@@ -25,9 +25,14 @@ patch on a sibling branch in `~/git/simcoupe/` (commit `76e5198` on branch
   ```
 
 - Linux/macOS CI invocation (after the patch lands and a fresh build is
-  available): `simcoupe -exitonhalt 1 work.mgt`, with
-  `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy` in the env on Linux to avoid
-  needing X. No xvfb required.
+  available): `simcoupe -exitonhalt 1 work.mgt`. The headless environment
+  setup (Xvfb, SDL drivers, Mesa software GL, ImageMagick for screenshots)
+  is documented separately in
+  [`docs/notes/headless-simcoupe.md`](headless-simcoupe.md). **The earlier
+  claim in this doc that `SDL_VIDEODRIVER=dummy` works without Xvfb has
+  been retracted** — empirically it does not satisfy SimCoupé's
+  `SDL_RENDERER_ACCELERATED` request and the emulator silently exits 0
+  before the Z80 starts. Xvfb + Mesa llvmpipe is required.
 
 ## Install path
 
@@ -555,19 +560,17 @@ in M0 Task 9 is one-liner-trivial.
 ## Recommended invocation (final)
 
 ```sh
-# Local dev (after building patched SimCoupé from source)
+# Local dev (after building patched SimCoupé from source) — macOS native.
 simcoupe -exitonhalt 1 work.mgt
 
-# CI on Linux (xvfb NOT required — SDL2's dummy drivers are enough)
-SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+# CI on Linux (and Linux dev container) — see headless-simcoupe.md for
+# the full setup (Xvfb, SDL drivers, Mesa GL).
+DISPLAY=:150 SDL_VIDEODRIVER=x11 SDL_AUDIODRIVER=dummy \
   ./simcoupe -exitonhalt 1 -fullscreen 0 -firstrun 0 work.mgt
 ```
 
 `-firstrun 0` suppresses the welcome dialog on the first run for a fresh CI
 runner. `-fullscreen 0` is paranoia (default is off, but we never want it).
-`SDL_VIDEODRIVER=dummy` means SDL doesn't try to open an X display; the
-emulator runs entirely off-screen at full Z80 speed (turbo'd via the
-existing `speed=1000` and `turbodisk` / `fastreset` options if we want).
 
 Exit code is 0 on clean halt; non-zero if SimCoupé failed to start (missing
 disk, bad config, SDL init failure, etc.). M0 Task 9 will wrap this with a
@@ -576,9 +579,9 @@ a stub bug could send the Z80 into a `JR -2` and never reach `HALT`.
 
 ## Known gotchas
 
-- **Linux without X**: use `SDL_VIDEODRIVER=dummy` env var. Easier than
-  xvfb; works in GitHub Actions ubuntu-latest out of the box. xvfb is a
-  fallback if a future SimCoupé feature ever needs a real GL context.
+- **Linux without X**: SDL dummy video drivers are NOT enough — see
+  [`headless-simcoupe.md`](headless-simcoupe.md). You need Xvfb backing the
+  display plus Mesa software GL.
 - **macOS GUI app focus stealing (expected, not yet verified)**: macOS
   `.app` bundles typically steal focus when launched via Cocoa's
   `NSApplication` startup, regardless of `SDL_VIDEODRIVER=dummy`. We have

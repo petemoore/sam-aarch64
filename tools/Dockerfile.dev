@@ -1,0 +1,67 @@
+# Dev container for the M0 round-trip oracle and Phase-1 assembler work.
+#
+# Mirrors the GitHub Actions ubuntu-latest runner closely enough that
+# fixes which work locally also work in CI. This Dockerfile is the
+# *developer-side* single source of truth for what's installed.
+# .github/workflows/ci.yml keeps its own inline apt-install steps as
+# the canonical CI recipe — they should be kept in step with this file.
+#
+# Usage from the project root:
+#
+#     docker build -t sam-aarch64-dev:latest -f tools/Dockerfile.dev tools/
+#     docker run -d --name sam-aarch64-ci --platform linux/amd64 \
+#         -v "$PWD:/work" -w /work \
+#         sam-aarch64-dev:latest sleep infinity
+#     docker exec -it sam-aarch64-ci bash
+#
+# Then inside the container, follow docs/notes/headless-simcoupe.md to
+# build the patched SimCoupé and run the round-trip with `make ci`.
+#
+# The simcoupe binary is intentionally NOT pre-built into this image —
+# rebuilding is fast (~30s) and keeps iteration on
+# tools/simcoupe-exitonhalt.patch out of the image-rebuild cycle.
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# System packages.
+#   build-essential cmake git              — generic build tooling
+#   libsdl2-dev libfmt-dev zlib1g-dev      — simcoupe build deps
+#   libpng-dev libsamplerate0-dev          — more simcoupe build deps
+#   xvfb libgl1-mesa-dri mesa-utils        — headless display + software GL
+#   imagemagick                            — `import` for screenshots
+#   binutils-aarch64-linux-gnu             — GNU `as` for the round-trip oracle
+#   python3-pip golang-go                  — pyz80 + samfile install
+#   ca-certificates curl                   — TLS for downstream clones
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential cmake git \
+        libsdl2-dev libfmt-dev zlib1g-dev libpng-dev libsamplerate0-dev \
+        xvfb libgl1-mesa-dri mesa-utils \
+        imagemagick \
+        binutils-aarch64-linux-gnu \
+        python3-pip golang-go \
+        ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Symlink the aarch64 cross prefix our scripts expect.
+RUN ln -s /usr/bin/aarch64-linux-gnu-as      /usr/local/bin/aarch64-none-elf-as \
+ && ln -s /usr/bin/aarch64-linux-gnu-objcopy /usr/local/bin/aarch64-none-elf-objcopy
+
+# pyz80 — the Z80 assembler, vendored from upstream as a Python package.
+# The legacy single-file `pyz80.py` is gone; v1.3.0+ is installed via pip
+# and drops a `pyz80` console-script on PATH.
+RUN git clone --depth 1 https://github.com/simonowen/pyz80 /tmp/pyz80 \
+ && pip install --break-system-packages /tmp/pyz80 \
+ && rm -rf /tmp/pyz80
+
+# samfile — Pete's Go-based MGT image inspector and code-file injector.
+# IMPORTANT: the `/v2` suffix on the module path is mandatory; without
+# it `go install` falls back to the pre-v2 release which lacks the
+# `add` subcommand we depend on.
+RUN go install github.com/petemoore/samfile/v2/cmd/samfile@latest \
+ && cp /root/go/bin/samfile /usr/local/bin/samfile \
+ && rm -rf /root/go /root/.cache
+
+WORKDIR /work
+CMD ["sleep", "infinity"]
