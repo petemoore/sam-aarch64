@@ -57,11 +57,16 @@ const (
 	LoadAddress uint32 = 0x8000
 
 	// SamdosLoadAddress is the address recorded in the samdos2 body
-	// header. ROM BOOT reads T4S1 raw to 0x8000 and JPs to 0x8009
-	// after locating the "BOOT" magic at sector offset 256, so this
-	// address is only consulted by SAMDOS's later self-bookkeeping.
-	// 0x8009 matches what the canonical samdos2-on-FRED-02 records.
-	SamdosLoadAddress uint32 = 0x8009
+	// header — this is what `samfile ls` reports as `Start` for the
+	// canonical samdos2 across the FRED 02 / Defender / pete-made
+	// installs and most other SAM disks that include SAMDOS. It
+	// decomposes to page 29 (low 5 bits of the StartPage byte) plus
+	// offset 9 in 0x8000-0xBFFF page-offset form:
+	//   (29 + 1) * 16384 + 9 = 491529
+	// ROM BOOT itself reads T4S1 raw to 0x8000 and JPs to 0x8009
+	// after locating the "BOOT" magic at sector offset 256; this
+	// address is what SAMDOS's later self-bookkeeping consults.
+	SamdosLoadAddress uint32 = 491529
 
 	// SamdosCanonicalStartPage is the decorative StartPage byte at
 	// body-header offset 8 in the canonical samdos2 binary (the
