@@ -1,32 +1,19 @@
 #!/usr/bin/env bash
-# Constructs a self-bootable .mgt disk image containing:
-#   - samdos2 as the FIRST file (slot 0, T4S1, 20 sectors covering T4-T5)
-#     so that SAM ROM's BOOT command (F9) can load it without simcoupe's
-#     -dosboot 1 hack — making the image bootable on real SAM hardware too.
-#   - a tokenised BASIC 'auto' file that auto-runs on boot (slot 1, T6S1)
-#     (CLEAR 24575 : LOAD "stub" CODE 24576 : CALL 24576)
-#   - the stub binary as a code file 'stub' (slot 2, T6S2; loads at 0x6000)
-#   - the input fixture as 'IN' (slot 3, T6S3)
+# Build the M0 round-trip disk image. Layout, semantics, and citations:
+#   docs/notes/test-mgt-byte-layout.md   ← byte-by-byte reference
+#   docs/notes/sam-basic-save-format.md  ← BASIC vars/gap invariant
 #
-# 0x6000 is the standard SAMDOS-coexisting code address — SAMDOS itself
-# occupies 0x8000-0xBFFF, so user code must live below 0x8000.
+# Slots:
+#   0  samdos2  T4S1..T5S10  (20 sectors; ROM BOOT reads T4S1 raw)
+#   1  auto     T6S1..T6S2   (BASIC AUTO: CLEAR + LOAD + CALL)
+#   2  stub     T6S3         (the assembler stub)
+#   3  IN       T6S4         (assembly source fixture)
 #
-# Why samdos2 must be at T4S1:
-#   SAM ROM's BOOT routine (D8CD–D97D in ROM v3.0) reads track 4 sector 1
-#   raw to &8000, then checks bytes 256–259 for the literal "BOOT"
-#   (case-insensitive, bit-7 ignored). If matched, JP &8009. Otherwise it
-#   issues error 53 ("NO DOS"). The samdos2 binary is engineered so that
-#   the magic "BOOT" string lands at body offset 247 — which becomes
-#   sector offset 256 once the standard 9-byte file header is prepended.
-#
-# Why we hand-roll everything:
-#   samfile (Pete's tool) has an operator-precedence bug at samfile.go:564
-#   in SAMMask: `1 << bitOffset & 0x07` parses as `(1 << bitOffset) & 0x07`
-#   which produces wrong (often zero) masks for bit_offsets ≥ 3. As a
-#   result, samfile add leaves sector address maps mostly zeroed and
-#   subsequent adds allocate the same sectors. Hand-rolling all four
-#   directory entries here avoids the bug. (TODO: upstream fix for
-#   samfile.)
+# We hand-roll the directory rather than calling `samfile add` because
+# samfile's SAMMask has an operator-precedence bug at samfile.go:564
+# (`1 << bitOffset & 0x07` parses as `(1 << bitOffset) & 0x07`) that
+# zeroes the sector bitmap for bitOffset ≥ 3. (Tracked in samfile;
+# unrelated to this script.)
 #
 # Usage: build-disk.sh <input.s> <output.mgt>
 
@@ -49,23 +36,17 @@ if [ ! -f "$samdos2" ]; then
 fi
 
 rm -f "$output"
-
-# Create a blank 819200-byte (800 KiB) MGT image (all zero bytes).
 dd if=/dev/zero of="$output" bs=1024 count=800 2>/dev/null
 
-# ---------------------------------------------------------------------------
-# All disk construction is done in this single Python block so that the
-# sector-allocation invariants are visible end-to-end.
-# ---------------------------------------------------------------------------
 python3 - "$output" "$samdos2" build/stub.bin "$input" <<'EOF'
 import sys
 
 output_path, samdos2_path, stub_path, input_path = sys.argv[1:5]
 
 # --- MGT format helpers -------------------------------------------------
-# Cylinder-interleaved layout: each cylinder = side0-track (5120 B) +
-# side1-track (5120 B). Track byte's bit 7 selects side. (SAM tech manual
-# v3.0 pp.78–81; samfile.go::Sector.Offset matches.)
+# Cylinder-interleaved: each cylinder = side0 (5120 B) + side1 (5120 B).
+# Track byte's bit 7 selects side. Tech Manual v3.0 §disk format;
+# samfile.go::Sector.Offset matches.
 
 def sector_offset(track: int, sector: int) -> int:
     return ((track >> 7) * 5120) + ((sector - 1) * 512) + ((track & 0x7f) * 10240)
@@ -75,7 +56,15 @@ def sector_bit(track: int, sector: int) -> int:
 
 def set_sector_in_map(sam_map: bytearray, track: int, sector: int) -> None:
     b = sector_bit(track, sector)
-    sam_map[b // 8] |= 1 << (b % 8)        # correct (cf. samfile bug above)
+    sam_map[b // 8] |= 1 << (b % 8)
+
+def page_form_3byte(value: int) -> bytes:
+    """Encode a value < 64K as a 3-byte page-form: [page, offset_lo, offset_hi]
+    with offset's bit 15 set (8000H REL PAGE FORM). Used for dir-entry
+    BASIC triplets at 0xDD/0xE0/0xE3."""
+    page = value // 16384
+    offset = (value % 16384) | 0x8000
+    return bytes([page, offset & 0xff, (offset >> 8) & 0xff])
 
 def write_directory_entry(img: bytearray, slot: int, *, type_byte: int,
                           name: bytes, chain: list, length: int,
@@ -85,18 +74,13 @@ def write_directory_entry(img: bytearray, slot: int, *, type_byte: int,
                           start_line: int = -1) -> None:
     """Write a 256-byte directory entry to slot N (0-79).
 
-    `body_header` (if provided) is the 9-byte on-disk file body header. If
-    given, it's mirrored into dir-entry bytes 0xD3-0xDB — SAMDOS's internal
-    9-byte body-header cache. Real ROM/SAMDOS SAVE writes both copies; see
-    `samdos/src/f.s:462-471` (`svhd` writes 9 bytes from `hd001` to `fsa+211`
-    and to the file body via `sbyt`). Tech Manual L4366-4368 calls these
-    bytes "MGT future and past, not used by SAMDOS" but that documentation
-    is wrong — SAMDOS does use them; `samdos/src/c.s:1376` sets `rptl=211`
-    so subsequent reads pull the cached header. Without this mirror,
-    SAMDOS reads zeros where it expects metadata, corrupting BASIC's view
-    of the file (root cause of the M0 CLEAR-AUTO-RUN crash).
-    Verified empirically against `Defender Compilation (19xx).dsk`, which
-    has the cache populated and boots fine in our test rig.
+    `body_header` (9 bytes) is mirrored into dir bytes 0xD3-0xDB
+    (SAMDOS body-header cache, samdos/src/c.s:1376) and its
+    StartPage/Offset/Pages fields into 0xEC-0xEF (samfile.go:248-256).
+
+    Auto-exec is gated by ROM at rom-disasm:22471-22484. To suppress
+    auto-exec, set BOTH dir byte 0xF2 = 0xFF (default here) AND body
+    header byte 6 = 0xFF (callers' responsibility).
     """
     assert len(name) == 10, name
     if body_header:
@@ -104,34 +88,25 @@ def write_directory_entry(img: bytearray, slot: int, *, type_byte: int,
     e = bytearray(256)
     e[0x00] = type_byte
     e[0x01:0x0b] = name
-    e[0x0b] = (len(chain) >> 8) & 0xff             # sector count BE high
-    e[0x0c] = len(chain) & 0xff                    # sector count BE low
-    e[0x0d] = chain[0][0]                          # first sector track
-    e[0x0e] = chain[0][1]                          # first sector
+    e[0x0b] = (len(chain) >> 8) & 0xff
+    e[0x0c] = len(chain) & 0xff
+    e[0x0d] = chain[0][0]
+    e[0x0e] = chain[0][1]
     sam_map = bytearray(195)
     for t, s in chain:
         set_sector_in_map(sam_map, t, s)
     e[0x0f:0x0f + 195] = sam_map
     if body_header:
-        e[0xd3:0xd3 + 9] = body_header             # SAMDOS body-header cache
-        # Mirror StartAddressPage / StartAddressPageOffset / Pages into the
-        # dir-entry slots samfile and ROM/SAMDOS LOAD path actually read
-        # (samfile.go:248-256, StartAddress() at :448-449). Without this,
-        # `Start` decodes as 16384 regardless of LOAD_ADDR — every canonical
-        # disk (FRED 02 / Defender / Mike AJ / DS7 / Arcadia) populates these.
-        e[0xec] = body_header[8]                  # StartAddressPage
-        e[0xed] = body_header[3]                  # PageOffset LE lo
-        e[0xee] = body_header[4]                  # PageOffset LE hi
-        e[0xef] = body_header[7]                  # Pages
+        e[0xd3:0xd3 + 9] = body_header
+        e[0xec] = body_header[8]
+        e[0xed] = body_header[3]
+        e[0xee] = body_header[4]
+        e[0xef] = body_header[7]
     e[0xf0] = length & 0xff
     e[0xf1] = (length >> 8) & 0xff
-    # Bytes 0xf2-0xf4 are the 3-byte execution-address / auto-run-line field.
-    # For CODE files: byte 0xf2 = ExecAddrDiv16K, 0xf3-0xf4 = ExecAddrMod16K.
-    # For BASIC files with auto-RUN: byte 0xf2 = 0, 0xf3-0xf4 = start line.
-    # For BASIC files without auto-RUN: byte 0xf2 = 0xff. (ROM E3D9 checks
-    # this byte: if 0xff after the file is loaded, no auto-RUN happens.)
-    if start_line >= 0:                            # SAM BASIC auto-RUN line
-        e[0xf2] = 0                                # marker: 'auto-RUN this BASIC'
+    if start_line >= 0:
+        # BASIC auto-RUN: dir byte 0xF2 = 0 marks "auto-RUN", 0xF3-0xF4 = line
+        e[0xf2] = 0
         e[0xf3] = start_line & 0xff
         e[0xf4] = (start_line >> 8) & 0xff
     else:
@@ -141,8 +116,8 @@ def write_directory_entry(img: bytearray, slot: int, *, type_byte: int,
     img[slot * 256:(slot + 1) * 256] = e
 
 def write_file_chain(img: bytearray, chain: list, file_bytes: bytes) -> None:
-    """Write file_bytes (header+body) split across `chain` sectors with
-    next-sector links at offsets 510–511 of each sector."""
+    """Write file_bytes across `chain` sectors with next-sector links at
+    bytes 510-511 of each sector. Last sector's link is (0,0) = end."""
     chunks = [file_bytes[i:i + 510] for i in range(0, len(file_bytes), 510)]
     assert len(chunks) <= len(chain), \
         f"file needs {len(chunks)} sectors but allocated {len(chain)}"
@@ -155,7 +130,6 @@ def write_file_chain(img: bytearray, chain: list, file_bytes: bytes) -> None:
             nt, ns = chain[i + 1]
             sd[510] = nt
             sd[511] = ns
-        # last sector: link bytes stay (0,0) = end of file
         img[off:off + 512] = sd
 
 # --- Open image ---------------------------------------------------------
@@ -163,174 +137,131 @@ with open(output_path, "r+b") as f:
     img = bytearray(f.read())
     assert len(img) == 819200, f"Expected 819200-byte image, got {len(img)}"
 
-    # === Slot 0: samdos2 (T4S1..T5S10, 20 sectors) =====================
+    # === Slot 0: samdos2 ===============================================
+    # 10000 bytes + 9-byte header = 10009 bytes = 20 sectors (T4-T5).
+    # ROM BOOT (D8CD-D97D) reads T4S1 raw to 0x8000 and checks for the
+    # literal "BOOT" at body offset 247 (sector offset 256). The
+    # samdos2 binary places "BOOT" so this matches.
     #
-    # samdos2 is 10000 bytes; with the 9-byte SAMDOS file header that's
-    # 10009 bytes total = ceil(10009/510) = 20 sectors. T4 has 10 sectors,
-    # T5 has 10 sectors → exact fit.
-    #
-    # Type byte: SAMDOS internally uses type 3 for itself, but samfile
-    # treats unrecognised types as "erased" and would overwrite the slot.
-    # We use type 19 (Code) which (a) is irrelevant for booting — the ROM
-    # reads sector data raw and doesn't look at the directory entry type;
-    # (b) makes samdos2 visible in `samfile ls`.
+    # Body header bytes are taken verbatim from the canonical FRED 02
+    # / Defender install: type 0x13, length 10000, PageOffset 0x8009,
+    # 0xff 0xff (no auto-exec — ROM BOOT bypasses this), Pages 0,
+    # StartPage 0x7d (decorative bits set; samfile masks to & 0x1f = 29
+    # → samfile-reported Start = 491529).
     samdos2_chain = [(t, s) for t in (4, 5) for s in range(1, 11)]
     samdos2_body = open(samdos2_path, "rb").read()
     assert len(samdos2_body) == 10000, len(samdos2_body)
-    # Use the body header bytes from a canonical SAMDOS2 install verbatim
-    # (taken from "FRED Magazine Issue 02" / "Defender Compilation" — both
-    # use the same bytes; many other disks vary the StartPage decorative
-    # bits but FRED/Defender are the most common). Decoded:
-    #   13            type 0x13 (Code)
-    #   10 27         LengthMod16K LE = 10000
-    #   09 80         PageOffset = 0x8009 (load to 0x8000, JP &8009)
-    #   ff ff         unused (canonical SAVE writes FF FF)
-    #   00            Pages = 0  (10K < 16K)
-    #   7d            StartPage — bits 5-6 are decorative on real disks;
-    #                 samfile masks `& 0x1f` (= 29) → samfile Start = 491529.
-    # Type byte 0x13 (Code) is a samfile-compat choice: SAMDOS-internal
-    # type 3 (samdos/src/b.s:14-22) is what real SAMDOS uses for itself,
-    # but samfile treats unknown types as "erased" and would hide it from
-    # `ls`. ROM BOOT bypasses the directory entirely (reads raw sectors),
-    # so the type byte is functionally irrelevant for boot.
     samdos2_header = bytes.fromhex("13102709 80ffff00 7d".replace(" ", ""))
     write_directory_entry(
         img, slot=0, type_byte=0x13, name=b"samdos2   ",
         chain=samdos2_chain, length=10000,
         body_header=samdos2_header,
-        # Audit finding #1: previous exec_addr_div_16k=0x80 was misleading
-        # (0x80 is the section-C marker bit, not a page byte). Default
-        # 0xff/0xffff = "no auto-exec" is canonical and ROM BOOT ignores it.
     )
     write_file_chain(img, samdos2_chain, samdos2_header + samdos2_body)
 
-    # === Slot 1: AUTO BASIC (T6S1) =====================================
+    # === Slot 1: auto BASIC ============================================
+    # `10 CLEAR 32767: LOAD "stub" CODE 32768: CALL 32768`
     #
-    # Tokenised SAM BASIC line:
-    #   10 LOAD "stub" CODE 24576 : CALL 24576
-    #
-    # CLEAR omitted: it crashed the system in the AUTO-RUN context (red
-    # border + garbage screen, no OK prompt). Checkpoint experiments
-    # 2026-05-10 confirmed that LOAD CODE + CALL work correctly without
-    # CLEAR. The "CLEAR n before LOAD CODE" User Guide convention does
-    # not apply here.
-    #
-    # Tokens: LOAD=0x95, CODE=0xff,0x6c, CALL=0xe4. Numbers carry a 5-byte
-    # numeric form right after their ASCII digits, prefixed with 0x0e:
-    # [0x0e, 0x00, 0x00, lo, hi, 0x00] for unsigned 16-bit.
+    # Tokens (single-byte unless noted): CLEAR=0xb3, LOAD=0x95,
+    # CODE=0xff,0x6c (two-byte SAM-extended token), CALL=0xe4. SAM BASIC
+    # stores tokens WITHOUT trailing 0x20 — the LIST renderer adds the
+    # display space at view time. Each numeric literal is followed by a
+    # 6-byte binary form: 0x0e marker + 5-byte value (small-int form is
+    # [0x0e, 0x00, sign, lo, hi, 0x00]).
     def num(n: int) -> bytes:
         return bytes([0x0e, 0x00, 0x00, n & 0xff, (n >> 8) & 0xff, 0x00])
 
     LOAD_ADDR = 32768
-    # Original BASIC AUTO line. Hypothesis-test: with the AUTO file metadata
-    # bug fixed (see below), CLEAR n in AUTO-RUN should now work — previously
-    # it crashed because BASIC's HDL was populated from zeroed dir-entry
-    # triplets, leaving NVARS/NUMEND/SAVARS sysvars pointing at invalid
-    # memory, which CLEAR's RECL2BIG then walked. Documented in
-    # docs/notes/sam-file-header.md.
-    stmt_clear = bytes([0xb3, 0x20]) + str(LOAD_ADDR - 1).encode() + num(LOAD_ADDR - 1)
-    stmt_load = (bytes([0x95, 0x20, 0x22]) + b"stub"
-                 + bytes([0x22, 0x20, 0xff, 0x6c, 0x20])
+    stmt_clear = bytes([0xb3]) + str(LOAD_ADDR - 1).encode() + num(LOAD_ADDR - 1)
+    stmt_load = (bytes([0x95, 0x22]) + b"stub"
+                 + bytes([0x22, 0xff, 0x6c])
                  + str(LOAD_ADDR).encode() + num(LOAD_ADDR))
-    stmt_call = bytes([0xe4, 0x20]) + str(LOAD_ADDR).encode() + num(LOAD_ADDR)
+    stmt_call = bytes([0xe4]) + str(LOAD_ADDR).encode() + num(LOAD_ADDR)
     line_body = stmt_clear + b"\x3a" + stmt_load + b"\x3a" + stmt_call + b"\x0d"
-    BASIC_BODY = (bytes([0x00, 0x0a, len(line_body) & 0xff, (len(line_body) >> 8) & 0xff])
-                  + line_body + b"\xff")
-    auto_chain = [(6, 1)]
-    # Body header (9 bytes) — corrected per docs/notes/sam-file-header.md §4.2.
-    # PROG (start of BASIC programs) = 0x5CD5; encoded in 8000H REL PAGE FORM
-    # as PageOffset = 0x9CD5 (= 0x8000 | 0x1CD5), StartPage = 0.
-    PROG_PAGE_OFFSET = 0x9CD5            # = 0x8000 | (PROG & 0x3FFF), PROG = 0x5CD5
+    PROG_SECTION = (bytes([0x00, 0x0a, len(line_body) & 0xff, (len(line_body) >> 8) & 0xff])
+                    + line_body + b"\xff")    # line + end-of-program sentinel
+
+    # Trailer: 92-byte vars area + 512-byte gap. See
+    # docs/notes/sam-basic-save-format.md for the canonical recipe and
+    # ROM citations. CLEAR re-initialises this region on AUTO-RUN, so
+    # all-zeros works; for byte-perfect canonical fidelity, fill with
+    # the CLRSR pattern (rom-disasm:13215-13228).
+    EMPTY_VARS_SIZE = 92
+    EMPTY_GAP_SIZE = 512
+    BASIC_BODY = (PROG_SECTION
+                  + b"\x00" * EMPTY_VARS_SIZE
+                  + b"\x00" * EMPTY_GAP_SIZE)
+    NVARS_OFFSET = len(PROG_SECTION)
+    NUMEND_OFFSET = NVARS_OFFSET + EMPTY_VARS_SIZE
+    SAVARS_OFFSET = NUMEND_OFFSET + EMPTY_GAP_SIZE
+    assert SAVARS_OFFSET == len(BASIC_BODY)
+
+    auto_chain = [(6, 1), (6, 2)]    # 656 + 9 hdr = 665 B; needs 2 sectors
+    PROG_PAGE_OFFSET = 0x9CD5        # PROG = 0x5CD5 in 8000H REL PAGE FORM
     PROG_START_PAGE = 0
     auto_header = bytes([
-        0x10,                                                # Type = 16 (BASIC)
-        len(BASIC_BODY) & 0xff, (len(BASIC_BODY) >> 8) & 0xff,  # LengthMod16K LE
-        PROG_PAGE_OFFSET & 0xff, (PROG_PAGE_OFFSET >> 8) & 0xff, # PageOffset LE = D5 9C
-        0xff, 0xff,                                          # unused (real SAVE writes FF FF)
-        0,                                                   # Pages — body < 16384
-        PROG_START_PAGE,                                     # StartPage = 0
+        0x10,                                                # Type = SAM BASIC
+        len(BASIC_BODY) & 0xff, (len(BASIC_BODY) >> 8) & 0xff,
+        PROG_PAGE_OFFSET & 0xff, (PROG_PAGE_OFFSET >> 8) & 0xff,
+        0xff, 0xff,                                          # body-header exec marker
+        0,
+        PROG_START_PAGE,
     ])
     write_directory_entry(
         img, slot=1, type_byte=0x10, name=b"auto      ",
         chain=auto_chain, length=len(BASIC_BODY),
         body_header=auto_header,
-        start_line=10,                          # auto-RUN from line 10
+        start_line=10,
     )
-    # Patch the BASIC-specific dir-entry fields that write_directory_entry
-    # leaves zero. ROM SAVE writes (NVARS-PROG), (NUMEND-PROG), (SAVARS-PROG)
-    # at HDR+16/+19/+22 (= dir bytes 0xDD/0xE0/0xE3) per ROM L22162-22180. For
-    # an AUTO with no variables, all three triplets equal the program length.
-    # Encoding: 3-byte page-form [page_byte, offset_lo, offset_hi] with
-    # offset's high bit set (8000H form). Per docs/notes/sam-paging.md.
-    def page_form_3byte(value: int) -> bytes:
-        page = value // 16384
-        offset = (value % 16384) | 0x8000
-        return bytes([page, offset & 0xff, (offset >> 8) & 0xff])
-    auto_e_offset = 1 * 256
-    triplet = page_form_3byte(len(BASIC_BODY))
-    img[auto_e_offset + 0xDD:auto_e_offset + 0xE0] = triplet  # prog-length
-    img[auto_e_offset + 0xE0:auto_e_offset + 0xE3] = triplet  # prog + nvars (no vars)
-    img[auto_e_offset + 0xE3:auto_e_offset + 0xE6] = triplet  # prog + nvars + gap (no vars)
-    # 0xEC-0xEE is now mirrored from auto_header by write_directory_entry.
+    auto_e = 1 * 256
+    img[auto_e + 0xDD:auto_e + 0xE0] = page_form_3byte(NVARS_OFFSET)
+    img[auto_e + 0xE0:auto_e + 0xE3] = page_form_3byte(NUMEND_OFFSET)
+    img[auto_e + 0xE3:auto_e + 0xE6] = page_form_3byte(SAVARS_OFFSET)
+    img[auto_e + 0xDC] = 0x20    # MGTFlags — canonical real-SAVE convention
     write_file_chain(img, auto_chain, auto_header + BASIC_BODY)
 
-    # === Slot 2: stub (T6S2) ===========================================
-    # IMPORTANT: this entry MUST NOT advertise an auto-exec address. The
-    # BASIC AUTO file does `LOAD "stub" CODE 24576 : CALL 24576` — the
-    # intent is for the LOAD to return to BASIC so `: CALL 24576` runs.
-    # If the dir entry has byte 0xf2 != 0xff the ROM (E281–E299) takes the
-    # HDLDEX path: PDPSR2 corrupts URPORT (HMPR) and JPs to R1OFFCLBC at
-    # the encoded exec addr, which (a) bypasses BASIC's `: CALL 24576`
-    # entirely and (b) lands in section A or wherever PDPSR2's page-0
-    # branch maps the offset, NOT at &6000. Setting both bytes to 0xff
-    # makes the ROM RET cleanly at E293 and BASIC continues to the CALL.
-    # NOTE: stub and IN dir-entry / body-header encoding is reverted to its
-    # ORIGINAL form, which empirically decodes correctly via samfile's formula
-    # at samfile.go:411-413: `(StartAddressPageOffset & 0x3fff) |
-    # ((StartAddressPage & 0x1f + 1) << 14)`. The audit agent's recommendation
-    # #10 (set 0xEC=`addr>>14`) was incorrect — that produces `Start=40960`
-    # for LOAD_ADDR=0x6000 instead of 24576, because samfile's formula adds
-    # 1 to the stored page. The right encoding has stored_page=real_page-1.
-    # Pending confirmation from the parallel samfile-capabilities research
-    # agent before any further changes here.
+    # === Slot 2: stub ===================================================
+    # CODE file at LOAD_ADDR. Body header bytes 5-6 = 0xFF FF (LOADED
+    # auto-exec marker = "no") so ROM rom-disasm:22471-22484 returns
+    # cleanly to BASIC after LOAD, letting the AUTO line's `: CALL`
+    # invoke the stub.
     stub_body = open(stub_path, "rb").read()
-    stub_chain = [(6, 2)]
+    stub_chain = [(6, 3)]
     assert len(stub_body) + 9 <= 510 * len(stub_chain), \
         f"stub too large for {len(stub_chain)} sector(s)"
     stub_header = bytes([0x13, len(stub_body) & 0xff, (len(stub_body) >> 8) & 0xff,
                          LOAD_ADDR & 0xff, (LOAD_ADDR >> 8) & 0xff,
-                         0, 0, 0, (LOAD_ADDR >> 14) - 1])
+                         0xff, 0xff, 0, (LOAD_ADDR >> 14) - 1])
     write_directory_entry(
         img, slot=2, type_byte=0x13, name=b"stub      ",
         chain=stub_chain, length=len(stub_body),
         body_header=stub_header,
-        exec_addr_div_16k=0xff, exec_addr_mod_16k=0xffff,    # no auto-exec
     )
     write_file_chain(img, stub_chain, stub_header + stub_body)
 
-    # === Slot 3: IN (T6S3) =============================================
+    # === Slot 3: IN ====================================================
+    # Data file. Same body-header convention as stub (no auto-exec).
     in_body = open(input_path, "rb").read()
-    in_chain = [(6, 3)]
+    in_chain = [(6, 4)]
     assert len(in_body) + 9 <= 510 * len(in_chain), \
         f"IN too large for {len(in_chain)} sector(s)"
     in_header = bytes([0x13, len(in_body) & 0xff, (len(in_body) >> 8) & 0xff,
                        LOAD_ADDR & 0xff, (LOAD_ADDR >> 8) & 0xff,
-                       0, 0, 0, (LOAD_ADDR >> 14) - 1])
+                       0xff, 0xff, 0, (LOAD_ADDR >> 14) - 1])
     write_directory_entry(
         img, slot=3, type_byte=0x13, name=b"IN        ",
         chain=in_chain, length=len(in_body),
         body_header=in_header,
-        exec_addr_div_16k=0xff, exec_addr_mod_16k=0xffff,    # IN is data, not executable
     )
     write_file_chain(img, in_chain, in_header + in_body)
 
     f.seek(0)
     f.write(img)
 
-print(f"samdos2 written ({len(samdos2_body)} bytes, 20 sectors T4S1-T5S10)")
-print(f"BASIC 'auto' written ({len(BASIC_BODY)} bytes, 1 sector T6S1)")
-print(f"stub written ({len(stub_body)} bytes, 1 sector T6S2)")
-print(f"IN written ({len(in_body)} bytes, 1 sector T6S3)")
+print(f"samdos2: {len(samdos2_body)} bytes  T4S1-T5S10")
+print(f"auto:    {len(BASIC_BODY)} bytes   T6S1-T6S2  (PROG={NVARS_OFFSET}, +VARS={EMPTY_VARS_SIZE}, +GAP={EMPTY_GAP_SIZE})")
+print(f"stub:    {len(stub_body)} bytes     T6S3")
+print(f"IN:      {len(in_body)} bytes     T6S4")
 EOF
 
 echo "Built $output"
