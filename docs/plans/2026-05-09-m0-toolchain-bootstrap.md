@@ -40,6 +40,15 @@ After M0 completes, the repo gains:
 
 This is a **research spike** — the goal is to discover and document the invocation pattern. Output is a markdown document, not code.
 
+**Source available at `~/git/simcoupe/` — read it.** Pete has cloned Simon Owen's repo locally; this is the primary reference. Pete is open to forking SimCoupé and merging features upstream.
+
+**Preliminary finding from `~/git/simcoupe/Base/Options.cpp`**: SimCoupé exposes options like `disk1`, `autoload`, `autoboot`, `fullscreen`, `speed`, but has **no native batch / headless / exit-on-halt mode**. Task 1 must therefore additionally **decide and document**:
+
+- **Option A: drive externally** — `timeout 30 simcoupe ...`, kill the process when the assembled output file appears on the host-mapped disk image, accept timeout exit code as success. Simple but hacky; flaky if timing is wrong.
+- **Option B: add batch mode upstream** — patch SimCoupé to accept e.g. `--exit-on-halt` and quit cleanly when the Z80 executes a `HALT` with interrupts disabled. Clean. Pete welcomes upstream PRs; the change is small (probably <30 lines in `Main.cpp`/`CPU.cpp`).
+
+Recommendation in the spike doc must include rationale and a concrete plan for whichever option is chosen. **Strong preference for Option B** if it can be implemented in <half a day — every M-milestone after this one will run thousands of these in CI; flaky timeouts compound.
+
 - [ ] **Step 1: Confirm SimCoupé is installed and locate the binary**
 
 Run:
