@@ -1,0 +1,115 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  m0-roundtrip:
+    runs-on: ubuntu-latest
+
+    env:
+      # SDL dummy drivers — no X display or audio device needed on Linux CI.
+      # Sufficient per docs/notes/simcoupe-batch.md; xvfb is not required.
+      SDL_VIDEODRIVER: dummy
+      SDL_AUDIODRIVER: dummy
+      # Keep SimCoupé config isolated to this run so stale cfg from a previous
+      # runner invocation can never leak in (SimCoupe.cfg is written on every
+      # clean exit — see simcoupe-batch.md "Known gotchas").
+      XDG_CONFIG_HOME: /tmp/simcoupe-cfg
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── 1. GNU aarch64 binutils ──────────────────────────────────────────
+      - name: Install GNU aarch64 binutils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-aarch64-linux-gnu
+          # Symlink from the cross prefix our scripts expect.
+          sudo ln -s /usr/bin/aarch64-linux-gnu-as      /usr/local/bin/aarch64-none-elf-as
+          sudo ln -s /usr/bin/aarch64-linux-gnu-objcopy /usr/local/bin/aarch64-none-elf-objcopy
+
+      # ── 2. Patched SimCoupé (built from source) ──────────────────────────
+      #
+      # Stock apt simcoupe (v1.x) does NOT have the -exitonhalt flag required
+      # for deterministic batch exit. We clone upstream at a pinned SHA, apply
+      # the vendored patch (tools/simcoupe-exitonhalt.patch), and build.
+      #
+      # Pinned upstream commit: 0f74cff52b96841fe0efa01ffd1a6875b253e72a
+      # ("Updated version to v1.2.15") — parent of the local exit-on-halt branch.
+      # Recipe from docs/notes/simcoupe-batch.md "Acquiring the patched SimCoupé in CI".
+
+      - name: Cache patched SimCoupé binary
+        id: cache-simcoupe
+        uses: actions/cache@v4
+        with:
+          path: simcoupe-build/build/simcoupe
+          # Cache key: patch file content + pinned upstream SHA.
+          key: simcoupe-0f74cff52b96841fe0efa01ffd1a6875b253e72a-${{ hashFiles('tools/simcoupe-exitonhalt.patch') }}
+
+      - name: Install SimCoupé build dependencies
+        if: steps.cache-simcoupe.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+              build-essential cmake git \
+              libsdl2-dev libfmt-dev zlib1g-dev libpng-dev libsamplerate0-dev
+
+      - name: Clone, patch, and build SimCoupé
+        if: steps.cache-simcoupe.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/simonowen/simcoupe.git simcoupe-build
+          cd simcoupe-build
+          git checkout 0f74cff52b96841fe0efa01ffd1a6875b253e72a
+          # Verify the patch applies cleanly before actually applying it.
+          git apply --check ../tools/simcoupe-exitonhalt.patch
+          git apply ../tools/simcoupe-exitonhalt.patch
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          # kosarev/z80 is fetched via CMake FetchContent — network required here.
+          cmake --build build -j$(nproc)
+
+      - name: Install SimCoupé onto PATH
+        run: |
+          sudo cp simcoupe-build/build/simcoupe /usr/local/bin/simcoupe
+          sudo chmod +x /usr/local/bin/simcoupe
+
+      # ── 3. Python + pyz80 ────────────────────────────────────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install pyz80
+        run: |
+          # pyz80 is distributed as a single Python script (no PyPI package).
+          # Clone it and install a wrapper that forces python3, since Ubuntu 22+
+          # runners may not have a bare 'python' on PATH and pyz80's shebang is
+          # '#!/usr/bin/env python'.
+          git clone https://github.com/simonowen/pyz80 /tmp/pyz80
+          # Write a thin wrapper rather than relying on the shebang.
+          printf '#!/usr/bin/env bash\nexec python3 /tmp/pyz80/pyz80.py "$@"\n' \
+              | sudo tee /usr/local/bin/pyz80 > /dev/null
+          sudo chmod +x /usr/local/bin/pyz80
+
+      # ── 4. Go + samfile ──────────────────────────────────────────────────
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Install samfile
+        run: |
+          go install github.com/petemoore/samfile/cmd/samfile@latest
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      # ── 5. Toolchain smoke test ──────────────────────────────────────────
+      - name: Verify toolchain
+        run: make check
+
+      # ── 6. M0 round-trip oracle ──────────────────────────────────────────
+      #
+      # SDL_VIDEODRIVER=dummy + SDL_AUDIODRIVER=dummy (set in job env above)
+      # allow SimCoupé to run without X or audio on Linux CI runners.
+      # No xvfb needed — confirmed in docs/notes/simcoupe-batch.md TL;DR.
+      - name: Round-trip oracle
+        run: make ci
