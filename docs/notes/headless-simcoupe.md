@@ -133,9 +133,12 @@ When the container is gone (host reboot, `docker rm`, etc.):
 ```bash
 cd /Users/pmoore/git/sam-aarch64
 docker build -t sam-aarch64-dev:latest -f tools/Dockerfile.dev tools/
-docker run -d --name sam-aarch64-ci --platform linux/amd64 \
+docker run -d --name sam-aarch64-ci \
     -v "$PWD:/work" -w /work \
     sam-aarch64-dev:latest sleep infinity
+# On Apple Silicon the image is arm64 by default, which is fine for
+# dev. Add `--platform linux/amd64` at both build and run if you want
+# CI-runner parity (amd64 + emulation cost).
 docker exec sam-aarch64-ci bash -c '
     PINNED_SHA=0f74cff52b96841fe0efa01ffd1a6875b253e72a
     cd /tmp && git clone --depth 1 https://github.com/simonowen/simcoupe.git

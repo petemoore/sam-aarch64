@@ -154,10 +154,13 @@ This pivot was deferred from the previous session for a clean handoff.
    ```bash
    docker rm -f sam-aarch64-ci 2>/dev/null
    docker build -t sam-aarch64-dev:latest -f tools/Dockerfile.dev tools/
-   docker run -d --name sam-aarch64-ci --platform linux/amd64 \
+   docker run -d --name sam-aarch64-ci \
        -v "$PWD:/work" -w /work \
        sam-aarch64-dev:latest sleep infinity
    ```
+   (Add `--platform linux/amd64` at both build and run if you want
+   CI-runner parity. Default arch is fine for dev; M0 artefacts are
+   architecture-independent.)
 4. Build the patched SimCoupé inside it (one-time per container, ~30s):
    see `headless-simcoupe.md` "Building the patched SimCoupé" section.
 5. Confirm baseline: `make ci` from `/work` (currently expected to

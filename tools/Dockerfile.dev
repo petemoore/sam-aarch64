@@ -9,10 +9,17 @@
 # Usage from the project root:
 #
 #     docker build -t sam-aarch64-dev:latest -f tools/Dockerfile.dev tools/
-#     docker run -d --name sam-aarch64-ci --platform linux/amd64 \
+#     docker run -d --name sam-aarch64-ci \
 #         -v "$PWD:/work" -w /work \
 #         sam-aarch64-dev:latest sleep infinity
 #     docker exec -it sam-aarch64-ci bash
+#
+# On Apple Silicon the image builds as arm64 by default, which is the
+# fast path for dev. The Z80 / aarch64 / Go / Python tooling produces
+# architecture-independent output; CI runs on amd64 ubuntu-latest but
+# uses inline apt installs (not this Dockerfile) so dev/CI arch
+# divergence doesn't affect artefacts. Pass `--platform linux/amd64`
+# at BOTH build and run if you specifically want amd64 parity.
 #
 # Then inside the container, follow docs/notes/headless-simcoupe.md to
 # build the patched SimCoupé and run the round-trip with `make ci`.
