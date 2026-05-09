@@ -1,8 +1,10 @@
-# aarch64 assembler for the SAM Coupé
+# sam-aarch64
 
-A self-hosting development environment for writing aarch64 (ARMv8-A 64-bit)
-assembly code on a SAM Coupé. The eventual product is a single Z80 program
-that runs on the SAM and combines:
+An aarch64 (ARMv8-A 64-bit) assembler that runs on a SAM Coupé.
+
+A self-hosting development environment for writing aarch64 assembly code on
+a SAM Coupé. The eventual product is a single Z80 program that runs on the
+SAM and combines:
 
 1. A visual editor for aarch64 source code
 2. An aarch64 assembler producing flat binaries
