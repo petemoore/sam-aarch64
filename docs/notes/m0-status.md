@@ -45,7 +45,36 @@ Two compounding fixes got us here:
 
 ## What's NOT done yet
 
-- Confirm the same `make ci` passes in GitHub Actions (one push away).
+- Nothing. CI passed cleanly on commit `1578bad` (2026-05-11). PR #1
+  ready for review pending Pete's approval.
+
+## SimCoupé runtime requirements (latent CI gotcha, fixed in `1578bad`)
+
+The patched simcoupé binary on its own is **not** runnable. It needs
+two things at runtime that `cp build/simcoupe /usr/local/bin/` alone
+doesn't deliver:
+
+1. **ROM resources at `/usr/local/share/simcoupe/`** (specifically
+   `samcoupe.rom` and `sp0256-al2.bin`). CMake bakes
+   `RESOURCE_DIR = CMAKE_INSTALL_FULL_DATAROOTDIR/simcoupe` into the
+   binary. Without these, `Base/Memory.cpp:228` and
+   `Base/VoiceBox.cpp:44` each pop a modal `MsgBox` warning. The modal
+   pushes onto `GUI::s_dialogStack`, so `GUI::IsModal()` returns true
+   forever, and `Base/CPU.cpp:151-167`'s `Run()` loop guards
+   `ExecuteChunk()` behind `!GUI::IsModal()` — the Z80 emulator never
+   runs, no port writes happen, our stub is never reached. The 30s
+   timeout fires with `OUT` absent from disk.
+2. **`libSAASound.so.3` in a standard library path.** It's fetched via
+   CMake FetchContent and built into `build/_deps/saasound-build/`.
+   `cmake --install` strips the binary's RUNPATH, so the loader can't
+   find it at the build path post-install. Copy to `/usr/local/lib/`
+   and `ldconfig`.
+
+The local dev container had these from a long-ago `cmake --install`
+that nobody recorded; CI never had them. CI failed all 21 times on
+this branch (most recently with a "30s timeout, no OUT on disk"
+signature) until commit `1578bad` added `cmake --install build` and
+the libSAASound copy to the workflow.
 
 ## What's verified
 
