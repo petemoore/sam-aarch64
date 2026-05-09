@@ -110,8 +110,13 @@ jobs:
 
       # ── 6. M0 round-trip oracle ──────────────────────────────────────────
       #
-      # SDL_VIDEODRIVER=dummy + SDL_AUDIODRIVER=dummy (set in job env above)
-      # allow SimCoupé to run without X or audio on Linux CI runners.
-      # No xvfb needed — confirmed in docs/notes/simcoupe-batch.md TL;DR.
+      # SDL_VIDEODRIVER=dummy alone is NOT enough — SimCoupé fails with
+      # "error: Video initialisation failed" on a headless runner even with
+      # the dummy driver set. xvfb provides a real (if invisible) X display
+      # that SDL2 can attach to. The spike doc's TL;DR predicted otherwise;
+      # CI run 25612320603 disproved it.
+      - name: Install xvfb
+        run: sudo apt-get install -y xvfb
+
       - name: Round-trip oracle
-        run: make ci
+        run: xvfb-run -a make ci
