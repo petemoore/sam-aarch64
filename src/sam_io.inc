@@ -19,9 +19,12 @@
 ;   UIFA     = &4B00  ; 48-byte user-information area: name + type + addr
 ;                     ;        + length, populated before HOFLE / HGFLE.
 ;
-; All routines preserve registers unless documented otherwise.
+; SAMDOS error handling: most hooks longjmp to BASIC on error — they do
+; NOT return to the caller. CY on error is only set by HOFLE (name
+; conflict / disk full). All other errors cause a BASIC error message and
+; longjmp. See spike doc for details.
 ;
-; (Bodies filled in M0 Task 7 once stub.asm needs them.)
+; All routines preserve registers unless documented otherwise.
 
 
 ; -----------------------------------------------------------------------
@@ -41,6 +44,7 @@ UIFA_PAGES:     equ     34             ; page count.
 UIFA_LENGTH:    equ     35             ; length-mod-16K LE word.
 
 ; SAMDOS hook codes (samdos/src/b.s::samhk). Numbered from 128.
+HOOK_HERAZ:     equ     166            ; erase file by name.
 HOOK_HOFLE:     equ     147            ; open file for writing (creates).
 HOOK_SBYT:      equ     148            ; save one byte (buffered).
 HOOK_CFSM:      equ     152            ; close output (flushes + dir update).
@@ -49,60 +53,90 @@ HOOK_LBYT:      equ     159            ; load one byte (buffered).
 
 
 ; -----------------------------------------------------------------------
-; open_input — opens file whose name+type are pre-filled in UIFA at &4B00,
-;              for reading. After return: the first sector has been read
-;              into the DOS buffer, RAM pointer is at start of payload.
-;              CY = 0 on success, CY = 1 + error in A on failure (e.g.
-;              file not found = error 26 → SAMDOS report 107).
+; fill_uifa — copy 15 bytes from (HL) into UIFA, pad bytes 15-47 with &FF.
+;
+; Input:  HL = pointer to 15-byte name block: 1 type + 10 name + 4 ext.
+; Output: UIFA at &4B00 is populated; IX = &4B00.
+; Clobbers: A, BC, DE, HL (via LDIR).
 ; -----------------------------------------------------------------------
-open_input:     ; TODO (Task 7): rst 8 / defb HOOK_HGFLE with IX = UIFA.
+fill_uifa:      ld      de, UIFA
+                ld      bc, 15
+                ldir                   ; copy type + name (10) + ext (4) = 15 bytes
+                ld      a, &FF
+                ld      b, 48 - 15     ; fill remaining 33 bytes with &FF
+fu1:            ld      (de), a
+                inc     de
+                djnz    fu1
+                ld      ix, UIFA       ; point IX at UIFA ready for RST 8
                 ret
 
-; -----------------------------------------------------------------------
-; read_byte — fetch next byte of currently open input file.
-;             A = byte read. CY set on EOF / error.
-;             Internally: rst 8 / defb HOOK_LBYT (148-1 → 159).
-; -----------------------------------------------------------------------
-read_byte:      ; TODO (Task 7): rst 8 / defb HOOK_LBYT.
-                ret
 
 ; -----------------------------------------------------------------------
-; close_input — release the input file. Note: SAMDOS has no explicit
-;               close-for-read entry point; on real SAMDOS this is a
-;               no-op (the buffer is reused on next open). On MasterDOS
-;               there is one; for portability we keep the wrapper as a
-;               named entry point even though the body may be empty.
+; open_input — open existing file for reading (HGFLE, hook 158).
+;
+; Precondition: fill_uifa has been called with the input file's name block.
+; After return: first sector in DOS buffer, read pointer at start of payload.
+; On error: SAMDOS longjmps to BASIC — does not return to caller.
 ; -----------------------------------------------------------------------
-close_input:    ; TODO (Task 7): no-op on SAMDOS; preserve wrapper for
-                ;                future MasterDOS support.
+open_input:     rst     8
+                defb    HOOK_HGFLE     ; 158: HGFLE — open file for reading
                 ret
 
-; -----------------------------------------------------------------------
-; create_output — create file whose name+type are pre-filled in UIFA, for
-;                 writing. Allocates a new directory entry, finds free
-;                 sectors, writes header. CY on failure (disk full,
-;                 directory full, name in use → user prompted).
-;                 Internally: rst 8 / defb HOOK_HOFLE.
-; -----------------------------------------------------------------------
-create_output:  ; TODO (Task 7): rst 8 / defb HOOK_HOFLE with IX = UIFA.
-                ret
 
 ; -----------------------------------------------------------------------
-; write_byte — write A to currently open output file (buffered through
-;              the DOS sector buffer; flushed automatically when full or
-;              by close_output).
-;              CY set on disk-full / I/O error.
-;              Internally: rst 8 / defb HOOK_SBYT.
+; read_byte — fetch next byte from currently open input file.
+;
+; Output: A = byte read.
+; On EOF or error: SAMDOS longjmps ("End of file" report) — never returns.
+; Precondition: open_input has been called.
 ; -----------------------------------------------------------------------
-write_byte:     ; TODO (Task 7): rst 8 / defb HOOK_SBYT.
+read_byte:      rst     8
+                defb    HOOK_LBYT      ; 159: LBYT — load one byte
                 ret
 
+
 ; -----------------------------------------------------------------------
-; close_output — flush remaining buffer to disk, write/finalise the
-;                file's sector-address-map directory entry.
-;                Must be called or the file's directory entry stays
-;                marked "open" and the file is unreadable.
-;                Internally: rst 8 / defb HOOK_CFSM.
+; close_input — release the input file.
+;
+; SAMDOS 2 has no explicit close-for-read hook (HCLOS stub at code 135
+; is a bare RET). This wrapper is a no-op for SAMDOS but is kept as a
+; named entry point for future MasterDOS support.
 ; -----------------------------------------------------------------------
-close_output:   ; TODO (Task 7): rst 8 / defb HOOK_CFSM.
+close_input:    ret
+
+
+; -----------------------------------------------------------------------
+; create_output — create a new file for streaming write (HOFLE, hook 147).
+;
+; Precondition: fill_uifa called with output file's name block.
+;               HERAZ should be called first to erase any existing file so
+;               that HOFLE does not prompt interactively (see spike doc).
+; After return: directory entry reserved, header written, buffer ready.
+; On error (disk/dir full): CY set — HOFLE is the only hook that returns
+;   CY instead of longjmping (see spike doc, ofsm / cyes).
+; -----------------------------------------------------------------------
+create_output:  rst     8
+                defb    HOOK_HOFLE     ; 147: HOFLE — open file for writing
+                ret
+
+
+; -----------------------------------------------------------------------
+; write_byte — write A to currently open output file (buffered).
+;
+; Input: A = byte to write.
+; On disk-full / I/O error: SAMDOS longjmps — does not return.
+; -----------------------------------------------------------------------
+write_byte:     rst     8
+                defb    HOOK_SBYT      ; 148: SBYT — save one byte
+                ret
+
+
+; -----------------------------------------------------------------------
+; close_output — flush buffer and finalise directory entry (CFSM, hook 152).
+;
+; Must be called or the directory entry stays "open" and the file is
+; unreadable on the next boot.
+; -----------------------------------------------------------------------
+close_output:   rst     8
+                defb    HOOK_CFSM      ; 152: CFSM — close/flush output file
                 ret
