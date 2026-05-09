@@ -121,32 +121,65 @@ A fresh `NEW` state has NUMEND == SAVARS (no gap). The first call to
 the variable-creation path triggers this 512-byte expansion. Subsequent
 SAVEs include the gap.
 
-This is why `vars=92, gap=512` is so common: any program that defines a
-single numeric variable and then re-clears (or ends with no vars in
-scope) leaves the runtime in `vars=92, gap=512` state, which is what
-gets serialised to disk.
-
 Variants with `gap=2064` (giving `vars+gap=2156`) come from MasterDOS
 or alternate ROMs whose MAKEROOM-equivalent uses a larger constant.
 
+## Honest gap: why is `gap=512` near-universal even for empty programs?
+
+The ROM mechanism above predicts: if no numeric variable has ever been
+created, MAKEROOM never fires, so `gap=0`. Yet 94% of empirical disks
+show `gap > 0`, with `gap=512` dominant. Something between `NEW` and
+`SAVE` triggers exactly one MAKEROOM call in real-world BASIC use.
+
+We did not trace this fully. Plausible candidates:
+
+- Editing a line with numeric literals may transiently create
+  parser-internal numeric state.
+- SAVE itself may pre-allocate before serialising, to keep the on-disk
+  layout consistent.
+- Auto-RUN line-number storage (dir bytes 0xF3-0xF4) may invoke the
+  numeric var path at SAVE time.
+
+For our purposes the gap exists empirically — that's enough to know
+how to emit a working file. The mechanism is left as an open
+follow-up.
+
 ## Practical recipe for synthesising a SAM BASIC AUTO file
 
-To write a SAM BASIC file that round-trips through ROM `LOAD` and
-`CLEAR` cleanly:
+This recipe targets the common case the M0 boot path needs: a small
+AUTO BASIC with no user-defined variables. For programs that actually
+declare variables, the vars-area size grows accordingly; that's beyond
+M0 scope.
 
 1. **PROG section**: tokenised lines + `0xff` end-of-program sentinel.
-2. **Trailer**: at minimum, 604 bytes of any content. The contents are
-   either re-initialised by `CLEAR` or treated as opaque. Zero-fill is
-   acceptable — verified empirically. For byte-perfect canonical
-   fidelity, write the 92-byte CLRSR pattern (above) followed by 512
-   zero bytes.
-3. **Dir-entry triplets** at `0xDD/0xE0/0xE3`: 3-byte page-form encoding
-   of `(NVARS-PROG, NUMEND-PROG, SAVARS-PROG)`. The canonical empty-state
-   triplet values are `(prog_length, prog_length+92, prog_length+604)`.
-4. **Body header LengthMod16K**: total body size including the trailer.
-5. **Sector chain**: enough sectors to hold the body (usually 2 for an
-   AUTO with a single short line: 9 header + 47 line + 1 sentinel + 92
-   vars + 512 gap = 661 bytes ≈ 2 sectors of 510 usable bytes).
+2. **Trailer**: 92 bytes vars area + 512 bytes gap = 604 bytes. The
+   bytes can be zero-filled; CLEAR re-initialises the vars area on
+   AUTO-RUN. For byte-perfect canonical fidelity, write the
+   CLRSR-init pattern (46 × `0xFF` + PSVTAB + 2 × PSVT2 = 92 bytes)
+   followed by 512 zeros.
+3. **Dir-entry triplets** at `0xDD/0xE0/0xE3`: page-form encoding of
+   `(prog_length, prog_length+92, prog_length+604)` respectively.
+4. **Body header LengthMod16K**: total body size including the trailer
+   (= prog_length + 604).
+5. **Sector chain**: enough sectors. For our AUTO: 9 header + 52 prog +
+   92 vars + 512 gap = 665 bytes → 2 sectors at 510 usable bytes each.
+
+### Why 92+512 specifically (and not, say, all-in-vars or all-in-gap)?
+
+There is a `vars + gap = 604` invariant that's robust (94% of disks).
+Within that, the split varies based on how many user variables are
+defined at SAVE time. For `vars_count == 0` the dominant split is
+`92 + 512` — that's what Pete's hand-saved reference has and what
+Defender's AUTOBOOT has, both of which boot cleanly. A different split
+that still sums to 604 would probably also work, but 92+512 is the
+empirically-safe choice with the most reference data behind it.
+
+We are NOT fully replicating ROM's dynamic MAKEROOM algorithm. We are
+emitting a fixed canonical layout that matches observed clean SAVES.
+For a future asssembler with real variables, the vars side of the
+split would grow as variables are defined; the gap side would track
+"available headroom" per the `<60 bytes free → +512` rule. That's
+beyond M0 but documented here for when it matters.
 
 `tools/build-disk.sh` implements this recipe for slot 1 (`auto`).
 
