@@ -19,10 +19,15 @@
 ; Note: pyz80 does not support the END directive. Assembly ends at EOF.
 ; The org directive sets the load address; the entry point is the first byte.
 
-                org     &6000
+                org     &8000
 
-; Jump table at the entry point: CALL 24576 lands on the first byte (&6000).
-; (Note: SAMDOS itself lives at &8000+, so user code must avoid that range.)
+; Jump table at the entry point: CALL 32768 lands on the first byte (&8000).
+; (Note: SAMDOS lives at logical &8000-&BFFF when its page is mapped via HMPR.
+;  During RST 8 hooks ROM pages SAMDOS into section B (&4000-&7FFF), so our
+;  &8000-resident stub is shadowed by HMPR-mapped SAMDOS data, not SAMDOS code.
+;  This matches Defender Compilation's `CALL 32768` convention. If this
+;  collides at hook time we'll see it as a separate failure mode; for now the
+;  point is to test the CLEAR WKEND-RAMTOP fix.)
 ; The subroutines from sam_io.inc follow immediately; start: is after them.
                 jp      start
 

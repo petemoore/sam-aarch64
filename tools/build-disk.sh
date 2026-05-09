@@ -212,7 +212,7 @@ with open(output_path, "r+b") as f:
     def num(n: int) -> bytes:
         return bytes([0x0e, 0x00, 0x00, n & 0xff, (n >> 8) & 0xff, 0x00])
 
-    LOAD_ADDR = 24576
+    LOAD_ADDR = 32768
     # Original BASIC AUTO line. Hypothesis-test: with the AUTO file metadata
     # bug fixed (see below), CLEAR n in AUTO-RUN should now work — previously
     # it crashed because BASIC's HDL was populated from zeroed dir-entry

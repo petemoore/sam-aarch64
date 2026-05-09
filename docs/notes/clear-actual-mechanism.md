@@ -19,34 +19,41 @@ SAMDOS source = `~/git/samdos/src/<file>`.
 
 ## TL;DR (verdict)
 
-**Cited root cause** (high confidence): CLEAR's RAMTOP-vs-WKEND
-validation at `rom:13186-13192` fails for our specific combination of
-(small body + low CLEAR target). After LDPRDT's MKRBIG-XOINTERS shifts
-WKEND by +57 (the body size), `WKEND+180 = PROG+845 = linear 0x6022`,
-which is **above** the CLEAR target `24575 = 0x5FFF`. The check `(WKEND+180)
-- target` returns NC (no borrow), JR NC,RTERR (`rom:13190`) fires
-"Invalid CLEAR address" error 48.
+**Cited root cause candidate** (medium-high confidence): CLEAR's
+RAMTOP-vs-WKEND validation at `rom:13178-13192` fails for our specific
+combination of (small body + CLEAR target = LOAD addr - 1).
 
-The interactive case has **no** MKRBIG-XOINTERS shift (no body load
-ever happened), so WKEND stays at MNINIT-time PROG+608 = linear 0x5F6D,
-WKEND+180 = 0x6021... wait, that's also > 0x5FFF.
+For interactive `CLEAR 24575` (no body load): WKEND = PROG+608 (MNINIT
+default). WKEND+180 = linear 0x5FE9. target = 0x5FFF. `(WKEND+180) -
+target = -0x16` (CY set, borrow) → `JR NC,RTERR` NOT taken → CLEAR
+succeeds. Margin: 22 bytes.
 
-**Actually** the interactive math also fails per this analysis. Either:
+For AUTO-RUN `CLEAR 24575` after LDPRDT loads our 57-byte body: WKEND =
+PROG+664 (= MNINIT_WKEND + body_size - reclaim_count, per the formula
+in §5). WKEND+180 = linear 0x6021. target = 0x5FFF. `(WKEND+180) -
+target = +0x22` (positive, NC) → `JR NC,RTERR` taken → fires error 48
+"Invalid CLEAR address".
 
-- (a) my understanding of WKEND-init is wrong (in which case the whole
-  argument falls)
-- (b) the empirical "interactive CLEAR works" claim needs re-verification
-  on the specific value `CLEAR 24575` (Pete's claim was based on
-  general "CLEAR n at OK prompt works" — maybe `CLEAR 24575` *also*
-  errors interactively, just to error-not-crash).
+**This explains the interactive-vs-AUTO-RUN difference** (the 22-byte
+margin is exactly consumed by the post-LDPRDT WKEND shift).
 
-I cannot conclusively determine the root cause of the
-**visualization** difference (clean error 48 vs page-displaced screen)
-from static analysis alone. **Runtime instrumentation needed.**
+**Honest gap**: my mechanism predicts a clean error 48 message, but
+empirically we see "page-displaced screen, palette differs, partial
+recovery to splash by ~12s" (`2026-05-10-handoff.md:53-54`). The error
+reporter (NORMERR → SETSTK → MAINER → ERRHAND1 → POMSR) should print a
+normal error and idle at MAINELP. I cannot from static analysis
+determine why the visualization differs from a clean error display.
 
-The body of this report goes through the math step-by-step with
-citations, lays out the candidate mechanisms, and flags the gaps
-honestly.
+**§7.1 padding does NOT help**: with body=825 bytes, my formula gives
+the same WKEND_post = PROG+664 (because reclaim cancels out
+body-size growth). The reclaim_count = body - nvars_triplet + 1, so
+WKEND_post = PROG + 607 + nvars_triplet, depending only on the
+NVARS-PROG triplet (which our 57-byte program forces ≥ 57). Padding
+cannot fix this.
+
+**Recommendation**: Pete should run runtime instrumentation (§8.1) to
+verify whether RTERR actually fires, OR empirically test
+`CLEAR 28000` substitute (§8.2) — if it works, mechanism confirmed.
 
 ---
 
@@ -57,84 +64,34 @@ verified against ROM).
 
 ### 1.1 MNINIT-time state (SETMIN included)
 
-CLRSR at `rom:13209-13234` walks:
-
-- `ADDRNV` (rom:13215): A=NVARSP=0, HL=NVARS=PROG+1 (initial empty
-  program — just the FF terminator at PROG)
-- `LD B,46`; loop write FF, INC HL — fills NVARS..NVARS+45 with FF (46
-  bytes for letter pointers A-W × 2 each... actually 23 letters × 2 =
-  46 bytes)
-- `LD HL,PSVTAB; LD C,26; LDIR` (rom:13223-13225): copies 26 bytes
-  from PSVTAB to NVARS+46..NVARS+71. PSVTAB at `rom:13286-13288` is 6
-  bytes (`19 00 03 00 FF FF`)... wait C=26 not 6. Let me recount.
-
-PSVTAB layout per `rom:13286-13288`:
-```
-PSVTAB: DW 0019H          ;X VARS
-        DW 0003H          ;Y VARS
-        DW 0FFFFH         ;Z VARS
-PSVT2:  DB 2; DW 8; DB "os"; DB 0,0,0,0,0    ;YOS variable
-        DB 2; DW 0xFFFF; DB "rg"; DB 0,0,192,0,0  ;YRG variable
-```
-
-PSVTAB = 6 bytes (3 words). PSVT2 = 20 bytes (2 var entries × 10 bytes
-each).
-
-But CLRSR's LDIR copies 26 bytes from PSVTAB. PSVTAB only has 6 bytes
-defined. The LDIR continues past the labeled bytes — i.e. PSVTAB+6
-onwards reads bytes that are physically PSVT2.
-
-So the LDIR-26-from-PSVTAB copies PSVTAB (6 bytes) + first 20 bytes of
-PSVT2... but then there's another LDIR-20-from-PSVT2 right after at
-`rom:13226-13228`:
+CLRSR at `rom:13209-13234` runs the following byte-write sequence
+(starting at NVARS in section-C-form):
 
 ```
-13986 EB                 EX DE,HL
-13987 21E339             LD HL,PSVTAB
-13988 0E1A               LD C,26
-13989 EDB0               LDIR              ;COPY 3 PTRS AND YOS/YRG
-13990 21E939             LD HL,PSVT2
-13991 0E14               LD C,20
-13992 EDB0               LDIR              ;COPY YOS/YRG AGAIN
+ADDRNV          ; HL=NVARS (=PROG+1 at MNINIT-time), A=NVARSP=0
+LD B,46
+CLNVP: LD (HL),0FFH; INC HL; DJNZ CLNVP   ; 46 bytes of FF (letter pointers)
+EX DE,HL
+LD HL,PSVTAB; LD C,26; LDIR               ; 26 more bytes
+LD HL,PSVT2;  LD C,20; LDIR               ; 20 more bytes
+EX DE,HL
+CALL SETNE                                ; NUMEND = HL = NVARS+92
+INC H; INC H                              ; HL += 0x200 (FPCS gap)
+CALL SETSAV                               ; SAVARS = HL = NVARS+92+0x200 = NVARS+604
+LD (HL),0FFH                              ; FF terminator at SAVARS
 ```
 
-So:
-- 26-byte LDIR from PSVTAB writes 6 bytes (the actual PSVTAB) + 20
-  bytes (which are physically PSVT2's bytes since PSVT2 immediately
-  follows PSVTAB).
-- Then 20-byte LDIR from PSVT2 writes 20 bytes (PSVT2 again).
+Total writes between NVARS and SAVARS: 46 (letter pointers) + 26
+(PSVTAB) + 20 (PSVT2) = **92 bytes**, then a 0x200 gap. Cite:
+rom:13215-13234.
 
-Net: 46 bytes written.
+The previous agent missed the third LDIR (rom:13226-13228 `LD HL,PSVT2;
+LD C,20; LDIR`), counting only 46+26 = 72 bytes. The corrected count is
+46+26+20 = 92 bytes.
 
-Hmm wait that's weird — the comment "COPY YOS/YRG AGAIN" suggests
-intentional duplication. So the 26-from-PSVTAB writes PSVTAB (6 bytes
-of letter pointers) + YOS/YRG (20 bytes), then the 20-from-PSVT2
-overwrites those same YOS/YRG bytes... no, LDIR continues forward.
-
-Let me re-read. After the first LDIR, DE has advanced by 26 bytes
-(from initial DE = NVARS+46). Now DE = NVARS+72.
-
-The second LDIR (20 bytes from PSVT2) writes to DE = NVARS+72..NVARS+91.
-
-So total CLRSR writes: 46 bytes FF + 26 bytes PSVTAB+PSVT2_first + 20
-bytes PSVT2 = 46 + 26 + 20 = 92 bytes, starting at NVARS=PROG+1 and
-ending at PROG+93.
-
-After the LDIRs: HL=DE = NVARS+92 = PROG+93.
-
-Then `EX DE,HL` (rom:13229) → HL=NVARS+92 = PROG+93. Then `CALL SETNE`
-(rom:13230): writes (NUMENDP, NUMEND) = page=0, addr=PROG+93. So
-NUMEND = PROG+93.
-
-Then `INC H; INC H` (rom:13231-13232): H += 2 = +0x200. HL = PROG+93 +
-0x200 = PROG+605.
-
-Then `CALL SETSAV` (rom:13233): SAVARS = PROG+605.
-
-`LD (HL),0xFF` (rom:13234): byte at PROG+605 = 0xFF (terminator).
-
-After CLRSR (within MNINIT): NVARS=PROG+1, NUMEND=PROG+93,
-SAVARS=PROG+605. ✓ matches the prompt's correction.
+SAVARS = NVARS + 92 + 0x200 = **NVARS + 604**. For MNINIT-time NVARS =
+PROG+1: SAVARS = PROG + 605. ELINE = SAVARS + 1 = PROG + 606. ✓ matches
+the prompt's correction.
 
 Then MNINIT continues at `rom:24653-24655` (= ECFB-ED02 in ROM
 addresses):
@@ -540,34 +497,25 @@ So §5's "ELINE-NVARS-0x025D goes negative" is wrong for our state.
 
 ---
 
-## 4. Why §7.1 padding is the WRONG fix
+## 4. Why §7.1 padding does not help
 
 The previous agent's §7.1 recommended padding the body to ≥605 bytes
-to "fix" the supposed negative-AHL issue. With my §1.7 analysis, this
-fix is **counterproductive**:
+to "fix" the supposed negative-AHL issue. Per §5 below, the
+post-CLEAR WKEND value depends ONLY on `nvars_triplet`, not on body
+size. Padding doesn't change nvars_triplet (the program-with-
+terminator length, which is what we have), so it doesn't change
+WKEND_post. RTERR fires regardless of body padding.
 
-- Larger body → MKRBIG-XOINTERS shifts WKEND by MORE bytes
-- Larger WKEND → WKEND+180 GREATER
-- More likely to fail the (WKEND+180) > target check
+For example, padding our body to 825 bytes (per §7.1's example):
+- WKEND post-LDPRDT = PROG + 608 + 825 = PROG + 1433
+- CLEAR's RECL2BIG: ELINE-NVARS = (PROG+606+825) - (PROG+57) = 1374.
+  AHL = 1374 - 605 = 769. RECL2BIG reclaims 769 bytes (XOINTERS shifts
+  sysvars by -769).
+- WKEND post-CLEAR = PROG + 1433 - 769 = **PROG + 664** (same as
+  57-byte body outcome)
+- WKEND + 180 = PROG + 844 = linear 0x6021 > target=0x5FFF → RTERR
 
-Specifically, padding our body to 825 bytes (per §7.1's example):
-- WKEND post-LDPRDT = PROG+608+825 = PROG+1433 = linear 0x6261
-  (assuming PROG=0x5CD5)
-- Wait but CLEAR's RECL2BIG would also shift differently. With the
-  larger body, the AHL after CLEAR's SUBAHLBC would be:
-  ELINE-NVARS = (PROG+606+825) - (PROG+57) = 1374. AHL = 1374-605 =
-  769. RECL2BIG with ABC=769 reclaims 769 bytes at NVARS. After:
-  WKEND-769 = PROG+1433-769 = PROG+664. **Same as 57-byte body
-  outcome!**
-
-Actually wait — the RECL2BIG-XOINTERS adjusts sysvars by -769 (the
-reclaim count). So WKEND post-CLEAR = PROG+1433-769 = PROG+664.
-WKEND+180 = PROG+844 = linear 0x6021. > target=0x5FFF.
-
-**RTERR fires regardless of body padding.** The fix is structurally
-wrong.
-
-This further confirms §7.1 should not be applied.
+§7.1 should not be applied.
 
 ---
 
@@ -606,67 +554,61 @@ Equivalently:
 - body_size - reclaim_count < 22
 - reclaim_count = (NVARS-PROG_triplet difference + ELINE shift - 0x025D)
 
-For our case: reclaim_count = 1, body_size = 57. 57 - 1 = 56 > 22. RTERR.
-For Defender: reclaim_count = 660-148 = 512 (numeric area), body=660.
-  660-512 = 148 > 22 — but Defender CLEAR target is 32767, not 24575.
-  target_offset = 32767-PROG = 32767-23765 = 9002. 148 < 9002. No
-  RTERR.
+### Algebraic derivation of WKEND_post
 
-**For our M0 use case (CLEAR 24575 with body sized to our 1-line
-program), the WKEND-validation check fundamentally cannot pass without
-either:**
-
-- (a) increasing the CLEAR target (e.g. CLEAR 32767), OR
-- (b) using a larger body whose CLRSR-reclaim makes the net WKEND
-  shift small (e.g. SAVARS-PROG triplet such that the reclaim size
-  cancels the body-size shift).
-
-Defender's body shape is the latter: SAVARS-PROG=660 (=body length),
-NVARS-PROG=56. After LDPROG: NVARS=PROG+56, ELINE-NVARS = (PROG+606+
-body)-NVARS = 1210 (with body=660). AHL after SUBAHLBC = 605. RECL2BIG
-reclaims 605 bytes. WKEND post = PROG+608+660-605 = PROG+663 (close to
-post-CLEAR WKEND for our 57-byte case).
-
-Hmm wait that's PROG+663 + 180 = PROG+843 = 0x6020. still > 0x5FFF.
-
-But Defender uses CLEAR 32767, so its target is 0x7FFF, well above
-WKEND+180. So Defender doesn't hit RTERR.
-
-OK so this is body-size + CLEAR-target combined. **The mechanism is
-not "body too small" but rather "body too small for CLEAR-target this
-close to PROG"**.
-
-If I wanted to make AUTO-RUN CLEAR 24575 work without changing the
-target, I'd need to make the body have a NVARS-PROG triplet that's
-LARGER than 22 + 0x025D - 605 = 22 (i.e. NVARS-PROG ≥ 22 + reclaim
-amount). But actually...
-
-Actually let me redo. We want WKEND_post_CLEAR_RECL2BIG + 180 < target.
-
+```
 WKEND_post = WKEND_post_MKRBIG - reclaim_count
-           = (PROG+608+body) - reclaim
-           = PROG + 608 + body - reclaim
 
-Where reclaim = AHL post-SUBAHLBC = ELINE_post_MKRBIG - NVARS_post_LDPROG - 0x025D
-             = (PROG+606+body) - (PROG+nvars_triplet) - 605
-             = body - nvars_triplet + 1
+WKEND_post_MKRBIG = MNINIT_WKEND + body_size
+                  = (PROG + 608) + body_size
 
-So WKEND_post = PROG + 608 + body - (body - nvars_triplet + 1)
+reclaim_count = AHL after CLEAR's SUBAHLBC at rom:13169
+              = ELINE_post_MKRBIG - NVARS_post_LDPROG - 0x025D
+              = (PROG + 606 + body_size) - (PROG + nvars_triplet) - 605
+              = body_size - nvars_triplet + 1
+
+WKEND_post   = (PROG + 608 + body_size) - (body_size - nvars_triplet + 1)
              = PROG + 607 + nvars_triplet
+```
 
-Interesting! WKEND_post depends on **nvars_triplet only**, not body.
+**WKEND_post depends ONLY on `nvars_triplet`, not on body_size.**
 
-WKEND+180 = PROG + 787 + nvars_triplet < target
-          = 24575 - PROG = 810
-          → nvars_triplet < 23
+Padding the body (per clear-remaining-diff.md §7.1) does NOT change
+WKEND_post — body_size cancels out of the equation. The only way to
+reduce WKEND_post is to reduce nvars_triplet (the program length up to
+the FF terminator).
 
-For our case, nvars_triplet = 57. 57 < 23? No. RTERR.
+### Verification across our case and Defender
 
-For interactive case (no LDPRDT): WKEND = PROG+608. WKEND+180 =
-PROG+788. 788 < 810. No RTERR.
+For our case, nvars_triplet = 57:
+- WKEND_post = PROG + 664
+- WKEND_post + 180 = PROG + 844 = linear 0x6021
+- target_offset_from_PROG (for `CLEAR 24575`, target_linear = 0x5FFF):
+  0x5FFF - 0x5CD5 = 810
+- 844 > 810 → **RTERR fires**
 
-**So the actual constraint for AUTO-RUN `CLEAR 24575` to succeed: the
-NVARS-PROG triplet (the encoded program length) must be < 23 bytes.**
+For Defender, nvars_triplet = 56:
+- WKEND_post = PROG + 663
+- WKEND_post + 180 = PROG + 843 = linear 0x6020
+- target_offset for `CLEAR 32767`: 0x7FFF - 0x5CD5 = 9002
+- 843 < 9002 → no RTERR
+
+So Defender's nvars_triplet ≈ ours, but Defender's CLEAR target is
+much higher (32767 vs 24575), giving plenty of margin.
+
+### The constraint for our use case
+
+For AUTO-RUN `CLEAR 24575` to succeed: `WKEND_post + 180 <
+target_linear` → `787 + nvars_triplet < 810` → **nvars_triplet < 23**.
+
+Our minimum 1-line program tokenized is ~57 bytes (4-byte line header +
+~52-byte tokenized line + 1-byte FF terminator). The nvars_triplet
+must equal the program-with-terminator length, which is the body
+length for a vars-less body. This forces nvars_triplet ≥ 57.
+
+**Conclusion: AUTO-RUN `CLEAR 24575` with our minimum 1-line
+LOAD/CALL program cannot satisfy the WKEND-vs-RAMTOP check at
+rom:13186.**
 
 Our minimal program is 57 bytes. We CANNOT make it ≤ 22 bytes while
 keeping the CLEAR/LOAD/CALL on a single line. (Just `CLEAR 24575:
@@ -768,6 +710,19 @@ Honest gaps:
    cache-fix shouldn't matter for the WKEND-RAMTOP check, but
    empirically the visualization changed. Implies my mechanism is
    incomplete.
+
+5. **The exact value of PROGP at AUTO-RUN time**. The math in §1.7
+   assumed PROGP=0, giving WKEND_post = PROG+664 in section-C-form
+   = 0x9F6D. With HMPR=PROGP=0, this would access physical page 0
+   offset 0x1F6D = linear 0x1F6D. But ROM annotation at rom:24547
+   computes PROG via `5CB6+31+0x4000 = 0x9CD5` which suggests linear
+   PROG = 0x5CD5 (in physical page 1). For section-C 0x9CD5 to
+   actually access linear 0x5CD5, PROGP must be 1 (HMPR=1, section
+   C = page 1). I cannot find an explicit `LD (PROGP),1` in MNINIT.
+   If PROGP differs from my assumption, the (WKEND+180) > target
+   math shifts by some amount. The qualitative conclusion (the
+   WKEND-RAMTOP check fails for our body+target combo) likely still
+   holds, but the exact numbers may be off by a fixed amount.
 
 4. **Whether the BASIC dispatcher path between BTHK return and
    LDPRDT entry alters any sysvars I haven't considered.** Per
