@@ -19,9 +19,10 @@
 ; Note: pyz80 does not support the END directive. Assembly ends at EOF.
 ; The org directive sets the load address; the entry point is the first byte.
 
-                org     &8000
+                org     &6000
 
-; Jump table at the entry point: CALL 32768 lands on the first byte (&8000).
+; Jump table at the entry point: CALL 24576 lands on the first byte (&6000).
+; (Note: SAMDOS itself lives at &8000+, so user code must avoid that range.)
 ; The subroutines from sam_io.inc follow immediately; start: is after them.
                 jp      start
 
@@ -63,7 +64,14 @@ emit:           ld      a, (hl)
 ; -- close OUT (flush + finalise directory entry) -------------------------
                 call    close_output   ; RST 8 / DEFB 152 — mandatory
 
-                halt                   ; DI + HALT → SimCoupé exits 0
+; -- magic exit signal -----------------------------------------------------
+; The patched SimCoupé's `-exitonhalt 1` flag detects an OUT to port &DEAD
+; with value &C0 and quits cleanly. No real SAM hardware decodes port &DEAD,
+; so this is unambiguous. HALT remains as a defence-in-depth fallback.
+                ld      bc, &dead
+                ld      a, &c0
+                out     (c), a
+                halt                   ; defence in depth
 
 fail:           ld      a, &02         ; red border = error indicator for debug
                 out     (&fe), a

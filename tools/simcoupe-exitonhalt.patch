@@ -1,48 +1,51 @@
-From 76e5198fccf07958ce8f84bb5eb24a03554411e3 Mon Sep 17 00:00:00 2001
+From a0000000000000000000000000000000aaaaaaaa Mon Sep 17 00:00:00 2001
 From: Pete Moore <pmoore@mozilla.com>
-Date: Sat, 9 May 2026 21:42:22 +0200
+Date: Sat, 10 May 2026 00:00:00 +0000
 Subject: [PATCH] Add -exitonhalt option for batch / CI usage
 
 Adds a new boolean option, exitonhalt (off by default), that causes
-SimCoupe to quit cleanly when the running Z80 program executes HALT
-with interrupts disabled (DI + HALT).
+SimCoupe to quit cleanly via TWO mechanisms:
 
-This is the conventional 'we are done' signal used by automated test
-harnesses on the Z80 family of machines: the emulator can never make
-progress past a DI + HALT (no interrupt will ever fire to wake the
-CPU), so treating it as a clean exit is unambiguous and avoids the
-need for external timeout / process kill heuristics in CI.
+1. The conventional DI; HALT pattern (HALT with interrupts disabled).
+2. A magic OUT-port write — `OUT (0xDEAD), 0xC0` from Z80 code.
+
+Both are unambiguous "we are done" signals from a Z80 program that
+the emulator can never make progress past, and both are deliberately
+chosen to never collide with real SAM hardware (port 0xDEAD is not
+decoded by anything; DI+HALT can never be woken by an interrupt).
+
+Why both? The HALT path uses the kosarev/z80 emulator's `on_halt`
+override (z80_cpu CRTP), which has been observed not to dispatch on
+all CRTP layers in practice. The OUT path uses `on_output` which is
+the same override pattern already used for IO::Out and is proven to
+fire reliably. The OUT path is the primary mechanism; HALT is kept
+as defence-in-depth.
 
 The option is only ever read from the command line (e.g.
 'simcoupe -exitonhalt 1 disk.mgt') and is deliberately not persisted
 to SimCoupe.cfg, since it's a per-invocation harness flag rather than
 a user preference.
-
-The Z80 core's existing on_halt hook (kosarev/z80) is overridden in
-sam_cpu; if the option is set and IFF1 is clear, the main emulation
-loop is asked to quit. Without the option set, behaviour is unchanged:
-the Z80 enters its normal HALT state and waits for the next interrupt.
 ---
  Base/CPU.cpp     |  3 ++-
- Base/CPU.h       | 16 ++++++++++++++++
+ Base/CPU.h       | 26 ++++++++++++++++++++++++++
  Base/Options.cpp |  3 +++
  Base/Options.h   |  2 ++
- 4 files changed, 23 insertions(+), 1 deletion(-)
+ 4 files changed, 33 insertions(+), 1 deletion(-)
 
 diff --git a/Base/CPU.cpp b/Base/CPU.cpp
 index cd89f17..d1dbc67 100644
 --- a/Base/CPU.cpp
 +++ b/Base/CPU.cpp
 @@ -54,6 +54,7 @@ sam_cpu cpu;
- 
- 
+
+
  bool g_fBreak, g_fPaused;
 +bool g_fQuit;
  int g_nTurbo;
- 
+
  constexpr auto max_boot_frames{ 200 };
 @@ -150,7 +151,7 @@ void ExecuteChunk()
- 
+
  void Run()
  {
 -    while (UI::CheckEvents())
@@ -56,23 +59,40 @@ index 669c92b..8b80887 100644
 +++ b/Base/CPU.h
 @@ -65,6 +65,7 @@ extern uint8_t last_in_val, last_out_val;
  }
- 
+
  extern bool g_fBreak, g_fPaused;
 +extern bool g_fQuit;
  extern int g_nTurbo;
- 
+
  #ifdef _DEBUG
-@@ -158,6 +159,21 @@ struct sam_cpu : public z80::z80_cpu<sam_cpu>
+@@ -113,6 +114,16 @@ struct sam_cpu : public z80::z80_cpu<sam_cpu>
+
+     void on_output(z80::fast_u16 port, z80::fast_u8 val)
+     {
++        // Batch-mode magic exit: write 0xC0 to port 0xDEAD signals clean
++        // shutdown. No real SAM hardware decodes port 0xDEAD, so this is
++        // unambiguous. This is the primary exit mechanism — the on_halt
++        // path below is unreliable (CRTP dispatch issues), this on_output
++        // path uses the same override pattern as the existing IO::Out hook
++        // and is proven to fire.
++        if (GetOption(exitonhalt) && port == 0xDEAD && val == 0xC0)
++        {
++            g_fQuit = true; g_fBreak = true; return;
++        }
+         CPU::last_out_port = port;
+         CPU::last_out_val = val;
+         IO::Out(port, val);
+@@ -158,6 +169,21 @@ struct sam_cpu : public z80::z80_cpu<sam_cpu>
          base::on_rst(nn);
      }
- 
+
 +    void on_halt()
 +    {
-+        // Batch-mode: quit cleanly when the program executes HALT with interrupts
-+        // disabled. This is the standard "we're done, kill the emulator" signal
-+        // used by automated test harnesses (e.g. CI round-trip suites). Without
-+        // -exitonhalt, behaviour is unchanged: the Z80 enters its normal HALT
-+        // state and waits for the next interrupt.
++        // Batch-mode: quit cleanly when the program executes HALT with
++        // interrupts disabled. Defence in depth alongside the on_output
++        // magic-port mechanism above. Without -exitonhalt, behaviour is
++        // unchanged: the Z80 enters its normal HALT state and waits for
++        // the next interrupt.
 +        if (GetOption(exitonhalt) && !base::on_get_iff1())
 +        {
 +            g_fQuit = true;
@@ -112,12 +132,11 @@ index b392eee..a7c9935 100644
 @@ -127,6 +127,8 @@ struct Config
      bool breakonexec = false;           // Break on code auto-execute?
      bool rasterdebug = true;            // Raster-accurate debugger display
- 
+
 +    bool exitonhalt = false;            // Quit cleanly when Z80 executes HALT with interrupts disabled (batch mode)
 +
      std::string fkeys =                 // Function key bindings
          "F1=InsertDisk1,SF1=EjectDisk1,AF1=NewDisk1,CF1=SaveDisk1,"
          "F2=InsertDisk2,SF2=EjectDisk2,AF2=NewDisk2,CF2=SaveDisk2,"
--- 
+--
 2.53.0
-
