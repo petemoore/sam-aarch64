@@ -81,13 +81,22 @@ start:          di                     ; one-shot batch program; no interrupts n
                 defb    HOOK_HSAVE     ; 132 — writes header, body, dir entry; longjmps on error
 
 ; -- magic exit signal -----------------------------------------------------
-; The patched SimCoupé's `-exitonhalt 1` flag detects an OUT to port &DEAD
-; with value &C0 and quits cleanly. No real SAM hardware decodes port &DEAD,
-; so this is unambiguous. HALT remains as a defence-in-depth fallback.
+; The patched SimCoupé's `-exitonhalt 1` flag has two exit mechanisms,
+; both needed for full cross-platform coverage:
+;   1. OUT (&DEAD), &C0 — detected by sam_cpu::on_output. Works reliably
+;      under linux/gcc; CRTP dispatch silently fails on Apple/clang, where
+;      on_output is never called for any port write.
+;   2. HALT with IFF1=0 — detected by sam_cpu::on_halt. The reverse:
+;      reliably fires on Apple/clang, harmless on linux/gcc (the OUT
+;      mechanism quits first). The IFF1=0 condition matters because
+;      SAMDOS's RST 8 dispatcher (ROM `PTDOS`) does `EI` inside the
+;      hook window — our initial `di` at `start:` has been undone by
+;      the time we get here, so we must `di` again before halting.
                 ld      bc, &dead
                 ld      a, &c0
-                out     (c), a
-                halt                   ; defence in depth
+                out     (c), a         ; primary: linux on_output magic port
+                di                     ; secondary: re-disable interrupts so
+                halt                   ; on_halt's !iff1 check fires on macOS
 
 fail:           ld      a, &02         ; red border = error indicator for debug
                 out     (&fe), a
