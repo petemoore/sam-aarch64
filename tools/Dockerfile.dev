@@ -63,10 +63,10 @@ RUN git clone --depth 1 https://github.com/simonowen/pyz80 /tmp/pyz80 \
  && rm -rf /tmp/pyz80
 
 # samfile — Pete's Go-based MGT image inspector and code-file injector.
-# IMPORTANT: the `/v2` suffix on the module path is mandatory; without
+# IMPORTANT: the `/v3` suffix on the module path is mandatory; without
 # it `go install` falls back to the pre-v2 release which lacks the
 # `add` subcommand we depend on.
-RUN go install github.com/petemoore/samfile/v2/cmd/samfile@latest \
+RUN go install github.com/petemoore/samfile/v3/cmd/samfile@latest \
  && cp /root/go/bin/samfile /usr/local/bin/samfile \
  && rm -rf /root/go /root/.cache
 

@@ -26,7 +26,7 @@ if [ ${#missing[@]} -ne 0 ]; then
     echo "" >&2
     echo "Install hints:" >&2
     echo "  pyz80                    pip install pyz80   (or clone simonowen/pyz80)" >&2
-    echo "  samfile                  go install github.com/petemoore/samfile/cmd/samfile@latest" >&2
+    echo "  samfile                  go install github.com/petemoore/samfile/v3/cmd/samfile@latest" >&2
     echo "  simcoupe                 see docs/notes/simcoupe-batch.md" >&2
     echo "  aarch64-none-elf-as      brew install aarch64-elf-binutils  (macOS)" >&2
     echo "                           apt-get install binutils-aarch64-linux-gnu  (Linux)" >&2

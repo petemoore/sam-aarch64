@@ -97,11 +97,11 @@ jobs:
 
       - name: Install samfile
         run: |
-          # samfile's module path is `github.com/petemoore/samfile/v2`
-          # (Go's /vN semantic import versioning); without the `/v2` suffix
+          # samfile's module path is `github.com/petemoore/samfile/v3`
+          # (Go's /vN semantic import versioning); without the `/v3` suffix
           # `go install` falls back to the pre-v2 release which lacks the
           # `add` subcommand we depend on.
-          go install github.com/petemoore/samfile/v2/cmd/samfile@latest
+          go install github.com/petemoore/samfile/v3/cmd/samfile@latest
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
 
       # ── 5. Toolchain smoke test ──────────────────────────────────────────
