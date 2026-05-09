@@ -2,7 +2,10 @@
 
 Entry point for any session picking up M0 toolchain-bootstrap work.
 
-Last update: 2026-05-10. Branch: `m0-toolchain-bootstrap`.
+Last update: 2026-05-11. M0 closed; `m0-toolchain-bootstrap` (PR #1)
+and `ci/docker-image-workflow` (PR #2) both merged to `main`. Latest
+work on `macos-native-stub-di` (PR #3, draft) simplifies the stub to
+exit via `DI; HALT` alone.
 
 ## What M0 is
 
@@ -13,8 +16,8 @@ before Phase 1 (the real assembler):
    input fixture file `IN`.
 2. SimCoupé (vendored patch) boots the disk headlessly, runs the stub.
 3. Stub uses SAMDOS RST 8 hooks to read `IN`, write a 4-byte aarch64-NOP
-   file `OUT`, and exit cleanly via the magic-port sequence
-   (`OUT (&DEAD), &C0`).
+   file `OUT`, and exit cleanly via `DI; HALT` (caught by the patched
+   SimCoupé's `-exitonhalt`).
 4. Mac side extracts `OUT` and byte-diffs it against
    `aarch64-none-elf-as` of the same source.
 
@@ -45,8 +48,10 @@ Two compounding fixes got us here:
 
 ## What's NOT done yet
 
-- Nothing. CI passed cleanly on commit `1578bad` (2026-05-11). PR #1
-  ready for review pending Pete's approval.
+- Nothing for M0 itself. PR #1 (M0 toolchain bootstrap) and PR #2
+  (CI publishes the dev image) are both merged. PR #3 — the native
+  macOS round-trip + `DI; HALT`-only simplification — is in draft
+  pending Pete's review.
 
 ## SimCoupé runtime requirements (latent CI gotcha, fixed in `1578bad`)
 
@@ -102,7 +107,8 @@ the libSAASound copy to the workflow.
   experimental notes; format authority is `sam-basic-save-format.md`
   and `test-mgt-byte-layout.md`.
 - `tools/simcoupe-exitonhalt.patch` — vendored simcoupé patch:
-  `on_halt` for `DI; HALT`, `on_output` for `OUT (&DEAD), &C0`.
+  `on_halt` quit on Z80 `DI; HALT` when `-exitonhalt 1` is passed.
+  Single-mechanism; upstream PR at `simonowen/simcoupe#109`.
 - `tools/Dockerfile.dev` — dev container recipe.
 - `reference/samdos/samdos2.bin` — vendored SAMDOS binary (10000 bytes,
   byte-identical to upstream).
@@ -143,7 +149,7 @@ the libSAASound copy to the workflow.
 - Extracted `OUT` byte-matches `aarch64-none-elf-as` for the 4-byte NOP
   fixture ✓
 - Round-trip total time < 25s ✓ (typically a few seconds)
-- Same `make ci` passes in GitHub Actions on `ubuntu-latest` (pending push)
+- Same `make ci` passes in GitHub Actions on `ubuntu-latest` ✓
 - Disk image bootable on real SAM hardware ✓
 
 ## Hand-off recipe

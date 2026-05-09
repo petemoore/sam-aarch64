@@ -19,7 +19,7 @@ simcoupe -exitonhalt 1 -fullscreen 0 -firstrun 0 disk.mgt
 ```
 
 Exit codes:
-- `0` — Z80 hit either `DI; HALT` or the magic `OUT (&DEAD), &C0` sequence; clean.
+- `0` — Z80 hit `DI; HALT`; clean exit via the `-exitonhalt` patch.
 - `124` — `timeout` killed it (boot didn't reach the exit signal in time).
 - `134`, `139` etc. — crash; investigate.
 
@@ -232,29 +232,36 @@ automatically when the binary is invoked from inside the bundle
 structure — that's how simcoupé finds `samcoupe.rom` and
 `sp0256-al2.bin` without us having to set anything.
 
-### Why the patch needs both exit mechanisms
+### Why the stub ends in `DI; HALT`
 
 The Z80 stub in `src/stub.asm` ends with:
 
 ```asm
-out  (&dead), a   ; OUT (&DEAD), &C0 — caught by sam_cpu::on_output
 di
 halt              ; HALT with IFF1=0 — caught by sam_cpu::on_halt
 ```
 
-Both are needed for cross-platform coverage:
+The patched SimCoupé's `on_halt` override fires when the Z80 executes
+HALT with `IFF1=0`, sets a quit flag, and the main `Run()` loop exits
+on the next iteration. This is the conventional Z80 "we are done"
+idiom — a HALT with interrupts disabled can never be woken by a
+maskable interrupt, so it's unambiguous.
 
-- On **Linux/gcc** the `on_output` CRTP override fires reliably for the
-  magic port — simcoupé exits before the HALT runs.
-- On **Apple/clang** the `on_output` CRTP override doesn't fire (CRTP
-  base→derived dispatch silently no-ops for `on_output` under that
-  toolchain). The `on_halt` override DOES fire, but its quit condition
-  is `IFF1=0` — SAMDOS's `PTDOS` reenables interrupts inside the RST 8
-  dispatch, so by the time we reach the exit sequence after HSAVE,
-  IFF1 is back to 1. The final `DI` restores IFF1=0 just before HALT.
+The `di` immediately before `halt` is load-bearing. SAMDOS's RST 8
+dispatcher (ROM `PTDOS`) does `EI` inside the hook window, so the
+`di` at `start:` in the stub has been undone by the time we reach
+this point after HSAVE. Without the trailing `di`, `IFF1=1` and
+`on_halt`'s quit check correctly does not trigger.
 
-See `memory/simcoupe_crtp_dispatch_per_platform.md` for empirical
-trace data.
+An earlier iteration of the patch added a second exit mechanism — a
+magic `OUT (&DEAD), &C0` port write caught by `sam_cpu::on_output` —
+in the belief that `on_halt` CRTP dispatch was unreliable on some
+platforms. That diagnosis was wrong: the underlying bug was the
+missing trailing `di`, not the dispatch. With the `di` in place,
+`on_halt` fires reliably on every toolchain tested (Apple clang on
+arm64, gcc-13 on Linux amd64+arm64, GHA `ubuntu-latest`). The
+`on_output` override was removed and the patch shrank to a single
+commit; the upstream PR (`simonowen/simcoupe#109`) reflects that.
 
 ## Related files
 

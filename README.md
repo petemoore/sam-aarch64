@@ -16,14 +16,20 @@ without ever leaving the SAM Coupé.
 
 ## Status
 
-M0 (toolchain bootstrap) is done and CI is green. The dev pipeline
+M0 (toolchain bootstrap) is done. The dev pipeline
 pyz80 → patched SimCoupé → samfile → GNU `as` is wired end-to-end:
 a Z80 stub writes a 4-byte file via SAMDOS HSAVE, the host extracts
-it, byte-compares it against `aarch64-none-elf-as`. Every push to
-this repo builds and publishes a dev image to
-`ghcr.io/petemoore/sam-aarch64-dev` and runs the round-trip oracle
-inside it on `ubuntu-latest`. See `docs/specs/` for design documents
-and `docs/plans/` for the M0 plan.
+it, byte-compares it against `aarch64-none-elf-as`. The stub signals
+completion with `DI; HALT` alone — one mechanism, working
+cross-platform.
+
+The same round-trip passes green in every environment we run it in:
+GitHub Actions on `ubuntu-latest` (inside the dev image published to
+`ghcr.io/petemoore/sam-aarch64-dev` on every push), the dev image
+locally under Docker on both `linux/amd64` and `linux/arm64`, and
+natively on macOS against a locally-built patched SimCoupé. See
+`docs/specs/` for design documents and `docs/plans/` for the M0
+plan.
 
 Next up: M1 (the actual aarch64 assembler).
 
@@ -47,9 +53,9 @@ pre-installed in it — `make ci` works against it with no further
 setup.
 
 For native macOS (no Docker), see the "Native macOS" section of
-`docs/notes/headless-simcoupe.md` — works end-to-end once a patched
-SimCoupé is built locally, but the recipe has a few non-obvious
-brew/CMake bits.
+`docs/notes/headless-simcoupe.md`. `make ci` runs the same
+round-trip in around 1.5s against a locally-built patched SimCoupé;
+setup is a one-time brew + CMake step.
 
 ## Repository layout
 
