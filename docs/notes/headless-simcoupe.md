@@ -181,6 +181,81 @@ That replaces `/usr/local/bin/simcoupe` and the ROM resources without
 rebuilding the whole Docker image. When you're happy with the patch,
 commit it and let CI rebuild the image properly.
 
+## Native macOS (no Docker)
+
+Native macOS works end-to-end with a few quirks. The stock
+`/Applications/SimCoupe.app` is unpatched, so the round-trip oracle's
+exit detection won't fire against it — the test would hit its 30s
+timeout. You need to build a patched binary from source.
+
+```bash
+# 1. Brew dep (one-time; sdl2 fmt libpng cmake assumed already present).
+brew install libsamplerate
+
+# 2. Clone simcoupé and apply the vendored patch.
+cd ~/git
+git clone https://github.com/simonowen/simcoupe.git   # if not already there
+cd simcoupe
+PINNED_SHA=0f74cff52b96841fe0efa01ffd1a6875b253e72a
+git fetch --depth=1 origin "$PINNED_SHA"
+git checkout "$PINNED_SHA"
+git apply /Users/pmoore/git/sam-aarch64/tools/simcoupe-exitonhalt.patch
+
+# 3. Build. The non-obvious CMake hints:
+#    - CMAKE_PREFIX_PATH=/opt/homebrew so find_package(SDL2) finds brew SDL2
+#    - {CXX,C,OBJC}_FLAGS=-I/opt/homebrew/include because simcoupé uses
+#      both `#include "SDL2/SDL.h"` (needs parent on include path) and
+#      `#include <SDL_opengl.h>` (needs SDL2 dir itself), and the .m file
+#      compiles with the C/OBJC flag set, not the CXX one.
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PREFIX_PATH=/opt/homebrew \
+    -DCMAKE_CXX_FLAGS=-I/opt/homebrew/include \
+    -DCMAKE_C_FLAGS=-I/opt/homebrew/include \
+    -DCMAKE_OBJC_FLAGS=-I/opt/homebrew/include
+cmake --build build -j
+
+# 4. Make the patched binary the one `make ci` picks up. Either:
+#    a) Replace /usr/local/bin/simcoupe symlink (requires sudo):
+sudo ln -sfn ~/git/simcoupe/build/SimCoupe.app/Contents/MacOS/SimCoupe \
+    /usr/local/bin/simcoupe
+#    b) Or put the .app's MacOS dir first on PATH per-session:
+export PATH=~/git/simcoupe/build/SimCoupe.app/Contents/MacOS:$PATH
+```
+
+Then `make ci` from `/Users/pmoore/git/sam-aarch64` should pass
+natively in ~1.5s.
+
+The build produces a full `SimCoupe.app/` bundle with the binary at
+`Contents/MacOS/SimCoupe` and ROM resources at `Contents/Resources/`.
+SDL's `SDL_GetBasePath()` resolves to the bundle's Resources/ directory
+automatically when the binary is invoked from inside the bundle
+structure — that's how simcoupé finds `samcoupe.rom` and
+`sp0256-al2.bin` without us having to set anything.
+
+### Why the patch needs both exit mechanisms
+
+The Z80 stub in `src/stub.asm` ends with:
+
+```asm
+out  (&dead), a   ; OUT (&DEAD), &C0 — caught by sam_cpu::on_output
+di
+halt              ; HALT with IFF1=0 — caught by sam_cpu::on_halt
+```
+
+Both are needed for cross-platform coverage:
+
+- On **Linux/gcc** the `on_output` CRTP override fires reliably for the
+  magic port — simcoupé exits before the HALT runs.
+- On **Apple/clang** the `on_output` CRTP override doesn't fire (CRTP
+  base→derived dispatch silently no-ops for `on_output` under that
+  toolchain). The `on_halt` override DOES fire, but its quit condition
+  is `IFF1=0` — SAMDOS's `PTDOS` reenables interrupts inside the RST 8
+  dispatch, so by the time we reach the exit sequence after HSAVE,
+  IFF1 is back to 1. The final `DI` restores IFF1=0 just before HALT.
+
+See `memory/simcoupe_crtp_dispatch_per_platform.md` for empirical
+trace data.
+
 ## Related files
 
 - `tools/Dockerfile.dev` — image recipe (single source of truth for CI

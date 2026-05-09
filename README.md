@@ -16,12 +16,40 @@ without ever leaving the SAM Coupé.
 
 ## Status
 
-M0 (toolchain bootstrap) round-trip passes locally — pyz80 → patched
-SimCoupé → samfile → GNU `as` is wired end-to-end and the stub's
-HSAVE-written `OUT` byte-matches `aarch64-none-elf-as`. PR #1 is the
-active draft on `m0-toolchain-bootstrap`; pending GitHub Actions
-green-on-amd64 before merging to main. See `docs/specs/` for design
-documents and `docs/plans/` for the M0 plan.
+M0 (toolchain bootstrap) is done and CI is green. The dev pipeline
+pyz80 → patched SimCoupé → samfile → GNU `as` is wired end-to-end:
+a Z80 stub writes a 4-byte file via SAMDOS HSAVE, the host extracts
+it, byte-compares it against `aarch64-none-elf-as`. Every push to
+this repo builds and publishes a dev image to
+`ghcr.io/petemoore/sam-aarch64-dev` and runs the round-trip oracle
+inside it on `ubuntu-latest`. See `docs/specs/` for design documents
+and `docs/plans/` for the M0 plan.
+
+Next up: M1 (the actual aarch64 assembler).
+
+## Local development
+
+The same image CI uses is published publicly. Pull it and run
+`make ci` inside:
+
+```bash
+docker pull ghcr.io/petemoore/sam-aarch64-dev:latest
+docker run -d --name sam-aarch64-ci \
+    -v "$PWD:/work" -w /work \
+    ghcr.io/petemoore/sam-aarch64-dev:latest sleep infinity
+docker exec sam-aarch64-ci bash -lc 'cd /work && make ci'
+```
+
+The image is multi-arch (`linux/amd64` + `linux/arm64`); Docker picks
+the variant matching your host. SimCoupé, pyz80, samfile, the
+aarch64 cross binutils, and the SimCoupé ROM resources are all
+pre-installed in it — `make ci` works against it with no further
+setup.
+
+For native macOS (no Docker), see the "Native macOS" section of
+`docs/notes/headless-simcoupe.md` — works end-to-end once a patched
+SimCoupé is built locally, but the recipe has a few non-obvious
+brew/CMake bits.
 
 ## Repository layout
 
