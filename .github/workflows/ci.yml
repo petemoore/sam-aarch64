@@ -110,13 +110,19 @@ jobs:
 
       # ── 6. M0 round-trip oracle ──────────────────────────────────────────
       #
-      # SDL_VIDEODRIVER=dummy alone is NOT enough — SimCoupé fails with
-      # "error: Video initialisation failed" on a headless runner even with
-      # the dummy driver set. xvfb provides a real (if invisible) X display
-      # that SDL2 can attach to. The spike doc's TL;DR predicted otherwise;
-      # CI run 25612320603 disproved it.
-      - name: Install xvfb
-        run: sudo apt-get install -y xvfb
+      # SimCoupé's SDLTexture::Init requests SDL_RENDERER_ACCELERATED — needs
+      # GL. SDL_VIDEODRIVER=dummy → "Video initialisation failed" because the
+      # dummy SDL driver has no renderer.  xvfb default 8-bit depth → also
+      # fails because Mesa's llvmpipe GL needs 24-bit depth or higher.
+      # Fix: install xvfb + Mesa llvmpipe, run xvfb-run with -screen 24-bit
+      # depth, drop the SDL_VIDEODRIVER=dummy override (set in job env).
+      - name: Install xvfb and Mesa software GL
+        run: sudo apt-get install -y xvfb libgl1-mesa-dri mesa-utils
 
       - name: Round-trip oracle
-        run: xvfb-run -a make ci
+        env:
+          # Override the job-level SDL_VIDEODRIVER=dummy — xvfb provides a real
+          # X display that SDL2's x11 driver can attach to, with Mesa's
+          # llvmpipe satisfying SDL_RENDERER_ACCELERATED.
+          SDL_VIDEODRIVER: x11
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" make ci
