@@ -114,6 +114,15 @@ def write_directory_entry(img: bytearray, slot: int, *, type_byte: int,
     e[0x0f:0x0f + 195] = sam_map
     if body_header:
         e[0xd3:0xd3 + 9] = body_header             # SAMDOS body-header cache
+        # Mirror StartAddressPage / StartAddressPageOffset / Pages into the
+        # dir-entry slots samfile and ROM/SAMDOS LOAD path actually read
+        # (samfile.go:248-256, StartAddress() at :448-449). Without this,
+        # `Start` decodes as 16384 regardless of LOAD_ADDR — every canonical
+        # disk (FRED 02 / Defender / Mike AJ / DS7 / Arcadia) populates these.
+        e[0xec] = body_header[8]                  # StartAddressPage
+        e[0xed] = body_header[3]                  # PageOffset LE lo
+        e[0xee] = body_header[4]                  # PageOffset LE hi
+        e[0xef] = body_header[7]                  # Pages
     e[0xf0] = length & 0xff
     e[0xf1] = (length >> 8) & 0xff
     # Bytes 0xf2-0xf4 are the 3-byte execution-address / auto-run-line field.
@@ -168,23 +177,23 @@ with open(output_path, "r+b") as f:
     samdos2_chain = [(t, s) for t in (4, 5) for s in range(1, 11)]
     samdos2_body = open(samdos2_path, "rb").read()
     assert len(samdos2_body) == 10000, len(samdos2_body)
-    # body header: bytes 5-6 are "Unused"; per Tech Man L4293 real BASIC SAVE
-    # writes FF FF here (ours had 0x00, 0x00 — cosmetic but non-canonical).
-    # Audit-agent finding #3 (docs/notes/sam-disk-format.md), 2026-05-10.
-    samdos2_header = bytes([
-        0x13,                                 # type 19 (Code) — see comment below
-        10000 & 0xff, (10000 >> 8) & 0xff,    # LengthMod16K LE = 10000
-        0x00, 0x80,                           # PageOffset = &8000 (8000H-form: 0x8000 = 0x8000 | 0)
-        0xFF, 0xFF,                           # unused — canonical SAVE writes FF FF (Tech Man L4293)
-        0x00,                                 # Pages = 0 (10K < 16K)
-        0x01,                                 # StartPage = 1
-    ])
-    # Type byte 0x13 (CODE) is a tooling-compat workaround: the canonical
-    # samdos2 binary (~/git/samdos/res/samdos2.reference.bin) is headerless;
-    # SAMDOS-internal type 3 (samdos/src/b.s:14-22) makes samfile treat the
-    # slot as 'erased'. Audit finding #14, 2026-05-10. ROM BOOT bypasses
-    # the directory entry entirely (reads raw sector data), so the type
-    # byte is functionally irrelevant.
+    # Use the body header bytes from a canonical SAMDOS2 install verbatim
+    # (taken from "FRED Magazine Issue 02" / "Defender Compilation" — both
+    # use the same bytes; many other disks vary the StartPage decorative
+    # bits but FRED/Defender are the most common). Decoded:
+    #   13            type 0x13 (Code)
+    #   10 27         LengthMod16K LE = 10000
+    #   09 80         PageOffset = 0x8009 (load to 0x8000, JP &8009)
+    #   ff ff         unused (canonical SAVE writes FF FF)
+    #   00            Pages = 0  (10K < 16K)
+    #   7d            StartPage — bits 5-6 are decorative on real disks;
+    #                 samfile masks `& 0x1f` (= 29) → samfile Start = 491529.
+    # Type byte 0x13 (Code) is a samfile-compat choice: SAMDOS-internal
+    # type 3 (samdos/src/b.s:14-22) is what real SAMDOS uses for itself,
+    # but samfile treats unknown types as "erased" and would hide it from
+    # `ls`. ROM BOOT bypasses the directory entirely (reads raw sectors),
+    # so the type byte is functionally irrelevant for boot.
+    samdos2_header = bytes.fromhex("13102709 80ffff00 7d".replace(" ", ""))
     write_directory_entry(
         img, slot=0, type_byte=0x13, name=b"samdos2   ",
         chain=samdos2_chain, length=10000,
@@ -262,10 +271,7 @@ with open(output_path, "r+b") as f:
     img[auto_e_offset + 0xDD:auto_e_offset + 0xE0] = triplet  # prog-length
     img[auto_e_offset + 0xE0:auto_e_offset + 0xE3] = triplet  # prog + nvars (no vars)
     img[auto_e_offset + 0xE3:auto_e_offset + 0xE6] = triplet  # prog + nvars + gap (no vars)
-    # StartPage / PageOffset mirror at 0xEC-0xEE — must match body header bytes 3-4 + 8.
-    img[auto_e_offset + 0xEC] = PROG_START_PAGE
-    img[auto_e_offset + 0xED] = PROG_PAGE_OFFSET & 0xff
-    img[auto_e_offset + 0xEE] = (PROG_PAGE_OFFSET >> 8) & 0xff
+    # 0xEC-0xEE is now mirrored from auto_header by write_directory_entry.
     write_file_chain(img, auto_chain, auto_header + BASIC_BODY)
 
     # === Slot 2: stub (T6S2) ===========================================
