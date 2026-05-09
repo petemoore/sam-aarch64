@@ -64,14 +64,24 @@ RUN git clone --depth 1 https://github.com/simonowen/pyz80 /tmp/pyz80 \
  && pip install --break-system-packages /tmp/pyz80 \
  && rm -rf /tmp/pyz80
 
-# ── samfile ──────────────────────────────────────────────────────────
-# Pete's Go-based MGT image inspector / code-file injector. The `/v3`
-# suffix on the module path is mandatory (Go's /vN semantic import
-# versioning); without it `go install` falls back to a pre-v2 release
-# that lacks the `add` subcommand the build-disk.sh script depends on.
+# ── samfile + build-disk ─────────────────────────────────────────────
+# Pete's Go-based MGT inspector / file-injector. The `/v3` suffix is
+# mandatory (Go's /vN semantic import versioning). The CLI binary is
+# used by tools/extract-output.sh, tools/check-toolchain.sh, and the
+# CI post-mortem step (`samfile ls`, `samfile cat`).
+#
+# Following that, build-disk (the Go program at tools/build-disk/) is
+# compiled in-image. It is the M0 disk constructor (the bash+Python
+# tools/build-disk.sh predecessor was retired in favour of this) and
+# imports the samfile sambasic package. Building both in one RUN step
+# lets the second build re-use the module cache the first one
+# populated, then drops the cache at the end so the final image stays
+# slim.
+COPY build-disk /tmp/build-disk
 RUN go install github.com/petemoore/samfile/v3/cmd/samfile@latest \
  && cp /root/go/bin/samfile /usr/local/bin/samfile \
- && rm -rf /root/go /root/.cache
+ && cd /tmp/build-disk && go build -o /usr/local/bin/build-disk . \
+ && rm -rf /tmp/build-disk /root/go /root/.cache
 
 # ── Patched SimCoupé ─────────────────────────────────────────────────
 # Stock apt simcoupé lacks the `-exitonhalt` flag we need for
