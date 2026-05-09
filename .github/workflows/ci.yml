@@ -10,14 +10,11 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # SDL dummy drivers — no X display or audio device needed on Linux CI.
-      # Sufficient per docs/notes/simcoupe-batch.md; xvfb is not required.
+      # SDL dummy drivers — overridden at the round-trip step. Set here
+      # so any non-round-trip simcoupe invocation (toolchain check etc.)
+      # doesn't try to open ALSA/video.
       SDL_VIDEODRIVER: dummy
       SDL_AUDIODRIVER: dummy
-      # Keep SimCoupé config isolated to this run so stale cfg from a previous
-      # runner invocation can never leak in (SimCoupe.cfg is written on every
-      # clean exit — see simcoupe-batch.md "Known gotchas").
-      XDG_CONFIG_HOME: /tmp/simcoupe-cfg
 
     steps:
       - uses: actions/checkout@v4
@@ -35,30 +32,32 @@ jobs:
       #
       # Stock apt simcoupe (v1.x) does NOT have the -exitonhalt flag required
       # for deterministic batch exit. We clone upstream at a pinned SHA, apply
-      # the vendored patch (tools/simcoupe-exitonhalt.patch), and build.
+      # the vendored patch (tools/simcoupe-exitonhalt.patch), build, and
+      # `cmake --install` so resources land at the path SimCoupé hard-codes.
       #
       # Pinned upstream commit: 0f74cff52b96841fe0efa01ffd1a6875b253e72a
       # ("Updated version to v1.2.15") — parent of the local exit-on-halt branch.
-      # Recipe from docs/notes/simcoupe-batch.md "Acquiring the patched SimCoupé in CI".
-
-      - name: Cache patched SimCoupé binary
-        id: cache-simcoupe
-        uses: actions/cache@v4
-        with:
-          path: simcoupe-build/build/simcoupe
-          # Cache key: patch file content + pinned upstream SHA.
-          key: simcoupe-0f74cff52b96841fe0efa01ffd1a6875b253e72a-${{ hashFiles('tools/simcoupe-exitonhalt.patch') }}
+      #
+      # We deliberately don't cache the build. The previous cache stored only
+      # `simcoupe-build/build/simcoupe`, missing two runtime dependencies:
+      # the resources (`samcoupe.rom`, `sp0256-al2.bin`, etc. — which SimCoupé
+      # looks for at `/usr/local/share/simcoupe/` from `RESOURCE_DIR`) and
+      # `libSAASound.so.3` (fetched via CMake FetchContent, linked at the
+      # build path via RUNPATH). On cache-hit the binary loaded with neither,
+      # which (a) prevents simcoupe from finding `samcoupe.rom`, popping a
+      # modal that blocks the Z80 from ever executing, and (b) on a fresh
+      # runner with no `_deps/` dir, would refuse to load at all. Always
+      # rebuilding (~30s total) avoids both issues; if build time becomes a
+      # problem later, the cache should include the install destination
+      # (/usr/local/share/simcoupe + /usr/local/bin/simcoupe + the .so).
 
       - name: Install SimCoupé build dependencies
-        if: steps.cache-simcoupe.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get update
           sudo apt-get install -y \
               build-essential cmake git \
               libsdl2-dev libfmt-dev zlib1g-dev libpng-dev libsamplerate0-dev
 
-      - name: Clone, patch, and build SimCoupé
-        if: steps.cache-simcoupe.outputs.cache-hit != 'true'
+      - name: Clone, patch, build, and install SimCoupé
         run: |
           git clone https://github.com/simonowen/simcoupe.git simcoupe-build
           cd simcoupe-build
@@ -69,11 +68,21 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           # kosarev/z80 is fetched via CMake FetchContent — network required here.
           cmake --build build -j$(nproc)
-
-      - name: Install SimCoupé onto PATH
-        run: |
-          sudo cp simcoupe-build/build/simcoupe /usr/local/bin/simcoupe
-          sudo chmod +x /usr/local/bin/simcoupe
+          # `cmake --install` puts the simcoupe binary at /usr/local/bin and
+          # the resources (samcoupe.rom, atom.rom, atomlite.rom, sp0256-al2.bin,
+          # SimCoupe.bmp) at /usr/local/share/simcoupe — the latter is the
+          # baked-in RESOURCE_DIR (`CMAKE_INSTALL_FULL_DATAROOTDIR/simcoupe`).
+          # Without these, simcoupe pops two modal dialogs ("Error loading ROM"
+          # and "Error loading SP0256 allophone data") that block the Z80
+          # emulation loop entirely — Z80 never runs → 30s timeout.
+          sudo cmake --install build
+          # `cmake --install` strips the binary's RUNPATH, so simcoupe can no
+          # longer find libSAASound.so.3 at its build-tree path. Copy the .so
+          # to a standard system lib dir and refresh the loader cache.
+          sudo cp build/_deps/saasound-build/libSAASound.so.3 /usr/local/lib/
+          sudo ldconfig
+          # Sanity-check the runtime linkage.
+          ldd /usr/local/bin/simcoupe | grep SAA
 
       # ── 3. Python + pyz80 ────────────────────────────────────────────────
       - uses: actions/setup-python@v5
@@ -110,7 +119,7 @@ jobs:
 
       # ── 6. M0 round-trip oracle ──────────────────────────────────────────
       #
-      # SimCoupé needs THREE init subsystems to all succeed before CPU::Run
+      # SimCoupé needs three init subsystems to all succeed before CPU::Run
       # is called (Base/Main.cpp:55):
       #   1. Video — needs a real renderer (SDL dummy has none). xvfb provides
       #      an invisible X display that SDL_VIDEODRIVER=x11 attaches to;
@@ -120,8 +129,6 @@ jobs:
       #      SDL_AUDIODRIVER=dummy gives SDL a no-op audio backend that
       #      always opens successfully — purely environmental, no patch.
       #   3. Input/Frame/CPU/UI — succeed unconditionally on Linux.
-      # Diagnosed locally via Docker repro on 2026-05-09; confirmed each
-      # subsystem failure short-circuits Main::Init causing silent exit-0.
       - name: Install xvfb and Mesa software GL
         run: sudo apt-get install -y xvfb libgl1-mesa-dri mesa-utils
 
@@ -135,8 +142,7 @@ jobs:
       # writes `OUT` to disk; if OUT is there with the right bytes, the
       # stub fully ran. If OUT is absent, the stub didn't reach HSAVE.
       # If OUT has wrong contents, HSAVE ran but something else is off.
-      # Far higher signal than `import -window root` (which only captures
-      # the X root, not SDL's window, so produces a blank PNG either way).
+      # Kept from the M0 investigation — small cost, high diagnostic value.
       - name: Post-mortem disk inspection
         if: failure()
         run: |
