@@ -1,0 +1,10 @@
+build/
+*.dsk
+*.mgt
+!reference/**/*.dsk
+!reference/**/*.mgt
+*.bin
+!reference/**/*.bin
+*.pyc
+__pycache__/
+.DS_Store
