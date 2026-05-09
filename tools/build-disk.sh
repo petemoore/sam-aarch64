@@ -79,11 +79,28 @@ def set_sector_in_map(sam_map: bytearray, track: int, sector: int) -> None:
 
 def write_directory_entry(img: bytearray, slot: int, *, type_byte: int,
                           name: bytes, chain: list, length: int,
+                          body_header: bytes = b"",
                           exec_addr_div_16k: int = 0xff,
                           exec_addr_mod_16k: int = 0xffff,
                           start_line: int = -1) -> None:
-    """Write a 256-byte directory entry to slot N (0-79)."""
+    """Write a 256-byte directory entry to slot N (0-79).
+
+    `body_header` (if provided) is the 9-byte on-disk file body header. If
+    given, it's mirrored into dir-entry bytes 0xD3-0xDB — SAMDOS's internal
+    9-byte body-header cache. Real ROM/SAMDOS SAVE writes both copies; see
+    `samdos/src/f.s:462-471` (`svhd` writes 9 bytes from `hd001` to `fsa+211`
+    and to the file body via `sbyt`). Tech Manual L4366-4368 calls these
+    bytes "MGT future and past, not used by SAMDOS" but that documentation
+    is wrong — SAMDOS does use them; `samdos/src/c.s:1376` sets `rptl=211`
+    so subsequent reads pull the cached header. Without this mirror,
+    SAMDOS reads zeros where it expects metadata, corrupting BASIC's view
+    of the file (root cause of the M0 CLEAR-AUTO-RUN crash).
+    Verified empirically against `Defender Compilation (19xx).dsk`, which
+    has the cache populated and boots fine in our test rig.
+    """
     assert len(name) == 10, name
+    if body_header:
+        assert len(body_header) == 9, len(body_header)
     e = bytearray(256)
     e[0x00] = type_byte
     e[0x01:0x0b] = name
@@ -95,6 +112,8 @@ def write_directory_entry(img: bytearray, slot: int, *, type_byte: int,
     for t, s in chain:
         set_sector_in_map(sam_map, t, s)
     e[0x0f:0x0f + 195] = sam_map
+    if body_header:
+        e[0xd3:0xd3 + 9] = body_header             # SAMDOS body-header cache
     e[0xf0] = length & 0xff
     e[0xf1] = (length >> 8) & 0xff
     # Bytes 0xf2-0xf4 are the 3-byte execution-address / auto-run-line field.
@@ -149,52 +168,125 @@ with open(output_path, "r+b") as f:
     samdos2_chain = [(t, s) for t in (4, 5) for s in range(1, 11)]
     samdos2_body = open(samdos2_path, "rb").read()
     assert len(samdos2_body) == 10000, len(samdos2_body)
+    # body header: bytes 5-6 are "Unused"; per Tech Man L4293 real BASIC SAVE
+    # writes FF FF here (ours had 0x00, 0x00 — cosmetic but non-canonical).
+    # Audit-agent finding #3 (docs/notes/sam-disk-format.md), 2026-05-10.
     samdos2_header = bytes([
-        0x13,                                 # type 19 (Code)
+        0x13,                                 # type 19 (Code) — see comment below
         10000 & 0xff, (10000 >> 8) & 0xff,    # LengthMod16K LE = 10000
-        0x00, 0x80,                           # PageOffset = &8000
-        0x00, 0x00,                           # reserved
+        0x00, 0x80,                           # PageOffset = &8000 (8000H-form: 0x8000 = 0x8000 | 0)
+        0xFF, 0xFF,                           # unused — canonical SAVE writes FF FF (Tech Man L4293)
         0x00,                                 # Pages = 0 (10K < 16K)
         0x01,                                 # StartPage = 1
     ])
+    # Type byte 0x13 (CODE) is a tooling-compat workaround: the canonical
+    # samdos2 binary (~/git/samdos/res/samdos2.reference.bin) is headerless;
+    # SAMDOS-internal type 3 (samdos/src/b.s:14-22) makes samfile treat the
+    # slot as 'erased'. Audit finding #14, 2026-05-10. ROM BOOT bypasses
+    # the directory entry entirely (reads raw sector data), so the type
+    # byte is functionally irrelevant.
     write_directory_entry(
         img, slot=0, type_byte=0x13, name=b"samdos2   ",
         chain=samdos2_chain, length=10000,
-        exec_addr_div_16k=0x80,               # &8000 / 16K = 2 → div=0x80? unused for BOOT
+        body_header=samdos2_header,
+        # Audit finding #1: previous exec_addr_div_16k=0x80 was misleading
+        # (0x80 is the section-C marker bit, not a page byte). Default
+        # 0xff/0xffff = "no auto-exec" is canonical and ROM BOOT ignores it.
     )
     write_file_chain(img, samdos2_chain, samdos2_header + samdos2_body)
 
     # === Slot 1: AUTO BASIC (T6S1) =====================================
     #
     # Tokenised SAM BASIC line:
-    #   10 CLEAR 24575 : LOAD "stub" CODE 24576 : CALL 24576
+    #   10 LOAD "stub" CODE 24576 : CALL 24576
     #
-    # Tokens: CLEAR=0xb3, LOAD=0x95, CODE=0xff,0x6c, CALL=0xe4. Numbers
-    # carry a 5-byte numeric form right after their ASCII digits, prefixed
-    # with 0x0e: [0x0e, 0x00, 0x00, lo, hi, 0x00] for unsigned 16-bit.
+    # CLEAR omitted: it crashed the system in the AUTO-RUN context (red
+    # border + garbage screen, no OK prompt). Checkpoint experiments
+    # 2026-05-10 confirmed that LOAD CODE + CALL work correctly without
+    # CLEAR. The "CLEAR n before LOAD CODE" User Guide convention does
+    # not apply here.
+    #
+    # Tokens: LOAD=0x95, CODE=0xff,0x6c, CALL=0xe4. Numbers carry a 5-byte
+    # numeric form right after their ASCII digits, prefixed with 0x0e:
+    # [0x0e, 0x00, 0x00, lo, hi, 0x00] for unsigned 16-bit.
     def num(n: int) -> bytes:
         return bytes([0x0e, 0x00, 0x00, n & 0xff, (n >> 8) & 0xff, 0x00])
 
     LOAD_ADDR = 24576
+    # Original BASIC AUTO line. Hypothesis-test: with the AUTO file metadata
+    # bug fixed (see below), CLEAR n in AUTO-RUN should now work — previously
+    # it crashed because BASIC's HDL was populated from zeroed dir-entry
+    # triplets, leaving NVARS/NUMEND/SAVARS sysvars pointing at invalid
+    # memory, which CLEAR's RECL2BIG then walked. Documented in
+    # docs/notes/sam-file-header.md.
     stmt_clear = bytes([0xb3, 0x20]) + str(LOAD_ADDR - 1).encode() + num(LOAD_ADDR - 1)
-    stmt_load  = (bytes([0x95, 0x20, 0x22]) + b"stub"
-                  + bytes([0x22, 0x20, 0xff, 0x6c, 0x20])
-                  + str(LOAD_ADDR).encode() + num(LOAD_ADDR))
-    stmt_call  = bytes([0xe4, 0x20]) + str(LOAD_ADDR).encode() + num(LOAD_ADDR)
+    stmt_load = (bytes([0x95, 0x20, 0x22]) + b"stub"
+                 + bytes([0x22, 0x20, 0xff, 0x6c, 0x20])
+                 + str(LOAD_ADDR).encode() + num(LOAD_ADDR))
+    stmt_call = bytes([0xe4, 0x20]) + str(LOAD_ADDR).encode() + num(LOAD_ADDR)
     line_body = stmt_clear + b"\x3a" + stmt_load + b"\x3a" + stmt_call + b"\x0d"
     BASIC_BODY = (bytes([0x00, 0x0a, len(line_body) & 0xff, (len(line_body) >> 8) & 0xff])
                   + line_body + b"\xff")
     auto_chain = [(6, 1)]
-    auto_header = bytes([0x10, len(BASIC_BODY) & 0xff, (len(BASIC_BODY) >> 8) & 0xff,
-                        0, 0, 0, 0, 0, 0])
+    # Body header (9 bytes) — corrected per docs/notes/sam-file-header.md §4.2.
+    # PROG (start of BASIC programs) = 0x5CD5; encoded in 8000H REL PAGE FORM
+    # as PageOffset = 0x9CD5 (= 0x8000 | 0x1CD5), StartPage = 0.
+    PROG_PAGE_OFFSET = 0x9CD5            # = 0x8000 | (PROG & 0x3FFF), PROG = 0x5CD5
+    PROG_START_PAGE = 0
+    auto_header = bytes([
+        0x10,                                                # Type = 16 (BASIC)
+        len(BASIC_BODY) & 0xff, (len(BASIC_BODY) >> 8) & 0xff,  # LengthMod16K LE
+        PROG_PAGE_OFFSET & 0xff, (PROG_PAGE_OFFSET >> 8) & 0xff, # PageOffset LE = D5 9C
+        0xff, 0xff,                                          # unused (real SAVE writes FF FF)
+        0,                                                   # Pages — body < 16384
+        PROG_START_PAGE,                                     # StartPage = 0
+    ])
     write_directory_entry(
         img, slot=1, type_byte=0x10, name=b"auto      ",
         chain=auto_chain, length=len(BASIC_BODY),
+        body_header=auto_header,
         start_line=10,                          # auto-RUN from line 10
     )
+    # Patch the BASIC-specific dir-entry fields that write_directory_entry
+    # leaves zero. ROM SAVE writes (NVARS-PROG), (NUMEND-PROG), (SAVARS-PROG)
+    # at HDR+16/+19/+22 (= dir bytes 0xDD/0xE0/0xE3) per ROM L22162-22180. For
+    # an AUTO with no variables, all three triplets equal the program length.
+    # Encoding: 3-byte page-form [page_byte, offset_lo, offset_hi] with
+    # offset's high bit set (8000H form). Per docs/notes/sam-paging.md.
+    def page_form_3byte(value: int) -> bytes:
+        page = value // 16384
+        offset = (value % 16384) | 0x8000
+        return bytes([page, offset & 0xff, (offset >> 8) & 0xff])
+    auto_e_offset = 1 * 256
+    triplet = page_form_3byte(len(BASIC_BODY))
+    img[auto_e_offset + 0xDD:auto_e_offset + 0xE0] = triplet  # prog-length
+    img[auto_e_offset + 0xE0:auto_e_offset + 0xE3] = triplet  # prog + nvars (no vars)
+    img[auto_e_offset + 0xE3:auto_e_offset + 0xE6] = triplet  # prog + nvars + gap (no vars)
+    # StartPage / PageOffset mirror at 0xEC-0xEE — must match body header bytes 3-4 + 8.
+    img[auto_e_offset + 0xEC] = PROG_START_PAGE
+    img[auto_e_offset + 0xED] = PROG_PAGE_OFFSET & 0xff
+    img[auto_e_offset + 0xEE] = (PROG_PAGE_OFFSET >> 8) & 0xff
     write_file_chain(img, auto_chain, auto_header + BASIC_BODY)
 
     # === Slot 2: stub (T6S2) ===========================================
+    # IMPORTANT: this entry MUST NOT advertise an auto-exec address. The
+    # BASIC AUTO file does `LOAD "stub" CODE 24576 : CALL 24576` — the
+    # intent is for the LOAD to return to BASIC so `: CALL 24576` runs.
+    # If the dir entry has byte 0xf2 != 0xff the ROM (E281–E299) takes the
+    # HDLDEX path: PDPSR2 corrupts URPORT (HMPR) and JPs to R1OFFCLBC at
+    # the encoded exec addr, which (a) bypasses BASIC's `: CALL 24576`
+    # entirely and (b) lands in section A or wherever PDPSR2's page-0
+    # branch maps the offset, NOT at &6000. Setting both bytes to 0xff
+    # makes the ROM RET cleanly at E293 and BASIC continues to the CALL.
+    # NOTE: stub and IN dir-entry / body-header encoding is reverted to its
+    # ORIGINAL form, which empirically decodes correctly via samfile's formula
+    # at samfile.go:411-413: `(StartAddressPageOffset & 0x3fff) |
+    # ((StartAddressPage & 0x1f + 1) << 14)`. The audit agent's recommendation
+    # #10 (set 0xEC=`addr>>14`) was incorrect — that produces `Start=40960`
+    # for LOAD_ADDR=0x6000 instead of 24576, because samfile's formula adds
+    # 1 to the stored page. The right encoding has stored_page=real_page-1.
+    # Pending confirmation from the parallel samfile-capabilities research
+    # agent before any further changes here.
     stub_body = open(stub_path, "rb").read()
     stub_chain = [(6, 2)]
     assert len(stub_body) + 9 <= 510 * len(stub_chain), \
@@ -202,16 +294,11 @@ with open(output_path, "r+b") as f:
     stub_header = bytes([0x13, len(stub_body) & 0xff, (len(stub_body) >> 8) & 0xff,
                          LOAD_ADDR & 0xff, (LOAD_ADDR >> 8) & 0xff,
                          0, 0, 0, (LOAD_ADDR >> 14) - 1])
-    # Code-file metadata in the directory:
-    #   ExecutionAddressDiv16K = (exec_addr >> 14) - 1
-    #   ExecutionAddressMod16K = (exec_addr & 0x3fff) | 0x8000  (the 0x8000 marks 'set')
-    exec_addr = LOAD_ADDR
-    exec_div = (exec_addr >> 14) - 1
-    exec_mod = (exec_addr & 0x3fff) | 0x8000
     write_directory_entry(
         img, slot=2, type_byte=0x13, name=b"stub      ",
         chain=stub_chain, length=len(stub_body),
-        exec_addr_div_16k=exec_div, exec_addr_mod_16k=exec_mod,
+        body_header=stub_header,
+        exec_addr_div_16k=0xff, exec_addr_mod_16k=0xffff,    # no auto-exec
     )
     write_file_chain(img, stub_chain, stub_header + stub_body)
 
@@ -226,6 +313,7 @@ with open(output_path, "r+b") as f:
     write_directory_entry(
         img, slot=3, type_byte=0x13, name=b"IN        ",
         chain=in_chain, length=len(in_body),
+        body_header=in_header,
         exec_addr_div_16k=0xff, exec_addr_mod_16k=0xffff,    # IN is data, not executable
     )
     write_file_chain(img, in_chain, in_header + in_body)
