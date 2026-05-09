@@ -36,4 +36,9 @@ fi
 #
 # The bare positional argument (disk path) is the canonical way to autoboot
 # a disk in SimCoupé; Options::Load inserts it as drive 1 and forces autoboot.
-exec simcoupe -exitonhalt 1 -fullscreen 0 -firstrun 0 "$disk"
+#
+# Safety timeout of 30s — even with the patch, if the BASIC auto-load fails to
+# trigger, simcoupe would otherwise sit at the SAM boot screen forever. We treat
+# a 30s timeout as a *failure* (exit 124) so CI doesn't silently pass when the
+# stub never reached DI; HALT.
+exec timeout 30s simcoupe -exitonhalt 1 -fullscreen 0 -firstrun 0 "$disk"
