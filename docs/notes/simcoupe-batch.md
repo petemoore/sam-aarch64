@@ -42,8 +42,10 @@ patch on a sibling branch in `~/git/simcoupe/` (commit `76e5198` on branch
 - Source at `~/git/simcoupe`, on `main` at `0f74cff Updated version to v1.2.15`.
   Patch lives on branch `exit-on-halt`, commit `76e5198`.
 - Linux: install via the `simcoupe` package on Debian/Ubuntu derivatives
-  (older), or build from source. CI will build from a pinned commit / fork
-  with the `-exitonhalt` patch applied.
+  (older), or build from source. CI will clone upstream `simonowen/simcoupe`
+  at a pinned commit, then `git apply` the `-exitonhalt` patch vendored at
+  `tools/simcoupe-exitonhalt.patch` in this repo. See "Acquiring the
+  patched SimCoupé in CI" below for the exact recipe.
 
 ## CLI option survey
 
@@ -211,6 +213,87 @@ construction.
 The patch does **not** bump `ConfigVersion` because no persisted field
 changed; existing `SimCoupe.cfg` files load unchanged.
 
+## Acquiring the patched SimCoupé in CI
+
+The patch is vendored in this repo as a single-commit `git format-patch`
+output at `tools/simcoupe-exitonhalt.patch` (~4.5 KB, 4 files changed).
+CI clones upstream at a pinned SHA and applies the patch on top — no fork,
+no submodule, no external mirror.
+
+- **Pinned upstream commit**: `0f74cff52b96841fe0efa01ffd1a6875b253e72a`
+  (`simonowen/simcoupe@main`, "Updated version to v1.2.15"). This is the
+  parent commit of the local `exit-on-halt` branch, so `git apply` of the
+  vendored patch will apply cleanly without conflicts.
+- **Vendored patch**: `tools/simcoupe-exitonhalt.patch` in this repo.
+- **Recipe** (Linux CI runner — Ubuntu, `ubuntu-latest` is fine):
+
+  ```sh
+  # System deps (SDL2, fmt, build tooling). Network access also required
+  # for the cmake FetchContent of kosarev/z80.
+  sudo apt-get update
+  sudo apt-get install -y \
+      build-essential cmake git \
+      libsdl2-dev libfmt-dev zlib1g-dev libpng-dev libsamplerate0-dev
+
+  # Fetch source at a pinned SHA.
+  git clone https://github.com/simonowen/simcoupe.git
+  cd simcoupe
+  git checkout 0f74cff52b96841fe0efa01ffd1a6875b253e72a
+
+  # Apply the vendored exit-on-halt patch.
+  git apply ../tools/simcoupe-exitonhalt.patch
+
+  # Build.
+  cmake -B build -DCMAKE_BUILD_TYPE=Release
+  cmake --build build -j
+
+  # Resulting binary: ./build/simcoupe
+  ./build/simcoupe -exitonhalt 1 ../path/to/work.mgt
+  ```
+
+  Use `git apply --check ../tools/simcoupe-exitonhalt.patch` first if you
+  want to assert apply-cleanliness as a separate CI step (it's a useful
+  early failure if upstream rebases the pinned SHA out of existence).
+
+- **When upstream merges the patch**: drop the `git apply` step, bump the
+  pinned SHA to a commit that contains the merge, and delete
+  `tools/simcoupe-exitonhalt.patch` from this repo. The CLI surface
+  (`-exitonhalt 1`) is the contract; the rest of the round-trip harness
+  is unaffected.
+- **When the vendored patch goes stale**: if upstream changes any of the
+  4 patched files materially (unlikely for `Base/CPU.cpp` /
+  `Base/Options.cpp`), re-apply the patch to a newer SHA locally,
+  regenerate with `git -C ~/git/simcoupe format-patch -1 <new-commit>
+  --stdout > tools/simcoupe-exitonhalt.patch`, and bump the pinned SHA
+  in CI.
+
+### Building locally on Linux
+
+If you already have the source at `~/git/simcoupe` (e.g. Pete's dev box),
+skip the clone and just apply the patch on top of the pinned base:
+
+```sh
+cd ~/git/simcoupe
+git checkout 0f74cff52b96841fe0efa01ffd1a6875b253e72a
+git apply /path/to/assembler/tools/simcoupe-exitonhalt.patch
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+./build/simcoupe -exitonhalt 1 work.mgt
+```
+
+(Alternatively, just check out the local `exit-on-halt` branch, which
+already contains the same commit as the patch.)
+
+### Building locally on macOS
+
+**Currently broken** — not because of anything in this patch, but because
+of pre-existing C++ toolchain issues on Pete's Mac (Apple CLT missing
+`<optional>`/`<variant>` headers under `/usr/bin/c++`; building with
+Homebrew `llvm` runs into an `fmt`-vs-Apple-`math.h` `isfinite` /
+`signbit` macro collision). See "Tested invocation" below for details.
+**Use Linux for SimCoupé builds for now.** A future M-milestone task may
+revisit this once Pete's CLT install is fixed.
+
 ## Auto-run mechanism
 
 This was the second arm of the spike (step 2b). Question: when SAMDOS boots
@@ -275,22 +358,21 @@ So the minimal stub on disk needs two files:
 Practical creation path on the host (no SAM Coupé needed):
 
 - Build the code file with `pyz80` (M0 Task 4).
-- Write the BASIC `auto` file. Two reasonable approaches:
-  - **(a) Hand-roll the tokenised BASIC.** Two lines of tokens; the SAM
-    BASIC token table is well documented, and `samfile basic-to-text` (Pete's
-    own tool) already implements the inverse direction so we have a token
-    table to reuse. ~50 bytes of file body.
-  - **(b) Skip BASIC entirely and use a custom `auto`-equivalent.** Patch
-    SAMDOS or use a different DOS that does auto-execute code files. Way
-    more work; not recommended.
+- Write the BASIC `auto` file by **hand-rolling the tokenised bytes**.
+  See "Generating the BASIC `auto` file (for Task 5's build-disk.sh)"
+  below for the full byte sequence and a script-able construction
+  recipe. The tokenisation table was reverse-engineered from
+  `~/git/samfile/keywords.go` + `sambasic.go` and round-trip-verified
+  against `samfile basic-to-text`.
 - `samfile add -i work.mgt -f stub -c -l 32768 -e 32768 ...` to add the code
   file with execution address `&8000` (so even if BASIC's `LOAD CODE` is
   redundant, it's safe).
 - `samfile` does not currently have a "add BASIC file with auto-run line"
-  command; we will need either to extend `samfile` (M0 Task 4 or 7) or to
-  template-generate the tokenised BASIC bytes from a fixture and pass them
-  through `samfile add`. **Decision deferred to M0 Task 4** — this spike's
-  job is to identify the constraint, not solve it.
+  command. The recipe below produces the BASIC file body bytes; combined
+  with a directory-entry type byte of `&10` and the auto-run line in the
+  appropriate directory slot, M0 Task 5's `build-disk.sh` can build the
+  full disk image directly. If extending `samfile` later proves cleaner,
+  the byte sequence below is the contract that command needs to emit.
 
 Note: there's a *possible* simplification. Since `samfile add -c -e <exec>`
 sets an execution address on a code file, BASIC's `LOAD "name"` (without
@@ -298,6 +380,132 @@ sets an execution address on a code file, BASIC's `LOAD "name"` (without
 address — but only when invoked from BASIC. Since the autoboot path does
 `SAVE "auto"` style behaviour and not a freeform LOAD, this doesn't help us
 skip the BASIC loader. The BASIC loader is required.
+
+## Generating the BASIC `auto` file (for Task 5's build-disk.sh)
+
+We hand-roll the tokenised BASIC. The auto file is exactly **30 bytes**,
+encoding a single auto-run line:
+
+```basic
+10 LOAD "stub" CODE : CALL 32768
+```
+
+`LOAD "stub" CODE` (no address) loads the code file at its saved load
+address; `CALL 32768` jumps to `&8000` where pyz80 will have placed the
+stub. (Saving the stub with both load- and exec-addresses set to `&8000`
+would let us drop the explicit `CALL`, but the explicit form is more
+robust and keeps Task 5 unambiguous.)
+
+### File format reference
+
+A SAM BASIC program file is a sequence of lines followed by a `0xff`
+terminator. Each line is:
+
+| Field         | Bytes     | Encoding                                    |
+| ------------- | --------- | ------------------------------------------- |
+| Line number   | 2         | **big-endian** uint16                       |
+| Line length   | 2         | **little-endian** uint16, body bytes only   |
+| Body          | *length*  | tokens + ASCII + numeric encodings + `0x0d` |
+
+(`0x0d` ends the body and counts toward the length.)
+
+The token bytes we need (cross-verified with the round-trip probe at
+`/tmp/samdecode/main.go`, derived from `~/git/samfile/keywords.go`):
+
+| Token  | Encoding   | Notes                                  |
+| ------ | ---------- | -------------------------------------- |
+| `LOAD` | `0x95`     | Statement keyword (direct byte).       |
+| `CODE` | `0xff 0x6c`| Function/expression token (prefixed).  |
+| `CALL` | `0xe4`     | Statement keyword (direct byte).       |
+
+Numeric integer literals appear in the source as their ASCII digits
+(`'3', '2', '7', '6', '8'`) **followed by** a 6-byte binary encoding:
+`0x0e 0x00 0x00 LO HI 0x00`, where `LO`/`HI` are the little-endian uint16
+value. So `32768` → `0x0e 0x00 0x00 0x00 0x80 0x00`.
+
+### The 30 bytes
+
+```
+00 0a 19 00 95 20 22 73 74 75 62 22 20 ff 6c 3a
+e4 33 32 37 36 38 0e 00 00 00 80 00 0d ff
+```
+
+Annotated:
+
+```
+00 0a              line number 10 (BE)
+19 00              line length 0x0019 = 25 bytes (LE), covers everything
+                   from the LOAD token up to and including the 0x0d
+  95               LOAD
+  20               ' '          (cosmetic, optional but kept for clarity)
+  22 73 74 75 62 22  "stub"
+  20               ' '
+  ff 6c            CODE         (function token, 0xff-prefixed)
+  3a               ':'          statement separator
+  e4               CALL
+  33 32 37 36 38   '32768'      ASCII digits (printed form)
+  0e 00 00 00 80 00  numeric encoding for 32768 (0x8000)
+  0d               line terminator
+ff                 file terminator
+```
+
+### Constructing it from a script
+
+Trivial in any language. Python one-liner for `build-disk.sh`:
+
+```sh
+python3 -c 'open("auto","wb").write(bytes.fromhex(
+    "000a1900"           # line 10 (BE), length 0x0019 (LE)
+    "9520227374756222"   # LOAD " s t u b "
+    "20ff6c"             # _ CODE
+    "3a"                 # :
+    "e4"                 # CALL
+    "3332373638"         # "32768" (printed digits)
+    "0e0000008000"       # numeric encoding for 32768
+    "0d"                 # line terminator
+    "ff"                 # file terminator
+))'
+```
+
+Or as a shell `printf`:
+
+```sh
+printf '\x00\x0a\x19\x00\x95\x20\x22stub\x22\x20\xff\x6c\x3a\xe4'\
+'32768\x0e\x00\x00\x00\x80\x00\x0d\xff' > auto
+```
+
+### Directory-entry side
+
+The 30 bytes above are the **file body**. The MGT/DSK directory entry that
+points at this body must additionally:
+
+- Set the file type byte to `0x10` (= 16, "SAM BASIC") — this is what
+  `autox` in SAMDOS dispatches on; type `0x13` (code) would skip BASIC
+  execution entirely.
+- Set the auto-run line number field to `10` (matching the BASIC line
+  number above) so SAMDOS executes from line 10 instead of dropping to
+  the `Ready` prompt.
+
+`samfile add` does not currently expose these knobs (it's a code-file-add
+tool); M0 Task 5's `build-disk.sh` will need to set them directly when
+laying out the directory sector. The MGT directory format is documented
+in `~/git/samdos/src/h.s` (entry layout) and `~/git/simcoupe/Manual.md`
+(file types).
+
+### Verification
+
+Round-trip the bytes through `samfile basic-to-text`:
+
+```sh
+printf '\x00\x0a\x19\x00\x95\x20\x22stub\x22\x20\xff\x6c\x3a\xe4'\
+'32768\x0e\x00\x00\x00\x80\x00\x0d\xff' \
+  | (cd ~/git/samfile && go run ./cmd/samfile basic-to-text)
+# expected:    10 LOAD  "stub"  CODE : CALL 32768
+```
+
+This was the verification used to confirm the byte sequence above —
+samfile's decoder emits an extra space around tokens, but the source
+recovers correctly.
 
 ## Tested invocation
 
@@ -371,14 +579,18 @@ a stub bug could send the Z80 into a `JR -2` and never reach `HALT`.
 - **Linux without X**: use `SDL_VIDEODRIVER=dummy` env var. Easier than
   xvfb; works in GitHub Actions ubuntu-latest out of the box. xvfb is a
   fallback if a future SimCoupé feature ever needs a real GL context.
-- **macOS GUI app focus stealing**: the installed `.app` bundle steals
-  focus when launched, even with `SDL_VIDEODRIVER=dummy` (Cocoa intercepts
-  the env var at NSApplication startup). For local dev runs that don't
-  want a window, build the SDL frontend without the macOS bundle wrapper
-  (the cmake target `simcoupe` produces a plain Mach-O at
-  `/tmp/simcoupe-build/SimCoupe.app/Contents/MacOS/SimCoupe`).
+- **macOS GUI app focus stealing (expected, not yet verified)**: macOS
+  `.app` bundles typically steal focus when launched via Cocoa's
+  `NSApplication` startup, regardless of `SDL_VIDEODRIVER=dummy`. We have
+  *not* observed this directly — the patched binary couldn't be built on
+  this Mac (see "Tested invocation" above), and the unpatched installed
+  binary was only smoke-tested with a 5s timeout. **Flag during M0 Task 5**
+  if it bites: the workaround would be to build the SDL frontend without
+  the macOS bundle wrapper (the cmake target `simcoupe` produces a plain
+  Mach-O under the build directory). On Linux CI this is a non-issue —
+  there's no Cocoa.
 - **`autoboot` is forced on per-run**, not loaded from `SimCoupe.cfg`
-  (see `Options.cpp:181`: `g_config.autoboot = true;` unconditionally).
+  (see `Options.cpp:182`: `g_config.autoboot = true;` unconditionally).
   No need to pass it on the CLI.
 - **`SimCoupe.cfg` is written on every clean exit**. CI runners get a
   stale config from a previous run. To keep CI hermetic, either: (a) point
