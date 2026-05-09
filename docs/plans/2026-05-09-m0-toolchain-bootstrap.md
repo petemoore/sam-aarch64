@@ -546,20 +546,26 @@ git commit -m "feat: run halt-only stub end-to-end in SimCoupé batch mode"
 - Create: `docs/notes/sam-file-io.md`
 - Create: `src/sam_io.inc` (initial skeleton; populated by spike)
 
-Research spike. Goal: identify which SAM ROM / MasterDOS calls the stub will use to (a) open and read the `IN` file, (b) create and write the `OUT` file. Output is a markdown document plus a stub include file with the discovered routines as labels.
+Research spike. Goal: identify which SAM ROM / SAMDOS calls the stub will use to (a) open and read the `IN` file, (b) create and write the `OUT` file. Output is a markdown document plus a stub include file with the discovered routines as labels.
 
-- [ ] **Step 1: Read the relevant decoded COMET source**
+**Primary reference: SAMDOS source at `~/git/samdos/src/`** (cloned 2026-05-09 from https://github.com/stefandrissen/samdos). SAMDOS is the standard SAM Coupé disk operating system; it lives on disk, gets loaded into RAM at boot, and exposes hooks for application I/O. Files are plain Z80 source: `samdos.s` plus parts `a.s` through `h.s`. Read these — they define the actual API we'll call.
 
-Skim `reference/comet-decoded/comet.asm` looking for:
-- File-open/read patterns near directives related to source loading
-- File-create/write patterns near directives related to output
-- Uses of `RST 8` with parameter bytes (the SAM ROM call convention)
+**Secondary reference: COMET's own use of disk I/O.** Skim `reference/comet-decoded/comet.asm` looking for `RST 8` patterns (SAM ROM call convention) where files are opened or written; this shows the *consumer* side of the API and confirms the calling conventions in practice.
 
-Look in particular for sections that handle "load source from disk" and "save assembled output". Note the routine addresses, parameter passing convention, and error returns.
+- [ ] **Step 1: Read SAMDOS source for the file I/O entry points**
 
-- [ ] **Step 2: Cross-reference with the COMET manual and SAM DOS docs**
+In `~/git/samdos/src/`, identify:
+- Hook addresses (jump table entries the application calls into)
+- The open/read/close sequence for an existing file
+- The create/write/close sequence for a new file
+- Filename format on disk (length, padding character, case)
+- Error return convention (likely Carry flag + error code in A)
 
-Open `docs/comet/comet_v1-3_manual.pdf` for any documented entry points. Search online for "SAM Coupe MasterDOS hook codes" and "MGT DOS programmer reference". Document the canonical call mechanism.
+Note line numbers in samdos sources for precise reference.
+
+- [ ] **Step 2: Cross-reference with the COMET manual and the COMET source**
+
+Open `docs/comet/comet_v1-3_manual.pdf` for any documented entry points. Search `reference/comet-decoded/comet.asm` for actual `RST 8` invocations (the SAM ROM call gateway) and the parameter bytes following them — those are the canonical hook codes COMET uses for file I/O. Cross-check against the SAMDOS hook table identified in Step 1.
 
 - [ ] **Step 3: Document findings in `docs/notes/sam-file-io.md`**
 
