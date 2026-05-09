@@ -1,28 +1,28 @@
-From c5c0d0da38ea36759bfe2b72fd29755555e51757 Mon Sep 17 00:00:00 2001
+From 8ae58c8b90800d64e0755d719451a4d3432d29ae Mon Sep 17 00:00:00 2001
 From: Pete Moore <pmoore@mozilla.com>
-Date: Sat, 9 May 2026 13:40:53 +0200
-Subject: [PATCH 1/2] Add Config::exitonhalt option (off by default,
- non-persisted)
+Date: Sat, 9 May 2026 14:34:50 +0200
+Subject: [PATCH 1/2] Add Config::exitonhalt option (off by default, not saved)
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
 Content-Transfer-Encoding: 8bit
 
 Introduce a new boolean configuration option `exitonhalt` that will
-be used by the upcoming batch-mode clean-exit mechanisms. The option
-is off by default and deliberately not persisted to SimCoupe.cfg —
-it's a per-invocation harness flag (set via `-exitonhalt 1` on the
-command line), not a user preference.
+be used by the upcoming batch-mode clean-exit mechanism. The option
+is off by default and is not persisted to SimCoupe.cfg — it is a
+per-invocation harness flag (set via `-exitonhalt 1` on the command
+line), not a user preference. Follows the same not-saved pattern as
+the existing `autoboot` option.
 
 This commit only wires the option through the config struct and the
-named-value parser. The behaviour that consults it is added in
-subsequent commits.
+named-value parser. The behaviour that consults it is added in the
+next commit.
 ---
- Base/Options.cpp | 3 +++
+ Base/Options.cpp | 1 +
  Base/Options.h   | 2 ++
- 2 files changed, 5 insertions(+)
+ 2 files changed, 3 insertions(+)
 
 diff --git a/Base/Options.cpp b/Base/Options.cpp
-index 53ad5d3..f308846 100644
+index 53ad5d3..b61c20f 100644
 --- a/Base/Options.cpp
 +++ b/Base/Options.cpp
 @@ -142,6 +142,7 @@ static bool SetNamedValue(const std::string& option_name, const std::string& str
@@ -33,24 +33,15 @@ index 53ad5d3..f308846 100644
      else
      {
          return false;
-@@ -318,6 +319,8 @@ bool Save()
-         ofs << "breakonexec=" << to_string(g_config.breakonexec) << std::endl;
-         ofs << "fkeys=" << to_string(g_config.fkeys) << std::endl;
-         ofs << "rasterdebug=" << to_string(g_config.rasterdebug) << std::endl;
-+        // exitonhalt is intentionally not persisted: it's a transient batch-mode flag
-+        // that should only be set per-invocation via the command line.
-     }
-     catch (...)
-     {
 diff --git a/Base/Options.h b/Base/Options.h
-index b392eee..a7c9935 100644
+index b392eee..ca7ceb0 100644
 --- a/Base/Options.h
 +++ b/Base/Options.h
 @@ -127,6 +127,8 @@ struct Config
      bool breakonexec = false;           // Break on code auto-execute?
      bool rasterdebug = true;            // Raster-accurate debugger display
  
-+    bool exitonhalt = false;            // Quit cleanly when Z80 executes HALT with interrupts disabled (batch mode)
++    bool exitonhalt = false;            // Quit when Z80 executes DI;HALT? (batch mode, not saved)
 +
      std::string fkeys =                 // Function key bindings
          "F1=InsertDisk1,SF1=EjectDisk1,AF1=NewDisk1,CF1=SaveDisk1,"
@@ -59,9 +50,9 @@ index b392eee..a7c9935 100644
 2.53.0
 
 
-From 2ea4c7ce4da6de417b7fa7ee1ce904003a617c00 Mon Sep 17 00:00:00 2001
+From ed99dd4ae7d2983255a7b8de6eaaff0f2e86992a Mon Sep 17 00:00:00 2001
 From: Pete Moore <pmoore@mozilla.com>
-Date: Sat, 9 May 2026 14:32:13 +0200
+Date: Sat, 9 May 2026 14:34:52 +0200
 Subject: [PATCH 2/2] Quit on Z80 DI;HALT when exitonhalt=1
 MIME-Version: 1.0
 Content-Type: text/plain; charset=UTF-8
