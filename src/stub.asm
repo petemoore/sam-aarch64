@@ -3,18 +3,29 @@
 ; The 4 bytes written are the little-endian aarch64 encoding of NOP:
 ;   0xd503201f → bytes 1f 20 03 d5  (low byte first).
 ;
-; SAMDOS calling convention (from docs/notes/sam-file-io.md, Task 6 spike):
-;   - IX must point to UIFA at &4B00 before each RST 8 hook call.
-;   - fill_uifa (in sam_io.inc) loads IX and populates the 48-byte buffer.
-;   - Most hooks longjmp to BASIC on error; jp c, fail guards are dead code
-;     for HGFLE/CFSM but are kept for defensive symmetry.
-;   - HOFLE is the only hook that may return with CY set (name-in-use /
-;     disk full) rather than longjmping — that CY is checked after create_output.
-;   - SAMDOS has no explicit close-for-read; close_input is a no-op wrapper.
-;   - LBYT longjmps on EOF; we must not call it past the last byte.
-;     For M0 we skip reading/discarding the input: HGFLE opens it and positions
-;     the read pointer, then HOFLE opens a fresh output channel — they are
-;     independent, so abandoning the input read is safe.
+; Output mechanism — HSAVE (hook 132), not HOFLE/SBYT/CFSM:
+;   The streaming-byte trio is broken when called externally via RST 8
+;   in canonical SAMDOS 2: their bodies never reset IX to `dchan`, so
+;   `ofsm` writes 256 bytes through (caller_ix + ffsa..) which lands
+;   inside SAMDOS's own code in section B, corrupting the live image.
+;   HSAVE writes the whole file in one call AND calls `gtixd` at
+;   `h.s:145` first, so it works correctly externally. We pre-populate
+;   UIFA bytes 31-36 with source page (from HMPR), source address
+;   (in 8000-BFFF form, which our payload already is given org &8000),
+;   pages count, and length-mod-16K. Full citations:
+;   `docs/notes/sam-stub-audit.md` and `docs/notes/archive/2026-05-10-handoff.md`.
+;
+; SAMDOS calling convention notes that still apply:
+;   - IX must point to UIFA at &4B00 before each RST 8 hook call;
+;     fill_uifa (in sam_io.inc) loads IX and populates bytes 0-14.
+;   - Most hooks longjmp to BASIC on error and do not return. HSAVE
+;     also longjmps on disk-full / write-error — fail: below is dead
+;     code under success and kept only as a defensive halt.
+;   - SAMDOS has no explicit close-for-read; close_input is a no-op.
+;   - LBYT longjmps on EOF; we skip reading IN entirely. HGFLE opens
+;     it (which is the only externally-correct streaming hook — gtfle
+;     calls fdhr which does `ld ix, dchan`) and HSAVE then independently
+;     handles the OUT side.
 ;
 ; Note: pyz80 does not support the END directive. Assembly ends at EOF.
 ; The org directive sets the load address; the entry point is the first byte.
@@ -51,23 +62,23 @@ start:          di                     ; one-shot batch program; no interrupts n
 ; HGFLE and HOFLE use a single DOS channel but independently.  HOFLE will
 ; reset the channel state; abandoning the read is safe for M0.
 
-; -- create OUT for writing -----------------------------------------------
+; -- write OUT via HSAVE (hook 132, whole-file write) ---------------------
+; HSAVE pulls source addr from UIFA bytes 32-33 and length from 35-36.
+; It writes UIFA byte 31 (& 0x1f) to HMPR before the body write, so we
+; feed back our current HMPR — the page our payload (and we) live in.
                 ld      hl, name_OUT
-                call    fill_uifa      ; populate UIFA + set IX = &4B00
-                call    create_output  ; RST 8 / DEFB 147 — CY on name conflict
-                jp      c, fail        ; disk/dir full → abort with red border
-
-; -- write the 4 NOP bytes to OUT ----------------------------------------
-; aarch64 NOP little-endian: 1f 20 03 d5
-                ld      hl, payload
-                ld      b, 4
-emit:           ld      a, (hl)
-                call    write_byte     ; RST 8 / DEFB 148
-                inc     hl
-                djnz    emit
-
-; -- close OUT (flush + finalise directory entry) -------------------------
-                call    close_output   ; RST 8 / DEFB 152 — mandatory
+                call    fill_uifa      ; UIFA bytes 0-14; pads 15-47 with FF; IX = &4B00
+                in      a, (251)       ; HMPR — current section-C physical page
+                and     &1f            ; 5-bit page number
+                ld      (UIFA + 31), a ; source page for HSAVE
+                ld      hl, payload    ; source address (already in &8000-BFFF form)
+                ld      (UIFA + 32), hl
+                xor     a
+                ld      (UIFA + 34), a ; pages = 0 (length < 16K)
+                ld      hl, 4
+                ld      (UIFA + 35), hl ; length-mod-16K = 4
+                rst     8
+                defb    HOOK_HSAVE     ; 132 — writes header, body, dir entry; longjmps on error
 
 ; -- magic exit signal -----------------------------------------------------
 ; The patched SimCoupé's `-exitonhalt 1` flag detects an OUT to port &DEAD

@@ -16,12 +16,12 @@ without ever leaving the SAM Coupé.
 
 ## Status
 
-M0 (toolchain bootstrap) implementation in progress on `m0-toolchain-bootstrap`.
-PR #1 is the active draft. The dev loop pyz80 → patched SimCoupé → samfile →
-GNU `as` is wired end-to-end; final blocker is that the SimCoupé `-exitonhalt`
-patch's `on_halt` override isn't being dispatched by kosarev/z80's CRTP, so
-the round-trip oracle can't yet detect Z80 program completion. See
-`docs/specs/` for design documents and `docs/plans/` for the M0 plan.
+M0 (toolchain bootstrap) round-trip passes locally — pyz80 → patched
+SimCoupé → samfile → GNU `as` is wired end-to-end and the stub's
+HSAVE-written `OUT` byte-matches `aarch64-none-elf-as`. PR #1 is the
+active draft on `m0-toolchain-bootstrap`; pending GitHub Actions
+green-on-amd64 before merging to main. See `docs/specs/` for design
+documents and `docs/plans/` for the M0 plan.
 
 ## Repository layout
 

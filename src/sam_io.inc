@@ -44,10 +44,16 @@ UIFA_PAGES:     equ     34             ; page count.
 UIFA_LENGTH:    equ     35             ; length-mod-16K LE word.
 
 ; SAMDOS hook codes (samdos/src/b.s::samhk). Numbered from 128.
-HOOK_HERAZ:     equ     166            ; erase file by name.
-HOOK_HOFLE:     equ     147            ; open file for writing (creates).
-HOOK_SBYT:      equ     148            ; save one byte (buffered).
-HOOK_CFSM:      equ     152            ; close output (flushes + dir update).
+;
+; The streaming-write trio HOFLE (147) / SBYT (148) / CFSM (152) is
+; intentionally not exposed here: their bodies in canonical SAMDOS 2
+; do NOT call `gtixd` at entry, so IX inherits the caller's value
+; (e.g. UIFA at &4B00) instead of `dchan`. With caller's IX,
+; `ofsm:1185-1260` writes 256 bytes through `(ix+ffsa..)` into SAMDOS's
+; own code in section B, corrupting the running image. Use HSAVE (132)
+; for whole-file writes: it calls `gtixd` at `h.s:145` before any FCB
+; access. Full audit: `docs/notes/sam-stub-audit.md`.
+HOOK_HSAVE:     equ     132            ; save whole file (gtixd-correct).
 HOOK_HGFLE:     equ     158            ; open file for reading.
 HOOK_LBYT:      equ     159            ; load one byte (buffered).
 
@@ -105,38 +111,6 @@ read_byte:      rst     8
 close_input:    ret
 
 
-; -----------------------------------------------------------------------
-; create_output — create a new file for streaming write (HOFLE, hook 147).
-;
-; Precondition: fill_uifa called with output file's name block.
-;               HERAZ should be called first to erase any existing file so
-;               that HOFLE does not prompt interactively (see spike doc).
-; After return: directory entry reserved, header written, buffer ready.
-; On error (disk/dir full): CY set — HOFLE is the only hook that returns
-;   CY instead of longjmping (see spike doc, ofsm / cyes).
-; -----------------------------------------------------------------------
-create_output:  rst     8
-                defb    HOOK_HOFLE     ; 147: HOFLE — open file for writing
-                ret
-
-
-; -----------------------------------------------------------------------
-; write_byte — write A to currently open output file (buffered).
-;
-; Input: A = byte to write.
-; On disk-full / I/O error: SAMDOS longjmps — does not return.
-; -----------------------------------------------------------------------
-write_byte:     rst     8
-                defb    HOOK_SBYT      ; 148: SBYT — save one byte
-                ret
-
-
-; -----------------------------------------------------------------------
-; close_output — flush buffer and finalise directory entry (CFSM, hook 152).
-;
-; Must be called or the directory entry stays "open" and the file is
-; unreadable on the next boot.
-; -----------------------------------------------------------------------
-close_output:   rst     8
-                defb    HOOK_CFSM      ; 152: CFSM — close/flush output file
-                ret
+; The output side intentionally has no per-byte API. Use the inline
+; HSAVE sequence in stub.asm — fill UIFA bytes 0-14 + 31-36, then
+; `rst 8 / defb HOOK_HSAVE`. Single call writes header, body, dir entry.

@@ -22,40 +22,30 @@ Plan: `docs/plans/2026-05-09-m0-toolchain-bootstrap.md`.
 
 ## Current state
 
-**Boot path: WORKING.** As of 2026-05-10 evening, the AUTO BASIC line
-`10 CLEAR 32767: LOAD "stub" CODE 32768: CALL 32768` boots cleanly,
-LOADs the stub at 0x8000, CALLs it, and the stub's `OUT (&FE), 4 : DI :
-HALT` triggers simcoupé's `-exitonhalt` patch and exits 0. Verified in
-the dev container against a 6-byte minimal stub.
+**Full round-trip: WORKING locally.** As of 2026-05-10 (late), the
+HSAVE-based stub writes `OUT` correctly inside the dev container,
+`samfile cat -i build/test.mgt -f OUT` produces exactly `1f 20 03 d5`,
+and `diff-vs-gnu.sh` confirms byte-identity with `aarch64-none-elf-as`.
+`make ci` in the container returns 0.
 
-The crash that blocked the boot path for several sessions (red /
-pink-bordered page-displaced screen → cold-boot reset) was caused by
-three independent bugs in `tools/build-disk.sh`, all now fixed:
+Two compounding fixes got us here:
 
-1. **stub/IN body header bytes 5-6** were `0x00 0x00` instead of `0xFF 0xFF`,
-   triggering ROM's LOAD-CODE auto-exec path to JP into garbage.
-2. **BASIC tokeniser inserted spurious `0x20` bytes** after each keyword,
-   producing visible double-spacing in LIST and corrupting the parser.
-3. **BASIC body had no vars/gap allocation.** Canonical SAM SAVE always
-   reserves `vars + gap = 604` bytes after the program text; with our
-   triplets all pointing to PROG+`prog_length`, CLEAR walked off the
-   program into the next file's body.
-
-See `docs/notes/sam-basic-save-format.md` for the format reference and
-`docs/notes/test-mgt-byte-layout.md` for the byte-by-byte explanation.
+1. **Boot path** (resolved earlier on 2026-05-10): three bugs in
+   `tools/build-disk.sh` — body header bytes 5-6 `0x00 → 0xFF`, BASIC
+   tokeniser dropping spurious `0x20` bytes, and missing `vars + gap = 604`
+   allocation. See `docs/notes/sam-basic-save-format.md` and
+   `docs/notes/test-mgt-byte-layout.md`.
+2. **OUT write** (this commit): switched stub output mechanism from
+   `HOFLE`/`SBYT`/`CFSM` (hooks 147/148/152) to `HSAVE` (hook 132). The
+   streaming-byte trio is broken externally in canonical SAMDOS 2 — their
+   bodies never `call gtixd` at entry, so they treat the caller's UIFA
+   address as a `dchan` FCB and `ofsm` overwrites SAMDOS's own running
+   code in section B. HSAVE calls `gtixd` at `h.s:145` and works
+   correctly externally. Full audit: `docs/notes/sam-stub-audit.md`.
 
 ## What's NOT done yet
 
-The 6-byte stub (LD A,4; OUT (FE),A; DI; HALT) only proves boot —
-it doesn't read `IN` or write `OUT`. The full M0 round-trip needs:
-
-1. Restore the SAMDOS-using `src/stub.asm` (~124 bytes per
-   `2026-05-10-handoff.md`).
-2. Verify it reads `IN` via SAMDOS hooks (`HGTHD`/`HLOAD` per `sam-stub-audit.md`)
-   and writes `OUT` via `HSAVE`.
-3. Add `OUT` extraction step to the Mac side and byte-diff vs
-   `aarch64-none-elf-as`.
-4. Confirm in GitHub Actions runner.
+- Confirm the same `make ci` passes in GitHub Actions (one push away).
 
 ## What's verified
 
@@ -74,9 +64,11 @@ it doesn't read `IN` or write `OUT`. The full M0 round-trip needs:
 
 ### Repo files
 
-- `src/stub.asm` — Z80 stub. Currently a 6-byte minimal "set border
-  green and HALT". Needs to be restored to the SAMDOS-using version.
-- `src/sam_io.inc` — SAMDOS-hook wrappers.
+- `src/stub.asm` — Z80 stub. 119 bytes. Opens `IN` via HGFLE, then writes
+  `OUT` via HSAVE (whole-file write — the only externally-correct SAMDOS
+  write path).
+- `src/sam_io.inc` — SAMDOS-hook wrappers (HGFLE, LBYT, fill_uifa).
+  HOFLE/SBYT/CFSM intentionally omitted — see header comment for why.
 - `tools/build-disk.sh` — disk constructor. Trimmed (2026-05-10) of
   experimental notes; format authority is `sam-basic-save-format.md`
   and `test-mgt-byte-layout.md`.
@@ -118,11 +110,11 @@ it doesn't read `IN` or write `OUT`. The full M0 round-trip needs:
 
 ## Definition of done (M0 milestone)
 
-- `make ci` exits 0 in the dev container ✓ (boot path)  / ✗ (round-trip)
+- `make ci` exits 0 in the dev container ✓
 - Extracted `OUT` byte-matches `aarch64-none-elf-as` for the 4-byte NOP
-  fixture
-- Round-trip total time < 25s
-- Same `make ci` passes in GitHub Actions on `ubuntu-latest`
+  fixture ✓
+- Round-trip total time < 25s ✓ (typically a few seconds)
+- Same `make ci` passes in GitHub Actions on `ubuntu-latest` (pending push)
 - Disk image bootable on real SAM hardware ✓
 
 ## Hand-off recipe
