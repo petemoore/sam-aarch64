@@ -82,15 +82,13 @@ jobs:
 
       - name: Install pyz80
         run: |
-          # pyz80 is distributed as a single Python script (no PyPI package).
-          # Clone it and install a wrapper that forces python3, since Ubuntu 22+
-          # runners may not have a bare 'python' on PATH and pyz80's shebang is
-          # '#!/usr/bin/env python'.
+          # pyz80 is now a proper Python package (pyproject.toml, src/pyz80/).
+          # `pip install` from the cloned repo creates a `pyz80` console-script
+          # entry point on PATH, no shebang/wrapper gymnastics needed.
           git clone https://github.com/simonowen/pyz80 /tmp/pyz80
-          # Write a thin wrapper rather than relying on the shebang.
-          printf '#!/usr/bin/env bash\nexec python3 /tmp/pyz80/pyz80.py "$@"\n' \
-              | sudo tee /usr/local/bin/pyz80 > /dev/null
-          sudo chmod +x /usr/local/bin/pyz80
+          pip install /tmp/pyz80
+          # actions/setup-python@v5 puts pip's bin dir on PATH automatically.
+          which pyz80 && pyz80 --help | head -1 || true
 
       # ── 4. Go + samfile ──────────────────────────────────────────────────
       - uses: actions/setup-go@v5
