@@ -123,10 +123,35 @@ jobs:
       # Diagnosed locally via Docker repro on 2026-05-09; confirmed each
       # subsystem failure short-circuits Main::Init causing silent exit-0.
       - name: Install xvfb and Mesa software GL
-        run: sudo apt-get install -y xvfb libgl1-mesa-dri mesa-utils
+        run: sudo apt-get install -y xvfb libgl1-mesa-dri mesa-utils imagemagick
+
+      # We start Xvfb manually rather than via `xvfb-run` so the X server
+      # outlives the make step. That lets the next step capture a screenshot
+      # of the final frame simcoupe rendered before its 30s timeout fired —
+      # essential diagnostic when the round-trip hangs.
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1280x1024x24 &
+          # Give it a moment to come up.
+          sleep 1
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
 
       - name: Round-trip oracle
         env:
           SDL_VIDEODRIVER: x11        # override job-level dummy; need real renderer
           SDL_AUDIODRIVER: dummy      # already set at job level; explicit here
-        run: xvfb-run -a -s "-screen 0 1280x1024x24" make ci
+        run: make ci
+
+      - name: Capture screenshot on failure
+        if: failure()
+        run: |
+          import -window root /tmp/simcoupe-screen.png || true
+          ls -la /tmp/simcoupe-screen.png || true
+
+      - name: Upload screenshot artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: simcoupe-screen
+          path: /tmp/simcoupe-screen.png
+          if-no-files-found: warn
