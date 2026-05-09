@@ -16,14 +16,23 @@ without ever leaving the SAM Coupé.
 
 ## Status
 
-Brainstorming / design phase. See `docs/specs/` for design documents.
+M0 (toolchain bootstrap) implementation in progress on `m0-toolchain-bootstrap`.
+PR #1 is the active draft. The dev loop pyz80 → patched SimCoupé → samfile →
+GNU `as` is wired end-to-end; final blocker is that the SimCoupé `-exitonhalt`
+patch's `on_halt` override isn't being dispatched by kosarev/z80's CRTP, so
+the round-trip oracle can't yet detect Z80 program completion. See
+`docs/specs/` for design documents and `docs/plans/` for the M0 plan.
 
 ## Repository layout
 
 ```
 docs/
 ├── specs/        Design documents (vision + per-phase specs)
+├── plans/        Per-milestone implementation plans
+├── notes/        Spike outputs (SimCoupé batch mode, SAM file I/O)
 ├── comet/        COMET assembler reference: PDF manual, decoded source
+├── sam/          SAM Coupé hardware refs: tech manual, user guide, ROM disasm
+├── saa1099/      SAA-1099 sound chip datasheet (for future chiptune work)
 ├── aarch64/      ARM ISA notes and (later) generated encoder tables
 └── trinity/      Quazar Trinity hardware programming notes
 
@@ -33,7 +42,8 @@ reference/
                     plain-text Z80 source — for study and selective porting
 
 src/             Z80 assembler source for the new tool (Phase 1: assembler)
-tools/           Mac-side helpers (encoder-table generator, test harness)
+tools/           Mac-side helpers (encoder-table generator, test harness,
+                 vendored simcoupe-exitonhalt patch)
 tests/           Test fixtures and round-trip scripts
 build/           Build outputs (gitignored)
 ```
