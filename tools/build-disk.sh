@@ -97,12 +97,19 @@ def write_directory_entry(img: bytearray, slot: int, *, type_byte: int,
     e[0x0f:0x0f + 195] = sam_map
     e[0xf0] = length & 0xff
     e[0xf1] = (length >> 8) & 0xff
-    e[0xf2] = exec_addr_div_16k
-    e[0xf3] = exec_addr_mod_16k & 0xff
-    e[0xf4] = (exec_addr_mod_16k >> 8) & 0xff
+    # Bytes 0xf2-0xf4 are the 3-byte execution-address / auto-run-line field.
+    # For CODE files: byte 0xf2 = ExecAddrDiv16K, 0xf3-0xf4 = ExecAddrMod16K.
+    # For BASIC files with auto-RUN: byte 0xf2 = 0, 0xf3-0xf4 = start line.
+    # For BASIC files without auto-RUN: byte 0xf2 = 0xff. (ROM E3D9 checks
+    # this byte: if 0xff after the file is loaded, no auto-RUN happens.)
     if start_line >= 0:                            # SAM BASIC auto-RUN line
+        e[0xf2] = 0                                # marker: 'auto-RUN this BASIC'
         e[0xf3] = start_line & 0xff
         e[0xf4] = (start_line >> 8) & 0xff
+    else:
+        e[0xf2] = exec_addr_div_16k
+        e[0xf3] = exec_addr_mod_16k & 0xff
+        e[0xf4] = (exec_addr_mod_16k >> 8) & 0xff
     img[slot * 256:(slot + 1) * 256] = e
 
 def write_file_chain(img: bytearray, chain: list, file_bytes: bytes) -> None:
