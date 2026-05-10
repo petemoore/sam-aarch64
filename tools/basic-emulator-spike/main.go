@@ -171,6 +171,8 @@ const (
 	sysNVARS  = 0x5A88 // ptr to start of numeric vars (2 bytes)
 	sysSAVARS = 0x5A82 // ptr to saved vars (2 bytes)
 	sysERRNR  = 0x5C3A // error number (1 byte)
+	sysLASTK  = 0x5C08 // last key pressed / received from queue
+	sysFLAGS  = 0x5C3B // FLAGS; bit 5 = "key available in LASTK"
 )
 
 // peekRAM reads a byte from the RAM page currently mapped at addr's section.
@@ -200,6 +202,100 @@ func pokeRAM(hw *Hardware, addr uint16, v uint8) {
 func pokeRAM16(hw *Hardware, addr uint16, v uint16) {
 	pokeRAM(hw, addr, uint8(v))
 	pokeRAM(hw, addr+1, uint8(v>>8))
+}
+
+// injectKeysAndRun drives the ROM through its normal keyboard input
+// path by faking the LASTK / FLAGS-bit-5 channel.
+//
+// SAM's editor calls KYIP2 (0x050A) to read keys: if FLAGS bit 5
+// (0x20) is set, it reads LASTK (0x5C08), clears the bit, and returns
+// the byte. Normally the bit is set by the queue-to-LASTK transfer
+// routine at 0xD51F (driven by KINTER from the line interrupt).
+//
+// We don't service interrupts, so we drive that channel directly:
+// for each character we write LASTK and set FLAGS bit 5, then step
+// the CPU until bit 5 clears (meaning the editor consumed it), then
+// move on to the next character.
+//
+// The line interrupt handler (KINTER → queue → LASTK) is gated by
+// "RET NZ if FLAGS bit 5 already set" (0xD51E), so our value never
+// gets overwritten while waiting to be consumed.
+//
+// Stop conditions:
+//   - all characters consumed AND PC re-enters KEYSCAN (0xD5BC) with
+//     FLAGS bit 5 clear → line was processed, ROM is at "ready" again
+//   - PC enters ERROR2 (0x37CE) → syntax / runtime error
+//   - HALT, or step budget exhausted
+func injectKeysAndRun(hw *Hardware, cpu *z80.CPU, line string, stepBudget uint64) bool {
+	const (
+		keyscanPC = 0xD5BC
+		error2PC  = 0x37CE
+	)
+	keys := []byte(line)
+	keys = append(keys, 0x0D) // ENTER
+	keyIdx := 0
+
+	pokeRAM(hw, sysERRNR, 0)
+
+	fmt.Printf("    keystroke injection: %d chars (line %q + CR), via LASTK/FLAGS bit 5\n",
+		len(keys), line)
+
+	progBefore := peekRAM16(hw, sysPROG)
+	nvarsBefore := peekRAM16(hw, sysNVARS)
+	fmt.Printf("    pre-injection: PROG=%04X NVARS=%04X (PROG body len=%d)\n",
+		progBefore, nvarsBefore, int(nvarsBefore)-int(progBefore))
+
+	// We need to know we're "really back at READY" — i.e. PC at
+	// KEYSCAN with FLAGS bit 5 clear AND we've consumed all keys
+	// AND a few thousand more steps have passed (so AUTOLIST etc
+	// fully complete).
+	allConsumed := false
+	idleSinceConsume := uint64(0)
+	const idleThreshold uint64 = 50_000
+
+	for i := uint64(0); i < stepBudget; i++ {
+		flags := peekRAM(hw, sysFLAGS)
+
+		// Inject the next key if the editor has consumed the previous.
+		if flags&0x20 == 0 && keyIdx < len(keys) {
+			pokeRAM(hw, sysLASTK, keys[keyIdx])
+			pokeRAM(hw, sysFLAGS, flags|0x20)
+			fmt.Printf("    step %d: inject key %d/%d = 0x%02X (%q)\n",
+				i, keyIdx+1, len(keys), keys[keyIdx], string([]byte{keys[keyIdx]}))
+			keyIdx++
+		} else if flags&0x20 == 0 && keyIdx == len(keys) && !allConsumed {
+			allConsumed = true
+			fmt.Printf("    step %d: all keys consumed, waiting for return to KEYSCAN\n", i)
+		}
+
+		cpu.Step()
+
+		if cpu.PC == error2PC {
+			err := peekRAM(hw, sysERRNR)
+			fmt.Printf("    step %d: ERROR2 entered, ERRNR=0x%02X\n", i+1, err)
+			return false
+		}
+		if allConsumed && cpu.PC == keyscanPC && flags&0x20 == 0 {
+			idleSinceConsume++
+			if idleSinceConsume >= idleThreshold {
+				progAfter := peekRAM16(hw, sysPROG)
+				nvarsAfter := peekRAM16(hw, sysNVARS)
+				err := peekRAM(hw, sysERRNR)
+				fmt.Printf("    step %d: back at KEYSCAN; ERRNR=0x%02X; PROG=%04X NVARS=%04X (body len=%d)\n",
+					i+1, err, progAfter, nvarsAfter, int(nvarsAfter)-int(progAfter))
+				return err == 0
+			}
+		} else if allConsumed {
+			idleSinceConsume = 0
+		}
+		if cpu.HALT {
+			fmt.Printf("    step %d: HALT at PC=%04X\n", i+1, cpu.PC)
+			return false
+		}
+	}
+	fmt.Printf("    step budget exhausted (PC=%04X, keys consumed %d/%d)\n",
+		cpu.PC, keyIdx, len(keys))
+	return false
 }
 
 // injectAndRun is best-effort line injection.
@@ -490,7 +586,7 @@ func main() {
 			// "INSERTLN returned" breakpoint fires.
 			for _, line := range strings.Split(strings.TrimRight(*injectLines, "\n"), "\n") {
 				fmt.Printf("\n>>> INJECTING: %q\n", line)
-				if !injectAndRun(hw, cpu, line, *maxSteps-step) {
+				if !injectKeysAndRun(hw, cpu, line, *maxSteps-step) {
 					fmt.Println("    (injection did not complete cleanly — see PC/ERRNR above)")
 					break
 				}
