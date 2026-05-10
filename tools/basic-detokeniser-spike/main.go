@@ -344,20 +344,28 @@ func loadProgViaPoke(hw *Hardware, progBytes []byte) {
 func editLineAndCapture(hw *Hardware, cpu *z80.CPU, lineNum uint16, stepBudget uint64) ([]byte, error) {
 	const editKeyCode = 0x07
 	keys := append([]byte(fmt.Sprintf("%d", lineNum)), editKeyCode)
-	const idleAfter uint64 = 200_000 // EDIT settles fast — keeps per-line latency low
+	const idleAfter uint64 = 2_000_000 // generous; long lines take >>200k cycles to render
 	if err := driveAndSettle(hw, cpu, keys, stepBudget, idleAfter); err != nil {
 		return nil, fmt.Errorf("drive EDIT %d: %w", lineNum, err)
 	}
 	eline := peekRAM16(hw, sysELINE)
+	worksp := peekRAM16(hw, sysWORKSP)
+	// ELINE buffer extends to WORKSP-1. Cap at WORKSP-ELINE (the
+	// editor's "live" buffer for this line). Fall back to 8KB if
+	// WORKSP looks wrong (shouldn't normally happen).
+	limit := int(worksp - eline)
+	if limit <= 0 || limit > 0x4000 {
+		limit = 8192
+	}
 	out := []byte{}
-	for i := uint16(0); i < 1024; i++ {
-		b := peekRAM(hw, eline+i)
+	for i := 0; i < limit; i++ {
+		b := peekRAM(hw, eline+uint16(i))
 		if b == 0x0D {
 			return out, nil
 		}
 		out = append(out, b)
 	}
-	return nil, fmt.Errorf("no 0x0D found within 1024 bytes of ELINE (line %d)", lineNum)
+	return nil, fmt.Errorf("no 0x0D found within %d bytes of ELINE (line %d)", limit, lineNum)
 }
 
 func readBasicBody(mgtPath, filename string) ([]byte, error) {
