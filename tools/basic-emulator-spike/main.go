@@ -44,6 +44,40 @@ type Hardware struct {
 	hmpr uint8
 	vmpr uint8
 
+	// Back-reference to the CPU so IO.In/Out can peek cpu.BC.Hi —
+	// koron-go's IO callback only receives the low byte but for
+	// SAM keyboard scanning (`IN E,(C)` with BC=row<<8 | KEYPORT)
+	// we need the high byte to know which keyboard row is being
+	// scanned. cpu.BC.Hi is intact at IO callback time.
+	cpu *z80.CPU
+
+	// Fake keyboard queue: when non-empty, intercept reads of FLAGS
+	// (bit 5 = key-available) and LASTK to deliver our chars.
+	// Bypasses the entire interrupt-driven scan-and-queue machinery.
+	keyQueue []byte
+
+	// Diagnostic counters
+	flagsReads uint64
+	lastkReads uint64
+	flagsWrites uint64
+
+	// SAM keyboard matrix — 9 bytes, each row 8 bits, active-low.
+	// Layout (rows 0-7 selected by BC.Hi bit-i LOW; row 8 always read
+	// on port FE when port high byte == 0xFF):
+	//   Row 0: bit 0=SHIFT, 1=Z, 2=X, 3=C, 4=V    (bits 5-7 = F1/F2/F3 keypad)
+	//   Row 1: bit 0=A,     1=S, 2=D, 3=F, 4=G    (bits 5-7 = F4/F5/F6)
+	//   Row 2: bit 0=Q,     1=W, 2=E, 3=R, 4=T    (bits 5-7 = F7/F8/F9)
+	//   Row 3: bit 0=1,     1=2, 2=3, 3=4, 4=5
+	//   Row 4: bit 0=0,     1=9, 2=8, 3=7, 4=6
+	//   Row 5: bit 0=P,     1=O, 2=I, 3=U, 4=Y
+	//   Row 6: bit 0=ENTER, 1=L, 2=K, 3=J, 4=H
+	//   Row 7: bit 0=SPACE, 1=SYM, 2=M, 3=N, 4=B
+	//   Row 8: bit 0=CTRL,  1=UP, 2=DOWN, 3=LEFT, 4=RIGHT
+	//
+	// Source: ~/git/simcoupe/Base/Keyboard.cpp:65 (asKeyMatrix) and
+	// ~/git/simcoupe/Base/SAMIO.cpp:423-464 (port read logic).
+	keyMatrix [9]uint8
+
 	// Trace
 	portWrites map[uint8]int
 	portReads  map[uint8]int
@@ -58,7 +92,7 @@ type Hardware struct {
 }
 
 func newHardware(rom []byte) *Hardware {
-	return &Hardware{
+	hw := &Hardware{
 		rom: rom,
 		// Hardware reset: bit 5 (RAM0) clear so ROM 0 is visible in
 		// section A — that's how PC=0 lands in ROM. bit 6 (ROM1) starts
@@ -69,6 +103,11 @@ func newHardware(rom []byte) *Hardware {
 		portWrites: map[uint8]int{},
 		portReads:  map[uint8]int{},
 	}
+	// No keys pressed: matrix all 1s (keys are active-low).
+	for i := range hw.keyMatrix {
+		hw.keyMatrix[i] = 0xFF
+	}
+	return hw
 }
 
 // resolve returns (page, isROM, romHalf). For ROM: romHalf=0 means ROM 0, 1 means ROM 1.
@@ -106,7 +145,24 @@ func (h *Hardware) Get(addr uint16) uint8 {
 		return h.rom[16384+offset]
 	}
 	h.ramReads++
-	return h.ram[page][offset]
+	v := h.ram[page][offset]
+	// Fake-keyboard intercept: when keys are queued, present
+	// FLAGS bit 5 (key-available) set, and LASTK = head of queue.
+	// The editor's KYIP2 path reads FLAGS, checks bit 5, reads
+	// LASTK, then RES 5,(HL) — that write is caught in Set().
+	switch addr {
+	case sysFLAGS:
+		h.flagsReads++
+		if len(h.keyQueue) > 0 {
+			return v | 0x20
+		}
+	case sysLASTK:
+		h.lastkReads++
+		if len(h.keyQueue) > 0 {
+			return h.keyQueue[0]
+		}
+	}
+	return v
 }
 
 func (h *Hardware) Set(addr uint16, value uint8) {
@@ -118,6 +174,35 @@ func (h *Hardware) Set(addr uint16, value uint8) {
 	}
 	h.ramWrites++
 	h.ram[page][offset] = value
+	if addr == sysFLAGS {
+		h.flagsWrites++
+		// Detect "key consumed" — the editor's KYIP2 does RES 5,(HL)
+		// on FLAGS after reading LASTK. A write to FLAGS with bit 5
+		// clear while we have a queued key means it was just read.
+		if len(h.keyQueue) > 0 && value&0x20 == 0 {
+			h.keyQueue = h.keyQueue[1:]
+		}
+	}
+}
+
+// scanKeyMatrix implements the SAM matrix read protocol. rowSelect
+// is the high byte of BC (active-low bits 0-7 = rows 0-7). bitMask
+// selects which key bits to return (0x1F for KEYPORT bits 0-4, 0xE0
+// for STATPORT bits 7-5). Per SimCoupé SAMIO.cpp:423-464.
+func (h *Hardware) scanKeyMatrix(rowSelect uint8, bitMask uint8) uint8 {
+	keys := uint8(0xFF)
+	if rowSelect == 0xFF {
+		// Special: bottom row (cursor keys + RCTRL) is read when
+		// every row-select bit is HIGH (no normal row selected).
+		keys &= h.keyMatrix[8]
+	} else {
+		for i := 0; i < 8; i++ {
+			if rowSelect&(1<<i) == 0 {
+				keys &= h.keyMatrix[i]
+			}
+		}
+	}
+	return keys & bitMask
 }
 
 func (h *Hardware) In(addr uint8) uint8 {
@@ -129,10 +214,19 @@ func (h *Hardware) In(addr uint8) uint8 {
 		return h.hmpr
 	case 0xFC:
 		return h.vmpr
+	case 0xFE: // KEYPORT — bits 0-4 from selected rows; bits 5-7 from border/keyboard state
+		if h.cpu == nil {
+			return 0xFF
+		}
+		// We don't model EAR/SPEN/SOFF, so just return matrix bits
+		// ORed with 1s for the unused bits.
+		return h.scanKeyMatrix(h.cpu.BC.Hi, 0x1F) | 0xE0
+	case 0xF9: // STATPORT — bits 5-7 from selected rows
+		if h.cpu == nil {
+			return 0xFF
+		}
+		return h.scanKeyMatrix(h.cpu.BC.Hi, 0xE0) | 0x1F
 	}
-	// Default for unknown ports: float-high (0xFF) is what an unconnected
-	// Z80 IN bus typically sees. SAM keyboard scan returns 0xFF for no
-	// keys pressed, which is what we want anyway.
 	return 0xFF
 }
 
@@ -204,6 +298,47 @@ func pokeRAM16(hw *Hardware, addr uint16, v uint16) {
 	pokeRAM(hw, addr+1, uint8(v>>8))
 }
 
+// samKey identifies a position on the SAM key matrix. row is 0-8;
+// bit is 0-4 for main keys (read via KEYPORT/0xFE), 5-7 for modifier
+// row (read via STATPORT/0xF9, but the modifier-row keys are only
+// SHIFT/CTRL/SYM and live in their corresponding rows 0/7/8).
+type samKey struct{ row, bit uint8 }
+
+// asciiToSamKey maps the small set of ASCII characters used in our
+// test program to their (row, bit) on the SAM matrix. Letters use
+// CAPS LOCK on (SAM default) so unshifted keys produce upper-case in
+// display but lower-case in the tokenisable buffer — the BASIC
+// tokeniser is case-insensitive so this is fine.
+var asciiToSamKey = map[byte]samKey{
+	' ':  {7, 0}, // SPACE
+	'\r': {6, 0}, // ENTER
+	'0':  {4, 0}, '1': {3, 0}, '2': {3, 1}, '3': {3, 2}, '4': {3, 3}, '5': {3, 4},
+	'6': {4, 4}, '7': {4, 3}, '8': {4, 2}, '9': {4, 1},
+	'A': {1, 0}, 'B': {7, 4}, 'C': {0, 3}, 'D': {1, 2}, 'E': {2, 2},
+	'F': {1, 3}, 'G': {1, 4}, 'H': {6, 4}, 'I': {5, 2}, 'J': {6, 3},
+	'K': {6, 2}, 'L': {6, 1}, 'M': {7, 2}, 'N': {7, 3}, 'O': {5, 1},
+	'P': {5, 0}, 'Q': {2, 0}, 'R': {2, 3}, 'S': {1, 1}, 'T': {2, 4},
+	'U': {5, 3}, 'V': {0, 4}, 'W': {2, 1}, 'X': {0, 2}, 'Y': {5, 4},
+	'Z': {0, 1},
+}
+
+func asciiUpper(b byte) byte {
+	if b >= 'a' && b <= 'z' {
+		return b - 32
+	}
+	return b
+}
+
+// pressMatrix sets a key bit LOW in the matrix.
+func (h *Hardware) pressMatrix(k samKey) {
+	h.keyMatrix[k.row] &^= 1 << k.bit
+}
+
+// releaseMatrix sets a key bit HIGH in the matrix.
+func (h *Hardware) releaseMatrix(k samKey) {
+	h.keyMatrix[k.row] |= 1 << k.bit
+}
+
 // injectKeysAndRun drives the ROM through its normal keyboard input
 // path by faking the LASTK / FLAGS-bit-5 channel.
 //
@@ -226,75 +361,104 @@ func pokeRAM16(hw *Hardware, addr uint16, v uint16) {
 //     FLAGS bit 5 clear → line was processed, ROM is at "ready" again
 //   - PC enters ERROR2 (0x37CE) → syntax / runtime error
 //   - HALT, or step budget exhausted
-func injectKeysAndRun(hw *Hardware, cpu *z80.CPU, line string, stepBudget uint64) bool {
+func injectKeysAndRun(hw *Hardware, cpu *z80.CPU, line string, stepBudget uint64, intInterval uint64) bool {
 	const (
-		keyscanPC = 0xD5BC
 		error2PC  = 0x37CE
+		idleSteps = 500_000 // after queue drains, wait for tokenise/insert/AUTOLIST
 	)
-	keys := []byte(line)
-	keys = append(keys, 0x0D) // ENTER
-	keyIdx := 0
 
+	// Boot banner: ERRNR=0x50 means the ROM is at MAINER3 → ERRHAND1
+	// printing "MILES GORDON TECHNOLOGY plc 1989 SAM Coupé   nnnK"
+	// and waiting at WTFK (0x0FA2) for any keypress via READKEY →
+	// TWOKSC → KEYSCAN (matrix-based, NOT FLAGS/LASTK). Press SPACE
+	// on the matrix to dismiss the banner; that drops the ROM into
+	// MAINELP (the editor proper) which polls via KYIP2/FLAGS-bit-5.
+	if peekRAM(hw, sysERRNR) == 0x50 {
+		fmt.Printf("    boot banner detected (ERRNR=0x50); dismissing with matrix SPACE press\n")
+		const wtfkExitPC = 0x0FA7 // CALL CLSLOWER — first instr past JR Z,WTFK
+		hw.keyMatrix[7] &^= 0x01  // press SPACE (row 7 bit 0)
+		exited := false
+		for i := uint64(0); i < 200_000; i++ {
+			cpu.Step()
+			if cpu.PC == wtfkExitPC {
+				exited = true
+				hw.keyMatrix[7] |= 0x01 // release
+				fmt.Printf("    banner dismissed at injection-step %d (PC=%04X ERRNR=%02X)\n",
+					i+1, cpu.PC, peekRAM(hw, sysERRNR))
+				break
+			}
+		}
+		if !exited {
+			hw.keyMatrix[7] |= 0x01
+			fmt.Printf("    banner-dismiss budget exhausted (PC=%04X)\n", cpu.PC)
+			return false
+		}
+		// Let the post-banner setup run a bit (CLSLOWER, JP ERRHAND2,
+		// path back to MAINELP/MAINEXEC) before we start FLAGS injection.
+		for i := uint64(0); i < 500_000; i++ {
+			cpu.Step()
+		}
+		fmt.Printf("    after banner settle: PC=%04X ERRNR=%02X\n",
+			cpu.PC, peekRAM(hw, sysERRNR))
+	}
+
+	keys := append([]byte(line), '\r')
+	hw.keyQueue = append(hw.keyQueue[:0], keys...)
 	pokeRAM(hw, sysERRNR, 0)
-
-	fmt.Printf("    keystroke injection: %d chars (line %q + CR), via LASTK/FLAGS bit 5\n",
-		len(keys), line)
 
 	progBefore := peekRAM16(hw, sysPROG)
 	nvarsBefore := peekRAM16(hw, sysNVARS)
+	fmt.Printf("    keystroke injection (FLAGS/LASTK intercept): %d chars (line %q + CR)\n",
+		len(keys), line)
 	fmt.Printf("    pre-injection: PROG=%04X NVARS=%04X (PROG body len=%d)\n",
 		progBefore, nvarsBefore, int(nvarsBefore)-int(progBefore))
 
-	// We need to know we're "really back at READY" — i.e. PC at
-	// KEYSCAN with FLAGS bit 5 clear AND we've consumed all keys
-	// AND a few thousand more steps have passed (so AUTOLIST etc
-	// fully complete).
-	allConsumed := false
-	idleSinceConsume := uint64(0)
-	const idleThreshold uint64 = 50_000
+	queueWasEmpty := false
+	idleStep := uint64(0)
+	lastQueueLen := len(hw.keyQueue)
 
 	for i := uint64(0); i < stepBudget; i++ {
-		flags := peekRAM(hw, sysFLAGS)
-
-		// Inject the next key if the editor has consumed the previous.
-		if flags&0x20 == 0 && keyIdx < len(keys) {
-			pokeRAM(hw, sysLASTK, keys[keyIdx])
-			pokeRAM(hw, sysFLAGS, flags|0x20)
-			fmt.Printf("    step %d: inject key %d/%d = 0x%02X (%q)\n",
-				i, keyIdx+1, len(keys), keys[keyIdx], string([]byte{keys[keyIdx]}))
-			keyIdx++
-		} else if flags&0x20 == 0 && keyIdx == len(keys) && !allConsumed {
-			allConsumed = true
-			fmt.Printf("    step %d: all keys consumed, waiting for return to KEYSCAN\n", i)
-		}
-
 		cpu.Step()
+
+		// Log when the editor consumes a key.
+		if curLen := len(hw.keyQueue); curLen != lastQueueLen {
+			consumed := keys[len(keys)-lastQueueLen]
+			fmt.Printf("    step %d: editor consumed 0x%02X (%q), %d remaining\n",
+				i+1, consumed, string([]byte{consumed}), curLen)
+			lastQueueLen = curLen
+		}
 
 		if cpu.PC == error2PC {
 			err := peekRAM(hw, sysERRNR)
-			fmt.Printf("    step %d: ERROR2 entered, ERRNR=0x%02X\n", i+1, err)
+			fmt.Printf("    step %d: ERROR2 entered, ERRNR=0x%02X (CHAD=%04X)\n",
+				i+1, err, peekRAM16(hw, sysCHAD))
 			return false
-		}
-		if allConsumed && cpu.PC == keyscanPC && flags&0x20 == 0 {
-			idleSinceConsume++
-			if idleSinceConsume >= idleThreshold {
-				progAfter := peekRAM16(hw, sysPROG)
-				nvarsAfter := peekRAM16(hw, sysNVARS)
-				err := peekRAM(hw, sysERRNR)
-				fmt.Printf("    step %d: back at KEYSCAN; ERRNR=0x%02X; PROG=%04X NVARS=%04X (body len=%d)\n",
-					i+1, err, progAfter, nvarsAfter, int(nvarsAfter)-int(progAfter))
-				return err == 0
-			}
-		} else if allConsumed {
-			idleSinceConsume = 0
 		}
 		if cpu.HALT {
 			fmt.Printf("    step %d: HALT at PC=%04X\n", i+1, cpu.PC)
 			return false
 		}
+
+		if len(hw.keyQueue) == 0 {
+			if !queueWasEmpty {
+				queueWasEmpty = true
+				idleStep = 0
+				fmt.Printf("    step %d: queue drained — waiting %d steps for tokenise/insert\n",
+					i+1, idleSteps)
+			}
+			idleStep++
+			if idleStep >= idleSteps {
+				err := peekRAM(hw, sysERRNR)
+				progAfter := peekRAM16(hw, sysPROG)
+				nvarsAfter := peekRAM16(hw, sysNVARS)
+				fmt.Printf("    DONE at step %d: ERRNR=0x%02X; PROG=%04X NVARS=%04X (body len=%d)\n",
+					i+1, err, progAfter, nvarsAfter, int(nvarsAfter)-int(progAfter))
+				return err == 0
+			}
+		}
 	}
-	fmt.Printf("    step budget exhausted (PC=%04X, keys consumed %d/%d)\n",
-		cpu.PC, keyIdx, len(keys))
+	fmt.Printf("    step budget exhausted (PC=%04X, %d/%d keys consumed)\n",
+		cpu.PC, len(keys)-len(hw.keyQueue), len(keys))
 	return false
 }
 
@@ -445,6 +609,7 @@ func main() {
 	rangeEnd := flag.Uint64("range-end", 0, "see range-start")
 	rangePath := flag.String("range", "/tmp/sam-range.txt", "where to write the range trace")
 	injectLines := flag.String("inject", "", "newline-separated BASIC lines to inject after READY is reached")
+	intInterval := flag.Uint64("int-interval", 70_000, "fire an IM1 interrupt every N steps after the IRQ is enabled (0 disables); 70k ≈ one 50Hz frame at SAM's ~3.5 MHz")
 	flag.Parse()
 
 	rom, err := os.ReadFile(*romPath)
@@ -457,12 +622,15 @@ func main() {
 
 	hw := newHardware(rom)
 	cpu := &z80.CPU{Memory: hw, IO: hw}
+	hw.cpu = cpu
 	cpu.PC = 0
 	cpu.SP = 0xFFFF
 
-	// Stop as soon as cold boot reaches KEYSCAN at 0xD5BC for the first
-	// time — that's the BASIC ready idle loop (ROM disasm line 19838).
-	const readyPC uint16 = 0xD5BC
+	// Stop when the cold boot reaches WAITKEY (0x04F0) — that's the
+	// editor's wait-for-key entry. Earlier breakpoints (e.g. on the
+	// first KEYSCAN at 0xD5BC) fire during init scans before the
+	// editor is actually polling for a typed character.
+	const readyPC uint16 = 0xD5BC // KEYSCAN entry — fires earliest
 	cpu.BreakPoints = map[uint16]struct{}{readyPC: {}}
 	var readyStep uint64
 	var readyHit bool
@@ -566,6 +734,16 @@ func main() {
 			lastPC = pc
 		}
 
+		// Fire periodic line interrupts once the ROM has enabled them.
+		// On real SAM the line int fires ~50Hz; we use *intInterval as
+		// a step-budget proxy. Without this the editor's WAITKEY loop
+		// just polls FLAGS bit 5, which only ever gets set by the
+		// KEYRD2 path running INSIDE the IM1 handler (per INTS5 at
+		// 0xD4DD calling KEYRD2). No interrupts → no keyboard input.
+		if *intInterval > 0 && cpu.IFF1 && step > 0 && step%*intInterval == 0 {
+			cpu.Interrupt = z80.IM1Interrupt()
+		}
+
 		cpu.Step()
 
 		if cpu.HALT {
@@ -586,7 +764,7 @@ func main() {
 			// "INSERTLN returned" breakpoint fires.
 			for _, line := range strings.Split(strings.TrimRight(*injectLines, "\n"), "\n") {
 				fmt.Printf("\n>>> INJECTING: %q\n", line)
-				if !injectKeysAndRun(hw, cpu, line, *maxSteps-step) {
+				if !injectKeysAndRun(hw, cpu, line, *maxSteps-step, *intInterval) {
 					fmt.Println("    (injection did not complete cleanly — see PC/ERRNR above)")
 					break
 				}
@@ -617,6 +795,9 @@ func main() {
 		fmt.Printf("\n>>> STUCK at PC=%04X (same PC >50 steps) <<<\n", stuckPC)
 	}
 
+	fmt.Println()
+	fmt.Printf("FLAGS reads/writes: %d / %d   LASTK reads: %d\n",
+		hw.flagsReads, hw.flagsWrites, hw.lastkReads)
 	fmt.Println()
 	fmt.Println("=== Memory traffic ===")
 	fmt.Printf("ROM 0 reads:  %d\n", hw.rom0Reads)
