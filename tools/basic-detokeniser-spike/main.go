@@ -311,14 +311,22 @@ func loadProgViaPoke(hw *Hardware, progBytes []byte) {
 	}
 
 	delta := uint16(len(progBytes)) - 1
-	// Overflow guard: PROG lives in section C (0x8000-0xBFFF) and
-	// section D is ROM 1 by default. After memmove + write, the upper
-	// edge is roughly PROG + len(progBytes) + 1024 (shiftLen). Anything
-	// past 0xBF00 risks running into ROM via the memmove's pokeRAM
-	// which fatals on ROM writes.
+
+	// Overflow strategy: PROG is in section C (0x8000-0xBFFF). Section
+	// D is ROM 1 by default, so writes to 0xC000-0xFFFF would fatal.
+	// Temporarily clear LMPR bit 6 (ROM1) → section D maps to RAM
+	// page (HMPR+1)&0x1F instead. Restore LMPR before returning so
+	// the editor sees the standard layout; ROM 1 paging during EDIT
+	// is the ROM's own concern.
+	origLMPR := hw.lmpr
+	hw.lmpr = origLMPR &^ 0x40
+	defer func() { hw.lmpr = origLMPR }()
+
+	// Upper bound is now 0xFFFF (top of 16-bit address space). For
+	// programs that span past 0xFFFF, uint16 arithmetic would wrap.
 	upperEdge := uint32(prog) + uint32(len(progBytes)) + 1024
-	if upperEdge > 0xBF00 {
-		log.Fatalf("program too large for single-page poke: PROG=%04X len=%d would reach %05X (limit 0xBF00); section-D paging not implemented",
+	if upperEdge > 0xFFFF {
+		log.Fatalf("program too large for two-page poke: PROG=%04X len=%d would reach %05X (>0xFFFF); HMPR-paged multi-page programs not supported",
 			prog, len(progBytes), upperEdge)
 	}
 
