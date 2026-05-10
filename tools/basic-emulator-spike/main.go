@@ -17,7 +17,18 @@ import (
 	"time"
 
 	"github.com/koron-go/z80"
+	"github.com/petemoore/samfile/v3"
+	"github.com/petemoore/samfile/v3/sambasic"
 )
+
+// rawTokens lets us hand a pre-tokenised byte slice (e.g. produced by
+// the SAM ROM's TOKMAIN) to sambasic.Line as a single opaque Token.
+// sambasic.Line.Bytes() then prepends the 2-byte line number + 2-byte
+// length and appends the 0x0D CR, exactly matching the on-disk SAM
+// BASIC line wire format.
+type rawTokens []byte
+
+func (r rawTokens) Bytes() []byte { return []byte(r) }
 
 // SAM Coupé memory map:
 //
@@ -330,6 +341,36 @@ func (h *Hardware) Restore(s Snapshot) {
 	h.cpu.HALT = s.HALT
 	h.cpu.Interrupt = s.Interrupt
 	h.keyQueue = nil
+}
+
+// writeBasicMGT wraps a tokenised sambasic.File into a SAMDOS-bootable
+// MGT image with two slots:
+//
+//	slot 0: samdos2 (so the disk boots)
+//	slot 1: <name> as FT_SAM_BASIC (the tokenised program)
+//
+// If basFile.StartLine != 0 then the BASIC file is marked auto-RUN
+// at that line number (per AddBasicFile's standard convention).
+func writeBasicMGT(outputPath, name string, basFile *sambasic.File) error {
+	samdos2, err := os.ReadFile("reference/samdos/samdos2.bin")
+	if err != nil {
+		return fmt.Errorf("read samdos2: %w", err)
+	}
+	if len(samdos2) != 10000 {
+		return fmt.Errorf("samdos2: expected 10000 bytes, got %d", len(samdos2))
+	}
+	const samdosLoad = uint32(491529)
+	disk := samfile.NewDiskImage()
+	if err := disk.AddCodeFile("samdos2", samdos2, samdosLoad, 0); err != nil {
+		return fmt.Errorf("AddCodeFile(samdos2): %w", err)
+	}
+	if err := disk.SetStartAddressPageUnusedBits("samdos2", 3); err != nil {
+		return fmt.Errorf("SetStartAddressPageUnusedBits(samdos2): %w", err)
+	}
+	if err := disk.AddBasicFile(name, basFile); err != nil {
+		return fmt.Errorf("AddBasicFile(%q): %w", name, err)
+	}
+	return disk.Save(outputPath)
 }
 
 // pokeRAM writes a byte to whatever page is currently mapped at addr.
@@ -768,6 +809,10 @@ func main() {
 	injectLines := flag.String("inject", "", "newline-separated BASIC lines to inject after READY is reached")
 	intInterval := flag.Uint64("int-interval", 70_000, "fire an IM1 interrupt every N steps after the IRQ is enabled (0 disables); 70k ≈ one 50Hz frame at SAM's ~3.5 MHz")
 	screenPath := flag.String("screen", "", "if set, dump the current screen to <screen>.bin (24KB mode-4 raw) and <screen>.pgm (grayscale)")
+	inputBasicPath := flag.String("in", "", "BASIC source text file: every non-empty line becomes one tokenised entry (overrides --inject)")
+	outputMgtPath := flag.String("out", "", "if set, write a bootable MGT containing samdos2 + tokenised BASIC program (FT_SAM_BASIC) named on disk as --out-name")
+	outputBasName := flag.String("out-name", "prog", "filename for the BASIC program inside the output MGT")
+	outputAutorun := flag.Bool("out-autorun", false, "if true, mark the tokenised BASIC file as auto-RUN so the disk boots straight into it")
 	flag.Parse()
 
 	rom, err := os.ReadFile(*romPath)
@@ -946,33 +991,89 @@ func main() {
 						*screenPath, *screenPath, hw.vmpr, hw.vmpr&0x1F)
 				}
 			}
-			if *injectLines == "" {
+			// Pick source-text lines: --in <file> wins over --inject.
+			var sourceLines []string
+			switch {
+			case *inputBasicPath != "":
+				data, err := os.ReadFile(*inputBasicPath)
+				if err != nil {
+					log.Fatalf("read --in %s: %v", *inputBasicPath, err)
+				}
+				for _, ln := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {
+					if ln = strings.TrimRight(ln, "\r"); ln != "" {
+						sourceLines = append(sourceLines, ln)
+					}
+				}
+			case *injectLines != "":
+				for _, ln := range strings.Split(strings.TrimRight(*injectLines, "\n"), "\n") {
+					if ln != "" {
+						sourceLines = append(sourceLines, ln)
+					}
+				}
+			default:
 				break
 			}
+			if len(sourceLines) == 0 {
+				break
+			}
+
 			// Take a snapshot of the freshly-booted editor state, then
 			// restore it before each line — Pete's design: skip the
 			// 30 ms cold boot for every line by replaying from the
 			// post-boot state in-memory.
 			snap := hw.Snapshot()
-			fmt.Printf("\n>>> Snapshot taken at MAINELP (boot cost amortised across all lines)\n")
+			fmt.Printf("\n>>> Snapshot taken at MAINELP — boot cost amortised across %d line(s)\n",
+				len(sourceLines))
+			injectStart := time.Now()
 			var collected []tokenisedLine
-			lines := strings.Split(strings.TrimRight(*injectLines, "\n"), "\n")
-			for _, line := range lines {
+			for _, line := range sourceLines {
 				hw.Restore(snap)
 				fmt.Printf("\n>>> INJECTING: %q\n", line)
 				if !injectKeysAndRun(hw, cpu, line, *maxSteps-step, *intInterval) {
 					fmt.Println("    (injection did not complete cleanly)")
-					break
+					return
 				}
 				collected = append(collected, hw.lastTokenisedLine)
 			}
-			fmt.Printf("\n=== Collected %d tokenised line(s) ===\n", len(collected))
+			fmt.Printf("\n=== Collected %d tokenised line(s) in %s (avg %s/line) ===\n",
+				len(collected), time.Since(injectStart),
+				time.Since(injectStart)/time.Duration(len(collected)))
+
+			// Sort by line number (SAM PROG requires ascending order)
+			// and lay them out as a sambasic.File. Each line's tokens
+			// include the trailing 0x0D from ELINE; strip it because
+			// sambasic.Line.Bytes appends its own CR (sambasic/file.go:26).
+			sort.Slice(collected, func(i, j int) bool {
+				return collected[i].lineNumber < collected[j].lineNumber
+			})
+			basFile := &sambasic.File{}
+			if *outputAutorun && len(collected) > 0 {
+				basFile.StartLine = collected[0].lineNumber
+			}
 			for _, tl := range collected {
-				fmt.Printf("  line %d (%d tokens): ", tl.lineNumber, len(tl.tokens))
+				body := tl.tokens
+				if n := len(body); n > 0 && body[n-1] == 0x0D {
+					body = body[:n-1]
+				}
+				basFile.Lines = append(basFile.Lines, sambasic.Line{
+					Number: tl.lineNumber,
+					Tokens: []sambasic.Token{rawTokens(body)},
+				})
+				fmt.Printf("  line %5d (%d tokens): ", tl.lineNumber, len(tl.tokens))
 				for _, b := range tl.tokens {
 					fmt.Printf("%02X ", b)
 				}
 				fmt.Println()
+			}
+			fmt.Printf("\nProgBytes length: %d   NVARSOffset: %d\n",
+				len(basFile.ProgBytes()), basFile.NVARSOffset())
+
+			if *outputMgtPath != "" {
+				if err := writeBasicMGT(*outputMgtPath, *outputBasName, basFile); err != nil {
+					log.Fatalf("writeBasicMGT: %v", err)
+				}
+				fmt.Printf("Wrote %s with samdos2 + %q (FT_SAM_BASIC, autorun=%v)\n",
+					*outputMgtPath, *outputBasName, *outputAutorun)
 			}
 			break
 		}
