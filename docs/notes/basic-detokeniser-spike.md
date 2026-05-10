@@ -39,7 +39,7 @@ The spike drives this by:
 | Limitation | Cause | Status |
 |---|---|---|
 | Line 0 not extractable | EDKY explicitly RETs for line 0 (rom-disasm:03A1, "DON'T EDIT LINE ZERO") | Skip in spike + strip from samfile in sweep comparator |
-| Programs > ~9KB fail | PROG starts at 0x9CD5 in section C; section D is ROM 1. Single-page poke can't grow PROG past 0xBF00 (~0x223B = ~8.5KB of program). SAM uses HMPR-paged extended addressing for larger programs. | Skip with clear error; section-D RAM paging not implemented |
+| Programs > ~24KB fail | PROG starts at 0x9CD5 in section C; the spike's loadProgViaPoke clears LMPR bit 6 temporarily so writes can reach into section D (RAM page (HMPR+1)&0x1F). Restores LMPR before EDIT so the ROM sees the standard layout. Hard ceiling is 0xFFFF — programs that genuinely need HMPR-paged extended addressing still fail. | Skip with clear error; full HMPR-paged support not implemented (low remainder: ~0.8% of corpus) |
 | Lines with embedded 0x0D | OUTLINE itself truncates at first 0x0D byte (rom-disasm:F38D-F38F), matching SAM's actual LIST/EDIT behaviour. Spike inherits this faithfully. samfile basic-to-text faithful mode reads full line per length header and includes embedded 0x0D as content. | One DIFFER in 500-job sample; treated as known ambiguity |
 | "Pretty listing" leading spaces | EDKY sets LISTFLG=0; SAM's leading-space-before-keyword logic (SPACES at rom-disasm:F36E) is gated by that flag and disabled in our path. samfile-faithful inserts them for readability. | Normalised away in sweep comparator via `stripSpacesOutsideStrings` (lifted from llist-sweep) |
 
@@ -57,19 +57,28 @@ normalisation:
   "leading space" insertions.
 - Drop line-0 entries from both sides.
 
-### 500-job sample run (commit `cd6404e`)
+### 500-job sample run (commit `fe3712d`, post-LMPR fix)
 
 | Status | Count | % |
 |---|---:|---:|
-| MATCH | 429 | 85.8 |
-| SPIKE-ERROR (all overflow) | 49 | 9.8 |
+| MATCH | 472 | 94.4 |
 | READ-ERROR (corpus disk read) | 14 | 2.8 |
 | B2T-ERROR (samfile failure) | 7 | 1.4 |
-| DIFFER | 1 | 0.2 |
+| SPIKE-ERROR (all true >24KB overflow) | 4 | 0.8 |
+| DIFFER | 3 | 0.6 |
 
-Of attemptable jobs that fit in one PROG page: **429 of 430 match
-(99.8%)**. The single DIFFER is an embedded-0x0D-in-string case (see
-limitations table).
+Of attemptable jobs (excl. READ-ERROR / B2T-ERROR / overflow):
+**472 of 475 match (99.4%)**. The 3 DIFFER cases are: 1 embedded-0x0D
+in string literal (see limitations table) + 2 identical copies of
+WormsWorld across two disks showing a double-space-before-keyword
+pattern not normalised by stripSpacesOutsideStrings (likely a
+trailing-space-then-keyword scenario where samfile-faithful keeps
+both spaces).
+
+Prior to the LMPR-bit-6 toggle fix in commit `fe3712d`, 49/500
+programs (~10%) fell out as overflow SPIKE-ERROR. After the fix
+those are 43 new MATCH, 2 new DIFFER, 4 still over the 0xFFFF
+ceiling.
 
 ## Next steps (not yet done)
 
