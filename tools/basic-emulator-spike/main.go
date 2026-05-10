@@ -61,6 +61,9 @@ type Hardware struct {
 	lastkReads uint64
 	flagsWrites uint64
 
+	// Captured by extractTokenisedLine on RST 8 entry.
+	lastTokenisedLine tokenisedLine
+
 	// SAM keyboard matrix — 9 bytes, each row 8 bits, active-low.
 	// Layout (rows 0-7 selected by BC.Hi bit-i LOW; row 8 always read
 	// on port FE when port high byte == 0xFF):
@@ -363,6 +366,78 @@ func (h *Hardware) releaseMatrix(k samKey) {
 //     FLAGS bit 5 clear → line was processed, ROM is at "ready" again
 //   - PC enters ERROR2 (0x37CE) → syntax / runtime error
 //   - HALT, or step budget exhausted
+// tokenisedLine holds a single SAM BASIC line as it appears in ELINE
+// after the editor's TOKMAIN has run. lineNumber is the value parsed
+// from the leading ASCII digits; tokens is the byte slice from the
+// first token after the digits up to and including the 0x0D CR
+// terminator. This is exactly the wire format SAM BASIC uses inside
+// a saved FT_SAM_BASIC body, prefixed with 2 bytes of line number
+// (big-endian) and 2 bytes of length (little-endian).
+type tokenisedLine struct {
+	lineNumber uint16
+	tokens     []byte // includes the trailing 0x0D
+}
+
+// extractTokenisedLine reads ELINE at the moment of RST 8 (ERROR2)
+// and produces the SAM BASIC wire-format representation of the line
+// that was just typed. Pete's insight: we don't need INSERTLN to run
+// — the editor's tokeniser has already done its job by the time the
+// CR is consumed. We can build PROG bytes ourselves by collecting
+// these and sorting by line number.
+//
+// ELINE layout at this point (example for "10 PRINT 1"):
+//
+//	31 30 BB 31 0E 00 00 01 00 00 0D FF
+//	└─┬─┘ └─────────── tokens ──────┘  └ end marker
+//	  ASCII line number digits
+//
+// The line number is parsed from the leading ASCII digits; the
+// tokens slice starts at the first non-digit and ends at (and
+// includes) the 0x0D CR. Optional leading whitespace between the
+// digits and the first token is skipped — matches INSERTLN's
+// behaviour at rom-disasm:10AB-10B7.
+func extractTokenisedLine(hw *Hardware) (tokenisedLine, error) {
+	elinePtr := peekRAM16(hw, sysELINE)
+	workspPtr := peekRAM16(hw, sysWORKSP)
+	if workspPtr <= elinePtr {
+		return tokenisedLine{}, fmt.Errorf("ELINE invalid: ELINE=%04X WORKSP=%04X", elinePtr, workspPtr)
+	}
+
+	// Parse leading digits.
+	var ln uint32
+	i := uint16(0)
+	for ; elinePtr+i < workspPtr; i++ {
+		b := peekRAM(hw, elinePtr+i)
+		if b < '0' || b > '9' {
+			break
+		}
+		ln = ln*10 + uint32(b-'0')
+		if ln > 0xFFFF {
+			return tokenisedLine{}, fmt.Errorf("line number %d > 65535", ln)
+		}
+	}
+	if i == 0 {
+		return tokenisedLine{}, fmt.Errorf("ELINE starts with non-digit 0x%02X (direct command?)", peekRAM(hw, elinePtr))
+	}
+
+	// Skip a single optional space between the line number and the
+	// first token (per INSERTLN behaviour).
+	if elinePtr+i < workspPtr && peekRAM(hw, elinePtr+i) == ' ' {
+		i++
+	}
+
+	// Tokens run from here up to and including the first 0x0D.
+	tokens := []byte{}
+	for ; elinePtr+i < workspPtr; i++ {
+		b := peekRAM(hw, elinePtr+i)
+		tokens = append(tokens, b)
+		if b == 0x0D {
+			return tokenisedLine{lineNumber: uint16(ln), tokens: tokens}, nil
+		}
+	}
+	return tokenisedLine{}, fmt.Errorf("no 0x0D CR found in ELINE")
+}
+
 func injectKeysAndRun(hw *Hardware, cpu *z80.CPU, line string, stepBudget uint64, intInterval uint64) bool {
 	const (
 		error2PC  = 0x37CE
@@ -403,27 +478,23 @@ func injectKeysAndRun(hw *Hardware, cpu *z80.CPU, line string, stepBudget uint64
 
 		if cpu.PC == error2PC {
 			err := peekRAM(hw, sysERRNR)
-			progAfter := peekRAM16(hw, sysPROG)
-			nvarsAfter := peekRAM16(hw, sysNVARS)
-			elinePtr := peekRAM16(hw, sysELINE)
-			workspAfter := peekRAM16(hw, sysWORKSP)
-			fmt.Printf("    step %d: ERROR2 entered, ERRNR=0x%02X CHAD=%04X\n",
-				i+1, err, peekRAM16(hw, sysCHAD))
-			fmt.Printf("    PROG=%04X NVARS=%04X (PROG body len=%d)\n",
-				progAfter, nvarsAfter, int(nvarsAfter)-int(progAfter))
-			fmt.Printf("    ELINE=%04X WORKSP=%04X (ELINE len=%d)\n",
-				elinePtr, workspAfter, int(workspAfter)-int(elinePtr))
-			fmt.Printf("    ELINE bytes: ")
-			for j := uint16(0); j < 32; j++ {
-				fmt.Printf("%02X ", peekRAM(hw, elinePtr+j))
+			fmt.Printf("    step %d: ERROR2 entered (ERRNR=0x%02X — \"OK\" unwind path); extracting tokens from ELINE\n",
+				i+1, err)
+			tl, perr := extractTokenisedLine(hw)
+			if perr != nil {
+				fmt.Printf("    extractTokenisedLine: %v\n", perr)
+				return false
+			}
+			fmt.Printf("    line %d, %d tokenised bytes: ", tl.lineNumber, len(tl.tokens))
+			for _, b := range tl.tokens {
+				fmt.Printf("%02X ", b)
 			}
 			fmt.Println()
-			fmt.Printf("    PROG bytes:  ")
-			for j := uint16(0); j < 32; j++ {
-				fmt.Printf("%02X ", peekRAM(hw, progAfter+j))
-			}
-			fmt.Println()
-			return err == 0
+			// Stash for the caller. For now, the spike just dumps —
+			// the build-disk integration that assembles PROG will
+			// come once we can do this for multiple lines back-to-back.
+			hw.lastTokenisedLine = tl
+			return true
 		}
 		if cpu.HALT {
 			fmt.Printf("    step %d: HALT at PC=%04X\n", i+1, cpu.PC)
