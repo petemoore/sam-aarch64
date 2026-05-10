@@ -3,11 +3,19 @@
 //
 // Usage:
 //
-//	build-screen-disk <screen.bin> <output.mgt>
+//	build-screen-disk <screen.bin> [<screen.paltab>] <output.mgt>
 //
 // The screen.bin must be exactly 24576 bytes — mode-4 pixel data
 // (256×192 at 4 bits/pixel), as produced by the basic-emulator-spike
 // --screen flag.
+//
+// The optional screen.paltab is a 40-byte PALTAB block (also emitted
+// by the spike's --screen flag). When provided, it is appended to
+// the SCREEN$ body so LDSCRN restores the palette on load and the
+// image renders with the same colours the ROM had on screen —
+// otherwise SimCoupé's current CLUT determines the colour mapping
+// and dark-on-dark surprises are possible (LDSCRN palette-restore
+// path: rom-disasm L22552-22573 / 0xE2F7-0xE30E).
 //
 // To view the screen on real SAM or in SimCoupé:
 //
@@ -69,11 +77,15 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("build-screen-disk: ")
 
-	if len(os.Args) != 3 {
-		log.Fatalf("usage: %s <screen.bin> <output.mgt>", os.Args[0])
+	var screenPath, paltabPath, outputPath string
+	switch len(os.Args) {
+	case 3:
+		screenPath, outputPath = os.Args[1], os.Args[2]
+	case 4:
+		screenPath, paltabPath, outputPath = os.Args[1], os.Args[2], os.Args[3]
+	default:
+		log.Fatalf("usage: %s <screen.bin> [<screen.paltab>] <output.mgt>", os.Args[0])
 	}
-	screenPath := os.Args[1]
-	outputPath := os.Args[2]
 
 	samdos2, err := os.ReadFile("reference/samdos/samdos2.bin")
 	if err != nil {
@@ -92,6 +104,23 @@ func main() {
 			ScreenBytes, len(screen))
 	}
 
+	// If a paltab was provided, append it. LDSCRN computes
+	// palette_extra = file_len_mod_16K - SCRLEN(mode); if > 0 it
+	// copies 40 bytes to PALTAB. Total body = pixels + paltab.
+	body := screen
+	if paltabPath != "" {
+		paltab, err := os.ReadFile(paltabPath)
+		if err != nil {
+			log.Fatalf("read %s: %v", paltabPath, err)
+		}
+		if len(paltab) != 40 {
+			log.Fatalf("paltab: expected 40 bytes, got %d", len(paltab))
+		}
+		body = make([]byte, 0, ScreenBytes+40)
+		body = append(body, screen...)
+		body = append(body, paltab...)
+	}
+
 	disk := samfile.NewDiskImage()
 
 	// Slot 0: SAMDOS2 — boot loader. Pattern copied verbatim from
@@ -103,9 +132,10 @@ func main() {
 		log.Fatalf("SetStartAddressPageUnusedBits(samdos2): %v", err)
 	}
 
-	// Slot 1: "screen" — raw mode-4 pixel data. AddCodeFile writes
-	// it as FT_CODE (19); we convert to FT_SCREEN (20) below.
-	if err := disk.AddCodeFile("screen", screen, LoadAddress, 0); err != nil {
+	// Slot 1: "screen" — raw mode-4 pixel data (+ optional 40-byte
+	// PALTAB suffix). AddCodeFile writes it as FT_CODE (19); we
+	// convert to FT_SCREEN (20) below.
+	if err := disk.AddCodeFile("screen", body, LoadAddress, 0); err != nil {
 		log.Fatalf("AddCodeFile(screen): %v", err)
 	}
 
@@ -139,9 +169,10 @@ func main() {
 	}
 
 	fmt.Printf("samdos2: %d bytes\n", len(samdos2))
-	fmt.Printf("screen:  %d bytes  (mode-4 SCREEN$, body header byte 0 = 20,\n", len(screen))
-	fmt.Printf("                    dir FileTypeInfo[0] = 3 = BASIC MODE 4)\n")
-	fmt.Printf("                    body at T%d/S%d → disk byte %d\n", track&0x7f, sector, bodyOff)
+	fmt.Printf("screen:  %d bytes (pixels=%d + paltab=%d)\n",
+		len(body), len(screen), len(body)-len(screen))
+	fmt.Printf("         body at T%d/S%d → disk byte %d\n", track&0x7f, sector, bodyOff)
+	fmt.Printf("         FT_SCREEN, mode 3 (BASIC MODE 4)\n")
 	fmt.Printf("Built %s\n\n", outputPath)
 	fmt.Println("To view: boot disk in SimCoupé (or real SAM), then at the BASIC prompt:")
 	fmt.Println("  LOAD \"screen\" SCREEN$")

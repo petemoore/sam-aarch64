@@ -265,8 +265,10 @@ const (
 	sysNVARS  = 0x5A88 // ptr to start of numeric vars (2 bytes)
 	sysSAVARS = 0x5A82 // ptr to saved vars (2 bytes)
 	sysERRNR  = 0x5C3A // error number (1 byte)
-	sysLASTK  = 0x5C08 // last key pressed / received from queue
-	sysFLAGS  = 0x5C3B // FLAGS; bit 5 = "key available in LASTK"
+	sysLASTK   = 0x5C08 // last key pressed / received from queue
+	sysFLAGS   = 0x5C3B // FLAGS; bit 5 = "key available in LASTK"
+	sysCUSCRNP = 0x5A78 // current screen page being printed to
+	sysFISCRNP = 0x5C9F // first screen page (boot default)
 )
 
 // peekRAM reads a byte from the RAM page currently mapped at addr's section.
@@ -578,14 +580,19 @@ func injectAndRun(hw *Hardware, cpu *z80.CPU, line string, stepBudget uint64) bo
 // in user terms) is 256×192 pixels at 4 bits/pixel, 24576 bytes
 // linear starting at the page indicated by VMPR & 0x1F. Each byte is
 // two pixels: high nibble = left, low nibble = right. Pixel value
-// 0-15 indexes the CLUT — we don't model the CLUT so we emit
-// 0..255 grayscale (pixel<<4).
+// 0-15 indexes the CLUT.
 //
-//	<basename>.bin = raw 24576 bytes of screen RAM (loadable as a
-//	                 SAM CODE file at &8000 with VMPR=0x7E once
-//	                 wrapped with a 9-byte header)
-//	<basename>.pgm = ASCII PGM, 256×192 grayscale — opens directly
-//	                 in macOS Preview, GIMP, etc.
+//	<basename>.bin    = raw 24576 bytes of screen RAM (24K pixel data)
+//	<basename>.pgm    = ASCII PGM, 256×192 grayscale — opens directly
+//	                    in macOS Preview, GIMP, etc.
+//	<basename>.paltab = 40-byte PALTAB sysvar block read from
+//	                    SAM RAM at 0x55D8. The first 16 bytes are
+//	                    the live CLUT — needed so that the loaded
+//	                    image renders with the same colours the
+//	                    ROM had on screen at the breakpoint.
+//	                    Sources: ROM disasm L1263 (PALTAB=0x55D8),
+//	                    L19535 (OTDR loop sending PALTAB[0..15] to
+//	                    CLUTPORT 0xF8).
 func dumpScreen(hw *Hardware, basename string) error {
 	page := hw.vmpr & 0x1F
 	const bytes = 24576 // 192 lines × 128 bytes/line
@@ -602,11 +609,20 @@ func dumpScreen(hw *Hardware, basename string) error {
 	for y := 0; y < H; y++ {
 		for x := 0; x < W; x += 2 {
 			b := raw[y*128+x/2]
-			pgm = append(pgm, b&0xF0)     // left pixel: high nibble
-			pgm = append(pgm, (b&0x0F)<<4) // right pixel: low nibble
+			pgm = append(pgm, b&0xF0)
+			pgm = append(pgm, (b&0x0F)<<4)
 		}
 	}
-	return os.WriteFile(basename+".pgm", pgm, 0644)
+	if err := os.WriteFile(basename+".pgm", pgm, 0644); err != nil {
+		return err
+	}
+	// PALTAB = sysvar at 0x55D8 (40 bytes). Section B with LMPR=0x5F
+	// gives page 0; offset = 0x55D8 - 0x4000 = 0x15D8.
+	paltab := make([]byte, 40)
+	for i := range paltab {
+		paltab[i] = peekRAM(hw, uint16(0x55D8+i))
+	}
+	return os.WriteFile(basename+".paltab", paltab, 0644)
 }
 
 func dumpSysvars(hw *Hardware) {
@@ -619,6 +635,8 @@ func dumpSysvars(hw *Hardware) {
 	fmt.Printf("  NVARS  = %04X   (start of numeric vars / end of PROG)\n", peekRAM16(hw, sysNVARS))
 	fmt.Printf("  SAVARS = %04X   (start of saved vars)\n", peekRAM16(hw, sysSAVARS))
 	fmt.Printf("  ERRNR  = %02X     (error number)\n", peekRAM(hw, sysERRNR))
+	fmt.Printf("  CUSCRNP= %02X     (current screen page = %d)\n", peekRAM(hw, sysCUSCRNP), peekRAM(hw, sysCUSCRNP)&0x1F)
+	fmt.Printf("  FISCRNP= %02X     (first screen page = %d)\n", peekRAM(hw, sysFISCRNP), peekRAM(hw, sysFISCRNP)&0x1F)
 
 	// Dump first 32 bytes of ELINE buffer and PROG buffer to see what's there.
 	elinePtr := peekRAM16(hw, sysELINE)
@@ -800,6 +818,18 @@ func main() {
 				readyPC, readyStep, float64(time.Since(start).Microseconds())/1000.0,
 				hw.lmpr, hw.hmpr, hw.vmpr, cpu.SP)
 			dumpSysvars(hw)
+			fmt.Println("\n=== Per-page non-zero byte counts (all 32 pages) ===")
+			for p := 0; p < 32; p++ {
+				count := 0
+				for _, b := range hw.ram[p] {
+					if b != 0 {
+						count++
+					}
+				}
+				if count > 0 {
+					fmt.Printf("  page %02d (0x%02X): %d/16384 non-zero bytes\n", p, p, count)
+				}
+			}
 			if *screenPath != "" {
 				if err := dumpScreen(hw, *screenPath); err != nil {
 					log.Printf("dumpScreen: %v", err)
