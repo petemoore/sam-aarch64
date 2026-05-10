@@ -77,13 +77,16 @@ func main() {
 			log.Fatalf("samfile binary not found at %s: %v", *samfileBin, err)
 		}
 	} else {
+		if _, err := os.Stat(*samfileBin); err != nil {
+			log.Fatalf("samfile binary not found at %s (needed for b2t capture even in --vs=llist-capture mode): %v", *samfileBin, err)
+		}
 		if _, err := os.Stat(*llistCapture); err != nil {
 			log.Fatalf("llist-capture.sh not found at %s: %v", *llistCapture, err)
 		}
 		if err := os.MkdirAll(*capturesDir, 0o755); err != nil {
 			log.Fatalf("create captures dir %s: %v", *capturesDir, err)
 		}
-		log.Printf("llist-capture mode: writing pairs to %s (.spike.txt + .llist.txt per job)", *capturesDir)
+		log.Printf("llist-capture mode: writing four-way captures to %s (.spike.txt + .llist.txt + .b2t.txt + .b2t-lossy.txt per job)", *capturesDir)
 	}
 
 	// Enumerate (disk, file) pairs deterministically.
@@ -141,7 +144,7 @@ func main() {
 		if *vs == "b2t" {
 			r = compareOne(j, *spikeBin, *samfileBin)
 		} else {
-			r = captureOneLLIST(j, *spikeBin, *llistCapture, *capturesDir)
+			r = captureOneTriple(j, *spikeBin, *samfileBin, *llistCapture, *capturesDir)
 		}
 		totals[r.status]++
 		fmt.Fprintf(out, "%s\t%s\t%s\t%s\n",
@@ -287,22 +290,27 @@ func min(a, b int) int {
 	return b
 }
 
-// captureOneLLIST runs both spike and llist-capture against (disk, file)
-// and writes their raw outputs to two files in capturesDir. No
-// comparison happens here — the captured pairs are kept as untouched
-// reference so post-processing experiments (un-wrap, normalise, diff)
-// can be iterated offline without re-running the slow SimCoupé path.
+// captureOneTriple runs spike + llist-capture + samfile basic-to-text
+// (both faithful and --lossy modes) against (disk, file) and writes
+// their raw outputs to four files in a per-disk subdirectory of
+// capturesDir. No comparison happens here — the captured outputs are
+// kept as untouched reference so post-processing experiments (un-wrap,
+// normalise, diff in any combination) can be iterated offline without
+// re-running the slow SimCoupé path.
 //
-// Status semantics:
+// Status semantics: the TSV status column records WHICH tools
+// completed, in the form "spike,llist,b2t,b2t-lossy" with failed tools
+// omitted. So:
 //
-//	CAPTURED      — both outputs successfully captured
-//	LLIST-ERROR   — llist-capture.sh failed
-//	SPIKE-ERROR   — spike binary failed
-//	READ-ERROR    — disk/file read failed (samfile)
+//	CAPTURED      — all four outputs successfully captured
+//	PARTIAL       — at least one but not all tools succeeded; detail
+//	                lists the failures with their stderr context
+//	READ-ERROR    — disk/file read failed (samfile pre-validation);
+//	                nothing else attempted
 //
-// The TSV detail column contains the filename pair (no <basename>__<file>
-// computation needed on the consumer side).
-func captureOneLLIST(j job, spikeBin, llistCaptureScript, capturesDir string) (r result) {
+// Even when a tool fails, the other tools still run — partial output
+// is still useful for the post-hoc investigation.
+func captureOneTriple(j job, spikeBin, samfileBin, llistCaptureScript, capturesDir string) (r result) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			r = result{"READ-ERROR", fmt.Sprintf("samfile panic: %v", rec)}
@@ -315,7 +323,8 @@ func captureOneLLIST(j job, spikeBin, llistCaptureScript, capturesDir string) (r
 	if err != nil {
 		return result{"READ-ERROR", fmt.Sprintf("load disk: %v", err)}
 	}
-	if _, err := di.File(j.fileName); err != nil {
+	f, err := di.File(j.fileName)
+	if err != nil {
 		return result{"READ-ERROR", fmt.Sprintf("find file: %v", err)}
 	}
 
@@ -328,25 +337,65 @@ func captureOneLLIST(j job, spikeBin, llistCaptureScript, capturesDir string) (r
 	fileStem := safeName(j.fileName)
 	spikeOut := filepath.Join(diskDir, fileStem+".spike.txt")
 	llistOut := filepath.Join(diskDir, fileStem+".llist.txt")
+	b2tOut := filepath.Join(diskDir, fileStem+".b2t.txt")
+	b2tLossyOut := filepath.Join(diskDir, fileStem+".b2t-lossy.txt")
 
-	// Spike first — fast and deterministic, so we know quickly if the
-	// file is going to bail out before we burn a SimCoupé invocation.
-	spikeCmd := exec.Command(spikeBin, "--mgt", j.diskPath, "--filename", j.fileName, "--out", spikeOut)
-	var spikeErr bytes.Buffer
-	spikeCmd.Stderr = &spikeErr
-	if err := spikeCmd.Run(); err != nil {
-		return result{"SPIKE-ERROR", fmt.Sprintf("%v: %s", err, strings.TrimSpace(spikeErr.String()))}
+	body := f.Body
+	var fails []string
+
+	// Spike: fast pure-Go, deterministic.
+	if err := runCmd(exec.Command(spikeBin, "--mgt", j.diskPath, "--filename", j.fileName, "--out", spikeOut)); err != nil {
+		fails = append(fails, "spike:"+err.Error())
 	}
 
-	// llist-capture next.
-	llistCmd := exec.Command(llistCaptureScript, j.diskPath, j.fileName, llistOut)
-	var llistErrBuf bytes.Buffer
-	llistCmd.Stderr = &llistErrBuf
-	if err := llistCmd.Run(); err != nil {
-		return result{"LLIST-ERROR", fmt.Sprintf("%v: %s", err, strings.TrimSpace(llistErrBuf.String()))}
+	// samfile basic-to-text (faithful, no --lossy).
+	if err := runSamfileB2T(samfileBin, body, b2tOut, false); err != nil {
+		fails = append(fails, "b2t:"+err.Error())
 	}
 
-	return result{"CAPTURED", filepath.Base(spikeOut) + " + " + filepath.Base(llistOut)}
+	// samfile basic-to-text --lossy (LLIST-format equivalent).
+	if err := runSamfileB2T(samfileBin, body, b2tLossyOut, true); err != nil {
+		fails = append(fails, "b2t-lossy:"+err.Error())
+	}
+
+	// llist-capture last — slowest, runs SimCoupé.
+	if err := runCmd(exec.Command(llistCaptureScript, j.diskPath, j.fileName, llistOut)); err != nil {
+		fails = append(fails, "llist:"+err.Error())
+	}
+
+	if len(fails) == 0 {
+		return result{"CAPTURED", ""}
+	}
+	return result{"PARTIAL", strings.Join(fails, "; ")}
+}
+
+// runCmd runs a command, captures stderr for the error message, and
+// returns nil on exit 0 / formatted error otherwise.
+func runCmd(cmd *exec.Cmd) error {
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// runSamfileB2T pipes the BASIC body bytes through `samfile basic-to-text`
+// (optionally with --lossy) and writes the result to outPath.
+func runSamfileB2T(samfileBin string, body []byte, outPath string, lossy bool) error {
+	args := []string{"basic-to-text"}
+	if lossy {
+		args = append(args, "--lossy")
+	}
+	cmd := exec.Command(samfileBin, args...)
+	cmd.Stdin = bytes.NewReader(body)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("%v: %s", err, strings.TrimSpace(stderr.String()))
+	}
+	return os.WriteFile(outPath, out, 0o644)
 }
 
 // safeName returns a filesystem-safe variant of the input string by
