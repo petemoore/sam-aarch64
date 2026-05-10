@@ -1,5 +1,5 @@
 // build-screen-disk constructs a SAM Coupé disk image containing
-// SAMDOS2 plus a CODE file carrying a raw mode-4 screen dump.
+// SAMDOS2 plus a SCREEN$ file carrying a raw mode-4 screen dump.
 //
 // Usage:
 //
@@ -12,17 +12,31 @@
 // To view the screen on real SAM or in SimCoupé:
 //
 //	(boot disk so SAMDOS2 takes over)
-//	MODE 4: LOAD "screen" CODE 32768
+//	LOAD "screen" SCREEN$
 //
-// The image will display using whatever palette is currently active
-// (no CLUT travels with the file in CODE form). For our purpose —
-// visually confirming what the spike's video RAM contains at the
-// READY breakpoint — pixel structure is the load-bearing thing.
+// LDSCRN at ROM 0xE2C0 (rom-disasm:22523) reads the screen mode from
+// the directory's FileTypeInfo[0] byte, switches to that mode if
+// needed, calls SELSCRN to page the displayed screen page into
+// section C, then loads the body at 0x8000 — which now lands on the
+// visible screen. (Plain LOAD CODE 32768 does NOT do the SELSCRN
+// step, so the bytes land in whatever page HMPR currently has in
+// section C, not the displayed screen.)
 //
-// (LOAD "screen" SCREEN$ would auto-switch the mode but requires
-// patching the directory entry's filetype byte from 19 to 20 and
-// FileTypeInfo[0] to the mode. The CODE path Pete suggested skips
-// that complexity entirely.)
+// samfile has FT_SCREEN as a constant but no AddScreenFile helper,
+// so we use AddCodeFile to allocate sectors and write the body, then
+// patch three bytes on the resulting disk image to convert the entry
+// to a SCREEN$:
+//
+//   - directory byte 0   : filetype 19 → 20
+//   - directory byte 221 : FileTypeInfo[0] ← screen mode (3 = MODE 4)
+//   - body  byte 0       : filetype mirror 19 → 20
+//
+// The image displays with whatever palette is currently active. The
+// SAM ROM's SAVE SCREEN$ flow appends 40 bytes PALTAB + a variable-
+// length LINICOLS table to capture the palette; LOAD SCREEN$ only
+// applies them if the body is longer than the bare-screen size, so
+// our 24576-byte body skips palette restore (LDSCRN exits early at
+// rom-disasm:22540 / 0xE2F5 `RET Z`).
 package main
 
 import (
@@ -89,19 +103,46 @@ func main() {
 		log.Fatalf("SetStartAddressPageUnusedBits(samdos2): %v", err)
 	}
 
-	// Slot 1: "screen" — raw mode-4 pixel data, loads to 0x8000.
+	// Slot 1: "screen" — raw mode-4 pixel data. AddCodeFile writes
+	// it as FT_CODE (19); we convert to FT_SCREEN (20) below.
 	if err := disk.AddCodeFile("screen", screen, LoadAddress, 0); err != nil {
 		log.Fatalf("AddCodeFile(screen): %v", err)
 	}
+
+	// Patch directory entry of slot 1 (bytes 256..511 in the disk
+	// image — first dir track sector holds slots 0 and 1) to make it
+	// a SCREEN$ entry. Constants from Tech Manual v3-0 directory
+	// layout (tech-man:4349-4400) and FT_SCREEN research.
+	const (
+		slot1Off            = 256
+		dirFileTypeOff      = 0
+		dirFirstSectorTrack = 13
+		dirFirstSectorSec   = 14
+		dirFileTypeInfo0Off = 221 // FileTypeInfo[0] = screen mode
+		ftScreen            = 20
+		internalModeForMode4 = 3 // ROM stores MODE-1 internally as 0..3
+	)
+	disk[slot1Off+dirFileTypeOff] = ftScreen
+	disk[slot1Off+dirFileTypeInfo0Off] = internalModeForMode4
+
+	// Patch the body's 9-byte header (first byte = filetype mirror).
+	// Body lives in whatever sector AddCodeFile allocated; read that
+	// from the directory entry. MGT sector → byte-offset formula
+	// from samfile.go:1055.
+	track := disk[slot1Off+dirFirstSectorTrack]
+	sector := disk[slot1Off+dirFirstSectorSec]
+	bodyOff := int(track>>7)*5120 + (int(sector)-1)*512 + int(track&0x7f)*10240
+	disk[bodyOff] = ftScreen
 
 	if err := disk.Save(outputPath); err != nil {
 		log.Fatalf("save %s: %v", outputPath, err)
 	}
 
 	fmt.Printf("samdos2: %d bytes\n", len(samdos2))
-	fmt.Printf("screen:  %d bytes  (mode-4 raw, loads to 0x%04X)\n",
-		len(screen), LoadAddress)
+	fmt.Printf("screen:  %d bytes  (mode-4 SCREEN$, body header byte 0 = 20,\n", len(screen))
+	fmt.Printf("                    dir FileTypeInfo[0] = 3 = BASIC MODE 4)\n")
+	fmt.Printf("                    body at T%d/S%d → disk byte %d\n", track&0x7f, sector, bodyOff)
 	fmt.Printf("Built %s\n\n", outputPath)
 	fmt.Println("To view: boot disk in SimCoupé (or real SAM), then at the BASIC prompt:")
-	fmt.Println("  MODE 4: LOAD \"screen\" CODE 32768")
+	fmt.Println("  LOAD \"screen\" SCREEN$")
 }

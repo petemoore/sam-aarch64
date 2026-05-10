@@ -667,7 +667,13 @@ func main() {
 	// editor's wait-for-key entry. Earlier breakpoints (e.g. on the
 	// first KEYSCAN at 0xD5BC) fire during init scans before the
 	// editor is actually polling for a typed character.
-	const readyPC uint16 = 0xD5BC // KEYSCAN entry — fires earliest
+	// WTFK at 0x0FA2 — the post-banner "wait for any key" loop.
+	// First KEYSCAN (0xD5BC) fires too early in boot (loading-bars
+	// phase, before the banner has been drawn). WTFK fires only
+	// after ERRHAND1 has finished printing the MGT message and is
+	// polling for a keypress — i.e. the screen is in a stable
+	// post-boot state we can dump and inspect.
+	const readyPC uint16 = 0x0FA2
 	cpu.BreakPoints = map[uint16]struct{}{readyPC: {}}
 	var readyStep uint64
 	var readyHit bool
@@ -790,8 +796,8 @@ func main() {
 		if !readyHit && cpu.PC == readyPC {
 			readyHit = true
 			readyStep = step + 1
-			fmt.Printf(">>> READY: KEYSCAN entered at step %d (%.1f ms wall time, LMPR=%02X HMPR=%02X VMPR=%02X SP=%04X) <<<\n",
-				readyStep, float64(time.Since(start).Microseconds())/1000.0,
+			fmt.Printf(">>> READY: breakpoint PC=%04X hit at step %d (%.1f ms wall time, LMPR=%02X HMPR=%02X VMPR=%02X SP=%04X) <<<\n",
+				readyPC, readyStep, float64(time.Since(start).Microseconds())/1000.0,
 				hw.lmpr, hw.hmpr, hw.vmpr, cpu.SP)
 			dumpSysvars(hw)
 			if *screenPath != "" {
