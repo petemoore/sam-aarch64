@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/koron-go/z80"
@@ -155,6 +156,189 @@ type tracePoint struct {
 	op   uint8
 }
 
+// SAM sysvars (all in VAR2 = 0x5A00, normally visible in section B with
+// LMPR=0x5F: section B = RAM page 0, so RAM page 0 offset 0x1A00 onwards).
+//
+// All addresses copied verbatim from rom-disasm definitions:
+//
+//	SAVARS=5A82  NVARS=5A88  WORKSP=5A91  ELINE=5A94  CHAD=5A97  PROG=5AA0
+//	ERRNR=5C3A  NSPPC=5C44  EPPC=5C49
+const (
+	sysELINE  = 0x5A94 // ptr to start of edit-line buffer (2 bytes)
+	sysWORKSP = 0x5A91 // ptr to workspace start = ELINE end + 1 (2 bytes)
+	sysCHAD   = 0x5A97 // ptr to current char in line (2 bytes)
+	sysPROG   = 0x5AA0 // ptr to start of program (2 bytes)
+	sysNVARS  = 0x5A88 // ptr to start of numeric vars (2 bytes)
+	sysSAVARS = 0x5A82 // ptr to saved vars (2 bytes)
+	sysERRNR  = 0x5C3A // error number (1 byte)
+)
+
+// peekRAM reads a byte from the RAM page currently mapped at addr's section.
+// Useful for inspecting sysvars when LMPR is in its default 0x5F state
+// (section B = RAM page 0, sysvars visible at 0x4000-0x7FFF and so on).
+func peekRAM(hw *Hardware, addr uint16) uint8 {
+	page, isROM, _ := hw.resolve(addr)
+	if isROM {
+		return 0xFF
+	}
+	return hw.ram[page][addr&0x3FFF]
+}
+
+func peekRAM16(hw *Hardware, addr uint16) uint16 {
+	return uint16(peekRAM(hw, addr)) | uint16(peekRAM(hw, addr+1))<<8
+}
+
+// pokeRAM writes a byte to whatever page is currently mapped at addr.
+func pokeRAM(hw *Hardware, addr uint16, v uint8) {
+	page, isROM, _ := hw.resolve(addr)
+	if isROM {
+		log.Fatalf("pokeRAM(%04X) lands in ROM — paging not set up for injection", addr)
+	}
+	hw.ram[page][addr&0x3FFF] = v
+}
+
+func pokeRAM16(hw *Hardware, addr uint16, v uint16) {
+	pokeRAM(hw, addr, uint8(v))
+	pokeRAM(hw, addr+1, uint8(v>>8))
+}
+
+// injectAndRun is best-effort line injection.
+//
+// Cleanest hijack found so far: jump to MAINEXEC (0x0E84) so AUTOLIST
+// and SETMIN run normally (SETMIN clears ELINE and sets WORKSP/WKEND/
+// STKEND properly). Then catch PC just before CALL EDITOR at 0x0E8D —
+// at that point all editor-prelude state is sane — write our line
+// into the freshly-cleared ELINE, advance PC past EDITOR to 0x0E90,
+// and let TOKMAIN onward run.
+//
+// Entry points (verified against rom-disasm v3.0):
+//
+//	0x0E84 MAINEXEC  : full editor iteration, calls AUTOLIST + SETMIN
+//	0x0E8D           : `CALL EDITOR` site — wait here, replace ELINE,
+//	                   then jump past the call
+//	0x0E90           : `CALL TOKMAIN` — tokenise the line we injected
+//	0x0E7A MAINEADD  : `CALL INSERTLN` — splice into PROG
+//	0x0E7D           : return point after CALL INSERTLN — clean stop
+//	SETMIN at 0x1D71 : writes 0x0D, 0xFF at ELINE start; sets WORKSP
+//
+// Stop condition: PC = 0x0E7D (INSERTLN just returned) — read ERRNR
+// to know success.
+func injectAndRun(hw *Hardware, cpu *z80.CPU, line string, stepBudget uint64) bool {
+	const (
+		mainexecPC = 0x0E84
+		preEditPC  = 0x0E8D // about to CALL EDITOR
+		postEditPC = 0x0E90 // CALL TOKMAIN
+		stopPC     = 0x0E7D
+		ispval     = 0x4F00
+	)
+
+	cpu.SP = ispval
+	cpu.PC = mainexecPC
+	pokeRAM(hw, sysERRNR, 0)
+
+	fmt.Printf("    SP ← %04X; PC ← %04X (MAINEXEC); running until pre-EDITOR (%04X)\n",
+		cpu.SP, cpu.PC, preEditPC)
+
+	// Phase 1: run from MAINEXEC until we're about to call EDITOR.
+	hitPre := false
+	for i := uint64(0); i < stepBudget; i++ {
+		cpu.Step()
+		if cpu.PC == preEditPC {
+			hitPre = true
+			fmt.Printf("    reached pre-EDITOR at step %d; ELINE buffer is now SETMIN-clean\n", i+1)
+			break
+		}
+		if cpu.HALT {
+			fmt.Printf("    HALT before pre-EDITOR at PC=%04X (step %d)\n", cpu.PC, i+1)
+			return false
+		}
+	}
+	if !hitPre {
+		fmt.Printf("    never reached pre-EDITOR (PC=%04X)\n", cpu.PC)
+		return false
+	}
+
+	// Phase 2: replace SETMIN's "<0x0D><0xFF>" empty-line marker with
+	// our text + CR + 0xFF; update WORKSP correspondingly. Then JP
+	// past the CALL EDITOR.
+	elinePtr := peekRAM16(hw, sysELINE)
+	for i, b := range []byte(line) {
+		pokeRAM(hw, elinePtr+uint16(i), b)
+	}
+	pokeRAM(hw, elinePtr+uint16(len(line)), 0x0D)
+	pokeRAM(hw, elinePtr+uint16(len(line))+1, 0xFF)
+	pokeRAM16(hw, sysWORKSP, elinePtr+uint16(len(line))+2)
+
+	fmt.Printf("    ELINE@%04X ← %q (%d bytes + CR + FF); WORKSP ← %04X; PC ← %04X (post-EDITOR)\n",
+		elinePtr, line, len(line), elinePtr+uint16(len(line))+2, uint16(postEditPC))
+	cpu.PC = postEditPC
+
+	// Phase 3: run TOKMAIN → LINESCAN → MAINEADD → INSERTLN, stop after.
+	// Annotate the milestone returns so we can see how far we got if we
+	// get stuck.
+	checkpoints := map[uint16]string{
+		0x3872: "entering TOKMAIN",
+		0x0E93: "back from TOKMAIN",
+		0x0D13: "entering LINESCAN",
+		0x0E96: "back from LINESCAN",
+		0x1079: "entering EVALLINO",
+		0x0EBB: "back from EVALLINO",
+		0x0E7A: "entering MAINEADD",
+		0x10A0: "entering INSERTLN",
+		0x1E1B: "entering MAKEROOM",
+	}
+	fmt.Printf("    phase 3 entry: LMPR=%02X HMPR=%02X SP=%04X PC=%04X first 6 ROM bytes at PC=%02X %02X %02X %02X %02X %02X\n",
+		hw.lmpr, hw.hmpr, cpu.SP, cpu.PC,
+		hw.Get(cpu.PC), hw.Get(cpu.PC+1), hw.Get(cpu.PC+2),
+		hw.Get(cpu.PC+3), hw.Get(cpu.PC+4), hw.Get(cpu.PC+5))
+	for i := uint64(0); i < stepBudget; i++ {
+		cpu.Step()
+		if name, ok := checkpoints[cpu.PC]; ok {
+			fmt.Printf("    step %d  PC=%04X  ← %s   (SP=%04X HL=%04X BC=%04X)\n",
+				i+1, cpu.PC, name, cpu.SP, cpu.HL.U16(), cpu.BC.U16())
+			delete(checkpoints, cpu.PC) // only show first visit
+		}
+		if cpu.PC == stopPC {
+			err := peekRAM(hw, sysERRNR)
+			fmt.Printf("    INSERTLN returned after %d steps; ERRNR = %02X\n", i+1, err)
+			return err == 0
+		}
+		if cpu.HALT {
+			fmt.Printf("    HALT at PC=%04X (step %d)\n", cpu.PC, i+1)
+			return false
+		}
+	}
+	fmt.Printf("    step budget exhausted in phase 3 (PC=%04X SP=%04X HL=%04X BC=%04X)\n",
+		cpu.PC, cpu.SP, cpu.HL.U16(), cpu.BC.U16())
+	return false
+}
+
+func dumpSysvars(hw *Hardware) {
+	fmt.Println()
+	fmt.Println("=== Sysvars at READY ===")
+	fmt.Printf("  ELINE  = %04X   (start of edit-line buffer)\n", peekRAM16(hw, sysELINE))
+	fmt.Printf("  WORKSP = %04X   (1 past end of edit-line buffer)\n", peekRAM16(hw, sysWORKSP))
+	fmt.Printf("  CHAD   = %04X   (current char in line)\n", peekRAM16(hw, sysCHAD))
+	fmt.Printf("  PROG   = %04X   (start of BASIC program)\n", peekRAM16(hw, sysPROG))
+	fmt.Printf("  NVARS  = %04X   (start of numeric vars / end of PROG)\n", peekRAM16(hw, sysNVARS))
+	fmt.Printf("  SAVARS = %04X   (start of saved vars)\n", peekRAM16(hw, sysSAVARS))
+	fmt.Printf("  ERRNR  = %02X     (error number)\n", peekRAM(hw, sysERRNR))
+
+	// Dump first 32 bytes of ELINE buffer and PROG buffer to see what's there.
+	elinePtr := peekRAM16(hw, sysELINE)
+	progPtr := peekRAM16(hw, sysPROG)
+	fmt.Printf("\n  ELINE @ %04X: ", elinePtr)
+	for i := uint16(0); i < 32; i++ {
+		fmt.Printf("%02X ", peekRAM(hw, elinePtr+i))
+	}
+	fmt.Println()
+	fmt.Printf("  PROG  @ %04X: ", progPtr)
+	for i := uint16(0); i < 32; i++ {
+		fmt.Printf("%02X ", peekRAM(hw, progPtr+i))
+	}
+	fmt.Println()
+}
+
 func main() {
 	romPath := flag.String("rom", "/Users/pmoore/git/simcoupe/Resource/samcoupe.rom", "path to samcoupe.rom (32KB)")
 	maxSteps := flag.Uint64("steps", 5_000_000, "max instructions to execute")
@@ -164,6 +348,7 @@ func main() {
 	rangeStart := flag.Uint64("range-start", 0, "if set, dump every step in [range-start, range-end] to range file")
 	rangeEnd := flag.Uint64("range-end", 0, "see range-start")
 	rangePath := flag.String("range", "/tmp/sam-range.txt", "where to write the range trace")
+	injectLines := flag.String("inject", "", "newline-separated BASIC lines to inject after READY is reached")
 	flag.Parse()
 
 	rom, err := os.ReadFile(*romPath)
@@ -297,8 +482,20 @@ func main() {
 			fmt.Printf(">>> READY: KEYSCAN entered at step %d (%.1f ms wall time, LMPR=%02X HMPR=%02X VMPR=%02X SP=%04X) <<<\n",
 				readyStep, float64(time.Since(start).Microseconds())/1000.0,
 				hw.lmpr, hw.hmpr, hw.vmpr, cpu.SP)
-			// Continue running so we see the steady-state behaviour
-			// for a few hundred thousand more steps.
+			dumpSysvars(hw)
+			if *injectLines == "" {
+				break
+			}
+			// Inject each line in turn. After each, run until the
+			// "INSERTLN returned" breakpoint fires.
+			for _, line := range strings.Split(strings.TrimRight(*injectLines, "\n"), "\n") {
+				fmt.Printf("\n>>> INJECTING: %q\n", line)
+				if !injectAndRun(hw, cpu, line, *maxSteps-step) {
+					fmt.Println("    (injection did not complete cleanly — see PC/ERRNR above)")
+					break
+				}
+				dumpSysvars(hw)
+			}
 			break
 		}
 
