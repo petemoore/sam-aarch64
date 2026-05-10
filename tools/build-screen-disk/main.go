@@ -53,6 +53,7 @@ import (
 	"os"
 
 	"github.com/petemoore/samfile/v3"
+	"github.com/petemoore/samfile/v3/sambasic"
 )
 
 const (
@@ -132,19 +133,47 @@ func main() {
 		log.Fatalf("SetStartAddressPageUnusedBits(samdos2): %v", err)
 	}
 
-	// Slot 1: "screen" — raw mode-4 pixel data (+ optional 40-byte
+	// Slot 1: auto-run BASIC. StartLine=10 so SAM auto-RUNs it on
+	// boot (per the ROM auto-run gate at rom-disasm:22471-22484
+	// checking dir byte 0xF2). It loads the SCREEN$ then PAUSE 0,
+	// so BASIC's "OK" prompt never prints over the bottom rows of
+	// our captured screen.
+	auto := &sambasic.File{
+		StartLine: 10,
+		Lines: []sambasic.Line{
+			{Number: 10, Tokens: []sambasic.Token{
+				sambasic.MODE,
+				sambasic.Number(4),
+			}},
+			{Number: 20, Tokens: []sambasic.Token{
+				sambasic.LOAD,
+				sambasic.String(`"screen"`),
+				sambasic.SCREEN_2B,
+			}},
+			{Number: 30, Tokens: []sambasic.Token{
+				sambasic.PAUSE,
+				sambasic.Number(0),
+			}},
+		},
+	}
+	if err := disk.AddBasicFile("auto", auto); err != nil {
+		log.Fatalf("AddBasicFile(auto): %v", err)
+	}
+
+	// Slot 2: "screen" — raw mode-4 pixel data (+ optional 40-byte
 	// PALTAB suffix). AddCodeFile writes it as FT_CODE (19); we
 	// convert to FT_SCREEN (20) below.
 	if err := disk.AddCodeFile("screen", body, LoadAddress, 0); err != nil {
 		log.Fatalf("AddCodeFile(screen): %v", err)
 	}
 
-	// Patch directory entry of slot 1 (bytes 256..511 in the disk
-	// image — first dir track sector holds slots 0 and 1) to make it
-	// a SCREEN$ entry. Constants from Tech Manual v3-0 directory
+	// Patch directory entry of slot 2 (bytes 512..767 in the disk
+	// image — slots 0/1 occupy track 0 sector 1, slot 2 lives in
+	// track 0 sector 2 at byte 512) to make the screen file a
+	// SCREEN$ entry. Constants from Tech Manual v3-0 directory
 	// layout (tech-man:4349-4400) and FT_SCREEN research.
 	const (
-		slot1Off            = 256
+		slot2Off            = 512
 		dirFileTypeOff      = 0
 		dirFirstSectorTrack = 13
 		dirFirstSectorSec   = 14
@@ -152,15 +181,15 @@ func main() {
 		ftScreen            = 20
 		internalModeForMode4 = 3 // ROM stores MODE-1 internally as 0..3
 	)
-	disk[slot1Off+dirFileTypeOff] = ftScreen
-	disk[slot1Off+dirFileTypeInfo0Off] = internalModeForMode4
+	disk[slot2Off+dirFileTypeOff] = ftScreen
+	disk[slot2Off+dirFileTypeInfo0Off] = internalModeForMode4
 
 	// Patch the body's 9-byte header (first byte = filetype mirror).
 	// Body lives in whatever sector AddCodeFile allocated; read that
 	// from the directory entry. MGT sector → byte-offset formula
 	// from samfile.go:1055.
-	track := disk[slot1Off+dirFirstSectorTrack]
-	sector := disk[slot1Off+dirFirstSectorSec]
+	track := disk[slot2Off+dirFirstSectorTrack]
+	sector := disk[slot2Off+dirFirstSectorSec]
 	bodyOff := int(track>>7)*5120 + (int(sector)-1)*512 + int(track&0x7f)*10240
 	disk[bodyOff] = ftScreen
 
