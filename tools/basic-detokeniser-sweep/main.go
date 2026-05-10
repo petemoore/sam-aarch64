@@ -208,16 +208,18 @@ func compareOne(j job, spikeBin, samfileBin string) result {
 		return result{"SPIKE-ERROR", fmt.Sprintf("read spike out: %v", err)}
 	}
 
-	// Two normalisation steps before byte-compare:
-	//   1. Render control bytes (<0x20 except newlines) as samfile's
-	//      `{N}` form so spike's raw bytes match samfile-faithful's
-	//      readable rendering.
-	//   2. Strip whitespace outside string literals (same as llist-sweep)
-	//      so we ignore samfile's "leading space before keyword"
-	//      formatting which SAM's EDIT/R-channel omits (EDKY sets
-	//      LISTFLG=0, suppressing SPACES at rom-disasm:F36E).
-	a := []byte(stripSpacesOutsideStrings(renderControls(string(spikeBytes))))
-	b := []byte(stripSpacesOutsideStrings(renderControls(string(b2tOut.Bytes()))))
+	// Normalise both sides into a canonical form before byte-compare:
+	//   - drop line 0 entries (spike can't extract line 0 because EDKY
+	//     explicitly RETs for it at rom-disasm:03A1; samfile renders
+	//     line 0 if present in PROG)
+	//   - render control bytes (<0x20) as samfile-faithful's `{N}`
+	//     form, including inside string literals (where 0x0A is a
+	//     literal byte, not a line terminator)
+	//   - strip whitespace outside string literals to ignore samfile's
+	//     "leading space before keyword" formatting that SAM's EDKY
+	//     omits (LISTFLG=0 → SPACES suppressed at rom-disasm:F36E)
+	a := []byte(normalise(string(spikeBytes)))
+	b := []byte(normalise(string(b2tOut.Bytes())))
 	if bytes.Equal(a, b) {
 		return result{"MATCH", ""}
 	}
@@ -256,17 +258,61 @@ func min(a, b int) int {
 	return b
 }
 
-// renderControls converts low-ASCII control bytes (0x00..0x1F except
-// 0x0A=LF and 0x0D=CR) into samfile-faithful's `{N}` text form so
-// spike's raw byte output can be compared against samfile output that
-// has already rendered them.
-func renderControls(s string) string {
+// normalise folds spike output and samfile-faithful output into a
+// canonical form. Tracks string-literal state so we can distinguish
+// 0x0A as line-terminator (outside strings) from 0x0A as literal
+// content (inside strings — renders as `{10}` to match samfile).
+//
+// Also drops any "    0 ..." line — the spike can't extract line 0
+// (EDKY RETs for line 0 at rom-disasm:03A1).
+func normalise(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "\n")
+
+	// Drop line-0 entries from each input. A "line 0" looks like
+	// optional spaces + "0" + space + content + \n.
+	var trimmed []string
+	for _, ln := range strings.Split(s, "\n") {
+		t := strings.TrimLeft(ln, " ")
+		if strings.HasPrefix(t, "0 ") || t == "0" {
+			continue
+		}
+		trimmed = append(trimmed, ln)
+	}
+	s = strings.Join(trimmed, "\n")
+
 	var b strings.Builder
+	inString := false
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if c < 0x20 && c != 0x0A && c != 0x0D {
+		if inString {
+			if c < 0x20 {
+				fmt.Fprintf(&b, "{%d}", c)
+			} else {
+				b.WriteByte(c)
+			}
+			if c == '"' {
+				if i+1 < len(s) && s[i+1] == '"' {
+					b.WriteByte('"')
+					i++
+					continue
+				}
+				inString = false
+			}
+			continue
+		}
+		// Outside strings
+		switch {
+		case c == '"':
+			inString = true
+			b.WriteByte('"')
+		case c == '\n':
+			b.WriteByte('\n')
+		case c < 0x20:
 			fmt.Fprintf(&b, "{%d}", c)
-		} else {
+		case c == ' ':
+			// strip (line-number prefix gets re-handled by line splitting)
+		default:
 			b.WriteByte(c)
 		}
 	}

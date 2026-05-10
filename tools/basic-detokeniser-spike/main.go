@@ -311,6 +311,16 @@ func loadProgViaPoke(hw *Hardware, progBytes []byte) {
 	}
 
 	delta := uint16(len(progBytes)) - 1
+	// Overflow guard: PROG lives in section C (0x8000-0xBFFF) and
+	// section D is ROM 1 by default. After memmove + write, the upper
+	// edge is roughly PROG + len(progBytes) + 1024 (shiftLen). Anything
+	// past 0xBF00 risks running into ROM via the memmove's pokeRAM
+	// which fatals on ROM writes.
+	upperEdge := uint32(prog) + uint32(len(progBytes)) + 1024
+	if upperEdge > 0xBF00 {
+		log.Fatalf("program too large for single-page poke: PROG=%04X len=%d would reach %05X (limit 0xBF00); section-D paging not implemented",
+			prog, len(progBytes), upperEdge)
+	}
 
 	// Memmove the section-C BASIC area (canonical NumericVars + gap +
 	// savars + ELINE + WORKSP) up by delta. Post-boot the live span
@@ -393,6 +403,13 @@ func extractAllLines(hw *Hardware, cpu *z80.CPU, basFile *sambasic.File, stepBud
 
 	out := make([]string, 0, len(lineNums))
 	for _, n := range lineNums {
+		if n == 0 {
+			// EDKY at rom-disasm:03A1 explicitly RETs for line 0
+			// (DON'T EDIT LINE ZERO). We skip — the sweep
+			// comparator strips line-0 entries from samfile output
+			// too so this difference doesn't show as DIFFER.
+			continue
+		}
 		hw.Restore(postLoadSnap)
 		text, err := editLineAndCapture(hw, cpu, n, stepBudget)
 		if err != nil {
@@ -427,6 +444,24 @@ func runProbe(hw *Hardware, cpu *z80.CPU, maxSteps uint64) {
 		}
 		fmt.Printf("  → %q\n", string(text))
 	}
+}
+
+// renderControlsForOutput escapes ALL low control bytes (<0x20) inside a
+// captured line as `{N}` so the output file uses \n only as a line
+// separator. Matches samfile basic-to-text faithful mode's rendering
+// of control bytes — needed because SAM's R-channel passes them
+// through raw, including 0x0A bytes embedded in REM text bodies.
+func renderControlsForOutput(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 {
+			fmt.Fprintf(&b, "{%d}", c)
+		} else {
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
 }
 
 func dumpSysvars(hw *Hardware, label string) {
@@ -504,7 +539,7 @@ func main() {
 		defer w.Close()
 	}
 	for _, ln := range lines {
-		fmt.Fprintln(w, strings.TrimRight(ln, "\r"))
+		fmt.Fprintln(w, renderControlsForOutput(strings.TrimRight(ln, "\r")))
 	}
 	if *outPath != "" {
 		fmt.Printf("Wrote %d lines to %s\n", len(lines), *outPath)
