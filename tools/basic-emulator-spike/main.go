@@ -289,6 +289,49 @@ func peekRAM16(hw *Hardware, addr uint16) uint16 {
 	return uint16(peekRAM(hw, addr)) | uint16(peekRAM(hw, addr+1))<<8
 }
 
+// Snapshot is a complete, restorable picture of the emulated SAM at
+// a single instant — every RAM page, every paging port, and every
+// CPU register including the alternates and the interrupt state.
+//
+// In-memory snapshot/restore lets us amortise the ~30 ms cold boot
+// over many line injections: boot once to MAINELP, snapshot, then
+// for each input line restore + inject + extract. Each restore is a
+// 512KB array copy + a struct copy = well under 100 µs.
+type Snapshot struct {
+	RAM       [32][16384]byte
+	LMPR      uint8
+	HMPR      uint8
+	VMPR      uint8
+	CPUStates z80.States
+	HALT      bool
+	Interrupt *z80.Interrupt
+}
+
+// Snapshot captures the current emulator state.
+func (h *Hardware) Snapshot() Snapshot {
+	return Snapshot{
+		RAM:       h.ram,
+		LMPR:      h.lmpr,
+		HMPR:      h.hmpr,
+		VMPR:      h.vmpr,
+		CPUStates: h.cpu.States,
+		HALT:      h.cpu.HALT,
+		Interrupt: h.cpu.Interrupt,
+	}
+}
+
+// Restore reverts the emulator to a previously taken snapshot.
+func (h *Hardware) Restore(s Snapshot) {
+	h.ram = s.RAM
+	h.lmpr = s.LMPR
+	h.hmpr = s.HMPR
+	h.vmpr = s.VMPR
+	h.cpu.States = s.CPUStates
+	h.cpu.HALT = s.HALT
+	h.cpu.Interrupt = s.Interrupt
+	h.keyQueue = nil
+}
+
 // pokeRAM writes a byte to whatever page is currently mapped at addr.
 func pokeRAM(hw *Hardware, addr uint16, v uint8) {
 	page, isROM, _ := hw.resolve(addr)
@@ -895,18 +938,6 @@ func main() {
 				readyPC, readyStep, float64(time.Since(start).Microseconds())/1000.0,
 				hw.lmpr, hw.hmpr, hw.vmpr, cpu.SP)
 			dumpSysvars(hw)
-			fmt.Println("\n=== Per-page non-zero byte counts (all 32 pages) ===")
-			for p := 0; p < 32; p++ {
-				count := 0
-				for _, b := range hw.ram[p] {
-					if b != 0 {
-						count++
-					}
-				}
-				if count > 0 {
-					fmt.Printf("  page %02d (0x%02X): %d/16384 non-zero bytes\n", p, p, count)
-				}
-			}
 			if *screenPath != "" {
 				if err := dumpScreen(hw, *screenPath); err != nil {
 					log.Printf("dumpScreen: %v", err)
@@ -918,15 +949,30 @@ func main() {
 			if *injectLines == "" {
 				break
 			}
-			// Inject each line in turn. After each, run until the
-			// "INSERTLN returned" breakpoint fires.
-			for _, line := range strings.Split(strings.TrimRight(*injectLines, "\n"), "\n") {
+			// Take a snapshot of the freshly-booted editor state, then
+			// restore it before each line — Pete's design: skip the
+			// 30 ms cold boot for every line by replaying from the
+			// post-boot state in-memory.
+			snap := hw.Snapshot()
+			fmt.Printf("\n>>> Snapshot taken at MAINELP (boot cost amortised across all lines)\n")
+			var collected []tokenisedLine
+			lines := strings.Split(strings.TrimRight(*injectLines, "\n"), "\n")
+			for _, line := range lines {
+				hw.Restore(snap)
 				fmt.Printf("\n>>> INJECTING: %q\n", line)
 				if !injectKeysAndRun(hw, cpu, line, *maxSteps-step, *intInterval) {
-					fmt.Println("    (injection did not complete cleanly — see PC/ERRNR above)")
+					fmt.Println("    (injection did not complete cleanly)")
 					break
 				}
-				dumpSysvars(hw)
+				collected = append(collected, hw.lastTokenisedLine)
+			}
+			fmt.Printf("\n=== Collected %d tokenised line(s) ===\n", len(collected))
+			for _, tl := range collected {
+				fmt.Printf("  line %d (%d tokens): ", tl.lineNumber, len(tl.tokens))
+				for _, b := range tl.tokens {
+					fmt.Printf("%02X ", b)
+				}
+				fmt.Println()
 			}
 			break
 		}
