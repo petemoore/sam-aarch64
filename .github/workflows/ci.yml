@@ -1,0 +1,162 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  m0-roundtrip:
+    runs-on: ubuntu-latest
+
+    env:
+      # SDL dummy drivers — overridden at the round-trip step. Set here
+      # so any non-round-trip simcoupe invocation (toolchain check etc.)
+      # doesn't try to open ALSA/video.
+      SDL_VIDEODRIVER: dummy
+      SDL_AUDIODRIVER: dummy
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── 1. GNU aarch64 binutils ──────────────────────────────────────────
+      - name: Install GNU aarch64 binutils
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils-aarch64-linux-gnu
+          # Symlink from the cross prefix our scripts expect.
+          sudo ln -s /usr/bin/aarch64-linux-gnu-as      /usr/local/bin/aarch64-none-elf-as
+          sudo ln -s /usr/bin/aarch64-linux-gnu-objcopy /usr/local/bin/aarch64-none-elf-objcopy
+
+      # ── 2. Patched SimCoupé (built from source) ──────────────────────────
+      #
+      # Stock apt simcoupe (v1.x) does NOT have the -exitonhalt flag required
+      # for deterministic batch exit. We clone upstream at a pinned SHA, apply
+      # the vendored patch (tools/simcoupe-exitonhalt.patch), build, and
+      # `cmake --install` so resources land at the path SimCoupé hard-codes.
+      #
+      # Pinned upstream commit: 0f74cff52b96841fe0efa01ffd1a6875b253e72a
+      # ("Updated version to v1.2.15") — parent of the local exit-on-halt branch.
+      #
+      # We deliberately don't cache the build. The previous cache stored only
+      # `simcoupe-build/build/simcoupe`, missing two runtime dependencies:
+      # the resources (`samcoupe.rom`, `sp0256-al2.bin`, etc. — which SimCoupé
+      # looks for at `/usr/local/share/simcoupe/` from `RESOURCE_DIR`) and
+      # `libSAASound.so.3` (fetched via CMake FetchContent, linked at the
+      # build path via RUNPATH). On cache-hit the binary loaded with neither,
+      # which (a) prevents simcoupe from finding `samcoupe.rom`, popping a
+      # modal that blocks the Z80 from ever executing, and (b) on a fresh
+      # runner with no `_deps/` dir, would refuse to load at all. Always
+      # rebuilding (~30s total) avoids both issues; if build time becomes a
+      # problem later, the cache should include the install destination
+      # (/usr/local/share/simcoupe + /usr/local/bin/simcoupe + the .so).
+
+      - name: Install SimCoupé build dependencies
+        run: |
+          sudo apt-get install -y \
+              build-essential cmake git \
+              libsdl2-dev libfmt-dev zlib1g-dev libpng-dev libsamplerate0-dev
+
+      - name: Clone, patch, build, and install SimCoupé
+        run: |
+          git clone https://github.com/simonowen/simcoupe.git simcoupe-build
+          cd simcoupe-build
+          git checkout 0f74cff52b96841fe0efa01ffd1a6875b253e72a
+          # Verify the patch applies cleanly before actually applying it.
+          git apply --check ../tools/simcoupe-exitonhalt.patch
+          git apply ../tools/simcoupe-exitonhalt.patch
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          # kosarev/z80 is fetched via CMake FetchContent — network required here.
+          cmake --build build -j$(nproc)
+          # `cmake --install` puts the simcoupe binary at /usr/local/bin and
+          # the resources (samcoupe.rom, atom.rom, atomlite.rom, sp0256-al2.bin,
+          # SimCoupe.bmp) at /usr/local/share/simcoupe — the latter is the
+          # baked-in RESOURCE_DIR (`CMAKE_INSTALL_FULL_DATAROOTDIR/simcoupe`).
+          # Without these, simcoupe pops two modal dialogs ("Error loading ROM"
+          # and "Error loading SP0256 allophone data") that block the Z80
+          # emulation loop entirely — Z80 never runs → 30s timeout.
+          sudo cmake --install build
+          # `cmake --install` strips the binary's RUNPATH, so simcoupe can no
+          # longer find libSAASound.so.3 at its build-tree path. Copy the .so
+          # to a standard system lib dir and refresh the loader cache.
+          sudo cp build/_deps/saasound-build/libSAASound.so.3 /usr/local/lib/
+          sudo ldconfig
+          # Sanity-check the runtime linkage.
+          ldd /usr/local/bin/simcoupe | grep SAA
+
+      # ── 3. Python + pyz80 ────────────────────────────────────────────────
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install pyz80
+        run: |
+          # pyz80 is now a proper Python package (pyproject.toml, src/pyz80/).
+          # `pip install` from the cloned repo creates a `pyz80` console-script
+          # entry point on PATH, no shebang/wrapper gymnastics needed.
+          git clone https://github.com/simonowen/pyz80 /tmp/pyz80
+          pip install /tmp/pyz80
+          # actions/setup-python@v5 puts pip's bin dir on PATH automatically.
+          which pyz80 && pyz80 --help | head -1 || true
+
+      # ── 4. Go + samfile ──────────────────────────────────────────────────
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Install samfile
+        run: |
+          # samfile's module path is `github.com/petemoore/samfile/v3`
+          # (Go's /vN semantic import versioning); without the `/v3` suffix
+          # `go install` falls back to the pre-v2 release which lacks the
+          # `add` subcommand we depend on.
+          go install github.com/petemoore/samfile/v3/cmd/samfile@latest
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
+
+      # ── 5. Toolchain smoke test ──────────────────────────────────────────
+      - name: Verify toolchain
+        run: make check
+
+      # ── 6. M0 round-trip oracle ──────────────────────────────────────────
+      #
+      # SimCoupé needs three init subsystems to all succeed before CPU::Run
+      # is called (Base/Main.cpp:55):
+      #   1. Video — needs a real renderer (SDL dummy has none). xvfb provides
+      #      an invisible X display that SDL_VIDEODRIVER=x11 attaches to;
+      #      Mesa's llvmpipe satisfies SDL_RENDERER_ACCELERATED. xvfb default
+      #      8-bit depth is too shallow → use -screen 0 1280x1024x24.
+      #   2. Sound — calls SDL_OpenAudioDevice. ALSA fails with no PCM card 0.
+      #      SDL_AUDIODRIVER=dummy gives SDL a no-op audio backend that
+      #      always opens successfully — purely environmental, no patch.
+      #   3. Input/Frame/CPU/UI — succeed unconditionally on Linux.
+      - name: Install xvfb and Mesa software GL
+        run: sudo apt-get install -y xvfb libgl1-mesa-dri mesa-utils
+
+      - name: Round-trip oracle
+        env:
+          SDL_VIDEODRIVER: x11        # override job-level dummy; need real renderer
+          SDL_AUDIODRIVER: dummy      # already set at job level; explicit here
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" make ci
+
+      # Diagnostic on failure: inspect the disk after the run. The stub
+      # writes `OUT` to disk; if OUT is there with the right bytes, the
+      # stub fully ran. If OUT is absent, the stub didn't reach HSAVE.
+      # If OUT has wrong contents, HSAVE ran but something else is off.
+      # Kept from the M0 investigation — small cost, high diagnostic value.
+      - name: Post-mortem disk inspection
+        if: failure()
+        run: |
+          echo "===== samfile ls ====="
+          samfile ls -i build/test.mgt || true
+          echo "===== OUT (hex) ====="
+          samfile cat -i build/test.mgt -f OUT 2>/dev/null | xxd | head -10 || echo "(OUT not present on disk)"
+          echo "===== disk size ====="
+          wc -c build/test.mgt
+
+      - name: Upload disk image on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-mgt-on-failure
+          path: build/test.mgt
+          if-no-files-found: warn
