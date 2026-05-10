@@ -10,3 +10,5 @@ __pycache__/
 .DS_Store
 .worktrees/
 tools/build-disk/build-disk
+tools/basic-emulator-spike/basic-emulator-spike
+tools/basic-detokeniser-spike/basic-detokeniser-spike
