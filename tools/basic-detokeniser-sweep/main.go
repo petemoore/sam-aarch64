@@ -286,6 +286,13 @@ func normalise(s string) string {
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		if inString {
+			// Newline resets string state — see comment in the
+			// outside-string \n branch below.
+			if c == '\n' {
+				b.WriteByte('\n')
+				inString = false
+				continue
+			}
 			if c < 0x20 {
 				fmt.Fprintf(&b, "{%d}", c)
 			} else {
@@ -307,6 +314,9 @@ func normalise(s string) string {
 			inString = true
 			b.WriteByte('"')
 		case c == '\n':
+			// Reset string state at line boundaries — an unmatched `"`
+			// (e.g. inside a REM body) would otherwise leak inString
+			// across the rest of the file.
 			b.WriteByte('\n')
 		case c < 0x20:
 			fmt.Fprintf(&b, "{%d}", c)
