@@ -573,6 +573,42 @@ func injectAndRun(hw *Hardware, cpu *z80.CPU, line string, stepBudget uint64) bo
 	return false
 }
 
+// dumpScreen writes the current screen image to disk. SAM mode 4 (the
+// boot default; VMPR=0x7E has bits 5-6 = mode 3 internally = "mode 4"
+// in user terms) is 256×192 pixels at 4 bits/pixel, 24576 bytes
+// linear starting at the page indicated by VMPR & 0x1F. Each byte is
+// two pixels: high nibble = left, low nibble = right. Pixel value
+// 0-15 indexes the CLUT — we don't model the CLUT so we emit
+// 0..255 grayscale (pixel<<4).
+//
+//	<basename>.bin = raw 24576 bytes of screen RAM (loadable as a
+//	                 SAM CODE file at &8000 with VMPR=0x7E once
+//	                 wrapped with a 9-byte header)
+//	<basename>.pgm = ASCII PGM, 256×192 grayscale — opens directly
+//	                 in macOS Preview, GIMP, etc.
+func dumpScreen(hw *Hardware, basename string) error {
+	page := hw.vmpr & 0x1F
+	const bytes = 24576 // 192 lines × 128 bytes/line
+	raw := make([]byte, bytes)
+	for i := 0; i < bytes; i++ {
+		raw[i] = hw.ram[(int(page)+i/16384)%32][i%16384]
+	}
+	if err := os.WriteFile(basename+".bin", raw, 0644); err != nil {
+		return err
+	}
+	const W, H = 256, 192
+	pgm := make([]byte, 0, len("P5\n256 192\n255\n")+W*H)
+	pgm = append(pgm, []byte("P5\n256 192\n255\n")...)
+	for y := 0; y < H; y++ {
+		for x := 0; x < W; x += 2 {
+			b := raw[y*128+x/2]
+			pgm = append(pgm, b&0xF0)     // left pixel: high nibble
+			pgm = append(pgm, (b&0x0F)<<4) // right pixel: low nibble
+		}
+	}
+	return os.WriteFile(basename+".pgm", pgm, 0644)
+}
+
 func dumpSysvars(hw *Hardware) {
 	fmt.Println()
 	fmt.Println("=== Sysvars at READY ===")
@@ -610,6 +646,7 @@ func main() {
 	rangePath := flag.String("range", "/tmp/sam-range.txt", "where to write the range trace")
 	injectLines := flag.String("inject", "", "newline-separated BASIC lines to inject after READY is reached")
 	intInterval := flag.Uint64("int-interval", 70_000, "fire an IM1 interrupt every N steps after the IRQ is enabled (0 disables); 70k ≈ one 50Hz frame at SAM's ~3.5 MHz")
+	screenPath := flag.String("screen", "", "if set, dump the current screen to <screen>.bin (24KB mode-4 raw) and <screen>.pgm (grayscale)")
 	flag.Parse()
 
 	rom, err := os.ReadFile(*romPath)
@@ -757,6 +794,14 @@ func main() {
 				readyStep, float64(time.Since(start).Microseconds())/1000.0,
 				hw.lmpr, hw.hmpr, hw.vmpr, cpu.SP)
 			dumpSysvars(hw)
+			if *screenPath != "" {
+				if err := dumpScreen(hw, *screenPath); err != nil {
+					log.Printf("dumpScreen: %v", err)
+				} else {
+					fmt.Printf("    screen dumped to %s.bin / %s.pgm (VMPR=%02X, page=%d)\n",
+						*screenPath, *screenPath, hw.vmpr, hw.vmpr&0x1F)
+				}
+			}
 			if *injectLines == "" {
 				break
 			}
