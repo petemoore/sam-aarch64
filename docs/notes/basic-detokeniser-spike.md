@@ -57,28 +57,41 @@ normalisation:
   "leading space" insertions.
 - Drop line-0 entries from both sides.
 
-### 500-job sample run (commit `fe3712d`, post-LMPR fix)
+### Full corpus run — 7017 (disk, file) jobs across 800 .mgt disks
 
 | Status | Count | % |
 |---|---:|---:|
-| MATCH | 472 | 94.4 |
-| READ-ERROR (corpus disk read) | 14 | 2.8 |
-| B2T-ERROR (samfile failure) | 7 | 1.4 |
-| SPIKE-ERROR (all true >24KB overflow) | 4 | 0.8 |
-| DIFFER | 3 | 0.6 |
+| MATCH | 5920 | 84.4 |
+| READ-ERROR (corpus disk read / parse) | 694 | 9.9 |
+| B2T-ERROR (samfile failure) | 277 | 3.9 |
+| SPIKE-ERROR | 76 | 1.1 |
+| DIFFER | 48 | 0.7 |
 
-Of attemptable jobs (excl. READ-ERROR / B2T-ERROR / overflow):
-**472 of 475 match (99.4%)**. The 3 DIFFER cases are: 1 embedded-0x0D
-in string literal (see limitations table) + 2 identical copies of
-WormsWorld across two disks showing a double-space-before-keyword
-pattern not normalised by stripSpacesOutsideStrings (likely a
-trailing-space-then-keyword scenario where samfile-faithful keeps
-both spaces).
+Of attemptable jobs (MATCH + DIFFER + SPIKE-ERROR = 6044):
+**MATCH rate 97.95%**.
+Excluding overflow (MATCH + DIFFER = 5968): **MATCH rate 99.20%**.
 
-Prior to the LMPR-bit-6 toggle fix in commit `fe3712d`, 49/500
-programs (~10%) fell out as overflow SPIKE-ERROR. After the fix
-those are 43 new MATCH, 2 new DIFFER, 4 still over the 0xFFFF
-ceiling.
+The 76 SPIKE-ERROR cases split as:
+- 71 true >24KB overflow (need HMPR-paged extended addressing)
+- 3 lines longer than their ELINE buffer ("no 0x0D found within 1255
+  bytes of ELINE (line 840)" — large unterminated lines, real bug)
+- 2 empty filenames in the corpus (input-validation edge case)
+
+The 48 DIFFER cases cluster into two patterns based on first-divergence offset analysis:
+- **Embedded 0x0D in string literals** — OUTLINE truncates at first
+  0x0D (rom-disasm:F38D-F38F), matching SAM's actual LIST/EDIT
+  behaviour. samfile basic-to-text reads the full line per the PROG
+  length header and includes embedded 0x0D as content. Spike is
+  arguably *more* faithful to SAM ROM here.
+- **Token rendering: samfile keeps `\xF9` / `\xFC` raw; spike renders
+  as `-`** — these are SAM keyword/operator tokens (e.g. variants of
+  minus) that the ROM expands when OUTLINE prints. samfile faithful
+  mode preserves the raw byte for round-trip-faithfulness;
+  spike-via-ROM expands. Again, spike matches the actual SAM behaviour.
+
+In both DIFFER categories, the spike's output is what real SAM would
+emit; samfile's faithful-mode output is a Go-side approximation that
+diverges on these specific cases.
 
 ## Next steps (not yet done)
 
