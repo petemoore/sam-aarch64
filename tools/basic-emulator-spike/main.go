@@ -846,7 +846,7 @@ func main() {
 	screenPath := flag.String("screen", "", "if set, dump the current screen to <screen>.bin (24KB mode-4 raw) and <screen>.pgm (grayscale)")
 	inputBasicPath := flag.String("in", "", "BASIC source text file: every non-empty line becomes one tokenised entry (overrides --inject)")
 	outputMgtPath := flag.String("out", "", "if set, write a bootable MGT containing samdos2 + tokenised BASIC program (FT_SAM_BASIC) named on disk as --out-name")
-	outputBasName := flag.String("out-name", "prog", "filename for the BASIC program inside the output MGT")
+	outputBasName := flag.String("out-name", "auto", "filename for the BASIC program inside the output MGT (SAMDOS auto-boots on disk insert only if name == \"auto\")")
 	outputAutorun := flag.Bool("out-autorun", false, "if true, mark the tokenised BASIC file as auto-RUN so the disk boots straight into it")
 	flag.Parse()
 
