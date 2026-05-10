@@ -30,6 +30,41 @@ type rawTokens []byte
 
 func (r rawTokens) Bytes() []byte { return []byte(r) }
 
+// canonicalNumericVars is the 92-byte NumericVars area as a real SAM
+// ROM SAVE produces it for a freshly-initialised program: 46 bytes of
+// 0xFF (the 23 letter-pointer pairs marking "no variable defined")
+// followed by 46 bytes of PSVTAB content (the pre-saved variables
+// table copied from ROM).
+//
+// samfile's default `make([]byte, 92)` emits 92 zeros, which crashes
+// at auto-run as soon as the program touches a variable (e.g. via
+// `FOR i=...`) — BASIC walks into corrupt letter pointers.
+//
+// Bytes extracted from `/tmp/hello-pete.mgt`, a disk Pete typed and
+// SAVEd by hand on a real SAM, byte offsets 0xF04F..0xF0AA. This
+// hardcode is a workaround. The architecturally clean fix is to let
+// INSERTLN actually run during line injection (sidestepped today by
+// extracting tokens from ELINE pre-insertion) and/or to route SAVE
+// through SAMDOS under emulation — see future_dos_via_emulated_sam
+// memory.
+var canonicalNumericVars = []byte{
+	// 46 bytes of 0xFF — letter-pointer "no var defined" sentinels
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+	// 46 bytes of PSVTAB content (extracted programmatically from
+	// /tmp/hello-pete.mgt, byte offsets 0xF07C..0xF0A9)
+	0x19, 0x00, 0x03, 0x00, 0xFF, 0xFF, 0x02, 0x08,
+	0x00, 0x6F, 0x73, 0x00, 0x00, 0x00, 0x00, 0x00,
+	0x02, 0xFF, 0xFF, 0x72, 0x67, 0x00, 0x00, 0xC0,
+	0x00, 0x00, 0x02, 0x08, 0x00, 0x6F, 0x73, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x02, 0xFF, 0xFF, 0x72,
+	0x67, 0x00, 0x00, 0x00, 0x01, 0x00,
+}
+
 // SAM Coupé memory map:
 //
 //   Section A: 0x0000-0x3FFF  ROM 0 by default; if LMPR bit 5 (RAM0) is HIGH then
@@ -1046,7 +1081,9 @@ func main() {
 			sort.Slice(collected, func(i, j int) bool {
 				return collected[i].lineNumber < collected[j].lineNumber
 			})
-			basFile := &sambasic.File{}
+			basFile := &sambasic.File{
+				NumericVars: canonicalNumericVars,
+			}
 			if *outputAutorun && len(collected) > 0 {
 				basFile.StartLine = collected[0].lineNumber
 			}
