@@ -369,41 +369,12 @@ func injectKeysAndRun(hw *Hardware, cpu *z80.CPU, line string, stepBudget uint64
 		idleSteps = 500_000 // after queue drains, wait for tokenise/insert/AUTOLIST
 	)
 
-	// Boot banner: ERRNR=0x50 means the ROM is at MAINER3 → ERRHAND1
-	// printing "MILES GORDON TECHNOLOGY plc 1989 SAM Coupé   nnnK"
-	// and waiting at WTFK (0x0FA2) for any keypress via READKEY →
-	// TWOKSC → KEYSCAN (matrix-based, NOT FLAGS/LASTK). Press SPACE
-	// on the matrix to dismiss the banner; that drops the ROM into
-	// MAINELP (the editor proper) which polls via KYIP2/FLAGS-bit-5.
-	if peekRAM(hw, sysERRNR) == 0x50 {
-		fmt.Printf("    boot banner detected (ERRNR=0x50); dismissing with matrix SPACE press\n")
-		const wtfkExitPC = 0x0FA7 // CALL CLSLOWER — first instr past JR Z,WTFK
-		hw.keyMatrix[7] &^= 0x01  // press SPACE (row 7 bit 0)
-		exited := false
-		for i := uint64(0); i < 200_000; i++ {
-			cpu.Step()
-			if cpu.PC == wtfkExitPC {
-				exited = true
-				hw.keyMatrix[7] |= 0x01 // release
-				fmt.Printf("    banner dismissed at injection-step %d (PC=%04X ERRNR=%02X)\n",
-					i+1, cpu.PC, peekRAM(hw, sysERRNR))
-				break
-			}
-		}
-		if !exited {
-			hw.keyMatrix[7] |= 0x01
-			fmt.Printf("    banner-dismiss budget exhausted (PC=%04X)\n", cpu.PC)
-			return false
-		}
-		// Let the post-banner setup run a bit (CLSLOWER, JP ERRHAND2,
-		// path back to MAINELP/MAINEXEC) before we start FLAGS injection.
-		for i := uint64(0); i < 500_000; i++ {
-			cpu.Step()
-		}
-		fmt.Printf("    after banner settle: PC=%04X ERRNR=%02X\n",
-			cpu.PC, peekRAM(hw, sysERRNR))
-	}
-
+	// We now skip the banner at boot via the skipBannerPC hijack in
+	// the outer loop, so the ROM is already at MAINELP (the editor
+	// loop) by the time injection runs. ERRNR is still 0x50 in RAM
+	// (stale leftover) but the editor doesn't care — it clears its
+	// own error state when reading keys. We clear ERRNR explicitly
+	// below so the post-LOAD check is meaningful.
 	keys := append([]byte(line), '\r')
 	hw.keyQueue = append(hw.keyQueue[:0], keys...)
 	pokeRAM(hw, sysERRNR, 0)
@@ -432,9 +403,27 @@ func injectKeysAndRun(hw *Hardware, cpu *z80.CPU, line string, stepBudget uint64
 
 		if cpu.PC == error2PC {
 			err := peekRAM(hw, sysERRNR)
-			fmt.Printf("    step %d: ERROR2 entered, ERRNR=0x%02X (CHAD=%04X)\n",
+			progAfter := peekRAM16(hw, sysPROG)
+			nvarsAfter := peekRAM16(hw, sysNVARS)
+			elinePtr := peekRAM16(hw, sysELINE)
+			workspAfter := peekRAM16(hw, sysWORKSP)
+			fmt.Printf("    step %d: ERROR2 entered, ERRNR=0x%02X CHAD=%04X\n",
 				i+1, err, peekRAM16(hw, sysCHAD))
-			return false
+			fmt.Printf("    PROG=%04X NVARS=%04X (PROG body len=%d)\n",
+				progAfter, nvarsAfter, int(nvarsAfter)-int(progAfter))
+			fmt.Printf("    ELINE=%04X WORKSP=%04X (ELINE len=%d)\n",
+				elinePtr, workspAfter, int(workspAfter)-int(elinePtr))
+			fmt.Printf("    ELINE bytes: ")
+			for j := uint16(0); j < 32; j++ {
+				fmt.Printf("%02X ", peekRAM(hw, elinePtr+j))
+			}
+			fmt.Println()
+			fmt.Printf("    PROG bytes:  ")
+			for j := uint16(0); j < 32; j++ {
+				fmt.Printf("%02X ", peekRAM(hw, progAfter+j))
+			}
+			fmt.Println()
+			return err == 0
 		}
 		if cpu.HALT {
 			fmt.Printf("    step %d: HALT at PC=%04X\n", i+1, cpu.PC)
@@ -685,13 +674,24 @@ func main() {
 	// editor's wait-for-key entry. Earlier breakpoints (e.g. on the
 	// first KEYSCAN at 0xD5BC) fire during init scans before the
 	// editor is actually polling for a typed character.
-	// WTFK at 0x0FA2 — the post-banner "wait for any key" loop.
-	// First KEYSCAN (0xD5BC) fires too early in boot (loading-bars
-	// phase, before the banner has been drawn). WTFK fires only
-	// after ERRHAND1 has finished printing the MGT message and is
-	// polling for a keypress — i.e. the screen is in a stable
-	// post-boot state we can dump and inspect.
-	const readyPC uint16 = 0x0FA2
+	// Banner-skip hijack: when the boot reaches 0x0F75 (the
+	// `CALL ERRHAND1` inside MAINER3), advance PC to 0x0F78
+	// (the `JP MAINELP` immediately after the call). MAINER3's
+	// earlier instructions (CLSLOWER at 0x0F67, SET 5,(TVFLAG)
+	// at 0x0F6D, RES 7,(FLAGS) at 0x0F70) still run — those
+	// are state setup the editor needs. ERRHAND1's banner print
+	// + WTFK wait are the only things skipped. After the JP we
+	// land in MAINELP (the editor's main loop), which is what
+	// we want to break on as "READY".
+	const skipBannerPC uint16 = 0x0F75
+	const skipBannerTo uint16 = 0x0F78
+
+	// MAINELP at 0x0E8A — editor inner loop after MAINER3 / MAINEXEC
+	// fall-through. First entry means: state is fully initialised,
+	// banner skipped, editor is about to call STRM0 → EDITOR → … →
+	// poll for keypress via WAITKEY. This is the right place to
+	// switch to FLAGS/LASTK injection for the actual program text.
+	const readyPC uint16 = 0x0E8A
 	cpu.BreakPoints = map[uint16]struct{}{readyPC: {}}
 	var readyStep uint64
 	var readyHit bool
@@ -793,6 +793,12 @@ func main() {
 		} else {
 			samePCCount = 0
 			lastPC = pc
+		}
+
+		// Banner-skip hijack: bypass CALL ERRHAND1 inside MAINER3.
+		// See block-comment near readyPC for rationale.
+		if cpu.PC == skipBannerPC {
+			cpu.PC = skipBannerTo
 		}
 
 		// Fire periodic line interrupts once the ROM has enabled them.
