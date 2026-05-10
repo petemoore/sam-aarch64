@@ -57,6 +57,9 @@ func main() {
 		progressEvery = flag.Int("progress", 25, "report progress every N files")
 		spikeBin      = flag.String("spike", "/tmp/detok-spike", "basic-detokeniser-spike binary")
 		samfileBin    = flag.String("samfile", "/tmp/samfile", "samfile binary")
+		llistCapture  = flag.String("llist-capture", filepath.Join(home, "git/sam-aarch64/tools/llist-capture.sh"), "llist-capture.sh path (only used with --vs=llist)")
+		vs            = flag.String("vs", "b2t", "oracle: b2t (samfile basic-to-text faithful, fast, pure-Go), llist-capture (real SAM ROM under SimCoupé — captures pairs to --captures-dir without comparing)")
+		capturesDir   = flag.String("captures-dir", "/tmp/detok-captures", "directory to write spike + llist captures into when --vs=llist-capture")
 		startOffset   = flag.Int("skip", 0, "skip the first N jobs (resume support)")
 		limit         = flag.Int("limit", 0, "stop after N jobs (0 = all)")
 		failFast      = flag.Bool("fail-fast", false, "exit on first DIFFER (with skip position for resume)")
@@ -66,8 +69,21 @@ func main() {
 	if _, err := os.Stat(*spikeBin); err != nil {
 		log.Fatalf("spike binary not found at %s: %v", *spikeBin, err)
 	}
-	if _, err := os.Stat(*samfileBin); err != nil {
-		log.Fatalf("samfile binary not found at %s: %v", *samfileBin, err)
+	if *vs != "b2t" && *vs != "llist-capture" {
+		log.Fatalf("--vs must be 'b2t' or 'llist-capture'")
+	}
+	if *vs == "b2t" {
+		if _, err := os.Stat(*samfileBin); err != nil {
+			log.Fatalf("samfile binary not found at %s: %v", *samfileBin, err)
+		}
+	} else {
+		if _, err := os.Stat(*llistCapture); err != nil {
+			log.Fatalf("llist-capture.sh not found at %s: %v", *llistCapture, err)
+		}
+		if err := os.MkdirAll(*capturesDir, 0o755); err != nil {
+			log.Fatalf("create captures dir %s: %v", *capturesDir, err)
+		}
+		log.Printf("llist-capture mode: writing pairs to %s (.spike.txt + .llist.txt per job)", *capturesDir)
 	}
 
 	// Enumerate (disk, file) pairs deterministically.
@@ -121,7 +137,12 @@ func main() {
 	start := time.Now()
 
 	for i, j := range jobs {
-		r := compareOne(j, *spikeBin, *samfileBin)
+		var r result
+		if *vs == "b2t" {
+			r = compareOne(j, *spikeBin, *samfileBin)
+		} else {
+			r = captureOneLLIST(j, *spikeBin, *llistCapture, *capturesDir)
+		}
 		totals[r.status]++
 		fmt.Fprintf(out, "%s\t%s\t%s\t%s\n",
 			r.status, filepath.Base(j.diskPath), j.fileName, sanitize(r.detail))
@@ -264,6 +285,87 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// captureOneLLIST runs both spike and llist-capture against (disk, file)
+// and writes their raw outputs to two files in capturesDir. No
+// comparison happens here — the captured pairs are kept as untouched
+// reference so post-processing experiments (un-wrap, normalise, diff)
+// can be iterated offline without re-running the slow SimCoupé path.
+//
+// Status semantics:
+//
+//	CAPTURED      — both outputs successfully captured
+//	LLIST-ERROR   — llist-capture.sh failed
+//	SPIKE-ERROR   — spike binary failed
+//	READ-ERROR    — disk/file read failed (samfile)
+//
+// The TSV detail column contains the filename pair (no <basename>__<file>
+// computation needed on the consumer side).
+func captureOneLLIST(j job, spikeBin, llistCaptureScript, capturesDir string) (r result) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			r = result{"READ-ERROR", fmt.Sprintf("samfile panic: %v", rec)}
+		}
+	}()
+
+	// Sanity check the file exists in the disk so we don't waste a
+	// SimCoupé spin on a malformed entry.
+	di, err := samfile.Load(j.diskPath)
+	if err != nil {
+		return result{"READ-ERROR", fmt.Sprintf("load disk: %v", err)}
+	}
+	if _, err := di.File(j.fileName); err != nil {
+		return result{"READ-ERROR", fmt.Sprintf("find file: %v", err)}
+	}
+
+	// One directory per disk so basic-file names can collide freely
+	// across disks (e.g. every disk has its own "auto").
+	diskDir := filepath.Join(capturesDir, safeName(strings.TrimSuffix(filepath.Base(j.diskPath), filepath.Ext(j.diskPath))))
+	if err := os.MkdirAll(diskDir, 0o755); err != nil {
+		return result{"READ-ERROR", fmt.Sprintf("mkdir %s: %v", diskDir, err)}
+	}
+	fileStem := safeName(j.fileName)
+	spikeOut := filepath.Join(diskDir, fileStem+".spike.txt")
+	llistOut := filepath.Join(diskDir, fileStem+".llist.txt")
+
+	// Spike first — fast and deterministic, so we know quickly if the
+	// file is going to bail out before we burn a SimCoupé invocation.
+	spikeCmd := exec.Command(spikeBin, "--mgt", j.diskPath, "--filename", j.fileName, "--out", spikeOut)
+	var spikeErr bytes.Buffer
+	spikeCmd.Stderr = &spikeErr
+	if err := spikeCmd.Run(); err != nil {
+		return result{"SPIKE-ERROR", fmt.Sprintf("%v: %s", err, strings.TrimSpace(spikeErr.String()))}
+	}
+
+	// llist-capture next.
+	llistCmd := exec.Command(llistCaptureScript, j.diskPath, j.fileName, llistOut)
+	var llistErrBuf bytes.Buffer
+	llistCmd.Stderr = &llistErrBuf
+	if err := llistCmd.Run(); err != nil {
+		return result{"LLIST-ERROR", fmt.Sprintf("%v: %s", err, strings.TrimSpace(llistErrBuf.String()))}
+	}
+
+	return result{"CAPTURED", filepath.Base(spikeOut) + " + " + filepath.Base(llistOut)}
+}
+
+// safeName returns a filesystem-safe variant of the input string by
+// replacing every byte outside [A-Za-z0-9_.+-] with `_`. Used for
+// both disk-stem and basic-filename components of the captures path.
+func safeName(s string) string {
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+			out = append(out, c)
+		case c == '_' || c == '-' || c == '.' || c == '+':
+			out = append(out, c)
+		default:
+			out = append(out, '_')
+		}
+	}
+	return string(out)
 }
 
 // normalise folds spike output and samfile-faithful output into a
