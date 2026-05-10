@@ -163,7 +163,15 @@ func sanitize(s string) string {
 	return s
 }
 
-func compareOne(j job, spikeBin, samfileBin string) result {
+func compareOne(j job, spikeBin, samfileBin string) (r result) {
+	// samfile occasionally panics on malformed corpus disks
+	// (e.g. slice-bounds-out-of-range in DiskImage.File). Treat
+	// any panic as a READ-ERROR so the sweep continues.
+	defer func() {
+		if rec := recover(); rec != nil {
+			r = result{"READ-ERROR", fmt.Sprintf("samfile panic: %v", rec)}
+		}
+	}()
 	// Read body via samfile.
 	di, err := samfile.Load(j.diskPath)
 	if err != nil {
