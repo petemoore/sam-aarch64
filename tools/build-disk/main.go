@@ -95,35 +95,27 @@ func main() {
 		log.Fatalf("SetStartAddressPageUnusedBits(samdos2): %v", err)
 	}
 
-	// Slot 1: AUTO BASIC. AUTO-RUN line 10 reads:
-	//   10 CLEAR 32767: LOAD "stub" CODE 32768: CALL 32768
-	//
-	// sambasic.File produces the on-disk tokenised body, the
-	// default 92-byte numeric-vars area + 512-byte gap (matching
-	// the canonical real-SAVE convention — see
-	// sam-basic-save-format.md for the ROM citations), the 0xFF
-	// end-of-program sentinel, and the dir-entry triplets at
-	// 0xDD/0xE0/0xE3 encoding the program-section sizes in 8000H
-	// REL PAGE FORM. StartLine=10 marks the entry as auto-RUN;
+	// Slot 1: AUTO BASIC. StartLine=10 marks the entry as auto-RUN;
 	// SAM ROM at rom-disasm:22471-22484 checks dir byte 0xF2 = 0
 	// to dispatch BASIC start-line auto-RUN.
 	auto := &sambasic.File{
 		StartLine: 10,
-		Lines: []sambasic.Line{{
-			Number: 10,
-			Tokens: []sambasic.Token{
+		Lines: []sambasic.Line{
+			{Number: 10, Tokens: []sambasic.Token{
 				sambasic.CLEAR,
 				sambasic.Number(uint16(LoadAddress - 1)),
-				sambasic.String(":"),
+			}},
+			{Number: 20, Tokens: []sambasic.Token{
 				sambasic.LOAD,
 				sambasic.String(`"stub"`),
 				sambasic.CODE,
 				sambasic.Number(uint16(LoadAddress)),
-				sambasic.String(":"),
+			}},
+			{Number: 30, Tokens: []sambasic.Token{
 				sambasic.CALL,
 				sambasic.Number(uint16(LoadAddress)),
-			},
-		}},
+			}},
+		},
 	}
 	if err := disk.AddBasicFile("auto", auto); err != nil {
 		log.Fatalf("AddBasicFile(auto): %v", err)
