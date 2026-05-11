@@ -74,9 +74,11 @@ jobs:
           # Registry-mode buildx cache: each layer cached as an image
           # blob at the buildcache tag. Cleaner than actions/cache (no
           # size limits, properly de-duplicated across runs). Layers
-          # invalidated only when their inputs change — the simcoupé
-          # build layer rebuilds only when the patch file or the SHA
-          # arg change.
+          # invalidated when their inputs change or any earlier layer
+          # changed — Dockerfile.dev orders rarely-changing layers
+          # (SimCoupé) before frequently-changing ones (Go/samfile)
+          # so the expensive SimCoupé build stays cached through
+          # normal development iterations.
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max
 
