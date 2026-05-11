@@ -13,29 +13,9 @@
 //	3  IN        T6S4         (assembly source fixture)
 //
 // This program replaces the earlier tools/build-disk.sh bash+Python
-// hybrid. Slots 1-3 are constructed via the v3 samfile API
-// (AddBasicFile / AddCodeFile from samfile PR #11). Slot 0 also uses
-// AddCodeFile.
-//
-// Two byte-level patches are applied after the samfile calls, both
-// tracked as upstream gaps in samfile (see UPSTREAM-GAPS in the
-// commit body / PR description):
-//
-//  1. For every type-19 CODE file, body-header bytes 5-6 are set to
-//     0xff 0xff. samfile's FileHeader.Raw() hard-codes these to
-//     0x00 0x00, but ROM's LOAD-CODE auto-exec gate at
-//     rom-disasm:22471-22484 requires BOTH dir byte 0xF2 AND body-
-//     header byte 6 to be 0xff to suppress auto-execution. With
-//     byte 6 = 0x00, our AUTO line's `LOAD "stub" CODE 32768` would
-//     try to auto-exec at a garbage address rather than returning
-//     to BASIC for the subsequent `: CALL`.
-//
-//  2. For samdos2 specifically, body-header byte 8 (StartPage) is
-//     forced to 0x7d to match the canonical FRED 02 / Defender
-//     install. AddCodeFile derives this from the load address
-//     (giving 0x01); the 0x60 bits are decorative and ROM masks to
-//     0x1f when reading, so this is byte-parity rather than a
-//     functional fix.
+// hybrid. All four slots are constructed via the v3 samfile API
+// (AddBasicFile / AddCodeFile). The only post-call tweak is
+// SetStartAddressPageUnusedBits for samdos2's decorative high bits.
 //
 // Usage:
 //
@@ -67,13 +47,6 @@ const (
 	// after locating the "BOOT" magic at sector offset 256; this
 	// address is what SAMDOS's later self-bookkeeping consults.
 	SamdosLoadAddress uint32 = 491529
-
-	// SamdosCanonicalStartPage is the decorative StartPage byte at
-	// body-header offset 8 in the canonical samdos2 binary (the
-	// 0x60 bits are "decorative" — anything that reads the field
-	// masks to 0x1f). AddCodeFile derives this from the load
-	// address (giving 0x01); we post-patch it for byte-parity.
-	SamdosCanonicalStartPage byte = 0x7d
 )
 
 func main() {
@@ -118,9 +91,9 @@ func main() {
 	if err := disk.AddCodeFile("samdos2", samdos2, SamdosLoadAddress, 0); err != nil {
 		log.Fatalf("AddCodeFile(samdos2): %v", err)
 	}
-	patchAutoExecGate(disk, "samdos2")
-	patchStartPage(disk, "samdos2", SamdosCanonicalStartPage)
-	patchMGTFutureAndPast(disk, "samdos2")
+	if err := disk.SetStartAddressPageUnusedBits("samdos2", 3); err != nil {
+		log.Fatalf("SetStartAddressPageUnusedBits(samdos2): %v", err)
+	}
 
 	// Slot 1: AUTO BASIC. AUTO-RUN line 10 reads:
 	//   10 CLEAR 32767: LOAD "stub" CODE 32768: CALL 32768
@@ -141,14 +114,12 @@ func main() {
 			Tokens: []sambasic.Token{
 				sambasic.CLEAR,
 				sambasic.Number(uint16(LoadAddress - 1)),
-				sambasic.Literal(':'),
+				sambasic.String(":"),
 				sambasic.LOAD,
-				sambasic.Literal('"'),
-				sambasic.String("stub"),
-				sambasic.Literal('"'),
+				sambasic.String(`"stub"`),
 				sambasic.CODE,
 				sambasic.Number(uint16(LoadAddress)),
-				sambasic.Literal(':'),
+				sambasic.String(":"),
 				sambasic.CALL,
 				sambasic.Number(uint16(LoadAddress)),
 			},
@@ -157,32 +128,19 @@ func main() {
 	if err := disk.AddBasicFile("auto", auto); err != nil {
 		log.Fatalf("AddBasicFile(auto): %v", err)
 	}
-	// AddBasicFile sets MGTFutureAndPast[6..7] = 0xff in the dir
-	// entry, but the body header on disk is still produced by
-	// FileHeader.Raw() which hard-codes bytes 5-6 to zero. Patch
-	// for canonical parity. (BASIC auto-RUN doesn't use the
-	// LOAD-CODE auto-exec gate, so this is byte-parity rather than
-	// a functional fix.)
-	patchAutoExecGate(disk, "auto")
 
 	// Slot 2: stub CODE file. AUTO-RUN's `LOAD "stub" CODE 32768`
-	// resolves this by name; the loaded body's auto-exec gate at
-	// dir byte 0xF2 + body-header byte 6 must both be 0xFF for
-	// LOAD CODE to return cleanly to BASIC so the subsequent
-	// `: CALL` invokes the stub. AddCodeFile sets the dir byte;
-	// patchAutoExecGate fixes the body-header byte.
+	// resolves this by name; the auto-exec gate (dir byte 0xF2 +
+	// body-header byte 6 both 0xFF) tells LOAD CODE to return to
+	// BASIC so the subsequent `: CALL` invokes the stub.
 	if err := disk.AddCodeFile("stub", stubBin, LoadAddress, 0); err != nil {
 		log.Fatalf("AddCodeFile(stub): %v", err)
 	}
-	patchAutoExecGate(disk, "stub")
-	patchMGTFutureAndPast(disk, "stub")
 
 	// Slot 3: IN data file. Read by the stub via SAMDOS HGFLE.
 	if err := disk.AddCodeFile("IN", in, LoadAddress, 0); err != nil {
 		log.Fatalf("AddCodeFile(IN): %v", err)
 	}
-	patchAutoExecGate(disk, "IN")
-	patchMGTFutureAndPast(disk, "IN")
 
 	if err := disk.Save(outputPath); err != nil {
 		log.Fatalf("save %s: %v", outputPath, err)
@@ -196,63 +154,4 @@ func main() {
 	fmt.Printf("stub:    %d bytes     T6S3\n", len(stubBin))
 	fmt.Printf("IN:      %d bytes     T6S4\n", len(in))
 	fmt.Printf("Built %s\n", outputPath)
-}
-
-// patchAutoExecGate sets the body-header auto-exec gate bytes for
-// the named CODE file to 0xff 0xff. Required because samfile's
-// FileHeader.Raw() hard-codes bytes 5-6 to 0x00 0x00 instead of
-// emitting the ExecutionAddress mirror — a samfile gap (see
-// UPSTREAM-GAPS in the commit body / PR description).
-func patchAutoExecGate(disk *samfile.DiskImage, name string) {
-	_, fe := findFileEntry(disk, name)
-	off := sectorByteOffset(fe.FirstSector.Track, fe.FirstSector.Sector)
-	disk[off+5] = 0xff
-	disk[off+6] = 0xff
-}
-
-// patchStartPage forces the body-header StartPage byte (offset 8)
-// AND its mirror in the dir entry (raw[0xEC]) for the named file
-// to value. AddCodeFile derives StartPage from the load address;
-// some canonical disks (e.g. FRED 02 samdos2) use decorative high
-// bits that ROM masks off but that matter for byte-perfect parity.
-func patchStartPage(disk *samfile.DiskImage, name string, value byte) {
-	slot, fe := findFileEntry(disk, name)
-	off := sectorByteOffset(fe.FirstSector.Track, fe.FirstSector.Sector)
-	disk[off+8] = value
-	disk[slot*256+0xEC] = value
-}
-
-// patchMGTFutureAndPast mirrors the 9-byte body header into the
-// directory entry's MGTFutureAndPast field (dir bytes 0xD3..0xDB).
-// AddCodeFile leaves this region zeroed, but the canonical SAMDOS
-// SAVE convention populates it; AddBasicFile already does the right
-// thing internally, so this is only needed after AddCodeFile.
-func patchMGTFutureAndPast(disk *samfile.DiskImage, name string) {
-	slot, fe := findFileEntry(disk, name)
-	bodyOff := sectorByteOffset(fe.FirstSector.Track, fe.FirstSector.Sector)
-	dirOff := slot * 256
-	for i := 0; i < 9; i++ {
-		disk[dirOff+0xD3+i] = disk[bodyOff+i]
-	}
-}
-
-func findFileEntry(disk *samfile.DiskImage, name string) (int, *samfile.FileEntry) {
-	for i, fe := range disk.DiskJournal() {
-		if fe.Used() && fe.Name.String() == name {
-			return i, fe
-		}
-	}
-	log.Fatalf("file %q not found in disk journal", name)
-	panic("unreachable")
-}
-
-// sectorByteOffset reports the byte offset within the disk image
-// where the named sector's data begins. SAM .mgt geometry is
-// cylinder-interleaved: each cylinder = side-0 (5120 B) + side-1
-// (5120 B). The track-byte's high bit selects the side; the low
-// 7 bits select the cylinder.
-func sectorByteOffset(track, sector byte) int {
-	side := int(track) >> 7
-	cyl := int(track) & 0x7f
-	return side*5120 + (int(sector)-1)*512 + cyl*10240
 }
