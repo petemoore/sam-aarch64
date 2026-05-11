@@ -64,15 +64,6 @@ RUN git clone --depth 1 https://github.com/simonowen/pyz80 /tmp/pyz80 \
  && pip install --break-system-packages /tmp/pyz80 \
  && rm -rf /tmp/pyz80
 
-# ── samfile ──────────────────────────────────────────────────────────
-# Pete's Go-based MGT image inspector / code-file injector. The `/v3`
-# suffix on the module path is mandatory (Go's /vN semantic import
-# versioning); without it `go install` falls back to a pre-v2 release
-# that lacks the `add` subcommand the build-disk.sh script depends on.
-RUN go install github.com/petemoore/samfile/v3/cmd/samfile@latest \
- && cp /root/go/bin/samfile /usr/local/bin/samfile \
- && rm -rf /root/go /root/.cache
-
 # ── Patched SimCoupé ─────────────────────────────────────────────────
 # Stock apt simcoupé lacks the `-exitonhalt` flag we need for
 # deterministic batch exit, so we build from source against a pinned
@@ -106,6 +97,12 @@ RUN go install github.com/petemoore/samfile/v3/cmd/samfile@latest \
 # Bumping SIMCOUPE_SHA is the one-line knob for picking up upstream
 # fixes; the patch file should apply cleanly against the new SHA, or
 # the build will fail loudly at `git apply --check`.
+#
+# This block is deliberately placed BEFORE the samfile/build-disk
+# layer below: SimCoupé inputs (the SHA + patch file) change rarely,
+# while the Go layer changes on most pushes during active development.
+# Keeping this layer earlier in the chain means it stays cached through
+# normal code iterations.
 ARG SIMCOUPE_SHA=0f74cff52b96841fe0efa01ffd1a6875b253e72a
 COPY simcoupe-exitonhalt.patch /tmp/
 RUN git clone https://github.com/simonowen/simcoupe.git /tmp/simcoupe \
@@ -120,6 +117,25 @@ RUN git clone https://github.com/simonowen/simcoupe.git /tmp/simcoupe \
  && cp build/_deps/saasound-build/libSAASound.so.3 /usr/local/lib/ \
  && ldconfig \
  && rm -rf /tmp/simcoupe /tmp/simcoupe-exitonhalt.patch
+
+# ── samfile + build-disk ─────────────────────────────────────────────
+# Pete's Go-based MGT inspector / file-injector. The `/v3` suffix is
+# mandatory (Go's /vN semantic import versioning). The CLI binary is
+# used by tools/extract-output.sh, tools/check-toolchain.sh, and the
+# CI post-mortem step (`samfile ls`, `samfile cat`).
+#
+# Following that, build-disk (the Go program at tools/build-disk/) is
+# compiled in-image. It is the M0 disk constructor (the bash+Python
+# tools/build-disk.sh predecessor was retired in favour of this) and
+# imports the samfile sambasic package. Building both in one RUN step
+# lets the second build re-use the module cache the first one
+# populated, then drops the cache at the end so the final image stays
+# slim.
+COPY build-disk /tmp/build-disk
+RUN go install github.com/petemoore/samfile/v3/cmd/samfile@latest \
+ && cp /root/go/bin/samfile /usr/local/bin/samfile \
+ && cd /tmp/build-disk && go build -o /usr/local/bin/build-disk . \
+ && rm -rf /tmp/build-disk /root/go /root/.cache
 
 WORKDIR /work
 CMD ["sleep", "infinity"]
