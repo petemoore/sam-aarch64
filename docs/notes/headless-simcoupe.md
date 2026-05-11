@@ -102,54 +102,45 @@ investigating why a real-world disk like FRED 56 boots or doesn't —
 see `docs/notes/fred-disk-inspection.md` for an example. Comes from
 the `imagemagick` apt package.
 
-## Building the patched SimCoupé inside the container
+## Getting the dev container
 
-The dev container does NOT pre-build SimCoupé — keep the patch
-iteration loop fast. From inside the container:
+The pre-built image is published to GitHub Container Registry by the
+project's CI workflow on every push to `main`. It's the same image CI
+runs the round-trip oracle against, so local and CI are guaranteed
+identical:
 
 ```bash
-# Pinned upstream commit (cf. .github/workflows/ci.yml).
-PINNED_SHA=0f74cff52b96841fe0efa01ffd1a6875b253e72a
+docker pull ghcr.io/petemoore/sam-aarch64-dev:latest
 
-cd /tmp
-rm -rf simcoupe
-git clone --depth 1 https://github.com/simonowen/simcoupe.git
-cd simcoupe
-git fetch --depth=1 origin "$PINNED_SHA"
-git checkout "$PINNED_SHA"
-git apply --check /work/tools/simcoupe-exitonhalt.patch  # sanity check
-git apply /work/tools/simcoupe-exitonhalt.patch
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j"$(nproc)"
-cp build/simcoupe /usr/local/bin/simcoupe
+cd /Users/pmoore/git/sam-aarch64
+docker run -d --name sam-aarch64-ci \
+    -v "$PWD:/work" -w /work \
+    ghcr.io/petemoore/sam-aarch64-dev:latest sleep infinity
+docker exec -it sam-aarch64-ci bash
 ```
 
-After this, `make ci` from `/work` should run end-to-end.
+The image is multi-arch (`linux/amd64` + `linux/arm64`); Docker picks
+the variant matching your host. On Apple Silicon you get native arm64.
 
-## Recreating the dev container from scratch
+The image has SimCoupé, pyz80, samfile, and the aarch64 cross binutils
+pre-installed, along with the SimCoupé ROM resources at
+`/usr/local/share/simcoupe/`. From inside the container, `make ci` in
+`/work` runs the whole round-trip.
 
-When the container is gone (host reboot, `docker rm`, etc.):
+### Building the image locally (instead of pulling)
+
+If you want to test a Dockerfile change before pushing, or you're
+working offline:
 
 ```bash
 cd /Users/pmoore/git/sam-aarch64
-docker build -t sam-aarch64-dev:latest -f tools/Dockerfile.dev tools/
+docker build -t sam-aarch64-dev:local -f tools/Dockerfile.dev tools/
 docker run -d --name sam-aarch64-ci \
     -v "$PWD:/work" -w /work \
-    sam-aarch64-dev:latest sleep infinity
-# On Apple Silicon the image is arm64 by default, which is fine for
-# dev. Add `--platform linux/amd64` at both build and run if you want
-# CI-runner parity (amd64 + emulation cost).
-docker exec sam-aarch64-ci bash -c '
-    PINNED_SHA=0f74cff52b96841fe0efa01ffd1a6875b253e72a
-    cd /tmp && git clone --depth 1 https://github.com/simonowen/simcoupe.git
-    cd simcoupe && git fetch --depth=1 origin "$PINNED_SHA"
-    git checkout "$PINNED_SHA"
-    git apply /work/tools/simcoupe-exitonhalt.patch
-    cmake -B build -DCMAKE_BUILD_TYPE=Release
-    cmake --build build -j$(nproc)
-    cp build/simcoupe /usr/local/bin/simcoupe
-'
+    sam-aarch64-dev:local sleep infinity
 ```
+
+Same image, just locally-tagged. Equivalent in every other way.
 
 ## Smoke test
 
@@ -161,15 +152,43 @@ docker exec sam-aarch64-ci bash -lc '
 '
 ```
 
+## Working on the simcoupé patch
+
+The image pre-builds SimCoupé from `tools/simcoupe-exitonhalt.patch`,
+so changing the patch normally requires rebuilding the image (slow,
+multi-arch, ~minutes) before you can test the change. To iterate on
+the patch faster, rebuild SimCoupé in-place inside an existing
+container instead:
+
+```bash
+docker exec sam-aarch64-ci bash -lc '
+    PINNED_SHA=0f74cff52b96841fe0efa01ffd1a6875b253e72a
+    cd /tmp && rm -rf simcoupe
+    git clone https://github.com/simonowen/simcoupe.git
+    cd simcoupe && git fetch --depth=1 origin "$PINNED_SHA"
+    git checkout "$PINNED_SHA"
+    git apply --check /work/tools/simcoupe-exitonhalt.patch
+    git apply /work/tools/simcoupe-exitonhalt.patch
+    cmake -B build -DCMAKE_BUILD_TYPE=Release
+    cmake --build build -j$(nproc)
+    cmake --install build
+    cp build/_deps/saasound-build/libSAASound.so.3 /usr/local/lib/
+    ldconfig
+'
+```
+
+That replaces `/usr/local/bin/simcoupe` and the ROM resources without
+rebuilding the whole Docker image. When you're happy with the patch,
+commit it and let CI rebuild the image properly.
+
 ## Related files
 
-- `tools/Dockerfile.dev` — container recipe
-- `tools/simcoupe-exitonhalt.patch` — vendored simcoupe patch
-- `tools/run-simcoupe.sh` — invocation wrapper used by `make`
-- `.github/workflows/ci.yml` — CI recipe (apt-installs the same packages
-  inline; keep in sync)
-- `docs/notes/m0-status.md` — current state of the M0 milestone
-- `docs/notes/simcoupe-batch.md` — historical/M0-Task-1 spike (this
-  document supersedes its headless-environment claims)
+- `tools/Dockerfile.dev` — image recipe (single source of truth for CI
+  and local dev).
+- `tools/simcoupe-exitonhalt.patch` — vendored SimCoupé patch.
+- `tools/run-simcoupe.sh` — invocation wrapper used by `make`.
+- `.github/workflows/ci.yml` — builds + publishes the image; runs the
+  round-trip in it.
+- `docs/notes/m0-status.md` — current state of the M0 milestone.
 - `docs/notes/fred-disk-inspection.md` — example of using ImageMagick
-  `import` to verify a real disk boots
+  `import` to verify a real disk boots.

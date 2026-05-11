@@ -1,12 +1,14 @@
-# Dev container for the M0 round-trip oracle and Phase-1 assembler work.
+# Dev image for sam-aarch64 — the M0 round-trip oracle and Phase-1
+# assembler work.
 #
-# Mirrors the GitHub Actions ubuntu-latest runner closely enough that
-# fixes which work locally also work in CI. This Dockerfile is the
-# *developer-side* single source of truth for what's installed.
-# .github/workflows/ci.yml keeps its own inline apt-install steps as
-# the canonical CI recipe — they should be kept in step with this file.
+# Single source of truth for both local development AND GitHub Actions
+# CI. `.github/workflows/ci.yml` builds this image and publishes it to
+# `ghcr.io/petemoore/sam-aarch64-dev:<tag>`; the CI test job pulls the
+# same image to run `make ci`. Local devs `docker pull` it too. One
+# recipe everywhere.
 #
-# Usage from the project root:
+# Build context is `tools/` (so the vendored simcoupé patch is at the
+# root of the context):
 #
 #     docker build -t sam-aarch64-dev:latest -f tools/Dockerfile.dev tools/
 #     docker run -d --name sam-aarch64-ci \
@@ -14,30 +16,27 @@
 #         sam-aarch64-dev:latest sleep infinity
 #     docker exec -it sam-aarch64-ci bash
 #
-# On Apple Silicon the image builds as arm64 by default, which is the
-# fast path for dev. The Z80 / aarch64 / Go / Python tooling produces
-# architecture-independent output; CI runs on amd64 ubuntu-latest but
-# uses inline apt installs (not this Dockerfile) so dev/CI arch
-# divergence doesn't affect artefacts. Pass `--platform linux/amd64`
-# at BOTH build and run if you specifically want amd64 parity.
+# Inside the container, the image already has `simcoupe`, `pyz80`,
+# `samfile`, and the aarch64 cross binutils on PATH plus the simcoupé
+# ROM resources installed at `/usr/local/share/simcoupe/`. `make ci`
+# just works.
 #
-# Then inside the container, follow docs/notes/headless-simcoupe.md to
-# build the patched SimCoupé and run the round-trip with `make ci`.
-#
-# The simcoupe binary is intentionally NOT pre-built into this image —
-# rebuilding is fast (~30s) and keeps iteration on
-# tools/simcoupe-exitonhalt.patch out of the image-rebuild cycle.
+# On Apple Silicon, `docker pull` will fetch the native arm64 manifest
+# from the published image (multi-arch build covers amd64 + arm64).
+# If you're iterating on `simcoupe-exitonhalt.patch` itself, rebuild
+# in-container per `docs/notes/headless-simcoupe.md` rather than
+# rebuilding the image each time.
 
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System packages.
-#   build-essential cmake git              — generic build tooling
-#   libsdl2-dev libfmt-dev zlib1g-dev      — simcoupe build deps
-#   libpng-dev libsamplerate0-dev          — more simcoupe build deps
+# ── System packages ──────────────────────────────────────────────────
+#   build-essential cmake git              — generic build + simcoupé build
+#   libsdl2-dev libfmt-dev zlib1g-dev      — simcoupé build deps
+#   libpng-dev libsamplerate0-dev          — more simcoupé build deps
 #   xvfb libgl1-mesa-dri mesa-utils        — headless display + software GL
-#   imagemagick                            — `import` for screenshots
+#   imagemagick                            — `import` for ad-hoc screenshots
 #   binutils-aarch64-linux-gnu             — GNU `as` for the round-trip oracle
 #   python3-pip golang-go                  — pyz80 + samfile install
 #   ca-certificates curl                   — TLS for downstream clones
@@ -51,24 +50,76 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Symlink the aarch64 cross prefix our scripts expect.
+# ── aarch64 cross-prefix symlinks ────────────────────────────────────
+# Our build scripts call `aarch64-none-elf-as`/-objcopy; apt ships
+# `aarch64-linux-gnu-*`. The two are interchangeable for our bare-metal
+# `.text`-extraction use; the symlinks let the scripts not care.
 RUN ln -s /usr/bin/aarch64-linux-gnu-as      /usr/local/bin/aarch64-none-elf-as \
  && ln -s /usr/bin/aarch64-linux-gnu-objcopy /usr/local/bin/aarch64-none-elf-objcopy
 
-# pyz80 — the Z80 assembler, vendored from upstream as a Python package.
-# The legacy single-file `pyz80.py` is gone; v1.3.0+ is installed via pip
-# and drops a `pyz80` console-script on PATH.
+# ── pyz80 ────────────────────────────────────────────────────────────
+# The Z80 assembler. v1.3.0+ is a proper Python package — pip install
+# drops a `pyz80` console-script on PATH, no shebang/wrapper gymnastics.
 RUN git clone --depth 1 https://github.com/simonowen/pyz80 /tmp/pyz80 \
  && pip install --break-system-packages /tmp/pyz80 \
  && rm -rf /tmp/pyz80
 
-# samfile — Pete's Go-based MGT image inspector and code-file injector.
-# IMPORTANT: the `/v3` suffix on the module path is mandatory; without
-# it `go install` falls back to the pre-v2 release which lacks the
-# `add` subcommand we depend on.
+# ── samfile ──────────────────────────────────────────────────────────
+# Pete's Go-based MGT image inspector / code-file injector. The `/v3`
+# suffix on the module path is mandatory (Go's /vN semantic import
+# versioning); without it `go install` falls back to a pre-v2 release
+# that lacks the `add` subcommand the build-disk.sh script depends on.
 RUN go install github.com/petemoore/samfile/v3/cmd/samfile@latest \
  && cp /root/go/bin/samfile /usr/local/bin/samfile \
  && rm -rf /root/go /root/.cache
+
+# ── Patched SimCoupé ─────────────────────────────────────────────────
+# Stock apt simcoupé lacks the `-exitonhalt` flag we need for
+# deterministic batch exit, so we build from source against a pinned
+# upstream SHA and apply the vendored patch.
+#
+# Artefacts placed in the image:
+#   /usr/local/bin/simcoupe                — binary
+#   /usr/local/share/simcoupe/             — RESOURCE_DIR; baked into
+#                                            the binary as
+#                                            CMAKE_INSTALL_FULL_DATAROOTDIR/
+#                                            simcoupe. Holds samcoupe.rom,
+#                                            sp0256-al2.bin, atom.rom,
+#                                            atomlite.rom, etc. If these
+#                                            are missing, simcoupé pops
+#                                            two modal MsgBox warnings at
+#                                            init that block the Z80
+#                                            emulation loop — every
+#                                            CI failure during M0 was
+#                                            this. See memory:
+#                                            simcoupe_install_requirements.md.
+#   /usr/local/lib/libSAASound.so.3        — sound chip emulation, fetched
+#                                            by CMake FetchContent into
+#                                            build/_deps/. `cmake --install`
+#                                            strips RUNPATH, so the binary
+#                                            can't find it at the build-tree
+#                                            path post-install. Copying to
+#                                            a standard system lib dir +
+#                                            ldconfig keeps the dynamic
+#                                            loader happy.
+#
+# Bumping SIMCOUPE_SHA is the one-line knob for picking up upstream
+# fixes; the patch file should apply cleanly against the new SHA, or
+# the build will fail loudly at `git apply --check`.
+ARG SIMCOUPE_SHA=0f74cff52b96841fe0efa01ffd1a6875b253e72a
+COPY simcoupe-exitonhalt.patch /tmp/
+RUN git clone https://github.com/simonowen/simcoupe.git /tmp/simcoupe \
+ && cd /tmp/simcoupe \
+ && git fetch --depth=1 origin "$SIMCOUPE_SHA" \
+ && git checkout "$SIMCOUPE_SHA" \
+ && git apply --check /tmp/simcoupe-exitonhalt.patch \
+ && git apply /tmp/simcoupe-exitonhalt.patch \
+ && cmake -B build -DCMAKE_BUILD_TYPE=Release \
+ && cmake --build build -j"$(nproc)" \
+ && cmake --install build \
+ && cp build/_deps/saasound-build/libSAASound.so.3 /usr/local/lib/ \
+ && ldconfig \
+ && rm -rf /tmp/simcoupe /tmp/simcoupe-exitonhalt.patch
 
 WORKDIR /work
 CMD ["sleep", "infinity"]

@@ -5,144 +5,117 @@ on:
     branches: [main]
   pull_request:
 
+# Workflow has two jobs:
+#
+#   build-image: builds the dev image from tools/Dockerfile.dev and pushes
+#                it to ghcr.io. Multi-arch (amd64 + arm64) via QEMU. Runs
+#                on every push/PR; nothing-changed runs are cheap because
+#                the registry-mode buildx cache makes most layers no-ops.
+#
+#   test:        pulls the image just published by build-image, runs the
+#                M0 round-trip oracle inside it.
+#
+# Both jobs see the same `github.sha`, so the test job can refer to the
+# image by `sha-<full-sha>` tag and is guaranteed to find it.
+
+permissions:
+  contents: read
+  packages: write   # build-image pushes to ghcr.io
+
+env:
+  IMAGE_NAME: ghcr.io/petemoore/sam-aarch64-dev
+
 jobs:
-  m0-roundtrip:
+  build-image:
     runs-on: ubuntu-latest
-
-    env:
-      # SDL dummy drivers — overridden at the round-trip step. Set here
-      # so any non-round-trip simcoupe invocation (toolchain check etc.)
-      # doesn't try to open ALSA/video.
-      SDL_VIDEODRIVER: dummy
-      SDL_AUDIODRIVER: dummy
-
     steps:
       - uses: actions/checkout@v4
 
-      # ── 1. GNU aarch64 binutils ──────────────────────────────────────────
-      - name: Install GNU aarch64 binutils
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y binutils-aarch64-linux-gnu
-          # Symlink from the cross prefix our scripts expect.
-          sudo ln -s /usr/bin/aarch64-linux-gnu-as      /usr/local/bin/aarch64-none-elf-as
-          sudo ln -s /usr/bin/aarch64-linux-gnu-objcopy /usr/local/bin/aarch64-none-elf-objcopy
+      # QEMU emulation lets buildx produce linux/arm64 from this amd64
+      # runner. Cost: arm64 simcoupé build runs emulated (~5-10x slower
+      # than native), but with the registry cache it's a one-time cost
+      # per simcoupé-patch change.
+      - uses: docker/setup-qemu-action@v3
 
-      # ── 2. Patched SimCoupé (built from source) ──────────────────────────
-      #
-      # Stock apt simcoupe (v1.x) does NOT have the -exitonhalt flag required
-      # for deterministic batch exit. We clone upstream at a pinned SHA, apply
-      # the vendored patch (tools/simcoupe-exitonhalt.patch), build, and
-      # `cmake --install` so resources land at the path SimCoupé hard-codes.
-      #
-      # Pinned upstream commit: 0f74cff52b96841fe0efa01ffd1a6875b253e72a
-      # ("Updated version to v1.2.15") — parent of the local exit-on-halt branch.
-      #
-      # We deliberately don't cache the build. The previous cache stored only
-      # `simcoupe-build/build/simcoupe`, missing two runtime dependencies:
-      # the resources (`samcoupe.rom`, `sp0256-al2.bin`, etc. — which SimCoupé
-      # looks for at `/usr/local/share/simcoupe/` from `RESOURCE_DIR`) and
-      # `libSAASound.so.3` (fetched via CMake FetchContent, linked at the
-      # build path via RUNPATH). On cache-hit the binary loaded with neither,
-      # which (a) prevents simcoupe from finding `samcoupe.rom`, popping a
-      # modal that blocks the Z80 from ever executing, and (b) on a fresh
-      # runner with no `_deps/` dir, would refuse to load at all. Always
-      # rebuilding (~30s total) avoids both issues; if build time becomes a
-      # problem later, the cache should include the install destination
-      # (/usr/local/share/simcoupe + /usr/local/bin/simcoupe + the .so).
+      - uses: docker/setup-buildx-action@v3
 
-      - name: Install SimCoupé build dependencies
-        run: |
-          sudo apt-get install -y \
-              build-essential cmake git \
-              libsdl2-dev libfmt-dev zlib1g-dev libpng-dev libsamplerate0-dev
-
-      - name: Clone, patch, build, and install SimCoupé
-        run: |
-          git clone https://github.com/simonowen/simcoupe.git simcoupe-build
-          cd simcoupe-build
-          git checkout 0f74cff52b96841fe0efa01ffd1a6875b253e72a
-          # Verify the patch applies cleanly before actually applying it.
-          git apply --check ../tools/simcoupe-exitonhalt.patch
-          git apply ../tools/simcoupe-exitonhalt.patch
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
-          # kosarev/z80 is fetched via CMake FetchContent — network required here.
-          cmake --build build -j$(nproc)
-          # `cmake --install` puts the simcoupe binary at /usr/local/bin and
-          # the resources (samcoupe.rom, atom.rom, atomlite.rom, sp0256-al2.bin,
-          # SimCoupe.bmp) at /usr/local/share/simcoupe — the latter is the
-          # baked-in RESOURCE_DIR (`CMAKE_INSTALL_FULL_DATAROOTDIR/simcoupe`).
-          # Without these, simcoupe pops two modal dialogs ("Error loading ROM"
-          # and "Error loading SP0256 allophone data") that block the Z80
-          # emulation loop entirely — Z80 never runs → 30s timeout.
-          sudo cmake --install build
-          # `cmake --install` strips the binary's RUNPATH, so simcoupe can no
-          # longer find libSAASound.so.3 at its build-tree path. Copy the .so
-          # to a standard system lib dir and refresh the loader cache.
-          sudo cp build/_deps/saasound-build/libSAASound.so.3 /usr/local/lib/
-          sudo ldconfig
-          # Sanity-check the runtime linkage.
-          ldd /usr/local/bin/simcoupe | grep SAA
-
-      # ── 3. Python + pyz80 ────────────────────────────────────────────────
-      - uses: actions/setup-python@v5
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          python-version: "3.x"
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install pyz80
-        run: |
-          # pyz80 is now a proper Python package (pyproject.toml, src/pyz80/).
-          # `pip install` from the cloned repo creates a `pyz80` console-script
-          # entry point on PATH, no shebang/wrapper gymnastics needed.
-          git clone https://github.com/simonowen/pyz80 /tmp/pyz80
-          pip install /tmp/pyz80
-          # actions/setup-python@v5 puts pip's bin dir on PATH automatically.
-          which pyz80 && pyz80 --help | head -1 || true
-
-      # ── 4. Go + samfile ──────────────────────────────────────────────────
-      - uses: actions/setup-go@v5
+      # Tag strategy:
+      #   sha-<full-sha>      — immutable, always set, used by the test job
+      #                         to refer to "the image we just built"
+      #   latest              — only on the default branch (main)
+      #   pr-<N>              — only for PR events
+      # The test job uses sha-<full-sha> for reproducibility; consumers
+      # locally usually want :latest.
+      - id: meta
+        uses: docker/metadata-action@v5
         with:
-          go-version: "stable"
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=ref,event=pr,prefix=pr-
 
-      - name: Install samfile
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: tools
+          file: tools/Dockerfile.dev
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Registry-mode buildx cache: each layer cached as an image
+          # blob at the buildcache tag. Cleaner than actions/cache (no
+          # size limits, properly de-duplicated across runs). Layers
+          # invalidated only when their inputs change — the simcoupé
+          # build layer rebuilds only when the patch file or the SHA
+          # arg change.
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build-image
+    container:
+      image: ghcr.io/petemoore/sam-aarch64-dev:sha-${{ github.sha }}
+      # Same-owner private packages still need credentials for the
+      # runner to pull them. If the package is public, this is harmless.
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      SDL_VIDEODRIVER: x11
+      SDL_AUDIODRIVER: dummy
+    steps:
+      - uses: actions/checkout@v4
+
+      # Container has everything pre-installed; we just need an X
+      # display for SimCoupé. Xvfb is already on PATH via the image's
+      # apt step. 24-bit depth is required for Mesa llvmpipe to satisfy
+      # SDL_RENDERER_ACCELERATED (default 8-bit is too shallow).
+      - name: Start Xvfb
         run: |
-          # samfile's module path is `github.com/petemoore/samfile/v3`
-          # (Go's /vN semantic import versioning); without the `/v3` suffix
-          # `go install` falls back to the pre-v2 release which lacks the
-          # `add` subcommand we depend on.
-          go install github.com/petemoore/samfile/v3/cmd/samfile@latest
-          echo "$HOME/go/bin" >> "$GITHUB_PATH"
-
-      # ── 5. Toolchain smoke test ──────────────────────────────────────────
-      - name: Verify toolchain
-        run: make check
-
-      # ── 6. M0 round-trip oracle ──────────────────────────────────────────
-      #
-      # SimCoupé needs three init subsystems to all succeed before CPU::Run
-      # is called (Base/Main.cpp:55):
-      #   1. Video — needs a real renderer (SDL dummy has none). xvfb provides
-      #      an invisible X display that SDL_VIDEODRIVER=x11 attaches to;
-      #      Mesa's llvmpipe satisfies SDL_RENDERER_ACCELERATED. xvfb default
-      #      8-bit depth is too shallow → use -screen 0 1280x1024x24.
-      #   2. Sound — calls SDL_OpenAudioDevice. ALSA fails with no PCM card 0.
-      #      SDL_AUDIODRIVER=dummy gives SDL a no-op audio backend that
-      #      always opens successfully — purely environmental, no patch.
-      #   3. Input/Frame/CPU/UI — succeed unconditionally on Linux.
-      - name: Install xvfb and Mesa software GL
-        run: sudo apt-get install -y xvfb libgl1-mesa-dri mesa-utils
+          Xvfb :99 -screen 0 1280x1024x24 &
+          # Give the X server a moment to listen.
+          sleep 1
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
 
       - name: Round-trip oracle
-        env:
-          SDL_VIDEODRIVER: x11        # override job-level dummy; need real renderer
-          SDL_AUDIODRIVER: dummy      # already set at job level; explicit here
-        run: xvfb-run -a -s "-screen 0 1280x1024x24" make ci
+        run: make ci
 
-      # Diagnostic on failure: inspect the disk after the run. The stub
-      # writes `OUT` to disk; if OUT is there with the right bytes, the
-      # stub fully ran. If OUT is absent, the stub didn't reach HSAVE.
-      # If OUT has wrong contents, HSAVE ran but something else is off.
-      # Kept from the M0 investigation — small cost, high diagnostic value.
+      # Diagnostic on failure: inspect the disk image. The stub writes
+      # `OUT` to disk via HSAVE before its magic-port exit. If OUT is
+      # absent the stub didn't get that far; if its bytes are wrong the
+      # stub ran but with wrong UIFA contents. Far higher signal than
+      # a screenshot (`import -window root` doesn't capture SDL's
+      # window under Xvfb anyway).
       - name: Post-mortem disk inspection
         if: failure()
         run: |
