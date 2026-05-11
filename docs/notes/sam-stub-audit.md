@@ -6,9 +6,18 @@
 `docs/sam/sam-coupe_tech-man_v3-0.txt`, and existing
 `docs/notes/sam-{file-io,paging,file-header}.md`.
 
+> **Update (2026-05-11):** Fix #1 (switch to `HSAVE`) was adopted and
+> M0 is now closed. The audit body below references an `OUT (&DEAD), &C0`
+> exit sequence because that was the stub's exit mechanism at the time of
+> the audit. The stub today exits via `DI; HALT` alone — see
+> `docs/notes/headless-simcoupe.md` § "Why the stub ends in `DI; HALT`"
+> for why the magic-port mechanism was removed. The HOFLE/SBYT/CFSM
+> findings below (bugs #1–#3) are unchanged and remain the canonical
+> reference for SAMDOS hook semantics.
+
 This audit was triggered by the symptom: the patched SimCoupé times out
 at 30 s when running the stub end-to-end. The stub never reaches its
-`OUT (&DEAD), &C0` exit. `docs/notes/sam-file-io.md` is the project's
+exit sequence. `docs/notes/sam-file-io.md` is the project's
 own pre-Task-7 spike — this audit confirms the calling convention it
 documents but identifies a hard real bug in canonical SAMDOS 2's
 `HOFLE` / `SBYT` / `CFSM` paths that breaks the stub.

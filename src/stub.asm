@@ -80,14 +80,13 @@ start:          di                     ; one-shot batch program; no interrupts n
                 rst     8
                 defb    HOOK_HSAVE     ; 132 — writes header, body, dir entry; longjmps on error
 
-; -- magic exit signal -----------------------------------------------------
-; The patched SimCoupé's `-exitonhalt 1` flag detects an OUT to port &DEAD
-; with value &C0 and quits cleanly. No real SAM hardware decodes port &DEAD,
-; so this is unambiguous. HALT remains as a defence-in-depth fallback.
-                ld      bc, &dead
-                ld      a, &c0
-                out     (c), a
-                halt                   ; defence in depth
+; -- exit signal -----------------------------------------------------------
+; The patched SimCoupé's `-exitonhalt 1` flag quits when the Z80
+; executes HALT with IFF1=0. The trailing DI is load-bearing: SAMDOS's
+; RST 8 dispatcher (ROM `PTDOS`) does `EI` inside the hook window, so
+; the `di` at `start:` has been undone by the time we get here.
+                di
+                halt
 
 fail:           ld      a, &02         ; red border = error indicator for debug
                 out     (&fe), a

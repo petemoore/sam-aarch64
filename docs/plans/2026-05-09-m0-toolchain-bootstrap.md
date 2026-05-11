@@ -1,5 +1,11 @@
 # M0 — Toolchain Bootstrap Implementation Plan
 
+> **Status (2026-05-11): COMPLETED.** M0 shipped via PR #1
+> (`m0-toolchain-bootstrap`) on 2026-05-10. The plan is retained for
+> historical reference — the unchecked `- [ ]` boxes below were the
+> work list at plan-time and are not pending. For current state see
+> `docs/notes/m0-status.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Wire up the entire dev-to-CI loop end-to-end with a stub Z80 program that emits one fixed `nop` instruction, so subsequent milestones (M1–M6) can iterate confidently against a working test harness.

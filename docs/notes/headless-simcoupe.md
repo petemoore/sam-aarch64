@@ -19,7 +19,7 @@ simcoupe -exitonhalt 1 -fullscreen 0 -firstrun 0 disk.mgt
 ```
 
 Exit codes:
-- `0` — Z80 hit either `DI; HALT` or the magic `OUT (&DEAD), &C0` sequence; clean.
+- `0` — Z80 hit `DI; HALT`; clean exit via the `-exitonhalt` patch.
 - `124` — `timeout` killed it (boot didn't reach the exit signal in time).
 - `134`, `139` etc. — crash; investigate.
 
@@ -180,6 +180,88 @@ docker exec sam-aarch64-ci bash -lc '
 That replaces `/usr/local/bin/simcoupe` and the ROM resources without
 rebuilding the whole Docker image. When you're happy with the patch,
 commit it and let CI rebuild the image properly.
+
+## Native macOS (no Docker)
+
+Native macOS works end-to-end with a few quirks. The stock
+`/Applications/SimCoupe.app` is unpatched, so the round-trip oracle's
+exit detection won't fire against it — the test would hit its 30s
+timeout. You need to build a patched binary from source.
+
+```bash
+# 1. Brew dep (one-time; sdl2 fmt libpng cmake assumed already present).
+brew install libsamplerate
+
+# 2. Clone simcoupé and apply the vendored patch.
+cd ~/git
+git clone https://github.com/simonowen/simcoupe.git   # if not already there
+cd simcoupe
+PINNED_SHA=0f74cff52b96841fe0efa01ffd1a6875b253e72a
+git fetch --depth=1 origin "$PINNED_SHA"
+git checkout "$PINNED_SHA"
+git apply /Users/pmoore/git/sam-aarch64/tools/simcoupe-exitonhalt.patch
+
+# 3. Build. The non-obvious CMake hints:
+#    - CMAKE_PREFIX_PATH=/opt/homebrew so find_package(SDL2) finds brew SDL2
+#    - {CXX,C,OBJC}_FLAGS=-I/opt/homebrew/include because simcoupé uses
+#      both `#include "SDL2/SDL.h"` (needs parent on include path) and
+#      `#include <SDL_opengl.h>` (needs SDL2 dir itself), and the .m file
+#      compiles with the C/OBJC flag set, not the CXX one.
+cmake -B build -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_PREFIX_PATH=/opt/homebrew \
+    -DCMAKE_CXX_FLAGS=-I/opt/homebrew/include \
+    -DCMAKE_C_FLAGS=-I/opt/homebrew/include \
+    -DCMAKE_OBJC_FLAGS=-I/opt/homebrew/include
+cmake --build build -j
+
+# 4. Make the patched binary the one `make ci` picks up. Either:
+#    a) Replace /usr/local/bin/simcoupe symlink (requires sudo):
+sudo ln -sfn ~/git/simcoupe/build/SimCoupe.app/Contents/MacOS/SimCoupe \
+    /usr/local/bin/simcoupe
+#    b) Or put the .app's MacOS dir first on PATH per-session:
+export PATH=~/git/simcoupe/build/SimCoupe.app/Contents/MacOS:$PATH
+```
+
+Then `make ci` from `/Users/pmoore/git/sam-aarch64` should pass
+natively in ~1.5s.
+
+The build produces a full `SimCoupe.app/` bundle with the binary at
+`Contents/MacOS/SimCoupe` and ROM resources at `Contents/Resources/`.
+SDL's `SDL_GetBasePath()` resolves to the bundle's Resources/ directory
+automatically when the binary is invoked from inside the bundle
+structure — that's how simcoupé finds `samcoupe.rom` and
+`sp0256-al2.bin` without us having to set anything.
+
+### Why the stub ends in `DI; HALT`
+
+The Z80 stub in `src/stub.asm` ends with:
+
+```asm
+di
+halt              ; HALT with IFF1=0 — caught by sam_cpu::on_halt
+```
+
+The patched SimCoupé's `on_halt` override fires when the Z80 executes
+HALT with `IFF1=0`, sets a quit flag, and the main `Run()` loop exits
+on the next iteration. This is the conventional Z80 "we are done"
+idiom — a HALT with interrupts disabled can never be woken by a
+maskable interrupt, so it's unambiguous.
+
+The `di` immediately before `halt` is load-bearing. SAMDOS's RST 8
+dispatcher (ROM `PTDOS`) does `EI` inside the hook window, so the
+`di` at `start:` in the stub has been undone by the time we reach
+this point after HSAVE. Without the trailing `di`, `IFF1=1` and
+`on_halt`'s quit check correctly does not trigger.
+
+An earlier iteration of the patch added a second exit mechanism — a
+magic `OUT (&DEAD), &C0` port write caught by `sam_cpu::on_output` —
+in the belief that `on_halt` CRTP dispatch was unreliable on some
+platforms. That diagnosis was wrong: the underlying bug was the
+missing trailing `di`, not the dispatch. With the `di` in place,
+`on_halt` fires reliably on every toolchain tested (Apple clang on
+arm64, gcc-13 on Linux amd64+arm64, GHA `ubuntu-latest`). The
+`on_output` override was removed and the patch shrank to a single
+commit; the upstream PR (`simonowen/simcoupe#109`) reflects that.
 
 ## Related files
 

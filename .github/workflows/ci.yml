@@ -111,7 +111,7 @@ jobs:
         run: make ci
 
       # Diagnostic on failure: inspect the disk image. The stub writes
-      # `OUT` to disk via HSAVE before its magic-port exit. If OUT is
+      # `OUT` to disk via HSAVE before its `DI; HALT` exit. If OUT is
       # absent the stub didn't get that far; if its bytes are wrong the
       # stub ran but with wrong UIFA contents. Far higher signal than
       # a screenshot (`import -window root` doesn't capture SDL's

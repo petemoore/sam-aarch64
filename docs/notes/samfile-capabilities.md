@@ -1,9 +1,10 @@
 # `samfile` capabilities vs. `tools/build-disk.sh` — full audit
 
-Date: 2026-05-10. Branch: `m0-toolchain-bootstrap`. Latest samfile
-upstream: `e64f5d5` (`/Users/pmoore/git/samfile/.git`, `git log
---oneline`). Audit target: `tools/build-disk.sh` at HEAD (commit
-`457cac1` or later).
+Audit conducted 2026-05-10 against samfile upstream `e64f5d5`
+(`/Users/pmoore/git/samfile/.git`, `git log --oneline`) and
+`tools/build-disk.sh` at commit `457cac1`. Findings informed M0
+(now merged via PR #1) and remain accurate for current samfile;
+re-verify if either side moves.
 
 This document compares Pete's MGT-image tool `samfile` (`~/git/samfile/`)
 against the hand-rolled `tools/build-disk.sh` for the four files our M0
