@@ -258,21 +258,46 @@ func pageFormLengthFromBytes(b []byte) uint32 {
 // buildInjectedLine constructs the bytes for the injected control
 // line at InjectedLineNumber:
 //
-//	65279 LLIST 1 TO 65278: CALL 16384
+//	65279 POKE 23203,0: POKE 23204,0: LLIST 1 TO 65278: CALL 16384
+//
+// The two POKEs zero the XPTR sysvar (syntax-error pointer) at
+// 0x5AA3-0x5AA4 = 23203-23204. The SAM ROM compares each byte's
+// memory address against (XPTR) during LLIST iteration (OUTLNLP at
+// 0xF377) and emits a flashing '?' marker via PRFLQUERY (0xF56E)
+// when they match — XPTR's job is to highlight where a syntax error
+// was detected. Its value is persistent runtime state set wherever
+// the parser last touched, so without zeroing it the LLIST output
+// gains a spurious '?' at a non-deterministic position inside the
+// listed program. Zeroing XPTR points it at ROM address 0 (outside
+// the program area) so the equality test never fires.
+//
+// Subsequent parser activity (the LLIST statement itself) may move
+// XPTR to a new value inside line 65279, but that's outside the
+// LLIST range (1 TO 65278) so still no '?' artefact appears.
 //
 // On-disk layout:
 //   [MSB LSB LenLo LenHi]  4-byte line header
-//   <token bytes>          tokens for "LLIST 1 TO 65278: CALL 16384"
+//   <token bytes>          tokens for the line above
 //   0x0D                   line terminator
 func buildInjectedLine() []byte {
 	line := sambasic.Line{
 		Number: InjectedLineNumber,
 		Tokens: []sambasic.Token{
+			sambasic.POKE,                     // zero XPTR low byte
+			sambasic.Number(23203),
+			sambasic.String(","),
+			sambasic.Number(0),
+			sambasic.String(":"),
+			sambasic.POKE,                     // zero XPTR high byte
+			sambasic.Number(23204),
+			sambasic.String(","),
+			sambasic.Number(0),
+			sambasic.String(":"),
 			sambasic.LLIST,                    // 0xBE
-			sambasic.Number(1),                // "1" + FP form for 1
+			sambasic.Number(0),                // include line 0 (329 corpus files have a line 0)
 			sambasic.TO,                       // 0x8E
 			sambasic.Number(LListUpperBound),  // "65278" + FP form
-			sambasic.String(":"),              // statement separator
+			sambasic.String(":"),
 			sambasic.CALL,                     // 0xE4
 			sambasic.Number(HaltStubAddress),  // "16384" + FP form
 		},

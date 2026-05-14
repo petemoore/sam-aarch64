@@ -66,6 +66,7 @@ func main() {
 		startOffset    = flag.Int("skip", 0, "skip the first N jobs (resume support)")
 		limit          = flag.Int("limit", 0, "stop after N jobs (0 = all)")
 		deleteCaptures = flag.Bool("delete-captures", true, "delete simc####.txt after each run to avoid filling Documents/SimCoupe")
+		failFast       = flag.Bool("fail-fast", false, "exit (status 1) on the first DIFFER; print skip-position for resume")
 	)
 	flag.Parse()
 
@@ -134,15 +135,25 @@ func main() {
 	}
 	fmt.Fprintf(os.Stderr, "Enumerated %d (disk, file) pairs across %d disks.\n", len(jobs), len(disks))
 
-	// Open results TSV.
-	f, err := os.Create(*resultsPath)
-	if err != nil {
-		log.Fatalf("create %s: %v", *resultsPath, err)
+	// Open results TSV. When resuming (-skip > 0) and the file already
+	// exists, append; otherwise create-or-truncate with header.
+	var f *os.File
+	if *startOffset > 0 {
+		if existing, err := os.OpenFile(*resultsPath, os.O_APPEND|os.O_WRONLY, 0o644); err == nil {
+			f = existing
+		}
+	}
+	if f == nil {
+		var err error
+		f, err = os.Create(*resultsPath)
+		if err != nil {
+			log.Fatalf("create %s: %v", *resultsPath, err)
+		}
+		fmt.Fprintln(f, "status\tdisk\tfile\tdetail")
 	}
 	defer f.Close()
 	w := bufio.NewWriter(f)
 	defer w.Flush()
-	fmt.Fprintln(w, "status\tdisk\tfile\tdetail")
 
 	counts := map[string]int{}
 	start := time.Now()
@@ -164,6 +175,16 @@ func main() {
 		w.Flush()
 		if (i+1-*startOffset)%*progressEvery == 0 {
 			progressLine(os.Stderr, i+1, progressTotal, start, counts)
+		}
+		if *failFast && r.status == "DIFFER" {
+			progressLine(os.Stderr, i+1, progressTotal, start, counts)
+			fmt.Fprintf(os.Stderr, "\nfail-fast: first DIFFER at index %d\n", i)
+			fmt.Fprintf(os.Stderr, "  disk:   %s\n", filepath.Base(j.diskPath))
+			fmt.Fprintf(os.Stderr, "  file:   %s\n", j.fileName)
+			fmt.Fprintf(os.Stderr, "  detail: %s\n", r.detail)
+			fmt.Fprintf(os.Stderr, "\nresume with: -skip %d\n", i+1)
+			w.Flush()
+			os.Exit(1)
 		}
 	}
 	progressLine(os.Stderr, progressTotal, progressTotal, start, counts)
@@ -243,6 +264,9 @@ func runOne(captureBin, runSim, samdos2, samfileBin, samcoupeData string, j job,
 		return result{"FILE-ERROR", fmt.Sprintf("read file: %v", err)}
 	}
 	body := f.Body
+	if len(body) == 0 {
+		return result{"EMPTY-BODY", "0-byte BASIC body (corpus corruption)"}
+	}
 
 	// 2. Build test disk via llist-capture binary.
 	tmpDir, err := os.MkdirTemp("", "llist-sweep-")
@@ -278,6 +302,19 @@ func runOne(captureBin, runSim, samdos2, samfileBin, samcoupeData string, j job,
 	}
 	if deleteCaptures {
 		os.Remove(llistPath)
+	}
+	// Strip our injected control line 65279 (and anything after it).
+	// LLIST 0 TO 65278 still emits line 65279 when it's the only line
+	// in (or numerically beyond) the requested range — apparently
+	// SAM's range upper bound is not strictly enforced when the lower
+	// bound is 0. Truncate at the "\r\n65279 " marker; the prior
+	// line's trailing CR LF stays in place.
+	if cut := bytes.Index(llistData, []byte("\r\n65279 ")); cut >= 0 {
+		llistData = llistData[:cut+2] // keep the CR LF of the preceding line
+	} else if bytes.HasPrefix(llistData, []byte("65279 ")) {
+		// Edge case: capture is only the injected line (e.g. empty
+		// program). Treat as no real output.
+		llistData = nil
 	}
 	// 6. Render via samfile basic-to-text --lossy (LLIST-equivalent).
 	b2tCmd := exec.Command(samfileBin, "basic-to-text", "--lossy")
