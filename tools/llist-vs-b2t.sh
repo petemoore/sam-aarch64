@@ -39,19 +39,26 @@ if [ -z "$samfile_bin" ]; then
     fi
 fi
 
+llist_raw="$(mktemp -t llist-raw-XXXXXX.txt)"
 llist_out="$(mktemp -t llist-XXXXXX.txt)"
 b2t_out="$(mktemp -t b2t-XXXXXX.txt)"
-trap 'rm -f "$llist_out" "$b2t_out"' EXIT
+trap 'rm -f "$llist_raw" "$llist_out" "$b2t_out"' EXIT
 
 # Capture the SAM ROM's LLIST output via SimCoupé.
-"$repo_root/tools/llist-capture.sh" "$source_disk" "$basic_name" "$llist_out"
+"$repo_root/tools/llist-capture.sh" "$source_disk" "$basic_name" "$llist_raw"
+
+# Normalise line endings: SimCoupé's print-to-file emits 0D 0A
+# (CRLF) per the SAM printer convention. basic-to-text emits 0A
+# only. Strip the CRs. LC_ALL=C so `tr` treats high-bit SAM bytes
+# (0x80-0xFF for graphics / UDGs) as raw bytes rather than failing
+# on invalid UTF-8.
+LC_ALL=C tr -d '\r' < "$llist_raw" > "$llist_out"
 
 # Render the same file via samfile basic-to-text.
 "$samfile_bin" cat -i "$source_disk" -f "$basic_name" \
     | "$samfile_bin" basic-to-text > "$b2t_out"
 
-# Show the diff. Use `-u` for context; ignore trailing whitespace
-# variation by passing -b (treat all-whitespace as equivalent).
+# Show the diff. Use `-u` for context.
 if diff -u "$b2t_out" "$llist_out"; then
     echo "MATCH: basic-to-text output is identical to SAM ROM LLIST output." >&2
     exit 0
