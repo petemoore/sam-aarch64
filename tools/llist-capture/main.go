@@ -234,15 +234,50 @@ func injectControlLine(target *samfile.File, entry *samfile.FileEntry) ([]byte, 
 		return nil, 0, 0, 0, fmt.Errorf("expected 0xFF program-end at offset %d, got 0x%02X", nvarsOff-1, body[nvarsOff-1])
 	}
 
+	// If the body already contains a line numbered InjectedLineNumber
+	// (33 corpus files do — they use 65279 as their own auto-RUN
+	// trampoline), drop it. Otherwise post-injection we'd have two
+	// lines with the same number, which ROM treats as malformed.
+	progBody := body[:nvarsOff-1]                              // lines section, excluding 0xFF marker
+	varsArea := body[nvarsOff-1:]                              // 0xFF + vars (index into ORIGINAL body)
+	progBody, removed := removeLine(progBody, InjectedLineNumber)
+	nvarsOff -= uint32(removed)
+	numendOff -= uint32(removed)
+	savarsOff -= uint32(removed)
+
 	injected := buildInjectedLine()
 	injectedLen := uint32(len(injected))
 
-	out := make([]byte, 0, len(body)+len(injected))
-	out = append(out, body[:nvarsOff-1]...)  // lines, no 0xFF
-	out = append(out, injected...)           // injected line bytes
-	out = append(out, body[nvarsOff-1:]...)  // 0xFF + vars sections
+	out := make([]byte, 0, len(progBody)+len(injected)+len(varsArea))
+	out = append(out, progBody...)  // lines, no 0xFF, with any existing 65279 removed
+	out = append(out, injected...)  // our control line
+	out = append(out, varsArea...)  // 0xFF + vars sections
 
 	return out, nvarsOff + injectedLen, numendOff + injectedLen, savarsOff + injectedLen, nil
+}
+
+// removeLine walks SAM BASIC program-area bytes (4-byte headers +
+// body + 0x0D terminator per line) and removes the line whose number
+// matches `lineNo`. Returns the new bytes and the number of bytes
+// removed. If no line matches, returns the input unchanged.
+func removeLine(progBody []byte, lineNo uint16) ([]byte, int) {
+	i := 0
+	for i+3 < len(progBody) {
+		num := uint16(progBody[i])<<8 | uint16(progBody[i+1])
+		lineLen := uint16(progBody[i+2]) | uint16(progBody[i+3])<<8
+		total := 4 + int(lineLen)
+		if i+total > len(progBody) {
+			break // malformed; bail
+		}
+		if num == lineNo {
+			out := make([]byte, 0, len(progBody)-total)
+			out = append(out, progBody[:i]...)
+			out = append(out, progBody[i+total:]...)
+			return out, total
+		}
+		i += total
+	}
+	return progBody, 0
 }
 
 // pageFormLengthFromBytes decodes the 3-byte page-form length used in

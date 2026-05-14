@@ -324,17 +324,29 @@ func runOne(captureBin, runSim, samdos2, samfileBin, samcoupeData string, j job,
 	if err := b2tCmd.Run(); err != nil {
 		return result{"DETOK-ERROR", fmt.Sprintf("basic-to-text: %v", err)}
 	}
+	// Mirror the LLIST-side strip: 33 corpus files have their own
+	// line 65279 (typically an auto-RUN trampoline). llist-capture
+	// removes that line before injecting our control line, so the
+	// LLIST capture never contains the user's 65279 either. Strip
+	// it from samfile output too so the comparison stays apples-to-
+	// apples.
+	b2tBytes := b2tOut.Bytes()
+	if cut := bytes.Index(b2tBytes, []byte("\r\n65279 ")); cut >= 0 {
+		b2tBytes = b2tBytes[:cut+2]
+	} else if bytes.HasPrefix(b2tBytes, []byte("65279 ")) {
+		b2tBytes = nil
+	}
 
 	// 7. Direct byte compare — no normalisation needed because both
 	// sides should be byte-identical when --lossy is faithful to
 	// LLIST. (basic-to-text --lossy emits CR LF terminators to match
 	// LLIST, so we compare the raw LLIST capture, NOT the CR-stripped
 	// version.)
-	if bytes.Equal(b2tOut.Bytes(), llistData) {
+	if bytes.Equal(b2tBytes, llistData) {
 		return result{"MATCH", ""}
 	}
 	// Find first differing byte offset for a brief detail.
-	a := b2tOut.Bytes()
+	a := b2tBytes
 	b := llistData
 	offset := -1
 	for i := 0; i < len(a) && i < len(b); i++ {
