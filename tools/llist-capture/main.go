@@ -12,14 +12,18 @@
 //   flag is forced to 65279 so that BASIC's LOAD will jump to this
 //   line. The injected line is:
 //
-//       65279 LLIST 1 TO 65278: CALL 16384
+//       65279 POKE 23203,0: POKE 23204,0: LLIST 1 TO 65278: CALL 16384
 //
-//   LLIST 1 TO 65278 emits the target's original lines (which all
-//   sit at line numbers ≤ 65278 — corpus check is left to the
-//   caller) to stream 3 = printer. The CALL 16384 transfers to a
-//   2-byte halt stub (DI; HALT = F3 76) that was loaded into the
-//   screen file at 0x4000 by the auto-run BASIC. SimCoupé's
-//   -exitonhalt 1 patch then quits cleanly.
+//   The two POKEs zero the XPTR sysvar (syntax-error pointer) so
+//   the ROM's PRFLQUERY check during LLIST iteration never fires,
+//   giving deterministic output. LLIST 1 TO 65278 emits lines in
+//   range — excludes both line 0 (because the lower bound is 1;
+//   line 0 is rare and `LLIST 0` triggers a ROM slow-path that
+//   makes LLIST take 60+ seconds vs <15s here) and line 65279 (the
+//   upper bound is 65278, excluding our control line). The CALL
+//   16384 transfers to a 2-byte halt stub (DI; HALT = F3 76) that
+//   was loaded into the screen file at 0x4000 by the auto-run
+//   BASIC. SimCoupé's -exitonhalt 1 patch then quits cleanly.
 //
 //   Disk layout:
 //     samdos2      — boot loader (reference/samdos/samdos2.bin)
@@ -318,23 +322,23 @@ func buildInjectedLine() []byte {
 	line := sambasic.Line{
 		Number: InjectedLineNumber,
 		Tokens: []sambasic.Token{
-			sambasic.POKE,                     // zero XPTR low byte
+			sambasic.POKE,
 			sambasic.Number(23203),
 			sambasic.String(","),
 			sambasic.Number(0),
 			sambasic.String(":"),
-			sambasic.POKE,                     // zero XPTR high byte
+			sambasic.POKE,
 			sambasic.Number(23204),
 			sambasic.String(","),
 			sambasic.Number(0),
 			sambasic.String(":"),
-			sambasic.LLIST,                    // 0xBE
-			sambasic.Number(0),                // include line 0 (329 corpus files have a line 0)
-			sambasic.TO,                       // 0x8E
-			sambasic.Number(LListUpperBound),  // "65278" + FP form
+			sambasic.LLIST,
+			sambasic.Number(1),
+			sambasic.TO,
+			sambasic.Number(LListUpperBound),
 			sambasic.String(":"),
-			sambasic.CALL,                     // 0xE4
-			sambasic.Number(HaltStubAddress),  // "16384" + FP form
+			sambasic.CALL,
+			sambasic.Number(HaltStubAddress),
 		},
 	}
 	return line.Bytes()
