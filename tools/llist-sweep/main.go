@@ -59,6 +59,8 @@ func main() {
 		progressEvery  = flag.Int("progress", 25, "report progress every N files")
 		repoRoot       = flag.String("repo", filepath.Join(home, "git/sam-aarch64"), "sam-aarch64 repo root")
 		samfileBin     = flag.String("samfile", "/tmp/samfile", "samfile binary (must already exist)")
+		captureBinFlag = flag.String("capture-bin", "", "llist-capture binary (default: <repo>/tools/llist-capture/llist-capture)")
+		runSimFlag     = flag.String("run-simcoupe", "", "run-simcoupe wrapper (default: <repo>/tools/run-simcoupe.sh)")
 		simCfg         = flag.String("simcfg", filepath.Join(home, "Library/Preferences/SimCoupe/SimCoupe.cfg"), "")
 		samcoupeData   = flag.String("samdata", filepath.Join(home, "Documents/SimCoupe"), "SimCoupé Documents output dir")
 		startOffset    = flag.Int("skip", 0, "skip the first N jobs (resume support)")
@@ -71,11 +73,17 @@ func main() {
 	if _, err := os.Stat(*samfileBin); err != nil {
 		log.Fatalf("samfile binary not found at %s: %v", *samfileBin, err)
 	}
-	captureBin := filepath.Join(*repoRoot, "tools/llist-capture/llist-capture")
+	captureBin := *captureBinFlag
+	if captureBin == "" {
+		captureBin = filepath.Join(*repoRoot, "tools/llist-capture/llist-capture")
+	}
 	if _, err := os.Stat(captureBin); err != nil {
 		log.Fatalf("llist-capture binary not built; build it first: %v", err)
 	}
-	runSim := filepath.Join(*repoRoot, "tools/run-simcoupe.sh")
+	runSim := *runSimFlag
+	if runSim == "" {
+		runSim = filepath.Join(*repoRoot, "tools/run-simcoupe.sh")
+	}
 	if _, err := os.Stat(runSim); err != nil {
 		log.Fatalf("run-simcoupe.sh not found at %s", runSim)
 	}
