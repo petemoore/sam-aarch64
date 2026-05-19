@@ -398,20 +398,37 @@ func runSamfileB2T(samfileBin string, body []byte, outPath string, lossy bool) e
 	return os.WriteFile(outPath, out, 0o644)
 }
 
-// safeName returns a filesystem-safe variant of the input string by
-// replacing every byte outside [A-Za-z0-9_.+-] with `_`. Used for
-// both disk-stem and basic-filename components of the captures path.
+// safeName returns a filesystem-safe variant of the input string,
+// using a bijective encoding so the original byte string can be
+// recovered exactly. The alphabet is [A-Za-z0-9.+-] (literal) plus `_`
+// reserved as an escape prefix:
+//
+//	A-Z a-z 0-9 . + -   →  itself
+//	_                   →  __        (literal underscore, doubled)
+//	any other byte      →  _XX       (uppercase hex of the byte)
+//
+// Decoding: scan left-to-right; on `_`, peek the next byte — if `_`
+// emit `_`, otherwise consume two hex digits and emit that byte.
+// Used for both disk-stem and basic-filename components of the
+// captures path. Earlier versions of this function collapsed every
+// non-safe byte to `_`, which lost information when a BASIC filename
+// contained non-printable bytes (e.g. "CARS\x95\"\r\xff \r" in
+// FRED 31 → "CARS______", indistinguishable from any other CARS-prefixed
+// garbage).
 func safeName(s string) string {
+	const hex = "0123456789ABCDEF"
 	out := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
 			out = append(out, c)
-		case c == '_' || c == '-' || c == '.' || c == '+':
+		case c == '-' || c == '.' || c == '+':
 			out = append(out, c)
+		case c == '_':
+			out = append(out, '_', '_')
 		default:
-			out = append(out, '_')
+			out = append(out, '_', hex[c>>4], hex[c&0x0F])
 		}
 	}
 	return string(out)
