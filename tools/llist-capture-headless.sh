@@ -60,22 +60,29 @@ fi
     -samdos "$repo_root/reference/samdos/samdos2.bin" > /dev/null
 
 # Flip parallel1=1, printerdev= (empty → auto-named simc####.txt in
-# $HOME/.simcoupe/). Use the same Python trick as the macOS script.
+# $HOME/.simcoupe/), and crank emulation flat-out: speed=1000 (10x),
+# turbodisk=1, fastreset=1. Use the same Python trick as the macOS script.
 python3 -c "
 path = '$sim_cfg'
+overrides = {
+    'parallel1': '1',
+    'printerdev': '',
+    'speed': '1000',
+    'turbodisk': '1',
+    'fastreset': '1',
+}
 with open(path) as f: lines = f.readlines()
 out = []
-seen_p1 = False
-seen_pdev = False
+seen = set()
 for line in lines:
-    if line.startswith('parallel1='):
-        out.append('parallel1=1\n'); seen_p1 = True
-    elif line.startswith('printerdev='):
-        out.append('printerdev=\n'); seen_pdev = True
+    key = line.split('=', 1)[0] if '=' in line else None
+    if key in overrides:
+        out.append(f'{key}={overrides[key]}\n'); seen.add(key)
     else:
         out.append(line)
-if not seen_p1: out.append('parallel1=1\n')
-if not seen_pdev: out.append('printerdev=\n')
+for k, v in overrides.items():
+    if k not in seen:
+        out.append(f'{k}={v}\n')
 with open(path, 'w') as f: f.writelines(out)
 "
 
@@ -91,12 +98,20 @@ fi
 # Stderr is captured silent unless something goes wrong.
 sim_log="$(mktemp /tmp/simcoupe-log-XXXXXX)"
 trap 'rm -f "$test_disk" "$sim_log"' EXIT
-if ! timeout 30s /usr/local/bin/simcoupe \
+# Capture exit status directly. The previous `if ! cmd; then rc=$?; fi`
+# pattern is broken: after a `!`-negated pipeline bash sets $? to the
+# inverted value, so timeouts (124) were being reported as exit 0 and
+# silently swallowed. Disable set -e around the call so we can inspect
+# rc ourselves.
+set +e
+timeout 60s /usr/local/bin/simcoupe \
         -exitonhalt 1 \
         -fullscreen 0 \
         -firstrun 0 \
-        "$test_disk" >"$sim_log" 2>&1; then
-    rc=$?
+        "$test_disk" >"$sim_log" 2>&1
+rc=$?
+set -e
+if [ "$rc" -ne 0 ]; then
     echo "ERROR: simcoupe exit $rc, log:" >&2
     cat "$sim_log" >&2
     exit "$rc"
