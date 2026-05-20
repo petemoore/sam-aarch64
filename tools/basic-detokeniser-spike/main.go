@@ -506,6 +506,24 @@ func dumpSysvars(hw *Hardware, label string) {
 		peekRAM(hw, sysERRNR))
 }
 
+// pos is a (physical_page, offset_within_page) coordinate used by the
+// multi-page loader. Encapsulates page-boundary carry so callers don't
+// repeat the arithmetic. offset stays in [0, 0x4000); page is the
+// physical RAM page (0..31). Page wrap-around at 32 is not detected
+// here — the size guard in loadProgViaPoke prevents it.
+type pos struct {
+	page   uint8
+	offset uint16
+}
+
+func (p pos) advance(n int) pos {
+	total := uint32(p.offset) + uint32(n)
+	return pos{
+		page:   p.page + uint8(total>>14),
+		offset: uint16(total & 0x3FFF),
+	}
+}
+
 func main() {
 	romPath := flag.String("rom", "/Users/pmoore/git/simcoupe/Resource/samcoupe.rom", "path to samcoupe.rom (32KB)")
 	maxSteps := flag.Uint64("steps", 5_000_000, "max instructions per phase")
