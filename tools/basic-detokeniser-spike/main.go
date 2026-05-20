@@ -376,6 +376,10 @@ func typeLineAndCommit(hw *Hardware, cpu *z80.CPU, line string, stepBudget uint6
 //	SAVARS  ─── 0 bytes saved vars (empty for fresh state)
 //	ELINE/WORKSP/etc — shifted up but logically unchanged
 //
+// Unlike the previous single-page loader, this implementation does not
+// manipulate LMPR — pokeRAMPage writes directly into hw.ram[] by physical
+// page index, bypassing the LMPR/HMPR-routed address window entirely.
+//
 // PROG itself is unchanged (sysPROG retains its fixed boot value).
 func loadProgViaPoke(hw *Hardware, progBytes []byte) {
 	const (
@@ -416,7 +420,7 @@ func loadProgViaPoke(hw *Hardware, progBytes []byte) {
 		{sysELINEP, sysELINE, signedDelta(sysELINE)},
 		{sysCHADP, sysCHAD, signedDelta(sysCHAD)},
 		{sysKCURP, sysKCUR, signedDelta(sysKCUR)},
-		{sysNXTLINEP, sysNXTLINE, signedDelta(sysNXTLINE)},
+		{sysNXTLINEP, sysNXTLINE, signedDelta(sysNXTLINE)}, // delta == -1 at boot (NXTLINE = NVARS - 1)
 	}
 
 	// Size guard: bail before any writes if the program won't fit.
