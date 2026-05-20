@@ -50,11 +50,17 @@ if [ ! -x "$tool_bin" ] \
 fi
 
 # Build the test disk.
-"$tool_bin" \
+builder_out=$("$tool_bin" \
     -source "$source_disk" \
     -file "$basic_name" \
     -output "$test_disk" \
-    -samdos "$repo_root/reference/samdos/samdos2.bin" > /dev/null
+    -samdos "$repo_root/reference/samdos/samdos2.bin")
+injected_line=$(echo "$builder_out" | sed -n 's/^injected-line: \([0-9]*\).*/\1/p')
+if [ -z "$injected_line" ]; then
+    echo "ERROR: builder did not report injected-line; raw stdout:" >&2
+    echo "$builder_out" >&2
+    exit 8
+fi
 
 # Snapshot the SimCoupé cfg so we can flip parallel1=1 for this run
 # without permanently mutating user preferences.
@@ -109,7 +115,29 @@ if [ -z "$new_newest" ] || [ "$new_newest" = "$prev_newest" ]; then
     exit 2
 fi
 
-cat "$new_newest" > "$output_file"
+# Filter out the injected control line + any 6-space-indented
+# continuation lines that follow it (LLIST wraps at 80 cols).
+python3 -c "
+import re, sys
+n = int(sys.argv[1])
+src_path, dst_path = sys.argv[2], sys.argv[3]
+with open(src_path, 'rb') as f:
+    lines = f.read().split(b'\n')
+out = []
+skipping = False
+pat = re.compile(rb'^\s*' + str(n).encode() + rb'(\s|\$|>)')
+for line in lines:
+    if pat.match(line):
+        skipping = True
+        continue
+    if skipping and re.match(rb'^      ', line):
+        continue
+    skipping = False
+    out.append(line)
+with open(dst_path, 'wb') as f:
+    f.write(b'\n'.join(out))
+" "$injected_line" "$new_newest" "$output_file"
+rm -f "$new_newest"
 
 if [ "$output_file" != "/dev/stdout" ]; then
     echo "$new_newest -> $output_file" >&2
