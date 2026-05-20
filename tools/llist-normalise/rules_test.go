@@ -416,3 +416,126 @@ func TestExpandTab6_EmptyInput(t *testing.T) {
 		t.Errorf("got %q, want empty", got)
 	}
 }
+
+// ---- Rule F: stripCursorMarker ----
+
+func TestCursorMarker_NoCursor(t *testing.T) {
+	in := []byte("    1 REM hello\n   20 PRINT 1\n")
+	got := stripCursorMarker(in)
+	want := []byte("    1 REM hello\n   20 PRINT 1\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestCursorMarker_StripsCursor(t *testing.T) {
+	in := []byte("    1>REM hello\n   20 PRINT 1\n")
+	got := stripCursorMarker(in)
+	want := []byte("    1 REM hello\n   20 PRINT 1\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestCursorMarker_OnlyImmediatelyAfterLineNumber(t *testing.T) {
+	// A `>` not in the line-number-cursor position must survive.
+	in := []byte("    1 IF x>0 THEN PRINT 1\n")
+	got := stripCursorMarker(in)
+	want := []byte("    1 IF x>0 THEN PRINT 1\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestCursorMarker_LineNumberWithoutLeadingSpaces(t *testing.T) {
+	// 65279>POKE — cursor right after a wide line number.
+	in := []byte("65279>POKE\n")
+	got := stripCursorMarker(in)
+	want := []byte("65279 POKE\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestCursorMarker_OnlyFirstOccurrencePerLine(t *testing.T) {
+	// Defensive: only the leading line-number-cursor `>` gets
+	// replaced; later `>` characters survive.
+	in := []byte("    5>IF a>b THEN c=>d\n")
+	got := stripCursorMarker(in)
+	want := []byte("    5 IF a>b THEN c=>d\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestCursorMarker_EmptyInput(t *testing.T) {
+	got := stripCursorMarker(nil)
+	if len(got) != 0 {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+// ---- Rule H: stripTrailingWhitespace ----
+
+func TestTrailingWS_NoTrailing(t *testing.T) {
+	in := []byte("hello\nworld\n")
+	got := stripTrailingWhitespace(in)
+	want := []byte("hello\nworld\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTrailingWS_StripsSpaces(t *testing.T) {
+	in := []byte("hello   \nworld  \n")
+	got := stripTrailingWhitespace(in)
+	want := []byte("hello\nworld\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTrailingWS_StripsTabs(t *testing.T) {
+	in := []byte("hello\t\t\nworld\t \t\n")
+	got := stripTrailingWhitespace(in)
+	want := []byte("hello\nworld\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTrailingWS_PreservesInternalWhitespace(t *testing.T) {
+	// Only TRAILING whitespace is stripped; internal stays.
+	in := []byte("hello  world  \n")
+	got := stripTrailingWhitespace(in)
+	want := []byte("hello  world\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTrailingWS_AllWhitespaceLineBecomesEmpty(t *testing.T) {
+	in := []byte("a\n   \nb\n")
+	got := stripTrailingWhitespace(in)
+	want := []byte("a\n\nb\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTrailingWS_LastLineNoTrailingNL(t *testing.T) {
+	// Final line without LF still gets stripped.
+	in := []byte("hello\nworld   ")
+	got := stripTrailingWhitespace(in)
+	want := []byte("hello\nworld")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestTrailingWS_EmptyInput(t *testing.T) {
+	got := stripTrailingWhitespace(nil)
+	if len(got) != 0 {
+		t.Errorf("got %q, want empty", got)
+	}
+}

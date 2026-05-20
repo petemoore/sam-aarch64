@@ -48,6 +48,16 @@ modified.
    invoking LLIST). Two-substring match prevents false positives on
    user programs that POKE one address alone.
 
+4. **F — stripCursorMarker** — replace the LLIST cursor marker
+   ` + "`>`" + ` (inserted immediately after the line number of the line
+   BASIC's PC pointed at when LLIST ran) with a space, restoring
+   the spike-format ` + "`<padding><digits> <body>`" + ` layout.
+
+5. **H — stripTrailingWhitespace** — strip trailing spaces and
+   tabs from each line. Soaks up trailing-pad mismatches left by
+   the symmetric chr(6) TAB expansion (rule C) and printer-side
+   column padding.
+
 ### spike side (applied in this order)
 
 1. **D — stripAttributeCodes** — strip every two-escape
@@ -63,6 +73,10 @@ modified.
    (MODE 1 boot default) and TABVAR=0 (16-col tabstops) are locked
    in because the llist-capture harness runs in that state. See
    ` + "`/tmp/tab-rule-investigation.md`" + ` for the empirical confirmation.
+
+3. **H — stripTrailingWhitespace** — strip trailing spaces and
+   tabs from each line. Applied symmetrically to both sides as
+   the final normalisation step.
 
 ## Why per-side rules go in different directions
 
@@ -151,17 +165,23 @@ func main() {
 		nSpike, nLlist, nSkipped, nErr, *outDir)
 }
 
-// spikeSidePipeline applies the spike-side rules in order: D then C.
+// spikeSidePipeline applies the spike-side rules in order:
+// D (strip attribute codes), C (TAB expansion), H (trailing ws).
 func spikeSidePipeline(in []byte) []byte {
 	out := stripAttributeCodes(in)
 	out = expandTab6(out)
+	out = stripTrailingWhitespace(out)
 	return out
 }
 
-// llistSidePipeline applies the llist-side rules in order: E then B then A.
+// llistSidePipeline applies the llist-side rules in order:
+// E (CRLF→LF), B (unwrap continuations), A (strip harness),
+// F (strip cursor marker), H (trailing ws).
 func llistSidePipeline(in []byte) []byte {
 	out := crlfToLf(in)
 	out = unwrap80ColContinuations(out)
 	out = stripInjectedControlLine(out)
+	out = stripCursorMarker(out)
+	out = stripTrailingWhitespace(out)
 	return out
 }

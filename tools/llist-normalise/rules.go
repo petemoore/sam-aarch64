@@ -167,6 +167,54 @@ func expandTab6(in []byte) []byte {
 	return out
 }
 
+// cursorAfterLineNum matches a `>` cursor marker in the column
+// immediately following a (possibly-space-padded) line number at
+// the start of a line. LLIST inserts this on whichever line BASIC's
+// PC pointed to when LLIST ran. Capture group 1 is the leading
+// whitespace + digits we want to preserve.
+var cursorAfterLineNum = regexp.MustCompile(`(?m)^([ ]*[0-9]+)>`)
+
+// stripCursorMarker replaces every `>` immediately following a
+// line-number prefix with a space, restoring the spike-format
+// `<padding><digits> <body>` layout. Other `>` characters on the
+// line survive (regex is anchored to the start-of-line position).
+// Applied to llist output as Rule F, after rule A.
+func stripCursorMarker(in []byte) []byte {
+	if len(in) == 0 {
+		return in
+	}
+	return cursorAfterLineNum.ReplaceAll(in, []byte("$1 "))
+}
+
+// stripTrailingWhitespace strips trailing spaces and tabs from each
+// line (LF-terminated) and from the final line (if it has no LF).
+// Applied to both sides as the final normalisation step, soaking up
+// the symmetric trailing-pad mismatches left by chr(6) TAB
+// expansion (rule C) and printer-side column padding.
+func stripTrailingWhitespace(in []byte) []byte {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]byte, 0, len(in))
+	start := 0
+	for i := 0; i <= len(in); i++ {
+		if i == len(in) || in[i] == '\n' {
+			line := in[start:i]
+			// Trim trailing spaces/tabs.
+			end := len(line)
+			for end > 0 && (line[end-1] == ' ' || line[end-1] == '\t') {
+				end--
+			}
+			out = append(out, line[:end]...)
+			if i < len(in) {
+				out = append(out, '\n')
+			}
+			start = i + 1
+		}
+	}
+	return out
+}
+
 // stripInjectedControlLine drops any line that contains both "23203"
 // and "23204" (the address pair the llist-capture harness POKEs to
 // zero — see tools/llist-capture/builder/builder.go for the harness
