@@ -90,35 +90,27 @@ func unwrap80ColContinuations(in []byte) []byte {
 	return out
 }
 
-// attrCodeRun matches one or more consecutive SAM attribute-control
-// escape pairs followed by one optional trailing space:
+// attrCodePair matches a SAM attribute-control escape pair:
 //
-//	({16}{N} | {17}{N} | {18}{N} | {19}{N} | {20}{N})+ ?
+//	{16}{N} | {17}{N} | {18}{N} | {19}{N} | {20}{N}
 //
 // where N is one or more decimal digits. The SAM ROM's printer
 // driver consumes these pairs silently while updating ink/paper/
 // flash/bright/inverse state; spike preserves them verbatim as
 // {N}-escaped control bytes. Stripping them here on the spike side
-// matches the lossy printer behaviour. The `+` collapses runs of
-// back-to-back pairs into one match so that only ONE trailing space
-// is absorbed per run, fixing the double-space artefact that
-// appeared after the v1 strip.
-var attrCodeRun = regexp.MustCompile(`(?:\{(?:16|17|18|19|20)\}\{[0-9]+\})+ ?`)
+// matches the lossy printer behaviour.
+var attrCodePair = regexp.MustCompile(`\{(?:16|17|18|19|20)\}\{[0-9]+\}`)
 
-// stripAttributeCodes removes every run of one-or-more two-escape
-// attribute-control sequences from the input, also absorbing one
-// optional trailing space per run. This fixes the double-space
-// artefact produced by v1 (which stripped codes but left the
-// trailing space that the printer driver consumed alongside them).
-// All other content (including other {N} escapes such as {6} TAB
-// or {13} CR) is preserved. Applied to spike output as Rule D
-// before rule C, so the column tracking in rule C isn't polluted
-// by these zero-width-on-printer codes.
+// stripAttributeCodes removes every two-escape attribute-control
+// sequence from the input. All other content (including other {N}
+// escapes such as {6} TAB or {13} CR) is preserved. Applied to
+// spike output as Rule D before rule C, so the column tracking in
+// rule C isn't polluted by these zero-width-on-printer codes.
 func stripAttributeCodes(in []byte) []byte {
 	if len(in) == 0 {
 		return in
 	}
-	return attrCodeRun.ReplaceAll(in, nil)
+	return attrCodePair.ReplaceAll(in, nil)
 }
 
 // expandTab6 replaces every literal `{6}` escape with N spaces,
