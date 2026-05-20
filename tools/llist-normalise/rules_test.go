@@ -222,3 +222,86 @@ func TestUnwrap_BareContinuationLine(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+func TestStripAttr_NoCodes(t *testing.T) {
+	in := []byte("10 PRINT {6}1{6}2\n")
+	got := stripAttributeCodes(in)
+	want := []byte("10 PRINT {6}1{6}2\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripAttr_StripsSinglePair(t *testing.T) {
+	in := []byte("PRINT {16}{0}HELLO")
+	got := stripAttributeCodes(in)
+	want := []byte("PRINT HELLO")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripAttr_StripsAllFiveTypes(t *testing.T) {
+	in := []byte("a{16}{1}b{17}{2}c{18}{3}d{19}{4}e{20}{5}f")
+	got := stripAttributeCodes(in)
+	want := []byte("abcdef")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripAttr_StripsConsecutivePairs(t *testing.T) {
+	in := []byte("X{16}{0}{17}{255}{20}{42}Y")
+	got := stripAttributeCodes(in)
+	want := []byte("XY")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripAttr_PreservesOther(t *testing.T) {
+	// Other {N} escapes must survive.
+	in := []byte("{6}{8}{13}{15}{21}{100}{255}")
+	got := stripAttributeCodes(in)
+	want := []byte("{6}{8}{13}{15}{21}{100}{255}")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripAttr_PreservesUnmatchedAttr(t *testing.T) {
+	// {16} without a following {N}: leave it.
+	in := []byte("X{16}Y")
+	got := stripAttributeCodes(in)
+	want := []byte("X{16}Y")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripAttr_PreservesNonNumericSecond(t *testing.T) {
+	// {16}{abc} isn't a valid attribute pair (M must be decimal).
+	in := []byte("X{16}{abc}Y")
+	got := stripAttributeCodes(in)
+	want := []byte("X{16}{abc}Y")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripAttr_SecondCanBeMultiDigit(t *testing.T) {
+	// Attribute values can be multi-digit (e.g. {18}{128} = bright).
+	in := []byte("X{18}{128}Y")
+	got := stripAttributeCodes(in)
+	want := []byte("XY")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripAttr_EmptyInput(t *testing.T) {
+	got := stripAttributeCodes(nil)
+	if len(got) != 0 {
+		t.Errorf("got %q, want empty", got)
+	}
+}

@@ -24,7 +24,10 @@
 // Function implementations land in subsequent task commits.
 package main
 
-import "bytes"
+import (
+	"bytes"
+	"regexp"
+)
 
 // crlfToLf replaces every "\r\n" with "\n", leaving lone CRs and lone
 // LFs untouched. Applied to llist output as Rule E; matches the SAM
@@ -85,6 +88,29 @@ func unwrap80ColContinuations(in []byte) []byte {
 		}
 	}
 	return out
+}
+
+// attrCodePair matches a SAM attribute-control escape pair:
+//
+//	{16}{N} | {17}{N} | {18}{N} | {19}{N} | {20}{N}
+//
+// where N is one or more decimal digits. The SAM ROM's printer
+// driver consumes these pairs silently while updating ink/paper/
+// flash/bright/inverse state; spike preserves them verbatim as
+// {N}-escaped control bytes. Stripping them here on the spike side
+// matches the lossy printer behaviour.
+var attrCodePair = regexp.MustCompile(`\{(?:16|17|18|19|20)\}\{[0-9]+\}`)
+
+// stripAttributeCodes removes every two-escape attribute-control
+// sequence from the input. All other content (including other {N}
+// escapes such as {6} TAB or {13} CR) is preserved. Applied to
+// spike output as Rule D before rule C, so the column tracking in
+// rule C isn't polluted by these zero-width-on-printer codes.
+func stripAttributeCodes(in []byte) []byte {
+	if len(in) == 0 {
+		return in
+	}
+	return attrCodePair.ReplaceAll(in, nil)
 }
 
 // stripInjectedControlLine drops any line that contains both "23203"
