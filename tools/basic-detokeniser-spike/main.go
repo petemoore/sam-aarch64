@@ -211,6 +211,16 @@ func pokeRAM16(hw *Hardware, addr uint16, v uint16) {
 	pokeRAM(hw, addr+1, uint8(v>>8))
 }
 
+// pokeRAMPage writes directly to a specific physical RAM page,
+// bypassing the LMPR/HMPR resolution that pokeRAM uses. The
+// multi-page loader uses this to stage program bytes across pages
+// without rotating HMPR mid-load. The masks defensively normalise
+// page into 0..31 and offset into 0..0x3FFF; the loader passes
+// already-normal values via the pos type but the masking is cheap.
+func pokeRAMPage(hw *Hardware, page uint8, offset uint16, v uint8) {
+	hw.ram[page&0x1F][offset&0x3FFF] = v
+}
+
 type Snapshot struct {
 	RAM       [32][16384]byte
 	LMPR      uint8

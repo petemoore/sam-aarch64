@@ -54,3 +54,27 @@ func TestPosAdvance_ZeroIsIdentity(t *testing.T) {
 		t.Errorf("advance(0): got %+v, want %+v", got, p)
 	}
 }
+
+func TestPokeRAMPage_WritesToCorrectPhysicalPage(t *testing.T) {
+	hw := &Hardware{}
+	// Default LMPR=0, HMPR=0 — would map section C to page 0. The
+	// helper must ignore that and write to page 7 regardless.
+	pokeRAMPage(hw, 7, 0x1234, 0xAB)
+	if got := hw.ram[7][0x1234]; got != 0xAB {
+		t.Errorf("hw.ram[7][0x1234] = %02X, want 0xAB", got)
+	}
+	// Spot-check: page 0 same offset is untouched.
+	if got := hw.ram[0][0x1234]; got != 0x00 {
+		t.Errorf("hw.ram[0][0x1234] = %02X, want 0x00 (other pages untouched)", got)
+	}
+}
+
+func TestPokeRAMPage_MasksPageAndOffset(t *testing.T) {
+	hw := &Hardware{}
+	// Page 0x25 has bit 5 set — should mask to 0x05 (within 32 pages).
+	// Offset 0x8000 has section-C bit — should mask to 0x0000.
+	pokeRAMPage(hw, 0x25, 0x8000, 0xCD)
+	if got := hw.ram[5][0]; got != 0xCD {
+		t.Errorf("hw.ram[5][0] = %02X, want 0xCD (page/offset masked)", got)
+	}
+}
