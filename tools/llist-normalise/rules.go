@@ -113,6 +113,60 @@ func stripAttributeCodes(in []byte) []byte {
 	return attrCodePair.ReplaceAll(in, nil)
 }
 
+// expandTab6 replaces every literal `{6}` escape with N spaces,
+// where N is the number of columns to advance per the SAM ROM's
+// PRCOMMA handler at rom-disasm:21577-21617:
+//
+//	col > 31 (WINDRHS): N = 16 (fixed)
+//	col <= 31:          N = ((col/16) + 1) * 16 - col  (range 1..16)
+//
+// col is the 0-based current position on the printer line. It
+// starts at 0, resets to 0 after every '\n', and otherwise advances
+// by 1 per output byte (printable or otherwise). The full reasoning
+// — including why TABVAR=0 (16-col tabstops) and WINDRHS=31 (MODE 1
+// boot default) are the right constants for our llist-capture
+// harness — is in /tmp/tab-rule-investigation.md.
+//
+// Applied to spike output as Rule C, after rule D so attribute-code
+// escapes don't pollute the column counter. Only the exact 3-byte
+// sequence `{`, `6`, `}` is touched; longer escapes containing 6
+// (e.g. `{16}` if rule D missed them) pass through verbatim.
+func expandTab6(in []byte) []byte {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]byte, 0, len(in))
+	col := 0
+	i := 0
+	for i < len(in) {
+		// Detect literal `{6}` (3 bytes).
+		if i+2 < len(in) && in[i] == '{' && in[i+1] == '6' && in[i+2] == '}' {
+			var n int
+			if col > 31 {
+				n = 16
+			} else {
+				n = ((col/16)+1)*16 - col
+			}
+			for j := 0; j < n; j++ {
+				out = append(out, ' ')
+			}
+			col += n
+			i += 3
+			continue
+		}
+		// All other bytes pass through.
+		b := in[i]
+		out = append(out, b)
+		if b == '\n' {
+			col = 0
+		} else {
+			col++
+		}
+		i++
+	}
+	return out
+}
+
 // stripInjectedControlLine drops any line that contains both "23203"
 // and "23204" (the address pair the llist-capture harness POKEs to
 // zero — see tools/llist-capture/builder/builder.go for the harness

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -301,6 +302,116 @@ func TestStripAttr_SecondCanBeMultiDigit(t *testing.T) {
 
 func TestStripAttr_EmptyInput(t *testing.T) {
 	got := stripAttributeCodes(nil)
+	if len(got) != 0 {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestExpandTab6_NoTabs(t *testing.T) {
+	in := []byte("10 PRINT 1\n20 PRINT 2\n")
+	got := expandTab6(in)
+	want := []byte("10 PRINT 1\n20 PRINT 2\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandTab6_AtColumnZero(t *testing.T) {
+	// col=0: N = ((0/16)+1)*16 - 0 = 16 spaces.
+	in := []byte("{6}X")
+	got := expandTab6(in)
+	want := []byte(strings.Repeat(" ", 16) + "X")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandTab6_BeforeColumn16(t *testing.T) {
+	// "ABC" advances col to 3; {6} should produce 16-3=13 spaces.
+	in := []byte("ABC{6}X")
+	got := expandTab6(in)
+	want := []byte("ABC" + strings.Repeat(" ", 13) + "X")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandTab6_ExactlyColumn16(t *testing.T) {
+	// 16 chars → col=16; {6} produces N = ((16/16)+1)*16 - 16 = 16 spaces.
+	in := []byte(strings.Repeat("X", 16) + "{6}Y")
+	got := expandTab6(in)
+	want := []byte(strings.Repeat("X", 16) + strings.Repeat(" ", 16) + "Y")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandTab6_AtColumn22_LikeAutoMork(t *testing.T) {
+	// Investigation report's empirical case: col 22 → 10 spaces.
+	// 22 chars of X advance col to 22; ((22/16)+1)*16 - 22 = 32-22 = 10.
+	in := []byte(strings.Repeat("X", 22) + "{6}Y")
+	got := expandTab6(in)
+	want := []byte(strings.Repeat("X", 22) + strings.Repeat(" ", 10) + "Y")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandTab6_PastColumn31_FixedSixteen(t *testing.T) {
+	// col 32 (one past WINDRHS=31): N = 16 unconditionally.
+	in := []byte(strings.Repeat("X", 32) + "{6}Y")
+	got := expandTab6(in)
+	want := []byte(strings.Repeat("X", 32) + strings.Repeat(" ", 16) + "Y")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandTab6_AtColumn64_LikeEllipse(t *testing.T) {
+	// Investigation report's empirical case: col 64 → 16 spaces (PC25 path).
+	in := []byte(strings.Repeat("X", 64) + "{6}Y")
+	got := expandTab6(in)
+	want := []byte(strings.Repeat("X", 64) + strings.Repeat(" ", 16) + "Y")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandTab6_TwoConsecutiveTabs(t *testing.T) {
+	// "X" col=1; {6} pads to col=16; {6} pads to col=32 (16 more spaces).
+	in := []byte("X{6}{6}Y")
+	got := expandTab6(in)
+	want := []byte("X" + strings.Repeat(" ", 15) + strings.Repeat(" ", 16) + "Y")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandTab6_ResetsAtNewline(t *testing.T) {
+	// {6} on a fresh line should produce 16 spaces (col reset by \n).
+	in := []byte("ABC\n{6}X")
+	got := expandTab6(in)
+	want := []byte("ABC\n" + strings.Repeat(" ", 16) + "X")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandTab6_PreservesOtherEscapes(t *testing.T) {
+	// {8}, {13}, etc. are not {6} and must pass through verbatim,
+	// even though they DO advance the column counter (by their
+	// textual byte count — see rule doc).
+	in := []byte("{8}{13}{6}X")
+	// {8} is 3 chars → col=3; {13} is 4 chars → col=7; {6} at col=7 → 9 spaces.
+	got := expandTab6(in)
+	want := []byte("{8}{13}" + strings.Repeat(" ", 9) + "X")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandTab6_EmptyInput(t *testing.T) {
+	got := expandTab6(nil)
 	if len(got) != 0 {
 		t.Errorf("got %q, want empty", got)
 	}
