@@ -218,3 +218,86 @@ func snapshotRAMRange(hw *Hardware, page uint8, offset, n int) []byte {
 	}
 	return out
 }
+
+// A minimal valid tokenised BASIC program: one line numbered 10
+// containing "PRINT 1", followed by the 0xFF end-of-program sentinel.
+// Per docs/notes/sam-basic-save-format.md, each line is
+// lineNumBE(2) + lineLenLE(2) + tokenised_body + 0x0D, where lineLen
+// counts (tokenised_body + 0x0D) — here "F0 20 31 0D" = 4 bytes.
+//
+//	line 10:  00 0A    04 00    F0 20 31    0D
+//	end:      FF
+//
+// Total 9 bytes.
+var smallProgram = []byte{
+	0x00, 0x0A, // line number 10 (big-endian)
+	0x04, 0x00, // lineLen = 4 (little-endian): covers "F0 20 31 0D"
+	0xF0,       // PRINT token
+	0x20, 0x31, // " 1"
+	0x0D,       // line terminator
+	0xFF,       // end-of-program sentinel
+}
+
+func TestLoadProg_SmallProgram_SysvarPairsBumpedByDelta(t *testing.T) {
+	hw := postBootState()
+
+	// Capture pre-load NVARS/NUMEND/SAVARS for delta math.
+	preNVARS := peekRAM16(hw, sysNVARS)
+	preNUMEND := peekRAM16(hw, sysNUMEND)
+	preSAVARS := peekRAM16(hw, sysSAVARS)
+
+	loadProgViaPoke(hw, smallProgram)
+
+	delta := uint16(len(smallProgram)) - 1 // current loader's delta convention
+
+	// New NVARS = PROG + len = 0x9CD5 + 9 = 0x9CDE (len = 9 bytes).
+	if got, want := peekRAM16(hw, sysNVARS), preNVARS+delta; got != want {
+		t.Errorf("NVARS after load: got %04X, want %04X (= preNVARS %04X + delta %d)",
+			got, want, preNVARS, delta)
+	}
+	if got, want := peekRAM16(hw, sysNUMEND), preNUMEND+delta; got != want {
+		t.Errorf("NUMEND: got %04X, want %04X", got, want)
+	}
+	if got, want := peekRAM16(hw, sysSAVARS), preSAVARS+delta; got != want {
+		t.Errorf("SAVARS: got %04X, want %04X", got, want)
+	}
+
+	// Page bytes all 1 (small program, everything in page 1).
+	for name, addr := range map[string]uint16{
+		"NVARSP": sysNVARSP, "NUMENDP": sysNUMENDP, "SAVARSP": sysSAVARSP,
+		"WKENDP": sysWKENDP, "WORKSPP": sysWORKSPP, "ELINEP": sysELINEP,
+		"CHADP": sysCHADP, "KCURP": sysKCURP, "NXTLINEP": sysNXTLINEP,
+		"PROGP": sysPROGP,
+	} {
+		if got := peekRAM(hw, addr); got != 1 {
+			t.Errorf("%s after load: got %02X, want 01 (small program stays in page 1)", name, got)
+		}
+	}
+
+	// Program bytes are at PROG (= page 1, offset 0x1CD5).
+	gotProg := snapshotRAMRange(hw, 1, 0x1CD5, len(smallProgram))
+	for i, b := range gotProg {
+		if b != smallProgram[i] {
+			t.Errorf("program byte %d: got %02X, want %02X", i, b, smallProgram[i])
+		}
+	}
+
+	// canonicalNumericVars relocated to new NVARS position.
+	newNVARS := peekRAM16(hw, sysNVARS)
+	gotVars := snapshotRAMRange(hw, 1, int(newNVARS&0x3FFF), len(canonicalNumericVars))
+	for i, b := range gotVars {
+		if b != canonicalNumericVars[i] {
+			t.Errorf("vars byte %d: got %02X, want %02X", i, b, canonicalNumericVars[i])
+		}
+	}
+
+	// ALLOCT untouched beyond the boot 0..3 (no new pages claimed).
+	for p := uint8(4); p <= 0x1F; p++ {
+		if got := peekRAM(hw, allocTableBase+uint16(p)); got != 0 {
+			t.Errorf("ALLOCT[%d]: got %02X, want 00 (small program shouldn't claim pages)", p, got)
+		}
+	}
+	if got := peekRAM(hw, sysLASTPAGE); got != 3 {
+		t.Errorf("LASTPAGE: got %02X, want 03 (no extension for small program)", got)
+	}
+}
