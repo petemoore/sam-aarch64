@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/petemoore/sam-aarch64/tools/llist-capture/builder"
 	"github.com/petemoore/samfile/v3"
 )
 
@@ -59,7 +60,6 @@ func main() {
 		progressEvery  = flag.Int("progress", 25, "report progress every N files")
 		repoRoot       = flag.String("repo", filepath.Join(home, "git/sam-aarch64"), "sam-aarch64 repo root")
 		samfileBin     = flag.String("samfile", "/tmp/samfile", "samfile binary (must already exist)")
-		captureBinFlag = flag.String("capture-bin", "", "llist-capture binary (default: <repo>/tools/llist-capture/llist-capture)")
 		runSimFlag     = flag.String("run-simcoupe", "", "run-simcoupe wrapper (default: <repo>/tools/run-simcoupe.sh)")
 		simCfg         = flag.String("simcfg", filepath.Join(home, "Library/Preferences/SimCoupe/SimCoupe.cfg"), "")
 		samcoupeData   = flag.String("samdata", filepath.Join(home, "Documents/SimCoupe"), "SimCoupé Documents output dir")
@@ -73,13 +73,6 @@ func main() {
 	// Sanity-check tools.
 	if _, err := os.Stat(*samfileBin); err != nil {
 		log.Fatalf("samfile binary not found at %s: %v", *samfileBin, err)
-	}
-	captureBin := *captureBinFlag
-	if captureBin == "" {
-		captureBin = filepath.Join(*repoRoot, "tools/llist-capture/llist-capture")
-	}
-	if _, err := os.Stat(captureBin); err != nil {
-		log.Fatalf("llist-capture binary not built; build it first: %v", err)
 	}
 	runSim := *runSimFlag
 	if runSim == "" {
@@ -169,7 +162,7 @@ func main() {
 		if *limit > 0 && i >= *startOffset+*limit {
 			break
 		}
-		r := runOne(captureBin, runSim, samdos2, *samfileBin, *samcoupeData, j, *deleteCaptures)
+		r := runOne(runSim, samdos2, *samfileBin, *samcoupeData, j, *deleteCaptures)
 		counts[r.status]++
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.status, filepath.Base(j.diskPath), j.fileName, r.detail)
 		w.Flush()
@@ -246,7 +239,7 @@ func progressLine(w io.Writer, i, total int, start time.Time, counts map[string]
 	fmt.Fprintln(w)
 }
 
-func runOne(captureBin, runSim, samdos2, samfileBin, samcoupeData string, j job, deleteCaptures bool) (r result) {
+func runOne(runSim, samdos2, samfileBin, samcoupeData string, j job, deleteCaptures bool) (r result) {
 	defer func() {
 		if p := recover(); p != nil {
 			r.status = "PANIC"
@@ -268,17 +261,21 @@ func runOne(captureBin, runSim, samdos2, samfileBin, samcoupeData string, j job,
 		return result{"EMPTY-BODY", "0-byte BASIC body (corpus corruption)"}
 	}
 
-	// 2. Build test disk via llist-capture binary.
+	// 2. Build test disk in-process via the builder package — no fork,
+	// no stdout parsing. The result tells us which line number it spliced
+	// in; we use that below to strip the injected line from the LLIST
+	// capture before comparison.
 	tmpDir, err := os.MkdirTemp("", "llist-sweep-")
 	if err != nil {
 		return result{"INTERNAL-ERROR", fmt.Sprintf("mkdtemp: %v", err)}
 	}
 	defer os.RemoveAll(tmpDir)
 	testDisk := filepath.Join(tmpDir, "test.mgt")
-	cmd := exec.Command(captureBin, "-source", j.diskPath, "-file", j.fileName, "-output", testDisk, "-samdos", samdos2)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return result{"BUILD-ERROR", fmt.Sprintf("build disk: %v: %s", err, string(out))}
+	res, err := builder.BuildTestDisk(j.diskPath, j.fileName, testDisk, samdos2)
+	if err != nil {
+		return result{"BUILD-ERROR", fmt.Sprintf("build disk: %v", err)}
 	}
+	injectedLine := res.InjectedLine
 
 	// 3. Snapshot newest pre-run simc*.txt so we can identify the new one.
 	prev := newestCapture(samcoupeData)
@@ -303,19 +300,13 @@ func runOne(captureBin, runSim, samdos2, samfileBin, samcoupeData string, j job,
 	if deleteCaptures {
 		os.Remove(llistPath)
 	}
-	// Strip our injected control line 65279 (and anything after it).
-	// LLIST 0 TO 65278 still emits line 65279 when it's the only line
-	// in (or numerically beyond) the requested range — apparently
-	// SAM's range upper bound is not strictly enforced when the lower
-	// bound is 0. Truncate at the "\r\n65279 " marker; the prior
-	// line's trailing CR LF stays in place.
-	if cut := bytes.Index(llistData, []byte("\r\n65279 ")); cut >= 0 {
-		llistData = llistData[:cut+2] // keep the CR LF of the preceding line
-	} else if bytes.HasPrefix(llistData, []byte("65279 ")) {
-		// Edge case: capture is only the injected line (e.g. empty
-		// program). Treat as no real output.
-		llistData = nil
-	}
+	// Strip the injected control line from the LLIST output. Wrap-aware:
+	// if the injected line overflows 80 columns, SAM emits continuation
+	// segments indented with whitespace, and StripInjectedLine drops
+	// those too. The user's own program bytes were left untouched by
+	// the builder, so no corresponding b2t-side strip is needed.
+	llistData = builder.StripInjectedLine(llistData, injectedLine)
+
 	// 6. Render via samfile basic-to-text --lossy (LLIST-equivalent).
 	b2tCmd := exec.Command(samfileBin, "basic-to-text", "--lossy")
 	b2tCmd.Stdin = bytes.NewReader(body)
@@ -324,18 +315,7 @@ func runOne(captureBin, runSim, samdos2, samfileBin, samcoupeData string, j job,
 	if err := b2tCmd.Run(); err != nil {
 		return result{"DETOK-ERROR", fmt.Sprintf("basic-to-text: %v", err)}
 	}
-	// Mirror the LLIST-side strip: 33 corpus files have their own
-	// line 65279 (typically an auto-RUN trampoline). llist-capture
-	// removes that line before injecting our control line, so the
-	// LLIST capture never contains the user's 65279 either. Strip
-	// it from samfile output too so the comparison stays apples-to-
-	// apples.
 	b2tBytes := b2tOut.Bytes()
-	if cut := bytes.Index(b2tBytes, []byte("\r\n65279 ")); cut >= 0 {
-		b2tBytes = b2tBytes[:cut+2]
-	} else if bytes.HasPrefix(b2tBytes, []byte("65279 ")) {
-		b2tBytes = nil
-	}
 
 	// 7. Direct byte compare — no normalisation needed because both
 	// sides should be byte-identical when --lossy is faithful to
