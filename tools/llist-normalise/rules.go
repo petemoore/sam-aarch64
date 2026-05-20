@@ -23,3 +23,13 @@
 //
 // Function implementations land in subsequent task commits.
 package main
+
+import "bytes"
+
+// crlfToLf replaces every "\r\n" with "\n", leaving lone CRs and lone
+// LFs untouched. Applied to llist output as Rule E; matches the SAM
+// ROM printer's CR+LF line termination so subsequent rules can assume
+// LF-only line separators.
+func crlfToLf(in []byte) []byte {
+	return bytes.ReplaceAll(in, []byte("\r\n"), []byte("\n"))
+}
