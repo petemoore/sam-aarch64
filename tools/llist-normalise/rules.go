@@ -33,3 +33,32 @@ import "bytes"
 func crlfToLf(in []byte) []byte {
 	return bytes.ReplaceAll(in, []byte("\r\n"), []byte("\n"))
 }
+
+// stripInjectedControlLine drops any line that contains both "23203"
+// and "23204" (the address pair the llist-capture harness POKEs to
+// zero — see tools/llist-capture/builder/builder.go for the harness
+// BASIC line). Any other line passes through unchanged. Operates on
+// LF-separated input (apply after crlfToLf). Trailing-LF presence
+// in the input is preserved in the output.
+func stripInjectedControlLine(in []byte) []byte {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]byte, 0, len(in))
+	// Walk the input line-by-line. Keep track of whether the input
+	// ended with a LF so we can faithfully preserve that.
+	start := 0
+	for i := 0; i <= len(in); i++ {
+		if i == len(in) || in[i] == '\n' {
+			line := in[start:i]
+			if !(bytes.Contains(line, []byte("23203")) && bytes.Contains(line, []byte("23204"))) {
+				out = append(out, line...)
+				if i < len(in) {
+					out = append(out, '\n')
+				}
+			}
+			start = i + 1
+		}
+	}
+	return out
+}
