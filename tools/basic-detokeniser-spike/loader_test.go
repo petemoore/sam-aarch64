@@ -78,3 +78,36 @@ func TestPokeRAMPage_MasksPageAndOffset(t *testing.T) {
 		t.Errorf("hw.ram[5][0] = %02X, want 0xCD (page/offset masked)", got)
 	}
 }
+
+func TestSetSysvarPair_WritesPageByteAndSectionCOffset(t *testing.T) {
+	hw := &Hardware{}
+	hw.lmpr = 0
+	hw.hmpr = 1 // sysvars at 0x5A** live in section B = page 1 with LMPR=0
+
+	setSysvarPair(hw, sysNVARSP, sysNVARS, pos{page: 4, offset: 0x1234})
+
+	// Page byte at sysNVARSP (0x5A87) should be 4.
+	if got := peekRAM(hw, sysNVARSP); got != 4 {
+		t.Errorf("NVARSP = %02X, want 04", got)
+	}
+	// 16-bit offset at sysNVARS (0x5A88) should be 0x8000 | 0x1234 = 0x9234.
+	if got := peekRAM16(hw, sysNVARS); got != 0x9234 {
+		t.Errorf("NVARS = %04X, want 9234 (section-C form of 0x1234)", got)
+	}
+}
+
+func TestSetSysvarPair_ZeroOffsetGetsSectionCBit(t *testing.T) {
+	hw := &Hardware{}
+	hw.lmpr = 0
+	hw.hmpr = 1
+
+	setSysvarPair(hw, sysSAVARSP, sysSAVARS, pos{page: 2, offset: 0})
+
+	if got := peekRAM(hw, sysSAVARSP); got != 2 {
+		t.Errorf("SAVARSP = %02X, want 02", got)
+	}
+	// Offset 0 → section-C-form 0x8000 (NOT 0x0000).
+	if got := peekRAM16(hw, sysSAVARS); got != 0x8000 {
+		t.Errorf("SAVARS = %04X, want 8000", got)
+	}
+}

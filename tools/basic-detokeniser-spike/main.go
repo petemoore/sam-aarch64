@@ -221,6 +221,17 @@ func pokeRAMPage(hw *Hardware, page uint8, offset uint16, v uint8) {
 	hw.ram[page&0x1F][offset&0x3FFF] = v
 }
 
+// setSysvarPair stores a (page, offset) in REL PAGE FORM at the given
+// sysvar addresses. The page byte goes at pageAddr; the offset is
+// encoded into section-C form (0x8000 | low_14_bits) and stored
+// 16-bit-little-endian at offsetAddr. Per the ROM convention
+// established by UNSTLEN (rom-disasm:14773-14786), the offset's top
+// bit is always set when storing an address (as opposed to a length).
+func setSysvarPair(hw *Hardware, pageAddr, offsetAddr uint16, p pos) {
+	pokeRAM(hw, pageAddr, p.page)
+	pokeRAM16(hw, offsetAddr, 0x8000|(p.offset&0x3FFF))
+}
+
 type Snapshot struct {
 	RAM       [32][16384]byte
 	LMPR      uint8
