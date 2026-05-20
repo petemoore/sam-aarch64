@@ -343,10 +343,11 @@ func TestLoadProg_MultiPage_40K_ProgramSpansThreePages(t *testing.T) {
 func TestLoadProg_SmallProgram_SysvarPairsBumpedByDelta(t *testing.T) {
 	hw := postBootState()
 
-	// Capture pre-load NVARS/NUMEND/SAVARS for delta math.
+	// Capture pre-load NVARS/NUMEND/SAVARS/NXTLINE for delta math.
 	preNVARS := peekRAM16(hw, sysNVARS)
 	preNUMEND := peekRAM16(hw, sysNUMEND)
 	preSAVARS := peekRAM16(hw, sysSAVARS)
+	preNXTLINE := peekRAM16(hw, sysNXTLINE)
 
 	loadProgViaPoke(hw, smallProgram)
 
@@ -362,6 +363,13 @@ func TestLoadProg_SmallProgram_SysvarPairsBumpedByDelta(t *testing.T) {
 	}
 	if got, want := peekRAM16(hw, sysSAVARS), preSAVARS+delta; got != want {
 		t.Errorf("SAVARS: got %04X, want %04X", got, want)
+	}
+	// NXTLINE has a signed delta of -1 (at boot NXTLINE = PROG = NVARS - 1).
+	// After load it should land at the byte before NVARS, which is the 0xFF
+	// end-of-program sentinel of the program.
+	if got, want := peekRAM16(hw, sysNXTLINE), preNXTLINE+delta; got != want {
+		t.Errorf("NXTLINE: got %04X, want %04X (= preNXTLINE %04X + delta %d)",
+			got, want, preNXTLINE, delta)
 	}
 
 	// Page bytes all 1 (small program, everything in page 1).

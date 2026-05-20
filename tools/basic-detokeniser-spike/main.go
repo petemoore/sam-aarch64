@@ -154,7 +154,7 @@ const (
 	sysNUMEND   = 0x5A85
 	sysNVARSP   = 0x5A87
 	sysNVARS    = 0x5A88
-	sysDATADD   = 0x5A8B
+	sysDATADD   = 0x5A8B // not bumped by the loader — points outside the BASIC area and is not part of the program-area boundary set
 	sysWKENDP   = 0x5A8D
 	sysWKEND    = 0x5A8E
 	sysWORKSPP  = 0x5A90
@@ -180,10 +180,9 @@ const (
 	allocTableBase uint16 = 0x5100
 
 	// Editor / keyboard sysvars (unchanged from previous block).
-	sysLASTK  = 0x5C08
-	sysERRNR  = 0x5C3A
-	sysFLAGS  = 0x5C3B
-	sysSTKEND = 0x5C65 // SAM-specific STKEND (different from Spectrum's)
+	sysLASTK = 0x5C08
+	sysERRNR = 0x5C3A
+	sysFLAGS = 0x5C3B
 )
 
 func peekRAM(hw *Hardware, addr uint16) uint8 {
@@ -209,6 +208,24 @@ func pokeRAM(hw *Hardware, addr uint16, v uint8) {
 func pokeRAM16(hw *Hardware, addr uint16, v uint16) {
 	pokeRAM(hw, addr, uint8(v))
 	pokeRAM(hw, addr+1, uint8(v>>8))
+}
+
+// pos is a (physical_page, offset_within_page) coordinate used by the
+// multi-page loader. Encapsulates page-boundary carry so callers don't
+// repeat the arithmetic. offset stays in [0, 0x4000); page is the
+// physical RAM page (0..31). Page wrap-around at 32 is not detected
+// here — the size guard in loadProgViaPoke prevents it.
+type pos struct {
+	page   uint8
+	offset uint16
+}
+
+func (p pos) advance(n int) pos {
+	total := uint32(p.offset) + uint32(n)
+	return pos{
+		page:   p.page + uint8(total>>14),
+		offset: uint16(total & 0x3FFF),
+	}
 }
 
 // pokeRAMPage writes directly to a specific physical RAM page,
@@ -363,10 +380,15 @@ func typeLineAndCommit(hw *Hardware, cpu *z80.CPU, line string, stepBudget uint6
 // of a freshly-LOADed program — while preserving the editor's internal
 // state (KCUR, NXTLINE, etc.) that the boot init set up.
 //
-// Approach: memmove all RAM bytes from old-NVARS upward by `delta`
-// (= len(progBytes) - 1, since post-boot PROG..NVARS is just the 1-byte
-// FF sentinel). Then bump every BASIC-area sysvar pointer (except PROG
-// and DATADD) by delta. Then write progBytes at PROG.
+// Approach: compute newNVARSPos = PROG.advance(len(progBytes)), then
+// shift the post-NVARS trailer (1024 bytes) to newNVARSPos using
+// paging-aware byte-by-byte copies (backwards, to handle overlap).
+// Write progBytes at PROG the same way. Finally, update every
+// BASIC-area sysvar pair in REL PAGE FORM (page byte + section-C
+// offset): NVARS lands at newNVARSPos; every downstream sysvar is
+// placed at newNVARSPos.advance(its signed delta from the boot NVARS).
+// Deltas are signed so NXTLINE (= PROG = NVARS − 1 at boot, delta = −1)
+// lands correctly at the byte before NVARS.
 //
 // Memory layout produced (matching docs/notes/sam-basic-save-format.md):
 //
@@ -380,7 +402,9 @@ func typeLineAndCommit(hw *Hardware, cpu *z80.CPU, line string, stepBudget uint6
 // manipulate LMPR — pokeRAMPage writes directly into hw.ram[] by physical
 // page index, bypassing the LMPR/HMPR-routed address window entirely.
 //
-// PROG itself is unchanged (sysPROG retains its fixed boot value).
+// PROG's 16-bit offset value is unchanged from its boot setting, but
+// PROGP is written explicitly here — ROM boot does not initialise PROGP,
+// and FNDLINE's multi-page traversal needs it correct.
 func loadProgViaPoke(hw *Hardware, progBytes []byte) {
 	const (
 		progPageStart    = uint8(1)
@@ -388,8 +412,7 @@ func loadProgViaPoke(hw *Hardware, progBytes []byte) {
 		trailerShiftLen  = 1024
 	)
 
-	// Sanity check: post-boot relationship must hold. Unchanged from
-	// the original loader at main.go:307-311.
+	// Sanity check: post-boot relationship must hold.
 	prog := peekRAM16(hw, sysPROG)
 	oldNVARS := peekRAM16(hw, sysNVARS)
 	if oldNVARS != prog+1 {
@@ -603,24 +626,6 @@ func dumpSysvars(hw *Hardware, label string) {
 		peekRAM16(hw, sysELINE), peekRAM16(hw, sysWORKSP),
 		peekRAM16(hw, sysWKEND), peekRAM16(hw, sysCHAD),
 		peekRAM(hw, sysERRNR))
-}
-
-// pos is a (physical_page, offset_within_page) coordinate used by the
-// multi-page loader. Encapsulates page-boundary carry so callers don't
-// repeat the arithmetic. offset stays in [0, 0x4000); page is the
-// physical RAM page (0..31). Page wrap-around at 32 is not detected
-// here — the size guard in loadProgViaPoke prevents it.
-type pos struct {
-	page   uint8
-	offset uint16
-}
-
-func (p pos) advance(n int) pos {
-	total := uint32(p.offset) + uint32(n)
-	return pos{
-		page:   p.page + uint8(total>>14),
-		offset: uint16(total & 0x3FFF),
-	}
 }
 
 func main() {
