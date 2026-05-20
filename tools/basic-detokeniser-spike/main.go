@@ -143,24 +143,47 @@ func (h *Hardware) Out(addr uint8, value uint8) {
 	}
 }
 
-// SAM sysvars. Addresses verbatim from rom-disasm:870-900 (PROG-area
-// pointers) and 1083-1093 (LASTK/FLAGS/ERRNR).
+// SAM sysvars. Addresses verbatim from rom-disasm:869-900 (PROG-area
+// pointers, with the "*P" page-byte companions used by REL PAGE FORM)
+// and rom-disasm:1140-1143 (RAMTOPP/RAMTOP/PRAMTP/LASTPAGE).
 const (
-	sysSAVARS  = 0x5A82
-	sysNUMEND  = 0x5A85
-	sysNVARS   = 0x5A88
-	sysDATADD  = 0x5A8B
-	sysWKEND   = 0x5A8E
-	sysWORKSP  = 0x5A91
-	sysELINE   = 0x5A94
-	sysCHAD    = 0x5A97
-	sysKCUR    = 0x5A9A
-	sysNXTLINE = 0x5A9D
-	sysPROG    = 0x5AA0
-	sysLASTK   = 0x5C08
-	sysERRNR   = 0x5C3A
-	sysFLAGS   = 0x5C3B
-	sysSTKEND  = 0x5C65 // SAM-specific STKEND (different from Spectrum's)
+	// BASIC pointer pairs: page byte at NAMEP, 16-bit offset at NAME.
+	sysSAVARSP  = 0x5A81
+	sysSAVARS   = 0x5A82
+	sysNUMENDP  = 0x5A84
+	sysNUMEND   = 0x5A85
+	sysNVARSP   = 0x5A87
+	sysNVARS    = 0x5A88
+	sysDATADD   = 0x5A8B
+	sysWKENDP   = 0x5A8D
+	sysWKEND    = 0x5A8E
+	sysWORKSPP  = 0x5A90
+	sysWORKSP   = 0x5A91
+	sysELINEP   = 0x5A93
+	sysELINE    = 0x5A94
+	sysCHADP    = 0x5A96
+	sysCHAD     = 0x5A97
+	sysKCURP    = 0x5A99
+	sysKCUR     = 0x5A9A
+	sysNXTLINEP = 0x5A9C
+	sysNXTLINE  = 0x5A9D
+	sysPROGP    = 0x5A9F
+	sysPROG     = 0x5AA0
+
+	// Paging / RAM ceiling.
+	sysLASTPAGE = 0x5CB0
+	sysRAMTOPP  = 0x5CB1
+	sysRAMTOP   = 0x5CB2
+	sysPRAMTP   = 0x5CB4
+
+	// ALLOCT base; 32 bytes, one per physical page (rom-disasm:1253).
+	allocTableBase uint16 = 0x5100
+
+	// Editor / keyboard sysvars (unchanged from previous block).
+	sysLASTK  = 0x5C08
+	sysERRNR  = 0x5C3A
+	sysFLAGS  = 0x5C3B
+	sysSTKEND = 0x5C65 // SAM-specific STKEND (different from Spectrum's)
 )
 
 func peekRAM(hw *Hardware, addr uint16) uint8 {
