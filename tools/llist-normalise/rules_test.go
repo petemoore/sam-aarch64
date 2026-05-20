@@ -135,3 +135,90 @@ func TestStripInjectedControlLine_EmptyInput(t *testing.T) {
 		t.Errorf("got %q, want empty", got)
 	}
 }
+
+func TestUnwrap_NoWraps(t *testing.T) {
+	in := []byte("10 PRINT 1\n20 PRINT 2\n")
+	got := unwrap80ColContinuations(in)
+	want := []byte("10 PRINT 1\n20 PRINT 2\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestUnwrap_SingleContinuation(t *testing.T) {
+	in := []byte("10 PRINT \"hello world from a long line\"\n      MORE\n20 PRINT 2\n")
+	got := unwrap80ColContinuations(in)
+	want := []byte("10 PRINT \"hello world from a long line\"MORE\n20 PRINT 2\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestUnwrap_MultipleContinuations(t *testing.T) {
+	// Three-chunk wrap: base + cont1 + cont2.
+	in := []byte("10 base\n      cont1\n      cont2\n20 next\n")
+	got := unwrap80ColContinuations(in)
+	want := []byte("10 basecont1cont2\n20 next\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestUnwrap_PreservesLeadingSpacesBeyondSix(t *testing.T) {
+	// Continuation content that itself begins with a space:
+	// strip exactly 6 leading spaces, keep the rest verbatim.
+	in := []byte("10 base\n        extra-space-in-content\n20 next\n")
+	got := unwrap80ColContinuations(in)
+	want := []byte("10 base  extra-space-in-content\n20 next\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestUnwrap_LineWithFiveLeadingSpacesIsNotContinuation(t *testing.T) {
+	// 5 leading spaces + "1" + " " is a line-numbered line, NOT
+	// a continuation. Pass through unchanged.
+	in := []byte("    1 PRINT\n20 next\n")
+	got := unwrap80ColContinuations(in)
+	want := []byte("    1 PRINT\n20 next\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestUnwrap_ContinuationWithNoPrior(t *testing.T) {
+	// Degenerate case: continuation appears first. Preserve verbatim.
+	in := []byte("      orphan\n10 PRINT\n")
+	got := unwrap80ColContinuations(in)
+	want := []byte("      orphan\n10 PRINT\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestUnwrap_NoTrailingNewline(t *testing.T) {
+	in := []byte("10 base\n      cont")
+	got := unwrap80ColContinuations(in)
+	want := []byte("10 basecont")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestUnwrap_EmptyInput(t *testing.T) {
+	got := unwrap80ColContinuations(nil)
+	if len(got) != 0 {
+		t.Errorf("got %q, want empty", got)
+	}
+}
+
+func TestUnwrap_BareContinuationLine(t *testing.T) {
+	// A line that's literally just 6 spaces (no further content):
+	// merges nothing onto the previous line.
+	in := []byte("10 base\n      \n20 next\n")
+	got := unwrap80ColContinuations(in)
+	want := []byte("10 base\n20 next\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}

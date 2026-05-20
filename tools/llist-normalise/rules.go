@@ -34,6 +34,59 @@ func crlfToLf(in []byte) []byte {
 	return bytes.ReplaceAll(in, []byte("\r\n"), []byte("\n"))
 }
 
+// unwrap80ColContinuations merges any line beginning with exactly 6
+// spaces onto the preceding line, dropping the 6-space prefix.
+// LLIST emits line numbers right-justified in a 5-char field plus a
+// separator space (6 chars total); a wrap continuation reuses those
+// 6 columns as a pure space pad. Lines with shorter line numbers
+// (e.g. "    1 PRINT") still have a non-space character at position
+// 4 or earlier, so they're unambiguously distinguishable.
+//
+// If a continuation line appears with no preceding line to merge
+// onto, it's preserved verbatim (defensive — shouldn't happen with
+// real LLIST output).
+//
+// Operates on LF-separated input; trailing-LF presence is preserved.
+func unwrap80ColContinuations(in []byte) []byte {
+	if len(in) == 0 {
+		return in
+	}
+	// Walk lines; for each, decide: continuation onto prev, or new line.
+	const prefix = "      " // 6 spaces
+	out := make([]byte, 0, len(in))
+	// Track where the previous output line started so we can rewind
+	// to it for a continuation merge.
+	prevLineEnd := -1 // index in `out` of the LF that terminates the previous line; -1 means no previous line yet
+	start := 0
+	for i := 0; i <= len(in); i++ {
+		if i == len(in) || in[i] == '\n' {
+			line := in[start:i]
+			hadLF := i < len(in)
+			if prevLineEnd >= 0 && len(line) >= 6 && bytes.Equal(line[:6], []byte(prefix)) {
+				// Continuation: remove the LF from the previous line, append the post-prefix content.
+				out = out[:prevLineEnd]
+				out = append(out, line[6:]...)
+				if hadLF {
+					out = append(out, '\n')
+					prevLineEnd = len(out) - 1
+				} else {
+					prevLineEnd = -1 // no LF to rewind to next time
+				}
+			} else {
+				out = append(out, line...)
+				if hadLF {
+					out = append(out, '\n')
+					prevLineEnd = len(out) - 1
+				} else {
+					prevLineEnd = -1
+				}
+			}
+			start = i + 1
+		}
+	}
+	return out
+}
+
 // stripInjectedControlLine drops any line that contains both "23203"
 // and "23204" (the address pair the llist-capture harness POKEs to
 // zero — see tools/llist-capture/builder/builder.go for the harness
