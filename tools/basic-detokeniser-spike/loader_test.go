@@ -234,8 +234,8 @@ var smallProgram = []byte{
 	0x04, 0x00, // lineLen = 4 (little-endian): covers "F0 20 31 0D"
 	0xF0,       // PRINT token
 	0x20, 0x31, // " 1"
-	0x0D,       // line terminator
-	0xFF,       // end-of-program sentinel
+	0x0D, // line terminator
+	0xFF, // end-of-program sentinel
 }
 
 func TestLoadProg_SmallProgram_SysvarPairsBumpedByDelta(t *testing.T) {
