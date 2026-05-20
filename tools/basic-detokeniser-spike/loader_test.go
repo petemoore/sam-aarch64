@@ -111,3 +111,37 @@ func TestSetSysvarPair_ZeroOffsetGetsSectionCBit(t *testing.T) {
 		t.Errorf("SAVARS = %04X, want 8000", got)
 	}
 }
+
+func TestCheckFits_FitsOn512K(t *testing.T) {
+	// Exact max on 512K (PRAMTP=0x1F): available = 32*0x4000 - 0x4000
+	// - 0x1CD5 = 500523 bytes; subtract trailer 1024 + headroom 150 =
+	// 499349 max program. 480 KB is safely under that.
+	err := checkFits(480*1024, 0x1F)
+	if err != nil {
+		t.Errorf("480 KB on PRAMTP=0x1F: unexpected error: %v", err)
+	}
+}
+
+func TestCheckFits_FitsOn256K(t *testing.T) {
+	// 200 KB on a 256 K (PRAMTP=0x0F) machine fits.
+	err := checkFits(200*1024, 0x0F)
+	if err != nil {
+		t.Errorf("200 KB on PRAMTP=0x0F: unexpected error: %v", err)
+	}
+}
+
+func TestCheckFits_ExceedsOn256K(t *testing.T) {
+	// 400 KB on a 256 K machine does not fit.
+	err := checkFits(400*1024, 0x0F)
+	if err == nil {
+		t.Errorf("400 KB on PRAMTP=0x0F: expected error, got nil")
+	}
+}
+
+func TestCheckFits_ExceedsOn512K(t *testing.T) {
+	// 600 KB on a 512 K machine does not fit (limit is ~488 KB).
+	err := checkFits(600*1024, 0x1F)
+	if err == nil {
+		t.Errorf("600 KB on PRAMTP=0x1F: expected error, got nil")
+	}
+}

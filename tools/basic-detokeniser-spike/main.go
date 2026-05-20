@@ -232,6 +232,36 @@ func setSysvarPair(hw *Hardware, pageAddr, offsetAddr uint16, p pos) {
 	pokeRAM16(hw, offsetAddr, 0x8000|(p.offset&0x3FFF))
 }
 
+// checkFits returns nil if a program of length progLen will fit in
+// physical RAM on a machine with the given PRAMTP, given the trailer
+// shift (1024 bytes, matching the current loader's memmove window)
+// and the ROM's required 150-byte WKEND headroom (rom-disasm:7152).
+//
+// PROG starts at page 1, offset 0x1CD5, so the usable region is
+// pages 1..PRAMTP minus the section-A page 0 and the system area
+// in page 1 below PROG.
+func checkFits(progLen int, pramtp uint8) error {
+	const (
+		progPageStart    = uint8(1)
+		progOffsetInPage = uint16(0x1CD5) // 0x9CD5 in section-C form
+		trailerShiftLen  = 1024
+		wkendHeadroom    = 150
+	)
+	totalNeeded := progLen + trailerShiftLen + wkendHeadroom
+	totalAvailable := (int(pramtp)+1)*0x4000 -
+		int(progPageStart)*0x4000 -
+		int(progOffsetInPage)
+	if totalNeeded > totalAvailable {
+		return fmt.Errorf("program does not fit in BASIC pages: "+
+			"len=%d shift=%d headroom=%d need=%d available=%d "+
+			"(PRAMTP=%02X, pages %d..%d)",
+			progLen, trailerShiftLen, wkendHeadroom,
+			totalNeeded, totalAvailable, pramtp,
+			progPageStart, pramtp)
+	}
+	return nil
+}
+
 type Snapshot struct {
 	RAM       [32][16384]byte
 	LMPR      uint8
