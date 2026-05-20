@@ -378,54 +378,98 @@ func typeLineAndCommit(hw *Hardware, cpu *z80.CPU, line string, stepBudget uint6
 //
 // PROG itself is unchanged (sysPROG retains its fixed boot value).
 func loadProgViaPoke(hw *Hardware, progBytes []byte) {
+	const (
+		progPageStart    = uint8(1)
+		progOffsetInPage = uint16(0x1CD5) // 0x9CD5 in section-C form
+		trailerShiftLen  = 1024
+	)
+
+	// Sanity check: post-boot relationship must hold. Unchanged from
+	// the original loader at main.go:307-311.
 	prog := peekRAM16(hw, sysPROG)
 	oldNVARS := peekRAM16(hw, sysNVARS)
 	if oldNVARS != prog+1 {
-		log.Fatalf("expected post-boot NVARS=PROG+1, got NVARS=%04X PROG=%04X", oldNVARS, prog)
+		log.Fatalf("expected post-boot NVARS=PROG+1, got NVARS=%04X PROG=%04X",
+			oldNVARS, prog)
 	}
 
-	delta := uint16(len(progBytes)) - 1
-
-	// Overflow strategy: PROG is in section C (0x8000-0xBFFF). Section
-	// D is ROM 1 by default, so writes to 0xC000-0xFFFF would fatal.
-	// Temporarily clear LMPR bit 6 (ROM1) → section D maps to RAM
-	// page (HMPR+1)&0x1F instead. Restore LMPR before returning so
-	// the editor sees the standard layout; ROM 1 paging during EDIT
-	// is the ROM's own concern.
-	origLMPR := hw.lmpr
-	hw.lmpr = origLMPR &^ 0x40
-	defer func() { hw.lmpr = origLMPR }()
-
-	// Upper bound is now 0xFFFF (top of 16-bit address space). For
-	// programs that span past 0xFFFF, uint16 arithmetic would wrap.
-	upperEdge := uint32(prog) + uint32(len(progBytes)) + 1024
-	if upperEdge > 0xFFFF {
-		log.Fatalf("program too large for two-page poke: PROG=%04X len=%d would reach %05X (>0xFFFF); HMPR-paged multi-page programs not supported",
-			prog, len(progBytes), upperEdge)
+	// Snapshot the boot-time offsets of every downstream sysvar from
+	// NVARS so we can preserve those relative offsets in the new
+	// layout. This is the equivalent of the original loader's "bump
+	// every sysvar by delta" pattern, generalised to (page, offset).
+	type sysvarSpec struct {
+		pageAddr, offsetAddr uint16
+		deltaFromNVARS       int
+	}
+	// Deltas are signed: NXTLINE in particular is BELOW NVARS at boot
+	// (NXTLINE=PROG=NVARS-1), so its delta is -1. Compute as signed
+	// 16-bit (cast through int16) to preserve sign across the wrap.
+	signedDelta := func(addr uint16) int {
+		return int(int16(peekRAM16(hw, addr) - oldNVARS))
+	}
+	bumpedSysvars := []sysvarSpec{
+		{sysNVARSP, sysNVARS, 0},
+		{sysNUMENDP, sysNUMEND, signedDelta(sysNUMEND)},
+		{sysSAVARSP, sysSAVARS, signedDelta(sysSAVARS)},
+		{sysWKENDP, sysWKEND, signedDelta(sysWKEND)},
+		{sysWORKSPP, sysWORKSP, signedDelta(sysWORKSP)},
+		{sysELINEP, sysELINE, signedDelta(sysELINE)},
+		{sysCHADP, sysCHAD, signedDelta(sysCHAD)},
+		{sysKCURP, sysKCUR, signedDelta(sysKCUR)},
+		{sysNXTLINEP, sysNXTLINE, signedDelta(sysNXTLINE)},
 	}
 
-	// Memmove the section-C BASIC area (canonical NumericVars + gap +
-	// savars + ELINE + WORKSP) up by delta. Post-boot the live span
-	// from oldNVARS up through WORKSP is ~610 bytes; we shift a
-	// generous 1KB to cover any editor scratch above WORKSP. Move
-	// backwards to avoid clobbering during overlap.
-	const shiftLen = 1024
-	for i := int(shiftLen) - 1; i >= 0; i-- {
+	// Size guard: bail before any writes if the program won't fit.
+	pramtp := peekRAM(hw, sysPRAMTP)
+	if err := checkFits(len(progBytes), pramtp); err != nil {
+		log.Fatalf("%v", err)
+	}
+
+	// Step 1: paging-aware trailer shift. Walk backwards from
+	// shiftLen-1 down to 0 so the source/dest overlap on small
+	// programs doesn't clobber. Source reads use the paged peekRAM
+	// (everything's in page 1's section-C window during the read);
+	// dest writes use pokeRAMPage to land bytes in the correct
+	// physical page regardless of HMPR state.
+	progPos := pos{page: progPageStart, offset: progOffsetInPage}
+	newNVARSPos := progPos.advance(len(progBytes))
+	for i := trailerShiftLen - 1; i >= 0; i-- {
 		b := peekRAM(hw, oldNVARS+uint16(i))
-		pokeRAM(hw, oldNVARS+delta+uint16(i), b)
+		dst := newNVARSPos.advance(i)
+		pokeRAMPage(hw, dst.page, dst.offset, b)
 	}
 
-	// Write progBytes at PROG.
-	for i, b := range progBytes {
-		pokeRAM(hw, prog+uint16(i), b)
+	// Step 2: write progBytes byte-by-byte starting at PROG. Done
+	// AFTER the trailer shift so source/dest overlap is identical
+	// to the original single-page loader.
+	cur := progPos
+	for _, b := range progBytes {
+		pokeRAMPage(hw, cur.page, cur.offset, b)
+		cur = cur.advance(1)
 	}
 
-	// Bump every BASIC-area sysvar pointer by delta. PROG is fixed.
-	// DATADD points to a different region (not the BASIC area) and
-	// doesn't track this boundary. STKEND is in section B (calculator
-	// stack) and similarly independent.
-	for _, sv := range []uint16{sysNVARS, sysNUMEND, sysSAVARS, sysWKEND, sysWORKSP, sysELINE, sysCHAD, sysKCUR, sysNXTLINE} {
-		pokeRAM16(hw, sv, peekRAM16(hw, sv)+delta)
+	// Step 3: write all sysvar pairs in REL PAGE FORM. PROG itself is
+	// unchanged value-wise, but we write the pair explicitly because
+	// ROM boot doesn't initialise PROGP (verified against disasm).
+	setSysvarPair(hw, sysPROGP, sysPROG, progPos)
+	for _, s := range bumpedSysvars {
+		p := newNVARSPos.advance(s.deltaFromNVARS)
+		setSysvarPair(hw, s.pageAddr, s.offsetAddr, p)
+	}
+
+	// Step 4: ALLOCT + LASTPAGE + RAMTOP for any page claimed beyond
+	// the boot-default 0..3. Compute the highest page used as the
+	// new position of WKEND (the editor's high-water mark).
+	wkendDelta := signedDelta(sysWKEND)
+	wkendPos := newNVARSPos.advance(wkendDelta)
+	maxPage := wkendPos.page
+	for p := uint8(4); p <= maxPage; p++ {
+		pokeRAM(hw, allocTableBase+uint16(p), 0x40)
+	}
+	if maxPage > 3 {
+		pokeRAM(hw, sysLASTPAGE, maxPage)
+		pokeRAM(hw, sysRAMTOPP, maxPage)
+		pokeRAM16(hw, sysRAMTOP, 0xBFFF)
 	}
 }
 

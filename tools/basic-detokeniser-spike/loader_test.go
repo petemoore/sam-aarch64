@@ -238,6 +238,108 @@ var smallProgram = []byte{
 	0xFF, // end-of-program sentinel
 }
 
+// makeProgram synthesises a tokenised BASIC body roughly bodyLen bytes
+// long, structured as many `<lineNum> REM xxx...` lines so the total
+// reaches the target size. Used to exercise the multi-page loader.
+func makeProgram(t *testing.T, bodyLen int) []byte {
+	t.Helper()
+	const remPadPerLine = 200 // 200 bytes of REM payload per line
+	var prog []byte
+	lineNum := uint16(10)
+	for len(prog) < bodyLen-1 {
+		// Line: lineNum_BE(2) + lineLen_LE(2) + 0xEA + payload + 0x0D
+		// lineLen counts payload + 0x0D = remPadPerLine + 2 bytes.
+		payload := make([]byte, remPadPerLine)
+		for i := range payload {
+			payload[i] = byte('A' + (i % 26))
+		}
+		line := []byte{
+			byte(lineNum >> 8), byte(lineNum & 0xFF),
+			byte(remPadPerLine + 2), 0x00,
+			0xEA, // REM token
+		}
+		line = append(line, payload...)
+		line = append(line, 0x0D)
+		prog = append(prog, line...)
+		lineNum += 10
+	}
+	prog = append(prog, 0xFF) // end-of-program sentinel
+	return prog
+}
+
+func TestLoadProg_MultiPage_40K_ProgramSpansThreePages(t *testing.T) {
+	hw := postBootState()
+
+	// 40 KB target body (makeProgram rounds up; actual size will be
+	// 40000-40300ish). Layout:
+	//   page 1 from offset 0x1CD5 holds the first 0x232B = 9003 bytes
+	//   page 2 from offset 0      holds the next 0x4000 = 16384 bytes
+	//   page 3 from offset 0      holds the remainder (~14600 bytes)
+	body := makeProgram(t, 40000)
+	if len(body) < 40000 {
+		t.Fatalf("makeProgram produced %d bytes, want >= 40000", len(body))
+	}
+	if len(body) > 0x232B+0x4000+0x4000 {
+		t.Fatalf("makeProgram produced %d bytes which would overflow into page 4 — test assumes pages 1..3 only", len(body))
+	}
+
+	loadProgViaPoke(hw, body)
+
+	// First 0x232B bytes of program live in page 1 from offset 0x1CD5.
+	firstChunk := snapshotRAMRange(hw, 1, 0x1CD5, 0x232B)
+	for i, b := range firstChunk {
+		if b != body[i] {
+			t.Fatalf("page 1 byte %d (program offset %d): got %02X, want %02X",
+				i, i, b, body[i])
+		}
+	}
+
+	// Next 0x4000 bytes live in page 2 from offset 0.
+	secondChunk := snapshotRAMRange(hw, 2, 0, 0x4000)
+	for i, b := range secondChunk {
+		if b != body[0x232B+i] {
+			t.Fatalf("page 2 byte %d: got %02X, want %02X (program offset %d)",
+				i, b, body[0x232B+i], 0x232B+i)
+		}
+	}
+
+	// Remainder of program in page 3.
+	remaining := len(body) - 0x232B - 0x4000
+	if remaining > 0 {
+		thirdChunk := snapshotRAMRange(hw, 3, 0, remaining)
+		for i, b := range thirdChunk {
+			if b != body[0x232B+0x4000+i] {
+				t.Fatalf("page 3 byte %d: got %02X, want %02X",
+					i, b, body[0x232B+0x4000+i])
+			}
+		}
+	}
+
+	// NVARS lives just past the program — its page byte should be 3
+	// (since program crossed into page 3) and offset should reflect
+	// the remainder.
+	expectedNVARSPos := pos{page: 1, offset: 0x1CD5}.advance(len(body))
+	if got := peekRAM(hw, sysNVARSP); got != expectedNVARSPos.page {
+		t.Errorf("NVARSP: got %02X, want %02X (program ends in page %d)",
+			got, expectedNVARSPos.page, expectedNVARSPos.page)
+	}
+	wantNVARS := uint16(0x8000) | (expectedNVARSPos.offset & 0x3FFF)
+	if got := peekRAM16(hw, sysNVARS); got != wantNVARS {
+		t.Errorf("NVARS: got %04X, want %04X", got, wantNVARS)
+	}
+
+	// canonicalNumericVars relocated to new NVARS position (across page
+	// boundary if needed).
+	for i, b := range canonicalNumericVars {
+		p := expectedNVARSPos.advance(i)
+		got := hw.ram[p.page&0x1F][p.offset&0x3FFF]
+		if got != b {
+			t.Errorf("vars byte %d at (page=%d, off=%04X): got %02X, want %02X",
+				i, p.page, p.offset, got, b)
+		}
+	}
+}
+
 func TestLoadProg_SmallProgram_SysvarPairsBumpedByDelta(t *testing.T) {
 	hw := postBootState()
 
