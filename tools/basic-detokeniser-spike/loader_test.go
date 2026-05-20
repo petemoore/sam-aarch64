@@ -145,3 +145,76 @@ func TestCheckFits_ExceedsOn512K(t *testing.T) {
 		t.Errorf("600 KB on PRAMTP=0x1F: expected error, got nil")
 	}
 }
+
+// postBootState returns a Hardware initialised to the post-boot state
+// loadProgViaPoke expects: LMPR=0, HMPR=1, PRAMTP=0x1F (512K), and
+// every BASIC sysvar pair set to its canonical post-boot value with
+// PROG = 0x9CD5. Mirrors what running the ROM boot sequence would
+// produce, without needing the ROM image.
+func postBootState() *Hardware {
+	hw := &Hardware{}
+	hw.lmpr = 0
+	hw.hmpr = 1
+	hw.vmpr = 0 // screen page doesn't matter for loader tests
+
+	// PROG (always at 0x9CD5 = page 1, offset 0x1CD5).
+	pokeRAM(hw, sysPROGP, 1)
+	pokeRAM16(hw, sysPROG, 0x9CD5)
+	// NVARS = PROG + 1 (the 0xFF end-of-program sentinel slot).
+	pokeRAM(hw, sysNVARSP, 1)
+	pokeRAM16(hw, sysNVARS, 0x9CD6)
+	// NUMEND = NVARS + 92.
+	pokeRAM(hw, sysNUMENDP, 1)
+	pokeRAM16(hw, sysNUMEND, 0x9D32)
+	// SAVARS = NUMEND + 512.
+	pokeRAM(hw, sysSAVARSP, 1)
+	pokeRAM16(hw, sysSAVARS, 0x9F32)
+	// ELINE = SAVARS (no saved string vars in a fresh state).
+	pokeRAM(hw, sysELINEP, 1)
+	pokeRAM16(hw, sysELINE, 0x9F32)
+	// WORKSP = ELINE + 1.
+	pokeRAM(hw, sysWORKSPP, 1)
+	pokeRAM16(hw, sysWORKSP, 0x9F33)
+	// WKEND = WORKSP.
+	pokeRAM(hw, sysWKENDP, 1)
+	pokeRAM16(hw, sysWKEND, 0x9F33)
+	// CHAD, KCUR, NXTLINE — track ELINE in fresh state.
+	pokeRAM(hw, sysCHADP, 1)
+	pokeRAM16(hw, sysCHAD, 0x9F32)
+	pokeRAM(hw, sysKCURP, 1)
+	pokeRAM16(hw, sysKCUR, 0x9F32)
+	pokeRAM(hw, sysNXTLINEP, 1)
+	pokeRAM16(hw, sysNXTLINE, 0x9CD5)
+
+	// Physical RAM ceiling: 512K = pages 0..31.
+	pokeRAM(hw, sysPRAMTP, 0x1F)
+	// BASIC owns pages 0..3 at boot.
+	pokeRAM(hw, sysLASTPAGE, 0x03)
+	pokeRAM(hw, sysRAMTOPP, 0x03)
+	pokeRAM16(hw, sysRAMTOP, 0xBFFF)
+	// ALLOCT: pages 0..3 marked "IN USE, CONTEXT 0".
+	for p := uint8(0); p <= 3; p++ {
+		pokeRAM(hw, allocTableBase+uint16(p), 0x40)
+	}
+
+	// Stage canonicalNumericVars at NVARS (matches ROM boot's CLRSR init).
+	nvars := peekRAM16(hw, sysNVARS)
+	for i, b := range canonicalNumericVars {
+		pokeRAM(hw, nvars+uint16(i), b)
+	}
+	// 512-byte gap above NVARS+92 is zero-initialised by virtue of hw.ram
+	// starting zero.
+
+	return hw
+}
+
+// snapshotRAMRange captures hw.ram[page][offset:offset+n] into a slice
+// for byte-level assertions in tests.
+func snapshotRAMRange(hw *Hardware, page uint8, offset, n int) []byte {
+	out := make([]byte, n)
+	for i := 0; i < n; i++ {
+		p := pos{page: page, offset: uint16(offset)}.advance(i)
+		out[i] = hw.ram[p.page&0x1F][p.offset&0x3FFF]
+	}
+	return out
+}
