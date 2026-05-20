@@ -307,6 +307,65 @@ func TestStripAttr_EmptyInput(t *testing.T) {
 	}
 }
 
+func TestStripAttr_AbsorbsTrailingSpaceAfterSinglePair(t *testing.T) {
+	in := []byte("1000 {16}{2} DEF PROC")
+	got := stripAttributeCodes(in)
+	want := []byte("1000 DEF PROC")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripAttr_AbsorbsTrailingSpaceAfterMultiplePairs(t *testing.T) {
+	// Back-to-back pairs are one code block; only ONE trailing space absorbed.
+	in := []byte("1000 {16}{2}{20}{1} DEF PROC")
+	got := stripAttributeCodes(in)
+	want := []byte("1000 DEF PROC")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripAttr_OnlyAbsorbsOneSpaceMax(t *testing.T) {
+	// Two trailing spaces: only one absorbed, the other remains.
+	in := []byte("X{16}{2}  Y")
+	got := stripAttributeCodes(in)
+	want := []byte("X Y")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripAttr_NoSpaceToAbsorb(t *testing.T) {
+	// No trailing space — behaviour unchanged from v1.
+	in := []byte("X{16}{2}Y")
+	got := stripAttributeCodes(in)
+	want := []byte("XY")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripAttr_PreservesInternalDoubleSpacesWithoutCode(t *testing.T) {
+	// Internal double-spaces in plain content (no adjacent codes) survive.
+	in := []byte("PRINT \"hello  world\"")
+	got := stripAttributeCodes(in)
+	want := []byte("PRINT \"hello  world\"")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripAttr_NonAdjacentCodesEachAbsorb(t *testing.T) {
+	// Two separate pair-runs each absorb their own trailing space.
+	in := []byte("X{16}{2} YZ{20}{1} W")
+	got := stripAttributeCodes(in)
+	want := []byte("XYZW")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
 func TestExpandTab6_NoTabs(t *testing.T) {
 	in := []byte("10 PRINT 1\n20 PRINT 2\n")
 	got := expandTab6(in)
