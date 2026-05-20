@@ -114,6 +114,26 @@ func (h *Hardware) Set(addr uint16, value uint8) {
 	if isROM {
 		return
 	}
+	if addr == sysFLAGS && h.cpu != nil {
+		pc := h.cpu.States.PC
+		a := h.cpu.States.AF.Hi
+		if pc == 0x02FF && a < 0x20 {
+			// ROM ADDCHAR at 0x02FD executes RES 0,(HL) on FLAGS for
+			// every non-space byte added via channel R, including
+			// control bytes 0x00-0x1F. POGEN1 at 0xDD37 later reads
+			// FLAGS bit 0 to decide whether to emit a leading space
+			// before a keyword token — finding it cleared, it emits
+			// the space. Screen and printer channels dispatch control
+			// bytes through PRCRLCDS (0xDDC4) which doesn't touch
+			// FLAGS, so they don't have this bug. Spike captures from
+			// channel R via EDKY, so it does. Preserve the old bit 0
+			// to align channel-R behaviour with channel-P/S output.
+			// See /tmp/spike-extra-space-investigation.md and
+			// rom-disasm lines 1357-1371, 21408-21412.
+			old := h.ram[page][offset]
+			value = (value &^ 0x01) | (old & 0x01)
+		}
+	}
 	h.ram[page][offset] = value
 	if addr == sysFLAGS && len(h.keyQueue) > 0 && value&0x20 == 0 {
 		h.keyQueue = h.keyQueue[1:]
@@ -650,6 +670,18 @@ func main() {
 	}
 	if len(rom) != 32768 {
 		log.Fatalf("ROM size: want 32768, got %d", len(rom))
+	}
+
+	// Sanity-check that the ROM has the expected RES 0,(HL) at ADDCHAR
+	// (0x02FD..0x02FE). The channel-R FLAGS-bit-0 fix in Hardware.Set
+	// gates on PC==0x02FF (one past this instruction) and depends on
+	// this exact opcode being there. A different ROM version would
+	// produce silently wrong output.
+	if rom[0x02FD] != 0xCB || rom[0x02FE] != 0x86 {
+		log.Fatalf("ROM does not contain expected RES 0,(HL) at 0x02FD..0x02FE "+
+			"(found %02X %02X) — the channel-R FLAGS fix in Hardware.Set "+
+			"depends on this exact instruction; a different ROM version is loaded",
+			rom[0x02FD], rom[0x02FE])
 	}
 
 	hw := newHardware(rom)
