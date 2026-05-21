@@ -64,9 +64,17 @@ modified.
    attribute-control sequence ` + "`{N}{M}`" + ` where N ∈ {16,17,18,19,20}
    and M is a decimal integer. These are SAM ink/paper/flash/
    bright/inverse codes the printer driver consumes silently. D
-   runs before C so the column tracking in C isn't polluted.
+   runs before G and C so the column tracking in C isn't polluted.
 
-2. **C — expandTab6** — replace every literal ` + "`{6}`" + ` escape with N
+2. **G — stripRemainingControls** — strip every ` + "`{N}`" + ` escape with
+   N ∈ [0,31] except N=6. After rule D has consumed the
+   ` + "`{16..20}{M}`" + ` attribute pairs, the remaining single-byte
+   control codes — null, bell, backspace, form-feed, embedded CR,
+   etc. — are stripped to match LLIST's printer driver which
+   consumes them silently. ` + "`{6}`" + ` is preserved for rule C
+   (TAB expansion).
+
+3. **C — expandTab6** — replace every literal ` + "`{6}`" + ` escape with N
    spaces, where N = 16-(col%16) for col≤31 (with col%16==0 giving
    N=16), and N=16 for col>31. Rule comes straight from the ROM's
    PRCOMMA handler at rom-disasm:21577-21617; constants WINDRHS=31
@@ -74,7 +82,7 @@ modified.
    in because the llist-capture harness runs in that state. See
    ` + "`/tmp/tab-rule-investigation.md`" + ` for the empirical confirmation.
 
-3. **H — stripTrailingWhitespace** — strip trailing spaces and
+4. **H — stripTrailingWhitespace** — strip trailing spaces and
    tabs from each line. Applied symmetrically to both sides as
    the final normalisation step.
 
@@ -166,11 +174,13 @@ func main() {
 }
 
 // spikeSidePipeline applies the spike-side rules in order:
-// D (strip attribute codes), C (TAB expansion), H (trailing ws).
+// D (strip attribute codes), G (strip remaining control escapes),
+// C (TAB expansion), H (trailing ws).
 func spikeSidePipeline(in []byte) []byte {
-	out := stripAttributeCodes(in)
-	out = expandTab6(out)
-	out = stripTrailingWhitespace(out)
+	out := stripAttributeCodes(in)     // D: strip {16..20}{M} pairs
+	out = stripRemainingControls(out)  // G: strip remaining {0..31}\{6} (LLIST swallows these)
+	out = expandTab6(out)              // C: expand {6} to spaces
+	out = stripTrailingWhitespace(out) // H: strip trailing whitespace
 	return out
 }
 

@@ -15,11 +15,13 @@
 //	  E: crlfToLf — convert \r\n to \n.
 //
 //	Applied to spike output:
+//	  D: stripAttributeCodes — strip `{16}{N}`, `{17}{N}`, `{18}{N}`,
+//	     `{19}{N}`, `{20}{N}` escape pairs.
+//	  G: stripRemainingControls — strip every `{N}` escape where
+//	     N ∈ [0,31] except N=6 (reserved for rule C).
 //	  C: expandTab6 — replace `{6}` escapes with N spaces where
 //	     N = 16 - (col % 16) for col <= 31, else N = 16. Column
 //	     resets at LF; tracking is per-line.
-//	  D: stripAttributeCodes — strip `{16}{N}`, `{17}{N}`, `{18}{N}`,
-//	     `{19}{N}`, `{20}{N}` escape pairs.
 //
 // Function implementations land in subsequent task commits.
 package main
@@ -27,6 +29,7 @@ package main
 import (
 	"bytes"
 	"regexp"
+	"strconv"
 )
 
 // crlfToLf replaces every "\r\n" with "\n", leaving lone CRs and lone
@@ -213,6 +216,40 @@ func stripTrailingWhitespace(in []byte) []byte {
 		}
 	}
 	return out
+}
+
+// remainingCtrlRegexp matches a {N} escape with one or more decimal
+// digits. Whether to strip depends on the value of N — see
+// stripRemainingControls.
+var remainingCtrlRegexp = regexp.MustCompile(`\{([0-9]+)\}`)
+
+// stripRemainingControls removes every {N} escape where N ∈ [0,31]
+// EXCEPT N=6. The exception preserves {6} for rule C (TAB expansion).
+// Rationale: spike captures every byte < 0x20 as {N}; rule D handles
+// the 2-byte attribute pairs {16..20}{M}; this rule handles all other
+// single-byte control codes that LLIST's printer driver consumes
+// silently (null, bell, backspace, form-feed, embedded CR, etc.).
+//
+// Numbers ≥ 32 and non-numeric brace expressions ({hello}, etc.) are
+// preserved unchanged.
+//
+// Applied to spike output between rules D and C.
+func stripRemainingControls(in []byte) []byte {
+	if len(in) == 0 {
+		return in
+	}
+	return remainingCtrlRegexp.ReplaceAllFunc(in, func(match []byte) []byte {
+		// match is e.g. "{12}". Parse the digits between the braces.
+		inner := match[1 : len(match)-1]
+		n, err := strconv.Atoi(string(inner))
+		if err != nil {
+			return match // shouldn't happen given the regex, defensive
+		}
+		if n == 6 || n >= 32 {
+			return match // preserve
+		}
+		return nil // strip
+	})
 }
 
 // stripInjectedControlLine drops any line that contains both "23203"

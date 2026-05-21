@@ -539,3 +539,116 @@ func TestTrailingWS_EmptyInput(t *testing.T) {
 		t.Errorf("got %q, want empty", got)
 	}
 }
+
+func TestStripRemainingControls_NoControls(t *testing.T) {
+	in := []byte("hello world\n10 PRINT 1\n")
+	got := stripRemainingControls(in)
+	want := []byte("hello world\n10 PRINT 1\n")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripRemainingControls_StripsZero(t *testing.T) {
+	in := []byte("X{0}Y")
+	got := stripRemainingControls(in)
+	want := []byte("XY")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripRemainingControls_StripsBackspace(t *testing.T) {
+	// {8} = backspace. We strip (don't try to apply destructively
+	// — that's a separate concern; LLIST's printer technically
+	// applies it but for v1 we just strip).
+	in := []byte("REM {8}{8}{8}HELLO")
+	got := stripRemainingControls(in)
+	want := []byte("REM HELLO")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripRemainingControls_StripsFormFeed(t *testing.T) {
+	in := []byte("X{12}Y")
+	got := stripRemainingControls(in)
+	want := []byte("XY")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripRemainingControls_PreservesTab(t *testing.T) {
+	// {6} is reserved for rule C; do NOT strip.
+	in := []byte("X{6}Y")
+	got := stripRemainingControls(in)
+	want := []byte("X{6}Y")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripRemainingControls_StripsHighControls(t *testing.T) {
+	// {22}, {24}, {31} are all < 32 — strip.
+	in := []byte("a{22}b{24}c{31}d")
+	got := stripRemainingControls(in)
+	want := []byte("abcd")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripRemainingControls_Preserves32AndUp(t *testing.T) {
+	// {32}, {255} are not control bytes — preserve.
+	in := []byte("X{32}Y{255}Z")
+	got := stripRemainingControls(in)
+	want := []byte("X{32}Y{255}Z")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripRemainingControls_PreservesNonNumericBraces(t *testing.T) {
+	// {hello} is not a control-byte escape — preserve.
+	in := []byte("X{hello}Y")
+	got := stripRemainingControls(in)
+	want := []byte("X{hello}Y")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripRemainingControls_StripsBoundary31(t *testing.T) {
+	in := []byte("X{31}Y")
+	got := stripRemainingControls(in)
+	want := []byte("XY")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripRemainingControls_StripsBoundary0(t *testing.T) {
+	in := []byte("X{0}Y")
+	got := stripRemainingControls(in)
+	want := []byte("XY")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripRemainingControls_StripsMultiDigit(t *testing.T) {
+	in := []byte("a{0}b{1}c{10}d{15}e{31}f")
+	got := stripRemainingControls(in)
+	want := []byte("abcdef")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestStripRemainingControls_EmptyInput(t *testing.T) {
+	got := stripRemainingControls(nil)
+	if len(got) != 0 {
+		t.Errorf("got %q, want empty", got)
+	}
+}
