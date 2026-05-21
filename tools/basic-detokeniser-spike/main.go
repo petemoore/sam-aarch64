@@ -507,8 +507,14 @@ func loadProgViaPoke(hw *Hardware, progBytes []byte) {
 	// Step 4: ALLOCT + LASTPAGE + RAMTOP for any page claimed beyond
 	// the boot-default 0..3. Compute the highest page used as the
 	// new position of WKEND (the editor's high-water mark).
-	wkendDelta := signedDelta(sysWKEND)
-	wkendPos := newNVARSPos.advance(wkendDelta)
+	//
+	// IMPORTANT: use the boot-time delta from bumpedSysvars[3] (which
+	// was computed before step 3 updated the sysvars). Re-calling
+	// signedDelta(sysWKEND) here would read the already-updated sysvar
+	// and produce a wrong (large-negative) delta for programs that push
+	// WKEND into pages 4+, causing maxPage to be underestimated and
+	// the ALLOCT/LASTPAGE writes to be skipped.
+	wkendPos := newNVARSPos.advance(bumpedSysvars[3].deltaFromNVARS)
 	maxPage := wkendPos.page
 	for p := uint8(4); p <= maxPage; p++ {
 		pokeRAM(hw, allocTableBase+uint16(p), 0x40)
