@@ -652,3 +652,64 @@ func TestStripRemainingControls_EmptyInput(t *testing.T) {
 		t.Errorf("got %q, want empty", got)
 	}
 }
+
+func TestExpandTab6_PlainCharWrapsAt80(t *testing.T) {
+	// 80 X's: col goes 0..79, the 81st X triggers wrap (col was 80
+	// before emit), so col becomes 6 then 7 after the emit. Total
+	// output: 81 X's with no inserted newline (Rule B already
+	// stripped the wrap CRLF+indent — see /tmp/palettes-line-10-trace.md).
+	in := []byte(strings.Repeat("X", 81))
+	got := expandTab6(in)
+	want := []byte(strings.Repeat("X", 81))
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandTab6_TabAcrossWrapBoundary(t *testing.T) {
+	// Position the TAB so col = 74 before it. PRCOMMA computes N
+	// once at the TAB start: col=74 > 31 → N=16. We emit 16 spaces;
+	// the 7th space arrives with col=80 → wrap-reset to col=6 →
+	// emit, col=7. Subsequent spaces continue at col=7,8,...
+	in := []byte(strings.Repeat("X", 74) + "{6}Y")
+	got := expandTab6(in)
+	// Spaces output: 16 of them (N computed once). Final col after
+	// the 16 spaces = wrap-reset midway. So output is 74 X's + 16
+	// spaces + Y. Total 91 bytes.
+	want := []byte(strings.Repeat("X", 74) + strings.Repeat(" ", 16) + "Y")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandTab6_TabImmediatelyAfterWrap(t *testing.T) {
+	// 80 X's, then {6}. The first byte AFTER position 79 (the {6}'s
+	// first space) finds col=80 → reset to col=6, then emit. So the
+	// TAB's N is computed using col=80 (PC25 path → N=16); we emit
+	// 16 spaces, the FIRST of which wraps. Result: 80 X's + 16
+	// spaces + Y.
+	in := []byte(strings.Repeat("X", 80) + "{6}Y")
+	got := expandTab6(in)
+	want := []byte(strings.Repeat("X", 80) + strings.Repeat(" ", 16) + "Y")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestExpandTab6_PalettesDivergencePoint(t *testing.T) {
+	// Reproduces the exact divergence point from PALETTES line 10
+	// (per /tmp/palettes-line-10-trace.md): a single {6} appears
+	// in the body at the position where LLIST's chunk_col is 29.
+	// Before fix: Rule C saw monotonic col=224 → 16 spaces. After
+	// fix: Rule C tracks wraps, col=29 at the TAB → 3 spaces.
+	//
+	// Construct an input that puts col=29 at the {6} via wraps:
+	// 80 X's (col goes 0..79, reset to 6 after 80), then 23 more
+	// X's brings col to 6+23 = 29. Then {6}. N = 16 - (29 % 16) = 3.
+	in := []byte(strings.Repeat("X", 80) + strings.Repeat("X", 23) + "{6}Y")
+	got := expandTab6(in)
+	want := []byte(strings.Repeat("X", 103) + "   Y")
+	if !bytes.Equal(got, want) {
+		t.Errorf("got %q, want %q (PALETTES line-10 divergence)", got, want)
+	}
+}
