@@ -77,11 +77,14 @@ var generatedForms = []Form{
 	{MnemonicID: 10, Pattern: 0x94000000, Mask: 0xfc000000, Slots: []OperandSlot{
 		{SlotKind: BranchImm26, ExpectedKind: 5, BitPosition: 0, BitWidth: 26},
 	}},
-	// Manually added: 0-operand ret = ret x30 (ARM ARM C6-1160). Pattern has
-	// x30 (=30=0b11110) baked into Rn (bits 9-5). Re-add after each regen.
+	// Manually added: 0-operand ret = ret x30 (ARM ARM C6-1160). Re-add after each regen.
 	{MnemonicID: 12, Pattern: 0xd65f03c0, Mask: 0xffffffff, Slots: []OperandSlot{}},
 	{MnemonicID: 12, Pattern: 0xd65f0000, Mask: 0xfffffc1f, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+	}},
+	{MnemonicID: 13, Pattern: 0x90000000, Mask: 0x9f000000, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: AdrpImm, ExpectedKind: 5, BitPosition: 5, BitWidth: 19},
 	}},
 	{MnemonicID: 19, Pattern: 0x7100001f, Mask: 0xff80001f, Slots: []OperandSlot{
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},

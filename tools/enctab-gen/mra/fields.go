@@ -31,6 +31,8 @@ func IsInternalField(name string) bool {
 		return true
 	case "hw": // shift selector for imm16 (movz/movk); encoded inside Imm16Shifted at +16
 		return true
+	case "immlo": // low 2 bits of adrp imm21; encoded inside AdrpImm alongside immhi
+		return true
 	}
 	return false
 }

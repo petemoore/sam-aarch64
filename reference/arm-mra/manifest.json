@@ -10,6 +10,19 @@
     "shared_pseudocode.xml",
     "nop.xml",
     "add_immediate.xml",
-    "ret.xml"
+    "ret.xml",
+    "sub_addsub_imm.xml",
+    "b_uncond.xml",
+    "b_cond.xml",
+    "cmp_subs_addsub_imm.xml",
+    "ldr_imm_gen.xml",
+    "str_imm_gen.xml",
+    "cbz.xml",
+    "cbnz.xml",
+    "bl.xml",
+    "blr.xml",
+    "mov_add_addsub_imm.xml",
+    "mov_movz.xml",
+    "adrp.xml"
   ]
 }
