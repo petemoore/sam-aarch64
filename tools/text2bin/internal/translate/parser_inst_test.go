@@ -368,6 +368,139 @@ func TestParseInstSturLdur(t *testing.T) {
 	}
 }
 
+func TestParseInstMrs(t *testing.T) {
+	f := parseHelper(t, "mrs x0, sctlr_el1\n")
+	r := format.NewRecordReader(f.Records)
+	rec, _ := r.Next()
+	id, _ := format.MnemonicID("mrs")
+	if rec.MnemonicID != id {
+		t.Fatalf("mnemonic_id=%d want %d", rec.MnemonicID, id)
+	}
+	if rec.OperandCount != 2 {
+		t.Fatalf("operand_count=%d want 2", rec.OperandCount)
+	}
+	or := format.NewOperandReader(rec.Operands)
+	o0, _ := or.Next()
+	if o0.Kind != format.OpRegX || o0.Reg != 0 {
+		t.Errorf("op0 = %+v, want OpRegX 0", o0)
+	}
+	o1, _ := or.Next()
+	if o1.Kind != format.OpSysName || string(o1.Str) != "sctlr_el1" {
+		t.Errorf("op1 = %+v, want OpSysName sctlr_el1", o1)
+	}
+}
+
+func TestParseInstMrsGenericSysReg(t *testing.T) {
+	f := parseHelper(t, "mrs x0, s3_1_c11_c0_2\n")
+	r := format.NewRecordReader(f.Records)
+	rec, _ := r.Next()
+	or := format.NewOperandReader(rec.Operands)
+	_, _ = or.Next()
+	o1, _ := or.Next()
+	if o1.Kind != format.OpSysName || string(o1.Str) != "s3_1_c11_c0_2" {
+		t.Errorf("op1 = %+v, want OpSysName s3_1_c11_c0_2", o1)
+	}
+}
+
+func TestParseInstMsrRegisterForm(t *testing.T) {
+	f := parseHelper(t, "msr cntp_cval_el0, x1\n")
+	r := format.NewRecordReader(f.Records)
+	rec, _ := r.Next()
+	id, _ := format.MnemonicID("msr")
+	if rec.MnemonicID != id {
+		t.Fatalf("mnemonic_id=%d want %d", rec.MnemonicID, id)
+	}
+	if rec.OperandCount != 2 {
+		t.Fatalf("operand_count=%d want 2", rec.OperandCount)
+	}
+	or := format.NewOperandReader(rec.Operands)
+	o0, _ := or.Next()
+	if o0.Kind != format.OpSysName || string(o0.Str) != "cntp_cval_el0" {
+		t.Errorf("op0 = %+v, want OpSysName cntp_cval_el0", o0)
+	}
+	o1, _ := or.Next()
+	if o1.Kind != format.OpRegX || o1.Reg != 1 {
+		t.Errorf("op1 = %+v, want OpRegX 1", o1)
+	}
+}
+
+func TestParseInstMsrPstateImmediate(t *testing.T) {
+	f := parseHelper(t, "msr daifset, #3\n")
+	r := format.NewRecordReader(f.Records)
+	rec, _ := r.Next()
+	or := format.NewOperandReader(rec.Operands)
+	o0, _ := or.Next()
+	if o0.Kind != format.OpSysName || string(o0.Str) != "daifset" {
+		t.Errorf("op0 = %+v, want OpSysName daifset", o0)
+	}
+	o1, _ := or.Next()
+	if o1.Kind != format.OpImmExpr {
+		t.Fatalf("op1 = %+v, want OpImmExpr", o1)
+	}
+	v, ok := format.EvalConst(o1.Expr)
+	if !ok || v != 3 {
+		t.Errorf("op1 expr = (%d, %v), want (3, true)", v, ok)
+	}
+}
+
+func TestParseInstDc(t *testing.T) {
+	f := parseHelper(t, "dc civac, x10\n")
+	r := format.NewRecordReader(f.Records)
+	rec, _ := r.Next()
+	id, _ := format.MnemonicID("dc")
+	if rec.MnemonicID != id {
+		t.Fatalf("mnemonic_id=%d want %d", rec.MnemonicID, id)
+	}
+	if rec.OperandCount != 2 {
+		t.Fatalf("operand_count=%d want 2", rec.OperandCount)
+	}
+	or := format.NewOperandReader(rec.Operands)
+	o0, _ := or.Next()
+	if o0.Kind != format.OpSysName || string(o0.Str) != "civac" {
+		t.Errorf("op0 = %+v, want OpSysName civac", o0)
+	}
+	o1, _ := or.Next()
+	if o1.Kind != format.OpRegX || o1.Reg != 10 {
+		t.Errorf("op1 = %+v, want OpRegX 10", o1)
+	}
+}
+
+func TestParseInstTlbiNoReg(t *testing.T) {
+	f := parseHelper(t, "tlbi vmalle1\n")
+	r := format.NewRecordReader(f.Records)
+	rec, _ := r.Next()
+	id, _ := format.MnemonicID("tlbi")
+	if rec.MnemonicID != id {
+		t.Fatalf("mnemonic_id=%d want %d", rec.MnemonicID, id)
+	}
+	if rec.OperandCount != 1 {
+		t.Fatalf("operand_count=%d want 1", rec.OperandCount)
+	}
+	or := format.NewOperandReader(rec.Operands)
+	o0, _ := or.Next()
+	if o0.Kind != format.OpSysName || string(o0.Str) != "vmalle1" {
+		t.Errorf("op0 = %+v, want OpSysName vmalle1", o0)
+	}
+}
+
+func TestParseInstTlbiWithReg(t *testing.T) {
+	f := parseHelper(t, "tlbi vae1is, x3\n")
+	r := format.NewRecordReader(f.Records)
+	rec, _ := r.Next()
+	if rec.OperandCount != 2 {
+		t.Fatalf("operand_count=%d want 2", rec.OperandCount)
+	}
+	or := format.NewOperandReader(rec.Operands)
+	o0, _ := or.Next()
+	if o0.Kind != format.OpSysName || string(o0.Str) != "vae1is" {
+		t.Errorf("op0 = %+v, want OpSysName vae1is", o0)
+	}
+	o1, _ := or.Next()
+	if o1.Kind != format.OpRegX || o1.Reg != 3 {
+		t.Errorf("op1 = %+v, want OpRegX 3", o1)
+	}
+}
+
 func TestParseInstSymbolRef(t *testing.T) {
 	f := parseHelper(t, "b target\n")
 	if len(f.Names) != 1 || f.Names[0] != "target" {

@@ -190,6 +190,14 @@ func encodeInst(rec format.Record, pc int64, p1 *Pass1Result, f *format.File) (u
 		if len(kinds) >= 3 && kinds[2] == format.OpImmExpr {
 			return encodeRorImm(operands, pc, p1, f)
 		}
+	case 77: // mrs
+		return encodeMrs(operands)
+	case 78: // msr (register or PSTATE-immediate)
+		return encodeMsr(operands, pc, p1, f)
+	case 79: // dc
+		return encodeDc(operands)
+	case 80: // tlbi
+		return encodeTlbi(operands)
 	}
 
 	form, ok, diag := enc.ValidateOperandKinds(rec.MnemonicID, kinds)
@@ -1057,6 +1065,158 @@ func encodeBarrierInst(mnemonicID uint16, operands []format.Operand, pc int64, p
 	}
 	word := base | (uint32(crm) << 8)
 	return word, nil
+}
+
+// ---------------------------------------------------------------------------
+// System-register access (mrs / msr) and system instructions (dc / tlbi)
+// ---------------------------------------------------------------------------
+
+// encodeMrs encodes `mrs Xt, <sysreg>` per ARM ARM C6.2.137.
+//
+//	1101 0101 0011 op0:1 op1:3 CRn:4 CRm:4 op2:3 Rt:5
+//	base 0xd5300000 | (op0<<19) | (op1<<16) | (CRn<<12) | (CRm<<8) | (op2<<5) | Rt
+func encodeMrs(operands []format.Operand) (uint32, error) {
+	if len(operands) < 2 {
+		return 0, fmt.Errorf("mrs: need 2 operands, got %d", len(operands))
+	}
+	if operands[0].Kind != format.OpRegX {
+		return 0, fmt.Errorf("mrs: operand 0 must be Xt")
+	}
+	if operands[1].Kind != format.OpSysName {
+		return 0, fmt.Errorf("mrs: operand 1 must be a system register name")
+	}
+	sr, ok := format.ParseSysReg(string(operands[1].Str))
+	if !ok {
+		return 0, fmt.Errorf("mrs: unknown system register %q", string(operands[1].Str))
+	}
+	return sysRegEncode(0xd5300000, sr, operands[0].Reg), nil
+}
+
+// encodeMsr encodes both forms of `msr`:
+//
+//   - Register form `msr <sysreg>, Xt` (ARM ARM C6.2.141):
+//     1101 0101 0001 op0:1 op1:3 CRn:4 CRm:4 op2:3 Rt:5
+//     base 0xd5100000 | (op0<<19) | (op1<<16) | (CRn<<12) | (CRm<<8) | (op2<<5) | Rt
+//
+//   - PSTATE-immediate form `msr <pstatefield>, #imm` (ARM ARM C6.2.140):
+//     1101 0101 0000 op1:3 0100 CRm:4 op2:3 11111
+//     base 0xd500401f | (op1<<16) | (CRm<<8) | (op2<<5)
+//     where CRm carries the 4-bit immediate.
+func encodeMsr(operands []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
+	if len(operands) < 2 {
+		return 0, fmt.Errorf("msr: need 2 operands, got %d", len(operands))
+	}
+	if operands[0].Kind != format.OpSysName {
+		return 0, fmt.Errorf("msr: operand 0 must be a system register or PSTATE field name")
+	}
+	name := string(operands[0].Str)
+
+	switch operands[1].Kind {
+	case format.OpRegX:
+		sr, ok := format.ParseSysReg(name)
+		if !ok {
+			return 0, fmt.Errorf("msr (register): unknown system register %q", name)
+		}
+		return sysRegEncode(0xd5100000, sr, operands[1].Reg), nil
+	case format.OpImmExpr:
+		pf, ok := format.ParsePState(name)
+		if !ok {
+			return 0, fmt.Errorf("msr (immediate): unknown PSTATE field %q", name)
+		}
+		ctx := makeCtx(pc, p1, f)
+		imm, err := enc.Eval(operands[1].Expr, ctx)
+		if err != nil {
+			return 0, fmt.Errorf("msr (immediate): %w", err)
+		}
+		if imm < 0 || imm > 0xf {
+			return 0, fmt.Errorf("msr (immediate): #imm %d out of range [0,15]", imm)
+		}
+		word := uint32(0xd500401f) |
+			(uint32(pf.Op1) << 16) |
+			(uint32(imm) << 8) |
+			(uint32(pf.Op2) << 5)
+		return word, nil
+	}
+	return 0, fmt.Errorf("msr: operand 1 must be a register or immediate (got kind %v)", operands[1].Kind)
+}
+
+// encodeDc encodes `dc <op>, Xt` as the SYS-instruction encoding:
+//
+//	1101 0101 0000 1 op1:3 0111 CRm:4 op2:3 Rt:5
+//	base 0xd5080000 | (op1<<16) | (CRn<<12) | (CRm<<8) | (op2<<5) | Rt
+//
+// All DC ops have CRn=7 — that's what makes them DC rather than another
+// SYS family — but we read CRn from the op table for clarity.
+func encodeDc(operands []format.Operand) (uint32, error) {
+	if len(operands) < 2 {
+		return 0, fmt.Errorf("dc: need 2 operands, got %d", len(operands))
+	}
+	if operands[0].Kind != format.OpSysName {
+		return 0, fmt.Errorf("dc: operand 0 must be op name")
+	}
+	if operands[1].Kind != format.OpRegX {
+		return 0, fmt.Errorf("dc: operand 1 must be Xt")
+	}
+	op, ok := format.ParseDC(string(operands[0].Str))
+	if !ok {
+		return 0, fmt.Errorf("dc: unknown op %q", string(operands[0].Str))
+	}
+	word := uint32(0xd5080000) |
+		(uint32(op.Op1) << 16) |
+		(uint32(op.CRn) << 12) |
+		(uint32(op.CRm) << 8) |
+		(uint32(op.Op2) << 5) |
+		uint32(operands[1].Reg)
+	return word, nil
+}
+
+// encodeTlbi encodes `tlbi <op>[, Xt]` as the SYS-instruction encoding.
+// Same base pattern as dc but the op table fixes CRn=8 (TLBI family).
+// Ops with no Xt operand encode Rt=11111 (xzr), matching GNU's output.
+func encodeTlbi(operands []format.Operand) (uint32, error) {
+	if len(operands) < 1 {
+		return 0, fmt.Errorf("tlbi: need at least 1 operand")
+	}
+	if operands[0].Kind != format.OpSysName {
+		return 0, fmt.Errorf("tlbi: operand 0 must be op name")
+	}
+	op, ok := format.ParseTLBI(string(operands[0].Str))
+	if !ok {
+		return 0, fmt.Errorf("tlbi: unknown op %q", string(operands[0].Str))
+	}
+	rt := byte(31) // xzr when no Xt is given
+	if len(operands) >= 2 {
+		if operands[1].Kind != format.OpRegX {
+			return 0, fmt.Errorf("tlbi: operand 1 must be Xt")
+		}
+		if !op.NeedsXt {
+			return 0, fmt.Errorf("tlbi: op %q does not take a register operand", string(operands[0].Str))
+		}
+		rt = operands[1].Reg
+	} else if op.NeedsXt {
+		return 0, fmt.Errorf("tlbi: op %q requires an Xt operand", string(operands[0].Str))
+	}
+	word := uint32(0xd5080000) |
+		(uint32(op.Op1) << 16) |
+		(uint32(op.CRn) << 12) |
+		(uint32(op.CRm) << 8) |
+		(uint32(op.Op2) << 5) |
+		uint32(rt)
+	return word, nil
+}
+
+// sysRegEncode packs the (op0, op1, CRn, CRm, op2, Rt) fields onto a
+// base pattern for the MRS/MSR (register-form) encodings. The base
+// pattern supplies the L bit that distinguishes read (mrs) from write
+// (msr-reg).
+func sysRegEncode(base uint32, sr format.SysReg, rt byte) uint32 {
+	return base |
+		(uint32(sr.Op0&1) << 19) |
+		(uint32(sr.Op1) << 16) |
+		(uint32(sr.CRn) << 12) |
+		(uint32(sr.CRm) << 8) |
+		(uint32(sr.Op2) << 5) |
+		uint32(rt)
 }
 
 func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.File) ([]byte, error) {

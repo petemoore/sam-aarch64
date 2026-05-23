@@ -334,6 +334,28 @@ func (p *parser) parseInst(t Tok) error {
 		return p.parseBarrier(id, true)
 	}
 
+	// System-register access and system instructions. Each of these
+	// carries a bareword keyword (sysreg name, PSTATE field name, or
+	// DC/TLBI op name) that the generic operand parser would mis-handle
+	// as a symbol reference. Parse them explicitly so the keyword reaches
+	// the encoder as an OpSysName.
+	mrsID, _ := format.MnemonicID("mrs")
+	msrID, _ := format.MnemonicID("msr")
+	dcID, _ := format.MnemonicID("dc")
+	tlbiID, _ := format.MnemonicID("tlbi")
+	if id == mrsID {
+		return p.parseMrs(id)
+	}
+	if id == msrID {
+		return p.parseMsr(id)
+	}
+	if id == dcID {
+		return p.parseDcTlbi(id, false)
+	}
+	if id == tlbiID {
+		return p.parseDcTlbi(id, true)
+	}
+
 	var ow format.OperandWriter
 	count := byte(0)
 	for {
@@ -596,6 +618,134 @@ func (p *parser) parseMovl() error {
 		ow2.WriteImmExpr(e2.Bytes())
 		p.rw.WriteInst(movkID, 2, ow2.Bytes())
 	}
+	return nil
+}
+
+// parseMrs handles `mrs Xt, <sysreg>`. The sysreg name is parsed as a
+// bareword identifier (it has no `#` prefix and is not a register) and
+// emitted as an OpSysName operand. The encoder looks it up against the
+// sysreg table in pass2.
+func (p *parser) parseMrs(id uint16) error {
+	var ow format.OperandWriter
+
+	// Operand 1: destination register (must be Xt).
+	regTok := p.cur()
+	if regTok.Kind != TokIdent {
+		return newErr(regTok.Pos, "mrs: expected register")
+	}
+	kind, reg, ok := matchReg(regTok.Text)
+	if !ok || kind != format.OpRegX {
+		return newErr(regTok.Pos, "mrs: expected X register")
+	}
+	ow.WriteReg(kind, reg)
+	p.pos++
+
+	if p.cur().Kind != TokComma {
+		return newErr(p.cur().Pos, "mrs: expected ',' after register")
+	}
+	p.pos++
+
+	// Operand 2: system register name (bareword identifier).
+	nameTok := p.cur()
+	if nameTok.Kind != TokIdent {
+		return newErr(nameTok.Pos, "mrs: expected system register name")
+	}
+	if _, ok := format.ParseSysReg(nameTok.Text); !ok {
+		return newErr(nameTok.Pos, "mrs: unknown system register %q", nameTok.Text)
+	}
+	ow.WriteSysName(nameTok.Text)
+	p.pos++
+
+	p.rw.WriteInst(id, 2, ow.Bytes())
+	return nil
+}
+
+// parseMsr handles both `msr <sysreg>, Xt` (register form) and
+// `msr <pstatefield>, #imm` (immediate / PSTATE-field form). The first
+// operand is always a bareword identifier emitted as OpSysName; the
+// second operand is either a register or an immediate expression. The
+// encoder dispatches on the kind of the second operand.
+func (p *parser) parseMsr(id uint16) error {
+	var ow format.OperandWriter
+
+	// Operand 1: sysreg name OR pstate field name (bareword identifier).
+	nameTok := p.cur()
+	if nameTok.Kind != TokIdent {
+		return newErr(nameTok.Pos, "msr: expected system register or PSTATE field name")
+	}
+	_, isSysReg := format.ParseSysReg(nameTok.Text)
+	_, isPstate := format.ParsePState(nameTok.Text)
+	if !isSysReg && !isPstate {
+		return newErr(nameTok.Pos, "msr: unknown system register / PSTATE field %q", nameTok.Text)
+	}
+	ow.WriteSysName(nameTok.Text)
+	p.pos++
+
+	if p.cur().Kind != TokComma {
+		return newErr(p.cur().Pos, "msr: expected ',' after destination")
+	}
+	p.pos++
+
+	// Operand 2: either Xt (register form) or #imm (PSTATE-immediate form).
+	// We dispatch by token kind: bareword that's a register name → reg
+	// form; everything else → expression (which will be folded to an
+	// immediate by parseOperand).
+	if p.cur().Kind == TokIdent {
+		regTok := p.cur()
+		if kind, reg, ok := matchReg(regTok.Text); ok {
+			if kind != format.OpRegX {
+				return newErr(regTok.Pos, "msr: source register must be Xt")
+			}
+			ow.WriteReg(kind, reg)
+			p.pos++
+			p.rw.WriteInst(id, 2, ow.Bytes())
+			return nil
+		}
+	}
+
+	// Immediate form.
+	if err := p.parseOperand(&ow); err != nil {
+		return err
+	}
+	p.rw.WriteInst(id, 2, ow.Bytes())
+	return nil
+}
+
+// parseDcTlbi handles `dc <op>, Xt` and `tlbi <op>[, Xt]`. The op
+// keyword is emitted as an OpSysName; the optional register operand
+// follows. The encoder consults the DC / TLBI op table to derive the
+// encoding fields and to verify the Xt requirement.
+func (p *parser) parseDcTlbi(id uint16, xtOptional bool) error {
+	var ow format.OperandWriter
+
+	// Operand 1: op name (bareword identifier).
+	nameTok := p.cur()
+	if nameTok.Kind != TokIdent {
+		return newErr(nameTok.Pos, "expected operation name")
+	}
+	ow.WriteSysName(nameTok.Text)
+	p.pos++
+
+	// Optional comma + Xt.
+	count := byte(1)
+	if p.cur().Kind == TokComma {
+		p.pos++
+		regTok := p.cur()
+		if regTok.Kind != TokIdent {
+			return newErr(regTok.Pos, "expected register after ','")
+		}
+		kind, reg, ok := matchReg(regTok.Text)
+		if !ok || kind != format.OpRegX {
+			return newErr(regTok.Pos, "expected X register after ','")
+		}
+		ow.WriteReg(kind, reg)
+		p.pos++
+		count = 2
+	} else if !xtOptional {
+		return newErr(p.cur().Pos, "expected ',' and register operand")
+	}
+
+	p.rw.WriteInst(id, count, ow.Bytes())
 	return nil
 }
 

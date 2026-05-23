@@ -65,6 +65,17 @@ var MnemonicTable = []string{
 	// Unscaled load/store with signed 9-bit byte offset (ARM ARM C6.2.276 / C6.2.124).
 	// These are distinct mnemonics from ldr/str; the offset is *not* scaled.
 	"stur", "ldur",
+	// System-register access (ARM ARM C6.2.137 / C6.2.140-C6.2.141).
+	//   mrs Xt, <sysreg>           — Move System Register to general register.
+	//   msr <sysreg>, Xt           — Move general register to System Register.
+	//   msr <pstatefield>, #imm    — Set a PSTATE field (daifset etc.).
+	// Both msr forms share a single mnemonic ID; the parser disambiguates
+	// on the second operand kind.
+	"mrs", "msr",
+	// System cache and TLB maintenance (ARM ARM C6.2.66 / C6.2.281).
+	//   dc <op>, Xt                — Data Cache maintenance op.
+	//   tlbi <op>[, Xt]            — TLB Invalidate op (Xt optional).
+	"dc", "tlbi",
 }
 
 var mnemonicIndex = func() map[string]uint16 {
