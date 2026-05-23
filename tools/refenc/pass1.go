@@ -278,6 +278,12 @@ func directiveSizeAtPC(rec format.Record, pc int64) (int64, error) {
 		// refenc layout emits everything into a single flat stream. See
 		// docs/notes/m2-status.md for the multi-section layout gap.
 		return 0, nil
+	case ".arch", ".cpu":
+		// .arch / .cpu are architecture/CPU selection directives. The
+		// encoder targets a fixed AArch64 profile and does not
+		// feature-gate instructions on these values, so they are
+		// treated as zero-byte no-ops.
+		return 0, nil
 	case ".ltorg":
 		// .ltorg's byte contribution is computed by the pool flush
 		// logic in Pass1; the directive itself emits no bytes.

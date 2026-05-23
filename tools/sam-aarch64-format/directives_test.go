@@ -24,6 +24,8 @@ func TestDirectiveExpectedSet(t *testing.T) {
 		".skip", ".space",
 		".inst",
 		".section",
+		".arch",
+		".cpu",
 	}
 	for _, n := range want {
 		if _, ok := DirectiveID(n); !ok {

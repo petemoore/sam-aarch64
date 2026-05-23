@@ -927,6 +927,10 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 		// .section is a no-op in the current flat-layout pipeline. See
 		// docs/notes/m2-status.md for the multi-section gap this leaves.
 		return nil, nil
+	case ".arch", ".cpu":
+		// .arch / .cpu architecture-selection directives are no-ops at
+		// encoding time — see pass1 sizeOfRecord for rationale.
+		return nil, nil
 	case ".balign":
 		// Round PC up to next multiple of alignment, emitting zero bytes.
 		or := format.NewOperandReader(rec.Operands)

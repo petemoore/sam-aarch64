@@ -18,6 +18,12 @@ var DirectiveTable = []string{
 	// layout is single-section flat, so .section is a no-op at encoding
 	// time. See docs/notes/m2-status.md for the multi-section layout gap.
 	".section",
+	// .arch / .cpu — GNU as architecture / CPU selection directives.
+	// text2bin accepts these for syntactic completeness; refenc treats
+	// them as no-ops because the encoder targets a fixed AArch64 profile
+	// and does not feature-gate instructions on .arch/.cpu values.
+	".arch",
+	".cpu",
 }
 
 var directiveIndex = func() map[string]uint8 {

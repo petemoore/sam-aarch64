@@ -132,6 +132,50 @@ func TestParseDirectiveSectionBareName(t *testing.T) {
 	}
 }
 
+// TestParseDirectiveArch covers `.arch armv8-a` — a no-op directive whose
+// argument is an opaque architecture name. The lexer splits `armv8-a` into
+// three tokens (TokIdent, TokMinus, TokIdent), and the parser must reassemble
+// them into a single OpSysName "armv8-a".
+func TestParseDirectiveArch(t *testing.T) {
+	f := parseHelper(t, ".arch armv8-a\n")
+	r := format.NewRecordReader(f.Records)
+	rec, err := r.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Kind != format.KindDirective {
+		t.Fatalf("kind = %v", rec.Kind)
+	}
+	wantID, _ := format.DirectiveID(".arch")
+	if rec.DirectiveID != wantID {
+		t.Errorf("directive_id = %d, want %d", rec.DirectiveID, wantID)
+	}
+	if rec.OperandCount != 1 {
+		t.Fatalf("operand_count = %d, want 1", rec.OperandCount)
+	}
+	or := format.NewOperandReader(rec.Operands)
+	o, _ := or.Next()
+	if o.Kind != format.OpSysName || string(o.Str) != "armv8-a" {
+		t.Errorf("op0 = %+v, want OpSysName armv8-a", o)
+	}
+}
+
+// TestParseDirectiveCpu covers `.cpu cortex-a53` — same shape as .arch.
+func TestParseDirectiveCpu(t *testing.T) {
+	f := parseHelper(t, ".cpu cortex-a53\n")
+	r := format.NewRecordReader(f.Records)
+	rec, _ := r.Next()
+	wantID, _ := format.DirectiveID(".cpu")
+	if rec.DirectiveID != wantID || rec.OperandCount != 1 {
+		t.Fatalf("rec = %+v", rec)
+	}
+	or := format.NewOperandReader(rec.Operands)
+	o, _ := or.Next()
+	if o.Kind != format.OpSysName || string(o.Str) != "cortex-a53" {
+		t.Errorf("op0 = %+v, want OpSysName cortex-a53", o)
+	}
+}
+
 func TestParseLo12(t *testing.T) {
 	f := parseHelper(t, "add x0, x1, :lo12:msg\n")
 	r := format.NewRecordReader(f.Records)

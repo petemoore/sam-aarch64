@@ -24,6 +24,8 @@ func TestIdempotency(t *testing.T) {
 		".section bss_kernel, \"aw\", %nobits\n",
 		".section text_tests, \"ax\"\n",
 		".section .rodata\n",
+		".arch armv8-a\n",
+		".cpu cortex-a53\n",
 	}
 	for _, src := range sources {
 		bin1, err := Translate([]byte(src), "test.s")

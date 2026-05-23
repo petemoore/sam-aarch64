@@ -93,6 +93,9 @@ func (p *parser) parseDirective(t Tok) error {
 	if t.Text == ".section" {
 		return p.parseDirectiveSection(id)
 	}
+	if t.Text == ".arch" || t.Text == ".cpu" {
+		return p.parseDirectiveRestOfLineAsSysName(id)
+	}
 	var ow format.OperandWriter
 	count := byte(0)
 	for {
@@ -188,6 +191,96 @@ func (p *parser) parseDirectiveSection(id uint8) error {
 		return nil
 	}
 	return newErr(p.cur().Pos, ".section: unexpected token after operands")
+}
+
+// parseDirectiveRestOfLineAsSysName consumes the rest of the current
+// logical line as a single OpSysName operand whose text is the
+// concatenation of token spellings. It is used for directives whose
+// argument is an opaque architecture/CPU name (e.g. `.arch armv8-a`,
+// `.cpu cortex-a53`) — the `-` between idents would otherwise be parsed
+// as a binary operator. The directive itself is a no-op at refenc layout
+// time; the operand is preserved only so bin2text can round-trip the
+// source text faithfully.
+//
+// If there are no operand tokens before EOL/EOF/comment the directive
+// is emitted with zero operands.
+func (p *parser) parseDirectiveRestOfLineAsSysName(id uint8) error {
+	var ow format.OperandWriter
+	var text []byte
+	for {
+		t := p.cur()
+		switch t.Kind {
+		case TokEOL, TokEOF, TokLineComment, TokBlockComment:
+			count := byte(0)
+			if len(text) > 0 {
+				ow.WriteSysName(string(text))
+				count = 1
+			}
+			p.rw.WriteDirective(id, count, ow.Bytes())
+			return nil
+		}
+		text = append(text, tokSpelling(t)...)
+		p.pos++
+	}
+}
+
+// tokSpelling returns the source-text spelling for a token kind whose
+// spelling is implied by its kind (or carried in Text for idents and
+// numbers). Used to reconstruct a rest-of-line raw operand for
+// directives like .arch / .cpu.
+func tokSpelling(t Tok) string {
+	switch t.Kind {
+	case TokIdent:
+		return t.Text
+	case TokInt:
+		if t.Text != "" {
+			return t.Text
+		}
+		return ""
+	case TokComma:
+		return ","
+	case TokHash:
+		return "#"
+	case TokColon:
+		return ":"
+	case TokBang:
+		return "!"
+	case TokDot:
+		return "."
+	case TokLBracket:
+		return "["
+	case TokRBracket:
+		return "]"
+	case TokLParen:
+		return "("
+	case TokRParen:
+		return ")"
+	case TokPlus:
+		return "+"
+	case TokMinus:
+		return "-"
+	case TokStar:
+		return "*"
+	case TokSlash:
+		return "/"
+	case TokAmp:
+		return "&"
+	case TokPipe:
+		return "|"
+	case TokCaret:
+		return "^"
+	case TokTilde:
+		return "~"
+	case TokShl:
+		return "<<"
+	case TokShr:
+		return ">>"
+	case TokEquals:
+		return "="
+	case TokPercent:
+		return "%"
+	}
+	return ""
 }
 
 func (p *parser) parseInst(t Tok) error {
