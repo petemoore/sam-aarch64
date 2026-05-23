@@ -1,0 +1,15 @@
+{
+  "source": "https://archive.org/download/arm-xml-a-profile-2022-12/ISA_A64_xml_A_profile-2022-12.tar.gz",
+  "arm_version": "A-profile 2022-12 (ISA_A64_xml_A_profile-2022-12)",
+  "snapshot_date": "2026-05-24",
+  "tarball_sha256": "1839a9722eab26aa3bdcd91adeeaf2e6c5c6df085f0e096f949c55cbee7d1a5a",
+  "arm_stem_names": {
+    "add_immediate.xml": "add_addsub_imm.xml"
+  },
+  "vendored_files": [
+    "shared_pseudocode.xml",
+    "nop.xml",
+    "add_immediate.xml",
+    "ret.xml"
+  ]
+}
