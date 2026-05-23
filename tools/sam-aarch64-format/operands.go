@@ -1,6 +1,9 @@
 package format
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 // OperandKind tags each operand with its on-disk shape (§4).
 type OperandKind byte
@@ -207,4 +210,125 @@ func appendU16(buf []byte, v uint16) []byte {
 	var tmp [2]byte
 	binary.LittleEndian.PutUint16(tmp[:], v)
 	return append(buf, tmp[:]...)
+}
+
+// Operand is a decoded operand record. Only the fields appropriate
+// to Kind are populated; the rest are zero-valued.
+type Operand struct {
+	Kind OperandKind
+
+	Reg      byte
+	Width    byte
+	Base     byte
+	Idx      byte
+	IdxWidth byte
+
+	ShiftKind ShiftKind
+	Extend    ExtendKind
+	ShiftAmt  byte
+
+	MemShape MemShape
+
+	Expr    []byte
+	AmtExpr []byte
+
+	Str []byte
+
+	Cond CondCode
+}
+
+// OperandReader walks an operand stream.
+type OperandReader struct {
+	buf []byte
+	pos int
+}
+
+func NewOperandReader(buf []byte) *OperandReader {
+	return &OperandReader{buf: buf}
+}
+
+func (r *OperandReader) AtEnd() bool { return r.pos >= len(r.buf) }
+
+func (r *OperandReader) Next() (Operand, error) {
+	if r.AtEnd() {
+		return Operand{}, fmt.Errorf("operand: read past end")
+	}
+	kind := OperandKind(r.buf[r.pos])
+	r.pos++
+	var o Operand
+	o.Kind = kind
+	switch kind {
+	case OpRegX, OpRegW, OpRegXSP, OpRegWSP:
+		o.Reg = r.take(1)[0]
+	case OpImmExpr:
+		n := r.readLen()
+		o.Expr = r.take(n)
+	case OpShiftedReg:
+		o.Width = r.take(1)[0]
+		o.Reg = r.take(1)[0]
+		o.ShiftKind = ShiftKind(r.take(1)[0])
+		n := r.readLen()
+		o.AmtExpr = r.take(n)
+	case OpExtendedReg:
+		o.Width = r.take(1)[0]
+		o.Reg = r.take(1)[0]
+		o.Extend = ExtendKind(r.take(1)[0])
+		n := r.readLen()
+		o.AmtExpr = r.take(n)
+	case OpMem:
+		o.MemShape = MemShape(r.take(1)[0])
+		switch o.MemShape {
+		case MemBase:
+			o.Base = r.take(1)[0]
+		case MemBaseOff, MemBaseOffPre, MemBaseOffPost:
+			o.Base = r.take(1)[0]
+			n := r.readLen()
+			o.Expr = r.take(n)
+		case MemBaseIdx:
+			o.Base = r.take(1)[0]
+			o.Idx = r.take(1)[0]
+			o.IdxWidth = r.take(1)[0]
+		case MemBaseIdxShifted:
+			o.Base = r.take(1)[0]
+			o.Idx = r.take(1)[0]
+			o.IdxWidth = r.take(1)[0]
+			o.ShiftAmt = r.take(1)[0]
+		case MemBaseIdxExtended:
+			o.Base = r.take(1)[0]
+			o.Idx = r.take(1)[0]
+			o.IdxWidth = r.take(1)[0]
+			o.Extend = ExtendKind(r.take(1)[0])
+			o.ShiftAmt = r.take(1)[0]
+		default:
+			return o, fmt.Errorf("operand: unknown MemShape %d", o.MemShape)
+		}
+	case OpString, OpSysName:
+		n := r.readLen()
+		o.Str = r.take(n)
+	case OpCond:
+		o.Cond = CondCode(r.take(1)[0])
+	default:
+		return o, fmt.Errorf("operand: unknown kind 0x%02x", byte(kind))
+	}
+	return o, nil
+}
+
+func (r *OperandReader) take(n int) []byte {
+	if r.pos+n > len(r.buf) {
+		s := r.buf[r.pos:]
+		r.pos = len(r.buf)
+		return s
+	}
+	s := r.buf[r.pos : r.pos+n]
+	r.pos += n
+	return s
+}
+
+func (r *OperandReader) readLen() int {
+	if r.pos+2 > len(r.buf) {
+		return 0
+	}
+	n := int(binary.LittleEndian.Uint16(r.buf[r.pos:]))
+	r.pos += 2
+	return n
 }
