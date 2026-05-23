@@ -41,4 +41,13 @@ fi
 # trigger, simcoupe would otherwise sit at the SAM boot screen forever. We treat
 # a 30s timeout as a *failure* (exit 124) so CI doesn't silently pass when the
 # stub never reached DI; HALT.
-exec timeout 30s /Applications/SimCoupe.app/Contents/MacOS/SimCoupe -exitonhalt 1 -fullscreen 0 -firstrun 0 "$disk"
+if command -v simcoupe >/dev/null 2>&1; then
+    SIMCOUPE=simcoupe
+elif [ -x /Applications/SimCoupe.app/Contents/MacOS/SimCoupe ]; then
+    SIMCOUPE=/Applications/SimCoupe.app/Contents/MacOS/SimCoupe
+else
+    echo "ERROR: simcoupe not found on PATH or at /Applications/SimCoupe.app" >&2
+    exit 1
+fi
+
+exec timeout 30s "$SIMCOUPE" -exitonhalt 1 -fullscreen 0 -firstrun 0 "$disk"
