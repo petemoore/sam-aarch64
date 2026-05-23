@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 
+	enc "github.com/petemoore/sam-aarch64/tools/aarch64enc"
 	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
 )
 
@@ -156,7 +157,7 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 			case ".ltorg":
 				flushPool(pc)
 			default:
-				n, err := directiveSizeAtPC(rec, pc)
+				n, err := directiveSizeAtPC(rec, pc, res, f)
 				if err != nil {
 					return nil, err
 				}
@@ -208,14 +209,17 @@ func resolveEquDirective(rec format.Record, f *format.File, res *Pass1Result) er
 		return fmt.Errorf("first operand of .equ must be a symbol reference")
 	}
 	name := f.Names[nameID]
-	// Operand 2: the value.
+	// Operand 2: the value. Allow it to reference previously-defined
+	// .equ/.set symbols — spectrum4's release.target chains constants
+	// like `.set BLOCK, (A + B) * 2`.
 	valOp, err := or.Next()
 	if err != nil {
 		return fmt.Errorf("missing value operand: %w", err)
 	}
-	v, ok := format.EvalConst(valOp.Expr)
-	if !ok {
-		return fmt.Errorf(".equ %s: value is not a constant expression", name)
+	ctx := pass1EvalCtx(0, res, f)
+	v, err := enc.Eval(valOp.Expr, ctx)
+	if err != nil {
+		return fmt.Errorf(".equ %s: %w", name, err)
 	}
 	res.Symbols[name] = v
 	return nil
@@ -233,13 +237,37 @@ func extractSymID(expr []byte) (uint16, bool) {
 }
 
 func directiveSize(rec format.Record) (int64, error) {
-	return directiveSizeAtPC(rec, 0)
+	return directiveSizeAtPC(rec, 0, nil, nil)
+}
+
+// pass1EvalCtx builds an EvalContext suitable for sizing directives in
+// pass1. Only `.set`/`.equ`-defined symbols are resolvable (they're added
+// to res.Symbols as the directives are seen). Label references would be
+// forward-references at sizing time and will surface as "undefined symbol"
+// errors from enc.Eval — which is the correct behaviour since labels can't
+// influence the size of an earlier `.space`/`.skip`/`.balign`.
+//
+// If res or f is nil (legacy `directiveSize` callers in tests) only literal
+// expressions resolve, matching the old format.EvalConst behaviour.
+func pass1EvalCtx(pc int64, res *Pass1Result, f *format.File) enc.EvalContext {
+	if res == nil || f == nil {
+		return enc.EvalContext{PC: pc}
+	}
+	return enc.EvalContext{
+		PC: pc,
+		Symbol: func(id uint16) (int64, bool) {
+			v, ok := res.Symbols[f.Names[id]]
+			return v, ok
+		},
+	}
 }
 
 // directiveSizeAtPC computes the byte contribution of a directive
 // record at the given PC. For most directives pc is ignored; for
-// .balign it is needed to compute the padding.
-func directiveSizeAtPC(rec format.Record, pc int64) (int64, error) {
+// .balign it is needed to compute the padding. res and f may be nil
+// for legacy callers — in that case operands must be pure literal
+// expressions.
+func directiveSizeAtPC(rec format.Record, pc int64, res *Pass1Result, f *format.File) (int64, error) {
 	name := format.DirectiveName(rec.DirectiveID)
 	switch name {
 	case ".byte":
@@ -264,9 +292,10 @@ func directiveSizeAtPC(rec format.Record, pc int64) (int64, error) {
 	case ".skip", ".space":
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
-		v, ok := format.EvalConst(o.Expr)
-		if !ok {
-			return 0, fmt.Errorf(".skip with non-constant operand")
+		ctx := pass1EvalCtx(pc, res, f)
+		v, err := enc.Eval(o.Expr, ctx)
+		if err != nil {
+			return 0, fmt.Errorf("%s: %w (only literals and .set/.equ symbols can be referenced before pass2)", name, err)
 		}
 		return v, nil
 	case ".inst":
@@ -291,9 +320,10 @@ func directiveSizeAtPC(rec format.Record, pc int64) (int64, error) {
 	case ".balign":
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
-		align, ok := format.EvalConst(o.Expr)
-		if !ok {
-			return 0, fmt.Errorf(".balign with non-constant operand")
+		ctx := pass1EvalCtx(pc, res, f)
+		align, err := enc.Eval(o.Expr, ctx)
+		if err != nil {
+			return 0, fmt.Errorf(".balign: %w", err)
 		}
 		if align <= 1 {
 			return 0, nil
@@ -304,9 +334,10 @@ func directiveSizeAtPC(rec format.Record, pc int64) (int64, error) {
 		// aarch64 GNU as convention: `.align N` aligns to 2^N bytes.
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
-		n, ok := format.EvalConst(o.Expr)
-		if !ok {
-			return 0, fmt.Errorf(".align with non-constant operand")
+		ctx := pass1EvalCtx(pc, res, f)
+		n, err := enc.Eval(o.Expr, ctx)
+		if err != nil {
+			return 0, fmt.Errorf(".align: %w", err)
 		}
 		if n <= 0 {
 			return 0, nil

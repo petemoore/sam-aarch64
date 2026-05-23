@@ -1323,9 +1323,9 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 		// Round PC up to next multiple of alignment, emitting zero bytes.
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
-		align, ok := format.EvalConst(o.Expr)
-		if !ok {
-			return nil, fmt.Errorf(".balign: non-constant alignment")
+		align, err := enc.Eval(o.Expr, ctx)
+		if err != nil {
+			return nil, fmt.Errorf(".balign: %w", err)
 		}
 		if align <= 1 {
 			return nil, nil
@@ -1336,9 +1336,9 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 		// aarch64 GNU as convention: `.align N` aligns to 2^N bytes.
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
-		n, ok := format.EvalConst(o.Expr)
-		if !ok {
-			return nil, fmt.Errorf(".align: non-constant exponent")
+		n, err := enc.Eval(o.Expr, ctx)
+		if err != nil {
+			return nil, fmt.Errorf(".align: %w", err)
 		}
 		if n <= 0 {
 			return nil, nil
@@ -1349,9 +1349,9 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 	case ".skip", ".space":
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
-		v, ok := format.EvalConst(o.Expr)
-		if !ok {
-			return nil, fmt.Errorf(".skip: non-constant size")
+		v, err := enc.Eval(o.Expr, ctx)
+		if err != nil {
+			return nil, fmt.Errorf(".skip: %w", err)
 		}
 		return make([]byte, v), nil
 	}
