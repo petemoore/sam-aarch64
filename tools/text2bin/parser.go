@@ -116,8 +116,46 @@ func (p *parser) parseOperand(ow *format.OperandWriter) error {
 	switch t.Kind {
 	case TokIdent:
 		if kind, reg, ok := matchReg(t.Text); ok {
-			ow.WriteReg(kind, reg)
 			p.pos++
+			if p.cur().Kind == TokComma && p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokIdent {
+				next := p.toks[p.pos+1].Text
+				if sk, ok := matchShiftKind(next); ok && (kind == format.OpRegX || kind == format.OpRegW) {
+					p.pos += 2
+					if p.cur().Kind != TokHash {
+						return newErr(p.cur().Pos, "expected '#' after shift")
+					}
+					p.pos++
+					amt, err := p.parseExpression()
+					if err != nil {
+						return err
+					}
+					width := byte(0)
+					if kind == format.OpRegX {
+						width = 1
+					}
+					ow.WriteShiftedReg(width, reg, sk, amt)
+					return nil
+				}
+				if ek, ok := matchExtend(next); ok && (kind == format.OpRegX || kind == format.OpRegW) {
+					p.pos += 2
+					var amt []byte
+					if p.cur().Kind == TokHash {
+						p.pos++
+						a, err := p.parseExpression()
+						if err != nil {
+							return err
+						}
+						amt = a
+					}
+					width := byte(0)
+					if kind == format.OpRegX {
+						width = 1
+					}
+					ow.WriteExtendedReg(width, reg, ek, amt)
+					return nil
+				}
+			}
+			ow.WriteReg(kind, reg)
 			return nil
 		}
 		expr, err := p.parseExpression()
@@ -133,6 +171,8 @@ func (p *parser) parseOperand(ow *format.OperandWriter) error {
 		}
 		ow.WriteImmExpr(expr)
 		return nil
+	case TokLBracket:
+		return p.parseMem(ow)
 	}
 	return newErr(t.Pos, "unexpected token in operand")
 }
@@ -299,4 +339,138 @@ func (p *parser) parseExprPrimary(w *format.ExprWriter) error {
 		return nil
 	}
 	return newErr(t.Pos, "unexpected token in expression")
+}
+
+func (p *parser) parseMem(ow *format.OperandWriter) error {
+	p.pos++ // consume '['
+	baseTok := p.cur()
+	if baseTok.Kind != TokIdent {
+		return newErr(baseTok.Pos, "expected register after '['")
+	}
+	baseKind, base, ok := matchReg(baseTok.Text)
+	if !ok || (baseKind != format.OpRegX && baseKind != format.OpRegXSP) {
+		return newErr(baseTok.Pos, "expected X register after '['")
+	}
+	p.pos++
+
+	if p.cur().Kind == TokRBracket {
+		p.pos++
+		// Post-index? `[base], #imm`
+		if p.cur().Kind == TokComma && p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokHash {
+			p.pos++ // ,
+			expr, err := p.parseExpression()
+			if err != nil {
+				return err
+			}
+			ow.WriteMemBaseOff(format.MemBaseOffPost, base, expr)
+			return nil
+		}
+		ow.WriteMemBase(base)
+		return nil
+	}
+
+	if p.cur().Kind != TokComma {
+		return newErr(p.cur().Pos, "expected ',' or ']'")
+	}
+	p.pos++
+
+	if p.cur().Kind == TokIdent {
+		idxKind, idx, ok := matchReg(p.cur().Text)
+		if ok && (idxKind == format.OpRegX || idxKind == format.OpRegW) {
+			width := byte(0)
+			if idxKind == format.OpRegX {
+				width = 1
+			}
+			p.pos++
+			if p.cur().Kind == TokComma {
+				p.pos++
+				modTok := p.cur()
+				if modTok.Kind != TokIdent {
+					return newErr(modTok.Pos, "expected shift/extend keyword")
+				}
+				if modTok.Text == "lsl" {
+					p.pos++
+					if p.cur().Kind != TokHash {
+						return newErr(p.cur().Pos, "expected '#'")
+					}
+					p.pos++
+					if p.cur().Kind != TokInt {
+						return newErr(p.cur().Pos, "shift amount must be literal")
+					}
+					amt := byte(p.cur().Int)
+					p.pos++
+					if err := p.expect(TokRBracket); err != nil {
+						return err
+					}
+					ow.WriteMemBaseIdxShifted(base, idx, width, amt)
+					return nil
+				}
+				ext, ok := matchExtend(modTok.Text)
+				if !ok {
+					return newErr(modTok.Pos, "unknown extend %q", modTok.Text)
+				}
+				p.pos++
+				amt := byte(0)
+				if p.cur().Kind == TokHash {
+					p.pos++
+					if p.cur().Kind != TokInt {
+						return newErr(p.cur().Pos, "extend amount must be literal")
+					}
+					amt = byte(p.cur().Int)
+					p.pos++
+				}
+				if err := p.expect(TokRBracket); err != nil {
+					return err
+				}
+				ow.WriteMemBaseIdxExtended(base, idx, width, ext, amt)
+				return nil
+			}
+			if err := p.expect(TokRBracket); err != nil {
+				return err
+			}
+			ow.WriteMemBaseIdx(base, idx, width)
+			return nil
+		}
+	}
+
+	expr, err := p.parseExpression()
+	if err != nil {
+		return err
+	}
+	if err := p.expect(TokRBracket); err != nil {
+		return err
+	}
+	if p.cur().Kind == TokBang {
+		p.pos++
+		ow.WriteMemBaseOff(format.MemBaseOffPre, base, expr)
+		return nil
+	}
+	ow.WriteMemBaseOff(format.MemBaseOff, base, expr)
+	return nil
+}
+
+func (p *parser) expect(k TokKind) error {
+	if p.cur().Kind != k {
+		return newErr(p.cur().Pos, "expected token %d, got %d", k, p.cur().Kind)
+	}
+	p.pos++
+	return nil
+}
+
+func matchExtend(name string) (format.ExtendKind, bool) {
+	for i := 0; i < 8; i++ {
+		if format.ExtendKind(i).Name() == name {
+			return format.ExtendKind(i), true
+		}
+	}
+	return 0, false
+}
+
+func matchShiftKind(name string) (format.ShiftKind, bool) {
+	for i := 0; i < 4; i++ {
+		if format.ShiftKind(i).Name() == name {
+			return format.ShiftKind(i), true
+		}
+	}
+	return 0, false
 }
