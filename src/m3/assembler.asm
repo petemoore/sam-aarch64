@@ -21,6 +21,7 @@
                 include "io.asm"
                 include "loader.asm"
                 include "slots/xreg.asm"
+                include "slots/imm_small.asm"
                 include "test_slots.asm"
 
 ; -----------------------------------------------------------------------

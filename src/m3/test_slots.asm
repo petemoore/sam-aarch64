@@ -6,8 +6,11 @@
 ; by load_enctab.  On all-pass the entry point RETs to the caller.
 ;
 ; Test vectors mirror the SUCCESS cases in
-; tools/aarch64enc/slots_trivial_test.go::TestEncodeXreg and
-; ::TestEncodeXregOrSpAcceptsThirtyOne.  The error case (reg=32) is
+; tools/aarch64enc/slots_trivial_test.go::TestEncodeXreg /
+; ::TestEncodeXregOrSpAcceptsThirtyOne / ::TestEncodeImm5 /
+; ::TestEncodeImm6 / ::TestEncodeCondCode and
+; tools/aarch64enc/slots_imm_test.go::TestEncodeShiftAmount.
+; Error cases (reg=32, imm=overflow, cond=overflow, etc.) are
 ; intentionally skipped: there is no way to test the `jp fail` path
 ; without halting the program.  (See plan §"Self-test framework".)
 
@@ -57,6 +60,43 @@ run_slot_self_tests:
                 call    encode_reg
                 call    assert_eq32_de_hl_imm
                 defb    31, 0, 0, 0
+
+; -- encode_imm_n(Imm5{BP=10,BW=5}, 17) => 0x00004400 (17 << 10) -------
+; Mirrors slots_trivial_test.go::TestEncodeImm5.
+                ld      hl, slot_imm5_bp10_bw5
+                ld      a, 17
+                call    encode_imm_n
+                call    assert_eq32_de_hl_imm
+                defb    &00, &44, &00, &00  ; 17<<10 = 0x00004400
+
+; -- encode_imm_n(Imm6{BP=16,BW=6}, 63) => 0x003f0000 (63 << 16) -------
+; Mirrors slots_trivial_test.go::TestEncodeImm6.
+                ld      hl, slot_imm6_bp16_bw6
+                ld      a, 63
+                call    encode_imm_n
+                call    assert_eq32_de_hl_imm
+                defb    &00, &00, &3f, &00  ; 63<<16 = 0x003f0000
+
+; -- encode_cond(CondCode{BP=0,BW=4}, 0xB) => 0x0000000b ----------------
+; LT condition code; mirrors slots_trivial_test.go::TestEncodeCondCode.
+; Exercises the encode_cond entry point (which jp-tails into
+; encode_imm_n) — the value 0xB < (1<<4)=16, so range-check passes.
+                ld      hl, slot_cond_bp0_bw4
+                ld      a, &0b
+                call    encode_cond
+                call    assert_eq32_de_hl_imm
+                defb    &0b, &00, &00, &00
+
+; -- encode_imm_n(ShiftAmount{BP=10,BW=6}, 4) => 0x00001000 (4 << 10) --
+; Mirrors slots_imm_test.go::TestEncodeShiftAmount.  ShiftAmount is
+; just a thin wrapper around encodeImmN on the Go side (slots_imm.go
+; lines 40-42); on the Z80 side the dispatcher will route SlotKind
+; 0x12 straight to encode_imm_n.
+                ld      hl, slot_shamt_bp10_bw6
+                ld      a, 4
+                call    encode_imm_n
+                call    assert_eq32_de_hl_imm
+                defb    &00, &10, &00, &00  ; 4<<10 = 0x00001000
 
 ; All assertions passed.
                 ret
@@ -118,15 +158,23 @@ assert_eq32_de_hl_imm:
 ; Layout (per docs/specs/2026-05-24-m2-encoder-tables-design.md §2):
 ;   defb slot_kind, expected_kind, bit_position, bit_width
 ;
-; slot_kind values (per tools/aarch64enc/types.go lines 16-19):
-;   Xreg     = 0x01
-;   Wreg     = 0x02
-;   XregOrSp = 0x03
-;   WregOrSp = 0x04
+; slot_kind values (per tools/aarch64enc/types.go lines 16-22 and 26):
+;   Xreg        = 0x01
+;   Wreg        = 0x02
+;   XregOrSp    = 0x03
+;   WregOrSp    = 0x04
+;   Imm5        = 0x05
+;   Imm6        = 0x06
+;   CondCode    = 0x07
+;   ShiftAmount = 0x12
 ;
-; expected_kind is set to 0 here: encode_reg does not consult it
+; expected_kind is set to 0 here: the encoders do not consult it
 ; (text2bin uses it earlier in the pipeline).
 ; -----------------------------------------------------------------------
 slot_xreg_bp0_bw5:      defb    &01, 0, 0, 5
 slot_xreg_bp5_bw5:      defb    &01, 0, 5, 5
 slot_xregorsp_bp0_bw5:  defb    &03, 0, 0, 5
+slot_imm5_bp10_bw5:     defb    &05, 0, 10, 5
+slot_imm6_bp16_bw6:     defb    &06, 0, 16, 6
+slot_cond_bp0_bw4:      defb    &07, 0, 0, 4
+slot_shamt_bp10_bw6:    defb    &12, 0, 10, 6
