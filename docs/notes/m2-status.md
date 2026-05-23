@@ -96,11 +96,17 @@ guidance on link-step requirements.
 
 ## Known gaps
 
-1. **Bare `ret` form gets clobbered on regen**. The 0-operand
-   `ret` form was added manually to `data.go`; running
-   `make enctab` overwrites it. Either teach the generator about
-   the ret alias, or add a small post-pass that re-injects the
-   form after regeneration.
+1. **Bare `ret` form (and other manual edits) survive routine builds.**
+   The 0-operand `ret` form is hand-added to `data.go` after each
+   intentional regeneration.  Previously `make enctab` (and therefore
+   anything that depended on it via `make m3-disk` / `make test-m3`)
+   silently regenerated `data.go` and wiped this manual form on every
+   build.  Fixed 2026-05-26: `enctab-gen`'s `-gopkg` flag now defaults
+   to empty (skip), and the regular `make enctab` target no longer
+   passes it.  A new `make enctab-regen-source` target is the explicit
+   entry-point for source regeneration (after an MRA bump or a planned
+   new-mnemonic batch); it will wipe manual edits as before, so reapply
+   them by hand or via a follow-up commit.
 
 2. **text2bin operand-kind validation** (spec §5, Task 21).
    Currently text2bin doesn't consult `ValidateOperandKinds`, so

@@ -19,7 +19,7 @@ func main() {
 	var mraDir, outEnc, outGo string
 	flag.StringVar(&mraDir, "mra", "reference/arm-mra", "MRA snapshot dir")
 	flag.StringVar(&outEnc, "out", "", "binary .enc output (optional)")
-	flag.StringVar(&outGo, "gopkg", "tools/aarch64enc/data.go", "generated Go source output")
+	flag.StringVar(&outGo, "gopkg", "", "regenerate Go source at this path (opt-in: default skips, because tools/aarch64enc/data.go has manual hand-edits — e.g. the 0-operand ret form — that this generator would clobber; see docs/notes/m2-status.md)")
 	flag.Parse()
 
 	xmls, err := filepath.Glob(filepath.Join(mraDir, "*.xml"))
