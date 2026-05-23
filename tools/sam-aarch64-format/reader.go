@@ -85,3 +85,53 @@ func (r *RecordReader) Next() (Record, error) {
 	}
 	return rec, nil
 }
+
+// File is a decoded .tbn file.
+type File struct {
+	Version uint16
+	Flags   uint16
+	Names   []string
+	Records []byte
+}
+
+func ReadFile(buf []byte) (*File, error) {
+	if len(buf) < 8 {
+		return nil, fmt.Errorf("file: too short for header")
+	}
+	if string(buf[0:4]) != "SA64" {
+		return nil, fmt.Errorf("file: bad magic %q", string(buf[0:4]))
+	}
+	version := binary.LittleEndian.Uint16(buf[4:6])
+	if version != Version {
+		return nil, fmt.Errorf("file: unsupported version %d (want %d)", version, Version)
+	}
+	flags := binary.LittleEndian.Uint16(buf[6:8])
+	pos := 8
+
+	if pos+2 > len(buf) {
+		return nil, fmt.Errorf("file: truncated name table count")
+	}
+	count := int(binary.LittleEndian.Uint16(buf[pos:]))
+	pos += 2
+
+	names := make([]string, count)
+	for i := 0; i < count; i++ {
+		if pos+2 > len(buf) {
+			return nil, fmt.Errorf("file: truncated name length at %d", i)
+		}
+		n := int(binary.LittleEndian.Uint16(buf[pos:]))
+		pos += 2
+		if pos+n > len(buf) {
+			return nil, fmt.Errorf("file: truncated name body at %d", i)
+		}
+		names[i] = string(buf[pos : pos+n])
+		pos += n
+	}
+
+	return &File{
+		Version: version,
+		Flags:   flags,
+		Names:   names,
+		Records: buf[pos:],
+	}, nil
+}
