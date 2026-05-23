@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+
+	emit "github.com/petemoore/sam-aarch64/tools/bin2text/emit"
 )
 
 func main() {
@@ -19,7 +21,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	out, err := Emit(in)
+	out, err := emit.Emit(in)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

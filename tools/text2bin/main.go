@@ -1,31 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"os"
 
-	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
+	translate "github.com/petemoore/sam-aarch64/tools/text2bin/internal/translate"
 )
-
-// Translate is the library entry point — accepts source bytes and a
-// path (for error messages) and returns the encoded .tbn bytes.
-func Translate(src []byte, path string) ([]byte, error) {
-	toks, err := Lex(src, path)
-	if err != nil {
-		return nil, err
-	}
-	records, st, err := Parse(toks)
-	if err != nil {
-		return nil, err
-	}
-	var out bytes.Buffer
-	if err := format.WriteFile(&out, st, records); err != nil {
-		return nil, err
-	}
-	return out.Bytes(), nil
-}
 
 func main() {
 	var outFlag string
@@ -41,7 +22,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	out, err := Translate(src, in)
+	out, err := translate.Translate(src, in)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
