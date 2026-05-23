@@ -71,3 +71,23 @@ func TestLexLocalLabelRef(t *testing.T) {
 		t.Errorf("tok[1] = %+v, want LocalRef 1f", toks[1])
 	}
 }
+
+func TestLexPercentForSectionType(t *testing.T) {
+	toks, err := Lex([]byte(`.section bss_kernel, "aw", %nobits`+"\n"), "f.s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []TokKind{
+		TokIdent /* .section */, TokIdent /* bss_kernel */, TokComma,
+		TokString /* "aw" */, TokComma,
+		TokPercent, TokIdent /* nobits */, TokEOL, TokEOF,
+	}
+	if len(toks) != len(want) {
+		t.Fatalf("got %d toks, want %d: %+v", len(toks), len(want), toks)
+	}
+	for i, w := range want {
+		if toks[i].Kind != w {
+			t.Errorf("tok[%d] = %v, want %v", i, toks[i].Kind, w)
+		}
+	}
+}

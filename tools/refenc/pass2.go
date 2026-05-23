@@ -923,6 +923,10 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 		return append(o.Str, 0), nil
 	case ".text", ".data", ".global", ".equ", ".set":
 		return nil, nil
+	case ".section":
+		// .section is a no-op in the current flat-layout pipeline. See
+		// docs/notes/m2-status.md for the multi-section gap this leaves.
+		return nil, nil
 	case ".balign":
 		// Round PC up to next multiple of alignment, emitting zero bytes.
 		or := format.NewOperandReader(rec.Operands)

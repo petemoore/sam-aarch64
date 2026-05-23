@@ -90,6 +90,9 @@ func (p *parser) parseDirective(t Tok) error {
 		return newErr(t.Pos, "unknown directive %q", t.Text)
 	}
 	p.pos++
+	if t.Text == ".section" {
+		return p.parseDirectiveSection(id)
+	}
 	var ow format.OperandWriter
 	count := byte(0)
 	for {
@@ -115,6 +118,76 @@ func (p *parser) parseDirective(t Tok) error {
 		}
 		count++
 	}
+}
+
+// parseDirectiveSection parses the GNU as `.section` directive in one of
+// the three forms used by spectrum4:
+//
+//	.section NAME                       — bare name only (permissive)
+//	.section NAME, "flags"              — name + ELF section flags string
+//	.section NAME, "flags", %type       — name + flags + ELF section type
+//
+// Operands are encoded as:
+//
+//	op0: OpSysName(NAME)           — bareword identifier
+//	op1: OpString(flags)           — flags content (without surrounding quotes)
+//	op2: OpSysName("%type")        — bareword with leading '%' preserved so
+//	                                  bin2text can round-trip the form
+//
+// The current refenc / layout pipeline treats .section as a no-op (flat
+// single-section output). Honouring multiple sections requires linker-
+// script support and is intentionally out of scope here. See
+// docs/notes/m2-status.md for the layout gap this leaves.
+func (p *parser) parseDirectiveSection(id uint8) error {
+	var ow format.OperandWriter
+	count := byte(0)
+
+	// Operand 1: section NAME. Accept either a plain identifier
+	// (e.g. `bss_kernel`) or a dotted identifier already parsed as a
+	// single TokIdent (e.g. `.rodata` — the lexer collapses `.` +
+	// ident-start into one TokIdent).
+	nameTok := p.cur()
+	if nameTok.Kind != TokIdent {
+		return newErr(nameTok.Pos, ".section: expected section name")
+	}
+	ow.WriteSysName(nameTok.Text)
+	p.pos++
+	count++
+
+	// Optional flags string after a comma.
+	if p.cur().Kind == TokComma {
+		p.pos++
+		if p.cur().Kind != TokString {
+			return newErr(p.cur().Pos, ".section: expected quoted flags string after ','")
+		}
+		ow.WriteString(p.cur().Bytes)
+		p.pos++
+		count++
+
+		// Optional %type after a further comma.
+		if p.cur().Kind == TokComma {
+			p.pos++
+			if p.cur().Kind != TokPercent {
+				return newErr(p.cur().Pos, ".section: expected percent-prefixed type after ','")
+			}
+			p.pos++
+			if p.cur().Kind != TokIdent {
+				return newErr(p.cur().Pos, ".section: expected type keyword after percent")
+			}
+			ow.WriteSysName("%" + p.cur().Text)
+			p.pos++
+			count++
+		}
+	}
+
+	// Trailing tokens must be statement terminators (comments are
+	// statement-terminators here just like for any other directive).
+	switch p.cur().Kind {
+	case TokEOL, TokEOF, TokLineComment, TokBlockComment:
+		p.rw.WriteDirective(id, count, ow.Bytes())
+		return nil
+	}
+	return newErr(p.cur().Pos, ".section: unexpected token after operands")
 }
 
 func (p *parser) parseInst(t Tok) error {

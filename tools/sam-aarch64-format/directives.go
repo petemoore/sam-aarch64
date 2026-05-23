@@ -13,6 +13,11 @@ var DirectiveTable = []string{
 	".inst",
 	".align", // aarch64 GNU as: align to 2^N bytes
 	".ltorg", // flush literal pool at this point
+	// .section NAME, "flags"[, %type] — GNU as section directive.
+	// text2bin parses it for syntactic completeness; the current refenc
+	// layout is single-section flat, so .section is a no-op at encoding
+	// time. See docs/notes/m2-status.md for the multi-section layout gap.
+	".section",
 }
 
 var directiveIndex = func() map[string]uint8 {

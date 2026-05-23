@@ -36,6 +36,10 @@ const (
 	TokBlockComment
 	TokLocalRef
 	TokEquals
+	// TokPercent is the '%' character. GNU as uses it as a prefix on
+	// section-type keywords in `.section NAME, "flags", %type`
+	// (e.g. `%nobits`, `%progbits`).
+	TokPercent
 )
 
 type Tok struct {
@@ -192,6 +196,9 @@ func (l *lexer) next() (Tok, error) {
 	case c == '=':
 		l.advance()
 		return Tok{Kind: TokEquals, Pos: start}, nil
+	case c == '%':
+		l.advance()
+		return Tok{Kind: TokPercent, Pos: start}, nil
 	case c == '<':
 		if l.pos+1 < len(l.src) && l.src[l.pos+1] == '<' {
 			l.advance()

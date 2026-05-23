@@ -273,6 +273,11 @@ func directiveSizeAtPC(rec format.Record, pc int64) (int64, error) {
 		return 4, nil
 	case ".text", ".data", ".global", ".equ", ".set":
 		return 0, nil
+	case ".section":
+		// .section is parsed for syntactic completeness but the current
+		// refenc layout emits everything into a single flat stream. See
+		// docs/notes/m2-status.md for the multi-section layout gap.
+		return 0, nil
 	case ".ltorg":
 		// .ltorg's byte contribution is computed by the pool flush
 		// logic in Pass1; the directive itself emits no bytes.
