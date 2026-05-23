@@ -47,6 +47,13 @@ var MnemonicTable = []string{
 	// movl: spectrum4 pseudo-instruction: "move 32-bit literal" into Wd/Wx.
 	// Expands to MOVZ Rd, #lo16 + MOVK Rd, #hi16, lsl #16 (or just MOVZ if hi16=0).
 	"movl",
+	// System barriers and exception return.
+	// eret: Exception Return (no operand).                     ARM ARM C6.2.84.
+	// isb: Instruction Synchronization Barrier (optional arg). ARM ARM C6.2.99.
+	// dsb: Data Synchronization Barrier (mandatory arg).       ARM ARM C6.2.74.
+	// dmb: Data Memory Barrier (mandatory arg).                ARM ARM C6.2.73.
+	// wfi: Wait For Interrupt (no operand).                    ARM ARM C6.2.305.
+	"eret", "isb", "dsb", "dmb", "wfi",
 }
 
 var mnemonicIndex = func() map[string]uint16 {

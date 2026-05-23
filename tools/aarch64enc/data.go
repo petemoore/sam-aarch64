@@ -544,6 +544,21 @@ var generatedForms = []Form{
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5}, // Wm
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 10, BitWidth: 5}, // Xa
 	}},
+
+	// eret (ID 65) — Exception Return (no operand). ARM ARM C6.2.84.
+	{MnemonicID: 65, Pattern: 0xd69f03e0, Mask: 0xffffffff, Slots: []OperandSlot{}},
+
+	// wfi (ID 69) — Wait For Interrupt (no operand). ARM ARM C6.2.305.
+	{MnemonicID: 69, Pattern: 0xd503207f, Mask: 0xffffffff, Slots: []OperandSlot{}},
+
+	// isb (ID 66), dsb (ID 67), dmb (ID 68) take a single OpImmExpr
+	// operand carrying the CRm field value (encoded by the parser from
+	// a barrier-arg keyword). pass2 (encodeBarrierInst) takes the
+	// pattern and ORs the CRm into bits 11:8.
+	//
+	//   isb base: 0xd50330df | (crm << 8)   (sy is default, crm=0xf)
+	//   dsb base: 0xd503309f | (crm << 8)
+	//   dmb base: 0xd50330bf | (crm << 8)
 }
 
 func init() {

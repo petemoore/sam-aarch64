@@ -157,6 +157,98 @@ func TestParseInstLdrRegular(t *testing.T) {
 	}
 }
 
+func TestParseInstBarrierZeroOperand(t *testing.T) {
+	// eret / wfi are 0-operand mnemonics.
+	f := parseHelper(t, "eret\nwfi\n")
+	r := format.NewRecordReader(f.Records)
+	rec, _ := r.Next()
+	eretID, _ := format.MnemonicID("eret")
+	if rec.MnemonicID != eretID || rec.OperandCount != 0 {
+		t.Errorf("eret: %+v", rec)
+	}
+	rec, _ = r.Next()
+	wfiID, _ := format.MnemonicID("wfi")
+	if rec.MnemonicID != wfiID || rec.OperandCount != 0 {
+		t.Errorf("wfi: %+v", rec)
+	}
+}
+
+func TestParseInstISBDefaultArg(t *testing.T) {
+	// isb with no argument defaults to sy (CRm=0xf).
+	f := parseHelper(t, "isb\n")
+	r := format.NewRecordReader(f.Records)
+	rec, _ := r.Next()
+	isbID, _ := format.MnemonicID("isb")
+	if rec.MnemonicID != isbID || rec.OperandCount != 1 {
+		t.Fatalf("isb: %+v", rec)
+	}
+	or := format.NewOperandReader(rec.Operands)
+	o, _ := or.Next()
+	if o.Kind != format.OpImmExpr {
+		t.Fatalf("isb op0 kind = %v", o.Kind)
+	}
+	v, ok := format.EvalConst(o.Expr)
+	if !ok || v != 0xf {
+		t.Errorf("isb default crm = (%d, %v), want (15, true)", v, ok)
+	}
+}
+
+func TestParseInstDSBWithBarrierArgs(t *testing.T) {
+	cases := []struct {
+		src string
+		crm int64
+	}{
+		{"dsb sy\n", 0xf},
+		{"dsb st\n", 0xe},
+		{"dsb ld\n", 0xd},
+		{"dsb ish\n", 0xb},
+		{"dsb ishst\n", 0xa},
+		{"dsb ishld\n", 0x9},
+		{"dsb nsh\n", 0x7},
+		{"dsb nshst\n", 0x6},
+		{"dsb nshld\n", 0x5},
+		{"dsb osh\n", 0x3},
+		{"dsb oshst\n", 0x2},
+		{"dsb oshld\n", 0x1},
+	}
+	dsbID, _ := format.MnemonicID("dsb")
+	for _, c := range cases {
+		f := parseHelper(t, c.src)
+		r := format.NewRecordReader(f.Records)
+		rec, _ := r.Next()
+		if rec.MnemonicID != dsbID || rec.OperandCount != 1 {
+			t.Errorf("%s: rec = %+v", c.src, rec)
+			continue
+		}
+		or := format.NewOperandReader(rec.Operands)
+		o, _ := or.Next()
+		v, ok := format.EvalConst(o.Expr)
+		if !ok || v != c.crm {
+			t.Errorf("%s: crm = (%d, %v), want %d", c.src, v, ok, c.crm)
+		}
+	}
+}
+
+func TestParseInstDMBMandatoryArg(t *testing.T) {
+	dmbID, _ := format.MnemonicID("dmb")
+	f := parseHelper(t, "dmb ish\n")
+	r := format.NewRecordReader(f.Records)
+	rec, _ := r.Next()
+	if rec.MnemonicID != dmbID || rec.OperandCount != 1 {
+		t.Fatalf("dmb: %+v", rec)
+	}
+	// Missing arg → parse error.
+	_, err := Translate([]byte("dmb\n"), "t.s")
+	if err == nil {
+		t.Error("expected error for dmb with no arg")
+	}
+	// Unknown arg → parse error.
+	_, err = Translate([]byte("dmb bogus\n"), "t.s")
+	if err == nil {
+		t.Error("expected error for dmb with unknown arg")
+	}
+}
+
 func TestParseInstSymbolRef(t *testing.T) {
 	f := parseHelper(t, "b target\n")
 	if len(f.Names) != 1 || f.Names[0] != "target" {

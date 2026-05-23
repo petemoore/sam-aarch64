@@ -319,6 +319,21 @@ func (p *parser) parseInst(t Tok) error {
 		}
 	}
 
+	// dsb / dmb take a mandatory barrier-arg keyword (sy, st, ld, ish,
+	// ishst, ishld, nsh, nshst, nshld, osh, oshst, oshld). isb takes an
+	// optional barrier arg defaulting to sy. We translate the keyword to
+	// its CRm value and emit an OpImmExpr operand; pass2 then encodes the
+	// barrier instruction directly (see encodeBarrierInst).
+	dsbID, _ := format.MnemonicID("dsb")
+	dmbID, _ := format.MnemonicID("dmb")
+	isbID, _ := format.MnemonicID("isb")
+	if id == dsbID || id == dmbID {
+		return p.parseBarrier(id, false)
+	}
+	if id == isbID {
+		return p.parseBarrier(id, true)
+	}
+
 	var ow format.OperandWriter
 	count := byte(0)
 	for {
@@ -410,6 +425,73 @@ func (p *parser) parseMovk(id uint16) error {
 	ow.WriteImmExpr(folded.Bytes())
 
 	p.rw.WriteInst(id, 2, ow.Bytes())
+	return nil
+}
+
+// barrierCRm returns the CRm field value (bits 11:8) for a barrier-arg
+// keyword, per ARM ARM C6.2.74 (DSB) / C6.2.73 (DMB) / C6.2.99 (ISB).
+// Returns ok=false when the keyword is not a known barrier.
+func barrierCRm(name string) (int64, bool) {
+	switch name {
+	case "sy":
+		return 0xf, true
+	case "st":
+		return 0xe, true
+	case "ld":
+		return 0xd, true
+	case "ish":
+		return 0xb, true
+	case "ishst":
+		return 0xa, true
+	case "ishld":
+		return 0x9, true
+	case "nsh":
+		return 0x7, true
+	case "nshst":
+		return 0x6, true
+	case "nshld":
+		return 0x5, true
+	case "osh":
+		return 0x3, true
+	case "oshst":
+		return 0x2, true
+	case "oshld":
+		return 0x1, true
+	}
+	return 0, false
+}
+
+// parseBarrier parses dsb / dmb / isb. The barrier-arg keyword (sy, st,
+// ld, ish, etc.) is translated to its CRm value and emitted as a single
+// OpImmExpr operand. For isb, the arg is optional and defaults to `sy`.
+// For dsb/dmb the arg is mandatory.
+func (p *parser) parseBarrier(id uint16, optional bool) error {
+	var ow format.OperandWriter
+
+	t := p.cur()
+	hasArg := t.Kind == TokIdent
+	if !hasArg {
+		if !optional {
+			return newErr(t.Pos, "expected barrier-arg keyword (sy, st, ld, ish, ishst, ishld, nsh, nshst, nshld, osh, oshst, oshld)")
+		}
+		// No arg: default to sy (CRm=0xf).
+		var e format.ExprWriter
+		e.WriteImm(0xf)
+		ow.WriteImmExpr(e.Bytes())
+		p.rw.WriteInst(id, 1, ow.Bytes())
+		return nil
+	}
+
+	crm, ok := barrierCRm(t.Text)
+	if !ok {
+		return newErr(t.Pos, "unknown barrier-arg %q (expected sy, st, ld, ish, ishst, ishld, nsh, nshst, nshld, osh, oshst, oshld)", t.Text)
+	}
+	p.pos++
+
+	var e format.ExprWriter
+	e.WriteImm(crm)
+	ow.WriteImmExpr(e.Bytes())
+	p.rw.WriteInst(id, 1, ow.Bytes())
 	return nil
 }
 

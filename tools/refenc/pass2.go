@@ -184,6 +184,8 @@ func encodeInst(rec format.Record, pc int64, p1 *Pass1Result, f *format.File) (u
 		}
 	case 52: // csetm — invert the condition code before encoding
 		return encodeCsetm(operands, pc, p1, f)
+	case 66, 67, 68: // isb, dsb, dmb — single CRm operand encoded in bits 11:8
+		return encodeBarrierInst(rec.MnemonicID, operands, pc, p1, f)
 	}
 
 	form, ok, diag := enc.ValidateOperandKinds(rec.MnemonicID, kinds)
@@ -898,6 +900,48 @@ func encodeCsetm(operands []format.Operand, pc int64, p1 *Pass1Result, f *format
 		base = 0x5a9f03e0
 	}
 	word := base | (invertedCond << 12) | uint32(rd.Reg)
+	return word, nil
+}
+
+// ---------------------------------------------------------------------------
+// Barrier instructions: isb, dsb, dmb
+// ---------------------------------------------------------------------------
+
+// encodeBarrierInst encodes isb / dsb / dmb. The single operand is an
+// immediate carrying the CRm value (bits 11:8) — the parser converts
+// the barrier-arg keyword (sy, st, ld, ish, ...) to the CRm value per
+// ARM ARM C6.2.74 (DSB) / C6.2.73 (DMB) / C6.2.99 (ISB).
+//
+//	isb (66) base: 0xd50330df ( | (CRm << 8) )
+//	dsb (67) base: 0xd503309f ( | (CRm << 8) )
+//	dmb (68) base: 0xd50330bf ( | (CRm << 8) )
+func encodeBarrierInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
+	if len(operands) < 1 {
+		return 0, fmt.Errorf("barrier: need 1 operand, got %d", len(operands))
+	}
+	if operands[0].Kind != format.OpImmExpr {
+		return 0, fmt.Errorf("barrier: operand 0 must be an immediate")
+	}
+	ctx := makeCtx(pc, p1, f)
+	crm, err := enc.Eval(operands[0].Expr, ctx)
+	if err != nil {
+		return 0, fmt.Errorf("barrier CRm: %w", err)
+	}
+	if crm < 0 || crm > 0xf {
+		return 0, fmt.Errorf("barrier CRm %d out of range [0,15]", crm)
+	}
+	var base uint32
+	switch mnemonicID {
+	case 66: // isb
+		base = 0xd50330df
+	case 67: // dsb
+		base = 0xd503309f
+	case 68: // dmb
+		base = 0xd50330bf
+	default:
+		return 0, fmt.Errorf("barrier: unsupported mnemonic id %d", mnemonicID)
+	}
+	word := base | (uint32(crm) << 8)
 	return word, nil
 }
 
