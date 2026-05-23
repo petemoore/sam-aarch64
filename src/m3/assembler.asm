@@ -48,19 +48,8 @@ start:
                 call    run_slot_self_tests
 
 ; -- Load and validate enctab.enc header --------------------------------
-; load_enctab: opens the file via HGFLE, reads the first 8 bytes via
-; LBYT, validates magic "ENC1" and version=1.
-;
-; DISABLED pending investigation.  When the fail: path was a no-op
-; (`di; halt` — see comment on fail: below), Task 3's "verification"
-; reported `make test-m3` exit 0 even on header-validation failure.
-; Repairing fail: to actually fail (the 30-second spin below) exposed
-; that the very first LBYT returns 0x00 instead of 'E' (0x45) — i.e.
-; the channel pointer set by HGFLE is not where the audit
-; (`docs/notes/sam-stub-audit.md`) describes.  Likely SAMDOS-state
-; issue interacting with BASIC's prior LOAD CODE.  Tracked separately;
-; re-enable the call once the loader is repaired.
-;                call    load_enctab
+; HGTHD+HLOAD enctab.enc into &C100, then check magic "ENC1" / version=1.
+                call    load_enctab
 
 ; -- Header valid: signal clean success ----------------------------------
 ; The DI at start: is undone by SAMDOS's EI inside the RST 8 hook window

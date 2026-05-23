@@ -53,6 +53,8 @@ UIFA_LENGTH:    equ     35             ; length-mod-16K LE word.
 ; own code in section B, corrupting the running image. Use HSAVE (132)
 ; for whole-file writes: it calls `gtixd` at `h.s:145` before any FCB
 ; access. Full audit: `docs/notes/sam-stub-audit.md`.
+HOOK_HGTHD:     equ     129            ; get file header (finds file + sets svde).
+HOOK_HLOAD:     equ     130            ; load whole file (uses (svde) from prior HGTHD).
 HOOK_HSAVE:     equ     132            ; save whole file (gtixd-correct).
 HOOK_HGFLE:     equ     158            ; open file for reading.
 HOOK_LBYT:      equ     159            ; load one byte (buffered).
