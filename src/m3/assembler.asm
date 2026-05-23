@@ -20,6 +20,8 @@
 
                 include "io.asm"
                 include "loader.asm"
+                include "slots/xreg.asm"
+                include "test_slots.asm"
 
 ; -----------------------------------------------------------------------
 ; Main program — entry via jp from &8000.
@@ -34,6 +36,11 @@ start:
 ; want it correct for the call itself.
 ; Stack lives at &C000-&C0FF (section D, HMPR+1 page — always writable).
                 ld      sp, &C100
+
+; -- Per-slot encoder self-tests ----------------------------------------
+; Exercises encode_reg against hardcoded slot records (no disk I/O).
+; On any mismatch: jp fail (red border + halt).  See test_slots.asm.
+                call    run_slot_self_tests
 
 ; -- Load and validate enctab.enc header --------------------------------
 ; load_enctab: opens the file, reads the first 8 bytes, validates magic
