@@ -244,7 +244,7 @@ func directiveSizeAtPC(rec format.Record, pc int64) (int64, error) {
 	switch name {
 	case ".byte":
 		return int64(rec.OperandCount), nil
-	case ".short":
+	case ".short", ".hword":
 		return int64(rec.OperandCount) * 2, nil
 	case ".word":
 		return int64(rec.OperandCount) * 4, nil

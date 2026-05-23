@@ -24,6 +24,10 @@ var DirectiveTable = []string{
 	// and does not feature-gate instructions on .arch/.cpu values.
 	".arch",
 	".cpu",
+	// .hword — GNU AS halfword (16-bit) data directive; synonym of .short.
+	// Distinct ID is preserved so bin2text can round-trip the source
+	// spelling verbatim; refenc encodes .hword identically to .short.
+	".hword",
 }
 
 var directiveIndex = func() map[string]uint8 {

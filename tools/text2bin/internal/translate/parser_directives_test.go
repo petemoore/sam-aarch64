@@ -19,6 +19,19 @@ func TestParseDirectiveByte(t *testing.T) {
 	}
 }
 
+func TestParseDirectiveHword(t *testing.T) {
+	f := parseHelper(t, ".hword 0x1234, 0x5678, 0xabcd\n")
+	r := format.NewRecordReader(f.Records)
+	rec, _ := r.Next()
+	if rec.Kind != format.KindDirective {
+		t.Fatalf("kind = %v", rec.Kind)
+	}
+	id, _ := format.DirectiveID(".hword")
+	if rec.DirectiveID != id || rec.OperandCount != 3 {
+		t.Errorf("rec = %+v", rec)
+	}
+}
+
 func TestParseDirectiveAscii(t *testing.T) {
 	f := parseHelper(t, ".ascii \"hi\"\n")
 	r := format.NewRecordReader(f.Records)

@@ -1273,7 +1273,7 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 	switch name {
 	case ".byte":
 		return evalImmsAsBytes(rec, ctx, 1)
-	case ".short":
+	case ".short", ".hword":
 		return evalImmsAsBytes(rec, ctx, 2)
 	case ".word":
 		return evalImmsAsBytes(rec, ctx, 4)
