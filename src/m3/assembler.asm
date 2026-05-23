@@ -13,7 +13,7 @@
 ; Pattern mirrors M0's src/stub.asm.
                 jp      start
 
-                include "../sam_io.inc"
+                include "io.asm"
 
 ; -----------------------------------------------------------------------
 ; Main program — entry via jp from &8000.
