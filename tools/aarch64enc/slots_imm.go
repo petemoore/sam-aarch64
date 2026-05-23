@@ -1,6 +1,10 @@
 package aarch64enc
 
-import "fmt"
+import (
+	"fmt"
+
+	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
+)
 
 // encodeImm12Shifted handles the (sh:1, imm12:12) pair used by
 // add/sub immediate. The 'sh' bit is at BitPosition+12; imm12 at
@@ -28,5 +32,23 @@ func encodeImm16Shifted(slot OperandSlot, imm int64, hw byte) (uint32, error) {
 		return 0, fmt.Errorf("Imm16Shifted: hw %d > 3", hw)
 	}
 	bits := uint32(imm)<<slot.BitPosition | uint32(hw)<<(slot.BitPosition+16)
+	return bits, nil
+}
+
+// encodeShiftAmount handles the shift-amount field inside shifted-
+// register operand forms. It is a plain unsigned N-bit immediate.
+func encodeShiftAmount(slot OperandSlot, amt int64) (uint32, error) {
+	return encodeImmN(slot, amt)
+}
+
+// encodeExtendOp packs the (option:3, imm3:3) pair used by
+// extended-register forms. option encodes the extend kind. imm3 is
+// the optional shift amount (0–4).
+func encodeExtendOp(slot OperandSlot, ext format.ExtendKind, shift byte) (uint32, error) {
+	if shift > 4 {
+		return 0, fmt.Errorf("ExtendOp: shift %d > 4", shift)
+	}
+	option := uint32(ext)
+	bits := option<<(slot.BitPosition+3) | uint32(shift)<<slot.BitPosition
 	return bits, nil
 }
