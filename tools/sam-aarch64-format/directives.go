@@ -11,6 +11,7 @@ var DirectiveTable = []string{
 	".org",
 	".skip", ".space",
 	".inst",
+	".align", // aarch64 GNU as: align to 2^N bytes
 }
 
 var directiveIndex = func() map[string]uint8 {

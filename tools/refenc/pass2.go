@@ -456,6 +456,20 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 		}
 		pad := (align - (pc % align)) % align
 		return make([]byte, pad), nil
+	case ".align":
+		// aarch64 GNU as convention: `.align N` aligns to 2^N bytes.
+		or := format.NewOperandReader(rec.Operands)
+		o, _ := or.Next()
+		n, ok := format.EvalConst(o.Expr)
+		if !ok {
+			return nil, fmt.Errorf(".align: non-constant exponent")
+		}
+		if n <= 0 {
+			return nil, nil
+		}
+		align := int64(1) << uint64(n)
+		pad := (align - (pc % align)) % align
+		return make([]byte, pad), nil
 	case ".skip", ".space":
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
