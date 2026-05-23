@@ -85,5 +85,218 @@ func (p *parser) parseInstOrDirective(t Tok) error {
 }
 
 func (p *parser) parseInst(t Tok) error {
-	return newErr(t.Pos, "instruction parsing arrives in Task 19")
+	id, ok := format.MnemonicID(t.Text)
+	if !ok {
+		return newErr(t.Pos, "unknown mnemonic %q", t.Text)
+	}
+	p.pos++
+	var ow format.OperandWriter
+	count := byte(0)
+	for {
+		switch p.cur().Kind {
+		case TokEOL, TokEOF, TokLineComment, TokBlockComment:
+			p.rw.WriteInst(id, count, ow.Bytes())
+			return nil
+		case TokComma:
+			if count == 0 {
+				return newErr(p.cur().Pos, "unexpected ','")
+			}
+			p.pos++
+			continue
+		}
+		if err := p.parseOperand(&ow); err != nil {
+			return err
+		}
+		count++
+	}
+}
+
+func (p *parser) parseOperand(ow *format.OperandWriter) error {
+	t := p.cur()
+	switch t.Kind {
+	case TokIdent:
+		if kind, reg, ok := matchReg(t.Text); ok {
+			ow.WriteReg(kind, reg)
+			p.pos++
+			return nil
+		}
+		expr, err := p.parseExpression()
+		if err != nil {
+			return err
+		}
+		ow.WriteImmExpr(expr)
+		return nil
+	case TokHash, TokInt, TokMinus, TokTilde, TokLParen, TokDot, TokLocalRef:
+		expr, err := p.parseExpression()
+		if err != nil {
+			return err
+		}
+		ow.WriteImmExpr(expr)
+		return nil
+	}
+	return newErr(t.Pos, "unexpected token in operand")
+}
+
+// matchReg returns the operand kind and register index for a textual
+// register name, or ok=false if it is not a register.
+func matchReg(name string) (format.OperandKind, byte, bool) {
+	switch name {
+	case "sp":
+		return format.OpRegXSP, 31, true
+	case "wsp":
+		return format.OpRegWSP, 31, true
+	case "xzr":
+		return format.OpRegX, 31, true
+	case "wzr":
+		return format.OpRegW, 31, true
+	case "fp":
+		return format.OpRegX, 29, true
+	case "lr":
+		return format.OpRegX, 30, true
+	}
+	if len(name) < 2 {
+		return 0, 0, false
+	}
+	prefix := name[0]
+	if prefix != 'x' && prefix != 'w' {
+		return 0, 0, false
+	}
+	num := 0
+	for _, c := range []byte(name[1:]) {
+		if c < '0' || c > '9' {
+			return 0, 0, false
+		}
+		num = num*10 + int(c-'0')
+		if num > 30 {
+			return 0, 0, false
+		}
+	}
+	if prefix == 'x' {
+		return format.OpRegX, byte(num), true
+	}
+	return format.OpRegW, byte(num), true
+}
+
+// parseExpression consumes tokens until it hits a comma, EOL, EOF, or
+// a closing bracket. It returns the bytecode for the expression.
+func (p *parser) parseExpression() ([]byte, error) {
+	var w format.ExprWriter
+	if err := p.parseExprPrec(&w, 0); err != nil {
+		return nil, err
+	}
+	if v, ok := format.EvalConst(w.Bytes()); ok {
+		var folded format.ExprWriter
+		folded.WriteImm(v)
+		return folded.Bytes(), nil
+	}
+	return w.Bytes(), nil
+}
+
+func tokPrec(k TokKind) int {
+	switch k {
+	case TokPipe, TokCaret:
+		return 0
+	case TokAmp:
+		return 1
+	case TokShl, TokShr:
+		return 2
+	case TokPlus, TokMinus:
+		return 3
+	case TokStar, TokSlash:
+		return 4
+	}
+	return -1
+}
+
+func (p *parser) parseExprPrec(w *format.ExprWriter, minPrec int) error {
+	if err := p.parseExprPrimary(w); err != nil {
+		return err
+	}
+	for {
+		k := p.cur().Kind
+		prec := tokPrec(k)
+		if prec < minPrec {
+			return nil
+		}
+		opTok := p.cur()
+		p.pos++
+		if err := p.parseExprPrec(w, prec+1); err != nil {
+			return err
+		}
+		switch opTok.Kind {
+		case TokPlus:
+			w.WriteOp(format.OpAdd)
+		case TokMinus:
+			w.WriteOp(format.OpSub)
+		case TokStar:
+			w.WriteOp(format.OpMul)
+		case TokSlash:
+			w.WriteOp(format.OpDiv)
+		case TokAmp:
+			w.WriteOp(format.OpAnd)
+		case TokPipe:
+			w.WriteOp(format.OpOr)
+		case TokCaret:
+			w.WriteOp(format.OpXor)
+		case TokShl:
+			w.WriteOp(format.OpShl)
+		case TokShr:
+			w.WriteOp(format.OpShr)
+		}
+	}
+}
+
+func (p *parser) parseExprPrimary(w *format.ExprWriter) error {
+	t := p.cur()
+	switch t.Kind {
+	case TokHash:
+		p.pos++
+		return p.parseExprPrimary(w)
+	case TokInt:
+		w.WriteImm(t.Int)
+		p.pos++
+		return nil
+	case TokIdent:
+		id := p.st.Intern(t.Text)
+		w.WriteSym(id)
+		p.pos++
+		return nil
+	case TokDot:
+		w.WritePC()
+		p.pos++
+		return nil
+	case TokLocalRef:
+		dir := byte(0)
+		if t.LocalDir == 'b' {
+			dir = 1
+		}
+		w.WriteLocal(t.Digit, dir)
+		p.pos++
+		return nil
+	case TokMinus:
+		p.pos++
+		if err := p.parseExprPrimary(w); err != nil {
+			return err
+		}
+		w.WriteOp(format.OpNeg)
+		return nil
+	case TokTilde:
+		p.pos++
+		if err := p.parseExprPrimary(w); err != nil {
+			return err
+		}
+		w.WriteOp(format.OpNot)
+		return nil
+	case TokLParen:
+		p.pos++
+		if err := p.parseExprPrec(w, 0); err != nil {
+			return err
+		}
+		if p.cur().Kind != TokRParen {
+			return newErr(p.cur().Pos, "missing ')'")
+		}
+		p.pos++
+		return nil
+	}
+	return newErr(t.Pos, "unexpected token in expression")
 }
