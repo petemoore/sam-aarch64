@@ -98,6 +98,30 @@ run_slot_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &00, &10, &00, &00  ; 4<<10 = 0x00001000
 
+; -- encode_imm12_shifted(Imm12Shifted{BP=10,BW=12}, 0x00000ABC) -------
+;    => 0xABC << 10 = 0x002AF000
+; Mirrors slots_imm_test.go::TestEncodeImm12Shifted_NoShift.
+; Wide-operand calling convention (see slots/imm12_shifted.asm header):
+;   HL = slot pointer, BCDE = big-endian 32-bit value.  For 0x00000ABC
+;   that means BC=&0000, DE=&0ABC.
+                ld      hl, slot_imm12_bp10_bw12
+                ld      bc, &0000
+                ld      de, &0abc
+                call    encode_imm12_shifted
+                call    assert_eq32_de_hl_imm
+                defb    &00, &f0, &2a, &00  ; 0x002AF000 LE
+
+; -- encode_imm12_shifted(Imm12Shifted{BP=10,BW=12}, 0x00001000) -------
+;    => (1<<10) | (1<<22) = 0x00400400
+; Mirrors slots_imm_test.go::TestEncodeImm12Shifted_LSL12.
+; v=0x1000 → BC=&0000, DE=&1000.  Case B path (sh=1, imm12=1).
+                ld      hl, slot_imm12_bp10_bw12
+                ld      bc, &0000
+                ld      de, &1000
+                call    encode_imm12_shifted
+                call    assert_eq32_de_hl_imm
+                defb    &00, &04, &40, &00  ; 0x00400400 LE
+
 ; All assertions passed.
                 ret
 
@@ -178,3 +202,4 @@ slot_imm5_bp10_bw5:     defb    &05, 0, 10, 5
 slot_imm6_bp16_bw6:     defb    &06, 0, 16, 6
 slot_cond_bp0_bw4:      defb    &07, 0, 0, 4
 slot_shamt_bp10_bw6:    defb    &12, 0, 10, 6
+slot_imm12_bp10_bw12:   defb    &10, 0, 10, 12
