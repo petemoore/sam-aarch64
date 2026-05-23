@@ -1,5 +1,10 @@
 package format
 
+import (
+	"encoding/binary"
+	"fmt"
+)
+
 // ExprOp is one byte of expression bytecode (§5).
 type ExprOp byte
 
@@ -142,4 +147,151 @@ func (w *ExprWriter) WriteImm(v int64) {
 			byte(v), byte(v>>8), byte(v>>16), byte(v>>24),
 			byte(v>>32), byte(v>>40), byte(v>>48), byte(v>>56))
 	}
+}
+
+// ExprReader walks a bytecode stream one opcode at a time.
+type ExprReader struct {
+	buf []byte
+	pos int
+}
+
+func NewExprReader(buf []byte) *ExprReader {
+	return &ExprReader{buf: buf}
+}
+
+// Next returns the next opcode plus its inline operand (raw bytes,
+// not parsed). For 0-argument opcodes the slice is nil.
+func (r *ExprReader) Next() (ExprOp, []byte, error) {
+	if r.pos >= len(r.buf) {
+		return 0, nil, fmt.Errorf("expr: read past end")
+	}
+	op := ExprOp(r.buf[r.pos])
+	r.pos++
+	width := operandWidth(op)
+	if width < 0 {
+		return 0, nil, fmt.Errorf("expr: unknown opcode 0x%02x", byte(op))
+	}
+	if r.pos+width > len(r.buf) {
+		return 0, nil, fmt.Errorf("expr: truncated operand for %s", op.Name())
+	}
+	operand := r.buf[r.pos : r.pos+width]
+	r.pos += width
+	return op, operand, nil
+}
+
+// AtEnd reports whether the reader has consumed the whole stream.
+func (r *ExprReader) AtEnd() bool { return r.pos >= len(r.buf) }
+
+// operandWidth returns the inline-operand size in bytes for an
+// opcode, or -1 for unknown opcodes.
+func operandWidth(op ExprOp) int {
+	switch op {
+	case OpPushImm8:
+		return 1
+	case OpPushImm16:
+		return 2
+	case OpPushImm32:
+		return 4
+	case OpPushImm64:
+		return 8
+	case OpPushSym:
+		return 2
+	case OpPushLocal:
+		return 2
+	case OpPushPC,
+		OpAdd, OpSub, OpMul, OpDiv,
+		OpAnd, OpOr, OpXor, OpShl, OpShr,
+		OpNeg, OpNot,
+		OpRelLo12, OpRelHi12,
+		OpRelAbsG0, OpRelAbsG0NC,
+		OpRelAbsG1, OpRelAbsG1NC,
+		OpRelAbsG2, OpRelAbsG2NC,
+		OpRelAbsG3:
+		return 0
+	}
+	return -1
+}
+
+// EvalConst returns the value of a bytecode stream when every push
+// operation is a literal. If any PUSH_SYM / PUSH_LOCAL / PUSH_PC or
+// REL_* opcode is encountered, ok=false. Used by text2bin's
+// constant-folder.
+func EvalConst(buf []byte) (int64, bool) {
+	r := NewExprReader(buf)
+	stack := make([]int64, 0, 8)
+	for !r.AtEnd() {
+		op, operand, err := r.Next()
+		if err != nil {
+			return 0, false
+		}
+		switch op {
+		case OpPushImm8:
+			stack = append(stack, int64(int8(operand[0])))
+		case OpPushImm16:
+			stack = append(stack, int64(int16(binary.LittleEndian.Uint16(operand))))
+		case OpPushImm32:
+			stack = append(stack, int64(int32(binary.LittleEndian.Uint32(operand))))
+		case OpPushImm64:
+			stack = append(stack, int64(binary.LittleEndian.Uint64(operand)))
+		case OpPushSym, OpPushLocal, OpPushPC,
+			OpRelLo12, OpRelHi12,
+			OpRelAbsG0, OpRelAbsG0NC,
+			OpRelAbsG1, OpRelAbsG1NC,
+			OpRelAbsG2, OpRelAbsG2NC,
+			OpRelAbsG3:
+			return 0, false
+		case OpAdd, OpSub, OpMul, OpDiv,
+			OpAnd, OpOr, OpXor, OpShl, OpShr:
+			if len(stack) < 2 {
+				return 0, false
+			}
+			b := stack[len(stack)-1]
+			a := stack[len(stack)-2]
+			stack = stack[:len(stack)-2]
+			stack = append(stack, applyBinary(op, a, b))
+		case OpNeg:
+			if len(stack) < 1 {
+				return 0, false
+			}
+			stack[len(stack)-1] = -stack[len(stack)-1]
+		case OpNot:
+			if len(stack) < 1 {
+				return 0, false
+			}
+			stack[len(stack)-1] = ^stack[len(stack)-1]
+		default:
+			return 0, false
+		}
+	}
+	if len(stack) != 1 {
+		return 0, false
+	}
+	return stack[0], true
+}
+
+func applyBinary(op ExprOp, a, b int64) int64 {
+	switch op {
+	case OpAdd:
+		return a + b
+	case OpSub:
+		return a - b
+	case OpMul:
+		return a * b
+	case OpDiv:
+		if b == 0 {
+			return 0
+		}
+		return a / b
+	case OpAnd:
+		return a & b
+	case OpOr:
+		return a | b
+	case OpXor:
+		return a ^ b
+	case OpShl:
+		return a << uint64(b)
+	case OpShr:
+		return a >> uint64(b)
+	}
+	return 0
 }
