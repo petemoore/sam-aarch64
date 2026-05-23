@@ -120,7 +120,16 @@ func (l *lexer) next() (Tok, error) {
 		// GNU as treats # at the start of a logical line as a
 		// line comment. Mid-line, # is the immediate-prefix used
 		// in operands like `add x0, x0, #4`.
+		//
+		// The preprocessor emits cpp-style line directives of the form
+		//     # <line> "<file>"
+		// at file/macro boundaries. When we see one at the start of a
+		// line, consume it and update the lexer position so subsequent
+		// tokens are attributed to the original source location.
 		if l.atLineStart {
+			if l.tryConsumeLineDirective() {
+				return l.next()
+			}
 			return l.readLineCommentChar(start, '#')
 		}
 		l.advance()
@@ -426,6 +435,78 @@ func (l *lexer) readBlockComment(start Position) (Tok, error) {
 		}
 		l.advance()
 	}
+}
+
+// tryConsumeLineDirective attempts to consume a cpp-style line directive of
+// the form
+//
+//	# <line> "<file>"
+//
+// starting at the current position (which must be a '#' at start of line).
+// On success it advances past the directive and the trailing newline,
+// updates l.line / l.path, and returns true. On failure it returns false
+// without advancing.
+func (l *lexer) tryConsumeLineDirective() bool {
+	// Must look like "# <digit>" — otherwise treat as a normal #-comment.
+	p := l.pos + 1
+	// Require exactly one space (cpp emits a single space; our preprocessor
+	// also emits exactly one) — but be lenient and accept 1+ whitespace.
+	if p >= len(l.src) || l.src[p] != ' ' {
+		return false
+	}
+	for p < len(l.src) && (l.src[p] == ' ' || l.src[p] == '\t') {
+		p++
+	}
+	if p >= len(l.src) || l.src[p] < '0' || l.src[p] > '9' {
+		return false
+	}
+	lineStart := p
+	for p < len(l.src) && l.src[p] >= '0' && l.src[p] <= '9' {
+		p++
+	}
+	lineNum := 0
+	for _, c := range []byte(string(l.src[lineStart:p])) {
+		lineNum = lineNum*10 + int(c-'0')
+	}
+	// Require " "<file>"".
+	if p >= len(l.src) || l.src[p] != ' ' {
+		return false
+	}
+	for p < len(l.src) && (l.src[p] == ' ' || l.src[p] == '\t') {
+		p++
+	}
+	if p >= len(l.src) || l.src[p] != '"' {
+		return false
+	}
+	p++
+	pathStart := p
+	for p < len(l.src) && l.src[p] != '"' && l.src[p] != '\n' {
+		p++
+	}
+	if p >= len(l.src) || l.src[p] != '"' {
+		return false
+	}
+	pathStr := string(l.src[pathStart:p])
+	p++
+	// Skip trailing whitespace and require newline (or EOF).
+	for p < len(l.src) && (l.src[p] == ' ' || l.src[p] == '\t' || l.src[p] == '\r') {
+		p++
+	}
+	if p < len(l.src) && l.src[p] != '\n' {
+		return false
+	}
+	if p < len(l.src) {
+		p++ // consume newline
+	}
+	// Commit: jump position and update line/file. lineNum names the line
+	// number that the *next* source line should have, since we have already
+	// consumed the directive's terminating newline. The col is reset to 1.
+	l.pos = p
+	l.line = lineNum
+	l.col = 1
+	l.path = pathStr
+	l.atLineStart = true
+	return true
 }
 
 func hexNibble(c byte) int {
