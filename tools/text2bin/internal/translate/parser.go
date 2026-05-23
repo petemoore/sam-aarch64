@@ -143,6 +143,16 @@ func (p *parser) parseInst(t Tok) error {
 		return p.parseMovl()
 	}
 
+	// LDR with `=value` is a literal-pool pseudo-instruction. It is
+	// always shaped `ldr <Xn|Wn>, =<expr>` and emits a single record
+	// carrying [OpReg{X|W}, OpLitPool{width, expr}].
+	ldrID, _ := format.MnemonicID("ldr")
+	if id == ldrID {
+		if handled, err := p.tryParseLdrLitPool(id); handled || err != nil {
+			return err
+		}
+	}
+
 	var ow format.OperandWriter
 	count := byte(0)
 	for {
@@ -339,6 +349,63 @@ func (p *parser) parseMovl() error {
 		p.rw.WriteInst(movkID, 2, ow2.Bytes())
 	}
 	return nil
+}
+
+// tryParseLdrLitPool checks for the `ldr <Xn|Wn>, =<expr>` form. If the
+// shape matches it parses and emits the instruction and returns
+// (true, nil) (or (true, err) on a parse error). Otherwise it returns
+// (false, nil) and leaves p.pos at the start of the operand list so
+// the generic parseInst flow can handle this `ldr` like any other.
+//
+// We require the syntax to be exactly `ldr <reg>, =<expr>` — i.e. the
+// second operand starts with `=`. Any other shape (memory addressing,
+// PC-relative literal with a numeric offset etc.) falls through.
+func (p *parser) tryParseLdrLitPool(id uint16) (bool, error) {
+	// Peek without consuming.
+	startPos := p.pos
+
+	// Op0: register name.
+	t0 := p.cur()
+	if t0.Kind != TokIdent {
+		return false, nil
+	}
+	regKind, reg, ok := matchReg(t0.Text)
+	if !ok {
+		return false, nil
+	}
+	if regKind != format.OpRegX && regKind != format.OpRegW {
+		return false, nil
+	}
+
+	// Comma.
+	if p.pos+1 >= len(p.toks) || p.toks[p.pos+1].Kind != TokComma {
+		return false, nil
+	}
+	// Equals at operand 1 head.
+	if p.pos+2 >= len(p.toks) || p.toks[p.pos+2].Kind != TokEquals {
+		return false, nil
+	}
+
+	// Commit: consume `<reg>` `,` `=`.
+	p.pos += 3
+
+	expr, err := p.parseExpression()
+	if err != nil {
+		// Restore and let the caller bubble the error.
+		p.pos = startPos
+		return true, err
+	}
+
+	width := byte(8)
+	if regKind == format.OpRegW {
+		width = 4
+	}
+
+	var ow format.OperandWriter
+	ow.WriteReg(regKind, reg)
+	ow.WriteLitPool(width, expr)
+	p.rw.WriteInst(id, 2, ow.Bytes())
+	return true, nil
 }
 
 func (p *parser) parseOperand(ow *format.OperandWriter) error {

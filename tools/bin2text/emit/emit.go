@@ -148,6 +148,13 @@ func emitOperandWithContext(out *bytes.Buffer, f *format.File, o format.Operand,
 		out.WriteString(o.Cond.Name())
 	case format.OpSysName:
 		out.Write(o.Str)
+	case format.OpLitPool:
+		// `ldr Xn, =expr` — emit the value expression without a
+		// leading '#'. GNU as accepts both forms (the parser strips
+		// `#` in primary-expression context), but the canonical
+		// spelling has no `#` after `=`.
+		out.WriteByte('=')
+		return emitExprAsImmediateWithContext(out, f, o.Expr, true)
 	default:
 		return fmt.Errorf("emitOperand: unsupported kind %v", o.Kind)
 	}

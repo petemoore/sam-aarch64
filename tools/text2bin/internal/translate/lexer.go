@@ -35,6 +35,7 @@ const (
 	TokLineComment
 	TokBlockComment
 	TokLocalRef
+	TokEquals
 )
 
 type Tok struct {
@@ -188,6 +189,9 @@ func (l *lexer) next() (Tok, error) {
 	case c == '~':
 		l.advance()
 		return Tok{Kind: TokTilde, Pos: start}, nil
+	case c == '=':
+		l.advance()
+		return Tok{Kind: TokEquals, Pos: start}, nil
 	case c == '<':
 		if l.pos+1 < len(l.src) && l.src[l.pos+1] == '<' {
 			l.advance()

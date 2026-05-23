@@ -14,6 +14,61 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 	var out []byte
 	var pc int64
 
+	emitFlush := func(preFlushPC int64) error {
+		entries, ok := p1.PoolFlushEntries[preFlushPC]
+		if !ok {
+			return nil
+		}
+		afterPC := p1.PoolFlushAtPC[preFlushPC]
+		var fours, eights []int
+		for _, i := range entries {
+			if p1.PoolEntries[i].Width == 4 {
+				fours = append(fours, i)
+			} else {
+				eights = append(eights, i)
+			}
+		}
+		// Pad to 4 if needed before 4-byte literals.
+		if len(fours) > 0 && pc%4 != 0 {
+			padN := 4 - (pc % 4)
+			out = append(out, make([]byte, padN)...)
+			pc += padN
+		}
+		for _, i := range fours {
+			e := p1.PoolEntries[i]
+			ctx := makeCtx(e.EvalPC, p1, f)
+			v, err := enc.Eval(e.Expr, ctx)
+			if err != nil {
+				return fmt.Errorf("pool entry @ pc=0x%x: %w", e.PC, err)
+			}
+			var buf [4]byte
+			binary.LittleEndian.PutUint32(buf[:], uint32(v))
+			out = append(out, buf[:]...)
+			pc += 4
+		}
+		if len(eights) > 0 && pc%8 != 0 {
+			padN := 8 - (pc % 8)
+			out = append(out, make([]byte, padN)...)
+			pc += padN
+		}
+		for _, i := range eights {
+			e := p1.PoolEntries[i]
+			ctx := makeCtx(e.EvalPC, p1, f)
+			v, err := enc.Eval(e.Expr, ctx)
+			if err != nil {
+				return fmt.Errorf("pool entry @ pc=0x%x: %w", e.PC, err)
+			}
+			var buf [8]byte
+			binary.LittleEndian.PutUint64(buf[:], uint64(v))
+			out = append(out, buf[:]...)
+			pc += 8
+		}
+		if pc != afterPC {
+			return fmt.Errorf("pool flush mismatch: pc=0x%x, after=0x%x", pc, afterPC)
+		}
+		return nil
+	}
+
 	rr := format.NewRecordReader(f.Records)
 	for !rr.AtEnd() {
 		rec, err := rr.Next()
@@ -31,6 +86,13 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 			out = append(out, buf[:]...)
 			pc += 4
 		case format.KindDirective:
+			name := format.DirectiveName(rec.DirectiveID)
+			if name == ".ltorg" {
+				if err := emitFlush(pc); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			bytes, err := encodeDirective(rec, pc, p1, f)
 			if err != nil {
 				return nil, err
@@ -38,6 +100,10 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 			out = append(out, bytes...)
 			pc += int64(len(bytes))
 		}
+	}
+	// Implicit pool flush at end of input.
+	if err := emitFlush(pc); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -98,6 +164,9 @@ func encodeInst(rec format.Record, pc int64, p1 *Pass1Result, f *format.File) (u
 		}
 		if k == format.OpExtendedReg {
 			return encodeExtendedRegInst(rec.MnemonicID, operands, pc, p1, f)
+		}
+		if k == format.OpLitPool {
+			return encodeLdrLitPoolInst(operands, pc, p1)
 		}
 	}
 
@@ -163,6 +232,53 @@ func operandsToValues(ops []format.Operand, pc int64, p1 *Pass1Result, f *format
 		}
 	}
 	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// LDR literal-pool pseudo-instruction
+// ---------------------------------------------------------------------------
+
+// encodeLdrLitPoolInst encodes `ldr Xn|Wn, =expr` as a PC-relative
+// load whose target is the literal-pool slot allocated for this
+// instruction during pass1.
+//
+//	X-form (size=01): bits[31:24] = 0x58 — 0x58000000 + (imm19 << 5) + Rt
+//	W-form (size=00): bits[31:24] = 0x18 — 0x18000000 + (imm19 << 5) + Rt
+//
+// imm19 = (target_pc - pc) / 4. The 19-bit signed range is ±1 MiB.
+func encodeLdrLitPoolInst(operands []format.Operand, pc int64, p1 *Pass1Result) (uint32, error) {
+	if len(operands) < 2 {
+		return 0, fmt.Errorf("ldr litpool: need 2 operands, got %d", len(operands))
+	}
+	rt := operands[0]
+	lit := operands[1]
+	if lit.Kind != format.OpLitPool {
+		// Defensive: dispatch should have ensured this.
+		return 0, fmt.Errorf("ldr litpool: operand 1 kind = %v", lit.Kind)
+	}
+
+	idx, ok := p1.LdrPoolIdx[pc]
+	if !ok {
+		return 0, fmt.Errorf("ldr litpool @ pc=0x%x: no pool index recorded", pc)
+	}
+	targetPC := p1.PoolEntries[idx].PC
+	off := targetPC - pc
+	if off%4 != 0 {
+		return 0, fmt.Errorf("ldr litpool @ pc=0x%x: target pc=0x%x not 4-byte aligned", pc, targetPC)
+	}
+	imm19 := off / 4
+	if imm19 < -(1<<18) || imm19 >= (1<<18) {
+		return 0, fmt.Errorf("ldr litpool @ pc=0x%x: offset %d out of ±1MiB range", pc, off)
+	}
+
+	var base uint32
+	if lit.Width == 8 {
+		base = 0x58000000 // 64-bit LDR (literal)
+	} else {
+		base = 0x18000000 // 32-bit LDR (literal)
+	}
+	word := base | ((uint32(imm19) & 0x7ffff) << 5) | uint32(rt.Reg)
+	return word, nil
 }
 
 // ---------------------------------------------------------------------------

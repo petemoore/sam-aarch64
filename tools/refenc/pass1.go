@@ -6,22 +6,112 @@ import (
 	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
 )
 
+// PoolEntry is one slot in the literal pool. It is shared by all
+// `ldr Xn|Wn, =expr` instructions whose (width, expr-bytes) match.
+type PoolEntry struct {
+	Width byte   // 4 or 8
+	Expr  []byte // expression bytecode (LSB of the dedup key)
+	PC    int64  // where this entry's bytes end up after layout
+
+	// EvalPC is the PC of the *first* `ldr` instruction that
+	// references this entry. It is the resolution context for local
+	// label references in Expr (e.g. `=10f` resolves relative to the
+	// `ldr` site, not the pool slot itself). GNU's behaviour,
+	// verified against aarch64-none-elf-as.
+	EvalPC int64
+}
+
 // Pass1Result holds the symbol table and total program size produced
 // by the first pass.
 type Pass1Result struct {
 	Symbols   map[string]int64
 	LocalDefs map[byte][]int64
 	TotalSize int64
+
+	// PoolEntries is the list of literal-pool slots in emit order.
+	// Pass2 walks this when emitting the bytes at flush points.
+	PoolEntries []PoolEntry
+
+	// LdrPoolIdx maps the PC of each `ldr Xn|Wn, =expr` instruction
+	// to its index in PoolEntries (so pass2 can read PoolEntries[i].PC).
+	LdrPoolIdx map[int64]int
+
+	// PoolFlushAtPC[pc] is the PC at which a flush completes (i.e. the
+	// PC immediately after the last pool byte written at that flush).
+	// Keyed by the *pre-flush* PC. For a `.ltorg` directive, the
+	// directive sits at the pre-flush PC; for end-of-input the
+	// pre-flush PC is the final pc value.
+	PoolFlushAtPC map[int64]int64
+
+	// PoolFlushEntries[preFlushPC] is the list of pool-entry indices
+	// to emit at that flush point.
+	PoolFlushEntries map[int64][]int
 }
 
 // Pass1 walks records and assigns PC to each instruction / data
 // directive, populating the symbol table.
 func Pass1(f *format.File) (*Pass1Result, error) {
 	res := &Pass1Result{
-		Symbols:   make(map[string]int64),
-		LocalDefs: make(map[byte][]int64),
+		Symbols:          make(map[string]int64),
+		LocalDefs:        make(map[byte][]int64),
+		LdrPoolIdx:       make(map[int64]int),
+		PoolFlushAtPC:    make(map[int64]int64),
+		PoolFlushEntries: make(map[int64][]int),
 	}
 	var pc int64
+	ldrID, _ := format.MnemonicID("ldr")
+
+	// pendingPool tracks pool entries created since the last flush,
+	// keyed by (width, string(expr)). Deduping is by full expression
+	// bytes — same as GNU's behaviour (verified empirically against
+	// aarch64-none-elf-as: e.g. two `ldr x0,=msg` share one slot).
+	type poolKey struct {
+		Width byte
+		Expr  string
+	}
+	pending := make(map[poolKey]int) // → index into res.PoolEntries
+	var pendingOrder []int           // indices in encounter order
+
+	flushPool := func(flushPC int64) {
+		if len(pendingOrder) == 0 {
+			return
+		}
+		// Partition by width: 4-byte entries first (encounter order),
+		// then padding to 8 if any 8-byte entries follow, then 8-byte
+		// entries (encounter order). GNU's behaviour, verified
+		// against aarch64-none-elf-as.
+		var fours, eights []int
+		for _, i := range pendingOrder {
+			if res.PoolEntries[i].Width == 4 {
+				fours = append(fours, i)
+			} else {
+				eights = append(eights, i)
+			}
+		}
+		layout := pc
+		if len(fours) > 0 && layout%4 != 0 {
+			// Pad to 4-byte alignment before 4-byte literals.
+			layout += 4 - (layout % 4)
+		}
+		for _, i := range fours {
+			res.PoolEntries[i].PC = layout
+			layout += 4
+		}
+		if len(eights) > 0 && layout%8 != 0 {
+			// Pad to 8-byte alignment before 8-byte literals.
+			layout += 8 - (layout % 8)
+		}
+		for _, i := range eights {
+			res.PoolEntries[i].PC = layout
+			layout += 8
+		}
+		ordered := append([]int(nil), pendingOrder...)
+		res.PoolFlushEntries[flushPC] = ordered
+		res.PoolFlushAtPC[flushPC] = layout
+		pc = layout
+		pending = make(map[poolKey]int)
+		pendingOrder = pendingOrder[:0]
+	}
 
 	rr := format.NewRecordReader(f.Records)
 	for !rr.AtEnd() {
@@ -35,18 +125,37 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 		case format.KindLocalDef:
 			res.LocalDefs[rec.Digit] = append(res.LocalDefs[rec.Digit], pc)
 		case format.KindInst:
+			// Detect `ldr Xn|Wn, =expr` (LitPool form) and register a
+			// pool entry. The instruction itself still consumes 4 bytes.
+			if rec.MnemonicID == ldrID {
+				if litOp, ok := litPoolOperand(rec); ok {
+					key := poolKey{Width: litOp.Width, Expr: string(litOp.Expr)}
+					idx, seen := pending[key]
+					if !seen {
+						idx = len(res.PoolEntries)
+						res.PoolEntries = append(res.PoolEntries, PoolEntry{
+							Width:  litOp.Width,
+							Expr:   litOp.Expr,
+							EvalPC: pc,
+						})
+						pending[key] = idx
+						pendingOrder = append(pendingOrder, idx)
+					}
+					res.LdrPoolIdx[pc] = idx
+				}
+			}
 			pc += 4
 		case format.KindDirective:
 			name := format.DirectiveName(rec.DirectiveID)
-			if name == ".equ" || name == ".set" {
+			switch name {
+			case ".equ", ".set":
 				// .equ NAME, value — add to symbol table as a constant.
-				// Operand 1 is a PUSH_SYM expr with the symbol index.
-				// Operand 2 is a constant expression for the value.
 				if err := resolveEquDirective(rec, f, res); err != nil {
 					return nil, fmt.Errorf(".equ: %w", err)
 				}
-				// No PC contribution.
-			} else {
+			case ".ltorg":
+				flushPool(pc)
+			default:
 				n, err := directiveSizeAtPC(rec, pc)
 				if err != nil {
 					return nil, err
@@ -55,8 +164,28 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 			}
 		}
 	}
+	// Implicit flush at end of input.
+	flushPool(pc)
+
 	res.TotalSize = pc
 	return res, nil
+}
+
+// litPoolOperand returns the OpLitPool operand of an `ldr` instruction
+// record if present, otherwise ok=false. By construction the parser
+// emits at most one OpLitPool per record (as the second operand).
+func litPoolOperand(rec format.Record) (format.Operand, bool) {
+	or := format.NewOperandReader(rec.Operands)
+	for !or.AtEnd() {
+		o, err := or.Next()
+		if err != nil {
+			return format.Operand{}, false
+		}
+		if o.Kind == format.OpLitPool {
+			return o, true
+		}
+	}
+	return format.Operand{}, false
 }
 
 // resolveEquDirective handles .equ/.set directives by evaluating the value
@@ -143,6 +272,10 @@ func directiveSizeAtPC(rec format.Record, pc int64) (int64, error) {
 	case ".inst":
 		return 4, nil
 	case ".text", ".data", ".global", ".equ", ".set":
+		return 0, nil
+	case ".ltorg":
+		// .ltorg's byte contribution is computed by the pool flush
+		// logic in Pass1; the directive itself emits no bytes.
 		return 0, nil
 	case ".balign":
 		or := format.NewOperandReader(rec.Operands)

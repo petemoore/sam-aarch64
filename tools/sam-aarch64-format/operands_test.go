@@ -10,6 +10,7 @@ func TestOperandKindValues(t *testing.T) {
 		{OpRegX, 0x01}, {OpRegW, 0x02}, {OpRegXSP, 0x03}, {OpRegWSP, 0x04},
 		{OpImmExpr, 0x05}, {OpShiftedReg, 0x06}, {OpExtendedReg, 0x07},
 		{OpMem, 0x08}, {OpString, 0x09}, {OpCond, 0x0A}, {OpSysName, 0x0B},
+		{OpLitPool, 0x0C},
 	}
 	for _, c := range cases {
 		if byte(c.k) != c.want {
