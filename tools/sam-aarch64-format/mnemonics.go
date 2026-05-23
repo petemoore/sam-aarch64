@@ -15,6 +15,10 @@ var MnemonicTable = []string{
 	"cmp",
 	"cbz", "cbnz", "tbz", "tbnz",
 	"csel", "csinc",
+	"b.eq", "b.ne", "b.cs", "b.cc",
+	"b.mi", "b.pl", "b.vs", "b.vc",
+	"b.hi", "b.ls", "b.ge", "b.lt",
+	"b.gt", "b.le", "b.al", "b.nv",
 }
 
 var mnemonicIndex = func() map[string]uint16 {

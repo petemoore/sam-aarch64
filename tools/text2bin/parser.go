@@ -79,9 +79,42 @@ func (p *parser) parseLine() error {
 
 func (p *parser) parseInstOrDirective(t Tok) error {
 	if len(t.Text) > 0 && t.Text[0] == '.' {
-		return newErr(t.Pos, "directive parsing arrives in Task 21")
+		return p.parseDirective(t)
 	}
 	return p.parseInst(t)
+}
+
+func (p *parser) parseDirective(t Tok) error {
+	id, ok := format.DirectiveID(t.Text)
+	if !ok {
+		return newErr(t.Pos, "unknown directive %q", t.Text)
+	}
+	p.pos++
+	var ow format.OperandWriter
+	count := byte(0)
+	for {
+		switch p.cur().Kind {
+		case TokEOL, TokEOF, TokLineComment, TokBlockComment:
+			p.rw.WriteDirective(id, count, ow.Bytes())
+			return nil
+		case TokComma:
+			if count == 0 {
+				return newErr(p.cur().Pos, "unexpected ','")
+			}
+			p.pos++
+			continue
+		}
+		if p.cur().Kind == TokString {
+			ow.WriteString(p.cur().Bytes)
+			p.pos++
+			count++
+			continue
+		}
+		if err := p.parseOperand(&ow); err != nil {
+			return err
+		}
+		count++
+	}
 }
 
 func (p *parser) parseInst(t Tok) error {
@@ -115,6 +148,11 @@ func (p *parser) parseOperand(ow *format.OperandWriter) error {
 	t := p.cur()
 	switch t.Kind {
 	case TokIdent:
+		if c, ok := matchCond(t.Text); ok {
+			ow.WriteCond(c)
+			p.pos++
+			return nil
+		}
 		if kind, reg, ok := matchReg(t.Text); ok {
 			p.pos++
 			if p.cur().Kind == TokComma && p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokIdent {
@@ -164,7 +202,7 @@ func (p *parser) parseOperand(ow *format.OperandWriter) error {
 		}
 		ow.WriteImmExpr(expr)
 		return nil
-	case TokHash, TokInt, TokMinus, TokTilde, TokLParen, TokDot, TokLocalRef:
+	case TokHash, TokInt, TokMinus, TokTilde, TokLParen, TokDot, TokLocalRef, TokColon:
 		expr, err := p.parseExpression()
 		if err != nil {
 			return err
@@ -337,6 +375,26 @@ func (p *parser) parseExprPrimary(w *format.ExprWriter) error {
 		}
 		p.pos++
 		return nil
+	case TokColon:
+		p.pos++
+		if p.cur().Kind != TokIdent {
+			return newErr(p.cur().Pos, "expected relocation name after ':'")
+		}
+		name := p.cur().Text
+		p.pos++
+		if p.cur().Kind != TokColon {
+			return newErr(p.cur().Pos, "expected ':' after relocation name")
+		}
+		p.pos++
+		if err := p.parseExprPrimary(w); err != nil {
+			return err
+		}
+		op, ok := relocOp(name)
+		if !ok {
+			return newErr(t.Pos, "unknown relocation %q", name)
+		}
+		w.WriteOp(op)
+		return nil
 	}
 	return newErr(t.Pos, "unexpected token in expression")
 }
@@ -471,6 +529,39 @@ func matchShiftKind(name string) (format.ShiftKind, bool) {
 		if format.ShiftKind(i).Name() == name {
 			return format.ShiftKind(i), true
 		}
+	}
+	return 0, false
+}
+
+func matchCond(name string) (format.CondCode, bool) {
+	for i := 0; i < 16; i++ {
+		if format.CondCode(i).Name() == name {
+			return format.CondCode(i), true
+		}
+	}
+	return 0, false
+}
+
+func relocOp(name string) (format.ExprOp, bool) {
+	switch name {
+	case "lo12":
+		return format.OpRelLo12, true
+	case "hi12":
+		return format.OpRelHi12, true
+	case "abs_g0":
+		return format.OpRelAbsG0, true
+	case "abs_g0_nc":
+		return format.OpRelAbsG0NC, true
+	case "abs_g1":
+		return format.OpRelAbsG1, true
+	case "abs_g1_nc":
+		return format.OpRelAbsG1NC, true
+	case "abs_g2":
+		return format.OpRelAbsG2, true
+	case "abs_g2_nc":
+		return format.OpRelAbsG2NC, true
+	case "abs_g3":
+		return format.OpRelAbsG3, true
 	}
 	return 0, false
 }
