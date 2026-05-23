@@ -95,3 +95,51 @@ func (o ExprOp) Name() string {
 	}
 	return "UNKNOWN"
 }
+
+// ExprWriter builds an expression bytecode stream.
+type ExprWriter struct {
+	buf []byte
+}
+
+// Bytes returns the accumulated bytecode. The caller must not mutate
+// the returned slice.
+func (w *ExprWriter) Bytes() []byte { return w.buf }
+
+// Reset clears the writer for reuse.
+func (w *ExprWriter) Reset() { w.buf = w.buf[:0] }
+
+// WriteOp writes a 0-argument opcode (binary or unary operator).
+func (w *ExprWriter) WriteOp(op ExprOp) {
+	w.buf = append(w.buf, byte(op))
+}
+
+// WriteSym writes PUSH_SYM with a u16 LE symbol id.
+func (w *ExprWriter) WriteSym(id uint16) {
+	w.buf = append(w.buf, byte(OpPushSym), byte(id), byte(id>>8))
+}
+
+// WriteLocal writes PUSH_LOCAL with a digit (1–9) and a direction
+// byte (0=f, 1=b).
+func (w *ExprWriter) WriteLocal(digit, dir byte) {
+	w.buf = append(w.buf, byte(OpPushLocal), digit, dir)
+}
+
+// WritePC writes the PUSH_PC opcode (the `.` operator).
+func (w *ExprWriter) WritePC() { w.buf = append(w.buf, byte(OpPushPC)) }
+
+// WriteImm writes a literal using the shortest PUSH_IMMn that fits.
+func (w *ExprWriter) WriteImm(v int64) {
+	switch {
+	case v >= -128 && v <= 127:
+		w.buf = append(w.buf, byte(OpPushImm8), byte(v))
+	case v >= -32768 && v <= 32767:
+		w.buf = append(w.buf, byte(OpPushImm16), byte(v), byte(v>>8))
+	case v >= -(int64(1)<<31) && v <= (int64(1)<<31)-1:
+		w.buf = append(w.buf, byte(OpPushImm32),
+			byte(v), byte(v>>8), byte(v>>16), byte(v>>24))
+	default:
+		w.buf = append(w.buf, byte(OpPushImm64),
+			byte(v), byte(v>>8), byte(v>>16), byte(v>>24),
+			byte(v>>32), byte(v>>40), byte(v>>48), byte(v>>56))
+	}
+}
