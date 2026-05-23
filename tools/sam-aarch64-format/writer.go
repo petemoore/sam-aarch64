@@ -1,6 +1,9 @@
 package format
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"io"
+)
 
 // RecordWriter accumulates records into a byte slice in stream order.
 type RecordWriter struct{ buf []byte }
@@ -48,4 +51,40 @@ func (w *RecordWriter) WriteDirective(directiveID, operandCount byte, operands [
 	w.writeHeader(KindDirective, payloadLen)
 	w.buf = append(w.buf, directiveID, operandCount)
 	w.buf = append(w.buf, operands...)
+}
+
+// WriteFile serialises a complete .tbn file to w: magic, version,
+// flags, the symbol table's name list, and the record stream.
+func WriteFile(w io.Writer, st *SymbolTable, records []byte) error {
+	if _, err := w.Write(Magic[:]); err != nil {
+		return err
+	}
+	var hdr [4]byte
+	binary.LittleEndian.PutUint16(hdr[0:2], Version)
+	binary.LittleEndian.PutUint16(hdr[2:4], Flags)
+	if _, err := w.Write(hdr[:]); err != nil {
+		return err
+	}
+
+	names := st.Names()
+	var cnt [2]byte
+	binary.LittleEndian.PutUint16(cnt[:], uint16(len(names)))
+	if _, err := w.Write(cnt[:]); err != nil {
+		return err
+	}
+	for _, n := range names {
+		var ln [2]byte
+		binary.LittleEndian.PutUint16(ln[:], uint16(len(n)))
+		if _, err := w.Write(ln[:]); err != nil {
+			return err
+		}
+		if _, err := w.Write([]byte(n)); err != nil {
+			return err
+		}
+	}
+
+	if _, err := w.Write(records); err != nil {
+		return err
+	}
+	return nil
 }
