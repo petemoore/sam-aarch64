@@ -186,6 +186,10 @@ func encodeInst(rec format.Record, pc int64, p1 *Pass1Result, f *format.File) (u
 		return encodeCsetm(operands, pc, p1, f)
 	case 66, 67, 68: // isb, dsb, dmb — single CRm operand encoded in bits 11:8
 		return encodeBarrierInst(rec.MnemonicID, operands, pc, p1, f)
+	case 70: // ror immediate form — alias of EXTR Rd, Rn, Rn, #imm
+		if len(kinds) >= 3 && kinds[2] == format.OpImmExpr {
+			return encodeRorImm(operands, pc, p1, f)
+		}
 	}
 
 	form, ok, diag := enc.ValidateOperandKinds(rec.MnemonicID, kinds)
@@ -900,6 +904,49 @@ func encodeCsetm(operands []format.Operand, pc int64, p1 *Pass1Result, f *format
 		base = 0x5a9f03e0
 	}
 	word := base | (invertedCond << 12) | uint32(rd.Reg)
+	return word, nil
+}
+
+// ---------------------------------------------------------------------------
+// ROR immediate — alias of EXTR Rd, Rn, Rn, #imm
+// ---------------------------------------------------------------------------
+
+// encodeRorImm encodes `ror Rd, Rn, #shift` as the EXTR alias.
+// ARM ARM C6.2.196: ROR (immediate) = EXTR Rd, Rn, Rn, #imm.
+//
+//	32-bit EXTR: 0x13800000 | (Rm<<16) | (imms<<10) | (Rn<<5) | Rd  (Rm=Rn)
+//	64-bit EXTR: 0x93c00000 | (Rm<<16) | (imms<<10) | (Rn<<5) | Rd  (Rm=Rn, N=1)
+func encodeRorImm(operands []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
+	if len(operands) < 3 {
+		return 0, fmt.Errorf("ror imm: need 3 operands, got %d", len(operands))
+	}
+	rd := operands[0]
+	rn := operands[1]
+	immOp := operands[2]
+	if immOp.Kind != format.OpImmExpr {
+		return 0, fmt.Errorf("ror imm: operand 2 must be an immediate")
+	}
+	ctx := makeCtx(pc, p1, f)
+	shift, err := enc.Eval(immOp.Expr, ctx)
+	if err != nil {
+		return 0, fmt.Errorf("ror imm shift: %w", err)
+	}
+	is64 := rd.Kind == format.OpRegX
+	regsize := int64(64)
+	if !is64 {
+		regsize = 32
+	}
+	if shift < 0 || shift >= regsize {
+		return 0, fmt.Errorf("ror imm: shift %d out of range [0,%d)", shift, regsize)
+	}
+	var base uint32
+	if is64 {
+		base = 0x93c00000
+	} else {
+		base = 0x13800000
+	}
+	rnIdx := uint32(rn.Reg)
+	word := base | (rnIdx << 16) | (uint32(shift) << 10) | (rnIdx << 5) | uint32(rd.Reg)
 	return word, nil
 }
 

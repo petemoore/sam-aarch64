@@ -559,6 +559,71 @@ var generatedForms = []Form{
 	//   isb base: 0xd50330df | (crm << 8)   (sy is default, crm=0xf)
 	//   dsb base: 0xd503309f | (crm << 8)
 	//   dmb base: 0xd50330bf | (crm << 8)
+
+	// ror (ID 70) — register form RORV. ARM ARM C6.2.197.
+	//   32-bit: 0x1ac02c00 | (Rm<<16) | (Rn<<5) | Rd
+	//   64-bit: 0x9ac02c00 | (Rm<<16) | (Rn<<5) | Rd
+	// Immediate form (ror Rd, Rn, #imm) is handled by encodeRorImm in
+	// pass2 because Rn appears in two slots of the underlying EXTR.
+	{MnemonicID: 70, Pattern: 0x1ac02c00, Mask: 0xffe0fc00, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},  // Rd
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},  // Rn
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5}, // Rm
+	}},
+	{MnemonicID: 70, Pattern: 0x9ac02c00, Mask: 0xffe0fc00, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},  // Rd
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},  // Rn
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5}, // Rm
+	}},
+
+	// mul (ID 71) — alias of MADD Rd,Rn,Rm,XZR. ARM ARM C6.2.139.
+	// Ra=11111 (XZR) baked into pattern at bits 14:10.
+	//   32-bit: 0x1b007c00 | (Rm<<16) | (Rn<<5) | Rd
+	//   64-bit: 0x9b007c00 | (Rm<<16) | (Rn<<5) | Rd
+	{MnemonicID: 71, Pattern: 0x1b007c00, Mask: 0xffe0fc00, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5},
+	}},
+	{MnemonicID: 71, Pattern: 0x9b007c00, Mask: 0xffe0fc00, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},
+	}},
+
+	// udiv (ID 72) — Unsigned Divide. ARM ARM C6.2.222.
+	//   32-bit: 0x1ac00800 | (Rm<<16) | (Rn<<5) | Rd
+	//   64-bit: 0x9ac00800 | (Rm<<16) | (Rn<<5) | Rd
+	{MnemonicID: 72, Pattern: 0x1ac00800, Mask: 0xffe0fc00, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5},
+	}},
+	{MnemonicID: 72, Pattern: 0x9ac00800, Mask: 0xffe0fc00, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},
+	}},
+
+	// cls (ID 73) — Count Leading Sign-bits. ARM ARM C6.2.39.
+	//   32-bit: 0x5ac01400 | (Rn<<5) | Rd
+	//   64-bit: 0xdac01400 | (Rn<<5) | Rd
+	{MnemonicID: 73, Pattern: 0x5ac01400, Mask: 0xfffffc00, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+	}},
+	{MnemonicID: 73, Pattern: 0xdac01400, Mask: 0xfffffc00, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+	}},
+
+	// sxtw (ID 74) — Sign-extend Word; alias of SBFM Xd,Xn,0,31.
+	// ARM ARM C6.2.214. immr=0, imms=31 baked. Result: Xd, source: Wn (Rn).
+	//   Pattern: 0x93407c00 | (Rn<<5) | Rd
+	{MnemonicID: 74, Pattern: 0x93407c00, Mask: 0xfffffc00, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+	}},
 }
 
 func init() {

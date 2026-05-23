@@ -54,6 +54,14 @@ var MnemonicTable = []string{
 	// dmb: Data Memory Barrier (mandatory arg).                ARM ARM C6.2.73.
 	// wfi: Wait For Interrupt (no operand).                    ARM ARM C6.2.305.
 	"eret", "isb", "dsb", "dmb", "wfi",
+	// Single-source ALU.
+	// ror:  Rotate Right — immediate alias of EXTR Rd,Rn,Rn,#imm (C6.2.196)
+	//       or register form RORV Rd,Rn,Rm (C6.2.197).
+	// mul:  Multiply — alias of MADD Rd,Rn,Rm,XZR (C6.2.139).
+	// udiv: Unsigned divide (C6.2.222).
+	// cls:  Count Leading Sign-bits (C6.2.39).
+	// sxtw: Sign-extend Word — alias of SBFM Xd,Xn,0,31 (C6.2.214).
+	"ror", "mul", "udiv", "cls", "sxtw",
 }
 
 var mnemonicIndex = func() map[string]uint16 {

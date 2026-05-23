@@ -249,6 +249,74 @@ func TestParseInstDMBMandatoryArg(t *testing.T) {
 	}
 }
 
+func TestParseInstRorImm(t *testing.T) {
+	f := parseHelper(t, "ror x0, x1, #5\n")
+	r := format.NewRecordReader(f.Records)
+	rec, _ := r.Next()
+	rorID, _ := format.MnemonicID("ror")
+	if rec.MnemonicID != rorID || rec.OperandCount != 3 {
+		t.Fatalf("ror: %+v", rec)
+	}
+	or := format.NewOperandReader(rec.Operands)
+	o, _ := or.Next()
+	if o.Kind != format.OpRegX || o.Reg != 0 {
+		t.Errorf("op0 = %+v", o)
+	}
+	o, _ = or.Next()
+	if o.Kind != format.OpRegX || o.Reg != 1 {
+		t.Errorf("op1 = %+v", o)
+	}
+	o, _ = or.Next()
+	if o.Kind != format.OpImmExpr {
+		t.Fatalf("op2 kind = %v", o.Kind)
+	}
+	v, ok := format.EvalConst(o.Expr)
+	if !ok || v != 5 {
+		t.Errorf("op2 expr = (%d, %v)", v, ok)
+	}
+}
+
+func TestParseInstRorReg(t *testing.T) {
+	f := parseHelper(t, "ror w0, w1, w2\n")
+	r := format.NewRecordReader(f.Records)
+	rec, _ := r.Next()
+	if rec.OperandCount != 3 {
+		t.Fatalf("ror reg: %+v", rec)
+	}
+	or := format.NewOperandReader(rec.Operands)
+	for i := 0; i < 3; i++ {
+		o, _ := or.Next()
+		if o.Kind != format.OpRegW || o.Reg != byte(i) {
+			t.Errorf("op%d = %+v", i, o)
+		}
+	}
+}
+
+func TestParseInstMulUdivClsSxtw(t *testing.T) {
+	f := parseHelper(t, "mul x0, x1, x2\nudiv x0, x1, x2\ncls x0, x1\nsxtw x0, w1\n")
+	r := format.NewRecordReader(f.Records)
+	mulID, _ := format.MnemonicID("mul")
+	udivID, _ := format.MnemonicID("udiv")
+	clsID, _ := format.MnemonicID("cls")
+	sxtwID, _ := format.MnemonicID("sxtw")
+	rec, _ := r.Next()
+	if rec.MnemonicID != mulID || rec.OperandCount != 3 {
+		t.Errorf("mul: %+v", rec)
+	}
+	rec, _ = r.Next()
+	if rec.MnemonicID != udivID || rec.OperandCount != 3 {
+		t.Errorf("udiv: %+v", rec)
+	}
+	rec, _ = r.Next()
+	if rec.MnemonicID != clsID || rec.OperandCount != 2 {
+		t.Errorf("cls: %+v", rec)
+	}
+	rec, _ = r.Next()
+	if rec.MnemonicID != sxtwID || rec.OperandCount != 2 {
+		t.Errorf("sxtw: %+v", rec)
+	}
+}
+
 func TestParseInstSymbolRef(t *testing.T) {
 	f := parseHelper(t, "b target\n")
 	if len(f.Names) != 1 || f.Names[0] != "target" {
