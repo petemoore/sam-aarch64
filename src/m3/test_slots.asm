@@ -122,6 +122,28 @@ run_slot_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &00, &04, &40, &00  ; 0x00400400 LE
 
+; -- encode_imm16_shifted(Imm16Shifted{BP=5,BW=16}, imm=0x42, hw=0) ----
+;    => 0x42 << 5 = 0x00000840
+; Mirrors slots_imm_test.go::TestEncodeImm16Shifted (first sub-case).
+; Two-operand wide convention (see slots/imm16_shifted.asm header):
+;   HL = slot pointer, DE = imm16, A = hw selector.
+                ld      hl, slot_imm16_bp5_bw16
+                ld      de, &0042
+                ld      a, 0
+                call    encode_imm16_shifted
+                call    assert_eq32_de_hl_imm
+                defb    &40, &08, &00, &00  ; 0x00000840 LE
+
+; -- encode_imm16_shifted(Imm16Shifted{BP=5,BW=16}, imm=0x42, hw=2) ----
+;    => (0x42 << 5) | (2 << 21) = 0x00000840 | 0x00400000 = 0x00400840
+; Mirrors slots_imm_test.go::TestEncodeImm16Shifted (second sub-case).
+                ld      hl, slot_imm16_bp5_bw16
+                ld      de, &0042
+                ld      a, 2
+                call    encode_imm16_shifted
+                call    assert_eq32_de_hl_imm
+                defb    &40, &08, &40, &00  ; 0x00400840 LE
+
 ; All assertions passed.
                 ret
 
@@ -182,15 +204,18 @@ assert_eq32_de_hl_imm:
 ; Layout (per docs/specs/2026-05-24-m2-encoder-tables-design.md §2):
 ;   defb slot_kind, expected_kind, bit_position, bit_width
 ;
-; slot_kind values (per tools/aarch64enc/types.go lines 16-22 and 26):
-;   Xreg        = 0x01
-;   Wreg        = 0x02
-;   XregOrSp    = 0x03
-;   WregOrSp    = 0x04
-;   Imm5        = 0x05
-;   Imm6        = 0x06
-;   CondCode    = 0x07
-;   ShiftAmount = 0x12
+; slot_kind values (per tools/aarch64enc/types.go lines 16-22, 24-25,
+; and 26):
+;   Xreg         = 0x01
+;   Wreg         = 0x02
+;   XregOrSp     = 0x03
+;   WregOrSp     = 0x04
+;   Imm5         = 0x05
+;   Imm6         = 0x06
+;   CondCode     = 0x07
+;   Imm12Shifted = 0x10
+;   Imm16Shifted = 0x11
+;   ShiftAmount  = 0x12
 ;
 ; expected_kind is set to 0 here: the encoders do not consult it
 ; (text2bin uses it earlier in the pipeline).
@@ -203,3 +228,4 @@ slot_imm6_bp16_bw6:     defb    &06, 0, 16, 6
 slot_cond_bp0_bw4:      defb    &07, 0, 0, 4
 slot_shamt_bp10_bw6:    defb    &12, 0, 10, 6
 slot_imm12_bp10_bw12:   defb    &10, 0, 10, 12
+slot_imm16_bp5_bw16:    defb    &11, 0, 5, 16

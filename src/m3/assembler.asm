@@ -23,6 +23,7 @@
                 include "slots/xreg.asm"
                 include "slots/imm_small.asm"
                 include "slots/imm12_shifted.asm"
+                include "slots/imm16_shifted.asm"
                 include "test_slots.asm"
 
 ; -----------------------------------------------------------------------
@@ -40,9 +41,10 @@ start:
                 ld      sp, &C100
 
 ; -- Per-slot encoder self-tests ----------------------------------------
-; Exercises encode_reg / encode_imm_n / encode_cond / encode_imm12_shifted
-; against hardcoded slot records (no disk I/O).  On any mismatch:
-; jp fail (red border + spin → 30s timeout).  See test_slots.asm.
+; Exercises encode_reg / encode_imm_n / encode_cond /
+; encode_imm12_shifted / encode_imm16_shifted against hardcoded slot
+; records (no disk I/O).  On any mismatch: jp fail (red border +
+; spin → 30s timeout).  See test_slots.asm.
                 call    run_slot_self_tests
 
 ; -- Load and validate enctab.enc header --------------------------------
