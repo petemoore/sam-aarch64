@@ -17,12 +17,14 @@ without ever leaving the SAM Coupé.
 ## Status
 
 M0 (toolchain bootstrap) and M1 (binary tokenised source format
-plus `text2bin` / `bin2text`) are both done. The Mac-side pipeline
-now lifts every Phase 1 text-dialect construct into a binary
-tokenised file and back; a four-layer test pyramid (format-unit,
-`.s` round-trip golden, `.tbn` reachability, GNU `as` cross-check)
-gates every change. The format is specified in
-`docs/specs/2026-05-23-m1-binary-tokenised-format-design.md`.
+plus `text2bin` / `bin2text`) are both done. M2 (encoder tables
++ Mac reference encoder) is partially complete: the full encoder
+library and generator pipeline are landed, refenc byte-matches
+`aarch64-none-elf-as` on the simpler M1 fixtures (nop, ret, add,
+sub, b/b.cond, mov, .byte/.short/.word, labels, etc.). The
+remaining work is wiring MEM, SHIFTED_REG, and EXTENDED_REG operand
+flattening through refenc, and adding `csel`/`csinc` to the table.
+See `docs/notes/m2-status.md` for the full gap list.
 
 The M0 round-trip continues to pass under every environment we
 exercise: GitHub Actions on `ubuntu-latest` (inside the dev image
@@ -32,7 +34,8 @@ the dev image locally under Docker on both `linux/amd64` and
 patched SimCoupé. See `docs/specs/` for design documents and
 `docs/plans/` for milestone plans.
 
-Next up: M2 (encoder tables).
+Next up: complete M2 (cover remaining operand kinds), then M3
+(Z80 emitter).
 
 ## Local development
 
