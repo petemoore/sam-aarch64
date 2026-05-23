@@ -2,10 +2,12 @@
 
 Entry point for any session picking up M2 encoder-tables work.
 
-Last update: 2026-05-24. M2 substantially complete on branch
-`worktree-m2-completion`; 19/20 M1 fixtures now byte-match
-`aarch64-none-elf-as`. Only `expr_pcrel` (multi-section VMA layout)
-remains as a known gap.
+Last update: 2026-05-25. **M2 fully complete**: all 20/20 M1
+fixtures now byte-match the GNU pipeline
+(`aarch64-none-elf-as` → `aarch64-none-elf-ld -Ttext=0` →
+`aarch64-none-elf-objcopy -O binary`) end-to-end via
+`text2bin` → `refenc`. Layer 3 is wired into `make ci-m2` via
+`tests/m1/run-refenc-roundtrip.sh`.
 
 ## What M2 is (spec recap)
 
@@ -71,45 +73,48 @@ Makefile                         Adds enctab-gen, refenc, enctab, test-m2, ci-m2
 |---|---|---|
 | 1 — aarch64enc unit tests | ✅ ALL PASS | Every slot kind tested, LogicalImm has pin tests against known-correct ARM encodings |
 | 2 — enctab-gen / mra unit tests | ✅ ALL PASS | Parser tested against real `nop.xml` and synthetic XML |
-| 3 — refenc roundtrip vs GNU as | ✅ 19/20 | Only `expr_pcrel` (multi-section VMA layout) remains |
+| 3 — refenc roundtrip vs GNU pipeline | ✅ 20/20 | All M1 fixtures byte-match via `tests/m1/run-refenc-roundtrip.sh` |
 | 4 — text2bin operand-kind validation | ❌ NOT DONE | Spec §5 wiring (Task 21) deferred |
 
 ## What's verified end-to-end
 
-19 of the 20 M1 fixtures byte-match `aarch64-none-elf-as`:
-
-`comments`, `dir_align_skip`, `dir_data`, `dir_equ`, `dir_string`, `empty`,
-`expr_simple`, `inst_bcond`, `inst_csel`, `inst_extended`, `inst_mem_extended`,
-`inst_mem_indexed`, `inst_mem_preindex`, `inst_mem_simple`, `inst_nop_ret`,
-`inst_reg_imm`, `inst_shifted`, `labels`, `local_labels`
+All 20 M1 fixtures byte-match the GNU pipeline
+(`aarch64-none-elf-as` → `ld -Ttext=0` → `objcopy -O binary`).
 
 That covers: nop, add/sub (immediate and register variants), cmp/csel/csinc,
 ldr/str (all addressing modes: unsigned offset, pre-index, post-index,
 register-offset, register-shifted, register-extended), .balign, .skip,
-b.cond × 16, .byte/.short/.word/.quad, .ascii/.asciz, .equ/.set,
-comments, labels, local labels (1f/1b), pure-constant expressions.
+adrp + `:lo12:`, b.cond × 16, .byte/.short/.word/.quad, .ascii/.asciz,
+.equ/.set, comments, labels, local labels (1f/1b), pure-constant
+expressions.
+
+**Note**: fixtures with relocations (e.g. `:lo12:msg`) need a link step
+between `as` and `objcopy` for the oracle to resolve relocations to the
+same values refenc bakes in at assembly time. `run-refenc-roundtrip.sh`
+runs `ld -Ttext=0` for that reason. This matches the M1 spec §5.1
+guidance on link-step requirements.
 
 ## Known gaps
 
-1. **Section layout in refenc** (`expr_pcrel`). `.text` and `.data`
-   sections both resolve to VMA=0 in relocatable objects; GNU as's
-   `objcopy -O binary` dumps them in ELF section-table order with
-   overlapping VMAs. Implementing this requires tracking section
-   boundaries and emitting a VMA-layout-aware binary. Low priority
-   since `expr_pcrel` is the only affected fixture.
-
-2. **Bare `ret` form gets clobbered on regen**. The 0-operand
+1. **Bare `ret` form gets clobbered on regen**. The 0-operand
    `ret` form was added manually to `data.go`; running
    `make enctab` overwrites it. Either teach the generator about
    the ret alias, or add a small post-pass that re-injects the
    form after regeneration.
 
-3. **text2bin operand-kind validation** (spec §5, Task 21).
+2. **text2bin operand-kind validation** (spec §5, Task 21).
    Currently text2bin doesn't consult `ValidateOperandKinds`, so
    malformed sources are accepted at parse time and only fail at
    refenc/M3 time.
 
-4. **`.org` in refenc**. Not implemented; pass1 returns 0 for size.
+3. **`.org` in refenc**. Not implemented; pass1 returns 0 for size.
+   No M1 fixture exercises it; add when needed.
+
+4. **Multi-section binary layout** (deferred from `expr_pcrel`).
+   The fixture was simplified to a single `.text` section so
+   `:lo12:` testing doesn't require section-layout tracking. If
+   future fixtures need genuine multi-section behaviour, refenc
+   needs section-boundary awareness + VMA-respecting emission.
 
 ## Hand-off recipe
 
