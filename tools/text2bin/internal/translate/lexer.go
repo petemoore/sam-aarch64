@@ -223,9 +223,39 @@ func (l *lexer) readIdent() (Tok, error) {
 }
 
 func (l *lexer) readNumberOrLocal(start Position) (Tok, error) {
-	if l.pos+1 < len(l.src) &&
-		(l.src[l.pos+1] == 'f' || l.src[l.pos+1] == 'b') &&
-		(l.pos+2 >= len(l.src) || !isIdentCont(l.src[l.pos+2])) {
+	// Try to match a local-label reference: one or two decimal digits followed
+	// immediately by 'f' or 'b' (not followed by another ident character).
+	// One-digit: Nf / Nb  (N in '0'..'9')
+	// Two-digit: NNf / NNb (both chars in '0'..'9')
+	isDigit := func(c byte) bool { return c >= '0' && c <= '9' }
+	tryLocal := func(nDigits int) bool {
+		if l.pos+nDigits >= len(l.src) {
+			return false
+		}
+		for i := 0; i < nDigits; i++ {
+			if !isDigit(l.src[l.pos+i]) {
+				return false
+			}
+		}
+		dir := l.src[l.pos+nDigits]
+		if dir != 'f' && dir != 'b' {
+			return false
+		}
+		// The char after 'f'/'b' must not be an ident continuation character.
+		if l.pos+nDigits+1 < len(l.src) && isIdentCont(l.src[l.pos+nDigits+1]) {
+			return false
+		}
+		return true
+	}
+	// Check two-digit first (more specific than one-digit).
+	if tryLocal(2) {
+		hi := l.advance() - '0'
+		lo := l.advance() - '0'
+		dir := l.advance()
+		d := hi*10 + lo
+		return Tok{Kind: TokLocalRef, Pos: start, Digit: d, LocalDir: dir}, nil
+	}
+	if tryLocal(1) {
 		d := l.advance() - '0'
 		dir := l.advance()
 		return Tok{Kind: TokLocalRef, Pos: start, Digit: d, LocalDir: dir}, nil

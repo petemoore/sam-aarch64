@@ -52,7 +52,7 @@ func (p *parser) parseLine() error {
 			p.rw.WriteComment(placement, t.Bytes)
 			p.pos++
 		case TokInt:
-			if p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokColon && t.Int >= 1 && t.Int <= 9 {
+			if p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokColon && t.Int >= 1 && t.Int <= 99 {
 				p.rw.WriteLocalDef(byte(t.Int))
 				p.pos += 2
 				emittedStatement = true
@@ -123,6 +123,26 @@ func (p *parser) parseInst(t Tok) error {
 		return newErr(t.Pos, "unknown mnemonic %q", t.Text)
 	}
 	p.pos++
+
+	// MOVK has a special immediate syntax: `movk Rd, #imm16 [, lsl #N]`.
+	// The lsl #N suffix selects which 16-bit slot to fill (hw=N/16).
+	// We encode the hw into bits [17:16] of the immediate so the refenc
+	// encoder can extract it without needing a new operand kind.
+	movkID, _ := format.MnemonicID("movk")
+	if id == movkID {
+		return p.parseMovk(id)
+	}
+
+	// MOVL is a spectrum4 pseudo-instruction: `movl Rd, #imm32` loads a
+	// 32-bit (or 64-bit) constant into a register. It expands to:
+	//   movz Rd, #lo16          (always emitted)
+	//   movk Rd, #hi16, lsl #16 (only if hi16 != 0)
+	// Both are emitted as separate instruction records.
+	movlID, _ := format.MnemonicID("movl")
+	if id == movlID {
+		return p.parseMovl()
+	}
+
 	var ow format.OperandWriter
 	count := byte(0)
 	for {
@@ -142,6 +162,183 @@ func (p *parser) parseInst(t Tok) error {
 		}
 		count++
 	}
+}
+
+// parseMovk handles the MOVK instruction which has the syntax:
+//
+//	movk <Rd>, #<imm16> [, lsl #N]
+//
+// The lsl #N suffix selects which 16-bit slot within the register to write
+// (hw = N/16 where N ∈ {0, 16, 32, 48}). We encode hw into bits [17:16] of
+// the immediate constant so the refenc encoder can extract it. For operands
+// without lsl, hw defaults to 0.
+func (p *parser) parseMovk(id uint16) error {
+	var ow format.OperandWriter
+
+	// Operand 1: destination register (Xd or Wd).
+	if err := p.parseOperand(&ow); err != nil {
+		return err
+	}
+
+	// Expect comma.
+	if p.cur().Kind != TokComma {
+		return newErr(p.cur().Pos, "movk: expected ',' after register")
+	}
+	p.pos++
+
+	// Operand 2: immediate (#imm16).
+	immExpr, err := p.parseExpression()
+	if err != nil {
+		return err
+	}
+	imm16, ok := format.EvalConst(immExpr)
+	if !ok {
+		return newErr(p.cur().Pos, "movk: immediate must be a constant")
+	}
+	if imm16 < 0 || imm16 > 0xffff {
+		return newErr(p.cur().Pos, "movk: immediate %d out of range [0, 65535]", imm16)
+	}
+
+	// Optional: `, lsl #N` suffix.
+	hw := int64(0)
+	if p.cur().Kind == TokComma {
+		p.pos++
+		if p.cur().Kind == TokIdent && p.cur().Text == "lsl" {
+			p.pos++
+			if p.cur().Kind != TokHash {
+				return newErr(p.cur().Pos, "movk: expected '#' after lsl")
+			}
+			p.pos++
+			shiftExpr, err := p.parseExpression()
+			if err != nil {
+				return err
+			}
+			shiftAmt, ok := format.EvalConst(shiftExpr)
+			if !ok {
+				return newErr(p.cur().Pos, "movk: shift amount must be a constant")
+			}
+			if shiftAmt < 0 || shiftAmt > 48 || shiftAmt%16 != 0 {
+				return newErr(p.cur().Pos, "movk: lsl shift %d not in {0, 16, 32, 48}", shiftAmt)
+			}
+			hw = shiftAmt / 16
+		} else {
+			return newErr(p.cur().Pos, "movk: expected 'lsl' after ','")
+		}
+	}
+
+	// Encode hw into bits [17:16] of the immediate so the encoder can
+	// distinguish hw=0 from hw=1/2/3 while keeping the format generic.
+	encoded := (hw << 16) | imm16
+	var folded format.ExprWriter
+	folded.WriteImm(encoded)
+	ow.WriteImmExpr(folded.Bytes())
+
+	p.rw.WriteInst(id, 2, ow.Bytes())
+	return nil
+}
+
+// parseMovl handles the spectrum4 `movl Rd, imm32` pseudo-instruction.
+// It expands to two real instructions using :abs_g0_nc: and :abs_g1: relocation ops:
+//
+//	mov  Rd, :abs_g0_nc:expr     (MOVZ with low 16 bits, no-carry)
+//	movk Rd, :abs_g1:expr        (MOVK with bits 31:16)
+//
+// When the expression is a constant, we use constant-folded lo/hi literals instead.
+func (p *parser) parseMovl() error {
+	movzID, _ := format.MnemonicID("mov")
+	movkID, _ := format.MnemonicID("movk")
+
+	// Operand 1: destination register (Xd or Wd).
+	var ow format.OperandWriter
+	if err := p.parseOperand(&ow); err != nil {
+		return err
+	}
+	// Extract register kind and index from what we just wrote.
+	rdBytes := ow.Bytes()
+	if len(rdBytes) < 2 {
+		return newErr(p.cur().Pos, "movl: expected register")
+	}
+	rdKind := format.OperandKind(rdBytes[0])
+	rdReg := rdBytes[1]
+
+	// Expect comma.
+	if p.cur().Kind != TokComma {
+		return newErr(p.cur().Pos, "movl: expected ',' after register")
+	}
+	p.pos++
+
+	// Operand 2: value expression (may be a symbol or a constant).
+	immExpr, err := p.parseExpression()
+	if err != nil {
+		return err
+	}
+
+	if imm, ok := format.EvalConst(immExpr); ok {
+		// Constant case: fold directly.
+		lo16 := imm & 0xffff
+		hi16 := (imm >> 16) & 0xffff
+
+		if lo16 == 0 && hi16 != 0 {
+			// Emit MOVZ Rd, #hi16, lsl #16 (hw=1 encoded in bits [17:16]).
+			var ow1 format.OperandWriter
+			ow1.WriteReg(rdKind, rdReg)
+			var e1 format.ExprWriter
+			e1.WriteImm((int64(1) << 16) | hi16)
+			ow1.WriteImmExpr(e1.Bytes())
+			p.rw.WriteInst(uint16(movzID), 2, ow1.Bytes())
+			return nil
+		}
+		// Emit MOVZ Rd, #lo16.
+		{
+			var ow1 format.OperandWriter
+			ow1.WriteReg(rdKind, rdReg)
+			var e1 format.ExprWriter
+			e1.WriteImm(lo16)
+			ow1.WriteImmExpr(e1.Bytes())
+			p.rw.WriteInst(uint16(movzID), 2, ow1.Bytes())
+		}
+		// If hi16 != 0, emit MOVK Rd, #hi16, lsl #16.
+		if hi16 != 0 {
+			var ow2 format.OperandWriter
+			ow2.WriteReg(rdKind, rdReg)
+			var e2 format.ExprWriter
+			e2.WriteImm((int64(1) << 16) | hi16)
+			ow2.WriteImmExpr(e2.Bytes())
+			p.rw.WriteInst(movkID, 2, ow2.Bytes())
+		}
+		return nil
+	}
+
+	// Symbolic case: expand to:
+	//   mov  Rd, :abs_g0_nc:expr   — MOVZ with bits[15:0], no-carry
+	//   movk Rd, :abs_g1:expr      — MOVK with bits[31:16], lsl #16
+	//
+	// immExpr is an already-encoded expression bytecode (e.g. PUSH_SYM id).
+	// We append the relocation op to produce :rel:sym form.
+	{
+		var ow1 format.OperandWriter
+		ow1.WriteReg(rdKind, rdReg)
+		var e1 format.ExprWriter
+		// Append immExpr bytes then the relocation op.
+		e1.AppendRaw(immExpr)
+		e1.WriteOp(format.OpRelAbsG0NC)
+		ow1.WriteImmExpr(e1.Bytes())
+		p.rw.WriteInst(uint16(movzID), 2, ow1.Bytes())
+	}
+	{
+		var ow2 format.OperandWriter
+		ow2.WriteReg(rdKind, rdReg)
+		// For MOVK hw=1 (lsl #16): encode as (1<<16) | :abs_g1:sym.
+		// The Imm16Shifted slot extracts hw from bits[17:16] of the imm value.
+		var e2 format.ExprWriter
+		e2.WriteImm(1 << 16)   // hw=1 marker
+		e2.AppendRaw(immExpr)  // push the symbol/expr
+		e2.WriteOp(format.OpRelAbsG1)
+		e2.WriteOp(format.OpOr) // (1<<16) | :abs_g1:sym
+		ow2.WriteImmExpr(e2.Bytes())
+		p.rw.WriteInst(movkID, 2, ow2.Bytes())
+	}
+	return nil
 }
 
 func (p *parser) parseOperand(ow *format.OperandWriter) error {
