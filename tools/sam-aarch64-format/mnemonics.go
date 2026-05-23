@@ -90,6 +90,13 @@ var MnemonicTable = []string{
 	// sbfx: Signed Bit Field Extract (ARM ARM C6.2.205). Alias of SBFM.
 	//   `sbfx Rd, Rn, #lsb, #width`.
 	"bfc", "sbfx",
+	// Signed-extend loads (share the LDR/STR encoding template but with
+	// a different opc field at bits 23:22). opc=10 selects "signed load
+	// to 64-bit Xt", opc=11 selects "signed load to 32-bit Wt".
+	// ldrsb: Load Signed Byte (ARM ARM C6.2.117). size=00.
+	// ldrsh: Load Signed Halfword (ARM ARM C6.2.118). size=01.
+	// ldrsw: Load Signed Word (ARM ARM C6.2.119). size=10, Xt only.
+	"ldrsb", "ldrsh", "ldrsw",
 }
 
 var mnemonicIndex = func() map[string]uint16 {

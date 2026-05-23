@@ -302,8 +302,21 @@ func encodeLdrLitPoolInst(operands []format.Operand, pc int64, p1 *Pass1Result) 
 // mnemonicIsLoad returns true when mnemonicID is ldr or similar load.
 // Returns false for str/stp etc. Used to set the L bit in memory encodings.
 func isLoadMnemonic(mnemonicID uint16) bool {
-	// ldr=5, ldp=7, ldrb=54, ldrh=56, ldur=76
-	return mnemonicID == 5 || mnemonicID == 7 || mnemonicID == 54 || mnemonicID == 56 || mnemonicID == 76
+	// ldr=5, ldp=7, ldrb=54, ldrh=56, ldur=76,
+	// ldrsb=86, ldrsh=87, ldrsw=88.
+	switch mnemonicID {
+	case 5, 7, 54, 56, 76, 86, 87, 88:
+		return true
+	}
+	return false
+}
+
+// isSignedExtendLoad reports ldrsb / ldrsh / ldrsw (ARM ARM C6.2.117 /
+// C6.2.118 / C6.2.119). These share the LDR/STR encoding template but
+// use opc=10 (signed load to Xt) or opc=11 (signed load to Wt) at bits
+// 23:22 rather than the regular load's opc=01.
+func isSignedExtendLoad(mnemonicID uint16) bool {
+	return mnemonicID == 86 || mnemonicID == 87 || mnemonicID == 88
 }
 
 // isUnscaledMemMnemonic reports stur(75) / ldur(76) — the unscaled
@@ -317,17 +330,48 @@ func isUnscaledMemMnemonic(mnemonicID uint16) bool {
 // memInstSize returns the AArch64 "size" field (bits 31:30) and the byte
 // scale factor for a given load/store mnemonic.
 // ldr/str: size=11 (64-bit), scale=8
-// ldrb/strb: size=00 (byte), scale=1
-// ldrh/strh: size=01 (halfword), scale=2
+// ldrb/strb/ldrsb: size=00 (byte), scale=1
+// ldrh/strh/ldrsh: size=01 (halfword), scale=2
+// ldrsw: size=10 (word), scale=4
 func memInstSize(mnemonicID uint16) (sizeBits uint32, scale int64) {
 	switch mnemonicID {
-	case 54, 55: // ldrb, strb
+	case 54, 55, 86: // ldrb, strb, ldrsb
 		return 0b00, 1
-	case 56, 57: // ldrh, strh
+	case 56, 57, 87: // ldrh, strh, ldrsh
 		return 0b01, 2
+	case 88: // ldrsw
+		return 0b10, 4
 	default: // ldr(5), str(6), ldp(7), stp(8)
 		return 0b11, 8
 	}
+}
+
+// memInstOpc returns the 2-bit opc field (bits 23:22) for a load/store
+// instruction. For STR/STRB/STRH this is 00; for LDR/LDRB/LDRH it is 01.
+// For LDRSB/LDRSH/LDRSW the opc selects the destination width: 10 when
+// Rt is Xt (sign-extend to 64-bit) and 11 when Rt is Wt (sign-extend to
+// 32-bit). LDRSW only has an Xt form.
+func memInstOpc(mnemonicID uint16, rtKind format.OperandKind) (uint32, error) {
+	if isSignedExtendLoad(mnemonicID) {
+		switch rtKind {
+		case format.OpRegX:
+			if mnemonicID == 88 {
+				return 0b10, nil // ldrsw (Xt only)
+			}
+			return 0b10, nil
+		case format.OpRegW:
+			if mnemonicID == 88 {
+				return 0, fmt.Errorf("ldrsw: Rt must be Xn (no Wt form)")
+			}
+			return 0b11, nil
+		default:
+			return 0, fmt.Errorf("ldrs*: Rt must be Wn or Xn (got kind %v)", rtKind)
+		}
+	}
+	if isLoadMnemonic(mnemonicID) {
+		return 0b01, nil
+	}
+	return 0b00, nil
 }
 
 // encodeMemInst encodes instructions that have an OpMem operand.
@@ -355,25 +399,24 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 		return encodeUnscaledMemInst(mnemonicID, operands[0], rt, mem, pc, p1, f)
 	}
 
-	isLoad := isLoadMnemonic(mnemonicID)
 	sizeBits, scale := memInstSize(mnemonicID)
+	opc, err := memInstOpc(mnemonicID, operands[0].Kind)
+	if err != nil {
+		return 0, err
+	}
 
 	// AArch64 load/store encoding:
 	// bits[31:30] = size (00=byte, 01=halfword, 10=word, 11=doubleword)
 	// bits[29:27] = 111 (VFP=0 is 0b111_0; V=0 → 0b111, bit26=0)
 	// bits[25:24] = addressing mode (01=unsigned-offset, 00=pre/post/unscaled)
-	// bits[23:22] = opc (01=load, 00=store for integer)
+	// bits[23:22] = opc (01=load, 00=store, 10=signed-load-to-Xt,
+	//                    11=signed-load-to-Wt)
 	const vfpMid = uint32(0b111) << 27
 
 	switch mem.MemShape {
 	case format.MemBase, format.MemBaseOff:
-		// LDR/STR (unsigned offset): size(2)|111|01|opc(2)|imm12|Rn|Rt
+		// LDR/STR/LDRSx (unsigned offset): size(2)|111|01|opc(2)|imm12|Rn|Rt
 		// bits 25:24 = 01 (unsigned offset encoding)
-		// bits 23:22 = 01 (load) or 00 (store)
-		opc := uint32(0) // store
-		if isLoad {
-			opc = uint32(1)
-		}
 		base := (sizeBits << 30) | vfpMid | (uint32(1) << 24) | (opc << 22)
 		// imm12 is a scaled (unsigned) offset: byte_offset / scale
 		var byteOffset int64
@@ -395,14 +438,9 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 	case format.MemBaseOffPre:
 		// LDR/STR (immediate, pre-index): size(2)|111|00|opc(2)|0|imm9|11|Rn|Rt
 		// bits 25:24 = 00 (unscaled/pre/post)
-		// bits 23:22 = 01 (load) or 00 (store)
 		// bit  21    = 0
 		// bits 20:12 = imm9 (signed)
 		// bits 11:10 = 11 (pre-index)
-		opc := uint32(0)
-		if isLoad {
-			opc = uint32(1)
-		}
 		base := (sizeBits << 30) | vfpMid | (opc << 22) | (uint32(3) << 10)
 		ctx := makeCtx(pc, p1, f)
 		v, err := enc.Eval(mem.Expr, ctx)
@@ -418,10 +456,6 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 
 	case format.MemBaseOffPost:
 		// LDR/STR (immediate, post-index): bits 11:10 = 01
-		opc := uint32(0)
-		if isLoad {
-			opc = uint32(1)
-		}
 		base := (sizeBits << 30) | vfpMid | (opc << 22) | (uint32(1) << 10)
 		ctx := makeCtx(pc, p1, f)
 		v, err := enc.Eval(mem.Expr, ctx)
@@ -439,10 +473,6 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 		// LDR/STR (register, no shift): Xt, [Xn, Xm]
 		// size(2)|111|00|opc(2)|1|Rm|option|S|10|Rn|Rt
 		// For Xm: option=011 (LSL), S=0
-		opc := uint32(0)
-		if isLoad {
-			opc = uint32(1)
-		}
 		const optionLSL = uint32(0b011)
 		base := (sizeBits << 30) | vfpMid | (opc << 22) | (uint32(1) << 21) |
 			(optionLSL << 13) | (uint32(0b10) << 10)
@@ -452,10 +482,6 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 	case format.MemBaseIdxShifted:
 		// LDR/STR (register, LSL): Xt, [Xn, Xm, LSL #N]
 		// Same as MemBaseIdx but S=1; S lives at bit 12.
-		opc := uint32(0)
-		if isLoad {
-			opc = uint32(1)
-		}
 		const optionLSL = uint32(0b011)
 		s := uint32(0)
 		if mem.ShiftAmt != 0 {
@@ -471,10 +497,6 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 		// size(2)|111|00|opc(2)|1|Rm|option|S|10|Rn|Rt
 		// option = extend kind (UXTW=010, SXTW=110, etc.)
 		// S = shift-applied (0 or 1)
-		opc := uint32(0)
-		if isLoad {
-			opc = uint32(1)
-		}
 		option := uint32(mem.Extend)
 		s := uint32(0)
 		if mem.ShiftAmt != 0 {
