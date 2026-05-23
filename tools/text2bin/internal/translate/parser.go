@@ -403,17 +403,17 @@ func (p *parser) parseMovk(id uint16) error {
 	}
 	p.pos++
 
-	// Operand 2: immediate (#imm16).
+	// Operand 2: immediate expression (#imm16). Symbol-bearing expressions
+	// are allowed: the encoder evaluates them later, after symbol resolution.
 	immExpr, err := p.parseExpression()
 	if err != nil {
 		return err
 	}
-	imm16, ok := format.EvalConst(immExpr)
-	if !ok {
-		return newErr(p.cur().Pos, "movk: immediate must be a constant")
-	}
-	if imm16 < 0 || imm16 > 0xffff {
-		return newErr(p.cur().Pos, "movk: immediate %d out of range [0, 65535]", imm16)
+	immConst, immIsConst := format.EvalConst(immExpr)
+	if immIsConst {
+		if immConst < 0 || immConst > 0xffff {
+			return newErr(p.cur().Pos, "movk: immediate %d out of range [0, 65535]", immConst)
+		}
 	}
 
 	// Optional: `, lsl #N` suffix.
@@ -445,9 +445,19 @@ func (p *parser) parseMovk(id uint16) error {
 
 	// Encode hw into bits [17:16] of the immediate so the encoder can
 	// distinguish hw=0 from hw=1/2/3 while keeping the format generic.
-	encoded := (hw << 16) | imm16
 	var folded format.ExprWriter
-	folded.WriteImm(encoded)
+	if immIsConst {
+		folded.WriteImm((hw << 16) | immConst)
+	} else {
+		// Build expression: (hw << 16) | (immExpr & 0xffff).
+		// The mask keeps the encoded value within the [0, 1<<18) range
+		// that Imm16Shifted expects (hw at bits 17:16, imm16 at bits 15:0).
+		folded.WriteImm(hw << 16)
+		folded.AppendRaw(immExpr)
+		folded.WriteImm(0xffff)
+		folded.WriteOp(format.OpAnd)
+		folded.WriteOp(format.OpOr)
+	}
 	ow.WriteImmExpr(folded.Bytes())
 
 	p.rw.WriteInst(id, 2, ow.Bytes())

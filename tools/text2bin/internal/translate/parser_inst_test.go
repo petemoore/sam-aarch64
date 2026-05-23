@@ -564,6 +564,31 @@ func TestParseInstBfcSbfx(t *testing.T) {
 	}
 }
 
+func TestParseInstMovkSymbolic(t *testing.T) {
+	// Pete's spectrum4 kernel/macros.s defines `movl` as a .macro that
+	// expands to `movz \Wn, \imm & 0xffff` + `movk \Wn, (\imm >> 16) &
+	// 0xffff, lsl #16`. With symbolic `\imm` (e.g. BORDER_COLOUR
+	// .set somewhere upstream) the immediate isn't constant at parse
+	// time — the encoder resolves it later.
+	src := ".set X, 0x12340000\n" +
+		"movz w0, X & 0xffff\n" +
+		"movk w0, (X >> 16) & 0xffff, lsl #16\n"
+	f := parseHelper(t, src)
+	// Just make sure we parsed without "movk: immediate must be a
+	// constant" — the records should be present and have two operands.
+	r := format.NewRecordReader(f.Records)
+	r.Next() // .set
+	for i := 0; i < 2; i++ {
+		rec, err := r.Next()
+		if err != nil {
+			t.Fatalf("rec %d: %v", i, err)
+		}
+		if rec.OperandCount != 2 {
+			t.Errorf("rec %d: operand_count=%d, want 2", i, rec.OperandCount)
+		}
+	}
+}
+
 func TestParseInstSymbolRef(t *testing.T) {
 	f := parseHelper(t, "b target\n")
 	if len(f.Names) != 1 || f.Names[0] != "target" {
