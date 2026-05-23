@@ -78,6 +78,10 @@ type xmlDocVar struct {
 type xmlEncoding struct {
 	XMLName xml.Name    `xml:"encoding"`
 	DocVars []xmlDocVar `xml:"docvars>docvar"`
+	// Encoding-level boxes override iclass-level variable boxes with fixed values
+	// (bitdiffs). Each box here has a name matching an iclass-level variable box
+	// and a fixed <c>0</c> or <c>1</c> body.
+	Boxes []xmlBox `xml:"box"`
 }
 
 type xmlIclass struct {
@@ -115,11 +119,15 @@ func ParseInstructionXML(r io.Reader) ([]ParsedForm, error) {
 					mnemonic = dv.Value
 				}
 			}
+			// Apply encoding-level box overrides (bitdiffs): these fix iclass-level
+			// variable fields to specific 0/1 values for this encoding variant.
+			// We update pattern/mask and remove the overridden field from slots.
+			encPattern, encMask, filteredSlots := applyEncodingOverrides(pattern, mask, slots, enc.Boxes)
 			forms = append(forms, ParsedForm{
 				Mnemonic:    mnemonic,
-				Pattern:     pattern,
-				Mask:        mask,
-				RawOperands: slots,
+				Pattern:     encPattern,
+				Mask:        encMask,
+				RawOperands: filteredSlots,
 			})
 		}
 	}
@@ -237,4 +245,58 @@ func convertRegDiagram(boxes []xmlBox) (pattern, mask uint32, slots []RawOperand
 		}
 	}
 	return pattern, mask, slots
+}
+
+// applyEncodingOverrides applies encoding-level <box> elements (bitdiffs) to
+// the iclass-level pattern/mask/slots. Each override box has a name matching
+// an iclass-level variable slot and fixed <c>0</c> or <c>1</c> children.
+//
+// For each override box:
+//  1. Its bits are applied to pattern/mask (fixing the bit values).
+//  2. The corresponding slot is removed from the returned slots slice.
+//
+// Slots not overridden are passed through unchanged.
+func applyEncodingOverrides(pattern, mask uint32, slots []RawOperandSlot, overrides []xmlBox) (uint32, uint32, []RawOperandSlot) {
+	if len(overrides) == 0 {
+		return pattern, mask, slots
+	}
+
+	// Build a set of overridden field names.
+	overridden := make(map[string]bool)
+	for _, box := range overrides {
+		if box.Name == "" {
+			continue
+		}
+		width := box.Width
+		if width == 0 {
+			width = 1
+		}
+		if box.Hibit < 0 || box.Hibit > 31 {
+			continue
+		}
+		// Apply each <c> child as a fixed bit.
+		for i, c := range box.Cs {
+			bitPos := box.Hibit - i
+			if bitPos < 0 || bitPos > 31 {
+				continue
+			}
+			body := strings.TrimSpace(c.Body)
+			mask |= uint32(1) << bitPos
+			if body == "1" {
+				pattern |= uint32(1) << bitPos
+			} else {
+				pattern &^= uint32(1) << bitPos
+			}
+		}
+		overridden[box.Name] = true
+	}
+
+	// Filter slots: remove any whose name was overridden.
+	filtered := slots[:0:0]
+	for _, s := range slots {
+		if !overridden[s.Name] {
+			filtered = append(filtered, s)
+		}
+	}
+	return pattern, mask, filtered
 }

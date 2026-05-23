@@ -13,6 +13,26 @@ type FieldContext struct {
 	AcceptsSP bool
 }
 
+// IsInternalField returns true for fields that appear as variable bits in the
+// iclass regdiagram but are NOT separate user-supplied operands. They are
+// either:
+//   - Handled implicitly by another SlotKind's encoder (e.g. "sh" is encoded
+//     inside Imm12Shifted at BitPosition+12), or
+//   - ISA-level selectors that are fixed by context but left variable in the
+//     shared iclass diagram (and should have been fixed by encoding-level
+//     bitdiffs but occasionally are not).
+//
+// The generator skips forms that contain an internal field rather than
+// reporting an error, because the field is an implementation detail, not
+// a user-visible operand.
+func IsInternalField(name string) bool {
+	switch name {
+	case "sh": // shift selector for imm12; encoded inside Imm12Shifted at +12
+		return true
+	}
+	return false
+}
+
 // MapField returns the SlotKind for an MRA operand-box name in the
 // given context. ok=false means the name is unrecognised; the
 // generator hard-errors in that case.
