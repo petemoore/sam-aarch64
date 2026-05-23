@@ -1,5 +1,7 @@
 package format
 
+import "encoding/binary"
+
 // OperandKind tags each operand with its on-disk shape (§4).
 type OperandKind byte
 
@@ -117,4 +119,92 @@ func (c CondCode) Name() string {
 		"eq", "ne", "cs", "cc", "mi", "pl", "vs", "vc",
 		"hi", "ls", "ge", "lt", "gt", "le", "al", "nv",
 	}[c]
+}
+
+// OperandWriter accumulates encoded operand bytes.
+type OperandWriter struct{ buf []byte }
+
+func (w *OperandWriter) Bytes() []byte { return w.buf }
+func (w *OperandWriter) Reset()        { w.buf = w.buf[:0] }
+
+// WriteReg writes a register operand; kind must be one of OpRegX,
+// OpRegW, OpRegXSP, OpRegWSP.
+func (w *OperandWriter) WriteReg(kind OperandKind, reg byte) {
+	w.buf = append(w.buf, byte(kind), reg)
+}
+
+// WriteImmExpr writes an IMM_EXPR operand carrying the given
+// expression bytecode.
+func (w *OperandWriter) WriteImmExpr(expr []byte) {
+	w.buf = append(w.buf, byte(OpImmExpr))
+	w.buf = appendU16(w.buf, uint16(len(expr)))
+	w.buf = append(w.buf, expr...)
+}
+
+// WriteShiftedReg writes a SHIFTED_REG operand. width: 0=W, 1=X.
+func (w *OperandWriter) WriteShiftedReg(width, reg byte, kind ShiftKind, amtExpr []byte) {
+	w.buf = append(w.buf, byte(OpShiftedReg), width, reg, byte(kind))
+	w.buf = appendU16(w.buf, uint16(len(amtExpr)))
+	w.buf = append(w.buf, amtExpr...)
+}
+
+// WriteExtendedReg writes an EXTENDED_REG operand. amtExpr may be nil
+// or empty (meaning no #N).
+func (w *OperandWriter) WriteExtendedReg(width, reg byte, kind ExtendKind, amtExpr []byte) {
+	w.buf = append(w.buf, byte(OpExtendedReg), width, reg, byte(kind))
+	w.buf = appendU16(w.buf, uint16(len(amtExpr)))
+	w.buf = append(w.buf, amtExpr...)
+}
+
+// WriteMemBase writes a MEM operand of shape [xn].
+func (w *OperandWriter) WriteMemBase(base byte) {
+	w.buf = append(w.buf, byte(OpMem), byte(MemBase), base)
+}
+
+// WriteMemBaseOff writes a MEM operand of shape [xn, #off], !, or post.
+// shape must be MemBaseOff, MemBaseOffPre, or MemBaseOffPost.
+func (w *OperandWriter) WriteMemBaseOff(shape MemShape, base byte, offExpr []byte) {
+	w.buf = append(w.buf, byte(OpMem), byte(shape), base)
+	w.buf = appendU16(w.buf, uint16(len(offExpr)))
+	w.buf = append(w.buf, offExpr...)
+}
+
+// WriteMemBaseIdx writes a MEM operand of shape [xn, xm]. idxWidth: 0=W, 1=X.
+func (w *OperandWriter) WriteMemBaseIdx(base, idx, idxWidth byte) {
+	w.buf = append(w.buf, byte(OpMem), byte(MemBaseIdx), base, idx, idxWidth)
+}
+
+// WriteMemBaseIdxShifted writes a MEM operand of shape [xn, xm, lsl #N].
+func (w *OperandWriter) WriteMemBaseIdxShifted(base, idx, idxWidth, shiftAmt byte) {
+	w.buf = append(w.buf, byte(OpMem), byte(MemBaseIdxShifted),
+		base, idx, idxWidth, shiftAmt)
+}
+
+// WriteMemBaseIdxExtended writes a MEM operand of shape
+// [xn, wm/xm, extend #N].
+func (w *OperandWriter) WriteMemBaseIdxExtended(base, idx, idxWidth byte, extend ExtendKind, shiftAmt byte) {
+	w.buf = append(w.buf, byte(OpMem), byte(MemBaseIdxExtended),
+		base, idx, idxWidth, byte(extend), shiftAmt)
+}
+
+func (w *OperandWriter) WriteString(s []byte) {
+	w.buf = append(w.buf, byte(OpString))
+	w.buf = appendU16(w.buf, uint16(len(s)))
+	w.buf = append(w.buf, s...)
+}
+
+func (w *OperandWriter) WriteCond(c CondCode) {
+	w.buf = append(w.buf, byte(OpCond), byte(c))
+}
+
+func (w *OperandWriter) WriteSysName(name string) {
+	w.buf = append(w.buf, byte(OpSysName))
+	w.buf = appendU16(w.buf, uint16(len(name)))
+	w.buf = append(w.buf, name...)
+}
+
+func appendU16(buf []byte, v uint16) []byte {
+	var tmp [2]byte
+	binary.LittleEndian.PutUint16(tmp[:], v)
+	return append(buf, tmp[:]...)
 }
