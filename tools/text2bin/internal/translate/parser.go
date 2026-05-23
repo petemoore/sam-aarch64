@@ -294,8 +294,12 @@ func (p *parser) parseInst(t Tok) error {
 	// The lsl #N suffix selects which 16-bit slot to fill (hw=N/16).
 	// We encode the hw into bits [17:16] of the immediate so the refenc
 	// encoder can extract it without needing a new operand kind.
+	// MOVZ and MOVN share the same surface syntax — parseMovk handles
+	// all three; the encoder dispatches on the mnemonic ID.
 	movkID, _ := format.MnemonicID("movk")
-	if id == movkID {
+	movzID, _ := format.MnemonicID("movz")
+	movnID, _ := format.MnemonicID("movn")
+	if id == movkID || id == movzID || id == movnID {
 		return p.parseMovk(id)
 	}
 

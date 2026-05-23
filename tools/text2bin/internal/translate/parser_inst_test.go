@@ -516,6 +516,27 @@ func TestParseInstAnds(t *testing.T) {
 	}
 }
 
+func TestParseInstMovzMovn(t *testing.T) {
+	src := "movz w0, #0x1234\n" +
+		"movz x0, #0x1234, lsl #48\n" +
+		"movn w0, #0x1234\n" +
+		"movn x0, #0x1234, lsl #16\n"
+	f := parseHelper(t, src)
+	r := format.NewRecordReader(f.Records)
+	movzID, _ := format.MnemonicID("movz")
+	movnID, _ := format.MnemonicID("movn")
+	want := []uint16{movzID, movzID, movnID, movnID}
+	for i, w := range want {
+		rec, err := r.Next()
+		if err != nil {
+			t.Fatalf("rec %d: %v", i, err)
+		}
+		if rec.MnemonicID != w || rec.OperandCount != 2 {
+			t.Errorf("rec %d: %+v want id=%d", i, rec, w)
+		}
+	}
+}
+
 func TestParseInstSymbolRef(t *testing.T) {
 	f := parseHelper(t, "b target\n")
 	if len(f.Names) != 1 || f.Names[0] != "target" {

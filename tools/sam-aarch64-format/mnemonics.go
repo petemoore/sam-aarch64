@@ -80,6 +80,10 @@ var MnemonicTable = []string{
 	// shifted-register forms. tst is the existing alias with Rd=xzr; ands
 	// is the full 3-operand form.
 	"ands",
+	// movz: Move Wide with Zero (ARM ARM C6.2.131). Same surface syntax
+	// as movk (with optional `lsl #N` suffix) but a different opcode.
+	// movn: Move Wide with Not (ARM ARM C6.2.129). Same shape.
+	"movz", "movn",
 }
 
 var mnemonicIndex = func() map[string]uint16 {

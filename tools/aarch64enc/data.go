@@ -652,6 +652,29 @@ var generatedForms = []Form{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},
 	}},
+
+	// movz (ID 82) — Move Wide with Zero. ARM ARM C6.2.131.
+	// 32-bit: 0x52800000, 64-bit: 0xd2800000.
+	// hw is encoded into bits [17:16] of the immediate by parseMovk.
+	{MnemonicID: 82, Pattern: 0x52800000, Mask: 0xffe00000, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Imm16Shifted, ExpectedKind: 5, BitPosition: 5, BitWidth: 16},
+	}},
+	{MnemonicID: 82, Pattern: 0xd2800000, Mask: 0xffe00000, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Imm16Shifted, ExpectedKind: 5, BitPosition: 5, BitWidth: 16},
+	}},
+
+	// movn (ID 83) — Move Wide with Not. ARM ARM C6.2.129.
+	// 32-bit: 0x12800000, 64-bit: 0x92800000.
+	{MnemonicID: 83, Pattern: 0x12800000, Mask: 0xffe00000, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Imm16Shifted, ExpectedKind: 5, BitPosition: 5, BitWidth: 16},
+	}},
+	{MnemonicID: 83, Pattern: 0x92800000, Mask: 0xffe00000, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Imm16Shifted, ExpectedKind: 5, BitPosition: 5, BitWidth: 16},
+	}},
 }
 
 func init() {
