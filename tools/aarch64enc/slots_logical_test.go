@@ -58,10 +58,10 @@ func TestEncodeLogicalImm_AgainstGNUAs(t *testing.T) {
 		{0xff, true, 0x1007, "0xff (64): N=1, immr=0, imms=7"},
 		// `and x0, x0, #0xffff` → 0x92403C00. imm13 = 0x100F.
 		{0xffff, true, 0x100F, "0xffff (64): N=1, immr=0, imms=15"},
-		// `and x0, x0, #0x00ff00ff00ff00ff` replicates at 16 bits with 8 ones.
-		// ARM imms encoding for size=16: top bits = 0b110000, low bits = ones-1 = 7.
-		// imms = 0b110000 | 0b000111 = 0x37. N=0, immr=0. imm13 = 0x37.
-		{0x00ff00ff00ff00ff, true, 0x37, "0x00ff... (16-bit replicating, 8 ones): N=0, imms=0x37"},
+		// `orr x0, x1, #0x00ff00ff00ff00ff` replicates at 16 bits with 8 ones.
+		// ARM imms encoding for size=16 (len=4): imms = 0b10_0000 | (8-1) = 0x27.
+		// Verified: aarch64-none-elf-as gives 0xb2009c20 → N=0, immr=0, imms=0x27.
+		{0x00ff00ff00ff00ff, true, 0x27, "0x00ff... (16-bit replicating, 8 ones): N=0, imms=0x27"},
 	}
 	for _, c := range cases {
 		got, err := encodeLogicalImm(slot, c.imm, c.is64)

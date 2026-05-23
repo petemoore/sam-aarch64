@@ -22,3 +22,17 @@ func encodeAdrpImm(slot OperandSlot, byteOffset int64) (uint32, error) {
 	immhi := (imm21 >> 2) & ((1 << 19) - 1)
 	return (immlo << 29) | (immhi << 5), nil
 }
+
+// encodeAdrImm packs a PC-relative byte offset into the (immlo:2, immhi:19)
+// pair used by ADR. The layout is identical to ADRP but the offset is a raw
+// byte offset (not page-aligned). Range: ±1 MB.
+func encodeAdrImm(slot OperandSlot, byteOffset int64) (uint32, error) {
+	half := int64(1) << 20
+	if byteOffset >= half || byteOffset < -half {
+		return 0, fmt.Errorf("AdrImm: byte offset %d out of ±1MB range", byteOffset)
+	}
+	imm21 := uint32(byteOffset) & ((1 << 21) - 1)
+	immlo := imm21 & 0x3
+	immhi := (imm21 >> 2) & ((1 << 19) - 1)
+	return (immlo << 29) | (immhi << 5), nil
+}

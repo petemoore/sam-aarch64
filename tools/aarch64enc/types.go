@@ -32,6 +32,7 @@ const (
 	AdrpImm     SlotKind = 0x23
 	LogicalImm  SlotKind = 0x24
 	BitfieldImm SlotKind = 0x25
+	AdrImm      SlotKind = 0x26 // ADR: raw byte offset, same bit layout as AdrpImm
 )
 
 func (k SlotKind) Name() string {
@@ -70,6 +71,8 @@ func (k SlotKind) Name() string {
 		return "LogicalImm"
 	case BitfieldImm:
 		return "BitfieldImm"
+	case AdrImm:
+		return "AdrImm"
 	}
 	return "Unknown"
 }
