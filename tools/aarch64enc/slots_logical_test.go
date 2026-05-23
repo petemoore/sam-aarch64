@@ -42,3 +42,37 @@ func TestEncodeLogicalImm_32bit(t *testing.T) {
 		t.Errorf("LogicalImm 32-bit returned zero")
 	}
 }
+
+// TestEncodeLogicalImm_AgainstGNUAs pins exact encodings cross-checked
+// against `aarch64-none-elf-as`. If these drift, the algorithm has
+// regressed.
+func TestEncodeLogicalImm_AgainstGNUAs(t *testing.T) {
+	slot := OperandSlot{SlotKind: LogicalImm, BitPosition: 10, BitWidth: 13}
+	cases := []struct {
+		imm      int64
+		is64     bool
+		wantImm13 uint32 // bare imm13 value (will be shifted to BitPosition)
+		desc     string
+	}{
+		// `and x0, x0, #0xff` → 0x92401C00. imm13 = 0x1007 (N=1, immr=0, imms=7).
+		{0xff, true, 0x1007, "0xff (64): N=1, immr=0, imms=7"},
+		// `and x0, x0, #0xffff` → 0x92403C00. imm13 = 0x100F.
+		{0xffff, true, 0x100F, "0xffff (64): N=1, immr=0, imms=15"},
+		// `and x0, x0, #0x00ff00ff00ff00ff` replicates at 16 bits with 8 ones.
+		// ARM imms encoding for size=16: top bits = 0b110000, low bits = ones-1 = 7.
+		// imms = 0b110000 | 0b000111 = 0x37. N=0, immr=0. imm13 = 0x37.
+		{0x00ff00ff00ff00ff, true, 0x37, "0x00ff... (16-bit replicating, 8 ones): N=0, imms=0x37"},
+	}
+	for _, c := range cases {
+		got, err := encodeLogicalImm(slot, c.imm, c.is64)
+		if err != nil {
+			t.Errorf("%s: err = %v", c.desc, err)
+			continue
+		}
+		want := c.wantImm13 << 10
+		if got != want {
+			t.Errorf("%s: got 0x%08x (imm13=0x%x), want 0x%08x (imm13=0x%x)",
+				c.desc, got, got>>10, want, c.wantImm13)
+		}
+	}
+}
