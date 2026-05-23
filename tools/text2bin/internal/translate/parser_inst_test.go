@@ -501,6 +501,21 @@ func TestParseInstTlbiWithReg(t *testing.T) {
 	}
 }
 
+func TestParseInstAnds(t *testing.T) {
+	f := parseHelper(t, "ands w0, w1, #0x3\nands x0, x0, #0x3\nands w0, w1, w2\nands x0, x1, x2\n")
+	r := format.NewRecordReader(f.Records)
+	andsID, _ := format.MnemonicID("ands")
+	for i := 0; i < 4; i++ {
+		rec, err := r.Next()
+		if err != nil {
+			t.Fatalf("rec %d: err %v", i, err)
+		}
+		if rec.MnemonicID != andsID || rec.OperandCount != 3 {
+			t.Errorf("rec %d: %+v", i, rec)
+		}
+	}
+}
+
 func TestParseInstSymbolRef(t *testing.T) {
 	f := parseHelper(t, "b target\n")
 	if len(f.Names) != 1 || f.Names[0] != "target" {

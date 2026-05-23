@@ -76,6 +76,10 @@ var MnemonicTable = []string{
 	//   dc <op>, Xt                — Data Cache maintenance op.
 	//   tlbi <op>[, Xt]            — TLB Invalidate op (Xt optional).
 	"dc", "tlbi",
+	// ands: AND setting flags (ARM ARM C6.2.13 / C6.2.14). Immediate and
+	// shifted-register forms. tst is the existing alias with Rd=xzr; ands
+	// is the full 3-operand form.
+	"ands",
 }
 
 var mnemonicIndex = func() map[string]uint16 {

@@ -624,6 +624,34 @@ var generatedForms = []Form{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
 	}},
+
+	// ands (ID 81) — AND setting flags. ARM ARM C6.2.13 / C6.2.14.
+	// Immediate form:
+	//   32-bit: sf=0, opc=11, 100100  → 0x72000000
+	//   64-bit: sf=1, opc=11, 100100  → 0xf2000000
+	{MnemonicID: 81, Pattern: 0x72000000, Mask: 0xff800000, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+		{SlotKind: LogicalImm, ExpectedKind: 5, BitPosition: 10, BitWidth: 13},
+	}},
+	{MnemonicID: 81, Pattern: 0xf2000000, Mask: 0xff800000, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+		{SlotKind: LogicalImm, ExpectedKind: 5, BitPosition: 10, BitWidth: 13},
+	}},
+	// Shifted-register form, no shift (3 plain registers).
+	//   32-bit: sf=0, opc=11, 01010, shift=00, N=0 → 0x6a000000
+	//   64-bit: sf=1, opc=11, 01010, shift=00, N=0 → 0xea000000
+	{MnemonicID: 81, Pattern: 0x6a000000, Mask: 0xffe0fc00, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5},
+	}},
+	{MnemonicID: 81, Pattern: 0xea000000, Mask: 0xffe0fc00, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},
+	}},
 }
 
 func init() {

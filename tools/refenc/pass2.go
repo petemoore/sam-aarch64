@@ -671,47 +671,62 @@ func encodeShiftedRegInst(mnemonicID uint16, operands []format.Operand, pc int64
 		return 0, fmt.Errorf("shift amount %d out of range [0,63]", amt)
 	}
 
-	// Determine sf (64-bit flag), opc, and N bit from mnemonic.
-	sf, opc, nBit, err := shiftedRegMnemonicFields(mnemonicID, sr.Width == 1)
+	// Determine sf (64-bit flag), opc, N bit, and the logical/arithmetic
+	// op class from mnemonic.
+	//
+	// Arithmetic shifted-reg (ADD/SUB/ADDS/SUBS) and logical shifted-reg
+	// (AND/ORR/EOR/ANDS/BIC/ORN/EON) share most of the field layout but
+	// differ in bits 28..24:
+	//   arithmetic: 01011
+	//   logical:    01010
+	sf, opc, nBit, isLogical, err := shiftedRegMnemonicFields(mnemonicID, sr.Width == 1)
 	if err != nil {
 		return 0, err
 	}
 
-	// Encoding: sf(1)|opc(2)|01011|shift(2)|N(1)|Rm(5)|imm6(6)|Rn(5)|Rd(5)
+	// Encoding: sf(1)|opc(2)|0101X|shift(2)|N(1)|Rm(5)|imm6(6)|Rn(5)|Rd(5)
+	mid := uint32(0b01011)
+	if isLogical {
+		mid = 0b01010
+	}
 	shiftEnc := uint32(sr.ShiftKind)
-	word := (sf << 31) | (opc << 29) | uint32(0b01011)<<24 |
+	word := (sf << 31) | (opc << 29) | mid<<24 |
 		(shiftEnc << 22) | (nBit << 21) | (uint32(sr.Reg) << 16) |
 		(uint32(amt) << 10) | (uint32(rn) << 5) | uint32(rd)
 	return word, nil
 }
 
-// shiftedRegMnemonicFields returns sf, opc, N-bit for shifted-register encoding.
+// shiftedRegMnemonicFields returns sf, opc, N-bit, and an isLogical flag
+// (true for AND/ORR/EOR/BIC/ORN/EON/ANDS/TST family — bits 28..24 = 01010;
+// false for ADD/SUB/ADDS/SUBS — bits 28..24 = 01011).
 // is64 is true when the operands are X registers.
 // N=1 distinguishes BIC/ORN/EON from AND/ORR/EOR in the shifted-reg space.
-func shiftedRegMnemonicFields(mnemonicID uint16, is64 bool) (sf, opc, nBit uint32, err error) {
+func shiftedRegMnemonicFields(mnemonicID uint16, is64 bool) (sf, opc, nBit uint32, isLogical bool, err error) {
 	sf = 0
 	if is64 {
 		sf = 1
 	}
 	switch mnemonicID {
 	case 1: // add
-		return sf, 0b00, 0, nil
+		return sf, 0b00, 0, false, nil
 	case 2: // sub
-		return sf, 0b10, 0, nil
+		return sf, 0b10, 0, false, nil
 	case 14: // and (shifted-reg, N=0)
-		return sf, 0b00, 0, nil
+		return sf, 0b00, 0, true, nil
 	case 15: // orr (shifted-reg, N=0)
-		return sf, 0b01, 0, nil
+		return sf, 0b01, 0, true, nil
 	case 16: // eor (shifted-reg, N=0)
-		return sf, 0b10, 0, nil
+		return sf, 0b10, 0, true, nil
 	case 45: // subs (shifted-reg): opc=11
-		return sf, 0b11, 0, nil
+		return sf, 0b11, 0, false, nil
 	case 46: // tst = ands (shifted-reg, N=0): opc=11 (ANDS discards result)
-		return sf, 0b11, 0, nil
+		return sf, 0b11, 0, true, nil
 	case 47: // bic (shifted-reg, N=1): AND NOT
-		return sf, 0b00, 1, nil
+		return sf, 0b00, 1, true, nil
+	case 81: // ands (shifted-reg, N=0): opc=11
+		return sf, 0b11, 0, true, nil
 	default:
-		return 0, 0, 0, fmt.Errorf("shiftedReg: unsupported mnemonic id %d", mnemonicID)
+		return 0, 0, 0, false, fmt.Errorf("shiftedReg: unsupported mnemonic id %d", mnemonicID)
 	}
 }
 
