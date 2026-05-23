@@ -154,10 +154,6 @@ func emitOperandWithContext(out *bytes.Buffer, f *format.File, o format.Operand,
 	return nil
 }
 
-func emitOperand(out *bytes.Buffer, f *format.File, o format.Operand) error {
-	return emitOperandWithContext(out, f, o, false)
-}
-
 func writeRegX(out *bytes.Buffer, r byte) {
 	switch r {
 	case 29:
@@ -285,11 +281,6 @@ func emitExprAsImmediateWithContext(out *bytes.Buffer, f *format.File, expr []by
 	}
 	out.WriteByte(')')
 	return nil
-}
-
-// emitExprAsImmediate prints an expression in instruction immediate (`#…`) context.
-func emitExprAsImmediate(out *bytes.Buffer, f *format.File, expr []byte) error {
-	return emitExprAsImmediateWithContext(out, f, expr, false)
 }
 
 // simpleSymRef recognises:
