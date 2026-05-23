@@ -34,7 +34,13 @@ func encodeSlot(slot OperandSlot, v OperandValue) (uint32, error) {
 	case Imm12Shifted:
 		return encodeImm12Shifted(slot, v.Imm)
 	case Imm16Shifted:
-		return 0, fmt.Errorf("Imm16Shifted: dispatcher path not yet wired")
+		// hw (shift selector) is an internal field treated as a generator-level
+		// "internal" field (like sh for imm12). For the MOV alias (= MOVZ hw:0),
+		// hw is fixed to 0 in the iclass mask/pattern or the caller provides a
+		// zero-shift immediate. We always encode hw=0 here; the ShiftKind in
+		// OperandValue could be used in a future extension for explicit MOVZ/MOVK
+		// with non-zero shifts.
+		return encodeImm16Shifted(slot, v.Imm, 0)
 	case ShiftAmount:
 		return encodeShiftAmount(slot, v.Imm)
 	case ExtendOp:

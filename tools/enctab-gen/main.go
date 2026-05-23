@@ -64,6 +64,13 @@ func main() {
 		}
 	}
 
+	// Expand b.cond forms: the MRA represents all conditional branches as a
+	// single B encoding with a CondCode slot (under the "B" mnemonic). The
+	// text2bin format uses separate mnemonics b.eq, b.ne, b.lt etc. (IDs 27-42).
+	// For each conditional-branch form found, emit one form per b.cc mnemonic
+	// with the condition code baked into pattern/mask and the CondCode slot removed.
+	allForms = expandBCondForms(allForms)
+
 	if outGo != "" {
 		out, err := os.Create(outGo)
 		if err != nil {
@@ -179,6 +186,62 @@ func expectedKindForSlot(k enc.SlotKind) format.OperandKind {
 
 func detectIs64(pf mra.ParsedForm) bool {
 	return (pf.Pattern>>31)&1 == 1
+}
+
+// expandBCondForms finds conditional-branch forms (forms for mnemonic "b" that
+// contain a CondCode slot) and expands them into 16 per-condition forms for
+// the b.eq, b.ne, ..., b.nv mnemonics (condition codes 0-15). The expanded
+// forms have the condition code baked into pattern/mask and no CondCode slot.
+//
+// The MRA represents all 16 conditional branches as a single encoding with a
+// variable cond field; text2bin uses separate mnemonic IDs for each condition.
+func expandBCondForms(forms []enc.Form) []enc.Form {
+	bID, _ := format.MnemonicID("b")
+	// b.eq is the first conditional mnemonic; we rely on it being the start
+	// of a contiguous run of 16 entries in MnemonicTable.
+	bEqID, ok := format.MnemonicID("b.eq")
+	if !ok {
+		return forms // b.eq not in table; nothing to expand
+	}
+
+	var out []enc.Form
+	for _, f := range forms {
+		if f.MnemonicID != bID || !hasCondCodeSlot(f) {
+			out = append(out, f)
+			continue
+		}
+		// Find the CondCode slot to determine its bit position.
+		var condSlot enc.OperandSlot
+		var otherSlots []enc.OperandSlot
+		for _, s := range f.Slots {
+			if s.SlotKind == enc.CondCode {
+				condSlot = s
+			} else {
+				otherSlots = append(otherSlots, s)
+			}
+		}
+		// Emit one form per condition code (0=EQ .. 15=NV).
+		for cond := uint32(0); cond <= 15; cond++ {
+			condBits := cond << uint32(condSlot.BitPosition)
+			condMask := uint32((1<<condSlot.BitWidth)-1) << uint32(condSlot.BitPosition)
+			out = append(out, enc.Form{
+				MnemonicID: bEqID + uint16(cond),
+				Pattern:    f.Pattern | condBits,
+				Mask:       f.Mask | condMask,
+				Slots:      otherSlots,
+			})
+		}
+	}
+	return out
+}
+
+func hasCondCodeSlot(f enc.Form) bool {
+	for _, s := range f.Slots {
+		if s.SlotKind == enc.CondCode {
+			return true
+		}
+	}
+	return false
 }
 
 func fail(err error) {

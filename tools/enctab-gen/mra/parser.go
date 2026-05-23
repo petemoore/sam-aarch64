@@ -114,9 +114,13 @@ func ParseInstructionXML(r io.Reader) ([]ParsedForm, error) {
 		pattern, mask, slots := convertRegDiagram(cls.Reg.Boxes)
 		for _, enc := range cls.Encoding {
 			mnemonic := ""
+			aliasMnemonic := ""
 			for _, dv := range enc.DocVars {
-				if dv.Key == "mnemonic" {
+				switch dv.Key {
+				case "mnemonic":
 					mnemonic = dv.Value
+				case "alias_mnemonic":
+					aliasMnemonic = dv.Value
 				}
 			}
 			// Apply encoding-level box overrides (bitdiffs): these fix iclass-level
@@ -129,6 +133,17 @@ func ParseInstructionXML(r io.Reader) ([]ParsedForm, error) {
 				Mask:        encMask,
 				RawOperands: filteredSlots,
 			})
+			// If the encoding also declares an alias_mnemonic (e.g. CMP is an alias
+			// for SUBS, MOV is an alias for ADD), emit a second form for the alias so
+			// the encoder table covers both the canonical and alias spellings.
+			if aliasMnemonic != "" && aliasMnemonic != mnemonic {
+				forms = append(forms, ParsedForm{
+					Mnemonic:    aliasMnemonic,
+					Pattern:     encPattern,
+					Mask:        encMask,
+					RawOperands: filteredSlots,
+				})
+			}
 		}
 	}
 	return forms, nil
@@ -275,12 +290,19 @@ func applyEncodingOverrides(pattern, mask uint32, slots []RawOperandSlot, overri
 			continue
 		}
 		// Apply each <c> child as a fixed bit.
+		// An empty body means this bit remains variable (not fixed by
+		// this override); skip it so we don't incorrectly clear the
+		// mask/pattern bits that the iclass already set.
 		for i, c := range box.Cs {
 			bitPos := box.Hibit - i
 			if bitPos < 0 || bitPos > 31 {
 				continue
 			}
 			body := strings.TrimSpace(c.Body)
+			if body == "" {
+				// Variable bit — not being overridden; leave as-is.
+				continue
+			}
 			mask |= uint32(1) << bitPos
 			if body == "1" {
 				pattern |= uint32(1) << bitPos

@@ -29,6 +29,8 @@ func IsInternalField(name string) bool {
 	switch name {
 	case "sh": // shift selector for imm12; encoded inside Imm12Shifted at +12
 		return true
+	case "hw": // shift selector for imm16 (movz/movk); encoded inside Imm16Shifted at +16
+		return true
 	}
 	return false
 }
