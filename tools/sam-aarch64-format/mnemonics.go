@@ -62,6 +62,9 @@ var MnemonicTable = []string{
 	// cls:  Count Leading Sign-bits (C6.2.39).
 	// sxtw: Sign-extend Word — alias of SBFM Xd,Xn,0,31 (C6.2.214).
 	"ror", "mul", "udiv", "cls", "sxtw",
+	// Unscaled load/store with signed 9-bit byte offset (ARM ARM C6.2.276 / C6.2.124).
+	// These are distinct mnemonics from ldr/str; the offset is *not* scaled.
+	"stur", "ldur",
 }
 
 var mnemonicIndex = func() map[string]uint16 {

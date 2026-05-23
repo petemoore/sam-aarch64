@@ -294,8 +294,16 @@ func encodeLdrLitPoolInst(operands []format.Operand, pc int64, p1 *Pass1Result) 
 // mnemonicIsLoad returns true when mnemonicID is ldr or similar load.
 // Returns false for str/stp etc. Used to set the L bit in memory encodings.
 func isLoadMnemonic(mnemonicID uint16) bool {
-	// ldr=5, ldp=7, ldrb=54, ldrh=56
-	return mnemonicID == 5 || mnemonicID == 7 || mnemonicID == 54 || mnemonicID == 56
+	// ldr=5, ldp=7, ldrb=54, ldrh=56, ldur=76
+	return mnemonicID == 5 || mnemonicID == 7 || mnemonicID == 54 || mnemonicID == 56 || mnemonicID == 76
+}
+
+// isUnscaledMemMnemonic reports stur(75) / ldur(76) — the unscaled
+// load/store family (ARM ARM C6.2.276 / C6.2.124). These share the
+// encoding template with LDR/STR (unscaled offset) but are emitted by
+// GNU as for any STUR/LDUR mnemonic regardless of offset value.
+func isUnscaledMemMnemonic(mnemonicID uint16) bool {
+	return mnemonicID == 75 || mnemonicID == 76
 }
 
 // memInstSize returns the AArch64 "size" field (bits 31:30) and the byte
@@ -331,6 +339,12 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 	mem := operands[1]
 	if mem.Kind != format.OpMem {
 		return 0, fmt.Errorf("encodeMemInst: operand 1 is not OpMem")
+	}
+
+	// STUR / LDUR (unscaled signed-9-bit offset). ARM ARM C6.2.276 /
+	// C6.2.124. Size is derived from Rt's width (W = 0b10, X = 0b11).
+	if isUnscaledMemMnemonic(mnemonicID) {
+		return encodeUnscaledMemInst(mnemonicID, operands[0], rt, mem, pc, p1, f)
 	}
 
 	isLoad := isLoadMnemonic(mnemonicID)
@@ -466,6 +480,59 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 	default:
 		return 0, fmt.Errorf("encodeMemInst: unsupported MemShape %v", mem.MemShape)
 	}
+}
+
+// encodeUnscaledMemInst encodes STUR (75) and LDUR (76). The base
+// pattern depends on Rt's width and the load/store direction:
+//
+//	stur W: 0xb8000000 | (imm9 << 12) | (Rn << 5) | Rt
+//	stur X: 0xf8000000 | ...
+//	ldur W: 0xb8400000 | ...
+//	ldur X: 0xf8400000 | ...
+//
+// imm9 is a signed byte offset (-256..+255); no scaling. Only the
+// MemBase and MemBaseOff shapes are accepted — pre/post-index aren't
+// the STUR/LDUR family.
+func encodeUnscaledMemInst(mnemonicID uint16, rtOp format.Operand, rt byte, mem format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
+	isLoad := isLoadMnemonic(mnemonicID)
+	// size bits: 0b10 for W, 0b11 for X.
+	var sizeBits uint32
+	switch rtOp.Kind {
+	case format.OpRegW:
+		sizeBits = 0b10
+	case format.OpRegX:
+		sizeBits = 0b11
+	default:
+		return 0, fmt.Errorf("stur/ldur: Rt must be Wn or Xn (got kind %v)", rtOp.Kind)
+	}
+	var byteOffset int64
+	switch mem.MemShape {
+	case format.MemBase:
+		byteOffset = 0
+	case format.MemBaseOff:
+		ctx := makeCtx(pc, p1, f)
+		v, err := enc.Eval(mem.Expr, ctx)
+		if err != nil {
+			return 0, err
+		}
+		byteOffset = v
+	default:
+		return 0, fmt.Errorf("stur/ldur: unsupported MemShape %v (only base + signed offset)", mem.MemShape)
+	}
+	imm9, err := encodeSignedImm9(byteOffset)
+	if err != nil {
+		return 0, fmt.Errorf("stur/ldur: %w", err)
+	}
+	// bits[29:24] = 0b111000 (vfpMid | mode=00). bits[23:22] = opc = 01
+	// for load, 00 for store. bits[11:10] = 00 for STUR/LDUR (unscaled).
+	const vfpMid = uint32(0b111) << 27
+	opc := uint32(0)
+	if isLoad {
+		opc = uint32(1)
+	}
+	base := (sizeBits << 30) | vfpMid | (opc << 22)
+	word := base | (imm9 << 12) | (uint32(mem.Base) << 5) | uint32(rt)
+	return word, nil
 }
 
 // encodePairInst encodes LDP/STP (load/store pair) instructions.

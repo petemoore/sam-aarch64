@@ -317,6 +317,57 @@ func TestParseInstMulUdivClsSxtw(t *testing.T) {
 	}
 }
 
+func TestParseInstSturLdur(t *testing.T) {
+	cases := []struct {
+		src     string
+		mnem    string
+		regKind format.OperandKind
+		regNum  byte
+		base    byte
+		hasOff  bool
+		off     int64
+	}{
+		{"stur w0, [x1]\n", "stur", format.OpRegW, 0, 1, false, 0},
+		{"stur x0, [x1, #0]\n", "stur", format.OpRegX, 0, 1, true, 0},
+		{"stur w0, [x1, #4]\n", "stur", format.OpRegW, 0, 1, true, 4},
+		{"stur x0, [x1, #-8]\n", "stur", format.OpRegX, 0, 1, true, -8},
+		{"ldur w0, [x1]\n", "ldur", format.OpRegW, 0, 1, false, 0},
+		{"ldur x0, [x1, #8]\n", "ldur", format.OpRegX, 0, 1, true, 8},
+	}
+	for _, c := range cases {
+		f := parseHelper(t, c.src)
+		r := format.NewRecordReader(f.Records)
+		rec, _ := r.Next()
+		mid, _ := format.MnemonicID(c.mnem)
+		if rec.MnemonicID != mid {
+			t.Errorf("%s: mnemonic_id=%d want %d", c.src, rec.MnemonicID, mid)
+		}
+		or := format.NewOperandReader(rec.Operands)
+		o, _ := or.Next()
+		if o.Kind != c.regKind || o.Reg != c.regNum {
+			t.Errorf("%s: rt = %+v", c.src, o)
+		}
+		o, _ = or.Next()
+		if o.Kind != format.OpMem {
+			t.Errorf("%s: mem kind = %v", c.src, o.Kind)
+		}
+		if o.Base != c.base {
+			t.Errorf("%s: base = %d, want %d", c.src, o.Base, c.base)
+		}
+		if c.hasOff {
+			if o.MemShape != format.MemBaseOff {
+				t.Errorf("%s: memshape = %v, want MemBaseOff", c.src, o.MemShape)
+			}
+			v, _ := format.EvalConst(o.Expr)
+			if v != c.off {
+				t.Errorf("%s: off = %d, want %d", c.src, v, c.off)
+			}
+		} else if o.MemShape != format.MemBase {
+			t.Errorf("%s: memshape = %v, want MemBase", c.src, o.MemShape)
+		}
+	}
+}
+
 func TestParseInstSymbolRef(t *testing.T) {
 	f := parseHelper(t, "b target\n")
 	if len(f.Names) != 1 || f.Names[0] != "target" {
