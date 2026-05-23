@@ -84,6 +84,12 @@ var MnemonicTable = []string{
 	// as movk (with optional `lsl #N` suffix) but a different opcode.
 	// movn: Move Wide with Not (ARM ARM C6.2.129). Same shape.
 	"movz", "movn",
+	// bfc: Bit Field Clear (ARM ARM C6.2.21). Alias of BFI Rd, XZR, lsb,
+	// width. 3-operand form: `bfc Rd, #lsb, #width`. Same encoding as
+	// BFI with Rn=XZR.
+	// sbfx: Signed Bit Field Extract (ARM ARM C6.2.205). Alias of SBFM.
+	//   `sbfx Rd, Rn, #lsb, #width`.
+	"bfc", "sbfx",
 }
 
 var mnemonicIndex = func() map[string]uint16 {

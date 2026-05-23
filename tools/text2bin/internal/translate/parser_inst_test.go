@@ -537,6 +537,33 @@ func TestParseInstMovzMovn(t *testing.T) {
 	}
 }
 
+func TestParseInstBfcSbfx(t *testing.T) {
+	src := "bfc w0, #5, #10\n" +
+		"bfc x0, #32, #1\n" +
+		"sbfx w0, w1, #5, #10\n" +
+		"sbfx x0, x1, #32, #1\n"
+	f := parseHelper(t, src)
+	r := format.NewRecordReader(f.Records)
+	bfcID, _ := format.MnemonicID("bfc")
+	sbfxID, _ := format.MnemonicID("sbfx")
+	r1, _ := r.Next()
+	if r1.MnemonicID != bfcID || r1.OperandCount != 3 {
+		t.Errorf("bfc[0]: %+v", r1)
+	}
+	r2, _ := r.Next()
+	if r2.MnemonicID != bfcID || r2.OperandCount != 3 {
+		t.Errorf("bfc[1]: %+v", r2)
+	}
+	r3, _ := r.Next()
+	if r3.MnemonicID != sbfxID || r3.OperandCount != 4 {
+		t.Errorf("sbfx[0]: %+v", r3)
+	}
+	r4, _ := r.Next()
+	if r4.MnemonicID != sbfxID || r4.OperandCount != 4 {
+		t.Errorf("sbfx[1]: %+v", r4)
+	}
+}
+
 func TestParseInstSymbolRef(t *testing.T) {
 	f := parseHelper(t, "b target\n")
 	if len(f.Names) != 1 || f.Names[0] != "target" {

@@ -176,7 +176,7 @@ func encodeInst(rec format.Record, pc int64, p1 *Pass1Result, f *format.File) (u
 	switch rec.MnemonicID {
 	case 17, 18: // lsl, lsr
 		return encodeLSLSR(rec.MnemonicID, operands, pc, p1, f)
-	case 49, 50, 51: // bfi, bfxil, ubfx
+	case 49, 50, 51, 84, 85: // bfi, bfxil, ubfx, bfc, sbfx
 		return encodeBitfieldInst(rec.MnemonicID, operands, pc, p1, f)
 	case 47: // bic — immediate form: negate the immediate before LogicalImm
 		if len(kinds) >= 3 && kinds[2] == format.OpImmExpr {
@@ -848,23 +848,40 @@ func encodeLSLSR(mnemonicID uint16, operands []format.Operand, pc int64, p1 *Pas
 // Bitfield instructions: bfi, bfxil, ubfx
 // ---------------------------------------------------------------------------
 
-// encodeBitfieldInst encodes bfi / bfxil / ubfx.
-// All three use BFM or UBFM base with computed immr/imms.
+// encodeBitfieldInst encodes bfi / bfxil / ubfx / bfc / sbfx.
+// All five use BFM/SBFM/UBFM bases with computed immr/imms.
 //
-// BFI (49):   Rd, Rn, #lsb, #width → BFM immr=(-lsb)%regsize, imms=width-1
-// BFXIL (50): Rd, Rn, #lsb, #width → BFM immr=lsb, imms=lsb+width-1
-// UBFX (51):  Rd, Rn, #lsb, #width → UBFM immr=lsb, imms=lsb+width-1
+// BFI  (49): Rd, Rn,  #lsb, #width → BFM  immr=(-lsb)%regsize, imms=width-1
+// BFXIL(50): Rd, Rn,  #lsb, #width → BFM  immr=lsb,            imms=lsb+width-1
+// UBFX (51): Rd, Rn,  #lsb, #width → UBFM immr=lsb,            imms=lsb+width-1
+// BFC  (84): Rd,      #lsb, #width → BFM Rn=XZR, immr=(-lsb)%regsize, imms=width-1
+// SBFX (85): Rd, Rn,  #lsb, #width → SBFM immr=lsb,            imms=lsb+width-1
 func encodeBitfieldInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
-	if len(operands) < 4 {
-		return 0, fmt.Errorf("bitfield: need 4 operands, got %d", len(operands))
+	// BFC is a 3-operand alias (no Rn — it is implicitly XZR).
+	isBfc := mnemonicID == 84
+	wantOps := 4
+	if isBfc {
+		wantOps = 3
+	}
+	if len(operands) < wantOps {
+		return 0, fmt.Errorf("bitfield: need %d operands, got %d", wantOps, len(operands))
 	}
 	rd := operands[0]
-	rn := operands[1]
-	lsbOp := operands[2]
-	widthOp := operands[3]
+	var rn format.Operand
+	var lsbOp, widthOp format.Operand
+	if isBfc {
+		// Rn is implicitly XZR (31). Build a synthetic operand matching Rd's width.
+		rn = format.Operand{Kind: rd.Kind, Reg: 31}
+		lsbOp = operands[1]
+		widthOp = operands[2]
+	} else {
+		rn = operands[1]
+		lsbOp = operands[2]
+		widthOp = operands[3]
+	}
 
 	if lsbOp.Kind != format.OpImmExpr || widthOp.Kind != format.OpImmExpr {
-		return 0, fmt.Errorf("bitfield: operands 2 and 3 must be immediates")
+		return 0, fmt.Errorf("bitfield: lsb and width must be immediates")
 	}
 
 	ctx := makeCtx(pc, p1, f)
@@ -916,6 +933,22 @@ func encodeBitfieldInst(mnemonicID uint16, operands []format.Operand, pc int64, 
 			base = 0xd3400000 // UBFM 64-bit
 		} else {
 			base = 0x53000000 // UBFM 32-bit
+		}
+	case 84: // bfc: BFM alias with Rn=XZR — immr=(-lsb)%regsize, imms=width-1
+		immr = uint32((-lsb)&(regsize-1)) & 0x3F
+		imms = uint32(width-1) & 0x3F
+		if is64 {
+			base = 0xb3400000 // BFM 64-bit
+		} else {
+			base = 0x33000000 // BFM 32-bit
+		}
+	case 85: // sbfx: SBFM alias — immr=lsb, imms=lsb+width-1
+		immr = uint32(lsb) & 0x3F
+		imms = uint32(lsb+width-1) & 0x3F
+		if is64 {
+			base = 0x93400000 // SBFM 64-bit
+		} else {
+			base = 0x13000000 // SBFM 32-bit
 		}
 	}
 

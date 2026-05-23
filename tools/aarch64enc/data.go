@@ -675,6 +675,37 @@ var generatedForms = []Form{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Imm16Shifted, ExpectedKind: 5, BitPosition: 5, BitWidth: 16},
 	}},
+
+	// bfc (ID 84) — Bit Field Clear. ARM ARM C6.2.21.
+	// Alias of BFI Rd, XZR, #lsb, #width. Encoded via encodeBfc in pass2.
+	// Form table reserves the slot shape; pass2 routes by mnemonic ID.
+	// 64-bit BFM: 0xb3400000, 32-bit BFM: 0x33000000. Rn baked as 11111.
+	{MnemonicID: 84, Pattern: 0xb34003e0, Mask: 0xffc003e0, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 16, BitWidth: 6}, // immr
+		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 10, BitWidth: 6}, // imms
+	}},
+	{MnemonicID: 84, Pattern: 0x330003e0, Mask: 0xffc003e0, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 16, BitWidth: 6},
+		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 10, BitWidth: 6},
+	}},
+
+	// sbfx (ID 85) — Signed Bit Field Extract. ARM ARM C6.2.205.
+	// Alias of SBFM Rd, Rn, #lsb, #(lsb+width-1).
+	// 64-bit SBFM: 0x93400000, 32-bit SBFM: 0x13000000.
+	{MnemonicID: 85, Pattern: 0x93400000, Mask: 0xffc00000, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 16, BitWidth: 6},
+		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 10, BitWidth: 6},
+	}},
+	{MnemonicID: 85, Pattern: 0x13000000, Mask: 0xffc00000, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 16, BitWidth: 6},
+		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 10, BitWidth: 6},
+	}},
 }
 
 func init() {
