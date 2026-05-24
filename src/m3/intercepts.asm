@@ -267,6 +267,27 @@ try_intercept_bitfield:
                 ret
 try_intercept_post_bitfield:
 
+; -- tbz=22 / tbnz=23 — test bit and branch ---------------------------
+; 3 operands: Rt, #bit, label.  Dispatched ahead of the form table on
+; the Mac side (refenc/pass2.go:292 -> encodeTbzTbnz).  No form-table
+; entry exists, so a miss here would fall through to FAIL40.  Grounded
+; against aarch64-none-elf-as + ARM ARM C6.2.317 (TBZ) / C6.2.318 (TBNZ).
+                ld      a, (try_intercept_mnem)
+                cp      22
+                jr      z, try_intercept_tbz
+                cp      23
+                jp      nz, try_intercept_post_tbz
+try_intercept_tbz:
+                ld      a, (main_op_count)
+                cp      3
+                jp      nz, try_intercept_post_tbz
+                ld      a, (try_intercept_mnem)
+                call    encode_tbz_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+try_intercept_post_tbz:
+
 ; -- Barrier mnemonics: isb=66 / dsb=67 / dmb=68 ----------------------
 ; text2bin converts the barrier-arg keyword (sy, ish, ishst, ...) into a
 ; single OpImmExpr carrying the CRm field (bits 11:8); isb with no arg
@@ -1343,3 +1364,223 @@ encode_bf_lsb:                   defb    0
 encode_bf_width:                 defb    0
 encode_bf_immr:                  defb    0
 encode_bf_imms:                  defb    0
+
+
+; -----------------------------------------------------------------------
+; encode_tbz_word — pure word computation for tbz / tbnz (mnem 22/23).
+;
+; Port of tools/refenc/pass2.go:encodeTbzTbnz (pass2.go:546).
+;   imm14 = (target - PC)/4   (4-aligned, 14-bit signed range +/-32 KiB)
+;   b5  = (bit>>5)&1   b40 = bit&0x1f   op = (mnem==23)?1:0
+;   word = (b5<<31) | (0b011011<<25) | (op<<24) | (b40<<19)
+;          | ((imm14 & 0x3fff)<<5) | Rt
+;
+; In:  A = mnemonic_id (22=tbz, 23=tbnz).
+;      OPVAL_ARRAY[0] = Rt (X=0x01 / W=0x02), reg in +1.
+;      OPVAL_ARRAY[1] = OpImmExpr (#bit, LE result at +2).
+;      OPVAL_ARRAY[2] = OpImmExpr (label byte offset, LE at +2).
+; Out: DE:HL = encoded 32-bit word.
+; Errors: jp fail on width != X/W, bit > 63, bit > 31 with W register,
+;   offset not 4-aligned, or imm14 out of 14-bit signed range.
+; -----------------------------------------------------------------------
+encode_tbz_word:
+                ld      (encode_tbz_op), a  ; stash mnem (resolved to op bit below)
+
+; -- bit number (operand 1 LE byte 0), validate range -----------------
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2)
+                ld      (encode_tbz_bit), a
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 3)
+                or      a
+                jp      nz, fail            ; non-u8 bit
+                ld      a, (encode_tbz_bit)
+                cp      64
+                jp      nc, fail            ; bit > 63
+; W register → bit must be <= 31
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0)
+                cp      OP_KIND_REG_W
+                jr      nz, encode_tbz_bit_ok
+                ld      a, (encode_tbz_bit)
+                cp      32
+                jp      nc, fail            ; bit > 31 with W
+                jr      encode_tbz_bit_ok
+encode_tbz_bit_ok:
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0)
+                cp      OP_KIND_REG_X
+                jr      z, encode_tbz_width_ok
+                cp      OP_KIND_REG_W
+                jp      nz, fail
+encode_tbz_width_ok:
+
+; -- off = target(operand 2) - PASS_PC (32-bit LE two's complement) ---
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 2)
+                ld      hl, PASS_PC
+                sub     (hl)
+                ld      (encode_tbz_off + 0), a
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 3)
+                inc     hl
+                sbc     a, (hl)
+                ld      (encode_tbz_off + 1), a
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 4)
+                inc     hl
+                sbc     a, (hl)
+                ld      (encode_tbz_off + 2), a
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 5)
+                inc     hl
+                sbc     a, (hl)
+                ld      (encode_tbz_off + 3), a
+
+; -- off must be 4-byte aligned ---------------------------------------
+                ld      a, (encode_tbz_off + 0)
+                and     &03
+                jp      nz, fail
+
+; -- imm14 = off >> 2 (arithmetic) ------------------------------------
+                ld      b, 2
+encode_tbz_asr_loop:
+                ld      a, (encode_tbz_off + 3)
+                sra     a
+                ld      (encode_tbz_off + 3), a
+                ld      a, (encode_tbz_off + 2)
+                rra
+                ld      (encode_tbz_off + 2), a
+                ld      a, (encode_tbz_off + 1)
+                rra
+                ld      (encode_tbz_off + 1), a
+                ld      a, (encode_tbz_off + 0)
+                rra
+                ld      (encode_tbz_off + 0), a
+                djnz    encode_tbz_asr_loop
+
+; -- Range check: imm14 must fit in 14-bit signed --------------------
+; ASR a copy by 14; result must be all-0 (non-neg) or all-FF (neg).
+                ld      a, (encode_tbz_off + 0)
+                ld      (encode_tbz_chk + 0), a
+                ld      a, (encode_tbz_off + 1)
+                ld      (encode_tbz_chk + 1), a
+                ld      a, (encode_tbz_off + 2)
+                ld      (encode_tbz_chk + 2), a
+                ld      a, (encode_tbz_off + 3)
+                ld      (encode_tbz_chk + 3), a
+                ld      b, 14
+encode_tbz_chk_loop:
+                ld      a, (encode_tbz_chk + 3)
+                sra     a
+                ld      (encode_tbz_chk + 3), a
+                ld      a, (encode_tbz_chk + 2)
+                rra
+                ld      (encode_tbz_chk + 2), a
+                ld      a, (encode_tbz_chk + 1)
+                rra
+                ld      (encode_tbz_chk + 1), a
+                ld      a, (encode_tbz_chk + 0)
+                rra
+                ld      (encode_tbz_chk + 0), a
+                djnz    encode_tbz_chk_loop
+                ld      a, (encode_tbz_chk + 0)
+                ld      h, a
+                ld      a, (encode_tbz_chk + 1)
+                or      h
+                ld      h, a
+                ld      a, (encode_tbz_chk + 2)
+                or      h
+                ld      h, a
+                ld      a, (encode_tbz_chk + 3)
+                or      h
+                jr      z, encode_tbz_pack
+                ld      a, (encode_tbz_chk + 0)
+                ld      h, a
+                ld      a, (encode_tbz_chk + 1)
+                and     h
+                ld      h, a
+                ld      a, (encode_tbz_chk + 2)
+                and     h
+                ld      h, a
+                ld      a, (encode_tbz_chk + 3)
+                and     h
+                cp      &ff
+                jp      nz, fail
+
+encode_tbz_pack:
+; imm14 (14 bits) lives in encode_tbz_off[0..1] (low 14 bits valid).
+; word bytes:
+;   byte0 = ((imm14 & 0x07) << 5) | Rt
+;   byte1 = (imm14 >> 3) & 0xff             (imm14 bits 3..10)
+;   byte2 = (imm14 >> 11) & 0x07            (imm14 bits 11..13, → bits16..18)
+;           | (b40 << 3)                    (b40 bits 0..4 → bits 19..23)
+;   byte3 = 0x36 | op | (b5 << 7)           (0b011011<<1=0x36; op bit0; b5 bit7)
+
+; -- byte0 (L) = (imm14[0..2] << 5) | Rt ------------------------------
+                ld      a, (encode_tbz_off + 0)
+                and     &07
+                rlca
+                rlca
+                rlca
+                rlca
+                rlca                        ; << 5
+                ld      c, a
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1)
+                and     &1f
+                or      c
+                ld      l, a
+
+; -- byte1 (H) = (imm14 >> 3) & 0xff ----------------------------------
+; off[0]>>3 OR off[1]<<5.
+                ld      a, (encode_tbz_off + 0)
+                rrca
+                rrca
+                rrca
+                and     &1f                 ; imm14 bits 3..7
+                ld      c, a
+                ld      a, (encode_tbz_off + 1)
+                and     &07                 ; imm14 bits 8..10
+                rlca
+                rlca
+                rlca
+                rlca
+                rlca                        ; << 5
+                or      c
+                ld      h, a
+
+; -- byte2 (E) = (imm14>>11 & 0x07) | (b40 << 3) ----------------------
+; imm14 bits 11..13 = off[1] bits 3..5 → (off[1]>>3)&0x07.
+                ld      a, (encode_tbz_off + 1)
+                rrca
+                rrca
+                rrca
+                and     &07                 ; imm14 bits 11..13 → byte2 bits 0..2
+                ld      c, a
+                ld      a, (encode_tbz_bit)
+                and     &1f                 ; b40 = bit & 0x1f
+                rlca
+                rlca
+                rlca                        ; << 3 → byte2 bits 3..7
+                or      c
+                ld      e, a
+
+; -- byte3 (D) = 0x36 | op | (b5 << 7) --------------------------------
+                ld      a, &36
+                ld      c, a
+; op bit: tbnz (23) → 1, tbz (22) → 0.
+                ld      a, (encode_tbz_op)
+                cp      23
+                jr      nz, encode_tbz_op_zero
+                ld      a, c
+                or      &01                 ; op = 1 → bit0
+                ld      c, a
+encode_tbz_op_zero:
+; b5 = (bit >> 5) & 1.
+                ld      a, (encode_tbz_bit)
+                and     &20                 ; bit 5 of bit number
+                jr      z, encode_tbz_b5_zero
+                ld      a, c
+                or      &80                 ; b5 = 1 → bit7
+                ld      c, a
+encode_tbz_b5_zero:
+                ld      d, c
+                ret
+
+
+encode_tbz_op:                   defb    0
+encode_tbz_bit:                  defb    0
+encode_tbz_off:                  defb    0, 0, 0, 0
+encode_tbz_chk:                  defb    0, 0, 0, 0
