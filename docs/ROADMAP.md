@@ -1,5 +1,36 @@
 # sam-aarch64 roadmap
 
+<!-- HANDOVER-PROTOCOL-START -->
+## START HERE — session handover protocol (read this first)
+
+**This file is the canonical entry point and the agent→agent handover contract.** If you are an agent picking up this project: read this section, then the **"Current State & Next Actions"** block below, then the current milestone status doc, then the memory index (`~/.claude/projects/-Users-pmoore-git-sam-aarch64/memory/MEMORY.md`). That is the complete start-up read — everything else is reached via links from here.
+
+### The contract (always inherited, always maintained)
+
+1. **Tracking is part of "done."** A new idea, decision, or deferred item is not captured until it is a one-line entry in this doc (the "Deferred-work review checklist") or the relevant milestone status doc — **in the same change that introduces it**. Treat a missing tracking entry like a missing test: reviewers flag it. This is the rule that stops ideas being lost to context drift.
+2. **One home per kind of thing** (this is how the docs stay un-sprawled):
+   - **ROADMAP.md** (this file) — the index, the backlog, and the live "Current State" below.
+   - **Milestone status docs** (`docs/notes/m{N}-status.md`) — the per-milestone source of truth.
+   - **Memory** (`~/.claude/projects/.../memory/`) — cross-session preferences, facts, feedback. *Not* work-tracking.
+   - **`docs/notes/archive/`** — superseded/dead state. When a doc is obsoleted, move it here rather than leave it to confuse the next reader.
+3. **At milestone close**, walk the "Deferred-work review checklist" and ask of each item: still deferred, or does it now fold into the milestone in flight? Archive whatever the milestone superseded.
+
+### Session hygiene (the minimal ritual)
+
+- **Closing a session:** update the **"Current State & Next Actions"** block below *in place* — what landed, what's in flight (open PRs / branches / running agents), and the single immediate next action; confirm tracking is current (rule 1). Do **not** write a new dated handoff doc — update the standing block. (Older dated `*-handoff.md` docs are archival snapshots, not the live contract.)
+- **Starting a session:** the standard start prompt is just **"Continue per docs/ROADMAP.md."** (A SessionStart hook also surfaces this section automatically.) Read this section → Current State → resume. No bespoke per-session prompt is needed — everything specific lives in the block below.
+
+### Current State & Next Actions
+
+*Updated in place each session — this is the live handover.*
+
+- **Milestone:** M6 — spectrum4 release-bytematch on SAM (closing via `docs/plans/2026-05-29-m6-closure-release-bytematch.md`).
+- **Landed:** PRs #58 (arch-doc editorial), #60 (sysreg off-axis → closes FAIL00), #59 (reader self-test re-enable), #61 (harness fidelity investigation), #62 (repo audit), #63 (FAIL40 barriers+adr encoders), #64 (test-variant budget relief — ends `&BA89`, ~1399 B under `&C000`; harness >16 KB load fixed), #65 (m7-status doc + tracking).
+- **In flight:** background agent closing the 4 remaining FAIL40 encoder families (ldr-literal, lsl/lsr, bitfield, tbz/tbnz) on branch `m6-closure-pr3b-encoders`; this handover-protocol PR; SessionStart-hook setup.
+- **Next (M6 closure order):** (1) land the 4 encoder families → release-stripped flows end-to-end; (2) PR-4 — release-stripped byte-match verification + status doc; (3) PR-5 — m6-release CI gate **+ the `&C000` budget-assertion** (closure-plan Step 2b) → flips M6 ✅.
+- **M7 backlog** lives in `docs/notes/m7-status.md` (bump-arena allocator, codegen tables, on-SAM disassembler, compact-`.tbn`, editor groundwork, housekeeping/README track, harness follow-ups).
+<!-- HANDOVER-PROTOCOL-END -->
+
 Canonical index of milestones, design specs, and deferred work. **Update this any time a design doc is added, a milestone changes state, or deferred work gets folded into a milestone.**
 
 ## Vision
