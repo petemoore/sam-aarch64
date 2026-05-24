@@ -573,6 +573,12 @@ main_kinds_loop:
                 djnz    main_kinds_loop
 
 main_kinds_built:
+; Mnemonic-ID intercepts (M5 PR-B): ror-imm, OpShiftedReg,
+; OpExtendedReg.  See src/m3/intercepts.asm.  Z=1 → handled (skip form
+; lookup; PASS_PC already advanced); Z=0 → fall through to form table.
+                call    try_mnemonic_intercept
+                jp      z, walk_records
+
 ; Find first form for this mnemonic.
                 ld      de, (main_mnemonic_id)
                 call    form_lookup_find_first
