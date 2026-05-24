@@ -1,5 +1,5 @@
 ; test_shifted_reg.asm — minimal Layer-1 self-test for the OpShiftedReg
-; encoder (src/m3/slots/shifted_reg.asm).  Two vectors chosen to
+; encoder (src/slots/shifted_reg.asm).  Two vectors chosen to
 ; exercise the main code paths:
 ;
 ;   1. add x0, x1, x2, lsl #4   → 0x8b021020  (arithmetic 3-op)

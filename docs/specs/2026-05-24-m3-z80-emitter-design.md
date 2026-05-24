@@ -37,7 +37,7 @@ the SAM Coupé:
 
 **In scope for M3**:
 
-- Z80 assembler source (`src/m3/`) using `pyz80`, paged into the
+- Z80 assembler source (`src/`) using `pyz80`, paged into the
   SAM via SAMDOS HSAVE-compatible delivery.
 - A SAMDOS-readable `enctab.enc` file produced by M2's
   `enctab-gen`, loaded into a paged RAM region at startup.
@@ -70,7 +70,7 @@ The Z80 emitter is a single program built by `pyz80`, lifted from
 M0's `src/stub.asm` structure:
 
 ```
-src/m3/
+src/
   assembler.asm        top-level: boot, load enctab, read .tbn, loop
   reader.asm           .tbn record streamer (M1 format)
   symbols.asm          name-table loader (consumes M1 §2 name table)
@@ -261,7 +261,7 @@ add `enctab.enc` + `IN` to the disk image, and a small driver in
 
 Tasks in rough order:
 
-1. Scaffold `src/m3/` with a halting assembler.asm that exits
+1. Scaffold `src/` with a halting assembler.asm that exits
    immediately (mirrors M0's halt-only stub).
 2. Read `enctab.enc` into a paged RAM region at startup; parse
    header and validate magic/version.
@@ -310,7 +310,7 @@ The plan document is at `docs/superpowers/plans/2026-05-24-m3-z80-emitter.md`
 
 - **Encoder table layout drift between Mac and Z80.** The format
   spec is the contract. Any change to `.enc` is a coordinated
-  change in `enctab-gen`, `aarch64enc`, and `src/m3/`. Mitigation:
+  change in `enctab-gen`, `aarch64enc`, and `src/`. Mitigation:
   `enctab.enc`'s magic + version byte; M3's loader rejects
   unknown versions.
 - **Z80 LogicalImm correctness.** The LLVM algorithm has subtle

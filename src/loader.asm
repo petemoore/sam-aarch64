@@ -36,7 +36,7 @@
 ; The trampoline lives in section B because HMPR changes paged out
 ; whatever was in section C/D — so the trampoline's own code must
 ; live in LMPR-controlled memory (A or B) to remain executable across
-; the HMPR change.  See `src/m3/trampoline.asm` for full design notes.
+; the HMPR change.  See `src/trampoline.asm` for full design notes.
 ;
 ; Why HGTHD + HLOAD and not HGFLE + LBYT?
 ;
@@ -127,7 +127,7 @@ load_enctab:
 ; The trampoline (installed at TRAMPOLINE_DST by enctab_trampoline_setup)
 ; reprograms HMPR to ENCTAB_PAGE around the RST 8, so the load writes
 ; through HL=&8000 land in physical page 4 instead of the page our code
-; is currently running from (page 2).  See `src/m3/trampoline.asm` and
+; is currently running from (page 2).  See `src/trampoline.asm` and
 ; `docs/specs/2026-05-27-samdos-load-idiom.md` for the full pattern.
 ;
 ; Calling convention (mirrors COMET's `comet.asm:1191-1200`):
@@ -289,7 +289,7 @@ if defined(BUILD_TESTS)
 ; ~780 B of section-C code) is moved off-axis so the test variant's
 ; binary tail doesn't spill past &C100 into OPVAL_ARRAY scratch.
 ;
-; The off-axis binary is assembled separately (src/m3/test_mem_offaxis.asm
+; The off-axis binary is assembled separately (src/test_mem_offaxis.asm
 ; with `--importfile=build/assembler.sym`, see Makefile).  Its first
 ; byte is `run_mem_self_tests`; assemble.asm's BUILD_TESTS block
 ; reaches it via LMPR-swap-call-restore.
@@ -350,7 +350,7 @@ name_test_mem:  defb    19
 ; pc_rel / directives_m5 / ror_imm / shifted_reg / extended_reg /
 ; litpool suites; its entry is cluster_dispatch at section-A &0000.
 ;
-; The off-axis binary is assembled separately (src/m3/test_offaxis_cluster.asm
+; The off-axis binary is assembled separately (src/test_offaxis_cluster.asm
 ; with `--importfile=build/assembler.sym`, see Makefile).  The
 ; BUILD_TESTS block in assembler.asm reaches it via LMPR-swap-call-restore.
 ;
@@ -409,7 +409,7 @@ name_cluster:   defb    19
 ; being trivially small (3 bytes — `ld a, &42; ret`).
 ;
 ; The payload is consumed by run_paged_call_self_tests in
-; src/m3/test_paged_call.asm; not used in any production path.
+; src/test_paged_call.asm; not used in any production path.
 ;
 ; Input:  none (precondition: enctab_trampoline_setup has been called).
 ; Output: physical page 14 holds the payload (`ld a, &42; ret` stub at

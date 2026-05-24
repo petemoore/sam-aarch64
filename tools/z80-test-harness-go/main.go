@@ -56,7 +56,7 @@ func main() {
 
 	// Optional BUILD_TESTS-variant named files (HLOADed at boot into pages
 	// 13/14).  The SAMDOS catalogue names are "test_mem" and "p14"
-	// (src/m3/loader.asm name_test_mem / name_page14).
+	// (src/loader.asm name_test_mem / name_page14).
 	var files []NamedFile
 	if *testMemPath != "" {
 		data, err := os.ReadFile(*testMemPath)
@@ -77,7 +77,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("read sysreg-data: %v", err)
 		}
-		// SAMDOS catalogue name is "sd13" (src/m3/loader.asm name_sysreg_data).
+		// SAMDOS catalogue name is "sd13" (src/loader.asm name_sysreg_data).
 		files = append(files, NamedFile{Name: "sd13", Content: data, TargetPage: 13})
 	}
 

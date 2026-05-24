@@ -94,5 +94,5 @@ the analysis as it stands.
    from cleaned main, run dev-container CI; if it fails, trace why
    (likely candidates: a hardcoded address PR #41 moved, or a
    subtle stack/SP interaction with the table relocations).  Update
-   the memory-map comments in `src/m3/assembler.asm` if the
+   the memory-map comments in `src/assembler.asm` if the
    `&E100..&FFFF` "free" region claim turns out to be inaccurate.

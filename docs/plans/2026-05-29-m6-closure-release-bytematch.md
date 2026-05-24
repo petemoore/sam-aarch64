@@ -204,21 +204,21 @@ Expected: PR opens ready-for-review; CI status checks all pass on doc-only diff.
 
 ## PR-2 — m6: sysreg_table off-axis on page 13 + 8 missing sysregs (closes FAIL00)
 
-**Why this PR exists**: `src/m3/sysname.asm:716-` holds the (12-entry) sysreg table. The release-stripped flatten needs 8 more (`hcr_el2`, `mair_el1`, `scr_el3`, `spsr_el3`, `tcr_el1`, `ttbr0_el1`, `ttbr1_el1`, `vbar_el1`). Adding ~111 B of sysreg data inline would push the prod variant past `&B000` (current 23-B headroom). The architecture doc's answer: move the table off-axis to physical page 13, call into a lookup routine via `paged_call`, and add the 8 entries "for free" (they don't compete with section-C budget). **This is the first real consumer of `paged_call`** and the PR that closes FAIL00.
+**Why this PR exists**: `src/sysname.asm:716-` holds the (12-entry) sysreg table. The release-stripped flatten needs 8 more (`hcr_el2`, `mair_el1`, `scr_el3`, `spsr_el3`, `tcr_el1`, `ttbr0_el1`, `ttbr1_el1`, `vbar_el1`). Adding ~111 B of sysreg data inline would push the prod variant past `&B000` (current 23-B headroom). The architecture doc's answer: move the table off-axis to physical page 13, call into a lookup routine via `paged_call`, and add the 8 entries "for free" (they don't compete with section-C budget). **This is the first real consumer of `paged_call`** and the PR that closes FAIL00.
 
 **Files:**
-- Create: `src/m3/sysreg_data.asm` — the page-13 payload (sysreg table + lookup routine).
-- Create: `src/m3/test_sysreg_paged.asm` — boot self-test (BUILD_TESTS only).
-- Modify: `src/m3/sysname.asm` — remove the inline `sysreg_table`; rewrite the four `sysname_lookup` / `sysreg_lookup` / `dc_lookup` / `tlbi_lookup` call paths to use `paged_call`.
-- Modify: `src/m3/trampoline.asm` — add constants `SYSREG_DATA_PAGE = 13`, `SYSREG_DATA_DST = &8000`, `SYSREG_LOOKUP_ENTRY = &8000` (lookup is at offset 0 of the page).
-- Modify: `src/m3/loader.asm` — HLOAD the page-13 payload at boot (uses the trampoline-HLOAD pattern PR #55 introduced for page 14).
+- Create: `src/sysreg_data.asm` — the page-13 payload (sysreg table + lookup routine).
+- Create: `src/test_sysreg_paged.asm` — boot self-test (BUILD_TESTS only).
+- Modify: `src/sysname.asm` — remove the inline `sysreg_table`; rewrite the four `sysname_lookup` / `sysreg_lookup` / `dc_lookup` / `tlbi_lookup` call paths to use `paged_call`.
+- Modify: `src/trampoline.asm` — add constants `SYSREG_DATA_PAGE = 13`, `SYSREG_DATA_DST = &8000`, `SYSREG_LOOKUP_ENTRY = &8000` (lookup is at offset 0 of the page).
+- Modify: `src/loader.asm` — HLOAD the page-13 payload at boot (uses the trampoline-HLOAD pattern PR #55 introduced for page 14).
 - Modify: `tools/build-m3-disk/main.go` — accept `-sysreg-data <path>` flag that deposits the page-13 payload as a CODE file (e.g. `sd13`).
-- Modify: `Makefile` — assemble `src/m3/sysreg_data.asm` standalone (org `&8000`), produce `build/sysreg_data.bin`, pass to `build-m3-disk` via the new flag.
-- Modify: `src/m3/assembler.asm` — wire `call run_sysreg_paged_self_tests` into the boot test sequence (BUILD_TESTS only) and include `test_sysreg_paged.asm`.
+- Modify: `Makefile` — assemble `src/sysreg_data.asm` standalone (org `&8000`), produce `build/sysreg_data.bin`, pass to `build-m3-disk` via the new flag.
+- Modify: `src/assembler.asm` — wire `call run_sysreg_paged_self_tests` into the boot test sequence (BUILD_TESTS only) and include `test_sysreg_paged.asm`.
 
 **Prior art / references:**
-- `src/m3/paged_call_test_payload.asm` + `src/m3/loader.asm:load_page14_payload` (PR #55) — the load-payload-into-page-N pattern.
-- `src/m3/trampoline.asm` — `paged_call` body LDIR'd into section B at boot.
+- `src/paged_call_test_payload.asm` + `src/loader.asm:load_page14_payload` (PR #55) — the load-payload-into-page-N pattern.
+- `src/trampoline.asm` — `paged_call` body LDIR'd into section B at boot.
 - `docs/notes/2026-05-28-paged-call-architecture.md` §3.3 (ABI), §6 PR-2 (scope, after PR-1's editorial fix), §7 open-question 8 (cross-file addressing convention).
 - `docs/notes/2026-05-28-memory-layout-brainstorm.md` — page 13 = "data tables" home.
 - `tools/sam-aarch64-format/sysregs.go` — authoritative list of 39 sysreg entries (used only for cross-check here; PR-4 of M7 will use it as codegen input).
@@ -232,9 +232,9 @@ make m3-asm-prod
 ls -l build/m3-asm.bin
 ls -l build/m3-asm-prod.bin
 # Note the byte sizes; m3-asm-prod should be 12056 B; ending at &AFE8 (12056 + &8000 - 1).
-grep -E "sysreg_table|pstate_table|dc_table|tlbi_table" src/m3/sysname.asm | head
+grep -E "sysreg_table|pstate_table|dc_table|tlbi_table" src/sysname.asm | head
 # Expect 4 tables labelled.
-grep -cE "hcr_el2|mair_el1|scr_el3|spsr_el3|tcr_el1|ttbr0_el1|ttbr1_el1|vbar_el1" src/m3/sysname.asm
+grep -cE "hcr_el2|mair_el1|scr_el3|spsr_el3|tcr_el1|ttbr0_el1|ttbr1_el1|vbar_el1" src/sysname.asm
 # Expect 0 — the 8 missing sysregs are not present.
 ```
 
@@ -276,7 +276,7 @@ Run the M6 round-trip script:
 
 Expected: FAIL ("unknown sysname" or equivalent) — the SAM-side encoder rejects the missing names, the GNU oracle accepts them, byte compare aborts. **This is the failing test that PR-2 is closing.** Confirm the failure mode is what you expected.
 
-- [ ] **Step 3: Write `src/m3/sysreg_data.asm` — the page-13 payload**
+- [ ] **Step 3: Write `src/sysreg_data.asm` — the page-13 payload**
 
 The payload contains:
 1. A 6-byte header: `paged_call`-callable entry table. Entry 0 is `sysreg_lookup`; entry 1 is `pstate_lookup`; entry 2 is `dc_lookup`; entry 3 is `tlbi_lookup`. Each is a `jp <target>` (3 B per entry). Total 12 B.
@@ -298,7 +298,7 @@ The 8 new sysreg entries — encoded with their canonical (op0, op1, CRn, CRm, o
 
 Verify each against `tools/sam-aarch64-format/sysregs.go` before committing. The Go file is authoritative.
 
-The payload assembles standalone with `pyz80 --obj=build/sysreg_data.bin --org=0x8000 src/m3/sysreg_data.asm`. Final binary is < 4 KB (target: < 2 KB so room exists on page 13 for future data).
+The payload assembles standalone with `pyz80 --obj=build/sysreg_data.bin --org=0x8000 src/sysreg_data.asm`. Final binary is < 4 KB (target: < 2 KB so room exists on page 13 for future data).
 
 Pseudo-skeleton:
 
@@ -353,7 +353,7 @@ tlbi_lookup:
 
 The exact lookup routine bodies should be lifted verbatim from `sysname.asm` (where they live today), so this is a pure relocation — no semantics change. Watch out for any references to other section-C symbols (e.g. `OPVAL_ARRAY` at `&C100`) — section D under `HMPR=13` is page 14, NOT the caller's section D, so any cross-section read inside a lookup body must be avoided. The lookup is leaf-only (it walks its own table and returns).
 
-- [ ] **Step 4: Write `src/m3/test_sysreg_paged.asm` — boot self-test (BUILD_TESTS only)**
+- [ ] **Step 4: Write `src/test_sysreg_paged.asm` — boot self-test (BUILD_TESTS only)**
 
 Boot test that does:
 1. `paged_call` into `sysreg_lookup_entry` with HL pointing at a known operand name in a BUILD_TESTS scratch buffer (e.g. `"hcr_el2\0"`).
@@ -367,7 +367,7 @@ Each assertion fails via `jp fail` (the M3 fail path; lights the printer-channel
 
 - [ ] **Step 5: Wire the boot self-test into `assembler.asm`**
 
-Edit `src/m3/assembler.asm` near the existing `call run_paged_call_self_tests` line (~line 236). Add:
+Edit `src/assembler.asm` near the existing `call run_paged_call_self_tests` line (~line 236). Add:
 
 ```asm
                 call    run_sysreg_paged_self_tests
@@ -400,7 +400,7 @@ Same shape for `pstate_lookup`, `dc_lookup`, `tlbi_lookup`, each pointing at its
 
 Delete the now-unused table data (`sysreg_table:` through the four `*_table_end` markers) from `sysname.asm`. Net section-C savings: ~600 B (the tables are the bulk of the file).
 
-- [ ] **Step 7: Add constants to `src/m3/trampoline.asm`**
+- [ ] **Step 7: Add constants to `src/trampoline.asm`**
 
 Near the existing `PAGED_CALL_TEST_PAGE` constant:
 
@@ -451,7 +451,7 @@ samdos2 ls build/sam-test-disk.mgt | grep sd13
 In `Makefile`, parallel to the M5/M6 `enctab.enc` target and PR #55's `paged_call_test_payload`:
 
 ```makefile
-build/sysreg_data.bin: src/m3/sysreg_data.asm
+build/sysreg_data.bin: src/sysreg_data.asm
 	pyz80 --obj=$@ --org=0x8000 $<
 
 build/sam-test-disk.mgt: ... build/sysreg_data.bin ... 
@@ -505,8 +505,8 @@ If `tools/run-m6-release-stripped.sh` doesn't exist yet, that's the next PR's de
 - [ ] **Step 14: Commit and open PR**
 
 ```bash
-g add src/m3/sysreg_data.asm src/m3/test_sysreg_paged.asm src/m3/sysname.asm \
-      src/m3/trampoline.asm src/m3/loader.asm src/m3/assembler.asm \
+g add src/sysreg_data.asm src/test_sysreg_paged.asm src/sysname.asm \
+      src/trampoline.asm src/loader.asm src/assembler.asm \
       tools/build-m3-disk/main.go Makefile \
       tests/m6/sources/inst_mrs_msr_missing.s
 g commit -m "$(cat <<'EOF'
@@ -544,9 +544,9 @@ First real consumer of `paged_call` (PR #55).  Moves the four sysreg tables off-
 
 ## What lands
 
-- `src/m3/sysreg_data.asm` — page 13 payload (entry table + four lookup routines + four data tables, including 8 new sysreg entries).
-- `src/m3/sysname.asm` — four lookups become paged_call thunks.
-- `src/m3/test_sysreg_paged.asm` — boot self-test (BUILD_TESTS only).
+- `src/sysreg_data.asm` — page 13 payload (entry table + four lookup routines + four data tables, including 8 new sysreg entries).
+- `src/sysname.asm` — four lookups become paged_call thunks.
+- `src/test_sysreg_paged.asm` — boot self-test (BUILD_TESTS only).
 - `tools/build-m3-disk/main.go` — new `-sysreg-data` flag (parallels `-paged-call`).
 - `Makefile` — assembles `build/sysreg_data.bin`; passes via the new flag.
 - `tests/m6/sources/inst_mrs_msr_missing.s` — round-trip fixture for the 8 new sysregs.
@@ -579,7 +579,7 @@ Wait for all 11 CI checks; fix failures autonomously (per global PR workflow). O
 **Why this PR exists**: Per the `m6_strand_a` memory entry's "Open thread" section, FAIL40 is the next failure site after FAIL00 — the `m6_strand_a_complete.md` entry notes "release-stripped FAIL00 untagged site" as an open thread. Once FAIL00 closes (PR-2 above), the SAM-side run advances and the next abort surfaces. The pattern of "fix the next FAIL, run again, fix the next FAIL" continues until the SAM-side run completes and produces a binary. **This PR is open-ended in shape** — we don't know yet what surfaces — but bounded in goal: close every FAIL in the path from `release-stripped.tbn` to a complete `release.bin` HSAVE.
 
 **Files (predicted; subject to what FAIL40 actually surfaces):**
-- Likely modify: one or more of `src/m3/encoder.asm`, `src/m3/sysname.asm`, `src/m3/operands.asm`, depending on which form / operand / directive the abort points at.
+- Likely modify: one or more of `src/encoder.asm`, `src/sysname.asm`, `src/operands.asm`, depending on which form / operand / directive the abort points at.
 - Likely add: one or more `tests/m6/sources/inst_*.s` focused fixtures per failure cause (mirrors how M5 closed missing operand kinds).
 
 ### Sub-steps
@@ -924,17 +924,17 @@ Once green and merged, **M6 is complete.**
 
 ## PR-6 — (parallel) m6: reader self-test re-enable / PR #42 SP-fix re-investigation via the Go harness
 
-**Why this PR exists**: `src/m3/assembler.asm:295-308` has `run_reader_paged_self_tests` commented out, blocked on the PR #42 SP-fix mystery (`memory/m6_strand_a_complete.md` open thread). Three branches exist as starting points: `m6-reader-self-test-sp-fix`, `m6-trampoline-sp-switch`, `investigate-reader-paged-self-test`. Pete asked specifically: *"this time using our new go framework that will allow it to understand the crash symptom better, and it can be encouraged also to iterate on the go tooling itself if that helps it uncover what the cause is."*
+**Why this PR exists**: `src/assembler.asm:295-308` has `run_reader_paged_self_tests` commented out, blocked on the PR #42 SP-fix mystery (`memory/m6_strand_a_complete.md` open thread). Three branches exist as starting points: `m6-reader-self-test-sp-fix`, `m6-trampoline-sp-switch`, `investigate-reader-paged-self-test`. Pete asked specifically: *"this time using our new go framework that will allow it to understand the crash symptom better, and it can be encouraged also to iterate on the go tooling itself if that helps it uncover what the cause is."*
 
-**This is the first real adversarial use of the Go harness.** Pete pre-authorised the harness-modification scope: subagent owns both `src/m3/` and `tools/z80-test-harness-go/` for the duration of this PR. The harness can be extended (better trace, register-snapshot capture, watchpoints) as part of the work — that's the design intent per `memory/feedback_go_harness_is_dev_tool_not_ci_gate`.
+**This is the first real adversarial use of the Go harness.** Pete pre-authorised the harness-modification scope: subagent owns both `src/` and `tools/z80-test-harness-go/` for the duration of this PR. The harness can be extended (better trace, register-snapshot capture, watchpoints) as part of the work — that's the design intent per `memory/feedback_go_harness_is_dev_tool_not_ci_gate`.
 
 This PR is **parallel-mergeable with PR-2 / PR-3** (different files, different concerns). Land it whenever the investigation completes; no ordering constraint with the FAIL00 → FAIL40+ stream.
 
 **Files (predicted):**
-- Modify: `src/m3/trampoline.asm` (probable SP-switch addition; see the three pre-existing branches for prior attempts).
-- Modify: `src/m3/assembler.asm` (uncomment the `call run_reader_paged_self_tests`).
+- Modify: `src/trampoline.asm` (probable SP-switch addition; see the three pre-existing branches for prior attempts).
+- Modify: `src/assembler.asm` (uncomment the `call run_reader_paged_self_tests`).
 - Modify (likely): `tools/z80-test-harness-go/*.go` — add whatever instrumentation the investigation needs (PC trace, register snapshot at fail, watch on SP_SAVE slot, etc.).
-- Possibly modify: `src/m3/reader.asm`, `src/m3/test_reader_paged.asm` — if the root cause is in the reader rather than the trampoline.
+- Possibly modify: `src/reader.asm`, `src/test_reader_paged.asm` — if the root cause is in the reader rather than the trampoline.
 
 ### Sub-steps
 
@@ -954,7 +954,7 @@ Read what each branch tried. PR #42 hypothesised the SP=`&FFFE` move; that was r
 - [ ] **Step 2: Reproduce the failure deterministically via the Go harness**
 
 ```bash
-# Uncomment the call run_reader_paged_self_tests line in src/m3/assembler.asm
+# Uncomment the call run_reader_paged_self_tests line in src/assembler.asm
 # (don't commit yet — staging the harness's view of the broken state)
 make m3-asm
 cd tools/z80-test-harness-go

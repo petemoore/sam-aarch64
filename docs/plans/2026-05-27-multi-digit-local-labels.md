@@ -4,7 +4,7 @@
 
 **Goal:** Allow the SAM-side Z80 assembler to handle local labels with two-digit values (`10`..`99`) in addition to single-digit (`1`..`9`). This unblocks `inst_ldr_litpool_local.s` (deferred from M5) and is a hard prerequisite for the spectrum4 release sources, which use locals up to `15:`.
 
-**Architecture:** Replace the 9-per-digit fixed-array layout in `src/m3/local_labels.asm` with a single shared sorted list of `(digit:u8, pc:u32)` tuples — 5 bytes per entry, capped at 200 total entries (1002 B, fits the existing 1 KB slot at `&CD60..&D15F`). The ABI is unchanged: callers still pass digit in `A` and PC via `local_label_pc_buf`. The Go-side tooling (`text2bin` lexer/parser, `refenc` pass1/pass2, `bin2text` emitter) already handles 1..99 — only the Z80 side needs to change.
+**Architecture:** Replace the 9-per-digit fixed-array layout in `src/local_labels.asm` with a single shared sorted list of `(digit:u8, pc:u32)` tuples — 5 bytes per entry, capped at 200 total entries (1002 B, fits the existing 1 KB slot at `&CD60..&D15F`). The ABI is unchanged: callers still pass digit in `A` and PC via `local_label_pc_buf`. The Go-side tooling (`text2bin` lexer/parser, `refenc` pass1/pass2, `bin2text` emitter) already handles 1..99 — only the Z80 side needs to change.
 
 **Tech Stack:** Z80 assembly in the pyz80 dialect; SAM Coupé under SimCoupé in the `ghcr.io/petemoore/sam-aarch64-dev:latest` container (Xvfb-driven); Go tooling on the host for golden-fixture generation.
 
@@ -19,9 +19,9 @@
 
 ## File structure
 
-- **Modify**: `src/m3/local_labels.asm` — full rewrite of the storage layout and the three lookup routines (`local_def_append`, `local_find_forward`, `local_find_backward`). `cmp_pc_at_hl_vs_ref` and `local_label_pc_buf` are preserved verbatim. ABI is unchanged.
-- **Modify**: `src/m3/test_local_labels.asm` — extend the self-test to cover two-digit digits (`10` and `99`), and to verify cross-digit isolation between a single-digit digit (`1`) and a two-digit one (`10`).
-- **Modify**: `src/m3/assembler.asm` — update the memory-map comment block (line ~58) so the LOCAL_LABEL_TABLE reservation matches the new shape (200 × 5 = 1000 B).
+- **Modify**: `src/local_labels.asm` — full rewrite of the storage layout and the three lookup routines (`local_def_append`, `local_find_forward`, `local_find_backward`). `cmp_pc_at_hl_vs_ref` and `local_label_pc_buf` are preserved verbatim. ABI is unchanged.
+- **Modify**: `src/test_local_labels.asm` — extend the self-test to cover two-digit digits (`10` and `99`), and to verify cross-digit isolation between a single-digit digit (`1`) and a two-digit one (`10`).
+- **Modify**: `src/assembler.asm` — update the memory-map comment block (line ~58) so the LOCAL_LABEL_TABLE reservation matches the new shape (200 × 5 = 1000 B).
 - **Modify**: `docs/specs/2026-05-24-m4-symbols-multipass-design.md` §2.3 — note the extended digit range and the new shared-list layout. Keep references to the old design as "v1; superseded by multi-digit work" so the design history is legible.
 - **Create**: `tests/m5/sources/inst_ldr_litpool_local.s` — copy verbatim from `tests/m1/sources/inst_ldr_litpool_local.s`. Add to the M5 fixture corpus.
 - **Modify**: `docs/notes/m5-status.md` — promote `inst_ldr_litpool_local.s` from the "deferred" list to the active corpus; bump the fixture count from 19 to 20.
@@ -41,7 +41,7 @@ No changes required in:
 ### Task 1: Rewrite `local_labels.asm` storage + append
 
 **Files:**
-- Modify: `src/m3/local_labels.asm` (full file)
+- Modify: `src/local_labels.asm` (full file)
 
 The new memory layout, replacing the 9-list layout at the top of the file:
 
@@ -307,7 +307,7 @@ Expected: both targets build. Record the new production-variant size and check h
 - [ ] **Step 9: Commit**
 
 ```
-g add src/m3/local_labels.asm
+g add src/local_labels.asm
 g commit -m "local_labels: shared (digit,pc) list, digits 1..99"
 ```
 
@@ -318,7 +318,7 @@ Single coherent commit for the storage rewrite. Test updates land in the next ta
 ### Task 2: Update self-tests for multi-digit coverage
 
 **Files:**
-- Modify: `src/m3/test_local_labels.asm`
+- Modify: `src/test_local_labels.asm`
 
 The existing tests cover digit-1 list operations and digit-3-isolation. Extend to cover digits `10` and `99`, and cross-isolation between a single-digit and a two-digit digit.
 
@@ -426,7 +426,7 @@ Expected: `9/9`, `4/4`, `19/19`. The boot-time self-tests run during ci-m3's fir
 - [ ] **Step 6: Commit**
 
 ```
-g add src/m3/test_local_labels.asm
+g add src/test_local_labels.asm
 g commit -m "test_local_labels: cover digits 10 / 99 + cross-isolation"
 ```
 
@@ -487,7 +487,7 @@ g commit -m "tests/m5: promote inst_ldr_litpool_local.s fixture"
 ### Task 4: Update `assembler.asm` memory-map comment
 
 **Files:**
-- Modify: `src/m3/assembler.asm` (line ~58)
+- Modify: `src/assembler.asm` (line ~58)
 
 - [ ] **Step 1: Update the LOCAL_LABEL_TABLE reservation line**
 
@@ -528,7 +528,7 @@ Find the section that describes local labels (search for "digit"). Update from "
 - [ ] **Step 2: Commit Tasks 4 + 5 together**
 
 ```
-g add src/m3/assembler.asm docs/specs/2026-05-24-m4-symbols-multipass-design.md
+g add src/assembler.asm docs/specs/2026-05-24-m4-symbols-multipass-design.md
 g commit -m "docs: multi-digit local labels — memory map + spec §2.3"
 ```
 

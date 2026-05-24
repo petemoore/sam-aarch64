@@ -7,7 +7,7 @@
 #
 # The assembler emits "OK\n" on success / "FAIL\n" on any self-test or
 # loader failure via OUT to ports &E8/&E9 (PRINTL1 data + strobe — see
-# src/m3/print.asm and Base/SAMIO.h in vendored SimCoupé).  We route
+# src/print.asm and Base/SAMIO.h in vendored SimCoupé).  We route
 # printer channel 1 to a file and, after SimCoupé exits, copy that file
 # to <status-out-path> (default: <disk>.status.log).  Callers grep it
 # for "^OK$" / "^FAIL$" to distinguish clean success from any

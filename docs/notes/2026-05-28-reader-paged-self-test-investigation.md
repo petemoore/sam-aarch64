@@ -9,7 +9,7 @@ retained as the historical investigation record.
 
 ## PR-6 resolution (2026-05-28) — re-enabled, no SP change
 
-`run_reader_paged_self_tests` is re-enabled in `src/m3/assembler.asm`.
+`run_reader_paged_self_tests` is re-enabled in `src/assembler.asm`.
 **No SP change was made — SP stays at `&C100`.** PR #42's `SP=&FFFE`
 idea was both unnecessary and wrong (top-of-section-D is HMPR-controlled
 and would move under paging).
@@ -103,7 +103,7 @@ whose body extended into that range executed garbage after the
 corruption.
 
 `run_reader_paged_self_tests` (test variant) sits at the very end of
-the binary because it's the last `include` in `src/m3/assembler.asm`.
+the binary because it's the last `include` in `src/assembler.asm`.
 Post-PR-#35 the function lives at &C068..&C111 — overlapping the
 stack page from &C068 upward.  As soon as a nested CALL or PUSH
 descended past the function's later instructions, those instructions
@@ -155,7 +155,7 @@ vulnerable to stack pushes.
 
 Move SP from &C100 to &FFFE so the stack lives in the
 &E100..&FFFF "free" region of section D (per the memory map in
-`src/m3/assembler.asm` comments).  The stack still grows downward,
+`src/assembler.asm` comments).  The stack still grows downward,
 just in a region that contains neither code nor scratch data.
 
 ```asm
@@ -219,7 +219,7 @@ re-enabled:
 
 ## Files touched (uncommitted)
 
-  - `src/m3/assembler.asm`: SP=&FFFE; re-enable
+  - `src/assembler.asm`: SP=&FFFE; re-enable
     `call run_reader_paged_self_tests`.
 
 ## Recommended action

@@ -1,6 +1,6 @@
-# Memory layout — SAM-side assembler (`src/m3`)
+# Memory layout — SAM-side assembler (`src/`)
 
-> **Source of truth:** the header comment block in `src/m3/assembler.asm` (currently lines ~7–177) together with the `equ` definitions immediately below it. **This doc mirrors that block; it does not replace it.** When the layout changes, the `assembler.asm` comment and its `equ`s are authoritative — update them, then re-sync this doc. Do not treat this file as the place to *define* addresses; it exists so a reader can grasp the whole map without scrolling through 32 KB of Z80.
+> **Source of truth:** the header comment block in `src/assembler.asm` (currently lines ~7–177) together with the `equ` definitions immediately below it. **This doc mirrors that block; it does not replace it.** When the layout changes, the `assembler.asm` comment and its `equ`s are authoritative — update them, then re-sync this doc. Do not treat this file as the place to *define* addresses; it exists so a reader can grasp the whole map without scrolling through 32 KB of Z80.
 
 The assembler links at `org &8000` (entry `jp start`; `CALL 32768` lands on the first byte). The 64 KB Z80 address space is divided into the four SAM paging sections A/B/C/D (16 KB each). See `docs/notes/sam-paging.md` for the LMPR/HMPR paging primer and `docs/notes/2026-05-28-memory-layout-brainstorm.md` for the design discussion behind the off-axis moves.
 
@@ -76,8 +76,8 @@ Both assembler variants link at `org &8000`; their scratch/stack starts at `&C00
 
 ## Related docs
 
-- `src/m3/assembler.asm` — **the source of truth** (header comment + `equ`s).
-- `src/m3/README.md` — assembler taxonomy (prod/test, off-axis modules, include order).
+- `src/assembler.asm` — **the source of truth** (header comment + `equ`s).
+- `src/README.md` — assembler taxonomy (prod/test, off-axis modules, include order).
 - `docs/notes/sam-paging.md` — SAM Coupé paging primer (sections, LMPR/HMPR).
 - `docs/notes/2026-05-28-memory-layout-brainstorm.md` — design discussion behind the off-axis layout.
 - `scripts/check-code-budget.sh` — the budget gate.

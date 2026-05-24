@@ -142,7 +142,7 @@ Physical page 4 (off-axis): ENCTAB body — paged into section A on demand
 M5 PR-E consumed ~1287 B of production headroom (10581 → 11868).
 Remaining 420 B is enough to absorb small follow-ups; any larger M6
 feature should either come in via paged code (mirroring ENCTAB's PR #31
-layout — see `src/m3/trampoline.asm`) or motivate a second budget lever.
+layout — see `src/trampoline.asm`) or motivate a second budget lever.
 
 ## What's NOT in M5 scope (still M6 / later)
 

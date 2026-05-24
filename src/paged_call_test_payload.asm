@@ -1,6 +1,6 @@
 ; paged_call_test_payload.asm — tiny payload assembled standalone and
 ; HLOAD'd into physical page 14 at boot.  Exercised by
-; run_paged_call_self_tests in src/m3/test_paged_call.asm; not used in
+; run_paged_call_self_tests in src/test_paged_call.asm; not used in
 ; any production path.
 ;
 ; Per docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1.
@@ -12,11 +12,11 @@
 ; Assembled with `org &8000` so the bytes appear at &8000-onward in
 ; section C when HMPR maps page 14 in.  Same idiom as enctab.enc's
 ; "loaded at &8000 but body lives in page 4" arrangement (see
-; src/m3/loader.asm).
+; src/loader.asm).
 ;
 ; Build pipeline: pyz80 emits build/paged_call_test_payload.bin from
 ; this file; build-m3-disk's -paged-call flag deposits it as CODE file
-; "p14" on the test disk image; src/m3/loader.asm::load_page14_payload
+; "p14" on the test disk image; src/loader.asm::load_page14_payload
 ; HLOADs it into physical page 14 via the trampoline.
 
                 org     &8000

@@ -108,7 +108,7 @@ fi
 # 3. Run SimCoupé. The wrapper exits ~1 s in either case (both paths
 #    do `DI; HALT`) and writes a status file containing "OK" or "FAIL"
 #    captured from the SAM's parallel printer channel.  See
-#    src/m3/print.asm + tools/run-simcoupe.sh.
+#    src/print.asm + tools/run-simcoupe.sh.
 echo "--- simcoupe ---"
 "$ROOT/tools/run-simcoupe.sh" "build/${base}.mgt" "build/${base}.status.log"
 

@@ -30,7 +30,7 @@
 ;            byte (CLUT bits 5-6 and ext-mem bit 7 included).
 ;
 ; Tag-space rationale: existing fail_with_tag callers use values
-; 01, 03, 10, 11, 21, 40, 62, 63, b0 (per grep of src/m3/*.asm).
+; 01, 03, 10, 11, 21, 40, 62, 63, b0 (per grep of src/*.asm).
 ; The &70..&74 block is a fresh contiguous range that doesn't collide
 ; with any existing site and groups the paged-call assertions
 ; together for diagnostic recognisability.

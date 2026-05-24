@@ -149,7 +149,7 @@ trampoline didn't relocate SP.
 
 ## Trampoline review — bugs found
 
-The trampoline (`src/m3/trampoline.asm:344-367`) does NOT switch SP
+The trampoline (`src/trampoline.asm:344-367`) does NOT switch SP
 before changing HMPR.  Quoting the existing comment at line 57-62:
 
 > COMET avoids this by switching SP into a section-A/B scratch area
@@ -206,7 +206,7 @@ Full `make ci-m6` (2 fixtures) passes with the fix in place.
 
 ## Root cause (precise)
 
-`src/m3/trampoline.asm:344-367` — the trampoline issues `RST 8` while
+`src/trampoline.asm:344-367` — the trampoline issues `RST 8` while
 SP points into section D under the trampoline's own HMPR change.  The
 `RST 8` push lands in page IN_BASE_PAGE+1 at offset (SP-2) & 0x3FFF.
 With our memory layout that's page 8 offset `&F8`.  HLOAD's auto-paging
@@ -240,8 +240,8 @@ in the corrected behaviour.
 
 ## References
 
-- `src/m3/trampoline.asm:344-367` — trampoline body (PR #37 state)
-- `src/m3/main_loop.asm:2129-2169` — `load_in_file` caller
+- `src/trampoline.asm:344-367` — trampoline body (PR #37 state)
+- `src/main_loop.asm:2129-2169` — `load_in_file` caller
 - `~/git/samdos/src/c.s:318-369` — `ctas` (HLOAD's HMPR auto-paging)
 - `~/git/samdos/src/c.s:575-672` — `ldblk` (per-byte load loop)
 - `~/git/samdos/src/h.s:70-90` — `hload` / `dschd`

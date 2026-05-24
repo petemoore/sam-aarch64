@@ -595,7 +595,7 @@ main_handle_inst_parse_loop:
 ; can advance over it.  The actual encoder
 ; (intercepts.asm::try_intercept_litpool / litpool_encode_ldr_word)
 ; reads only the width from OPVAL_ARRAY[+1] and looks up the pool slot
-; via PASS_PC.  See src/m3/litpool.asm for the full design.
+; via PASS_PC.  See src/litpool.asm for the full design.
 ;
 ; Layout written into OPVAL_ARRAY entry (10 bytes total):
 ;   +0 kind = 0x0C
@@ -734,7 +734,7 @@ main_parse_imm_copy:
 ;
 ; The encoder consumes only the low byte for the imm6 shift amount; we
 ; keep 4 bytes so the range check can reject negative / wide values
-; cleanly (encode_shifted_reg_word in src/m3/slots/shifted_reg.asm).
+; cleanly (encode_shifted_reg_word in src/slots/shifted_reg.asm).
 main_parse_shifted_reg:
                 ld      a, (hl)             ; width
                 inc     hl
@@ -766,7 +766,7 @@ main_parse_shifted_reg:
 ;   +0 kind=0x07    +1 width    +2 reg    +3 extend
 ;   +4..+7 amt low-32 LE        +8..+9 padding
 ;
-; The encoder (src/m3/slots/extended_reg.asm) consumes only the low
+; The encoder (src/slots/extended_reg.asm) consumes only the low
 ; byte for the imm3 shift amount (0..4 valid per ARM ARM).
 main_parse_extended_reg:
                 ld      a, (hl)             ; width
@@ -1170,7 +1170,7 @@ main_kinds_loop:
 
 main_kinds_built:
 ; Mnemonic-ID intercepts (M5 PR-B): ror-imm, OpShiftedReg,
-; OpExtendedReg.  See src/m3/intercepts.asm.  Z=1 → handled (skip form
+; OpExtendedReg.  See src/intercepts.asm.  Z=1 → handled (skip form
 ; lookup; PASS_PC already advanced); Z=0 → fall through to form table.
                 call    try_mnemonic_intercept
                 jp      z, walk_records

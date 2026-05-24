@@ -152,7 +152,7 @@ generic encoder produce the AND.  Ports `tools/refenc/pass2.go:304`
 
 Class-1 sample offsets `0x169c` / `0x38c4` byte-match (confirmed gone).
 The Class-2/3/4 fix is a single MOV-alias
-auto-selection intercept (`encode_mov_imm_word` in `src/m3/intercepts.asm`),
+auto-selection intercept (`encode_mov_imm_word` in `src/intercepts.asm`),
 a faithful port of `tools/refenc/pass2.go:438-502` (`tryEncodeMovImm`):
 MOVZ chunk-search → MOVN chunk-search → ORR-bitmask, in that priority
 order (the same order GNU as uses).  All targeted offsets (0x3c, 0x78,
@@ -370,6 +370,6 @@ follow-ups (none block the milestone):
 ## References
 - `scripts/build-spectrum4-release.sh` — oracle builder (refenc vs GNU).
 - `tools/refenc/` — Mac-side reference encoder (the per-`.tbn` oracle).
-- `src/m3/encoder.asm`, `src/m3/main_loop.asm` — Z80 encoder + directives.
+- `src/encoder.asm`, `src/main_loop.asm` — Z80 encoder + directives.
 - `docs/notes/m6-status.md` — milestone status (this work is the headline closer).
 - `memory/feedback_test_variant_fragility.md` — budget cliff to respect while editing.

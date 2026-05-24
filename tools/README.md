@@ -1,6 +1,6 @@
 # `tools/` — index
 
-This directory holds the Go-side toolchain, build helpers, and exploratory spikes that support the SAM-side Z80 assembler in `src/m3/`. Tools fall into four buckets:
+This directory holds the Go-side toolchain, build helpers, and exploratory spikes that support the SAM-side Z80 assembler in `src/`. Tools fall into four buckets:
 
 - **Production toolchain** — part of the build / CI critical path. Touching these affects shipped behaviour.
 - **Dev tools** — aid agent iteration but are *not* CI gates (SimCoupé is the only gate).
@@ -35,7 +35,7 @@ This directory holds the Go-side toolchain, build helpers, and exploratory spike
 
 | Path | Purpose | `make` target |
 |------|---------|---------------|
-| `z80-test-harness-go/` | Go harness over `koron-go/z80` running `src/m3` fixtures at ~1 ms each for fast inner-loop feedback. **Not a CI gate** — it can crash or mislead; SimCoupé wins on disagreement. See its `README.md` and `SCOPE.md`. | — |
+| `z80-test-harness-go/` | Go harness over `koron-go/z80` running `src/` fixtures at ~1 ms each for fast inner-loop feedback. **Not a CI gate** — it can crash or mislead; SimCoupé wins on disagreement. See its `README.md` and `SCOPE.md`. | — |
 
 ## Spikes
 

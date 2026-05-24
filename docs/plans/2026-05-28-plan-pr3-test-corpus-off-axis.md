@@ -14,13 +14,13 @@ Today's baseline: test variant ends at `&C10F` — 15 B past `&C100`. Working on
 
 Pick BUILD_TESTS-only code that:
 
-- Is included via `if defined(BUILD_TESTS)` in `src/m3/assembler.asm` or its includes.
+- Is included via `if defined(BUILD_TESTS)` in `src/assembler.asm` or its includes.
 - Can be relocated to an off-axis page (the same pattern as ENCTAB / OUT / IN — load the .bin at boot into a known physical page; call into it via the existing trampoline or via the now-landing `paged_call` once PR #50 is salvaged).
 - Is meaningfully large (≥ 100 B per self-test moved).
 
 Candidates (in approximate priority order):
 
-1. `run_slot_self_tests`, `run_symbol_table_self_tests`, `run_local_label_self_tests` — the early-boot test suites in `src/m3/assembler.asm`'s BUILD_TESTS block. Probably the largest aggregate.
+1. `run_slot_self_tests`, `run_symbol_table_self_tests`, `run_local_label_self_tests` — the early-boot test suites in `src/assembler.asm`'s BUILD_TESTS block. Probably the largest aggregate.
 2. `test_*.asm` includes that compile into the test-variant binary's tail (these are the ones currently spilling past `&C100`).
 3. The boot-time `print_*` helpers used only by the self-tests.
 
@@ -36,9 +36,9 @@ Candidates (in approximate priority order):
 
 ## Concrete steps
 
-1. Survey `src/m3/assembler.asm`'s BUILD_TESTS block + the `test_*.asm` includes. Measure the byte-size of each self-test suite.
+1. Survey `src/assembler.asm`'s BUILD_TESTS block + the `test_*.asm` includes. Measure the byte-size of each self-test suite.
 2. Pick ONE substantive suite (target: ≥ 200 B) and migrate it off-axis:
-   - Move its code into a new `src/m3/test_*_offaxis.asm` source assembled with `org &8000` to produce a `.bin` file.
+   - Move its code into a new `src/test_*_offaxis.asm` source assembled with `org &8000` to produce a `.bin` file.
    - Extend `tools/build-m3-disk` (or take the cleaner enctab.enc generator route — see PR #50 critical-read in the session handoff doc, point #4) to deposit that file at a known disk location.
    - Add a `load_<test>_off_axis` routine in `loader.asm` that HLOADs the file at boot into a chosen physical page.
    - Replace the inline `call run_*_self_tests` with `LMPR_TEST_PAGE` swap + `call &8000` + restore.
@@ -51,7 +51,7 @@ Candidates (in approximate priority order):
 - Open the PR ready-for-review (not draft).
 - `gh pr merge --merge`; Co-Authored-By trailer.
 - Dev container only for SimCoupé runs.
-- Don't touch `src/m3/paged_bodies.asm`, `src/m3/test_paged_call.asm`, or the page-13 plumbing from PR #50 — those wait for plan-PR 1's salvage.
+- Don't touch `src/paged_bodies.asm`, `src/test_paged_call.asm`, or the page-13 plumbing from PR #50 — those wait for plan-PR 1's salvage.
 - **Don't push code into `&AFFF`-then-`&B000-&BFFF` territory carelessly** — the brainstorm doc treats `&B000-&BFFF` as production-code headroom, not test-code spillover. If you need to spill there for test code only (and BUILD_TESTS-not-set production stays clear), that's OK; document it.
 
 ## Discipline reminders

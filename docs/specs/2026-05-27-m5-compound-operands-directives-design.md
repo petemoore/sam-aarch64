@@ -59,7 +59,7 @@ Each entry below describes the parser dispatch point, what slot encoder fires (o
 
 ### 2.2 Directive handlers
 
-**`.set` / `.equ`.** Standard 2-operand directive (symref + value). Pass 1 size 0; the handler extracts PUSH_SYM id, evals expr, calls `symbol_insert(id, value)`. M4's evaluator already handles `.set`-chains in source order — value can be arbitrary u32 (the symbol table accepts arbitrary u32 already; `src/m3/symbols.asm:117`). Pass 2 emits nothing. No schema change. Reference: `refenc/pass1.go:166-170`, `:241-271` `resolveEquDirective`.
+**`.set` / `.equ`.** Standard 2-operand directive (symref + value). Pass 1 size 0; the handler extracts PUSH_SYM id, evals expr, calls `symbol_insert(id, value)`. M4's evaluator already handles `.set`-chains in source order — value can be arbitrary u32 (the symbol table accepts arbitrary u32 already; `src/symbols.asm:117`). Pass 2 emits nothing. No schema change. Reference: `refenc/pass1.go:166-170`, `:241-271` `resolveEquDirective`.
 
 **`.balign` / `.align`.** Pass 1 size = `(N - pc%N) % N` — PC-dependent (`refenc/pass1.go:365-381`). Pass 2 emits `alignPadBytes(pc, pad)` (`pass2.go:1729-1746`, `:403-429`): NOP-fill in `.text`, zero elsewhere. M4's walker already passes PC through, so the only new mechanism is the pad helper. `.align N` is the `2^N` sibling — fold into the same handler.
 

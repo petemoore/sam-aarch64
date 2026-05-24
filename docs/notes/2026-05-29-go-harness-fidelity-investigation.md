@@ -34,9 +34,9 @@ Everything else (FDC, disk, ASIC, line interrupt, keyboard, screen, the rest of 
 
 The assembler touches a *small* SAMDOS API surface — only HGTHD/HLOAD/HSAVE and paging ports 250/251:
 
-- `src/m3/loader.asm:124` — `rst 8 / defb HOOK_HGTHD`
-- `src/m3/loader.asm` HLOAD via the section-B trampoline; HSAVE trampoline in `src/m3/trampoline.asm:131-167`
-- paging: `out (250/251), a` brackets in `src/m3/encoder.asm:421-422`, `trampoline.asm`
+- `src/loader.asm:124` — `rst 8 / defb HOOK_HGTHD`
+- `src/loader.asm` HLOAD via the section-B trampoline; HSAVE trampoline in `src/trampoline.asm:131-167`
+- paging: `out (250/251), a` brackets in `src/encoder.asm:421-422`, `trampoline.asm`
 
 So at the *hook-name* level Pete's intuition is right: it's only three hooks. The problem is what those three hooks *do underneath*.
 
@@ -82,7 +82,7 @@ That is the bulk of what SimCoupé already does. We would be rebuilding the emul
 Pete's stated benefit is catching the assembler encroaching into "SAMDOS program space." Two facts make real-ROM execution the wrong tool for this:
 
 1. **SAMDOS is not resident in the assembler's window.** It lives in one 16 KB page recorded in `DOSFLG` (`&5BC2`), and is paged into section B *only for the duration of a hook call*, then paged out (`sam-paging.md:586-598`; Tech Manual `:4632-4641`). The assembler runs in section C (`&8000-&BFFF`, physical page 2) with scratch/stack in section D (`&C000-&FFFF`). There is no steady-state overlap to "encroach" on; the only collision window is *inside* a hook, where SAMDOS owns the machine anyway and uses its own stack at `&8000`.
-2. **The realistic encroachment bugs are static memory-map facts.** The assembler's budget is tight and explicit (`src/m3/assembler.asm:21-22, 74-113`): stack at `&C100` growing down, scratch arrays at `&C100-&E100`, OUT on physical pages 5-6, IN on 7-12, test_mem on page 13, p14 on page 14. The bugs that actually bite are (a) scratch/stack growth past a budgeted boundary, (b) two physical-page roles colliding, (c) code-size overrun (the production budget is 12265/12288 B today — measured from `build/assembler-prod.bin`). All three are detectable *without* executing SAMDOS:
+2. **The realistic encroachment bugs are static memory-map facts.** The assembler's budget is tight and explicit (`src/assembler.asm:21-22, 74-113`): stack at `&C100` growing down, scratch arrays at `&C100-&E100`, OUT on physical pages 5-6, IN on 7-12, test_mem on page 13, p14 on page 14. The bugs that actually bite are (a) scratch/stack growth past a budgeted boundary, (b) two physical-page roles colliding, (c) code-size overrun (the production budget is 12265/12288 B today — measured from `build/assembler-prod.bin`). All three are detectable *without* executing SAMDOS:
 
    - **Build-time link-map assertion.** pyz80 emits symbol addresses; a tiny checker can assert `scratch_end < stack_floor`, `code_end < &C000`, and that the physical-page role table has no duplicates. This is the cheapest, most direct guard and it runs in the existing build.
    - **Run-time write-watchpoint in the harness.** The harness already has the hook for this — `Hardware.watchSPLo/watchSPHi` + `stackWrites` exist but are currently unused (`harness.go:189-194, 214-218`). Wiring `Set()` to record any write to a forbidden physical page (e.g. the SAMDOS-resident page, or page roles the assembler must never write) gives a precise "who wrote where" trace at ~1 ms, far more actionable than a real-ROM crash.
@@ -207,5 +207,5 @@ SWEEP=1 go test -run TestCorpusSweep -v -timeout 300s ./...
 - `samdos/src/c.s:104-191, 622-653, 810-845` (catalogue/block DRQ-gated streaming), `:354-369` (ctas auto-paging).
 - `samdos/src/h.s:59-90, 132-154` (HGTHD/HLOAD/HSAVE hook bodies → disk).
 - `docs/sam/sam-coupe_rom-v3.0_annotated-disassembly.txt:12944-12978` (PTDOS dispatcher); `docs/notes/sam-paging.md:586-628` (SAMDOS residency + PTDOS reproduction); Tech Manual `:4632-4641` (SAMDOS one-page residency).
-- `src/m3/loader.asm:41-75, 113-130` (hook usage + clobber facts), `src/m3/assembler.asm:7-113` (memory map / budgets), `src/m3/trampoline.asm:131-167` (HSAVE trampoline).
+- `src/loader.asm:41-75, 113-130` (hook usage + clobber facts), `src/assembler.asm:7-113` (memory map / budgets), `src/trampoline.asm:131-167` (HSAVE trampoline).
 - git: PR #54 `694c2e3`, PR #59 `114e0ca`, PR #60 `bd20ef6`/`c88cb60`/`d88e5bd`.

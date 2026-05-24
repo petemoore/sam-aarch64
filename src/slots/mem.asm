@@ -9,7 +9,7 @@
 ;
 ; OpMem is operand-kind-driven (not slot-driven); the form table has no
 ; MEM-slot entries.  Dispatch happens via try_mnemonic_intercept
-; (src/m3/intercepts.asm) for the eleven memory mnemonics that share
+; (src/intercepts.asm) for the eleven memory mnemonics that share
 ; this encoding family:
 ;   ldr=5    str=6    ldp=7    stp=8
 ;   ldrb=54  strb=55  ldrh=56  strh=57

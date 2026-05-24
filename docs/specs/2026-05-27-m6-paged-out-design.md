@@ -21,7 +21,7 @@ The HSAVE call site is already designed in `docs/specs/2026-05-27-samdos-save-id
 
 ### Where OUT lives
 
-- **Physical pages 5 (+ 6 if needed for outputs > 16 KB)**, contiguous to ENCTAB on page 4.  Page 5 is free per the Tech Manual page allocation table (`src/m3/trampoline.asm:188-208`); contiguity to ENCTAB simplifies allocation reasoning but isn't strictly required.
+- **Physical pages 5 (+ 6 if needed for outputs > 16 KB)**, contiguous to ENCTAB on page 4.  Page 5 is free per the Tech Manual page allocation table (`src/trampoline.asm:188-208`); contiguity to ENCTAB simplifies allocation reasoning but isn't strictly required.
 - **Section A in the assembler's address space (`&0000-&3FFF`)** during emit.  LMPR's bit 5 (RAM0 bit, value `&20`) is set so the page is RAM-mapped rather than ROM.  `LMPR_OUT_BASE = &25` (RAM0 + low 5 bits = 5).
 - **HSAVE will read OUT via section C (`&8000-&BFFF`)** at the end of pass 2 — see `docs/specs/2026-05-27-samdos-save-idiom.md`.  UIFA byte 31 is set to `OUT_BASE_PAGE`; UIFA bytes 32-33 to `&8000`; HSAVE auto-increments HMPR across `&C000`.
 
@@ -31,7 +31,7 @@ The same physical page is reached through section A during emit (LMPR-controlled
 
 Crucial observation from `docs/notes/sam-paging.md:88-91` (Tech Manual `tech-man_v3-0.txt:908-910`): **section B = LMPR+1 automatically**.  With `LMPR_ENCTAB = &24` (low 5 bits = 4) already set during pass 2, section B (`&4000-&7FFF`) maps to physical page **5** for free.  Reads/writes to `&4000..&7FFF` during the encoder window land in page 5 with zero LMPR overhead.
 
-`src/m3/trampoline.asm:110-115` notes this explicitly: *"LMPR = LMPR_ENCTAB means section A = page 4 (ENCTAB, RAM-replaces-ROM) and section B = page 5 (currently unused — we never write or read here while LMPR = LMPR_ENCTAB)."*
+`src/trampoline.asm:110-115` notes this explicitly: *"LMPR = LMPR_ENCTAB means section A = page 4 (ENCTAB, RAM-replaces-ROM) and section B = page 5 (currently unused — we never write or read here while LMPR = LMPR_ENCTAB)."*
 
 So the OUT buffer's **first 16 KB** is reachable via section B with the LMPR state we already have, and `emit_byte_paged` reduces to essentially the current `emit_byte` — just with `OUT_PC` in the section-B range instead of section C.
 
@@ -214,6 +214,6 @@ A second fixture exercising page-crossing (> 16 KB of output) is optional for th
 
 ## Open questions deferred to plan / impl
 
-- Exact placement of `emit_byte_paged` (`encoder.asm` vs new `src/m3/emit.asm` module). Probably keep in `encoder.asm` for minimal churn.
+- Exact placement of `emit_byte_paged` (`encoder.asm` vs new `src/emit.asm` module). Probably keep in `encoder.asm` for minimal churn.
 - Whether to keep `OUT_LEN` as `defw` at the existing scratch location or move it. Probably keep — minimises diff.
 - Whether the boot self-test fits in test-variant headroom (current: 4280 B in disk slot; new code is small).

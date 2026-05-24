@@ -15,7 +15,7 @@
 // This replaces the SimCoupé round-trip (disk build + boot + run + extract)
 // for each fixture, shrinking per-fixture time from ~30 s to <100 ms.
 //
-// # Memory layout (mirrors src/m3/assembler.asm)
+// # Memory layout (mirrors src/assembler.asm)
 //
 //	Section A (&0000-&3FFF): fake ROM (RST 8 stub at &0008) or ENCTAB page
 //	Section B (&4000-&7FFF): page 1 (BASIC sys page + trampoline copy)

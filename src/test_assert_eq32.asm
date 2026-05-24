@@ -19,7 +19,7 @@
 ; off-axis page) is read correctly.  See test_offaxis_cluster.asm and
 ; test_mem_offaxis.asm:36-43 for the full caveat.
 ;
-; Included from src/m3/assembler.asm's BUILD_TESTS include block, BEFORE
+; Included from src/assembler.asm's BUILD_TESTS include block, BEFORE
 ; the suites that reference it (so the symbol exists for inline callers
 ; and is exported into assembler.sym for the off-axis builds).
 

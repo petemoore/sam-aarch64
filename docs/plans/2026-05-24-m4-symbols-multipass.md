@@ -4,7 +4,7 @@
 
 **Goal:** Land the three pieces M3 deferred per `docs/specs/2026-05-24-m4-symbols-multipass-design.md`: a Z80 symbol-table data structure with hash-bucketed lookup, a two-pass record walker, and the full expression-bytecode evaluator (with `PUSH_SYM` / `PUSH_LOCAL` / `PUSH_PC` / `REL_*`). Together these unlock branches to labels, PC-relative addressing, local-label refs (`1f` / `1b`), and forward references.
 
-**Architecture:** Refactor M3's single-pass walker into pass-mode-driven dual-pass over the same `.tbn` records. Add `src/m3/symbols.asm` (hash table) and `src/m3/local_labels.asm` (per-digit lists). Expand `src/m3/expr_eval.asm` with symbol-resolution and PC-relative cases. PC-relative slot encoders (`BranchImm*`, `AdrpImm`) gain a "subtract PC" pre-step before their existing bit layout.
+**Architecture:** Refactor M3's single-pass walker into pass-mode-driven dual-pass over the same `.tbn` records. Add `src/symbols.asm` (hash table) and `src/local_labels.asm` (per-digit lists). Expand `src/expr_eval.asm` with symbol-resolution and PC-relative cases. PC-relative slot encoders (`BranchImm*`, `AdrpImm`) gain a "subtract PC" pre-step before their existing bit layout.
 
 **Tech Stack:** Same as M3 — pyz80, SimCoupé patched, SAMDOS, aarch64-none-elf-as oracle.
 
@@ -22,13 +22,13 @@
 
 ### Task 1: Pass-mode flag in the record walker
 
-Refactor `src/m3/reader.asm`'s top-level loop to accept a "pass" register (A or a known memory location). Add a stub for pass-2 behaviour (currently identical to pass-1 — that's deliberate; pass 2 diverges in Tasks 4–5).
+Refactor `src/reader.asm`'s top-level loop to accept a "pass" register (A or a known memory location). Add a stub for pass-2 behaviour (currently identical to pass-1 — that's deliberate; pass 2 diverges in Tasks 4–5).
 
 Commit: `m4: thread pass-mode flag through record walker`.
 
 ### Task 2: Symbol table — insert + lookup
 
-`src/m3/symbols.asm`. Hash-bucketed: 256 buckets indexed by `symbol_id mod 256`. Each entry: `(symbol_id u16, address u32, next u16)` chained within the bucket.
+`src/symbols.asm`. Hash-bucketed: 256 buckets indexed by `symbol_id mod 256`. Each entry: `(symbol_id u16, address u32, next u16)` chained within the bucket.
 
 Subroutines:
 
@@ -41,7 +41,7 @@ Commit: `m4: symbol table — hash-bucketed insert + lookup`.
 
 ### Task 3: Local-label table
 
-`src/m3/local_labels.asm`. Nine per-digit sorted PC lists; sorted by definition order (= PC order, since pass 1 walks records sequentially).
+`src/local_labels.asm`. Nine per-digit sorted PC lists; sorted by definition order (= PC order, since pass 1 walks records sequentially).
 
 Subroutines:
 

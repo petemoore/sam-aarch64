@@ -5,7 +5,7 @@
 ; docs/notes/2026-05-29-test-variant-budget-relief.md.
 ;
 ; This file is its own pyz80 entry point — it is NOT included from
-; src/m3/assembler.asm.  The Makefile invokes pyz80 separately on this
+; src/assembler.asm.  The Makefile invokes pyz80 separately on this
 ; file with `--importfile=build/assembler.sym` so that section-C
 ; production symbols (encode_*, litpool_*, symbol_*, compute_directive_size,
 ; main_eval_*, pass_pc_reset, assert_eq32_de_hl_imm, fail, ...) resolve
@@ -52,7 +52,7 @@
 ;   This is the identical caveat that the test_mem off-axis path relies
 ;   on (see test_mem_offaxis.asm:36-43).
 ;
-; Mechanism at boot (in src/m3/assembler.asm and src/m3/loader.asm):
+; Mechanism at boot (in src/assembler.asm and src/loader.asm):
 ;   1.  enctab_trampoline_setup installs the HLOAD trampoline.
 ;   2.  load_offaxis_cluster HLOADs this binary into page 12 at
 ;       section-C offset &8000.  When section A is mapped to page 12

@@ -7,7 +7,7 @@
 ;
 ; This file is assembled STANDALONE (org &8000) into build/sysreg_data.bin
 ; and HLOAD'd into physical page 13 at boot by
-; src/m3/loader.asm::load_page13_payload.  It is a PRODUCTION feature
+; src/loader.asm::load_page13_payload.  It is a PRODUCTION feature
 ; (sysreg lookups are needed by every build, not just BUILD_TESTS), so
 ; the loader call and the disk deposit happen in both variants.
 ;
@@ -21,7 +21,7 @@
 ; HMPR low5, section D = HMPR+1, both invariant only under a fixed HMPR).
 ;
 ; The split is forced by the paging model.  A routine running under
-; HMPR=13 (reached via `paged_call`, see src/m3/paged_bodies.asm) sees:
+; HMPR=13 (reached via `paged_call`, see src/paged_bodies.asm) sees:
 ;   - section A/B = LMPR / LMPR+1  (invariant across HMPR — VISIBLE)
 ;   - section C   = page 13        (THIS code + tables)
 ;   - section D   = page 14        (NOT the caller's section D)
@@ -62,7 +62,7 @@
 
 ; ---------------------------------------------------------------------
 ; Comm-buffer addresses — MUST match the equ definitions in
-; src/m3/trampoline.asm exactly (this file is assembled standalone, so
+; src/trampoline.asm exactly (this file is assembled standalone, so
 ; it carries its own copies; trampoline.asm is the canonical source and
 ; the two are kept in lock-step by the shared-ABI comment there).
 ; Section B (LMPR-stable), in the verified-free region &7E72..&7ECF

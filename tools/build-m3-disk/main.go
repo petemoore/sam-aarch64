@@ -27,7 +27,7 @@
 // Task-3 boot tests where the assembler exits before reading IN.
 //
 // Four-positional form: adds IN as a CODE file at load address &B000
-// (matches IN_BUF in src/m3/main_loop.asm).
+// (matches IN_BUF in src/main_loop.asm).
 //
 // -test-mem <path>: deposits an off-axis test payload (test_mem.bin)
 // as a CODE file named "test_mem".  Required for the BUILD_TESTS
@@ -64,7 +64,7 @@ import (
 const (
 	// LoadAddress is the SAM address the assembler loads to.
 	// The AUTO BASIC does `CLEAR&7FFF: LOAD "assembler" CODE 32768: CALL 32768`.
-	// This matches src/m3/assembler.asm's `org &8000`.
+	// This matches src/assembler.asm's `org &8000`.
 	LoadAddress uint32 = 0x8000
 
 	// SamdosLoadAddress is the address recorded in the samdos2 body header.
@@ -194,9 +194,9 @@ func main() {
 		log.Fatalf("AddCodeFile(assembler): %v", err)
 	}
 
-	// Slot 3: enctab.enc CODE file. Loaded at startup by src/m3/loader.asm
+	// Slot 3: enctab.enc CODE file. Loaded at startup by src/loader.asm
 	// via SAMDOS HGTHD + trampoline_hload into physical page 4 (outside
-	// section C — see src/m3/trampoline.asm and docs/specs/2026-05-27-
+	// section C — see src/trampoline.asm and docs/specs/2026-05-27-
 	// samdos-load-idiom.md for the trampoline pattern that makes this
 	// possible).  The recorded load address here is documentary only:
 	// HGTHD reads it into DIFA at runtime but our loader.asm supplies
@@ -211,7 +211,7 @@ func main() {
 	}
 
 	// Slot 4 (optional): IN .tbn file.  Loaded at runtime by
-	// src/m3/main_loop.asm::load_in_file via HGTHD+HLOAD into IN_BUF at
+	// src/main_loop.asm::load_in_file via HGTHD+HLOAD into IN_BUF at
 	// &B000.  The on-disk LOAD address is purely documentary — HLOAD's
 	// caller specifies HL = &B000 — but recording a consistent value
 	// makes the on-disk catalogue readable.
@@ -227,7 +227,7 @@ func main() {
 	}
 
 	// Slot 5 (optional): off-axis test_mem.bin.  Loaded at runtime by
-	// src/m3/loader.asm::load_test_mem_off_axis via HGTHD+trampoline
+	// src/loader.asm::load_test_mem_off_axis via HGTHD+trampoline
 	// into physical page 13 (section A at &0000 when LMPR = LMPR_TEST_MEM).
 	// BUILD_TESTS variant only; production builds omit -test-mem.
 	// The on-disk LOAD address is documentary (the trampoline supplies
@@ -247,7 +247,7 @@ func main() {
 	}
 
 	// Slot 5b (optional): off-axis "M5 + misc encoder" cluster (cluster).
-	// Loaded at boot by src/m3/loader.asm::load_offaxis_cluster via
+	// Loaded at boot by src/loader.asm::load_offaxis_cluster via
 	// HGTHD+trampoline into physical page 12 (section A at &0000 when
 	// LMPR = LMPR_TEST_CLUSTER), then invoked via one LMPR swap
 	// (cluster_dispatch).  Holds the relocated pc_rel / directives_m5 /
@@ -268,9 +268,9 @@ func main() {
 	}
 
 	// Slot 6 (optional): paged_call self-test payload (p14).  Loaded at
-	// boot by src/m3/loader.asm::load_page14_payload via HGTHD +
+	// boot by src/loader.asm::load_page14_payload via HGTHD +
 	// trampoline into physical page 14, then exercised by
-	// run_paged_call_self_tests (src/m3/test_paged_call.asm).
+	// run_paged_call_self_tests (src/test_paged_call.asm).
 	// BUILD_TESTS variant only; production builds omit -paged-call.
 	// Recorded load address mirrors enctab.enc / test_mem: documentary,
 	// since the loader supplies HL = &8000 and target page = 14 when
@@ -287,9 +287,9 @@ func main() {
 	}
 
 	// Slot 7 (optional): page-13 sysreg lookup data (sd13).  Loaded at
-	// boot by src/m3/loader.asm::load_page13_payload via HGTHD +
+	// boot by src/loader.asm::load_page13_payload via HGTHD +
 	// trampoline into physical page 13, then read by the four
-	// sysname_lookup_* routines (src/m3/sysname.asm) via paged_call.
+	// sysname_lookup_* routines (src/sysname.asm) via paged_call.
 	// PRODUCTION feature — sysreg/dc/tlbi/pstate operands appear in
 	// shipping sources, so this file is deposited for BOTH variants
 	// (unlike -test-mem / -paged-call which are BUILD_TESTS only).

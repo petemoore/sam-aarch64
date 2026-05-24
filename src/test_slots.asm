@@ -352,7 +352,7 @@ run_slot_self_tests:
                 ret
 
 
-; assert_eq32_de_hl_imm was extracted to src/m3/test_assert_eq32.asm in
+; assert_eq32_de_hl_imm was extracted to src/test_assert_eq32.asm in
 ; the M6 budget-relief PR (2026-05-29) so that test_slots.asm can be
 ; relocated off-axis (page 12) while the shared helper stays resident in
 ; the main binary for both inline and off-axis callers.  See that file's

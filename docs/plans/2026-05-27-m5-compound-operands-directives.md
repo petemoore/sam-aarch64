@@ -25,7 +25,7 @@
 
 Land the directives that need no new walker mechanism, all together:
 
-- `.set` (ID 9) / `.equ` (ID 8) — synonyms. Pass-1 handler extracts PUSH_SYM id, evals expr, calls `symbol_insert(id, value)`. Pass 1 size 0; pass 2 emits nothing. Reuse the M4 symbol table — it already accepts arbitrary u32 values (`src/m3/symbols.asm:117`).
+- `.set` (ID 9) / `.equ` (ID 8) — synonyms. Pass-1 handler extracts PUSH_SYM id, evals expr, calls `symbol_insert(id, value)`. Pass 1 size 0; pass 2 emits nothing. Reuse the M4 symbol table — it already accepts arbitrary u32 values (`src/symbols.asm:117`).
 - `.skip` (ID 13) / `.space` (ID 14) — same handler. Pass 1 size = eval(expr); pass 2 emits N zero bytes. M4's evaluator handles `.set`-symbols in the operand.
 - `.inst` (ID 15) — one 32-bit raw word. Pass 1 size 4; pass 2 emits the word LE.
 - `.global` (ID 10), `.section` (ID 18), `.arch` (ID 19), `.cpu` (ID 20) — swap each `jp fail` for a size-0 emit-nothing handler.
@@ -132,7 +132,7 @@ Commit: `m5: OpSysName encoder — mrs / msr / dc / tlbi`.
 Schedule this between earlier tasks if `m3-asm-prod` crosses 7500 B. The default lever is "move `ENCTAB_BUF` up from `&A000`":
 
 1. Pick a new home (e.g. `&B800` shifts the IN buffer too — easier: load ENCTAB into a paged region and trampoline reads).
-2. Update `src/m3/loader.asm` HGTHD+HLOAD target.
+2. Update `src/loader.asm` HGTHD+HLOAD target.
 3. Update the memory-map table in `docs/notes/m4-status.md` (the m5-status.md from Task 17 picks up the new layout).
 4. Re-run `make ci-m4 ci-m4-prod` — regression check.
 

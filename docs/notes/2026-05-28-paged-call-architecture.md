@@ -11,7 +11,7 @@ pages go; this note pins down HOW we call into and read from them.
 
 ## 0. Why this note exists
 
-`src/m3/sysname.asm:716` holds the (currently 12-entry) `sysreg_table`
+`src/sysname.asm:716` holds the (currently 12-entry) `sysreg_table`
 inside the assembler binary. Adding the 8 missing `spectrum4` sysregs
 (`hcr_el2`, `mair_el1`, `scr_el3`, `spsr_el3`, `tcr_el1`, `ttbr0_el1`,
 `ttbr1_el1`, `vbar_el1`) — ~111 B of static data — pushed the
@@ -19,7 +19,7 @@ inside the assembler binary. Adding the 8 missing `spectrum4` sysregs
 prod variant has ~4 180 B headroom in section C
 (`docs/notes/2026-05-28-memory-layout-brainstorm.md:10`); the test
 variant has none — its tail spills past `OPVAL_ARRAY` at `&C100`
-(`src/m3/assembler.asm:72`) and corrupts pass-1/pass-2 scratch while
+(`src/assembler.asm:72`) and corrupts pass-1/pass-2 scratch while
 running. That's a fragility, not a fix.
 
 The brainstorm doc proposes "even pages 13–29 that aren't used yet …
@@ -125,7 +125,7 @@ both ports), buffers through a 256-byte staging area, and clobbers
 DE/HL/AF/AF'/BC. It's the right shape for "copy this 10 KB block
 across pages once" (already what the M6 PR 2 reader-payload copy
 loop does, modulo our own LDIR variant at
-`src/m3/reader.asm:218-237`), not "read this 1 byte from page 13".
+`src/reader.asm:218-237`), not "read this 1 byte from page 13".
 
 ### 1.3 SAM ROM — register-save bracket helpers
 
@@ -235,7 +235,7 @@ would come from ROM1. Putting SWAP in RAM (the old ZX Printer buffer
 at `&5B00-&5B6F`, copied there at boot) keeps the fetch stable across
 the bank switch. **This is the direct analogue of our trampoline
 living in section B at `&7E00` rather than in section C**
-(`src/m3/trampoline.asm:18-44`); the structural problem is identical.
+(`src/trampoline.asm:18-44`); the structural problem is identical.
 
 Per-call cost: 4 bytes (`RST 28` + 2-byte target + the standard
 machine-code RET in ROM1 that pairs with YOUNGER). Each ROM1 routine
@@ -300,7 +300,7 @@ they make different trade-offs about who composes what.
 
 `sproom` (`comet.asm:4876`) is COMET's two-byte SP-save slot,
 analogous to our `SP_SAVE` at `TRAMPOLINE_DST + 33`
-(`src/m3/trampoline.asm:297`).
+(`src/trampoline.asm:297`).
 
 Other COMET sites that use the same pattern: `comet.asm:2242, 2700,
 2705, 2732, 2746, 3022, 3051, 3590, 3685, 3805, 3928, 4112, 4141,
@@ -328,7 +328,7 @@ practice for paged calls and they converge on the same shape.
 
 ### 1.9 What our codebase already does
 
-`src/m3/trampoline.asm` lines 362-396 implement a one-shot, hard-coded
+`src/trampoline.asm` lines 362-396 implement a one-shot, hard-coded
 trampoline that brackets a SAMDOS HLOAD hook. It's *not* a generic
 paged-call mechanism; it's an HLOAD-specific bracket that lives in
 section B and is invoked via plain `CALL TRAMPOLINE_DST`. The body
@@ -339,8 +339,8 @@ keeping it conditionally), and adding LMPR support. Practically, it
 becomes a different routine; the existing one stays as the HLOAD
 trampoline.
 
-`src/m3/reader.asm:218-237`, `src/m3/encoder.asm:439-498`,
-`src/m3/main_loop.asm:218-265` implement **per-byte LMPR bracketing
+`src/reader.asm:218-237`, `src/encoder.asm:439-498`,
+`src/main_loop.asm:218-265` implement **per-byte LMPR bracketing
 inline** at the call sites — 8 B of bracket per record read, 9 B of
 bracket per high-zone emit, etc. This is the current state of the
 art: explicit `in a,(250); ld (save),a; ld a,target; out (250),a;
@@ -386,7 +386,7 @@ per site. With ~30 anticipated call sites in M6 strand B + Phase 2
 30 = 60 B saved. That's roughly one sysreg entry. Not transformative.
 
 (b) requires us to take over an RST vector at boot. Our boot already
-starts at `&8000` (`src/m3/assembler.asm:122`) after BASIC's
+starts at `&8000` (`src/assembler.asm:122`) after BASIC's
 `CALL 32768`, with ROM0 still in section A. To install a handler at
 e.g. `&0038`, we'd have to either:
 - Page out ROM0 (LMPR bit 5 = 1) for the lifetime of the program,
@@ -896,8 +896,8 @@ order.
 variant budget. Scope per the salvage (narrower than the original
 PR-#50 draft):**
 
-- Add `paged_call` body in `src/m3/paged_bodies.asm`, included at the
-  end of `src/m3/assembler.asm`. The body is LDIR'd into section B
+- Add `paged_call` body in `src/paged_bodies.asm`, included at the
+  end of `src/assembler.asm`. The body is LDIR'd into section B
   at boot by an extended `enctab_trampoline_setup` (`trampoline.asm`).
 - Reserve scratch slots `paged_call_hmpr_save`, `paged_call_sp_save`
   in section B at `TRAMPOLINE_DST + &D0..&D2` (well above the body
@@ -907,12 +907,12 @@ PR-#50 draft):**
 - Add `PAGED_CALL_TEST_PAGE = 14` constant in `trampoline.asm`. Page
   13 is in use by plan-PR-3's `test_mem` off-axis payload; page 14
   is the test-only payload page for plan-PR 1.
-- Add a 3-byte standalone payload (`src/m3/paged_call_test_payload.asm`,
+- Add a 3-byte standalone payload (`src/paged_call_test_payload.asm`,
   `ld a, &42; ret`) HLOADed into physical page 14 at boot by
   `load_page14_payload` (BUILD_TESTS only, in `loader.asm`).
 - Extend `tools/build-m3-disk/main.go` with a `-paged-call <path>`
   flag depositing the page-14 payload as a CODE file named `p14`.
-- Add the boot self-test (`src/m3/test_paged_call.asm`) that calls
+- Add the boot self-test (`src/test_paged_call.asm`) that calls
   `paged_call` against the page-14 stub and asserts A=&42 plus HMPR
   bit-identity round-trip.
 - Patch this design doc's §3.3 / §4 / §6 / §7 to reflect the salvage
@@ -940,7 +940,7 @@ PR-#50 draft):**
 ### PR 1 (original, superseded) — paged_call + paged_data helpers
 
 **Scope:**
-- Add `paged_call` body to `src/m3/trampoline.asm`, alongside the
+- Add `paged_call` body to `src/trampoline.asm`, alongside the
   existing `enctab_trampoline_setup` etc.
 - Add `paged_data_map_hmpr` / `paged_data_unmap_hmpr` (rename
   candidates: `hmpr_swap_in` / `hmpr_swap_out`) in the same file.
@@ -982,8 +982,8 @@ documentation), medium PR.
 
 **Scope:**
 - Move `sysreg_table`, `pstate_table`, `dc_table`, `tlbi_table`,
-  `sysname_table` from `src/m3/sysname.asm:716-793` to a new file
-  `src/m3/sysreg_data.asm` placed at the head of page 13's content.
+  `sysname_table` from `src/sysname.asm:716-793` to a new file
+  `src/sysreg_data.asm` placed at the head of page 13's content.
 - Add a new build step: assemble `sysreg_data.asm` standalone (org
   `&8000`), produce a flat binary, HLOAD-target it to page 13 at
   startup. (Or: extend `enctab.enc`'s pattern — generate the page-13
@@ -1052,7 +1052,7 @@ physical page 13.
 
 **Original draft scope (NOT all landed in PR #52):**
 - The M3/M4/M5 boot self-test corpus
-  (`src/m3/test_*.asm` files) consumes section-C code budget in the
+  (`src/test_*.asm` files) consumes section-C code budget in the
   BUILD_TESTS variant. Move it to a paged page (page 14? — TBD per
   brainstorm doc); invoke the tests via paged_call entries that map
   the test page in and run.
@@ -1079,7 +1079,7 @@ physical page 13.
 
 **Scope:**
 - The current `sysreg_table` is hand-maintained in
-  `src/m3/sysname.asm`. The authoritative list lives in
+  `src/sysname.asm`. The authoritative list lives in
   `tools/sam-aarch64-format/sysregs.go` (39 entries per
   `memory-layout-brainstorm.md:29`). Hand-sync drifts.
 - Add a Mac-side build step that generates `sysreg_data.asm` (or
@@ -1161,8 +1161,8 @@ asm refactors), medium PR.
    calls into `paged_call` for sysreg_table lookup, the call sites
    need `(target_addr_in_section_C, target_hmpr)` constants — and
    those constants should be defined ONCE, not hardcoded per site.
-   Define them in `src/m3/trampoline.asm` (or a new
-   `src/m3/paged_data_constants.asm`) alongside `LMPR_ENCTAB`,
+   Define them in `src/trampoline.asm` (or a new
+   `src/paged_data_constants.asm`) alongside `LMPR_ENCTAB`,
    `LMPR_OUT_HIGH`, `LMPR_IN_BASE`, e.g.:
    ```
    PAGED_PAGE_DISASM_AUX:   equ     13
@@ -1215,7 +1215,7 @@ asm refactors), medium PR.
 ## 8. Headline
 
 **Section-B `paged_call` helper, HMPR-based, structurally identical
-to the existing HLOAD trampoline at `src/m3/trampoline.asm:362-396`.
+to the existing HLOAD trampoline at `src/trampoline.asm:362-396`.
 +3 B per call site (6 B vs `CALL nnnn`'s 3 B). One PR lands the
 mechanism and a test; the next ports `sysreg_table` to page 13 and
 the 8 missing sysregs land for free; subsequent PRs port the test
@@ -1250,12 +1250,12 @@ generalise it instead of inventing new mechanism.
 - `docs/notes/2026-05-28-memory-layout-brainstorm.md` — entire;
   particularly `:10` (real code ceiling), `:43-62` (page-axis),
   `:97` (constants pattern), `:108` (CLUT preservation)
-- `src/m3/assembler.asm:1-200` (current memory map);
-  `src/m3/trampoline.asm` — entire (HLOAD trampoline body and
-  SP-switch reasoning at `:362-425`); `src/m3/encoder.asm:439-498`
-  (emit_byte LMPR bracket); `src/m3/reader.asm:218-237`
-  (reader_next_kind LMPR bracket); `src/m3/main_loop.asm:218-265`
-  (in_map_current / in_normalise_hl); `src/m3/sysname.asm:716-793`
+- `src/assembler.asm:1-200` (current memory map);
+  `src/trampoline.asm` — entire (HLOAD trampoline body and
+  SP-switch reasoning at `:362-425`); `src/encoder.asm:439-498`
+  (emit_byte LMPR bracket); `src/reader.asm:218-237`
+  (reader_next_kind LMPR bracket); `src/main_loop.asm:218-265`
+  (in_map_current / in_normalise_hl); `src/sysname.asm:716-793`
   (sysreg / pstate / dc / tlbi tables)
 - `docs/notes/2026-05-28-reader-paged-self-test-investigation.md`
   (SP-collision rationale, also cited by HLOAD trampoline)

@@ -14,14 +14,14 @@ The HLOAD call site is already known — `load_in_file` in `main_loop.asm:2041-2
 
 | Concern | Location | Behaviour |
 |---|---|---|
-| IN buffer constants | `src/m3/assembler.asm:31-32` | `IN_BUF = &B000`, `IN_BUF_END = &B800` (2 KB in section C) |
-| Disk load | `src/m3/main_loop.asm:2041-2070` (`load_in_file`) | HGTHD → read DIFA from `&4B50+34..36` → direct HLOAD into `IN_BUF` (no trampoline; HMPR unchanged) |
-| Pass driver | `src/m3/main_loop.asm:112-150` (`main_assemble`) | `load_in_file` → `enctab_map_in` → pass 1 walk → pass 2 walk → `enctab_map_out` → save.  Disk load happens BEFORE ENCTAB is mapped into section A. |
-| Pass reset | `src/m3/main_loop.asm:164-167` (`reset_reader_to_in_buf`) | `IN_POS := IN_BUF; reader_init`.  Called once per pass; pass 2 simply rewinds `IN_POS` to the same in-memory buffer. |
-| Reader globals | `src/m3/main_loop.asm:2144-2145` | `IN_POS defw 0`, `IN_END defw 0` (both section-C addresses today). |
-| Header skip + walk | `src/m3/reader.asm:46-153` | `reader_init` validates `SA64` magic, version, skips the u16-prefixed name table, leaves `IN_POS` at the first record's `kind` byte.  `reader_next_kind` reads `[kind][len_lo][len_hi]`, returns payload pointer in HL, advances `IN_POS` by `3 + len`. |
+| IN buffer constants | `src/assembler.asm:31-32` | `IN_BUF = &B000`, `IN_BUF_END = &B800` (2 KB in section C) |
+| Disk load | `src/main_loop.asm:2041-2070` (`load_in_file`) | HGTHD → read DIFA from `&4B50+34..36` → direct HLOAD into `IN_BUF` (no trampoline; HMPR unchanged) |
+| Pass driver | `src/main_loop.asm:112-150` (`main_assemble`) | `load_in_file` → `enctab_map_in` → pass 1 walk → pass 2 walk → `enctab_map_out` → save.  Disk load happens BEFORE ENCTAB is mapped into section A. |
+| Pass reset | `src/main_loop.asm:164-167` (`reset_reader_to_in_buf`) | `IN_POS := IN_BUF; reader_init`.  Called once per pass; pass 2 simply rewinds `IN_POS` to the same in-memory buffer. |
+| Reader globals | `src/main_loop.asm:2144-2145` | `IN_POS defw 0`, `IN_END defw 0` (both section-C addresses today). |
+| Header skip + walk | `src/reader.asm:46-153` | `reader_init` validates `SA64` magic, version, skips the u16-prefixed name table, leaves `IN_POS` at the first record's `kind` byte.  `reader_next_kind` reads `[kind][len_lo][len_hi]`, returns payload pointer in HL, advances `IN_POS` by `3 + len`. |
 | Record consumers | `main_loop.asm` instruction / directive / label / local-def handlers | Receive HL = payload pointer, walk it for operand bytes / mnemonic id / symbol id.  Pointers are not retained past the current record's processing… |
-| …except litpool | `src/m3/litpool.asm:148-260` (`litpool_register`) and `:707-841` (`litpool_emit_by_width`) | Pass 1 records `expr_ptr` (a section-C pointer into the operand bytecode in IN) in `LITPOOL_TABLE[slot]+1..2`.  Pass 2 reads from this pointer at `.ltorg` / implicit flush time to evaluate and emit the pool entry.  **This is the only cross-record retention of an IN pointer.** |
+| …except litpool | `src/litpool.asm:148-260` (`litpool_register`) and `:707-841` (`litpool_emit_by_width`) | Pass 1 records `expr_ptr` (a section-C pointer into the operand bytecode in IN) in `LITPOOL_TABLE[slot]+1..2`.  Pass 2 reads from this pointer at `.ltorg` / implicit flush time to evaluate and emit the pool entry.  **This is the only cross-record retention of an IN pointer.** |
 | Other places that take IN pointers | `sysname_ptr` (`sysname.asm:799`), `main_payload_ptr` (`main_loop.asm:2111`), `reader_curr_payload` (`reader.asm:161`) | All single-record lifetime; consumed within the same record handler that wrote them.  None survive pass-2 record advance. |
 
 So today's invariant is "the whole `.tbn` is resident in section C, and any IN address is dereferenceable any time".  Paged IN means we have to either keep the whole file reachable through a stable window (impossible if it exceeds one LMPR-controlled section) or break the "any address any time" assumption — every IN pointer becomes scoped to its enclosing record handler, and litpool-style cross-pass retention requires explicit copy-out.
@@ -61,7 +61,7 @@ We cannot copy COMET wholesale because section A is committed to ENCTAB during t
 
 ## HLOAD trampoline — multi-page support
 
-`src/m3/loader.asm:131-143` and `src/m3/trampoline.asm:286-330` document the HLOAD trampoline calling convention.  HLOAD itself supports multi-page loads via SAMDOS's internal `ctas` (`samdos/src/c.s:354-369`): when the destination HL crosses `&C000`, SAMDOS resets `H` to `&80` and increments HMPR's low 5 bits (preserving top 3).  So a multi-page HLOAD started at HL=`&8000` with HMPR=N continues into HMPR=N+1, then N+2, …, automatically.
+`src/loader.asm:131-143` and `src/trampoline.asm:286-330` document the HLOAD trampoline calling convention.  HLOAD itself supports multi-page loads via SAMDOS's internal `ctas` (`samdos/src/c.s:354-369`): when the destination HL crosses `&C000`, SAMDOS resets `H` to `&80` and increments HMPR's low 5 bits (preserving top 3).  So a multi-page HLOAD started at HL=`&8000` with HMPR=N continues into HMPR=N+1, then N+2, …, automatically.
 
 The UIFA bytes that drive this are populated by HGTHD (samdos copies them from the file's DIFA into `UIFA + 80 = &4B50`):
 
@@ -277,7 +277,7 @@ IN_END_OFFSET:  defw    0             ; last byte's offset
 | `enctab_map_out` | LMPR_DEFAULT | (assembler page) | ROM0 | BASIC sys page | Restored before save. |
 | `save_out_file` | LMPR_DEFAULT | (HSAVE-managed) | ROM0 | BASIC sys page | HSAVE OUTs HMPR per UIFA[31]; LMPR unchanged. |
 
-Port-correctness: every `OUT (port), A` referenced in the table is port **250 (LMPR)**, except `save_out_file`'s HMPR which is internal to HSAVE.  Citation: `trampoline.asm:353` (LMPR write), `trampoline.asm:309` (HMPR read), and the M6 PR 1 `emit_byte` code at `src/m3/encoder.asm:459-467` (post-PR #36).  The spec doc that pre-dates PR #36 has the wrong port (251 vs 250) and must not be trusted.
+Port-correctness: every `OUT (port), A` referenced in the table is port **250 (LMPR)**, except `save_out_file`'s HMPR which is internal to HSAVE.  Citation: `trampoline.asm:353` (LMPR write), `trampoline.asm:309` (HMPR read), and the M6 PR 1 `emit_byte` code at `src/encoder.asm:459-467` (post-PR #36).  The spec doc that pre-dates PR #36 has the wrong port (251 vs 250) and must not be trusted.
 
 ### `load_in_file` — paged variant
 

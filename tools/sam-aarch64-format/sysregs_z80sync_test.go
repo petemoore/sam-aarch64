@@ -7,7 +7,7 @@ package format
 //
 //   - The Go authority in this package (namedSysRegs, pstateFields,
 //     dcOps, tlbiOps).
-//   - The Z80 page-13 payload src/m3/sysreg_data.asm, which the SAM
+//   - The Z80 page-13 payload src/sysreg_data.asm, which the SAM
 //     assembler HLOADs and walks at runtime.
 //
 // The audit flagged this hand-sync as a real drift hazard: adding or
@@ -20,7 +20,7 @@ package format
 // everything else is handled at runtime by the generic Sn_op1_Cm_Cn_op2
 // parser). So the invariant we enforce is:
 //
-//	every entry present in src/m3/sysreg_data.asm MUST appear in the
+//	every entry present in src/sysreg_data.asm MUST appear in the
 //	corresponding Go map with a BYTE-IDENTICAL encoding.
 //
 // A Z80 entry whose name is absent from Go, or whose (op0,op1,CRn,CRm,
@@ -45,7 +45,7 @@ import (
 	"testing"
 )
 
-// asmPath returns the absolute path to src/m3/sysreg_data.asm, resolved
+// asmPath returns the absolute path to src/sysreg_data.asm, resolved
 // relative to this test file's own location so it works regardless of the
 // caller's working directory (go test sets cwd to the package dir).
 func asmPath(t *testing.T) string {
@@ -56,7 +56,7 @@ func asmPath(t *testing.T) string {
 	}
 	// thisFile = <repo>/tools/sam-aarch64-format/sysregs_z80sync_test.go
 	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
-	p := filepath.Join(repoRoot, "src", "m3", "sysreg_data.asm")
+	p := filepath.Join(repoRoot, "src", "sysreg_data.asm")
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		t.Fatalf("resolving asm path: %v", err)
@@ -223,7 +223,7 @@ func checkSubset(t *testing.T, table string, z80 []z80Entry, goFields func(name 
 	}
 	if len(problems) > 0 {
 		sort.Strings(problems)
-		t.Errorf("%s: Z80 src/m3/sysreg_data.asm disagrees with Go tools/sam-aarch64-format:\n%s\n\n"+
+		t.Errorf("%s: Z80 src/sysreg_data.asm disagrees with Go tools/sam-aarch64-format:\n%s\n\n"+
 			"These two tables are hand-synced — update BOTH sides (see the header "+
 			"comments in sysreg_data.asm and sysregs.go).", table, strings.Join(problems, "\n"))
 	}

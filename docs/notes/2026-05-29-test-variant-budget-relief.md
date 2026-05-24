@@ -73,7 +73,7 @@ test path is LMPR-swap-safe.
 `assert_eq32_de_hl_imm` was defined in `test_slots.asm` but is called by 8
 suites (including the already-off-axis `test_mem`).  To relocate `slots`
 without breaking the staying suites, the helper was extracted into its own
-file `src/m3/test_assert_eq32.asm`, which stays **resident in the main
+file `src/test_assert_eq32.asm`, which stays **resident in the main
 binary** (section C).  Both inline callers (resolve directly) and off-axis
 callers (resolve via `--importfile`) reach it; under the LMPR swap the
 helper's `pop bc; (bc)` reads the inline literal via section A (the off-axis
