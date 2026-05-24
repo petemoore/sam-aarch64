@@ -81,6 +81,7 @@ DIR_SKIP:               equ     13  ; .skip
 DIR_SPACE:              equ     14  ; .space
 DIR_INST:               equ     15  ; .inst
 DIR_ALIGN:              equ     16  ; .align (2^N)
+DIR_LTORG:              equ     17  ; .ltorg
 DIR_SECTION:            equ     18  ; .section
 DIR_ARCH:               equ     19  ; .arch
 DIR_CPU:                equ     20  ; .cpu
@@ -123,9 +124,11 @@ main_assemble:
                 ld      (PASS_MODE), a
                 call    symbol_table_init
                 call    local_label_table_init
+                call    litpool_init
                 call    pass_pc_reset
                 call    reset_reader_to_in_buf
                 call    walk_records
+                call    litpool_flush               ; implicit end-of-source
 
 ; ----- Pass 2: emit --------------------------------------------------
                 ld      a, PASS_PASS2
@@ -133,7 +136,13 @@ main_assemble:
                 call    pass_pc_reset
                 call    reset_out_buffer
                 call    reset_reader_to_in_buf
+; Pass 2 re-uses the LITPOOL_TABLE / LITPOOL_PC_MAP populated by pass 1.
+; Reset the per-slot `pending` flag (cleared by pass-1 flush) so the
+; pass-2 flush emits each slot exactly once.  The slot count and the
+; pc-map (which pass 2 only reads) are untouched.
+                call    litpool_reset_pending
                 call    walk_records
+                call    litpool_flush               ; implicit end-of-source
 
 ; -- Bracket close: restore LMPR so save_out_file's RST 8 finds ROM
 ; in section A.
@@ -484,8 +493,57 @@ main_handle_inst_parse_loop:
 ; STRING its own clearly-named branch for clarity).  M5 PR-D Task 14.
                 cp      OP_KIND_STRING
                 jp      z, fail
-; OP_KIND_LIT_POOL (0x0C) is M5 PR-E territory.
+; OpLitPool (0x0C) — `=expr` for `ldr Xn|Wn, =<value>`.  Parse the
+; payload (width + expr_len + bytecode) just enough that the dispatch
+; can advance over it.  The actual encoder
+; (intercepts.asm::try_intercept_litpool / litpool_encode_ldr_word)
+; reads only the width from OPVAL_ARRAY[+1] and looks up the pool slot
+; via PASS_PC.  See src/m3/litpool.asm for the full design.
+;
+; Layout written into OPVAL_ARRAY entry (10 bytes total):
+;   +0 kind = 0x0C
+;   +1 width (4 or 8)
+;   +2..+9 zero (no per-instance state needed; pool entries live in
+;          LITPOOL_TABLE keyed by PASS_PC).
+                cp      OP_KIND_LIT_POOL
+                jp      z, main_parse_litpool
                 jp      fail
+
+
+; ---- Parse OpLitPool (0x0C) — `=<expr>` ------------------------------
+;
+; On entry: kind byte (0x0C) is already at OPVAL[+0]; DE points at +1.
+;           HL points at on-disk byte just past the kind byte (start of
+;           [width u8][expr_len u16 LE][bytecode...]).
+;
+; We don't need to evaluate the expression here — pass 1 has already
+; registered the pool slot keyed by PASS_PC.  Pass 2's encoder fetches
+; the slot via litpool_lookup and uses its entry_pc to compute imm19.
+;
+; We DO need to consume the bytecode bytes so subsequent operands (if
+; any — `ldr X0, =val` has none beyond OpLitPool) parse correctly, and
+; advance the dispatch counter.
+main_parse_litpool:
+                ld      a, (hl)                     ; width
+                inc     hl
+                ld      (de), a                     ; OPVAL +1 = width
+                inc     de
+; Zero OPVAL +2..+9 (8 bytes).
+                push    bc
+                ld      b, 8
+                xor     a
+main_parse_litpool_zero:
+                ld      (de), a
+                inc     de
+                djnz    main_parse_litpool_zero
+                pop     bc
+; Read expr_len u16 LE and skip the bytecode bytes.
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)
+                inc     hl                          ; HL → bytecode start
+                add     hl, bc                      ; HL past bytecode
+                jp      main_handle_inst_advance
 
 
 ; ---- Parse reg: read 1 byte, store at OPVAL[+1] ----------------------
@@ -1046,11 +1104,24 @@ main_kinds_built:
 
 
 ; -----------------------------------------------------------------------
-; Pass-1 INST handler: just advance PASS_PC.  The reader has already
-; advanced IN_POS past this record's payload (see reader.asm:147), so
-; there is no operand walking to do.
+; Pass-1 INST handler.  Two responsibilities:
+;
+;   1. PASS_PC += 4 (one aarch64 instruction).
+;   2. If the instruction is `ldr Xn|Wn, =<expr>` (mnemonic 5 with an
+;      OpLitPool operand), register a literal-pool slot via
+;      litpool_scan_inst_record.  All other mnemonics fall straight
+;      through — the scanner short-circuits on mnemonic_id != 5.
+;
+; The reader has already advanced IN_POS past this record's payload
+; (reader.asm:147), so we can scan HL→payload non-destructively.
+;
+; Note: litpool_scan_inst_record reads PASS_PC for the inst_pc field of
+; the pc-map.  We MUST scan BEFORE advancing PASS_PC.
 ; -----------------------------------------------------------------------
 main_handle_inst_pass1:
+                push    hl
+                call    litpool_scan_inst_record
+                pop     hl
                 call    pass_pc_advance_4
                 jp      walk_records
 
@@ -1124,6 +1195,8 @@ main_handle_directive_pass1:
                 jp      z, main_dir_equ_pass1
                 cp      DIR_ORG
                 jp      z, main_dir_org_pass1
+                cp      DIR_LTORG
+                jp      z, main_dir_ltorg
 
                 call    compute_directive_size      ; result → BC (size, 16-bit)
                 ld      d, b
@@ -1178,6 +1251,8 @@ main_handle_directive_pass2:
                 jp      z, main_dir_align_emit
                 cp      DIR_ORG
                 jp      z, main_dir_org_pass2
+                cp      DIR_LTORG
+                jp      z, main_dir_ltorg
                 jp      fail
 
 
@@ -1236,6 +1311,8 @@ compute_directive_size:
                 jp      z, compute_dir_size_balign
                 cp      DIR_ALIGN
                 jp      z, compute_dir_size_align
+                cp      DIR_LTORG
+                jp      z, compute_dir_size_zero    ; flush is PC-side; size 0
                 jp      fail
 
 compute_dir_size_zero:
@@ -1714,6 +1791,22 @@ main_dir_org_emit_loop:
                 pop     bc
                 dec     bc
                 jr      main_dir_org_emit_loop
+
+; ---- .ltorg — flush the literal pool (both passes) -------------------
+;
+; Pass 1: advance PASS_PC by sum(pending pool entry sizes), recording
+;         each slot's entry_pc.  No emit.
+; Pass 2: same alignment / PC accounting + emit pool bytes.
+;
+; The litpool_flush helper checks PASS_MODE internally and does the
+; right thing.  Both passes follow `walk_records` so a single shared
+; handler suffices.
+;
+; Mac-side reference: refenc/pass1.go:171-172 + refenc/pass2.go:96-100.
+main_dir_ltorg:
+                call    litpool_flush
+                jp      walk_records
+
 
 ; PASS_PC := expr_result.  Shared by pass-1 and pass-2 .org tails.
 main_dir_org_set_pc:

@@ -65,6 +65,15 @@ PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
 ; Rt1, Rt2, [mem] for ldp/stp) so a single 8-byte slot suffices.
 OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
 
+; M5 PR-E scratch: literal-pool data structures (see src/m3/litpool.asm).
+;   &D200..&D3BF  LITPOOL_TABLE       (32 slots × 14 bytes = 448 B)
+;   &D3C0..&D47F  LITPOOL_PC_MAP      (32 entries × 6 bytes = 192 B)
+;   &D480         LITPOOL_COUNT       (1 byte)
+;   &D481         LITPOOL_PCM_COUNT   (1 byte)
+;   &D482..&D485  LITPOOL_SAVED_PC    (4 bytes)
+; Total: 646 bytes (&D200..&D485 inclusive).  Remaining &D486..&FFFF
+; (~11 KB) free for expr-eval stack and future use.
+
 
                 org     &8000
 
@@ -97,6 +106,7 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
                 include "main_loop.asm"
                 include "symbols.asm"
                 include "local_labels.asm"
+                include "litpool.asm"
 
                 include "print.asm"
 
@@ -165,6 +175,7 @@ if defined(BUILD_TESTS)
                 call    run_extended_reg_self_tests
                 call    run_mem_self_tests
                 call    run_sysname_self_tests
+                call    run_litpool_self_tests
 endif
 
 ; -- Install the section-B HLOAD trampoline.  Must happen BEFORE
@@ -259,5 +270,6 @@ if defined(BUILD_TESTS)
                 include "test_extended_reg.asm"
                 include "test_mem.asm"
                 include "test_sysname.asm"
+                include "test_litpool.asm"
                 include "test_trampoline.asm"
 endif
