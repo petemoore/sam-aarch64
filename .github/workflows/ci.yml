@@ -191,6 +191,14 @@ jobs:
           sleep 1
           echo "DISPLAY=:99" >> "$GITHUB_ENV"
 
+      # Inside the dev container, the checked-out repo is owned by the
+      # host UID; git refuses to operate on dirs owned by "other" users
+      # by default, and `go build` then fails with "error obtaining VCS
+      # status: exit status 128".  Mark the work tree safe before any
+      # Go build step.
+      - name: Mark workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Run M3 fixture corpus
         run: make ci-m3
 
