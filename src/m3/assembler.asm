@@ -187,6 +187,7 @@ if defined(BUILD_TESTS)
                 call    run_mem_self_tests
                 call    run_sysname_self_tests
                 call    run_litpool_self_tests
+                call    run_emit_paged_self_tests
 endif
 
 ; -- Install the section-B HLOAD trampoline.  Must happen BEFORE
@@ -283,4 +284,5 @@ if defined(BUILD_TESTS)
                 include "test_sysname.asm"
                 include "test_litpool.asm"
                 include "test_trampoline.asm"
+                include "test_emit_paged.asm"
 endif

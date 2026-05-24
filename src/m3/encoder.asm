@@ -418,12 +418,14 @@ encoder_load_imm_bcde:
 ;       section B maps to page 5 (= LMPR_ENCTAB + 1) for free.  Write
 ;       lands directly with no LMPR change.
 ;   High zone (OUT_ZONE = 1; OUT bytes 16384..32767):
-;       Bracket the write with `in a,(251)` to snapshot the current
-;       LMPR (= LMPR_ENCTAB at the call site), `out (251), LMPR_OUT_HIGH`
+;       Bracket the write with `in a,(250)` to snapshot the current
+;       LMPR (= LMPR_ENCTAB at the call site), `out (250), LMPR_OUT_HIGH`
 ;       to put page 6 in section B, write, then restore the snapshot.
 ;       Reading LMPR live (rather than hard-coding LMPR_ENCTAB on the
 ;       restore) keeps us correct against the boot-time top-bits in
 ;       LMPR_DEFAULT_RUNTIME (see assembler.asm:142, trampoline.asm).
+;       (Port 250 = LMPR, port 251 = HMPR per SAM Coupé Tech Manual
+;       §6.10 and the existing trampoline / enctab_map_in usage.)
 ;
 ; OUT_PC walks &4000..&7FFF; when it hits &8000 we flip OUT_ZONE to 1
 ; and wrap OUT_PC back to &4000.  A second wrap (i.e. OUT_LEN reaching
@@ -451,17 +453,19 @@ emit_byte:
                 jr      emit_byte_advance
 
 ; ----- High zone — bracket the store with LMPR=LMPR_OUT_HIGH ---------
+; Port 250 is LMPR (sections A+B); port 251 is HMPR (sections C+D).
+; The OUT buffer is reached via section B so we touch LMPR only.
 emit_byte_high:
-                in      a, (251)
+                in      a, (250)
                 ld      (emit_lmpr_save), a
                 ld      a, LMPR_OUT_HIGH
-                out     (251), a
+                out     (250), a
                 pop     de
                 pop     bc
                 pop     af                  ; A = byte
                 ld      (hl), a             ; section B = page 6 under &25
                 ld      a, (emit_lmpr_save)
-                out     (251), a            ; restore LMPR_ENCTAB
+                out     (250), a            ; restore LMPR_ENCTAB
                 ; fall through; A is dead beyond this point
 
 ; ----- Common tail: advance OUT_PC, handle zone boundary, bump LEN ----
