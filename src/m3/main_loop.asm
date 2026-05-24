@@ -470,7 +470,21 @@ main_handle_inst_parse_loop:
                 jp      z, main_parse_mem
                 cp      OP_KIND_SYS_NAME
                 jp      z, main_parse_sys_name
-; Anything else (STRING, LIT_POOL) is M5 PR-D Task 14 / PR-E territory.
+; OpString (0x09) as an instruction operand: defensive error path.
+;
+; No current fixture routes an OpString through this code path.  The
+; text2bin parser only emits OpString inside *directive* records
+; (.ascii / .asciz / .section flags) — see parser.go:127-131, where
+; the operand-parser routes TokString to a directive-only branch.
+; But the on-disk format permits any operand kind in any record kind,
+; so a corrupted / fuzzed / future-protocol .tbn could legitimately
+; place an OpString record here.  Explicit jp fail prevents that from
+; silently producing garbage bytes (the previous fall-through to
+; `jp fail` worked but lumped STRING in with LIT_POOL; this gives
+; STRING its own clearly-named branch for clarity).  M5 PR-D Task 14.
+                cp      OP_KIND_STRING
+                jp      z, fail
+; OP_KIND_LIT_POOL (0x0C) is M5 PR-E territory.
                 jp      fail
 
 
