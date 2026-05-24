@@ -166,6 +166,73 @@ run_slot_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &00, &c8, &00, &00  ; 0x0000C800 LE
 
+; -- encode_branch_imm(BranchImm26{BP=0,BW=26}, 0) => 0x00000000 -------
+; Mirrors slots_branch_test.go::TestEncodeBranchImm26 (first sub-case).
+; Wide signed-operand convention (see slots/branch_imm.asm header):
+;   HL = slot pointer, BCDE = signed 32-bit byteOffset big-endian.
+;   byteOffset = 0 → BC=&0000, DE=&0000.
+                ld      hl, slot_branch26_bp0_bw26
+                ld      bc, &0000
+                ld      de, &0000
+                call    encode_branch_imm
+                call    assert_eq32_de_hl_imm
+                defb    &00, &00, &00, &00  ; 0x00000000 LE
+
+; -- encode_branch_imm(BranchImm26{BP=0,BW=26}, +4) => 0x00000001 ------
+; byteOffset = +4 → instrOffset = +1 → bits = 1.
+                ld      hl, slot_branch26_bp0_bw26
+                ld      bc, &0000
+                ld      de, &0004
+                call    encode_branch_imm
+                call    assert_eq32_de_hl_imm
+                defb    &01, &00, &00, &00  ; 0x00000001 LE
+
+; -- encode_branch_imm(BranchImm26{BP=0,BW=26}, -4) => 0x03FFFFFF ------
+; byteOffset = -4 → instrOffset = -1 → masked to 26 bits = 0x03FFFFFF.
+                ld      hl, slot_branch26_bp0_bw26
+                ld      bc, &ffff
+                ld      de, &fffc
+                call    encode_branch_imm
+                call    assert_eq32_de_hl_imm
+                defb    &ff, &ff, &ff, &03  ; 0x03FFFFFF LE
+
+; -- encode_branch_imm(BranchImm26{BP=0,BW=26}, +0x07FFFFFC=max) -------
+;    => instrOffset = 0x01FFFFFF = (1<<25)-1
+; byteOffset = 134217724 = 0x07FFFFFC → BC=&07ff, DE=&fffc.
+                ld      hl, slot_branch26_bp0_bw26
+                ld      bc, &07ff
+                ld      de, &fffc
+                call    encode_branch_imm
+                call    assert_eq32_de_hl_imm
+                defb    &ff, &ff, &ff, &01  ; 0x01FFFFFF LE
+
+; -- encode_branch_imm(BranchImm19{BP=5,BW=19}, +8) => 0x40 ------------
+; instrOffset = 2 → 2 << 5 = 0x40.
+                ld      hl, slot_branch19_bp5_bw19
+                ld      bc, &0000
+                ld      de, &0008
+                call    encode_branch_imm
+                call    assert_eq32_de_hl_imm
+                defb    &40, &00, &00, &00  ; 0x00000040 LE
+
+; -- encode_branch_imm(BranchImm19{BP=5,BW=19}, -4) => 0x00FFFFE0 -----
+; instrOffset = -1 → masked to 19 bits = 0x7FFFF, << 5 = 0x00FFFFE0.
+                ld      hl, slot_branch19_bp5_bw19
+                ld      bc, &ffff
+                ld      de, &fffc
+                call    encode_branch_imm
+                call    assert_eq32_de_hl_imm
+                defb    &e0, &ff, &ff, &00  ; 0x00FFFFE0 LE
+
+; -- encode_branch_imm(BranchImm14{BP=5,BW=14}, +4) => 0x20 ------------
+; instrOffset = +1 → 1 << 5 = 0x20.
+                ld      hl, slot_branch14_bp5_bw14
+                ld      bc, &0000
+                ld      de, &0004
+                call    encode_branch_imm
+                call    assert_eq32_de_hl_imm
+                defb    &20, &00, &00, &00  ; 0x00000020 LE
+
 ; All assertions passed.
                 ret
 
@@ -239,6 +306,9 @@ assert_eq32_de_hl_imm:
 ;   Imm16Shifted = 0x11
 ;   ShiftAmount  = 0x12
 ;   ExtendOp     = 0x13
+;   BranchImm26  = 0x20
+;   BranchImm19  = 0x21
+;   BranchImm14  = 0x22
 ;
 ; expected_kind is set to 0 here: the encoders do not consult it
 ; (text2bin uses it earlier in the pipeline).
@@ -253,3 +323,6 @@ slot_shamt_bp10_bw6:    defb    &12, 0, 10, 6
 slot_imm12_bp10_bw12:   defb    &10, 0, 10, 12
 slot_imm16_bp5_bw16:    defb    &11, 0, 5, 16
 slot_extop_bp10_bw6:    defb    &13, 0, 10, 6
+slot_branch26_bp0_bw26: defb    &20, 0,  0, 26
+slot_branch19_bp5_bw19: defb    &21, 0,  5, 19
+slot_branch14_bp5_bw14: defb    &22, 0,  5, 14
