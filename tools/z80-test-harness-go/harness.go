@@ -197,6 +197,11 @@ type Hardware struct {
 	trigPC   uint16
 	trigHit  bool
 	trigRegs RegSnapshot
+	// trigDumpAddrs: logical addresses to snapshot (via Get, honouring
+	// current paging) when trigPC is first reached.  Results in trigDump.
+	trigDumpAddrs []uint16
+	trigDumpLen   int
+	trigDump      map[uint16][]byte
 	trigBT   []uint16
 	trigStep uint64
 
@@ -480,6 +485,12 @@ type Config struct {
 	// first time PC == TrigPC) and TrigBacktrace (the 200-PC ring at that
 	// moment).  Useful for "who jumped into fail?".
 	TrigPC uint16
+
+	// TrigDumpAddrs/TrigDumpLen: logical addresses to read (honouring the
+	// paging state at the trigger) for TrigDumpLen bytes each, captured the
+	// moment TrigPC is reached.  Surfaces in TrigResult.Dump.
+	TrigDumpAddrs []uint16
+	TrigDumpLen   int
 }
 
 // TrigResult holds the state captured when Config.TrigPC was first reached.
@@ -488,6 +499,7 @@ type TrigResult struct {
 	Regs       RegSnapshot
 	Backtrace  []uint16
 	StepAtTrig uint64
+	Dump       map[uint16][]byte
 }
 
 // RunConfig is the full-control entry point.  It returns the Result plus the
@@ -496,12 +508,15 @@ func RunConfig(cfg Config) (Result, []RegSnapshot, TrigResult) {
 	hw := newHardware()
 	hw.traceLo, hw.traceHi = cfg.TraceLo, cfg.TraceHi
 	hw.trigPC = cfg.TrigPC
+	hw.trigDumpAddrs = cfg.TrigDumpAddrs
+	hw.trigDumpLen = cfg.TrigDumpLen
 	res := runOn(hw, cfg.AssemblerBin, cfg.EnctabData, cfg.InData, cfg.Files, cfg.Timeout)
 	return res, hw.windowTrace, TrigResult{
 		Hit:        hw.trigHit,
 		Regs:       hw.trigRegs,
 		Backtrace:  hw.trigBT,
 		StepAtTrig: hw.trigStep,
+		Dump:       hw.trigDump,
 	}
 }
 
@@ -723,6 +738,16 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 			hw.trigRegs = hw.snapshot()
 			hw.trigBT = hw.last200PC()
 			hw.trigStep = steps
+			if len(hw.trigDumpAddrs) > 0 {
+				hw.trigDump = make(map[uint16][]byte)
+				for _, a := range hw.trigDumpAddrs {
+					b := make([]byte, hw.trigDumpLen)
+					for i := 0; i < hw.trigDumpLen; i++ {
+						b[i] = hw.Get(a + uint16(i))
+					}
+					hw.trigDump[a] = b
+				}
+			}
 		}
 		// Detect the &0038 garbage-trap spin (PC stuck in fake-ROM 0xFF land).
 		if cpu.PC == 0x0038 {

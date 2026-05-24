@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -24,6 +25,10 @@ func main() {
 	timeoutStr := flag.String("timeout", "10s", "wall-clock timeout per run")
 	testMemPath := flag.String("test-mem", "", "path to off-axis test_mem.bin (BUILD_TESTS variant; page 13)")
 	p14Path := flag.String("p14", "", "path to paged_call_test_payload.bin (BUILD_TESTS variant; page 14)")
+	sysregDataPath := flag.String("sysreg-data", "", "path to sysreg_data.bin (prod feature; CODE file \"sd13\"; page 13)")
+	trigStr := flag.String("trig", "", "trigger-PC (hex, e.g. AED6): capture register snapshot + 200-PC backtrace the first time PC reaches this address")
+	dumpStr := flag.String("dump", "", "comma-separated hex logical addresses to hex-dump at the trigger (requires -trig)")
+	dumpLenFlag := flag.Int("dump-len", 16, "bytes to dump per -dump address")
 	flag.Parse()
 
 	if *assemblerPath == "" || *enctabPath == "" || *inPath == "" {
@@ -67,9 +72,48 @@ func main() {
 		}
 		files = append(files, NamedFile{Name: "p14", Content: data, TargetPage: 14})
 	}
+	if *sysregDataPath != "" {
+		data, err := os.ReadFile(*sysregDataPath)
+		if err != nil {
+			log.Fatalf("read sysreg-data: %v", err)
+		}
+		// SAMDOS catalogue name is "sd13" (src/m3/loader.asm name_sysreg_data).
+		files = append(files, NamedFile{Name: "sd13", Content: data, TargetPage: 13})
+	}
+
+	var trigPC uint16
+	if *trigStr != "" {
+		v, err := strconv.ParseUint(*trigStr, 16, 16)
+		if err != nil {
+			log.Fatalf("invalid -trig %q: %v", *trigStr, err)
+		}
+		trigPC = uint16(v)
+	}
+
+	var dumpAddrs []uint16
+	dumpLen := 0
+	if *dumpStr != "" {
+		dumpLen = *dumpLenFlag
+		for _, s := range splitCSV(*dumpStr) {
+			v, err := strconv.ParseUint(s, 16, 16)
+			if err != nil {
+				log.Fatalf("invalid -dump addr %q: %v", s, err)
+			}
+			dumpAddrs = append(dumpAddrs, uint16(v))
+		}
+	}
 
 	start := time.Now()
-	result := RunWithFiles(assemblerBin, enctabData, inData, files, timeout)
+	result, _, trig := RunConfig(Config{
+		AssemblerBin:  assemblerBin,
+		EnctabData:    enctabData,
+		InData:        inData,
+		Files:         files,
+		Timeout:       timeout,
+		TrigPC:        trigPC,
+		TrigDumpAddrs: dumpAddrs,
+		TrigDumpLen:   dumpLen,
+	})
 	elapsed := time.Since(start)
 
 	fmt.Printf("Exit:    %s\n", result.ExitReason)
@@ -79,6 +123,30 @@ func main() {
 	fmt.Printf("Steps:   %d\n", result.Steps)
 	fmt.Printf("Regs:    %s\n", result.FaultRegs)
 	fmt.Printf("Last PC: %04X\n", lastPCMain(result.Last200PC))
+
+	if trigPC != 0 {
+		if trig.Hit {
+			fmt.Printf("\n=== TRIGGER PC %04X hit at step %d ===\n", trigPC, trig.StepAtTrig)
+			fmt.Printf("Regs at trigger: %s\n", trig.Regs)
+			fmt.Printf("Backtrace (last 40 PCs before trigger, oldest first):\n")
+			bt := trig.Backtrace
+			s := len(bt) - 40
+			if s < 0 {
+				s = 0
+			}
+			for i, pc := range bt[s:] {
+				fmt.Printf("  [%3d] %04X\n", i, pc)
+			}
+			if len(trig.Dump) > 0 {
+				fmt.Printf("Memory dump at trigger:\n")
+				for _, a := range dumpAddrs {
+					fmt.Printf("  &%04X: %s\n", a, hex.EncodeToString(trig.Dump[a]))
+				}
+			}
+		} else {
+			fmt.Printf("\n=== TRIGGER PC %04X never reached ===\n", trigPC)
+		}
+	}
 
 	if result.Passed {
 		fmt.Println("PASS")
@@ -95,6 +163,25 @@ func main() {
 		}
 		os.Exit(1)
 	}
+}
+
+func splitCSV(s string) []string {
+	var out []string
+	cur := ""
+	for _, r := range s {
+		if r == ',' {
+			if cur != "" {
+				out = append(out, cur)
+			}
+			cur = ""
+		} else if r != ' ' {
+			cur += string(r)
+		}
+	}
+	if cur != "" {
+		out = append(out, cur)
+	}
+	return out
 }
 
 func lastPCMain(pcs []uint16) uint16 {
