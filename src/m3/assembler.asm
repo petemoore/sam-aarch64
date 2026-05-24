@@ -272,10 +272,31 @@ if defined(BUILD_TESTS)
                 ld      a, (LMPR_DEFAULT_RUNTIME)
                 out     (250), a
 
+; -- Load the sysreg lookup data into page 13 (PR-2).  In the test
+; variant this must happen AFTER the test_mem off-axis self-tests above
+; (which used page 13 as the test_mem payload) and BEFORE
+; run_sysname_self_tests / run_sysreg_paged_self_tests below (which read
+; the tables via paged_call).  Page 13 is overwritten: test_mem is fully
+; consumed by run_mem_self_tests above, so the overwrite is safe.  See
+; loader.asm::load_page13_payload header for the ordering contract.
+                call    load_page13_payload
+                call    run_sysreg_paged_self_tests
+
                 call    run_sysname_self_tests
                 call    run_litpool_self_tests
                 call    run_emit_paged_self_tests
 endif
+
+; -- Load the sysreg lookup data into page 13 (PRODUCTION path, and a
+; redundant-but-harmless reload in the test variant).  In a production
+; build the BUILD_TESTS block above is #ifdef'd out entirely, so this
+; unconditional call is the ONLY place page 13 gets the sysreg data.
+; In the test variant the block above already loaded it before the
+; sysreg self-tests; reloading the same bytes here is idempotent.  We
+; keep this unconditional (rather than `if defined(BUILD_TESTS)==0`,
+; which pyz80 doesn't parse) for simplicity — the extra HLOAD costs a
+; few ms at boot only.  Must run before main_assemble's first lookup.
+                call    load_page13_payload
 
 ; -- Load and validate enctab.enc header --------------------------------
 ; load_enctab uses the trampoline to land the file in physical page 4
@@ -436,6 +457,7 @@ if defined(BUILD_TESTS)
                 include "test_emit_paged.asm"
                 include "test_reader_paged.asm"
                 include "test_paged_call.asm"
+                include "test_sysreg_paged.asm"
 endif
 
 ; -- paged_call body source ---------------------------------------------
