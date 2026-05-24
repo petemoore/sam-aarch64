@@ -43,7 +43,7 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 		for _, i := range fours {
 			e := p1.PoolEntries[i]
 			ctx := makeCtx(e.EvalPC, p1, f)
-			v, err := enc.Eval(e.Expr, ctx)
+			v, err := EvalUsage(e.Expr, ctx, usage)
 			if err != nil {
 				return fmt.Errorf("pool entry @ pc=0x%x: %w", e.PC, err)
 			}
@@ -60,7 +60,7 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 		for _, i := range eights {
 			e := p1.PoolEntries[i]
 			ctx := makeCtx(e.EvalPC, p1, f)
-			v, err := enc.Eval(e.Expr, ctx)
+			v, err := EvalUsage(e.Expr, ctx, usage)
 			if err != nil {
 				return fmt.Errorf("pool entry @ pc=0x%x: %w", e.PC, err)
 			}
@@ -108,7 +108,7 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 				or := format.NewOperandReader(rec.Operands)
 				o, _ := or.Next()
 				ctx := makeCtx(pc, p1, f)
-				target, err := enc.Eval(o.Expr, ctx)
+				target, err := EvalUsage(o.Expr, ctx, usage)
 				if err != nil {
 					return nil, fmt.Errorf(".org: %w", err)
 				}
@@ -342,7 +342,7 @@ func operandsToValues(ops []format.Operand, pc int64, p1 *Pass1Result, f *format
 		case format.OpRegX, format.OpRegW, format.OpRegXSP, format.OpRegWSP:
 			out = append(out, enc.OperandValue{Reg: o.Reg})
 		case format.OpImmExpr:
-			v, err := enc.Eval(o.Expr, ctx)
+			v, err := EvalUsage(o.Expr, ctx, usage)
 			if err != nil {
 				return nil, err
 			}
@@ -438,7 +438,7 @@ func alignPadBytes(pc, pad int64) []byte {
 func tryEncodeMovImm(operands []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, bool, error) {
 	rd := operands[0]
 	ctx := makeCtx(pc, p1, f)
-	imm, err := enc.Eval(operands[1].Expr, ctx)
+	imm, err := EvalUsage(operands[1].Expr, ctx, usage)
 	if err != nil {
 		return 0, false, err
 	}
@@ -509,7 +509,7 @@ func encodeLdrLitDirect(operands []format.Operand, pc int64, p1 *Pass1Result, f 
 	rt := operands[0]
 	target := operands[1]
 	ctx := makeCtx(pc, p1, f)
-	v, err := enc.Eval(target.Expr, ctx)
+	v, err := EvalUsage(target.Expr, ctx, usage)
 	if err != nil {
 		return 0, fmt.Errorf("ldr (literal): %w", err)
 	}
@@ -557,7 +557,7 @@ func encodeTbzTbnz(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 		return 0, fmt.Errorf("tbz/tbnz: operand 1 must be immediate, operand 2 must be label")
 	}
 	ctx := makeCtx(pc, p1, f)
-	bit, err := enc.Eval(bitOp.Expr, ctx)
+	bit, err := EvalUsage(bitOp.Expr, ctx, usage)
 	if err != nil {
 		return 0, fmt.Errorf("tbz/tbnz bit: %w", err)
 	}
@@ -567,7 +567,7 @@ func encodeTbzTbnz(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 	if rt.Kind == format.OpRegW && bit > 31 {
 		return 0, fmt.Errorf("tbz/tbnz: bit %d > 31 with W register", bit)
 	}
-	target, err := enc.Eval(labelOp.Expr, ctx)
+	target, err := EvalUsage(labelOp.Expr, ctx, usage)
 	if err != nil {
 		return 0, fmt.Errorf("tbz/tbnz label: %w", err)
 	}
@@ -763,7 +763,7 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 		var byteOffset int64
 		if mem.MemShape == format.MemBaseOff {
 			ctx := makeCtx(pc, p1, f)
-			v, err := enc.Eval(mem.Expr, ctx)
+			v, err := EvalUsage(mem.Expr, ctx, usage)
 			if err != nil {
 				return 0, err
 			}
@@ -791,7 +791,7 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 		// bits 11:10 = 11 (pre-index)
 		base := (sizeBits << 30) | vfpMid | (opc << 22) | (uint32(3) << 10)
 		ctx := makeCtx(pc, p1, f)
-		v, err := enc.Eval(mem.Expr, ctx)
+		v, err := EvalUsage(mem.Expr, ctx, usage)
 		if err != nil {
 			return 0, err
 		}
@@ -806,7 +806,7 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 		// LDR/STR (immediate, post-index): bits 11:10 = 01
 		base := (sizeBits << 30) | vfpMid | (opc << 22) | (uint32(1) << 10)
 		ctx := makeCtx(pc, p1, f)
-		v, err := enc.Eval(mem.Expr, ctx)
+		v, err := EvalUsage(mem.Expr, ctx, usage)
 		if err != nil {
 			return 0, err
 		}
@@ -889,7 +889,7 @@ func encodeUnscaledMemInst(mnemonicID uint16, rtOp format.Operand, rt byte, mem 
 		byteOffset = 0
 	case format.MemBaseOff:
 		ctx := makeCtx(pc, p1, f)
-		v, err := enc.Eval(mem.Expr, ctx)
+		v, err := EvalUsage(mem.Expr, ctx, usage)
 		if err != nil {
 			return 0, err
 		}
@@ -946,7 +946,7 @@ func encodePairInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *
 		modeBits = 0b10 // signed offset
 	case format.MemBaseOff:
 		ctx := makeCtx(pc, p1, f)
-		v, err := enc.Eval(mem.Expr, ctx)
+		v, err := EvalUsage(mem.Expr, ctx, usage)
 		if err != nil {
 			return 0, err
 		}
@@ -954,7 +954,7 @@ func encodePairInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *
 		modeBits = 0b10 // signed offset
 	case format.MemBaseOffPre:
 		ctx := makeCtx(pc, p1, f)
-		v, err := enc.Eval(mem.Expr, ctx)
+		v, err := EvalUsage(mem.Expr, ctx, usage)
 		if err != nil {
 			return 0, err
 		}
@@ -962,7 +962,7 @@ func encodePairInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *
 		modeBits = 0b11 // pre-index
 	case format.MemBaseOffPost:
 		ctx := makeCtx(pc, p1, f)
-		v, err := enc.Eval(mem.Expr, ctx)
+		v, err := EvalUsage(mem.Expr, ctx, usage)
 		if err != nil {
 			return 0, err
 		}
@@ -1033,7 +1033,7 @@ func encodeShiftedRegInst(mnemonicID uint16, operands []format.Operand, pc int64
 	}
 
 	ctx := makeCtx(pc, p1, f)
-	amt, err := enc.Eval(sr.AmtExpr, ctx)
+	amt, err := EvalUsage(sr.AmtExpr, ctx, usage)
 	if err != nil {
 		return 0, fmt.Errorf("shift amount: %w", err)
 	}
@@ -1143,7 +1143,7 @@ func encodeExtendedRegInst(mnemonicID uint16, operands []format.Operand, pc int6
 	var amt int64
 	if len(er.AmtExpr) > 0 {
 		var err error
-		amt, err = enc.Eval(er.AmtExpr, ctx)
+		amt, err = EvalUsage(er.AmtExpr, ctx, usage)
 		if err != nil {
 			return 0, fmt.Errorf("extend amount: %w", err)
 		}
@@ -1225,7 +1225,7 @@ func encodeLSLSR(mnemonicID uint16, operands []format.Operand, pc int64, p1 *Pas
 	}
 
 	ctx := makeCtx(pc, p1, f)
-	shift, err := enc.Eval(immOp.Expr, ctx)
+	shift, err := EvalUsage(immOp.Expr, ctx, usage)
 	if err != nil {
 		return 0, fmt.Errorf("lsl/lsr shift: %w", err)
 	}
@@ -1303,11 +1303,11 @@ func encodeBitfieldInst(mnemonicID uint16, operands []format.Operand, pc int64, 
 	}
 
 	ctx := makeCtx(pc, p1, f)
-	lsb, err := enc.Eval(lsbOp.Expr, ctx)
+	lsb, err := EvalUsage(lsbOp.Expr, ctx, usage)
 	if err != nil {
 		return 0, fmt.Errorf("bitfield lsb: %w", err)
 	}
-	width, err := enc.Eval(widthOp.Expr, ctx)
+	width, err := EvalUsage(widthOp.Expr, ctx, usage)
 	if err != nil {
 		return 0, fmt.Errorf("bitfield width: %w", err)
 	}
@@ -1389,7 +1389,7 @@ func encodeBicImm(operands []format.Operand, pc int64, p1 *Pass1Result, f *forma
 	immOp := operands[2]
 
 	ctx := makeCtx(pc, p1, f)
-	imm, err := enc.Eval(immOp.Expr, ctx)
+	imm, err := EvalUsage(immOp.Expr, ctx, usage)
 	if err != nil {
 		return 0, fmt.Errorf("bic-imm: %w", err)
 	}
@@ -1468,7 +1468,7 @@ func encodeRorImm(operands []format.Operand, pc int64, p1 *Pass1Result, f *forma
 		return 0, fmt.Errorf("ror imm: operand 2 must be an immediate")
 	}
 	ctx := makeCtx(pc, p1, f)
-	shift, err := enc.Eval(immOp.Expr, ctx)
+	shift, err := EvalUsage(immOp.Expr, ctx, usage)
 	if err != nil {
 		return 0, fmt.Errorf("ror imm shift: %w", err)
 	}
@@ -1511,7 +1511,7 @@ func encodeBarrierInst(mnemonicID uint16, operands []format.Operand, pc int64, p
 		return 0, fmt.Errorf("barrier: operand 0 must be an immediate")
 	}
 	ctx := makeCtx(pc, p1, f)
-	crm, err := enc.Eval(operands[0].Expr, ctx)
+	crm, err := EvalUsage(operands[0].Expr, ctx, usage)
 	if err != nil {
 		return 0, fmt.Errorf("barrier CRm: %w", err)
 	}
@@ -1590,7 +1590,7 @@ func encodeMsr(operands []format.Operand, pc int64, p1 *Pass1Result, f *format.F
 			return 0, fmt.Errorf("msr (immediate): unknown PSTATE field %q", name)
 		}
 		ctx := makeCtx(pc, p1, f)
-		imm, err := enc.Eval(operands[1].Expr, ctx)
+		imm, err := EvalUsage(operands[1].Expr, ctx, usage)
 		if err != nil {
 			return 0, fmt.Errorf("msr (immediate): %w", err)
 		}
@@ -1733,7 +1733,7 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 		// mirrors GNU as's behaviour in `.text` sections.
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
-		align, err := enc.Eval(o.Expr, ctx)
+		align, err := EvalUsage(o.Expr, ctx, usage)
 		if err != nil {
 			return nil, fmt.Errorf(".balign: %w", err)
 		}
@@ -1748,7 +1748,7 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 		// aarch64 GNU as convention: `.align N` aligns to 2^N bytes.
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
-		n, err := enc.Eval(o.Expr, ctx)
+		n, err := EvalUsage(o.Expr, ctx, usage)
 		if err != nil {
 			return nil, fmt.Errorf(".align: %w", err)
 		}
@@ -1763,7 +1763,7 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 	case ".skip", ".space":
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
-		v, err := enc.Eval(o.Expr, ctx)
+		v, err := EvalUsage(o.Expr, ctx, usage)
 		if err != nil {
 			return nil, fmt.Errorf(".skip: %w", err)
 		}
@@ -1780,7 +1780,7 @@ func evalImmsAsBytes(rec format.Record, ctx enc.EvalContext, size int) ([]byte, 
 		if err != nil {
 			return nil, err
 		}
-		v, err := enc.Eval(o.Expr, ctx)
+		v, err := EvalUsage(o.Expr, ctx, usage)
 		if err != nil {
 			return nil, err
 		}
