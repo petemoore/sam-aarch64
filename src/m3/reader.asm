@@ -229,9 +229,15 @@ reader_next_kind_copy_byte:
                                              ; (Z80 datasheet, LDI flag effects)
 
 reader_next_kind_no_payload:
-; HL points one past the last payload byte (possibly past &3FFF if the
-; record ended exactly on a page boundary — handled by the loop's
-; renorm).  Persist back to cursor then restore LMPR_ENCTAB.
+; HL points one past the last payload byte.  If the record ended
+; exactly on a page boundary (or no payload was copied past the
+; 3-byte header that may itself have hit &3FFE..&4001), HL may be
+; >= &4000.  Renormalise before persisting so the cursor reaches a
+; canonical (page, [0, &4000)) form.  Without this, a subsequent
+; reader_at_end could compare cursor=(N, &4000) vs end=(N+1, 0) —
+; semantically equal but byte-wise different — and falsely report
+; "not at end", causing an infinite loop in walk_records.
+                call    in_normalise_hl
                 call    in_persist_hl
                 call    enctab_map_in        ; LMPR back to LMPR_ENCTAB
 
