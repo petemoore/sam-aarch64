@@ -32,9 +32,11 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 				eights = append(eights, i)
 			}
 		}
-		// Pad to 4 if needed before 4-byte literals.
-		if len(fours) > 0 && pc%4 != 0 {
-			padN := 4 - (pc % 4)
+		// Pad to 4 if needed before 4-byte literals. Use unsigned
+		// modulus so high-VMA pc (negative as int64) produces the
+		// correct remainder (see pass1.flushPool for the same fix).
+		if len(fours) > 0 && uint64(pc)%4 != 0 {
+			padN := int64(4 - (uint64(pc) % 4))
 			out = append(out, make([]byte, padN)...)
 			pc += padN
 		}
@@ -50,8 +52,8 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 			out = append(out, buf[:]...)
 			pc += 4
 		}
-		if len(eights) > 0 && pc%8 != 0 {
-			padN := 8 - (pc % 8)
+		if len(eights) > 0 && uint64(pc)%8 != 0 {
+			padN := int64(8 - (uint64(pc) % 8))
 			out = append(out, make([]byte, padN)...)
 			pc += padN
 		}
@@ -249,6 +251,26 @@ func encodeInst(rec format.Record, pc int64, p1 *Pass1Result, f *format.File) (u
 		}
 	}
 
+	// MOV imm autoselect: GNU as picks the smallest single-instruction
+	// encoding for `mov Rd, #imm` — movz/movn/orr-imm. For values
+	// that fit in movz with shift {0,16,32,48} the standard mov-via-
+	// movz form table entry handles it (with encodeImm16Shifted
+	// auto-selecting the shift). For ~imm that fits in 16 bits at
+	// some shift, GNU emits movn. For other values that are logical
+	// immediates, GNU emits `orr Rd, XZR, #imm`. We mirror those
+	// fallbacks here so e.g. `mov w1, #0xffffffff` encodes as
+	// `movn w1, #0` not `movz w1, #0xffff` (truncating).
+	movID, _ := format.MnemonicID("mov")
+	if rec.MnemonicID == movID && len(operands) == 2 &&
+		(operands[0].Kind == format.OpRegX || operands[0].Kind == format.OpRegW) &&
+		operands[1].Kind == format.OpImmExpr {
+		if w, ok, err := tryEncodeMovImm(operands, pc, p1, f); ok {
+			return w, nil
+		} else if err != nil {
+			return 0, err
+		}
+	}
+
 	// LDR (literal) direct-label form: `ldr Xt, label` or `ldr Wt, label`
 	// (no `=`). Encodes as PC-relative 19-bit immediate; the label IS
 	// the target. Distinct from `ldr Xt, =expr` (literal-pool slot).
@@ -365,6 +387,119 @@ func operandsToValues(ops []format.Operand, pc int64, p1 *Pass1Result, f *format
 // ---------------------------------------------------------------------------
 // LDR literal-pool pseudo-instruction
 // ---------------------------------------------------------------------------
+
+// alignPadBytes returns the byte sequence used to pad an alignment
+// directive in `.text`. When both the current PC and the padding
+// length are 4-byte multiples, the pad is filled with `nop`
+// (0xd503201f) — matching GNU as's behaviour in `.text` sections.
+// Otherwise the leading non-aligned bytes are zero-filled and the
+// 4-aligned tail (if any) is NOPs.
+//
+// For now the current pipeline emits everything into a single
+// implicit `.text` section, so this is the right behaviour for all
+// alignment directives we see. If we later carry section type in
+// the record stream, this should consult that (`.data`/BSS pad with
+// zeros, `.text` pads with NOPs).
+func alignPadBytes(pc, pad int64) []byte {
+	if pad <= 0 {
+		return nil
+	}
+	const nop = uint32(0xd503201f)
+	// Zero-fill leading bytes until PC is 4-aligned.
+	out := make([]byte, 0, pad)
+	cur := pc
+	rem := pad
+	for rem > 0 && uint64(cur)%4 != 0 {
+		out = append(out, 0)
+		cur++
+		rem--
+	}
+	for rem >= 4 {
+		var buf [4]byte
+		binary.LittleEndian.PutUint32(buf[:], nop)
+		out = append(out, buf[:]...)
+		rem -= 4
+		cur += 4
+	}
+	for rem > 0 {
+		out = append(out, 0)
+		rem--
+	}
+	return out
+}
+
+// tryEncodeMovImm attempts to encode `mov Rd, #imm` using the
+// single-instruction movz / movn / orr-imm fallbacks that GNU as
+// picks when the bare value doesn't fit a 16-bit slot. Returns
+// (word, true, nil) if a one-instruction encoding was found,
+// (0, false, nil) when no encoding works (caller falls through to the
+// generic form table, which may also fail), or (_, _, err) on a hard
+// error (e.g. malformed expression).
+func tryEncodeMovImm(operands []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, bool, error) {
+	rd := operands[0]
+	ctx := makeCtx(pc, p1, f)
+	imm, err := enc.Eval(operands[1].Expr, ctx)
+	if err != nil {
+		return 0, false, err
+	}
+	is64 := rd.Kind == format.OpRegX
+	u := uint64(imm)
+	if !is64 {
+		u &= 0xffffffff
+	}
+	// 1. Direct movz: value is one 16-bit chunk in any slot.
+	for shift := uint(0); shift < 64; shift += 16 {
+		if !is64 && shift >= 32 {
+			break
+		}
+		chunk := (u >> shift) & 0xffff
+		if chunk<<shift == u {
+			hw := uint32(shift / 16)
+			var base uint32
+			if is64 {
+				base = 0xd2800000
+			} else {
+				base = 0x52800000
+			}
+			return base | (hw << 21) | (uint32(chunk) << 5) | uint32(rd.Reg), true, nil
+		}
+	}
+	// 2. movn: ~value is one 16-bit chunk in any slot. For W, the
+	//    inverted-mask covers only the low 32 bits.
+	nu := ^u
+	if !is64 {
+		nu &= 0xffffffff
+	}
+	for shift := uint(0); shift < 64; shift += 16 {
+		if !is64 && shift >= 32 {
+			break
+		}
+		chunk := (nu >> shift) & 0xffff
+		if chunk<<shift == nu {
+			hw := uint32(shift / 16)
+			var base uint32
+			if is64 {
+				base = 0x92800000 // movn x
+			} else {
+				base = 0x12800000 // movn w
+			}
+			return base | (hw << 21) | (uint32(chunk) << 5) | uint32(rd.Reg), true, nil
+		}
+	}
+	// 3. ORR-immediate (logical immediate): mov Rd, #imm aliases to
+	//    `orr Rd, XZR, #imm` when imm is a valid logical-imm pattern.
+	slot := enc.OperandSlot{SlotKind: enc.LogicalImm, BitPosition: 10, BitWidth: 13}
+	if bits, lerr := enc.EncodeLogicalImmPub(slot, imm, is64); lerr == nil {
+		var base uint32
+		if is64 {
+			base = 0xb20003e0 // orr Xd, XZR, #imm
+		} else {
+			base = 0x320003e0 // orr Wd, WZR, #imm
+		}
+		return base | bits | uint32(rd.Reg), true, nil
+	}
+	return 0, false, nil
+}
 
 // encodeLdrLitDirect encodes the direct PC-relative literal-load form
 // `ldr Xt, label` (no `=`). The label IS the target; the encoded
@@ -1565,11 +1700,22 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 	case ".ascii":
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
-		return o.Str, nil
+		// Copy o.Str: OperandReader returns a view into the source
+		// buffer; returning that slice directly is fine, but any
+		// caller-side append would overwrite subsequent records.
+		out := make([]byte, len(o.Str))
+		copy(out, o.Str)
+		return out, nil
 	case ".asciz":
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
-		return append(o.Str, 0), nil
+		// Append the terminating NUL into a fresh slice to avoid
+		// mutating the underlying record buffer (the original cause
+		// of subsequent directives being misread — issue surfaced
+		// during M3 release-build byte-match).
+		out := make([]byte, len(o.Str)+1)
+		copy(out, o.Str)
+		return out, nil
 	case ".text", ".data", ".global", ".equ", ".set":
 		return nil, nil
 	case ".section":
@@ -1581,7 +1727,10 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 		// encoding time — see pass1 sizeOfRecord for rationale.
 		return nil, nil
 	case ".balign":
-		// Round PC up to next multiple of alignment, emitting zero bytes.
+		// Round PC up to next multiple of alignment. In .text the
+		// padding bytes are NOP (0xd503201f) instructions when both
+		// the current PC and the pad length are 4-byte aligned —
+		// mirrors GNU as's behaviour in `.text` sections.
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
 		align, err := enc.Eval(o.Expr, ctx)
@@ -1591,8 +1740,10 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 		if align <= 1 {
 			return nil, nil
 		}
-		pad := (align - (pc % align)) % align
-		return make([]byte, pad), nil
+		ua := uint64(align)
+		up := uint64(pc)
+		pad := int64((ua - (up % ua)) % ua)
+		return alignPadBytes(pc, pad), nil
 	case ".align":
 		// aarch64 GNU as convention: `.align N` aligns to 2^N bytes.
 		or := format.NewOperandReader(rec.Operands)
@@ -1605,8 +1756,10 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 			return nil, nil
 		}
 		align := int64(1) << uint64(n)
-		pad := (align - (pc % align)) % align
-		return make([]byte, pad), nil
+		ua := uint64(align)
+		up := uint64(pc)
+		pad := int64((ua - (up % ua)) % ua)
+		return alignPadBytes(pc, pad), nil
 	case ".skip", ".space":
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()

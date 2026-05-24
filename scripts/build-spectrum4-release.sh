@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# build-spectrum4-release.sh — reproducibly build spectrum4's release.img
+# from sources using our toolchain, then compare against the GNU oracle.
+#
+# Pipeline:
+#
+#   1. Build text2bin and refenc binaries.
+#   2. text2bin -flatten release.target → release.tbn
+#         (flatten step folds spectrum4's linker script + section layout
+#          into a single linear record stream; see flatten.go for the
+#          layout encoded in this pass.)
+#   3. refenc release.tbn → release.bin (our spectrum4.img).
+#   4. Build the GNU oracle (release.gnu.img) for byte-match comparison.
+#   5. cmp release.bin release.gnu.img — exit 0 on match, non-zero on
+#      mismatch (with a brief summary).
+#
+# This script assumes:
+#   - aarch64-none-elf-{as,ld,objcopy} are on PATH (binutils ≥ 2.45).
+#   - The spectrum4 source tree lives at ~/git/spectrum4/src/spectrum4
+#     (overridable via SPECTRUM4_SRC).
+#
+# Usage:  scripts/build-spectrum4-release.sh
+# Output: build/release.bin and (on success) "BYTE-MATCH OK"
+#         build/release.gnu.img is left for inspection.
+
+set -euo pipefail
+
+SAMDIR="${SAMDIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+SPECTRUM4_SRC="${SPECTRUM4_SRC:-$HOME/git/spectrum4/src/spectrum4}"
+BUILD="${SAMDIR}/build"
+
+if [[ ! -d "$SPECTRUM4_SRC" ]]; then
+    echo "spectrum4 source not found at $SPECTRUM4_SRC" >&2
+    echo "set SPECTRUM4_SRC to override" >&2
+    exit 2
+fi
+
+mkdir -p "$BUILD"
+
+# 1. Build tools.
+echo "[1/5] Building text2bin and refenc..."
+make -C "$SAMDIR" text2bin refenc >/dev/null
+
+# 2. Run text2bin -flatten on release.target.
+echo "[2/5] text2bin -flatten release.target → release.tbn"
+"$BUILD/text2bin" -flatten \
+    -I "$SPECTRUM4_SRC" \
+    -I "$SPECTRUM4_SRC/kernel" \
+    -I "$SPECTRUM4_SRC/roms" \
+    -I "$SPECTRUM4_SRC/tests" \
+    -I "$SPECTRUM4_SRC/demo" \
+    -I "$SPECTRUM4_SRC/libextra" \
+    -origin 0xfffffff000000000 \
+    -o "$BUILD/release.tbn" \
+    "$SPECTRUM4_SRC/targets/release.target"
+
+# 3. Run refenc to produce release.bin.
+echo "[3/5] refenc release.tbn → release.bin"
+"$BUILD/refenc" -o "$BUILD/release.bin" "$BUILD/release.tbn"
+echo "       $(wc -c <"$BUILD/release.bin") bytes"
+
+# 4. Build the GNU oracle.
+echo "[4/5] Building GNU oracle release.gnu.img..."
+GNUTMP="$(mktemp -d)"
+trap 'rm -rf "$GNUTMP"' EXIT
+aarch64-none-elf-as \
+    -I "$SPECTRUM4_SRC" \
+    -I "$SPECTRUM4_SRC/kernel" \
+    -I "$SPECTRUM4_SRC/roms" \
+    -I "$SPECTRUM4_SRC/tests" \
+    -I "$SPECTRUM4_SRC/demo" \
+    -I "$SPECTRUM4_SRC/libextra" \
+    -o "$GNUTMP/release.o" \
+    "$SPECTRUM4_SRC/targets/release.target"
+
+# Link without cortex-a53 errata workarounds first; those workarounds
+# insert NOPs at specific instruction patterns and would be a deferred
+# concern if our output matches the no-errata oracle.
+aarch64-none-elf-ld \
+    --no-warn-rwx-segments \
+    -T "$SPECTRUM4_SRC/kernel/spectrum4.ld" \
+    -o "$GNUTMP/release.elf" \
+    "$GNUTMP/release.o"
+
+aarch64-none-elf-objcopy "$GNUTMP/release.elf" -O binary "$BUILD/release.gnu.img"
+echo "       $(wc -c <"$BUILD/release.gnu.img") bytes"
+
+# 5. Compare.
+echo "[5/5] cmp release.bin release.gnu.img"
+if cmp -s "$BUILD/release.bin" "$BUILD/release.gnu.img"; then
+    echo
+    echo "BYTE-MATCH OK"
+    exit 0
+fi
+
+echo
+echo "BYTE-MATCH MISMATCH — first differing bytes:"
+cmp -l "$BUILD/release.bin" "$BUILD/release.gnu.img" | head -10 || true
+echo
+echo "       our size: $(wc -c <"$BUILD/release.bin") bytes"
+echo "       gnu size: $(wc -c <"$BUILD/release.gnu.img") bytes"
+exit 1

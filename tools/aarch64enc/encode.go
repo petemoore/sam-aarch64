@@ -38,12 +38,31 @@ func encodeSlot(slot OperandSlot, v OperandValue, is64 bool) (uint32, error) {
 	case Imm12Shifted:
 		return encodeImm12Shifted(slot, v.Imm)
 	case Imm16Shifted:
-		// hw (shift selector) is an internal field. For MOV (= MOVZ), hw is
-		// fixed to 0 in the pattern. For MOVK, the parser encodes the hw value
-		// into bits [17:16] of the immediate constant (see parseMovk in text2bin).
-		// Extract hw from bits [17:16] and imm16 from bits [15:0].
+		// hw (shift selector) is an internal field. For MOV (= MOVZ),
+		// hw is fixed to 0 in the pattern but a single-arg `mov Rd, #imm`
+		// should still work for any constant that fits in one of the
+		// movz slots (lsl #0 / #16 / #32 / #48). MOVK / MOVZ / MOVN
+		// callers encode hw into bits [17:16] of the immediate so the
+		// extraction below selects the requested slot.
+		//
+		// If bits [17:16] are zero (the default for an un-annotated
+		// `mov`) and the value's lower 16 bits don't cover the full
+		// constant, try each higher-shift slot to find a single-movz
+		// fit. This mirrors GNU as's behaviour of auto-selecting the
+		// shift for one-instruction `mov` aliases.
 		hw := byte((v.Imm >> 16) & 0x3)
 		imm16 := v.Imm & 0xffff
+		if hw == 0 && (v.Imm < 0 || v.Imm > 0xffff) {
+			u := uint64(v.Imm)
+			for shift := uint(0); shift < 64; shift += 16 {
+				chunk := (u >> shift) & 0xffff
+				if chunk<<shift == u {
+					hw = byte(shift / 16)
+					imm16 = int64(chunk)
+					break
+				}
+			}
+		}
 		return encodeImm16Shifted(slot, imm16, hw)
 	case ShiftAmount:
 		return encodeShiftAmount(slot, v.Imm)

@@ -1236,15 +1236,19 @@ func (p *parser) parseMem(ow *format.OperandWriter) error {
 
 	if p.cur().Kind == TokRBracket {
 		p.pos++
-		// Post-index? `[base], #imm`
-		if p.cur().Kind == TokComma && p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokHash {
-			p.pos++ // ,
-			expr, err := p.parseExpression()
-			if err != nil {
-				return err
+		// Post-index? `[base], #imm` or `[base], imm` (GNU accepts both).
+		if p.cur().Kind == TokComma && p.pos+1 < len(p.toks) {
+			next := p.toks[p.pos+1].Kind
+			if next == TokHash || next == TokInt || next == TokMinus ||
+				next == TokIdent || next == TokLParen {
+				p.pos++ // ,
+				expr, err := p.parseExpression()
+				if err != nil {
+					return err
+				}
+				ow.WriteMemBaseOff(format.MemBaseOffPost, base, expr)
+				return nil
 			}
-			ow.WriteMemBaseOff(format.MemBaseOffPost, base, expr)
-			return nil
 		}
 		ow.WriteMemBase(base)
 		return nil

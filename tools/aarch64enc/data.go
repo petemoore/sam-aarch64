@@ -75,13 +75,19 @@ var generatedForms = []Form{
 	}},
 
 	// mov (ID 3) — alias for add Rd, Rn, #0 (2-register)
-	{MnemonicID: 3, Pattern: 0x11000000, Mask: 0xfffffc00, Slots: []OperandSlot{
+	// mov Rd, Rm — ORR Rd, ZR, Rm (ARM ARM C6.2.130 "MOV (register)").
+	// 32-bit: 0x2a0003e0 | (Rm<<16) | Rd  (Rn=11111 baked).
+	// 64-bit: 0xaa0003e0 | (Rm<<16) | Rd.
+	// This is GNU as's preferred encoding for register-to-register
+	// mov; the earlier ADD-imm-#0 form is also a valid mov-alias but
+	// differs from GNU's choice, so byte-match builds require ORR.
+	{MnemonicID: 3, Pattern: 0x2a0003e0, Mask: 0xffe0ffe0, Slots: []OperandSlot{
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
-		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5},
 	}},
-	{MnemonicID: 3, Pattern: 0x91000000, Mask: 0xfffffc00, Slots: []OperandSlot{
+	{MnemonicID: 3, Pattern: 0xaa0003e0, Mask: 0xffe0ffe0, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
-		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},
 	}},
 	// mov Xd, SP / mov SP, Xn — ADD immediate #0 with SP operand (ARM ARM C6.2.128).
 	// Pattern: 0x91000000 (64-bit ADD imm #0). XregOrSp in destination or source.
@@ -589,8 +595,8 @@ var generatedForms = []Form{
 
 	// umulh (ID 61) — Unsigned Multiply High. ARM ARM C6.2.301.
 	// sf=1, 00, 11011, 110, Rm, Ra=00000, Rn, Rd
-	// Pattern: 0x9bc00000, Mask: 0xffe0fc00
-	{MnemonicID: 61, Pattern: 0x9bc00000, Mask: 0xffe0fc00, Slots: []OperandSlot{
+	// Pattern: 0x9bc07c00 (bits 14:10 = 11111 baked for Ra=XZR alias).
+	{MnemonicID: 61, Pattern: 0x9bc07c00, Mask: 0xffe0fc00, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},  // Xd
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},  // Xn
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5}, // Xm
