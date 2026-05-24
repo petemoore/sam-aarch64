@@ -228,6 +228,7 @@ endif
 ; failure is reported before we waste time on the assemble loop).
 if defined(BUILD_TESTS)
                 call    run_trampoline_self_tests
+                call    run_reader_paged_self_tests
 endif
 
 ; -- Run the assemble: pass 1 (table build) + pass 2 (emit) -----------
@@ -303,4 +304,5 @@ if defined(BUILD_TESTS)
                 include "test_litpool.asm"
                 include "test_trampoline.asm"
                 include "test_emit_paged.asm"
+                include "test_reader_paged.asm"
 endif
