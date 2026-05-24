@@ -442,8 +442,9 @@ main_handle_inst_parse_loop:
                 jr      z, main_parse_cond
                 cp      OP_KIND_SHIFTED_REG
                 jp      z, main_parse_shifted_reg
-; Anything else (EXTENDED_REG, MEM, STRING, SYS_NAME, LIT_POOL) is M5
-; PR-C+ territory.
+                cp      OP_KIND_EXTENDED_REG
+                jp      z, main_parse_extended_reg
+; Anything else (MEM, STRING, SYS_NAME, LIT_POOL) is M5 PR-C+ territory.
                 jp      fail
 
 
@@ -552,7 +553,41 @@ main_parse_shifted_reg:
                 inc     hl
                 ld      (de), a             ; +3 = shift_kind
                 inc     de
-                ; fall through into main_parse_amt_expr_tail
+                jp      main_parse_amt_expr_tail
+
+
+; ---- Parse OpExtendedReg (0x07) — `Rm, <extend> #amt` ------------------
+;
+; On entry: kind byte (0x07) is already at OPVAL[+0]; DE points at +1.
+;
+; Payload (per tools/sam-aarch64-format/operands.go:164-168,
+; WriteExtendedReg):
+;   [width u8][reg u8][extend u8][amt_expr_len u16][amt_expr bytes...]
+;
+; amt_expr may be empty (no `#N` suffix); main_parse_amt_expr_tail
+; handles len=0 by storing amt=0.
+;
+; In-memory layout (10 bytes):
+;   +0 kind=0x07    +1 width    +2 reg    +3 extend
+;   +4..+7 amt low-32 LE        +8..+9 padding
+;
+; The encoder (src/m3/slots/extended_reg.asm) consumes only the low
+; byte for the imm3 shift amount (0..4 valid per ARM ARM).
+main_parse_extended_reg:
+                ld      a, (hl)             ; width
+                inc     hl
+                ld      (de), a             ; +1
+                inc     de
+                ld      a, (hl)             ; reg
+                inc     hl
+                ld      (de), a             ; +2
+                inc     de
+                ld      a, (hl)             ; extend
+                inc     hl
+                ld      (de), a             ; +3
+                inc     de
+                ; fall through into main_parse_amt_expr_tail (shared with
+                ; OpShiftedReg).
 
 
 ; ---- main_parse_amt_expr_tail — shared amt_expr evaluator ----------------

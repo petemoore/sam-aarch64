@@ -59,19 +59,38 @@ try_intercept_post_ror:
                 cp      46                  ; tst → 2-operand path
                 jp      z, try_intercept_tst
 
-; 3-operand mnemonics: must have op_count=3, op2 = ShiftedReg or plain
+; 3-operand mnemonics: op_count=3 required.  Then operand 2 selects the
+; encoder: ShiftedReg → shifted-reg encoder; ExtendedReg (add/sub only)
+; → extended-reg encoder; 3 plain GPRs → coerce to LSL #0 then encode.
                 ld      a, (main_op_count)
                 cp      3
                 jp      nz, try_intercept_post_shift
                 ld      a, (OPVAL_KINDS + 2)
                 cp      OP_KIND_SHIFTED_REG
                 jp      z, try_intercept_shifted_dispatch
+                cp      OP_KIND_EXTENDED_REG
+                jp      z, try_intercept_extended_dispatch
 ; 3-plain-GPR coerce?
                 call    operands012_all_plain_gpr
                 jp      nz, try_intercept_post_shift
                 ld      a, 2
                 call    coerce_op_to_lsl0
                 jp      try_intercept_shifted_dispatch
+
+try_intercept_extended_dispatch:
+; ExtendedReg only valid for add (1) / sub (2).  encode_extended_reg_word
+; already enforces this, but reject up-front anything else so we fall
+; through to form lookup (which will then fail cleanly).
+                ld      a, (try_intercept_mnem)
+                cp      1
+                jr      z, try_intercept_ext_call
+                cp      2
+                jp      nz, try_intercept_post_shift
+try_intercept_ext_call:
+                call    encode_extended_reg_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
 
 try_intercept_tst:
                 ld      a, (main_op_count)
