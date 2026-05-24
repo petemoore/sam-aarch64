@@ -579,12 +579,22 @@ paged_call:           ; lives in section B at TRAMPOLINE_DST + N
     push    hl                  ; trailer pops first (target's RET lands here)
     push    de                  ; target — final RET jumps to it
 
+    ; HMPR bits 5-7 are mode-3 CLUT + ext-mem (sam-paging.md:140-150)
+    ; and must NOT be clobbered.  Caller-supplied A may have those bits
+    ; clear (most call sites just embed a page number) — mask the page
+    ; bits in over the entry HMPR's CLUT bits.
+    ld      hl, paged_call_hmpr_save
+    and     %00011111            ; keep page bits only from caller-supplied A
+    ld      e, a
+    ld      a, (hl)              ; A = entry HMPR
+    and     %11100000            ; keep CLUT + ext-mem bits
+    or      e                    ; combine: caller-page | entry-CLUT
     out     (251), a            ; HMPR := target → section C = target page
     ret                         ; → DE = target_addr_in_C
 
 paged_call_trailer:           ; in section B, fetched stably across HMPR change
     ld      a, (paged_call_hmpr_save)
-    out     (251), a            ; restore caller's HMPR
+    out     (251), a            ; restore caller's HMPR (full byte, CLUT preserved)
     ld      sp, (paged_call_sp_save)
     ; NB: don't EI — caller chose DI state; we restore it via the
     ; existing convention (M3 runs DI throughout). If editor / Phase 2
@@ -882,9 +892,9 @@ documentation), medium PR.
   paged_data_map_hmpr / ldir / call paged_data_unmap_hmpr` per
   §4.2.
 - Add the 8 missing sysreg entries (`hcr_el2`, `mair_el1`, `scr_el3`,
-  `spsr_el3`, `tcr_el1`, `ttbr0_el1`, `tcr_el1`, `ttbr1_el1`,
-  `vbar_el1`) — comes "for free" because we're no longer constrained
-  by the test-variant `&C200` ceiling.
+  `spsr_el3`, `tcr_el1`, `ttbr0_el1`, `ttbr1_el1`, `vbar_el1`) —
+  comes "for free" because we're no longer constrained by the
+  test-variant `&C200` ceiling.
 - Verify the test-variant binary tail returns to `&C10F` (or wherever
   it was pre-FAIL00) once the tables are gone.
 
@@ -1007,9 +1017,29 @@ asm refactors), medium PR.
    helper MUST mask through `TSURPG`-equivalent logic, or the retro
    palette glitches every time we touch a paged data page. Brainstorm
    doc §6.5 (`memory-layout-brainstorm.md:108`) already flagged this.
-   **PR 1's helper must preserve HMPR bits 5-7 (CLUT + external-mem)
-   across the swap** — same discipline as the existing
+   **PR 1's helper preserves HMPR bits 5-7 (CLUT + external-mem)
+   across the swap** — see §3.3 handler pseudocode, which masks
+   `target_hmpr` to bits 0-4 only and OR-s in bits 5-7 from the saved
+   entry HMPR. Inline-byte payloads at call sites should embed just
+   the page number (low 5 bits clear of the CLUT mask); the helper
+   reconstructs the full byte. Same discipline as the existing
    `trampoline_body` does via `in a, (251)` capture + restore.
+
+8. **Cross-file addressing convention for PR 2.** When `sysname.asm`
+   calls into `paged_call` for sysreg_table lookup, the call sites
+   need `(target_addr_in_section_C, target_hmpr)` constants — and
+   those constants should be defined ONCE, not hardcoded per site.
+   Define them in `src/m3/trampoline.asm` (or a new
+   `src/m3/paged_data_constants.asm`) alongside `LMPR_ENCTAB`,
+   `LMPR_OUT_HIGH`, `LMPR_IN_BASE`, e.g.:
+   ```
+   PAGED_PAGE_DISASM_AUX:   equ     13
+   HMPR_DISASM_AUX:         equ     PAGED_PAGE_DISASM_AUX        ; bits 5-7 added by helper
+   SYSREG_TABLE_PAGED_ADDR: equ     &8000                        ; offset within page 13
+   ```
+   Avoiding hardcoded `&8000`/`&2D` per call site means a layout
+   change is a single-file edit. Verification subagent's risk
+   callout — apply during PR 2.
 
 6. **Music IRQ interaction**: if we ever EI during a paged_call
    window, the IRQ's section-C fetch sees the target page, not ROM0
