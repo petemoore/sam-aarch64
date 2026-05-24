@@ -308,6 +308,55 @@ run_mem_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &e0, &07, &40, &a9
 
+; ===================== Task 10: signed loads ==========================
+
+; -- (13) ldrsw x0, [x1]            →  0xb9800020 (signed-load Xt) -----
+                call    test_mem_wipe
+                ld      a, OP_KIND_REG_X
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                ld      a, OP_KIND_MEM
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
+                xor     a                   ; shape = MemBase
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+                ld      a, 1
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2), a
+                ld      a, 87               ; mnem = ldrsw
+                call    encode_mem_word
+                call    assert_eq32_de_hl_imm
+                defb    &20, &00, &80, &b9
+
+; -- (14) ldrsb x0, [x1]            →  0x39800020 (signed-load byte, Xt)
+                call    test_mem_wipe
+                ld      a, OP_KIND_REG_X
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                ld      a, OP_KIND_MEM
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
+                xor     a
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+                ld      a, 1
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2), a
+                ld      a, 85               ; mnem = ldrsb
+                call    encode_mem_word
+                call    assert_eq32_de_hl_imm
+                defb    &20, &00, &80, &39
+
+; -- (15) ldrsh w0, [x1, #4]        →  0x79c00820 (signed-load hword,Wt)
+                call    test_mem_wipe
+                ld      a, OP_KIND_REG_W
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                ld      a, OP_KIND_MEM
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
+                ld      a, 1                ; shape = MemBaseOff
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+                ld      a, 1
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2), a
+                ld      a, 4
+                ld      (OPMEM_OFF + 0), a
+                ld      a, 86               ; mnem = ldrsh
+                call    encode_mem_word
+                call    assert_eq32_de_hl_imm
+                defb    &20, &08, &c0, &79
+
                 ret
 
 
