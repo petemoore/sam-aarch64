@@ -5,11 +5,12 @@
 // test is a fast inner-loop check that the test variant boots clean.
 //
 // Requires the BUILD_TESTS artefacts:
-//   build/assembler.bin                  (make m3-asm)
-//   build/test_mem.bin                   (make test-mem-offaxis)
-//   build/paged_call_test_payload.bin    (make paged-call-payload)
-//   build/enctab.enc                     (make enctab)
-//   build/text2bin                       (make text2bin)
+//
+//	build/assembler.bin                  (make m3-asm)
+//	build/test_mem.bin                   (make test-mem-offaxis)
+//	build/paged_call_test_payload.bin    (make paged-call-payload)
+//	build/enctab.enc                     (make enctab)
+//	build/text2bin                       (make text2bin)
 //
 // Skipped automatically if build/assembler.bin is absent.
 package main
@@ -78,6 +79,13 @@ func TestVariantBootSelfTests(t *testing.T) {
 	if !res.Passed {
 		t.Fatalf("test variant boot self-tests did not pass: printer=%q exit=%q regs=%s",
 			res.PrinterCapture, res.ExitReason, res.FaultRegs)
+	}
+	// The regression guard below is only meaningful if execution actually
+	// entered the reader-test window; an empty trace would let it pass
+	// vacuously (e.g. if a future layout moved the routine out of the
+	// window).  Fail loudly rather than rot into a no-op.
+	if len(trace) == 0 {
+		t.Fatal("reader-test window [BE00,C000) never entered — regression guard is not exercising the target routine")
 	}
 	// Regression guard for the PR #42 failure mode: the boot stack at
 	// &C100 must never collide with code executing below &C000.

@@ -17,34 +17,34 @@
 //
 // # Memory layout (mirrors src/m3/assembler.asm)
 //
-//   Section A (&0000-&3FFF): fake ROM (RST 8 stub at &0008) or ENCTAB page
-//   Section B (&4000-&7FFF): page 1 (BASIC sys page + trampoline copy)
-//   Section C (&8000-&BFFF): assembler code (page 2 = HMPR_DEFAULT low-5)
-//   Section D (&C000-&FFFF): scratch / stack (page 3 = HMPR_DEFAULT+1)
+//	Section A (&0000-&3FFF): fake ROM (RST 8 stub at &0008) or ENCTAB page
+//	Section B (&4000-&7FFF): page 1 (BASIC sys page + trampoline copy)
+//	Section C (&8000-&BFFF): assembler code (page 2 = HMPR_DEFAULT low-5)
+//	Section D (&C000-&FFFF): scratch / stack (page 3 = HMPR_DEFAULT+1)
 //
-//   Physical page 4:   ENCTAB (paged into section A via LMPR_ENCTAB = &24)
-//   Physical pages 5-6: OUT buffer (written by assembler)
-//   Physical pages 7-12: IN .tbn (pre-deposited; read via LMPR brackets)
+//	Physical page 4:   ENCTAB (paged into section A via LMPR_ENCTAB = &24)
+//	Physical pages 5-6: OUT buffer (written by assembler)
+//	Physical pages 7-12: IN .tbn (pre-deposited; read via LMPR brackets)
 //
 // # RST 8 / SAMDOS hook interception
 //
 // The SAM Coupé ROM PTDOS sits at &0008 and dispatches SAMDOS hooks.  We
 // install a minimal fake ROM that:
 //
-//   &0008:  EX (SP),HL   ; HL = return addr (= DEFB byte address)
-//           LD A,(HL)    ; A = hook code
-//           INC HL       ; HL = addr after DEFB
-//           EX (SP),HL   ; (SP) = addr after DEFB; HL restored
-//           OUT (0xFD),A ; signal hook code to IO.Out
-//           RET          ; resume at addr after DEFB
+//	&0008:  EX (SP),HL   ; HL = return addr (= DEFB byte address)
+//	        LD A,(HL)    ; A = hook code
+//	        INC HL       ; HL = addr after DEFB
+//	        EX (SP),HL   ; (SP) = addr after DEFB; HL restored
+//	        OUT (0xFD),A ; signal hook code to IO.Out
+//	        RET          ; resume at addr after DEFB
 //
 // IO.Out(0xFD, hookCode) dispatches to per-hook handlers.  Hooks that the
 // assembler uses:
 //
-//   129 HGTHD — fake: populate &4B50+34 (pages) and &4B50+35-36 (length)
-//               for the IN file; enctab.enc uses hardcoded constants.
-//   130 HLOAD — no-op: data already pre-deposited in the target pages.
-//   132 HSAVE — capture: read OUT bytes from UIFA[31..36] + pages 5-6.
+//	129 HGTHD — fake: populate &4B50+34 (pages) and &4B50+35-36 (length)
+//	            for the IN file; enctab.enc uses hardcoded constants.
+//	130 HLOAD — no-op: data already pre-deposited in the target pages.
+//	132 HSAVE — capture: read OUT bytes from UIFA[31..36] + pages 5-6.
 //
 // Port &FA = LMPR (section A+B page selector)
 // Port &FB = HMPR (section C+D page selector; bits 5-7 = CLUT, preserved)
@@ -69,7 +69,7 @@ const (
 	numPages = 32
 
 	// Physical page allocations.
-	enctabPage = 4  // ENCTAB encoder table
+	enctabPage  = 4 // ENCTAB encoder table
 	outBasePage = 5 // first OUT buffer page (page 5 = low zone, page 6 = high)
 	inBasePage  = 7 // first IN .tbn page (up to 6 pages = pages 7..12)
 
@@ -162,13 +162,13 @@ type NamedFile struct {
 // at &4000 within the ROM slice), LMPR/HMPR paging, printer ports, and the
 // synthetic RST-8 hook dispatch port.
 type Hardware struct {
-	rom [romSize]byte
-	ram [numPages][pageSize]byte
+	rom  [romSize]byte
+	ram  [numPages][pageSize]byte
 	lmpr uint8
 	hmpr uint8
 
 	// Printer capture: bytes written to &E8 on each strobe-high.
-	printerBuf strings.Builder
+	printerBuf    strings.Builder
 	lastPrintData uint8
 
 	// Hook dispatch callback: called by IO.Out(portHookDispatch, code).
@@ -186,13 +186,6 @@ type Hardware struct {
 	files       map[string]*NamedFile
 	currentFile *NamedFile
 
-	// Optional stack-corruption watchpoint.  When watchSPLo<=addr<watchSPHi
-	// is written AND the write is NOT a CPU PUSH/CALL (i.e. an unexpected
-	// data write into the live stack region), record it.  Disabled when
-	// watchSPHi==0.
-	watchSPLo, watchSPHi uint16
-	stackWrites          []stackWrite
-
 	// Optional windowed PC trace.  When traceHi>traceLo, every step whose
 	// PC lies in [traceLo,traceHi) is appended (in order, unbounded) to
 	// windowTrace as a snapshot.  Lets us see the exact path through a
@@ -209,12 +202,6 @@ type Hardware struct {
 
 	// CPU back-reference (set after construction).
 	cpu *z80.CPU
-}
-
-type stackWrite struct {
-	addr  uint16
-	value uint8
-	pc    uint16
 }
 
 // snapshot captures the current CPU register file + paging state.
@@ -253,12 +240,13 @@ func newHardware() *Hardware {
 // installFakeROM writes the RST-8 intercept stub at &0008 in the fake ROM.
 //
 // The stub:
-//   E3       EX (SP),HL   ; HL = return addr (= DEFB-hook address); (SP) = old HL
-//   7E       LD A,(HL)    ; A = hook code
-//   23       INC HL       ; HL = addr after DEFB
-//   E3       EX (SP),HL   ; (SP) = addr after DEFB; HL restored
-//   D3 FD    OUT (0xFD),A ; dispatch to hook handler via IO.Out
-//   C9       RET          ; resume at addr after DEFB
+//
+//	E3       EX (SP),HL   ; HL = return addr (= DEFB-hook address); (SP) = old HL
+//	7E       LD A,(HL)    ; A = hook code
+//	23       INC HL       ; HL = addr after DEFB
+//	E3       EX (SP),HL   ; (SP) = addr after DEFB; HL restored
+//	D3 FD    OUT (0xFD),A ; dispatch to hook handler via IO.Out
+//	C9       RET          ; resume at addr after DEFB
 //
 // All other ROM bytes default to 0xFF (RST 0x38 in Z80 — never reached
 // in normal flow; treated as a trap if PC lands there).
@@ -274,7 +262,7 @@ func (h *Hardware) installFakeROM() {
 		0x23,       // INC HL
 		0xE3,       // EX (SP),HL
 		0xD3, 0xFD, // OUT (0xFD),A
-		0xC9,       // RET
+		0xC9, // RET
 	}
 	copy(h.rom[0x0008:], stub)
 }
@@ -285,10 +273,10 @@ func (h *Hardware) installFakeROM() {
 //
 // Memory map (SAM Coupé Tech Manual v3.0 §6.10, verbatim from basic-emulator-spike):
 //
-//   Section A (0x0000-0x3FFF): ROM 0 if LMPR bit5=0; else RAM page (LMPR & 0x1F)
-//   Section B (0x4000-0x7FFF): RAM page (LMPR & 0x1F + 1) mod 32; LMPR bit7=WPRAM (ignored)
-//   Section C (0x8000-0xBFFF): RAM page (HMPR & 0x1F)
-//   Section D (0xC000-0xFFFF): ROM 1 if LMPR bit6=1; else RAM page (HMPR & 0x1F + 1) mod 32
+//	Section A (0x0000-0x3FFF): ROM 0 if LMPR bit5=0; else RAM page (LMPR & 0x1F)
+//	Section B (0x4000-0x7FFF): RAM page (LMPR & 0x1F + 1) mod 32; LMPR bit7=WPRAM (ignored)
+//	Section C (0x8000-0xBFFF): RAM page (HMPR & 0x1F)
+//	Section D (0xC000-0xFFFF): ROM 1 if LMPR bit6=1; else RAM page (HMPR & 0x1F + 1) mod 32
 func (h *Hardware) resolveRead(addr uint16) (data uint8) {
 	offset := int(addr & 0x3FFF)
 	section := addr >> 14
@@ -324,14 +312,14 @@ func (h *Hardware) resolveWritePage(addr uint16) int {
 		}
 		return int(h.lmpr & 0x1F)
 	case 1:
-		return int((h.lmpr&0x1F+1) & 0x1F)
+		return int((h.lmpr&0x1F + 1) & 0x1F)
 	case 2:
 		return int(h.hmpr & 0x1F)
 	case 3:
 		if h.lmpr&0x40 != 0 {
 			return -1 // ROM 1 — drop
 		}
-		return int((h.hmpr&0x1F+1) & 0x1F)
+		return int((h.hmpr&0x1F + 1) & 0x1F)
 	}
 	return -1
 }
@@ -455,10 +443,10 @@ func (h *Hardware) readPageBytes(startPage int, offset int, length int) []byte {
 
 // Run executes the assembler until HALT or timeout.
 //
-//   assemblerBin: contents of assembler-prod.bin (loaded at &8000)
-//   enctabData:   contents of enctab.enc (pre-deposited in page 4)
-//   inData:       contents of a .tbn file (pre-deposited in pages 7-12)
-//   timeout:      wall-clock limit
+//	assemblerBin: contents of assembler-prod.bin (loaded at &8000)
+//	enctabData:   contents of enctab.enc (pre-deposited in page 4)
+//	inData:       contents of a .tbn file (pre-deposited in pages 7-12)
+//	timeout:      wall-clock limit
 //
 // Returns a Result describing the outcome.
 func Run(assemblerBin, enctabData, inData []byte, timeout time.Duration) Result {
@@ -496,10 +484,10 @@ type Config struct {
 
 // TrigResult holds the state captured when Config.TrigPC was first reached.
 type TrigResult struct {
-	Hit          bool
-	Regs         RegSnapshot
-	Backtrace    []uint16
-	StepAtTrig   uint64
+	Hit        bool
+	Regs       RegSnapshot
+	Backtrace  []uint16
+	StepAtTrig uint64
 }
 
 // RunConfig is the full-control entry point.  It returns the Result plus the
