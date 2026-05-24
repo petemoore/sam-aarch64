@@ -63,8 +63,10 @@ PASS_PASS2:     equ     2
                 include "reader.asm"
                 include "main_loop.asm"
                 include "symbols.asm"
+                include "local_labels.asm"
                 include "test_slots.asm"
                 include "test_symbols.asm"
+                include "test_local_labels.asm"
 
 ; -----------------------------------------------------------------------
 ; Main program — entry via jp from &8000.
@@ -89,6 +91,13 @@ start:
 ; hard-coded ids and addresses (no disk I/O).  On any mismatch: jp fail.
 ; See test_symbols.asm.
                 call    run_symbol_table_self_tests
+
+; -- Local-label table self-tests ---------------------------------------
+; Exercises local_label_table_init / local_def_append /
+; local_find_forward / local_find_backward against a hard-coded
+; per-digit PC list (no disk I/O).  On any mismatch: jp fail.
+; See test_local_labels.asm.
+                call    run_local_label_self_tests
 
 ; -- Load and validate enctab.enc header --------------------------------
                 call    load_enctab
