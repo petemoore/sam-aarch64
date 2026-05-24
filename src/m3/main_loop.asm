@@ -1884,6 +1884,29 @@ main_dir_equ_pass1:
                 ld      a, (expr_result + 3)
                 ld      (symbol_value_buf + 3), a
 
+; Classify origin-relative vs absolute: compare the evaluated high word
+; expr_result[4..7] against ORIGIN_HIGH.  Equal → origin-relative (e.g.
+; `.set FOO, some_label`); unequal → absolute constant (e.g.
+; `.set RAM_DISK_SIZE, 0x10000000`, high word 0).  Mark the absolute case
+; so eval_push_sym does NOT re-apply ORIGIN_HIGH to it.  See
+; assembler.asm SYMTAB_ABS_BITMAP.  (Faithful to Go where Symbols[name]
+; carries the full evaluated value with no eval-time origin fixup.)
+                ld      hl, expr_result + 4
+                ld      de, ORIGIN_HIGH
+                ld      b, 4
+main_dir_equ_high_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, main_dir_equ_mark_abs
+                inc     hl
+                inc     de
+                djnz    main_dir_equ_high_cmp
+                jr      main_dir_equ_do_insert      ; high == ORIGIN_HIGH → origin-relative
+main_dir_equ_mark_abs:
+                ld      hl, (main_dir_equ_pending_id)
+                call    symbol_mark_absolute
+main_dir_equ_do_insert:
+
 ; Insert (id, value) — duplicate id → symbol_insert does jp fail.
                 ld      hl, (main_dir_equ_pending_id)
                 call    symbol_insert

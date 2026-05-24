@@ -115,6 +115,16 @@ symbol_table_init_loop:
                 xor     a
                 ld      (symtab_overflow_count + 0), a
                 ld      (symtab_overflow_count + 1), a
+
+; Clear the per-id absolute-symbol bitmap (64 bytes, all origin-relative
+; by default).  See assembler.asm SYMTAB_ABS_BITMAP.
+                ld      hl, SYMTAB_ABS_BITMAP
+                ld      b, 64
+                xor     a
+symbol_table_init_abs_loop:
+                ld      (hl), a
+                inc     hl
+                djnz    symbol_table_init_abs_loop
                 ret
 
 
@@ -289,6 +299,56 @@ symbol_insert_populate_entry:
                 ld      (hl), a                     ; next_off MSB
                 ret
 
+
+; -----------------------------------------------------------------------
+; symbol_abs_bit_ptr — compute (HL=ptr to bitmap byte, A=mask) for id.
+;   In:  HL = symbol_id u16 (id < 512).
+;   Out: HL = SYMTAB_ABS_BITMAP + (id >> 3); A = 1 << (id & 7).
+;   Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+symbol_abs_bit_ptr:
+                ld      a, l
+                and     7                   ; A = id & 7
+                ld      b, a
+                inc     b                   ; rotate count = (id&7)+1
+                ld      a, 1
+symbol_abs_bit_ptr_rot:
+                rlca
+                djnz    symbol_abs_bit_ptr_rot
+                rrca                        ; A = 1 << (id & 7)
+                ld      c, a                ; C = mask
+; HL := id >> 3  (16-bit logical shift right by 3).
+                srl     h
+                rr      l
+                srl     h
+                rr      l
+                srl     h
+                rr      l
+                ld      de, SYMTAB_ABS_BITMAP
+                add     hl, de              ; HL = &bitmap[id>>3]
+                ld      a, c                ; A = mask
+                ret
+
+; -----------------------------------------------------------------------
+; symbol_mark_absolute — set the absolute bit for symbol id HL.
+;   In:  HL = symbol_id.  Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+symbol_mark_absolute:
+                call    symbol_abs_bit_ptr  ; HL=byte ptr, A=mask
+                or      (hl)
+                ld      (hl), a
+                ret
+
+; -----------------------------------------------------------------------
+; symbol_is_absolute — test the absolute bit for symbol id HL.
+;   In:  HL = symbol_id.
+;   Out: Z=0 (NZ) if absolute, Z=1 if origin-relative.
+;   Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+symbol_is_absolute:
+                call    symbol_abs_bit_ptr  ; HL=byte ptr, A=mask
+                and     (hl)                ; Z set iff bit clear (origin-rel)
+                ret
 
 ; -----------------------------------------------------------------------
 ; symbol_lookup — resolve symbol_id → address.

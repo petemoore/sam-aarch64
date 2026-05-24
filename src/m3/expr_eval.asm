@@ -567,10 +567,32 @@ eval_push_sym:
                 ld      a, (symbol_value_buf + 3)
                 ld      (hl), a
                 inc     hl                          ; HL → slot[4]
-; A symbol's value is origin-relative: re-apply the OriginVMA high word so
-; e.g. `.quad <label>` emits the full 64-bit address (low from the symtab
-; entry, high from ORIGIN_HIGH).  See eval_store_origin_high.
+; Reconstruct the high word.  Origin-relative symbols (labels, PC
+; snapshots, label-derived .set) get ORIGIN_HIGH re-applied so e.g.
+; `.quad <label>` emits the full 64-bit address; ABSOLUTE symbols (a
+; `.set`/`.equ` constant such as RAM_DISK_SIZE) get high word 0 — applying
+; ORIGIN_HIGH to those broke `mov x9, RAM_DISK_SIZE` (0xfffffff0_10000000
+; vs 0x10000000).  The per-id flag is set in main_dir_equ_pass1 by
+; comparing the evaluated high word against ORIGIN_HIGH.  See
+; assembler.asm SYMTAB_ABS_BITMAP.  Faithful to Go (tools/refenc:
+; Symbols[name] holds the full value, eval adds no origin — pass1.go:154,
+; pass1.go:296; pass2.go:150).
+                push    hl                          ; save slot[4] ptr
+                ld      hl, (eval_sym_operand)      ; HL = id
+                call    symbol_is_absolute          ; Z=1 origin-rel, NZ absolute
+                pop     hl                          ; HL = slot[4] ptr
+                jr      nz, eval_push_sym_zero_high
                 call    eval_store_origin_high      ; slot[4..7] := ORIGIN_HIGH
+                jp      eval_loop
+eval_push_sym_zero_high:
+                xor     a                           ; absolute → slot[4..7] := 0
+                ld      (hl), a
+                inc     hl
+                ld      (hl), a
+                inc     hl
+                ld      (hl), a
+                inc     hl
+                ld      (hl), a
                 jp      eval_loop
 
 

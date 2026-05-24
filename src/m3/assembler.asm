@@ -114,10 +114,38 @@ PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
 ; with pc seeded from OriginVMA; tools/refenc/pass2.go:18,148-152).
 ORIGIN_HIGH:    equ     &C960          ; 4 bytes — high word of OriginVMA (u32 LE)
 
+; SYMTAB_ABS_BITMAP — 1 bit per symbol id: 1 = the symbol is ABSOLUTE (its
+; full 64-bit value's high word is NOT the link origin's high word, i.e.
+; a `.set`/`.equ` constant such as RAM_DISK_SIZE=0x10000000); 0 = the
+; symbol is ORIGIN-RELATIVE (a label / PC snapshot / label-derived
+; expression whose high word is ORIGIN_HIGH).
+;
+; Why this exists: the SYMTAB entry stores only the LOW 32 bits of a
+; symbol's value.  eval_push_sym reconstructs the high word at use time.
+; For origin-relative symbols that word is ORIGIN_HIGH; for absolute
+; constants it is 0 (none of the release's .set/.equ constants exceed 32
+; bits — verified against spectrum4/src/spectrum4).  Blanket-applying
+; ORIGIN_HIGH (the Class-1 fix) was wrong for absolute constants:
+; e.g. `mov x9, RAM_DISK_SIZE` saw 0xfffffff0_10000000 instead of
+; 0x10000000, breaking the MOV single-chunk decomposition.
+;
+; The flag is DERIVED at definition from the evaluated high word: if a
+; symbol's expr_result[4..7] equals ORIGIN_HIGH it is origin-relative
+; (bit 0), else absolute (bit 1) — see main_dir_equ_pass1 / the label-def
+; path.  Faithful to the Go reference where Symbols[name] holds the FULL
+; value (tools/refenc/pass1.go:154 label=pc-from-OriginVMA;
+; pass1.go:296 .set/.equ = raw evaluated value) and eval adds nothing.
+;
+; 64 bytes cover ids 0..511 (release peak id 474).  RAM-only (no binary
+; cost).  Cleared by symbol_table_init.  Bit (id) lives at
+; SYMTAB_ABS_BITMAP + (id>>3), mask 1<<(id&7).
+SYMTAB_ABS_BITMAP: equ  &C964          ; 64 bytes — per-id absolute flag
+
 ; M4 scratch reservation (allocated by symbols.asm + local_labels.asm):
 ;   &C160-&C95F  SYMTAB              (256 buckets × 8 bytes = 2 KB)
 ;   &C960-&C963  ORIGIN_HIGH         (4 bytes — high word of OriginVMA)
-;   &C964-&CFFF  free (1692 B; old SYMTAB_OVERFLOW + old LOCAL_LABEL_TABLE
+;   &C964-&C9A3  SYMTAB_ABS_BITMAP   (64 bytes — per-id absolute flag)
+;   &C9A4-&CFFF  free (1628 B; old SYMTAB_OVERFLOW + old LOCAL_LABEL_TABLE
 ;                regions, freed when both were moved to &E100+ on
 ;                2026-05-28 to absorb the release.tbn census peaks).
 ; SYMTAB_OVERFLOW is now at &E800 (256 entries, 2 KB) and
