@@ -111,10 +111,12 @@ jobs:
         run: make ci-m2
 
   # disasm — strand-B Go disassembler oracle: aarch64dec vs binutils objdump
-  # on the vendored release.img (TDD target; RED until the decoder is
-  # complete). Pure Go + binutils, no container/SimCoupé. NOTE: deliberately
-  # NOT in main's required-status-checks while it's red — add it as a
-  # required check only once it's green.
+  # on a CODE-ONLY build of the release (release.s with data directives
+  # stripped, reassembled by GNU) so objdump's linear sweep sees only
+  # instructions. Asserts NO mis-decodes (declining .inst on literal-pool
+  # data is fine) + a coverage floor. Pure Go + binutils, no container.
+  # GREEN as of the strand-B disassembler PR; candidate to promote to a
+  # required status check once it's confirmed stable on main.
   disasm:
     runs-on: ubuntu-latest
     steps:
