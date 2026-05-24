@@ -213,3 +213,28 @@ test-m6-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
 ci-m6: test-m6
 
 ci-m6-prod: test-m6-prod
+
+.PHONY: release-stripped-tbn
+
+# Build the comment-stripped, flattened spectrum4 release.tbn (~88 KB)
+# that fits the SAM assembler's 96 KB IN-buffer ceiling.  Used for the
+# release-bytematch milestone iteration (FAIL40+ coverage-gap closure).
+# Without -strip-comments the flattened release.tbn is ~408 KB and the
+# assembler trips FAIL03 (in_file_pages > 6) immediately at load.
+#
+# SPECTRUM4_SRC defaults to ~/git/spectrum4/src/spectrum4; override on
+# the command line if your checkout lives elsewhere.
+SPECTRUM4_SRC ?= $(HOME)/git/spectrum4/src/spectrum4
+
+release-stripped-tbn: text2bin
+	$(BUILD)/text2bin -flatten -strip-comments \
+	    -I $(SPECTRUM4_SRC) \
+	    -I $(SPECTRUM4_SRC)/kernel \
+	    -I $(SPECTRUM4_SRC)/roms \
+	    -I $(SPECTRUM4_SRC)/tests \
+	    -I $(SPECTRUM4_SRC)/demo \
+	    -I $(SPECTRUM4_SRC)/libextra \
+	    -origin 0xfffffff000000000 \
+	    -o $(BUILD)/release-stripped.tbn \
+	    $(SPECTRUM4_SRC)/targets/release.target
+	@echo "release-stripped.tbn: $$(stat -f%z $(BUILD)/release-stripped.tbn 2>/dev/null || stat -c%s $(BUILD)/release-stripped.tbn) bytes"
