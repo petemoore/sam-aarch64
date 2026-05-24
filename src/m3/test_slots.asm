@@ -144,6 +144,28 @@ run_slot_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &40, &08, &40, &00  ; 0x00400840 LE
 
+; -- encode_extend_op(ExtendOp{BP=10,BW=6}, ext=UXTW(2), shift=0) ------
+;    => 2 << (10+3) = 2 << 13 = 0x00004000
+; Mirrors slots_imm_test.go::TestEncodeExtendOp (first sub-case).
+; Two-operand small-value convention (see slots/extend_op.asm header):
+;   HL = slot pointer, A = ext, C = shift.
+                ld      hl, slot_extop_bp10_bw6
+                ld      a, 2               ; ext = UXTW
+                ld      c, 0               ; shift = 0
+                call    encode_extend_op
+                call    assert_eq32_de_hl_imm
+                defb    &00, &40, &00, &00  ; 0x00004000 LE
+
+; -- encode_extend_op(ExtendOp{BP=10,BW=6}, ext=SXTW(6), shift=2) ------
+;    => 6 << 13 | 2 << 10 = 0xC000 | 0x0800 = 0x0000C800
+; Mirrors slots_imm_test.go::TestEncodeExtendOp (second sub-case).
+                ld      hl, slot_extop_bp10_bw6
+                ld      a, 6               ; ext = SXTW
+                ld      c, 2               ; shift = 2
+                call    encode_extend_op
+                call    assert_eq32_de_hl_imm
+                defb    &00, &c8, &00, &00  ; 0x0000C800 LE
+
 ; All assertions passed.
                 ret
 
@@ -216,6 +238,7 @@ assert_eq32_de_hl_imm:
 ;   Imm12Shifted = 0x10
 ;   Imm16Shifted = 0x11
 ;   ShiftAmount  = 0x12
+;   ExtendOp     = 0x13
 ;
 ; expected_kind is set to 0 here: the encoders do not consult it
 ; (text2bin uses it earlier in the pipeline).
@@ -229,3 +252,4 @@ slot_cond_bp0_bw4:      defb    &07, 0, 0, 4
 slot_shamt_bp10_bw6:    defb    &12, 0, 10, 6
 slot_imm12_bp10_bw12:   defb    &10, 0, 10, 12
 slot_imm16_bp5_bw16:    defb    &11, 0, 5, 16
+slot_extop_bp10_bw6:    defb    &13, 0, 10, 6
