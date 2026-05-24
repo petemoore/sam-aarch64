@@ -2077,23 +2077,45 @@ load_in_file:
 
 
 ; -----------------------------------------------------------------------
-; save_out_file — HSAVE OUT_BUF[0..OUT_LEN] as "OUT".
+; save_out_file — HSAVE the paged OUT buffer as file "OUT".
 ;
-; Mirrors M0's stub.asm HSAVE call.  Pre-populates UIFA bytes 31-36
-; with current HMPR, source address, and length.
+; Per docs/specs/2026-05-27-samdos-save-idiom.md.  HSAVE manages its
+; own HMPR (saves at entry, restores at exit) and auto-pages across
+; &C000 inside its save loop (`samdos/src/c.s:354-369 ctas`).  So the
+; caller only has to populate UIFA[31..36]:
+;
+;   byte 31    : start page → HSAVE sets HMPR low 5 bits from this
+;                (= OUT_BASE_PAGE = 5; page 5 then page 6 via auto-page).
+;   bytes 32-33: source offset in section-C form (= &8000).
+;   byte 34    : pages count = OUT_LEN >> 14.
+;   bytes 35-36: remainder length = OUT_LEN & 0x3FFF.
+;
+; LMPR is unchanged across HSAVE (ROM PTDOS save/restores).  After
+; this call: OUT is on disk; assembler-side LMPR/HMPR back to
+; pre-call values; IX clobbered to dchan (we don't read it).
 ; -----------------------------------------------------------------------
 save_out_file:
                 ld      hl, name_OUT
                 call    fill_uifa
-                in      a, (251)
-                and     &1f
-                ld      (UIFA + 31), a
-                ld      hl, (OUT_BASE)
-                ld      (UIFA + 32), hl
-                xor     a
-                ld      (UIFA + 34), a
-                ld      hl, (OUT_LEN)
-                ld      (UIFA + 35), hl
+
+                ld      a, OUT_BASE_PAGE
+                ld      (UIFA + 31), a              ; HSAVE: HMPR low5 = page
+
+                ld      hl, &8000                   ; section-C source offset
+                ld      (UIFA + 32), hl             ; HSAVE: HL = (hd0d1) = UIFA[32-33]
+
+                ld      hl, (OUT_LEN)               ; total bytes (0..32767)
+                ld      a, h
+                rlca
+                rlca
+                and     3
+                ld      (UIFA + 34), a              ; pages = OUT_LEN >> 14
+
+                ld      a, h
+                and     &3f
+                ld      h, a
+                ld      (UIFA + 35), hl             ; remainder = OUT_LEN & 0x3FFF
+
                 rst     8
                 defb    HOOK_HSAVE
                 ret

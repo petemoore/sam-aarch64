@@ -4,25 +4,38 @@
 ; Boot via M0's BASIC autorun pattern:
 ;   CLEAR&7FFF: LOAD CODE "assembler" 32768: CALL 32768
 ;
-; Memory layout (M5 post-budget-lever):
+; Memory layout (M6 PR 1 — paged OUT):
 ;   &0000-&3FFF  section A — ROM0 (default LMPR_DEFAULT)
 ;                  OR ENCTAB (physical page 4) when LMPR = LMPR_ENCTAB
 ;   &4000-&7FFF  section B — page 1 (BASIC sys area, mostly unused by us);
-;                  trampoline copy at TRAMPOLINE_DST (&7E00)
+;                  trampoline copy at TRAMPOLINE_DST (&7E00).  Under
+;                  LMPR_ENCTAB section B = page 5 = OUT-low (used as
+;                  the OUT emit window — see emit_byte).
 ;   &8000-&AFFF  assembler code (12 KB; this file + all M3/M4/M5 includes)
 ;   &B000-&B7FF  IN .tbn buffer (2 KB; IN_BUF below)
-;   &B800-&BFFF  OUT buffer (2 KB; OUT_BUF below)
+;   &B800-&BFFF  reserved (was OUT_BUF pre-M6; freed by paging OUT out
+;                  of section C — available for future use, currently
+;                  unused).
 ;   &C000-&C0FF  stack (SP = &C100, grows down into section D RAM)
 ;   &C100-&FFFF  scratch (OPVAL arrays, SYMTAB, etc.) — section D RAM
 ;
 ;   Physical page 4 (off-axis): ENCTAB body — paged into section A on
 ;     demand for encoder runtime reads.  See `src/m3/trampoline.asm`.
+;   Physical pages 5..6 (off-axis): OUT buffer — page 5 reached via
+;     section B with LMPR_ENCTAB for free (low zone, bytes 0..16383);
+;     page 6 reached via LMPR=LMPR_OUT_HIGH bracket per emit
+;     (high zone, bytes 16384..32767).  HSAVE at end of pass 2 reads
+;     the buffer via section C with UIFA[31] = OUT_BASE_PAGE.  See
+;     docs/specs/2026-05-27-m6-paged-out-design.md and
+;     docs/specs/2026-05-27-samdos-save-idiom.md.
 ;
 ; Pre-M5 layout placed ENCTAB at &A000-&AFFF in section C, consuming
 ; 4 KB of the code section.  M5's compound-operand encoders pushed
 ; code size past the resulting 8 KB code budget; paging ENCTAB out
 ; recovers that 4 KB.  See docs/specs/2026-05-27-samdos-load-idiom.md
-; for the design rationale.
+; for the design rationale.  M6 PR 1 extends the off-axis pattern to
+; OUT, freeing 2 KB at &B800 and lifting the output ceiling from
+; 2 KB to 32 KB.
 ;
 ; Note: pyz80 does not support the END directive. Assembly ends at EOF.
 ; The org directive sets the load address; the entry point is the
@@ -30,8 +43,6 @@
 
 IN_BUF:         equ     &B000          ; .tbn source buffer (section C; HLOAD dest)
 IN_BUF_END:     equ     &B800          ; one past end of IN buffer (2 KB)
-OUT_BUF:        equ     &B800          ; output buffer (section C; HSAVE source)
-OUT_BUF_END:    equ     &C000          ; one past end of OUT buffer (2 KB)
 
 OPVAL_ARRAY:    equ     &C100          ; 7 * 10 = 70 bytes — operand value array
 OPVAL_KINDS:    equ     &C150          ; 7 bytes — kinds[] for form_lookup_match
