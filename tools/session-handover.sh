@@ -46,6 +46,16 @@ else
   echo "    To refresh: stash/commit your work, then 'git checkout main && git pull --ff-only'."
 fi
 
+# Stray-output guard: superpowers skills natively save to docs/superpowers/,
+# which is globally ignored here (the repo canon is docs/plans + docs/specs).
+# If anything landed there, surface it so it's migrated rather than lost.
+if [ -n "$(find docs/superpowers -type f 2>/dev/null)" ]; then
+  echo "⚠️  Stray files in docs/superpowers/ (globally ignored — would be lost):"
+  find docs/superpowers -type f 2>/dev/null | sed 's/^/      /'
+  echo "    Migrate to docs/plans/ or docs/specs/ and delete the originals (see CLAUDE.md)."
+  echo
+fi
+
 echo
 if grep -q HANDOVER-PROTOCOL-START docs/ROADMAP.md 2>/dev/null; then
   sed -n '/HANDOVER-PROTOCOL-START/,/HANDOVER-PROTOCOL-END/p' docs/ROADMAP.md
