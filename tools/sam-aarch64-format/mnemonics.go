@@ -111,6 +111,12 @@ var MnemonicTable = []string{
 	// ldrsh: Load Signed Halfword (ARM ARM C6.2.118). size=01.
 	// ldrsw: Load Signed Word (ARM ARM C6.2.119). size=10, Xt only.
 	"ldrsb", "ldrsh", "ldrsw",
+	// ccmp: Conditional Compare (ARM ARM C6.2.43 / C6.2.44).
+	//   ccmp Rn, #imm5, #nzcv, cond   — immediate form.
+	//   ccmp Rn, Rm,    #nzcv, cond   — register form.
+	// Both have 32-bit (Wn) and 64-bit (Xn) variants.  Used by
+	// spectrum4/kernel/macros.s and friends to chain comparisons.
+	"ccmp",
 }
 
 var mnemonicIndex = func() map[string]uint16 {
