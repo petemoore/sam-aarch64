@@ -196,6 +196,29 @@ try_intercept_post_mem:
 
 try_intercept_post_litpool:
 
+; -- Barrier mnemonics: isb=66 / dsb=67 / dmb=68 ----------------------
+; text2bin converts the barrier-arg keyword (sy, ish, ishst, ...) into a
+; single OpImmExpr carrying the CRm field (bits 11:8); isb with no arg
+; defaults to sy (CRm=15).  The Mac-side dispatch is refenc/pass2.go:310
+; (case 66,67,68 → encodeBarrierInst).  No form-table entry exists for
+; these, so a miss here would always fall through to fail anyway —
+; unconditional intercept, like the sysname block below.
+                ld      a, (try_intercept_mnem)
+                cp      66
+                jp      z, try_intercept_barrier
+                cp      67
+                jp      z, try_intercept_barrier
+                cp      68
+                jp      z, try_intercept_barrier
+                jp      try_intercept_post_barrier
+try_intercept_barrier:
+                ld      a, (try_intercept_mnem)
+                call    encode_barrier_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+try_intercept_post_barrier:
+
 ; -- OpSysName mnemonics (M5 PR-D Task 11) ----------------------------
 ;   mrs  = 76    mrs Xt, <sysreg>
 ;   msr  = 77    msr <sysreg>, Xt  OR  msr <pstate>, #imm
@@ -558,3 +581,64 @@ encode_ror_imm_pack:
 
 
 encode_ror_imm_rs:               defb    0
+
+
+; -----------------------------------------------------------------------
+; encode_barrier_word — pure word computation for isb / dsb / dmb.
+;
+; Port of tools/refenc/pass2.go:encodeBarrierInst (refenc/pass2.go:1506).
+;   word := base | (CRm << 8)
+;     isb (66): base 0xd50330df
+;     dsb (67): base 0xd503309f
+;     dmb (68): base 0xd50330bf
+; Grounded against aarch64-none-elf-as + ARM ARM C6.2.99 (ISB) /
+; C6.2.74 (DSB) / C6.2.73 (DMB).
+;
+; In:  A = mnemonic_id (66/67/68).  Single operand at OPVAL_ARRAY[0] is an
+;      OpImmExpr; CRm value (0..15) is the low byte of its 8-byte LE
+;      result at OPVAL_ARRAY + 2.
+; Out: DE:HL = encoded 32-bit word (HL = bits 0..15, DE = bits 16..31).
+;      DE is constant 0xd503 for all three; HL = (base_low16) | (CRm<<8).
+; Errors: jp fail on CRm > 15 or non-zero high bytes (not a small u8).
+; -----------------------------------------------------------------------
+encode_barrier_word:
+                cp      66
+                jp      z, encode_barrier_isb
+                cp      67
+                jp      z, encode_barrier_dsb
+                cp      68
+                jp      z, encode_barrier_dmb
+                jp      fail                ; unreachable (intercept gates ids)
+encode_barrier_isb:
+                ld      hl, &30df
+                jp      encode_barrier_pack
+encode_barrier_dsb:
+                ld      hl, &309f
+                jp      encode_barrier_pack
+encode_barrier_dmb:
+                ld      hl, &30bf
+
+encode_barrier_pack:
+; HL = base low16.  DE = base high16 (constant 0xd503 for all barriers).
+                ld      de, &d503
+; -- Read CRm (low byte of the imm result at OPVAL_ARRAY[0] + 2).
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 2)
+                cp      &10
+                jp      nc, fail            ; CRm > 15 → out of range [0,15]
+                ld      b, a                ; B = CRm (0..15)
+; -- Reject any non-zero upper byte of the 8-byte LE imm (must be u8 nibble).
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 3)
+                or      a
+                jp      nz, fail
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 4)
+                or      a
+                jp      nz, fail
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 5)
+                or      a
+                jp      nz, fail
+; -- OR CRm into bits 11:8 (HL high byte, low nibble).  base bits 11:8
+;    are clear (0x30 / 0x30 / 0x30 → low nibble 0), so a plain OR suffices.
+                ld      a, b
+                or      h
+                ld      h, a
+                ret
