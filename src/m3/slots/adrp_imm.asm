@@ -142,44 +142,106 @@
 ;
 ; -----------------------------------------------------------------------
 encode_adrp_imm:
-; -- M4: mask BCDE with ~0xFFF, then subtract (PASS_PC & ~0xFFF) --------
-; Caller passes the ABSOLUTE target address in BCDE.  We compute the
-; page-difference: (target & ~0xFFF) - (pc & ~0xFFF).  Both operands
-; are first masked to their 4 KB page bases by clearing the low 12
-; bits — for BCDE that means E := 0, D := D & 0xF0.  PASS_PC is read
-; into a 4-byte temp and the same mask applied there.  Then a full
-; 32-bit two's-complement subtract LSB-first.
+; -- Full 64-bit page-difference, then mask33 + sign-extend bit 32 ------
+; Faithful port of tools/refenc/pass2.go:363-369 (the AdrpImm case of
+; operandsToValues):
+;
+;     diff := (v & ^int64(0xFFF)) - (pc & ^int64(0xFFF))
+;     const mask33 = int64(1<<33 - 1)
+;     diff &= mask33
+;     if diff&(int64(1)<<32) != 0 {
+;         diff |= ^mask33
+;     }
+;     v = diff
+;
+; followed by encodeAdrpImm (slots_adrp.go:11-24): pageOffset = diff/4096,
+; range-check ±2^20, imm21 = pageOffset & 0x1FFFFF.
+;
+; The 32-bit-only predecessor mis-signed page deltas whose low 32 bits
+; have bit 31 set but whose true (33-bit) value is positive — e.g.
+; delta 0xff841000 under origin 0xfffffff0_00000000.  The diff therefore
+; MUST be computed at full width and sign-determined by bit 32, not 31.
+;
+; v (the ABSOLUTE target) is the full 8-byte LE eval value at
+; (encoder_opval_ptr)+2 — under the high origin its high word is
+; ORIGIN_HIGH (carried in via eval_store_origin_high).  The caller also
+; passed the low 32 bits in BCDE, but we ignore that and re-read all 8
+; bytes here so the high word participates in the subtraction.
+;
+; pc = PASS_PC (low 32, LE) ++ ORIGIN_HIGH (high 32, LE).
+
+; Build (v & ~0xFFF) in encode_adrp_imm_t8[0..7] (LE, 8 bytes).
+                ld      hl, (encoder_opval_ptr)
+                inc     hl
+                inc     hl                     ; HL → byte 0 of LE value
+                ld      de, encode_adrp_imm_t8
+                ld      bc, 8
+                ldir
                 xor     a
-                ld      e, a                   ; clear low 8 bits of target
-                ld      a, d
-                and     &f0                    ; clear bits 8..11 of target
-                ld      d, a
-; Build (PASS_PC & ~0xFFF) in encode_adrp_imm_pcpage[0..3] (LE).
+                ld      (encode_adrp_imm_t8 + 0), a    ; clear low 8 bits
+                ld      a, (encode_adrp_imm_t8 + 1)
+                and     &f0                            ; clear bits 8..11
+                ld      (encode_adrp_imm_t8 + 1), a
+
+; Build (pc & ~0xFFF) in encode_adrp_imm_pc8[0..7] (LE, 8 bytes).
                 xor     a
-                ld      (encode_adrp_imm_pcpage + 0), a    ; low byte := 0
+                ld      (encode_adrp_imm_pc8 + 0), a   ; low byte := 0
                 ld      a, (PASS_PC + 1)
-                and     &f0                                ; clear bits 8..11
-                ld      (encode_adrp_imm_pcpage + 1), a
+                and     &f0
+                ld      (encode_adrp_imm_pc8 + 1), a
                 ld      a, (PASS_PC + 2)
-                ld      (encode_adrp_imm_pcpage + 2), a
+                ld      (encode_adrp_imm_pc8 + 2), a
                 ld      a, (PASS_PC + 3)
-                ld      (encode_adrp_imm_pcpage + 3), a
-; BCDE -= (PASS_PC & ~0xFFF), LSB-first across 4 bytes.
-                ld      a, e
-                ld      hl, encode_adrp_imm_pcpage
-                sub     (hl)
-                ld      e, a
-                ld      a, d
-                inc     hl
-                sbc     a, (hl)
-                ld      d, a
-                ld      a, c
-                inc     hl
-                sbc     a, (hl)
+                ld      (encode_adrp_imm_pc8 + 3), a
+                ld      hl, ORIGIN_HIGH
+                ld      de, encode_adrp_imm_pc8 + 4
+                ld      bc, 4
+                ldir
+
+; diff = t8 - pc8, LSB-first across 8 bytes, result back into t8.
+                or      a                      ; clear carry
+                ld      hl, encode_adrp_imm_t8
+                ld      de, encode_adrp_imm_pc8
+                ld      b, 8
+encode_adrp_imm_sub8:
+                ld      a, (de)
                 ld      c, a
-                ld      a, b
+                ld      a, (hl)
+                sbc     a, c
+                ld      (hl), a
                 inc     hl
-                sbc     a, (hl)
+                inc     de
+                djnz    encode_adrp_imm_sub8
+
+; mask33 + sign-extend bit 32.  Keep bits 0..32; bit 32 = bit 0 of byte 4.
+;   byte4 &= 1
+;   if byte4 != 0:  byte4 = 0xFF; byte5..7 = 0xFF
+;   else:           byte4..7 = 0x00
+                ld      a, (encode_adrp_imm_t8 + 4)
+                and     1
+                jr      z, encode_adrp_imm_sx_zero
+                ld      a, &ff
+encode_adrp_imm_sx_zero:
+                ; A = 0x00 (bit32 clear) or 0xFF (bit32 set) → the sign byte.
+                ld      hl, encode_adrp_imm_t8 + 4
+                ld      (hl), a
+                inc     hl
+                ld      (hl), a
+                inc     hl
+                ld      (hl), a
+                inc     hl
+                ld      (hl), a
+; byte 4 (encode_adrp_imm_t8+4) is now the 33-bit sign byte (0x00/0xFF),
+; used below as phase-A's incoming sign extension.
+
+; Load BCDE = bytes 3..0 of the (sign-correct) diff.
+                ld      a, (encode_adrp_imm_t8 + 0)
+                ld      e, a
+                ld      a, (encode_adrp_imm_t8 + 1)
+                ld      d, a
+                ld      a, (encode_adrp_imm_t8 + 2)
+                ld      c, a
+                ld      a, (encode_adrp_imm_t8 + 3)
                 ld      b, a
 
 ; -- Page-alignment check: low 12 bits must be zero ---------------------
@@ -193,14 +255,13 @@ encode_adrp_imm:
                 jp      nz, fail               ; D[3:0] ≠ 0 → not 4096-aligned
 
 ; -- pageOffset = byteOffset >> 12 (signed) -----------------------------
-; Phase A: byte-shift right by 1 byte, sign-extending B.
+; Phase A: byte-shift right by 1 byte, sign-extending from BIT 32 (the
+; 33-bit sign byte we materialised at encode_adrp_imm_t8+4), NOT from
+; bit 31 of B.
                 ld      e, d                   ; E ← D
                 ld      d, c                   ; D ← C
                 ld      c, b                   ; C ← B
-; New B = sign-extension of old B: 0xFF if B's bit 7 set, else 0x00.
-                ld      a, b                   ; A = old B
-                add     a, a                   ; CY ← old bit 7 of B
-                sbc     a, a                   ; A = 0xFF if CY, else 0x00
+                ld      a, (encode_adrp_imm_t8 + 4)  ; A = 33-bit sign byte
                 ld      b, a                   ; B = sign byte
 
 ; Phase B: 4-bit arithmetic right-shift (sra b; rr c; rr d; rr e) ×4.
@@ -490,5 +551,10 @@ encode_adrp_imm_copy:
                 defb    0, 0, 0, 0
 encode_adrp_imm_immlo:
                 defb    0
-encode_adrp_imm_pcpage:
-                defb    0, 0, 0, 0
+; 64-bit working buffers for the full-width page-difference (Class 5):
+;   t8  — page-masked target v, then diff (LSB-first, 8 bytes)
+;   pc8 — page-masked pc (PASS_PC low ++ ORIGIN_HIGH high), 8 bytes
+encode_adrp_imm_t8:
+                defb    0, 0, 0, 0, 0, 0, 0, 0
+encode_adrp_imm_pc8:
+                defb    0, 0, 0, 0, 0, 0, 0, 0
