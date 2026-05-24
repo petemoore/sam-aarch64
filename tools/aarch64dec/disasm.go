@@ -43,6 +43,17 @@ func Decode(word uint32) (mnem string, operands string, ok bool) {
 // emit absolute target addresses in objdump's style.
 func DecodeAt(pc uint64, word uint32) (mnem string, operands string, ok bool) {
 	ctx := decodeCtx{word: word, pc: pc}
+	// The load/store (memory) family is hand-rolled by the encoder
+	// (refenc/pass2.go) and is therefore absent from AllForms().  Decode
+	// it via the special-case inverse in mem.go *first*: a handful of
+	// form-table masks (the add/sub-immediate forms in particular) are
+	// loose enough to spuriously match memory words, so the memory
+	// decoder must take precedence on its own encoding space.  decodeMem
+	// returns ok=false for everything outside that space, so the form
+	// walk below still handles all other instructions.
+	if mnem, operands, ok := decodeMem(pc, word); ok {
+		return mnem, operands, true
+	}
 	for _, f := range aarch64enc.AllForms() {
 		if word&f.Mask == f.Pattern {
 			return decodeForm(ctx, f)
