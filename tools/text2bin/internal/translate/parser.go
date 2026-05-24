@@ -71,6 +71,20 @@ func (p *parser) parseLine() error {
 				return err
 			}
 			emittedStatement = true
+		case TokDot:
+			// GNU as: `. = expr` is equivalent to `.org expr`. The `.`
+			// token here stands for the current location counter; setting
+			// it to a value emits zero-fill bytes to advance the PC (or
+			// sets the origin VMA when nothing has been emitted yet).
+			if p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokEquals {
+				p.pos += 2 // consume '.' and '='
+				if err := p.parseOrgRHS(); err != nil {
+					return err
+				}
+				emittedStatement = true
+				continue
+			}
+			return newErr(t.Pos, "unexpected '.' at start of statement (did you mean '. = expr'?)")
 		default:
 			return newErr(t.Pos, "unexpected token kind %d", t.Kind)
 		}
@@ -121,6 +135,29 @@ func (p *parser) parseDirective(t Tok) error {
 		}
 		count++
 	}
+}
+
+// parseOrgRHS parses the right-hand side of `. = expr` and emits it as
+// a `.org expr` directive record. The leading `.` and `=` tokens must
+// already have been consumed by the caller. The expression runs until
+// EOL / EOF / comment.
+func (p *parser) parseOrgRHS() error {
+	id, ok := format.DirectiveID(".org")
+	if !ok {
+		return newErr(p.cur().Pos, "internal: .org directive ID not registered")
+	}
+	expr, err := p.parseExpression()
+	if err != nil {
+		return err
+	}
+	var ow format.OperandWriter
+	ow.WriteImmExpr(expr)
+	switch p.cur().Kind {
+	case TokEOL, TokEOF, TokLineComment, TokBlockComment:
+		p.rw.WriteDirective(id, 1, ow.Bytes())
+		return nil
+	}
+	return newErr(p.cur().Pos, "unexpected token after '. = expr'")
 }
 
 // parseDirectiveSection parses the GNU as `.section` directive in one of

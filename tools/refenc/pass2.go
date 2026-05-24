@@ -12,7 +12,11 @@ import (
 // symbol table available from Pass1.
 func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 	var out []byte
-	var pc int64
+	// PC tracks the *VMA*: starts at OriginVMA (zero unless a leading
+	// `.org N` shifted the origin). Output byte 0 always corresponds to
+	// pc == OriginVMA, mirroring `objcopy -O binary` semantics.
+	pc := p1.OriginVMA
+	originVMA := p1.OriginVMA
 
 	emitFlush := func(preFlushPC int64) error {
 		entries, ok := p1.PoolFlushEntries[preFlushPC]
@@ -90,6 +94,35 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 			if name == ".ltorg" {
 				if err := emitFlush(pc); err != nil {
 					return nil, err
+				}
+				continue
+			}
+			if name == ".org" {
+				// `.org expr` semantics: at the very start of input
+				// (no bytes emitted, pc == OriginVMA == 0, no pool
+				// entries) it sets the origin VMA. Otherwise it
+				// advances pc, emitting zero-fill bytes if expr > pc.
+				// Use unsigned arithmetic so high VMAs (>= 2^63) work.
+				or := format.NewOperandReader(rec.Operands)
+				o, _ := or.Next()
+				ctx := makeCtx(pc, p1, f)
+				target, err := enc.Eval(o.Expr, ctx)
+				if err != nil {
+					return nil, fmt.Errorf(".org: %w", err)
+				}
+				if len(out) == 0 && pc == originVMA && originVMA == 0 && target != 0 {
+					// Leading origin set — match pass1's decision.
+					pc = target
+					originVMA = target
+					continue
+				}
+				if uint64(target) < uint64(pc) {
+					return nil, fmt.Errorf(".org: target 0x%x < current pc 0x%x (backward .org not allowed)", uint64(target), uint64(pc))
+				}
+				pad := int64(uint64(target) - uint64(pc))
+				if pad > 0 {
+					out = append(out, make([]byte, pad)...)
+					pc = target
 				}
 				continue
 			}

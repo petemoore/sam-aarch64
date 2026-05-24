@@ -339,6 +339,8 @@ func (l *lexer) readCharLit(start Position) (Tok, error) {
 		switch esc {
 		case 'n':
 			c = '\n'
+		case 'r':
+			c = '\r'
 		case 't':
 			c = '\t'
 		case '\\':
@@ -378,6 +380,8 @@ func (l *lexer) readString(start Position) (Tok, error) {
 			switch esc {
 			case 'n':
 				body = append(body, '\n')
+			case 'r':
+				body = append(body, '\r')
 			case 't':
 				body = append(body, '\t')
 			case '\\':
