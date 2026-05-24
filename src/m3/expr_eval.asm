@@ -567,12 +567,10 @@ eval_push_sym:
                 ld      a, (symbol_value_buf + 3)
                 ld      (hl), a
                 inc     hl                          ; HL → slot[4]
-                xor     a
-                ld      b, 4
-eval_push_sym_zero:
-                ld      (hl), a
-                inc     hl
-                djnz    eval_push_sym_zero
+; A symbol's value is origin-relative: re-apply the OriginVMA high word so
+; e.g. `.quad <label>` emits the full 64-bit address (low from the symtab
+; entry, high from ORIGIN_HIGH).  See eval_store_origin_high.
+                call    eval_store_origin_high      ; slot[4..7] := ORIGIN_HIGH
                 jp      eval_loop
 
 
@@ -645,12 +643,9 @@ eval_push_local_check:
                 ld      a, (local_label_pc_buf + 3)
                 ld      (hl), a
                 inc     hl                          ; HL → slot[4]
-                xor     a
-                ld      b, 4
-eval_push_local_zero:
-                ld      (hl), a
-                inc     hl
-                djnz    eval_push_local_zero
+; Local-label values are origin-relative PCs; apply ORIGIN_HIGH like the
+; named-symbol path so 64-bit materialisations carry the full VMA.
+                call    eval_store_origin_high      ; slot[4..7] := ORIGIN_HIGH
                 jp      eval_loop
 
 
@@ -677,15 +672,37 @@ eval_push_pc:
                 ld      a, (PASS_PC + 3)
                 ld      (hl), a
                 inc     hl                          ; HL → slot[4]
-; Zero the high 4 bytes (eval_alloc_top doesn't zero-fill despite the
-; stale comment in its header; slot may hold prior content).
-                xor     a
-                ld      b, 4
-eval_push_pc_zero:
-                ld      (hl), a
-                inc     hl
-                djnz    eval_push_pc_zero
+                call    eval_store_origin_high      ; slot[4..7] := ORIGIN_HIGH
                 jp      eval_loop
+
+
+; -----------------------------------------------------------------------
+; eval_store_origin_high — write the 4-byte ORIGIN_HIGH (high word of the
+; link OriginVMA) into the eval-stack slot's bytes [4..7], sign/origin-
+; extending the just-pushed origin-relative 32-bit value to the full
+; 64-bit VMA.
+;
+; ORIGIN_HIGH is 0 unless a leading `.org` set a >4 GB origin (the
+; spectrum4 release links at 0xfffffff0_00000000), so on the `-Ttext=0`
+; fixture corpus this is identical to the previous zero-fill.
+;
+; Used by the three origin-relative pushes — symbol (eval_push_sym), PC
+; (eval_push_pc), and local-label (eval_push_local) — mirroring the Go
+; reference where every such value carries the full 64-bit OriginVMA
+; (tools/refenc/pass2.go:148-152 makeCtx Symbol/PC/LocalLabel).
+;
+; Input:  HL → slot[4].  Output: slot[4..7] = ORIGIN_HIGH.  HL advanced
+;         to slot[8].  Clobbers: A, B, DE.
+eval_store_origin_high:
+                ld      de, ORIGIN_HIGH
+                ld      b, 4
+eval_store_origin_high_loop:
+                ld      a, (de)
+                ld      (hl), a
+                inc     de
+                inc     hl
+                djnz    eval_store_origin_high_loop
+                ret
 
 
 ; -----------------------------------------------------------------------

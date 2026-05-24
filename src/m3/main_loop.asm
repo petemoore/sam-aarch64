@@ -269,15 +269,27 @@ in_normalise_loop:
 ; PASS_PC helpers.
 ; -----------------------------------------------------------------------
 
-; pass_pc_reset — PASS_PC := 0.
+; pass_pc_reset — PASS_PC := 0, ORIGIN_HIGH := 0.
 ;
-; Input:  none.  Output: PASS_PC = 0.  Clobbers: A, HL.
+; ORIGIN_HIGH is cleared here so that, absent a leading `.org` with a
+; non-zero high word (i.e. the `-Ttext=0` fixture corpus, origin 0), every
+; origin-relative push contributes high=0 — preserving M3/M4/M5/M6 byte
+; output.  A leading `.org 0xfffffff0_00000000` re-sets it via
+; main_dir_org_set_pc at the start of each pass's record walk.
+;
+; Input:  none.  Output: PASS_PC = 0, ORIGIN_HIGH = 0.  Clobbers: A, B, HL.
 pass_pc_reset:
                 xor     a
                 ld      (PASS_PC + 0), a
                 ld      (PASS_PC + 1), a
                 ld      (PASS_PC + 2), a
                 ld      (PASS_PC + 3), a
+                ld      hl, ORIGIN_HIGH
+                ld      b, 4
+pass_pc_reset_oh:
+                ld      (hl), a
+                inc     hl
+                djnz    pass_pc_reset_oh
                 ret
 
 
@@ -1946,7 +1958,17 @@ main_dir_ltorg:
                 jp      walk_records
 
 
-; PASS_PC := expr_result.  Shared by pass-1 and pass-2 .org tails.
+; PASS_PC := expr_result[0..3]; ORIGIN_HIGH := expr_result[4..7].
+; Shared by pass-1 and pass-2 .org tails.
+;
+; PASS_PC tracks only the low 32 bits of the VMA (sufficient: the image
+; is < 4 GB, so every label's offset fits the low word).  The high 32
+; bits of the origin are stashed in ORIGIN_HIGH and re-applied by the
+; origin-relative push handlers (eval_push_sym / eval_push_pc /
+; eval_push_local) so a `.quad <label>` materialises the full 64-bit
+; origin-relative address.  Mirrors the Go reference, where `pc` (and
+; thus every symbol value) is seeded from OriginVMA — the full 64-bit
+; origin flows into `.quad` via evalImmsAsBytes (refenc/pass2.go:1775).
 main_dir_org_set_pc:
                 ld      a, (expr_result + 0)
                 ld      (PASS_PC + 0), a
@@ -1956,6 +1978,10 @@ main_dir_org_set_pc:
                 ld      (PASS_PC + 2), a
                 ld      a, (expr_result + 3)
                 ld      (PASS_PC + 3), a
+                ld      hl, expr_result + 4
+                ld      de, ORIGIN_HIGH
+                ld      bc, 4
+                ldir
                 jp      walk_records
 
 

@@ -98,9 +98,26 @@ PASS_PASS2:     equ     2
 ; main_loop.asm (pass_pc_reset / pass_pc_advance_*).
 PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
 
+; ORIGIN_HIGH — the high 32 bits of the link origin (s64 OriginVMA).
+; PASS_PC only tracks the low 32 bits of the VMA (the output is < 4 GB so
+; the low word fully captures every label's offset within the image), but
+; the spectrum4 release links at origin 0xfffffff0_00000000 — the high
+; word 0xfffffff0 must be re-applied whenever an origin-relative value
+; (a label/PC/local-label reference) is materialised as a 64-bit operand,
+; e.g. a `.quad <label>`.  Constants (`.quad 0x93`) carry high=0.
+;
+; Set by `.org`'s set-pc tail from expr_result[4..7] (the evaluated
+; origin's high word); reset to 0 by pass_pc_reset so the `-Ttext=0`
+; fixture corpus (origin 0) is unaffected.  Mirrors the Go reference
+; where every symbol/PC value is `pc` starting at OriginVMA, so it carries
+; the full 64-bit origin (tools/refenc/pass1.go:154 res.Symbols[name]=pc
+; with pc seeded from OriginVMA; tools/refenc/pass2.go:18,148-152).
+ORIGIN_HIGH:    equ     &C960          ; 4 bytes — high word of OriginVMA (u32 LE)
+
 ; M4 scratch reservation (allocated by symbols.asm + local_labels.asm):
 ;   &C160-&C95F  SYMTAB              (256 buckets × 8 bytes = 2 KB)
-;   &C960-&CFFF  free (1696 B; old SYMTAB_OVERFLOW + old LOCAL_LABEL_TABLE
+;   &C960-&C963  ORIGIN_HIGH         (4 bytes — high word of OriginVMA)
+;   &C964-&CFFF  free (1692 B; old SYMTAB_OVERFLOW + old LOCAL_LABEL_TABLE
 ;                regions, freed when both were moved to &E100+ on
 ;                2026-05-28 to absorb the release.tbn census peaks).
 ; SYMTAB_OVERFLOW is now at &E800 (256 entries, 2 KB) and
@@ -501,7 +518,15 @@ if defined(BUILD_TESTS)
                 ; test_mem.asm likewise lives off-axis (physical page 13);
                 ; see load_test_mem_off_axis / plan-PR 3 (PR #52).
                 include "test_sysname.asm"
-                include "test_litpool.asm"
+                ; test_litpool.asm is NOT included inline: its
+                ; run_litpool_self_tests is dispatched only from the
+                ; off-axis page-12 cluster (test_offaxis_cluster.asm),
+                ; which compiles its own copy.  The former inline include
+                ; here emitted dead code (never called inline since the
+                ; PR-3c cluster move, see line ~342) — removed in the
+                ; Class-1 64-bit-address-data fix (2026-05-29) to reclaim
+                ; test-variant budget for the ORIGIN_HIGH machinery.  No
+                ; behavioural change: the cluster still runs the suite.
                 include "test_trampoline.asm"
                 include "test_emit_paged.asm"
                 include "test_reader_paged.asm"

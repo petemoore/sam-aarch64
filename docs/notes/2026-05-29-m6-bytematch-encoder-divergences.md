@@ -93,7 +93,7 @@ output offset, the GNU (correct) text, and the SAM (wrong) text.
 
 | # | Class | Count | Fix status |
 |---|---|---|---|
-| 1 | 64-bit address data — high word truncated to 0 | 55 | ☐ open |
+| 1 | 64-bit address data — high word truncated to 0 | 55 | ✅ done (2026-05-29) |
 | 2 | MOV (wide immediate) — wrong 16-bit chunk / `hw` shift | 30 | ✅ done (2026-05-29) |
 | 3 | MOV (bitmask immediate) alias unhandled | 10 | ✅ done (2026-05-29) |
 | 4 | MOV (inverted wide immediate) → MOVN; emits invalid encoding | 7 | ✅ done (2026-05-29) |
@@ -102,7 +102,12 @@ output offset, the GNU (correct) text, and the SAM (wrong) text.
 | 7 | Logical (bitmask) immediate value wrong (`and`/etc.) | 1 | ☐ open |
 
 **Release-diff progress:** 358 (initial) → 356 (after csetm, Class 6) →
-**235 (after Classes 2+3+4)**.  The Class-2/3/4 fix is a single MOV-alias
+235 (after Classes 2+3+4) → **16 (after Class 1)**.  The 16 residual
+differing bytes are the still-open classes: Class 5 (ADRP, 13 sites — the
+`0x5a..0x15fa` immhi-sign diffs), Class 7 (`and w7,w7,#0xfffffffe` at
+`0x51a1/0x51a2`), and one stray at `0x3596` (to be triaged with Class 5/7).
+Class-1 sample offsets `0x169c` / `0x38c4` now byte-match (confirmed gone).
+The Class-2/3/4 fix is a single MOV-alias
 auto-selection intercept (`encode_mov_imm_word` in `src/m3/intercepts.asm`),
 a faithful port of `tools/refenc/pass2.go:438-502` (`tryEncodeMovImm`):
 MOVZ chunk-search → MOVN chunk-search → ORR-bitmask, in that priority
@@ -130,11 +135,38 @@ reused here for the MOV-bitmask path), left open for follow-up.
 @0x38c4  low-word@0x38c0 GNU=54440000 SAM=54440000 (match)   high GNU=f0ffffff SAM=00000000
 ```
 Confirmed: low halves match, only the high halves differ.
-**Suspected root cause:** the data-directive emission path
-(`src/m3/main_loop.asm` `DIR_QUAD` / `.quad`) writes a symbol address
-as 32 bits, not applying the link origin's high 32 bits
-(`0xfffffff0`). Need to confirm whether symbol *values* carry the full
-64-bit origin or are stored 32-bit. Highest-count class.
+
+**Root cause (confirmed 2026-05-29):** `PASS_PC` (`assembler.asm:99`) is a
+4-byte counter — it tracks only the *low* 32 bits of the VMA. The link
+origin enters via the leading `.org 0xfffffff0_00000000` that
+`text2bin -flatten -origin` emits, but `main_dir_org_set_pc`
+(`main_loop.asm`) copied only `expr_result[0..3]` into PASS_PC, dropping
+the high word `0xfffffff0`. Symbol values are PASS_PC snapshots
+(`symbols.asm` 8-byte entry: id u16 + address u32 + next_off u16 — only
+32 address bits). So `eval_push_sym` zero-extended the 32-bit address to a
+64-bit eval value, and `.quad`'s 8-byte emit (`main_dir_quad_emit`,
+faithful) wrote high = 0. The data-emit path was correct; the truncation
+was upstream in PASS_PC / symbol-value width.
+
+The Go reference never truncates: `pc` starts at `OriginVMA`
+(`refenc/pass2.go:18`), every label value is `res.Symbols[name] = pc`
+(`pass1.go:154`), `makeCtx` exposes Symbol/PC/LocalLabel as that full
+64-bit value (`pass2.go:148-152`), and `.quad` emits all 8 bytes via
+`evalImmsAsBytes` (`pass2.go:1775`). Constants (`.quad 0x93`) are literal
+values that never carry the origin — exactly mirrored.
+
+**Fix (this work item):** added a 4-byte `ORIGIN_HIGH` scratch
+(`assembler.asm`, `&C960`, RAM only — no binary-size cost). `.org`'s
+set-pc tail now stashes `expr_result[4..7]` into it (LDIR); `pass_pc_reset`
+clears it (so the `-Ttext=0` fixture corpus, origin 0, is unchanged). The
+three origin-relative eval pushes — `eval_push_sym`, `eval_push_pc`,
+`eval_push_local` (`expr_eval.asm`) — now write `ORIGIN_HIGH` into the
+eval-stack slot's high 4 bytes (via the shared `eval_store_origin_high`
+helper) instead of zero-filling, materialising the full 64-bit
+origin-relative value. Faithful port of the Go origin-carrying `pc`
+semantics. Verified: `tests/m6/sources/inst_quad_addr.s` SAM-vs-refenc at
+`-origin 0xfffffff000000000` byte-matches; release diff 235 → 16 with the
+55 Class-1 sites gone.
 
 ### Class 2 — MOV (wide immediate), wrong chunk/shift (30 sites)
 
