@@ -172,14 +172,20 @@ reset_reader_to_in_buf:
 ;
 ; Called before pass 2 only (pass 1 never emits).
 ;
+; Per docs/specs/2026-05-27-m6-paged-out-design.md the OUT buffer
+; lives in physical pages 5+6, reached via section B (&4000..&7FFF).
+; OUT_PC starts at the section-B base; OUT_ZONE starts at 0 (= low
+; zone, section B = page 5 for free under LMPR_ENCTAB).
+;
 ; Input:  none.
-; Output: OUT_BASE = OUT_PC = OUT_BUF; OUT_LEN = 0.
-; Clobbers: HL.
+; Output: OUT_PC = &4000; OUT_ZONE = 0; OUT_LEN = 0.
+; Clobbers: A, HL.
 ; -----------------------------------------------------------------------
 reset_out_buffer:
-                ld      hl, OUT_BUF
-                ld      (OUT_BASE), hl
+                ld      hl, &4000           ; section-B base
                 ld      (OUT_PC), hl
+                xor     a
+                ld      (OUT_ZONE), a       ; start in low zone (page 5)
                 ld      hl, 0
                 ld      (OUT_LEN), hl
                 ret
@@ -2144,6 +2150,12 @@ main_dir_equ_pending_id:        defw    0
 IN_POS:                 defw    0           ; current read pointer into IN_BUF
 IN_END:                 defw    0           ; one past the last valid byte
 
-OUT_BASE:               defw    0           ; base of output buffer (= OUT_BUF)
-OUT_PC:                 defw    0           ; next emit position
+; Paged OUT cursor state — see docs/specs/2026-05-27-m6-paged-out-design.md.
+; OUT_PC walks section B (&4000..&7FFF); OUT_ZONE flips 0 → 1 at the
+; first byte 16384 to switch from page 5 (under LMPR_ENCTAB) to page 6
+; (under LMPR_OUT_HIGH).  OUT_LEN is the total emitted byte count
+; (16-bit; cap is 32 KB given the two-page allocation).
+OUT_PC:                 defw    0           ; next emit position (section B)
 OUT_LEN:                defw    0           ; bytes emitted so far
+OUT_ZONE:               defb    0           ; 0 = low zone (section B, page 5);
+                                            ; 1 = high zone (LMPR=&25, page 6)
