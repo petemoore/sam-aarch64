@@ -162,26 +162,37 @@ encode_adrp_imm:
 ; delta 0xff841000 under origin 0xfffffff0_00000000.  The diff therefore
 ; MUST be computed at full width and sign-determined by bit 32, not 31.
 ;
-; v (the ABSOLUTE target) is the full 8-byte LE eval value at
-; (encoder_opval_ptr)+2 — under the high origin its high word is
-; ORIGIN_HIGH (carried in via eval_store_origin_high).  The caller also
-; passed the low 32 bits in BCDE, but we ignore that and re-read all 8
-; bytes here so the high word participates in the subtraction.
+; CALLING CONVENTION (unchanged from M4): BCDE = low 32 bits of the
+; ABSOLUTE target, big-endian register packing (B=hi .. E=lo).  An adrp
+; target is ALWAYS an origin-relative address (a label / PC-relative
+; expression), so its full-64-bit high word equals ORIGIN_HIGH — exactly
+; the same high word as PASS_PC's VMA.  We therefore reconstruct the
+; full 64-bit target as (BCDE low) ++ (ORIGIN_HIGH high), which makes the
+; high words cancel in the page-difference subtraction below.  This both
+; preserves the M4 self-test convention (which sets BCDE directly with
+; PASS_PC == 0 and ORIGIN_HIGH == 0, so the high words are 0) AND fixes
+; the high-origin path (delta 0xff841000 is +ve in 33-bit space).
+; Faithful to Go where target v and pc both carry the full OriginVMA
+; (tools/refenc/pass2.go:363 diff = (v&~0xFFF) - (pc&~0xFFF)).
 ;
 ; pc = PASS_PC (low 32, LE) ++ ORIGIN_HIGH (high 32, LE).
 
 ; Build (v & ~0xFFF) in encode_adrp_imm_t8[0..7] (LE, 8 bytes).
-                ld      hl, (encoder_opval_ptr)
-                inc     hl
-                inc     hl                     ; HL → byte 0 of LE value
-                ld      de, encode_adrp_imm_t8
-                ld      bc, 8
-                ldir
+;   t8[0..3] = BCDE (low 32), then mask low 12 bits.
                 xor     a
                 ld      (encode_adrp_imm_t8 + 0), a    ; clear low 8 bits
-                ld      a, (encode_adrp_imm_t8 + 1)
+                ld      a, d
                 and     &f0                            ; clear bits 8..11
                 ld      (encode_adrp_imm_t8 + 1), a
+                ld      a, c
+                ld      (encode_adrp_imm_t8 + 2), a
+                ld      a, b
+                ld      (encode_adrp_imm_t8 + 3), a
+;   t8[4..7] = ORIGIN_HIGH (target high word == origin high word).
+                ld      hl, ORIGIN_HIGH
+                ld      de, encode_adrp_imm_t8 + 4
+                ld      bc, 4
+                ldir
 
 ; Build (pc & ~0xFFF) in encode_adrp_imm_pc8[0..7] (LE, 8 bytes).
                 xor     a

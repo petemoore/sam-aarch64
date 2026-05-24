@@ -232,6 +232,17 @@ start:
                 xor     a
                 ld      (encode_logical_imm_soft), a
 
+; Zero ORIGIN_HIGH at cold boot.  It is normally set by `.org`'s set-pc
+; tail and reset by pass_pc_reset — but both run inside main_assemble,
+; AFTER the BUILD_TESTS boot self-tests.  encode_adrp_imm now reads
+; ORIGIN_HIGH as the target/PC high word, so the adrp slot self-tests
+; (which assume origin 0) would otherwise see uninitialised RAM.  Force
+; it to 0 here, before any self-test runs.
+                ld      (ORIGIN_HIGH + 0), a
+                ld      (ORIGIN_HIGH + 1), a
+                ld      (ORIGIN_HIGH + 2), a
+                ld      (ORIGIN_HIGH + 3), a
+
 ; Capture the boot LMPR value (as left by BASIC's CALL 32768) into
 ; LMPR_DEFAULT_RUNTIME so enctab_map_out restores the *real* default,
 ; not a synthetic "ROM in A / page 1 in B" guess.  BASIC's default

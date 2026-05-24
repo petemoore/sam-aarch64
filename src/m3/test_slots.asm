@@ -271,15 +271,26 @@ run_slot_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &20, &00, &00, &20  ; 0x20000020 LE
 
-; -- encode_adrp_imm(AdrpImm{BP=0,BW=21}, -4096) => 0x60FFFFE0 --------
-; pageOffset = -1 → imm21 = 0x1FFFFF → immlo=3, immhi=0x7FFFF.
-; (3<<29) | (0x7FFFF<<5) = 0x60000000 | 0x00FFFFE0 = 0x60FFFFE0.
+; -- encode_adrp_imm(AdrpImm{BP=0,BW=21}, target=0xFFFFF000) => 0x607FFFE0
+; The wide operand is the ABSOLUTE TARGET (not a pre-signed byteOffset),
+; and the page-difference is computed in full 64-bit / 33-bit space with
+; the target's high word == PC's high word == ORIGIN_HIGH (here 0).  So
+; target 0xFFFFF000 with PASS_PC 0 gives diff 0xFFFFF000 (POSITIVE in
+; 33-bit space, bit 32 clear) → pageOffset 0xFFFFF (1048575, < 2^20, in
+; range) → imm21 = 0xFFFFF → immlo=3, immhi=0x3FFFF →
+; (3<<29) | (0x3FFFF<<5) = 0x60000000 | 0x007FFFE0 = 0x607FFFE0.
+; Verified against refenc: `adrp x0, 0xFFFFF000` (origin 0) → payload
+; 0x607FFFE0 (f07fffe0 with the x0/opcode bits).  The prior expectation
+; 0x60FFFFE0 assumed a 32-bit-signed interpretation of the operand
+; (treating 0xFFFFF000 as -4096), which diverged from GNU/refenc for
+; targets >= 2^31 under a zero origin; the full-width computation (M6
+; Class-5 fix) corrects it.
                 ld      hl, slot_adrp_bp0_bw21
                 ld      bc, &ffff
                 ld      de, &f000
                 call    encode_adrp_imm
                 call    assert_eq32_de_hl_imm
-                defb    &e0, &ff, &ff, &60  ; 0x60FFFFE0 LE
+                defb    &e0, &ff, &7f, &60  ; 0x607FFFE0 LE
 
 ; -- encode_logical_imm(LogicalImm{BP=10,BW=13}, 0xff, is64=true) ------
 ;    => N=1, immr=0, imms=7 → imm13 = 0x1007 → << 10 = 0x00401C00.
