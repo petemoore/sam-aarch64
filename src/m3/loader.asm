@@ -205,3 +205,67 @@ load_enctab_fail:
 name_enctab:    defb    19
                 defm    "enctab.enc"   ; 10 chars
                 defm    "    "         ; 4-char ext (4 spaces)
+
+
+if defined(BUILD_TESTS)
+
+; -----------------------------------------------------------------------
+; load_test_mem_off_axis — BUILD_TESTS only.  HLOAD the off-axis
+;                           test_mem binary into physical page 13 via
+;                           the trampoline.
+;
+; Per plan-PR 3 of docs/notes/2026-05-28-paged-call-architecture.md
+; (re-ordered per docs/notes/2026-05-28-session-handoff.md): the
+; largest single BUILD_TESTS-only self-test suite (test_mem.asm,
+; ~780 B of section-C code) is moved off-axis so the test variant's
+; binary tail doesn't spill past &C100 into OPVAL_ARRAY scratch.
+;
+; The off-axis binary is assembled separately (src/m3/test_mem_offaxis.asm
+; with `--importfile=build/assembler.sym`, see Makefile).  Its first
+; byte is `run_mem_self_tests`; assemble.asm's BUILD_TESTS block
+; reaches it via LMPR-swap-call-restore.
+;
+; Input:  none (precondition: enctab_trampoline_setup has been called).
+; Output: test_mem.bin content sits at physical page 13.  Reads via
+;         section A (LMPR = LMPR_TEST_MEM = &2D) see the code at
+;         &0000-onward.  LMPR/HMPR restored on return.
+; Clobbers: A, BC, DE, HL, IX (everything except SP).
+; -----------------------------------------------------------------------
+load_test_mem_off_axis:
+                ld      hl, name_test_mem
+                call    fill_uifa
+                rst     8
+                defb    HOOK_HGTHD     ; longjmps on "file not found"
+
+; Read length-mod-16K from SAMDOS-deposited DIFA header at &4B50+35,
+; clearing the `set 7, d` marker.  Mirrors load_in_file in main_loop.asm.
+                ld      hl, (&4B50 + 35)
+                ld      a, h
+                and     &7F
+                ld      h, a
+                ld      e, l
+                ld      d, h           ; DE = length-mod-16K
+
+; Read page count from DIFA+34.  We expect 0 for a sub-16K payload —
+; if the off-axis test bin ever grows past 16 KB this needs revisiting.
+                ld      a, (&4B50 + 34)
+                ld      c, a           ; C = pages count
+
+                ld      hl, &8000      ; section-C window (HLOAD requirement)
+                ld      b, TEST_MEM_PAGE
+                call    TRAMPOLINE_DST
+                ret
+
+
+; -----------------------------------------------------------------------
+; UIFA name block for "test_mem" (BUILD_TESTS only).
+;
+; The on-disk catalogue entry is created Mac-side by build-m3-disk
+; (using samfile) when invoked with the -test-mem flag, matching the
+; same `tools/build-m3-disk/main.go` pattern used for enctab.enc.
+; -----------------------------------------------------------------------
+name_test_mem:  defb    19
+                defm    "test_mem  "   ; 10 chars (8 + 2 trailing spaces)
+                defm    "    "         ; 4-char ext (unused)
+
+endif

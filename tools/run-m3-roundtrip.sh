@@ -74,8 +74,21 @@ echo "--- text2bin ---"
 "$ROOT/build/text2bin" -o "build/${base}.tbn" "$fixture"
 
 # 2. build-m3-disk with the .tbn as IN.
+#
+# For the test variant only, also deposit the off-axis test_mem.bin
+# (plan-PR 3 of the paging architecture — see
+# docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md).  Production
+# builds don't include the test_mem code path at all, so no off-axis
+# file is needed.
 echo "--- build-m3-disk ---"
+test_mem_flag=()
+if [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler.bin" ]; then
+    # Test variant — needs the off-axis test_mem payload.
+    make -s test-mem-offaxis
+    test_mem_flag=(-test-mem "$ROOT/build/test_mem.bin")
+fi
 "$ROOT/build/build-m3-disk" \
+    "${test_mem_flag[@]}" \
     "$ASSEMBLER_BIN" build/enctab.enc \
     "build/${base}.tbn" \
     "build/${base}.mgt"

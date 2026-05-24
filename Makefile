@@ -96,7 +96,7 @@ test-m2: refenc text2bin
 
 ci-m2: test-m2
 
-.PHONY: m3-asm m3-asm-prod build-m3-disk m3-disk test-m3 ci-m3
+.PHONY: m3-asm m3-asm-prod build-m3-disk m3-disk test-mem-offaxis test-m3 ci-m3
 
 # Two build variants of the SAM-side assembler:
 #
@@ -122,13 +122,35 @@ m3-asm: $(BUILD)/assembler.bin
 
 m3-asm-prod: $(BUILD)/assembler-prod.bin
 
-$(BUILD)/assembler.bin: src/m3/assembler.asm $(wildcard src/m3/*.asm) $(wildcard src/m3/**/*.asm) src/sam_io.inc
+# Test-variant build also exports the symbol table for the off-axis
+# test_mem.bin to import (plan-PR 3 — see
+# docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md).
+$(BUILD)/assembler.bin $(BUILD)/assembler.sym: src/m3/assembler.asm $(wildcard src/m3/*.asm) $(wildcard src/m3/**/*.asm) src/sam_io.inc
 	@mkdir -p $(BUILD)
-	pyz80 -D BUILD_TESTS=1 --obj=$(BUILD)/assembler.bin src/m3/assembler.asm
+	pyz80 -D BUILD_TESTS=1 \
+	    --obj=$(BUILD)/assembler.bin \
+	    --exportfile=$(BUILD)/assembler.sym \
+	    src/m3/assembler.asm
 
 $(BUILD)/assembler-prod.bin: src/m3/assembler.asm $(wildcard src/m3/*.asm) $(wildcard src/m3/**/*.asm) src/sam_io.inc
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/assembler-prod.bin src/m3/assembler.asm
+
+# Off-axis test_mem build (BUILD_TESTS only).
+#
+# test_mem_offaxis.asm is a thin wrapper that does `org &0000` then
+# `include "test_mem.asm"`.  Imports section-C symbols (encode_mem_word,
+# assert_eq32_de_hl_imm, OPVAL_ARRAY, ...) from the just-built
+# assembler.sym so that production calls resolve to their real
+# addresses in the main binary.  The resulting build/test_mem.bin is
+# small (~780 B) and is HLOADed at boot into physical page 13 by
+# src/m3/loader.asm::load_test_mem_off_axis.  See plan-PR 3 brief.
+$(BUILD)/test_mem.bin: src/m3/test_mem_offaxis.asm src/m3/test_mem.asm $(BUILD)/assembler.sym
+	pyz80 --importfile=$(BUILD)/assembler.sym \
+	    --obj=$(BUILD)/test_mem.bin \
+	    src/m3/test_mem_offaxis.asm
+
+test-mem-offaxis: $(BUILD)/test_mem.bin
 
 $(BUILD)/build-m3-disk: tools/build-m3-disk/main.go tools/build-m3-disk/go.mod
 	@mkdir -p $(BUILD)
@@ -136,13 +158,15 @@ $(BUILD)/build-m3-disk: tools/build-m3-disk/main.go tools/build-m3-disk/go.mod
 
 build-m3-disk: $(BUILD)/build-m3-disk
 
-m3-disk: m3-asm enctab $(BUILD)/build-m3-disk
-	$(BUILD)/build-m3-disk $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/m3-test.mgt
+m3-disk: m3-asm test-mem-offaxis enctab $(BUILD)/build-m3-disk
+	$(BUILD)/build-m3-disk \
+	    -test-mem $(BUILD)/test_mem.bin \
+	    $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/m3-test.mgt
 
 # test-m3 — sweep every fixture under tests/m3/sources/ end-to-end:
 # text2bin → build-m3-disk → SimCoupé → samfile extract OUT →
 # byte-compare against aarch64-{none-elf,linux-gnu}-as + objcopy -O binary.
-test-m3: m3-asm enctab $(BUILD)/build-m3-disk text2bin
+test-m3: m3-asm test-mem-offaxis enctab $(BUILD)/build-m3-disk text2bin
 	./tests/m3/run-roundtrip.sh
 
 ci-m3: test-m3
@@ -154,7 +178,7 @@ ci-m3: test-m3
 # but feeds it M4-fixture .tbn inputs and uses an oracle that includes
 # `ld -Ttext=0` so :lo12: / branch-to-label relocations resolve.  See
 # docs/specs/2026-05-24-m4-symbols-multipass-design.md §3.
-test-m4: m3-asm enctab $(BUILD)/build-m3-disk text2bin
+test-m4: m3-asm test-mem-offaxis enctab $(BUILD)/build-m3-disk text2bin
 	./tests/m4/run-roundtrip.sh
 
 ci-m4: test-m4
@@ -185,7 +209,7 @@ ci-m4-prod: test-m4-prod
 #
 # The GitHub Actions `m5` job is added in M5 PR E (the final integration
 # PR); for now ci-m5 / ci-m5-prod run locally + via the dev container.
-test-m5: m3-asm enctab $(BUILD)/build-m3-disk text2bin
+test-m5: m3-asm test-mem-offaxis enctab $(BUILD)/build-m3-disk text2bin
 	./tests/m5/run-roundtrip.sh
 
 test-m5-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
@@ -204,7 +228,7 @@ ci-m5-prod: test-m5-prod
 # exercise the paged-OUT machinery (sections-B emit + HSAVE auto-paging
 # across &C000) by emitting > 16 KB of output to cross the OUT_ZONE
 # low → high boundary.
-test-m6: m3-asm enctab $(BUILD)/build-m3-disk text2bin
+test-m6: m3-asm test-mem-offaxis enctab $(BUILD)/build-m3-disk text2bin
 	./tests/m6/run-roundtrip.sh
 
 test-m6-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin

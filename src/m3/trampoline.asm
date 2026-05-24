@@ -267,6 +267,27 @@ LMPR_IN_BASE:   equ     &20 + IN_BASE_PAGE
                                        ; = &27; section A = page 7 (IN[0])
 
 
+; Off-axis test-payload page (BUILD_TESTS only — see plan-PR 3 of
+; docs/notes/2026-05-28-paged-call-architecture.md and the brief at
+; docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md).
+;
+; Page 13 is reserved by docs/notes/2026-05-28-memory-layout-brainstorm.md
+; §3 for "disasm aux + sysreg DB + rewrite-hint table".  That role
+; lands in a later strand-B PR; until then plan-PR 3 reuses page 13
+; as the off-axis test payload page.  When PR #50 is salvaged and the
+; disasm-aux infrastructure lands, the test payload will move to a
+; dedicated page (or be migrated to paged_call) — see the §6 PR
+; sequence in the paged-call architecture doc.
+;
+; LMPR_TEST_MEM = &20 | 13 = &2D puts section A = page 13.  Section B
+; under this LMPR = page 14 (free).  HMPR is unchanged, so section
+; C/D still map to the assembler code + scratch — calls FROM off-axis
+; test code TO production code (encode_mem_word, assert_eq32_de_hl_imm,
+; fail) work as if the swap had never happened.
+TEST_MEM_PAGE:  equ     13
+LMPR_TEST_MEM:  equ     &20 + TEST_MEM_PAGE         ; = &2D
+
+
 TRAMPOLINE_DST: equ     &7E00          ; section-B copy destination
                                        ; (under LMPR_DEFAULT, section B
                                        ; = page 1).  Near the top of

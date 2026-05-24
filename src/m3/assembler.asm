@@ -45,6 +45,13 @@
 ;     startup via load_in_file_paged; read via per-record LMPR-bracket
 ;     into section A on each reader_next_kind call.  See
 ;     docs/specs/2026-05-27-m6-paged-in-design.md.
+;   Physical page 13 (off-axis, BUILD_TESTS only): test_mem.bin — the
+;     largest BUILD_TESTS-only self-test suite, ported off-axis to
+;     free section-C budget.  HLOAD'd at boot via
+;     load_test_mem_off_axis (loader.asm); invoked via LMPR-swap-
+;     CALL-restore from `start:` in this file.  See plan-PR 3 of
+;     docs/notes/2026-05-28-paged-call-architecture.md and the brief
+;     at docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md.
 ;
 ; Pre-M5 layout placed ENCTAB at &A000-&AFFF in section C, consuming
 ; 4 KB of the code section.  M5's compound-operand encoders pushed
@@ -195,6 +202,26 @@ if defined(BUILD_TESTS)
                 ld      (boot_hmpr), a
 endif
 
+; -- Install the section-B HLOAD trampoline.  Must happen BEFORE
+; load_enctab (which uses it).  Per plan-PR 3 it also runs BEFORE
+; the BUILD_TESTS self-tests because the test variant HLOADs the
+; off-axis test_mem payload via this trampoline before invoking
+; run_mem_self_tests below.  The pre-load on-axis self-tests don't
+; touch section B, so installing the trampoline early is safe.
+                call    enctab_trampoline_setup
+
+; -- BUILD_TESTS only: HLOAD the off-axis test_mem.bin into page 13.
+; The Mac-side build pipeline assembles src/m3/test_mem_offaxis.asm
+; against the main-binary symbol export, producing a small standalone
+; binary that lives at section-A &0000-onward when LMPR = LMPR_TEST_MEM.
+; The actual run_mem_self_tests invocation below swaps LMPR briefly,
+; calls into the off-axis entry, then restores.
+;
+; See docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md.
+if defined(BUILD_TESTS)
+                call    load_test_mem_off_axis
+endif
+
 ; -- Boot-time self-tests (compiled in only when BUILD_TESTS=1) --------
 ; Five suites run in fixed order BEFORE load_enctab so they have no
 ; disk-state dependency.  Any assertion failure does `jp fail` (red
@@ -217,16 +244,24 @@ if defined(BUILD_TESTS)
                 call    run_ror_imm_self_tests
                 call    run_shifted_reg_self_tests
                 call    run_extended_reg_self_tests
-                call    run_mem_self_tests
+
+; -- run_mem_self_tests lives off-axis on page 13 (plan-PR 3).
+; LMPR-swap-call-restore sequence: 9 bytes vs 3 for a plain `call`,
+; net section-C saving ~770 B over the moved test_mem.asm body.
+; HMPR is unchanged, so the off-axis code's calls to encode_mem_word,
+; assert_eq32_de_hl_imm, and fail all resolve to their section-C
+; addresses and execute correctly.  Stack (section D, HMPR) likewise
+; unaffected.  Interrupts already DI at this point (set at start:).
+                ld      a, LMPR_TEST_MEM
+                out     (250), a
+                call    &0000                       ; off-axis run_mem_self_tests
+                ld      a, (LMPR_DEFAULT_RUNTIME)
+                out     (250), a
+
                 call    run_sysname_self_tests
                 call    run_litpool_self_tests
                 call    run_emit_paged_self_tests
 endif
-
-; -- Install the section-B HLOAD trampoline.  Must happen BEFORE
-; load_enctab (which uses it) but AFTER the self-tests (which may
-; reuse section B's address range for their own scratch).
-                call    enctab_trampoline_setup
 
 ; -- Load and validate enctab.enc header --------------------------------
 ; load_enctab uses the trampoline to land the file in physical page 4
@@ -365,7 +400,10 @@ if defined(BUILD_TESTS)
                 include "test_ror_imm.asm"
                 include "test_shifted_reg.asm"
                 include "test_extended_reg.asm"
-                include "test_mem.asm"
+                ; test_mem.asm now lives off-axis on physical page 13;
+                ; assembled separately into build/test_mem.bin and HLOADed
+                ; at boot via load_test_mem_off_axis.  See plan-PR 3 brief
+                ; at docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md.
                 include "test_sysname.asm"
                 include "test_litpool.asm"
                 include "test_trampoline.asm"
