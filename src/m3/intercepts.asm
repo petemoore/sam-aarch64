@@ -67,6 +67,35 @@ try_intercept_post_ror:
                 jp      try_intercept_no_match  ; Z=0 → generic form encodes it
 try_intercept_post_csetm:
 
+; -- bic Rd, Rn, #imm (ID 47, immediate form) — AND with ~imm ----------
+; `bic Rd, Rn, #imm` is `and Rd, Rn, #~imm`.  The generic form-table path
+; for bic-immediate maps it onto the AND-imm encoding but with the RAW
+; immediate (it never negates), so e.g. `bic w7,w7,#1` came out as
+; `and w7,w7,#0x1` (120000e7) instead of GNU's `and w7,w7,#0xfffffffe`
+; (121f78e7).  Following the csetm pattern, negate operand 2's immediate
+; IN PLACE and fall through to the generic encoder (whose LogicalImm slot
+; then encodes the AND with ~imm).  Mirrors tools/refenc/pass2.go:304
+; (case 47 dispatch) + encodeBicImm (pass2.go:1397 negImm = ^imm).  Only
+; the (Rd, Rn, #imm) shape is intercepted; the register form
+; (bic Rd,Rn,Rm{,shift}) is handled by the shifted-reg path below.
+                ld      a, (try_intercept_mnem)
+                cp      47
+                jr      nz, try_intercept_post_bic
+                ld      a, (main_op_count)
+                cp      3
+                jr      nz, try_intercept_post_bic
+                ld      a, (OPVAL_KINDS + 2)
+                cp      OP_KIND_IMM_EXPR
+                jr      nz, try_intercept_post_bic
+; ~imm in place over operand 2's 8-byte LE value (NOT all 8 bytes; the
+; LogicalImm encoder masks/replicates to width itself for the W case).
+                ld      hl, OPVAL_ARRAY + 2 * OPVAL_STRIDE + 2
+                call    ml_not
+; Fall through to try_intercept_no_match: the generic form encodes `bic`
+; as AND-imm, now over ~imm.
+                jp      try_intercept_no_match
+try_intercept_post_bic:
+
 ; -- mov Rd, #imm (ID 3) — MOV-immediate alias auto-selection ----------
 ; A bare `mov Rd, #imm` is an alias GNU as resolves to ONE of MOVZ (wide
 ; immediate), MOVN (inverted wide immediate), or ORR Rd,XZR,#bimm
