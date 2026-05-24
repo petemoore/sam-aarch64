@@ -45,6 +45,28 @@ try_mnemonic_intercept:
 
 try_intercept_post_ror:
 
+; -- csetm (ID 52) — invert the condition before the form table -------
+; csetm Rd, cond is an alias of CSINV Rd, XZR, XZR, invert(cond): the
+; condition field in the machine code is cond XOR 1.  The form-table
+; entry for ID 52 (manual_forms.go:416-425, CSINV pattern with the
+; CondCode slot at bits[15:12]) places the cond operand verbatim, so we
+; must XOR the stored cond byte by 1 here, then fall through to the
+; generic path which encodes it.  This mirrors the Mac-side dispatch
+; tools/refenc/pass2.go:308 (case 52 -> encodeCsetm), whose body is
+; `invertedCond := cond ^ 1` (pass2.go:1436).  Grounded against
+; aarch64-none-elf-as + ARM ARM C6.2.58 (CSETM).
+;
+; The OpCond operand is operand 1; its cond byte lives at +2 of the
+; operand record (see encoder.asm encode_slot_cond: cond stored at +2).
+                ld      a, (try_intercept_mnem)
+                cp      52
+                jp      nz, try_intercept_post_csetm
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2)
+                xor     1                   ; invert: EQ<->NE, CS<->CC, ...
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2), a
+                jp      try_intercept_no_match  ; Z=0 → generic form encodes it
+try_intercept_post_csetm:
+
 ; -- Shifted-register-capable mnemonics: add/sub/and/orr/eor/subs/tst/
 ;    bic/ands.  Two routings:
 ;      (a) operand 2 (or 1 for tst) is OpShiftedReg — direct dispatch.
