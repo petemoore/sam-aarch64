@@ -1,8 +1,9 @@
-; local_labels.asm — per-digit local-label table for the M4 assembler.
+; local_labels.asm — local-label table for the M4+ assembler.
 ;
-; Per docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.3.
+; Per docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.3 (v2,
+; multi-digit) and docs/plans/2026-05-27-multi-digit-local-labels.md.
 ;
-; Local labels are written as a single decimal digit `1..9` and are
+; Local labels are written as a decimal digit `1..99` and are
 ; referenced as either `Nf` (forward — next occurrence with PC strictly
 ; greater than the reference PC) or `Nb` (backward — most recent
 ; occurrence with PC less than or equal to the reference PC).
@@ -14,33 +15,31 @@
 ; On-disk layout
 ; -----------------------------------------------------------------------
 ;
-; Nine fixed-size per-digit lists, packed contiguously at
-; LOCAL_LABEL_TABLE (= &CD60).  Each list is LOCAL_LIST_STRIDE bytes:
+; Single shared sorted list of (digit, pc) tuples, at LOCAL_LABEL_TABLE
+; (= &CD60).  Five bytes per entry (1 B digit + 4 B PC LE), with a
+; 2-byte count prefix:
 ;
-;   offset 0      count   u16 LE     (entries used; 0..LOCAL_LIST_MAX)
-;   offset 2..97  pcs     u32 LE * LOCAL_LIST_MAX
+; Memory layout (1 KB slot at &CD60..&D15F):
 ;
-; LOCAL_LIST_MAX = 24 entries per digit → stride 2 + 24*4 = 98 bytes.
-; Total reservation: 9 × 98 = 882 bytes  (&CD60..&D0C1 inclusive),
-; comfortably inside the &CD60..&D15F (1 KB) budget called out in
-; assembler.asm.
+;   offset 0..1   count   u16 LE     (entries used; 0..LOCAL_LIST_MAX)
+;   offset 2..    entries — for i in 0..count:
+;     base + 2 + i*5 + 0       = digit (u8, 1..99)
+;     base + 2 + i*5 + 1..4    = pc    (u32 LE)
 ;
-; The 9 lists are addressed via a static base-pointer table
-; (local_list_bases) rather than by multiplying digit*stride — stride
-; 98 has no nice power-of-two factor, and a 9-entry pointer table is 18
-; bytes of ROM, which is cheaper than 6+ shifts at every call site.
+; LOCAL_LIST_MAX = 200 → 2 + 200*5 = 1002 bytes ≤ 1024-byte slot
+; reserved by assembler.asm.
 ;
 ; Sort order: definition order (= PC order).  Pass 1 walks records
 ; sequentially, so PCs at each call to local_def_append are
-; monotonically non-decreasing within a digit.  This means appending in
-; order automatically keeps the list sorted; no insertion-point search
-; is required.
+; monotonically non-decreasing across the whole list (and so within
+; each digit's subsequence too).  Appending in order automatically
+; keeps the list sorted; no insertion-point search is required.
 ;
 ; -----------------------------------------------------------------------
 ; ABI summary (full per-routine headers below)
 ; -----------------------------------------------------------------------
 ;
-;   local_label_table_init                           — reset all 9 counts
+;   local_label_table_init                            — reset the count
 ;   local_def_append      A=digit, (local_label_pc_buf)=pc      — append
 ;   local_find_forward    A=digit, (local_label_pc_buf)=ref_pc  — > ref
 ;   local_find_backward   A=digit, (local_label_pc_buf)=ref_pc  — <=ref
@@ -51,8 +50,8 @@
 ; pressure off the caller (A is the digit; BC/DE/HL are scratch).
 ;
 ; Errors:
-;   * invalid digit (< 1 or > 9)             → jp fail
-;   * append into full per-digit list        → jp fail
+;   * invalid digit (< 1 or > 99)            → jp fail
+;   * append into full shared list           → jp fail
 ; Both are unrecoverable; same single-shot termination as symbol_insert.
 ;
 ; -----------------------------------------------------------------------
@@ -60,143 +59,109 @@
 ; ---------------------------------------------------------------------
 ; Memory map (must match the reservation comment in assembler.asm).
 ; ---------------------------------------------------------------------
-LOCAL_LABEL_TABLE:      equ     &CD60          ; 9 × 98 bytes = 882 bytes
-LOCAL_LIST_MAX:         equ     24             ; max entries per digit
-LOCAL_LIST_STRIDE:      equ     98             ; 2 (count) + 24 * 4 (pcs)
+LOCAL_LABEL_TABLE:      equ     &CD60   ; 2-byte count + 200 * 5-byte entries = 1002 bytes
+LOCAL_LIST_MAX:         equ     200     ; total entries across ALL digits
+LOCAL_ENTRY_SIZE:       equ     5       ; 1 byte digit + 4 bytes PC (LE)
+LOCAL_MAX_DIGIT:        equ     99      ; digit range 1..99 inclusive
 
 
 ; -----------------------------------------------------------------------
-; local_label_table_init — zero all per-digit counts.
+; local_label_table_init — zero the entry count.
 ;
-; Only the 2-byte count field of each per-digit list needs zeroing; the
-; PC slots are don't-care until the count grows to include them.
+; Only the 2-byte count field needs zeroing; the entry slots are
+; don't-care until the count grows to include them.
 ;
 ; Input:  none.
-; Output: count = 0 in every per-digit list.
-; Clobbers: A, BC, HL.
+; Output: count = 0.
+; Clobbers: A, HL.
 ; -----------------------------------------------------------------------
 local_label_table_init:
                 ld      hl, LOCAL_LABEL_TABLE
-                ld      a, 9                        ; A = digits remaining
-local_label_table_init_loop:
                 ld      (hl), 0                     ; count LSB
                 inc     hl
                 ld      (hl), 0                     ; count MSB
-                dec     hl                          ; HL back at count[0]
-                push    af                          ; preserve counter
-                ld      bc, LOCAL_LIST_STRIDE
-                add     hl, bc                      ; HL = next digit's count
-                pop     af
-                dec     a
-                jr      nz, local_label_table_init_loop
                 ret
 
 
 ; -----------------------------------------------------------------------
-; local_get_list_base — internal helper: HL := base of digit A's list.
-;
-; Input:  A = digit (1..9).
-; Output: HL = address of the digit's count field (= list base).
-; Errors: A < 1 or A > 9 → jp fail.
-; Clobbers: A, BC, HL.
-;
-; Implementation: 9-entry pointer table (local_list_bases) holds the
-; base address of each digit's list.  Digit d (1-indexed) is at table
-; offset (d-1)*2.
-; -----------------------------------------------------------------------
-local_get_list_base:
-                or      a
-                jp      z, fail                     ; digit 0 invalid
-                cp      10
-                jp      nc, fail                    ; digit >= 10 invalid
-
-                dec     a                           ; 0..8 = table index
-                ld      l, a
-                ld      h, 0
-                add     hl, hl                      ; * 2 (pointer entry size)
-                ld      bc, local_list_bases
-                add     hl, bc                      ; HL = &local_list_bases[d-1]
-                ld      c, (hl)
-                inc     hl
-                ld      b, (hl)                     ; BC = digit's list base
-                ld      h, b
-                ld      l, c                        ; HL = digit's list base
-                ret
-
-
-; -----------------------------------------------------------------------
-; local_def_append — append a PC to digit A's per-digit list.
+; local_def_append — append a (digit, pc) entry to the shared list.
 ;
 ; Input:
-;   A                              = digit (1..9).
+;   A                              = digit (1..99).
 ;   (local_label_pc_buf + 0..3)    = pc u32 LE.
 ;
 ; Output: returns normally on success.  local_label_pc_buf unchanged.
 ;
 ; Errors:
-;   Invalid digit (< 1 or > 9)           → jp fail.
-;   Per-digit list full (count == MAX)   → jp fail.
+;   Invalid digit (< 1 or > 99)          → jp fail.
+;   List full (count == LOCAL_LIST_MAX)  → jp fail.
 ;
 ; Clobbers: A, BC, DE, HL.
 ;
 ; Strategy:
-;   1. Resolve list base via local_get_list_base.
+;   1. Validate digit.
 ;   2. Read count; range-check against LOCAL_LIST_MAX.
-;   3. Append PC at &(base + 2 + count*4).
-;   4. Bump count.
+;   3. Write digit at base + 2 + count*5.
+;   4. Write 4-byte PC at base + 2 + count*5 + 1.
+;   5. Bump count.
 ; -----------------------------------------------------------------------
 local_def_append:
-                call    local_get_list_base         ; HL = list base
-                ld      (local_pending_base), hl    ; save for write-back
+                ld      (local_saved_digit), a      ; A = digit, save
 
-; Read count (16-bit LE at HL+0..1).
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)                     ; DE = count
-                dec     hl                          ; HL = base
-
-; Range check: count must be < LOCAL_LIST_MAX.
-; Counts are bounded by LOCAL_LIST_MAX (= 24), so the high byte is 0.
-                ld      a, d
+; Validate digit ∈ [1, 99].
                 or      a
-                jp      nz, fail                    ; > 255 — impossible but defensive
-                ld      a, e
-                cp      LOCAL_LIST_MAX
-                jp      nc, fail                    ; full — overflow
+                jp      z, fail                     ; digit 0 invalid
+                cp      LOCAL_MAX_DIGIT + 1
+                jp      nc, fail                    ; digit > 99 invalid
 
-; Compute insertion address: base + 2 + count*4.
+; Load count.  Cap < 256 so high byte must be 0; check both halves
+; defensively (any non-zero MSB ⇒ corruption).
+                ld      hl, LOCAL_LABEL_TABLE
+                inc     hl                          ; HL → count MSB
+                ld      a, (hl)
+                or      a
+                jp      nz, fail                    ; MSB != 0 ⇒ corruption
+                dec     hl                          ; HL = base
+                ld      a, (hl)                     ; A = count LSB
+                cp      LOCAL_LIST_MAX
+                jp      nc, fail                    ; list full
+
+; Compute entry address: base + 2 + count*5.
+                ld      e, a                        ; E = count
+                ld      d, 0
                 ex      de, hl                      ; HL = count, DE = base
-                add     hl, hl                      ; * 2
-                add     hl, hl                      ; * 4
+                ld      b, h
+                ld      c, l                        ; BC = count
+                add     hl, hl                      ; *2
+                add     hl, hl                      ; *4
+                add     hl, bc                      ; *5
                 ld      bc, 2
                 add     hl, bc                      ; + 2 (skip count field)
-                add     hl, de                      ; + base → HL = &pcs[count]
+                add     hl, de                      ; + base → HL = &entries[count]
 
-; Write 4 bytes from local_label_pc_buf into &pcs[count].
+; Write digit byte.
+                ld      a, (local_saved_digit)
+                ld      (hl), a
+                inc     hl
+
+; Write 4-byte PC from local_label_pc_buf.
                 ld      de, local_label_pc_buf
                 ex      de, hl                      ; HL = src, DE = dest
                 ld      bc, 4
                 ldir
 
-; Bump count.  HL was clobbered by ldir; reload from saved base.
-                ld      hl, (local_pending_base)
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)
-                dec     hl
-                inc     de                          ; count++
-                ld      (hl), e
-                inc     hl
-                ld      (hl), d
+; Bump count (LSB only; high byte stays 0 because cap < 256).
+                ld      hl, LOCAL_LABEL_TABLE
+                inc     (hl)
                 ret
 
 
 ; -----------------------------------------------------------------------
-; local_find_forward — `Nf` lookup: smallest pc in digit A's list with
-; pc strictly greater than ref_pc.
+; local_find_forward — `Nf` lookup: smallest pc in the entries with
+; digit == A, where pc is strictly greater than ref_pc.
 ;
 ; Input:
-;   A                              = digit (1..9).
+;   A                              = digit (1..99).
 ;   (local_label_pc_buf + 0..3)    = ref_pc u32 LE.
 ;
 ; Output (hit):
@@ -207,76 +172,76 @@ local_def_append:
 ;   CF = 1.
 ;   local_label_pc_buf is unchanged.
 ;
-; Errors: invalid digit → jp fail (via local_get_list_base).
+; Errors: invalid digit → jp fail.
 ;
 ; Clobbers: A, BC, DE, HL.
 ;
-; Strategy: the list is sorted ascending (definition order = PC order).
-; Linear scan from low to high; first pc with pc > ref_pc wins.  Lists
-; cap at 24 entries so linear is fine.
+; Strategy: the list is sorted ascending by PC across all digits
+; (definition order = PC order).  Linear scan from low to high, skip
+; entries whose digit doesn't match; first matching pc with pc > ref_pc
+; wins.  List caps at 200 entries so linear is fine.
 ; -----------------------------------------------------------------------
 local_find_forward:
-                call    local_get_list_base         ; HL = list base
+                ld      (local_saved_digit), a      ; A = target digit
 
-; Read count.
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)                     ; DE = count
-                inc     hl                          ; HL → &pcs[0]
-
-; If count == 0, miss.
-                ld      a, d
-                or      e
-                jr      z, local_find_forward_miss
-
-                ld      b, e                        ; B = remaining entries (< 256)
-
-local_find_forward_loop:
-; Compare *HL (4 bytes LE) against ref_pc.  Want: *HL > ref_pc, i.e.
-; ref_pc < *HL.  Compute (*HL) - ref_pc via SUB on each byte from LSB
-; up; if final CF=0 AND any byte differs, *HL > ref_pc.  Easier: use
-; the CP-style sequence below, but track equality separately because
-; CP only tests for <.
-;
-; Concretely we compute: candidate - ref_pc.  CF=1 ⇒ candidate < ref_pc
-; (skip).  CF=0 ⇒ candidate >= ref_pc; need to disambiguate ==/>.
-                call    cmp_pc_at_hl_vs_ref         ; sets flags; preserves HL, DE
-; cmp returns:
-;   A = 0, CF = 0 ⇒ *HL == ref_pc  (skip — need strictly greater)
-;   A = 0, CF = 1 ⇒ *HL  < ref_pc  (skip)
-;   A != 0, CF = 0 ⇒ *HL > ref_pc  (HIT)
-                jr      c, local_find_forward_skip
+; Validate digit ∈ [1, 99] (mirrors append).
                 or      a
-                jr      nz, local_find_forward_hit
-local_find_forward_skip:
-; Advance HL by 4 bytes to next entry, decrement remaining.
-                ld      a, 4
+                jp      z, fail
+                cp      LOCAL_MAX_DIGIT + 1
+                jp      nc, fail
+
+                ld      hl, LOCAL_LABEL_TABLE
+                ld      a, (hl)                     ; count LSB
+                inc     hl                          ; (skip high byte — known 0)
+                inc     hl                          ; HL = &entries[0]
+
+                or      a
+                jr      z, lff_miss
+                ld      b, a                        ; B = entries remaining
+
+lff_loop:
+                push    hl                          ; save base of this entry
+                ld      a, (hl)                     ; A = entry digit
+                ld      c, a
+                ld      a, (local_saved_digit)
+                cp      c
+                jr      nz, lff_advance             ; digit mismatch — skip
+                inc     hl                          ; HL → entry's pc field
+                call    cmp_pc_at_hl_vs_ref         ; preserves HL, BC
+                jr      c, lff_advance              ; cand < ref → skip
+                or      a
+                jr      nz, lff_hit                 ; cand > ref → HIT
+                ; cand == ref → skip (need strictly greater)
+lff_advance:
+                pop     hl
+                ld      a, LOCAL_ENTRY_SIZE
                 add     a, l
                 ld      l, a
-                jr      nc, local_find_forward_no_carry_skip
+                jr      nc, lff_no_carry
                 inc     h
-local_find_forward_no_carry_skip:
-                djnz    local_find_forward_loop
+lff_no_carry:
+                djnz    lff_loop
 
-local_find_forward_miss:
+lff_miss:
                 scf
                 ret
 
-local_find_forward_hit:
-; Copy 4 bytes at HL into local_label_pc_buf, CF=0.
+lff_hit:
+                ; HL → pc field of matching entry.  Copy 4 B to local_label_pc_buf.
                 ld      de, local_label_pc_buf
                 ld      bc, 4
                 ldir
+                pop     bc                          ; discard saved entry base
                 or      a                           ; CF = 0
                 ret
 
 
 ; -----------------------------------------------------------------------
-; local_find_backward — `Nb` lookup: largest pc in digit A's list with
-; pc <= ref_pc.
+; local_find_backward — `Nb` lookup: largest pc in the entries with
+; digit == A, where pc is less than or equal to ref_pc.
 ;
 ; Input:
-;   A                              = digit (1..9).
+;   A                              = digit (1..99).
 ;   (local_label_pc_buf + 0..3)    = ref_pc u32 LE.
 ;
 ; Output (hit):
@@ -291,79 +256,73 @@ local_find_forward_hit:
 ;
 ; Clobbers: A, BC, DE, HL.
 ;
-; Strategy: list is sorted ascending.  Walk from low to high; remember
-; the most recent entry that satisfies entry <= ref_pc; stop when we
-; see an entry > ref_pc (no further match possible since the list is
-; sorted).  Wins because we only ever need one pass.
+; Strategy: list is sorted ascending by PC.  Walk from low to high;
+; remember the address of the pc-field of the most recent matching
+; entry that satisfies entry.pc <= ref_pc; stop when we see a matching
+; entry with pc > ref_pc (no further match possible since the list is
+; sorted).  Non-matching digits are skipped.
 ; -----------------------------------------------------------------------
 local_find_backward:
-                call    local_get_list_base         ; HL = list base
+                ld      (local_saved_digit), a
 
-; Read count.
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)                     ; DE = count
-                inc     hl                          ; HL → &pcs[0]
-
-; If count == 0, miss.
-                ld      a, d
-                or      e
-                jp      z, local_find_backward_miss
-
-                ld      b, e                        ; B = remaining (< 256)
-
-; local_pending_match stores the address (in the table) of the best
-; candidate seen so far.  0x0000 indicates "no candidate yet".  Table
-; addresses are >= LOCAL_LABEL_TABLE (= &CD60), so 0x0000 is safely
-; outside the valid range.
-                ld      de, 0
-                ld      (local_pending_match), de
-
-local_find_backward_loop:
-                call    cmp_pc_at_hl_vs_ref         ; preserves HL
-; A,CF semantics same as in forward:
-;   A=0, CF=0 ⇒ *HL == ref_pc → candidate (<= ref_pc), and since list
-;                                is sorted ascending and we want the
-;                                LARGEST <= ref_pc, this is the best
-;                                possible match: record and STOP.
-;   A=0, CF=1 ⇒ *HL  < ref_pc → candidate; update and keep scanning,
-;                                a later entry may also be <= ref_pc.
-;   A!=0,CF=0 ⇒ *HL  > ref_pc → no longer eligible; stop (list sorted).
-                jr      c, local_find_backward_remember
                 or      a
-                jr      nz, local_find_backward_done
-; Equal case: record and stop.
-                ld      (local_pending_match), hl
-                jr      local_find_backward_done
+                jp      z, fail
+                cp      LOCAL_MAX_DIGIT + 1
+                jp      nc, fail
 
-local_find_backward_remember:
-; *HL < ref_pc — record as best-so-far, then advance.
-                ld      (local_pending_match), hl
+                ld      hl, LOCAL_LABEL_TABLE
+                ld      a, (hl)                     ; count LSB
+                inc     hl
+                inc     hl                          ; HL = &entries[0]
 
-; Advance HL by 4.
-                ld      a, 4
+                or      a
+                jp      z, lfb_miss
+                ld      b, a
+
+                ld      de, 0
+                ld      (local_pending_match), de   ; no candidate yet
+
+lfb_loop:
+                push    hl                          ; save entry base
+                ld      a, (hl)
+                ld      c, a
+                ld      a, (local_saved_digit)
+                cp      c
+                jr      nz, lfb_advance             ; digit mismatch — skip
+                inc     hl                          ; HL → pc field
+                call    cmp_pc_at_hl_vs_ref         ; preserves HL, BC
+                jr      c, lfb_remember             ; cand < ref → record + keep scanning
+                or      a
+                jr      nz, lfb_advance             ; cand > ref → not eligible; skip
+                ; cand == ref → exact match; record and STOP (no later entry can beat ==)
+                ld      (local_pending_match), hl
+                pop     bc                          ; discard saved entry base
+                jr      lfb_done
+
+lfb_remember:
+                ld      (local_pending_match), hl   ; HL → pc field
+lfb_advance:
+                pop     hl
+                ld      a, LOCAL_ENTRY_SIZE
                 add     a, l
                 ld      l, a
-                jr      nc, local_find_backward_no_carry
+                jr      nc, lfb_no_carry
                 inc     h
-local_find_backward_no_carry:
-                djnz    local_find_backward_loop
+lfb_no_carry:
+                djnz    lfb_loop
 
-local_find_backward_done:
-; If local_pending_match is still 0, no entry was <= ref_pc → miss.
+lfb_done:
                 ld      hl, (local_pending_match)
                 ld      a, h
                 or      l
-                jr      z, local_find_backward_miss
-
-; Copy 4 bytes from match address into local_label_pc_buf, CF=0.
+                jr      z, lfb_miss
                 ld      de, local_label_pc_buf
                 ld      bc, 4
                 ldir
-                or      a                           ; CF = 0
+                or      a
                 ret
 
-local_find_backward_miss:
+lfb_miss:
                 scf
                 ret
 
@@ -456,23 +415,9 @@ cmp_pc_at_hl_vs_ref:
 ; resolved pc from local_find_*.  See ABI note at the top of this file.
 local_label_pc_buf:     defb    0, 0, 0, 0
 
-; local_pending_base — saved digit-list base across the append routine.
-local_pending_base:     defw    0
-
-; local_pending_match — best-so-far candidate address (in the list)
-; during local_find_backward.  0x0000 means "no match yet".
+; local_pending_match — best-so-far candidate address (pc-field of an
+; entry) during local_find_backward.  0x0000 means "no match yet".
 local_pending_match:    defw    0
 
-; local_list_bases — base address of each per-digit list, indexed by
-; (digit - 1).  Used by local_get_list_base to skip the awkward
-; multiplication by LOCAL_LIST_STRIDE (= 98).
-local_list_bases:
-                defw    LOCAL_LABEL_TABLE + 0 * LOCAL_LIST_STRIDE   ; digit 1
-                defw    LOCAL_LABEL_TABLE + 1 * LOCAL_LIST_STRIDE   ; digit 2
-                defw    LOCAL_LABEL_TABLE + 2 * LOCAL_LIST_STRIDE   ; digit 3
-                defw    LOCAL_LABEL_TABLE + 3 * LOCAL_LIST_STRIDE   ; digit 4
-                defw    LOCAL_LABEL_TABLE + 4 * LOCAL_LIST_STRIDE   ; digit 5
-                defw    LOCAL_LABEL_TABLE + 5 * LOCAL_LIST_STRIDE   ; digit 6
-                defw    LOCAL_LABEL_TABLE + 6 * LOCAL_LIST_STRIDE   ; digit 7
-                defw    LOCAL_LABEL_TABLE + 7 * LOCAL_LIST_STRIDE   ; digit 8
-                defw    LOCAL_LABEL_TABLE + 8 * LOCAL_LIST_STRIDE   ; digit 9
+; local_saved_digit — caller's A across append / find_forward / find_backward.
+local_saved_digit:      defb    0
