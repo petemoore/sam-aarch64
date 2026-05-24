@@ -49,7 +49,9 @@ func TestCorpusSweep(t *testing.T) {
 		t.Fatalf("read assembler.bin: %v", err)
 	}
 	testMem, _ := os.ReadFile(filepath.Join(build, "test_mem.bin"))
+	cluster, _ := os.ReadFile(filepath.Join(build, "test_cluster.bin"))
 	pagedCall, _ := os.ReadFile(filepath.Join(build, "paged_call_test_payload.bin"))
+	sysregData, _ := os.ReadFile(filepath.Join(build, "sysreg_data.bin"))
 
 	// Toolchain: prefer aarch64-none-elf-*, fall back to linux-gnu.
 	as, ld, objcopy := "aarch64-none-elf-as", "aarch64-none-elf-ld", "aarch64-none-elf-objcopy"
@@ -57,10 +59,16 @@ func TestCorpusSweep(t *testing.T) {
 		as, ld, objcopy = "aarch64-linux-gnu-as", "aarch64-linux-gnu-ld", "aarch64-linux-gnu-objcopy"
 	}
 
-	// BUILD_TESTS named files: test_mem on page 13, p14 on page 14
-	// (off-axis layout from plan-PR 3 / paged-call architecture).
+	// BUILD_TESTS named files: sd13/test_mem on page 13 (time-multiplexed),
+	// cluster on page 12, p14 on page 14 (off-axis layout from plan-PR 3 /
+	// paged-call architecture + M6 budget-relief cluster).  sd13 listed
+	// before test_mem so test_mem wins the initial page-13 pre-deposit
+	// (run_mem_self_tests runs first); load_page13_payload later HLOADs
+	// sd13 over page 13 before the sysreg self-tests read it.
 	testFiles := []NamedFile{
+		{Name: "sd13", Content: sysregData, TargetPage: 13},
 		{Name: "test_mem", Content: testMem, TargetPage: 13},
+		{Name: "cluster", Content: cluster, TargetPage: 12},
 		{Name: "p14", Content: pagedCall, TargetPage: 14},
 	}
 

@@ -339,6 +339,65 @@ name_test_mem:  defb    19
 
 
 ; -----------------------------------------------------------------------
+; load_offaxis_cluster — BUILD_TESTS only.  HLOAD the off-axis "M5 +
+;                        misc encoder" cluster binary into physical
+;                        page 12 via the trampoline.
+;
+; M6 budget-relief PR (2026-05-29).  Structural twin of
+; load_test_mem_off_axis above: HGTHD + HLOAD-via-trampoline.  The only
+; differences are the file name ("cluster") and the target page
+; (TEST_CLUSTER_PAGE = 12).  The payload (~1225 B) holds the relocated
+; pc_rel / directives_m5 / ror_imm / shifted_reg / extended_reg /
+; litpool suites; its entry is cluster_dispatch at section-A &0000.
+;
+; The off-axis binary is assembled separately (src/m3/test_offaxis_cluster.asm
+; with `--importfile=build/assembler.sym`, see Makefile).  The
+; BUILD_TESTS block in assembler.asm reaches it via LMPR-swap-call-restore.
+;
+; Input:  none (precondition: enctab_trampoline_setup has been called).
+; Output: cluster binary content sits at physical page 12.  Reads via
+;         section A (LMPR = LMPR_TEST_CLUSTER = &2C) see the code at
+;         &0000-onward.  LMPR/HMPR restored on return.
+; Clobbers: A, BC, DE, HL, IX (everything except SP).
+; -----------------------------------------------------------------------
+load_offaxis_cluster:
+                ld      hl, name_cluster
+                call    fill_uifa
+                rst     8
+                defb    HOOK_HGTHD     ; longjmps on "file not found"
+
+; Read length-mod-16K from SAMDOS-deposited DIFA header at &4B50+35,
+; clearing the `set 7, d` marker.  Mirrors load_test_mem_off_axis.
+                ld      hl, (&4B50 + 35)
+                ld      a, h
+                and     &7F
+                ld      h, a
+                ld      e, l
+                ld      d, h           ; DE = length-mod-16K
+
+; Read page count from DIFA+34.  We expect 0 for a sub-16K payload —
+; if the cluster bin ever grows past 16 KB this needs revisiting.
+                ld      a, (&4B50 + 34)
+                ld      c, a           ; C = pages count
+
+                ld      hl, &8000      ; section-C window (HLOAD requirement)
+                ld      b, TEST_CLUSTER_PAGE
+                call    TRAMPOLINE_DST
+                ret
+
+
+; -----------------------------------------------------------------------
+; UIFA name block for "cluster" (BUILD_TESTS only).
+;
+; The on-disk catalogue entry is created Mac-side by build-m3-disk
+; (using samfile) when invoked with the -cluster flag.
+; -----------------------------------------------------------------------
+name_cluster:   defb    19
+                defm    "cluster   "   ; 10 chars (7 + 3 trailing spaces)
+                defm    "    "         ; 4-char ext (unused)
+
+
+; -----------------------------------------------------------------------
 ; load_page14_payload — BUILD_TESTS only.  HLOAD the paged_call self-
 ;                       test payload into physical page 14 via the
 ;                       trampoline.

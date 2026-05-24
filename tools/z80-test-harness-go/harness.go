@@ -202,8 +202,8 @@ type Hardware struct {
 	trigDumpAddrs []uint16
 	trigDumpLen   int
 	trigDump      map[uint16][]byte
-	trigBT   []uint16
-	trigStep uint64
+	trigBT        []uint16
+	trigStep      uint64
 
 	// CPU back-reference (set after construction).
 	cpu *z80.CPU
@@ -434,6 +434,24 @@ func (h *Hardware) depositPage(page int, data []byte) {
 	copy(h.ram[page][:], data)
 }
 
+// depositPagesFrom copies data into consecutive physical pages starting at
+// startPage, splitting on 16 KB boundaries.  Mirrors how SAM maps a binary
+// org'd at &8000 across sections C+D (and beyond) under HMPR: the first
+// 16 KB land in startPage (section C = &8000..&BFFF), the next 16 KB in
+// startPage+1 (section D = &C000..&FFFF auto-paged by HMPR+1), etc.  Used
+// for the BUILD_TESTS ("test") assembler variant, whose binary exceeds one
+// 16 KB page (it ends around &BA89 = ~15 KB post-budget-relief, but the
+// general splitter keeps working if it grows back across &C000).
+func (h *Hardware) depositPagesFrom(startPage int, data []byte) {
+	for off := 0; off < len(data); off += pageSize {
+		end := off + pageSize
+		if end > len(data) {
+			end = len(data)
+		}
+		copy(h.ram[startPage+off/pageSize][:], data[off:end])
+	}
+}
+
 // readPageBytes reads a slice of bytes from physical page storage, spanning
 // page boundaries if length demands it.
 func (h *Hardware) readPageBytes(startPage int, offset int, length int) []byte {
@@ -546,10 +564,14 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 		hw.files["IN"] = inFile
 	}
 
-	// Deposit assembler binary at section C (page 2 = HMPR_DEFAULT low-5).
-	// The binary is built for org &8000 and loads into physical page 2
-	// (section C) when HMPR = hmprDefault.
-	hw.depositPage(2, assemblerBin)
+	// Deposit assembler binary starting at section C (page 2 = HMPR_DEFAULT
+	// low-5).  The binary is built for org &8000; its first 16 KB load into
+	// physical page 2 (section C) when HMPR = hmprDefault, and any overflow
+	// past &C000 spills into page 3 (section D) and beyond — exactly how SAM
+	// maps it under HMPR/HMPR+1.  The BUILD_TESTS test variant exceeds one
+	// 16 KB page, so we must split across consecutive pages rather than
+	// panic in depositPage.
+	hw.depositPagesFrom(2, assemblerBin)
 
 	// Deposit enctab.enc into page 4.
 	hw.depositPage(enctabPage, enctabData)

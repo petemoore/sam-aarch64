@@ -78,10 +78,11 @@ func main() {
 
 	testMemPath := flag.String("test-mem", "", "path to off-axis test_mem.bin (BUILD_TESTS only; plan-PR 3)")
 	pagedCallPath := flag.String("paged-call", "", "path to the paged_call self-test page-14 payload (BUILD_TESTS only; plan-PR 1)")
+	clusterPath := flag.String("cluster", "", "path to the off-axis page-12 M5+misc encoder self-test cluster (build/test_cluster.bin; BUILD_TESTS only; M6 budget-relief)")
 	sysregDataPath := flag.String("sysreg-data", "", "path to the page-13 sysreg lookup data (build/sysreg_data.bin; PRODUCTION + test; PR-2)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
-			"usage: %s [-test-mem <path>] [-paged-call <path>] [-sysreg-data <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n",
+			"usage: %s [-test-mem <path>] [-paged-call <path>] [-cluster <path>] [-sysreg-data <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n",
 			os.Args[0])
 		flag.PrintDefaults()
 	}
@@ -245,6 +246,27 @@ func main() {
 		}
 	}
 
+	// Slot 5b (optional): off-axis "M5 + misc encoder" cluster (cluster).
+	// Loaded at boot by src/m3/loader.asm::load_offaxis_cluster via
+	// HGTHD+trampoline into physical page 12 (section A at &0000 when
+	// LMPR = LMPR_TEST_CLUSTER), then invoked via one LMPR swap
+	// (cluster_dispatch).  Holds the relocated pc_rel / directives_m5 /
+	// ror_imm / shifted_reg / extended_reg / litpool self-test suites.
+	// BUILD_TESTS variant only; production builds omit -cluster.  M6
+	// budget-relief PR (2026-05-29) — mirrors the test_mem off-axis
+	// pattern.  Recorded load address is documentary (the trampoline
+	// supplies HL = &8000 and target page = 12).
+	if *clusterPath != "" {
+		clusterData, err := os.ReadFile(*clusterPath)
+		if err != nil {
+			log.Fatalf("read cluster: %v", err)
+		}
+		const ClusterLoadAddress uint32 = 0x8000
+		if err := disk.AddCodeFile("cluster", clusterData, ClusterLoadAddress, 0); err != nil {
+			log.Fatalf("AddCodeFile(cluster): %v", err)
+		}
+	}
+
 	// Slot 6 (optional): paged_call self-test payload (p14).  Loaded at
 	// boot by src/m3/loader.asm::load_page14_payload via HGTHD +
 	// trampoline into physical page 14, then exercised by
@@ -302,6 +324,10 @@ func main() {
 	if *testMemPath != "" {
 		testMemSize, _ := os.Stat(*testMemPath)
 		fmt.Printf("test_mem:   %d bytes\n", testMemSize.Size())
+	}
+	if *clusterPath != "" {
+		clusterSize, _ := os.Stat(*clusterPath)
+		fmt.Printf("cluster:    %d bytes\n", clusterSize.Size())
 	}
 	if *pagedCallPath != "" {
 		pagedCallSize, _ := os.Stat(*pagedCallPath)

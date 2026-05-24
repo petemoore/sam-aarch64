@@ -32,12 +32,13 @@ func TestVariantBootSelfTests(t *testing.T) {
 		t.Skip("build/assembler.bin absent — run `make m3-asm test-mem-offaxis paged-call-payload enctab text2bin`")
 	}
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
+	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
 	sd13Path := filepath.Join(root, "build", "sysreg_data.bin")
 	encPath := filepath.Join(root, "build", "enctab.enc")
 	text2binPath := filepath.Join(root, "build", "text2bin")
 	fixturePath := filepath.Join(root, "tests", "m3", "sources", "inst_nop_ret.s")
-	for _, p := range []string{tmPath, p14Path, sd13Path, encPath, text2binPath, fixturePath} {
+	for _, p := range []string{tmPath, clusterPath, p14Path, sd13Path, encPath, text2binPath, fixturePath} {
 		if _, err := os.Stat(p); err != nil {
 			t.Skipf("prerequisite missing: %s", p)
 		}
@@ -52,6 +53,7 @@ func TestVariantBootSelfTests(t *testing.T) {
 
 	asm, _ := os.ReadFile(asmPath)
 	tm, _ := os.ReadFile(tmPath)
+	cluster, _ := os.ReadFile(clusterPath)
 	p14, _ := os.ReadFile(p14Path)
 	sd13, _ := os.ReadFile(sd13Path)
 	enc, _ := os.ReadFile(encPath)
@@ -63,6 +65,10 @@ func TestVariantBootSelfTests(t *testing.T) {
 	// descends into that code region (the original PR #42 failure mode was
 	// the stack at &C100 overwriting the test function's own opcodes when
 	// it spilled above &C000 — which must not recur).
+	//
+	// After the M6 budget-relief PR (2026-05-29) the whole code region
+	// dropped well below &C000 (binary ends ~&BA89); run_reader_paged_self_tests
+	// now lives around &B870.  Trace [B800,BA00) brackets it.
 	res, trace, _ := RunConfig(Config{
 		AssemblerBin: asm, EnctabData: enc, InData: in,
 		Files: []NamedFile{
@@ -72,10 +78,14 @@ func TestVariantBootSelfTests(t *testing.T) {
 			// (PR-2) before run_sysreg_paged_self_tests reads the tables.
 			{Name: "sd13", Content: sd13, TargetPage: 13},
 			{Name: "test_mem", Content: tm, TargetPage: 13},
+			// The off-axis "M5 + misc encoder" cluster on page 12 (M6
+			// budget-relief PR).  load_offaxis_cluster HGTHD+HLOADs it at
+			// boot; cluster_dispatch runs it via one LMPR swap.
+			{Name: "cluster", Content: cluster, TargetPage: 12},
 			{Name: "p14", Content: p14, TargetPage: 14},
 		},
 		Timeout: 10 * time.Second,
-		TraceLo: 0xBE00, TraceHi: 0xC000,
+		TraceLo: 0xB800, TraceHi: 0xBA00,
 	})
 
 	t.Logf("Exit: %s", res.ExitReason)
@@ -92,12 +102,15 @@ func TestVariantBootSelfTests(t *testing.T) {
 	// vacuously (e.g. if a future layout moved the routine out of the
 	// window).  Fail loudly rather than rot into a no-op.
 	if len(trace) == 0 {
-		t.Fatal("reader-test window [BE00,C000) never entered — regression guard is not exercising the target routine")
+		t.Fatal("reader-test window [B800,BA00) never entered — regression guard is not exercising the target routine")
 	}
 	// Regression guard for the PR #42 failure mode: the boot stack at
-	// &C100 must never collide with code executing below &C000.
+	// &C100 must never collide with code executing in the reader-test
+	// region.  Post-budget-relief the code sits ~&B870, so SP (descending
+	// from &C100) has ~2 KB of clearance; flag if it ever dips into the
+	// reader-test window itself.
 	for _, s := range trace {
-		if s.PC >= 0xBE00 && s.PC < 0xC000 && s.SP < 0xC080 {
+		if s.PC >= 0xB800 && s.PC < 0xBA00 && s.SP < 0xBA00 {
 			t.Errorf("SP descended dangerously close to reader-test code: PC=%04X SP=%04X", s.PC, s.SP)
 			break
 		}

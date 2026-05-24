@@ -288,6 +288,29 @@ TEST_MEM_PAGE:  equ     13
 LMPR_TEST_MEM:  equ     &20 + TEST_MEM_PAGE         ; = &2D
 
 
+; Off-axis "M5 + misc encoder" cluster page (BUILD_TESTS only — M6
+; budget-relief PR, 2026-05-29; see src/m3/test_offaxis_cluster.asm).
+;
+; Holds the relocated pc_rel / directives_m5 / ror_imm / shifted_reg /
+; extended_reg / litpool self-test suites (1225 B), HLOADed at boot and
+; invoked once via an LMPR swap (cluster_dispatch at section-A &0000).
+;
+; Page 12: a free page per the Tech Manual PAGE ALLOCATION TABLE (pages
+; 4..12 unused).  At the boot-self-test phase it holds nothing — IN is
+; not HLOADed into pages 7..12 until main_assemble, long after the
+; cluster self-tests have run to completion (same time-multiplex the
+; test_mem/page-13 and IN/pages-7..12 payloads already rely on).
+;
+; LMPR_TEST_CLUSTER = &20 | 12 = &2C puts section A = page 12.  Section B
+; under this LMPR = page 13 (which holds test_mem at this point — but the
+; cluster suites never touch section B; they only call HMPR-stable
+; section-C/D production routines, verified to not reach paged_call).
+; HMPR is unchanged, so calls FROM cluster code TO production code work
+; as if the swap had never happened.
+TEST_CLUSTER_PAGE:  equ     12
+LMPR_TEST_CLUSTER:  equ     &20 + TEST_CLUSTER_PAGE     ; = &2C
+
+
 ; paged_call test-payload page (BUILD_TESTS only — see plan-PR 1 of
 ; docs/notes/2026-05-28-paged-call-architecture.md).
 ;
