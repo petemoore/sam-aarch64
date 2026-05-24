@@ -23,17 +23,24 @@
 ; "assembler" before we even start running.
 ;
 ; Memory layout used here:
-;   &C000-&C0FF  stack (SP = &C100, grows down)
-;   &C100+       enctab buffer (holds entire enctab.enc file body)
+;   &8000-&8FFF  assembler code (this file + includes; ~683 bytes today)
+;   &9000-&BFFF  enctab buffer (12 KB; holds entire enctab.enc file body)
+;   &C000-&C0FF  stack (SP = &C100, grows down into section D)
 ;
-; &C000–&FFFF is section D, HMPR+1 page — always writable RAM.  enctab.enc
-; is 1090 bytes today; section D gives ~16 KB headroom for any future M3
-; table.  HLOAD's target HL=&C100 is in section D, which violates the Tech
-; Manual's "HL must be &8000-&BFFF" rule — but the rule only matters when
-; the auto-wrap-fix in SAMDOS's `ctas` (`samdos/src/c.s:347-369`) fires,
-; which happens only when a track step occurs mid-load.  enctab.enc lives
-; entirely on track 6 (T6S5..T6S7 per build-m3-disk layout), so no track
-; step happens during the load and HL stays in section D throughout.
+; ENCTAB_BUF (&9000) lives inside section C (&8000-&BFFF, the HMPR page),
+; satisfying the Tech Manual's "HL must be &8000-&BFFF" rule for HLOAD
+; (page 211).  The rule is enforced by the auto-wrap-fix in SAMDOS's
+; `ctas` (`samdos/src/c.s:347-369`) which fires on every track step:
+; HL just outside &8000-&BFFF wraps to &8000 the next time a sector
+; crosses a track boundary.  Earlier M3 spikes loaded into section D
+; (&C100) and dodged the wrap by ensuring enctab.enc lived on a single
+; track — fragile, since growing the table or moving it on disk would
+; silently corrupt the load.  Keeping HL in section C makes the load
+; correct regardless of the file's on-disk layout.
+;
+; Stack at &C100 is fine: only HLOAD's destination is constrained by
+; the section-C rule.  SP grows down into section D (&C000-&FFFF) which
+; is always writable RAM.
 ;
 ; UIFA name block convention (from src/sam_io.inc / M0's stub.asm):
 ;   1 byte   type     (19 = code file, FT_CODE)
@@ -61,10 +68,12 @@
 ; Constants
 ; -----------------------------------------------------------------------
 
-ENCTAB_BUF:     equ     &C100          ; load enctab.enc body here
-STACK_TOP:      equ     &C100          ; SP before any call (grows down)
-ENCTAB_LEN:     equ     1090           ; current enctab.enc body size; build-time
-                                       ; constant (matches build/enctab.enc)
+ENCTAB_BUF:     equ     &9000          ; load enctab.enc body here (section C,
+                                       ; inside HLOAD's required &8000-&BFFF range)
+STACK_TOP:      equ     &C100          ; SP before any call (grows down into section D)
+ENCTAB_LEN:     equ     3329           ; current enctab.enc body size; build-time
+                                       ; constant (matches build/enctab.enc;
+                                       ; 135 forms = 87 manual + 48 MRA-derived)
 
 
 ; -----------------------------------------------------------------------
@@ -99,13 +108,13 @@ load_enctab:
 ; CALLER'S MAIN register set is what gets saved, not the alternates).
 ; HLOAD's dschd then reads them back via `ld hl,(hkhl)` etc.
 ; (samdos/src/h.s:74-90):
-;   HL = destination address (Tech Manual: 8000-BFFF; see header comment
-;        for why &C100 works for enctab-sized loads).
+;   HL = destination address (Tech Manual: 8000-BFFF — satisfied by
+;        ENCTAB_BUF=&9000; see header comment for the wrap-fix details).
 ;   C  = number of full 16K pages used by the file (BC: only C matters,
 ;        B is discarded).
 ;   DE = length modulo 16K; HLOAD's dschd does `res 7, d` to cap at <16K.
 ;   IX = UIFA (already set by fill_uifa above).
-; For enctab.enc (1090 bytes < 16K): C=0, DE=1090 (=0x0442).
+; For enctab.enc (3329 bytes < 16K): C=0, DE=3329 (=0x0d01).
                 ld      hl, ENCTAB_BUF
                 ld      bc, 0          ; B=0 (don't care), C=0 (0 full 16K pages)
                 ld      de, ENCTAB_LEN ; length modulo 16K (whole file fits)

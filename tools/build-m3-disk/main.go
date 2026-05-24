@@ -105,9 +105,11 @@ func main() {
 	}
 
 	// Slot 3: enctab.enc CODE file. Loaded at startup by src/m3/loader.asm
-	// via SAMDOS HGFLE. Load address matches ENCTAB_BUF in loader.asm (&C100).
+	// via SAMDOS HLOAD. Load address matches ENCTAB_BUF in loader.asm (&9000),
+	// which sits inside section C (&8000-&BFFF) — the address range the
+	// SAMDOS auto-wrap-fix in ctas enforces for HLOAD destinations.
 	// executionAddress=0 means no auto-exec.
-	const EnctabLoadAddress uint32 = 0xC100
+	const EnctabLoadAddress uint32 = 0x9000
 	if err := disk.AddCodeFile("enctab.enc", enctabData, EnctabLoadAddress, 0); err != nil {
 		log.Fatalf("AddCodeFile(enctab.enc): %v", err)
 	}
