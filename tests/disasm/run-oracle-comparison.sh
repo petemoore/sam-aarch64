@@ -54,10 +54,13 @@ mkdir -p build
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-# Shared normaliser: strip objdump's trailing `// ...` comment, tabs->spaces,
-# strip the leading address-column padding, squeeze internal whitespace.
+# Shared normaliser: strip objdump's trailing comments — both `// ...`
+# (e.g. `b.ne 0x1e8  // b.any`) and `; ...` (e.g. `.inst 0x00010001 ;
+# undefined`); these are cosmetic annotations, not semantic content.
+# Then tabs->spaces, strip the leading address-column padding, squeeze
+# internal whitespace so the comparison is on address/bytes/mnemonic/operands.
 norm() {
-    sed -E 's#[[:space:]]*//.*$##' \
+    sed -E 's#[[:space:]]*//.*$##; s#[[:space:]]*;.*$##' \
         | tr '\t' ' ' \
         | sed -E 's/^ +//; s/ +/ /g; s/ +$//'
 }

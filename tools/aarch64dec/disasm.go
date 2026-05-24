@@ -10,6 +10,7 @@
 package aarch64dec
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/petemoore/sam-aarch64/tools/aarch64enc"
@@ -53,6 +54,15 @@ func DecodeAt(pc uint64, word uint32) (mnem string, operands string, ok bool) {
 	// walk below still handles all other instructions.
 	if mnem, operands, ok := decodeMem(pc, word); ok {
 		return mnem, operands, true
+	}
+	// UDF — the permanently-undefined encoding space: bits[31:16] == 0,
+	// imm16 = bits[15:0] (ARM ARM C6.2.... "UDF").  objdump renders it
+	// `udf #<imm16>` in decimal.  No real instruction occupies this space,
+	// so a bare top-16-bits-zero test is unambiguous.  These appear in
+	// release.img's data regions (small integer table entries that
+	// linear-sweep as udf); matching objdump means rendering them likewise.
+	if word>>16 == 0 {
+		return "udf", fmt.Sprintf("#%d", word&0xffff), true
 	}
 	for _, f := range aarch64enc.AllForms() {
 		if word&f.Mask == f.Pattern {
