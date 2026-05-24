@@ -34,3 +34,30 @@ func TranslateWithOptions(src []byte, path string, opts PreprocessOptions) ([]by
 	}
 	return out.Bytes(), nil
 }
+
+// TranslateAndFlatten preprocesses, parses, and then applies the
+// linker-equivalent Flatten pass before emitting the .tbn file. See
+// flatten.go for the spectrum4 layout encoded in the flatten step.
+func TranslateAndFlatten(src []byte, path string, preOpts PreprocessOptions, flatOpts FlattenOptions) ([]byte, error) {
+	pre, err := Preprocess(src, path, preOpts)
+	if err != nil {
+		return nil, err
+	}
+	toks, err := Lex(pre, path)
+	if err != nil {
+		return nil, err
+	}
+	records, st, err := Parse(toks)
+	if err != nil {
+		return nil, err
+	}
+	flat, err := Flatten(records, st.Names(), flatOpts)
+	if err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	if err := format.WriteFile(&out, st, flat); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}

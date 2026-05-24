@@ -203,6 +203,74 @@ func encodeInst(rec format.Record, pc int64, p1 *Pass1Result, f *format.File) (u
 		}
 	}
 
+	// Shifted-register coercion: when an arithmetic/logical mnemonic
+	// is parsed with three plain register operands (Rd, Rn, Rm) and
+	// no explicit shift, treat it as the no-shift case of the shifted
+	// -register variant (LSL #0). GNU as accepts this canonical form
+	// for ADD/SUB/AND/ORR/EOR/BIC/SUBS/ANDS — encoding identical to
+	// `add Xd, Xn, Xm, lsl #0`.
+	if len(operands) == 3 && isShiftedRegMnemonic(rec.MnemonicID) {
+		k0, k1, k2 := operands[0].Kind, operands[1].Kind, operands[2].Kind
+		if isPlainGPR(k0) && isPlainGPR(k1) && isPlainGPR(k2) {
+			synth := operands[2]
+			synth.Kind = format.OpShiftedReg
+			synth.Reg = operands[2].Reg
+			synth.ShiftKind = format.ShiftLSL
+			if k0 == format.OpRegX {
+				synth.Width = 1
+			} else {
+				synth.Width = 0
+			}
+			// Zero shift amount expression.
+			var ew format.ExprWriter
+			ew.WriteImm(0)
+			synth.AmtExpr = ew.Bytes()
+			coerced := []format.Operand{operands[0], operands[1], synth}
+			return encodeShiftedRegInst(rec.MnemonicID, coerced, pc, p1, f)
+		}
+	}
+	// Same coercion for 2-register `tst Rn, Rm` (no Rd; xzr baked).
+	if len(operands) == 2 && rec.MnemonicID == 46 {
+		if isPlainGPR(operands[0].Kind) && isPlainGPR(operands[1].Kind) {
+			synth := operands[1]
+			synth.Kind = format.OpShiftedReg
+			synth.Reg = operands[1].Reg
+			synth.ShiftKind = format.ShiftLSL
+			if operands[0].Kind == format.OpRegX {
+				synth.Width = 1
+			} else {
+				synth.Width = 0
+			}
+			var ew format.ExprWriter
+			ew.WriteImm(0)
+			synth.AmtExpr = ew.Bytes()
+			coerced := []format.Operand{operands[0], synth}
+			return encodeShiftedRegInst(rec.MnemonicID, coerced, pc, p1, f)
+		}
+	}
+
+	// LDR (literal) direct-label form: `ldr Xt, label` or `ldr Wt, label`
+	// (no `=`). Encodes as PC-relative 19-bit immediate; the label IS
+	// the target. Distinct from `ldr Xt, =expr` (literal-pool slot).
+	ldrID, _ := format.MnemonicID("ldr")
+	if rec.MnemonicID == ldrID && len(operands) == 2 &&
+		(operands[0].Kind == format.OpRegX || operands[0].Kind == format.OpRegW) &&
+		operands[1].Kind == format.OpImmExpr {
+		return encodeLdrLitDirect(operands, pc, p1, f)
+	}
+
+	// TBZ / TBNZ — test bit and branch. Encoding (ARM ARM C6.2.298 /
+	// C6.2.299):
+	//   bits 31    = b5 (bit number bit 5)
+	//   bits 30:24 = 0110110 (op)
+	//   bit  24    = 0 for TBZ, 1 for TBNZ
+	//   bits 23:19 = b40 (bit number bits 4:0)
+	//   bits 18:5  = imm14 (signed PC-relative branch / 4)
+	//   bits 4:0   = Rt
+	if rec.MnemonicID == 22 || rec.MnemonicID == 23 { // tbz/tbnz
+		return encodeTbzTbnz(rec.MnemonicID, operands, pc, p1, f)
+	}
+
 	// Mnemonic-specific intercepts before the generic form table:
 	// lsl/lsr use UBFM with computed immr/imms; bfi/bfxil/ubfx use
 	// BFM/UBFM with alias-specific computations.
@@ -263,9 +331,22 @@ func operandsToValues(ops []format.Operand, pc int64, p1 *Pass1Result, f *format
 				case enc.BranchImm26, enc.BranchImm19, enc.BranchImm14:
 					v = v - pc
 				case enc.AdrpImm:
-					// ADRP uses page-aligned PC; the offset is the
-					// difference between target page and PC page.
-					v = (v & ^int64(0xFFF)) - (pc & ^int64(0xFFF))
+					// ADRP uses page-aligned PC; the encoded
+					// pageOffset is a signed 21-bit value, so the
+					// 21+12 = 33-bit byte-offset diff is implicitly
+					// modulo 2^33. Matches GNU as's behaviour of
+					// silently truncating absolute targets that wrap
+					// around the kernel VMA — used by spectrum4's
+					// `adrp xN, 0x<physical_addr>` idioms whose
+					// resulting wrapped target lands in the kernel's
+					// virtual mapping of that physical page.
+					diff := (v & ^int64(0xFFF)) - (pc & ^int64(0xFFF))
+					const mask33 = int64(1<<33 - 1)
+					diff &= mask33
+					if diff&(int64(1)<<32) != 0 {
+						diff |= ^mask33
+					}
+					v = diff
 				case enc.AdrImm:
 					// ADR uses raw byte offset from current PC.
 					v = v - pc
@@ -284,6 +365,95 @@ func operandsToValues(ops []format.Operand, pc int64, p1 *Pass1Result, f *format
 // ---------------------------------------------------------------------------
 // LDR literal-pool pseudo-instruction
 // ---------------------------------------------------------------------------
+
+// encodeLdrLitDirect encodes the direct PC-relative literal-load form
+// `ldr Xt, label` (no `=`). The label IS the target; the encoded
+// imm19 = (label - PC) / 4 (signed). 64-bit form base = 0x58000000;
+// 32-bit form base = 0x18000000.
+func encodeLdrLitDirect(operands []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
+	rt := operands[0]
+	target := operands[1]
+	ctx := makeCtx(pc, p1, f)
+	v, err := enc.Eval(target.Expr, ctx)
+	if err != nil {
+		return 0, fmt.Errorf("ldr (literal): %w", err)
+	}
+	off := v - pc
+	if off%4 != 0 {
+		return 0, fmt.Errorf("ldr (literal) @ pc=0x%x: target pc=0x%x not 4-byte aligned", uint64(pc), uint64(v))
+	}
+	imm19 := off / 4
+	if imm19 < -(1<<18) || imm19 >= (1<<18) {
+		return 0, fmt.Errorf("ldr (literal) @ pc=0x%x: offset %d out of ±1MiB range", uint64(pc), off)
+	}
+	var base uint32
+	if rt.Kind == format.OpRegX {
+		base = 0x58000000
+	} else {
+		base = 0x18000000
+	}
+	return base | ((uint32(imm19) & 0x7ffff) << 5) | uint32(rt.Reg), nil
+}
+
+// encodeTbzTbnz encodes the TBZ / TBNZ instructions.
+//
+//	tbz  Rt, #bit, label  → bit 24 = 0 (op = TBZ)
+//	tbnz Rt, #bit, label  → bit 24 = 1 (op = TBNZ)
+//
+// Encoding (ARM ARM C6.2.298 / C6.2.299):
+//
+//	bits 31    = b5 (bit number bit 5; 1 when Rt is X and bit ≥ 32)
+//	bits 30:25 = 011011
+//	bit  24    = op  (0 = TBZ, 1 = TBNZ)
+//	bits 23:19 = b40 (bit number bits 4:0)
+//	bits 18:5  = imm14 (signed PC-relative branch / 4)
+//	bits 4:0   = Rt
+func encodeTbzTbnz(mnemonicID uint16, operands []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
+	if len(operands) < 3 {
+		return 0, fmt.Errorf("tbz/tbnz: need 3 operands, got %d", len(operands))
+	}
+	rt := operands[0]
+	bitOp := operands[1]
+	labelOp := operands[2]
+	if rt.Kind != format.OpRegX && rt.Kind != format.OpRegW {
+		return 0, fmt.Errorf("tbz/tbnz: operand 0 must be Rt")
+	}
+	if bitOp.Kind != format.OpImmExpr || labelOp.Kind != format.OpImmExpr {
+		return 0, fmt.Errorf("tbz/tbnz: operand 1 must be immediate, operand 2 must be label")
+	}
+	ctx := makeCtx(pc, p1, f)
+	bit, err := enc.Eval(bitOp.Expr, ctx)
+	if err != nil {
+		return 0, fmt.Errorf("tbz/tbnz bit: %w", err)
+	}
+	if bit < 0 || bit > 63 {
+		return 0, fmt.Errorf("tbz/tbnz: bit number %d out of range [0,63]", bit)
+	}
+	if rt.Kind == format.OpRegW && bit > 31 {
+		return 0, fmt.Errorf("tbz/tbnz: bit %d > 31 with W register", bit)
+	}
+	target, err := enc.Eval(labelOp.Expr, ctx)
+	if err != nil {
+		return 0, fmt.Errorf("tbz/tbnz label: %w", err)
+	}
+	off := target - pc
+	if off%4 != 0 {
+		return 0, fmt.Errorf("tbz/tbnz: target 0x%x not 4-byte aligned (pc=0x%x)", uint64(target), uint64(pc))
+	}
+	imm14 := off / 4
+	if imm14 < -(1<<13) || imm14 >= (1<<13) {
+		return 0, fmt.Errorf("tbz/tbnz: offset %d out of ±32 KiB range", off)
+	}
+	b5 := uint32(bit>>5) & 1
+	b40 := uint32(bit & 0x1f)
+	op := uint32(0)
+	if mnemonicID == 23 { // tbnz
+		op = 1
+	}
+	word := (b5 << 31) | (uint32(0b011011) << 25) | (op << 24) |
+		(b40 << 19) | ((uint32(imm14) & 0x3fff) << 5) | uint32(rt.Reg)
+	return word, nil
+}
 
 // encodeLdrLitPoolInst encodes `ldr Xn|Wn, =expr` as a PC-relative
 // load whose target is the literal-pool slot allocated for this
@@ -361,12 +531,12 @@ func isUnscaledMemMnemonic(mnemonicID uint16) bool {
 }
 
 // memInstSize returns the AArch64 "size" field (bits 31:30) and the byte
-// scale factor for a given load/store mnemonic.
-// ldr/str: size=11 (64-bit), scale=8
+// scale factor for a given load/store mnemonic + Rt-kind.
+// ldr/str: size depends on Rt kind: X → 11 (8-byte), W → 10 (4-byte)
 // ldrb/strb/ldrsb: size=00 (byte), scale=1
 // ldrh/strh/ldrsh: size=01 (halfword), scale=2
 // ldrsw: size=10 (word), scale=4
-func memInstSize(mnemonicID uint16) (sizeBits uint32, scale int64) {
+func memInstSize(mnemonicID uint16, rtKind format.OperandKind) (sizeBits uint32, scale int64) {
 	switch mnemonicID {
 	case 54, 55, 86: // ldrb, strb, ldrsb
 		return 0b00, 1
@@ -375,6 +545,9 @@ func memInstSize(mnemonicID uint16) (sizeBits uint32, scale int64) {
 	case 88: // ldrsw
 		return 0b10, 4
 	default: // ldr(5), str(6), ldp(7), stp(8)
+		if rtKind == format.OpRegW {
+			return 0b10, 4
+		}
 		return 0b11, 8
 	}
 }
@@ -432,7 +605,7 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 		return encodeUnscaledMemInst(mnemonicID, operands[0], rt, mem, pc, p1, f)
 	}
 
-	sizeBits, scale := memInstSize(mnemonicID)
+	sizeBits, scale := memInstSize(mnemonicID, operands[0].Kind)
 	opc, err := memInstOpc(mnemonicID, operands[0].Kind)
 	if err != nil {
 		return 0, err
@@ -462,6 +635,13 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 			byteOffset = v
 		}
 		if byteOffset < 0 || byteOffset%scale != 0 || byteOffset/scale >= (1<<12) {
+			// GNU as transparently rewrites `str/ldr Rt, [Rn, #-N]`
+			// (and similar non-scaled offsets) to the STUR/LDUR
+			// unscaled-signed-9-bit form. Mirror that here so
+			// spectrum4's `str x2, [x3, #-0x10]` idioms encode.
+			if byteOffset >= -256 && byteOffset <= 255 {
+				return encodeUnscaledMemInst(mnemonicID, operands[0], rt, mem, pc, p1, f)
+			}
 			return 0, fmt.Errorf("LDR/STR unsigned offset: byte offset %d not representable as scaled imm12 (must be 0..%d, multiple of %d)", byteOffset, scale*(1<<12-1), scale)
 		}
 		imm12 := uint32(byteOffset / scale)
@@ -751,6 +931,28 @@ func encodeShiftedRegInst(mnemonicID uint16, operands []format.Operand, pc int64
 	return word, nil
 }
 
+// isShiftedRegMnemonic reports whether a mnemonic supports the
+// shifted-register addressing form. Used by pass2 to coerce three
+// plain-register operands into a no-shift ShiftedReg.
+func isShiftedRegMnemonic(id uint16) bool {
+	switch id {
+	case 1, 2, 14, 15, 16, 45, 46, 47, 81: // add, sub, and, orr, eor, subs, tst, bic, ands
+		return true
+	}
+	return false
+}
+
+// isPlainGPR reports whether kind is one of the plain GPR kinds
+// (X, W, X-SP, W-SP) — i.e. anything that came in as a single
+// register without an attached shift/extend.
+func isPlainGPR(k format.OperandKind) bool {
+	switch k {
+	case format.OpRegX, format.OpRegW, format.OpRegXSP, format.OpRegWSP:
+		return true
+	}
+	return false
+}
+
 // shiftedRegMnemonicFields returns sf, opc, N-bit, and an isLogical flag
 // (true for AND/ORR/EOR/BIC/ORN/EON/ANDS/TST family — bits 28..24 = 01010;
 // false for ADD/SUB/ADDS/SUBS — bits 28..24 = 01011).
@@ -845,11 +1047,17 @@ func extendedRegMnemonicFields(mnemonicID uint16) (sf, opc uint32, err error) {
 // LSL / LSR via UBFM
 // ---------------------------------------------------------------------------
 
-// encodeLSLSR encodes lsl and lsr as UBFM aliases.
-// Syntax: lsl/lsr Rd, Rn, #shift
+// encodeLSLSR encodes lsl and lsr in both forms:
 //
-// LSL: immr = (-shift) mod regsize, imms = regsize - 1 - shift
-// LSR: immr = shift, imms = regsize - 1
+//	immediate (UBFM alias):  lsl/lsr Rd, Rn, #shift
+//	register  (LSLV/LSRV):   lsl/lsr Rd, Rn, Rm
+//
+// LSL imm: immr = (-shift) mod regsize, imms = regsize - 1 - shift
+// LSR imm: immr = shift, imms = regsize - 1
+// LSLV:    32-bit 0x1ac02000 | (Rm<<16) | (Rn<<5) | Rd
+//          64-bit 0x9ac02000 | ...
+// LSRV:    32-bit 0x1ac02400 | (Rm<<16) | (Rn<<5) | Rd
+//          64-bit 0x9ac02400 | ...
 func encodeLSLSR(mnemonicID uint16, operands []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
 	if len(operands) < 3 {
 		return 0, fmt.Errorf("lsl/lsr: need 3 operands, got %d", len(operands))
@@ -857,8 +1065,28 @@ func encodeLSLSR(mnemonicID uint16, operands []format.Operand, pc int64, p1 *Pas
 	rd := operands[0]
 	rn := operands[1]
 	immOp := operands[2]
+	// Register-shift form: dispatch to LSLV / LSRV.
+	if immOp.Kind == format.OpRegX || immOp.Kind == format.OpRegW {
+		is64 := rd.Kind == format.OpRegX
+		var base uint32
+		if mnemonicID == 17 { // lsl → LSLV
+			if is64 {
+				base = 0x9ac02000
+			} else {
+				base = 0x1ac02000
+			}
+		} else { // lsr → LSRV
+			if is64 {
+				base = 0x9ac02400
+			} else {
+				base = 0x1ac02400
+			}
+		}
+		word := base | (uint32(immOp.Reg) << 16) | (uint32(rn.Reg) << 5) | uint32(rd.Reg)
+		return word, nil
+	}
 	if immOp.Kind != format.OpImmExpr {
-		return 0, fmt.Errorf("lsl/lsr: operand 2 must be an immediate")
+		return 0, fmt.Errorf("lsl/lsr: operand 2 must be an immediate or register")
 	}
 
 	ctx := makeCtx(pc, p1, f)

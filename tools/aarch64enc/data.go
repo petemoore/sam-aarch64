@@ -20,6 +20,22 @@ var generatedForms = []Form{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
 		{SlotKind: Imm12Shifted, ExpectedKind: 5, BitPosition: 10, BitWidth: 12},
 	}},
+	// add SP-form: `add Xd, sp, #imm` and `add sp, Xn, #imm` and `add sp, sp, #imm`
+	{MnemonicID: 1, Pattern: 0x91000000, Mask: 0xff800000, Slots: []OperandSlot{
+		{SlotKind: XregOrSp, ExpectedKind: 3, BitPosition: 0, BitWidth: 5},
+		{SlotKind: XregOrSp, ExpectedKind: 3, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Imm12Shifted, ExpectedKind: 5, BitPosition: 10, BitWidth: 12},
+	}},
+	{MnemonicID: 1, Pattern: 0x91000000, Mask: 0xff800000, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: XregOrSp, ExpectedKind: 3, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Imm12Shifted, ExpectedKind: 5, BitPosition: 10, BitWidth: 12},
+	}},
+	{MnemonicID: 1, Pattern: 0x91000000, Mask: 0xff800000, Slots: []OperandSlot{
+		{SlotKind: XregOrSp, ExpectedKind: 3, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Imm12Shifted, ExpectedKind: 5, BitPosition: 10, BitWidth: 12},
+	}},
 	// add (ID 1) — 2-register alias forms (add Rd, Rn = add Rd, Rn, #0)
 	{MnemonicID: 1, Pattern: 0x11000000, Mask: 0xfffffc00, Slots: []OperandSlot{
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
@@ -38,6 +54,22 @@ var generatedForms = []Form{
 	}},
 	{MnemonicID: 2, Pattern: 0xd1000000, Mask: 0xff800000, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Imm12Shifted, ExpectedKind: 5, BitPosition: 10, BitWidth: 12},
+	}},
+	// sub SP-form: `sub sp, sp, #imm` and friends.
+	{MnemonicID: 2, Pattern: 0xd1000000, Mask: 0xff800000, Slots: []OperandSlot{
+		{SlotKind: XregOrSp, ExpectedKind: 3, BitPosition: 0, BitWidth: 5},
+		{SlotKind: XregOrSp, ExpectedKind: 3, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Imm12Shifted, ExpectedKind: 5, BitPosition: 10, BitWidth: 12},
+	}},
+	{MnemonicID: 2, Pattern: 0xd1000000, Mask: 0xff800000, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: XregOrSp, ExpectedKind: 3, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Imm12Shifted, ExpectedKind: 5, BitPosition: 10, BitWidth: 12},
+	}},
+	{MnemonicID: 2, Pattern: 0xd1000000, Mask: 0xff800000, Slots: []OperandSlot{
+		{SlotKind: XregOrSp, ExpectedKind: 3, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
 		{SlotKind: Imm12Shifted, ExpectedKind: 5, BitPosition: 10, BitWidth: 12},
 	}},
@@ -128,6 +160,18 @@ var generatedForms = []Form{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
 	}},
 
+	// br (ID 11) — branch to register (ARM ARM C6.2.36). Encoding:
+	// 1101_0110_0001_1111_0000_00 Rn 00000 = 0xd61f0000 | (Rn<<5).
+	{MnemonicID: 11, Pattern: 0xd61f0000, Mask: 0xfffffc1f, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+	}},
+
+	// blr (ID 44) — branch-and-link to register (ARM ARM C6.2.37).
+	// 1101_0110_0011_1111_0000_00 Rn 00000 = 0xd63f0000 | (Rn<<5).
+	{MnemonicID: 44, Pattern: 0xd63f0000, Mask: 0xfffffc1f, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+	}},
+
 	// adrp (ID 13)
 	{MnemonicID: 13, Pattern: 0x90000000, Mask: 0x9f000000, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
@@ -144,6 +188,13 @@ var generatedForms = []Form{
 	// 64-bit: 0x92000000
 	{MnemonicID: 14, Pattern: 0x92000000, Mask: 0xff800000, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+		{SlotKind: LogicalImm, ExpectedKind: 5, BitPosition: 10, BitWidth: 13},
+	}},
+	// and SP-form: `and sp, Xn, #imm` (immediate form — AND with SP
+	// destination is allowed; useful for stack-alignment masks).
+	{MnemonicID: 14, Pattern: 0x92000000, Mask: 0xff800000, Slots: []OperandSlot{
+		{SlotKind: XregOrSp, ExpectedKind: 3, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
 		{SlotKind: LogicalImm, ExpectedKind: 5, BitPosition: 10, BitWidth: 13},
 	}},
@@ -251,6 +302,11 @@ var generatedForms = []Form{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},  // Rn
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5}, // Rm
 	}},
+	// Manually added: CMP shifted-register 32-bit (SUBS wzr, Wn, Wm). ARM ARM C6.2.69.
+	{MnemonicID: 19, Pattern: 0x6b00001f, Mask: 0xffe0fc1f, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},  // Rn
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5}, // Rm
+	}},
 
 	// cbz (ID 20)
 	{MnemonicID: 20, Pattern: 0x34000000, Mask: 0xff000000, Slots: []OperandSlot{
@@ -276,6 +332,20 @@ var generatedForms = []Form{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4},
+	}},
+	// Manually added: CSEL (32-bit). ARM ARM C6.2.52.
+	{MnemonicID: 24, Pattern: 0x1a800000, Mask: 0xffe00c00, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5},
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4},
+	}},
+	// Manually added: CSINC (32-bit). ARM ARM C6.2.54.
+	{MnemonicID: 25, Pattern: 0x1a800400, Mask: 0xffe00c00, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5},
 		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4},
 	}},
 	// Manually added: CSINC (64-bit). ARM ARM C6.2.54.

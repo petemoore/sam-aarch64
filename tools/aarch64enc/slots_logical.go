@@ -58,19 +58,36 @@ func encodeLogicalImm(slot OperandSlot, imm int64, is64 bool) (uint32, error) {
 		return 0, fmt.Errorf("LogicalImm: element not encodable")
 	}
 
-	// Rotate until the low ones-run starts at bit 0.
-	rotation := 0
-	for element&1 == 0 {
-		element = ((element >> 1) | (element << (size - 1))) & mask
-		rotation++
-	}
+	// Rotate right until bit 0 is the start of the ones-run — i.e.
+	// rotate so the value becomes (1<<ones) - 1 (all ones in the
+	// low `ones` bits). The ones-run may wrap around the element
+	// (e.g. 0xfffffffd has a 31-bit run wrapping from bit 2 through
+	// bit 0), so we cannot rely on "rotate while LSB == 0": instead
+	// we scan for the first 0→1 transition and rotate by that amount.
 	expected := (uint64(1) << ones) - 1
-	if element != expected {
+	rotation := -1
+	for r := 0; r < size; r++ {
+		// Try rotating right by r.
+		rotated := ((element >> r) | (element << (size - r))) & mask
+		if rotated == expected {
+			rotation = r
+			break
+		}
+	}
+	if rotation < 0 {
 		return 0, fmt.Errorf("LogicalImm: not a single ones-run")
 	}
+	element = expected
 
 	var n uint32
+	// We rotated the value RIGHT by `rotation` to recover the canonical
+	// (1<<ones)-1 pattern. The encoded immr is the inverse rotation
+	// (i.e. ARM's DecodeBitMasks does `welem ROR immr` to recover the
+	// original value), so immr = (size - rotation) modulo size.
 	var immr uint32 = uint32(rotation)
+	if rotation != 0 {
+		immr = uint32(size - rotation)
+	}
 	var imms uint32
 
 	if size == 64 {
