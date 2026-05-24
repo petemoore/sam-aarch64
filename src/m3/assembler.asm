@@ -220,6 +220,20 @@ endif
 ; See docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md.
 if defined(BUILD_TESTS)
                 call    load_test_mem_off_axis
+
+; -- BUILD_TESTS only: HLOAD the paged_call self-test payload into
+; physical page 14, then run the self-test.  Must happen AFTER
+; enctab_trampoline_setup (paged_call body needs installing in
+; section B) and BEFORE load_enctab (which mutates HMPR via the
+; HLOAD trampoline and would perturb the test's bit-identity
+; assertion).
+;
+; The payload is 3 bytes (`ld a, &42; ret`); the test calls
+; paged_call into it and asserts A=&42 + HMPR-bit-identity on
+; return.  See plan-PR 1 of
+; docs/notes/2026-05-28-paged-call-architecture.md.
+                call    load_page14_payload
+                call    run_paged_call_self_tests
 endif
 
 ; -- Boot-time self-tests (compiled in only when BUILD_TESTS=1) --------
@@ -409,4 +423,23 @@ if defined(BUILD_TESTS)
                 include "test_trampoline.asm"
                 include "test_emit_paged.asm"
                 include "test_reader_paged.asm"
+                include "test_paged_call.asm"
 endif
+
+; -- paged_call body source ---------------------------------------------
+; Included LAST so the body source bytes appear at the end of the
+; binary, NOT near the BUILD_TESTS test-data labels (boot_hmpr,
+; lmpr_save_test, reader_paged_*) which live alongside the
+; test_*.asm includes above.  The body is NEVER executed from its
+; section-C source location — enctab_trampoline_setup LDIRs the
+; bytes into section B at boot; this include just emits the
+; source-side bytes for the LDIR to read from.
+;
+; Source-position rationale: paged_bodies.asm has no `org` directive
+; (it inherits pyz80's current PC), so its absolute address shifts
+; with every byte added or removed above it.  The bytes baked into
+; the body, however, are all absolute references to section-B
+; addresses (PAGED_CALL_HMPR_SAVE / PAGED_CALL_SP_SAVE / TRAMP_SAFE_SP
+; / paged_call_trailer_dst) — all defined as EQU expressions in
+; trampoline.asm — so the body's contents are position-independent.
+                include "paged_bodies.asm"
