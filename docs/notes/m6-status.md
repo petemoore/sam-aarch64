@@ -2,12 +2,10 @@
 
 Entry point for any session picking up where M6 left off.
 
-**M6 IN PROGRESS — PR 1 of N landed.** The first M6 PR moves the OUT
-buffer out of section C, lifting the SAM-side assembler's output
-ceiling from 2 KB to 32 KB and unblocking the spectrum4 release.bin
-(~22 KB) target.  Subsequent PRs cover the paged IN buffer (source
-> 2 KB), the compact `.tbn` format, the on-SAM disassembler, and
-multi-digit local labels.
+**M6 IN PROGRESS — PR 2 of N landed.** PR 1 paged OUT; PR 2 pages IN.
+With both, source files > 2 KB AND outputs > 2 KB are now possible
+on the SAM-side assembler.  Subsequent PRs cover the compact `.tbn`
+format, the on-SAM disassembler, and multi-digit local labels.
 
 ## M6 scope (full milestone)
 
@@ -17,8 +15,8 @@ toolchain — `release.s` is ~20 KB source emitting ~22 KB output.
 
 | Strand | Status | Spec | PR |
 |---|---|---|---|
-| Paged OUT buffer (sections-B emit + HSAVE auto-paging) | ✅ done | `docs/specs/2026-05-27-m6-paged-out-design.md` (+ `docs/specs/2026-05-27-samdos-save-idiom.md`) | this PR (M6 PR 1) |
-| Paged IN buffer (source > 2 KB; HLOAD chunked into page 7+) | 📋 designed (reuse the trampoline pattern from PR #31) | TBD — design note pending | M6 PR 2 |
+| Paged OUT buffer (sections-B emit + HSAVE auto-paging) | ✅ done | `docs/specs/2026-05-27-m6-paged-out-design.md` (+ `docs/specs/2026-05-27-samdos-save-idiom.md`) | landed (#36) — M6 PR 1 |
+| Paged IN buffer (source > 2 KB; trampoline-HLOAD into pages 7..10) | ✅ done | `docs/specs/2026-05-27-m6-paged-in-design.md` | this PR (M6 PR 2) |
 | Multi-digit local labels (`10f` / `10b` / …) | 📋 plan ready | `docs/plans/2026-05-27-multi-digit-local-labels.md` | open draft PR #35 (independent of this PR) |
 | Compact `.tbn` format | 📋 designed | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | M6 PR 3+ |
 | On-SAM disassembler | 📋 designed | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | M6 PR 4+ |
@@ -118,20 +116,118 @@ Physical pages 5..6 (off-axis): OUT buffer
   - HSAVE reads via section C with UIFA[31] = OUT_BASE_PAGE
 ```
 
-## What's NOT in M6 PR 1 (still pending)
+## PR 2 — paged IN buffer (this PR)
 
-- **Paged IN buffer** — source > 2 KB.  Next PR.  Will reuse the
-  HLOAD trampoline from PR #31 with chunked loading; UIFA[31] +
-  the page allocator extend trivially.
-- **Compact `.tbn` format** — separate strand; defers until real
-  spectrum4 sources need to fit in SAM RAM.
+### What landed
+
+Per `docs/specs/2026-05-27-m6-paged-in-design.md`:
+
+1. **Storage.**  IN .tbn loaded via trampoline-HLOAD into physical
+   pages 7..10 (4 contiguous pages = 64 KB ceiling per design;
+   see "Caveat" below for the load-path's effective range).
+2. **Cursor.**  Flat 16-bit `IN_POS` replaced with 24-bit (page,
+   offset) pair: `IN_POS_PAGE` holds a full LMPR byte (RAM0 bit +
+   low 5 bits = the IN page mapped into section A), `IN_POS_OFFSET`
+   the section-A offset in `[&0000, &4000)`.  IN_END similarly
+   split.
+3. **Reader runtime.**  `reader_next_kind` brackets each record
+   fetch with an LMPR=`&27`-derived window mapping the current IN
+   page into section A; copies the record's `[kind][len][payload]`
+   into `STAGING_BUF` (= `&D500`, 1 KB) via an LDI loop with inline
+   `H >= &40` page-cross test (re-normalises HL + bumps LMPR mid-
+   loop); restores `LMPR_ENCTAB` before returning so the encoder
+   window is live on entry to the record handler.
+4. **Cursor helpers.**  Three primitives in main_loop.asm:
+   `in_map_current` (LMPR := IN_POS_PAGE), `in_persist_hl`
+   (snapshot HL + LMPR to cursor), `in_normalise_hl` (COMET-style
+   adjustpo; while H >= &40, subtract &40 from H and bump LMPR's
+   low 5 bits).
+5. **Pass 1 → pass 2 rewind.**  `reset_reader_to_in_buf` sets
+   cursor to `(LMPR_IN_BASE, 0)` and re-walks the header via
+   `reader_init`.  No disk re-read between passes.
+6. **Litpool cross-pass fix.**  Pass 1's `expr_ptr` would have
+   pointed into the per-record STAGING_BUF (overwritten on the
+   next `reader_next_kind` call).  `litpool_register` now copies
+   the expr bytecode into `LITPOOL_EXPR_BUF` (= `&D900`, 2 KB
+   bump-allocator in section D) at registration time.  Pass 2's
+   flush reads from the page-stable copy.
+7. **Boot self-test.**  `test_reader_paged.asm` exercises (a) the
+   page-cross helper (`in_normalise_hl` with HL=`&7FFE` → bumped
+   LMPR, HL=`&3FFE`); (b) a synthetic record fetch (stamp a
+   15-byte ".tbn" blob into page 7 via an LMPR-bracket LDIR, then
+   reset_reader_to_in_buf + reader_next_kind, assert payload bytes
+   match in STAGING_BUF); (c) post-read LMPR check (= `LMPR_ENCTAB`
+   on return).
+8. **Fixture.**  `tests/m6/sources/in_long_source.s` is a 44-line
+   fixture: 20 long-comment records (800 B payload each) plus one
+   shorter comment that pushes the .tbn just past the 16 KB
+   section-A page boundary.  Total .tbn ~16.5 KB.
+
+### Deviations from the plan
+
+| What | Why |
+|---|---|
+| `in_normalise_hl` called after LDI loop (not just inside) | Without this, a record whose last payload byte lands at section-A offset `&3FFF` leaves the cursor at `(old_page, &4000)` — same logical position as `(next_page, &0000)` but byte-wise different.  `reader_at_end` then compares page-wise and falsely reports "not at end" → infinite loop.  Found via the long-source fixture.  Fix: call `in_normalise_hl` before `in_persist_hl`, ensuring canonical cursor form. |
+| Fixture sized at ~16.5 KB rather than the plan's "4000 add instructions" | Two reasons: (1) the 4000-add fixture produces ~28 KB of .tbn — within the 64 KB ceiling but per-record encode cost overruns the SimCoupé 30s timeout in the dev-container path.  (2) Empirically the trampoline-HLOAD's section-D spillover near `&C100` becomes sensitive past ~16.6 KB — see Caveat below.  The 16.5 KB fixture still exercises the reader's intra-record page-cross + multi-page HLOAD path. |
+
+### Caveat — trampoline-HLOAD effective range
+
+The trampoline calling convention sets `HMPR = IN_BASE_PAGE` during
+the HLOAD call.  HMPR=7 makes section C = page 7 and section D =
+page 8.  During HLOAD, SAMDOS's internal `ctas` writes can spill
+into section D before catching up at the &C000 boundary; with the
+stack at SP=&C100 (page 8 offset &0100), HLOAD writes >~256 bytes
+past the page boundary into the stack region can corrupt RST 8
+return-state.  Empirically, .tbn files up to ~16626 bytes load
+cleanly; > 16640 bytes hangs the assembler.
+
+This puts the **effective IN ceiling at ~16.5 KB**, not the 64 KB
+the design intended.  Lifting this requires either moving the
+stack to an HMPR-stable location or changing the multi-page HLOAD
+strategy.  Tracked as a follow-up; the current PR's fixture stays
+inside the safe range while still exercising both the load-time
+multi-page HLOAD path AND the reader's intra-record page-cross.
+
+### Test status (all green)
+
+| Layer | Status | Notes |
+|---|---|---|
+| `make m3-asm-prod` | ✅ PASS | 12058 B / 12288 B (230 B headroom) |
+| `make ci-m3` | ✅ PASS | 9/9 |
+| `make ci-m3-prod` | ✅ PASS | 9/9 |
+| `make ci-m4` | ✅ PASS | 4/4 |
+| `make ci-m4-prod` | ✅ PASS | 4/4 |
+| `make ci-m5` | ✅ PASS | 19/19 |
+| `make ci-m5-prod` | ✅ PASS | 19/19 |
+| `make ci-m6` | ✅ PASS | 2/2 (`inst_long_emit` + `in_long_source`) |
+| `make ci-m6-prod` | ✅ PASS | 2/2 |
+| Boot self-tests | ✅ PASS | + paged-reader self-tests (page-cross + synthetic record fetch + post-read LMPR check) |
+
+### Code budget
+
+| variant | size | budget | headroom |
+|---|---|---|---|
+| `m3-asm-prod` (no self-tests) | 12058 B | 12288 B (`&8000-&AFFF`) | **230 B** |
+
+Net cost of M6 PR 2: 152 B in production (11906 → 12058).  Comfortably
+under the 12200 B watch threshold the verification subagent set;
+plenty of room for M6 PR 3+ work.
+
+## What's NOT in M6 PR 2 (still pending)
+
+- **Paged IN > 16.5 KB** — caveat above.  Requires either an
+  HMPR-stable stack relocation or a multi-page load strategy that
+  doesn't write into section D.  Tracked for follow-up.
+- **Compact `.tbn` format** — separate strand; needed for real
+  spectrum4 sources to fit in SAM RAM.
 - **On-SAM disassembler** — follows compact `.tbn`.
 - **Multi-digit local labels** (`10f` / `10b`) — independent draft
   PR #35.
 - **64 KB output limit** — 16-bit `OUT_LEN`; debug builds (~274 KB)
   need M7+.
-- **`(hksp)` error handler** — HSAVE longjmps on error; the
-  assembler crashes.  Same behaviour as M3..M5.  Out of scope.
+- **`(hksp)` error handler** — HSAVE / HGTHD / HLOAD longjmp on
+  error; the assembler crashes.  Same behaviour as M3..M5.  Out
+  of scope.
 
 ## Hand-off recipe (verify locally)
 
