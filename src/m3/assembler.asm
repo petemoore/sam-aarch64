@@ -179,6 +179,14 @@ start:
 ; re-enables interrupts, so DI must be repeated after hook calls.
                 ld      sp, &C100
 
+; Disarm the logical-imm soft-fail hook.  It lives in uninitialised
+; section-D RAM (&F019) and defaults to "armed only by the MOV-bitmask
+; path" — but RAM is not zero on cold boot, so force it clear here.  When
+; clear, encode_logical_imm_reject `jp fail`s as before for the normal
+; and/orr-immediate slot path.  See src/m3/slots/logical_imm.asm.
+                xor     a
+                ld      (encode_logical_imm_soft), a
+
 ; Capture the boot LMPR value (as left by BASIC's CALL 32768) into
 ; LMPR_DEFAULT_RUNTIME so enctab_map_out restores the *real* default,
 ; not a synthetic "ROM in A / page 1 in B" guess.  BASIC's default

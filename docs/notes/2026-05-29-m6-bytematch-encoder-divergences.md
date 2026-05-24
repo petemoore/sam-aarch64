@@ -94,12 +94,30 @@ output offset, the GNU (correct) text, and the SAM (wrong) text.
 | # | Class | Count | Fix status |
 |---|---|---|---|
 | 1 | 64-bit address data — high word truncated to 0 | 55 | ☐ open |
-| 2 | MOV (wide immediate) — wrong 16-bit chunk / `hw` shift | 30 | ☐ open |
-| 3 | MOV (bitmask immediate) alias unhandled | 10 | ☐ open |
-| 4 | MOV (inverted wide immediate) → MOVN; emits invalid encoding | 7 | ☐ open |
+| 2 | MOV (wide immediate) — wrong 16-bit chunk / `hw` shift | 30 | ✅ done (2026-05-29) |
+| 3 | MOV (bitmask immediate) alias unhandled | 10 | ✅ done (2026-05-29) |
+| 4 | MOV (inverted wide immediate) → MOVN; emits invalid encoding | 7 | ✅ done (2026-05-29) |
 | 5 | ADRP page-delta sign/high-bit wrong under large origin | 13 | ☐ open |
-| 6 | `csetm` condition not inverted | 2 | ☐ open |
+| 6 | `csetm` condition not inverted | 2 | ✅ done (csetm commit) |
 | 7 | Logical (bitmask) immediate value wrong (`and`/etc.) | 1 | ☐ open |
+
+**Release-diff progress:** 358 (initial) → 356 (after csetm, Class 6) →
+**235 (after Classes 2+3+4)**.  The Class-2/3/4 fix is a single MOV-alias
+auto-selection intercept (`encode_mov_imm_word` in `src/m3/intercepts.asm`),
+a faithful port of `tools/refenc/pass2.go:438-502` (`tryEncodeMovImm`):
+MOVZ chunk-search → MOVN chunk-search → ORR-bitmask, in that priority
+order (the same order GNU as uses).  All targeted offsets (0x3c, 0x78,
+0x170, 0x390, 0x648, 0x794, 0x844, 0xa20, 0xc6c, 0x4c20, 0x488c, 0x4898 …)
+now byte-match.  Fixtures: `tests/m6/sources/inst_mov_{wide_imm,movn,bitmask}.s`.
+
+Note on Class 3: several values the bug inventory below listed under
+Class 3 (e.g. `mov x0, #0xfffffffffffffffd`, `mov w7, #0xfffffffe`) are
+in fact resolved by GNU as as **MOVN**, not ORR-bitmask — verified with
+`aarch64-none-elf-as`.  The MOV-alias selection order handles them
+correctly regardless of which sub-class they fall in.  Class 7
+(`and w7, w7, #0xfffffffe`) is a separate operand-evaluation issue (the
+bitmask *slot* encoder `encode_logical_imm` is a correct port and is
+reused here for the MOV-bitmask path), left open for follow-up.
 
 ### Class 1 — 64-bit address data, high word truncated (55 sites)
 
