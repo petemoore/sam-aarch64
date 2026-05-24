@@ -11,8 +11,13 @@
 ;     REL_ABS_G0..G3 (and their _NC variants — same eval semantics, the
 ;     suffix only affects linker-relocation tracking which doesn't change
 ;     emitted bytes).
-;   • Still errors (jp fail) on MUL, DIV — text2bin's constant-folder
-;     should have collapsed these for instruction operands.
+;   • M6 closure (PR-3c) additions: MUL (0x12), DIV (0x13).  These reach
+;     the SAM evaluator whenever an operand is symbolic (text2bin only
+;     constant-folds all-literal expressions), e.g. release-stripped's
+;     `PUSH_SYM .. SUB PUSH_IMM8 MUL` streams.  Semantics match the Go
+;     evaluators (expr.go::applyBinary / aarch64enc/expr.go): signed
+;     64-bit `a*b` (low 64 bits) and signed `a/b` truncating toward
+;     zero, div-by-zero → 0.  Implemented via ml_mul / ml_div.
 ;
 ; Opcode values (tools/sam-aarch64-format/expr.go lines 12-66):
 ;
@@ -152,6 +157,10 @@ eval_loop:
                 jp      z, eval_add
                 cp      &11
                 jp      z, eval_sub
+                cp      &12
+                jp      z, eval_mul
+                cp      &13
+                jp      z, eval_div
                 cp      &14
                 jp      z, eval_and
                 cp      &15
@@ -431,6 +440,20 @@ eval_add:
 eval_sub:
                 call    eval_top2_ptrs
                 call    ml_sub
+                jp      eval_loop
+
+; MUL/DIV — opcodes 0x12/0x13.  After eval_top2_ptrs HL=lhs (new top),
+; DE=rhs (popped).  ml_mul/ml_div take (HL=dest/lhs, DE=src/rhs) and
+; leave the 64-bit result in (HL).  Reference: ml.asm headers +
+; tools/sam-aarch64-format/expr.go::applyBinary.
+eval_mul:
+                call    eval_top2_ptrs
+                call    ml_mul
+                jp      eval_loop
+
+eval_div:
+                call    eval_top2_ptrs
+                call    ml_div
                 jp      eval_loop
 
 eval_and:
