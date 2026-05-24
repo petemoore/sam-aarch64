@@ -208,13 +208,36 @@ func decodeScalarMem(word uint32) (string, string, bool) {
 	if mode == 0b00 {
 		// bits[25:24]=00: unscaled / pre / post / register offset, split on
 		// bits[11:10] and bit21.
+		//
+		// bit21 is the load/store-register sub-group discriminator in this
+		// space (ARM ARM C4.1.4 "Loads and stores"):
+		//
+		//   bit21=0 : immediate forms — unscaled (STUR/LDUR, bits[11:10]=00),
+		//             post-index (bits[11:10]=01), pre-index (bits[11:10]=11).
+		//             bits[11:10]=10 with bit21=0 is undefined.
+		//   bit21=1 : register-offset load/store ONLY when bits[11:10]=10.
+		//             bits[11:10]=00 with bit21=1 is the ATOMIC memory-ops
+		//             sub-space (LDADD/LDCLR/LDEOR/LDSET/LDSMAX/LDSMIN/
+		//             LDUMAX/LDUMIN/SWP, e.g. 0x38307030 lduminb,
+		//             0x78652079 ldeorlh); bits[11:10]=01/11 with bit21=1 are
+		//             reserved/undefined (e.g. 0x7830fc38, 0xf83ff03f).
+		//
+		// The project's encoder only emits the immediate forms and the
+		// register-offset form; everything else in this space is an atomic
+		// (out of scope) or reserved encoding objdump renders `.inst`, so we
+		// decline it.
 		idxBits := (word >> 10) & 0x3 // bits[11:10]
+		bit21 := (word >> 21) & 1
 		switch idxBits {
 		case 0b00:
 			// STUR/LDUR family: unscaled signed imm9 at [20:12].
 			// refenc encodeUnscaledMemInst (pass2.go ~874): GNU renders
 			// these as stur/ldur, and the encoder rewrites out-of-range
 			// str/ldr offsets into this form, so objdump shows stur/ldur.
+			// bit21=1 here is the atomic memory-ops sub-space — decline.
+			if bit21 != 0 {
+				return "", "", false
+			}
 			mnem, is64, ok := sturMnem(size, opc)
 			if !ok {
 				return "", "", false
@@ -224,15 +247,23 @@ func decodeScalarMem(word uint32) (string, string, bool) {
 			return mnem, ops, true
 		case 0b10:
 			// Register offset (bit21 must be 1): [Rn, Rm{, ext/lsl #amt}].
-			if (word>>21)&1 != 1 {
+			if bit21 != 1 {
 				return "", "", false
 			}
 			return decodeRegOffset(word, size, opc, rt, rn)
 		case 0b01:
 			// Post-index: signed imm9 at [20:12]; `[Rn], #N`.
+			// bit21=1 here is reserved/undefined — decline.
+			if bit21 != 0 {
+				return "", "", false
+			}
 			return decodeIndexed(word, size, opc, rt, rn, false)
 		case 0b11:
 			// Pre-index: signed imm9 at [20:12]; `[Rn, #N]!`.
+			// bit21=1 here is reserved/undefined — decline.
+			if bit21 != 0 {
+				return "", "", false
+			}
 			return decodeIndexed(word, size, opc, rt, rn, true)
 		}
 	}

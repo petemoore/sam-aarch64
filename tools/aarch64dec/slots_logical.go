@@ -28,7 +28,15 @@ import (
 //	  → 0:  927c0420  and  x0, x1, #0x30      ← wait, hex differs
 //	# (0x927c0420 from the encoder for `and x0, x1, #0x30`; little-
 //	# endian on disk is 20 04 7c 92.)
-func decodeLogicalImm(word uint32, slot aarch64enc.OperandSlot) string {
+// The bool return is false when (N:immr:imms) is not a legal bitmask
+// encoding (decodeBitMasks fails).  A Form's (Pattern, Mask) can match a
+// word whose N:immr:imms does not decode to any legal mask — the logical-
+// immediate field is not part of the Form mask — and objdump renders such
+// words as `.inst` (undefined), so the whole instruction must DECLINE.
+// Propagating false here makes decodeSlot fail the slot, which makes
+// decodeForm fail the Form, which lets DecodeAt fall through to .inst.
+// (Examples from release.img's interleaved data: 0x72652045, 0x52435300.)
+func decodeLogicalImm(word uint32, slot aarch64enc.OperandSlot) (string, bool) {
 	field := extractBits(word, slot.BitPosition, 13)
 	n := (field >> 12) & 1
 	immr := (field >> 6) & 0x3F
@@ -42,12 +50,9 @@ func decodeLogicalImm(word uint32, slot aarch64enc.OperandSlot) string {
 
 	value, ok := decodeBitMasks(n, immr, imms, regsize)
 	if !ok {
-		// Should never happen for words that match a real Form's
-		// Pattern + Mask, but guard anyway so a corrupt input
-		// produces visible output rather than a panic.
-		return fmt.Sprintf("#<invalid logical imm N=%d immr=%d imms=%d>", n, immr, imms)
+		return "", false
 	}
-	return fmt.Sprintf("#%#x", value)
+	return fmt.Sprintf("#%#x", value), true
 }
 
 // decodeBitMasks expands (N, immr, imms) to the regsize-bit bitmask

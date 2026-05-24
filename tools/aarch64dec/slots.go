@@ -71,7 +71,10 @@ func decodeSlot(ctx decodeCtx, slot aarch64enc.OperandSlot) (string, bool) {
 	case aarch64enc.AdrImm:
 		return decodeAdrImm(ctx), true
 	case aarch64enc.LogicalImm:
-		return decodeLogicalImm(ctx.word, slot), true
+		// Returns ok=false when N:immr:imms is not a legal bitmask
+		// encoding; that fails the Form so DecodeAt falls back to .inst,
+		// matching objdump's `undefined` on those words.
+		return decodeLogicalImm(ctx.word, slot)
 	case aarch64enc.BitfieldImm:
 		// BitfieldImm appears twice in any form that uses it
 		// (immr and imms slots); each slot independently renders
