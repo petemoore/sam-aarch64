@@ -824,6 +824,7 @@ EOF
 
 **Files:**
 - Modify: `.github/workflows/<existing>.yml` — add an `m6-release` job mirroring `m6-prod`'s shape but driving the release-stripped script.
+- Add (build/CI glue): a small build-time/CI **budget assertion** (e.g. a Makefile check or a tiny script invoked from CI) that fails the build on a code-size cliff — see the budget-assertion sub-step below.
 - Modify: `docs/ROADMAP.md` — flip M6's state column from "⏳ in progress" to "✅ done", add the PR link.
 - Modify: `~/.claude/projects/-Users-pmoore-git-sam-aarch64/memory/MEMORY.md` — move m6_strand_a_complete from "⭐ Current state" to "Past milestones" (or wherever the auto-loaded file groups closed milestones).
 
@@ -844,6 +845,15 @@ Mirror `m6-prod` but:
 - Build target: `make release-stripped-tbn` + `make m3-asm-prod-disk` (the disk with release-stripped.tbn pre-loaded).
 - Run target: `./tools/run-m6-release-stripped.sh`.
 - Timeout: 180s (the script's longest path — full release.s assembly on the SAM under SimCoupé).
+
+- [ ] **Step 2b: Add a build-time / CI budget assertion (the structural fix for the test-variant fragility class)**
+
+PR-5 ALSO adds a build-time/CI **budget assertion** so a code-size overrun becomes a CI *failure with a number* rather than a silent boot-hang. Two checks:
+
+- **Test variant (`BUILD_TESTS`):** fail the build if the test (`m3-asm`) variant's `code_end ≥ &C000` — the reader-self-test stack-collision cliff. Past that boundary the assembler's own scratch/stack growth collides with the loader spillover and the failure manifests as a deterministic boot-hang (rc=124) with no diagnostic, exactly the failure class that bit PR #43 and that the test-variant fragility memory (`memory/feedback_test_variant_fragility.md`) tracks.
+- **Prod variant:** fail the build if `m3-asm-prod` exceeds its ceiling.
+
+pyz80 emits symbol addresses, so the assertion can read `code_end` from the link map (or the binary size + org) and `exit 1` with a message like `code_end &C0xx ≥ &C000 cliff — N bytes over`. This **converts the silent boot-hang into a CI failure with a number** — the structural fix for the whole test-variant fragility class. This recommendation originates in the Go-harness fidelity investigation: `docs/notes/2026-05-29-go-harness-fidelity-investigation.md:14` (encroachment is a static memory-map fact, checkable with a link-map assertion at build time), `:87` (the build-time link-map assertion that asserts `code_end < &C000`), and `:183` (schedule the link-map assertion as a small inner-loop task — promoted here into the M6-closure gate because it directly protects the headline).
 
 - [ ] **Step 3: Test the workflow change locally via `act` or a draft PR**
 
