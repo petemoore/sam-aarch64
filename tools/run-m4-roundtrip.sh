@@ -87,9 +87,22 @@ echo "--- build-m3-disk ---"
     "build/${base}.tbn" \
     "build/${base}.mgt"
 
-# 3. Run SimCoupé.
+# 3. Run SimCoupé.  See run-m3-roundtrip.sh for the printer-channel
+#    status-banner rationale.
 echo "--- simcoupe ---"
-"$ROOT/tools/run-simcoupe.sh" "build/${base}.mgt"
+"$ROOT/tools/run-simcoupe.sh" "build/${base}.mgt" "build/${base}.status.log"
+
+status=$(tr -d '\r\n ' < "build/${base}.status.log" || true)
+if [ "$status" != "OK" ]; then
+    echo "FAIL: $base — assembler emitted status '${status}' (expected 'OK')"
+    if [ -s "build/${base}.status.log" ]; then
+        echo "  printer log:"
+        sed 's/^/    /' "build/${base}.status.log"
+    else
+        echo "  (printer log empty — SimCoupé may have hung or crashed before status emit)"
+    fi
+    exit 1
+fi
 
 # 4. Extract OUT.
 echo "--- extract OUT ---"

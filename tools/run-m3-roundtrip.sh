@@ -67,10 +67,28 @@ echo "--- build-m3-disk ---"
     "build/${base}.tbn" \
     "build/${base}.mgt"
 
-# 3. Run SimCoupé. The wrapper handles the timeout-vs-clean-exit
-#    semantics — see tools/run-simcoupe.sh.
+# 3. Run SimCoupé. The wrapper exits ~1 s in either case (both paths
+#    do `DI; HALT`) and writes a status file containing "OK" or "FAIL"
+#    captured from the SAM's parallel printer channel.  See
+#    src/m3/print.asm + tools/run-simcoupe.sh.
 echo "--- simcoupe ---"
-"$ROOT/tools/run-simcoupe.sh" "build/${base}.mgt"
+"$ROOT/tools/run-simcoupe.sh" "build/${base}.mgt" "build/${base}.status.log"
+
+# 3a. Check the SAM-side status banner before bothering with the byte
+#     compare.  A "FAIL" status indicates a boot-time self-test
+#     failure in the assembler — no point comparing OUT bytes in that
+#     case (OUT may be stale from a previous run or absent).
+status=$(tr -d '\r\n ' < "build/${base}.status.log" || true)
+if [ "$status" != "OK" ]; then
+    echo "FAIL: $base — assembler emitted status '${status}' (expected 'OK')"
+    if [ -s "build/${base}.status.log" ]; then
+        echo "  printer log:"
+        sed 's/^/    /' "build/${base}.status.log"
+    else
+        echo "  (printer log empty — SimCoupé may have hung or crashed before status emit)"
+    fi
+    exit 1
+fi
 
 # 4. Extract OUT.
 echo "--- extract OUT ---"

@@ -5,7 +5,8 @@
 ; These run BEFORE load_enctab (see assembler.asm start:) so they
 ; exercise the symbol-table routines against hard-coded ids/addresses
 ; with no disk I/O.  Any assertion failure does `jp fail` — same
-; red-border / 30s-spin path that the slot self-tests use.
+; red-border + printer-channel "FAIL" banner path that the slot
+; self-tests use.
 ;
 ; Test coverage:
 ;   1. After symbol_table_init, lookup of any id returns CF=1.
