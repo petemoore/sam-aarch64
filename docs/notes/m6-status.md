@@ -2,10 +2,14 @@
 
 Entry point for any session picking up where M6 left off.
 
-**M6 IN PROGRESS — PR 2 of N landed.** PR 1 paged OUT; PR 2 pages IN.
-With both, source files > 2 KB AND outputs > 2 KB are now possible
-on the SAM-side assembler.  Subsequent PRs cover the compact `.tbn`
-format, the on-SAM disassembler, and multi-digit local labels.
+**M6 — HEADLINE ACHIEVED (byte-match), CI gate pending.** As of
+2026-05-29 the SAM-side assembler produces spectrum4 `release.bin`
+byte-identical to GNU (see "Release byte-match — status" below). The
+mechanism work (paged OUT, paged IN, paged_call, off-axis tables,
+multi-digit local labels, the 8 encoder-bug fixes) has all landed; the
+only remaining step to flip M6 ✅ is the `m6-release` CI gate (PR-5 of
+the closure plan). The sections below document the earlier PRs (paged
+OUT/IN) in detail and remain accurate for that machinery.
 
 ## M6 scope (full milestone)
 
@@ -20,7 +24,7 @@ toolchain — `release.s` is ~20 KB source emitting ~22 KB output.
 | Multi-digit local labels (`10f` / `10b` / …) | 📋 plan ready | `docs/plans/2026-05-27-multi-digit-local-labels.md` | open draft PR #35 (independent of this PR) |
 | Compact `.tbn` format | 📋 designed | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | M6 PR 3+ |
 | On-SAM disassembler | 📋 designed | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | M6 PR 4+ |
-| spectrum4 release.bin byte-match on SAM | ⏳ in progress — flows through SimCoupé (OK, 21752 B); byte-match blocked on ~7 SAM encoder bug classes (see below) | — | M6 PR N |
+| spectrum4 release.bin byte-match on SAM | ✅ **ACHIEVED** (2026-05-29) — SAM OUT byte-identical to GNU (21752 B, cmp exit 0); CI gate (PR-5) pending to fully close M6 | `tools/run-m6-release-stripped.sh` | branch `m6-bytematch-encoder-fixes` |
 
 ## Release byte-match — status (2026-05-29, the headline closer)
 
@@ -36,22 +40,26 @@ the assembler **on SimCoupé** (the authoritative gate):
    **harness fidelity gap, not a real SAM paged-IN bug.** (`run-simcoupe.sh`
    gained a `SIMCOUPE_TIMEOUT` env override — 88 KB exceeds the 30 s default.)
 
-2. **Byte-match NOT yet achieved.** SAM OUT differs from the GNU oracle at
-   **118 of 5 438 instruction words** (refenc on the *identical* `.tbn`
-   matches GNU exactly, so the divergence is purely the Z80 encoder). ~7
-   distinct encoder bug classes the fixture corpus never exercised:
-   64-bit address-data high-word truncation (55), MOV wide-imm
-   decomposition (30), MOV bitmask-imm alias (10), MOV→MOVN invalid
-   encodings (7), ADRP high-origin page-delta (13), csetm condition
-   inversion (2), logical-imm value (1).
+2. **Byte-match ACHIEVED** (2026-05-29). The initial run surfaced 118
+   differing instruction words across 8 encoder bug classes the fixture
+   corpus never exercised; all are now fixed (each a faithful port of the
+   Go authority per `docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md`):
+   csetm condition inversion, MOV wide-imm decomposition, MOV bitmask-imm
+   alias, MOV→MOVN, 64-bit address-data high word (PASS_PC made
+   origin-aware), ADRP high-origin page-delta, bic-immediate, and
+   `.set`/`.equ` absolute-vs-origin-relative symbol values. Release diff
+   walked **358 → 0**. The SAM-side production assembler now HSAVEs a
+   21752-byte OUT byte-identical to GNU `as+ld+objcopy`, verified
+   end-to-end on SimCoupé via `tools/run-m6-release-stripped.sh` (exit 0).
+   All ci-m3/m4/m5/m6 + -prod fixtures pass; both code variants under the
+   `&C000` ceiling (test ~&BFD9, prod ~&B846).
 
-   **These are M6 critical-path** (release-stripped uses them) — distinct
-   from the M7 "Z80↔Go parity audit" (instructions release does *not*
-   use). **Fix authority: port from the Go implementation** — see the
-   inventory doc's "AUTHORITY FOR ALL FIXES" table; nothing is reinvented.
-   Fix status is tracked in that doc's inventory table. Each class needs a
-   permanent `tests/m6/sources/` fixture (the gaps existed because no
-   fixture used these forms).
+   The fixes live on branch `m6-bytematch-encoder-fixes` (one commit per
+   class; PR pending Pete's review). **What remains to fully close M6:**
+   PR-5 — wire `tools/run-m6-release-stripped.sh` into CI as the
+   `m6-release` gate + add the `&C000` budget assertion (M6-closure plan
+   Step 2b). Each class also gained a permanent `tests/m6/sources/`
+   fixture so the corpus now covers these forms.
 
 ### Go-harness paged-path trap — root-cause follow-up (Pete: ideally M6)
 
