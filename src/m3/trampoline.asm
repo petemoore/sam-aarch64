@@ -230,6 +230,26 @@ LMPR_ENCTAB:    equ     &20 + ENCTAB_PAGE
                                        ; boot LMPR has bit 5 = 0; we
                                        ; need it = 1 to swap ROM out).
 
+; OUT-buffer paged-output constants.
+;
+; Per docs/specs/2026-05-27-m6-paged-out-design.md.  OUT lives in
+; physical pages 5..6 across two zones:
+;
+;   Low zone  (bytes 0..16383)   — section B during LMPR_ENCTAB window;
+;                                  page 5 reached for free as
+;                                  LMPR_ENCTAB+1 = &25 (Tech Manual
+;                                  tech-man_v3-0.txt:908-910).
+;   High zone (bytes 16384..32767) — LMPR brackets each emit to LMPR_OUT_HIGH,
+;                                    placing page 6 in section B.
+;
+; HSAVE at end of pass 2 reads via section C with UIFA[31]=OUT_BASE_PAGE
+; (= 5), HMPR auto-paging at &C000 to reach page 6 (see
+; docs/specs/2026-05-27-samdos-save-idiom.md).
+
+OUT_BASE_PAGE:  equ     5              ; first physical page of OUT
+LMPR_OUT_HIGH:  equ     &25            ; RAM0 + low5=5; A=page 5, B=page 6
+
+
 TRAMPOLINE_DST: equ     &7E00          ; section-B copy destination
                                        ; (under LMPR_DEFAULT, section B
                                        ; = page 1).  Near the top of
