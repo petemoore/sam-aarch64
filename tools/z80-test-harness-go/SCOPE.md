@@ -16,6 +16,34 @@ design rationale and known stub gaps; see the README for usage.
 
 ## What is stubbed vs faithful
 
+## PR-6 additions (2026-05-28) — BUILD_TESTS variant + fault diagnostics
+
+Added during the M6-closure PR-6 reader-self-test investigation (the first
+adversarial use of the harness on a real failure):
+
+- **Named-file registry (`NamedFile` + `RunWithFiles`/`RunConfig`)**: HGTHD
+  now reads the UIFA name and selects a registered file; HLOAD faithfully
+  re-deposits that file's bytes into the section-C physical page (HMPR&0x1F),
+  spanning consecutive pages to mirror SAMDOS `ctas` auto-paging
+  (`samdos/src/c.s:354-369`). This lets the **BUILD_TESTS variant** boot: it
+  HLOADs `test_mem` (page 13) and `p14` (page 14) before its self-tests. It
+  also makes a *re-HLOAD of IN* restore IN page 7 — which the reader
+  self-test deliberately clobbers — exactly as real hardware does. Without
+  this, the no-op HLOAD left page 7 corrupted and the subsequent real
+  assembly pass read the synthetic record (a harness artifact, not a Z80
+  bug).
+- **Register snapshot at exit (`Result.FaultRegs`, `RegSnapshot`)**: full
+  register file + LMPR/HMPR + alternate set, captured on HALT/trap/timeout.
+- **Step counter (`Result.Steps`)**.
+- **`&0038` garbage-trap detector**: bails out fast (with a snapshot) when PC
+  spins in the `0xFF` fake-ROM fill, instead of burning the whole timeout.
+- **Windowed PC/register trace (`Config.TraceLo/TraceHi`)**: ordered
+  snapshots at every step whose PC is in a target range — read a routine's
+  exact path without inner-loop noise.
+- **Trigger-PC backtrace (`Config.TrigPC` → `TrigResult`)**: snapshot +
+  last-200-PC ring the first time PC reaches a target address (e.g. the
+  `fail` entry) — answers "who jumped here?".
+
 ### Faithful (implemented correctly)
 - **SAM paging model**: LMPR (port &FA) for sections A+B, HMPR (port &FB) for sections C+D; bits 5-7 of HMPR are mode-3 CLUT, preserved on all HMPR writes.  Sourced verbatim from `tools/basic-emulator-spike/main.go` comments citing Tech Manual v3.0 §6.10.
 - **RST 8 dispatch**: a 7-byte stub at &0008 in the fake ROM correctly extracts the hook code from the DEFB immediately following RST 8, dispatches via port &FD, and returns to the instruction after the DEFB.  The EX (SP),HL trick is position-independent and HL-preserving.
