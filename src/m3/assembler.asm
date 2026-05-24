@@ -259,7 +259,16 @@ endif
 if defined(BUILD_TESTS)
                 call    run_symbol_table_self_tests
                 call    run_local_label_self_tests
-                call    run_expr_eval_m4_self_tests
+                ; run_expr_eval_m4_self_tests moved off-axis into the page-12
+                ; cluster (PR-3c, 2026-05-29) to reclaim ~449 B of section-C/D
+                ; budget for the MUL/DIV evaluator code.  It runs first in
+                ; cluster_dispatch, preserving its prior relative order (after
+                ; symbol/local, before slots).  The suite is LMPR-swap-safe:
+                ; verified call-graph-free of paged_call / section-B / LMPR
+                ; routines (only eval_expr_const, symbol_*, local_* — all
+                ; HMPR-stable section-C/D), and its inline `defb` literals read
+                ; via section A under the swap, like the slots suite already
+                ; relies on.
 
 ; -- The slot / pc_rel / directives_m5 / ror_imm / shifted_reg /
 ; extended_reg / litpool suites live off-axis on physical page 12 (M6
@@ -469,7 +478,8 @@ if defined(BUILD_TESTS)
                 include "test_assert_eq32.asm"
                 include "test_symbols.asm"
                 include "test_local_labels.asm"
-                include "test_expr_eval_m4.asm"
+                ; test_expr_eval_m4 moved off-axis into the page-12 cluster
+                ; (PR-3c, 2026-05-29) — see the call-site comment above.
                 ; test_slots / test_pc_rel / test_directives_m5 / test_ror_imm /
                 ; test_shifted_reg / test_extended_reg / test_litpool now
                 ; live off-axis on physical page 12 (the "M5 + misc encoder"
