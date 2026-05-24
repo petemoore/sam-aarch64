@@ -172,21 +172,38 @@ Per `docs/specs/2026-05-27-m6-paged-in-design.md`:
 
 ### Caveat — trampoline-HLOAD effective range
 
-The trampoline calling convention sets `HMPR = IN_BASE_PAGE` during
-the HLOAD call.  HMPR=7 makes section C = page 7 and section D =
-page 8.  During HLOAD, SAMDOS's internal `ctas` writes can spill
-into section D before catching up at the &C000 boundary; with the
-stack at SP=&C100 (page 8 offset &0100), HLOAD writes >~256 bytes
-past the page boundary into the stack region can corrupt RST 8
-return-state.  Empirically, .tbn files up to ~16626 bytes load
-cleanly; > 16640 bytes hangs the assembler.
+The trampoline calling convention sets `HMPR = IN_BASE_PAGE` (= 7)
+during the HLOAD call.  Section C = page 7 (HLOAD's destination);
+section D = page 8 (= HMPR+1).  Empirically, .tbn files up to 16632
+bytes load cleanly; **≥ 16633 bytes deterministically hangs** the
+assembler.
 
-This puts the **effective IN ceiling at ~16.5 KB**, not the 64 KB
-the design intended.  Lifting this requires either moving the
-stack to an HMPR-stable location or changing the multi-page HLOAD
-strategy.  Tracked as a follow-up; the current PR's fixture stays
-inside the safe range while still exercising both the load-time
-multi-page HLOAD path AND the reader's intra-record page-cross.
+**Root cause** (see `docs/notes/2026-05-28-hload-16k-limit-investigation.md`
+for the full investigation): the trampoline's own `rst 8` pushes a
+2-byte return address onto the caller's stack at `&C0F8/&C0F9` — in
+section D, which under `HMPR=7` is page 8 at offset `&00F8/&00F9`.
+HLOAD's spillover from the first 16 KB page writes into page 8
+starting at offset 0, overwriting the trampoline's pushed return
+address before HLOAD restores HMPR.  The hang is the resulting
+return into garbage.
+
+(The earlier "user stack at SP=&C100 collides" theory was conceptually
+right but specifically wrong: ROM PTDOS switches SP to `&8000` at
+hook entry, so the user's `&C100` stack frame isn't live during HLOAD
+writes — only the trampoline's own pre-RST-8 push is.  COMET
+routinely loads >16 KB files via HLOAD and avoids this by `LD SP,
+(sproom)` before its HLOAD trampoline (`comet.asm:1189`), switching
+SP to a section-A-stable location.  Our trampoline omits that SP
+switch — the bug.)
+
+**Effective IN ceiling under this PR**: **16632 bytes**, not the 64 KB
+the design intended.  A 3-instruction SP-switch patch (save SP, load
+SP from a section-B/A-stable variable, restore SP) lifts the ceiling
+to ≥ 32 KB — verified empirically.  Tracked as a follow-up PR (the
+fix lives in the trampoline layer from PR #31, not in this PR's IN
+scope).  This PR's fixture (`in_long_source.s`, ~16.5 KB .tbn) stays
+inside the safe range while still exercising both the multi-page
+HLOAD path AND the reader's intra-record page-cross.
 
 ### Test status (all green)
 
