@@ -16,22 +16,26 @@ without ever leaving the SAM Coupé.
 
 ## Status
 
-M0 (toolchain bootstrap) is done. The dev pipeline
-pyz80 → patched SimCoupé → samfile → GNU `as` is wired end-to-end:
-a Z80 stub writes a 4-byte file via SAMDOS HSAVE, the host extracts
-it, byte-compares it against `aarch64-none-elf-as`. The stub signals
-completion with `DI; HALT` alone — one mechanism, working
-cross-platform.
+M0 (toolchain bootstrap) and M1 (binary tokenised source format
+plus `text2bin` / `bin2text`) are both done. M2 (encoder tables
++ Mac reference encoder) is partially complete: the full encoder
+library and generator pipeline are landed, refenc byte-matches
+`aarch64-none-elf-as` on the simpler M1 fixtures (nop, ret, add,
+sub, b/b.cond, mov, .byte/.short/.word, labels, etc.). The
+remaining work is wiring MEM, SHIFTED_REG, and EXTENDED_REG operand
+flattening through refenc, and adding `csel`/`csinc` to the table.
+See `docs/notes/m2-status.md` for the full gap list.
 
-The same round-trip passes green in every environment we run it in:
-GitHub Actions on `ubuntu-latest` (inside the dev image published to
-`ghcr.io/petemoore/sam-aarch64-dev` on every push), the dev image
-locally under Docker on both `linux/amd64` and `linux/arm64`, and
-natively on macOS against a locally-built patched SimCoupé. See
-`docs/specs/` for design documents and `docs/plans/` for the M0
-plan.
+The M0 round-trip continues to pass under every environment we
+exercise: GitHub Actions on `ubuntu-latest` (inside the dev image
+published to `ghcr.io/petemoore/sam-aarch64-dev` on every push),
+the dev image locally under Docker on both `linux/amd64` and
+`linux/arm64`, and natively on macOS against a locally-built
+patched SimCoupé. See `docs/specs/` for design documents and
+`docs/plans/` for milestone plans.
 
-Next up: M1 (the actual aarch64 assembler).
+Next up: complete M2 (cover remaining operand kinds), then M3
+(Z80 emitter).
 
 ## Local development
 

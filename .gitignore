@@ -13,3 +13,5 @@ tools/build-disk/build-disk
 tools/basic-emulator-spike/basic-emulator-spike
 tools/basic-detokeniser-spike/basic-detokeniser-spike
 tools/basic-detokeniser-sweep/basic-detokeniser-sweep
+go.work
+go.work.sum
