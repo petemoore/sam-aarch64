@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/tools/session-handover.sh\" 2>/dev/null || sed -n '/HANDOVER-PROTOCOL-START/,/HANDOVER-PROTOCOL-END/p' \"${CLAUDE_PROJECT_DIR:-.}/docs/ROADMAP.md\" 2>/dev/null || true",
+            "timeout": 10,
+            "statusMessage": "Loading ROADMAP handover protocol"
+          }
+        ]
+      }
+    ]
+  }
+}

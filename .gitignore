@@ -16,3 +16,15 @@ tools/basic-detokeniser-sweep/basic-detokeniser-sweep
 tools/z80-test-harness-go/z80-test-harness-go
 go.work
 go.work.sum
+
+# --- Override global ~/.gitignore_global for this (personal) repo ---
+# The global excludesfile ignores the whole .claude/ directory + superpowers
+# (a guard so work repos never commit Claude files — company policy). This is
+# a personal repo, so we surgically re-include the version-controlled session
+# handover hook config, while keeping the agent worktrees (and everything else
+# under .claude/) ignored. NOTE: a parent dir must be un-ignored before a file
+# inside it can be re-included, hence the !.claude/ then .claude/* dance.
+!.claude/
+.claude/*
+!.claude/settings.json
+.claude/worktrees/
