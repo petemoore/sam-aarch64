@@ -19,10 +19,26 @@ See `docs/specs/2026-05-09-vision.md` for the long-form pitch and `docs/specs/20
 | M4 | Symbol table, multi-pass, full expression evaluator on Z80 | `docs/specs/2026-05-24-m4-symbols-multipass-design.md` | `docs/notes/m4-status.md` | ✅ done (PRs #21, #22, #23); 4/4 M4 fixtures byte-match GNU end-to-end via SimCoupé — plan: `docs/plans/2026-05-24-m4-symbols-multipass.md` |
 | M5 | Compound operands (`OpShiftedReg`, `OpExtendedReg`, `OpMem`, `OpSysName`, `OpLitPool`) + remaining directives (`.set`/`.equ`, `.balign`/`.align`, `.org`, `.skip`/`.space`, `.inst`, `.ltorg`) + `ror`-imm intercept | `docs/specs/2026-05-27-m5-compound-operands-directives-design.md` | `docs/notes/m5-status.md` | ✅ done (PRs #29 / #30 / #31 / #32 / #33 / this PR); 19/19 M5 fixtures byte-match GNU end-to-end via SimCoupé — plan: `docs/plans/2026-05-27-m5-compound-operands-directives.md` |
 | M6 | Paged OUT + paged IN + compact `.tbn` format + built-in disassembler (real spectrum4 fixture round-tripping byte-identical via SAM) | `docs/specs/2026-05-27-m6-paged-out-design.md` + `docs/specs/2026-05-27-m6-paged-in-design.md` + `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | `docs/notes/m6-status.md` | ⏳ in progress (PRs 1-2 of N — paged OUT + paged IN landed) |
-| (Phase 2) | On-SAM editor | `docs/specs/2026-05-09-phase1-assembler.md` §editor + future spec | — | 📋 sketched |
+| (Phase 2) | On-SAM editor (see "Editor vision" below) | `docs/specs/2026-05-09-phase1-assembler.md` §editor + future spec | — | 📋 sketched |
 | (Phase 3) | TFTP shipper to Pi 400 (Quazar Trinity) over direct LAN cable | `docs/specs/2026-05-27-phase3-tftp-direct-lan-design.md` | — | 📋 design direction captured; reference: `simonowen/trinload` |
 
 Legend: ✅ done · ⏳ in progress · 📋 designed, not started
+
+## Editor vision (Phase 2 — design pointers, not yet spec'd)
+
+Captured 2026-05-27 from Pete during the compact-`.tbn` design conversation. These shape the editor's design but aren't on the immediate critical path. Use as inputs when the Phase 2 spec gets written.
+
+- **Inline instruction explanation on demand.** Reader selects an instruction; editor shows: what it does in prose, which flags it sets, which registers it reads/writes, the exact bit-fields the encoding occupies. Useful both for learning aarch64 and for verifying intent during code review. Synergy with the disassembler-as-inverse-encoder: the same form table that decodes the 4-byte word also tells us the operand semantics, so this is one extra layer over the disassembler rather than a separate database.
+
+- **Register simulator with user-chosen seeds.** Step through instructions one at a time; let the user inject arbitrary bit patterns into source registers (or randomise) and see what the destination registers + flags + relevant memory look like afterwards. Doesn't need to be a full SAM-Coupé-internal Z80 simulator — just a small aarch64 instruction emulator covering the subset we generate. Compounds with the explanation feature: "you typed `lsr x0, x1, #4`; if x1 = 0xCAFEBABE, then x0 becomes 0x0CAFEBAB".
+
+- **Retro UI affordances**: chiptune background music, period-appropriate fonts, animations when entering instructions. The SAM Coupé hardware specifically supports this (256 KB RAM, SAA sound chip via SAASound, palette / mode 3 / 24K screen tricks). The editor is a SAM-resident program, so embracing its native aesthetic is a free win and frames the whole product as a love letter to the platform rather than a transplanted modern IDE.
+
+- **"Why is this instruction here?" navigation**: select an instruction, see all sites that branch to it or read from a register it writes. Inverse-flow visualisation. Same data structures that drive the symbol table already give us this.
+
+- **Replay-on-edit**: when an instruction is changed, re-run the register simulator from the most recent label and show what changed downstream. Tight feedback loop for understanding the blast radius of an edit.
+
+These should NOT compete with the M6 / Phase 1 critical path. They're explicitly Phase 2+ surface. But the disassembler-and-encoder format chosen in M6 should be evaluated against "does it make these features easier or harder?" — e.g. preserving alias info in the encoded form (see the canonical-aliases survey at `docs/notes/2026-05-27-disassembly-canonicalisation-survey.md` when it lands) directly enables the explanation feature without round-tripping through GNU as.
 
 ## Design notes not strictly inside a milestone
 
