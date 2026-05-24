@@ -96,13 +96,39 @@ test-m2: refenc text2bin
 
 ci-m2: test-m2
 
-.PHONY: m3-asm build-m3-disk m3-disk test-m3 ci-m3
+.PHONY: m3-asm m3-asm-prod build-m3-disk m3-disk test-m3 ci-m3
+
+# Two build variants of the SAM-side assembler:
+#
+#   m3-asm       (test variant, default for dev / ci-m3 / ci-m4)
+#                Includes all boot-time self-tests (slots / symbols /
+#                local labels / M4 expr_eval / PC-rel).  Larger binary
+#                but catches per-routine regressions before the
+#                fixture-corpus round-trip even runs.  This is what
+#                tests/m{3,4}/run-roundtrip.sh expect.
+#
+#   m3-asm-prod  (production variant, for end-user shipping)
+#                Self-tests #ifdef'd out via `-D BUILD_TESTS=0` (i.e.
+#                BUILD_TESTS is undefined; `if defined(BUILD_TESTS)`
+#                blocks in src/m3/assembler.asm are skipped).  Smaller
+#                binary — frees code budget for M5.  Identical OUT
+#                bytes on every fixture (the self-tests don't affect
+#                the assemble path); the build-split-status target
+#                verifies this.
+#
+# Both variants byte-match GNU on the M3 + M4 fixture corpora.
 
 m3-asm: $(BUILD)/assembler.bin
 
+m3-asm-prod: $(BUILD)/assembler-prod.bin
+
 $(BUILD)/assembler.bin: src/m3/assembler.asm $(wildcard src/m3/*.asm) $(wildcard src/m3/**/*.asm) src/sam_io.inc
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/assembler.bin src/m3/assembler.asm
+	pyz80 -D BUILD_TESTS=1 --obj=$(BUILD)/assembler.bin src/m3/assembler.asm
+
+$(BUILD)/assembler-prod.bin: src/m3/assembler.asm $(wildcard src/m3/*.asm) $(wildcard src/m3/**/*.asm) src/sam_io.inc
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/assembler-prod.bin src/m3/assembler.asm
 
 $(BUILD)/build-m3-disk: tools/build-m3-disk/main.go tools/build-m3-disk/go.mod
 	@mkdir -p $(BUILD)
@@ -132,3 +158,20 @@ test-m4: m3-asm enctab $(BUILD)/build-m3-disk text2bin
 	./tests/m4/run-roundtrip.sh
 
 ci-m4: test-m4
+
+.PHONY: test-m3-prod test-m4-prod ci-m3-prod ci-m4-prod
+
+# Production-variant sweeps — same fixture corpora, same oracle, but
+# with the smaller assembler binary that omits the boot-time self-tests.
+# Useful as a correctness check that the BUILD_TESTS=1 / undefined
+# fork in src/m3/assembler.asm doesn't accidentally change emit
+# behaviour.  ci-m{3,4} cover the test variant; these cover prod.
+test-m3-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
+	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m3/run-roundtrip.sh
+
+test-m4-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
+	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m4/run-roundtrip.sh
+
+ci-m3-prod: test-m3-prod
+
+ci-m4-prod: test-m4-prod

@@ -53,8 +53,21 @@ echo "=== M3 round-trip: $fixture ==="
 
 mkdir -p build
 
-# Mac-side tools and the assembler binary.
-make -s text2bin enctab m3-asm build-m3-disk
+# Mac-side tools.  The assembler binary itself is a per-variant input:
+# ASSEMBLER_BIN selects between the test build (default — includes
+# boot-time self-tests) and the production build (set
+# ASSEMBLER_BIN=build/assembler-prod.bin).  Caller is responsible for
+# ensuring the chosen binary is built; we don't `make m3-asm` here
+# because that would force the test variant even when the caller wants
+# the prod variant.
+ASSEMBLER_BIN="${ASSEMBLER_BIN:-$ROOT/build/assembler.bin}"
+make -s text2bin enctab build-m3-disk
+
+if [ ! -f "$ASSEMBLER_BIN" ]; then
+    echo "ERROR: assembler binary not found: $ASSEMBLER_BIN" >&2
+    echo "  (build it with 'make m3-asm' or 'make m3-asm-prod')" >&2
+    exit 2
+fi
 
 # 1. text2bin → INPUT.tbn
 echo "--- text2bin ---"
@@ -63,7 +76,7 @@ echo "--- text2bin ---"
 # 2. build-m3-disk with the .tbn as IN.
 echo "--- build-m3-disk ---"
 "$ROOT/build/build-m3-disk" \
-    build/assembler.bin build/enctab.enc \
+    "$ASSEMBLER_BIN" build/enctab.enc \
     "build/${base}.tbn" \
     "build/${base}.mgt"
 
