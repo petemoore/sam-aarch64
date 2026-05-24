@@ -218,6 +218,29 @@ try_intercept_post_litpool:
                 ret
 try_intercept_post_ldrlit:
 
+; -- lsl / lsr (mnemonics 17 / 18) ------------------------------------
+; Both forms (3 operands): operand 2 = OpImmExpr → UBFM-alias immediate
+; shift; operand 2 = OpRegX/OpRegW → LSLV/LSRV register shift.  The
+; Mac-side dispatch is refenc/pass2.go:300 (case 17,18 → encodeLSLSR),
+; ahead of the form table.  No form-table entry exists, so a miss here
+; would fall through to FAIL40.  Grounded against aarch64-none-elf-as +
+; ARM ARM C6.2.218/.222 (LSL/LSR imm) and C6.2.219/.223 (LSLV/LSRV).
+                ld      a, (try_intercept_mnem)
+                cp      17
+                jr      z, try_intercept_lslsr
+                cp      18
+                jp      nz, try_intercept_post_lslsr
+try_intercept_lslsr:
+                ld      a, (main_op_count)
+                cp      3
+                jp      nz, try_intercept_post_lslsr
+                ld      a, (try_intercept_mnem)
+                call    encode_lslsr_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+try_intercept_post_lslsr:
+
 ; -- Barrier mnemonics: isb=66 / dsb=67 / dmb=68 ----------------------
 ; text2bin converts the barrier-arg keyword (sy, ish, ishst, ...) into a
 ; single OpImmExpr carrying the CRm field (bits 11:8); isb with no arg
@@ -864,3 +887,228 @@ encode_ldrlit_pack:
 encode_ldrlit_basehi:            defb    0
 encode_ldrlit_off:               defb    0, 0, 0, 0
 encode_ldrlit_chk:               defb    0, 0, 0, 0
+
+
+; -----------------------------------------------------------------------
+; encode_lslsr_word — pure word computation for lsl / lsr (mnem 17/18).
+;
+; Port of tools/refenc/pass2.go:encodeLSLSR (pass2.go:1196).
+;
+; In:  A = mnemonic_id (17=lsl, 18=lsr).
+;      OPVAL_ARRAY[0] = Rd (X=0x01 / W=0x02), reg in +1.
+;      OPVAL_ARRAY[1] = Rn (matching width), reg in +1.
+;      OPVAL_ARRAY[2] = OpImmExpr (#shift, LE result at +2) OR a register
+;        (LSLV/LSRV).  Width comes from operand 0.
+; Out: DE:HL = encoded 32-bit word (HL=bits0..15, DE=bits16..31).
+; Errors: jp fail on width != X/W, shift out of [0,regsize), or non-u8
+;   shift.
+; Grounded against aarch64-none-elf-as + ARM ARM C6.2.218/.222/.219/.223.
+; -----------------------------------------------------------------------
+encode_lslsr_word:
+                ld      (encode_lslsr_mnem), a
+; -- regsize / is64 from operand 0 kind -------------------------------
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0)
+                cp      OP_KIND_REG_X
+                jr      z, encode_lslsr_x
+                cp      OP_KIND_REG_W
+                jp      nz, fail
+                xor     a                   ; is64 = 0 (W)
+                jr      encode_lslsr_size_set
+encode_lslsr_x:
+                ld      a, 1                ; is64 = 1 (X)
+encode_lslsr_size_set:
+                ld      (encode_lslsr_is64), a
+
+; -- Branch on operand-2 kind: register (LSLV/LSRV) vs immediate ------
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 0)
+                cp      OP_KIND_REG_X
+                jp      z, encode_lslsr_reg
+                cp      OP_KIND_REG_W
+                jp      z, encode_lslsr_reg
+                cp      OP_KIND_IMM_EXPR
+                jp      nz, fail
+
+; =====================================================================
+; Immediate form (UBFM alias).
+; =====================================================================
+; regsize = is64 ? 64 : 32.  Read shift (operand 2 LE byte 0).
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 2)
+                ld      (encode_lslsr_shift), a
+; reject non-u8 shift (upper LE bytes must be zero)
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 3)
+                or      a
+                jp      nz, fail
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 4)
+                or      a
+                jp      nz, fail
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 5)
+                or      a
+                jp      nz, fail
+; range: 0 <= shift < regsize
+                ld      a, (encode_lslsr_is64)
+                or      a
+                ld      a, 32
+                jr      z, encode_lslsr_imm_rs_set
+                ld      a, 64
+encode_lslsr_imm_rs_set:
+                ld      (encode_lslsr_regsize), a
+                ld      b, a                ; B = regsize
+                ld      a, (encode_lslsr_shift)
+                cp      b
+                jp      nc, fail            ; shift >= regsize → fail
+
+; -- Compute immr/imms by mnemonic ------------------------------------
+                ld      a, (encode_lslsr_mnem)
+                cp      18
+                jp      z, encode_lslsr_lsr_imm
+
+; LSL: immr = (-shift) & (regsize-1); imms = regsize-1-shift
+;   shift==0 → immr=0; else immr = regsize - shift.
+                ld      a, (encode_lslsr_shift)
+                or      a
+                jr      nz, encode_lslsr_lsl_immr_nz
+                xor     a                   ; immr = 0
+                jr      encode_lslsr_lsl_immr_done
+encode_lslsr_lsl_immr_nz:
+; immr = regsize - shift  (shift in [1, regsize-1])
+                ld      a, (encode_lslsr_regsize)
+                ld      c, a
+                ld      a, (encode_lslsr_shift)
+                ld      b, a
+                ld      a, c
+                sub     b                   ; A = regsize - shift
+                and     &3f
+encode_lslsr_lsl_immr_done:
+                ld      (encode_lslsr_immr), a
+; imms = regsize - 1 - shift
+                ld      a, (encode_lslsr_regsize)
+                dec     a                   ; regsize - 1
+                ld      c, a
+                ld      a, (encode_lslsr_shift)
+                ld      b, a
+                ld      a, c
+                sub     b                   ; A = (regsize-1) - shift
+                and     &3f
+                ld      (encode_lslsr_imms), a
+                jp      encode_lslsr_imm_base
+
+encode_lslsr_lsr_imm:
+; LSR: immr = shift; imms = regsize - 1
+                ld      a, (encode_lslsr_shift)
+                and     &3f
+                ld      (encode_lslsr_immr), a
+                ld      a, (encode_lslsr_regsize)
+                dec     a
+                and     &3f
+                ld      (encode_lslsr_imms), a
+
+encode_lslsr_imm_base:
+; base = is64 ? 0xd3400000 : 0x53000000.  DE high16, HL=0.
+                ld      a, (encode_lslsr_is64)
+                or      a
+                jr      z, encode_lslsr_imm_w
+                ld      de, &d340
+                jr      encode_lslsr_imm_pack
+encode_lslsr_imm_w:
+                ld      de, &5300
+encode_lslsr_imm_pack:
+                ld      hl, 0
+; -- OR Rd into bits 4:0 ---------------------------------------------
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1)
+                and     &1f
+                ld      l, a
+; -- OR Rn into bits 9:5 ---------------------------------------------
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1)
+                and     &1f
+                call    encode_ubfm_or_rn      ; HL |= Rn<<5
+; -- OR imms into bits 15:10 -----------------------------------------
+                ld      a, (encode_lslsr_imms)
+                call    encode_ubfm_or_imms    ; HL |= imms<<10
+; -- OR immr into bits 21:16 (DE low byte bits 0..5) -----------------
+                ld      a, (encode_lslsr_immr)
+                or      e
+                ld      e, a
+                ret
+
+; =====================================================================
+; Register form (LSLV / LSRV).
+; =====================================================================
+encode_lslsr_reg:
+; base by mnemonic + width:
+;   lsl(17): X 0x9ac02000 / W 0x1ac02000
+;   lsr(18): X 0x9ac02400 / W 0x1ac02400
+; DE high16: lsl X=0x9ac0 W=0x1ac0; lsr same high16 (0x...c0).
+; HL low16:  lsl 0x2000; lsr 0x2400.  Then | (Rm<<16)|(Rn<<5)|Rd.
+                ld      a, (encode_lslsr_is64)
+                or      a
+                jr      z, encode_lslsr_reg_w
+                ld      de, &9ac0
+                jr      encode_lslsr_reg_lo
+encode_lslsr_reg_w:
+                ld      de, &1ac0
+encode_lslsr_reg_lo:
+                ld      a, (encode_lslsr_mnem)
+                cp      18
+                jr      z, encode_lslsr_reg_lsr
+                ld      hl, &2000           ; LSLV low16
+                jr      encode_lslsr_reg_pack
+encode_lslsr_reg_lsr:
+                ld      hl, &2400           ; LSRV low16
+encode_lslsr_reg_pack:
+; -- OR Rd into bits 4:0 ---------------------------------------------
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1)
+                and     &1f
+                or      l
+                ld      l, a
+; -- OR Rn into bits 9:5 ---------------------------------------------
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1)
+                and     &1f
+                call    encode_ubfm_or_rn      ; HL |= Rn<<5
+; -- OR Rm into bits 20:16 (DE low byte bits 0..4) -------------------
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 1)
+                and     &1f
+                or      e
+                ld      e, a
+                ret
+
+
+; -----------------------------------------------------------------------
+; encode_ubfm_or_rn — OR a 5-bit Rn (in A) into HL at bit position 5.
+; Rn<<5 spans HL bits 5..9: low 3 bits of Rn → HL low byte bits 5..7;
+; high 2 bits of Rn → HL high byte bits 0..1.  Clobbers A, C.
+; -----------------------------------------------------------------------
+encode_ubfm_or_rn:
+                and     &1f
+                rrca
+                rrca
+                rrca                        ; A bits 5..7 = Rn&7 ; A bits 0..1 = Rn>>3
+                ld      c, a
+                and     &e0                 ; (Rn&7)<<5
+                or      l
+                ld      l, a
+                ld      a, c
+                and     &03                 ; Rn>>3
+                or      h
+                ld      h, a
+                ret
+
+; -----------------------------------------------------------------------
+; encode_ubfm_or_imms — OR a 6-bit imms (in A) into HL at bit position
+; 10.  imms<<10 spans HL bits 10..15 = HL high byte bits 2..7.
+; Clobbers A.
+; -----------------------------------------------------------------------
+encode_ubfm_or_imms:
+                and     &3f
+                add     a, a
+                add     a, a                ; imms<<2 → bits 2..7 of high byte
+                or      h
+                ld      h, a
+                ret
+
+
+encode_lslsr_mnem:               defb    0
+encode_lslsr_is64:               defb    0
+encode_lslsr_regsize:            defb    0
+encode_lslsr_shift:              defb    0
+encode_lslsr_immr:               defb    0
+encode_lslsr_imms:               defb    0
