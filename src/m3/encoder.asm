@@ -326,11 +326,12 @@ encode_slot_extendop:
                 jp      encode_slot_or_and_next
 
 
-; BranchImm26/19/14 — wide BCDE big-endian signed.  PC-rel byte offset.
-; M3 only supports CONSTANT operands (text2bin already folded labels
-; into PC-relative literals only when the label was a constant — i.e.
-; in M3 we expect this to rarely fire; when it does, the value is a
-; raw byte offset).
+; BranchImm26/19/14 — wide BCDE big-endian signed.
+; M4 semantics: BCDE is the ABSOLUTE target address (resolved by the
+; expression evaluator from a label / PC-relative expression).
+; encode_branch_imm subtracts PASS_PC internally before applying its
+; range-check + bit-pack body.  M3 fixtures don't reach this dispatch
+; entry; M4 fixtures (PR 3) exercise it end-to-end.
 encode_slot_branch:
                 call    encoder_load_imm_bcde
                 ld      hl, (encoder_slot_ptr)
@@ -339,6 +340,9 @@ encode_slot_branch:
 
 
 ; AdrpImm — wide BCDE big-endian signed.
+; M4 semantics: BCDE is the ABSOLUTE target address.  encode_adrp_imm
+; masks both target and PASS_PC to their 4 KB page bases and subtracts
+; before applying its range-check + bit-pack body.
 encode_slot_adrp:
                 call    encoder_load_imm_bcde
                 ld      hl, (encoder_slot_ptr)

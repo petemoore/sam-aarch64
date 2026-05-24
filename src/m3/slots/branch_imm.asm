@@ -26,10 +26,26 @@
 ;   BranchImm19 (B.cond, CBZ, CBNZ): bit_width=19, BP=5   (SlotKind=0x21)
 ;   BranchImm14 (TBZ, TBNZ):         bit_width=14, BP=5   (SlotKind=0x22)
 ;
-; M3 scope: byteOffset is the constant the parser hands us — no
-; PC-relative arithmetic yet (M4 will add label resolution).  We treat
-; it as a 32-bit signed integer; the largest plausible input for BW=26
-; is ±(1<<27 - 4) = ±0x07FFFFFC, well within int32.
+; M4 caller contract: BCDE is the ABSOLUTE target address (the resolved
+; value of a label or PC-relative expression).  This routine subtracts
+; PASS_PC (the PC of the instruction currently being assembled, u32 LE
+; at &C159) from BCDE before applying the existing range-check + bit-
+; pack body.  The subtracted result IS the signed byteOffset the older
+; M3-style body operated on.
+;
+; Per docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.5:
+;   if slot.SlotKind in {BranchImm26, BranchImm19, BranchImm14}:
+;       value = value - current_pc
+;
+; M3 fixtures never exercise branches/adrp, so the M3 corpus continues
+; to byte-match GNU regardless of the new subtraction step (the encoder
+; code path isn't hit).  M4 fixtures (PR 3) exercise it end-to-end.
+;
+; The largest plausible input AFTER subtraction for BW=26 is
+; ±(1<<27 - 4) = ±0x07FFFFFC, well within int32; the subtraction itself
+; is a full 32-bit two's-complement subtract via SUB/SBC, so any
+; underflow at the high byte is absorbed and the subsequent range check
+; catches out-of-range offsets cleanly.
 ;
 ; -----------------------------------------------------------------------
 ; Calling convention — wide signed single-operand
@@ -38,13 +54,15 @@
 ; encode_imm12_shifted, reinterpreted as signed two's-complement:
 ;
 ;   HL    = pointer to 4-byte slot record (consumed → low word of DEHL).
-;   BCDE  = signed 32-bit byteOffset, big-endian register packing:
+;   BCDE  = signed 32-bit ABSOLUTE address, big-endian register packing:
 ;             B = bits 24..31  (hi byte, includes sign bit at bit 7)
 ;             C = bits 16..23
 ;             D = bits  8..15
 ;             E = bits  0.. 7  (lo byte)
-;           Negative byteOffsets use two's-complement; e.g. byteOffset=-4
-;           is BC=&ffff / DE=&fffc.
+;           For tests that want to exercise the encoder body directly
+;           (independent of PASS_PC) set PASS_PC = 0 first — then BCDE
+;           effectively IS the byteOffset and the old M3 semantics
+;           are recovered.
 ;
 ; Output:
 ;   DEHL  = 32-bit encoded value (DE = bits 16..31, HL = bits 0..15).
@@ -102,6 +120,38 @@ encode_branch_imm:
                 inc     hl                 ; HL → bit_width
                 ld      a, (hl)
                 ld      (encode_branch_imm_bw), a
+
+; -- M4: subtract PASS_PC from BCDE -------------------------------------
+; Caller now passes the ABSOLUTE target address in BCDE.  The encoder
+; body below operates on the signed byteOffset = target - PC, so we
+; convert here before running the alignment check.
+;
+; Subtraction is LSB-first across 4 bytes:
+;   E -= PASS_PC[0]                 (SUB clears carry)
+;   D -= PASS_PC[1] + borrow        (SBC)
+;   C -= PASS_PC[2] + borrow
+;   B -= PASS_PC[3] + borrow
+;
+; PASS_PC is treated as a u32; full 32-bit two's-complement subtraction
+; absorbs any borrow at the high byte (negative results are sign-
+; correct in BCDE).  The downstream range check rejects offsets that
+; don't fit the slot's BW.
+                ld      a, e
+                ld      hl, PASS_PC
+                sub     (hl)
+                ld      e, a
+                ld      a, d
+                inc     hl
+                sbc     a, (hl)
+                ld      d, a
+                ld      a, c
+                inc     hl
+                sbc     a, (hl)
+                ld      c, a
+                ld      a, b
+                inc     hl
+                sbc     a, (hl)
+                ld      b, a
 
 ; -- Alignment check: byteOffset & 3 == 0 -------------------------------
                 ld      a, e

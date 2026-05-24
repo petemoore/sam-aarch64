@@ -77,6 +77,7 @@ PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
                 include "test_symbols.asm"
                 include "test_local_labels.asm"
                 include "test_expr_eval_m4.asm"
+                include "test_pc_rel.asm"
 
 ; -----------------------------------------------------------------------
 ; Main program — entry via jp from &8000.
@@ -122,6 +123,14 @@ start:
 ; by main_assemble's pass_pc_reset call, so the test doesn't need to
 ; restore it.
                 call    run_expr_eval_m4_self_tests
+
+; -- PC-relative slot-encoder self-tests --------------------------------
+; Exercises encode_branch_imm and encode_adrp_imm under M4 semantics:
+; caller passes an ABSOLUTE target address, the encoder subtracts
+; PASS_PC (BranchImm*) or (PASS_PC & ~0xFFF) (AdrpImm) internally.
+; PASS_PC is set explicitly per sub-test; the suite restores PASS_PC=0
+; on exit (defensive — main_assemble re-zeros it).  See test_pc_rel.asm.
+                call    run_pc_rel_self_tests
 
 ; -- Load and validate enctab.enc header --------------------------------
                 call    load_enctab

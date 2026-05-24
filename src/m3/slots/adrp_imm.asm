@@ -27,15 +27,32 @@
 ; SlotKind handled here:
 ;   AdrpImm = 0x23
 ;
-; M3 scope: constant byteOffset only.  The valid Go-side range is
-; ±(1<<32) bytes (±4GB), reflecting the 21-signed-bit pageOffset times
-; 4096.  This Z80 port accepts a 32-bit signed BCDE byteOffset, so the
-; reachable range here is ±(1<<31) bytes (±2GB).  That is comfortably
-; more than the assembler will encounter in M3 — every constant operand
-; in M3 is a small literal computed at parse time, not a real PC-
-; relative target — and the future M4 PC-relative path will pre-compute
-; pageOffset directly anyway.  If we ever need the full ±4GB on-SAM,
-; this convention can be extended to 5-byte input (sign byte + BCDE).
+; M4 caller contract: BCDE is the ABSOLUTE target address (the resolved
+; value of a label or PC-relative expression).  The adrp instruction
+; computes target_page - pc_page, where each "page" is the 4 KB-aligned
+; address (low 12 bits zero).  Per
+; docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.5:
+;
+;   if slot.SlotKind == AdrpImm:
+;       value = (value & ~0xFFF) - (current_pc & ~0xFFF)
+;
+; Both operands are masked to their page bases BEFORE the subtract.
+; This is materially different from "subtract then mask", because if
+; current_pc has any low-12 bits set, the page-base difference will
+; differ from the masked raw difference.
+;
+; The mask + subtraction also subsumes the page-alignment check that
+; used to exist here: after masking both operands to page boundaries,
+; the difference is page-aligned by construction, so the low-12-bit
+; alignment check below is a no-op for any well-formed M4 input.  We
+; keep the check anyway as a defensive invariant.
+;
+; M3 fixtures never exercise adrp, so the existing M3 corpus continues
+; to byte-match GNU regardless of the new subtraction step.  M4
+; fixtures (PR 3) exercise it end-to-end.
+;
+; The Z80 reachable range is ±(1<<31) bytes (±2GB), comfortably more
+; than any practical SAM-resident assembler input.
 ;
 ; -----------------------------------------------------------------------
 ; Calling convention — wide signed single-operand
@@ -125,7 +142,49 @@
 ;
 ; -----------------------------------------------------------------------
 encode_adrp_imm:
+; -- M4: mask BCDE with ~0xFFF, then subtract (PASS_PC & ~0xFFF) --------
+; Caller passes the ABSOLUTE target address in BCDE.  We compute the
+; page-difference: (target & ~0xFFF) - (pc & ~0xFFF).  Both operands
+; are first masked to their 4 KB page bases by clearing the low 12
+; bits — for BCDE that means E := 0, D := D & 0xF0.  PASS_PC is read
+; into a 4-byte temp and the same mask applied there.  Then a full
+; 32-bit two's-complement subtract LSB-first.
+                xor     a
+                ld      e, a                   ; clear low 8 bits of target
+                ld      a, d
+                and     &f0                    ; clear bits 8..11 of target
+                ld      d, a
+; Build (PASS_PC & ~0xFFF) in encode_adrp_imm_pcpage[0..3] (LE).
+                xor     a
+                ld      (encode_adrp_imm_pcpage + 0), a    ; low byte := 0
+                ld      a, (PASS_PC + 1)
+                and     &f0                                ; clear bits 8..11
+                ld      (encode_adrp_imm_pcpage + 1), a
+                ld      a, (PASS_PC + 2)
+                ld      (encode_adrp_imm_pcpage + 2), a
+                ld      a, (PASS_PC + 3)
+                ld      (encode_adrp_imm_pcpage + 3), a
+; BCDE -= (PASS_PC & ~0xFFF), LSB-first across 4 bytes.
+                ld      a, e
+                ld      hl, encode_adrp_imm_pcpage
+                sub     (hl)
+                ld      e, a
+                ld      a, d
+                inc     hl
+                sbc     a, (hl)
+                ld      d, a
+                ld      a, c
+                inc     hl
+                sbc     a, (hl)
+                ld      c, a
+                ld      a, b
+                inc     hl
+                sbc     a, (hl)
+                ld      b, a
+
 ; -- Page-alignment check: low 12 bits must be zero ---------------------
+; After the masked subtraction above the low 12 bits are zero by
+; construction; this check is retained as a defensive invariant.
                 ld      a, e
                 or      a
                 jp      nz, fail               ; E ≠ 0 → not 4096-aligned
@@ -322,7 +381,8 @@ encode_adrp_imm_immlo_shift:
 
 ; -----------------------------------------------------------------------
 ; Scratch bytes — range-check loop counter, a 4-byte copy of the
-; shifted pageOffset, and a 1-byte stash for immlo.
+; shifted pageOffset, a 1-byte stash for immlo, and a 4-byte buffer
+; for the masked PASS_PC (M4 page-base subtraction).
 ; -----------------------------------------------------------------------
 encode_adrp_imm_cnt:
                 defb    0
@@ -330,3 +390,5 @@ encode_adrp_imm_copy:
                 defb    0, 0, 0, 0
 encode_adrp_imm_immlo:
                 defb    0
+encode_adrp_imm_pcpage:
+                defb    0, 0, 0, 0
