@@ -1,7 +1,79 @@
 # reader_paged boot self-test — root cause + fix
 
 Date: 2026-05-28
-Status: **SUPERSEDED — verification table below was on a stale tree.**
+Status: **RESOLVED (M6-closure PR-6, 2026-05-28).** See the
+"PR-6 resolution" section at the foot of this file. The body below is
+retained as the historical investigation record.
+
+---
+
+## PR-6 resolution (2026-05-28) — re-enabled, no SP change
+
+`run_reader_paged_self_tests` is re-enabled in `src/m3/assembler.asm`.
+**No SP change was made — SP stays at `&C100`.** PR #42's `SP=&FFFE`
+idea was both unnecessary and wrong (top-of-section-D is HMPR-controlled
+and would move under paging).
+
+### What actually fixed it: PR #52 (off-axis test_mem), not this PR
+
+The original root-cause analysis below (stack-vs-own-code collision at
+`&C100`) was **correct for the layout at the time**: pre-PR-#52 the test
+variant ended around `&C1AB`, so `run_reader_paged_self_tests` sat above
+`&C000` inside the `SP=&C100` stack page, and its own opcodes were
+overwritten by stack pushes during its execution.
+
+PR #52 (`test_mem.asm` ported off-axis to physical page 13) shrank the
+test variant to `~&BF70`. `run_reader_paged_self_tests` now lives at
+`≈&BE5B` — **entirely below `&C000`**. The boot stack at `&C100` grows
+down through section-D scratch and never reaches the test function's
+code. So the collision the 2026-05 investigation found is gone; the test
+simply passes on the current layout with the original `SP=&C100`.
+
+Confirmed empirically (this PR): in a windowed register trace through
+`&BE5B..&BF40`, SP holds steady at `&C0FE..&C100` for the entire
+self-test — never descending into the `&BExx` code region. (Harness:
+`tools/z80-test-harness-go/`, windowed-trace feature added in this PR.)
+
+### How the Go harness was used (first adversarial use)
+
+1. Extended the harness to run the BUILD_TESTS variant at all: added a
+   **named-file registry** so HGTHD/HLOAD faithfully serve `test_mem`
+   (page 13) and `p14` (page 14), which the test variant HLOADs at boot.
+   Before this the test variant trapped at `&0038` (jumped into the
+   `0xFF` fake ROM) because pages 13/14 were empty.
+2. Reproduced a deterministic `FAIL00` (clean assertion-fail halt, not a
+   hang). Added a **windowed PC/register trace** + a **trigger-PC
+   backtrace** to the harness; the backtrace showed `fail` was entered
+   from `walk_records` (`&A06D`) during the *real* assembly pass, while
+   processing a record of kind `&77` — the synthetic kind the reader
+   self-test stamps into IN page 7.
+3. Diagnosed this as a **harness fidelity gap**, not a Z80 bug: the
+   reader test clobbers IN page 7 with its synthetic blob, and on real
+   hardware `main_assemble`'s `load_in_file` HLOAD re-reads the real IN
+   file from disk and restores page 7. The harness's HLOAD was a no-op,
+   so page 7 stayed corrupted. Fixed by making HLOAD faithfully
+   re-deposit the named file across pages (matching SAMDOS `ctas`
+   auto-paging). After the fix the harness PASSes with the self-test
+   live.
+4. **SimCoupé is the arbiter.** Ran the full dev-container sweep with the
+   call enabled: `ci-m{3,4,5,6}` and `ci-m{3,4,5,6}-prod` all green
+   (M3 9/9, M4 5/5, M5 20/20, M6 2/2 each variant). SimCoupé and the
+   (fixed) harness agree.
+
+### Bottom line
+
+No production-code or reader-logic change was needed — the latent bug
+was closed by PR #52's layout change. This PR (a) re-enables the boot
+self-test, (b) updates the stale `assembler.asm` comment, (c) lands the
+harness improvements that made the diagnosis possible, and (d) records
+this resolution.
+
+---
+
+## Historical investigation record (pre-PR-6)
+
+Status of the section below: **SUPERSEDED — verification table was on a
+stale tree.**
 
 > **2026-05-28 update:** the verification CI table in this document
 > ("All CI suites pass with the test re-enabled: ci-m3 9/9 …") was

@@ -5,11 +5,12 @@
 // test is a fast inner-loop check that the test variant boots clean.
 //
 // Requires the BUILD_TESTS artefacts:
-//   build/assembler.bin                  (make m3-asm)
-//   build/test_mem.bin                   (make test-mem-offaxis)
-//   build/paged_call_test_payload.bin    (make paged-call-payload)
-//   build/enctab.enc                     (make enctab)
-//   build/text2bin                       (make text2bin)
+//
+//	build/assembler.bin                  (make m3-asm)
+//	build/test_mem.bin                   (make test-mem-offaxis)
+//	build/paged_call_test_payload.bin    (make paged-call-payload)
+//	build/enctab.enc                     (make enctab)
+//	build/text2bin                       (make text2bin)
 //
 // Skipped automatically if build/assembler.bin is absent.
 package main
@@ -32,10 +33,11 @@ func TestVariantBootSelfTests(t *testing.T) {
 	}
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
+	sd13Path := filepath.Join(root, "build", "sysreg_data.bin")
 	encPath := filepath.Join(root, "build", "enctab.enc")
 	text2binPath := filepath.Join(root, "build", "text2bin")
 	fixturePath := filepath.Join(root, "tests", "m3", "sources", "inst_nop_ret.s")
-	for _, p := range []string{tmPath, p14Path, encPath, text2binPath, fixturePath} {
+	for _, p := range []string{tmPath, p14Path, sd13Path, encPath, text2binPath, fixturePath} {
 		if _, err := os.Stat(p); err != nil {
 			t.Skipf("prerequisite missing: %s", p)
 		}
@@ -51,6 +53,7 @@ func TestVariantBootSelfTests(t *testing.T) {
 	asm, _ := os.ReadFile(asmPath)
 	tm, _ := os.ReadFile(tmPath)
 	p14, _ := os.ReadFile(p14Path)
+	sd13, _ := os.ReadFile(sd13Path)
 	enc, _ := os.ReadFile(encPath)
 	in, _ := os.ReadFile(tbnPath)
 
@@ -63,6 +66,11 @@ func TestVariantBootSelfTests(t *testing.T) {
 	res, trace, _ := RunConfig(Config{
 		AssemblerBin: asm, EnctabData: enc, InData: in,
 		Files: []NamedFile{
+			// sd13 listed before test_mem so test_mem wins the initial
+			// page-13 pre-deposit (run_mem_self_tests runs first); the boot
+			// later HGTHD+HLOADs "sd13" over page 13 via load_page13_payload
+			// (PR-2) before run_sysreg_paged_self_tests reads the tables.
+			{Name: "sd13", Content: sd13, TargetPage: 13},
 			{Name: "test_mem", Content: tm, TargetPage: 13},
 			{Name: "p14", Content: p14, TargetPage: 14},
 		},
@@ -78,6 +86,13 @@ func TestVariantBootSelfTests(t *testing.T) {
 	if !res.Passed {
 		t.Fatalf("test variant boot self-tests did not pass: printer=%q exit=%q regs=%s",
 			res.PrinterCapture, res.ExitReason, res.FaultRegs)
+	}
+	// The regression guard below is only meaningful if execution actually
+	// entered the reader-test window; an empty trace would let it pass
+	// vacuously (e.g. if a future layout moved the routine out of the
+	// window).  Fail loudly rather than rot into a no-op.
+	if len(trace) == 0 {
+		t.Fatal("reader-test window [BE00,C000) never entered — regression guard is not exercising the target routine")
 	}
 	// Regression guard for the PR #42 failure mode: the boot stack at
 	// &C100 must never collide with code executing below &C000.

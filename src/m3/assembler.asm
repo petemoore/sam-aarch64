@@ -272,10 +272,31 @@ if defined(BUILD_TESTS)
                 ld      a, (LMPR_DEFAULT_RUNTIME)
                 out     (250), a
 
+; -- Load the sysreg lookup data into page 13 (PR-2).  In the test
+; variant this must happen AFTER the test_mem off-axis self-tests above
+; (which used page 13 as the test_mem payload) and BEFORE
+; run_sysname_self_tests / run_sysreg_paged_self_tests below (which read
+; the tables via paged_call).  Page 13 is overwritten: test_mem is fully
+; consumed by run_mem_self_tests above, so the overwrite is safe.  See
+; loader.asm::load_page13_payload header for the ordering contract.
+                call    load_page13_payload
+                call    run_sysreg_paged_self_tests
+
                 call    run_sysname_self_tests
                 call    run_litpool_self_tests
                 call    run_emit_paged_self_tests
 endif
+
+; -- Load the sysreg lookup data into page 13 (PRODUCTION path, and a
+; redundant-but-harmless reload in the test variant).  In a production
+; build the BUILD_TESTS block above is #ifdef'd out entirely, so this
+; unconditional call is the ONLY place page 13 gets the sysreg data.
+; In the test variant the block above already loaded it before the
+; sysreg self-tests; reloading the same bytes here is idempotent.  We
+; keep this unconditional (rather than `if defined(BUILD_TESTS)==0`,
+; which pyz80 doesn't parse) for simplicity — the extra HLOAD costs a
+; few ms at boot only.  Must run before main_assemble's first lookup.
+                call    load_page13_payload
 
 ; -- Load and validate enctab.enc header --------------------------------
 ; load_enctab uses the trampoline to land the file in physical page 4
@@ -292,20 +313,32 @@ endif
 ; failure is reported before we waste time on the assemble loop).
 if defined(BUILD_TESTS)
                 call    run_trampoline_self_tests
-                ; NOTE: run_reader_paged_self_tests is DISABLED pending
-                ; root-cause investigation.  PR #42 attempted to fix the
-                ; failure by moving SP from &C100 to &FFFE; the fix's
-                ; verification table was on a tree pre-PR-#41, and once
-                ; #41's table relocations landed the SP=&FFFE state broke
-                ; the test variants in production CI.  PR #43 was meant
-                ; to revert PR #42 but the revert was incomplete — the SP
-                ; change was left live, breaking m{3..6} test variants.
-                ; This call is to be re-enabled only once a fresh
-                ; investigation on cleaned main confirms the fix.  See
+                ; run_reader_paged_self_tests was DISABLED across PRs #42→#45
+                ; pending root-cause investigation of a deterministic boot
+                ; FAIL on the test variant.  Re-enabled here after the PR-6
+                ; M6-closure investigation (the first adversarial use of the
+                ; Go harness, tools/z80-test-harness-go/).
+                ;
+                ; Root cause (now resolved upstream by PR #52, not by this
+                ; PR): the original failure was the stack-vs-own-code
+                ; collision documented in
                 ; docs/notes/2026-05-28-reader-paged-self-test-investigation.md
-                ; (status note at the top) and
-                ; docs/notes/2026-05-28-test-variant-ci-regression.md.
-                ; call    run_reader_paged_self_tests
+                ; — on the pre-PR-#52 layout the test function spilled above
+                ; &C000 into the SP=&C100 stack page, so its own opcodes were
+                ; overwritten by stack pushes.  PR #52 ported test_mem.asm
+                ; off-axis to physical page 13, shrinking the test variant
+                ; from &C1AB to ~&BF70; run_reader_paged_self_tests now lives
+                ; entirely below &C000 (≈&BE5B), so the stack at &C100 never
+                ; collides with it.  No SP change is needed — PR #42's
+                ; SP=&FFFE "fix" was both unnecessary AND wrong (the top of
+                ; section D is HMPR-controlled and would move under paging).
+                ; SP stays at &C100 (set at start:).
+                ;
+                ; Verified: harness PASS + SimCoupé ci-m{3,4,5,6} all green
+                ; with this call live.  See
+                ; docs/notes/2026-05-28-reader-paged-self-test-investigation.md
+                ; (PR-6 resolution section at the foot).
+                call    run_reader_paged_self_tests
 endif
 
 ; -- Run the assemble: pass 1 (table build) + pass 2 (emit) -----------
@@ -424,6 +457,7 @@ if defined(BUILD_TESTS)
                 include "test_emit_paged.asm"
                 include "test_reader_paged.asm"
                 include "test_paged_call.asm"
+                include "test_sysreg_paged.asm"
 endif
 
 ; -- paged_call body source ---------------------------------------------
