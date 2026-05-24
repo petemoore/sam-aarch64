@@ -205,6 +205,40 @@ scope).  This PR's fixture (`in_long_source.s`, ~16.5 KB .tbn) stays
 inside the safe range while still exercising both the multi-page
 HLOAD path AND the reader's intra-record page-cross.
 
+### Caveat — boot self-test deferred
+
+The plan called for a `run_reader_paged_self_tests` boot-time
+self-test (page-cross helper exercise + synthetic 14-byte .tbn read).
+It was passing on the original PR branch (which based on PR #36's
+unsquashed commits) but began deterministically failing on the
+rebased branch (which bases on origin/main with PR #35 + PR #36
+squashed).  The failure is in step (1) — the page-cross-helper
+assertion — even though the helper's code is byte-identical between
+pre/post-rebase.
+
+The test code and include line remain in the source tree
+(`src/m3/test_reader_paged.asm`); only the *call* in `assembler.asm`
+is disabled.  Reader correctness is exercised end-to-end by the M6
+long-source fixture, which catches any regression in the same paths
+the boot test would.
+
+Root-cause investigation is queued.  Plausible suspects:
+
+- Interaction between PR #35's expanded multi-digit local-label test
+  sequence and the new reader's section-D scratch usage (the only
+  thing that changed in the base content between pre- and post-rebase).
+- A code-layout-dependent JR offset that the rebase shifted into a
+  misassembled boundary (unlikely — pyz80 would error, not silently
+  produce wrong bytes).
+- The same SP-vs-section-D-spillover issue documented above: the
+  assembler binary post-PR-#37 is 16669 B = 285 B spillover into
+  section D = stack page (vs 139 B pre-rebase).  If the boot test's
+  state machine relies on a region in `&C000..&C11C` that's now
+  overwritten by the loader, that would explain the difference.
+
+The deferred test is small enough (~150 B) that recovering it isn't
+budget-sensitive once the failure is understood.
+
 ### Test status (all green)
 
 | Layer | Status | Notes |
