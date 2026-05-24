@@ -120,3 +120,15 @@ test-m3: m3-asm enctab $(BUILD)/build-m3-disk text2bin
 	./tests/m3/run-roundtrip.sh
 
 ci-m3: test-m3
+
+.PHONY: test-m4 ci-m4
+
+# test-m4 — sweep every fixture under tests/m4/sources/.  Reuses the M3
+# assembler binary (which is M4-capable post-PR-#22) and build-m3-disk,
+# but feeds it M4-fixture .tbn inputs and uses an oracle that includes
+# `ld -Ttext=0` so :lo12: / branch-to-label relocations resolve.  See
+# docs/specs/2026-05-24-m4-symbols-multipass-design.md §3.
+test-m4: m3-asm enctab $(BUILD)/build-m3-disk text2bin
+	./tests/m4/run-roundtrip.sh
+
+ci-m4: test-m4

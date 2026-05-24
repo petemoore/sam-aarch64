@@ -34,8 +34,11 @@ the dev image locally under Docker on both `linux/amd64` and
 patched SimCoupé. See `docs/specs/` for design documents and
 `docs/plans/` for milestone plans.
 
-Next up: complete M2 (cover remaining operand kinds), then M3
-(Z80 emitter).
+M0–M4 are complete. The SAM-side Z80 assembler, running in
+SimCoupé, byte-matches GNU `as + ld -Ttext=0 + objcopy -O binary`
+end-to-end for the M3 (9 fixtures) and M4 (4 fixtures) corpora.
+Next up: M5 (compound operands — shifted-reg / extended-reg / mem;
+plus `.balign` / `.org` / `.skip` / `.set`).
 
 ## Local development
 
