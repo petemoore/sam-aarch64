@@ -83,6 +83,13 @@ litpool_init:
                 ld      (LITPOOL_PCM_COUNT), a
                 ld      (LITPOOL_SEGMENT_ALLOC), a
                 ld      (LITPOOL_SEGMENT_FLUSH), a
+
+; Reset the section-D expr pool's bump-allocator top to the pool base
+; so pass 1 registers from a fresh start.  Pass 2 must NOT call
+; litpool_init (which would reset the pointer mid-flush and would
+; clobber the still-active pass-1 copies); see litpool_reset_pending.
+                ld      hl, LITPOOL_EXPR_BUF
+                ld      (litpool_expr_buf_top), hl
                 ret
 
 
@@ -237,13 +244,28 @@ litpool_register_append:
                 cp      LITPOOL_MAX
                 jp      nc, fail
                 ld      (litpool_reg_idx), a
+
+; -- Copy expr bytecode out of the staging buffer into the section-D
+; cross-pass pool BEFORE storing the slot.  M6 PR 2: the IN reader's
+; staging buffer is overwritten on every reader_next_kind call, so the
+; pointer captured in pass 1 is invalid by the time pass-2's flush
+; reads it.  litpool_copy_expr copies BC bytes from HL (staging-buf)
+; to LITPOOL_EXPR_BUF and returns HL = section-D copy address.  We
+; overwrite litpool_reg_expr_ptr with the new (page-stable) pointer
+; before the slot store below.
+                ld      hl, (litpool_reg_expr_ptr)    ; HL = staging-buf src
+                ld      bc, (litpool_reg_expr_len)    ; BC = expr_len
+                call    litpool_copy_expr             ; HL = section-D dest
+                ld      (litpool_reg_expr_ptr), hl
+
+                ld      a, (litpool_reg_idx)
                 call    slot_ptr_for_idx              ; HL → fresh slot base
 
 ; +0 width
                 ld      a, (litpool_reg_width)
                 ld      (hl), a
                 inc     hl
-; +1..+2 expr_ptr
+; +1..+2 expr_ptr (now points into LITPOOL_EXPR_BUF, page-stable)
                 ld      a, (litpool_reg_expr_ptr + 0)
                 ld      (hl), a
                 inc     hl
@@ -317,6 +339,51 @@ litpool_register_record_pcmap:
                 inc     a
                 ld      (LITPOOL_PCM_COUNT), a
                 ret
+
+
+; -----------------------------------------------------------------------
+; litpool_copy_expr — copy BC bytes of expr bytecode from HL (staging
+; buffer) to the section-D cross-pass pool at LITPOOL_EXPR_BUF.
+;
+; Per docs/specs/2026-05-27-m6-paged-in-design.md §"Litpool copy hook".
+; Under paged IN the staging buffer is overwritten on every
+; reader_next_kind call, so a section-C-style expr_ptr captured in
+; pass 1 is invalid by the time pass-2's flush reads it.  This helper
+; copies the bytecode out at registration time into a dedicated pool
+; that lives until end-of-assemble.
+;
+; Bound-check: post-copy top (DE + BC) must be <= LITPOOL_EXPR_BUF_END
+; or we'd run off into the section-D scratch.  Overflow → jp fail.
+;
+; Input:  HL = src (staging-buf addr), BC = expr_len.
+; Output: HL = dest (section-D copy address).  litpool_expr_buf_top
+;         advanced by BC.
+; Clobbers: A, BC (consumed by LDIR), DE.
+; -----------------------------------------------------------------------
+litpool_copy_expr:
+                ld      de, (litpool_expr_buf_top)    ; next free byte
+
+; Bound: post-copy top = DE + BC.  If > LITPOOL_EXPR_BUF_END → fail.
+                push    hl                            ; preserve src
+                push    bc                            ; preserve len for LDIR
+                ld      h, d
+                ld      l, e
+                add     hl, bc                        ; HL = DE + BC = post-copy top
+                ld      bc, LITPOOL_EXPR_BUF_END
+                or      a                             ; clear CF
+                sbc     hl, bc                        ; HL = (DE + BC) - END
+                jp      nc, fail                      ; post-copy top > END → overflow
+                pop     bc
+                pop     hl                            ; restore src
+
+                push    de                            ; remember dest for return
+                ldir
+                ld      (litpool_expr_buf_top), de
+                pop     hl                            ; HL = dest (start of copy)
+                ret
+
+
+litpool_expr_buf_top:   defw    LITPOOL_EXPR_BUF
 
 
 ; -----------------------------------------------------------------------
