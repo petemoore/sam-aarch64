@@ -515,6 +515,11 @@ main_handle_inst_pass2:
 ; -- Read operand_count (u8) -------------------------------------------
                 ld      a, (hl)
                 inc     hl
+; Bounds check: OPVAL_ARRAY holds 7 entries of OPVAL_STRIDE bytes
+; (= 70 B, &C100..&C145).  op_count > 7 would overflow into OPVAL_KINDS
+; (&C150) and beyond into PASS_MODE/PASS_PC/SYMTAB.  Fail cleanly.
+                cp      8
+                jp      nc, fail            ; op_count > 7 → overflow
                 ld      (main_op_count), a
                 ld      (main_op_count_remaining), a
 
@@ -2141,6 +2146,14 @@ load_in_file:
 
 ; Read page count from &4B50+34 (low byte only).
                 ld      a, (&4B50 + 34)
+; Bounds check: IN is allocated 4 contiguous physical pages (7..10) in
+; the LMPR-low5 axis.  A file with > 4 full 16K pages would spill into
+; pages 11+ — those are free RAM and the in_normalise_hl cursor handles
+; them, but the cap exists as a deliberate ceiling per the M6 paged-IN
+; design.  Files exceeding it should fail cleanly rather than load past
+; the documented limit.
+                cp      5
+                jp      nc, fail            ; pages > 4 → exceeds IN ceiling
                 ld      (in_file_pages), a
 
 ; Call the section-B trampoline.
