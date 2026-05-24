@@ -1,6 +1,7 @@
 package format
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -104,6 +105,88 @@ func ParseSysReg(name string) (SysReg, bool) {
 		return sr, true
 	}
 	return parseGenericSysReg(lc)
+}
+
+// sysRegNames is the reverse of namedSysRegs, built once on first use.
+// Keyed by the (op0,op1,CRn,CRm,op2) tuple. namedSysRegs has no two
+// names sharing a tuple (verified), so the reverse is unambiguous.
+var sysRegNames map[SysReg]string
+
+// SysRegName returns the architectural name for a (op0,op1,CRn,CRm,op2)
+// tuple, or the generic `s<op0>_<op1>_c<CRn>_c<CRm>_<op2>` spelling
+// (matching GNU as / objdump) when the tuple is unnamed. It is the
+// reverse of ParseSysReg and shares its name table, so the assembler
+// and disassembler cannot drift.
+func SysRegName(sr SysReg) string {
+	if sysRegNames == nil {
+		sysRegNames = make(map[SysReg]string, len(namedSysRegs))
+		for name, tup := range namedSysRegs {
+			sysRegNames[tup] = name
+		}
+	}
+	if name, ok := sysRegNames[sr]; ok {
+		return name
+	}
+	return fmt.Sprintf("s%d_%d_c%d_c%d_%d", sr.Op0, sr.Op1, sr.CRn, sr.CRm, sr.Op2)
+}
+
+// pstateNames is the reverse of pstateFields, built once on first use.
+var pstateNames map[PState]string
+
+// PStateName returns the PSTATE field keyword for a (op1,op2) pair, or
+// ("", false) if the pair names no known field. Reverse of ParsePState.
+func PStateName(pf PState) (string, bool) {
+	if pstateNames == nil {
+		pstateNames = make(map[PState]string, len(pstateFields))
+		for name, tup := range pstateFields {
+			pstateNames[tup] = name
+		}
+	}
+	name, ok := pstateNames[pf]
+	return name, ok
+}
+
+// dcKey / tlbiKey index the SYS-instruction reverse tables by their
+// (op1,CRn,CRm,op2) encoding.
+type sysOpKey struct{ Op1, CRn, CRm, Op2 byte }
+
+var (
+	dcNames   map[sysOpKey]string
+	tlbiNames map[sysOpKey]string
+)
+
+// DCName returns the DC op name for an (op1,CRn,CRm,op2) tuple, with a
+// NeedsXt flag; ok=false if unrecognised. Reverse of ParseDC.
+func DCName(op1, crn, crm, op2 byte) (name string, needsXt, ok bool) {
+	if dcNames == nil {
+		dcNames = make(map[sysOpKey]string, len(dcOps))
+		for n, op := range dcOps {
+			dcNames[sysOpKey{op.Op1, op.CRn, op.CRm, op.Op2}] = n
+		}
+	}
+	n, found := dcNames[sysOpKey{op1, crn, crm, op2}]
+	if !found {
+		return "", false, false
+	}
+	op, _ := dcOps[n]
+	return n, op.NeedsXt, true
+}
+
+// TLBIName returns the TLBI op name for an (op1,CRn,CRm,op2) tuple, with
+// a NeedsXt flag; ok=false if unrecognised. Reverse of ParseTLBI.
+func TLBIName(op1, crn, crm, op2 byte) (name string, needsXt, ok bool) {
+	if tlbiNames == nil {
+		tlbiNames = make(map[sysOpKey]string, len(tlbiOps))
+		for n, op := range tlbiOps {
+			tlbiNames[sysOpKey{op.Op1, op.CRn, op.CRm, op.Op2}] = n
+		}
+	}
+	n, found := tlbiNames[sysOpKey{op1, crn, crm, op2}]
+	if !found {
+		return "", false, false
+	}
+	op, _ := tlbiOps[n]
+	return n, op.NeedsXt, true
 }
 
 // parseGenericSysReg parses the `Sn_op1_Cm_Cn_op2` form. The leading

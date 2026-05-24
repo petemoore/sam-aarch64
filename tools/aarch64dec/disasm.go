@@ -55,6 +55,19 @@ func DecodeAt(pc uint64, word uint32) (mnem string, operands string, ok bool) {
 	if mnem, operands, ok := decodeMem(pc, word); ok {
 		return mnem, operands, true
 	}
+	// System instruction group (mrs/msr/dc/tlbi/at/ic + dsb/dmb/isb) and
+	// test-and-branch (tbz/tbnz) are hand-rolled by the encoder and
+	// absent from AllForms() — and occupy encoding spaces that no form
+	// touches — so decode them via their special-case inverses ahead of
+	// the form walk.  decodeSys declines the hint sub-space (nop/wfi),
+	// which IS in AllForms, returning ok=false so the form walk handles
+	// those.
+	if mnem, operands, ok := decodeSys(word); ok {
+		return mnem, operands, true
+	}
+	if mnem, operands, ok := decodeTestBranch(pc, word); ok {
+		return mnem, operands, true
+	}
 	// UDF — the permanently-undefined encoding space: bits[31:16] == 0,
 	// imm16 = bits[15:0] (ARM ARM C6.2.... "UDF").  objdump renders it
 	// `udf #<imm16>` in decimal.  No real instruction occupies this space,
@@ -68,6 +81,19 @@ func DecodeAt(pc uint64, word uint32) (mnem string, operands string, ok bool) {
 		if word&f.Mask == f.Pattern {
 			return decodeForm(ctx, f)
 		}
+	}
+	// Data-processing (shifted / extended register) — add/sub/logical —
+	// is hand-rolled by the encoder (encodeShiftedRegInst /
+	// encodeExtendedRegInst) and so is absent from AllForms().  Decode it
+	// LAST, as a fallback: AllForms carries the GNU-preferred *alias*
+	// forms over this same encoding space (mov = ORR Rn=xzr, cmp = SUBS
+	// Rd=xzr, tst = ANDS Rd=xzr, etc.) with tighter masks, and those must
+	// win.  Running decodeDPReg only after the form walk lets the alias
+	// forms shadow it exactly as objdump prefers; decodeDPReg then names
+	// the base mnemonic for every shifted/extended-reg word the aliases
+	// don't claim.
+	if mnem, operands, ok := decodeDPReg(word); ok {
+		return mnem, operands, true
 	}
 	return "", "", false
 }
