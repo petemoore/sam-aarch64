@@ -113,7 +113,10 @@ build-m3-disk: $(BUILD)/build-m3-disk
 m3-disk: m3-asm enctab $(BUILD)/build-m3-disk
 	$(BUILD)/build-m3-disk $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/m3-test.mgt
 
-test-m3: m3-disk
-	./tools/run-simcoupe.sh $(BUILD)/m3-test.mgt
+# test-m3 — sweep every fixture under tests/m3/sources/ end-to-end:
+# text2bin → build-m3-disk → SimCoupé → samfile extract OUT →
+# byte-compare against aarch64-{none-elf,linux-gnu}-as + objcopy -O binary.
+test-m3: m3-asm enctab $(BUILD)/build-m3-disk text2bin
+	./tests/m3/run-roundtrip.sh
 
 ci-m3: test-m3
