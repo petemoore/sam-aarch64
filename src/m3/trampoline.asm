@@ -325,12 +325,13 @@ PAGED_CALL_TEST_PAGE:   equ     14
 ; main_assemble).  Both occupy page 13's physical bytes from &0000 /
 ; &8000 respectively — but the off-axis payload assembles at org &0000
 ; (section-A view) while sysreg_data assembles at org &8000 (section-C
-; view); the SAME physical page-13 bytes back both.  Because the two
-; payloads are loaded into page 13 at DIFFERENT times would clash, the
-; build deposits them as separate disk files: load_test_mem_off_axis
-; (BUILD_TESTS) loads test_mem.bin first and the self-tests consume it;
-; load_page13_payload then overwrites page 13 with sysreg_data.bin
-; before main_assemble.  See assembler.asm boot-sequence ordering.
+; view); the SAME physical page-13 bytes back both.  They do not clash
+; because they are loaded at DIFFERENT times: in the test variant
+; load_test_mem_off_axis loads test_mem.bin first and run_mem_self_tests
+; fully consumes it; load_page13_payload then overwrites page 13 with
+; sysreg_data.bin before main_assemble.  In the production variant
+; test_mem is never loaded, so page 13 is free for sysreg_data from the
+; start.  See assembler.asm boot-sequence ordering.
 SYSREG_DATA_PAGE:       equ     13
 
 ; paged_call entry points into the page-13 data file (one jump-table
