@@ -403,3 +403,99 @@ jobs:
             echo "===== $(basename $log) ====="
             tail -20 "$log"
           done
+
+  # M6 — sweeps the M6 fixture corpus end-to-end.  Same container as
+  # M3..M5; runs `make ci-m6` which exercises the paged-OUT machinery
+  # introduced in M6 PR 1 (sections-B emit during the LMPR_ENCTAB
+  # window + LMPR_OUT_HIGH bracket for the high zone + HSAVE
+  # auto-paging across &C000).  The fixture corpus is currently a
+  # single >16 KB long-emit fixture that crosses the OUT_ZONE
+  # low → high boundary.  See
+  # docs/specs/2026-05-27-m6-paged-out-design.md.
+  m6:
+    runs-on: ubuntu-latest
+    needs: build-image
+    container:
+      image: ghcr.io/petemoore/sam-aarch64-dev:sha-${{ github.sha }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      SDL_VIDEODRIVER: x11
+      SDL_AUDIODRIVER: dummy
+      AARCH64_AS: aarch64-linux-gnu-as
+      AARCH64_LD: aarch64-linux-gnu-ld
+      AARCH64_OBJCOPY: aarch64-linux-gnu-objcopy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1280x1024x24 &
+          sleep 1
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+
+      - name: Mark workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Run M6 fixture corpus
+        run: make ci-m6
+
+      - name: Post-mortem disk inspection on failure
+        if: failure()
+        run: |
+          echo "===== M6 fixtures ====="
+          ls tests/m6/sources/
+          echo "===== build/ artefacts ====="
+          ls -la build/ | grep -E 'mgt|tbn|bin' || true
+          for log in /tmp/m6-*.log; do
+            [ -f "$log" ] || continue
+            echo "===== $(basename $log) ====="
+            tail -20 "$log"
+          done
+
+  # M6 production-variant sweep — same M6 fixture corpus, but uses
+  # the smaller production assembler binary (no boot-time self-tests).
+  # Catches divergence between the test and production variants on
+  # the paged-OUT code path.
+  m6-prod:
+    runs-on: ubuntu-latest
+    needs: build-image
+    container:
+      image: ghcr.io/petemoore/sam-aarch64-dev:sha-${{ github.sha }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      SDL_VIDEODRIVER: x11
+      SDL_AUDIODRIVER: dummy
+      AARCH64_AS: aarch64-linux-gnu-as
+      AARCH64_LD: aarch64-linux-gnu-ld
+      AARCH64_OBJCOPY: aarch64-linux-gnu-objcopy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1280x1024x24 &
+          sleep 1
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+
+      - name: Mark workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Run M6 fixture corpus (production assembler)
+        run: make ci-m6-prod
+
+      - name: Post-mortem disk inspection on failure
+        if: failure()
+        run: |
+          echo "===== M6 fixtures (prod variant) ====="
+          ls tests/m6/sources/
+          echo "===== build/ artefacts ====="
+          ls -la build/ | grep -E 'mgt|tbn|bin' || true
+          for log in /tmp/m6-*.log; do
+            [ -f "$log" ] || continue
+            echo "===== $(basename $log) ====="
+            tail -20 "$log"
+          done

@@ -194,3 +194,22 @@ test-m5-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
 ci-m5: test-m5
 
 ci-m5-prod: test-m5-prod
+
+.PHONY: test-m6 ci-m6 test-m6-prod ci-m6-prod
+
+# test-m6 — sweep every fixture under tests/m6/sources/.  Same pipeline
+# as test-m5 (text2bin → build-m3-disk → SimCoupé → samfile extract OUT
+# → byte-compare against aarch64-*-as + ld -Ttext=0 + objcopy -O binary).
+# Per docs/specs/2026-05-27-m6-paged-out-design.md.  The M6 fixtures
+# exercise the paged-OUT machinery (sections-B emit + HSAVE auto-paging
+# across &C000) by emitting > 16 KB of output to cross the OUT_ZONE
+# low → high boundary.
+test-m6: m3-asm enctab $(BUILD)/build-m3-disk text2bin
+	./tests/m6/run-roundtrip.sh
+
+test-m6-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
+	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m6/run-roundtrip.sh
+
+ci-m6: test-m6
+
+ci-m6-prod: test-m6-prod
