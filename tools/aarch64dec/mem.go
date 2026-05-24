@@ -34,9 +34,25 @@ func decodeMem(pc uint64, word uint32) (mnem string, operands string, ok bool) {
 	case 0b1110:
 		return decodeScalarMem(word)
 	case 0b1010:
-		return decodePairMem(word)
+		// Load/store register pair requires bit25==0 (the group selector
+		// is bits[29:25]==0b1010_0).  Other instructions share bits[29:26]
+		// ==1010 with bit25==1 — notably add/sub-with-flags shifted
+		// register (adds/subs, e.g. the cmn/cmp aliases at 0x2b03001f).
+		// Without this guard the pair decoder spuriously claims those.
+		if (word>>25)&1 == 0 {
+			return decodePairMem(word)
+		}
 	case 0b0110:
-		return decodeLiteralMem(pc, word)
+		// LDR (literal) requires bits[25:24]==00 in addition to
+		// bits[29:26]==0110.  Other instructions share the bits[29:26]
+		// signature with bits[25:24]!=00 — notably conditional-select
+		// (csel, bits[25:24]=10) and data-processing-3-source (madd/
+		// umulh/umaddl/..., bits[25:24]=11).  Without this guard the
+		// literal-LDR decoder spuriously claims those words; decline so
+		// the alias/Form decoders handle them.
+		if (word>>24)&0x3 == 0 {
+			return decodeLiteralMem(pc, word)
+		}
 	}
 	return "", "", false
 }

@@ -77,6 +77,18 @@ func DecodeAt(pc uint64, word uint32) (mnem string, operands string, ok bool) {
 	if word>>16 == 0 {
 		return "udf", fmt.Sprintf("#%d", word&0xffff), true
 	}
+	// Canonical-alias families (move-wide, bitfield, add/sub-immediate,
+	// shifted-register, conditional-select) are decoded by bit-pattern in
+	// aliases.go, applying objdump's exact alias-selection rules — see that
+	// file's header.  This runs ahead of the Form walk because the Form
+	// table is the encoder's view (tight masks over only the alias words it
+	// emits) and so misses or mis-renders the broader set of real words
+	// objdump linear-sweeps; decoding the base class here and naming the
+	// alias directly matches the oracle.  decodeAlias declines everything
+	// outside its families (ok=false), so the Form walk still handles them.
+	if mnem, operands, ok := decodeAlias(word); ok {
+		return mnem, operands, true
+	}
 	for _, f := range aarch64enc.AllForms() {
 		if word&f.Mask == f.Pattern {
 			return decodeForm(ctx, f)

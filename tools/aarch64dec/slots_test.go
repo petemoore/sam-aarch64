@@ -46,31 +46,31 @@ func TestDecode_Imm16Shifted_NoShift(t *testing.T) {
 }
 
 func TestDecode_Imm16Shifted_LSL16(t *testing.T) {
-	// MOVZ X9, #0x123, lsl #16 — hw=01.  Word 0xd2a02469.  objdump
-	// pre-computes the shifted constant and emits `mov x9,
-	// #0x1230000`; our raw decoder preserves the `#0x123, lsl #16`
-	// form because that's what the slot produces.  Pre-computing
-	// the constant for the MOV alias is alias-rewrite work and
-	// belongs in Task 3.
+	// MOVZ X9, #0x123, lsl #16 — hw=01.  Word 0xd2a02469.  objdump's
+	// MOV (wide immediate) alias pre-computes the shifted constant
+	// and emits `mov x9, #0x1230000`; the move-wide canonicaliser in
+	// aliases.go does the same (cross-checked: aarch64-none-elf-objdump
+	// on 0xd2a02469 → `mov x9, #0x1230000`).
 	mnem, ops, ok := Decode(0xd2a02469)
 	if !ok {
 		t.Fatalf("Decode(0xd2a02469) not ok")
 	}
-	want := "x9, #0x123, lsl #16"
+	want := "x9, #0x1230000"
 	if mnem != "mov" || ops != want {
-		t.Errorf("Decode(0xd2a02469): got mnem=%q ops=%q; want mnem=\"mov\" ops=%q (objdump emits the pre-shifted hex; see comment)", mnem, ops, want)
+		t.Errorf("Decode(0xd2a02469): got mnem=%q ops=%q; want mnem=\"mov\" ops=%q (objdump emits the pre-shifted hex)", mnem, ops, want)
 	}
 }
 
 func TestDecode_Imm16Shifted_LSL32and48(t *testing.T) {
-	// hw=10 → `, lsl #32`.  Word 0xd2c02469.
-	// hw=11 → `, lsl #48`.  Word 0xd2e02469.
+	// hw=10 → value << 32.  Word 0xd2c02469 → mov x9, #0x12300000000.
+	// hw=11 → value << 48.  Word 0xd2e02469 → mov x9, #0x123000000000000.
+	// Both cross-checked against aarch64-none-elf-objdump.
 	for _, tc := range []struct {
 		word uint32
 		want string
 	}{
-		{0xd2c02469, "x9, #0x123, lsl #32"},
-		{0xd2e02469, "x9, #0x123, lsl #48"},
+		{0xd2c02469, "x9, #0x12300000000"},
+		{0xd2e02469, "x9, #0x123000000000000"},
 	} {
 		mnem, ops, ok := Decode(tc.word)
 		if !ok || mnem != "mov" || ops != tc.want {
