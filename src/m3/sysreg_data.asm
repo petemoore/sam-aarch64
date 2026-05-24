@@ -42,11 +42,11 @@
 ;   (SYSREG_COMM_NAME)  — up to 16 name bytes, raw (NOT lowercased; the
 ;                         matcher lowercases each byte on compare).
 ;   (SYSREG_COMM_LEN)   — name length, u8.
-;   C                   — fields-per-entry to copy on match (sysname_match's
-;                         old `sysname_field_count`); passed in BC, which
-;                         paged_call preserves across the call.
+;   (fields-per-entry is NOT passed by the caller — each jump-table entry
+;    point sets it internally in A, see "Each entry sets ..." below.  It
+;    corresponds to sysname_match's old `sysname_field_count`.)
 ; Output:
-;   A = 1 and SYSREG_COMM_RESULT[0..C-1] = matched field bytes, on hit.
+;   A = 1 and SYSREG_COMM_RESULT[0..fields-1] = matched field bytes, on hit.
 ;   A = 0 on miss (no fields written; main side handles the miss).
 ;
 ; The table base is selected by the paged_call entry point (one of four
@@ -78,7 +78,7 @@ SYSREG_COMM_RESULT:     equ     &7E91   ; up to 8 field bytes (ends &7E98)
 ; -----------------------------------------------------------------------
 ; Jump table — paged_call targets, one per sysname table.  Fixed offsets
 ; so trampoline.asm can name them as SYSREG_*_ENTRY equ &8000/3/6/9.
-; Each entry sets HL = its table base, C = fields-per-entry, then jumps
+; Each entry sets HL = its table base, A = fields-per-entry, then jumps
 ; to the common matcher.
 ; -----------------------------------------------------------------------
 ; Each slot is 8 bytes (ld a,n / ld hl,nn / jp), so they land at

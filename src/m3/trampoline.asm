@@ -351,11 +351,11 @@ SYSREG_TLBI_ENTRY:      equ     &8018
 ;
 ; Safety from stack clobber: during a paged_call the SP is set to
 ; TRAMP_SAFE_SP=&7F00 and grows DOWN as the target pushes.  The page-13
-; matcher is a shallow leaf (only sysreg_tolower's one return slot, ~2-4
-; bytes), and the paged_call body itself pushes 4 bytes (trailer + target)
-; at &7EFC..&7EFF before the swap.  Deepest realistic SP reach is well
-; above &7EE0 — 56 bytes clear of the buffer end (&7E98) and clear of
-; PAGED_CALL_HMPR_SAVE (&7ED0).  The boot self-test
+; matcher is a shallow leaf: do_match enters with SP=&7EFE and its only
+; push is sysreg_tolower's single return slot (&7EFC..&7EFD).  The
+; deepest stack write is thus &7EFC — 100 bytes (&64) clear of the
+; buffer end (&7E98), and well clear of PAGED_CALL_HMPR_SAVE (&7ED0).
+; The boot self-test
 ; run_sysreg_paged_self_tests (BUILD_TESTS) proves the buffer survives a
 ; paged_call's stack usage with a sentinel.
 ;

@@ -14,7 +14,7 @@
 ;
 ; Dispatch is via try_mnemonic_intercept (intercepts.asm).  Each
 ; encoder reads OPVAL_ARRAY[k] +2..+5 to get the (ptr, len) of the
-; sysname (a 16-bit pointer into IN_BUF and a 16-bit length, set by
+; sysname (a 16-bit pointer into STAGING_BUF and a 16-bit length, set by
 ; main_parse_sys_name in main_loop.asm), looks the name up in the
 ; appropriate table, packs the encoding, and returns DE:HL = 32-bit
 ; word for intercept_emit_dehl to emit.
@@ -526,9 +526,9 @@ sysname_setup:
 
 ; -----------------------------------------------------------------------
 ; sysname_stage_to_comm — copy the operand name from (sysname_ptr) in
-; IN_BUF into the section-B comm buffer (SYSREG_COMM_NAME), and write
+; STAGING_BUF into the section-B comm buffer (SYSREG_COMM_NAME), and write
 ; the length to SYSREG_COMM_LEN, so the page-13 matcher (which cannot
-; see IN_BUF — section C/D — under HMPR=13) can read it.
+; see STAGING_BUF — section C/D — under HMPR=13) can read it.
 ;
 ; Names are bounded by the assembler's operand-length limits; the
 ; longest sysname/dc/tlbi/pstate name is 13 chars ("cntp_cval_el0"),
@@ -779,7 +779,7 @@ sysname_expect_underscore:
 ; -----------------------------------------------------------------------
 ; Scratch (main side, section D under default HMPR).
 ; -----------------------------------------------------------------------
-sysname_ptr:           defw    0       ; pointer to name bytes in IN_BUF
+sysname_ptr:           defw    0       ; pointer to name bytes in STAGING_BUF
 sysname_len:           defw    0       ; length of name (u16; effective u8)
 sysname_lmpr_save:     defb    0       ; live LMPR saved across the paged_call
 sysreg_fields:         defs    8       ; 5..8 bytes — packed encoding tuple
