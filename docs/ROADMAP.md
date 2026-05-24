@@ -17,8 +17,8 @@
 
 ### Session hygiene (the minimal ritual)
 
-- **Closing a session:** update the **"Current State & Next Actions"** block below *in place* — what landed, what's in flight (open PRs / branches / running agents), and the single immediate next action; confirm tracking is current (rule 1). Do **not** write a new dated handoff doc — update the standing block. (Older dated `*-handoff.md` docs are archival snapshots, not the live contract.)
-- **Starting a session:** the standard start prompt is just **"Continue per docs/ROADMAP.md."** (A SessionStart hook also surfaces this section automatically.) Read this section → Current State → resume. No bespoke per-session prompt is needed — everything specific lives in the block below.
+- **Closing a session:** update the **"Current State & Next Actions"** block below *in place* — what landed, what's in flight (open PRs / branches / running agents), and the single immediate next action; confirm tracking is current (rule 1). Do **not** write a new dated handoff doc — update the standing block. (Older dated `*-handoff.md` docs are archival snapshots, not the live contract.) **Get this update merged to `main` before handover** — a quick docs PR + CI, since branch protection blocks direct pushes. Never hand over with the live state stuck in an open PR, or the next session reads stale context.
+- **Starting a session:** the standard start prompt is just **"Continue per docs/ROADMAP.md."** A SessionStart hook (`tools/session-handover.sh`) runs first: it surfaces this section and, **when you are on a clean `main`, auto-`fetch`es and fast-forwards to the latest** so the doc you read is current. If it instead **warns** (you are on a feature branch, have uncommitted changes, or `main` can't fast-forward), refresh deliberately before relying on the doc: stash/commit your work, then `git checkout main && git pull --ff-only`. Then read this section → Current State → resume; no bespoke per-session prompt is needed.
 
 ### Current State & Next Actions
 
