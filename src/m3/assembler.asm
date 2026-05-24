@@ -62,7 +62,9 @@ PASS_PASS2:     equ     2
                 include "encoder.asm"
                 include "reader.asm"
                 include "main_loop.asm"
+                include "symbols.asm"
                 include "test_slots.asm"
+                include "test_symbols.asm"
 
 ; -----------------------------------------------------------------------
 ; Main program — entry via jp from &8000.
@@ -81,6 +83,12 @@ start:
 ; records (no disk I/O).  On any mismatch: jp fail (red border +
 ; spin → 30s timeout).  See test_slots.asm.
                 call    run_slot_self_tests
+
+; -- Symbol-table self-tests --------------------------------------------
+; Exercises symbol_table_init / symbol_insert / symbol_lookup against
+; hard-coded ids and addresses (no disk I/O).  On any mismatch: jp fail.
+; See test_symbols.asm.
+                call    run_symbol_table_self_tests
 
 ; -- Load and validate enctab.enc header --------------------------------
                 call    load_enctab
