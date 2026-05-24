@@ -58,6 +58,21 @@ once resolved.
    happy for the agent to drive design + brainstorming solo (review later).
    Editor/screen-mode aesthetic input can come at review time. See the
    bump-arena strand below for Pete's substantive framing on that one.
+4. **`src/stub.asm` — retire the M0 round-trip oracle, or keep it?**
+   ⏳ NEW (2026-05-29). Pete flagged the old "assemble a nop, write OUT to
+   disk" stub as probably no-longer-needed. But it is NOT dead: it's the
+   M0 end-to-end round-trip oracle (`make ci` → `make stub` → `build/stub.bin`),
+   and the **`test` CI job (a required check) runs `make ci`**. So it's the
+   most basic pyz80→SimCoupé→samfile→GNU smoke test. It's arguably subsumed
+   now by the M3–M6 fixture corpus + the m6-release gate (all of which do
+   the same round-trip with real encoding). Retiring it means removing
+   `src/stub.asm` + `tools/build-stub.sh` + the nop fixture + the `test`
+   CI job + dropping `test` from branch-protection's required checks — a
+   judgement call (keep the minimal smoke test, or rely on M3+?). **Logged,
+   not actioned** — needs Pete's decision (and a branch-protection edit).
+5. **`tools/llist-normalise/llist-normalise` is a committed binary** (an
+   accidental check-in spotted during the rename). Folds into the punted
+   LLIST-cluster disposition (open question 2) — handle together.
 
 ## Strands in detail
 
