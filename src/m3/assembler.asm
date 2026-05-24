@@ -76,6 +76,7 @@ PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
                 include "test_slots.asm"
                 include "test_symbols.asm"
                 include "test_local_labels.asm"
+                include "test_expr_eval_m4.asm"
 
 ; -----------------------------------------------------------------------
 ; Main program — entry via jp from &8000.
@@ -107,6 +108,20 @@ start:
 ; per-digit PC list (no disk I/O).  On any mismatch: jp fail.
 ; See test_local_labels.asm.
                 call    run_local_label_self_tests
+
+; -- Expression-evaluator M4 self-tests --------------------------------
+; Exercises eval_expr_const's new M4 opcodes (PUSH_SYM, PUSH_LOCAL,
+; PUSH_PC, REL_LO12/HI12, REL_ABS_G0..G3) against hand-rolled bytecode
+; buffers and pre-seeded PASS_PC / symbol-table / local-label-table
+; state.  On any mismatch: jp fail.  See test_expr_eval_m4.asm.
+;
+; This MUST run AFTER run_symbol_table_self_tests + run_local_label_self_tests
+; so it can safely re-init both tables (those suites are destructive on
+; the tables they exercise, and the M4 tests need a known starting
+; point).  PASS_PC is also clobbered by the M4 tests but is re-zeroed
+; by main_assemble's pass_pc_reset call, so the test doesn't need to
+; restore it.
+                call    run_expr_eval_m4_self_tests
 
 ; -- Load and validate enctab.enc header --------------------------------
                 call    load_enctab

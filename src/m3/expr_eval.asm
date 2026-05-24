@@ -1,23 +1,28 @@
 ; expr_eval.asm — constant-only expression bytecode evaluator.
 ;
-; Z80 port of tools/sam-aarch64-format/expr.go::EvalConst and (parts of)
-; tools/aarch64enc/expr.go::Eval for the M3 constant subset.
+; Z80 port of tools/sam-aarch64-format/expr.go::EvalConst and
+; tools/aarch64enc/expr.go::Eval for the full M4 opcode set.
 ;
-; Per docs/specs/2026-05-24-m3-z80-emitter-design.md §2.5:
-;   • Supported opcodes: PUSH_IMM8/16/32/64, ADD, SUB, AND, OR, XOR,
-;     SHL, SHR, NEG, NOT.
-;   • Errors (jp fail) on PUSH_SYM, PUSH_LOCAL, PUSH_PC, REL_*, MUL, DIV.
-;     text2bin's constant-folder should have collapsed these.
+; Per docs/specs/2026-05-24-m3-z80-emitter-design.md §2.5 and
+; docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.5:
+;   • M3 subset (constant-only): PUSH_IMM8/16/32/64, ADD, SUB, AND, OR,
+;     XOR, SHL, SHR, NEG, NOT.
+;   • M4 additions: PUSH_SYM, PUSH_LOCAL, PUSH_PC, REL_LO12, REL_HI12,
+;     REL_ABS_G0..G3 (and their _NC variants — same eval semantics, the
+;     suffix only affects linker-relocation tracking which doesn't change
+;     emitted bytes).
+;   • Still errors (jp fail) on MUL, DIV — text2bin's constant-folder
+;     should have collapsed these for instruction operands.
 ;
-; Opcode values (tools/sam-aarch64-format/expr.go lines 12-42):
+; Opcode values (tools/sam-aarch64-format/expr.go lines 12-66):
 ;
 ;   0x01 PUSH_IMM8        [s8]
 ;   0x02 PUSH_IMM16       [s16 LE]
 ;   0x03 PUSH_IMM32       [s32 LE]
 ;   0x04 PUSH_IMM64       [s64 LE]
-;   0x05 PUSH_SYM         [u16] (M4 — fail)
-;   0x06 PUSH_LOCAL       [u8 digit, u8 dir] (M4 — fail)
-;   0x07 PUSH_PC          (M4 — fail)
+;   0x05 PUSH_SYM         [u16 symbol_id]
+;   0x06 PUSH_LOCAL       [u8 digit, u8 dir]     ; dir=0 fwd, dir=1 back
+;   0x07 PUSH_PC
 ;
 ;   0x10 ADD              (binary)
 ;   0x11 SUB              (binary)
@@ -32,7 +37,15 @@
 ;   0x20 NEG              (unary)
 ;   0x21 NOT              (unary)
 ;
-;   0x30..0x38 REL_*      (M4 — fail)
+;   0x30 REL_LO12         top  =  top         & 0xFFF
+;   0x31 REL_HI12         top  = (top >> 12)  & 0xFFF
+;   0x32 REL_ABS_G0       top  =  top         & 0xFFFF
+;   0x33 REL_ABS_G0_NC    (alias of REL_ABS_G0)
+;   0x34 REL_ABS_G1       top  = (top >> 16)  & 0xFFFF
+;   0x35 REL_ABS_G1_NC    (alias of REL_ABS_G1)
+;   0x36 REL_ABS_G2       top  = (top >> 32)  & 0xFFFF
+;   0x37 REL_ABS_G2_NC    (alias of REL_ABS_G2)
+;   0x38 REL_ABS_G3       top  = (top >> 48)  & 0xFFFF
 ;
 ; -----------------------------------------------------------------------
 ; Calling convention
@@ -109,7 +122,7 @@ eval_loop:
                 ld      hl, (eval_remaining)
                 ld      a, h
                 or      l
-                jr      z, eval_done
+                jp      z, eval_done
 
 ; -- Fetch next opcode byte --------------------------------------------
                 ld      hl, (eval_pos)
@@ -129,6 +142,12 @@ eval_loop:
                 jp      z, eval_push_imm32
                 cp      &04
                 jp      z, eval_push_imm64
+                cp      &05
+                jp      z, eval_push_sym
+                cp      &06
+                jp      z, eval_push_local
+                cp      &07
+                jp      z, eval_push_pc
                 cp      &10
                 jp      z, eval_add
                 cp      &11
@@ -147,7 +166,25 @@ eval_loop:
                 jp      z, eval_neg
                 cp      &21
                 jp      z, eval_not
-; Everything else (PUSH_SYM/LOCAL/PC, MUL/DIV, REL_*) — M4 / unsupported.
+                cp      &30
+                jp      z, eval_rel_lo12
+                cp      &31
+                jp      z, eval_rel_hi12
+                cp      &32
+                jp      z, eval_rel_abs_g0
+                cp      &33
+                jp      z, eval_rel_abs_g0      ; _NC alias
+                cp      &34
+                jp      z, eval_rel_abs_g1
+                cp      &35
+                jp      z, eval_rel_abs_g1      ; _NC alias
+                cp      &36
+                jp      z, eval_rel_abs_g2
+                cp      &37
+                jp      z, eval_rel_abs_g2      ; _NC alias
+                cp      &38
+                jp      z, eval_rel_abs_g3
+; Everything else (MUL/DIV) — unsupported in the constant evaluator.
                 jp      fail
 
 
@@ -459,12 +496,358 @@ eval_not:
 
 
 ; -----------------------------------------------------------------------
+; eval_push_sym — opcode 0x05.  Resolve a u16 symbol_id (read inline from
+; the bytecode stream) via symbol_lookup; push the 32-bit address as a
+; zero-extended s64 onto the eval stack.
+;
+; On miss (symbol not in table) → jp fail.  This matches the
+; aarch64enc/expr.go Eval reference's "undefined symbol" error.  text2bin
+; only emits PUSH_SYM for identifiers that are known to be defined; an
+; emitted PUSH_SYM whose target is missing at pass 2 indicates either a
+; mid-assembly symbol-table corruption or a text2bin bug.  Failing here
+; is preferable to producing wrong bytes silently.
+;
+; Bytecode operand:
+;   [0..1]  symbol_id u16 LE
+;
+; eval_take_bytes copies the operand into the freshly-allocated top slot
+; (which we zero-fill via eval_alloc_top, so the 6 bytes above the id
+; are zero — exactly the right shape for symbol_lookup's `HL = id`
+; calling convention to pick up the id from the slot's low 2 bytes).
+;
+; Reference: tools/aarch64enc/expr.go::Eval (case format.OpPushSym).
+; -----------------------------------------------------------------------
+eval_push_sym:
+; Read the 2-byte symbol id into a scratch slot first; doing the read
+; before allocating the eval-stack slot keeps register juggling minimal
+; (symbol_lookup clobbers HL/BC/DE/A, so any slot pointer we held would
+; need to be saved across the call anyway).
+                ld      hl, eval_sym_operand
+                ld      b, 2
+                call    eval_take_bytes
+
+                ld      hl, (eval_sym_operand)      ; HL = id (LE u16 at scratch)
+                call    symbol_lookup
+                jp      c, fail                     ; miss → fail
+
+; Hit: symbol_value_buf[0..3] holds the 32-bit address LE.  Allocate the
+; eval-stack slot now and write address into slot[0..3], zero slot[4..7].
+                call    eval_alloc_top              ; HL = new top slot
+                ld      a, (symbol_value_buf + 0)
+                ld      (hl), a
+                inc     hl
+                ld      a, (symbol_value_buf + 1)
+                ld      (hl), a
+                inc     hl
+                ld      a, (symbol_value_buf + 2)
+                ld      (hl), a
+                inc     hl
+                ld      a, (symbol_value_buf + 3)
+                ld      (hl), a
+                inc     hl                          ; HL → slot[4]
+                xor     a
+                ld      b, 4
+eval_push_sym_zero:
+                ld      (hl), a
+                inc     hl
+                djnz    eval_push_sym_zero
+                jp      eval_loop
+
+
+; -----------------------------------------------------------------------
+; eval_push_local — opcode 0x06.  Resolve a per-digit local label via
+; local_find_forward (dir=0) or local_find_backward (dir=1), using the
+; current PASS_PC as the reference PC.  Push the resolved 32-bit PC as
+; zero-extended s64.
+;
+; Bytecode operand:
+;   [0]  digit  u8  (1..9)
+;   [1]  dir    u8  (0 = forward, 1 = backward)
+;
+; Reference: tools/aarch64enc/expr.go::Eval (case format.OpPushLocal).
+; The ref_pc semantics for f/b are per the local-label spec:
+;   * Nf : smallest PC strictly greater than ref_pc
+;   * Nb : largest  PC less than or equal to ref_pc
+; ref_pc = PASS_PC (PC of the instruction currently being assembled).
+; -----------------------------------------------------------------------
+eval_push_local:
+; Read the 2-byte operand (digit, dir) directly into a scratch pair so
+; we don't have to juggle the eval-stack slot pointer through the find
+; call (find clobbers HL/BC/DE/A).
+                ld      hl, eval_local_operand
+                ld      b, 2
+                call    eval_take_bytes
+
+; Seed local_label_pc_buf with PASS_PC (4-byte LE).
+                ld      a, (PASS_PC + 0)
+                ld      (local_label_pc_buf + 0), a
+                ld      a, (PASS_PC + 1)
+                ld      (local_label_pc_buf + 1), a
+                ld      a, (PASS_PC + 2)
+                ld      (local_label_pc_buf + 2), a
+                ld      a, (PASS_PC + 3)
+                ld      (local_label_pc_buf + 3), a
+
+; Dispatch on dir.
+                ld      a, (eval_local_operand + 1) ; A = dir
+                or      a
+                jr      z, eval_push_local_forward
+                cp      1
+                jr      z, eval_push_local_backward
+                jp      fail                        ; invalid dir
+
+eval_push_local_forward:
+                ld      a, (eval_local_operand + 0) ; A = digit
+                call    local_find_forward
+                jr      eval_push_local_check
+
+eval_push_local_backward:
+                ld      a, (eval_local_operand + 0) ; A = digit
+                call    local_find_backward
+
+eval_push_local_check:
+                jp      c, fail                     ; miss → fail
+
+; Allocate a stack slot AFTER the find call (which clobbered HL/DE) and
+; write resolved PC into slot[0..3], zero slot[4..7].
+                call    eval_alloc_top              ; HL = new top slot
+                ld      a, (local_label_pc_buf + 0)
+                ld      (hl), a
+                inc     hl
+                ld      a, (local_label_pc_buf + 1)
+                ld      (hl), a
+                inc     hl
+                ld      a, (local_label_pc_buf + 2)
+                ld      (hl), a
+                inc     hl
+                ld      a, (local_label_pc_buf + 3)
+                ld      (hl), a
+                inc     hl                          ; HL → slot[4]
+                xor     a
+                ld      b, 4
+eval_push_local_zero:
+                ld      (hl), a
+                inc     hl
+                djnz    eval_push_local_zero
+                jp      eval_loop
+
+
+; -----------------------------------------------------------------------
+; eval_push_pc — opcode 0x07.  Push PASS_PC (4-byte LE u32) as a
+; zero-extended s64 onto the eval stack.  No inline operand.
+;
+; PASS_PC is the pass-2 PC counter maintained by walk_records; it equals
+; the PC of the instruction currently being assembled (NOT the address
+; after this instruction).  Reference: tools/aarch64enc/expr.go::Eval
+; (case format.OpPushPC).
+; -----------------------------------------------------------------------
+eval_push_pc:
+                call    eval_alloc_top              ; HL = new top slot
+                ld      a, (PASS_PC + 0)
+                ld      (hl), a
+                inc     hl
+                ld      a, (PASS_PC + 1)
+                ld      (hl), a
+                inc     hl
+                ld      a, (PASS_PC + 2)
+                ld      (hl), a
+                inc     hl
+                ld      a, (PASS_PC + 3)
+                ld      (hl), a
+                inc     hl                          ; HL → slot[4]
+; Zero the high 4 bytes (eval_alloc_top doesn't zero-fill despite the
+; stale comment in its header; slot may hold prior content).
+                xor     a
+                ld      b, 4
+eval_push_pc_zero:
+                ld      (hl), a
+                inc     hl
+                djnz    eval_push_pc_zero
+                jp      eval_loop
+
+
+; -----------------------------------------------------------------------
+; REL_* opcodes — mask/shift the top-of-stack value in place.  The _NC
+; variants share an implementation with their non-NC counterparts
+; (different opcodes route to the same handler in the dispatch above);
+; the suffix only affects linker overflow tracking, not the emitted
+; bytes.  Reference: tools/aarch64enc/expr.go::Eval lines 76-87.
+;
+; Byte-shift trick: shifts by 16, 32, 48 are exact byte-aligned moves —
+; we copy the requested byte pair into slot[0..1] and zero slot[2..7].
+; Shifts by 12 (REL_LO12, REL_HI12) need bit work but operate on only
+; the low 24 bits of the source.
+; -----------------------------------------------------------------------
+
+; eval_rel_lo12 — top = top & 0xFFF.  Keep low 12 bits, zero rest.
+eval_rel_lo12:
+                call    eval_top_ptr                ; HL = top slot
+                inc     hl                          ; HL → slot[1]
+                ld      a, (hl)
+                and     &0F                         ; mask high nibble of byte 1
+                ld      (hl), a
+                inc     hl                          ; HL → slot[2]
+                ld      b, 6
+                xor     a
+eval_rel_lo12_zero:
+                ld      (hl), a
+                inc     hl
+                djnz    eval_rel_lo12_zero
+                jp      eval_loop
+
+
+; eval_rel_hi12 — top = (top >> 12) & 0xFFF.
+;
+; The 12-bit result occupies bits 12..23 of the source.  Bytes 1 and 2
+; of the source contain those bits:
+;   source byte 1 = src[8..15]  → result bits [0..3] come from src[12..15]
+;   source byte 2 = src[16..23] → result bits [4..11] come from src[16..23]
+; So result byte 0 = (src[1] >> 4) | (src[2] << 4)    (low 8 bits of result)
+;    result byte 1 = (src[2] >> 4) & 0x0F             (high 4 bits of result)
+; Result bytes 2..7 = 0.
+; -----------------------------------------------------------------------
+eval_rel_hi12:
+                call    eval_top_ptr                ; HL = top slot[0]
+                push    hl                          ; preserve slot[0] ptr
+                inc     hl                          ; HL → slot[1] (src[1])
+                ld      a, (hl)                     ; A = src[1]
+                rrca
+                rrca
+                rrca
+                rrca
+                and     &0F                         ; A = src[1] >> 4 (low nibble)
+                ld      c, a                        ; C = low nibble of result byte 0
+                inc     hl                          ; HL → slot[2] (src[2])
+                ld      a, (hl)                     ; A = src[2]
+                ld      d, a                        ; D = src[2] (save for byte-1 calc)
+                rlca
+                rlca
+                rlca
+                rlca                                ; A = src[2] rotated by 4 (nibbles swapped)
+                and     &F0                         ; high nibble of result byte 0 (= src[2] low nibble << 4)
+                or      c                           ; combine with low nibble from src[1] >> 4
+                pop     hl                          ; HL = slot[0]
+                ld      (hl), a                     ; slot[0] = result byte 0
+                inc     hl                          ; HL → slot[1]
+                ld      a, d                        ; A = src[2]
+                rrca
+                rrca
+                rrca
+                rrca
+                and     &0F                         ; A = src[2] >> 4 = result byte 1
+                ld      (hl), a                     ; slot[1] = result byte 1
+                inc     hl                          ; HL → slot[2]
+                ld      b, 6
+                xor     a
+eval_rel_hi12_zero:
+                ld      (hl), a
+                inc     hl
+                djnz    eval_rel_hi12_zero
+                jp      eval_loop
+
+
+; eval_rel_abs_g0 — top = top & 0xFFFF.  Keep low 16 bits.
+eval_rel_abs_g0:
+                call    eval_top_ptr                ; HL = top slot
+                ld      bc, 2
+                add     hl, bc                      ; HL → slot[2]
+                ld      b, 6
+                xor     a
+eval_rel_abs_g0_zero:
+                ld      (hl), a
+                inc     hl
+                djnz    eval_rel_abs_g0_zero
+                jp      eval_loop
+
+
+; eval_rel_abs_g1 — top = (top >> 16) & 0xFFFF.
+; Source bytes 2,3 → dest bytes 0,1; rest = 0.
+eval_rel_abs_g1:
+                call    eval_top_ptr                ; HL = slot[0]
+                push    hl                          ; preserve slot base
+                ld      bc, 2
+                add     hl, bc                      ; HL → slot[2]
+                ld      a, (hl)                     ; A = src[2]
+                pop     de                          ; DE = slot[0]
+                ld      (de), a
+                inc     hl                          ; HL → src[3]
+                inc     de                          ; DE → dst[1]
+                ld      a, (hl)
+                ld      (de), a
+                inc     de                          ; DE → dst[2]
+                ex      de, hl                      ; HL = dst[2]
+                ld      b, 6
+                xor     a
+eval_rel_abs_g1_zero:
+                ld      (hl), a
+                inc     hl
+                djnz    eval_rel_abs_g1_zero
+                jp      eval_loop
+
+
+; eval_rel_abs_g2 — top = (top >> 32) & 0xFFFF.
+; Source bytes 4,5 → dest bytes 0,1; rest = 0.
+eval_rel_abs_g2:
+                call    eval_top_ptr                ; HL = slot[0]
+                push    hl                          ; preserve slot base
+                ld      bc, 4
+                add     hl, bc                      ; HL → slot[4]
+                ld      a, (hl)                     ; A = src[4]
+                pop     de                          ; DE = slot[0]
+                ld      (de), a
+                inc     hl                          ; HL → src[5]
+                inc     de                          ; DE → dst[1]
+                ld      a, (hl)
+                ld      (de), a
+                inc     de                          ; DE → dst[2]
+                ex      de, hl                      ; HL = dst[2]
+                ld      b, 6
+                xor     a
+eval_rel_abs_g2_zero:
+                ld      (hl), a
+                inc     hl
+                djnz    eval_rel_abs_g2_zero
+                jp      eval_loop
+
+
+; eval_rel_abs_g3 — top = (top >> 48) & 0xFFFF.
+; Source bytes 6,7 → dest bytes 0,1; rest = 0.
+eval_rel_abs_g3:
+                call    eval_top_ptr                ; HL = slot[0]
+                push    hl                          ; preserve slot base
+                ld      bc, 6
+                add     hl, bc                      ; HL → slot[6]
+                ld      a, (hl)                     ; A = src[6]
+                pop     de                          ; DE = slot[0]
+                ld      (de), a
+                inc     hl                          ; HL → src[7]
+                inc     de                          ; DE → dst[1]
+                ld      a, (hl)
+                ld      (de), a
+                inc     de                          ; DE → dst[2]
+                ex      de, hl                      ; HL = dst[2]
+                ld      b, 6
+                xor     a
+eval_rel_abs_g3_zero:
+                ld      (hl), a
+                inc     hl
+                djnz    eval_rel_abs_g3_zero
+                jp      eval_loop
+
+
+; -----------------------------------------------------------------------
 ; Scratch storage.  Placed in section A code RAM (assembler.bin).
 ; -----------------------------------------------------------------------
 expr_sp:        defb    0                   ; current depth
 eval_pos:       defw    0                   ; bytecode read pointer
 eval_remaining: defw    0                   ; bytes left to consume
 expr_result:    defb    0, 0, 0, 0, 0, 0, 0, 0   ; final 8-byte LE result
+
+; Operand scratch for the M4 push opcodes — separates the bytecode
+; operand bytes from the eval-stack slot so we don't have to preserve
+; an in-slot pointer across the resolve calls (which clobber HL/BC/DE).
+eval_sym_operand:   defw    0               ; PUSH_SYM: symbol_id u16
+eval_local_operand: defb    0, 0            ; PUSH_LOCAL: digit u8, dir u8
 
 ; The stack: 8 slots × 8 bytes = 64 bytes.
 expr_stack:     defs    EXPR_STACK_DEPTH * 8
