@@ -19,8 +19,8 @@ Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not
 | Bump-arena allocator (Go-slices-vs-fixed-arrays for the Z80 data structures) | ❌ YAGNI | `docs/specs/2026-05-29-bump-arena-risk-census.md` (the census); Pete 2026-05-29 (accepted) | **NOT building it.** The risk-census (PR #84) found no fixed section-D array is a real overrun time-bomb — all SAFE today, only 3 go at-risk at a full ~5× kernel and are trivially bumpable in place. Pete confirmed YAGNI. The genuinely tight ceiling is elsewhere — the IN/OUT paged byte buffers (next row), fixed by claiming free pages, not an allocator. **Revisit trigger** (census §4): a measured at-risk overrun, or the symbol table heading toward ~2× its 512 cap. |
 | IN/OUT paged-buffer ceiling (claim more SAM pages) | 🧭 | `docs/specs/2026-05-29-bump-arena-risk-census.md` §IN/OUT | The real near-term constraint surfaced by the bump-arena census: the **IN `.tbn` buffer is at 92% of its 96 KB / 6-page cap today** (88,644 B; fail tag `03`), OUT at 68% of 32 KB (fail tag `b0`). Physical pages 15..31 (~272 KB) are free, so the fix is a bounds bump (more pages), not an allocator. Not urgent (release fits), but the closest ceiling — do before a substantially larger source lands. Pairs with the compact-`.tbn` strand. |
 | Codegen sysreg / mnemonic / form tables from Go authority | 📋 | M6-closure plan §M7 sketch (PR-A), `tools/sam-aarch64-format/sysregs.go` | Kills hand-sync drift. Depends on M6 PR-2's page-13 binary build glue. |
-| On-SAM disassembler (strand B) | 📋 | `docs/plans/2026-05-28-go-aarch64-disassembler.md`; branch `strand-b-1-disassembler` (5 commits, parked) | Resume per Pete's redirect after M6 closes. |
-| **Source compression / compact `.tbn`** ⭐ NEXT-SESSION PRIORITY | 📋 | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`; Pete 2026-05-29 (framing + priority) | **Pete's stated next priority.** Framing: make the internal representation **the assembled bytes** for instructions that carry no expressions (vs the current verbose record stream). Pete expects **huge memory savings** (directly relieves the IN-buffer ceiling — currently 92% — and the section-D tables) **and gets us much closer to a full on-SAM Z80 disassembler** (bytes-in → text-out is the inverse). Expression-bearing instructions still need their symbolic form for 2-pass resolution, so the format is hybrid. Design first (refine the existing spec with this framing), then implement. |
+| On-SAM disassembler (strand B) — Go side | ⏳ **ACTIVE** | `docs/plans/2026-05-28-go-aarch64-disassembler.md`; parked branch `strand-b-1-disassembler` (Tasks 1–4: skeleton + slot decoders + branch/PC-rel + logical/bitfield + CLI; ~1141 LOC, 145 commits behind main) | **Now the active strand (Pete 2026-05-29 reorder — see decision below).** Disassembler-first: it's the prerequisite that makes the compact `.tbn` usable (bytes→text for the editor) and is a clean standalone unit. Resume the parked code, port forward onto current `aarch64enc`, then complete Task 3 (aliases), Task 5 (objdump oracle), and the **3-translation round-trip** test (`source→assemble→v1→disassemble→canonical→assemble→v2`, assert `v1==v2`) + alias-vs-binutils canonical-form tests. Then Z80 port. See `memory/feedback_disassembler_first_decouple`. |
+| Source compression / compact `.tbn` | 📋 (sequenced **after** the disassembler) | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` § "2026-05-29 refinement"; Pete 2026-05-29 | **Design done; build deferred until the disassembler lands (Pete 2026-05-29 reorder).** The disassembler is the prerequisite — a compact `.tbn` that stores assembled bytes is write-only to the editor without bytes→text. Design (kept as the eventual target): hybrid format adds **`KindLitInsts = 0x07`** (a *run* of consecutive fully-literal instructions stored as assembled bytes); compaction lives in **`refenc`** (sole encoder authority) as a `.tbn`→`.tbn` transform; the m6-release 3-way gate verifies. Increment plan in the spec. Open-Q6 (defaults chosen). |
 | Editor groundwork (Phase 2) | 🧭 | `docs/ROADMAP.md` "Editor vision" section | Instruction-explanation panel, register simulator, sysreg docs, did-you-mean. Not yet spec'd. |
 | Repo-cleanup / README housekeeping track | ⏳ | `docs/notes/2026-05-29-repo-audit.md` §6 (prioritised plan) | Track underway. **Landed: PR #78** (dead Go symbols + orphan stub removed), **PR #80** (`tools/` + `src/README.md` index READMEs). Remaining: deep reviews of `main_loop.asm` (#11) / `litpool.asm` (#12), and the `SYMTAB_*` `equ` sentinels (#8). Does NOT block other M7 work. |
 | Directory naming & logical organisation (rename `src/m3`) | ⏳ | Pete 2026-05-29 (decision delegated to agent) | **`src/m3` → flat `src/` DONE (PR #82).** The dir is gone; all live references updated. The wider naming review (`tests/m{3..6}`, `ci-m{N}` targets, `build-m3-disk` tool, milestone-named fixtures) remains as later M7 cleanup. |
@@ -80,15 +80,36 @@ once resolved.
    `run-m{3..6}-roundtrip.sh` + the m6-release gate). The historical M0 design
    docs (`docs/plans/2026-05-09-m0-toolchain-bootstrap.md`, `docs/notes/m0-status.md`,
    `docs/notes/sam-stub-audit.md`) were kept as archival reference.
-   **⚠ STILL PENDING at merge time:** remove `test` from `main`'s
-   branch-protection required-status-checks (`gh api … required_status_checks/contexts`
-   — drops 14 → 13). Must be done or merges block on a check that no longer
-   reports. (The orchestrator handles this when merging the PR.)
+   **✅ DONE at merge:** `test` removed from `main`'s branch-protection
+   required-status-checks (was 13 contexts incl. `test` — handover's "14" was
+   off by one; now **12**: build-image, m1, m2, m3, m4, m4-prod, m5, m5-prod,
+   m6, m6-prod, m6-release, sysreg-sync). PR #91 merged (`8cf1dd7`).
 5. **`tools/llist-normalise/llist-normalise` is a committed binary** (an
    accidental check-in spotted during the rename). Folds into the punted
    LLIST-cluster disposition (open question 2) — handle together.
-
-## Strands in detail
+6. **Compact-`.tbn` design choices (non-blocking; defaults chosen, building
+   on them).** Captured 2026-05-29 while implementing the compression strand
+   (details + rationale in the spec refinement). The agent proceeded with the
+   defaults; flag if you'd prefer otherwise: (a) **Level-3 frequency
+   dictionary** — *deferred* (Level 2 should clear the ceiling; dictionary
+   adds a per-project artifact + decoder complexity). (b) **Compact constant
+   data directives** (`.word`/`.byte` runs) — *deferred to PR 3* (PR 1/2 are
+   instructions-only, your exact framing). (c) **Compaction flag home** —
+   `refenc -emit-compact-tbn` for now (reuses the sole encoder; text2bin
+   doesn't encode), revisit the CLI surface once the format is proven.
+7. **Sequencing: disassembler BEFORE compact-`.tbn` — ✅ DECIDED (Pete
+   2026-05-29).** Pete redirected mid-session: build the standalone Go
+   disassembler first, *then* the compact-`.tbn` format change — not both at
+   once. Rationale (his + agreed): the disassembler is the prerequisite that
+   makes a bytes-based representation usable (the editor needs bytes→text),
+   it's a clean independently-testable unit, and doing the format change +
+   assembler wiring simultaneously couples two risky changes. Verify the
+   disassembler with a **3-translation round-trip** (`source→assemble→v1→
+   disassemble→canonical→assemble→v2`, assert `v1==v2` — dodges the
+   non-canonical-representation problem) plus alias/canonical-form tests vs
+   binutils `objdump`. Captured in `memory/feedback_disassembler_first_decouple`.
+   The compact-`.tbn` design (open-Q6 + spec refinement) stays as the
+   eventual target.
 
 ### Bump-arena allocator (headline structural item) — ❌ YAGNI (closed 2026-05-29)
 
