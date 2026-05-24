@@ -58,7 +58,8 @@ PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
 ; M4 scratch reservation (allocated by symbols.asm + local_labels.asm):
 ;   &C160-&C95F  SYMTAB              (256 buckets × 8 bytes = 2 KB)
 ;   &C960-&CD5F  SYMTAB_OVERFLOW     (overflow chain, ~1 KB)
-;   &CD60-&D149  LOCAL_LABEL_TABLE   (count + 200 × 5 bytes = 1002 bytes)
+;   &CD60-&D0E5  LOCAL_LABEL_TABLE   (count + 180 × 5 bytes = 902 bytes;
+;                                    capped below OPMEM_OFF at &D100)
 
 ; M5 PR-C scratch: OpMem encoder's 8-byte LE offset value.
 ; Only one OpMem operand exists per instruction (Rt, [mem] for non-pair;

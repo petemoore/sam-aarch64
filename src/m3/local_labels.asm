@@ -19,15 +19,19 @@
 ; (= &CD60).  Five bytes per entry (1 B digit + 4 B PC LE), with a
 ; 2-byte count prefix:
 ;
-; Memory layout (1 KB slot at &CD60..&D15F):
+; Memory layout (must fit in &CD60..&D0FF — below OPMEM_OFF at &D100):
 ;
 ;   offset 0..1   count   u16 LE     (entries used; 0..LOCAL_LIST_MAX)
 ;   offset 2..    entries — for i in 0..count:
 ;     base + 2 + i*5 + 0       = digit (u8, 1..99)
 ;     base + 2 + i*5 + 1..4    = pc    (u32 LE)
 ;
-; LOCAL_LIST_MAX = 200 → 2 + 200*5 = 1002 bytes ≤ 1024-byte slot
-; reserved by assembler.asm.
+; LOCAL_LIST_MAX = 180 → 2 + 180*5 = 902 bytes; table ends at &D0E5.
+; Capped below OPMEM_OFF (&D100, allocated for M5 OpMem encoder) so the
+; two regions cannot overlap.  Pass 1 populates the table; pass 2 reads
+; it (and writes OPMEM_OFF) — temporally disjoint within a single pass,
+; but a high-locals fixture exceeding ~168 entries would silently corrupt
+; OPMEM_OFF on the pass boundary if the bound weren't enforced here.
 ;
 ; Sort order: definition order (= PC order).  Pass 1 walks records
 ; sequentially, so PCs at each call to local_def_append are
@@ -59,8 +63,10 @@
 ; ---------------------------------------------------------------------
 ; Memory map (must match the reservation comment in assembler.asm).
 ; ---------------------------------------------------------------------
-LOCAL_LABEL_TABLE:      equ     &CD60   ; 2-byte count + 200 * 5-byte entries = 1002 bytes
-LOCAL_LIST_MAX:         equ     200     ; total entries across ALL digits
+LOCAL_LABEL_TABLE:      equ     &CD60   ; 2-byte count + 180 * 5-byte entries = 902 bytes
+LOCAL_LIST_MAX:         equ     180     ; total entries across ALL digits
+                                        ; capped at 180 so the table (&CD60..&D0E5)
+                                        ; ends below OPMEM_OFF at &D100.
 LOCAL_ENTRY_SIZE:       equ     5       ; 1 byte digit + 4 bytes PC (LE)
 LOCAL_MAX_DIGIT:        equ     99      ; digit range 1..99 inclusive
 
