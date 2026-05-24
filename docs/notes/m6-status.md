@@ -2,14 +2,22 @@
 
 Entry point for any session picking up where M6 left off.
 
-**M6 — HEADLINE ACHIEVED (byte-match), CI gate pending.** As of
-2026-05-29 the SAM-side assembler produces spectrum4 `release.bin`
-byte-identical to GNU (see "Release byte-match — status" below). The
-mechanism work (paged OUT, paged IN, paged_call, off-axis tables,
-multi-digit local labels, the 8 encoder-bug fixes) has all landed; the
-only remaining step to flip M6 ✅ is the `m6-release` CI gate (PR-5 of
-the closure plan). The sections below document the earlier PRs (paged
-OUT/IN) in detail and remain accurate for that machinery.
+**M6 — ✅ COMPLETE (2026-05-29).** The SAM-side assembler produces
+spectrum4 `release.bin` byte-identical to GNU (see "Release byte-match —
+status" below), and the byte-match is now CI-gated. The mechanism work
+(paged OUT, paged IN, paged_call, off-axis tables, multi-digit local
+labels, the 8 encoder-bug fixes) landed across PRs #29-#73; **PR #76**
+wired the `m6-release` GH Actions gate — a hermetic **3-way byte-match**
+(`tools/run-m6-release-gate.sh`): GNU `release.img` == our Go toolchain
+(text2bin + refenc) == our Z80/SAM toolchain, over a vendored flattened
+release source (`tests/m6/release/release.s`, `text2bin -E`). No spectrum4
+checkout / `tup` / aarch64 binutils needed at CI time; refresh the fixture
+with `tools/revendor-m6-release.sh`. PR #76 also added the `&C000`
+code-budget assertion (`scripts/check-code-budget.sh` /
+`make check-budget`) that turns the silent stack-page boot-hang cliff
+into a CI failure with a number. M7 backlog: `docs/notes/m7-status.md`.
+The sections below document the earlier PRs (paged OUT/IN) in detail and
+remain accurate for that machinery.
 
 ## M6 scope (full milestone)
 
@@ -24,7 +32,7 @@ toolchain — `release.s` is ~20 KB source emitting ~22 KB output.
 | Multi-digit local labels (`10f` / `10b` / …) | 📋 plan ready | `docs/plans/2026-05-27-multi-digit-local-labels.md` | open draft PR #35 (independent of this PR) |
 | Compact `.tbn` format | 📋 designed | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | M6 PR 3+ |
 | On-SAM disassembler | 📋 designed | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | M6 PR 4+ |
-| spectrum4 release.bin byte-match on SAM | ✅ **ACHIEVED** (2026-05-29) — SAM OUT byte-identical to GNU (21752 B, cmp exit 0); CI gate (PR-5) pending to fully close M6 | `tools/run-m6-release-stripped.sh` | branch `m6-bytematch-encoder-fixes` |
+| spectrum4 release.bin byte-match on SAM | ✅ **DONE** (2026-05-29) — SAM OUT byte-identical to GNU (21752 B); CI-gated by the `m6-release` 3-way byte-match (GNU==Go==Z80) (PR #76) | `tools/run-m6-release-gate.sh` (CI); `tools/run-m6-release-stripped.sh` (from-source deep check) | byte-match #73; CI gate #76 |
 
 ## Release byte-match — status (2026-05-29, the headline closer)
 
@@ -54,12 +62,14 @@ the assembler **on SimCoupé** (the authoritative gate):
    All ci-m3/m4/m5/m6 + -prod fixtures pass; both code variants under the
    `&C000` ceiling (test ~&BFD9, prod ~&B846).
 
-   The fixes live on branch `m6-bytematch-encoder-fixes` (one commit per
-   class; PR pending Pete's review). **What remains to fully close M6:**
-   PR-5 — wire `tools/run-m6-release-stripped.sh` into CI as the
-   `m6-release` gate + add the `&C000` budget assertion (M6-closure plan
-   Step 2b). Each class also gained a permanent `tests/m6/sources/`
-   fixture so the corpus now covers these forms.
+   The fixes landed in PR #73 (one commit per class). Each class also
+   gained a permanent `tests/m6/sources/` fixture so the corpus now
+   covers these forms. **M6 is now fully closed:** PR #76 added the
+   `m6-release` CI gate — a hermetic 3-way byte-match (GNU == Go == Z80)
+   over a vendored flattened release source (`tools/run-m6-release-gate.sh`,
+   fixture under `tests/m6/release/`, refreshed by
+   `tools/revendor-m6-release.sh`) — plus the `&C000` budget assertion
+   (`make check-budget`), per M6-closure plan Step 2 / 2b.
 
 ### Go-harness paged-path trap — root-cause follow-up (Pete: ideally M6)
 
