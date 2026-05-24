@@ -308,10 +308,6 @@ func extractSymID(expr []byte) (uint16, bool) {
 	return uint16(expr[1]) | uint16(expr[2])<<8, true
 }
 
-func directiveSize(rec format.Record) (int64, error) {
-	return directiveSizeAtPC(rec, 0, nil, nil)
-}
-
 // pass1EvalCtx builds an EvalContext suitable for sizing directives in
 // pass1. Only `.set`/`.equ`-defined symbols are resolvable (they're added
 // to res.Symbols as the directives are seen). Label references would be
@@ -319,8 +315,8 @@ func directiveSize(rec format.Record) (int64, error) {
 // errors from enc.Eval — which is the correct behaviour since labels can't
 // influence the size of an earlier `.space`/`.skip`/`.balign`.
 //
-// If res or f is nil (legacy `directiveSize` callers in tests) only literal
-// expressions resolve, matching the old format.EvalConst behaviour.
+// If res or f is nil only literal expressions resolve, matching the old
+// format.EvalConst behaviour.
 func pass1EvalCtx(pc int64, res *Pass1Result, f *format.File) enc.EvalContext {
 	if res == nil || f == nil {
 		return enc.EvalContext{PC: pc}
