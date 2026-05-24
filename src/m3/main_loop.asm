@@ -2096,10 +2096,15 @@ main_eval_next_imm:
 
 
 ; -----------------------------------------------------------------------
-; load_in_file — HGTHD + HLOAD "IN" into IN_BUF.
+; load_in_file — HGTHD + trampoline-HLOAD "IN" into pages 7..10.
 ;
-; HLOAD's destination must be in section C (&8000-&BFFF) per the
-; loader.asm header notes.  IN_BUF lives in section C.
+; Per docs/specs/2026-05-27-m6-paged-in-design.md.  IN lands in
+; physical pages 7..10 (off-axis) via the section-B HLOAD trampoline,
+; same pattern as load_enctab.  HLOAD's destination is &8000 — a
+; section-C address — and SAMDOS's internal ctas auto-pages HMPR
+; across the &C000 boundary, so a multi-page load to HMPR=N actually
+; leaves the file spread across physical pages N, N+1, ...,
+; N+(C-1) (Citation: samdos/src/c.s:354-369 ctas).
 ;
 ; The on-disk IN file size is recorded in the file's body header.
 ; SAMDOS's HGTHD reads that header, populates internal `difa`, then
@@ -2109,6 +2114,10 @@ main_eval_next_imm:
 ;   (&4B50 + 35..36) = length-mod-16K
 ;     with bit 15 set by SAMDOS's `set 7, d` line (h.s:hgthd) —
 ;     we must `res 7` on the high byte before passing to HLOAD.
+;
+; Output: IN_END_PAGE / IN_END_OFFSET set; IN paged-in-resident; LMPR
+;         restored to whatever the caller had (TRAMPOLINE_DST touches
+;         HMPR only).
 ;
 ; Citation: samdos/src/h.s::hgthd lines 59-67 + ::txhed lines that
 ; transfer difa to &4B50.
@@ -2130,18 +2139,29 @@ load_in_file:
                 ld      a, (&4B50 + 34)
                 ld      (in_file_pages), a
 
-                ld      hl, IN_BUF
+; Call the section-B trampoline.
+;   HL = &8000      (section-C window; HLOAD's required start address)
+;   B  = IN_BASE_PAGE
+;   C  = pages count
+;   DE = length-mod-16K
+;   IX = UIFA (already set by fill_uifa)
+                ld      hl, &8000
+                ld      b, IN_BASE_PAGE
                 ld      a, (in_file_pages)
                 ld      c, a
-                ld      b, 0
                 ld      de, (in_file_len)
-                rst     8
-                defb    HOOK_HLOAD
+                call    TRAMPOLINE_DST
 
-                ld      hl, IN_BUF
-                ld      de, (in_file_len)
-                add     hl, de
-                ld      (IN_END), hl
+; Compute (IN_END_PAGE, IN_END_OFFSET) = LMPR_IN_BASE + pages, offset
+; = in_file_len (length within that last page).  The `or &20` sets the
+; RAM0 bit so IN_END_PAGE stores a full LMPR value, matching the
+; IN_POS_PAGE convention.
+                ld      a, (in_file_pages)
+                add     a, IN_BASE_PAGE
+                or      &20
+                ld      (IN_END_PAGE), a
+                ld      hl, (in_file_len)
+                ld      (IN_END_OFFSET), hl
                 ret
 
 
