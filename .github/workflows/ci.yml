@@ -135,3 +135,17 @@ jobs:
           name: test-mgt-on-failure
           path: build/test.mgt
           if-no-files-found: warn
+
+  m1:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: Install aarch64 binutils
+        run: sudo apt-get update && sudo apt-get install -y binutils-aarch64-linux-gnu
+      - name: Run M1 tests
+        env:
+          AARCH64_AS: aarch64-linux-gnu-as
+        run: make ci-m1

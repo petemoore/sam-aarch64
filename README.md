@@ -16,22 +16,23 @@ without ever leaving the SAM Coupé.
 
 ## Status
 
-M0 (toolchain bootstrap) is done. The dev pipeline
-pyz80 → patched SimCoupé → samfile → GNU `as` is wired end-to-end:
-a Z80 stub writes a 4-byte file via SAMDOS HSAVE, the host extracts
-it, byte-compares it against `aarch64-none-elf-as`. The stub signals
-completion with `DI; HALT` alone — one mechanism, working
-cross-platform.
+M0 (toolchain bootstrap) and M1 (binary tokenised source format
+plus `text2bin` / `bin2text`) are both done. The Mac-side pipeline
+now lifts every Phase 1 text-dialect construct into a binary
+tokenised file and back; a four-layer test pyramid (format-unit,
+`.s` round-trip golden, `.tbn` reachability, GNU `as` cross-check)
+gates every change. The format is specified in
+`docs/specs/2026-05-23-m1-binary-tokenised-format-design.md`.
 
-The same round-trip passes green in every environment we run it in:
-GitHub Actions on `ubuntu-latest` (inside the dev image published to
-`ghcr.io/petemoore/sam-aarch64-dev` on every push), the dev image
-locally under Docker on both `linux/amd64` and `linux/arm64`, and
-natively on macOS against a locally-built patched SimCoupé. See
-`docs/specs/` for design documents and `docs/plans/` for the M0
-plan.
+The M0 round-trip continues to pass under every environment we
+exercise: GitHub Actions on `ubuntu-latest` (inside the dev image
+published to `ghcr.io/petemoore/sam-aarch64-dev` on every push),
+the dev image locally under Docker on both `linux/amd64` and
+`linux/arm64`, and natively on macOS against a locally-built
+patched SimCoupé. See `docs/specs/` for design documents and
+`docs/plans/` for milestone plans.
 
-Next up: M1 (the actual aarch64 assembler).
+Next up: M2 (encoder tables).
 
 ## Local development
 

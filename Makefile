@@ -40,3 +40,19 @@ ci: check test
 
 clean:
 	rm -rf $(BUILD)
+
+.PHONY: text2bin bin2text test-m1 ci-m1
+
+text2bin:
+	cd tools/text2bin && go build -o $(CURDIR)/$(BUILD)/text2bin .
+
+bin2text:
+	cd tools/bin2text && go build -o $(CURDIR)/$(BUILD)/bin2text .
+
+test-m1: text2bin bin2text
+	cd tools/sam-aarch64-format && go test ./...
+	cd tools/text2bin && go test ./...
+	cd tools/bin2text && go test ./...
+	./tests/m1/run-gnu-as-check.sh
+
+ci-m1: test-m1
