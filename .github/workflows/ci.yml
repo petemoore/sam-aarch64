@@ -110,6 +110,25 @@ jobs:
           AARCH64_AS: aarch64-linux-gnu-as
         run: make ci-m2
 
+  # disasm — strand-B Go disassembler oracle: aarch64dec vs binutils objdump
+  # on the vendored release.img (TDD target; RED until the decoder is
+  # complete). Pure Go + binutils, no container/SimCoupé. NOTE: deliberately
+  # NOT in main's required-status-checks while it's red — add it as a
+  # required check only once it's green.
+  disasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: Install aarch64 binutils
+        run: sudo apt-get update && sudo apt-get install -y binutils-aarch64-linux-gnu
+      - name: Disassembler oracle (aarch64dec vs objdump)
+        env:
+          OBJDUMP: aarch64-linux-gnu-objdump
+        run: make ci-disasm
+
   # sysreg-sync — Go↔Z80 sysreg table sync guard (repo-audit §5 / §6 #9).
   # Asserts the hand-maintained Z80 table src/sysreg_data.asm agrees
   # byte-for-byte with the Go authority tools/sam-aarch64-format/sysregs.go
