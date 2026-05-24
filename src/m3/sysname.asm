@@ -333,14 +333,64 @@ sysreg_pack:
 ; Output: sysreg_fields[0..4] = (op0, op1, CRn, CRm, op2).
 ; Clobbers: A, BC, DE, HL.
 ; -----------------------------------------------------------------------
+; -----------------------------------------------------------------------
+; LMPR bracketing for the page-13 paged_call (load-bearing).
+;
+; The sysname lookups can run DURING main_assemble's encode window,
+; where LMPR = LMPR_ENCTAB (section A = ENCTAB page 4, section B =
+; page 5).  But paged_call's body AND the sysreg comm buffer both live
+; in section B at the trampoline page (the page LMPR_DEFAULT_RUNTIME
+; selects — see trampoline.asm:110-116, which notes the trampoline copy
+; is "INVISIBLE" under LMPR_ENCTAB).  Calling paged_call under
+; LMPR_ENCTAB would execute page-5 garbage and hang.
+;
+; So we snapshot the live LMPR, switch to LMPR_DEFAULT_RUNTIME (making
+; section B the trampoline/comm page), do the staging + paged_call +
+; result copy, then restore the snapshot.  The pattern mirrors
+; emit_byte's high-zone LMPR bracket (encoder.asm:455-468) — read LMPR
+; live rather than hard-coding, so the boot-time top bits are preserved.
+;
+; All comm-buffer access (stage write, result read) MUST happen inside
+; the bracket (LMPR = default); sysreg_fields / OPVAL_ARRAY access is
+; section C/D (HMPR-controlled, LMPR-independent) and may happen either
+; side.  sysname_setup runs BEFORE the bracket (it only touches section
+; C/D).  Port 250 = LMPR (Tech Manual §6.10; matches existing usage).
+; -----------------------------------------------------------------------
+sysname_lmpr_default_in:
+                in      a, (250)
+                ld      (sysname_lmpr_save), a
+                ld      a, (LMPR_DEFAULT_RUNTIME)
+                out     (250), a
+                ret
+
+sysname_lmpr_restore:
+                ld      a, (sysname_lmpr_save)
+                out     (250), a
+                ret
+
+
 sysname_lookup_sysreg:
-                call    sysname_setup       ; HL=ptr, BC=len, fields_dest=sysreg_fields
-                ld      a, 5
-                ld      (sysname_field_count), a
-                ld      hl, sysreg_table
-                call    sysname_match
-                ret     z
-; Fall through to generic Sn_op1_Cm_Cn_op2 parser.
+                call    sysname_setup       ; sysname_ptr / sysname_len set
+                call    sysname_lmpr_default_in
+                call    sysname_stage_to_comm
+                call    paged_call
+                defw    SYSREG_SYSREG_ENTRY
+                defb    SYSREG_DATA_PAGE
+                or      a
+                jp      z, sysname_lookup_sysreg_miss
+; Hit: copy 5 result fields → sysreg_fields[0..4] (LMPR still default, so
+; SYSREG_COMM_RESULT in section B is visible; sysreg_fields is section D).
+                ld      hl, SYSREG_COMM_RESULT
+                ld      de, sysreg_fields
+                ld      bc, 5
+                ldir
+                call    sysname_lmpr_restore
+                ret
+sysname_lookup_sysreg_miss:
+                call    sysname_lmpr_restore
+; Fall through to generic Sn_op1_Cm_Cn_op2 parser (reads sysname_ptr /
+; sysname_len in section D — LMPR-independent — so it runs after the
+; LMPR restore without issue).
                 jp      sysname_parse_generic
 
 
@@ -352,16 +402,23 @@ sysname_lookup_sysreg:
 ; -----------------------------------------------------------------------
 sysname_lookup_pstate:
                 call    sysname_setup
-                ld      a, 2
-                ld      (sysname_field_count), a
-                ld      hl, pstate_table
-                call    sysname_match
-                jp      nz, fail
-                ld      a, (sysreg_fields + 0)
+                call    sysname_lmpr_default_in
+                call    sysname_stage_to_comm
+                call    paged_call
+                defw    SYSREG_PSTATE_ENTRY
+                defb    SYSREG_DATA_PAGE
+                or      a
+                jr      z, sysname_lookup_pstate_miss
+; Hit: result[0]=op1 → B, result[1]=op2 → C (read while LMPR default).
+                ld      a, (SYSREG_COMM_RESULT + 0)
                 ld      b, a
-                ld      a, (sysreg_fields + 1)
+                ld      a, (SYSREG_COMM_RESULT + 1)
                 ld      c, a
+                call    sysname_lmpr_restore
                 ret
+sysname_lookup_pstate_miss:
+                call    sysname_lmpr_restore
+                jp      fail                ; miss → fail (no generic form)
 
 
 ; -----------------------------------------------------------------------
@@ -373,20 +430,26 @@ sysname_lookup_pstate:
 ; -----------------------------------------------------------------------
 sysname_lookup_dc:
                 call    sysname_setup
-                ld      a, 4
-                ld      (sysname_field_count), a
-                ld      hl, dc_table
-; sysname_match writes the matched fields starting at sysname_field_dest;
-; for DC we want them at sysreg_fields+1.  Adjust the dest first.
-                push    hl
-                ld      hl, sysreg_fields + 1
-                ld      (sysname_field_dest), hl
-                pop     hl
-                call    sysname_match
-                jp      nz, fail
+                call    sysname_lmpr_default_in
+                call    sysname_stage_to_comm
+                call    paged_call
+                defw    SYSREG_DC_ENTRY
+                defb    SYSREG_DATA_PAGE
+                or      a
+                jr      z, sysname_lookup_dc_miss
+; Hit: 4 result fields (op1,CRn,CRm,op2) → sysreg_fields[1..4],
+; sysreg_fields[0] = 0 (op0 implicit in the DC base pattern).
+                ld      hl, SYSREG_COMM_RESULT
+                ld      de, sysreg_fields + 1
+                ld      bc, 4
+                ldir
+                call    sysname_lmpr_restore
                 xor     a
                 ld      (sysreg_fields + 0), a
                 ret
+sysname_lookup_dc_miss:
+                call    sysname_lmpr_restore
+                jp      fail                ; miss → fail
 
 
 ; -----------------------------------------------------------------------
@@ -402,30 +465,39 @@ sysname_lookup_dc:
 ; -----------------------------------------------------------------------
 sysname_lookup_tlbi:
                 call    sysname_setup
-                ld      a, 5
-                ld      (sysname_field_count), a
-                ld      hl, tlbi_table
-                push    hl
-                ld      hl, sysreg_fields + 1
-                ld      (sysname_field_dest), hl
-                pop     hl
-                call    sysname_match
-                jp      nz, fail
+                call    sysname_lmpr_default_in
+                call    sysname_stage_to_comm
+                call    paged_call
+                defw    SYSREG_TLBI_ENTRY
+                defb    SYSREG_DATA_PAGE
+                or      a
+                jr      z, sysname_lookup_tlbi_miss
+; Hit: 5 result fields (op1,CRn,CRm,op2,NeedsXt) → sysreg_fields[1..5],
+; sysreg_fields[0] = 0.  NeedsXt (sysreg_fields[5]) is returned in A.
+                ld      hl, SYSREG_COMM_RESULT
+                ld      de, sysreg_fields + 1
+                ld      bc, 5
+                ldir
+                call    sysname_lmpr_restore
                 xor     a
                 ld      (sysreg_fields + 0), a
-; The 5th matched field is NeedsXt.  Restore: shift entries so
-; (op1,CRn,CRm,op2) land at +1..+4 and NeedsXt is returned in A.
                 ld      a, (sysreg_fields + 5)
                 ret
+sysname_lookup_tlbi_miss:
+                call    sysname_lmpr_restore
+                jp      fail                ; miss → fail
 
 
 ; -----------------------------------------------------------------------
 ; sysname_setup — given operand index in A, populate sysname scratch
-; with name_ptr / name_len read from OPVAL_ARRAY[A] +2..+5, and reset
-; sysname_field_dest to sysreg_fields.
+; with name_ptr / name_len read from OPVAL_ARRAY[A] +2..+5.
+;
+; Reads OPVAL_ARRAY (section D) and writes sysname_ptr / sysname_len
+; (section D) — both visible only under the default HMPR, so this MUST
+; run on the main side, before paged_call swaps to HMPR=13.
 ;
 ; Input:  A = operand index.
-; Output: sysname_ptr / sysname_len set, sysname_field_dest = sysreg_fields.
+; Output: sysname_ptr / sysname_len set.
 ; -----------------------------------------------------------------------
 sysname_setup:
 ; Compute OPVAL_ARRAY + idx * OPVAL_STRIDE.  STRIDE=10 = 8+2.
@@ -449,85 +521,66 @@ sysname_setup:
                 inc     hl
                 ld      d, (hl)
                 ld      (sysname_len), de
-                ld      hl, sysreg_fields
-                ld      (sysname_field_dest), hl
                 ret
 
 
 ; -----------------------------------------------------------------------
-; sysname_match — walk a (name_len, name_bytes, fields) table looking
-; for a case-insensitive ASCII match against (sysname_ptr, sysname_len).
+; sysname_stage_to_comm — copy the operand name from (sysname_ptr) in
+; IN_BUF into the section-B comm buffer (SYSREG_COMM_NAME), and write
+; the length to SYSREG_COMM_LEN, so the page-13 matcher (which cannot
+; see IN_BUF — section C/D — under HMPR=13) can read it.
 ;
-; Input:  HL = table start.
-;         (sysname_ptr) / (sysname_len) — source name.
-;         (sysname_field_count) — fields per entry.
-;         (sysname_field_dest) — where to copy matched fields.
+; Names are bounded by the assembler's operand-length limits; the
+; longest sysname/dc/tlbi/pstate name is 13 chars ("cntp_cval_el0"),
+; well within the 16-byte SYSREG_COMM_NAME slot.  We clamp the copy to
+; 16 bytes defensively (never read past the comm slot) and write a
+; matcher length byte that preserves the original miss behaviour for
+; over-long names — see the length handling below.
 ;
-; Output: Z=1 + fields copied if match found; Z=0 if reached terminator.
+; Input:  sysname_ptr / sysname_len (set by sysname_setup).
+; Output: SYSREG_COMM_NAME[0..n-1] = name bytes (n = min(len,16));
+;         SYSREG_COMM_LEN = the matcher length byte (see below).
 ; Clobbers: A, BC, DE, HL.
+;
+; The matcher (do_match) reads only the single SYSREG_COMM_LEN byte and
+; rejects entries whose name_len differs.  The original sysname_match
+; ALSO rejected any source length with a nonzero high byte (len > 255)
+; before comparing — see the deleted sysname.asm:489-491.  We preserve
+; that exactly: if the true length has a nonzero high byte we write a
+; sentinel length (&FF) that cannot equal any table entry (all entry
+; names are <= 13 chars), forcing a clean miss.  Writing the raw low
+; byte instead would risk a false length match (e.g. len 263 → low byte
+; 7 == a 7-char entry's length), which the original code rejected.
 ; -----------------------------------------------------------------------
-sysname_match:
-sysname_match_entry:
-                ld      a, (hl)             ; entry name_len
+sysname_stage_to_comm:
+                ld      hl, (sysname_len)
+                ld      a, h
                 or      a
-                jp      z, sysname_match_done_nz   ; terminator
-                ld      c, a                ; C = entry name_len
-                inc     hl                  ; HL → entry name bytes
-; Compare lengths first.
-                ld      a, (sysname_len + 0)
-                cp      c
-                jp      nz, sysname_skip_entry
-                ld      a, (sysname_len + 1)
+                jr      z, sysname_stage_len_ok
+; True length >= 256: cannot match any entry.  Sentinel &FF length +
+; clamp the copy to 16 (the bytes are irrelevant since the length check
+; will miss, but we still must not read past the 16-byte comm slot).
+                ld      a, &ff
+                ld      (SYSREG_COMM_LEN), a
+                ld      l, 16
+                jr      sysname_stage_copy
+sysname_stage_len_ok:
+; len <= 255.  Write the true low byte as the matcher length.
+                ld      a, l
+                ld      (SYSREG_COMM_LEN), a
+                cp      17
+                jr      c, sysname_stage_copy     ; len <= 16 → copy as-is
+                ld      l, 16                     ; clamp copy to 16 bytes
+sysname_stage_copy:
+; Copy L bytes (1..16, or 0) from (sysname_ptr) → SYSREG_COMM_NAME.
+                ld      c, l
+                ld      b, 0
+                ld      a, c
                 or      a
-                jp      nz, sysname_skip_entry    ; src len > 255 ≠ entry len
-; Lengths match.  Compare bytes case-insensitively.
-                ld      de, (sysname_ptr)
-                ld      b, c                ; B = bytes to compare
-sysname_match_loop:
-                ld      a, (de)
-                call    to_lower_ascii
-                ld      c, a
-                ld      a, (hl)             ; entry byte (already lower)
-                cp      c
-                jp      nz, sysname_skip_entry_inloop
-                inc     hl
-                inc     de
-                djnz    sysname_match_loop
-; Match!  HL → first field byte.  Copy sysname_field_count bytes to
-; sysname_field_dest.
-                ld      a, (sysname_field_count)
-                ld      b, a
-                ld      de, (sysname_field_dest)
-sysname_copy_fields:
-                ld      a, (hl)
-                ld      (de), a
-                inc     hl
-                inc     de
-                djnz    sysname_copy_fields
-                xor     a                   ; Z=1
-                ret
-
-sysname_skip_entry_inloop:
-; HL currently points partway through entry name; advance to end of entry.
-                ld      a, b                ; A = bytes remaining
-                ld      c, a
-                ld      b, 0
-                add     hl, bc              ; HL → first field
-                jp      sysname_skip_fields
-
-sysname_skip_entry:
-; HL points at first byte of entry name; skip C name bytes + fields.
-                ld      b, 0
-                add     hl, bc              ; HL → first field
-sysname_skip_fields:
-                ld      a, (sysname_field_count)
-                ld      c, a
-                ld      b, 0
-                add     hl, bc              ; HL → next entry
-                jp      sysname_match_entry
-
-sysname_match_done_nz:
-                or      &ff
+                ret     z                   ; zero-length name → nothing to copy
+                ld      hl, (sysname_ptr)
+                ld      de, SYSREG_COMM_NAME
+                ldir
                 ret
 
 
@@ -705,99 +758,28 @@ sysname_expect_underscore:
 
 
 ; -----------------------------------------------------------------------
-; Data tables.  Only entries actually used by current M5 fixtures are
-; listed; adding a new sysreg / DC / TLBI op is mechanical (append the
-; entry before the 0-terminator).  All names must be lower case (the
-; matcher lowercases the source bytes before compare).
+; Data tables MOVED OFF-AXIS to physical page 13 (PR-2).
+;
+; sysreg_table / pstate_table / dc_table / tlbi_table and the generic
+; table-walker (formerly sysname_match) now live in
+; src/m3/sysreg_data.asm, assembled standalone into build/sysreg_data.bin
+; and HLOAD'd into page 13 at boot.  The four sysname_lookup_* routines
+; above reach them via paged_call (see SYSREG_*_ENTRY in trampoline.asm).
+; This freed the table + matcher bytes from the section-C code budget,
+; closing the spectrum4 release-bytematch FAIL00 while adding the 8
+; previously-missing sysregs (hcr_el2 / mair_el1 / scr_el3 / spsr_el3 /
+; tcr_el1 / ttbr0_el1 / ttbr1_el1 / vbar_el1).
+;
+; See src/m3/sysreg_data.asm and src/m3/trampoline.asm headers for the
+; split-design rationale (the matcher must be self-contained because
+; section C/D are paged away under HMPR=13).
 ; -----------------------------------------------------------------------
-
-; sysreg_table — 12 entries.
-; Format per entry: [name_len u8][name_bytes][op0 u8][op1 u8][CRn u8][CRm u8][op2 u8].
-sysreg_table:
-                defb    9
-                defm    "sctlr_el1"
-                defb    3, 0, 1, 0, 0
-                defb    4
-                defm    "nzcv"
-                defb    3, 3, 4, 2, 0
-                defb    9
-                defm    "currentel"
-                defb    3, 0, 4, 2, 2
-                defb    8
-                defm    "midr_el1"
-                defb    3, 0, 0, 0, 0
-                defb    9
-                defm    "mpidr_el1"
-                defb    3, 0, 0, 0, 5
-                defb    7
-                defm    "esr_el1"
-                defb    3, 0, 5, 2, 0
-                defb    7
-                defm    "elr_el1"
-                defb    3, 0, 4, 0, 1
-                defb    7
-                defm    "far_el1"
-                defb    3, 0, 6, 0, 0
-                defb    10
-                defm    "cntpct_el0"
-                defb    3, 3, 14, 0, 1
-                defb    12
-                defm    "cntp_ctl_el0"
-                defb    3, 3, 14, 2, 1
-                defb    13
-                defm    "cntp_cval_el0"
-                defb    3, 3, 14, 2, 2
-                defb    7
-                defm    "elr_el3"
-                defb    3, 6, 4, 0, 1
-                defb    0
-
-
-; pstate_table — 2 entries.
-; Format per entry: [name_len u8][name_bytes][op1 u8][op2 u8].
-pstate_table:
-                defb    7
-                defm    "daifset"
-                defb    3, 6
-                defb    7
-                defm    "daifclr"
-                defb    3, 7
-                defb    0
-
-
-; dc_table — 3 entries.
-; Format per entry: [name_len u8][name_bytes][op1 u8][CRn u8][CRm u8][op2 u8].
-dc_table:
-                defb    5
-                defm    "civac"
-                defb    3, 7, 14, 1
-                defb    4
-                defm    "cvac"
-                defb    3, 7, 10, 1
-                defb    4
-                defm    "ivac"
-                defb    0, 7, 6, 1
-                defb    0
-
-
-; tlbi_table — 2 entries.
-; Format per entry:
-;   [name_len u8][name_bytes][op1 u8][CRn u8][CRm u8][op2 u8][NeedsXt u8].
-tlbi_table:
-                defb    7
-                defm    "vmalle1"
-                defb    0, 8, 7, 0, 0
-                defb    6
-                defm    "vae1is"
-                defb    0, 8, 3, 1, 1
-                defb    0
 
 
 ; -----------------------------------------------------------------------
-; Scratch.
+; Scratch (main side, section D under default HMPR).
 ; -----------------------------------------------------------------------
 sysname_ptr:           defw    0       ; pointer to name bytes in IN_BUF
 sysname_len:           defw    0       ; length of name (u16; effective u8)
-sysname_field_count:   defb    0       ; bytes to copy on match
-sysname_field_dest:    defw    0       ; where to copy matched fields
+sysname_lmpr_save:     defb    0       ; live LMPR saved across the paged_call
 sysreg_fields:         defs    8       ; 5..8 bytes — packed encoding tuple

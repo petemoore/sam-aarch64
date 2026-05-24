@@ -305,6 +305,67 @@ LMPR_TEST_MEM:  equ     &20 + TEST_MEM_PAGE         ; = &2D
 PAGED_CALL_TEST_PAGE:   equ     14
 
 
+; sysreg lookup data page (PRODUCTION feature — both variants).
+;
+; Per docs/plans/2026-05-29-m6-closure-release-bytematch.md PR-2, as
+; corrected by the PR-2 implementation spec.  The four sysname lookup
+; tables (sysreg / pstate / dc / tlbi) and the generic table-walker
+; were moved off the section-C code budget into physical page 13.  The
+; matcher runs under HMPR=13 (reached via paged_call) and is fully
+; self-contained — it reads the operand name from / writes the matched
+; fields to the section-B comm buffer below, never touching section
+; C/D (which are paged away under HMPR=13).  See src/m3/sysreg_data.asm
+; and src/m3/sysname.asm headers for the split-design rationale.
+;
+; Page 13 was previously reused by the BUILD_TESTS-only off-axis
+; test_mem payload (LMPR_TEST_MEM above).  That use is a transient
+; LMPR-swap into section A; this sysreg use is an HMPR=13 paged_call.
+; They never overlap in time (test_mem self-tests run to completion at
+; boot before main_assemble; the sysreg matcher only runs during
+; main_assemble).  Both occupy page 13's physical bytes from &0000 /
+; &8000 respectively — but the off-axis payload assembles at org &0000
+; (section-A view) while sysreg_data assembles at org &8000 (section-C
+; view); the SAME physical page-13 bytes back both.  Because the two
+; payloads are loaded into page 13 at DIFFERENT times would clash, the
+; build deposits them as separate disk files: load_test_mem_off_axis
+; (BUILD_TESTS) loads test_mem.bin first and the self-tests consume it;
+; load_page13_payload then overwrites page 13 with sysreg_data.bin
+; before main_assemble.  See assembler.asm boot-sequence ordering.
+SYSREG_DATA_PAGE:       equ     13
+
+; paged_call entry points into the page-13 data file (one jump-table
+; slot per sysname table; 8 bytes each — see sysreg_data.asm).  Used as
+; the `defw <target>` in the call-site shape
+; `call paged_call / defw SYSREG_*_ENTRY / defb SYSREG_DATA_PAGE`.
+SYSREG_SYSREG_ENTRY:    equ     &8000
+SYSREG_PSTATE_ENTRY:    equ     &8008
+SYSREG_DC_ENTRY:        equ     &8010
+SYSREG_TLBI_ENTRY:      equ     &8018
+
+; sysreg comm buffer — LMPR-stable section B, shared between the
+; main-side staging code (sysname.asm, default HMPR) and the page-13
+; matcher (HMPR=13).  Placed in the verified-free region &7E72..&7ECF
+; between the paged_call body+trailer end (&7E71; body is 50 bytes from
+; PAGED_CALL_DST=&7E40) and PAGED_CALL_HMPR_SAVE (&7ED0).
+;
+; Safety from stack clobber: during a paged_call the SP is set to
+; TRAMP_SAFE_SP=&7F00 and grows DOWN as the target pushes.  The page-13
+; matcher is a shallow leaf (only sysreg_tolower's one return slot, ~2-4
+; bytes), and the paged_call body itself pushes 4 bytes (trailer + target)
+; at &7EFC..&7EFF before the swap.  Deepest realistic SP reach is well
+; above &7EE0 — 56 bytes clear of the buffer end (&7E98) and clear of
+; PAGED_CALL_HMPR_SAVE (&7ED0).  The boot self-test
+; run_sysreg_paged_self_tests (BUILD_TESTS) proves the buffer survives a
+; paged_call's stack usage with a sentinel.
+;
+; These addresses are duplicated (and kept in lock-step) in
+; src/m3/sysreg_data.asm, which is assembled standalone and cannot see
+; these equ's.
+SYSREG_COMM_NAME:       equ     TRAMPOLINE_DST + &80    ; = &7E80, 16 bytes
+SYSREG_COMM_LEN:        equ     TRAMPOLINE_DST + &90    ; = &7E90, 1 byte
+SYSREG_COMM_RESULT:     equ     TRAMPOLINE_DST + &91    ; = &7E91, up to 8 bytes
+
+
 TRAMPOLINE_DST: equ     &7E00          ; section-B copy destination
                                        ; (under LMPR_DEFAULT, section B
                                        ; = page 1).  Near the top of
