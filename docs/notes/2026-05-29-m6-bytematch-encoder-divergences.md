@@ -1,9 +1,11 @@
 # M6 release byte-match — SAM-side encoder divergences (2026-05-29)
 
-Status: **investigation complete; fixes in progress.** This note is the
-authoritative tracking artifact for the encoder bugs the spectrum4
-release byte-match surfaced. Each bug class below is a work item; the
-fix-status column is updated as fixes land.
+Status: **FULL BYTE-MATCH ACHIEVED (2026-05-29).** All encoder
+divergences are closed: the SAM-side assembler's OUT now byte-matches
+the GNU oracle on the spectrum4 release image (`cmp build/release.gnu.img
+build/release.sam.bin` → exit 0, no differences). This note is the
+authoritative tracking artifact for the encoder bugs the byte-match
+surfaced; every class below is now done.
 
 ## TL;DR
 
@@ -97,16 +99,58 @@ output offset, the GNU (correct) text, and the SAM (wrong) text.
 | 2 | MOV (wide immediate) — wrong 16-bit chunk / `hw` shift | 30 | ✅ done (2026-05-29) |
 | 3 | MOV (bitmask immediate) alias unhandled | 10 | ✅ done (2026-05-29) |
 | 4 | MOV (inverted wide immediate) → MOVN; emits invalid encoding | 7 | ✅ done (2026-05-29) |
-| 5 | ADRP page-delta sign/high-bit wrong under large origin | 13 | ☐ open |
+| 5 | ADRP page-delta sign/high-bit wrong under large origin | 13 | ✅ done (2026-05-29) |
 | 6 | `csetm` condition not inverted | 2 | ✅ done (csetm commit) |
-| 7 | Logical (bitmask) immediate value wrong (`and`/etc.) | 1 | ☐ open |
+| 7 | Logical (bitmask) immediate value wrong (`bic`-imm) | 1 | ✅ done (2026-05-29) |
+| — | stray `mov x9, RAM_DISK_SIZE` (`.set` constant + ORIGIN_HIGH) | 1 | ✅ done (2026-05-29) |
 
 **Release-diff progress:** 358 (initial) → 356 (after csetm, Class 6) →
-235 (after Classes 2+3+4) → **16 (after Class 1)**.  The 16 residual
-differing bytes are the still-open classes: Class 5 (ADRP, 13 sites — the
-`0x5a..0x15fa` immhi-sign diffs), Class 7 (`and w7,w7,#0xfffffffe` at
-`0x51a1/0x51a2`), and one stray at `0x3596` (to be triaged with Class 5/7).
-Class-1 sample offsets `0x169c` / `0x38c4` now byte-match (confirmed gone).
+235 (after Classes 2+3+4) → 16 (after Class 1) → 3 (after Class 5, ADRP) →
+2 (after the `.set`-absolute stray fix) → **0 (FULL BYTE-MATCH)** after
+Class 7 (`bic`-immediate).
+
+### Class 5 — ADRP (done)
+
+Under origin `0xfffffff0_00000000` an adrp page-delta whose low 32 bits
+have bit 31 set (e.g. `0xff841000`) is POSITIVE in 33-bit space (bit 32
+clear); the 32-bit-only encoder did an arithmetic `>>12` that mis-signed
+it.  Fix: compute the page-difference in full 64-bit width
+(target = BCDE-low ++ ORIGIN_HIGH-high, pc = PASS_PC ++ ORIGIN_HIGH —
+the origins cancel), mask to 33 bits, sign-extend from bit 32, then the
+`>>12`/pack tail.  Ports `tools/refenc/pass2.go:363-369` +
+`tools/aarch64enc/slots_adrp.go:11-24`.  The boot self-test assertion in
+`test_slots.asm` for target `0xFFFFF000` was stale (it assumed
+32-bit-signed operand semantics → `0x60FFFFE0`); corrected to the
+faithful `0x607FFFE0` (matches refenc `adrp x0,0xFFFFF000`).  ORIGIN_HIGH
+is now zeroed at cold boot so the pre-`main_assemble` self-tests see a
+defined value.  Fixture: `tests/m6/sources/inst_adrp_highorigin.s`.
+
+### Stray `mov x9, RAM_DISK_SIZE` (done)
+
+The Class-1 fix re-applied ORIGIN_HIGH to EVERY symbol at eval time —
+correct for labels, wrong for `.set`/`.equ` ABSOLUTE constants.
+`mov x9, RAM_DISK_SIZE` (`.set RAM_DISK_SIZE,0x10000000`) saw
+`0xfffffff0_10000000`, failing the MOV single-chunk decomposition and
+emitting `mov x9,#0` (`d2800009` vs GNU `d2a20009`).  Fix: a 64-byte
+per-id `SYMTAB_ABS_BITMAP`; `main_dir_equ_pass1` marks a symbol absolute
+when its evaluated high word != ORIGIN_HIGH; `eval_push_sym` zero-fills
+the high word for absolute symbols and re-applies ORIGIN_HIGH only for
+origin-relative ones.  Faithful to Go (Symbols[name] holds the full
+value, eval adds no origin: `pass1.go:154/296`, `pass2.go:150`).
+Fixture: `tests/m6/sources/inst_mov_setconst.s`.
+
+### Class 7 — `bic` immediate (done)
+
+`bic Rd,Rn,#imm` = `and Rd,Rn,#~imm`.  The generic form-table path fed
+the AND-imm encoding the RAW immediate, so `bic w7,w7,#1` emitted
+`and w7,w7,#0x1` (`120000e7`) vs GNU `and w7,w7,#0xfffffffe`
+(`121f78e7`).  Fix (csetm-style in-place mutate + fall-through): negate
+operand 2 (`~imm`) for the (Rd,Rn,#imm) shape of bic, then let the
+generic encoder produce the AND.  Ports `tools/refenc/pass2.go:304`
+(case 47) + `encodeBicImm` (`pass2.go:1397`).  Fixture:
+`tests/m6/sources/inst_bic_imm.s`.
+
+Class-1 sample offsets `0x169c` / `0x38c4` byte-match (confirmed gone).
 The Class-2/3/4 fix is a single MOV-alias
 auto-selection intercept (`encode_mov_imm_word` in `src/m3/intercepts.asm`),
 a faithful port of `tools/refenc/pass2.go:438-502` (`tryEncodeMovImm`):
@@ -216,7 +260,7 @@ The MOV→MOVN path (when the value can't be a single MOVZ but its
 inverse can) is missing/broken; worse, the result is not a legal
 instruction. **Functional-correctness risk, not just byte-match.**
 
-### Class 5 — ADRP page-delta wrong under large origin (13 sites)
+### Class 5 — ADRP page-delta wrong under large origin (13 sites) — ✅ DONE (see TL;DR Class 5 above)
 
 ```
 @0x58    GNU adrp x2, 0xff841000      SAM adrp x2, 0xffffffffff841000
@@ -237,14 +281,17 @@ is being computed/sign-extended wrong under origin
 `csetm Wd,cond` = `csinv Wd,WZR,WZR,invert(cond)`. SAM is not inverting
 the condition (or inverting the wrong field). Small, self-contained.
 
-### Class 7 — logical (bitmask) immediate value wrong (1 site)
+### Class 7 — logical (bitmask) immediate value wrong (1 site) — ✅ DONE
 
 ```
 @0x51a0  GNU and w7, w7, #0xfffffffe    SAM and w7, w7, #0x1
 ```
-`encode_logical_imm` (`src/m3/encoder.asm:381`) produced the encoding
-for `0x1` instead of `0xfffffffe` (= `~0x1`). Likely the same
-N:immr:imms search that Class 3 needs; fixing one may fix both.
+Root cause was NOT the bitmask slot encoder (it is a correct port) but
+the `bic`-immediate alias: the source is `bic w7, w7, #1`, which is
+`and w7, w7, #~1` = `and w7, w7, #0xfffffffe`.  The generic form-table
+path encoded the AND with the RAW immediate (no negate).  Fixed by
+negating operand 2 for the bic-immediate shape — see the "Class 7" entry
+in the TL;DR above.
 
 ## Fix plan (ordering)
 
