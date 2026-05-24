@@ -59,14 +59,18 @@
 encode_mem_word:
                 ld      (encode_mem_mnem), a
 
+; -- Compute (sizeBits, scale, opc) from mnemonic + Rt-kind.  Covers
+;    stur/ldur too (they fall through to the default ldr/str branch on
+;    the Mac side via Rt-kind selection).  Sets encode_mem_size /
+;    encode_mem_scale / encode_mem_opc.
+                call    mem_size_scale_opc
+
 ; -- Branch on unscaled mnemonics (stur=74, ldur=75) ------------------
+                ld      a, (encode_mem_mnem)
                 cp      74
                 jp      z, encode_mem_unscaled
                 cp      75
                 jp      z, encode_mem_unscaled
-
-; -- Compute (sizeBits, scale, opc) from mnemonic + Rt-kind -----------
-                call    mem_size_scale_opc
 
 ; -- Branch on shape ---------------------------------------------------
                 ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1)
@@ -74,7 +78,15 @@ encode_mem_word:
                 jp      z, encode_mem_scaled
                 cp      1                   ; MemBaseOff
                 jp      z, encode_mem_scaled
-; (shapes 2..6 land in later sub-tasks; fall through fail for now.)
+                cp      2                   ; MemBaseOffPre
+                jp      z, encode_mem_preindex
+                cp      3                   ; MemBaseOffPost
+                jp      z, encode_mem_postindex
+                cp      4                   ; MemBaseIdx
+                jp      z, encode_mem_regoff
+                cp      5                   ; MemBaseIdxShifted
+                jp      z, encode_mem_regoff
+; (shape 6 = MemBaseIdxExtended lands in commit 3/4 of this PR.)
                 jp      fail
 
 
@@ -370,36 +382,37 @@ encode_mem_promote_ok:
 ; ---------------------------------------------------------------------
 encode_mem_unscaled:
 encode_mem_unscaled_from_promote:
-; -- sizeBits from Rt's kind: W → 10, X → 11 -------------------------
-                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0)
-                cp      OP_KIND_REG_X
-                jr      z, encode_mem_unscaled_x
-                cp      OP_KIND_REG_W
-                jp      nz, fail
-                ld      a, &02              ; sizeBits = 10
-                jr      encode_mem_unscaled_have_size
-encode_mem_unscaled_x:
-                ld      a, &03              ; sizeBits = 11
-encode_mem_unscaled_have_size:
-                ld      (encode_mem_size), a
+; mode_bits = 00 for unscaled (STUR/LDUR + auto-promote).  Pre/post-
+; index use the same encoding template but with bits 11:10 = 11 / 01.
+                xor     a
+                ld      (encode_mem_idx_mode), a
+                jr      encode_mem_unscaled_body
 
-; -- isLoad → opc.  ldr=5, ldur=75, ldrb=54, ldrh=56, ldrsb=85, ldrsh=86,
-;    ldrsw=87 are loads; stur=74, str=6, strb=55, strh=57 are stores.
-;
-; For STUR / LDUR (direct mnem), and the auto-promote path from
-; ldr/str/ldrb/strb/ldrh/strh, we use opc=01 (load) or 00 (store).
-; The signed-extend loads (85/86/87) use a different opc per Rt width;
-; M5 PR-C Task 10 will reach this through the auto-promote of negative
-; offsets — but Task 10's ldrs* will land here too, with their dedicated
-; opc lookup.  For now ldrs* are not handled by this routine and will
-; fail.
-                ld      a, (encode_mem_mnem)
-                call    is_mem_load_mnemonic
-                ld      a, 0
-                jr      nz, encode_mem_unscaled_no_load
-                ld      a, 1
-encode_mem_unscaled_no_load:
-                ld      (encode_mem_opc), a
+; ---------------------------------------------------------------------
+; encode_mem_preindex — pre-index shape (MemBaseOffPre, shape 2).
+;   bits 11:10 = 11.
+; ---------------------------------------------------------------------
+encode_mem_preindex:
+                ld      a, &03
+                ld      (encode_mem_idx_mode), a
+                jr      encode_mem_unscaled_body
+
+; ---------------------------------------------------------------------
+; encode_mem_postindex — post-index shape (MemBaseOffPost, shape 3).
+;   bits 11:10 = 01.
+; ---------------------------------------------------------------------
+encode_mem_postindex:
+                ld      a, &01
+                ld      (encode_mem_idx_mode), a
+                ; fall through
+
+encode_mem_unscaled_body:
+; encode_mem_size and encode_mem_opc are pre-computed by
+; mem_size_scale_opc (called from encode_mem_word).  The opc field
+; carries the right value: 01 for loads (incl. STUR/LDUR variants and
+; auto-promote source mnemonics), 00 for stores, and 10/11 for the
+; signed-extend loads (ldrsb/ldrsh/ldrsw at Task 10 — those reach this
+; body via the auto-promote of negative scaled offsets).
 
 ; -- Read OPMEM_OFF into a 16-bit working buffer (low 2 bytes) and check
 ; the high bytes for sign-extension consistency.  imm9 must be in
@@ -504,6 +517,13 @@ encode_mem_unscaled_have_off:
                 rlca
                 rlca
                 rlca                        ; A = imm9[3:0] << 4
+                ld      h, a
+; OR in idx_mode (bits 11:10 of word = byte 1 bits 3:2).
+                ld      a, (encode_mem_idx_mode)
+                and     &03
+                add     a, a
+                add     a, a                ; A = mode << 2
+                or      h
                 ld      h, a
 
 ; imm9 bits 7:4 → byte 2 bits 3:0 (bits 19:16 of word; imm9 << 12 puts
@@ -680,6 +700,151 @@ is_mem_load_mnemonic:
 
 
 ; ---------------------------------------------------------------------
+; encode_mem_regoff — register-offset shapes (MemBaseIdx = 4 and
+; MemBaseIdxShifted = 5).
+;
+; Mac-side reference: tools/refenc/pass2.go:820-841.
+;
+; AArch64 encoding (LDR/STR register form):
+;   size(2)|111|00|opc(2)|1|Rm|option(3)|S|10|Rn|Rt
+;
+; option:
+;   011 = LSL (X-form Rm)         — shape 4 / 5
+;   xxx = UXTW/SXTW/etc (W-form)  — shape 6 (extended)
+;
+; S = 0 when shift_amt == 0 (no LSL #N).  S = 1 when shift_amt is
+; non-zero (LSL #N applied).  ARM ARM allows only N == log2(scale).
+; Mac side does no further validation (the parser already ensures it).
+;
+; Common shape-4 vs shape-5 difference: shape 5 always uses LSL (idx is
+; an Xm, option=011) with a non-zero shift amount.  Shape 4 has no
+; explicit shift (shift_amt=0, S=0).
+; ---------------------------------------------------------------------
+encode_mem_regoff:
+; option = 011 (LSL, X-form Rm) for both shapes.  Extended-register
+; shape (6) goes through a separate routine.
+                ld      a, &03
+                ld      (encode_mem_option), a
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 6)
+                or      a
+                ld      a, 0
+                jr      z, encode_mem_regoff_s
+                ld      a, 1
+encode_mem_regoff_s:
+                ld      (encode_mem_s), a
+                jp      encode_mem_regoff_body
+
+
+; ---------------------------------------------------------------------
+; encode_mem_regoff_body — common 32-bit packer for the register-offset
+; shapes (4 / 5 / 6).
+;
+; Inputs (pre-computed):
+;   encode_mem_size    sizeBits (2)
+;   encode_mem_opc     opc (2)
+;   encode_mem_option  option (3)
+;   encode_mem_s       S bit (0/1)
+;   OPVAL_ARRAY[0]     Rt
+;   OPVAL_ARRAY[1]     OpMem: +2 base, +3 idx
+; ---------------------------------------------------------------------
+encode_mem_regoff_body:
+; -- Build word.  Base: (size<<30) | (0b111<<27) | (opc<<22) | (1<<21) | (0b10<<10)
+;   = (size<<30) | 0x38200400 | (opc<<22)
+;
+; Layout:
+;   byte 0 = (Rn & 7) << 5 | Rt
+;   byte 1 = (Rn >> 3) bits 1:0 | 0b10 << 2 = 0x08 | Rn_hi
+;   byte 2 = Rm (5 bits) | option[0] << 5 | option[1] << 6 | option[2] << 7
+;            Actually: bits 20:16 = Rm; bits 15:13 = option; S at bit 12.
+;            We compose byte 2 (bits 23:16) and byte 1 (bits 15:8).
+;
+; Easier: H/L bytes (low 16 of word):
+;   bits 15:13 = option       (H bits 7:5)
+;   bit  12    = S            (H bit  4)
+;   bits 11:10 = 10           (H bits 3:2)
+;   bits 9:5   = Rn           (H bits 1:0 | L bits 7:5)
+;   bits 4:0   = Rt           (L bits 4:0)
+;
+; D/E bytes (high 16):
+;   bits 31:30 = size         (D bits 7:6)
+;   bits 29:24 = 0b111000     (D bits 5:0 = 0x38)
+;   bits 23:22 = opc          (E bits 7:6)
+;   bit  21    = 1            (E bit  5)
+;   bits 20:16 = Rm           (E bits 4:0)
+
+                ld      hl, &0000
+                ld      d, &38
+                ld      a, (encode_mem_size)
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a                ; size << 6
+                or      d
+                ld      d, a
+                ld      a, (encode_mem_opc)
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a                ; opc << 6
+                or      &20                 ; bit 21 = 1
+                ld      e, a
+; Rm at bits 20:16 → E bits 4:0.
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 3)
+                and     &1f
+                or      e
+                ld      e, a
+
+; option << 5 → H bits 7:5.
+                ld      a, (encode_mem_option)
+                and     &07
+                rrca
+                rrca
+                rrca                        ; A bits 7:5 = option
+                ld      h, a
+; S << 4 → H bit 4.
+                ld      a, (encode_mem_s)
+                or      a
+                jr      z, encode_mem_regoff_no_s
+                ld      a, h
+                or      &10
+                ld      h, a
+encode_mem_regoff_no_s:
+; bits 11:10 = 10 → H bits 3:2.
+                ld      a, h
+                or      &08
+                ld      h, a
+
+; Rn at bits 9:5: Rn[2:0] → L bits 7:5; Rn[4:3] → H bits 1:0.
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2)
+                and     &1f
+                ld      b, a
+                and     &07
+                rrca
+                rrca
+                rrca
+                or      l
+                ld      l, a
+                ld      a, b
+                and     &18
+                rrca
+                rrca
+                rrca
+                or      h
+                ld      h, a
+
+; Rt at bits 4:0 → L bits 4:0.
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1)
+                and     &1f
+                or      l
+                ld      l, a
+                ret
+
+
+; ---------------------------------------------------------------------
 ; encode_pair_word — top-level pair encoder (ldp/stp).  Implemented in
 ; M5 PR-C Task 9.  For now, fail cleanly.
 ; ---------------------------------------------------------------------
@@ -695,3 +860,6 @@ encode_mem_size:        defb    0       ; sizeBits (2 bits, in low bits of byte)
 encode_mem_scale:       defb    0       ; 1, 2, 4, or 8
 encode_mem_opc:         defb    0       ; opc field (2 bits)
 encode_mem_imm12:       defb    0, 0    ; imm12 (B:C = high:low; stored low,high)
+encode_mem_idx_mode:    defb    0       ; bits 11:10 (00 unscaled, 01 post, 11 pre)
+encode_mem_option:      defb    0       ; option(3) for register-offset shapes
+encode_mem_s:           defb    0       ; S bit (0/1) for register-offset shapes

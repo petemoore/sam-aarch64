@@ -136,6 +136,82 @@ run_mem_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &20, &04, &40, &b9
 
+; ===================== Task 8: pre/post/register =======================
+
+; -- (5) ldr x0, [x1, #8]!           →  0xf8408c20 (pre-index) ---------
+                call    test_mem_wipe
+                ld      a, OP_KIND_REG_X
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                ld      a, OP_KIND_MEM
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
+                ld      a, 2                ; shape = MemBaseOffPre
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+                ld      a, 1
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2), a
+                ld      a, 8
+                ld      (OPMEM_OFF + 0), a
+                ld      a, 5
+                call    encode_mem_word
+                call    assert_eq32_de_hl_imm
+                defb    &20, &8c, &40, &f8
+
+; -- (6) ldr x0, [x1], #8            →  0xf8408420 (post-index) --------
+                call    test_mem_wipe
+                ld      a, OP_KIND_REG_X
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                ld      a, OP_KIND_MEM
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
+                ld      a, 3                ; shape = MemBaseOffPost
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+                ld      a, 1
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2), a
+                ld      a, 8
+                ld      (OPMEM_OFF + 0), a
+                ld      a, 5
+                call    encode_mem_word
+                call    assert_eq32_de_hl_imm
+                defb    &20, &84, &40, &f8
+
+; -- (7) ldr x0, [x1, x2]            →  0xf8626820 (reg-offset) --------
+                call    test_mem_wipe
+                ld      a, OP_KIND_REG_X
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                ld      a, OP_KIND_MEM
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
+                ld      a, 4                ; shape = MemBaseIdx
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+                ld      a, 1
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2), a
+                ld      a, 2                ; idx Rm = 2
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 3), a
+                ld      a, 1                ; idx_width = X
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 4), a
+                ld      a, 5
+                call    encode_mem_word
+                call    assert_eq32_de_hl_imm
+                defb    &20, &68, &62, &f8
+
+; -- (8) ldr x0, [x1, x2, lsl #3]    →  0xf8627820 (reg-shifted) -------
+                call    test_mem_wipe
+                ld      a, OP_KIND_REG_X
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                ld      a, OP_KIND_MEM
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
+                ld      a, 5                ; shape = MemBaseIdxShifted
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+                ld      a, 1
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2), a
+                ld      a, 2
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 3), a
+                ld      a, 1                ; idx_width = X
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 4), a
+                ld      a, 3                ; shift_amt non-zero → S=1
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 6), a
+                ld      a, 5
+                call    encode_mem_word
+                call    assert_eq32_de_hl_imm
+                defb    &20, &78, &62, &f8
+
                 ret
 
 
