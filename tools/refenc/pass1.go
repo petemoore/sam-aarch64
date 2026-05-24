@@ -47,7 +47,7 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 				}
 				// No PC contribution.
 			} else {
-				n, err := directiveSize(rec)
+				n, err := directiveSizeAtPC(rec, pc)
 				if err != nil {
 					return nil, err
 				}
@@ -104,6 +104,13 @@ func extractSymID(expr []byte) (uint16, bool) {
 }
 
 func directiveSize(rec format.Record) (int64, error) {
+	return directiveSizeAtPC(rec, 0)
+}
+
+// directiveSizeAtPC computes the byte contribution of a directive
+// record at the given PC. For most directives pc is ignored; for
+// .balign it is needed to compute the padding.
+func directiveSizeAtPC(rec format.Record, pc int64) (int64, error) {
 	name := format.DirectiveName(rec.DirectiveID)
 	switch name {
 	case ".byte":
@@ -135,11 +142,21 @@ func directiveSize(rec format.Record) (int64, error) {
 		return v, nil
 	case ".inst":
 		return 4, nil
-	case ".text", ".data", ".global":
+	case ".text", ".data", ".global", ".equ", ".set":
 		return 0, nil
-	case ".balign", ".org":
-		// Approximate: 0 size. Real implementation rounds PC up
-		// or sets it — deferred.
+	case ".balign":
+		or := format.NewOperandReader(rec.Operands)
+		o, _ := or.Next()
+		align, ok := format.EvalConst(o.Expr)
+		if !ok {
+			return 0, fmt.Errorf(".balign with non-constant operand")
+		}
+		if align <= 1 {
+			return 0, nil
+		}
+		pad := (align - (pc % align)) % align
+		return pad, nil
+	case ".org":
 		return 0, nil
 	}
 	return 0, fmt.Errorf("unknown directive %q in pass1", name)
