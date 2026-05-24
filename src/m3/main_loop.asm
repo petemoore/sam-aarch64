@@ -468,7 +468,9 @@ main_handle_inst_parse_loop:
                 jp      z, main_parse_extended_reg
                 cp      OP_KIND_MEM
                 jp      z, main_parse_mem
-; Anything else (STRING, SYS_NAME, LIT_POOL) is M5 PR-D/E territory.
+                cp      OP_KIND_SYS_NAME
+                jp      z, main_parse_sys_name
+; Anything else (STRING, LIT_POOL) is M5 PR-D Task 14 / PR-E territory.
                 jp      fail
 
 
@@ -890,6 +892,58 @@ main_parse_mem_idxe_zero:
                 ld      (de), a
                 inc     de
                 djnz    main_parse_mem_idxe_zero
+                pop     bc
+                jp      main_handle_inst_advance
+
+
+; ---- Parse OpSysName (0x0B) — sysreg / PSTATE / DC-op / TLBI-op name --
+;
+; On entry: kind byte (0x0B) is already at OPVAL[+0]; DE points at +1.
+;           HL points at on-disk byte just past the kind byte (start of
+;           len u16).
+;
+; On-disk payload (operands.go:220-224, WriteSysName):
+;   [len u16 LE][bytes...]
+;
+; In-memory layout written into OPVAL_ARRAY entry (10 bytes total):
+;   +0 kind=0x0B
+;   +1 zero (reserved)
+;   +2..+3 name_ptr (16-bit pointer into IN_BUF)
+;   +4..+5 name_len (16-bit length)
+;   +6..+9 zero
+;
+; The encoder (sysname.asm) consumes (ptr,len) to look up the name in
+; one of the four tables: sysregs, PSTATE fields, DC ops, TLBI ops.
+main_parse_sys_name:
+                xor     a
+                ld      (de), a             ; +1 = 0 (reserved)
+                inc     de
+                ld      c, (hl)             ; len LSB
+                inc     hl
+                ld      b, (hl)             ; len MSB
+                inc     hl                  ; HL → name bytes
+                ld      a, l
+                ld      (de), a             ; +2 = name_ptr LSB
+                inc     de
+                ld      a, h
+                ld      (de), a             ; +3 = name_ptr MSB
+                inc     de
+                ld      a, c
+                ld      (de), a             ; +4 = name_len LSB
+                inc     de
+                ld      a, b
+                ld      (de), a             ; +5 = name_len MSB
+                inc     de
+; Advance HL by BC (the name bytes).
+                add     hl, bc
+; Zero +6..+9 (4 bytes of padding).
+                push    bc
+                ld      b, 4
+                xor     a
+main_parse_sys_name_zero:
+                ld      (de), a
+                inc     de
+                djnz    main_parse_sys_name_zero
                 pop     bc
                 jp      main_handle_inst_advance
 

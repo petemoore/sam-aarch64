@@ -92,6 +92,7 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
                 include "form_lookup.asm"
                 include "encoder.asm"
                 include "intercepts.asm"
+                include "sysname.asm"
                 include "reader.asm"
                 include "main_loop.asm"
                 include "symbols.asm"
@@ -163,6 +164,7 @@ if defined(BUILD_TESTS)
                 call    run_shifted_reg_self_tests
                 call    run_extended_reg_self_tests
                 call    run_mem_self_tests
+                call    run_sysname_self_tests
 endif
 
 ; -- Install the section-B HLOAD trampoline.  Must happen BEFORE
@@ -256,5 +258,6 @@ if defined(BUILD_TESTS)
                 include "test_shifted_reg.asm"
                 include "test_extended_reg.asm"
                 include "test_mem.asm"
+                include "test_sysname.asm"
                 include "test_trampoline.asm"
 endif
