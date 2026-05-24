@@ -6,22 +6,31 @@
 //	1  auto       T6S1..T6S2   (BASIC AUTO: CLEAR + LOAD "assembler" + CALL)
 //	2  assembler  T6S3         (the M3 Z80 assembler binary)
 //	3  enctab.enc T6S4         (encoder table produced by enctab-gen)
-//	4  IN         (after)      (the .tbn source file, if provided)
+//	4  p13        (after)      (paged_call self-test payload, if -p13)
+//	5  IN         (after)      (the .tbn source file, if provided)
 //
 // The AUTO BASIC references "assembler" (not "stub" as in M0).
 //
 // Usage:
 //
-//	build-m3-disk <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>
+//	build-m3-disk [-p13 <p13.bin>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>
 //
-// Three-arg form (legacy): no IN file is added — used by Task-3 boot
-// tests where the assembler exits before reading IN.
+// The -p13 flag is optional; when present, the named file is added as a
+// CODE file called "p13" on the disk image.  Consumed at boot by the
+// BUILD_TESTS-only load_page13_payload (src/m3/loader.asm) for the
+// paged_call self-test in src/m3/test_paged_call.asm.  Per
+// docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1.
 //
-// Four-arg form: adds IN as a CODE file at load address &B000 (matches
-// IN_BUF in src/m3/main_loop.asm).
+// Three positional args (without optional -p13 / in.tbn): no IN file is
+// added — used by Task-3 boot tests where the assembler exits before
+// reading IN.
+//
+// Four positional args: adds IN as a CODE file at load address &B000
+// (matches IN_BUF in src/m3/main_loop.asm).
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -45,19 +54,24 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("build-m3-disk: ")
 
+	p13Path := flag.String("p13", "", "optional: path to the paged_call self-test page-13 payload binary; "+
+		"when set, added as the CODE file 'p13' on the disk image")
+	flag.Parse()
+	args := flag.Args()
+
 	var assemblerPath, enctabPath, inPath, outputPath string
-	switch len(os.Args) {
+	switch len(args) {
+	case 3:
+		assemblerPath = args[0]
+		enctabPath = args[1]
+		outputPath = args[2]
 	case 4:
-		assemblerPath = os.Args[1]
-		enctabPath = os.Args[2]
-		outputPath = os.Args[3]
-	case 5:
-		assemblerPath = os.Args[1]
-		enctabPath = os.Args[2]
-		inPath = os.Args[3]
-		outputPath = os.Args[4]
+		assemblerPath = args[0]
+		enctabPath = args[1]
+		inPath = args[2]
+		outputPath = args[3]
 	default:
-		log.Fatalf("usage: %s <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>", os.Args[0])
+		log.Fatalf("usage: %s [-p13 <p13.bin>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>", os.Args[0])
 	}
 
 	samdos2, err := os.ReadFile("reference/samdos/samdos2.bin")
@@ -164,7 +178,29 @@ func main() {
 		log.Fatalf("AddCodeFile(enctab.enc): %v", err)
 	}
 
-	// Slot 4 (optional): IN .tbn file.  Loaded at runtime by
+	// Slot 4 (optional): p13 — paged_call self-test page-13 payload.
+	// Loaded at boot by src/m3/loader.asm::load_page13_payload into
+	// physical page 13 via the HLOAD trampoline.  Consumed by
+	// run_paged_call_self_tests in src/m3/test_paged_call.asm.  See
+	// docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1.
+	//
+	// load_page13_payload is BUILD_TESTS-only, so production builds
+	// (`-p13` flag absent) skip this file.
+	if *p13Path != "" {
+		p13Data, err := os.ReadFile(*p13Path)
+		if err != nil {
+			log.Fatalf("read p13: %v", err)
+		}
+		// LoadAddress &8000 mirrors enctab.enc: the on-disk address
+		// is documentary; the loader supplies its own HMPR-target-page
+		// (= 13) when calling the trampoline.
+		const P13LoadAddress uint32 = 0x8000
+		if err := disk.AddCodeFile("p13", p13Data, P13LoadAddress, 0); err != nil {
+			log.Fatalf("AddCodeFile(p13): %v", err)
+		}
+	}
+
+	// Slot 5 (optional): IN .tbn file.  Loaded at runtime by
 	// src/m3/main_loop.asm::load_in_file via HGTHD+HLOAD into IN_BUF at
 	// &B000.  The on-disk LOAD address is purely documentary — HLOAD's
 	// caller specifies HL = &B000 — but recording a consistent value
@@ -191,6 +227,10 @@ func main() {
 		auto.SAVARSOffset()-auto.NUMENDOffset())
 	fmt.Printf("assembler:  %d bytes     T6S3\n", len(assemblerBin))
 	fmt.Printf("enctab.enc: %d bytes     T6S4\n", len(enctabData))
+	if *p13Path != "" {
+		p13Size, _ := os.Stat(*p13Path)
+		fmt.Printf("p13:        %d bytes\n", p13Size.Size())
+	}
 	if inPath != "" {
 		inSize, _ := os.Stat(inPath)
 		fmt.Printf("IN:         %d bytes\n", inSize.Size())

@@ -267,6 +267,27 @@ LMPR_IN_BASE:   equ     &20 + IN_BASE_PAGE
                                        ; = &27; section A = page 7 (IN[0])
 
 
+; Paged-page constants — physical pages reserved for off-axis paged
+; routines and paged data tables (HMPR-mapped).  Per
+; docs/notes/2026-05-28-paged-call-architecture.md §7 risk #8 and
+; docs/notes/2026-05-28-memory-layout-brainstorm.md §3.
+;
+; Call-site convention: inline DEFB payloads supply ONLY the page
+; number (low 5 bits, e.g. 13).  The paged_call / paged_data_map_hmpr
+; helpers combine that page number with the entry HMPR's top 3 bits
+; (mode-3 CLUT bits 5-6 + external-memory bit 7) so the CLUT/ext-mem
+; state is preserved across the call.  Callers should NOT pass a
+; pre-OR'd `&20 | page` value here — the bit-5 "RAM0" semantic is an
+; LMPR thing; HMPR bit 5 is the CLUT, not a RAM-page selector, so
+; OR-ing &20 onto an HMPR value would silently glitch mode-3 palette.
+;
+; The page-number values match the brainstorm doc's page-axis
+; assignment.  Subsequent PRs will reference these constants from
+; their call sites (e.g. PR 2 references PAGED_PAGE_DISASM_AUX for
+; sysreg-table lookup).
+PAGED_PAGE_DISASM_AUX:  equ     13     ; disasm aux + sysreg DB + rewrite hints
+
+
 TRAMPOLINE_DST: equ     &7E00          ; section-B copy destination
                                        ; (under LMPR_DEFAULT, section B
                                        ; = page 1).  Near the top of
@@ -276,49 +297,164 @@ TRAMPOLINE_DST: equ     &7E00          ; section-B copy destination
                                        ; which is nothing, since BASIC
                                        ; is dead by the time we copy.
 
-; Absolute address of the static HMPR-save byte in section B.  The
-; trampoline body's `ld (HMPR_SAVE), a` and `ld a, (HMPR_SAVE)`
-; instructions encode THIS address; after the LDIR copy, those
-; instructions access section B (LMPR-stable across the HMPR change)
-; regardless of where the trampoline copy itself lives.
+; =======================================================================
+; Section-B layout — HLOAD trampoline + paged_call / paged_data helpers
+; =======================================================================
 ;
-; Placed at TRAMPOLINE_DST + 32 to leave plenty of headroom for the
-; trampoline body (30 bytes post-SP-switch).
-HMPR_SAVE:      equ     TRAMPOLINE_DST + 32
+; All four helpers (HLOAD trampoline, paged_call, paged_data_map_hmpr,
+; paged_data_unmap_hmpr) live in section B at TRAMPOLINE_DST.. so they
+; are LMPR-stable across the HMPR changes their bodies perform.  The
+; static save slots (HMPR_SAVE, SP_SAVE for HLOAD; PAGED_CALL_HMPR_SAVE,
+; PAGED_CALL_SP_SAVE for paged_call; PAGED_DATA_HMPR_SAVE for paged_data)
+; live alongside them in section B for the same reason — push/pop
+; across the HMPR change is unsafe because SP points into section D =
+; HMPR+1.
+;
+; Bodies are placed CONTIGUOUSLY in source order (trampoline_body →
+; paged_call_body → paged_data_map_body → paged_data_unmap_body) so
+; ONE LDIR (in enctab_trampoline_setup) copies all four bodies in a
+; single block.  Destination offsets equal source offsets relative to
+; TRAMPOLINE_DST, so absolute references baked into the instruction
+; stream (PAGED_CALL_HMPR_SAVE etc.) resolve to the same section-B
+; address in both source and copy.
+;
+; Per docs/notes/2026-05-28-paged-call-architecture.md §3.3 (paged_call)
+; and §4 (paged_data_map_hmpr / paged_data_unmap_hmpr).
+;
+; ABI summary (per architecture doc §3.4):
+;
+;   - paged_call (call site: CALL paged_call / DEFW addr / DEFB page)
+;     clobbers A, HL, DE, F; preserves BC, IX, IY.  Target args go in
+;     BC / IX / IY.  Target runs with section C = target page; on RET,
+;     HMPR is restored to entry value (bit-identical, including CLUT
+;     bits 5-6 and ext-mem bit 7).
+;   - paged_data_map_hmpr  (in: A = page number, low 5 bits used) saves
+;     entry HMPR, sets HMPR = (entry & %11100000) | (A & %00011111).
+;     Clobbers A, B, F.  Preserves C, DE, HL, IX, IY.
+;   - paged_data_unmap_hmpr restores the saved HMPR.  Clobbers A, F.
+;
+; HMPR-bits-5-7 preservation (load-bearing correctness property): bits
+; 5-6 are the mode-3 CLUT high bits and bit 7 is the external-memory
+; flag (docs/notes/sam-paging.md:140-150).  Clobbering them silently
+; glitches the screen palette and / or maps external memory.  Both
+; helpers preserve those bits by masking caller-supplied A to bits 0-4
+; and OR-ing the entry HMPR's top 3 bits.  Mirrors the SAM ROM's
+; TSURPG / SELURPG idiom (rom-v3.0:14852-14861).  Call sites supply
+; ONLY the page number (low 5 bits) — never pre-OR an HMPR byte.
+;
+; Re-entrance: NOT re-entrant.  The static save slots have room for one
+; saved HMPR each — an inner paged_call would clobber the outer's
+; saved value.  Mitigation: target routines must not paged_call.  For
+; the planned consumers (sysreg lookup, disasm aux reads) this is
+; trivially fine.
+;
+; ---- Section-B layout (TRAMPOLINE_DST = &7E00) -----------------------
+; Bodies (LDIR'd in by enctab_trampoline_setup):
+;   &7E00..&7E1?  HLOAD trampoline body (~30 bytes)
+;   &7E1?..       paged_call body (~38 bytes, includes trailer)
+;   &7E?? ..      paged_data_map body (~15 bytes)
+;   &7E?? ..      paged_data_unmap body (~6 bytes)
+; Static save slots (uninitialised; written by helpers at runtime):
+;   &7EE0         HMPR_SAVE                (HLOAD)     (1 byte)
+;   &7EE1..&7EE2  SP_SAVE                  (HLOAD)     (2 bytes)
+;   &7EE3         PAGED_CALL_HMPR_SAVE                 (1 byte)
+;   &7EE4..&7EE5  PAGED_CALL_SP_SAVE                   (2 bytes)
+;   &7EE6         PAGED_DATA_HMPR_SAVE                 (1 byte)
+;   &7F00         TRAMP_SAFE_SP            (top of safe-SP scratch)
+;
+; The static slots are placed at +&E0..+&E6 — well above the body
+; region (~90 bytes ending at &7E5A) and well below TRAMP_SAFE_SP at
+; &7F00.  Leaves &7E60..&7EDF (128 bytes) of headroom inside the body
+; region for future helpers.
 
-; SP_SAVE — 2 bytes immediately after HMPR_SAVE.  The trampoline
-; switches SP into a section-B-stable location for the duration of
-; the RST 8 (see "Why we switch SP" below).  HLOAD's auto-paging
-; writes can clobber addresses in section D (= HMPR+1 page during
-; HLOAD), and the RST 8 hardware push lands wherever SP points —
-; if that's in section D, the saved return address is corrupted by
-; HLOAD's spillover for files > 16632 B.  Per
-; docs/notes/2026-05-28-hload-16k-limit-investigation.md.
-SP_SAVE:        equ     TRAMPOLINE_DST + 33    ; 2 bytes (33, 34)
+; Static save slots — HMPR_SAVE / SP_SAVE keep their original
+; addresses at +32/+33 (= &7E20/&7E21) to preserve the HLOAD
+; trampoline body's byte-identity with the pre-PR-#50 state.  The
+; new paged_call / paged_data slots live at +&D0+ (well above the
+; body copies which span &7E40..&7E80).
+HMPR_SAVE:                equ     TRAMPOLINE_DST + 32     ; = &7E20 (HLOAD; 1 byte)
+SP_SAVE:                  equ     TRAMPOLINE_DST + 33     ; = &7E21 (HLOAD; 2 bytes)
+PAGED_CALL_HMPR_SAVE:     equ     TRAMPOLINE_DST + &D0    ; = &7ED0 (1 byte)
+PAGED_CALL_SP_SAVE:       equ     TRAMPOLINE_DST + &D1    ; = &7ED1 (2 bytes)
+PAGED_DATA_HMPR_SAVE:     equ     TRAMPOLINE_DST + &D3    ; = &7ED3 (1 byte)
 
 ; TRAMP_SAFE_SP — value SP is switched to during the RST 8.  Chosen
 ; near the top of section B (which is LMPR-stable) but well clear of
-; the trampoline body and HMPR_SAVE/SP_SAVE bytes.  The RST 8 push
-; lands at TRAMP_SAFE_SP-1 and TRAMP_SAFE_SP-2 (= &7EFE / &7EFF) —
-; in section B, untouched by HLOAD.  Matches COMET's `LD SP,(sproom)`
+; the trampoline bodies and static save slots.  The RST 8 push lands
+; at TRAMP_SAFE_SP-1 and TRAMP_SAFE_SP-2 (= &7EFE / &7EFF) — in
+; section B, untouched by HLOAD.  Matches COMET's `LD SP,(sproom)`
 ; pattern at `comet.asm:1189` (see investigation note).
-TRAMP_SAFE_SP:  equ     TRAMPOLINE_DST + 256   ; = &7F00
+TRAMP_SAFE_SP:            equ     TRAMPOLINE_DST + 256    ; = &7F00
+
+; Destination addresses for the LDIR'd-in helper bodies.  Bodies are
+; placed immediately after the HLOAD trampoline body in section B,
+; but their SOURCE position in the binary is at the END of the
+; assembler binary (in paged_bodies.asm, included after the
+; BUILD_TESTS test files in src/m3/assembler.asm).  Source position
+; is decoupled from destination position because each body is LDIR'd
+; separately by enctab_trampoline_setup using its own source/dest
+; pair.
+;
+; PAGED_CALL_DST sits at TRAMPOLINE_DST + HLOAD_BODY_LEN (= +30 with
+; the current HLOAD body); the paged_data_map / paged_data_unmap
+; bodies follow contiguously inside section B.
+;
+; Manual offsets are used here (rather than computed via
+; `paged_call_body - paged_call_body`) because the body sources are
+; in a different file from the EQUs and pyz80's pass-1 forward
+; resolution gets confused chaining EQUs against forward-defined
+; labels in a separately-included file.
+; PAGED_CALL_DST starts at +&40 to skip the HLOAD body (~30B at +0)
+; AND the HMPR_SAVE/SP_SAVE slots (3B at +32/+33).  PAGED_DATA_MAP_DST
+; follows contiguously after paged_call (48B body+trailer).
+PAGED_CALL_DST:           equ     TRAMPOLINE_DST + &40    ; = &7E40
+PAGED_DATA_MAP_DST:       equ     TRAMPOLINE_DST + &70    ; = &7E70
+                                                            ; (= &7E40 + 48B paged_call)
+PAGED_DATA_UNMAP_DST:     equ     TRAMPOLINE_DST + &7F    ; = &7E7F
+                                                            ; (= &7E70 + 15B map)
+
+; Lowercase aliases for call-site readability (`call paged_call /
+; defw …` instead of `call PAGED_CALL_DST / defw …`).
+paged_call:               equ     PAGED_CALL_DST
+paged_data_map_hmpr:      equ     PAGED_DATA_MAP_DST
+paged_data_unmap_hmpr:    equ     PAGED_DATA_UNMAP_DST
 
 
 ; -----------------------------------------------------------------------
-; enctab_trampoline_setup — copy the trampoline body into section B.
+; enctab_trampoline_setup — copy ALL section-B trampoline bodies into
+; their section-B destinations.  Must be called ONCE at startup, BEFORE
+; the first CALL into any of TRAMPOLINE_DST / PAGED_CALL_DST /
+; PAGED_DATA_MAP_DST / PAGED_DATA_UNMAP_DST.  Idempotent.
 ;
-; Must be called ONCE at startup, BEFORE the first call to
-; trampoline_hload.  Idempotent (safe to call multiple times).
+; The four bodies (trampoline_body, paged_call_body, paged_data_map_body,
+; paged_data_unmap_body) are laid out CONTIGUOUSLY in source order
+; below; their destinations are at the same offsets relative to
+; TRAMPOLINE_DST.  One LDIR copies them all.
+;
+; (Historical aside: this routine used to copy only the HLOAD trampoline
+; body — hence the "enctab" prefix in its name.  It was extended to
+; also copy the paged_call / paged_data bodies in plan-PR 1 of the
+; paging architecture, per docs/notes/2026-05-28-paged-call-architecture.md.
+; The name stayed for diff-blame continuity; the function is now
+; "set up ALL section-B helpers".)
 ;
 ; Input:  none.
-; Output: trampoline body installed at TRAMPOLINE_DST in section B.
+; Output: all helper bodies installed at their DST addresses.
 ; Clobbers: A, BC, DE, HL.
 ; -----------------------------------------------------------------------
 enctab_trampoline_setup:
+                ; HLOAD trampoline body.
                 ld      hl, trampoline_body
                 ld      de, TRAMPOLINE_DST
                 ld      bc, trampoline_body_end - trampoline_body
+                ldir
+                ; paged_call / paged_data bodies.  Source lives in
+                ; src/m3/paged_bodies.asm, included at the END of
+                ; assembler.asm (load-bearing source-position; see
+                ; paged_bodies.asm header).
+                ld      hl, paged_call_body
+                ld      de, PAGED_CALL_DST
+                ld      bc, paged_data_unmap_body_end - paged_call_body
                 ldir
                 ret
 
@@ -396,8 +532,24 @@ trampoline_body:
 trampoline_body_end:
 
 ; -----------------------------------------------------------------------
-; Why we switch SP
-; ----------------
+; paged_call_body / paged_data_map_body / paged_data_unmap_body —
+; bodies are defined in src/m3/paged_bodies.asm, included at the END
+; of src/m3/assembler.asm.  Source-position-at-end is load-bearing:
+; placing them inline here would shift later BUILD_TESTS storage
+; bytes (boot_hmpr et al.) deeper into the SP=&C100 stack-growth zone
+; and break the test variant.  See
+; docs/notes/2026-05-28-plan-pr1-stuck.md "Issue 3" for the diagnosis.
+;
+; The bodies' addresses are still known to the EQUs at the top of
+; this file via pass-2 label resolution.
+;
+; The paged_call_trailer_dst EQU is also defined in paged_bodies.asm
+; (alongside the trailer label it references).
+
+
+; -----------------------------------------------------------------------
+; Why we switch SP in the HLOAD trampoline
+; ----------------------------------------
 ;
 ; Without the SP-switch, the trampoline issues RST 8 with SP still
 ; pointing into the CALLER's section D — and after the trampoline

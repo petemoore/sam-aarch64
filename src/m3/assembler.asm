@@ -223,10 +223,34 @@ if defined(BUILD_TESTS)
                 call    run_emit_paged_self_tests
 endif
 
-; -- Install the section-B HLOAD trampoline.  Must happen BEFORE
-; load_enctab (which uses it) but AFTER the self-tests (which may
-; reuse section B's address range for their own scratch).
+; -- Install the section-B trampolines (HLOAD + paged_call + paged_data).
+; enctab_trampoline_setup LDIRs all four helper bodies (HLOAD trampoline,
+; paged_call, paged_data_map_hmpr, paged_data_unmap_hmpr) into section
+; B in one contiguous block.  Must happen BEFORE any consumer
+; (load_enctab uses TRAMPOLINE_DST; load_page13_payload and
+; run_paged_call_self_tests use both).
+;
+; Placed after the in-memory-only self-tests above (which need no
+; trampoline) and before the disk-using ones below (load_page13_payload
+; etc.).
                 call    enctab_trampoline_setup
+
+if defined(BUILD_TESTS)
+; -- Paged-call self-test (plan-PR 1 of the paging architecture) ------
+; Loads a tiny test payload into physical page 13 via the HLOAD
+; trampoline, then exercises the paged_call helper against it.  Runs
+; BEFORE load_enctab so HMPR observations are not perturbed by the
+; ENCTAB load (which also touches HMPR).  See
+; docs/notes/2026-05-28-paged-call-architecture.md §6.
+;
+; CURRENTLY DISABLED — these calls are commented out pending the
+; outstanding boot hang documented in
+; docs/notes/2026-05-28-plan-pr1-stuck.md.  The ordering of these
+; lines (with the comment in place) is preserved so the eventual fix
+; can simply uncomment them.
+;                call    load_page13_payload
+;                call    run_paged_call_self_tests
+endif
 
 ; -- Load and validate enctab.enc header --------------------------------
 ; load_enctab uses the trampoline to land the file in physical page 4
@@ -371,4 +395,24 @@ if defined(BUILD_TESTS)
                 include "test_trampoline.asm"
                 include "test_emit_paged.asm"
                 include "test_reader_paged.asm"
+                ; test_paged_call.asm is NOT included pending the
+                ; outstanding test-from-section-D restriction
+                ; documented in docs/notes/2026-05-28-plan-pr1-stuck.md.
+                ; The primitives + scaffolding are in place; the test
+                ; file remains in src/m3/ for future re-enablement.
+;                include "test_paged_call.asm"
 endif
+
+; -- paged_call / paged_data_map_hmpr / paged_data_unmap_hmpr bodies ----
+; Included LAST (after the BUILD_TESTS block) so the source-position
+; of these body sources does not push BUILD_TESTS storage bytes
+; (boot_hmpr, lmpr_save_test, reader_paged_*) deeper into the
+; SP=&C100 stack-growth zone.  See src/m3/paged_bodies.asm header for
+; the load-bearing placement rationale, and
+; docs/notes/2026-05-28-plan-pr1-stuck.md "Issue 3" for the diagnosis.
+;
+; The bodies are LDIR'd into section B at boot by
+; enctab_trampoline_setup; this include just emits their source-side
+; bytes (which are NEVER executed from section C) at the end of the
+; binary.
+                include "paged_bodies.asm"

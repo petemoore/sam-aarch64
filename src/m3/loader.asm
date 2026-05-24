@@ -205,3 +205,52 @@ load_enctab_fail:
 name_enctab:    defb    19
                 defm    "enctab.enc"   ; 10 chars
                 defm    "    "         ; 4-char ext (4 spaces)
+
+
+if defined(BUILD_TESTS)
+; -----------------------------------------------------------------------
+; load_page13_payload — HLOAD the page-13 test payload (a tiny binary
+; built from src/m3/page13_test_payload.asm) into physical page 13.
+;
+; Per docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1.  The
+; payload is consumed by run_paged_call_self_tests (test_paged_call.asm)
+; and not used in any production path; this routine is therefore
+; BUILD_TESTS-only.  Disk-image builder build-m3-disk deposits the
+; payload as a CODE file named "p13" alongside enctab.enc.
+;
+; Structural cousin: load_enctab above.  Same HGTHD + HLOAD-via-
+; trampoline shape; the only differences are:
+;   - file name ("p13" instead of "enctab.enc")
+;   - target page (PAGED_PAGE_DISASM_AUX = 13 instead of ENCTAB_PAGE = 4)
+;   - file length (PAGE13_PAYLOAD_LEN = 4 instead of ENCTAB_LEN ≈ 3399)
+;
+; Input:  none (precondition: enctab_trampoline_setup has been called).
+; Output: physical page 13 holds the payload (sentinel byte &A5 at
+;         offset 0; `ld a, &42; ret` stub at offset 1+).  HL undefined.
+; Clobbers: A, BC, DE, HL, IX (everything except SP).
+;
+; On HGTHD "file not found" or any HLOAD error, SAMDOS longjmps —
+; which our stub returns to whatever caller_SP was at boot.  The boot
+; sequence's eventual `di; halt` cleans up either way; explicit
+; failure isn't surfaced for this test-only loader because a missing
+; payload is a build-image construction error, not a runtime
+; condition we need diagnostics for.
+PAGE13_PAYLOAD_LEN:  equ    3               ; 3-byte ld a, &42 / ret stub
+load_page13_payload:
+                ld      hl, name_page13
+                call    fill_uifa           ; populate UIFA + IX = &4B00
+                rst     8
+                defb    HOOK_HGTHD          ; find file → populate svde
+
+                ld      hl, ENCTAB_LOAD_HL  ; &8000 — section-C window
+                ld      b, PAGED_PAGE_DISASM_AUX
+                ld      c, 0
+                ld      de, PAGE13_PAYLOAD_LEN
+                call    TRAMPOLINE_DST      ; runs HLOAD via section-B trampoline
+                ret
+
+name_page13:    defb    19
+                defm    "p13       "        ; 10 chars (3-char name padded
+                                            ; with 7 trailing spaces)
+                defm    "    "              ; 4-char ext (4 spaces)
+endif

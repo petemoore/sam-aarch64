@@ -130,6 +130,14 @@ $(BUILD)/assembler-prod.bin: src/m3/assembler.asm $(wildcard src/m3/*.asm) $(wil
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/assembler-prod.bin src/m3/assembler.asm
 
+# Page-13 test payload: a tiny binary (sentinel byte + ld a,&42; ret stub)
+# HLOAD'd into physical page 13 at boot, exercised by the BUILD_TESTS-only
+# paged_call self-test in src/m3/test_paged_call.asm.  Per
+# docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1.
+$(BUILD)/page13_test_payload.bin: src/m3/page13_test_payload.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/page13_test_payload.bin src/m3/page13_test_payload.asm
+
 $(BUILD)/build-m3-disk: tools/build-m3-disk/main.go tools/build-m3-disk/go.mod
 	@mkdir -p $(BUILD)
 	cd tools/build-m3-disk && go build -o ../../$(BUILD)/build-m3-disk .

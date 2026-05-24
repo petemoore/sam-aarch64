@@ -74,6 +74,14 @@ echo "--- text2bin ---"
 "$ROOT/build/text2bin" -o "build/${base}.tbn" "$fixture"
 
 # 2. build-m3-disk with the .tbn as IN.
+#
+# The -p13 flag (page-13 payload for the paged_call self-test) is not
+# passed here because the BUILD_TESTS variant's
+# `call run_paged_call_self_tests` is currently disabled pending the
+# boot-hang investigation in
+# docs/notes/2026-05-28-plan-pr1-stuck.md.  When the self-test is
+# re-enabled, add `-p13 build/page13_test_payload.bin` to the
+# command line below.
 echo "--- build-m3-disk ---"
 "$ROOT/build/build-m3-disk" \
     "$ASSEMBLER_BIN" build/enctab.enc \
