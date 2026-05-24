@@ -66,19 +66,18 @@ refenc:
 	cd tools/refenc && go build -o $(CURDIR)/$(BUILD)/refenc .
 
 # Build the binary enctab.enc artefact from the vendored MRA snapshot.
-# Does NOT touch tools/aarch64enc/data.go — that file has manual
-# hand-edits (e.g. the 0-operand ret form; see docs/notes/m2-status.md)
-# that a default regen would clobber.  Use `make enctab-regen-source`
-# for an intentional source regeneration.
+# Includes both MRA-derived (data.go) and hand-curated (manual_forms.go)
+# forms; the binary mirrors the Go-side runtime form table.  Does NOT
+# touch any source files.
 enctab: enctab-gen
 	$(BUILD)/enctab-gen \
 	    -mra reference/arm-mra \
 	    -out $(BUILD)/enctab.enc
 
 # Regenerate tools/aarch64enc/data.go from the vendored MRA snapshot.
-# Run intentionally after an MRA bump or a planned new-mnemonic batch.
-# Will WIPE manual hand-edits (notably the 0-operand ret form); reapply
-# them by hand or via a follow-up commit.  See docs/notes/m2-status.md.
+# Safe to run at any time: data.go is purely the MRA projection; all
+# hand-curated forms live in tools/aarch64enc/manual_forms.go which
+# this target never touches.  See docs/notes/m2-status.md.
 .PHONY: enctab-regen-source
 enctab-regen-source: enctab-gen
 	$(BUILD)/enctab-gen \

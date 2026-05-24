@@ -96,17 +96,24 @@ guidance on link-step requirements.
 
 ## Known gaps
 
-1. **Bare `ret` form (and other manual edits) survive routine builds.**
-   The 0-operand `ret` form is hand-added to `data.go` after each
-   intentional regeneration.  Previously `make enctab` (and therefore
-   anything that depended on it via `make m3-disk` / `make test-m3`)
-   silently regenerated `data.go` and wiped this manual form on every
-   build.  Fixed 2026-05-26: `enctab-gen`'s `-gopkg` flag now defaults
-   to empty (skip), and the regular `make enctab` target no longer
-   passes it.  A new `make enctab-regen-source` target is the explicit
-   entry-point for source regeneration (after an MRA bump or a planned
-   new-mnemonic batch); it will wipe manual edits as before, so reapply
-   them by hand or via a follow-up commit.
+1. **Hand-curated forms split out from the regenerated table.**
+   `tools/aarch64enc/data.go` is now purely MRA-derived and safe to
+   regenerate at any time via `make enctab-regen-source`.  All hand-
+   curated forms (0-operand `ret`, ORR-based `mov Rd, Rm`, CMP/CSEL/
+   CSINC shifted-register, spectrum4 pseudo-mnemonics, byte-match
+   fixes for `subs`/`tst`/`bic`/`ands`/...) live in the sibling file
+   `tools/aarch64enc/manual_forms.go`, which the generator never
+   touches.  Lookup order: manual entries first, so hand-curated forms
+   shadow any same-shape MRA-derived entry (notably the ORR mov vs the
+   MRA's ADD-imm-#0 alias).
+   - `tools/enctab-gen/regen_survives_test.go` asserts that the
+     regenerated `data.go` is byte-identical to the committed file —
+     so an MRA bump that produces a real diff has to be staged
+     deliberately, while a stray `make enctab-regen-source` cannot
+     introduce a phantom diff.
+   - `tools/aarch64enc/manual_forms_test.go` pins down well-known
+     manual entries (`ret`, ORR `mov`, `mvn`, `subs`, …) so an
+     accidental deletion is caught immediately.
 
 2. **text2bin operand-kind validation** (spec §5, Task 21).
    Currently text2bin doesn't consult `ValidateOperandKinds`, so
