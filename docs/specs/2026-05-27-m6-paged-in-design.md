@@ -693,15 +693,35 @@ reader_next_kind_no_payload:
 ### Litpool copy hook
 
 ```asm
+; litpool_copy_expr — copy BC bytes from staging-buf (HL) to the section-D
+; expr pool.  Bound-checks DE+BC against LITPOOL_EXPR_BUF_END so a long
+; expr can't run off the pool.
+;
+; Input:  HL = src (staging-buf addr), BC = expr_len.
+; Output: HL = dest (section-D copy address).  litpool_expr_buf_top
+;         advanced by BC.
+; Clobbers: A, BC (consumed by LDIR), DE.
 litpool_copy_expr:
                 ld      de, (litpool_expr_buf_top)
-                ld      a, d
-                cp      &E1                  ; cap at LITPOOL_EXPR_BUF_END = &E100
-                jp      nc, fail
-                push    de
+
+; Bound: verify (DE + BC) <= LITPOOL_EXPR_BUF_END.  Compute end via
+;   end = DE + BC; if end > LITPOOL_EXPR_BUF_END → fail.
+                push    hl                          ; preserve src
+                push    bc                          ; preserve len for LDIR
+                ld      h, d
+                ld      l, e
+                add     hl, bc                      ; HL = DE + BC = post-copy top
+                ld      bc, LITPOOL_EXPR_BUF_END
+                or      a                           ; clear CF
+                sbc     hl, bc                      ; HL = (DE + BC) - END
+                jp      nc, fail                    ; post-copy top > END → overflow
+                pop     bc
+                pop     hl                          ; restore src
+
+                push    de                          ; remember dest for return
                 ldir
                 ld      (litpool_expr_buf_top), de
-                pop     hl
+                pop     hl                          ; HL = dest (start of copy)
                 ret
 
 litpool_expr_buf_top:   defw    LITPOOL_EXPR_BUF
