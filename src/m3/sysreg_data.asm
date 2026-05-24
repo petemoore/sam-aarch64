@@ -210,8 +210,15 @@ sysreg_tolower:
 ; sysreg entries appended to sysreg_table.  All names lower case (the
 ; matcher lowercases the source bytes before compare).
 ;
-; The 8 new entries are verified against
-; tools/sam-aarch64-format/sysregs.go (see the PR-2 spec table).
+; HAND-SYNCED with the Go authority tools/sam-aarch64-format/sysregs.go
+; (namedSysRegs / pstateFields / dcOps / tlbiOps).  These tables are a
+; SUBSET of the Go ones (only the entries M5/M6 fixtures exercise; other
+; sysregs are handled at runtime by the generic Sn_op1_Cm_Cn_op2 parser),
+; but every entry here MUST match the Go encoding byte-for-byte.  The sync
+; guard tools/sam-aarch64-format/sysregs_z80sync_test.go (CI job
+; `sysreg-sync`, make target `sysreg-sync-check`) parses THIS file and
+; fails on any name/encoding divergence — so if you add or edit an entry
+; here, update sysregs.go too (and vice versa).  repo-audit 2026-05-29 #9.
 ; =======================================================================
 
 ; sysreg_table — 12 original + 8 new = 20 entries.
