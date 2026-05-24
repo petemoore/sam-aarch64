@@ -24,11 +24,15 @@
 ;   5. Cross-digit isolation: appending to digit 3 must not perturb
 ;      digit 1's list — re-run the digit-1 lookups after appending
 ;      digit=3 pc=999.
+;   6. Multi-digit (1..99) coverage: append to digit 10 at PCs 50 +
+;      200 and digit 99 at PC 1000.  Verify forward / backward lookups
+;      on digit 10 and forward lookup on digit 99 (boundary), plus
+;      cross-isolation between digit 1 and digit 10.
 ;
 ; Not exercised (one-way `jp fail` paths, same caveat as test_slots /
 ; test_symbols):
-;   - Invalid digit (0 or >=10).
-;   - Per-digit list overflow (>= LOCAL_LIST_MAX).
+;   - Invalid digit (0 or > 99).
+;   - Shared list overflow (>= LOCAL_LIST_MAX).
 ;   Both → jp fail; covered by inspection.
 
 
@@ -186,6 +190,87 @@ run_local_label_self_tests:
                 call    assert_cf_clear
                 call    assert_local_pc_buf_eq_imm
                 defb    &18, &00, &00, &00          ; 24
+
+; -- (6) Multi-digit (1..99) coverage --------------------------------
+; Append digit-10 entries (PCs 50 then 200) and a digit-99 entry
+; (PC 1000).  The shared list is sorted by definition order = PC
+; order, so by this point it contains:
+;
+;   digit  1, pc = 4
+;   digit  1, pc = 12
+;   digit  1, pc = 24
+;   digit  1, pc = 100
+;   digit  3, pc = 999
+;   digit 10, pc = 50          ; ← appended below
+;   digit 10, pc = 200         ; ← appended below
+;   digit 99, pc = 1000        ; ← appended below
+;
+; (Definition-order vs absolute PC order is fine — the
+; find routines only require the SUBSEQUENCE for a given digit to
+; be sorted, which it is, since each individual digit's PCs were
+; monotonically non-decreasing in the order we appended them.)
+
+; ---- Digit 10 list construction ----
+                call    set_local_pc_buf_imm
+                defb    &32, &00, &00, &00          ; pc=50
+                ld      a, 10
+                call    local_def_append
+
+                call    set_local_pc_buf_imm
+                defb    &C8, &00, &00, &00          ; pc=200
+                ld      a, 10
+                call    local_def_append
+
+; ---- Digit 99 boundary ----
+                call    set_local_pc_buf_imm
+                defb    &E8, &03, &00, &00          ; pc=1000
+                ld      a, 99
+                call    local_def_append
+
+; ---- Digit 10 forward: ref_pc=0 → 50 ----
+                call    set_local_pc_buf_imm
+                defb    &00, &00, &00, &00
+                ld      a, 10
+                call    local_find_forward
+                call    assert_cf_clear
+                call    assert_local_pc_buf_eq_imm
+                defb    &32, &00, &00, &00          ; 50
+
+; ---- Digit 10 forward: ref_pc=50 → 200 (strictly greater) ----
+                call    set_local_pc_buf_imm
+                defb    &32, &00, &00, &00          ; 50
+                ld      a, 10
+                call    local_find_forward
+                call    assert_cf_clear
+                call    assert_local_pc_buf_eq_imm
+                defb    &C8, &00, &00, &00          ; 200
+
+; ---- Digit 10 backward: ref_pc=100 → 50 ----
+                call    set_local_pc_buf_imm
+                defb    &64, &00, &00, &00          ; 100
+                ld      a, 10
+                call    local_find_backward
+                call    assert_cf_clear
+                call    assert_local_pc_buf_eq_imm
+                defb    &32, &00, &00, &00          ; 50
+
+; ---- Cross-digit isolation: digit-1 forward ref_pc=50 still → 100 ----
+                call    set_local_pc_buf_imm
+                defb    &32, &00, &00, &00          ; 50
+                ld      a, 1
+                call    local_find_forward
+                call    assert_cf_clear
+                call    assert_local_pc_buf_eq_imm
+                defb    &64, &00, &00, &00          ; 100
+
+; ---- Digit 99 forward: ref_pc=0 → 1000 (boundary digit works) ----
+                call    set_local_pc_buf_imm
+                defb    &00, &00, &00, &00
+                ld      a, 99
+                call    local_find_forward
+                call    assert_cf_clear
+                call    assert_local_pc_buf_eq_imm
+                defb    &E8, &03, &00, &00          ; 1000
 
 ; All assertions passed.
                 ret
