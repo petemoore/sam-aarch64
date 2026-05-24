@@ -143,7 +143,6 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
                 include "slots/branch_imm.asm"
                 include "slots/adrp_imm.asm"
                 include "slots/logical_imm.asm"
-                include "slots/bitfield_imm.asm"
                 include "slots/shifted_reg.asm"
                 include "slots/extended_reg.asm"
                 include "slots/mem.asm"

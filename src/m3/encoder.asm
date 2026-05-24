@@ -139,8 +139,12 @@ encode_inst_loop:
                 jp      z, encode_slot_adrp
                 cp      &24
                 jp      z, encode_slot_logimm
-                cp      &25
-                jp      z, encode_slot_bitfield      ; rejected in M3 by reader
+                ; slot kind &25 (BitfieldImm) intentionally has no dispatch
+                ; entry: bfi/ubfx are handled by a mnemonic-id intercept
+                ; (intercepts.asm::encode_bitfield_word), so an &25 slot
+                ; reaching the encoder is an error and falls through to
+                ; `jp fail` below — matching the old encode_slot_bitfield
+                ; stub's behaviour (removed 2026-05-29, PR-3c).
                 cp      &26
                 jp      z, encode_slot_adr
                 jp      fail
@@ -376,13 +380,6 @@ encode_slot_logimm_call:
                 ld      hl, (encoder_slot_ptr)
                 call    encode_logical_imm
                 jp      encode_slot_or_and_next
-
-
-; BitfieldImm — two slots, two values.  M3 fixtures don't exercise
-; arbitrary bitfield instructions; bfi/ubfx in refenc are handled by a
-; mnemonic-id intercept.  For now, hard-error.
-encode_slot_bitfield:
-                jp      fail
 
 
 ; ---------------------------------------------------------------------
