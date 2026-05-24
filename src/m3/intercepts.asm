@@ -27,6 +27,7 @@ try_mnemonic_intercept:
                 or      a
                 jp      nz, try_intercept_no_match
                 ld      a, l
+                ld      (try_intercept_mnem), a
 
 ; -- ror (ID 70) — EXTR alias when operand 2 is OpImmExpr -------------
                 cp      70
@@ -44,9 +45,203 @@ try_mnemonic_intercept:
 
 try_intercept_post_ror:
 
+; -- Shifted-register-capable mnemonics: add/sub/and/orr/eor/subs/tst/
+;    bic/ands.  Two routings:
+;      (a) operand 2 (or 1 for tst) is OpShiftedReg — direct dispatch.
+;      (b) all-plain-GPR — coerce to ShiftedReg with LSL #0 in-place
+;          and dispatch.
+;    See tools/refenc/pass2.go:208-252.
+                ld      a, (try_intercept_mnem)
+                call    is_shifted_reg_mnemonic
+                jp      nz, try_intercept_post_shift
+
+                ld      a, (try_intercept_mnem)
+                cp      46                  ; tst → 2-operand path
+                jp      z, try_intercept_tst
+
+; 3-operand mnemonics: must have op_count=3, op2 = ShiftedReg or plain
+                ld      a, (main_op_count)
+                cp      3
+                jp      nz, try_intercept_post_shift
+                ld      a, (OPVAL_KINDS + 2)
+                cp      OP_KIND_SHIFTED_REG
+                jp      z, try_intercept_shifted_dispatch
+; 3-plain-GPR coerce?
+                call    operands012_all_plain_gpr
+                jp      nz, try_intercept_post_shift
+                ld      a, 2
+                call    coerce_op_to_lsl0
+                jp      try_intercept_shifted_dispatch
+
+try_intercept_tst:
+                ld      a, (main_op_count)
+                cp      2
+                jp      nz, try_intercept_post_shift
+                ld      a, (OPVAL_KINDS + 1)
+                cp      OP_KIND_SHIFTED_REG
+                jp      z, try_intercept_shifted_dispatch
+; 2-plain-GPR tst coerce?
+                ld      a, (OPVAL_KINDS + 0)
+                call    is_plain_gpr_kind
+                jp      nz, try_intercept_post_shift
+                ld      a, (OPVAL_KINDS + 1)
+                call    is_plain_gpr_kind
+                jp      nz, try_intercept_post_shift
+                ld      a, 1
+                call    coerce_op_to_lsl0
+                ; fall through
+
+try_intercept_shifted_dispatch:
+                ld      a, (try_intercept_mnem)
+                call    encode_shifted_reg_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+
+try_intercept_post_shift:
+
 try_intercept_no_match:
                 or      &ff                 ; A=0xFF → Z=0
                 ret
+
+
+; -----------------------------------------------------------------------
+; is_plain_gpr_kind — A = operand kind byte.
+;   Z=1 if kind ∈ {RegX, RegW, RegX-SP, RegW-SP}.
+;   Mirrors tools/refenc/pass2.go:1083-1089 (isPlainGPR).
+; -----------------------------------------------------------------------
+is_plain_gpr_kind:
+                cp      OP_KIND_REG_X
+                ret     z
+                cp      OP_KIND_REG_W
+                ret     z
+                cp      OP_KIND_REG_XSP
+                ret     z
+                cp      OP_KIND_REG_WSP
+                ret
+
+
+; -----------------------------------------------------------------------
+; operands012_all_plain_gpr — Z=1 if OPVAL_KINDS[0..2] are all plain GPRs.
+; -----------------------------------------------------------------------
+operands012_all_plain_gpr:
+                ld      a, (OPVAL_KINDS + 0)
+                call    is_plain_gpr_kind
+                ret     nz
+                ld      a, (OPVAL_KINDS + 1)
+                call    is_plain_gpr_kind
+                ret     nz
+                ld      a, (OPVAL_KINDS + 2)
+                jp      is_plain_gpr_kind
+
+
+; -----------------------------------------------------------------------
+; is_shifted_reg_mnemonic — A = mnemonic_id (low byte).
+;   Z=1 if id ∈ {1, 2, 14, 15, 16, 45, 46, 47, 80}.
+;   Mirrors tools/refenc/pass2.go:1072-1078.
+;   Preserves A.
+; -----------------------------------------------------------------------
+is_shifted_reg_mnemonic:
+                cp      1
+                ret     z
+                cp      2
+                ret     z
+                cp      14
+                ret     z
+                cp      15
+                ret     z
+                cp      16
+                ret     z
+                cp      45
+                ret     z
+                cp      46
+                ret     z
+                cp      47
+                ret     z
+                cp      80
+                ret
+
+
+; -----------------------------------------------------------------------
+; coerce_op_to_lsl0 — rewrite OPVAL_ARRAY[idx] in-place from a plain
+; GPR record into an OpShiftedReg record with LSL #0.  Mirrors the
+; synthesis in tools/refenc/pass2.go:217-251.
+;
+; Input:  A = idx (1 for tst, 2 for 3-op).
+;
+; Width is taken from the GPR's own kind for the 3-op case, but from
+; operand 0 for the tst (idx=1) case (mirrors pass2.go:241).
+;
+; Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+coerce_op_to_lsl0:
+                ld      (coerce_idx), a
+
+; Compute idx*STRIDE in C.  STRIDE=10 = 8+2; idx ∈ {1,2}.
+                add     a, a                ; A = 2*idx
+                ld      c, a                ; C = 2*idx
+                add     a, a
+                add     a, a                ; A = 8*idx
+                add     a, c                ; A = 8*idx + 2*idx = 10*idx
+                ld      c, a
+                ld      b, 0
+                ld      hl, OPVAL_ARRAY
+                add     hl, bc              ; HL → OPVAL[idx*STRIDE]
+
+; Save the original kind + reg before overwriting.
+                ld      a, (hl)
+                ld      c, a                ; C = original kind
+                inc     hl
+                ld      b, (hl)             ; B = reg
+                dec     hl
+
+; Width derivation.  For tst (idx==1), width follows OPVAL[0]; for the
+; 3-op coerce (idx==2), width follows operand 2's own kind.
+                ld      a, (coerce_idx)
+                cp      1
+                jr      nz, coerce_kind_self
+                ld      a, (OPVAL_ARRAY + 0)
+                jr      coerce_kind_done
+coerce_kind_self:
+                ld      a, c
+coerce_kind_done:
+                cp      OP_KIND_REG_X
+                jr      z, coerce_w1
+                cp      OP_KIND_REG_XSP
+                jr      z, coerce_w1
+                xor     a
+                jr      coerce_w_done
+coerce_w1:      ld      a, 1
+coerce_w_done:
+                ld      c, a                ; C = width
+
+; Write the new layout: +0=0x06, +1=width, +2=reg, +3..+9=0.
+                ld      a, OP_KIND_SHIFTED_REG
+                ld      (hl), a
+                inc     hl
+                ld      (hl), c
+                inc     hl
+                ld      (hl), b
+                inc     hl
+                xor     a
+                ld      b, 7
+coerce_zero_tail:
+                ld      (hl), a
+                inc     hl
+                djnz    coerce_zero_tail
+
+; Update OPVAL_KINDS[idx] = SHIFTED_REG.
+                ld      a, (coerce_idx)
+                ld      hl, OPVAL_KINDS
+                ld      c, a
+                ld      b, 0
+                add     hl, bc
+                ld      (hl), OP_KIND_SHIFTED_REG
+                ret
+
+
+try_intercept_mnem:             defb    0
+coerce_idx:                     defb    0
 
 
 ; -----------------------------------------------------------------------
