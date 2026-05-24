@@ -34,11 +34,18 @@ the dev image locally under Docker on both `linux/amd64` and
 patched SimCoupé. See `docs/specs/` for design documents and
 `docs/plans/` for milestone plans.
 
-M0–M4 are complete. The SAM-side Z80 assembler, running in
+M0–M5 are complete. The SAM-side Z80 assembler, running in
 SimCoupé, byte-matches GNU `as + ld -Ttext=0 + objcopy -O binary`
-end-to-end for the M3 (9 fixtures) and M4 (4 fixtures) corpora.
-Next up: M5 (compound operands — shifted-reg / extended-reg / mem;
-plus `.balign` / `.org` / `.skip` / `.set`).
+end-to-end for the M3 (9 fixtures), M4 (4 fixtures) and M5 (19
+fixtures) corpora.  M5 added the full compound-operand grammar
+(shifted-reg, extended-reg, all seven memory addressing shapes,
+system registers, literal pool) plus the remaining directives
+(`.set` / `.equ`, `.balign` / `.align`, `.org`, `.skip` / `.space`,
+`.inst`, `.ltorg`).  See `docs/notes/m5-status.md`.
+
+Next up: M6 (compact `.tbn` format, paged source / output buffers,
+built-in disassembler).  M6 will be the first milestone where the
+real spectrum4 sources (~20 KB) round-trip end-to-end via SAM.
 
 ## Local development
 
