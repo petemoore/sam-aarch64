@@ -76,11 +76,14 @@ trap "rm -rf '$outpath'" EXIT
 # -fullscreen 0  never fullscreen
 # -firstrun 0    suppress the welcome dialog
 #
-# 30-second outer timeout retained as a safety net for environments
-# where -exitonhalt isn't honoured (unpatched macOS SimCoupé) or for
-# genuine infinite loops in the assembler.
+# Outer timeout retained as a safety net for environments where
+# -exitonhalt isn't honoured (unpatched macOS SimCoupé) or for genuine
+# infinite loops in the assembler.  Default 30 s suits the small
+# fixtures; large inputs (e.g. the 88 KB release-stripped.tbn, whose
+# two-pass assembly far exceeds 30 s) override via SIMCOUPE_TIMEOUT.
+SIMCOUPE_TIMEOUT="${SIMCOUPE_TIMEOUT:-30}"
 set +e
-timeout 30s "$SIMCOUPE" \
+timeout "${SIMCOUPE_TIMEOUT}s" "$SIMCOUPE" \
     -exitonhalt 1 \
     -fullscreen 0 \
     -firstrun 0 \
