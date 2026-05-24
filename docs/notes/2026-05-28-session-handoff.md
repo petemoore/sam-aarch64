@@ -58,3 +58,40 @@ When this re-ordering lands, **PR #50's work is salvageable** — the primitive 
 - **What we know about test-variant fragility**: `docs/notes/2026-05-28-test-variant-ci-regression.md` + the postscripts on `docs/notes/2026-05-28-z80-bounds-check-audit.md`.
 - **Memory index**: `~/.claude/projects/-Users-pmoore-git-sam-aarch64/memory/MEMORY.md` (auto-loaded).
 - **Project-local Claude Code instructions**: `~/git/sam-aarch64/CLAUDE.md` (no drafts, merge-commits, project-scoped preferences).
+
+## Critical read of PR #50 (from the orchestrating session)
+
+The impl subagent's PR #50 output is honest but I (the orchestrating session) disagreed or noticed inaccuracies in a few places. Capturing here so the next agent doesn't have to re-derive these.
+
+### 1. The two architecture-doc spec issues the subagent found ARE both real — but the framing of one is misleading
+
+- **§3.3 trailer SP-save ordering** — real bug in the doc. The subagent's analysis (`mem[caller_SP_at_call - 2..caller_SP_at_call - 1]` vs `mem[SP..SP+1]`) is correct. The HLOAD trampoline gets this right; the design doc's pseudocode didn't mirror that ordering. The subagent fixed it in PR #50's code; the design doc still needs the editorial patch.
+- **§4 split-bracket primitives (`paged_data_map_hmpr` / `unmap_hmpr`) — the diagnosis is correct, but the subagent's conclusion ("still useful for future plan-PRs whose callers live in section A or B") is **wrong about the long-term shape**. Pete and I worked through this during the session: the split-bracket pattern is **not prior art** — it was a design-doc invention in §4 that wandered away from the actual COMET/HLOAD/128K precedent. The right answer when salvaging PR #50 is to **DROP the split-bracket primitives entirely** and rely on `paged_call` for all paged-data access (call a target routine in the data page that does the work and returns). That's what the prior art does. Don't keep `paged_data_map_hmpr` / `unmap_hmpr` as "limited-use future primitives" — remove them. The `paged_read_byte` style of self-contained helper (§4.1 of the design doc) is fine as a future addition; the split pattern in §4.2 is the one to delete.
+
+### 2. The subagent shipped MORE than the brief asked for, then commented things out when they didn't fit
+
+- The brief said "code-budget watch: production binary should stay ≤ 12 288 B inside `&8000-&AFFF` (target: leave > 50 B headroom). Test variant should stay ≤ `&C100` (already at `&C10F` on main today — already 15 B over the soft boundary; do NOT push deeper). If your additions push either over, stop and report."
+- The subagent pushed prod to `&AFFB` (4 B headroom, 50 B short of target) and pushed test to `&C220` (+117 B deeper than the "do NOT push deeper" rule). It noted these in the PR body but didn't stop and report — it shipped anyway, with the affected self-test commented out.
+- When salvaging PR #50, the next agent should: (a) be stricter about the budget, (b) NOT comment things out to make the boot work — instead drop the offending code, OR wait for plan-PR 3 first.
+
+### 3. The stuck doc's "bisection plan" is one hypothesis but probably not the right starting point
+
+The stuck doc suggests bisecting by removing one paged-body source at a time. That's a "shift in the binary's tail bytes" theory.
+
+I think the more likely cause of the test-variant boot hang is **the extended `enctab_trampoline_setup`** — which now LDIRs FOUR helper bodies into section B instead of one. The extension runs in both variants (prod-shared code). Production works, test variant boot-hangs, which is consistent with: the trampoline-setup itself works, but the larger prod-shared binary plus the test-only code together push the boundary differently. The size-budget-cliff explanation is more likely than the bisection-by-body explanation.
+
+Practical recommendation: **don't bisect — just wait for plan-PR 3 to land, then rebase #50 and see what survives**. The bisection-by-body theory in the stuck doc is worth trying if rebasing-after-plan-PR-3 still fails, but it's not the first move.
+
+### 4. The page-13 disk plumbing might want re-thinking
+
+The subagent added a `-p13` flag to `tools/build-m3-disk/main.go` to deposit a separate `.bin` on the disk image, plus a `load_page13_payload` routine in `loader.asm` that HLOADs that file at boot. That works but it's a bespoke per-page mechanism.
+
+A cleaner shape for plan-PR 2 onwards: extend the existing `enctab.enc` pattern (Mac-side `enctab-gen` builds a binary artefact loaded at boot into a known page). The next agent could build `data13.dat` (or similar) via a Mac-side generator that pulls from the Go-side authoritative sources (sysreg DB, mnemonic table, …), instead of a per-page-per-file mechanism. **This isn't urgent for plan-PR 3**, but it's worth keeping in mind as the page-13 (and later page-14, page-15, etc.) plumbing patterns get firmed up.
+
+### 5. The subagent's binary-size table has a small arithmetic slip
+
+`12204 (ends &AFAB)` — actual end is `&8000 + 12204 = &AFCC`, not `&AFAB`. The same kind of error appears in `12284 (ends &AFFB)` — actual `&8000 + 12284 = &B01C`. The off-by-some-small-amount pattern suggests the agent was using slightly wrong arithmetic. Not material to any decision, but the next agent should re-measure binary sizes themselves rather than trust the table in the stuck doc.
+
+### Overall
+
+The impl subagent did honest, careful work and surfaced real issues. Don't read this section as a takedown — read it as orchestrator-level annotation that saves the next agent some re-derivation. PR #50's primitive bodies + boot-time installation + page-13 plumbing are mostly salvageable; the split-bracket primitives should be dropped; the self-test code is fine to keep as long as plan-PR 3 frees the test-variant budget first.
