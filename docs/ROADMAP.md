@@ -14,6 +14,7 @@
    - **Memory** (`~/.claude/projects/.../memory/`) — cross-session preferences, facts, feedback. *Not* work-tracking.
    - **`docs/notes/archive/`** — superseded/dead state. When a doc is obsoleted, move it here rather than leave it to confuse the next reader.
 3. **At milestone close**, walk the "Deferred-work review checklist" and ask of each item: still deferred, or does it now fold into the milestone in flight? Archive whatever the milestone superseded.
+4. **Delegate to subagents to preserve orchestration context.** The agent driving a session (the *orchestrator*) should push self-contained, well-scoped work out to subagents — codebase searches, mechanical edits, doc drafting, focused investigations, even whole low-risk PRs (implement → verify locally → commit → push → open PR) — via the `Agent` tool (and `Explore` / `Plan`), keeping only the conclusions in its own window. A subagent's full transcript is discarded; only its final summary returns, so the orchestrator's context lasts far longer. The orchestrator keeps the judgement calls itself: sequencing, monitoring CI, merge/launch decisions, and anything user-facing. The durable state lives in subagents-plus-these-docs, not in any one agent's window — so when context *does* fill, the handover (update "Current State", below) lets the next agent resume as orchestrator with nothing lost. Prefer launching independent subagents in parallel (one message, multiple `Agent` calls) when the work has no shared state.
 
 ### Session hygiene (the minimal ritual)
 
