@@ -12,11 +12,11 @@ See `docs/specs/2026-05-09-vision.md` for the long-form pitch and `docs/specs/20
 
 | M | Title | Spec | Status doc | State |
 |---|---|---|---|---|
-| M0 | Toolchain bootstrap (pyz80 → SimCoupé → samfile → GNU `as` round-trip) | — | `docs/notes/m0-status.md` | ✅ done (PR #1) |
-| M1 | Binary tokenised source format (`.tbn`) + text2bin / bin2text | `docs/specs/2026-05-23-m1-binary-tokenised-format-design.md` | `docs/notes/m1-status.md` | ✅ done (PR #6) |
-| M2 | Encoder tables + Mac-side refenc; 20/20 M1 fixtures byte-match GNU | `docs/specs/2026-05-24-m2-encoder-tables-design.md` | `docs/notes/m2-status.md` | ✅ done (PR #7, #8); extended via #11, #14, #15, #17 |
-| M3 | Z80 emitter: read `.tbn`, encode, HSAVE output (no symbol table; constant-only) | `docs/specs/2026-05-24-m3-z80-emitter-design.md` | `docs/notes/m3-status.md` | ⏳ in progress — Tasks 1-12 done (PRs #9, #12, #16, #17); Tasks 16-22 in flight |
-| M4 | Symbol table, multi-pass, full expression evaluator on Z80 | `docs/specs/2026-05-24-m4-symbols-multipass-design.md` | — (not yet) | 📋 designed; ordering after M3 |
+| M0 | Toolchain bootstrap (pyz80 → SimCoupé → samfile → GNU `as` round-trip) | — | `docs/notes/m0-status.md` | ✅ done (PR #1) — plan: `docs/plans/2026-05-09-m0-toolchain-bootstrap.md` |
+| M1 | Binary tokenised source format (`.tbn`) + text2bin / bin2text | `docs/specs/2026-05-23-m1-binary-tokenised-format-design.md` | `docs/notes/m1-status.md` | ✅ done (PR #6) — plan: `docs/plans/2026-05-24-m1-binary-tokenised-format.md` |
+| M2 | Encoder tables + Mac-side refenc; 20/20 M1 fixtures byte-match GNU | `docs/specs/2026-05-24-m2-encoder-tables-design.md` | `docs/notes/m2-status.md` | ✅ done (PR #7, #8); extended via #11, #14, #15, #17 — plan: `docs/plans/2026-05-24-m2-encoder-tables.md` |
+| M3 | Z80 emitter: read `.tbn`, encode, HSAVE output (no symbol table; constant-only) | `docs/specs/2026-05-24-m3-z80-emitter-design.md` | `docs/notes/m3-status.md` | ⏳ in progress — Tasks 1-12 done (PRs #9, #12, #16, #17); Tasks 16-22 in flight — plan: `docs/plans/2026-05-24-m3-z80-emitter.md` |
+| M4 | Symbol table, multi-pass, full expression evaluator on Z80 | `docs/specs/2026-05-24-m4-symbols-multipass-design.md` | — (not yet) | 📋 designed; ordering after M3 — plan: `docs/plans/2026-05-24-m4-symbols-multipass.md` |
 | M5 | Compact `.tbn` format + built-in disassembler | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | — | 📋 designed; ordering after M3 / M4 |
 | (Phase 2) | On-SAM editor | `docs/specs/2026-05-09-phase1-assembler.md` §editor + future spec | — | 📋 sketched |
 | (Phase 3) | TFTP shipper to Pi 400 (Quazar Trinity) | future spec | — | 📋 sketched; reference: `simonowen/trinload` |
@@ -51,6 +51,7 @@ When closing out each milestone, walk this list and ask: *"does this still belon
 - [ ] Multi-section / linker-script honouring in refenc — explicitly punted in favour of the `text2bin -flatten` approach (PR #15). Revisit only if a non-spectrum4-shaped project ever needs it.
 - [ ] `SpectrumFourLayout` extraction (`-layout` flag or linker-script parser) — Pete's call: not worth doing unless a second project surfaces.
 - [ ] Replace M3 `fail:` 30s-timeout spin with **printer-channel status reporting** — `OUT (&E1), A` to write OK/FAIL strings; test wrapper checks both exit code AND printer log. Drops failure latency from 30s to ~100ms, gives per-fail-site diagnostic messages, sidesteps the silent-success risk. Pete's idea, 2026-05-27. Land after M3 Tasks 16-22 to avoid merge conflicts with the in-flight `src/m3/assembler.asm` work.
+- [ ] Split M3 assembler build into **production vs test** variants. Today every `make m3-asm` includes `run_slot_self_tests` and the boot-time test hooks; in the production assembler used by an end-user, the self-tests should be #ifdef'd out. The `print_status` primitive itself (for end-user error messages — "unknown mnemonic", "out of memory" etc.) stays in production. Natural sibling of the printer-channel change above.
 
 ## How to extend this doc
 
