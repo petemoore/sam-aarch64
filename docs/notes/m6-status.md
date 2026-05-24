@@ -20,7 +20,48 @@ toolchain — `release.s` is ~20 KB source emitting ~22 KB output.
 | Multi-digit local labels (`10f` / `10b` / …) | 📋 plan ready | `docs/plans/2026-05-27-multi-digit-local-labels.md` | open draft PR #35 (independent of this PR) |
 | Compact `.tbn` format | 📋 designed | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | M6 PR 3+ |
 | On-SAM disassembler | 📋 designed | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | M6 PR 4+ |
-| spectrum4 release.bin byte-match on SAM | 📋 ultimate goal | — | M6 PR N |
+| spectrum4 release.bin byte-match on SAM | ⏳ in progress — flows through SimCoupé (OK, 21752 B); byte-match blocked on ~7 SAM encoder bug classes (see below) | — | M6 PR N |
+
+## Release byte-match — status (2026-05-29, the headline closer)
+
+Full detail + work-item inventory:
+**`docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md`**.
+
+Two findings from driving the full 88 KB `release-stripped.tbn` through
+the assembler **on SimCoupé** (the authoritative gate):
+
+1. **The "trap at scale" open question is RESOLVED — negative.** 88 KB
+   flows end-to-end on SimCoupé: OK banner, 21 752-byte OUT, 21 s. The
+   Go-harness trap (PC → `&0038`) from the 2026-05-28 handover was a
+   **harness fidelity gap, not a real SAM paged-IN bug.** (`run-simcoupe.sh`
+   gained a `SIMCOUPE_TIMEOUT` env override — 88 KB exceeds the 30 s default.)
+
+2. **Byte-match NOT yet achieved.** SAM OUT differs from the GNU oracle at
+   **118 of 5 438 instruction words** (refenc on the *identical* `.tbn`
+   matches GNU exactly, so the divergence is purely the Z80 encoder). ~7
+   distinct encoder bug classes the fixture corpus never exercised:
+   64-bit address-data high-word truncation (55), MOV wide-imm
+   decomposition (30), MOV bitmask-imm alias (10), MOV→MOVN invalid
+   encodings (7), ADRP high-origin page-delta (13), csetm condition
+   inversion (2), logical-imm value (1).
+
+   **These are M6 critical-path** (release-stripped uses them) — distinct
+   from the M7 "Z80↔Go parity audit" (instructions release does *not*
+   use). **Fix authority: port from the Go implementation** — see the
+   inventory doc's "AUTHORITY FOR ALL FIXES" table; nothing is reinvented.
+   Fix status is tracked in that doc's inventory table. Each class needs a
+   permanent `tests/m6/sources/` fixture (the gaps existed because no
+   fixture used these forms).
+
+### Go-harness paged-path trap — root-cause follow-up (Pete: ideally M6)
+
+Separate work item: root-cause **why the Go harness traps (PC → `&0038`)
+on the full 88 KB / 6-page paged-IN load where SimCoupé succeeds**, and
+fix the harness's HLOAD/paging stub so it can run the full release input
+(which would make the encoder-fix iteration above ~1 ms instead of a
+20 s SimCoupé round-trip). Not on the critical path (SimCoupé is the gate
+and works); Pete's call is ideally M6, acceptable M7. Cross-referenced in
+`m7-status.md` (Go-harness fidelity row).
 
 ## PR 1 — paged OUT buffer (this PR)
 
