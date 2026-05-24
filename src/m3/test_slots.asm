@@ -271,6 +271,56 @@ run_slot_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &e0, &ff, &ff, &60  ; 0x60FFFFE0 LE
 
+; -- encode_logical_imm(LogicalImm{BP=10,BW=13}, 0xff, is64=true) ------
+;    => N=1, immr=0, imms=7 → imm13 = 0x1007 → << 10 = 0x00401C00.
+; Mirrors slots_logical_test.go::TestEncodeLogicalImm_AgainstGNUAs[0]
+; (`and x0, x0, #0xff` → 0x92401C00).
+; 64-bit single-operand convention (see slots/logical_imm.asm header):
+;   HL = slot pointer, DE = ptr to 8-byte LE buffer, C = is64 flag.
+                ld      hl, slot_logimm_bp10_bw13
+                ld      de, logimm_input_ff_64
+                ld      c, 1                ; is64 = true
+                call    encode_logical_imm
+                call    assert_eq32_de_hl_imm
+                defb    &00, &1c, &40, &00  ; 0x00401C00 LE
+
+; -- encode_logical_imm(LogicalImm{BP=10,BW=13}, 0xffff, is64=true) ----
+;    => N=1, immr=0, imms=15 → imm13 = 0x100F → << 10 = 0x00403C00.
+; Mirrors slots_logical_test.go::TestEncodeLogicalImm_AgainstGNUAs[1].
+                ld      hl, slot_logimm_bp10_bw13
+                ld      de, logimm_input_ffff_64
+                ld      c, 1
+                call    encode_logical_imm
+                call    assert_eq32_de_hl_imm
+                defb    &00, &3c, &40, &00  ; 0x00403C00 LE
+
+; -- encode_logical_imm(LogicalImm{BP=10,BW=13},
+;                       0x00ff00ff00ff00ff, is64=true)
+;    => 16-bit replicating pattern, 8 ones per element.
+;    N=0, immr=0, imms=0x27 → imm13 = 0x27 → << 10 = 0x00009C00.
+; Mirrors slots_logical_test.go::TestEncodeLogicalImm_AgainstGNUAs[2].
+                ld      hl, slot_logimm_bp10_bw13
+                ld      de, logimm_input_00ff_x4
+                ld      c, 1
+                call    encode_logical_imm
+                call    assert_eq32_de_hl_imm
+                defb    &00, &9c, &00, &00  ; 0x00009C00 LE
+
+; -- encode_logical_imm(LogicalImm{BP=10,BW=13},
+;                       0x000f000f, is64=false)
+;    => 32-bit input widened to 64-bit = 0x000f000f000f000f.
+;    16-bit replicating pattern with 4 ones.
+;    N=0, immr=0, sizeLog2=4 → nimmsTop=0x20, imms=0x23
+;    → imm13 = 0x23 → << 10 = 0x00008C00.
+; Mirrors slots_logical_test.go::TestEncodeLogicalImm_32bit (pins exact
+; value computed by the spec; the Go test only checks non-zero).
+                ld      hl, slot_logimm_bp10_bw13
+                ld      de, logimm_input_000f000f_32
+                ld      c, 0                ; is64 = false
+                call    encode_logical_imm
+                call    assert_eq32_de_hl_imm
+                defb    &00, &8c, &00, &00  ; 0x00008C00 LE
+
 ; All assertions passed.
                 ret
 
@@ -348,6 +398,7 @@ assert_eq32_de_hl_imm:
 ;   BranchImm19  = 0x21
 ;   BranchImm14  = 0x22
 ;   AdrpImm      = 0x23
+;   LogicalImm   = 0x24
 ;
 ; expected_kind is set to 0 here: the encoders do not consult it
 ; (text2bin uses it earlier in the pipeline).
@@ -366,3 +417,13 @@ slot_branch26_bp0_bw26: defb    &20, 0,  0, 26
 slot_branch19_bp5_bw19: defb    &21, 0,  5, 19
 slot_branch14_bp5_bw14: defb    &22, 0,  5, 14
 slot_adrp_bp0_bw21:     defb    &23, 0,  0, 21
+slot_logimm_bp10_bw13:  defb    &24, 0, 10, 13
+
+; -- LogicalImm input buffers (8-byte LE) -------------------------------
+; The encoder takes a pointer to an 8-byte LE buffer (DE on entry).
+; For 32-bit inputs the high 4 bytes are ignored (the encoder masks
+; and self-replicates internally per the Go reference).
+logimm_input_ff_64:         defb &ff, &00, &00, &00, &00, &00, &00, &00
+logimm_input_ffff_64:       defb &ff, &ff, &00, &00, &00, &00, &00, &00
+logimm_input_00ff_x4:       defb &ff, &00, &ff, &00, &ff, &00, &ff, &00
+logimm_input_000f000f_32:   defb &0f, &00, &0f, &00, &00, &00, &00, &00
