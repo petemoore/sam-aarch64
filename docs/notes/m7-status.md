@@ -31,6 +31,33 @@ Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not
 | Canonical memory-layout reference doc | 📋 | Pete 2026-05-29; `src/m3/assembler.asm:21-122` (authoritative live map) | Consolidate the section/page map + scratch regions + budget ceilings (today scattered across the asm comments, `sam-paging.md`, the layout brainstorm, ~10 notes) into one doc. Keep the asm comments as source-of-truth; the doc mirrors/points to them (no second drifting copy). High value given how central layout is. |
 | Trinity SD/flash storage → bigger-kernel architecture | 🧭 *(beyond-M7)* | Pete 2026-05-29; `memory/trinity_hardware.md` | Trinity's SD/MMC slot lifts the implicit single-floppy ceiling, enabling much larger kernels/debug builds (spectrum4 may be ~5× when complete). The binding constraint eventually shifts from code budget to storage. Quazar docs to be scanned. Distant future. |
 
+## Open questions for Pete (awaiting input)
+
+These are decisions an autonomous M7 session is blocked on (or chose to
+defer rather than guess). Logged here so they survive context churn — the
+agent works around them and Pete answers when available. Remove an entry
+once resolved.
+
+1. **`src/m3` rename — choose the new name.** Agreed in principle (the dir
+   is the SAM-side Z80 assembler, not "milestone 3"). Candidates floated:
+   `src/assembler`, `src/sam-as`, `src/asm`. Also: do the big cross-cutting
+   rename now (Makefile / include paths / `tools/*-disk` / CI / docs, one
+   reviewed PR) or bundle it into the broader naming review? **Until Pete
+   picks a name, the rename is deferred; READMEs etc. use the current
+   `src/m3` path.** (See the "Directory naming & logical organisation"
+   strand above.)
+2. **LLIST tool cluster disposition** (`tools/llist-*` + `llist-*.sh`).
+   Repo-audit #6 flags it superseded by the EDIT/EDKY detokeniser spike
+   (findings captured in `docs/notes/basic-detokeniser-spike.md`). Archive,
+   delete, or keep? Needs one Pete confirm that nothing he still uses
+   depends on it. **Deferred until confirmed** (the rest of the
+   archive-superseded-docs PR proceeds without it).
+3. **Design-strand handling.** For the design-heavy strands (bump-arena
+   allocator, editor groundwork + SAM screen-mode, compact `.tbn`): draft
+   design docs solo for later review, or hold for a brainstorm together?
+   Editor/screen-mode especially wants Pete's aesthetic input. **Default
+   while unanswered: hold them; do not design solo.**
+
 ## Strands in detail
 
 ### Bump-arena allocator (headline structural item)
