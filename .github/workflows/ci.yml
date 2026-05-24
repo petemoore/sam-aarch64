@@ -111,12 +111,12 @@ jobs:
         run: make ci-m2
 
   # disasm — strand-B Go disassembler oracle: aarch64dec vs binutils objdump
-  # on a CODE-ONLY build of the release (release.s with data directives
-  # stripped, reassembled by GNU) so objdump's linear sweep sees only
-  # instructions. Asserts NO mis-decodes (declining .inst on literal-pool
-  # data is fine) + a coverage floor. Pure Go + binutils, no container.
-  # GREEN as of the strand-B disassembler PR; candidate to promote to a
-  # required status check once it's confirmed stable on main.
+  # on a CODE-ONLY build of the release (release.s with all data removed at
+  # source — data directives AND `ldr =imm` literal-pool pseudo-ops —
+  # reassembled by GNU) so objdump's linear sweep sees only instructions.
+  # Asserts an EXACT match. Pure Go + binutils, no container. GREEN as of the
+  # strand-B disassembler PR; candidate to promote to a required status check
+  # once confirmed stable on main.
   disasm:
     runs-on: ubuntu-latest
     steps:

@@ -19,25 +19,22 @@
 # ONLY — text2bin and the m6-release byte-match gate keep the full source,
 # data and all.)
 #
-# Pass criterion — NO MIS-DECODES.  A handful of words still differ: GNU as
-# materialises `ldr wN, =0xNNNN` constants as a literal pool (a .word in
-# .text) that objdump linear-sweeps as an instruction.  Those are data; our
-# decoder correctly DECLINES them (renders `.inst 0x…`).  Declining on
-# out-of-scope/data encodings is correct; emitting a *different* instruction
-# than objdump is a bug.  So the gate fails only on a mis-decode (a differing
-# line where our side is not `.inst`), and additionally guards coverage with
-# a match-percentage floor.
+# Pass criterion — EXACT MATCH.  Because all data is removed at source (both
+# data directives and the `ldr =imm` pseudo-ops that materialise literal
+# pools), the binary is pure instructions and our disassembly must equal
+# objdump's line-for-line.  On failure the differing lines are classified
+# into mis-decodes (we emitted a *different* instruction — a decoder bug) vs
+# declines (we emitted `.inst …` — a coverage gap) purely as a diagnostic.
 #
 # Env: OBJDUMP / AS / LD / OBJCOPY override the binutils tools (defaults try
 # the aarch64-linux-gnu-* then aarch64-none-elf-* variants); RELEASE_S the
-# source (default tests/m6/release/release.s); MIN_MATCH the coverage floor.
+# source (default tests/m6/release/release.s).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 RELEASE_S="${RELEASE_S:-tests/m6/release/release.s}"
-MIN_MATCH="${MIN_MATCH:-99.0}"
 [ -f "$RELEASE_S" ] || { echo "ERROR: release source not found at $RELEASE_S" >&2; exit 2; }
 
 # Resolve a binutils tool from a list of candidate names.
@@ -57,12 +54,22 @@ mkdir -p build
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
-# 1. Strip data-emitting directives, keeping labels + instructions.  No
-#    label-and-data-directive-on-one-line cases exist in release.s (verified),
-#    so a line-delete is sufficient.  Portable ERE (no \b — BSD sed lacks it):
-#    match a leading-optional-whitespace data directive followed by space/EOL.
+# 1. Strip everything that puts DATA into the binary, keeping labels +
+#    real instructions, so objdump's linear sweep sees only instructions:
+#      (a) data-emitting directives (.hword/.byte/.asciz/.word/.quad/…), and
+#      (b) `ldr <reg>, =<imm>` — GNU as materialises the constant as a
+#          literal-pool .word in .text, which is data that can coincidentally
+#          equal a real instruction encoding (it did: 3 pool words swept as
+#          stxr/sqrshrn/SME).  Removing the pseudo-op at source removes the
+#          pool, eliminating that data at the root rather than teaching the
+#          decoder to tolerate it.
+#    No label-and-data-directive-on-one-line cases exist in release.s
+#    (verified), so a line-delete is sufficient.  Portable ERE (no \b — BSD
+#    sed lacks it): match the leading-optional-whitespace token + a boundary.
 grep -vE '^[[:space:]]*\.(hword|byte|asciz|ascii|string|quad|word|2byte|4byte|8byte|double|float|fill|zero|space|skip|octa)([[:space:]]|$)' \
-    "$RELEASE_S" > "$tmp/code-only.s"
+    "$RELEASE_S" \
+  | grep -vE '^[[:space:]]*ldr[[:space:]]+[wx][0-9]+[[:space:]]*,[[:space:]]*=' \
+    > "$tmp/code-only.s"
 
 # 2. Assemble → link → flat binary (instructions only).
 "$AS" -o "$tmp/co.o" "$tmp/code-only.s"
@@ -103,24 +110,22 @@ paste -d'\t' "$tmp/objdump.txt" "$tmp/ours.txt" \
 read -r misdecodes declines < "$tmp/counts.txt"
 
 diffn=$((misdecodes + declines))
-match="$(awk "BEGIN{printf \"%.2f\", 100 - 100*$diffn/$total}")"
 
 echo "aarch64dec vs $OBJDUMP on code-only release ($total instructions):"
-echo "  match ${match}%  —  mis-decodes: $misdecodes, declines (literal-pool data): $declines"
 
-fail=0
+if [ "$diffn" -eq 0 ]; then
+    echo "PASS: aarch64dec matches objdump exactly on all $total code-only instructions"
+    exit 0
+fi
+
+match="$(awk "BEGIN{printf \"%.2f\", 100 - 100*$diffn/$total}")"
+echo "FAIL: $diffn / $total lines differ (${match}% match) — mis-decodes: $misdecodes, declines: $declines" >&2
 if [ "$misdecodes" -ne 0 ]; then
-    echo "FAIL: $misdecodes mis-decode(s) — aarch64dec emitted a different instruction than objdump:" >&2
-    grep MIS-DECODE "$tmp/diffinfo.txt" >&2 || true
-    fail=1
+    echo "  MIS-DECODES (aarch64dec emitted a DIFFERENT instruction than objdump — decoder bug):" >&2
+    grep MIS-DECODE "$tmp/diffinfo.txt" | head -25 >&2 || true
 fi
-# Coverage floor: catches a regression that turns matches into declines.
-if awk "BEGIN{exit !($match < $MIN_MATCH)}"; then
-    echo "FAIL: match ${match}% below floor ${MIN_MATCH}% (coverage regressed)" >&2
-    fail=1
+if [ "$declines" -ne 0 ]; then
+    echo "  DECLINES (aarch64dec emitted .inst — coverage gap, or residual data not stripped at source):" >&2
+    grep decline "$tmp/diffinfo.txt" | head -25 >&2 || true
 fi
-
-if [ "$fail" -ne 0 ]; then exit 1; fi
-echo "PASS: no mis-decodes; ${match}% of code-only release matches objdump"
-echo "  (the $declines declined words are GNU-as literal-pool constants — data, correctly rendered .inst)"
-exit 0
+exit 1
