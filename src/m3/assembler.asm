@@ -4,16 +4,29 @@
 ; Boot via M0's BASIC autorun pattern:
 ;   CLEAR&7FFF: LOAD CODE "assembler" 32768: CALL 32768
 ;
-; Memory layout (M3 post-Task-16):
-;   &8000-&9FFF  assembler code (8 KB; this file + all M3 includes)
-;   &A000-&AFFF  enctab.enc buffer (4 KB; ENCTAB_BUF in loader.asm)
+; Memory layout (M5 post-budget-lever):
+;   &0000-&3FFF  section A — ROM0 (default LMPR_DEFAULT)
+;                  OR ENCTAB (physical page 4) when LMPR = LMPR_ENCTAB
+;   &4000-&7FFF  section B — page 1 (BASIC sys area, mostly unused by us);
+;                  trampoline copy at TRAMPOLINE_DST (&7E00)
+;   &8000-&AFFF  assembler code (12 KB; this file + all M3/M4/M5 includes)
 ;   &B000-&B7FF  IN .tbn buffer (2 KB; IN_BUF below)
 ;   &B800-&BFFF  OUT buffer (2 KB; OUT_BUF below)
 ;   &C000-&C0FF  stack (SP = &C100, grows down into section D RAM)
-;   &C100-&FFFF  scratch (OPVAL arrays, etc.) — section D RAM
+;   &C100-&FFFF  scratch (OPVAL arrays, SYMTAB, etc.) — section D RAM
+;
+;   Physical page 4 (off-axis): ENCTAB body — paged into section A on
+;     demand for encoder runtime reads.  See `src/m3/trampoline.asm`.
+;
+; Pre-M5 layout placed ENCTAB at &A000-&AFFF in section C, consuming
+; 4 KB of the code section.  M5's compound-operand encoders pushed
+; code size past the resulting 8 KB code budget; paging ENCTAB out
+; recovers that 4 KB.  See docs/specs/2026-05-27-samdos-load-idiom.md
+; for the design rationale.
 ;
 ; Note: pyz80 does not support the END directive. Assembly ends at EOF.
-; The org directive sets the load address; the entry point is the first byte.
+; The org directive sets the load address; the entry point is the
+; first byte.
 
 IN_BUF:         equ     &B000          ; .tbn source buffer (section C; HLOAD dest)
 IN_BUF_END:     equ     &B800          ; one past end of IN buffer (2 KB)
@@ -55,6 +68,7 @@ PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
                 jp      start
 
                 include "io.asm"
+                include "trampoline.asm"
                 include "loader.asm"
                 include "slots/xreg.asm"
                 include "slots/imm_small.asm"
@@ -82,13 +96,13 @@ PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
 ; -----------------------------------------------------------------------
 ; Main program — entry via jp from &8000.
 ;
-; M5 PR-A note on placement: `start:` and `fail:` are intentionally
-; defined BEFORE the test_*.asm includes (and therefore live entirely
-; within the &8000-&9FFF region) so the production code path is not
-; disturbed when self-tests, which sit at &A000+, are overwritten by
-; load_enctab.  The self-tests run BEFORE load_enctab; by the time
-; load_enctab clobbers &A000-&AFFF the test code has already
-; completed.  See the BUILD_TESTS include block below.
+; M5 budget-lever update: ENCTAB no longer occupies section C, so the
+; &A000-&AFFF region is now AVAILABLE for code.  The historical
+; `start:` / `fail:` placement constraint (must precede the test_*.asm
+; includes so production code stays under &9FFF) is no longer
+; strictly necessary — but we keep it because the ordering still
+; matches "self-tests run BEFORE load_enctab, which is the only real
+; ordering requirement".
 ; -----------------------------------------------------------------------
 
 start:
@@ -97,6 +111,28 @@ start:
 ; Set up the stack before any call.  SAMDOS's EI in the RST 8 hook
 ; re-enables interrupts, so DI must be repeated after hook calls.
                 ld      sp, &C100
+
+; Capture the boot LMPR value (as left by BASIC's CALL 32768) into
+; LMPR_DEFAULT_RUNTIME so enctab_map_out restores the *real* default,
+; not a synthetic "ROM in A / page 1 in B" guess.  BASIC's default
+; LMPR is typically &1F (ROM0 in A; section B = LMPR_low+1 = page 0
+; = BASIC sys page).  enctab_map_out must restore THIS value so the
+; subsequent RST 8 calls see the same section B they saw at boot
+; (UIFA at &4B00, sys vars at &5xxx, etc. all live in section B).
+;
+; This must run BEFORE any LMPR-changing call (i.e. before
+; enctab_map_in / load_enctab).
+                in      a, (250)
+                ld      (LMPR_DEFAULT_RUNTIME), a
+
+; Capture the boot HMPR value too, so the trampoline self-test can
+; verify that load_enctab's trampoline call restored it correctly.
+; Only used by the BUILD_TESTS path; production builds zero this
+; storage (no callers).
+if defined(BUILD_TESTS)
+                in      a, (251)
+                ld      (boot_hmpr), a
+endif
 
 ; -- Boot-time self-tests (compiled in only when BUILD_TESTS=1) --------
 ; Five suites run in fixed order BEFORE load_enctab so they have no
@@ -122,17 +158,34 @@ if defined(BUILD_TESTS)
                 call    run_extended_reg_self_tests
 endif
 
+; -- Install the section-B HLOAD trampoline.  Must happen BEFORE
+; load_enctab (which uses it) but AFTER the self-tests (which may
+; reuse section B's address range for their own scratch).
+                call    enctab_trampoline_setup
+
 ; -- Load and validate enctab.enc header --------------------------------
+; load_enctab uses the trampoline to land the file in physical page 4
+; (outside section C, freeing &A000-&AFFF for code).  Validates the
+; magic + version inline via a temporary enctab_map_in/map_out window,
+; and leaves LMPR back at the boot-captured LMPR_DEFAULT_RUNTIME on
+; return.
                 call    load_enctab
 
-; -- Initialise form-lookup pointers (form table base + index base) -----
-                call    form_lookup_init
+; -- Post-load trampoline / LMPR-swap self-tests ----------------------
+; These verify HMPR/LMPR are correctly restored and that ENCTAB is
+; readable via the map_in/map_out wrapper.  Must run AFTER load_enctab
+; (it needs ENCTAB to be loaded) and BEFORE main_assemble (so any
+; failure is reported before we waste time on the assemble loop).
+if defined(BUILD_TESTS)
+                call    run_trampoline_self_tests
+endif
 
 ; -- Run the assemble: pass 1 (table build) + pass 2 (emit) -----------
-; main_assemble owns the two-pass dance internally: it sets PASS_MODE
-; for each pass, resets PASS_PC + the symbol/local tables before
-; pass 1, resets PASS_PC + OUT state before pass 2, and rewinds the
-; reader between passes.  See main_loop.asm.
+; main_assemble owns the two-pass dance AND the ENCTAB-window
+; bracketing: it loads IN (LMPR=DEFAULT for SAMDOS hooks), then
+; map_in's ENCTAB into section A, calls form_lookup_init, runs the
+; passes, then map_out's before returning.  Callers see LMPR back at
+; LMPR_DEFAULT.  See main_loop.asm.
                 call    main_assemble
 
 ; -- Write OUT to disk via HSAVE ----------------------------------------
@@ -180,10 +233,10 @@ fail:           ld      a, 2
 ; -----------------------------------------------------------------------
 ; Boot-time self-test includes (BUILD_TESTS only).
 ;
-; Placed AFTER `start:` and `fail:` so the production code path lives
-; entirely in &8000-&9FFF.  The test code may legitimately spill into
-; &A000+ (which becomes ENCTAB_BUF after load_enctab); by the time
-; load_enctab overwrites that region the tests have already returned.
+; Placed AFTER `start:` and `fail:`.  Post-budget-lever, the test code
+; can legitimately spill into the full &8000-&AFFF code window
+; (ENCTAB no longer occupies section C); the production binary's code
+; budget is now 12 KB total instead of 8 KB.
 ; -----------------------------------------------------------------------
 if defined(BUILD_TESTS)
                 include "test_slots.asm"
@@ -195,4 +248,5 @@ if defined(BUILD_TESTS)
                 include "test_ror_imm.asm"
                 include "test_shifted_reg.asm"
                 include "test_extended_reg.asm"
+                include "test_trampoline.asm"
 endif

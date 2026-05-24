@@ -88,17 +88,35 @@ DIR_HWORD:              equ     21  ; .hword (synonym of .short)
 
 
 ; -----------------------------------------------------------------------
-; main_assemble — orchestrate the two-pass assemble.
+; main_assemble — orchestrate the two-pass assemble + the ENCTAB-in-
+; section-A window bracketing.
 ;
-; Called after load_enctab + form_lookup_init.
+; Called after load_enctab (which leaves LMPR = LMPR_DEFAULT).
+;
+; Sequence:
+;   1. load_in_file (RST 8 — needs LMPR = LMPR_DEFAULT for ROM access)
+;   2. enctab_map_in — page ENCTAB into section A for encoder reads
+;   3. form_lookup_init — first call that READS ENCTAB; must be inside
+;      the map_in window
+;   4. Pass 1 — table build (reads ENCTAB heavily via form_lookup)
+;   5. Pass 2 — emit (reads ENCTAB + writes OUT)
+;   6. enctab_map_out — restore LMPR = LMPR_DEFAULT before returning so
+;      the caller can safely call save_out_file (RST 8)
 ;
 ; Input: none.
 ; Output: OUT_BUF populated, OUT_LEN set; ready for HSAVE.
+;         LMPR = LMPR_DEFAULT on return.
 ; On any error: jp fail.
 ; -----------------------------------------------------------------------
 main_assemble:
-; -- Load IN via HGTHD + HLOAD into IN_BUF (once) ---------------------
+; -- Load IN via HGTHD + HLOAD into IN_BUF (LMPR = boot default) ------
                 call    load_in_file
+
+; -- Bracket open: ENCTAB into section A for encoder reads -----------
+                call    enctab_map_in
+
+; -- First ENCTAB-reading call: compute form/index pointers ----------
+                call    form_lookup_init
 
 ; ----- Pass 1: table build -------------------------------------------
                 ld      a, PASS_PASS1
@@ -116,6 +134,10 @@ main_assemble:
                 call    reset_out_buffer
                 call    reset_reader_to_in_buf
                 call    walk_records
+
+; -- Bracket close: restore LMPR so save_out_file's RST 8 finds ROM
+; in section A.
+                call    enctab_map_out
                 ret
 
 
