@@ -22,9 +22,15 @@ func main() {
 		flattenFlag       bool
 		originStr         string
 		stripCommentsFlag bool
+		preprocessOnly    bool
 	)
 	flag.StringVar(&outFlag, "o", "", "output file (defaults to INPUT.tbn)")
 	flag.Var(&incDirs, "I", "directory to search for .include (repeatable)")
+	flag.BoolVar(&preprocessOnly, "E", false,
+		"preprocess only: emit the expanded SOURCE (includes resolved, "+
+			"macros expanded, .if evaluated) and stop — do NOT tokenise. "+
+			"Mirrors the cpp `-E` convention. Used to vendor a single "+
+			"self-contained release source for the m6-release gate.")
 	flag.BoolVar(&flattenFlag, "flatten", false,
 		"after parsing, apply the linker-equivalent flatten pass "+
 			"(spectrum4 layout: .text + BSS labels as .equ).")
@@ -38,7 +44,7 @@ func main() {
 			"(~408 KB unstripped, ~88 KB stripped).")
 	flag.Parse()
 	if flag.NArg() != 1 {
-		fmt.Fprintf(os.Stderr, "usage: text2bin [-I dir]... [-flatten [-origin N]] [-strip-comments] INPUT.s [-o OUTPUT.tbn]\n")
+		fmt.Fprintf(os.Stderr, "usage: text2bin [-I dir]... [-E | [-flatten [-origin N]] [-strip-comments]] INPUT.s [-o OUTPUT]\n")
 		os.Exit(2)
 	}
 	in := flag.Arg(0)
@@ -47,6 +53,32 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+
+	// -E: emit expanded source, not a .tbn.  Mutually exclusive with the
+	// tokenising flags.
+	if preprocessOnly {
+		if flattenFlag || stripCommentsFlag {
+			fmt.Fprintln(os.Stderr, "-E cannot be combined with -flatten or -strip-comments")
+			os.Exit(2)
+		}
+		expanded, err := translate.Preprocess(src, in,
+			translate.PreprocessOptions{IncludeDirs: incDirs})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		if outFlag == "" {
+			if _, err := os.Stdout.Write(expanded); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		} else if err := os.WriteFile(outFlag, expanded, 0644); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	var out []byte
 	if flattenFlag {
 		origin, err := parseInt64(originStr)
