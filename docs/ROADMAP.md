@@ -19,7 +19,7 @@ See `docs/specs/2026-05-09-vision.md` for the long-form pitch and `docs/specs/20
 | M4 | Symbol table, multi-pass, full expression evaluator on Z80 | `docs/specs/2026-05-24-m4-symbols-multipass-design.md` | — (not yet) | 📋 designed; ordering after M3 — plan: `docs/plans/2026-05-24-m4-symbols-multipass.md` |
 | M5 | Compact `.tbn` format + built-in disassembler | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | — | 📋 designed; ordering after M3 / M4 |
 | (Phase 2) | On-SAM editor | `docs/specs/2026-05-09-phase1-assembler.md` §editor + future spec | — | 📋 sketched |
-| (Phase 3) | TFTP shipper to Pi 400 (Quazar Trinity) | future spec | — | 📋 sketched; reference: `simonowen/trinload` |
+| (Phase 3) | TFTP shipper to Pi 400 (Quazar Trinity) over direct LAN cable | `docs/specs/2026-05-27-phase3-tftp-direct-lan-design.md` | — | 📋 design direction captured; reference: `simonowen/trinload` |
 
 Legend: ✅ done · ⏳ in progress · 📋 designed, not started
 
