@@ -151,19 +151,23 @@ main_assemble:
 
 
 ; -----------------------------------------------------------------------
-; reset_reader_to_in_buf — IN_POS := IN_BUF, then reader_init.
+; reset_reader_to_in_buf — IN_POS := (LMPR_IN_BASE, 0), then reader_init.
 ;
-; reader_init validates the magic, skips the name table, and leaves
-; IN_POS at the first record.  It does not write outside IN_POS, so
-; calling it twice (once per pass) is safe.
+; reader_init validates the magic, skips the name table, and leaves the
+; cursor at the first record.  It does not write outside the cursor
+; vars, so calling it twice (once per pass) is safe.  Pass 2 uses this
+; to rewind the in-memory cursor with no disk re-read.
 ;
-; Input:  IN_END must be set (by load_in_file).
-; Output: IN_POS positioned at the first record's kind byte.
+; Input:  IN_END_PAGE / IN_END_OFFSET must be set (by load_in_file).
+; Output: cursor at the first record's kind byte; LMPR back at
+;         LMPR_ENCTAB (reader_init restores it before returning).
 ; Clobbers: A, BC, DE, HL.
 ; -----------------------------------------------------------------------
 reset_reader_to_in_buf:
-                ld      hl, IN_BUF
-                ld      (IN_POS), hl
+                ld      a, LMPR_IN_BASE
+                ld      (IN_POS_PAGE), a
+                ld      hl, 0
+                ld      (IN_POS_OFFSET), hl
                 jp      reader_init                 ; tail-call
 
 
