@@ -241,6 +241,32 @@ try_intercept_lslsr:
                 ret
 try_intercept_post_lslsr:
 
+; -- Bitfield aliases: bfi=49 bfxil=50 ubfx=51 bfc=83 sbfx=84 ---------
+; All BFM/SBFM/UBFM aliases with computed immr/imms, dispatched ahead of
+; the form table on the Mac side (refenc/pass2.go:302 -> case 49,50,51,
+; 83,84 -> encodeBitfieldInst).  bfc is 3-operand (Rn implicitly XZR);
+; the others are 4-operand.  No form-table entry exists, so a miss here
+; would fall through to FAIL40.  Grounded against aarch64-none-elf-as +
+; ARM ARM C6.2.40/.42/.335/.41/.270.
+                ld      a, (try_intercept_mnem)
+                cp      49
+                jr      z, try_intercept_bitfield
+                cp      50
+                jr      z, try_intercept_bitfield
+                cp      51
+                jr      z, try_intercept_bitfield
+                cp      83
+                jr      z, try_intercept_bitfield
+                cp      84
+                jp      nz, try_intercept_post_bitfield
+try_intercept_bitfield:
+                ld      a, (try_intercept_mnem)
+                call    encode_bitfield_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+try_intercept_post_bitfield:
+
 ; -- Barrier mnemonics: isb=66 / dsb=67 / dmb=68 ----------------------
 ; text2bin converts the barrier-arg keyword (sy, ish, ishst, ...) into a
 ; single OpImmExpr carrying the CRm field (bits 11:8); isb with no arg
@@ -1112,3 +1138,208 @@ encode_lslsr_regsize:            defb    0
 encode_lslsr_shift:              defb    0
 encode_lslsr_immr:               defb    0
 encode_lslsr_imms:               defb    0
+
+
+; -----------------------------------------------------------------------
+; encode_bitfield_word — pure word computation for the bitfield aliases.
+;
+; Port of tools/refenc/pass2.go:encodeBitfieldInst (pass2.go:1277).
+;   bfi  (49): immr=(-lsb)&(regsize-1), imms=width-1     base BFM
+;   bfxil(50): immr=lsb,                imms=lsb+width-1  base BFM
+;   ubfx (51): immr=lsb,                imms=lsb+width-1  base UBFM
+;   bfc  (83): Rn=XZR(31); immr=(-lsb)&(regsize-1), imms=width-1 BFM
+;   sbfx (84): immr=lsb,                imms=lsb+width-1  base SBFM
+;   word = base | (immr<<16) | (imms<<10) | (Rn<<5) | Rd
+;
+; In:  A = mnemonic_id (49/50/51/83/84).
+;      OPVAL_ARRAY[0] = Rd (X=0x01 / W=0x02), reg in +1.
+;      bfc (83):  op1 = #lsb (ImmExpr), op2 = #width (ImmExpr); Rn=31.
+;      others:    op1 = Rn, op2 = #lsb, op3 = #width.
+; Out: DE:HL = encoded 32-bit word.
+; Errors: jp fail on width != X/W, lsb >= regsize, width<1 or
+;   width>regsize-lsb, or non-u8 lsb/width.
+; -----------------------------------------------------------------------
+encode_bitfield_word:
+                ld      (encode_bf_mnem), a
+; -- regsize / is64 from operand 0 kind -------------------------------
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0)
+                cp      OP_KIND_REG_X
+                jr      z, encode_bf_x
+                cp      OP_KIND_REG_W
+                jp      nz, fail
+                ld      a, 32
+                jr      encode_bf_size_set
+encode_bf_x:
+                ld      a, 64
+encode_bf_size_set:
+                ld      (encode_bf_regsize), a
+
+; -- Locate operand slots (bfc shifts lsb/width down by one) ----------
+; Rn and lsb/width source offsets differ for bfc (83).
+                ld      a, (encode_bf_mnem)
+                cp      83
+                jr      z, encode_bf_bfc
+
+; 4-operand: Rn = op1 reg; lsb = op2 LE byte 0; width = op3 LE byte 0.
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1)
+                and     &1f
+                ld      (encode_bf_rn), a
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 2)
+                ld      (encode_bf_lsb), a
+; reject non-u8 lsb
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 3)
+                or      a
+                jp      nz, fail
+                ld      a, (OPVAL_ARRAY + 3 * OPVAL_STRIDE + 2)
+                ld      (encode_bf_width), a
+                ld      a, (OPVAL_ARRAY + 3 * OPVAL_STRIDE + 3)
+                or      a
+                jp      nz, fail
+                jr      encode_bf_have_ops
+
+encode_bf_bfc:
+; 3-operand bfc: Rn = XZR (31); lsb = op1 LE; width = op2 LE.
+                ld      a, 31
+                ld      (encode_bf_rn), a
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2)
+                ld      (encode_bf_lsb), a
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 3)
+                or      a
+                jp      nz, fail
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 2)
+                ld      (encode_bf_width), a
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 3)
+                or      a
+                jp      nz, fail
+
+encode_bf_have_ops:
+; -- Range checks: lsb < regsize; 1 <= width <= regsize - lsb ---------
+                ld      a, (encode_bf_regsize)
+                ld      b, a                ; B = regsize
+                ld      a, (encode_bf_lsb)
+                cp      b
+                jp      nc, fail            ; lsb >= regsize
+                ld      a, b                ; regsize
+                ld      c, a
+                ld      a, (encode_bf_lsb)
+                ld      b, a
+                ld      a, c
+                sub     b                   ; A = regsize - lsb
+                ld      c, a                ; C = regsize - lsb (>=1)
+                ld      a, (encode_bf_width)
+                or      a
+                jp      z, fail             ; width == 0
+                cp      c
+                jp      z, encode_bf_width_ok
+                jp      nc, fail            ; width > regsize - lsb
+encode_bf_width_ok:
+
+; -- Compute immr/imms by mnemonic ------------------------------------
+; bfi(49) and bfc(83): immr=(-lsb)&(regsize-1), imms=width-1
+; bfxil(50)/ubfx(51)/sbfx(84): immr=lsb, imms=lsb+width-1
+                ld      a, (encode_bf_mnem)
+                cp      49
+                jr      z, encode_bf_immr_neg
+                cp      83
+                jr      z, encode_bf_immr_neg
+
+; immr = lsb; imms = lsb + width - 1
+                ld      a, (encode_bf_lsb)
+                and     &3f
+                ld      (encode_bf_immr), a
+                ld      a, (encode_bf_lsb)
+                ld      b, a
+                ld      a, (encode_bf_width)
+                add     a, b
+                dec     a                   ; lsb + width - 1
+                and     &3f
+                ld      (encode_bf_imms), a
+                jr      encode_bf_base
+
+encode_bf_immr_neg:
+; immr = (-lsb) & (regsize-1) = (regsize - lsb) & (regsize-1).
+;   lsb==0 → immr=0; else regsize - lsb.
+                ld      a, (encode_bf_lsb)
+                or      a
+                jr      nz, encode_bf_immr_neg_nz
+                xor     a
+                jr      encode_bf_immr_neg_done
+encode_bf_immr_neg_nz:
+                ld      a, (encode_bf_regsize)
+                ld      c, a
+                ld      a, (encode_bf_lsb)
+                ld      b, a
+                ld      a, c
+                sub     b                   ; regsize - lsb
+                and     &3f
+encode_bf_immr_neg_done:
+                ld      (encode_bf_immr), a
+; imms = width - 1
+                ld      a, (encode_bf_width)
+                dec     a
+                and     &3f
+                ld      (encode_bf_imms), a
+
+encode_bf_base:
+; base by mnemonic + width.  DE = base high16, HL = 0.
+;   bfi/bfxil/bfc : BFM  — X 0xb340 / W 0x3300
+;   ubfx          : UBFM — X 0xd340 / W 0x5300
+;   sbfx          : SBFM — X 0x9340 / W 0x1300
+                ld      a, (encode_bf_mnem)
+                cp      51
+                jr      z, encode_bf_base_ubfm
+                cp      84
+                jr      z, encode_bf_base_sbfm
+; BFM (bfi/bfxil/bfc)
+                ld      a, (encode_bf_regsize)
+                cp      64
+                jr      z, encode_bf_bfm_x
+                ld      de, &3300
+                jr      encode_bf_pack
+encode_bf_bfm_x:
+                ld      de, &b340
+                jr      encode_bf_pack
+encode_bf_base_ubfm:
+                ld      a, (encode_bf_regsize)
+                cp      64
+                jr      z, encode_bf_ubfm_x
+                ld      de, &5300
+                jr      encode_bf_pack
+encode_bf_ubfm_x:
+                ld      de, &d340
+                jr      encode_bf_pack
+encode_bf_base_sbfm:
+                ld      a, (encode_bf_regsize)
+                cp      64
+                jr      z, encode_bf_sbfm_x
+                ld      de, &1300
+                jr      encode_bf_pack
+encode_bf_sbfm_x:
+                ld      de, &9340
+
+encode_bf_pack:
+                ld      hl, 0
+; Rd → bits 4:0
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1)
+                and     &1f
+                ld      l, a
+; Rn → bits 9:5
+                ld      a, (encode_bf_rn)
+                call    encode_ubfm_or_rn
+; imms → bits 15:10
+                ld      a, (encode_bf_imms)
+                call    encode_ubfm_or_imms
+; immr → bits 21:16 (DE low byte bits 0..5)
+                ld      a, (encode_bf_immr)
+                or      e
+                ld      e, a
+                ret
+
+
+encode_bf_mnem:                  defb    0
+encode_bf_regsize:               defb    0
+encode_bf_rn:                    defb    0
+encode_bf_lsb:                   defb    0
+encode_bf_width:                 defb    0
+encode_bf_immr:                  defb    0
+encode_bf_imms:                  defb    0
