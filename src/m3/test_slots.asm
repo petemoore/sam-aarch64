@@ -321,6 +321,31 @@ run_slot_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &00, &8c, &00, &00  ; 0x00008C00 LE
 
+; -- encode_bitfield_bfi(immr@BP=16,imms@BP=10, regsize=64, lsb=4, width=8)
+;    => immr = (-4) & 63 = 60, imms = 7
+;       result = 60<<16 | 7<<10 = 0x003C0000 | 0x00001C00 = 0x003C1C00.
+; Mirrors slots_bitfield_test.go::TestEncodeBitfieldBfi.
+; Two-slot calling convention (see slots/bitfield_imm.asm header):
+;   HL = combined 8-byte slot record, B = lsb, C = width, A = regsize sel.
+                ld      hl, slot_bf_immr_bp16_imms_bp10
+                ld      b, 4               ; lsb
+                ld      c, 8               ; width
+                ld      a, 1               ; regsize = 64
+                call    encode_bitfield_bfi
+                call    assert_eq32_de_hl_imm
+                defb    &00, &1c, &3c, &00  ; 0x003C1C00 LE
+
+; -- encode_bitfield_ubfx(immr@BP=16,imms@BP=10, lsb=4, width=8)
+;    => immr = 4, imms = 4+8-1 = 11
+;       result = 4<<16 | 11<<10 = 0x00040000 | 0x00002C00 = 0x00042C00.
+; Mirrors slots_bitfield_test.go::TestEncodeBitfieldUbfx.
+                ld      hl, slot_bf_immr_bp16_imms_bp10
+                ld      b, 4               ; lsb
+                ld      c, 8               ; width
+                call    encode_bitfield_ubfx
+                call    assert_eq32_de_hl_imm
+                defb    &00, &2c, &04, &00  ; 0x00042C00 LE
+
 ; All assertions passed.
                 ret
 
@@ -399,6 +424,7 @@ assert_eq32_de_hl_imm:
 ;   BranchImm14  = 0x22
 ;   AdrpImm      = 0x23
 ;   LogicalImm   = 0x24
+;   BitfieldImm  = 0x25
 ;
 ; expected_kind is set to 0 here: the encoders do not consult it
 ; (text2bin uses it earlier in the pipeline).
@@ -418,6 +444,14 @@ slot_branch19_bp5_bw19: defb    &21, 0,  5, 19
 slot_branch14_bp5_bw14: defb    &22, 0,  5, 14
 slot_adrp_bp0_bw21:     defb    &23, 0,  0, 21
 slot_logimm_bp10_bw13:  defb    &24, 0, 10, 13
+
+; BitfieldImm uses TWO slots back-to-back (immr followed by imms).
+; The encoder takes HL pointing at the 8-byte combined record.
+;   immr_slot: BP=16, BW=6
+;   imms_slot: BP=10, BW=6
+slot_bf_immr_bp16_imms_bp10:
+                defb    &25, 0, 16, 6      ; immr slot
+                defb    &25, 0, 10, 6      ; imms slot
 
 ; -- LogicalImm input buffers (8-byte LE) -------------------------------
 ; The encoder takes a pointer to an 8-byte LE buffer (DE on entry).
