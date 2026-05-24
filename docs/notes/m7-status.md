@@ -20,7 +20,7 @@ Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not
 | IN/OUT paged-buffer ceiling (claim more SAM pages) | 🧭 | `docs/specs/2026-05-29-bump-arena-risk-census.md` §IN/OUT | The real near-term constraint surfaced by the bump-arena census: the **IN `.tbn` buffer is at 92% of its 96 KB / 6-page cap today** (88,644 B; fail tag `03`), OUT at 68% of 32 KB (fail tag `b0`). Physical pages 15..31 (~272 KB) are free, so the fix is a bounds bump (more pages), not an allocator. Not urgent (release fits), but the closest ceiling — do before a substantially larger source lands. Pairs with the compact-`.tbn` strand. |
 | Codegen sysreg / mnemonic / form tables from Go authority | 📋 | M6-closure plan §M7 sketch (PR-A), `tools/sam-aarch64-format/sysregs.go` | Kills hand-sync drift. Depends on M6 PR-2's page-13 binary build glue. |
 | On-SAM disassembler (strand B) | 📋 | `docs/plans/2026-05-28-go-aarch64-disassembler.md`; branch `strand-b-1-disassembler` (5 commits, parked) | Resume per Pete's redirect after M6 closes. |
-| Compact `.tbn` format | 📋 | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | Future-proofing for sources beyond the paged-IN ceiling. |
+| **Source compression / compact `.tbn`** ⭐ NEXT-SESSION PRIORITY | 📋 | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`; Pete 2026-05-29 (framing + priority) | **Pete's stated next priority.** Framing: make the internal representation **the assembled bytes** for instructions that carry no expressions (vs the current verbose record stream). Pete expects **huge memory savings** (directly relieves the IN-buffer ceiling — currently 92% — and the section-D tables) **and gets us much closer to a full on-SAM Z80 disassembler** (bytes-in → text-out is the inverse). Expression-bearing instructions still need their symbolic form for 2-pass resolution, so the format is hybrid. Design first (refine the existing spec with this framing), then implement. |
 | Editor groundwork (Phase 2) | 🧭 | `docs/ROADMAP.md` "Editor vision" section | Instruction-explanation panel, register simulator, sysreg docs, did-you-mean. Not yet spec'd. |
 | Repo-cleanup / README housekeeping track | ⏳ | `docs/notes/2026-05-29-repo-audit.md` §6 (prioritised plan) | Track underway. **Landed: PR #78** (dead Go symbols + orphan stub removed), **PR #80** (`tools/` + `src/README.md` index READMEs). Remaining: deep reviews of `main_loop.asm` (#11) / `litpool.asm` (#12), and the `SYMTAB_*` `equ` sentinels (#8). Does NOT block other M7 work. |
 | Directory naming & logical organisation (rename `src/m3`) | ⏳ | Pete 2026-05-29 (decision delegated to agent) | **`src/m3` → flat `src/` DONE (PR #82).** The dir is gone; all live references updated. The wider naming review (`tests/m{3..6}`, `ci-m{N}` targets, `build-m3-disk` tool, milestone-named fixtures) remains as later M7 cleanup. |
@@ -31,7 +31,8 @@ Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not
 | Go-harness fidelity follow-ups | ⏳ | `docs/notes/2026-05-29-go-harness-fidelity-investigation.md` Q4; paged-trap root-cause `docs/notes/2026-05-29-go-harness-paged-trap-rootcause.md` | **Paged-path trap ✅ RESOLVED (PR #88):** NOT a fidelity bug — the 6-page paged-IN HLOAD is faithful; the `&0038` trap was a missing `-sysreg-data` (empty page 13 → NOP-slide). With it supplied, **the harness runs the full release `.tbn` and byte-matches the vendored `release.img`.** Fixed diagnostically (loud "unserved HGTHD file" message) + regression test. **Remaining (lower priority):** write-watchpoint activation, `make harness-sweep` target, USAGE.md ledger. NOT real-ROM execution. |
 | Z80↔Go encoding/operator parity audit | ✅ | PR #87 → `docs/notes/2026-05-29-z80-go-parity-audit.md` | **Done — and parity is essentially COMPLETE, not a subset.** The generic encoder consumes `enctab.enc` generated from the same Go `Form` table (can't drift); all 17 slot kinds dispatched; every refenc special-case encoder mirrored 1:1; 27/27 expr ops, 22/22 directives, 12/12 operand kinds. Remaining work is **robustness/scale, not features** → see the seeds row below. |
 | Parity robustness seeds (from the #87 audit) | 🧭 | `docs/notes/2026-05-29-z80-go-parity-audit.md` §summary | Three follow-ups the parity audit surfaced: (1) the sysreg named-table subset has one fail-hard path (`src/sysname.asm:421` "no generic form" — likely some PSTATE/DC/TLBI op names) — make it fail-soft or extend the subset; (2) fixed Z80 caps vs unbounded Go (the IN/OUT-ceiling + bump-arena-YAGNI story already covers most); (3) **untested-form-combination sweep** — parity today is *structural*, not empirically tested beyond the M3–M6 fixtures; a fixture sweep through the byte-match harness would convert structural→verified parity (and the harness can now run the full release, per #88). |
-| SAM screen-mode decision (editor) | 🧭 | Pete 2026-05-29; ROADMAP "Editor vision" | MODE 3 currently assumed. Decide mode(s) by colour-vs-resolution + aesthetics nearer the editor; the choice consumes display RAM / pages, so it feeds the memory-layout doc (the ✅ row above). |
+| SAM screen-mode decision (editor) | 🧭 | Pete 2026-05-29; ROADMAP "Editor vision" | MODE 3 currently assumed. Decide mode(s) by colour-vs-resolution + aesthetics nearer the editor; the choice consumes display RAM / pages, so it feeds the memory-layout doc (the ✅ row above). **Pete 2026-05-29:** consider offering it as a **user preference** — high-resolution/fewer-colours vs lower-resolution/more-colours — rather than a fixed choice. |
+| Full ARMv8-A instruction-set footprint — research | 🧭 (research) | Pete 2026-05-29 | **Isolated research project:** estimate how much additional memory (encoder tables + Z80 code) it would take to support the **full ARMv8.0-A A64 instruction set** (A64 only — no AArch32/Thumb; ARMv8.0 only, not later v8.x), vs today's spectrum4-release-only subset. Include the **FP + Advanced SIMD/NEON** extensions (Pete: "is that NEON? — yes"). Motivation: decide whether broad-ISA support is worth it for future kernel dev (more ops than spectrum4 uses) or ingesting LLVM-compiled output (extract asm → modify on SAM). Output: an informed size estimate + feasibility note; no implementation. Builds on the #87 parity audit (which found the *current* coverage is structurally complete for the subset). |
 | Trinity SD/flash storage → bigger-kernel architecture | 🧭 *(beyond-M7)* | Pete 2026-05-29; `memory/trinity_hardware.md` | Trinity's SD/MMC slot lifts the implicit single-floppy ceiling, enabling much larger kernels/debug builds (spectrum4 may be ~5× when complete). The binding constraint eventually shifts from code budget to storage. Quazar docs to be scanned. Distant future. |
 
 ## Open questions for Pete (awaiting input)
@@ -61,18 +62,20 @@ once resolved.
    happy for the agent to drive design + brainstorming solo (review later).
    Editor/screen-mode aesthetic input can come at review time. See the
    bump-arena strand below for Pete's substantive framing on that one.
-4. **`src/stub.asm` — retire the M0 round-trip oracle, or keep it?**
-   ⏳ NEW (2026-05-29). Pete flagged the old "assemble a nop, write OUT to
-   disk" stub as probably no-longer-needed. But it is NOT dead: it's the
-   M0 end-to-end round-trip oracle (`make ci` → `make stub` → `build/stub.bin`),
-   and the **`test` CI job (a required check) runs `make ci`**. So it's the
-   most basic pyz80→SimCoupé→samfile→GNU smoke test. It's arguably subsumed
-   now by the M3–M6 fixture corpus + the m6-release gate (all of which do
-   the same round-trip with real encoding). Retiring it means removing
-   `src/stub.asm` + `tools/build-stub.sh` + the nop fixture + the `test`
-   CI job + dropping `test` from branch-protection's required checks — a
-   judgement call (keep the minimal smoke test, or rely on M3+?). **Logged,
-   not actioned** — needs Pete's decision (and a branch-protection edit).
+4. **`src/stub.asm` / the M0 stub chain — ✅ DECIDED: DELETE (Pete 2026-05-29).**
+   Pete: "delete all the stub chain stuff, it is completely subsumed, i
+   agree." The M0 nop-to-disk round-trip oracle is fully subsumed by the
+   M3–M6 fixture corpus + the m6-release 3-way gate. **Not yet executed**
+   (a careful change + a branch-protection edit — a clean next-session
+   task). **Deletion recipe** (one PR): remove `src/stub.asm`,
+   `tools/build-stub.sh`, the M0 nop fixture (`tests/fixtures/nop.s`), and
+   the `stub` / `disk` / `run` / `extract` / `diff` / `test` / `check` /
+   `ci` Makefile targets that exist *only* for the M0 stub flow (audit
+   carefully — keep anything the M3+ flows reuse); remove the `test` CI job
+   from `.github/workflows/ci.yml`; **and remove `test` from `main`'s
+   branch-protection required-status-checks** (`gh api … required_status_checks/contexts`
+   — would drop 14 → 13). Also sweep docs for now-dead M0/stub references.
+   Verify `make ci-m3 … ci-m6` (+`-prod`) + the m6-release gate still pass.
 5. **`tools/llist-normalise/llist-normalise` is a committed binary** (an
    accidental check-in spotted during the rename). Folds into the punted
    LLIST-cluster disposition (open question 2) — handle together.
@@ -240,6 +243,39 @@ The recommendation is a small dev/CI check that diffs the two tables, or a
 cross-link comment making the sync obligation impossible to miss. This is
 the tactical near-term guard; the codegen-from-Go-authority strand above is
 the strategic fix that dissolves the drift entirely. 📋.
+
+## Beyond-M7 / future ideas (captured 2026-05-29, need organising)
+
+Pete dumped a batch of longer-horizon ideas at the end of the M6/M7
+session. Captured here so none are lost; they still need to be
+**organised, prioritised, dependency-mapped, and scheduled** (likely
+re-homed into ROADMAP milestones / a new milestone doc, and split for
+parallel-agent execution). That organisation is itself a pending task.
+
+- **UI-prototyping spike (interactive editor).** Before/at the editor
+  milestone (Phase 2), do a spike to prototype what the assembler's
+  **user interface** could look like — play with visuals + interaction
+  ideas for the main editor UI. Tightly coupled to the SAM screen-mode
+  decision (scope-table row) and the hi-res/lo-res user-preference idea.
+  Pete: "would be nice to play around with some visuals or ideas."
+- **Preprocessor capabilities on SAM: `.if` build-constraints + macros.**
+  Pete's macOS spectrum4 workflow uses `.if` for debug/release/test
+  builds and `.macro`s; moving development onto the SAM would be painful
+  without them. text2bin already handles `.if`/`.macro` Mac-side (the
+  flatten/`-E` path) — the question is supporting them *in the on-SAM
+  toolchain*. Big enabler for real on-SAM kernel development.
+- **Multiple source files + staged/partial loading.** Considering the
+  above motivates: support kernels **split across multiple source files**;
+  **not** requiring the entire source resident in memory at once; staged
+  load + includes; and **assembling part of the code without the full
+  source loaded**. Directly relieves the memory-ceiling story and pairs
+  with source compression + the Trinity SD/flash storage path (bigger
+  binaries). Several interdependent enhancements here.
+- **(see also)** the **full ARMv8-A ISA footprint research** and
+  **source-compression/compact-`.tbn`** scope rows above, and the
+  **Trinity SD/flash storage** beyond-M7 row — this cluster
+  (compression ↔ multi-file ↔ staged-load ↔ bigger storage ↔ broader ISA)
+  is interlinked and wants a proper dependency map.
 
 ## Deferred backlog (smaller items)
 
