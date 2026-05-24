@@ -1,14 +1,14 @@
 # M7 — current status (read me first)
 
-Entry point for any session picking up M7. This is an **initial planning
-doc** — a parking place for the M7 backlog that's currently scattered
-across notes and memory, gathered ahead of time so nothing is lost in the
-M6 → M7 transition. It will be refined (and the strands re-prioritised /
-sequenced) when M6 closes and the standalone M7 plan is written.
+Entry point for any session picking up M7. The M7 backlog (gathered from
+notes + memory so nothing was lost in the M6 → M7 transition) is the scope
+table below; it will keep being refined / re-prioritised as M7 proceeds.
 
-**M7 — NOT STARTED (planning).** M6 closing via
-`docs/plans/2026-05-29-m6-closure-release-bytematch.md`; M7 opens once M6
-flips ✅.
+**M7 — ACTIVE (opened 2026-05-29; M6 closed via PR #76).** Housekeeping
+batch 1 has landed (PRs #78–#82: dead-code removal, sysreg sync guard,
+index READMEs + memory-layout doc, decision bookkeeping, the `src/m3` →
+flat `src/` rename). See the ROADMAP "Current State" block for the live
+session view; this doc is the per-strand source of truth.
 
 ## M7 scope (planning snapshot)
 
@@ -22,14 +22,14 @@ Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not
 | Compact `.tbn` format | 📋 | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | Future-proofing for sources beyond the paged-IN ceiling. |
 | Editor groundwork (Phase 2) | 🧭 | `docs/ROADMAP.md` "Editor vision" section | Instruction-explanation panel, register simulator, sysreg docs, did-you-mean. Not yet spec'd. |
 | Repo-cleanup / README housekeeping track | ⏳ | `docs/notes/2026-05-29-repo-audit.md` §6 (prioritised plan) | Track underway. **Landed: PR #78** (dead Go symbols + orphan stub removed), **PR #80** (`tools/` + `src/README.md` index READMEs). Remaining: deep reviews of `main_loop.asm` (#11) / `litpool.asm` (#12), and the `SYMTAB_*` `equ` sentinels (#8). Does NOT block other M7 work. |
-| Directory naming & logical organisation (rename `src/m3`) | ⏳ | Pete 2026-05-29 (decision delegated to agent) | **Decided: flatten `src/m3/` → `src/`** (flat, no component subfolder — see resolved open-question 1). Rename PR in flight. The wider naming review (`tests/m{3..6}`, `ci-m{N}` targets, milestone-named fixtures) remains as later M7 cleanup. |
-| Canonical memory-layout reference doc | ✅ | PR #80 → `docs/notes/memory-layout.md` | Done. Mirrors the authoritative `src/m3/assembler.asm` header map (source of truth; doc points to it, no drift). |
-| Sysreg Go↔Z80 sync guard | ✅ | PR #79 → `tools/sam-aarch64-format/sysregs_z80sync_test.go` + `sysreg-sync` CI job (now a required check) | Done. Go test parses `src/m3/sysreg_data.asm` and asserts every Z80 entry byte-matches the Go authority (the Z80 table is an intentional subset). |
+| Directory naming & logical organisation (rename `src/m3`) | ⏳ | Pete 2026-05-29 (decision delegated to agent) | **`src/m3` → flat `src/` DONE (PR #82).** The dir is gone; all live references updated. The wider naming review (`tests/m{3..6}`, `ci-m{N}` targets, `build-m3-disk` tool, milestone-named fixtures) remains as later M7 cleanup. |
+| Subagent worktree-isolation leak (stray git ops in shared checkout) | 🧭 | Observed 2026-05-29 (Pete flagged) | Worktree-isolated subagents (`Agent` tool, `isolation: worktree`) have twice run `git checkout -b` / `git reset --hard` against the **shared** checkout instead of staying in their worktree (recovered both times, no work lost — the orchestrator commits before dispatching). Investigate why isolation leaks (likely the subagent `cd`s to the repo root, which resolves to the shared dir) and harden: e.g. instruct subagents to operate only via their worktree path, or verify/restore the shared checkout's branch after each subagent returns. Process hazard, not yet causing damage. |
+| Canonical memory-layout reference doc | ✅ | PR #80 → `docs/notes/memory-layout.md` | Done. Mirrors the authoritative `src/assembler.asm` header map (source of truth; doc points to it, no drift). |
+| Sysreg Go↔Z80 sync guard | ✅ | PR #79 → `tools/sam-aarch64-format/sysregs_z80sync_test.go` + `sysreg-sync` CI job (now a required check) | Done. Go test parses `src/sysreg_data.asm` and asserts every Z80 entry byte-matches the Go authority (the Z80 table is an intentional subset). |
 | Linker-layout coupling (flatten hardcodes `spectrum4.ld`) | 🧭 | Pete 2026-05-29; `tools/text2bin/internal/translate/flatten.go` `SpectrumFourLayout` | Byte-equivalence on the release relies on text2bin's flatten pass **hardcoding** spectrum4.ld's section order + ALIGNs + origin (we do NOT parse the `.ld`). The m6-release 3-way gate guards drift (a `.ld` change → re-vendor → gate fails until flatten is updated), but it's an implicit coupling. Consider: parse `spectrum4.ld` directly, or vendor it + a checked cross-reference, or at minimum document the coupling beside `SpectrumFourLayout`. |
 | Go-harness fidelity follow-ups | 📋 | `docs/notes/2026-05-29-go-harness-fidelity-investigation.md` Q4 | Write-watchpoint activation, `make harness-sweep` target, USAGE.md ledger. NOT real-ROM execution. **PLUS: root-cause the paged-path trap** — harness traps (PC→`&0038`) on the full 88 KB / 6-page paged-IN load where SimCoupé succeeds (`docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md`). Pete: ideally M6 (tracked primarily in `m6-status.md`), acceptable M7. |
 | Z80↔Go encoding/operator parity audit | 🧭 | Pete 2026-05-29; `tools/sam-aarch64-format` / refenc is authoritative | Systematically ensure the Z80 side implements the same instruction encodings AND expression operators as the Go library. M6 closes only what release-stripped needs; full parity is M7. |
-| SAM screen-mode decision (editor) | 🧭 | Pete 2026-05-29; ROADMAP "Editor vision" | MODE 3 currently assumed. Decide mode(s) by colour-vs-resolution + aesthetics nearer the editor; the choice consumes display RAM / pages, so it feeds the memory-layout doc below. |
-| Canonical memory-layout reference doc | 📋 | Pete 2026-05-29; `src/m3/assembler.asm:21-122` (authoritative live map) | Consolidate the section/page map + scratch regions + budget ceilings (today scattered across the asm comments, `sam-paging.md`, the layout brainstorm, ~10 notes) into one doc. Keep the asm comments as source-of-truth; the doc mirrors/points to them (no second drifting copy). High value given how central layout is. |
+| SAM screen-mode decision (editor) | 🧭 | Pete 2026-05-29; ROADMAP "Editor vision" | MODE 3 currently assumed. Decide mode(s) by colour-vs-resolution + aesthetics nearer the editor; the choice consumes display RAM / pages, so it feeds the memory-layout doc (the ✅ row above). |
 | Trinity SD/flash storage → bigger-kernel architecture | 🧭 *(beyond-M7)* | Pete 2026-05-29; `memory/trinity_hardware.md` | Trinity's SD/MMC slot lifts the implicit single-floppy ceiling, enabling much larger kernels/debug builds (spectrum4 may be ~5× when complete). The binding constraint eventually shifts from code budget to storage. Quazar docs to be scanned. Distant future. |
 
 ## Open questions for Pete (awaiting input)
@@ -47,8 +47,9 @@ once resolved.
    all non-SAM/host code; and with no editor/music components yet, a
    speculative `src/assembler/` would force a fuzzy assembler-vs-core split
    now for no benefit (YAGNI). Component subfolders become a deliberate
-   re-org when those components arrive with real boundaries. Rename PR in
-   flight (mechanical: `git mv`, all `src/m3` references, README move).
+   re-org when those components arrive with real boundaries. **Done in
+   PR #82** (mechanical: `git mv` all of `src/m3/*` → `src/`, including
+   `src/slots/`; `../sam_io.inc` → `sam_io.inc`; all references updated).
 2. **LLIST tool cluster disposition** (`tools/llist-*` + `llist-*.sh`).
    **⏸ PUNTED (Pete 2026-05-29) — revisit later.** Pete hasn't decided;
    leave the cluster exactly in place. `tools/README.md` (PR #80) marks it
@@ -172,7 +173,7 @@ path. 🧭.
 
 A dedicated housekeeping track defined by the repo audit at
 `docs/notes/2026-05-29-repo-audit.md` §6 (prioritised cleanup plan). It
-covers: removing confirmed-dead Go symbols, adding `tools/` + `src/m3/`
+covers: removing confirmed-dead Go symbols, adding `tools/` + `src/`
 index READMEs, archiving superseded docs and the LLIST tool cluster,
 deleting the orphan `src/stub-border-test.asm`, resolving the unused
 `SYMTAB_*` `equ` sentinels, and scheduled deep reviews of the two largest
@@ -224,7 +225,7 @@ watchpoint, without re-implementing SimCoupé. 📋.
 
 The single concrete Go↔Z80 drift risk recorded by the repo audit (§5,
 §6 item 9): the sysreg/sysname tables are independently hand-maintained on
-both sides and must agree (the Z80 entries at `src/m3/sysreg_data.asm:214`
+both sides and must agree (the Z80 entries at `src/sysreg_data.asm:214`
 and `:256` are annotated "verified vs `tools/sam-aarch64-format/sysregs.go`").
 The recommendation is a small dev/CI check that diffs the two tables, or a
 cross-link comment making the sync obligation impossible to miss. This is
