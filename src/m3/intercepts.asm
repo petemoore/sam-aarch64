@@ -196,6 +196,28 @@ try_intercept_post_mem:
 
 try_intercept_post_litpool:
 
+; -- ldr Xt|Wt, <label> — LDR (literal) direct-label form -------------
+; mnemonic 5 (ldr) with operand 1 = OpImmExpr (NOT OpLitPool, NOT OpMem).
+; The label IS the PC-relative target; imm19 = (target - PASS_PC)/4.
+; The Mac-side dispatch is refenc/pass2.go:281 (encodeLdrLitDirect).  No
+; form-table entry exists for {RegX/RegW, ImmExpr}, so a miss here would
+; fall through to form lookup → FAIL40.  Grounded against
+; aarch64-none-elf-as + ARM ARM C6.2.131 (LDR literal).
+                ld      a, (try_intercept_mnem)
+                cp      5
+                jp      nz, try_intercept_post_ldrlit
+                ld      a, (main_op_count)
+                cp      2
+                jp      nz, try_intercept_post_ldrlit
+                ld      a, (OPVAL_KINDS + 1)
+                cp      OP_KIND_IMM_EXPR
+                jp      nz, try_intercept_post_ldrlit
+                call    encode_ldr_lit_direct_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+try_intercept_post_ldrlit:
+
 ; -- Barrier mnemonics: isb=66 / dsb=67 / dmb=68 ----------------------
 ; text2bin converts the barrier-arg keyword (sy, ish, ishst, ...) into a
 ; single OpImmExpr carrying the CRm field (bits 11:8); isb with no arg
@@ -642,3 +664,203 @@ encode_barrier_pack:
                 or      h
                 ld      h, a
                 ret
+
+
+; -----------------------------------------------------------------------
+; encode_ldr_lit_direct_word — LDR (literal) direct-label form.
+;
+; Port of tools/refenc/pass2.go:encodeLdrLitDirect (pass2.go:508).
+;   off   := target - PC                     (raw byte offset)
+;   imm19 := off / 4   (off must be 4-aligned, range +/-1 MiB signed)
+;   base  := X ? 0x58000000 : 0x18000000
+;   word  := base | ((imm19 & 0x7ffff) << 5) | Rt
+;
+; OPVAL_ARRAY[0] = Rt (X = 0x01 / W = 0x02); reg in +1.
+; OPVAL_ARRAY[1] = OpImmExpr; 8-byte LE result (the label's byte offset,
+;   same byte-offset space as PASS_PC) starts at +2.
+;
+; Output: DE:HL = encoded 32-bit word (HL = bits 0..15, DE = bits 16..31).
+; Errors: jp fail on width != X/W, off not 4-aligned, imm19 out of
+;   19-bit signed range, or target high bytes inconsistent.
+; Grounded against aarch64-none-elf-as + ARM ARM C6.2.131 (LDR literal).
+; -----------------------------------------------------------------------
+encode_ldr_lit_direct_word:
+; -- Width / base from operand-0 kind ---------------------------------
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0)
+                cp      OP_KIND_REG_X
+                jr      z, encode_ldrlit_x
+                cp      OP_KIND_REG_W
+                jp      nz, fail
+                ld      a, &18              ; W base high byte (0x18000000)
+                jr      encode_ldrlit_base_set
+encode_ldrlit_x:
+                ld      a, &58              ; X base high byte (0x58000000)
+encode_ldrlit_base_set:
+                ld      (encode_ldrlit_basehi), a
+
+; -- off = target - PASS_PC (32-bit two's complement, LSB-first) ------
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2)
+                ld      hl, PASS_PC
+                sub     (hl)
+                ld      (encode_ldrlit_off + 0), a
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 3)
+                inc     hl
+                sbc     a, (hl)
+                ld      (encode_ldrlit_off + 1), a
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 4)
+                inc     hl
+                sbc     a, (hl)
+                ld      (encode_ldrlit_off + 2), a
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 5)
+                inc     hl
+                sbc     a, (hl)
+                ld      (encode_ldrlit_off + 3), a
+
+; -- off must be 4-byte aligned (low 2 bits zero) ---------------------
+                ld      a, (encode_ldrlit_off + 0)
+                and     &03
+                jp      nz, fail
+
+; -- imm19 = off >> 2 (arithmetic, sign-preserving) -------------------
+; Two arithmetic right-shifts of the 4-byte signed value.
+                ld      b, 2
+encode_ldrlit_asr_loop:
+                ld      a, (encode_ldrlit_off + 3)
+                sra     a
+                ld      (encode_ldrlit_off + 3), a
+                ld      a, (encode_ldrlit_off + 2)
+                rra
+                ld      (encode_ldrlit_off + 2), a
+                ld      a, (encode_ldrlit_off + 1)
+                rra
+                ld      (encode_ldrlit_off + 1), a
+                ld      a, (encode_ldrlit_off + 0)
+                rra
+                ld      (encode_ldrlit_off + 0), a
+                djnz    encode_ldrlit_asr_loop
+; encode_ldrlit_off now = imm19 (sign-extended to 32 bits).
+
+; -- Range check: imm19 must fit in 19-bit signed --------------------
+; Bits 19..31 must all equal bit 18 (the sign).  Equivalently, an extra
+; ASR-by-19 of a COPY collapses to all-0 (non-neg) or all-FF (neg).
+                ld      a, (encode_ldrlit_off + 0)
+                ld      (encode_ldrlit_chk + 0), a
+                ld      a, (encode_ldrlit_off + 1)
+                ld      (encode_ldrlit_chk + 1), a
+                ld      a, (encode_ldrlit_off + 2)
+                ld      (encode_ldrlit_chk + 2), a
+                ld      a, (encode_ldrlit_off + 3)
+                ld      (encode_ldrlit_chk + 3), a
+                ld      b, 19
+encode_ldrlit_chk_loop:
+                ld      a, (encode_ldrlit_chk + 3)
+                sra     a
+                ld      (encode_ldrlit_chk + 3), a
+                ld      a, (encode_ldrlit_chk + 2)
+                rra
+                ld      (encode_ldrlit_chk + 2), a
+                ld      a, (encode_ldrlit_chk + 1)
+                rra
+                ld      (encode_ldrlit_chk + 1), a
+                ld      a, (encode_ldrlit_chk + 0)
+                rra
+                ld      (encode_ldrlit_chk + 0), a
+                djnz    encode_ldrlit_chk_loop
+; chk must be 0x00000000 (non-neg in range) or 0xFFFFFFFF (neg in range).
+                ld      a, (encode_ldrlit_chk + 0)
+                ld      h, a
+                ld      a, (encode_ldrlit_chk + 1)
+                or      h
+                ld      h, a
+                ld      a, (encode_ldrlit_chk + 2)
+                or      h
+                ld      h, a
+                ld      a, (encode_ldrlit_chk + 3)
+                or      h
+                jr      z, encode_ldrlit_pack
+                ld      a, (encode_ldrlit_chk + 0)
+                ld      h, a
+                ld      a, (encode_ldrlit_chk + 1)
+                and     h
+                ld      h, a
+                ld      a, (encode_ldrlit_chk + 2)
+                and     h
+                ld      h, a
+                ld      a, (encode_ldrlit_chk + 3)
+                and     h
+                cp      &ff
+                jp      nz, fail
+
+encode_ldrlit_pack:
+; -- Pack word = basehi:00 | (imm19[0..18] << 5) | Rt -----------------
+; imm19 (19 bits) lives in encode_ldrlit_off[0..2] (low 3 bytes; bit 18
+; is the top valid bit).  word bytes:
+;   byte0 = ((imm19 & 0x07) << 5) | Rt
+;   byte1 = (imm19 >> 3)  & 0xff
+;   byte2 = (imm19 >> 11) & 0xff   (8 bits: imm19[11..18])
+;   byte3 = basehi
+; (imm19 << 5) spans bits 5..23 — disjoint from Rt (bits 0..4) and the
+; base high byte (bits 24..31), so plain ORs suffice.
+
+; -- byte2 (DE high) = (imm19 >> 11) & 0xff ---------------------------
+; imm19>>11: take off[1] (bits 8..15) >> 3, OR off[2] (bits 16..18) << 5.
+                ld      a, (encode_ldrlit_off + 1)
+                rrca
+                rrca
+                rrca
+                and     &1f                 ; bits 11..15 of imm19 → low 5 of byte2
+                ld      c, a
+                ld      a, (encode_ldrlit_off + 2)
+                and     &07                 ; imm19 bits 16..18
+                rlca
+                rlca
+                rlca
+                rlca
+                rlca                        ; << 5 → bits 16..18 land in byte2 bits 5..7
+                or      c
+                ld      d, a                ; D = byte2 (word bits 16..23)
+                ld      a, (encode_ldrlit_basehi)
+                ; DE high byte (bit24..31) = basehi; build E later, keep in B
+                ld      b, a                ; B = byte3 (basehi)
+
+; -- byte1 (HL high) = (imm19 >> 3) & 0xff ----------------------------
+; imm19>>3: off[0] (bits 0..7) >> 3 OR off[1] (bits 8..10) << 5.
+                ld      a, (encode_ldrlit_off + 0)
+                rrca
+                rrca
+                rrca
+                and     &1f                 ; imm19 bits 3..7 → low 5
+                ld      c, a
+                ld      a, (encode_ldrlit_off + 1)
+                and     &07                 ; imm19 bits 8..10
+                rlca
+                rlca
+                rlca
+                rlca
+                rlca                        ; << 5 → bits 5..7
+                or      c
+                ld      h, a                ; H = byte1 (word bits 8..15)
+
+; -- byte0 (HL low) = ((imm19 & 0x07) << 5) | Rt ----------------------
+                ld      a, (encode_ldrlit_off + 0)
+                and     &07                 ; imm19 bits 0..2
+                rlca
+                rlca
+                rlca
+                rlca
+                rlca                        ; << 5 → bits 5..7
+                ld      c, a
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1)
+                and     &1f                 ; Rt (5 bits) → bits 0..4
+                or      c
+                ld      l, a                ; L = byte0 (word bits 0..7)
+
+; -- Assemble DE = byte3:byte2 ----------------------------------------
+                ld      e, d                ; E = byte2 (bits 16..23)
+                ld      d, b                ; D = byte3 (bits 24..31) = basehi
+                ret
+
+
+encode_ldrlit_basehi:            defb    0
+encode_ldrlit_off:               defb    0, 0, 0, 0
+encode_ldrlit_chk:               defb    0, 0, 0, 0
