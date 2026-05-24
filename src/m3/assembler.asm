@@ -28,10 +28,19 @@ OPVAL_KINDS:    equ     &C150          ; 7 bytes — kinds[] for form_lookup_mat
 ; them again and emits resolved bytes.  See
 ; docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.1.  Pass 1
 ; never touches OUT_BUF; pass 2 alone emits.  PASS_MODE is set by
-; main_assemble and read by every record handler that diverges per pass.
+; main_assemble (which now owns both pass-1 and pass-2 setup) and is
+; read by every record handler that diverges per pass.
 PASS_MODE:      equ     &C158          ; 1 byte — current pass (PASS_PASS1 / PASS_PASS2)
 PASS_PASS1:     equ     1
 PASS_PASS2:     equ     2
+
+; PASS_PC — 4-byte little-endian assembler PC, reset to 0 at the start
+; of each pass and advanced in lockstep by both pass-1 (table build,
+; no emit) and pass-2 (emit) handlers.  Tasks 5-6 will read this when
+; resolving PC-relative expressions; M3 fixtures have no PC-relative
+; refs, so it's observationally inert today.  Helpers live in
+; main_loop.asm (pass_pc_reset / pass_pc_advance_*).
+PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
 
 ; M4 scratch reservation (allocated by symbols.asm + local_labels.asm):
 ;   &C160-&C95F  SYMTAB              (256 buckets × 8 bytes = 2 KB)
@@ -105,16 +114,11 @@ start:
 ; -- Initialise form-lookup pointers (form table base + index base) -----
                 call    form_lookup_init
 
-; -- Run the assemble pass: load IN, walk records, build OUT -----------
-; M4: declare which pass main_assemble is currently executing.  Until
-; Tasks 4-5 split the walker into pass-1 (table build, no emit) and
-; pass-2 (emit) calls, the single call below acts as the pass-2 emit
-; (matching M3 behaviour).  Setting PASS_MODE = PASS_PASS1 here is a
-; deliberate placeholder: the walker does not read PASS_MODE yet, so
-; the value is observationally inert in M3 fixtures; Tasks 4-5 will
-; restructure start: to do both calls explicitly.
-                ld      a, PASS_PASS1
-                ld      (PASS_MODE), a
+; -- Run the assemble: pass 1 (table build) + pass 2 (emit) -----------
+; main_assemble owns the two-pass dance internally: it sets PASS_MODE
+; for each pass, resets PASS_PC + the symbol/local tables before
+; pass 1, resets PASS_PC + OUT state before pass 2, and rewinds the
+; reader between passes.  See main_loop.asm.
                 call    main_assemble
 
 ; -- Write OUT to disk via HSAVE ----------------------------------------
