@@ -212,6 +212,102 @@ run_mem_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &20, &78, &62, &f8
 
+; ===================== Task 9: extended + pair =========================
+
+; -- (9) ldr x0, [x1, w2, uxtw #3]   →  0xf8625820 (extended UXTW) -----
+                call    test_mem_wipe
+                ld      a, OP_KIND_REG_X
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                ld      a, OP_KIND_MEM
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
+                ld      a, 6                ; shape = MemBaseIdxExtended
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+                ld      a, 1                ; base
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2), a
+                ld      a, 2                ; idx
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 3), a
+                xor     a                   ; idx_width = W
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 4), a
+                ld      a, 2                ; extend = UXTW
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 5), a
+                ld      a, 3                ; shift_amt (non-zero → S=1)
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 6), a
+                ld      a, 5
+                call    encode_mem_word
+                call    assert_eq32_de_hl_imm
+                defb    &20, &58, &62, &f8
+
+; -- (10) ldr x0, [x1, w2, sxtw]     →  0xf862c820 (extended SXTW, S=0)
+                call    test_mem_wipe
+                ld      a, OP_KIND_REG_X
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                ld      a, OP_KIND_MEM
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
+                ld      a, 6
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+                ld      a, 1
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2), a
+                ld      a, 2
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 3), a
+                xor     a
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 4), a
+                ld      a, 6                ; extend = SXTW
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 5), a
+                ; shift_amt = 0 (already wiped)
+                ld      a, 5
+                call    encode_mem_word
+                call    assert_eq32_de_hl_imm
+                defb    &20, &c8, &62, &f8
+
+; -- (11) stp x0, x1, [sp, #-16]!    →  0xa9bf07e0 (pair pre-index)
+; Rt1=x0, Rt2=x1, base=sp(31), shape=MemBaseOffPre, off=-16 → scaled=-2
+                call    test_mem_wipe
+                ld      a, OP_KIND_REG_X
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                ; Rt1 reg = 0 (already wiped)
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
+                ld      a, 1
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a    ; Rt2 = x1
+                ld      a, OP_KIND_MEM
+                ld      (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 0), a
+                ld      a, 2                ; shape = MemBaseOffPre
+                ld      (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 1), a
+                ld      a, 31               ; base = sp (xzr/sp = 31)
+                ld      (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 2), a
+                ; OPMEM_OFF = -16 (sign-extended)
+                ld      a, &f0
+                ld      (OPMEM_OFF + 0), a
+                ld      a, &ff
+                ld      (OPMEM_OFF + 1), a
+                ld      (OPMEM_OFF + 2), a
+                ld      (OPMEM_OFF + 3), a
+                ld      (OPMEM_OFF + 4), a
+                ld      (OPMEM_OFF + 5), a
+                ld      (OPMEM_OFF + 6), a
+                ld      (OPMEM_OFF + 7), a
+                ld      a, 8                ; mnem = stp
+                call    encode_pair_word
+                call    assert_eq32_de_hl_imm
+                defb    &e0, &07, &bf, &a9
+
+; -- (12) ldp x0, x1, [sp]           →  0xa94007e0 (pair, base only) ---
+                call    test_mem_wipe
+                ld      a, OP_KIND_REG_X
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
+                ld      a, 1
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+                ld      a, OP_KIND_MEM
+                ld      (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 0), a
+                xor     a                   ; shape = MemBase
+                ld      (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 1), a
+                ld      a, 31
+                ld      (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 2), a
+                ld      a, 7                ; mnem = ldp
+                call    encode_pair_word
+                call    assert_eq32_de_hl_imm
+                defb    &e0, &07, &40, &a9
+
                 ret
 
 
