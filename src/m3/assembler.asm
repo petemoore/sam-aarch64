@@ -28,7 +28,12 @@
 ;   &E280-&E77C  LOCAL_LABEL_TABLE (2 + 255 × 5 = 1277 B; moved here 2026-05-28)
 ;   &E77D-&E7FF  free (131 B between local-labels and symtab-overflow)
 ;   &E800-&EFFF  SYMTAB_OVERFLOW (256 × 8 = 2 KB; moved here 2026-05-28)
-;   &F000-&FFFF  free (4 KB headroom in section D for future use)
+;   &F000-&F01A  MOV-imm + logical-imm encoder scratch (encode_mov_imm_*
+;                &F000-&F018; logical-imm soft-fail flags &F019/&F01A;
+;                added 2026-05-29 for the release byte-match encoder fixes)
+;   &F01B-&FFFF  free (~4 KB headroom in section D for future use)
+;   (Also: ORIGIN_HIGH &C960 (4 B) + SYMTAB_ABS_BITMAP &C964 (64 B),
+;    added 2026-05-29 — see their equ definitions below.)
 ;
 ;   Physical page 4 (off-axis): ENCTAB body — paged into section A on
 ;     demand for encoder runtime reads.  See `src/m3/trampoline.asm`.

@@ -328,6 +328,45 @@ above much faster). **Not on the critical path** (SimCoupé is the gate
 and works), but worth understanding. Tracked in `m6-status.md` /
 `m7-status.md`. Pete's call: ideally M6, acceptable M7.
 
+## Final whole-branch review — follow-ups (2026-05-29)
+
+A final review of the cumulative branch diff (each Z80 port read against
+its cited Go function, both variants rebuilt, encodings cross-checked via
+refenc) found **no CRITICAL issues** — the ports are faithful, the shared
+eval-path changes (ORIGIN_HIGH / SYMTAB_ABS_BITMAP) interact correctly
+with the MOV and ADRP fixes, the soft-fail reject mechanism is
+stack-balanced, and the budget reclaim lost no coverage. Report-only
+follow-ups (none block the milestone):
+
+1. **CI cannot yet catch a regression in the origin-dependent logic.**
+   The three new fixtures (`inst_quad_addr.s`, `inst_adrp_highorigin.s`,
+   `inst_mov_setconst.s`) only manifest their bug at the release origin
+   `0xfffffff0…`; the m6 SimCoupé roundtrip links at `-Ttext=0`, where
+   they pass trivially. The only real guard is the **full release
+   byte-match, which is not wired into CI** (`tools/run-m6-release-stripped.sh`
+   is a manual driver). Until **PR-5** (the `m6-release` gate) lands, the
+   ORIGIN_HIGH / abs-bitmap / 33-bit-ADRP logic can silently regress with
+   CI green. → Raises PR-5 priority; tracked in `m6-status.md`.
+2. **Latent (non-release) edge:** an absolute `.set X, 0xfffffff0_NNNNNNNN`
+   whose high word coincidentally equals ORIGIN_HIGH is misclassified
+   origin-relative (the Z80 stores only the low 32 bits + reconstructs
+   ORIGIN_HIGH; Go stores the full value). Harmless for release (its
+   `.set` constants are ≤32-bit), but a divergence-from-Go on inputs the
+   release doesn't exercise. → Fold into the M7 "Z80↔Go encoding/operator
+   parity audit" (`m7-status.md`).
+3. **Latent fragility (pre-existing, not new):** `run_slot_self_tests`
+   computes the ADRP test as `target − PASS_PC` before `pass_pc_reset`,
+   relying on cold-boot RAM being 0 at PASS_PC. The old 32-bit test had
+   the identical dependency. An explicit `pass_pc_reset` before the
+   page-12 self-test cluster would harden it. → M7 housekeeping.
+4. **MINOR (fixed):** the `assembler.asm` section-D memory-map comment
+   said `&F000-&FFFF free`; now records the 27-byte MOV/logical-imm
+   scratch reservation. (Feeds the M7 canonical-memory-layout doc.)
+5. **MINOR:** `build-spectrum4-release.sh` toolchain fallback only probes
+   `$AS`; if `AARCH64_AS` is set but LD/OBJCOPY are not, the others keep
+   their none-elf defaults. Matches the documented override contract;
+   low impact.
+
 ## References
 - `scripts/build-spectrum4-release.sh` — oracle builder (refenc vs GNU).
 - `tools/refenc/` — Mac-side reference encoder (the per-`.tbn` oracle).

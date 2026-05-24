@@ -160,6 +160,8 @@ to the level of a named strand. One line each, with the cited source.
 | Multi-section / linker-script refenc | `docs/ROADMAP.md:81-82` | Punted in favour of `text2bin -flatten`; revisit only if a non-spectrum4-shaped project needs it (incl. `SpectrumFourLayout` extraction). |
 | Replace `cls` test instruction | `docs/ROADMAP.md:87` | `cls` exists in `manual_forms.go` solely for one test; replace with a real spectrum4 instruction. |
 | SimCoupé upstream v1.2.16 bump | `docs/ROADMAP.md:88`; `memory/project_simcoupe_upstream_pr.md` | Switch CI's SimCoupé from build-from-source-with-patch to upstream v1.2.16 (`-exitonhalt` landed as `a65a16e`); drop the vendored patch. |
+| Absolute `.set` high-word edge vs Go | `docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md` review §2 | An absolute `.set X, 0xfffffff0_NNNNNNNN` whose high word coincidentally equals ORIGIN_HIGH is misclassified origin-relative (Z80 stores low-32 + reconstructs; Go stores full value). Harmless for release; a divergence-from-Go on non-release inputs → fold into the parity-audit row above. |
+| Harden slot self-test PASS_PC dependency | `docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md` review §3 | `run_slot_self_tests` computes the ADRP test vs PASS_PC before `pass_pc_reset` (relies on cold-boot RAM=0). Pre-existing; add an explicit `pass_pc_reset` before the page-12 cluster to harden. |
 
 **Beyond M7** (noted so they're not mistaken for M7 strands): Phase 3 (TFTP
 shipper to the Pi 400 over the direct LAN cable, `docs/ROADMAP.md` M-table
