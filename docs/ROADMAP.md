@@ -50,6 +50,7 @@ When closing out each milestone, walk this list and ask: *"does this still belon
 - [ ] Cortex-A53 errata workarounds (`--fix-cortex-a53-{835769,843419}`) — not modelled. No-op on release.img today; revisit if/when a target needs them.
 - [ ] Multi-section / linker-script honouring in refenc — explicitly punted in favour of the `text2bin -flatten` approach (PR #15). Revisit only if a non-spectrum4-shaped project ever needs it.
 - [ ] `SpectrumFourLayout` extraction (`-layout` flag or linker-script parser) — Pete's call: not worth doing unless a second project surfaces.
+- [ ] Replace M3 `fail:` 30s-timeout spin with **printer-channel status reporting** — `OUT (&E1), A` to write OK/FAIL strings; test wrapper checks both exit code AND printer log. Drops failure latency from 30s to ~100ms, gives per-fail-site diagnostic messages, sidesteps the silent-success risk. Pete's idea, 2026-05-27. Land after M3 Tasks 16-22 to avoid merge conflicts with the in-flight `src/m3/assembler.asm` work.
 
 ## How to extend this doc
 
