@@ -56,3 +56,29 @@ test-m1: text2bin bin2text
 	./tests/m1/run-gnu-as-check.sh
 
 ci-m1: test-m1
+
+.PHONY: enctab-gen refenc enctab test-m2 ci-m2
+
+enctab-gen:
+	cd tools/enctab-gen && go build -o $(CURDIR)/$(BUILD)/enctab-gen .
+
+refenc:
+	cd tools/refenc && go build -o $(CURDIR)/$(BUILD)/refenc .
+
+# Regenerate enctab.enc + aarch64enc/data.go from the vendored MRA snapshot.
+# Note: the manually-added 0-operand ret form must be re-added after each
+# regeneration. See docs/notes/m2-status.md.
+enctab: enctab-gen
+	$(BUILD)/enctab-gen \
+	    -mra reference/arm-mra \
+	    -gopkg tools/aarch64enc/data.go \
+	    -out $(BUILD)/enctab.enc
+
+test-m2: refenc
+	cd tools/sam-aarch64-format && go test ./...
+	cd tools/aarch64enc && go test ./...
+	cd tools/enctab-gen && go test ./...
+	cd tools/refenc && go test ./...
+	cd tools/text2bin && go test ./...
+
+ci-m2: test-m2

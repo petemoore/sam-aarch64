@@ -10,3 +10,5 @@ __pycache__/
 .DS_Store
 .worktrees/
 tools/build-disk/build-disk
+go.work
+go.work.sum
