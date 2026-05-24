@@ -121,6 +121,39 @@ type Result struct {
 	OutBytes       []byte
 	Last200PC      []uint16
 	ExitReason     string
+
+	// Fault diagnostics (populated on abnormal exit — trap or timeout).
+	// FaultRegs is a snapshot of the CPU register file at the point the
+	// run ended; Steps is the total instruction count executed.
+	FaultRegs RegSnapshot
+	Steps     uint64
+}
+
+// RegSnapshot captures the Z80 register file plus paging state at a point
+// in time.  Used for post-mortem analysis of a trap / hang.
+type RegSnapshot struct {
+	PC, SP             uint16
+	AF, BC, DE, HL     uint16
+	IX, IY             uint16
+	AF_, BC_, DE_, HL_ uint16
+	LMPR, HMPR         uint8
+}
+
+func (r RegSnapshot) String() string {
+	return fmt.Sprintf(
+		"PC=%04X SP=%04X AF=%04X BC=%04X DE=%04X HL=%04X IX=%04X IY=%04X "+
+			"AF'=%04X BC'=%04X DE'=%04X HL'=%04X LMPR=%02X HMPR=%02X",
+		r.PC, r.SP, r.AF, r.BC, r.DE, r.HL, r.IX, r.IY,
+		r.AF_, r.BC_, r.DE_, r.HL_, r.LMPR, r.HMPR)
+}
+
+// NamedFile is a SAMDOS file the harness can serve via HGTHD+HLOAD.  The
+// content is copied into TargetPage when the assembler issues an HLOAD with
+// HMPR mapping TargetPage into section C (the COMET trampoline idiom).
+type NamedFile struct {
+	Name       string // SAMDOS catalogue name, up to 10 chars (no padding needed)
+	Content    []byte
+	TargetPage int // physical page the assembler will load this file into
 }
 
 // Hardware implements the koron-go/z80 Memory and IO interfaces.
@@ -146,8 +179,66 @@ type Hardware struct {
 	pcHead  int // index of oldest entry (ring buffer)
 	pcCount int // number of valid entries
 
+	// Named-file registry for HGTHD/HLOAD.  Keyed by the 10-char SAMDOS
+	// name (trailing spaces trimmed).  The "current" file is selected by
+	// HGTHD (which reads the name from UIFA) and consumed by the next
+	// HLOAD.
+	files       map[string]*NamedFile
+	currentFile *NamedFile
+
+	// Optional stack-corruption watchpoint.  When watchSPLo<=addr<watchSPHi
+	// is written AND the write is NOT a CPU PUSH/CALL (i.e. an unexpected
+	// data write into the live stack region), record it.  Disabled when
+	// watchSPHi==0.
+	watchSPLo, watchSPHi uint16
+	stackWrites          []stackWrite
+
+	// Optional windowed PC trace.  When traceHi>traceLo, every step whose
+	// PC lies in [traceLo,traceHi) is appended (in order, unbounded) to
+	// windowTrace as a snapshot.  Lets us see the exact path through a
+	// specific routine without the noise of inner copy/fill loops.
+	traceLo, traceHi uint16
+	windowTrace      []RegSnapshot
+
+	// Trigger-PC capture (see Config.TrigPC).
+	trigPC   uint16
+	trigHit  bool
+	trigRegs RegSnapshot
+	trigBT   []uint16
+	trigStep uint64
+
 	// CPU back-reference (set after construction).
 	cpu *z80.CPU
+}
+
+type stackWrite struct {
+	addr  uint16
+	value uint8
+	pc    uint16
+}
+
+// snapshot captures the current CPU register file + paging state.
+func (h *Hardware) snapshot() RegSnapshot {
+	c := h.cpu
+	if c == nil {
+		return RegSnapshot{LMPR: h.lmpr, HMPR: h.hmpr}
+	}
+	return RegSnapshot{
+		PC:   c.PC,
+		SP:   c.SP,
+		AF:   c.AF.U16(),
+		BC:   c.BC.U16(),
+		DE:   c.DE.U16(),
+		HL:   c.HL.U16(),
+		IX:   c.IX,
+		IY:   c.IY,
+		AF_:  c.Alternate.AF.U16(),
+		BC_:  c.Alternate.BC.U16(),
+		DE_:  c.Alternate.DE.U16(),
+		HL_:  c.Alternate.HL.U16(),
+		LMPR: h.lmpr,
+		HMPR: h.hmpr,
+	}
 }
 
 func newHardware() *Hardware {
@@ -371,7 +462,86 @@ func (h *Hardware) readPageBytes(startPage int, offset int, length int) []byte {
 //
 // Returns a Result describing the outcome.
 func Run(assemblerBin, enctabData, inData []byte, timeout time.Duration) Result {
+	return RunWithFiles(assemblerBin, enctabData, inData, nil, timeout)
+}
+
+// RunWithFiles is like Run but additionally serves a set of named SAMDOS
+// files via HGTHD+HLOAD.  This is what the BUILD_TESTS variant needs: at
+// boot it HLOADs "test_mem" (page 13) and "p14" (page 14) before running
+// the self-test suite.  Each NamedFile's content is also pre-deposited into
+// its TargetPage so that even if the HLOAD path differs, the data is present.
+func RunWithFiles(assemblerBin, enctabData, inData []byte, files []NamedFile, timeout time.Duration) Result {
+	r, _, _ := RunConfig(Config{
+		AssemblerBin: assemblerBin, EnctabData: enctabData, InData: inData,
+		Files: files, Timeout: timeout,
+	})
+	return r
+}
+
+// Config bundles all inputs + optional diagnostics knobs for a harness run.
+type Config struct {
+	AssemblerBin, EnctabData, InData []byte
+	Files                            []NamedFile
+	Timeout                          time.Duration
+
+	// TraceLo/TraceHi: if TraceHi>TraceLo, capture an ordered register
+	// snapshot at every step whose PC is in [TraceLo,TraceHi).
+	TraceLo, TraceHi uint16
+
+	// TrigPC: if non-zero, capture FirstTrig (the register snapshot the
+	// first time PC == TrigPC) and TrigBacktrace (the 200-PC ring at that
+	// moment).  Useful for "who jumped into fail?".
+	TrigPC uint16
+}
+
+// TrigResult holds the state captured when Config.TrigPC was first reached.
+type TrigResult struct {
+	Hit          bool
+	Regs         RegSnapshot
+	Backtrace    []uint16
+	StepAtTrig   uint64
+}
+
+// RunConfig is the full-control entry point.  It returns the Result plus the
+// windowed PC trace (empty unless Config.TraceHi>Config.TraceLo).
+func RunConfig(cfg Config) (Result, []RegSnapshot, TrigResult) {
 	hw := newHardware()
+	hw.traceLo, hw.traceHi = cfg.TraceLo, cfg.TraceHi
+	hw.trigPC = cfg.TrigPC
+	res := runOn(hw, cfg.AssemblerBin, cfg.EnctabData, cfg.InData, cfg.Files, cfg.Timeout)
+	return res, hw.windowTrace, TrigResult{
+		Hit:        hw.trigHit,
+		Regs:       hw.trigRegs,
+		Backtrace:  hw.trigBT,
+		StepAtTrig: hw.trigStep,
+	}
+}
+
+func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedFile, timeout time.Duration) Result {
+
+	// Register named files and pre-deposit their content into the target
+	// pages (belt-and-braces: HLOAD also copies, but pre-deposit guarantees
+	// presence regardless of HLOAD ordering).
+	hw.files = make(map[string]*NamedFile)
+	for i := range files {
+		f := files[i]
+		hw.files[f.Name] = &files[i]
+		if f.TargetPage >= 0 && f.TargetPage < numPages {
+			hw.depositPage(f.TargetPage, f.Content)
+		}
+	}
+
+	// Auto-register the IN file ("IN" in the SAMDOS catalogue) so that a
+	// re-HLOAD of IN actually re-deposits the .tbn into pages 7.. — exactly
+	// as real SAMDOS re-reads it from disk.  Without this, the BUILD_TESTS
+	// reader self-test (which stamps a synthetic blob over IN page 7) would
+	// leave page 7 corrupted, because main_assemble's load_in_file HLOAD
+	// would be a no-op.  (Registered only if the caller hasn't already
+	// supplied an explicit "IN".)
+	if _, ok := hw.files["IN"]; !ok && len(inData) > 0 {
+		inFile := &NamedFile{Name: "IN", Content: inData, TargetPage: inBasePage}
+		hw.files["IN"] = inFile
+	}
 
 	// Deposit assembler binary at section C (page 2 = HMPR_DEFAULT low-5).
 	// The binary is built for org &8000 and loads into physical page 2
@@ -429,29 +599,74 @@ func Run(assemblerBin, enctabData, inData []byte, timeout time.Duration) Result 
 			// Read name from UIFA[1..10] at the resolved address.
 			uifaPage := int((hw.lmpr&0x1F + 1) & 0x1F)
 			uifaOffset := uifaAddr & 0x3FFF
-			name := string(hw.ram[uifaPage][uifaOffset+1 : uifaOffset+11])
+			rawName := string(hw.ram[uifaPage][uifaOffset+1 : uifaOffset+11])
+			name := strings.TrimRight(rawName, " ")
 
-			if strings.HasPrefix(name, "IN") {
-				// Populate &4B50+34 (page count) and &4B50+35-36 (length, bit15 set).
-				// The copy area &4B50 is also in section B (page 0 at boot).
-				copyPage := uifaPage
-				copyOffset := uifaCopyAddr & 0x3FFF
-				// byte 34: page count
+			// Look up the named file in the registry; this becomes the
+			// "current file" the next HLOAD will deposit.  HGTHD also
+			// populates the DIFA geometry at &4B50+34..36 (page count +
+			// length-mod-16K with bit 15 set) exactly as real SAMDOS does.
+			//
+			// Fallback for the legacy IN path: if no registered file
+			// matches but the name starts with "IN", use the pre-deposited
+			// inData geometry computed above.  This keeps the prod harness
+			// behaviour byte-identical for callers using the old Run().
+			copyPage := uifaPage
+			copyOffset := uifaCopyAddr & 0x3FFF
+			if f, ok := hw.files[name]; ok {
+				hw.currentFile = f
+				flen := len(f.Content)
+				pages := uint8(flen / pageSize)
+				lenMod := uint16(flen % pageSize)
+				if flen > 0 && lenMod == 0 {
+					pages--
+					lenMod = pageSize
+				}
+				hw.ram[copyPage][copyOffset+34] = pages
+				lenWithFlag := lenMod | 0x8000
+				hw.ram[copyPage][copyOffset+35] = uint8(lenWithFlag)
+				hw.ram[copyPage][copyOffset+36] = uint8(lenWithFlag >> 8)
+			} else if strings.HasPrefix(name, "IN") {
+				hw.currentFile = nil
 				hw.ram[copyPage][copyOffset+34] = inFilePages
-				// bytes 35-36: length-mod-16K, with bit 15 set (SAMDOS `set 7,d`).
 				lenWithFlag := inFileLenMod16K | 0x8000
 				hw.ram[copyPage][copyOffset+35] = uint8(lenWithFlag)
 				hw.ram[copyPage][copyOffset+36] = uint8(lenWithFlag >> 8)
+			} else {
+				// Unknown file (e.g. enctab.enc when called via the legacy
+				// hardcoded-constants path).  No DIFA update needed because
+				// that caller doesn't read it back.  Leave currentFile nil
+				// so HLOAD relies on pre-deposit.
+				hw.currentFile = nil
 			}
-			// For enctab.enc: assembler uses hardcoded constants, HGTHD only
-			// needs to not crash. No extra work needed.
 
 		case hookHLOAD:
-			// HLOAD: data already pre-deposited in physical pages.
-			// The trampoline has set HMPR to the target page before this RST 8.
-			// HLOAD would normally copy from disk to section C.
-			// We've already placed the data there, so just return.
-			// No-op.
+			// HLOAD: copy the current file (selected by the preceding HGTHD)
+			// into the physical page currently mapped at section C.  The COMET
+			// trampoline sets HMPR := target page and HL := &8000 before the
+			// RST 8, so HLOAD writes to section C = physical page (HMPR & 0x1F).
+			//
+			// This is faithful to HLOAD's *effect*.  When currentFile is nil
+			// (legacy IN / enctab path), the data was pre-deposited into the
+			// fixed physical pages, so this is a no-op — preserving the old
+			// harness behaviour exactly.
+			if hw.currentFile != nil {
+				// Deposit across consecutive physical pages starting at the
+				// section-C page (HMPR & 0x1F), mirroring SAMDOS's ctas
+				// auto-paging which advances HMPR every &C000-boundary
+				// crossing (samdos/src/c.s:354-369).  This makes a re-HLOAD
+				// of a file faithfully restore ALL its pages — critical for
+				// the BUILD_TESTS reader self-test, which clobbers IN page 7
+				// and relies on main_assemble's load_in_file re-reading the
+				// real IN file from disk to restore it.
+				dstPage := int(hw.hmpr & 0x1F)
+				content := hw.currentFile.Content
+				for i, b := range content {
+					pg := (dstPage + i/pageSize) & 0x1F
+					hw.ram[pg][i%pageSize] = b
+				}
+				hw.currentFile = nil
+			}
 
 		case hookHSAVE:
 			// HSAVE: capture OUT bytes from the paged OUT buffer.
@@ -500,18 +715,50 @@ func Run(assemblerBin, enctabData, inData []byte, timeout time.Duration) Result 
 
 	deadline := time.Now().Add(timeout)
 	var exitReason string
+	var steps uint64
+
+	// Trap detection: if the CPU enters the ROM 0xFF fill region (the fake
+	// ROM is all 0xFF except the &0008 stub), it has jumped to garbage.  The
+	// RST 38 (0xFF opcode) spin at &0038 is the canonical "fell into garbage"
+	// symptom.  Detect a sustained spin there and bail out fast with a
+	// register snapshot — far more useful than burning the full timeout.
+	trapSpin := 0
+	const trapSpinThreshold = 64
 
 	for time.Now().Before(deadline) {
 		hw.recordPC(cpu.PC)
+		if hw.traceHi > hw.traceLo && cpu.PC >= hw.traceLo && cpu.PC < hw.traceHi {
+			hw.windowTrace = append(hw.windowTrace, hw.snapshot())
+		}
+		if hw.trigPC != 0 && cpu.PC == hw.trigPC && !hw.trigHit {
+			hw.trigHit = true
+			hw.trigRegs = hw.snapshot()
+			hw.trigBT = hw.last200PC()
+			hw.trigStep = steps
+		}
+		// Detect the &0038 garbage-trap spin (PC stuck in fake-ROM 0xFF land).
+		if cpu.PC == 0x0038 {
+			trapSpin++
+			if trapSpin >= trapSpinThreshold {
+				exitReason = fmt.Sprintf(
+					"TRAP: PC spinning at &0038 (jumped into 0xFF fake-ROM) after %d steps", steps)
+				break
+			}
+		} else {
+			trapSpin = 0
+		}
 		cpu.Step()
+		steps++
 		if cpu.HALT {
 			exitReason = fmt.Sprintf("HALT at PC=%04X", cpu.PC)
 			break
 		}
 	}
 	if exitReason == "" {
-		exitReason = fmt.Sprintf("timeout after %v", timeout)
+		exitReason = fmt.Sprintf("timeout after %v (%d steps)", timeout, steps)
 	}
+
+	faultRegs := hw.snapshot()
 
 	printerStr := hw.printerBuf.String()
 	// Strip trailing CR/LF/NUL for cleaner comparison.
@@ -525,5 +772,7 @@ func Run(assemblerBin, enctabData, inData []byte, timeout time.Duration) Result 
 		OutBytes:       capturedOut,
 		Last200PC:      hw.last200PC(),
 		ExitReason:     exitReason,
+		FaultRegs:      faultRegs,
+		Steps:          steps,
 	}
 }
