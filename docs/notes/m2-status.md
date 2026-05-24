@@ -2,12 +2,10 @@
 
 Entry point for any session picking up M2 encoder-tables work.
 
-Last update: 2026-05-24. M2 partially complete on branch
-`worktree-m2-encoder-tables`; opened as **draft PR with known
-gaps** documented below. The skeleton is solid (all 16 slot-kind
-encoders, MRA parser, generator pipeline, refenc working end-to-end
-for a subset of fixtures), but full M1-fixture coverage isn't there
-yet.
+Last update: 2026-05-24. M2 substantially complete on branch
+`worktree-m2-completion`; 19/20 M1 fixtures now byte-match
+`aarch64-none-elf-as`. Only `expr_pcrel` (multi-section VMA layout)
+remains as a known gap.
 
 ## What M2 is (spec recap)
 
@@ -73,65 +71,45 @@ Makefile                         Adds enctab-gen, refenc, enctab, test-m2, ci-m2
 |---|---|---|
 | 1 — aarch64enc unit tests | ✅ ALL PASS | Every slot kind tested, LogicalImm has pin tests against known-correct ARM encodings |
 | 2 — enctab-gen / mra unit tests | ✅ ALL PASS | Parser tested against real `nop.xml` and synthetic XML |
-| 3 — refenc roundtrip vs GNU as | ⚠️ PARTIAL | 11/20 M1 fixtures pass; see "Known gaps" |
+| 3 — refenc roundtrip vs GNU as | ✅ 19/20 | Only `expr_pcrel` (multi-section VMA layout) remains |
 | 4 — text2bin operand-kind validation | ❌ NOT DONE | Spec §5 wiring (Task 21) deferred |
 
 ## What's verified end-to-end
 
-11 of the 20 M1 fixtures byte-match `aarch64-none-elf-as`:
+19 of the 20 M1 fixtures byte-match `aarch64-none-elf-as`:
 
-`comments`, `dir_data`, `dir_equ`, `dir_string`, `empty`, `expr_simple`, `inst_bcond`, `inst_nop_ret`, `inst_reg_imm`, `labels`, `local_labels`
+`comments`, `dir_align_skip`, `dir_data`, `dir_equ`, `dir_string`, `empty`,
+`expr_simple`, `inst_bcond`, `inst_csel`, `inst_extended`, `inst_mem_extended`,
+`inst_mem_indexed`, `inst_mem_preindex`, `inst_mem_simple`, `inst_nop_ret`,
+`inst_reg_imm`, `inst_shifted`, `labels`, `local_labels`
 
-That covers: nop, add (immediate W and X), sub (immediate), ret (bare),
+That covers: nop, add/sub (immediate and register variants), cmp/csel/csinc,
+ldr/str (all addressing modes: unsigned offset, pre-index, post-index,
+register-offset, register-shifted, register-extended), .balign, .skip,
 b.cond × 16, .byte/.short/.word/.quad, .ascii/.asciz, .equ/.set,
 comments, labels, local labels (1f/1b), pure-constant expressions.
 
 ## Known gaps
 
-In rough order of priority:
+1. **Section layout in refenc** (`expr_pcrel`). `.text` and `.data`
+   sections both resolve to VMA=0 in relocatable objects; GNU as's
+   `objcopy -O binary` dumps them in ELF section-table order with
+   overlapping VMAs. Implementing this requires tracking section
+   boundaries and emitting a VMA-layout-aware binary. Low priority
+   since `expr_pcrel` is the only affected fixture.
 
-1. **MEM operand kinds in refenc** (`inst_mem_simple`,
-   `inst_mem_indexed`, `inst_mem_preindex`, `inst_mem_extended`).
-   `pass2.go`'s `operandsToValues` has no `OpMem*` cases. The slot
-   encoders exist; what's missing is flattening the parsed `OpMem`
-   operand into the base-reg + offset-imm pair the form expects.
-
-2. **SHIFTED_REG / EXTENDED_REG forms in refenc** (`inst_shifted`,
-   `inst_extended`, `inst_csel` indirectly via `cmp` shifted-reg).
-   The Encode dispatcher handles these slot kinds individually, but
-   the parser-emitted `OpShiftedReg` / `OpExtendedReg` operands need
-   to be flattened into the 2-3 values the form expects.
-
-3. **`csel` / `csinc` MRA snapshot + form data**. The mnemonics are
-   in `MnemonicTable` but no XML is vendored. Add `csel.xml`,
-   `csinc.xml`; the `CondCode` slot is already supported.
-
-4. **Section layout in refenc** (`expr_pcrel`). `.text` and `.data`
-   are no-ops in pass1; that breaks `adrp` PC-relative arithmetic
-   across sections. Refenc would need to track section
-   boundaries and emit a proper VMA layout matching GNU as's
-   `objcopy -O binary` behaviour (data at the post-text address).
-
-5. **`.balign` / `.org` in refenc**. Currently 0-byte placeholders
-   in pass1. Need to round PC up / set PC respectively, with
-   matching emit-NOPs / zero-fill in pass2.
-
-6. **Bare `ret` form gets clobbered on regen**. The 0-operand
+2. **Bare `ret` form gets clobbered on regen**. The 0-operand
    `ret` form was added manually to `data.go`; running
    `make enctab` overwrites it. Either teach the generator about
    the ret alias, or add a small post-pass that re-injects the
    form after regeneration.
 
-7. **text2bin operand-kind validation** (spec §5, Task 21).
+3. **text2bin operand-kind validation** (spec §5, Task 21).
    Currently text2bin doesn't consult `ValidateOperandKinds`, so
-   malformed sources like `add x0, x1, [x2]` are accepted at parse
-   time and only fail at refenc/M3 time. Wiring needs care: it'll
-   break any M1 fixture whose mnemonic doesn't have a form yet.
-   Best done after gap 1-3 above so all M1 mnemonics have forms.
+   malformed sources are accepted at parse time and only fail at
+   refenc/M3 time.
 
-8. **`bin2text` Layer 2 goldens for new fixtures**. If gaps 1-3
-   require new fixtures, M1's Layer 2 goldens will need
-   regeneration.
+4. **`.org` in refenc**. Not implemented; pass1 returns 0 for size.
 
 ## Hand-off recipe
 
