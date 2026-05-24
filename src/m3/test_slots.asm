@@ -233,6 +233,44 @@ run_slot_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &20, &00, &00, &00  ; 0x00000020 LE
 
+; -- encode_adrp_imm(AdrpImm{BP=0,BW=21}, +4096) => 0x20000000 --------
+; pageOffset = +1 → immlo=1, immhi=0 → 1<<29 = 0x20000000.
+; Wide signed-operand convention: HL=slot, BCDE=byteOffset BE.
+                ld      hl, slot_adrp_bp0_bw21
+                ld      bc, &0000
+                ld      de, &1000
+                call    encode_adrp_imm
+                call    assert_eq32_de_hl_imm
+                defb    &00, &00, &00, &20  ; 0x20000000 LE
+
+; -- encode_adrp_imm(AdrpImm{BP=0,BW=21}, +12288) => 0x60000000 --------
+; pageOffset = +3 → immlo=3, immhi=0 → 3<<29 = 0x60000000.
+                ld      hl, slot_adrp_bp0_bw21
+                ld      bc, &0000
+                ld      de, &3000
+                call    encode_adrp_imm
+                call    assert_eq32_de_hl_imm
+                defb    &00, &00, &00, &60  ; 0x60000000 LE
+
+; -- encode_adrp_imm(AdrpImm{BP=0,BW=21}, +20480) => 0x20000020 -------
+; pageOffset = +5 = 0b101 → immlo=1, immhi=1 → (1<<29)|(1<<5).
+                ld      hl, slot_adrp_bp0_bw21
+                ld      bc, &0000
+                ld      de, &5000
+                call    encode_adrp_imm
+                call    assert_eq32_de_hl_imm
+                defb    &20, &00, &00, &20  ; 0x20000020 LE
+
+; -- encode_adrp_imm(AdrpImm{BP=0,BW=21}, -4096) => 0x60FFFFE0 --------
+; pageOffset = -1 → imm21 = 0x1FFFFF → immlo=3, immhi=0x7FFFF.
+; (3<<29) | (0x7FFFF<<5) = 0x60000000 | 0x00FFFFE0 = 0x60FFFFE0.
+                ld      hl, slot_adrp_bp0_bw21
+                ld      bc, &ffff
+                ld      de, &f000
+                call    encode_adrp_imm
+                call    assert_eq32_de_hl_imm
+                defb    &e0, &ff, &ff, &60  ; 0x60FFFFE0 LE
+
 ; All assertions passed.
                 ret
 
@@ -309,6 +347,7 @@ assert_eq32_de_hl_imm:
 ;   BranchImm26  = 0x20
 ;   BranchImm19  = 0x21
 ;   BranchImm14  = 0x22
+;   AdrpImm      = 0x23
 ;
 ; expected_kind is set to 0 here: the encoders do not consult it
 ; (text2bin uses it earlier in the pipeline).
@@ -326,3 +365,4 @@ slot_extop_bp10_bw6:    defb    &13, 0, 10, 6
 slot_branch26_bp0_bw26: defb    &20, 0,  0, 26
 slot_branch19_bp5_bw19: defb    &21, 0,  5, 19
 slot_branch14_bp5_bw14: defb    &22, 0,  5, 14
+slot_adrp_bp0_bw21:     defb    &23, 0,  0, 21

@@ -26,6 +26,7 @@
                 include "slots/imm16_shifted.asm"
                 include "slots/extend_op.asm"
                 include "slots/branch_imm.asm"
+                include "slots/adrp_imm.asm"
                 include "test_slots.asm"
 
 ; -----------------------------------------------------------------------
