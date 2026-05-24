@@ -52,8 +52,23 @@ go build -o /tmp/z80-harness .
 /tmp/z80-harness \
     -assembler ../../build/assembler-prod.bin \
     -enctab ../../build/enctab.enc \
+    -sysreg-data ../../build/sysreg_data.bin \
     -in /tmp/inst_nop_ret.tbn
 ```
+
+**Always pass `-sysreg-data` for the prod assembler.**  The prod assembler
+*unconditionally* HLOADs the sysreg lookup data (SAMDOS file `"sd13"`) into
+physical page 13 at boot (`src/loader.asm::load_page13_payload`, called
+unconditionally from `src/assembler.asm`).  Any source that uses a
+sysreg / `dc` / `tlbi` / pstate operand then runs the page-13 matcher via
+`paged_call`.  If `-sysreg-data` is omitted, page 13 is empty, the matcher
+runs into a zero/`nop` slide and falls off the end of section C into the
+empty section D, wrapping to `&0038` — a cryptic trap that looks like a deep
+paging bug but is really a missing input.  The harness now detects this and
+names the unserved `"sd13"` file in the trap message.  (Small sources with no
+sysreg operands happen to survive without it, which is why this was easy to
+miss.)  Build it with `make sysreg-data`.  See
+`docs/notes/2026-05-29-go-harness-paged-trap-rootcause.md`.
 
 BUILD_TESTS variant (runs the boot-time self-test suites, including
 `run_reader_paged_self_tests`).  Pass the off-axis test_mem binary and the

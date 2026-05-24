@@ -125,6 +125,16 @@ type Result struct {
 	// run ended; Steps is the total instruction count executed.
 	FaultRegs RegSnapshot
 	Steps     uint64
+
+	// UnservedFiles lists SAMDOS file names the assembler asked for via
+	// HGTHD that the harness could neither serve (no registered NamedFile)
+	// nor account for as a known pre-deposited file (enctab.enc / IN).
+	// An unserved file means the corresponding HLOAD was a silent no-op
+	// and that physical page is still zero/garbage — the classic cause of
+	// a downstream "jumped into garbage → &0038" trap (e.g. forgetting
+	// -sysreg-data, so page 13's sysreg matcher is empty).  Populated in
+	// dispatch order, deduplicated.
+	UnservedFiles []string
 }
 
 // RegSnapshot captures the Z80 register file plus paging state at a point
@@ -183,6 +193,13 @@ type Hardware struct {
 	// HLOAD.
 	files       map[string]*NamedFile
 	currentFile *NamedFile
+
+	// unservedFiles records, in dispatch order, the names HGTHD asked for
+	// that the harness could neither serve from the registry nor account
+	// for as a known pre-deposited legacy file (enctab.enc / IN).  These
+	// are the silent-HLOAD-no-op cases that strand a page empty.
+	unservedFiles []string
+	unservedSeen  map[string]bool
 
 	// Optional windowed PC trace.  When traceHi>traceLo, every step whose
 	// PC lies in [traceLo,traceHi) is appended (in order, unbounded) to
@@ -643,10 +660,35 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 				hw.ram[copyPage][copyOffset+35] = uint8(lenWithFlag)
 				hw.ram[copyPage][copyOffset+36] = uint8(lenWithFlag >> 8)
 			} else {
-				// Unknown file (e.g. enctab.enc when called via the legacy
-				// hardcoded-constants path).  No DIFA update needed because
-				// that caller doesn't read it back.  Leave currentFile nil
-				// so HLOAD relies on pre-deposit.
+				// Unknown file.  Two sub-cases:
+				//
+				//  (a) Known pre-deposited legacy file: "enctab.enc" is
+				//      pre-deposited into page 4 directly, and the legacy
+				//      IN path (handled by the HasPrefix branch above) is
+				//      pre-deposited into pages 7..  Their HLOADs are
+				//      legitimate no-ops.  No DIFA update needed because
+				//      that caller doesn't read it back.
+				//
+				//  (b) A file the harness was never given (e.g. "sd13" /
+				//      sysreg_data when -sysreg-data is omitted).  Here the
+				//      subsequent HLOAD is a SILENT no-op, leaving the
+				//      target page zero/garbage — which on real SAM would
+				//      be a SAMDOS "file not found" longjmp to a FAIL
+				//      banner, but in the stub manifests downstream as a
+				//      cryptic "jumped into garbage → &0038" trap (the
+				//      page-13 sysreg matcher runs into a NOP slide and
+				//      falls off section C into the empty section D).
+				//      Record it so the trap message can name the real
+				//      cause.
+				if name != "enctab.enc" {
+					if hw.unservedSeen == nil {
+						hw.unservedSeen = make(map[string]bool)
+					}
+					if !hw.unservedSeen[name] {
+						hw.unservedSeen[name] = true
+						hw.unservedFiles = append(hw.unservedFiles, name)
+					}
+				}
 				hw.currentFile = nil
 			}
 
@@ -762,6 +804,9 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 			if trapSpin >= trapSpinThreshold {
 				exitReason = fmt.Sprintf(
 					"TRAP: PC spinning at &0038 (jumped into 0xFF fake-ROM) after %d steps", steps)
+				if hint := hw.unservedFileHint(); hint != "" {
+					exitReason += "; " + hint
+				}
 				break
 			}
 		} else {
@@ -776,6 +821,9 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 	}
 	if exitReason == "" {
 		exitReason = fmt.Sprintf("timeout after %v (%d steps)", timeout, steps)
+		if hint := hw.unservedFileHint(); hint != "" {
+			exitReason += "; " + hint
+		}
 	}
 
 	faultRegs := hw.snapshot()
@@ -794,5 +842,31 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 		ExitReason:     exitReason,
 		FaultRegs:      faultRegs,
 		Steps:          steps,
+		UnservedFiles:  hw.unservedFiles,
 	}
+}
+
+// unservedFileHint returns a human-readable diagnostic naming any SAMDOS
+// files HGTHD requested that the harness could not serve, with the common
+// remedy.  Empty string when every requested file was served.
+func (h *Hardware) unservedFileHint() string {
+	if len(h.unservedFiles) == 0 {
+		return ""
+	}
+	remedy := ""
+	for _, n := range h.unservedFiles {
+		if n == "sd13" {
+			// The prod assembler unconditionally HLOADs sd13 (sysreg
+			// lookup data) into page 13 at boot — see
+			// src/loader.asm::load_page13_payload + the unconditional
+			// call in src/assembler.asm.  Without it the page-13 sysreg
+			// matcher is empty and the first sysreg/dc/tlbi/pstate
+			// operand traps.
+			remedy = " (supply build/sysreg_data.bin via -sysreg-data: " +
+				"the prod assembler always HLOADs \"sd13\" into page 13 at boot)"
+		}
+	}
+	return fmt.Sprintf("HGTHD requested file(s) the harness could not serve: %v%s; "+
+		"the matching HLOAD was a no-op, so that physical page is empty",
+		h.unservedFiles, remedy)
 }
