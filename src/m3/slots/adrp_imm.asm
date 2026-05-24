@@ -380,6 +380,106 @@ encode_adrp_imm_immlo_shift:
 
 
 ; -----------------------------------------------------------------------
+; encode_adr_imm — AdrImm constant-offset encoder (ADR Xd, <label>).
+;
+; Z80 port of tools/aarch64enc/slots_adrp.go::encodeAdrImm (lines 26-38).
+; The (immlo:2, immhi:19) bit layout is IDENTICAL to adrp (bits 29..30
+; and 5..23), so we share adrp's imm21-packing tail.  The differences
+; from adrp:
+;   - the offset is a RAW byte offset (NOT page-aligned, NOT >>12'd):
+;     value = target - PASS_PC, no masking of either operand.
+;   - range is ±1 MB i.e. the 21-bit signed range [-2^20, 2^20).
+;
+; M4 caller contract (same as encode_adrp_imm): BCDE = ABSOLUTE target
+; address, big-endian register packing (B=hi .. E=lo).  PASS_PC holds
+; the current instruction's PC (4-byte LE).  Output DEHL = encoded word.
+; Clobbers A, BC, DE, HL.  Errors: jp fail when the byte offset doesn't
+; fit in 21-bit signed (±1 MB).
+;
+; Grounded against aarch64-none-elf-as + ARM ARM C6.2.10 (ADR).
+; -----------------------------------------------------------------------
+encode_adr_imm:
+; -- value = target - PASS_PC (raw 32-bit two's-complement, LSB-first) --
+; No page masking (unlike adrp).  PASS_PC is little-endian at PASS_PC+0..3.
+                ld      a, e
+                ld      hl, PASS_PC
+                sub     (hl)
+                ld      e, a
+                ld      a, d
+                inc     hl
+                sbc     a, (hl)
+                ld      d, a
+                ld      a, c
+                inc     hl
+                sbc     a, (hl)
+                ld      c, a
+                ld      a, b
+                inc     hl
+                sbc     a, (hl)
+                ld      b, a
+; BCDE now = signed byte offset (target - PASS_PC), sign-extended to 32.
+
+; -- Range check: byte offset must fit in 21-bit signed (±1 MB) ---------
+; Same ASR-20-times idiom as adrp's pageOffset check, but applied to the
+; RAW byte offset.  In-range yields 0x00000000 or 0xFFFFFFFF.
+                ld      a, b
+                ld      (encode_adrp_imm_copy+0), a
+                ld      a, c
+                ld      (encode_adrp_imm_copy+1), a
+                ld      a, d
+                ld      (encode_adrp_imm_copy+2), a
+                ld      a, e
+                ld      (encode_adrp_imm_copy+3), a
+                ld      a, 20
+                ld      (encode_adrp_imm_cnt), a
+encode_adr_imm_range_loop:
+                ld      a, (encode_adrp_imm_copy+0)
+                sra     a
+                ld      (encode_adrp_imm_copy+0), a
+                ld      a, (encode_adrp_imm_copy+1)
+                rra
+                ld      (encode_adrp_imm_copy+1), a
+                ld      a, (encode_adrp_imm_copy+2)
+                rra
+                ld      (encode_adrp_imm_copy+2), a
+                ld      a, (encode_adrp_imm_copy+3)
+                rra
+                ld      (encode_adrp_imm_copy+3), a
+                ld      a, (encode_adrp_imm_cnt)
+                dec     a
+                ld      (encode_adrp_imm_cnt), a
+                jp      nz, encode_adr_imm_range_loop
+; Verify copy is all-0 or all-FF.
+                ld      a, (encode_adrp_imm_copy+0)
+                ld      h, a
+                ld      a, (encode_adrp_imm_copy+1)
+                or      h
+                ld      h, a
+                ld      a, (encode_adrp_imm_copy+2)
+                or      h
+                ld      h, a
+                ld      a, (encode_adrp_imm_copy+3)
+                or      h
+                jr      z, encode_adr_imm_pack
+                ld      a, (encode_adrp_imm_copy+0)
+                ld      h, a
+                ld      a, (encode_adrp_imm_copy+1)
+                and     h
+                ld      h, a
+                ld      a, (encode_adrp_imm_copy+2)
+                and     h
+                ld      h, a
+                ld      a, (encode_adrp_imm_copy+3)
+                and     h
+                cp      &ff
+                jp      nz, fail
+encode_adr_imm_pack:
+; BCDE = raw byte offset (in range).  The imm21 mask + immlo/immhi pack
+; is identical to adrp — reuse it.
+                jp      encode_adrp_imm_in_range
+
+
+; -----------------------------------------------------------------------
 ; Scratch bytes — range-check loop counter, a 4-byte copy of the
 ; shifted pageOffset, a 1-byte stash for immlo, and a 4-byte buffer
 ; for the masked PASS_PC (M4 page-base subtraction).

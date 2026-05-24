@@ -351,12 +351,14 @@ encode_slot_adrp:
 
 
 ; AdrImm (0x26) — same calling convention as AdrpImm but routes to
-; encode_adr_imm.  M3 fixtures don't use this; we wire it for
-; completeness in case the form table references it.
+; encode_adr_imm (slots/adrp_imm.asm).  ADR uses a raw PC-relative byte
+; offset (no page masking, no >>12), range ±1 MB.  Needed by the
+; spectrum4 release source (e.g. `adr x1, mailbox_base`).
 encode_slot_adr:
-; aarch64enc.go has encodeAdrImm; we don't implement the Z80 side yet —
-; treat as a hard error.  Fixture corpus must avoid ADR.
-                jp      fail
+                call    encoder_load_imm_bcde
+                ld      hl, (encoder_slot_ptr)
+                call    encode_adr_imm
+                jp      encode_slot_or_and_next
 
 
 ; LogicalImm — DE=ptr to 8-byte LE buffer, C=is64.
