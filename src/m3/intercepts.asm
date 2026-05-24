@@ -119,8 +119,94 @@ try_intercept_shifted_dispatch:
 
 try_intercept_post_shift:
 
+; -- Memory mnemonics (M5 PR-C Tasks 7-10) ----------------------------
+; Eleven mnemonics share the OpMem encoder family:
+;   ldr=5    str=6    ldp=7    stp=8
+;   ldrb=54  strb=55  ldrh=56  strh=57
+;   stur=74  ldur=75
+;   ldrsb=85 ldrsh=86 ldrsw=87
+;
+; Dispatch model:
+;   - LDP / STP (ID 7 / 8) have 3 operands; operand 2 is OpMem.
+;     Routed to encode_pair_word (M5 PR-C Task 9).
+;   - All others have 2 operands; operand 1 is OpMem.  Routed to
+;     encode_mem_word.
+                ld      a, (try_intercept_mnem)
+                call    is_mem_mnemonic_id
+                jp      nz, try_intercept_no_match
+
+; Pair (ldp=7, stp=8): require 3 operands, kind[2] == OpMem.
+                cp      7
+                jp      z, try_intercept_pair_check
+                cp      8
+                jp      z, try_intercept_pair_check
+
+; Non-pair: require >= 2 operands and kind[1] == OpMem.
+                ld      a, (main_op_count)
+                cp      2
+                jp      c, try_intercept_no_match
+                ld      a, (OPVAL_KINDS + 1)
+                cp      OP_KIND_MEM
+                jp      nz, try_intercept_no_match
+                ld      a, (try_intercept_mnem)
+                call    encode_mem_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+
+try_intercept_pair_check:
+                ld      a, (main_op_count)
+                cp      3
+                jp      nz, try_intercept_no_match
+                ld      a, (OPVAL_KINDS + 2)
+                cp      OP_KIND_MEM
+                jp      nz, try_intercept_no_match
+                ld      a, (try_intercept_mnem)
+                call    encode_pair_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+
+
 try_intercept_no_match:
                 or      &ff                 ; A=0xFF → Z=0
+                ret
+
+
+; -----------------------------------------------------------------------
+; is_mem_mnemonic_id — Z=1 if A is one of the eleven memory mnemonics.
+;   ldr=5 / str=6 / ldp=7 / stp=8 /
+;   ldrb=54 / strb=55 / ldrh=56 / strh=57 /
+;   stur=74 / ldur=75 /
+;   ldrsb=85 / ldrsh=86 / ldrsw=87.
+; Preserves A.
+; -----------------------------------------------------------------------
+is_mem_mnemonic_id:
+                cp      5
+                ret     z
+                cp      6
+                ret     z
+                cp      7
+                ret     z
+                cp      8
+                ret     z
+                cp      54
+                ret     z
+                cp      55
+                ret     z
+                cp      56
+                ret     z
+                cp      57
+                ret     z
+                cp      74
+                ret     z
+                cp      75
+                ret     z
+                cp      85
+                ret     z
+                cp      86
+                ret     z
+                cp      87
                 ret
 
 
