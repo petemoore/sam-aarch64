@@ -68,7 +68,8 @@ const (
 	LoadAddress uint32 = 0x8000
 
 	// SamdosLoadAddress is the address recorded in the samdos2 body header.
-	// Same as the M0 build-disk; citation: tools/build-disk/main.go.
+	// Inherited from the original M0 build-disk tool (since deleted; see
+	// git history for tools/build-disk/main.go).
 	SamdosLoadAddress uint32 = 491529
 )
 
@@ -136,7 +137,8 @@ func main() {
 
 	// Slot 1: AUTO BASIC.
 	// StartLine=10 marks the entry as auto-RUN (SAM ROM checks dir byte 0xF2=0
-	// to dispatch BASIC start-line auto-RUN; citation: tools/build-disk/main.go).
+	// to dispatch BASIC start-line auto-RUN; inherited from the original M0
+	// build-disk tool, since deleted — see git history).
 	auto := &sambasic.File{
 		StartLine: 10,
 		Lines: []sambasic.Line{

@@ -16,60 +16,53 @@ without ever leaving the SAM Coupé.
 
 ## Status
 
-M0 (toolchain bootstrap) and M1 (binary tokenised source format
-plus `text2bin` / `bin2text`) are both done. M2 (encoder tables
-+ Mac reference encoder) is partially complete: the full encoder
-library and generator pipeline are landed, refenc byte-matches
-`aarch64-none-elf-as` on the simpler M1 fixtures (nop, ret, add,
-sub, b/b.cond, mov, .byte/.short/.word, labels, etc.). The
-remaining work is wiring MEM, SHIFTED_REG, and EXTENDED_REG operand
-flattening through refenc, and adding `csel`/`csinc` to the table.
-See `docs/notes/m2-status.md` for the full gap list.
-
-The M0 round-trip continues to pass under every environment we
-exercise: GitHub Actions on `ubuntu-latest` (inside the dev image
-published to `ghcr.io/petemoore/sam-aarch64-dev` on every push),
-the dev image locally under Docker on both `linux/amd64` and
-`linux/arm64`, and natively on macOS against a locally-built
-patched SimCoupé. See `docs/specs/` for design documents and
+M0–M6 are complete; **M7 is the active milestone** (see
+`docs/notes/m7-status.md`). The SAM-side Z80 assembler, running in
+SimCoupé, byte-matches GNU `as + ld -Ttext=0 + objcopy -O binary`
+end-to-end for the M3–M6 fixture corpora, and — the M6 headline —
+assembles the **full spectrum4 `release.bin` (21 752 bytes)
+byte-identical to GNU** on real SAM paging (paged source-IN, paged
+OUT, off-axis tables via `paged_call`). The `m6-release` GitHub
+Actions job stands guard as a hermetic 3-way byte-match (GNU == our
+Go toolchain == our Z80/SAM toolchain). See `docs/ROADMAP.md` for
+the milestone index, `docs/specs/` for design documents, and
 `docs/plans/` for milestone plans.
 
-M0–M5 are complete. The SAM-side Z80 assembler, running in
-SimCoupé, byte-matches GNU `as + ld -Ttext=0 + objcopy -O binary`
-end-to-end for the M3 (9 fixtures), M4 (4 fixtures) and M5 (19
-fixtures) corpora.  M5 added the full compound-operand grammar
-(shifted-reg, extended-reg, all seven memory addressing shapes,
-system registers, literal pool) plus the remaining directives
-(`.set` / `.equ`, `.balign` / `.align`, `.org`, `.skip` / `.space`,
-`.inst`, `.ltorg`).  See `docs/notes/m5-status.md`.
+The round-trip gates pass under every environment we exercise:
+GitHub Actions on `ubuntu-latest` (inside the dev image published to
+`ghcr.io/petemoore/sam-aarch64-dev` on every push), the dev image
+locally under Docker on both `linux/amd64` and `linux/arm64`, and
+natively on macOS against a locally-built patched SimCoupé.
 
-Next up: M6 (compact `.tbn` format, paged source / output buffers,
-built-in disassembler).  M6 will be the first milestone where the
-real spectrum4 sources (~20 KB) round-trip end-to-end via SAM.
+> Historical note: the original M0 milestone was a `nop`-to-disk
+> round-trip oracle (a Z80 stub + a one-instruction fixture). It was
+> fully subsumed by the M3–M6 fixture corpora + the `m6-release`
+> gate and retired in M7; the M0 design record survives at
+> `docs/plans/2026-05-09-m0-toolchain-bootstrap.md` and
+> `docs/notes/m0-status.md`.
 
 ## Local development
 
-The same image CI uses is published publicly. Pull it and run
-`make ci` inside:
+The same image CI uses is published publicly. Pull it and run the
+round-trip sweep inside:
 
 ```bash
 docker pull ghcr.io/petemoore/sam-aarch64-dev:latest
 docker run -d --name sam-aarch64-ci \
     -v "$PWD:/work" -w /work \
     ghcr.io/petemoore/sam-aarch64-dev:latest sleep infinity
-docker exec sam-aarch64-ci bash -lc 'cd /work && make ci'
+docker exec sam-aarch64-ci bash -lc 'cd /work && make ci-m3 ci-m4 ci-m5 ci-m6 && tools/run-m6-release-gate.sh'
 ```
 
 The image is multi-arch (`linux/amd64` + `linux/arm64`); Docker picks
 the variant matching your host. SimCoupé, pyz80, samfile, the
 aarch64 cross binutils, and the SimCoupé ROM resources are all
-pre-installed in it — `make ci` works against it with no further
-setup.
+pre-installed in it — the round-trip targets work against it with no
+further setup.
 
 For native macOS (no Docker), see the "Native macOS" section of
-`docs/notes/headless-simcoupe.md`. `make ci` runs the same
-round-trip in around 1.5s against a locally-built patched SimCoupé;
-setup is a one-time brew + CMake step.
+`docs/notes/headless-simcoupe.md`; setup is a one-time brew + CMake
+step.
 
 ## Repository layout
 

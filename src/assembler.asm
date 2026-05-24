@@ -179,7 +179,7 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
                 org     &8000
 
 ; Jump table at the entry point: CALL 32768 lands on the first byte (&8000).
-; Pattern mirrors M0's src/stub.asm.
+; Pattern mirrors M0's stub (src/stub.asm, retired in M7 — see git history).
                 jp      start
 
                 include "io.asm"
@@ -463,7 +463,8 @@ endif
 
 ; -- Clean exit ---------------------------------------------------------
 ; The DI at start: is undone by SAMDOS's EI inside the RST 8 hook window
-; (ROM PTDOS does EI before dispatching — per src/stub.asm citation).
+; (ROM PTDOS does EI before dispatching — see docs/notes/headless-simcoupe.md
+; "Why the stub ends in DI; HALT").
 ; Re-issue DI so HALT with IFF1=0 triggers SimCoupé's -exitonhalt.
                 di
                 halt

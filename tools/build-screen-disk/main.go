@@ -124,8 +124,10 @@ func main() {
 
 	disk := samfile.NewDiskImage()
 
-	// Slot 0: SAMDOS2 — boot loader. Pattern copied verbatim from
-	// tools/build-disk/main.go so the disk boots the same way.
+	// Slot 0: SAMDOS2 — boot loader. Pattern copied verbatim from the
+	// original M0 build-disk tool (since deleted; see git history, or the
+	// live equivalent in tools/build-m3-disk/main.go) so the disk boots
+	// the same way.
 	if err := disk.AddCodeFile("samdos2", samdos2, SamdosLoadAddress, 0); err != nil {
 		log.Fatalf("AddCodeFile(samdos2): %v", err)
 	}

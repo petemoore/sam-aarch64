@@ -52,7 +52,8 @@
 ; what BASIC's `LOAD CODE` provably exercises every time the
 ; auto-boot loads "assembler" before we even start running.
 ;
-; UIFA name block convention (from src/sam_io.inc / M0's stub.asm):
+; UIFA name block convention (from src/sam_io.inc; originally also in
+; M0's stub.asm, retired in M7):
 ;   1 byte   type     (19 = code file, FT_CODE)
 ;   10 bytes name     space-padded to 10 chars
 ;   4 bytes  ext      space-padded to 4 chars (unused on SAM)

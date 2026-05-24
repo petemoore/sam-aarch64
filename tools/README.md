@@ -20,13 +20,11 @@ This directory holds the Go-side toolchain, build helpers, and exploratory spike
 | `refenc/` | Reference (golden) assembler built on `aarch64enc` + `sam-aarch64-format`: assembles a `.tbn` to a flat binary, the oracle the Z80 output is compared against. `-dump-usage` prints a peak-usage census for sizing Z80 tables. | `refenc` |
 | `enctab-gen/` | Generates the binary `enctab.enc` form table (and can regenerate `aarch64enc/data.go`) from the vendored ARM MRA snapshot. The `.enc` mirrors the Go runtime form table that M3 loads. | `enctab-gen`, `enctab` |
 | `build-m3-disk/` | Builds the M3+ round-trip `.mgt` disk image: assembler binary + `enctab.enc` + off-axis payloads (test_mem, cluster, paged-call, sysreg-data). The current production disk builder. | `build-m3-disk`, `m3-disk` |
-| `build-disk/` | Builds the original M0 round-trip disk image (stub + fixture). | (used by `tools/build-disk.sh` / `make disk`) |
-| `build-stub.sh`, `build-disk.sh`, `run-simcoupe.sh`, `extract-output.sh`, `diff-vs-gnu.sh`, `run-roundtrip.sh` | M0 build/run/extract/diff shell helpers. | `stub`, `disk`, `run`, `extract`, `diff`, `test` |
+| `run-simcoupe.sh` | Runs SimCoupé headless on a `.mgt` (timeout + `-exitonhalt`), capturing the OUT/status. Shared by every round-trip driver and the m6-release gate. | (called by the `run-m{3..6}-roundtrip.sh` drivers + `run-m6-release-*.sh`) |
 | `run-m3-roundtrip.sh`, `run-m4-roundtrip.sh`, `run-m5-roundtrip.sh`, `run-m6-roundtrip.sh` | Per-milestone end-to-end round-trip drivers (text2bin → disk → SimCoupé → extract → byte-compare vs GNU). | (called by `tests/m{3,4,5,6}/run-roundtrip.sh`) |
 | `run-m6-release-gate.sh`, `run-m6-release-stripped.sh`, `run-release-sam.sh` | Drive the spectrum4 `release.bin` byte-match on SAM (the M6 headline gate / iteration helpers). | — |
 | `revendor-m6-release.sh` | Refresh the vendored stripped release `.tbn` fixture from a spectrum4 checkout. | — |
 | `flatten-s/` | Recursively expands GNU-`as` `.include` directives in a `.s` file (does *not* expand macros). Pre-processing helper. | — |
-| `check-toolchain.sh` | Verifies the host toolchain (pyz80, aarch64 `as`, Go, etc.). | `check` |
 | `session-handover.sh` | Session-start helper; warns about stray `docs/superpowers/` files. | — |
 | `Dockerfile.dev` | Dev-container image (pyz80 + SimCoupé + Go). SimCoupé runs only in this container. | — |
 | `simcoupe-exitonhalt.patch` | Vendored SimCoupé patch (exit-on-`HALT`); superseded upstream but Dockerfile.dev not yet bumped. | — |
