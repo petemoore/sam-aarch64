@@ -72,6 +72,18 @@ DIR_WORD:               equ     4   ; .word
 DIR_QUAD:               equ     5   ; .quad
 DIR_ASCII:              equ     6   ; .ascii
 DIR_ASCIZ:              equ     7   ; .asciz
+DIR_EQU:                equ     8   ; .equ
+DIR_SET:                equ     9   ; .set
+DIR_GLOBAL:             equ     10  ; .global
+DIR_BALIGN:             equ     11  ; .balign
+DIR_ORG:                equ     12  ; .org
+DIR_SKIP:               equ     13  ; .skip
+DIR_SPACE:              equ     14  ; .space
+DIR_INST:               equ     15  ; .inst
+DIR_ALIGN:              equ     16  ; .align (2^N)
+DIR_SECTION:            equ     18  ; .section
+DIR_ARCH:               equ     19  ; .arch
+DIR_CPU:                equ     20  ; .cpu
 DIR_HWORD:              equ     21  ; .hword (synonym of .short)
 
 
@@ -641,7 +653,31 @@ main_handle_directive:
 
 
 ; ----- Pass 1: compute directive size, advance PASS_PC, return ---------
+;
+; Special-case the directives whose pass-1 effect is something other than
+; "PASS_PC += size":
+;
+;   .equ / .set      — pass-1 inserts (symbol_id, value) into SYMTAB;
+;                      size is 0.  Mac-side: refenc/pass1.go:166-170,
+;                      :241-271 (resolveEquDirective).
+;
+;   .org             — pass-1 sets PASS_PC := target directly (not +=).
+;                      Backward .org → fail.  Mac-side: pass1.go:173-203.
+;                      OriginVMA (at-start .org with target != 0 from
+;                      PASS_PC == 0) is punted here per M5 PR-A scope —
+;                      no current M1 fixture exercises it.
+;
+; Every other directive falls through to compute_directive_size +
+; pass_pc_advance_de.
 main_handle_directive_pass1:
+                ld      a, (main_dir_id)
+                cp      DIR_EQU
+                jp      z, main_dir_equ_pass1
+                cp      DIR_SET
+                jp      z, main_dir_equ_pass1
+                cp      DIR_ORG
+                jp      z, main_dir_org_pass1
+
                 call    compute_directive_size      ; result → BC (size, 16-bit)
                 ld      d, b
                 ld      e, c
@@ -670,6 +706,31 @@ main_handle_directive_pass2:
                 jp      z, walk_records             ; .text — no-op
                 cp      DIR_DATA
                 jp      z, walk_records             ; .data — no-op
+; ---- M5 PR A directives -------------------------------------------------
+                cp      DIR_EQU
+                jp      z, walk_records             ; symbol already inserted in pass 1
+                cp      DIR_SET
+                jp      z, walk_records             ; .set is an .equ synonym
+                cp      DIR_GLOBAL
+                jp      z, walk_records             ; no-op (refenc/pass2.go:1719)
+                cp      DIR_SECTION
+                jp      z, walk_records             ; no-op (refenc/pass2.go:1721-1724)
+                cp      DIR_ARCH
+                jp      z, walk_records             ; no-op (refenc/pass2.go:1725-1728)
+                cp      DIR_CPU
+                jp      z, walk_records             ; no-op
+                cp      DIR_SKIP
+                jp      z, main_dir_skip_emit
+                cp      DIR_SPACE
+                jp      z, main_dir_skip_emit       ; same handler
+                cp      DIR_INST
+                jp      z, main_dir_inst_emit
+                cp      DIR_BALIGN
+                jp      z, main_dir_balign_emit
+                cp      DIR_ALIGN
+                jp      z, main_dir_align_emit
+                cp      DIR_ORG
+                jp      z, main_dir_org_pass2
                 jp      fail
 
 
@@ -703,11 +764,138 @@ compute_directive_size:
                 jr      z, compute_dir_size_zero
                 cp      DIR_DATA
                 jr      z, compute_dir_size_zero
+; ---- M5 PR A directives -------------------------------------------------
+                cp      DIR_EQU
+                jr      z, compute_dir_size_zero
+                cp      DIR_SET
+                jr      z, compute_dir_size_zero
+                cp      DIR_GLOBAL
+                jr      z, compute_dir_size_zero
+                cp      DIR_SECTION
+                jr      z, compute_dir_size_zero
+                cp      DIR_ARCH
+                jr      z, compute_dir_size_zero
+                cp      DIR_CPU
+                jr      z, compute_dir_size_zero
+                cp      DIR_ORG
+                jr      z, compute_dir_size_zero    ; .org handled in pass-1
+                cp      DIR_INST
+                jp      z, compute_dir_size_inst
+                cp      DIR_SKIP
+                jp      z, compute_dir_size_skip
+                cp      DIR_SPACE
+                jp      z, compute_dir_size_skip
+                cp      DIR_BALIGN
+                jp      z, compute_dir_size_balign
+                cp      DIR_ALIGN
+                jp      z, compute_dir_size_align
                 jp      fail
 
 compute_dir_size_zero:
                 ld      bc, 0
                 ret
+
+; .inst — fixed 4 bytes (refenc/pass1.go:346-347).
+compute_dir_size_inst:
+                ld      bc, 4
+                ret
+
+; .skip / .space — size = eval(operand1).  We use the low 16 bits;
+; M5 PR-A fixtures stay well under 64 KB.  Mac-side: pass1.go:337-345.
+compute_dir_size_skip:
+                call    main_eval_first_imm
+                ld      a, (expr_result + 0)
+                ld      c, a
+                ld      a, (expr_result + 1)
+                ld      b, a
+                ret
+
+; .balign N — size = (N - PC%N) % N.
+; Mirrors refenc/pass1.go:365-381 with unsigned modulus.  N is read from
+; the operand; PASS_PC is the current pc at directive entry.
+;
+; Both passes call this routine: in pass 1 PASS_PC is the pre-directive
+; PC (advanced afterwards via pass_pc_advance_de); in pass 2 the emit
+; handler runs first but doesn't advance PASS_PC, then dir_emit_done
+; re-calls compute_directive_size — at which point PASS_PC is still the
+; pre-directive PC, so the recomputed pad matches what was emitted.
+compute_dir_size_balign:
+                call    main_eval_first_imm         ; expr_result = N (s64)
+                jp      compute_balign_pad_from_n
+
+
+; .align N — Mac convention `align to 2^N`.  Same as .balign with
+; align = 1 << N.  N = 0 is a no-op (pad = 0).  M5 PR-A only sees
+; small N (corpus values are 2..4), so we just shift in place.
+compute_dir_size_align:
+                call    main_eval_first_imm         ; expr_result = N (s64)
+; align = 1 << N.  Take low byte of N as the shift count.
+                ld      a, (expr_result + 0)
+                or      a
+                jr      z, compute_dir_size_align_pad0
+                cp      32
+                jp      nc, fail                    ; alignment too large for u32
+; HL = 1 << A (build a 16-bit alignment for now; PR-A fixtures stay <= 16).
+                ld      hl, 1
+compute_dir_size_align_shift:
+                add     hl, hl
+                dec     a
+                jr      nz, compute_dir_size_align_shift
+; Stash HL as N in expr_result+0..1 so compute_balign_pad_from_n can pick
+; it up.  Top bytes are already zero from main_eval_first_imm (expr is
+; small positive); but zero them explicitly to be safe.
+                ld      a, l
+                ld      (expr_result + 0), a
+                ld      a, h
+                ld      (expr_result + 1), a
+                xor     a
+                ld      (expr_result + 2), a
+                ld      (expr_result + 3), a
+                jp      compute_balign_pad_from_n
+
+compute_dir_size_align_pad0:
+                ld      bc, 0
+                ret
+
+
+; compute_balign_pad_from_n — given N in (expr_result + 0..1) (16-bit
+; unsigned), compute pad = (N - PASS_PC%N) % N.  Returns BC = pad.
+;
+; PASS_PC is a 32-bit value.  For all M5 PR-A fixtures N is a small
+; power of two (≤ 16), so PASS_PC % N == (PASS_PC low byte) & (N-1).
+; Use the low-byte mask form when N is a power of two for simplicity;
+; fall back to long division otherwise (no current fixture needs it).
+compute_balign_pad_from_n:
+                ld      a, (expr_result + 1)
+                or      a
+                jp      nz, compute_balign_pad_large_n
+                ld      a, (expr_result + 0)
+                cp      2
+                jp      c, compute_balign_pad_zero  ; N < 2 → pad = 0
+; Check power-of-two: N & (N-1) == 0.
+                ld      b, a                        ; B = N
+                dec     a                           ; A = N-1
+                ld      c, a                        ; C = N-1
+                and     b
+                jp      nz, fail                    ; not power-of-two (PR-A)
+; PASS_PC low byte AND (N-1) gives remainder for power-of-two N.
+                ld      a, (PASS_PC + 0)
+                and     c                           ; A = PASS_PC % N
+                jp      z, compute_balign_pad_zero  ; already aligned
+                ld      d, a                        ; D = remainder
+                ld      a, b                        ; A = N
+                sub     d                           ; A = N - remainder
+                ld      c, a
+                ld      b, 0
+                ret
+
+compute_balign_pad_zero:
+                ld      bc, 0
+                ret
+
+compute_balign_pad_large_n:
+; N > 255 — no current PR-A fixture; surface as fail until needed.
+                jp      fail
 
 ; size = op_count * 1
 compute_dir_size_x1:
@@ -951,6 +1139,266 @@ dir_emit_done:
                 jp      walk_records
 
 
+; -----------------------------------------------------------------------
+; M5 PR-A directive handlers (Tasks 1-3).
+; -----------------------------------------------------------------------
+
+; ---- .equ / .set (pass 1) — insert (symbol_id, value) into SYMTAB ----
+;
+; Both operands are IMM_EXPR records (see emitEqu in
+; tools/text2bin/internal/translate/flatten.go).  Operand 1's bytecode
+; is exactly [PUSH_SYM=0x05][id_lo][id_hi] (3 bytes) — we extract the
+; id by inspection rather than evaluating (the symbol may not be in
+; SYMTAB yet, but we only want its id).  Operand 2 is the value
+; expression — eval it via main_eval_next_imm.
+;
+; Pass-2 .equ / .set are no-ops (the symbol was inserted in pass 1).
+;
+; Mac-side reference: refenc/pass1.go:241-271 (resolveEquDirective);
+; format/operands writer: text2bin/internal/translate/flatten.go:283-296
+; (emitEqu).
+main_dir_equ_pass1:
+; Position main_opval_src at operand 1.
+                ld      hl, (main_dir_payload_after_header)
+
+; Operand 1 layout: [kind=0x05 IMM_EXPR][len u16][bytecode...].
+                ld      a, (hl)
+                cp      OP_KIND_IMM_EXPR
+                jp      nz, fail
+                inc     hl                          ; HL → len LSB
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl                          ; HL → bytecode start
+
+; Validate bytecode shape: must be exactly 3 bytes [PUSH_SYM, id_lo, id_hi].
+                ld      a, d
+                or      a
+                jp      nz, fail
+                ld      a, e
+                cp      3
+                jp      nz, fail
+                ld      a, (hl)
+                cp      &05                         ; PUSH_SYM opcode
+                jp      nz, fail
+                inc     hl                          ; HL → id_lo
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)                     ; BC = symbol_id (C=lo, B=hi)
+                inc     hl                          ; HL past operand-1 bytecode
+
+; Stash symbol id; HL still on the kind byte of operand 2.
+                ld      (main_dir_equ_pending_id), bc
+                ld      (main_opval_src), hl
+                ld      a, 1
+                ld      (main_op_count_remaining), a    ; only operand 2 left
+
+; Evaluate operand 2 → expr_result (8 bytes LE).
+                call    main_eval_next_imm
+
+; Copy low 4 bytes of expr_result into symbol_value_buf.  The address
+; field in SYMTAB is u32 — same width as PASS_PC.  M4's evaluator
+; already returns 8-byte LE; we drop the high 4 bytes here.
+                ld      a, (expr_result + 0)
+                ld      (symbol_value_buf + 0), a
+                ld      a, (expr_result + 1)
+                ld      (symbol_value_buf + 1), a
+                ld      a, (expr_result + 2)
+                ld      (symbol_value_buf + 2), a
+                ld      a, (expr_result + 3)
+                ld      (symbol_value_buf + 3), a
+
+; Insert (id, value) — duplicate id → symbol_insert does jp fail.
+                ld      hl, (main_dir_equ_pending_id)
+                call    symbol_insert
+                jp      walk_records
+
+
+; ---- .org (pass 1) — PASS_PC := target -------------------------------
+;
+; Per M5 PR-A scope, OriginVMA semantics (at-start .org with target > 0
+; from PASS_PC == 0) are punted — no PR-A fixture exercises it.
+; Backward .org is an error.  Pass-2 mirror is below.
+;
+; Mac-side reference: refenc/pass1.go:194-203.
+main_dir_org_pass1:
+                call    main_eval_first_imm         ; expr_result = target
+                jp      main_dir_org_set_pc
+
+; ---- .org (pass 2) — zero-fill from current PC to target ------------
+;
+; PR-A scope: 16-bit delta only (max 64 KB pad).  M5's IN/OUT buffers
+; are 2 KB each, so anything larger would be unusable anyway.  Larger
+; deltas are out-of-scope until a fixture needs them.
+;
+; Mirrors refenc/pass2.go:102-128: emit (target - pc) zero bytes and
+; set PASS_PC = target.
+main_dir_org_pass2:
+                call    main_eval_first_imm         ; expr_result = target
+
+; Validate target's upper 16 bits match PASS_PC (else delta > 64 K).
+                ld      a, (expr_result + 2)
+                ld      hl, PASS_PC + 2
+                cp      (hl)
+                jp      nz, fail
+                ld      a, (expr_result + 3)
+                inc     hl
+                cp      (hl)
+                jp      nz, fail
+
+; BC = delta = (target_low16 - PASS_PC_low16).  Backward → fail.
+                ld      a, (expr_result + 0)
+                ld      hl, PASS_PC
+                sub     (hl)
+                ld      c, a
+                ld      a, (expr_result + 1)
+                inc     hl
+                sbc     a, (hl)
+                ld      b, a
+                jp      c, fail                     ; target < PASS_PC
+
+main_dir_org_emit_loop:
+                ld      a, b
+                or      c
+                jr      z, main_dir_org_set_pc
+                push    bc
+                xor     a
+                call    emit_byte
+                pop     bc
+                dec     bc
+                jr      main_dir_org_emit_loop
+
+; PASS_PC := expr_result.  Shared by pass-1 and pass-2 .org tails.
+main_dir_org_set_pc:
+                ld      a, (expr_result + 0)
+                ld      (PASS_PC + 0), a
+                ld      a, (expr_result + 1)
+                ld      (PASS_PC + 1), a
+                ld      a, (expr_result + 2)
+                ld      (PASS_PC + 2), a
+                ld      a, (expr_result + 3)
+                ld      (PASS_PC + 3), a
+                jp      walk_records
+
+
+; ---- .skip / .space (pass 2 emit) — N zero bytes --------------------
+;
+; N is computed by compute_dir_size_skip and returned in BC.  We loop
+; emit_byte N times.  After emit, jp dir_emit_done re-runs the size
+; compute (same value) and advances PASS_PC.
+;
+; Mac-side reference: refenc/pass2.go:1763-1770.
+main_dir_skip_emit:
+                call    compute_directive_size      ; BC = N (size, 16-bit)
+                ld      a, b
+                or      c
+                jp      z, dir_emit_done
+main_dir_skip_emit_loop:
+                push    bc
+                xor     a
+                call    emit_byte
+                pop     bc
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, main_dir_skip_emit_loop
+                jp      dir_emit_done
+
+
+; ---- .inst (pass 2 emit) — one 32-bit LE word ------------------------
+;
+; Mac-side reference: refenc/pass1.go:346-347 (size = 4).  Pass-2 emit
+; is by-inspection: evaluate the operand expression and emit four bytes
+; little-endian.
+main_dir_inst_emit:
+                call    main_eval_first_imm         ; expr_result = u32 (low 4 bytes)
+                ld      a, (expr_result + 0)
+                call    emit_byte
+                ld      a, (expr_result + 1)
+                call    emit_byte
+                ld      a, (expr_result + 2)
+                call    emit_byte
+                ld      a, (expr_result + 3)
+                call    emit_byte
+                jp      dir_emit_done
+
+
+; ---- .balign / .align (pass 2 emit) — pad bytes ---------------------
+;
+; compute_directive_size returns the pad count in BC.  We mirror
+; refenc's alignPadBytes (tools/refenc/pass2.go:403-429): zero-fill
+; leading bytes until PC is 4-aligned, then NOPs (0xd503201f LE) while
+; >= 4 bytes remain, then trailing zeros.
+;
+; D tracks the running emit-PC offset since the directive started; we
+; recompute (PASS_PC + D) % 4 = (PASS_PC + D) & 3 each iteration to
+; decide between zero and NOP.  PASS_PC itself is left alone so
+; dir_emit_done's compute_directive_size re-evaluates to the same pad.
+;
+; PR-A fixtures all have pad = 0 (the fixtures' `.balign` directives
+; hit at PC=0, where every alignment is a no-op).  The handler is
+; general so future promotions don't surface byte-mismatch bugs.
+main_dir_balign_emit:
+main_dir_align_emit:
+                call    compute_directive_size      ; BC = pad
+                ld      a, b
+                or      c
+                jp      z, dir_emit_done
+                ld      d, 0                        ; D = bytes emitted so far
+
+main_dir_pad_loop:
+                ld      a, b
+                or      c
+                jp      z, dir_emit_done
+
+; (cur_pc & 3) = (PASS_PC[0] + D) & 3.
+                ld      a, (PASS_PC + 0)
+                add     a, d
+                and     3
+                jr      nz, main_dir_pad_zero       ; not 4-aligned → zero
+
+; 4-aligned.  Emit NOP if at least 4 bytes remain; else fall through.
+                ld      a, c
+                cp      4
+                jr      nc, main_dir_pad_nop
+                ld      a, b
+                or      a
+                jr      z, main_dir_pad_zero        ; < 4 left → trailing zero
+
+main_dir_pad_nop:
+                push    bc
+                push    de
+                ld      a, &1f
+                call    emit_byte
+                ld      a, &20
+                call    emit_byte
+                ld      a, &03
+                call    emit_byte
+                ld      a, &d5
+                call    emit_byte
+                pop     de
+                pop     bc
+                dec     bc
+                dec     bc
+                dec     bc
+                dec     bc
+                ld      a, d
+                add     a, 4
+                ld      d, a
+                jr      main_dir_pad_loop
+
+main_dir_pad_zero:
+                push    bc
+                push    de
+                xor     a
+                call    emit_byte
+                pop     de
+                pop     bc
+                dec     bc
+                inc     d
+                jr      main_dir_pad_loop
+
+
 main_emit_string_bytes:
 ; Input: HL = bytes ptr, BC = length.  Emit each byte via emit_byte.
                 ld      a, b
@@ -978,6 +1426,28 @@ main_emit_string_loop:
 ; -----------------------------------------------------------------------
 main_eval_each_imm_init:
                 ret
+
+
+; -----------------------------------------------------------------------
+; main_eval_first_imm — reset main_opval_src to the start of the
+; directive's operand list, then evaluate the first IMM_EXPR.  Used by
+; compute_directive_size for PC-dependent / size-from-operand directives
+; (.skip, .space, .inst, .balign, .align, .org) so they can be
+; re-evaluated in dir_emit_done after the emit loop has consumed
+; main_opval_src.  M5 PR-A.
+;
+; Side-effect: decrements main_op_count_remaining (harmless — pass-1's
+; main_handle_directive_pass1 doesn't read it afterwards, and pass-2
+; emit handlers manage their own counter explicitly).
+;
+; Input:  none (reads main_dir_payload_after_header).
+; Output: expr_result = 8-byte LE eval of operand 1.
+; Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+main_eval_first_imm:
+                ld      hl, (main_dir_payload_after_header)
+                ld      (main_opval_src), hl
+                jp      main_eval_next_imm          ; tail-call
 
 
 ; -----------------------------------------------------------------------
@@ -1121,6 +1591,12 @@ main_dir_payload_after_header:  defw    0
 ; walk_strings_sum_lengths.  Reset to 0 before each pass at the
 ; directive's size-compute step.
 compute_dir_size_acc:           defw    0
+
+; M5 PR-A scratch — .equ helper.
+;
+; main_dir_equ_pending_id: symbol id extracted from operand 1 (held
+;                          across the operand-2 evaluation).
+main_dir_equ_pending_id:        defw    0
 
 ; -----------------------------------------------------------------------
 ; Globals shared between reader / encoder / main_loop.
