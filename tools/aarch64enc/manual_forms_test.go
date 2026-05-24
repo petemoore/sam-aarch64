@@ -10,7 +10,7 @@ func TestManualFormsNonEmpty(t *testing.T) {
 		t.Fatal("manualForms is empty; hand-curated form table must not be lost")
 	}
 	if len(manualForms) < 50 {
-		t.Errorf("manualForms has only %d entries; expected ~80+ (mvn, lsl, lsr, csel, csinc, csetm, bfi, bfxil, ubfx, sbfx, tst, bic, adr, eor, orr, ands, movk, movn, madd, msub, umull, umulh, umaddl, umsubl, eret, wfi, ror, mul, udiv, cls, sxtw, bfc, …)", len(manualForms))
+		t.Errorf("manualForms has only %d entries; expected ~80+ (mvn, lsl, lsr, csel, csinc, csetm, bfi, bfxil, ubfx, sbfx, tst, bic, adr, eor, orr, ands, movk, movn, madd, msub, umull, umulh, umaddl, umsubl, eret, wfi, ror, mul, udiv, sxtw, bfc, …)", len(manualForms))
 	}
 }
 
