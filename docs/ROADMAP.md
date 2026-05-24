@@ -52,6 +52,7 @@ When closing out each milestone, walk this list and ask: *"does this still belon
 - [ ] `SpectrumFourLayout` extraction (`-layout` flag or linker-script parser) — Pete's call: not worth doing unless a second project surfaces.
 - [ ] Replace M3 `fail:` 30s-timeout spin with **printer-channel status reporting** — `OUT (&E1), A` to write OK/FAIL strings; test wrapper checks both exit code AND printer log. Drops failure latency from 30s to ~100ms, gives per-fail-site diagnostic messages, sidesteps the silent-success risk. Pete's idea, 2026-05-27. Land after M3 Tasks 16-22 to avoid merge conflicts with the in-flight `src/m3/assembler.asm` work.
 - [ ] Split M3 assembler build into **production vs test** variants. Today every `make m3-asm` includes `run_slot_self_tests` and the boot-time test hooks; in the production assembler used by an end-user, the self-tests should be #ifdef'd out. The `print_status` primitive itself (for end-user error messages — "unknown mnemonic", "out of memory" etc.) stays in production. Natural sibling of the printer-channel change above.
+- [ ] **Screenshot SimCoupé on failure** — `tools/run-simcoupe.sh` calls `import -window root` (Linux/Xvfb) or `screencapture -x` (macOS) on timeout/non-zero-exit, dumps a PNG into the failure-artifacts upload. Lets us see ROM/BASIC error messages (`108 End of file`, `26 File not found`, etc.) that the printer-channel can't capture because they come from layers our code doesn't control. Pete's idea, 2026-05-27. Land alongside or after the printer-channel change.
 
 ## How to extend this doc
 
