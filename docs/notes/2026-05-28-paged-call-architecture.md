@@ -866,9 +866,10 @@ consumed by the first *user* of the mechanism (sysreg-table relocate).
 **Brainstorm doc update needed?** Yes, minor: add a note that the
 "new constants alongside LMPR_ENCTAB / LMPR_OUT_HIGH / LMPR_IN_BASE"
 mentioned at `memory-layout-brainstorm.md:97` are now
-`HMPR_DATA_TABLES = &0D` (page 13 in HMPR low-5 form), etc., and
-that the access mechanism is `paged_data_map_hmpr(A)` /
-`paged_data_unmap_hmpr` per §4.2 of this note.
+`HMPR_DATA_TABLES = &0D` (page 13 in HMPR low-5 form), etc.  The
+access mechanism per §4 (post-salvage) is `paged_call` into a
+target routine that lives on the data page — split-bracket
+helpers are NOT used (§4.2 documents why they were rejected).
 
 ---
 
@@ -989,9 +990,17 @@ documentation), medium PR.
   payload Mac-side as a separate `.dat` file, load via the same
   HLOAD trampoline mechanism extended to target page 13.)
 - Replace the inline `ld hl, sysreg_table` reads in
-  `sysname.asm` with `ld c, HMPR_DATA_TABLES; ld hl, &8000; call
-  paged_data_map_hmpr / ldir / call paged_data_unmap_hmpr` per
-  §4.2.
+  `sysname.asm` with a `paged_call` to a small lookup routine
+  that lives at the head of the page-13 payload.  The lookup
+  routine takes the mnemonic-id in a designated register (e.g. C),
+  walks the table from its known section-C-shape base (= `&8000`),
+  and returns the (op0, op1, CRn, CRm, op2) packed encoding in
+  another register (e.g. DE+L) for the caller to compose into the
+  instruction word.  See §3 paged_call ABI for register-clobber
+  rules.  This is structurally how SAM ROM `R1OFFCLBC`, SAMDOS
+  `RST 8`, and the 128K's `RST 28H` all consume their paged code —
+  caller hands off, callee runs, callee RETs back through the
+  trampoline.
 - Add the 8 missing sysreg entries (`hcr_el2`, `mair_el1`, `scr_el3`,
   `spsr_el3`, `tcr_el1`, `ttbr0_el1`, `ttbr1_el1`, `vbar_el1`) —
   comes "for free" because we're no longer constrained by the
@@ -1004,10 +1013,14 @@ documentation), medium PR.
   wrong, PR 2 surfaces it.
 - Boot-time sequencing: page-13 load happens BEFORE
   `enctab_map_in` switches LMPR (the page-13 load uses HMPR; ENCTAB
-  uses LMPR; they're independent). But the build-time mechanism
-  needs to produce page 13's contents, which means a Mac-side step
-  similar to `enctab.enc` generation. Probably extends
-  `tools/refenc/` or adds a parallel `tools/sysreg-page-gen/`.
+  uses LMPR; they're independent). The build-time mechanism that
+  produces page 13's contents has a direct precedent: PR #55's
+  `paged_call_test_payload` is loaded into page 14 by the
+  `-paged-call` flag of `tools/build-m3-disk/main.go`. PR-2
+  generalises that one-payload mechanism to a "data tables"
+  payload (a new `-sysreg-data` flag depositing the page-13
+  binary), so no `tools/refenc/` extension or new
+  `tools/sysreg-page-gen/` is needed.
 - The sysreg table is currently referenced by name (`ld hl,
   sysreg_table`); after the move, callers in `sysname.asm` need the
   page-13-offset-form address `&8000`. Cross-file refs become
