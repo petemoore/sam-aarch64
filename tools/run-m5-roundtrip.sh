@@ -63,7 +63,7 @@ mkdir -p build
 # Mac-side tools.  ASSEMBLER_BIN is per-variant — see header of
 # tools/run-m3-roundtrip.sh for the test vs prod rationale.
 ASSEMBLER_BIN="${ASSEMBLER_BIN:-$ROOT/build/assembler.bin}"
-make -s text2bin enctab build-m3-disk
+make -s text2bin enctab build-m3-disk sysreg-data
 
 if [ ! -f "$ASSEMBLER_BIN" ]; then
     echo "ERROR: assembler binary not found: $ASSEMBLER_BIN" >&2
@@ -92,6 +92,7 @@ if [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler.bin" ]; then
 fi
 "$ROOT/build/build-m3-disk" \
     "${test_variant_flags[@]}" \
+    -sysreg-data "$ROOT/build/sysreg_data.bin" \
     "$ASSEMBLER_BIN" build/enctab.enc \
     "build/${base}.tbn" \
     "build/${base}.mgt"

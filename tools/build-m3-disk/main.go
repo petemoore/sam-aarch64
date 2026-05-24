@@ -12,6 +12,9 @@
 //	6  p14        (after)      (paged_call self-test payload, if
 //	                            provided — plan-PR 1 of the paging
 //	                            architecture)
+//	7  sd13       (after)      (page-13 sysreg lookup data, if provided —
+//	                            PR-2; deposited for BOTH variants since
+//	                            sysreg lookups are a production feature)
 //
 // The AUTO BASIC references "assembler" (not "stub" as in M0).
 //
@@ -75,9 +78,10 @@ func main() {
 
 	testMemPath := flag.String("test-mem", "", "path to off-axis test_mem.bin (BUILD_TESTS only; plan-PR 3)")
 	pagedCallPath := flag.String("paged-call", "", "path to the paged_call self-test page-14 payload (BUILD_TESTS only; plan-PR 1)")
+	sysregDataPath := flag.String("sysreg-data", "", "path to the page-13 sysreg lookup data (build/sysreg_data.bin; PRODUCTION + test; PR-2)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
-			"usage: %s [-test-mem <path>] [-paged-call <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n",
+			"usage: %s [-test-mem <path>] [-paged-call <path>] [-sysreg-data <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n",
 			os.Args[0])
 		flag.PrintDefaults()
 	}
@@ -260,6 +264,26 @@ func main() {
 		}
 	}
 
+	// Slot 7 (optional): page-13 sysreg lookup data (sd13).  Loaded at
+	// boot by src/m3/loader.asm::load_page13_payload via HGTHD +
+	// trampoline into physical page 13, then read by the four
+	// sysname_lookup_* routines (src/m3/sysname.asm) via paged_call.
+	// PRODUCTION feature — sysreg/dc/tlbi/pstate operands appear in
+	// shipping sources, so this file is deposited for BOTH variants
+	// (unlike -test-mem / -paged-call which are BUILD_TESTS only).
+	// Recorded load address mirrors enctab.enc: documentary, since the
+	// loader supplies HL = &8000 and target page = 13 to the trampoline.
+	if *sysregDataPath != "" {
+		sysregData, err := os.ReadFile(*sysregDataPath)
+		if err != nil {
+			log.Fatalf("read sysreg-data payload: %v", err)
+		}
+		const SysregDataLoadAddress uint32 = 0x8000
+		if err := disk.AddCodeFile("sd13", sysregData, SysregDataLoadAddress, 0); err != nil {
+			log.Fatalf("AddCodeFile(sd13): %v", err)
+		}
+	}
+
 	if err := disk.Save(outputPath); err != nil {
 		log.Fatalf("save %s: %v", outputPath, err)
 	}
@@ -282,6 +306,10 @@ func main() {
 	if *pagedCallPath != "" {
 		pagedCallSize, _ := os.Stat(*pagedCallPath)
 		fmt.Printf("p14:        %d bytes\n", pagedCallSize.Size())
+	}
+	if *sysregDataPath != "" {
+		sysregDataSize, _ := os.Stat(*sysregDataPath)
+		fmt.Printf("sd13:       %d bytes\n", sysregDataSize.Size())
 	}
 	fmt.Printf("Built %s\n", outputPath)
 }
