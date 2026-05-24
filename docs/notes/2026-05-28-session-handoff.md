@@ -27,6 +27,19 @@ Suggested new ordering: **plan-PR 3 → plan-PR 1 → plan-PR 2 → plan-PR 4.**
 
 When this re-ordering lands, **PR #50's work is salvageable** — the primitive bodies in `src/m3/paged_bodies.asm`, the boot-time installation in extended `enctab_trampoline_setup`, the page-13 disk plumbing, and the test self-test code are all useful. The reason they don't WORK is purely the test-variant size budget; once plan-PR 3 creates room, rebasing #50 should land them cleanly.
 
+## Pre-created branches (ready for the next session to dispatch on)
+
+Four branches are pre-created off this handoff branch's tip, so each subagent's worktree starts with the briefs already in-tree (no need to wait for PR #51 to merge before dispatching):
+
+| Branch | Brief | What lands there |
+|--------|-------|------------------|
+| `m6/plan-pr-3-test-corpus-off-axis` | `docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md` | The port-test-corpus-off-axis PR; needs to land BEFORE PR #50 can be salvaged. |
+| `spike/go-z80-harness` | `docs/notes/2026-05-28-test-harness-spike-briefs.md` § Spike A | `tools/z80-test-harness-spike-go/` + SCOPE.md + measurement. |
+| `spike/simcoupe-instrumentation` | same doc § Spike B | SCOPE.md + integration docs (the SimCoupé patches live in `~/git/simcoupe`). |
+| `spike/test-harness-bakeoff-evaluator` | same doc § Spike C | `docs/notes/2026-05-28-test-harness-bakeoff-evaluation.md`. |
+
+The four spike-and-plan branches share the briefs (handoff-branch tip = main + this PR + the plan-PR 3 brief). Once PR #51 merges, the briefs are also on main, but subagents dispatched on the pre-created branches work without needing main to be up-to-date.
+
 ## What the next session should do, in order
 
 1. **Read this doc fully + the three docs it links to** (paged-call architecture, memory-layout brainstorm, plan-PR 1 stuck doc). Skim the music research only if relevant.
