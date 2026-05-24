@@ -195,6 +195,13 @@ reader_next_kind:
                 inc     hl                  ; HL → payload start; BC = len
                 ld      (reader_curr_len), bc
 
+; Bounds check: payload length must fit in STAGING_BUF.
+; STAGING_BUF size = STAGING_BUF_END - STAGING_BUF = &400 (1024 B).
+; Overflow → silent corruption of LITPOOL_EXPR_BUF; fail cleanly instead.
+                ld      a, b
+                cp      (STAGING_BUF_END - STAGING_BUF) >> 8
+                jp      nc, fail            ; high byte >= 4 → len >= 1024 → overflow
+
 ; Note: the 3-byte header above does NOT call in_normalise_hl between
 ; INC HL steps.  If the header straddled &3FFF..&4001, the high bytes
 ; would be read via section B under LMPR=IN_POS_PAGE — and section B at
