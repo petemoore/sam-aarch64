@@ -253,13 +253,14 @@ LMPR_OUT_HIGH:  equ     &25            ; RAM0 + low5=5; A=page 5, B=page 6
 ; IN-buffer paged-input constants.
 ;
 ; Per docs/specs/2026-05-27-m6-paged-in-design.md.  IN lives in physical
-; pages 7..10 (4 contiguous pages = 64 KB ceiling), HLOAD'd once at
-; startup.  Each reader_next_kind brackets a brief LMPR=&27-derived
-; window mapping the current IN page into section A, stages the record
-; into STAGING_BUF in section D, and restores LMPR_ENCTAB before
-; returning to the caller.  Pages 7..12 are in the "00H unused" range
-; per the Tech Manual page-allocation table cited at
-; trampoline.asm:188-208 above.
+; pages 7..12 (6 contiguous pages = 96 KB ceiling, raised 2026-05-28
+; from the original 4-page / 64 KB allocation to fit spectrum4's 88 KB
+; stripped release.tbn), HLOAD'd once at startup.  Each
+; reader_next_kind brackets a brief LMPR=&27-derived window mapping the
+; current IN page into section A, stages the record into STAGING_BUF in
+; section D, and restores LMPR_ENCTAB before returning to the caller.
+; Pages 7..12 are all in the "00H unused" range per the Tech Manual
+; page-allocation table cited at trampoline.asm:188-208 above.
 
 IN_BASE_PAGE:   equ     7              ; first physical page of IN
 LMPR_IN_BASE:   equ     &20 + IN_BASE_PAGE

@@ -16,22 +16,26 @@
 ; -----------------------------------------------------------------------
 ;
 ; Single shared sorted list of (digit, pc) tuples, at LOCAL_LABEL_TABLE
-; (= &CD60).  Five bytes per entry (1 B digit + 4 B PC LE), with a
-; 2-byte count prefix:
+; (= &E280, moved 2026-05-28 from the original &CD60).  Five bytes per
+; entry (1 B digit + 4 B PC LE), with a 2-byte count prefix:
 ;
-; Memory layout (must fit in &CD60..&D0FF — below OPMEM_OFF at &D100):
+; Memory layout (resides in the &E100+ section-D free region):
 ;
 ;   offset 0..1   count   u16 LE     (entries used; 0..LOCAL_LIST_MAX)
 ;   offset 2..    entries — for i in 0..count:
 ;     base + 2 + i*5 + 0       = digit (u8, 1..99)
 ;     base + 2 + i*5 + 1..4    = pc    (u32 LE)
 ;
-; LOCAL_LIST_MAX = 180 → 2 + 180*5 = 902 bytes; table ends at &D0E5.
-; Capped below OPMEM_OFF (&D100, allocated for M5 OpMem encoder) so the
-; two regions cannot overlap.  Pass 1 populates the table; pass 2 reads
-; it (and writes OPMEM_OFF) — temporally disjoint within a single pass,
-; but a high-locals fixture exceeding ~168 entries would silently corrupt
-; OPMEM_OFF on the pass boundary if the bound weren't enforced here.
+; LOCAL_LIST_MAX = 255 → 2 + 255*5 = 1277 bytes; table ends at &E77C.
+; Bumped from 180 to 255 on 2026-05-28 per `docs/notes/2026-05-28-z80-
+; table-sizing-census.md`: release.tbn populates 172 entries (peak
+; digit 1 = 60 occurrences) versus the old 180-entry cap (4 % slack).
+; 255 gives ~33 % margin and keeps the count single-byte (the bump in
+; `local_def_append` is `inc (hl)` on the LSB only, which is cheap and
+; correct so long as the count never reaches 256).  The table was
+; moved to &E280 because the expanded size no longer fits below
+; OPMEM_OFF at &D100 — see assembler.asm for the section-D layout.
+; Pass 1 populates the table; pass 2 reads it.
 ;
 ; Sort order: definition order (= PC order).  Pass 1 walks records
 ; sequentially, so PCs at each call to local_def_append are
@@ -63,10 +67,9 @@
 ; ---------------------------------------------------------------------
 ; Memory map (must match the reservation comment in assembler.asm).
 ; ---------------------------------------------------------------------
-LOCAL_LABEL_TABLE:      equ     &CD60   ; 2-byte count + 180 * 5-byte entries = 902 bytes
-LOCAL_LIST_MAX:         equ     180     ; total entries across ALL digits
-                                        ; capped at 180 so the table (&CD60..&D0E5)
-                                        ; ends below OPMEM_OFF at &D100.
+LOCAL_LABEL_TABLE:      equ     &E280   ; 2-byte count + 255 * 5-byte entries = 1277 bytes
+LOCAL_LIST_MAX:         equ     255     ; total entries across ALL digits (cap raised
+                                        ; from 180 on 2026-05-28; table now &E280..&E77C).
 LOCAL_ENTRY_SIZE:       equ     5       ; 1 byte digit + 4 bytes PC (LE)
 LOCAL_MAX_DIGIT:        equ     99      ; digit range 1..99 inclusive
 
@@ -120,8 +123,8 @@ local_def_append:
                 cp      LOCAL_MAX_DIGIT + 1
                 jp      nc, fail                    ; digit > 99 invalid
 
-; Load count.  Cap < 256 so high byte must be 0; check both halves
-; defensively (any non-zero MSB ⇒ corruption).
+; Load count.  Cap is 255 so the count stays single-byte; the MSB is
+; always 0 in steady state, and any non-zero MSB signals corruption.
                 ld      hl, LOCAL_LABEL_TABLE
                 inc     hl                          ; HL → count MSB
                 ld      a, (hl)
@@ -131,7 +134,6 @@ local_def_append:
                 ld      a, (hl)                     ; A = count LSB
                 cp      LOCAL_LIST_MAX
                 jp      nc, fail                    ; list full
-
 ; Compute entry address: base + 2 + count*5.
                 ld      e, a                        ; E = count
                 ld      d, 0

@@ -19,10 +19,16 @@
 ;                  available for future use.  M6 PR 1 freed &B800-&BFFF
 ;                  (OUT); M6 PR 2 freed &B000-&B7FF (IN).
 ;   &C000-&C0FF  stack (SP = &C100, grows down into section D RAM)
-;   &C100-&D4FF  scratch (OPVAL arrays, SYMTAB, litpool tables) — section D RAM
+;   &C100-&D4FF  scratch (OPVAL arrays, SYMTAB, litpool TABLE+counters) —
+;                  section D RAM.  See per-file headers and the detailed
+;                  block below for sub-allocations.
 ;   &D500-&D8FF  STAGING_BUF — paged-IN per-record staging area (M6 PR 2)
 ;   &D900-&E0FF  LITPOOL_EXPR_BUF — cross-pass expr bytecode pool (M6 PR 2)
-;   &E100-&FFFF  free (~7.7 KB headroom in section D for future use)
+;   &E100-&E27F  LITPOOL_PC_MAP (64 × 6 = 384 B; moved here 2026-05-28)
+;   &E280-&E77C  LOCAL_LABEL_TABLE (2 + 255 × 5 = 1277 B; moved here 2026-05-28)
+;   &E77D-&E7FF  free (131 B between local-labels and symtab-overflow)
+;   &E800-&EFFF  SYMTAB_OVERFLOW (256 × 8 = 2 KB; moved here 2026-05-28)
+;   &F000-&FFFF  free (4 KB headroom in section D for future use)
 ;
 ;   Physical page 4 (off-axis): ENCTAB body — paged into section A on
 ;     demand for encoder runtime reads.  See `src/m3/trampoline.asm`.
@@ -33,10 +39,11 @@
 ;     the buffer via section C with UIFA[31] = OUT_BASE_PAGE.  See
 ;     docs/specs/2026-05-27-m6-paged-out-design.md and
 ;     docs/specs/2026-05-27-samdos-save-idiom.md.
-;   Physical pages 7..10 (off-axis): IN .tbn buffer — 4 contiguous
-;     pages = 64 KB ceiling.  HLOAD'd once at startup via
-;     load_in_file_paged; read via per-record LMPR-bracket into
-;     section A on each reader_next_kind call.  See
+;   Physical pages 7..12 (off-axis): IN .tbn buffer — 6 contiguous
+;     pages = 96 KB ceiling (bumped from 4 pages / 64 KB on 2026-05-28
+;     to fit spectrum4's 88 KB stripped release.tbn).  HLOAD'd once at
+;     startup via load_in_file_paged; read via per-record LMPR-bracket
+;     into section A on each reader_next_kind call.  See
 ;     docs/specs/2026-05-27-m6-paged-in-design.md.
 ;
 ; Pre-M5 layout placed ENCTAB at &A000-&AFFF in section C, consuming
@@ -53,7 +60,7 @@
 ; first byte.
 
 ; IN buffer paging — see docs/specs/2026-05-27-m6-paged-in-design.md.
-;   pages 7..10  ── IN .tbn (HLOAD destination); 64 KB ceiling
+;   pages 7..12  ── IN .tbn (HLOAD destination); 96 KB ceiling
 ;   STAGING_BUF  ── per-record staging window in section D
 ;   LITPOOL_EXPR_BUF ── cross-pass copy of litpool expr bytecode
 
@@ -86,9 +93,12 @@ PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
 
 ; M4 scratch reservation (allocated by symbols.asm + local_labels.asm):
 ;   &C160-&C95F  SYMTAB              (256 buckets × 8 bytes = 2 KB)
-;   &C960-&CD5F  SYMTAB_OVERFLOW     (overflow chain, ~1 KB)
-;   &CD60-&D0E5  LOCAL_LABEL_TABLE   (count + 180 × 5 bytes = 902 bytes;
-;                                    capped below OPMEM_OFF at &D100)
+;   &C960-&CFFF  free (1696 B; old SYMTAB_OVERFLOW + old LOCAL_LABEL_TABLE
+;                regions, freed when both were moved to &E100+ on
+;                2026-05-28 to absorb the release.tbn census peaks).
+; SYMTAB_OVERFLOW is now at &E800 (256 entries, 2 KB) and
+; LOCAL_LABEL_TABLE at &E280 (255 entries, 1277 B); see the high-level
+; map block above for the full &E100+ layout.
 
 ; M5 PR-C scratch: OpMem encoder's 8-byte LE offset value.
 ; Only one OpMem operand exists per instruction (Rt, [mem] for non-pair;
@@ -97,12 +107,16 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
 
 ; M5 PR-E scratch: literal-pool data structures (see src/m3/litpool.asm).
 ;   &D200..&D3BF  LITPOOL_TABLE       (32 slots × 14 bytes = 448 B)
-;   &D3C0..&D47F  LITPOOL_PC_MAP      (32 entries × 6 bytes = 192 B)
-;   &D480         LITPOOL_COUNT       (1 byte)
-;   &D481         LITPOOL_PCM_COUNT   (1 byte)
-;   &D482..&D485  LITPOOL_SAVED_PC    (4 bytes)
-; Total: 646 bytes (&D200..&D485 inclusive).  Remaining &D486..&FFFF
-; (~11 KB) free for expr-eval stack and future use.
+;   &D3C0         LITPOOL_COUNT       (1 byte)
+;   &D3C1         LITPOOL_PCM_COUNT   (1 byte)
+;   &D3C2         LITPOOL_SEGMENT_ALLOC (1 byte)
+;   &D3C3         LITPOOL_SEGMENT_FLUSH (1 byte)
+;   &D3C4..&D3C7  LITPOOL_SAVED_PC    (4 bytes)
+;   &D3C8..&D4FF  free (312 B between counters and STAGING_BUF at &D500)
+;   &E100..&E27F  LITPOOL_PC_MAP      (64 entries × 6 bytes = 384 B;
+;                                     moved to &E100+ on 2026-05-28 to
+;                                     fit the bumped 64-entry cap —
+;                                     release.tbn census peaks at 44).
 
 
                 org     &8000
@@ -282,12 +296,50 @@ endif
 ; The border colour is retained as a human-visible signal when running
 ; SimCoupé interactively (the wrapper doesn't depend on it).
 ; Citation: SAM Coupé Technical Manual §7 (ULA port &FE).
+; fail_with_tag — entry point for fail sites that want to record a tag
+; byte.  Sites do `ld a, <tag>; jp fail_with_tag` (5 bytes total — saves
+; 3 bytes per site versus the inline `ld (LAST_FAIL_TAG), a; jp fail`
+; pattern).  Falls through into the main fail routine.
+fail_with_tag:  ld      (LAST_FAIL_TAG), a
+
 fail:           ld      a, 2
                 out     (&fe), a            ; SAM border port — red
                 ld      hl, msg_fail
                 call    print_status_string
+; Diagnostic: emit the LAST_FAIL_TAG byte as two ASCII hex digits.
+; Untagged callers leave LAST_FAIL_TAG at its boot value (0x00); tagged
+; callers (via fail_with_tag) recorded their site code in it just before
+; jumping here.  The hex pair appears between FAIL and the newline so
+; the existing `grep '^FAIL'` status check still works.
+                ld      a, (LAST_FAIL_TAG)
+                call    print_hex_byte
+                ld      a, 10
+                call    print_status_char
                 di
                 halt
+
+; print_hex_byte — write A as two ASCII hex digits to printer channel 1.
+; Clobbers: A, F (preserves BC, DE, HL via print_status_char).
+print_hex_byte:
+                push    af
+                rra
+                rra
+                rra
+                rra
+                call    print_hex_nibble
+                pop     af
+                ; fall through to print the low nibble
+print_hex_nibble:
+                and     &0f
+                add     a, &30                  ; '0'
+                cp      &3a                     ; '0' + 10
+                jr      c, print_hex_emit
+                add     a, &27                  ; 'a' - '0' - 10 = 0x61 - 0x30 - 10 = 0x27
+print_hex_emit:
+                call    print_status_char
+                ret
+
+LAST_FAIL_TAG:  defb    0
 
 
 ; -----------------------------------------------------------------------
