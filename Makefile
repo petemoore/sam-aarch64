@@ -82,3 +82,25 @@ test-m2: refenc
 	cd tools/text2bin && go test ./...
 
 ci-m2: test-m2
+
+.PHONY: m3-asm build-m3-disk m3-disk test-m3 ci-m3
+
+m3-asm: $(BUILD)/assembler.bin
+
+$(BUILD)/assembler.bin: src/m3/assembler.asm $(wildcard src/m3/*.asm) $(wildcard src/m3/**/*.asm) src/sam_io.inc
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/assembler.bin src/m3/assembler.asm
+
+$(BUILD)/build-m3-disk: tools/build-m3-disk/main.go tools/build-m3-disk/go.mod
+	@mkdir -p $(BUILD)
+	cd tools/build-m3-disk && go build -o ../../$(BUILD)/build-m3-disk .
+
+build-m3-disk: $(BUILD)/build-m3-disk
+
+m3-disk: m3-asm enctab $(BUILD)/build-m3-disk
+	$(BUILD)/build-m3-disk $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/m3-test.mgt
+
+test-m3: m3-disk
+	./tools/run-simcoupe.sh $(BUILD)/m3-test.mgt
+
+ci-m3: test-m3
