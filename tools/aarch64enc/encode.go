@@ -11,10 +11,14 @@ func Encode(form Form, values []OperandValue) (uint32, error) {
 		return 0, fmt.Errorf("encode: not enough operand values (need %d, got %d)",
 			len(form.Slots), len(values))
 	}
+	// is64 is derived from the sf bit (bit 31) of the pattern. This lets
+	// size-sensitive encoders (e.g. LogicalImm) pick the correct N-bit value
+	// without needing a per-slot is64 parameter.
+	is64 := (form.Pattern>>31)&1 == 1
 	out := form.Pattern
 	for i, slot := range form.Slots {
 		v := values[i]
-		bits, err := encodeSlot(slot, v)
+		bits, err := encodeSlot(slot, v, is64)
 		if err != nil {
 			return 0, fmt.Errorf("slot %d (%s): %v", i, slot.SlotKind.Name(), err)
 		}
@@ -23,7 +27,7 @@ func Encode(form Form, values []OperandValue) (uint32, error) {
 	return out, nil
 }
 
-func encodeSlot(slot OperandSlot, v OperandValue) (uint32, error) {
+func encodeSlot(slot OperandSlot, v OperandValue, is64 bool) (uint32, error) {
 	switch slot.SlotKind {
 	case Xreg, Wreg, XregOrSp, WregOrSp:
 		return encodeReg(slot, v.Reg)
@@ -34,13 +38,13 @@ func encodeSlot(slot OperandSlot, v OperandValue) (uint32, error) {
 	case Imm12Shifted:
 		return encodeImm12Shifted(slot, v.Imm)
 	case Imm16Shifted:
-		// hw (shift selector) is an internal field treated as a generator-level
-		// "internal" field (like sh for imm12). For the MOV alias (= MOVZ hw:0),
-		// hw is fixed to 0 in the iclass mask/pattern or the caller provides a
-		// zero-shift immediate. We always encode hw=0 here; the ShiftKind in
-		// OperandValue could be used in a future extension for explicit MOVZ/MOVK
-		// with non-zero shifts.
-		return encodeImm16Shifted(slot, v.Imm, 0)
+		// hw (shift selector) is an internal field. For MOV (= MOVZ), hw is
+		// fixed to 0 in the pattern. For MOVK, the parser encodes the hw value
+		// into bits [17:16] of the immediate constant (see parseMovk in text2bin).
+		// Extract hw from bits [17:16] and imm16 from bits [15:0].
+		hw := byte((v.Imm >> 16) & 0x3)
+		imm16 := v.Imm & 0xffff
+		return encodeImm16Shifted(slot, imm16, hw)
 	case ShiftAmount:
 		return encodeShiftAmount(slot, v.Imm)
 	case ExtendOp:
@@ -49,8 +53,11 @@ func encodeSlot(slot OperandSlot, v OperandValue) (uint32, error) {
 		return encodeBranchImm(slot, v.Imm)
 	case AdrpImm:
 		return encodeAdrpImm(slot, v.Imm)
+	case AdrImm:
+		return encodeAdrImm(slot, v.Imm)
 	case LogicalImm:
-		return encodeLogicalImm(slot, v.Imm, true)
+		// is64 is passed from Encode, derived from sf bit (bit 31) of the pattern.
+		return encodeLogicalImm(slot, v.Imm, is64)
 	case BitfieldImm:
 		return 0, fmt.Errorf("BitfieldImm dispatched via two-slot pairs, not single-slot")
 	}

@@ -156,6 +156,20 @@ func directiveSizeAtPC(rec format.Record, pc int64) (int64, error) {
 		}
 		pad := (align - (pc % align)) % align
 		return pad, nil
+	case ".align":
+		// aarch64 GNU as convention: `.align N` aligns to 2^N bytes.
+		or := format.NewOperandReader(rec.Operands)
+		o, _ := or.Next()
+		n, ok := format.EvalConst(o.Expr)
+		if !ok {
+			return 0, fmt.Errorf(".align with non-constant operand")
+		}
+		if n <= 0 {
+			return 0, nil
+		}
+		align := int64(1) << uint64(n)
+		pad := (align - (pc % align)) % align
+		return pad, nil
 	case ".org":
 		return 0, nil
 	}

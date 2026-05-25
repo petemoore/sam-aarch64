@@ -49,7 +49,7 @@ type Tok struct {
 
 // Lex tokenises src; "path" is used for error positions.
 func Lex(src []byte, path string) ([]Tok, error) {
-	l := &lexer{src: src, path: path, line: 1, col: 1}
+	l := &lexer{src: src, path: path, line: 1, col: 1, atLineStart: true}
 	var toks []Tok
 	for {
 		t, err := l.next()
@@ -60,14 +60,16 @@ func Lex(src []byte, path string) ([]Tok, error) {
 		if t.Kind == TokEOF {
 			return toks, nil
 		}
+		l.atLineStart = t.Kind == TokEOL
 	}
 }
 
 type lexer struct {
-	src       []byte
-	path      string
-	pos       int
-	line, col int
+	src         []byte
+	path        string
+	pos         int
+	line, col   int
+	atLineStart bool // true at file start or after most recently emitted TokEOL
 }
 
 func (l *lexer) pos2() Position {
@@ -115,6 +117,12 @@ func (l *lexer) next() (Tok, error) {
 		l.advance()
 		return Tok{Kind: TokComma, Pos: start}, nil
 	case c == '#':
+		// GNU as treats # at the start of a logical line as a
+		// line comment. Mid-line, # is the immediate-prefix used
+		// in operands like `add x0, x0, #4`.
+		if l.atLineStart {
+			return l.readLineCommentChar(start, '#')
+		}
 		l.advance()
 		return Tok{Kind: TokHash, Pos: start}, nil
 	case c == ':':
@@ -215,9 +223,39 @@ func (l *lexer) readIdent() (Tok, error) {
 }
 
 func (l *lexer) readNumberOrLocal(start Position) (Tok, error) {
-	if l.pos+1 < len(l.src) &&
-		(l.src[l.pos+1] == 'f' || l.src[l.pos+1] == 'b') &&
-		(l.pos+2 >= len(l.src) || !isIdentCont(l.src[l.pos+2])) {
+	// Try to match a local-label reference: one or two decimal digits followed
+	// immediately by 'f' or 'b' (not followed by another ident character).
+	// One-digit: Nf / Nb  (N in '0'..'9')
+	// Two-digit: NNf / NNb (both chars in '0'..'9')
+	isDigit := func(c byte) bool { return c >= '0' && c <= '9' }
+	tryLocal := func(nDigits int) bool {
+		if l.pos+nDigits >= len(l.src) {
+			return false
+		}
+		for i := 0; i < nDigits; i++ {
+			if !isDigit(l.src[l.pos+i]) {
+				return false
+			}
+		}
+		dir := l.src[l.pos+nDigits]
+		if dir != 'f' && dir != 'b' {
+			return false
+		}
+		// The char after 'f'/'b' must not be an ident continuation character.
+		if l.pos+nDigits+1 < len(l.src) && isIdentCont(l.src[l.pos+nDigits+1]) {
+			return false
+		}
+		return true
+	}
+	// Check two-digit first (more specific than one-digit).
+	if tryLocal(2) {
+		hi := l.advance() - '0'
+		lo := l.advance() - '0'
+		dir := l.advance()
+		d := hi*10 + lo
+		return Tok{Kind: TokLocalRef, Pos: start, Digit: d, LocalDir: dir}, nil
+	}
+	if tryLocal(1) {
 		d := l.advance() - '0'
 		dir := l.advance()
 		return Tok{Kind: TokLocalRef, Pos: start, Digit: d, LocalDir: dir}, nil
@@ -353,6 +391,18 @@ func (l *lexer) readString(start Position) (Tok, error) {
 func (l *lexer) readLineComment(start Position) (Tok, error) {
 	l.advance()
 	l.advance()
+	startBody := l.pos
+	for l.pos < len(l.src) && l.src[l.pos] != '\n' {
+		l.advance()
+	}
+	return Tok{Kind: TokLineComment, Pos: start, Bytes: l.src[startBody:l.pos]}, nil
+}
+
+// readLineCommentChar consumes a line comment introduced by a single
+// character (e.g. `#` at start of line). The opener character is
+// included verbatim in the body, mirroring GNU as behaviour.
+func (l *lexer) readLineCommentChar(start Position, opener byte) (Tok, error) {
+	l.advance() // consume the opener
 	startBody := l.pos
 	for l.pos < len(l.src) && l.src[l.pos] != '\n' {
 		l.advance()

@@ -193,6 +193,8 @@ func detectIs64(pf mra.ParsedForm) bool {
 // the b.eq, b.ne, ..., b.nv mnemonics (condition codes 0-15). The expanded
 // forms have the condition code baked into pattern/mask and no CondCode slot.
 //
+// It also emits alias forms for b.hs (=CS, cond=2) and b.lo (=CC, cond=3).
+//
 // The MRA represents all 16 conditional branches as a single encoding with a
 // variable cond field; text2bin uses separate mnemonic IDs for each condition.
 func expandBCondForms(forms []enc.Form) []enc.Form {
@@ -202,6 +204,20 @@ func expandBCondForms(forms []enc.Form) []enc.Form {
 	bEqID, ok := format.MnemonicID("b.eq")
 	if !ok {
 		return forms // b.eq not in table; nothing to expand
+	}
+
+	// Alias mnemonics: map condition-code value → additional mnemonic IDs
+	// that share the same encoding. b.hs=CS=cond2, b.lo=CC=cond3.
+	type condAlias struct {
+		cond uint32
+		id   uint16
+	}
+	var aliases []condAlias
+	if id, ok := format.MnemonicID("b.hs"); ok {
+		aliases = append(aliases, condAlias{2, id}) // CS = HS
+	}
+	if id, ok := format.MnemonicID("b.lo"); ok {
+		aliases = append(aliases, condAlias{3, id}) // CC = LO
 	}
 
 	var out []enc.Form
@@ -230,6 +246,17 @@ func expandBCondForms(forms []enc.Form) []enc.Form {
 				Mask:       f.Mask | condMask,
 				Slots:      otherSlots,
 			})
+			// Emit alias forms for any alias with this condition code.
+			for _, a := range aliases {
+				if a.cond == cond {
+					out = append(out, enc.Form{
+						MnemonicID: a.id,
+						Pattern:    f.Pattern | condBits,
+						Mask:       f.Mask | condMask,
+						Slots:      otherSlots,
+					})
+				}
+			}
 		}
 	}
 	return out

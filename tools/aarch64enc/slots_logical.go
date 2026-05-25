@@ -5,6 +5,12 @@ import (
 	"math/bits"
 )
 
+// EncodeLogicalImmPub is the exported wrapper used by pass2 for bic-immediate
+// encoding (where the operand has already been inverted to ~imm by the caller).
+func EncodeLogicalImmPub(slot OperandSlot, imm int64, is64 bool) (uint32, error) {
+	return encodeLogicalImm(slot, imm, is64)
+}
+
 // encodeLogicalImm implements ARM's bitmask-immediate encoding
 // (N:1, immr:6, imms:6), following LLVM's processLogicalImmediate.
 // Returns the 13-bit packed (N|immr|imms) at slot.BitPosition, or
@@ -72,12 +78,18 @@ func encodeLogicalImm(slot OperandSlot, imm int64, is64 bool) (uint32, error) {
 		imms = uint32(ones - 1)
 	} else {
 		n = 0
-		// nimms: top (6 - log2(size)) bits ones, bottom log2(size) bits = ones-1.
+		// For element size 2^len (len = sizeLog2):
+		// The decoder finds len = highest set bit of N:NOT(imms).
+		// We need NOT(imms)[len]=1 and NOT(imms)[k]=0 for k > len (k ≤ 5).
+		// This means imms[k]=1 for k > len (i.e., k in [len+1, 5]) and
+		// imms[len]=0, with imms[len-1:0] = ones-1.
+		// nimmsTop = bits [5 : len+1] set = ~((1 << (len+1)) - 1) & 0x3F.
+		// (ARM DDI 0487L.a C4.1.64 "DecodeBitMasks".)
 		sizeLog2 := 0
 		for s := size; s > 1; s >>= 1 {
 			sizeLog2++
 		}
-		nimmsTop := (uint32(0x3F) << sizeLog2) & 0x3F
+		nimmsTop := ^uint32((1<<(sizeLog2+1))-1) & 0x3F
 		imms = nimmsTop | uint32(ones-1)
 	}
 

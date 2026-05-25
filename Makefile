@@ -81,6 +81,7 @@ test-m2: refenc text2bin
 	cd tools/refenc && go test ./...
 	cd tools/text2bin && go test ./...
 	./tests/m1/run-refenc-roundtrip.sh
+	./tests/spectrum4/run-roundtrip.sh
 
 ci-m2: test-m2
 

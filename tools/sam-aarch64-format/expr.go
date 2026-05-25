@@ -113,6 +113,13 @@ func (w *ExprWriter) Bytes() []byte { return w.buf }
 // Reset clears the writer for reuse.
 func (w *ExprWriter) Reset() { w.buf = w.buf[:0] }
 
+// AppendRaw appends raw expression bytecode to the writer.
+// Used by pseudo-instruction expanders that need to compose a new
+// expression from an already-encoded sub-expression.
+func (w *ExprWriter) AppendRaw(b []byte) {
+	w.buf = append(w.buf, b...)
+}
+
 // WriteOp writes a 0-argument opcode (binary or unary operator).
 func (w *ExprWriter) WriteOp(op ExprOp) {
 	w.buf = append(w.buf, byte(op))
