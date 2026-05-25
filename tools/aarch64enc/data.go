@@ -158,6 +158,30 @@ var generatedForms = []Form{
 	{MnemonicID: 41, Pattern: 0x5400000f, Mask: 0xff00001f, Slots: []OperandSlot{
 		{SlotKind: BranchImm19, ExpectedKind: 5, BitPosition: 5, BitWidth: 19},
 	}},
+	// Manually added: CMP (shifted register, 64-bit) = SUBS xzr, Xn, Xm, LSL #0.
+	// Rd=31 (xzr) and shift=LSL/imm6=0 are baked into pattern/mask.
+	// ARM ARM C6.2.69 / SUBS C6.2.251.
+	{MnemonicID: 19, Pattern: 0xeb00001f, Mask: 0xffe0fc1f, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},  // Rn
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5}, // Rm
+	}},
+	// Manually added: CSEL (64-bit). ARM ARM C6.2.52.
+	// Encoding: sf(1)|op(1)|S(1)|11010100|Rm(5)|cond(4)|00|Rn(5)|Rd(5)
+	// sf=1, op=0, S=0 → pattern base 0x9a800000; bits[11:10]=00 fixed.
+	{MnemonicID: 24, Pattern: 0x9a800000, Mask: 0xffe00c00, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},   // Rd
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},   // Rn
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},  // Rm
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4},
+	}},
+	// Manually added: CSINC (64-bit). ARM ARM C6.2.54.
+	// Same as CSEL but bit[10]=1 (op2=01).
+	{MnemonicID: 25, Pattern: 0x9a800400, Mask: 0xffe00c00, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},   // Rd
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},   // Rn
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},  // Rm
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4},
+	}},
 }
 
 func init() {
