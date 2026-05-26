@@ -33,30 +33,52 @@ HGFLE/LBYT/HSAVE wrappers). Included by `assembler.asm` via
 
 ### Task 3: Load enctab.enc and validate header
 
-`src/m3/loader.asm` — opens `enctab.enc` via HGFLE, reads the first 8
-bytes via LBYT, validates magic "ENC1" and version = 1 (u16 LE = 1),
-then returns control to `assembler.asm` which issues `DI; HALT`.
+`src/m3/loader.asm` — opens `enctab.enc` via SAMDOS HGTHD (hook 129),
+loads the whole 1090-byte body via HLOAD (hook 130) into ENCTAB_BUF
+(&C100), validates magic "ENC1" and version = 1 (u16 LE = 1), then
+returns to `assembler.asm`.
 
 `tools/build-m3-disk/` — Go CLI that builds the test disk:
 `samdos2 + auto BASIC + assembler.bin + enctab.enc`.
 
-**Verified in SimCoupé** (locally-built patched binary with `-exitonhalt`):
+**Verified end-to-end** (after PR #12 + #13):
 ```
-timeout 30s /path/to/patched/SimCoupe -exitonhalt 1 ... build/m3-test.mgt
-exit: 0
+make test-m3   →   exit 0
 ```
 
-### Key correctness finding (Task 3)
+`make test-m3`'s `fail:` path spins until the wrapper's 30 s timeout,
+so an actual loader/self-test failure surfaces as exit 124. Each test
+vector in `src/m3/test_slots.asm` and the loader's magic check is
+verified by deliberate corruption.
 
-**B register clobbered by PTDOS dispatch.**
-ROM PTDOS (`rom-v3.0_annotated-disassembly.txt:12944-12978`, step 1)
-reads the current LMPR into B before switching to the SAMDOS stack.
-SAMDOS does NOT restore the caller's B on return (d.s:284-289 `bcr`
-is the normal return path and does not reload from `hkbc`).
-Consequence: **do not use B as a loop counter around `call read_byte`
-(i.e., avoid `djnz` loops that span RST 8 hook calls).**
-The loader uses 8 individual `call read_byte` sequences instead of a
-DJNZ loop.
+### Key correctness findings (Task 3)
+
+**Original HGFLE + LBYT approach was broken.**
+The original loader used HGFLE (hook 158) to open enctab.enc, then
+LBYT × 8 to read the header bytes. Every LBYT returned 0x00,
+contradicting the audit (`docs/notes/sam-stub-audit.md`) which claimed
+HGFLE leaves the read pointer past the 9-byte SAM file header.
+Mechanism is still unexplained — likely a SAMDOS-state interaction
+with BASIC's prior `LOAD CODE` — but the path is bypassed by using
+HGTHD+HLOAD instead (PR #13). HGTHD populates `(svde)` via its
+internal `gtfle` call; HLOAD's `dschd` consumes that and `ldblk`
+block-copies the file body to the caller's HL.
+
+**Hook register-clobber summary** (from the loader's IMPORTANT block):
+
+- B  — ROM PTDOS reads caller's LMPR into B and never restores.
+- HL — ROM PTDOS does `LD HL, 0; ADD HL, SP` (step 2) and never restores.
+- E  — SAMDOS's `rfhk` (`b.s:475-479`) does `xor a; ld e, a`, zeroing E
+  on every hook return. D is untouched.
+- IX — dispatcher saves caller's IX to `(svhdr)` so the hook body can
+  reach the UIFA, but `rfhk` never restores; IX ends pointing at
+  `dchan` after any `gtixd`-calling hook.
+
+Preserved across `rst 8`: IY, AF (A holds return value), SP, D.
+
+Consequence: don't use B as a djnz counter around RST 8 calls; don't
+keep destination pointers in DE or HL across `rst 8`; use absolute
+stores or stash via memory if you need them.
 
 ## Current test status
 
