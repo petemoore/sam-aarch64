@@ -90,6 +90,12 @@ func (p *parser) parseDirective(t Tok) error {
 		return newErr(t.Pos, "unknown directive %q", t.Text)
 	}
 	p.pos++
+	if t.Text == ".section" {
+		return p.parseDirectiveSection(id)
+	}
+	if t.Text == ".arch" || t.Text == ".cpu" {
+		return p.parseDirectiveRestOfLineAsSysName(id)
+	}
 	var ow format.OperandWriter
 	count := byte(0)
 	for {
@@ -117,6 +123,166 @@ func (p *parser) parseDirective(t Tok) error {
 	}
 }
 
+// parseDirectiveSection parses the GNU as `.section` directive in one of
+// the three forms used by spectrum4:
+//
+//	.section NAME                       — bare name only (permissive)
+//	.section NAME, "flags"              — name + ELF section flags string
+//	.section NAME, "flags", %type       — name + flags + ELF section type
+//
+// Operands are encoded as:
+//
+//	op0: OpSysName(NAME)           — bareword identifier
+//	op1: OpString(flags)           — flags content (without surrounding quotes)
+//	op2: OpSysName("%type")        — bareword with leading '%' preserved so
+//	                                  bin2text can round-trip the form
+//
+// The current refenc / layout pipeline treats .section as a no-op (flat
+// single-section output). Honouring multiple sections requires linker-
+// script support and is intentionally out of scope here. See
+// docs/notes/m2-status.md for the layout gap this leaves.
+func (p *parser) parseDirectiveSection(id uint8) error {
+	var ow format.OperandWriter
+	count := byte(0)
+
+	// Operand 1: section NAME. Accept either a plain identifier
+	// (e.g. `bss_kernel`) or a dotted identifier already parsed as a
+	// single TokIdent (e.g. `.rodata` — the lexer collapses `.` +
+	// ident-start into one TokIdent).
+	nameTok := p.cur()
+	if nameTok.Kind != TokIdent {
+		return newErr(nameTok.Pos, ".section: expected section name")
+	}
+	ow.WriteSysName(nameTok.Text)
+	p.pos++
+	count++
+
+	// Optional flags string after a comma.
+	if p.cur().Kind == TokComma {
+		p.pos++
+		if p.cur().Kind != TokString {
+			return newErr(p.cur().Pos, ".section: expected quoted flags string after ','")
+		}
+		ow.WriteString(p.cur().Bytes)
+		p.pos++
+		count++
+
+		// Optional %type after a further comma.
+		if p.cur().Kind == TokComma {
+			p.pos++
+			if p.cur().Kind != TokPercent {
+				return newErr(p.cur().Pos, ".section: expected percent-prefixed type after ','")
+			}
+			p.pos++
+			if p.cur().Kind != TokIdent {
+				return newErr(p.cur().Pos, ".section: expected type keyword after percent")
+			}
+			ow.WriteSysName("%" + p.cur().Text)
+			p.pos++
+			count++
+		}
+	}
+
+	// Trailing tokens must be statement terminators (comments are
+	// statement-terminators here just like for any other directive).
+	switch p.cur().Kind {
+	case TokEOL, TokEOF, TokLineComment, TokBlockComment:
+		p.rw.WriteDirective(id, count, ow.Bytes())
+		return nil
+	}
+	return newErr(p.cur().Pos, ".section: unexpected token after operands")
+}
+
+// parseDirectiveRestOfLineAsSysName consumes the rest of the current
+// logical line as a single OpSysName operand whose text is the
+// concatenation of token spellings. It is used for directives whose
+// argument is an opaque architecture/CPU name (e.g. `.arch armv8-a`,
+// `.cpu cortex-a53`) — the `-` between idents would otherwise be parsed
+// as a binary operator. The directive itself is a no-op at refenc layout
+// time; the operand is preserved only so bin2text can round-trip the
+// source text faithfully.
+//
+// If there are no operand tokens before EOL/EOF/comment the directive
+// is emitted with zero operands.
+func (p *parser) parseDirectiveRestOfLineAsSysName(id uint8) error {
+	var ow format.OperandWriter
+	var text []byte
+	for {
+		t := p.cur()
+		switch t.Kind {
+		case TokEOL, TokEOF, TokLineComment, TokBlockComment:
+			count := byte(0)
+			if len(text) > 0 {
+				ow.WriteSysName(string(text))
+				count = 1
+			}
+			p.rw.WriteDirective(id, count, ow.Bytes())
+			return nil
+		}
+		text = append(text, tokSpelling(t)...)
+		p.pos++
+	}
+}
+
+// tokSpelling returns the source-text spelling for a token kind whose
+// spelling is implied by its kind (or carried in Text for idents and
+// numbers). Used to reconstruct a rest-of-line raw operand for
+// directives like .arch / .cpu.
+func tokSpelling(t Tok) string {
+	switch t.Kind {
+	case TokIdent:
+		return t.Text
+	case TokInt:
+		if t.Text != "" {
+			return t.Text
+		}
+		return ""
+	case TokComma:
+		return ","
+	case TokHash:
+		return "#"
+	case TokColon:
+		return ":"
+	case TokBang:
+		return "!"
+	case TokDot:
+		return "."
+	case TokLBracket:
+		return "["
+	case TokRBracket:
+		return "]"
+	case TokLParen:
+		return "("
+	case TokRParen:
+		return ")"
+	case TokPlus:
+		return "+"
+	case TokMinus:
+		return "-"
+	case TokStar:
+		return "*"
+	case TokSlash:
+		return "/"
+	case TokAmp:
+		return "&"
+	case TokPipe:
+		return "|"
+	case TokCaret:
+		return "^"
+	case TokTilde:
+		return "~"
+	case TokShl:
+		return "<<"
+	case TokShr:
+		return ">>"
+	case TokEquals:
+		return "="
+	case TokPercent:
+		return "%"
+	}
+	return ""
+}
+
 func (p *parser) parseInst(t Tok) error {
 	id, ok := format.MnemonicID(t.Text)
 	if !ok {
@@ -128,8 +294,12 @@ func (p *parser) parseInst(t Tok) error {
 	// The lsl #N suffix selects which 16-bit slot to fill (hw=N/16).
 	// We encode the hw into bits [17:16] of the immediate so the refenc
 	// encoder can extract it without needing a new operand kind.
+	// MOVZ and MOVN share the same surface syntax — parseMovk handles
+	// all three; the encoder dispatches on the mnemonic ID.
 	movkID, _ := format.MnemonicID("movk")
-	if id == movkID {
+	movzID, _ := format.MnemonicID("movz")
+	movnID, _ := format.MnemonicID("movn")
+	if id == movkID || id == movzID || id == movnID {
 		return p.parseMovk(id)
 	}
 
@@ -141,6 +311,53 @@ func (p *parser) parseInst(t Tok) error {
 	movlID, _ := format.MnemonicID("movl")
 	if id == movlID {
 		return p.parseMovl()
+	}
+
+	// LDR with `=value` is a literal-pool pseudo-instruction. It is
+	// always shaped `ldr <Xn|Wn>, =<expr>` and emits a single record
+	// carrying [OpReg{X|W}, OpLitPool{width, expr}].
+	ldrID, _ := format.MnemonicID("ldr")
+	if id == ldrID {
+		if handled, err := p.tryParseLdrLitPool(id); handled || err != nil {
+			return err
+		}
+	}
+
+	// dsb / dmb take a mandatory barrier-arg keyword (sy, st, ld, ish,
+	// ishst, ishld, nsh, nshst, nshld, osh, oshst, oshld). isb takes an
+	// optional barrier arg defaulting to sy. We translate the keyword to
+	// its CRm value and emit an OpImmExpr operand; pass2 then encodes the
+	// barrier instruction directly (see encodeBarrierInst).
+	dsbID, _ := format.MnemonicID("dsb")
+	dmbID, _ := format.MnemonicID("dmb")
+	isbID, _ := format.MnemonicID("isb")
+	if id == dsbID || id == dmbID {
+		return p.parseBarrier(id, false)
+	}
+	if id == isbID {
+		return p.parseBarrier(id, true)
+	}
+
+	// System-register access and system instructions. Each of these
+	// carries a bareword keyword (sysreg name, PSTATE field name, or
+	// DC/TLBI op name) that the generic operand parser would mis-handle
+	// as a symbol reference. Parse them explicitly so the keyword reaches
+	// the encoder as an OpSysName.
+	mrsID, _ := format.MnemonicID("mrs")
+	msrID, _ := format.MnemonicID("msr")
+	dcID, _ := format.MnemonicID("dc")
+	tlbiID, _ := format.MnemonicID("tlbi")
+	if id == mrsID {
+		return p.parseMrs(id)
+	}
+	if id == msrID {
+		return p.parseMsr(id)
+	}
+	if id == dcID {
+		return p.parseDcTlbi(id, false)
+	}
+	if id == tlbiID {
+		return p.parseDcTlbi(id, true)
 	}
 
 	var ow format.OperandWriter
@@ -186,17 +403,17 @@ func (p *parser) parseMovk(id uint16) error {
 	}
 	p.pos++
 
-	// Operand 2: immediate (#imm16).
+	// Operand 2: immediate expression (#imm16). Symbol-bearing expressions
+	// are allowed: the encoder evaluates them later, after symbol resolution.
 	immExpr, err := p.parseExpression()
 	if err != nil {
 		return err
 	}
-	imm16, ok := format.EvalConst(immExpr)
-	if !ok {
-		return newErr(p.cur().Pos, "movk: immediate must be a constant")
-	}
-	if imm16 < 0 || imm16 > 0xffff {
-		return newErr(p.cur().Pos, "movk: immediate %d out of range [0, 65535]", imm16)
+	immConst, immIsConst := format.EvalConst(immExpr)
+	if immIsConst {
+		if immConst < 0 || immConst > 0xffff {
+			return newErr(p.cur().Pos, "movk: immediate %d out of range [0, 65535]", immConst)
+		}
 	}
 
 	// Optional: `, lsl #N` suffix.
@@ -228,12 +445,89 @@ func (p *parser) parseMovk(id uint16) error {
 
 	// Encode hw into bits [17:16] of the immediate so the encoder can
 	// distinguish hw=0 from hw=1/2/3 while keeping the format generic.
-	encoded := (hw << 16) | imm16
 	var folded format.ExprWriter
-	folded.WriteImm(encoded)
+	if immIsConst {
+		folded.WriteImm((hw << 16) | immConst)
+	} else {
+		// Build expression: (hw << 16) | (immExpr & 0xffff).
+		// The mask keeps the encoded value within the [0, 1<<18) range
+		// that Imm16Shifted expects (hw at bits 17:16, imm16 at bits 15:0).
+		folded.WriteImm(hw << 16)
+		folded.AppendRaw(immExpr)
+		folded.WriteImm(0xffff)
+		folded.WriteOp(format.OpAnd)
+		folded.WriteOp(format.OpOr)
+	}
 	ow.WriteImmExpr(folded.Bytes())
 
 	p.rw.WriteInst(id, 2, ow.Bytes())
+	return nil
+}
+
+// barrierCRm returns the CRm field value (bits 11:8) for a barrier-arg
+// keyword, per ARM ARM C6.2.74 (DSB) / C6.2.73 (DMB) / C6.2.99 (ISB).
+// Returns ok=false when the keyword is not a known barrier.
+func barrierCRm(name string) (int64, bool) {
+	switch name {
+	case "sy":
+		return 0xf, true
+	case "st":
+		return 0xe, true
+	case "ld":
+		return 0xd, true
+	case "ish":
+		return 0xb, true
+	case "ishst":
+		return 0xa, true
+	case "ishld":
+		return 0x9, true
+	case "nsh":
+		return 0x7, true
+	case "nshst":
+		return 0x6, true
+	case "nshld":
+		return 0x5, true
+	case "osh":
+		return 0x3, true
+	case "oshst":
+		return 0x2, true
+	case "oshld":
+		return 0x1, true
+	}
+	return 0, false
+}
+
+// parseBarrier parses dsb / dmb / isb. The barrier-arg keyword (sy, st,
+// ld, ish, etc.) is translated to its CRm value and emitted as a single
+// OpImmExpr operand. For isb, the arg is optional and defaults to `sy`.
+// For dsb/dmb the arg is mandatory.
+func (p *parser) parseBarrier(id uint16, optional bool) error {
+	var ow format.OperandWriter
+
+	t := p.cur()
+	hasArg := t.Kind == TokIdent
+	if !hasArg {
+		if !optional {
+			return newErr(t.Pos, "expected barrier-arg keyword (sy, st, ld, ish, ishst, ishld, nsh, nshst, nshld, osh, oshst, oshld)")
+		}
+		// No arg: default to sy (CRm=0xf).
+		var e format.ExprWriter
+		e.WriteImm(0xf)
+		ow.WriteImmExpr(e.Bytes())
+		p.rw.WriteInst(id, 1, ow.Bytes())
+		return nil
+	}
+
+	crm, ok := barrierCRm(t.Text)
+	if !ok {
+		return newErr(t.Pos, "unknown barrier-arg %q (expected sy, st, ld, ish, ishst, ishld, nsh, nshst, nshld, osh, oshst, oshld)", t.Text)
+	}
+	p.pos++
+
+	var e format.ExprWriter
+	e.WriteImm(crm)
+	ow.WriteImmExpr(e.Bytes())
+	p.rw.WriteInst(id, 1, ow.Bytes())
 	return nil
 }
 
@@ -339,6 +633,191 @@ func (p *parser) parseMovl() error {
 		p.rw.WriteInst(movkID, 2, ow2.Bytes())
 	}
 	return nil
+}
+
+// parseMrs handles `mrs Xt, <sysreg>`. The sysreg name is parsed as a
+// bareword identifier (it has no `#` prefix and is not a register) and
+// emitted as an OpSysName operand. The encoder looks it up against the
+// sysreg table in pass2.
+func (p *parser) parseMrs(id uint16) error {
+	var ow format.OperandWriter
+
+	// Operand 1: destination register (must be Xt).
+	regTok := p.cur()
+	if regTok.Kind != TokIdent {
+		return newErr(regTok.Pos, "mrs: expected register")
+	}
+	kind, reg, ok := matchReg(regTok.Text)
+	if !ok || kind != format.OpRegX {
+		return newErr(regTok.Pos, "mrs: expected X register")
+	}
+	ow.WriteReg(kind, reg)
+	p.pos++
+
+	if p.cur().Kind != TokComma {
+		return newErr(p.cur().Pos, "mrs: expected ',' after register")
+	}
+	p.pos++
+
+	// Operand 2: system register name (bareword identifier).
+	nameTok := p.cur()
+	if nameTok.Kind != TokIdent {
+		return newErr(nameTok.Pos, "mrs: expected system register name")
+	}
+	if _, ok := format.ParseSysReg(nameTok.Text); !ok {
+		return newErr(nameTok.Pos, "mrs: unknown system register %q", nameTok.Text)
+	}
+	ow.WriteSysName(nameTok.Text)
+	p.pos++
+
+	p.rw.WriteInst(id, 2, ow.Bytes())
+	return nil
+}
+
+// parseMsr handles both `msr <sysreg>, Xt` (register form) and
+// `msr <pstatefield>, #imm` (immediate / PSTATE-field form). The first
+// operand is always a bareword identifier emitted as OpSysName; the
+// second operand is either a register or an immediate expression. The
+// encoder dispatches on the kind of the second operand.
+func (p *parser) parseMsr(id uint16) error {
+	var ow format.OperandWriter
+
+	// Operand 1: sysreg name OR pstate field name (bareword identifier).
+	nameTok := p.cur()
+	if nameTok.Kind != TokIdent {
+		return newErr(nameTok.Pos, "msr: expected system register or PSTATE field name")
+	}
+	_, isSysReg := format.ParseSysReg(nameTok.Text)
+	_, isPstate := format.ParsePState(nameTok.Text)
+	if !isSysReg && !isPstate {
+		return newErr(nameTok.Pos, "msr: unknown system register / PSTATE field %q", nameTok.Text)
+	}
+	ow.WriteSysName(nameTok.Text)
+	p.pos++
+
+	if p.cur().Kind != TokComma {
+		return newErr(p.cur().Pos, "msr: expected ',' after destination")
+	}
+	p.pos++
+
+	// Operand 2: either Xt (register form) or #imm (PSTATE-immediate form).
+	// We dispatch by token kind: bareword that's a register name → reg
+	// form; everything else → expression (which will be folded to an
+	// immediate by parseOperand).
+	if p.cur().Kind == TokIdent {
+		regTok := p.cur()
+		if kind, reg, ok := matchReg(regTok.Text); ok {
+			if kind != format.OpRegX {
+				return newErr(regTok.Pos, "msr: source register must be Xt")
+			}
+			ow.WriteReg(kind, reg)
+			p.pos++
+			p.rw.WriteInst(id, 2, ow.Bytes())
+			return nil
+		}
+	}
+
+	// Immediate form.
+	if err := p.parseOperand(&ow); err != nil {
+		return err
+	}
+	p.rw.WriteInst(id, 2, ow.Bytes())
+	return nil
+}
+
+// parseDcTlbi handles `dc <op>, Xt` and `tlbi <op>[, Xt]`. The op
+// keyword is emitted as an OpSysName; the optional register operand
+// follows. The encoder consults the DC / TLBI op table to derive the
+// encoding fields and to verify the Xt requirement.
+func (p *parser) parseDcTlbi(id uint16, xtOptional bool) error {
+	var ow format.OperandWriter
+
+	// Operand 1: op name (bareword identifier).
+	nameTok := p.cur()
+	if nameTok.Kind != TokIdent {
+		return newErr(nameTok.Pos, "expected operation name")
+	}
+	ow.WriteSysName(nameTok.Text)
+	p.pos++
+
+	// Optional comma + Xt.
+	count := byte(1)
+	if p.cur().Kind == TokComma {
+		p.pos++
+		regTok := p.cur()
+		if regTok.Kind != TokIdent {
+			return newErr(regTok.Pos, "expected register after ','")
+		}
+		kind, reg, ok := matchReg(regTok.Text)
+		if !ok || kind != format.OpRegX {
+			return newErr(regTok.Pos, "expected X register after ','")
+		}
+		ow.WriteReg(kind, reg)
+		p.pos++
+		count = 2
+	} else if !xtOptional {
+		return newErr(p.cur().Pos, "expected ',' and register operand")
+	}
+
+	p.rw.WriteInst(id, count, ow.Bytes())
+	return nil
+}
+
+// tryParseLdrLitPool checks for the `ldr <Xn|Wn>, =<expr>` form. If the
+// shape matches it parses and emits the instruction and returns
+// (true, nil) (or (true, err) on a parse error). Otherwise it returns
+// (false, nil) and leaves p.pos at the start of the operand list so
+// the generic parseInst flow can handle this `ldr` like any other.
+//
+// We require the syntax to be exactly `ldr <reg>, =<expr>` — i.e. the
+// second operand starts with `=`. Any other shape (memory addressing,
+// PC-relative literal with a numeric offset etc.) falls through.
+func (p *parser) tryParseLdrLitPool(id uint16) (bool, error) {
+	// Peek without consuming.
+	startPos := p.pos
+
+	// Op0: register name.
+	t0 := p.cur()
+	if t0.Kind != TokIdent {
+		return false, nil
+	}
+	regKind, reg, ok := matchReg(t0.Text)
+	if !ok {
+		return false, nil
+	}
+	if regKind != format.OpRegX && regKind != format.OpRegW {
+		return false, nil
+	}
+
+	// Comma.
+	if p.pos+1 >= len(p.toks) || p.toks[p.pos+1].Kind != TokComma {
+		return false, nil
+	}
+	// Equals at operand 1 head.
+	if p.pos+2 >= len(p.toks) || p.toks[p.pos+2].Kind != TokEquals {
+		return false, nil
+	}
+
+	// Commit: consume `<reg>` `,` `=`.
+	p.pos += 3
+
+	expr, err := p.parseExpression()
+	if err != nil {
+		// Restore and let the caller bubble the error.
+		p.pos = startPos
+		return true, err
+	}
+
+	width := byte(8)
+	if regKind == format.OpRegW {
+		width = 4
+	}
+
+	var ow format.OperandWriter
+	ow.WriteReg(regKind, reg)
+	ow.WriteLitPool(width, expr)
+	p.rw.WriteInst(id, 2, ow.Bytes())
+	return true, nil
 }
 
 func (p *parser) parseOperand(ow *format.OperandWriter) error {

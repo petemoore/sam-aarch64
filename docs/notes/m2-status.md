@@ -122,6 +122,31 @@ guidance on link-step requirements.
    future fixtures need genuine multi-section behaviour, refenc
    needs section-boundary awareness + VMA-respecting emission.
 
+   As of 2026-05-26, text2bin **parses** `.section NAME, "flags"[, %type]`
+   (the three forms used by spectrum4: `%nobits`, `%progbits`, no-type)
+   so that release.target's 232 callsites no longer halt the parser at
+   pcie.s:1154 `.section bss_kernel, "aw", %nobits`. The directive is
+   carried through as a `KindDirective` record with the section name as
+   `OpSysName`, the flags as `OpString`, and the type bareword (with
+   leading `%`) as `OpSysName`. **refenc treats it as a no-op** — bytes
+   continue to be appended to a single flat output stream regardless of
+   the section a source line nominally belongs to.
+
+   The consequence: text2bin → refenc on a multi-section binary will
+   not byte-match `aarch64-none-elf-as` + `ld -Ttext=0` + `objcopy`
+   because the GNU pipeline honours section ordering, VMAs, and BSS-vs-
+   PROGBITS distinctions. Closing this gap requires:
+   - a refenc layout pass that tracks the current section, accumulates
+     per-section byte streams, and concatenates them in a deterministic
+     order (likely defined by a linker-script substitute);
+   - BSS-like (`%nobits`) sections must be omitted from the output
+     image while still consuming PC for symbol resolution;
+   - section flags (`a`, `w`, `x`) probably need to feed permission
+     metadata once we have ELF output.
+
+   This is the next major refenc work item for the spectrum4 end-to-end
+   bit-match goal (task #12).
+
 ## Hand-off recipe
 
 1. From repo root: `make ci-m2`. All Go tests should pass.

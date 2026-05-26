@@ -17,6 +17,15 @@ func TestIdempotency(t *testing.T) {
 		"  add x0, x1, :lo12:msg\n",
 		".byte 1, 2, 3\n",
 		".ascii \"hi\"\n",
+		"  ldr x0, =0x30d0088a\n",
+		"  ldr w2, =0xdeadbeef\n",
+		"  ldr x1, =msg\nmsg:\n",
+		"  ldr x2, =10f\n10:\n",
+		".section bss_kernel, \"aw\", %nobits\n",
+		".section text_tests, \"ax\"\n",
+		".section .rodata\n",
+		".arch armv8-a\n",
+		".cpu cortex-a53\n",
 	}
 	for _, src := range sources {
 		bin1, err := Translate([]byte(src), "test.s")

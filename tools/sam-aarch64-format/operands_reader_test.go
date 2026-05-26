@@ -53,6 +53,32 @@ func TestOperandReadRoundtrip(t *testing.T) {
 	}
 }
 
+func TestOperandReadLitPool(t *testing.T) {
+	expr := []byte{byte(OpPushImm8), 0x42}
+	var ow OperandWriter
+	ow.WriteLitPool(8, expr)
+	ow.WriteLitPool(4, expr)
+
+	r := NewOperandReader(ow.Bytes())
+	o, err := r.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Kind != OpLitPool || o.Width != 8 || !bytes.Equal(o.Expr, expr) {
+		t.Errorf("op0: %+v", o)
+	}
+	o, err = r.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Kind != OpLitPool || o.Width != 4 || !bytes.Equal(o.Expr, expr) {
+		t.Errorf("op1: %+v", o)
+	}
+	if !r.AtEnd() {
+		t.Errorf("reader not at end")
+	}
+}
+
 func TestOperandReadMemShapes(t *testing.T) {
 	var ow OperandWriter
 	ow.WriteMemBase(1)

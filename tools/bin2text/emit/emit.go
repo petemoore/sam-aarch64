@@ -70,6 +70,7 @@ func Emit(in []byte) ([]byte, error) {
 func emitStatement(out *bytes.Buffer, f *format.File, rec format.Record) error {
 	out.WriteString("  ")
 	isDirective := false
+	isBarrier := false
 	switch rec.Kind {
 	case format.KindInst:
 		name := format.MnemonicName(rec.MnemonicID)
@@ -77,6 +78,11 @@ func emitStatement(out *bytes.Buffer, f *format.File, rec format.Record) error {
 			return fmt.Errorf("unknown mnemonic_id %d", rec.MnemonicID)
 		}
 		out.WriteString(name)
+		// isb / dsb / dmb single-operand form: print the barrier-arg
+		// keyword (sy, st, ld, ish, ...) rather than the CRm immediate.
+		if name == "isb" || name == "dsb" || name == "dmb" {
+			isBarrier = true
+		}
 	case format.KindDirective:
 		isDirective = true
 		name := format.DirectiveName(rec.DirectiveID)
@@ -86,6 +92,29 @@ func emitStatement(out *bytes.Buffer, f *format.File, rec format.Record) error {
 		out.WriteString(name)
 	}
 	if rec.OperandCount == 0 {
+		return nil
+	}
+	if isBarrier {
+		// Barrier mnemonics carry exactly one OpImmExpr operand (the CRm
+		// value). Emit the keyword form.
+		or := format.NewOperandReader(rec.Operands)
+		o, err := or.Next()
+		if err != nil {
+			return err
+		}
+		if o.Kind != format.OpImmExpr {
+			return fmt.Errorf("barrier mnemonic operand kind %v", o.Kind)
+		}
+		v, ok := format.EvalConst(o.Expr)
+		if !ok {
+			return fmt.Errorf("barrier mnemonic with non-constant CRm")
+		}
+		name := barrierName(byte(v))
+		if name == "" {
+			return fmt.Errorf("barrier mnemonic with unknown CRm %d", v)
+		}
+		out.WriteByte(' ')
+		out.WriteString(name)
 		return nil
 	}
 	out.WriteByte(' ')
@@ -105,6 +134,39 @@ func emitStatement(out *bytes.Buffer, f *format.File, rec format.Record) error {
 		}
 	}
 	return nil
+}
+
+// barrierName is the inverse of parser.barrierCRm — it maps a CRm value
+// (bits 11:8 of dsb/dmb/isb encodings) to the canonical barrier-arg
+// keyword per ARM ARM C6.2.74 / C6.2.73 / C6.2.99.
+func barrierName(crm byte) string {
+	switch crm {
+	case 0xf:
+		return "sy"
+	case 0xe:
+		return "st"
+	case 0xd:
+		return "ld"
+	case 0xb:
+		return "ish"
+	case 0xa:
+		return "ishst"
+	case 0x9:
+		return "ishld"
+	case 0x7:
+		return "nsh"
+	case 0x6:
+		return "nshst"
+	case 0x5:
+		return "nshld"
+	case 0x3:
+		return "osh"
+	case 0x2:
+		return "oshst"
+	case 0x1:
+		return "oshld"
+	}
+	return ""
 }
 
 func emitOperandWithContext(out *bytes.Buffer, f *format.File, o format.Operand, isDirective bool) error {
@@ -148,6 +210,13 @@ func emitOperandWithContext(out *bytes.Buffer, f *format.File, o format.Operand,
 		out.WriteString(o.Cond.Name())
 	case format.OpSysName:
 		out.Write(o.Str)
+	case format.OpLitPool:
+		// `ldr Xn, =expr` — emit the value expression without a
+		// leading '#'. GNU as accepts both forms (the parser strips
+		// `#` in primary-expression context), but the canonical
+		// spelling has no `#` after `=`.
+		out.WriteByte('=')
+		return emitExprAsImmediateWithContext(out, f, o.Expr, true)
 	default:
 		return fmt.Errorf("emitOperand: unsupported kind %v", o.Kind)
 	}

@@ -1,0 +1,3 @@
+  .hword 0x1234
+  .hword 1, 2, 3
+  .hword 0xabcd, 0xdcba

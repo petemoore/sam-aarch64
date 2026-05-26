@@ -14,6 +14,61 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 	var out []byte
 	var pc int64
 
+	emitFlush := func(preFlushPC int64) error {
+		entries, ok := p1.PoolFlushEntries[preFlushPC]
+		if !ok {
+			return nil
+		}
+		afterPC := p1.PoolFlushAtPC[preFlushPC]
+		var fours, eights []int
+		for _, i := range entries {
+			if p1.PoolEntries[i].Width == 4 {
+				fours = append(fours, i)
+			} else {
+				eights = append(eights, i)
+			}
+		}
+		// Pad to 4 if needed before 4-byte literals.
+		if len(fours) > 0 && pc%4 != 0 {
+			padN := 4 - (pc % 4)
+			out = append(out, make([]byte, padN)...)
+			pc += padN
+		}
+		for _, i := range fours {
+			e := p1.PoolEntries[i]
+			ctx := makeCtx(e.EvalPC, p1, f)
+			v, err := enc.Eval(e.Expr, ctx)
+			if err != nil {
+				return fmt.Errorf("pool entry @ pc=0x%x: %w", e.PC, err)
+			}
+			var buf [4]byte
+			binary.LittleEndian.PutUint32(buf[:], uint32(v))
+			out = append(out, buf[:]...)
+			pc += 4
+		}
+		if len(eights) > 0 && pc%8 != 0 {
+			padN := 8 - (pc % 8)
+			out = append(out, make([]byte, padN)...)
+			pc += padN
+		}
+		for _, i := range eights {
+			e := p1.PoolEntries[i]
+			ctx := makeCtx(e.EvalPC, p1, f)
+			v, err := enc.Eval(e.Expr, ctx)
+			if err != nil {
+				return fmt.Errorf("pool entry @ pc=0x%x: %w", e.PC, err)
+			}
+			var buf [8]byte
+			binary.LittleEndian.PutUint64(buf[:], uint64(v))
+			out = append(out, buf[:]...)
+			pc += 8
+		}
+		if pc != afterPC {
+			return fmt.Errorf("pool flush mismatch: pc=0x%x, after=0x%x", pc, afterPC)
+		}
+		return nil
+	}
+
 	rr := format.NewRecordReader(f.Records)
 	for !rr.AtEnd() {
 		rec, err := rr.Next()
@@ -31,6 +86,13 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 			out = append(out, buf[:]...)
 			pc += 4
 		case format.KindDirective:
+			name := format.DirectiveName(rec.DirectiveID)
+			if name == ".ltorg" {
+				if err := emitFlush(pc); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			bytes, err := encodeDirective(rec, pc, p1, f)
 			if err != nil {
 				return nil, err
@@ -38,6 +100,10 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 			out = append(out, bytes...)
 			pc += int64(len(bytes))
 		}
+	}
+	// Implicit pool flush at end of input.
+	if err := emitFlush(pc); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -99,6 +165,9 @@ func encodeInst(rec format.Record, pc int64, p1 *Pass1Result, f *format.File) (u
 		if k == format.OpExtendedReg {
 			return encodeExtendedRegInst(rec.MnemonicID, operands, pc, p1, f)
 		}
+		if k == format.OpLitPool {
+			return encodeLdrLitPoolInst(operands, pc, p1)
+		}
 	}
 
 	// Mnemonic-specific intercepts before the generic form table:
@@ -107,7 +176,7 @@ func encodeInst(rec format.Record, pc int64, p1 *Pass1Result, f *format.File) (u
 	switch rec.MnemonicID {
 	case 17, 18: // lsl, lsr
 		return encodeLSLSR(rec.MnemonicID, operands, pc, p1, f)
-	case 49, 50, 51: // bfi, bfxil, ubfx
+	case 49, 50, 51, 84, 85: // bfi, bfxil, ubfx, bfc, sbfx
 		return encodeBitfieldInst(rec.MnemonicID, operands, pc, p1, f)
 	case 47: // bic — immediate form: negate the immediate before LogicalImm
 		if len(kinds) >= 3 && kinds[2] == format.OpImmExpr {
@@ -115,6 +184,20 @@ func encodeInst(rec format.Record, pc int64, p1 *Pass1Result, f *format.File) (u
 		}
 	case 52: // csetm — invert the condition code before encoding
 		return encodeCsetm(operands, pc, p1, f)
+	case 66, 67, 68: // isb, dsb, dmb — single CRm operand encoded in bits 11:8
+		return encodeBarrierInst(rec.MnemonicID, operands, pc, p1, f)
+	case 70: // ror immediate form — alias of EXTR Rd, Rn, Rn, #imm
+		if len(kinds) >= 3 && kinds[2] == format.OpImmExpr {
+			return encodeRorImm(operands, pc, p1, f)
+		}
+	case 77: // mrs
+		return encodeMrs(operands)
+	case 78: // msr (register or PSTATE-immediate)
+		return encodeMsr(operands, pc, p1, f)
+	case 79: // dc
+		return encodeDc(operands)
+	case 80: // tlbi
+		return encodeTlbi(operands)
 	}
 
 	form, ok, diag := enc.ValidateOperandKinds(rec.MnemonicID, kinds)
@@ -166,30 +249,129 @@ func operandsToValues(ops []format.Operand, pc int64, p1 *Pass1Result, f *format
 }
 
 // ---------------------------------------------------------------------------
+// LDR literal-pool pseudo-instruction
+// ---------------------------------------------------------------------------
+
+// encodeLdrLitPoolInst encodes `ldr Xn|Wn, =expr` as a PC-relative
+// load whose target is the literal-pool slot allocated for this
+// instruction during pass1.
+//
+//	X-form (size=01): bits[31:24] = 0x58 — 0x58000000 + (imm19 << 5) + Rt
+//	W-form (size=00): bits[31:24] = 0x18 — 0x18000000 + (imm19 << 5) + Rt
+//
+// imm19 = (target_pc - pc) / 4. The 19-bit signed range is ±1 MiB.
+func encodeLdrLitPoolInst(operands []format.Operand, pc int64, p1 *Pass1Result) (uint32, error) {
+	if len(operands) < 2 {
+		return 0, fmt.Errorf("ldr litpool: need 2 operands, got %d", len(operands))
+	}
+	rt := operands[0]
+	lit := operands[1]
+	if lit.Kind != format.OpLitPool {
+		// Defensive: dispatch should have ensured this.
+		return 0, fmt.Errorf("ldr litpool: operand 1 kind = %v", lit.Kind)
+	}
+
+	idx, ok := p1.LdrPoolIdx[pc]
+	if !ok {
+		return 0, fmt.Errorf("ldr litpool @ pc=0x%x: no pool index recorded", pc)
+	}
+	targetPC := p1.PoolEntries[idx].PC
+	off := targetPC - pc
+	if off%4 != 0 {
+		return 0, fmt.Errorf("ldr litpool @ pc=0x%x: target pc=0x%x not 4-byte aligned", pc, targetPC)
+	}
+	imm19 := off / 4
+	if imm19 < -(1<<18) || imm19 >= (1<<18) {
+		return 0, fmt.Errorf("ldr litpool @ pc=0x%x: offset %d out of ±1MiB range", pc, off)
+	}
+
+	var base uint32
+	if lit.Width == 8 {
+		base = 0x58000000 // 64-bit LDR (literal)
+	} else {
+		base = 0x18000000 // 32-bit LDR (literal)
+	}
+	word := base | ((uint32(imm19) & 0x7ffff) << 5) | uint32(rt.Reg)
+	return word, nil
+}
+
+// ---------------------------------------------------------------------------
 // Memory operand encoding
 // ---------------------------------------------------------------------------
 
 // mnemonicIsLoad returns true when mnemonicID is ldr or similar load.
 // Returns false for str/stp etc. Used to set the L bit in memory encodings.
 func isLoadMnemonic(mnemonicID uint16) bool {
-	// ldr=5, ldp=7, ldrb=54, ldrh=56
-	return mnemonicID == 5 || mnemonicID == 7 || mnemonicID == 54 || mnemonicID == 56
+	// ldr=5, ldp=7, ldrb=54, ldrh=56, ldur=76,
+	// ldrsb=86, ldrsh=87, ldrsw=88.
+	switch mnemonicID {
+	case 5, 7, 54, 56, 76, 86, 87, 88:
+		return true
+	}
+	return false
+}
+
+// isSignedExtendLoad reports ldrsb / ldrsh / ldrsw (ARM ARM C6.2.117 /
+// C6.2.118 / C6.2.119). These share the LDR/STR encoding template but
+// use opc=10 (signed load to Xt) or opc=11 (signed load to Wt) at bits
+// 23:22 rather than the regular load's opc=01.
+func isSignedExtendLoad(mnemonicID uint16) bool {
+	return mnemonicID == 86 || mnemonicID == 87 || mnemonicID == 88
+}
+
+// isUnscaledMemMnemonic reports stur(75) / ldur(76) — the unscaled
+// load/store family (ARM ARM C6.2.276 / C6.2.124). These share the
+// encoding template with LDR/STR (unscaled offset) but are emitted by
+// GNU as for any STUR/LDUR mnemonic regardless of offset value.
+func isUnscaledMemMnemonic(mnemonicID uint16) bool {
+	return mnemonicID == 75 || mnemonicID == 76
 }
 
 // memInstSize returns the AArch64 "size" field (bits 31:30) and the byte
 // scale factor for a given load/store mnemonic.
 // ldr/str: size=11 (64-bit), scale=8
-// ldrb/strb: size=00 (byte), scale=1
-// ldrh/strh: size=01 (halfword), scale=2
+// ldrb/strb/ldrsb: size=00 (byte), scale=1
+// ldrh/strh/ldrsh: size=01 (halfword), scale=2
+// ldrsw: size=10 (word), scale=4
 func memInstSize(mnemonicID uint16) (sizeBits uint32, scale int64) {
 	switch mnemonicID {
-	case 54, 55: // ldrb, strb
+	case 54, 55, 86: // ldrb, strb, ldrsb
 		return 0b00, 1
-	case 56, 57: // ldrh, strh
+	case 56, 57, 87: // ldrh, strh, ldrsh
 		return 0b01, 2
+	case 88: // ldrsw
+		return 0b10, 4
 	default: // ldr(5), str(6), ldp(7), stp(8)
 		return 0b11, 8
 	}
+}
+
+// memInstOpc returns the 2-bit opc field (bits 23:22) for a load/store
+// instruction. For STR/STRB/STRH this is 00; for LDR/LDRB/LDRH it is 01.
+// For LDRSB/LDRSH/LDRSW the opc selects the destination width: 10 when
+// Rt is Xt (sign-extend to 64-bit) and 11 when Rt is Wt (sign-extend to
+// 32-bit). LDRSW only has an Xt form.
+func memInstOpc(mnemonicID uint16, rtKind format.OperandKind) (uint32, error) {
+	if isSignedExtendLoad(mnemonicID) {
+		switch rtKind {
+		case format.OpRegX:
+			if mnemonicID == 88 {
+				return 0b10, nil // ldrsw (Xt only)
+			}
+			return 0b10, nil
+		case format.OpRegW:
+			if mnemonicID == 88 {
+				return 0, fmt.Errorf("ldrsw: Rt must be Xn (no Wt form)")
+			}
+			return 0b11, nil
+		default:
+			return 0, fmt.Errorf("ldrs*: Rt must be Wn or Xn (got kind %v)", rtKind)
+		}
+	}
+	if isLoadMnemonic(mnemonicID) {
+		return 0b01, nil
+	}
+	return 0b00, nil
 }
 
 // encodeMemInst encodes instructions that have an OpMem operand.
@@ -211,25 +393,30 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 		return 0, fmt.Errorf("encodeMemInst: operand 1 is not OpMem")
 	}
 
-	isLoad := isLoadMnemonic(mnemonicID)
+	// STUR / LDUR (unscaled signed-9-bit offset). ARM ARM C6.2.276 /
+	// C6.2.124. Size is derived from Rt's width (W = 0b10, X = 0b11).
+	if isUnscaledMemMnemonic(mnemonicID) {
+		return encodeUnscaledMemInst(mnemonicID, operands[0], rt, mem, pc, p1, f)
+	}
+
 	sizeBits, scale := memInstSize(mnemonicID)
+	opc, err := memInstOpc(mnemonicID, operands[0].Kind)
+	if err != nil {
+		return 0, err
+	}
 
 	// AArch64 load/store encoding:
 	// bits[31:30] = size (00=byte, 01=halfword, 10=word, 11=doubleword)
 	// bits[29:27] = 111 (VFP=0 is 0b111_0; V=0 → 0b111, bit26=0)
 	// bits[25:24] = addressing mode (01=unsigned-offset, 00=pre/post/unscaled)
-	// bits[23:22] = opc (01=load, 00=store for integer)
+	// bits[23:22] = opc (01=load, 00=store, 10=signed-load-to-Xt,
+	//                    11=signed-load-to-Wt)
 	const vfpMid = uint32(0b111) << 27
 
 	switch mem.MemShape {
 	case format.MemBase, format.MemBaseOff:
-		// LDR/STR (unsigned offset): size(2)|111|01|opc(2)|imm12|Rn|Rt
+		// LDR/STR/LDRSx (unsigned offset): size(2)|111|01|opc(2)|imm12|Rn|Rt
 		// bits 25:24 = 01 (unsigned offset encoding)
-		// bits 23:22 = 01 (load) or 00 (store)
-		opc := uint32(0) // store
-		if isLoad {
-			opc = uint32(1)
-		}
 		base := (sizeBits << 30) | vfpMid | (uint32(1) << 24) | (opc << 22)
 		// imm12 is a scaled (unsigned) offset: byte_offset / scale
 		var byteOffset int64
@@ -251,14 +438,9 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 	case format.MemBaseOffPre:
 		// LDR/STR (immediate, pre-index): size(2)|111|00|opc(2)|0|imm9|11|Rn|Rt
 		// bits 25:24 = 00 (unscaled/pre/post)
-		// bits 23:22 = 01 (load) or 00 (store)
 		// bit  21    = 0
 		// bits 20:12 = imm9 (signed)
 		// bits 11:10 = 11 (pre-index)
-		opc := uint32(0)
-		if isLoad {
-			opc = uint32(1)
-		}
 		base := (sizeBits << 30) | vfpMid | (opc << 22) | (uint32(3) << 10)
 		ctx := makeCtx(pc, p1, f)
 		v, err := enc.Eval(mem.Expr, ctx)
@@ -274,10 +456,6 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 
 	case format.MemBaseOffPost:
 		// LDR/STR (immediate, post-index): bits 11:10 = 01
-		opc := uint32(0)
-		if isLoad {
-			opc = uint32(1)
-		}
 		base := (sizeBits << 30) | vfpMid | (opc << 22) | (uint32(1) << 10)
 		ctx := makeCtx(pc, p1, f)
 		v, err := enc.Eval(mem.Expr, ctx)
@@ -295,10 +473,6 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 		// LDR/STR (register, no shift): Xt, [Xn, Xm]
 		// size(2)|111|00|opc(2)|1|Rm|option|S|10|Rn|Rt
 		// For Xm: option=011 (LSL), S=0
-		opc := uint32(0)
-		if isLoad {
-			opc = uint32(1)
-		}
 		const optionLSL = uint32(0b011)
 		base := (sizeBits << 30) | vfpMid | (opc << 22) | (uint32(1) << 21) |
 			(optionLSL << 13) | (uint32(0b10) << 10)
@@ -308,10 +482,6 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 	case format.MemBaseIdxShifted:
 		// LDR/STR (register, LSL): Xt, [Xn, Xm, LSL #N]
 		// Same as MemBaseIdx but S=1; S lives at bit 12.
-		opc := uint32(0)
-		if isLoad {
-			opc = uint32(1)
-		}
 		const optionLSL = uint32(0b011)
 		s := uint32(0)
 		if mem.ShiftAmt != 0 {
@@ -327,10 +497,6 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 		// size(2)|111|00|opc(2)|1|Rm|option|S|10|Rn|Rt
 		// option = extend kind (UXTW=010, SXTW=110, etc.)
 		// S = shift-applied (0 or 1)
-		opc := uint32(0)
-		if isLoad {
-			opc = uint32(1)
-		}
 		option := uint32(mem.Extend)
 		s := uint32(0)
 		if mem.ShiftAmt != 0 {
@@ -344,6 +510,59 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 	default:
 		return 0, fmt.Errorf("encodeMemInst: unsupported MemShape %v", mem.MemShape)
 	}
+}
+
+// encodeUnscaledMemInst encodes STUR (75) and LDUR (76). The base
+// pattern depends on Rt's width and the load/store direction:
+//
+//	stur W: 0xb8000000 | (imm9 << 12) | (Rn << 5) | Rt
+//	stur X: 0xf8000000 | ...
+//	ldur W: 0xb8400000 | ...
+//	ldur X: 0xf8400000 | ...
+//
+// imm9 is a signed byte offset (-256..+255); no scaling. Only the
+// MemBase and MemBaseOff shapes are accepted — pre/post-index aren't
+// the STUR/LDUR family.
+func encodeUnscaledMemInst(mnemonicID uint16, rtOp format.Operand, rt byte, mem format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
+	isLoad := isLoadMnemonic(mnemonicID)
+	// size bits: 0b10 for W, 0b11 for X.
+	var sizeBits uint32
+	switch rtOp.Kind {
+	case format.OpRegW:
+		sizeBits = 0b10
+	case format.OpRegX:
+		sizeBits = 0b11
+	default:
+		return 0, fmt.Errorf("stur/ldur: Rt must be Wn or Xn (got kind %v)", rtOp.Kind)
+	}
+	var byteOffset int64
+	switch mem.MemShape {
+	case format.MemBase:
+		byteOffset = 0
+	case format.MemBaseOff:
+		ctx := makeCtx(pc, p1, f)
+		v, err := enc.Eval(mem.Expr, ctx)
+		if err != nil {
+			return 0, err
+		}
+		byteOffset = v
+	default:
+		return 0, fmt.Errorf("stur/ldur: unsupported MemShape %v (only base + signed offset)", mem.MemShape)
+	}
+	imm9, err := encodeSignedImm9(byteOffset)
+	if err != nil {
+		return 0, fmt.Errorf("stur/ldur: %w", err)
+	}
+	// bits[29:24] = 0b111000 (vfpMid | mode=00). bits[23:22] = opc = 01
+	// for load, 00 for store. bits[11:10] = 00 for STUR/LDUR (unscaled).
+	const vfpMid = uint32(0b111) << 27
+	opc := uint32(0)
+	if isLoad {
+		opc = uint32(1)
+	}
+	base := (sizeBits << 30) | vfpMid | (opc << 22)
+	word := base | (imm9 << 12) | (uint32(mem.Base) << 5) | uint32(rt)
+	return word, nil
 }
 
 // encodePairInst encodes LDP/STP (load/store pair) instructions.
@@ -474,47 +693,62 @@ func encodeShiftedRegInst(mnemonicID uint16, operands []format.Operand, pc int64
 		return 0, fmt.Errorf("shift amount %d out of range [0,63]", amt)
 	}
 
-	// Determine sf (64-bit flag), opc, and N bit from mnemonic.
-	sf, opc, nBit, err := shiftedRegMnemonicFields(mnemonicID, sr.Width == 1)
+	// Determine sf (64-bit flag), opc, N bit, and the logical/arithmetic
+	// op class from mnemonic.
+	//
+	// Arithmetic shifted-reg (ADD/SUB/ADDS/SUBS) and logical shifted-reg
+	// (AND/ORR/EOR/ANDS/BIC/ORN/EON) share most of the field layout but
+	// differ in bits 28..24:
+	//   arithmetic: 01011
+	//   logical:    01010
+	sf, opc, nBit, isLogical, err := shiftedRegMnemonicFields(mnemonicID, sr.Width == 1)
 	if err != nil {
 		return 0, err
 	}
 
-	// Encoding: sf(1)|opc(2)|01011|shift(2)|N(1)|Rm(5)|imm6(6)|Rn(5)|Rd(5)
+	// Encoding: sf(1)|opc(2)|0101X|shift(2)|N(1)|Rm(5)|imm6(6)|Rn(5)|Rd(5)
+	mid := uint32(0b01011)
+	if isLogical {
+		mid = 0b01010
+	}
 	shiftEnc := uint32(sr.ShiftKind)
-	word := (sf << 31) | (opc << 29) | uint32(0b01011)<<24 |
+	word := (sf << 31) | (opc << 29) | mid<<24 |
 		(shiftEnc << 22) | (nBit << 21) | (uint32(sr.Reg) << 16) |
 		(uint32(amt) << 10) | (uint32(rn) << 5) | uint32(rd)
 	return word, nil
 }
 
-// shiftedRegMnemonicFields returns sf, opc, N-bit for shifted-register encoding.
+// shiftedRegMnemonicFields returns sf, opc, N-bit, and an isLogical flag
+// (true for AND/ORR/EOR/BIC/ORN/EON/ANDS/TST family — bits 28..24 = 01010;
+// false for ADD/SUB/ADDS/SUBS — bits 28..24 = 01011).
 // is64 is true when the operands are X registers.
 // N=1 distinguishes BIC/ORN/EON from AND/ORR/EOR in the shifted-reg space.
-func shiftedRegMnemonicFields(mnemonicID uint16, is64 bool) (sf, opc, nBit uint32, err error) {
+func shiftedRegMnemonicFields(mnemonicID uint16, is64 bool) (sf, opc, nBit uint32, isLogical bool, err error) {
 	sf = 0
 	if is64 {
 		sf = 1
 	}
 	switch mnemonicID {
 	case 1: // add
-		return sf, 0b00, 0, nil
+		return sf, 0b00, 0, false, nil
 	case 2: // sub
-		return sf, 0b10, 0, nil
+		return sf, 0b10, 0, false, nil
 	case 14: // and (shifted-reg, N=0)
-		return sf, 0b00, 0, nil
+		return sf, 0b00, 0, true, nil
 	case 15: // orr (shifted-reg, N=0)
-		return sf, 0b01, 0, nil
+		return sf, 0b01, 0, true, nil
 	case 16: // eor (shifted-reg, N=0)
-		return sf, 0b10, 0, nil
+		return sf, 0b10, 0, true, nil
 	case 45: // subs (shifted-reg): opc=11
-		return sf, 0b11, 0, nil
+		return sf, 0b11, 0, false, nil
 	case 46: // tst = ands (shifted-reg, N=0): opc=11 (ANDS discards result)
-		return sf, 0b11, 0, nil
+		return sf, 0b11, 0, true, nil
 	case 47: // bic (shifted-reg, N=1): AND NOT
-		return sf, 0b00, 1, nil
+		return sf, 0b00, 1, true, nil
+	case 81: // ands (shifted-reg, N=0): opc=11
+		return sf, 0b11, 0, true, nil
 	default:
-		return 0, 0, 0, fmt.Errorf("shiftedReg: unsupported mnemonic id %d", mnemonicID)
+		return 0, 0, 0, false, fmt.Errorf("shiftedReg: unsupported mnemonic id %d", mnemonicID)
 	}
 }
 
@@ -636,23 +870,40 @@ func encodeLSLSR(mnemonicID uint16, operands []format.Operand, pc int64, p1 *Pas
 // Bitfield instructions: bfi, bfxil, ubfx
 // ---------------------------------------------------------------------------
 
-// encodeBitfieldInst encodes bfi / bfxil / ubfx.
-// All three use BFM or UBFM base with computed immr/imms.
+// encodeBitfieldInst encodes bfi / bfxil / ubfx / bfc / sbfx.
+// All five use BFM/SBFM/UBFM bases with computed immr/imms.
 //
-// BFI (49):   Rd, Rn, #lsb, #width → BFM immr=(-lsb)%regsize, imms=width-1
-// BFXIL (50): Rd, Rn, #lsb, #width → BFM immr=lsb, imms=lsb+width-1
-// UBFX (51):  Rd, Rn, #lsb, #width → UBFM immr=lsb, imms=lsb+width-1
+// BFI  (49): Rd, Rn,  #lsb, #width → BFM  immr=(-lsb)%regsize, imms=width-1
+// BFXIL(50): Rd, Rn,  #lsb, #width → BFM  immr=lsb,            imms=lsb+width-1
+// UBFX (51): Rd, Rn,  #lsb, #width → UBFM immr=lsb,            imms=lsb+width-1
+// BFC  (84): Rd,      #lsb, #width → BFM Rn=XZR, immr=(-lsb)%regsize, imms=width-1
+// SBFX (85): Rd, Rn,  #lsb, #width → SBFM immr=lsb,            imms=lsb+width-1
 func encodeBitfieldInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
-	if len(operands) < 4 {
-		return 0, fmt.Errorf("bitfield: need 4 operands, got %d", len(operands))
+	// BFC is a 3-operand alias (no Rn — it is implicitly XZR).
+	isBfc := mnemonicID == 84
+	wantOps := 4
+	if isBfc {
+		wantOps = 3
+	}
+	if len(operands) < wantOps {
+		return 0, fmt.Errorf("bitfield: need %d operands, got %d", wantOps, len(operands))
 	}
 	rd := operands[0]
-	rn := operands[1]
-	lsbOp := operands[2]
-	widthOp := operands[3]
+	var rn format.Operand
+	var lsbOp, widthOp format.Operand
+	if isBfc {
+		// Rn is implicitly XZR (31). Build a synthetic operand matching Rd's width.
+		rn = format.Operand{Kind: rd.Kind, Reg: 31}
+		lsbOp = operands[1]
+		widthOp = operands[2]
+	} else {
+		rn = operands[1]
+		lsbOp = operands[2]
+		widthOp = operands[3]
+	}
 
 	if lsbOp.Kind != format.OpImmExpr || widthOp.Kind != format.OpImmExpr {
-		return 0, fmt.Errorf("bitfield: operands 2 and 3 must be immediates")
+		return 0, fmt.Errorf("bitfield: lsb and width must be immediates")
 	}
 
 	ctx := makeCtx(pc, p1, f)
@@ -704,6 +955,22 @@ func encodeBitfieldInst(mnemonicID uint16, operands []format.Operand, pc int64, 
 			base = 0xd3400000 // UBFM 64-bit
 		} else {
 			base = 0x53000000 // UBFM 32-bit
+		}
+	case 84: // bfc: BFM alias with Rn=XZR — immr=(-lsb)%regsize, imms=width-1
+		immr = uint32((-lsb)&(regsize-1)) & 0x3F
+		imms = uint32(width-1) & 0x3F
+		if is64 {
+			base = 0xb3400000 // BFM 64-bit
+		} else {
+			base = 0x33000000 // BFM 32-bit
+		}
+	case 85: // sbfx: SBFM alias — immr=lsb, imms=lsb+width-1
+		immr = uint32(lsb) & 0x3F
+		imms = uint32(lsb+width-1) & 0x3F
+		if is64 {
+			base = 0x93400000 // SBFM 64-bit
+		} else {
+			base = 0x13000000 // SBFM 32-bit
 		}
 	}
 
@@ -785,13 +1052,250 @@ func encodeCsetm(operands []format.Operand, pc int64, p1 *Pass1Result, f *format
 	return word, nil
 }
 
+// ---------------------------------------------------------------------------
+// ROR immediate — alias of EXTR Rd, Rn, Rn, #imm
+// ---------------------------------------------------------------------------
+
+// encodeRorImm encodes `ror Rd, Rn, #shift` as the EXTR alias.
+// ARM ARM C6.2.196: ROR (immediate) = EXTR Rd, Rn, Rn, #imm.
+//
+//	32-bit EXTR: 0x13800000 | (Rm<<16) | (imms<<10) | (Rn<<5) | Rd  (Rm=Rn)
+//	64-bit EXTR: 0x93c00000 | (Rm<<16) | (imms<<10) | (Rn<<5) | Rd  (Rm=Rn, N=1)
+func encodeRorImm(operands []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
+	if len(operands) < 3 {
+		return 0, fmt.Errorf("ror imm: need 3 operands, got %d", len(operands))
+	}
+	rd := operands[0]
+	rn := operands[1]
+	immOp := operands[2]
+	if immOp.Kind != format.OpImmExpr {
+		return 0, fmt.Errorf("ror imm: operand 2 must be an immediate")
+	}
+	ctx := makeCtx(pc, p1, f)
+	shift, err := enc.Eval(immOp.Expr, ctx)
+	if err != nil {
+		return 0, fmt.Errorf("ror imm shift: %w", err)
+	}
+	is64 := rd.Kind == format.OpRegX
+	regsize := int64(64)
+	if !is64 {
+		regsize = 32
+	}
+	if shift < 0 || shift >= regsize {
+		return 0, fmt.Errorf("ror imm: shift %d out of range [0,%d)", shift, regsize)
+	}
+	var base uint32
+	if is64 {
+		base = 0x93c00000
+	} else {
+		base = 0x13800000
+	}
+	rnIdx := uint32(rn.Reg)
+	word := base | (rnIdx << 16) | (uint32(shift) << 10) | (rnIdx << 5) | uint32(rd.Reg)
+	return word, nil
+}
+
+// ---------------------------------------------------------------------------
+// Barrier instructions: isb, dsb, dmb
+// ---------------------------------------------------------------------------
+
+// encodeBarrierInst encodes isb / dsb / dmb. The single operand is an
+// immediate carrying the CRm value (bits 11:8) — the parser converts
+// the barrier-arg keyword (sy, st, ld, ish, ...) to the CRm value per
+// ARM ARM C6.2.74 (DSB) / C6.2.73 (DMB) / C6.2.99 (ISB).
+//
+//	isb (66) base: 0xd50330df ( | (CRm << 8) )
+//	dsb (67) base: 0xd503309f ( | (CRm << 8) )
+//	dmb (68) base: 0xd50330bf ( | (CRm << 8) )
+func encodeBarrierInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
+	if len(operands) < 1 {
+		return 0, fmt.Errorf("barrier: need 1 operand, got %d", len(operands))
+	}
+	if operands[0].Kind != format.OpImmExpr {
+		return 0, fmt.Errorf("barrier: operand 0 must be an immediate")
+	}
+	ctx := makeCtx(pc, p1, f)
+	crm, err := enc.Eval(operands[0].Expr, ctx)
+	if err != nil {
+		return 0, fmt.Errorf("barrier CRm: %w", err)
+	}
+	if crm < 0 || crm > 0xf {
+		return 0, fmt.Errorf("barrier CRm %d out of range [0,15]", crm)
+	}
+	var base uint32
+	switch mnemonicID {
+	case 66: // isb
+		base = 0xd50330df
+	case 67: // dsb
+		base = 0xd503309f
+	case 68: // dmb
+		base = 0xd50330bf
+	default:
+		return 0, fmt.Errorf("barrier: unsupported mnemonic id %d", mnemonicID)
+	}
+	word := base | (uint32(crm) << 8)
+	return word, nil
+}
+
+// ---------------------------------------------------------------------------
+// System-register access (mrs / msr) and system instructions (dc / tlbi)
+// ---------------------------------------------------------------------------
+
+// encodeMrs encodes `mrs Xt, <sysreg>` per ARM ARM C6.2.137.
+//
+//	1101 0101 0011 op0:1 op1:3 CRn:4 CRm:4 op2:3 Rt:5
+//	base 0xd5300000 | (op0<<19) | (op1<<16) | (CRn<<12) | (CRm<<8) | (op2<<5) | Rt
+func encodeMrs(operands []format.Operand) (uint32, error) {
+	if len(operands) < 2 {
+		return 0, fmt.Errorf("mrs: need 2 operands, got %d", len(operands))
+	}
+	if operands[0].Kind != format.OpRegX {
+		return 0, fmt.Errorf("mrs: operand 0 must be Xt")
+	}
+	if operands[1].Kind != format.OpSysName {
+		return 0, fmt.Errorf("mrs: operand 1 must be a system register name")
+	}
+	sr, ok := format.ParseSysReg(string(operands[1].Str))
+	if !ok {
+		return 0, fmt.Errorf("mrs: unknown system register %q", string(operands[1].Str))
+	}
+	return sysRegEncode(0xd5300000, sr, operands[0].Reg), nil
+}
+
+// encodeMsr encodes both forms of `msr`:
+//
+//   - Register form `msr <sysreg>, Xt` (ARM ARM C6.2.141):
+//     1101 0101 0001 op0:1 op1:3 CRn:4 CRm:4 op2:3 Rt:5
+//     base 0xd5100000 | (op0<<19) | (op1<<16) | (CRn<<12) | (CRm<<8) | (op2<<5) | Rt
+//
+//   - PSTATE-immediate form `msr <pstatefield>, #imm` (ARM ARM C6.2.140):
+//     1101 0101 0000 op1:3 0100 CRm:4 op2:3 11111
+//     base 0xd500401f | (op1<<16) | (CRm<<8) | (op2<<5)
+//     where CRm carries the 4-bit immediate.
+func encodeMsr(operands []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
+	if len(operands) < 2 {
+		return 0, fmt.Errorf("msr: need 2 operands, got %d", len(operands))
+	}
+	if operands[0].Kind != format.OpSysName {
+		return 0, fmt.Errorf("msr: operand 0 must be a system register or PSTATE field name")
+	}
+	name := string(operands[0].Str)
+
+	switch operands[1].Kind {
+	case format.OpRegX:
+		sr, ok := format.ParseSysReg(name)
+		if !ok {
+			return 0, fmt.Errorf("msr (register): unknown system register %q", name)
+		}
+		return sysRegEncode(0xd5100000, sr, operands[1].Reg), nil
+	case format.OpImmExpr:
+		pf, ok := format.ParsePState(name)
+		if !ok {
+			return 0, fmt.Errorf("msr (immediate): unknown PSTATE field %q", name)
+		}
+		ctx := makeCtx(pc, p1, f)
+		imm, err := enc.Eval(operands[1].Expr, ctx)
+		if err != nil {
+			return 0, fmt.Errorf("msr (immediate): %w", err)
+		}
+		if imm < 0 || imm > 0xf {
+			return 0, fmt.Errorf("msr (immediate): #imm %d out of range [0,15]", imm)
+		}
+		word := uint32(0xd500401f) |
+			(uint32(pf.Op1) << 16) |
+			(uint32(imm) << 8) |
+			(uint32(pf.Op2) << 5)
+		return word, nil
+	}
+	return 0, fmt.Errorf("msr: operand 1 must be a register or immediate (got kind %v)", operands[1].Kind)
+}
+
+// encodeDc encodes `dc <op>, Xt` as the SYS-instruction encoding:
+//
+//	1101 0101 0000 1 op1:3 0111 CRm:4 op2:3 Rt:5
+//	base 0xd5080000 | (op1<<16) | (CRn<<12) | (CRm<<8) | (op2<<5) | Rt
+//
+// All DC ops have CRn=7 — that's what makes them DC rather than another
+// SYS family — but we read CRn from the op table for clarity.
+func encodeDc(operands []format.Operand) (uint32, error) {
+	if len(operands) < 2 {
+		return 0, fmt.Errorf("dc: need 2 operands, got %d", len(operands))
+	}
+	if operands[0].Kind != format.OpSysName {
+		return 0, fmt.Errorf("dc: operand 0 must be op name")
+	}
+	if operands[1].Kind != format.OpRegX {
+		return 0, fmt.Errorf("dc: operand 1 must be Xt")
+	}
+	op, ok := format.ParseDC(string(operands[0].Str))
+	if !ok {
+		return 0, fmt.Errorf("dc: unknown op %q", string(operands[0].Str))
+	}
+	word := uint32(0xd5080000) |
+		(uint32(op.Op1) << 16) |
+		(uint32(op.CRn) << 12) |
+		(uint32(op.CRm) << 8) |
+		(uint32(op.Op2) << 5) |
+		uint32(operands[1].Reg)
+	return word, nil
+}
+
+// encodeTlbi encodes `tlbi <op>[, Xt]` as the SYS-instruction encoding.
+// Same base pattern as dc but the op table fixes CRn=8 (TLBI family).
+// Ops with no Xt operand encode Rt=11111 (xzr), matching GNU's output.
+func encodeTlbi(operands []format.Operand) (uint32, error) {
+	if len(operands) < 1 {
+		return 0, fmt.Errorf("tlbi: need at least 1 operand")
+	}
+	if operands[0].Kind != format.OpSysName {
+		return 0, fmt.Errorf("tlbi: operand 0 must be op name")
+	}
+	op, ok := format.ParseTLBI(string(operands[0].Str))
+	if !ok {
+		return 0, fmt.Errorf("tlbi: unknown op %q", string(operands[0].Str))
+	}
+	rt := byte(31) // xzr when no Xt is given
+	if len(operands) >= 2 {
+		if operands[1].Kind != format.OpRegX {
+			return 0, fmt.Errorf("tlbi: operand 1 must be Xt")
+		}
+		if !op.NeedsXt {
+			return 0, fmt.Errorf("tlbi: op %q does not take a register operand", string(operands[0].Str))
+		}
+		rt = operands[1].Reg
+	} else if op.NeedsXt {
+		return 0, fmt.Errorf("tlbi: op %q requires an Xt operand", string(operands[0].Str))
+	}
+	word := uint32(0xd5080000) |
+		(uint32(op.Op1) << 16) |
+		(uint32(op.CRn) << 12) |
+		(uint32(op.CRm) << 8) |
+		(uint32(op.Op2) << 5) |
+		uint32(rt)
+	return word, nil
+}
+
+// sysRegEncode packs the (op0, op1, CRn, CRm, op2, Rt) fields onto a
+// base pattern for the MRS/MSR (register-form) encodings. The base
+// pattern supplies the L bit that distinguishes read (mrs) from write
+// (msr-reg).
+func sysRegEncode(base uint32, sr format.SysReg, rt byte) uint32 {
+	return base |
+		(uint32(sr.Op0&1) << 19) |
+		(uint32(sr.Op1) << 16) |
+		(uint32(sr.CRn) << 12) |
+		(uint32(sr.CRm) << 8) |
+		(uint32(sr.Op2) << 5) |
+		uint32(rt)
+}
+
 func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.File) ([]byte, error) {
 	name := format.DirectiveName(rec.DirectiveID)
 	ctx := makeCtx(pc, p1, f)
 	switch name {
 	case ".byte":
 		return evalImmsAsBytes(rec, ctx, 1)
-	case ".short":
+	case ".short", ".hword":
 		return evalImmsAsBytes(rec, ctx, 2)
 	case ".word":
 		return evalImmsAsBytes(rec, ctx, 4)
@@ -807,13 +1311,21 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 		return append(o.Str, 0), nil
 	case ".text", ".data", ".global", ".equ", ".set":
 		return nil, nil
+	case ".section":
+		// .section is a no-op in the current flat-layout pipeline. See
+		// docs/notes/m2-status.md for the multi-section gap this leaves.
+		return nil, nil
+	case ".arch", ".cpu":
+		// .arch / .cpu architecture-selection directives are no-ops at
+		// encoding time — see pass1 sizeOfRecord for rationale.
+		return nil, nil
 	case ".balign":
 		// Round PC up to next multiple of alignment, emitting zero bytes.
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
-		align, ok := format.EvalConst(o.Expr)
-		if !ok {
-			return nil, fmt.Errorf(".balign: non-constant alignment")
+		align, err := enc.Eval(o.Expr, ctx)
+		if err != nil {
+			return nil, fmt.Errorf(".balign: %w", err)
 		}
 		if align <= 1 {
 			return nil, nil
@@ -824,9 +1336,9 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 		// aarch64 GNU as convention: `.align N` aligns to 2^N bytes.
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
-		n, ok := format.EvalConst(o.Expr)
-		if !ok {
-			return nil, fmt.Errorf(".align: non-constant exponent")
+		n, err := enc.Eval(o.Expr, ctx)
+		if err != nil {
+			return nil, fmt.Errorf(".align: %w", err)
 		}
 		if n <= 0 {
 			return nil, nil
@@ -837,9 +1349,9 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 	case ".skip", ".space":
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
-		v, ok := format.EvalConst(o.Expr)
-		if !ok {
-			return nil, fmt.Errorf(".skip: non-constant size")
+		v, err := enc.Eval(o.Expr, ctx)
+		if err != nil {
+			return nil, fmt.Errorf(".skip: %w", err)
 		}
 		return make([]byte, v), nil
 	}

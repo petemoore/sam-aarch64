@@ -71,6 +71,20 @@ func TestOperandWriteString(t *testing.T) {
 	}
 }
 
+func TestOperandWriteLitPool(t *testing.T) {
+	var w OperandWriter
+	// width=8, expr = PUSH_IMM8(0x42)
+	expr := []byte{byte(OpPushImm8), 0x42}
+	w.WriteLitPool(8, expr)
+	want := []byte{
+		byte(OpLitPool), 8, byte(len(expr)), 0,
+		byte(OpPushImm8), 0x42,
+	}
+	if !bytes.Equal(w.Bytes(), want) {
+		t.Errorf("got % X, want % X", w.Bytes(), want)
+	}
+}
+
 func TestOperandWriteCondSysName(t *testing.T) {
 	var w OperandWriter
 	w.WriteCond(CondNE)

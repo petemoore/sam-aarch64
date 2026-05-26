@@ -20,6 +20,12 @@ const (
 	OpString      OperandKind = 0x09
 	OpCond        OperandKind = 0x0A
 	OpSysName     OperandKind = 0x0B
+	// OpLitPool is the `=expr` operand used by `ldr Xn, =expr` and
+	// `ldr Wn, =expr`. The value is computed (in the case of a
+	// constant) or resolved (in the case of a symbol) at link time
+	// and stashed in the literal pool. Width is 8 bytes for X
+	// destinations, 4 bytes for W destinations.
+	OpLitPool OperandKind = 0x0C
 )
 
 func (k OperandKind) Name() string {
@@ -46,6 +52,8 @@ func (k OperandKind) Name() string {
 		return "COND"
 	case OpSysName:
 		return "SYS_NAME"
+	case OpLitPool:
+		return "LIT_POOL"
 	}
 	return "UNKNOWN"
 }
@@ -200,6 +208,15 @@ func (w *OperandWriter) WriteCond(c CondCode) {
 	w.buf = append(w.buf, byte(OpCond), byte(c))
 }
 
+// WriteLitPool writes a LIT_POOL operand. width must be 4 (W
+// destination, 4-byte pool entry) or 8 (X destination, 8-byte pool
+// entry). expr is the value expression to place in the pool.
+func (w *OperandWriter) WriteLitPool(width byte, expr []byte) {
+	w.buf = append(w.buf, byte(OpLitPool), width)
+	w.buf = appendU16(w.buf, uint16(len(expr)))
+	w.buf = append(w.buf, expr...)
+}
+
 func (w *OperandWriter) WriteSysName(name string) {
 	w.buf = append(w.buf, byte(OpSysName))
 	w.buf = appendU16(w.buf, uint16(len(name)))
@@ -307,6 +324,10 @@ func (r *OperandReader) Next() (Operand, error) {
 		o.Str = r.take(n)
 	case OpCond:
 		o.Cond = CondCode(r.take(1)[0])
+	case OpLitPool:
+		o.Width = r.take(1)[0]
+		n := r.readLen()
+		o.Expr = r.take(n)
 	default:
 		return o, fmt.Errorf("operand: unknown kind 0x%02x", byte(kind))
 	}
