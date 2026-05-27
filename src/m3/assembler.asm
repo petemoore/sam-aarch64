@@ -58,7 +58,12 @@ PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
 ; M4 scratch reservation (allocated by symbols.asm + local_labels.asm):
 ;   &C160-&C95F  SYMTAB              (256 buckets × 8 bytes = 2 KB)
 ;   &C960-&CD5F  SYMTAB_OVERFLOW     (overflow chain, ~1 KB)
-;   &CD60-&D15F  LOCAL_LABEL_TABLE   (9 digits, ~1 KB)
+;   &CD60-&D0D1  LOCAL_LABEL_TABLE   (9 × 98 bytes = 882 bytes)
+
+; M5 PR-C scratch: OpMem encoder's 8-byte LE offset value.
+; Only one OpMem operand exists per instruction (Rt, [mem] for non-pair;
+; Rt1, Rt2, [mem] for ldp/stp) so a single 8-byte slot suffices.
+OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
 
 
                 org     &8000
@@ -81,6 +86,7 @@ PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
                 include "slots/bitfield_imm.asm"
                 include "slots/shifted_reg.asm"
                 include "slots/extended_reg.asm"
+                include "slots/mem.asm"
                 include "ml.asm"
                 include "expr_eval.asm"
                 include "form_lookup.asm"
@@ -156,6 +162,7 @@ if defined(BUILD_TESTS)
                 call    run_ror_imm_self_tests
                 call    run_shifted_reg_self_tests
                 call    run_extended_reg_self_tests
+                call    run_mem_self_tests
 endif
 
 ; -- Install the section-B HLOAD trampoline.  Must happen BEFORE
@@ -248,5 +255,6 @@ if defined(BUILD_TESTS)
                 include "test_ror_imm.asm"
                 include "test_shifted_reg.asm"
                 include "test_extended_reg.asm"
+                include "test_mem.asm"
                 include "test_trampoline.asm"
 endif

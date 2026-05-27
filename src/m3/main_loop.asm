@@ -466,7 +466,9 @@ main_handle_inst_parse_loop:
                 jp      z, main_parse_shifted_reg
                 cp      OP_KIND_EXTENDED_REG
                 jp      z, main_parse_extended_reg
-; Anything else (MEM, STRING, SYS_NAME, LIT_POOL) is M5 PR-C+ territory.
+                cp      OP_KIND_MEM
+                jp      z, main_parse_mem
+; Anything else (STRING, SYS_NAME, LIT_POOL) is M5 PR-D/E territory.
                 jp      fail
 
 
@@ -672,6 +674,224 @@ main_parse_amt_copy_loop:
                 inc     de
                 ld      (de), a
                 jp      main_handle_inst_advance_imm
+
+
+; ---- Parse OpMem (0x08) — addressing-mode operand ---------------------
+;
+; On entry: kind byte (0x08) is already at OPVAL[+0]; DE points at +1.
+;           HL points at on-disk byte just past the kind byte.
+;
+; The seven shapes (see tools/sam-aarch64-format/operands.go:64-72):
+;   MemBase (0)             : [shape][base]                       — 2 bytes
+;   MemBaseOff (1)          : [shape][base][off_len u16][off...]   — 4+ bytes
+;   MemBaseOffPre (2)       : same shape as 1                      — 4+ bytes
+;   MemBaseOffPost (3)      : same shape as 1                      — 4+ bytes
+;   MemBaseIdx (4)          : [shape][base][idx][idxw]             — 4 bytes
+;   MemBaseIdxShifted (5)   : [shape][base][idx][idxw][shAmt]      — 5 bytes
+;   MemBaseIdxExtended (6)  : [shape][base][idx][idxw][ext][shAmt] — 6 bytes
+;
+; In-memory layout written into OPVAL_ARRAY (10 bytes):
+;   +0 kind = 0x08
+;   +1 shape
+;   +2 base
+;   +3 idx
+;   +4 idx_width
+;   +5 extend
+;   +6 shift_amt
+;   +7..+9 zero
+;
+; The signed-64-bit offset for shapes 1/2/3 is evaluated via
+; eval_expr_const and the 8-byte LE result is copied to the shared
+; OPMEM_OFF scratch (only one OpMem operand per instruction).
+main_parse_mem:
+                ld      a, (hl)             ; shape
+                inc     hl
+                ld      (de), a             ; OPVAL +1 = shape
+                inc     de
+                ld      b, a                ; B = shape (for dispatch below)
+                ld      a, (hl)             ; base reg
+                inc     hl
+                ld      (de), a             ; OPVAL +2 = base
+                inc     de
+
+; Branch on shape — first decide if the remaining payload is an
+; off_expr (shapes 1/2/3) or one of the register-offset shapes (4/5/6)
+; or empty (shape 0).
+                ld      a, b
+                or      a
+                jp      z, main_parse_mem_finish        ; shape 0: MemBase
+                cp      1
+                jp      z, main_parse_mem_off
+                cp      2
+                jp      z, main_parse_mem_off
+                cp      3
+                jp      z, main_parse_mem_off
+                cp      4
+                jp      z, main_parse_mem_idx
+                cp      5
+                jp      z, main_parse_mem_idx_shifted
+                cp      6
+                jp      z, main_parse_mem_idx_extended
+                jp      fail
+
+; ---- MemBase (shape 0): nothing more on-disk; zero the remaining 7
+;      OPVAL bytes + OPMEM_OFF (no offset for this shape) and advance.
+main_parse_mem_finish:
+                push    bc
+                ld      b, 7
+                xor     a
+main_parse_mem_finish_zero:
+                ld      (de), a
+                inc     de
+                djnz    main_parse_mem_finish_zero
+                pop     bc
+; Zero OPMEM_OFF — encoder reads this unconditionally for shapes that
+; may carry an offset; force-clearing it here prevents a previous
+; instruction's offset leaking into the current one.
+                push    hl
+                push    de
+                ld      hl, OPMEM_OFF
+                ld      b, 8
+                xor     a
+main_parse_mem_finish_zoff:
+                ld      (hl), a
+                inc     hl
+                djnz    main_parse_mem_finish_zoff
+                pop     de
+                pop     hl
+                jp      main_handle_inst_advance
+
+; ---- MemBaseOff/Pre/Post (shapes 1/2/3): read off_expr_len u16 +
+;      bytecode, evaluate, copy 8-byte LE result to OPMEM_OFF.  Then
+;      zero OPVAL +3..+9 and advance.
+main_parse_mem_off:
+                push    de                  ; save OPVAL +3 dest
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)
+                inc     hl                  ; HL → bytecode start; BC = len
+                ld      (main_opval_src), hl
+                ld      a, b
+                or      c
+                jr      nz, main_parse_mem_off_eval
+; Zero-length expr: store 0.
+                ld      hl, expr_result
+                ld      b, 8
+                xor     a
+main_parse_mem_off_zero_loop:
+                ld      (hl), a
+                inc     hl
+                djnz    main_parse_mem_off_zero_loop
+                jp      main_parse_mem_off_copy
+main_parse_mem_off_eval:
+                push    bc
+                call    eval_expr_const
+                pop     bc
+                ld      hl, (main_opval_src)
+                add     hl, bc
+                ld      (main_opval_src), hl
+main_parse_mem_off_copy:
+; Copy expr_result[0..7] → OPMEM_OFF[0..7].
+                ld      hl, expr_result
+                ld      de, OPMEM_OFF
+                ld      b, 8
+main_parse_mem_off_cpy:
+                ld      a, (hl)
+                ld      (de), a
+                inc     hl
+                inc     de
+                djnz    main_parse_mem_off_cpy
+                pop     de                  ; restore OPVAL +3 dest
+; Zero OPVAL +3..+9 (7 bytes).
+                push    bc
+                ld      b, 7
+                xor     a
+main_parse_mem_off_zerorest:
+                ld      (de), a
+                inc     de
+                djnz    main_parse_mem_off_zerorest
+                pop     bc
+                ld      hl, (main_opval_src)
+                jp      main_handle_inst_advance
+
+; ---- MemBaseIdx (shape 4): [idx][idxw]; remaining OPVAL bytes:
+;      +3 idx, +4 idx_width, +5..+9 zero.
+main_parse_mem_idx:
+                ld      a, (hl)
+                inc     hl
+                ld      (de), a             ; OPVAL +3 = idx
+                inc     de
+                ld      a, (hl)
+                inc     hl
+                ld      (de), a             ; OPVAL +4 = idx_width
+                inc     de
+                push    bc
+                ld      b, 5
+                xor     a
+main_parse_mem_idx_zero:
+                ld      (de), a
+                inc     de
+                djnz    main_parse_mem_idx_zero
+                pop     bc
+                jp      main_handle_inst_advance
+
+; ---- MemBaseIdxShifted (shape 5): [idx][idxw][shAmt]
+main_parse_mem_idx_shifted:
+                ld      a, (hl)
+                inc     hl
+                ld      (de), a             ; +3 idx
+                inc     de
+                ld      a, (hl)
+                inc     hl
+                ld      (de), a             ; +4 idx_width
+                inc     de
+                inc     de                  ; skip +5 (extend) for shape 5
+                ; Write +5 = 0 (no extend for shape 5) — done by zero loop.
+                dec     de
+                xor     a
+                ld      (de), a             ; +5 = 0
+                inc     de
+                ld      a, (hl)
+                inc     hl
+                ld      (de), a             ; +6 shift_amt
+                inc     de
+                push    bc
+                ld      b, 3
+                xor     a
+main_parse_mem_idxs_zero:
+                ld      (de), a
+                inc     de
+                djnz    main_parse_mem_idxs_zero
+                pop     bc
+                jp      main_handle_inst_advance
+
+; ---- MemBaseIdxExtended (shape 6): [idx][idxw][ext][shAmt]
+main_parse_mem_idx_extended:
+                ld      a, (hl)
+                inc     hl
+                ld      (de), a             ; +3 idx
+                inc     de
+                ld      a, (hl)
+                inc     hl
+                ld      (de), a             ; +4 idx_width
+                inc     de
+                ld      a, (hl)
+                inc     hl
+                ld      (de), a             ; +5 extend
+                inc     de
+                ld      a, (hl)
+                inc     hl
+                ld      (de), a             ; +6 shift_amt
+                inc     de
+                push    bc
+                ld      b, 3
+                xor     a
+main_parse_mem_idxe_zero:
+                ld      (de), a
+                inc     de
+                djnz    main_parse_mem_idxe_zero
+                pop     bc
+                jp      main_handle_inst_advance
 
 
 ; main_handle_inst_advance — common tail after a non-imm operand parse:
