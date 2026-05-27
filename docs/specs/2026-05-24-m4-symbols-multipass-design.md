@@ -97,9 +97,9 @@ Total ≈ 2KB for 200 symbols. Comfortable.
 
 ### 2.3 Local-label table
 
-Separate from the global symbol table. For each digit 1–9, a
-sorted list of PCs (sorted by definition order, which is also PC
-order since pass 1 walks records sequentially).
+Separate from the global symbol table. For each decimal digit
+`1..99`, a sorted list of PCs (sorted by definition order, which
+is also PC order since pass 1 walks records sequentially).
 
 At pass 2, when the expression evaluator hits `PUSH_LOCAL d, dir`:
 
@@ -111,6 +111,16 @@ At pass 2, when the expression evaluator hits `PUSH_LOCAL d, dir`:
 
 Both M1's spec (§6) and aarch64enc's Eval implement the same
 algorithm; M4 ports it to Z80.
+
+> **v2 (M6-era, multi-digit)** — the on-SAM table was redesigned from
+> a fixed 9-array layout (digits 1..9, 24 entries each) to a single
+> shared sorted `(digit, pc)` list capped at 200 entries.  ABI
+> unchanged; the digit range extends to 1..99 to support fixtures
+> like `inst_ldr_litpool_local.s` (which uses `10f`) and spectrum4
+> release sources (which use locals up to `15:`).  Storage layout is
+> now 5 bytes per entry (1 B digit + 4 B PC LE) plus a 2 B count
+> prefix, occupying the same 1 KB slot at `&CD60..&D15F`.  See
+> `docs/plans/2026-05-27-multi-digit-local-labels.md`.
 
 ### 2.4 Full expression evaluator on Z80
 

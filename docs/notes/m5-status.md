@@ -9,7 +9,7 @@ register, all seven memory addressing shapes, system registers, literal
 pool) and the remaining directives (`.set`/`.equ`, `.balign`/`.align`,
 `.org`, `.skip`/`.space`, `.inst`, `.ltorg`, plus `.global`/`.section`/
 `.arch`/`.cpu` no-ops).  Byte-identical to `aarch64-*-as + ld -Ttext=0
-+ objcopy -O binary` for the M5 fixture corpus (19 fixtures).
++ objcopy -O binary` for the M5 fixture corpus (20 fixtures).
 
 ## What M5 is (spec recap)
 
@@ -66,13 +66,13 @@ fixture that doesn't require source > 2 KB now has an M5 home.
 | `make ci-m3-prod` | ✅ PASS | 9/9 M3 fixtures (production variant) |
 | `make ci-m4` | ✅ PASS | 4/4 M4 fixtures |
 | `make ci-m4-prod` | ✅ PASS | 4/4 M4 fixtures (production variant) |
-| `make ci-m5` | ✅ PASS | 19/19 M5 fixtures |
-| `make ci-m5-prod` | ✅ PASS | 19/19 M5 fixtures (production variant) |
+| `make ci-m5` | ✅ PASS | 20/20 M5 fixtures |
+| `make ci-m5-prod` | ✅ PASS | 20/20 M5 fixtures (production variant) |
 | Boot-time self-tests | ✅ PASS | Slots + symbols + local-label + M4 expr_eval + PC-rel + M5 directives + ror-imm + ShiftedReg + ExtendedReg + Mem + SysName + LitPool |
 | GitHub `m5:` job | ✅ PASS | Wired into `.github/workflows/ci.yml` |
 | GitHub `m5-prod:` job | ✅ PASS | Production-variant CI gate |
 
-## M5 fixture corpus (19 fixtures)
+## M5 fixture corpus (20 fixtures)
 
 | Fixture | Exercises |
 |---|---|
@@ -84,6 +84,7 @@ fixture that doesn't require source > 2 KB now has an M5 home.
 | `inst_extended.s` | OpExtendedReg (`add`/`sub` extended) |
 | `inst_ldrs.s` | OpMem signed loads (`ldrsb`, `ldrsh`, `ldrsw`) |
 | `inst_ldr_litpool.s` | OpLitPool basic + symbol-valued entry |
+| `inst_ldr_litpool_local.s` | OpLitPool + two-digit local labels (`10f`) |
 | `inst_ldr_litpool_ltorg.s` | OpLitPool + `.ltorg` flush + per-segment dedup |
 | `inst_mem_extended.s` | OpMem extended-offset (`[Xn, Wm, sxtw #N]`) |
 | `inst_mem_indexed.s` | OpMem scaled indexed (`[Xn, #imm]`) |
@@ -98,10 +99,6 @@ fixture that doesn't require source > 2 KB now has an M5 home.
 
 Deferred (covered-by-implication or non-trivial):
 
-- `inst_ldr_litpool_local.s` — requires two-digit local labels (`10f`).
-  The M4 local-label table only supports digits 1..9 (single-digit
-  per refenc/format).  Promote in M6 when the table is extended to
-  handle multi-digit local labels.
 - `inst_bfc_sbfx.s` — BitfieldImm extras; the M4 BitfieldImm path
   already covers this.  Promote only if a regression surfaces.
 
@@ -148,9 +145,6 @@ layout — see `src/m3/trampoline.asm`) or motivate a second budget lever.
   PR #31 (ENCTAB) is the prerequisite.
 - **Compact `.tbn` format + built-in disassembler** — M6.  Defers
   until real spectrum4 sources need to fit in SAM RAM.
-- **Multi-digit local labels** (`10f`/`10b`) — the M4 local-label
-  table is hard-coded to digits 1..9.  One M5 fixture
-  (`inst_ldr_litpool_local.s`) needs this; deferred to M6.
 - **64-bit MUL / DIV on Z80** — still rejected.
 - **Macros / conditional assembly** — handled by Mac-side `text2bin`
   per `docs/specs/2026-05-25-macro-expansion-research.md`; never
@@ -167,7 +161,7 @@ make ci-m3 ci-m4 ci-m5
 # expect:
 #   9/9 M3 fixtures matched
 #   4/4 M4 fixtures matched
-#   19/19 M5 fixtures matched
+#   20/20 M5 fixtures matched
 
 # Production-variant gate (the standing CI matrix):
 make ci-m3-prod ci-m4-prod ci-m5-prod
