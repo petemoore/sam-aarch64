@@ -11,6 +11,12 @@ pool) and the remaining directives (`.set`/`.equ`, `.balign`/`.align`,
 `.arch`/`.cpu` no-ops).  Byte-identical to `aarch64-*-as + ld -Ttext=0
 + objcopy -O binary` for the M5 fixture corpus (20 fixtures).
 
+**M5 SUPERSEDED by M6 (in progress).**  M5 closed the compound-operand
++ directive gap.  M6 (currently mid-flight) extends the reach to real
+spectrum4 sources via paged buffers, compact `.tbn`, and a disassembler.
+See `docs/notes/m6-status.md` for the current state of play.  The M5
+fixture corpus + CI matrix are still part of the standing regression.
+
 ## What M5 is (spec recap)
 
 Per `docs/specs/2026-05-27-m5-compound-operands-directives-design.md`:

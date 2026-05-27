@@ -172,14 +172,20 @@ reset_reader_to_in_buf:
 ;
 ; Called before pass 2 only (pass 1 never emits).
 ;
+; Per docs/specs/2026-05-27-m6-paged-out-design.md the OUT buffer
+; lives in physical pages 5+6, reached via section B (&4000..&7FFF).
+; OUT_PC starts at the section-B base; OUT_ZONE starts at 0 (= low
+; zone, section B = page 5 for free under LMPR_ENCTAB).
+;
 ; Input:  none.
-; Output: OUT_BASE = OUT_PC = OUT_BUF; OUT_LEN = 0.
-; Clobbers: HL.
+; Output: OUT_PC = &4000; OUT_ZONE = 0; OUT_LEN = 0.
+; Clobbers: A, HL.
 ; -----------------------------------------------------------------------
 reset_out_buffer:
-                ld      hl, OUT_BUF
-                ld      (OUT_BASE), hl
+                ld      hl, &4000           ; section-B base
                 ld      (OUT_PC), hl
+                xor     a
+                ld      (OUT_ZONE), a       ; start in low zone (page 5)
                 ld      hl, 0
                 ld      (OUT_LEN), hl
                 ret
@@ -2071,23 +2077,45 @@ load_in_file:
 
 
 ; -----------------------------------------------------------------------
-; save_out_file — HSAVE OUT_BUF[0..OUT_LEN] as "OUT".
+; save_out_file — HSAVE the paged OUT buffer as file "OUT".
 ;
-; Mirrors M0's stub.asm HSAVE call.  Pre-populates UIFA bytes 31-36
-; with current HMPR, source address, and length.
+; Per docs/specs/2026-05-27-samdos-save-idiom.md.  HSAVE manages its
+; own HMPR (saves at entry, restores at exit) and auto-pages across
+; &C000 inside its save loop (`samdos/src/c.s:354-369 ctas`).  So the
+; caller only has to populate UIFA[31..36]:
+;
+;   byte 31    : start page → HSAVE sets HMPR low 5 bits from this
+;                (= OUT_BASE_PAGE = 5; page 5 then page 6 via auto-page).
+;   bytes 32-33: source offset in section-C form (= &8000).
+;   byte 34    : pages count = OUT_LEN >> 14.
+;   bytes 35-36: remainder length = OUT_LEN & 0x3FFF.
+;
+; LMPR is unchanged across HSAVE (ROM PTDOS save/restores).  After
+; this call: OUT is on disk; assembler-side LMPR/HMPR back to
+; pre-call values; IX clobbered to dchan (we don't read it).
 ; -----------------------------------------------------------------------
 save_out_file:
                 ld      hl, name_OUT
                 call    fill_uifa
-                in      a, (251)
-                and     &1f
-                ld      (UIFA + 31), a
-                ld      hl, (OUT_BASE)
-                ld      (UIFA + 32), hl
-                xor     a
-                ld      (UIFA + 34), a
-                ld      hl, (OUT_LEN)
-                ld      (UIFA + 35), hl
+
+                ld      a, OUT_BASE_PAGE
+                ld      (UIFA + 31), a              ; HSAVE: HMPR low5 = page
+
+                ld      hl, &8000                   ; section-C source offset
+                ld      (UIFA + 32), hl             ; HSAVE: HL = (hd0d1) = UIFA[32-33]
+
+                ld      hl, (OUT_LEN)               ; total bytes (0..32767)
+                ld      a, h
+                rlca
+                rlca
+                and     3
+                ld      (UIFA + 34), a              ; pages = OUT_LEN >> 14
+
+                ld      a, h
+                and     &3f
+                ld      h, a
+                ld      (UIFA + 35), hl             ; remainder = OUT_LEN & 0x3FFF
+
                 rst     8
                 defb    HOOK_HSAVE
                 ret
@@ -2144,6 +2172,12 @@ main_dir_equ_pending_id:        defw    0
 IN_POS:                 defw    0           ; current read pointer into IN_BUF
 IN_END:                 defw    0           ; one past the last valid byte
 
-OUT_BASE:               defw    0           ; base of output buffer (= OUT_BUF)
-OUT_PC:                 defw    0           ; next emit position
+; Paged OUT cursor state — see docs/specs/2026-05-27-m6-paged-out-design.md.
+; OUT_PC walks section B (&4000..&7FFF); OUT_ZONE flips 0 → 1 at the
+; first byte 16384 to switch from page 5 (under LMPR_ENCTAB) to page 6
+; (under LMPR_OUT_HIGH).  OUT_LEN is the total emitted byte count
+; (16-bit; cap is 32 KB given the two-page allocation).
+OUT_PC:                 defw    0           ; next emit position (section B)
 OUT_LEN:                defw    0           ; bytes emitted so far
+OUT_ZONE:               defb    0           ; 0 = low zone (section B, page 5);
+                                            ; 1 = high zone (LMPR=&25, page 6)
