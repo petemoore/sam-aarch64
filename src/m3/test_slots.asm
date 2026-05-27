@@ -24,6 +24,16 @@
 ; -----------------------------------------------------------------------
 run_slot_self_tests:
 
+; -- Seed PASS_PC = 0 ---------------------------------------------------
+; M4 made encode_branch_imm and encode_adrp_imm subtract PASS_PC from
+; the input value (caller now passes an absolute target address, not a
+; raw byteOffset).  At cold boot PASS_PC (&C159 .. &C15C) contains
+; whatever the SAM RAM/SAMDOS load left there, which is non-zero.  The
+; pre-M4 branch / adrp test vectors below are still written in "raw
+; byteOffset" style, so we zero PASS_PC here to recover the old
+; semantics for this suite.  PC-aware tests live in test_pc_rel.asm.
+                call    pass_pc_reset
+
 ; -- encode_reg(Xreg{BP=0,BW=5}, 5)  =>  0x00000005 --------------------
                 ld      hl, slot_xreg_bp0_bw5
                 ld      a, 5

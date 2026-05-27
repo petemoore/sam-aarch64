@@ -28,10 +28,19 @@ OPVAL_KINDS:    equ     &C150          ; 7 bytes — kinds[] for form_lookup_mat
 ; them again and emits resolved bytes.  See
 ; docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.1.  Pass 1
 ; never touches OUT_BUF; pass 2 alone emits.  PASS_MODE is set by
-; main_assemble and read by every record handler that diverges per pass.
+; main_assemble (which now owns both pass-1 and pass-2 setup) and is
+; read by every record handler that diverges per pass.
 PASS_MODE:      equ     &C158          ; 1 byte — current pass (PASS_PASS1 / PASS_PASS2)
 PASS_PASS1:     equ     1
 PASS_PASS2:     equ     2
+
+; PASS_PC — 4-byte little-endian assembler PC, reset to 0 at the start
+; of each pass and advanced in lockstep by both pass-1 (table build,
+; no emit) and pass-2 (emit) handlers.  Tasks 5-6 will read this when
+; resolving PC-relative expressions; M3 fixtures have no PC-relative
+; refs, so it's observationally inert today.  Helpers live in
+; main_loop.asm (pass_pc_reset / pass_pc_advance_*).
+PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
 
 ; M4 scratch reservation (allocated by symbols.asm + local_labels.asm):
 ;   &C160-&C95F  SYMTAB              (256 buckets × 8 bytes = 2 KB)
@@ -67,6 +76,8 @@ PASS_PASS2:     equ     2
                 include "test_slots.asm"
                 include "test_symbols.asm"
                 include "test_local_labels.asm"
+                include "test_expr_eval_m4.asm"
+                include "test_pc_rel.asm"
 
 ; -----------------------------------------------------------------------
 ; Main program — entry via jp from &8000.
@@ -99,22 +110,39 @@ start:
 ; See test_local_labels.asm.
                 call    run_local_label_self_tests
 
+; -- Expression-evaluator M4 self-tests --------------------------------
+; Exercises eval_expr_const's new M4 opcodes (PUSH_SYM, PUSH_LOCAL,
+; PUSH_PC, REL_LO12/HI12, REL_ABS_G0..G3) against hand-rolled bytecode
+; buffers and pre-seeded PASS_PC / symbol-table / local-label-table
+; state.  On any mismatch: jp fail.  See test_expr_eval_m4.asm.
+;
+; This MUST run AFTER run_symbol_table_self_tests + run_local_label_self_tests
+; so it can safely re-init both tables (those suites are destructive on
+; the tables they exercise, and the M4 tests need a known starting
+; point).  PASS_PC is also clobbered by the M4 tests but is re-zeroed
+; by main_assemble's pass_pc_reset call, so the test doesn't need to
+; restore it.
+                call    run_expr_eval_m4_self_tests
+
+; -- PC-relative slot-encoder self-tests --------------------------------
+; Exercises encode_branch_imm and encode_adrp_imm under M4 semantics:
+; caller passes an ABSOLUTE target address, the encoder subtracts
+; PASS_PC (BranchImm*) or (PASS_PC & ~0xFFF) (AdrpImm) internally.
+; PASS_PC is set explicitly per sub-test; the suite restores PASS_PC=0
+; on exit (defensive — main_assemble re-zeros it).  See test_pc_rel.asm.
+                call    run_pc_rel_self_tests
+
 ; -- Load and validate enctab.enc header --------------------------------
                 call    load_enctab
 
 ; -- Initialise form-lookup pointers (form table base + index base) -----
                 call    form_lookup_init
 
-; -- Run the assemble pass: load IN, walk records, build OUT -----------
-; M4: declare which pass main_assemble is currently executing.  Until
-; Tasks 4-5 split the walker into pass-1 (table build, no emit) and
-; pass-2 (emit) calls, the single call below acts as the pass-2 emit
-; (matching M3 behaviour).  Setting PASS_MODE = PASS_PASS1 here is a
-; deliberate placeholder: the walker does not read PASS_MODE yet, so
-; the value is observationally inert in M3 fixtures; Tasks 4-5 will
-; restructure start: to do both calls explicitly.
-                ld      a, PASS_PASS1
-                ld      (PASS_MODE), a
+; -- Run the assemble: pass 1 (table build) + pass 2 (emit) -----------
+; main_assemble owns the two-pass dance internally: it sets PASS_MODE
+; for each pass, resets PASS_PC + the symbol/local tables before
+; pass 1, resets PASS_PC + OUT state before pass 2, and rewinds the
+; reader between passes.  See main_loop.asm.
                 call    main_assemble
 
 ; -- Write OUT to disk via HSAVE ----------------------------------------
