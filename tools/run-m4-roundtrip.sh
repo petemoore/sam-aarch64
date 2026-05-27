@@ -74,7 +74,16 @@ echo "=== M4 round-trip: $fixture ==="
 
 mkdir -p build
 
-make -s text2bin enctab m3-asm build-m3-disk
+# Mac-side tools.  ASSEMBLER_BIN is per-variant — see header of
+# tools/run-m3-roundtrip.sh for the test vs prod rationale.
+ASSEMBLER_BIN="${ASSEMBLER_BIN:-$ROOT/build/assembler.bin}"
+make -s text2bin enctab build-m3-disk
+
+if [ ! -f "$ASSEMBLER_BIN" ]; then
+    echo "ERROR: assembler binary not found: $ASSEMBLER_BIN" >&2
+    echo "  (build it with 'make m3-asm' or 'make m3-asm-prod')" >&2
+    exit 2
+fi
 
 # 1. text2bin → INPUT.tbn
 echo "--- text2bin ---"
@@ -83,7 +92,7 @@ echo "--- text2bin ---"
 # 2. build-m3-disk with the .tbn as IN.
 echo "--- build-m3-disk ---"
 "$ROOT/build/build-m3-disk" \
-    build/assembler.bin build/enctab.enc \
+    "$ASSEMBLER_BIN" build/enctab.enc \
     "build/${base}.tbn" \
     "build/${base}.mgt"
 

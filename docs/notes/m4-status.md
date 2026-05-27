@@ -78,7 +78,7 @@ The earlier M3 oracle (`tools/run-m3-roundtrip.sh`) skips the link step because 
 ## Memory layout (during assembly)
 
 ```
-&8000-&9FFF  assembler code (~8 KB; 8011 bytes after PR #22)
+&8000-&9FFF  assembler code (~8 KB; test variant 8054 B, prod variant 6077 B post-PR-#25)
 &A000-&AFFF  enctab.enc buffer (4 KB)
 &B000-&B7FF  IN .tbn buffer (2 KB)
 &B800-&BFFF  OUT buffer (2 KB)
@@ -94,10 +94,17 @@ The earlier M3 oracle (`tools/run-m3-roundtrip.sh`) skips the link step because 
 
 ## Code budget heads-up
 
-The M3 assembler binary is now **8011 bytes** / 8192-byte budget (`&8000-&9FFF`). 181 bytes headroom. PR 3 adds no Z80 code (only fixtures, scripts, docs), so the next bump will come from M5. Likely M5 will need to:
+| variant | size | budget | headroom |
+|---|---|---|---|
+| `m3-asm` (test, includes boot self-tests) | 8054 B | 8192 B (`&8000-&9FFF`) | 138 B |
+| `m3-asm-prod` (no self-tests) | 6077 B | 8192 B | **2115 B** |
+
+PR #25 (build split) carved out the production variant. M5 should build against `m3-asm-prod` for maximum runway. The test variant is reserved for dev / CI pre-flight where the boot self-tests catch per-routine regressions before the fixture corpus even runs.
+
+If M5 exhausts the 2115 B production headroom, the next levers are:
 
 1. Move `ENCTAB_BUF` up from `&A000` (currently 4 KB at &A000-&AFFF) to free more code space.
-2. Or shrink the encoder by factoring out duplicated dispatch.
+2. Shrink the encoder by factoring out duplicated dispatch.
 
 Out of scope for M4.
 

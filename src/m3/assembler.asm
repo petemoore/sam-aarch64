@@ -73,11 +73,19 @@ PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
                 include "main_loop.asm"
                 include "symbols.asm"
                 include "local_labels.asm"
+
+; Boot-time self-tests live in the test_* includes.  They are compiled
+; in only when pyz80 is invoked with `-D BUILD_TESTS=1` (see the
+; m3-asm vs m3-asm-prod Makefile rules).  A production build omits
+; both the test code and the corresponding `call run_*_self_tests`
+; lines in `start:`, saving ~1.5 KB of code budget for M5.
+if defined(BUILD_TESTS)
                 include "test_slots.asm"
                 include "test_symbols.asm"
                 include "test_local_labels.asm"
                 include "test_expr_eval_m4.asm"
                 include "test_pc_rel.asm"
+endif
                 include "print.asm"
 
 ; -----------------------------------------------------------------------
@@ -91,48 +99,26 @@ start:
 ; re-enables interrupts, so DI must be repeated after hook calls.
                 ld      sp, &C100
 
-; -- Per-slot encoder self-tests ----------------------------------------
-; Exercises encode_reg / encode_imm_n / encode_cond /
-; encode_imm12_shifted / encode_imm16_shifted against hardcoded slot
-; records (no disk I/O).  On any mismatch: jp fail (red border +
-; printer-channel "FAIL" banner, ci-m3 reports fail immediately).
-; See test_slots.asm.
-                call    run_slot_self_tests
-
-; -- Symbol-table self-tests --------------------------------------------
-; Exercises symbol_table_init / symbol_insert / symbol_lookup against
-; hard-coded ids and addresses (no disk I/O).  On any mismatch: jp fail.
-; See test_symbols.asm.
-                call    run_symbol_table_self_tests
-
-; -- Local-label table self-tests ---------------------------------------
-; Exercises local_label_table_init / local_def_append /
-; local_find_forward / local_find_backward against a hard-coded
-; per-digit PC list (no disk I/O).  On any mismatch: jp fail.
-; See test_local_labels.asm.
-                call    run_local_label_self_tests
-
-; -- Expression-evaluator M4 self-tests --------------------------------
-; Exercises eval_expr_const's new M4 opcodes (PUSH_SYM, PUSH_LOCAL,
-; PUSH_PC, REL_LO12/HI12, REL_ABS_G0..G3) against hand-rolled bytecode
-; buffers and pre-seeded PASS_PC / symbol-table / local-label-table
-; state.  On any mismatch: jp fail.  See test_expr_eval_m4.asm.
+; -- Boot-time self-tests (compiled in only when BUILD_TESTS=1) --------
+; Five suites run in fixed order BEFORE load_enctab so they have no
+; disk-state dependency.  Any assertion failure does `jp fail` (red
+; border + printer-channel "FAIL" banner, ci-m3 reports fail
+; immediately).  All five are omitted from a production build (the
+; corresponding test_* includes are also skipped — see above), saving
+; ~1.5 KB of code budget for M5.
 ;
-; This MUST run AFTER run_symbol_table_self_tests + run_local_label_self_tests
-; so it can safely re-init both tables (those suites are destructive on
-; the tables they exercise, and the M4 tests need a known starting
-; point).  PASS_PC is also clobbered by the M4 tests but is re-zeroed
-; by main_assemble's pass_pc_reset call, so the test doesn't need to
-; restore it.
+; Ordering note: M4 expr_eval / PC-rel suites MUST run AFTER the
+; symbol-table + local-label suites, because the M4 tests destructively
+; re-init both tables and need a known starting point.  PASS_PC is
+; also clobbered but is re-zeroed by main_assemble's pass_pc_reset
+; call, so it doesn't need explicit restoration here.
+if defined(BUILD_TESTS)
+                call    run_slot_self_tests
+                call    run_symbol_table_self_tests
+                call    run_local_label_self_tests
                 call    run_expr_eval_m4_self_tests
-
-; -- PC-relative slot-encoder self-tests --------------------------------
-; Exercises encode_branch_imm and encode_adrp_imm under M4 semantics:
-; caller passes an ABSOLUTE target address, the encoder subtracts
-; PASS_PC (BranchImm*) or (PASS_PC & ~0xFFF) (AdrpImm) internally.
-; PASS_PC is set explicitly per sub-test; the suite restores PASS_PC=0
-; on exit (defensive — main_assemble re-zeros it).  See test_pc_rel.asm.
                 call    run_pc_rel_self_tests
+endif
 
 ; -- Load and validate enctab.enc header --------------------------------
                 call    load_enctab

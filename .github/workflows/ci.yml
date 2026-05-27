@@ -260,3 +260,52 @@ jobs:
             echo "===== $(basename $log) ====="
             tail -20 "$log"
           done
+
+  # M4 production-variant sweep — same M4 fixture corpus, but uses the
+  # smaller production assembler binary (no boot-time self-tests).
+  # Guards against accidental divergence between the two variants:
+  # both must produce byte-identical OUT for every fixture.  M3-prod
+  # is omitted because the prod variant only differs in self-test
+  # presence (not operand handling), so passing the harder M4 corpus
+  # implies the M3 corpus also passes.
+  m4-prod:
+    runs-on: ubuntu-latest
+    needs: build-image
+    container:
+      image: ghcr.io/petemoore/sam-aarch64-dev:sha-${{ github.sha }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      SDL_VIDEODRIVER: x11
+      SDL_AUDIODRIVER: dummy
+      AARCH64_AS: aarch64-linux-gnu-as
+      AARCH64_LD: aarch64-linux-gnu-ld
+      AARCH64_OBJCOPY: aarch64-linux-gnu-objcopy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1280x1024x24 &
+          sleep 1
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+
+      - name: Mark workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Run M4 fixture corpus (production assembler)
+        run: make ci-m4-prod
+
+      - name: Post-mortem disk inspection on failure
+        if: failure()
+        run: |
+          echo "===== M4 fixtures (prod variant) ====="
+          ls tests/m4/sources/
+          echo "===== build/ artefacts ====="
+          ls -la build/ | grep -E 'mgt|tbn|bin' || true
+          for log in /tmp/m4-*.log; do
+            [ -f "$log" ] || continue
+            echo "===== $(basename $log) ====="
+            tail -20 "$log"
+          done
