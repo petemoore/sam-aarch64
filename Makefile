@@ -175,3 +175,22 @@ test-m4-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
 ci-m3-prod: test-m3-prod
 
 ci-m4-prod: test-m4-prod
+
+.PHONY: test-m5 ci-m5 test-m5-prod ci-m5-prod
+
+# test-m5 — sweep every fixture under tests/m5/sources/.  Same pipeline
+# as test-m4 (text2bin → build-m3-disk → SimCoupé → samfile extract OUT →
+# byte-compare against aarch64-*-as + ld -Ttext=0 + objcopy -O binary).
+# Per docs/specs/2026-05-27-m5-compound-operands-directives-design.md §3.
+#
+# The GitHub Actions `m5` job is added in M5 PR E (the final integration
+# PR); for now ci-m5 / ci-m5-prod run locally + via the dev container.
+test-m5: m3-asm enctab $(BUILD)/build-m3-disk text2bin
+	./tests/m5/run-roundtrip.sh
+
+test-m5-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
+	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m5/run-roundtrip.sh
+
+ci-m5: test-m5
+
+ci-m5-prod: test-m5-prod

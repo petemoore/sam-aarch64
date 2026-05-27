@@ -74,22 +74,18 @@ PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
                 include "symbols.asm"
                 include "local_labels.asm"
 
-; Boot-time self-tests live in the test_* includes.  They are compiled
-; in only when pyz80 is invoked with `-D BUILD_TESTS=1` (see the
-; m3-asm vs m3-asm-prod Makefile rules).  A production build omits
-; both the test code and the corresponding `call run_*_self_tests`
-; lines in `start:`, saving ~1.5 KB of code budget for M5.
-if defined(BUILD_TESTS)
-                include "test_slots.asm"
-                include "test_symbols.asm"
-                include "test_local_labels.asm"
-                include "test_expr_eval_m4.asm"
-                include "test_pc_rel.asm"
-endif
                 include "print.asm"
 
 ; -----------------------------------------------------------------------
 ; Main program — entry via jp from &8000.
+;
+; M5 PR-A note on placement: `start:` and `fail:` are intentionally
+; defined BEFORE the test_*.asm includes (and therefore live entirely
+; within the &8000-&9FFF region) so the production code path is not
+; disturbed when self-tests, which sit at &A000+, are overwritten by
+; load_enctab.  The self-tests run BEFORE load_enctab; by the time
+; load_enctab clobbers &A000-&AFFF the test code has already
+; completed.  See the BUILD_TESTS include block below.
 ; -----------------------------------------------------------------------
 
 start:
@@ -104,8 +100,7 @@ start:
 ; disk-state dependency.  Any assertion failure does `jp fail` (red
 ; border + printer-channel "FAIL" banner, ci-m3 reports fail
 ; immediately).  All five are omitted from a production build (the
-; corresponding test_* includes are also skipped — see above), saving
-; ~1.5 KB of code budget for M5.
+; corresponding test_* includes are also skipped — see below).
 ;
 ; Ordering note: M4 expr_eval / PC-rel suites MUST run AFTER the
 ; symbol-table + local-label suites, because the M4 tests destructively
@@ -118,6 +113,7 @@ if defined(BUILD_TESTS)
                 call    run_local_label_self_tests
                 call    run_expr_eval_m4_self_tests
                 call    run_pc_rel_self_tests
+                call    run_directives_m5_self_tests
 endif
 
 ; -- Load and validate enctab.enc header --------------------------------
@@ -173,3 +169,21 @@ fail:           ld      a, 2
                 call    print_status_string
                 di
                 halt
+
+
+; -----------------------------------------------------------------------
+; Boot-time self-test includes (BUILD_TESTS only).
+;
+; Placed AFTER `start:` and `fail:` so the production code path lives
+; entirely in &8000-&9FFF.  The test code may legitimately spill into
+; &A000+ (which becomes ENCTAB_BUF after load_enctab); by the time
+; load_enctab overwrites that region the tests have already returned.
+; -----------------------------------------------------------------------
+if defined(BUILD_TESTS)
+                include "test_slots.asm"
+                include "test_symbols.asm"
+                include "test_local_labels.asm"
+                include "test_expr_eval_m4.asm"
+                include "test_pc_rel.asm"
+                include "test_directives_m5.asm"
+endif
