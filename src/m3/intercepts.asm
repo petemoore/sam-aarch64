@@ -133,7 +133,7 @@ try_intercept_post_shift:
 ;     encode_mem_word.
                 ld      a, (try_intercept_mnem)
                 call    is_mem_mnemonic_id
-                jp      nz, try_intercept_no_match
+                jp      nz, try_intercept_post_mem
 
 ; Pair (ldp=7, stp=8): require 3 operands, kind[2] == OpMem.
                 cp      7
@@ -163,6 +163,52 @@ try_intercept_pair_check:
                 jp      nz, try_intercept_no_match
                 ld      a, (try_intercept_mnem)
                 call    encode_pair_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+
+try_intercept_post_mem:
+
+; -- OpSysName mnemonics (M5 PR-D Task 11) ----------------------------
+;   mrs  = 76    mrs Xt, <sysreg>
+;   msr  = 77    msr <sysreg>, Xt  OR  msr <pstate>, #imm
+;   dc   = 78    dc <op>, Xt
+;   tlbi = 79    tlbi <op>[, Xt]
+;
+; Each routes to its own encoder in sysname.asm.  These are unconditional
+; intercepts: the four mnemonics have no form-table entries, so a miss
+; here would always fall through to form_lookup_match → fail anyway.
+                ld      a, (try_intercept_mnem)
+                cp      76
+                jp      z, try_intercept_mrs
+                cp      77
+                jp      z, try_intercept_msr
+                cp      78
+                jp      z, try_intercept_dc
+                cp      79
+                jp      z, try_intercept_tlbi
+                jp      try_intercept_no_match
+
+try_intercept_mrs:
+                call    encode_mrs_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+
+try_intercept_msr:
+                call    encode_msr_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+
+try_intercept_dc:
+                call    encode_dc_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+
+try_intercept_tlbi:
+                call    encode_tlbi_word
                 call    intercept_emit_dehl
                 xor     a
                 ret

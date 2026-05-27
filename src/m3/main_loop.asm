@@ -468,7 +468,23 @@ main_handle_inst_parse_loop:
                 jp      z, main_parse_extended_reg
                 cp      OP_KIND_MEM
                 jp      z, main_parse_mem
-; Anything else (STRING, SYS_NAME, LIT_POOL) is M5 PR-D/E territory.
+                cp      OP_KIND_SYS_NAME
+                jp      z, main_parse_sys_name
+; OpString (0x09) as an instruction operand: defensive error path.
+;
+; No current fixture routes an OpString through this code path.  The
+; text2bin parser only emits OpString inside *directive* records
+; (.ascii / .asciz / .section flags) — see parser.go:127-131, where
+; the operand-parser routes TokString to a directive-only branch.
+; But the on-disk format permits any operand kind in any record kind,
+; so a corrupted / fuzzed / future-protocol .tbn could legitimately
+; place an OpString record here.  Explicit jp fail prevents that from
+; silently producing garbage bytes (the previous fall-through to
+; `jp fail` worked but lumped STRING in with LIT_POOL; this gives
+; STRING its own clearly-named branch for clarity).  M5 PR-D Task 14.
+                cp      OP_KIND_STRING
+                jp      z, fail
+; OP_KIND_LIT_POOL (0x0C) is M5 PR-E territory.
                 jp      fail
 
 
@@ -890,6 +906,58 @@ main_parse_mem_idxe_zero:
                 ld      (de), a
                 inc     de
                 djnz    main_parse_mem_idxe_zero
+                pop     bc
+                jp      main_handle_inst_advance
+
+
+; ---- Parse OpSysName (0x0B) — sysreg / PSTATE / DC-op / TLBI-op name --
+;
+; On entry: kind byte (0x0B) is already at OPVAL[+0]; DE points at +1.
+;           HL points at on-disk byte just past the kind byte (start of
+;           len u16).
+;
+; On-disk payload (operands.go:220-224, WriteSysName):
+;   [len u16 LE][bytes...]
+;
+; In-memory layout written into OPVAL_ARRAY entry (10 bytes total):
+;   +0 kind=0x0B
+;   +1 zero (reserved)
+;   +2..+3 name_ptr (16-bit pointer into IN_BUF)
+;   +4..+5 name_len (16-bit length)
+;   +6..+9 zero
+;
+; The encoder (sysname.asm) consumes (ptr,len) to look up the name in
+; one of the four tables: sysregs, PSTATE fields, DC ops, TLBI ops.
+main_parse_sys_name:
+                xor     a
+                ld      (de), a             ; +1 = 0 (reserved)
+                inc     de
+                ld      c, (hl)             ; len LSB
+                inc     hl
+                ld      b, (hl)             ; len MSB
+                inc     hl                  ; HL → name bytes
+                ld      a, l
+                ld      (de), a             ; +2 = name_ptr LSB
+                inc     de
+                ld      a, h
+                ld      (de), a             ; +3 = name_ptr MSB
+                inc     de
+                ld      a, c
+                ld      (de), a             ; +4 = name_len LSB
+                inc     de
+                ld      a, b
+                ld      (de), a             ; +5 = name_len MSB
+                inc     de
+; Advance HL by BC (the name bytes).
+                add     hl, bc
+; Zero +6..+9 (4 bytes of padding).
+                push    bc
+                ld      b, 4
+                xor     a
+main_parse_sys_name_zero:
+                ld      (de), a
+                inc     de
+                djnz    main_parse_sys_name_zero
                 pop     bc
                 jp      main_handle_inst_advance
 
