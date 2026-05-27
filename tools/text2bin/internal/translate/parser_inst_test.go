@@ -292,12 +292,11 @@ func TestParseInstRorReg(t *testing.T) {
 	}
 }
 
-func TestParseInstMulUdivClsSxtw(t *testing.T) {
-	f := parseHelper(t, "mul x0, x1, x2\nudiv x0, x1, x2\ncls x0, x1\nsxtw x0, w1\n")
+func TestParseInstMulUdivSxtw(t *testing.T) {
+	f := parseHelper(t, "mul x0, x1, x2\nudiv x0, x1, x2\nsxtw x0, w1\n")
 	r := format.NewRecordReader(f.Records)
 	mulID, _ := format.MnemonicID("mul")
 	udivID, _ := format.MnemonicID("udiv")
-	clsID, _ := format.MnemonicID("cls")
 	sxtwID, _ := format.MnemonicID("sxtw")
 	rec, _ := r.Next()
 	if rec.MnemonicID != mulID || rec.OperandCount != 3 {
@@ -306,10 +305,6 @@ func TestParseInstMulUdivClsSxtw(t *testing.T) {
 	rec, _ = r.Next()
 	if rec.MnemonicID != udivID || rec.OperandCount != 3 {
 		t.Errorf("udiv: %+v", rec)
-	}
-	rec, _ = r.Next()
-	if rec.MnemonicID != clsID || rec.OperandCount != 2 {
-		t.Errorf("cls: %+v", rec)
 	}
 	rec, _ = r.Next()
 	if rec.MnemonicID != sxtwID || rec.OperandCount != 2 {

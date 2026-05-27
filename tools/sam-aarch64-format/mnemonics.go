@@ -1,10 +1,25 @@
 package format
 
-// MnemonicTable is the append-only ID ↔ name map for aarch64
-// mnemonics that text2bin recognises. New mnemonics are appended;
-// existing IDs never shift (§3, §9.1).
+// MnemonicTable is the ID ↔ name map for aarch64 mnemonics that
+// text2bin recognises.  Index in the slice is the on-disk
+// mnemonic_id.
 //
-// Index in the slice is the on-disk mnemonic_id.
+// Format-stability policy (interim — see M1 spec §9, "Risks /
+// Format ossification"):
+//
+//   - **For now** (no .tbn files exist outside `build/` and `/tmp/`;
+//     none are committed to the repo, none shipped to end-users), the
+//     table is mutable: removals + renumberings are allowed, with the
+//     caveat that every consumer (manual_forms.go, data.go, the
+//     hardcoded integer dispatches in refenc/pass2.go, and any test
+//     that builds a record by literal ID) must be updated in lockstep.
+//     PR #26 (drop unused `cls`) exercised this lockstep for the
+//     first time.
+//   - **Once `.tbn` files start being shipped or persisted** (the M5
+//     compact `.tbn` format work, a packaged release, or anything
+//     where pre-built `.tbn` artefacts exist in the wild), the table
+//     reverts to strictly append-only.  Removals at that point need a
+//     format-version bump.
 var MnemonicTable = []string{
 	"nop", "add", "sub", "mov", "mvn",
 	"ldr", "str", "ldp", "stp",
@@ -59,9 +74,8 @@ var MnemonicTable = []string{
 	//       or register form RORV Rd,Rn,Rm (C6.2.197).
 	// mul:  Multiply — alias of MADD Rd,Rn,Rm,XZR (C6.2.139).
 	// udiv: Unsigned divide (C6.2.222).
-	// cls:  Count Leading Sign-bits (C6.2.39).
 	// sxtw: Sign-extend Word — alias of SBFM Xd,Xn,0,31 (C6.2.214).
-	"ror", "mul", "udiv", "cls", "sxtw",
+	"ror", "mul", "udiv", "sxtw",
 	// Unscaled load/store with signed 9-bit byte offset (ARM ARM C6.2.276 / C6.2.124).
 	// These are distinct mnemonics from ldr/str; the offset is *not* scaled.
 	"stur", "ldur",

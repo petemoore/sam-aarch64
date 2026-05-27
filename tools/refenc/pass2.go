@@ -299,7 +299,7 @@ func encodeInst(rec format.Record, pc int64, p1 *Pass1Result, f *format.File) (u
 	switch rec.MnemonicID {
 	case 17, 18: // lsl, lsr
 		return encodeLSLSR(rec.MnemonicID, operands, pc, p1, f)
-	case 49, 50, 51, 84, 85: // bfi, bfxil, ubfx, bfc, sbfx
+	case 49, 50, 51, 83, 84: // bfi, bfxil, ubfx, bfc, sbfx
 		return encodeBitfieldInst(rec.MnemonicID, operands, pc, p1, f)
 	case 47: // bic — immediate form: negate the immediate before LogicalImm
 		if len(kinds) >= 3 && kinds[2] == format.OpImmExpr {
@@ -313,13 +313,13 @@ func encodeInst(rec format.Record, pc int64, p1 *Pass1Result, f *format.File) (u
 		if len(kinds) >= 3 && kinds[2] == format.OpImmExpr {
 			return encodeRorImm(operands, pc, p1, f)
 		}
-	case 77: // mrs
+	case 76: // mrs
 		return encodeMrs(operands)
-	case 78: // msr (register or PSTATE-immediate)
+	case 77: // msr (register or PSTATE-immediate)
 		return encodeMsr(operands, pc, p1, f)
-	case 79: // dc
+	case 78: // dc
 		return encodeDc(operands)
-	case 80: // tlbi
+	case 79: // tlbi
 		return encodeTlbi(operands)
 	}
 
@@ -643,7 +643,7 @@ func isLoadMnemonic(mnemonicID uint16) bool {
 	// ldr=5, ldp=7, ldrb=54, ldrh=56, ldur=76,
 	// ldrsb=86, ldrsh=87, ldrsw=88.
 	switch mnemonicID {
-	case 5, 7, 54, 56, 76, 86, 87, 88:
+	case 5, 7, 54, 56, 75, 85, 86, 87:
 		return true
 	}
 	return false
@@ -654,7 +654,7 @@ func isLoadMnemonic(mnemonicID uint16) bool {
 // use opc=10 (signed load to Xt) or opc=11 (signed load to Wt) at bits
 // 23:22 rather than the regular load's opc=01.
 func isSignedExtendLoad(mnemonicID uint16) bool {
-	return mnemonicID == 86 || mnemonicID == 87 || mnemonicID == 88
+	return mnemonicID == 85 || mnemonicID == 86 || mnemonicID == 87
 }
 
 // isUnscaledMemMnemonic reports stur(75) / ldur(76) — the unscaled
@@ -662,7 +662,7 @@ func isSignedExtendLoad(mnemonicID uint16) bool {
 // encoding template with LDR/STR (unscaled offset) but are emitted by
 // GNU as for any STUR/LDUR mnemonic regardless of offset value.
 func isUnscaledMemMnemonic(mnemonicID uint16) bool {
-	return mnemonicID == 75 || mnemonicID == 76
+	return mnemonicID == 74 || mnemonicID == 75
 }
 
 // memInstSize returns the AArch64 "size" field (bits 31:30) and the byte
@@ -673,11 +673,11 @@ func isUnscaledMemMnemonic(mnemonicID uint16) bool {
 // ldrsw: size=10 (word), scale=4
 func memInstSize(mnemonicID uint16, rtKind format.OperandKind) (sizeBits uint32, scale int64) {
 	switch mnemonicID {
-	case 54, 55, 86: // ldrb, strb, ldrsb
+	case 54, 55, 85: // ldrb, strb, ldrsb
 		return 0b00, 1
-	case 56, 57, 87: // ldrh, strh, ldrsh
+	case 56, 57, 86: // ldrh, strh, ldrsh
 		return 0b01, 2
-	case 88: // ldrsw
+	case 87: // ldrsw
 		return 0b10, 4
 	default: // ldr(5), str(6), ldp(7), stp(8)
 		if rtKind == format.OpRegW {
@@ -696,12 +696,12 @@ func memInstOpc(mnemonicID uint16, rtKind format.OperandKind) (uint32, error) {
 	if isSignedExtendLoad(mnemonicID) {
 		switch rtKind {
 		case format.OpRegX:
-			if mnemonicID == 88 {
+			if mnemonicID == 87 {
 				return 0b10, nil // ldrsw (Xt only)
 			}
 			return 0b10, nil
 		case format.OpRegW:
-			if mnemonicID == 88 {
+			if mnemonicID == 87 {
 				return 0, fmt.Errorf("ldrsw: Rt must be Xn (no Wt form)")
 			}
 			return 0b11, nil
@@ -1071,7 +1071,7 @@ func encodeShiftedRegInst(mnemonicID uint16, operands []format.Operand, pc int64
 // plain-register operands into a no-shift ShiftedReg.
 func isShiftedRegMnemonic(id uint16) bool {
 	switch id {
-	case 1, 2, 14, 15, 16, 45, 46, 47, 81: // add, sub, and, orr, eor, subs, tst, bic, ands
+	case 1, 2, 14, 15, 16, 45, 46, 47, 80: // add, sub, and, orr, eor, subs, tst, bic, ands
 		return true
 	}
 	return false
@@ -1115,7 +1115,7 @@ func shiftedRegMnemonicFields(mnemonicID uint16, is64 bool) (sf, opc, nBit uint3
 		return sf, 0b11, 0, true, nil
 	case 47: // bic (shifted-reg, N=1): AND NOT
 		return sf, 0b00, 1, true, nil
-	case 81: // ands (shifted-reg, N=0): opc=11
+	case 80: // ands (shifted-reg, N=0): opc=11
 		return sf, 0b11, 0, true, nil
 	default:
 		return 0, 0, 0, false, fmt.Errorf("shiftedReg: unsupported mnemonic id %d", mnemonicID)
@@ -1276,7 +1276,7 @@ func encodeLSLSR(mnemonicID uint16, operands []format.Operand, pc int64, p1 *Pas
 // SBFX (85): Rd, Rn,  #lsb, #width → SBFM immr=lsb,            imms=lsb+width-1
 func encodeBitfieldInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
 	// BFC is a 3-operand alias (no Rn — it is implicitly XZR).
-	isBfc := mnemonicID == 84
+	isBfc := mnemonicID == 83
 	wantOps := 4
 	if isBfc {
 		wantOps = 3
@@ -1352,7 +1352,7 @@ func encodeBitfieldInst(mnemonicID uint16, operands []format.Operand, pc int64, 
 		} else {
 			base = 0x53000000 // UBFM 32-bit
 		}
-	case 84: // bfc: BFM alias with Rn=XZR — immr=(-lsb)%regsize, imms=width-1
+	case 83: // bfc: BFM alias with Rn=XZR — immr=(-lsb)%regsize, imms=width-1
 		immr = uint32((-lsb)&(regsize-1)) & 0x3F
 		imms = uint32(width-1) & 0x3F
 		if is64 {
@@ -1360,7 +1360,7 @@ func encodeBitfieldInst(mnemonicID uint16, operands []format.Operand, pc int64, 
 		} else {
 			base = 0x33000000 // BFM 32-bit
 		}
-	case 85: // sbfx: SBFM alias — immr=lsb, imms=lsb+width-1
+	case 84: // sbfx: SBFM alias — immr=lsb, imms=lsb+width-1
 		immr = uint32(lsb) & 0x3F
 		imms = uint32(lsb+width-1) & 0x3F
 		if is64 {

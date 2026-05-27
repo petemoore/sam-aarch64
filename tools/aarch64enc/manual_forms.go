@@ -11,7 +11,7 @@ package aarch64enc
 //     br, lsl/lsr, csel, csinc, csetm, bfi, bfxil, ubfx, sbfx, tst,
 //     bic, adr, eor, orr (shifted-reg), and, ands, movk, movn, madd,
 //     msub, umull, umulh, umaddl, umsubl, eret, wfi, ror, mul, udiv,
-//     cls, sxtw, bfc, ... and all the spectrum4 pseudo-mnemonics);
+//     sxtw, bfc, ... and all the spectrum4 pseudo-mnemonics);
 //
 //   - encoder choices that differ from the MRA's preferred alias.  The
 //     load-bearing example is `mov Xd, Xn`: the MRA emits the ADD-imm-#0
@@ -537,43 +537,33 @@ var manualForms = []Form{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},
 	}},
 
-	// cls (ID 73) — Count Leading Sign-bits.  ARM ARM C6.2.39.
-	{MnemonicID: 73, Pattern: 0x5ac01400, Mask: 0xfffffc00, Slots: []OperandSlot{
-		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
-		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
-	}},
-	{MnemonicID: 73, Pattern: 0xdac01400, Mask: 0xfffffc00, Slots: []OperandSlot{
-		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
-		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
-	}},
-
-	// sxtw (ID 74) — Sign-extend Word; alias of SBFM Xd,Xn,0,31.
+	// sxtw (ID 73) — Sign-extend Word; alias of SBFM Xd,Xn,0,31.
 	// ARM ARM C6.2.214.  immr=0, imms=31 baked.
-	{MnemonicID: 74, Pattern: 0x93407c00, Mask: 0xfffffc00, Slots: []OperandSlot{
+	{MnemonicID: 73, Pattern: 0x93407c00, Mask: 0xfffffc00, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
 	}},
 
 	// ands (ID 81) — AND setting flags.  ARM ARM C6.2.13 / C6.2.14.
 	// Immediate form:  32-bit 0x72000000, 64-bit 0xf2000000.
-	{MnemonicID: 81, Pattern: 0x72000000, Mask: 0xff800000, Slots: []OperandSlot{
+	{MnemonicID: 80, Pattern: 0x72000000, Mask: 0xff800000, Slots: []OperandSlot{
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
 		{SlotKind: LogicalImm, ExpectedKind: 5, BitPosition: 10, BitWidth: 13},
 	}},
-	{MnemonicID: 81, Pattern: 0xf2000000, Mask: 0xff800000, Slots: []OperandSlot{
+	{MnemonicID: 80, Pattern: 0xf2000000, Mask: 0xff800000, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
 		{SlotKind: LogicalImm, ExpectedKind: 5, BitPosition: 10, BitWidth: 13},
 	}},
 	// Shifted-register form, no shift (3 plain registers).
 	// 32-bit: 0x6a000000, 64-bit: 0xea000000.
-	{MnemonicID: 81, Pattern: 0x6a000000, Mask: 0xffe0fc00, Slots: []OperandSlot{
+	{MnemonicID: 80, Pattern: 0x6a000000, Mask: 0xffe0fc00, Slots: []OperandSlot{
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5},
 	}},
-	{MnemonicID: 81, Pattern: 0xea000000, Mask: 0xffe0fc00, Slots: []OperandSlot{
+	{MnemonicID: 80, Pattern: 0xea000000, Mask: 0xffe0fc00, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},
@@ -581,11 +571,11 @@ var manualForms = []Form{
 
 	// movn (ID 83) — Move Wide with Not.  ARM ARM C6.2.129.
 	// 32-bit: 0x12800000, 64-bit: 0x92800000.
-	{MnemonicID: 83, Pattern: 0x12800000, Mask: 0xffe00000, Slots: []OperandSlot{
+	{MnemonicID: 82, Pattern: 0x12800000, Mask: 0xffe00000, Slots: []OperandSlot{
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Imm16Shifted, ExpectedKind: 5, BitPosition: 5, BitWidth: 16},
 	}},
-	{MnemonicID: 83, Pattern: 0x92800000, Mask: 0xffe00000, Slots: []OperandSlot{
+	{MnemonicID: 82, Pattern: 0x92800000, Mask: 0xffe00000, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Imm16Shifted, ExpectedKind: 5, BitPosition: 5, BitWidth: 16},
 	}},
@@ -594,12 +584,12 @@ var manualForms = []Form{
 	// BFI Rd, XZR, #lsb, #width.  Encoded via encodeBfc in pass2.
 	// Form table reserves the slot shape; pass2 routes by mnemonic ID.
 	// Rn baked as 11111.
-	{MnemonicID: 84, Pattern: 0xb34003e0, Mask: 0xffc003e0, Slots: []OperandSlot{
+	{MnemonicID: 83, Pattern: 0xb34003e0, Mask: 0xffc003e0, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
 		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 16, BitWidth: 6},
 		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 10, BitWidth: 6},
 	}},
-	{MnemonicID: 84, Pattern: 0x330003e0, Mask: 0xffc003e0, Slots: []OperandSlot{
+	{MnemonicID: 83, Pattern: 0x330003e0, Mask: 0xffc003e0, Slots: []OperandSlot{
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
 		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 16, BitWidth: 6},
 		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 10, BitWidth: 6},
@@ -607,13 +597,13 @@ var manualForms = []Form{
 
 	// sbfx (ID 85) — Signed Bit Field Extract = SBFM alias.
 	// ARM ARM C6.2.205.
-	{MnemonicID: 85, Pattern: 0x93400000, Mask: 0xffc00000, Slots: []OperandSlot{
+	{MnemonicID: 84, Pattern: 0x93400000, Mask: 0xffc00000, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
 		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 16, BitWidth: 6},
 		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 10, BitWidth: 6},
 	}},
-	{MnemonicID: 85, Pattern: 0x13000000, Mask: 0xffc00000, Slots: []OperandSlot{
+	{MnemonicID: 84, Pattern: 0x13000000, Mask: 0xffc00000, Slots: []OperandSlot{
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
 		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 16, BitWidth: 6},

@@ -175,11 +175,11 @@ var generatedForms = []Form{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
 		{SlotKind: Imm12Shifted, ExpectedKind: 5, BitPosition: 10, BitWidth: 12},
 	}},
-	{MnemonicID: 82, Pattern: 0x52800000, Mask: 0xffc00000, Slots: []OperandSlot{
+	{MnemonicID: 81, Pattern: 0x52800000, Mask: 0xffc00000, Slots: []OperandSlot{
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Imm16Shifted, ExpectedKind: 5, BitPosition: 5, BitWidth: 16},
 	}},
-	{MnemonicID: 82, Pattern: 0xd2800000, Mask: 0xff800000, Slots: []OperandSlot{
+	{MnemonicID: 81, Pattern: 0xd2800000, Mask: 0xff800000, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Imm16Shifted, ExpectedKind: 5, BitPosition: 5, BitWidth: 16},
 	}},
