@@ -440,8 +440,11 @@ main_handle_inst_parse_loop:
                 jp      z, main_parse_imm
                 cp      OP_KIND_COND
                 jr      z, main_parse_cond
-; Anything else (SHIFTED_REG, EXTENDED_REG, MEM, STRING, SYS_NAME, LIT_POOL)
-; is M4 territory.
+                cp      OP_KIND_SHIFTED_REG
+                jp      z, main_parse_shifted_reg
+                cp      OP_KIND_EXTENDED_REG
+                jp      z, main_parse_extended_reg
+; Anything else (MEM, STRING, SYS_NAME, LIT_POOL) is M5 PR-C+ territory.
                 jp      fail
 
 
@@ -521,6 +524,134 @@ main_parse_imm_copy:
                 jp      main_handle_inst_advance_imm
 
 
+; ---- Parse OpShiftedReg (0x06) — `Rm, <shift> #amt` -------------------
+;
+; On entry: kind byte (0x06) is already at OPVAL[+0]; DE points at +1.
+;           HL points at on-disk byte just past the kind byte.
+;
+; Payload (per tools/sam-aarch64-format/operands.go:155-160, WriteShiftedReg):
+;   [width u8][reg u8][shift_kind u8][amt_expr_len u16][amt_expr bytes...]
+;
+; In-memory layout written into OPVAL_ARRAY entry (10 bytes total):
+;   +0 kind=0x06    +1 width    +2 reg    +3 shift_kind
+;   +4..+7 amt low-32 LE (evaluator's low 4 bytes)
+;   +8..+9 padding (zero)
+;
+; The encoder consumes only the low byte for the imm6 shift amount; we
+; keep 4 bytes so the range check can reject negative / wide values
+; cleanly (encode_shifted_reg_word in src/m3/slots/shifted_reg.asm).
+main_parse_shifted_reg:
+                ld      a, (hl)             ; width
+                inc     hl
+                ld      (de), a             ; +1 = width
+                inc     de
+                ld      a, (hl)             ; reg
+                inc     hl
+                ld      (de), a             ; +2 = reg
+                inc     de
+                ld      a, (hl)             ; shift_kind
+                inc     hl
+                ld      (de), a             ; +3 = shift_kind
+                inc     de
+                jp      main_parse_amt_expr_tail
+
+
+; ---- Parse OpExtendedReg (0x07) — `Rm, <extend> #amt` ------------------
+;
+; On entry: kind byte (0x07) is already at OPVAL[+0]; DE points at +1.
+;
+; Payload (per tools/sam-aarch64-format/operands.go:164-168,
+; WriteExtendedReg):
+;   [width u8][reg u8][extend u8][amt_expr_len u16][amt_expr bytes...]
+;
+; amt_expr may be empty (no `#N` suffix); main_parse_amt_expr_tail
+; handles len=0 by storing amt=0.
+;
+; In-memory layout (10 bytes):
+;   +0 kind=0x07    +1 width    +2 reg    +3 extend
+;   +4..+7 amt low-32 LE        +8..+9 padding
+;
+; The encoder (src/m3/slots/extended_reg.asm) consumes only the low
+; byte for the imm3 shift amount (0..4 valid per ARM ARM).
+main_parse_extended_reg:
+                ld      a, (hl)             ; width
+                inc     hl
+                ld      (de), a             ; +1
+                inc     de
+                ld      a, (hl)             ; reg
+                inc     hl
+                ld      (de), a             ; +2
+                inc     de
+                ld      a, (hl)             ; extend
+                inc     hl
+                ld      (de), a             ; +3
+                inc     de
+                ; fall through into main_parse_amt_expr_tail (shared with
+                ; OpShiftedReg).
+
+
+; ---- main_parse_amt_expr_tail — shared amt_expr evaluator ----------------
+;
+; OpShiftedReg (M5 PR-B Task 5) and OpExtendedReg (Task 6) both trail
+; their fixed prefix with `[amt_expr_len u16][bytes...]`.  Read the
+; length; if 0 store amt = 0, otherwise evaluate via eval_expr_const
+; and copy the low 4 bytes into OPVAL +4..+7.  Then zero +8..+9 and
+; advance.
+;
+; Input:  HL = on-disk pointer at amt_expr_len's first byte.
+;         DE = OPVAL_ARRAY entry's +4 slot.
+; Output: OPVAL +4..+9 populated; HL bumped past the amt_expr.
+; Clobbers: A, BC, DE, HL.
+main_parse_amt_expr_tail:
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)
+                inc     hl                  ; HL → bytecode start; BC = len
+                ld      (main_opval_src), hl
+
+                ld      a, b
+                or      c
+                jr      nz, main_parse_amt_eval
+; Zero-length amt expression: amt = 0.  Zero expr_result so the copy
+; below propagates that.
+                push    de
+                ld      hl, expr_result
+                ld      b, 8
+                xor     a
+main_parse_amt_zero_loop:
+                ld      (hl), a
+                inc     hl
+                djnz    main_parse_amt_zero_loop
+                pop     de
+                jp      main_parse_amt_copy
+
+main_parse_amt_eval:
+                push    de
+                push    bc
+                call    eval_expr_const     ; HL=bytecode, BC=len → expr_result
+                pop     bc
+                pop     de
+                ld      hl, (main_opval_src)
+                add     hl, bc              ; HL past amt_expr bytecode
+                ld      (main_opval_src), hl
+
+main_parse_amt_copy:
+; Copy expr_result[0..3] → OPVAL[+4..+7].  Zero OPVAL[+8..+9].
+                ld      hl, expr_result
+                ld      b, 4
+main_parse_amt_copy_loop:
+                ld      a, (hl)
+                ld      (de), a
+                inc     hl
+                inc     de
+                djnz    main_parse_amt_copy_loop
+                xor     a
+                ld      (de), a
+                inc     de
+                ld      (de), a
+                jp      main_handle_inst_advance_imm
+
+
 ; main_handle_inst_advance — common tail after a non-imm operand parse:
 ;   - opval_dest += OPVAL_STRIDE
 ;   - opval_src is already advanced by the parser branch (HL).
@@ -573,6 +704,12 @@ main_kinds_loop:
                 djnz    main_kinds_loop
 
 main_kinds_built:
+; Mnemonic-ID intercepts (M5 PR-B): ror-imm, OpShiftedReg,
+; OpExtendedReg.  See src/m3/intercepts.asm.  Z=1 → handled (skip form
+; lookup; PASS_PC already advanced); Z=0 → fall through to form table.
+                call    try_mnemonic_intercept
+                jp      z, walk_records
+
 ; Find first form for this mnemonic.
                 ld      de, (main_mnemonic_id)
                 call    form_lookup_find_first

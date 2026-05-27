@@ -65,10 +65,13 @@ PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
                 include "slots/adrp_imm.asm"
                 include "slots/logical_imm.asm"
                 include "slots/bitfield_imm.asm"
+                include "slots/shifted_reg.asm"
+                include "slots/extended_reg.asm"
                 include "ml.asm"
                 include "expr_eval.asm"
                 include "form_lookup.asm"
                 include "encoder.asm"
+                include "intercepts.asm"
                 include "reader.asm"
                 include "main_loop.asm"
                 include "symbols.asm"
@@ -114,6 +117,9 @@ if defined(BUILD_TESTS)
                 call    run_expr_eval_m4_self_tests
                 call    run_pc_rel_self_tests
                 call    run_directives_m5_self_tests
+                call    run_ror_imm_self_tests
+                call    run_shifted_reg_self_tests
+                call    run_extended_reg_self_tests
 endif
 
 ; -- Load and validate enctab.enc header --------------------------------
@@ -186,4 +192,7 @@ if defined(BUILD_TESTS)
                 include "test_expr_eval_m4.asm"
                 include "test_pc_rel.asm"
                 include "test_directives_m5.asm"
+                include "test_ror_imm.asm"
+                include "test_shifted_reg.asm"
+                include "test_extended_reg.asm"
 endif
