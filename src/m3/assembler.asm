@@ -4,13 +4,25 @@
 ; Boot via M0's BASIC autorun pattern:
 ;   CLEAR&7FFF: LOAD CODE "assembler" 32768: CALL 32768
 ;
-; Layout:
-;   &8000-&8FFF  assembler code (this file + includes; ~683 bytes today)
-;   &9000-&BFFF  enctab.enc buffer (12 KB; inside HLOAD's &8000-&BFFF range)
-;   &C000-&C0FF  stack (grows down from &C100 into section D)
+; Memory layout (M3 post-Task-16):
+;   &8000-&9FFF  assembler code (8 KB; this file + all M3 includes)
+;   &A000-&AFFF  enctab.enc buffer (4 KB; ENCTAB_BUF in loader.asm)
+;   &B000-&B7FF  IN .tbn buffer (2 KB; IN_BUF below)
+;   &B800-&BFFF  OUT buffer (2 KB; OUT_BUF below)
+;   &C000-&C0FF  stack (SP = &C100, grows down into section D RAM)
+;   &C100-&FFFF  scratch (OPVAL arrays, etc.) — section D RAM
 ;
 ; Note: pyz80 does not support the END directive. Assembly ends at EOF.
 ; The org directive sets the load address; the entry point is the first byte.
+
+IN_BUF:         equ     &B000          ; .tbn source buffer (section C; HLOAD dest)
+IN_BUF_END:     equ     &B800          ; one past end of IN buffer (2 KB)
+OUT_BUF:        equ     &B800          ; output buffer (section C; HSAVE source)
+OUT_BUF_END:    equ     &C000          ; one past end of OUT buffer (2 KB)
+
+OPVAL_ARRAY:    equ     &C100          ; 7 * 10 = 70 bytes — operand value array
+OPVAL_KINDS:    equ     &C150          ; 7 bytes — kinds[] for form_lookup_match
+
 
                 org     &8000
 
@@ -29,6 +41,12 @@
                 include "slots/adrp_imm.asm"
                 include "slots/logical_imm.asm"
                 include "slots/bitfield_imm.asm"
+                include "ml.asm"
+                include "expr_eval.asm"
+                include "form_lookup.asm"
+                include "encoder.asm"
+                include "reader.asm"
+                include "main_loop.asm"
                 include "test_slots.asm"
 
 ; -----------------------------------------------------------------------
@@ -40,9 +58,6 @@ start:
 
 ; Set up the stack before any call.  SAMDOS's EI in the RST 8 hook
 ; re-enables interrupts, so DI must be repeated after hook calls.
-; SP must be valid before any CALL; loader.asm also sets it, but we
-; want it correct for the call itself.
-; Stack lives at &C000-&C0FF (section D, HMPR+1 page — always writable).
                 ld      sp, &C100
 
 ; -- Per-slot encoder self-tests ----------------------------------------
@@ -53,10 +68,18 @@ start:
                 call    run_slot_self_tests
 
 ; -- Load and validate enctab.enc header --------------------------------
-; HGTHD+HLOAD enctab.enc into &C100, then check magic "ENC1" / version=1.
                 call    load_enctab
 
-; -- Header valid: signal clean success ----------------------------------
+; -- Initialise form-lookup pointers (form table base + index base) -----
+                call    form_lookup_init
+
+; -- Run the assemble pass: load IN, walk records, build OUT -----------
+                call    main_assemble
+
+; -- Write OUT to disk via HSAVE ----------------------------------------
+                call    save_out_file
+
+; -- Clean exit ---------------------------------------------------------
 ; The DI at start: is undone by SAMDOS's EI inside the RST 8 hook window
 ; (ROM PTDOS does EI before dispatching — per src/stub.asm citation).
 ; Re-issue DI so HALT with IFF1=0 triggers SimCoupé's -exitonhalt.

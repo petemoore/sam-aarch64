@@ -22,12 +22,16 @@
 ; BASIC's `LOAD CODE` provably exercises every time the auto-boot loads
 ; "assembler" before we even start running.
 ;
-; Memory layout used here:
-;   &8000-&8FFF  assembler code (this file + includes; ~683 bytes today)
-;   &9000-&BFFF  enctab buffer (12 KB; holds entire enctab.enc file body)
+; Memory layout used here (post-M3-Task-16 layout):
+;   &8000-&9FFF  assembler code (8 KB; this file + all M3 includes)
+;   &A000-&AFFF  enctab buffer (4 KB; holds entire enctab.enc file body,
+;                currently ~3.3 KB)
+;   &B000-&B7FF  IN .tbn buffer (2 KB)
+;   &B800-&BFFF  OUT buffer (2 KB)
 ;   &C000-&C0FF  stack (SP = &C100, grows down into section D)
+;   &C100-&FFFF  scratch (OPVAL arrays, eval stack, etc.) — section D RAM
 ;
-; ENCTAB_BUF (&9000) lives inside section C (&8000-&BFFF, the HMPR page),
+; ENCTAB_BUF (&A000) lives inside section C (&8000-&BFFF, the HMPR page),
 ; satisfying the Tech Manual's "HL must be &8000-&BFFF" rule for HLOAD
 ; (page 211).  The rule is enforced by the auto-wrap-fix in SAMDOS's
 ; `ctas` (`samdos/src/c.s:347-369`) which fires on every track step:
@@ -68,8 +72,14 @@
 ; Constants
 ; -----------------------------------------------------------------------
 
-ENCTAB_BUF:     equ     &9000          ; load enctab.enc body here (section C,
+ENCTAB_BUF:     equ     &A000          ; load enctab.enc body here (section C,
                                        ; inside HLOAD's required &8000-&BFFF range)
+                                       ; M3 layout: code at &8000-&9FFF, enctab at
+                                       ; &A000-&AFFF, IN at &B000-&B7FF, OUT at
+                                       ; &B800-&BFFF.  Was &9000 in the pre-Task-16
+                                       ; layout when only enctab needed section C
+                                       ; space — moved up to give code 8KB instead
+                                       ; of 4KB.
 STACK_TOP:      equ     &C100          ; SP before any call (grows down into section D)
 ENCTAB_LEN:     equ     3329           ; current enctab.enc body size; build-time
                                        ; constant (matches build/enctab.enc;
