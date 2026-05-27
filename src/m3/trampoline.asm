@@ -282,9 +282,26 @@ TRAMPOLINE_DST: equ     &7E00          ; section-B copy destination
 ; regardless of where the trampoline copy itself lives.
 ;
 ; Placed at TRAMPOLINE_DST + 32 to leave plenty of headroom for the
-; trampoline body (currently 15 bytes; a future extension might
-; lengthen it, e.g. to do an HSAVE-side mirror).
+; trampoline body (30 bytes post-SP-switch).
 HMPR_SAVE:      equ     TRAMPOLINE_DST + 32
+
+; SP_SAVE — 2 bytes immediately after HMPR_SAVE.  The trampoline
+; switches SP into a section-B-stable location for the duration of
+; the RST 8 (see "Why we switch SP" below).  HLOAD's auto-paging
+; writes can clobber addresses in section D (= HMPR+1 page during
+; HLOAD), and the RST 8 hardware push lands wherever SP points —
+; if that's in section D, the saved return address is corrupted by
+; HLOAD's spillover for files > 16632 B.  Per
+; docs/notes/2026-05-28-hload-16k-limit-investigation.md.
+SP_SAVE:        equ     TRAMPOLINE_DST + 33    ; 2 bytes (33, 34)
+
+; TRAMP_SAFE_SP — value SP is switched to during the RST 8.  Chosen
+; near the top of section B (which is LMPR-stable) but well clear of
+; the trampoline body and HMPR_SAVE/SP_SAVE bytes.  The RST 8 push
+; lands at TRAMP_SAFE_SP-1 and TRAMP_SAFE_SP-2 (= &7EFE / &7EFF) —
+; in section B, untouched by HLOAD.  Matches COMET's `LD SP,(sproom)`
+; pattern at `comet.asm:1189` (see investigation note).
+TRAMP_SAFE_SP:  equ     TRAMPOLINE_DST + 256   ; = &7F00
 
 
 ; -----------------------------------------------------------------------
@@ -346,6 +363,12 @@ trampoline_body:
                 ld      (HMPR_SAVE), a          ; save to absolute section-B
                                                 ; address (LMPR-stable across
                                                 ; the upcoming HMPR change)
+                ld      (SP_SAVE), sp           ; save caller's SP — see "Why
+                                                ; we switch SP" below.
+                ld      sp, TRAMP_SAFE_SP       ; switch to section-B-stable SP
+                                                ; so the upcoming RST 8 push
+                                                ; lands in section B, not in
+                                                ; section D where HLOAD writes.
                 ld      a, b                    ; A = target page
                 out     (251), a                ; HMPR = target
                                                 ; (section C/D now points at
@@ -359,12 +382,45 @@ trampoline_body:
                                                 ; matter because we restore
                                                 ; AF below)
                 out     (251), a                ; HMPR restored
+                ld      sp, (SP_SAVE)           ; restore caller's SP — must
+                                                ; happen AFTER HMPR is restored
+                                                ; so that any subsequent stack
+                                                ; access lands in the caller's
+                                                ; native section D = HMPR+1.
                 ex      af, af'                 ; restore HLOAD's AF
                 di                              ; PTDOS does EI inside RST 8;
                                                 ; restore the no-interrupts
                                                 ; invariant
                 ret
 trampoline_body_end:
+
+; -----------------------------------------------------------------------
+; Why we switch SP
+; ----------------
+;
+; Without the SP-switch, the trampoline issues RST 8 with SP still
+; pointing into the CALLER's section D — and after the trampoline
+; sets HMPR = IN_BASE_PAGE, section D maps to physical page
+; (IN_BASE_PAGE + 1).  The Z80's RST 8 hardware push lands the return
+; address at offsets in that page corresponding to (caller_SP - 2).
+;
+; For SP = &C100 and IN_BASE_PAGE = 7, the push lands at page 8
+; offset &00F8 / &00F9.  HLOAD's auto-paging spills writes into page 8
+; starting at offset 0; once the file exceeds 16384 + ~248 = 16632
+; bytes, the spillover reaches offset &F8 and overwrites the saved
+; return address.  PTDOS's eventual RET pops garbage and hangs.
+;
+; The fix is the COMET workaround at `comet.asm:1189`: switch SP to
+; an LMPR-stable section-B address for the duration of the RST 8.
+; PTDOS reads caller's SP via `LD HL, 0; ADD HL, SP` (saving it on its
+; OWN stack at &8000), then switches SP to &8000 for dispatch, and
+; restores caller's SP at exit.  Our trampoline's SP_SAVE value gets
+; pushed/popped by PTDOS as part of that dance — invisible to HLOAD's
+; section-D writes.
+;
+; With the switch in place, paged-IN files up to ≥ 32 KB load cleanly
+; (verified empirically per
+; docs/notes/2026-05-28-hload-16k-limit-investigation.md).
 
 
 ; -----------------------------------------------------------------------
