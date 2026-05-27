@@ -1,50 +1,56 @@
 ; loader.asm — enctab.enc reader and header validator.
 ;
-; Loads the entire encoder-table file from disk into ENCTAB_BUF via SAMDOS
-; HGTHD (hook 129) + HLOAD (hook 130), then validates the magic "ENC1" and
-; version=1 in RAM.  This mirrors how BASIC's `LOAD CODE` ultimately drives
-; SAMDOS (gtfle + ldblk) and is the documented "production" path for
-; loading whole files into a non-section-A target.
+; Loads the entire encoder-table file from disk into ENCTAB's dedicated
+; physical RAM page (page 4) via SAMDOS HGTHD (hook 129) + HLOAD
+; (hook 130), then validates the magic "ENC1" and version=1 in RAM.
 ;
 ; Per docs/specs/2026-05-24-m3-z80-emitter-design.md §2.3.
 ; Format citation: docs/specs/2026-05-24-m2-encoder-tables-design.md §2.
 ;
-; Why HGTHD + HLOAD and not HGFLE + LBYT?
+; M5 budget-lever change: ENCTAB no longer lives in section C
+; -----------------------------------------------------------
+; Pre-M5: ENCTAB was loaded directly into &A000 in section C (alongside
+; the assembler code).  This stole 4 KB from the code budget — fine for
+; M3 / M4 but blocked M5's compound-operand encoders which push code
+; size past 8 KB.  Per the design source `docs/specs/2026-05-27-samdos-
+; load-idiom.md` we now use the COMET-style trampoline pattern to load
+; ENCTAB into a dedicated physical RAM page (page 4) outside section C.
+; This frees &A000-&AFFF for code use, opening 12 KB total for code
+; (&8000-&AFFF) instead of 8 KB (&8000-&9FFF).
 ;
-; HGFLE+LBYT is the byte-at-a-time API, but a previous spike found the
-; first LBYT after HGFLE returning 0x00 instead of the file's first payload
-; byte ('E' = 0x45).  The audit (`docs/notes/sam-stub-audit.md` §"Hook 158
-; — HGFLE") asserts HGFLE leaves the read pointer past the 9-byte file
-; header — but that claim is from static reading of the SAMDOS source,
-; never observed in practice.  HSAVE-then-extract diagnostics confirmed all
-; eight LBYTs after HGFLE return 0x00.  Root cause unclear; HLOAD instead
-; bypasses LBYT entirely and uses ldblk's block-copy loop, which is what
-; BASIC's `LOAD CODE` provably exercises every time the auto-boot loads
-; "assembler" before we even start running.
-;
-; Memory layout used here (post-M3-Task-16 layout):
-;   &8000-&9FFF  assembler code (8 KB; this file + all M3 includes)
-;   &A000-&AFFF  enctab buffer (4 KB; holds entire enctab.enc file body,
-;                currently ~3.3 KB)
+; Memory layout (M5 post-budget-lever):
+;   &0000-&3FFF  ROM0 (section A, default)     OR  page 4 = ENCTAB
+;                                                  (when LMPR = LMPR_ENCTAB)
+;   &4000-&7FFF  page 1 (section B, default)
+;                  with trampoline copy at TRAMPOLINE_DST (= &7E00)
+;   &8000-&AFFF  assembler code (12 KB; this file + all M3/M4/M5 includes)
 ;   &B000-&B7FF  IN .tbn buffer (2 KB)
 ;   &B800-&BFFF  OUT buffer (2 KB)
 ;   &C000-&C0FF  stack (SP = &C100, grows down into section D)
-;   &C100-&FFFF  scratch (OPVAL arrays, eval stack, etc.) — section D RAM
+;   &C100-&FFFF  scratch (OPVAL arrays, eval stack, SYMTAB etc.) —
+;                section D RAM
 ;
-; ENCTAB_BUF (&A000) lives inside section C (&8000-&BFFF, the HMPR page),
-; satisfying the Tech Manual's "HL must be &8000-&BFFF" rule for HLOAD
-; (page 211).  The rule is enforced by the auto-wrap-fix in SAMDOS's
-; `ctas` (`samdos/src/c.s:347-369`) which fires on every track step:
-; HL just outside &8000-&BFFF wraps to &8000 the next time a sector
-; crosses a track boundary.  Earlier M3 spikes loaded into section D
-; (&C100) and dodged the wrap by ensuring enctab.enc lived on a single
-; track — fragile, since growing the table or moving it on disk would
-; silently corrupt the load.  Keeping HL in section C makes the load
-; correct regardless of the file's on-disk layout.
+;   Physical page 4: ENCTAB (paged into section A on demand via
+;                LMPR = LMPR_ENCTAB).
 ;
-; Stack at &C100 is fine: only HLOAD's destination is constrained by
-; the section-C rule.  SP grows down into section D (&C000-&FFFF) which
-; is always writable RAM.
+; The trampoline lives in section B because HMPR changes paged out
+; whatever was in section C/D — so the trampoline's own code must
+; live in LMPR-controlled memory (A or B) to remain executable across
+; the HMPR change.  See `src/m3/trampoline.asm` for full design notes.
+;
+; Why HGTHD + HLOAD and not HGFLE + LBYT?
+;
+; HGFLE+LBYT is the byte-at-a-time API, but a previous spike found the
+; first LBYT after HGFLE returning 0x00 instead of the file's first
+; payload byte ('E' = 0x45).  The audit
+; (`docs/notes/sam-stub-audit.md` §"Hook 158 — HGFLE") asserts HGFLE
+; leaves the read pointer past the 9-byte file header — but that
+; claim is from static reading of the SAMDOS source, never observed
+; in practice.  HSAVE-then-extract diagnostics confirmed all eight
+; LBYTs after HGFLE return 0x00.  Root cause unclear; HLOAD instead
+; bypasses LBYT entirely and uses ldblk's block-copy loop, which is
+; what BASIC's `LOAD CODE` provably exercises every time the
+; auto-boot loads "assembler" before we even start running.
 ;
 ; UIFA name block convention (from src/sam_io.inc / M0's stub.asm):
 ;   1 byte   type     (19 = code file, FT_CODE)
@@ -56,30 +62,31 @@
 ; IMPORTANT: SAMDOS hook calls (RST 8 + DEFB code) clobber a few caller
 ; registers via the ROM PTDOS dispatcher and the SAMDOS rfhk epilogue:
 ;   - B is overwritten with the previous LMPR value by PTDOS step 1
-;     (rom-v3.0_annotated-disassembly.txt:12944-12978).  SAMDOS does not
-;     restore B from hkbc (`samdos/src/d.s:284-289 bcr` is the normal
-;     return path; it only restores the border colour).
+;     (rom-v3.0_annotated-disassembly.txt:12944-12978).  SAMDOS does
+;     not restore B from hkbc (`samdos/src/d.s:284-289 bcr` is the
+;     normal return path; it only restores the border colour).
 ;   - E is forced to 0 by `rfhk` (`samdos/src/b.s:475-479`), which does
 ;     `xor a; ld e, a` before tail-calling bcr.
-;   - IX is left at `dchan` after any hook that calls `gtixd` or `fdhr`
-;     (HLOAD, HGTHD, HGFLE, HSAVE, ...).  The dispatcher saves caller's
-;     IX to `(svhdr)` at `b.s:440` but never restores it.
-; Consequence: do NOT use B as a loop counter, or E as a low byte of a
-; pointer, across any RST 8 hook.  Re-load IX if you need it elsewhere.
+;   - IX is left at `dchan` after any hook that calls `gtixd` or
+;     `fdhr` (HLOAD, HGTHD, HGFLE, HSAVE, ...).  The dispatcher saves
+;     caller's IX to `(svhdr)` at `b.s:440` but never restores it.
+; Consequence: do NOT use B as a loop counter, or E as a low byte of
+; a pointer, across any RST 8 hook.  Re-load IX if you need it
+; elsewhere.
 
 
 ; -----------------------------------------------------------------------
 ; Constants
 ; -----------------------------------------------------------------------
 
-ENCTAB_BUF:     equ     &A000          ; load enctab.enc body here (section C,
-                                       ; inside HLOAD's required &8000-&BFFF range)
-                                       ; M3 layout: code at &8000-&9FFF, enctab at
-                                       ; &A000-&AFFF, IN at &B000-&B7FF, OUT at
-                                       ; &B800-&BFFF.  Was &9000 in the pre-Task-16
-                                       ; layout when only enctab needed section C
-                                       ; space — moved up to give code 8KB instead
-                                       ; of 4KB.
+; HLOAD destination address — must lie in section C per Tech Manual
+; (page 211).  The trampoline reprograms HMPR so this address maps to
+; ENCTAB_PAGE for the duration of the HLOAD call.  &8000 chosen
+; because (a) it satisfies the &8000-&BFFF constraint, (b) it's the
+; start of section C so the entire 16 KB section maps to physical
+; page 4 cleanly (no offset arithmetic needed).
+ENCTAB_LOAD_HL: equ     &8000
+
 STACK_TOP:      equ     &C100          ; SP before any call (grows down into section D)
 ENCTAB_LEN:     equ     3329           ; current enctab.enc body size; build-time
                                        ; constant (matches build/enctab.enc;
@@ -87,12 +94,16 @@ ENCTAB_LEN:     equ     3329           ; current enctab.enc body size; build-tim
 
 
 ; -----------------------------------------------------------------------
-; load_enctab — load enctab.enc into ENCTAB_BUF via HGTHD+HLOAD, validate
-;               header.
+; load_enctab — load enctab.enc into ENCTAB physical page (page 4) via
+;               HGTHD+trampoline_hload, validate header.
 ;
-; Input:  none
-; Output: HL = ENCTAB_BUF (pointer to validated enctab data)
-; On mismatch: jp fail (red border + printer-channel "FAIL" banner, then clean exit → exit 124)
+; Input:  none (precondition: enctab_trampoline_setup has been called
+;         to install the trampoline copy at TRAMPOLINE_DST).
+; Output: ENCTAB byte 0 sits at ENCTAB_PAGE physical address; reads
+;         via section A (after enctab_map_in) at &0000 see the
+;         validated table.  HL is undefined.
+; On mismatch: jp fail (red border + printer-channel "FAIL" banner,
+;              then clean exit → exit 124)
 ; Clobbers: A, BC, DE, HL, IX (everything except SP).
 ; -----------------------------------------------------------------------
 load_enctab:
@@ -112,61 +123,76 @@ load_enctab:
                 rst     8
                 defb    HOOK_HGTHD     ; 129 — longjmps on "file not found"
 
-; -- HLOAD (hook 130): copy file body to memory --------------------------
-; Calling convention (samdos/src/b.s:439-470 dispatcher does `exx` then
-; saves the now-swapped HL'/DE'/BC' to (hkhl)/(hkde)/(hkbc) — meaning the
-; CALLER'S MAIN register set is what gets saved, not the alternates).
-; HLOAD's dschd then reads them back via `ld hl,(hkhl)` etc.
-; (samdos/src/h.s:74-90):
-;   HL = destination address (Tech Manual: 8000-BFFF — satisfied by
-;        ENCTAB_BUF=&9000; see header comment for the wrap-fix details).
-;   C  = number of full 16K pages used by the file (BC: only C matters,
-;        B is discarded).
-;   DE = length modulo 16K; HLOAD's dschd does `res 7, d` to cap at <16K.
-;   IX = UIFA (already set by fill_uifa above).
-; For enctab.enc (3329 bytes < 16K): C=0, DE=3329 (=0x0d01).
-                ld      hl, ENCTAB_BUF
-                ld      bc, 0          ; B=0 (don't care), C=0 (0 full 16K pages)
-                ld      de, ENCTAB_LEN ; length modulo 16K (whole file fits)
-                rst     8
-                defb    HOOK_HLOAD     ; 130 — longjmps on read error
+; -- HLOAD via the section-B trampoline ---------------------------------
+; The trampoline (installed at TRAMPOLINE_DST by enctab_trampoline_setup)
+; reprograms HMPR to ENCTAB_PAGE around the RST 8, so the load writes
+; through HL=&8000 land in physical page 4 instead of the page our code
+; is currently running from (page 2).  See `src/m3/trampoline.asm` and
+; `docs/specs/2026-05-27-samdos-load-idiom.md` for the full pattern.
+;
+; Calling convention (mirrors COMET's `comet.asm:1191-1200`):
+;   HL = &8000      (section-C window; satisfies Tech Manual constraint)
+;   B  = ENCTAB_PAGE (target physical page for the load)
+;   C  = 0          (0 full 16 KB pages used; whole file < 16 KB)
+;   DE = ENCTAB_LEN (length modulo 16 KB)
+;   IX = UIFA       (already set by fill_uifa above)
+                ld      hl, ENCTAB_LOAD_HL
+                ld      b, ENCTAB_PAGE
+                ld      c, 0
+                ld      de, ENCTAB_LEN
+                call    TRAMPOLINE_DST  ; runs the trampoline copy in section B
 
-; -- Validate magic "ENC1" -----------------------------------------------
-; pyz80 character literals use double-quoted single chars: "E" = ord('E') = 69.
-; Citation: pyz80 source (pyz80.py:436: char literal substitution via double quotes).
-                ld      hl, ENCTAB_BUF
+; -- Validate magic "ENC1" via section-A mapping -------------------------
+; The trampoline left HMPR at its original value, so section C is back
+; to our code page.  To read ENCTAB now, map page 4 into section A.
+;
+; pyz80 character literals use double-quoted single chars:
+; "E" = ord('E') = 69.  Citation: pyz80 source (pyz80.py:436).
+                call    enctab_map_in           ; LMPR=&24 → section A = page 4
+                ld      hl, ENCTAB_BASE
                 ld      a, (hl)
                 cp      "E"
-                jp      nz, fail
+                jp      nz, load_enctab_fail
                 inc     hl
                 ld      a, (hl)
                 cp      "N"
-                jp      nz, fail
+                jp      nz, load_enctab_fail
                 inc     hl
                 ld      a, (hl)
                 cp      "C"
-                jp      nz, fail
+                jp      nz, load_enctab_fail
                 inc     hl
                 ld      a, (hl)
                 cp      "1"
-                jp      nz, fail
+                jp      nz, load_enctab_fail
 
 ; -- Validate version = 1 ------------------------------------------------
-; Version is u16 LE at bytes 4-5 of the file (ENCTAB_BUF+4, ENCTAB_BUF+5).
+; Version is u16 LE at bytes 4-5 of the file (ENCTAB_BASE+4, +5).
 ; Expect version_lo = 1, version_hi = 0.
 ; Citation: docs/specs/2026-05-24-m2-encoder-tables-design.md §2.
-                inc     hl             ; hl = ENCTAB_BUF + 4 (version_lo)
+                inc     hl             ; hl = ENCTAB_BASE + 4 (version_lo)
                 ld      a, (hl)
                 cp      1
-                jp      nz, fail
-                inc     hl             ; hl = ENCTAB_BUF + 5 (version_hi)
+                jp      nz, load_enctab_fail
+                inc     hl             ; hl = ENCTAB_BASE + 5 (version_hi)
                 ld      a, (hl)
                 or      a              ; expect 0
-                jp      nz, fail
+                jp      nz, load_enctab_fail
 
-; -- Header validated.  Return HL = ENCTAB_BUF. -------------------------
-                ld      hl, ENCTAB_BUF
+; -- Header validated.  Restore section A to ROM before returning so
+; the caller can safely call SAMDOS hooks (load_in_file does so).
+; The caller will re-issue enctab_map_in before walking the form
+; table.
+                call    enctab_map_out
                 ret
+
+; -- Mismatch path: restore LMPR before jp fail so the fail handler
+; runs in a known LMPR state (defensive — fail itself doesn't access
+; ROM, but downstream printer / border-port writes are easier to
+; reason about with the default mapping).
+load_enctab_fail:
+                call    enctab_map_out
+                jp      fail
 
 
 ; -----------------------------------------------------------------------

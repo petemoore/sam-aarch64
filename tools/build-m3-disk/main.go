@@ -150,13 +150,17 @@ func main() {
 	}
 
 	// Slot 3: enctab.enc CODE file. Loaded at startup by src/m3/loader.asm
-	// via SAMDOS HLOAD. Load address matches ENCTAB_BUF in loader.asm (&A000),
-	// which sits inside section C (&8000-&BFFF) — the address range the
-	// SAMDOS auto-wrap-fix in ctas enforces for HLOAD destinations.
-	// Bumped from &9000 to &A000 in M3 Task 16 to give the assembler binary
-	// 8KB of code room (&8000-&9FFF) instead of the original 4KB.
+	// via SAMDOS HGTHD + trampoline_hload into physical page 4 (outside
+	// section C — see src/m3/trampoline.asm and docs/specs/2026-05-27-
+	// samdos-load-idiom.md for the trampoline pattern that makes this
+	// possible).  The recorded load address here is documentary only:
+	// HGTHD reads it into DIFA at runtime but our loader.asm supplies
+	// its own HL (= &8000) and HMPR-target-page (= 4) values when
+	// calling the trampoline, so the recorded value is never honoured
+	// directly.  We record &8000 (the trampoline's section-C window)
+	// to make the on-disk catalogue match the runtime HL value.
 	// executionAddress=0 means no auto-exec.
-	const EnctabLoadAddress uint32 = 0xA000
+	const EnctabLoadAddress uint32 = 0x8000
 	if err := disk.AddCodeFile("enctab.enc", enctabData, EnctabLoadAddress, 0); err != nil {
 		log.Fatalf("AddCodeFile(enctab.enc): %v", err)
 	}

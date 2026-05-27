@@ -7,11 +7,11 @@
 ; The mnemonic index lives at the tail of enctab.enc per the M2 spec
 ; §2 layout.  enctab.enc body in memory:
 ;
-;   ENCTAB_BUF + 0    "ENC1"               4 bytes
-;   ENCTAB_BUF + 4    version u16          2 bytes
-;   ENCTAB_BUF + 6    flags   u16          2 bytes
-;   ENCTAB_BUF + 8    form_count u32       4 bytes
-;   ENCTAB_BUF + 12   forms[count] ...
+;   ENCTAB_BASE + 0    "ENC1"               4 bytes
+;   ENCTAB_BASE + 4    version u16          2 bytes
+;   ENCTAB_BASE + 6    flags   u16          2 bytes
+;   ENCTAB_BASE + 8    form_count u32       4 bytes
+;   ENCTAB_BASE + 12   forms[count] ...
 ;     Each form: 2+1+4+4 = 11 byte header + slots*4 bytes
 ;   <after forms>     index_count u32      4 bytes
 ;     Each entry: 2+4+2 = 8 bytes
@@ -30,8 +30,8 @@
 ; form_lookup_init — compute FORMS_BASE and INDEX_BASE pointers by
 ; walking the form table.
 ;
-; Input:  none (uses ENCTAB_BUF + the count fields stored there).
-; Output: form_first_ptr  = pointer to first form (ENCTAB_BUF + 12)
+; Input:  none (uses ENCTAB_BASE + the count fields stored there).
+; Output: form_first_ptr  = pointer to first form (ENCTAB_BASE + 12)
 ;         form_count      = u16 number of forms (we cap at 16-bit;
 ;                           form_count u32 in file fits comfortably).
 ;         index_first_ptr = pointer to first mnemonic-index entry
@@ -45,8 +45,8 @@
 ; Clobbers: A, BC, DE, HL.
 ; -----------------------------------------------------------------------
 form_lookup_init:
-; -- form_count is at ENCTAB_BUF + 8 (4-byte LE) ------------------------
-                ld      hl, ENCTAB_BUF + 8
+; -- form_count is at ENCTAB_BASE + 8 (4-byte LE) ------------------------
+                ld      hl, ENCTAB_BASE + 8
                 ld      e, (hl)
                 inc     hl
                 ld      d, (hl)
@@ -54,8 +54,8 @@ form_lookup_init:
 ; (We ignore the top 2 bytes of the form_count u32 — it is bounded by
 ;  the table emitter to fit in u16 for our subset.)
 
-; -- form_first_ptr = ENCTAB_BUF + 12 ----------------------------------
-                ld      hl, ENCTAB_BUF + 12
+; -- form_first_ptr = ENCTAB_BASE + 12 ----------------------------------
+                ld      hl, ENCTAB_BASE + 12
                 ld      (form_first_ptr), hl
 
 ; -- Walk all forms, computing the byte offset to the index section -----
