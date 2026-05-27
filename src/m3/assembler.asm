@@ -78,6 +78,7 @@ PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
                 include "test_local_labels.asm"
                 include "test_expr_eval_m4.asm"
                 include "test_pc_rel.asm"
+                include "print.asm"
 
 ; -----------------------------------------------------------------------
 ; Main program — entry via jp from &8000.
@@ -94,7 +95,8 @@ start:
 ; Exercises encode_reg / encode_imm_n / encode_cond /
 ; encode_imm12_shifted / encode_imm16_shifted against hardcoded slot
 ; records (no disk I/O).  On any mismatch: jp fail (red border +
-; spin → 30s timeout).  See test_slots.asm.
+; printer-channel "FAIL" banner, ci-m3 reports fail immediately).
+; See test_slots.asm.
                 call    run_slot_self_tests
 
 ; -- Symbol-table self-tests --------------------------------------------
@@ -148,6 +150,12 @@ start:
 ; -- Write OUT to disk via HSAVE ----------------------------------------
                 call    save_out_file
 
+; -- Print "OK\n" to printer channel 1 so the wrapper can distinguish
+; clean success from any early exit / crashed-and-halted scenario.
+; The wrapper greps the printer log for "^OK$"; absence → failure.
+                ld      hl, msg_ok
+                call    print_status_string
+
 ; -- Clean exit ---------------------------------------------------------
 ; The DI at start: is undone by SAMDOS's EI inside the RST 8 hook window
 ; (ROM PTDOS does EI before dispatching — per src/stub.asm citation).
@@ -157,22 +165,25 @@ start:
 
 
 ; -----------------------------------------------------------------------
-; fail — error indicator: red border, then spin until SimCoupé times out.
+; fail — error indicator: print "FAIL\n" to the printer channel, set
+; the border red, then halt cleanly.
 ; -----------------------------------------------------------------------
-; The success path ends in `di; halt`, which (with patched SimCoupé's
-; `-exitonhalt 1`) exits the emulator with code 0.  If `fail:` did the
-; same thing — `di; halt` — SimCoupé would also exit 0, and the wrapper
-; script (tools/run-simcoupe.sh) would record the run as a pass even
-; though a self-test or loader check just failed.
-;
-; To make failure observable to CI / `make test-m3`, `fail:` instead
-; spins in an infinite loop.  The wrapper's 30-second `timeout` kills
-; SimCoupé, exit 124 propagates out, and the test goes red.  Cost: a
-; failing run takes the full 30 seconds; that's acceptable because
-; failures are not on the hot path.
+; Both paths now do `di; halt` (clean SimCoupé exit), with the status
+; conveyed via the parallel printer channel — see print.asm and the
+; wrapper logic in tools/run-simcoupe.sh.  The previous design spun
+; here and relied on the wrapper's 30 s timeout to detect failure;
+; that's been replaced because (a) it cost a full 30 s per failure
+; (painful during M4 dev), and (b) it gave no per-fail-site
+; diagnostic.  The printer-channel banner drops failure latency to
+; ~100 ms and leaves room for per-site diagnostic strings in future.
 ;
 ; SimCoupé port &FE bit 0-2 sets SAM border colour; value 2 = red.
+; The border colour is retained as a human-visible signal when running
+; SimCoupé interactively (the wrapper doesn't depend on it).
 ; Citation: SAM Coupé Technical Manual §7 (ULA port &FE).
 fail:           ld      a, 2
-                out     (&fe), a       ; SAM border port — red
-fail_spin:      jr      fail_spin      ; spin → 30s timeout → exit 124
+                out     (&fe), a            ; SAM border port — red
+                ld      hl, msg_fail
+                call    print_status_string
+                di
+                halt

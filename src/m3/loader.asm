@@ -92,7 +92,7 @@ ENCTAB_LEN:     equ     3329           ; current enctab.enc body size; build-tim
 ;
 ; Input:  none
 ; Output: HL = ENCTAB_BUF (pointer to validated enctab data)
-; On mismatch: jp fail (red border + spin → 30s timeout → exit 124)
+; On mismatch: jp fail (red border + printer-channel "FAIL" banner, then clean exit → exit 124)
 ; Clobbers: A, BC, DE, HL, IX (everything except SP).
 ; -----------------------------------------------------------------------
 load_enctab:

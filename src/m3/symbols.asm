@@ -52,7 +52,7 @@
 ; insert and lookup read/write this buffer.
 ;
 ; Duplicate insert and overflow exhaustion are unrecoverable: both
-; `jp fail` (red border + 30s spin → ci-m3 timeout).  The duplicate /
+; `jp fail` (red border + printer-channel "FAIL" banner, ci-m3 reports fail immediately).  The duplicate /
 ; overflow paths therefore can't be exercised from the self-test block
 ; (same caveat as test_slots.asm — the `jp fail` path is one-way).
 ;

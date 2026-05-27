@@ -5,8 +5,8 @@
 ;
 ; Mirrors test_symbols.asm / test_local_labels.asm: runs from start:
 ; BEFORE load_enctab, hard-coded bytecode buffers + table state, no
-; disk I/O.  Any assertion failure does `jp fail` (red border + 30 s
-; spin → ci-m3 timeout).
+; disk I/O.  Any assertion failure does `jp fail` (red border +
+; printer-channel "FAIL" banner, ci-m3 reports fail immediately).
 ;
 ; Coverage:
 ;   1. PUSH_PC               (op 0x07).
