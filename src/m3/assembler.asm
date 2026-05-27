@@ -23,6 +23,21 @@ OUT_BUF_END:    equ     &C000          ; one past end of OUT buffer (2 KB)
 OPVAL_ARRAY:    equ     &C100          ; 7 * 10 = 70 bytes — operand value array
 OPVAL_KINDS:    equ     &C150          ; 7 bytes — kinds[] for form_lookup_match
 
+; M4: which assembly pass is currently active.  Pass 1 walks records to
+; assign PC and populate the symbol / local-label tables; pass 2 walks
+; them again and emits resolved bytes.  See
+; docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.1.  Pass 1
+; never touches OUT_BUF; pass 2 alone emits.  PASS_MODE is set by
+; main_assemble and read by every record handler that diverges per pass.
+PASS_MODE:      equ     &C158          ; 1 byte — current pass (PASS_PASS1 / PASS_PASS2)
+PASS_PASS1:     equ     1
+PASS_PASS2:     equ     2
+
+; M4 scratch reservation (allocated by symbols.asm + local_labels.asm):
+;   &C160-&C95F  SYMTAB              (256 buckets × 8 bytes = 2 KB)
+;   &C960-&CD5F  SYMTAB_OVERFLOW     (overflow chain, ~1 KB)
+;   &CD60-&D15F  LOCAL_LABEL_TABLE   (9 digits, ~1 KB)
+
 
                 org     &8000
 
@@ -47,7 +62,11 @@ OPVAL_KINDS:    equ     &C150          ; 7 bytes — kinds[] for form_lookup_mat
                 include "encoder.asm"
                 include "reader.asm"
                 include "main_loop.asm"
+                include "symbols.asm"
+                include "local_labels.asm"
                 include "test_slots.asm"
+                include "test_symbols.asm"
+                include "test_local_labels.asm"
 
 ; -----------------------------------------------------------------------
 ; Main program — entry via jp from &8000.
@@ -67,6 +86,19 @@ start:
 ; spin → 30s timeout).  See test_slots.asm.
                 call    run_slot_self_tests
 
+; -- Symbol-table self-tests --------------------------------------------
+; Exercises symbol_table_init / symbol_insert / symbol_lookup against
+; hard-coded ids and addresses (no disk I/O).  On any mismatch: jp fail.
+; See test_symbols.asm.
+                call    run_symbol_table_self_tests
+
+; -- Local-label table self-tests ---------------------------------------
+; Exercises local_label_table_init / local_def_append /
+; local_find_forward / local_find_backward against a hard-coded
+; per-digit PC list (no disk I/O).  On any mismatch: jp fail.
+; See test_local_labels.asm.
+                call    run_local_label_self_tests
+
 ; -- Load and validate enctab.enc header --------------------------------
                 call    load_enctab
 
@@ -74,6 +106,15 @@ start:
                 call    form_lookup_init
 
 ; -- Run the assemble pass: load IN, walk records, build OUT -----------
+; M4: declare which pass main_assemble is currently executing.  Until
+; Tasks 4-5 split the walker into pass-1 (table build, no emit) and
+; pass-2 (emit) calls, the single call below acts as the pass-2 emit
+; (matching M3 behaviour).  Setting PASS_MODE = PASS_PASS1 here is a
+; deliberate placeholder: the walker does not read PASS_MODE yet, so
+; the value is observationally inert in M3 fixtures; Tasks 4-5 will
+; restructure start: to do both calls explicitly.
+                ld      a, PASS_PASS1
+                ld      (PASS_MODE), a
                 call    main_assemble
 
 ; -- Write OUT to disk via HSAVE ----------------------------------------
