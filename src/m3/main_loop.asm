@@ -151,19 +151,23 @@ main_assemble:
 
 
 ; -----------------------------------------------------------------------
-; reset_reader_to_in_buf — IN_POS := IN_BUF, then reader_init.
+; reset_reader_to_in_buf — IN_POS := (LMPR_IN_BASE, 0), then reader_init.
 ;
-; reader_init validates the magic, skips the name table, and leaves
-; IN_POS at the first record.  It does not write outside IN_POS, so
-; calling it twice (once per pass) is safe.
+; reader_init validates the magic, skips the name table, and leaves the
+; cursor at the first record.  It does not write outside the cursor
+; vars, so calling it twice (once per pass) is safe.  Pass 2 uses this
+; to rewind the in-memory cursor with no disk re-read.
 ;
-; Input:  IN_END must be set (by load_in_file).
-; Output: IN_POS positioned at the first record's kind byte.
+; Input:  IN_END_PAGE / IN_END_OFFSET must be set (by load_in_file).
+; Output: cursor at the first record's kind byte; LMPR back at
+;         LMPR_ENCTAB (reader_init restores it before returning).
 ; Clobbers: A, BC, DE, HL.
 ; -----------------------------------------------------------------------
 reset_reader_to_in_buf:
-                ld      hl, IN_BUF
-                ld      (IN_POS), hl
+                ld      a, LMPR_IN_BASE
+                ld      (IN_POS_PAGE), a
+                ld      hl, 0
+                ld      (IN_POS_OFFSET), hl
                 jp      reader_init                 ; tail-call
 
 
@@ -189,6 +193,75 @@ reset_out_buffer:
                 ld      hl, 0
                 ld      (OUT_LEN), hl
                 ret
+
+
+; -----------------------------------------------------------------------
+; Paged-IN cursor helpers.
+;
+; Per docs/specs/2026-05-27-m6-paged-in-design.md.  Three primitives:
+;   in_map_current   — write IN_POS_PAGE to LMPR, mapping the current
+;                      IN page into section A (&0000..&3FFF).
+;   in_persist_hl    — write HL back to IN_POS_OFFSET and snapshot the
+;                      current LMPR into IN_POS_PAGE.  Used at the end
+;                      of a reader bracket to commit the new cursor.
+;   in_normalise_hl  — COMET-style adjustpo.  While H >= &40, subtract
+;                      &40 from H and bump LMPR's low 5 bits.  The
+;                      RAM0 bit at &20 is preserved across the inc
+;                      because page numbers can't go above 31, so the
+;                      low 5 bits never overflow into bit 5.
+;
+; All three use port 250 (LMPR).  Port 251 is HMPR (sections C+D)
+; and is untouched here.  See trampoline.asm and the SAM Coupé Tech
+; Manual §6.10 for the port assignments.
+; -----------------------------------------------------------------------
+
+; in_map_current — LMPR := IN_POS_PAGE; section A = current IN page.
+;
+; Input:  none.  Output: LMPR programmed.  Clobbers: A.
+in_map_current:
+                ld      a, (IN_POS_PAGE)
+                out     (250), a            ; port 250 = LMPR
+                ret
+
+
+; in_persist_hl — IN_POS_OFFSET := HL; IN_POS_PAGE := current LMPR.
+;
+; Called at the end of a reader bracket so a later in_map_current
+; restores the cursor's new position.
+;
+; Input:  HL = section-A offset (in [&0000, &4000)).
+; Output: IN_POS_OFFSET / IN_POS_PAGE updated.  Clobbers: A.
+in_persist_hl:
+                ld      (IN_POS_OFFSET), hl
+                in      a, (250)            ; A = current LMPR
+                ld      (IN_POS_PAGE), a
+                ret
+
+
+; in_normalise_hl — while H >= &40, subtract &40 from H and bump LMPR's
+; low 5 bits by 1 (the RAM0 bit at &20 stays set because the low 5 bits
+; never exceed 31 in practice — IN spans pages 7..10 max).
+;
+; Mirrors COMET's adjustpo (reference/comet-decoded/comet.asm:3180-3188)
+; — the standard "renormalise (page, offset) after a section-A
+; address-arithmetic step" idiom.
+;
+; Input:  HL = section-A-ish offset (possibly >= &4000 after an add).
+; Output: HL normalised into [&0000, &4000).  LMPR bumped per page
+;         boundary crossed.  Clobbers: A.
+in_normalise_hl:
+in_normalise_loop:
+                ld      a, h
+                cp      &40
+                ret     c                   ; H < &40 → done
+                sub     &40
+                ld      h, a
+                in      a, (250)
+                inc     a                   ; low 5 bits += 1 (RAM0 bit
+                                            ;   preserved — pages 7..10
+                                            ;   never overflow into bit 5)
+                out     (250), a
+                jr      in_normalise_loop
 
 
 ; -----------------------------------------------------------------------
@@ -2027,10 +2100,15 @@ main_eval_next_imm:
 
 
 ; -----------------------------------------------------------------------
-; load_in_file — HGTHD + HLOAD "IN" into IN_BUF.
+; load_in_file — HGTHD + trampoline-HLOAD "IN" into pages 7..10.
 ;
-; HLOAD's destination must be in section C (&8000-&BFFF) per the
-; loader.asm header notes.  IN_BUF lives in section C.
+; Per docs/specs/2026-05-27-m6-paged-in-design.md.  IN lands in
+; physical pages 7..10 (off-axis) via the section-B HLOAD trampoline,
+; same pattern as load_enctab.  HLOAD's destination is &8000 — a
+; section-C address — and SAMDOS's internal ctas auto-pages HMPR
+; across the &C000 boundary, so a multi-page load to HMPR=N actually
+; leaves the file spread across physical pages N, N+1, ...,
+; N+(C-1) (Citation: samdos/src/c.s:354-369 ctas).
 ;
 ; The on-disk IN file size is recorded in the file's body header.
 ; SAMDOS's HGTHD reads that header, populates internal `difa`, then
@@ -2040,6 +2118,10 @@ main_eval_next_imm:
 ;   (&4B50 + 35..36) = length-mod-16K
 ;     with bit 15 set by SAMDOS's `set 7, d` line (h.s:hgthd) —
 ;     we must `res 7` on the high byte before passing to HLOAD.
+;
+; Output: IN_END_PAGE / IN_END_OFFSET set; IN paged-in-resident; LMPR
+;         restored to whatever the caller had (TRAMPOLINE_DST touches
+;         HMPR only).
 ;
 ; Citation: samdos/src/h.s::hgthd lines 59-67 + ::txhed lines that
 ; transfer difa to &4B50.
@@ -2061,18 +2143,29 @@ load_in_file:
                 ld      a, (&4B50 + 34)
                 ld      (in_file_pages), a
 
-                ld      hl, IN_BUF
+; Call the section-B trampoline.
+;   HL = &8000      (section-C window; HLOAD's required start address)
+;   B  = IN_BASE_PAGE
+;   C  = pages count
+;   DE = length-mod-16K
+;   IX = UIFA (already set by fill_uifa)
+                ld      hl, &8000
+                ld      b, IN_BASE_PAGE
                 ld      a, (in_file_pages)
                 ld      c, a
-                ld      b, 0
                 ld      de, (in_file_len)
-                rst     8
-                defb    HOOK_HLOAD
+                call    TRAMPOLINE_DST
 
-                ld      hl, IN_BUF
-                ld      de, (in_file_len)
-                add     hl, de
-                ld      (IN_END), hl
+; Compute (IN_END_PAGE, IN_END_OFFSET) = LMPR_IN_BASE + pages, offset
+; = in_file_len (length within that last page).  The `or &20` sets the
+; RAM0 bit so IN_END_PAGE stores a full LMPR value, matching the
+; IN_POS_PAGE convention.
+                ld      a, (in_file_pages)
+                add     a, IN_BASE_PAGE
+                or      &20
+                ld      (IN_END_PAGE), a
+                ld      hl, (in_file_len)
+                ld      (IN_END_OFFSET), hl
                 ret
 
 
@@ -2169,8 +2262,23 @@ main_dir_equ_pending_id:        defw    0
 ; -----------------------------------------------------------------------
 ; Globals shared between reader / encoder / main_loop.
 ; -----------------------------------------------------------------------
-IN_POS:                 defw    0           ; current read pointer into IN_BUF
-IN_END:                 defw    0           ; one past the last valid byte
+
+; Paged IN cursor — see docs/specs/2026-05-27-m6-paged-in-design.md.
+;
+; IN lives in physical pages 7..10 (off-axis).  The 24-bit cursor is
+; stored as a (page, offset) pair: IN_POS_PAGE holds the LMPR low5+RAM0
+; byte (i.e. a full LMPR value, &27..&2A for pages 7..10), IN_POS_OFFSET
+; the section-A offset (&0000..&3FFF).  in_normalise_hl re-normalises
+; into [&0000, &4000) after a page-crossing add, bumping LMPR's low 5
+; bits.
+;
+; IN_END_PAGE / IN_END_OFFSET together point one past the last valid
+; byte; they're set by load_in_file_paged from the .tbn's DIFA bytes.
+IN_POS_PAGE:            defb    0           ; current LMPR low5+RAM0 for IN
+IN_POS_OFFSET:          defw    0           ; current offset in that page
+                                            ;   (&0000..&3FFF)
+IN_END_PAGE:            defb    0           ; last byte's LMPR low5+RAM0
+IN_END_OFFSET:          defw    0           ; last byte's offset in that page
 
 ; Paged OUT cursor state — see docs/specs/2026-05-27-m6-paged-out-design.md.
 ; OUT_PC walks section B (&4000..&7FFF); OUT_ZONE flips 0 → 1 at the
