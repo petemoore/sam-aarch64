@@ -19,7 +19,7 @@ func main() {
 	var mraDir, outEnc, outGo string
 	flag.StringVar(&mraDir, "mra", "reference/arm-mra", "MRA snapshot dir")
 	flag.StringVar(&outEnc, "out", "", "binary .enc output (optional)")
-	flag.StringVar(&outGo, "gopkg", "", "regenerate Go source at this path (opt-in: default skips, because tools/aarch64enc/data.go has manual hand-edits — e.g. the 0-operand ret form — that this generator would clobber; see docs/notes/m2-status.md)")
+	flag.StringVar(&outGo, "gopkg", "", "regenerate the MRA-derived Go source at this path.  Only emits MRA-derived forms; hand-curated forms live in tools/aarch64enc/manual_forms.go and are not touched by this tool.")
 	flag.Parse()
 
 	xmls, err := filepath.Glob(filepath.Join(mraDir, "*.xml"))
@@ -85,16 +85,26 @@ func main() {
 	}
 
 	if outEnc != "" {
+		// The Go library's runtime form table is the union of
+		// manualForms (hand-curated) and the MRA-derived allForms.
+		// The binary enctab.enc must mirror that union or M3's Z80
+		// loader would be using a strict subset of the encodings the
+		// Go side relies on.  Manual entries come first to match the
+		// runtime lookup order — see manual_forms.go for why.
+		combined := make([]enc.Form, 0, len(enc.ManualForms())+len(allForms))
+		combined = append(combined, enc.ManualForms()...)
+		combined = append(combined, allForms...)
 		encOut, err := os.Create(outEnc)
 		if err != nil {
 			fail(err)
 		}
-		if err := emit.RenderEnc(encOut, allForms); err != nil {
+		if err := emit.RenderEnc(encOut, combined); err != nil {
 			encOut.Close()
 			fail(err)
 		}
 		encOut.Close()
-		fmt.Printf("Wrote %s\n", outEnc)
+		fmt.Printf("Wrote %s (%d forms: %d manual + %d MRA-derived)\n",
+			outEnc, len(combined), len(enc.ManualForms()), len(allForms))
 	}
 }
 

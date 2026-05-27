@@ -4,10 +4,10 @@
 ; Boot via M0's BASIC autorun pattern:
 ;   CLEAR&7FFF: LOAD CODE "assembler" 32768: CALL 32768
 ;
-; Layout (per spec §2.1):
-;   &8000-&BFFF  assembler code (this file + includes)
-;   &C000-&C0FF  stack (grows down from &C100)
-;   &C100+       enctab.enc buffer
+; Layout:
+;   &8000-&8FFF  assembler code (this file + includes; ~683 bytes today)
+;   &9000-&BFFF  enctab.enc buffer (12 KB; inside HLOAD's &8000-&BFFF range)
+;   &C000-&C0FF  stack (grows down from &C100 into section D)
 ;
 ; Note: pyz80 does not support the END directive. Assembly ends at EOF.
 ; The org directive sets the load address; the entry point is the first byte.
