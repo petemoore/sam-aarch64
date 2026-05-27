@@ -71,6 +71,20 @@ func (p *parser) parseLine() error {
 				return err
 			}
 			emittedStatement = true
+		case TokDot:
+			// GNU as: `. = expr` is equivalent to `.org expr`. The `.`
+			// token here stands for the current location counter; setting
+			// it to a value emits zero-fill bytes to advance the PC (or
+			// sets the origin VMA when nothing has been emitted yet).
+			if p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokEquals {
+				p.pos += 2 // consume '.' and '='
+				if err := p.parseOrgRHS(); err != nil {
+					return err
+				}
+				emittedStatement = true
+				continue
+			}
+			return newErr(t.Pos, "unexpected '.' at start of statement (did you mean '. = expr'?)")
 		default:
 			return newErr(t.Pos, "unexpected token kind %d", t.Kind)
 		}
@@ -121,6 +135,29 @@ func (p *parser) parseDirective(t Tok) error {
 		}
 		count++
 	}
+}
+
+// parseOrgRHS parses the right-hand side of `. = expr` and emits it as
+// a `.org expr` directive record. The leading `.` and `=` tokens must
+// already have been consumed by the caller. The expression runs until
+// EOL / EOF / comment.
+func (p *parser) parseOrgRHS() error {
+	id, ok := format.DirectiveID(".org")
+	if !ok {
+		return newErr(p.cur().Pos, "internal: .org directive ID not registered")
+	}
+	expr, err := p.parseExpression()
+	if err != nil {
+		return err
+	}
+	var ow format.OperandWriter
+	ow.WriteImmExpr(expr)
+	switch p.cur().Kind {
+	case TokEOL, TokEOF, TokLineComment, TokBlockComment:
+		p.rw.WriteDirective(id, 1, ow.Bytes())
+		return nil
+	}
+	return newErr(p.cur().Pos, "unexpected token after '. = expr'")
 }
 
 // parseDirectiveSection parses the GNU as `.section` directive in one of
@@ -371,6 +408,35 @@ func (p *parser) parseInst(t Tok) error {
 			if count == 0 {
 				return newErr(p.cur().Pos, "unexpected ','")
 			}
+			// Special case: `, lsl #N` after an immediate operand on
+			// add/sub/subs/cmp instructions is a shift-of-imm12
+			// suffix (`add Xd, Xn, #imm, lsl #12`). Consume the
+			// suffix and fold it into the previously-emitted IMM
+			// operand by shifting its expression value left by N.
+			if isShiftedImmMnemonic(id) && p.pos+2 < len(p.toks) &&
+				p.toks[p.pos+1].Kind == TokIdent && p.toks[p.pos+1].Text == "lsl" &&
+				p.toks[p.pos+2].Kind == TokHash {
+				// Consume the comma, lsl, and #.
+				p.pos += 3
+				shiftExpr, err := p.parseExpression()
+				if err != nil {
+					return err
+				}
+				shift, ok := format.EvalConst(shiftExpr)
+				if !ok {
+					return newErr(p.cur().Pos, "lsl shift amount must be a constant")
+				}
+				if shift != 0 && shift != 12 {
+					return newErr(p.cur().Pos, "lsl shift %d invalid for arithmetic imm12 (must be 0 or 12)", shift)
+				}
+				if shift == 12 {
+					// Rewrite the last operand: load its IMM expr,
+					// multiply by 4096, and overwrite. We do this by
+					// rebuilding ow from scratch.
+					ow = rewriteLastImmShiftLeft12(ow)
+				}
+				continue
+			}
 			p.pos++
 			continue
 		}
@@ -378,6 +444,87 @@ func (p *parser) parseInst(t Tok) error {
 			return err
 		}
 		count++
+	}
+}
+
+// isShiftedImmMnemonic reports whether a mnemonic accepts the
+// `, lsl #N` (N=0|12) suffix on its immediate operand. This is the
+// arithmetic-immediate family (add/sub/subs/cmp).
+func isShiftedImmMnemonic(id uint16) bool {
+	switch id {
+	case 1, 2, 19, 45: // add, sub, cmp, subs
+		return true
+	}
+	return false
+}
+
+// rewriteLastImmShiftLeft12 rebuilds an OperandWriter, multiplying the
+// expression of its trailing OpImmExpr operand by 4096 (encoded as
+// `<expr> << 12`).
+func rewriteLastImmShiftLeft12(ow format.OperandWriter) format.OperandWriter {
+	or := format.NewOperandReader(ow.Bytes())
+	var ops []format.Operand
+	for !or.AtEnd() {
+		o, err := or.Next()
+		if err != nil {
+			return ow
+		}
+		ops = append(ops, o)
+	}
+	if len(ops) == 0 || ops[len(ops)-1].Kind != format.OpImmExpr {
+		return ow
+	}
+	// Build new expression: <orig_expr> 12 SHL
+	var ew format.ExprWriter
+	ew.AppendRaw(ops[len(ops)-1].Expr)
+	ew.WriteImm(12)
+	ew.WriteOp(format.OpShl)
+	// Re-emit all operands with the rewritten last one.
+	var nw format.OperandWriter
+	for i, o := range ops {
+		if i == len(ops)-1 {
+			nw.WriteImmExpr(ew.Bytes())
+			continue
+		}
+		// Re-emit using the public WriteX helpers.
+		reemitOperand(&nw, o)
+	}
+	return nw
+}
+
+// reemitOperand re-encodes a decoded operand into nw. Used by
+// rewriteLastImmShiftLeft12 to copy non-shifted operands forward.
+func reemitOperand(nw *format.OperandWriter, o format.Operand) {
+	switch o.Kind {
+	case format.OpRegX, format.OpRegW, format.OpRegXSP, format.OpRegWSP:
+		nw.WriteReg(o.Kind, o.Reg)
+	case format.OpImmExpr:
+		nw.WriteImmExpr(o.Expr)
+	case format.OpShiftedReg:
+		nw.WriteShiftedReg(o.Width, o.Reg, o.ShiftKind, o.AmtExpr)
+	case format.OpExtendedReg:
+		nw.WriteExtendedReg(o.Width, o.Reg, o.Extend, o.AmtExpr)
+	case format.OpMem:
+		switch o.MemShape {
+		case format.MemBase:
+			nw.WriteMemBase(o.Base)
+		case format.MemBaseOff, format.MemBaseOffPre, format.MemBaseOffPost:
+			nw.WriteMemBaseOff(o.MemShape, o.Base, o.Expr)
+		case format.MemBaseIdx:
+			nw.WriteMemBaseIdx(o.Base, o.Idx, o.IdxWidth)
+		case format.MemBaseIdxShifted:
+			nw.WriteMemBaseIdxShifted(o.Base, o.Idx, o.IdxWidth, o.ShiftAmt)
+		case format.MemBaseIdxExtended:
+			nw.WriteMemBaseIdxExtended(o.Base, o.Idx, o.IdxWidth, o.Extend, o.ShiftAmt)
+		}
+	case format.OpString:
+		nw.WriteString(o.Str)
+	case format.OpCond:
+		nw.WriteCond(o.Cond)
+	case format.OpSysName:
+		nw.WriteSysName(string(o.Str))
+	case format.OpLitPool:
+		nw.WriteLitPool(o.Width, o.Expr)
 	}
 }
 
@@ -1089,15 +1236,19 @@ func (p *parser) parseMem(ow *format.OperandWriter) error {
 
 	if p.cur().Kind == TokRBracket {
 		p.pos++
-		// Post-index? `[base], #imm`
-		if p.cur().Kind == TokComma && p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokHash {
-			p.pos++ // ,
-			expr, err := p.parseExpression()
-			if err != nil {
-				return err
+		// Post-index? `[base], #imm` or `[base], imm` (GNU accepts both).
+		if p.cur().Kind == TokComma && p.pos+1 < len(p.toks) {
+			next := p.toks[p.pos+1].Kind
+			if next == TokHash || next == TokInt || next == TokMinus ||
+				next == TokIdent || next == TokLParen {
+				p.pos++ // ,
+				expr, err := p.parseExpression()
+				if err != nil {
+					return err
+				}
+				ow.WriteMemBaseOff(format.MemBaseOffPost, base, expr)
+				return nil
 			}
-			ow.WriteMemBaseOff(format.MemBaseOffPost, base, expr)
-			return nil
 		}
 		ow.WriteMemBase(base)
 		return nil
@@ -1210,10 +1361,18 @@ func matchShiftKind(name string) (format.ShiftKind, bool) {
 }
 
 func matchCond(name string) (format.CondCode, bool) {
+	// Canonical names match the cond-code table.
 	for i := 0; i < 16; i++ {
 		if format.CondCode(i).Name() == name {
 			return format.CondCode(i), true
 		}
+	}
+	// GNU as accepts two aliases: hs ≡ cs (cond=2) and lo ≡ cc (cond=3).
+	switch name {
+	case "hs":
+		return format.CondCS, true
+	case "lo":
+		return format.CondCC, true
 	}
 	return 0, false
 }

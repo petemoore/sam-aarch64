@@ -47,7 +47,10 @@ func TestMemInstSize_SignedExtendLoads(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s not in mnemonic table", tc.mnem)
 		}
-		gotSize, gotScale := memInstSize(id)
+		// Pin against Xt's expected register kind: ldrsb/ldrsh accept
+		// both Xt and Wt — we test the X-form (matching the table
+		// entries above); ldrsw is Xt-only.
+		gotSize, gotScale := memInstSize(id, format.OpRegX)
 		if gotSize != tc.size || gotScale != tc.scale {
 			t.Errorf("memInstSize(%s) = (%#b, %d), want (%#b, %d)",
 				tc.mnem, gotSize, gotScale, tc.size, tc.scale)

@@ -29,6 +29,15 @@ type Pass1Result struct {
 	LocalDefs map[byte][]int64
 	TotalSize int64
 
+	// OriginVMA is the VMA at which output byte 0 sits. By default it is
+	// zero (PC starts at 0). When the first directive in the input is
+	// `.org expr` (or equivalent `. = expr`) issued *before* any bytes
+	// have been emitted, OriginVMA is set to expr — labels resolve at
+	// that VMA but the output file's byte 0 still corresponds to
+	// OriginVMA, mirroring the behaviour of `objcopy -O binary` on a
+	// linked ELF whose lowest loaded address is the script's `. = N`.
+	OriginVMA int64
+
 	// PoolEntries is the list of literal-pool slots in emit order.
 	// Pass2 walks this when emitting the bytes at flush points.
 	PoolEntries []PoolEntry
@@ -89,18 +98,23 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 				eights = append(eights, i)
 			}
 		}
+		// Use unsigned-modulus arithmetic to compute alignment padding:
+		// spectrum4's VMAs are above 2^63 (high bit set), so a signed
+		// `%` operation gives a negative remainder and the pad
+		// calculation overshoots by `align` bytes. uint64(pc) % N
+		// always returns the correct unsigned remainder.
 		layout := pc
-		if len(fours) > 0 && layout%4 != 0 {
+		if len(fours) > 0 && uint64(layout)%4 != 0 {
 			// Pad to 4-byte alignment before 4-byte literals.
-			layout += 4 - (layout % 4)
+			layout += int64(4 - (uint64(layout) % 4))
 		}
 		for _, i := range fours {
 			res.PoolEntries[i].PC = layout
 			layout += 4
 		}
-		if len(eights) > 0 && layout%8 != 0 {
+		if len(eights) > 0 && uint64(layout)%8 != 0 {
 			// Pad to 8-byte alignment before 8-byte literals.
-			layout += 8 - (layout % 8)
+			layout += int64(8 - (uint64(layout) % 8))
 		}
 		for _, i := range eights {
 			res.PoolEntries[i].PC = layout
@@ -156,6 +170,37 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 				}
 			case ".ltorg":
 				flushPool(pc)
+			case ".org":
+				// `.org expr` (and the syntactic alias `. = expr`).
+				// At pc == 0 with OriginVMA == 0 and no prior bytes,
+				// treat as setting the origin VMA (mirrors `objcopy
+				// -O binary` semantics on a linked ELF whose lowest
+				// loaded address is the script's `. = N`). Otherwise
+				// advance pc, emitting zero-fill if expr > pc and
+				// erroring on backward .org (matches GNU as).
+				//
+				// Addresses are treated as unsigned 64-bit quantities
+				// for ordering: spectrum4 uses VMAs above 2^63
+				// (0xfffffff000000000), which would be negative as
+				// signed int64. Storage is still int64 so the bit
+				// pattern survives the round-trip.
+				or := format.NewOperandReader(rec.Operands)
+				o, _ := or.Next()
+				ctx := pass1EvalCtx(pc, res, f)
+				target, err := enc.Eval(o.Expr, ctx)
+				if err != nil {
+					return nil, fmt.Errorf(".org: %w", err)
+				}
+				if pc == res.OriginVMA && len(res.PoolEntries) == 0 && pc == 0 && target != 0 {
+					// First .org before any output: set the origin VMA.
+					res.OriginVMA = target
+					pc = target
+					break
+				}
+				if uint64(target) < uint64(pc) {
+					return nil, fmt.Errorf(".org: target 0x%x < current pc 0x%x (backward .org not allowed)", uint64(target), uint64(pc))
+				}
+				pc = target
 			default:
 				n, err := directiveSizeAtPC(rec, pc, res, f)
 				if err != nil {
@@ -328,7 +373,11 @@ func directiveSizeAtPC(rec format.Record, pc int64, res *Pass1Result, f *format.
 		if align <= 1 {
 			return 0, nil
 		}
-		pad := (align - (pc % align)) % align
+		// Unsigned modulus: high-VMA pc (negative as int64) needs to
+		// be treated as an unsigned address for the alignment math.
+		ua := uint64(align)
+		up := uint64(pc)
+		pad := int64((ua - (up % ua)) % ua)
 		return pad, nil
 	case ".align":
 		// aarch64 GNU as convention: `.align N` aligns to 2^N bytes.
@@ -343,7 +392,9 @@ func directiveSizeAtPC(rec format.Record, pc int64, res *Pass1Result, f *format.
 			return 0, nil
 		}
 		align := int64(1) << uint64(n)
-		pad := (align - (pc % align)) % align
+		ua := uint64(align)
+		up := uint64(pc)
+		pad := int64((ua - (up % ua)) % ua)
 		return pad, nil
 	case ".org":
 		return 0, nil
