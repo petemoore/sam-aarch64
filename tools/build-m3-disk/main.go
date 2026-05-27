@@ -100,7 +100,30 @@ func main() {
 	}
 
 	// Slot 2: assembler CODE file (M3 Z80 binary).
-	if err := disk.AddCodeFile("assembler", assemblerBin, LoadAddress, 0); err != nil {
+	//
+	// Pad the body so the FILE occupies an integer number of full tracks
+	// from the point where it starts (T6S3).  This guarantees the next
+	// file (enctab.enc) starts at the beginning of a new track (T7S1),
+	// which in turn guarantees no track-step occurs during enctab.enc's
+	// HLOAD — a prerequisite for the loader.asm path that loads
+	// enctab.enc at &C100 (outside SAMDOS's "HL must be &8000-&BFFF"
+	// rule; see loader.asm header comment).
+	//
+	// The padding length is computed so:
+	//   file-on-disk-size = (8 sectors starting at T6S3) = 8 useful sectors
+	// Each MGT sector holds 510 useful bytes (last 2 bytes are sector link).
+	// File header is 9 bytes.  So body must be 8*510 - 9 = 4071 bytes.
+	const SectorUseful = 510
+	const FileHeaderSize = 9
+	const AssemblerSectors = 8 // T6S3..T6S10 = 8 sectors
+	targetBodyLen := AssemblerSectors*SectorUseful - FileHeaderSize
+	if len(assemblerBin) > targetBodyLen {
+		log.Fatalf("assembler.bin (%d bytes) exceeds the %d-byte budget for %d sectors",
+			len(assemblerBin), targetBodyLen, AssemblerSectors)
+	}
+	padded := make([]byte, targetBodyLen)
+	copy(padded, assemblerBin)
+	if err := disk.AddCodeFile("assembler", padded, LoadAddress, 0); err != nil {
 		log.Fatalf("AddCodeFile(assembler): %v", err)
 	}
 
