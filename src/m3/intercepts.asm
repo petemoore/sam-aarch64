@@ -141,13 +141,16 @@ try_intercept_post_shift:
                 cp      8
                 jp      z, try_intercept_pair_check
 
-; Non-pair: require >= 2 operands and kind[1] == OpMem.
+; Non-pair: require >= 2 operands and kind[1] == OpMem.  If the
+; mnemonic IS a mem-family ID but the operand-1 kind isn't OpMem,
+; fall through to the post-mem stage (M5 PR-E adds the OpLitPool
+; intercept there for `ldr Xn|Wn, =<expr>`).
                 ld      a, (main_op_count)
                 cp      2
-                jp      c, try_intercept_no_match
+                jp      c, try_intercept_post_mem
                 ld      a, (OPVAL_KINDS + 1)
                 cp      OP_KIND_MEM
-                jp      nz, try_intercept_no_match
+                jp      nz, try_intercept_post_mem
                 ld      a, (try_intercept_mnem)
                 call    encode_mem_word
                 call    intercept_emit_dehl
@@ -168,6 +171,30 @@ try_intercept_pair_check:
                 ret
 
 try_intercept_post_mem:
+
+; -- ldr Xn|Wn, =<expr> (M5 PR-E Task 13) -----------------------------
+; mnemonic 5 (ldr) with operand 1 = OpLitPool routes to the LDR-literal
+; encoder.  The Mac-side dispatch is also handled inline in
+; encodeInst (refenc/pass2.go:283-289 → encodeLdrLitPoolInst).
+;
+; Pass 1 already registered the pool slot keyed by PASS_PC; the encoder
+; looks up the slot's entry_pc to compute imm19.  No form-table entry
+; exists for OpLitPool, so falling through here would always fail.
+                ld      a, (try_intercept_mnem)
+                cp      5
+                jp      nz, try_intercept_post_litpool
+                ld      a, (main_op_count)
+                cp      2
+                jp      nz, try_intercept_post_litpool
+                ld      a, (OPVAL_KINDS + 1)
+                cp      OP_KIND_LIT_POOL
+                jp      nz, try_intercept_post_litpool
+                call    litpool_encode_ldr_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+
+try_intercept_post_litpool:
 
 ; -- OpSysName mnemonics (M5 PR-D Task 11) ----------------------------
 ;   mrs  = 76    mrs Xt, <sysreg>

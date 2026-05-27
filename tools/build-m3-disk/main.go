@@ -130,14 +130,13 @@ func main() {
 	// tracks = 20 sectors = 10180 bytes.
 	const SectorUseful = 510
 	const FileHeaderSize = 9
-	const AssemblerSectors = 30 // T6S3..T6S10 (8) + T7..T8 full (20) +
-	//                              T9S1..T9S2 (2) = 30 sectors = 3 "full
-	//                              tracks" from T6S3.  Bumped from 20
-	//                              in M5 PR-B to fit the test variant
-	//                              (10191 → 15291 byte budget) after
-	//                              the OpShiftedReg / OpExtendedReg
-	//                              encoders + their Layer-1 tests
-	//                              landed.
+	const AssemblerSectors = 40 // T6S3..T6S10 (8) + T7..T9 full (30) +
+	//                              T10S1..T10S2 (2) = 40 sectors = 4 "full
+	//                              tracks" from T6S3.  Bumped from 30
+	//                              in M5 PR-E to fit the test variant
+	//                              (15291 → 20391 byte budget) after
+	//                              the OpLitPool encoder + .ltorg flush
+	//                              + Layer-1 tests landed.
 	targetBodyLen := AssemblerSectors*SectorUseful - FileHeaderSize
 	if len(assemblerBin) > targetBodyLen {
 		log.Fatalf("assembler.bin (%d bytes) exceeds the %d-byte budget for %d sectors",
