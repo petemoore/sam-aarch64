@@ -62,9 +62,11 @@ corrupting downstream state. Motivated by the hang observed feeding the
 |-|------:|------:|
 | Before (PR #39) | 12069 | — |
 | After (this audit) | 12085 | **+16** |
-| Budget | 12288 | 203 B headroom |
+| Budget (section-C code window `&8000-&AFFF`) | 12288 | 203 B headroom |
 
 Three guards, ~5 B each. Well within the 12200 B watch threshold.
+
+> **Postscript 2026-05-28**: as of post-PR-#41 main, production code is **12 204 B** — additional ~119 B accumulated since this audit. Headroom inside `&8000-&AFFF` is **84 B**. *But* the effective code ceiling is `&C000` = 16 384 B because `&B000-&BFFF` is reserved as additional code headroom (`src/m3/assembler.asm:17`), so ~4 180 B is actually available for code expansion when a structural change is worth jumping the `&AFFF` block boundary.
 
 ## CI matrix result
 
@@ -127,3 +129,15 @@ RAM at `&E100+` (we'd cross `LITPOOL_EXPR_BUF` first at `&D900`). Given
 how easy this is to hit with real-scale source (any `.ascii "<a long
 string>"` could exceed 1 KB), it's a strong candidate for the
 86 KB-release hang the audit was motivated by.
+
+> **Postscript 2026-05-28**: this prediction turned out to be
+> empirically wrong on the actual 86 KB stripped-release fixture.
+> Once the fixture became available, the FAIL00 investigation
+> bisected to a different root cause entirely: the static
+> `sysreg_table` in `src/m3/sysname.asm:846` is missing 8 sysregs
+> spectrum4 uses (`hcr_el2`, `mair_el1`, `scr_el3`, `spsr_el3`,
+> `tcr_el1`, `ttbr0_el1`, `ttbr1_el1`, `vbar_el1`).  Falling through
+> to the generic `Sn_op1_Cn_Cm_op2` parser triggered its first
+> defensive `jp nz, fail` at `sysname.asm:579`.  Measured
+> `STAGING_BUF` peak on this corpus was 94 B out of 1024 (9 %).
+> A coverage gap in a static lookup table, not a buffer overflow.
