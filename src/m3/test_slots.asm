@@ -360,54 +360,11 @@ run_slot_self_tests:
                 ret
 
 
-; -----------------------------------------------------------------------
-; assert_eq32_de_hl_imm — assert DEHL equals a 32-bit literal that
-; immediately follows the call in the caller's code stream.
-;
-; Caller pattern:
-;     call assert_eq32_de_hl_imm
-;     defb b0, b1, b2, b3        ; little-endian: b0 = bit 0..7
-;
-; The return address on the stack points at the first defb byte.  This
-; routine compares DEHL against the four bytes (HL low first, then DE
-; high), advances the return address past them on match, and RETs.
-; On mismatch: jp fail.
-;
-; Layout reminder: DEHL where HL is bits 0..15 and DE is bits 16..31,
-; so the in-memory little-endian byte order is L, H, E, D.
-;
-; Rationale: inline-literal style reads cleanly at the call site and is
-; consistent with the pyz80 convention used for SAMDOS hooks (`rst 8`
-; followed by `defb <hook>`).  See src/sam_io.inc lines 87-101.
-;
-; Clobbers: A, BC.  Preserves DE and HL so the caller's "actual" result
-; remains intact (useful when chaining diagnostics).
-; -----------------------------------------------------------------------
-assert_eq32_de_hl_imm:
-                pop     bc             ; BC = pointer to inline literal
-
-                ld      a, (bc)        ; byte 0: low byte of HL
-                cp      l
-                jp      nz, fail
-                inc     bc
-
-                ld      a, (bc)        ; byte 1: high byte of HL
-                cp      h
-                jp      nz, fail
-                inc     bc
-
-                ld      a, (bc)        ; byte 2: low byte of DE
-                cp      e
-                jp      nz, fail
-                inc     bc
-
-                ld      a, (bc)        ; byte 3: high byte of DE
-                cp      d
-                jp      nz, fail
-                inc     bc             ; BC now points just past the literal
-
-                push    bc             ; restore as return address
-                ret
+; assert_eq32_de_hl_imm was extracted to src/m3/test_assert_eq32.asm in
+; the M6 budget-relief PR (2026-05-29) so that test_slots.asm can be
+; relocated off-axis (page 12) while the shared helper stays resident in
+; the main binary for both inline and off-axis callers.  See that file's
+; header for the resolution mechanism.
 
 
 ; -----------------------------------------------------------------------

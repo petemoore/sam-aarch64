@@ -1,0 +1,89 @@
+; test_offaxis_cluster.asm — off-axis assembly wrapper for the
+; "M5 + misc encoder" boot self-test suites.
+;
+; M6 budget-relief PR (2026-05-29).  See
+; docs/notes/2026-05-29-test-variant-budget-relief.md.
+;
+; This file is its own pyz80 entry point — it is NOT included from
+; src/m3/assembler.asm.  The Makefile invokes pyz80 separately on this
+; file with `--importfile=build/assembler.sym` so that section-C
+; production symbols (encode_*, litpool_*, symbol_*, compute_directive_size,
+; main_eval_*, pass_pc_reset, assert_eq32_de_hl_imm, fail, ...) resolve
+; to the addresses they hold in the main assembler.bin.  The result is a
+; standalone binary (build/test_cluster.bin) that gets loaded at boot
+; into physical page 12 via HLOAD and invoked through a single LMPR swap.
+;
+; Why off-axis: PR #63 pushed the BUILD_TESTS test variant to end at
+; &C0B6 — past the &C000 section-D boundary, into the &C100 boot-stack /
+; OPVAL_ARRAY region.  Relocating this cluster (1225 B of section-C/D
+; code) below &C000 restores ~1 KB of headroom so the remaining FAIL40
+; encoder families (ldr-literal, lsl/lsr-imm, bitfield, tbz/tbnz) can
+; land without re-crossing.  See feedback_test_variant_fragility and
+; docs/notes/2026-05-28-test-variant-ci-regression.md for the cliff
+; history; this mirrors the test_mem off-axis precedent (plan-PR 3 /
+; PR #52) exactly.
+;
+; WHICH suites live here (and why they are LMPR-swap-safe):
+;   slots, pc_rel, directives_m5, ror_imm, shifted_reg, extended_reg,
+;   litpool.
+;
+;   Every production routine these call is HMPR-stable (section C/D) and
+;   — verified by transitive call-graph analysis — NONE reach `paged_call`
+;   or the section-B trampoline/comm buffer.  That matters because the
+;   LMPR swap below relocates BOTH section A and section B to the off-axis
+;   page pair; anything that depends on section B holding the installed
+;   paged_call body (e.g. the sysreg encoders used by test_sysname) would
+;   break.  Those suites stay inline in the main binary.
+;
+;   `assert_eq32_de_hl_imm` (defined in test_slots.asm, which stays in the
+;   main binary) is reached via importfile.  Its inline-literal `pop bc;
+;   (bc)` reads land in section A — which IS the off-axis page under the
+;   swap — so the `defb` literals following each call read correctly.
+;   This is the identical caveat that the test_mem off-axis path relies
+;   on (see test_mem_offaxis.asm:36-43).
+;
+; Mechanism at boot (in src/m3/assembler.asm and src/m3/loader.asm):
+;   1.  enctab_trampoline_setup installs the HLOAD trampoline.
+;   2.  load_offaxis_cluster HLOADs this binary into page 12 at
+;       section-C offset &8000.  When section A is mapped to page 12
+;       (LMPR = LMPR_TEST_CLUSTER), the binary's bytes appear at
+;       &0000-onward in section A.
+;   3.  Inline at the call site: OUT (250), A=LMPR_TEST_CLUSTER;
+;       CALL &0000 (the cluster_dispatch entry); OUT (250),
+;       A=LMPR_DEFAULT_RUNTIME.
+;   4.  HMPR is unchanged across the LMPR swap, so calls FROM the
+;       off-axis code TO section-C production symbols reach the right
+;       addresses.  Stack remains in section D (HMPR), also unchanged.
+;
+; Page 12 is a free page (Tech Manual "PAGE ALLOCATION TABLE": pages
+; 4..12 unused) at boot-self-test time — IN is not HLOADed into pages
+; 7..12 until main_assemble runs, long after these self-tests complete.
+; This is the same time-multiplexing the test_mem (page 13) and IN
+; (pages 7..12) payloads already rely on.
+
+                org     &0000
+
+; -----------------------------------------------------------------------
+; cluster_dispatch — entry point reached via `call &0000` from the
+; LMPR-swap call site in assembler.asm.  Runs each relocated suite in
+; the same relative order it had inline, then RETs to the swap-restore
+; sequence.  Any suite's assertion failure does `jp fail` (section C,
+; HMPR-stable) and halts before returning.
+; -----------------------------------------------------------------------
+cluster_dispatch:
+                call    run_slot_self_tests
+                call    run_pc_rel_self_tests
+                call    run_directives_m5_self_tests
+                call    run_ror_imm_self_tests
+                call    run_shifted_reg_self_tests
+                call    run_extended_reg_self_tests
+                call    run_litpool_self_tests
+                ret
+
+                include "test_slots.asm"
+                include "test_pc_rel.asm"
+                include "test_directives_m5.asm"
+                include "test_ror_imm.asm"
+                include "test_shifted_reg.asm"
+                include "test_extended_reg.asm"
+                include "test_litpool.asm"

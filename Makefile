@@ -96,7 +96,7 @@ test-m2: refenc text2bin
 
 ci-m2: test-m2
 
-.PHONY: m3-asm m3-asm-prod build-m3-disk m3-disk test-mem-offaxis paged-call-payload sysreg-data test-m3 ci-m3
+.PHONY: m3-asm m3-asm-prod build-m3-disk m3-disk test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data test-m3 ci-m3
 
 # Two build variants of the SAM-side assembler:
 #
@@ -152,6 +152,30 @@ $(BUILD)/test_mem.bin: src/m3/test_mem_offaxis.asm src/m3/test_mem.asm $(BUILD)/
 
 test-mem-offaxis: $(BUILD)/test_mem.bin
 
+# Off-axis "M5 + misc encoder" cluster build (BUILD_TESTS only).
+#
+# test_offaxis_cluster.asm is a thin wrapper that does `org &0000` then
+# includes the pc_rel / directives_m5 / ror_imm / shifted_reg /
+# extended_reg / litpool self-test suites behind a small dispatcher.
+# Imports section-C/D production symbols (encode_*, litpool_*, symbol_*,
+# compute_directive_size, assert_eq32_de_hl_imm, fail, ...) from the
+# just-built assembler.sym.  The resulting build/test_cluster.bin
+# (~1225 B) is HLOADed at boot into physical page 12 by
+# src/m3/loader.asm::load_offaxis_cluster and invoked via one LMPR swap.
+# M6 budget-relief PR (2026-05-29); mirrors the test_mem off-axis
+# pattern (PR #52).  See src/m3/test_offaxis_cluster.asm.
+$(BUILD)/test_cluster.bin: src/m3/test_offaxis_cluster.asm \
+		src/m3/test_slots.asm src/m3/test_pc_rel.asm \
+		src/m3/test_directives_m5.asm src/m3/test_ror_imm.asm \
+		src/m3/test_shifted_reg.asm src/m3/test_extended_reg.asm \
+		src/m3/test_litpool.asm \
+		$(BUILD)/assembler.sym
+	pyz80 --importfile=$(BUILD)/assembler.sym \
+	    --obj=$(BUILD)/test_cluster.bin \
+	    src/m3/test_offaxis_cluster.asm
+
+cluster-offaxis: $(BUILD)/test_cluster.bin
+
 # paged_call self-test payload (BUILD_TESTS only).
 #
 # A 3-byte standalone binary (`ld a, &42; ret`) HLOAD'd at boot into
@@ -187,9 +211,10 @@ $(BUILD)/build-m3-disk: tools/build-m3-disk/main.go tools/build-m3-disk/go.mod
 
 build-m3-disk: $(BUILD)/build-m3-disk
 
-m3-disk: m3-asm test-mem-offaxis paged-call-payload sysreg-data enctab $(BUILD)/build-m3-disk
+m3-disk: m3-asm test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data enctab $(BUILD)/build-m3-disk
 	$(BUILD)/build-m3-disk \
 	    -test-mem $(BUILD)/test_mem.bin \
+	    -cluster $(BUILD)/test_cluster.bin \
 	    -paged-call $(BUILD)/paged_call_test_payload.bin \
 	    -sysreg-data $(BUILD)/sysreg_data.bin \
 	    $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/m3-test.mgt

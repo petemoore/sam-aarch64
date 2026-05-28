@@ -91,10 +91,11 @@ echo "--- build-m3-disk ---"
 test_variant_flags=()
 if [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler.bin" ]; then
     # Test variant — needs the off-axis payloads.
-    make -s test-mem-offaxis paged-call-payload
+    make -s test-mem-offaxis paged-call-payload cluster-offaxis
     test_variant_flags=(
         -test-mem "$ROOT/build/test_mem.bin"
         -paged-call "$ROOT/build/paged_call_test_payload.bin"
+        -cluster "$ROOT/build/test_cluster.bin"
     )
 fi
 "$ROOT/build/build-m3-disk" \
