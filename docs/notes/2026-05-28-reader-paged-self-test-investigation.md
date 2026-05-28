@@ -1,7 +1,26 @@
 # reader_paged boot self-test — root cause + fix
 
 Date: 2026-05-28
-Status: ROOT CAUSE FOUND; FIX VERIFIED; awaiting Pete review before commit.
+Status: **SUPERSEDED — verification table below was on a stale tree.**
+
+> **2026-05-28 update:** the verification CI table in this document
+> ("All CI suites pass with the test re-enabled: ci-m3 9/9 …") was
+> generated on a tree that did NOT include the table-relocation work
+> from PR #41.  Once PR #41 landed and the SP=&FFFE fix was applied
+> on top, test-variant CI started failing across m{3..6} with rc=124
+> boot self-test hangs.  PR #43 was authored to revert PR #42 but the
+> revert was incomplete — the SP=&FFFE change remained live in main
+> until cleanup PR (this commit) restored SP=&C100 and re-disabled
+> the call.
+>
+> The root-cause *analysis* below (stack-vs-code collision at &C100
+> when BUILD_TESTS code spills past &C000) may still be accurate; the
+> *fix* needs re-evaluation on cleaned main.  A follow-up
+> investigation will re-apply SP=&FFFE on cleaned main, run the dev-
+> container CI, and either re-land the fix or document why it doesn't
+> work in the post-#41 layout.  See
+> `docs/notes/2026-05-28-test-variant-ci-regression.md` for the
+> regression report.
 
 ## Verdict
 
