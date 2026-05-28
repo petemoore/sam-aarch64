@@ -9,12 +9,16 @@
 //	4  IN         (after)      (the .tbn source file, if provided)
 //	5  test_mem   (after)      (off-axis test_mem.bin, if provided —
 //	                            plan-PR 3 of the paging architecture)
+//	6  p14        (after)      (paged_call self-test payload, if
+//	                            provided — plan-PR 1 of the paging
+//	                            architecture)
 //
 // The AUTO BASIC references "assembler" (not "stub" as in M0).
 //
 // Usage:
 //
-//	build-m3-disk [-test-mem <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>
+//	build-m3-disk [-test-mem <path>] [-paged-call <path>] \
+//	    <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>
 //
 // Three-positional form (legacy): no IN file is added — used by
 // Task-3 boot tests where the assembler exits before reading IN.
@@ -27,6 +31,21 @@
 // variant of the assembler from plan-PR 3 onwards (the test binary
 // HLOADs this file into physical page 13 at boot via
 // load_test_mem_off_axis).  Production builds omit this file.
+//
+// -paged-call <path>: deposits the paged_call boot self-test target
+// payload as a CODE file named "p14".  Required for the BUILD_TESTS
+// variant from plan-PR 1 onwards (the test binary HLOADs this file
+// into physical page 14 at boot via load_page14_payload, then
+// invokes run_paged_call_self_tests against it).  Production builds
+// omit this file.
+//
+// The two BUILD_TESTS-only flags (-test-mem, -paged-call) are
+// intentionally kept as bespoke per-page flags rather than
+// generalised to `-page N FILE`: there are only two callers at
+// present, and the per-page Go-side bookkeeping (UIFA name +
+// load_*_payload routine) is per-page anyway in the loader.asm
+// pairings.  If a third use case appears we can refactor; until
+// then the bespoke form keeps the call-site obvious.
 package main
 
 import (
@@ -55,9 +74,10 @@ func main() {
 	log.SetPrefix("build-m3-disk: ")
 
 	testMemPath := flag.String("test-mem", "", "path to off-axis test_mem.bin (BUILD_TESTS only; plan-PR 3)")
+	pagedCallPath := flag.String("paged-call", "", "path to the paged_call self-test page-14 payload (BUILD_TESTS only; plan-PR 1)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
-			"usage: %s [-test-mem <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n",
+			"usage: %s [-test-mem <path>] [-paged-call <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n",
 			os.Args[0])
 		flag.PrintDefaults()
 	}
@@ -221,6 +241,25 @@ func main() {
 		}
 	}
 
+	// Slot 6 (optional): paged_call self-test payload (p14).  Loaded at
+	// boot by src/m3/loader.asm::load_page14_payload via HGTHD +
+	// trampoline into physical page 14, then exercised by
+	// run_paged_call_self_tests (src/m3/test_paged_call.asm).
+	// BUILD_TESTS variant only; production builds omit -paged-call.
+	// Recorded load address mirrors enctab.enc / test_mem: documentary,
+	// since the loader supplies HL = &8000 and target page = 14 when
+	// calling the trampoline.
+	if *pagedCallPath != "" {
+		pagedCallData, err := os.ReadFile(*pagedCallPath)
+		if err != nil {
+			log.Fatalf("read paged-call payload: %v", err)
+		}
+		const PagedCallLoadAddress uint32 = 0x8000
+		if err := disk.AddCodeFile("p14", pagedCallData, PagedCallLoadAddress, 0); err != nil {
+			log.Fatalf("AddCodeFile(p14): %v", err)
+		}
+	}
+
 	if err := disk.Save(outputPath); err != nil {
 		log.Fatalf("save %s: %v", outputPath, err)
 	}
@@ -239,6 +278,10 @@ func main() {
 	if *testMemPath != "" {
 		testMemSize, _ := os.Stat(*testMemPath)
 		fmt.Printf("test_mem:   %d bytes\n", testMemSize.Size())
+	}
+	if *pagedCallPath != "" {
+		pagedCallSize, _ := os.Stat(*pagedCallPath)
+		fmt.Printf("p14:        %d bytes\n", pagedCallSize.Size())
 	}
 	fmt.Printf("Built %s\n", outputPath)
 }

@@ -268,4 +268,60 @@ name_test_mem:  defb    19
                 defm    "test_mem  "   ; 10 chars (8 + 2 trailing spaces)
                 defm    "    "         ; 4-char ext (unused)
 
+
+; -----------------------------------------------------------------------
+; load_page14_payload — BUILD_TESTS only.  HLOAD the paged_call self-
+;                       test payload into physical page 14 via the
+;                       trampoline.
+;
+; Per plan-PR 1 of docs/notes/2026-05-28-paged-call-architecture.md.
+; Structural cousin of load_test_mem_off_axis above (and load_enctab):
+; HGTHD + HLOAD-via-trampoline.  The only differences are file name
+; ("p14"), target page (PAGED_CALL_TEST_PAGE = 14), and the payload
+; being trivially small (3 bytes — `ld a, &42; ret`).
+;
+; The payload is consumed by run_paged_call_self_tests in
+; src/m3/test_paged_call.asm; not used in any production path.
+;
+; Input:  none (precondition: enctab_trampoline_setup has been called).
+; Output: physical page 14 holds the payload (`ld a, &42; ret` stub at
+;         offset &8000-onward when HMPR maps page 14 in).  HMPR
+;         restored on return.
+; Clobbers: A, BC, DE, HL, IX (everything except SP).
+; -----------------------------------------------------------------------
+load_page14_payload:
+                ld      hl, name_page14
+                call    fill_uifa
+                rst     8
+                defb    HOOK_HGTHD     ; longjmps on "file not found"
+
+; Read length-mod-16K from SAMDOS-deposited DIFA header at &4B50+35,
+; clearing the `set 7, d` marker.  Mirrors load_test_mem_off_axis above.
+                ld      hl, (&4B50 + 35)
+                ld      a, h
+                and     &7F
+                ld      h, a
+                ld      e, l
+                ld      d, h           ; DE = length-mod-16K (= 3)
+
+; Read page count from DIFA+34.  Expected 0 — the payload is 3 bytes.
+                ld      a, (&4B50 + 34)
+                ld      c, a           ; C = pages count
+
+                ld      hl, &8000      ; section-C window (HLOAD requirement)
+                ld      b, PAGED_CALL_TEST_PAGE
+                call    TRAMPOLINE_DST
+                ret
+
+
+; -----------------------------------------------------------------------
+; UIFA name block for "p14" (BUILD_TESTS only).
+;
+; The on-disk catalogue entry is created Mac-side by build-m3-disk
+; (using samfile) when invoked with the -paged-call flag.
+; -----------------------------------------------------------------------
+name_page14:    defb    19
+                defm    "p14       "   ; 10 chars (3 + 7 trailing spaces)
+                defm    "    "         ; 4-char ext (unused)
+
 endif

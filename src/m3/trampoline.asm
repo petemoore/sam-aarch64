@@ -288,6 +288,23 @@ TEST_MEM_PAGE:  equ     13
 LMPR_TEST_MEM:  equ     &20 + TEST_MEM_PAGE         ; = &2D
 
 
+; paged_call test-payload page (BUILD_TESTS only — see plan-PR 1 of
+; docs/notes/2026-05-28-paged-call-architecture.md).
+;
+; Page 14 holds the boot self-test target stub for the section-B
+; paged_call helper.  Picked distinct from page 13 (which plan-PR 3
+; reuses for the off-axis test_mem corpus) so the test_mem off-axis
+; pattern is undisturbed.  The brainstorm doc's long-term role for
+; page 14 is "explanation prose" (memory-layout-brainstorm.md §3) —
+; that lands later; until then plan-PR 1 reuses page 14 as the
+; paged_call self-test payload page.
+;
+; HMPR-page form: the helper combines this low-5-bit page number
+; with the entry HMPR's top 3 bits (CLUT + ext-mem) at runtime, so
+; no LMPR_PAGED_CALL_TEST constant is needed at the call site.
+PAGED_CALL_TEST_PAGE:   equ     14
+
+
 TRAMPOLINE_DST: equ     &7E00          ; section-B copy destination
                                        ; (under LMPR_DEFAULT, section B
                                        ; = page 1).  Near the top of
@@ -323,23 +340,90 @@ SP_SAVE:        equ     TRAMPOLINE_DST + 33    ; 2 bytes (33, 34)
 ; lands at TRAMP_SAFE_SP-1 and TRAMP_SAFE_SP-2 (= &7EFE / &7EFF) —
 ; in section B, untouched by HLOAD.  Matches COMET's `LD SP,(sproom)`
 ; pattern at `comet.asm:1189` (see investigation note).
+;
+; Also reused as the safe SP for the paged_call helper — it likewise
+; needs SP in LMPR-stable section B for the duration of the target
+; routine, because section D may map to a different physical page
+; during the call.
 TRAMP_SAFE_SP:  equ     TRAMPOLINE_DST + 256   ; = &7F00
 
 
-; -----------------------------------------------------------------------
-; enctab_trampoline_setup — copy the trampoline body into section B.
+; =======================================================================
+; paged_call — section-B helper for generic paged target routines.
+; =======================================================================
 ;
-; Must be called ONCE at startup, BEFORE the first call to
-; trampoline_hload.  Idempotent (safe to call multiple times).
+; Per docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1 of §6.
+;
+; Lives in section B (LMPR-stable) alongside the HLOAD trampoline.
+; Generalises the HLOAD trampoline's "swap HMPR, dispatch, swap back"
+; pattern from (RST 8 with fixed hook number) to (any target address
+; in section C with any target page number).  See paged_bodies.asm
+; header for the call-site shape and the mechanism walkthrough; see
+; the architecture doc §3 for the full design rationale.
+;
+; Section-B layout (TRAMPOLINE_DST = &7E00):
+;
+;   &7E00..&7E1?  HLOAD trampoline body (~30 bytes)
+;   &7E20..&7E22  HMPR_SAVE (1) + SP_SAVE (2) — HLOAD static slots
+;   &7E40..&7E??  paged_call body + trailer
+;   &7ED0..&7ED2  PAGED_CALL_HMPR_SAVE (1) + PAGED_CALL_SP_SAVE (2)
+;   &7F00         TRAMP_SAFE_SP (top-of-safe-SP scratch)
+;
+; HMPR_SAVE / SP_SAVE keep their original offsets at +32/+33 so the
+; HLOAD trampoline body bytes are byte-identical to pre-PR-#50 state
+; (lower regression risk during the salvage).  The new paged_call
+; static slots live well above the body region (at +&D0+) and well
+; below TRAMP_SAFE_SP scratch.
+;
+; ABI (architecture doc §3.4): paged_call clobbers A, HL, DE, F;
+; preserves BC, IX, IY.  Target args go in BC / IX / IY.  Target runs
+; with section C/D = target page; on RET, HMPR is restored bit-
+; identically (including CLUT bits 5-6 and ext-mem bit 7).  Not
+; re-entrant — the static save slots are one deep.
+PAGED_CALL_DST:           equ     TRAMPOLINE_DST + &40    ; = &7E40
+                                                          ; (clear of HLOAD body
+                                                          ; ~30 B at +0 and
+                                                          ; HMPR_SAVE/SP_SAVE at
+                                                          ; +32/+33)
+PAGED_CALL_HMPR_SAVE:     equ     TRAMPOLINE_DST + &D0    ; = &7ED0 (1 byte)
+PAGED_CALL_SP_SAVE:       equ     TRAMPOLINE_DST + &D1    ; = &7ED1 (2 bytes)
+
+; Lowercase alias for call-site readability (`call paged_call / defw
+; addr / defb page` is the on-the-page shape).
+paged_call:               equ     PAGED_CALL_DST
+
+
+; -----------------------------------------------------------------------
+; enctab_trampoline_setup — copy section-B helper bodies into section B.
+;
+; Installs both the HLOAD trampoline body and the paged_call body in
+; one pass.  Must be called ONCE at startup, BEFORE the first call
+; to TRAMPOLINE_DST or paged_call.  Idempotent (safe to call multiple
+; times).
+;
+; (Historical aside: this routine used to copy only the HLOAD
+; trampoline body — hence the "enctab" prefix in its name.  It was
+; extended to also copy the paged_call body in plan-PR 1 of the
+; paging-architecture rollout.  The name stayed for diff-blame
+; continuity.)
 ;
 ; Input:  none.
-; Output: trampoline body installed at TRAMPOLINE_DST in section B.
+; Output: HLOAD body installed at TRAMPOLINE_DST; paged_call body
+;         installed at PAGED_CALL_DST.  Both in section B.
 ; Clobbers: A, BC, DE, HL.
 ; -----------------------------------------------------------------------
 enctab_trampoline_setup:
+                ; HLOAD trampoline body.
                 ld      hl, trampoline_body
                 ld      de, TRAMPOLINE_DST
                 ld      bc, trampoline_body_end - trampoline_body
+                ldir
+                ; paged_call body (source lives in src/m3/paged_bodies.asm,
+                ; included at the END of assembler.asm — see
+                ; paged_bodies.asm header for the source-position note).
+                ld      hl, paged_call_body
+                ld      de, PAGED_CALL_DST
+                ld      bc, paged_call_body_end - paged_call_body
                 ldir
                 ret
 

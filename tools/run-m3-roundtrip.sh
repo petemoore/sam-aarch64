@@ -75,20 +75,26 @@ echo "--- text2bin ---"
 
 # 2. build-m3-disk with the .tbn as IN.
 #
-# For the test variant only, also deposit the off-axis test_mem.bin
-# (plan-PR 3 of the paging architecture — see
-# docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md).  Production
-# builds don't include the test_mem code path at all, so no off-axis
-# file is needed.
+# For the test variant only, also deposit:
+#   - the off-axis test_mem.bin (plan-PR 3 of the paging architecture,
+#     see docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md), and
+#   - the paged_call self-test page-14 payload (plan-PR 1 of the same
+#     architecture, see
+#     docs/notes/2026-05-28-paged-call-architecture.md).
+# Production builds don't include either code path, so neither file
+# is needed.
 echo "--- build-m3-disk ---"
-test_mem_flag=()
+test_variant_flags=()
 if [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler.bin" ]; then
-    # Test variant — needs the off-axis test_mem payload.
-    make -s test-mem-offaxis
-    test_mem_flag=(-test-mem "$ROOT/build/test_mem.bin")
+    # Test variant — needs the off-axis payloads.
+    make -s test-mem-offaxis paged-call-payload
+    test_variant_flags=(
+        -test-mem "$ROOT/build/test_mem.bin"
+        -paged-call "$ROOT/build/paged_call_test_payload.bin"
+    )
 fi
 "$ROOT/build/build-m3-disk" \
-    "${test_mem_flag[@]}" \
+    "${test_variant_flags[@]}" \
     "$ASSEMBLER_BIN" build/enctab.enc \
     "build/${base}.tbn" \
     "build/${base}.mgt"

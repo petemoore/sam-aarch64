@@ -556,50 +556,69 @@ Revised call-site shape:
     ; resume here after target's RET
 ```
 
-Handler (this time correct):
+Handler (final spec — patched 2026-05-28 post-PR-#50-salvage to match
+the HLOAD trampoline's SP-save ordering, and to preserve the
+target's AF across the trailer's HMPR restore):
 
 ```
 paged_call:           ; lives in section B at TRAMPOLINE_DST + N
     di
-    pop     hl                  ; HL → inline payload
-    in      a, (251)            ; A = current HMPR
+    ld      (paged_call_sp_save), sp    ; save SP BEFORE the pop —
+                                        ; the saved value is caller_SP - 2
+                                        ; (the post-CALL hardware-push state)
+                                        ; which the trailer needs to restore
+                                        ; so its RET reads the right slot.
+    in      a, (251)                    ; A = current HMPR
     ld      (paged_call_hmpr_save), a
-    ld      (paged_call_sp_save), sp
-    ld      sp, paged_call_safe_sp
+    pop     hl                          ; HL → inline payload; SP = caller_SP
 
     ld      e, (hl)
     inc     hl
     ld      d, (hl)
     inc     hl
-    ld      a, (hl)             ; A = target HMPR
-    inc     hl                  ; HL = post-payload return
+    ld      a, (hl)                     ; A = target page (low 5 bits)
+    inc     hl                          ; HL = post-payload return
 
-    push    hl                  ; real return after the target
+    ; Rewrite caller's return-addr slot with the real post-payload
+    ; return.  push hl decrements SP by 2 (back to caller_SP - 2,
+    ; which == saved paged_call_sp_save) and writes HL — overwriting
+    ; the original (now stale) return-after-CALL pointer that pointed
+    ; at the DEFW.  The trailer's final RET pops from this slot.
+    push    hl                          ; SP := caller_SP - 2;
+                                        ; mem[SP..+1] := post-payload-return
+
+    ld      sp, paged_call_safe_sp      ; section-B-stable SP
+
     ld      hl, paged_call_trailer
-    push    hl                  ; trailer pops first (target's RET lands here)
-    push    de                  ; target — final RET jumps to it
+    push    hl                          ; target's RET lands here
+    push    de                          ; target — final RET jumps to it
 
     ; HMPR bits 5-7 are mode-3 CLUT + ext-mem (sam-paging.md:140-150)
-    ; and must NOT be clobbered.  Caller-supplied A may have those bits
-    ; clear (most call sites just embed a page number) — mask the page
-    ; bits in over the entry HMPR's CLUT bits.
-    ld      hl, paged_call_hmpr_save
-    and     %00011111            ; keep page bits only from caller-supplied A
+    ; and must NOT be clobbered.  Caller-supplied A holds the page
+    ; number only (low 5 bits); OR in the saved HMPR's top 3 bits
+    ; over the caller's page bits.
+    and     %00011111                   ; keep page bits
     ld      e, a
-    ld      a, (hl)              ; A = entry HMPR
-    and     %11100000            ; keep CLUT + ext-mem bits
-    or      e                    ; combine: caller-page | entry-CLUT
-    out     (251), a            ; HMPR := target → section C = target page
-    ret                         ; → DE = target_addr_in_C
+    ld      a, (paged_call_hmpr_save)
+    and     %11100000                   ; keep CLUT + ext-mem
+    or      e                           ; combine
+    out     (251), a                    ; HMPR := target → section C = target page
+    ret                                 ; → target
 
 paged_call_trailer:           ; in section B, fetched stably across HMPR change
+    ex      af, af'                     ; preserve target's AF — the target
+                                        ; may return a value in A or status
+                                        ; in F.  Mirrors the HLOAD
+                                        ; trampoline's ex-af-af' pattern.
     ld      a, (paged_call_hmpr_save)
-    out     (251), a            ; restore caller's HMPR (full byte, CLUT preserved)
-    ld      sp, (paged_call_sp_save)
+    out     (251), a                    ; restore caller's HMPR (full byte)
+    ld      sp, (paged_call_sp_save)    ; SP := caller_SP - 2;
+                                        ; mem[SP..+1] = post-payload-return
+    ex      af, af'                     ; restore target's AF
     ; NB: don't EI — caller chose DI state; we restore it via the
     ; existing convention (M3 runs DI throughout). If editor / Phase 2
     ; wants EI, that's a caller-side bracket.
-    ret                         ; → caller's post-payload return
+    ret                                 ; → caller's post-payload return
 ```
 
 **This handler is structurally identical to the HLOAD trampoline at
@@ -612,14 +631,32 @@ Note: 3 B not 1 B, because we're not taking the RST shortcut. Pete's
 +1 B framing assumed an RST-based mechanism; section-B trampoline
 loses that 2 B but gains the structural correctness.
 
+**Editorial history**: this pseudocode was patched twice during the
+plan-PR 1 salvage (PR following #50):
+1. **SP-save ordering** — the original draft saved SP AFTER the
+   `pop hl`. That's wrong: pop has already incremented SP by 2, so
+   the saved value is caller_SP, not caller_SP - 2; the trailer's
+   later `ld sp, (save); ret` then puts SP one slot above the
+   return address and pops garbage. The HLOAD trampoline at
+   `trampoline.asm` got this right by saving BEFORE the modify; the
+   final pseudocode mirrors it.
+2. **AF preservation across the trailer** — the original trailer
+   unconditionally clobbered A with `ld a, (paged_call_hmpr_save)`.
+   For a single-target call like HLOAD that's fine (HLOAD's caller
+   doesn't expect A back); for the GENERIC paged_call helper the
+   target may legitimately return a value in A. The final trailer
+   uses `ex af, af'` (same pattern as the HLOAD trampoline) to flow
+   A/F back unchanged.
+
 ### 3.4 Properties
 
-**Register preservation**: handler clobbers A, HL, DE; preserves BC,
-IX, IY (not touched). Per-call ABI: same as a plain `CALL` to a
-routine that itself clobbers A/HL/DE (most assembler routines
-already do). Callers of the existing HLOAD trampoline already pass
-arguments in B, C, DE, IX (`trampoline.asm:346-352`); paged_call's
-caller would pass target-args in BC/IX/IY only.
+**Register preservation**: handler clobbers HL, DE; preserves BC,
+IX, IY. AF flows through the trailer via `ex af, af'` so the target's
+return value (A) and status flags (F) reach the caller unchanged.
+Caller-supplied arguments to the target are best passed in BC / IX /
+IY since the handler clobbers HL and DE. Note: AF' is used as
+scratch by the trailer; targets that themselves need AF' must save
+it before paged_call entry.
 
 **Stack consumption**: 6 bytes (3 PUSHs at handler entry: post-payload
 return, trailer, target). The scratch stack at `paged_call_safe_sp`
@@ -665,44 +702,46 @@ existing LMPR-based ENCTAB/OUT/IN mapping.
 ## 4. Paged-data — generalisation
 
 The sysreg-table case is **read-only static data**, not a callable
-routine. The full `paged_call` mechanism is overkill for "load one
-byte from page 13".
+routine. The first instinct was: a separate, lighter-weight primitive
+for "read a byte / block from page N" without the full call-via-
+target dance.
 
-### 4.1 The simpler primitive
+**Status (post-PR-#50-salvage, 2026-05-28):** the split-bracket
+primitives drafted below in §4.2 — `paged_data_map_hmpr` /
+`paged_data_unmap_hmpr` (a `getset` / `restore` pair specialised to
+HMPR) — were investigated as part of PR #50 and **dropped during the
+salvage** (PR following #50). Reason: the bracket pattern can't be
+safely used from code in section C/D. After `paged_data_map_hmpr`'s
+RET, the caller's next instruction is fetched from section C/D under
+the NEW HMPR — i.e. from the target page, not the caller's code.
+Crash. (The §3 paged_call helper sidesteps this by switching HMPR
+ONLY during the target's body; the trailer restores HMPR before the
+caller's next instruction is fetched.)
 
-For paged-data access, define two helpers:
+For paged-data access from section-C/D callers (which is everyone in
+M3-M6 — the assembler binary lives in section C), the right shape is
+**`paged_call` to a target routine that lives in the data page and
+does its work**. That's what the SAM ROM (`R1ONCLBC` /
+`R1OFFCLBC` — §1.3), COMET (`getset` / `restore` — §1.6 — does NOT
+have this problem because COMET's call sites live in section A,
+LMPR-stable across LMPR changes), and SAMDOS (PTDOS / `RST 8` —
+§1.4) all do. The §4.1 self-contained-helper pattern below (e.g.
+`paged_read_byte`) is also fine for ad-hoc one-shot use — it lives
+in section B so the HMPR change doesn't perturb its instruction
+stream — but `paged_call` is the only primitive needed for the
+M3-M6 milestone-block consumers.
+
+### 4.1 Self-contained helpers — fine as future additions
+
+A self-contained `paged_read_byte` (lives entirely in section B,
+takes a page + offset, returns A) is fine as a future helper. Its
+body fetches and the HMPR-bracketed read both happen inside the
+LMPR-stable region; no instruction-fetch hazard. Pseudocode for
+reference (kept here so the design rationale isn't lost):
 
 ```
-paged_read_byte:   ; A := (target_page : target_offset)
-    ; in:  C = target_page (low 5 + RAM0 if page > 0... actually
-    ;          C = target HMPR value, e.g. &2D for page 13)
-    ;      HL = target offset in section-C form (&8000..&BFFF)
-    ; out: A = byte
-    ; clobbers: A only — HL/BC/DE preserved
-    di
-    in      a, (251)
-    push    af                  ; (a) save HMPR; section B = page 1 stable
-    ld      a, c
-    out     (251), a
-    ld      a, (hl)             ; read via section C
-    pop     bc                  ; (b) recover original HMPR into B
-    push    af                  ; preserve A across out
-    ld      a, b
-    out     (251), a
-    pop     af                  ; A = byte
-    ret
-```
-
-Wait — `push af` and `pop af` cross the HMPR change; they hit section
-D (= HMPR+1). For SP in section D (= &C100), the push goes to one
-page, the pop reads from another. **Same SP-collision problem the
-HLOAD trampoline already solved.**
-
-Fix: use the same SP-switch into section-B-stable scratch:
-
-```
-paged_read_byte:
-    ; in:  C = target HMPR value
+paged_read_byte:        ; lives in section B
+    ; in:  C = target page (low 5 bits used)
     ;      HL = target offset in section-C form (&8000..&BFFF)
     ; out: A = byte
     di
@@ -711,7 +750,8 @@ paged_read_byte:
     in      a, (251)
     push    af                  ; section B SP — stable across HMPR change
     ld      a, c
-    out     (251), a
+    out     (251), a            ; HMPR := target page (caller passes raw page;
+                                ; helper should also mask + OR CLUT bits)
     ld      a, (hl)             ; A = byte
     pop     bc                  ; B = original HMPR; clobbers B
     ld      c, a                ; preserve byte in C
@@ -722,56 +762,58 @@ paged_read_byte:
     ret
 ```
 
-10 instructions, ~25 T-states overhead per byte read. For sysreg
-lookup (~6 bytes per match attempt), that's 150 T-states per attempt
-× say 12 attempts = ~2 ms per sysreg-bearing instruction. Negligible.
+Not implemented as part of plan-PR 1 (the original PR-#50 attempt
+shipped it but the same SP-switch wasn't wired correctly; the
+salvage drops the helper rather than fix-and-keep, on YAGNI grounds).
+Re-introduce when a real consumer exists.
 
-### 4.2 Smarter bulk reads — recommended
+### 4.2 Split-bracket primitives — REJECTED (no longer the design)
 
-For 5-byte sysreg-table entry copies (the common access pattern,
-`sysname.asm:716`), bracket once around the whole copy loop:
+An earlier draft proposed a `paged_data_map_hmpr` / `paged_data_unmap_hmpr`
+pair callable from arbitrary code, with the caller bracketing
+arbitrary code between them:
 
 ```
-    ld      a, C                  ; C = target HMPR
-    call    paged_data_map        ; HMPR := target, save old
+    ld      a, C                  ; C = target page
+    call    paged_data_map_hmpr   ; HMPR := target, save old
     ldir                          ; or whatever loop reads the page
-    call    paged_data_unmap      ; HMPR := saved old
+    call    paged_data_unmap_hmpr ; HMPR := saved old
 ```
 
-This is exactly the COMET `getset` / `restore` pattern from §1.6,
-specialised to HMPR. Per-site cost ~10 B for the bracket but you
-only pay it once per *block read*, not once per byte. The 5-byte
-sysreg copy: 10 B bracket + 5 B `ldir`-style copy = 15 B per use vs
-~50 B for per-byte bracketing. **This is the right shape for paged
-data.**
+**This doesn't work for callers in section C/D**. After
+`paged_data_map_hmpr` does its RET, the caller resumes execution —
+but the caller's instruction fetch (PC was in section C/D) now hits
+the target page, not the caller's code. The bracket can be safely
+issued only by callers living in section A (LMPR-stable across HMPR
+changes) or section B (also LMPR-stable). Since all M3-M6 code lives
+in section C, no real caller benefits from the split-bracket shape.
 
-### 4.3 The generalisation — paged_call is paged_map + call + paged_unmap
+For real-world precedents that DO use a split-bracket pattern (COMET
+`getset` / `restore`, §1.6), the caller's code lives in section A
+under a fixed LMPR window — those callers don't see the HMPR change
+because they're in an LMPR-managed section. We don't have that luxury
+in our codebase.
 
-The single-shot `paged_call` helper (§3.3) is literally just
-`paged_data_map` + a call to the target via the trailer + an inline
-`paged_data_unmap`. **Both should be implemented in one PR**, with
-the data-bracket helpers being the primary primitives and
-`paged_call` being a thin convenience wrapper.
+**The post-salvage answer**: for any need to do work in a paged
+data page from section-C/D code, the caller invokes `paged_call`
+with a target routine living in the data page. The target routine
+does the work and returns. That's the SAM ROM / SAMDOS shape; that's
+the spec.
 
-For PR sizing this means PR 1 = "paged_data_map / paged_data_unmap +
-the section-B paged_call wrapper + ONE test", which is a coherent
-unit.
-
-### 4.4 ENCTAB-style LMPR paged data (existing)
+### 4.3 ENCTAB-style LMPR paged data (existing)
 
 The existing ENCTAB pattern (`trampoline.asm:440-476`) is the LMPR
-analogue of the HMPR-based `paged_data_map`/`paged_data_unmap`. We
-should generalise the naming:
+analogue of an HMPR-based map/unmap. The §4.2 critique above doesn't
+apply because the LMPR-bracketed code in our codebase lives in
+section C (HMPR-stable), so the LMPR change doesn't perturb its
+fetch. The asymmetry is real: LMPR brackets can be used from section
+C, but HMPR brackets can't.
 
-- `lmpr_swap_in(page) / lmpr_swap_out` — already exists as
-  `enctab_map_in / enctab_map_out`. Rename if used for non-ENCTAB
-  data; keep specialised names for ENCTAB if not.
-- `hmpr_swap_in(page) / hmpr_swap_out` — new helpers per §4.2.
-
-The brainstorm doc's page-axis allocation
-(`memory-layout-brainstorm.md:43-62`) already separates "LMPR pages"
-(ENCTAB, OUT-low-zone) from "HMPR pages" (TFTP buffers, music, F1
-prose, sim state). The two-helper family makes this concrete.
+If the brainstorm doc (`memory-layout-brainstorm.md:43-62`) ever
+firms up the "LMPR pages" vs "HMPR pages" labelling into helper
+naming (`lmpr_swap_in / lmpr_swap_out` for LMPR-bracket, plus a
+TBD design for HMPR access that's NOT a split bracket) — that's a
+future cleanup, not part of plan-PR 1.
 
 ---
 
@@ -835,7 +877,66 @@ that the access mechanism is `paged_data_map_hmpr(A)` /
 Each PR is a coherent, testable, mergeable unit. PRs land in order;
 each depends on the previous.
 
-### PR 1 — paged_call + paged_data helpers (medium)
+**Editorial note (2026-05-28 post-PR-#50-salvage):** the
+original §6 ordering (PR 1 → PR 2 → PR 3 → PR 4) was wrong as
+written. PR 1 (paged_call primitives) was the first attempt
+(landed as PR #50, draft, parked) but bumped against the test-
+variant `&C100` cliff: the new bodies plus the BUILD_TESTS-only
+test scaffolding pushed the test variant from `&C1AB` to `&C220`,
+crashing the test boot. PR 3 (port test corpus off-axis) was the
+right *first* PR — it freed 722 B of test-variant section-C
+budget, restoring 552 B of headroom under `&C100`. That landed as
+PR #52. The list below is annotated to reflect the actual landing
+order.
+
+### PR 1 — paged_call primitive (small-medium) — LANDED post-PR-#52
+
+**Landed as the salvage of PR #50, after PR #52 freed the test-
+variant budget. Scope per the salvage (narrower than the original
+PR-#50 draft):**
+
+- Add `paged_call` body in `src/m3/paged_bodies.asm`, included at the
+  end of `src/m3/assembler.asm`. The body is LDIR'd into section B
+  at boot by an extended `enctab_trampoline_setup` (`trampoline.asm`).
+- Reserve scratch slots `paged_call_hmpr_save`, `paged_call_sp_save`
+  in section B at `TRAMPOLINE_DST + &D0..&D2` (well above the body
+  region and well below `TRAMP_SAFE_SP` scratch).
+- Reuse `TRAMP_SAFE_SP` (= `&7F00`) as the section-B-stable SP during
+  the target's body.
+- Add `PAGED_CALL_TEST_PAGE = 14` constant in `trampoline.asm`. Page
+  13 is in use by plan-PR-3's `test_mem` off-axis payload; page 14
+  is the test-only payload page for plan-PR 1.
+- Add a 3-byte standalone payload (`src/m3/paged_call_test_payload.asm`,
+  `ld a, &42; ret`) HLOADed into physical page 14 at boot by
+  `load_page14_payload` (BUILD_TESTS only, in `loader.asm`).
+- Extend `tools/build-m3-disk/main.go` with a `-paged-call <path>`
+  flag depositing the page-14 payload as a CODE file named `p14`.
+- Add the boot self-test (`src/m3/test_paged_call.asm`) that calls
+  `paged_call` against the page-14 stub and asserts A=&42 plus HMPR
+  bit-identity round-trip.
+- Patch this design doc's §3.3 / §4 / §6 / §7 to reflect the salvage
+  decisions (drop split-bracket primitives; correct SP-save and AF-
+  preservation in the trailer; record actual PR ordering).
+
+**NOT included** (compared with original PR-#50 draft):
+- `paged_data_map_hmpr` / `paged_data_unmap_hmpr` — dropped per §4
+  post-salvage rewrite.
+- `paged_read_byte` self-contained helper — deferred; YAGNI until a
+  consumer materialises.
+
+**Risk callouts (post-salvage retrospective):**
+- The §3.3 SP-save ordering trap caught the original PR-#50 author —
+  fix in §3.3 pseudocode above (save BEFORE the pop). The salvage
+  also adds the `ex af, af'` preservation in the trailer so target
+  return values flow back unchanged.
+- The §4.2 split-bracket helpers were a design-doc invention rather
+  than prior art; the SAM ROM / SAMDOS / COMET precedents all use a
+  single-call dispatch pattern (RST 30H / RST 8 / RST 28). The
+  salvage drops the split-bracket primitives.
+- Port number cross-check (251 for HMPR, 250 for LMPR — easy to
+  transpose, has bitten before per `m6_strand_a_complete.md:93-95`).
+
+### PR 1 (original, superseded) — paged_call + paged_data helpers
 
 **Scope:**
 - Add `paged_call` body to `src/m3/trampoline.asm`, alongside the
@@ -916,9 +1017,27 @@ documentation), medium PR.
 **Estimate:** ~300 lines (data file + build glue + sysname.asm
 refactor + tests), small-medium PR.
 
-### PR 3 — port M5 self-test fixture corpus off-axis (small)
+### PR 3 — port test corpus off-axis (small) — LANDED FIRST as PR #52
 
-**Scope:**
+**Landed BEFORE plan-PR 1** (which was the salvage of PR #50) because
+the test variant was already past `&C100` on baseline `main`, and
+plan-PR 1's new BUILD_TESTS-only scaffolding would have pushed it
+much further. PR #52 frees 722 B of section-C budget by porting the
+largest BUILD_TESTS self-test (`test_mem.asm`, ~780 B) off-axis to
+physical page 13.
+
+**Scope as landed (PR #52, 2026-05-28):**
+- The `test_mem.asm` suite moved off-axis to physical page 13.
+- Two-stage build: `pyz80 --exportfile=build/assembler.sym`, then
+  `test_mem_offaxis.asm` is assembled standalone with
+  `--importfile` so cross-page symbols resolve.
+- Invocation uses a brief LMPR swap to map page 13 into section A,
+  call the off-axis entry at `&0000`, then restore LMPR. Crucially,
+  this is an **LMPR** bracket, not HMPR — section C / D (and the
+  scratch addresses they hold) is unaffected, so the off-axis test
+  code can call back into section-C production helpers.
+
+**Original draft scope (NOT all landed in PR #52):**
 - The M3/M4/M5 boot self-test corpus
   (`src/m3/test_*.asm` files) consumes section-C code budget in the
   BUILD_TESTS variant. Move it to a paged page (page 14? — TBD per
@@ -1060,6 +1179,23 @@ asm refactors), medium PR.
    days ago per the staleness warning). Specifically `OPVAL_ARRAY`
    at `&C100`, the `&E100..&FFFF` "free" region, and the trampoline
    layout at `&7E00..&7F00` should all be re-confirmed.
+
+9. **Test-variant section-C cliff — STRUCTURALLY ADDRESSED 2026-05-28
+   by PR #52 (plan-PR 3 landed first).** The original drafting of
+   this note assumed plan-PR 1 landed first; in practice the test
+   variant was already 15 B past `&C100` on baseline `main` and any
+   plan-PR-1-shaped change (which adds BUILD_TESTS scaffolding for
+   the boot self-test) was guaranteed to push it deeper, crashing
+   the boot. PR #52 ported the largest BUILD_TESTS-only suite
+   (`test_mem.asm`, ~780 B) off-axis to physical page 13, giving
+   the test variant ~552 B of headroom under `&C100`. With that
+   headroom in place plan-PR 1's salvage (PR following #50) fits
+   cleanly: test variant ends at `&BF6D` (~408 B headroom).
+   Subsequent plan-PR-1-shaped additions can use the same off-axis
+   pattern if their BUILD_TESTS overhead would breach the ceiling
+   again; the §3 mechanism (paged_call) is now also available, so
+   future ports can be paged_call-shaped rather than LMPR-bracketed
+   like `test_mem`.
 
 ---
 
