@@ -17,10 +17,11 @@ func (i *includeDirsFlag) Set(v string) error { *i = append(*i, v); return nil }
 
 func main() {
 	var (
-		outFlag     string
-		incDirs     includeDirsFlag
-		flattenFlag bool
-		originStr   string
+		outFlag           string
+		incDirs           includeDirsFlag
+		flattenFlag       bool
+		originStr         string
+		stripCommentsFlag bool
 	)
 	flag.StringVar(&outFlag, "o", "", "output file (defaults to INPUT.tbn)")
 	flag.Var(&incDirs, "I", "directory to search for .include (repeatable)")
@@ -30,9 +31,14 @@ func main() {
 	flag.StringVar(&originStr, "origin", "0xfffffff000000000",
 		"origin VMA emitted at the start of -flatten output "+
 			"(the linker script's `. = N`); ignored without -flatten.")
+	flag.BoolVar(&stripCommentsFlag, "strip-comments", false,
+		"after parsing, remove all COMMENT records from the output. "+
+			"Used to fit the .tbn within the SAM assembler's IN-buffer "+
+			"ceiling (96 KB) when feeding it the spectrum4 release source "+
+			"(~408 KB unstripped, ~88 KB stripped).")
 	flag.Parse()
 	if flag.NArg() != 1 {
-		fmt.Fprintf(os.Stderr, "usage: text2bin [-I dir]... [-flatten [-origin N]] INPUT.s [-o OUTPUT.tbn]\n")
+		fmt.Fprintf(os.Stderr, "usage: text2bin [-I dir]... [-flatten [-origin N]] [-strip-comments] INPUT.s [-o OUTPUT.tbn]\n")
 		os.Exit(2)
 	}
 	in := flag.Arg(0)
@@ -60,6 +66,13 @@ func main() {
 			translate.PreprocessOptions{IncludeDirs: incDirs})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	if stripCommentsFlag {
+		out, err = stripCommentRecords(out)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "strip-comments: %v\n", err)
 			os.Exit(1)
 		}
 	}
