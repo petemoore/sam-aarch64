@@ -34,10 +34,19 @@ For **building up a branch locally before opening the PR**, squash / amend / reb
 
 See also: `feedback_merge_commits` memory entry; `docs/notes/2026-05-28-test-variant-ci-regression.md` for the PR #43 incident.
 
+## Development inner loop for Z80 changes
+
+When iterating on SAM-side Z80 code (the assembler in `src/m3/`, tests, paging trampoline, etc.), use `tools/z80-test-harness-go/` for fast (~1 ms/fixture) feedback during inner-loop development. See its README for usage. Before pushing, run SimCoupé under Docker locally for a real-hardware confirmation; CI runs the SimCoupé matrix as the gate.
+
+The harness is **not** a CI gate — SimCoupé is the only gate. The harness can crash or mislead without blocking progress; skip it that iteration and use SimCoupé directly. When the harness disagrees with SimCoupé, SimCoupé wins. Agents own the harness code and evolve it as part of normal work — no design review needed for improvements that make it more useful.
+
+Design rationale + workflow: `docs/notes/2026-05-28-test-harness-bakeoff-evaluation.md`.
+
 ## Pointers for first-session-on-this-repo
 
 - Project overview + roadmap: `docs/ROADMAP.md`.
 - Current state + milestone status: latest `docs/notes/m{6,5,4,3}-status.md` files.
 - SAM Coupé paging primer: `docs/notes/sam-paging.md`.
+- Z80 dev tool: `tools/z80-test-harness-go/` (see "Development inner loop" above).
 - Memory index: `~/.claude/projects/-Users-pmoore-git-sam-aarch64/memory/MEMORY.md` (always auto-loaded).
 - Pete's prime directive ("correctness over workarounds"): the first entry in the memory index — read it before anything else.

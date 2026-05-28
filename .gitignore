@@ -13,5 +13,6 @@ tools/build-disk/build-disk
 tools/basic-emulator-spike/basic-emulator-spike
 tools/basic-detokeniser-spike/basic-detokeniser-spike
 tools/basic-detokeniser-sweep/basic-detokeniser-sweep
+tools/z80-test-harness-go/z80-test-harness-go
 go.work
 go.work.sum
