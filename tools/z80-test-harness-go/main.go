@@ -18,10 +18,12 @@ import (
 )
 
 func main() {
-	assemblerPath := flag.String("assembler", "", "path to assembler-prod.bin")
+	assemblerPath := flag.String("assembler", "", "path to assembler-prod.bin (or test variant assembler.bin)")
 	enctabPath := flag.String("enctab", "", "path to enctab.enc")
 	inPath := flag.String("in", "", "path to .tbn input file")
 	timeoutStr := flag.String("timeout", "10s", "wall-clock timeout per run")
+	testMemPath := flag.String("test-mem", "", "path to off-axis test_mem.bin (BUILD_TESTS variant; page 13)")
+	p14Path := flag.String("p14", "", "path to paged_call_test_payload.bin (BUILD_TESTS variant; page 14)")
 	flag.Parse()
 
 	if *assemblerPath == "" || *enctabPath == "" || *inPath == "" {
@@ -47,23 +49,44 @@ func main() {
 		log.Fatalf("read IN: %v", err)
 	}
 
+	// Optional BUILD_TESTS-variant named files (HLOADed at boot into pages
+	// 13/14).  The SAMDOS catalogue names are "test_mem" and "p14"
+	// (src/m3/loader.asm name_test_mem / name_page14).
+	var files []NamedFile
+	if *testMemPath != "" {
+		data, err := os.ReadFile(*testMemPath)
+		if err != nil {
+			log.Fatalf("read test-mem: %v", err)
+		}
+		files = append(files, NamedFile{Name: "test_mem", Content: data, TargetPage: 13})
+	}
+	if *p14Path != "" {
+		data, err := os.ReadFile(*p14Path)
+		if err != nil {
+			log.Fatalf("read p14: %v", err)
+		}
+		files = append(files, NamedFile{Name: "p14", Content: data, TargetPage: 14})
+	}
+
 	start := time.Now()
-	result := Run(assemblerBin, enctabData, inData, timeout)
+	result := RunWithFiles(assemblerBin, enctabData, inData, files, timeout)
 	elapsed := time.Since(start)
 
 	fmt.Printf("Exit:    %s\n", result.ExitReason)
 	fmt.Printf("Printer: %q\n", result.PrinterCapture)
 	fmt.Printf("OUT:     %s\n", hex.EncodeToString(result.OutBytes))
 	fmt.Printf("Elapsed: %v\n", elapsed)
+	fmt.Printf("Steps:   %d\n", result.Steps)
+	fmt.Printf("Regs:    %s\n", result.FaultRegs)
 	fmt.Printf("Last PC: %04X\n", lastPCMain(result.Last200PC))
 
 	if result.Passed {
 		fmt.Println("PASS")
 	} else {
 		fmt.Println("FAIL")
-		fmt.Printf("Last 10 PC:\n")
+		fmt.Printf("Last 30 PC (oldest first):\n")
 		pcs := result.Last200PC
-		start := len(pcs) - 10
+		start := len(pcs) - 30
 		if start < 0 {
 			start = 0
 		}

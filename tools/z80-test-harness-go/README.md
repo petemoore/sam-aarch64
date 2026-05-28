@@ -45,6 +45,8 @@ go test -v ./...
 
 ## Run the standalone binary
 
+Production variant:
+
 ```
 go build -o /tmp/z80-harness .
 /tmp/z80-harness \
@@ -52,6 +54,26 @@ go build -o /tmp/z80-harness .
     -enctab ../../build/enctab.enc \
     -in /tmp/inst_nop_ret.tbn
 ```
+
+BUILD_TESTS variant (runs the boot-time self-test suites, including
+`run_reader_paged_self_tests`).  Pass the off-axis test_mem binary and the
+page-14 payload so HGTHD/HLOAD can serve them:
+
+```
+make m3-asm test-mem-offaxis paged-call-payload enctab text2bin
+/tmp/z80-harness \
+    -assembler ../../build/assembler.bin \
+    -enctab ../../build/enctab.enc \
+    -in /tmp/inst_nop_ret.tbn \
+    -test-mem ../../build/test_mem.bin \
+    -p14 ../../build/paged_call_test_payload.bin
+```
+
+On any non-PASS exit the runner prints the register snapshot
+(`Regs:`), step count, and the last 30 PCs.  For deeper analysis use
+`RunConfig` from Go (windowed PC/register traces via `TraceLo/TraceHi`, or a
+trigger-PC backtrace via `TrigPC`) — see `test_variant_test.go` and
+`SCOPE.md` "PR-6 additions".
 
 ## How it works
 

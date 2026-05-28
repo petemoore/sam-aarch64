@@ -313,20 +313,32 @@ endif
 ; failure is reported before we waste time on the assemble loop).
 if defined(BUILD_TESTS)
                 call    run_trampoline_self_tests
-                ; NOTE: run_reader_paged_self_tests is DISABLED pending
-                ; root-cause investigation.  PR #42 attempted to fix the
-                ; failure by moving SP from &C100 to &FFFE; the fix's
-                ; verification table was on a tree pre-PR-#41, and once
-                ; #41's table relocations landed the SP=&FFFE state broke
-                ; the test variants in production CI.  PR #43 was meant
-                ; to revert PR #42 but the revert was incomplete — the SP
-                ; change was left live, breaking m{3..6} test variants.
-                ; This call is to be re-enabled only once a fresh
-                ; investigation on cleaned main confirms the fix.  See
+                ; run_reader_paged_self_tests was DISABLED across PRs #42→#45
+                ; pending root-cause investigation of a deterministic boot
+                ; FAIL on the test variant.  Re-enabled here after the PR-6
+                ; M6-closure investigation (the first adversarial use of the
+                ; Go harness, tools/z80-test-harness-go/).
+                ;
+                ; Root cause (now resolved upstream by PR #52, not by this
+                ; PR): the original failure was the stack-vs-own-code
+                ; collision documented in
                 ; docs/notes/2026-05-28-reader-paged-self-test-investigation.md
-                ; (status note at the top) and
-                ; docs/notes/2026-05-28-test-variant-ci-regression.md.
-                ; call    run_reader_paged_self_tests
+                ; — on the pre-PR-#52 layout the test function spilled above
+                ; &C000 into the SP=&C100 stack page, so its own opcodes were
+                ; overwritten by stack pushes.  PR #52 ported test_mem.asm
+                ; off-axis to physical page 13, shrinking the test variant
+                ; from &C1AB to ~&BF70; run_reader_paged_self_tests now lives
+                ; entirely below &C000 (≈&BE5B), so the stack at &C100 never
+                ; collides with it.  No SP change is needed — PR #42's
+                ; SP=&FFFE "fix" was both unnecessary AND wrong (the top of
+                ; section D is HMPR-controlled and would move under paging).
+                ; SP stays at &C100 (set at start:).
+                ;
+                ; Verified: harness PASS + SimCoupé ci-m{3,4,5,6} all green
+                ; with this call live.  See
+                ; docs/notes/2026-05-28-reader-paged-self-test-investigation.md
+                ; (PR-6 resolution section at the foot).
+                call    run_reader_paged_self_tests
 endif
 
 ; -- Run the assemble: pass 1 (table build) + pass 2 (emit) -----------
