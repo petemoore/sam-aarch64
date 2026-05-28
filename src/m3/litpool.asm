@@ -8,8 +8,14 @@
 ; tools/refenc/pass2.go:593-634 (encodeLdrLitPoolInst).
 ;
 ; -----------------------------------------------------------------------
-; Data structures (lives in section D scratch — &D200 onwards, well clear
-; of OPMEM_OFF at &D100).
+; Data structures.
+;
+; LITPOOL_TABLE lives in section D scratch at &D200 (well clear of
+; OPMEM_OFF at &D100).  LITPOOL_PC_MAP was moved to the &E100+ free
+; region (2026-05-28) so its capacity can grow to 64 entries without
+; colliding with STAGING_BUF at &D500 — release.tbn peaks at 44 active
+; pc-map entries per flush (census `docs/notes/2026-05-28-z80-table-
+; sizing-census.md`), which the original 32-entry cap couldn't fit.
 ; -----------------------------------------------------------------------
 ;
 ; LITPOOL_TABLE     entries indexed by slot.  14 bytes per entry:
@@ -26,8 +32,8 @@
 ;   +0   inst_pc     u32 LE
 ;   +4   slot_idx    u16 LE
 ;
-; LITPOOL_COUNT             u8       slots allocated so far
-; LITPOOL_PCM_COUNT         u8       pc-map entries so far
+; LITPOOL_COUNT             u8       slots allocated so far (cap LITPOOL_MAX = 32)
+; LITPOOL_PCM_COUNT         u8       pc-map entries so far  (cap LITPOOL_PCM_MAX = 64)
 ; LITPOOL_SEGMENT_ALLOC     u8       segment for newly-allocated slots
 ;                                    (incremented at each flush in pass 1)
 ; LITPOOL_SEGMENT_FLUSH     u8       segment currently being flushed
@@ -48,21 +54,23 @@
 ;     next allocation lands in the next segment); pass 2 doesn't
 ;     allocate so ALLOC is irrelevant after pass 1.
 ;
-; Capacities: M5 corpus needs <= 5 distinct (value,width) pairs and <= 5
-; LDR-litpool sites; cap at 32 each to absorb growth.
+; Capacities (post-2026-05-28 census against release.tbn):
+;   LITPOOL_MAX     = 32  slots (peak 30; 2 slack — keep an eye on this)
+;   LITPOOL_PCM_MAX = 64  pc-map entries (peak 44; 20 slack)
 ; -----------------------------------------------------------------------
 
 LITPOOL_MAX:            equ     32
+LITPOOL_PCM_MAX:        equ     64
 LITPOOL_ENTRY_STRIDE:   equ     14
 LITPOOL_PCM_STRIDE:     equ     6
 
 LITPOOL_TABLE:          equ     &D200          ; 32 * 14 = 448 B
-LITPOOL_PC_MAP:         equ     &D3C0          ; 32 * 6  = 192 B
-LITPOOL_COUNT:          equ     &D480          ; 1 byte
-LITPOOL_PCM_COUNT:      equ     &D481          ; 1 byte
-LITPOOL_SEGMENT_ALLOC:  equ     &D482          ; 1 byte
-LITPOOL_SEGMENT_FLUSH:  equ     &D483          ; 1 byte
-LITPOOL_SAVED_PC:       equ     &D484          ; 4 bytes
+LITPOOL_PC_MAP:         equ     &E100          ; 64 * 6  = 384 B (moved to &E100+ region 2026-05-28)
+LITPOOL_COUNT:          equ     &D3C0          ; 1 byte
+LITPOOL_PCM_COUNT:      equ     &D3C1          ; 1 byte
+LITPOOL_SEGMENT_ALLOC:  equ     &D3C2          ; 1 byte
+LITPOOL_SEGMENT_FLUSH:  equ     &D3C3          ; 1 byte
+LITPOOL_SAVED_PC:       equ     &D3C4          ; 4 bytes
 
 
 ; -----------------------------------------------------------------------
@@ -242,7 +250,10 @@ litpool_register_scan_next:
 litpool_register_append:
                 ld      a, (LITPOOL_COUNT)
                 cp      LITPOOL_MAX
-                jp      nc, fail
+                jr      c, litpool_count_ok
+                ld      a, &10
+                jp      fail_with_tag       ; tag 10: LITPOOL_TABLE overflow
+litpool_count_ok:
                 ld      (litpool_reg_idx), a
 
 ; -- Copy expr bytecode out of the staging buffer into the section-D
@@ -315,8 +326,11 @@ litpool_register_append:
 litpool_register_record_pcmap:
                 ld      (litpool_reg_idx), a          ; save slot idx
                 ld      a, (LITPOOL_PCM_COUNT)
-                cp      LITPOOL_MAX
-                jp      nc, fail
+                cp      LITPOOL_PCM_MAX
+                jr      c, litpool_pcm_ok
+                ld      a, &11
+                jp      fail_with_tag       ; tag 11: LITPOOL_PC_MAP overflow
+litpool_pcm_ok:
                 call    pcm_ptr_for_idx               ; HL → fresh pcm entry
 
                 ld      a, (PASS_PC + 0)
@@ -372,7 +386,7 @@ litpool_copy_expr:
                 ld      bc, LITPOOL_EXPR_BUF_END
                 or      a                             ; clear CF
                 sbc     hl, bc                        ; HL = (DE + BC) - END
-                jp      nc, fail                      ; post-copy top > END → overflow
+                jp      nc, fail
                 pop     bc
                 pop     hl                            ; restore src
 
@@ -497,7 +511,6 @@ litpool_encode_ldr_word:
                 ld      a, (litpool_enc_off + 0)
                 and     3
                 jp      nz, fail
-
 ; imm19 = off / 4.  Shift the 4-byte off right twice (arithmetic, since
 ; off may be negative — but for M5 forward-pool layouts, off is
 ; positive; backward .ltorg layouts would carry sign).

@@ -81,11 +81,20 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 	}
 	pending := make(map[poolKey]int) // → index into res.PoolEntries
 	var pendingOrder []int           // indices in encounter order
+	// pendingLdrSites counts LDR-litpool instructions since the last
+	// flush — i.e. the pc-map entries that LITPOOL_PC_MAP must hold
+	// concurrently on the Z80 side (the table is reset on every flush).
+	pendingLdrSites := 0
 
 	flushPool := func(flushPC int64) {
 		if len(pendingOrder) == 0 {
 			return
 		}
+		// Observe pre-flush peak BEFORE we reset pending (the active-
+		// slot peak is the max of pending sizes between flushes; this
+		// is the cap LITPOOL_TABLE / LITPOOL_PC_MAP must absorb on the
+		// Z80 side because both are reset at each flush).
+		usage.observePoolPending(len(pendingOrder), pendingLdrSites)
 		// Partition by width: 4-byte entries first (encounter order),
 		// then padding to 8 if any 8-byte entries follow, then 8-byte
 		// entries (encounter order). GNU's behaviour, verified
@@ -126,6 +135,7 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 		pc = layout
 		pending = make(map[poolKey]int)
 		pendingOrder = pendingOrder[:0]
+		pendingLdrSites = 0
 	}
 
 	rr := format.NewRecordReader(f.Records)
@@ -134,11 +144,17 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 		if err != nil {
 			return nil, err
 		}
+		usage.observeRecord(rec)
 		switch rec.Kind {
 		case format.KindLabelDef:
-			res.Symbols[f.Names[rec.SymbolID]] = pc
+			name := f.Names[rec.SymbolID]
+			if _, dup := res.Symbols[name]; !dup {
+				usage.observeSymbolAdd(res.Symbols, name)
+			}
+			res.Symbols[name] = pc
 		case format.KindLocalDef:
 			res.LocalDefs[rec.Digit] = append(res.LocalDefs[rec.Digit], pc)
+			usage.observeLocalDefAdd(res.LocalDefs, rec.Digit)
 		case format.KindInst:
 			// Detect `ldr Xn|Wn, =expr` (LitPool form) and register a
 			// pool entry. The instruction itself still consumes 4 bytes.
@@ -155,8 +171,15 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 						})
 						pending[key] = idx
 						pendingOrder = append(pendingOrder, idx)
+						usage.observePoolEntryAlloc(len(litOp.Expr))
 					}
 					res.LdrPoolIdx[pc] = idx
+					pendingLdrSites++
+					usage.observePoolLdrSite()
+					// Re-check pending peak after each allocation, not
+					// just at flush: a long stream of allocations with
+					// no flush is exactly what stresses the Z80 table.
+					usage.observePoolPending(len(pendingOrder), pendingLdrSites)
 				}
 			}
 			pc += 4
@@ -169,6 +192,7 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 					return nil, fmt.Errorf(".equ: %w", err)
 				}
 			case ".ltorg":
+				usage.observePoolFlush(true)
 				flushPool(pc)
 			case ".org":
 				// `.org expr` (and the syntactic alias `. = expr`).
@@ -187,7 +211,7 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 				or := format.NewOperandReader(rec.Operands)
 				o, _ := or.Next()
 				ctx := pass1EvalCtx(pc, res, f)
-				target, err := enc.Eval(o.Expr, ctx)
+				target, err := EvalUsage(o.Expr, ctx, usage)
 				if err != nil {
 					return nil, fmt.Errorf(".org: %w", err)
 				}
@@ -262,9 +286,12 @@ func resolveEquDirective(rec format.Record, f *format.File, res *Pass1Result) er
 		return fmt.Errorf("missing value operand: %w", err)
 	}
 	ctx := pass1EvalCtx(0, res, f)
-	v, err := enc.Eval(valOp.Expr, ctx)
+	v, err := EvalUsage(valOp.Expr, ctx, usage)
 	if err != nil {
 		return fmt.Errorf(".equ %s: %w", name, err)
+	}
+	if _, dup := res.Symbols[name]; !dup {
+		usage.observeSymbolAdd(res.Symbols, name)
 	}
 	res.Symbols[name] = v
 	return nil
@@ -338,7 +365,7 @@ func directiveSizeAtPC(rec format.Record, pc int64, res *Pass1Result, f *format.
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
 		ctx := pass1EvalCtx(pc, res, f)
-		v, err := enc.Eval(o.Expr, ctx)
+		v, err := EvalUsage(o.Expr, ctx, usage)
 		if err != nil {
 			return 0, fmt.Errorf("%s: %w (only literals and .set/.equ symbols can be referenced before pass2)", name, err)
 		}
@@ -366,7 +393,7 @@ func directiveSizeAtPC(rec format.Record, pc int64, res *Pass1Result, f *format.
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
 		ctx := pass1EvalCtx(pc, res, f)
-		align, err := enc.Eval(o.Expr, ctx)
+		align, err := EvalUsage(o.Expr, ctx, usage)
 		if err != nil {
 			return 0, fmt.Errorf(".balign: %w", err)
 		}
@@ -384,7 +411,7 @@ func directiveSizeAtPC(rec format.Record, pc int64, res *Pass1Result, f *format.
 		or := format.NewOperandReader(rec.Operands)
 		o, _ := or.Next()
 		ctx := pass1EvalCtx(pc, res, f)
-		n, err := enc.Eval(o.Expr, ctx)
+		n, err := EvalUsage(o.Expr, ctx, usage)
 		if err != nil {
 			return 0, fmt.Errorf(".align: %w", err)
 		}

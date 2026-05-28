@@ -240,7 +240,8 @@ in_persist_hl:
 
 ; in_normalise_hl — while H >= &40, subtract &40 from H and bump LMPR's
 ; low 5 bits by 1 (the RAM0 bit at &20 stays set because the low 5 bits
-; never exceed 31 in practice — IN spans pages 7..10 max).
+; never exceed 31 in practice — IN spans pages 7..12 max post 2026-05-28
+; bump, which is well under the 31-page low5 ceiling).
 ;
 ; Mirrors COMET's adjustpo (reference/comet-decoded/comet.asm:3180-3188)
 ; — the standard "renormalise (page, offset) after a section-A
@@ -258,7 +259,7 @@ in_normalise_loop:
                 ld      h, a
                 in      a, (250)
                 inc     a                   ; low 5 bits += 1 (RAM0 bit
-                                            ;   preserved — pages 7..10
+                                            ;   preserved — pages 7..12
                                             ;   never overflow into bit 5)
                 out     (250), a
                 jr      in_normalise_loop
@@ -515,6 +516,11 @@ main_handle_inst_pass2:
 ; -- Read operand_count (u8) -------------------------------------------
                 ld      a, (hl)
                 inc     hl
+; Bounds check: OPVAL_ARRAY holds 7 entries of OPVAL_STRIDE bytes
+; (= 70 B, &C100..&C145).  op_count > 7 would overflow into OPVAL_KINDS
+; (&C150) and beyond into PASS_MODE/PASS_PC/SYMTAB.  Fail cleanly.
+                cp      8
+                jp      nc, fail
                 ld      (main_op_count), a
                 ld      (main_op_count_remaining), a
 
@@ -1160,8 +1166,10 @@ main_kinds_built:
 ; Find first form for this mnemonic.
                 ld      de, (main_mnemonic_id)
                 call    form_lookup_find_first
-                jp      nz, fail            ; mnemonic unknown
-
+                jr      z, mnemonic_found
+                ld      a, &40
+                jp      fail_with_tag       ; tag 40: mnemonic unknown
+mnemonic_found:
 ; Match operand-kind tuple.
                 push    hl                  ; save first-form ptr (HL set by find_first)
                 push    bc                  ; save form_count
@@ -1170,8 +1178,7 @@ main_kinds_built:
                 pop     bc
                 pop     hl
                 call    form_lookup_match
-                jp      nz, fail            ; no matching form
-
+                jp      nz, fail
 ; HL now = matched form header pointer.  Call encoder.
                 ld      de, OPVAL_ARRAY
                 ld      a, (main_op_count)
@@ -1437,7 +1444,7 @@ compute_dir_size_align:
                 or      a
                 jr      z, compute_dir_size_align_pad0
                 cp      32
-                jp      nc, fail                    ; alignment too large for u32
+                jp      nc, fail
 ; HL = 1 << A (build a 16-bit alignment for now; PR-A fixtures stay <= 16).
                 ld      hl, 1
 compute_dir_size_align_shift:
@@ -1480,7 +1487,7 @@ compute_balign_pad_from_n:
                 dec     a                           ; A = N-1
                 ld      c, a                        ; C = N-1
                 and     b
-                jp      nz, fail                    ; not power-of-two (PR-A)
+                jp      nz, fail
 ; PASS_PC low byte AND (N-1) gives remainder for power-of-two N.
                 ld      a, (PASS_PC + 0)
                 and     c                           ; A = PASS_PC % N
@@ -1496,9 +1503,63 @@ compute_balign_pad_zero:
                 ld      bc, 0
                 ret
 
+; compute_balign_pad_large_n — N >= 256 path.  Supports N up to 16 bits
+; (covers spectrum4's `.align 12` = 4096, `.align 11` = 2048, etc.).
+; N is in (expr_result + 0..1) as a 16-bit unsigned; bytes 2..3 are 0
+; (text2bin's `-flatten` constant-folds the operand into a 16-bit
+; immediate for all observed cases; values > 0xFFFF surface as tag 63).
+;
+; Assumes N is a power-of-two (which it is for `.align <small N>` =
+; 1 << N).  pad = (N - (PASS_PC mod N)) mod N.  For power-of-two N this
+; reduces to pad = (N - (PASS_PC & (N-1))) & (N-1).
 compute_balign_pad_large_n:
-; N > 255 — no current PR-A fixture; surface as fail until needed.
-                jp      fail
+; Reject N >= 2^16.
+                ld      a, (expr_result + 2)
+                or      a
+                jr      nz, balign_pad_large_overflow
+                ld      a, (expr_result + 3)
+                or      a
+                jr      nz, balign_pad_large_overflow
+; HL = N (16-bit).
+                ld      hl, (expr_result + 0)
+; DE = N - 1 (mask).
+                ld      d, h
+                ld      e, l
+                dec     de
+; Validate power-of-two: N AND (N-1) == 0.
+                ld      a, l
+                and     e
+                jr      nz, balign_pad_large_not_pow2
+                ld      a, h
+                and     d
+                jr      nz, balign_pad_large_not_pow2
+; remainder = (PASS_PC low16) AND mask.
+                ld      a, (PASS_PC + 0)
+                and     e
+                ld      c, a
+                ld      a, (PASS_PC + 1)
+                and     d
+                ld      b, a
+; pad = N - remainder.  If remainder == 0, pad = 0 (already aligned).
+                ld      a, b
+                or      c
+                jr      z, balign_pad_large_zero
+                ld      a, l
+                sub     c
+                ld      c, a
+                ld      a, h
+                sbc     a, b
+                ld      b, a
+                ret
+balign_pad_large_zero:
+                ld      bc, 0
+                ret
+balign_pad_large_overflow:
+                ld      a, &63
+                jp      fail_with_tag       ; tag 63: .balign N >= 2^16
+balign_pad_large_not_pow2:
+                ld      a, &62
+                jp      fail_with_tag       ; tag 62: .balign N (>=256) not power-of-two
 
 ; size = op_count * 1
 compute_dir_size_x1:
@@ -1848,7 +1909,6 @@ main_dir_org_pass2:
                 inc     hl
                 cp      (hl)
                 jp      nz, fail
-
 ; BC = delta = (target_low16 - PASS_PC_low16).  Backward → fail.
                 ld      a, (expr_result + 0)
                 ld      hl, PASS_PC
@@ -1858,8 +1918,7 @@ main_dir_org_pass2:
                 inc     hl
                 sbc     a, (hl)
                 ld      b, a
-                jp      c, fail                     ; target < PASS_PC
-
+                jp      c, fail
 main_dir_org_emit_loop:
                 ld      a, b
                 or      c
@@ -2100,10 +2159,10 @@ main_eval_next_imm:
 
 
 ; -----------------------------------------------------------------------
-; load_in_file — HGTHD + trampoline-HLOAD "IN" into pages 7..10.
+; load_in_file — HGTHD + trampoline-HLOAD "IN" into pages 7..12.
 ;
 ; Per docs/specs/2026-05-27-m6-paged-in-design.md.  IN lands in
-; physical pages 7..10 (off-axis) via the section-B HLOAD trampoline,
+; physical pages 7..12 (off-axis; 96 KB ceiling) via the section-B HLOAD trampoline,
 ; same pattern as load_enctab.  HLOAD's destination is &8000 — a
 ; section-C address — and SAMDOS's internal ctas auto-pages HMPR
 ; across the &C000 boundary, so a multi-page load to HMPR=N actually
@@ -2141,6 +2200,18 @@ load_in_file:
 
 ; Read page count from &4B50+34 (low byte only).
                 ld      a, (&4B50 + 34)
+; Bounds check: IN is allocated 6 contiguous physical pages (7..12) in
+; the LMPR-low5 axis (= 96 KB ceiling).  The first 4 (7..10) are the
+; original M6 PR 2 allocation; pages 11..12 were added 2026-05-28 to fit
+; the 88 KB spectrum4 release.tbn — they're "00H unused" per the
+; Tech Manual page-allocation table cited at trampoline.asm:188-208.
+; Files exceeding 6 pages spill into pages 13+ — those may be reserved
+; for other allocations; fail cleanly rather than overwrite them.
+                cp      7                   ; allow up to 6 pages (= 96 KB ceiling)
+                jr      c, in_file_pages_ok
+                ld      a, &03
+                jp      fail_with_tag       ; tag 03: in_file_pages > 6
+in_file_pages_ok:
                 ld      (in_file_pages), a
 
 ; Call the section-B trampoline.
@@ -2265,12 +2336,12 @@ main_dir_equ_pending_id:        defw    0
 
 ; Paged IN cursor — see docs/specs/2026-05-27-m6-paged-in-design.md.
 ;
-; IN lives in physical pages 7..10 (off-axis).  The 24-bit cursor is
-; stored as a (page, offset) pair: IN_POS_PAGE holds the LMPR low5+RAM0
-; byte (i.e. a full LMPR value, &27..&2A for pages 7..10), IN_POS_OFFSET
-; the section-A offset (&0000..&3FFF).  in_normalise_hl re-normalises
-; into [&0000, &4000) after a page-crossing add, bumping LMPR's low 5
-; bits.
+; IN lives in physical pages 7..12 (off-axis; 96 KB ceiling).  The
+; 24-bit cursor is stored as a (page, offset) pair: IN_POS_PAGE holds
+; the LMPR low5+RAM0 byte (i.e. a full LMPR value, &27..&2C for pages
+; 7..12), IN_POS_OFFSET the section-A offset (&0000..&3FFF).
+; in_normalise_hl re-normalises into [&0000, &4000) after a
+; page-crossing add, bumping LMPR's low 5 bits.
 ;
 ; IN_END_PAGE / IN_END_OFFSET together point one past the last valid
 ; byte; they're set by load_in_file_paged from the .tbn's DIFA bytes.

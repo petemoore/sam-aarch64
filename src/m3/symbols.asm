@@ -17,21 +17,30 @@
 ;   offset 2   address   u32 LE     (the resolved address for this id)
 ;   offset 6   next_off  u16 LE     (chain link, see "Chain pointer" below)
 ;
-; SYMTAB_OVERFLOW at &C960 is a parallel flat array of overflow entries
-; with the same 8-byte layout.  Up to 128 overflow entries fit in the
-; 1 KB reservation (&C960..&CD5F inclusive).
+; SYMTAB_OVERFLOW at &E800 is a parallel flat array of overflow entries
+; with the same 8-byte layout.  Up to 256 overflow entries fit in the
+; 2 KB reservation (&E800..&EFFF inclusive).  Bumped from 128 to 256
+; on 2026-05-28 per `docs/notes/2026-05-28-z80-table-sizing-census.md`:
+; release.tbn populates 474 unique symbols (282 LabelDef + 193
+; .equ/.set/.global; 1 duplicate landed pre-existing), versus 256
+; primary buckets, so worst-case 474 − 256 = 218 entries spill into the
+; overflow chain.  256 gives ~17% margin.  Moving the overflow region
+; out of the section-D &CD60 area also freed 1 KB for the relocated
+; LITPOOL_PC_MAP and the bumped LOCAL_LABEL_TABLE.
 ;
 ; Chain pointer (`next_off`):
 ;
 ;   next_off is the **index** (not byte offset) of the next entry in the
 ;   chain within SYMTAB_OVERFLOW.  index 0 → first overflow entry at
-;   &C960, index 1 → &C968, etc.  The byte offset is `index * 8`.
+;   &E800, index 1 → &E808, etc.  The byte offset is `index * 8`.
 ;   Sentinel 0xFFFF means "end of chain".
 ;
-;   Rationale: index form keeps the limit (128) below 8 bits today but
+;   Rationale: index form keeps the limit (256) below 9 bits today but
 ;   leaves room to expand the overflow region to 64 KB without changing
 ;   the on-disk layout.  Insert/lookup multiply by 8 (three `add hl, hl`)
-;   to convert to a byte offset before indexing.
+;   to convert to a byte offset before indexing.  Index 255 is stored
+;   as next_off = 0x00FF, distinct from the 0xFFFF end-of-chain sentinel
+;   because the high byte differs.
 ;
 ; Empty-bucket sentinel: symbol_id == 0xFFFF.  Since text2bin allocates
 ; ids densely from 0, 0xFFFF is never a valid id.  symbol_table_init
@@ -62,8 +71,8 @@
 ; Memory map (must match the reservation comment in assembler.asm).
 ; ---------------------------------------------------------------------
 SYMTAB:                 equ     &C160          ; 256 buckets × 8 bytes = 2 KB
-SYMTAB_OVERFLOW:        equ     &C960          ; 128 entries × 8 bytes = 1 KB
-SYMTAB_OVERFLOW_MAX:    equ     128            ; max overflow entries
+SYMTAB_OVERFLOW:        equ     &E800          ; 256 entries × 8 bytes = 2 KB (moved 2026-05-28)
+SYMTAB_OVERFLOW_MAX:    equ     256            ; max overflow entries (bumped from 128 — census peak 474 total symbols)
 
 ; Per-bucket / per-entry constants
 SYMTAB_ENTRY_SIZE:      equ     8
@@ -168,7 +177,8 @@ symbol_insert_chain_walk:
                 ld      a, (hl)                     ; A = entry id high
                 dec     hl
                 cp      b
-                jp      z, fail                     ; duplicate id → fail
+                jr      nz, symbol_insert_not_dup
+                jp      fail
 
 symbol_insert_not_dup:
 ; Read next_off (entry+6..7); if END_OF_CHAIN, this is the tail.
@@ -206,15 +216,15 @@ symbol_insert_extend_chain:
                 ld      hl, (symtab_overflow_count)
                 ld      (symtab_new_index), hl
 
-; Range check: N must be < SYMTAB_OVERFLOW_MAX (== 128).  Since the
-; max is < 256, the high byte must be 0 and the low byte < 128.
+; Range check: N must be < SYMTAB_OVERFLOW_MAX (== 256).  count is u16;
+; at the boundary count == 256 the LSB rolls over to 0 and the MSB
+; becomes 1, so a non-zero MSB alone signals exhaustion.
                 ld      a, h
                 or      a
-                jp      nz, fail                    ; > 255 — exhausted
-                ld      a, l
-                cp      SYMTAB_OVERFLOW_MAX
-                jp      nc, fail                    ; >= 128 — exhausted
-
+                jr      z, symtab_overflow_room_ok
+                ld      a, &21
+                jp      fail_with_tag       ; tag 21: SYMTAB_OVERFLOW exhausted
+symtab_overflow_room_ok:
 ; Bump count for next allocation.
                 inc     hl
                 ld      (symtab_overflow_count), hl

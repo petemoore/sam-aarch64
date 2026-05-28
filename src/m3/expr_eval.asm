@@ -303,7 +303,7 @@ eval_take_bytes:
                 jr      nz, eval_take_have_enough   ; remaining >= 256 → OK
                 ld      a, l
                 cp      c
-                jp      c, fail             ; remaining < N → fail
+                jp      c, fail
 eval_take_have_enough:
                 pop     hl                  ; restore dest
                 ld      de, (eval_pos)
@@ -528,8 +528,7 @@ eval_push_sym:
 
                 ld      hl, (eval_sym_operand)      ; HL = id (LE u16 at scratch)
                 call    symbol_lookup
-                jp      c, fail                     ; miss → fail
-
+                jp      c, fail
 ; Hit: symbol_value_buf[0..3] holds the 32-bit address LE.  Allocate the
 ; eval-stack slot now and write address into slot[0..3], zero slot[4..7].
                 call    eval_alloc_top              ; HL = new top slot
@@ -594,7 +593,8 @@ eval_push_local:
                 jr      z, eval_push_local_forward
                 cp      1
                 jr      z, eval_push_local_backward
-                jp      fail                        ; invalid dir
+                jp      fail
+
 
 eval_push_local_forward:
                 ld      a, (eval_local_operand + 0) ; A = digit
@@ -606,8 +606,7 @@ eval_push_local_backward:
                 call    local_find_backward
 
 eval_push_local_check:
-                jp      c, fail                     ; miss → fail
-
+                jp      c, fail
 ; Allocate a stack slot AFTER the find call (which clobbered HL/DE) and
 ; write resolved PC into slot[0..3], zero slot[4..7].
                 call    eval_alloc_top              ; HL = new top slot

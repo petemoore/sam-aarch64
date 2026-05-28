@@ -480,7 +480,10 @@ emit_byte_advance:
 ; (OUT_ZONE already 1) means OUT_LEN ≥ 32768 — past the M6 ceiling.
                 ld      a, (OUT_ZONE)
                 or      a
-                jp      nz, fail            ; output > 32 KB
+                jr      z, emit_byte_zone_room_ok
+                ld      a, &b0
+                jp      fail_with_tag       ; tag b0: OUT > 32 KB
+emit_byte_zone_room_ok:
                 ld      a, 1
                 ld      (OUT_ZONE), a
                 ld      hl, &4000

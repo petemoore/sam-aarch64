@@ -64,5 +64,8 @@ print_status_string:
 ; -----------------------------------------------------------------------
 msg_ok:         defm    "OK"
                 defb    10, 0
+; NB: msg_fail has no trailing newline; the fail routine in assembler.asm
+; emits a 2-digit hex tag (LAST_FAIL_TAG) and then the newline so failure
+; sites can be distinguished.  grep '^FAIL' still matches.
 msg_fail:       defm    "FAIL"
-                defb    10, 0
+                defb    0

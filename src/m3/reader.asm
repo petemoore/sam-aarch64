@@ -28,7 +28,7 @@
 ; The reader's storage now lives in main_loop.asm as a 24-bit (page,
 ; offset) cursor pair: IN_POS_PAGE / IN_POS_OFFSET (current), and
 ; IN_END_PAGE / IN_END_OFFSET (one past last byte).  IN is resident in
-; physical pages 7..10 (HLOAD'd once by load_in_file at startup); each
+; physical pages 7..12 (HLOAD'd once by load_in_file at startup); each
 ; reader_next_kind brackets a brief LMPR=&27-derived window mapping the
 ; current IN page into section A, stages the record into STAGING_BUF
 ; (section D), and restores LMPR_ENCTAB before returning.
@@ -195,6 +195,15 @@ reader_next_kind:
                 inc     hl                  ; HL → payload start; BC = len
                 ld      (reader_curr_len), bc
 
+; Bounds check: payload length must fit in STAGING_BUF.
+; STAGING_BUF size = STAGING_BUF_END - STAGING_BUF = &400 (1024 B).
+; Overflow → silent corruption of LITPOOL_EXPR_BUF; fail cleanly instead.
+                ld      a, b
+                cp      (STAGING_BUF_END - STAGING_BUF) >> 8
+                jr      c, reader_payload_size_ok
+                ld      a, &01
+                jp      fail_with_tag       ; tag 01: STAGING_BUF overflow
+reader_payload_size_ok:
 ; Note: the 3-byte header above does NOT call in_normalise_hl between
 ; INC HL steps.  If the header straddled &3FFF..&4001, the high bytes
 ; would be read via section B under LMPR=IN_POS_PAGE — and section B at
