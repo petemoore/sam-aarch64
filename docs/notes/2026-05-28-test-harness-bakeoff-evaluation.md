@@ -74,7 +74,6 @@ the spike SCOPE files:
 | PC-trace quality | last-200 PC values (uint16 only) | last-200 PC + 4 opcode bytes; also state.json with registers + paging |
 | Risk of behavioural divergence | **Real**: RST 8 stub, paging, SAMDOS hooks all hand-rolled | **Negligible**: runs real SimCoupé code + real SAMDOS |
 | Next instrumentation feature | New Go code; SAM hardware model must be kept in sync | Add ~20 lines in `OnStep()` / `on_write()` per SCOPE.md table |
-| Cost to integrate into CI | New `make ci-m3-fast` target + GHA job; self-contained Go | Requires building the fork binary in CI + libSAASound ldconfig |
 | Cost to keep in sync with upstream | **None**: self-contained Go, no C++ dependency | Periodic rebase; upstream moves slowly (1 merge since mid-2025) |
 | Maintenance surface | Grows with every new SAM-hardware detail the assembler touches | Bounded by SimCoupé's existing abstraction layer |
 
@@ -102,31 +101,30 @@ code path as the existing CI.
 
 ---
 
-## Recommendation: **Go harness (Spike A)**
+## Decision: adopt the Go harness as an agent-side development tool; SimCoupé under Docker remains the only CI gate
 
-The ~530× speed improvement is real, substantial, and directly addresses the pain that
-motivated the bake-off: bisection iterations costing ~30 s each (even 0.5 s each in
-Docker). At 1 ms per fixture, 60 fixtures can run in under a minute on a laptop without
-any Docker overhead, making the harness useful for local iteration, not just CI.
+The Go harness (`tools/z80-test-harness-spike-go/`) exists to make agents more agile
+during Z80 dev iteration. It is **not** a CI gate. The existing
+`make ci-m{3,4,5,6}{,-prod}` SimCoupé matrix remains the sole authoritative gate
+because SimCoupé is closest to real SAM hardware.
 
-The decisive argument is **workflow position**. The Go harness slots into the development
-inner loop (edit → test → iterate in seconds), while SimCoupé — even at 0.5 s — is a
-CI-gate artifact, not an iteration tool. Spike B addresses the same problem as Spike A
-but at a time-budget that still forces batching rather than immediate feedback.
+The decisive argument is **workflow position**. At ~1 ms per fixture the harness slots
+into the development inner loop (edit → test → iterate in seconds, locally, on the host,
+with no container). SimCoupé under Docker at ~0.5 s per fixture is fine as a final
+pre-push confirmation but still forces batching rather than the immediate feedback
+agents need while exploring a Z80 change.
 
-The second argument is **CI isolation**. The Go harness is a self-contained binary with
-no C++ build step, no SDL, no Xvfb, no libSAASound runtime dependency. Adding a
-`ci-m3-fast` job is a single `go test` line. Spike B requires building a custom
-SimCoupé fork in each CI runner, which adds ~2 min cold-build overhead and introduces
-a C++ toolchain dependency into the CI image.
+The SimCoupé fork (Spike B) was rejected as a productisation target. The fast-iteration
+loop it enables is already a tier slower than the Go harness, and SimCoupé itself
+(no fork required) already provides the realism layer the project needs. Adopting the
+fork would add a C++ build dependency without solving a problem the Go harness doesn't
+already solve better.
 
 ### Discounting Pete's Go bias
 
-This evaluation explicitly discounts Pete's stated Go preference. The recommendation
-stands on the speed and CI-integration arguments alone. If Pete were a SimCoupé C++
-expert and a Go skeptic, the same numbers would still favour Spike A: 530× faster,
-zero new C++ build dependencies in CI. The Go-expertise advantage is a secondary
-benefit (lower ongoing maintenance cost), not the load-bearing argument.
+This evaluation explicitly discounts the user's stated Go preference. The decision
+stands on the workflow-position argument alone. The Go-expertise advantage is a
+secondary benefit (lower ongoing maintenance cost), not the load-bearing reason.
 
 ### Steelman of the rejected option (Spike B)
 
@@ -134,39 +132,60 @@ The strongest argument for the SimCoupé fork is **correctness fidelity**. Spike
 hand-rolled RST 8 dispatch, UIFA page-resolution logic, and SAMDOS hook stubs are
 approximations. Any gap between the stub model and real SAMDOS behaviour is invisible
 until a fixture fails in SimCoupé but passes in the Go harness. Spike B, being
-SimCoupé, cannot produce that class of false positive. For the specific scenario of
-validating paged-call primitives (plan-PR 1), where the failure mode is a subtle
-interaction between HMPR writes inside the trampoline and UIFA state, the SimCoupé
-oracle is strictly more trustworthy. If the project had no CI speed problem and the
-only goal were richer diagnostic output on failures, Spike B would be the right answer.
+SimCoupé, cannot produce that class of false positive.
+
+This argument is acknowledged and absorbed by the workflow below rather than rejected:
+SimCoupé under Docker remains the pre-push and CI authority, so any divergence Spike A
+might miss is caught there. The Go harness never needs to be authoritative for the
+project to retain SimCoupé's correctness fidelity.
 
 ---
 
-## Open questions Pete should answer before productising
+## How the harness fits into the workflow
 
-1. **Two-tier CI strategy?** Run the Go harness as a fast smoke test on every push
-   (< 5 s for all m3–m6 fixtures), then gate PRs on the full SimCoupé round-trip as
-   the oracle check. This captures Spike A's speed benefit while keeping Spike B as the
-   correctness authority. The main cost is maintaining two test paths; the main benefit
-   is a seconds-fast feedback loop locally.
+1. Agent makes a Z80 code change.
+2. Quick check via the Go harness (~1 ms/fixture, runs on the host, no Docker). If it
+   surfaces a bug, iterate.
+3. Before pushing, run SimCoupé under Docker locally (`make ci-m{3..6}{,-prod}` or the
+   relevant per-milestone target) for a real-hardware confirmation.
+4. Push. CI runs the SimCoupé matrix as the gate.
 
-2. **Test variant coverage.** The Go harness ran only the prod binary. The test variant
-   runs ~200 K+ Z80 steps and exercises HGTHD for `enctab.enc`. Does the fast harness
-   need to handle the test variant, or is prod-only coverage sufficient for the inner
-   loop?
+**The Go harness is never a gate.** If it crashes for an unknown reason, misleads, or
+just isn't helpful in a given iteration, the agent skips it and runs SimCoupé under
+Docker directly. "The tool wasn't helpful this time" is a fine outcome — it does not
+need investigation or escalation.
 
-3. **Strict-mode for unknown hooks.** Spike A SCOPE.md item 3: if the assembler calls
-   a SAMDOS hook the harness doesn't handle, it silently continues. Should there be a
-   panic-on-unknown-hook "strict mode"? Without it, stubs silently hiding hook calls is
-   the most likely source of false passes.
+**When the harness disagrees with SimCoupé, SimCoupé wins.** The right next move is to
+fix the harness (stub gap, hook semantics, paging discrepancy), but the SAM-side code
+change ships based on SimCoupé's verdict.
 
-4. **PC trace format.** Spike A returns PC values only; recovering opcode bytes
-   requires a post-hoc disassembly pass. Is that acceptable, or should the Go harness
-   capture the 4 opcode bytes at each PC as Spike B does? (Trivial addition: call
-   `hw.Get` for 4 bytes after each `recordPC`.)
+**Agents own the harness code.** It exists to serve them. Improvements — richer state
+dumps, single-step execution, memory watchpoints, T-state counting, opcode bytes in the
+PC trace, branch coverage, or whatever else turns out to be useful when something
+crashes or behaves unexpectedly — are part of normal Z80 work. PR them without
+ceremony; no design review or permission needed for harness changes that are obviously
+making the tool more useful.
 
-5. **`-bracketwithtag` ergonomics.** Spike B SCOPE.md item 2: for the current fixture
-   corpus, SAMDOS calls are ~20 000 instructions before HALT, so the bracket sentinels
-   are overwritten by the ring. Is the feature useful as-is, or should it become a
-   dedicated `-log-rst8-calls FILE` that captures all hook entries regardless of the
-   ring size?
+---
+
+## Known stub gaps (for future agent reference)
+
+Spike A's SCOPE.md identifies three live approximations. These are not blockers, but
+they're where divergences from SimCoupé are most likely to surface. When an agent
+notices "this fixture passes the Go harness but fails in SimCoupé", one of these is the
+first place to look.
+
+1. **UIFA/&4B50 page resolution.** If LMPR changes before HGTHD is called, the wrong
+   physical page may be written. Currently untested for non-default LMPR at hook entry.
+2. **Test variant.** Boot-time self-tests do ~200 K+ Z80 steps; the HGTHD stub for
+   `enctab.enc` may need to populate `&4B50` to track real SAMDOS behaviour. Spike A
+   only ran the prod binary.
+3. **Multi-page OUT.** HSAVE multi-page capture logic exists but is untested. Will
+   surface when an m6 fixture exceeds the single-page OUT path.
+
+Spike-B-derived ideas worth keeping on the shortlist if they would help in a given
+debug session: opcode bytes per PC in the trace (call `hw.Get` for 4 bytes after each
+`recordPC`); a `LogHook` mode that records every RST 8 dispatch outside the last-200
+ring (the bracket-with-tag pattern from the SimCoupé fork was good; SAMDOS calls in
+current fixtures fire ~20 000 instructions before HALT, so they're outside any small
+ring).
