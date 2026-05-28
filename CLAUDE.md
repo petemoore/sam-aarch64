@@ -42,6 +42,15 @@ The harness is **not** a CI gate — SimCoupé is the only gate. The harness can
 
 Design rationale + workflow: `docs/notes/2026-05-28-test-harness-bakeoff-evaluation.md`.
 
+## Where plans and specs go (override the superpowers default)
+
+The superpowers skills (`writing-plans`, `brainstorming`) **explicitly instruct** you to save to `docs/superpowers/plans/` and `docs/superpowers/specs/`. **In this repo, do NOT — override that:**
+
+- **Plans → `docs/plans/`** (committed). **Specs / design docs → `docs/specs/`** (committed).
+- **Never write to `docs/superpowers/`** — it is excluded by the global `~/.gitignore_global`, so anything you put there is silently dropped from the repo. (PR #18 made `docs/plans` + `docs/specs` canonical; see `memory/feedback_superpowers_docs_gitignored`.)
+
+If you find files in `docs/superpowers/`, they're a stray slip — migrate them to `docs/plans`/`docs/specs` and delete the originals. `tools/session-handover.sh` warns at session start if any appear.
+
 ## Pointers for first-session-on-this-repo
 
 - Project overview + roadmap: `docs/ROADMAP.md`.
