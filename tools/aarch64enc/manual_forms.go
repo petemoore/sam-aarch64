@@ -609,6 +609,61 @@ var manualForms = []Form{
 		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 16, BitWidth: 6},
 		{SlotKind: BitfieldImm, ExpectedKind: 5, BitPosition: 10, BitWidth: 6},
 	}},
+
+	// -----------------------------------------------------------------
+	// ccmp (ID 88) — Conditional Compare.  ARM ARM C6.2.43 (immediate)
+	// and C6.2.44 (register).
+	//
+	// Encoding (per the ARMv8 ARM):
+	//
+	//   immediate: sf 1 1 1 1 0 1 0 0 1 0 imm5 cond 1 0 Rn 0 nzcv
+	//   register:  sf 1 1 1 1 0 1 0 0 1 0  Rm  cond 0 0 Rn 0 nzcv
+	//
+	// Fixed bits: 31..21, 11..10, 4.  Bit 11 = 1 selects the immediate
+	// form (imm5 in 20..16); bit 11 = 0 selects the register form
+	// (Rm in 20..16).  Bit 10 = 0 for both.  Bit 4 = 0 for both.
+	//
+	// Mask: 0xFFE00C10 (top 11 bits + bits 11, 10, 4).
+	//
+	// Patterns: bits 31..21 give 0xFA400000 (sf=1) or 0x7A400000 (sf=0);
+	// immediate forms additionally set bit 11 (|0x800).
+	//
+	// Both nzcv (bits 3..0) and imm5 (bits 20..16) are unsigned small
+	// immediates: SlotKind=Imm5 with BitWidth=4 packs nzcv (4 bits, 0..15)
+	// and BitWidth=5 packs imm5 (5 bits, 0..31).  The shared Imm5 / Imm6
+	// slot encoder is BitWidth-driven (see slots_trivial.go::encodeImmN).
+	//
+	// ExpectedKind: OpImmExpr (5) for both nzcv and imm5; the parser
+	// emits both as IMM_EXPR operands carrying a constant expression.
+
+	// ccmp Wn, #imm5, #nzcv, cond — 32-bit immediate.
+	{MnemonicID: 88, Pattern: 0x7a400800, Mask: 0xffe00c10, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},     // Rn
+		{SlotKind: Imm5, ExpectedKind: 5, BitPosition: 16, BitWidth: 5},    // imm5
+		{SlotKind: Imm5, ExpectedKind: 5, BitPosition: 0, BitWidth: 4},     // nzcv
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4}, // cond
+	}},
+	// ccmp Xn, #imm5, #nzcv, cond — 64-bit immediate.
+	{MnemonicID: 88, Pattern: 0xfa400800, Mask: 0xffe00c10, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},     // Rn
+		{SlotKind: Imm5, ExpectedKind: 5, BitPosition: 16, BitWidth: 5},    // imm5
+		{SlotKind: Imm5, ExpectedKind: 5, BitPosition: 0, BitWidth: 4},     // nzcv
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4}, // cond
+	}},
+	// ccmp Wn, Wm, #nzcv, cond — 32-bit register.
+	{MnemonicID: 88, Pattern: 0x7a400000, Mask: 0xffe00c10, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},     // Rn
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5},    // Rm
+		{SlotKind: Imm5, ExpectedKind: 5, BitPosition: 0, BitWidth: 4},     // nzcv
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4}, // cond
+	}},
+	// ccmp Xn, Xm, #nzcv, cond — 64-bit register.
+	{MnemonicID: 88, Pattern: 0xfa400000, Mask: 0xffe00c10, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},     // Rn
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},    // Rm
+		{SlotKind: Imm5, ExpectedKind: 5, BitPosition: 0, BitWidth: 4},     // nzcv
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4}, // cond
+	}},
 }
 
 // ManualForms returns the hand-curated form table.  Exposed so that
