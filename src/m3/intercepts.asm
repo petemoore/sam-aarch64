@@ -196,6 +196,98 @@ try_intercept_post_mem:
 
 try_intercept_post_litpool:
 
+; -- ldr Xt|Wt, <label> — LDR (literal) direct-label form -------------
+; mnemonic 5 (ldr) with operand 1 = OpImmExpr (NOT OpLitPool, NOT OpMem).
+; The label IS the PC-relative target; imm19 = (target - PASS_PC)/4.
+; The Mac-side dispatch is refenc/pass2.go:281 (encodeLdrLitDirect).  No
+; form-table entry exists for {RegX/RegW, ImmExpr}, so a miss here would
+; fall through to form lookup → FAIL40.  Grounded against
+; aarch64-none-elf-as + ARM ARM C6.2.131 (LDR literal).
+                ld      a, (try_intercept_mnem)
+                cp      5
+                jp      nz, try_intercept_post_ldrlit
+                ld      a, (main_op_count)
+                cp      2
+                jp      nz, try_intercept_post_ldrlit
+                ld      a, (OPVAL_KINDS + 1)
+                cp      OP_KIND_IMM_EXPR
+                jp      nz, try_intercept_post_ldrlit
+                call    encode_ldr_lit_direct_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+try_intercept_post_ldrlit:
+
+; -- lsl / lsr (mnemonics 17 / 18) ------------------------------------
+; Both forms (3 operands): operand 2 = OpImmExpr → UBFM-alias immediate
+; shift; operand 2 = OpRegX/OpRegW → LSLV/LSRV register shift.  The
+; Mac-side dispatch is refenc/pass2.go:300 (case 17,18 → encodeLSLSR),
+; ahead of the form table.  No form-table entry exists, so a miss here
+; would fall through to FAIL40.  Grounded against aarch64-none-elf-as +
+; ARM ARM C6.2.218/.222 (LSL/LSR imm) and C6.2.219/.223 (LSLV/LSRV).
+                ld      a, (try_intercept_mnem)
+                cp      17
+                jr      z, try_intercept_lslsr
+                cp      18
+                jp      nz, try_intercept_post_lslsr
+try_intercept_lslsr:
+                ld      a, (main_op_count)
+                cp      3
+                jp      nz, try_intercept_post_lslsr
+                ld      a, (try_intercept_mnem)
+                call    encode_lslsr_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+try_intercept_post_lslsr:
+
+; -- Bitfield aliases: bfi=49 bfxil=50 ubfx=51 bfc=83 sbfx=84 ---------
+; All BFM/SBFM/UBFM aliases with computed immr/imms, dispatched ahead of
+; the form table on the Mac side (refenc/pass2.go:302 -> case 49,50,51,
+; 83,84 -> encodeBitfieldInst).  bfc is 3-operand (Rn implicitly XZR);
+; the others are 4-operand.  No form-table entry exists, so a miss here
+; would fall through to FAIL40.  Grounded against aarch64-none-elf-as +
+; ARM ARM C6.2.40/.42/.335/.41/.270.
+                ld      a, (try_intercept_mnem)
+                cp      49
+                jr      z, try_intercept_bitfield
+                cp      50
+                jr      z, try_intercept_bitfield
+                cp      51
+                jr      z, try_intercept_bitfield
+                cp      83
+                jr      z, try_intercept_bitfield
+                cp      84
+                jp      nz, try_intercept_post_bitfield
+try_intercept_bitfield:
+                ld      a, (try_intercept_mnem)
+                call    encode_bitfield_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+try_intercept_post_bitfield:
+
+; -- tbz=22 / tbnz=23 — test bit and branch ---------------------------
+; 3 operands: Rt, #bit, label.  Dispatched ahead of the form table on
+; the Mac side (refenc/pass2.go:292 -> encodeTbzTbnz).  No form-table
+; entry exists, so a miss here would fall through to FAIL40.  Grounded
+; against aarch64-none-elf-as + ARM ARM C6.2.317 (TBZ) / C6.2.318 (TBNZ).
+                ld      a, (try_intercept_mnem)
+                cp      22
+                jr      z, try_intercept_tbz
+                cp      23
+                jp      nz, try_intercept_post_tbz
+try_intercept_tbz:
+                ld      a, (main_op_count)
+                cp      3
+                jp      nz, try_intercept_post_tbz
+                ld      a, (try_intercept_mnem)
+                call    encode_tbz_word
+                call    intercept_emit_dehl
+                xor     a
+                ret
+try_intercept_post_tbz:
+
 ; -- Barrier mnemonics: isb=66 / dsb=67 / dmb=68 ----------------------
 ; text2bin converts the barrier-arg keyword (sy, ish, ishst, ...) into a
 ; single OpImmExpr carrying the CRm field (bits 11:8); isb with no arg
@@ -642,3 +734,853 @@ encode_barrier_pack:
                 or      h
                 ld      h, a
                 ret
+
+
+; -----------------------------------------------------------------------
+; encode_ldr_lit_direct_word — LDR (literal) direct-label form.
+;
+; Port of tools/refenc/pass2.go:encodeLdrLitDirect (pass2.go:508).
+;   off   := target - PC                     (raw byte offset)
+;   imm19 := off / 4   (off must be 4-aligned, range +/-1 MiB signed)
+;   base  := X ? 0x58000000 : 0x18000000
+;   word  := base | ((imm19 & 0x7ffff) << 5) | Rt
+;
+; OPVAL_ARRAY[0] = Rt (X = 0x01 / W = 0x02); reg in +1.
+; OPVAL_ARRAY[1] = OpImmExpr; 8-byte LE result (the label's byte offset,
+;   same byte-offset space as PASS_PC) starts at +2.
+;
+; Output: DE:HL = encoded 32-bit word (HL = bits 0..15, DE = bits 16..31).
+; Errors: jp fail on width != X/W, off not 4-aligned, imm19 out of
+;   19-bit signed range, or target high bytes inconsistent.
+; Grounded against aarch64-none-elf-as + ARM ARM C6.2.131 (LDR literal).
+; -----------------------------------------------------------------------
+encode_ldr_lit_direct_word:
+; -- Width / base from operand-0 kind ---------------------------------
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0)
+                cp      OP_KIND_REG_X
+                jr      z, encode_ldrlit_x
+                cp      OP_KIND_REG_W
+                jp      nz, fail
+                ld      a, &18              ; W base high byte (0x18000000)
+                jr      encode_ldrlit_base_set
+encode_ldrlit_x:
+                ld      a, &58              ; X base high byte (0x58000000)
+encode_ldrlit_base_set:
+                ld      (encode_ldrlit_basehi), a
+
+; -- off = target - PASS_PC (32-bit two's complement, LSB-first) ------
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2)
+                ld      hl, PASS_PC
+                sub     (hl)
+                ld      (encode_ldrlit_off + 0), a
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 3)
+                inc     hl
+                sbc     a, (hl)
+                ld      (encode_ldrlit_off + 1), a
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 4)
+                inc     hl
+                sbc     a, (hl)
+                ld      (encode_ldrlit_off + 2), a
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 5)
+                inc     hl
+                sbc     a, (hl)
+                ld      (encode_ldrlit_off + 3), a
+
+; -- off must be 4-byte aligned (low 2 bits zero) ---------------------
+                ld      a, (encode_ldrlit_off + 0)
+                and     &03
+                jp      nz, fail
+
+; -- imm19 = off >> 2 (arithmetic, sign-preserving) -------------------
+; Two arithmetic right-shifts of the 4-byte signed value.
+                ld      b, 2
+encode_ldrlit_asr_loop:
+                ld      a, (encode_ldrlit_off + 3)
+                sra     a
+                ld      (encode_ldrlit_off + 3), a
+                ld      a, (encode_ldrlit_off + 2)
+                rra
+                ld      (encode_ldrlit_off + 2), a
+                ld      a, (encode_ldrlit_off + 1)
+                rra
+                ld      (encode_ldrlit_off + 1), a
+                ld      a, (encode_ldrlit_off + 0)
+                rra
+                ld      (encode_ldrlit_off + 0), a
+                djnz    encode_ldrlit_asr_loop
+; encode_ldrlit_off now = imm19 (sign-extended to 32 bits).
+
+; -- Range check: imm19 must fit in 19-bit signed --------------------
+; Bits 19..31 must all equal bit 18 (the sign).  Equivalently, an extra
+; ASR-by-19 of a COPY collapses to all-0 (non-neg) or all-FF (neg).
+                ld      a, (encode_ldrlit_off + 0)
+                ld      (encode_ldrlit_chk + 0), a
+                ld      a, (encode_ldrlit_off + 1)
+                ld      (encode_ldrlit_chk + 1), a
+                ld      a, (encode_ldrlit_off + 2)
+                ld      (encode_ldrlit_chk + 2), a
+                ld      a, (encode_ldrlit_off + 3)
+                ld      (encode_ldrlit_chk + 3), a
+                ld      b, 19
+encode_ldrlit_chk_loop:
+                ld      a, (encode_ldrlit_chk + 3)
+                sra     a
+                ld      (encode_ldrlit_chk + 3), a
+                ld      a, (encode_ldrlit_chk + 2)
+                rra
+                ld      (encode_ldrlit_chk + 2), a
+                ld      a, (encode_ldrlit_chk + 1)
+                rra
+                ld      (encode_ldrlit_chk + 1), a
+                ld      a, (encode_ldrlit_chk + 0)
+                rra
+                ld      (encode_ldrlit_chk + 0), a
+                djnz    encode_ldrlit_chk_loop
+; chk must be 0x00000000 (non-neg in range) or 0xFFFFFFFF (neg in range).
+                ld      a, (encode_ldrlit_chk + 0)
+                ld      h, a
+                ld      a, (encode_ldrlit_chk + 1)
+                or      h
+                ld      h, a
+                ld      a, (encode_ldrlit_chk + 2)
+                or      h
+                ld      h, a
+                ld      a, (encode_ldrlit_chk + 3)
+                or      h
+                jr      z, encode_ldrlit_pack
+                ld      a, (encode_ldrlit_chk + 0)
+                ld      h, a
+                ld      a, (encode_ldrlit_chk + 1)
+                and     h
+                ld      h, a
+                ld      a, (encode_ldrlit_chk + 2)
+                and     h
+                ld      h, a
+                ld      a, (encode_ldrlit_chk + 3)
+                and     h
+                cp      &ff
+                jp      nz, fail
+
+encode_ldrlit_pack:
+; -- Pack word = basehi:00 | (imm19[0..18] << 5) | Rt -----------------
+; imm19 (19 bits) lives in encode_ldrlit_off[0..2] (low 3 bytes; bit 18
+; is the top valid bit).  word bytes:
+;   byte0 = ((imm19 & 0x07) << 5) | Rt
+;   byte1 = (imm19 >> 3)  & 0xff
+;   byte2 = (imm19 >> 11) & 0xff   (8 bits: imm19[11..18])
+;   byte3 = basehi
+; (imm19 << 5) spans bits 5..23 — disjoint from Rt (bits 0..4) and the
+; base high byte (bits 24..31), so plain ORs suffice.
+
+; -- byte2 (DE high) = (imm19 >> 11) & 0xff ---------------------------
+; imm19>>11: take off[1] (bits 8..15) >> 3, OR off[2] (bits 16..18) << 5.
+                ld      a, (encode_ldrlit_off + 1)
+                rrca
+                rrca
+                rrca
+                and     &1f                 ; bits 11..15 of imm19 → low 5 of byte2
+                ld      c, a
+                ld      a, (encode_ldrlit_off + 2)
+                and     &07                 ; imm19 bits 16..18
+                rlca
+                rlca
+                rlca
+                rlca
+                rlca                        ; << 5 → bits 16..18 land in byte2 bits 5..7
+                or      c
+                ld      d, a                ; D = byte2 (word bits 16..23)
+                ld      a, (encode_ldrlit_basehi)
+                ; DE high byte (bit24..31) = basehi; build E later, keep in B
+                ld      b, a                ; B = byte3 (basehi)
+
+; -- byte1 (HL high) = (imm19 >> 3) & 0xff ----------------------------
+; imm19>>3: off[0] (bits 0..7) >> 3 OR off[1] (bits 8..10) << 5.
+                ld      a, (encode_ldrlit_off + 0)
+                rrca
+                rrca
+                rrca
+                and     &1f                 ; imm19 bits 3..7 → low 5
+                ld      c, a
+                ld      a, (encode_ldrlit_off + 1)
+                and     &07                 ; imm19 bits 8..10
+                rlca
+                rlca
+                rlca
+                rlca
+                rlca                        ; << 5 → bits 5..7
+                or      c
+                ld      h, a                ; H = byte1 (word bits 8..15)
+
+; -- byte0 (HL low) = ((imm19 & 0x07) << 5) | Rt ----------------------
+                ld      a, (encode_ldrlit_off + 0)
+                and     &07                 ; imm19 bits 0..2
+                rlca
+                rlca
+                rlca
+                rlca
+                rlca                        ; << 5 → bits 5..7
+                ld      c, a
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1)
+                and     &1f                 ; Rt (5 bits) → bits 0..4
+                or      c
+                ld      l, a                ; L = byte0 (word bits 0..7)
+
+; -- Assemble DE = byte3:byte2 ----------------------------------------
+                ld      e, d                ; E = byte2 (bits 16..23)
+                ld      d, b                ; D = byte3 (bits 24..31) = basehi
+                ret
+
+
+encode_ldrlit_basehi:            defb    0
+encode_ldrlit_off:               defb    0, 0, 0, 0
+encode_ldrlit_chk:               defb    0, 0, 0, 0
+
+
+; -----------------------------------------------------------------------
+; encode_lslsr_word — pure word computation for lsl / lsr (mnem 17/18).
+;
+; Port of tools/refenc/pass2.go:encodeLSLSR (pass2.go:1196).
+;
+; In:  A = mnemonic_id (17=lsl, 18=lsr).
+;      OPVAL_ARRAY[0] = Rd (X=0x01 / W=0x02), reg in +1.
+;      OPVAL_ARRAY[1] = Rn (matching width), reg in +1.
+;      OPVAL_ARRAY[2] = OpImmExpr (#shift, LE result at +2) OR a register
+;        (LSLV/LSRV).  Width comes from operand 0.
+; Out: DE:HL = encoded 32-bit word (HL=bits0..15, DE=bits16..31).
+; Errors: jp fail on width != X/W, shift out of [0,regsize), or non-u8
+;   shift.
+; Grounded against aarch64-none-elf-as + ARM ARM C6.2.218/.222/.219/.223.
+; -----------------------------------------------------------------------
+encode_lslsr_word:
+                ld      (encode_lslsr_mnem), a
+; -- regsize / is64 from operand 0 kind -------------------------------
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0)
+                cp      OP_KIND_REG_X
+                jr      z, encode_lslsr_x
+                cp      OP_KIND_REG_W
+                jp      nz, fail
+                xor     a                   ; is64 = 0 (W)
+                jr      encode_lslsr_size_set
+encode_lslsr_x:
+                ld      a, 1                ; is64 = 1 (X)
+encode_lslsr_size_set:
+                ld      (encode_lslsr_is64), a
+
+; -- Branch on operand-2 kind: register (LSLV/LSRV) vs immediate ------
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 0)
+                cp      OP_KIND_REG_X
+                jp      z, encode_lslsr_reg
+                cp      OP_KIND_REG_W
+                jp      z, encode_lslsr_reg
+                cp      OP_KIND_IMM_EXPR
+                jp      nz, fail
+
+; =====================================================================
+; Immediate form (UBFM alias).
+; =====================================================================
+; regsize = is64 ? 64 : 32.  Read shift (operand 2 LE byte 0).
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 2)
+                ld      (encode_lslsr_shift), a
+; reject non-u8 shift (upper LE bytes must be zero)
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 3)
+                or      a
+                jp      nz, fail
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 4)
+                or      a
+                jp      nz, fail
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 5)
+                or      a
+                jp      nz, fail
+; range: 0 <= shift < regsize
+                ld      a, (encode_lslsr_is64)
+                or      a
+                ld      a, 32
+                jr      z, encode_lslsr_imm_rs_set
+                ld      a, 64
+encode_lslsr_imm_rs_set:
+                ld      (encode_lslsr_regsize), a
+                ld      b, a                ; B = regsize
+                ld      a, (encode_lslsr_shift)
+                cp      b
+                jp      nc, fail            ; shift >= regsize → fail
+
+; -- Compute immr/imms by mnemonic ------------------------------------
+                ld      a, (encode_lslsr_mnem)
+                cp      18
+                jp      z, encode_lslsr_lsr_imm
+
+; LSL: immr = (-shift) & (regsize-1); imms = regsize-1-shift
+;   shift==0 → immr=0; else immr = regsize - shift.
+                ld      a, (encode_lslsr_shift)
+                or      a
+                jr      nz, encode_lslsr_lsl_immr_nz
+                xor     a                   ; immr = 0
+                jr      encode_lslsr_lsl_immr_done
+encode_lslsr_lsl_immr_nz:
+; immr = regsize - shift  (shift in [1, regsize-1])
+                ld      a, (encode_lslsr_regsize)
+                ld      c, a
+                ld      a, (encode_lslsr_shift)
+                ld      b, a
+                ld      a, c
+                sub     b                   ; A = regsize - shift
+                and     &3f
+encode_lslsr_lsl_immr_done:
+                ld      (encode_lslsr_immr), a
+; imms = regsize - 1 - shift
+                ld      a, (encode_lslsr_regsize)
+                dec     a                   ; regsize - 1
+                ld      c, a
+                ld      a, (encode_lslsr_shift)
+                ld      b, a
+                ld      a, c
+                sub     b                   ; A = (regsize-1) - shift
+                and     &3f
+                ld      (encode_lslsr_imms), a
+                jp      encode_lslsr_imm_base
+
+encode_lslsr_lsr_imm:
+; LSR: immr = shift; imms = regsize - 1
+                ld      a, (encode_lslsr_shift)
+                and     &3f
+                ld      (encode_lslsr_immr), a
+                ld      a, (encode_lslsr_regsize)
+                dec     a
+                and     &3f
+                ld      (encode_lslsr_imms), a
+
+encode_lslsr_imm_base:
+; base = is64 ? 0xd3400000 : 0x53000000.  DE high16, HL=0.
+                ld      a, (encode_lslsr_is64)
+                or      a
+                jr      z, encode_lslsr_imm_w
+                ld      de, &d340
+                jr      encode_lslsr_imm_pack
+encode_lslsr_imm_w:
+                ld      de, &5300
+encode_lslsr_imm_pack:
+                ld      hl, 0
+; -- OR Rd into bits 4:0 ---------------------------------------------
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1)
+                and     &1f
+                ld      l, a
+; -- OR Rn into bits 9:5 ---------------------------------------------
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1)
+                and     &1f
+                call    encode_ubfm_or_rn      ; HL |= Rn<<5
+; -- OR imms into bits 15:10 -----------------------------------------
+                ld      a, (encode_lslsr_imms)
+                call    encode_ubfm_or_imms    ; HL |= imms<<10
+; -- OR immr into bits 21:16 (DE low byte bits 0..5) -----------------
+                ld      a, (encode_lslsr_immr)
+                or      e
+                ld      e, a
+                ret
+
+; =====================================================================
+; Register form (LSLV / LSRV).
+; =====================================================================
+encode_lslsr_reg:
+; base by mnemonic + width:
+;   lsl(17): X 0x9ac02000 / W 0x1ac02000
+;   lsr(18): X 0x9ac02400 / W 0x1ac02400
+; DE high16: lsl X=0x9ac0 W=0x1ac0; lsr same high16 (0x...c0).
+; HL low16:  lsl 0x2000; lsr 0x2400.  Then | (Rm<<16)|(Rn<<5)|Rd.
+                ld      a, (encode_lslsr_is64)
+                or      a
+                jr      z, encode_lslsr_reg_w
+                ld      de, &9ac0
+                jr      encode_lslsr_reg_lo
+encode_lslsr_reg_w:
+                ld      de, &1ac0
+encode_lslsr_reg_lo:
+                ld      a, (encode_lslsr_mnem)
+                cp      18
+                jr      z, encode_lslsr_reg_lsr
+                ld      hl, &2000           ; LSLV low16
+                jr      encode_lslsr_reg_pack
+encode_lslsr_reg_lsr:
+                ld      hl, &2400           ; LSRV low16
+encode_lslsr_reg_pack:
+; -- OR Rd into bits 4:0 ---------------------------------------------
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1)
+                and     &1f
+                or      l
+                ld      l, a
+; -- OR Rn into bits 9:5 ---------------------------------------------
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1)
+                and     &1f
+                call    encode_ubfm_or_rn      ; HL |= Rn<<5
+; -- OR Rm into bits 20:16 (DE low byte bits 0..4) -------------------
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 1)
+                and     &1f
+                or      e
+                ld      e, a
+                ret
+
+
+; -----------------------------------------------------------------------
+; encode_ubfm_or_rn — OR a 5-bit Rn (in A) into HL at bit position 5.
+; Rn<<5 spans HL bits 5..9: low 3 bits of Rn → HL low byte bits 5..7;
+; high 2 bits of Rn → HL high byte bits 0..1.  Clobbers A, C.
+; -----------------------------------------------------------------------
+encode_ubfm_or_rn:
+                and     &1f
+                rrca
+                rrca
+                rrca                        ; A bits 5..7 = Rn&7 ; A bits 0..1 = Rn>>3
+                ld      c, a
+                and     &e0                 ; (Rn&7)<<5
+                or      l
+                ld      l, a
+                ld      a, c
+                and     &03                 ; Rn>>3
+                or      h
+                ld      h, a
+                ret
+
+; -----------------------------------------------------------------------
+; encode_ubfm_or_imms — OR a 6-bit imms (in A) into HL at bit position
+; 10.  imms<<10 spans HL bits 10..15 = HL high byte bits 2..7.
+; Clobbers A.
+; -----------------------------------------------------------------------
+encode_ubfm_or_imms:
+                and     &3f
+                add     a, a
+                add     a, a                ; imms<<2 → bits 2..7 of high byte
+                or      h
+                ld      h, a
+                ret
+
+
+encode_lslsr_mnem:               defb    0
+encode_lslsr_is64:               defb    0
+encode_lslsr_regsize:            defb    0
+encode_lslsr_shift:              defb    0
+encode_lslsr_immr:               defb    0
+encode_lslsr_imms:               defb    0
+
+
+; -----------------------------------------------------------------------
+; encode_bitfield_word — pure word computation for the bitfield aliases.
+;
+; Port of tools/refenc/pass2.go:encodeBitfieldInst (pass2.go:1277).
+;   bfi  (49): immr=(-lsb)&(regsize-1), imms=width-1     base BFM
+;   bfxil(50): immr=lsb,                imms=lsb+width-1  base BFM
+;   ubfx (51): immr=lsb,                imms=lsb+width-1  base UBFM
+;   bfc  (83): Rn=XZR(31); immr=(-lsb)&(regsize-1), imms=width-1 BFM
+;   sbfx (84): immr=lsb,                imms=lsb+width-1  base SBFM
+;   word = base | (immr<<16) | (imms<<10) | (Rn<<5) | Rd
+;
+; In:  A = mnemonic_id (49/50/51/83/84).
+;      OPVAL_ARRAY[0] = Rd (X=0x01 / W=0x02), reg in +1.
+;      bfc (83):  op1 = #lsb (ImmExpr), op2 = #width (ImmExpr); Rn=31.
+;      others:    op1 = Rn, op2 = #lsb, op3 = #width.
+; Out: DE:HL = encoded 32-bit word.
+; Errors: jp fail on width != X/W, lsb >= regsize, width<1 or
+;   width>regsize-lsb, or non-u8 lsb/width.
+; -----------------------------------------------------------------------
+encode_bitfield_word:
+                ld      (encode_bf_mnem), a
+; -- regsize / is64 from operand 0 kind -------------------------------
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0)
+                cp      OP_KIND_REG_X
+                jr      z, encode_bf_x
+                cp      OP_KIND_REG_W
+                jp      nz, fail
+                ld      a, 32
+                jr      encode_bf_size_set
+encode_bf_x:
+                ld      a, 64
+encode_bf_size_set:
+                ld      (encode_bf_regsize), a
+
+; -- Locate operand slots (bfc shifts lsb/width down by one) ----------
+; Rn and lsb/width source offsets differ for bfc (83).
+                ld      a, (encode_bf_mnem)
+                cp      83
+                jr      z, encode_bf_bfc
+
+; 4-operand: Rn = op1 reg; lsb = op2 LE byte 0; width = op3 LE byte 0.
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1)
+                and     &1f
+                ld      (encode_bf_rn), a
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 2)
+                ld      (encode_bf_lsb), a
+; reject non-u8 lsb
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 3)
+                or      a
+                jp      nz, fail
+                ld      a, (OPVAL_ARRAY + 3 * OPVAL_STRIDE + 2)
+                ld      (encode_bf_width), a
+                ld      a, (OPVAL_ARRAY + 3 * OPVAL_STRIDE + 3)
+                or      a
+                jp      nz, fail
+                jr      encode_bf_have_ops
+
+encode_bf_bfc:
+; 3-operand bfc: Rn = XZR (31); lsb = op1 LE; width = op2 LE.
+                ld      a, 31
+                ld      (encode_bf_rn), a
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2)
+                ld      (encode_bf_lsb), a
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 3)
+                or      a
+                jp      nz, fail
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 2)
+                ld      (encode_bf_width), a
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 3)
+                or      a
+                jp      nz, fail
+
+encode_bf_have_ops:
+; -- Range checks: lsb < regsize; 1 <= width <= regsize - lsb ---------
+                ld      a, (encode_bf_regsize)
+                ld      b, a                ; B = regsize
+                ld      a, (encode_bf_lsb)
+                cp      b
+                jp      nc, fail            ; lsb >= regsize
+                ld      a, b                ; regsize
+                ld      c, a
+                ld      a, (encode_bf_lsb)
+                ld      b, a
+                ld      a, c
+                sub     b                   ; A = regsize - lsb
+                ld      c, a                ; C = regsize - lsb (>=1)
+                ld      a, (encode_bf_width)
+                or      a
+                jp      z, fail             ; width == 0
+                cp      c
+                jp      z, encode_bf_width_ok
+                jp      nc, fail            ; width > regsize - lsb
+encode_bf_width_ok:
+
+; -- Compute immr/imms by mnemonic ------------------------------------
+; bfi(49) and bfc(83): immr=(-lsb)&(regsize-1), imms=width-1
+; bfxil(50)/ubfx(51)/sbfx(84): immr=lsb, imms=lsb+width-1
+                ld      a, (encode_bf_mnem)
+                cp      49
+                jr      z, encode_bf_immr_neg
+                cp      83
+                jr      z, encode_bf_immr_neg
+
+; immr = lsb; imms = lsb + width - 1
+                ld      a, (encode_bf_lsb)
+                and     &3f
+                ld      (encode_bf_immr), a
+                ld      a, (encode_bf_lsb)
+                ld      b, a
+                ld      a, (encode_bf_width)
+                add     a, b
+                dec     a                   ; lsb + width - 1
+                and     &3f
+                ld      (encode_bf_imms), a
+                jr      encode_bf_base
+
+encode_bf_immr_neg:
+; immr = (-lsb) & (regsize-1) = (regsize - lsb) & (regsize-1).
+;   lsb==0 → immr=0; else regsize - lsb.
+                ld      a, (encode_bf_lsb)
+                or      a
+                jr      nz, encode_bf_immr_neg_nz
+                xor     a
+                jr      encode_bf_immr_neg_done
+encode_bf_immr_neg_nz:
+                ld      a, (encode_bf_regsize)
+                ld      c, a
+                ld      a, (encode_bf_lsb)
+                ld      b, a
+                ld      a, c
+                sub     b                   ; regsize - lsb
+                and     &3f
+encode_bf_immr_neg_done:
+                ld      (encode_bf_immr), a
+; imms = width - 1
+                ld      a, (encode_bf_width)
+                dec     a
+                and     &3f
+                ld      (encode_bf_imms), a
+
+encode_bf_base:
+; base by mnemonic + width.  DE = base high16, HL = 0.
+;   bfi/bfxil/bfc : BFM  — X 0xb340 / W 0x3300
+;   ubfx          : UBFM — X 0xd340 / W 0x5300
+;   sbfx          : SBFM — X 0x9340 / W 0x1300
+                ld      a, (encode_bf_mnem)
+                cp      51
+                jr      z, encode_bf_base_ubfm
+                cp      84
+                jr      z, encode_bf_base_sbfm
+; BFM (bfi/bfxil/bfc)
+                ld      a, (encode_bf_regsize)
+                cp      64
+                jr      z, encode_bf_bfm_x
+                ld      de, &3300
+                jr      encode_bf_pack
+encode_bf_bfm_x:
+                ld      de, &b340
+                jr      encode_bf_pack
+encode_bf_base_ubfm:
+                ld      a, (encode_bf_regsize)
+                cp      64
+                jr      z, encode_bf_ubfm_x
+                ld      de, &5300
+                jr      encode_bf_pack
+encode_bf_ubfm_x:
+                ld      de, &d340
+                jr      encode_bf_pack
+encode_bf_base_sbfm:
+                ld      a, (encode_bf_regsize)
+                cp      64
+                jr      z, encode_bf_sbfm_x
+                ld      de, &1300
+                jr      encode_bf_pack
+encode_bf_sbfm_x:
+                ld      de, &9340
+
+encode_bf_pack:
+                ld      hl, 0
+; Rd → bits 4:0
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1)
+                and     &1f
+                ld      l, a
+; Rn → bits 9:5
+                ld      a, (encode_bf_rn)
+                call    encode_ubfm_or_rn
+; imms → bits 15:10
+                ld      a, (encode_bf_imms)
+                call    encode_ubfm_or_imms
+; immr → bits 21:16 (DE low byte bits 0..5)
+                ld      a, (encode_bf_immr)
+                or      e
+                ld      e, a
+                ret
+
+
+encode_bf_mnem:                  defb    0
+encode_bf_regsize:               defb    0
+encode_bf_rn:                    defb    0
+encode_bf_lsb:                   defb    0
+encode_bf_width:                 defb    0
+encode_bf_immr:                  defb    0
+encode_bf_imms:                  defb    0
+
+
+; -----------------------------------------------------------------------
+; encode_tbz_word — pure word computation for tbz / tbnz (mnem 22/23).
+;
+; Port of tools/refenc/pass2.go:encodeTbzTbnz (pass2.go:546).
+;   imm14 = (target - PC)/4   (4-aligned, 14-bit signed range +/-32 KiB)
+;   b5  = (bit>>5)&1   b40 = bit&0x1f   op = (mnem==23)?1:0
+;   word = (b5<<31) | (0b011011<<25) | (op<<24) | (b40<<19)
+;          | ((imm14 & 0x3fff)<<5) | Rt
+;
+; In:  A = mnemonic_id (22=tbz, 23=tbnz).
+;      OPVAL_ARRAY[0] = Rt (X=0x01 / W=0x02), reg in +1.
+;      OPVAL_ARRAY[1] = OpImmExpr (#bit, LE result at +2).
+;      OPVAL_ARRAY[2] = OpImmExpr (label byte offset, LE at +2).
+; Out: DE:HL = encoded 32-bit word.
+; Errors: jp fail on width != X/W, bit > 63, bit > 31 with W register,
+;   offset not 4-aligned, or imm14 out of 14-bit signed range.
+; -----------------------------------------------------------------------
+encode_tbz_word:
+                ld      (encode_tbz_op), a  ; stash mnem (resolved to op bit below)
+
+; -- bit number (operand 1 LE byte 0), validate range -----------------
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2)
+                ld      (encode_tbz_bit), a
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 3)
+                or      a
+                jp      nz, fail            ; non-u8 bit
+                ld      a, (encode_tbz_bit)
+                cp      64
+                jp      nc, fail            ; bit > 63
+; W register → bit must be <= 31
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0)
+                cp      OP_KIND_REG_W
+                jr      nz, encode_tbz_bit_ok
+                ld      a, (encode_tbz_bit)
+                cp      32
+                jp      nc, fail            ; bit > 31 with W
+                jr      encode_tbz_bit_ok
+encode_tbz_bit_ok:
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0)
+                cp      OP_KIND_REG_X
+                jr      z, encode_tbz_width_ok
+                cp      OP_KIND_REG_W
+                jp      nz, fail
+encode_tbz_width_ok:
+
+; -- off = target(operand 2) - PASS_PC (32-bit LE two's complement) ---
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 2)
+                ld      hl, PASS_PC
+                sub     (hl)
+                ld      (encode_tbz_off + 0), a
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 3)
+                inc     hl
+                sbc     a, (hl)
+                ld      (encode_tbz_off + 1), a
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 4)
+                inc     hl
+                sbc     a, (hl)
+                ld      (encode_tbz_off + 2), a
+                ld      a, (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 5)
+                inc     hl
+                sbc     a, (hl)
+                ld      (encode_tbz_off + 3), a
+
+; -- off must be 4-byte aligned ---------------------------------------
+                ld      a, (encode_tbz_off + 0)
+                and     &03
+                jp      nz, fail
+
+; -- imm14 = off >> 2 (arithmetic) ------------------------------------
+                ld      b, 2
+encode_tbz_asr_loop:
+                ld      a, (encode_tbz_off + 3)
+                sra     a
+                ld      (encode_tbz_off + 3), a
+                ld      a, (encode_tbz_off + 2)
+                rra
+                ld      (encode_tbz_off + 2), a
+                ld      a, (encode_tbz_off + 1)
+                rra
+                ld      (encode_tbz_off + 1), a
+                ld      a, (encode_tbz_off + 0)
+                rra
+                ld      (encode_tbz_off + 0), a
+                djnz    encode_tbz_asr_loop
+
+; -- Range check: imm14 must fit in 14-bit signed --------------------
+; ASR a copy by 14; result must be all-0 (non-neg) or all-FF (neg).
+                ld      a, (encode_tbz_off + 0)
+                ld      (encode_tbz_chk + 0), a
+                ld      a, (encode_tbz_off + 1)
+                ld      (encode_tbz_chk + 1), a
+                ld      a, (encode_tbz_off + 2)
+                ld      (encode_tbz_chk + 2), a
+                ld      a, (encode_tbz_off + 3)
+                ld      (encode_tbz_chk + 3), a
+                ld      b, 14
+encode_tbz_chk_loop:
+                ld      a, (encode_tbz_chk + 3)
+                sra     a
+                ld      (encode_tbz_chk + 3), a
+                ld      a, (encode_tbz_chk + 2)
+                rra
+                ld      (encode_tbz_chk + 2), a
+                ld      a, (encode_tbz_chk + 1)
+                rra
+                ld      (encode_tbz_chk + 1), a
+                ld      a, (encode_tbz_chk + 0)
+                rra
+                ld      (encode_tbz_chk + 0), a
+                djnz    encode_tbz_chk_loop
+                ld      a, (encode_tbz_chk + 0)
+                ld      h, a
+                ld      a, (encode_tbz_chk + 1)
+                or      h
+                ld      h, a
+                ld      a, (encode_tbz_chk + 2)
+                or      h
+                ld      h, a
+                ld      a, (encode_tbz_chk + 3)
+                or      h
+                jr      z, encode_tbz_pack
+                ld      a, (encode_tbz_chk + 0)
+                ld      h, a
+                ld      a, (encode_tbz_chk + 1)
+                and     h
+                ld      h, a
+                ld      a, (encode_tbz_chk + 2)
+                and     h
+                ld      h, a
+                ld      a, (encode_tbz_chk + 3)
+                and     h
+                cp      &ff
+                jp      nz, fail
+
+encode_tbz_pack:
+; imm14 (14 bits) lives in encode_tbz_off[0..1] (low 14 bits valid).
+; word bytes:
+;   byte0 = ((imm14 & 0x07) << 5) | Rt
+;   byte1 = (imm14 >> 3) & 0xff             (imm14 bits 3..10)
+;   byte2 = (imm14 >> 11) & 0x07            (imm14 bits 11..13, → bits16..18)
+;           | (b40 << 3)                    (b40 bits 0..4 → bits 19..23)
+;   byte3 = 0x36 | op | (b5 << 7)           (0b011011<<1=0x36; op bit0; b5 bit7)
+
+; -- byte0 (L) = (imm14[0..2] << 5) | Rt ------------------------------
+                ld      a, (encode_tbz_off + 0)
+                and     &07
+                rlca
+                rlca
+                rlca
+                rlca
+                rlca                        ; << 5
+                ld      c, a
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1)
+                and     &1f
+                or      c
+                ld      l, a
+
+; -- byte1 (H) = (imm14 >> 3) & 0xff ----------------------------------
+; off[0]>>3 OR off[1]<<5.
+                ld      a, (encode_tbz_off + 0)
+                rrca
+                rrca
+                rrca
+                and     &1f                 ; imm14 bits 3..7
+                ld      c, a
+                ld      a, (encode_tbz_off + 1)
+                and     &07                 ; imm14 bits 8..10
+                rlca
+                rlca
+                rlca
+                rlca
+                rlca                        ; << 5
+                or      c
+                ld      h, a
+
+; -- byte2 (E) = (imm14>>11 & 0x07) | (b40 << 3) ----------------------
+; imm14 bits 11..13 = off[1] bits 3..5 → (off[1]>>3)&0x07.
+                ld      a, (encode_tbz_off + 1)
+                rrca
+                rrca
+                rrca
+                and     &07                 ; imm14 bits 11..13 → byte2 bits 0..2
+                ld      c, a
+                ld      a, (encode_tbz_bit)
+                and     &1f                 ; b40 = bit & 0x1f
+                rlca
+                rlca
+                rlca                        ; << 3 → byte2 bits 3..7
+                or      c
+                ld      e, a
+
+; -- byte3 (D) = 0x36 | op | (b5 << 7) --------------------------------
+                ld      a, &36
+                ld      c, a
+; op bit: tbnz (23) → 1, tbz (22) → 0.
+                ld      a, (encode_tbz_op)
+                cp      23
+                jr      nz, encode_tbz_op_zero
+                ld      a, c
+                or      &01                 ; op = 1 → bit0
+                ld      c, a
+encode_tbz_op_zero:
+; b5 = (bit >> 5) & 1.
+                ld      a, (encode_tbz_bit)
+                and     &20                 ; bit 5 of bit number
+                jr      z, encode_tbz_b5_zero
+                ld      a, c
+                or      &80                 ; b5 = 1 → bit7
+                ld      c, a
+encode_tbz_b5_zero:
+                ld      d, c
+                ret
+
+
+encode_tbz_op:                   defb    0
+encode_tbz_bit:                  defb    0
+encode_tbz_off:                  defb    0, 0, 0, 0
+encode_tbz_chk:                  defb    0, 0, 0, 0
