@@ -171,7 +171,16 @@ start:
 
 ; Set up the stack before any call.  SAMDOS's EI in the RST 8 hook
 ; re-enables interrupts, so DI must be repeated after hook calls.
-                ld      sp, &C100
+;
+; The stack lives at the top of section D (growing down from &FFFE
+; into the &E100..&FFFF free region).  Earlier layouts placed the
+; stack at &C000..&C0FF, but post-M6 the assembler binary's tail
+; (test code in BUILD_TESTS variant) spills past &C000 into the
+; section-D address space.  A stack at &C100 would then push into
+; the binary's own code bytes, corrupting them.  Moving SP to the
+; top of section D keeps stack pushes in the unused &E100..&FFFF
+; free region, well away from the binary's code+data.
+                ld      sp, &FFFE
 
 ; Capture the boot LMPR value (as left by BASIC's CALL 32768) into
 ; LMPR_DEFAULT_RUNTIME so enctab_map_out restores the *real* default,
@@ -243,15 +252,7 @@ endif
 ; failure is reported before we waste time on the assemble loop).
 if defined(BUILD_TESTS)
                 call    run_trampoline_self_tests
-                ; NOTE: run_reader_paged_self_tests is DISABLED pending
-                ; root-cause investigation.  Confirmed orthogonal to the
-                ; HLOAD trampoline SP-switch fix in this branch (test
-                ; still fails with the SP fix in place).  Reader
-                ; correctness is exercised end-to-end by the M6
-                ; long-source fixture; this boot test was extra paranoia.
-                ; See `docs/notes/m6-status.md` §"Boot self-test deferred"
-                ; for the queued investigation.
-                ; call    run_reader_paged_self_tests
+                call    run_reader_paged_self_tests
 endif
 
 ; -- Run the assemble: pass 1 (table build) + pass 2 (emit) -----------
