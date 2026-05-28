@@ -616,4 +616,4 @@ Once the PR number is known, edit `docs/ROADMAP.md` to replace `#XX` with the re
 
 - [ ] **Step 4: Mark ready / merge**
 
-Per global PR workflow: if CI is green AND the diff is mechanical (a Pete-glance is not load-bearing), merge directly via `gh pr merge --squash --delete-branch`. Otherwise leave as draft for review.
+Per project-local PR workflow (`CLAUDE.md`): if CI is green AND the diff is mechanical (a Pete-glance is not load-bearing), merge directly via `gh pr merge --merge --delete-branch`. Otherwise leave open for review. (Corrected 2026-05-28: this plan originally said `--squash`; sam-aarch64 now uses merge commits — see the `feedback_merge_commits` memory entry.)
