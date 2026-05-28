@@ -7,21 +7,30 @@
 //	2  assembler  T6S3         (the M3 Z80 assembler binary)
 //	3  enctab.enc T6S4         (encoder table produced by enctab-gen)
 //	4  IN         (after)      (the .tbn source file, if provided)
+//	5  test_mem   (after)      (off-axis test_mem.bin, if provided —
+//	                            plan-PR 3 of the paging architecture)
 //
 // The AUTO BASIC references "assembler" (not "stub" as in M0).
 //
 // Usage:
 //
-//	build-m3-disk <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>
+//	build-m3-disk [-test-mem <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>
 //
-// Three-arg form (legacy): no IN file is added — used by Task-3 boot
-// tests where the assembler exits before reading IN.
+// Three-positional form (legacy): no IN file is added — used by
+// Task-3 boot tests where the assembler exits before reading IN.
 //
-// Four-arg form: adds IN as a CODE file at load address &B000 (matches
-// IN_BUF in src/m3/main_loop.asm).
+// Four-positional form: adds IN as a CODE file at load address &B000
+// (matches IN_BUF in src/m3/main_loop.asm).
+//
+// -test-mem <path>: deposits an off-axis test payload (test_mem.bin)
+// as a CODE file named "test_mem".  Required for the BUILD_TESTS
+// variant of the assembler from plan-PR 3 onwards (the test binary
+// HLOADs this file into physical page 13 at boot via
+// load_test_mem_off_axis).  Production builds omit this file.
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -45,19 +54,31 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("build-m3-disk: ")
 
+	testMemPath := flag.String("test-mem", "", "path to off-axis test_mem.bin (BUILD_TESTS only; plan-PR 3)")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr,
+			"usage: %s [-test-mem <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n",
+			os.Args[0])
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	args := flag.Args()
+
 	var assemblerPath, enctabPath, inPath, outputPath string
-	switch len(os.Args) {
+	switch len(args) {
+	case 3:
+		assemblerPath = args[0]
+		enctabPath = args[1]
+		outputPath = args[2]
 	case 4:
-		assemblerPath = os.Args[1]
-		enctabPath = os.Args[2]
-		outputPath = os.Args[3]
-	case 5:
-		assemblerPath = os.Args[1]
-		enctabPath = os.Args[2]
-		inPath = os.Args[3]
-		outputPath = os.Args[4]
+		assemblerPath = args[0]
+		enctabPath = args[1]
+		inPath = args[2]
+		outputPath = args[3]
 	default:
-		log.Fatalf("usage: %s <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>", os.Args[0])
+		flag.Usage()
+		os.Exit(2)
 	}
 
 	samdos2, err := os.ReadFile("reference/samdos/samdos2.bin")
@@ -180,6 +201,26 @@ func main() {
 		}
 	}
 
+	// Slot 5 (optional): off-axis test_mem.bin.  Loaded at runtime by
+	// src/m3/loader.asm::load_test_mem_off_axis via HGTHD+trampoline
+	// into physical page 13 (section A at &0000 when LMPR = LMPR_TEST_MEM).
+	// BUILD_TESTS variant only; production builds omit -test-mem.
+	// The on-disk LOAD address is documentary (the trampoline supplies
+	// its own HL = &8000 and target page = 13); we record &8000 because
+	// (a) samfile's AddCodeFile rejects addresses below 16384 as ROM,
+	// (b) &8000 is the section-C window the HLOAD trampoline actually
+	// uses.  Citation: tools/samfile-equivalent guard from upstream.
+	if *testMemPath != "" {
+		testMemData, err := os.ReadFile(*testMemPath)
+		if err != nil {
+			log.Fatalf("read test_mem: %v", err)
+		}
+		const TestMemLoadAddress uint32 = 0x8000
+		if err := disk.AddCodeFile("test_mem", testMemData, TestMemLoadAddress, 0); err != nil {
+			log.Fatalf("AddCodeFile(test_mem): %v", err)
+		}
+	}
+
 	if err := disk.Save(outputPath); err != nil {
 		log.Fatalf("save %s: %v", outputPath, err)
 	}
@@ -194,6 +235,10 @@ func main() {
 	if inPath != "" {
 		inSize, _ := os.Stat(inPath)
 		fmt.Printf("IN:         %d bytes\n", inSize.Size())
+	}
+	if *testMemPath != "" {
+		testMemSize, _ := os.Stat(*testMemPath)
+		fmt.Printf("test_mem:   %d bytes\n", testMemSize.Size())
 	}
 	fmt.Printf("Built %s\n", outputPath)
 }
