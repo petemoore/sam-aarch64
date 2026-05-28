@@ -207,6 +207,75 @@ name_enctab:    defb    19
                 defm    "    "         ; 4-char ext (4 spaces)
 
 
+; -----------------------------------------------------------------------
+; load_page13_payload — PRODUCTION feature (both variants).  HLOAD the
+; sysreg lookup-data binary (build/sysreg_data.bin, CODE file "sd13")
+; into physical page 13 via the section-B HLOAD trampoline.
+;
+; Per docs/plans/2026-05-29-m6-closure-release-bytematch.md PR-2, as
+; corrected by the PR-2 implementation spec.  Structural cousin of
+; load_page14_payload / load_test_mem_off_axis / load_enctab: HGTHD to
+; find the file + populate svde, then HLOAD-via-trampoline to land it in
+; a page outside section C.  Differences: file name ("sd13"), target
+; page (SYSREG_DATA_PAGE = 13).
+;
+; The page-13 content is consumed at runtime by the four
+; sysname_lookup_* routines (sysname.asm) via paged_call into the
+; SYSREG_*_ENTRY jump-table slots.  Needed by EVERY build (sysreg/dc/
+; tlbi/pstate operands appear in production sources), so this routine
+; and its boot-sequence call are NOT gated by BUILD_TESTS.
+;
+; ORDERING (assembler.asm boot sequence): this must run AFTER
+; enctab_trampoline_setup (the HLOAD trampoline must be installed) and,
+; in the BUILD_TESTS variant, AFTER load_test_mem_off_axis +
+; run_mem_self_tests (which use page 13 as the off-axis test_mem
+; payload).  load_page13_payload overwrites page 13 with sysreg_data,
+; so it must land after those consumers have finished with test_mem.
+; It must run BEFORE main_assemble (the first place a sysname lookup
+; can occur).
+;
+; Input:  none (precondition: enctab_trampoline_setup has been called).
+; Output: physical page 13 holds sysreg_data.bin (jump table at &8000
+;         when HMPR maps page 13 in).  HMPR restored on return.
+; Clobbers: A, BC, DE, HL, IX (everything except SP).
+; -----------------------------------------------------------------------
+load_page13_payload:
+                ld      hl, name_sysreg_data
+                call    fill_uifa
+                rst     8
+                defb    HOOK_HGTHD     ; longjmps on "file not found"
+
+; Read length-mod-16K from SAMDOS-deposited DIFA header at &4B50+35,
+; clearing the `set 7, d` marker.  Mirrors load_page14_payload.
+                ld      hl, (&4B50 + 35)
+                ld      a, h
+                and     &7F
+                ld      h, a
+                ld      e, l
+                ld      d, h           ; DE = length-mod-16K
+
+; Read page count from DIFA+34.  Expected 0 — sysreg_data.bin is < 1 KB.
+                ld      a, (&4B50 + 34)
+                ld      c, a           ; C = pages count
+
+                ld      hl, &8000      ; section-C window (HLOAD requirement)
+                ld      b, SYSREG_DATA_PAGE
+                call    TRAMPOLINE_DST
+                ret
+
+
+; -----------------------------------------------------------------------
+; UIFA name block for "sd13" (sysreg_data, both variants).
+;
+; The on-disk catalogue entry is created Mac-side by build-m3-disk
+; (using samfile) when invoked with the -sysreg-data flag.
+; -----------------------------------------------------------------------
+name_sysreg_data:
+                defb    19
+                defm    "sd13      "   ; 10 chars (4 + 6 trailing spaces)
+                defm    "    "         ; 4-char ext (unused)
+
+
 if defined(BUILD_TESTS)
 
 ; -----------------------------------------------------------------------

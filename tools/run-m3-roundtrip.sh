@@ -61,7 +61,7 @@ mkdir -p build
 # because that would force the test variant even when the caller wants
 # the prod variant.
 ASSEMBLER_BIN="${ASSEMBLER_BIN:-$ROOT/build/assembler.bin}"
-make -s text2bin enctab build-m3-disk
+make -s text2bin enctab build-m3-disk sysreg-data
 
 if [ ! -f "$ASSEMBLER_BIN" ]; then
     echo "ERROR: assembler binary not found: $ASSEMBLER_BIN" >&2
@@ -83,6 +83,10 @@ echo "--- text2bin ---"
 #     docs/notes/2026-05-28-paged-call-architecture.md).
 # Production builds don't include either code path, so neither file
 # is needed.
+#
+# The page-13 sysreg lookup data (-sysreg-data) is deposited for BOTH
+# variants — sysreg/dc/tlbi/pstate lookups are a production feature
+# (PR-2 of docs/plans/2026-05-29-m6-closure-release-bytematch.md).
 echo "--- build-m3-disk ---"
 test_variant_flags=()
 if [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler.bin" ]; then
@@ -95,6 +99,7 @@ if [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler.bin" ]; then
 fi
 "$ROOT/build/build-m3-disk" \
     "${test_variant_flags[@]}" \
+    -sysreg-data "$ROOT/build/sysreg_data.bin" \
     "$ASSEMBLER_BIN" build/enctab.enc \
     "build/${base}.tbn" \
     "build/${base}.mgt"

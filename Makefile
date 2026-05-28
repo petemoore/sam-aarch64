@@ -96,7 +96,7 @@ test-m2: refenc text2bin
 
 ci-m2: test-m2
 
-.PHONY: m3-asm m3-asm-prod build-m3-disk m3-disk test-mem-offaxis paged-call-payload test-m3 ci-m3
+.PHONY: m3-asm m3-asm-prod build-m3-disk m3-disk test-mem-offaxis paged-call-payload sysreg-data test-m3 ci-m3
 
 # Two build variants of the SAM-side assembler:
 #
@@ -164,16 +164,34 @@ $(BUILD)/paged_call_test_payload.bin: src/m3/paged_call_test_payload.asm
 
 paged-call-payload: $(BUILD)/paged_call_test_payload.bin
 
+# Page-13 sysreg lookup data (PRODUCTION feature — both variants).
+#
+# A small standalone binary (~480 B) holding the four sysname lookup
+# tables (sysreg / pstate / dc / tlbi) and a self-contained matcher,
+# org &8000.  HLOAD'd at boot into physical page 13 by
+# src/m3/loader.asm::load_page13_payload and read at runtime by the
+# sysname_lookup_* routines via paged_call.  Per PR-2 of
+# docs/plans/2026-05-29-m6-closure-release-bytematch.md (split-design
+# correction documented in src/m3/sysreg_data.asm).  Needed by EVERY
+# build, not just BUILD_TESTS — sysreg/dc/tlbi/pstate operands appear
+# in shipping sources.
+$(BUILD)/sysreg_data.bin: src/m3/sysreg_data.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/sysreg_data.bin src/m3/sysreg_data.asm
+
+sysreg-data: $(BUILD)/sysreg_data.bin
+
 $(BUILD)/build-m3-disk: tools/build-m3-disk/main.go tools/build-m3-disk/go.mod
 	@mkdir -p $(BUILD)
 	cd tools/build-m3-disk && go build -o ../../$(BUILD)/build-m3-disk .
 
 build-m3-disk: $(BUILD)/build-m3-disk
 
-m3-disk: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk
+m3-disk: m3-asm test-mem-offaxis paged-call-payload sysreg-data enctab $(BUILD)/build-m3-disk
 	$(BUILD)/build-m3-disk \
 	    -test-mem $(BUILD)/test_mem.bin \
 	    -paged-call $(BUILD)/paged_call_test_payload.bin \
+	    -sysreg-data $(BUILD)/sysreg_data.bin \
 	    $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/m3-test.mgt
 
 # test-m3 — sweep every fixture under tests/m3/sources/ end-to-end:
