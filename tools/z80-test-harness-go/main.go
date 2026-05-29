@@ -123,6 +123,12 @@ func main() {
 	fmt.Printf("Steps:   %d\n", result.Steps)
 	fmt.Printf("Regs:    %s\n", result.FaultRegs)
 	fmt.Printf("Last PC: %04X\n", lastPCMain(result.Last200PC))
+	if len(result.UnservedFiles) > 0 {
+		fmt.Printf("Unserved HGTHD files: %v "+
+			"(their HLOAD was a no-op; the target page is empty — "+
+			"a frequent cause of a downstream &0038 trap)\n",
+			result.UnservedFiles)
+	}
 
 	if trigPC != 0 {
 		if trig.Hit {
