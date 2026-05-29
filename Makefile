@@ -57,6 +57,17 @@ test-m1: text2bin bin2text
 
 ci-m1: test-m1
 
+# sysreg-sync-check — Go↔Z80 sysreg/pstate/dc/tlbi table sync guard
+# (repo-audit 2026-05-29 §5 / §6 item #9).  Asserts every entry in the
+# hand-maintained Z80 table src/m3/sysreg_data.asm matches the Go authority
+# tools/sam-aarch64-format/sysregs.go byte-for-byte, so the two can't
+# silently drift.  Cheap (pure Go, no container) — also runs implicitly
+# inside test-m1 / test-m2's `go test ./...`, but is exposed here as a
+# standalone target so it can be a named CI check / branch-protection gate.
+.PHONY: sysreg-sync-check
+sysreg-sync-check:
+	cd tools/sam-aarch64-format && go test -run TestSysregZ80Sync -v ./...
+
 .PHONY: enctab-gen refenc enctab test-m2 ci-m2
 
 enctab-gen:

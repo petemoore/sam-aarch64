@@ -26,6 +26,14 @@ type SysReg struct {
 // architectural mnemonic. Add new entries here as they appear in the
 // source tree.
 //
+// HAND-SYNCED with the Z80 copy in src/m3/sysreg_data.asm (the page-13
+// payload the SAM assembler walks at runtime). That file carries a SUBSET
+// of these entries — only the ones the M5/M6 fixtures exercise — but every
+// entry it does carry MUST match the encoding here byte-for-byte. The
+// sync guard sysregs_z80sync_test.go (CI job `sysreg-sync`, make target
+// `sysreg-sync-check`) enforces this; if you edit an encoding here, update
+// sysreg_data.asm too or the guard will fail. (repo-audit 2026-05-29 #9.)
+//
 // References are to the ARM ARM (D17 chapter for general-purpose
 // system registers, D17.11 for generic timer, D17.12 for debug).
 var namedSysRegs = map[string]SysReg{
