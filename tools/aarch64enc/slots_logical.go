@@ -77,7 +77,6 @@ func encodeLogicalImm(slot OperandSlot, imm int64, is64 bool) (uint32, error) {
 	if rotation < 0 {
 		return 0, fmt.Errorf("LogicalImm: not a single ones-run")
 	}
-	element = expected
 
 	var n uint32
 	// We rotated the value RIGHT by `rotation` to recover the canonical
