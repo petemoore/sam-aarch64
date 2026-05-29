@@ -22,6 +22,8 @@ Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not
 | Compact `.tbn` format | 📋 | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | Future-proofing for sources beyond the paged-IN ceiling. |
 | Editor groundwork (Phase 2) | 🧭 | `docs/ROADMAP.md` "Editor vision" section | Instruction-explanation panel, register simulator, sysreg docs, did-you-mean. Not yet spec'd. |
 | Repo-cleanup / README housekeeping track | 📋 | `docs/notes/2026-05-29-repo-audit.md` §6 (prioritised plan) | Track defined; dedicated M7 housekeeping track that does NOT block M6 closure. |
+| Directory naming & logical organisation (rename `src/m3`) | 🧭 | Pete 2026-05-29 | The repo's layout shows its *development history* (`src/m3` = milestone 3) rather than its *logical components*. A clean project should read as a coherent product organised by component, not chronology (git history covers the chronology view). Rename `src/m3` to something meaningful (it's the SAM-side Z80 assembler) and review the wider naming/organisation (`tests/m{3..6}`, `ci-m{N}` targets, milestone-named fixtures, etc.). Part of the M7 review/cleanup activity. |
+| Linker-layout coupling (flatten hardcodes `spectrum4.ld`) | 🧭 | Pete 2026-05-29; `tools/text2bin/internal/translate/flatten.go` `SpectrumFourLayout` | Byte-equivalence on the release relies on text2bin's flatten pass **hardcoding** spectrum4.ld's section order + ALIGNs + origin (we do NOT parse the `.ld`). The m6-release 3-way gate guards drift (a `.ld` change → re-vendor → gate fails until flatten is updated), but it's an implicit coupling. Consider: parse `spectrum4.ld` directly, or vendor it + a checked cross-reference, or at minimum document the coupling beside `SpectrumFourLayout`. |
 | Go-harness fidelity follow-ups | 📋 | `docs/notes/2026-05-29-go-harness-fidelity-investigation.md` Q4 | Write-watchpoint activation, `make harness-sweep` target, USAGE.md ledger. NOT real-ROM execution. **PLUS: root-cause the paged-path trap** — harness traps (PC→`&0038`) on the full 88 KB / 6-page paged-IN load where SimCoupé succeeds (`docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md`). Pete: ideally M6 (tracked primarily in `m6-status.md`), acceptable M7. |
 | Sysreg Go↔Z80 sync guard | 📋 | `docs/notes/2026-05-29-repo-audit.md` §5 / §6 item 9 | Diff-check or cross-link comment for the hand-synced sysreg tables. |
 | Z80↔Go encoding/operator parity audit | 🧭 | Pete 2026-05-29; `tools/sam-aarch64-format` / refenc is authoritative | Systematically ensure the Z80 side implements the same instruction encodings AND expression operators as the Go library. M6 closes only what release-stripped needs; full parity is M7. |
@@ -116,6 +118,29 @@ Z80 files (`main_loop.asm` 2362 lines, `litpool.asm` 1138 lines). The audit
 recommends running it as a track that does NOT block M6 closure, with the
 tiny tool-verified PRs interleaved now and the larger reviews scheduled into
 M7 proper. 📋 — track defined.
+
+### Directory naming & logical organisation (rename `src/m3`)
+
+Guiding principle (Pete, 2026-05-29): **a clean project should read as a
+coherent product, organised by logical component — not as a fossil record
+of how it was built.** Today's layout encodes development chronology:
+`src/m3` is "milestone 3", `tests/m{3..6}`, `ci-m{N}` targets, and many
+milestone-named fixtures. That chronology is already captured by git
+history; the tree itself should describe *what the thing is*.
+
+Concretely for M7's review/cleanup:
+- Rename `src/m3` → a name that says what it is (the SAM-side Z80
+  aarch64 assembler — e.g. `src/assembler` / `src/sam-as`). Touches the
+  Makefile, the include paths, `tools/*-disk`, CI, and many docs — do it
+  as one mechanical, well-reviewed PR.
+- Review the wider naming surface: `tests/m{N}` corpora, `ci-m{N}` /
+  `test-m{N}` targets, milestone-prefixed fixture names, and whether the
+  "M3/M4/M5/M6 fixture" framing should become capability-named suites.
+- Keep it a deliberate cleanup PR (or small series), not drive-by renames
+  scattered through feature work. Pairs naturally with the repo-audit
+  housekeeping track above.
+
+🧭 — principle captured; not yet planned in detail.
 
 ### Go-harness fidelity follow-ups
 

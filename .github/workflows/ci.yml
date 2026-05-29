@@ -499,3 +499,64 @@ jobs:
             echo "===== $(basename $log) ====="
             tail -20 "$log"
           done
+
+  # m6-release — THE M6 HEADLINE GATE (3-way byte-match).  Proves the
+  # standing claim "spectrum4 release.bin byte-match on SAM" by showing
+  # three independent toolchains agree, byte-for-byte, on the vendored
+  # spectrum4 release:
+  #   1. GNU binutils  — the vendored tests/m6/release/release.img.
+  #   2. our Go path   — text2bin (release.s → .tbn) + refenc (.tbn → bin).
+  #   3. our Z80 path  — the SAM assembler on SimCoupé (.tbn → OUT).
+  # Without it, the origin-dependent encoder logic (ORIGIN_HIGH /
+  # SYMTAB_ABS_BITMAP / 33-bit-ADRP) could silently regress, because the m6
+  # roundtrip links at -Ttext=0 and never exercises the release origin.
+  #
+  # Hermetic + fast: BOTH inputs are vendored (tests/m6/release/), so this
+  # needs no spectrum4 checkout, no tup, and no aarch64 binutils at CI time
+  # — just the dev image.  release.s is the whole release flattened into one
+  # self-contained source by `text2bin -E`; the gate regenerates the .tbn
+  # from it, so it also exercises text2bin's flatten/strip pipeline (if .tbn
+  # generation broke, the Go and Z80 outputs would diverge from the GNU
+  # image).  Refresh both files with tools/revendor-m6-release.sh.
+  #
+  # Also runs `make check-budget`, so a code-size overrun past the &C000
+  # stack-page cliff fails here with a number rather than as a silent
+  # boot-hang (the test-variant fragility class; scripts/check-code-budget.sh).
+  m6-release:
+    runs-on: ubuntu-latest
+    needs: build-image
+    container:
+      image: ghcr.io/petemoore/sam-aarch64-dev:sha-${{ github.sha }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    env:
+      SDL_VIDEODRIVER: x11
+      SDL_AUDIODRIVER: dummy
+      SIMCOUPE_TIMEOUT: "900"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start Xvfb
+        run: |
+          Xvfb :99 -screen 0 1280x1024x24 &
+          sleep 1
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+
+      - name: Mark workspace as a safe git directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: spectrum4 release 3-way byte-match (GNU == Go == Z80)
+        run: tools/run-m6-release-gate.sh
+
+      - name: Post-mortem on failure
+        if: failure()
+        run: |
+          echo "===== SAM assembler status log ====="
+          cat build/m6-release.status.log 2>/dev/null || echo "(no status log)"
+          echo "===== sizes ====="
+          wc -c tests/m6/release/release.img build/m6-release.go.img build/m6-release.sam.img 2>/dev/null || true
+          echo "===== GNU vs Go ====="
+          cmp -l tests/m6/release/release.img build/m6-release.go.img 2>/dev/null | head -20 || true
+          echo "===== GNU vs Z80 (SAM) ====="
+          cmp -l tests/m6/release/release.img build/m6-release.sam.img 2>/dev/null | head -20 || true
