@@ -21,11 +21,12 @@ Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not
 | On-SAM disassembler (strand B) | 📋 | `docs/plans/2026-05-28-go-aarch64-disassembler.md`; branch `strand-b-1-disassembler` (5 commits, parked) | Resume per Pete's redirect after M6 closes. |
 | Compact `.tbn` format | 📋 | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | Future-proofing for sources beyond the paged-IN ceiling. |
 | Editor groundwork (Phase 2) | 🧭 | `docs/ROADMAP.md` "Editor vision" section | Instruction-explanation panel, register simulator, sysreg docs, did-you-mean. Not yet spec'd. |
-| Repo-cleanup / README housekeeping track | 📋 | `docs/notes/2026-05-29-repo-audit.md` §6 (prioritised plan) | Track defined; dedicated M7 housekeeping track that does NOT block M6 closure. |
-| Directory naming & logical organisation (rename `src/m3`) | 🧭 | Pete 2026-05-29 | The repo's layout shows its *development history* (`src/m3` = milestone 3) rather than its *logical components*. A clean project should read as a coherent product organised by component, not chronology (git history covers the chronology view). Rename `src/m3` to something meaningful (it's the SAM-side Z80 assembler) and review the wider naming/organisation (`tests/m{3..6}`, `ci-m{N}` targets, milestone-named fixtures, etc.). Part of the M7 review/cleanup activity. |
+| Repo-cleanup / README housekeeping track | ⏳ | `docs/notes/2026-05-29-repo-audit.md` §6 (prioritised plan) | Track underway. **Landed: PR #78** (dead Go symbols + orphan stub removed), **PR #80** (`tools/` + `src/README.md` index READMEs). Remaining: deep reviews of `main_loop.asm` (#11) / `litpool.asm` (#12), and the `SYMTAB_*` `equ` sentinels (#8). Does NOT block other M7 work. |
+| Directory naming & logical organisation (rename `src/m3`) | ⏳ | Pete 2026-05-29 (decision delegated to agent) | **Decided: flatten `src/m3/` → `src/`** (flat, no component subfolder — see resolved open-question 1). Rename PR in flight. The wider naming review (`tests/m{3..6}`, `ci-m{N}` targets, milestone-named fixtures) remains as later M7 cleanup. |
+| Canonical memory-layout reference doc | ✅ | PR #80 → `docs/notes/memory-layout.md` | Done. Mirrors the authoritative `src/m3/assembler.asm` header map (source of truth; doc points to it, no drift). |
+| Sysreg Go↔Z80 sync guard | ✅ | PR #79 → `tools/sam-aarch64-format/sysregs_z80sync_test.go` + `sysreg-sync` CI job (now a required check) | Done. Go test parses `src/m3/sysreg_data.asm` and asserts every Z80 entry byte-matches the Go authority (the Z80 table is an intentional subset). |
 | Linker-layout coupling (flatten hardcodes `spectrum4.ld`) | 🧭 | Pete 2026-05-29; `tools/text2bin/internal/translate/flatten.go` `SpectrumFourLayout` | Byte-equivalence on the release relies on text2bin's flatten pass **hardcoding** spectrum4.ld's section order + ALIGNs + origin (we do NOT parse the `.ld`). The m6-release 3-way gate guards drift (a `.ld` change → re-vendor → gate fails until flatten is updated), but it's an implicit coupling. Consider: parse `spectrum4.ld` directly, or vendor it + a checked cross-reference, or at minimum document the coupling beside `SpectrumFourLayout`. |
 | Go-harness fidelity follow-ups | 📋 | `docs/notes/2026-05-29-go-harness-fidelity-investigation.md` Q4 | Write-watchpoint activation, `make harness-sweep` target, USAGE.md ledger. NOT real-ROM execution. **PLUS: root-cause the paged-path trap** — harness traps (PC→`&0038`) on the full 88 KB / 6-page paged-IN load where SimCoupé succeeds (`docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md`). Pete: ideally M6 (tracked primarily in `m6-status.md`), acceptable M7. |
-| Sysreg Go↔Z80 sync guard | 📋 | `docs/notes/2026-05-29-repo-audit.md` §5 / §6 item 9 | Diff-check or cross-link comment for the hand-synced sysreg tables. |
 | Z80↔Go encoding/operator parity audit | 🧭 | Pete 2026-05-29; `tools/sam-aarch64-format` / refenc is authoritative | Systematically ensure the Z80 side implements the same instruction encodings AND expression operators as the Go library. M6 closes only what release-stripped needs; full parity is M7. |
 | SAM screen-mode decision (editor) | 🧭 | Pete 2026-05-29; ROADMAP "Editor vision" | MODE 3 currently assumed. Decide mode(s) by colour-vs-resolution + aesthetics nearer the editor; the choice consumes display RAM / pages, so it feeds the memory-layout doc below. |
 | Canonical memory-layout reference doc | 📋 | Pete 2026-05-29; `src/m3/assembler.asm:21-122` (authoritative live map) | Consolidate the section/page map + scratch regions + budget ceilings (today scattered across the asm comments, `sam-paging.md`, the layout brainstorm, ~10 notes) into one doc. Keep the asm comments as source-of-truth; the doc mirrors/points to them (no second drifting copy). High value given how central layout is. |
@@ -38,25 +39,25 @@ defer rather than guess). Logged here so they survive context churn — the
 agent works around them and Pete answers when available. Remove an entry
 once resolved.
 
-1. **`src/m3` rename — choose the new name.** Agreed in principle (the dir
-   is the SAM-side Z80 assembler, not "milestone 3"). Candidates floated:
-   `src/assembler`, `src/sam-as`, `src/asm`. Also: do the big cross-cutting
-   rename now (Makefile / include paths / `tools/*-disk` / CI / docs, one
-   reviewed PR) or bundle it into the broader naming review? **Until Pete
-   picks a name, the rename is deferred; READMEs etc. use the current
-   `src/m3` path.** (See the "Directory naming & logical organisation"
-   strand above.)
+1. **`src/m3` rename — ✅ RESOLVED (Pete 2026-05-29).** Pete delegated the
+   final structure choice to the agent. **Decision: flatten `src/m3/` up
+   into `src/`** (no component subfolder). Rationale: the stub is gone
+   (PR #78), so `src/` is just the SAM monolith + the live `src/sam_io.inc`
+   (`src/m3/io.asm` includes `../sam_io.inc`); `tools/` already separates
+   all non-SAM/host code; and with no editor/music components yet, a
+   speculative `src/assembler/` would force a fuzzy assembler-vs-core split
+   now for no benefit (YAGNI). Component subfolders become a deliberate
+   re-org when those components arrive with real boundaries. Rename PR in
+   flight (mechanical: `git mv`, all `src/m3` references, README move).
 2. **LLIST tool cluster disposition** (`tools/llist-*` + `llist-*.sh`).
-   Repo-audit #6 flags it superseded by the EDIT/EDKY detokeniser spike
-   (findings captured in `docs/notes/basic-detokeniser-spike.md`). Archive,
-   delete, or keep? Needs one Pete confirm that nothing he still uses
-   depends on it. **Deferred until confirmed** (the rest of the
-   archive-superseded-docs PR proceeds without it).
-3. **Design-strand handling.** For the design-heavy strands (bump-arena
-   allocator, editor groundwork + SAM screen-mode, compact `.tbn`): draft
-   design docs solo for later review, or hold for a brainstorm together?
-   Editor/screen-mode especially wants Pete's aesthetic input. **Default
-   while unanswered: hold them; do not design solo.**
+   **⏸ PUNTED (Pete 2026-05-29) — revisit later.** Pete hasn't decided;
+   leave the cluster exactly in place. `tools/README.md` (PR #80) marks it
+   "superseded by the EDIT/EDKY detokeniser spike — disposition pending".
+   Nothing to do until Pete chooses archive/delete/keep.
+3. **Design-strand handling — ✅ RESOLVED (Pete 2026-05-29).** Pete is
+   happy for the agent to drive design + brainstorming solo (review later).
+   Editor/screen-mode aesthetic input can come at review time. See the
+   bump-arena strand below for Pete's substantive framing on that one.
 
 ## Strands in detail
 
@@ -87,6 +88,25 @@ bump arenas from the start … per-component, not global, so each table stays
 in a known page") and `:129` ("Bump-arena lands with the disasm-aux PR.
 Retrofitting later is more work"). It is a **named direction, not a
 designed feature** — no spec or plan yet, hence 🧭.
+
+**Pete's framing (2026-05-29) — needs-driven, not speculative.** Build a
+growable-array mechanism (which needs an allocator) **only if we actually
+have a fixed-size structure we append to that can realistically overrun**;
+do NOT build one for its own sake. Growable arrays cost complexity, an
+allocator, and per-op overhead, but are ultimately safer and can keep a
+smaller footprint (freeing memory). The decision hinges on a concrete
+question the design must answer FIRST: *is any current fixed array a live
+time-bomb* — i.e. can a plausible (not pathological) future spectrum4
+source push it past its cap, turning today's hard-fail into a recurring
+hazard? We earlier replaced several array overruns with hard fails (the
+bounds-check work in M6 strand A); if those caps are comfortably above any
+realistic demand, leave them. If any is genuinely at risk, do the
+groundwork so the **only** failure mode is true whole-program OOM, never an
+artificial per-table ceiling. So the design doc's Step 1 is a
+risk-census (extend `2026-05-28-z80-table-sizing-census.md`): per fixed
+structure, record cap vs observed peak vs *plausible-growth* peak, and
+classify safe / at-risk. Only the at-risk set justifies the arena. Pete is
+happy for the agent to drive this design solo (review later).
 
 ### Codegen sysreg / mnemonic / form tables from Go authority
 
