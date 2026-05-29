@@ -26,6 +26,23 @@ text2bin:
 bin2text:
 	cd tools/bin2text && go build -o $(CURDIR)/$(BUILD)/bin2text .
 
+# aarch64dec — Go-side aarch64 disassembler (strand B); inverse of aarch64enc.
+.PHONY: aarch64dec test-disasm ci-disasm
+
+aarch64dec:
+	cd tools/aarch64dec/cmd/aarch64dec && go build -o $(CURDIR)/$(BUILD)/aarch64dec .
+
+# Unit tests for the disassembler package.
+test-disasm:
+	cd tools/aarch64dec && go test ./...
+
+# Oracle gate: aarch64dec vs binutils objdump on the vendored release.img.
+# RED until the decoder is complete (TDD); the diff is the worklist.  See
+# docs/plans/2026-05-28-go-aarch64-disassembler.md.  Needs an aarch64
+# objdump (binutils-aarch64-linux-gnu) + Go; no SimCoupé/container.
+ci-disasm: test-disasm
+	./tests/disasm/run-oracle-comparison.sh
+
 test-m1: text2bin bin2text
 	cd tools/sam-aarch64-format && go test ./...
 	cd tools/text2bin && go test ./...
