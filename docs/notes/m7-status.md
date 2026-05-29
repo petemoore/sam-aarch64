@@ -62,20 +62,28 @@ once resolved.
    happy for the agent to drive design + brainstorming solo (review later).
    Editor/screen-mode aesthetic input can come at review time. See the
    bump-arena strand below for Pete's substantive framing on that one.
-4. **`src/stub.asm` / the M0 stub chain — ✅ DECIDED: DELETE (Pete 2026-05-29).**
-   Pete: "delete all the stub chain stuff, it is completely subsumed, i
-   agree." The M0 nop-to-disk round-trip oracle is fully subsumed by the
-   M3–M6 fixture corpus + the m6-release 3-way gate. **Not yet executed**
-   (a careful change + a branch-protection edit — a clean next-session
-   task). **Deletion recipe** (one PR): remove `src/stub.asm`,
-   `tools/build-stub.sh`, the M0 nop fixture (`tests/fixtures/nop.s`), and
-   the `stub` / `disk` / `run` / `extract` / `diff` / `test` / `check` /
-   `ci` Makefile targets that exist *only* for the M0 stub flow (audit
-   carefully — keep anything the M3+ flows reuse); remove the `test` CI job
-   from `.github/workflows/ci.yml`; **and remove `test` from `main`'s
-   branch-protection required-status-checks** (`gh api … required_status_checks/contexts`
-   — would drop 14 → 13). Also sweep docs for now-dead M0/stub references.
-   Verify `make ci-m3 … ci-m6` (+`-prod`) + the m6-release gate still pass.
+4. **`src/stub.asm` / the M0 stub chain — ✅ EXECUTED (2026-05-29, branch
+   `m7-delete-m0-stub-chain`).** Pete: "delete all the stub chain stuff, it
+   is completely subsumed, i agree." The M0 nop-to-disk round-trip oracle is
+   fully subsumed by the M3–M6 fixture corpus + the m6-release 3-way gate.
+   **Deleted:** `src/stub.asm`, `tools/build-stub.sh`, `tools/build-disk.sh`,
+   `tools/build-disk/` (Go tool), `tools/run-roundtrip.sh` (the M0 root one —
+   *not* the per-milestone `tests/m{N}/run-roundtrip.sh`), `tools/extract-output.sh`,
+   `tools/diff-vs-gnu.sh`, `tools/check-toolchain.sh` (M0-scoped per its own
+   header, orphaned once `check` went), the M0 nop fixture + dir
+   (`tests/fixtures/nop.s`), and all six M0 dev tests (`tests/test-{build-stub,
+   stub-emits-nop,simcoupe-runs,diff-vs-gnu,diff-vs-gnu-unit,check-toolchain}.sh`).
+   Makefile `stub`/`disk`/`run`/`extract`/`diff`/`test`/`check`/`ci` targets
+   removed; `all:` now builds `m3-asm m3-asm-prod`. The `test` CI job removed
+   from `.github/workflows/ci.yml`. Docs swept (README, tools/README).
+   **KEPT (reused, verified):** `tools/run-simcoupe.sh` (used by every
+   `run-m{3..6}-roundtrip.sh` + the m6-release gate). The historical M0 design
+   docs (`docs/plans/2026-05-09-m0-toolchain-bootstrap.md`, `docs/notes/m0-status.md`,
+   `docs/notes/sam-stub-audit.md`) were kept as archival reference.
+   **⚠ STILL PENDING at merge time:** remove `test` from `main`'s
+   branch-protection required-status-checks (`gh api … required_status_checks/contexts`
+   — drops 14 → 13). Must be done or merges block on a check that no longer
+   reports. (The orchestrator handles this when merging the PR.)
 5. **`tools/llist-normalise/llist-normalise` is a committed binary** (an
    accidental check-in spotted during the rename). Folds into the punted
    LLIST-cluster disposition (open question 2) — handle together.

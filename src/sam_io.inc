@@ -114,5 +114,6 @@ close_input:    ret
 
 
 ; The output side intentionally has no per-byte API. Use the inline
-; HSAVE sequence in stub.asm — fill UIFA bytes 0-14 + 31-36, then
+; HSAVE sequence (the wrappers in src/io.asm; the original example was
+; M0's stub.asm, retired in M7) — fill UIFA bytes 0-14 + 31-36, then
 ; `rst 8 / defb HOOK_HSAVE`. Single call writes header, body, dir entry.
