@@ -12,11 +12,12 @@ session view; this doc is the per-strand source of truth.
 
 ## M7 scope (planning snapshot)
 
-Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not-yet-designed
+Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not-yet-designed · ❌ won't-do (YAGNI)
 
 | Strand | Status | Spec/Source | Notes |
 |---|---|---|---|
-| Bump-arena allocator (Go-slices-vs-fixed-arrays for the Z80 data structures) | 🧭 | `memory/m6_strand_a_complete.md:51`; `docs/notes/2026-05-28-memory-layout-brainstorm.md:122,129`; motivation/data in `docs/notes/2026-05-28-z80-table-sizing-census.md` | Headline structural item. Named direction, not yet designed. Durable fix for the fixed-table-overflow class. |
+| Bump-arena allocator (Go-slices-vs-fixed-arrays for the Z80 data structures) | ❌ YAGNI | `docs/specs/2026-05-29-bump-arena-risk-census.md` (the census); Pete 2026-05-29 (accepted) | **NOT building it.** The risk-census (PR #84) found no fixed section-D array is a real overrun time-bomb — all SAFE today, only 3 go at-risk at a full ~5× kernel and are trivially bumpable in place. Pete confirmed YAGNI. The genuinely tight ceiling is elsewhere — the IN/OUT paged byte buffers (next row), fixed by claiming free pages, not an allocator. **Revisit trigger** (census §4): a measured at-risk overrun, or the symbol table heading toward ~2× its 512 cap. |
+| IN/OUT paged-buffer ceiling (claim more SAM pages) | 🧭 | `docs/specs/2026-05-29-bump-arena-risk-census.md` §IN/OUT | The real near-term constraint surfaced by the bump-arena census: the **IN `.tbn` buffer is at 92% of its 96 KB / 6-page cap today** (88,644 B; fail tag `03`), OUT at 68% of 32 KB (fail tag `b0`). Physical pages 15..31 (~272 KB) are free, so the fix is a bounds bump (more pages), not an allocator. Not urgent (release fits), but the closest ceiling — do before a substantially larger source lands. Pairs with the compact-`.tbn` strand. |
 | Codegen sysreg / mnemonic / form tables from Go authority | 📋 | M6-closure plan §M7 sketch (PR-A), `tools/sam-aarch64-format/sysregs.go` | Kills hand-sync drift. Depends on M6 PR-2's page-13 binary build glue. |
 | On-SAM disassembler (strand B) | 📋 | `docs/plans/2026-05-28-go-aarch64-disassembler.md`; branch `strand-b-1-disassembler` (5 commits, parked) | Resume per Pete's redirect after M6 closes. |
 | Compact `.tbn` format | 📋 | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | Future-proofing for sources beyond the paged-IN ceiling. |
@@ -77,7 +78,14 @@ once resolved.
 
 ## Strands in detail
 
-### Bump-arena allocator (headline structural item)
+### Bump-arena allocator (headline structural item) — ❌ YAGNI (closed 2026-05-29)
+
+**Outcome:** the risk-census (PR #84, `docs/specs/2026-05-29-bump-arena-risk-census.md`)
+concluded no general bump-arena is needed, and **Pete confirmed YAGNI
+(2026-05-29)** — happy not to implement it. The section below is retained
+as the original framing/context; the census doc has the evidence and the
+precise revisit-trigger. The real near-term ceiling it surfaced (the IN/OUT
+paged buffers) is now its own scope-table strand.
 
 The durable answer to the fixed-table-overflow class. Today the SAM-side
 assembler uses **fixed-capacity arrays** for every internal data structure
