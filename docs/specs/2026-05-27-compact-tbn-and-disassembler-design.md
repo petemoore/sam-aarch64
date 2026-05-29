@@ -153,3 +153,140 @@ Each level is incrementally shippable.
 - `docs/notes/m2-status.md` — current encoder coverage, the executable spec the disassembler inverts.
 - `docs/notes/sam-stub-audit.md` — SAMDOS hook semantics, relevant for "Import Binary" file IO.
 - `docs/specs/2026-05-27-samdos-load-idiom.md` — load-into-arbitrary-memory trampoline pattern, relevant for paged source storage.
+
+---
+
+## 2026-05-29 refinement — implementation design (Level 2, Pete's priority)
+
+> **Sequencing note (Pete 2026-05-29, after this section was first drafted):**
+> the **standalone Go disassembler is built FIRST**, before this compact-`.tbn`
+> format change. A bytes-based `.tbn` is write-only to the editor without a
+> disassembler (bytes→text), and decoupling avoids changing the format +
+> wiring the assembler in one risky step. Treat this section as the design for
+> the *eventual target*; the active work is
+> `docs/plans/2026-05-28-go-aarch64-disassembler.md`. See
+> `memory/feedback_disassembler_first_decouple` and m7-status open-Q7.
+
+This section refines the plan above for the M7 implementation. It supersedes
+the ordering in "Plan / ordering" where they differ. Grounded in a fresh
+code read of the toolchain (citations inline). Pete's framing: *make the
+internal representation the assembled bytes for expression-free
+instructions* (hybrid — expression-bearing instructions keep their symbolic
+record for 2-pass resolution). Goal: relieve the IN-buffer ceiling
+(currently 92% of 96 KB for release-stripped) and get most of the way to an
+on-SAM disassembler (bytes→text is the inverse of this encode).
+
+### Key architectural finding (reshapes the producer side)
+
+`text2bin` does **not** encode instructions — it tokenises symbolically.
+The single instruction-encoding authority is `refenc`'s `encodeInst()`
+(`tools/refenc/pass2.go:176`, ~160 lines: operand parse → compound-operand
+dispatch / form lookup → `aarch64enc.Encode`, `tools/aarch64enc/encode.go:9`).
+`text2bin` does not import `aarch64enc` at all.
+
+**Decision: the compaction lives in `refenc`, not `text2bin`.** refenc
+already encodes every instruction during pass-2, so it is the natural place
+to collapse fully-literal instructions to their bytes — as a **`.tbn` → `.tbn`
+transform** that reuses the one encoder. This avoids duplicating ~160 lines
+of encoder into text2bin (which would be a second source of truth — exactly
+the hand-sync drift the sysreg guard / codegen strand fights). The pipeline
+becomes:
+
+```
+text2bin  →  symbolic .tbn  →  refenc -emit-compact-tbn  →  compact .tbn
+                                              │
+                                              └─ (also still emits the binary, unchanged)
+```
+
+Both the Go decoder (refenc reading the compact `.tbn`) and the SAM decoder
+then consume the compact form.
+
+### Format (Level 2): one new record kind
+
+Add **`KindLitInsts = 0x07`** — a *run* of consecutive fully-literal
+instructions:
+
+```
+[kind:1 = 0x07][payloadLen:2 LE][count:1][word0:4 LE][word1:4 LE]…[word{count-1}:4 LE]
+```
+
+`payloadLen = 1 + 4*count`; `count` ∈ 1..255 (split longer runs into
+successive records). Per-record framing is 3 bytes (`kind` + 2-byte `len`),
+so the run form is what actually pays off: per-instruction cost is
+`(4 + 4R)/R = 4 + 4/R` bytes for a run of length `R` (≈4.4–4.8 B/inst),
+versus ~8–14 B for the symbolic `KindInst`. A single literal instruction is
+just a run of `count=1`.
+
+> We deliberately do **not** add the spec's separate `KindLitInst = 0x06`
+> (single). A `count=1` run costs one extra byte vs a bare single; not worth
+> a second kind + second decode path on the Z80 side. `0x06` stays reserved
+> if measurement later shows singles dominate.
+
+PC accounting is preserved exactly: a run occupies `4*count` bytes, identical
+to `count` separate `KindInst`s, so label positions and the 2-pass values for
+expression-bearing instructions are unchanged. pass-1 sizing is trivial
+(`pc += 4*count`); pass-2 is a `memcpy` of `4*count` bytes — **zero encoding
+work on the SAM**, which is the headline win.
+
+### "Fully literal" determination
+
+A `KindInst` is fully literal iff its encoding depends on neither the PC nor
+the symbol table — i.e. none of its operands carry a symbol ref, local-label
+ref, PC ref, relocation operator (`:lo12:` etc.), or literal-pool (`=imm`)
+ref. Implement `format.IsFullyLiteral(rec)` by scanning the operand stream
+and the embedded expression bytecode for the context-dependent opcodes
+(`OpPushSym` / `OpPushLocal` / `OpPushPC` / the `Rel*` operators / `OpLitPool`
+— verify exact names in `tools/sam-aarch64-format/`). `OpMem`/`OpShiftedReg`/
+`OpExtendedReg` are literal only if their offset/amount sub-expressions are
+constant. When in doubt, classify as *not* literal (falls back to the
+symbolic path — always correct, just less compact). The gate (below) proves
+no false-positive ever produces wrong bytes.
+
+### Verification — the m6-release gate is the oracle
+
+`tools/run-m6-release-gate.sh` already does a hermetic 3-way byte-match
+(GNU `release.img` == Go refenc == Z80/SAM) over the vendored flattened
+release source. Compaction slots straight in:
+
+1. **Go side (PR 1):** produce `compact.tbn` via `refenc -emit-compact-tbn`,
+   then assert `refenc compact.tbn` → img **== the vendored GNU release.img**
+   (and == the symbolic-path img). If the compact `.tbn` assembles to the
+   identical release binary, the literal-collapse is provably correct. Also
+   log `compact.tbn` size vs `symbolic.tbn` size (the compression number).
+2. **SAM side (PR 2):** once the Z80 decoder lands, feed the SAM the
+   `compact.tbn` and assert its OUT still == release.img.
+
+This makes the compression self-policing: any encoder bug or false-positive
+literal classification fails the gate.
+
+### Increment plan
+
+- **PR 1 — Go side, no Z80 (self-contained, de-risks the format):**
+  `format` gains `KindLitInsts` + reader/writer + `IsFullyLiteral`; `refenc`
+  gains `-emit-compact-tbn <path>` (the compaction pass) and the decode path
+  (pass-1 `pc += 4*count`, pass-2 memcpy); a Go unit test (TDD) on a small
+  literal+symbolic fixture; the m6-release gate extended to build + verify the
+  compact `.tbn` and print the size delta. Deliverable: a measured release
+  compression ratio + a standing gate guard, zero Z80 risk.
+- **PR 2 — SAM/Z80 decoder:** add the `REC_KIND_LIT_INSTS` dispatch in
+  `src/main_loop.asm` (after the COMMENT case, ~`:442`); pass-1 sizing +
+  pass-2 memcpy-to-OUT handlers; switch the SAM side of the gate to consume
+  the compact `.tbn`. Re-measure the IN-buffer headroom (the 92% → ?).
+- **PR 3+ (future):** `KindLitInsts` for constant data directives
+  (`.word`/`.byte` runs); Level 3 per-project frequency dictionary; then the
+  disassembler (bytes→text), which inverts exactly this encode.
+
+### Open questions for Pete (tracked; not blocking — chosen defaults noted)
+
+1. **Frequency dictionary (Level 3) this milestone?** Default: **defer** —
+   Level 2 alone should clear the ceiling; the dictionary adds a per-project
+   artifact + a 4th level of decoder complexity for diminishing returns.
+   Revisit if Level 2's measured ratio is insufficient for the debug build.
+2. **Compact constant *data* directives too (`.word`/`.byte` runs)?** Default:
+   **defer to PR 3** — keep PR 1/2 scoped to instructions (Pete's exact
+   framing). `.word`/`.byte` already emit fairly tight records; folding runs
+   of them into a raw-bytes record is a smaller, separable win.
+3. **Where should the user-facing compaction flag live long-term?** Default:
+   `refenc -emit-compact-tbn` for now (least code, reuses the encoder). If a
+   cleaner CLI surface is wanted later (e.g. `text2bin -compact` that links a
+   shared encoder package), that's a refactor once the format is proven.
