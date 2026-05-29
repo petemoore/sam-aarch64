@@ -44,9 +44,13 @@ the assembler **on SimCoupé** (the authoritative gate):
 
 1. **The "trap at scale" open question is RESOLVED — negative.** 88 KB
    flows end-to-end on SimCoupé: OK banner, 21 752-byte OUT, 21 s. The
-   Go-harness trap (PC → `&0038`) from the 2026-05-28 handover was a
-   **harness fidelity gap, not a real SAM paged-IN bug.** (`run-simcoupe.sh`
-   gained a `SIMCOUPE_TIMEOUT` env override — 88 KB exceeds the 30 s default.)
+   Go-harness trap (PC → `&0038`) from the 2026-05-28 handover was **not a
+   real SAM paged-IN bug.** (`run-simcoupe.sh` gained a `SIMCOUPE_TIMEOUT`
+   env override — 88 KB exceeds the 30 s default.) **Further update
+   (PR #88): the trap wasn't a harness fidelity gap either — it was a
+   missing `-sysreg-data` (empty page 13). The harness's 6-page paged-IN is
+   faithful; given `-sysreg-data` it runs the full release `.tbn` and
+   byte-matches `release.img`. Use the harness for full-release iteration.**
 
 2. **Byte-match ACHIEVED** (2026-05-29). The initial run surfaced 118
    differing instruction words across 8 encoder bug classes the fixture
@@ -71,15 +75,20 @@ the assembler **on SimCoupé** (the authoritative gate):
    `tools/revendor-m6-release.sh`) — plus the `&C000` budget assertion
    (`make check-budget`), per M6-closure plan Step 2 / 2b.
 
-### Go-harness paged-path trap — root-cause follow-up (Pete: ideally M6)
+### Go-harness paged-path trap — ✅ RESOLVED (PR #88)
 
-Separate work item: root-cause **why the Go harness traps (PC → `&0038`)
-on the full 88 KB / 6-page paged-IN load where SimCoupé succeeds**, and
-fix the harness's HLOAD/paging stub so it can run the full release input
-(which would make the encoder-fix iteration above ~1 ms instead of a
-20 s SimCoupé round-trip). Not on the critical path (SimCoupé is the gate
-and works); Pete's call is ideally M6, acceptable M7. Cross-referenced in
-`m7-status.md` (Go-harness fidelity row).
+Root-caused in PR #88 (`docs/notes/2026-05-29-go-harness-paged-trap-rootcause.md`):
+the trap was **not** an HLOAD/paging stub gap — the harness's 6-page
+paged-IN is faithful. It was a missing `-sysreg-data` (page 13 empty → the
+first sysreg/dc/tlbi/pstate operand dispatched into an empty matcher → a
+NOP-slide off section C wrapping to `&0038`). With `-sysreg-data` supplied,
+the harness runs the full release `.tbn` to completion and produces OUT
+byte-identical to the vendored `release.img` (21 752 B) — so encoder-fix
+iteration on the full release is now ~1 ms in the harness instead of a 20 s
+SimCoupé round-trip. The fix surfaces unserved HGTHD files loudly (no more
+cryptic trap) + a regression test. **Net: use the Go harness for
+full-release inner-loop work** (remember `-sysreg-data` for the prod
+assembler — see `tools/z80-test-harness-go/README.md`).
 
 ## PR 1 — paged OUT buffer (this PR)
 
