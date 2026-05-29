@@ -126,7 +126,7 @@ encode_logical_imm_zero_test:
                 inc     hl
                 djnz    encode_logical_imm_zero_test
                 or      a
-                jp      z, fail
+                jp      z, encode_logical_imm_reject
 
 ; -- Reject u == 0xFFFFFFFFFFFFFFFF -------------------------------------
                 ld      hl, encode_logical_imm_u
@@ -137,7 +137,7 @@ encode_logical_imm_ones_test:
                 inc     hl
                 djnz    encode_logical_imm_ones_test
                 cp      &ff
-                jp      z, fail
+                jp      z, encode_logical_imm_reject
 
 ; -- Find smallest replicating element size -----------------------------
                 ld      hl, encode_logical_imm_u
@@ -365,7 +365,7 @@ encode_logical_imm_replicate_check:
                 ld      de, encode_logical_imm_u_orig
                 ld      b, 8
                 call    encode_logical_imm_cmp_bytes
-                jp      nz, fail
+                jp      nz, encode_logical_imm_reject
 
 encode_logical_imm_replicate_ok:
 
@@ -392,10 +392,10 @@ encode_logical_imm_popcount_skip:
 
                 ld      a, (encode_logical_imm_ones)
                 or      a
-                jp      z, fail
+                jp      z, encode_logical_imm_reject
                 ld      hl, encode_logical_imm_size
                 cp      (hl)
-                jp      z, fail
+                jp      z, encode_logical_imm_reject
 
 ; -- Step 6: find rotation ---------------------------------------------
                 call    encode_logical_imm_build_expected
@@ -418,7 +418,7 @@ encode_logical_imm_rotate_loop:
                 ld      (encode_logical_imm_rotation), a
                 ld      hl, encode_logical_imm_size
                 cp      (hl)
-                jp      z, fail
+                jp      z, encode_logical_imm_reject
                 call    encode_logical_imm_ror1
                 jr      encode_logical_imm_rotate_loop
 encode_logical_imm_rotate_found:
@@ -676,3 +676,33 @@ encode_logical_imm_expected:
                 defb    0, 0, 0, 0, 0, 0, 0, 0
 encode_logical_imm_rotated:
                 defb    0, 0, 0, 0, 0, 0, 0, 0
+
+
+; -----------------------------------------------------------------------
+; encode_logical_imm_reject — shared reject target.
+;
+; All reject sites in encode_logical_imm jump here (replacing their former
+; `jp fail`).  The default behaviour is unchanged: `jp fail` aborts
+; assembly.  But the MOV-bitmask alias path (intercepts.asm
+; encode_logical_imm_try) needs a recoverable "not encodable" signal so it
+; can fall through to the next alias form.  When that caller has armed the
+; soft flag, this handler instead records the rejection and RETs — landing
+; back in encode_logical_imm_try, which maps it to CY=1.
+;
+; Every reject site is at a stack-balanced point (only the encoder's own
+; return address is on the stack), so the RET returns to the correct
+; caller.  Mirrors the Go side, where tryEncodeMovImm simply observes
+; encodeLogicalImm returning an error and moves on (refenc/pass2.go:492).
+; -----------------------------------------------------------------------
+encode_logical_imm_reject:
+                ld      a, (encode_logical_imm_soft)
+                or      a
+                jp      z, fail             ; hard fail (normal and/orr-imm path)
+                ld      a, 1
+                ld      (encode_logical_imm_rejected), a
+                ret
+
+; Soft-fail flags live in section-D RAM (&F000 free region) to avoid
+; spending code-image bytes (the test variant is tight against &C000).
+encode_logical_imm_soft:         equ     &F019
+encode_logical_imm_rejected:     equ     &F01A

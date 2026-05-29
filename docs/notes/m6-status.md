@@ -2,10 +2,14 @@
 
 Entry point for any session picking up where M6 left off.
 
-**M6 IN PROGRESS — PR 2 of N landed.** PR 1 paged OUT; PR 2 pages IN.
-With both, source files > 2 KB AND outputs > 2 KB are now possible
-on the SAM-side assembler.  Subsequent PRs cover the compact `.tbn`
-format, the on-SAM disassembler, and multi-digit local labels.
+**M6 — HEADLINE ACHIEVED (byte-match), CI gate pending.** As of
+2026-05-29 the SAM-side assembler produces spectrum4 `release.bin`
+byte-identical to GNU (see "Release byte-match — status" below). The
+mechanism work (paged OUT, paged IN, paged_call, off-axis tables,
+multi-digit local labels, the 8 encoder-bug fixes) has all landed; the
+only remaining step to flip M6 ✅ is the `m6-release` CI gate (PR-5 of
+the closure plan). The sections below document the earlier PRs (paged
+OUT/IN) in detail and remain accurate for that machinery.
 
 ## M6 scope (full milestone)
 
@@ -20,7 +24,52 @@ toolchain — `release.s` is ~20 KB source emitting ~22 KB output.
 | Multi-digit local labels (`10f` / `10b` / …) | 📋 plan ready | `docs/plans/2026-05-27-multi-digit-local-labels.md` | open draft PR #35 (independent of this PR) |
 | Compact `.tbn` format | 📋 designed | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | M6 PR 3+ |
 | On-SAM disassembler | 📋 designed | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | M6 PR 4+ |
-| spectrum4 release.bin byte-match on SAM | 📋 ultimate goal | — | M6 PR N |
+| spectrum4 release.bin byte-match on SAM | ✅ **ACHIEVED** (2026-05-29) — SAM OUT byte-identical to GNU (21752 B, cmp exit 0); CI gate (PR-5) pending to fully close M6 | `tools/run-m6-release-stripped.sh` | branch `m6-bytematch-encoder-fixes` |
+
+## Release byte-match — status (2026-05-29, the headline closer)
+
+Full detail + work-item inventory:
+**`docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md`**.
+
+Two findings from driving the full 88 KB `release-stripped.tbn` through
+the assembler **on SimCoupé** (the authoritative gate):
+
+1. **The "trap at scale" open question is RESOLVED — negative.** 88 KB
+   flows end-to-end on SimCoupé: OK banner, 21 752-byte OUT, 21 s. The
+   Go-harness trap (PC → `&0038`) from the 2026-05-28 handover was a
+   **harness fidelity gap, not a real SAM paged-IN bug.** (`run-simcoupe.sh`
+   gained a `SIMCOUPE_TIMEOUT` env override — 88 KB exceeds the 30 s default.)
+
+2. **Byte-match ACHIEVED** (2026-05-29). The initial run surfaced 118
+   differing instruction words across 8 encoder bug classes the fixture
+   corpus never exercised; all are now fixed (each a faithful port of the
+   Go authority per `docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md`):
+   csetm condition inversion, MOV wide-imm decomposition, MOV bitmask-imm
+   alias, MOV→MOVN, 64-bit address-data high word (PASS_PC made
+   origin-aware), ADRP high-origin page-delta, bic-immediate, and
+   `.set`/`.equ` absolute-vs-origin-relative symbol values. Release diff
+   walked **358 → 0**. The SAM-side production assembler now HSAVEs a
+   21752-byte OUT byte-identical to GNU `as+ld+objcopy`, verified
+   end-to-end on SimCoupé via `tools/run-m6-release-stripped.sh` (exit 0).
+   All ci-m3/m4/m5/m6 + -prod fixtures pass; both code variants under the
+   `&C000` ceiling (test ~&BFD9, prod ~&B846).
+
+   The fixes live on branch `m6-bytematch-encoder-fixes` (one commit per
+   class; PR pending Pete's review). **What remains to fully close M6:**
+   PR-5 — wire `tools/run-m6-release-stripped.sh` into CI as the
+   `m6-release` gate + add the `&C000` budget assertion (M6-closure plan
+   Step 2b). Each class also gained a permanent `tests/m6/sources/`
+   fixture so the corpus now covers these forms.
+
+### Go-harness paged-path trap — root-cause follow-up (Pete: ideally M6)
+
+Separate work item: root-cause **why the Go harness traps (PC → `&0038`)
+on the full 88 KB / 6-page paged-IN load where SimCoupé succeeds**, and
+fix the harness's HLOAD/paging stub so it can run the full release input
+(which would make the encoder-fix iteration above ~1 ms instead of a
+20 s SimCoupé round-trip). Not on the critical path (SimCoupé is the gate
+and works); Pete's call is ideally M6, acceptable M7. Cross-referenced in
+`m7-status.md` (Go-harness fidelity row).
 
 ## PR 1 — paged OUT buffer (this PR)
 

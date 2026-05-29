@@ -37,6 +37,17 @@ fi
 
 mkdir -p "$BUILD"
 
+# Toolchain selection.  Prefer aarch64-none-elf-* (Pete's macOS install),
+# fall back to aarch64-linux-gnu-* (dev container / CI).  Override via the
+# AARCH64_AS / AARCH64_LD / AARCH64_OBJCOPY env vars (mirrors
+# tools/run-m6-roundtrip.sh).
+AS="${AARCH64_AS:-aarch64-none-elf-as}"
+LD="${AARCH64_LD:-aarch64-none-elf-ld}"
+OBJCOPY="${AARCH64_OBJCOPY:-aarch64-none-elf-objcopy}"
+if ! command -v "$AS" >/dev/null 2>&1; then
+    AS="aarch64-linux-gnu-as"; LD="aarch64-linux-gnu-ld"; OBJCOPY="aarch64-linux-gnu-objcopy"
+fi
+
 # 1. Build tools.
 echo "[1/5] Building text2bin and refenc..."
 make -C "$SAMDIR" text2bin refenc >/dev/null
@@ -63,7 +74,7 @@ echo "       $(wc -c <"$BUILD/release.bin") bytes"
 echo "[4/5] Building GNU oracle release.gnu.img..."
 GNUTMP="$(mktemp -d)"
 trap 'rm -rf "$GNUTMP"' EXIT
-aarch64-none-elf-as \
+"$AS" \
     -I "$SPECTRUM4_SRC" \
     -I "$SPECTRUM4_SRC/kernel" \
     -I "$SPECTRUM4_SRC/roms" \
@@ -76,13 +87,13 @@ aarch64-none-elf-as \
 # Link without cortex-a53 errata workarounds first; those workarounds
 # insert NOPs at specific instruction patterns and would be a deferred
 # concern if our output matches the no-errata oracle.
-aarch64-none-elf-ld \
+"$LD" \
     --no-warn-rwx-segments \
     -T "$SPECTRUM4_SRC/kernel/spectrum4.ld" \
     -o "$GNUTMP/release.elf" \
     "$GNUTMP/release.o"
 
-aarch64-none-elf-objcopy "$GNUTMP/release.elf" -O binary "$BUILD/release.gnu.img"
+"$OBJCOPY" "$GNUTMP/release.elf" -O binary "$BUILD/release.gnu.img"
 echo "       $(wc -c <"$BUILD/release.gnu.img") bytes"
 
 # 5. Compare.

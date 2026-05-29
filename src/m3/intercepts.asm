@@ -45,6 +45,92 @@ try_mnemonic_intercept:
 
 try_intercept_post_ror:
 
+; -- csetm (ID 52) — invert the condition before the form table -------
+; csetm Rd, cond is an alias of CSINV Rd, XZR, XZR, invert(cond): the
+; condition field in the machine code is cond XOR 1.  The form-table
+; entry for ID 52 (manual_forms.go:416-425, CSINV pattern with the
+; CondCode slot at bits[15:12]) places the cond operand verbatim, so we
+; must XOR the stored cond byte by 1 here, then fall through to the
+; generic path which encodes it.  This mirrors the Mac-side dispatch
+; tools/refenc/pass2.go:308 (case 52 -> encodeCsetm), whose body is
+; `invertedCond := cond ^ 1` (pass2.go:1436).  Grounded against
+; aarch64-none-elf-as + ARM ARM C6.2.58 (CSETM).
+;
+; The OpCond operand is operand 1; its cond byte lives at +2 of the
+; operand record (see encoder.asm encode_slot_cond: cond stored at +2).
+                ld      a, (try_intercept_mnem)
+                cp      52
+                jp      nz, try_intercept_post_csetm
+                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2)
+                xor     1                   ; invert: EQ<->NE, CS<->CC, ...
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2), a
+                jp      try_intercept_no_match  ; Z=0 → generic form encodes it
+try_intercept_post_csetm:
+
+; -- bic Rd, Rn, #imm (ID 47, immediate form) — AND with ~imm ----------
+; `bic Rd, Rn, #imm` is `and Rd, Rn, #~imm`.  The generic form-table path
+; for bic-immediate maps it onto the AND-imm encoding but with the RAW
+; immediate (it never negates), so e.g. `bic w7,w7,#1` came out as
+; `and w7,w7,#0x1` (120000e7) instead of GNU's `and w7,w7,#0xfffffffe`
+; (121f78e7).  Following the csetm pattern, negate operand 2's immediate
+; IN PLACE and fall through to the generic encoder (whose LogicalImm slot
+; then encodes the AND with ~imm).  Mirrors tools/refenc/pass2.go:304
+; (case 47 dispatch) + encodeBicImm (pass2.go:1397 negImm = ^imm).  Only
+; the (Rd, Rn, #imm) shape is intercepted; the register form
+; (bic Rd,Rn,Rm{,shift}) is handled by the shifted-reg path below.
+                ld      a, (try_intercept_mnem)
+                cp      47
+                jr      nz, try_intercept_post_bic
+                ld      a, (main_op_count)
+                cp      3
+                jr      nz, try_intercept_post_bic
+                ld      a, (OPVAL_KINDS + 2)
+                cp      OP_KIND_IMM_EXPR
+                jr      nz, try_intercept_post_bic
+; ~imm in place over operand 2's 8-byte LE value (NOT all 8 bytes; the
+; LogicalImm encoder masks/replicates to width itself for the W case).
+                ld      hl, OPVAL_ARRAY + 2 * OPVAL_STRIDE + 2
+                call    ml_not
+; Fall through to try_intercept_no_match: the generic form encodes `bic`
+; as AND-imm, now over ~imm.
+                jp      try_intercept_no_match
+try_intercept_post_bic:
+
+; -- mov Rd, #imm (ID 3) — MOV-immediate alias auto-selection ----------
+; A bare `mov Rd, #imm` is an alias GNU as resolves to ONE of MOVZ (wide
+; immediate), MOVN (inverted wide immediate), or ORR Rd,XZR,#bimm
+; (bitmask immediate), choosing whichever single-instruction form can
+; encode the value, in that priority order.  The generic form-table path
+; only ever reaches the MOVZ pattern and feeds it through
+; encode_slot_imm16shifted, which reads (v>>16)&3 as hw and the low 16
+; bits as imm — wrong for any chunk not in the low slot, and incapable of
+; MOVN / ORR.  Mirror tryEncodeMovImm (tools/refenc/pass2.go:438-502)
+; here, ahead of the form table.  encode.go:53-66 is the same chunk
+; search.  Only intercept the (Rd, #imm) shape; movz/movk/movn keep their
+; own mnemonics, and `mov Rd, Rs` (register move) is a different shape
+; the form table still handles.
+                ld      a, (try_intercept_mnem)
+                cp      3
+                jr      nz, try_intercept_post_mov
+                ld      a, (main_op_count)
+                cp      2
+                jr      nz, try_intercept_post_mov
+                ld      a, (OPVAL_KINDS + 0)
+                cp      OP_KIND_REG_X
+                jr      z, try_intercept_mov_op0_ok
+                cp      OP_KIND_REG_W
+                jr      nz, try_intercept_post_mov
+try_intercept_mov_op0_ok:
+                ld      a, (OPVAL_KINDS + 1)
+                cp      OP_KIND_IMM_EXPR
+                jr      nz, try_intercept_post_mov
+                call    encode_mov_imm_word
+                jr      nz, try_intercept_post_mov  ; NZ → no single-inst fit; fall through
+                call    intercept_emit_dehl
+                xor     a                   ; Z=1 → handled
+                ret
+try_intercept_post_mov:
+
 ; -- Shifted-register-capable mnemonics: add/sub/and/orr/eor/subs/tst/
 ;    bic/ands.  Two routings:
 ;      (a) operand 2 (or 1 for tst) is OpShiftedReg — direct dispatch.
@@ -673,6 +759,337 @@ encode_ror_imm_pack:
 
 
 encode_ror_imm_rs:               defb    0
+
+
+; -----------------------------------------------------------------------
+; encode_mov_imm_word — MOV-immediate alias auto-selection.
+;
+; Faithful port of tools/refenc/pass2.go:438-502 (tryEncodeMovImm).  A
+; bare `mov Rd, #imm` resolves to the first single-instruction form that
+; fits, in priority order:
+;
+;   1. MOVZ  — value is a single 16-bit chunk in some slot (lsl #0/16/32/
+;              48; for W only #0/16).         base 0xd2800000 / 0x52800000
+;   2. MOVN  — ~value is a single 16-bit chunk in some slot (for W, ~ is
+;              masked to 32 bits first).       base 0x92800000 / 0x12800000
+;   3. ORR   — value is a valid logical (bitmask) immediate;
+;              mov Rd,#imm == orr Rd,XZR,#imm. base 0xb20003e0 / 0x320003e0
+;
+; encode.go:53-66 is the same chunk search; slots_logical.go (Z80:
+; src/m3/slots/logical_imm.asm) is the bitmask encoder reused for step 3.
+;
+; "chunk<<shift == u" with shift a multiple of 16 is equivalent to: the
+; only non-zero bytes of the 8-byte LE value are the two bytes at offset
+; 2*hw.  So the chunk search is a pure byte test — no shifting needed.
+;
+; In:  OPVAL_ARRAY[0] = Rd (RegX/RegW), OPVAL_ARRAY[1] = OpImmExpr whose
+;      8-byte LE value lives at OPVAL_ARRAY + 1*STRIDE + 2.
+; Out: Z=1 → handled, DE:HL = encoded word (HL=bits0..15, DE=bits16..31).
+;      Z=0 (NZ) → no single-instruction fit; caller falls through to the
+;      form table (which will then fail cleanly if truly unencodable).
+; Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+encode_mov_imm_word:
+; -- is64 from Rd kind (RegX → 1, else 0); Rd number --------------------
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0)
+                sub     OP_KIND_REG_X       ; A=0 iff RegX
+                sub     1                   ; CY iff was RegX (A=0)
+                sbc     a, a                ; A = 0xff iff RegX else 0x00
+                and     1                   ; A = 1 iff RegX (is64) else 0
+                ld      (encode_mov_imm_is64), a
+
+                ld      a, (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1)
+                and     &1f
+                ld      (encode_mov_imm_rd), a
+
+; -- u = value, masked to 32 bits if !is64 ------------------------------
+                ld      hl, OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2
+                ld      de, encode_mov_imm_u
+                ld      bc, 8
+                ldir
+                ld      hl, encode_mov_imm_u
+                call    encode_mov_imm_mask32
+
+; -- Step 1: MOVZ — single 16-bit chunk in u ----------------------------
+                ld      hl, encode_mov_imm_u
+                call    encode_mov_imm_find_chunk   ; A=hw / 0xff
+                cp      &ff
+                jr      z, encode_mov_imm_try_movn
+                ld      b, 0                ; B=0 → movz base offset
+                jr      encode_mov_imm_emit_wide
+
+; -- Step 2: MOVN — single 16-bit chunk in ~u ---------------------------
+encode_mov_imm_try_movn:
+                ld      hl, encode_mov_imm_u
+                ld      de, encode_mov_imm_nu
+                ld      bc, 8
+                ldir
+                ld      hl, encode_mov_imm_nu
+                call    ml_not
+                ld      hl, encode_mov_imm_nu
+                call    encode_mov_imm_mask32
+                ld      hl, encode_mov_imm_nu
+                call    encode_mov_imm_find_chunk
+                cp      &ff
+                jr      z, encode_mov_imm_try_orr
+                ld      b, 1                ; B=1 → movn base offset
+encode_mov_imm_emit_wide:
+; Base hi16: movz 0x5280 / movn 0x1280, +0x8000 when is64.
+;   B=0 → movz, B=1 → movn.  Start DE=0x5280, if movn sub 0x4000,
+;   if is64 add 0x8000.
+                push    af                  ; save hw
+                ld      de, &5280
+                bit     0, b
+                jr      z, encode_mov_imm_base_z
+                ld      de, &1280
+encode_mov_imm_base_z:
+                ld      a, (encode_mov_imm_is64)
+                or      a
+                jr      z, encode_mov_imm_base_w
+                ld      a, d
+                add     a, &80              ; +0x8000 → set sf bit
+                ld      d, a
+encode_mov_imm_base_w:
+                pop     af                  ; A = hw
+                jp      encode_mov_imm_pack_wide
+
+; -- Step 3: ORR (bitmask immediate) — reuse encode_logical_imm ---------
+; tryEncodeMovImm step 3 (refenc/pass2.go:489-500).  encode_logical_imm
+; rejects non-bitmask values via `jp fail`; the soft-fail wrapper turns
+; that into CY=1 so we can fall through to the form table instead.
+encode_mov_imm_try_orr:
+                ld      hl, encode_mov_imm_orr_slot
+                ld      de, encode_mov_imm_u
+                ld      a, (encode_mov_imm_is64)
+                ld      c, a
+                call    encode_logical_imm_try
+                jr      c, encode_mov_imm_none
+; DE:HL = (N|immr|imms)<<10.  OR in ORR base (0xb20003e0 / 0x320003e0)
+; and Rd.  Low/high bits (0xe0/0x03) are width-independent; only D's high
+; byte differs (0xb2 vs 0x32).
+                ld      a, l
+                or      &e0
+                ld      l, a
+                ld      a, h
+                or      &03
+                ld      h, a
+                ld      c, &32              ; w ORR base hi8
+                ld      a, (encode_mov_imm_is64)
+                or      a
+                jr      z, encode_mov_imm_orr_setd
+                ld      c, &b2              ; x ORR base hi8
+encode_mov_imm_orr_setd:
+                ld      a, d
+                or      c
+                ld      d, a
+                ld      a, (encode_mov_imm_rd)
+                or      l
+                ld      l, a
+                xor     a                   ; Z=1 → handled
+                ret
+
+encode_mov_imm_none:
+                or      &ff                 ; Z=0 → caller falls through
+                ret
+
+
+; -- encode_mov_imm_mask32 — if !is64, zero bytes 4..7 of (HL) ----------
+encode_mov_imm_mask32:
+                ld      a, (encode_mov_imm_is64)
+                or      a
+                ret     nz
+                ld      bc, 4
+                add     hl, bc
+                xor     a
+                ld      b, 4
+encode_mov_imm_mask32_loop:
+                ld      (hl), a
+                inc     hl
+                djnz    encode_mov_imm_mask32_loop
+                ret
+
+; -----------------------------------------------------------------------
+; encode_mov_imm_pack_wide — build a MOVZ/MOVN word.
+;   In:  DE:HL = base (hi16 in DE, lo16 0), A = hw (0..3),
+;        chunk in encode_mov_imm_chunk_lo / _hi, Rd in encode_mov_imm_rd.
+;   Word layout: bits 22:21 = hw, bits 20:5 = imm16, bits 4:0 = Rd.
+;   Out: DE:HL = word, Z=1 (handled).
+;
+; Build the variable bits in a 4-byte LE accumulator (acc), then OR into
+; DE:HL.  acc = (hw<<21) | (imm16<<5) | Rd.  imm16 = chunk_lo|(chunk_hi<<8).
+; We compute (imm16<<5) by placing imm16 into acc bytes 0..1 and doing 5
+; single-bit left shifts of the 4-byte accumulator, then OR in hw<<21 and
+; Rd (Rd has no overlap with the shifted field).
+; -----------------------------------------------------------------------
+encode_mov_imm_pack_wide:
+; DE (base hi16) survives untouched until the fold (the body below uses
+; only A, B, F, HL), so no save/restore is needed.  imm16<<5 spans bits
+; 5..20, so acc byte 3 is always 0 — we shift and fold only bytes 0..2.
+                ld      (encode_mov_imm_hw), a
+
+; acc[0..1] = imm16 (chunk_lo/chunk_hi consecutive); acc[2] = 0.
+                ld      hl, (encode_mov_imm_chunk_lo)
+                ld      (encode_mov_imm_acc + 0), hl
+                xor     a
+                ld      (encode_mov_imm_acc + 2), a
+
+; acc <<= 5  (24-bit logical left shift via 5 single-bit passes).
+                ld      b, 5
+encode_mov_imm_shl5_outer:
+                or      a                   ; CY = 0
+                ld      hl, encode_mov_imm_acc + 0
+                rl      (hl)
+                inc     hl
+                rl      (hl)
+                inc     hl
+                rl      (hl)
+                djnz    encode_mov_imm_shl5_outer
+
+; OR hw<<21 into acc byte 2 bits 5..6 (bit 21 = byte 2 bit 5).
+                ld      a, (encode_mov_imm_hw)
+                rrca
+                rrca
+                rrca
+                and     &60
+                ld      hl, encode_mov_imm_acc + 2
+                or      (hl)
+                ld      (hl), a
+
+; OR Rd (bits 0..4) into acc byte 0.
+                ld      a, (encode_mov_imm_rd)
+                ld      hl, encode_mov_imm_acc + 0
+                or      (hl)
+                ld      (hl), a
+
+; Fold acc into DE:HL.  HL = acc[0..1] (base lo16 is 0); D keeps its top
+; base bits (acc byte 3 is 0), so only OR acc[2] into E.
+                ld      a, (encode_mov_imm_acc + 2)
+                or      e
+                ld      e, a
+                ld      hl, (encode_mov_imm_acc + 0)
+                xor     a                   ; Z=1 → handled
+                ret
+
+
+; -----------------------------------------------------------------------
+; encode_mov_imm_find_chunk — chunk search over the 8-byte LE value at HL.
+;
+; Returns A = hw (0..3) of the single non-zero 16-bit chunk, and stores
+; that chunk's two bytes in encode_mov_imm_chunk_lo/_hi.  Returns A=0xff
+; if NO single-chunk decomposition exists (more than one non-zero chunk).
+;
+; A "chunk" is bytes [2*hw, 2*hw+1]; the decomposition is valid iff all
+; OTHER bytes of the 8-byte value are zero (mirrors Go's chunk<<shift==u
+; for shift in {0,16,32,48}).  is64 has already masked bytes 4..7 to zero
+; for the W case, so the loop over hw=0..3 naturally restricts W to
+; hw∈{0,1} (the upper chunks are zero, and an all-zero value matches
+; hw=0 with chunk 0 — exactly Go's behaviour for `mov Rd, #0`).
+;
+; In:  HL = ptr to 8-byte LE value.
+; Out: A = hw or 0xff; encode_mov_imm_chunk_lo/_hi set on success.
+; Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+; Walk the four 16-bit chunks.  A single-chunk decomposition exists iff at
+; most one chunk is non-zero; its index is hw (chunk_lo/_hi = that chunk).
+; All-zero → hw=0, chunk=0 (matches Go's `mov Rd, #0`).  >1 non-zero → no
+; fit (A=0xff).
+encode_mov_imm_find_chunk:
+                xor     a
+                ld      (encode_mov_imm_chunk_lo), a    ; default chunk = 0
+                ld      (encode_mov_imm_chunk_hi), a
+                ld      d, 0                ; D = hw of the (single) non-zero chunk
+                ld      e, 0                ; E = count of non-zero chunks
+                ld      c, 0                ; C = current chunk index
+encode_mov_imm_fc_loop:
+                ld      a, (hl)             ; A = chunk lo
+                inc     hl
+                ld      b, (hl)             ; B = chunk hi
+                inc     hl
+                or      b                   ; (lo|hi)==0 → chunk is zero
+                jr      z, encode_mov_imm_fc_step
+; Non-zero chunk: record hw + chunk bytes (re-read lo/hi via HL-2).
+                ld      d, c                ; hw = this index
+                dec     hl
+                dec     hl
+                ld      a, (hl)
+                ld      (encode_mov_imm_chunk_lo), a
+                inc     hl
+                ld      a, (hl)
+                ld      (encode_mov_imm_chunk_hi), a
+                inc     hl
+                inc     e                   ; count++
+encode_mov_imm_fc_step:
+                inc     c
+                ld      a, c
+                cp      4
+                jr      c, encode_mov_imm_fc_loop
+; E = number of non-zero chunks.
+                ld      a, e
+                cp      2
+                jr      nc, encode_mov_imm_fc_nofit ; >1 → no single-chunk fit
+                ld      a, d                ; 0 or 1 non-zero → hw = D (0 if none)
+                ret
+encode_mov_imm_fc_nofit:
+                ld      a, &ff
+                ret
+
+
+; -----------------------------------------------------------------------
+; encode_logical_imm_try — soft-fail wrapper around encode_logical_imm.
+;
+; encode_logical_imm aborts assembly (`jp fail`) on a non-encodable
+; value, but the MOV-bitmask path needs a recoverable "not encodable"
+; signal so it can fall through to the form table.  logical_imm.asm
+; routes all its reject sites through encode_logical_imm_reject, which
+; consults the (encode_logical_imm_soft) flag: when armed it RETs with
+; CY=1 (recoverable); when clear it `jp fail`s as before (the normal
+; and/orr-immediate slot path).  Every reject site is at a
+; stack-balanced point (only the encoder's own return address on the
+; stack), so the RET lands back here.
+;
+; In:  HL = slot ptr, DE = 8-byte LE buffer ptr, C = is64.
+; Out: CY=0 → DE:HL = encoded word; CY=1 → not encodable.
+; Note: the success path of encode_logical_imm leaves CY clear (its final
+; shift loop / early RET do not set CY in a way we rely on), so we force
+; CY=0 explicitly here.
+; -----------------------------------------------------------------------
+encode_logical_imm_try:
+                ld      a, 1
+                ld      (encode_logical_imm_soft), a
+                xor     a
+                ld      (encode_logical_imm_rejected), a
+                call    encode_logical_imm
+; On a reject, encode_logical_imm_reject set (encode_logical_imm_rejected)
+; to 1 and RETed here.  On success it RETed normally with that flag still
+; 0 and DE:HL holding the encoded word.  Disarm, then map the flag to CY.
+                xor     a
+                ld      (encode_logical_imm_soft), a
+                ld      a, (encode_logical_imm_rejected)
+                or      a
+                ret     z                   ; success → CY=0 (A=0 from `or`)
+                scf                         ; reject → CY=1
+                ret
+
+
+; -----------------------------------------------------------------------
+; Scratch + constants for encode_mov_imm_word.
+;
+; Working buffers live in section-D RAM (&F000 free region — see the
+; memory map in assembler.asm) so they consume no code-image bytes; the
+; test variant runs tight against the &C000 ceiling.  Only the constant
+; slot record needs initialised image bytes.
+; -----------------------------------------------------------------------
+encode_mov_imm_is64:             equ     &F000
+encode_mov_imm_rd:               equ     &F001
+encode_mov_imm_hw:               equ     &F002
+encode_mov_imm_chunk_lo:         equ     &F003
+encode_mov_imm_chunk_hi:         equ     &F004
+encode_mov_imm_acc:              equ     &F005   ; 4 bytes
+encode_mov_imm_u:                equ     &F009   ; 8 bytes
+encode_mov_imm_nu:               equ     &F011   ; 8 bytes
+; LogicalImm slot record for the ORR-bitmask path: kind=0x24, BitPosition=10,
+; BitWidth=13 (mirrors refenc tryEncodeMovImm's enc.OperandSlot{LogicalImm,10,13}).
+encode_mov_imm_orr_slot:         defb    &24, 0, 10, 13
 
 
 ; -----------------------------------------------------------------------

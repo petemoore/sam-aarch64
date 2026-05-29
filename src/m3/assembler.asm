@@ -28,7 +28,12 @@
 ;   &E280-&E77C  LOCAL_LABEL_TABLE (2 + 255 × 5 = 1277 B; moved here 2026-05-28)
 ;   &E77D-&E7FF  free (131 B between local-labels and symtab-overflow)
 ;   &E800-&EFFF  SYMTAB_OVERFLOW (256 × 8 = 2 KB; moved here 2026-05-28)
-;   &F000-&FFFF  free (4 KB headroom in section D for future use)
+;   &F000-&F01A  MOV-imm + logical-imm encoder scratch (encode_mov_imm_*
+;                &F000-&F018; logical-imm soft-fail flags &F019/&F01A;
+;                added 2026-05-29 for the release byte-match encoder fixes)
+;   &F01B-&FFFF  free (~4 KB headroom in section D for future use)
+;   (Also: ORIGIN_HIGH &C960 (4 B) + SYMTAB_ABS_BITMAP &C964 (64 B),
+;    added 2026-05-29 — see their equ definitions below.)
 ;
 ;   Physical page 4 (off-axis): ENCTAB body — paged into section A on
 ;     demand for encoder runtime reads.  See `src/m3/trampoline.asm`.
@@ -98,9 +103,54 @@ PASS_PASS2:     equ     2
 ; main_loop.asm (pass_pc_reset / pass_pc_advance_*).
 PASS_PC:        equ     &C159          ; 4 bytes — current pass PC (u32 LE)
 
+; ORIGIN_HIGH — the high 32 bits of the link origin (s64 OriginVMA).
+; PASS_PC only tracks the low 32 bits of the VMA (the output is < 4 GB so
+; the low word fully captures every label's offset within the image), but
+; the spectrum4 release links at origin 0xfffffff0_00000000 — the high
+; word 0xfffffff0 must be re-applied whenever an origin-relative value
+; (a label/PC/local-label reference) is materialised as a 64-bit operand,
+; e.g. a `.quad <label>`.  Constants (`.quad 0x93`) carry high=0.
+;
+; Set by `.org`'s set-pc tail from expr_result[4..7] (the evaluated
+; origin's high word); reset to 0 by pass_pc_reset so the `-Ttext=0`
+; fixture corpus (origin 0) is unaffected.  Mirrors the Go reference
+; where every symbol/PC value is `pc` starting at OriginVMA, so it carries
+; the full 64-bit origin (tools/refenc/pass1.go:154 res.Symbols[name]=pc
+; with pc seeded from OriginVMA; tools/refenc/pass2.go:18,148-152).
+ORIGIN_HIGH:    equ     &C960          ; 4 bytes — high word of OriginVMA (u32 LE)
+
+; SYMTAB_ABS_BITMAP — 1 bit per symbol id: 1 = the symbol is ABSOLUTE (its
+; full 64-bit value's high word is NOT the link origin's high word, i.e.
+; a `.set`/`.equ` constant such as RAM_DISK_SIZE=0x10000000); 0 = the
+; symbol is ORIGIN-RELATIVE (a label / PC snapshot / label-derived
+; expression whose high word is ORIGIN_HIGH).
+;
+; Why this exists: the SYMTAB entry stores only the LOW 32 bits of a
+; symbol's value.  eval_push_sym reconstructs the high word at use time.
+; For origin-relative symbols that word is ORIGIN_HIGH; for absolute
+; constants it is 0 (none of the release's .set/.equ constants exceed 32
+; bits — verified against spectrum4/src/spectrum4).  Blanket-applying
+; ORIGIN_HIGH (the Class-1 fix) was wrong for absolute constants:
+; e.g. `mov x9, RAM_DISK_SIZE` saw 0xfffffff0_10000000 instead of
+; 0x10000000, breaking the MOV single-chunk decomposition.
+;
+; The flag is DERIVED at definition from the evaluated high word: if a
+; symbol's expr_result[4..7] equals ORIGIN_HIGH it is origin-relative
+; (bit 0), else absolute (bit 1) — see main_dir_equ_pass1 / the label-def
+; path.  Faithful to the Go reference where Symbols[name] holds the FULL
+; value (tools/refenc/pass1.go:154 label=pc-from-OriginVMA;
+; pass1.go:296 .set/.equ = raw evaluated value) and eval adds nothing.
+;
+; 64 bytes cover ids 0..511 (release peak id 474).  RAM-only (no binary
+; cost).  Cleared by symbol_table_init.  Bit (id) lives at
+; SYMTAB_ABS_BITMAP + (id>>3), mask 1<<(id&7).
+SYMTAB_ABS_BITMAP: equ  &C964          ; 64 bytes — per-id absolute flag
+
 ; M4 scratch reservation (allocated by symbols.asm + local_labels.asm):
 ;   &C160-&C95F  SYMTAB              (256 buckets × 8 bytes = 2 KB)
-;   &C960-&CFFF  free (1696 B; old SYMTAB_OVERFLOW + old LOCAL_LABEL_TABLE
+;   &C960-&C963  ORIGIN_HIGH         (4 bytes — high word of OriginVMA)
+;   &C964-&C9A3  SYMTAB_ABS_BITMAP   (64 bytes — per-id absolute flag)
+;   &C9A4-&CFFF  free (1628 B; old SYMTAB_OVERFLOW + old LOCAL_LABEL_TABLE
 ;                regions, freed when both were moved to &E100+ on
 ;                2026-05-28 to absorb the release.tbn census peaks).
 ; SYMTAB_OVERFLOW is now at &E800 (256 entries, 2 KB) and
@@ -178,6 +228,25 @@ start:
 ; Set up the stack before any call.  SAMDOS's EI in the RST 8 hook
 ; re-enables interrupts, so DI must be repeated after hook calls.
                 ld      sp, &C100
+
+; Disarm the logical-imm soft-fail hook.  It lives in uninitialised
+; section-D RAM (&F019) and defaults to "armed only by the MOV-bitmask
+; path" — but RAM is not zero on cold boot, so force it clear here.  When
+; clear, encode_logical_imm_reject `jp fail`s as before for the normal
+; and/orr-immediate slot path.  See src/m3/slots/logical_imm.asm.
+                xor     a
+                ld      (encode_logical_imm_soft), a
+
+; Zero ORIGIN_HIGH at cold boot.  It is normally set by `.org`'s set-pc
+; tail and reset by pass_pc_reset — but both run inside main_assemble,
+; AFTER the BUILD_TESTS boot self-tests.  encode_adrp_imm now reads
+; ORIGIN_HIGH as the target/PC high word, so the adrp slot self-tests
+; (which assume origin 0) would otherwise see uninitialised RAM.  Force
+; it to 0 here, before any self-test runs.
+                ld      (ORIGIN_HIGH + 0), a
+                ld      (ORIGIN_HIGH + 1), a
+                ld      (ORIGIN_HIGH + 2), a
+                ld      (ORIGIN_HIGH + 3), a
 
 ; Capture the boot LMPR value (as left by BASIC's CALL 32768) into
 ; LMPR_DEFAULT_RUNTIME so enctab_map_out restores the *real* default,
@@ -493,7 +562,15 @@ if defined(BUILD_TESTS)
                 ; test_mem.asm likewise lives off-axis (physical page 13);
                 ; see load_test_mem_off_axis / plan-PR 3 (PR #52).
                 include "test_sysname.asm"
-                include "test_litpool.asm"
+                ; test_litpool.asm is NOT included inline: its
+                ; run_litpool_self_tests is dispatched only from the
+                ; off-axis page-12 cluster (test_offaxis_cluster.asm),
+                ; which compiles its own copy.  The former inline include
+                ; here emitted dead code (never called inline since the
+                ; PR-3c cluster move, see line ~342) — removed in the
+                ; Class-1 64-bit-address-data fix (2026-05-29) to reclaim
+                ; test-variant budget for the ORIGIN_HIGH machinery.  No
+                ; behavioural change: the cluster still runs the suite.
                 include "test_trampoline.asm"
                 include "test_emit_paged.asm"
                 include "test_reader_paged.asm"

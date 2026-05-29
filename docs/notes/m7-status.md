@@ -22,7 +22,7 @@ Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not
 | Compact `.tbn` format | 📋 | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` | Future-proofing for sources beyond the paged-IN ceiling. |
 | Editor groundwork (Phase 2) | 🧭 | `docs/ROADMAP.md` "Editor vision" section | Instruction-explanation panel, register simulator, sysreg docs, did-you-mean. Not yet spec'd. |
 | Repo-cleanup / README housekeeping track | 📋 | `docs/notes/2026-05-29-repo-audit.md` §6 (prioritised plan) | Track defined; dedicated M7 housekeeping track that does NOT block M6 closure. |
-| Go-harness fidelity follow-ups | 📋 | `docs/notes/2026-05-29-go-harness-fidelity-investigation.md` Q4 | Write-watchpoint activation, `make harness-sweep` target, USAGE.md ledger. NOT real-ROM execution. |
+| Go-harness fidelity follow-ups | 📋 | `docs/notes/2026-05-29-go-harness-fidelity-investigation.md` Q4 | Write-watchpoint activation, `make harness-sweep` target, USAGE.md ledger. NOT real-ROM execution. **PLUS: root-cause the paged-path trap** — harness traps (PC→`&0038`) on the full 88 KB / 6-page paged-IN load where SimCoupé succeeds (`docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md`). Pete: ideally M6 (tracked primarily in `m6-status.md`), acceptable M7. |
 | Sysreg Go↔Z80 sync guard | 📋 | `docs/notes/2026-05-29-repo-audit.md` §5 / §6 item 9 | Diff-check or cross-link comment for the hand-synced sysreg tables. |
 | Z80↔Go encoding/operator parity audit | 🧭 | Pete 2026-05-29; `tools/sam-aarch64-format` / refenc is authoritative | Systematically ensure the Z80 side implements the same instruction encodings AND expression operators as the Go library. M6 closes only what release-stripped needs; full parity is M7. |
 | SAM screen-mode decision (editor) | 🧭 | Pete 2026-05-29; ROADMAP "Editor vision" | MODE 3 currently assumed. Decide mode(s) by colour-vs-resolution + aesthetics nearer the editor; the choice consumes display RAM / pages, so it feeds the memory-layout doc below. |
@@ -160,6 +160,8 @@ to the level of a named strand. One line each, with the cited source.
 | Multi-section / linker-script refenc | `docs/ROADMAP.md:81-82` | Punted in favour of `text2bin -flatten`; revisit only if a non-spectrum4-shaped project needs it (incl. `SpectrumFourLayout` extraction). |
 | Replace `cls` test instruction | `docs/ROADMAP.md:87` | `cls` exists in `manual_forms.go` solely for one test; replace with a real spectrum4 instruction. |
 | SimCoupé upstream v1.2.16 bump | `docs/ROADMAP.md:88`; `memory/project_simcoupe_upstream_pr.md` | Switch CI's SimCoupé from build-from-source-with-patch to upstream v1.2.16 (`-exitonhalt` landed as `a65a16e`); drop the vendored patch. |
+| Absolute `.set` high-word edge vs Go | `docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md` review §2 | An absolute `.set X, 0xfffffff0_NNNNNNNN` whose high word coincidentally equals ORIGIN_HIGH is misclassified origin-relative (Z80 stores low-32 + reconstructs; Go stores full value). Harmless for release; a divergence-from-Go on non-release inputs → fold into the parity-audit row above. |
+| Harden slot self-test PASS_PC dependency | `docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md` review §3 | `run_slot_self_tests` computes the ADRP test vs PASS_PC before `pass_pc_reset` (relies on cold-boot RAM=0). Pre-existing; add an explicit `pass_pc_reset` before the page-12 cluster to harden. |
 
 **Beyond M7** (noted so they're not mistaken for M7 strands): Phase 3 (TFTP
 shipper to the Pi 400 over the direct LAN cable, `docs/ROADMAP.md` M-table
