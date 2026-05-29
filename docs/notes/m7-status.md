@@ -19,7 +19,7 @@ Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not
 | Bump-arena allocator (Go-slices-vs-fixed-arrays for the Z80 data structures) | ❌ YAGNI | `docs/specs/2026-05-29-bump-arena-risk-census.md` (the census); Pete 2026-05-29 (accepted) | **NOT building it.** The risk-census (PR #84) found no fixed section-D array is a real overrun time-bomb — all SAFE today, only 3 go at-risk at a full ~5× kernel and are trivially bumpable in place. Pete confirmed YAGNI. The genuinely tight ceiling is elsewhere — the IN/OUT paged byte buffers (next row), fixed by claiming free pages, not an allocator. **Revisit trigger** (census §4): a measured at-risk overrun, or the symbol table heading toward ~2× its 512 cap. |
 | IN/OUT paged-buffer ceiling (claim more SAM pages) | 🧭 | `docs/specs/2026-05-29-bump-arena-risk-census.md` §IN/OUT | The real near-term constraint surfaced by the bump-arena census: the **IN `.tbn` buffer is at 92% of its 96 KB / 6-page cap today** (88,644 B; fail tag `03`), OUT at 68% of 32 KB (fail tag `b0`). Physical pages 15..31 (~272 KB) are free, so the fix is a bounds bump (more pages), not an allocator. Not urgent (release fits), but the closest ceiling — do before a substantially larger source lands. Pairs with the compact-`.tbn` strand. |
 | Codegen sysreg / mnemonic / form tables from Go authority | 📋 | M6-closure plan §M7 sketch (PR-A), `tools/sam-aarch64-format/sysregs.go` | Kills hand-sync drift. Depends on M6 PR-2's page-13 binary build glue. |
-| On-SAM disassembler (strand B) — Go side | ⏳ **ACTIVE** | `docs/plans/2026-05-28-go-aarch64-disassembler.md`; parked branch `strand-b-1-disassembler` (Tasks 1–4: skeleton + slot decoders + branch/PC-rel + logical/bitfield + CLI; ~1141 LOC, 145 commits behind main) | **Now the active strand (Pete 2026-05-29 reorder — see decision below).** Disassembler-first: it's the prerequisite that makes the compact `.tbn` usable (bytes→text for the editor) and is a clean standalone unit. Resume the parked code, port forward onto current `aarch64enc`, then complete Task 3 (aliases), Task 5 (objdump oracle), and the **3-translation round-trip** test (`source→assemble→v1→disassemble→canonical→assemble→v2`, assert `v1==v2`) + alias-vs-binutils canonical-form tests. Then Z80 port. See `memory/feedback_disassembler_first_decouple`. |
+| On-SAM disassembler (strand B) — Go side | ✅ **Go side DONE — PR #93 (open, awaiting Pete's review)** | `docs/plans/2026-05-28-go-aarch64-disassembler.md`; `tools/aarch64dec/` | **The Go disassembler is complete and green.** Resumed the parked `strand-b-1-disassembler` (built clean against current `aarch64enc`), then drove a TDD objdump oracle 44.6% → **100.00% exact match** on a code-only build of the spectrum4 release: load/store decoders, UDF, shifted/extended-reg + tbz/tbnz + barriers + mrs/msr/dc/tlbi, full alias canonicalisation (mov/cmp/lsr/bfi/… match binutils), plus never-mis-decode hardening (declines atomics/reserved/invalid-imm — full-`release.img` mis-decodes driven to 0). **Oracle design (Pete's at-source insight):** the `disasm` CI gate strips ALL data from `release.s` (data directives + `ldr =imm` literal pools), GNU-reassembles a pure-instruction binary, and asserts aarch64dec == objdump line-for-line. **Remaining strand work (separate PRs):** (1) the byte-level 3-translation round-trip (`source→assemble v1→disassemble→reassemble→v2`, assert `v1==v2`) — plan PR-2; (2) **Z80 port** of the disassembler. See `memory/feedback_disassembler_first_decouple`, `memory/feedback_fix_at_source_momentum`. |
 | Source compression / compact `.tbn` | 📋 (sequenced **after** the disassembler) | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` § "2026-05-29 refinement"; Pete 2026-05-29 | **Design done; build deferred until the disassembler lands (Pete 2026-05-29 reorder).** The disassembler is the prerequisite — a compact `.tbn` that stores assembled bytes is write-only to the editor without bytes→text. Design (kept as the eventual target): hybrid format adds **`KindLitInsts = 0x07`** (a *run* of consecutive fully-literal instructions stored as assembled bytes); compaction lives in **`refenc`** (sole encoder authority) as a `.tbn`→`.tbn` transform; the m6-release 3-way gate verifies. Increment plan in the spec. Open-Q6 (defaults chosen). |
 | Editor groundwork (Phase 2) | 🧭 | `docs/ROADMAP.md` "Editor vision" section | Instruction-explanation panel, register simulator, sysreg docs, did-you-mean. Not yet spec'd. |
 | Repo-cleanup / README housekeeping track | ⏳ | `docs/notes/2026-05-29-repo-audit.md` §6 (prioritised plan) | Track underway. **Landed: PR #78** (dead Go symbols + orphan stub removed), **PR #80** (`tools/` + `src/README.md` index READMEs). Remaining: deep reviews of `main_loop.asm` (#11) / `litpool.asm` (#12), and the `SYMTAB_*` `equ` sentinels (#8). Does NOT block other M7 work. |
@@ -110,6 +110,30 @@ once resolved.
    binutils `objdump`. Captured in `memory/feedback_disassembler_first_decouple`.
    The compact-`.tbn` design (open-Q6 + spec refinement) stays as the
    eventual target.
+8. **Disassembler follow-ups (await Pete; defaults noted).** Surfaced while
+   landing PR #93 (Go disassembler, green, open for review):
+   (a) **Merge PR #93?** — awaiting your review (left open deliberately: it's
+   a substantial feature and you'd been hands-on with the strand). CI fully
+   green incl. the new `disasm` exact-match gate + `m6-release` (byte-match
+   undisturbed).
+   (b) **Promote `disasm` to a required status check?** — default: yes, once
+   confirmed stable on `main` (12 → 13 required checks). Held off until #93
+   merges.
+   (c) **Round-trip (plan PR-2) — reassemble via GNU `as` or via our own
+   text2bin→refenc pipeline?** Default: do BOTH — GNU reassembly is the
+   simplest faithful-inverse check; our-pipeline reassembly exercises the
+   whole SAM toolchain end-to-end (stronger, and what the editor will use).
+   Lean: start with our-pipeline, add GNU as a cross-check.
+   (d) **SIMD/SVE/FP/SME + atomic/exclusive decoding** — aarch64dec currently
+   *declines* (`.inst`) on these (spectrum4 emits none; encoder has zero
+   refs). Default: keep declining until a real need appears (bigger kernel,
+   or the editor importing third-party binaries). Folds into the
+   full-ARMv8-A-ISA-footprint research strand.
+9. **Repo hygiene nit (non-blocking):** `go build` in `tools/refenc` /
+   `tools/aarch64dec/cmd/...` drops binaries in-tree (e.g. `tools/refenc/refenc`)
+   not covered by `.gitignore` — easy to commit by accident (removed stray
+   ones this session). Consider a `.gitignore` rule or always building into
+   `build/`.
 
 ### Bump-arena allocator (headline structural item) — ❌ YAGNI (closed 2026-05-29)
 
