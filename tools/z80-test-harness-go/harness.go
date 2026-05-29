@@ -69,9 +69,8 @@ const (
 	numPages = 32
 
 	// Physical page allocations.
-	enctabPage  = 4 // ENCTAB encoder table
-	outBasePage = 5 // first OUT buffer page (page 5 = low zone, page 6 = high)
-	inBasePage  = 7 // first IN .tbn page (up to 6 pages = pages 7..12)
+	enctabPage = 4 // ENCTAB encoder table
+	inBasePage = 7 // first IN .tbn page (up to 6 pages = pages 7..12)
 
 	// ROM size: 32 KB (two 16 KB halves).
 	romSize = 32768
@@ -98,7 +97,6 @@ const (
 
 	// LMPR values.
 	lmprDefault = 0x1F // typical boot LMPR (ROM0 in A, page 0 in B)
-	lmprEnctab  = 0x24 // RAM0 bit + page 4 → section A = ENCTAB
 
 	// HMPR default: assembler code in section C = page 2.
 	hmprDefault = 0x02
@@ -400,19 +398,6 @@ func (h *Hardware) last200PC() []uint16 {
 	return out
 }
 
-// peekPage returns a byte directly from a physical RAM page, bypassing
-// the LMPR/HMPR resolution.  Used by the HSAVE handler to read OUT bytes
-// from pages 5+6 regardless of the current paging state.
-func (h *Hardware) peekPage(page int, offset int) uint8 {
-	return h.ram[page][offset]
-}
-
-// pokePage writes a byte directly to a physical RAM page, bypassing the
-// LMPR/HMPR resolution.  Used to pre-deposit enctab.enc, IN .tbn, etc.
-func (h *Hardware) pokePage(page int, offset int, value uint8) {
-	h.ram[page][offset] = value
-}
-
 // depositInPages copies data into consecutive physical pages starting at
 // inBasePage (page 7).  Up to 6 pages (96 KB) are supported.
 func (h *Hardware) depositInPages(data []byte) {
@@ -696,7 +681,7 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 		case hookHSAVE:
 			// HSAVE: capture OUT bytes from the paged OUT buffer.
 			// The assembler has populated UIFA[31..36]:
-			//   UIFA[31]: start page (= outBasePage = 5)
+			//   UIFA[31]: start page (= 5)
 			//   UIFA[32-33]: section-C source offset (&8000)
 			//   UIFA[34]: pages count (OUT_LEN >> 14)
 			//   UIFA[35-36]: remainder length (OUT_LEN & 0x3FFF)
