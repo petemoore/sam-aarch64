@@ -165,7 +165,7 @@ jobs:
         run: make ci-m2
 
   # sysreg-sync — Go↔Z80 sysreg table sync guard (repo-audit §5 / §6 #9).
-  # Asserts the hand-maintained Z80 table src/m3/sysreg_data.asm agrees
+  # Asserts the hand-maintained Z80 table src/sysreg_data.asm agrees
   # byte-for-byte with the Go authority tools/sam-aarch64-format/sysregs.go
   # for every sysreg/pstate/dc/tlbi entry the Z80 side carries, so the two
   # copies can't silently drift. Pure Go, no container, no binutils —

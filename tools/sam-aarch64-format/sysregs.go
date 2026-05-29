@@ -26,7 +26,7 @@ type SysReg struct {
 // architectural mnemonic. Add new entries here as they appear in the
 // source tree.
 //
-// HAND-SYNCED with the Z80 copy in src/m3/sysreg_data.asm (the page-13
+// HAND-SYNCED with the Z80 copy in src/sysreg_data.asm (the page-13
 // payload the SAM assembler walks at runtime). That file carries a SUBSET
 // of these entries — only the ones the M5/M6 fixtures exercise — but every
 // entry it does carry MUST match the encoding here byte-for-byte. The

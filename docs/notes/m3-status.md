@@ -28,9 +28,9 @@ The M3 scope is **constant-folded operands only** — no symbol table, no forwar
 | 10 | AdrpImm slot encoder | PR #16 |
 | 11 | LogicalImm slot encoder | PR #16 |
 | 12 | BitfieldImm slot encoder (BFI + UBFX) | PR #16 |
-| 16 | `.tbn` stream reader (`src/m3/reader.asm`) | PR #19 |
-| 17 | Form lookup + operand-kind validation (`src/m3/form_lookup.asm`) | PR #19 |
-| 18 | Encoder dispatcher (`src/m3/encoder.asm`) | PR #19 |
+| 16 | `.tbn` stream reader (`src/reader.asm`) | PR #19 |
+| 17 | Form lookup + operand-kind validation (`src/form_lookup.asm`) | PR #19 |
+| 18 | Encoder dispatcher (`src/encoder.asm`) | PR #19 |
 | 19 | Constant-only expression evaluator + 64-bit math (`expr_eval.asm`, `ml.asm`) | PR #19 |
 | 20 | HSAVE to OUT file (in `main_loop.asm::save_out_file`) | PR #19 |
 | 21 | Round-trip driver script (`tools/run-m3-roundtrip.sh`) | PR #19 |

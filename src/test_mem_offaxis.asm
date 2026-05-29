@@ -4,7 +4,7 @@
 ; docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md.
 ;
 ; This file is its own pyz80 entry point — it is NOT included from
-; src/m3/assembler.asm.  The Makefile invokes pyz80 separately on this
+; src/assembler.asm.  The Makefile invokes pyz80 separately on this
 ; file with `--importfile=build/assembler.sym` so that section-C
 ; symbols (e.g. `encode_mem_word`, `assert_eq32_de_hl_imm`,
 ; `OPVAL_ARRAY`) resolve to the addresses they hold in the main
@@ -18,7 +18,7 @@
 ; OPVAL_ARRAY boundary in section D, causing silent code corruption
 ; at boot.  See feedback_test_variant_fragility.md.
 ;
-; Mechanism at boot (in src/m3/assembler.asm and src/m3/loader.asm):
+; Mechanism at boot (in src/assembler.asm and src/loader.asm):
 ;   1.  enctab_trampoline_setup installs the HLOAD trampoline.
 ;   2.  load_test_mem_off_axis HLOADs this binary into page 13 at
 ;       section-C offset &8000.  When section A is mapped to page 13

@@ -21,13 +21,13 @@ files that don't fit in section C's 2 KB window.
    already does internally.
 
 2. **The READ-IN trampoline's HOWTO comment block was over-engineered
-   on this point.**  Lines 131-136 of `src/m3/trampoline.asm`
+   on this point.**  Lines 131-136 of `src/trampoline.asm`
    describe "**HSAVE (hook 132) trampoline.** Mirror
    `trampoline_hload` but with `defb 132` instead of `defb
    HOOK_HLOAD`."  That mirror is not needed.  The HSAVE-side change
    is simply to populate UIFA byte 31 with the **OUT-buffer's
    physical page** (rather than the current HMPR's low 5 bits, as
-   `save_out_file` does today at `src/m3/main_loop.asm:2082-2084`)
+   `save_out_file` does today at `src/main_loop.asm:2082-2084`)
    and call `RST 8 / DEFB 132`.  No trampoline at the call site.
 
 3. **COMET does NOT have a save-side counterpart.**  COMET hands its
@@ -61,9 +61,9 @@ files that don't fit in section C's 2 KB window.
 ## Background
 
 The SAM-side Z80 assembler currently lives in section C (`&8000-&AFFF`)
-with a 2 KB output buffer at `OUT_BUF = &B800` (`src/m3/assembler.asm:33`).
+with a 2 KB output buffer at `OUT_BUF = &B800` (`src/assembler.asm:33`).
 Pass 2 emits bytes into `OUT_BUF`, then `save_out_file`
-(`src/m3/main_loop.asm:2079-2093`) populates UIFA byte 31 from the
+(`src/main_loop.asm:2079-2093`) populates UIFA byte 31 from the
 current HMPR's low 5 bits — i.e. the same physical page where the
 assembler is running — and calls `RST 8 / DEFB 132` (HSAVE).
 
@@ -77,7 +77,7 @@ have in section C above the assembler code.  M6 needs to:
   Tech Manual page allocation table, contiguous to page 6 if we
   ever need a second OUT page);
 - write to that page during pass-2 emit via an LMPR swap (mirror of
-  the ENCTAB read pattern in `src/m3/trampoline.asm:96-117`);
+  the ENCTAB read pattern in `src/trampoline.asm:96-117`);
 - at end of pass 2, call HSAVE with UIFA byte 31 set to the OUT
   page so SAMDOS reads through section C from the right physical
   page.
@@ -195,7 +195,7 @@ NOT touch HMPR.  So if the caller wants HLOAD to write to a
 physical page other than the one currently mapped in section C,
 the caller must arrange that mapping itself.
 
-That's why the HLOAD trampoline at `src/m3/trampoline.asm:308-331`
+That's why the HLOAD trampoline at `src/trampoline.asm:308-331`
 exists: to do the HMPR change around the RST 8 from a location
 (section B) that's unaffected by the HMPR change.
 
@@ -234,7 +234,7 @@ restore (`rom:12970-12975`):
 | BC | No — `b.s:443-446` saves caller BC to `hkbc` but does not restore | observed |
 | DE | No — same, saved to `hkde` not restored | observed |
 | HL | No — saved to `hkhl` not restored | observed |
-| IX | **NOT preserved** — `b.s:440` saves caller IX to `svhdr`, but `rfhk` (`b.s:475-479`) does not restore it.  After HSAVE returns, IX = `dchan` (set by `gtixd` inside HSAVE).  See `src/m3/trampoline.asm:65-71`. | `b.s:440`, `b.s:475-479`; `c.s:1513` (gtixd sets `IX = dchan`) |
+| IX | **NOT preserved** — `b.s:440` saves caller IX to `svhdr`, but `rfhk` (`b.s:475-479`) does not restore it.  After HSAVE returns, IX = `dchan` (set by `gtixd` inside HSAVE).  See `src/trampoline.asm:65-71`. | `b.s:440`, `b.s:475-479`; `c.s:1513` (gtixd sets `IX = dchan`) |
 | IY | Preserved (not touched by dispatcher; we don't depend on this and the READ-IN trampoline doc warns against it).  Callers that care should save/restore IY around the RST 8. | observed |
 | SP | Preserved (PTDOS saves/restores) | `rom:12950-12951, 12970-12975` |
 | LMPR | Preserved (PTDOS saves/restores via `IN B,(C); OUT (C),B`) | `rom:12949, 12973` |
@@ -256,7 +256,7 @@ out of scope here.
 
 ## Pre-built code snippet
 
-Drop this into `src/m3/main_loop.asm` (or `src/m6/save.asm` if we
+Drop this into `src/main_loop.asm` (or `src/m6/save.asm` if we
 spin out a new module) when the M6 impl PR lands.  It replaces the
 existing `save_out_file` at `main_loop.asm:2079-2093`.
 
@@ -335,7 +335,7 @@ save_out_file_paged:
 ;                                 (e.g. 5, picked from Tech Manual's
 ;                                 "free pages 4..12" range; ENCTAB
 ;                                 already uses page 4 per
-;                                 src/m3/trampoline.asm:210).
+;                                 src/trampoline.asm:210).
 ;   OUT_LEN    defw 0           ; impl PR: 16-bit length is the M6
 ;                                 ceiling; >64 KB would need a wider
 ;                                 counter, but spectrum4 release.bin
@@ -405,7 +405,7 @@ These belong in a separate impl-design note, not here:
    that page during emit — via LMPR swap (mirror of ENCTAB's
    read pattern) or some other mechanism.  This is the "runtime
    read/write via section A" question the trampoline HOWTO comment
-   raises (`src/m3/trampoline.asm:138-158`).
+   raises (`src/trampoline.asm:138-158`).
 
 2. **Three-buffer paging.**  Pass 2 reads IN, reads ENCTAB, writes
    OUT.  Only one page can be LMPR-mapped into section A at a time.
@@ -436,12 +436,12 @@ These belong in a separate impl-design note, not here:
 - `docs/notes/sam-stub-audit.md` — SAMDOS hook semantics audit.
   HSAVE's calling convention and the broken HOFLE/SBYT/CFSM path
   documented in §"TL;DR — concrete bug list".
-- `src/m3/trampoline.asm` — the READ-IN trampoline + LMPR-swap
+- `src/trampoline.asm` — the READ-IN trampoline + LMPR-swap
   machinery.  The "HOW TO EXTEND THIS PATTERN FOR IN AND OUT
   BUFFERS" comment block (lines 119-181) anticipated this note;
   with the present findings, the IN-side answer for that block is
   "extend the existing trampoline" but the OUT-side answer is
   simpler: "no trampoline, just call HSAVE with UIFA[31] set
   correctly."
-- `src/m3/main_loop.asm:2079-2093` — the current single-page
+- `src/main_loop.asm:2079-2093` — the current single-page
   `save_out_file` to be replaced.

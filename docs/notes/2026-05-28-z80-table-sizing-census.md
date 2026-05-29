@@ -38,23 +38,23 @@ quoted from the source.
 
 | Structure | Peak observed | Z80 limit | Z80 source | Status |
 |---|---|---|---|---|
-| Symbol table — total entries | **474** | 256 primary + 128 overflow = 384 | `src/m3/symbols.asm:64-66` | **UNDERSIZED** (~90 short) |
-| Symbol name length (max) | 39 B | n/a (Z80 doesn't store names; hashes on `symbol_id mod 256`) | `src/m3/symbols.asm:8` | n/a |
-| Local labels — total | 172 | LOCAL_LIST_MAX = 180 | `src/m3/local_labels.asm:67` | tight (8 slack) |
-| Local labels — distinct digits seen | 15 | LOCAL_MAX_DIGIT = 99 | `src/m3/local_labels.asm:71` | OK |
+| Symbol table — total entries | **474** | 256 primary + 128 overflow = 384 | `src/symbols.asm:64-66` | **UNDERSIZED** (~90 short) |
+| Symbol name length (max) | 39 B | n/a (Z80 doesn't store names; hashes on `symbol_id mod 256`) | `src/symbols.asm:8` | n/a |
+| Local labels — total | 172 | LOCAL_LIST_MAX = 180 | `src/local_labels.asm:67` | tight (8 slack) |
+| Local labels — distinct digits seen | 15 | LOCAL_MAX_DIGIT = 99 | `src/local_labels.asm:71` | OK |
 | Local labels — peak per digit | 60 (digit `1`) | shared list (no per-digit cap) | — | OK |
-| Litpool — active pool slots / flush | 30 | LITPOOL_MAX = 32 | `src/m3/litpool.asm:55` | tight (2 slack) |
-| Litpool — active PC-map / flush | **44** | LITPOOL_MAX = 32 (PC_MAP shares the cap) | `src/m3/litpool.asm:55,60` | **UNDERSIZED** (12 short) |
+| Litpool — active pool slots / flush | 30 | LITPOOL_MAX = 32 | `src/litpool.asm:55` | tight (2 slack) |
+| Litpool — active PC-map / flush | **44** | LITPOOL_MAX = 32 (PC_MAP shares the cap) | `src/litpool.asm:55,60` | **UNDERSIZED** (12 short) |
 | Litpool — explicit `.ltorg` flushes | 1 | unbounded | — | OK |
-| Litpool — total expr bytes | 210 B | LITPOOL_EXPR_BUF = 2048 B | `src/m3/assembler.asm:62-63` | OK (10% used) |
-| Expression evaluator — peak stack depth | 3 | EXPR_STACK_DEPTH = 8 | `src/m3/expr_eval.asm:76` | OK (38% used) |
+| Litpool — total expr bytes | 210 B | LITPOOL_EXPR_BUF = 2048 B | `src/assembler.asm:62-63` | OK (10% used) |
+| Expression evaluator — peak stack depth | 3 | EXPR_STACK_DEPTH = 8 | `src/expr_eval.asm:76` | OK (38% used) |
 | Expression evaluator — longest single bytecode | 24 B | (streamed; no buffer cap) | — | n/a |
-| OPVAL — peak operands per INST record | 4 | 7 | `src/m3/assembler.asm:65` | OK (57% used) |
-| OPVAL — peak operand bytes per INST record | 29 B | 70 B (7×10) | `src/m3/assembler.asm:65` | OK |
+| OPVAL — peak operands per INST record | 4 | 7 | `src/assembler.asm:65` | OK (57% used) |
+| OPVAL — peak operand bytes per INST record | 29 B | 70 B (7×10) | `src/assembler.asm:65` | OK |
 | OPVAL — peak operands per DIRECTIVE record | 16 | n/a (directives stream one operand at a time; `main_handle_directive` in `main_loop.asm`) | — | n/a |
-| STAGING_BUF — peak operand-payload bytes | 94 B | 1024 B | `src/m3/assembler.asm:60-61` | OK (9% used) |
+| STAGING_BUF — peak operand-payload bytes | 94 B | 1024 B | `src/assembler.asm:60-61` | OK (9% used) |
 | Record-stream total | 13,072 (3318 Inst + 282 LabelDef + 172 LocalDef + 2288 Directive + 7012 Comment) | streamed; no buffer | — | OK |
-| OUT bytes emitted | 21,752 | OUT buffer = 32 KB (post-PR #25, page 5 only) | `src/m3/assembler.asm:31-32` | OK |
+| OUT bytes emitted | 21,752 | OUT buffer = 32 KB (post-PR #25, page 5 only) | `src/assembler.asm:31-32` | OK |
 
 (The 86 KB hung input would only stress structures that scale with
 *input* — primarily symbol/label/litpool counts, not OUT bytes or
@@ -70,7 +70,7 @@ operand width. The candidates above are the right places to look.)
   - (Total observed via observeSymbolAdd: 475 unique inserts; one
     duplicate landed pre-existing.)
 - **Name-length distribution:** max=39, mean≈11.9, median=10.
-- **Z80 layout** (`src/m3/symbols.asm:64-66`):
+- **Z80 layout** (`src/symbols.asm:64-66`):
   - SYMTAB: 256 buckets × 8 bytes = 2 KB at `&C160..&C95F`.
   - SYMTAB_OVERFLOW: 128 entries × 8 bytes = 1 KB at `&C960..&CD5F`.
   - Max symbols storable = 256 + 128 = 384.
@@ -94,7 +94,7 @@ operand width. The candidates above are the right places to look.)
 - **Per-digit peak:** digit 1 = 60, digit 2 = 40, digit 3 = 23, digit
   4 = 12, digit 5 = 8, digit 6 = 6, digits 7..15 = 1..6 each.
 - **Z80 cap:** LOCAL_LIST_MAX = 180 (post-PR #35), at
-  `src/m3/local_labels.asm:67`.
+  `src/local_labels.asm:67`.
 - **Recommendation:** bump LOCAL_LIST_MAX to **256** entries
   (5 B each = 1282 bytes total). PR #35 already addressed this once;
   release.tbn's 172 is uncomfortably close. The table currently runs
@@ -108,7 +108,7 @@ operand width. The candidates above are the right places to look.)
 - **Peak active pool slots between flushes: 30.**
   - (44 ldr sites referencing 30 distinct slots — dedupe saves 14.)
 - **`.ltorg` flushes in input: 1.**
-- **Z80 cap:** LITPOOL_MAX = 32 (`src/m3/litpool.asm:55`); this is
+- **Z80 cap:** LITPOOL_MAX = 32 (`src/litpool.asm:55`); this is
   the cap for BOTH LITPOOL_TABLE *and* LITPOOL_PC_MAP, since the
   Z80-side `litpool_register_ldr` (called per ldr site) range-checks
   against LITPOOL_MAX before writing into LITPOOL_PC_MAP.
@@ -126,7 +126,7 @@ operand width. The candidates above are the right places to look.)
 - **Total litpool-expr bytes: 210 B.**
 - **Peak single bytecode: 13 B.**
 - **Z80 cap:** LITPOOL_EXPR_BUF = 2048 B (post-PR #37,
-  `src/m3/assembler.asm:62-63`).
+  `src/assembler.asm:62-63`).
 - **Headroom: 10× used → 90% spare.** No change needed.
 
 ### 5. Expression evaluator stack — comfortable headroom
@@ -134,7 +134,7 @@ operand width. The candidates above are the right places to look.)
 - **Peak stack depth: 3** (lots of compound expressions but they
   collapse fast via binary ops).
 - **Peak single-bytecode length: 24 B.**
-- **Z80 cap:** EXPR_STACK_DEPTH = 8 (`src/m3/expr_eval.asm:76`).
+- **Z80 cap:** EXPR_STACK_DEPTH = 8 (`src/expr_eval.asm:76`).
 - **Headroom:** 5 slack slots / 38% used. No change needed.
 
 ### 6. OPVAL — comfortable headroom for instruction records

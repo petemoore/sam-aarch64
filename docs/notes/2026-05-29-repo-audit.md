@@ -38,8 +38,8 @@ where the purpose is non-obvious from the contents.
 | `/` (root) | Project entry; build via `make` / `scripts/` | yes | yes (have) |
 | `.github/workflows/` | `ci.yml` — Docker image build + SimCoupé fixture matrix (the CI gate) | no | low (single file, well-commented) |
 | `src/` | Z80 sources: M3 assembler (`m3/`) + M0 boot stubs (`stub*.asm`, `sam_io.inc`) | no | **med** — clarify stub-vs-assembler split |
-| `src/m3/` | The SAM-side Z80 aarch64 assembler (production + BUILD_TESTS self-tests + off-axis payloads) | no | **HIGH** — 40 files, prod/test/payload mix is the single most confusing dir for a newcomer |
-| `src/m3/slots/` | Per-instruction-class operand-slot encoders (one file per encoding family) | no | low (consistent headers) |
+| `src/` | The SAM-side Z80 aarch64 assembler (production + BUILD_TESTS self-tests + off-axis payloads) | no | **HIGH** — 40 files, prod/test/payload mix is the single most confusing dir for a newcomer |
+| `src/slots/` | Per-instruction-class operand-slot encoders (one file per encoding family) | no | low (consistent headers) |
 | `tests/m{1,3,4,5,6,spectrum4}/` | Per-milestone fixture corpora (`sources/`, `golden/`) | no | low |
 | `tests/fixtures/` | Shared fixtures (`nop.s`) | no | low |
 | `docs/` | Roadmap + notes + plans + specs + vendored reference PDFs | no | low (ROADMAP.md is the entry) |
@@ -64,7 +64,7 @@ where the purpose is non-obvious from the contents.
 
 **Prioritised README list (high value first):**
 1. `tools/` top-level index README — one table mapping each tool/script to: live-toolchain / dev-tool / spike / superseded, and which `make` target (if any) builds it. Highest newcomer value.
-2. `src/m3/` README — explain the production-vs-`BUILD_TESTS`-vs-off-axis-payload file taxonomy and the `assembler.asm` include order. This dir's structure is genuinely non-obvious.
+2. `src/` README — explain the production-vs-`BUILD_TESTS`-vs-off-axis-payload file taxonomy and the `assembler.asm` include order. This dir's structure is genuinely non-obvious.
 3. `src/` README (short) — stub-vs-assembler split.
 4. `docs/notes/` README/index — live-vs-archived triage pointer (lower value; the memory index partly covers this).
 5. `reference/arm-mra/` one-liner on ARM MRA provenance.
@@ -103,7 +103,7 @@ The brief's flagged examples (`outBasePage`, `lmprEnctab`, `peekPage`, `pokePage
 
 ### Z80 (grep-confirmed defined-but-unreferenced labels)
 
-Whole-`src/m3/`-tree reference count == 1 (definition only):
+Whole-`src/`-tree reference count == 1 (definition only):
 
 | Label | Location | Kind | Status | Note |
 |---|---|---|---|---|
@@ -212,7 +212,7 @@ audit is proposed.**
 
 One drift risk worth recording (single concrete instance, not a campaign):
 
-- **Sysreg/sysname tables are hand-maintained on both sides.** `src/m3/sysreg_data.asm:214`
+- **Sysreg/sysname tables are hand-maintained on both sides.** `src/sysreg_data.asm:214`
   and `:256` explicitly state the Z80 table entries were "verified vs
   `tools/sam-aarch64-format/sysregs.go`". Two independently hand-edited tables that must
   agree (MRS/MSR/DC/TLBI op0/op1/CRn/CRm/op2 encodings) is a real maintenance hazard: adding
@@ -230,7 +230,7 @@ One drift risk worth recording (single concrete instance, not a campaign):
 | 1 | Remove confirmed dead Go symbols in `z80-test-harness-go` (`peekPage`, `pokePage`, `outBasePage`, `lmprEnctab`) | med | low | S | immediate small PR |
 | 2 | Remove `directiveSize` (refenc) + SA4006 dead store (aarch64enc `:80`) + S1030 cosmetic | low | low | S | immediate small PR (bundle with #1) |
 | 3 | Add `tools/` top-level index README (live / dev / spike / superseded + make target) | high | low | M | immediate small PR |
-| 4 | Add `src/m3/` README (prod/test/off-axis taxonomy + include order) | high | low | S | immediate small PR |
+| 4 | Add `src/` README (prod/test/off-axis taxonomy + include order) | high | low | S | immediate small PR |
 | 5 | Archive `2026-05-28-session-handoff.md` → `docs/notes/archive/` | med | low | S | immediate small PR (bundle with #6) |
 | 6 | Archive-or-delete the LLIST cluster (`llist-*` tool dirs + `llist-*.sh`) after confirming spike findings are captured | med | low* | M | small PR (needs one Pete confirm) |
 | 7 | Delete orphan `src/stub-border-test.asm` | low | low | S | immediate small PR |
@@ -250,7 +250,7 @@ llist scripts.
 1. **PR: remove confirmed dead Go symbols** — items #1, #2, #7 (harness consts/methods,
    `directiveSize`, SA4006/S1030, orphan stub). Pure deletions, tool-verified, zero risk.
    Re-run `make ci` + `staticcheck -checks U1000` as the gate.
-2. **PR: add `tools/` and `src/m3/` index READMEs** — items #3, #4. Highest newcomer/agent
+2. **PR: add `tools/` and `src/` index READMEs** — items #3, #4. Highest newcomer/agent
    value; no code touched.
 3. **PR: archive superseded docs + LLIST cluster** — items #5, #6 (one Pete confirm on #6).
 4. **(M7) PR: deep review of `main_loop.asm`** — item #11, scheduled, with the audit's
@@ -269,7 +269,7 @@ edit those files have merged, to avoid conflicts.
 
 ## Headline counts
 
-- Directories without a README: **~30 significant dirs; only 3 have one.** High-value gaps: **2** (`tools/`, `src/m3/`); med-value: ~4.
+- Directories without a README: **~30 significant dirs; only 3 have one.** High-value gaps: **2** (`tools/`, `src/`); med-value: ~4.
 - Dead-code candidates: **9 Go symbols confirmed dead** (+2 minor quality findings), **1 orphan Z80 file confirmed**, **5 Z80 labels flagged verify** (3 `equ` sentinels + 2 fall-through names).
 - Stale/superseded docs: **1 confirmed superseded handoff to archive**, **1 superseded tool cluster (LLIST)**, **1 stale-but-leave-to-M6 status header** (`m6-status.md`). The split-bracket doc cleanup was already done (PR #58) — not a finding.
 - Go↔Z80 drift risks: **1 concrete** (hand-synced sysreg tables).

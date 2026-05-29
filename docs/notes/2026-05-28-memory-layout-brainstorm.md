@@ -7,7 +7,7 @@
 Z80 sees 64 KB in four 16 KB sections A/B/C/D, backed by 32 physical pages. Paging is one `out (port), a` per swap. Two cost vectors:
 
 1. **Bracket T-states** — the in/out/work/restore bracket dominates inner loops. High-zone OUT emit measures ~60 T-states/byte (`m6-status.md:39-43`), almost all of which is bracket overhead around a 4-T-state store.
-2. **Code budget** — paging while running code needs a section-stable trampoline (`trampoline.asm:270,:297-305`). Each new bracketed call site eats into section C's code area. Production code today: 12 204 B used inside `&8000-&AFFF` (84 B headroom inside that block). **Effective ceiling is `&C000` = 16 384 B**, because `&B000-&BFFF` is reserved as additional code headroom (per `src/m3/assembler.asm:17`) — so ~4 180 B is actually available for code expansion. Editor + assembler need a structural plan if they're both to live in section C; the "84 B" framing made that look impossible when in fact it's tight-but-tractable. Bracket-site cost still applies the same way regardless of which kilobyte the call site lives in.
+2. **Code budget** — paging while running code needs a section-stable trampoline (`trampoline.asm:270,:297-305`). Each new bracketed call site eats into section C's code area. Production code today: 12 204 B used inside `&8000-&AFFF` (84 B headroom inside that block). **Effective ceiling is `&C000` = 16 384 B**, because `&B000-&BFFF` is reserved as additional code headroom (per `src/assembler.asm:17`) — so ~4 180 B is actually available for code expansion. Editor + assembler need a structural plan if they're both to live in section C; the "84 B" framing made that look impossible when in fact it's tight-but-tractable. Bracket-site cost still applies the same way regardless of which kilobyte the call site lives in.
 
 "Minimise swaps" for inner loops; "minimise bracket call sites" for code budget.
 
@@ -139,7 +139,7 @@ Small in code (a few constants + two bracket helpers); large conceptually — ev
 - `docs/ROADMAP.md` §Editor vision; `docs/specs/2026-05-09-vision.md`; `docs/specs/2026-05-09-phase1-assembler.md`
 - `docs/specs/2026-05-27-phase3-tftp-direct-lan-design.md`; `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`
 - `docs/notes/m6-status.md`; `docs/notes/2026-05-28-z80-table-sizing-census.md`
-- `src/m3/assembler.asm` (memory map block, lines 1-50); `src/m3/trampoline.asm` (page constants + ALLOCT survey)
+- `src/assembler.asm` (memory map block, lines 1-50); `src/trampoline.asm` (page constants + ALLOCT survey)
 - `tools/sam-aarch64-format/sysregs.go` (39 sysreg entries); `tools/aarch64enc/manual_forms.go`; `build/enctab.enc` (3 399 B measured)
 - `~/git/trinload/trinload.bin` (3 334 B measured); `reference/comet-decoded/comet.asm` (4 903 lines, editor sizing reference)
 - Memory entries: `m6_strand_a_complete.md`, `feedback_correctness_over_workarounds.md`, `feedback_sam_editor_keyboard_driven.md`, `future_roadmap.md`

@@ -1,6 +1,6 @@
 # Z80 assembler bounds-check audit (2026-05-28)
 
-Audit of every fixed-size data structure in `src/m3/` to ensure overflow
+Audit of every fixed-size data structure in `src/` to ensure overflow
 fails cleanly via the `fail` printer-channel banner instead of silently
 corrupting downstream state. Motivated by the hang observed feeding the
 86 KB stripped release `.tbn` to the assembler.
@@ -66,7 +66,7 @@ corrupting downstream state. Motivated by the hang observed feeding the
 
 Three guards, ~5 B each. Well within the 12200 B watch threshold.
 
-> **Postscript 2026-05-28**: as of post-PR-#41 main, production code is **12 204 B** — additional ~119 B accumulated since this audit. Headroom inside `&8000-&AFFF` is **84 B**. *But* the effective code ceiling is `&C000` = 16 384 B because `&B000-&BFFF` is reserved as additional code headroom (`src/m3/assembler.asm:17`), so ~4 180 B is actually available for code expansion when a structural change is worth jumping the `&AFFF` block boundary.
+> **Postscript 2026-05-28**: as of post-PR-#41 main, production code is **12 204 B** — additional ~119 B accumulated since this audit. Headroom inside `&8000-&AFFF` is **84 B**. *But* the effective code ceiling is `&C000` = 16 384 B because `&B000-&BFFF` is reserved as additional code headroom (`src/assembler.asm:17`), so ~4 180 B is actually available for code expansion when a structural change is worth jumping the `&AFFF` block boundary.
 
 ## CI matrix result
 
@@ -134,7 +134,7 @@ string>"` could exceed 1 KB), it's a strong candidate for the
 > empirically wrong on the actual 86 KB stripped-release fixture.
 > Once the fixture became available, the FAIL00 investigation
 > bisected to a different root cause entirely: the static
-> `sysreg_table` in `src/m3/sysname.asm:846` is missing 8 sysregs
+> `sysreg_table` in `src/sysname.asm:846` is missing 8 sysregs
 > spectrum4 uses (`hcr_el2`, `mair_el1`, `scr_el3`, `spsr_el3`,
 > `tcr_el1`, `ttbr0_el1`, `ttbr1_el1`, `vbar_el1`).  Falling through
 > to the generic `Sn_op1_Cn_Cm_op2` parser triggered its first

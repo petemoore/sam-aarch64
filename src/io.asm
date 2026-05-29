@@ -5,4 +5,4 @@
 ; Per docs/notes/sam-stub-audit.md and src/sam_io.inc.
 ; Include this from the top-level assembler.asm, not directly.
 
-        include "../sam_io.inc"
+        include "sam_io.inc"

@@ -1,5 +1,5 @@
 ; test_extended_reg.asm — minimal Layer-1 self-test for the
-; OpExtendedReg encoder (src/m3/slots/extended_reg.asm).
+; OpExtendedReg encoder (src/slots/extended_reg.asm).
 ;
 ; Mirrors tools/refenc/pass2.go:1131-1179 (encodeExtendedRegInst).
 ;

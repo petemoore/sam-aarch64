@@ -78,7 +78,7 @@ required.
 
 ## Intercepts review
 
-The only mnemonic intercept currently in `src/m3/intercepts.asm` that
+The only mnemonic intercept currently in `src/intercepts.asm` that
 affects a spectrum4-used mnemonic is `ror`-imm (PR #30, M5 PR-B). The
 intercept fires only when operand 2 is `OpImmExpr`; register-form
 `ror` falls through to the normal Form-table path (RORV alias of EXTR).

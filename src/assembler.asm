@@ -36,7 +36,7 @@
 ;    added 2026-05-29 — see their equ definitions below.)
 ;
 ;   Physical page 4 (off-axis): ENCTAB body — paged into section A on
-;     demand for encoder runtime reads.  See `src/m3/trampoline.asm`.
+;     demand for encoder runtime reads.  See `src/trampoline.asm`.
 ;   Physical pages 5..6 (off-axis): OUT buffer — page 5 reached via
 ;     section B with LMPR_ENCTAB for free (low zone, bytes 0..16383);
 ;     page 6 reached via LMPR=LMPR_OUT_HIGH bracket per emit
@@ -162,7 +162,7 @@ SYMTAB_ABS_BITMAP: equ  &C964          ; 64 bytes — per-id absolute flag
 ; Rt1, Rt2, [mem] for ldp/stp) so a single 8-byte slot suffices.
 OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
 
-; M5 PR-E scratch: literal-pool data structures (see src/m3/litpool.asm).
+; M5 PR-E scratch: literal-pool data structures (see src/litpool.asm).
 ;   &D200..&D3BF  LITPOOL_TABLE       (32 slots × 14 bytes = 448 B)
 ;   &D3C0         LITPOOL_COUNT       (1 byte)
 ;   &D3C1         LITPOOL_PCM_COUNT   (1 byte)
@@ -233,7 +233,7 @@ start:
 ; section-D RAM (&F019) and defaults to "armed only by the MOV-bitmask
 ; path" — but RAM is not zero on cold boot, so force it clear here.  When
 ; clear, encode_logical_imm_reject `jp fail`s as before for the normal
-; and/orr-immediate slot path.  See src/m3/slots/logical_imm.asm.
+; and/orr-immediate slot path.  See src/slots/logical_imm.asm.
                 xor     a
                 ld      (encode_logical_imm_soft), a
 
@@ -279,7 +279,7 @@ endif
                 call    enctab_trampoline_setup
 
 ; -- BUILD_TESTS only: HLOAD the off-axis test_mem.bin into page 13.
-; The Mac-side build pipeline assembles src/m3/test_mem_offaxis.asm
+; The Mac-side build pipeline assembles src/test_mem_offaxis.asm
 ; against the main-binary symbol export, producing a small standalone
 ; binary that lives at section-A &0000-onward when LMPR = LMPR_TEST_MEM.
 ; The actual run_mem_self_tests invocation below swaps LMPR briefly,
@@ -350,7 +350,7 @@ if defined(BUILD_TESTS)
 ; fail) resolve to their section-C/D addresses.  Verified by call-graph
 ; analysis that none of those routines reach paged_call / the section-B
 ; trampoline, which the LMPR swap would relocate.  Stack (section D,
-; HMPR) unaffected.  See src/m3/test_offaxis_cluster.asm for the full
+; HMPR) unaffected.  See src/test_offaxis_cluster.asm for the full
 ; safety argument.  Must run AFTER the inline symbol/local-label suites
 ; above (pc_rel re-uses the local-label table they leave initialised).
                 ld      a, LMPR_TEST_CLUSTER
@@ -556,7 +556,7 @@ if defined(BUILD_TESTS)
                 ; and HLOADed at boot via load_offaxis_cluster.  Relocated
                 ; in the M6 budget-relief PR (2026-05-29) to drop the test
                 ; variant back below &C000.  See
-                ; src/m3/test_offaxis_cluster.asm and
+                ; src/test_offaxis_cluster.asm and
                 ; docs/notes/2026-05-29-test-variant-budget-relief.md.
                 ;
                 ; test_mem.asm likewise lives off-axis (physical page 13);

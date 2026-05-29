@@ -289,7 +289,7 @@ LMPR_TEST_MEM:  equ     &20 + TEST_MEM_PAGE         ; = &2D
 
 
 ; Off-axis "M5 + misc encoder" cluster page (BUILD_TESTS only — M6
-; budget-relief PR, 2026-05-29; see src/m3/test_offaxis_cluster.asm).
+; budget-relief PR, 2026-05-29; see src/test_offaxis_cluster.asm).
 ;
 ; Holds the relocated pc_rel / directives_m5 / ror_imm / shifted_reg /
 ; extended_reg / litpool self-test suites (1225 B), HLOADed at boot and
@@ -337,8 +337,8 @@ PAGED_CALL_TEST_PAGE:   equ     14
 ; matcher runs under HMPR=13 (reached via paged_call) and is fully
 ; self-contained — it reads the operand name from / writes the matched
 ; fields to the section-B comm buffer below, never touching section
-; C/D (which are paged away under HMPR=13).  See src/m3/sysreg_data.asm
-; and src/m3/sysname.asm headers for the split-design rationale.
+; C/D (which are paged away under HMPR=13).  See src/sysreg_data.asm
+; and src/sysname.asm headers for the split-design rationale.
 ;
 ; Page 13 was previously reused by the BUILD_TESTS-only off-axis
 ; test_mem payload (LMPR_TEST_MEM above).  That use is a transient
@@ -383,7 +383,7 @@ SYSREG_TLBI_ENTRY:      equ     &8018
 ; paged_call's stack usage with a sentinel.
 ;
 ; These addresses are duplicated (and kept in lock-step) in
-; src/m3/sysreg_data.asm, which is assembled standalone and cannot see
+; src/sysreg_data.asm, which is assembled standalone and cannot see
 ; these equ's.
 SYSREG_COMM_NAME:       equ     TRAMPOLINE_DST + &80    ; = &7E80, 16 bytes
 SYSREG_COMM_LEN:        equ     TRAMPOLINE_DST + &90    ; = &7E90, 1 byte
@@ -503,7 +503,7 @@ enctab_trampoline_setup:
                 ld      de, TRAMPOLINE_DST
                 ld      bc, trampoline_body_end - trampoline_body
                 ldir
-                ; paged_call body (source lives in src/m3/paged_bodies.asm,
+                ; paged_call body (source lives in src/paged_bodies.asm,
                 ; included at the END of assembler.asm — see
                 ; paged_bodies.asm header for the source-position note).
                 ld      hl, paged_call_body

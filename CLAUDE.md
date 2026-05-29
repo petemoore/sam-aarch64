@@ -36,7 +36,7 @@ See also: `feedback_merge_commits` memory entry; `docs/notes/2026-05-28-test-var
 
 ## Development inner loop for Z80 changes
 
-When iterating on SAM-side Z80 code (the assembler in `src/m3/`, tests, paging trampoline, etc.), use `tools/z80-test-harness-go/` for fast (~1 ms/fixture) feedback during inner-loop development. See its README for usage. Before pushing, run SimCoupé under Docker locally for a real-hardware confirmation; CI runs the SimCoupé matrix as the gate.
+When iterating on SAM-side Z80 code (the assembler in `src/`, tests, paging trampoline, etc.), use `tools/z80-test-harness-go/` for fast (~1 ms/fixture) feedback during inner-loop development. See its README for usage. Before pushing, run SimCoupé under Docker locally for a real-hardware confirmation; CI runs the SimCoupé matrix as the gate.
 
 The harness is **not** a CI gate — SimCoupé is the only gate. The harness can crash or mislead without blocking progress; skip it that iteration and use SimCoupé directly. When the harness disagrees with SimCoupé, SimCoupé wins. Agents own the harness code and evolve it as part of normal work — no design review needed for improvements that make it more useful.
 

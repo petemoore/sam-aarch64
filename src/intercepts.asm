@@ -776,7 +776,7 @@ encode_ror_imm_rs:               defb    0
 ;              mov Rd,#imm == orr Rd,XZR,#imm. base 0xb20003e0 / 0x320003e0
 ;
 ; encode.go:53-66 is the same chunk search; slots_logical.go (Z80:
-; src/m3/slots/logical_imm.asm) is the bitmask encoder reused for step 3.
+; src/slots/logical_imm.asm) is the bitmask encoder reused for step 3.
 ;
 ; "chunk<<shift == u" with shift a multiple of 16 is equivalent to: the
 ; only non-zero bytes of the 8-byte LE value are the two bytes at offset

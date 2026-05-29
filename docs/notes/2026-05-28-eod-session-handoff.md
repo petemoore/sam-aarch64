@@ -21,19 +21,19 @@
 | prod | `&AFE8` | 23 B under `&B000` | **Tight**. `&B000-&BFFF` is reserved code-headroom (~4 KB available if deliberately spilled). |
 | test | `&BF6C` | 403 B under `&C100` | Comfortable. |
 
-### What plan-PR 1 actually delivered (verified against `src/m3/`)
+### What plan-PR 1 actually delivered (verified against `src/`)
 
-- `paged_call` body in `src/m3/paged_bodies.asm`, LDIR'd into section B at boot by extended `enctab_trampoline_setup` (`trampoline.asm`).
+- `paged_call` body in `src/paged_bodies.asm`, LDIR'd into section B at boot by extended `enctab_trampoline_setup` (`trampoline.asm`).
 - Constants `PAGED_CALL_TEST_PAGE=14`, `PAGED_CALL_DST=&7E40`, `PAGED_CALL_HMPR_SAVE=&7ED0`, `PAGED_CALL_SP_SAVE=&7ED1` in `trampoline.asm`.
-- 3-byte payload (`ld a, &42; ret`) at `src/m3/paged_call_test_payload.asm`, HLOADed into physical page 14 at boot.
-- Boot self-test `run_paged_call_self_tests` (BUILD_TESTS only, `src/m3/test_paged_call.asm`) asserts A=&42 + HMPR bit-identity round-trip. **Runs in CI on all four m{3,4,5,6} test-variant jobs; green.**
+- 3-byte payload (`ld a, &42; ret`) at `src/paged_call_test_payload.asm`, HLOADed into physical page 14 at boot.
+- Boot self-test `run_paged_call_self_tests` (BUILD_TESTS only, `src/test_paged_call.asm`) asserts A=&42 + HMPR bit-identity round-trip. **Runs in CI on all four m{3,4,5,6} test-variant jobs; green.**
 - ABI fixes vs the original PR #50: SP saved BEFORE the `pop hl` (was wrong in the design doc's §3.3 pseudocode); `ex af, af'` in trailer preserves caller's AF so paged targets can return a byte in A.
 
 ## Open threads (verified — these are the things to not forget)
 
 ### 1. Plan-PR 2 — sysreg_table off-axis + 8 missing entries (BLOCKED FAIL00; first real consumer of paged_call)
 
-`src/m3/sysname.asm` is **still missing** the 8 sysregs spectrum4 release.tbn needs (`hcr_el2, mair_el1, scr_el3, spsr_el3, tcr_el1, ttbr0_el1, ttbr1_el1, vbar_el1`). Verified: `grep -c` for these names in `sysname.asm` returns 0.
+`src/sysname.asm` is **still missing** the 8 sysregs spectrum4 release.tbn needs (`hcr_el2, mair_el1, scr_el3, spsr_el3, tcr_el1, ttbr0_el1, ttbr1_el1, vbar_el1`). Verified: `grep -c` for these names in `sysname.asm` returns 0.
 
 The release-stripped flatten (`make release-stripped-tbn`, builds `build/release-stripped.tbn` ~88 KB) currently fails at FAIL00 because of this gap.
 
@@ -45,7 +45,7 @@ Authoritative list at `tools/sam-aarch64-format/sysregs.go` (39 entries per the 
 
 ### 3. Reader self-test re-enable (was the original budget concern)
 
-`src/m3/assembler.asm:52-65` has `call run_reader_paged_self_tests` **still commented out**. The comment cites PR #42 → #43 → #45 history: PR #42 attempted to fix the failure by moving SP from `&C100` to `&FFFE`; the fix's verification was on a pre-#41 tree, and when #41's table relocations landed the SP change broke test variants. **Root cause was never found.** The fix branches still exist: `m6-reader-self-test-sp-fix`, `m6-trampoline-sp-switch`, `investigate-reader-paged-self-test`.
+`src/assembler.asm:52-65` has `call run_reader_paged_self_tests` **still commented out**. The comment cites PR #42 → #43 → #45 history: PR #42 attempted to fix the failure by moving SP from `&C100` to `&FFFE`; the fix's verification was on a pre-#41 tree, and when #41's table relocations landed the SP change broke test variants. **Root cause was never found.** The fix branches still exist: `m6-reader-self-test-sp-fix`, `m6-trampoline-sp-switch`, `investigate-reader-paged-self-test`.
 
 Budget exists to re-enable, but the interaction needs root-causing first. **This is the perfect first real use of the Go harness** — fast iteration on a Z80-side crash whose only signal today is a SimCoupé deterministic boot-hang.
 

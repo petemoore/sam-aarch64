@@ -59,7 +59,7 @@ ci-m1: test-m1
 
 # sysreg-sync-check — Go↔Z80 sysreg/pstate/dc/tlbi table sync guard
 # (repo-audit 2026-05-29 §5 / §6 item #9).  Asserts every entry in the
-# hand-maintained Z80 table src/m3/sysreg_data.asm matches the Go authority
+# hand-maintained Z80 table src/sysreg_data.asm matches the Go authority
 # tools/sam-aarch64-format/sysregs.go byte-for-byte, so the two can't
 # silently drift.  Cheap (pure Go, no container) — also runs implicitly
 # inside test-m1 / test-m2's `go test ./...`, but is exposed here as a
@@ -130,7 +130,7 @@ check-budget: m3-asm m3-asm-prod
 #   m3-asm-prod  (production variant, for end-user shipping)
 #                Self-tests #ifdef'd out via `-D BUILD_TESTS=0` (i.e.
 #                BUILD_TESTS is undefined; `if defined(BUILD_TESTS)`
-#                blocks in src/m3/assembler.asm are skipped).  Smaller
+#                blocks in src/assembler.asm are skipped).  Smaller
 #                binary — frees code budget for M5.  Identical OUT
 #                bytes on every fixture (the self-tests don't affect
 #                the assemble path); the build-split-status target
@@ -145,17 +145,17 @@ m3-asm-prod: $(BUILD)/assembler-prod.bin
 # Test-variant build also exports the symbol table for the off-axis
 # test_mem.bin to import (plan-PR 3 — see
 # docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md).
-$(BUILD)/assembler.bin $(BUILD)/assembler.sym: src/m3/assembler.asm $(wildcard src/m3/*.asm) $(wildcard src/m3/**/*.asm) src/sam_io.inc
+$(BUILD)/assembler.bin $(BUILD)/assembler.sym: src/assembler.asm $(wildcard src/*.asm) $(wildcard src/**/*.asm) src/sam_io.inc
 	@mkdir -p $(BUILD)
 	pyz80 -D BUILD_TESTS=1 \
 	    --obj=$(BUILD)/assembler.bin \
 	    --exportfile=$(BUILD)/assembler.sym \
-	    src/m3/assembler.asm
+	    src/assembler.asm
 	@./scripts/check-code-budget.sh $(BUILD)/assembler.bin test
 
-$(BUILD)/assembler-prod.bin: src/m3/assembler.asm $(wildcard src/m3/*.asm) $(wildcard src/m3/**/*.asm) src/sam_io.inc
+$(BUILD)/assembler-prod.bin: src/assembler.asm $(wildcard src/*.asm) $(wildcard src/**/*.asm) src/sam_io.inc
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/assembler-prod.bin src/m3/assembler.asm
+	pyz80 --obj=$(BUILD)/assembler-prod.bin src/assembler.asm
 	@./scripts/check-code-budget.sh $(BUILD)/assembler-prod.bin prod
 
 # Off-axis test_mem build (BUILD_TESTS only).
@@ -166,11 +166,11 @@ $(BUILD)/assembler-prod.bin: src/m3/assembler.asm $(wildcard src/m3/*.asm) $(wil
 # assembler.sym so that production calls resolve to their real
 # addresses in the main binary.  The resulting build/test_mem.bin is
 # small (~780 B) and is HLOADed at boot into physical page 13 by
-# src/m3/loader.asm::load_test_mem_off_axis.  See plan-PR 3 brief.
-$(BUILD)/test_mem.bin: src/m3/test_mem_offaxis.asm src/m3/test_mem.asm $(BUILD)/assembler.sym
+# src/loader.asm::load_test_mem_off_axis.  See plan-PR 3 brief.
+$(BUILD)/test_mem.bin: src/test_mem_offaxis.asm src/test_mem.asm $(BUILD)/assembler.sym
 	pyz80 --importfile=$(BUILD)/assembler.sym \
 	    --obj=$(BUILD)/test_mem.bin \
-	    src/m3/test_mem_offaxis.asm
+	    src/test_mem_offaxis.asm
 
 test-mem-offaxis: $(BUILD)/test_mem.bin
 
@@ -183,30 +183,30 @@ test-mem-offaxis: $(BUILD)/test_mem.bin
 # compute_directive_size, assert_eq32_de_hl_imm, fail, ...) from the
 # just-built assembler.sym.  The resulting build/test_cluster.bin
 # (~1225 B) is HLOADed at boot into physical page 12 by
-# src/m3/loader.asm::load_offaxis_cluster and invoked via one LMPR swap.
+# src/loader.asm::load_offaxis_cluster and invoked via one LMPR swap.
 # M6 budget-relief PR (2026-05-29); mirrors the test_mem off-axis
-# pattern (PR #52).  See src/m3/test_offaxis_cluster.asm.
-$(BUILD)/test_cluster.bin: src/m3/test_offaxis_cluster.asm \
-		src/m3/test_slots.asm src/m3/test_pc_rel.asm \
-		src/m3/test_directives_m5.asm src/m3/test_ror_imm.asm \
-		src/m3/test_shifted_reg.asm src/m3/test_extended_reg.asm \
-		src/m3/test_litpool.asm \
+# pattern (PR #52).  See src/test_offaxis_cluster.asm.
+$(BUILD)/test_cluster.bin: src/test_offaxis_cluster.asm \
+		src/test_slots.asm src/test_pc_rel.asm \
+		src/test_directives_m5.asm src/test_ror_imm.asm \
+		src/test_shifted_reg.asm src/test_extended_reg.asm \
+		src/test_litpool.asm \
 		$(BUILD)/assembler.sym
 	pyz80 --importfile=$(BUILD)/assembler.sym \
 	    --obj=$(BUILD)/test_cluster.bin \
-	    src/m3/test_offaxis_cluster.asm
+	    src/test_offaxis_cluster.asm
 
 cluster-offaxis: $(BUILD)/test_cluster.bin
 
 # paged_call self-test payload (BUILD_TESTS only).
 #
 # A 3-byte standalone binary (`ld a, &42; ret`) HLOAD'd at boot into
-# physical page 14 by src/m3/loader.asm::load_page14_payload.
-# Exercised by src/m3/test_paged_call.asm.  Per plan-PR 1 of
+# physical page 14 by src/loader.asm::load_page14_payload.
+# Exercised by src/test_paged_call.asm.  Per plan-PR 1 of
 # docs/notes/2026-05-28-paged-call-architecture.md.
-$(BUILD)/paged_call_test_payload.bin: src/m3/paged_call_test_payload.asm
+$(BUILD)/paged_call_test_payload.bin: src/paged_call_test_payload.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/paged_call_test_payload.bin src/m3/paged_call_test_payload.asm
+	pyz80 --obj=$(BUILD)/paged_call_test_payload.bin src/paged_call_test_payload.asm
 
 paged-call-payload: $(BUILD)/paged_call_test_payload.bin
 
@@ -215,15 +215,15 @@ paged-call-payload: $(BUILD)/paged_call_test_payload.bin
 # A small standalone binary (~480 B) holding the four sysname lookup
 # tables (sysreg / pstate / dc / tlbi) and a self-contained matcher,
 # org &8000.  HLOAD'd at boot into physical page 13 by
-# src/m3/loader.asm::load_page13_payload and read at runtime by the
+# src/loader.asm::load_page13_payload and read at runtime by the
 # sysname_lookup_* routines via paged_call.  Per PR-2 of
 # docs/plans/2026-05-29-m6-closure-release-bytematch.md (split-design
-# correction documented in src/m3/sysreg_data.asm).  Needed by EVERY
+# correction documented in src/sysreg_data.asm).  Needed by EVERY
 # build, not just BUILD_TESTS — sysreg/dc/tlbi/pstate operands appear
 # in shipping sources.
-$(BUILD)/sysreg_data.bin: src/m3/sysreg_data.asm
+$(BUILD)/sysreg_data.bin: src/sysreg_data.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/sysreg_data.bin src/m3/sysreg_data.asm
+	pyz80 --obj=$(BUILD)/sysreg_data.bin src/sysreg_data.asm
 
 sysreg-data: $(BUILD)/sysreg_data.bin
 
@@ -266,7 +266,7 @@ ci-m4: test-m4
 # Production-variant sweeps — same fixture corpora, same oracle, but
 # with the smaller assembler binary that omits the boot-time self-tests.
 # Useful as a correctness check that the BUILD_TESTS=1 / undefined
-# fork in src/m3/assembler.asm doesn't accidentally change emit
+# fork in src/assembler.asm doesn't accidentally change emit
 # behaviour.  ci-m{3,4} cover the test variant; these cover prod.
 test-m3-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
 	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m3/run-roundtrip.sh

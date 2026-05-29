@@ -762,7 +762,7 @@ sysname_expect_underscore:
 ;
 ; sysreg_table / pstate_table / dc_table / tlbi_table and the generic
 ; table-walker (formerly sysname_match) now live in
-; src/m3/sysreg_data.asm, assembled standalone into build/sysreg_data.bin
+; src/sysreg_data.asm, assembled standalone into build/sysreg_data.bin
 ; and HLOAD'd into page 13 at boot.  The four sysname_lookup_* routines
 ; above reach them via paged_call (see SYSREG_*_ENTRY in trampoline.asm).
 ; This freed the table + matcher bytes from the section-C code budget,
@@ -770,7 +770,7 @@ sysname_expect_underscore:
 ; previously-missing sysregs (hcr_el2 / mair_el1 / scr_el3 / spsr_el3 /
 ; tcr_el1 / ttbr0_el1 / ttbr1_el1 / vbar_el1).
 ;
-; See src/m3/sysreg_data.asm and src/m3/trampoline.asm headers for the
+; See src/sysreg_data.asm and src/trampoline.asm headers for the
 ; split-design rationale (the matcher must be self-contained because
 ; section C/D are paged away under HMPR=13).
 ; -----------------------------------------------------------------------

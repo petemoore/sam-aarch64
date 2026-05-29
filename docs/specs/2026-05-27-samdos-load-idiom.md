@@ -4,7 +4,7 @@
 
 ## Background
 
-The M3 loader at `src/m3/loader.asm` loads `enctab.enc` via `HGTHD` (129) + `HLOAD` (130). The Tech Manual specifies that HLOAD requires `HL ∈ &8000-&BFFF` (section C). The earlier loader violated this by loading to `&C100` (section D), getting away with it only because hand-crafted disk layout dodged the SAMDOS auto-wrap-fix in `ctas` (`samdos/src/c.s:347-369`).
+The M3 loader at `src/loader.asm` loads `enctab.enc` via `HGTHD` (129) + `HLOAD` (130). The Tech Manual specifies that HLOAD requires `HL ∈ &8000-&BFFF` (section C). The earlier loader violated this by loading to `&C100` (section D), getting away with it only because hand-crafted disk layout dodged the SAMDOS auto-wrap-fix in `ctas` (`samdos/src/c.s:347-369`).
 
 PR #17 fixed the immediate problem by moving `ENCTAB_BUF` to `&9000` (option (a) — small enctab fits comfortably in section C alongside the assembler code). This document captures the *future-proof* pattern for when loads exceed section C's capacity (paged source, symbol table, etc.).
 

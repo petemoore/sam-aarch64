@@ -109,7 +109,7 @@ Per `docs/specs/2026-05-27-m6-paged-out-design.md` and
    trampoline needed.  Per
    `docs/specs/2026-05-27-samdos-save-idiom.md`.
 3. **Constants.**  `OUT_BASE_PAGE = 5`, `LMPR_OUT_HIGH = &25` added
-   to `src/m3/trampoline.asm` alongside `ENCTAB_PAGE` / `LMPR_ENCTAB`.
+   to `src/trampoline.asm` alongside `ENCTAB_PAGE` / `LMPR_ENCTAB`.
 4. **Old section-C OUT buffer removed.**  `OUT_BUF` / `OUT_BUF_END`
    constants dropped from `assembler.asm`; `OUT_BASE` storage word
    dropped from `main_loop.asm`.  The freed 2 KB at `&B800-&BFFF`
@@ -276,7 +276,7 @@ assertion — even though the helper's code is byte-identical between
 pre/post-rebase.
 
 The test code and include line remain in the source tree
-(`src/m3/test_reader_paged.asm`); only the *call* in `assembler.asm`
+(`src/test_reader_paged.asm`); only the *call* in `assembler.asm`
 is disabled.  Reader correctness is exercised end-to-end by the M6
 long-source fixture, which catches any regression in the same paths
 the boot test would.

@@ -1,7 +1,7 @@
 // inst_expr_muldiv.s — M6 closure PR-3c fixture.
 //
 // Exercises the constant-expression MUL (0x12) and DIV (0x13) operators
-// in the .tbn expression bytecode evaluator (src/m3/expr_eval.asm).
+// in the .tbn expression bytecode evaluator (src/expr_eval.asm).
 // release-stripped's expression streams contain 9 MUL and 6 DIV opcodes
 // (confirmed by scanning build/release-stripped.tbn through the
 // tools/sam-aarch64-format reader); the SAM evaluator previously rejected
