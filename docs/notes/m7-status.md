@@ -19,7 +19,7 @@ Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not
 | Bump-arena allocator (Go-slices-vs-fixed-arrays for the Z80 data structures) | ❌ YAGNI | `docs/specs/2026-05-29-bump-arena-risk-census.md` (the census); Pete 2026-05-29 (accepted) | **NOT building it.** The risk-census (PR #84) found no fixed section-D array is a real overrun time-bomb — all SAFE today, only 3 go at-risk at a full ~5× kernel and are trivially bumpable in place. Pete confirmed YAGNI. The genuinely tight ceiling is elsewhere — the IN/OUT paged byte buffers (next row), fixed by claiming free pages, not an allocator. **Revisit trigger** (census §4): a measured at-risk overrun, or the symbol table heading toward ~2× its 512 cap. |
 | IN/OUT paged-buffer ceiling (claim more SAM pages) | 🧭 | `docs/specs/2026-05-29-bump-arena-risk-census.md` §IN/OUT | The real near-term constraint surfaced by the bump-arena census: the **IN `.tbn` buffer is at 92% of its 96 KB / 6-page cap today** (88,644 B; fail tag `03`), OUT at 68% of 32 KB (fail tag `b0`). Physical pages 15..31 (~272 KB) are free, so the fix is a bounds bump (more pages), not an allocator. Not urgent (release fits), but the closest ceiling — do before a substantially larger source lands. Pairs with the compact-`.tbn` strand. |
 | Codegen sysreg / mnemonic / form tables from Go authority | 📋 | M6-closure plan §M7 sketch (PR-A), `tools/sam-aarch64-format/sysregs.go` | Kills hand-sync drift. Depends on M6 PR-2's page-13 binary build glue. |
-| On-SAM disassembler (strand B) — Go side | ✅ **Go side DONE — PR #93 (open, awaiting Pete's review)** | `docs/plans/2026-05-28-go-aarch64-disassembler.md`; `tools/aarch64dec/` | **The Go disassembler is complete and green.** Resumed the parked `strand-b-1-disassembler` (built clean against current `aarch64enc`), then drove a TDD objdump oracle 44.6% → **100.00% exact match** on a code-only build of the spectrum4 release: load/store decoders, UDF, shifted/extended-reg + tbz/tbnz + barriers + mrs/msr/dc/tlbi, full alias canonicalisation (mov/cmp/lsr/bfi/… match binutils), plus never-mis-decode hardening (declines atomics/reserved/invalid-imm — full-`release.img` mis-decodes driven to 0). **Oracle design (Pete's at-source insight):** the `disasm` CI gate strips ALL data from `release.s` (data directives + `ldr =imm` literal pools), GNU-reassembles a pure-instruction binary, and asserts aarch64dec == objdump line-for-line. **Remaining strand work (separate PRs):** (1) the byte-level 3-translation round-trip (`source→assemble v1→disassemble→reassemble→v2`, assert `v1==v2`) — plan PR-2; (2) **Z80 port** of the disassembler. See `memory/feedback_disassembler_first_decouple`, `memory/feedback_fix_at_source_momentum`. |
+| On-SAM disassembler (strand B) — Go side | ✅ **Go side DONE & MERGED (PR #93, `fbec9d5`)** | `docs/plans/2026-05-28-go-aarch64-disassembler.md`; `tools/aarch64dec/` | **The Go disassembler is complete, merged, and gated.** Resumed the parked `strand-b-1-disassembler` (built clean against current `aarch64enc`), then drove a TDD objdump oracle 44.6% → **100.00% exact match** on a code-only build of the spectrum4 release: load/store decoders, UDF, shifted/extended-reg + tbz/tbnz + barriers + mrs/msr/dc/tlbi, full alias canonicalisation (mov/cmp/lsr/bfi/… match binutils), plus never-mis-decode hardening (declines atomics/reserved/invalid-imm — full-`release.img` mis-decodes driven to 0). **Oracle (Pete's at-source insight):** the `disasm` CI gate — now a **required check** — strips ALL data from `release.s` (data directives + `ldr =imm` literal pools), GNU-reassembles a pure-instruction binary, and asserts aarch64dec == objdump line-for-line. **Next (separate PRs):** (1) **PR-2 round-trip** via OUR pipeline (Pete-decided): `code-only → text2bin → refenc → v1 → aarch64dec → text → text2bin → refenc → v2`, assert `v1==v2`; (2) **Z80 port**. SIMD/atomics stay declined (folds into the full-ISA strand). See `memory/feedback_disassembler_first_decouple`, `memory/feedback_fix_at_source_momentum`. |
 | Source compression / compact `.tbn` | 📋 (sequenced **after** the disassembler) | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` § "2026-05-29 refinement"; Pete 2026-05-29 | **Design done; build deferred until the disassembler lands (Pete 2026-05-29 reorder).** The disassembler is the prerequisite — a compact `.tbn` that stores assembled bytes is write-only to the editor without bytes→text. Design (kept as the eventual target): hybrid format adds **`KindLitInsts = 0x07`** (a *run* of consecutive fully-literal instructions stored as assembled bytes); compaction lives in **`refenc`** (sole encoder authority) as a `.tbn`→`.tbn` transform; the m6-release 3-way gate verifies. Increment plan in the spec. Open-Q6 (defaults chosen). |
 | Editor groundwork (Phase 2) | 🧭 | `docs/ROADMAP.md` "Editor vision" section | Instruction-explanation panel, register simulator, sysreg docs, did-you-mean. Not yet spec'd. |
 | Repo-cleanup / README housekeeping track | ⏳ | `docs/notes/2026-05-29-repo-audit.md` §6 (prioritised plan) | Track underway. **Landed: PR #78** (dead Go symbols + orphan stub removed), **PR #80** (`tools/` + `src/README.md` index READMEs). Remaining: deep reviews of `main_loop.asm` (#11) / `litpool.asm` (#12), and the `SYMTAB_*` `equ` sentinels (#8). Does NOT block other M7 work. |
@@ -110,25 +110,23 @@ once resolved.
    binutils `objdump`. Captured in `memory/feedback_disassembler_first_decouple`.
    The compact-`.tbn` design (open-Q6 + spec refinement) stays as the
    eventual target.
-8. **Disassembler follow-ups (await Pete; defaults noted).** Surfaced while
-   landing PR #93 (Go disassembler, green, open for review):
-   (a) **Merge PR #93?** — awaiting your review (left open deliberately: it's
-   a substantial feature and you'd been hands-on with the strand). CI fully
-   green incl. the new `disasm` exact-match gate + `m6-release` (byte-match
-   undisturbed).
-   (b) **Promote `disasm` to a required status check?** — default: yes, once
-   confirmed stable on `main` (12 → 13 required checks). Held off until #93
-   merges.
-   (c) **Round-trip (plan PR-2) — reassemble via GNU `as` or via our own
-   text2bin→refenc pipeline?** Default: do BOTH — GNU reassembly is the
-   simplest faithful-inverse check; our-pipeline reassembly exercises the
-   whole SAM toolchain end-to-end (stronger, and what the editor will use).
-   Lean: start with our-pipeline, add GNU as a cross-check.
-   (d) **SIMD/SVE/FP/SME + atomic/exclusive decoding** — aarch64dec currently
-   *declines* (`.inst`) on these (spectrum4 emits none; encoder has zero
-   refs). Default: keep declining until a real need appears (bigger kernel,
-   or the editor importing third-party binaries). Folds into the
-   full-ARMv8-A-ISA-footprint research strand.
+8. **Disassembler follow-ups — ✅ ALL RESOLVED (Pete 2026-05-29 #2).**
+   (a) **Merge PR #93** — ✅ DONE (merged `fbec9d5`). The Go disassembler is
+   on `main`.
+   (b) **Promote `disasm` to a required status check** — ✅ DONE: `disasm`
+   added to `main`'s required-status-checks (now **13**: build-image, m1, m2,
+   m3, m4, m4-prod, m5, m5-prod, m6, m6-prod, m6-release, sysreg-sync,
+   disasm).
+   (c) **Round-trip (plan PR-2) assembler** — ✅ DECIDED: **our own
+   text2bin→refenc pipeline** (Pete: we guarantee GNU-equivalence elsewhere,
+   and our pipeline is always available where GNU may not be). So PR-2 is:
+   `release(code-only) → text2bin → refenc → v1 → aarch64dec disassemble →
+   text → text2bin → refenc → v2`, assert `v1==v2`.
+   (d) **SIMD/SVE/FP/SME + atomic/exclusive decoding** — ✅ DECIDED: **keep
+   declining** (`.inst`). Spectrum4 emits none; the encoder has zero refs.
+   This naturally folds into the **full-ARMv8-A-ISA-footprint** M7 research
+   strand — if/when we extend instruction support there, the disassembler
+   coverage comes with it.
 9. **Repo hygiene nit (non-blocking):** `go build` in `tools/refenc` /
    `tools/aarch64dec/cmd/...` drops binaries in-tree (e.g. `tools/refenc/refenc`)
    not covered by `.gitignore` — easy to commit by accident (removed stray
