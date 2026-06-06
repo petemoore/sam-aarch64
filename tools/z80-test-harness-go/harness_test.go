@@ -57,21 +57,32 @@ func TestInstNopRet(t *testing.T) {
 	assemblerBinPath := filepath.Join(root, "build", "assembler-prod.bin")
 	enctabPath := filepath.Join(root, "build", "enctab.enc")
 	text2binPath := filepath.Join(root, "build", "text2bin")
+	refencPath := filepath.Join(root, "build", "refenc")
 	fixturePath := filepath.Join(root, "tests", "m3", "sources", "inst_nop_ret.s")
 
 	// Check prerequisites exist.
-	for _, path := range []string{assemblerBinPath, enctabPath, text2binPath, fixturePath} {
+	for _, path := range []string{assemblerBinPath, enctabPath, text2binPath, refencPath, fixturePath} {
 		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("prerequisite missing: %s\n  run `make m3-asm-prod enctab text2bin` from repo root", path)
+			t.Fatalf("prerequisite missing: %s\n  run `make m3-asm-prod enctab text2bin refenc` from repo root", path)
 		}
 	}
 
-	// Generate the .tbn file from the fixture source.
-	tbnPath := filepath.Join(t.TempDir(), "inst_nop_ret.tbn")
-	cmd := exec.Command(text2binPath, "-o", tbnPath, fixturePath)
+	// Generate the symbolic .tbn from the fixture source, then compact it
+	// (refenc -emit-compact-tbn) — the SAM assembler consumes the compact v2
+	// .tbn (INSN_RUN decoder), not the raw symbolic text2bin output.
+	tmp := t.TempDir()
+	symTbnPath := filepath.Join(tmp, "inst_nop_ret.tbn")
+	tbnPath := filepath.Join(tmp, "inst_nop_ret.compact.tbn")
+	goImgPath := filepath.Join(tmp, "inst_nop_ret.go.img")
+	cmd := exec.Command(text2binPath, "-o", symTbnPath, fixturePath)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("text2bin failed: %v\n%s", err, out)
+	}
+	cmd = exec.Command(refencPath, "-o", goImgPath, "-emit-compact-tbn", tbnPath, symTbnPath)
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("refenc failed: %v\n%s", err, out)
 	}
 
 	// Read all inputs.
@@ -90,7 +101,7 @@ func TestInstNopRet(t *testing.T) {
 
 	t.Logf("assembler-prod.bin: %d bytes", len(assemblerBin))
 	t.Logf("enctab.enc:         %d bytes", len(enctabData))
-	t.Logf("inst_nop_ret.tbn:   %d bytes", len(inData))
+	t.Logf("inst_nop_ret.compact.tbn: %d bytes", len(inData))
 
 	// Run the harness with a 10-second timeout.
 	start := time.Now()

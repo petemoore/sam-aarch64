@@ -14,7 +14,7 @@
 ;      LMPR_IN_BASE, HL = &7FFE.  Call in_normalise_hl.  Assert
 ;      H < &40 (= &3FFE) and LMPR low 5 bits incremented by 1.
 ;   2. synthetic record read: stamp a 14-byte ".tbn" blob into page 7
-;      via an LMPR=&27 bracket.  Blob = "SA64", version=1, flags=0,
+;      via an LMPR=&27 bracket.  Blob = "SA64", version=2, flags=0,
 ;      name_count=0, then one record [kind=&77][len=&02 &00][&AB &CD].
 ;      Set IN_END = (page=&27, offset=14).  Call reset_reader_to_in_buf
 ;      (which tail-calls reader_init), then reader_at_end → not at end,
@@ -83,7 +83,7 @@ run_reader_paged_self_tests:
 ; doesn't displace them.  The blob is:
 ;
 ;   offset 0..3   : "SA64"
-;   offset 4..5   : version u16 LE = 0x0001
+;   offset 4..5   : version u16 LE = 0x0002
 ;   offset 6..7   : flags u16 LE = 0x0000
 ;   offset 8..9   : name_count u16 LE = 0x0000
 ;   offset 10     : record kind = &77
@@ -203,7 +203,7 @@ reader_paged_fail_with_lmpr:
 ; -----------------------------------------------------------------------
 reader_paged_synthetic_tbn:
                 defm    "SA64"              ; magic (4 bytes)
-                defw    1                   ; version u16 LE = 1
+                defw    2                   ; version u16 LE = 2 (compact `.tbn` v2)
                 defw    0                   ; flags u16 LE = 0
                 defw    0                   ; name_count u16 LE = 0
                 defb    &77                 ; record kind

@@ -63,7 +63,7 @@ mkdir -p build
 # Mac-side tools.  ASSEMBLER_BIN is per-variant — see header of
 # tools/run-m3-roundtrip.sh for the test vs prod rationale.
 ASSEMBLER_BIN="${ASSEMBLER_BIN:-$ROOT/build/assembler.bin}"
-make -s text2bin enctab build-m3-disk sysreg-data disasm-payload
+make -s text2bin refenc enctab build-m3-disk sysreg-data disasm-payload
 
 if [ ! -f "$ASSEMBLER_BIN" ]; then
     echo "ERROR: assembler binary not found: $ASSEMBLER_BIN" >&2
@@ -71,11 +71,17 @@ if [ ! -f "$ASSEMBLER_BIN" ]; then
     exit 2
 fi
 
-# 1. text2bin → INPUT.tbn
+# 1. text2bin → INPUT.tbn (symbolic), then refenc → INPUT.compact.tbn.
+#
+# The SAM assembler consumes the COMPACT v2 .tbn (the INSN_RUN decoder);
+# the raw symbolic text2bin output is fed to refenc -emit-compact-tbn to
+# produce it.  build-m3-disk below gets the compact .tbn as IN.
 echo "--- text2bin ---"
 "$ROOT/build/text2bin" -o "build/${base}.tbn" "$fixture"
+echo "--- refenc (emit compact .tbn) ---"
+"$ROOT/build/refenc" -o "build/${base}.img" -emit-compact-tbn "build/${base}.compact.tbn" "build/${base}.tbn"
 
-# 2. build-m3-disk with the .tbn as IN.
+# 2. build-m3-disk with the COMPACT .tbn as IN.
 #
 # For the test variant only, also deposit:
 #   - the off-axis test_mem.bin (plan-PR 3), and
@@ -101,7 +107,7 @@ fi
     -sysreg-data "$ROOT/build/sysreg_data.bin" \
     -disasm "$disasm_bin" \
     "$ASSEMBLER_BIN" build/enctab.enc \
-    "build/${base}.tbn" \
+    "build/${base}.compact.tbn" \
     "build/${base}.mgt"
 
 # 3. Run SimCoupé.  See run-m3-roundtrip.sh for the printer-channel

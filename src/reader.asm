@@ -88,9 +88,9 @@ reader_init:
                 jp      nz, fail
                 inc     hl
 
-; -- Validate version u16 LE = 1 ---------------------------------------
+; -- Validate version u16 LE = 2 (compact-`.tbn` v2, M8 / i39a) ---------
                 ld      a, (hl)
-                cp      1
+                cp      2
                 jp      nz, fail
                 inc     hl
                 ld      a, (hl)
