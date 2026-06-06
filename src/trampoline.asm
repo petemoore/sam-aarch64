@@ -394,13 +394,12 @@ SYSREG_COMM_RESULT:     equ     TRAMPOLINE_DST + &91    ; = &7E91, up to 8 bytes
 ;
 ; Per docs/notes/2026-06-07-disassembler-page-placement.md.
 ; Page 15 holds disasm.bin (standalone stub, assembles at org &8000).
-; Called via paged_call from src/test_disasm_paged.asm (BUILD_TESTS) and,
-; in future, from the on-SAM editor at runtime.  Not re-entrant — paged_call
-; has a single static HMPR save slot; callers must not nest.
+; Invoked via paged_call (BUILD_TESTS: run_disasm_self_test at
+; DISASM_SELF_TEST_ENTRY; runtime: on-SAM editor).  Not re-entrant —
+; paged_call has a single static HMPR save slot; callers must not nest.
 DISASM_PAGE:    equ     15
 
 ; Entry point address in section C when HMPR = DISASM_PAGE (= 15).
-; The `defw DISASM_ENTRY` in paged_call call-sites encodes this value.
 DISASM_ENTRY:   equ     &8000
 
 ; Disassembler comm buffer — LMPR-stable section B, shared between the

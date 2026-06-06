@@ -281,8 +281,8 @@ endif
 ; -- PRODUCTION: HLOAD disasm.bin into physical page 15.  The disassembler
 ; is a production feature (needed by the editor at runtime); deposited for
 ; both variants.  Must run AFTER enctab_trampoline_setup (which installs
-; the HLOAD trampoline + paged_call body) and BEFORE
-; run_disasm_paged_self_tests (which calls into the loaded page).
+; the HLOAD trampoline + paged_call body) and BEFORE the BUILD_TESTS
+; paged_call to DISASM_SELF_TEST_ENTRY (which calls into the loaded page).
                 call    load_page15_payload
 
 ; -- BUILD_TESTS only: HLOAD the off-axis test_mem.bin into page 13.
