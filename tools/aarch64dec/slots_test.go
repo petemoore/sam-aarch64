@@ -354,6 +354,89 @@ func TestDecode_LogicalImm_W(t *testing.T) {
 }
 
 // ----------------------------------------------------------------
+// LogicalImm — non-canonical rejection (immr >= esize).
+//
+// ARM ARM C4.1.64 "DecodeBitMasks" computes R = immr MOD esize, so an
+// immr field >= the element size silently wraps on hardware.  Decoding
+// such a word to a canonical immediate and re-encoding it would change
+// the raw bits (the canonical form uses immr MOD esize), so
+// decodeBitMasks DECLINES these encodings — the word falls through to
+// `.inst 0xNNNNNNNN`, preserving the exact 4 bytes.
+//
+// Each crafted word below is an ORR (immediate):
+//
+//	sf | 0110_0100 | N | immr(6) | imms(6) | Rn(5) | Rd(5)
+//
+// The element size (esize) is recovered from N:NOT(imms) per the ARM
+// pseudocode; the test pairs every NON-canonical word (immr >= esize)
+// with its CANONICAL counterpart (immr < esize, same imms/Rn/Rd) so the
+// test proves the boundary, not merely that something gets rejected.
+//
+// 0x32200013 is a real word lifted from release data: a non-canonical
+// `orr w19, w0, #0x1` (esize=32, immr=32).
+// ----------------------------------------------------------------
+
+func TestDecode_LogicalImm_NonCanonical_RejectsToInst(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		word uint32
+	}{
+		// 32-bit word, esize=32, immr=32 (== esize).  Real release data.
+		{"esize32 immr32 (0x32200013)", 0x32200013},
+		// 64-bit word, 16-bit element (N=0, imms=0x20), immr=20 (> esize=16).
+		{"esize16 immr20", 0xb2148005},
+		// 32-bit word, 8-bit element (N=0, imms=0x30), immr=12 (> esize=8).
+		{"esize8 immr12", 0x320cc009},
+	} {
+		mnem, ops, ok := Decode(tc.word)
+		if ok {
+			t.Errorf("Decode(0x%08x) [%s]: expected reject (ok=false → .inst), got mnem=%q ops=%q",
+				tc.word, tc.name, mnem, ops)
+		}
+	}
+}
+
+func TestDecode_LogicalImm_Canonical_BoundaryDecodes(t *testing.T) {
+	// The canonical counterpart of each non-canonical word above
+	// (immr < esize, otherwise identical): these MUST decode to `orr`.
+	// This is the lower side of the boundary — together with
+	// TestDecode_LogicalImm_NonCanonical_RejectsToInst it shows the
+	// reject is exactly at immr >= esize, not an over-broad decline.
+	for _, tc := range []struct {
+		word uint32
+		want string
+	}{
+		// esize=32, immr=1 → orr w19, w0, #0x80000000.
+		{0x32010013, "w19, w0, #0x80000000"},
+		// esize=16, immr=4 → orr x5, x0, #0x1000100010001000.
+		{0xb2048005, "x5, x0, #0x1000100010001000"},
+		// esize=8, immr=5 → orr w9, w0, #0x8080808.
+		{0x3205c009, "w9, w0, #0x8080808"},
+	} {
+		mnem, ops, ok := Decode(tc.word)
+		if !ok || mnem != "orr" || ops != tc.want {
+			t.Errorf("Decode(0x%08x): got ok=%v mnem=%q ops=%q; want ok=true mnem=\"orr\" ops=%q",
+				tc.word, ok, mnem, ops, tc.want)
+		}
+	}
+}
+
+// decodeBitMasks-level boundary check: same R, just immr stepped across
+// esize.  Exercises the function directly so the boundary is asserted
+// independent of Form-table matching.
+func TestDecodeBitMasks_ImmrBoundary(t *testing.T) {
+	// esize=32 (regsize=32, N=0): imms=0 → S-run of 1 bit.
+	// immr=31 is the last canonical value; immr=32 wraps to 0 on
+	// hardware and must be declined.
+	if _, ok := decodeBitMasks(0, 31, 0, 32); !ok {
+		t.Errorf("decodeBitMasks(N=0, immr=31, imms=0, regsize=32): want ok=true (immr < esize)")
+	}
+	if _, ok := decodeBitMasks(0, 32, 0, 32); ok {
+		t.Errorf("decodeBitMasks(N=0, immr=32, imms=0, regsize=32): want ok=false (immr == esize → non-canonical)")
+	}
+}
+
+// ----------------------------------------------------------------
 // BitfieldImm: pair of 6-bit immediates rendered as `#immr, #imms`.
 //
 // Plan-vs-reality discovery: the manualForms table lists `lsl`

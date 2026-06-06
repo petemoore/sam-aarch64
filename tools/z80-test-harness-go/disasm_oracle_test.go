@@ -194,6 +194,35 @@ func TestDisasmSelfTest(t *testing.T) {
 	t.Fatalf("run_disasm_self_test step cap %d exceeded (PC=%04X)", maxSteps, cpu.PC)
 }
 
+// TestDisasmNonCanonicalLogicalImm asserts the Z80 disassembler declines a
+// non-canonical logical-immediate word the same way the Go decoder does,
+// emitting `.inst 0xNNNNNNNN` rather than a canonicalised orr/and/eor.
+//
+// 0x32200013 is a non-canonical `orr w19, w0, #0x1` (esize=32, immr=32 ==
+// esize).  The Z80 decodeBitMasks port (strand-B PR-4) rejects immr >= esize
+// for the same reason the Go side does (ARM ARM C4.1.64 computes immr MOD
+// esize, so decoding-then-re-encoding would change the raw bits).  Pairs the
+// Go aarch64dec regression tests (tools/aarch64dec/slots_test.go:
+// TestDecode_LogicalImm_NonCanonical_RejectsToInst) on the Z80 side.
+//
+// Reads the PROD build/disasm.bin (the shipped decoder).
+func TestDisasmNonCanonicalLogicalImm(t *testing.T) {
+	disasmBin, err := os.ReadFile("../../build/disasm.bin")
+	if err != nil {
+		t.Fatalf("read build/disasm.bin (build it with `pyz80 --obj=build/disasm.bin src/disasm.asm` from repo root): %v", err)
+	}
+	const word = 0x32200013
+	mnem, ops, rerr := runZ80Disasm(disasmBin, word, 0)
+	if rerr != nil {
+		t.Fatalf("Z80 run failed for non-canonical word %#08x: %v", word, rerr)
+	}
+	if mnem != ".inst" || ops != fmt.Sprintf("%#08x", uint32(word)) {
+		t.Errorf("Z80 disasm of non-canonical %#08x: got [%s|%s]; want [.inst|%#08x] "+
+			"(non-canonical logical-immediate must decline to .inst, not canonicalise)",
+			uint32(word), mnem, ops, uint32(word))
+	}
+}
+
 // goOracle returns the canonical (mnem, operands) the Go disassembler emits
 // for word at pc, including the ok==false → ".inst" / "%#08x" fallback that
 // WriteAsm uses (tools/aarch64dec/asm.go:74-76 and disasm.go).
