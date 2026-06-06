@@ -61,6 +61,7 @@ REC_KIND_LOCAL_DEF:     equ     &03
 REC_KIND_DIRECTIVE:     equ     &04
 REC_KIND_COMMENT:       equ     &05
 REC_KIND_LIT_INSTS:     equ     &07
+REC_KIND_LIT_DATA:      equ     &08
 
 ; -----------------------------------------------------------------------
 ; Directive ID constants (tools/sam-aarch64-format/directives.go).
@@ -442,9 +443,13 @@ walk_records:
                 jp      z, main_handle_directive
                 cp      REC_KIND_COMMENT
                 jp      z, walk_records             ; skip (both passes)
-                cp      REC_KIND_LIT_INSTS
-                jp      z, main_handle_lit_insts
-                jp      fail
+; LIT_INSTS (0x07) and LIT_DATA (0x08) share one handler: both are a
+; 1-byte tag (count / directive_id — irrelevant to the assembler) followed
+; by raw output bytes.  Range-check kind ∈ {0x07,0x08} → A-7 < 2.
+                sub     REC_KIND_LIT_INSTS
+                cp      REC_KIND_LIT_DATA - REC_KIND_LIT_INSTS + 1
+                jp      nc, fail
+                jp      main_handle_lit_insts
 
 
 ; -----------------------------------------------------------------------
@@ -1228,29 +1233,30 @@ main_handle_inst_pass1:
 
 
 ; -----------------------------------------------------------------------
-; main_handle_lit_insts — KindLitInsts (0x07) record handler.
+; main_handle_lit_insts — KindLitInsts (0x07) AND KindLitData (0x08).
 ;
-; A run of fully-literal instructions stored as their assembled words
-; (compact `.tbn`, i1 — produced by `refenc -emit-compact-tbn`).
-; Payload: [count u8][word0..word{count-1}], each word 4 bytes LE; the
-; run occupies 4*count output bytes.
+; Both kinds are "a 1-byte tag the assembler ignores, then raw output
+; bytes" (compact `.tbn`, i1 — produced by `refenc -emit-compact-tbn`):
+;   LIT_INSTS payload = [count u8][word0..]  — fully-literal instructions
+;   LIT_DATA  payload = [dir_id u8][raw…]    — constant data run (the
+;             directive_id only matters to the disassembler)
+; In both, the run occupies (payload_len - 1) output bytes.
 ;
-;   Pass 1: PASS_PC += 4*count.  No operand parse, no litpool scan
-;           (a literal run never references the pool).
-;   Pass 2: memcpy the 4*count word bytes straight to OUT (zero encoding
-;           work), then PASS_PC += 4*count — keeping PASS_PC == OUT_LEN.
+;   Pass 1: PASS_PC += nbytes.  No operand parse, no litpool scan.
+;   Pass 2: memcpy the nbytes raw bytes straight to OUT (zero encoding
+;           work), then PASS_PC += nbytes — keeping PASS_PC == OUT_LEN.
 ;
-; PC accounting is identical to the count separate KindInst records this
+; PC accounting is identical to the KindInst / data-directive records the
 ; run replaced, so label positions and 2-pass values are unchanged.
 ;
-; Input:  HL = payload ptr, BC = payload len (= 1 + 4*count).
+; Input:  HL = payload ptr, BC = payload len (= 1 + nbytes).
 ; Output: jp walk_records.
 ; -----------------------------------------------------------------------
 main_handle_lit_insts:
-; nbytes = 4*count = payload_len - 1 (the leading count byte), so BC-1
-; is the word-byte count directly — no need to read or multiply count.
-                dec     bc                  ; BC = nbytes = 4*count
-                inc     hl                  ; HL → first word byte
+; nbytes = payload_len - 1 (the leading 1-byte tag), so BC-1 is the
+; output-byte count directly — no need to read the tag.
+                dec     bc                  ; BC = nbytes
+                inc     hl                  ; HL → first output byte
                 ld      a, (PASS_MODE)
                 cp      PASS_PASS1
                 jr      z, advance_bc_and_walk      ; pass 1: no emit

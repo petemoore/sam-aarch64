@@ -15,6 +15,13 @@ const (
 	// memcpys the words straight to OUT — zero encoding work. See
 	// docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md.
 	KindLitInsts RecordKind = 0x07
+	// KindLitData is a run of constant data from a single numeric data
+	// directive (.byte/.short/.hword/.word/.quad), stored as its raw
+	// assembled little-endian bytes (compact `.tbn`, Level 2). Payload:
+	// [directive_id u8][raw bytes]. The directive_id preserves which
+	// directive the author wrote so the disassembler round-trips the
+	// source spelling; the assembler ignores it and memcpys the bytes.
+	KindLitData RecordKind = 0x08
 )
 
 // Name returns the symbolic name of the record kind, or "UNKNOWN" for
@@ -33,6 +40,8 @@ func (k RecordKind) Name() string {
 		return "COMMENT"
 	case KindLitInsts:
 		return "LIT_INSTS"
+	case KindLitData:
+		return "LIT_DATA"
 	}
 	return "UNKNOWN"
 }

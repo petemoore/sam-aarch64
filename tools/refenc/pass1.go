@@ -188,6 +188,11 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 			// exactly 4 bytes each — same PC contribution as the
 			// equivalent symbolic KindInst records it replaced.
 			pc += 4 * int64(rec.LitCount)
+		case format.KindLitData:
+			// A run of pre-assembled constant data occupies its raw
+			// byte count — same PC contribution as the data directive
+			// records it replaced.
+			pc += int64(len(rec.LitData))
 		case format.KindDirective:
 			name := format.DirectiveName(rec.DirectiveID)
 			switch name {

@@ -15,6 +15,15 @@ const (
 	pcProbeB = int64(0x40000)
 )
 
+// litDataMaxBytes caps the raw bytes in one LIT_DATA record. The Z80
+// reader stages each record's payload into a 1024-byte STAGING_BUF and
+// fails (src/reader.asm tag 01) if the payload reaches 1024. A LIT_DATA
+// payload is [dir_id]+bytes, so the bytes must stay ≤ 1022; 1016 leaves
+// headroom and is divisible by every element width (1/2/4/8) so a record
+// always holds whole elements. (LIT_INSTS is separately bounded by its
+// 255-word/1021-byte cap.)
+const litDataMaxBytes = 1016
+
 // Compact rewrites a symbolic .tbn record stream into a compact one:
 // runs of consecutive fully-literal, PC-invariant instructions collapse
 // to KindLitInsts records storing their assembled words; every other
@@ -25,21 +34,46 @@ const (
 // output of the compact .tbn against the symbolic one.
 func Compact(f *format.File, p1 *Pass1Result) ([]byte, error) {
 	var w format.RecordWriter
-	var run []uint32
 
-	flush := func() {
-		// A KindLitInsts run holds at most 255 words; split longer runs
-		// across successive records.
-		for len(run) > 0 {
-			n := len(run)
-			if n > 255 {
+	// Two run accumulators: fully-literal instruction words (LIT_INSTS)
+	// and same-directive constant data bytes (LIT_DATA). Only one is
+	// ever open at a time — a record of the other kind flushes it first.
+	var instRun []uint32
+	var dataRun []byte
+	var dataDirID byte
+	var dataWidth int // 0 = no open data run
+
+	flushInst := func() {
+		for len(instRun) > 0 {
+			n := len(instRun)
+			if n > 255 { // a LIT_INSTS run holds at most 255 words
 				n = 255
 			}
-			w.WriteLitInsts(run[:n])
-			run = run[n:]
+			w.WriteLitInsts(instRun[:n])
+			instRun = instRun[n:]
 		}
-		run = nil
+		instRun = nil
 	}
+	flushData := func() {
+		if dataWidth == 0 {
+			return
+		}
+		// Split so each record fits the Z80 STAGING_BUF (litDataMaxBytes),
+		// on whole-element boundaries so a record always holds complete
+		// .word/.quad/… elements (the disassembler depends on it).
+		max := litDataMaxBytes / dataWidth * dataWidth
+		for len(dataRun) > 0 {
+			n := len(dataRun)
+			if n > max {
+				n = max
+			}
+			w.WriteLitData(dataDirID, dataRun[:n])
+			dataRun = dataRun[n:]
+		}
+		dataRun = nil
+		dataWidth = 0
+	}
+	flushAll := func() { flushInst(); flushData() }
 
 	rr := format.NewRecordReader(f.Records)
 	for !rr.AtEnd() {
@@ -48,13 +82,27 @@ func Compact(f *format.File, p1 *Pass1Result) ([]byte, error) {
 			return nil, err
 		}
 		if word, ok := literalWord(rec, p1, f); ok {
-			run = append(run, word)
+			flushData()
+			instRun = append(instRun, word)
 			continue
 		}
-		flush()
+		if width, ok := format.ConstDataWidth(rec); ok {
+			if raw, derr := encodeDirective(rec, 0, p1, f); derr == nil && raw != nil {
+				flushInst()
+				if dataWidth != 0 && dataDirID != rec.DirectiveID {
+					flushData() // different directive — start a new run
+				}
+				dataDirID = rec.DirectiveID
+				dataWidth = width
+				dataRun = append(dataRun, raw...)
+				continue
+			}
+			// encode error: fall through and keep the record symbolic.
+		}
+		flushAll()
 		w.WriteRaw(rec.Kind, rec.Raw)
 	}
-	flush()
+	flushAll()
 	return w.Bytes(), nil
 }
 
