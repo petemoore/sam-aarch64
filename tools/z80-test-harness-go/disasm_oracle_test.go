@@ -10,14 +10,16 @@
 //
 // src/disasm.asm is ported family-by-family (strand-B PR-4); the Go oracle
 // already decodes the full aarch64 subset and round-trips release.s.  This
-// test drives the Z80 disassembler toward equivalence: it prints the exact
-// match ratio plus a per-Go-mnemonic mismatch breakdown — the worklist for
-// the next family to port, biggest first — and enforces a ratchet floor
-// (matchFloor below) that each landed family raises.  It is green on main
-// throughout the port and fails only on a regression below the floor; when
-// the floor reaches nWords the Z80 disassembler is proven equivalent to the
-// Go oracle.  TestDisasmSelfTest additionally runs the on-page boot
-// self-test (entry &8003) and asserts BC=0.
+// test asserts full per-word equivalence and prints the exact match ratio
+// plus a per-Go-mnemonic mismatch breakdown — the worklist for the next
+// family, biggest first.  It is developed on the PR-4 feature branch and
+// fails (TDD red) until the port is complete; that is fine because the
+// harness is never a CI gate and the branch is not merged until it reaches
+// 100% (so main never sees a red test — no ratchet needed).  When green,
+// the Z80 disassembler is proven equivalent to the Go oracle, so both
+// run-disasm-roundtrip.sh gates pass for it too.  It also asserts the
+// paged_call ABI (BC/IX/IY preserved) on every word.  TestDisasmSelfTest
+// additionally runs the on-page boot self-test (entry &8003) → BC=0.
 //
 // # disasm_entry ABI (src/disasm.asm lines 40-100)
 //
@@ -280,27 +282,19 @@ func TestDisasmOracle(t *testing.T) {
 			s.pc, s.word, s.goMnem, s.goOps, s.z80Mnem, s.z80Ops)
 	}
 
-	// Ratchet floor.  The Z80 disassembler is ported family-by-family
-	// (strand-B PR-4); each increment must raise — and may never lower —
-	// the count of words that match the Go oracle exactly.  The ultimate
-	// target is matches == nWords (5438); when we reach it the
-	// disassembler is proven equivalent to the Go oracle that already
-	// round-trips release.s.
-	//
-	// RAISE THIS FLOOR whenever a family lands (the test prints the new
-	// ratio).  Keeping it a floor — not a flat "== nWords" — lets the
-	// test stay green on main throughout the port while still failing
-	// loudly on any regression below the families already ported.
-	const matchFloor = 2254 // NOP + .inst data + udf + move-wide (movz/movn/movk/mov)
-
-	if matches < matchFloor {
-		t.Errorf("REGRESSION: Z80 disasm matches Go oracle on only %d/%d words (= %.1f%%), "+
-			"below the ratchet floor of %d. A previously-ported family stopped matching; "+
-			"see the breakdown above.", matches, nWords, pct, matchFloor)
-	}
-	if matches < nWords {
-		t.Logf("TDD progress: %d/%d words match (%.1f%%); %d still fall through to .inst. "+
-			"Port the next family (biggest in the breakdown above) and raise matchFloor.",
-			matches, nWords, pct, nWords-matches)
+	// This test asserts FULL equivalence: every release.img word must
+	// decode identically to the Go oracle.  It is developed entirely on
+	// the strand-B PR-4 feature branch and fails (TDD red) until the port
+	// is complete — which is fine, because the harness is never a CI gate
+	// and the branch is not merged to main until the port reaches 100%.
+	// (No ratchet / "allowed failure rate": a feature branch can stay red
+	// until it passes — see the per-Go-mnemonic breakdown above for the
+	// remaining worklist.)  When this is green the Z80 disassembler is
+	// proven equivalent to the Go oracle that already round-trips
+	// release.s, so both run-disasm-roundtrip.sh gates pass for it too.
+	if matches != nWords {
+		t.Errorf("Z80 disasm matches the Go oracle on %d/%d words (%.1f%%); %d still "+
+			"differ (mostly fall through to .inst). Port the next family — biggest in "+
+			"the breakdown above — until this reaches 100%%.", matches, nWords, pct, nWords-matches)
 	}
 }
