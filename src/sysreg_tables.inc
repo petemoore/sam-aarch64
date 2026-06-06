@@ -13,10 +13,14 @@
 ;   dc_table      — 4 bytes: op1, CRn, CRm, op2
 ;   tlbi_table    — 5 bytes: op1, CRn, CRm, op2, NeedsXt
 ;
-; These tables are a SUBSET of the Go authority
-; tools/sam-aarch64-format/sysregs.go (only the entries the M5/M6 fixtures
-; and the disasm oracle exercise; other tuples are handled by the generic
-; Sn_op1_Cm_Cn_op2 form).  Every entry here MUST match the Go encoding
+; The pstate / dc / tlbi tables are at FULL parity with the Go authority
+; tools/sam-aarch64-format/sysregs.go (those three families have no generic
+; Sn_op1_Cm_Cn_op2 fallback in Go, so a missing entry would make the SAM
+; assembler fail-hard on a name Go encodes — see sysname.asm's lookup-miss
+; paths).  The sysreg_table is still a subset: any unnamed system register
+; is reachable via the generic Sn_op1_Cm_Cn_op2 form (matching Go's
+; ParseSysReg / SysRegName fallback), so missing named sysregs are not a
+; correctness gap.  Every entry here MUST match the Go encoding
 ; byte-for-byte: the sync guard tools/sam-aarch64-format/
 ; sysregs_z80sync_test.go (CI job `sysreg-sync`, make target
 ; `sysreg-sync-check`) parses THIS file and fails on any name/encoding
@@ -91,41 +95,174 @@ sysreg_table:
                 defb    0
 
 
-; pstate_table — 2 entries.
+; pstate_table — full parity with the Go authority pstateFields
+; (tools/sam-aarch64-format/sysregs.go).  8 entries.
 ; Format per entry: [name_len u8][name_bytes][op1 u8][op2 u8].
 pstate_table:
+                defb    5
+                defm    "spsel"
+                defb    0, 5
                 defb    7
                 defm    "daifset"
                 defb    3, 6
                 defb    7
                 defm    "daifclr"
                 defb    3, 7
+                defb    3
+                defm    "uao"
+                defb    0, 3
+                defb    3
+                defm    "pan"
+                defb    0, 4
+                defb    3
+                defm    "dit"
+                defb    3, 2
+                defb    3
+                defm    "tco"
+                defb    3, 4
+                defb    4
+                defm    "ssbs"
+                defb    3, 1
                 defb    0
 
 
-; dc_table — 3 entries.
+; dc_table — full parity with the Go authority dcOps
+; (tools/sam-aarch64-format/sysregs.go).  9 entries; all DC ops take Xt.
 ; Format per entry: [name_len u8][name_bytes][op1 u8][CRn u8][CRm u8][op2 u8].
 dc_table:
-                defb    5
-                defm    "civac"
-                defb    3, 7, 14, 1
+                defb    4
+                defm    "ivac"
+                defb    0, 7, 6, 1
+                defb    3
+                defm    "isw"
+                defb    0, 7, 6, 2
+                defb    3
+                defm    "csw"
+                defb    0, 7, 10, 2
+                defb    4
+                defm    "cisw"
+                defb    0, 7, 14, 2
+                defb    3
+                defm    "zva"
+                defb    3, 7, 4, 1
                 defb    4
                 defm    "cvac"
                 defb    3, 7, 10, 1
                 defb    4
-                defm    "ivac"
-                defb    0, 7, 6, 1
+                defm    "cvau"
+                defb    3, 7, 11, 1
+                defb    5
+                defm    "civac"
+                defb    3, 7, 14, 1
+                defb    4
+                defm    "cvap"
+                defb    3, 7, 12, 1
                 defb    0
 
 
-; tlbi_table — 2 entries.
+; tlbi_table — full parity with the Go authority tlbiOps
+; (tools/sam-aarch64-format/sysregs.go).  30 entries.
 ; Format per entry:
 ;   [name_len u8][name_bytes][op1 u8][CRn u8][CRm u8][op2 u8][NeedsXt u8].
+; All TLBI ops have CRn = 8 (the TLBI family selector).
 tlbi_table:
+; EL1, no Xt.
+                defb    9
+                defm    "vmalle1is"
+                defb    0, 8, 3, 0, 0
                 defb    7
                 defm    "vmalle1"
                 defb    0, 8, 7, 0, 0
+                defb    7
+                defm    "alle1is"
+                defb    4, 8, 3, 4, 0
+                defb    5
+                defm    "alle1"
+                defb    4, 8, 7, 4, 0
+                defb    7
+                defm    "alle2is"
+                defb    4, 8, 3, 0, 0
+                defb    5
+                defm    "alle2"
+                defb    4, 8, 7, 0, 0
+                defb    7
+                defm    "alle3is"
+                defb    6, 8, 3, 0, 0
+                defb    5
+                defm    "alle3"
+                defb    6, 8, 7, 0, 0
+                defb    12
+                defm    "vmalls12e1is"
+                defb    4, 8, 3, 6, 0
+                defb    10
+                defm    "vmalls12e1"
+                defb    4, 8, 7, 6, 0
+; EL1, with Xt.
                 defb    6
                 defm    "vae1is"
                 defb    0, 8, 3, 1, 1
+                defb    8
+                defm    "aside1is"
+                defb    0, 8, 3, 2, 1
+                defb    7
+                defm    "vaae1is"
+                defb    0, 8, 3, 3, 1
+                defb    7
+                defm    "vale1is"
+                defb    0, 8, 3, 5, 1
+                defb    8
+                defm    "vaale1is"
+                defb    0, 8, 3, 7, 1
+                defb    4
+                defm    "vae1"
+                defb    0, 8, 7, 1, 1
+                defb    6
+                defm    "aside1"
+                defb    0, 8, 7, 2, 1
+                defb    5
+                defm    "vaae1"
+                defb    0, 8, 7, 3, 1
+                defb    5
+                defm    "vale1"
+                defb    0, 8, 7, 5, 1
+                defb    6
+                defm    "vaale1"
+                defb    0, 8, 7, 7, 1
+; EL2 / EL3, with Xt.
+                defb    9
+                defm    "ipas2e1is"
+                defb    4, 8, 0, 1, 1
+                defb    10
+                defm    "ipas2le1is"
+                defb    4, 8, 0, 5, 1
+                defb    6
+                defm    "vae2is"
+                defb    4, 8, 3, 1, 1
+                defb    7
+                defm    "vale2is"
+                defb    4, 8, 3, 5, 1
+                defb    6
+                defm    "vae3is"
+                defb    6, 8, 3, 1, 1
+                defb    7
+                defm    "vale3is"
+                defb    6, 8, 3, 5, 1
+                defb    7
+                defm    "ipas2e1"
+                defb    4, 8, 4, 1, 1
+                defb    8
+                defm    "ipas2le1"
+                defb    4, 8, 4, 5, 1
+                defb    4
+                defm    "vae2"
+                defb    4, 8, 7, 1, 1
+                defb    5
+                defm    "vale2"
+                defb    4, 8, 7, 5, 1
+                defb    4
+                defm    "vae3"
+                defb    6, 8, 7, 1, 1
+                defb    5
+                defm    "vale3"
+                defb    6, 8, 7, 5, 1
                 defb    0
