@@ -97,6 +97,7 @@ planning session; `i13` is locked to "gitignore" to match shipped PR #107, so th
 | **i36** | Z80 disasm: ccmp/ccmn decode (was → `.inst`) — added decode + encoder (ccmn ID 100); binutils-aligned | ✅ DONE (PR #119) | `docs/notes/2026-06-08-z80-go-disasm-parity-i9.md` |
 | **i37** | base csinv/csneg (Rn≠Rm): Go `aarch64dec` now decodes them (IDs 101/102), encoder coverage added; aliases intact | ✅ DONE (PR #119) | same analysis doc. The i9 sweep skip is removed; families now certified |
 | **i38** | Audit for other skipped/excluded tests + PRs that left gaps rather than fixing them | ✅ DONE (PR #118) — 14 skip sites, 13 legitimate, only the i9 gap (now fixed by i36/i37); no other papered-over gaps | `docs/notes/2026-06-08-skipped-tests-and-gaps-audit.md` |
+| **i39** | Next-gen maximally-efficient compact `.tbn` encoding (bitfield-packing; runs of *anything*; assembled-form-with-zeroed-bits + sparse expression overlay so every instruction is ≈4 B; header label/symbol table so labels don't break runs; embedded comments; rethink local-vs-global within one file). Goal: maximise source that fits in the SAM's 512 KB. Significant rewrite acceptable; efficiency is the priority. | 🧭 brainstorm in progress (Pete 2026-06-08) | `docs/specs/2026-06-08-compact-tbn-nextgen-design.md` (brainstorm) — builds on / may supersede the i1 LIT_INSTS/LIT_DATA format |
 
 ## Open questions for Pete (awaiting input)
 
