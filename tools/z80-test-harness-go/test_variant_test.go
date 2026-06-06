@@ -35,7 +35,8 @@ func TestVariantBootSelfTests(t *testing.T) {
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
 	sd13Path := filepath.Join(root, "build", "sysreg_data.bin")
-	d15Path := filepath.Join(root, "build", "disasm.bin")
+	// BUILD_TESTS assembler boot runs the disasm self-test → TEST disasm.
+	d15Path := filepath.Join(root, "build", "disasm-test.bin")
 	encPath := filepath.Join(root, "build", "enctab.enc")
 	text2binPath := filepath.Join(root, "build", "text2bin")
 	fixturePath := filepath.Join(root, "tests", "m3", "sources", "inst_nop_ret.s")

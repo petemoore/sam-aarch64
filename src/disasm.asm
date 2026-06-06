@@ -65,7 +65,9 @@ NOP_LO:     equ     &201F   ; IX = low  16 bits
 ; (src/disasm_comm.inc), which src/assembler.asm names at its own build.
 ; -----------------------------------------------------------------------
                 jp      disasm_entry            ; &8000  DISASM_ENTRY
+if defined(BUILD_TESTS)
                 jp      run_disasm_self_test    ; &8003  DISASM_SELF_TEST_ENTRY
+endif
 
 ; -----------------------------------------------------------------------
 ; disasm_entry — decoder entry, reached via the &8000 jump above.
@@ -6939,6 +6941,7 @@ disasm_pow10_tbl:
                 defw    0               ; sentinel
 
 
+if defined(BUILD_TESTS)
 ; -----------------------------------------------------------------------
 ; run_disasm_self_test — boot self-test, invoked via paged_call from the
 ; BUILD_TESTS boot sequence in src/assembler.asm.
@@ -7815,3 +7818,5 @@ disasm_stest_udiv_expect:       defm    "udiv"
                                 defb    0
 disasm_stest_udiv_ops_expect:   defm    "w2, w2, w3"
                                 defb    0
+
+endif ; defined(BUILD_TESTS)

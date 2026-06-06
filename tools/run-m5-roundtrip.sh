@@ -83,8 +83,13 @@ echo "--- text2bin ---"
 # See docs/notes/2026-05-28-paged-call-architecture.md.
 echo "--- build-m3-disk ---"
 test_variant_flags=()
+# The disasm self-test runs at boot only under BUILD_TESTS (the test
+# assembler), so the test disk ships disasm-test.bin (with the &8003
+# self-test) and prod disks ship the stripped disasm.bin.
+disasm_bin="$ROOT/build/disasm.bin"
 if [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler.bin" ]; then
-    make -s test-mem-offaxis paged-call-payload cluster-offaxis
+    make -s test-mem-offaxis paged-call-payload cluster-offaxis disasm-test-payload
+    disasm_bin="$ROOT/build/disasm-test.bin"
     test_variant_flags=(
         -test-mem "$ROOT/build/test_mem.bin"
         -paged-call "$ROOT/build/paged_call_test_payload.bin"
@@ -94,7 +99,7 @@ fi
 "$ROOT/build/build-m3-disk" \
     "${test_variant_flags[@]}" \
     -sysreg-data "$ROOT/build/sysreg_data.bin" \
-    -disasm "$ROOT/build/disasm.bin" \
+    -disasm "$disasm_bin" \
     "$ASSEMBLER_BIN" build/enctab.enc \
     "build/${base}.tbn" \
     "build/${base}.mgt"

@@ -106,7 +106,7 @@ test-m2: refenc text2bin
 
 ci-m2: test-m2
 
-.PHONY: m3-asm m3-asm-prod build-m3-disk m3-disk test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-payload test-m3 ci-m3 check-budget
+.PHONY: m3-asm m3-asm-prod build-m3-disk m3-disk test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-payload disasm-test-payload test-m3 ci-m3 check-budget
 
 # check-budget — fail if either assembler variant has grown into the
 # &C000 stack page (the silent boot-hang cliff; see
@@ -226,18 +226,34 @@ $(BUILD)/sysreg_data.bin: src/sysreg_data.asm
 
 sysreg-data: $(BUILD)/sysreg_data.bin
 
-# Disassembler binary (PRODUCTION feature — both variants).
+# Disassembler binary — two variants, mirroring the assembler split.
 #
 # Standalone disassembler stub (org &8000) HLOAD'd at boot into physical
-# page 15 by src/loader.asm::load_page15_payload.  Entry at DISASM_ENTRY
-# (&8000) when HMPR = DISASM_PAGE (= 15).  Called via paged_call by
-# run_disasm_paged_self_tests (BUILD_TESTS) and, once the editor lands,
-# at runtime.  Not an importfile user — assembles standalone.
+# page 15 by src/loader.asm::load_page15_payload.  The decoder entry at
+# DISASM_ENTRY (&8000) is production; the &8003 self-test slot
+# (DISASM_SELF_TEST_ENTRY) and the whole run_disasm_self_test body are
+# wrapped in `if defined(BUILD_TESTS)` in src/disasm.asm.  Not an
+# importfile user — assembles standalone.
+#
+#   disasm.bin       (PROD)  no flag — decoder only, self-test stripped.
+#                    Ships on every production disk (m4/m5/m6-prod,
+#                    m6-release) where no boot self-test runs.
+#
+#   disasm-test.bin  (TEST)  -D BUILD_TESTS=1 — includes the &8003
+#                    self-test entry + fixtures.  Ships only on the test
+#                    disk (the BUILD_TESTS assembler boot calls &8003 via
+#                    paged_call to verify the decoder).
 $(BUILD)/disasm.bin: src/disasm.asm
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/disasm.bin src/disasm.asm
 
+$(BUILD)/disasm-test.bin: src/disasm.asm
+	@mkdir -p $(BUILD)
+	pyz80 -D BUILD_TESTS=1 --obj=$(BUILD)/disasm-test.bin src/disasm.asm
+
 disasm-payload: $(BUILD)/disasm.bin
+
+disasm-test-payload: $(BUILD)/disasm-test.bin
 
 $(BUILD)/build-m3-disk: tools/build-m3-disk/main.go tools/build-m3-disk/go.mod
 	@mkdir -p $(BUILD)
@@ -245,13 +261,16 @@ $(BUILD)/build-m3-disk: tools/build-m3-disk/main.go tools/build-m3-disk/go.mod
 
 build-m3-disk: $(BUILD)/build-m3-disk
 
-m3-disk: m3-asm test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-payload enctab $(BUILD)/build-m3-disk
+# m3-disk uses the TEST assembler (assembler.bin, BUILD_TESTS=1), whose
+# boot sequence calls the disasm &8003 self-test via paged_call — so it
+# must ship the TEST disasm binary (disasm-test.bin).
+m3-disk: m3-asm test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-test-payload enctab $(BUILD)/build-m3-disk
 	$(BUILD)/build-m3-disk \
 	    -test-mem $(BUILD)/test_mem.bin \
 	    -cluster $(BUILD)/test_cluster.bin \
 	    -paged-call $(BUILD)/paged_call_test_payload.bin \
 	    -sysreg-data $(BUILD)/sysreg_data.bin \
-	    -disasm $(BUILD)/disasm.bin \
+	    -disasm $(BUILD)/disasm-test.bin \
 	    $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/m3-test.mgt
 
 # test-m3 — sweep every fixture under tests/m3/sources/ end-to-end:

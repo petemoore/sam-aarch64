@@ -158,10 +158,13 @@ func runZ80Disasm(disasmBin []byte, word uint32, pc uint64) (mnem, ops string, e
 // fail-tag would halt the assembler in the SimCoupé CI gate.  Verifying it
 // here (no SimCoupé / no Docker needed) catches a broken self-test before
 // CI does.  Keep its fixtures in lock-step with the ported families.
+// Reads build/disasm-test.bin — the TEST variant (-D BUILD_TESTS=1), which
+// is the only build that carries the &8003 self-test entry + fixtures.  The
+// shipped prod build/disasm.bin strips them.
 func TestDisasmSelfTest(t *testing.T) {
-	disasmBin, err := os.ReadFile("../../build/disasm.bin")
+	disasmBin, err := os.ReadFile("../../build/disasm-test.bin")
 	if err != nil {
-		t.Fatalf("read build/disasm.bin (build it with `pyz80 --obj=build/disasm.bin src/disasm.asm`): %v", err)
+		t.Fatalf("read build/disasm-test.bin (build it with `pyz80 -D BUILD_TESTS=1 --obj=build/disasm-test.bin src/disasm.asm`): %v", err)
 	}
 	m := &flatMem{}
 	copy(m.ram[disasmEntry:], disasmBin)
@@ -202,6 +205,9 @@ func goOracle(pc uint64, word uint32) (mnem, ops string) {
 	return m, o
 }
 
+// Reads build/disasm.bin — the PROD variant (no BUILD_TESTS flag), which is
+// the binary actually shipped on production disks.  Verifying the shipped
+// decoder (not the test build) is the point: this is the 100% gate.
 func TestDisasmOracle(t *testing.T) {
 	disasmBin, err := os.ReadFile("../../build/disasm.bin")
 	if err != nil {

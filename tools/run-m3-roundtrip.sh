@@ -89,9 +89,14 @@ echo "--- text2bin ---"
 # (PR-2 of docs/plans/2026-05-29-m6-closure-release-bytematch.md).
 echo "--- build-m3-disk ---"
 test_variant_flags=()
+# The disasm self-test runs at boot only under BUILD_TESTS (the test
+# assembler), so the test disk ships disasm-test.bin (with the &8003
+# self-test) and prod disks ship the stripped disasm.bin.
+disasm_bin="$ROOT/build/disasm.bin"
 if [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler.bin" ]; then
-    # Test variant — needs the off-axis payloads.
-    make -s test-mem-offaxis paged-call-payload cluster-offaxis
+    # Test variant — needs the off-axis payloads + the self-test disasm.
+    make -s test-mem-offaxis paged-call-payload cluster-offaxis disasm-test-payload
+    disasm_bin="$ROOT/build/disasm-test.bin"
     test_variant_flags=(
         -test-mem "$ROOT/build/test_mem.bin"
         -paged-call "$ROOT/build/paged_call_test_payload.bin"
@@ -101,7 +106,7 @@ fi
 "$ROOT/build/build-m3-disk" \
     "${test_variant_flags[@]}" \
     -sysreg-data "$ROOT/build/sysreg_data.bin" \
-    -disasm "$ROOT/build/disasm.bin" \
+    -disasm "$disasm_bin" \
     "$ASSEMBLER_BIN" build/enctab.enc \
     "build/${base}.tbn" \
     "build/${base}.mgt"

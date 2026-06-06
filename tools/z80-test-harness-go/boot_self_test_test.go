@@ -30,11 +30,11 @@
 //     DISASM_COMM_PC at &7EBD) surfaces here as a FAIL banner with its tag,
 //     not as a CI failure minutes later.
 //
-// Requires (all from `make m3-asm enctab sysreg-data disasm-payload
+// Requires (all from `make m3-asm enctab sysreg-data disasm-test-payload
 // test-mem-offaxis cluster-offaxis paged-call-payload text2bin`):
 //
 //	build/assembler.bin   build/enctab.enc   build/sysreg_data.bin
-//	build/disasm.bin      build/test_mem.bin build/test_cluster.bin
+//	build/disasm-test.bin build/test_mem.bin build/test_cluster.bin
 //	build/paged_call_test_payload.bin   build/text2bin
 //
 // Skipped automatically if any artefact is absent.  SimCoupé remains the sole
@@ -57,7 +57,9 @@ func TestBootSelfTestsPass(t *testing.T) {
 	asmPath := filepath.Join(root, "build", "assembler.bin")
 	encPath := filepath.Join(root, "build", "enctab.enc")
 	sd13Path := filepath.Join(root, "build", "sysreg_data.bin")
-	d15Path := filepath.Join(root, "build", "disasm.bin")
+	// Test disk: the BUILD_TESTS assembler boot runs the disasm self-test,
+	// so it needs the TEST disasm binary (disasm-test.bin) on page 15.
+	d15Path := filepath.Join(root, "build", "disasm-test.bin")
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
@@ -66,7 +68,7 @@ func TestBootSelfTestsPass(t *testing.T) {
 
 	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path, text2binPath, fixturePath} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make m3-asm enctab sysreg-data disasm-payload test-mem-offaxis cluster-offaxis paged-call-payload text2bin`", p)
+			t.Skipf("prerequisite missing: %s\n  run `make m3-asm enctab sysreg-data disasm-test-payload test-mem-offaxis cluster-offaxis paged-call-payload text2bin`", p)
 		}
 	}
 

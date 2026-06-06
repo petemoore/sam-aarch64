@@ -24,7 +24,9 @@ func TestBootSelfTestsFailProbe(t *testing.T) {
 	asmPath := filepath.Join(root, "build", "assembler.bin")
 	encPath := filepath.Join(root, "build", "enctab.enc")
 	sd13Path := filepath.Join(root, "build", "sysreg_data.bin")
-	d15Path := filepath.Join(root, "build", "disasm.bin")
+	// Test disk: corrupts the &8003 self-test, which only exists in the
+	// TEST disasm binary (disasm-test.bin).
+	d15Path := filepath.Join(root, "build", "disasm-test.bin")
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
