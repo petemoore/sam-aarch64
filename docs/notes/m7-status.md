@@ -4,6 +4,10 @@ Entry point for any session picking up M7. The M7 backlog (gathered from
 notes + memory so nothing was lost in the M6 → M7 transition) is the scope
 table below; it will keep being refined / re-prioritised as M7 proceeds.
 
+**Items are tracked with stable `iN` ids** — see the **"Item index — the `iN`
+registry"** section below for the authoritative id↔item map and the naming
+convention. Refer to work by its id (e.g. "i1", "i12a") in PRs and conversation.
+
 **M7 — ACTIVE (opened 2026-05-29; M6 closed via PR #76).** Housekeeping
 batch 1 has landed (PRs #78–#82: dead-code removal, sysreg sync guard,
 index READMEs + memory-layout doc, decision bookkeeping, the `src/m3` →
@@ -38,6 +42,58 @@ Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not
 | SAM screen-mode decision (editor) | 🧭 | Pete 2026-05-29; ROADMAP "Editor vision" | MODE 3 currently assumed. Decide mode(s) by colour-vs-resolution + aesthetics nearer the editor; the choice consumes display RAM / pages, so it feeds the memory-layout doc (the ✅ row above). **Pete 2026-05-29:** consider offering it as a **user preference** — high-resolution/fewer-colours vs lower-resolution/more-colours — rather than a fixed choice. |
 | Full ARMv8-A instruction-set footprint — research | ✅ DELIVERED (`docs/notes/2026-06-08-armv8-a64-isa-footprint-research.md`) | Pete 2026-05-29 | **Isolated research project:** estimate how much additional memory (encoder tables + Z80 code) it would take to support the **full ARMv8.0-A A64 instruction set** (A64 only — no AArch32/Thumb; ARMv8.0 only, not later v8.x), vs today's spectrum4-release-only subset. Include the **FP + Advanced SIMD/NEON** extensions (Pete: "is that NEON? — yes"). **Findings:** ~442 mnemonics full-ISA vs 99 today; NEON/FP is ~40–45% by mnemonic / >50% by encoding-variant — the dominant cost. Estimate +1100–1850 encoder Forms, `enctab.enc` 3.7 KB → ~30–50 KB (cheap — pages onto the free 272 KB), **+15–35 KB of Z80 code**. **Verdict:** does NOT fit the flat `&8000–&C000` window (1.9 KB code headroom vs +15–35 KB) → needs a **paged-code/overlay** subsystem; table growth already solved by the existing off-axis pattern; Trinity storage not required on a 512K machine. Motivation: decide whether broad-ISA support is worth it for future kernel dev or ingesting LLVM-compiled output. Builds on the #87 parity audit (which found the *current* coverage is structurally complete for the subset). |
 | Trinity SD/flash storage → bigger-kernel architecture | 🧭 *(beyond-M7)* | Pete 2026-05-29; `memory/trinity_hardware.md` | Trinity's SD/MMC slot lifts the implicit single-floppy ceiling, enabling much larger kernels/debug builds (spectrum4 may be ~5× when complete). The binding constraint eventually shifts from code budget to storage. Quazar docs to be scanned. Distant future. |
+
+## Item index — the `iN` registry (naming convention)
+
+**Convention (Pete, 2026-06-08):** every tracked item has a stable **`iN`** id
+(`i` = item). This table is the **registry** — the authoritative id↔item map.
+Rules: (1) once an id appears in a PR title, branch, or commit it is **locked** —
+never renumber it; (2) sub-items take letter suffixes (`i12a`/`i12b`/`i12c`);
+(3) a new item gets the next free integer; (4) reference items by id in
+conversation, PRs, and these docs. The scope table above and the deferred-backlog
+table below carry the same ids. (The ids below were assigned in the 2026-06-08
+planning session; `i13` is locked to "gitignore" to match shipped PR #107, so the
+"replace `cls`" item — tentatively i13 in conversation — is registered as `i16`.)
+
+| id | item | status | pointer |
+|----|------|--------|---------|
+| **i1** | Compact-`.tbn` format change (hybrid bytes/symbolic; `KindLitInsts`) | 📋 planned (the sequenced-next big strand) | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` |
+| **i2** | On-SAM IDE memory model (edit buffer + IN/OUT paging; "claim all free RAM, grow on demand") | 🧭 reframed; deferred to editor work | scope row "IN/OUT paged-buffer ceiling" |
+| **i3** | Editor groundwork (Phase 2) — full vision | 🧭 | ROADMAP "Editor vision" |
+| **i4** | Basic read-only listing/scroll viewer (centre-locked cursor; up/down only) | 🧭 new 2026-06-08 | — (Pete's idea; precursor to i3) |
+| **i5** | UI visual prototyping via image generation (MODE 3 64×24 vs MODE 4 32×24 mockups) | 🧭 new 2026-06-08 | — (Pete's idea) |
+| **i6** | SAM screen-mode decision (MODE 3 vs 4, or user preference) | 🧭 | ROADMAP "Editor vision"; scope row |
+| **i7** | Codegen sysreg/mnemonic/form tables from Go authority | 📋 | scope row |
+| **i8** | Sysreg-table de-dup into shared `src/sysreg_tables.inc` | ✅ DONE (PR #108) | `src/sysreg_tables.inc` |
+| **i9** | Parity robustness seeds (sysname fail-soft + untested-form empirical sweep) | ⏳ in progress (agent) | `docs/notes/2026-05-29-z80-go-parity-audit.md`; scope row |
+| **i10** | Go-vs-Z80 capability parity report | ✅ DONE (PR #109) | `docs/notes/2026-06-08-go-vs-z80-disasm-capability-parity.md` |
+| **i11** | Full ARMv8.0-A A64 ISA footprint research | ✅ DONE (PR #110) | `docs/notes/2026-06-08-armv8-a64-isa-footprint-research.md` |
+| **i12a** | SimCoupé v1.2.16 bump (pin SHA to upstream, drop vendored `-exitonhalt` patch) | ⏳ in progress (agent) | `tools/Dockerfile.dev` |
+| **i12b** | Editor-testing input injection (`-keyin` vs `FLAGS`/`LASTK` memory injection) | 🧭 new 2026-06-08 | `tools/run-simcoupe.sh`; for automated editor tests |
+| **i12c** | Rebase/upstream macOS+Linux paste support | ✅ RESOLVED/MOOT — upstreamed (`87f2a69`); arrives free with i12a | `~/.claude/.../memory/project_simcoupe_sdl_paste_branch.md` |
+| **i13** | gitignore in-tree Go build binaries | ✅ DONE (PR #107) | `.gitignore` |
+| **i14** | Non-canonical logical-immediate decoder tests (`decodeBitMasks` `immr≥esize` reject) | 🧭 | deferred-backlog row |
+| **i15** | `adds` 3-register form (Z80) | 🧭 | deferred-backlog row |
+| **i16** | Replace `cls` test instruction with a real spectrum4 one | 🧭 (was tentatively "i13" in conversation) | `docs/ROADMAP.md` deferred checklist |
+| **i17** | Deep reviews of `main_loop.asm` + `litpool.asm` + `SYMTAB_*` equ sentinels | ⏳ | repo-audit §6 |
+| **i18** | Wider naming review (`tests/m{N}`, `ci-m{N}`, `build-m3-disk`, milestone fixtures) | ⏳ | scope row "Directory naming" |
+| **i19** | Subagent worktree-isolation leak — harden | 🧭 | scope row |
+| **i20** | Linker-layout coupling (`spectrum4.ld` hardcoded in flatten) | 🧭 | scope row |
+| **i21** | Go-harness fidelity follow-ups (watchpoint, `make harness-sweep`, USAGE.md) | ⏳ | scope row |
+| **i22** | Per-fail-site diagnostic strings | 🧭 | deferred-backlog row |
+| **i23** | Paged-IN >16.5 KB HLOAD-ceiling lift | 🧭 | deferred-backlog row |
+| **i24** | 64 KB output / 16-bit `OUT_LEN` limit | 🧭 | deferred-backlog row |
+| **i25** | `(hksp)` HSAVE/HLOAD error handler | 🧭 | deferred-backlog row |
+| **i26** | text2bin operand-kind validation (Task 21) | 🧭 | deferred-backlog row |
+| **i27** | Cortex-A53 errata workarounds (`--fix-cortex-a53-*`) | 🧭 | deferred-backlog row |
+| **i28** | Absolute `.set` high-word edge vs Go | 🧭 | deferred-backlog row |
+| **i29** | Harden slot self-test `PASS_PC` dependency | 🧭 | deferred-backlog row |
+| **i30** | LDIR-fan-out for cross-page-shared blocks (smaller binary + faster boot) | 🧭 deferred/possible | `docs/plans/2026-06-07-strand-b-pr4-z80-disassembler-port.md` "Future enhancements" |
+| **i31** | On-SAM preprocessor (`.if` build-constraints + macros) | 🧭 beyond-M7 | "Beyond-M7 / future ideas" |
+| **i32** | Multiple source files + staged/partial loading | 🧭 beyond-M7 | "Beyond-M7 / future ideas" |
+| **i33** | Trinity SD/flash storage → bigger-kernel architecture | 🧭 beyond-M7 | `memory/trinity_hardware.md` |
+| **i34** | Untrack accidentally-committed Go binaries | ⏳ partial — `enctab-gen` untracked (PR #111); `llist-normalise` pending LLIST disposition (open-Q5) | `.gitignore`; open-question 5 |
+| **i35** | `sdiv` missing across the whole stack (no mnemonic/Form → `.inst`; unencodable) | 🧭 new 2026-06-08 | deferred-backlog row; mirror `udiv` ID 72 |
 
 ## Open questions for Pete (awaiting input)
 
