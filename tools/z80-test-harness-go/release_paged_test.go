@@ -43,13 +43,14 @@ func TestReleasePagedInLoad(t *testing.T) {
 	asmPath := filepath.Join(root, "build", "assembler-prod.bin")
 	encPath := filepath.Join(root, "build", "enctab.enc")
 	sd13Path := filepath.Join(root, "build", "sysreg_data.bin")
+	d15Path := filepath.Join(root, "build", "disasm.bin")
 	text2binPath := filepath.Join(root, "build", "text2bin")
 	releaseSrc := filepath.Join(root, "tests", "m6", "release", "release.s")
 	releaseImg := filepath.Join(root, "tests", "m6", "release", "release.img")
 
-	for _, p := range []string{asmPath, encPath, sd13Path, text2binPath, releaseSrc, releaseImg} {
+	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, text2binPath, releaseSrc, releaseImg} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make m3-asm-prod enctab text2bin sysreg-data`", p)
+			t.Skipf("prerequisite missing: %s\n  run `make m3-asm-prod enctab text2bin sysreg-data disasm-payload`", p)
 		}
 	}
 
@@ -68,6 +69,7 @@ func TestReleasePagedInLoad(t *testing.T) {
 	asm, _ := os.ReadFile(asmPath)
 	enc, _ := os.ReadFile(encPath)
 	sd13, _ := os.ReadFile(sd13Path)
+	d15, _ := os.ReadFile(d15Path)
 	in, err := os.ReadFile(tbnPath)
 	if err != nil {
 		t.Fatalf("read release.tbn: %v", err)
@@ -80,9 +82,15 @@ func TestReleasePagedInLoad(t *testing.T) {
 		t.Fatalf("release.tbn is only %d pages; expected >=6 for the paged-IN regression", wantPages)
 	}
 
-	// (1) WITH sd13 → completes + byte-matches the vendored oracle.
+	// (1) WITH sd13 + d15 → completes + byte-matches the vendored oracle.
+	// d15 (the disassembler) is a production feature HLOAD'd at boot by
+	// load_page15_payload in BOTH variants, so the prod boot pages it into
+	// physical page 15; without it served the boot traps naming d15.
 	res := RunWithFiles(asm, enc, in,
-		[]NamedFile{{Name: "sd13", Content: sd13, TargetPage: 13}},
+		[]NamedFile{
+			{Name: "sd13", Content: sd13, TargetPage: 13},
+			{Name: "d15", Content: d15, TargetPage: 15},
+		},
 		30*time.Second)
 	if !res.Passed {
 		t.Fatalf("release paged-IN run FAILED with sd13 supplied: exit=%q printer=%q regs=%s",
