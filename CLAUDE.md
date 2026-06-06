@@ -81,6 +81,8 @@ The harness is **not** a CI gate — SimCoupé is the only gate. The harness can
 
 Design rationale + workflow: `docs/notes/2026-05-28-test-harness-bakeoff-evaluation.md`.
 
+**Don't use CI as the inner loop.** Pushing and waiting for the SimCoupé CI matrix costs *minutes* per round-trip; the harness runs equivalent checks in *seconds*. An agent doesn't feel the wait, but Pete does — and it's the throughput bottleneck. The harness now covers the **full paged boot path**, not just standalone decode: `tools/z80-test-harness-go/TestBootSelfTestsPass` boots the BUILD_TESTS assembler (paging payloads into pages 12-15) and asserts every boot self-test passes in ~30 ms, with `TestBootSelfTestsFailProbe` as a negative control. So verify locally — `pyz80` + `go test ./...` (oracle/decode + the boot test) — and reserve CI for the **final pre-merge gate**, not per-iteration. If the harness lacks a capability you need (a page not served, a payload not loaded), add it — normal harness evolution (see the `d15`/page-15 gap fixed during the disassembler port).
+
 ## Where plans and specs go (override the superpowers default)
 
 The superpowers skills (`writing-plans`, `brainstorming`) **explicitly instruct** you to save to `docs/superpowers/plans/` and `docs/superpowers/specs/`. **In this repo, do NOT — override that:**
