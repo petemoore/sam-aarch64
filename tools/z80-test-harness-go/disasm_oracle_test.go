@@ -107,12 +107,26 @@ func runZ80Disasm(disasmBin []byte, word uint32) (mnem, ops string, err error) {
 
 	cpu.BC.SetU16(uint16(word >> 16)) // BC = high 16 bits
 	cpu.IX = uint16(word & 0xFFFF)    // IX = low 16 bits
+	const iySentinel = 0xA5A5
+	cpu.IY = iySentinel // must be preserved per the paged_call ABI
 	cpu.PC = disasmEntry
 
 	const maxSteps = 100000
 	for steps := 0; steps < maxSteps; steps++ {
 		cpu.Step()
 		if cpu.PC == sentinel {
+			// disasm_entry's contract: "Preserves: BC, IX, IY" (paged_call
+			// ABI).  The production bytes->text caller decodes in a loop and
+			// relies on it, so enforce it on every word.
+			if got := cpu.BC.U16(); got != uint16(word>>16) {
+				return "", "", fmt.Errorf("ABI violation: BC not preserved (got %#04x, want %#04x; word %#08x)", got, word>>16, word)
+			}
+			if cpu.IX != uint16(word&0xFFFF) {
+				return "", "", fmt.Errorf("ABI violation: IX not preserved (got %#04x, want %#04x; word %#08x)", cpu.IX, word&0xFFFF, word)
+			}
+			if cpu.IY != iySentinel {
+				return "", "", fmt.Errorf("ABI violation: IY not preserved (got %#04x, want %#04x; word %#08x)", cpu.IY, iySentinel, word)
+			}
 			return m.readCString(disasmCommMnem), m.readCString(disasmCommOps), nil
 		}
 		if cpu.HALT {

@@ -326,6 +326,16 @@ disasm_mw_sf_ok:
                 ld      a, (disasm_mw_opc)
                 cp      1
                 jp      z, disasm_not_movewide    ; opc=01 unallocated → .inst
+; Past the last decline: every remaining path is a success that ret's.
+; The emit code below clobbers BC and IX as scratch, but disasm_entry's
+; ABI contract (paged_call) requires BC/IX/IY preserved for the caller —
+; the production bytes->text loop relies on it.  Save them here and
+; restore via disasm_mw_done before returning.  (The decline paths above
+; never reach here, and they leave BC/IX/D/E untouched, so the .inst
+; fallback still sees the original word.)  IY is already preserved (no
+; move-wide code touches it; disasm_emit_dec16 save/restores it).
+                push    bc
+                push    ix
                 cp      3                          ; opc=11 → movk
                 jp      z, disasm_mw_movk
                 cp      2                          ; opc=10 → movz
@@ -430,7 +440,7 @@ disasm_mw_emit_keptops:
                 call    disasm_mw_emit_lsl
 disasm_mw_keptops_done:
                 ld      (hl), 0
-                ret
+                jp      disasm_mw_done
 
 
 ; -----------------------------------------------------------------------
@@ -462,6 +472,16 @@ disasm_mw_emit_mov_alias:
 disasm_mw_alias_width:
                 call    disasm_mw_emit_hexbuf       ; A bytes of disasm_mw_val
                 ld      (hl), 0
+                ; fall through to disasm_mw_done (restore BC/IX, return)
+
+; -----------------------------------------------------------------------
+; disasm_mw_done — common success epilogue: restore the BC/IX that the
+; move-wide emit code clobbered (saved after the last decline) and return,
+; honouring disasm_entry's "Preserves: BC, IX, IY" ABI contract.
+; -----------------------------------------------------------------------
+disasm_mw_done:
+                pop     ix
+                pop     bc
                 ret
 
 
