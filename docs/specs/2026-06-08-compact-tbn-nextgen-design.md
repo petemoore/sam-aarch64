@@ -619,7 +619,7 @@ The reasoning:
 
 ---
 
-## 6. Open questions for Pete
+## 6. Open questions for Pete — ✅ RESOLVED 2026-06-08 (see §7)
 
 1. **Resident-vs-file priority.** The headline win (−32% *assembler-resident*)
    depends on paging name strings + comments out of the assembler's mapped set.
@@ -644,3 +644,45 @@ The reasoning:
    round-trip-only and moves to the sidecar. OK to treat *all* named symbols as
    value/position entries the assembler resolves identically (no
    local/global behavioural distinction inside one file)?
+
+---
+
+## 7. Decisions (Pete, 2026-06-08) — Format B confirmed
+
+The §6 questions are resolved as follows; **Format B is the agreed target.**
+
+1. **Resident-vs-file priority → resident RAM is the driver; on-disk file size is
+   secondary.** Pete's key refinement (the unlock): the SAM can **write the `.tbn`
+   to disk before assembling, reuse the comment/name RAM as OUT/scratch during the
+   build, write the assembled binary to disk, then reload the `.tbn`** to restore
+   the editor view. So the editor-only content need not be a separate file or a
+   permanently-unmapped page — it lives **inline in the one file** in a
+   **contiguous, temporally-evictable region** that is swapped to disk during a
+   build. This reconciles "everything in one file" (Q2) with "minimise resident
+   bytes" (Q1). Tracked as a concrete future mechanism: **i40**.
+2. **Editor sidecar location → one `.tbn` file** (no companion file). The
+   editor-only content is a section *within* that file (the evictable region above).
+3. **Version bump → clean breaking v2.** Pre-release; nothing is committed to v1,
+   so get the slot enum / run modes / directive ids append-only-stable in v2.
+4. **Numeric-base / spelling hints → editor region.** They don't affect assembled
+   output, so they live in the evictable editor metadata, not the assembler stream.
+5. **Local/global symbol semantics → uniform assembly + non-destructive
+   preservation** (agent's call, Pete confirmed):
+   - **Numeric locals (`1f`/`1b`) stay first-class** — a distinct *resolution*
+     mechanism (nearest forward/backward), not a visibility attribute.
+   - **All named symbols resolve identically** in the assembler — there is no
+     linker in the single-file flat-binary path, so `.global` never changes a byte.
+   - **`.global`/`.local` is preserved non-destructively** as a ~1-bit/symbol flag
+     in the editor region (≪100 B for the release; not resident during a build), so
+     SAM↔PC-binutils round-trips keep the visibility split. Best of both: uniform
+     assembly, lossless source.
+
+**Net agreed shape:** Format B — instruction overlay (assembled word + zeroed bits
++ expression overlay) unifying literal/symbolic instructions into one run; header
+label/offset table; one `.tbn` v2 file with a contiguous **evictable editor region**
+(comments, name strings, base hints, `.global` flags); name-table front-coding;
+bitfield-packing as later polish. Projected ~38.6 KB file / ~34.5 KB
+assembler-resident (−32% vs today's 51 KB), in 3 phases behind the m6-release gate.
+
+**Next:** the Phase 1 implementation plan (instruction overlay + header label
+table), to be written under `docs/plans/`.
