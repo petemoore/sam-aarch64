@@ -126,6 +126,16 @@ disasm_not_mem:
                 jr      disasm_nop
 disasm_not_nop:
 
+; --- System instruction group (mrs/msr/dc/at/ic/tlbi/barriers/eret/wfi) -
+; aarch64dec decodeSys (sys.go) runs second in DecodeAt (after the mem
+; family).  Its encoding space (bits[31:22]==0b1101010100, plus the exact
+; eret/wfi words) is disjoint from every other ported family, so trying it
+; here is order-faithful.  It declines (B,C,D,E intact) for non-system
+; words and for the hint sub-space (nop is special-cased above; wfi is the
+; only other corpus hint and is matched exactly here).
+                jp      disasm_try_sys
+disasm_not_sys:
+
 ; --- test-and-branch (tbz/tbnz) ---------------------------------------
 ; aarch64dec decodeTestBranch (tbranch.go) runs ahead of udf/aliases on the
 ; Go side.  bits[30:25] == 0b011011.  Disjoint from NOP/UDF/move-wide, so
@@ -3728,21 +3738,28 @@ disasm_try_shiftvar:
                 rlca
                 and     3
                 jp      nz, disasm_not_shiftvar
-; opcode2 = (D>>2)&0x3f  (bits[15:10]).  Must be 001000..001011.
+; opcode2 = (D>>2)&0x3f  (bits[15:10]).  Two sub-families share this
+; dp-2-source space here:
+;   001000..001011  variable shift  → lsl/lsr/asr/ror  (decodeShiftVarAlias)
+;   000010          udiv            (decodeDP2Source)
+;   000011          sdiv            (decodeDP2Source)
 ; Keep B,C,D,E intact on the decline path: only A and scratch are touched.
                 ld      a, d
                 rrca
                 rrca
                 and     &3f
-                ld      l, a                     ; L = opcode2 (E must stay intact)
-                ; opcode2 high bits must be 001000 → check (opcode2 & ~3)==8.
+                ld      (disasm_sv_opc2), a      ; stash opcode2 (E must stay intact)
+; variable-shift?  high bits 001000 → (opcode2 & ~3)==8.
                 and     &fc
                 cp      8
-                jp      nz, disasm_not_shiftvar  ; not a variable-shift op
-; select mnemonic by opcode2 low 2 bits: 00 lsl 01 lsr 10 asr 11 ror.
-                ld      a, l
-                and     3
-                ld      (disasm_sv_sel), a
+                jr      z, disasm_sv_fields      ; variable shift
+; udiv/sdiv?  opcode2 == 0000010 (udiv) / 0000011 (sdiv) → (opcode2 & ~1)==2.
+                ld      a, (disasm_sv_opc2)
+                and     &fe
+                cp      2
+                jp      nz, disasm_not_shiftvar  ; neither sub-family → .inst
+; (mnemonic is selected after field extraction, which clobbers D.)
+disasm_sv_fields:
 ; sf = B>>7.
                 ld      a, b
                 rlca
@@ -3775,14 +3792,30 @@ disasm_try_shiftvar:
                 push    bc
                 push    ix
 
-; mnemonic from table indexed by sel*4 (each "lsl\0" entry is 4 bytes).
-                ld      a, (disasm_sv_sel)
+; Select the mnemonic now that the word bytes (D) are no longer needed.
+;   opcode2 001000..001011 → variable shift (lsl/lsr/asr/ror) by low 2 bits
+;   opcode2 0000010/0000011 → udiv/sdiv by bit0
+                ld      a, (disasm_sv_opc2)
+                and     &fc
+                cp      8
+                jr      nz, disasm_sv_mnem_div
+; variable shift: table indexed by (opcode2 & 3)*4.
+                ld      a, (disasm_sv_opc2)
+                and     3
                 add     a, a
                 add     a, a                     ; sel*4
                 ld      e, a
                 ld      d, 0
                 ld      hl, disasm_sv_tbl
                 add     hl, de
+                jr      disasm_sv_mnem_set
+disasm_sv_mnem_div:
+                ld      hl, disasm_sv_udiv_txt
+                ld      a, (disasm_sv_opc2)
+                bit     0, a
+                jr      z, disasm_sv_mnem_set
+                ld      hl, disasm_sv_sdiv_txt
+disasm_sv_mnem_set:
                 call    disasm_sv_set_mnem
 ; operands: "Rd, Rn, Rm" at sf width.
                 ld      hl, DISASM_COMM_OPS
@@ -3838,8 +3871,12 @@ disasm_sv_tbl:
                 defb    0
                 defm    "ror"
                 defb    0
+disasm_sv_udiv_txt:     defm    "udiv"
+                        defb    0
+disasm_sv_sdiv_txt:     defm    "sdiv"
+                        defb    0
 
-disasm_sv_sel:          defb    0
+disasm_sv_opc2:         defb    0       ; opcode2 bits[15:10] (sub-family select)
 disasm_sv_sf:           defb    0
 disasm_sv_rm:           defb    0
 disasm_sv_rn:           defb    0
@@ -5768,6 +5805,1027 @@ disasm_mw_rd:           defb    0       ; destination register index 0..31
 disasm_mw_val:          defs    8       ; little-endian materialised value
 
 
+; =======================================================================
+; System instruction group — Z80 port of tools/aarch64dec/sys.go
+; (decodeSys).  Decodes mrs / msr (register + immediate) / dc / at / ic /
+; tlbi / dsb / dmb / isb, plus the exact-word hints eret and wfi.
+;
+; Encoding (the group): bits[31:22] == 0b1101010100, i.e. B == 0xd5 and
+; (C & 0xc0) == 0 (word & 0xffc00000 == 0xd5000000).  Two exact hint words
+; sit just outside that mask and are matched directly: eret 0xd69f03e0 and
+; wfi 0xd503207f (nop 0xd503201f is special-cased earlier; all other hints
+; do not occur in release.img and decline to .inst, matching the Go form
+; walk which carries only nop/wfi/eret as exact patterns).
+;
+; Field layout (word = B:C:D:E, B = bits31:24):
+;   l      = bit21       = (C>>5)&1
+;   op0fld = bits[20:19] = (C>>3)&3      (the switch discriminant)
+;   op1    = bits[18:16] = C&7
+;   CRn    = bits[15:12] = (D>>4)&0xf
+;   CRm    = bits[11:8]  = D&0xf
+;   op2    = bits[7:5]   = (E>>5)&7
+;   Rt     = bits[4:0]   = E&0x1f
+;
+; ABI: clobbers BC/IX on success; B,C,D,E are never modified by the decline
+; checks (only A/HL/scratch), so decline paths reach disasm_not_sys with the
+; word intact.  Success paths reconstruct BC/IX via disasm_sys_done.
+; =======================================================================
+disasm_try_sys:
+; Save the word bytes to scratch up front so success paths can clobber
+; BC/IX freely and reconstruct them in disasm_sys_done.  Decline paths
+; never modify B,C,D,E, so they reach disasm_not_sys with the word intact
+; regardless of these scratch writes.
+                ld      a, b
+                ld      (disasm_sys_wb), a
+                ld      a, c
+                ld      (disasm_sys_wc), a
+                ld      a, d
+                ld      (disasm_sys_wd), a
+                ld      a, e
+                ld      (disasm_sys_we), a
+
+; --- exact-word hints: eret (0xd69f03e0) -------------------------------
+                ld      a, b
+                cp      &d6
+                jr      nz, disasm_sys_not_eret
+                ld      a, c
+                cp      &9f
+                jr      nz, disasm_sys_not_eret
+                ld      a, d
+                cp      &03
+                jr      nz, disasm_sys_not_eret
+                ld      a, e
+                cp      &e0
+                jr      nz, disasm_sys_not_eret
+                ld      hl, disasm_sys_eret_txt
+                jp      disasm_sys_emit_mnem_noops
+disasm_sys_not_eret:
+
+; --- group discriminator: B==0xd5 and (C&0xc0)==0 ----------------------
+                ld      a, b
+                cp      &d5
+                jp      nz, disasm_not_sys
+                ld      a, c
+                and     &c0
+                jp      nz, disasm_not_sys
+
+; --- exact-word hint: wfi (0xd503207f) ---------------------------------
+; (Inside the group: C==0x03, D==0x20, E==0x7f.)
+                ld      a, c
+                cp      &03
+                jr      nz, disasm_sys_not_wfi
+                ld      a, d
+                cp      &20
+                jr      nz, disasm_sys_not_wfi
+                ld      a, e
+                cp      &7f
+                jr      nz, disasm_sys_not_wfi
+                ld      hl, disasm_sys_wfi_txt
+                jp      disasm_sys_emit_mnem_noops
+disasm_sys_not_wfi:
+
+; Extract the common fields into page scratch (B,C,D,E left intact).
+                ld      a, c
+                and     7
+                ld      (disasm_sys_op1), a           ; op1 = C&7
+                ld      a, c
+                rrca
+                rrca
+                rrca
+                and     3
+                ld      (disasm_sys_op0f), a          ; op0fld = (C>>3)&3
+                ld      a, d
+                rrca
+                rrca
+                rrca
+                rrca
+                and     &0f
+                ld      (disasm_sys_crn), a           ; CRn = (D>>4)&0xf
+                ld      a, d
+                and     &0f
+                ld      (disasm_sys_crm), a           ; CRm = D&0xf
+                ld      a, e
+                rlca
+                rlca
+                rlca
+                and     7
+                ld      (disasm_sys_op2), a           ; op2 = (E>>5)&7
+                ld      a, e
+                and     &1f
+                ld      (disasm_sys_rt), a            ; Rt = E&0x1f
+; L = bit21 (mrs vs msr), stashed.
+                ld      a, c
+                rlca
+                rlca
+                rlca
+                and     1
+                ld      (disasm_sys_l), a             ; L = (C>>5)&1
+
+; Switch on op0fld (the bits[20:19] discriminant).
+                ld      a, (disasm_sys_op0f)
+                or      a
+                jp      z, disasm_sys_op0_zero        ; 00 → barriers / msr-imm / hint
+                cp      1
+                jp      z, disasm_sys_instr           ; 01 → dc / at / ic / tlbi
+; 10 / 11 → mrs / msr register form.
+                jp      disasm_sys_mrsmsr
+
+
+; -----------------------------------------------------------------------
+; op0fld == 00: CRn picks the sub-family.  CRn==3 barriers; CRn==4 msr-imm;
+; CRn==2 is the hint space (wfi already handled, nop special-cased) → all
+; other hints decline.  Anything else declines to .inst.
+; -----------------------------------------------------------------------
+disasm_sys_op0_zero:
+                ld      a, (disasm_sys_crn)
+                cp      3
+                jp      z, disasm_sys_barrier
+                cp      4
+                jp      z, disasm_sys_msrimm
+                jp      disasm_not_sys
+
+
+; -----------------------------------------------------------------------
+; Barriers: dsb / dmb / isb.  op2 4→dsb 5→dmb 6→isb; Rt must be 11111.
+; CRm carries the option.
+; -----------------------------------------------------------------------
+disasm_sys_barrier:
+                ld      a, (disasm_sys_rt)
+                cp      &1f
+                jp      nz, disasm_not_sys           ; Rt != 31 → not a barrier
+                ld      a, (disasm_sys_op2)
+                cp      4
+                jr      z, disasm_sys_dsb
+                cp      5
+                jr      z, disasm_sys_dmb
+                cp      6
+                jr      z, disasm_sys_isb
+                jp      disasm_not_sys
+
+disasm_sys_dsb:
+                ld      hl, disasm_sys_dsb_txt
+                call    disasm_sys_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                ld      a, 1                          ; isDsb = 1
+                call    disasm_sys_emit_baropt
+                jp      disasm_sys_done
+
+disasm_sys_dmb:
+                ld      hl, disasm_sys_dmb_txt
+                call    disasm_sys_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                xor     a                            ; isDsb = 0
+                call    disasm_sys_emit_baropt
+                jp      disasm_sys_done
+
+disasm_sys_isb:
+; objdump: bare "isb" when CRm==15 (sy); else "isb #0xN".
+                ld      hl, disasm_sys_isb_txt
+                call    disasm_sys_set_mnem
+                ld      a, (disasm_sys_crm)
+                cp      &0f
+                jr      z, disasm_sys_isb_bare
+                ld      hl, DISASM_COMM_OPS
+                ld      (hl), "#"
+                inc     hl
+                ld      (hl), "0"
+                inc     hl
+                ld      (hl), "x"
+                inc     hl
+                ld      a, (disasm_sys_crm)           ; CRm 0..14 → one hex digit
+                call    disasm_emit_hex_nibble
+                ld      (hl), 0
+                jp      disasm_sys_done
+disasm_sys_isb_bare:
+                ld      hl, DISASM_COMM_OPS
+                ld      (hl), 0
+                jp      disasm_sys_done
+
+
+; -----------------------------------------------------------------------
+; disasm_sys_emit_baropt — emit the dsb/dmb barrier option keyword for
+; (disasm_sys_crm) to (HL), advancing HL and NUL-terminating.  A = isDsb.
+; Mirrors barrierOption (sys.go): named CRm → keyword; CRm 0/4 → ssbb/pssbb
+; for dsb only; otherwise "#0xNN" (two hex digits, like Go "%#02x").
+; Clobbers A, BC, DE, HL.
+; -----------------------------------------------------------------------
+disasm_sys_emit_baropt:
+                ld      (disasm_sys_isdsb), a
+; Look up CRm in the option-name table (16 entries, 0 ptr = unnamed).
+                ld      a, (disasm_sys_crm)
+                add     a, a                          ; CRm*2 (word entries)
+                ld      e, a
+                ld      d, 0
+                ld      ix, disasm_sys_baropt_tbl
+                add     ix, de
+                ld      a, (ix+0)
+                ld      e, a
+                ld      a, (ix+1)
+                ld      d, a                          ; DE = name ptr (0 if none)
+                ld      a, d
+                or      e
+                jr      z, disasm_sys_baropt_special  ; no general name → ssbb/#imm
+; Copy the named keyword (DE) to (HL).
+                ex      de, hl                        ; HL=src ptr, DE=dest
+disasm_sys_baropt_copy:
+                ld      a, (hl)
+                ld      (de), a
+                or      a
+                jr      z, disasm_sys_baropt_copied
+                inc     hl
+                inc     de
+                jr      disasm_sys_baropt_copy
+disasm_sys_baropt_copied:
+                ex      de, hl                        ; HL = dest (at the NUL)
+                ret
+disasm_sys_baropt_special:
+; CRm has no shared name.  For dsb: CRm 0→ssbb, 4→pssbb.  Else "#0xNN".
+                ld      a, (disasm_sys_isdsb)
+                or      a
+                jr      z, disasm_sys_baropt_imm      ; dmb → numeric
+                ld      a, (disasm_sys_crm)
+                or      a
+                jr      nz, disasm_sys_baropt_chk4
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_sys_ssbb_txt
+                jr      disasm_sys_baropt_cpyspec
+disasm_sys_baropt_chk4:
+                cp      4
+                jr      nz, disasm_sys_baropt_imm
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_sys_pssbb_txt
+disasm_sys_baropt_cpyspec:
+                ex      de, hl                        ; HL=src, DE=dest
+disasm_sys_baropt_cpyspec_loop:
+                ld      a, (hl)
+                ld      (de), a
+                or      a
+                jr      z, disasm_sys_baropt_cpyspec_done
+                inc     hl
+                inc     de
+                jr      disasm_sys_baropt_cpyspec_loop
+disasm_sys_baropt_cpyspec_done:
+                ex      de, hl
+                ret
+disasm_sys_baropt_imm:
+; "#0xNN" — two hex digits (Go "%#02x").
+                ld      hl, DISASM_COMM_OPS
+                ld      (hl), "#"
+                inc     hl
+                ld      (hl), "0"
+                inc     hl
+                ld      (hl), "x"
+                inc     hl
+                ld      a, (disasm_sys_crm)
+                call    disasm_emit_hex_byte          ; CRm < 16 → "0N"
+                ld      (hl), 0
+                ret
+
+
+; -----------------------------------------------------------------------
+; op0fld == 00, CRn==4: msr (immediate) PSTATE form.  Rt must be 11111.
+; (op1,op2) → pstate field name; CRm is the 4-bit immediate.
+;   "msr <field>, #0xN"
+; -----------------------------------------------------------------------
+disasm_sys_msrimm:
+                ld      a, (disasm_sys_rt)
+                cp      &1f
+                jp      nz, disasm_not_sys
+; Look up (op1,op2) in the pstate table (search by field bytes).
+                ld      ix, disasm_pstate_tbl
+                call    disasm_sys_find_pstate
+                jp      z, disasm_not_sys             ; unknown pstate → .inst
+; HL = pstate record ptr.  Stash it, set the "msr" mnemonic, then build ops.
+                ld      (disasm_sys_nameptr), hl
+                call    disasm_sys_set_mnem_msr       ; mnem = "msr"
+; operands: "<field>, #0x<crm-nibble>".
+                ld      hl, (disasm_sys_nameptr)      ; HL = src record
+                ld      de, DISASM_COMM_OPS           ; DE = dest
+                call    disasm_sys_copy_named         ; DE advanced past name
+                ex      de, hl                        ; HL = dest after name
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      (hl), "#"
+                inc     hl
+                ld      (hl), "0"
+                inc     hl
+                ld      (hl), "x"
+                inc     hl
+                ld      a, (disasm_sys_crm)
+                call    disasm_emit_hex_nibble        ; imm 0..15 → one digit
+                ld      (hl), 0
+                jp      disasm_sys_done
+
+
+; -----------------------------------------------------------------------
+; op0fld == 01: SYS / SYSL — dc / at / ic (CRn==7) / tlbi (CRn==8).
+; -----------------------------------------------------------------------
+disasm_sys_instr:
+                ld      a, (disasm_sys_crn)
+                cp      8
+                jp      z, disasm_sys_tlbi
+                cp      7
+                jp      z, disasm_sys_dc_at_ic
+                jp      disasm_not_sys
+
+disasm_sys_tlbi:
+; Search disasm_tlbi_tbl by (op1,CRn,CRm,op2); entry trailing byte = NeedsXt.
+                ld      ix, disasm_tlbi_tbl
+                call    disasm_sys_find_tlbi          ; Z=miss; HL=name, sets needsxt
+                jp      z, disasm_not_sys
+                push    hl                            ; save name ptr
+                push    bc
+                push    ix
+                ld      hl, disasm_sys_tlbi_txt
+                call    disasm_sys_set_mnem
+                pop     ix
+                pop     bc
+                pop     hl                            ; HL = name ptr
+                jp      disasm_sys_emit_op_name
+
+disasm_sys_dc_at_ic:
+; Try dc table first (search by op1,CRn,CRm,op2).
+                ld      ix, disasm_dc_tbl
+                call    disasm_sys_find_dc
+                jr      z, disasm_sys_try_at
+                ld      a, 1
+                ld      (disasm_sys_needsxt), a       ; all dc ops take Xt
+                push    hl
+                push    bc
+                push    ix
+                ld      hl, disasm_sys_dc_txt
+                call    disasm_sys_set_mnem
+                pop     ix
+                pop     bc
+                pop     hl
+                jp      disasm_sys_emit_op_name
+disasm_sys_try_at:
+; AT ops (CRm 8, all take Xt) — small inline table.
+                ld      a, (disasm_sys_crm)
+                cp      8
+                jr      nz, disasm_sys_try_ic
+                ld      ix, disasm_sys_at_tbl
+                call    disasm_sys_find_atic          ; match by (op1,op2); Z=miss
+                jr      z, disasm_sys_try_ic
+                ld      a, 1
+                ld      (disasm_sys_needsxt), a
+                push    hl
+                push    bc
+                push    ix
+                ld      hl, disasm_sys_at_txt
+                call    disasm_sys_set_mnem
+                pop     ix
+                pop     bc
+                pop     hl
+                jp      disasm_sys_emit_op_name
+disasm_sys_try_ic:
+; IC ops (CRm 1/5).  ialluis/iallu take no Xt; ivau takes Xt.  find_atic
+; matches on (op1,CRm,op2) and sets disasm_sys_needsxt from the table.
+                ld      ix, disasm_sys_ic_tbl
+                call    disasm_sys_find_atic
+                jp      z, disasm_not_sys
+                push    hl
+                push    bc
+                push    ix
+                ld      hl, disasm_sys_ic_txt
+                call    disasm_sys_set_mnem
+                pop     ix
+                pop     bc
+                pop     hl
+                jp      disasm_sys_emit_op_name
+
+
+; -----------------------------------------------------------------------
+; disasm_sys_emit_op_name — common tail for dc/at/ic/tlbi.  HL = ptr to the
+; length-prefixed op-name record.  Writes the name to DISASM_COMM_OPS, then
+; appends ", x<Rt>" (xzr at 31) when (disasm_sys_needsxt) != 0.
+; -----------------------------------------------------------------------
+disasm_sys_emit_op_name:
+                ld      de, DISASM_COMM_OPS
+                call    disasm_sys_copy_named         ; HL=record, DE=dest after
+                ex      de, hl                        ; HL = dest (at end)
+                ld      a, (disasm_sys_needsxt)
+                or      a
+                jr      z, disasm_sys_eon_done
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      a, (disasm_sys_rt)
+                ld      c, a
+                ld      b, 1                          ; x-width
+                call    disasm_br_emit_reg            ; x<Rt> / xzr
+disasm_sys_eon_done:
+                ld      (hl), 0
+                jp      disasm_sys_done
+
+
+; -----------------------------------------------------------------------
+; op0fld 10/11: mrs / msr register form.
+;   op0 = 2 | (op0fld & 1) ; L picks mrs (1) / msr (0).
+;   mrs x<Rt>, <sysreg>      msr <sysreg>, x<Rt>
+; <sysreg> = named lookup, else generic s<op0>_<op1>_c<CRn>_c<CRm>_<op2>.
+; -----------------------------------------------------------------------
+disasm_sys_mrsmsr:
+; op0 = 2 | (op0fld & 1).
+                ld      a, (disasm_sys_op0f)
+                and     1
+                or      2
+                ld      (disasm_sys_op0), a
+; Resolve the sysreg name into disasm_sys_namebuf (named or generic).
+                call    disasm_sys_resolve_sysreg     ; HL → name (NUL-term)
+                ld      (disasm_sys_nameptr), hl
+; mnem = "mrs" (L==1) / "msr" (L==0).
+                ld      a, (disasm_sys_l)
+                or      a
+                jr      z, disasm_sys_mm_msr
+; mrs x<Rt>, <name>
+                ld      hl, disasm_sys_mrs_txt
+                call    disasm_sys_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_sys_rt)
+                ld      c, a
+                ld      b, 1
+                call    disasm_br_emit_reg
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      de, (disasm_sys_nameptr)
+                call    disasm_sys_copy_de_to_hl
+                ld      (hl), 0
+                jp      disasm_sys_done
+disasm_sys_mm_msr:
+; msr <name>, x<Rt>
+                ld      hl, disasm_sys_msr_txt
+                call    disasm_sys_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                ld      de, (disasm_sys_nameptr)
+                call    disasm_sys_copy_de_to_hl
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      a, (disasm_sys_rt)
+                ld      c, a
+                ld      b, 1
+                call    disasm_br_emit_reg
+                ld      (hl), 0
+                jp      disasm_sys_done
+
+
+; -----------------------------------------------------------------------
+; disasm_sys_resolve_sysreg — set HL to a NUL-terminated sysreg name for
+; the (op0,op1,CRn,CRm,op2) in scratch.  Searches disasm_sysreg_tbl; on a
+; hit returns the table name ptr.  On a miss builds the generic
+; s<op0>_<op1>_c<CRn>_c<CRm>_<op2> spelling into disasm_sys_namebuf and
+; returns that.  Clobbers A, BC, DE, HL, IX.
+; -----------------------------------------------------------------------
+disasm_sys_resolve_sysreg:
+                ld      ix, disasm_sysreg_tbl
+                call    disasm_sys_find_sysreg        ; Z=miss; HL=record on hit
+                jr      z, disasm_sys_rs_generic
+; Named — copy the length-prefixed name to namebuf, NUL-terminate, return it.
+                ld      de, disasm_sys_namebuf
+                call    disasm_sys_copy_named         ; HL=record, DE=dest
+                ld      a, 0
+                ld      (de), a                       ; NUL-terminate
+                ld      hl, disasm_sys_namebuf
+                ret
+disasm_sys_rs_generic:
+; Generic spelling into disasm_sys_namebuf.
+                ld      hl, disasm_sys_namebuf
+                ld      (hl), "s"
+                inc     hl
+                ld      a, (disasm_sys_op0)
+                call    disasm_sys_emit_u8dec
+                ld      (hl), "_"
+                inc     hl
+                ld      a, (disasm_sys_op1)
+                call    disasm_sys_emit_u8dec
+                ld      (hl), "_"
+                inc     hl
+                ld      (hl), "c"
+                inc     hl
+                ld      a, (disasm_sys_crn)
+                call    disasm_sys_emit_u8dec
+                ld      (hl), "_"
+                inc     hl
+                ld      (hl), "c"
+                inc     hl
+                ld      a, (disasm_sys_crm)
+                call    disasm_sys_emit_u8dec
+                ld      (hl), "_"
+                inc     hl
+                ld      a, (disasm_sys_op2)
+                call    disasm_sys_emit_u8dec
+                ld      (hl), 0
+                ld      hl, disasm_sys_namebuf
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_sys_emit_u8dec — emit A (0..15, the field range) as minimal
+; decimal at (HL), advancing HL.  Fields are <=15 so at most two digits.
+; Clobbers A, F (and B via the tens loop).
+; -----------------------------------------------------------------------
+disasm_sys_emit_u8dec:
+                cp      10
+                jr      c, disasm_sys_u8_units
+                ld      b, "0"                        ; tens digit, counts up
+disasm_sys_u8_tens:
+                inc     b
+                sub     10
+                cp      10
+                jr      nc, disasm_sys_u8_tens
+                ld      (hl), b
+                inc     hl
+disasm_sys_u8_units:
+                add     a, "0"
+                ld      (hl), a
+                inc     hl
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_sys_copy_de_to_hl — copy NUL-terminated string (DE) to (HL),
+; leaving HL at the terminating NUL (not past it).  Clobbers A, DE, HL.
+; Used for the generic s<..> spelling (which IS NUL-terminated).
+; -----------------------------------------------------------------------
+disasm_sys_copy_de_to_hl:
+                ld      a, (de)
+                or      a
+                ret     z
+                ld      (hl), a
+                inc     hl
+                inc     de
+                jr      disasm_sys_copy_de_to_hl
+
+
+; -----------------------------------------------------------------------
+; disasm_sys_copy_named — copy a length-prefixed table name to (DE).
+; Input: HL = ptr to the [len][name bytes...] record start; DE = dest.
+; Output: name bytes copied (NO terminator); DE advanced past them; HL
+; advanced past the name.  Clobbers A, B, DE, HL.
+; (The sysreg/pstate/dc/tlbi tables store names length-prefixed, not
+; NUL-terminated — same layout as src/sysreg_data.asm.)
+; -----------------------------------------------------------------------
+disasm_sys_copy_named:
+                ld      a, (hl)                       ; name_len
+                inc     hl
+                or      a
+                ret     z
+                ld      b, a
+disasm_sys_copy_named_loop:
+                ld      a, (hl)
+                ld      (de), a
+                inc     hl
+                inc     de
+                djnz    disasm_sys_copy_named_loop
+                ret
+
+
+; -----------------------------------------------------------------------
+; Table finders.  Each walks a [len][name][fields...]-format table (IX =
+; base), comparing the field bytes (NOT the name) against scratch.  On a
+; hit: returns NZ, HL = name ptr (and A = the relevant trailing field for
+; tlbi).  On a miss: returns Z.  Clobber A, BC, DE, HL, IX.
+;
+; Generic walker disasm_sys_tblwalk advances IX over one record and sets
+; DE = name ptr, BC = ptr to first field byte, A = name_len; Z if at the
+; 0 terminator.
+; -----------------------------------------------------------------------
+
+; --- sysreg: 5 fields (op0,op1,CRn,CRm,op2) ---------------------------
+disasm_sys_find_sysreg:
+                ld      a, (ix+0)
+                or      a
+                jr      z, disasm_sys_fs_miss
+                ld      c, (ix+0)                     ; name_len
+; field offset = 1 + name_len.
+                push    ix
+                ld      b, 0
+                add     ix, bc
+                inc     ix                            ; IX → first field
+                ld      a, (ix+0)
+                ld      hl, disasm_sys_op0
+                cp      (hl)
+                jr      nz, disasm_sys_fs_next
+                ld      a, (ix+1)
+                ld      hl, disasm_sys_op1
+                cp      (hl)
+                jr      nz, disasm_sys_fs_next
+                ld      a, (ix+2)
+                ld      hl, disasm_sys_crn
+                cp      (hl)
+                jr      nz, disasm_sys_fs_next
+                ld      a, (ix+3)
+                ld      hl, disasm_sys_crm
+                cp      (hl)
+                jr      nz, disasm_sys_fs_next
+                ld      a, (ix+4)
+                ld      hl, disasm_sys_op2
+                cp      (hl)
+                jr      nz, disasm_sys_fs_next
+; Hit — HL = record start (length byte) = saved IX.
+                pop     hl
+                or      &ff                           ; NZ
+                ret
+disasm_sys_fs_next:
+                pop     ix                            ; restore record start
+                ld      c, (ix+0)
+                ld      b, 0
+                add     ix, bc                        ; skip name
+                ld      bc, 6                         ; 1 (len) + 5 fields
+                add     ix, bc
+                jr      disasm_sys_find_sysreg
+disasm_sys_fs_miss:
+                xor     a                             ; Z
+                ret
+
+
+; --- pstate: 2 fields (op1,op2) ---------------------------------------
+disasm_sys_find_pstate:
+                ld      a, (ix+0)
+                or      a
+                jr      z, disasm_sys_fp_miss
+                ld      c, (ix+0)
+                push    ix
+                ld      b, 0
+                add     ix, bc
+                inc     ix
+                ld      a, (ix+0)
+                ld      hl, disasm_sys_op1
+                cp      (hl)
+                jr      nz, disasm_sys_fp_next
+                ld      a, (ix+1)
+                ld      hl, disasm_sys_op2
+                cp      (hl)
+                jr      nz, disasm_sys_fp_next
+                pop     hl                            ; HL = record start (len byte)
+                or      &ff
+                ret
+disasm_sys_fp_next:
+                pop     ix
+                ld      c, (ix+0)
+                ld      b, 0
+                add     ix, bc
+                ld      bc, 3                          ; 1 + 2
+                add     ix, bc
+                jr      disasm_sys_find_pstate
+disasm_sys_fp_miss:
+                xor     a
+                ret
+
+
+; --- dc: 4 fields (op1,CRn,CRm,op2) -----------------------------------
+disasm_sys_find_dc:
+                ld      a, (ix+0)
+                or      a
+                jr      z, disasm_sys_fd_miss
+                ld      c, (ix+0)
+                push    ix
+                ld      b, 0
+                add     ix, bc
+                inc     ix
+                ld      a, (ix+0)
+                ld      hl, disasm_sys_op1
+                cp      (hl)
+                jr      nz, disasm_sys_fd_next
+                ld      a, (ix+1)
+                ld      hl, disasm_sys_crn
+                cp      (hl)
+                jr      nz, disasm_sys_fd_next
+                ld      a, (ix+2)
+                ld      hl, disasm_sys_crm
+                cp      (hl)
+                jr      nz, disasm_sys_fd_next
+                ld      a, (ix+3)
+                ld      hl, disasm_sys_op2
+                cp      (hl)
+                jr      nz, disasm_sys_fd_next
+                pop     hl                            ; HL = record start (len byte)
+                or      &ff
+                ret
+disasm_sys_fd_next:
+                pop     ix
+                ld      c, (ix+0)
+                ld      b, 0
+                add     ix, bc
+                ld      bc, 5                          ; 1 + 4
+                add     ix, bc
+                jr      disasm_sys_find_dc
+disasm_sys_fd_miss:
+                xor     a
+                ret
+
+
+; --- tlbi: 5 fields (op1,CRn,CRm,op2,NeedsXt); returns A=NeedsXt on hit -
+disasm_sys_find_tlbi:
+                ld      a, (ix+0)
+                or      a
+                jr      z, disasm_sys_ft_miss
+                ld      c, (ix+0)
+                push    ix
+                ld      b, 0
+                add     ix, bc
+                inc     ix
+                ld      a, (ix+0)
+                ld      hl, disasm_sys_op1
+                cp      (hl)
+                jr      nz, disasm_sys_ft_next
+                ld      a, (ix+1)
+                ld      hl, disasm_sys_crn
+                cp      (hl)
+                jr      nz, disasm_sys_ft_next
+                ld      a, (ix+2)
+                ld      hl, disasm_sys_crm
+                cp      (hl)
+                jr      nz, disasm_sys_ft_next
+                ld      a, (ix+3)
+                ld      hl, disasm_sys_op2
+                cp      (hl)
+                jr      nz, disasm_sys_ft_next
+                ld      a, (ix+4)                      ; NeedsXt
+                pop     hl                            ; HL = record start (len byte)
+                ld      (disasm_sys_needsxt), a        ; stash NeedsXt
+                or      &ff                            ; A=0xFF → NZ (hit)
+                ret
+disasm_sys_ft_next:
+                pop     ix
+                ld      c, (ix+0)
+                ld      b, 0
+                add     ix, bc
+                ld      bc, 6                          ; 1 + 5
+                add     ix, bc
+                jr      disasm_sys_find_tlbi
+disasm_sys_ft_miss:
+                xor     a
+                ret
+
+
+; --- at/ic inline tables: [op1][CRm][op2][NeedsXt][len][name...] ------
+; These tables match by (op1,CRm,op2).  Format per entry:
+;   [op1][CRm][op2][len][name bytes...]  terminated by a 0xFF op1 sentinel.
+; Returns NZ + HL = name ptr on hit (NeedsXt handled by the dc/at/ic
+; dispatch: at always Xt, ic via disasm_sys_needsxt set by the table).
+; -----------------------------------------------------------------------
+disasm_sys_find_atic:
+                ld      a, (ix+0)
+                cp      &ff
+                jr      z, disasm_sys_fa_miss
+                ld      a, (ix+0)
+                ld      hl, disasm_sys_op1
+                cp      (hl)
+                jr      nz, disasm_sys_fa_next
+                ld      a, (ix+1)
+                ld      hl, disasm_sys_crm
+                cp      (hl)
+                jr      nz, disasm_sys_fa_next
+                ld      a, (ix+2)
+                ld      hl, disasm_sys_op2
+                cp      (hl)
+                jr      nz, disasm_sys_fa_next
+; Hit.  NeedsXt = (ix+3); set scratch.  HL = name ptr = IX+5.
+                ld      a, (ix+3)
+                ld      (disasm_sys_needsxt), a
+                push    ix
+                pop     hl
+                ld      bc, 4
+                add     hl, bc                        ; HL → len byte (then name)
+                or      &ff                           ; NZ
+                ret
+disasm_sys_fa_next:
+                ld      c, (ix+4)                      ; name_len
+                ld      b, 0
+                push    ix
+                pop     hl
+                ld      a, 5
+                add     a, c
+                ld      c, a
+                ld      b, 0
+                add     hl, bc                        ; HL → next entry
+                push    hl
+                pop     ix
+                jr      disasm_sys_find_atic
+disasm_sys_fa_miss:
+                xor     a
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_sys_set_mnem — copy NUL-terminated string (HL) to DISASM_COMM_MNEM.
+; Clobbers A, DE, HL.
+; -----------------------------------------------------------------------
+disasm_sys_set_mnem:
+                ld      de, DISASM_COMM_MNEM
+disasm_sys_set_mnem_loop:
+                ld      a, (hl)
+                ld      (de), a
+                or      a
+                ret     z
+                inc     hl
+                inc     de
+                jr      disasm_sys_set_mnem_loop
+
+; "msr" mnemonic, used by the immediate form.
+disasm_sys_set_mnem_msr:
+                ld      hl, disasm_sys_msr_txt
+                jr      disasm_sys_set_mnem
+
+
+; -----------------------------------------------------------------------
+; disasm_sys_emit_mnem_noops — mnem = (HL), operands empty.  Used by the
+; zero-operand exact-word hints eret/wfi.  Restores nothing (B,C,D,E are
+; still intact — these paths never touched them), so it can ret directly
+; with the ABI honoured.
+; -----------------------------------------------------------------------
+disasm_sys_emit_mnem_noops:
+                call    disasm_sys_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                ld      (hl), 0
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_sys_done — success epilogue.  Reconstructs BC/IX from the word
+; bytes saved at disasm_try_sys entry, honouring the "Preserves: BC, IX"
+; ABI without stack juggling (the decoders clobber both freely).
+; -----------------------------------------------------------------------
+disasm_sys_done:
+                ld      a, (disasm_sys_wb)
+                ld      b, a
+                ld      a, (disasm_sys_wc)
+                ld      c, a
+                ld      a, (disasm_sys_wd)
+                ld      h, a
+                ld      a, (disasm_sys_we)
+                ld      l, a
+                push    hl
+                pop     ix
+                ret
+
+
+; --- system-group mnemonic / option strings ---------------------------
+disasm_sys_eret_txt:    defm    "eret"
+                        defb    0
+disasm_sys_wfi_txt:     defm    "wfi"
+                        defb    0
+disasm_sys_dsb_txt:     defm    "dsb"
+                        defb    0
+disasm_sys_dmb_txt:     defm    "dmb"
+                        defb    0
+disasm_sys_isb_txt:     defm    "isb"
+                        defb    0
+disasm_sys_mrs_txt:     defm    "mrs"
+                        defb    0
+disasm_sys_msr_txt:     defm    "msr"
+                        defb    0
+disasm_sys_dc_txt:      defm    "dc"
+                        defb    0
+disasm_sys_at_txt:      defm    "at"
+                        defb    0
+disasm_sys_ic_txt:      defm    "ic"
+                        defb    0
+disasm_sys_tlbi_txt:    defm    "tlbi"
+                        defb    0
+disasm_sys_ssbb_txt:    defm    "ssbb"
+                        defb    0
+disasm_sys_pssbb_txt:   defm    "pssbb"
+                        defb    0
+
+; Barrier-option name strings.
+disasm_sys_bo_oshld:    defm    "oshld"
+                        defb    0
+disasm_sys_bo_oshst:    defm    "oshst"
+                        defb    0
+disasm_sys_bo_osh:      defm    "osh"
+                        defb    0
+disasm_sys_bo_nshld:    defm    "nshld"
+                        defb    0
+disasm_sys_bo_nshst:    defm    "nshst"
+                        defb    0
+disasm_sys_bo_nsh:      defm    "nsh"
+                        defb    0
+disasm_sys_bo_ishld:    defm    "ishld"
+                        defb    0
+disasm_sys_bo_ishst:    defm    "ishst"
+                        defb    0
+disasm_sys_bo_ish:      defm    "ish"
+                        defb    0
+disasm_sys_bo_ld:       defm    "ld"
+                        defb    0
+disasm_sys_bo_st:       defm    "st"
+                        defb    0
+disasm_sys_bo_sy:       defm    "sy"
+                        defb    0
+
+; Barrier-option table indexed by CRm (0..15).  Each entry is a 16-bit
+; pointer to a name string, or 0 for "no shared name" (CRm 0/4/8/12 →
+; ssbb/pssbb/#imm handled by disasm_sys_emit_baropt).  Mirrors
+; barrierOption (sys.go).
+disasm_sys_baropt_tbl:
+                defw    0                  ; 0  (ssbb for dsb / #imm)
+                defw    disasm_sys_bo_oshld ; 1
+                defw    disasm_sys_bo_oshst ; 2
+                defw    disasm_sys_bo_osh   ; 3
+                defw    0                  ; 4  (pssbb for dsb / #imm)
+                defw    disasm_sys_bo_nshld ; 5
+                defw    disasm_sys_bo_nshst ; 6
+                defw    disasm_sys_bo_nsh   ; 7
+                defw    0                  ; 8  (#imm)
+                defw    disasm_sys_bo_ishld ; 9
+                defw    disasm_sys_bo_ishst ; 10
+                defw    disasm_sys_bo_ish   ; 11
+                defw    0                  ; 12 (#imm)
+                defw    disasm_sys_bo_ld    ; 13
+                defw    disasm_sys_bo_st    ; 14
+                defw    disasm_sys_bo_sy    ; 15
+
+; AT op table — [op1][CRm][op2][NeedsXt=1][len][name...], 0xFF sentinel.
+; ARM ARM C5.3.1.  All AT ops take Xt.
+disasm_sys_at_tbl:
+                defb    0, 8, 0, 1
+                defb    5
+                defm    "s1e1r"
+                defb    0, 8, 1, 1
+                defb    5
+                defm    "s1e1w"
+                defb    0, 8, 2, 1
+                defb    5
+                defm    "s1e0r"
+                defb    0, 8, 3, 1
+                defb    5
+                defm    "s1e0w"
+                defb    4, 8, 0, 1
+                defb    5
+                defm    "s1e2r"
+                defb    4, 8, 1, 1
+                defb    5
+                defm    "s1e2w"
+                defb    4, 8, 4, 1
+                defb    6
+                defm    "s12e1r"
+                defb    4, 8, 5, 1
+                defb    6
+                defm    "s12e1w"
+                defb    4, 8, 6, 1
+                defb    6
+                defm    "s12e0r"
+                defb    4, 8, 7, 1
+                defb    6
+                defm    "s12e0w"
+                defb    6, 8, 0, 1
+                defb    5
+                defm    "s1e3r"
+                defb    6, 8, 1, 1
+                defb    5
+                defm    "s1e3w"
+                defb    &ff
+
+; IC op table — [op1][CRm][op2][NeedsXt][len][name...], 0xFF sentinel.
+; ARM ARM C5.3.10.  ialluis/iallu no Xt; ivau Xt.
+disasm_sys_ic_tbl:
+                defb    0, 1, 0, 0
+                defb    7
+                defm    "ialluis"
+                defb    0, 5, 0, 0
+                defb    5
+                defm    "iallu"
+                defb    3, 5, 1, 1
+                defb    4
+                defm    "ivau"
+                defb    &ff
+
+
+; --- system-group working scratch (this page) -------------------------
+disasm_sys_wb:          defb    0       ; saved word byte bits31:24
+disasm_sys_wc:          defb    0       ;                  bits23:16
+disasm_sys_wd:          defb    0       ;                  bits15:8
+disasm_sys_we:          defb    0       ;                  bits7:0
+disasm_sys_op0f:        defb    0       ; op0 field bits[20:19]
+disasm_sys_op0:         defb    0       ; full op0 (2|bit19) for mrs/msr
+disasm_sys_op1:         defb    0
+disasm_sys_crn:         defb    0
+disasm_sys_crm:         defb    0
+disasm_sys_op2:         defb    0
+disasm_sys_rt:          defb    0
+disasm_sys_l:           defb    0       ; bit21: mrs(1)/msr(0)
+disasm_sys_needsxt:     defb    0
+disasm_sys_isdsb:       defb    0
+disasm_sys_nameptr:     defw    0
+disasm_sys_namebuf:     defs    20      ; generic s<..> spelling (max ~13)
+
+; Encoding→name data for the System group (disasm_sysreg_tbl /
+; disasm_pstate_tbl / disasm_dc_tbl / disasm_tlbi_tbl).  Included here so
+; the tables land in THIS page alongside the decoder.  See the file's
+; header for the no-drift design and the deferred shared-include de-dup
+; with src/sysreg_data.asm.
+                include "sysreg_names.inc"
+
+
 ; -----------------------------------------------------------------------
 ; disasm_emit_hex_byte — emit A as two lowercase ASCII hex digits,
 ; writing to (HL) and (HL+1), advancing HL by 2.
@@ -5921,6 +6979,11 @@ disasm_pow10_tbl:
 ;   &68 — ret (bare) check failed.
 ;   &67 — cbz (imm19 PC-relative target) check failed.
 ;   &66 — adrp (imm21 page-relative target) check failed.
+;   &5E — mrs (named + generic sysreg) check failed.
+;   &5D — msr (named sysreg + immediate/pstate) check failed.
+;   &5C — dsb / dc check failed.
+;   &5B — eret / wfi check failed.
+;   &5A — udiv check failed.
 ; Clobbers: A, DE, HL, F (paged_call ABI; BC is the return value).
 ; -----------------------------------------------------------------------
 run_disasm_self_test:
@@ -6352,6 +7415,115 @@ run_disasm_self_test:
                 call    disasm_stest_strcmp
                 jp      nz, disasm_stest_fail_svlsr
 
+; --- system group + dp-2-source div fixtures --------------------------
+
+; mrs (named sysreg).  D5384240 → "mrs", "x0, currentel".
+                ld      bc, &D538
+                ld      ix, &4240
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_mrs_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_mrs
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_mrs_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_mrs
+
+; mrs (generic sysreg spelling).  D539B040 → "mrs", "x0, s3_1_c11_c0_2".
+                ld      bc, &D539
+                ld      ix, &B040
+                call    disasm_entry
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_mrsgen_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_mrs
+
+; msr (named sysreg).  D5181000 → "msr", "sctlr_el1, x0".
+                ld      bc, &D518
+                ld      ix, &1000
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_msr_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_msr
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_msr_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_msr
+
+; msr (immediate / pstate).  D50343DF → "msr", "daifset, #0x3".
+                ld      bc, &D503
+                ld      ix, &43DF
+                call    disasm_entry
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_msrimm_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_msr
+
+; dsb sy.  D5033F9F → "dsb", "sy".
+                ld      bc, &D503
+                ld      ix, &3F9F
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_dsb_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_dsb
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_dsb_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_dsb
+
+; dc civac, x10.  D50B7E2A → "dc", "civac, x10".
+                ld      bc, &D50B
+                ld      ix, &7E2A
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_dc_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_dsb
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_dc_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_dsb
+
+; eret.  D69F03E0 → "eret", "".
+                ld      bc, &D69F
+                ld      ix, &03E0
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_eret_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_eret
+                ld      a, (DISASM_COMM_OPS)
+                or      a
+                jp      nz, disasm_stest_fail_eret
+
+; wfi.  D503207F → "wfi", "".
+                ld      bc, &D503
+                ld      ix, &207F
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_wfi_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_eret
+                ld      a, (DISASM_COMM_OPS)
+                or      a
+                jp      nz, disasm_stest_fail_eret
+
+; udiv.  1AC30842 → "udiv", "w2, w2, w3".
+                ld      bc, &1AC3
+                ld      ix, &0842
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_udiv_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_udiv
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_udiv_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_udiv
+
                 ld      bc, 0
                 ret
 
@@ -6470,6 +7642,21 @@ disasm_stest_fail_madd:
                 ret
 disasm_stest_fail_svlsr:
                 ld      bc, &5F
+                ret
+disasm_stest_fail_mrs:
+                ld      bc, &5E
+                ret
+disasm_stest_fail_msr:
+                ld      bc, &5D
+                ret
+disasm_stest_fail_dsb:
+                ld      bc, &5C
+                ret
+disasm_stest_fail_eret:
+                ld      bc, &5B
+                ret
+disasm_stest_fail_udiv:
+                ld      bc, &5A
                 ret
 
 ; disasm_stest_strcmp — compare null-terminated strings at (HL) and (DE).
@@ -6599,4 +7786,32 @@ disasm_stest_madd_ops_expect:   defm    "x0, x1, x4, x4"
 disasm_stest_svlsr_expect:      defm    "lsr"
                                 defb    0
 disasm_stest_svlsr_ops_expect:  defm    "w12, w12, w14"
+                                defb    0
+disasm_stest_mrs_expect:        defm    "mrs"
+                                defb    0
+disasm_stest_mrs_ops_expect:    defm    "x0, currentel"
+                                defb    0
+disasm_stest_mrsgen_ops_expect: defm    "x0, s3_1_c11_c0_2"
+                                defb    0
+disasm_stest_msr_expect:        defm    "msr"
+                                defb    0
+disasm_stest_msr_ops_expect:    defm    "sctlr_el1, x0"
+                                defb    0
+disasm_stest_msrimm_ops_expect: defm    "daifset, #0x3"
+                                defb    0
+disasm_stest_dsb_expect:        defm    "dsb"
+                                defb    0
+disasm_stest_dsb_ops_expect:    defm    "sy"
+                                defb    0
+disasm_stest_dc_expect:         defm    "dc"
+                                defb    0
+disasm_stest_dc_ops_expect:     defm    "civac, x10"
+                                defb    0
+disasm_stest_eret_expect:       defm    "eret"
+                                defb    0
+disasm_stest_wfi_expect:        defm    "wfi"
+                                defb    0
+disasm_stest_udiv_expect:       defm    "udiv"
+                                defb    0
+disasm_stest_udiv_ops_expect:   defm    "w2, w2, w3"
                                 defb    0
