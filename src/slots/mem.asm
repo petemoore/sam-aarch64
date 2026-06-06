@@ -66,26 +66,25 @@ encode_mem_word:
                 call    mem_size_scale_opc
 
 ; -- Branch on unscaled mnemonics (stur=74/ldur=75/sturh=94/sturb=95/ldurh=96/ldurb=97) --
+; Range-check pairs: {74,75} and {94..97} all route to encode_mem_unscaled.
                 ld      a, (encode_mem_mnem)
                 cp      74
-                jp      z, encode_mem_unscaled
-                cp      75
-                jp      z, encode_mem_unscaled
+                jr      c, enc_mw_skip74        ; A < 74 → not unscaled
+                cp      76
+                jp      c, encode_mem_unscaled  ; 74 ≤ A < 76 → unscaled
+enc_mw_skip74:
                 cp      94
-                jp      z, encode_mem_unscaled
-                cp      95
-                jp      z, encode_mem_unscaled
-                cp      96
-                jp      z, encode_mem_unscaled
-                cp      97
-                jp      z, encode_mem_unscaled
+                jr      c, enc_mw_skip94        ; A < 94 → not unscaled
+                cp      98
+                jp      c, encode_mem_unscaled  ; 94 ≤ A < 98 → unscaled
+enc_mw_skip94:
 
 ; -- Branch on shape ---------------------------------------------------
                 ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1)
                 cp      0                   ; MemBase
-                jp      z, encode_mem_scaled
+                jr      z, encode_mem_scaled
                 cp      1                   ; MemBaseOff
-                jp      z, encode_mem_scaled
+                jr      z, encode_mem_scaled
                 cp      2                   ; MemBaseOffPre
                 jp      z, encode_mem_preindex
                 cp      3                   ; MemBaseOffPost
@@ -598,19 +597,20 @@ mem_size_scale_opc:
                 jp      z, mem_szop_byte
                 cp      85                  ; ldrsb
                 jp      z, mem_szop_byte
-                cp      95                  ; sturb
-                jp      z, mem_szop_byte
-                cp      97                  ; ldurb
-                jp      z, mem_szop_byte
+; {94..97}: range check dispatches by bit 0 (even=hword, odd=byte).
+                cp      94
+                jr      c, mem_szop_skip_new    ; A < 94 → skip
+                cp      98
+                jr      nc, mem_szop_skip_new   ; A ≥ 98 → skip
+                rrca                            ; bit 0 → carry
+                jr      c, mem_szop_byte        ; odd (95=sturb, 97=ldurb) → byte
+                jr      mem_szop_hword          ; even (94=sturh, 96=ldurh) → hword
+mem_szop_skip_new:
                 cp      56                  ; ldrh
                 jp      z, mem_szop_hword
                 cp      57                  ; strh
                 jp      z, mem_szop_hword
                 cp      86                  ; ldrsh
-                jp      z, mem_szop_hword
-                cp      94                  ; sturh
-                jp      z, mem_szop_hword
-                cp      96                  ; ldurh
                 jp      z, mem_szop_hword
                 cp      87                  ; ldrsw
                 jp      z, mem_szop_ldrsw
