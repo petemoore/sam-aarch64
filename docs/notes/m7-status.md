@@ -49,56 +49,22 @@ The `iN` registry has moved to its canonical, milestone-neutral home:
 **`docs/notes/item-registry.md`** (project-wide, never archived). Refer to and
 update items there; this milestone doc no longer carries the table.
 
-## Open questions for Pete (awaiting input)
+## Open questions for Pete
 
-These are decisions an autonomous M7 session is blocked on (or chose to
-defer rather than guess). Logged here so they survive context churn — the
-agent works around them and Pete answers when available. Remove an entry
-once resolved.
+The open-question registry has **moved to its canonical, milestone-neutral home:
+`docs/notes/question-registry.md`** (`qN` ids, project-wide, never archived — the
+sibling of the item registry; see that file or the item-registry header for the
+shared registry discipline that governs *both* `iN` items and `qN` questions). The
+still-open **q1** (i5 graphics), **q7/q8** (i48 strictness sweep / LLIST), plus the
+resolved **q2–q6**, all live there now — **do not duplicate them here**; add new
+questions to the registry the moment they arise. (Extracted 2026-06-08, mirroring the
+i*N* item-registry extraction in PR #128, so open questions are never stranded in a
+winding-down milestone doc.)
 
-**Practice (Pete, 2026-06-08):** *every* question for Pete goes here the moment
-it arises — not just in chat — because simultaneous edits mean a chat question
-can be missed and left unanswered. This section is the single sure-fire list of
-**unanswered** questions: add on ask, remove/mark-resolved on answer, so what's
-shown is always exactly what's still open. (See `memory/feedback_capture_open_questions`.)
-Questions carry stable **`qN`** ids (matching the `iN` item convention; Pete
-2026-06-08) — locked once assigned, marked-resolved (moved to "Recently resolved")
-when answered, never renumbered.
+The numbered list below is the **M7 session decision-log** (decisions resolved during
+M7), retained as history — it archives with this doc, not with the question registry.
 
-### ⏳ OPEN — awaiting Pete
-
-- **q1 — i5 graphics tooling.** For editor UI mockups at SAM-accurate
-  resolution, which approach? (a) a **programmatic SAM-faithful renderer** I write —
-  emits PNGs (or actual SAM `SCREEN$` files viewable in SimCoupé) at exact MODE 3
-  (512×192, 4 colours/line) or MODE 4 (256×192, 16 colours) geometry, colours from
-  the real 128-entry palette, 8×8 attribute cells — deterministic and
-  constraint-accurate; (b) a **dedicated retro/pixel-art tool** you'd drive by hand;
-  (c) a **generic AI image generator**. My capability note: I have **no** native
-  image generation here, and a generic AI generator wouldn't respect the hard SAM
-  constraints — so for *faithful* mockups (a) is the honest best option; a dedicated
-  art tool (b) is better for hand-authored final art. **Status (Pete, 2026-06-08):
-  Pete is researching tools the agent can drive** — parked on his side until that
-  lands; no agent action meanwhile.
-
-### ✅ Recently resolved
-
-- **q2 — next major strand → compact-`.tbn` (i1) (Pete, 2026-06-08).** "let's
-  compact .tbn." i1 is the next major strand; **PR1 (Go side) is in flight** — see
-  the i1 registry row and the "Source compression / compact `.tbn`" scope row.
-
-- **q4 — work tracking → keep the doc, no GitHub Issues (Pete, 2026-06-08).**
-  "let's stick without GitHub issues for now." The `iN`/m7-status registry stays the
-  tracking home; do NOT build the scrape-to-md skill or mint Issues. Fully reversible
-  if a human-stepping-through need surfaces later.
-
-
-- **q3 — formal GitHub reviews for pre-merge review agents → YES (Pete, 2026-06-08).**
-  Adopt native GitHub reviews: record each pre-merge review with `gh pr review
-  <n> --comment` (the checklist verdict + inline comments anchored to code), not
-  `--approve` (GitHub blocks self-approve; our agents commit as Pete). Codified in
-  project `CLAUDE.md` §3. Tonight's five merges (#112–#116) had their review
-  verdicts posted natively retroactively.
-
+### M7 session decisions (resolved; historical)
 
 1. **`src/m3` rename — ✅ RESOLVED (Pete 2026-05-29).** Pete delegated the
    final structure choice to the agent. **Decision: flatten `src/m3/` up

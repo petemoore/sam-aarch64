@@ -58,6 +58,14 @@ Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
 | **i39b** — Phase 2: name-table front-coding + comment/`.global`/base-hint editor sidecars (evictable region) | 🧭 designed (design §3.6/§3.7) | design §5 phase 2 |
 | **i39c** — Phase 3: bitfield-packing polish on the overlay slot bytes | 🧭 designed (low priority) | design §3.1 |
 | **i40** — assembler-side editor-region eviction (write editor region/`.tbn` to disk before assembling, reuse RAM as OUT/scratch, reload to restore) | 🧭 future (editor phase) | design §7 decision 1 |
+| **i48** — single serialized format + pass-free syntactic encoder (refines i39/i39a). **A:** overlay is the *only* serialized `.tbn`; symbolic kinds become in-memory IR (old format buried, in no head doc). **B:** text→overlay is syntactic (no symbol pass); value-bits computed in the fold; forego GNU's silent `ldr→ldur`/`add lsl#12` rewrite (→ syntactic/error); narrow `mov`→`movz`/`orr`/`movn` assemble-time fallback. Driver: the SAM must do text→overlay too (editor), so the host should mirror that flow. | 📋 **design agreed** (Pete 2026-06-08) — strands **i48a** host front-end unification · **i48b** syntactic encoder + fold value-work (lands before/with PR(c)) · **i48c** Z80 text→overlay encoder (future) · **i48d** doc unification (rewrite the tbn format reference to overlay-only) | `docs/specs/2026-06-08-i48-single-format-syntactic-encoder-design.md`; item registry i48 |
+
+**i48 ↔ i39a interaction.** i48b refines a fold-rule with a **format-byte effect**
+(`FoldMovzAuto` computes `hw` instead of reading it from a pre-baked base word), so its
+Go change must land **before/with i39a PR(c)** — PR(c)'s Z80 fold jump-table ports the
+*refined* folds. i48a (host front-end unification) is independent of the Z80. i48d (the
+doc scrub, incl. rewriting `tbn-binary-format-reference.md` to overlay-only) lands with
+the v2 merge so no head doc describes a format the code doesn't produce.
 
 ## i39a Phase-1 progress (the v2 overlay flip)
 
@@ -162,10 +170,13 @@ path jobs) + every Go unit suite. PR(c) makes the Z80 jobs green again.
 
 ## Open questions for Pete (M8)
 
-None blocking — the 5 i39 design questions are all resolved (design §7), and
-PR(a) confirmed the v1→v2 flip needs **no re-vendoring** (the m6 gate
-re-derives the `.tbn` from `release.s`). The two missing slots and the movz
-split above were mechanical (resolved without Pete).
+The 5 i39 design questions are all resolved (design §7), and PR(a) confirmed the
+v1→v2 flip needs **no re-vendoring** (the m6 gate re-derives the `.tbn` from
+`release.s`). Open questions live in the milestone-neutral **`docs/notes/question-registry.md`**
+(`qN`). The i48 ones are mostly resolved: **q5** host packaging → **one integrated tool**
+(Pete 2026-06-09); **q6** editor value-dependent base words → resolved by i41 decision #3
+(editor holds the symbolic IR, not base words). Remaining: **q7** any other GNU rewrites
+to forego (sweep at i48b). None blocking i39a/PR(c).
 
 ## Authoritative references
 

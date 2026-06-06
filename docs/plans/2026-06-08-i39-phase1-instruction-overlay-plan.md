@@ -362,9 +362,13 @@ Within that branch, the reviewable commits/PRs are:
   assemble→overlay→disassemble→re-assemble. **Proves:** the slot enum is exhaustive and faithful (the
   fidelity guard for (a)); round-trip byte-identical over M3–M6.
 - **(c) Z80 overlay decoder.** `INSN_RUN` dispatch + mode-0/mode-1 pass-1/pass-2 handlers in `main_loop.asm`,
-  fold jump-table (ports of pass2 conversions), reusing `expr_eval.asm`; delete the form-table symbolic path.
+  fold jump-table (ports of pass2 conversions), reusing `expr_eval.asm`; delete the form-table symbolic path
+  (and the now-dead `KindLitInsts`/`REC_KIND_LIT_INSTS` handler — i48a). **Port the i48b-refined folds**, not
+  the current ones: `FoldMovzAuto` computes `hw` from the resolved value (the Go side lands before/with this
+  PR as a format-byte change); symbolic mem is `FoldMemImm12` by syntax (error, not imm9 rewrite). See
+  `docs/specs/2026-06-08-i48-single-format-syntactic-encoder-design.md` §4, §7.
   **Proves:** Z80(SAM) assembles the v2 compact `.tbn` to OUT == release.img (m6-release Z80 arm green);
-  `&C000` budget holds (measured); boot self-tests green.
+  `&C000` budget holds (measured); boot self-tests green. Inner loop: the Go z80 harness, not SimCoupé.
 - **(d) Header label/offset table.** Move `LABEL_DEF`/`LOCAL_DEF` to the delta-varint header table; Go build/
   consume + Z80 upfront load; remove the per-record label dispatch on both sides. **Proves:** labels no longer
   split runs (single long instruction run); m6-release stays green; label table ~−0.7 KB.

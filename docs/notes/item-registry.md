@@ -22,6 +22,29 @@ tables carry the same ids. (The ids below were assigned in the 2026-06-08
 planning session; `i13` is locked to "gitignore" to match shipped PR #107, so the
 "replace `cls`" item — tentatively i13 in conversation — is registered as `i16`.)
 
+### Two registries, one discipline (read this for *both* items and questions)
+
+There are **two sibling registries**, and they follow the **same governance** — so
+learning one teaches the other:
+
+- **Items** → this file (`docs/notes/item-registry.md`), ids **`iN`** — tracked *work*.
+- **Questions for Pete** → `docs/notes/question-registry.md`, ids **`qN`** —
+  *unresolved decisions* (things an agent can't settle itself, or defers rather than
+  guessing). Every open question goes there the moment it arises — not just in chat
+  (chat questions get lost in simultaneous-edit races); the registry is the single
+  sure-fire list of what's still open. (See the `feedback_capture_open_questions`
+  memory.)
+
+Shared rules for **both** `iN` and `qN`: (1) **stable ids, locked** once they appear
+in a PR/branch/commit — never renumbered; (2) **milestone-neutral and never
+archived** — when a milestone status doc is superseded, its items *and* questions live
+on in their registry, never stranded in an archived `m{N}-status` doc; (3) **marked
+done/resolved, not deleted** (`✅` with the resolution + where it was decided), so the
+id is never reused; (4) referenced by id everywhere; (5) **landed on `main`** via PR
+(branch-protection forbids direct pushes) so Pete sees them where he reads. Milestone
+status docs and the ROADMAP **reference** both registries; they do not duplicate the
+tables.
+
 | id | item | status | pointer |
 |----|------|--------|---------|
 | **i1** | Compact-`.tbn` format change (hybrid bytes/symbolic; `KindLitInsts` + `KindLitData`) | ✅ PR1 #121 + PR2 #122 + PR3 #124 all merged — **88,644 → 51,117 B (−42.3%)**, 6 IN pages → 4, byte-identical to GNU. Next-gen redesign explored as **i39**. | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`; `docs/specs/2026-06-08-tbn-binary-format-reference.md` (§7) |
@@ -59,7 +82,7 @@ planning session; `i13` is locked to "gitignore" to match shipped PR #107, so th
 | **i31** | On-SAM preprocessor (`.if` build-constraints + macros) | 🧭 beyond-M7 | "Beyond-M7 / future ideas" |
 | **i32** | Multiple source files + staged/partial loading | 🧭 beyond-M7 | "Beyond-M7 / future ideas" |
 | **i33** | Trinity SD/flash storage → bigger-kernel architecture | 🧭 beyond-M7 | `memory/trinity_hardware.md` |
-| **i34** | Untrack accidentally-committed Go binaries | ⏳ partial — `enctab-gen` untracked (PR #111); `llist-normalise` pending LLIST disposition (open-Q5) | `.gitignore`; open-question 5 |
+| **i34** | Untrack accidentally-committed Go binaries | ⏳ partial — `enctab-gen` untracked (PR #111); `llist-normalise` pending LLIST disposition (question **q8**) | `.gitignore`; question registry q8 |
 | **i35** | `sdiv` missing across the whole stack (no mnemonic/Form → `.inst`; unencodable) | ✅ DONE (PR #115) | deferred-backlog row; mirrored `udiv` ID 72 |
 | **i36** | Z80 disasm: ccmp/ccmn decode (was → `.inst`) — added decode + encoder (ccmn ID 100); binutils-aligned | ✅ DONE (PR #119) | `docs/notes/2026-06-08-z80-go-disasm-parity-i9.md` |
 | **i37** | base csinv/csneg (Rn≠Rm): Go `aarch64dec` now decodes them (IDs 101/102), encoder coverage added; aliases intact | ✅ DONE (PR #119) | same analysis doc. The i9 sweep skip is removed; families now certified |
@@ -69,10 +92,15 @@ planning session; `i13` is locked to "gitignore" to match shipped PR #107, so th
 | **i39b** | M8 Phase 2 — name-table front-coding + comment/`.global`/base-hint editor sidecars (evictable region) | 🧭 designed | design §3.6/§3.7, §5 |
 | **i39c** | M8 Phase 3 — bitfield-packing polish on the overlay slot bytes | 🧭 designed (low priority) | design §3.1 |
 | **i40** | Assembler-side editor-region eviction (write editor region/`.tbn` to disk before assembling, reuse RAM as OUT/scratch, reload to restore the editor view). Lets "everything in one file" coexist with minimal resident RAM. **→ M8 (editor phase).** | 🧭 future — Pete 2026-06-08 | `docs/notes/m8-status.md`; design §7 (decision 1) |
-| **i41** | Editor edit-buffer data structure — insertion performance for large source. A naive contiguous edit buffer (mutating the `.tbn` in place) requires shifting all bytes after an insert; at ~400 KB on the SAM Z80 that is ~1.5–2+ s (before paging overhead), exceeding the ~1 s/edit bound. **Resolution is architectural:** the `.tbn` is the *serialized* storage/assembly form (offset/PC-based, contiguous); the editor holds the source in a separate insertion-friendly in-memory document model (options: gap buffer / piece table / record linked-list) and serializes to `.tbn` on save/assemble — edits never shift the `.tbn`, and offsets/PCs are recomputed in one O(n) pass on serialize, not per keystroke. Comments/symbols are anchored by record-reference (or a stable record-id), NOT by byte-offset, so an insert touches only local nodes (no global reindex). Capture now; full edit-model design at editor time (Phase 2). Does NOT change i39 (i39 is the storage/assembly format). Cross-links: i39, i40, i3/i4 (editor). | 🧭 design-needed at editor phase — Pete 2026-06-08 | `docs/notes/m8-status.md`; ROADMAP "Editor vision"; cross-links i39, i40, i3, i4 |
+| **i41** | Editor edit-buffer data structure — insertion performance for large source. A naive contiguous edit buffer (mutating the `.tbn` in place) requires shifting all bytes after an insert; at ~400 KB on the SAM Z80 that is ~1.5–2+ s (before paging overhead), exceeding the ~1 s/edit bound. **Resolution is architectural:** the `.tbn` is the *serialized* storage/assembly form (offset/PC-based, contiguous); the editor holds the source in a separate insertion-friendly in-memory document model (options: gap buffer / piece table / record linked-list) and serializes to `.tbn` on save/assemble — edits never shift the `.tbn`, and offsets/PCs are recomputed in one O(n) pass on serialize, not per keystroke. Comments/symbols are anchored by record-reference (or a stable record-id), NOT by byte-offset, so an insert touches only local nodes (no global reindex). Capture now; full edit-model design at editor time (Phase 2). Does NOT change i39 (i39 is the storage/assembly format). Cross-links: i39, i40, i3/i4 (editor). **Design AGREED (opus, 2026-06-08):** **paged block-list** (block = page, intra-block gap buffer, record-id side-tables) — worst-case edit ~30–80 ms at 400 KB, every op 0–2 page swaps. **5 decisions (§7):** ½-page blocks · bounded ring-journal undo · **edit-model records = the i48 in-memory symbolic IR** (pre-lexed/parsed → validate-on-entry, canonical layout, compact via interned names; active line raw-until-commit, raw/error record for invalid lines) · build the block-list directly (clean serialize seam, no throwaway MVP) · u24 no-reuse record-ids. Unifies the editor document model with i48's IR. | 📋 design agreed — 5 decisions recorded (Pete 2026-06-08) | `docs/specs/2026-06-08-editor-edit-model-design.md` (design §7); `docs/notes/m8-status.md`; ROADMAP "Editor vision"; cross-links i39, i40, i3, i4, i48 |
 | **i42** | CRC / signature in the `.tbn` file header (integrity check) | 🧭 (deferred since M1; the v1 header has magic/version/flags but no integrity field) | `docs/notes/m1-status.md` "Known gaps" (CRC / signature in the file header) |
 | **i43** | Editor: register simulator with user-chosen seeds (step instructions; inject/randomise source regs; show dest regs/flags/memory) + replay-on-edit | 🧭 Phase-2 editor sub-feature | `docs/ROADMAP.md` "Editor vision"; sub-feature of i3 |
 | **i44** | Editor: inline instruction-explanation panel (prose semantics, flags set, regs read/written, bit-field layout) | 🧭 Phase-2 editor sub-feature | `docs/ROADMAP.md` "Editor vision"; sub-feature of i3 |
 | **i45** | Editor: "did you mean a simpler instruction?" result-equivalent rewrite hint | 🧭 Phase-2 editor sub-feature | `docs/ROADMAP.md` "Editor vision"; sub-feature of i3 |
 | **i46** | Editor: system-register documentation panel surfaced from the cursor line (embed ARM MRA subset + editorial overlay) | 🧭 Phase-2 editor sub-feature | `docs/ROADMAP.md` "Editor vision"; sub-feature of i3 |
 | **i47** | Editor: "why is this instruction here?" inverse-flow navigation + retro UI affordances (chiptune, period fonts, animations) | 🧭 Phase-2 editor sub-features | `docs/ROADMAP.md` "Editor vision"; sub-features of i3 |
+| **i48** | Single serialized format + pass-free syntactic encoder (the design). **A:** the compact overlay is the *only* serialized `.tbn`; the symbolic kinds (`KindInst`/`LabelDef`/`LocalDef`/`LitInsts`) become an in-memory IR, never written — old format buried, described in no head doc. **B:** text→overlay is a pure syntactic transform (no symbol pass); value-dependent bits computed in the fold at assemble time; forego GNU's silent `ldr→ldur`/`add lsl#12` rewrite (→ syntactic/error); narrow assemble-time `mov`→`movz`/`orr`/`movn` fallback. Makes the host mirror the eventual SAM flow (text→overlay must run on the SAM too). Refines i39/i39a. | 📋 **design agreed** (Pete 2026-06-08) — strands i48a–i48d | `docs/specs/2026-06-08-i48-single-format-syntactic-encoder-design.md`; `docs/notes/m8-status.md` |
+| **i48a** | Host front-end unification — factor the three core capabilities (text→overlay encoder / overlay→bytes assembler / overlay→text renderer) as Go-authoritative shared libs, composed into **one integrated host tool** (q5; staged modes via flags); symbolic IR in-memory only; drop symbolic serialization. *(Absorbs the standalone `KindLitInsts`-removal item.)* | 📋 plan-ready | i48 spec §3, §7; q5 |
+| **i48b** | Syntactic encoder + fold-time value-work — `FoldMovzAuto` computes `hw`; symbolic mem → `FoldMemImm12`-or-error; add/sub `lsl #12` syntactic; `mov` movz-default + assemble-time fallback. **Format-byte effect (movz-auto base word) → Go change must precede/accompany i39a PR(c).** | 📋 plan-ready | i48 spec §4, §7 |
+| **i48c** | Z80 **text→overlay encoder** (editor input path) — the SAM-side mirror of the host front-end; Go i48b is the authority. | 🧭 future (editor phase) | i48 spec §2, §7 |
+| **i48d** | Doc unification — rewrite `tbn-binary-format-reference.md` to overlay-only; scrub head docs of the old format; historical banners on the M1/i1 design docs. Lands with the v2/elimination so docs and code agree. | 📋 plan-ready | i48 spec §6, §9 |
