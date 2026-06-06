@@ -412,7 +412,7 @@ DISASM_ENTRY:           equ     &8000           ; entry point in section-C form
 ; equ's.
 DISASM_COMM_LEN:        equ     36              ; total buffer reservation
 DISASM_COMM_MNEM:       equ     TRAMPOLINE_DST + &99    ; = &7E99, 12 bytes
-DISASM_COMM_OPS:        equ     TRAMPOLINE_DST + &A5    ; = &7EA5, 24 bytes
+DISASM_COMM_OPS:        equ     TRAMPOLINE_DST + &A3    ; = &7EA3, 26 bytes
 
 
 TRAMPOLINE_DST: equ     &7E00          ; section-B copy destination

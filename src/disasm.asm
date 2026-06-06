@@ -36,7 +36,7 @@
 ; src/trampoline.asm exactly (this file is assembled standalone, so
 ; it carries its own copies; trampoline.asm is the canonical source).
 DISASM_COMM_MNEM:   equ     &7E99   ; 12 bytes — mnemonic (null-terminated)
-DISASM_COMM_OPS:    equ     &7EA5   ; 24 bytes — operands (null-terminated)
+DISASM_COMM_OPS:    equ     &7EA3   ; 26 bytes — operands (null-terminated)
 
 ; NOP encoding (D503201F LE: bytes 1F, 20, 03, D5).
 ; paged_call preserves BC (= high word 0x0000D503) and IX (= low word
