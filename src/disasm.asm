@@ -149,6 +149,20 @@ disasm_not_addsubimm:
                 jp      disasm_try_logimm
 disasm_not_logimm:
 
+; --- dp-register aliases (mov/mvn/cmp/cmn/tst/neg/negs/ngc) ------------
+; Per Go DecodeAt order the register-space aliases (decodeDPRegAlias,
+; inside decodeAlias) run BEFORE the base decodeDPReg form walk, so they
+; must shadow the base mnemonics.  The base decoder sits at the end of the
+; chain (just before .inst), mirroring decodeDPReg running last in Go.
+                jp      disasm_try_dpreg_alias
+disasm_not_dpreg_alias:
+
+; --- dp-register base (add/sub/adds/subs/and/orr/eor/ands/bic/orn/eon) -
+; shifted + extended register forms.  Runs LAST before .inst (decodeDPReg
+; is the final fallback after the form walk in Go).
+                jp      disasm_try_dpreg
+disasm_not_dpreg:
+
 ; --- default: .inst 0xNNNNNNNN ----------------------------------------
                 jp      disasm_inst
 
@@ -1670,6 +1684,780 @@ disasm_li_mwp_s:        defb    0
 
 
 ; =======================================================================
+; Data-processing (shifted/extended register) family — Z80 port of
+; tools/aarch64dec/dpreg.go (decodeDPReg) and the register-space aliases
+; in tools/aarch64dec/aliases.go (decodeDPRegAlias).
+;
+; Class selector bits[28:24] (= ((B&0x1f)<<1)|(C>>7)):
+;   0b01011 (0x0b) — arithmetic add/sub: bit21 (C bit5) picks shifted(0)/
+;                    extended(1).
+;   0b01010 (0x0a) — logical and/orr/eor/ands (+ bic/orn/eon via N bit);
+;                    shifted only.
+;
+; Shifted-register fields:
+;   sf=B>>7  opc=(B>>5)&3  shift=(C>>6)&3  N/bit21=(C>>5)&1  Rm=C&0x1f
+;   imm6=(D>>2)&0x3f  Rn=((D&3)<<3)|(E>>5)  Rd=E&0x1f
+; Extended-register additionally:  option=(D>>5)&7  imm3=(D>>2)&7
+;
+; Shared scratch (disasm_dpr_*) is filled by disasm_dpr_extract, which
+; leaves B,C,D,E intact so the decline paths can still reach .inst with
+; the original word.  Both the alias and base decoders call it.
+; =======================================================================
+
+; -----------------------------------------------------------------------
+; disasm_dpr_extract — decode the common shifted/extended fields into
+; scratch.  Sets disasm_dpr_cls (0x0a/0x0b/other).  Leaves B,C,D,E intact.
+; Clobbers A, HL.
+; -----------------------------------------------------------------------
+disasm_dpr_extract:
+; cls = bits[28:24] = B & 0x1f.
+                ld      a, b
+                and     &1f
+                ld      (disasm_dpr_cls), a
+; sf = B>>7.
+                ld      a, b
+                rlca
+                and     1
+                ld      (disasm_dpr_sf), a
+; opc = (B>>5)&3.
+                ld      a, b
+                rlca
+                rlca
+                rlca
+                and     3
+                ld      (disasm_dpr_opc), a
+; shift = (C>>6)&3.
+                ld      a, c
+                rlca
+                rlca
+                and     3
+                ld      (disasm_dpr_shift), a
+; bit21 (N) = (C>>5)&1.
+                ld      a, c
+                rlca
+                rlca
+                rlca
+                and     1
+                ld      (disasm_dpr_n), a
+; Rm = C&0x1f.
+                ld      a, c
+                and     &1f
+                ld      (disasm_dpr_rm), a
+; imm6 = (D>>2)&0x3f.
+                ld      a, d
+                rrca
+                rrca
+                and     &3f
+                ld      (disasm_dpr_imm6), a
+; option = (D>>5)&7.
+                ld      a, d
+                rlca
+                rlca
+                rlca
+                and     7
+                ld      (disasm_dpr_option), a
+; imm3 = (D>>2)&7.
+                ld      a, d
+                rrca
+                rrca
+                and     7
+                ld      (disasm_dpr_imm3), a
+; Rn = ((D&3)<<3)|(E>>5).
+                ld      a, d
+                and     3
+                add     a, a
+                add     a, a
+                add     a, a
+                ld      l, a
+                ld      a, e
+                rlca
+                rlca
+                rlca
+                and     7
+                or      l
+                ld      (disasm_dpr_rn), a
+; Rd = E&0x1f.
+                ld      a, e
+                and     &1f
+                ld      (disasm_dpr_rd), a
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_dpr_class_ok — A := class (cls in {0x0a,0x0b}); Z set iff this is
+; a dp-register class word.  Clobbers A.
+; -----------------------------------------------------------------------
+disasm_dpr_class_ok:
+                ld      a, (disasm_dpr_cls)
+                cp      &0a
+                ret     z
+                cp      &0b
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_dpr_shifted_valid — apply the shifted-register validity guards
+; (carry SET = valid, carry CLEAR = decline).  Mirrors decodeShiftedReg /
+; decodeDPRegAlias guards:
+;   - sf==0 && imm6>=32 → undefined.
+;   - arithmetic (cls 0x0b) shift==0b11 (ror) → reserved.
+; Clobbers A.
+; -----------------------------------------------------------------------
+disasm_dpr_shifted_valid:
+                ld      a, (disasm_dpr_sf)
+                or      a
+                jr      nz, disasm_dpr_sv_chkror
+                ld      a, (disasm_dpr_imm6)
+                cp      32
+                jr      c, disasm_dpr_sv_chkror
+                or      a                           ; sf=0 && imm6>=32 → clear carry
+                ret
+disasm_dpr_sv_chkror:
+                ld      a, (disasm_dpr_cls)
+                cp      &0b
+                jr      nz, disasm_dpr_sv_ok        ; logical: ror allowed
+                ld      a, (disasm_dpr_shift)
+                cp      3
+                jr      nz, disasm_dpr_sv_ok
+                or      a                           ; arith ror → clear carry
+                ret
+disasm_dpr_sv_ok:
+                scf
+                ret
+
+
+; =======================================================================
+; disasm_try_dpreg_alias — register-space aliases (Z80 port of
+; decodeDPRegAlias, aliases.go:391).  Shifted-register only.
+;
+; Arithmetic (cls 0x0b, bit21==0):
+;   opc 01 adds, Rd==31 → cmn Rn, Rm[, shift]
+;   opc 10 sub,  Rn==31 → neg Rd, Rm[, shift]
+;   opc 11 subs, Rd==31 → cmp Rn, Rm[, shift]
+;            "    Rn==31 → negs Rd, Rm[, shift]
+; Logical (cls 0x0a):
+;   opc 01 N1 orn, Rn==31 → mvn Rd, Rm[, shift]
+;   opc 01 N0 orr, Rn==31 && imm6==0 && shift==0 → mov Rd, Rm
+;   opc 11 N0 ands, Rd==31 → tst Rn, Rm[, shift]
+; All other words DECLINE to disasm_not_dpreg_alias (word intact).
+;
+; ABI: clobbers BC/IX on success; saves them after the LAST decline,
+; restores via disasm_dpr_done.  Decline paths leave B,C,D,E intact.
+; =======================================================================
+disasm_try_dpreg_alias:
+                call    disasm_dpr_extract
+                call    disasm_dpr_class_ok
+                jp      nz, disasm_not_dpreg_alias
+; Arithmetic: bit21==1 is extended-register → no register aliases here.
+                ld      a, (disasm_dpr_cls)
+                cp      &0b
+                jr      nz, disasm_dpra_have_class  ; logical: bit21 is N
+                ld      a, (disasm_dpr_n)
+                or      a
+                jp      nz, disasm_not_dpreg_alias  ; arith extended → decline
+disasm_dpra_have_class:
+; Validity guards (same as base) — an undefined alias word must decline so
+; .inst still matches.
+                call    disasm_dpr_shifted_valid
+                jp      nc, disasm_not_dpreg_alias
+; Determine which alias (if any) fires.  We only COMMIT (push BC/IX) once an
+; alias is confirmed, so the no-alias case can decline with the word intact.
+                ld      a, (disasm_dpr_cls)
+                cp      &0b
+                jp      z, disasm_dpra_arith
+; --- logical aliases (cls 0x0a) ---
+                ld      a, (disasm_dpr_opc)
+                cp      1
+                jr      z, disasm_dpra_orr_orn
+                cp      3
+                jp      z, disasm_dpra_ands
+                jp      disasm_not_dpreg_alias
+disasm_dpra_orr_orn:
+                ld      a, (disasm_dpr_n)
+                or      a
+                jr      nz, disasm_dpra_orn
+; orr (N=0) → mov only when Rn==31 && imm6==0 && shift==0.
+                ld      a, (disasm_dpr_rn)
+                cp      31
+                jp      nz, disasm_not_dpreg_alias
+                ld      a, (disasm_dpr_imm6)
+                or      a
+                jp      nz, disasm_not_dpreg_alias
+                ld      a, (disasm_dpr_shift)
+                or      a
+                jp      nz, disasm_not_dpreg_alias
+; mov Rd, Rm.
+                push    bc
+                push    ix
+                ld      hl, disasm_dpr_mov_txt
+                call    disasm_asi_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_dpr_rd)
+                call    disasm_dpr_emit_reg
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      a, (disasm_dpr_rm)
+                call    disasm_dpr_emit_reg
+                ld      (hl), 0
+                jp      disasm_dpr_done
+disasm_dpra_orn:
+; orn (N=1) → mvn when Rn==31.
+                ld      a, (disasm_dpr_rn)
+                cp      31
+                jp      nz, disasm_not_dpreg_alias
+                ld      hl, disasm_dpr_mvn_txt
+                jp      disasm_dpra_emit_2op_rd     ; mvn Rd, Rm[, shift]
+disasm_dpra_ands:
+; ands (N must be 0) → tst when Rd==31.
+                ld      a, (disasm_dpr_n)
+                or      a
+                jp      nz, disasm_not_dpreg_alias
+                ld      a, (disasm_dpr_rd)
+                cp      31
+                jp      nz, disasm_not_dpreg_alias
+                ld      hl, disasm_dpr_tst_txt
+                jp      disasm_dpra_emit_2op_rn     ; tst Rn, Rm[, shift]
+
+; --- arithmetic aliases (cls 0x0b, bit21==0) ---
+disasm_dpra_arith:
+                ld      a, (disasm_dpr_opc)
+                cp      1
+                jr      z, disasm_dpra_adds
+                cp      2
+                jr      z, disasm_dpra_sub
+                cp      3
+                jp      z, disasm_dpra_subs
+                jp      disasm_not_dpreg_alias      ; opc 00 add → no alias
+disasm_dpra_adds:
+                ld      a, (disasm_dpr_rd)
+                cp      31
+                jp      nz, disasm_not_dpreg_alias
+                ld      hl, disasm_dpr_cmn_txt
+                jp      disasm_dpra_emit_2op_rn     ; cmn Rn, Rm[, shift]
+disasm_dpra_sub:
+                ld      a, (disasm_dpr_rn)
+                cp      31
+                jp      nz, disasm_not_dpreg_alias
+                ld      hl, disasm_dpr_neg_txt
+                jp      disasm_dpra_emit_2op_rd     ; neg Rd, Rm[, shift]
+disasm_dpra_subs:
+; subs: Rd==31 → cmp Rn, Rm ; else Rn==31 → negs Rd, Rm.
+                ld      a, (disasm_dpr_rd)
+                cp      31
+                jr      nz, disasm_dpra_subs_neg
+                ld      hl, disasm_dpr_cmp_txt
+                jp      disasm_dpra_emit_2op_rn     ; cmp Rn, Rm[, shift]
+disasm_dpra_subs_neg:
+                ld      a, (disasm_dpr_rn)
+                cp      31
+                jp      nz, disasm_not_dpreg_alias
+                ld      hl, disasm_dpr_negs_txt
+                jp      disasm_dpra_emit_2op_rd     ; negs Rd, Rm[, shift]
+
+
+; -----------------------------------------------------------------------
+; disasm_dpra_emit_2op_rd / _rn — emit a two-register alias whose first
+; operand is Rd (neg/negs/mvn) or Rn (cmp/cmn/tst): "<first>, <Rm>[, shift]".
+; HL on entry → mnemonic string.  Commits (push BC/IX) then returns via
+; disasm_dpr_done.
+; -----------------------------------------------------------------------
+disasm_dpra_emit_2op_rd:
+                ld      a, (disasm_dpr_rd)
+                jr      disasm_dpra_emit_2op
+disasm_dpra_emit_2op_rn:
+                ld      a, (disasm_dpr_rn)
+disasm_dpra_emit_2op:
+                ld      (disasm_dpr_first), a
+                push    bc
+                push    ix
+                call    disasm_asi_set_mnem         ; mnemonic from HL
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_dpr_first)
+                call    disasm_dpr_emit_reg
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      a, (disasm_dpr_rm)
+                call    disasm_dpr_emit_reg
+                call    disasm_dpr_emit_shift       ; optional ", <kind> #imm6"
+                ld      (hl), 0
+                jp      disasm_dpr_done
+
+
+; =======================================================================
+; disasm_try_dpreg — base shifted/extended register decoder (Z80 port of
+; decodeDPReg).  Runs LAST before .inst; the aliases above already claimed
+; the alias words, so this emits the plain base mnemonic.
+;
+; ABI: clobbers BC/IX on success; saves them after the LAST decline,
+; restores via disasm_dpr_done.  Decline paths leave B,C,D,E intact.
+; =======================================================================
+disasm_try_dpreg:
+                call    disasm_dpr_extract
+                call    disasm_dpr_class_ok
+                jp      nz, disasm_not_dpreg
+; Arithmetic with bit21==1 → extended register.
+                ld      a, (disasm_dpr_cls)
+                cp      &0b
+                jr      nz, disasm_dpr_shifted      ; logical → always shifted
+                ld      a, (disasm_dpr_n)
+                or      a
+                jp      nz, disasm_dpr_extended
+; --- shifted register ---
+disasm_dpr_shifted:
+                call    disasm_dpr_shifted_valid
+                jp      nc, disasm_not_dpreg
+; Mnemonic: arithmetic by opc (add/adds/sub/subs); logical by opc+N.
+                ld      a, (disasm_dpr_cls)
+                cp      &0b
+                jr      nz, disasm_dpr_sh_logical
+; arithmetic: index opc into the add/sub table (reuse asi table).
+                ld      a, (disasm_dpr_opc)
+                add     a, a
+                ld      e, a
+                ld      d, 0
+                ld      hl, disasm_asi_mnem_tbl
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                ex      de, hl
+                jr      disasm_dpr_sh_emit
+disasm_dpr_sh_logical:
+; logical: opc*2 + N → index into disasm_dpr_log_tbl (8 word ptrs).
+                ld      a, (disasm_dpr_opc)
+                add     a, a                        ; opc*2
+                ld      l, a
+                ld      a, (disasm_dpr_n)
+                or      l                           ; (opc<<1)|N
+                add     a, a                        ; *2 word ptrs
+                ld      e, a
+                ld      d, 0
+                ld      hl, disasm_dpr_log_tbl
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                ex      de, hl
+disasm_dpr_sh_emit:
+; HL = mnemonic string.  Commit and emit "Rd, Rn, Rm[, shift]".
+                push    bc
+                push    ix
+                call    disasm_asi_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_dpr_rd)
+                call    disasm_dpr_emit_reg
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      a, (disasm_dpr_rn)
+                call    disasm_dpr_emit_reg
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      a, (disasm_dpr_rm)
+                call    disasm_dpr_emit_reg
+                call    disasm_dpr_emit_shift
+                ld      (hl), 0
+                jp      disasm_dpr_done
+
+
+; -----------------------------------------------------------------------
+; Extended register (add/adds/sub/subs).  bits[23:22]==00 required; imm3<=4.
+;   Rd/Rn are SP-able (sp/wsp at idx 31); Rm width = X for uxtx/sxtx
+;   (option 011/111), else W.
+;   lslOption = sf?011:010.  When option==lslOption && (Rd==31 || Rn==31):
+;     imm3==0 → omit extend phrase ; imm3!=0 → ", lsl #imm3".
+;   Otherwise emit ", <ext>" (imm3==0) or ", <ext> #imm3".
+; -----------------------------------------------------------------------
+disasm_dpr_extended:
+; opt (bits[23:22]) must be 0.  shift scratch holds (C>>6)&3 = bits[23:22].
+                ld      a, (disasm_dpr_shift)
+                or      a
+                jp      nz, disasm_not_dpreg
+; imm3 > 4 → undefined.
+                ld      a, (disasm_dpr_imm3)
+                cp      5
+                jp      nc, disasm_not_dpreg
+; Mnemonic by opc (add/adds/sub/subs).
+                ld      a, (disasm_dpr_opc)
+                add     a, a
+                ld      e, a
+                ld      d, 0
+                ld      hl, disasm_asi_mnem_tbl
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                ex      de, hl
+                push    bc
+                push    ix
+                call    disasm_asi_set_mnem
+; Rd (SP-able), Rn (SP-able).
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_dpr_rd)
+                call    disasm_dpr_emit_reg_sp
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      a, (disasm_dpr_rn)
+                call    disasm_dpr_emit_reg_sp
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+; Rm: width depends on option (011/111 → x, else w).
+                ld      a, (disasm_dpr_option)
+                cp      3
+                jr      z, disasm_dpr_ext_rm_x
+                cp      7
+                jr      z, disasm_dpr_ext_rm_x
+                ld      a, (disasm_dpr_rm)
+                call    disasm_dpr_emit_reg_w       ; force W width
+                jr      disasm_dpr_ext_phrase
+disasm_dpr_ext_rm_x:
+                ld      a, (disasm_dpr_rm)
+                call    disasm_dpr_emit_reg_x       ; force X width
+disasm_dpr_ext_phrase:
+; lslOption = sf?3:2.
+                ld      a, (disasm_dpr_sf)
+                or      a
+                ld      a, 2
+                jr      z, disasm_dpr_ext_haslsl
+                ld      a, 3
+disasm_dpr_ext_haslsl:
+                ld      b, a                        ; B = lslOption
+                ld      a, (disasm_dpr_option)
+                cp      b
+                jr      nz, disasm_dpr_ext_kw       ; not the lsl option → keyword
+; option == lslOption: lsl branch when Rd==31 or Rn==31.
+                ld      a, (disasm_dpr_rd)
+                cp      31
+                jr      z, disasm_dpr_ext_lsl
+                ld      a, (disasm_dpr_rn)
+                cp      31
+                jr      nz, disasm_dpr_ext_kw       ; no SP → keyword form
+disasm_dpr_ext_lsl:
+; SP involved + lsl option.  imm3==0 → omit phrase; else ", lsl #imm3".
+                ld      a, (disasm_dpr_imm3)
+                or      a
+                jr      z, disasm_dpr_ext_done
+                ld      de, disasm_mem_lsl_txt      ; "lsl"
+                call    disasm_dpr_emit_extamt
+                jr      disasm_dpr_ext_done
+disasm_dpr_ext_kw:
+; keyword form.  imm3==0 → ", <ext>" ; else ", <ext> #imm3".  The ext
+; keyword string ptr is fetched via disasm_dpr_ext_str (preserves HL).
+                ld      a, (disasm_dpr_option)
+                call    disasm_dpr_ext_str          ; DE = ext string ptr (HL kept)
+                ld      a, (disasm_dpr_imm3)
+                or      a
+                jr      nz, disasm_dpr_ext_kwamt
+; ", <ext>" (no amount).
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                call    disasm_dpr_emit_str_de
+                jr      disasm_dpr_ext_done
+disasm_dpr_ext_kwamt:
+                call    disasm_dpr_emit_extamt
+disasm_dpr_ext_done:
+                ld      (hl), 0
+                jp      disasm_dpr_done
+
+
+; -----------------------------------------------------------------------
+; disasm_dpr_ext_str — A = option (0..7) → DE = pointer to the extend
+; keyword string (uxtb..sxtx).  Preserves HL.  Clobbers A, DE.
+; -----------------------------------------------------------------------
+disasm_dpr_ext_str:
+                push    hl
+                add     a, a                        ; *2 word ptrs
+                ld      e, a
+                ld      d, 0
+                ld      hl, disasm_dpr_ext_tbl
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                      ; DE = ext string ptr
+                pop     hl
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_dpr_emit_extamt — emit ", <kw> #imm3" where DE→keyword string and
+; imm3 = disasm_dpr_imm3.  Advances HL.  Clobbers A, BC, DE.
+; -----------------------------------------------------------------------
+disasm_dpr_emit_extamt:
+                push    de
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                pop     de
+                call    disasm_dpr_emit_str_de
+                ld      (hl), " "
+                inc     hl
+                ld      (hl), "#"
+                inc     hl
+                ld      a, (disasm_dpr_imm3)
+                ld      e, a
+                ld      d, 0
+                call    disasm_emit_dec16
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_dpr_emit_str_de — copy null-terminated string at (DE) to (HL),
+; advancing HL.  Clobbers A, DE.
+; -----------------------------------------------------------------------
+disasm_dpr_emit_str_de:
+                ld      a, (de)
+                or      a
+                ret     z
+                ld      (hl), a
+                inc     hl
+                inc     de
+                jr      disasm_dpr_emit_str_de
+
+
+; -----------------------------------------------------------------------
+; disasm_dpr_emit_shift — append ", <kind> #imm6" to (HL) when imm6 != 0.
+; kind from disasm_dpr_shift (lsl/lsr/asr/ror).  Advances HL.
+; Clobbers A, BC, DE.
+; -----------------------------------------------------------------------
+disasm_dpr_emit_shift:
+                ld      a, (disasm_dpr_imm6)
+                or      a
+                ret     z
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+; kind string ptr from table (preserves HL), then copy + " #imm6".
+                ld      a, (disasm_dpr_shift)
+                push    hl
+                add     a, a                        ; *2 word ptrs
+                ld      e, a
+                ld      d, 0
+                ld      hl, disasm_dpr_shift_tbl
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                      ; DE = kind string ptr
+                pop     hl
+                call    disasm_dpr_emit_str_de
+                ld      (hl), " "
+                inc     hl
+                ld      (hl), "#"
+                inc     hl
+                ld      a, (disasm_dpr_imm6)
+                ld      e, a
+                ld      d, 0
+                call    disasm_emit_dec16
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_dpr_emit_reg / _sp / _w / _x — emit register index A.
+;   _reg : width from disasm_dpr_sf, zero index → xzr/wzr.
+;   _sp  : width from disasm_dpr_sf, zero index → sp/wsp (SP-able).
+;   _w   : force W width, zero index → wzr.
+;   _x   : force X width, zero index → xzr.
+; Advances HL.  Clobbers A, DE (IX/IY preserved by disasm_emit_dec16).
+; -----------------------------------------------------------------------
+disasm_dpr_emit_reg:
+                ld      c, a                        ; C = index
+                ld      a, (disasm_dpr_sf)
+                ld      b, a                        ; B = is64
+                xor     a
+                jr      disasm_dpr_reg_emit         ; spable=0 → zr/wzr
+disasm_dpr_emit_reg_sp:
+                ld      c, a
+                ld      a, (disasm_dpr_sf)
+                ld      b, a
+                ld      a, 1                        ; spable=1 → sp/wsp
+                jr      disasm_dpr_reg_emit
+disasm_dpr_emit_reg_w:
+                ld      c, a
+                ld      b, 0                        ; force W
+                xor     a
+                jr      disasm_dpr_reg_emit
+disasm_dpr_emit_reg_x:
+                ld      c, a
+                ld      b, 1                        ; force X
+                xor     a
+                ; fall through
+; B = is64, C = index, A = spable (0=zr/1=sp naming for idx 31).
+disasm_dpr_reg_emit:
+                ld      (disasm_dpr_spable), a
+                ld      a, c
+                cp      31
+                jr      z, disasm_dpr_reg_special
+; ordinary register: prefix + decimal.
+                ld      a, b
+                or      a
+                ld      a, "w"
+                jr      z, disasm_dpr_reg_pfx
+                ld      a, "x"
+disasm_dpr_reg_pfx:
+                ld      (hl), a
+                inc     hl
+                ld      a, c
+                ld      e, a
+                ld      d, 0
+                call    disasm_emit_dec16
+                ret
+disasm_dpr_reg_special:
+                ld      a, (disasm_dpr_spable)
+                or      a
+                jr      nz, disasm_dpr_reg_sp
+; zr form: "xzr"/"wzr".
+                ld      a, b
+                or      a
+                ld      a, "w"
+                jr      z, disasm_dpr_reg_zp
+                ld      a, "x"
+disasm_dpr_reg_zp:
+                ld      (hl), a
+                inc     hl
+                ld      (hl), "z"
+                inc     hl
+                ld      (hl), "r"
+                inc     hl
+                ret
+disasm_dpr_reg_sp:
+; sp form: "sp" (64) / "wsp" (32).
+                ld      a, b
+                or      a
+                jr      nz, disasm_dpr_reg_sp64
+                ld      (hl), "w"
+                inc     hl
+disasm_dpr_reg_sp64:
+                ld      (hl), "s"
+                inc     hl
+                ld      (hl), "p"
+                inc     hl
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_dpr_done — common success epilogue: restore BC/IX (saved after
+; the last decline) and return.  Honours disasm_entry's ABI.
+; -----------------------------------------------------------------------
+disasm_dpr_done:
+                pop     ix
+                pop     bc
+                ret
+
+
+; --- dp-register mnemonic strings -------------------------------------
+disasm_dpr_mov_txt:     defm    "mov"
+                        defb    0
+disasm_dpr_mvn_txt:     defm    "mvn"
+                        defb    0
+disasm_dpr_cmp_txt:     defm    "cmp"
+                        defb    0
+disasm_dpr_cmn_txt:     defm    "cmn"
+                        defb    0
+disasm_dpr_tst_txt:     defm    "tst"
+                        defb    0
+disasm_dpr_neg_txt:     defm    "neg"
+                        defb    0
+disasm_dpr_negs_txt:    defm    "negs"
+                        defb    0
+disasm_dpr_and_txt:     defm    "and"
+                        defb    0
+disasm_dpr_bic_txt:     defm    "bic"
+                        defb    0
+disasm_dpr_orr_txt:     defm    "orr"
+                        defb    0
+disasm_dpr_orn_txt:     defm    "orn"
+                        defb    0
+disasm_dpr_eor_txt:     defm    "eor"
+                        defb    0
+disasm_dpr_eon_txt:     defm    "eon"
+                        defb    0
+disasm_dpr_ands_txt:    defm    "ands"
+                        defb    0
+disasm_dpr_bics_txt:    defm    "bics"
+                        defb    0
+disasm_dpr_lsl_txt:     defm    "lsl"
+                        defb    0
+disasm_dpr_lsr_txt:     defm    "lsr"
+                        defb    0
+disasm_dpr_asr_txt:     defm    "asr"
+                        defb    0
+disasm_dpr_ror_txt:     defm    "ror"
+                        defb    0
+disasm_dpr_uxtb_txt:    defm    "uxtb"
+                        defb    0
+disasm_dpr_uxth_txt:    defm    "uxth"
+                        defb    0
+disasm_dpr_uxtw_txt:    defm    "uxtw"
+                        defb    0
+disasm_dpr_uxtx_txt:    defm    "uxtx"
+                        defb    0
+disasm_dpr_sxtb_txt:    defm    "sxtb"
+                        defb    0
+disasm_dpr_sxth_txt:    defm    "sxth"
+                        defb    0
+disasm_dpr_sxtw_txt:    defm    "sxtw"
+                        defb    0
+disasm_dpr_sxtx_txt:    defm    "sxtx"
+                        defb    0
+
+; logical shifted-register mnemonic table, indexed (opc<<1)|N (8 entries):
+;   opc00 and/bic  opc01 orr/orn  opc10 eor/eon  opc11 ands/bics
+disasm_dpr_log_tbl:     defw    disasm_dpr_and_txt  ; 000 and
+                        defw    disasm_dpr_bic_txt  ; 001 bic
+                        defw    disasm_dpr_orr_txt  ; 010 orr
+                        defw    disasm_dpr_orn_txt  ; 011 orn
+                        defw    disasm_dpr_eor_txt  ; 100 eor
+                        defw    disasm_dpr_eon_txt  ; 101 eon
+                        defw    disasm_dpr_ands_txt ; 110 ands
+                        defw    disasm_dpr_bics_txt ; 111 bics
+
+; shift-kind table (indexed by 2-bit shift field): lsl/lsr/asr/ror.
+disasm_dpr_shift_tbl:   defw    disasm_dpr_lsl_txt
+                        defw    disasm_dpr_lsr_txt
+                        defw    disasm_dpr_asr_txt
+                        defw    disasm_dpr_ror_txt
+
+; extend-kind table (indexed by 3-bit option field): uxtb..sxtx.
+disasm_dpr_ext_tbl:     defw    disasm_dpr_uxtb_txt
+                        defw    disasm_dpr_uxth_txt
+                        defw    disasm_dpr_uxtw_txt
+                        defw    disasm_dpr_uxtx_txt
+                        defw    disasm_dpr_sxtb_txt
+                        defw    disasm_dpr_sxth_txt
+                        defw    disasm_dpr_sxtw_txt
+                        defw    disasm_dpr_sxtx_txt
+
+; --- dp-register working scratch (this page) --------------------------
+disasm_dpr_cls:         defb    0       ; class 0x0a/0x0b/other
+disasm_dpr_sf:          defb    0
+disasm_dpr_opc:         defb    0
+disasm_dpr_shift:       defb    0       ; shift field (also opt bits23:22)
+disasm_dpr_n:           defb    0       ; N / bit21
+disasm_dpr_rm:          defb    0
+disasm_dpr_imm6:        defb    0
+disasm_dpr_option:      defb    0       ; extend option bits15:13
+disasm_dpr_imm3:        defb    0       ; extend amount bits12:10
+disasm_dpr_rn:          defb    0
+disasm_dpr_rd:          defb    0
+disasm_dpr_first:       defb    0       ; first operand reg for 2-op aliases
+disasm_dpr_spable:      defb    0
+
+
+; =======================================================================
 ; Load/store (memory) family — Z80 port of tools/aarch64dec/mem.go
 ; (decodeMem + decodeScalarMem + decodeIndexed + decodeRegOffset +
 ;  decodePairMem; decodeLiteralMem is declined, see below).
@@ -2893,6 +3681,10 @@ disasm_pow10_tbl:
 ;   &71 — logical-imm mov (orr bitmask alias) check failed.
 ;   &70 — logical-imm and check failed (mnemonic or operands).
 ;   &6F — logical-imm non-canonical → .inst check failed.
+;   &6E — dp-register shifted add (lsl #n) check failed.
+;   &6D — dp-register mov (orr-xzr alias) check failed.
+;   &6C — dp-register cmp (subs-xzr alias) check failed.
+;   &6B — dp-register extended add (uxtw) check failed.
 ; Clobbers: A, DE, HL, F (paged_call ABI; BC is the return value).
 ; -----------------------------------------------------------------------
 run_disasm_self_test:
@@ -3105,6 +3897,58 @@ run_disasm_self_test:
                 call    disasm_stest_strcmp
                 jp      nz, disasm_stest_fail_noncanon
 
+; dp-register shifted add with lsl.  8B100A10 → "add", "x16, x16, x16, lsl #2".
+                ld      bc, &8B10
+                ld      ix, &0A10
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_dadd_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_dadd
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_dadd_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_dadd
+
+; dp-register mov (orr-xzr alias).  AA0103E2 → "mov", "x2, x1".
+                ld      bc, &AA01
+                ld      ix, &03E2
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_dmov_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_dmov
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_dmov_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_dmov
+
+; dp-register cmp (subs-xzr alias).  EB01001F → "cmp", "x0, x1".
+                ld      bc, &EB01
+                ld      ix, &001F
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_dcmp_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_dcmp
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_dcmp_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_dcmp
+
+; dp-register extended add.  8B234041 → "add", "x1, x2, w3, uxtw".
+                ld      bc, &8B23
+                ld      ix, &4041
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_dext_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_dext
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_dext_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_dext
+
                 ld      bc, 0
                 ret
 
@@ -3155,6 +3999,18 @@ disasm_stest_fail_andi:
                 ret
 disasm_stest_fail_noncanon:
                 ld      bc, &6F
+                ret
+disasm_stest_fail_dadd:
+                ld      bc, &6E
+                ret
+disasm_stest_fail_dmov:
+                ld      bc, &6D
+                ret
+disasm_stest_fail_dcmp:
+                ld      bc, &6C
+                ret
+disasm_stest_fail_dext:
+                ld      bc, &6B
                 ret
 
 ; disasm_stest_strcmp — compare null-terminated strings at (HL) and (DE).
@@ -3222,4 +4078,20 @@ disasm_stest_and_ops_expect:    defm    "x0, x0, #0xc"
 disasm_stest_inst_expect:       defm    ".inst"
                                 defb    0
 disasm_stest_noncanon_ops_expect: defm  "0x32200013"
+                                defb    0
+disasm_stest_dadd_expect:       defm    "add"
+                                defb    0
+disasm_stest_dadd_ops_expect:   defm    "x16, x16, x16, lsl #2"
+                                defb    0
+disasm_stest_dmov_expect:       defm    "mov"
+                                defb    0
+disasm_stest_dmov_ops_expect:   defm    "x2, x1"
+                                defb    0
+disasm_stest_dcmp_expect:       defm    "cmp"
+                                defb    0
+disasm_stest_dcmp_ops_expect:   defm    "x0, x1"
+                                defb    0
+disasm_stest_dext_expect:       defm    "add"
+                                defb    0
+disasm_stest_dext_ops_expect:   defm    "x1, x2, w3, uxtw"
                                 defb    0
