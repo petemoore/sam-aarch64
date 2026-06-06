@@ -10,6 +10,12 @@
 
 **Reference:** All section numbers (§1–§10) in this plan refer to `docs/specs/2026-05-23-m1-binary-tokenised-format-design.md`.
 
+> **Note (historical plan):** the format-enum snippets below capture the v1 `.tbn`
+> shape as built during M1. The current normative record/operand/expression
+> tables (now including `KindLitInsts`, `OpLitPool`, and the grown directive
+> set) live in `docs/specs/2026-06-08-tbn-binary-format-reference.md`; consult
+> that for the up-to-date encoding.
+
 ---
 
 ## File structure

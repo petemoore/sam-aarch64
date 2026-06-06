@@ -3,6 +3,19 @@
 **Status**: approved 2026-05-23. Read alongside `2026-05-09-vision.md`
 and `2026-05-09-phase1-assembler.md`.
 
+> ⚠️ **The format-reference sections of this doc (§2–§6) are SUPERSEDED.**
+> The single normative description of the on-disk `.tbn` format — current
+> with `KindLitInsts`, `OpLitPool`, the grown directive table, and the
+> compaction record kinds — now lives in
+> **`docs/specs/2026-06-08-tbn-binary-format-reference.md`**. The tables in
+> §2–§6 below predate those additions and are retained only as the
+> historical M1 milestone record (and for the §7–§9 tooling / test-pyramid /
+> open-items content, which still applies). For any *current* question about
+> record kinds, operand kinds, the expression bytecode, the directive table,
+> the header/name-table layout, or record framing, read the reference doc
+> instead — if the two disagree, the reference (and the Go authority it cites)
+> wins.
+
 ## 1. Goal & boundaries
 
 M1 designs and implements the **binary tokenised source format** for
@@ -36,6 +49,10 @@ the on-SAM editor (Phase 2). M1 itself ships no SAM-side code.
 - No CRC or signature in the file header — easy to add post-v1.
 
 ## 2. File container
+
+> **Superseded by `docs/specs/2026-06-08-tbn-binary-format-reference.md` §2.**
+> The reference doc has the current container layout. The text below is the
+> original M1 description.
 
 A tokenised binary file (suggested extension `.tbn`) is laid out as:
 
@@ -74,6 +91,10 @@ samfile machinery. Allocating a dedicated SAM file type is a
 samfile/SAMDOS-coordinated change and not strictly necessary in v1.
 
 ## 3. Record kinds
+
+> **Superseded by `docs/specs/2026-06-08-tbn-binary-format-reference.md` §3.**
+> The current kind table adds `0x07 LIT_INSTS` (and reserves `0x08 LIT_DATA`);
+> the table below is the original v1 set.
 
 The statement stream is a flat sequence of records. Each record has a
 3-byte header followed by a kind-specific payload:
@@ -122,6 +143,10 @@ Notes:
   `EQU` record kind.
 
 ## 4. Operand kinds
+
+> **Superseded by `docs/specs/2026-06-08-tbn-binary-format-reference.md` §4.**
+> The current operand table adds `0x0C LIT_POOL`; the table below is the
+> original v1 set.
 
 Every operand begins with `[kind : u8]`. The Z80 dispatches on `kind`
 to the right encoder routine. v1 kinds:
@@ -181,6 +206,10 @@ representing `lsl #4` is one `PUSH_IMM8` opcode plus its byte (2
 bytes payload, total 4 bytes once length-prefix is counted). Cheap.
 
 ## 5. Expression bytecode
+
+> **Superseded by `docs/specs/2026-06-08-tbn-binary-format-reference.md` §5.**
+> The opcode table below remains accurate, but the reference doc is the
+> current normative copy.
 
 Operand positions that contain arithmetic — and may involve
 forward-referenced labels — embed a length-prefixed **expression
@@ -273,6 +302,10 @@ sign-extension and range-check) is computed by the Z80 operand
 encoder `BranchImm26` at pass 2.
 
 ## 6. Local labels & comments — resolution semantics
+
+> **Superseded by `docs/specs/2026-06-08-tbn-binary-format-reference.md` §8.**
+> Resolution semantics (local labels now 1–99, literal pool, comments) are
+> current in the reference doc's §8.
 
 These are subtle enough to spell out so M3's Z80 implementation does
 not have to re-derive them.
