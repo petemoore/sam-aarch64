@@ -84,12 +84,17 @@ else
     exit 1
 fi
 
-echo "=== [5/6] Z80 toolchain: SAM assembler on SimCoupé → OUT ==="
+echo "=== [5/6] Z80 toolchain: SAM assembler on SimCoupé → OUT (from the COMPACT .tbn) ==="
+# The SAM side consumes the COMPACT .tbn (i1 PR2): the Z80
+# REC_KIND_LIT_INSTS decode memcpys the pre-assembled literal runs to
+# OUT. Proving OUT == release.img from the compact source exercises that
+# decode path under SimCoupé (the symbolic Z80 path is covered by the
+# m3..m6 fixture jobs + the harness).
 "$ROOT/build/build-m3-disk" \
     -sysreg-data "$ROOT/build/sysreg_data.bin" \
     -disasm "$ROOT/build/disasm.bin" \
     "$ROOT/build/assembler-prod.bin" "$ROOT/build/enctab.enc" \
-    "$TBN" \
+    "$CTBN" \
     "$ROOT/build/m6-release.mgt"
 "$ROOT/tools/run-simcoupe.sh" \
     "$ROOT/build/m6-release.mgt" \
@@ -106,9 +111,9 @@ echo "=== [6/6] 3-way byte-compare ==="
 gnu_sz=$(wc -c < "$GNU" | tr -d ' ')
 go_sz=$(wc -c < "$GO_IMG" | tr -d ' ')
 sam_sz=$(wc -c < "$SAM_IMG" | tr -d ' ')
-printf '    GNU (vendored) : %s bytes\n' "$gnu_sz"
-printf '    Go (refenc)    : %s bytes\n' "$go_sz"
-printf '    Z80 (SAM)      : %s bytes\n' "$sam_sz"
+printf '    GNU (vendored)      : %s bytes\n' "$gnu_sz"
+printf '    Go (refenc)         : %s bytes\n' "$go_sz"
+printf '    Z80 (SAM, compact)  : %s bytes\n' "$sam_sz"
 
 rc=0
 report_diff() {
@@ -124,7 +129,7 @@ report_diff() {
 }
 report_diff "$GNU" "$GO_IMG"   "GNU vs Go (text2bin+refenc)"
 report_diff "$GNU" "$GO_IMG_C" "GNU vs Go (compact .tbn)"
-report_diff "$GNU" "$SAM_IMG"  "GNU vs Z80 (SAM assembler)"
+report_diff "$GNU" "$SAM_IMG"  "GNU vs Z80 (SAM assembler, compact .tbn)"
 
 echo
 if [ "$rc" -eq 0 ]; then
