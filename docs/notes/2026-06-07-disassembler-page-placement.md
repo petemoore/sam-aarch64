@@ -246,20 +246,27 @@ Go source scan raises this to 3–4 KB, still well within one 16 KB page.
 
 ---
 
-## 6. Open questions and risks
+## 6. Decisions (Pete, 2026-06-07)
 
-1. **Page 15 vs pages 14–15 for "explanation prose"** — the brainstorm
-   doc reserves pages 14–15 for explanation prose
-   (`memory-layout-brainstorm.md §3`).  Page 14 is currently the
-   `paged_call` self-test payload (`BUILD_TESTS` only); page 15 is
-   free.  Using page 15 for the disassembler code means explanation
-   prose must move to pages 16–17.  This is a minor page-assignment
-   shift; it needs a constants update in `trampoline.asm` and the
-   brainstorm doc, but no mechanism change.  Alternatively, keep
-   pages 14–15 as prose and assign the disassembler to pages 16–17.
-   **Pete's call.**
+1. **Page assignment** — **✅ DECIDED: disassembler on page 15; explanation
+   prose moves to pages 16–17.**  The constants update in `trampoline.asm`
+   and the brainstorm doc can be deferred to when prose content actually
+   lands; the page-15 assignment is the binding commitment now.
 
-2. **String output ABI** — the Go disassembler returns `(mnem, operands
+2. **Sysreg name table duplication** — **✅ DECIDED: option (a) — embed a
+   minimal sysreg name table directly in the disassembler page.**  At ~400 B
+   this is ~2.4% of the 16 KB page (or ~1.2% of the full 32 KB bank), well
+   within the "revisit if needed later" threshold.  To prevent drift without
+   any runtime cost, the names table is extracted into a shared
+   **`src/sysreg_names.inc`** and `include`d from both `src/sysreg_data.asm`
+   (page 13) and `src/disasm.asm` (page 15) — one source file, zero drift by
+   construction.  When the M7 "codegen tables from Go authority" strand
+   lands, the generated file replaces the hand-written `.inc` and both
+   consumers update automatically.
+
+## 7. Remaining open questions
+
+1. **String output ABI** — the Go disassembler returns `(mnem, operands
    string)`.  The Z80 port needs an output convention.  Candidates:
    (a) two null-terminated strings written to a section-B comm buffer
    (same pattern as the sysreg comm buffer at `SYSREG_COMM_NAME`), or
@@ -269,32 +276,18 @@ Go source scan raises this to 3–4 KB, still well within one 16 KB page.
    render but requires section D to hold the output buffer at call
    time.  Needs design before the Z80 port begins.
 
-3. **PC-relative slot values** — `DecodeAt(pc, word)` feeds branch
+2. **PC-relative slot values** — `DecodeAt(pc, word)` feeds branch
    targets, ADR/ADRP, and LDR-literal offsets.  The Z80 port needs
    the current PC passed in.  The caller (disasm loop) knows the PC;
    it can be passed in IX or a section-B staging slot.
 
-4. **Non-re-entrance of `paged_call`** — if the disassembler itself
-   needs to call `paged_call` (e.g. to look up a sysreg name from
-   page 13 while running under HMPR=15), the single static-save slot
-   at `PAGED_CALL_HMPR_SAVE` is not safe.  The sysreg matcher on page
-   13 is likely needed for `mrs`/`msr` decoding.  Options: (a) embed
-   a minimal sysreg name table inside the disassembler page itself
-   (duplicates ~400 B of data); (b) extend `paged_call` to a
-   2-deep save stack; (c) structure the disassembler so the sysreg
-   lookup is done by the caller (section-C code) before the
-   `paged_call` into the disassembler.  **This is the key design
-   decision for the Z80 port** and must be resolved before
-   implementation begins.
+3. **Test payload boot-sequencing with page 15** — check whether any
+   `BUILD_TESTS`-only self-test transiently occupies page 15 before
+   the disassembler is loaded.  Sequencing must be explicit in
+   `loader.asm` (analogous to `test_mem.bin`/page-13 +
+   `sysreg_data.bin`/page-13 time-multiplex).
 
-5. **Test payload boot-sequencing with page 15** — if any
-   `BUILD_TESTS`-only self-test needs to occupy page 15 transiently
-   before the disassembler is loaded (analogous to
-   `test_mem.bin`/page-13 + `sysreg_data.bin`/page-13 time-
-   multiplex), the sequencing must be explicit in `loader.asm`.
-   Check whether any existing test cluster spills onto page 15.
-
-6. **256 KB machine compatibility** — on a 256 KB SAM, page 15 is the
+4. **256 KB machine compatibility** — on a 256 KB SAM, page 15 is the
    last RAM page and is marked screen memory by BASIC
    (`trampoline.asm:190-194`).  The project currently targets 512 KB;
    if 256 KB support is ever added, page-15 use needs revisiting.
@@ -302,7 +295,7 @@ Go source scan raises this to 3–4 KB, still well within one 16 KB page.
 
 ---
 
-## 7. Sources
+## 8. Sources
 
 - `docs/notes/sam-paging.md §1–2` — LMPR/HMPR semantics, section
   pairing, CLUT bits
