@@ -172,6 +172,17 @@ func TestAlias_ShiftVar(t *testing.T) {
 	})
 }
 
+// TestAlias_Extr covers EXTR (extract) — the ror Rd,Rn,#imm alias (Rm==Rn)
+// and the base extr form (Rm!=Rn).  Verified against ARM ARM C6.2.72:
+// 0x13811420 = ror w0,w1,#5 ; 0x93c11420 = ror x0,x1,#5.
+func TestAlias_Extr(t *testing.T) {
+	runAliasCases(t, []aliasCase{
+		{"extr_ror_w", 0x13811420, "ror", "w0, w1, #5"},
+		{"extr_ror_x", 0x93c11420, "ror", "x0, x1, #5"},
+		{"extr_extr_w", 0x13821420, "extr", "w0, w1, w2, #5"}, // Rm=2 != Rn=1
+	})
+}
+
 // TestAlias_BitfieldUndefined covers bitfield-class words that are
 // architecturally undefined (N != sf), which objdump renders `.inst`.
 func TestAlias_BitfieldUndefined(t *testing.T) {

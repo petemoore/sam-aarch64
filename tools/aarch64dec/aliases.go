@@ -61,6 +61,9 @@ func decodeAlias(word uint32) (mnem string, operands string, ok bool) {
 	if m, o, ok := decodeMovk(word); ok {
 		return m, o, true
 	}
+	if m, o, ok := tryDecodeExtr(word); ok {
+		return m, o, true
+	}
 	return "", "", false
 }
 
@@ -747,6 +750,60 @@ func decodeMovk(word uint32) (string, string, bool) {
 	}
 	prefix, zero := regWidth(sf)
 	return "movk", movWideOperands(decodeReg(rd, prefix, zero), imm16, hw), true
+}
+
+// -----------------------------------------------------------------------
+// EXTR (extract) → ror Rd, Rn, #imms  (Rm==Rn alias) or extr Rd, Rn, Rm, #imms.
+//
+// Encoding (ARM ARM C6.2.72):
+//
+//	sf | 00100111 | N | 0 | Rm(5) | imms(6) | Rn(5) | Rd(5)
+//
+//	32-bit: sf=0, N=0 → pattern 0x13800000, mask 0xFFE00000
+//	64-bit: sf=1, N=1 → pattern 0x93C00000, mask 0xFFE00000
+//
+// When Rm==Rn, objdump renders the ROR alias: `ror Rd, Rn, #imms`.
+// When Rm!=Rn, it renders the base form: `extr Rd, Rn, Rm, #imms`.
+//
+// EXTR is absent from AllForms(): refenc encodes it by hand in
+// encodeRorImm (Rn appears in two slots), so the generic form-table
+// dispatch cannot find it and the word would otherwise fall through to
+// `.inst`.  Decoding it here restores round-trip completeness.
+//
+// Verified:
+//
+//	13811420 ror w0, w1, #5   (sf=0, Rm=Rn=1, imms=5)
+//	93c11420 ror x0, x1, #5   (sf=1, Rm=Rn=1, imms=5)
+//	13821420 extr w0, w1, w2, #5  (sf=0, Rm=2, Rn=1, imms=5)
+func tryDecodeExtr(word uint32) (mnem, ops string, ok bool) {
+	var sf bool
+	switch word & 0xFFE00000 {
+	case 0x13800000:
+		sf = false
+	case 0x93C00000:
+		sf = true
+	default:
+		return "", "", false
+	}
+	rm := (word >> 16) & 0x1f
+	imms := (word >> 10) & 0x3f
+	rn := (word >> 5) & 0x1f
+	rd := word & 0x1f
+
+	var prefix, zero string
+	if sf {
+		prefix, zero = "x", "xzr"
+	} else {
+		prefix, zero = "w", "wzr"
+	}
+	rdTxt := decodeReg(rd, prefix, zero)
+	rnTxt := decodeReg(rn, prefix, zero)
+	rmTxt := decodeReg(rm, prefix, zero)
+
+	if rm == rn {
+		return "ror", fmt.Sprintf("%s, %s, #%d", rdTxt, rnTxt, imms), true
+	}
+	return "extr", fmt.Sprintf("%s, %s, %s, #%d", rdTxt, rnTxt, rmTxt, imms), true
 }
 
 // -----------------------------------------------------------------------
