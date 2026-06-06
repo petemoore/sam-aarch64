@@ -57,6 +57,13 @@ NOP_LO:     equ     &201F   ; IX = low  16 bits
 ; -----------------------------------------------------------------------
 disasm_entry:
 
+; Extract IX bytes into DE via push/pop — (ix+N) is an indexed memory
+; read (address IX+N), not a register-byte access.  push/pop is the
+; standard Z80 idiom.  D = high byte of lo-word (bits 15..8),
+; E = low byte (bits 7..0).  IX itself is unchanged.
+                push    ix
+                pop     de
+
 ; Check BC against NOP high word.
                 ld      hl, NOP_HI
                 ld      a, b
@@ -66,13 +73,12 @@ disasm_entry:
                 cp      l
                 jr      nz, disasm_inst
 
-; Check IX against NOP low word.  IX is a 16-bit register; test each
-; byte via IX+0 (low byte) and IX+1 (high byte).  NOP_LO = &201F so
-; IX+0 = &1F (low) and IX+1 = &20 (high).
-                ld      a, (ix + 0)         ; low byte of IX
+; Check DE (IX bytes) against NOP low word.  NOP_LO = &201F:
+; E = &1F (bits 7..0), D = &20 (bits 15..8).
+                ld      a, e
                 cp      NOP_LO & &FF        ; &1F
                 jr      nz, disasm_inst
-                ld      a, (ix + 1)         ; high byte of IX
+                ld      a, d
                 cp      (NOP_LO >> 8) & &FF ; &20
                 jr      nz, disasm_inst
 
@@ -134,12 +140,12 @@ disasm_inst:
                 ld      a, c
                 call    disasm_emit_hex_byte
 
-; Emit IX high byte (bits 15..8).
-                ld      a, (ix + 1)
+; Emit D (IX high byte = bits 15..8).
+                ld      a, d
                 call    disasm_emit_hex_byte
 
-; Emit IX low byte (bits 7..0).
-                ld      a, (ix + 0)
+; Emit E (IX low byte = bits 7..0).
+                ld      a, e
                 call    disasm_emit_hex_byte
 
 ; Null-terminate the operands string.

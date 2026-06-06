@@ -2,13 +2,11 @@
 ;
 ; Per docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.2.
 ;
-; Lives in the off-axis page-12 cluster (src/test_offaxis_cluster.asm),
-; relocated from the inline section in strand-B PR-3 (2026-06-07) to
-; reclaim section-C budget.  Runs via a single LMPR swap before
-; load_enctab — so it exercises the symbol-table routines against
-; hard-coded ids/addresses with no disk I/O.  Any assertion failure
-; does `jp fail` — same red-border + printer-channel "FAIL" banner
-; path that the slot self-tests use.
+; These run BEFORE load_enctab (see assembler.asm start:) so they
+; exercise the symbol-table routines against hard-coded ids/addresses
+; with no disk I/O.  Any assertion failure does `jp fail` — same
+; red-border + printer-channel "FAIL" banner path that the slot
+; self-tests use.
 ;
 ; Test coverage:
 ;   1. After symbol_table_init, lookup of any id returns CF=1.
@@ -30,8 +28,8 @@
 
 
 ; -----------------------------------------------------------------------
-; run_symbol_table_self_tests — entry point, called from cluster_dispatch
-; in test_offaxis_cluster.asm.
+; run_symbol_table_self_tests — entry point called from assembler.asm
+; start: (between run_slot_self_tests and load_enctab).
 ;
 ; Input:  none.
 ; Output: returns to caller on success.  On any mismatch: jp fail.

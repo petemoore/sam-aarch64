@@ -277,69 +277,6 @@ name_sysreg_data:
                 defm    "    "         ; 4-char ext (unused)
 
 
-; -----------------------------------------------------------------------
-; load_page15_payload — PRODUCTION feature (both variants).  HLOAD the
-; disassembler stub binary (build/disasm.bin, CODE file "d15") into
-; physical page 15 via the section-B HLOAD trampoline.
-;
-; Per strand-B PR-3.  Structural cousin of load_page13_payload: HGTHD to
-; find the file + populate svde, then HLOAD-via-trampoline to land it in
-; a page outside section C.  Differences: file name ("d15"), target page
-; (DISASM_PAGE = 15).
-;
-; The page-15 content is consumed at runtime by the disassembler via
-; paged_call into DISASM_ENTRY (&8000).  Needed by EVERY build (the
-; editor will invoke the disassembler in production), so this routine
-; and its boot-sequence call are NOT gated by BUILD_TESTS.
-;
-; ORDERING (assembler.asm boot sequence): this must run AFTER
-; enctab_trampoline_setup (the HLOAD trampoline must be installed) and
-; AFTER load_page13_payload (which also uses the trampoline).  It must
-; run BEFORE main_assemble (the first point where the disassembler
-; might be needed).
-;
-; Input:  none (precondition: enctab_trampoline_setup has been called).
-; Output: physical page 15 holds disasm.bin (entry at &8000 when HMPR
-;         maps page 15 in).  HMPR restored on return.
-; Clobbers: A, BC, DE, HL, IX (everything except SP).
-; -----------------------------------------------------------------------
-load_page15_payload:
-                ld      hl, name_disasm
-                call    fill_uifa
-                rst     8
-                defb    HOOK_HGTHD     ; longjmps on "file not found"
-
-; Read length-mod-16K from SAMDOS-deposited DIFA header at &4B50+35,
-; clearing the `set 7, d` marker.  Mirrors load_page13_payload.
-                ld      hl, (&4B50 + 35)
-                ld      a, h
-                and     &7F
-                ld      h, a
-                ld      e, l
-                ld      d, h           ; DE = length-mod-16K
-
-; Read page count from DIFA+34.  Expected 0 — disasm.bin is well under 1 KB.
-                ld      a, (&4B50 + 34)
-                ld      c, a           ; C = pages count
-
-                ld      hl, &8000      ; section-C window (HLOAD requirement)
-                ld      b, DISASM_PAGE
-                call    TRAMPOLINE_DST
-                ret
-
-
-; -----------------------------------------------------------------------
-; UIFA name block for "d15" (disassembler stub, both variants).
-;
-; The on-disk catalogue entry is created Mac-side by build-m3-disk
-; (using samfile) when invoked with the -disasm flag, as "d15".
-; -----------------------------------------------------------------------
-name_disasm:
-                defb    19
-                defm    "d15       "   ; 10 chars (3 + 7 trailing spaces)
-                defm    "    "         ; 4-char ext (unused)
-
-
 if defined(BUILD_TESTS)
 
 ; -----------------------------------------------------------------------

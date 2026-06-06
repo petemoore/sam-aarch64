@@ -7,11 +7,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 # Rebuild Go binaries in-container (ELF, not Mach-O).
-make -s text2bin enctab build-m3-disk sysreg-data disasm-payload
+make -s text2bin enctab build-m3-disk sysreg-data
 
 ./build/build-m3-disk \
     -sysreg-data build/sysreg_data.bin \
-    -disasm build/disasm.bin \
     build/assembler-prod.bin build/enctab.enc \
     build/release-stripped.tbn build/release-stripped.mgt
 

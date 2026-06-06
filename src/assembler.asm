@@ -326,22 +326,18 @@ endif
 ; also clobbered but is re-zeroed by main_assemble's pass_pc_reset
 ; call, so it doesn't need explicit restoration here.
 if defined(BUILD_TESTS)
-                ; run_symbol_table_self_tests and run_local_label_self_tests
-                ; moved off-axis into the page-12 cluster (strand-B PR-3,
-                ; 2026-06-07) to reclaim ~775 B of section-C budget for the
-                ; page-15 disassembler loader and self-test.  Both suites
-                ; call their own init routines and are order-independent.
-                ; They now run first in cluster_dispatch, preserving the
-                ; prior relative order (symbol/local before expr_eval_m4).
-                ; run_expr_eval_m4_self_tests also moved off-axis into the
-                ; page-12 cluster (PR-3c, 2026-05-29) to reclaim ~449 B of
-                ; section-C/D budget for the MUL/DIV evaluator code.  It
-                ; runs after symbol/local in cluster_dispatch.  The suite is
-                ; LMPR-swap-safe: verified call-graph-free of paged_call /
-                ; section-B / LMPR routines (only eval_expr_const, symbol_*,
-                ; local_* — all HMPR-stable section-C/D), and its inline
-                ; `defb` literals read via section A under the swap, like the
-                ; slots suite already relies on.
+                call    run_symbol_table_self_tests
+                call    run_local_label_self_tests
+                ; run_expr_eval_m4_self_tests moved off-axis into the page-12
+                ; cluster (PR-3c, 2026-05-29) to reclaim ~449 B of section-C/D
+                ; budget for the MUL/DIV evaluator code.  It runs first in
+                ; cluster_dispatch, preserving its prior relative order (after
+                ; symbol/local, before slots).  The suite is LMPR-swap-safe:
+                ; verified call-graph-free of paged_call / section-B / LMPR
+                ; routines (only eval_expr_const, symbol_*, local_* — all
+                ; HMPR-stable section-C/D), and its inline `defb` literals read
+                ; via section A under the swap, like the slots suite already
+                ; relies on.
 
 ; -- The slot / pc_rel / directives_m5 / ror_imm / shifted_reg /
 ; extended_reg / litpool suites live off-axis on physical page 12 (M6
@@ -405,17 +401,6 @@ endif
 ; few ms at boot only.  Must run before main_assemble's first lookup.
                 call    load_page13_payload
 
-; -- Load the disassembler stub into page 15 (PRODUCTION feature).
-; load_page15_payload HLOAD's build/disasm.bin ("d15" on disk) into
-; physical page 15 so the editor can invoke the disassembler at runtime
-; via paged_call into DISASM_ENTRY (&8000, page 15).  Must run AFTER
-; enctab_trampoline_setup (uses the HLOAD trampoline) and AFTER
-; load_page13_payload (same trampoline, sequential use is fine).  Runs
-; BEFORE main_assemble and load_enctab so the disassembler is ready for
-; any caller.  See loader.asm::load_page15_payload.
-                call    load_page15_payload
-
-
 ; -- Load and validate enctab.enc header --------------------------------
 ; load_enctab uses the trampoline to land the file in physical page 4
 ; (outside section C, freeing &A000-&AFFF for code).  Validates the
@@ -457,14 +442,6 @@ if defined(BUILD_TESTS)
                 ; docs/notes/2026-05-28-reader-paged-self-test-investigation.md
                 ; (PR-6 resolution section at the foot).
                 call    run_reader_paged_self_tests
-
-; -- Disassembler paged-call self-test.  Exercises the page-15 stub
-; loaded by load_page15_payload above (unconditional section).
-; Must run AFTER load_page15_payload (page 15 holds disasm.bin) and
-; AFTER enctab_trampoline_setup (paged_call body installed in section B).
-; Page 15 is a PRODUCTION load so it is available in both variants;
-; the test call is BUILD_TESTS-only.
-                call    run_disasm_paged_self_tests
 endif
 
 ; -- Run the assemble: pass 1 (table build) + pass 2 (emit) -----------
@@ -569,13 +546,8 @@ if defined(BUILD_TESTS)
                 ; main binary so both inline and off-axis suites resolve it
                 ; (the off-axis cluster + test_mem reach it via importfile).
                 include "test_assert_eq32.asm"
-                ; test_symbols.asm and test_local_labels.asm moved off-axis
-                ; into the page-12 cluster (strand-B PR-3, 2026-06-07) to
-                ; reclaim ~775 B of section-C budget for the page-15
-                ; disassembler loader and self-test.  Their helper routines
-                ; (assert_cf_set/clear, set_value_buf_imm, etc.) move with
-                ; them; test_expr_eval_m4.asm in the cluster resolves these
-                ; locally rather than via assembler.sym importfile.
+                include "test_symbols.asm"
+                include "test_local_labels.asm"
                 ; test_expr_eval_m4 moved off-axis into the page-12 cluster
                 ; (PR-3c, 2026-05-29) — see the call-site comment above.
                 ; test_slots / test_pc_rel / test_directives_m5 / test_ror_imm /
@@ -605,7 +577,6 @@ if defined(BUILD_TESTS)
                 include "test_reader_paged.asm"
                 include "test_paged_call.asm"
                 include "test_sysreg_paged.asm"
-                include "test_disasm_paged.asm"
 endif
 
 ; -- paged_call body source ---------------------------------------------

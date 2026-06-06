@@ -57,7 +57,7 @@ GO_IMG="$ROOT/build/m6-release.go.img"      # toolchain 2 output
 SAM_IMG="$ROOT/build/m6-release.sam.img"    # toolchain 3 output
 
 echo "=== [1/5] build SAM + Go tools (+ &C000 budget check) ==="
-make -s text2bin refenc enctab sysreg-data disasm-payload build-m3-disk m3-asm-prod check-budget
+make -s text2bin refenc enctab sysreg-data build-m3-disk m3-asm-prod check-budget
 
 echo "=== [2/5] text2bin: vendored release.s → .tbn (flatten + strip-comments) ==="
 "$ROOT/build/text2bin" -flatten -strip-comments -origin "$ORIGIN" -o "$TBN" "$SRC"
@@ -69,7 +69,6 @@ echo "=== [3/5] Go toolchain: refenc .tbn → binary ==="
 echo "=== [4/5] Z80 toolchain: SAM assembler on SimCoupé → OUT ==="
 "$ROOT/build/build-m3-disk" \
     -sysreg-data "$ROOT/build/sysreg_data.bin" \
-    -disasm "$ROOT/build/disasm.bin" \
     "$ROOT/build/assembler-prod.bin" "$ROOT/build/enctab.enc" \
     "$TBN" \
     "$ROOT/build/m6-release.mgt"
