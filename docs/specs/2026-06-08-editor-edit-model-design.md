@@ -713,32 +713,58 @@ likely fine).
 
 ---
 
-## 7. Open questions for Pete
+## 7. Decisions (Pete, 2026-06-08)
 
-1. **Block granularity: ½-page (8 KB) or full-page (16 KB)?** ½-page gives ~4 KB
-   split copies (~15–25 ms) and finer paging at the cost of ~2× the block count and
-   overhead; full-page halves overhead but doubles the worst-case split copy to
-   ~8 KB (~30–50 ms). Both are inside the bound; ½-page is my lean. Empirical —
-   want to measure on a real edit trace before freezing?
+All five resolved. The recommendation (paged block-list, §4.2/§5) stands; these pin
+the parameters.
 
-2. **Undo model: bounded journal (block-list) or free-unlimited (piece tree)?**
-   The replay-on-edit / blast-radius feature (ROADMAP) wants cheap edit history. A
-   bounded ring journal on the block-list is simple and almost certainly enough for
-   a 1980s-idiom line editor; *unlimited* free undo is the one thing that would
-   tilt the whole choice toward the piece tree (Scalable-B). How much undo depth do
-   you actually want?
+1. **Block granularity → ½-page (8 KB).** ~4 KB worst-case split copies (~15–25 ms),
+   finer paging; the ~2× block-count/overhead is acceptable. The exact split cost is
+   **empirically tuned** on a real edit trace before freezing — ½-page vs full-page is
+   a constant the implementation can flip without structural change.
 
-3. **Edit-model record shape: raw source text per line, or pre-lexed token
-   records?** (§6) Raw text is simplest + most faithful for round-trip (free base
-   hints, exact spelling); pre-lexed is faster to serialize but needs separate
-   spelling-hint carriage. I lean raw-text-per-line for the MVP. Agree?
+2. **Undo model → bounded ring journal** on the block-list. Depth is tunable and
+   almost certainly ample for a 1980s-idiom line editor. Crucially this keeps the
+   structure on the **block-list** (not the piece tree) — unlimited free undo was the
+   only thing that would have tilted the choice to Scalable-B, and we don't need it.
 
-4. **MVP-first staging:** ship the gap-buffer + line-index "Simple" model on small
-   files first (sharing the serialize/load path), then swap the core to the
-   block-list — or build the block-list directly? Simple-first de-risks the editor
-   UX/serialize boundary before the harder data structure, but is throwaway core
-   code. Worth the throwaway?
+3. **Edit-model record shape → pre-lexed *parsed* records (= the i48 in-memory
+   symbolic IR).** This supersedes the §6 "raw-text" lean. Rationale (Pete's
+   validation-on-entry instinct + the i48 unification):
+   - **The editor's document model *is* the i48 symbolic IR.** i48 made the symbolic
+     form (mnemonic-id + operand tokens + expression bytecode) the in-memory
+     intermediate between tokenize and overlay-emit; storing *parsed records* makes
+     the editor the i48 front-end holding that IR live. **entry** = parse → record
+     (parse-success *is* the validation, the moment a line is committed); **display**
+     = detokenize → text (the disassembler/bin2text direction the editor needs anyway
+     to render a loaded `.tbn`); **save** = IR → overlay (no re-lex); **load** =
+     overlay → IR.
+   - **More compact than raw text** — symbol *names* are interned once in the name
+     table and referenced by id, not repeated inline at every use; on a symbol-heavy
+     source that is a material edit-buffer saving, directly serving i41's large-source
+     memory goal.
+   - **Layout consistency comes free** — re-rendering each line from tokens *is*
+     canonical formatting (Pete's "ensures layout is consistent"). The trade-off vs
+     raw text: keystroke-exact spacing isn't byte-preserved (re-rendered canonically),
+     which for a learning editor is a feature; any spelling worth keeping
+     (hex-vs-decimal, `.short`-vs-`.hword`) rides in i48's base-hints.
+   - **Edge case (designed for):** an in-progress / syntactically-invalid line can't
+     be a parsed record, so the model is a small **hybrid** — committed lines = parsed
+     records; the line under the cursor = raw text, parsed on commit; an invalid line
+     on commit is **flagged and held as a raw/error record** (validation feedback
+     without forcing an immediate fix; it just won't serialize until valid).
 
-5. **record-id width and reuse:** u24 monotonic-with-gaps (no reuse, ~16 M ids —
-   safe for any plausible session) vs u16 with free-list reuse (tighter, but
-   reuse complicates undo/anchoring). I lean u24-no-reuse for simplicity. OK?
+4. **Staging → build the block-list directly** (no throwaway gap-buffer MVP). We
+   already argued the simple structures don't scale, so there's no architecture to
+   trial. The MVP's only real value was de-risking the **editor↔serialize boundary**;
+   we keep that by holding the **serialize/load seam cleanly separable and
+   independently unit-tested**, without throwaway core code.
+
+5. **record-id width → u24, no reuse.** ~16 M ids — never exhausted in a real
+   session, so no free-list. The premise that the simpler option is *smaller* is
+   inverted: u24 costs ~1 byte/id **more** than u16 — on the 400 KB / ~13 K-record
+   stress case that's **~18 KB, ~4 % of the buffer** (less on realistic sources). But
+   u16 would *require* a free-list (65 K ids can't cover a churny session without
+   reuse), and **id reuse breaks correctness** — a recycled id can mis-anchor a
+   comment or corrupt an undo-of-a-delete. So u24 is simpler, faster, *and* safer; the
+   ~4 % space is well worth it.
