@@ -87,6 +87,15 @@ for the full v2 stack; CLAUDE.md §5 long-lived-branch-until-green).
   runs and/or `litBreak` is tuned). All Go unit tests green; disasm-roundtrip
   green (unaffected — it uses the symbolic `.tbn`).
 
+**Feature-branch CI state (verified on PR #131, expected — CLAUDE.md §5).** ALL
+Z80/SimCoupé fixture jobs are red — **m3, m4, m4-prod, m5, m5-prod, m6, m6-prod,
+m6-release** — because the v2 version bump trips the Z80 reader's `version == 1`
+check (`src/reader.asm:91`): the SAM assembler rejects every v2 `.tbn` at
+`reader_init`, before any record (status `FAIL00` on every fixture, even
+`empty`). This is the clean-break v2 consequence, not a Go bug. **GREEN:**
+build-image, disasm, disasm-roundtrip, m1, m2, sysreg-sync (Go-only / symbolic-
+path jobs) + every Go unit suite. PR(c) makes the Z80 jobs green again.
+
 **Findings worth carrying forward (the plan §8 "needs Pete = NONE" was off by two):**
 - The §3 ten-slot table **omitted two real fold-rules** that release.s uses:
   `FoldAddSubImm12` (the dominant `adrp`+`add #:lo12:` idiom + symbol-diff
@@ -109,11 +118,15 @@ for the full v2 stack; CLAUDE.md §5 long-lived-branch-until-green).
 - **PR(b)** — `aarch64dec` overlay-aware rendering (render `:lo12:sym`/labels
   from a patch's `{slot, expr}` + name table) + extend `run-disasm-roundtrip.sh`
   to assemble→overlay→disassemble→re-assemble. The slot-enum fidelity guard.
-- **PR(c)** — Z80 `INSN_RUN` decoder in `src/main_loop.asm` (fold jump-table =
-  ports of the pass2 conversions; delete the form-table symbolic path) →
-  m6-release **Z80 arm green** + the Go-harness `compact_tbn_test` green. Measure
-  `&C000` budget (don't ratchet). **The large one — best on fresh context, with
-  SimCoupé.**
+- **PR(c)** — Z80 v2 reader. Two parts: **(i)** bump the reader version check
+  `src/reader.asm:91` from 1 to 2 (one-line; without it the SAM rejects every v2
+  `.tbn` — this is why all Z80 fixture jobs are currently red); **(ii)** the
+  `INSN_RUN` decoder in `src/main_loop.asm` (mode-0 memcpy; mode-1 per element
+  `base | fold` over patches via a fold jump-table = ports of the pass2
+  conversions; litpool value from the LITPOOL_PC_MAP lookup; delete the
+  form-table symbolic path). Makes **all** Z80 jobs green (m3-m6 + m6-release) +
+  the Go-harness `compact_tbn_test`. Measure `&C000` budget (don't ratchet).
+  **The large one — best on fresh context, with SimCoupé.**
 - **PR(d)** — header label/offset table (delta-varint); labels stop splitting
   runs; closes toward the ~44 KB target.
 
