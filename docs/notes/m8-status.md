@@ -54,7 +54,7 @@ Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
 
 | Strand | Status | Source |
 |---|---|---|
-| **i39a** — Phase 1: instruction overlay (unify literal/symbolic INST into one run) + header label/offset table; v2 format flip | ⏳ **PR(a)+(b) done; PR(c)/(d) remaining** (see below) | `docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md`; branch `i39a-instruction-overlay`, PR #131 (draft) |
+| **i39a** — Phase 1: instruction overlay (unify literal/symbolic INST into one run) + header label/offset table; v2 format flip | ⏳ **PR(a)+(b)+i48b+(c) done — all 14 CI checks GREEN incl. the full SimCoupé matrix; PR(d) remaining** (see below) | `docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md`; branch `i39a-instruction-overlay`, PR #131 |
 | **i39b** — Phase 2: name-table front-coding + comment/`.global`/base-hint editor sidecars (evictable region) | 🧭 designed (design §3.6/§3.7) | design §5 phase 2 |
 | **i39c** — Phase 3: bitfield-packing polish on the overlay slot bytes | 🧭 designed (low priority) | design §3.1 |
 | **i40** — assembler-side editor-region eviction (write editor region/`.tbn` to disk before assembling, reuse RAM as OUT/scratch, reload to restore) | 🧭 future (editor phase) | design §7 decision 1 |
@@ -95,14 +95,12 @@ for the full v2 stack; CLAUDE.md §5 long-lived-branch-until-green).
   runs and/or `litBreak` is tuned). All Go unit tests green; disasm-roundtrip
   green (unaffected — it uses the symbolic `.tbn`).
 
-**Feature-branch CI state (verified on PR #131, expected — CLAUDE.md §5).** ALL
-Z80/SimCoupé fixture jobs are red — **m3, m4, m4-prod, m5, m5-prod, m6, m6-prod,
-m6-release** — because the v2 version bump trips the Z80 reader's `version == 1`
-check (`src/reader.asm:91`): the SAM assembler rejects every v2 `.tbn` at
-`reader_init`, before any record (status `FAIL00` on every fixture, even
-`empty`). This is the clean-break v2 consequence, not a Go bug. **GREEN:**
-build-image, disasm, disasm-roundtrip, m1, m2, sysreg-sync (Go-only / symbolic-
-path jobs) + every Go unit suite. PR(c) makes the Z80 jobs green again.
+**Feature-branch CI state (PR #131): ALL 14 checks GREEN as of PR(c)
+(2026-06-09).** The full SimCoupé matrix — **m3, m4, m4-prod, m5, m5-prod, m6,
+m6-prod, m6-release** — plus build-image, disasm, disasm-roundtrip, m1, m2,
+sysreg-sync. (Between PR(a) and PR(c) the Z80 jobs were red, expected — the v2
+version bump tripped the Z80 reader's `version == 1` check before PR(c) added the
+v2 reader + `INSN_RUN` decoder.)
 
 **Findings worth carrying forward (the plan §8 "needs Pete = NONE" was off by two):**
 - The §3 ten-slot table **omitted two real fold-rules** that release.s uses:
@@ -151,22 +149,40 @@ path jobs) + every Go unit suite. PR(c) makes the Z80 jobs green again.
   deps. All Go suites + `ci-m1` (incl. the GNU-as cross-check of the corrected
   golden) + `disasm-roundtrip` green; Z80 jobs stay red until PR(c).
 
-**⏳ Remaining (same feature branch):**
-- **PR(c)** — Z80 v2 reader. Two parts: **(i)** bump the reader version check
-  `src/reader.asm:91` from 1 to 2 (one-line; without it the SAM rejects every v2
-  `.tbn` — this is why all Z80 fixture jobs are currently red); **(ii)** the
-  `INSN_RUN` decoder in `src/main_loop.asm` (mode-0 memcpy; mode-1 per element
-  `base | fold` over patches via a fold jump-table = ports of the pass2
-  conversions; litpool value from the LITPOOL_PC_MAP lookup; delete the
-  form-table symbolic path). Makes **all** Z80 jobs green (m3-m6 + m6-release) +
-  the Go-harness `compact_tbn_test`. Measure `&C000` budget (don't ratchet).
-  **The large one — best on fresh context, with SimCoupé.** Also delete the
-  now-dead **`KindLitInsts` (0x07)** handlers (Z80 `REC_KIND_LIT_INSTS` in
-  `src/main_loop.asm` + the Go `reader.go` arm) — INSN_RUN mode 0 subsumes it,
-  the compactor no longer emits it (`compact_test.go` asserts none survive),
-  so both handlers are unreachable (Pete flagged 2026-06-08).
+**✅ i48b — `FoldMovzAuto` computes hw in the fold (DONE, 2026-06-09; commit `0162f52`).**
+The one i48b change with a format-byte effect: `ZeroSlot` clears the movz-auto
+`hw` (bits 22:21) and `Fold` computes hw from the resolved value (the lowest
+non-zero 16-bit chunk, mirroring `tryEncodeMovImm`). Verified: release
+byte-matches GNU through the v2 compact `.tbn`; 104/104 disasm round-trips. The
+non-byte-affecting Decision-B strictness items (symbolic mem → error, add/sub
+`lsl#12` syntactic, mov→movz fallback) + the q7 sweep stay with **i48a**.
+
+**✅ PR(c) — Z80 v2 reader + `INSN_RUN` decoder; symbolic path retired (DONE,
+2026-06-09; commit `5e3e8eb`; all 14 CI checks GREEN incl. the SimCoupé matrix).**
+`src/reader.asm` version 1→2; `src/insn_run.asm` (new) decodes `INSN_RUN` (0x09)
+— mode-0 memcpy (via `main_handle_lit_insts`), mode-1 per element `base | fold`
+over patches with a 13-rule fold dispatch (faithful ports of `overlay.go::Fold`,
+reusing the proven slot encoders + inline field-place for mem/pair/movk; litpool
+via `litpool_register`/`litpool_lookup`). The symbolic `KindInst` form-table path,
+`LIT_INSTS` dispatch, and `encode_inst` dispatcher are **deleted** — net **~370 B
+smaller** (test `&BE7F`, 385 B headroom). Gates + harness feed the compact `.tbn`.
+**Result:** the full release assembles **byte-identically to GNU on the SAM**
+(21752 B) and all **53 M3–M6 fixtures byte-match GNU**. *(The dead Go-side
+`KindLitInsts` reader arm is left for i48a, per the i48 design — the Z80 budget-
+critical removal is done.)*
+
+**⏳ Remaining (same feature branch, before merge):**
 - **PR(d)** — header label/offset table (delta-varint); labels stop splitting
-  runs; closes toward the ~44 KB target.
+  runs; closes toward the ~44 KB target. A byte-affecting format change (Go +
+  Z80, full byte-match re-verification) — the overlay is already correct with
+  labels as records, so this is an optimization, not a correctness prerequisite.
+- **i48a** — host front-end unification (the compact overlay becomes the only
+  serialized `.tbn`; symbolic kinds → in-memory IR; drops the dead Go
+  `KindLitInsts` arm). Independent of the Z80; can run in parallel.
+- **i48d** — doc scrub (rewrite `tbn-binary-format-reference.md` to overlay-only).
+  **Must land WITH the merge to `main`** — `main`'s code+doc both describe v1
+  today (consistent); merging the v2 code without i48d would leave a head doc
+  describing a format `main` no longer produces (the i48 §9 skew risk).
 
 ## Open questions for Pete (M8)
 
