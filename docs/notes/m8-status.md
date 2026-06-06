@@ -54,7 +54,7 @@ Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
 
 | Strand | Status | Source |
 |---|---|---|
-| **i39a** — Phase 1: instruction overlay (unify literal/symbolic INST into one run) + header label/offset table; v2 format flip | ⏳ **PR(a) done; PR(b)/(c)/(d) remaining** (see below) | `docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md`; branch `i39a-instruction-overlay`, PR #131 (draft) |
+| **i39a** — Phase 1: instruction overlay (unify literal/symbolic INST into one run) + header label/offset table; v2 format flip | ⏳ **PR(a)+(b) done; PR(c)/(d) remaining** (see below) | `docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md`; branch `i39a-instruction-overlay`, PR #131 (draft) |
 | **i39b** — Phase 2: name-table front-coding + comment/`.global`/base-hint editor sidecars (evictable region) | 🧭 designed (design §3.6/§3.7) | design §5 phase 2 |
 | **i39c** — Phase 3: bitfield-packing polish on the overlay slot bytes | 🧭 designed (low priority) | design §3.1 |
 | **i40** — assembler-side editor-region eviction (write editor region/`.tbn` to disk before assembling, reuse RAM as OUT/scratch, reload to restore) | 🧭 future (editor phase) | design §7 decision 1 |
@@ -114,10 +114,36 @@ path jobs) + every Go unit suite. PR(c) makes the Z80 jobs green again.
   `KindLabelDef` records (the merged `p1.Symbols` can't distinguish them; add a
   `LabelDefs` set in pass1).
 
+**✅ PR(b) — overlay-aware render + round-trip fidelity gate (done).**
+- `tools/bin2text/emit/overlay.go`: bin2text now renders a compact v2 `.tbn`
+  back to text — walks `INSN_RUN`, decodes each element's base word via
+  `aarch64dec`, and splices the `{FoldSlot, expr}` patch into the zeroed slot
+  (branch/adr targets, `:lo12:` add, movz/movk, `ldr =pool`, scaled/unscaled
+  mem offsets, symbol-diff operands). `LIT_DATA`→source data directives,
+  `LIT_INSTS`→plain disasm. Put in **bin2text** (the file-level `.tbn`→text
+  renderer with real symbol names + label/directive walking), calling
+  aarch64dec only for the word-level base decode — the cleaner split than the
+  plan's "aarch64dec rendering", and the exact bytes→text path the editor uses.
+- `tools/run-disasm-roundtrip.sh` extended (`[2d/3]`+`[2e/3]`): assemble →
+  `refenc -emit-compact-tbn` → bin2text → re-assemble, byte-identical over all
+  M3–M6 fixtures **and the full release (== GNU release.img)**. The slot/fold
+  *rendering* fidelity guard for PR(a). **104 round-trips pass, 0 fail**; the
+  overlay renderer handles data + litpool natively, so it skips no fixtures.
+  Per-slot unit vectors in `overlay_test.go` (incl. the logical-imm sentinel
+  path: an all-zero bitmask is invalid, so the base decodes via a folded #1).
+- **Three latent bin2text bugs fixed** (release-scale render exposed them —
+  bin2text couldn't render release before, `OpPushImm64` blocked it):
+  (1) `printExpr` dropped sub-expression parens, so `(a-b)*c` re-parsed with
+  wrong precedence — now parenthesises non-atomic operands; this also corrected
+  golden `dir_skip_symbolic.s`, whose `.skip (SIZE_A+SIZE_B)*2` had rendered as
+  `(SIZE_A + SIZE_B * 2)` → **80 bytes not 96** (a real round-trip bug the
+  golden had locked in). (2) `printExpr` ignored `OpPushImm64` (64-bit litpool
+  constants). (3) a negative immediate rendered the malformed `0x-N` → now
+  `-0xN`. `bin2text`/`text2bin` go.mod gained the `aarch64dec`/`aarch64enc`
+  deps. All Go suites + `ci-m1` (incl. the GNU-as cross-check of the corrected
+  golden) + `disasm-roundtrip` green; Z80 jobs stay red until PR(c).
+
 **⏳ Remaining (same feature branch):**
-- **PR(b)** — `aarch64dec` overlay-aware rendering (render `:lo12:sym`/labels
-  from a patch's `{slot, expr}` + name table) + extend `run-disasm-roundtrip.sh`
-  to assemble→overlay→disassemble→re-assemble. The slot-enum fidelity guard.
 - **PR(c)** — Z80 v2 reader. Two parts: **(i)** bump the reader version check
   `src/reader.asm:91` from 1 to 2 (one-line; without it the SAM rejects every v2
   `.tbn` — this is why all Z80 fixture jobs are currently red); **(ii)** the
@@ -126,7 +152,11 @@ path jobs) + every Go unit suite. PR(c) makes the Z80 jobs green again.
   conversions; litpool value from the LITPOOL_PC_MAP lookup; delete the
   form-table symbolic path). Makes **all** Z80 jobs green (m3-m6 + m6-release) +
   the Go-harness `compact_tbn_test`. Measure `&C000` budget (don't ratchet).
-  **The large one — best on fresh context, with SimCoupé.**
+  **The large one — best on fresh context, with SimCoupé.** Also delete the
+  now-dead **`KindLitInsts` (0x07)** handlers (Z80 `REC_KIND_LIT_INSTS` in
+  `src/main_loop.asm` + the Go `reader.go` arm) — INSN_RUN mode 0 subsumes it,
+  the compactor no longer emits it (`compact_test.go` asserts none survive),
+  so both handlers are unreachable (Pete flagged 2026-06-08).
 - **PR(d)** — header label/offset table (delta-varint); labels stop splitting
   runs; closes toward the ~44 KB target.
 
