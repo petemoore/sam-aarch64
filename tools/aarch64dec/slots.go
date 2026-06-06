@@ -45,12 +45,12 @@ func decodeSlot(ctx decodeCtx, slot aarch64enc.OperandSlot) (string, bool) {
 	case aarch64enc.CondCode:
 		return decodeCond(bits), true
 	case aarch64enc.Imm5, aarch64enc.Imm6:
-		// Imm5 and Imm6 are both plain unsigned N-bit immediates;
-		// the bit width (and thus the value range) is carried in
-		// slot.BitWidth — see aarch64enc.encodeImmN.  Objdump
-		// renders them as `#<decimal>` for fields like nzcv and
-		// `#<decimal>` for the imm5 used by ccmp.  We match that.
-		return fmt.Sprintf("#%d", bits), true
+		// Imm5 / Imm6 are plain unsigned N-bit immediates; the bit
+		// width (value range) is carried in slot.BitWidth — see
+		// aarch64enc.encodeImmN.  The only forms using them are
+		// ccmp / ccmn (imm5 and nzcv fields), which objdump renders
+		// in hex (`#0x5`, `#0x3`); match that.
+		return fmt.Sprintf("#%#x", bits), true
 	case aarch64enc.ShiftAmount:
 		// ShiftAmount is an unsigned N-bit immediate that lives
 		// inside a shifted-register operand (`Xn, lsl #N`).  The

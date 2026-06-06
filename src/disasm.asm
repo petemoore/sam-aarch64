@@ -184,6 +184,13 @@ disasm_not_logimm:
                 jp      disasm_try_bitfield
 disasm_not_bitfield:
 
+; --- conditional compare (ccmp/ccmn, immediate + register forms) -------
+; aarch64dec form walk: ccmp (ID 88) / ccmn (ID 100) in AllForms().  This
+; encoding space is disjoint from conditional-select (bits[28:21] = 0xd2
+; here vs 0xd4 there), so ordering relative to condsel is harmless.
+                jp      disasm_try_ccmp
+disasm_not_ccmp:
+
 ; --- conditional select (csel/csinc/csinv/csneg + cset/csetm/cinc/cinv/
 ;     cneg aliases) ----------------------------------------------------
 ; aarch64dec decodeCondSelAlias (aliases.go:502) plus the base csel/csinc/
@@ -3032,6 +3039,233 @@ disasm_bf_rn:           defb    0
 disasm_bf_rd:           defb    0
 disasm_bf_dm1:          defb    0
 disasm_bf_tmp:          defb    0
+
+
+; =======================================================================
+; Conditional compare (CCMP / CCMN) family — Z80 port of the ccmp (ID 88)
+; and ccmn (ID 100) form-table entries (tools/aarch64enc/manual_forms.go),
+; decoded by the Go form walk.
+;
+; Encoding (ARM ARM C6.2.41-44):
+;   immediate: sf op 1 11010 0 10 imm5 cond 1 0 Rn 0 nzcv
+;   register:  sf op 1 11010 0 10  Rm  cond 0 0 Rn 0 nzcv
+;   op=1 → ccmp, op=0 → ccmn.  bit11=1 selects the immediate form (imm5 in
+;   bits[20:16]); bit11=0 selects the register form (Rm in bits[20:16]).
+;
+; Discriminator bits[28:21] == 0b11010010 = ((B&0x1f)<<3)|(C>>5) == 0xD2.
+; The conditional-compare class fixes bit29 (the "S" slot) = 1 — unlike
+; conditional-select where it must be 0 — so require B bit5 = 1.  bit10
+; (D bit2) and bit4 (E bit4) are fixed 0; decline (→ .inst) otherwise.
+;
+; Render: "<mnem> Rn, #0x<imm5>|Rm, #0x<nzcv>, <cond>".  Both imm5 and nzcv
+; render in hex (minimal width), matching objdump (and the Go Imm5 decoder).
+;
+; ABI: BC/IX saved after the last decline, restored via disasm_cc_done.
+; =======================================================================
+disasm_try_ccmp:
+; Discriminator: ((B&0x1f)<<3)|(C>>5) == 0xD2.
+                ld      a, b
+                and     &1f
+                add     a, a
+                add     a, a
+                add     a, a                     ; (B&0x1f)<<3
+                ld      l, a
+                ld      a, c
+                rlca
+                rlca
+                rlca
+                and     7                        ; C>>5
+                or      l
+                cp      &d2
+                jp      nz, disasm_not_ccmp
+; bit29 (the "S" slot) must be 1 for the conditional-compare class.
+                ld      a, b
+                and     &20
+                jp      z, disasm_not_ccmp
+; bit10 = D bit2 must be 0.
+                ld      a, d
+                and     &04
+                jp      nz, disasm_not_ccmp
+; bit4 = E bit4 must be 0.
+                ld      a, e
+                and     &10
+                jp      nz, disasm_not_ccmp
+
+; Past the last decline — commit; save BC/IX (emit clobbers).
+                push    bc
+                push    ix
+
+; sf = B>>7.
+                ld      a, b
+                rlca
+                and     1
+                ld      (disasm_cc_sf), a
+; op = (B>>6)&1 → ccmp(1)/ccmn(0).
+                ld      a, b
+                rlca
+                rlca
+                and     1
+                ld      (disasm_cc_op), a
+; bit11 = D bit3 → 1 immediate / 0 register.
+                ld      a, d
+                and     &08
+                ld      (disasm_cc_isimm), a     ; 0 = register, nonzero = immediate
+; imm5/Rm = bits[20:16] = C & 0x1f.
+                ld      a, c
+                and     &1f
+                ld      (disasm_cc_immrm), a
+; cond = bits[15:12] = D>>4.
+                ld      a, d
+                rrca
+                rrca
+                rrca
+                rrca
+                and     &0f
+                ld      (disasm_cc_cond), a
+; Rn = bits[9:5] = ((D&3)<<3)|(E>>5).
+                ld      a, d
+                and     3
+                add     a, a
+                add     a, a
+                add     a, a
+                ld      l, a
+                ld      a, e
+                rlca
+                rlca
+                rlca
+                and     7
+                or      l
+                ld      (disasm_cc_rn), a
+; nzcv = bits[3:0] = E & 0xf.
+                ld      a, e
+                and     &0f
+                ld      (disasm_cc_nzcv), a
+
+; mnemonic: op=1 → ccmp, op=0 → ccmn.
+                ld      a, (disasm_cc_op)
+                or      a
+                ld      hl, disasm_cc_ccmn_txt
+                jr      z, disasm_cc_set_mnem
+                ld      hl, disasm_cc_ccmp_txt
+disasm_cc_set_mnem:
+                ld      de, DISASM_COMM_MNEM
+disasm_cc_mnem_loop:
+                ld      a, (hl)
+                ld      (de), a
+                or      a
+                jr      z, disasm_cc_mnem_done
+                inc     hl
+                inc     de
+                jr      disasm_cc_mnem_loop
+disasm_cc_mnem_done:
+
+; operands.
+                ld      hl, DISASM_COMM_OPS
+; Rn.
+                ld      a, (disasm_cc_rn)
+                ld      c, a
+                ld      a, (disasm_cc_sf)
+                ld      b, a
+                call    disasm_br_emit_reg
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+; second operand: #0x<imm5> (immediate) or Rm (register).
+                ld      a, (disasm_cc_isimm)
+                or      a
+                jr      z, disasm_cc_reg_operand
+; immediate: "#0x<imm5>".
+                ld      (hl), "#"
+                inc     hl
+                ld      (hl), "0"
+                inc     hl
+                ld      (hl), "x"
+                inc     hl
+                ld      a, (disasm_cc_immrm)
+                call    disasm_cc_emit_hex_a
+                jr      disasm_cc_after_op2
+disasm_cc_reg_operand:
+; register: Rm.
+                ld      a, (disasm_cc_immrm)
+                ld      c, a
+                ld      a, (disasm_cc_sf)
+                ld      b, a
+                call    disasm_br_emit_reg
+disasm_cc_after_op2:
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+; "#0x<nzcv>".
+                ld      (hl), "#"
+                inc     hl
+                ld      (hl), "0"
+                inc     hl
+                ld      (hl), "x"
+                inc     hl
+                ld      a, (disasm_cc_nzcv)
+                call    disasm_cc_emit_hex_a
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+; <cond>.
+                ld      a, (disasm_cc_cond)
+                call    disasm_cc_emit_cond_a
+                ld      (hl), 0
+                jp      disasm_cc_done
+
+; --- helpers ----------------------------------------------------------
+; disasm_cc_emit_hex_a — emit minimal-width lowercase hex of the value in A
+; (A is a small field, 0..0x1f) at (HL), advancing HL.  High nibble emitted
+; only when nonzero; the low nibble is always emitted (so 0 → "0").
+disasm_cc_emit_hex_a:
+                ld      c, a                     ; save value
+                rra
+                rra
+                rra
+                rra
+                and     &0f
+                jr      z, disasm_cc_hex_low     ; high nibble zero → skip
+                call    disasm_emit_hex_nibble
+disasm_cc_hex_low:
+                ld      a, c
+                jp      disasm_emit_hex_nibble   ; emits low nibble, advances HL, ret
+
+; emit condition name for A (2-char), advancing HL.  Shares the cond table
+; with the condsel/branch families.
+disasm_cc_emit_cond_a:
+                add     a, a                     ; *2
+                ld      e, a
+                ld      d, 0
+                ld      ix, disasm_br_cond_tbl
+                add     ix, de
+                ld      a, (ix+0)
+                ld      (hl), a
+                inc     hl
+                ld      a, (ix+1)
+                ld      (hl), a
+                inc     hl
+                ret
+
+disasm_cc_done:
+                pop     ix
+                pop     bc
+                ret
+
+disasm_cc_ccmp_txt:     defm    "ccmp"
+                        defb    0
+disasm_cc_ccmn_txt:     defm    "ccmn"
+                        defb    0
+
+disasm_cc_sf:           defb    0
+disasm_cc_op:           defb    0
+disasm_cc_isimm:        defb    0
+disasm_cc_immrm:        defb    0
+disasm_cc_cond:         defb    0
+disasm_cc_rn:           defb    0
+disasm_cc_nzcv:         defb    0
 
 
 ; =======================================================================

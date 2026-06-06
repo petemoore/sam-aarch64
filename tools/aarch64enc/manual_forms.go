@@ -694,6 +694,88 @@ var manualForms = []Form{
 	}},
 
 	// -----------------------------------------------------------------
+	// ccmn (ID 100) — Conditional Compare Negative.  ARM ARM C6.2.41
+	// (register) and C6.2.42 (immediate).  Identical encoding to ccmp
+	// (ID 88) but with op (bit 30) = 0:
+	//
+	//   immediate: sf 0 1 1 1 0 1 0 0 1 0 imm5 cond 1 0 Rn 0 nzcv
+	//   register:  sf 0 1 1 1 0 1 0 0 1 0  Rm  cond 0 0 Rn 0 nzcv
+	//
+	// Patterns: 0xba400000 (sf=1) / 0x3a400000 (sf=0); imm forms |0x800.
+	// Same mask (0xffe00c10) and same slot layout as ccmp.
+
+	// ccmn Wn, #imm5, #nzcv, cond — 32-bit immediate.
+	{MnemonicID: 100, Pattern: 0x3a400800, Mask: 0xffe00c10, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},     // Rn
+		{SlotKind: Imm5, ExpectedKind: 5, BitPosition: 16, BitWidth: 5},    // imm5
+		{SlotKind: Imm5, ExpectedKind: 5, BitPosition: 0, BitWidth: 4},     // nzcv
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4}, // cond
+	}},
+	// ccmn Xn, #imm5, #nzcv, cond — 64-bit immediate.
+	{MnemonicID: 100, Pattern: 0xba400800, Mask: 0xffe00c10, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},     // Rn
+		{SlotKind: Imm5, ExpectedKind: 5, BitPosition: 16, BitWidth: 5},    // imm5
+		{SlotKind: Imm5, ExpectedKind: 5, BitPosition: 0, BitWidth: 4},     // nzcv
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4}, // cond
+	}},
+	// ccmn Wn, Wm, #nzcv, cond — 32-bit register.
+	{MnemonicID: 100, Pattern: 0x3a400000, Mask: 0xffe00c10, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},     // Rn
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5},    // Rm
+		{SlotKind: Imm5, ExpectedKind: 5, BitPosition: 0, BitWidth: 4},     // nzcv
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4}, // cond
+	}},
+	// ccmn Xn, Xm, #nzcv, cond — 64-bit register.
+	{MnemonicID: 100, Pattern: 0xba400000, Mask: 0xffe00c10, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},     // Rn
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},    // Rm
+		{SlotKind: Imm5, ExpectedKind: 5, BitPosition: 0, BitWidth: 4},     // nzcv
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4}, // cond
+	}},
+
+	// -----------------------------------------------------------------
+	// csinv (ID 101) / csneg (ID 102) — base 4-operand conditional-select
+	// forms.  ARM ARM C6.2.55 / C6.2.56.  Same encoding family as
+	// csel (ID 24) / csinc (ID 25):
+	//
+	//   sf op S 11010100 Rm cond op2 Rn Rd
+	//
+	//   csinv: op=1 op2=0 → base 0x5a800000 (sf=0) / 0xda800000 (sf=1)
+	//   csneg: op=1 op2=1 → base 0x5a800400 (sf=0) / 0xda800400 (sf=1)
+	//
+	// Mask 0xffe00c00 (matches csel/csinc).  These are the NON-alias base
+	// forms; the Rn==Rm alias shapes (csetm/cinv for csinv, cneg for csneg)
+	// are decoded by decodeCondSelAlias (aliases.go) ahead of the form
+	// walk, so they shadow these for the alias operand patterns — exactly
+	// as csel/csinc coexist with cset/cinc.  Adding them here makes the
+	// base forms both encodable and decodable, matching binutils which
+	// renders e.g. 0xda87b0c5 as `csinv x5, x6, x7, lt`.
+	{MnemonicID: 101, Pattern: 0x5a800000, Mask: 0xffe00c00, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5},
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4},
+	}},
+	{MnemonicID: 101, Pattern: 0xda800000, Mask: 0xffe00c00, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4},
+	}},
+	{MnemonicID: 102, Pattern: 0x5a800400, Mask: 0xffe00c00, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5},
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4},
+	}},
+	{MnemonicID: 102, Pattern: 0xda800400, Mask: 0xffe00c00, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},
+		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4},
+	}},
+
+	// -----------------------------------------------------------------
 	// udf (ID 89) — Permanently Undefined instruction (ARM ARM C6.2.228).
 	// Encoding: bits[31:16]=0 fixed, bits[15:0]=imm16 operand.
 	{MnemonicID: 89, Pattern: 0x00000000, Mask: 0xffff0000, Slots: []OperandSlot{

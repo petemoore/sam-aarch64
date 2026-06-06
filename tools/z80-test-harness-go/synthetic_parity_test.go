@@ -20,18 +20,20 @@
 // declines MUST decode to ".inst" on the Z80 too, and vice-versa.
 //
 // Families certified here (structural → empirical):
-//   - conditional select base forms: csel, csinc
+//   - conditional select base forms: csel, csinc, csinv, csneg
 //   - conditional select aliases:    cset, csetm, cinc, cinv, cneg
+//   - conditional compare:           ccmp, ccmn (immediate + register forms)
 //   - extended-register add/sub:      add/sub/adds/subs Xd, Xn, Wm, {u,s}xt{b,h,w}/sxtx [#sh]
 //   - signed multiply long/high:      smull, smaddl, smsubl, smnegl, smulh
 //
 // `sdiv` is deliberately excluded (known-missing across the whole stack —
-// encoder + decoder both lack it; tracked separately as item i35).  The
-// conditional-COMPARE family (ccmp/ccmn) and the *non-alias* base csinv/csneg
-// forms are ALSO excluded here, because they are genuine Z80↔Go DISAGREEMENTS
-// found while building this sweep — see TestSyntheticParity_KnownDisagreements
-// below and the report in docs/notes/2026-06-08-z80-go-disasm-parity-i9.md.
-// Per the prime directive those are reported, not worked around.
+// encoder + decoder both lack it; tracked separately as item i35).
+//
+// The conditional-COMPARE family (ccmp/ccmn) and the *non-alias* base
+// csinv/csneg forms were genuine Z80↔Go disagreements surfaced by an earlier
+// run of this sweep; items i36 + i37 closed them at source (encoder + both
+// decoders + binutils now all agree), so they are certified here rather than
+// pinned.  See docs/notes/2026-06-08-z80-go-disasm-parity-i9.md.
 //
 // Not a CI gate — same philosophy as the oracle (SimCoupé is the only gate).
 // Requires GNU `as` (aarch64-none-elf-as or aarch64-linux-gnu-as) and a built
@@ -135,6 +137,11 @@ func TestSyntheticParity_CondSel(t *testing.T) {
 		// Base csel / csinc (Go has forms for these; Rn != Rm so no alias).
 		"csel x0, x1, x2, eq", "csel w3, w4, w5, ne", "csel x6, x7, x8, ge",
 		"csinc x9, x10, x11, lt", "csinc w12, w13, w14, gt", "csinc x15, x16, x17, le",
+		// Base csinv / csneg (Rn != Rm so no alias).  Added by items i36+i37:
+		// Go previously declined these (no form) while the Z80 decoded them —
+		// now both decode the base mnemonic, matching binutils.
+		"csinv x5, x6, x7, lt", "csinv w0, w1, w2, ne", "csinv x18, x19, x20, ge",
+		"csneg x8, x9, x10, gt", "csneg w3, w4, w5, le", "csneg x21, x22, x23, mi",
 		// cset / csetm (csinc/csinv with Rn==Rm==zr, invertable cond).
 		"cset x0, eq", "cset w1, ne", "cset x2, cc",
 		"csetm x3, hi", "csetm w4, ls", "csetm x5, mi",
@@ -142,6 +149,27 @@ func TestSyntheticParity_CondSel(t *testing.T) {
 		"cinc x6, x7, eq", "cinc w8, w9, ne",
 		"cinv x10, x11, ge", "cinv w12, w13, lt",
 		"cneg x14, x15, gt", "cneg w16, w17, le",
+	}
+	words := gnuAssembleWords(t, lines)
+	assertZ80MatchesGo(t, loadProdDisasm(t), lines, words)
+}
+
+// TestSyntheticParity_CondCmp certifies the conditional-compare family
+// (ccmp/ccmn, immediate and register forms, 32- and 64-bit, several
+// conditions and nzcv/imm5 values).  Items i36+i37 added ccmn to the encoder
+// + Go decoder, ported ccmp/ccmn decode to src/disasm.asm, and aligned the
+// Go Imm5 rendering with binutils (`#0xN` hex).  Before that the Z80 emitted
+// `.inst` for the whole family and ccmn was unimplemented on every side.
+func TestSyntheticParity_CondCmp(t *testing.T) {
+	lines := []string{
+		// ccmp register form.
+		"ccmp x0, x1, #2, eq", "ccmp w3, w4, #0, ne", "ccmp x6, x7, #15, ge",
+		// ccmp immediate form.
+		"ccmp x5, #3, #4, ne", "ccmp w8, #0, #0, eq", "ccmp x9, #31, #7, lt",
+		// ccmn register form.
+		"ccmn w3, w4, #5, ne", "ccmn x10, x11, #1, gt", "ccmn w12, w13, #8, le",
+		// ccmn immediate form.
+		"ccmn w5, #3, #4, eq", "ccmn x14, #17, #2, cc", "ccmn w15, #31, #15, hi",
 	}
 	words := gnuAssembleWords(t, lines)
 	assertZ80MatchesGo(t, loadProdDisasm(t), lines, words)
@@ -299,64 +327,38 @@ func gnuRawBytes(t *testing.T, lines []string) []byte {
 	return raw
 }
 
-// TestSyntheticParity_KnownDisagreements documents the genuine Z80↔Go
-// DECODE disagreements this sweep surfaced.  These are NOT worked around: the
-// test is SKIPPED by default with a pointer to the report so they cannot be
-// silently forgotten, and (when run with PARITY_DISAGREEMENTS=1) it asserts
-// the *current* divergent behaviour so a future fix that resolves a row trips
-// the test and prompts moving that family up into the certified sweeps above.
-//
-// The two disagreement classes (full analysis in
-// docs/notes/2026-06-08-z80-go-disasm-parity-i9.md):
-//
-//  1. ccmp / ccmn (conditional compare): Go decodes (ccmp has a form;
-//     binutils agrees), but src/disasm.asm has NO ccmp/ccmn handler, so the
-//     Z80 emits ".inst".  A Z80 *decoder* port gap (the *encoder* already has
-//     full parity — the SAM assembler byte-matches GNU on ccmp).
-//
-//  2. non-alias base csinv / csneg (Rn != Rm): src/disasm.asm decodes the
-//     base csinv/csneg forms, but Go's DecodeAt declines them (no csinv/csneg
-//     form in aarch64enc.AllForms(); decodeCondSelAlias only fires for the
-//     Rn==Rm alias shapes), so Go emits ".inst" while the Z80 emits the base
-//     mnemonic.  Here the Z80 is MORE capable than the Go authority — which
-//     itself is less capable than binutils.  Resolution is a Go-authority
-//     decision (extend Go's decoder to match binutils, then the Z80 already
-//     agrees), so it is reported, not changed in this PR.
-func TestSyntheticParity_KnownDisagreements(t *testing.T) {
-	if os.Getenv("PARITY_DISAGREEMENTS") != "1" {
-		t.Skip("known Z80↔Go disasm disagreements (ccmp/ccmn decode, base csinv/csneg decode) — " +
-			"see docs/notes/2026-06-08-z80-go-disasm-parity-i9.md; set PARITY_DISAGREEMENTS=1 to assert them")
-	}
+// TestSyntheticParity_KnownDisagreementsResolved re-asserts, as a regression
+// guard, that the two former Z80↔Go disagreements this sweep once pinned are
+// now fully resolved (items i36 + i37): every word decodes to the same
+// (mnemonic, operands) on the Go authority AND the Z80 port, matching
+// binutils.  The families are exercised more broadly by
+// TestSyntheticParity_CondCmp and TestSyntheticParity_CondSel above; this is
+// a focused guard on the exact words from the original report.
+func TestSyntheticParity_KnownDisagreementsResolved(t *testing.T) {
 	disasmBin := loadProdDisasm(t)
-
-	// (word, gnu-text, expected-Go-mnem, expected-Z80-mnem) for each
-	// documented divergence.  Asserting the *current* split state means a
-	// future fix that closes a gap will fail here, flagging the family for
-	// promotion into a certified sweep.
-	type diverge struct {
-		word            uint32
-		text            string
-		goMnem, z80Mnem string
+	type fixed struct {
+		word uint32
+		want string // canonical objdump operands (mnem in wantMnem)
+		mnem string
 	}
-	cases := []diverge{
-		{0xfa410002, "ccmp x0, x1, #2, eq", "ccmp", ".inst"},    // Go decodes; Z80 has no handler
-		{0xfa4318a4, "ccmp x5, #3, #4, ne", "ccmp", ".inst"},    // immediate form, same gap
-		{0x3a441065, "ccmn w3, w4, #5, ne", ".inst", ".inst"},   // ccmn unimplemented BOTH sides → agree
-		{0xda87b0c5, "csinv x5, x6, x7, lt", ".inst", "csinv"},  // Z80 decodes base; Go declines
-		{0xda8ac528, "csneg x8, x9, x10, gt", ".inst", "csneg"}, // Z80 decodes base; Go declines
+	cases := []fixed{
+		{0xfa410002, "x0, x1, #0x2, eq", "ccmp"},
+		{0xfa4318a4, "x5, #0x3, #0x4, ne", "ccmp"},
+		{0x3a441065, "w3, w4, #0x5, ne", "ccmn"},
+		{0xda87b0c5, "x5, x6, x7, lt", "csinv"},
+		{0xda8ac528, "x8, x9, x10, gt", "csneg"},
 	}
 	for _, c := range cases {
-		zm, _, err := runZ80Disasm(disasmBin, c.word, 0)
+		zm, zo, err := runZ80Disasm(disasmBin, c.word, 0)
 		if err != nil {
-			t.Fatalf("[%s] Z80 run failed: %v", c.text, err)
+			t.Fatalf("[%#08x] Z80 run failed: %v", c.word, err)
 		}
-		gm, _ := goOracle(0, c.word)
-		if gm != c.goMnem {
-			t.Errorf("[%s] Go mnemonic changed: got %q want documented %q — re-triage this row", c.text, gm, c.goMnem)
+		gm, go_ := goOracle(0, c.word)
+		if gm != c.mnem || go_ != c.want {
+			t.Errorf("[%#08x] Go decode: got [%s|%s] want [%s|%s]", c.word, gm, go_, c.mnem, c.want)
 		}
-		if zm != c.z80Mnem {
-			t.Errorf("[%s] Z80 mnemonic changed: got %q want documented %q — a fix may have landed; "+
-				"promote this family into a certified sweep", c.text, zm, c.z80Mnem)
+		if zm != c.mnem || zo != c.want {
+			t.Errorf("[%#08x] Z80 decode: got [%s|%s] want [%s|%s]", c.word, zm, zo, c.mnem, c.want)
 		}
 	}
 }
