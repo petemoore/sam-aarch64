@@ -664,6 +664,57 @@ var manualForms = []Form{
 		{SlotKind: Imm5, ExpectedKind: 5, BitPosition: 0, BitWidth: 4},     // nzcv
 		{SlotKind: CondCode, ExpectedKind: 10, BitPosition: 12, BitWidth: 4}, // cond
 	}},
+
+	// -----------------------------------------------------------------
+	// udf (ID 89) — Permanently Undefined instruction (ARM ARM C6.2.228).
+	// Encoding: bits[31:16]=0 fixed, bits[15:0]=imm16 operand.
+	{MnemonicID: 89, Pattern: 0x00000000, Mask: 0xffff0000, Slots: []OperandSlot{
+		{SlotKind: Imm16, ExpectedKind: 5, BitPosition: 0, BitWidth: 16},
+	}},
+
+	// -----------------------------------------------------------------
+	// sxth (ID 90) — Sign-extend Halfword (ARM ARM C6.2.213).
+	// Alias of SBFM Rd, Wn, #0, #15; immr=0 imms=15 baked.
+	// sxth (W) — SBFM w,w,#0,#15. sf=0 N=0 immr=0 imms=15.
+	{MnemonicID: 90, Pattern: 0x13003c00, Mask: 0xfffffc00, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+	}},
+	// sxth (X) — SBFM x,w,#0,#15. sf=1 N=1 immr=0 imms=15.
+	{MnemonicID: 90, Pattern: 0x93403c00, Mask: 0xfffffc00, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+	}},
+
+	// -----------------------------------------------------------------
+	// sxtb (ID 91) — Sign-extend Byte (ARM ARM C6.2.212).
+	// Alias of SBFM Rd, Wn, #0, #7; immr=0 imms=7 baked.
+	// sxtb (W) — SBFM w,w,#0,#7. sf=0 N=0 immr=0 imms=7.
+	{MnemonicID: 91, Pattern: 0x13001c00, Mask: 0xfffffc00, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+	}},
+	// sxtb (X) — SBFM x,w,#0,#7. sf=1 N=1 immr=0 imms=7.
+	{MnemonicID: 91, Pattern: 0x93401c00, Mask: 0xfffffc00, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+	}},
+
+	// -----------------------------------------------------------------
+	// uxtb (ID 92) — Unsigned-extend Byte (ARM ARM C6.2.226).
+	// Alias of UBFM Wd, Wn, #0, #7; only W-form (sf=0). immr=0 imms=7 baked.
+	{MnemonicID: 92, Pattern: 0x53001c00, Mask: 0xfffffc00, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+	}},
+
+	// -----------------------------------------------------------------
+	// uxth (ID 93) — Unsigned-extend Halfword (ARM ARM C6.2.227).
+	// Alias of UBFM Wd, Wn, #0, #15; only W-form (sf=0). immr=0 imms=15 baked.
+	{MnemonicID: 93, Pattern: 0x53003c00, Mask: 0xfffffc00, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+	}},
 }
 
 // ManualForms returns the hand-curated form table.  Exposed so that

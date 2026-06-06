@@ -1716,6 +1716,16 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 		out := make([]byte, len(o.Str)+1)
 		copy(out, o.Str)
 		return out, nil
+	case ".inst":
+		or := format.NewOperandReader(rec.Operands)
+		o, _ := or.Next()
+		v, err := EvalUsage(o.Expr, ctx, usage)
+		if err != nil {
+			return nil, fmt.Errorf(".inst: %w", err)
+		}
+		b := make([]byte, 4)
+		binary.LittleEndian.PutUint32(b, uint32(v))
+		return b, nil
 	case ".text", ".data", ".global", ".equ", ".set":
 		return nil, nil
 	case ".section":
