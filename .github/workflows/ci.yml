@@ -131,6 +131,19 @@ jobs:
           OBJDUMP: aarch64-linux-gnu-objdump
         run: make ci-disasm
 
+  # disasm-roundtrip — strand-B PR-2: proves encode→decode→encode is
+  # self-consistent for the M3-M6 fixture corpus.  Pure Go pipeline,
+  # no aarch64 binutils or SimCoupé required.
+  disasm-roundtrip:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: Disassembler round-trip (encode→decode→encode)
+        run: make ci-disasm-roundtrip
+
   # sysreg-sync — Go↔Z80 sysreg table sync guard (repo-audit §5 / §6 #9).
   # Asserts the hand-maintained Z80 table src/sysreg_data.asm agrees
   # byte-for-byte with the Go authority tools/sam-aarch64-format/sysregs.go

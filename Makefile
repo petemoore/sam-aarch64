@@ -27,7 +27,7 @@ bin2text:
 	cd tools/bin2text && go build -o $(CURDIR)/$(BUILD)/bin2text .
 
 # aarch64dec — Go-side aarch64 disassembler (strand B); inverse of aarch64enc.
-.PHONY: aarch64dec test-disasm ci-disasm
+.PHONY: aarch64dec test-disasm ci-disasm ci-disasm-roundtrip
 
 aarch64dec:
 	cd tools/aarch64dec/cmd/aarch64dec && go build -o $(CURDIR)/$(BUILD)/aarch64dec .
@@ -42,6 +42,11 @@ test-disasm:
 # objdump (binutils-aarch64-linux-gnu) + Go; no SimCoupé/container.
 ci-disasm: test-disasm
 	./tests/disasm/run-oracle-comparison.sh
+
+# Round-trip gate: encode→decode→encode must produce identical bytes for
+# all M3-M6 fixture sources.  Pure Go pipeline, no binutils or container.
+ci-disasm-roundtrip: test-disasm
+	./tools/run-disasm-roundtrip.sh
 
 test-m1: text2bin bin2text
 	cd tools/sam-aarch64-format && go test ./...
