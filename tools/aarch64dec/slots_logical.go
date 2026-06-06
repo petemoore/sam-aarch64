@@ -86,6 +86,13 @@ func decodeBitMasks(n, immr, imms uint32, regsize int) (uint64, bool) {
 		return 0, false
 	}
 	levels := uint32(esize - 1)
+	// Non-canonical: immr must fit within the element's bit-width (immr < esize).
+	// Hardware computes R = immr MOD esize, so an out-of-range immr is architecturally
+	// equivalent to a smaller one, but it is not the canonical encoding.  Decline here
+	// so the caller falls through to .inst, preserving the exact bit pattern.
+	if immr&levels != immr {
+		return 0, false
+	}
 	s := imms & levels
 	r := immr & levels
 	if s == levels {
