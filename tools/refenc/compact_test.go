@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	enc "github.com/petemoore/sam-aarch64/tools/aarch64enc"
 	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
 )
 
@@ -92,7 +93,9 @@ func TestCompact_CollapsesLiteralRun(t *testing.T) {
 		t.Fatalf("Compact: %v", err)
 	}
 
-	var litRuns, litInsts, symInsts int
+	var insnRuns, litElems, overlayElems int
+	var overlaySlot byte = 0xff
+	noPlainInst := true
 	rr := format.NewRecordReader(compacted)
 	for !rr.AtEnd() {
 		rec, err := rr.Next()
@@ -100,23 +103,37 @@ func TestCompact_CollapsesLiteralRun(t *testing.T) {
 			t.Fatalf("reader: %v", err)
 		}
 		switch rec.Kind {
-		case format.KindLitInsts:
-			litRuns++
-			litInsts += int(rec.LitCount)
-		case format.KindInst:
-			symInsts++
+		case format.KindInsnRun:
+			insnRuns++
+			for _, el := range rec.Elements {
+				if len(el.Patches) == 0 {
+					litElems++
+				} else {
+					overlayElems++
+					overlaySlot = el.Patches[0].Slot
+				}
+			}
+		case format.KindInst, format.KindLitInsts:
+			noPlainInst = false
 		}
 	}
-	// The two leading nops collapse into one run; the trailing nop is a
-	// second run of one. The `b start` stays a symbolic INST.
-	if litRuns != 2 {
-		t.Errorf("lit runs = %d, want 2", litRuns)
+	// v2 unifies instructions into INSN_RUN: the three nops are patch-free
+	// elements; `b start` is one overlay element (a Branch26 patch). No
+	// KindInst / KindLitInsts records survive in the compact stream.
+	if !noPlainInst {
+		t.Errorf("compact stream still has KindInst/KindLitInsts records")
 	}
-	if litInsts != 3 {
-		t.Errorf("collapsed insts = %d, want 3 (three nops)", litInsts)
+	if insnRuns == 0 {
+		t.Errorf("no INSN_RUN records emitted")
 	}
-	if symInsts != 1 {
-		t.Errorf("symbolic insts = %d, want 1 (b start)", symInsts)
+	if litElems != 3 {
+		t.Errorf("literal elements = %d, want 3 (three nops)", litElems)
+	}
+	if overlayElems != 1 {
+		t.Errorf("overlay elements = %d, want 1 (b start)", overlayElems)
+	}
+	if overlaySlot != byte(enc.FoldBranch26) {
+		t.Errorf("overlay slot = %d, want FoldBranch26 (%d)", overlaySlot, enc.FoldBranch26)
 	}
 }
 

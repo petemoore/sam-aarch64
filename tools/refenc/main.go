@@ -20,10 +20,11 @@ func main() {
 			"pool, expr evaluator, OPVAL buffer, record stream) to "+
 			"stderr — used for sizing the Z80-side fixed tables.")
 	flag.StringVar(&emitCompact, "emit-compact-tbn", "",
-		"also write a compacted .tbn to this path: runs of fully-"+
-			"literal instructions are collapsed to KindLitInsts records "+
-			"(assembled bytes), shrinking the file while assembling to "+
-			"the identical binary. The normal -o binary is unaffected.")
+		"also write a compacted v2 .tbn to this path: instructions are "+
+			"collapsed into INSN_RUN records (assembled base words plus a "+
+			"sparse overlay patch for symbol/PC-bearing fields), shrinking "+
+			"the file while assembling to the identical binary. The normal "+
+			"-o binary is unaffected.")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: refenc INPUT.tbn -o OUTPUT.bin [--dump-usage]")

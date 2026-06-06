@@ -56,6 +56,12 @@ type Pass1Result struct {
 	// PoolFlushEntries[preFlushPC] is the list of pool-entry indices
 	// to emit at that flush point.
 	PoolFlushEntries map[int64][]int
+
+	// InstPC is the PC of each KindInst record in record order. The Nth
+	// KindInst the compaction pass walks (over the same File) is at
+	// InstPC[N], so the overlay encoder can resolve PC-relative and local-
+	// label operands at the instruction's true PC.
+	InstPC []int64
 }
 
 // Pass1 walks records and assigns PC to each instruction / data
@@ -156,6 +162,7 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 			res.LocalDefs[rec.Digit] = append(res.LocalDefs[rec.Digit], pc)
 			usage.observeLocalDefAdd(res.LocalDefs, rec.Digit)
 		case format.KindInst:
+			res.InstPC = append(res.InstPC, pc)
 			// Detect `ldr Xn|Wn, =expr` (LitPool form) and register a
 			// pool entry. The instruction itself still consumes 4 bytes.
 			if rec.MnemonicID == ldrID {
@@ -193,6 +200,40 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 			// byte count — same PC contribution as the data directive
 			// records it replaced.
 			pc += int64(len(rec.LitData))
+		case format.KindInsnRun:
+			// Each overlay element occupies 4 bytes. An element carrying a
+			// litpool patch (`ldr Xt|Wt, =expr` collapsed into the run)
+			// registers a pool entry exactly as the KindInst path above —
+			// keyed by the instruction's PC, deduped by (width, expr).
+			for _, el := range rec.Elements {
+				for _, patch := range el.Patches {
+					if patch.Slot != byte(enc.FoldLitpool19) {
+						continue
+					}
+					width := byte(4)
+					if (el.BaseWord>>30)&1 == 1 {
+						width = 8
+					}
+					key := poolKey{Width: width, Expr: string(patch.Expr)}
+					idx, seen := pending[key]
+					if !seen {
+						idx = len(res.PoolEntries)
+						res.PoolEntries = append(res.PoolEntries, PoolEntry{
+							Width:  width,
+							Expr:   patch.Expr,
+							EvalPC: pc,
+						})
+						pending[key] = idx
+						pendingOrder = append(pendingOrder, idx)
+						usage.observePoolEntryAlloc(len(patch.Expr))
+					}
+					res.LdrPoolIdx[pc] = idx
+					pendingLdrSites++
+					usage.observePoolLdrSite()
+					usage.observePoolPending(len(pendingOrder), pendingLdrSites)
+				}
+				pc += 4
+			}
 		case format.KindDirective:
 			name := format.DirectiveName(rec.DirectiveID)
 			switch name {

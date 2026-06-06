@@ -24,12 +24,15 @@ const (
 	FoldAddSubImm12 FoldSlot = 6  // add/sub/cmp imm: (sh,imm12) @10 (:lo12:, symbol-diff)
 	FoldMemImm12    FoldSlot = 7  // ldr/str scaled offset: imm12 @10 = byteOff/scale
 	FoldMemImm9     FoldSlot = 8  // stur/ldur/pre/post: imm9 @12 (signed byte offset)
-	FoldMovkImm16   FoldSlot = 9  // mov/movz/movk: imm16 @5 (hw selects the 16-bit chunk)
+	FoldMovkImm16   FoldSlot = 9  // explicit movz/movk: imm16 @5 (= value&0xFFFF; hw in base)
 	FoldLogical     FoldSlot = 10 // orr/and/eor/bic imm: N:immr:imms @10 (bitmask immediate)
 	FoldPairImm7    FoldSlot = 11 // ldp/stp: imm7 @15 = byteOff/scale (signed)
 	// Litpool — PC-dependent, but the value is the pool-entry PC (looked up
 	// by the instruction's PC), not an evaluated expression.
 	FoldLitpool19 FoldSlot = 12 // ldr =expr: imm19 @5 = (poolPC-pc)/4
+	// FoldMovzAuto is `mov Rd, #value` collapsed to movz: the value is the
+	// full constant and the base word's hw field selects the 16-bit chunk.
+	FoldMovzAuto FoldSlot = 13 // mov-imm: imm16 @5 = (value >> hw*16)&0xFFFF
 )
 
 // Fold computes the bits a relocated field contributes, given the resolved
@@ -80,10 +83,15 @@ func Fold(slot FoldSlot, value int64, pc int64, baseWord uint32) (uint32, error)
 		}
 		return (uint32(value) & 0x1ff) << 12, nil
 	case FoldMovkImm16:
-		// encodeImm16Shifted / tryEncodeMovImm: the 16-bit chunk at the hw
-		// shift carried in the base word (bits 22:21). For an expression
-		// that already extracted a chunk (:abs_gN:) hw is 0 and this is a
-		// no-op shift; for `mov Rd,#sym` hw selects the movz slot.
+		// Explicit movz/movk via the form table: text2bin packs the hw
+		// shift into bits 17:16 of the operand value (encodeImm16Shifted
+		// derives hw from there), so imm16 is the low 16 bits and hw stays
+		// in the base word.
+		return uint32(uint64(value)&0xFFFF) << 5, nil
+	case FoldMovzAuto:
+		// `mov Rd, #value` collapsed to movz: the value is the full
+		// constant; the base word's hw field (bits 22:21) selects which
+		// 16-bit chunk lands in imm16.
 		hw := (baseWord >> 21) & 3
 		chunk := (uint64(value) >> (hw * 16)) & 0xFFFF
 		return uint32(chunk) << 5, nil
@@ -113,6 +121,34 @@ func Fold(slot FoldSlot, value int64, pc int64, baseWord uint32) (uint32, error)
 	return 0, fmt.Errorf("Fold: unknown slot %d", slot)
 }
 
+// FoldSlotForKind maps a form-table SlotKind (the encoder's per-operand
+// slot) to the overlay FoldSlot for a symbol/PC-bearing operand in that
+// slot. ok=false for slot kinds that never carry a relocatable expression
+// (registers, condition codes, constant shift/extend amounts). The
+// hand-rolled families (mem, litpool, tbz, ldr-literal, mov-imm) are
+// classified by their encoder path, not this table.
+func FoldSlotForKind(k SlotKind) (FoldSlot, bool) {
+	switch k {
+	case BranchImm26:
+		return FoldBranch26, true
+	case BranchImm19:
+		return FoldBranch19, true
+	case BranchImm14:
+		return FoldBranch14, true
+	case AdrImm:
+		return FoldAdr, true
+	case AdrpImm:
+		return FoldAdrp, true
+	case Imm12Shifted:
+		return FoldAddSubImm12, true
+	case Imm16Shifted:
+		return FoldMovkImm16, true
+	case LogicalImm:
+		return FoldLogical, true
+	}
+	return 0, false
+}
+
 // ZeroSlot clears the bit-range a slot's Fold writes into, recovering the
 // patch-free base word. The cleared range matches Fold's output bits
 // exactly (locked by TestZeroSlotClearsFoldBits).
@@ -132,7 +168,7 @@ func ZeroSlot(word uint32, slot FoldSlot) uint32 {
 		return word &^ (0xFFF << 10)
 	case FoldMemImm9:
 		return word &^ (0x1FF << 12)
-	case FoldMovkImm16:
+	case FoldMovkImm16, FoldMovzAuto:
 		return word &^ (0xFFFF << 5)
 	case FoldPairImm7:
 		return word &^ (0x7F << 15)

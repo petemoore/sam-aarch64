@@ -28,7 +28,10 @@ func TestFold(t *testing.T) {
 		{"add/sub imm12 lo12", FoldAddSubImm12, 0x123, 0, 0x91000000, 0x123 << 10},
 		{"mem imm12 X-scale8", FoldMemImm12, 0x40, 0, 0xF9400000, (0x40 / 8) << 10},
 		{"mem imm9 -8 unscaled", FoldMemImm9, -8, 0, 0xF8400000, (0x1F8) << 12},
-		{"movk imm16 hw=1", FoldMovkImm16, 0x12340000, 0, 0x52a00000, 0x1234 << 5},
+		// explicit movk: value is hw-packed (imm16 in low 16 bits, hw in base).
+		{"movk imm16 explicit", FoldMovkImm16, 0x1234, 0, 0x52a00000, 0x1234 << 5},
+		// mov-imm auto-movz: full value; base hw=1 selects the high chunk.
+		{"movz-auto imm16 hw=1", FoldMovzAuto, 0x12340000, 0, 0x52a00000, 0x1234 << 5},
 		{"logical #0xFFF w-reg", FoldLogical, 0xFFF, 0, 0x32000000, 0xB << 10},
 		{"pair imm7 X-scale8", FoldPairImm7, 0x40, 0, 0xA9000000, 0x8 << 15},
 		// Litpool: value is the pool-entry PC; fold like branch19.
@@ -66,7 +69,8 @@ func TestZeroSlotClearsFoldBits(t *testing.T) {
 		{FoldAddSubImm12, 0x123, 0, 0x91000000},
 		{FoldMemImm12, 0x40, 0, 0xF9400000},
 		{FoldMemImm9, -8, 0, 0xF8400000},
-		{FoldMovkImm16, 0x12340000, 0, 0x52a00000},
+		{FoldMovkImm16, 0x1234, 0, 0x52a00000},
+		{FoldMovzAuto, 0x12340000, 0, 0x52a00000},
 		{FoldLogical, 0xFFF, 0, 0x32000000},
 		{FoldPairImm7, 0x40, 0, 0xA9000000},
 		{FoldLitpool19, 0x1080, 0x1000, 0x58000000},
