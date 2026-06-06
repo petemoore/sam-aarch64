@@ -61,7 +61,7 @@ mkdir -p build
 # because that would force the test variant even when the caller wants
 # the prod variant.
 ASSEMBLER_BIN="${ASSEMBLER_BIN:-$ROOT/build/assembler.bin}"
-make -s text2bin enctab build-m3-disk sysreg-data
+make -s text2bin enctab build-m3-disk sysreg-data disasm-payload
 
 if [ ! -f "$ASSEMBLER_BIN" ]; then
     echo "ERROR: assembler binary not found: $ASSEMBLER_BIN" >&2
@@ -101,6 +101,7 @@ fi
 "$ROOT/build/build-m3-disk" \
     "${test_variant_flags[@]}" \
     -sysreg-data "$ROOT/build/sysreg_data.bin" \
+    -disasm "$ROOT/build/disasm.bin" \
     "$ASSEMBLER_BIN" build/enctab.enc \
     "build/${base}.tbn" \
     "build/${base}.mgt"

@@ -50,7 +50,7 @@ if ! command -v "$SAMFILE" >/dev/null 2>&1; then
 fi
 
 echo "=== [1/5] build Mac/Go-side tools + production assembler ==="
-make -s text2bin refenc enctab sysreg-data build-m3-disk m3-asm-prod
+make -s text2bin refenc enctab sysreg-data disasm-payload build-m3-disk m3-asm-prod
 
 echo "=== [2/5] flatten + strip release.target → release-stripped.tbn ==="
 make -s release-stripped-tbn
@@ -58,6 +58,7 @@ make -s release-stripped-tbn
 echo "=== [3/5] build production disk with release-stripped.tbn as IN ==="
 "$ROOT/build/build-m3-disk" \
     -sysreg-data "$ROOT/build/sysreg_data.bin" \
+    -disasm "$ROOT/build/disasm.bin" \
     "$ROOT/build/assembler-prod.bin" "$ROOT/build/enctab.enc" \
     "$ROOT/build/release-stripped.tbn" \
     "$ROOT/build/release-stripped.mgt"
