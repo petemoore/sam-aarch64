@@ -28,7 +28,7 @@ Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not
 | On-SAM disassembler (strand B) — Z80 NOP stub / PR-3 | ✅ wiring complete (session #5, direct commits on main) | `src/disasm.asm`; `src/disasm_comm.inc`; `src/loader.asm`; `src/assembler.asm`; `docs/notes/2026-06-07-disassembler-page-placement.md` | **All 5 missing items landed (commits bfcd900 + 1b3b7ab, 2026-06-07 session #5):** (1) `DISASM_PAGE`/`DISASM_ENTRY`/`DISASM_COMM_MNEM`/`DISASM_COMM_OPS` defined in `src/disasm_comm.inc` (single source of truth, included by both `trampoline.asm` and `disasm.asm` — eliminates the lock-step duplication that was a footgun); (2) `load_page15_payload` added to `loader.asm` (8-byte stub → shared `load_payload_generic` 28-byte body; refactoring also saved 82 bytes by de-duplicating the 5 HGTHD+HLOAD loaders); (3) "d15" deposited by `build-m3-disk` + `-disasm` flag wired in all roundtrip scripts; (4) `call load_page15_payload` at boot in `assembler.asm`; (5) `run_disasm_self_test` at `DISASM_SELF_TEST_ENTRY` (&8100) inside `disasm.asm` itself — invoked via `paged_call` from assembler.asm (avoids nested paged_call). `test_disasm_paged.asm` deleted (logic absorbed). Budget: test variant &BFEA (22 B headroom), prod &B88B. **All 14 CI checks green.** |
 | On-SAM disassembler (strand B) — Z80 decoder port (PR-4) | ✅ COMPLETE (PRs #102 + #103, 2026-06-07 #6) | `src/disasm.asm`; `tools/z80-test-harness-go/disasm_oracle_test.go` + `boot_self_test_test.go`; `docs/plans/2026-06-07-strand-b-pr4-z80-disassembler-port.md` | **Done — full aarch64 disassembler, oracle 100% (5438/5438 release.img words decode identically to `aarch64dec.DecodeAt`).** Ported test-first family-by-family: udf, move-wide, load/store, add/sub-imm, logical-imm (incl. `decodeBitMasks` + non-canonical `immr≥esize` reject), dp-register (shifted/extended + aliases), branch + PC-relative (b/bl/b.cc/cbz/cbnz/tbz/tbnz/adr/adrp/ldr-literal/ret/br/blr), bitfield, condsel, multiply, system (mrs/msr/dc/tlbi/barriers/eret/wfi), udiv/sdiv. TDD keystone `TestDisasmOracle` drives the PROD `build/disasm.bin` standalone in koron-go/z80, word-by-word vs the Go oracle, asserting a plain 100% + the `paged_call` BC/IX/IY ABI every word. **pc ABI:** `DISASM_COMM_PC` (&7EBD section-B slot). **Local full-boot test** `TestBootSelfTestsPass` (~30 ms, + fail-probe) verifies the page-15 boot self-test path locally. **BUILD_TESTS split:** prod `disasm.bin` (9636 B) ships no test code; test `disasm-test.bin` (11803 B) has the self-test; roundtrip scripts route by assembler variant. **Follow-ups (non-blocking):** ~~literal `z80disasm -asm` [2b/2c] mirror~~ **CANCELLED/WONTFIX** (Pete, 2026-06-08 — no added signal; per-word oracle equivalence already implies round-trip equivalence); de-dup the four sysreg name↔encoding tables into one shared `src/sysreg_tables.inc` included by both page-13 (`sysreg_data.asm`) and page-15 (`disasm.asm`) — the `sysreg-sync` guard parses only those four table sections, so it does NOT need to follow includes; just repoint its `asmPath` at the shared `.inc` (Pete, 2026-06-08 — supersedes the earlier "needs include-walking" framing); **Go-vs-Z80 capability parity report** (Pete's idea — surface instructions Go decodes that aren't in release.img, so coverage gaps aren't hidden by the release-only corpus) — ✅ **DELIVERED** `docs/notes/2026-06-08-go-vs-z80-disasm-capability-parity.md` (i10, 2026-06-08): release.img exercises 66 of ~90 Go-decodable families; ~24 families are handled by `disasm.asm` but never compared against Go by the oracle (cond-compare/select, extended-register arith, signed multiplies are the ones that matter); recommends a synthetic fixture sweep + flags `sdiv` as a Go-side `.inst` gap. |
 | Test-wiring audit + repair (blocks strand-B PR-4) | ✅ audit done + repairs shipped (session #5) | `src/assembler.asm`; `src/test_*.asm`; `.github/workflows/ci.yml` | **Audit completed (session #5, 2026-06-07):** all test files confirmed wired; the only gap was the disasm wiring from the PR-99 revert (fixed — see row above). No other orphaned tests found. All 14 CI checks green on main (commit 1b3b7ab). **PR-4 is now unblocked.** |
-| Source compression / compact `.tbn` | 📋 (sequenced **after** the disassembler) | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` § "2026-05-29 refinement"; Pete 2026-05-29 | **Design done; build deferred until the disassembler lands (Pete 2026-05-29 reorder).** The disassembler is the prerequisite — a compact `.tbn` that stores assembled bytes is write-only to the editor without bytes→text. Design (kept as the eventual target): hybrid format adds **`KindLitInsts = 0x07`** (a *run* of consecutive fully-literal instructions stored as assembled bytes); compaction lives in **`refenc`** (sole encoder authority) as a `.tbn`→`.tbn` transform; the m6-release 3-way gate verifies. Increment plan in the spec. Open-Q6 (defaults chosen). |
+| Source compression / compact `.tbn` (i1) | ⏳ PR1 (Go side) in flight | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` § "2026-05-29 refinement"; Pete 2026-06-08 (q2: "let's compact .tbn") | **Disassembler prerequisite landed (PR-4); Pete picked this as the next strand (q2).** **PR1 (Go side, no Z80):** `format` gains **`KindLitInsts = 0x07`** (a *run* of fully-literal instructions stored as assembled words) + reader/writer + `IsFullyLiteral`; `refenc` gains `-emit-compact-tbn` (a `.tbn`→`.tbn` transform reusing `encodeInst` with a PC-invariance guard) + the decode path (pass1 `pc += 4*count`, pass2 memcpy); the m6-release gate extended to assemble + byte-verify the compact `.tbn` and print the size delta. **Measured on release: 88,644 → 68,755 B (−22.4%)**, assembling byte-identical to GNU `release.img`; IN-buffer 92% → ~71% of the 96 KB cap. **Next — PR2:** the Z80 `REC_KIND_LIT_INSTS` decode in `src/main_loop.asm` (pass1 sizing + pass2 memcpy-to-OUT). **PR3+:** compact constant-data directive runs; Level 3 dictionary. Open-Q6 defaults chosen. |
 | Editor groundwork (Phase 2) | 🧭 | `docs/ROADMAP.md` "Editor vision" section | Instruction-explanation panel, register simulator, sysreg docs, did-you-mean. Not yet spec'd. |
 | Repo-cleanup / README housekeeping track | ⏳ | `docs/notes/2026-05-29-repo-audit.md` §6 (prioritised plan) | Track underway. **Landed: PR #78** (dead Go symbols + orphan stub removed), **PR #80** (`tools/` + `src/README.md` index READMEs). Remaining: deep reviews of `main_loop.asm` (#11) / `litpool.asm` (#12), and the `SYMTAB_*` `equ` sentinels (#8). Does NOT block other M7 work. |
 | Directory naming & logical organisation (rename `src/m3`) | ⏳ | Pete 2026-05-29 (decision delegated to agent) | **`src/m3` → flat `src/` DONE (PR #82).** The dir is gone; all live references updated. The wider naming review (`tests/m{3..6}`, `ci-m{N}` targets, `build-m3-disk` tool, milestone-named fixtures) remains as later M7 cleanup. |
@@ -57,7 +57,7 @@ planning session; `i13` is locked to "gitignore" to match shipped PR #107, so th
 
 | id | item | status | pointer |
 |----|------|--------|---------|
-| **i1** | Compact-`.tbn` format change (hybrid bytes/symbolic; `KindLitInsts`) | 📋 planned (the sequenced-next big strand) | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` |
+| **i1** | Compact-`.tbn` format change (hybrid bytes/symbolic; `KindLitInsts`) | ⏳ PR1 (Go side) in flight — q2 picked it as the next strand (Pete 2026-06-08) | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` § "2026-05-29 refinement" |
 | **i2** | On-SAM IDE memory model (edit buffer + IN/OUT paging; "claim all free RAM, grow on demand") | 🧭 reframed; deferred to editor work | scope row "IN/OUT paged-buffer ceiling" |
 | **i3** | Editor groundwork (Phase 2) — full vision | 🧭 | ROADMAP "Editor vision" |
 | **i4** | Basic read-only listing/scroll viewer (centre-locked cursor; up/down only) | 🧭 new 2026-06-08 | — (Pete's idea; precursor to i3) |
@@ -125,33 +125,21 @@ when answered, never renumbered.
   (c) a **generic AI image generator**. My capability note: I have **no** native
   image generation here, and a generic AI generator wouldn't respect the hard SAM
   constraints — so for *faithful* mockups (a) is the honest best option; a dedicated
-  art tool (b) is better for hand-authored final art. Your call.
-
-- **q2 — next major strand after the current batch.** With i8/i9/i12a/i13/i14/i35
-  (and i36/i37/i38) landing, what's the next big piece: **i1** (compact-`.tbn`, the
-  long-sequenced next), **start the editor** (i4 read-only listing viewer → i3), or
-  **i7** (codegen tables from Go authority)? You earlier leaned compact-`.tbn` or
-  editor. (Default if unanswered: I do **not** start a new major strand without your
-  steer.)
-
-- **q4 — how to track work: doc vs GitHub Issues vs a scrape-to-md skill.**
-  Pete (2026-06-08): are we reinventing GitHub Issues with the `iN`/m7-status
-  registry? **The refinement Pete proposed:** a skill that scrapes GitHub Issues →
-  one generated markdown file (single-read context for the agent, cheap at session
-  start), plus a skill that updates the issue when work changes — so the human gets
-  standard Issues tracking while the agent keeps single-read context. **My honest
-  take:** clever, and it directly answers the multi-API-call objection. But (a) make
-  the md a **pure generated cache** (regenerate from issues; issues are canonical;
-  ONE write target = the issue), **not** a dual-write "its own record + the issue" —
-  dual-write is exactly the drift hazard we keep fighting (sysreg dup, id drift);
-  (b) it's real infrastructure (renderer + update skill) that competes with project
-  work, and the doc works fine today, so it's borderline **YAGNI right now**.
-  **Recommendation:** keep the doc for now; build the lean *issues-canonical +
-  generated-md-cache* version if/when human-stepping-through becomes a real need.
-  Fully reversible either way (mint issues from the registry anytime). Your call:
-  build the lean skill now, or revisit later?
+  art tool (b) is better for hand-authored final art. **Status (Pete, 2026-06-08):
+  Pete is researching tools the agent can drive** — parked on his side until that
+  lands; no agent action meanwhile.
 
 ### ✅ Recently resolved
+
+- **q2 — next major strand → compact-`.tbn` (i1) (Pete, 2026-06-08).** "let's
+  compact .tbn." i1 is the next major strand; **PR1 (Go side) is in flight** — see
+  the i1 registry row and the "Source compression / compact `.tbn`" scope row.
+
+- **q4 — work tracking → keep the doc, no GitHub Issues (Pete, 2026-06-08).**
+  "let's stick without GitHub issues for now." The `iN`/m7-status registry stays the
+  tracking home; do NOT build the scrape-to-md skill or mint Issues. Fully reversible
+  if a human-stepping-through need surfaces later.
+
 
 - **q3 — formal GitHub reviews for pre-merge review agents → YES (Pete, 2026-06-08).**
   Adopt native GitHub reviews: record each pre-merge review with `gh pr review

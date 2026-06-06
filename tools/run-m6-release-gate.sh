@@ -53,20 +53,38 @@ fi
 
 ORIGIN="0xfffffff000000000"
 TBN="$ROOT/build/m6-release.tbn"
-GO_IMG="$ROOT/build/m6-release.go.img"      # toolchain 2 output
-SAM_IMG="$ROOT/build/m6-release.sam.img"    # toolchain 3 output
+CTBN="$ROOT/build/m6-release.compact.tbn"        # compact .tbn (i1 PR1)
+GO_IMG="$ROOT/build/m6-release.go.img"           # toolchain 2 output
+GO_IMG_C="$ROOT/build/m6-release.go.compact.img" # toolchain 2 via compact .tbn
+SAM_IMG="$ROOT/build/m6-release.sam.img"         # toolchain 3 output
 
-echo "=== [1/5] build SAM + Go tools (+ &C000 budget check) ==="
+echo "=== [1/6] build SAM + Go tools (+ &C000 budget check) ==="
 make -s text2bin refenc enctab sysreg-data disasm-payload build-m3-disk m3-asm-prod check-budget
 
-echo "=== [2/5] text2bin: vendored release.s → .tbn (flatten + strip-comments) ==="
+echo "=== [2/6] text2bin: vendored release.s → .tbn (flatten + strip-comments) ==="
 "$ROOT/build/text2bin" -flatten -strip-comments -origin "$ORIGIN" -o "$TBN" "$SRC"
 echo "    .tbn: $(wc -c < "$TBN" | tr -d ' ') bytes"
 
-echo "=== [3/5] Go toolchain: refenc .tbn → binary ==="
-"$ROOT/build/refenc" -o "$GO_IMG" "$TBN"
+echo "=== [3/6] Go toolchain: refenc .tbn → binary (+ emit compact .tbn) ==="
+"$ROOT/build/refenc" -o "$GO_IMG" -emit-compact-tbn "$CTBN" "$TBN"
 
-echo "=== [4/5] Z80 toolchain: SAM assembler on SimCoupé → OUT ==="
+echo "=== [4/6] compact .tbn: assemble + verify byte-identical + size delta ==="
+"$ROOT/build/refenc" -o "$GO_IMG_C" "$CTBN"
+if cmp -s "$GO_IMG" "$GO_IMG_C"; then
+    sym_tbn=$(wc -c < "$TBN" | tr -d ' ')
+    cmp_tbn=$(wc -c < "$CTBN" | tr -d ' ')
+    saved=$(( sym_tbn - cmp_tbn ))
+    pct=$(( saved * 100 / sym_tbn ))
+    echo "    compact .tbn assembles identically to the symbolic .tbn."
+    printf '    .tbn size: %s → %s bytes  (-%s, -%s%%)\n' \
+        "$sym_tbn" "$cmp_tbn" "$saved" "$pct"
+else
+    echo "FAIL: compact .tbn assembles to a different binary than the symbolic .tbn" >&2
+    cmp -l "$GO_IMG" "$GO_IMG_C" | head -20 >&2 || true
+    exit 1
+fi
+
+echo "=== [5/6] Z80 toolchain: SAM assembler on SimCoupé → OUT ==="
 "$ROOT/build/build-m3-disk" \
     -sysreg-data "$ROOT/build/sysreg_data.bin" \
     -disasm "$ROOT/build/disasm.bin" \
@@ -84,7 +102,7 @@ if [ "$status" != "OK" ]; then
 fi
 "$SAMFILE" cat -i "$ROOT/build/m6-release.mgt" -f OUT > "$SAM_IMG"
 
-echo "=== [5/5] 3-way byte-compare ==="
+echo "=== [6/6] 3-way byte-compare ==="
 gnu_sz=$(wc -c < "$GNU" | tr -d ' ')
 go_sz=$(wc -c < "$GO_IMG" | tr -d ' ')
 sam_sz=$(wc -c < "$SAM_IMG" | tr -d ' ')
@@ -104,8 +122,9 @@ report_diff() {
         rc=1
     fi
 }
-report_diff "$GNU" "$GO_IMG"  "GNU vs Go (text2bin+refenc)"
-report_diff "$GNU" "$SAM_IMG" "GNU vs Z80 (SAM assembler)"
+report_diff "$GNU" "$GO_IMG"   "GNU vs Go (text2bin+refenc)"
+report_diff "$GNU" "$GO_IMG_C" "GNU vs Go (compact .tbn)"
+report_diff "$GNU" "$SAM_IMG"  "GNU vs Z80 (SAM assembler)"
 
 echo
 if [ "$rc" -eq 0 ]; then

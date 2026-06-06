@@ -183,6 +183,11 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 				}
 			}
 			pc += 4
+		case format.KindLitInsts:
+			// A run of pre-assembled literal instructions occupies
+			// exactly 4 bytes each — same PC contribution as the
+			// equivalent symbolic KindInst records it replaced.
+			pc += 4 * int64(rec.LitCount)
 		case format.KindDirective:
 			name := format.DirectiveName(rec.DirectiveID)
 			switch name {
