@@ -95,6 +95,16 @@ disasm_entry:
 ; family order.  Each `try_*` decoder either handles the word and returns,
 ; or falls through to the next.  The chain ends at disasm_inst (.inst).
 ;
+; In DecodeAt the load/store (mem) family is decoded FIRST, ahead of
+; everything else.  Its encoding space is disjoint from NOP/UDF/move-wide,
+; so trying it first here is order-faithful and harmless.  disasm_try_mem
+; either handles the word (ret) or falls through to disasm_not_mem with
+; B,C,D,E intact for the later families.
+; -----------------------------------------------------------------------
+                jp      disasm_try_mem
+disasm_not_mem:
+
+; -----------------------------------------------------------------------
 ; NOP is special-cased first (it is in AllForms on the Go side, decoded by
 ; the form-walk; we have no form-walk yet, so we recognise it directly).
 ; NOP and UDF are disjoint encoding spaces, so the ordering is harmless.
@@ -690,6 +700,1057 @@ disasm_mw_hb_next:
                 ret
 
 
+; =======================================================================
+; Load/store (memory) family — Z80 port of tools/aarch64dec/mem.go
+; (decodeMem + decodeScalarMem + decodeIndexed + decodeRegOffset +
+;  decodePairMem; decodeLiteralMem is declined, see below).
+;
+; Register layout on entry (disasm_entry): B=bits31:24 C=bits23:16
+; D=bits15:8 E=bits7:0.  Bit-field extractions:
+;   bits29:26 = (B>>2)&0xf       size bits31:30 = (B>>6)&3
+;   bits25:24 = B&3              opc  bits23:22 = (C>>6)&3
+;   bit21     = (C>>5)&1         Rt   bits4:0   = E&0x1f
+;   Rn bits9:5  = ((D&3)<<3)|(E>>5)    idxBits bits11:10 = (D>>2)&3
+;   imm12 bits21:10 = ((C&0x3f)<<6)|(D>>2)
+;   imm9  bits20:12 = ((C&0x1f)<<4)|(D>>4)
+;   Rm bits20:16 = C&0x1f   option bits15:13 = (D>>5)&7  S bit12 = (D>>4)&1
+; Pair: opc=(B>>6)&3  mode bits24:23=((B&1)<<1)|(C>>7)  L bit22=(C>>6)&1
+;   imm7 bits21:15=((C&0x3f)<<1)|(D>>7)  Rt2 bits14:10=(D>>2)&0x1f
+;
+; decodeLiteralMem (LDR/LDRSW literal, bits29:26==0110) renders a
+; PC-relative *target address* (pc + sext(imm19)<<2).  The Z80 decoder
+; receives no PC (the paged_call ABI passes only the word), so it cannot
+; reproduce objdump's target — it DECLINES the literal space (falls through
+; to .inst).  This is the one mem sub-form intentionally left unported.
+;
+; ABI: this path clobbers BC/IX as scratch on success; it pushes them
+; after the LAST decline and restores via disasm_mem_done (pop ix/pop bc).
+; All decline paths reach disasm_not_mem with B,C,D,E intact.
+; =======================================================================
+disasm_try_mem:
+; group = bits29:26 = (B>>2)&0xf.
+                ld      a, b
+                rrca
+                rrca
+                and     &0f
+                cp      &0e                 ; 0b1110 scalar load/store
+                jp      z, disasm_mem_scalar
+                cp      &0a                 ; 0b1010 load/store pair
+                jp      z, disasm_mem_pair_grp
+                ; 0b0110 literal LDR is declined (no PC); all else not mem.
+                jp      disasm_not_mem
+
+disasm_mem_pair_grp:
+; Pair requires bit25==0 (group selector bits29:25 == 0b1010_0).
+                bit     1, b                ; bit25 = B bit1
+                jp      nz, disasm_not_mem
+                jp      disasm_mem_pair
+
+
+; -----------------------------------------------------------------------
+; Scalar (single-register) load/store.  bits29:26 == 0b1110.
+; -----------------------------------------------------------------------
+disasm_mem_scalar:
+; Decode common fields into scratch.
+                call    disasm_mem_decode_common
+; mode = bits25:24 = B&3.
+                ld      a, b
+                and     3
+                cp      1
+                jp      z, disasm_mem_uimm   ; mode 01 → unsigned imm12 offset
+                cp      0
+                jp      nz, disasm_not_mem   ; mode 10/11 → not in our set
+; mode 00: split on idxBits (bits11:10) and bit21.
+                ld      a, (disasm_mem_idx)
+                cp      0
+                jp      z, disasm_mem_unscaled
+                cp      2
+                jp      z, disasm_mem_regoff
+                cp      1
+                jp      z, disasm_mem_post
+                ; idxBits == 3 → pre-index.
+                jp      disasm_mem_pre
+
+
+; -----------------------------------------------------------------------
+; disasm_mem_decode_common — extract size,opc,Rt,Rn,idxBits,bit21 into
+; scratch (scalar forms).  Clobbers A, HL.  Leaves B,C,D,E intact.
+; -----------------------------------------------------------------------
+disasm_mem_decode_common:
+; size = (B>>6)&3.
+                ld      a, b
+                rlca
+                rlca
+                and     3
+                ld      (disasm_mem_size), a
+; opc = (C>>6)&3.
+                ld      a, c
+                rlca
+                rlca
+                and     3
+                ld      (disasm_mem_opc), a
+; Rt = E&0x1f.
+                ld      a, e
+                and     &1f
+                ld      (disasm_mem_rt), a
+; Rn = ((D&3)<<3)|(E>>5).
+                ld      a, d
+                and     3
+                add     a, a
+                add     a, a
+                add     a, a                ; (D&3)<<3
+                ld      l, a
+                ld      a, e
+                rlca
+                rlca
+                rlca
+                and     7                   ; E>>5
+                or      l
+                ld      (disasm_mem_rn), a
+; idxBits = (D>>2)&3.
+                ld      a, d
+                rrca
+                rrca
+                and     3
+                ld      (disasm_mem_idx), a
+; bit21 = (C>>5)&1.
+                ld      a, c
+                rlca
+                rlca
+                rlca
+                and     1
+                ld      (disasm_mem_bit21), a
+; Compute imm12 and imm9 into scratch NOW, while the word bytes B,C,D,E are
+; still in registers.  The mnemonic table lookup (disasm_mem_mnem_lookup)
+; clobbers DE, so the offset must be derived before that runs.  imm9 is
+; computed first because the imm12 step destroys the D register.
+; imm9 = ((C&0x1f)<<4)|(D>>4)  → 9-bit, stored disasm_mem_imm9 (h = bit8).
+                ld      a, c
+                and     &1f
+                ld      l, a
+                ld      h, 0
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl                      ; (C&0x1f)<<4
+                ld      a, d
+                rrca
+                rrca
+                rrca
+                rrca
+                and     &0f                         ; D>>4
+                or      l
+                ld      l, a
+                ld      (disasm_mem_imm9), hl       ; HL = imm9 (h = bit8)
+; imm12 = ((C&0x3f)<<6)|(D>>2)  → HL, stored disasm_mem_imm12.
+                ld      a, c
+                and     &3f
+                ld      l, a
+                ld      h, 0
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl                      ; (C&0x3f)<<6
+                ld      a, d
+                rrca
+                rrca
+                and     &3f                         ; D>>2 (0..63)
+                add     a, l                        ; low byte += (D>>2)
+                ld      l, a
+                jr      nc, disasm_dc_imm12_done
+                inc     h                           ; carry into high byte
+disasm_dc_imm12_done:
+                ld      (disasm_mem_imm12), hl
+; Register-offset fields (used only by the regoff path, but extracted here
+; because the mnemonic table lookup clobbers the D register downstream).
+; option = (D>>5)&7 ; S = (D>>4)&1 ; Rm = C&0x1f.
+                ld      a, d
+                rlca
+                rlca
+                rlca
+                and     7
+                ld      (disasm_mem_option), a
+                ld      a, d
+                rrca
+                rrca
+                rrca
+                rrca
+                and     1
+                ld      (disasm_mem_s), a
+                ld      a, c
+                and     &1f
+                ld      (disasm_mem_rm), a
+                ret
+
+
+; -----------------------------------------------------------------------
+; mode 01: unsigned immediate offset.  off = imm12 * (1<<size).
+; -----------------------------------------------------------------------
+disasm_mem_uimm:
+                call    disasm_mem_scalar_mnem      ; sets mnem+is64 or declines
+                jp      nc, disasm_not_mem
+; Committed to success — save BC/IX (the emit code clobbers them) before
+; any register-clobbering arithmetic.  Restored via disasm_mem_done.
+                push    bc
+                push    ix
+; imm12 = ((C&0x3f)<<6)|(D>>2)  → 12-bit unsigned.  Then scale by 1<<size.
+; Build 16-bit value in HL: hi = (C&0x3f)>>2 ... do it as full shift.
+; imm12 fits in 12 bits; *scale (1,2,4,8) keeps it within 16 bits for the
+; corpus.  Compute imm12 into DE first.
+                call    disasm_mem_imm12_to_de      ; DE = imm12
+; scale: shift DE left by size.
+                ld      a, (disasm_mem_size)
+                or      a
+                jr      z, disasm_mem_uimm_scaled
+                ld      b, a
+disasm_mem_uimm_shl:
+                sla     e
+                rl      d
+                djnz    disasm_mem_uimm_shl
+disasm_mem_uimm_scaled:
+; off is unsigned (>=0).  Emit "<Rt>, " then memOffset(base, off).
+                ld      (disasm_mem_off_lo), de
+                xor     a
+                ld      (disasm_mem_off_neg), a     ; positive
+                jp      disasm_mem_emit_base_off
+
+
+; -----------------------------------------------------------------------
+; mode 00, idxBits 00: unscaled STUR/LDUR.  off = sext(imm9).  bit21 must
+; be 0 (else atomic memory-ops sub-space → decline).
+; -----------------------------------------------------------------------
+disasm_mem_unscaled:
+                ld      a, (disasm_mem_bit21)
+                or      a
+                jp      nz, disasm_not_mem
+                call    disasm_mem_stur_mnem
+                jp      nc, disasm_not_mem
+                push    bc
+                push    ix
+                call    disasm_mem_imm9_signed      ; sets off + off_neg
+                jp      disasm_mem_emit_base_off
+
+
+; -----------------------------------------------------------------------
+; mode 00, idxBits 01: post-index `[Rn], #N`.  bit21 must be 0.
+; -----------------------------------------------------------------------
+disasm_mem_post:
+                ld      a, (disasm_mem_bit21)
+                or      a
+                jp      nz, disasm_not_mem
+                call    disasm_mem_scalar_mnem
+                jp      nc, disasm_not_mem
+                push    bc
+                push    ix
+                call    disasm_mem_imm9_signed
+                xor     a
+                ld      (disasm_mem_idxmode), a     ; 0 = post
+                jp      disasm_mem_emit_indexed
+
+
+; -----------------------------------------------------------------------
+; mode 00, idxBits 11: pre-index `[Rn, #N]!`.  bit21 must be 0.
+; -----------------------------------------------------------------------
+disasm_mem_pre:
+                ld      a, (disasm_mem_bit21)
+                or      a
+                jp      nz, disasm_not_mem
+                call    disasm_mem_scalar_mnem
+                jp      nc, disasm_not_mem
+                push    bc
+                push    ix
+                call    disasm_mem_imm9_signed
+                ld      a, 1
+                ld      (disasm_mem_idxmode), a     ; 1 = pre
+                jp      disasm_mem_emit_indexed
+
+
+; -----------------------------------------------------------------------
+; mode 00, idxBits 10: register offset.  bit21 must be 1.
+; `<Rt>, [Rn, Rm{, <ext> {#amt}}]`.
+; -----------------------------------------------------------------------
+disasm_mem_regoff:
+                ld      a, (disasm_mem_bit21)
+                cp      1
+                jp      nz, disasm_not_mem
+                call    disasm_mem_scalar_mnem
+                jp      nc, disasm_not_mem
+; option/S/Rm were precomputed into scratch by disasm_mem_decode_common
+; (before the mnemonic table lookup clobbered the D register).
+; Decline (word intact) if option not in {010,011,110,111}.
+                ld      a, (disasm_mem_option)
+                cp      2
+                jp      z, disasm_mem_emit_regoff
+                cp      3
+                jp      z, disasm_mem_emit_regoff
+                cp      6
+                jp      z, disasm_mem_emit_regoff
+                cp      7
+                jp      z, disasm_mem_emit_regoff
+                jp      disasm_not_mem
+
+
+; =======================================================================
+; Emit helpers.  All run with BC/IX saved (pushed at the top of the emit
+; path) and return through disasm_mem_done.
+; =======================================================================
+
+; --- emit `<Rt>, [Rn{, #off}]` (unsigned/unscaled, no index writeback) --
+; Caller has already saved BC/IX.
+disasm_mem_emit_base_off:
+                call    disasm_mem_write_mnem
+                ld      hl, DISASM_COMM_OPS
+                call    disasm_mem_emit_rt          ; <Rt>
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                call    disasm_mem_emit_addr_off    ; [Rn] or [Rn, #off]
+                ld      (hl), 0
+                jp      disasm_mem_done
+
+; --- emit indexed `<Rt>, [Rn, #off]!` (pre) or `<Rt>, [Rn], #off` (post) -
+; Caller has already saved BC/IX.
+disasm_mem_emit_indexed:
+                call    disasm_mem_write_mnem
+                ld      hl, DISASM_COMM_OPS
+                call    disasm_mem_emit_rt
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      a, (disasm_mem_idxmode)
+                or      a
+                jr      z, disasm_mem_emit_post
+; pre-index: "[Rn, #off]!"
+                ld      (hl), "["
+                inc     hl
+                call    disasm_mem_emit_base
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                call    disasm_mem_emit_signed_imm
+                ld      (hl), "]"
+                inc     hl
+                ld      (hl), "!"
+                inc     hl
+                ld      (hl), 0
+                jp      disasm_mem_done
+disasm_mem_emit_post:
+; post-index: "[Rn], #off"
+                ld      (hl), "["
+                inc     hl
+                call    disasm_mem_emit_base
+                ld      (hl), "]"
+                inc     hl
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                call    disasm_mem_emit_signed_imm
+                ld      (hl), 0
+                jp      disasm_mem_done
+
+; --- emit register-offset `<Rt>, [Rn, Rm{, <ext> {#amt}}]` --------------
+; Reached only with a valid option (validated in disasm_mem_regoff).
+disasm_mem_emit_regoff:
+                push    bc
+                push    ix
+                call    disasm_mem_write_mnem
+                ld      hl, DISASM_COMM_OPS
+                call    disasm_mem_emit_rt
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      (hl), "["
+                inc     hl
+                call    disasm_mem_emit_base
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+; Determine Rm width: option 011/111 → x (Xm), 010/110 → w (Wm).
+                ld      a, (disasm_mem_option)
+                cp      3                           ; 011 LSL
+                jr      z, disasm_mem_ro_lsl
+                cp      2                           ; 010 UXTW
+                jr      z, disasm_mem_ro_uxtw
+                cp      6                           ; 110 SXTW
+                jr      z, disasm_mem_ro_sxtw
+                jr      disasm_mem_ro_sxtx          ; option 111 SXTX
+
+disasm_mem_ro_lsl:
+; Xm, then optional ", lsl #amt" when S=1.  amt = size.
+                ld      a, 1
+                call    disasm_mem_emit_rm          ; A=1 → x
+                ld      a, (disasm_mem_s)
+                or      a
+                jr      z, disasm_mem_ro_close
+                ld      de, disasm_mem_lsl_txt
+                call    disasm_mem_emit_ext_amt
+                jr      disasm_mem_ro_close
+
+disasm_mem_ro_uxtw:
+                xor     a
+                call    disasm_mem_emit_rm          ; A=0 → w
+                ld      de, disasm_mem_uxtw_txt
+                jr      disasm_mem_ro_ext_common
+disasm_mem_ro_sxtw:
+                xor     a
+                call    disasm_mem_emit_rm          ; w
+                ld      de, disasm_mem_sxtw_txt
+                jr      disasm_mem_ro_ext_common
+disasm_mem_ro_sxtx:
+                ld      a, 1
+                call    disasm_mem_emit_rm          ; x
+                ld      de, disasm_mem_sxtx_txt
+disasm_mem_ro_ext_common:
+; For UXTW/SXTW/SXTX: when S=1 emit ", <ext> #amt"; when S=0 emit ", <ext>".
+                ld      a, (disasm_mem_s)
+                or      a
+                jr      nz, disasm_mem_ro_ext_amt
+; ", <ext>" (no amount).
+                push    de
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                pop     de
+                call    disasm_mem_emit_str_de
+                jr      disasm_mem_ro_close
+disasm_mem_ro_ext_amt:
+                call    disasm_mem_emit_ext_amt
+disasm_mem_ro_close:
+                ld      (hl), "]"
+                inc     hl
+                ld      (hl), 0
+                jp      disasm_mem_done
+
+
+; -----------------------------------------------------------------------
+; disasm_mem_emit_ext_amt — emit ", <ext> #amt" where DE→ext string and
+; amt = size.  Advances HL.  Clobbers A, BC, DE.
+; -----------------------------------------------------------------------
+disasm_mem_emit_ext_amt:
+                push    de
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                pop     de
+                call    disasm_mem_emit_str_de      ; ext keyword
+                ld      (hl), " "
+                inc     hl
+                ld      (hl), "#"
+                inc     hl
+                ld      a, (disasm_mem_size)
+                ld      e, a
+                ld      d, 0
+                call    disasm_emit_dec16
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_mem_emit_str_de — copy null-terminated string at (DE) to (HL),
+; advancing HL past it (terminator not copied).  Clobbers A, DE.
+; -----------------------------------------------------------------------
+disasm_mem_emit_str_de:
+                ld      a, (de)
+                or      a
+                ret     z
+                ld      (hl), a
+                inc     hl
+                inc     de
+                jr      disasm_mem_emit_str_de
+
+
+; -----------------------------------------------------------------------
+; disasm_mem_emit_addr_off — emit "[Rn]" (off==0) or "[Rn, #off]".
+; Uses disasm_mem_off_lo/hi + disasm_mem_off_neg.  Advances HL.
+; -----------------------------------------------------------------------
+disasm_mem_emit_addr_off:
+                ld      (hl), "["
+                inc     hl
+                call    disasm_mem_emit_base
+; off == 0 ?  (neg flag clear AND value zero)
+                ld      a, (disasm_mem_off_neg)
+                or      a
+                jr      nz, disasm_mem_ao_nonzero
+                ld      a, (disasm_mem_off_lo)
+                ld      b, a
+                ld      a, (disasm_mem_off_hi)
+                or      b
+                jr      nz, disasm_mem_ao_nonzero
+; zero offset → just "]"
+                ld      (hl), "]"
+                inc     hl
+                ret
+disasm_mem_ao_nonzero:
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                call    disasm_mem_emit_signed_imm
+                ld      (hl), "]"
+                inc     hl
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_mem_emit_signed_imm — emit "#N" or "#-N" (decimal) from the
+; 16-bit magnitude disasm_mem_off_lo/hi with sign disasm_mem_off_neg.
+; Advances HL.  Clobbers A, BC, DE.
+; -----------------------------------------------------------------------
+disasm_mem_emit_signed_imm:
+                ld      (hl), "#"
+                inc     hl
+                ld      a, (disasm_mem_off_neg)
+                or      a
+                jr      z, disasm_mem_si_pos
+                ld      (hl), "-"
+                inc     hl
+disasm_mem_si_pos:
+                ld      a, (disasm_mem_off_lo)
+                ld      e, a
+                ld      a, (disasm_mem_off_hi)
+                ld      d, a
+                call    disasm_emit_dec16
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_mem_emit_rt — emit the Rt register (idx disasm_mem_rt, width
+; disasm_mem_is64).  Advances HL.  Clobbers A, DE.
+; disasm_mem_emit_base — emit base register Rn: x<n> or sp (idx 31).
+; disasm_mem_emit_rm  — emit Rm given width flag in A (0=w,1=x).
+; -----------------------------------------------------------------------
+disasm_mem_emit_rt:
+                ld      a, (disasm_mem_rt)
+                ld      c, a
+                ld      a, (disasm_mem_is64)
+                ld      b, a                        ; B = is64
+                jp      disasm_mem_emit_genreg
+
+disasm_mem_emit_rm:
+; A = width flag (0=w,1=x); index = Rm (disasm_mem_rm).
+                ld      b, a                        ; B = is64 flag
+                ld      a, (disasm_mem_rm)
+                ld      c, a                        ; C = Rm index
+                jp      disasm_mem_emit_genreg
+
+; emit a general Rt-style register: B=is64(0/1), C=index(0..31).
+; idx 31 → "wzr"/"xzr".  Advances HL.  Clobbers A, DE.
+disasm_mem_emit_genreg:
+                ld      a, c
+                cp      31
+                jr      z, disasm_mem_gr_zero
+                ld      a, b
+                or      a
+                ld      a, "w"
+                jr      z, disasm_mem_gr_prefix
+                ld      a, "x"
+disasm_mem_gr_prefix:
+                ld      (hl), a
+                inc     hl
+                ld      a, c
+                ld      e, a
+                ld      d, 0
+                call    disasm_emit_dec16
+                ret
+disasm_mem_gr_zero:
+                ld      a, b
+                or      a
+                ld      a, "w"
+                jr      z, disasm_mem_gr_zp
+                ld      a, "x"
+disasm_mem_gr_zp:
+                ld      (hl), a
+                inc     hl
+                ld      (hl), "z"
+                inc     hl
+                ld      (hl), "r"
+                inc     hl
+                ret
+
+; base register: always 64-bit; idx 31 → "sp", else "x<n>".
+disasm_mem_emit_base:
+                ld      a, (disasm_mem_rn)
+                cp      31
+                jr      z, disasm_mem_base_sp
+                ld      (hl), "x"
+                inc     hl
+                ld      e, a
+                ld      d, 0
+                call    disasm_emit_dec16
+                ret
+disasm_mem_base_sp:
+                ld      (hl), "s"
+                inc     hl
+                ld      (hl), "p"
+                inc     hl
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_mem_write_mnem — copy the mnemonic at disasm_mem_mnem_ptr (a
+; null-terminated string) to DISASM_COMM_MNEM.  Clobbers A, DE, HL.
+; -----------------------------------------------------------------------
+disasm_mem_write_mnem:
+                ld      hl, (disasm_mem_mnem_ptr)
+                ld      de, DISASM_COMM_MNEM
+disasm_mem_wm_loop:
+                ld      a, (hl)
+                ld      (de), a
+                or      a
+                ret     z
+                inc     hl
+                inc     de
+                jr      disasm_mem_wm_loop
+
+
+; -----------------------------------------------------------------------
+; disasm_mem_imm12_to_de — DE = imm12 = ((C&0x3f)<<6)|(D>>2).
+; Clobbers A, HL.  Leaves B,C,D,E intact.
+; -----------------------------------------------------------------------
+disasm_mem_imm12_to_de:
+; imm12 was precomputed into scratch by disasm_mem_decode_common (before the
+; mnemonic table lookup clobbered the D register).
+                ld      de, (disasm_mem_imm12)
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_mem_imm9_signed — compute signed imm9 (bits20:12), store magnitude
+; in disasm_mem_off_lo/hi and sign in disasm_mem_off_neg (1=negative).
+; imm9 = ((C&0x1f)<<4)|(D>>4).  Sign bit = bit8 of imm9.
+; Clobbers A, BC?, DE, HL — but B,C,D,E (the word) must survive: we only
+; read them, and use HL/local A.  Preserves the word.
+; -----------------------------------------------------------------------
+disasm_mem_imm9_signed:
+; imm9 (0..511) was precomputed into scratch by disasm_mem_decode_common.
+                ld      hl, (disasm_mem_imm9)
+; sign: bit8 set?  HL >= 0x100 → negative.
+                ld      a, h
+                or      a
+                jr      nz, disasm_mem_i9_neg        ; h!=0 means bit8 set
+                xor     a
+                ld      (disasm_mem_off_neg), a
+                ld      (disasm_mem_off_lo), hl
+                ret
+disasm_mem_i9_neg:
+; magnitude = 512 - imm9 = (0x200 - HL).  HL in [256..511].
+                ld      a, 1
+                ld      (disasm_mem_off_neg), a
+                ex      de, hl                      ; DE = imm9
+                ld      hl, &0200
+                or      a
+                sbc     hl, de                      ; HL = 512 - imm9
+                ld      (disasm_mem_off_lo), hl
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_mem_scalar_mnem / disasm_mem_stur_mnem — map (size,opc) to a
+; mnemonic pointer (disasm_mem_mnem_ptr) and is64 flag (disasm_mem_is64).
+; Carry SET on success, CLEAR on decline.  Clobbers A, HL, DE.
+; -----------------------------------------------------------------------
+disasm_mem_scalar_mnem:
+                ld      de, disasm_mem_scalar_tbl
+                jp      disasm_mem_mnem_lookup
+disasm_mem_stur_mnem:
+                ld      de, disasm_mem_stur_tbl
+                ; fall through
+
+; Table format per (size*4+opc) slot, 3 bytes:
+;   byte0 = is64 flag (0/1) | 0x80 set when slot is VALID; 0 = invalid.
+;   bytes1:2 = little-endian pointer to mnemonic string.
+; Indexed by (size<<2)|opc → 16 slots.
+; Each slot is 3 bytes → offset = slot*3 where slot = (size<<2)|opc.
+disasm_mem_mnem_lookup:
+                ld      a, (disasm_mem_size)
+                add     a, a
+                add     a, a
+                ld      l, a
+                ld      a, (disasm_mem_opc)
+                add     a, l                        ; slot
+                ld      l, a
+                add     a, a                        ; 2*slot
+                add     a, l                        ; 3*slot
+                ld      l, a
+                ld      h, 0
+                add     hl, de                      ; HL = &tbl[slot*3]
+                ld      a, (hl)
+                or      a
+                jr      z, disasm_mem_mnem_invalid   ; 0 → invalid slot
+; valid: bit0 = is64.
+                and     1
+                ld      (disasm_mem_is64), a
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                ld      (disasm_mem_mnem_ptr), de
+                scf
+                ret
+disasm_mem_mnem_invalid:
+                or      a                           ; clear carry
+                ret
+
+
+; =======================================================================
+; Pair load/store.  bits29:26==0b1010, bit25==0.
+; =======================================================================
+disasm_mem_pair:
+; opc = (B>>6)&3.  Only 00 (W,scale4) and 10 (X,scale8) supported.
+                ld      a, b
+                rlca
+                rlca
+                and     3
+                cp      0
+                jr      z, disasm_mem_pair_w
+                cp      2
+                jp      nz, disasm_not_mem          ; opc 01/11 → SIMD/undef
+; opc 10 → 64-bit, scale 8.
+                ld      a, 1
+                ld      (disasm_mem_is64), a
+                ld      a, 8
+                jr      disasm_mem_pair_scale
+disasm_mem_pair_w:
+                xor     a
+                ld      (disasm_mem_is64), a
+                ld      a, 4
+disasm_mem_pair_scale:
+                ld      (disasm_mem_pscale), a
+; L = (C>>6)&1 → stp(0)/ldp(1).
+                ld      a, c
+                rlca
+                rlca
+                and     1
+                jr      z, disasm_mem_pair_stp
+                ld      hl, disasm_mem_ldp_txt
+                jr      disasm_mem_pair_mnemset
+disasm_mem_pair_stp:
+                ld      hl, disasm_mem_stp_txt
+disasm_mem_pair_mnemset:
+                ld      (disasm_mem_mnem_ptr), hl
+; Rt1 = E&0x1f ; Rn = ((D&3)<<3)|(E>>5) ; Rt2 = (D>>2)&0x1f.
+                ld      a, e
+                and     &1f
+                ld      (disasm_mem_rt), a          ; Rt1
+                ld      a, d
+                and     3
+                add     a, a
+                add     a, a
+                add     a, a
+                ld      l, a
+                ld      a, e
+                rlca
+                rlca
+                rlca
+                and     7
+                or      l
+                ld      (disasm_mem_rn), a
+                ld      a, d
+                rrca
+                rrca
+                and     &1f
+                ld      (disasm_mem_rt2), a         ; Rt2
+; imm7 = ((C&0x3f)<<1)|(D>>7) ; 7-bit signed.  off = sext(imm7)*scale.
+                ld      a, c
+                and     &3f
+                add     a, a                        ; (C&0x3f)<<1
+                ld      l, a
+                ld      a, d
+                rlca                                ; D>>7 → carry; bring into bit0
+                and     1
+                or      l
+                ld      l, a                        ; L = imm7 (0..127)
+; sign-extend bit6: if imm7>=64 → negative, magnitude = (128-imm7).
+; Then multiply magnitude by scale.
+                ld      a, l
+                cp      64
+                jr      nc, disasm_mem_pair_neg
+; positive: magnitude = imm7.
+                xor     a
+                ld      (disasm_mem_off_neg), a
+                ld      a, l                        ; imm7
+                jr      disasm_mem_pair_mul
+disasm_mem_pair_neg:
+                ld      a, 1
+                ld      (disasm_mem_off_neg), a
+                ld      a, 128
+                sub     l                           ; 128 - imm7
+disasm_mem_pair_mul:
+; A = magnitude (0..64) ; multiply by pscale (4 or 8) → 16-bit in HL.
+                ld      l, a
+                ld      h, 0
+                ld      a, (disasm_mem_pscale)
+                cp      8
+                jr      z, disasm_mem_pair_mul8
+; *4
+                add     hl, hl
+                add     hl, hl
+                jr      disasm_mem_pair_store
+disasm_mem_pair_mul8:
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl
+disasm_mem_pair_store:
+                ld      (disasm_mem_off_lo), hl
+; mode = ((B&1)<<1)|(C>>7).  10 signed-off, 11 pre, 01 post.
+                ld      a, b
+                and     1
+                add     a, a                        ; (B&1)<<1
+                ld      l, a
+                ld      a, c
+                rlca                                ; C>>7 → carry→bit0
+                and     1
+                or      l
+                ld      (disasm_mem_idxmode), a     ; 1=post,2=signed,3=pre
+                cp      2
+                jp      z, disasm_mem_pair_emit_off
+                cp      3
+                jp      z, disasm_mem_pair_emit_pre
+                cp      1
+                jp      z, disasm_mem_pair_emit_post
+                jp      disasm_not_mem              ; mode 00 → undefined here
+
+; common pair register prefix: "<Rt1>, <Rt2>, "
+disasm_mem_pair_regs:
+                ld      hl, DISASM_COMM_OPS
+                call    disasm_mem_emit_rt          ; Rt1 (uses disasm_mem_rt)
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+; Rt2.
+                ld      a, (disasm_mem_rt2)
+                ld      c, a
+                ld      a, (disasm_mem_is64)
+                ld      b, a
+                call    disasm_mem_emit_genreg
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ret
+
+disasm_mem_pair_emit_off:
+                push    bc
+                push    ix
+                call    disasm_mem_write_mnem
+                call    disasm_mem_pair_regs
+                call    disasm_mem_emit_addr_off    ; [Rn] or [Rn, #off]
+                ld      (hl), 0
+                jp      disasm_mem_done
+disasm_mem_pair_emit_pre:
+                push    bc
+                push    ix
+                call    disasm_mem_write_mnem
+                call    disasm_mem_pair_regs
+                ld      (hl), "["
+                inc     hl
+                call    disasm_mem_emit_base
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                call    disasm_mem_emit_signed_imm
+                ld      (hl), "]"
+                inc     hl
+                ld      (hl), "!"
+                inc     hl
+                ld      (hl), 0
+                jp      disasm_mem_done
+disasm_mem_pair_emit_post:
+                push    bc
+                push    ix
+                call    disasm_mem_write_mnem
+                call    disasm_mem_pair_regs
+                ld      (hl), "["
+                inc     hl
+                call    disasm_mem_emit_base
+                ld      (hl), "]"
+                inc     hl
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                call    disasm_mem_emit_signed_imm
+                ld      (hl), 0
+                jp      disasm_mem_done
+
+
+; -----------------------------------------------------------------------
+; disasm_mem_done — restore BC/IX (saved at the start of each emit path)
+; and return.  Honours disasm_entry's "Preserves: BC, IX, IY" ABI.
+; -----------------------------------------------------------------------
+disasm_mem_done:
+                pop     ix
+                pop     bc
+                ret
+
+
+; --- load/store mnemonic strings (null-terminated) --------------------
+disasm_mem_str_str:     defm    "str"
+                        defb    0
+disasm_mem_ldr_str:     defm    "ldr"
+                        defb    0
+disasm_mem_strb_str:    defm    "strb"
+                        defb    0
+disasm_mem_ldrb_str:    defm    "ldrb"
+                        defb    0
+disasm_mem_ldrsb_str:   defm    "ldrsb"
+                        defb    0
+disasm_mem_strh_str:    defm    "strh"
+                        defb    0
+disasm_mem_ldrh_str:    defm    "ldrh"
+                        defb    0
+disasm_mem_ldrsh_str:   defm    "ldrsh"
+                        defb    0
+disasm_mem_ldrsw_str:   defm    "ldrsw"
+                        defb    0
+disasm_mem_stur_str:    defm    "stur"
+                        defb    0
+disasm_mem_ldur_str:    defm    "ldur"
+                        defb    0
+disasm_mem_sturb_str:   defm    "sturb"
+                        defb    0
+disasm_mem_ldurb_str:   defm    "ldurb"
+                        defb    0
+disasm_mem_ldursb_str:  defm    "ldursb"
+                        defb    0
+disasm_mem_sturh_str:   defm    "sturh"
+                        defb    0
+disasm_mem_ldurh_str:   defm    "ldurh"
+                        defb    0
+disasm_mem_ldursh_str:  defm    "ldursh"
+                        defb    0
+disasm_mem_ldursw_str:  defm    "ldursw"
+                        defb    0
+disasm_mem_stp_txt:     defm    "stp"
+                        defb    0
+disasm_mem_ldp_txt:     defm    "ldp"
+                        defb    0
+disasm_mem_lsl_txt:     defm    "lsl"
+                        defb    0
+disasm_mem_uxtw_txt:    defm    "uxtw"
+                        defb    0
+disasm_mem_sxtw_txt:    defm    "sxtw"
+                        defb    0
+disasm_mem_sxtx_txt:    defm    "sxtx"
+                        defb    0
+
+; --- (size<<2)|opc → (is64|valid, mnemonic-ptr) tables -----------------
+; Slot byte0: 0 = invalid; else 1+is64 encoded as just is64 in bit0 with
+; the slot being nonzero only because we never store 0 for a valid entry —
+; but is64 can be 0.  To distinguish, valid slots store (is64 ? 1 : 1)?  No:
+; we need a validity marker independent of is64.  Use byte0 bit1 as "valid"
+; and bit0 as is64; invalid = 0x00.
+; Reworked below: byte0 = 0x02 | is64  (valid), 0x00 (invalid).
+;   value & 1 = is64 ; value != 0 = valid.
+disasm_mem_scalar_tbl:
+; size 00 (byte): strb(w) ldrb(w) ldrsb(x) ldrsb(w)
+                defb    &02
+                defw    disasm_mem_strb_str         ; opc00 strb is64=0
+                defb    &02
+                defw    disasm_mem_ldrb_str         ; opc01 ldrb is64=0
+                defb    &03
+                defw    disasm_mem_ldrsb_str        ; opc10 ldrsb is64=1
+                defb    &02
+                defw    disasm_mem_ldrsb_str        ; opc11 ldrsb is64=0
+; size 01 (half): strh(w) ldrh(w) ldrsh(x) ldrsh(w)
+                defb    &02
+                defw    disasm_mem_strh_str
+                defb    &02
+                defw    disasm_mem_ldrh_str
+                defb    &03
+                defw    disasm_mem_ldrsh_str
+                defb    &02
+                defw    disasm_mem_ldrsh_str
+; size 10 (word): str(w) ldr(w) ldrsw(x) invalid
+                defb    &02
+                defw    disasm_mem_str_str
+                defb    &02
+                defw    disasm_mem_ldr_str
+                defb    &03
+                defw    disasm_mem_ldrsw_str
+                defb    &00
+                defw    0                           ; opc11 invalid
+; size 11 (double): str(x) ldr(x) invalid invalid
+                defb    &03
+                defw    disasm_mem_str_str
+                defb    &03
+                defw    disasm_mem_ldr_str
+                defb    &00
+                defw    0
+                defb    &00
+                defw    0
+
+disasm_mem_stur_tbl:
+; size 00: sturb(w) ldurb(w) ldursb(x) ldursb(w)
+                defb    &02
+                defw    disasm_mem_sturb_str
+                defb    &02
+                defw    disasm_mem_ldurb_str
+                defb    &03
+                defw    disasm_mem_ldursb_str
+                defb    &02
+                defw    disasm_mem_ldursb_str
+; size 01: sturh(w) ldurh(w) ldursh(x) ldursh(w)
+                defb    &02
+                defw    disasm_mem_sturh_str
+                defb    &02
+                defw    disasm_mem_ldurh_str
+                defb    &03
+                defw    disasm_mem_ldursh_str
+                defb    &02
+                defw    disasm_mem_ldursh_str
+; size 10: stur(w) ldur(w) ldursw(x) invalid
+                defb    &02
+                defw    disasm_mem_stur_str
+                defb    &02
+                defw    disasm_mem_ldur_str
+                defb    &03
+                defw    disasm_mem_ldursw_str
+                defb    &00
+                defw    0
+; size 11: stur(x) ldur(x) invalid invalid
+                defb    &03
+                defw    disasm_mem_stur_str
+                defb    &03
+                defw    disasm_mem_ldur_str
+                defb    &00
+                defw    0
+                defb    &00
+                defw    0
+
+; --- load/store working scratch (this page) ---------------------------
+disasm_mem_size:        defb    0
+disasm_mem_opc:         defb    0
+disasm_mem_rt:          defb    0
+disasm_mem_rt2:         defb    0
+disasm_mem_rm:          defb    0
+disasm_mem_rn:          defb    0
+disasm_mem_idx:         defb    0       ; idxBits 11:10
+disasm_mem_bit21:       defb    0
+disasm_mem_is64:        defb    0
+disasm_mem_idxmode:     defb    0       ; 0=post,1=pre (scalar); pair: 1/2/3
+disasm_mem_option:      defb    0
+disasm_mem_s:           defb    0
+disasm_mem_pscale:      defb    0
+disasm_mem_imm12:       defw    0       ; precomputed unsigned imm12
+disasm_mem_imm9:        defw    0       ; precomputed imm9 (h byte = bit8)
+disasm_mem_off_neg:     defb    0       ; 1 = offset negative
+disasm_mem_off_lo:      defw    0       ; offset magnitude (lo,hi)
+disasm_mem_off_hi:      equ     disasm_mem_off_lo+1
+disasm_mem_mnem_ptr:    defw    0       ; pointer to chosen mnemonic string
+
+
 ; --- move-wide mnemonic strings (null-terminated) ---------------------
 disasm_mw_mov_txt:      defm    "mov"
                         defb    0
@@ -854,6 +1915,10 @@ disasm_pow10_tbl:
 ;   &7A — move-wide mov-alias check failed (mnemonic or operands).
 ;   &79 — move-wide kept-movz check failed (mnemonic or operands).
 ;   &78 — move-wide movk check failed (mnemonic or operands).
+;   &77 — load/store scaled str check failed (mnemonic or operands).
+;   &76 — load/store pair stp check failed (mnemonic or operands).
+;   &75 — load/store ldrb check failed (mnemonic or operands).
+;   &74 — load/store register-offset ldr check failed (mnemonic or operands).
 ; Clobbers: A, DE, HL, F (paged_call ABI; BC is the return value).
 ; -----------------------------------------------------------------------
 run_disasm_self_test:
@@ -946,6 +2011,58 @@ run_disasm_self_test:
                 call    disasm_stest_strcmp
                 jp      nz, disasm_stest_fail_movk
 
+; load/store: scaled str.  F9003983 → "str", "x3, [x12, #112]".
+                ld      bc, &F900
+                ld      ix, &3983
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_str_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_str
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_str_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_str
+
+; load/store pair: stp.  A9027BFD → "stp", "x29, x30, [sp, #32]".
+                ld      bc, &A902
+                ld      ix, &7BFD
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_stp_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_stp
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_stp_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_stp
+
+; load/store byte: ldrb.  39432190 → "ldrb", "w16, [x12, #200]".
+                ld      bc, &3943
+                ld      ix, &2190
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_ldrb_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_ldrb
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_ldrb_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_ldrb
+
+; load/store register offset: F8607843 → "ldr", "x3, [x2, x0, lsl #3]".
+                ld      bc, &F860
+                ld      ix, &7843
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_ldr_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_ldrro
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_ldrro_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_ldrro
+
                 ld      bc, 0
                 ret
 
@@ -969,6 +2086,18 @@ disasm_stest_fail_movz:
                 ret
 disasm_stest_fail_movk:
                 ld      bc, &78
+                ret
+disasm_stest_fail_str:
+                ld      bc, &77
+                ret
+disasm_stest_fail_stp:
+                ld      bc, &76
+                ret
+disasm_stest_fail_ldrb:
+                ld      bc, &75
+                ret
+disasm_stest_fail_ldrro:
+                ld      bc, &74
                 ret
 
 ; disasm_stest_strcmp — compare null-terminated strings at (HL) and (DE).
@@ -1000,4 +2129,20 @@ disasm_stest_movz_ops_expect:   defm    "x0, #0x0, lsl #16"
 disasm_stest_movk_expect:       defm    "movk"
                                 defb    0
 disasm_stest_movk_ops_expect:   defm    "x13, #0x12f, lsl #48"
+                                defb    0
+disasm_stest_str_expect:        defm    "str"
+                                defb    0
+disasm_stest_str_ops_expect:    defm    "x3, [x12, #112]"
+                                defb    0
+disasm_stest_stp_expect:        defm    "stp"
+                                defb    0
+disasm_stest_stp_ops_expect:    defm    "x29, x30, [sp, #32]"
+                                defb    0
+disasm_stest_ldrb_expect:       defm    "ldrb"
+                                defb    0
+disasm_stest_ldrb_ops_expect:   defm    "w16, [x12, #200]"
+                                defb    0
+disasm_stest_ldr_expect:        defm    "ldr"
+                                defb    0
+disasm_stest_ldrro_ops_expect:  defm    "x3, [x2, x0, lsl #3]"
                                 defb    0
