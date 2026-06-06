@@ -31,7 +31,7 @@ func encodeSlot(slot OperandSlot, v OperandValue, is64 bool) (uint32, error) {
 	switch slot.SlotKind {
 	case Xreg, Wreg, XregOrSp, WregOrSp:
 		return encodeReg(slot, v.Reg)
-	case Imm5, Imm6:
+	case Imm5, Imm6, Imm16:
 		return encodeImmN(slot, v.Imm)
 	case CondCode:
 		return encodeCond(slot, byte(v.Cond))

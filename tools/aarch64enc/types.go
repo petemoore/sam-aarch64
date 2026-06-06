@@ -20,6 +20,7 @@ const (
 	Imm5     SlotKind = 0x05
 	Imm6     SlotKind = 0x06
 	CondCode SlotKind = 0x07
+	Imm16    SlotKind = 0x08
 
 	Imm12Shifted SlotKind = 0x10
 	Imm16Shifted SlotKind = 0x11
@@ -51,6 +52,8 @@ func (k SlotKind) Name() string {
 		return "Imm6"
 	case CondCode:
 		return "CondCode"
+	case Imm16:
+		return "Imm16"
 	case Imm12Shifted:
 		return "Imm12Shifted"
 	case Imm16Shifted:

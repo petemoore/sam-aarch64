@@ -117,6 +117,17 @@ var MnemonicTable = []string{
 	// Both have 32-bit (Wn) and 64-bit (Xn) variants.  Used by
 	// spectrum4/kernel/macros.s and friends to chain comparisons.
 	"ccmp",
+	// udf: Permanently Undefined instruction (ARM ARM C6.2.228).
+	// Encoding: 0x0000NNNN where bits[31:16]=0, bits[15:0]=imm16.
+	// Used by objdump/aarch64dec for zero-byte padding and undefined slots.
+	"udf",
+	// sxth: Sign-extend Halfword — alias of SBFM Rd, Wn, #0, #15 (ARM ARM C6.2.213).
+	// sxtb: Sign-extend Byte    — alias of SBFM Rd, Wn, #0, #7  (ARM ARM C6.2.212).
+	// uxtb: Unsigned-extend Byte     — alias of UBFM Wd, Wn, #0, #7  (ARM ARM C6.2.226).
+	//       Only W-form (sf=0); 64-bit unsigned extend stays ubfx.
+	// uxth: Unsigned-extend Halfword — alias of UBFM Wd, Wn, #0, #15 (ARM ARM C6.2.227).
+	//       Only W-form (sf=0).
+	"sxth", "sxtb", "uxtb", "uxth",
 }
 
 var mnemonicIndex = func() map[string]uint16 {
