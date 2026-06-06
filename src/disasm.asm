@@ -141,6 +141,14 @@ disasm_not_udf:
                 jp      disasm_try_movewide
 disasm_not_movewide:
 
+; --- add/sub immediate (add/sub/adds/subs + cmp/cmn/mov-sp aliases) ----
+                jp      disasm_try_addsubimm
+disasm_not_addsubimm:
+
+; --- logical immediate (and/orr/eor/ands + mov/tst aliases) -----------
+                jp      disasm_try_logimm
+disasm_not_logimm:
+
 ; --- default: .inst 0xNNNNNNNN ----------------------------------------
                 jp      disasm_inst
 
@@ -698,6 +706,967 @@ disasm_mw_hb_next:
                 ld      (hl), "0"
                 inc     hl
                 ret
+
+
+; =======================================================================
+; Add/sub immediate family — Z80 port of aarch64dec decodeAddSubImmAlias
+; (aliases.go:305).
+;
+; Encoding:  sf | op(1) | S(1) | 100010 | sh(1) | imm12(12) | Rn(5) | Rd(5)
+;   op 0 → ADD/ADDS   op 1 → SUB/SUBS   S = set-flags
+;
+; Aliases objdump prefers:
+;   S=1, Rd=31:  subs → cmp Rn, #imm ; adds → cmn Rn, #imm
+;   S=0, op=0, sh=0, imm12=0, (Rd==31 || Rn==31): add → mov Rd, Rn  (sp form)
+; Base forms: add/adds/sub/subs Rd, Rn, #imm[, lsl #12].
+;   Rd and Rn are SP-able (sp/wsp at idx 31) for the non-flag forms; for
+;   adds/subs Rd is the zero register (Rd=31 is the cmp/cmn case above).
+;
+; ABI: clobbers BC/IX on success; saves them after the LAST decline and
+; restores via disasm_asi_done.  Decline paths leave B,C,D,E intact.
+;
+; Scratch (this page): disasm_asi_sf/op/s/sh/imm_hi/imm_lo/rn/rd.
+; =======================================================================
+disasm_try_addsubimm:
+; Discriminator bits28:23 == 0b100010.  = ((B&0x1f)<<1)|(C>>7).
+                ld      a, b
+                and     &1f
+                add     a, a                        ; (B&0x1f)<<1
+                ld      l, a
+                ld      a, c
+                rlca                                ; C>>7 → bit0
+                and     1
+                or      l
+                cp      &22
+                jp      nz, disasm_not_addsubimm
+; sf = B>>7.
+                ld      a, b
+                rlca
+                and     1
+                ld      (disasm_asi_sf), a
+; op = (B>>6)&1.
+                ld      a, b
+                rlca
+                rlca
+                and     1
+                ld      (disasm_asi_op), a
+; S = (B>>5)&1.
+                ld      a, b
+                rlca
+                rlca
+                rlca
+                and     1
+                ld      (disasm_asi_s), a
+; sh = (C>>6)&1.
+                ld      a, c
+                rlca
+                rlca
+                and     1
+                ld      (disasm_asi_sh), a
+; imm12 = ((C&0x3f)<<6)|(D>>2)  → hi:lo bytes (12-bit value).
+                ld      a, c
+                and     &3f
+                ld      l, a
+                ld      h, 0
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl                      ; (C&0x3f)<<6
+                ld      a, d
+                rrca
+                rrca
+                and     &3f                         ; D>>2
+                or      l
+                ld      l, a
+                ld      a, l
+                ld      (disasm_asi_imm_lo), a
+                ld      a, h
+                ld      (disasm_asi_imm_hi), a
+; Rn = ((D&3)<<3)|(E>>5).
+                ld      a, d
+                and     3
+                add     a, a
+                add     a, a
+                add     a, a
+                ld      l, a
+                ld      a, e
+                rlca
+                rlca
+                rlca
+                and     7
+                or      l
+                ld      (disasm_asi_rn), a
+; Rd = E&0x1f.
+                ld      a, e
+                and     &1f
+                ld      (disasm_asi_rd), a
+
+; Past the last decline — commit to success.  Save BC/IX (emit clobbers).
+                push    bc
+                push    ix
+
+; --- cmp/cmn: S=1 && Rd==31 ---
+                ld      a, (disasm_asi_s)
+                or      a
+                jr      z, disasm_asi_chk_mov
+                ld      a, (disasm_asi_rd)
+                cp      31
+                jr      nz, disasm_asi_base
+; cmn (op=0) / cmp (op=1).
+                ld      a, (disasm_asi_op)
+                or      a
+                ld      hl, disasm_asi_cmn_txt
+                jr      z, disasm_asi_cmp_set
+                ld      hl, disasm_asi_cmp_txt
+disasm_asi_cmp_set:
+                call    disasm_asi_set_mnem
+; operands: "<Rn>, #imm[, lsl #12]".  Rn is SP-able here? No — cmp/cmn use
+; the zero-register name (Go decodeReg with zero).
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_asi_rn)
+                ld      c, a
+                xor     a                           ; spable=0 (zr/wzr)
+                call    disasm_asi_emit_reg
+                jp      disasm_asi_emit_imm_tail
+
+disasm_asi_chk_mov:
+; --- mov Rd, Rn: S=0, op=0, sh=0, imm12=0, (Rd==31 || Rn==31) ---
+                ld      a, (disasm_asi_op)
+                or      a
+                jr      nz, disasm_asi_base
+                ld      a, (disasm_asi_sh)
+                or      a
+                jr      nz, disasm_asi_base
+                ld      a, (disasm_asi_imm_hi)
+                ld      l, a
+                ld      a, (disasm_asi_imm_lo)
+                or      l
+                jr      nz, disasm_asi_base         ; imm12 != 0
+                ld      a, (disasm_asi_rd)
+                cp      31
+                jr      z, disasm_asi_mov
+                ld      a, (disasm_asi_rn)
+                cp      31
+                jr      nz, disasm_asi_base
+disasm_asi_mov:
+                ld      hl, disasm_asi_mov_txt
+                call    disasm_asi_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_asi_rd)
+                ld      c, a
+                ld      a, 1                        ; spable=1 (sp/wsp)
+                call    disasm_asi_emit_reg
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      a, (disasm_asi_rn)
+                ld      c, a
+                ld      a, 1                        ; spable
+                call    disasm_asi_emit_reg
+                ld      (hl), 0
+                jp      disasm_asi_done
+
+; --- base add/adds/sub/subs ---
+disasm_asi_base:
+; mnem index = (op<<1)|S → 0 add, 1 adds, 2 sub, 3 subs.
+                ld      a, (disasm_asi_op)
+                add     a, a
+                ld      l, a
+                ld      a, (disasm_asi_s)
+                or      l                           ; index 0..3
+                add     a, a                        ; *2 (table of word ptrs)
+                ld      e, a
+                ld      d, 0
+                ld      hl, disasm_asi_mnem_tbl
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                ex      de, hl                      ; HL = mnem string ptr
+                call    disasm_asi_set_mnem
+; Rd: SP-able for add/sub (S=0); zero-reg for adds/subs (S=1).
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_asi_rd)
+                ld      c, a
+                ld      a, (disasm_asi_s)
+                xor     1                           ; S=0 → spable=1 ; S=1 → 0
+                call    disasm_asi_emit_reg
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+; Rn: always SP-able.
+                ld      a, (disasm_asi_rn)
+                ld      c, a
+                ld      a, 1
+                call    disasm_asi_emit_reg
+; fall through to ", #imm[, lsl #12]" tail.
+disasm_asi_emit_imm_tail:
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      (hl), "#"
+                inc     hl
+                ld      (hl), "0"
+                inc     hl
+                ld      (hl), "x"
+                inc     hl
+                ld      a, (disasm_asi_imm_lo)
+                ld      (disasm_mw_val), a
+                ld      a, (disasm_asi_imm_hi)
+                ld      (disasm_mw_val+1), a
+                ld      a, 2
+                call    disasm_mw_emit_hexbuf
+                ld      a, (disasm_asi_sh)
+                or      a
+                jr      z, disasm_asi_imm_done
+; ", lsl #12"
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      (hl), "l"
+                inc     hl
+                ld      (hl), "s"
+                inc     hl
+                ld      (hl), "l"
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      (hl), "#"
+                inc     hl
+                ld      (hl), "1"
+                inc     hl
+                ld      (hl), "2"
+                inc     hl
+disasm_asi_imm_done:
+                ld      (hl), 0
+                ; fall through to disasm_asi_done.
+
+disasm_asi_done:
+                pop     ix
+                pop     bc
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_asi_set_mnem — copy null-terminated mnemonic at (HL) to
+; DISASM_COMM_MNEM.  Clobbers A, DE, HL.
+; -----------------------------------------------------------------------
+disasm_asi_set_mnem:
+                ld      de, DISASM_COMM_MNEM
+disasm_asi_sm_loop:
+                ld      a, (hl)
+                ld      (de), a
+                or      a
+                ret     z
+                inc     hl
+                inc     de
+                jr      disasm_asi_sm_loop
+
+
+; -----------------------------------------------------------------------
+; disasm_asi_emit_reg — emit register C with width from disasm_asi_sf and
+; zero/sp naming from A (0 → xzr/wzr ; 1 → sp/wsp).  Advances HL.
+; Clobbers A, DE, F (IX/IY preserved by disasm_emit_dec16).
+; -----------------------------------------------------------------------
+disasm_asi_emit_reg:
+                ld      (disasm_asi_spable), a
+                ld      a, c
+                cp      31
+                jr      z, disasm_asi_reg_special
+; ordinary reg: prefix + decimal index.
+                ld      a, (disasm_asi_sf)
+                or      a
+                ld      a, "w"
+                jr      z, disasm_asi_reg_pfx
+                ld      a, "x"
+disasm_asi_reg_pfx:
+                ld      (hl), a
+                inc     hl
+                ld      a, c
+                ld      e, a
+                ld      d, 0
+                call    disasm_emit_dec16
+                ret
+disasm_asi_reg_special:
+                ld      a, (disasm_asi_spable)
+                or      a
+                jr      nz, disasm_asi_reg_sp
+; zr form: "xzr"/"wzr".
+                ld      a, (disasm_asi_sf)
+                or      a
+                ld      a, "w"
+                jr      z, disasm_asi_reg_zp
+                ld      a, "x"
+disasm_asi_reg_zp:
+                ld      (hl), a
+                inc     hl
+                ld      (hl), "z"
+                inc     hl
+                ld      (hl), "r"
+                inc     hl
+                ret
+disasm_asi_reg_sp:
+; sp form: "sp" (64) / "wsp" (32).
+                ld      a, (disasm_asi_sf)
+                or      a
+                jr      nz, disasm_asi_reg_sp64
+                ld      (hl), "w"
+                inc     hl
+disasm_asi_reg_sp64:
+                ld      (hl), "s"
+                inc     hl
+                ld      (hl), "p"
+                inc     hl
+                ret
+
+
+; --- add/sub-imm mnemonic strings + table (index (op<<1)|S) ------------
+disasm_asi_add_txt:     defm    "add"
+                        defb    0
+disasm_asi_adds_txt:    defm    "adds"
+                        defb    0
+disasm_asi_sub_txt:     defm    "sub"
+                        defb    0
+disasm_asi_subs_txt:    defm    "subs"
+                        defb    0
+disasm_asi_cmp_txt:     defm    "cmp"
+                        defb    0
+disasm_asi_cmn_txt:     defm    "cmn"
+                        defb    0
+disasm_asi_mov_txt:     defm    "mov"
+                        defb    0
+disasm_asi_mnem_tbl:    defw    disasm_asi_add_txt  ; 0 add
+                        defw    disasm_asi_adds_txt ; 1 adds
+                        defw    disasm_asi_sub_txt  ; 2 sub
+                        defw    disasm_asi_subs_txt ; 3 subs
+
+; --- add/sub-imm working scratch (this page) --------------------------
+disasm_asi_sf:          defb    0
+disasm_asi_op:          defb    0
+disasm_asi_s:           defb    0
+disasm_asi_sh:          defb    0
+disasm_asi_imm_hi:      defb    0
+disasm_asi_imm_lo:      defb    0
+disasm_asi_rn:          defb    0
+disasm_asi_rd:          defb    0
+disasm_asi_spable:      defb    0
+
+
+; =======================================================================
+; Logical immediate family — Z80 port of aarch64dec decodeLogicalImmAlias
+; (aliases.go:570), the base and/orr/eor/ands logical-imm forms, plus the
+; decodeBitMasks (slots_logical.go) N:immr:imms → bitmask expansion.
+;
+; Encoding:  sf | opc(2) | 100100 | N(1) | immr(6) | imms(6) | Rn(5) | Rd(5)
+;   opc 00 → AND   01 → ORR   10 → EOR   11 → ANDS
+; Aliases: orr Rn=31 → mov Rd, #imm  (unless moveWidePreferred → keep orr);
+;          ands Rd=31 → tst Rn, #imm.
+;
+; decodeBitMasks rejects illegal encodings (esize>regsize, immr>=esize
+; non-canonical, all-ones run) — those DECLINE to .inst.  Operand registers:
+; Rd/Rn are SP-able for and/orr/eor (not flag-setting); Rd is zr for ands;
+; Rn is always a zr-register source.  (Go decodeReg uses prefix/zero, never
+; sp, for logical — but and/orr/eor allow SP as Rd.  Matches objdump.)
+;
+; ABI: clobbers BC/IX on success; saves after the LAST decline, restores via
+; disasm_li_done.  Decline paths leave B,C,D,E intact.
+; =======================================================================
+disasm_try_logimm:
+; Discriminator bits28:23 == 0b100100.  = ((B&0x1f)<<1)|(C>>7).
+                ld      a, b
+                and     &1f
+                add     a, a
+                ld      l, a
+                ld      a, c
+                rlca
+                and     1
+                or      l
+                cp      &24
+                jp      nz, disasm_not_logimm
+; sf = B>>7.
+                ld      a, b
+                rlca
+                and     1
+                ld      (disasm_li_sf), a
+; opc = (B>>5)&3.
+                ld      a, b
+                rlca
+                rlca
+                rlca
+                and     3
+                ld      (disasm_li_opc), a
+; N = (C>>6)&1.
+                ld      a, c
+                rlca
+                rlca
+                and     1
+                ld      (disasm_li_n), a
+; immr = C&0x3f.
+                ld      a, c
+                and     &3f
+                ld      (disasm_li_immr), a
+; imms = (D>>2)&0x3f.
+                ld      a, d
+                rrca
+                rrca
+                and     &3f
+                ld      (disasm_li_imms), a
+; Rn = ((D&3)<<3)|(E>>5).
+                ld      a, d
+                and     3
+                add     a, a
+                add     a, a
+                add     a, a
+                ld      l, a
+                ld      a, e
+                rlca
+                rlca
+                rlca
+                and     7
+                or      l
+                ld      (disasm_li_rn), a
+; Rd = E&0x1f.
+                ld      a, e
+                and     &1f
+                ld      (disasm_li_rd), a
+
+; For sf=0 (32-bit), N must be 0 (else UNDEFINED → decline).
+                ld      a, (disasm_li_sf)
+                or      a
+                jr      nz, disasm_li_sf_ok
+                ld      a, (disasm_li_n)
+                or      a
+                jp      nz, disasm_not_logimm
+disasm_li_sf_ok:
+
+; disasm_li_bitmasks and the emit code clobber BC/IX, so save them now
+; (the discriminator/field-extraction above left B,C,D,E intact for the
+; decline at the top).  On an illegal-encoding decline we must restore the
+; word before falling through to .inst.
+                push    bc
+                push    ix
+
+; Expand the bitmask into disasm_mw_val[0..7]; decline on failure.
+                call    disasm_li_bitmasks
+                jr      c, disasm_li_decoded
+                pop     ix
+                pop     bc
+                jp      disasm_not_logimm           ; illegal encoding → .inst
+disasm_li_decoded:
+
+; --- orr (opc=01) with Rn=31 → mov, unless moveWidePreferred → keep orr ---
+                ld      a, (disasm_li_opc)
+                cp      1
+                jr      nz, disasm_li_chk_tst
+                ld      a, (disasm_li_rn)
+                cp      31
+                jr      nz, disasm_li_base
+                call    disasm_li_movewide_pref     ; Z set if preferred
+                jr      z, disasm_li_base           ; movz/movn-encodable → keep orr
+; mov Rd, #imm.
+                ld      hl, disasm_li_mov_txt
+                call    disasm_asi_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_li_rd)
+                ld      c, a
+                xor     a                           ; mov target uses zr naming
+                call    disasm_li_emit_reg
+                jp      disasm_li_emit_imm_tail
+
+disasm_li_chk_tst:
+; --- ands (opc=11) with Rd=31 → tst Rn, #imm ---
+                ld      a, (disasm_li_opc)
+                cp      3
+                jr      nz, disasm_li_base
+                ld      a, (disasm_li_rd)
+                cp      31
+                jr      nz, disasm_li_base
+                ld      hl, disasm_li_tst_txt
+                call    disasm_asi_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_li_rn)
+                ld      c, a
+                xor     a                           ; Rn zr-source
+                call    disasm_li_emit_reg
+                jp      disasm_li_emit_imm_tail
+
+; --- base and/orr/eor/ands ---
+disasm_li_base:
+                ld      a, (disasm_li_opc)
+                add     a, a                        ; *2 (word ptrs)
+                ld      e, a
+                ld      d, 0
+                ld      hl, disasm_li_mnem_tbl
+                add     hl, de
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                ex      de, hl
+                call    disasm_asi_set_mnem
+; Rd: SP-able for and/orr/eor (opc != 11); zr for ands (opc 11).
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_li_rd)
+                ld      c, a
+                ld      a, (disasm_li_opc)
+                cp      3
+                ld      a, 1                        ; spable for non-ands
+                jr      nz, disasm_li_base_rd
+                xor     a                           ; ands → zr
+disasm_li_base_rd:
+                call    disasm_li_emit_reg
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+; Rn: zr-register source (decodeReg with zero).
+                ld      a, (disasm_li_rn)
+                ld      c, a
+                xor     a
+                call    disasm_li_emit_reg
+; fall through to ", #imm" tail.
+disasm_li_emit_imm_tail:
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      (hl), "#"
+                inc     hl
+                ld      (hl), "0"
+                inc     hl
+                ld      (hl), "x"
+                inc     hl
+; minimal-width hex of the mask: 8 bytes (sf=1) or 4 bytes (sf=0).
+                ld      a, (disasm_li_sf)
+                or      a
+                ld      a, 4
+                jr      z, disasm_li_imm_w
+                ld      a, 8
+disasm_li_imm_w:
+                call    disasm_mw_emit_hexbuf
+                ld      (hl), 0
+                ; fall through to disasm_li_done.
+
+disasm_li_done:
+                pop     ix
+                pop     bc
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_li_emit_reg — emit register C; width from disasm_li_sf; A selects
+; zero naming: 0 → xzr/wzr ; 1 → sp/wsp (SP-able forms).  Advances HL.
+; Clobbers A, DE, F.
+; -----------------------------------------------------------------------
+disasm_li_emit_reg:
+                ld      (disasm_li_spable), a
+                ld      a, c
+                cp      31
+                jr      z, disasm_li_reg_special
+                ld      a, (disasm_li_sf)
+                or      a
+                ld      a, "w"
+                jr      z, disasm_li_reg_pfx
+                ld      a, "x"
+disasm_li_reg_pfx:
+                ld      (hl), a
+                inc     hl
+                ld      a, c
+                ld      e, a
+                ld      d, 0
+                call    disasm_emit_dec16
+                ret
+disasm_li_reg_special:
+                ld      a, (disasm_li_spable)
+                or      a
+                jr      nz, disasm_li_reg_sp
+                ld      a, (disasm_li_sf)
+                or      a
+                ld      a, "w"
+                jr      z, disasm_li_reg_zp
+                ld      a, "x"
+disasm_li_reg_zp:
+                ld      (hl), a
+                inc     hl
+                ld      (hl), "z"
+                inc     hl
+                ld      (hl), "r"
+                inc     hl
+                ret
+disasm_li_reg_sp:
+                ld      a, (disasm_li_sf)
+                or      a
+                jr      nz, disasm_li_reg_sp64
+                ld      (hl), "w"
+                inc     hl
+disasm_li_reg_sp64:
+                ld      (hl), "s"
+                inc     hl
+                ld      (hl), "p"
+                inc     hl
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_li_bitmasks — port of decodeBitMasks (slots_logical.go).
+; Inputs (scratch): disasm_li_n, disasm_li_immr, disasm_li_imms, disasm_li_sf.
+; On success: CARRY set, mask written little-endian to disasm_mw_val[0..7]
+; (8 bytes; high 4 zero for sf=0).  On illegal encoding: CARRY clear.
+; Clobbers A, BC, DE, HL.
+;
+; Algorithm:
+;   combined = (N<<6) | (~imms & 0x3f) ; length = highest set bit (0..6).
+;   length<1 invalid unless length==0 (esize 2).  esize = 1<<length.
+;   esize>regsize invalid.  levels = esize-1.
+;   immr & levels != immr → invalid (non-canonical).
+;   s = imms & levels ; r = immr & levels ; s==levels invalid.
+;   welem = (1<<(s+1))-1 masked to esize.  rotate right by r within esize.
+;   replicate esize-bit pattern to regsize.
+; -----------------------------------------------------------------------
+disasm_li_bitmasks:
+; combined = (N<<6) | (~imms & 0x3f).
+                ld      a, (disasm_li_imms)
+                cpl
+                and     &3f
+                ld      l, a
+                ld      a, (disasm_li_n)
+                or      a
+                jr      z, disasm_li_bm_comb
+                ld      a, l
+                or      &40                         ; set bit6
+                ld      l, a
+disasm_li_bm_comb:
+; L = combined (0..127).  length = highest set bit (scan 6..0).
+                ld      a, l
+                bit     6, a
+                jr      nz, disasm_li_bm_len6
+                bit     5, a
+                jr      nz, disasm_li_bm_len5
+                bit     4, a
+                jr      nz, disasm_li_bm_len4
+                bit     3, a
+                jr      nz, disasm_li_bm_len3
+                bit     2, a
+                jr      nz, disasm_li_bm_len2
+                bit     1, a
+                jr      nz, disasm_li_bm_len1
+                bit     0, a
+                jr      nz, disasm_li_bm_len0
+                ; all zero → length -1 → invalid.
+                or      a                           ; clear carry
+                ret
+disasm_li_bm_len6:
+                ld      a, 6
+                jr      disasm_li_bm_haslen
+disasm_li_bm_len5:
+                ld      a, 5
+                jr      disasm_li_bm_haslen
+disasm_li_bm_len4:
+                ld      a, 4
+                jr      disasm_li_bm_haslen
+disasm_li_bm_len3:
+                ld      a, 3
+                jr      disasm_li_bm_haslen
+disasm_li_bm_len2:
+                ld      a, 2
+                jr      disasm_li_bm_haslen
+disasm_li_bm_len1:
+                ld      a, 1
+                jr      disasm_li_bm_haslen
+disasm_li_bm_len0:
+                xor     a                           ; length 0
+disasm_li_bm_haslen:
+                ld      (disasm_li_length), a
+; esize = 1 << length.  length is 0..6 → esize 1..64.
+                ld      b, a                        ; B = length (shift count)
+                ld      a, 1
+                inc     b
+                dec     b
+                jr      z, disasm_li_bm_esize_set   ; length 0 → esize 1
+disasm_li_bm_esize_loop:
+                add     a, a
+                djnz    disasm_li_bm_esize_loop
+disasm_li_bm_esize_set:
+                ld      (disasm_li_esize), a
+; regsize = sf ? 64 : 32.  esize > regsize → invalid.
+                ld      c, 32
+                ld      a, (disasm_li_sf)
+                or      a
+                jr      z, disasm_li_bm_haveregsz
+                ld      c, 64
+disasm_li_bm_haveregsz:
+                ld      a, (disasm_li_esize)
+                cp      c
+                jr      z, disasm_li_bm_esize_ok
+                jr      c, disasm_li_bm_esize_ok
+                or      a                           ; esize>regsize → clear carry
+                ret
+disasm_li_bm_esize_ok:
+; levels = esize-1.
+                ld      a, (disasm_li_esize)
+                dec     a
+                ld      (disasm_li_levels), a
+; Non-canonical: immr & levels != immr → invalid.
+                ld      a, (disasm_li_immr)
+                ld      b, a
+                ld      a, (disasm_li_levels)
+                and     b                           ; immr & levels
+                cp      b
+                jr      z, disasm_li_bm_canon
+                or      a                           ; differ → clear carry
+                ret
+disasm_li_bm_canon:
+; s = imms & levels ; r = immr & levels (== immr, just verified).
+                ld      a, (disasm_li_levels)
+                ld      b, a
+                ld      a, (disasm_li_imms)
+                and     b
+                ld      (disasm_li_s), a
+; s == levels → invalid.
+                ld      c, a
+                ld      a, (disasm_li_levels)
+                cp      c
+                jr      nz, disasm_li_bm_s_ok
+                or      a                           ; s==levels → clear carry
+                ret
+disasm_li_bm_s_ok:
+                ld      a, (disasm_li_immr)
+                ld      (disasm_li_r), a            ; r = immr (& levels == immr)
+; Build welem in a 64-bit buffer disasm_li_welem[0..7] = (1<<(s+1))-1,
+; i.e. (s+1) low bits set.  Then rotate-right by r within esize, then
+; replicate to regsize, into disasm_mw_val[0..7].
+                call    disasm_li_build_pattern
+                scf
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_li_build_pattern — construct the rotated, replicated mask into
+; disasm_mw_val[0..7] (little-endian, 64-bit; sf=0 leaves high zero — the
+; replication naturally fills only regsize bits but we always fill 8 bytes
+; and the renderer reads 4 for sf=0).
+;
+; Strategy: work bit-by-bit over the esize-bit element.  For element bit
+; position j (0..esize-1), the rotated value's bit j = welem[(j+r) mod esize]
+; where welem bit k = (k <= s).  Then replicate: dest bit (e*esize + j) =
+; element bit j, for all e while e*esize < regsize.
+;
+; Implemented by computing, for each destination bit i in [0,regsize):
+;   j = i mod esize ; src = (j + r) mod esize ; bit = (src <= s) ? 1 : 0.
+; Set that bit in disasm_mw_val.  This is O(regsize) bit ops — fine here.
+;
+; Uses scratch: disasm_li_s, disasm_li_r, disasm_li_esize ; sf for regsize.
+; Clobbers A, BC, DE, HL.
+; -----------------------------------------------------------------------
+disasm_li_build_pattern:
+; zero disasm_mw_val[0..7].
+                ld      hl, disasm_mw_val
+                xor     a
+                ld      b, 8
+disasm_li_bp_clear:
+                ld      (hl), a
+                inc     hl
+                djnz    disasm_li_bp_clear
+; regsize → D.
+                ld      a, (disasm_li_sf)
+                or      a
+                ld      a, 32
+                jr      z, disasm_li_bp_havers
+                ld      a, 64
+disasm_li_bp_havers:
+                ld      d, a                        ; D = regsize
+; loop i = 0..regsize-1 in E.
+                ld      e, 0
+disasm_li_bp_loop:
+                ld      a, e
+                cp      d
+                ret     nc                          ; i >= regsize → done
+; j = i mod esize.
+                ld      a, e
+                ld      b, a                        ; B = i
+                ld      a, (disasm_li_esize)
+                ld      c, a                        ; C = esize
+                ld      a, b
+disasm_li_bp_jmod:
+                cp      c
+                jr      c, disasm_li_bp_have_j
+                sub     c
+                jr      disasm_li_bp_jmod
+disasm_li_bp_have_j:
+; A = j.  src = (j + r) mod esize.
+                ld      b, a                        ; B = j
+                ld      a, (disasm_li_r)
+                add     a, b                        ; j + r
+disasm_li_bp_srcmod:
+                cp      c
+                jr      c, disasm_li_bp_have_src
+                sub     c
+                jr      disasm_li_bp_srcmod
+disasm_li_bp_have_src:
+; A = src.  bit = (src <= s) ? 1 : 0.
+                ld      b, a                        ; B = src
+                ld      a, (disasm_li_s)
+                cp      b                           ; s - src ; carry if s<src
+                jr      c, disasm_li_bp_next        ; s<src → bit 0
+; set bit i (E) in disasm_mw_val.  byte = i>>3, bit = i&7.
+                ld      a, e
+                rrca
+                rrca
+                rrca
+                and     &1f                         ; i>>3 (0..7)
+                ld      l, a
+                ld      h, 0
+                ld      bc, disasm_mw_val
+                add     hl, bc                      ; HL = &val[i>>3]
+                ld      a, e
+                and     7                           ; bit index (0..7)
+                ld      b, a
+                ld      a, 1
+                inc     b
+                dec     b
+                jr      z, disasm_li_bp_setbit      ; bit 0 → mask 1
+disasm_li_bp_shl:
+                add     a, a
+                djnz    disasm_li_bp_shl
+disasm_li_bp_setbit:
+                or      (hl)
+                ld      (hl), a
+disasm_li_bp_next:
+                inc     e
+                jr      disasm_li_bp_loop
+
+
+; -----------------------------------------------------------------------
+; disasm_li_movewide_pref — port of moveWidePreferred (aliases.go:608).
+; Z set (== true) when the (sf,N,imms,immr) logical-imm value is also a
+; movz/movn-encodable immediate (so objdump keeps `orr`).  Z clear → not
+; preferred (render the mov bitmask alias).
+; Inputs (scratch): disasm_li_sf, disasm_li_n, disasm_li_imms, disasm_li_immr.
+; Clobbers A, BC, DE, HL.
+;
+;   width = sf?64:32
+;   sf=1 && N!=1 → false
+;   sf=0 && !(N==0 && bit5(imms)==0) → false
+;   s = imms ; r = immr
+;   if s < 16:  return ((16 - (r mod 16)) mod 16) <= (15 - s)
+;   if s >= width-15: return (r mod 16) <= (s - (width-16))
+;   else false
+; -----------------------------------------------------------------------
+disasm_li_movewide_pref:
+                ld      a, (disasm_li_sf)
+                or      a
+                jr      z, disasm_li_mwp_32
+; sf=1: require N==1.
+                ld      a, (disasm_li_n)
+                cp      1
+                jr      z, disasm_li_mwp_w64
+                jp      disasm_li_mwp_false
+disasm_li_mwp_w64:
+                ld      a, 64
+                ld      (disasm_li_mwp_width), a
+                jr      disasm_li_mwp_body
+disasm_li_mwp_32:
+; sf=0: require N==0 && bit5(imms)==0.
+                ld      a, (disasm_li_n)
+                or      a
+                jp      nz, disasm_li_mwp_false
+                ld      a, (disasm_li_imms)
+                bit     5, a
+                jp      nz, disasm_li_mwp_false
+                ld      a, 32
+                ld      (disasm_li_mwp_width), a
+disasm_li_mwp_body:
+; s = imms, r = immr.
+                ld      a, (disasm_li_imms)
+                ld      (disasm_li_mwp_s), a
+                cp      16
+                jr      nc, disasm_li_mwp_shi
+; s < 16: return ((16 - (r mod 16)) mod 16) <= (15 - s).
+                ld      a, (disasm_li_immr)
+                and     &0f                         ; r mod 16
+                ld      b, a                        ; B = r%16
+                ld      a, 16
+                sub     b                           ; 16 - r%16  (1..16)
+                and     &0f                         ; mod 16 → 0..15
+                ld      b, a                        ; B = lhs
+                ld      a, 15
+                ld      c, a
+                ld      a, (disasm_li_mwp_s)
+                ld      e, a
+                ld      a, c
+                sub     e                           ; 15 - s
+                ; compare lhs (B) <= (15-s) (A): true if B <= A → A-B no borrow.
+                sub     b                           ; (15-s) - lhs
+                jr      nc, disasm_li_mwp_true
+                jr      disasm_li_mwp_false
+disasm_li_mwp_shi:
+; s >= 16.  Check s >= width-15.
+                ld      a, (disasm_li_mwp_width)
+                sub     15                          ; width-15
+                ld      b, a
+                ld      a, (disasm_li_mwp_s)
+                cp      b
+                jr      c, disasm_li_mwp_false      ; s < width-15 → false
+; return (r mod 16) <= (s - (width-16)).
+                ld      a, (disasm_li_mwp_width)
+                sub     16                          ; width-16
+                ld      b, a
+                ld      a, (disasm_li_mwp_s)
+                sub     b                           ; s - (width-16)
+                ld      c, a                        ; C = rhs
+                ld      a, (disasm_li_immr)
+                and     &0f                         ; r mod 16
+                cp      c
+                jr      z, disasm_li_mwp_true
+                jr      c, disasm_li_mwp_true       ; r%16 < rhs
+                jr      disasm_li_mwp_false
+disasm_li_mwp_true:
+                xor     a                           ; Z set = true
+                ret
+disasm_li_mwp_false:
+                or      1                           ; Z clear = false
+                ret
+
+
+; --- logical-imm mnemonic strings + table (index opc) -----------------
+disasm_li_and_txt:      defm    "and"
+                        defb    0
+disasm_li_orr_txt:      defm    "orr"
+                        defb    0
+disasm_li_eor_txt:      defm    "eor"
+                        defb    0
+disasm_li_ands_txt:     defm    "ands"
+                        defb    0
+disasm_li_mov_txt:      defm    "mov"
+                        defb    0
+disasm_li_tst_txt:      defm    "tst"
+                        defb    0
+disasm_li_mnem_tbl:     defw    disasm_li_and_txt   ; opc 00 and
+                        defw    disasm_li_orr_txt   ; opc 01 orr
+                        defw    disasm_li_eor_txt   ; opc 10 eor
+                        defw    disasm_li_ands_txt  ; opc 11 ands
+
+; --- logical-imm working scratch (this page) --------------------------
+disasm_li_sf:           defb    0
+disasm_li_opc:          defb    0
+disasm_li_n:            defb    0
+disasm_li_immr:         defb    0
+disasm_li_imms:         defb    0
+disasm_li_rn:           defb    0
+disasm_li_rd:           defb    0
+disasm_li_spable:       defb    0
+disasm_li_length:       defb    0
+disasm_li_esize:        defb    0
+disasm_li_levels:       defb    0
+disasm_li_s:            defb    0
+disasm_li_r:            defb    0
+disasm_li_mwp_width:    defb    0
+disasm_li_mwp_s:        defb    0
 
 
 ; =======================================================================
@@ -1919,6 +2888,11 @@ disasm_pow10_tbl:
 ;   &76 — load/store pair stp check failed (mnemonic or operands).
 ;   &75 — load/store ldrb check failed (mnemonic or operands).
 ;   &74 — load/store register-offset ldr check failed (mnemonic or operands).
+;   &73 — add/sub-imm add check failed (mnemonic or operands).
+;   &72 — add/sub-imm cmp check failed (mnemonic or operands).
+;   &71 — logical-imm mov (orr bitmask alias) check failed.
+;   &70 — logical-imm and check failed (mnemonic or operands).
+;   &6F — logical-imm non-canonical → .inst check failed.
 ; Clobbers: A, DE, HL, F (paged_call ABI; BC is the return value).
 ; -----------------------------------------------------------------------
 run_disasm_self_test:
@@ -2063,6 +3037,74 @@ run_disasm_self_test:
                 call    disasm_stest_strcmp
                 jp      nz, disasm_stest_fail_ldrro
 
+; add/sub immediate: kept add.  91000000 → "add", "x0, x0, #0x0".
+                ld      bc, &9100
+                ld      ix, &0000
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_add_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_addi
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_add_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_addi
+
+; add/sub immediate: cmp alias.  F100301F → "cmp", "x0, #0xc".
+                ld      bc, &F100
+                ld      ix, &301F
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_cmp_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_cmpi
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_cmp_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_cmpi
+
+; logical immediate: orr-bitmask mov alias.  B202E7EF → "mov",
+; "x15, #0xcccccccccccccccc".
+                ld      bc, &B202
+                ld      ix, &E7EF
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_limov_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_limov
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_limov_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_limov
+
+; logical immediate: and base.  927E0400 → "and", "x0, x0, #0xc".
+                ld      bc, &927E
+                ld      ix, &0400
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_and_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_andi
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_and_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_andi
+
+; logical immediate: non-canonical immr (immr>=esize) → .inst.
+; 32200013 = orr w19,w0,#0x1 with esize=32, immr=32 → decodeBitMasks
+; rejects (immr & levels != immr) → ".inst", "0x32200013".
+                ld      bc, &3220
+                ld      ix, &0013
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_inst_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_noncanon
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_noncanon_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_noncanon
+
                 ld      bc, 0
                 ret
 
@@ -2098,6 +3140,21 @@ disasm_stest_fail_ldrb:
                 ret
 disasm_stest_fail_ldrro:
                 ld      bc, &74
+                ret
+disasm_stest_fail_addi:
+                ld      bc, &73
+                ret
+disasm_stest_fail_cmpi:
+                ld      bc, &72
+                ret
+disasm_stest_fail_limov:
+                ld      bc, &71
+                ret
+disasm_stest_fail_andi:
+                ld      bc, &70
+                ret
+disasm_stest_fail_noncanon:
+                ld      bc, &6F
                 ret
 
 ; disasm_stest_strcmp — compare null-terminated strings at (HL) and (DE).
@@ -2145,4 +3202,24 @@ disasm_stest_ldrb_ops_expect:   defm    "w16, [x12, #200]"
 disasm_stest_ldr_expect:        defm    "ldr"
                                 defb    0
 disasm_stest_ldrro_ops_expect:  defm    "x3, [x2, x0, lsl #3]"
+                                defb    0
+disasm_stest_add_expect:        defm    "add"
+                                defb    0
+disasm_stest_add_ops_expect:    defm    "x0, x0, #0x0"
+                                defb    0
+disasm_stest_cmp_expect:        defm    "cmp"
+                                defb    0
+disasm_stest_cmp_ops_expect:    defm    "x0, #0xc"
+                                defb    0
+disasm_stest_limov_expect:      defm    "mov"
+                                defb    0
+disasm_stest_limov_ops_expect:  defm    "x15, #0xcccccccccccccccc"
+                                defb    0
+disasm_stest_and_expect:        defm    "and"
+                                defb    0
+disasm_stest_and_ops_expect:    defm    "x0, x0, #0xc"
+                                defb    0
+disasm_stest_inst_expect:       defm    ".inst"
+                                defb    0
+disasm_stest_noncanon_ops_expect: defm  "0x32200013"
                                 defb    0
