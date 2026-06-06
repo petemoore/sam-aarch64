@@ -206,11 +206,12 @@ try_intercept_shifted_dispatch:
 try_intercept_post_shift:
 
 ; -- Memory mnemonics (M5 PR-C Tasks 7-10) ----------------------------
-; Eleven mnemonics share the OpMem encoder family:
+; Fifteen mnemonics share the OpMem encoder family:
 ;   ldr=5    str=6    ldp=7    stp=8
 ;   ldrb=54  strb=55  ldrh=56  strh=57
 ;   stur=74  ldur=75
 ;   ldrsb=85 ldrsh=86 ldrsw=87
+;   sturh=94 sturb=95 ldurh=96 ldurb=97
 ;
 ; Dispatch model:
 ;   - LDP / STP (ID 7 / 8) have 3 operands; operand 2 is OpMem.
@@ -448,11 +449,12 @@ try_intercept_no_match:
 
 
 ; -----------------------------------------------------------------------
-; is_mem_mnemonic_id — Z=1 if A is one of the eleven memory mnemonics.
+; is_mem_mnemonic_id — Z=1 if A is one of the fifteen memory mnemonics.
 ;   ldr=5 / str=6 / ldp=7 / stp=8 /
 ;   ldrb=54 / strb=55 / ldrh=56 / strh=57 /
 ;   stur=74 / ldur=75 /
-;   ldrsb=85 / ldrsh=86 / ldrsw=87.
+;   ldrsb=85 / ldrsh=86 / ldrsw=87 /
+;   sturh=94 / sturb=95 / ldurh=96 / ldurb=97.
 ; Preserves A.
 ; -----------------------------------------------------------------------
 is_mem_mnemonic_id:
@@ -481,6 +483,14 @@ is_mem_mnemonic_id:
                 cp      86
                 ret     z
                 cp      87
+                ret     z
+                cp      94
+                ret     z
+                cp      95
+                ret     z
+                cp      96
+                ret     z
+                cp      97
                 ret
 
 

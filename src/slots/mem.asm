@@ -65,11 +65,19 @@ encode_mem_word:
 ;    encode_mem_scale / encode_mem_opc.
                 call    mem_size_scale_opc
 
-; -- Branch on unscaled mnemonics (stur=74, ldur=75) ------------------
+; -- Branch on unscaled mnemonics (stur=74/ldur=75/sturh=94/sturb=95/ldurh=96/ldurb=97) --
                 ld      a, (encode_mem_mnem)
                 cp      74
                 jp      z, encode_mem_unscaled
                 cp      75
+                jp      z, encode_mem_unscaled
+                cp      94
+                jp      z, encode_mem_unscaled
+                cp      95
+                jp      z, encode_mem_unscaled
+                cp      96
+                jp      z, encode_mem_unscaled
+                cp      97
                 jp      z, encode_mem_unscaled
 
 ; -- Branch on shape ---------------------------------------------------
@@ -590,11 +598,19 @@ mem_size_scale_opc:
                 jp      z, mem_szop_byte
                 cp      85                  ; ldrsb
                 jp      z, mem_szop_byte
+                cp      95                  ; sturb
+                jp      z, mem_szop_byte
+                cp      97                  ; ldurb
+                jp      z, mem_szop_byte
                 cp      56                  ; ldrh
                 jp      z, mem_szop_hword
                 cp      57                  ; strh
                 jp      z, mem_szop_hword
                 cp      86                  ; ldrsh
+                jp      z, mem_szop_hword
+                cp      94                  ; sturh
+                jp      z, mem_szop_hword
+                cp      96                  ; ldurh
                 jp      z, mem_szop_hword
                 cp      87                  ; ldrsw
                 jp      z, mem_szop_ldrsw
@@ -677,9 +693,9 @@ mem_szop_signed_xt:
 
 ; ---------------------------------------------------------------------
 ; is_mem_load_mnemonic — Z=1 if A is a load (ldr=5, ldp=7, ldrb=54,
-; ldrh=56, ldur=75, ldrsb=85, ldrsh=86, ldrsw=87).  Mirrors
-; isLoadMnemonic in refenc/pass2.go:642-650 (with the ID renumbering for
-; the post-PR-#26 table).  Preserves nothing other than A on entry.
+; ldrh=56, ldur=75, ldrsb=85, ldrsh=86, ldrsw=87, ldurh=96, ldurb=97).
+; Mirrors isLoadMnemonic in refenc/pass2.go:642-650.
+; Preserves nothing other than A on entry.
 ; ---------------------------------------------------------------------
 is_mem_load_mnemonic:
                 cp      5
@@ -697,6 +713,10 @@ is_mem_load_mnemonic:
                 cp      86
                 ret     z
                 cp      87
+                ret     z
+                cp      96
+                ret     z
+                cp      97
                 ret
 
 

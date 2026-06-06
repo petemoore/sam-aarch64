@@ -438,6 +438,13 @@ var manualForms = []Form{
 
 	// -----------------------------------------------------------------
 	// madd (ID 58) — Multiply-Add.  ARM ARM C6.2.103.
+	// 32-bit: sf=0 → 0x1b000000.  64-bit: sf=1 → 0x9b000000.
+	{MnemonicID: 58, Pattern: 0x1b000000, Mask: 0xff008000, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},  // Rd
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},  // Rn
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5}, // Rm
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 10, BitWidth: 5}, // Ra
+	}},
 	{MnemonicID: 58, Pattern: 0x9b000000, Mask: 0xff008000, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},  // Rd
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},  // Rn
@@ -446,6 +453,13 @@ var manualForms = []Form{
 	}},
 
 	// msub (ID 59) — Multiply-Subtract.  ARM ARM C6.2.120.  bit15=1.
+	// 32-bit: sf=0 → 0x1b008000.  64-bit: sf=1 → 0x9b008000.
+	{MnemonicID: 59, Pattern: 0x1b008000, Mask: 0xff008000, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},  // Rd
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},  // Rn
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5}, // Rm
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 10, BitWidth: 5}, // Ra
+	}},
 	{MnemonicID: 59, Pattern: 0x9b008000, Mask: 0xff008000, Slots: []OperandSlot{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},  // Rd
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},  // Rn
@@ -714,6 +728,23 @@ var manualForms = []Form{
 	{MnemonicID: 93, Pattern: 0x53003c00, Mask: 0xfffffc00, Slots: []OperandSlot{
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
 		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+	}},
+
+	// -----------------------------------------------------------------
+	// adds (ID 98) — Add and Set Flags (full 3-operand form).
+	// ARM ARM C6.2.6.  The MRA emits only the ADDS WZR/XZR alias (== cmn);
+	// add the full Rd form here, symmetric with subs (ID 45).
+	// 32-bit: sf=0 op=0 S=1 10001 → base 0x31000000.
+	// 64-bit: sf=1 op=0 S=1 10001 → base 0xb1000000.
+	{MnemonicID: 98, Pattern: 0x31000000, Mask: 0xff800000, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Imm12Shifted, ExpectedKind: 5, BitPosition: 10, BitWidth: 12},
+	}},
+	{MnemonicID: 98, Pattern: 0xb1000000, Mask: 0xff800000, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Imm12Shifted, ExpectedKind: 5, BitPosition: 10, BitWidth: 12},
 	}},
 }
 

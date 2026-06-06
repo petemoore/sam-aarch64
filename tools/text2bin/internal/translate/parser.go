@@ -449,10 +449,10 @@ func (p *parser) parseInst(t Tok) error {
 
 // isShiftedImmMnemonic reports whether a mnemonic accepts the
 // `, lsl #N` (N=0|12) suffix on its immediate operand. This is the
-// arithmetic-immediate family (add/sub/subs/cmp).
+// arithmetic-immediate family (add/sub/adds/subs/cmp).
 func isShiftedImmMnemonic(id uint16) bool {
 	switch id {
-	case 1, 2, 19, 45: // add, sub, cmp, subs
+	case 1, 2, 19, 45, 98: // add, sub, cmp, subs, adds
 		return true
 	}
 	return false

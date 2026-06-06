@@ -640,10 +640,10 @@ func encodeLdrLitPoolInst(operands []format.Operand, pc int64, p1 *Pass1Result) 
 // mnemonicIsLoad returns true when mnemonicID is ldr or similar load.
 // Returns false for str/stp etc. Used to set the L bit in memory encodings.
 func isLoadMnemonic(mnemonicID uint16) bool {
-	// ldr=5, ldp=7, ldrb=54, ldrh=56, ldur=76,
-	// ldrsb=86, ldrsh=87, ldrsw=88.
+	// ldr=5, ldp=7, ldrb=54, ldrh=56, ldur=75,
+	// ldrsb=85, ldrsh=86, ldrsw=87, ldurh=96, ldurb=97.
 	switch mnemonicID {
-	case 5, 7, 54, 56, 75, 85, 86, 87:
+	case 5, 7, 54, 56, 75, 85, 86, 87, 96, 97:
 		return true
 	}
 	return false
@@ -657,12 +657,15 @@ func isSignedExtendLoad(mnemonicID uint16) bool {
 	return mnemonicID == 85 || mnemonicID == 86 || mnemonicID == 87
 }
 
-// isUnscaledMemMnemonic reports stur(75) / ldur(76) — the unscaled
-// load/store family (ARM ARM C6.2.276 / C6.2.124). These share the
-// encoding template with LDR/STR (unscaled offset) but are emitted by
-// GNU as for any STUR/LDUR mnemonic regardless of offset value.
+// isUnscaledMemMnemonic reports the unscaled load/store family
+// (ARM ARM C6.2.276 / C6.2.124 and the halfword/byte variants).
+// stur=74, ldur=75, sturh=94, sturb=95, ldurh=96, ldurb=97.
 func isUnscaledMemMnemonic(mnemonicID uint16) bool {
-	return mnemonicID == 74 || mnemonicID == 75
+	switch mnemonicID {
+	case 74, 75, 94, 95, 96, 97:
+		return true
+	}
+	return false
 }
 
 // memInstSize returns the AArch64 "size" field (bits 31:30) and the byte
@@ -873,15 +876,29 @@ func encodeMemInst(mnemonicID uint16, operands []format.Operand, pc int64, p1 *P
 // the STUR/LDUR family.
 func encodeUnscaledMemInst(mnemonicID uint16, rtOp format.Operand, rt byte, mem format.Operand, pc int64, p1 *Pass1Result, f *format.File) (uint32, error) {
 	isLoad := isLoadMnemonic(mnemonicID)
-	// size bits: 0b10 for W, 0b11 for X.
+	// sizeBits (bits 31:30): halfword variants fix size=01, byte variants fix
+	// size=00; stur/ldur derive size from Rt width (W→10, X→11).
 	var sizeBits uint32
-	switch rtOp.Kind {
-	case format.OpRegW:
-		sizeBits = 0b10
-	case format.OpRegX:
-		sizeBits = 0b11
-	default:
-		return 0, fmt.Errorf("stur/ldur: Rt must be Wn or Xn (got kind %v)", rtOp.Kind)
+	switch mnemonicID {
+	case 94, 96: // sturh, ldurh — halfword
+		sizeBits = 0b01
+		if rtOp.Kind != format.OpRegW {
+			return 0, fmt.Errorf("sturh/ldurh: Rt must be Wn (got kind %v)", rtOp.Kind)
+		}
+	case 95, 97: // sturb, ldurb — byte
+		sizeBits = 0b00
+		if rtOp.Kind != format.OpRegW {
+			return 0, fmt.Errorf("sturb/ldurb: Rt must be Wn (got kind %v)", rtOp.Kind)
+		}
+	default: // stur=74, ldur=75 — size from Rt width
+		switch rtOp.Kind {
+		case format.OpRegW:
+			sizeBits = 0b10
+		case format.OpRegX:
+			sizeBits = 0b11
+		default:
+			return 0, fmt.Errorf("stur/ldur: Rt must be Wn or Xn (got kind %v)", rtOp.Kind)
+		}
 	}
 	var byteOffset int64
 	switch mem.MemShape {
@@ -1071,7 +1088,7 @@ func encodeShiftedRegInst(mnemonicID uint16, operands []format.Operand, pc int64
 // plain-register operands into a no-shift ShiftedReg.
 func isShiftedRegMnemonic(id uint16) bool {
 	switch id {
-	case 1, 2, 14, 15, 16, 45, 46, 47, 80: // add, sub, and, orr, eor, subs, tst, bic, ands
+	case 1, 2, 14, 15, 16, 45, 46, 47, 80, 98: // add, sub, and, orr, eor, subs, tst, bic, ands, adds
 		return true
 	}
 	return false
@@ -1111,6 +1128,8 @@ func shiftedRegMnemonicFields(mnemonicID uint16, is64 bool) (sf, opc, nBit uint3
 		return sf, 0b10, 0, true, nil
 	case 45: // subs (shifted-reg): opc=11
 		return sf, 0b11, 0, false, nil
+	case 98: // adds (shifted-reg): opc=01
+		return sf, 0b01, 0, false, nil
 	case 46: // tst = ands (shifted-reg, N=0): opc=11 (ANDS discards result)
 		return sf, 0b11, 0, true, nil
 	case 47: // bic (shifted-reg, N=1): AND NOT

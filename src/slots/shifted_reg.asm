@@ -242,6 +242,7 @@ shifted_reg_table:
                 defb    46,       3,   0,    1    ; tst  — logical (Rd=xzr)
                 defb    47,       0,   1,    1    ; bic  — logical N=1
                 defb    80,       3,   0,    1    ; ands — logical
+                defb    98,       1,   0,    0    ; adds — arith opc=01
                 defb    &ff                       ; sentinel
 
 

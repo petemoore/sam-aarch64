@@ -128,6 +128,15 @@ var MnemonicTable = []string{
 	// uxth: Unsigned-extend Halfword — alias of UBFM Wd, Wn, #0, #15 (ARM ARM C6.2.227).
 	//       Only W-form (sf=0).
 	"sxth", "sxtb", "uxtb", "uxth",
+	// Unscaled halfword/byte load-store (ARM ARM C6.2.279/C6.2.276/C6.2.118/C6.2.115).
+	// sturh/ldurh: halfword (size=01); sturb/ldurb: byte (size=00).
+	// Register is always Wn; the size field is fixed by the mnemonic, not Rt width.
+	// IDs 94-97, symmetric with stur=74/ldur=75.
+	"sturh", "sturb", "ldurh", "ldurb",
+	// adds: Add and Set Flags (ARM ARM C6.2.6). Immediate and shifted-register forms.
+	// Symmetric with subs (ID 45): same encoding template, op=0 S=1 → base 0x31/0xb1.
+	// ID 98.
+	"adds",
 }
 
 var mnemonicIndex = func() map[string]uint16 {
