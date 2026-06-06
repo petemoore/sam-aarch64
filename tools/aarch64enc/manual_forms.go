@@ -551,6 +551,20 @@ var manualForms = []Form{
 		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},
 	}},
 
+	// sdiv (ID 99) — Signed Divide.  ARM ARM C6.2.202.
+	// Mirrors udiv (ID 72) exactly with opcode bit10 set:
+	// udiv base 0x1ac00800 (opcode 000010), sdiv base 0x1ac00c00 (opcode 000011).
+	{MnemonicID: 99, Pattern: 0x1ac00c00, Mask: 0xffe0fc00, Slots: []OperandSlot{
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Wreg, ExpectedKind: 2, BitPosition: 16, BitWidth: 5},
+	}},
+	{MnemonicID: 99, Pattern: 0x9ac00c00, Mask: 0xffe0fc00, Slots: []OperandSlot{
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 0, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 5, BitWidth: 5},
+		{SlotKind: Xreg, ExpectedKind: 1, BitPosition: 16, BitWidth: 5},
+	}},
+
 	// sxtw (ID 73) — Sign-extend Word; alias of SBFM Xd,Xn,0,31.
 	// ARM ARM C6.2.214.  immr=0, imms=31 baked.
 	{MnemonicID: 73, Pattern: 0x93407c00, Mask: 0xfffffc00, Slots: []OperandSlot{
