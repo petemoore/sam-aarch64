@@ -7,8 +7,7 @@
 # same image to run `make ci`. Local devs `docker pull` it too. One
 # recipe everywhere.
 #
-# Build context is `tools/` (so the vendored simcoupé patch is at the
-# root of the context):
+# Build context is `tools/`:
 #
 #     docker build -t sam-aarch64-dev:latest -f tools/Dockerfile.dev tools/
 #     docker run -d --name sam-aarch64-ci \
@@ -23,9 +22,6 @@
 #
 # On Apple Silicon, `docker pull` will fetch the native arm64 manifest
 # from the published image (multi-arch build covers amd64 + arm64).
-# If you're iterating on `simcoupe-exitonhalt.patch` itself, rebuild
-# in-container per `docs/notes/headless-simcoupe.md` rather than
-# rebuilding the image each time.
 
 FROM ubuntu:24.04
 
@@ -64,10 +60,11 @@ RUN git clone --depth 1 https://github.com/simonowen/pyz80 /tmp/pyz80 \
  && pip install --break-system-packages /tmp/pyz80 \
  && rm -rf /tmp/pyz80
 
-# ── Patched SimCoupé ─────────────────────────────────────────────────
+# ── SimCoupé ─────────────────────────────────────────────────────────
 # Stock apt simcoupé lacks the `-exitonhalt` flag we need for
 # deterministic batch exit, so we build from source against a pinned
-# upstream SHA and apply the vendored patch.
+# upstream SHA. Upstream v1.2.16 ships `-exitonhalt` natively, so the
+# build is a plain clone → fetch SHA → checkout → cmake.
 #
 # Artefacts placed in the image:
 #   /usr/local/bin/simcoupe                — binary
@@ -95,28 +92,23 @@ RUN git clone --depth 1 https://github.com/simonowen/pyz80 /tmp/pyz80 \
 #                                            loader happy.
 #
 # Bumping SIMCOUPE_SHA is the one-line knob for picking up upstream
-# fixes; the patch file should apply cleanly against the new SHA, or
-# the build will fail loudly at `git apply --check`.
+# fixes. Pinned to upstream v1.2.16, which carries `-exitonhalt`.
 #
 # This block is deliberately placed BEFORE the samfile layer
-# below: SimCoupé inputs (the SHA + patch file) change rarely,
-# while the Go layer changes on most pushes during active development.
-# Keeping this layer earlier in the chain means it stays cached through
-# normal code iterations.
-ARG SIMCOUPE_SHA=0f74cff52b96841fe0efa01ffd1a6875b253e72a
-COPY simcoupe-exitonhalt.patch /tmp/
+# below: the SimCoupé SHA changes rarely, while the Go layer changes
+# on most pushes during active development. Keeping this layer earlier
+# in the chain means it stays cached through normal code iterations.
+ARG SIMCOUPE_SHA=0e8a69f3096fe00a00a29bd2303db6a7358021ad
 RUN git clone https://github.com/simonowen/simcoupe.git /tmp/simcoupe \
  && cd /tmp/simcoupe \
  && git fetch --depth=1 origin "$SIMCOUPE_SHA" \
  && git checkout "$SIMCOUPE_SHA" \
- && git apply --check /tmp/simcoupe-exitonhalt.patch \
- && git apply /tmp/simcoupe-exitonhalt.patch \
  && cmake -B build -DCMAKE_BUILD_TYPE=Release \
  && cmake --build build -j"$(nproc)" \
  && cmake --install build \
  && cp build/_deps/saasound-build/libSAASound.so.3 /usr/local/lib/ \
  && ldconfig \
- && rm -rf /tmp/simcoupe /tmp/simcoupe-exitonhalt.patch
+ && rm -rf /tmp/simcoupe
 
 # ── samfile ──────────────────────────────────────────────────────────
 # Pete's Go-based MGT inspector / file-injector. The `/v3` suffix is

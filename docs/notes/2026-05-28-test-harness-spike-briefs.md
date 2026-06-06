@@ -142,9 +142,9 @@ report what blocked you.
 
 ## Precedent
 
-The repo already vendor-patches SimCoupé via
-`tools/simcoupe-exitonhalt.patch` (now superseded by upstream
-v1.2.16). Pete has a `sdl-paste-clipboard` branch in
+The repo builds SimCoupé from upstream v1.2.16 source, which ships
+`-exitonhalt` natively (an earlier vendored patch added it before it
+landed upstream). Pete has a `sdl-paste-clipboard` branch in
 `~/git/simcoupe/` with macOS Paste support. The codebase is
 SimCoupé v1.x — C++ — small enough that adding three flags to the
 Z80 instruction dispatch + the HALT handler is plausible work.

@@ -3,9 +3,9 @@
 The single source of truth for what SimCoupé needs in a headless
 environment — Linux container, no display, no audio. Everything in
 this doc is empirically verified against the live `sam-aarch64-ci`
-container and against `simcoupe` v1.2.15 (upstream pinned commit
-`0f74cff52b96841fe0efa01ffd1a6875b253e72a`) plus the vendored patch
-at `tools/simcoupe-exitonhalt.patch`.
+container and against `simcoupe` v1.2.16 (upstream pinned commit
+`0e8a69f3096fe00a00a29bd2303db6a7358021ad`), which ships `-exitonhalt`
+natively.
 
 ## TL;DR — the working incantation
 
@@ -19,7 +19,7 @@ simcoupe -exitonhalt 1 -fullscreen 0 -firstrun 0 disk.mgt
 ```
 
 Exit codes:
-- `0` — Z80 hit `DI; HALT`; clean exit via the `-exitonhalt` patch.
+- `0` — Z80 hit `DI; HALT`; clean exit via `-exitonhalt`.
 - `124` — `timeout` killed it (boot didn't reach the exit signal in time).
 - `134`, `139` etc. — crash; investigate.
 
@@ -152,23 +152,19 @@ docker exec sam-aarch64-ci bash -lc '
 '
 ```
 
-## Working on the simcoupé patch
+## Rebuilding simcoupé in-place
 
-The image pre-builds SimCoupé from `tools/simcoupe-exitonhalt.patch`,
-so changing the patch normally requires rebuilding the image (slow,
-multi-arch, ~minutes) before you can test the change. To iterate on
-the patch faster, rebuild SimCoupé in-place inside an existing
-container instead:
+The image builds SimCoupé from the pinned upstream SHA. To rebuild it
+inside an existing container (e.g. to test a different SHA) without
+rebuilding the whole Docker image:
 
 ```bash
 docker exec sam-aarch64-ci bash -lc '
-    PINNED_SHA=0f74cff52b96841fe0efa01ffd1a6875b253e72a
+    PINNED_SHA=0e8a69f3096fe00a00a29bd2303db6a7358021ad
     cd /tmp && rm -rf simcoupe
     git clone https://github.com/simonowen/simcoupe.git
     cd simcoupe && git fetch --depth=1 origin "$PINNED_SHA"
     git checkout "$PINNED_SHA"
-    git apply --check /work/tools/simcoupe-exitonhalt.patch
-    git apply /work/tools/simcoupe-exitonhalt.patch
     cmake -B build -DCMAKE_BUILD_TYPE=Release
     cmake --build build -j$(nproc)
     cmake --install build
@@ -178,28 +174,27 @@ docker exec sam-aarch64-ci bash -lc '
 ```
 
 That replaces `/usr/local/bin/simcoupe` and the ROM resources without
-rebuilding the whole Docker image. When you're happy with the patch,
-commit it and let CI rebuild the image properly.
+rebuilding the whole Docker image. To make a SHA change permanent, bump
+`SIMCOUPE_SHA` in `tools/Dockerfile.dev` and let CI rebuild the image.
 
 ## Native macOS (no Docker)
 
-Native macOS works end-to-end with a few quirks. The stock
-`/Applications/SimCoupe.app` is unpatched, so the round-trip oracle's
-exit detection won't fire against it — the test would hit its 30s
-timeout. You need to build a patched binary from source.
+Native macOS works end-to-end with a few quirks. A stale stock
+`/Applications/SimCoupe.app` predating v1.2.16 lacks `-exitonhalt`, so
+the round-trip oracle's exit detection won't fire against it — the test
+would hit its 30s timeout. Build a v1.2.16+ binary from source.
 
 ```bash
 # 1. Brew dep (one-time; sdl2 fmt libpng cmake assumed already present).
 brew install libsamplerate
 
-# 2. Clone simcoupé and apply the vendored patch.
+# 2. Clone simcoupé at the pinned SHA.
 cd ~/git
 git clone https://github.com/simonowen/simcoupe.git   # if not already there
 cd simcoupe
-PINNED_SHA=0f74cff52b96841fe0efa01ffd1a6875b253e72a
+PINNED_SHA=0e8a69f3096fe00a00a29bd2303db6a7358021ad
 git fetch --depth=1 origin "$PINNED_SHA"
 git checkout "$PINNED_SHA"
-git apply /Users/pmoore/git/sam-aarch64/tools/simcoupe-exitonhalt.patch
 
 # 3. Build. The non-obvious CMake hints:
 #    - CMAKE_PREFIX_PATH=/opt/homebrew so find_package(SDL2) finds brew SDL2
@@ -241,10 +236,10 @@ di
 halt              ; HALT with IFF1=0 — caught by sam_cpu::on_halt
 ```
 
-The patched SimCoupé's `on_halt` override fires when the Z80 executes
-HALT with `IFF1=0`, sets a quit flag, and the main `Run()` loop exits
-on the next iteration. This is the conventional Z80 "we are done"
-idiom — a HALT with interrupts disabled can never be woken by a
+With `-exitonhalt 1`, SimCoupé's `on_halt` override fires when the Z80
+executes HALT with `IFF1=0`, sets a quit flag, and the main `Run()`
+loop exits on the next iteration. This is the conventional Z80 "we are
+done" idiom — a HALT with interrupts disabled can never be woken by a
 maskable interrupt, so it's unambiguous.
 
 The `di` immediately before `halt` is load-bearing. SAMDOS's RST 8
@@ -253,21 +248,16 @@ dispatcher (ROM `PTDOS`) does `EI` inside the hook window, so the
 this point after HSAVE. Without the trailing `di`, `IFF1=1` and
 `on_halt`'s quit check correctly does not trigger.
 
-An earlier iteration of the patch added a second exit mechanism — a
-magic `OUT (&DEAD), &C0` port write caught by `sam_cpu::on_output` —
-in the belief that `on_halt` CRTP dispatch was unreliable on some
-platforms. That diagnosis was wrong: the underlying bug was the
-missing trailing `di`, not the dispatch. With the `di` in place,
-`on_halt` fires reliably on every toolchain tested (Apple clang on
-arm64, gcc-13 on Linux amd64+arm64, GHA `ubuntu-latest`). The
-`on_output` override was removed and the patch shrank to a single
-commit; the upstream PR (`simonowen/simcoupe#109`) reflects that.
+With the `di` in place, `on_halt` fires reliably on every toolchain
+tested (Apple clang on arm64, gcc-13 on Linux amd64+arm64, GHA
+`ubuntu-latest`). `-exitonhalt` is upstream as of v1.2.16 (Simon's
+`a65a16e`, his re-implementation of our closed PR
+`simonowen/simcoupe#109`).
 
 ## Related files
 
 - `tools/Dockerfile.dev` — image recipe (single source of truth for CI
-  and local dev).
-- `tools/simcoupe-exitonhalt.patch` — vendored SimCoupé patch.
+  and local dev); pins the upstream SimCoupé SHA.
 - `tools/run-simcoupe.sh` — invocation wrapper used by `make`.
 - `.github/workflows/ci.yml` — builds + publishes the image; runs the
   round-trip in it.
