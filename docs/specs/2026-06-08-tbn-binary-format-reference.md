@@ -1,8 +1,20 @@
 # `.tbn` binary tokenised format — complete encoding reference
 
-**Status**: living reference, current as of 2026-06-08. This is the
-single normative description of the on-disk `.tbn` format as actually
-implemented. It **supersedes the format sections (§2–§6) of the M1
+> ⚠️ **Being superseded by the v2 overlay-only format (M8 / i39 + i48).** This
+> doc describes the **v1 / symbolic** format, which is what `main` serializes
+> *today* (the v2 work is on the `i39a-instruction-overlay` branch, unmerged).
+> Under the agreed design the v1 symbolic record kinds (`KindInst`/`LabelDef`/
+> `LocalDef`/`LitInsts`) are retired — the compact **overlay** (`INSN_RUN` +
+> `LIT_DATA`) becomes the *only* serialized form, and this reference will be
+> **rewritten to overlay-only** when v2 lands (item **i48d**). See
+> `docs/specs/2026-06-08-compact-tbn-nextgen-design.md` (format) and
+> `docs/specs/2026-06-08-i48-single-format-syntactic-encoder-design.md`
+> (the single-format + syntactic-encoder decisions). Until then, the **v1**
+> description below is accurate for `main`.
+
+**Status**: living reference for the **v1 / symbolic** format, current as of
+2026-06-08. This is the single normative description of the on-disk v1 `.tbn`
+format as actually implemented on `main`. It **supersedes the format sections (§2–§6) of the M1
 design spec** (`docs/specs/2026-05-23-m1-binary-tokenised-format-design.md`),
 which is now a historical milestone record and predates several
 additions (`KindLitInsts`, `OpLitPool`, the grown directive table).
