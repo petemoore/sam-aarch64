@@ -7,8 +7,10 @@ package format
 //
 //   - The Go authority in this package (namedSysRegs, pstateFields,
 //     dcOps, tlbiOps).
-//   - The Z80 page-13 payload src/sysreg_data.asm, which the SAM
-//     assembler HLOADs and walks at runtime.
+//   - The Z80 table bytes in src/sysreg_tables.inc, the single source of
+//     truth `include`d by BOTH the page-13 matcher (src/sysreg_data.asm,
+//     which the SAM assembler HLOADs and walks at runtime) and the
+//     page-15 disassembler (src/disasm.asm via src/sysreg_names.inc).
 //
 // The audit flagged this hand-sync as a real drift hazard: adding or
 // editing a register on one side and forgetting the other would pass
@@ -20,14 +22,14 @@ package format
 // everything else is handled at runtime by the generic Sn_op1_Cm_Cn_op2
 // parser). So the invariant we enforce is:
 //
-//	every entry present in src/sysreg_data.asm MUST appear in the
+//	every entry present in src/sysreg_tables.inc MUST appear in the
 //	corresponding Go map with a BYTE-IDENTICAL encoding.
 //
 // A Z80 entry whose name is absent from Go, or whose (op0,op1,CRn,CRm,
 // op2) / (op1,op2) / (op1,CRn,CRm,op2) / (op1,CRn,CRm,op2,NeedsXt) fields
 // disagree with Go, fails the test with a precise diff.
 //
-// Parsing strategy: we read sysreg_data.asm, isolate each `<name>_table:`
+// Parsing strategy: we read sysreg_tables.inc, isolate each `<name>_table:`
 // section, flatten every `defb`/`defm` byte in source order into one byte
 // stream, then decode records exactly the way the Z80 matcher (do_match in
 // sysreg_data.asm) does — `[name_len u8][name bytes][N field bytes]`,
@@ -45,7 +47,8 @@ import (
 	"testing"
 )
 
-// asmPath returns the absolute path to src/sysreg_data.asm, resolved
+// asmPath returns the absolute path to src/sysreg_tables.inc — the shared
+// single source of truth for the four table byte streams — resolved
 // relative to this test file's own location so it works regardless of the
 // caller's working directory (go test sets cwd to the package dir).
 func asmPath(t *testing.T) string {
@@ -56,13 +59,13 @@ func asmPath(t *testing.T) string {
 	}
 	// thisFile = <repo>/tools/sam-aarch64-format/sysregs_z80sync_test.go
 	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
-	p := filepath.Join(repoRoot, "src", "sysreg_data.asm")
+	p := filepath.Join(repoRoot, "src", "sysreg_tables.inc")
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		t.Fatalf("resolving asm path: %v", err)
 	}
 	if _, err := os.Stat(abs); err != nil {
-		t.Fatalf("sysreg_data.asm not found at %s: %v", abs, err)
+		t.Fatalf("sysreg_tables.inc not found at %s: %v", abs, err)
 	}
 	return abs
 }
@@ -92,7 +95,7 @@ func parseTableBytes(t *testing.T, src, label string) []byte {
 		}
 	}
 	if start < 0 {
-		t.Fatalf("table label %q not found in sysreg_data.asm", label)
+		t.Fatalf("table label %q not found in sysreg_tables.inc", label)
 	}
 
 	var out []byte
@@ -198,7 +201,7 @@ func readAsm(t *testing.T) string {
 	t.Helper()
 	data, err := os.ReadFile(asmPath(t))
 	if err != nil {
-		t.Fatalf("reading sysreg_data.asm: %v", err)
+		t.Fatalf("reading sysreg_tables.inc: %v", err)
 	}
 	return string(data)
 }
@@ -223,9 +226,9 @@ func checkSubset(t *testing.T, table string, z80 []z80Entry, goFields func(name 
 	}
 	if len(problems) > 0 {
 		sort.Strings(problems)
-		t.Errorf("%s: Z80 src/sysreg_data.asm disagrees with Go tools/sam-aarch64-format:\n%s\n\n"+
+		t.Errorf("%s: Z80 src/sysreg_tables.inc disagrees with Go tools/sam-aarch64-format:\n%s\n\n"+
 			"These two tables are hand-synced — update BOTH sides (see the header "+
-			"comments in sysreg_data.asm and sysregs.go).", table, strings.Join(problems, "\n"))
+			"comments in sysreg_tables.inc and sysregs.go).", table, strings.Join(problems, "\n"))
 	}
 }
 
