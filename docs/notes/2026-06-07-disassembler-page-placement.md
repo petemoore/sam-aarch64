@@ -266,15 +266,19 @@ Go source scan raises this to 3–4 KB, still well within one 16 KB page.
 
 ## 7. Remaining open questions
 
-1. **String output ABI** — the Go disassembler returns `(mnem, operands
-   string)`.  The Z80 port needs an output convention.  Candidates:
-   (a) two null-terminated strings written to a section-B comm buffer
-   (same pattern as the sysreg comm buffer at `SYSREG_COMM_NAME`), or
-   (b) a single pre-formatted string with a tab separator into an
-   output buffer already mapped in section D.  Option (a) matches the
-   existing `paged_call` ABI; option (b) is slightly simpler to
-   render but requires section D to hold the output buffer at call
-   time.  Needs design before the Z80 port begins.
+1. **String output ABI** — **✅ DECIDED: two null-terminated strings
+   packed into a 36-byte section-B comm buffer, placed just below
+   `TRAMPOLINE_DST` (`&7E00`).**  Layout: `DISASM_COMM_MNEM` (mnemonic,
+   null-terminated) immediately followed by `DISASM_COMM_OPS` (operands,
+   null-terminated); total reservation `DISASM_COMM_LEN equ 36`.  Size
+   justified by the longest decoded instruction in our subset:
+   `ldrsw x29, [x30, x28, sxtx #2]` → `"ldrsw\0"` (6 B) +
+   `"x29, [x30, x28, sxtx #2]\0"` (26 B) = 32 B, leaving 4 B headroom.
+   Section D is unavailable as a comm buffer (it remaps to page 16
+   during the HMPR=15 call; writes there are lost on HMPR restore).
+   Buffer is short-lived: caller copies it out immediately after return.
+   `DISASM_COMM_LEN` is a single named constant — bump it if a future
+   instruction doesn't fit.
 
 2. **PC-relative slot values** — `DecodeAt(pc, word)` feeds branch
    targets, ADR/ADRP, and LDR-literal offsets.  The Z80 port needs
