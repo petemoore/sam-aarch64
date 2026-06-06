@@ -65,14 +65,14 @@ planning session; `i13` is locked to "gitignore" to match shipped PR #107, so th
 | **i6** | SAM screen-mode decision (MODE 3 vs 4, or user preference) | 🧭 | ROADMAP "Editor vision"; scope row |
 | **i7** | Codegen sysreg/mnemonic/form tables from Go authority | 📋 | scope row |
 | **i8** | Sysreg-table de-dup into shared `src/sysreg_tables.inc` | ✅ DONE (PR #108) | `src/sysreg_tables.inc` |
-| **i9** | Parity robustness seeds (sysname fail-soft + untested-form empirical sweep) | ⏳ in progress (agent) | `docs/notes/2026-05-29-z80-go-parity-audit.md`; scope row |
+| **i9** | Parity robustness seeds (sysname full-Go-parity + untested-form empirical sweep) | ✅ DONE (PR #114) — but it *pinned* two found gaps as skipped tests; fixed under **i36/i37** | `docs/notes/2026-06-08-z80-go-disasm-parity-i9.md` |
 | **i10** | Go-vs-Z80 capability parity report | ✅ DONE (PR #109) | `docs/notes/2026-06-08-go-vs-z80-disasm-capability-parity.md` |
 | **i11** | Full ARMv8.0-A A64 ISA footprint research | ✅ DONE (PR #110) | `docs/notes/2026-06-08-armv8-a64-isa-footprint-research.md` |
-| **i12a** | SimCoupé v1.2.16 bump (pin SHA to upstream, drop vendored `-exitonhalt` patch) | ⏳ in progress (agent) | `tools/Dockerfile.dev` |
+| **i12a** | SimCoupé v1.2.16 bump (pin SHA to upstream, drop vendored `-exitonhalt` patch) | ✅ DONE (PR #112) | `tools/Dockerfile.dev` |
 | **i12b** | Editor-testing input injection (`-keyin` vs `FLAGS`/`LASTK` memory injection) | 🧭 new 2026-06-08 | `tools/run-simcoupe.sh`; for automated editor tests |
 | **i12c** | Rebase/upstream macOS+Linux paste support | ✅ RESOLVED/MOOT — upstreamed (`87f2a69`); arrives free with i12a | `~/.claude/.../memory/project_simcoupe_sdl_paste_branch.md` |
 | **i13** | gitignore in-tree Go build binaries | ✅ DONE (PR #107) | `.gitignore` |
-| **i14** | Non-canonical logical-immediate decoder tests (`decodeBitMasks` `immr≥esize` reject) | 🧭 | deferred-backlog row |
+| **i14** | Non-canonical logical-immediate decoder tests (`decodeBitMasks` `immr≥esize` reject) | ✅ DONE (PR #113) | deferred-backlog row |
 | **i15** | `adds` 3-register form (Z80) | 🧭 | deferred-backlog row |
 | **i16** | Replace `cls` test instruction with a real spectrum4 one | 🧭 (was tentatively "i13" in conversation) | `docs/ROADMAP.md` deferred checklist |
 | **i17** | Deep reviews of `main_loop.asm` + `litpool.asm` + `SYMTAB_*` equ sentinels | ⏳ | repo-audit §6 |
@@ -93,7 +93,10 @@ planning session; `i13` is locked to "gitignore" to match shipped PR #107, so th
 | **i32** | Multiple source files + staged/partial loading | 🧭 beyond-M7 | "Beyond-M7 / future ideas" |
 | **i33** | Trinity SD/flash storage → bigger-kernel architecture | 🧭 beyond-M7 | `memory/trinity_hardware.md` |
 | **i34** | Untrack accidentally-committed Go binaries | ⏳ partial — `enctab-gen` untracked (PR #111); `llist-normalise` pending LLIST disposition (open-Q5) | `.gitignore`; open-question 5 |
-| **i35** | `sdiv` missing across the whole stack (no mnemonic/Form → `.inst`; unencodable) | 🧭 new 2026-06-08 | deferred-backlog row; mirror `udiv` ID 72 |
+| **i35** | `sdiv` missing across the whole stack (no mnemonic/Form → `.inst`; unencodable) | ✅ DONE (PR #115) | deferred-backlog row; mirrored `udiv` ID 72 |
+| **i36** | Z80 disasm: ccmp/ccmn (conditional-compare) not decoded → `.inst` (encoder has parity; Go decodes) | ⏳ in progress (agent) | found by i9 sweep; `docs/notes/2026-06-08-z80-go-disasm-parity-i9.md` |
+| **i37** | base csinv/csneg (Rn≠Rm): Go `aarch64dec` declines them (less capable than binutils + than our Z80); align Go decoder + ensure encoder coverage | ⏳ in progress (agent) | found by i9 sweep; same analysis doc. Fixed together with i36 |
+| **i38** | Audit for other skipped/excluded tests + PRs that left gaps rather than fixing them | ⏳ in progress (agent) | `docs/notes/2026-06-08-skipped-tests-and-gaps-audit.md` (forthcoming) |
 
 ## Open questions for Pete (awaiting input)
 
@@ -107,56 +110,55 @@ it arises — not just in chat — because simultaneous edits mean a chat questi
 can be missed and left unanswered. This section is the single sure-fire list of
 **unanswered** questions: add on ask, remove/mark-resolved on answer, so what's
 shown is always exactly what's still open. (See `memory/feedback_capture_open_questions`.)
+Questions carry stable **`qN`** ids (matching the `iN` item convention; Pete
+2026-06-08) — locked once assigned, marked-resolved (moved to "Recently resolved")
+when answered, never renumbered.
 
-### ⏳ OPEN — awaiting Pete (added 2026-06-08, evening)
+### ⏳ OPEN — awaiting Pete
 
-- **OQ-A — i5 graphics tooling.** For editor UI mockups at SAM-accurate
-  resolution, which approach do you want? (a) a **programmatic SAM-faithful
-  renderer** I write — emits PNGs (or actual SAM `SCREEN$` files viewable in
-  SimCoupé) at the exact MODE 3 (512×192, 4 colours/line) or MODE 4 (256×192,
-  16 colours) geometry, colours drawn from the real 128-entry palette,
-  8×8 attribute cells — deterministic and constraint-accurate; (b) a **dedicated
-  retro/pixel-art tool** you'd prefer to drive by hand; (c) a **generic AI image
-  generator**. Note on my capability: I do **not** have native image generation
-  in this environment, and a generic AI generator wouldn't respect the hard SAM
-  constraints (fixed resolution, 4/16-from-128 palette, attribute cells) — so for
-  *faithful* mockups, (a) is the honest best option; a dedicated art tool (b) is
-  better for hand-authored final art. Your call on which to use for i5.
+- **q1 — i5 graphics tooling.** For editor UI mockups at SAM-accurate
+  resolution, which approach? (a) a **programmatic SAM-faithful renderer** I write —
+  emits PNGs (or actual SAM `SCREEN$` files viewable in SimCoupé) at exact MODE 3
+  (512×192, 4 colours/line) or MODE 4 (256×192, 16 colours) geometry, colours from
+  the real 128-entry palette, 8×8 attribute cells — deterministic and
+  constraint-accurate; (b) a **dedicated retro/pixel-art tool** you'd drive by hand;
+  (c) a **generic AI image generator**. My capability note: I have **no** native
+  image generation here, and a generic AI generator wouldn't respect the hard SAM
+  constraints — so for *faithful* mockups (a) is the honest best option; a dedicated
+  art tool (b) is better for hand-authored final art. Your call.
 
-- **OQ-B — next major strand after the current batch lands.** Once
-  i8/i9/i12a/i13/i14/i35 are merged, what's the next big piece: **i1**
-  (compact-`.tbn`, the long-sequenced next), **start the editor** (i4 read-only
-  listing viewer → i3 groundwork), or **i7** (codegen tables from Go authority)?
-  You earlier leaned compact-`.tbn` or editor. (Default if unanswered: I land the
-  in-flight PRs but do **not** start a new major strand without your steer.)
+- **q2 — next major strand after the current batch.** With i8/i9/i12a/i13/i14/i35
+  (and i36/i37/i38) landing, what's the next big piece: **i1** (compact-`.tbn`, the
+  long-sequenced next), **start the editor** (i4 read-only listing viewer → i3), or
+  **i7** (codegen tables from Go authority)? You earlier leaned compact-`.tbn` or
+  editor. (Default if unanswered: I do **not** start a new major strand without your
+  steer.)
 
-- **OQ-C — formal GitHub reviews for pre-merge review agents.** Pete (2026-06-08):
-  record each pre-merge review as a **native GitHub review** (`gh pr review`) so the
-  reasoning persists on the PR for posterity, instead of living only in the
-  agent/chat transcript (where it's lost — only inferable from later commits).
-  **My recommendation: YES, adopt** — it matches the existing global "Reviewing PRs
-  on GitHub" rules (native review + inline comments anchored to code). **Caveat:**
-  GitHub blocks an author *approving* their own PR, and our agents commit as Pete
-  (same `gh` account), so use **`gh pr review --comment`** to record the checklist
-  verdict (+ inline comments for specific findings), not `--approve`. To codify:
-  add to the project `CLAUDE.md` §3 (pre-merge review). *(Applied to tonight's
-  babysitter immediately, ahead of formal codification.)*
+- **q4 — how to track work: doc vs GitHub Issues vs a scrape-to-md skill.**
+  Pete (2026-06-08): are we reinventing GitHub Issues with the `iN`/m7-status
+  registry? **The refinement Pete proposed:** a skill that scrapes GitHub Issues →
+  one generated markdown file (single-read context for the agent, cheap at session
+  start), plus a skill that updates the issue when work changes — so the human gets
+  standard Issues tracking while the agent keeps single-read context. **My honest
+  take:** clever, and it directly answers the multi-API-call objection. But (a) make
+  the md a **pure generated cache** (regenerate from issues; issues are canonical;
+  ONE write target = the issue), **not** a dual-write "its own record + the issue" —
+  dual-write is exactly the drift hazard we keep fighting (sysreg dup, id drift);
+  (b) it's real infrastructure (renderer + update skill) that competes with project
+  work, and the doc works fine today, so it's borderline **YAGNI right now**.
+  **Recommendation:** keep the doc for now; build the lean *issues-canonical +
+  generated-md-cache* version if/when human-stepping-through becomes a real need.
+  Fully reversible either way (mint issues from the registry anytime). Your call:
+  build the lean skill now, or revisit later?
 
-- **OQ-D — GitHub Issues vs the `iN` doc registry.** Pete (2026-06-08): are we
-  reinventing GitHub Issues with the `iN`/m7-status registry? Tradeoff — Issues give
-  clean lifecycle (open/closed), PR linkage (`Closes #n`), labels/boards, and are
-  easy for a human to step through; the **doc** gives single-read whole-context
-  (one Read = the entire backlog + design rationale + cross-item dependencies), a
-  real agent-effectiveness advantage, and avoids the multi-API-call cost of
-  reconstructing state from many issues. **My lean:** keep the doc as the primary
-  source of truth for now (don't double-track — that's a drift hazard, cf. the
-  sysreg/registry drift we just fixed), and do **not** fully migrate; if
-  human-stepping-through becomes painful, adopt a **light hybrid** — one tracking
-  issue per *active* major strand (titled with its `iN` id; PRs `Close` it), with the
-  doc staying the comprehensive register + design narrative. Mitigation on the
-  multi-call concern: `gh issue list --json number,title,body,labels,state` returns
-  all issues + bodies in ONE call *if* content lives in bodies (not scattered in
-  comments). **Decision: Pete's call** — start a light hybrid now, or revisit later.
+### ✅ Recently resolved
+
+- **q3 — formal GitHub reviews for pre-merge review agents → YES (Pete, 2026-06-08).**
+  Adopt native GitHub reviews: record each pre-merge review with `gh pr review
+  <n> --comment` (the checklist verdict + inline comments anchored to code), not
+  `--approve` (GitHub blocks self-approve; our agents commit as Pete). Codified in
+  project `CLAUDE.md` §3. Tonight's five merges (#112–#116) had their review
+  verdicts posted natively retroactively.
 
 
 1. **`src/m3` rename — ✅ RESOLVED (Pete 2026-05-29).** Pete delegated the
