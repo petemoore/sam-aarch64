@@ -126,6 +126,13 @@ disasm_not_mem:
                 jr      disasm_nop
 disasm_not_nop:
 
+; --- test-and-branch (tbz/tbnz) ---------------------------------------
+; aarch64dec decodeTestBranch (tbranch.go) runs ahead of udf/aliases on the
+; Go side.  bits[30:25] == 0b011011.  Disjoint from NOP/UDF/move-wide, so
+; trying it here is order-faithful and harmless.
+                jp      disasm_try_tbranch
+disasm_not_tbranch:
+
 ; --- UDF (bits[31:16] == 0) -------------------------------------------
 ; aarch64dec disasm.go:77 — `if word>>16 == 0 { "udf", "#<dec imm16>" }`.
 ; Top 16 bits are B and C; both zero ⇒ UDF.  imm16 = DE.
@@ -134,6 +141,15 @@ disasm_not_nop:
                 jr      nz, disasm_not_udf
                 jp      disasm_udf
 disasm_not_udf:
+
+; --- branch + PC-relative families (b/bl/b.cond/cbz/cbnz/adr/adrp +
+;     ret/br/blr) — the AllForms() branch/adr/adrp forms in the Go form
+;     walk, plus the register-branch forms.  Each is a disjoint encoding
+;     space; trying them here is order-faithful (the form walk runs after
+;     aliases in Go, but no alias claims these spaces).  PC-relative
+;     families read DISASM_COMM_PC.
+                jp      disasm_try_branch
+disasm_not_branch:
 
 ; --- (further families ported here, in DecodeAt order) ----------------
 
@@ -723,8 +739,833 @@ disasm_mw_hb_next:
 
 
 ; =======================================================================
-; Add/sub immediate family — Z80 port of aarch64dec decodeAddSubImmAlias
-; (aliases.go:305).
+; Branch + PC-relative families — Z80 port of the AllForms() branch / adr /
+; adrp forms plus the register-branch forms and decodeTestBranch:
+;   b, bl            (imm26)   tools/aarch64dec branchtarget.go / data.go
+;   b.<cond>         (imm19)   data.go MnemonicID 26..41 + format.CondCode
+;   cbz, cbnz        (imm19)   data.go MnemonicID 20/21
+;   tbz, tbnz        (imm14)   tools/aarch64dec/tbranch.go
+;   adr              (imm21)   manual_forms.go MnemonicID 48 / slots_branch.go
+;   adrp             (imm21)   data.go MnemonicID 13 / slots_branch.go
+;   ret, br, blr     (Rn)      manual_forms.go / data.go (no PC target)
+;   ldr (literal)    (imm19)   tools/aarch64dec/mem.go decodeLiteralMem
+;
+; The PC-relative families render the ABSOLUTE target address (DecodeAt's
+; raw operand string, `0x<minimal-width-hex>`) computed as in the Go side:
+;   imm26/19/14 branches: target = pc + (sext(imm) << 2)
+;   adr:                  target = pc + sext(imm21)
+;   adrp:                 target = (pc & ~0xfff) + (sext(imm21) << 12)
+;   ldr (literal):        target = pc + (sext(imm19) << 2)
+; pc is the 8-byte little-endian value at DISASM_COMM_PC.
+;
+; ABI: clobbers BC/IX on success; saves after the LAST decline and restores
+; via disasm_br_done.  Decline paths leave B,C,D,E intact (the field
+; extraction writes only this page's scratch).
+; =======================================================================
+
+; -----------------------------------------------------------------------
+; disasm_br_save_word / restore — stash the 4 word bytes (B,C,D,E) to
+; scratch so the field arithmetic below can use all registers freely while
+; the decline contract (B,C,D,E intact for .inst) is honoured.  The branch
+; decoders read the word ONLY from these scratch bytes after saving.
+; -----------------------------------------------------------------------
+disasm_br_save_word:
+                ld      a, b
+                ld      (disasm_br_wb), a
+                ld      a, c
+                ld      (disasm_br_wc), a
+                ld      a, d
+                ld      (disasm_br_wd), a
+                ld      a, e
+                ld      (disasm_br_we), a
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_try_tbranch — tbz/tbnz.  bits[30:25] == 0b011011 (= (B>>1)&0x3f).
+; Renders `tbz/tbnz <reg>, #<bitpos-dec>, 0x<target>`.
+; -----------------------------------------------------------------------
+disasm_try_tbranch:
+                ld      a, b
+                rrca
+                and     &3f
+                cp      &1b                         ; 0b011011
+                jp      nz, disasm_not_tbranch
+                call    disasm_br_save_word
+; op = wb bit0 (0 tbz / 1 tbnz).
+                ld      a, (disasm_br_wb)
+                and     1
+                ld      (disasm_br_op), a
+; b5 = wb bit7 → is64.
+                ld      a, (disasm_br_wb)
+                rlca
+                and     1
+                ld      (disasm_br_is64), a
+; b40 = (wc>>3)&0x1f.
+                ld      a, (disasm_br_wc)
+                rrca
+                rrca
+                rrca
+                and     &1f
+                ld      l, a
+; bitpos = (b5<<5)|b40.
+                ld      a, (disasm_br_is64)
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a                        ; b5<<5
+                or      l
+                ld      (disasm_br_bit), a
+; Rt = we&0x1f.
+                ld      a, (disasm_br_we)
+                and     &1f
+                ld      (disasm_br_rt), a
+; imm14 = bits[18:5] = ((wc&7)<<11)|(wd<<3)|(we>>5)  → disasm_br_off (LE).
+                ld      a, (disasm_br_wc)
+                and     7
+                ld      h, a
+                ld      l, 0
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl                      ; (wc&7)<<11
+                ld      a, (disasm_br_wd)
+                ld      e, a
+                ld      d, 0
+                ex      de, hl
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl                      ; wd<<3
+                ex      de, hl                      ; DE = wd<<3, HL = (wc&7)<<11
+                add     hl, de                      ; HL = ((wc&7)<<11)|(wd<<3)
+                ld      a, (disasm_br_we)
+                rlca
+                rlca
+                rlca
+                and     7                           ; we>>5
+                or      l
+                ld      l, a
+                ld      (disasm_br_off), hl
+                call    disasm_br_off_zero_hi
+; Sign-extend imm14 (width 14), shift left 2, add pc → disasm_mw_val.
+                ld      a, 14
+                ld      (disasm_br_width), a
+                ld      a, 2
+                ld      (disasm_br_shift), a
+                xor     a
+                ld      (disasm_br_pgmask), a         ; not adrp
+                call    disasm_br_compute_target
+; mnemonic.
+                ld      hl, disasm_br_tbz_txt
+                ld      a, (disasm_br_op)
+                or      a
+                jr      z, disasm_tbr_setm
+                ld      hl, disasm_br_tbnz_txt
+disasm_tbr_setm:
+                call    disasm_asi_set_mnem
+; operands: "<reg>, #<bit>, 0x<target>".
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_br_rt)
+                ld      c, a
+                ld      a, (disasm_br_is64)
+                ld      b, a
+                call    disasm_br_emit_reg          ; <reg> (zr at idx 31)
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      (hl), "#"
+                inc     hl
+                ld      a, (disasm_br_bit)
+                ld      e, a
+                ld      d, 0
+                call    disasm_emit_dec16           ; bitpos (decimal)
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                call    disasm_br_emit_target       ; "0x<hex target>"
+                ld      (hl), 0
+                jp      disasm_br_done
+
+
+; -----------------------------------------------------------------------
+; disasm_try_branch — b/bl, b.<cond>, cbz/cbnz, adr/adrp, ret/br/blr.
+; Each sub-family is a distinct discriminator; words matching none fall
+; through to disasm_not_branch with B,C,D,E intact.
+; -----------------------------------------------------------------------
+disasm_try_branch:
+; --- ret/br/blr: B == 0xd6 -------------------------------------------
+                ld      a, b
+                cp      &d6
+                jp      z, disasm_br_reg
+; --- b (bits31:26 == 0b000101 = 0x05) --------------------------------
+                ld      a, b
+                rrca
+                rrca
+                and     &3f
+                cp      &05
+                jp      z, disasm_br_b
+                cp      &25                         ; bl  (0b100101)
+                jp      z, disasm_br_bl
+; --- cbz/cbnz/b.cond: discriminated on full B (mask 0xff) ------------
+                ld      a, b
+                cp      &34
+                jp      z, disasm_br_cbz
+                cp      &b4
+                jp      z, disasm_br_cbz
+                cp      &35
+                jp      z, disasm_br_cbnz
+                cp      &b5
+                jp      z, disasm_br_cbnz
+                cp      &54
+                jp      z, disasm_br_bcond
+; --- adr/adrp: bit31=0/1, bits28:24 == 0b10000 -----------------------
+                ld      a, b
+                and     &1f
+                cp      &10
+                jp      nz, disasm_not_branch
+                bit     7, b
+                jp      z, disasm_br_adr
+                jp      disasm_br_adrp
+
+
+; --- ret / br / blr (register; no PC target) -------------------------
+; ret  = 0xd65f03c0 (full word).  br = 0xd61f0000 | Rn<<5.  blr = 0xd63f0000.
+disasm_br_reg:
+                call    disasm_br_save_word
+; Rn = ((wd&3)<<3)|(we>>5).
+                ld      a, (disasm_br_wd)
+                and     3
+                add     a, a
+                add     a, a
+                add     a, a
+                ld      l, a
+                ld      a, (disasm_br_we)
+                rlca
+                rlca
+                rlca
+                and     7
+                or      l
+                ld      (disasm_br_rt), a           ; reuse rt slot for Rn
+; All three share mask 0xfffffc1f: bits[9:5]=Rn free, bits[4:0]=0 fixed.
+; So require (wd & 0xfc)==0 (bits15:10 zero) and (we & 0x1f)==0 (Rt field
+; zero).  wc selects the family: 0x5f ret, 0x1f br, 0x3f blr.
+                ld      a, (disasm_br_wd)
+                and     &fc
+                jr      nz, disasm_not_branch_j
+                ld      a, (disasm_br_we)
+                and     &1f
+                jr      nz, disasm_not_branch_j
+                ld      a, (disasm_br_wc)
+                cp      &5f
+                jr      z, disasm_br_reg_ret
+                cp      &1f
+                jr      z, disasm_br_reg_br
+                cp      &3f
+                jr      z, disasm_br_reg_blr
+                jr      disasm_not_branch_j
+disasm_br_reg_ret:
+; ret: bare "ret" when Rn==30 (the default link register, objdump omits it);
+; otherwise "ret <xN>".
+                ld      hl, disasm_br_ret_txt
+                call    disasm_asi_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_br_rt)           ; Rn
+                cp      30
+                jr      nz, disasm_br_reg_ret_reg
+                ld      (hl), 0                     ; Rn==30 → no operands
+                jp      disasm_br_done
+disasm_br_reg_ret_reg:
+                ld      c, a
+                ld      b, 1                        ; always X register
+                call    disasm_br_emit_reg
+                ld      (hl), 0
+                jp      disasm_br_done
+disasm_br_reg_br:
+                ld      hl, disasm_br_br_txt
+                jr      disasm_br_reg_emit
+disasm_br_reg_blr:
+                ld      hl, disasm_br_blr_txt
+disasm_br_reg_emit:
+                call    disasm_asi_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_br_rt)           ; Rn
+                ld      c, a
+                ld      b, 1                        ; always X register
+                call    disasm_br_emit_reg
+                ld      (hl), 0
+                jp      disasm_br_done
+
+; Trampoline: a `jr`-reachable decline (the body above is past the 128-byte
+; range of the original disasm_not_branch label).
+disasm_not_branch_j:
+                jp      disasm_not_branch
+
+
+; --- b (imm26) -------------------------------------------------------
+disasm_br_b:
+                call    disasm_br_save_word
+                call    disasm_br_build_imm26
+                ld      hl, disasm_br_b_txt
+                jp      disasm_br_emit_target_only
+; --- bl (imm26) ------------------------------------------------------
+disasm_br_bl:
+                call    disasm_br_save_word
+                call    disasm_br_build_imm26
+                ld      hl, disasm_br_bl_txt
+                jp      disasm_br_emit_target_only
+
+
+; --- cbz/cbnz (imm19 + Rt + sf) --------------------------------------
+disasm_br_cbz:
+                call    disasm_br_save_word
+                call    disasm_br_build_cbr_fields
+                call    disasm_br_build_imm19
+                ld      hl, disasm_br_cbz_txt
+                jp      disasm_br_emit_reg_target
+disasm_br_cbnz:
+                call    disasm_br_save_word
+                call    disasm_br_build_cbr_fields
+                call    disasm_br_build_imm19
+                ld      hl, disasm_br_cbnz_txt
+                jp      disasm_br_emit_reg_target
+
+
+; --- b.<cond> (imm19 + cond4) ----------------------------------------
+; Requires we bit4 == 0 (bit4 of the word; pattern 0x54000000 mask
+; 0xff00001f — the o0 bit must be 0).
+disasm_br_bcond:
+                call    disasm_br_save_word
+                ld      a, (disasm_br_we)
+                bit     4, a
+                jp      nz, disasm_not_branch
+                call    disasm_br_build_imm19       ; sets width=19, shift=2, adrp=0
+; mnemonic "b.<cc>": copy "b." then the 2-char cond name (cond = we&0xf).
+                call    disasm_br_compute_target
+; write "b." + cond name to DISASM_COMM_MNEM.
+                ld      hl, DISASM_COMM_MNEM
+                ld      (hl), "b"
+                inc     hl
+                ld      (hl), "."
+                inc     hl
+                ld      a, (disasm_br_we)
+                and     &0f                         ; cond
+                add     a, a                        ; *2 (2-char entries)
+                ld      e, a
+                ld      d, 0
+                ld      ix, disasm_br_cond_tbl
+                add     ix, de
+                ld      a, (ix+0)
+                ld      (hl), a
+                inc     hl
+                ld      a, (ix+1)
+                ld      (hl), a
+                inc     hl
+                ld      (hl), 0
+; operands: "0x<target>".
+                ld      hl, DISASM_COMM_OPS
+                call    disasm_br_emit_target
+                ld      (hl), 0
+                jp      disasm_br_done
+
+
+; --- adr (imm21, no shift, base = pc) --------------------------------
+disasm_br_adr:
+                call    disasm_br_save_word
+                call    disasm_br_build_imm21
+                ld      a, 21
+                ld      (disasm_br_width), a
+                xor     a
+                ld      (disasm_br_shift), a        ; no shift
+                ld      (disasm_br_pgmask), a         ; base = full pc
+                ld      hl, disasm_br_adr_txt
+                jp      disasm_br_emit_rd_target
+; --- adrp (imm21, shift 12, base = pc & ~0xfff) ----------------------
+disasm_br_adrp:
+                call    disasm_br_save_word
+                call    disasm_br_build_imm21
+                ld      a, 21
+                ld      (disasm_br_width), a
+                ld      a, 12
+                ld      (disasm_br_shift), a
+                ld      a, 1
+                ld      (disasm_br_pgmask), a         ; base = pc & ~0xfff
+                ld      hl, disasm_br_adrp_txt
+                jp      disasm_br_emit_rd_target
+
+
+; =======================================================================
+; Shared field builders + emit tails.
+; =======================================================================
+
+; --- build imm26 byte offset: off = sext(imm26)<<2 -------------------
+; imm26 = bits[25:0] = ((wb&3)<<24)|(wc<<16)|(wd<<8)|we.
+disasm_br_build_imm26:
+                ld      a, (disasm_br_we)
+                ld      (disasm_br_off+0), a
+                ld      a, (disasm_br_wd)
+                ld      (disasm_br_off+1), a
+                ld      a, (disasm_br_wc)
+                ld      (disasm_br_off+2), a
+                ld      a, (disasm_br_wb)
+                and     3
+                ld      (disasm_br_off+3), a
+                ld      hl, disasm_br_off+4
+                call    disasm_br_zero4_at_hl       ; off[4..7] = 0
+                ld      a, 26
+                ld      (disasm_br_width), a
+                ld      a, 2
+                ld      (disasm_br_shift), a
+                xor     a
+                ld      (disasm_br_pgmask), a
+                ret
+
+
+; --- build imm19 byte offset: off = sext(imm19)<<2 -------------------
+; imm19 = bits[23:5] = (wc<<11)|(wd<<3)|(we>>5).
+disasm_br_build_imm19:
+                ld      a, (disasm_br_wc)
+                ld      h, a
+                ld      l, 0                        ; HL = wc<<8
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl                      ; wc<<11
+                ld      a, (disasm_br_wd)
+                ld      e, a
+                ld      d, 0
+                ex      de, hl
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl                      ; wd<<3
+                ex      de, hl                      ; DE=wd<<3, HL=wc<<11
+                add     hl, de
+                ld      a, (disasm_br_we)
+                rlca
+                rlca
+                rlca
+                and     7                           ; we>>5
+                or      l
+                ld      l, a
+                ld      (disasm_br_off), hl         ; off[0..1] = imm19[15:0]
+; bits18:16 of imm19 = wc>>5 (wc<<11 puts wc bits7:5 at imm19 bits18:16);
+; these overflow HL, so store them in off[2] directly.
+                ld      a, (disasm_br_wc)
+                rlca
+                rlca
+                rlca
+                and     7
+                ld      (disasm_br_off+2), a
+                ld      hl, disasm_br_off+3
+                call    disasm_br_zero5_at_hl       ; off[3..7] = 0
+                ld      a, 19
+                ld      (disasm_br_width), a
+                ld      a, 2
+                ld      (disasm_br_shift), a
+                xor     a
+                ld      (disasm_br_pgmask), a
+                ret
+
+
+; --- build imm21 raw value (adr/adrp): immhi:immlo, no shift here ----
+; imm21 = (immhi<<2)|immlo ; immhi = bits[23:5] (19 bits) ; immlo =
+; bits[30:29] = (wb>>5)&3.  Stored zero-extended in disasm_br_off.
+disasm_br_build_imm21:
+; immhi (19 bits) = (wc<<11)|(wd<<3)|(we>>5), max 0x7ffff.  Build it into
+; disasm_br_off zero-extended:  low 16 bits in HL, bits18:16 = wc>>5.
+                ld      a, (disasm_br_wc)
+                ld      h, a
+                ld      l, 0                        ; HL = wc<<8
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl                      ; HL = wc<<11 (low 16 bits)
+                ld      a, (disasm_br_wd)
+                ld      e, a
+                ld      d, 0
+                ex      de, hl
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl                      ; HL = wd<<3
+                ex      de, hl                      ; DE = wd<<3, HL = wc<<11
+                add     hl, de                      ; HL = low 16 bits so far
+                ld      a, (disasm_br_we)
+                rlca
+                rlca
+                rlca
+                and     7                           ; we>>5
+                or      l
+                ld      l, a                        ; HL = immhi[15:0]
+                ld      (disasm_br_off), hl
+; bits18:16 of immhi = wc>>5 (wc<<11 puts wc bits7:5 at immhi bits18:16).
+                ld      a, (disasm_br_wc)
+                rlca
+                rlca
+                rlca
+                and     7
+                ld      (disasm_br_off+2), a
+                ld      hl, disasm_br_off+3
+                call    disasm_br_zero5_at_hl       ; off[3..7] = 0
+; imm21 = (immhi<<2)|immlo.  Shift <<2 then OR immlo = (wb>>5)&3.
+                call    disasm_br_off_shl1
+                call    disasm_br_off_shl1
+                ld      a, (disasm_br_wb)
+                rlca
+                rlca
+                rlca
+                and     3                           ; wb>>5 (= immlo, bits30:29)
+                ld      l, a
+                ld      a, (disasm_br_off)
+                or      l
+                ld      (disasm_br_off), a
+                ret
+
+
+; --- build cbz/cbnz reg fields: sf, Rt -------------------------------
+disasm_br_build_cbr_fields:
+                ld      a, (disasm_br_wb)
+                rlca
+                and     1
+                ld      (disasm_br_is64), a         ; sf
+                ld      a, (disasm_br_we)
+                and     &1f
+                ld      (disasm_br_rt), a
+                ret
+
+
+; --- emit tail: mnemonic (HL) + operands "0x<target>" ----------------
+; HL on entry → mnemonic string.  compute_target clobbers HL, so the
+; mnemonic pointer is stashed first.
+disasm_br_emit_target_only:
+                ld      (disasm_br_mnem_ptr), hl
+                call    disasm_br_compute_target
+                ld      hl, (disasm_br_mnem_ptr)
+                call    disasm_asi_set_mnem         ; mnemonic from HL
+                ld      hl, DISASM_COMM_OPS
+                call    disasm_br_emit_target
+                ld      (hl), 0
+                jp      disasm_br_done
+
+; --- emit tail: mnemonic (HL) + "<reg>, 0x<target>" (cbz/cbnz) -------
+disasm_br_emit_reg_target:
+                ld      (disasm_br_mnem_ptr), hl
+                call    disasm_br_compute_target
+                ld      hl, (disasm_br_mnem_ptr)
+                call    disasm_asi_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_br_rt)
+                ld      c, a
+                ld      a, (disasm_br_is64)
+                ld      b, a
+                call    disasm_br_emit_reg
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                call    disasm_br_emit_target
+                ld      (hl), 0
+                jp      disasm_br_done
+
+; --- emit tail: mnemonic (HL) + "<xreg>, 0x<target>" (adr/adrp) ------
+disasm_br_emit_rd_target:
+                ld      (disasm_br_mnem_ptr), hl
+                call    disasm_br_compute_target
+                ld      hl, (disasm_br_mnem_ptr)
+                call    disasm_asi_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_br_we)
+                and     &1f                         ; Rd
+                ld      c, a
+                ld      b, 1                        ; always X register
+                call    disasm_br_emit_reg
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                call    disasm_br_emit_target
+                ld      (hl), 0
+                jp      disasm_br_done
+
+
+; -----------------------------------------------------------------------
+; disasm_br_compute_target — fill disasm_mw_val[0..7] (LE) with the absolute
+; target address.  Inputs (scratch):
+;   disasm_br_off[0..3]  = raw immediate field (zero-extended, LE)
+;   disasm_br_width      = field bit width (sign bit at width-1)
+;   disasm_br_shift      = left-shift count applied AFTER sign-extension
+;   disasm_br_pgmask       = 1 → base = pc & ~0xfff ; 0 → base = pc
+; pc is the 8-byte LE value at DISASM_COMM_PC.
+; Clobbers A, BC, DE, HL.
+; -----------------------------------------------------------------------
+disasm_br_compute_target:
+; 1. Sign-extend disasm_br_off (8 bytes) from bit (width-1) to full 64 bits.
+;    The sign bit lives at bit (width-1).  Determine its byte/bit, then if
+;    set, fill all higher bits with 1.
+                ld      a, (disasm_br_width)
+                dec     a                           ; sign bit index (0..25)
+                ld      b, a                        ; B = sign-bit index
+; byte = sign>>3 ; bit = sign&7.
+                ld      a, b
+                rrca
+                rrca
+                rrca
+                and     &1f                         ; byte index (0..3)
+                ld      l, a
+                ld      h, 0
+                ld      de, disasm_br_off
+                add     hl, de                      ; HL = &off[byte]
+                ld      a, b
+                and     7                           ; bit within byte
+                ld      c, a
+; build mask = 1<<bit.
+                ld      a, 1
+                inc     c
+                dec     c
+                jr      z, disasm_br_se_haymask
+disasm_br_se_shl:
+                add     a, a
+                dec     c
+                jr      nz, disasm_br_se_shl
+disasm_br_se_haymask:
+                ld      c, a                        ; C = sign mask
+                ld      a, (hl)
+                and     c
+                jr      z, disasm_br_se_positive
+; negative: set every bit above the sign bit across the 4 bytes.
+                call    disasm_br_off_signfill
+disasm_br_se_positive:
+; 2. Shift left by disasm_br_shift (multiply), over the 8-byte buffer.
+;    disasm_br_off_shl1 clobbers B/HL, so the loop count lives in memory.
+                ld      a, (disasm_br_shift)
+                or      a
+                jr      z, disasm_br_shifted
+                ld      (disasm_br_shctr), a
+disasm_br_shift_loop:
+                call    disasm_br_off_shl1
+                ld      a, (disasm_br_shctr)
+                dec     a
+                ld      (disasm_br_shctr), a
+                jr      nz, disasm_br_shift_loop
+disasm_br_shifted:
+; 3. target = base + off → disasm_mw_val[0..7].  off is now a full 64-bit
+;    sign-extended, shifted value.  Copy pc (8 bytes) from DISASM_COMM_PC,
+;    mask low 12 bits when adrp, then add off (plain 8-byte add).
+                ld      hl, DISASM_COMM_PC
+                ld      de, disasm_mw_val
+                ld      bc, 8
+                ldir
+                ld      a, (disasm_br_pgmask)
+                or      a
+                jr      z, disasm_br_ct_nomask
+                xor     a
+                ld      (disasm_mw_val), a          ; clear bits7:0
+                ld      a, (disasm_mw_val+1)
+                and     &f0                         ; clear bits11:8
+                ld      (disasm_mw_val+1), a
+disasm_br_ct_nomask:
+; 8-byte add: disasm_mw_val += disasm_br_off.
+                ld      hl, disasm_mw_val
+                ld      de, disasm_br_off
+                or      a                           ; clear carry
+                ld      b, 8
+disasm_br_add_loop:
+                ld      a, (de)
+                adc     a, (hl)
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    disasm_br_add_loop
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_br_off_shl1 — shift disasm_br_off (8 bytes LE) left by 1.
+; Clobbers A, B, F, HL.
+; -----------------------------------------------------------------------
+disasm_br_off_shl1:
+                ld      hl, disasm_br_off
+                or      a                           ; clear carry
+                ld      b, 8
+disasm_br_shl1_loop:
+                ld      a, (hl)
+                adc     a, a
+                ld      (hl), a
+                inc     hl
+                djnz    disasm_br_shl1_loop
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_br_zero4/5/6_at_hl — write 4/5/6 zero bytes starting at (HL).
+; Used to zero the high part of disasm_br_off after a builder fills only the
+; low bytes.  Clobbers A, B, HL.
+; -----------------------------------------------------------------------
+disasm_br_zero6_at_hl:
+                ld      b, 6
+                jr      disasm_br_zero_n
+disasm_br_zero5_at_hl:
+                ld      b, 5
+                jr      disasm_br_zero_n
+disasm_br_zero4_at_hl:
+                ld      b, 4
+disasm_br_zero_n:
+                xor     a
+disasm_br_zero_loop:
+                ld      (hl), a
+                inc     hl
+                djnz    disasm_br_zero_loop
+                ret
+
+; disasm_br_off_zero_hi — zero disasm_br_off[2..7] (6 bytes).
+disasm_br_off_zero_hi:
+                ld      hl, disasm_br_off+2
+                jr      disasm_br_zero6_at_hl
+
+
+; -----------------------------------------------------------------------
+; disasm_br_off_signfill — given HL = &off[byte] (the sign byte) and C =
+; sign-bit mask (1<<bit) within it, set every bit strictly above the sign
+; bit, then fill all higher whole bytes (up to disasm_br_off+7) with 0xff.
+; Clobbers A, DE, F.  HL is advanced.
+; -----------------------------------------------------------------------
+disasm_br_off_signfill:
+; hibits = ~((mask<<1) - 1) = bits strictly above the sign bit in this byte.
+                ld      a, c
+                add     a, a                        ; mask<<1 (0 if bit==7)
+                dec     a                           ; (mask<<1)-1 = bits 0..bit
+                cpl                                 ; ~ → bits bit+1..7
+                or      (hl)
+                ld      (hl), a
+; Fill bytes (HL+1)..(disasm_br_off+7) with 0xff.
+                ld      de, disasm_br_off+7
+disasm_br_sf_hi_loop:
+                ld      a, l
+                cp      e                           ; HL == off+7 ? (H fixed)
+                ret     z
+                jr      nc, disasm_br_sf_ret
+                inc     hl
+                ld      (hl), &ff
+                jr      disasm_br_sf_hi_loop
+disasm_br_sf_ret:
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_br_emit_reg — emit register: B = is64 (0=w/1=x), C = index.
+; idx 31 → wzr/xzr (the zero register; branch-family regs are never SP).
+; Advances HL.  Clobbers A, DE.
+; -----------------------------------------------------------------------
+disasm_br_emit_reg:
+                ld      a, c
+                cp      31
+                jr      z, disasm_br_reg_zero
+                ld      a, b
+                or      a
+                ld      a, "w"
+                jr      z, disasm_br_reg_pfx
+                ld      a, "x"
+disasm_br_reg_pfx:
+                ld      (hl), a
+                inc     hl
+                ld      a, c
+                ld      e, a
+                ld      d, 0
+                call    disasm_emit_dec16
+                ret
+disasm_br_reg_zero:
+                ld      a, b
+                or      a
+                ld      a, "w"
+                jr      z, disasm_br_reg_zp
+                ld      a, "x"
+disasm_br_reg_zp:
+                ld      (hl), a
+                inc     hl
+                ld      (hl), "z"
+                inc     hl
+                ld      (hl), "r"
+                inc     hl
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_br_emit_target — emit "0x<minimal-width-hex>" of disasm_mw_val (8
+; bytes LE) to (HL), advancing HL.  Clobbers A, BC, DE.
+; -----------------------------------------------------------------------
+disasm_br_emit_target:
+                ld      (hl), "0"
+                inc     hl
+                ld      (hl), "x"
+                inc     hl
+                ld      a, 8
+                call    disasm_mw_emit_hexbuf
+                ret
+
+
+; -----------------------------------------------------------------------
+; disasm_br_done — common success epilogue.  The branch decoders clobber
+; BC/IX freely (the field builders use B and IX as scratch), so rather than
+; stack-saving them we RECONSTRUCT the original word here from the saved
+; bytes: BC = high word = (wb<<8)|wc ; IX = low word = (wd<<8)|we.  This
+; honours disasm_entry's "Preserves: BC, IX, IY" ABI without any push/pop.
+; -----------------------------------------------------------------------
+disasm_br_done:
+                ld      a, (disasm_br_wb)
+                ld      b, a
+                ld      a, (disasm_br_wc)
+                ld      c, a
+                ld      a, (disasm_br_wd)
+                ld      h, a
+                ld      a, (disasm_br_we)
+                ld      l, a
+                push    hl
+                pop     ix
+                ret
+
+
+; --- branch-family mnemonic strings -----------------------------------
+disasm_br_b_txt:        defm    "b"
+                        defb    0
+disasm_br_bl_txt:       defm    "bl"
+                        defb    0
+disasm_br_ret_txt:      defm    "ret"
+                        defb    0
+disasm_br_br_txt:       defm    "br"
+                        defb    0
+disasm_br_blr_txt:      defm    "blr"
+                        defb    0
+disasm_br_cbz_txt:      defm    "cbz"
+                        defb    0
+disasm_br_cbnz_txt:     defm    "cbnz"
+                        defb    0
+disasm_br_tbz_txt:      defm    "tbz"
+                        defb    0
+disasm_br_tbnz_txt:     defm    "tbnz"
+                        defb    0
+disasm_br_adr_txt:      defm    "adr"
+                        defb    0
+disasm_br_adrp_txt:     defm    "adrp"
+                        defb    0
+
+; Condition-name table (2 chars per entry, indexed by cond*2).  Mirrors
+; format.CondCode.Name() (sam-aarch64-format/operands.go).
+disasm_br_cond_tbl:     defm    "eqnecsccmiplvsvc"
+                        defm    "hilsgeltgtlealnv"
+
+; --- branch-family working scratch (this page) ------------------------
+disasm_br_wb:           defb    0       ; saved word byte bits31:24
+disasm_br_wc:           defb    0       ;                  bits23:16
+disasm_br_wd:           defb    0       ;                  bits15:8
+disasm_br_we:           defb    0       ;                  bits7:0
+disasm_br_off:          defs    8       ; raw/sign-extended/shifted offset (LE, 64-bit)
+disasm_br_width:        defb    0       ; immediate field bit width
+disasm_br_shift:        defb    0       ; post-sext left-shift count
+disasm_br_pgmask:         defb    0       ; 1 = mask pc low 12 bits (adrp)
+disasm_br_op:           defb    0       ; tbz(0)/tbnz(1)
+disasm_br_is64:         defb    0       ; register width (sf / b5)
+disasm_br_bit:          defb    0       ; tbz/tbnz bit position
+disasm_br_rt:           defb    0       ; Rt / Rn index
+disasm_br_shctr:        defb    0       ; shift-loop counter (compute_target)
+disasm_br_mnem_ptr:     defw    0       ; stashed mnemonic ptr across compute_target
 ;
 ; Encoding:  sf | op(1) | S(1) | 100010 | sh(1) | imm12(12) | Rn(5) | Rd(5)
 ;   op 0 → ADD/ADDS   op 1 → SUB/SUBS   S = set-flags
@@ -2494,8 +3335,75 @@ disasm_try_mem:
                 jp      z, disasm_mem_scalar
                 cp      &0a                 ; 0b1010 load/store pair
                 jp      z, disasm_mem_pair_grp
-                ; 0b0110 literal LDR is declined (no PC); all else not mem.
+                cp      &06                 ; 0b0110 literal LDR (needs PC)
+                jp      z, disasm_mem_literal_grp
                 jp      disasm_not_mem
+
+disasm_mem_literal_grp:
+; LDR (literal) requires bits[25:24]==00 (B&3==0); other shares of bits29:26
+; ==0110 with bits25:24!=00 are csel / dp-3-source — decline so the form
+; walk / aliases handle them.
+                ld      a, b
+                and     3
+                jp      nz, disasm_not_mem
+                jp      disasm_mem_literal
+
+
+; -----------------------------------------------------------------------
+; disasm_mem_literal — LDR (literal) family.  bits29:26==0110, bits25:24==00.
+; Z80 port of aarch64dec decodeLiteralMem (mem.go).  opc[31:30] picks the
+; mnemonic + width:  00 ldr Wt ; 01 ldr Xt ; 10 ldrsw Xt ; 11 → decline
+; (PRFM literal, not in our set).  target = pc + sext(imm19)<<2, where
+; imm19 = bits[23:5].  Renders `<mnem> <reg>, 0x<target>`.
+; -----------------------------------------------------------------------
+disasm_mem_literal:
+                call    disasm_br_save_word
+; opc = (wb>>6)&3.
+                ld      a, (disasm_br_wb)
+                rlca
+                rlca
+                and     3
+                ld      (disasm_mem_lit_opc), a
+                cp      3
+                jp      z, disasm_not_mem           ; opc 11 PRFM → decline
+; Rt = we&0x1f ; width: opc 00 → w (is64=0), else x (is64=1).
+                ld      a, (disasm_br_we)
+                and     &1f
+                ld      (disasm_br_rt), a
+                ld      a, (disasm_mem_lit_opc)
+                or      a
+                ld      a, 0
+                jr      z, disasm_mem_lit_w
+                ld      a, 1
+disasm_mem_lit_w:
+                ld      (disasm_br_is64), a
+; imm19 → off, sign-extend width 19, shift 2, pc base (sets adrp=0).
+; The builders + compute_target clobber BC/IX; disasm_br_done reconstructs
+; the original word from the saved bytes, so no push/pop is needed here.
+                call    disasm_br_build_imm19
+                call    disasm_br_compute_target
+; mnemonic: opc 10 → ldrsw, else ldr.
+                ld      hl, disasm_mem_ldr_str
+                ld      a, (disasm_mem_lit_opc)
+                cp      2
+                jr      nz, disasm_mem_lit_setm
+                ld      hl, disasm_mem_ldrsw_str
+disasm_mem_lit_setm:
+                call    disasm_asi_set_mnem
+; operands: "<reg>, 0x<target>".
+                ld      hl, DISASM_COMM_OPS
+                ld      a, (disasm_br_rt)
+                ld      c, a
+                ld      a, (disasm_br_is64)
+                ld      b, a
+                call    disasm_br_emit_reg
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                call    disasm_br_emit_target
+                ld      (hl), 0
+                jp      disasm_br_done
 
 disasm_mem_pair_grp:
 ; Pair requires bit25==0 (group selector bits29:25 == 0b1010_0).
@@ -3506,6 +4414,7 @@ disasm_mem_off_neg:     defb    0       ; 1 = offset negative
 disasm_mem_off_lo:      defw    0       ; offset magnitude (lo,hi)
 disasm_mem_off_hi:      equ     disasm_mem_off_lo+1
 disasm_mem_mnem_ptr:    defw    0       ; pointer to chosen mnemonic string
+disasm_mem_lit_opc:     defb    0       ; LDR-literal opc (00 ldr-w/01 ldr-x/10 ldrsw)
 
 
 ; --- move-wide mnemonic strings (null-terminated) ---------------------
@@ -3685,6 +4594,11 @@ disasm_pow10_tbl:
 ;   &6D — dp-register mov (orr-xzr alias) check failed.
 ;   &6C — dp-register cmp (subs-xzr alias) check failed.
 ;   &6B — dp-register extended add (uxtw) check failed.
+;   &6A — branch b (imm26 PC-relative target) check failed.
+;   &69 — branch bl (imm26 PC-relative target) check failed.
+;   &68 — ret (bare) check failed.
+;   &67 — cbz (imm19 PC-relative target) check failed.
+;   &66 — adrp (imm21 page-relative target) check failed.
 ; Clobbers: A, DE, HL, F (paged_call ABI; BC is the return value).
 ; -----------------------------------------------------------------------
 run_disasm_self_test:
@@ -3949,7 +4863,103 @@ run_disasm_self_test:
                 call    disasm_stest_strcmp
                 jp      nz, disasm_stest_fail_dext
 
+; --- branch + PC-relative fixtures (write DISASM_COMM_PC first) --------
+
+; b: 14000004 at pc=0x1000 → "b", "0x1010".
+                ld      hl, &1000
+                call    disasm_stest_set_pc
+                ld      bc, &1400
+                ld      ix, &0004
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_b_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_b
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_b_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_b
+
+; bl: 94000004 at pc=0x1000 → "bl", "0x1010".
+                ld      hl, &1000
+                call    disasm_stest_set_pc
+                ld      bc, &9400
+                ld      ix, &0004
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_bl_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_bl
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_bl_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_bl
+
+; ret: D65F03C0 (Rn=30 → bare "ret", no operands).  pc irrelevant; set 0.
+                ld      hl, 0
+                call    disasm_stest_set_pc
+                ld      bc, &D65F
+                ld      ix, &03C0
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_ret_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_ret
+                ld      a, (DISASM_COMM_OPS)
+                or      a                           ; operands must be empty
+                jp      nz, disasm_stest_fail_ret
+
+; cbz: 34000040 at pc=0x2000 → "cbz", "w0, 0x2008".
+                ld      hl, &2000
+                call    disasm_stest_set_pc
+                ld      bc, &3400
+                ld      ix, &0040
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_cbz_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_cbz
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_cbz_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_cbz
+
+; adrp: 90000000 at pc=0x1000 → "adrp", "x0, 0x1000".
+                ld      hl, &1000
+                call    disasm_stest_set_pc
+                ld      bc, &9000
+                ld      ix, &0000
+                call    disasm_entry
+                ld      hl, DISASM_COMM_MNEM
+                ld      de, disasm_stest_adrp_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_adrp
+                ld      hl, DISASM_COMM_OPS
+                ld      de, disasm_stest_adrp_ops_expect
+                call    disasm_stest_strcmp
+                jp      nz, disasm_stest_fail_adrp
+
                 ld      bc, 0
+                ret
+
+
+; disasm_stest_set_pc — write HL (a 16-bit PC) to DISASM_COMM_PC as an
+; 8-byte little-endian value (HL low 2 bytes, then 6 zero bytes).
+; Clobbers A, DE, HL.
+disasm_stest_set_pc:
+                ld      de, DISASM_COMM_PC
+                ld      a, l
+                ld      (de), a
+                inc     de
+                ld      a, h
+                ld      (de), a
+                inc     de
+                xor     a
+                ld      b, 6
+disasm_stest_setpc_loop:
+                ld      (de), a
+                inc     de
+                djnz    disasm_stest_setpc_loop
                 ret
 
 disasm_stest_fail_nop:
@@ -4011,6 +5021,21 @@ disasm_stest_fail_dcmp:
                 ret
 disasm_stest_fail_dext:
                 ld      bc, &6B
+                ret
+disasm_stest_fail_b:
+                ld      bc, &6A
+                ret
+disasm_stest_fail_bl:
+                ld      bc, &69
+                ret
+disasm_stest_fail_ret:
+                ld      bc, &68
+                ret
+disasm_stest_fail_cbz:
+                ld      bc, &67
+                ret
+disasm_stest_fail_adrp:
+                ld      bc, &66
                 ret
 
 ; disasm_stest_strcmp — compare null-terminated strings at (HL) and (DE).
@@ -4094,4 +5119,22 @@ disasm_stest_dcmp_ops_expect:   defm    "x0, x1"
 disasm_stest_dext_expect:       defm    "add"
                                 defb    0
 disasm_stest_dext_ops_expect:   defm    "x1, x2, w3, uxtw"
+                                defb    0
+disasm_stest_b_expect:          defm    "b"
+                                defb    0
+disasm_stest_b_ops_expect:      defm    "0x1010"
+                                defb    0
+disasm_stest_bl_expect:         defm    "bl"
+                                defb    0
+disasm_stest_bl_ops_expect:     defm    "0x1010"
+                                defb    0
+disasm_stest_ret_expect:        defm    "ret"
+                                defb    0
+disasm_stest_cbz_expect:        defm    "cbz"
+                                defb    0
+disasm_stest_cbz_ops_expect:    defm    "w0, 0x2008"
+                                defb    0
+disasm_stest_adrp_expect:       defm    "adrp"
+                                defb    0
+disasm_stest_adrp_ops_expect:   defm    "x0, 0x1000"
                                 defb    0

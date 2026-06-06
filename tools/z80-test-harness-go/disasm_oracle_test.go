@@ -56,6 +56,7 @@ const (
 	disasmSelfTestEntry = 0x8003 // DISASM_SELF_TEST_ENTRY (jump-table slot)
 	disasmCommMnem      = 0x7E99
 	disasmCommOps       = 0x7EA3
+	disasmCommPC        = 0x7EBD // DISASM_COMM_PC (8-byte LE instruction PC)
 )
 
 // flatMem is a flat 64 KB RAM implementing z80.Memory + z80.IO.  The
@@ -88,15 +89,27 @@ func (m *flatMem) readCString(addr uint16) string {
 }
 
 // runZ80Disasm loads disasmBin at &8000 into a fresh flat memory, sets
-// BC = high16, IX = low16, and runs disasm_entry to completion, returning
-// the (mnemonic, operands) strings it wrote to the comm buffer.
+// BC = high16, IX = low16, writes pc (8 bytes LE) into DISASM_COMM_PC, and
+// runs disasm_entry to completion, returning the (mnemonic, operands)
+// strings it wrote to the comm buffer.
+//
+// pc feeds the PC-relative families (b/bl/b.cc/cbz/cbnz/tbz/tbnz/adr/adrp/
+// ldr-literal); it arrives via the memory slot, not a register, so the
+// BC/IX/IY ABI assertions below are unchanged (IY stays a preserved
+// sentinel).  This mirrors the Go oracle's DecodeAt(pc, word).
 //
 // Return detection: a sentinel return address 0x0000 is pushed before entry;
 // the routine's terminating `ret` pops it into PC, so we step until PC==0
 // (or until a step cap, to guard against runaway code).
-func runZ80Disasm(disasmBin []byte, word uint32) (mnem, ops string, err error) {
+func runZ80Disasm(disasmBin []byte, word uint32, pc uint64) (mnem, ops string, err error) {
 	m := &flatMem{}
 	copy(m.ram[disasmEntry:], disasmBin)
+
+	// Write the instruction PC as an 8-byte little-endian value into the
+	// section-B comm slot the decoder reads for PC-relative targets.
+	for i := 0; i < 8; i++ {
+		m.ram[disasmCommPC+i] = byte(pc >> (8 * uint(i)))
+	}
 
 	cpu := &z80.CPU{Memory: m, IO: m}
 
@@ -223,7 +236,7 @@ func TestDisasmOracle(t *testing.T) {
 
 		goMnem, goOps := goOracle(pc, word)
 
-		z80Mnem, z80Ops, rerr := runZ80Disasm(disasmBin, word)
+		z80Mnem, z80Ops, rerr := runZ80Disasm(disasmBin, word, pc)
 		if rerr != nil {
 			t.Fatalf("Z80 run failed at word %d (pc=%#x word=%#08x): %v", i, pc, word, rerr)
 		}
