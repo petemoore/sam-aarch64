@@ -102,6 +102,35 @@ defer rather than guess). Logged here so they survive context churn — the
 agent works around them and Pete answers when available. Remove an entry
 once resolved.
 
+**Practice (Pete, 2026-06-08):** *every* question for Pete goes here the moment
+it arises — not just in chat — because simultaneous edits mean a chat question
+can be missed and left unanswered. This section is the single sure-fire list of
+**unanswered** questions: add on ask, remove/mark-resolved on answer, so what's
+shown is always exactly what's still open. (See `memory/feedback_capture_open_questions`.)
+
+### ⏳ OPEN — awaiting Pete (added 2026-06-08, evening)
+
+- **OQ-A — i5 graphics tooling.** For editor UI mockups at SAM-accurate
+  resolution, which approach do you want? (a) a **programmatic SAM-faithful
+  renderer** I write — emits PNGs (or actual SAM `SCREEN$` files viewable in
+  SimCoupé) at the exact MODE 3 (512×192, 4 colours/line) or MODE 4 (256×192,
+  16 colours) geometry, colours drawn from the real 128-entry palette,
+  8×8 attribute cells — deterministic and constraint-accurate; (b) a **dedicated
+  retro/pixel-art tool** you'd prefer to drive by hand; (c) a **generic AI image
+  generator**. Note on my capability: I do **not** have native image generation
+  in this environment, and a generic AI generator wouldn't respect the hard SAM
+  constraints (fixed resolution, 4/16-from-128 palette, attribute cells) — so for
+  *faithful* mockups, (a) is the honest best option; a dedicated art tool (b) is
+  better for hand-authored final art. Your call on which to use for i5.
+
+- **OQ-B — next major strand after the current batch lands.** Once
+  i8/i9/i12a/i13/i14/i35 are merged, what's the next big piece: **i1**
+  (compact-`.tbn`, the long-sequenced next), **start the editor** (i4 read-only
+  listing viewer → i3 groundwork), or **i7** (codegen tables from Go authority)?
+  You earlier leaned compact-`.tbn` or editor. (Default if unanswered: I land the
+  in-flight PRs but do **not** start a new major strand without your steer.)
+
+
 1. **`src/m3` rename — ✅ RESOLVED (Pete 2026-05-29).** Pete delegated the
    final structure choice to the agent. **Decision: flatten `src/m3/` up
    into `src/`** (no component subfolder). Rationale: the stub is gone
