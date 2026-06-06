@@ -89,12 +89,28 @@ func Fold(slot FoldSlot, value int64, pc int64, baseWord uint32) (uint32, error)
 		// in the base word.
 		return uint32(uint64(value)&0xFFFF) << 5, nil
 	case FoldMovzAuto:
-		// `mov Rd, #value` collapsed to movz: the value is the full
-		// constant; the base word's hw field (bits 22:21) selects which
-		// 16-bit chunk lands in imm16.
-		hw := (baseWord >> 21) & 3
-		chunk := (uint64(value) >> (hw * 16)) & 0xFFFF
-		return uint32(chunk) << 5, nil
+		// `mov Rd, #value` collapsed to movz (i48b): the value alone
+		// determines both the hw shift and imm16 — text→overlay never
+		// pre-bakes hw, so the base word's bits 22:21 are zeroed and the
+		// fold computes hw here. Mirrors tryEncodeMovImm (pass2.go:494) —
+		// the lowest 16-bit chunk position whose single chunk reproduces
+		// the value. is64 (W vs X) comes from the base word's sf bit.
+		is64 := (baseWord>>31)&1 == 1
+		u := uint64(value)
+		if !is64 {
+			u &= 0xFFFFFFFF
+		}
+		for shift := uint(0); shift < 64; shift += 16 {
+			if !is64 && shift >= 32 {
+				break
+			}
+			chunk := (u >> shift) & 0xFFFF
+			if chunk<<shift == u {
+				hw := uint32(shift / 16)
+				return (uint32(chunk) << 5) | (hw << 21), nil
+			}
+		}
+		return 0, fmt.Errorf("FoldMovzAuto: value %#x not movz-encodable", uint64(value))
 	case FoldLogical:
 		// encodeLogicalImm: bitmask immediate N:immr:imms @10; is64 from sf.
 		is64 := (baseWord>>31)&1 == 1
@@ -168,8 +184,13 @@ func ZeroSlot(word uint32, slot FoldSlot) uint32 {
 		return word &^ (0xFFF << 10)
 	case FoldMemImm9:
 		return word &^ (0x1FF << 12)
-	case FoldMovkImm16, FoldMovzAuto:
+	case FoldMovkImm16:
+		// Explicit movz/movk: hw stays in the base word (syntactic lsl #N).
 		return word &^ (0xFFFF << 5)
+	case FoldMovzAuto:
+		// Auto-movz (i48b): hw is computed in the fold, so clear it (22:21)
+		// alongside imm16 (@5) — the base word carries neither.
+		return word &^ ((0xFFFF << 5) | (0x3 << 21))
 	case FoldPairImm7:
 		return word &^ (0x7F << 15)
 	}
