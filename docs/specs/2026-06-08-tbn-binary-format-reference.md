@@ -100,11 +100,12 @@ readers' framing — though an old reader cannot render an unknown kind's
 | `0x03` | `LOCAL_DEF` | `[digit u8]` — defines a numeric local label (1–99) | kinds.go:9 |
 | `0x04` | `DIRECTIVE` | `[directive_id u8][operand_count u8][operands…]` (§4, §6) | kinds.go:10 |
 | `0x05` | `COMMENT`   | `[placement u8][bytes…]` — `0`=standalone, `1`=trailing | kinds.go:11 |
-| `0x07` | `LIT_INSTS` | `[count u8][word₀…word₍count₋₁₎]`, each word 4 bytes LE — a run of fully-literal instructions stored as assembled machine code (§7) | kinds.go:17 |
+| `0x07` | `LIT_INSTS` | `[count u8][word₀…word₍count₋₁₎]`, each word 4 bytes LE — a run of fully-literal instructions stored as assembled machine code (§7.2) | kinds.go:17 |
+| `0x08` | `LIT_DATA`  | `[directive_id u8][raw LE bytes…]` — a run of constant numeric data stored as assembled bytes, tagged with its source directive (§7.3) | kinds.go:18 |
 
 Reserved / not-yet-defined: `0x00`; `0x06` (was earmarked for a *single*
 literal instruction — not used, a `count=1` LIT_INSTS run covers it);
-`0x08` (**planned** `LIT_DATA`, §7.3); `0x09`–`0xFF`.
+`0x09`–`0xFF`.
 
 Notes:
 
@@ -334,14 +335,14 @@ assembler memcpys the words straight to OUT — zero encoding work
 (`src/main_loop.asm:main_handle_lit_insts`). On the vendored spectrum4
 release this shrinks the `.tbn` from 88,644 → 68,755 B (−22.4%).
 
-### 7.3 `LIT_DATA` (0x08) — constant data runs (**planned**, i1 PR3)
+### 7.3 `LIT_DATA` (0x08) — constant data runs (**implemented**, i1 PR3 — PR #124)
 
 The remaining bulk of a compact `.tbn` is numeric data directives
 (`.byte`/`.short`/`.hword`/`.word`/`.quad`) whose operands are constants.
-Today each element is a full `IMM_EXPR` operand (kind + length + push +
-value ≈ 6–12 B) emitting only 1–8 output bytes — a ~5× bloat. PR3 collapses
-a run of consecutive **same-directive, all-constant** data records into one
-record storing the raw assembled bytes:
+In the symbolic form each element is a full `IMM_EXPR` operand (kind +
+length + push + value ≈ 6–12 B) emitting only 1–8 output bytes — a ~5×
+bloat. A run of consecutive **same-directive, all-constant** data records
+collapses into one record storing the raw assembled bytes:
 
 ```
 [kind 0x08][len u16][directive_id u8][raw LE bytes…]
@@ -355,15 +356,26 @@ optimisation (a `.hword` table and a `.word` table with the same bytes must
 not become indistinguishable). Only runs of the **same** directive id merge,
 so the boundary between, say, a `.word` table and an adjacent `.quad` table
 is preserved as two `LIT_DATA` records. Symbol-bearing data (e.g.
-`.quad some_label`) stays a symbolic `DIRECTIVE` for relocation.
+`.quad some_label`) stays a symbolic `DIRECTIVE` for relocation. The
+collapsibility predicate is `format.ConstDataWidth` (`litinsts.go`); the
+bytes come from the one encoder (`refenc`'s `encodeDirective`), so a
+`LIT_DATA` record is byte-identical to what the symbolic path would emit.
 
-**Measured estimate** (vendored release, analyser over the compact `.tbn`):
-1,745 collapsible numeric records currently occupy **21,892 B** (31.8% of
-the 68,755 B file) but assemble to only **4,046 B**. PR3 is projected to
-save **~13–18 KB**, taking the compact `.tbn` to **~51–56 KB** (−18% to
-−26% vs today; **−37% to −43% vs the original 88,644 B symbolic**). `.hword`
-tables dominate the collapsible set (17.5 KB) and tend to be contiguous, so
-the realistic result skews toward the merged-run end (~51–53 KB).
+A run is split into records of at most **1016 data bytes** (on whole-element
+boundaries) so each payload stays under the Z80 reader's 1024-byte
+`STAGING_BUF` (`src/reader.asm`). On the SAM the decode is shared with
+`LIT_INSTS` — both are "skip the 1-byte tag, memcpy `len-1` bytes to OUT"
+(`src/main_loop.asm:main_handle_lit_insts`); the `directive_id` matters only
+to the disassembler.
+
+**Measured result** (vendored spectrum4 release; PR #124, byte-identical to
+GNU `release.img`): 1,745 collapsible numeric records that occupied
+**21,892 B** (31.8%) of the 68,755 B PR1/PR2 file — assembling to just
+4,046 B of output — collapse the compact `.tbn` to **51,117 B**. That is
+**−25.7% vs the PR1/PR2 file** and **−42.3% vs the original 88,644 B
+symbolic** form, and drops the paged-IN load from **5 IN pages to 4**.
+`.hword` tables dominate the collapsible set (17.5 KB) and are contiguous,
+so the result landed at the merged-run end the estimate predicted.
 
 ### 7.4 Level 3 dictionary (future)
 
