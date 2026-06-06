@@ -150,6 +150,69 @@ for dir in "${FIXTURE_DIRS[@]}"; do
 done
 
 echo ""
+echo "=== [2b/3] Round-trip release.s (code-only, -strip-data) ==="
+# release.s contains both instructions and data (.word/.quad tables, literal
+# pools).  -strip-data removes all data-emitting directive records and
+# ldr Xn,=expr (literal-pool load) instructions, producing a code-only .tbn
+# so the round-trip never encounters .inst entries from embedded data words.
+release_src="$ROOT/tests/m6/release/release.s"
+if [ -f "$release_src" ]; then
+    rel_v1_tbn="$tmp/release_v1.tbn"
+    rel_v1_bin="$tmp/release_v1.bin"
+    rel_disasm_s="$tmp/release_disasm.s"
+    rel_v2_tbn="$tmp/release_v2.tbn"
+    rel_v2_bin="$tmp/release_v2.bin"
+
+    if ! "$ROOT/build/text2bin" -flatten -strip-comments -strip-data \
+            -o "$rel_v1_tbn" "$release_src" 2>/dev/null; then
+        echo "    FAIL(text2bin) release.s"
+        fail_names+=("release.s [text2bin]")
+        failed=$((failed + 1))
+    elif ! "$ROOT/build/refenc" -o "$rel_v1_bin" "$rel_v1_tbn" 2>/dev/null; then
+        echo "    FAIL(refenc) release.s"
+        fail_names+=("release.s [refenc]")
+        failed=$((failed + 1))
+    elif ! "$ROOT/build/aarch64dec" -asm "$rel_v1_bin" > "$rel_disasm_s" 2>/dev/null; then
+        echo "    FAIL(aarch64dec) release.s"
+        fail_names+=("release.s [aarch64dec]")
+        failed=$((failed + 1))
+    elif grep -q $'\t\.inst' "$rel_disasm_s"; then
+        count=$(grep -c $'\t\.inst' "$rel_disasm_s")
+        echo "    FAIL(.inst) release.s: $count word(s) could not be decoded"
+        grep $'\t\.inst' "$rel_disasm_s" | head -3 | sed 's/^/      /'
+        fail_names+=("release.s [.inst: $count undecodeable word(s)]")
+        failed=$((failed + 1))
+    elif ! "$ROOT/build/text2bin" -o "$rel_v2_tbn" "$rel_disasm_s" 2>/dev/null; then
+        echo "    FAIL(text2bin2) release.s"
+        fail_names+=("release.s [text2bin re-asm]")
+        failed=$((failed + 1))
+    elif ! "$ROOT/build/refenc" -o "$rel_v2_bin" "$rel_v2_tbn" 2>/dev/null; then
+        echo "    FAIL(refenc2) release.s"
+        fail_names+=("release.s [refenc re-enc]")
+        failed=$((failed + 1))
+    elif cmp -s "$rel_v1_bin" "$rel_v2_bin"; then
+        rel_sz=$(wc -c < "$rel_v1_bin")
+        rel_words=$(( rel_sz / 4 ))
+        echo "    PASS release.s ($rel_sz B, $rel_words instructions)"
+        passed=$((passed + 1))
+    else
+        first_diff=$(cmp -l "$rel_v1_bin" "$rel_v2_bin" 2>/dev/null | head -1 | awk '{print $1}') || true
+        if [ -n "$first_diff" ]; then
+            byte_off=$(( (first_diff - 1) & ~3 ))
+            v1_word=$(od -j "$byte_off" -N4 -An -t x4 "$rel_v1_bin" | tr -d ' \n')
+            v2_word=$(od -j "$byte_off" -N4 -An -t x4 "$rel_v2_bin" | tr -d ' \n')
+            echo "    FAIL(mismatch) release.s [byte $byte_off: v1=0x$v1_word v2=0x$v2_word]"
+        else
+            echo "    FAIL(mismatch) release.s [sizes differ]"
+        fi
+        fail_names+=("release.s [mismatch]")
+        failed=$((failed + 1))
+    fi
+else
+    echo "    SKIP release.s (not found at $release_src)"
+fi
+
+echo ""
 echo "=== [3/3] Summary ==="
 printf "    PASSED:  %d\n" "$passed"
 printf "    SKIPPED: %d  (data fixtures, out of scope for instruction round-trip)\n" "$skipped"

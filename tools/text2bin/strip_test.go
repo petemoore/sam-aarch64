@@ -114,3 +114,123 @@ func TestStripCommentRecords_RemovesAllWhenAllAreComments(t *testing.T) {
 		t.Errorf("expected empty record stream, got %d bytes", len(f.Records))
 	}
 }
+
+// — stripDataRecords tests —
+
+func dirID(t *testing.T, name string) byte {
+	t.Helper()
+	id, ok := format.DirectiveID(name)
+	if !ok {
+		t.Fatalf("unknown directive %q", name)
+	}
+	return id
+}
+
+// makeLitPoolOperands returns the encoded operand bytes for an ldr Xn,=expr
+// instruction: one OpRegX operand followed by one OpLitPool operand.
+func makeLitPoolOperands() []byte {
+	var ow format.OperandWriter
+	ow.WriteReg(format.OpRegX, 0) // x0
+	ow.WriteLitPool(8, []byte{0x01, 0x00}) // =1 (8-byte pool entry)
+	return ow.Bytes()
+}
+
+func TestStripDataRecords_RemovesDataDirectivesAndLitPool(t *testing.T) {
+	wordID := dirID(t, ".word")
+	quadID := dirID(t, ".quad")
+	ltorgID := dirID(t, ".ltorg")
+
+	var rw format.RecordWriter
+	rw.WriteLabelDef(0)                  // keep: label
+	rw.WriteInst(1, 0, nil)              // keep: plain instruction
+	rw.WriteDirective(wordID, 0, nil)    // strip: .word
+	rw.WriteDirective(quadID, 0, nil)    // strip: .quad
+	rw.WriteDirective(ltorgID, 0, nil)   // strip: .ltorg
+	ops := makeLitPoolOperands()
+	rw.WriteInst(2, 2, ops)             // strip: ldr x0, =expr
+	rw.WriteLocalDef(1)                  // keep: local label
+
+	in := buildTbn(t, []string{"_start"}, rw.Bytes())
+	out, err := stripDataRecords(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := format.ReadFile(out)
+	if err != nil {
+		t.Fatalf("re-read after strip: %v", err)
+	}
+	r := format.NewRecordReader(f.Records)
+	var kinds []format.RecordKind
+	for !r.AtEnd() {
+		rec, err := r.Next()
+		if err != nil {
+			t.Fatalf("read record: %v", err)
+		}
+		kinds = append(kinds, rec.Kind)
+	}
+	want := []format.RecordKind{
+		format.KindLabelDef,
+		format.KindInst,
+		format.KindLocalDef,
+	}
+	if len(kinds) != len(want) {
+		t.Fatalf("got kinds %v, want %v", kinds, want)
+	}
+	for i := range want {
+		if kinds[i] != want[i] {
+			t.Errorf("kinds[%d] = %v, want %v", i, kinds[i], want[i])
+		}
+	}
+}
+
+func TestStripDataRecords_PreservesNonDataDirectives(t *testing.T) {
+	globalID := dirID(t, ".global")
+	equID := dirID(t, ".equ")
+	wordID := dirID(t, ".word")
+
+	var rw format.RecordWriter
+	rw.WriteDirective(globalID, 0, nil) // keep: .global
+	rw.WriteDirective(equID, 0, nil)    // keep: .equ
+	rw.WriteDirective(wordID, 0, nil)   // strip: .word
+
+	in := buildTbn(t, nil, rw.Bytes())
+	out, err := stripDataRecords(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := format.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := format.NewRecordReader(f.Records)
+	var dirNames []string
+	for !r.AtEnd() {
+		rec, err := r.Next()
+		if err != nil {
+			t.Fatalf("read record: %v", err)
+		}
+		if rec.Kind == format.KindDirective {
+			dirNames = append(dirNames, format.DirectiveName(rec.DirectiveID))
+		}
+	}
+	if len(dirNames) != 2 || dirNames[0] != ".global" || dirNames[1] != ".equ" {
+		t.Errorf("got directives %v, want [.global .equ]", dirNames)
+	}
+}
+
+func TestStripDataRecords_NoDataIsIdempotent(t *testing.T) {
+	var rw format.RecordWriter
+	rw.WriteLabelDef(0)
+	rw.WriteInst(1, 0, nil)
+	in := buildTbn(t, []string{"_start"}, rw.Bytes())
+
+	out, err := stripDataRecords(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(in, out) {
+		t.Errorf("strip of data-free .tbn should be a no-op")
+	}
+}

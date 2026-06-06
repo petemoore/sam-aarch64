@@ -6,6 +6,16 @@ import (
 	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
 )
 
+// dataDirectiveSet is the set of directive names that emit data bytes into
+// the output binary.  These are stripped by stripDataRecords.
+var dataDirectiveSet = map[string]bool{
+	".byte": true, ".short": true, ".hword": true,
+	".word": true, ".quad": true,
+	".ascii": true, ".asciz": true,
+	".skip": true, ".space": true,
+	".ltorg": true,
+}
+
 // stripCommentRecords returns the input `.tbn` with every KindComment
 // record removed.  The file header (magic, version, flags, name table)
 // is preserved verbatim; only the record stream is filtered.
@@ -51,4 +61,70 @@ func stripCommentRecords(in []byte) ([]byte, error) {
 	out = append(out, header...)
 	out = append(out, newRecords.Bytes()...)
 	return out, nil
+}
+
+// stripDataRecords returns the input `.tbn` with all data-emitting records
+// removed: KindDirective records for data directives (.word, .quad, .byte,
+// .hword, .short, .ascii, .asciz, .skip, .space, .ltorg) and KindInst
+// records that carry an OpLitPool operand (ldr Xn, =expr).  Label,
+// local-label, comment, and non-data directive records are preserved.
+//
+// Use case: produce a code-only .tbn for the disassembler round-trip gate
+// on spectrum4 release.s, which embeds data (literal pools, .word/.quad
+// tables).  Stripping data ensures the assembled binary contains only
+// 4-byte instruction words, so aarch64dec never encounters .inst entries
+// from embedded data words.
+func stripDataRecords(in []byte) ([]byte, error) {
+	f, err := format.ReadFile(in)
+	if err != nil {
+		return nil, err
+	}
+
+	headerLen := len(in) - len(f.Records)
+	header := in[:headerLen]
+
+	var newRecords bytes.Buffer
+	r := format.NewRecordReader(f.Records)
+	for !r.AtEnd() {
+		rec, err := r.Next()
+		if err != nil {
+			return nil, err
+		}
+		switch rec.Kind {
+		case format.KindDirective:
+			if dataDirectiveSet[format.DirectiveName(rec.DirectiveID)] {
+				continue
+			}
+		case format.KindInst:
+			if instHasLitPoolOperand(rec) {
+				continue
+			}
+		}
+		n := uint16(len(rec.Raw))
+		newRecords.WriteByte(byte(rec.Kind))
+		newRecords.WriteByte(byte(n))
+		newRecords.WriteByte(byte(n >> 8))
+		newRecords.Write(rec.Raw)
+	}
+
+	out := make([]byte, 0, len(header)+newRecords.Len())
+	out = append(out, header...)
+	out = append(out, newRecords.Bytes()...)
+	return out, nil
+}
+
+// instHasLitPoolOperand reports whether rec (a KindInst record) contains an
+// OpLitPool operand, i.e. whether it is an `ldr Xn, =expr` instruction.
+func instHasLitPoolOperand(rec format.Record) bool {
+	or := format.NewOperandReader(rec.Operands)
+	for !or.AtEnd() {
+		o, err := or.Next()
+		if err != nil {
+			break
+		}
+		if o.Kind == format.OpLitPool {
+			return true
+		}
+	}
+	return false
 }

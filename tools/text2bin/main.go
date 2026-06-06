@@ -22,6 +22,7 @@ func main() {
 		flattenFlag       bool
 		originStr         string
 		stripCommentsFlag bool
+		stripDataFlag     bool
 		preprocessOnly    bool
 	)
 	flag.StringVar(&outFlag, "o", "", "output file (defaults to INPUT.tbn)")
@@ -42,6 +43,11 @@ func main() {
 			"Used to fit the .tbn within the SAM assembler's IN-buffer "+
 			"ceiling (96 KB) when feeding it the spectrum4 release source "+
 			"(~408 KB unstripped, ~88 KB stripped).")
+	flag.BoolVar(&stripDataFlag, "strip-data", false,
+		"after parsing, remove all data-emitting records: .word/.quad/.byte/"+
+			".hword/.short/.ascii/.asciz/.skip/.space/.ltorg directives and "+
+			"ldr Xn,=expr (literal-pool load) instructions. "+
+			"Produces a code-only .tbn for the disassembler round-trip gate.")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		fmt.Fprintf(os.Stderr, "usage: text2bin [-I dir]... [-E | [-flatten [-origin N]] [-strip-comments]] INPUT.s [-o OUTPUT]\n")
@@ -57,8 +63,8 @@ func main() {
 	// -E: emit expanded source, not a .tbn.  Mutually exclusive with the
 	// tokenising flags.
 	if preprocessOnly {
-		if flattenFlag || stripCommentsFlag {
-			fmt.Fprintln(os.Stderr, "-E cannot be combined with -flatten or -strip-comments")
+		if flattenFlag || stripCommentsFlag || stripDataFlag {
+			fmt.Fprintln(os.Stderr, "-E cannot be combined with -flatten or -strip-comments or -strip-data")
 			os.Exit(2)
 		}
 		expanded, err := translate.Preprocess(src, in,
@@ -105,6 +111,13 @@ func main() {
 		out, err = stripCommentRecords(out)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "strip-comments: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	if stripDataFlag {
+		out, err = stripDataRecords(out)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "strip-data: %v\n", err)
 			os.Exit(1)
 		}
 	}
