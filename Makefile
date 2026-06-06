@@ -186,6 +186,7 @@ test-mem-offaxis: $(BUILD)/test_mem.bin
 # M6 budget-relief PR (2026-05-29); mirrors the test_mem off-axis
 # pattern (PR #52).  See src/test_offaxis_cluster.asm.
 $(BUILD)/test_cluster.bin: src/test_offaxis_cluster.asm \
+		src/test_symbols.asm src/test_local_labels.asm \
 		src/test_slots.asm src/test_pc_rel.asm \
 		src/test_directives_m5.asm src/test_ror_imm.asm \
 		src/test_shifted_reg.asm src/test_extended_reg.asm \

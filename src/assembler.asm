@@ -326,18 +326,22 @@ endif
 ; also clobbered but is re-zeroed by main_assemble's pass_pc_reset
 ; call, so it doesn't need explicit restoration here.
 if defined(BUILD_TESTS)
-                call    run_symbol_table_self_tests
-                call    run_local_label_self_tests
-                ; run_expr_eval_m4_self_tests moved off-axis into the page-12
-                ; cluster (PR-3c, 2026-05-29) to reclaim ~449 B of section-C/D
-                ; budget for the MUL/DIV evaluator code.  It runs first in
-                ; cluster_dispatch, preserving its prior relative order (after
-                ; symbol/local, before slots).  The suite is LMPR-swap-safe:
-                ; verified call-graph-free of paged_call / section-B / LMPR
-                ; routines (only eval_expr_const, symbol_*, local_* — all
-                ; HMPR-stable section-C/D), and its inline `defb` literals read
-                ; via section A under the swap, like the slots suite already
-                ; relies on.
+                ; run_symbol_table_self_tests and run_local_label_self_tests
+                ; moved off-axis into the page-12 cluster (strand-B PR-3,
+                ; 2026-06-07) to reclaim ~775 B of section-C budget for the
+                ; page-15 disassembler loader and self-test.  Both suites
+                ; call their own init routines and are order-independent.
+                ; They now run first in cluster_dispatch, preserving the
+                ; prior relative order (symbol/local before expr_eval_m4).
+                ; run_expr_eval_m4_self_tests also moved off-axis into the
+                ; page-12 cluster (PR-3c, 2026-05-29) to reclaim ~449 B of
+                ; section-C/D budget for the MUL/DIV evaluator code.  It
+                ; runs after symbol/local in cluster_dispatch.  The suite is
+                ; LMPR-swap-safe: verified call-graph-free of paged_call /
+                ; section-B / LMPR routines (only eval_expr_const, symbol_*,
+                ; local_* — all HMPR-stable section-C/D), and its inline
+                ; `defb` literals read via section A under the swap, like the
+                ; slots suite already relies on.
 
 ; -- The slot / pc_rel / directives_m5 / ror_imm / shifted_reg /
 ; extended_reg / litpool suites live off-axis on physical page 12 (M6
@@ -547,8 +551,13 @@ if defined(BUILD_TESTS)
                 ; main binary so both inline and off-axis suites resolve it
                 ; (the off-axis cluster + test_mem reach it via importfile).
                 include "test_assert_eq32.asm"
-                include "test_symbols.asm"
-                include "test_local_labels.asm"
+                ; test_symbols.asm and test_local_labels.asm moved off-axis
+                ; into the page-12 cluster (strand-B PR-3, 2026-06-07) to
+                ; reclaim ~775 B of section-C budget for the page-15
+                ; disassembler loader and self-test.  Their helper routines
+                ; (assert_cf_set/clear, set_value_buf_imm, etc.) move with
+                ; them; test_expr_eval_m4.asm in the cluster resolves these
+                ; locally rather than via assembler.sym importfile.
                 ; test_expr_eval_m4 moved off-axis into the page-12 cluster
                 ; (PR-3c, 2026-05-29) — see the call-site comment above.
                 ; test_slots / test_pc_rel / test_directives_m5 / test_ror_imm /

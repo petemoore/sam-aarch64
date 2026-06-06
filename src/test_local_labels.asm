@@ -4,9 +4,11 @@
 ; Per docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.3 and the
 ; M4 plan (docs/plans/2026-05-24-m4-symbols-multipass.md Task 3).
 ;
-; Mirrors test_symbols.asm's structure: runs from start: BEFORE
-; load_enctab, with assertion failures going `jp fail` (red border +
-; printer-channel "FAIL" banner, ci-m3 reports fail immediately).
+; Lives in the off-axis page-12 cluster (src/test_offaxis_cluster.asm),
+; relocated from the inline section in strand-B PR-3 (2026-06-07) to
+; reclaim section-C budget.  Runs before load_enctab, with assertion
+; failures going `jp fail` (red border + printer-channel "FAIL" banner,
+; ci-m3 reports fail immediately).
 ;
 ; Test coverage:
 ;   1. After local_label_table_init, lookup of any digit returns CF=1.
@@ -37,8 +39,8 @@
 
 
 ; -----------------------------------------------------------------------
-; run_local_label_self_tests — entry point called from assembler.asm
-; start: (between run_symbol_table_self_tests and load_enctab).
+; run_local_label_self_tests — entry point, called from cluster_dispatch
+; in test_offaxis_cluster.asm.
 ;
 ; Input:  none.
 ; Output: returns to caller on success.  On any mismatch: jp fail.
