@@ -130,6 +130,34 @@ shown is always exactly what's still open. (See `memory/feedback_capture_open_qu
   You earlier leaned compact-`.tbn` or editor. (Default if unanswered: I land the
   in-flight PRs but do **not** start a new major strand without your steer.)
 
+- **OQ-C — formal GitHub reviews for pre-merge review agents.** Pete (2026-06-08):
+  record each pre-merge review as a **native GitHub review** (`gh pr review`) so the
+  reasoning persists on the PR for posterity, instead of living only in the
+  agent/chat transcript (where it's lost — only inferable from later commits).
+  **My recommendation: YES, adopt** — it matches the existing global "Reviewing PRs
+  on GitHub" rules (native review + inline comments anchored to code). **Caveat:**
+  GitHub blocks an author *approving* their own PR, and our agents commit as Pete
+  (same `gh` account), so use **`gh pr review --comment`** to record the checklist
+  verdict (+ inline comments for specific findings), not `--approve`. To codify:
+  add to the project `CLAUDE.md` §3 (pre-merge review). *(Applied to tonight's
+  babysitter immediately, ahead of formal codification.)*
+
+- **OQ-D — GitHub Issues vs the `iN` doc registry.** Pete (2026-06-08): are we
+  reinventing GitHub Issues with the `iN`/m7-status registry? Tradeoff — Issues give
+  clean lifecycle (open/closed), PR linkage (`Closes #n`), labels/boards, and are
+  easy for a human to step through; the **doc** gives single-read whole-context
+  (one Read = the entire backlog + design rationale + cross-item dependencies), a
+  real agent-effectiveness advantage, and avoids the multi-API-call cost of
+  reconstructing state from many issues. **My lean:** keep the doc as the primary
+  source of truth for now (don't double-track — that's a drift hazard, cf. the
+  sysreg/registry drift we just fixed), and do **not** fully migrate; if
+  human-stepping-through becomes painful, adopt a **light hybrid** — one tracking
+  issue per *active* major strand (titled with its `iN` id; PRs `Close` it), with the
+  doc staying the comprehensive register + design narrative. Mitigation on the
+  multi-call concern: `gh issue list --json number,title,body,labels,state` returns
+  all issues + bodies in ONE call *if* content lives in bodies (not scattered in
+  comments). **Decision: Pete's call** — start a light hybrid now, or revisit later.
+
 
 1. **`src/m3` rename — ✅ RESOLVED (Pete 2026-05-29).** Pete delegated the
    final structure choice to the agent. **Decision: flatten `src/m3/` up
