@@ -390,6 +390,31 @@ SYSREG_COMM_LEN:        equ     TRAMPOLINE_DST + &90    ; = &7E90, 1 byte
 SYSREG_COMM_RESULT:     equ     TRAMPOLINE_DST + &91    ; = &7E91, up to 8 bytes
 
 
+; Disassembler page (PRODUCTION feature — both variants).
+;
+; Per docs/notes/2026-06-07-disassembler-page-placement.md.
+; Page 15 holds disasm.bin (standalone stub, assembles at org &8000).
+; Called via paged_call from src/test_disasm_paged.asm (BUILD_TESTS) and,
+; in future, from the on-SAM editor at runtime.  Not re-entrant — paged_call
+; has a single static HMPR save slot; callers must not nest.
+DISASM_PAGE:    equ     15
+
+; Entry point address in section C when HMPR = DISASM_PAGE (= 15).
+; The `defw DISASM_ENTRY` in paged_call call-sites encodes this value.
+DISASM_ENTRY:   equ     &8000
+
+; Disassembler comm buffer — LMPR-stable section B, shared between the
+; caller (default HMPR) and the disasm routine (HMPR = DISASM_PAGE).
+; Placed immediately after SYSREG_COMM_RESULT (&7E91 + 8 = &7E99),
+; well clear of PAGED_CALL_HMPR_SAVE (&7ED0).
+;
+; Constants (DISASM_COMM_MNEM, DISASM_COMM_OPS, DISASM_SELF_TEST_ENTRY)
+; are defined in src/disasm_comm.inc — a shared file included by both
+; this file and src/disasm.asm (which is assembled standalone and cannot
+; see our equ's directly).
+                include "disasm_comm.inc"
+
+
 TRAMPOLINE_DST: equ     &7E00          ; section-B copy destination
                                        ; (under LMPR_DEFAULT, section B
                                        ; = page 1).  Near the top of

@@ -209,60 +209,60 @@ name_enctab:    defb    19
 
 
 ; -----------------------------------------------------------------------
-; load_page13_payload — PRODUCTION feature (both variants).  HLOAD the
-; sysreg lookup-data binary (build/sysreg_data.bin, CODE file "sd13")
-; into physical page 13 via the section-B HLOAD trampoline.
+; load_payload_generic — shared HGTHD + HLOAD-via-trampoline body.
 ;
-; Per docs/plans/2026-05-29-m6-closure-release-bytematch.md PR-2, as
-; corrected by the PR-2 implementation spec.  Structural cousin of
-; load_page14_payload / load_test_mem_off_axis / load_enctab: HGTHD to
-; find the file + populate svde, then HLOAD-via-trampoline to land it in
-; a page outside section C.  Differences: file name ("sd13"), target
-; page (SYSREG_DATA_PAGE = 13).
+; Called via JP from each load_pageN_payload stub.  Each stub provides:
+;   HL = UIFA name block (type + 10-char name + 4-char ext, 15 bytes).
+;   A  = target physical page (5-bit page number).
 ;
-; The page-13 content is consumed at runtime by the four
-; sysname_lookup_* routines (sysname.asm) via paged_call into the
-; SYSREG_*_ENTRY jump-table slots.  Needed by EVERY build (sysreg/dc/
-; tlbi/pstate operands appear in production sources), so this routine
-; and its boot-sequence call are NOT gated by BUILD_TESTS.
+; The body does:
+;   push A (saves target page), fill_uifa, HOOK_HGTHD, read
+;   DIFA+34/35 for page-count + length-mod-16K, pop A into B, then
+;   call TRAMPOLINE_DST to execute the section-B HLOAD trampoline.
 ;
-; ORDERING (assembler.asm boot sequence): this must run AFTER
-; enctab_trampoline_setup (the HLOAD trampoline must be installed) and,
-; in the BUILD_TESTS variant, AFTER load_test_mem_off_axis +
-; run_mem_self_tests (which use page 13 as the off-axis test_mem
-; payload).  load_page13_payload overwrites page 13 with sysreg_data,
-; so it must land after those consumers have finished with test_mem.
-; It must run BEFORE main_assemble (the first place a sysname lookup
-; can occur).
-;
-; Input:  none (precondition: enctab_trampoline_setup has been called).
-; Output: physical page 13 holds sysreg_data.bin (jump table at &8000
-;         when HMPR maps page 13 in).  HMPR restored on return.
-; Clobbers: A, BC, DE, HL, IX (everything except SP).
+; Input:  HL = name block, A = target page.
+;         Precondition: enctab_trampoline_setup has been called.
+; Output: file in target page, HMPR restored on return.
+; Clobbers: A, BC, DE, HL, IX.
 ; -----------------------------------------------------------------------
-load_page13_payload:
-                ld      hl, name_sysreg_data
+load_payload_generic:
+                push    af             ; save A = target page
                 call    fill_uifa
                 rst     8
                 defb    HOOK_HGTHD     ; longjmps on "file not found"
-
 ; Read length-mod-16K from SAMDOS-deposited DIFA header at &4B50+35,
-; clearing the `set 7, d` marker.  Mirrors load_page14_payload.
+; clearing the `set 7, d` marker left by HGTHD.
                 ld      hl, (&4B50 + 35)
                 ld      a, h
                 and     &7F
                 ld      h, a
                 ld      e, l
                 ld      d, h           ; DE = length-mod-16K
-
-; Read page count from DIFA+34.  Expected 0 — sysreg_data.bin is < 1 KB.
+; Read page count from DIFA+34.  Zero for any payload < 16 KB.
                 ld      a, (&4B50 + 34)
                 ld      c, a           ; C = pages count
-
+                pop     af             ; restore A = target page
+                ld      b, a           ; B = target page for HLOAD trampoline
                 ld      hl, &8000      ; section-C window (HLOAD requirement)
-                ld      b, SYSREG_DATA_PAGE
                 call    TRAMPOLINE_DST
                 ret
+
+
+; -----------------------------------------------------------------------
+; load_page13_payload — PRODUCTION feature (both variants).  HLOAD the
+; sysreg lookup-data binary (build/sysreg_data.bin, CODE file "sd13")
+; into physical page 13.
+;
+; Per docs/plans/2026-05-29-m6-closure-release-bytematch.md PR-2.
+; Needed by EVERY build (sysreg/dc/tlbi/pstate operands appear in
+; production sources).  ORDERING: after enctab_trampoline_setup and,
+; in BUILD_TESTS, after test_mem self-tests (page 13 is reused); before
+; main_assemble.
+; -----------------------------------------------------------------------
+load_page13_payload:
+                ld      hl, name_sysreg_data
+                ld      a, SYSREG_DATA_PAGE
+                jp      load_payload_generic
 
 
 ; -----------------------------------------------------------------------
@@ -274,6 +274,32 @@ load_page13_payload:
 name_sysreg_data:
                 defb    19
                 defm    "sd13      "   ; 10 chars (4 + 6 trailing spaces)
+                defm    "    "         ; 4-char ext (unused)
+
+
+; -----------------------------------------------------------------------
+; load_page15_payload — PRODUCTION feature (both variants).  HLOAD the
+; disassembler binary (build/disasm.bin, CODE file "d15") into physical
+; page 15.
+;
+; Per docs/notes/2026-06-07-disassembler-page-placement.md (strand-B PR-3).
+; ORDERING: after enctab_trampoline_setup; before the BUILD_TESTS
+; disasm self-test paged_call.
+; -----------------------------------------------------------------------
+load_page15_payload:
+                ld      hl, name_disasm
+                ld      a, DISASM_PAGE
+                jp      load_payload_generic
+
+
+; -----------------------------------------------------------------------
+; UIFA name block for "d15" (disasm, both variants).
+;
+; The on-disk catalogue entry is created by build-m3-disk when invoked
+; with the -disasm flag.
+; -----------------------------------------------------------------------
+name_disasm:    defb    19
+                defm    "d15       "   ; 10 chars (3 + 7 trailing spaces)
                 defm    "    "         ; 4-char ext (unused)
 
 
@@ -303,28 +329,8 @@ if defined(BUILD_TESTS)
 ; -----------------------------------------------------------------------
 load_test_mem_off_axis:
                 ld      hl, name_test_mem
-                call    fill_uifa
-                rst     8
-                defb    HOOK_HGTHD     ; longjmps on "file not found"
-
-; Read length-mod-16K from SAMDOS-deposited DIFA header at &4B50+35,
-; clearing the `set 7, d` marker.  Mirrors load_in_file in main_loop.asm.
-                ld      hl, (&4B50 + 35)
-                ld      a, h
-                and     &7F
-                ld      h, a
-                ld      e, l
-                ld      d, h           ; DE = length-mod-16K
-
-; Read page count from DIFA+34.  We expect 0 for a sub-16K payload —
-; if the off-axis test bin ever grows past 16 KB this needs revisiting.
-                ld      a, (&4B50 + 34)
-                ld      c, a           ; C = pages count
-
-                ld      hl, &8000      ; section-C window (HLOAD requirement)
-                ld      b, TEST_MEM_PAGE
-                call    TRAMPOLINE_DST
-                ret
+                ld      a, TEST_MEM_PAGE
+                jp      load_payload_generic
 
 
 ; -----------------------------------------------------------------------
@@ -363,28 +369,8 @@ name_test_mem:  defb    19
 ; -----------------------------------------------------------------------
 load_offaxis_cluster:
                 ld      hl, name_cluster
-                call    fill_uifa
-                rst     8
-                defb    HOOK_HGTHD     ; longjmps on "file not found"
-
-; Read length-mod-16K from SAMDOS-deposited DIFA header at &4B50+35,
-; clearing the `set 7, d` marker.  Mirrors load_test_mem_off_axis.
-                ld      hl, (&4B50 + 35)
-                ld      a, h
-                and     &7F
-                ld      h, a
-                ld      e, l
-                ld      d, h           ; DE = length-mod-16K
-
-; Read page count from DIFA+34.  We expect 0 for a sub-16K payload —
-; if the cluster bin ever grows past 16 KB this needs revisiting.
-                ld      a, (&4B50 + 34)
-                ld      c, a           ; C = pages count
-
-                ld      hl, &8000      ; section-C window (HLOAD requirement)
-                ld      b, TEST_CLUSTER_PAGE
-                call    TRAMPOLINE_DST
-                ret
+                ld      a, TEST_CLUSTER_PAGE
+                jp      load_payload_generic
 
 
 ; -----------------------------------------------------------------------
@@ -420,27 +406,8 @@ name_cluster:   defb    19
 ; -----------------------------------------------------------------------
 load_page14_payload:
                 ld      hl, name_page14
-                call    fill_uifa
-                rst     8
-                defb    HOOK_HGTHD     ; longjmps on "file not found"
-
-; Read length-mod-16K from SAMDOS-deposited DIFA header at &4B50+35,
-; clearing the `set 7, d` marker.  Mirrors load_test_mem_off_axis above.
-                ld      hl, (&4B50 + 35)
-                ld      a, h
-                and     &7F
-                ld      h, a
-                ld      e, l
-                ld      d, h           ; DE = length-mod-16K (= 3)
-
-; Read page count from DIFA+34.  Expected 0 — the payload is 3 bytes.
-                ld      a, (&4B50 + 34)
-                ld      c, a           ; C = pages count
-
-                ld      hl, &8000      ; section-C window (HLOAD requirement)
-                ld      b, PAGED_CALL_TEST_PAGE
-                call    TRAMPOLINE_DST
-                ret
+                ld      a, PAGED_CALL_TEST_PAGE
+                jp      load_payload_generic
 
 
 ; -----------------------------------------------------------------------

@@ -32,11 +32,9 @@
 ; See docs/notes/2026-06-07-disassembler-page-placement.md for the
 ; full design rationale and page-placement decision.
 
-; Comm-buffer addresses — MUST match the equ definitions in
-; src/trampoline.asm exactly (this file is assembled standalone, so
-; it carries its own copies; trampoline.asm is the canonical source).
-DISASM_COMM_MNEM:   equ     &7E99   ; 12 bytes — mnemonic (null-terminated)
-DISASM_COMM_OPS:    equ     &7EA3   ; 26 bytes — operands (null-terminated)
+; Comm-buffer addresses and self-test entry — shared with
+; src/trampoline.asm via the include below (single source of truth).
+                include "disasm_comm.inc"
 
 ; NOP encoding (D503201F LE: bytes 1F, 20, 03, D5).
 ; paged_call preserves BC (= high word 0x0000D503) and IX (= low word
@@ -179,4 +177,50 @@ disasm_emit_hex_nibble:
 disasm_hex_emit:
                 ld      (hl), a
                 inc     hl
+                ret
+
+
+; -----------------------------------------------------------------------
+; run_disasm_self_test — boot self-test, invoked via paged_call from the
+; BUILD_TESTS boot sequence in src/assembler.asm.
+;
+; Placed at DISASM_SELF_TEST_ENTRY (&8100) — the `org` below enforces
+; this and will error at assembly time if the code above has grown past
+; &8100.  The self-test calls disasm_entry directly (no paged_call),
+; because both routines are on the same page (15); no re-entrancy risk.
+;
+; Input:  none.
+; Output: BC = 0 on success; BC = fail-tag (B=0, C=tag) on error.
+;   &7D — NOP mnemonic check failed.
+;   &7E — .inst mnemonic check failed.
+; Clobbers: A, DE, HL, F (paged_call ABI; BC is the return value).
+; -----------------------------------------------------------------------
+                defs    DISASM_SELF_TEST_ENTRY - $  ; pad to entry point
+
+run_disasm_self_test:
+
+; NOP case: D503201F LE (BC = high 16 bits = &D503, IX = low 16 bits = &201F).
+                ld      bc, NOP_HI
+                ld      ix, NOP_LO
+                call    disasm_entry
+                ld      a, (DISASM_COMM_MNEM)
+                cp      "n"
+                jr      nz, disasm_stest_fail_nop
+
+; .inst case: D2800000 LE (BC = &D280, IX = &0000).
+                ld      bc, &D280
+                ld      ix, &0000
+                call    disasm_entry
+                ld      a, (DISASM_COMM_MNEM)
+                cp      "."
+                jr      nz, disasm_stest_fail_inst
+
+                ld      bc, 0
+                ret
+
+disasm_stest_fail_nop:
+                ld      bc, &7D
+                ret
+disasm_stest_fail_inst:
+                ld      bc, &7E
                 ret

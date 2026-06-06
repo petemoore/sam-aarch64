@@ -278,6 +278,13 @@ endif
 ; touch section B, so installing the trampoline early is safe.
                 call    enctab_trampoline_setup
 
+; -- PRODUCTION: HLOAD disasm.bin into physical page 15.  The disassembler
+; is a production feature (needed by the editor at runtime); deposited for
+; both variants.  Must run AFTER enctab_trampoline_setup (which installs
+; the HLOAD trampoline + paged_call body) and BEFORE
+; run_disasm_paged_self_tests (which calls into the loaded page).
+                call    load_page15_payload
+
 ; -- BUILD_TESTS only: HLOAD the off-axis test_mem.bin into page 13.
 ; The Mac-side build pipeline assembles src/test_mem_offaxis.asm
 ; against the main-binary symbol export, producing a small standalone
@@ -388,6 +395,20 @@ if defined(BUILD_TESTS)
                 ; (litpool_init re-initialises its own state) so its earlier
                 ; position in the cluster is behaviour-neutral.
                 call    run_emit_paged_self_tests
+
+; -- Disasm stub self-test: invoke run_disasm_self_test on page 15 via
+; paged_call.  The self-test (in disasm.bin at DISASM_SELF_TEST_ENTRY)
+; calls disasm_entry directly — same page, no nested paged_call.  On
+; return BC=0 signals success; non-zero BC carries the fail tag in C.
+                call    paged_call
+                defw    DISASM_SELF_TEST_ENTRY
+                defb    DISASM_PAGE
+                ld      a, b
+                or      c
+                jr      z, disasm_paged_test_ok
+                ld      a, c
+                jp      fail_with_tag
+disasm_paged_test_ok:
 endif
 
 ; -- Load the sysreg lookup data into page 13 (PRODUCTION path, and a

@@ -15,6 +15,9 @@
 //	7  sd13       (after)      (page-13 sysreg lookup data, if provided —
 //	                            PR-2; deposited for BOTH variants since
 //	                            sysreg lookups are a production feature)
+//	8  d15        (after)      (page-15 disassembler binary, if provided —
+//	                            strand-B PR-3; deposited for BOTH variants;
+//	                            needed by editor at runtime)
 //
 // The AUTO BASIC references "assembler" (not "stub" as in M0).
 //
@@ -81,9 +84,10 @@ func main() {
 	pagedCallPath := flag.String("paged-call", "", "path to the paged_call self-test page-14 payload (BUILD_TESTS only; plan-PR 1)")
 	clusterPath := flag.String("cluster", "", "path to the off-axis page-12 M5+misc encoder self-test cluster (build/test_cluster.bin; BUILD_TESTS only; M6 budget-relief)")
 	sysregDataPath := flag.String("sysreg-data", "", "path to the page-13 sysreg lookup data (build/sysreg_data.bin; PRODUCTION + test; PR-2)")
+	disasmPath := flag.String("disasm", "", "path to the page-15 disassembler binary (build/disasm.bin; PRODUCTION + test; strand-B PR-3)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
-			"usage: %s [-test-mem <path>] [-paged-call <path>] [-cluster <path>] [-sysreg-data <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n",
+			"usage: %s [-test-mem <path>] [-paged-call <path>] [-cluster <path>] [-sysreg-data <path>] [-disasm <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n",
 			os.Args[0])
 		flag.PrintDefaults()
 	}
@@ -308,6 +312,24 @@ func main() {
 		}
 	}
 
+	// Slot 8 (optional): page-15 disassembler binary (d15). Loaded at boot
+	// by src/loader.asm::load_page15_payload via HGTHD + trampoline into
+	// physical page 15 (section C at &8000 when HMPR = DISASM_PAGE = 15).
+	// Exercised at boot by run_disasm_paged_self_tests (BUILD_TESTS only)
+	// and at runtime by the on-SAM editor via paged_call. PRODUCTION feature
+	// — deposited for BOTH variants. Recorded load address is documentary
+	// (the trampoline supplies HL = &8000 and target page = 15).
+	if *disasmPath != "" {
+		disasmData, err := os.ReadFile(*disasmPath)
+		if err != nil {
+			log.Fatalf("read disasm payload: %v", err)
+		}
+		const DisasmLoadAddress uint32 = 0x8000
+		if err := disk.AddCodeFile("d15", disasmData, DisasmLoadAddress, 0); err != nil {
+			log.Fatalf("AddCodeFile(d15): %v", err)
+		}
+	}
+
 	if err := disk.Save(outputPath); err != nil {
 		log.Fatalf("save %s: %v", outputPath, err)
 	}
@@ -338,6 +360,10 @@ func main() {
 	if *sysregDataPath != "" {
 		sysregDataSize, _ := os.Stat(*sysregDataPath)
 		fmt.Printf("sd13:       %d bytes\n", sysregDataSize.Size())
+	}
+	if *disasmPath != "" {
+		disasmSize, _ := os.Stat(*disasmPath)
+		fmt.Printf("d15:        %d bytes\n", disasmSize.Size())
 	}
 	fmt.Printf("Built %s\n", outputPath)
 }
