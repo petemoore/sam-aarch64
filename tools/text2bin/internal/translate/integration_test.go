@@ -34,7 +34,7 @@ func TestIntegrationAllConstructs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.Version != 1 {
+	if f.Version != 2 {
 		t.Errorf("version = %d", f.Version)
 	}
 	found := map[string]bool{}

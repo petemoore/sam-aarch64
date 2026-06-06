@@ -23,7 +23,7 @@ func TestReadFileRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.Version != 1 {
+	if f.Version != 2 {
 		t.Errorf("version = %d", f.Version)
 	}
 	if len(f.Names) != 2 || f.Names[0] != "loop" || f.Names[1] != "exit" {

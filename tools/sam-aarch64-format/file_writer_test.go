@@ -22,8 +22,8 @@ func TestWriteFileMinimal(t *testing.T) {
 	if string(got[:4]) != "SA64" {
 		t.Errorf("magic = %q", string(got[:4]))
 	}
-	if got[4] != 1 || got[5] != 0 {
-		t.Errorf("version = %d %d, want 1 0", got[4], got[5])
+	if got[4] != 2 || got[5] != 0 {
+		t.Errorf("version = %d %d, want 2 0", got[4], got[5])
 	}
 	if got[8] != 2 || got[9] != 0 {
 		t.Errorf("name count = %d %d, want 2 0", got[8], got[9])
