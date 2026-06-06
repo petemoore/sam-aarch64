@@ -3,9 +3,13 @@
 // binary -m aarch64` line-for-line so that diffs against the oracle
 // are mechanical.
 //
-//	aarch64dec [-base N] FILE.bin
+//	aarch64dec [-base N] [-asm] FILE.bin
 //
 //	-base N   address of the first instruction (default 0)
+//	-asm      emit labeled assembly instead of objdump-format output.
+//	          Branch targets within the binary are replaced with
+//	          synthetic labels L0/L1/… — safe for editor import and
+//	          text2bin re-assembly.
 //
 // FILE.bin must be a multiple of 4 bytes; trailing partial words are
 // rejected.  Words that no Form matches render as `.inst 0xNNNNNNNN`.
@@ -23,11 +27,14 @@ import (
 
 func main() {
 	var base uint64
+	var asmMode bool
 	flag.Uint64Var(&base, "base", 0,
 		"byte address of the first instruction (default 0)")
+	flag.BoolVar(&asmMode, "asm", false,
+		"emit labeled assembly (text2bin-compatible) instead of objdump format")
 	flag.Parse()
 	if flag.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: aarch64dec [-base N] FILE.bin")
+		fmt.Fprintln(os.Stderr, "usage: aarch64dec [-base N] [-asm] FILE.bin")
 		os.Exit(2)
 	}
 	data, err := os.ReadFile(flag.Arg(0))
@@ -36,6 +43,12 @@ func main() {
 	}
 	if len(data)%4 != 0 {
 		fail(fmt.Errorf("input length %d is not a multiple of 4", len(data)))
+	}
+	if asmMode {
+		if err := aarch64dec.WriteAsm(os.Stdout, base, data); err != nil {
+			fail(err)
+		}
+		return
 	}
 	if err := disasmTo(os.Stdout, base, data); err != nil {
 		fail(err)
