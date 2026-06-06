@@ -457,6 +457,14 @@ if defined(BUILD_TESTS)
                 ; docs/notes/2026-05-28-reader-paged-self-test-investigation.md
                 ; (PR-6 resolution section at the foot).
                 call    run_reader_paged_self_tests
+
+; -- Disassembler paged-call self-test.  Exercises the page-15 stub
+; loaded by load_page15_payload above (unconditional section).
+; Must run AFTER load_page15_payload (page 15 holds disasm.bin) and
+; AFTER enctab_trampoline_setup (paged_call body installed in section B).
+; Page 15 is a PRODUCTION load so it is available in both variants;
+; the test call is BUILD_TESTS-only.
+                call    run_disasm_paged_self_tests
 endif
 
 ; -- Run the assemble: pass 1 (table build) + pass 2 (emit) -----------
@@ -597,6 +605,7 @@ if defined(BUILD_TESTS)
                 include "test_reader_paged.asm"
                 include "test_paged_call.asm"
                 include "test_sysreg_paged.asm"
+                include "test_disasm_paged.asm"
 endif
 
 ; -- paged_call body source ---------------------------------------------
