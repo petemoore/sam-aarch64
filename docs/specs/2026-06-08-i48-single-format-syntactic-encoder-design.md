@@ -185,7 +185,7 @@ touch the following. `[A]`/`[B]` tag which decision; "NEW" = file added by i39a 
 - `docs/specs/2026-05-23-m1-binary-tokenised-format-design.md`, `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` `[A]` — mark **historical baseline** (dated design records; they may describe the old format *as the baseline they improved on*, but get a clear "superseded — not the current format" banner).
 - `docs/specs/2026-06-08-compact-tbn-nextgen-design.md` — the v2 format design; this spec refines it (cross-link).
 - `docs/notes/m8-status.md`, `docs/ROADMAP.md`, `docs/notes/item-registry.md` `[A][B]` — i48 strands + status (this change).
-- `docs/notes/question-registry.md` (NEW) — residual open questions (§8).
+- `docs/notes/question-registry.md` — residual open questions q5/q6/q7 (§8).
 - `docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md` `[B]` — note the fold-rule refinement lands with PR(c).
 
 ### PR comments
@@ -205,14 +205,14 @@ so no head doc describes a format the code doesn't produce.
 
 ## 8. Open questions (→ `question-registry.md`)
 
-- **Q-i48-1 — host packaging.** Two CLIs over a shared front-end lib (recommended; keeps
+- **q5 — host packaging.** Two CLIs over a shared front-end lib (recommended; keeps
   `text2bin` as a command; minor host pass-1 duplication) vs one merged tool (no
   duplication; retires `text2bin`). Pete to confirm.
-- **Q-i48-2 — editor in-memory model for value-dependent base words.** At edit time a
+- **q6 — editor in-memory model for value-dependent base words.** At edit time a
   referenced symbol may be unresolved, so the editor can't always pick the final base
   word. Strategy (keep tentative/symbolic until assemble vs default+validate) interacts
   with **i41** (edit-model). Resolve at editor phase.
-- **Q-i48-3 — strictness scope.** We forego `ldr→ldur` and `add` `lsl #12` auto-rewrite.
+- **q7 — strictness scope.** We forego `ldr→ldur` and `add` `lsl #12` auto-rewrite.
   Any other GNU "generous" rewrites in the corpus to treat the same way? (Sweep when
   implementing i48b.)
 
