@@ -405,6 +405,16 @@ endif
 ; few ms at boot only.  Must run before main_assemble's first lookup.
                 call    load_page13_payload
 
+; -- Load the disassembler stub into page 15 (PRODUCTION feature).
+; load_page15_payload HLOAD's build/disasm.bin ("d15" on disk) into
+; physical page 15 so the editor can invoke the disassembler at runtime
+; via paged_call into DISASM_ENTRY (&8000, page 15).  Must run AFTER
+; enctab_trampoline_setup (uses the HLOAD trampoline) and AFTER
+; load_page13_payload (same trampoline, sequential use is fine).  Runs
+; BEFORE main_assemble and load_enctab so the disassembler is ready for
+; any caller.  See loader.asm::load_page15_payload.
+                call    load_page15_payload
+
 
 ; -- Load and validate enctab.enc header --------------------------------
 ; load_enctab uses the trampoline to land the file in physical page 4
