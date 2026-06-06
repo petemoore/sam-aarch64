@@ -276,7 +276,6 @@ name_sysreg_data:
                 defm    "sd13      "   ; 10 chars (4 + 6 trailing spaces)
                 defm    "    "         ; 4-char ext (unused)
 
-
 if defined(BUILD_TESTS)
 
 ; -----------------------------------------------------------------------

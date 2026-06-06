@@ -389,6 +389,31 @@ SYSREG_COMM_NAME:       equ     TRAMPOLINE_DST + &80    ; = &7E80, 16 bytes
 SYSREG_COMM_LEN:        equ     TRAMPOLINE_DST + &90    ; = &7E90, 1 byte
 SYSREG_COMM_RESULT:     equ     TRAMPOLINE_DST + &91    ; = &7E91, up to 8 bytes
 
+; disassembler page assignment (strand-B PR-3+).
+; Page 15 is free on a 512 KB machine (pages 14-15 are screen pages
+; only on a 256 KB machine; the project targets 512 KB).
+; See docs/notes/2026-06-07-disassembler-page-placement.md §1.
+DISASM_PAGE:            equ     15
+DISASM_ENTRY:           equ     &8000           ; entry point in section-C form
+
+; disasm comm buffer — LMPR-stable section B, written by the page-15
+; disassembler (HMPR=15) and read by the main side after paged_call
+; returns.  Placed in the verified-free region &7E99..&7ECF between
+; the sysreg comm result end (&7E98) and PAGED_CALL_HMPR_SAVE (&7ED0).
+;
+; Stack safety: during a paged_call SP = TRAMP_SAFE_SP = &7F00 and
+; grows down.  The disasm stub is shallow (no push/pop in the main
+; path; disasm_emit_hex_byte does one push/pop = SP reaches &7EFE).
+; Deepest stack write is &7EFC — 55 bytes clear of buffer end
+; (&7EC5), well clear of PAGED_CALL_HMPR_SAVE (&7ED0).
+;
+; These addresses are duplicated (and kept in lock-step) in
+; src/disasm.asm, which is assembled standalone and cannot see these
+; equ's.
+DISASM_COMM_LEN:        equ     36              ; total buffer reservation
+DISASM_COMM_MNEM:       equ     TRAMPOLINE_DST + &99    ; = &7E99, 12 bytes
+DISASM_COMM_OPS:        equ     TRAMPOLINE_DST + &A5    ; = &7EA5, 24 bytes
+
 
 TRAMPOLINE_DST: equ     &7E00          ; section-B copy destination
                                        ; (under LMPR_DEFAULT, section B

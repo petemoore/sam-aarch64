@@ -401,6 +401,7 @@ endif
 ; few ms at boot only.  Must run before main_assemble's first lookup.
                 call    load_page13_payload
 
+
 ; -- Load and validate enctab.enc header --------------------------------
 ; load_enctab uses the trampoline to land the file in physical page 4
 ; (outside section C, freeing &A000-&AFFF for code).  Validates the

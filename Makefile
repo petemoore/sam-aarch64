@@ -106,7 +106,7 @@ test-m2: refenc text2bin
 
 ci-m2: test-m2
 
-.PHONY: m3-asm m3-asm-prod build-m3-disk m3-disk test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data test-m3 ci-m3 check-budget
+.PHONY: m3-asm m3-asm-prod build-m3-disk m3-disk test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-payload test-m3 ci-m3 check-budget
 
 # check-budget — fail if either assembler variant has grown into the
 # &C000 stack page (the silent boot-hang cliff; see
@@ -226,24 +226,39 @@ $(BUILD)/sysreg_data.bin: src/sysreg_data.asm
 
 sysreg-data: $(BUILD)/sysreg_data.bin
 
+# Page-15 disassembler stub (PRODUCTION feature — both variants).
+#
+# A standalone binary (org &8000) implementing the NOP-only disassembler
+# stub.  HLOAD'd at boot into physical page 15 by
+# src/loader.asm::load_page15_payload and called at runtime via paged_call
+# (DISASM_ENTRY = &8000, DISASM_PAGE = 15).  Per strand-B PR-3 and
+# docs/notes/2026-06-07-disassembler-page-placement.md.  Needed by EVERY
+# build — the disassembler is a production feature.
+$(BUILD)/disasm.bin: src/disasm.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/disasm.bin src/disasm.asm
+
+disasm-payload: $(BUILD)/disasm.bin
+
 $(BUILD)/build-m3-disk: tools/build-m3-disk/main.go tools/build-m3-disk/go.mod
 	@mkdir -p $(BUILD)
 	cd tools/build-m3-disk && go build -o ../../$(BUILD)/build-m3-disk .
 
 build-m3-disk: $(BUILD)/build-m3-disk
 
-m3-disk: m3-asm test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data enctab $(BUILD)/build-m3-disk
+m3-disk: m3-asm test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-payload enctab $(BUILD)/build-m3-disk
 	$(BUILD)/build-m3-disk \
 	    -test-mem $(BUILD)/test_mem.bin \
 	    -cluster $(BUILD)/test_cluster.bin \
 	    -paged-call $(BUILD)/paged_call_test_payload.bin \
 	    -sysreg-data $(BUILD)/sysreg_data.bin \
+	    -disasm $(BUILD)/disasm.bin \
 	    $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/m3-test.mgt
 
 # test-m3 — sweep every fixture under tests/m3/sources/ end-to-end:
 # text2bin → build-m3-disk → SimCoupé → samfile extract OUT →
 # byte-compare against aarch64-{none-elf,linux-gnu}-as + objcopy -O binary.
-test-m3: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk text2bin
+test-m3: m3-asm test-mem-offaxis paged-call-payload sysreg-data disasm-payload enctab $(BUILD)/build-m3-disk text2bin
 	./tests/m3/run-roundtrip.sh
 
 ci-m3: test-m3
@@ -255,7 +270,7 @@ ci-m3: test-m3
 # but feeds it M4-fixture .tbn inputs and uses an oracle that includes
 # `ld -Ttext=0` so :lo12: / branch-to-label relocations resolve.  See
 # docs/specs/2026-05-24-m4-symbols-multipass-design.md §3.
-test-m4: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk text2bin
+test-m4: m3-asm test-mem-offaxis paged-call-payload sysreg-data disasm-payload enctab $(BUILD)/build-m3-disk text2bin
 	./tests/m4/run-roundtrip.sh
 
 ci-m4: test-m4
@@ -267,10 +282,10 @@ ci-m4: test-m4
 # Useful as a correctness check that the BUILD_TESTS=1 / undefined
 # fork in src/assembler.asm doesn't accidentally change emit
 # behaviour.  ci-m{3,4} cover the test variant; these cover prod.
-test-m3-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
+test-m3-prod: m3-asm-prod sysreg-data disasm-payload enctab $(BUILD)/build-m3-disk text2bin
 	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m3/run-roundtrip.sh
 
-test-m4-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
+test-m4-prod: m3-asm-prod sysreg-data disasm-payload enctab $(BUILD)/build-m3-disk text2bin
 	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m4/run-roundtrip.sh
 
 ci-m3-prod: test-m3-prod
@@ -286,10 +301,10 @@ ci-m4-prod: test-m4-prod
 #
 # The GitHub Actions `m5` job is added in M5 PR E (the final integration
 # PR); for now ci-m5 / ci-m5-prod run locally + via the dev container.
-test-m5: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk text2bin
+test-m5: m3-asm test-mem-offaxis paged-call-payload sysreg-data disasm-payload enctab $(BUILD)/build-m3-disk text2bin
 	./tests/m5/run-roundtrip.sh
 
-test-m5-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
+test-m5-prod: m3-asm-prod sysreg-data disasm-payload enctab $(BUILD)/build-m3-disk text2bin
 	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m5/run-roundtrip.sh
 
 ci-m5: test-m5
@@ -305,10 +320,10 @@ ci-m5-prod: test-m5-prod
 # exercise the paged-OUT machinery (sections-B emit + HSAVE auto-paging
 # across &C000) by emitting > 16 KB of output to cross the OUT_ZONE
 # low → high boundary.
-test-m6: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk text2bin
+test-m6: m3-asm test-mem-offaxis paged-call-payload sysreg-data disasm-payload enctab $(BUILD)/build-m3-disk text2bin
 	./tests/m6/run-roundtrip.sh
 
-test-m6-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
+test-m6-prod: m3-asm-prod sysreg-data disasm-payload enctab $(BUILD)/build-m3-disk text2bin
 	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m6/run-roundtrip.sh
 
 ci-m6: test-m6
