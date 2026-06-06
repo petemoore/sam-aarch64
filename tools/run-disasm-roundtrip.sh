@@ -213,6 +213,62 @@ else
 fi
 
 echo ""
+echo "=== [2c/3] Round-trip release.s (full binary — data included) ==="
+# Assembles the full source (code + data), disassembles, then reassembles and
+# checks byte-identity.  Data words that decode as valid instructions are
+# re-encoded to their canonical form; undecodeable data words fall through to
+# .inst and are preserved verbatim.
+if [ -f "$release_src" ]; then
+    full_v1_tbn="$tmp/release_full_v1.tbn"
+    full_v1_bin="$tmp/release_full_v1.bin"
+    full_disasm_s="$tmp/release_full_disasm.s"
+    full_v2_tbn="$tmp/release_full_v2.tbn"
+    full_v2_bin="$tmp/release_full_v2.bin"
+
+    if ! "$ROOT/build/text2bin" -flatten -strip-comments \
+            -o "$full_v1_tbn" "$release_src" 2>/dev/null; then
+        echo "    FAIL(text2bin) release.s (full)"
+        fail_names+=("release.s full [text2bin]")
+        failed=$((failed + 1))
+    elif ! "$ROOT/build/refenc" -o "$full_v1_bin" "$full_v1_tbn" 2>/dev/null; then
+        echo "    FAIL(refenc) release.s (full)"
+        fail_names+=("release.s full [refenc]")
+        failed=$((failed + 1))
+    elif ! "$ROOT/build/aarch64dec" -asm "$full_v1_bin" > "$full_disasm_s" 2>/dev/null; then
+        echo "    FAIL(aarch64dec) release.s (full)"
+        fail_names+=("release.s full [aarch64dec]")
+        failed=$((failed + 1))
+    elif ! "$ROOT/build/text2bin" -o "$full_v2_tbn" "$full_disasm_s" 2>/dev/null; then
+        echo "    FAIL(text2bin2) release.s (full)"
+        fail_names+=("release.s full [text2bin re-asm]")
+        failed=$((failed + 1))
+    elif ! "$ROOT/build/refenc" -o "$full_v2_bin" "$full_v2_tbn" 2>/dev/null; then
+        echo "    FAIL(refenc2) release.s (full)"
+        fail_names+=("release.s full [refenc re-enc]")
+        failed=$((failed + 1))
+    elif cmp -s "$full_v1_bin" "$full_v2_bin"; then
+        full_sz=$(wc -c < "$full_v1_bin")
+        full_inst=$(grep -c $'\t\.inst' "$full_disasm_s" 2>/dev/null || echo 0)
+        echo "    PASS release.s full ($full_sz B, $full_inst .inst entries in disasm)"
+        passed=$((passed + 1))
+    else
+        first_diff=$(cmp -l "$full_v1_bin" "$full_v2_bin" 2>/dev/null | head -1 | awk '{print $1}') || true
+        if [ -n "$first_diff" ]; then
+            byte_off=$(( (first_diff - 1) & ~3 ))
+            v1_word=$(od -j "$byte_off" -N4 -An -t x4 "$full_v1_bin" | tr -d ' \n')
+            v2_word=$(od -j "$byte_off" -N4 -An -t x4 "$full_v2_bin" | tr -d ' \n')
+            echo "    FAIL(mismatch) release.s full [byte $byte_off: v1=0x$v1_word v2=0x$v2_word]"
+        else
+            echo "    FAIL(mismatch) release.s full [sizes differ]"
+        fi
+        fail_names+=("release.s full [mismatch]")
+        failed=$((failed + 1))
+    fi
+else
+    echo "    SKIP release.s (not found at $release_src)"
+fi
+
+echo ""
 echo "=== [3/3] Summary ==="
 printf "    PASSED:  %d\n" "$passed"
 printf "    SKIPPED: %d  (data fixtures, out of scope for instruction round-trip)\n" "$skipped"
