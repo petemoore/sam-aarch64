@@ -82,7 +82,7 @@ tables.
 | **i31** | On-SAM preprocessor (`.if` build-constraints + macros) | 🧭 beyond-M7 | "Beyond-M7 / future ideas" |
 | **i32** | Multiple source files + staged/partial loading | 🧭 beyond-M7 | "Beyond-M7 / future ideas" |
 | **i33** | Trinity SD/flash storage → bigger-kernel architecture | 🧭 beyond-M7 | `memory/trinity_hardware.md` |
-| **i34** | Untrack accidentally-committed Go binaries | ⏳ partial — `enctab-gen` untracked (PR #111); `llist-normalise` pending LLIST disposition (question **q8**) | `.gitignore`; question registry q8 |
+| **i34** | Untrack accidentally-committed Go binaries | ✅ DONE — `enctab-gen` untracked (PR #111); `llist-normalise` deleted with the LLIST cluster (i52 PR 4, q8 resolved 2026-06-10) | `.gitignore`; PR #111; i52 PR 4 |
 | **i35** | `sdiv` missing across the whole stack (no mnemonic/Form → `.inst`; unencodable) | ✅ DONE (PR #115) | deferred-backlog row; mirrored `udiv` ID 72 |
 | **i36** | Z80 disasm: ccmp/ccmn decode (was → `.inst`) — added decode + encoder (ccmn ID 100); binutils-aligned | ✅ DONE (PR #119) | `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-08-z80-go-disasm-parity-i9.md` |
 | **i37** | base csinv/csneg (Rn≠Rm): Go `aarch64dec` now decodes them (IDs 101/102), encoder coverage added; aliases intact | ✅ DONE (PR #119) | same analysis doc. The i9 sweep skip is removed; families now certified |
