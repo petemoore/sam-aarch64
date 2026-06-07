@@ -33,3 +33,7 @@ design doc is deleted (git history is the archive).
   (feeds the future Phase-2 spec): explanation panels, register simulator,
   retro UI affordances, keyboard-driven interaction model, edit-model pointer
   (i41).
+- [`editor-tui-prototype-design.md`](editor-tui-prototype-design.md) —
+  host-side Go TUI editor prototype at SAM-faithful geometry (i76): the
+  SAM-screen abstraction, terminal + PNG/SCREEN$ mockup backends, geometry
+  matrix, i41 op mapping (spec gate — awaiting approval).
