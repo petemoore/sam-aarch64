@@ -28,8 +28,10 @@ Authorship per worldofsam.org product pages and the disk-image version strings. 
 |---------|:---:|:---:|:---:|:---:|---|
 | 1.4d–1.5a | YES | — | — | — | ~8 GB |
 | AL 1.5a | — | YES | — | — | 8 GB CF |
-| 1.5t beta 6 | — | — | YES | — | 64 GB SDHC |
+| 1.5t beta 6 | — | — | YES | — | 64 GB SDHC* |
 | 1.6c–1.7q | YES | — | — | YES | 8 GB hard cap (documented in the 1.7n manual) |
+
+*The 64 GB figure applies to block-addressed SDHC/SDXC cards; byte-addressed MMC/SDv1 cards cap at 4 GB under the fork (the 32-bit byte address caps there). Per the B-DOS 1.5t analysis (i71, `bdos-trinity-fork-analysis.md`), beta 6 selects block vs byte addressing per card at init from the CMD58 CCS bit.
 
 **SimCoupé:** emulates Atom (byte-swapped HDF) and Atom Lite (non-byte-swapped), with B-DOS disk detection (`HardDisk::IsBDOSDisk()`). It does **not** emulate the Trinity (no `&DC`–`&DF` port handling). The "Atom Lite? (or Trinity media under 8GB)" comment in `Base/HardDisk.cpp` reflects an *accidental* media-format compatibility: Trinity-formatted media under 8 GB carries the same signature as Atom Lite media, so SimCoupé can mount such images via the Atom Lite path. Code touching the Trinity SPI ports directly will not run in SimCoupé.
 
@@ -38,6 +40,8 @@ Authorship per worldofsam.org product pages and the disk-image version strings. 
 > "B-DOS offers several hook codes including the SAMDOS hookcodes. All other codes which are not included in this list are ignored by B-DOS."
 
 Verified hook table highlights: **every hook the project's `samdos-file-io.md` idioms use — HGTHD (129), HLOAD (130), HVERY (131), HSAVE (132), HOFLE (147), HSBYT (148), HWSAD (149), HSVBK (150), HCFSM (152), HRSAD (160), HLDBK (161), HERAZ (166) — is present and SAMDOS-compatible in B-DOS.** B-DOS-only hooks: HRECORD (&9C, record selection), HVEBK (&9D), HLBYT (&9F), HDINIT (&87), HVMSAD (&86). DVARs 0/1/2/5/7 are SAMDOS-compatible; all others B-DOS-specific (DVAR 7 = B-DOS version, the documented detection idiom).
+
+**Detection across the fork:** 1.5t still reports DVAR 7 = 5, identical to 1.5a and AL 1.5a (the B-DOS 1.5t analysis, i71, `bdos-trinity-fork-analysis.md`). DVAR-7 detection therefore treats 1.5t as 1.5a-family — good for portability (the same detection branch works), useless for fingerprinting the fork (only the banner text or a Trinity hardware probe distinguishes it).
 
 **Load-bearing differences:**
 1. Programs that POKE/CALL directly into SAMDOS addresses break under B-DOS — all file I/O must go through hooks (which is this project's idiom anyway).
@@ -67,7 +71,7 @@ Preservation copies of the items below are archived locally (outside the repo).
 
 - **SimCoupé / CI experiments: B-DOS AL 1.5a** (confidence HIGH — sam.speccy.cz documents SimCoupé Atom Lite support with AL 1.5a; SimCoupé's `AtomLiteDevice` enforces the non-byte-swapped B-DOS signature).
 - **Real Trinity hardware: B-DOS 1.5t beta 6** (confidence HIGH — the only Trinity-capable B-DOS; beta 6 strictly supersedes betas 4/5).
-- Development transfers between them at the hook level — **VERIFIED for the SAMDOS ↔ B-DOS AL 1.5a (Atom Lite) pair** by the i62 dual-run experiment below; the Trinity 1.5t leg remains LIKELY (SimCoupé has no Trinity emulation, so it can only be executed on real hardware).
+- Development transfers between them at the hook level — **VERIFIED for the SAMDOS ↔ B-DOS AL 1.5a (Atom Lite) pair** by the i62 dual-run experiment below, and **verified-static for the Trinity 1.5t leg**: per the B-DOS 1.5t analysis (i71, `bdos-trinity-fork-analysis.md`) the hook dispatch, the 39-entry vector table, and the handler code are all 1.5a's bytes under relocation — only the sector-device layer changed. The claim no longer rests on lineage inference; runtime confirmation on real Trinity hardware remains outstanding (no emulator covers the Trinity ports).
 
 ## Empirical verification (i62)
 
@@ -92,7 +96,7 @@ The probe exercises the full `samdos-file-io.md` sequence: DVAR-7 B-DOS detectio
 
 ### Rig and repro
 
-`tools/i62-bdos-experiment/run-experiment.sh` rebuilds everything and asserts both transcripts plus the HDF post-check; `tools/i62-bdos-experiment/README.md` has the exact invocations. Components: the probe (pyz80), a `build-i62-disk` Go tool (same boot-disk recipe as `tools/build-disk`, with the DOS slot swappable — SAMDOS 2 at start-address 491529 or `AL-BDOS15a` at 32777, both with the 0x60 start-page unused-bits pattern their source disks carry), and `make-atomlite-hdf.py` (RS-IDE v1.1 + ATA identify + stamped records; every field cites SimCoupé's `HardDisk.cpp`/`ATA.cpp` or the B-DOS source). The B-DOS boot disk and HDF are built at run time from the worldofsam images in `~/sam-archive/bdos/` — nothing from the archive is committed.
+`tools/i62-bdos-experiment/run-experiment.sh` rebuilds everything and asserts both transcripts plus the HDF post-check; `tools/i62-bdos-experiment/README.md` has the exact invocations. Components: the probe (pyz80), a `build-i62-disk` Go tool (same boot-disk recipe as `tools/build-disk`, with the DOS slot swappable — SAMDOS 2 at start-address 491529 or `AL-BDOS15a` at 32777, both with the 0x60 start-page unused-bits pattern their source disks carry), and `make-atomlite-hdf.py` (RS-IDE v1.1 + ATA identify + stamped records; every field cites SimCoupé's `HardDisk.cpp`/`ATA.cpp` or the B-DOS source). The AL 1.5a DOS binary is the vendored freeware copy (`reference/bdos/al-bdos15a.bin`, i71); the boot disk and HDF are built from it at run time, with a `BDOS_BOOT_MGT` override to re-extract from a worldofsam disk image instead.
 
 Verified on a Linux/ARM host with no X available: SimCoupé at the CI-pinned SHA built with `-DSIMCOUPE_PORTABLE=1` (static SDL2) runs fully headless under `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy` **plus a 6-line local patch** falling back to SDL's software renderer when `SDL_RENDERER_ACCELERATED` is unavailable (stock SimCoupé hard-requires an accelerated renderer; the rendering backend has no effect on Z80/ATA emulation — the patched build first reproduced the standard CI fixture round-trip byte-for-byte before being trusted for i62). The CI dev container should run the script unmodified via the stock Xvfb x11 recipe from `headless-simcoupe.md` (same SimCoupé SHA, same flags as every CI fixture run) — expected but not yet executed there, since this host has no Docker and the experiment is deliberately **not** a CI gate (the B-DOS disk images stay outside the repo). Software rendering is slow on small hosts — `-speed 1000` plus a small window keeps wall-clock sane.
 
@@ -102,14 +106,14 @@ Verified on a Linux/ARM host with no X available: SimCoupé at the CI-pinned SHA
 
 - Hook-level portability SAMDOS ↔ B-DOS AL 1.5a: LIKELY → **VERIFIED** (this experiment).
 - The spill route for i40/i59 (SAMDOS hooks → B-DOS records) is proven viable on the CI tier: record selection + whole-file save/load against an 800 KB record slice works with the production call shapes.
-- Trinity/1.5t leg: still LIKELY — same 1.5a-descended hook layer, but no emulator can execute it; needs real hardware.
+- Trinity/1.5t leg: **verified-static** (i71, `bdos-trinity-fork-analysis.md`) — the hook dispatch, vector table, and handler bodies are 1.5a's bytes under relocation, only the sector-device layer is swapped; runtime confirmation on real Trinity hardware is still outstanding (no emulator covers the ports).
 
 ## Open questions
 
-1. What 1.5t beta 6's "improved compatibility" covers (UNKNOWN — release notes not found).
-2. Whether 1.5t shares the filler-byte-32 behaviour (LIKELY — same 1.5a codebase; matters only for raw directory inspection).
+1. What 1.5t beta 6's "improved compatibility" covers — NARROWED (i71, `bdos-trinity-fork-analysis.md`): beta 6 implements SDHC/SDXC block addressing (the >4 GB / 64 GB enabler) and card hot-swap via RESTORE DEVICE. Per-beta (4 vs 5 vs 6) attribution remains impossible from beta 6 alone, so the question stays open but narrowed to that residue.
+2. ~~Whether 1.5t shares the filler-byte-32 behaviour~~ — **RESOLVED (i71, `bdos-trinity-fork-analysis.md`)**: the directory-management code is relocation-only in the diff, so 1.5a's filler-byte behaviour carries over unchanged.
 3. Any post-2014 1.5t development (none found; Trinity hardware revisions v1.1/2019 and v1.2/2023 appear hardware-only).
 
 ## Sources
 
-worldofsam.org product pages (b-dos, b-dos-15a, b-dos-15t, b-dos-al-15a, b-dos-16-17, b-dos-17n, b-dos-17i, samdos, trinity-ethernet-interface) · worldofsam.org forum thread 2019-04-06/1734 · the B-DOS 1.7n manual PDF (worldofsam.org system files; hook/DVAR tables extracted via pdftotext) · sam.speccy.cz/atomlite.html · ftp.nvg.ntnu.no/pub/sam-coupe/disks/dos/ (+ Bdos15a.inf directory listing) · samcoupe.com/hardtrin.htm + samcoupe.com/samrevival.htm · local SimCoupé source (`Base/HardDisk.cpp`, `Base/AtomLite.cpp`, `Base/Atom.cpp`).
+worldofsam.org product pages (b-dos, b-dos-15a, b-dos-15t, b-dos-al-15a, b-dos-16-17, b-dos-17n, b-dos-17i, samdos, trinity-ethernet-interface) · worldofsam.org forum thread 2019-04-06/1734 · the B-DOS 1.7n manual PDF (worldofsam.org system files; hook/DVAR tables extracted via pdftotext) · sam.speccy.cz/atomlite.html · ftp.nvg.ntnu.no/pub/sam-coupe/disks/dos/ (+ Bdos15a.inf directory listing) · samcoupe.com/hardtrin.htm + samcoupe.com/samrevival.htm · local SimCoupé source (`Base/HardDisk.cpp`, `Base/AtomLite.cpp`, `Base/Atom.cpp`) · the B-DOS 1.5t fork analysis (`bdos-trinity-fork-analysis.md`).
