@@ -246,7 +246,9 @@ func TestLabFrameImageDimensions(t *testing.T) {
 func TestRelaxPaletteRendersOffSAMColours(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.RelaxPalette = true
-	cfg.RoleCode = 7 // beyond the 0-3 quad
+	// Fine-syntax roles must also be set beyond the quad to exercise off-SAM rendering.
+	cfg.RoleCode = 7        // beyond the 0-3 quad
+	cfg.RoleMnemonic.Pen = 7 // mnemonic uses role_mnemonic, not role_code
 	m, dl := model([3]string{"nop", "", ""})
 	g, err := samscreen.LookupGeometry(labGeometry)
 	if err != nil {
@@ -360,5 +362,199 @@ func TestMaxInstructionWidthCommentSuppressed(t *testing.T) {
 	// The truncated row must not show the comment.
 	if strings.Contains(j, "load byte") {
 		t.Errorf("truncated off-cursor line should not show its comment\n%s", j)
+	}
+}
+
+// --- v1.2 feature tests ------------------------------------------------------
+
+// TestExpandOnlyIfNeededSkipsExpansion confirms that when expand_only_if_needed
+// is on and the cursor line's code+comment fits in one row, no expansion rows
+// appear below the cursor (the comment stays inline).
+func TestExpandOnlyIfNeededSkipsExpansion(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.ExpandCursorLine = expandWrap
+	cfg.ExpandK = 3
+	cfg.ExpandOnlyIfNeeded = true
+	// A short instruction + short comment: "nop" + "ok" easily fits on 64 cols.
+	m, dl := model([3]string{"nop", "", "ok"})
+	_, rows := renderAt(t, cfg, m, dl, 0)
+	j := joined(rows)
+	// The comment must appear on the same row as "nop", not beneath it.
+	for _, row := range rows {
+		if strings.Contains(row, "nop") && strings.Contains(row, "ok") {
+			return // found on same row: correct
+		}
+	}
+	t.Errorf("expand_only_if_needed=on: short comment should stay inline\n%s", j)
+}
+
+// TestExpandOnlyIfNeededFiresWhenNeeded confirms expansion fires when the
+// cursor line's code+comment would exceed the screen width.
+func TestExpandOnlyIfNeededFiresWhenNeeded(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.ExpandCursorLine = expandWrap
+	cfg.ExpandK = 3
+	cfg.ExpandOnlyIfNeeded = true
+	// "nop" + a 70-char comment: total exceeds 64 cols, so expansion fires.
+	longComment := strings.Repeat("x", 70)
+	m, dl := model([3]string{"nop", "", longComment})
+	_, rows := renderAt(t, cfg, m, dl, 0)
+	j := joined(rows)
+	// The long comment text must appear somewhere in the output.
+	if !strings.Contains(j, "xxxxxxxx") {
+		t.Errorf("expand_only_if_needed=on: long comment should expand\n%s", j)
+	}
+	// And it must NOT appear on the same row as "nop" in full.
+	for _, row := range rows {
+		if strings.Contains(row, "nop") && strings.Contains(row, longComment) {
+			t.Errorf("long comment should have expanded, not stayed inline\n%s", j)
+		}
+	}
+}
+
+// TestCursorBlockStyleBracket confirms the bracket glyph appears on expanded rows.
+func TestCursorBlockStyleBracket(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.ExpandCursorLine = expandWrap
+	cfg.ExpandK = 3
+	cfg.ExpandOnlyIfNeeded = false
+	cfg.CursorBlockStyle = cblBracket
+	longComment := strings.Repeat("z", 70)
+	m, dl := model([3]string{"nop", "", longComment})
+	s, _ := renderAt(t, cfg, m, dl, 0)
+	_, rows := s.Size()
+	// At least one expanded row must have the bracket glyph at column 0.
+	found := false
+	for y := 0; y < rows; y++ {
+		if s.At(0, y).Ch == labGlyphBracket {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("cursor_block_style=bracket: no bracket glyph found at column 0")
+	}
+}
+
+// TestCursorBlockStyleBand confirms the band paper colour appears on expanded rows.
+func TestCursorBlockStyleBand(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.ExpandCursorLine = expandWrap
+	cfg.ExpandK = 3
+	cfg.ExpandOnlyIfNeeded = false
+	cfg.CursorBlockStyle = cblBand
+	longComment := strings.Repeat("y", 70)
+	m, dl := model(
+		[3]string{"nop", "", longComment},
+		[3]string{"ret", "", ""},
+	)
+	s, _ := renderAt(t, cfg, m, dl, 0)
+	_, rows := s.Size()
+	// Find an expansion row (below the cursor row, containing the repeated char).
+	bandFound := false
+	for y := 0; y < rows; y++ {
+		if strings.Contains(gridRow(s, y), "yyy") {
+			// This is an expansion row; its paper should be currentBg.
+			if s.At(2, y).Paper == uint8(cfg.RoleCurrentBg) {
+				bandFound = true
+			}
+		}
+	}
+	if !bandFound {
+		t.Error("cursor_block_style=band: expansion row not painted in band colour")
+	}
+}
+
+// TestSyntaxRoleMnemonicColour confirms role_mnemonic colouring applies to the
+// mnemonic token when a non-default pen is set.
+func TestSyntaxRoleMnemonicColour(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.RoleMnemonic = roleSpec{Pen: 1} // comment pen (grey), distinct from code pen 3
+	m, dl := model([3]string{"nop", "", ""})
+	s, _ := renderAt(t, cfg, m, dl, 0)
+	_, rows := s.Size()
+	// Find the "nop" row and check the mnemonic ink.
+	for y := 0; y < rows; y++ {
+		if strings.TrimSpace(gridRow(s, y)) == "nop" {
+			if s.At(2, y).Ink != 1 {
+				t.Errorf("role_mnemonic pen=1: mnemonic ink = %d, want 1", s.At(2, y).Ink)
+			}
+			return
+		}
+	}
+	t.Fatal("nop row not found")
+}
+
+// TestSyntaxRoleImmediateColour confirms role_immediate colouring applies to
+// immediate tokens when mark_immediates is off.
+func TestSyntaxRoleImmediateColour(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.RoleImmediate = roleSpec{Pen: 2} // accent pen
+	cfg.MarkImmediates = false           // role_immediate active (mark_immediates not overriding)
+	m, dl := model([3]string{"mov", "x0, #16", ""})
+	cfg.ImmDropHash = true // so "#16" becomes "16" — simpler token match
+	s, _ := renderAt(t, cfg, m, dl, 0)
+	_, rows := s.Size()
+	// Find the row with "mov" and look for a cell with ink=2 (the accent pen).
+	for y := 0; y < rows-1; y++ {
+		row := gridRow(s, y)
+		if strings.Contains(row, "mov") && strings.Contains(row, "16") {
+			// Scan cells for ink=2.
+			cols, _ := s.Size()
+			for x := 0; x < cols; x++ {
+				if s.At(x, y).Ink == 2 {
+					return // found: correct
+				}
+			}
+			t.Errorf("role_immediate pen=2: no cell with ink=2 on row %q", row)
+			return
+		}
+	}
+	t.Fatal("mov row not found")
+}
+
+// TestSyntaxRoleInverseModifier confirms the inverse flag swaps ink/paper for
+// a token class.
+func TestSyntaxRoleInverseModifier(t *testing.T) {
+	cfg := defaultConfig()
+	// Set mnemonic to inverse: ink=paper(0), paper=pen(3). The mnemonic cell
+	// should read (ink=0, paper=3) rather than (ink=3, paper=0).
+	cfg.RoleMnemonic = roleSpec{Pen: 3, Inverse: true}
+	m, dl := model([3]string{"nop", "", ""})
+	s, _ := renderAt(t, cfg, m, dl, 0)
+	_, rows := s.Size()
+	for y := 0; y < rows; y++ {
+		if strings.TrimSpace(gridRow(s, y)) == "nop" {
+			cell := s.At(2, y)
+			if cell.Ink != uint8(cfg.RolePaper) || cell.Paper != 3 {
+				t.Errorf("role_mnemonic inverse: ink=%d paper=%d, want ink=%d paper=3",
+					cell.Ink, cell.Paper, cfg.RolePaper)
+			}
+			return
+		}
+	}
+	t.Fatal("nop row not found")
+}
+
+// TestSnapshotRoundTripV12 confirms that the v1.2 new keys survive a snapshot
+// round-trip (serialise, parse, compare).
+func TestSnapshotRoundTripV12(t *testing.T) {
+	orig := defaultConfig()
+	orig.ExpandCursorLine = expandWrap
+	orig.ExpandK = 3
+	orig.ExpandOnlyIfNeeded = true
+	orig.CursorBlockStyle = cblBracket
+	orig.RoleMnemonic = roleSpec{Pen: 2, Inverse: false}
+	orig.RoleExpression = roleSpec{Pen: 3, Inverse: false}
+	orig.RoleRegister = roleSpec{Pen: 1, Inverse: true}
+	orig.RoleImmediate = roleSpec{Pen: 2, Inverse: false}
+
+	p := writeConfig(t, orig.Snapshot())
+	got, err := parseLabConfigFile(p)
+	if err != nil {
+		t.Fatalf("reparse v1.2 snapshot: %v", err)
+	}
+	if got != orig {
+		t.Errorf("v1.2 snapshot round-trip mismatch:\n got  %+v\n want %+v", got, orig)
 	}
 }
