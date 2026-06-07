@@ -176,13 +176,45 @@ g rm -r archive
 g rm m0-status.md m1-status.md m2-status.md m3-status.md m4-status.md m5-status.md m6-status.md m7-status.md spectrum4-status.md 2026-05-27-disassembly-canonicalisation-survey.md 2026-05-28-eod-session-handoff.md 2026-05-28-hload-16k-limit-investigation.md 2026-05-28-memory-layout-brainstorm.md 2026-05-28-paged-call-architecture.md 2026-05-28-reader-paged-self-test-investigation.md 2026-05-28-spectrum4-instruction-inventory.md 2026-05-28-test-harness-bakeoff-evaluation.md 2026-05-28-test-harness-spike-briefs.md 2026-05-28-test-variant-ci-regression.md 2026-05-28-z80-bounds-check-audit.md 2026-05-28-z80-table-sizing-census.md 2026-05-29-go-harness-fidelity-investigation.md 2026-05-29-go-harness-paged-trap-rootcause.md 2026-05-29-m6-bytematch-encoder-divergences.md 2026-05-29-repo-audit.md 2026-05-29-test-variant-budget-relief.md 2026-05-29-z80-go-parity-audit.md 2026-06-07-disassembler-page-placement.md 2026-06-08-go-vs-z80-disasm-capability-parity.md 2026-06-08-skipped-tests-and-gaps-audit.md 2026-06-08-z80-go-disasm-parity-i9.md comet-encoding-patterns.md fred-disk-inspection.md samfile-capabilities.md samdos2-auto-run-analysis.md
 ```
 - [ ] **Step 4:** Pre-deletion guard: before committing, sweep `m7-status.md` and `m8-status.md`-adjacent docs for any open item living ONLY in a deleted doc: `g show HEAD:docs/notes/m7-status.md | grep -oE 'i[0-9]+' | sort -u` and confirm each id appears in `item-registry.md`. Any orphan → add a registry row before the deletion commit.
-- [ ] **Step 5:** Flatten the one-file subdir: `g mv simcoupe-ideas/2026-05-29-paste-driven-control-plane.md 2026-05-29-simcoupe-paste-control-plane.md` (updates: grep for the old path).
+- [ ] **Step 5:** Flatten the one-file subdir: `g mv simcoupe-ideas/2026-05-29-paste-driven-control-plane.md simcoupe-paste-control-plane.md` (updates: grep for the old path).
 - [ ] **Step 6:** Commit: `docs: delete executed plans, superseded notes, closed milestone docs (git history is the archive)`.
+
+### Task 2.6b: Evergreen renames for kept docs (spec decision 6 — no dated filenames)
+
+- [ ] **Step 1:**
+```bash
+cd ~/git/sam-aarch64-doc-cleanup/docs/specs
+g mv 2026-05-09-vision.md vision.md
+g mv 2026-05-09-phase1-assembler.md phase1-assembler.md
+g mv 2026-06-08-tbn-binary-format-reference.md tbn-binary-format-reference.md
+g mv 2026-06-08-compact-tbn-nextgen-design.md compact-tbn-nextgen-design.md
+g mv 2026-06-08-i48-single-format-syntactic-encoder-design.md i48-syntactic-encoder-design.md
+g mv 2026-06-08-editor-edit-model-design.md editor-edit-model-design.md
+g mv 2026-05-27-m6-paged-in-design.md paged-in-design.md
+g mv 2026-05-27-m6-paged-out-design.md paged-out-design.md
+g mv 2026-05-27-phase3-tftp-direct-lan-design.md phase3-tftp-design.md
+cd ../notes
+g mv 2026-05-28-sam-music-playback-research.md sam-music-playback-research.md
+g mv 2026-06-08-armv8-a64-isa-footprint-research.md a64-isa-footprint-research.md
+```
+(The cleanup's own spec/plan keep their dated names — they are deleted in PR 5 anyway.)
+- [ ] **Step 2:** Update every reference to each old name: `for n in <old names>; do grep -rln --exclude-dir=.git "$n" .; done` → fix all hits (ROADMAP doc index, CLAUDE.md, m8-status.md, registries, kept specs' cross-references).
+- [ ] **Step 3:** Adjust Task 2.6 Step 5's target accordingly: the simcoupe-ideas note flattens to `docs/notes/simcoupe-paste-control-plane.md` (no date prefix).
+- [ ] **Step 4:** Commit: `docs: evergreen filenames for living docs (dates live in git history)`.
+
+### Task 2.6c: Doc link checker (standing guard for the deletions)
+
+- [ ] **Step 1:** Create `tools/check-doc-links.sh` (executable): for every markdown link target in `README.md`, `CLAUDE.md`, `docs/**/*.md`, `src/README.md`, `tools/**/*.md`, `tests/**/*.md` that is a relative path into the repo (starts with `docs/`, `src/`, `tools/`, `tests/`, `reference/`, `scripts/`, or is relative to the file's dir), check the target exists; exit 1 listing any misses. Skip URLs, anchors, and `blob/<sha>` links. Implementation: grep -oE '\]\(([^)#]+)' over the md set, normalise each path against the containing file's dir and the repo root, test -e.
+- [ ] **Step 2:** Run it; fix any hits (these are exactly the dangling references the Task 2.8 sweep hunts).
+- [ ] **Step 3:** Wire it as an extra step in the existing `staticcheck` CI job (no new required check; ci.yml gets one `run:` line) and a `make check-doc-links` target.
+- [ ] **Step 4:** Commit: `tools: add doc link checker; wire into staticcheck job`.
 
 ### Task 2.7: Directory READMEs / indexes
 
-- [ ] **Step 1:** Create short (≤30-line) READMEs: `docs/README.md` (map: ARCHITECTURE → specs → notes → vendored refs), `docs/notes/README.md` (references vs registries vs active milestone doc), `docs/specs/README.md` (annotated list of the live specs), `tests/README.md` (corpora = cumulative feature tiers; how to run a sweep), `reference/README.md` (what's vendored and why).
-- [ ] **Step 2:** Create ≤15-line READMEs for `tools/sam-aarch64/`, `tools/sam-aarch64-format/`, `tools/aarch64enc/`, `tools/aarch64dec/`, `tools/enctab-gen/`: purpose, authority role, key entry points, the make targets that exercise them.
+**Principle (Pete, 2026-06-10):** stepping into any directory should give you local context — every top-level directory and every Go module carries a README answering *what is this, how does it relate to the whole, where is the canonical deep doc*. Pointer-first: link the canonical doc, never restate its content. The per-corpus `tests/*/` subdirs are covered by the `tests/README.md` table rather than per-dir files (duplication risk outweighs the value at that depth).
+
+- [ ] **Step 1:** Create short (≤30-line) READMEs: `docs/README.md` (map: ARCHITECTURE → specs → notes → vendored refs), `docs/notes/README.md` (references vs registries vs active milestone doc), `docs/specs/README.md` (annotated list of the live specs), `docs/plans/README.md` (3 lines: plans are ephemeral — committed at execution start, deleted by the completing PR; an empty dir is the healthy state), `tests/README.md` (corpora = cumulative feature tiers, table with one line per corpus; how to run a sweep), `reference/README.md` (what's vendored and why).
+- [ ] **Step 2:** Create ≤15-line READMEs for the Go modules without one: `tools/sam-aarch64/`, `tools/sam-aarch64-format/`, `tools/aarch64enc/`, `tools/aarch64dec/`, `tools/enctab-gen/`, `tools/build-m3-disk/` (PR 5 renames the dir; the README moves with it): purpose, authority role, key entry points, the make targets that exercise them. Plus `src/slots/README.md` (one-line index of the per-operand-kind encoders and how they're included).
 - [ ] **Step 3:** Commit: `docs: add directory READMEs and indexes`.
 
 ### Task 2.8: ROADMAP/README pointer repair + link sweep
@@ -223,6 +255,21 @@ Fix every DANGLING hit (update or blob-pin), re-run until clean.
 - [ ] **Step 1:** `g mv`-equivalent: create `docs/specs/editor-vision.md` with the full "Editor vision" section content (unchanged prose, add a one-line header noting it feeds the Phase 2 spec); delete the section from ROADMAP; link it from the Phase-2 milestone row and the docs/specs README.
 - [ ] **Step 2:** Delete the "Achievements worth keeping visible" section (the milestone table + git history carry these).
 - [ ] **Step 3:** Commit: `docs: move editor vision to a spec; drop the achievements log from ROADMAP`.
+
+### Task 3.2b: Codify the doc lifecycle + hygiene-as-you-go policy (spec decision 6)
+
+- [ ] **Step 1:** CLAUDE.md — extend the "Where plans and specs go" section with the lifecycle rules:
+  - Plans (`docs/plans/`) are ephemeral execution artifacts: committed when execution starts, **deleted in the PR that completes the work** (the completing PR's description links the plan's final blob).
+  - `docs/specs/` holds only **living** design docs with **evergreen (undated) filenames**. When a design ships, fold its durable rationale into `docs/ARCHITECTURE.md` or a reference doc and delete the design doc in the same PR.
+  - Milestone status docs are deleted at milestone close, after the registry walk (contract rule 3).
+  - No `YYYY-MM-DD` filename prefixes under `docs/` — git history carries dates. This deliberately overrides the superpowers skills' dated-filename convention.
+  - Name new artifacts (dirs, scripts, make targets, CI jobs) after their **function**, never after the milestone that introduced them.
+  - Superseded code/tooling is deleted in the PR that supersedes it; if a deletion needs Pete's sign-off, raise a `qN` immediately rather than parking the artifact indefinitely.
+  - Every top-level directory and every Go module carries a ≤30-line README (*what is this, how does it relate, where is the canonical deep doc* — link, never restate). A PR that creates a directory ships its README in the same PR.
+- [ ] **Step 2:** CLAUDE.md §3 pre-merge checklist — add item 6, "Repo hygiene": the PR leaves no newly-dead artifacts behind (superseded docs/tooling deleted, plan deleted if the PR completes one, no new dated filenames, no new tracking homes outside the registries, new durable info landed in an existing living doc where one fits). Green: clean. Red: any hygiene debt introduced.
+- [ ] **Step 3:** `tools/session-handover.sh` — add two cheap standing warnings after the existing stray-file check: (a) any `docs/**/20[0-9][0-9]-*.md` filename → "dated filename — lifecycle policy violation"; (b) list `docs/plans/*.md` if non-empty as "in-flight plans" so stale plans are visible every session start.
+- [ ] **Step 4:** Run `bash tools/session-handover.sh` to confirm the warnings behave (the cleanup's own dated plan/spec will trigger warning (a) — expected and self-resolving in PR 5; note this in the commit message).
+- [ ] **Step 5:** Commit: `docs: codify ephemeral-plan/evergreen-spec lifecycle + per-PR hygiene gate`.
 
 ### Task 3.3: Verify + ship PR 3
 

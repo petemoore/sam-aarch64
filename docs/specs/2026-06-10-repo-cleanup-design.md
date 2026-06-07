@@ -23,6 +23,16 @@ documented in `src/README.md`).
 4. **`docs/ARCHITECTURE.md` is a synthesized overview**, not just an index.
 5. **Phase-5 verification is a test-inventory comparison**, not "CI green
    before and after" (see §8).
+6. **Doc lifecycle policy** (Pete, 2026-06-10 — prevents the pile regrowing):
+   plans are **ephemeral** — committed when execution starts, deleted in the
+   PR that completes the work. `docs/specs/` holds **only living docs with
+   evergreen (undated) filenames**; when a design ships, fold its durable
+   rationale into ARCHITECTURE.md or a reference doc and delete it. Milestone
+   status docs are deleted at milestone close after the registry walk. No
+   `YYYY-MM-DD` filename prefixes anywhere under `docs/` — git history
+   carries the dates. This overrides the superpowers skills' dated-filename
+   convention and is codified in CLAUDE.md (PR 3). Kept specs/notes are
+   renamed to evergreen names in PR 2.
 
 ## 1. Docs end-state
 

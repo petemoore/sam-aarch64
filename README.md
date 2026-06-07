@@ -71,6 +71,7 @@ docs/
 └── saa1099/      SAA-1099 sound chip datasheet (for future chiptune work)
 
 reference/
+├── arm-mra/         ARM Machine Readable Architecture XML (encoder-table source)
 ├── comet-disk/      Original COMET 1.44" disk, files extracted as-is
 ├── samdos/          SAMDOS 2 binary (disk building)
 └── comet-decoded/   Same files run through Simon Owen's comet2txt to give
