@@ -120,7 +120,7 @@ spec → plan → implementation cycle.
 
 ## Open items
 
-- Quazar Trinity SD card programming docs (Colin Piggot). Pete has them
+- Quazar Trinity SD card programming docs — available in private reference materials
   in email; will surface when Phase 3 begins. The MMC SPI command set
   itself is a public standard; only the SAM-side select/SPI wrapper is
   Trinity-specific.
