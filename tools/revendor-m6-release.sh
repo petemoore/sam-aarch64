@@ -6,7 +6,7 @@
 # vendored spectrum4 release:
 #
 #   tests/m6/release/release.s     the release flattened into ONE
-#                                  self-contained source file (text2bin -E:
+#                                  self-contained source file (sam-aarch64 -E:
 #                                  includes resolved, macros expanded, .if
 #                                  evaluated, test suites dropped), comments
 #                                  kept, cpp line-markers stripped.
@@ -17,7 +17,7 @@
 # spectrum4's release.img changes / the kernel adds new instructions.  It:
 #   1. ensures the spectrum4 sources are generated (runs spectrum4's
 #      tup-under-docker build if targets/release.img is absent);
-#   2. re-flattens release.target → release.s via `text2bin -E`;
+#   2. re-flattens release.target → release.s via `sam-aarch64 -E`;
 #   3. copies release.img;
 #   4. runs the gate to confirm all three toolchains still agree.
 #
@@ -65,12 +65,12 @@ if [ ! -f "$RELEASE_IMG" ] || [ ! -f "$RELEASE_RUNNER" ]; then
     ( cd "$s4root" && ./tup-under-docker.sh src/spectrum4/targets/release.img )
 fi
 
-# 2. Flatten release.target → one self-contained source via text2bin -E,
+# 2. Flatten release.target → one self-contained source via sam-aarch64 -E,
 #    dropping the cpp `# line "<abs-path>"` markers (they'd leak local
 #    paths and add noise; they don't affect the assembled bytes).
-echo "=== flattening release.target → release.s (text2bin -E) ==="
-make -s text2bin
-"$ROOT/build/text2bin" -E \
+echo "=== flattening release.target → release.s (sam-aarch64 -E) ==="
+make -s sam-aarch64
+"$ROOT/build/sam-aarch64" -E \
     -I "$SPECTRUM4_SRC" \
     -I "$SPECTRUM4_SRC/kernel" \
     -I "$SPECTRUM4_SRC/roms" \

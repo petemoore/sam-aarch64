@@ -15,12 +15,12 @@
 //     empty), and the harness's trap diagnostic now names "sd13" as an
 //     unserved HGTHD file — so the cryptic trap is self-explaining.
 //
-// Requires (all produced by `make m3-asm-prod enctab text2bin sysreg-data`):
+// Requires (all produced by `make m3-asm-prod enctab sam-aarch64 sysreg-data`):
 //
 //	build/assembler-prod.bin
 //	build/enctab.enc
 //	build/sysreg_data.bin
-//	build/text2bin
+//	build/sam-aarch64
 //	tests/m6/release/release.s   (vendored; always present)
 //	tests/m6/release/release.img (vendored oracle; always present)
 //
@@ -44,37 +44,30 @@ func TestReleasePagedInLoad(t *testing.T) {
 	encPath := filepath.Join(root, "build", "enctab.enc")
 	sd13Path := filepath.Join(root, "build", "sysreg_data.bin")
 	d15Path := filepath.Join(root, "build", "disasm.bin")
-	text2binPath := filepath.Join(root, "build", "text2bin")
-	refencPath := filepath.Join(root, "build", "refenc")
+	samPath := filepath.Join(root, "build", "sam-aarch64")
 	releaseSrc := filepath.Join(root, "tests", "m6", "release", "release.s")
 	releaseImg := filepath.Join(root, "tests", "m6", "release", "release.img")
 
-	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, text2binPath, refencPath, releaseSrc, releaseImg} {
+	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, samPath, releaseSrc, releaseImg} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make m3-asm-prod enctab text2bin refenc sysreg-data disasm-payload`", p)
+			t.Skipf("prerequisite missing: %s\n  run `make m3-asm-prod enctab sam-aarch64 sysreg-data disasm-payload`", p)
 		}
 	}
 
-	// Build the flattened, comment-stripped release .tbn at the release origin
-	// (matches `make release-stripped-tbn`), then compact it
-	// (refenc -emit-compact-tbn).  ~88 KB symbolic → 6 IN pages (7..12); the
-	// SAM assembler consumes the compact v2 .tbn (INSN_RUN decoder).
+	// Build the flattened, comment-stripped release binary + compact .tbn at
+	// the release origin (matches `make release-stripped-tbn`) via
+	// sam-aarch64 --emit-tbn.  The SAM assembler consumes the compact v2 .tbn
+	// (INSN_RUN decoder).
 	tmp := t.TempDir()
-	symTbnPath := filepath.Join(tmp, "release.tbn")
 	tbnPath := filepath.Join(tmp, "release.compact.tbn")
 	goImgPath := filepath.Join(tmp, "release.go.img")
-	cmd := exec.Command(text2binPath,
+	cmd := exec.Command(samPath,
 		"-flatten", "-strip-comments",
 		"-origin", "0xfffffff000000000",
-		"-o", symTbnPath, releaseSrc)
+		"-o", goImgPath, "-emit-tbn", tbnPath, releaseSrc)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("text2bin failed: %v\n%s", err, out)
-	}
-	cmd = exec.Command(refencPath, "-o", goImgPath, "-emit-compact-tbn", tbnPath, symTbnPath)
-	cmd.Dir = root
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("refenc failed: %v\n%s", err, out)
+		t.Fatalf("sam-aarch64 failed: %v\n%s", err, out)
 	}
 
 	asm, _ := os.ReadFile(asmPath)

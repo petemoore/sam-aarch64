@@ -6,7 +6,7 @@
 // The test expects:
 //   - build/assembler-prod.bin (built with `make m3-asm-prod`)
 //   - build/enctab.enc         (built with `make enctab`)
-//   - build/text2bin            (built with `make text2bin`)
+//   - build/sam-aarch64         (built with `make sam-aarch64`)
 //   - tests/m3/sources/inst_nop_ret.s  (source fixture; always present)
 //
 // Run from the repo root:
@@ -56,33 +56,26 @@ func TestInstNopRet(t *testing.T) {
 	// Paths.
 	assemblerBinPath := filepath.Join(root, "build", "assembler-prod.bin")
 	enctabPath := filepath.Join(root, "build", "enctab.enc")
-	text2binPath := filepath.Join(root, "build", "text2bin")
-	refencPath := filepath.Join(root, "build", "refenc")
+	samPath := filepath.Join(root, "build", "sam-aarch64")
 	fixturePath := filepath.Join(root, "tests", "m3", "sources", "inst_nop_ret.s")
 
 	// Check prerequisites exist.
-	for _, path := range []string{assemblerBinPath, enctabPath, text2binPath, refencPath, fixturePath} {
+	for _, path := range []string{assemblerBinPath, enctabPath, samPath, fixturePath} {
 		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("prerequisite missing: %s\n  run `make m3-asm-prod enctab text2bin refenc` from repo root", path)
+			t.Fatalf("prerequisite missing: %s\n  run `make m3-asm-prod enctab sam-aarch64` from repo root", path)
 		}
 	}
 
-	// Generate the symbolic .tbn from the fixture source, then compact it
-	// (refenc -emit-compact-tbn) — the SAM assembler consumes the compact v2
-	// .tbn (INSN_RUN decoder), not the raw symbolic text2bin output.
+	// Assemble the fixture source to a binary + compact .tbn — the SAM
+	// assembler consumes the compact v2 .tbn (INSN_RUN decoder), which
+	// sam-aarch64 emits directly via --emit-tbn.
 	tmp := t.TempDir()
-	symTbnPath := filepath.Join(tmp, "inst_nop_ret.tbn")
 	tbnPath := filepath.Join(tmp, "inst_nop_ret.compact.tbn")
 	goImgPath := filepath.Join(tmp, "inst_nop_ret.go.img")
-	cmd := exec.Command(text2binPath, "-o", symTbnPath, fixturePath)
+	cmd := exec.Command(samPath, "-o", goImgPath, "-emit-tbn", tbnPath, fixturePath)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("text2bin failed: %v\n%s", err, out)
-	}
-	cmd = exec.Command(refencPath, "-o", goImgPath, "-emit-compact-tbn", tbnPath, symTbnPath)
-	cmd.Dir = root
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("refenc failed: %v\n%s", err, out)
+		t.Fatalf("sam-aarch64 failed: %v\n%s", err, out)
 	}
 
 	// Read all inputs.

@@ -31,11 +31,11 @@
 //     not as a CI failure minutes later.
 //
 // Requires (all from `make m3-asm enctab sysreg-data disasm-test-payload
-// test-mem-offaxis cluster-offaxis paged-call-payload text2bin`):
+// test-mem-offaxis cluster-offaxis paged-call-payload sam-aarch64`):
 //
 //	build/assembler.bin   build/enctab.enc   build/sysreg_data.bin
 //	build/disasm-test.bin build/test_mem.bin build/test_cluster.bin
-//	build/paged_call_test_payload.bin   build/text2bin
+//	build/paged_call_test_payload.bin   build/sam-aarch64
 //
 // Skipped automatically if any artefact is absent.  SimCoupé remains the sole
 // CI gate; this is a fast inner-loop check.
@@ -63,34 +63,27 @@ func TestBootSelfTestsPass(t *testing.T) {
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
-	text2binPath := filepath.Join(root, "build", "text2bin")
-	refencPath := filepath.Join(root, "build", "refenc")
+	samPath := filepath.Join(root, "build", "sam-aarch64")
 	fixturePath := filepath.Join(root, "tests", "m3", "sources", "inst_nop_ret.s")
 
-	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path, text2binPath, refencPath, fixturePath} {
+	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path, samPath, fixturePath} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make m3-asm enctab sysreg-data disasm-test-payload test-mem-offaxis cluster-offaxis paged-call-payload text2bin refenc`", p)
+			t.Skipf("prerequisite missing: %s\n  run `make m3-asm enctab sysreg-data disasm-test-payload test-mem-offaxis cluster-offaxis paged-call-payload sam-aarch64`", p)
 		}
 	}
 
-	// Assemble the trivial fixture to a symbolic .tbn, then compact it
-	// (refenc -emit-compact-tbn) so main_assemble has something to chew on
+	// Assemble the trivial fixture to a binary + compact .tbn
+	// (sam-aarch64 --emit-tbn) so main_assemble has something to chew on
 	// after the self-test block; reaching its "OK" proves the boot got all
 	// the way through the self-tests.  The SAM assembler consumes the compact
-	// v2 .tbn (INSN_RUN decoder), not the raw symbolic text2bin output.
+	// v2 .tbn (INSN_RUN decoder).
 	tmp := t.TempDir()
-	symTbnPath := filepath.Join(tmp, "inst_nop_ret.tbn")
 	tbnPath := filepath.Join(tmp, "inst_nop_ret.compact.tbn")
 	goImgPath := filepath.Join(tmp, "inst_nop_ret.go.img")
-	cmd := exec.Command(text2binPath, "-o", symTbnPath, fixturePath)
+	cmd := exec.Command(samPath, "-o", goImgPath, "-emit-tbn", tbnPath, fixturePath)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("text2bin failed: %v\n%s", err, out)
-	}
-	cmd = exec.Command(refencPath, "-o", goImgPath, "-emit-compact-tbn", tbnPath, symTbnPath)
-	cmd.Dir = root
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("refenc failed: %v\n%s", err, out)
+		t.Fatalf("sam-aarch64 failed: %v\n%s", err, out)
 	}
 
 	asm, _ := os.ReadFile(asmPath)

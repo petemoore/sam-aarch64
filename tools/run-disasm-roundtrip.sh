@@ -4,16 +4,16 @@
 # Two complementary round-trips over the M3-M6 fixture corpus + release.s,
 # both pure Go (no aarch64 binutils or SimCoupé required):
 #
-# [2/3] binary disassembler (strand-B): refenc and aarch64dec are inverses on
-#   the assembled binary —
-#     source.s → text2bin → refenc → v1.bin
-#     v1.bin → aarch64dec -asm → disasm.s → text2bin → refenc → v2.bin
+# [2/3] binary disassembler (strand-B): sam-aarch64 and aarch64dec are inverses
+#   on the assembled binary —
+#     source.s → sam-aarch64 → v1.bin
+#     v1.bin → aarch64dec -asm → disasm.s → sam-aarch64 → v2.bin
 #     assert v1.bin == v2.bin
 #
-# [2d/3]+[2e/3] compact-`.tbn` v2 instruction overlay (M8 / i39a): bin2text
-#   renders the compact overlay back to text faithfully —
-#     source.s → text2bin → refenc -emit-compact-tbn → compact_v2.tbn
-#     compact_v2.tbn → bin2text → overlay.s → text2bin → refenc → v2.bin
+# [2d/3]+[2e/3] compact-`.tbn` v2 instruction overlay (M8 / i39a): sam-aarch64
+#   --render renders the compact overlay back to text faithfully —
+#     source.s → sam-aarch64 --emit-tbn → compact_v2.tbn
+#     compact_v2.tbn → sam-aarch64 --render → overlay.s → sam-aarch64 → v2.bin
 #     assert v1.bin == v2.bin
 #   This is the slot/fold-enum *rendering* fidelity guard: a one-bit error in
 #   turning a {FoldSlot, expression} patch back into its symbolic operand fails
@@ -30,7 +30,7 @@
 #
 #  2. inst_ldr_litpool.s: embeds a `.word 0x12345678` literal pool entry.
 #     aarch64dec decodes that 4-byte word as an `and` instruction; the
-#     logical-immediate bits of that word are not idempotent under refenc
+#     logical-immediate bits of that word are not idempotent under the encoder
 #     (pre-existing encoder bug unrelated to this infrastructure).
 #     Embedding 32-bit data words in a code binary is outside the scope of
 #     a pure-instruction round-trip test.
@@ -40,7 +40,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 echo "=== [1/3] Build tools ==="
-make -s text2bin refenc aarch64dec bin2text
+make -s sam-aarch64 aarch64dec
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
@@ -74,20 +74,12 @@ for dir in "${FIXTURE_DIRS[@]}"; do
         fi
 
         v1_bin="$tmp/${dir//\//_}_${name}_v1.bin"
-        v1_tbn="$tmp/${dir//\//_}_${name}_v1.tbn"
         disasm_s="$tmp/${dir//\//_}_${name}_disasm.s"
-        v2_tbn="$tmp/${dir//\//_}_${name}_v2.tbn"
         v2_bin="$tmp/${dir//\//_}_${name}_v2.bin"
 
-        if ! "$ROOT/build/text2bin" -o "$v1_tbn" "$src" 2>/dev/null; then
-            echo "    FAIL(text2bin) $dir/$name.s"
-            fail_names+=("$dir/$name.s [text2bin]")
-            failed=$((failed + 1))
-            continue
-        fi
-        if ! "$ROOT/build/refenc" -o "$v1_bin" "$v1_tbn" 2>/dev/null; then
-            echo "    FAIL(refenc) $dir/$name.s"
-            fail_names+=("$dir/$name.s [refenc]")
+        if ! "$ROOT/build/sam-aarch64" -o "$v1_bin" "$src" 2>/dev/null; then
+            echo "    FAIL(sam-aarch64) $dir/$name.s"
+            fail_names+=("$dir/$name.s [sam-aarch64]")
             failed=$((failed + 1))
             continue
         fi
@@ -131,15 +123,9 @@ for dir in "${FIXTURE_DIRS[@]}"; do
             continue
         fi
 
-        if ! "$ROOT/build/text2bin" -o "$v2_tbn" "$disasm_s" 2>/dev/null; then
-            echo "    FAIL(text2bin2) $dir/$name.s"
-            fail_names+=("$dir/$name.s [text2bin re-asm]")
-            failed=$((failed + 1))
-            continue
-        fi
-        if ! "$ROOT/build/refenc" -o "$v2_bin" "$v2_tbn" 2>/dev/null; then
-            echo "    FAIL(refenc2) $dir/$name.s"
-            fail_names+=("$dir/$name.s [refenc re-enc]")
+        if ! "$ROOT/build/sam-aarch64" -o "$v2_bin" "$disasm_s" 2>/dev/null; then
+            echo "    FAIL(sam-aarch64-2) $dir/$name.s"
+            fail_names+=("$dir/$name.s [sam-aarch64 re-asm]")
             failed=$((failed + 1))
             continue
         fi
@@ -172,20 +158,14 @@ echo "=== [2b/3] Round-trip release.s (code-only, -strip-data) ==="
 # so the round-trip never encounters .inst entries from embedded data words.
 release_src="$ROOT/tests/m6/release/release.s"
 if [ -f "$release_src" ]; then
-    rel_v1_tbn="$tmp/release_v1.tbn"
     rel_v1_bin="$tmp/release_v1.bin"
     rel_disasm_s="$tmp/release_disasm.s"
-    rel_v2_tbn="$tmp/release_v2.tbn"
     rel_v2_bin="$tmp/release_v2.bin"
 
-    if ! "$ROOT/build/text2bin" -flatten -strip-comments -strip-data \
-            -o "$rel_v1_tbn" "$release_src" 2>/dev/null; then
-        echo "    FAIL(text2bin) release.s"
-        fail_names+=("release.s [text2bin]")
-        failed=$((failed + 1))
-    elif ! "$ROOT/build/refenc" -o "$rel_v1_bin" "$rel_v1_tbn" 2>/dev/null; then
-        echo "    FAIL(refenc) release.s"
-        fail_names+=("release.s [refenc]")
+    if ! "$ROOT/build/sam-aarch64" -flatten -strip-comments -strip-data \
+            -o "$rel_v1_bin" "$release_src" 2>/dev/null; then
+        echo "    FAIL(sam-aarch64) release.s"
+        fail_names+=("release.s [sam-aarch64]")
         failed=$((failed + 1))
     elif ! "$ROOT/build/aarch64dec" -asm "$rel_v1_bin" > "$rel_disasm_s" 2>/dev/null; then
         echo "    FAIL(aarch64dec) release.s"
@@ -197,13 +177,9 @@ if [ -f "$release_src" ]; then
         grep $'\t\.inst' "$rel_disasm_s" | head -3 | sed 's/^/      /'
         fail_names+=("release.s [.inst: $count undecodeable word(s)]")
         failed=$((failed + 1))
-    elif ! "$ROOT/build/text2bin" -o "$rel_v2_tbn" "$rel_disasm_s" 2>/dev/null; then
-        echo "    FAIL(text2bin2) release.s"
-        fail_names+=("release.s [text2bin re-asm]")
-        failed=$((failed + 1))
-    elif ! "$ROOT/build/refenc" -o "$rel_v2_bin" "$rel_v2_tbn" 2>/dev/null; then
-        echo "    FAIL(refenc2) release.s"
-        fail_names+=("release.s [refenc re-enc]")
+    elif ! "$ROOT/build/sam-aarch64" -o "$rel_v2_bin" "$rel_disasm_s" 2>/dev/null; then
+        echo "    FAIL(sam-aarch64-2) release.s"
+        fail_names+=("release.s [sam-aarch64 re-asm]")
         failed=$((failed + 1))
     elif cmp -s "$rel_v1_bin" "$rel_v2_bin"; then
         rel_sz=$(wc -c < "$rel_v1_bin")
@@ -234,32 +210,22 @@ echo "=== [2c/3] Round-trip release.s (full binary — data included) ==="
 # re-encoded to their canonical form; undecodeable data words fall through to
 # .inst and are preserved verbatim.
 if [ -f "$release_src" ]; then
-    full_v1_tbn="$tmp/release_full_v1.tbn"
     full_v1_bin="$tmp/release_full_v1.bin"
     full_disasm_s="$tmp/release_full_disasm.s"
-    full_v2_tbn="$tmp/release_full_v2.tbn"
     full_v2_bin="$tmp/release_full_v2.bin"
 
-    if ! "$ROOT/build/text2bin" -flatten -strip-comments \
-            -o "$full_v1_tbn" "$release_src" 2>/dev/null; then
-        echo "    FAIL(text2bin) release.s (full)"
-        fail_names+=("release.s full [text2bin]")
-        failed=$((failed + 1))
-    elif ! "$ROOT/build/refenc" -o "$full_v1_bin" "$full_v1_tbn" 2>/dev/null; then
-        echo "    FAIL(refenc) release.s (full)"
-        fail_names+=("release.s full [refenc]")
+    if ! "$ROOT/build/sam-aarch64" -flatten -strip-comments \
+            -o "$full_v1_bin" "$release_src" 2>/dev/null; then
+        echo "    FAIL(sam-aarch64) release.s (full)"
+        fail_names+=("release.s full [sam-aarch64]")
         failed=$((failed + 1))
     elif ! "$ROOT/build/aarch64dec" -asm "$full_v1_bin" > "$full_disasm_s" 2>/dev/null; then
         echo "    FAIL(aarch64dec) release.s (full)"
         fail_names+=("release.s full [aarch64dec]")
         failed=$((failed + 1))
-    elif ! "$ROOT/build/text2bin" -o "$full_v2_tbn" "$full_disasm_s" 2>/dev/null; then
-        echo "    FAIL(text2bin2) release.s (full)"
-        fail_names+=("release.s full [text2bin re-asm]")
-        failed=$((failed + 1))
-    elif ! "$ROOT/build/refenc" -o "$full_v2_bin" "$full_v2_tbn" 2>/dev/null; then
-        echo "    FAIL(refenc2) release.s (full)"
-        fail_names+=("release.s full [refenc re-enc]")
+    elif ! "$ROOT/build/sam-aarch64" -o "$full_v2_bin" "$full_disasm_s" 2>/dev/null; then
+        echo "    FAIL(sam-aarch64-2) release.s (full)"
+        fail_names+=("release.s full [sam-aarch64 re-asm]")
         failed=$((failed + 1))
     elif cmp -s "$full_v1_bin" "$full_v2_bin"; then
         full_sz=$(wc -c < "$full_v1_bin")
@@ -284,12 +250,12 @@ else
 fi
 
 echo ""
-echo "=== [2d/3] Overlay round-trip each fixture (compact v2 → bin2text → re-assemble) ==="
+echo "=== [2d/3] Overlay round-trip each fixture (compact v2 → render → re-assemble) ==="
 # Proves the compact-`.tbn` v2 instruction overlay (M8 / i39a) is faithful:
-#   source.s → text2bin → refenc -emit-compact-tbn → compact_v2.tbn
-#   compact_v2.tbn → bin2text → overlay.s → text2bin → refenc → v2.bin
+#   source.s → sam-aarch64 --emit-tbn → compact_v2.tbn
+#   compact_v2.tbn → sam-aarch64 --render → overlay.s → sam-aarch64 → v2.bin
 #   assert v1.bin == v2.bin
-# This exercises the slot/fold enum's *rendering* direction (bin2text turns each
+# This exercises the slot/fold enum's *rendering* direction (--render turns each
 # {FoldSlot, expression} patch back into its symbolic operand); a one-bit
 # slot-rendering error fails the byte-compare deterministically. Unlike the
 # binary-disassembler legs above, the overlay renderer handles data (LIT_DATA)
@@ -299,27 +265,19 @@ for dir in "${FIXTURE_DIRS[@]}"; do
         [ -f "$src" ] || continue
         name="$(basename "$src" .s)"
 
-        ov_v1_tbn="$tmp/ov_${dir//\//_}_${name}_v1.tbn"
         ov_v1_bin="$tmp/ov_${dir//\//_}_${name}_v1.bin"
         ov_compact="$tmp/ov_${dir//\//_}_${name}_compact.tbn"
         ov_dis="$tmp/ov_${dir//\//_}_${name}_overlay.s"
-        ov_v2_tbn="$tmp/ov_${dir//\//_}_${name}_v2.tbn"
         ov_v2_bin="$tmp/ov_${dir//\//_}_${name}_v2.bin"
 
-        if ! "$ROOT/build/text2bin" -o "$ov_v1_tbn" "$src" 2>/dev/null; then
-            echo "    FAIL(text2bin) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay text2bin]"); failed=$((failed + 1)); continue
+        if ! "$ROOT/build/sam-aarch64" -o "$ov_v1_bin" --emit-tbn "$ov_compact" "$src" 2>/dev/null; then
+            echo "    FAIL(sam-aarch64-compact) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay compact]"); failed=$((failed + 1)); continue
         fi
-        if ! "$ROOT/build/refenc" -o "$ov_v1_bin" -emit-compact-tbn "$ov_compact" "$ov_v1_tbn" 2>/dev/null; then
-            echo "    FAIL(refenc-compact) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay compact]"); failed=$((failed + 1)); continue
+        if ! "$ROOT/build/sam-aarch64" --render "$ov_compact" > "$ov_dis" 2>/dev/null; then
+            echo "    FAIL(render) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay render]"); failed=$((failed + 1)); continue
         fi
-        if ! "$ROOT/build/bin2text" "$ov_compact" > "$ov_dis" 2>/dev/null; then
-            echo "    FAIL(bin2text) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay render]"); failed=$((failed + 1)); continue
-        fi
-        if ! "$ROOT/build/text2bin" -o "$ov_v2_tbn" "$ov_dis" 2>/dev/null; then
-            echo "    FAIL(text2bin2) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay re-asm]"); failed=$((failed + 1)); continue
-        fi
-        if ! "$ROOT/build/refenc" -o "$ov_v2_bin" "$ov_v2_tbn" 2>/dev/null; then
-            echo "    FAIL(refenc2) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay re-enc]"); failed=$((failed + 1)); continue
+        if ! "$ROOT/build/sam-aarch64" -o "$ov_v2_bin" "$ov_dis" 2>/dev/null; then
+            echo "    FAIL(sam-aarch64-2) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay re-asm]"); failed=$((failed + 1)); continue
         fi
         if cmp -s "$ov_v1_bin" "$ov_v2_bin"; then
             ov_sz=$(wc -c < "$ov_v1_bin")
@@ -347,24 +305,18 @@ echo "=== [2e/3] Overlay round-trip release.s (full binary — code + data) ==="
 # instruction overlay, rendered back to text, and re-assembled byte-identically
 # (and byte-identical to the vendored GNU release.img).
 if [ -f "$release_src" ]; then
-    rel_ov_v1_tbn="$tmp/rel_ov_v1.tbn"
     rel_ov_v1_bin="$tmp/rel_ov_v1.bin"
     rel_ov_compact="$tmp/rel_ov_compact.tbn"
     rel_ov_dis="$tmp/rel_ov_overlay.s"
-    rel_ov_v2_tbn="$tmp/rel_ov_v2.tbn"
     rel_ov_v2_bin="$tmp/rel_ov_v2.bin"
     rel_img="$ROOT/tests/m6/release/release.img"
 
-    if ! "$ROOT/build/text2bin" -flatten -strip-comments -o "$rel_ov_v1_tbn" "$release_src" 2>/dev/null; then
-        echo "    FAIL(text2bin) release.s (overlay)"; fail_names+=("release.s [overlay text2bin]"); failed=$((failed + 1))
-    elif ! "$ROOT/build/refenc" -o "$rel_ov_v1_bin" -emit-compact-tbn "$rel_ov_compact" "$rel_ov_v1_tbn" 2>/dev/null; then
-        echo "    FAIL(refenc-compact) release.s (overlay)"; fail_names+=("release.s [overlay compact]"); failed=$((failed + 1))
-    elif ! "$ROOT/build/bin2text" "$rel_ov_compact" > "$rel_ov_dis" 2>/dev/null; then
-        echo "    FAIL(bin2text) release.s (overlay)"; fail_names+=("release.s [overlay render]"); failed=$((failed + 1))
-    elif ! "$ROOT/build/text2bin" -o "$rel_ov_v2_tbn" "$rel_ov_dis" 2>/dev/null; then
-        echo "    FAIL(text2bin2) release.s (overlay)"; fail_names+=("release.s [overlay re-asm]"); failed=$((failed + 1))
-    elif ! "$ROOT/build/refenc" -o "$rel_ov_v2_bin" "$rel_ov_v2_tbn" 2>/dev/null; then
-        echo "    FAIL(refenc2) release.s (overlay)"; fail_names+=("release.s [overlay re-enc]"); failed=$((failed + 1))
+    if ! "$ROOT/build/sam-aarch64" -flatten -strip-comments -o "$rel_ov_v1_bin" --emit-tbn "$rel_ov_compact" "$release_src" 2>/dev/null; then
+        echo "    FAIL(sam-aarch64-compact) release.s (overlay)"; fail_names+=("release.s [overlay compact]"); failed=$((failed + 1))
+    elif ! "$ROOT/build/sam-aarch64" --render "$rel_ov_compact" > "$rel_ov_dis" 2>/dev/null; then
+        echo "    FAIL(render) release.s (overlay)"; fail_names+=("release.s [overlay render]"); failed=$((failed + 1))
+    elif ! "$ROOT/build/sam-aarch64" -o "$rel_ov_v2_bin" "$rel_ov_dis" 2>/dev/null; then
+        echo "    FAIL(sam-aarch64-2) release.s (overlay)"; fail_names+=("release.s [overlay re-asm]"); failed=$((failed + 1))
     elif ! cmp -s "$rel_ov_v1_bin" "$rel_ov_v2_bin"; then
         first_diff=$(cmp -l "$rel_ov_v1_bin" "$rel_ov_v2_bin" 2>/dev/null | head -1 | awk '{print $1}') || true
         byte_off=$(( (first_diff - 1) & ~3 ))

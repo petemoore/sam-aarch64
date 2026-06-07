@@ -159,7 +159,7 @@ func directiveByteSize(rec format.Record, pc, originVMA int64) (int64, error) {
 		// (it sets the origin / advances PC); the rest emit no bytes.
 		return 0, nil
 	}
-	return 0, fmt.Errorf("bin2text: unknown directive %q for PC sizing", name)
+	return 0, fmt.Errorf("render: unknown directive %q for PC sizing", name)
 }
 
 // alignPad returns the padding bytes needed to align addr up to a power-of-two

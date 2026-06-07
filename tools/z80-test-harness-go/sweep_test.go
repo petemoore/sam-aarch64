@@ -12,7 +12,7 @@
 //
 // Assumes prerequisites already built into ../../build:
 //
-//	build/text2bin build/enctab.enc build/assembler-prod.bin build/assembler.bin
+//	build/sam-aarch64 build/enctab.enc build/assembler-prod.bin build/assembler.bin
 //	build/test_mem.bin build/paged_call_test_payload.bin
 package main
 
@@ -35,10 +35,9 @@ func TestCorpusSweep(t *testing.T) {
 	root := "../.."
 	build := filepath.Join(root, "build")
 
-	text2bin := filepath.Join(build, "text2bin")
-	refenc := filepath.Join(build, "refenc")
-	if _, e := os.Stat(refenc); e != nil {
-		t.Skipf("build/refenc not built (run `make refenc`): %v", e)
+	sam := filepath.Join(build, "sam-aarch64")
+	if _, e := os.Stat(sam); e != nil {
+		t.Skipf("build/sam-aarch64 not built (run `make sam-aarch64`): %v", e)
 	}
 	enctab, err := os.ReadFile(filepath.Join(build, "enctab.enc"))
 	if err != nil {
@@ -100,18 +99,13 @@ func TestCorpusSweep(t *testing.T) {
 			base := filepath.Base(src)
 			base = base[:len(base)-len(".s")]
 
-			// Symbolic .tbn → compact .tbn (refenc -emit-compact-tbn): the
-			// SAM assembler consumes the compact v2 .tbn (INSN_RUN decoder),
-			// not the raw symbolic text2bin output.
-			symTbnPath := filepath.Join(tmp, base+".tbn")
-			if out, e := exec.Command(text2bin, "-o", symTbnPath, src).CombinedOutput(); e != nil {
-				rows = append(rows, row{m, base, "-", false, false, 0, 0, "text2bin-fail", string(out)})
-				continue
-			}
+			// Assemble to a binary + compact .tbn (sam-aarch64 --emit-tbn):
+			// the SAM assembler consumes the compact v2 .tbn (INSN_RUN
+			// decoder).
 			tbnPath := filepath.Join(tmp, base+".compact.tbn")
 			goImgPath := filepath.Join(tmp, base+".go.img")
-			if out, e := exec.Command(refenc, "-o", goImgPath, "-emit-compact-tbn", tbnPath, symTbnPath).CombinedOutput(); e != nil {
-				rows = append(rows, row{m, base, "-", false, false, 0, 0, "refenc-fail", string(out)})
+			if out, e := exec.Command(sam, "-o", goImgPath, "-emit-tbn", tbnPath, src).CombinedOutput(); e != nil {
+				rows = append(rows, row{m, base, "-", false, false, 0, 0, "sam-aarch64-fail", string(out)})
 				continue
 			}
 			tbn, _ := os.ReadFile(tbnPath)

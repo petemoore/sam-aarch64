@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Layer 3 round-trip: for every fixture under tests/m1/sources/,
-# build via text2bin + refenc and byte-compare against
+# build via sam-aarch64 and byte-compare against
 # `aarch64-none-elf-as` + `ld -Ttext=0` + `objcopy -O binary`.
 #
 # The `ld -Ttext=0` step is what makes :lo12: / :hi12: / etc.
-# relocations resolve to the same values refenc bakes in — per
+# relocations resolve to the same values sam-aarch64 bakes in — per
 # the M1 spec §5.1, this is the prescribed oracle for fixtures
 # carrying relocations.
 #
@@ -34,11 +34,10 @@ fi
 cd "$ROOT"
 mkdir -p build/refenc-roundtrip
 
-TEXT2BIN="$ROOT/build/text2bin"
-REFENC="$ROOT/build/refenc"
+SAM="$ROOT/build/sam-aarch64"
 
-if [ ! -x "$TEXT2BIN" ] || [ ! -x "$REFENC" ]; then
-    echo "text2bin or refenc not built; run: make text2bin refenc" >&2
+if [ ! -x "$SAM" ]; then
+    echo "sam-aarch64 not built; run: make sam-aarch64" >&2
     exit 2
 fi
 
@@ -51,14 +50,13 @@ for src in "$ROOT"/tests/m1/sources/*.s; do
     mkdir -p "$work"
 
     # Build via our pipeline.
-    "$TEXT2BIN" -o "$work/ours.tbn" "$src"
-    "$REFENC" -o "$work/ours.bin" "$work/ours.tbn"
+    "$SAM" -o "$work/ours.bin" "$src"
 
     # Build via GNU pipeline.
     "$AS" "$src" -o "$work/gnu.o"
 
     if [ ! -s "$work/ours.bin" ]; then
-        # refenc emitted nothing; expect an empty oracle binary.
+        # sam-aarch64 emitted nothing; expect an empty oracle binary.
         : > "$work/gnu.bin"
     else
         # Link and convert. The "_start" warning is harmless.

@@ -154,7 +154,7 @@ func Emit(in []byte) ([]byte, error) {
 	// Flush any definition at the final PC (an end-of-stream label).
 	flush()
 	if leftover := hd.remaining(); len(leftover) > 0 {
-		return nil, fmt.Errorf("bin2text: %d header definition(s) not placed by PC walk (first at offset %#x) — PC accounting bug or corrupt header table",
+		return nil, fmt.Errorf("render: %d header definition(s) not placed by PC walk (first at offset %#x) — PC accounting bug or corrupt header table",
 			len(leftover), leftover[0].offset)
 	}
 	if prevWasStatement {

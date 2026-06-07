@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # For every fixture under tests/spectrum4/sources/, build via
-# text2bin + refenc and byte-compare against
+# sam-aarch64 and byte-compare against
 # `aarch64-none-elf-as` + `ld -Ttext=0` + `objcopy -O binary`.
 #
 # Mirrors tests/m1/run-refenc-roundtrip.sh but for the spectrum4
@@ -29,11 +29,10 @@ fi
 cd "$ROOT"
 mkdir -p build/spectrum4-roundtrip
 
-TEXT2BIN="$ROOT/build/text2bin"
-REFENC="$ROOT/build/refenc"
+SAM="$ROOT/build/sam-aarch64"
 
-if [ ! -x "$TEXT2BIN" ] || [ ! -x "$REFENC" ]; then
-    echo "text2bin or refenc not built; run: make text2bin refenc" >&2
+if [ ! -x "$SAM" ]; then
+    echo "sam-aarch64 not built; run: make sam-aarch64" >&2
     exit 2
 fi
 
@@ -45,8 +44,7 @@ for src in "$ROOT"/tests/spectrum4/sources/*.s; do
     work="$ROOT/build/spectrum4-roundtrip/$base"
     mkdir -p "$work"
 
-    "$TEXT2BIN" -o "$work/ours.tbn" "$src"
-    "$REFENC" -o "$work/ours.bin" "$work/ours.tbn"
+    "$SAM" -o "$work/ours.bin" "$src"
 
     "$AS" "$src" -o "$work/gnu.o"
 

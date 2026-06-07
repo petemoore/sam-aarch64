@@ -371,7 +371,7 @@ func applyBinaryUsage(op format.ExprOp, a, b int64) int64 {
 
 // Dump writes a human-readable summary of u to w.
 func (u *Usage) Dump(w io.Writer) {
-	fmt.Fprintln(w, "=== refenc --dump-usage ===")
+	fmt.Fprintln(w, "=== sam-aarch64 --dump-usage ===")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Record stream:")
 	fmt.Fprintf(w, "  Total records:    %d\n", u.TotalRecords)

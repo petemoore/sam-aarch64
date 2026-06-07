@@ -5,8 +5,8 @@
 # format, just the M6 fixture corpus).  See
 # docs/specs/2026-05-27-m6-paged-out-design.md.
 #
-#   1. text2bin INPUT.s   → INPUT.tbn
-#   2. build-m3-disk assembler.bin enctab.enc INPUT.tbn → OUT.mgt
+#   1. sam-aarch64 INPUT.s → INPUT.img + INPUT.compact.tbn
+#   2. build-m3-disk assembler.bin enctab.enc INPUT.compact.tbn → OUT.mgt
 #      (the M3 assembler binary is M6-capable post-PR-1; the .tbn
 #       record format is unchanged.)
 #   3. SimCoupé runs the disk; the assembler reads IN (two passes),
@@ -63,7 +63,7 @@ mkdir -p build
 # Mac-side tools.  ASSEMBLER_BIN is per-variant — see header of
 # tools/run-m3-roundtrip.sh for the test vs prod rationale.
 ASSEMBLER_BIN="${ASSEMBLER_BIN:-$ROOT/build/assembler.bin}"
-make -s text2bin refenc enctab build-m3-disk sysreg-data disasm-payload
+make -s sam-aarch64 enctab build-m3-disk sysreg-data disasm-payload
 
 if [ ! -f "$ASSEMBLER_BIN" ]; then
     echo "ERROR: assembler binary not found: $ASSEMBLER_BIN" >&2
@@ -71,15 +71,13 @@ if [ ! -f "$ASSEMBLER_BIN" ]; then
     exit 2
 fi
 
-# 1. text2bin → INPUT.tbn (symbolic), then refenc → INPUT.compact.tbn.
+# 1. sam-aarch64 INPUT.s → INPUT.img + INPUT.compact.tbn.
 #
 # The SAM assembler consumes the COMPACT v2 .tbn (the INSN_RUN decoder);
-# the raw symbolic text2bin output is fed to refenc -emit-compact-tbn to
-# produce it.  build-m3-disk below gets the compact .tbn as IN.
-echo "--- text2bin ---"
-"$ROOT/build/text2bin" -o "build/${base}.tbn" "$fixture"
-echo "--- refenc (emit compact .tbn) ---"
-"$ROOT/build/refenc" -o "build/${base}.img" -emit-compact-tbn "build/${base}.compact.tbn" "build/${base}.tbn"
+# the integrated tool assembles the source and emits the compact .tbn
+# directly via --emit-tbn.  build-m3-disk below gets the compact .tbn as IN.
+echo "--- sam-aarch64 (assemble + emit compact .tbn) ---"
+"$ROOT/build/sam-aarch64" -o "build/${base}.img" --emit-tbn "build/${base}.compact.tbn" "$fixture"
 
 # 2. build-m3-disk with the COMPACT .tbn as IN.
 #

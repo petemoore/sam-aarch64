@@ -3,17 +3,17 @@
 #
 # Standing guard for "spectrum4 release.bin byte-match on SAM".  It takes
 # the VENDORED spectrum4 release source (tests/m6/release/release.s — the
-# whole release flattened into one self-contained file by `text2bin -E`)
+# whole release flattened into one self-contained file by `sam-aarch64 -E`)
 # and proves three independent toolchains agree on its bytes:
 #
 #   1. GNU binutils — the vendored tests/m6/release/release.img (spectrum4's
 #      own as+ld+objcopy build; we trust + freeze it, so CI needs no
 #      aarch64 binutils).
-#   2. Our Go toolchain — text2bin (source → .tbn) + refenc (.tbn → binary).
+#   2. Our Go toolchain — sam-aarch64 (source → binary + compact .tbn).
 #   3. Our Z80 toolchain — the SAM-side assembler on SimCoupé (.tbn → OUT).
 #
 # All three must be byte-identical.  This exercises BOTH our toolchains
-# (text2bin's flatten/strip + the Go encoder, and the Z80 encoder) on the
+# (sam-aarch64's flatten/strip + the Go encoder, and the Z80 encoder) on the
 # real release, with no spectrum4 checkout / tup / GNU toolchain at CI
 # time — only the two small vendored files.  Refresh them with
 # tools/revendor-m6-release.sh when spectrum4's release.img changes.
@@ -52,39 +52,31 @@ if ! command -v "$SAMFILE" >/dev/null 2>&1; then
 fi
 
 ORIGIN="0xfffffff000000000"
-TBN="$ROOT/build/m6-release.tbn"
 CTBN="$ROOT/build/m6-release.compact.tbn"        # compact .tbn (i1 PR1)
 GO_IMG="$ROOT/build/m6-release.go.img"           # toolchain 2 output
 GO_IMG_C="$ROOT/build/m6-release.go.compact.img" # toolchain 2 via compact .tbn
 SAM_IMG="$ROOT/build/m6-release.sam.img"         # toolchain 3 output
 
-echo "=== [1/6] build SAM + Go tools (+ &C000 budget check) ==="
-make -s text2bin refenc enctab sysreg-data disasm-payload build-m3-disk m3-asm-prod check-budget
+echo "=== [1/5] build SAM + Go tools (+ &C000 budget check) ==="
+make -s sam-aarch64 enctab sysreg-data disasm-payload build-m3-disk m3-asm-prod check-budget
 
-echo "=== [2/6] text2bin: vendored release.s → .tbn (flatten + strip-comments) ==="
-"$ROOT/build/text2bin" -flatten -strip-comments -origin "$ORIGIN" -o "$TBN" "$SRC"
-echo "    .tbn: $(wc -c < "$TBN" | tr -d ' ') bytes"
+echo "=== [2/5] sam-aarch64: vendored release.s → binary (+ emit compact .tbn) (flatten + strip-comments) ==="
+"$ROOT/build/sam-aarch64" -flatten -strip-comments -origin "$ORIGIN" -o "$GO_IMG" --emit-tbn "$CTBN" "$SRC"
+echo "    compact .tbn: $(wc -c < "$CTBN" | tr -d ' ') bytes"
 
-echo "=== [3/6] Go toolchain: refenc .tbn → binary (+ emit compact .tbn) ==="
-"$ROOT/build/refenc" -o "$GO_IMG" -emit-compact-tbn "$CTBN" "$TBN"
-
-echo "=== [4/6] compact .tbn: assemble + verify byte-identical + size delta ==="
-"$ROOT/build/refenc" -o "$GO_IMG_C" "$CTBN"
+echo "=== [3/5] compact .tbn: assemble + verify byte-identical ==="
+"$ROOT/build/sam-aarch64" -o "$GO_IMG_C" "$CTBN"
 if cmp -s "$GO_IMG" "$GO_IMG_C"; then
-    sym_tbn=$(wc -c < "$TBN" | tr -d ' ')
     cmp_tbn=$(wc -c < "$CTBN" | tr -d ' ')
-    saved=$(( sym_tbn - cmp_tbn ))
-    pct=$(( saved * 100 / sym_tbn ))
-    echo "    compact .tbn assembles identically to the symbolic .tbn."
-    printf '    .tbn size: %s → %s bytes  (-%s, -%s%%)\n' \
-        "$sym_tbn" "$cmp_tbn" "$saved" "$pct"
+    echo "    compact .tbn assembles identically to the source binary."
+    printf '    compact .tbn size: %s bytes\n' "$cmp_tbn"
 else
-    echo "FAIL: compact .tbn assembles to a different binary than the symbolic .tbn" >&2
+    echo "FAIL: compact .tbn assembles to a different binary than the source" >&2
     cmp -l "$GO_IMG" "$GO_IMG_C" | head -20 >&2 || true
     exit 1
 fi
 
-echo "=== [5/6] Z80 toolchain: SAM assembler on SimCoupé → OUT (from the COMPACT .tbn) ==="
+echo "=== [4/5] Z80 toolchain: SAM assembler on SimCoupé → OUT (from the COMPACT .tbn) ==="
 # The SAM side consumes the COMPACT .tbn (i1 PR2): the Z80
 # REC_KIND_LIT_INSTS decode memcpys the pre-assembled literal runs to
 # OUT. Proving OUT == release.img from the compact source exercises that
@@ -107,12 +99,12 @@ if [ "$status" != "OK" ]; then
 fi
 "$SAMFILE" cat -i "$ROOT/build/m6-release.mgt" -f OUT > "$SAM_IMG"
 
-echo "=== [6/6] 3-way byte-compare ==="
+echo "=== [5/5] 3-way byte-compare ==="
 gnu_sz=$(wc -c < "$GNU" | tr -d ' ')
 go_sz=$(wc -c < "$GO_IMG" | tr -d ' ')
 sam_sz=$(wc -c < "$SAM_IMG" | tr -d ' ')
 printf '    GNU (vendored)      : %s bytes\n' "$gnu_sz"
-printf '    Go (refenc)         : %s bytes\n' "$go_sz"
+printf '    Go (sam-aarch64)    : %s bytes\n' "$go_sz"
 printf '    Z80 (SAM, compact)  : %s bytes\n' "$sam_sz"
 
 rc=0
@@ -127,7 +119,7 @@ report_diff() {
         rc=1
     fi
 }
-report_diff "$GNU" "$GO_IMG"   "GNU vs Go (text2bin+refenc)"
+report_diff "$GNU" "$GO_IMG"   "GNU vs Go (sam-aarch64)"
 report_diff "$GNU" "$GO_IMG_C" "GNU vs Go (compact .tbn)"
 report_diff "$GNU" "$SAM_IMG"  "GNU vs Z80 (SAM assembler, compact .tbn)"
 
@@ -137,6 +129,6 @@ if [ "$rc" -eq 0 ]; then
 else
     echo "3-WAY BYTE-MATCH FAILED.  If the vendored release.img/release.s were just" >&2
     echo "refreshed with new instructions, a toolchain may need extending to cover" >&2
-    echo "them; otherwise this is a regression in text2bin/refenc or the SAM encoder." >&2
+    echo "them; otherwise this is a regression in sam-aarch64 or the SAM encoder." >&2
 fi
 exit "$rc"
