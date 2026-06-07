@@ -54,8 +54,11 @@ for dir in "${FIXTURE_DIRS[@]}"; do
 
         # Explicit skip: literal pool data decoded as instructions
         # (see header comment for rationale).
-        if [ "$name" = "inst_ldr_litpool" ]; then
-            echo "    SKIP $dir/$name.s (embedded 32-bit data word)"
+        # dir_hword.s is a pure .hword data fixture with no instructions
+        # at all — same category as dir_data.s / dir_string.s, which are
+        # already skipped by the non-4-byte-aligned size check.
+        if [ "$name" = "inst_ldr_litpool" ] || [ "$name" = "dir_hword" ]; then
+            echo "    SKIP $dir/$name.s (pure data, no instructions)"
             skipped=$((skipped + 1))
             continue
         fi
@@ -92,6 +95,27 @@ for dir in "${FIXTURE_DIRS[@]}"; do
             failed=$((failed + 1))
             continue
         fi
+
+        # Assert the disassembly contains no .inst entries.  A .inst entry
+        # means a word could not be decoded; the byte-compare still passes
+        # (raw bytes are preserved via the .inst directive) but the
+        # disassembly is incomplete, which would silently break editor import.
+        #
+        # Fixtures with embedded data words that legitimately decode as .inst
+        # are listed in inst_allowed below; the byte-compare still runs for
+        # those, only the .inst-free assertion is relaxed.
+        inst_allowed=false
+        [ "$name" = "inst_ldr_literal" ] && inst_allowed=true
+
+        if ! $inst_allowed && grep -q $'\t\.inst' "$disasm_s"; then
+            count=$(grep -c $'\t\.inst' "$disasm_s")
+            echo "    FAIL(.inst) $dir/$name.s: $count word(s) could not be decoded"
+            grep $'\t\.inst' "$disasm_s" | head -3 | sed 's/^/      /'
+            fail_names+=("$dir/$name.s [.inst: $count undecodeable word(s)]")
+            failed=$((failed + 1))
+            continue
+        fi
+
         if ! "$ROOT/build/text2bin" -o "$v2_tbn" "$disasm_s" 2>/dev/null; then
             echo "    FAIL(text2bin2) $dir/$name.s"
             fail_names+=("$dir/$name.s [text2bin re-asm]")
