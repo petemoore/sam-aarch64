@@ -38,7 +38,7 @@ func buildMixedTBN(t *testing.T) *format.File {
 	rw.WriteInst(nopID, 0, nil)
 
 	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, st, rw.Bytes()); err != nil {
+	if err := format.WriteFile(&buf, st, nil, nil, rw.Bytes()); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	f, err := format.ReadFile(buf.Bytes())
@@ -61,10 +61,13 @@ func assemble(t *testing.T, f *format.File) []byte {
 	return out
 }
 
-func TestCompact_RoundTripIdentical(t *testing.T) {
-	f := buildMixedTBN(t)
-	want := assemble(t, f)
-
+// compactFile runs the full compaction round-trip the refenc binary does:
+// Pass1 → Compact → WriteFile (with the header label/local tables built from
+// pass1) → ReadFile. The returned File is a v2 compact `.tbn` whose labels
+// and numeric-locals live in the header tables (NOT in the record stream),
+// exactly as writeCompactTBN produces.
+func compactFile(t *testing.T, f *format.File) *format.File {
+	t.Helper()
 	p1, err := Pass1(f)
 	if err != nil {
 		t.Fatalf("Pass1: %v", err)
@@ -73,12 +76,46 @@ func TestCompact_RoundTripIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
+	st := format.NewSymbolTable()
+	for _, n := range f.Names {
+		st.Intern(n)
+	}
+	labels, locals := headerRows(f, p1)
+	var buf bytes.Buffer
+	if err := format.WriteFile(&buf, st, labels, locals, compacted); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cf, err := format.ReadFile(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	return cf
+}
 
-	cf := &format.File{Version: f.Version, Flags: f.Flags, Names: f.Names, Records: compacted}
+func TestCompact_RoundTripIdentical(t *testing.T) {
+	f := buildMixedTBN(t)
+	want := assemble(t, f)
+
+	cf := compactFile(t, f)
 	got := assemble(t, cf)
 
 	if !bytes.Equal(got, want) {
 		t.Errorf("compact assembly differs:\n got % X\nwant % X", got, want)
+	}
+
+	// The label moved to the header table; no LABEL_DEF record survives.
+	if len(cf.Labels) != 1 || cf.Names[cf.Labels[0].NameID] != "start" {
+		t.Errorf("header label table = %+v, want one row for \"start\"", cf.Labels)
+	}
+	rr := format.NewRecordReader(cf.Records)
+	for !rr.AtEnd() {
+		rec, err := rr.Next()
+		if err != nil {
+			t.Fatalf("reader: %v", err)
+		}
+		if rec.Kind == format.KindLabelDef || rec.Kind == format.KindLocalDef {
+			t.Errorf("compact record stream still carries %s", rec.Kind.Name())
+		}
 	}
 }
 
@@ -177,7 +214,7 @@ func buildDataTBN(t *testing.T) *format.File {
 	rw.WriteDirective(byteID, n, ops) // .byte 0xaa,0xbb (different dir → own run)
 
 	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, st, rw.Bytes()); err != nil {
+	if err := format.WriteFile(&buf, st, nil, nil, rw.Bytes()); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	f, err := format.ReadFile(buf.Bytes())
@@ -191,18 +228,16 @@ func TestCompact_DataRoundTripIdentical(t *testing.T) {
 	f := buildDataTBN(t)
 	want := assemble(t, f)
 
-	p1, err := Pass1(f)
-	if err != nil {
-		t.Fatalf("Pass1: %v", err)
-	}
-	compacted, err := Compact(f, p1)
-	if err != nil {
-		t.Fatalf("Compact: %v", err)
-	}
-	cf := &format.File{Version: f.Version, Flags: f.Flags, Names: f.Names, Records: compacted}
+	cf := compactFile(t, f)
 	got := assemble(t, cf)
 	if !bytes.Equal(got, want) {
 		t.Errorf("compact data assembly differs:\n got % X\nwant % X", got, want)
+	}
+
+	// The `start` label (referenced by `.quad start`) is resolved from the
+	// header table, not a LABEL_DEF record.
+	if len(cf.Labels) != 1 || cf.Names[cf.Labels[0].NameID] != "start" {
+		t.Errorf("header label table = %+v, want one row for \"start\"", cf.Labels)
 	}
 }
 

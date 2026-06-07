@@ -79,8 +79,9 @@ func writeCompactTBN(path string, f *format.File, p1 *Pass1Result) error {
 	for _, n := range f.Names {
 		st.Intern(n)
 	}
+	labels, locals := headerRows(f, p1)
 	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, st, compacted); err != nil {
+	if err := format.WriteFile(&buf, st, labels, locals, compacted); err != nil {
 		return err
 	}
 	return os.WriteFile(path, buf.Bytes(), 0644)

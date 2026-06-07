@@ -14,7 +14,7 @@ func TestWriteFileMinimal(t *testing.T) {
 	rw.WriteLabelDef(0)
 
 	var buf bytes.Buffer
-	if err := WriteFile(&buf, st, rw.Bytes()); err != nil {
+	if err := WriteFile(&buf, st, nil, nil, rw.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -32,7 +32,7 @@ func TestWriteFileMinimal(t *testing.T) {
 
 func TestWriteFileEmpty(t *testing.T) {
 	var buf bytes.Buffer
-	if err := WriteFile(&buf, NewSymbolTable(), nil); err != nil {
+	if err := WriteFile(&buf, NewSymbolTable(), nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if buf.Len() < 10 {

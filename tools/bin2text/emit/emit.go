@@ -16,6 +16,34 @@ func Emit(in []byte) ([]byte, error) {
 	var out bytes.Buffer
 	rr := format.NewRecordReader(f.Records)
 	var prevWasStatement bool
+
+	// Header-table label/local definitions (compact `.tbn` v2). Inert for a
+	// symbolic `.tbn` (empty tables); there the LABEL_DEF/LOCAL_DEF records
+	// below render inline.
+	hd := newHeaderDefs(f)
+	// PC tracking exists solely to place header-table definitions. A symbolic
+	// `.tbn` has none, so PC bookkeeping (which can fail on a non-constant
+	// directive size like `.skip SYM`) is skipped entirely — labels/locals
+	// render from their inline LABEL_DEF/LOCAL_DEF records instead.
+	trackPC := !hd.empty()
+	var pc int64        // running offset from origin
+	var originVMA int64 // set by the leading injected `.org`
+
+	// emitDef renders one header definition (a label name or a numeric local)
+	// exactly as the inline LABEL_DEF/LOCAL_DEF records do.
+	emitDef := func(d headerDef) {
+		if prevWasStatement {
+			out.WriteByte('\n')
+		}
+		if d.isLocal {
+			fmt.Fprintf(&out, "%d:", d.digit)
+		} else {
+			fmt.Fprintf(&out, "%s:", d.name)
+		}
+		prevWasStatement = true
+	}
+	flush := func() { hd.flushAt(pc, emitDef) }
+
 	for !rr.AtEnd() {
 		rec, err := rr.Next()
 		if err != nil {
@@ -35,6 +63,8 @@ func Emit(in []byte) ([]byte, error) {
 			fmt.Fprintf(&out, "%d:", rec.Digit)
 			prevWasStatement = true
 		case format.KindComment:
+			// Comments occupy no PC; a label at this PC still belongs before
+			// the next byte-emitting statement, so don't flush here.
 			if rec.Placement == 1 && prevWasStatement {
 				out.WriteByte(' ')
 				fmt.Fprintf(&out, "//%s", string(rec.Body))
@@ -47,7 +77,8 @@ func Emit(in []byte) ([]byte, error) {
 			}
 			fmt.Fprintf(&out, "//%s\n", string(rec.Body))
 			prevWasStatement = false
-		case format.KindInst, format.KindDirective:
+		case format.KindInst:
+			flush()
 			if prevWasStatement {
 				out.WriteByte('\n')
 			}
@@ -55,21 +86,76 @@ func Emit(in []byte) ([]byte, error) {
 				return nil, err
 			}
 			prevWasStatement = true
+			pc += 4
+		case format.KindDirective:
+			// Flush header labels/locals before every directive EXCEPT .org.
+			// A label at a directive's start PC belongs before it: `foo: .quad
+			// 5` (data), or `end:` then `.align 4` (the label marks the
+			// pre-pad PC). .org is the sole exception: it remaps PC↔VMA, so a
+			// label coincident with the leading `.org` (e.g. `.org N` then
+			// `_start:`) must render AFTER the .org — otherwise _start would
+			// resolve to PC 0 instead of the origin VMA on re-assembly. A
+			// label at the post-.org PC is flushed by the next byte-producer.
+			if format.DirectiveName(rec.DirectiveID) != ".org" {
+				flush()
+			}
+			if prevWasStatement {
+				out.WriteByte('\n')
+			}
+			if err := emitStatement(&out, f, rec); err != nil {
+				return nil, err
+			}
+			prevWasStatement = true
+			// Advance PC by the directive's byte contribution, handling the
+			// leading `.org` that establishes the origin VMA. Only needed when
+			// tracking header-table definitions.
+			if trackPC {
+				if format.DirectiveName(rec.DirectiveID) == ".org" {
+					or := format.NewOperandReader(rec.Operands)
+					o, oerr := or.Next()
+					if oerr != nil {
+						return nil, oerr
+					}
+					target, ok := format.EvalConst(o.Expr)
+					if !ok {
+						return nil, fmt.Errorf(".org: non-constant target in compact stream")
+					}
+					if pc == 0 && originVMA == 0 {
+						originVMA = target // first .org sets the origin
+					} else {
+						pc = target - originVMA // later .org advances within origin space
+					}
+				} else {
+					n, derr := directiveByteSize(rec, pc, originVMA)
+					if derr != nil {
+						return nil, derr
+					}
+					pc += n
+				}
+			}
 		case format.KindInsnRun:
-			if err := emitInsnRun(&out, f, rec, &prevWasStatement); err != nil {
+			if err := emitInsnRun(&out, f, rec, &prevWasStatement, &pc, flush); err != nil {
 				return nil, err
 			}
 		case format.KindLitInsts:
-			emitLitInsts(&out, rec, &prevWasStatement)
+			emitLitInsts(&out, rec, &prevWasStatement, &pc, flush)
 		case format.KindLitData:
+			flush()
 			if err := emitLitData(&out, rec, &prevWasStatement); err != nil {
 				return nil, err
 			}
+			pc += int64(len(rec.LitData))
 		default:
 			fmt.Fprintf(&out, "// [skipped unknown record kind 0x%02x, %d bytes]\n",
 				byte(rec.Kind), len(rec.Raw))
 			prevWasStatement = false
 		}
+	}
+	// Flush any definition at the final PC (an end-of-stream label).
+	flush()
+	if leftover := hd.remaining(); len(leftover) > 0 {
+		return nil, fmt.Errorf("bin2text: %d header definition(s) not placed by PC walk (first at offset %#x) — PC accounting bug or corrupt header table",
+			len(leftover), leftover[0].offset)
 	}
 	if prevWasStatement {
 		out.WriteByte('\n')

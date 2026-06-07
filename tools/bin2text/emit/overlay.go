@@ -29,9 +29,13 @@ import (
 	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
 )
 
-// emitInsnRun renders a KindInsnRun record as one statement per element.
-func emitInsnRun(out *bytes.Buffer, f *format.File, rec format.Record, prevWasStatement *bool) error {
+// emitInsnRun renders a KindInsnRun record as one statement per element. Each
+// element occupies 4 bytes; flush emits any header-table label/local whose PC
+// falls on an element boundary (a label embedded mid-run — the case the header
+// table exists to support).
+func emitInsnRun(out *bytes.Buffer, f *format.File, rec format.Record, prevWasStatement *bool, pc *int64, flush func()) error {
 	for _, el := range rec.Elements {
+		flush()
 		if *prevWasStatement {
 			out.WriteByte('\n')
 		}
@@ -40,6 +44,7 @@ func emitInsnRun(out *bytes.Buffer, f *format.File, rec format.Record, prevWasSt
 			return err
 		}
 		*prevWasStatement = true
+		*pc += 4
 	}
 	return nil
 }
@@ -271,8 +276,9 @@ func renderTargetText(f *format.File, expr []byte) (string, error) {
 // emitLitInsts renders a KindLitInsts record (a run of literal words). The
 // compactor no longer emits this kind — INSN_RUN mode 0 subsumes it — but the
 // renderer handles it for completeness while the kind is being retired.
-func emitLitInsts(out *bytes.Buffer, rec format.Record, prevWasStatement *bool) {
+func emitLitInsts(out *bytes.Buffer, rec format.Record, prevWasStatement *bool, pc *int64, flush func()) {
 	for i := 0; i < int(rec.LitCount); i++ {
+		flush()
 		word := binary.LittleEndian.Uint32(rec.LitWords[4*i:])
 		if *prevWasStatement {
 			out.WriteByte('\n')
@@ -280,6 +286,7 @@ func emitLitInsts(out *bytes.Buffer, rec format.Record, prevWasStatement *bool) 
 		out.WriteString("  ")
 		out.WriteString(decodeLiteral(word))
 		*prevWasStatement = true
+		*pc += 4
 	}
 }
 

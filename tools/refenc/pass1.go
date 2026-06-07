@@ -27,6 +27,12 @@ type PoolEntry struct {
 type Pass1Result struct {
 	Symbols   map[string]int64
 	LocalDefs map[byte][]int64
+	// LabelDefs records which names in Symbols are position-labels
+	// (defined by a LABEL_DEF record / header label row) as opposed to
+	// `.equ`/`.set` value-symbols. The compaction header-table builder
+	// emits label rows only for these — value-symbols are positions of
+	// nothing and stay as DIRECTIVE records.
+	LabelDefs map[string]bool
 	TotalSize int64
 
 	// OriginVMA is the VMA at which output byte 0 sits. By default it is
@@ -70,6 +76,7 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 	res := &Pass1Result{
 		Symbols:          make(map[string]int64),
 		LocalDefs:        make(map[byte][]int64),
+		LabelDefs:        make(map[string]bool),
 		LdrPoolIdx:       make(map[int64]int),
 		PoolFlushAtPC:    make(map[int64]int64),
 		PoolFlushEntries: make(map[int64][]int),
@@ -158,6 +165,7 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 				usage.observeSymbolAdd(res.Symbols, name)
 			}
 			res.Symbols[name] = pc
+			res.LabelDefs[name] = true
 		case format.KindLocalDef:
 			res.LocalDefs[rec.Digit] = append(res.LocalDefs[rec.Digit], pc)
 			usage.observeLocalDefAdd(res.LocalDefs, rec.Digit)
@@ -289,6 +297,22 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 	flushPool(pc)
 
 	res.TotalSize = pc
+
+	// Seed position-labels and numeric-local def sites from the header
+	// tables (compact-input path). OriginVMA is final now (a leading .org
+	// has been processed). For a symbolic `.tbn` the header tables are
+	// empty and the record walk above already did the work, so these loops
+	// are no-ops. Offsets are byte offsets from origin, so the absolute VMA
+	// is OriginVMA + offset — exactly what the record walk stores.
+	for _, lr := range f.Labels {
+		name := f.Names[lr.NameID]
+		res.Symbols[name] = res.OriginVMA + lr.Offset
+		res.LabelDefs[name] = true
+	}
+	for _, lr := range f.Locals {
+		res.LocalDefs[lr.Digit] = append(res.LocalDefs[lr.Digit], res.OriginVMA+lr.Offset)
+	}
+
 	return res, nil
 }
 

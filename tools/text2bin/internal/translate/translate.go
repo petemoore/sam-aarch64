@@ -29,7 +29,9 @@ func TranslateWithOptions(src []byte, path string, opts PreprocessOptions) ([]by
 		return nil, err
 	}
 	var out bytes.Buffer
-	if err := format.WriteFile(&out, st, records); err != nil {
+	// The symbolic `.tbn` has no resolved PCs, so both header tables are
+	// empty — labels/locals are still carried as LABEL_DEF/LOCAL_DEF records.
+	if err := format.WriteFile(&out, st, nil, nil, records); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil
@@ -56,7 +58,9 @@ func TranslateAndFlatten(src []byte, path string, preOpts PreprocessOptions, fla
 		return nil, err
 	}
 	var out bytes.Buffer
-	if err := format.WriteFile(&out, st, flat); err != nil {
+	// Symbolic `.tbn` (flattened): header tables empty, labels/locals stay
+	// as records.
+	if err := format.WriteFile(&out, st, nil, nil, flat); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil

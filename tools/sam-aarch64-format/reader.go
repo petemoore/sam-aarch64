@@ -186,6 +186,11 @@ type File struct {
 	Version uint16
 	Flags   uint16
 	Names   []string
+	// Labels and Locals are the header position tables (§2.4): named
+	// position-labels and numeric-local def sites resolved to byte offsets
+	// from the origin VMA. Empty for a symbolic `.tbn` from text2bin.
+	Labels  []LabelRow
+	Locals  []LocalRow
 	Records []byte
 }
 
@@ -223,10 +228,21 @@ func ReadFile(buf []byte) (*File, error) {
 		pos += n
 	}
 
+	labels, pos, err := readLabelTable(buf, pos)
+	if err != nil {
+		return nil, err
+	}
+	locals, pos, err := readLocalTable(buf, pos)
+	if err != nil {
+		return nil, err
+	}
+
 	return &File{
 		Version: version,
 		Flags:   flags,
 		Names:   names,
+		Labels:  labels,
+		Locals:  locals,
 		Records: buf[pos:],
 	}, nil
 }

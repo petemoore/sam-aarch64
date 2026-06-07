@@ -81,6 +81,23 @@ func Compact(f *format.File, p1 *Pass1Result) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Position-labels and numeric-local defs move out of the record
+		// stream into the header label/local tables (§2.4). Drop them here
+		// WITHOUT flushing the open instruction run, so a run spans the
+		// labels embedded in it — the whole point of the header table. Their
+		// offsets are recorded by pass1 (res.Symbols / res.LocalDefs) and
+		// emitted as header rows by writeCompactTBN.
+		//
+		// A data run, however, IS flushed at a label/local: a LIT_DATA record
+		// is one contiguous block keyed by its start PC, so merging data
+		// across a label would bury the label's offset mid-block where the
+		// disassembler cannot place it. Flushing keeps every label/local on a
+		// clean record boundary. (The assembled bytes are unchanged — this
+		// only splits one LIT_DATA into two; the m6 byte-match proves it.)
+		if rec.Kind == format.KindLabelDef || rec.Kind == format.KindLocalDef {
+			flushData()
+			continue
+		}
 		if rec.Kind == format.KindInst {
 			flushData()
 			if instIdx >= len(p1.InstPC) {
@@ -112,6 +129,40 @@ func Compact(f *format.File, p1 *Pass1Result) ([]byte, error) {
 	}
 	flushAll()
 	return w.Bytes(), nil
+}
+
+// headerRows builds the compact `.tbn` header label/local tables from pass1
+// results. Label rows are one per position-label (p1.LabelDefs filters out
+// `.equ`/`.set` value-symbols); local rows are one per numeric-local def
+// site. Offsets are byte offsets from origin (= symbolVMA - OriginVMA, ≥ 0).
+// name_id is the name's index in f.Names. The rows are returned unsorted;
+// WriteFile sorts them by offset into the on-disk delta-varint order.
+func headerRows(f *format.File, p1 *Pass1Result) ([]format.LabelRow, []format.LocalRow) {
+	nameID := make(map[string]uint16, len(f.Names))
+	for i, n := range f.Names {
+		// First-occurrence index matches the IDs the records reference (the
+		// name table is interned in ID order with no duplicates).
+		if _, seen := nameID[n]; !seen {
+			nameID[n] = uint16(i)
+		}
+	}
+	var labels []format.LabelRow
+	for name := range p1.LabelDefs {
+		labels = append(labels, format.LabelRow{
+			NameID: nameID[name],
+			Offset: p1.Symbols[name] - p1.OriginVMA,
+		})
+	}
+	var locals []format.LocalRow
+	for digit, pcs := range p1.LocalDefs {
+		for _, pc := range pcs {
+			locals = append(locals, format.LocalRow{
+				Digit:  digit,
+				Offset: pc - p1.OriginVMA,
+			})
+		}
+	}
+	return labels, locals
 }
 
 // compactInst turns one KindInst record at its true PC into an INSN_RUN

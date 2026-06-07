@@ -9,7 +9,7 @@ import (
 
 func TestEmitEmpty(t *testing.T) {
 	var buf bytes.Buffer
-	format.WriteFile(&buf, format.NewSymbolTable(), nil)
+	format.WriteFile(&buf, format.NewSymbolTable(), nil, nil, nil)
 	out, err := Emit(buf.Bytes())
 	if err != nil {
 		t.Fatal(err)
@@ -25,7 +25,7 @@ func TestEmitLabelDef(t *testing.T) {
 	var rw format.RecordWriter
 	rw.WriteLabelDef(0)
 	var buf bytes.Buffer
-	format.WriteFile(&buf, st, rw.Bytes())
+	format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 	out, err := Emit(buf.Bytes())
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestEmitLocalDef(t *testing.T) {
 	var rw format.RecordWriter
 	rw.WriteLocalDef(3)
 	var buf bytes.Buffer
-	format.WriteFile(&buf, format.NewSymbolTable(), rw.Bytes())
+	format.WriteFile(&buf, format.NewSymbolTable(), nil, nil, rw.Bytes())
 	out, _ := Emit(buf.Bytes())
 	if string(out) != "3:\n" {
 		t.Errorf("emit = %q, want %q", string(out), "3:\n")
@@ -55,7 +55,7 @@ func TestEmitCommentPlacement(t *testing.T) {
 	st := format.NewSymbolTable()
 	st.Intern("x")
 	var buf bytes.Buffer
-	format.WriteFile(&buf, st, rw.Bytes())
+	format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 	out, _ := Emit(buf.Bytes())
 	want := "// standalone\nx: // trailing\n"
 	if string(out) != want {

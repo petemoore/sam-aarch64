@@ -134,9 +134,17 @@ func (w *RecordWriter) WriteDirective(directiveID, operandCount byte, operands [
 	w.buf = append(w.buf, operands...)
 }
 
-// WriteFile serialises a complete .tbn file to w: magic, version,
-// flags, the symbol table's name list, and the record stream.
-func WriteFile(w io.Writer, st *SymbolTable, records []byte) error {
+// WriteFile serialises a complete .tbn file to w: magic, version, flags,
+// the symbol table's name list, the header label/local tables, and the
+// record stream. The two header tables sit AFTER the name table and BEFORE
+// the record stream (a label row references a name_id into the name table).
+//
+// labels/locals carry resolved position offsets (= symbolVMA - OriginVMA);
+// the symbolic `.tbn` from text2bin passes both nil (no resolved PCs yet).
+// WriteFile sorts copies of the rows by offset ascending (ties by
+// NameID/Digit ascending) so the increasing-offset delta-varint invariant
+// always holds regardless of the caller's row order.
+func WriteFile(w io.Writer, st *SymbolTable, labels []LabelRow, locals []LocalRow, records []byte) error {
 	if _, err := w.Write(Magic[:]); err != nil {
 		return err
 	}
@@ -162,6 +170,12 @@ func WriteFile(w io.Writer, st *SymbolTable, records []byte) error {
 		if _, err := w.Write([]byte(n)); err != nil {
 			return err
 		}
+	}
+
+	tables := writeLabelTable(nil, labels)
+	tables = writeLocalTable(tables, locals)
+	if _, err := w.Write(tables); err != nil {
+		return err
 	}
 
 	if _, err := w.Write(records); err != nil {

@@ -17,7 +17,7 @@ func TestPass1_PCAssignment(t *testing.T) {
 	rw.WriteInst(nopID, 0, nil)
 
 	var buf bytes.Buffer
-	format.WriteFile(&buf, st, rw.Bytes())
+	format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 	f, _ := format.ReadFile(buf.Bytes())
 
 	res, err := Pass1(f)
@@ -45,7 +45,7 @@ func TestPass1_DirectiveBytes(t *testing.T) {
 	rw.WriteDirective(id, 3, ow.Bytes())
 
 	var buf bytes.Buffer
-	format.WriteFile(&buf, st, rw.Bytes())
+	format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 	f, _ := format.ReadFile(buf.Bytes())
 
 	res, err := Pass1(f)
@@ -67,7 +67,7 @@ func TestPass1_LocalLabels(t *testing.T) {
 	rw.WriteLocalDef(1)
 
 	var buf bytes.Buffer
-	format.WriteFile(&buf, st, rw.Bytes())
+	format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 	f, _ := format.ReadFile(buf.Bytes())
 
 	res, err := Pass1(f)

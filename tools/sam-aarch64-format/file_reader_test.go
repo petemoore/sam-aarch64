@@ -15,7 +15,7 @@ func TestReadFileRoundtrip(t *testing.T) {
 	rw.WriteLabelDef(1)
 
 	var buf bytes.Buffer
-	if err := WriteFile(&buf, st, rw.Bytes()); err != nil {
+	if err := WriteFile(&buf, st, nil, nil, rw.Bytes()); err != nil {
 		t.Fatal(err)
 	}
 
