@@ -5,6 +5,7 @@ build/
 !reference/**/*.mgt
 *.bin
 !reference/**/*.bin
+!tools/editor-prototype/fonts/*.bin
 *.pyc
 __pycache__/
 .DS_Store
