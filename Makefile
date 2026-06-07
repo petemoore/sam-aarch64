@@ -79,7 +79,7 @@ sysreg-sync-check:
 # modules to STATICCHECK_MODULES as they appear.
 .PHONY: staticcheck
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.7.0
-STATICCHECK_MODULES := comment-bench sam-aarch64-format sam-aarch64 aarch64enc aarch64dec enctab-gen z80-test-harness-go
+STATICCHECK_MODULES := comment-bench sam-aarch64-format sam-aarch64 aarch64enc aarch64dec enctab-gen z80-test-harness-go zx0-greedy
 staticcheck:
 	for m in $(STATICCHECK_MODULES); do \
 	    echo "=== staticcheck (U1000) $$m ==="; \

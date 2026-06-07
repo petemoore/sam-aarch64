@@ -9,4 +9,5 @@ use (
 	./tools/sam-aarch64
 	./tools/sam-aarch64-format
 	./tools/z80-test-harness-go
+	./tools/zx0-greedy
 )
