@@ -1,8 +1,8 @@
 # Memory layout — SAM-side assembler (`src/`)
 
-> **Source of truth:** the header comment block in `src/assembler.asm` (currently lines ~7–177) together with the `equ` definitions immediately below it. **This doc mirrors that block; it does not replace it.** When the layout changes, the `assembler.asm` comment and its `equ`s are authoritative — update them, then re-sync this doc. Do not treat this file as the place to *define* addresses; it exists so a reader can grasp the whole map without scrolling through 32 KB of Z80.
+> **Source of truth:** the header comment block at the top of `src/assembler.asm` together with the `equ` definitions immediately below it. **This doc mirrors that block; it does not replace it.** When the layout changes, the `assembler.asm` comment and its `equ`s are authoritative — update them, then re-sync this doc. Do not treat this file as the place to *define* addresses; it exists so a reader can grasp the whole map without scrolling through 32 KB of Z80. Last synced: 2026-06-10.
 
-The assembler links at `org &8000` (entry `jp start`; `CALL 32768` lands on the first byte). The 64 KB Z80 address space is divided into the four SAM paging sections A/B/C/D (16 KB each). See `docs/notes/sam-paging.md` for the LMPR/HMPR paging primer and `docs/notes/2026-05-28-memory-layout-brainstorm.md` for the design discussion behind the off-axis moves.
+The assembler links at `org &8000` (entry `jp start`; `CALL 32768` lands on the first byte). The 64 KB Z80 address space is divided into the four SAM paging sections A/B/C/D (16 KB each). See `docs/notes/sam-paging.md` for the LMPR/HMPR paging primer and the memory-layout brainstorm (blob-pinned: <https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-memory-layout-brainstorm.md>) for the design discussion behind the off-axis moves.
 
 ## Section map (logical address space)
 
@@ -10,8 +10,7 @@ The assembler links at `org &8000` (entry `jp start`; `CALL 32768` lands on the 
 |-------|---------|----------|
 | `&0000-&3FFF` | A | ROM0 by default; **or** ENCTAB (physical page 4) under `LMPR_ENCTAB`; **or** an IN page under `LMPR_IN_BASE + N` inside the reader bracket (see `reader.asm`). |
 | `&4000-&7FFF` | B | Page 1 (BASIC sys area, mostly unused). Trampoline copy at `TRAMPOLINE_DST` (`&7E00`). Under `LMPR_ENCTAB`, section B = page 5 = OUT-low (the OUT emit window — see `emit_byte`). |
-| `&8000-&AFFF` | C | **Assembler code** (12 KB: `assembler.asm` + all M3/M4/M5/M6 includes). |
-| `&B000-&BFFF` | C | Reserved / free (4 KB freed by M6: was IN_BUF + OUT_BUF pre-M6; both now paged out — `&B800-&BFFF` freed by M6 PR 1 (OUT), `&B000-&B7FF` by M6 PR 2 (IN)). |
+| `&8000-&BFFF` | C | **Assembler code** (`assembler.asm` + all includes). The IN/OUT/ENCTAB buffers live off-axis, so the whole 16 KB section is code budget; `scripts/check-code-budget.sh` (run at the tail of `make m3-asm` / `m3-asm-prod`) enforces `code_end < &C000` — the stack page starts there. |
 | `&C000-&C0FF` | D | Stack (`SP = &C100`, grows down). |
 | `&C100-&D4FF` | D | Scratch — OPVAL arrays, SYMTAB, litpool table + counters (sub-allocations below). |
 | `&D500-&D8FF` | D | `STAGING_BUF` — paged-IN per-record staging area (M6 PR 2). |
@@ -31,12 +30,13 @@ These pages are not normally mapped into the address space; they are paged in on
 |---------|----------|
 | 4 | ENCTAB body — paged into section A on demand for encoder reads. See `trampoline.asm`. |
 | 5..6 | OUT buffer. Page 5 reached via section B under `LMPR_ENCTAB` (low zone, bytes 0..16383); page 6 via `LMPR_OUT_HIGH` per emit (high zone, 16384..32767). HSAVE at end of pass 2 reads via section C with `UIFA[31] = OUT_BASE_PAGE`. |
-| 7..12 | IN `.tbn` buffer — 6 contiguous pages = 96 KB ceiling (bumped from 4 pages / 64 KB on 2026-05-28 to fit spectrum4's 88 KB stripped `release.tbn`). HLOAD'd once at startup; read per-record via an LMPR bracket. |
-| 13 | `sysreg_data.bin` (production payload, every build) **and** `test_mem.bin` (`BUILD_TESTS` only) — mutually exclusive across the prod/test split. Off-axis HLOAD at boot. |
-| 12 | `test_cluster.bin` (`BUILD_TESTS` only) — the off-axis "M5 + misc encoder" suite (overlaps the IN-buffer page range; test variant only). |
-| 14 | `paged_call_test_payload.bin` (`BUILD_TESTS` only). |
+| 7..12 | IN `.tbn` buffer — 6 contiguous pages = 96 KB ceiling. HLOAD'd once at startup; read per-record via an LMPR bracket. |
+| 12 | `test_cluster.bin` (`BUILD_TESTS` only) — the off-axis encoder self-test cluster (`src/test_offaxis_cluster.asm`), invoked once via an LMPR swap. Time-multiplexed with the IN buffer, which is not HLOAD'd until `main_assemble`. |
+| 13 | `sysreg_data.bin` (every build) — sysname lookup tables + matcher (`src/sysreg_data.asm`), reached via `paged_call`; loaded by `load_page13_payload`. Under `BUILD_TESTS` the page first holds `test_mem.bin` (the largest self-test suite, invoked via LMPR-swap-CALL-restore from `start:`); `sysreg_data.bin` overwrites it once that suite completes. |
+| 14 | `paged_call_test_payload.bin` (`BUILD_TESTS` only) — the `paged_call` boot self-test stub (`PAGED_CALL_TEST_PAGE`). |
+| 15 | `disasm.bin` (every build) — the on-SAM disassembler (`src/disasm.asm`), HLOAD'd at boot via `load_page15_payload` (`DISASM_PAGE`) and invoked via `paged_call`. |
 
-(The exact page assignments for the test payloads are defined in `Makefile` recipes and `loader.asm`; the IN/OUT/ENCTAB physical pages are the source-of-truth in the `assembler.asm` header.)
+(Source of truth for the page numbers: the `equ`s in `src/trampoline.asm` — `ENCTAB_PAGE`, `OUT_BASE_PAGE`, `IN_BASE_PAGE`, `TEST_CLUSTER_PAGE`, `PAGED_CALL_TEST_PAGE`, `DISASM_PAGE` — plus the loader recipes in `src/loader.asm` and `Makefile`.)
 
 ## Scratch region `equ`s (section D)
 
@@ -79,5 +79,5 @@ Both assembler variants link at `org &8000`; their scratch/stack starts at `&C00
 - `src/assembler.asm` — **the source of truth** (header comment + `equ`s).
 - `src/README.md` — assembler taxonomy (prod/test, off-axis modules, include order).
 - `docs/notes/sam-paging.md` — SAM Coupé paging primer (sections, LMPR/HMPR).
-- `docs/notes/2026-05-28-memory-layout-brainstorm.md` — design discussion behind the off-axis layout.
+- Memory-layout brainstorm (blob-pinned: <https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-memory-layout-brainstorm.md>) — design discussion behind the off-axis layout.
 - `scripts/check-code-budget.sh` — the budget gate.

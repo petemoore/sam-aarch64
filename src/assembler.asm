@@ -13,11 +13,12 @@
 ;                  trampoline copy at TRAMPOLINE_DST (&7E00).  Under
 ;                  LMPR_ENCTAB section B = page 5 = OUT-low (used as
 ;                  the OUT emit window — see emit_byte).
-;   &8000-&AFFF  assembler code (12 KB; this file + all M3/M4/M5/M6 includes)
-;   &B000-&BFFF  reserved (4 KB freed by M6 — was IN_BUF + OUT_BUF
-;                  pre-M6.  Both are now paged out of section C;
-;                  available for future use.  M6 PR 1 freed &B800-&BFFF
-;                  (OUT); M6 PR 2 freed &B000-&B7FF (IN).
+;   &8000-&BFFF  section C — assembler code (this file + all includes).
+;                  The IN/OUT/ENCTAB buffers live off-axis (below), so
+;                  the whole 16 KB section is code budget.
+;                  scripts/check-code-budget.sh (run at the tail of
+;                  make m3-asm / m3-asm-prod) enforces code_end < &C000
+;                  — the stack page starts there.
 ;   &C000-&C0FF  stack (SP = &C100, grows down into section D RAM)
 ;   &C100-&D4FF  scratch (OPVAL arrays, SYMTAB, litpool TABLE+counters) —
 ;                  section D RAM.  See per-file headers and the detailed
@@ -50,13 +51,25 @@
 ;     startup via load_in_file_paged; read via per-record LMPR-bracket
 ;     into section A on each reader_next_kind call.  See
 ;     docs/specs/2026-05-27-m6-paged-in-design.md.
-;   Physical page 13 (off-axis, BUILD_TESTS only): test_mem.bin — the
-;     largest BUILD_TESTS-only self-test suite, ported off-axis to
-;     free section-C budget.  HLOAD'd at boot via
-;     load_test_mem_off_axis (loader.asm); invoked via LMPR-swap-
-;     CALL-restore from `start:` in this file.  See plan-PR 3 of
-;     docs/notes/2026-05-28-paged-call-architecture.md and the brief
-;     at docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md.
+;   Physical page 12 (off-axis, BUILD_TESTS only): test_cluster.bin —
+;     the off-axis encoder self-test cluster
+;     (src/test_offaxis_cluster.asm), HLOAD'd at boot and invoked once
+;     via an LMPR swap.  Time-multiplexed with the IN buffer, which is
+;     not HLOAD'd until main_assemble.
+;   Physical page 13 (off-axis): sysreg_data.bin — the sysname lookup
+;     tables + matcher (src/sysreg_data.asm), reached via paged_call;
+;     loaded in BOTH variants by load_page13_payload (loader.asm).
+;     Under BUILD_TESTS the page first holds test_mem.bin (the largest
+;     self-test suite, HLOAD'd via load_test_mem_off_axis and invoked
+;     via LMPR-swap-CALL-restore from `start:`); sysreg_data.bin
+;     overwrites it once that suite completes.
+;   Physical page 14 (off-axis, BUILD_TESTS only):
+;     paged_call_test_payload.bin — the paged_call boot self-test stub
+;     (see src/trampoline.asm PAGED_CALL_TEST_PAGE).
+;   Physical page 15 (off-axis): disasm.bin — the on-SAM disassembler
+;     (src/disasm.asm), HLOAD'd at boot in EVERY build via
+;     load_page15_payload (loader.asm, DISASM_PAGE) and invoked via
+;     paged_call.
 ;
 ; Pre-M5 layout placed ENCTAB at &A000-&AFFF in section C, consuming
 ; 4 KB of the code section.  M5's compound-operand encoders pushed
