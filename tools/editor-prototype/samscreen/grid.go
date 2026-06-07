@@ -8,6 +8,12 @@ package samscreen
 type Grid struct {
 	geom  Geometry
 	cells []Cell // row-major, len == Cols*Rows
+	// offSAM lifts the mode's colour ceiling for the explicitly off-SAM
+	// "dreaming" path only (the lab's relax_palette: unlimited terminal
+	// colours, can never render a SAM PNG). A normal SAM grid stays bounded —
+	// the invariant is not weakened for it; only a grid built with
+	// NewOffSAMGrid opts out, and it is plainly labelled as off-SAM.
+	offSAM bool
 }
 
 // NewGrid builds a cleared grid for geom (every cell SpaceCell).
@@ -17,6 +23,17 @@ func NewGrid(geom Geometry) *Grid {
 		cells: make([]Cell, geom.Cols*geom.Rows),
 	}
 	g.Clear(SpaceCell)
+	return g
+}
+
+// NewOffSAMGrid builds a grid that keeps geom's layout (cell count, font) but
+// lifts the colour ceiling to the full 16-entry CLUT — for the lab's
+// relax_palette dreaming mode, which is explicitly not constrained to a SAM
+// quadruple and refuses SAM PNG export. Cells still index a 16-entry Palette;
+// values 0–15 are accepted.
+func NewOffSAMGrid(geom Geometry) *Grid {
+	g := NewGrid(geom)
+	g.offSAM = true
 	return g
 }
 
@@ -30,16 +47,28 @@ func (g *Grid) Geometry() Geometry { return g.geom }
 // out-of-range cell or colour — spec §2.1).
 func (g *Grid) Set(x, y int, c Cell) {
 	checkBounds(g.geom, x, y)
-	checkColour(g.geom, c.Ink, c.Paper)
+	g.checkColour(c.Ink, c.Paper)
 	g.cells[y*g.geom.Cols+x] = c
 }
 
 // Clear fills every cell with c (colour-checked once).
 func (g *Grid) Clear(c Cell) {
-	checkColour(g.geom, c.Ink, c.Paper)
+	g.checkColour(c.Ink, c.Paper)
 	for i := range g.cells {
 		g.cells[i] = c
 	}
+}
+
+// checkColour enforces the colour ceiling: the mode's MaxColour for a SAM grid,
+// or the full 16-entry CLUT (0–15) for an off-SAM grid.
+func (g *Grid) checkColour(ink, paper uint8) {
+	if g.offSAM {
+		if ink > 15 || paper > 15 {
+			panic("samscreen: off-SAM colour index exceeds the 16-entry CLUT")
+		}
+		return
+	}
+	checkColour(g.geom, ink, paper)
 }
 
 // At returns the cell at (x,y) for a backend to present. Panics out of range.
