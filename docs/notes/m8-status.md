@@ -58,7 +58,7 @@ Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
 | **i39b** — Phase 2: name-table front-coding + comment/`.global`/base-hint editor sidecars (evictable region) | 🧭 designed (design §3.6/§3.7) | design §5 phase 2 |
 | **i39c** — Phase 3: bitfield-packing polish on the overlay slot bytes | 🧭 designed (low priority) | design §3.1 |
 | **i40** — assembler-side editor-region eviction (write editor region/`.tbn` to disk before assembling, reuse RAM as OUT/scratch, reload to restore) | 🧭 future (editor phase) | design §7 decision 1 |
-| **i48** — single serialized format + pass-free syntactic encoder (refines i39/i39a). **A:** overlay is the *only* serialized `.tbn`; symbolic kinds become in-memory IR (old format buried, in no head doc). **B:** text→overlay is syntactic (no symbol pass); value-bits computed in the fold; forego GNU's silent `ldr→ldur`/`add lsl#12` rewrite (→ syntactic/error); narrow `mov`→`movz`/`orr`/`movn` assemble-time fallback. Driver: the SAM must do text→overlay too (editor), so the host should mirror that flow. | 📋 **design agreed** (Pete 2026-06-08) — strands **i48a** host front-end unification · **i48b** syntactic encoder + fold value-work (lands before/with PR(c)) · **i48c** Z80 text→overlay encoder (future) · **i48d** doc unification (rewrite the tbn format reference to overlay-only) | `docs/specs/2026-06-08-i48-single-format-syntactic-encoder-design.md`; item registry i48 |
+| **i48** — single serialized format + pass-free syntactic encoder (refines i39/i39a). **A:** overlay is the *only* serialized `.tbn`; symbolic kinds become in-memory IR (old format buried, in no head doc). **B:** text→overlay is syntactic (no symbol pass); value-bits computed in the fold; forego GNU's silent `ldr→ldur`/`add lsl#12` rewrite (→ syntactic/error); narrow `mov`→`movz`/`orr`/`movn` assemble-time fallback. Driver: the SAM must do text→overlay too (editor), so the host should mirror that flow. | ✅ **host side DONE** — **i48a** (#141/#142/#144) host front-end unification + in-memory IR + symbolic-serialization removal · **i48b** syntactic encoder + fold value-work · **i48d** overlay-only doc rewrite — all merged. **i48c** (Z80 text→overlay encoder) is future (editor phase). | `docs/specs/2026-06-08-i48-single-format-syntactic-encoder-design.md`; item registry i48 |
 
 **i48 ↔ i39a interaction.** i48b refines a fold-rule with a **format-byte effect**
 (`FoldMovzAuto` computes `hw` instead of reading it from a pre-baked base word), so its
@@ -202,8 +202,8 @@ as **two profiles of one v2 container** — the symbolic intermediate (host-only
 SAM/shipped form). `LIT_INSTS` (0x07) marked retained-but-unproduced. Superseded
 banners on the M1/i1 design docs.
 
-**↪ i48a — host front-end unification, in 3 phased PRs (Pete, 2026-06-09). PR1 +
-PR2 MERGED (2026-06-09 #4); PR3 is the final strand.** Plan:
+**↪ i48a — host front-end unification, in 3 phased PRs (Pete, 2026-06-09).
+✅ ALL THREE MERGED (2026-06-09 #5) — i48a is COMPLETE.** Plan:
 `docs/plans/2026-06-09-i48a-host-frontend-unification.md`.
 - **✅ PR1 (#141, merge commit `271b202`) — byte-neutral library extraction.** The
   three host tools became thin wrappers over one new module `tools/sam-aarch64`
@@ -221,26 +221,34 @@ PR2 MERGED (2026-06-09 #4); PR3 is the final strand.** Plan:
   the SAM reads. Byte-neutral across 89 M1–M6 fixtures + release (== GNU, 21752 B;
   compact `.tbn` 45,189 B) + render + `-E`. All 14 CI checks green incl. the SimCoupé
   matrix; §3 review = MERGE.
-- **📋 PR3 (next) — Decision-B strictness + q7 sweep + i48d overlay-only docs +
-  symbolic-record-kind removal.** (1) symbolic mem → `FoldMemImm12`-or-error (no silent
-  imm9 rewrite); add/sub `lsl #12` syntactic; `mov`→`movz` default + assemble-time
-  `orr`/`movn` fallback — non-byte-affecting (design measured 0 corpus sites). (2) the
-  **q7** GNU-rewrite sweep. (3) the **i48d** overlay-only rewrite of
-  `tbn-binary-format-reference.md` (the symbolic intermediate no longer exists on disk
-  after PR2). (4) **remove the symbolic record kinds** (`KindInst`/`KindLabelDef`/
-  `KindLocalDef`/`KindLitInsts`) from `tools/sam-aarch64-format/{kinds,reader,writer,
-  litinsts}.go` + `assemble/{compact,pass1}.go` + tests — *deferred from PR2* because
-  they're woven through the format lib + assemble (a real format change, not a dead-arm
-  snip); the symbolic kinds stay only as the in-memory IR types. (5) convert the M1
-  string goldens to re-assemble-and-byte-check round-trips. Hard invariant: overlay bytes
-  byte-identical (m6-release + harness guard).
+- **✅ PR3 (#144, merge commit `d07d627`) — symbolic records are in-memory IR only;
+  format lib serializes overlay only.** (1) **The currency change** (shape-b): `format.File.Records`
+  `[]byte`→`[]Record`; the front-end builds `[]format.Record` structs directly and hands
+  the `*File` to pass1/pass2 — no serialize→`ReadFile` round-trip; `ReadFile` decodes the
+  on-disk overlay stream into the slice. (2) **Format-lib removal:** `WriteInst`/
+  `WriteLabelDef`/`WriteLocalDef`/`WriteLitInsts` + the four symbolic `Next()` decode-arms
+  deleted; the `RecordKind` consts + `Record` fields stay (in-memory IR vocabulary);
+  `Compact` re-serialises its DIRECTIVE/COMMENT pass-throughs from struct fields
+  (byte-identical to the old `WriteRaw`). (3) **Decision-B strictness** — symbolic mem →
+  `FoldMemImm12`-or-error (no silent imm9 rewrite); add/sub `lsl #12` syntactic (sh stays
+  in the base word, fold fills only imm12, errors on overflow; `ZeroSlot` split from
+  `FoldLogical`); `mov`→`movz` default. (4) **q7 sweep — resolved** (no GNU silent
+  form-rewrite in the corpus beyond ldr→ldur / add `lsl#12`). (5) **i48d** overlay-only
+  rewrite of `tbn-binary-format-reference.md`. (6) **item 7** — the M1 string-goldens →
+  re-assemble-and-byte-check vs GNU (`golden_test.go`); the 36 dead goldens removed.
+  Byte-neutral: GNU == Go(source) == Go(compact .tbn) (21752 B / 45,189 B), all Go
+  suites + the koron-go/z80 harness + disasm-roundtrip (104/104), and **all 14 CI checks
+  green incl. the SimCoupé matrix + m6-release 3-way byte-match**; §3 review = MERGE.
+  Follow-up: drop the now-unused `format.RecordWriter.WriteRaw` (review YELLOW).
 
 **✅ MERGED (PR #131, merge commit `e68e0bf`, 2026-06-09 #3).** All 14 CI checks
 green incl. the full SimCoupé matrix + the m6-release 3-way byte-match (GNU == Go ==
 Z80/SAM — the first authoritative SimCoupé verdict on PR(d), confirming the harness);
 the §3 pre-merge review returned MERGE (all items PASS, recorded on the PR). **The
-i48a follow-up then landed as PR1 (#141) + PR2 (#142); i48a PR3 is next** — see the
-i48a entry above.
+i48a follow-up then landed in full: PR1 (#141) + PR2 (#142) + PR3 (#144) — i48a is
+COMPLETE.** Decision A (overlay-only serialized; symbolic = in-memory IR) and Decision
+B (syntactic encode) are realised on the host; only i48c (the Z80 text→overlay encoder,
+editor phase) remains. See the i48a entry above.
 
 ## Open questions for Pete (M8)
 
