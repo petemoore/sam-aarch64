@@ -102,4 +102,4 @@ The investment is bounded — a few hundred lines across `Base/Keyin.cpp`, `Base
 - Keyin: `~/git/simcoupe/Base/Keyin.cpp:35-58` (String), `:60-89` (EscapedString), `:118-134` (Next).
 - Action dispatch: `~/git/simcoupe/Base/Actions.cpp::Do`, modal cases visible at `:158-253`.
 - Screen-output intercept points: `docs/sam/sam-coupe_rom-v3.0_annotated-disassembly.txt:21194` (PROM1 at `0xDC00`) and `:26992-27006` (CHANTAB).
-- Larger sam-as-a-pipe rationale: existed at `/tmp/simcoupe-vs-sam-investigation.md` from the May 21 session; ephemeral. Worth re-capturing into `docs/notes/simcoupe-ideas/` if revisiting.
+- Larger sam-as-a-pipe rationale: existed at `/tmp/simcoupe-vs-sam-investigation.md` from the May 21 session; ephemeral. Worth re-capturing into `docs/notes/` if revisiting.
