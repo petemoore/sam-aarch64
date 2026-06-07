@@ -103,18 +103,28 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 	pending := make(map[poolKey]int) // → index into res.PoolEntries
 	var pendingOrder []int           // indices in encounter order
 	// pendingLdrSites counts LDR-litpool instructions since the last
-	// flush — i.e. the pc-map entries that LITPOOL_PC_MAP must hold
-	// concurrently on the Z80 side (the table is reset on every flush).
+	// flush. It is observed only for the informational "peak between
+	// flushes" figure: it is NOT the cap LITPOOL_PC_MAP must hold. The
+	// Z80 pc-map is per-FILE — litpool_init clears LITPOOL_PCM_COUNT once
+	// per pass and no flush ever resets it — so the binding cap is the
+	// cumulative total of ldr-litpool sites in the file (PoolLdrSites,
+	// vs LITPOOL_PCM_MAX = 64), not the per-flush peak.
 	pendingLdrSites := 0
 
 	flushPool := func(flushPC int64) {
 		if len(pendingOrder) == 0 {
 			return
 		}
-		// Observe pre-flush peak BEFORE we reset pending (the active-
-		// slot peak is the max of pending sizes between flushes; this
-		// is the cap LITPOOL_TABLE / LITPOOL_PC_MAP must absorb on the
-		// Z80 side because both are reset at each flush).
+		// Observe pre-flush peak BEFORE we reset pending. The active-
+		// slot peak is the max of pending sizes between flushes — purely
+		// informational. Neither Z80 table is reset at a flush: a flush
+		// only advances the segment counters (litpool_register dedups
+		// within the current segment but leaves earlier-segment slots in
+		// place). Both LITPOOL_TABLE and LITPOOL_PC_MAP are per-FILE,
+		// cleared only in litpool_init (once per pass), so their binding
+		// caps are the cumulative per-file totals (MaxDistinctPoolEntries
+		// vs LITPOOL_MAX = 32; PoolLdrSites vs LITPOOL_PCM_MAX = 64), not
+		// these per-flush peaks.
 		usage.observePoolPending(len(pendingOrder), pendingLdrSites)
 		// Partition by width: 4-byte entries first (encounter order),
 		// then padding to 8 if any 8-byte entries follow, then 8-byte

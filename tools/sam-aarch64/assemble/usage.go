@@ -51,26 +51,32 @@ type Usage struct {
 
 	// --- Literal pool ---
 	// PeakPoolPending is the maximum number of *active* (pending) pool
-	// slots between two flushes. This is the value that
-	// LITPOOL_TABLE must accommodate at any single moment.
+	// slots between two flushes. Informational only: the Z80
+	// LITPOOL_TABLE is not reset at a flush (see MaxDistinctPoolEntries).
 	PeakPoolPending int
 	// MaxDistinctPoolEntries is the cumulative count of pool entries
 	// allocated across the WHOLE input (across all .ltorg flushes
-	// combined). With the current Z80 design that resets the table at
-	// each flush, this is purely informational; with a design that
-	// kept the table across flushes it would be the relevant cap.
+	// combined). The Z80 LITPOOL_TABLE is per-FILE — a flush only
+	// advances the segment counters, never clearing the table
+	// (litpool_init clears LITPOOL_COUNT once per pass) — so THIS
+	// cumulative total, not PeakPoolPending, is the cap that
+	// LITPOOL_MAX (= 32 slots) must accommodate.
 	MaxDistinctPoolEntries int
 	// PoolFlushes counts the number of explicit `.ltorg` flushes. The
 	// implicit end-of-input flush is NOT counted here (refenc emits it
 	// unconditionally regardless of whether anything's pending).
 	PoolFlushes int
 	// PoolLdrSites is the cumulative count of LDR-litpool instructions
-	// (each one generates a PC_MAP entry on the Z80 side). Z80
-	// LITPOOL_PC_MAP is 32 entries; refenc's LdrPoolIdx is unbounded.
+	// (each one generates a PC_MAP entry on the Z80 side). The Z80
+	// LITPOOL_PC_MAP is per-FILE — litpool_init clears LITPOOL_PCM_COUNT
+	// once per pass and no flush ever resets it — so THIS cumulative
+	// total is the cap that LITPOOL_PCM_MAX (= 64 entries) must
+	// accommodate (release peak: 44). refenc's LdrPoolIdx is unbounded.
 	PoolLdrSites int
 	// PeakPoolPcMapPending is the maximum number of LDR-litpool sites
-	// (pc-map entries) between two flushes. Z80 LITPOOL_PC_MAP is
-	// reset at each flush so this is the actual cap, not the total.
+	// (pc-map entries) between two flushes. Informational only: the Z80
+	// LITPOOL_PC_MAP is per-FILE, not reset at a flush, so the binding
+	// cap is the cumulative PoolLdrSites total, not this peak.
 	PeakPoolPcMapPending int
 
 	// --- Expression evaluator ---
@@ -418,11 +424,14 @@ func (u *Usage) Dump(w io.Writer) {
 	}
 	fmt.Fprintln(w)
 
-	fmt.Fprintln(w, "Literal pool (Z80 LITPOOL_TABLE = 32 slots, LITPOOL_PC_MAP = 32):")
-	fmt.Fprintf(w, "  Peak active slots (between flushes):  %d\n", u.PeakPoolPending)
-	fmt.Fprintf(w, "  Peak active PC-map entries:           %d\n", u.PeakPoolPcMapPending)
-	fmt.Fprintf(w, "  Total distinct pool entries (input):  %d\n", u.MaxDistinctPoolEntries)
-	fmt.Fprintf(w, "  Total LDR-litpool sites:              %d\n", u.PoolLdrSites)
+	// Both Z80 tables are per-FILE (cleared only in litpool_init, never
+	// at a flush), so the binding caps are the cumulative totals below,
+	// not the per-flush peaks.
+	fmt.Fprintln(w, "Literal pool (Z80 LITPOOL_TABLE = 32 slots, LITPOOL_PC_MAP = 64 entries):")
+	fmt.Fprintf(w, "  Peak active slots (between flushes):  %d  (informational)\n", u.PeakPoolPending)
+	fmt.Fprintf(w, "  Peak active PC-map entries:           %d  (informational)\n", u.PeakPoolPcMapPending)
+	fmt.Fprintf(w, "  Total distinct pool entries (input):  %d  (vs LITPOOL_MAX = 32)\n", u.MaxDistinctPoolEntries)
+	fmt.Fprintf(w, "  Total LDR-litpool sites:              %d  (vs LITPOOL_PCM_MAX = 64)\n", u.PoolLdrSites)
 	fmt.Fprintf(w, "  Explicit .ltorg flushes:              %d\n", u.PoolFlushes)
 	fmt.Fprintf(w, "  Peak single litpool-expr bytecode:    %d B\n", u.PeakLitpoolExprBytecodeLen)
 	fmt.Fprintf(w, "  Total litpool-expr bytecode bytes:    %d (Z80 LITPOOL_EXPR_BUF = 2048 B)\n",
