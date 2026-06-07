@@ -267,3 +267,98 @@ func TestRelaxPaletteRendersOffSAMColours(t *testing.T) {
 	}
 	t.Fatal("nop row not found")
 }
+
+// TestMaxInstructionWidthTruncatesOffCursor confirms that a non-cursor line
+// whose code width exceeds MaxInstructionWidth is truncated at N−1 + ellipsis,
+// while the cursor line is always shown in full.
+func TestMaxInstructionWidthTruncatesOffCursor(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.MaxInstructionWidth = 10
+	// A wide instruction that definitely exceeds 10 columns (2 indent + 8 = 10
+	// minimum; "ldrb x12, [x13, x14]" with indent is well over that).
+	m, dl := model(
+		[3]string{"ldrb", "x12, [x13, x14]", ""},
+		[3]string{"ret", "", ""},
+	)
+	// cursor=1 ("ret"): off-cursor line is the ldrb row (line 0).
+	_, rows := renderAt(t, cfg, m, dl, 1)
+	j := joined(rows)
+	// The truncated row must not contain the full operands.
+	if strings.Contains(j, "x13, x14") {
+		t.Errorf("off-cursor line was not truncated: %s", j)
+	}
+	// The truncated row must contain the ellipsis placeholder '.'.
+	foundEllipsis := false
+	for _, row := range rows {
+		if strings.Contains(row, "ldrb") && strings.Contains(row, ".") {
+			foundEllipsis = true
+			break
+		}
+	}
+	if !foundEllipsis {
+		t.Errorf("truncated row missing ellipsis glyph\n%s", j)
+	}
+}
+
+// TestMaxInstructionWidthCursorFull confirms the cursor line is never truncated
+// even when MaxInstructionWidth is set.
+func TestMaxInstructionWidthCursorFull(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.MaxInstructionWidth = 10
+	m, dl := model(
+		[3]string{"ldrb", "x12, [x13, x14]", ""},
+	)
+	// cursor=0: the single line is the cursor line, never truncated.
+	_, rows := renderAt(t, cfg, m, dl, 0)
+	j := joined(rows)
+	if !strings.Contains(j, "x13, x14") {
+		t.Errorf("cursor line was truncated but must be full\n%s", j)
+	}
+}
+
+// TestRenderConstantsHex forces hex rendering of a decimal constant.
+func TestRenderConstantsHex(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.ImmHexAmp = true
+	cfg.RenderConstants = rcHex
+	// A decimal immediate — should become &HEX.
+	m, dl := model([3]string{"mov", "x0, #255", ""})
+	_, rows := renderAt(t, cfg, m, dl, 0)
+	j := joined(rows)
+	if !strings.Contains(j, "&FF") {
+		t.Errorf("render_constants=hex did not produce &FF\n%s", j)
+	}
+}
+
+// TestRenderConstantsDec forces decimal rendering of a hex constant.
+func TestRenderConstantsDec(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.RenderConstants = rcDec
+	// A hex immediate — should become decimal.
+	m, dl := model([3]string{"mov", "x0, #0xff", ""})
+	_, rows := renderAt(t, cfg, m, dl, 0)
+	j := joined(rows)
+	if !strings.Contains(j, "255") || strings.Contains(j, "0xff") {
+		t.Errorf("render_constants=dec did not produce 255\n%s", j)
+	}
+}
+
+// TestMaxInstructionWidthCommentSuppressed confirms that a truncated off-cursor
+// line has its same-line comment suppressed (the comment would float against a
+// fake column on the truncated row).
+func TestMaxInstructionWidthCommentSuppressed(t *testing.T) {
+	cfg := defaultConfig()
+	cfg.MaxInstructionWidth = 10
+	// A wide instruction with a trailing comment.
+	m, dl := model(
+		[3]string{"ldrb", "x12, [x13, x14]", "load byte"},
+		[3]string{"ret", "", ""},
+	)
+	// cursor=1: off-cursor line (line 0) should be truncated and its comment suppressed.
+	_, rows := renderAt(t, cfg, m, dl, 1)
+	j := joined(rows)
+	// The truncated row must not show the comment.
+	if strings.Contains(j, "load byte") {
+		t.Errorf("truncated off-cursor line should not show its comment\n%s", j)
+	}
+}

@@ -38,3 +38,8 @@ Editor keys stay SAM-faithful (arrows, PgUp/Dn, q/ESC); lab keys are lab-only.
 Starters: `binutils-baseline` (R0) · `compressed` (recommendation) ·
 `comet-minimal` (chromeless) · `dreamer` (`relax_palette`).
 Design authority: `docs/specs/editor-tui-prototype-design.md`.
+
+Lab keys include `M` (toggle `max_instruction_width`: truncate over-long
+non-cursor rows at N−1 + ellipsis; cursor line always full) and `b` (cycle
+`render_constants` source → hex → dec). The format never imposes line-length
+limits — overflow is a display concern; truncation is presentation-only.
