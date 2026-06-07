@@ -13,14 +13,15 @@
 ;   1. page-cross helper (in_normalise_hl): set IN_POS_PAGE =
 ;      LMPR_IN_BASE, HL = &7FFE.  Call in_normalise_hl.  Assert
 ;      H < &40 (= &3FFE) and LMPR low 5 bits incremented by 1.
-;   2. synthetic record read: stamp a 19-byte ".tbn" blob into page 7
+;   2. synthetic record read: stamp a 21-byte ".tbn" blob into page 7
 ;      via an LMPR=&27 bracket.  Blob = "SA64", version=2, flags=0,
-;      name_count=0, label_count=0, local_count=0, then one record
-;      [kind=&77][len=&02 &00][&AB &CD].
-;      Set IN_END = (page=&27, offset=19).  Call reset_reader_to_in_buf
-;      (which tail-calls reader_init), then reader_at_end → not at end,
-;      then reader_next_kind.  Assert A=&77, BC=2, (STAGING_BUF)=&AB,
-;      (STAGING_BUF+1)=&CD, then reader_at_end → at end (Z=1).
+;      editor_region_offset=21, label_count=0, local_count=0, then one
+;      record [kind=&77][len=&02 &00][&AB &CD].  Call
+;      reset_reader_to_in_buf (which tail-calls reader_init); reader_init
+;      derives IN_END = (page=&27, offset=21) from the section index.
+;      Then reader_at_end → not at end, then reader_next_kind.  Assert
+;      A=&77, BC=2, (STAGING_BUF)=&AB, (STAGING_BUF+1)=&CD, then
+;      reader_at_end → at end (Z=1).
 ;   3. post-read LMPR check: read port 250 after reader_next_kind,
 ;      assert &24 (= LMPR_ENCTAB) — proves the reader restored LMPR.
 ;
@@ -86,14 +87,15 @@ run_reader_paged_self_tests:
 ;   offset 0..3   : "SA64"
 ;   offset 4..5   : version u16 LE = 0x0002
 ;   offset 6..7   : flags u16 LE = 0x0000
-;   offset 8..9   : name_count u16 LE = 0x0000
-;   offset 10..11 : label_count u16 LE = 0x0000  (compact `.tbn` v2 header table)
-;   offset 12..13 : local_count u16 LE = 0x0000  (compact `.tbn` v2 header table)
-;   offset 14     : record kind = &77
-;   offset 15..16 : payload length u16 LE = 2
-;   offset 17..18 : payload bytes &AB, &CD
+;   offset 8..11  : editor_region_offset u32 LE = 21  (section index, M8 / i39b-2)
+;   offset 12..13 : label_count u16 LE = 0x0000  (compact `.tbn` v2 header table)
+;   offset 14..15 : local_count u16 LE = 0x0000  (compact `.tbn` v2 header table)
+;   offset 16     : record kind = &77
+;   offset 17..18 : payload length u16 LE = 2
+;   offset 19..20 : payload bytes &AB, &CD
 ;
-; Total = 19 bytes; IN_END_OFFSET = 19.
+; Total = 21 bytes; reader_init derives IN_END_OFFSET = 21 from the
+; section index (the editor region after the record is empty).
 ;
 ; Note: writes go to section A under LMPR_IN_BASE, so the page-7
 ; physical bytes are clobbered (no other test relies on those bytes
@@ -114,15 +116,17 @@ run_reader_paged_self_tests:
                 ld      a, (reader_paged_lmpr_save)
                 out     (250), a            ; restore LMPR_ENCTAB
 
-; Wire IN_END to point past our synthetic blob.
+; Pre-set IN_END to a deliberately-wrong value so the test proves
+; reader_init DERIVES IN_END from the section index (editor_region_offset
+; = 21) rather than relying on a caller-supplied bound.
                 ld      a, LMPR_IN_BASE
                 ld      (IN_END_PAGE), a
-                ld      hl, reader_paged_synthetic_tbn_end - reader_paged_synthetic_tbn
+                ld      hl, 0
                 ld      (IN_END_OFFSET), hl
 
-; Reset reader to start; this tail-calls reader_init which validates
-; the magic, walks the name table (count = 0 → no walk), and
-; restores LMPR_ENCTAB.
+; Reset reader to start; this tail-calls reader_init which validates the
+; magic, reads the section index → IN_END = (LMPR_IN_BASE, 21), parses the
+; empty header tables, and restores LMPR_ENCTAB.
                 call    reset_reader_to_in_buf
 
 ; Verify LMPR was restored to LMPR_ENCTAB by reader_init.
@@ -202,13 +206,17 @@ reader_paged_fail_with_lmpr:
 
 
 ; -----------------------------------------------------------------------
-; Synthetic .tbn blob — 19 bytes.  Used by the record-fetch test above.
+; Synthetic .tbn blob — 21 bytes (compact `.tbn` v2, editor-region split).
+; Used by the record-fetch test above.  The editor_region_offset section
+; index (21) points one byte past the only record, so the editor region is
+; empty and reader_init sets IN_END to that boundary.
 ; -----------------------------------------------------------------------
 reader_paged_synthetic_tbn:
                 defm    "SA64"              ; magic (4 bytes)
                 defw    2                   ; version u16 LE = 2 (compact `.tbn` v2)
                 defw    0                   ; flags u16 LE = 0
-                defw    0                   ; name_count u16 LE = 0
+                defw    21                  ; editor_region_offset u32 LE = 21 (end of records)
+                defw    0
                 defw    0                   ; label_count u16 LE = 0 (header table)
                 defw    0                   ; local_count u16 LE = 0 (header table)
                 defb    &77                 ; record kind

@@ -52,6 +52,7 @@ func main() {
 		flattenFlag   bool
 		originStr     string
 		stripComments bool
+		thinComments  int
 		stripData     bool
 		preprocess    bool
 		renderMode    bool
@@ -72,6 +73,10 @@ func main() {
 	flag.BoolVar(&stripComments, "strip-comments", false,
 		"after parsing, remove all COMMENT records (fits the .tbn within "+
 			"the SAM assembler's IN-buffer ceiling for the release source).")
+	flag.IntVar(&thinComments, "thin-comments", 0,
+		"keep only one in every N COMMENT records (N>1), stripping the rest; "+
+			"0/1 keeps all. Used by the m6/SAM gate to flow a bounded comment "+
+			"subset through the Z80 round-trip under the IN-buffer ceiling.")
 	flag.BoolVar(&stripData, "strip-data", false,
 		"after parsing, remove all data-emitting records (.word/.quad/etc "+
 			"and ldr Xn,=expr): a code-only input for the disasm round-trip gate.")
@@ -97,13 +102,13 @@ func main() {
 	case renderMode:
 		runRender(src, outFlag)
 	case preprocess:
-		if flattenFlag || stripComments || stripData || emitTBN != "" {
-			fail(fmt.Errorf("-E cannot be combined with -flatten/-strip-comments/-strip-data/--emit-tbn"))
+		if flattenFlag || stripComments || thinComments > 0 || stripData || emitTBN != "" {
+			fail(fmt.Errorf("-E cannot be combined with -flatten/-strip-comments/-thin-comments/-strip-data/--emit-tbn"))
 		}
 		runPreprocess(src, in, incDirs, outFlag)
 	default:
 		runAssemble(src, in, incDirs, flattenFlag, originStr,
-			stripComments, stripData, emitTBN, outFlag, dumpUsage)
+			stripComments, thinComments, stripData, emitTBN, outFlag, dumpUsage)
 	}
 }
 
@@ -119,7 +124,7 @@ func isTBN(buf []byte) bool {
 // decision A). Only an existing on-disk `.tbn` (overlay format) is decoded
 // via format.ReadFile.
 func runAssemble(src []byte, path string, incDirs includeDirsFlag,
-	flatten bool, originStr string, stripComments, stripData bool,
+	flatten bool, originStr string, stripComments bool, thinComments int, stripData bool,
 	emitTBN, outFlag string, dumpUsage bool) {
 
 	tbnIsInput := isTBN(src)
@@ -152,6 +157,8 @@ func runAssemble(src []byte, path string, incDirs includeDirsFlag,
 		}
 		if stripComments {
 			f.Records = frontend.StripCommentRecords(f.Records)
+		} else if thinComments > 1 {
+			f.Records = frontend.ThinComments(f.Records, thinComments)
 		}
 		if stripData {
 			f.Records = frontend.StripDataRecords(f.Records)

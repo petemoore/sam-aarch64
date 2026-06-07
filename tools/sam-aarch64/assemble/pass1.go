@@ -68,6 +68,14 @@ type Pass1Result struct {
 	// InstPC[N], so the overlay encoder can resolve PC-relative and local-
 	// label operands at the instruction's true PC.
 	InstPC []int64
+
+	// RecordPC[i] is the PC at the START of f.Records[i] (index-aligned with
+	// the File the pass walked). The compaction pass uses it to anchor a
+	// COMMENT record to its output PC for the editor-region comment sidecar
+	// (M8 / i39b-2). For a `.ltorg` / origin-setting `.org` the captured PC is
+	// the pre-flush / pre-origin value; the following record captures the
+	// post-flush / post-origin value, which is what a comment there wants.
+	RecordPC []int64
 }
 
 // Pass1 walks records and assigns PC to each instruction / data
@@ -152,6 +160,7 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 	}
 
 	for _, rec := range f.Records {
+		res.RecordPC = append(res.RecordPC, pc)
 		usage.observeRecord(rec)
 		switch rec.Kind {
 		case format.KindLabelDef:

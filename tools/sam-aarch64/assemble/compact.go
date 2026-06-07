@@ -36,7 +36,13 @@ const litDataMaxBytes = 1016
 // positions, the literal pool, and the 2-pass values are unchanged — the
 // m6-release gate verifies this by byte-matching the assembled output of the
 // compact .tbn against the symbolic one.
-func Compact(f *format.File, p1 *Pass1Result) ([]byte, error) {
+//
+// Editor-only data is relocated out of the record stream (M8 / i39b-2): COMMENT
+// records become comment-sidecar rows (anchored to their output PC) and
+// `.global` directives become a list of name_ids — both returned for the
+// editor region (writeCompactTBN passes them to WriteFile). Neither flushes the
+// open instruction run, so a run spans the comments / `.global`s embedded in it.
+func Compact(f *format.File, p1 *Pass1Result) (recordsOut []byte, commentsOut []format.CommentRow, globalsOut []uint16, _ error) {
 	var w format.RecordWriter
 
 	// Two run accumulators: instruction-run elements (INSN_RUN) and
@@ -75,7 +81,7 @@ func Compact(f *format.File, p1 *Pass1Result) ([]byte, error) {
 	// instIdx indexes p1.InstPC: the Nth KindInst this loop sees is the Nth
 	// pass1 recorded, so InstPC[instIdx] is its true PC.
 	instIdx := 0
-	for _, rec := range f.Records {
+	for i, rec := range f.Records {
 		// Position-labels and numeric-local defs move out of the record
 		// stream into the header label/local tables (§2.4). Drop them here
 		// WITHOUT flushing the open instruction run, so a run spans the
@@ -93,15 +99,42 @@ func Compact(f *format.File, p1 *Pass1Result) ([]byte, error) {
 			flushData()
 			continue
 		}
+		// Comments relocate to the editor-region comment sidecar (M8 / i39b-2),
+		// anchored to their output PC (= pass1's record PC, as an offset from
+		// origin). Like labels, they do NOT flush the instruction run — the run
+		// spans them (the run-efficiency win). A LIT_DATA run is also spanned:
+		// a comment occupies no bytes, so it never buries a label offset.
+		if rec.Kind == format.KindComment {
+			anchor := p1.RecordPC[i] - p1.OriginVMA
+			if anchor < 0 {
+				anchor = 0 // a comment before the origin-setting `.org` renders at the top
+			}
+			commentsOut = append(commentsOut, format.CommentRow{
+				Anchor:    anchor,
+				Placement: rec.Placement,
+				Body:      rec.Body,
+			})
+			continue
+		}
+		// `.global` is encoding-irrelevant (no linker in the flat-binary path),
+		// so it moves to the editor region as a name_id flag list (§3.5) rather
+		// than staying a DIRECTIVE in the assembler stream. Spans the run too.
+		// If the operands aren't clean symbol references, keep it as a directive.
+		if rec.Kind == format.KindDirective && format.DirectiveName(rec.DirectiveID) == ".global" {
+			if ids, ok := globalNameIDs(rec); ok {
+				globalsOut = append(globalsOut, ids...)
+				continue
+			}
+		}
 		if rec.Kind == format.KindInst {
 			flushData()
 			if instIdx >= len(p1.InstPC) {
-				return nil, fmt.Errorf("compact: instruction index %d past pass1 InstPC (%d)", instIdx, len(p1.InstPC))
+				return nil, nil, nil, fmt.Errorf("compact: instruction index %d past pass1 InstPC (%d)", instIdx, len(p1.InstPC))
 			}
 			el, ierr := compactInst(rec, p1.InstPC[instIdx], p1, f)
 			instIdx++
 			if ierr != nil {
-				return nil, ierr
+				return nil, nil, nil, ierr
 			}
 			instRun = append(instRun, el)
 			continue
@@ -121,19 +154,17 @@ func Compact(f *format.File, p1 *Pass1Result) ([]byte, error) {
 		}
 		flushAll()
 		// Re-serialise the pass-through record from its struct fields. Only
-		// DIRECTIVE and COMMENT records reach here (INST/LABEL_DEF/LOCAL_DEF
-		// and collapsible data are handled above).
+		// DIRECTIVE records reach here (INST/LABEL_DEF/LOCAL_DEF, collapsible
+		// data, comments, and `.global` are handled above).
 		switch rec.Kind {
-		case format.KindComment:
-			w.WriteComment(rec.Placement, rec.Body)
 		case format.KindDirective:
 			w.WriteDirective(rec.DirectiveID, rec.OperandCount, rec.Operands)
 		default:
-			return nil, fmt.Errorf("compact: unexpected pass-through record kind %s", rec.Kind.Name())
+			return nil, nil, nil, fmt.Errorf("compact: unexpected pass-through record kind %s", rec.Kind.Name())
 		}
 	}
 	flushAll()
-	return w.Bytes(), nil
+	return w.Bytes(), commentsOut, globalsOut, nil
 }
 
 // headerRows builds the compact `.tbn` header label/local tables from pass1
@@ -168,6 +199,31 @@ func headerRows(f *format.File, p1 *Pass1Result) ([]format.LabelRow, []format.Lo
 		}
 	}
 	return labels, locals
+}
+
+// globalNameIDs extracts the symbol ids a `.global` directive names. Each
+// operand is a symbol reference (an OpImmExpr wrapping a bare PUSH_SYM, the
+// same shape `.equ`'s first operand uses). Returns ok=false if any operand is
+// not a clean PUSH_SYM — the caller then keeps the directive in the record
+// stream rather than silently dropping a symbol.
+func globalNameIDs(rec format.Record) ([]uint16, bool) {
+	or := format.NewOperandReader(rec.Operands)
+	var ids []uint16
+	for !or.AtEnd() {
+		o, err := or.Next()
+		if err != nil || o.Kind != format.OpImmExpr {
+			return nil, false
+		}
+		id, ok := extractSymID(o.Expr)
+		if !ok {
+			return nil, false
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil, false
+	}
+	return ids, true
 }
 
 // compactInst turns one KindInst record at its true PC into an INSN_RUN

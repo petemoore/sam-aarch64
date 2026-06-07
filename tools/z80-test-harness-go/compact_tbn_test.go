@@ -19,6 +19,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -47,9 +48,13 @@ func TestCompactTbnAssembly(t *testing.T) {
 	compactTbn := filepath.Join(tmp, "release.compact.tbn")
 	goImg := filepath.Join(tmp, "release.go.img")
 
-	// release.s → binary + compact .tbn (flatten + strip-comments, release
-	// origin; literal runs collapsed to 0x07 in the compact .tbn).
-	cmd := exec.Command(samPath, "-flatten", "-strip-comments",
+	// release.s → binary + compact .tbn (flatten + thin-comments=20, release
+	// origin). thin-comments keeps a bounded subset of release.s's ~335 KB of
+	// comments (M8 / i39b-2) so a populated editor region rides the full Z80
+	// round-trip while the .tbn stays under the 96 KB IN ceiling — mirrors the
+	// m6-release SimCoupé gate. Comments are assembly no-ops, so the OUT must
+	// still byte-match release.img.
+	cmd := exec.Command(samPath, "-flatten", "-thin-comments=20",
 		"-origin", "0xfffffff000000000", "-o", goImg, "-emit-tbn", compactTbn, releaseSrc)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -66,8 +71,19 @@ func TestCompactTbnAssembly(t *testing.T) {
 	}
 	wantImg, _ := os.ReadFile(releaseImg)
 
-	t.Logf("compact .tbn: %d bytes (%d IN pages)",
-		len(in), (len(in)+pageSize-1)/pageSize)
+	// The section index (bytes 8..12) is the editor_region_offset: the
+	// assembler-facing region the SAM walks. Everything past it (front-coded
+	// name table, .global flags, comment sidecar) is the editor region the
+	// assembler never reads — the bytes a future build (i40) could reclaim.
+	pages := (len(in) + pageSize - 1) / pageSize
+	editorOff := int(binary.LittleEndian.Uint32(in[8:12]))
+	t.Logf("compact .tbn: %d bytes (%d IN pages); assembler-facing %d B, "+
+		"editor region (reclaimable) %d B", len(in), pages, editorOff, len(in)-editorOff)
+	// The IN buffer is 6 physical pages (96 KB). A thinned-comment .tbn must
+	// still fit; if this trips, lower the m6/harness thin-comments ratio.
+	if pages > 6 {
+		t.Errorf("compact .tbn is %d IN pages, exceeds the 6-page / 96 KB ceiling", pages)
+	}
 
 	res := RunWithFiles(asm, enc, in,
 		[]NamedFile{

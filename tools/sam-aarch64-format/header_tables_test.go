@@ -34,10 +34,10 @@ func TestHeaderTablesRoundTrip(t *testing.T) {
 	}
 
 	var rw RecordWriter
-	rw.WriteComment(0, []byte(" marker"))
+	rw.WriteDirective(0, 0, nil) // a .text no-op marker in the record stream
 
 	var buf bytes.Buffer
-	if err := WriteFile(&buf, st, labels, locals, rw.Bytes()); err != nil {
+	if err := WriteFile(&buf, st, labels, locals, rw.Bytes(), nil, nil); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	f, err := ReadFile(buf.Bytes())
@@ -68,7 +68,7 @@ func TestHeaderTablesRoundTrip(t *testing.T) {
 	}
 
 	// The record stream after the tables must survive intact.
-	if len(f.Records) != 1 || f.Records[0].Kind != KindComment || string(f.Records[0].Body) != " marker" {
+	if len(f.Records) != 1 || f.Records[0].Kind != KindDirective {
 		t.Errorf("records mismatch: got %+v", f.Records)
 	}
 }
@@ -77,7 +77,7 @@ func TestHeaderTablesRoundTrip(t *testing.T) {
 // two empty tables and reads back nil/empty slices.
 func TestHeaderTablesEmpty(t *testing.T) {
 	var buf bytes.Buffer
-	if err := WriteFile(&buf, NewSymbolTable(), nil, nil, nil); err != nil {
+	if err := WriteFile(&buf, NewSymbolTable(), nil, nil, nil, nil, nil); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	f, err := ReadFile(buf.Bytes())

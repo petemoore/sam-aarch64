@@ -34,6 +34,33 @@ func StripCommentRecords(records []format.Record) []format.Record {
 	return out
 }
 
+// ThinComments returns the record IR keeping only one in every n COMMENT
+// records (in source order), stripping the rest; n <= 1 keeps them all. Use
+// case: the SAM m6/release gate can't fit the full ~335 KB of release.s
+// comments in the 96 KB IN buffer, but stripping them all leaves the SAM-side
+// editor region empty (no on-hardware coverage of a populated editor region).
+// Thinning keeps a bounded, spread-out subset (e.g. 1-in-20 ≈ a few KB) so the
+// full Z80 round-trip exercises a non-empty comment sidecar while the `.tbn`
+// stays well under the ceiling. Byte-neutral: comments are assembly no-ops.
+func ThinComments(records []format.Record, n int) []format.Record {
+	if n <= 1 {
+		return records
+	}
+	out := make([]format.Record, 0, len(records))
+	ci := 0
+	for _, rec := range records {
+		if rec.Kind == format.KindComment {
+			keep := ci%n == 0
+			ci++
+			if !keep {
+				continue
+			}
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
 // StripDataRecords returns the in-memory record IR with all data-emitting
 // records removed: KindDirective records for data directives (.word, .quad,
 // .byte, .hword, .short, .ascii, .asciz, .skip, .space, .ltorg) and KindInst
