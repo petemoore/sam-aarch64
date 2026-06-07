@@ -148,11 +148,10 @@ tools/aarch64enc/manual_forms.go   (hand-curated; never regenerated)
   table by construction.
 - On the SAM, `enctab.enc` is HLOAD'd at boot into physical page 4 and read
   through section A under `LMPR_ENCTAB` (§5).
-- **`ENCTAB_LEN` sync rule**: `src/loader.asm` carries the table's byte
-  size as a build-time constant (`ENCTAB_LEN`), and it must equal
-  `wc -c build/enctab.enc` exactly — a stale value truncates the HLOAD and
-  surfaces as failures on unrelated mnemonics. Update it whenever the form
-  table grows.
+- The loader reads the file length from the SAMDOS DIFA header that HGTHD
+  deposits at &4B50+34/35, so no build-time length constant is needed
+  (i7 phase A eliminated `ENCTAB_LEN`).  Growing the form table is a
+  no-op for the loader.
 
 ## 5. Memory + paging model
 
