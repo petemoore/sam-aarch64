@@ -56,8 +56,6 @@ OP_KIND_LIT_POOL:       equ     &0C
 ; RecordKind constants (mirror of tools/sam-aarch64-format/kinds.go).
 ; -----------------------------------------------------------------------
 REC_KIND_INST:          equ     &01
-REC_KIND_LABEL_DEF:     equ     &02
-REC_KIND_LOCAL_DEF:     equ     &03
 REC_KIND_DIRECTIVE:     equ     &04
 REC_KIND_COMMENT:       equ     &05
 REC_KIND_LIT_INSTS:     equ     &07
@@ -385,39 +383,6 @@ pass_pc_advance_de_b1_done:
                 ret
 
 
-; copy_pass_pc_to_symbol_value_buf — copy PASS_PC (4 bytes) into
-; symbol_value_buf.  Used by KindLabelDef before calling symbol_insert.
-;
-; Input:  none.  Output: symbol_value_buf = PASS_PC.  Clobbers: A.
-copy_pass_pc_to_symbol_value_buf:
-                ld      a, (PASS_PC + 0)
-                ld      (symbol_value_buf + 0), a
-                ld      a, (PASS_PC + 1)
-                ld      (symbol_value_buf + 1), a
-                ld      a, (PASS_PC + 2)
-                ld      (symbol_value_buf + 2), a
-                ld      a, (PASS_PC + 3)
-                ld      (symbol_value_buf + 3), a
-                ret
-
-
-; copy_pass_pc_to_local_label_pc_buf — copy PASS_PC (4 bytes) into
-; local_label_pc_buf.  Used by KindLocalDef before calling
-; local_def_append.
-;
-; Input:  none.  Output: local_label_pc_buf = PASS_PC.  Clobbers: A.
-copy_pass_pc_to_local_label_pc_buf:
-                ld      a, (PASS_PC + 0)
-                ld      (local_label_pc_buf + 0), a
-                ld      a, (PASS_PC + 1)
-                ld      (local_label_pc_buf + 1), a
-                ld      a, (PASS_PC + 2)
-                ld      (local_label_pc_buf + 2), a
-                ld      a, (PASS_PC + 3)
-                ld      (local_label_pc_buf + 3), a
-                ret
-
-
 ; -----------------------------------------------------------------------
 ; walk_records — per-pass main loop.
 ;
@@ -434,10 +399,6 @@ walk_records:
 
                 call    reader_next_kind    ; A = kind, HL = payload, BC = len
 
-                cp      REC_KIND_LABEL_DEF
-                jp      z, main_handle_label_def
-                cp      REC_KIND_LOCAL_DEF
-                jp      z, main_handle_local_def
                 cp      REC_KIND_DIRECTIVE
                 jp      z, main_handle_directive
                 cp      REC_KIND_COMMENT
@@ -450,60 +411,6 @@ walk_records:
                 cp      REC_KIND_LIT_DATA
                 jp      z, main_handle_lit_insts
                 jp      fail
-
-
-; -----------------------------------------------------------------------
-; main_handle_label_def — KindLabelDef record handler.
-;
-; Pass 1: insert (symbol_id, PASS_PC) into the global symbol table.
-; Pass 2: no-op (entry already present from pass 1).
-;
-; Payload layout: [symbol_id u16 LE] (BC = 2).
-;
-; Input:  HL = payload ptr, BC = payload len (= 2).
-; Output: jp walk_records.
-; -----------------------------------------------------------------------
-main_handle_label_def:
-                ld      a, (PASS_MODE)
-                cp      PASS_PASS1
-                jp      nz, walk_records            ; pass 2: skip
-
-; Pass 1: stash PC into symbol_value_buf, then call symbol_insert with
-; HL = symbol_id.
-                push    hl                          ; preserve payload ptr
-                call    copy_pass_pc_to_symbol_value_buf
-                pop     hl
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)
-                ex      de, hl                      ; HL = symbol_id
-                call    symbol_insert
-                jp      walk_records
-
-
-; -----------------------------------------------------------------------
-; main_handle_local_def — KindLocalDef record handler.
-;
-; Pass 1: append PASS_PC to the per-digit list for digit A.
-; Pass 2: no-op.
-;
-; Payload layout: [digit u8] (BC = 1).
-;
-; Input:  HL = payload ptr, BC = payload len (= 1).
-; Output: jp walk_records.
-; -----------------------------------------------------------------------
-main_handle_local_def:
-                ld      a, (PASS_MODE)
-                cp      PASS_PASS1
-                jp      nz, walk_records            ; pass 2: skip
-
-                push    hl                          ; preserve payload ptr
-                call    copy_pass_pc_to_local_label_pc_buf
-                pop     hl
-                ld      a, (hl)                     ; A = digit
-                call    local_def_append
-                jp      walk_records
-
 
 
 ; -----------------------------------------------------------------------
