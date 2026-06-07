@@ -6,7 +6,7 @@ Three kinds of file live here:
   work items) and [`question-registry.md`](question-registry.md) (`qN`
   open questions for Pete). Milestone-neutral, never archived; the
   registry discipline is documented in each file's header.
-- **The active milestone status doc** — [`m8-status.md`](m8-status.md),
+- **The active milestone status doc** — [`m9-status.md`](m9-status.md),
   the per-strand source of truth for the milestone in flight. Deleted at
   milestone close after the registry walk (see `docs/ROADMAP.md`).
 - **Durable technical references** — everything else: SAM hardware/format

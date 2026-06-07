@@ -3,7 +3,7 @@
 A synthesized overview of the whole system — the first document to read
 after the root `README.md`. Each section summarizes one subsystem and links
 the deep spec or reference that owns the detail; nothing here is normative
-on its own. For current milestone state see `notes/m8-status.md`; for the
+on its own. For current milestone state see `notes/m9-status.md`; for the
 work backlog and open questions see `notes/item-registry.md` and
 `notes/question-registry.md`.
 
@@ -382,7 +382,7 @@ exercise combinations, and the release gate exercises everything at once.
   [`notes/sam-disk-format.md`](notes/sam-disk-format.md) ·
   [`notes/sam-file-header.md`](notes/sam-file-header.md)
 - Roadmap + tracking: [`ROADMAP.md`](ROADMAP.md) ·
-  [`notes/m8-status.md`](notes/m8-status.md) ·
+  [`notes/m9-status.md`](notes/m9-status.md) ·
   [`notes/item-registry.md`](notes/item-registry.md) ·
   [`notes/question-registry.md`](notes/question-registry.md)
 - Working agreements (authority model, inner loop, PR workflow):

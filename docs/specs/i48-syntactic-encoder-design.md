@@ -193,7 +193,7 @@ touch the following. `[A]`/`[B]` tag which decision; "NEW" = file added by i39a 
 - `docs/specs/tbn-binary-format-reference.md` `[A]` — **full rewrite to overlay-only** (i48d). It currently says `Version = 1` and documents the symbolic record kinds as current; that is correct for `main` *today* (v2 is unmerged), so the rewrite lands **with** the v2/elimination, not before — until then it carries a banner pointing here. **This is the doc Pete specifically flagged.**
 - `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-23-m1-binary-tokenised-format-design.md`, `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` `[A]` — mark **historical baseline** (dated design records; they may describe the old format *as the baseline they improved on*, but get a clear "superseded — not the current format" banner).
 - `docs/specs/compact-tbn-nextgen-design.md` — the v2 format design; this spec refines it (cross-link).
-- `docs/notes/m8-status.md`, `docs/ROADMAP.md`, `docs/notes/item-registry.md` `[A][B]` — i48 strands + status (this change).
+- `https://github.com/petemoore/sam-aarch64/blob/d874a69/docs/notes/m8-status.md`, `docs/ROADMAP.md`, `docs/notes/item-registry.md` `[A][B]` — i48 strands + status (this change).
 - `docs/notes/question-registry.md` — residual open questions q5/q6/q7 (§8).
 - `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md` `[B]` — note the fold-rule refinement lands with PR(c).
 

@@ -113,7 +113,7 @@ If you find files in `docs/superpowers/`, they're a stray slip — migrate them 
 
 - System overview (the first read): `docs/ARCHITECTURE.md`.
 - Project overview + roadmap: `docs/ROADMAP.md`.
-- Current state + milestone status: `docs/notes/m8-status.md` (active milestone) + `docs/notes/item-registry.md` / `question-registry.md`.
+- Current state + milestone status: `docs/notes/m9-status.md` (active milestone) + `docs/notes/item-registry.md` / `question-registry.md`.
 - SAM Coupé paging primer: `docs/notes/sam-paging.md`.
 - Z80 dev tool: `tools/z80-test-harness-go/` (see "Development inner loop" above).
 - Memory index: `~/.claude/projects/<this-repo's-path-slug>/memory/MEMORY.md` (always auto-loaded; the slug varies by host).
