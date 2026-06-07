@@ -81,41 +81,25 @@ zx0_compress:
 
         ; ── Fill hash table with &FF (sentinel &FFFF) ─────────────────
         ; Go: newMatchFinder initialises hashHead[] = 0xFFFF.
+        ; LDIR ripple-fill: write the first byte, then copy each byte to
+        ; the next address (21 T/byte vs ~33 T/byte for a manual loop).
         ld      hl, (zxc_ws_base)
-        ld      b, HASH_SIZE_BYTES >> 8 ; = 4 (for 1024 bytes)
-        ld      c, HASH_SIZE_BYTES & &FF ; = 0
-        ld      a, &FF
-zxc_fill_hash:
-        ld      (hl), a
-        inc     hl
-        dec     bc
-        ld      a, b
-        or      c
-        ld      a, &FF
-        jp      nz, zxc_fill_hash
+        ld      (hl), &FF
+        ld      d, h
+        ld      e, l
+        inc     de
+        ld      bc, HASH_SIZE_BYTES - 1
+        ldir
 
-        ; ── Fill chain array with &FF ─────────────────────────────────
-        ; Go: newMatchFinder initialises chain[] = 0xFFFF.
-        ; HL = chain_base (immediately after hash table).
-        ld      de, (zxc_src_len)
-        ld      a, d
-        or      e
-        jp      z, zxc_chain_done
-        ; BC = src_len * 2
-        ld      b, d
-        ld      c, e
-        sla     c
-        rl      b                       ; BC = src_len * 2
-        ld      a, &FF
-zxc_fill_chain:
-        ld      (hl), a
-        inc     hl
-        dec     bc
-        ld      a, b
-        or      c
-        ld      a, &FF
-        jp      nz, zxc_fill_chain
-zxc_chain_done:
+        ; The chain array is NOT initialised.  Go fills chain[] = 0xFFFF,
+        ; but that fill is unobservable: chain[c] is only ever read for a
+        ; candidate c obtained from hashHead[] or a previous chain read,
+        ; and every non-sentinel candidate enters those structures via
+        ; insert(c), which writes chain[c] BEFORE publishing c in
+        ; hashHead[].  The 0xFFFF sentinel terminates the walk before
+        ; chain[0xFFFF] could be read.  Hence every chain entry is
+        ; written before it can be read and the fill value never reaches
+        ; the output (oracle-verified; saves ~66 T per input byte).
 
         ; ── Initialise module-level state variables ───────────────────
         ; src_base, src_len, dst_base, hash_base, chain_base are already set.
