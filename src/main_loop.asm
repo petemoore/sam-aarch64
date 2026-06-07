@@ -1553,6 +1553,11 @@ load_in_file:
                 ld      e, l                    ; no — clamp to actual size (DE = HL)
 load_in_head_call:
                 ld      hl, &8000
+; The preceding RST 8 HGTHD ran ROM PTDOS, which does EI — re-enabling
+; interrupts.  The trampoline's documented entry contract requires DI
+; (trampoline.asm:589-593): an interrupt during its HMPR-set window could
+; see a deranged section C/D map.  Re-assert DI before the call.
+                di
                 call    TRAMPOLINE_DST      ; head read: 512 bytes into page 7
 
 ; -- Read editor_region_offset from file offset 8 in the just-loaded head --
@@ -1633,6 +1638,10 @@ load_in_prefix_pages_ok:
                 ld      a, (in_file_pages)
                 ld      c, a
                 ld      de, (in_file_len)
+; As at the head read: the RST 8 HGTHD above re-enabled interrupts (PTDOS
+; EI), so re-assert DI to honour the trampoline's DI-entry contract
+; (trampoline.asm:589-593) before calling.
+                di
                 call    TRAMPOLINE_DST
 
 ; Compute (IN_END_PAGE, IN_END_OFFSET) from the prefix geometry.
