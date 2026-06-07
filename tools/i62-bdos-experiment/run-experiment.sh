@@ -15,11 +15,11 @@
 # After the B-DOS run the HDF is checked for the saved pattern bytes —
 # independent evidence that HSAVE really wrote to the Atom Lite record.
 #
-# Inputs from outside the repo (worldofsam preservation copies; NOT
-# committed — see the publication policy note in
-# docs/notes/bdos-version-landscape.md):
-#   BDOS_BOOT_MGT  (default ~/sam-archive/bdos/megaboot-alplus.mgt)
-#                  any AL disk carrying the bootable "AL-BDOS15a" file.
+# The AL 1.5a DOS binary is vendored at reference/bdos/al-bdos15a.bin
+# (freeware; see reference/bdos/README.md), so no external disk image is
+# needed.  To re-extract it from a different worldofsam AL disk instead,
+# set BDOS_BOOT_MGT to that .mgt (the bootable "AL-BDOS15a" file is read
+# out with samfile) — an optional override, not a prerequisite.
 #
 # Host knobs:
 #   SIMCOUPE          emulator binary (default: simcoupe on PATH)
@@ -37,8 +37,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD="$ROOT/build"
 EXP="$ROOT/tools/i62-bdos-experiment"
-BDOS_ARCHIVE="${BDOS_ARCHIVE:-$HOME/sam-archive/bdos}"
-BDOS_BOOT_MGT="${BDOS_BOOT_MGT:-$BDOS_ARCHIVE/megaboot-alplus.mgt}"
+AL_BDOS_BIN="$ROOT/reference/bdos/al-bdos15a.bin"
+BDOS_BOOT_MGT="${BDOS_BOOT_MGT:-}"
 SIMCOUPE="${SIMCOUPE:-simcoupe}"
 SIMCOUPE_TIMEOUT="${SIMCOUPE_TIMEOUT:-120}"
 SIMCOUPE_ARGS="${SIMCOUPE_ARGS:-}"
@@ -46,17 +46,23 @@ SIMCOUPE_ARGS="${SIMCOUPE_ARGS:-}"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 command -v pyz80 >/dev/null || fail "pyz80 not on PATH"
-command -v samfile >/dev/null || fail "samfile not on PATH (go build it from github.com/petemoore/samfile)"
 command -v "$SIMCOUPE" >/dev/null || [ -x "$SIMCOUPE" ] || fail "simcoupe not found ($SIMCOUPE)"
-[ -f "$BDOS_BOOT_MGT" ] || fail "B-DOS AL boot disk not found: $BDOS_BOOT_MGT (set BDOS_BOOT_MGT)"
 
 mkdir -p "$BUILD"
 
 echo "--- assemble probe ---"
 pyz80 --obj="$BUILD/i62test.bin" "$EXP/i62test.asm"
 
-echo "--- extract B-DOS AL 1.5a DOS file ---"
-samfile cat -i "$BDOS_BOOT_MGT" -f "AL-BDOS15a" > "$BUILD/al-bdos15a.bin"
+echo "--- obtain B-DOS AL 1.5a DOS file ---"
+if [ -n "$BDOS_BOOT_MGT" ]; then
+    # Optional override: re-extract from a worldofsam AL disk image.
+    command -v samfile >/dev/null || fail "samfile not on PATH (go build it from github.com/petemoore/samfile)"
+    [ -f "$BDOS_BOOT_MGT" ] || fail "B-DOS AL boot disk not found: $BDOS_BOOT_MGT"
+    samfile cat -i "$BDOS_BOOT_MGT" -f "AL-BDOS15a" > "$BUILD/al-bdos15a.bin"
+else
+    # Default: the vendored freeware binary (reference/bdos/al-bdos15a.bin).
+    cp "$AL_BDOS_BIN" "$BUILD/al-bdos15a.bin"
+fi
 dos_size=$(wc -c < "$BUILD/al-bdos15a.bin")
 echo "AL-BDOS15a: $dos_size bytes"
 

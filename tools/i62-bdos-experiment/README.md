@@ -14,7 +14,7 @@ One probe binary (`i62test.asm`, pyz80, org `&8000`) is booted twice:
 | run | boot disk | mass storage | expected transcript |
 |-----|-----------|--------------|---------------------|
 | control | SAMDOS 2 (`reference/samdos/samdos2.bin`) | none | `I62` `DOS:SAMDOS` `P2` `P3` `P4` `OK` |
-| B-DOS | AL-BDOS15a (extracted from a worldofsam AL disk) | Atom Lite HDF (`-drive2 3 -atomdisk0`) | `I62` `DOS:BDOS V=05 R=000B` `P1` `P2` `P3` `P4` `OK` |
+| B-DOS | AL-BDOS15a (`reference/bdos/al-bdos15a.bin`) | Atom Lite HDF (`-drive2 3 -atomdisk0`) | `I62` `DOS:BDOS V=05 R=000B` `P1` `P2` `P3` `P4` `OK` |
 
 The probe: DVAR-7 B-DOS detection (manual MC idiom, from section B) →
 `HRECORD` record 1 (B-DOS branch only) → `HSAVE` a 1553-byte pattern →
@@ -39,18 +39,18 @@ under test.
 
 ## Prerequisites
 
-- `pyz80`, `go`, `python3`, `samfile` (build from
-  github.com/petemoore/samfile: `go build ./cmd/samfile`).
+- `pyz80`, `go`, `python3`.
 - SimCoupé ≥ v1.2.16 (`-exitonhalt`). The CI dev container's build
   under Xvfb (`docs/notes/headless-simcoupe.md`) is expected to work
   as-is (same binary + flags as every CI fixture run; not yet executed
   there — the 2026-06-11 runs used a local build, see the landscape
   doc's i62 section).
-- A B-DOS AL 1.5a disk image from worldofsam.org (NOT in this repo —
-  publication policy). Default path
-  `~/sam-archive/bdos/megaboot-alplus.mgt`; override with
-  `BDOS_BOOT_MGT`. Any AL disk whose first file is the bootable
-  `AL-BDOS15a` CODE file works.
+- The B-DOS AL 1.5a DOS binary is the vendored freeware copy
+  ([`reference/bdos/al-bdos15a.bin`](../../reference/bdos/README.md)) — no
+  external disk image is needed. To re-extract from a different worldofsam
+  AL disk instead, set `BDOS_BOOT_MGT` to that `.mgt` (any AL disk whose
+  first file is the bootable `AL-BDOS15a` CODE file) — this path additionally
+  needs `samfile` (`go build ./cmd/samfile` from github.com/petemoore/samfile).
 
 ## Running
 
@@ -72,5 +72,7 @@ All artifacts land in `build/` (gitignored): `i62test.bin`,
 `i62-samdos.mgt`, `i62-bdos.mgt`, `i62-atomlite.hdf`, plus the two
 `*.status.log` transcripts.
 
-This experiment is **not** a CI gate: it needs the worldofsam disk
-images, which stay outside the repo.
+This experiment is **not** a CI gate. The AL 1.5a DOS binary is the
+vendored freeware copy, but the run still needs SimCoupé and (for a real
+hardware confirmation) a B-DOS-formatted medium, so it stays a local /
+dev-container check rather than a gate.
