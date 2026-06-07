@@ -132,6 +132,84 @@ func (c commentLayout) String() string {
 	}
 }
 
+// cursorBlockStyle controls how the expanded cursor block is visually demarcated
+// when cursor-line expansion is active and the cursor line actually expanded.
+// A non-expanded cursor line never receives the block treatment — only the
+// existing current-line band (if enabled).
+type cursorBlockStyle int
+
+const (
+	cblNone    cursorBlockStyle = iota // no demarcation beyond current-line band
+	cblFrame                           // full box from box-drawing glyphs (1 row above + 1 below)
+	cblBracket                         // heavy left-edge bracket glyph on each expanded row
+	cblBand                            // expanded rows painted in the current-line band colour
+)
+
+func (s cursorBlockStyle) String() string {
+	switch s {
+	case cblFrame:
+		return "frame"
+	case cblBracket:
+		return "bracket"
+	case cblBand:
+		return "band"
+	default:
+		return "none"
+	}
+}
+
+func parseCursorBlockStyle(v string) (cursorBlockStyle, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "none", "off", "":
+		return cblNone, nil
+	case "frame":
+		return cblFrame, nil
+	case "bracket":
+		return cblBracket, nil
+	case "band":
+		return cblBand, nil
+	}
+	return cblNone, fmt.Errorf("want none|frame|bracket|band, got %q", v)
+}
+
+// roleSpec is a pen index with an optional inverse modifier. Syntax in a config
+// file is `N` or `N inverse` where N is a CLUT pen index (0-3 normally, 0-15
+// when relax_palette is on). The inverse flag renders the token with ink and
+// paper swapped relative to the pen's normal assignment.
+type roleSpec struct {
+	Pen     int
+	Inverse bool
+}
+
+func (rs roleSpec) String() string {
+	if rs.Inverse {
+		return fmt.Sprintf("%d inverse", rs.Pen)
+	}
+	return fmt.Sprintf("%d", rs.Pen)
+}
+
+// parseRoleSpec parses "N" or "N inverse".
+func parseRoleSpec(val string) (roleSpec, error) {
+	parts := strings.Fields(strings.TrimSpace(val))
+	if len(parts) == 0 {
+		return roleSpec{}, fmt.Errorf("want a pen index, got empty string")
+	}
+	n, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return roleSpec{}, fmt.Errorf("want a pen index, got %q", parts[0])
+	}
+	rs := roleSpec{Pen: n}
+	if len(parts) == 2 {
+		if strings.ToLower(parts[1]) != "inverse" {
+			return roleSpec{}, fmt.Errorf("want 'N' or 'N inverse', got %q", val)
+		}
+		rs.Inverse = true
+	} else if len(parts) > 2 {
+		return roleSpec{}, fmt.Errorf("want 'N' or 'N inverse', got %q", val)
+	}
+	return rs, nil
+}
+
 // LabConfig is the complete, hand-editable rendering configuration. Every field
 // maps to one documented key in the starter configs. Zero/false defaults give
 // the binutils baseline (R0); the compressed profile turns rules on.
@@ -201,8 +279,35 @@ type LabConfig struct {
 	CommentColumnCommentedOnly bool
 
 	// --- Cursor-line expansion --------------------------------------------
-	ExpandCursorLine expandMode
-	ExpandK          int // the K in wrap:K / panel:K
+	ExpandCursorLine  expandMode
+	ExpandK           int  // the K in wrap:K / panel:K
+	// ExpandOnlyIfNeeded skips expansion when the cursor line's full code plus
+	// its full comment already fits within the comment-column budget on a single
+	// row. When false (the default), expansion fires unconditionally whenever
+	// ExpandCursorLine != expandOff. Pete's annoyance: short comments that fit
+	// were being moved underneath anyway.
+	ExpandOnlyIfNeeded bool
+	// CursorBlockStyle demarcates the expanded block visually (frame/bracket/band).
+	// Applied only when the cursor line actually expanded; a non-expanded cursor
+	// line never receives the block treatment.
+	CursorBlockStyle cursorBlockStyle
+
+	// --- Fine syntax-colour roles -----------------------------------------
+	// RoleMnemonic / RoleExpression / RoleRegister / RoleImmediate split the
+	// former role_code into per-token-class roles, each config-assignable with an
+	// optional inverse modifier (e.g. "3 inverse"). The 4-pen budget and
+	// relax_palette apply unchanged.
+	//
+	// When reg_style marking is active (RegStrip), the register marking logic
+	// (pensFor / paintOperands) wins for register tokens — these roles provide the
+	// base pen; the mark style then overrides ink/paper per token class.
+	//
+	// Default starter: mnemonic and register tokens use the existing code pen;
+	// expression/immediate tokens match the immediate-mark pen (tasteful accent).
+	RoleMnemonic    roleSpec // instruction mnemonic token
+	RoleExpression  roleSpec // operand expressions (non-register, non-immediate)
+	RoleRegister    roleSpec // register tokens (base, before reg_style marking)
+	RoleImmediate   roleSpec // immediate tokens (when mark_immediates is off)
 
 	// --- Viewport ----------------------------------------------------------
 	Wrap         bool // wrap vs horizontal-shift when a line overflows
@@ -266,6 +371,13 @@ func defaultConfig() LabConfig {
 		Wrap:          true,
 		ViewportStep:  8,
 		StatusTemplate: "{file}  L{line}/{total}  {pct}  {mode}",
+		// Fine syntax roles default to the existing code pen (RoleCode=3) so a
+		// config that does not set them behaves identically to the old role_code.
+		// RoleImmediate defaults to pen 2 (accent) for a tasteful distinction.
+		RoleMnemonic:   roleSpec{Pen: 3},
+		RoleExpression: roleSpec{Pen: 3},
+		RoleRegister:   roleSpec{Pen: 3},
+		RoleImmediate:  roleSpec{Pen: 2},
 	}
 }
 
@@ -512,6 +624,32 @@ func (c *LabConfig) set(key, val string) error {
 		default:
 			return fmt.Errorf("want off | wrap:K | panel:K, got %q", val)
 		}
+	case "expand_only_if_needed":
+		v, err := b()
+		c.ExpandOnlyIfNeeded = v
+		return err
+	case "cursor_block_style":
+		v, err := parseCursorBlockStyle(val)
+		c.CursorBlockStyle = v
+		return err
+
+	// Fine syntax-colour roles.
+	case "role_mnemonic":
+		rs, err := parseRoleSpec(val)
+		c.RoleMnemonic = rs
+		return err
+	case "role_expression":
+		rs, err := parseRoleSpec(val)
+		c.RoleExpression = rs
+		return err
+	case "role_register":
+		rs, err := parseRoleSpec(val)
+		c.RoleRegister = rs
+		return err
+	case "role_immediate":
+		rs, err := parseRoleSpec(val)
+		c.RoleImmediate = rs
+		return err
 
 	// Viewport.
 	case "wrap":
@@ -600,6 +738,10 @@ func (c *LabConfig) resolveRoles() error {
 		{"role_chrome_bg", c.RoleChromeBg},
 		{"role_current_line", c.RoleCurrentBg},
 		{"role_status", c.RoleStatus},
+		{"role_mnemonic", c.RoleMnemonic.Pen},
+		{"role_expression", c.RoleExpression.Pen},
+		{"role_register", c.RoleRegister.Pen},
+		{"role_immediate", c.RoleImmediate.Pen},
 	}
 	var bad []string
 	for _, r := range roles {
@@ -709,7 +851,9 @@ func (c *LabConfig) Snapshot() string {
 	if c.ExpandCursorLine != expandOff {
 		exp = fmt.Sprintf("%s:%d", c.ExpandCursorLine, c.ExpandK)
 	}
-	fmt.Fprintf(&b, "expand_cursor_line = %s\n\n", exp)
+	fmt.Fprintf(&b, "expand_cursor_line = %s\n", exp)
+	fmt.Fprintf(&b, "expand_only_if_needed = %s\n", onoff(c.ExpandOnlyIfNeeded))
+	fmt.Fprintf(&b, "cursor_block_style = %s\n\n", c.CursorBlockStyle)
 
 	fmt.Fprintf(&b, "wrap = %s\n", onoff(c.Wrap))
 	fmt.Fprintf(&b, "viewport_step = %d\n\n", c.ViewportStep)
@@ -726,6 +870,12 @@ func (c *LabConfig) Snapshot() string {
 		maxW = strconv.Itoa(c.MaxInstructionWidth)
 	}
 	fmt.Fprintf(&b, "max_instruction_width = %s\n", maxW)
-	fmt.Fprintf(&b, "render_constants = %s\n", c.RenderConstants)
+	fmt.Fprintf(&b, "render_constants = %s\n\n", c.RenderConstants)
+
+	fmt.Fprintf(&b, "# Fine syntax-colour roles (pen [inverse]).\n")
+	fmt.Fprintf(&b, "role_mnemonic = %s\n", c.RoleMnemonic)
+	fmt.Fprintf(&b, "role_expression = %s\n", c.RoleExpression)
+	fmt.Fprintf(&b, "role_register = %s\n", c.RoleRegister)
+	fmt.Fprintf(&b, "role_immediate = %s\n", c.RoleImmediate)
 	return b.String()
 }

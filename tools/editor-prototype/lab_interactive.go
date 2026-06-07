@@ -162,6 +162,10 @@ func (st *labState) handleKey(k samscreen.Key) bool {
 		st.cfg.CommentSemicolon = !st.cfg.CommentSemicolon
 	case 'e': // cycle expand_cursor_line off -> wrap:3 -> panel:4 -> off
 		st.cfg.ExpandCursorLine, st.cfg.ExpandK = cycleExpand(st.cfg.ExpandCursorLine, st.cfg.ExpandK)
+	case 'o': // expand_only_if_needed toggle
+		st.cfg.ExpandOnlyIfNeeded = !st.cfg.ExpandOnlyIfNeeded
+	case 'B': // cursor_block_style cycle: none -> frame -> bracket -> band -> none
+		st.cfg.CursorBlockStyle = (st.cfg.CursorBlockStyle + 1) % 4
 	case 'w': // wrap toggle
 		st.cfg.Wrap = !st.cfg.Wrap
 		if st.cfg.Wrap {
@@ -233,9 +237,10 @@ var helpLines = []string{
 	" t tight commas      r reg strip   x/X cycle x/w mark       ",
 	" i mark immediates   n/N label trunc -/+                    ",
 	" c comment layout    C comment column rule  ; semicolon     ",
-	" e expand cursor line  w wrap   l current-line band         ",
-	" p relax palette     E tighten exprs                        ",
-	" M max instr width (off/40 toggle)                          ",
+	" e expand cursor line  o expand only if needed              ",
+	" B cursor block style (none/frame/bracket/band)             ",
+	" w wrap   l current-line band   p relax palette             ",
+	" E tighten exprs   M max instr width (off/40 toggle)        ",
 	" b render_constants cycle (source/hex/dec)                  ",
 	"                                                            ",
 	" S  snapshot current settings -> lab-snapshot-N.config      ",

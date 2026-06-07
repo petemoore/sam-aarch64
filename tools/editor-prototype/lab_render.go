@@ -19,13 +19,22 @@ import (
 // labGlyphEllipsis / labGlyphArrowLeft reuse the iteration glyph slots; the AND
 // glyph is a new slot used when imm_hex_amp collides with the '&' AND operator.
 const (
-	labGlyphEllipsis = glyphEllipsis  // 0x81
+	labGlyphEllipsis  = glyphEllipsis  // 0x81
 	labGlyphArrowLeft = glyphArrowLeft // 0x82
 	labGlyphMarker    = glyphMarker    // 0x80
 	// labGlyphAnd is a custom "logical AND" glyph (a small wedge, ∧-style),
 	// drawn in place of '&' as the AND operator when imm_hex_amp claims '&' for
 	// hex. Without this the reader cannot tell `x0 & 7` from `&7`.
 	labGlyphAnd = 0x83
+	// Frame glyphs for the cursor-block frame style (8x8 box-drawing set).
+	labGlyphFrameTopLeft  = 0x84 // ┌
+	labGlyphFrameTopRight = 0x85 // ┐
+	labGlyphFrameHoriz    = 0x86 // ─
+	labGlyphFrameBotLeft  = 0x87 // └
+	labGlyphFrameBotRight = 0x88 // ┘
+	labGlyphFrameVert     = 0x89 // │
+	// labGlyphBracket is a heavy left-edge mark for the bracket block style.
+	labGlyphBracket = 0x8a // left half-block ▌
 )
 
 // labGlyphs are the lab's custom 8x8 glyph patterns (bit 7 leftmost).
@@ -35,6 +44,15 @@ var labGlyphs = map[byte][]uint8{
 	labGlyphMarker:    {0x00, 0x7c, 0x00, 0x7c, 0x00, 0x70, 0x00, 0x00},
 	// ∧: a wedge rising to a point — visually distinct from '&'.
 	labGlyphAnd: {0x00, 0x18, 0x18, 0x24, 0x24, 0x42, 0x42, 0x00},
+	// Box-drawing glyphs for the frame cursor-block style.
+	labGlyphFrameTopLeft:  {0x00, 0x3e, 0x22, 0x22, 0x22, 0x22, 0x22, 0x00}, // ┌
+	labGlyphFrameTopRight: {0x00, 0x7c, 0x44, 0x44, 0x44, 0x44, 0x44, 0x00}, // ┐
+	labGlyphFrameHoriz:    {0x00, 0x00, 0x00, 0x7e, 0x00, 0x00, 0x00, 0x00}, // ─
+	labGlyphFrameBotLeft:  {0x00, 0x22, 0x22, 0x22, 0x22, 0x22, 0x3e, 0x00}, // └
+	labGlyphFrameBotRight: {0x00, 0x44, 0x44, 0x44, 0x44, 0x44, 0x7c, 0x00}, // ┘
+	labGlyphFrameVert:     {0x00, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x00}, // │
+	// ▌ left half-block: heavy bracket mark on the left edge of each expanded row.
+	labGlyphBracket: {0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0, 0xf0},
 }
 
 // labCell is one virtual-row cell (built unclipped, then blitted at a
@@ -54,9 +72,13 @@ type labRenderer struct {
 	doc *docLines // text accessor for comment bodies
 
 	// Resolved pens (CLUT indices, or palette indices when relaxed).
-	paper, code, comment, label                uint8
-	regMark, immMark                           uint8
-	chromeFg, chromeBg, currentBg, statusPen   uint8
+	paper, code, comment, label              uint8
+	regMark, immMark                         uint8
+	chromeFg, chromeBg, currentBg, statusPen uint8
+
+	// Fine syntax-colour pens (resolved from the roleSpec fields).
+	mnemonicInk, expressionInk, registerInk, immediateInk uint8
+	mnemonicInverse, expressionInverse, registerInverse, immediateInverse bool
 
 	// Per-page layout, recomputed by setPage.
 	pageLo, pageHi int
@@ -83,6 +105,16 @@ func newLabRenderer(cfg LabConfig, m []srcLine, doc *docLines) *labRenderer {
 	r.chromeBg = uint8(cfg.RoleChromeBg)
 	r.currentBg = uint8(cfg.RoleCurrentBg)
 	r.statusPen = uint8(cfg.RoleStatus)
+	// Fine syntax-colour roles. The pen from the roleSpec is the ink against the
+	// paper pen; the inverse flag swaps ink/paper for the token.
+	r.mnemonicInk = uint8(cfg.RoleMnemonic.Pen)
+	r.mnemonicInverse = cfg.RoleMnemonic.Inverse
+	r.expressionInk = uint8(cfg.RoleExpression.Pen)
+	r.expressionInverse = cfg.RoleExpression.Inverse
+	r.registerInk = uint8(cfg.RoleRegister.Pen)
+	r.registerInverse = cfg.RoleRegister.Inverse
+	r.immediateInk = uint8(cfg.RoleImmediate.Pen)
+	r.immediateInverse = cfg.RoleImmediate.Inverse
 	return r
 }
 
@@ -243,7 +275,10 @@ func labPrintable(ch byte) bool {
 		return true
 	}
 	switch ch {
-	case labGlyphEllipsis, labGlyphArrowLeft, labGlyphMarker, labGlyphAnd:
+	case labGlyphEllipsis, labGlyphArrowLeft, labGlyphMarker, labGlyphAnd,
+		labGlyphFrameTopLeft, labGlyphFrameTopRight, labGlyphFrameHoriz,
+		labGlyphFrameBotLeft, labGlyphFrameBotRight, labGlyphFrameVert,
+		labGlyphBracket:
 		return true
 	}
 	return false
@@ -262,6 +297,18 @@ func (r *labRenderer) pensFor(style markStyle, role uint8) (ink, paper uint8) {
 	default:
 		return r.code, r.paper
 	}
+}
+
+// syntaxPensFor returns the (ink, paper) pair for a fine-syntax token class,
+// applying the role's inverse flag. When the role pen equals the code pen and
+// inverse is false, the result is identical to the plain code pen — no visual
+// change, which is correct for configs that leave the fine-syntax roles at their
+// defaults.
+func (r *labRenderer) syntaxPensFor(ink uint8, inverse bool) (i, p uint8) {
+	if inverse {
+		return r.paper, ink
+	}
+	return ink, r.paper
 }
 
 // commentText returns the comment string to draw for line l (semicolon prefix
@@ -389,7 +436,9 @@ func (r *labRenderer) row(l srcLine, indent int, suppressComment bool) (rows [][
 		r.putText(code, indent, stmt, r.code, r.paper)
 	} else {
 		col := r.mnemonicColumn()
-		r.putText(code, indent, l.mnemonic, r.code, r.paper)
+		// Use the mnemonic syntax role for the mnemonic token.
+		mnemInk, mnemPaper := r.syntaxPensFor(r.mnemonicInk, r.mnemonicInverse)
+		r.putText(code, indent, l.mnemonic, mnemInk, mnemPaper)
 		if ops := r.opsDisplay(l); ops != "" {
 			// R0 (col==0): one space after the mnemonic. R1+: operands align to
 			// the page column, but never overlap a longer-than-column mnemonic.
@@ -428,14 +477,12 @@ func (r *labRenderer) paintOperands(row []labCell, x int, ops string) {
 	andGlyph := r.cfg.ImmHexAmp
 	rest := ops
 	for rest != "" {
-		// Find the next thing to specially paint: a register, or (if marking
-		// immediates) an immediate, whichever comes first.
+		// Find the next thing to specially paint: a register, or an immediate.
+		// Immediates are always scanned (for role_immediate colouring); the
+		// mark_immediates flag governs whether they also use the mark accent pen.
 		locReg := reRegNum.FindStringSubmatchIndex(rest)
 		locName := reRegName.FindStringIndex(rest)
-		locImm := []int(nil)
-		if r.cfg.MarkImmediates {
-			locImm = reLabImm.FindStringIndex(rest)
-		}
+		locImm := reLabImm.FindStringIndex(rest)
 
 		// Choose the earliest match.
 		next := -1
@@ -462,40 +509,55 @@ func (r *labRenderer) paintOperands(row []labCell, x int, ops string) {
 			if r.cfg.RegStrip {
 				cellText = digits
 			}
-			style := r.cfg.RegXStyle
-			if wReg {
-				style = r.cfg.RegWStyle
-			}
-			ink, paper := r.code, r.paper
+			var ink, paper uint8
 			if r.cfg.RegStrip {
+				// reg_style marking wins for stripped registers.
+				style := r.cfg.RegXStyle
+				if wReg {
+					style = r.cfg.RegWStyle
+				}
 				ink, paper = r.pensFor(style, r.regMark)
+			} else {
+				// Fine syntax role: role_register (base, before marking).
+				ink, paper = r.syntaxPensFor(r.registerInk, r.registerInverse)
 			}
 			x = r.putText(row, x, cellText, ink, paper)
 			rest = rest[locReg[1]:]
 		case 2: // named register
 			tok := rest[locName[0]:locName[1]]
-			ink, paper := r.code, r.paper
+			var ink, paper uint8
 			if r.cfg.RegStrip {
 				ink, paper = r.pensFor(r.cfg.RegNamedStyle, r.regMark)
+			} else {
+				ink, paper = r.syntaxPensFor(r.registerInk, r.registerInverse)
 			}
 			x = r.putText(row, x, tok, ink, paper)
 			rest = rest[locName[1]:]
-		case 3: // immediate (mark alternative)
+		case 3: // immediate token
 			tok := rest[locImm[0]:locImm[1]]
-			ink, paper := r.pensFor(r.cfg.MarkImmediatesStyle, r.immMark)
+			var ink, paper uint8
+			if r.cfg.MarkImmediates {
+				// mark_immediates accent pen wins when active.
+				ink, paper = r.pensFor(r.cfg.MarkImmediatesStyle, r.immMark)
+			} else {
+				// Otherwise use the fine syntax role_immediate.
+				ink, paper = r.syntaxPensFor(r.immediateInk, r.immediateInverse)
+			}
 			x = r.putText(row, x, tok, ink, paper)
 			rest = rest[locImm[1]:]
 		}
 	}
 }
 
-// putPlain writes plain operand text, substituting the AND operator glyph for
-// ' & ' when hex '&' is active.
+// putPlain writes plain operand text (expressions: not register, not immediate),
+// applying the role_expression syntax colour. Substitutes the AND operator glyph
+// when imm_hex_amp is active.
 func (r *labRenderer) putPlain(row []labCell, x int, s string, andGlyph bool) int {
 	if andGlyph && strings.Contains(s, " & ") {
 		s = reLabAnd.ReplaceAllString(s, " "+string([]byte{labGlyphAnd})+" ")
 	}
-	return r.putText(row, x, s, r.code, r.paper)
+	exprInk, exprPaper := r.syntaxPensFor(r.expressionInk, r.expressionInverse)
+	return r.putText(row, x, s, exprInk, exprPaper)
 }
 
 // reLabImm matches an immediate operand worth marking: a bare decimal, a #-form,
@@ -566,7 +628,23 @@ func (r *labRenderer) renderScreen(scr samscreen.Screen, cursor, offset int, st 
 	}
 	panelRows := 0
 	if r.cfg.ExpandCursorLine == expandPanel && r.cfg.ExpandK > 0 {
-		panelRows = r.cfg.ExpandK
+		// expand_only_if_needed: suppress the panel when the cursor line's
+		// content (code + comment) fits on a single row. The panel costs screen
+		// real estate; no point reserving it for a line that already renders in full.
+		showPanel := true
+		if r.cfg.ExpandOnlyIfNeeded && cursor >= 0 && cursor < len(r.m) {
+			cl := r.m[cursor]
+			if cl.trailing == "" {
+				showPanel = false // no comment → nothing to panel
+			} else {
+				codeW := indent + r.codeWidthRaw(cl)
+				totalW := codeW + r.cfg.CommentGap + len(cl.trailing)
+				showPanel = totalW > cols
+			}
+		}
+		if showPanel {
+			panelRows = r.cfg.ExpandK
+		}
 	}
 	textRows := rows - statusRows - panelRows
 	if textRows < 1 {
@@ -584,20 +662,47 @@ func (r *labRenderer) renderScreen(scr samscreen.Screen, cursor, offset int, st 
 	}
 	r.setPage(lo, hi, indent)
 
+	// Determine whether the cursor line's wrap-expansion actually fires. With
+	// expand_only_if_needed = true, expansion is skipped when the full code +
+	// comment already fits in one row (no truncation, no overflow). The test
+	// mirrors the comment-column rule: total width = indent + code + gap + comment.
+	wrapExpand := r.cfg.ExpandCursorLine == expandWrap && r.cfg.ExpandK > 0
+	cursorActuallyExpanded := false
+	if wrapExpand && cursor >= 0 && cursor < len(r.m) {
+		if r.cfg.ExpandOnlyIfNeeded {
+			cl := r.m[cursor]
+			codeW := indent + r.codeWidthRaw(cl)
+			totalW := codeW
+			if cl.trailing != "" {
+				totalW += r.cfg.CommentGap + len(cl.trailing)
+			}
+			cursorActuallyExpanded = totalW > cols || cl.trailing == ""  // expand only when it won't fit; blank trailing never expands
+			// A line with no comment never needs expansion (nothing to unfold).
+			if cl.trailing == "" {
+				cursorActuallyExpanded = false
+			} else {
+				cursorActuallyExpanded = totalW > cols
+			}
+		} else {
+			// Unconditional expansion when there is a comment to expand.
+			cursorActuallyExpanded = cursor >= 0 && cursor < len(r.m) && r.m[cursor].trailing != ""
+		}
+	}
+
 	// Build display rows from a window of document lines, centre-locking the
 	// cursor's code row. Expansion (wrap mode) inserts extra rows at the cursor.
 	type drow struct {
-		cells    []labCell
-		isCursor bool
+		cells        []labCell
+		isCursor     bool
+		isExpandedEx bool // part of the cursor block expansion rows (not the code row itself)
 	}
 	var disp []drow
 	cursorRow := -1
-	wrapExpand := r.cfg.ExpandCursorLine == expandWrap && r.cfg.ExpandK > 0
 	for i := lo; i < hi; i++ {
 		isCursorLine := i == cursor
 		// In wrap-expansion the cursor line's comment moves to the expansion
 		// rows, so suppress it on the code row (no duplication).
-		suppress := wrapExpand && isCursorLine && r.m[i].trailing != ""
+		suppress := cursorActuallyExpanded && isCursorLine && r.m[i].trailing != ""
 		// When max_instruction_width is active, a non-cursor code line whose
 		// raw width exceeds the limit is truncated: suppress its same-line
 		// comment so it does not float against a fake column. The comment
@@ -620,12 +725,32 @@ func (r *labRenderer) renderScreen(scr samscreen.Screen, cursor, offset int, st 
 			if lineTruncated && vi == len(vr)-1 {
 				r.truncateVirtualRow(vrow, indent+r.cfg.MaxInstructionWidth)
 			}
-			disp = append(disp, drow{vrow, isCur})
+			disp = append(disp, drow{cells: vrow, isCursor: isCur})
 			// Wrap-expansion: after the cursor's code row, unfold its full
 			// comment into <=K extra inline rows (page below shifts down).
-			if isCur && wrapExpand {
-				for _, ex := range r.expandComment(r.m[i], indent, cols, r.cfg.ExpandK) {
-					disp = append(disp, drow{ex, false})
+			if isCur && cursorActuallyExpanded {
+				exRows := r.expandComment(r.m[i], indent, cols, r.cfg.ExpandK)
+				// cursor_block_style = frame: prepend a frame-top row (drawn
+				// before the first expansion row); append a frame-bottom row after.
+				if r.cfg.CursorBlockStyle == cblFrame && len(exRows) > 0 {
+					topRow := r.makeFrameRow(cols, true)
+					disp = append(disp, drow{cells: topRow, isExpandedEx: true})
+				}
+				for _, ex := range exRows {
+					switch r.cfg.CursorBlockStyle {
+					case cblBracket:
+						ex[0] = labCell{labGlyphBracket, r.comment, r.paper}
+					case cblBand:
+						r.applyBandToRow(ex)
+					case cblFrame:
+						ex[0] = labCell{labGlyphFrameVert, r.comment, r.paper}
+						ex[cols-1] = labCell{labGlyphFrameVert, r.comment, r.paper}
+					}
+					disp = append(disp, drow{cells: ex, isExpandedEx: true})
+				}
+				if r.cfg.CursorBlockStyle == cblFrame && len(exRows) > 0 {
+					botRow := r.makeFrameRow(cols, false)
+					disp = append(disp, drow{cells: botRow, isExpandedEx: true})
 				}
 			}
 		}
@@ -698,6 +823,39 @@ func (r *labRenderer) expandComment(l srcLine, indent, cols, k int) [][]labCell 
 		out = append(out, row)
 	}
 	return out
+}
+
+// makeFrameRow builds a horizontal frame rule row (top or bottom of the expanded
+// block). Top row uses ┌─…─┐; bottom uses └─…─┘.
+func (r *labRenderer) makeFrameRow(cols int, top bool) []labCell {
+	row := newLabRow()
+	r.blankRow(row)
+	lCorner := byte(labGlyphFrameTopLeft)
+	rCorner := byte(labGlyphFrameTopRight)
+	if !top {
+		lCorner = labGlyphFrameBotLeft
+		rCorner = labGlyphFrameBotRight
+	}
+	if cols > 0 {
+		row[0] = labCell{lCorner, r.comment, r.paper}
+	}
+	for x := 1; x < cols-1; x++ {
+		row[x] = labCell{labGlyphFrameHoriz, r.comment, r.paper}
+	}
+	if cols > 1 {
+		row[cols-1] = labCell{rCorner, r.comment, r.paper}
+	}
+	return row
+}
+
+// applyBandToRow repaints a virtual row's background with the currentBg pen
+// (the band style for expanded rows).
+func (r *labRenderer) applyBandToRow(row []labCell) {
+	for i := range row {
+		if row[i].paper == r.paper {
+			row[i].paper = r.currentBg
+		}
+	}
 }
 
 // renderPanel paints the reserved bottom panel (panel mode): the cursor line's
