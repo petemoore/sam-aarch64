@@ -32,6 +32,7 @@ This directory holds the Go-side toolchain, build helpers, and dev tools that su
 
 | Path | Purpose | `make` target |
 |------|---------|---------------|
+| `comment-bench/` | Benchmarks Z80-feasible compression schemes (word dict, BPE, Huffman, LZ77/ZX0-style, flate) against the full release comment corpus from the unstripped `.tbn`. Reports ratio × decoder footprint × capacity in pages. See `docs/notes/comment-compression-research.md`. | `comment-bench` |
 | `z80-test-harness-go/` | Go harness over `koron-go/z80` running `src/` fixtures at ~1 ms each for fast inner-loop feedback. **Not a CI gate** — it can crash or mislead; SimCoupé wins on disagreement. See its `README.md` and `SCOPE.md`. | — |
 | `test-manifest.sh` | Snapshot tool: enumerates CI jobs, Go test names, fixture corpora, boot self-tests, and round-trip sweeps into a single report file. Queries GitHub Actions via `gh`. | — |
 

@@ -4,6 +4,7 @@ use (
 	./tools/aarch64dec
 	./tools/aarch64enc
 	./tools/build-disk
+	./tools/comment-bench
 	./tools/enctab-gen
 	./tools/sam-aarch64
 	./tools/sam-aarch64-format
