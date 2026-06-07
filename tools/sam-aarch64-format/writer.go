@@ -114,15 +114,28 @@ func WriteFile(w io.Writer, st *SymbolTable, labels []LabelRow, locals []LocalRo
 	if _, err := w.Write(cnt[:]); err != nil {
 		return err
 	}
+	// Front-code each entry against the PREVIOUS name (encounter order, no
+	// sort — ids are wired through every PUSH_SYM patch and the header
+	// tables, so the order must stay stable). An entry is
+	// [shared_prefix_len uvarint][suffix_len uvarint][suffix bytes]; decode
+	// copies `shared` bytes from the prior name and appends the suffix.
+	var prev string
+	var tmp [binary.MaxVarintLen64]byte
 	for _, n := range names {
-		var ln [2]byte
-		binary.LittleEndian.PutUint16(ln[:], uint16(len(n)))
-		if _, err := w.Write(ln[:]); err != nil {
+		shared := commonPrefixLen(prev, n)
+		suffix := n[shared:]
+		k := binary.PutUvarint(tmp[:], uint64(shared))
+		if _, err := w.Write(tmp[:k]); err != nil {
 			return err
 		}
-		if _, err := w.Write([]byte(n)); err != nil {
+		k = binary.PutUvarint(tmp[:], uint64(len(suffix)))
+		if _, err := w.Write(tmp[:k]); err != nil {
 			return err
 		}
+		if _, err := w.Write([]byte(suffix)); err != nil {
+			return err
+		}
+		prev = n
 	}
 
 	tables := writeLabelTable(nil, labels)
@@ -135,4 +148,17 @@ func WriteFile(w io.Writer, st *SymbolTable, labels []LabelRow, locals []LocalRo
 		return err
 	}
 	return nil
+}
+
+// commonPrefixLen returns the number of leading bytes a and b share.
+func commonPrefixLen(a, b string) int {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	i := 0
+	for i < n && a[i] == b[i] {
+		i++
+	}
+	return i
 }

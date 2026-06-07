@@ -62,8 +62,8 @@
 ; next IN page — which gives the correct bytes by virtue of section B =
 ; LMPR-low+1.  This matches the COMET adjustpo idiom and is robust.
 ; The name-table walk below DOES call in_normalise_hl after each
-; HL += name_len step because BC may be hundreds of bytes — too large
-; to rely on the section-B implicit window.
+; cursor += suffix_len step because a suffix may be tens of bytes — too
+; large to rely on the section-B implicit window.
 ; -----------------------------------------------------------------------
 reader_init:
                 call    in_map_current
@@ -102,31 +102,58 @@ reader_init:
                 inc     hl
                 inc     hl
 
-; -- Name table: [count u16][names…] each name = [len u16][bytes] -------
+; -- Name table: [count u16] then front-coded entries (i39b-1).  Each
+;    entry = [shared_prefix_len uvarint][suffix_len uvarint][suffix bytes].
+;    The assembler resolves symbols by name_id via the header tables and
+;    NEVER decodes a name string, so the skip only advances the cursor
+;    past each entry.  We drive it through (reader_in_cursor) so we can
+;    reuse the LEB128 decoder (reader_uvarint_add) the header tables use.
                 ld      e, (hl)
                 inc     hl
                 ld      d, (hl)
-                inc     hl                  ; HL → first name (if count > 0)
+                inc     hl                  ; HL → first entry; DE = count
                 ld      (reader_name_count), de
+                ld      (reader_in_cursor), hl
 
 reader_init_skip_names:
                 ld      a, d
                 or      e
-                jr      z, reader_init_header_tables
+                jr      z, reader_init_skip_names_done
 
                 push    de                  ; remaining count
-                ld      c, (hl)
-                inc     hl
-                ld      b, (hl)
-                inc     hl                  ; HL → name bytes; BC = len
-; HL += BC — may push HL past &3FFF.  Renormalise into section A so
-; subsequent name reads stay in [&0000, &4000) with LMPR bumped if we
-; crossed an IN page boundary.
+
+; shared_prefix_len uvarint — consume + discard (only the cursor advance
+; matters; the decoded value lands in a scratch we never read).
+                ld      hl, reader_name_skip_tmp
+                call    reader_uvarint_add
+
+; suffix_len uvarint — decode into a zeroed scratch to recover its value.
+                xor     a
+                ld      (reader_name_skip_tmp + 0), a
+                ld      (reader_name_skip_tmp + 1), a
+                ld      (reader_name_skip_tmp + 2), a
+                ld      (reader_name_skip_tmp + 3), a
+                ld      hl, reader_name_skip_tmp
+                call    reader_uvarint_add  ; scratch = suffix_len
+
+; cursor += suffix_len.  A symbol name is far under one IN page (16 KB),
+; so the high two bytes are zero and one in_normalise_hl pass (it bumps
+; LMPR on a single &4000 crossing) suffices.
+                ld      hl, (reader_in_cursor)
+                ld      bc, (reader_name_skip_tmp)  ; low 16 bits = suffix_len
                 add     hl, bc
                 call    in_normalise_hl
+                ld      (reader_in_cursor), hl
+
                 pop     de
                 dec     de
                 jp      reader_init_skip_names
+
+reader_init_skip_names_done:
+; Hand the (normalised) cursor back to HL — reader_init_header_tables
+; re-seeds reader_in_cursor from it.
+                ld      hl, (reader_in_cursor)
+                jp      reader_init_header_tables
 
 
 ; -----------------------------------------------------------------------
@@ -594,3 +621,4 @@ reader_varint_acc_ptr:  defw    0   ; address of the 4-byte LE accumulator
 reader_varint_tmp:      defb    0, 0, 0, 0  ; decoded varint (4-byte LE)
 reader_varint_byte:     defb    0   ; the LEB128 byte being merged
 reader_varint_shift:    defb    0   ; bit position of the next group
+reader_name_skip_tmp:   defb    0, 0, 0, 0  ; name-table-skip uvarint decode (4-byte LE)
