@@ -122,8 +122,7 @@ func Compact(f *format.File, p1 *Pass1Result) ([]byte, error) {
 		flushAll()
 		// Re-serialise the pass-through record from its struct fields. Only
 		// DIRECTIVE and COMMENT records reach here (INST/LABEL_DEF/LOCAL_DEF
-		// and collapsible data are handled above); both re-emit byte-for-byte
-		// identically to the former WriteRaw(rec.Kind, rec.Raw) path.
+		// and collapsible data are handled above).
 		switch rec.Kind {
 		case format.KindComment:
 			w.WriteComment(rec.Placement, rec.Body)

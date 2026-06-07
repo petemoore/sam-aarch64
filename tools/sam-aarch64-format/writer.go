@@ -9,7 +9,6 @@ import (
 type RecordWriter struct{ buf []byte }
 
 func (w *RecordWriter) Bytes() []byte { return w.buf }
-func (w *RecordWriter) Reset()        { w.buf = w.buf[:0] }
 
 func (w *RecordWriter) writeHeader(kind RecordKind, payloadLen int) {
 	w.buf = append(w.buf, byte(kind))
@@ -77,14 +76,6 @@ func appendU32(buf []byte, v uint32) []byte {
 	var tmp [4]byte
 	binary.LittleEndian.PutUint32(tmp[:], v)
 	return append(buf, tmp[:]...)
-}
-
-// WriteRaw writes a record with an already-encoded payload verbatim.
-// Used by the compaction pass to pass non-literal records through
-// unchanged (the payload is the Record.Raw slice from the reader).
-func (w *RecordWriter) WriteRaw(kind RecordKind, payload []byte) {
-	w.writeHeader(kind, len(payload))
-	w.buf = append(w.buf, payload...)
 }
 
 // WriteDirective writes a DIRECTIVE record. operands is the

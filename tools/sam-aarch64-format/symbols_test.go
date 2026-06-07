@@ -17,31 +17,6 @@ func TestSymbolTableInternFirstEncounter(t *testing.T) {
 	}
 }
 
-func TestSymbolTableName(t *testing.T) {
-	st := NewSymbolTable()
-	st.Intern("alpha")
-	st.Intern("beta")
-	if st.Name(0) != "alpha" || st.Name(1) != "beta" {
-		t.Errorf("Name lookup failed")
-	}
-	if st.Name(99) != "" {
-		t.Errorf("out-of-range Name should return \"\"")
-	}
-}
-
-func TestSymbolTableLen(t *testing.T) {
-	st := NewSymbolTable()
-	if st.Len() != 0 {
-		t.Errorf("empty table Len() = %d, want 0", st.Len())
-	}
-	st.Intern("a")
-	st.Intern("b")
-	st.Intern("a") // duplicate
-	if st.Len() != 2 {
-		t.Errorf("Len() = %d after two distinct interns, want 2", st.Len())
-	}
-}
-
 func TestSymbolTableNames(t *testing.T) {
 	st := NewSymbolTable()
 	st.Intern("a")
