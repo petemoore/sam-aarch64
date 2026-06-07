@@ -16,8 +16,11 @@
 DISASM_COMM_MNEM:        equ     &7E99
 DISASM_COMM_OPS:         equ     &7EA3
 
-; Entry point for the disasm self-test stub that lives at the tail of
-; disasm.bin (page 15).  Placed at &8100 (256 bytes into the page) to
-; give the main disasm_entry / helpers room below; enforced by an
-; `org DISASM_SELF_TEST_ENTRY` in disasm.asm.
-DISASM_SELF_TEST_ENTRY:  equ     &8100
+; Entry point for the disasm boot self-test.  disasm.asm opens the page
+; with a two-slot jump table so both the decoder entry (&8000) and the
+; self-test entry have FIXED addresses that src/assembler.asm can name at
+; its own (separate) build time, while the decoder body and the self-test
+; code grow freely after the table with no padding:
+;   &8000  jp disasm_dispatch        (DISASM_ENTRY, in src/trampoline.asm)
+;   &8003  jp run_disasm_self_test   (DISASM_SELF_TEST_ENTRY, here)
+DISASM_SELF_TEST_ENTRY:  equ     &8003
