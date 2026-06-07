@@ -29,7 +29,7 @@ same process; the symbolic record kinds are **never serialized** (not to disk,
 not even to an in-memory byte stream) (`tools/sam-aarch64/main.go:runAssemble`,
 `tools/sam-aarch64/frontend/translate.go`). It is therefore not part of the
 on-disk format and is not described here; see the i48 design
-(`docs/specs/2026-06-08-i48-single-format-syntactic-encoder-design.md`,
+(`docs/specs/i48-syntactic-encoder-design.md`,
 Decision A) for why the symbolic form is an in-memory IR rather than a
 serialized profile. The pre-v2 (v1 / symbolic) on-disk format was never
 released; it survives only in git history.
@@ -99,7 +99,7 @@ are length-prefixed (u16 LE), never NUL-terminated.
 The file splits at `editor_region_offset` into an **assembler-facing region**
 (everything the SAM Z80 assembler reads) and a trailing **editor region**
 (data only the renderer / editor needs). The editor-region split is M8 / i39b-2;
-see `docs/specs/2026-06-08-compact-tbn-nextgen-design.md` §3.5/§3.6/§3.7.
+see `docs/specs/compact-tbn-nextgen-design.md` §3.5/§3.6/§3.7.
 
 - **Magic / version / flags / editor_region_offset** (12 bytes total).
   `ReadFile` rejects a bad magic or a version ≠ 2; `Flags` is reserved and
@@ -649,8 +649,8 @@ assembler never reads them. The host's `-strip-comments` drops them entirely
 ## 9. Cross-references
 
 - **v2 overlay design** (the instruction-overlay redesign this doc
-  describes): `docs/specs/2026-06-08-compact-tbn-nextgen-design.md` (i39
-  format) and `docs/specs/2026-06-08-i48-single-format-syntactic-encoder-design.md`
+  describes): `docs/specs/compact-tbn-nextgen-design.md` (i39
+  format) and `docs/specs/i48-syntactic-encoder-design.md`
   (the single-format + syntactic-encoder decisions — Decision A makes the
   compact overlay the only serialized form and the symbolic records an
   in-memory IR).

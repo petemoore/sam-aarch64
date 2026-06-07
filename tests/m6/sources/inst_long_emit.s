@@ -1,6 +1,6 @@
 // inst_long_emit.s — M6 PR 1 zone-crossing fixture.
 //
-// Per docs/specs/2026-05-27-m6-paged-out-design.md.  Emits > 16 KB of
+// Per docs/specs/paged-out-design.md.  Emits > 16 KB of
 // OUT so that emit_byte crosses the OUT_ZONE 0 → 1 boundary
 // (low zone, section B = page 5 under LMPR_ENCTAB → high zone,
 // section B = page 6 under LMPR_OUT_HIGH bracket).

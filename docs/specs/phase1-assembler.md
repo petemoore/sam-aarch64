@@ -1,6 +1,6 @@
 # Phase 1 spec: standalone aarch64 assembler
 
-**Status**: approved 2026-05-09. Read alongside `2026-05-09-vision.md`.
+**Status**: approved 2026-05-09. Read alongside `vision.md`.
 
 ## 1. Goal & boundaries
 

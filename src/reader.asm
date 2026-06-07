@@ -1,7 +1,7 @@
 ; reader.asm — .tbn record stream walker (paged IN — M6 PR 2).
 ;
 ; Per docs/specs/2026-05-23-m1-binary-tokenised-format-design.md §2-§3
-; for the format; docs/specs/2026-05-27-m6-paged-in-design.md for the
+; for the format; docs/specs/paged-in-design.md for the
 ; paging design.
 ;
 ;   File layout (compact `.tbn` v2; editor-region split, M8 / i39b-2):
@@ -500,7 +500,7 @@ reader_at_end_no:
 ; reader_next_kind — fetch the next record into STAGING_BUF and return
 ; A=kind, BC=payload length, HL=STAGING_BUF.
 ;
-; Per docs/specs/2026-05-27-m6-paged-in-design.md §"reader_next_kind
+; Per docs/specs/paged-in-design.md §"reader_next_kind
 ; (paged)".  Brackets an LMPR=IN_POS_PAGE window around the read; copies
 ; [payload] bytes from section A into STAGING_BUF; renormalises across
 ; IN page boundaries during the copy.  Restores LMPR_ENCTAB before

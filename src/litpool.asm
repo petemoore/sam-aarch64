@@ -359,7 +359,7 @@ litpool_pcm_ok:
 ; litpool_copy_expr — copy BC bytes of expr bytecode from HL (staging
 ; buffer) to the section-D cross-pass pool at LITPOOL_EXPR_BUF.
 ;
-; Per docs/specs/2026-05-27-m6-paged-in-design.md §"Litpool copy hook".
+; Per docs/specs/paged-in-design.md §"Litpool copy hook".
 ; Under paged IN the staging buffer is overwritten on every
 ; reader_next_kind call, so a section-C-style expr_ptr captured in
 ; pass 1 is invalid by the time pass-2's flush reads it.  This helper

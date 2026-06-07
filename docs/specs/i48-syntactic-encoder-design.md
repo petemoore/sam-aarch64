@@ -6,7 +6,7 @@
 **Authority:** the code, then the agreed design. This spec records two architectural
 decisions taken after i39a PR(a)/(b) landed, and enumerates every touchpoint they
 affect so nothing is lost. It is the normative reference for both; the i39 design
-(`2026-06-08-compact-tbn-nextgen-design.md`) remains the format design, this sharpens
+(`compact-tbn-nextgen-design.md`) remains the format design, this sharpens
 *how the host and SAM produce and consume it*.
 
 ---
@@ -190,9 +190,9 @@ touch the following. `[A]`/`[B]` tag which decision; "NEW" = file added by i39a 
 - No config change. Required checks `m1`/`m2`/`disasm`/`disasm-roundtrip`/`sysreg-sync` stay green; `m3`/`m4{,-prod}`/`m5{,-prod}`/`m6{,-prod}`/`m6-release` go green when PR(c) lands the v2 Z80 reader + refined folds.
 
 ### Docs (the scrub — Decision A's "no old format in head")
-- `docs/specs/2026-06-08-tbn-binary-format-reference.md` `[A]` — **full rewrite to overlay-only** (i48d). It currently says `Version = 1` and documents the symbolic record kinds as current; that is correct for `main` *today* (v2 is unmerged), so the rewrite lands **with** the v2/elimination, not before — until then it carries a banner pointing here. **This is the doc Pete specifically flagged.**
+- `docs/specs/tbn-binary-format-reference.md` `[A]` — **full rewrite to overlay-only** (i48d). It currently says `Version = 1` and documents the symbolic record kinds as current; that is correct for `main` *today* (v2 is unmerged), so the rewrite lands **with** the v2/elimination, not before — until then it carries a banner pointing here. **This is the doc Pete specifically flagged.**
 - `docs/specs/2026-05-23-m1-binary-tokenised-format-design.md`, `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` `[A]` — mark **historical baseline** (dated design records; they may describe the old format *as the baseline they improved on*, but get a clear "superseded — not the current format" banner).
-- `docs/specs/2026-06-08-compact-tbn-nextgen-design.md` — the v2 format design; this spec refines it (cross-link).
+- `docs/specs/compact-tbn-nextgen-design.md` — the v2 format design; this spec refines it (cross-link).
 - `docs/notes/m8-status.md`, `docs/ROADMAP.md`, `docs/notes/item-registry.md` `[A][B]` — i48 strands + status (this change).
 - `docs/notes/question-registry.md` — residual open questions q5/q6/q7 (§8).
 - `docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md` `[B]` — note the fold-rule refinement lands with PR(c).
@@ -221,7 +221,7 @@ so no head doc describes a format the code doesn't produce.
 - **q6 — editor in-memory model for value-dependent base words. ✅ RESOLVED (via i41
   decision #3 + i48b)** — the editor holds the symbolic IR, not base words, so there is
   no edit-time base word to pick; value-dependent bits are computed in the fold at
-  serialize/assemble. See `docs/specs/2026-06-08-editor-edit-model-design.md` §7.3.
+  serialize/assemble. See `docs/specs/editor-edit-model-design.md` §7.3.
 - **q7 — strictness scope.** ⏳ We forego `ldr→ldur` and `add` `lsl #12` auto-rewrite.
   Any other GNU "generous" rewrites in the corpus to treat the same way? (Sweep when
   implementing i48b.)

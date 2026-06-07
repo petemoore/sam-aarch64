@@ -30,7 +30,7 @@ const (
 	// (with relocated bitfields zeroed) followed by [patch_count u8] and
 	// patch_count × [slot u8][expr_len u8][expr bytes]; pass 2 evaluates
 	// each patch expression and ORs the folded bits into the zeroed field.
-	// See docs/specs/2026-06-08-compact-tbn-nextgen-design.md.
+	// See docs/specs/compact-tbn-nextgen-design.md.
 	KindInsnRun RecordKind = 0x09
 )
 

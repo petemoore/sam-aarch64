@@ -43,14 +43,14 @@
 ;     page 6 reached via LMPR=LMPR_OUT_HIGH bracket per emit
 ;     (high zone, bytes 16384..32767).  HSAVE at end of pass 2 reads
 ;     the buffer via section C with UIFA[31] = OUT_BASE_PAGE.  See
-;     docs/specs/2026-05-27-m6-paged-out-design.md and
+;     docs/specs/paged-out-design.md and
 ;     docs/specs/samdos-file-io.md.
 ;   Physical pages 7..12 (off-axis): IN .tbn buffer — 6 contiguous
 ;     pages = 96 KB ceiling (bumped from 4 pages / 64 KB on 2026-05-28
 ;     to fit spectrum4's 88 KB stripped release.tbn).  HLOAD'd once at
 ;     startup via load_in_file_paged; read via per-record LMPR-bracket
 ;     into section A on each reader_next_kind call.  See
-;     docs/specs/2026-05-27-m6-paged-in-design.md.
+;     docs/specs/paged-in-design.md.
 ;   Physical page 12 (off-axis, BUILD_TESTS only): test_cluster.bin —
 ;     the off-axis encoder self-test cluster
 ;     (src/test_offaxis_cluster.asm), HLOAD'd at boot and invoked once
@@ -84,7 +84,7 @@
 ; The org directive sets the load address; the entry point is the
 ; first byte.
 
-; IN buffer paging — see docs/specs/2026-05-27-m6-paged-in-design.md.
+; IN buffer paging — see docs/specs/paged-in-design.md.
 ;   pages 7..12  ── IN .tbn (HLOAD destination); 96 KB ceiling
 ;   STAGING_BUF  ── per-record staging window in section D
 ;   LITPOOL_EXPR_BUF ── cross-pass copy of litpool expr bytecode

@@ -20,7 +20,7 @@
 ;     zero, div-by-zero → 0.  Implemented via ml_mul / ml_div.
 ;
 ; Opcode values (tools/sam-aarch64-format/expr.go lines 12-66; full
-; normative table in docs/specs/2026-06-08-tbn-binary-format-reference.md §5):
+; normative table in docs/specs/tbn-binary-format-reference.md §5):
 ;
 ;   0x01 PUSH_IMM8        [s8]
 ;   0x02 PUSH_IMM16       [s16 LE]

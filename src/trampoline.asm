@@ -232,7 +232,7 @@ LMPR_ENCTAB:    equ     &20 + ENCTAB_PAGE
 
 ; OUT-buffer paged-output constants.
 ;
-; Per docs/specs/2026-05-27-m6-paged-out-design.md.  OUT lives in
+; Per docs/specs/paged-out-design.md.  OUT lives in
 ; physical pages 5..6 across two zones:
 ;
 ;   Low zone  (bytes 0..16383)   — section B during LMPR_ENCTAB window;
@@ -252,7 +252,7 @@ LMPR_OUT_HIGH:  equ     &25            ; RAM0 + low5=5; A=page 5, B=page 6
 
 ; IN-buffer paged-input constants.
 ;
-; Per docs/specs/2026-05-27-m6-paged-in-design.md.  IN lives in physical
+; Per docs/specs/paged-in-design.md.  IN lives in physical
 ; pages 7..12 (6 contiguous pages = 96 KB ceiling, raised 2026-05-28
 ; from the original 4-page / 64 KB allocation to fit spectrum4's 88 KB
 ; stripped release.tbn), HLOAD'd once at startup.  Each

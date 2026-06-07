@@ -2,7 +2,7 @@
 ;
 ; Per docs/plans/2026-05-27-m6-paged-out.md Task 5.  Verifies the
 ; runtime emit path described in
-; docs/specs/2026-05-27-m6-paged-out-design.md.
+; docs/specs/paged-out-design.md.
 ;
 ; Preconditions: load_enctab has completed so LMPR_DEFAULT_RUNTIME is
 ; live and LMPR is currently = LMPR_DEFAULT_RUNTIME (post-map_out).

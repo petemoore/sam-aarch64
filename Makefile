@@ -348,7 +348,7 @@ ci-m5-prod: test-m5-prod
 # test-m6 — sweep every fixture under tests/m6/sources/.  Same pipeline
 # as test-m5 (sam-aarch64 → build-m3-disk → SimCoupé → samfile extract OUT
 # → byte-compare against aarch64-*-as + ld -Ttext=0 + objcopy -O binary).
-# Per docs/specs/2026-05-27-m6-paged-out-design.md.  The M6 fixtures
+# Per docs/specs/paged-out-design.md.  The M6 fixtures
 # exercise the paged-OUT machinery (sections-B emit + HSAVE auto-paging
 # across &C000) by emitting > 16 KB of output to cross the OUT_ZONE
 # low → high boundary.

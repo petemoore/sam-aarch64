@@ -262,7 +262,7 @@ access) is separate machinery, also in `src/trampoline.asm`
    question** — an LMPR-swap problem, identical in shape to ENCTAB's
    runtime-read pattern. This document covers only the *flush* — how to call
    HSAVE on a paged OUT buffer. The runtime emit path is designed in
-   `docs/specs/2026-05-27-m6-paged-out-design.md` (OUT in physical pages
+   `docs/specs/paged-out-design.md` (OUT in physical pages
    5-6, written via section B).
 
 ### The HSAVE pattern
@@ -537,8 +537,8 @@ the hook would give graceful error reporting — tracked as registry item i25.
   sysreg data, test payloads), all routed through the trampoline.
 - `src/main_loop.asm` — `save_out_file`, the HSAVE call site for the paged
   OUT buffer.
-- `docs/specs/2026-05-27-m6-paged-in-design.md` /
-  `docs/specs/2026-05-27-m6-paged-out-design.md` — the runtime read/emit
+- `docs/specs/paged-in-design.md` /
+  `docs/specs/paged-out-design.md` — the runtime read/emit
   paths these file-IO calls bracket.
 - `docs/notes/sam-stub-audit.md` — SAMDOS hook semantics audit (the broken
   HOFLE/SBYT/CFSM path; cross-bank read/write helpers; stack and paging

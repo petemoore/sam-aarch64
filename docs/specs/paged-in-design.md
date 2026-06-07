@@ -1,6 +1,6 @@
 # M6 PR 2 — paged IN buffer design
 
-**Status**: design spec.  Pairs with `docs/specs/2026-05-27-m6-paged-out-design.md` (the OUT-side counterpart) and `docs/specs/samdos-file-io.md` (the COMET-style HLOAD trampoline pattern).  Date: 2026-05-27.
+**Status**: design spec.  Pairs with `docs/specs/paged-out-design.md` (the OUT-side counterpart) and `docs/specs/samdos-file-io.md` (the COMET-style HLOAD trampoline pattern).  Date: 2026-05-27.
 
 This is the design for the second M6 PR.  Scope: relocate the IN `.tbn` buffer out of section C so that inputs larger than 2 KB are possible.  Compaction of the `.tbn` format itself is a separate strand (M6 PR 3 — `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`).
 
@@ -224,7 +224,7 @@ Drop:
 Add (in `assembler.asm` near the existing section-D scratch declarations):
 
 ```asm
-; IN buffer paging — see docs/specs/2026-05-27-m6-paged-in-design.md.
+; IN buffer paging — see docs/specs/paged-in-design.md.
 ;   pages 7..10  ── IN .tbn (HLOAD destination); 64 KB ceiling
 ;   STAGING_BUF  ── per-record staging window in section D
 ;   LITPOOL_EXPR_BUF ── cross-pass copy of litpool expr bytecode

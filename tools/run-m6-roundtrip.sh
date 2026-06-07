@@ -3,7 +3,7 @@
 #
 # Pipeline (mirror of run-m5-roundtrip.sh — same oracle, same disk
 # format, just the M6 fixture corpus).  See
-# docs/specs/2026-05-27-m6-paged-out-design.md.
+# docs/specs/paged-out-design.md.
 #
 #   1. sam-aarch64 INPUT.s → INPUT.img + INPUT.compact.tbn
 #   2. build-m3-disk assembler.bin enctab.enc INPUT.compact.tbn → OUT.mgt

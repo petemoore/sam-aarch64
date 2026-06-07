@@ -414,7 +414,7 @@ jobs:
   # auto-paging across &C000).  The fixture corpus is currently a
   # single >16 KB long-emit fixture that crosses the OUT_ZONE
   # low → high boundary.  See
-  # docs/specs/2026-05-27-m6-paged-out-design.md.
+  # docs/specs/paged-out-design.md.
   m6:
     runs-on: ubuntu-latest
     needs: build-image

@@ -61,7 +61,7 @@ spec → plan → implementation cycle.
 
 - **Phase 1 — Standalone assembler.** Source from disk → flat binary,
   listing, symbol map to disk. No editor. No network. See
-  `2026-05-09-phase1-assembler.md`. *Riskiest piece de-risked first; the
+  `phase1-assembler.md`. *Riskiest piece de-risked first; the
   encoder is the algorithmically novel work.*
 
 - **Phase 2 — Visual editor.** A SAM-native structured editor that

@@ -177,7 +177,7 @@ reset_reader_to_in_buf:
 ;
 ; Called before pass 2 only (pass 1 never emits).
 ;
-; Per docs/specs/2026-05-27-m6-paged-out-design.md the OUT buffer
+; Per docs/specs/paged-out-design.md the OUT buffer
 ; lives in physical pages 5+6, reached via section B (&4000..&7FFF).
 ; OUT_PC starts at the section-B base; OUT_ZONE starts at 0 (= low
 ; zone, section B = page 5 for free under LMPR_ENCTAB).
@@ -199,7 +199,7 @@ reset_out_buffer:
 ; -----------------------------------------------------------------------
 ; Paged-IN cursor helpers.
 ;
-; Per docs/specs/2026-05-27-m6-paged-in-design.md.  Three primitives:
+; Per docs/specs/paged-in-design.md.  Three primitives:
 ;   in_map_current   — write IN_POS_PAGE to LMPR, mapping the current
 ;                      IN page into section A (&0000..&3FFF).
 ;   in_persist_hl    — write HL back to IN_POS_OFFSET and snapshot the
@@ -1441,7 +1441,7 @@ main_eval_next_imm:
 ; -----------------------------------------------------------------------
 ; load_in_file — HGTHD + trampoline-HLOAD "IN" into pages 7..12.
 ;
-; Per docs/specs/2026-05-27-m6-paged-in-design.md.  IN lands in
+; Per docs/specs/paged-in-design.md.  IN lands in
 ; physical pages 7..12 (off-axis; 96 KB ceiling) via the section-B HLOAD trampoline,
 ; same pattern as load_enctab.  HLOAD's destination is &8000 — a
 ; section-C address — and SAMDOS's internal ctas auto-pages HMPR
@@ -1614,7 +1614,7 @@ main_dir_equ_pending_id:        defw    0
 ; Globals shared between reader / encoder / main_loop.
 ; -----------------------------------------------------------------------
 
-; Paged IN cursor — see docs/specs/2026-05-27-m6-paged-in-design.md.
+; Paged IN cursor — see docs/specs/paged-in-design.md.
 ;
 ; IN lives in physical pages 7..12 (off-axis; 96 KB ceiling).  The
 ; 24-bit cursor is stored as a (page, offset) pair: IN_POS_PAGE holds
@@ -1631,7 +1631,7 @@ IN_POS_OFFSET:          defw    0           ; current offset in that page
 IN_END_PAGE:            defb    0           ; last byte's LMPR low5+RAM0
 IN_END_OFFSET:          defw    0           ; last byte's offset in that page
 
-; Paged OUT cursor state — see docs/specs/2026-05-27-m6-paged-out-design.md.
+; Paged OUT cursor state — see docs/specs/paged-out-design.md.
 ; OUT_PC walks section B (&4000..&7FFF); OUT_ZONE flips 0 → 1 at the
 ; first byte 16384 to switch from page 5 (under LMPR_ENCTAB) to page 6
 ; (under LMPR_OUT_HIGH).  OUT_LEN is the total emitted byte count

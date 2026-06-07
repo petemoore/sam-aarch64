@@ -7,8 +7,8 @@ recommendation, not a frozen spec)
 `docs/notes/memory-layout.md`, `docs/notes/sam-paging.md`, `src/reader.asm`,
 `src/assembler.asm` (header map), `docs/notes/m7-status.md` ("IN/OUT
 paged-buffer ceiling" row + items i2/i40), and the v2 serialize target:
-`docs/specs/2026-06-08-compact-tbn-nextgen-design.md` (§7 decisions) +
-`docs/specs/2026-06-08-tbn-binary-format-reference.md`. Editor interaction model:
+`docs/specs/compact-tbn-nextgen-design.md` (§7 decisions) +
+`docs/specs/tbn-binary-format-reference.md`. Editor interaction model:
 `docs/ROADMAP.md` "Editor vision (Phase 2)".
 
 This doc designs the **in-RAM document model the editor mutates while you type**.
