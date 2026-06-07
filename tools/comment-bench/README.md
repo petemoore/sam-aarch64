@@ -19,3 +19,5 @@ Elias-gamma costs (labelled "greedy stand-in"), and flate level-9 as a
 not-Z80-feasible ceiling.  All compressed sizes include table/dictionary
 overhead.  See `docs/notes/comment-compression-research.md` for results,
 decoder-cost table, and capacity analysis.
+
+`--dump-blocks DIR` writes the PC-ordered corpus as raw 1/2/4/8 KB block files (consumed by the harness ZX0 decode benchmark; `make zx0-blocks`).
