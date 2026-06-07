@@ -334,6 +334,10 @@ on-SAM compression, the path is to cache hot state variables in registers across
 rather than reading/writing them via absolute addresses.  That optimisation is deferred to
 a later item (see q9 / i60c).
 
+The table above records the *unoptimised* port.  Item i67 (next section)
+implements the register-caching path and brings the 4 KB figure from
+2557 T/byte to 972 T/byte.
+
 ### Recommended operating point
 
 **H=512, D=16** (`tools/zx0-greedy.DefaultParams`) is the recommended
@@ -352,3 +356,126 @@ Larger blocks (8 KB) improve ratio to 0.3302 but require 17438 B scratch
 (17 KB) and 660 ms to recompress — still within a "save" latency budget but
 tight for 256 KB SAMs where free scratch pages are limited.  The 4 KB / 8 KB
 choice is Pete's call (q9 / i60c design note).
+
+## T-state optimization of the Z80 ZX0 path (i67)
+
+Night-shift optimization of `src/zx0_compress.asm` under a hard invariant:
+**the compressor's output bytes never change** — same algorithm, same
+(H,D)=(512,16), same greedy parse, only faster code.  The proof at every step
+is the byte-identity oracle (`TestZX0CompressPort`, Z80 vs the Go authority)
+plus round-trips through the real upstream decoders.  `TestZX0CorpusTotals`
+extends the oracle to **every block of the full 298,050 B corpus at both 4 KB
+(73 blocks) and 8 KB (37 blocks) blockings** — all 110 blocks byte-identical
+and round-trip clean at every kept step.
+
+### Whole-corpus totals: before → after
+
+Measured by `TestZX0CorpusTotals` (instruction-level T-state table,
+koron-go/z80, uncontended RAM, 6 MHz).  Reproduce:
+
+```
+make zx0-corpus zx0-compress-payload
+cd tools/z80-test-harness-go && go test -run TestZX0CorpusTotals -v -count=1 .
+```
+
+| Phase | Blocking | Before (T) | After (T) | Before (s) | After (s) | T/byte | Saved |
+|-------|----------|-----------:|----------:|-----------:|----------:|-------:|------:|
+| Z80 compress | 4 KB | 804,132,274 | 289,731,306 | 134.0 | 48.3 | 2698.0 → 972.1 | **64.0%** |
+| Z80 compress | 8 KB | 866,544,662 | 294,513,715 | 144.4 | 49.1 | 2907.4 → 988.1 | **66.0%** |
+
+Per 4 KB dirty block the compress cost drops from ~1.84 s to ~0.66 s at
+6 MHz (the i60b-2 numbers above were measured on the 6-block sample; the
+whole-corpus average is slightly higher than the sample average).
+
+### Optimization log
+
+Every step assembled, oracle-checked (byte-identity + round-trip), measured
+on the full corpus, and committed individually.  T/byte figures are the 4 KB
+whole-corpus averages.
+
+| # | Technique | T/byte | Kept |
+|---|-----------|--------|------|
+| 0 | baseline (i60b-2 port) | 2698.0 | — |
+| 1 | drop dead chain-array init (write-before-read proof), LDIR hash fill | 2698.0 → 2604.2 | ✅ |
+| 2 | table-driven hash2 (512 B page-aligned `x*31` tables) returning `&hashHead[h]`; boundary check dropped with unobservability proof | 2604.2 → 2322.1 | ✅ |
+| 3 | stack-free insert; hash2 preserves DE | 2322.1 → 2215.5 | ✅ |
+| 4 | register-resident chain walk: DE=candidate, BC=pos_ptr, IXh=bestLen, IXl=depth counter, IYl=compare budget; SMC per-call constants; screen byte at offset bestLen; ceiling exit at bestLen==maxML; off-range checks dropped (provably dead) | 2215.5 → 1168.0 | ✅ |
+| 5 | self-contained insert_tail (count in IXl, inlined hash, parked chain slot); orphaned zxc_insert removed | 1168.0 → 1113.8 | ✅ |
+| 6 | bit-writer state in shadow registers (D'E'=out_ptr, H'L'=holder, C'=mask, B'=backtrack); A-only-clobber bit routines; de-push'd gamma loops; LDIR literal flush | 1113.8 → 1000.7 | ✅ |
+| 7 | incremental chain slot in insert_tail; SMC main-loop length | 1000.7 → 978.9 | ✅ |
+| 8 | fused bit-pair emitter for gamma loops (one EXX round per pair; value bit skips the provably-clear backtrack test) | 978.9 → 972.1 | ✅ |
+
+Nothing was reverted; every step passed the oracle first try except step 4,
+which initially computed pos_ptr into BC before calling the BC-clobbering
+hash2 (caught immediately by the oracle as a no-matches-found output blowup,
+fixed by hashing first).
+
+The flat profiler used to aim each step is
+`TestZX0CompressProfile` (per-routine T-state attribution via the pyz80 map
+file).  After step 8 the remaining cost is spread across the chain-walk
+advance (~11%), the deep compare (~8%), the tail-insert hash (~19%), and the
+parse/emit glue — all near their structural floors for this algorithm shape;
+further gains would be ≤5% each at growing complexity, so the work stopped
+here (diminishing-returns rule).
+
+Cost of the speed: the payload grows from 1182 B to 1792 B (page-aligned
+hash tables generated at assemble time), and the routine now requires
+interrupts disabled (bit-writer lives in the shadow registers), runs from RAM
+(self-modifying immediates), and clobbers IX/IY.  The workspace contract
+(`ScratchBytes`, 9246 B at 4 KB blocks) is unchanged.
+
+### Z80 instruction-set notes (incl. undocumented opcodes)
+
+Support matrix established before relying on anything undocumented:
+
+| Feature | pyz80 (assembler) | koron-go/z80 (harness) | Real Z80B / SimCoupé |
+|---------|-------------------|------------------------|----------------------|
+| IXH/IXL/IYH/IYL halves (LD/ALU/INC/DEC, immediate loads) | ✅ native mnemonics (`single_mapping` includes IXH..IYL); encodings verified byte-exact | ✅ full DD/FD dispatch incl. register-half loads, ALU, INC/DEC, `LD rx,n` | ✅ classic NMOS-universal undocumented ops; SimCoupé implements them |
+| SLL (SL1) | ✅ as `SL1` (warns on `SLL`) | ✅ (`SL1 r` / `SL1 (HL)`, CB 30–37) | ✅ NMOS behaviour (shift left, LSB=1) |
+| `OUT (C),0` | not needed | ED 71 not dispatched as such | NMOS=0 / CMOS=&FF — avoided |
+
+Decisions taken:
+
+* **Used**: IXh/IXl/IYl as extra 8-bit registers in the match-finder hot
+  loops (bestLen, chain counter, compare budget).  Cost model: prefix+4 T per
+  access (8 T for LD/ALU/INC/DEC on a half; 11 T for `LD IXL,n`).  The
+  harness T-state table gained the DD/FD 26/2E = 11 T immediate-load entries;
+  all other used forms were already covered by the default-8 prefix case.
+* **Not used**: SLL (no profitable site — `srl c`/`add a,a` cover the bit
+  paths), `OUT (C),0` (CMOS-divergent, and the compressor does no I/O).
+* Self-modifying code (constants patched into immediates at entry, per-call
+  walk parameters) is used throughout — the payload runs from RAM on SAM, so
+  this is legal; it is noted in the header as a no-ROM/no-reentrancy
+  constraint.
+* EXX / EX AF,AF' shadow banking holds the bit-writer state; on real
+  hardware this requires DI (or an ISR that preserves shadow registers),
+  noted in the header.  The koron-go harness runs interrupt-free.
+
+### Decoder variants (i67)
+
+The upstream ZX0 repo (pinned commit `ecde3a2`) ships two more
+forward-direction decoders beyond standard/turbo; both are now vendored
+(`reference/zx0/z80/`), ported to pyz80 (syntax-only), and measured.  The
+remaining upstream variants are backward-direction (`*_back.asm`) ports and
+the obsolete `OLD_V1` format — not applicable to this pipeline.
+
+Whole-corpus decode totals over the **greedy-compressed** streams (the bytes
+the editor will actually decode), 6 MHz:
+
+| Decoder | Size | 4 KB blocking T | T/byte | s | 8 KB T/byte |
+|---------|-----:|----------------:|-------:|--:|------------:|
+| dzx0_standard | 68 B | 18,966,114 | 63.6 | 3.16 | 65.0 |
+| dzx0_turbo | 126 B | 15,170,262 | 50.9 | 2.53 | 51.7 |
+| dzx0_fast (spke) | 187 B | 14,539,971 | 48.8 | 2.42 | 49.8 |
+| dzx0_mega | 673 B | 13,876,751 | 46.6 | 2.31 | 47.5 |
+
+On the optimal-parse `.zx0` bench blocks (`TestZX0DecodeBench`), mega
+measures 50.6 / 49.8 / 49.0 / 47.9 T/byte at 1/2/4/8 KB — 26–27% faster than
+standard, matching upstream's "28% faster" claim within noise.  All four
+decoders are byte-exact on all 110 corpus blocks and all 24 bench blocks.
+
+**Read of the data**: decode was never the bottleneck (a 4 KB block decodes
+in 9–13 ms with any variant — comfortably interactive), so the decoder choice
+is a size/speed taste call: turbo at 126 B captures most of the win; mega
+buys a further ~8% for 547 B more.  The headline i67 win is on the compress
+side, where the 4 KB-block save cost drops from ~1.84 s to ~0.66 s.
