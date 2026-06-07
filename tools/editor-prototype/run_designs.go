@@ -95,10 +95,10 @@ const (
 type srcLine struct {
 	doc      int // index into doc.Lines
 	kind     lineKind
-	label    string // label text incl. ':' (lkLabel)
-	mnemonic string // first token (lkInst)
-	operands string // rest (lkInst)
-	trailing string // trailing comment, '//' stripped
+	label    string   // label text incl. ':' (lkLabel)
+	mnemonic string   // first token (lkInst)
+	operands string   // rest (lkInst)
+	trailing string   // trailing comment, '//' stripped
 	block    []string // attached standalone comment lines, '//' stripped
 }
 
