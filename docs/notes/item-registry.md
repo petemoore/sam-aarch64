@@ -53,7 +53,7 @@ tables.
 | **i4** | Basic read-only listing/scroll viewer (centre-locked cursor; up/down only) | 🧭 new 2026-06-08 | — (Pete's idea; precursor to i3) |
 | **i5** | UI visual prototyping via image generation (MODE 3 64×24 vs MODE 4 32×24 mockups) | 🧭 new 2026-06-08 | — (Pete's idea) |
 | **i6** | SAM screen-mode decision (MODE 3 vs 4, or user preference) | 🧭 | ROADMAP "Editor vision"; scope row |
-| **i7** | Codegen sysreg/mnemonic/form tables from Go authority | 📋 | scope row |
+| **i7** | Codegen sysreg/mnemonic/form tables from Go authority | 📋 spec drafted — **awaiting Pete approval** before implementation (spec gate) | `docs/specs/codegen-tables-design.md` |
 | **i8** | Sysreg-table de-dup into shared `src/sysreg_tables.inc` | ✅ DONE (PR #108) | `src/sysreg_tables.inc` |
 | **i9** | Parity robustness seeds (sysname full-Go-parity + untested-form empirical sweep) | ✅ DONE (PR #114) — but it *pinned* two found gaps as skipped tests; fixed under **i36/i37** | `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-08-z80-go-disasm-parity-i9.md` |
 | **i10** | Go-vs-Z80 capability parity report | ✅ DONE (PR #109) | `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-08-go-vs-z80-disasm-capability-parity.md` |
