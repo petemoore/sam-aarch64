@@ -779,6 +779,71 @@ zxc_write_bbt:
         ret
 
 
+; ── zxc_bitpair — emit direction bit 0 then value bit A ──────────────
+; Go: the writeBit(0) + writeBit(v) pair inside writeEliasGamma /
+; writeEliasGammaInv.  One EXX round serves both bits, and the value
+; bit skips the backtrack test: after the direction bit, backtrack is
+; always clear (it was either already clear or consumed by that bit).
+; Entry: A = 0 emits (0,0); A != 0 emits (0,1).  Clobbers: A.
+zxc_bitpair:
+        exx
+        push    af                      ; park the value bit
+        ; ── direction bit 0 ──
+        ld      a, b
+        or      a
+        jp      nz, zxc_bp0_bt
+        ld      a, c
+        or      a
+        jp      z, zxc_bp0_new
+        srl     c
+        jp      zxc_bp_second
+zxc_bp0_new:
+        ld      h, d
+        ld      l, e                    ; open a new holder
+        ld      (hl), 0
+        inc     de
+        ld      c, 64
+        jp      zxc_bp_second
+zxc_bp0_bt:
+        ld      b, 0                    ; consume backtrack; 0 writes nothing
+zxc_bp_second:
+        ; ── value bit (backtrack known clear) ──
+        pop     af
+        or      a
+        jp      z, zxc_bp_v0
+        ld      a, c
+        or      a
+        jp      z, zxc_bp1_new
+        or      (hl)                    ; set the mask bit in the holder
+        ld      (hl), a
+        srl     c
+        exx
+        ret
+zxc_bp1_new:
+        ld      h, d
+        ld      l, e
+        ld      (hl), 128
+        inc     de
+        ld      c, 64
+        exx
+        ret
+zxc_bp_v0:
+        ld      a, c
+        or      a
+        jp      z, zxc_bp0n2
+        srl     c
+        exx
+        ret
+zxc_bp0n2:
+        ld      h, d
+        ld      l, e
+        ld      (hl), 0
+        inc     de
+        ld      c, 64
+        exx
+        ret
+
+
 ; ════════════════════════════════════════════════════════════════════
 ; zxc_eg — writeEliasGamma(HL).
 ; Go: bitWriter.writeEliasGamma (compress.go lines 251–267).
@@ -820,19 +885,13 @@ zxc_eg_bits:
         ld      a, b
         or      c
         jp      z, zxc_eg_term
-        call    zxc_bit0                ; direction bit (A-only clobber)
         ld      a, c
         and     e
         ld      h, a
         ld      a, b
         and     d
-        or      h
-        jp      z, zxc_eg_bit0
-        call    zxc_bit1
-        jp      zxc_eg_bitdone          ; bit written; advance BC
-zxc_eg_bit0:
-        call    zxc_bit0
-zxc_eg_bitdone:
+        or      h                       ; A = v & p (any nonzero = bit 1)
+        call    zxc_bitpair             ; emit (0, value bit); A-only clobber
         srl     b
         rr      c
         jp      zxc_eg_bits             ; check loop termination at top
@@ -880,7 +939,6 @@ zxc_egi_bits:
         ld      a, b
         or      c
         jp      z, zxc_egi_term
-        call    zxc_bit0                ; direction bit (A-only clobber)
         ; Inverted bit: (v & BC)==0 → 1, else → 0.
         ld      a, c
         and     e
@@ -888,12 +946,9 @@ zxc_egi_bits:
         ld      a, b
         and     d
         or      h
-        jp      z, zxc_egi_bit1
-        call    zxc_bit0
-        jp      zxc_egi_bitdone         ; bit written; advance BC
-zxc_egi_bit1:
-        call    zxc_bit1
-zxc_egi_bitdone:
+        cp      1
+        sbc     a, a                    ; A = (v&p)==0 ? &FF : 0 (inverted)
+        call    zxc_bitpair             ; emit (0, value bit); A-only clobber
         srl     b
         rr      c
         jp      zxc_egi_bits            ; check loop termination at top
