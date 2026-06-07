@@ -80,6 +80,37 @@ func (e expandMode) String() string {
 		return "off"
 	}
 }
+// renderConstantBase controls how numeric constants in operands are displayed.
+type renderConstantBase int
+
+const (
+	rcSource renderConstantBase = iota // keep the source spelling (default)
+	rcHex                              // force hex (SAM &FFFF when imm_hex_amp; 0x otherwise)
+	rcDec                              // force decimal
+)
+
+func (r renderConstantBase) String() string {
+	switch r {
+	case rcHex:
+		return "hex"
+	case rcDec:
+		return "dec"
+	default:
+		return "source"
+	}
+}
+
+func parseRenderConstants(s string) (renderConstantBase, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "source", "":
+		return rcSource, nil
+	case "hex":
+		return rcHex, nil
+	case "dec":
+		return rcDec, nil
+	}
+	return rcSource, fmt.Errorf("want source|hex|dec, got %q", s)
+}
 
 // commentLayout is where a same-line comment is drawn relative to its code.
 type commentLayout int
@@ -184,6 +215,32 @@ type LabConfig struct {
 
 	// --- R6 expression tightening -----------------------------------------
 	TightenExprs bool // collapse spaces in parenthesised expressions
+
+	// --- Max instruction width --------------------------------------------
+	// MaxInstructionWidth is 0 (off) or N: when a rendered code line exceeds N
+	// columns and it is NOT the cursor line, the line is truncated at N−1
+	// columns and the existing ellipsis glyph is appended. The cursor line
+	// always shows in full — if the full line plus its comment exceeds the
+	// screen, the existing expand_cursor_line machinery (wrap:K / panel:K)
+	// provides the overflow. Same-line comments are NOT shown on a truncated
+	// row (they would float against a fake column); they remain reachable via
+	// the cursor-expansion and F7 paths. Width computation for the
+	// page-adaptive mnemonic/comment columns uses post-truncation widths so
+	// truncated lines do not drag the comment column right.
+	//
+	// The FORMAT never imposes line-length limits — anything binutils accepts
+	// must round-trip cleanly; overflow is a display concern (collapse/expand).
+	// Hard format limits are an absolute last resort, effectively never.
+	// (Pete, 2026-06-12)
+	MaxInstructionWidth int
+
+	// --- Constant base rendering ------------------------------------------
+	// RenderConstants controls how numeric constants in operands are displayed.
+	// "source" (default) keeps the source spelling, which is honest because the
+	// v2 format carries editor-region base hints; "hex" forces SAM-style &FFFF
+	// (or 0x when imm_hex_amp is off); "dec" forces decimal. Applied at the
+	// expression-rendering layer; imm_hex_amp / imm_drop_hash compose with it.
+	RenderConstants renderConstantBase
 }
 
 // defaultConfig is the binutils baseline (R0, everything off): the starting
@@ -482,6 +539,28 @@ func (c *LabConfig) set(key, val string) error {
 		c.TightenExprs = v
 		return err
 
+	// Max instruction width.
+	case "max_instruction_width":
+		v := strings.ToLower(strings.TrimSpace(val))
+		if v == "off" {
+			c.MaxInstructionWidth = 0
+			return nil
+		}
+		n, err := parseInt(val)
+		if err != nil {
+			return err
+		}
+		if n < 1 {
+			return fmt.Errorf("max_instruction_width must be off or >= 1, got %d", n)
+		}
+		c.MaxInstructionWidth = n
+
+	// Constant base rendering.
+	case "render_constants":
+		v, err := parseRenderConstants(val)
+		c.RenderConstants = v
+		return err
+
 	default:
 		return fmt.Errorf("unknown key")
 	}
@@ -641,5 +720,12 @@ func (c *LabConfig) Snapshot() string {
 		fmt.Fprintf(&b, "status_message = %s\n", c.StatusMessage)
 	}
 	fmt.Fprintf(&b, "\ntighten_exprs = %s\n", onoff(c.TightenExprs))
+
+	maxW := "off"
+	if c.MaxInstructionWidth > 0 {
+		maxW = strconv.Itoa(c.MaxInstructionWidth)
+	}
+	fmt.Fprintf(&b, "max_instruction_width = %s\n", maxW)
+	fmt.Fprintf(&b, "render_constants = %s\n", c.RenderConstants)
 	return b.String()
 }

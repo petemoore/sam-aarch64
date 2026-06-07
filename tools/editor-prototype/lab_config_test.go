@@ -45,6 +45,8 @@ current_line_highlight = on
 status_line = {file} {pct}
 status_message = hi
 tighten_exprs = on
+max_instruction_width = 40
+render_constants = hex
 `)
 	c, err := parseLabConfigFile(p)
 	if err != nil {
@@ -78,6 +80,8 @@ tighten_exprs = on
 		{"CurrentLineHighlight", c.CurrentLineHighlight, true},
 		{"StatusMessage", c.StatusMessage, "hi"},
 		{"TightenExprs", c.TightenExprs, true},
+		{"MaxInstructionWidth", c.MaxInstructionWidth, 40},
+		{"RenderConstants", c.RenderConstants, rcHex},
 	}
 	for _, ck := range checks {
 		if ck.got != ck.want {
@@ -159,6 +163,8 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	orig.StatusTemplate = "{file} L{line}/{total} {pct} {mode}"
 	orig.StatusMessage = "round trip"
 	orig.TightenExprs = true
+	orig.MaxInstructionWidth = 32
+	orig.RenderConstants = rcDec
 
 	p := writeConfig(t, orig.Snapshot())
 	got, err := parseLabConfigFile(p)
