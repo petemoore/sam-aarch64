@@ -28,8 +28,9 @@
 
 
 ; -----------------------------------------------------------------------
-; run_symbol_table_self_tests — entry point called from assembler.asm
-; start: (between run_slot_self_tests and load_enctab).
+; run_symbol_table_self_tests — entry point dispatched from the off-axis
+; page-12 cluster (test_offaxis_cluster.asm cluster_dispatch, first entry,
+; before run_local_label_self_tests).
 ;
 ; Input:  none.
 ; Output: returns to caller on success.  On any mismatch: jp fail.
