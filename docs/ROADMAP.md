@@ -31,7 +31,7 @@
 - **Last landed:** i39b-2 editor-region split (PR #153) — compact `.tbn` v2 now has a separable editor region the assembler never reads; binary byte-identity invariant held (GNU == Go == Z80/SAM, 21 752 B).
 - **In flight:** nothing. Recent: i52 cleanup (#155-#160); i57 compression benchmark + i58 Trinity research landed (#161 + this PR) — results feed q9.
 - **Open questions:** q1 (i5 graphics — Pete), **q9 (comment-residency strategy — data ready, Pete's call)**. **Parked:** i50. **Blocked:** i51 (on i40/q9).
-- **NEXT ACTION:** i39c (overlay bitfield polish; low priority — fold into the next overlay-decoder touch) then i40 (assembler-side editor-region eviction; unblocks i51). Then the M7 tail: i7 codegen tables, i17 deep reviews (i18 naming closed by i52 PR 5).
+- **NEXT ACTION:** **i60** (on-SAM ZX0 comment compression: measure → design → build; Pete 2026-06-10). Then i40 (editor-region eviction; unblocks i51) — i60's block architecture feeds it. i39c stays parked (fold into the next overlay-decoder touch). Then the M7 tail: i7 codegen tables, i17 deep reviews (i18 naming closed by i52 PR 5).
 - Every strand keeps the **assembled-binary byte-identical** invariant (the `release-gate` 3-way byte-match); the i39 invariant is binary-identity + round-trip + `.tbn`-shrinks-or-holds, NOT `.tbn` byte-identity.
 <!-- HANDOVER-PROTOCOL-END -->
 
