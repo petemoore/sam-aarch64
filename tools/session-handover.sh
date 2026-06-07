@@ -56,6 +56,26 @@ if [ -n "$(find docs/superpowers -type f 2>/dev/null)" ]; then
   echo
 fi
 
+# Doc lifecycle guard (a): dated filenames under docs/ violate the evergreen
+# policy (spec decision 6, CLAUDE.md "Doc lifecycle rules"). The cleanup's own
+# plan + spec are expected violations until PR 5 deletes them.
+dated_files="$(find docs -type f -name '20[0-9][0-9]-*.md' 2>/dev/null)"
+if [ -n "$dated_files" ]; then
+  echo "⚠️  Dated filenames found under docs/ (lifecycle policy: evergreen names only):"
+  printf '%s\n' "$dated_files" | sed 's/^/      /'
+  echo "    Rename to a functional name or confirm deletion is pending (see CLAUDE.md)."
+  echo
+fi
+
+# Doc lifecycle guard (b): list in-flight plans so stale ones are visible.
+plan_files="$(find docs/plans -maxdepth 1 -name '*.md' -not -name 'README.md' -type f 2>/dev/null)"
+if [ -n "$plan_files" ]; then
+  echo "ℹ️  In-flight plans in docs/plans/:"
+  printf '%s\n' "$plan_files" | sed 's/^/      /'
+  echo "    Plans are ephemeral — delete each in the PR that completes the work."
+  echo
+fi
+
 echo
 if grep -q HANDOVER-PROTOCOL-START docs/ROADMAP.md 2>/dev/null; then
   sed -n '/HANDOVER-PROTOCOL-START/,/HANDOVER-PROTOCOL-END/p' docs/ROADMAP.md

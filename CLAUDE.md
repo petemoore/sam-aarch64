@@ -53,6 +53,8 @@ Before running `gh pr merge` on any PR, spawn a review subagent with this checkl
 
 5. **No skipped/relaxed tests masking a gap (HOLD trigger).** Scan the PR for newly-added `t.Skip`/`Skipf`/`SkipNow`, build-tag-excluded tests, relaxed/ratcheted assertions, allowed-failure thresholds, `inst_allowed`/`.inst`-free relaxations, or fixtures excluded by name. A *principled* skip is fine (prerequisite-missing like "no GNU toolchain on PATH", pure-data fixtures). But a skip/relaxation that exists because a real disagreement, bug, or unimplemented feature was **worked around rather than fixed** is an automatic **HOLD** — do not merge; either implement the fix or keep the work on a feature branch until the test genuinely passes (the "don't weaken a test to keep `main` green" rule). **Why:** PR #114 (i9, 2026-06-08) merged with two real decoder gaps (ccmp/ccmn, base csinv/csneg) pinned as skipped tests; that should have paused for review, not auto-merged. Green: no gap-masking skips. Red: any skip/relaxation that hides an unfixed gap.
 
+6. **Repo hygiene.** The PR leaves no newly-dead artifacts behind: superseded docs and tooling are deleted, the plan is deleted if the PR completes one, no new dated filenames appear under `docs/`, no new tracking homes exist outside the `iN`/`qN` registries, and any durable new information lands in an existing living doc where one fits. Green: clean. Red: any hygiene debt introduced.
+
 The subagent returns a one-line PASS/FAIL verdict per item plus a final MERGE / DO NOT MERGE. Treat any RED as a blocker — fix it, push a new commit, re-run CI, then re-run the review before merging.
 
 **Record the review natively on the PR.** Submit the verdict as a GitHub review with `gh pr review <n> --comment` (the checklist PASS/FAIL per item + the MERGE/HOLD verdict), with inline comments anchored to specific lines for any findings — so the reasoning persists on the PR for posterity instead of living only in the agent/chat transcript. Use `--comment` (not `--approve`): GitHub blocks an author approving their own PR, and our agents commit as Pete, so `--approve` would error; `--comment` carries the same record. This matches the global "Reviewing PRs on GitHub" rules. (Adopted 2026-06-08.)
@@ -95,6 +97,16 @@ The superpowers skills (`writing-plans`, `brainstorming`) **explicitly instruct*
 - **Never write to `docs/superpowers/`** — it is excluded by the global `~/.gitignore_global`, so anything you put there is silently dropped from the repo. (PR #18 made `docs/plans` + `docs/specs` canonical; see `memory/feedback_superpowers_docs_gitignored`.)
 
 If you find files in `docs/superpowers/`, they're a stray slip — migrate them to `docs/plans`/`docs/specs` and delete the originals. `tools/session-handover.sh` warns at session start if any appear.
+
+### Doc lifecycle rules (spec decision 6, codified in PR 3)
+
+- Plans (`docs/plans/`) are **ephemeral** execution artifacts: committed when execution starts, **deleted in the PR that completes the work** (the completing PR's description links the plan's final blob). A directory with no plan files in it is the healthy steady state.
+- `docs/specs/` holds only **living** design docs with **evergreen (undated) filenames**. When a design ships, fold its durable rationale into `docs/ARCHITECTURE.md` or a reference doc and delete the design doc in the same PR.
+- Milestone status docs are **deleted at milestone close**, after the registry walk (contract rule 3). Git history is the archive.
+- No `YYYY-MM-DD` filename prefixes anywhere under `docs/` — git history carries the dates. This deliberately overrides the superpowers skills' dated-filename convention.
+- Name new artifacts (dirs, scripts, make targets, CI jobs) after their **function**, never after the milestone that introduced them.
+- Superseded code/tooling is deleted in the PR that supersedes it; if a deletion needs Pete's sign-off, raise a `qN` immediately rather than parking the artifact indefinitely.
+- Every top-level directory and every Go module carries a ≤30-line README (*what is this, how does it relate, where is the canonical deep doc* — link, never restate). A PR that creates a new directory ships its README in the same PR.
 
 ## Pointers for first-session-on-this-repo
 
