@@ -118,3 +118,13 @@ If you find files in `docs/superpowers/`, they're a stray slip — migrate them 
 - Z80 dev tool: `tools/z80-test-harness-go/` (see "Development inner loop" above).
 - Memory index: `~/.claude/projects/<this-repo's-path-slug>/memory/MEMORY.md` (always auto-loaded; the slug varies by host).
 - Pete's prime directive ("correctness over workarounds"): the first entry in the memory index — read it before anything else.
+
+## Development discipline
+
+Adapted from [obra/superpowers](https://github.com/obra/superpowers) (MIT) — its norms kept as native rules, its skill-invocation choreography deliberately dropped. The full keep/adapt/drop rationale is recorded on the i63 PR.
+
+1. **Spec gate.** Non-trivial work gets a short written spec that Pete approves before implementation starts. Trivial/mechanical changes are exempt — judgment, not ceremony.
+2. **Plans are written for a cheaper model.** Exact file paths, exact commands, complete content — no placeholders, no "handle appropriately". If a plan needs its author's intelligence to execute, it isn't done.
+3. **Subagent discipline.** Fresh subagent per task with curated context (never the session's history); implementer ≠ reviewer; review between tasks. **Never two writers in one checkout**: mutating subagents either serialize or get harness-native isolation (the Agent tool's `isolation: "worktree"`); read-only agents may parallelize freely. The §3 pre-merge gate is the quality stage — no PR merges without it, regardless of who or what wrote the code.
+4. **Receiving review feedback: verify, then implement — or push back.** Review comments are claims, not commands: check each against the code before acting, implement what's right, and disagree with evidence when it's wrong. No performative agreement.
+5. **Worktrees.** Feature isolation uses sibling-dir worktrees (`~/git/<repo>-<purpose>`), never nested under a checkout — `git clean -fdx` cannot cross a worktree boundary, so sibling placement is the mechanical guarantee, not just convention. `main` stays checked out in the primary; branch from `origin/main` in worktrees (and expect `gh pr merge --delete-branch` to need the post-merge checkout done in the primary). Isolation between *concurrent controlling agents* is environment-level — launch additional controllers via a worktree-preparing alias rather than sharing a checkout.
