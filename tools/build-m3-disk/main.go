@@ -202,8 +202,8 @@ func main() {
 
 	// Slot 3: enctab.enc CODE file. Loaded at startup by src/loader.asm
 	// via SAMDOS HGTHD + trampoline_hload into physical page 4 (outside
-	// section C — see src/trampoline.asm and docs/specs/2026-05-27-
-	// samdos-load-idiom.md for the trampoline pattern that makes this
+	// section C — see src/trampoline.asm and docs/specs/samdos-file-io.md
+	// for the trampoline pattern that makes this
 	// possible).  The recorded load address here is documentary only:
 	// HGTHD reads it into DIFA at runtime but our loader.asm supplies
 	// its own HL (= &8000) and HMPR-target-page (= 4) values when

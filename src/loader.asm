@@ -129,7 +129,7 @@ load_enctab:
 ; reprograms HMPR to ENCTAB_PAGE around the RST 8, so the load writes
 ; through HL=&8000 land in physical page 4 instead of the page our code
 ; is currently running from (page 2).  See `src/trampoline.asm` and
-; `docs/specs/2026-05-27-samdos-load-idiom.md` for the full pattern.
+; `docs/specs/samdos-file-io.md` for the full pattern.
 ;
 ; Calling convention (mirrors COMET's `comet.asm:1191-1200`):
 ;   HL = &8000      (section-C window; satisfies Tech Manual constraint)

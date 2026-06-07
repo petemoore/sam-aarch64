@@ -1,6 +1,6 @@
 # M6 PR 2 — paged IN buffer design
 
-**Status**: design spec.  Pairs with `docs/specs/2026-05-27-m6-paged-out-design.md` (the OUT-side counterpart) and `docs/specs/2026-05-27-samdos-load-idiom.md` (the COMET-style HLOAD trampoline pattern).  Date: 2026-05-27.
+**Status**: design spec.  Pairs with `docs/specs/2026-05-27-m6-paged-out-design.md` (the OUT-side counterpart) and `docs/specs/samdos-file-io.md` (the COMET-style HLOAD trampoline pattern).  Date: 2026-05-27.
 
 This is the design for the second M6 PR.  Scope: relocate the IN `.tbn` buffer out of section C so that inputs larger than 2 KB are possible.  Compaction of the `.tbn` format itself is a separate strand (M6 PR 3 — `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`).
 

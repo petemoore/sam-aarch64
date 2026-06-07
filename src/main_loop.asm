@@ -1523,7 +1523,7 @@ in_file_pages_ok:
 ; -----------------------------------------------------------------------
 ; save_out_file — HSAVE the paged OUT buffer as file "OUT".
 ;
-; Per docs/specs/2026-05-27-samdos-save-idiom.md.  HSAVE manages its
+; Per docs/specs/samdos-file-io.md.  HSAVE manages its
 ; own HMPR (saves at entry, restores at exit) and auto-pages across
 ; &C000 inside its save loop (`samdos/src/c.s:354-369 ctas`).  So the
 ; caller only has to populate UIFA[31..36]:

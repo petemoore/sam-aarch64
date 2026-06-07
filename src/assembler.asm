@@ -43,7 +43,7 @@
 ;     (high zone, bytes 16384..32767).  HSAVE at end of pass 2 reads
 ;     the buffer via section C with UIFA[31] = OUT_BASE_PAGE.  See
 ;     docs/specs/2026-05-27-m6-paged-out-design.md and
-;     docs/specs/2026-05-27-samdos-save-idiom.md.
+;     docs/specs/samdos-file-io.md.
 ;   Physical pages 7..12 (off-axis): IN .tbn buffer — 6 contiguous
 ;     pages = 96 KB ceiling (bumped from 4 pages / 64 KB on 2026-05-28
 ;     to fit spectrum4's 88 KB stripped release.tbn).  HLOAD'd once at
@@ -61,7 +61,7 @@
 ; Pre-M5 layout placed ENCTAB at &A000-&AFFF in section C, consuming
 ; 4 KB of the code section.  M5's compound-operand encoders pushed
 ; code size past the resulting 8 KB code budget; paging ENCTAB out
-; recovers that 4 KB.  See docs/specs/2026-05-27-samdos-load-idiom.md
+; recovers that 4 KB.  See docs/specs/samdos-file-io.md
 ; for the design rationale.  M6 PR 1 extends the off-axis pattern to
 ; OUT, freeing 2 KB at &B800 and lifting the output ceiling from
 ; 2 KB to 32 KB.  M6 PR 2 extends it to IN, freeing another 2 KB

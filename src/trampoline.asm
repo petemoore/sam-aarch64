@@ -1,7 +1,7 @@
 ; trampoline.asm — paged-RAM trampoline machinery for HLOAD and ENCTAB
 ; runtime reads.
 ;
-; Per docs/specs/2026-05-27-samdos-load-idiom.md (the design source).
+; Per docs/specs/samdos-file-io.md (the design source).
 ;
 ; Purpose
 ; -------
@@ -45,7 +45,7 @@
 ;
 ; Stack handling — static-save-in-section-B pattern
 ; --------------------------------------------------
-; The design note (`docs/specs/2026-05-27-samdos-load-idiom.md`
+; The design note (`docs/specs/samdos-file-io.md`
 ; §"Pre-built trampoline reference") shows a `push af / ... / pop af`
 ; pair BRACKETING the HMPR change (push BEFORE the change, pop AFTER).
 ; That works only if SP points into LMPR-stable memory (section A or
@@ -172,7 +172,7 @@
 ;       pattern in COMET because we already had its source; the
 ;       broader corpus may have other examples).
 ;    c) Write the design up alongside
-;       `docs/specs/2026-05-27-samdos-load-idiom.md` (a follow-up
+;       `docs/specs/samdos-file-io.md` (a follow-up
 ;       note in the same `docs/specs/` directory).
 ;    d) Open the implementation PR AFTER the design note is in.
 ;
@@ -244,7 +244,7 @@ LMPR_ENCTAB:    equ     &20 + ENCTAB_PAGE
 ;
 ; HSAVE at end of pass 2 reads via section C with UIFA[31]=OUT_BASE_PAGE
 ; (= 5), HMPR auto-paging at &C000 to reach page 6 (see
-; docs/specs/2026-05-27-samdos-save-idiom.md).
+; docs/specs/samdos-file-io.md).
 
 OUT_BASE_PAGE:  equ     5              ; first physical page of OUT
 LMPR_OUT_HIGH:  equ     &25            ; RAM0 + low5=5; A=page 5, B=page 6

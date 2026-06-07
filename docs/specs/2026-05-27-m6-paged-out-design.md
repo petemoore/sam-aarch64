@@ -1,6 +1,6 @@
 # M6 PR 1 — paged OUT buffer design
 
-**Status**: design spec.  Pairs with `docs/specs/2026-05-27-samdos-save-idiom.md` (the research note covering the HSAVE call site) and `docs/specs/2026-05-27-samdos-load-idiom.md` (the M5 ENCTAB-paging counterpart). Date: 2026-05-27.
+**Status**: design spec.  Pairs with `docs/specs/samdos-file-io.md` (the research note covering the HSAVE call site and the HLOAD trampoline pattern behind the ENCTAB paging). Date: 2026-05-27.
 
 This is the design for the first M6 PR.  Scope: relocate the OUT buffer out of section C so that outputs > 2 KB are possible.  Paged source loading (IN > 2 KB) is a follow-on PR.
 
@@ -8,7 +8,7 @@ This is the design for the first M6 PR.  Scope: relocate the OUT buffer out of s
 
 Allow the SAM-side assembler to emit binary outputs of up to ~16 KB inside one physical page (`OUT_BASE_PAGE`) and, if needed, up to ~64 KB by spilling into the next contiguous physical page.  Real target: spectrum4 release.bin at ~21.7 KB across pages 5 + 6.
 
-The HSAVE call site is already designed in `docs/specs/2026-05-27-samdos-save-idiom.md`; this spec covers the **runtime emit path** — how `emit_byte` writes to a physical page that isn't the assembler's running page.
+The HSAVE call site is already designed in `docs/specs/samdos-file-io.md`; this spec covers the **runtime emit path** — how `emit_byte` writes to a physical page that isn't the assembler's running page.
 
 ## Constraints
 
@@ -23,7 +23,7 @@ The HSAVE call site is already designed in `docs/specs/2026-05-27-samdos-save-id
 
 - **Physical pages 5 (+ 6 if needed for outputs > 16 KB)**, contiguous to ENCTAB on page 4.  Page 5 is free per the Tech Manual page allocation table (`src/trampoline.asm:188-208`); contiguity to ENCTAB simplifies allocation reasoning but isn't strictly required.
 - **Section A in the assembler's address space (`&0000-&3FFF`)** during emit.  LMPR's bit 5 (RAM0 bit, value `&20`) is set so the page is RAM-mapped rather than ROM.  `LMPR_OUT_BASE = &25` (RAM0 + low 5 bits = 5).
-- **HSAVE will read OUT via section C (`&8000-&BFFF`)** at the end of pass 2 — see `docs/specs/2026-05-27-samdos-save-idiom.md`.  UIFA byte 31 is set to `OUT_BASE_PAGE`; UIFA bytes 32-33 to `&8000`; HSAVE auto-increments HMPR across `&C000`.
+- **HSAVE will read OUT via section C (`&8000-&BFFF`)** at the end of pass 2 — see `docs/specs/samdos-file-io.md`.  UIFA byte 31 is set to `OUT_BASE_PAGE`; UIFA bytes 32-33 to `&8000`; HSAVE auto-increments HMPR across `&C000`.
 
 The same physical page is reached through section A during emit (LMPR-controlled) and through section C during save (HMPR-controlled, by HSAVE itself).  These are independent mechanisms and don't conflict.
 
@@ -107,7 +107,7 @@ The zone-crossing test is `if H == &80 → cross-zone`: cheaper than a 16-bit co
 
 ### Save call site
 
-Replace the current `save_out_file` (`main_loop.asm:2079`) with `save_out_file_paged` from the design note (`docs/specs/2026-05-27-samdos-save-idiom.md` §"Pre-built code snippet"):
+Replace the current `save_out_file` (`main_loop.asm:2079`) with `save_out_file_paged` from the design note (`docs/specs/samdos-file-io.md` §"Pre-built code snippet"):
 
 ```asm
 save_out_file_paged:
