@@ -4,7 +4,7 @@
 //
 // Usage:
 //
-//	comment-bench <release-unstripped.tbn>
+//	comment-bench [--dump-blocks=DIR] <release-unstripped.tbn>
 //
 // Schemes measured: static word dictionary (N=128/256/512/1024), digram/BPE
 // (256-entry table), canonical Huffman over bytes, dictionary+Huffman hybrid,
@@ -15,6 +15,11 @@
 // per-comment (dictionary / Huffman families only). All compressed sizes
 // include their decompression table/dictionary overhead.
 //
+// When --dump-blocks=DIR is specified, raw block files are written to DIR
+// for each block size (1/2/4/8 KB), named block_NNNkb_NNNN.raw, alongside
+// their ZX0-ready form (callers compress separately with the zx0 tool).
+// This is used by tools/z80-test-harness-go to measure real decode T-states.
+//
 // Outputs a text report to stdout. Run from the repo root via:
 //
 //	make comment-bench
@@ -23,9 +28,11 @@ package main
 import (
 	"bytes"
 	"compress/flate"
+	"flag"
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode"
@@ -34,11 +41,14 @@ import (
 )
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintf(os.Stderr, "usage: comment-bench <release-unstripped.tbn>\n")
+	dumpBlocks := flag.String("dump-blocks", "", "write raw block files to this directory")
+	flag.Parse()
+	args := flag.Args()
+	if len(args) != 1 {
+		fmt.Fprintf(os.Stderr, "usage: comment-bench [--dump-blocks=DIR] <release-unstripped.tbn>\n")
 		os.Exit(1)
 	}
-	data, err := os.ReadFile(os.Args[1])
+	data, err := os.ReadFile(args[0])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "comment-bench: %v\n", err)
 		os.Exit(1)
@@ -64,6 +74,44 @@ func main() {
 		totalChars += len(c.Body)
 		corpus = append(corpus, c.Body...)
 		corpus = append(corpus, '\n')
+	}
+
+	// ── Optional block dump (--dump-blocks) ───────────────────────────────
+	// When requested, write the corpus split into raw block files of each
+	// block size.  The first 4 blocks of each size plus 2 from the middle
+	// are written (6 files per size × 4 sizes = 24 files).  The caller
+	// compresses them with the real zx0 tool.
+	if *dumpBlocks != "" {
+		if err := os.MkdirAll(*dumpBlocks, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "comment-bench: mkdir %s: %v\n", *dumpBlocks, err)
+			os.Exit(1)
+		}
+		for _, bsz := range []int{1024, 2048, 4096, 8192} {
+			nBlocks := (len(corpus) + bsz - 1) / bsz
+			// Write first 4 + 2 from middle.
+			wanted := make(map[int]bool)
+			for i := 0; i < 4 && i < nBlocks; i++ {
+				wanted[i] = true
+			}
+			mid := nBlocks / 2
+			for i := mid; i < mid+2 && i < nBlocks; i++ {
+				wanted[i] = true
+			}
+			for idx := range wanted {
+				start := idx * bsz
+				end := start + bsz
+				if end > len(corpus) {
+					end = len(corpus)
+				}
+				block := corpus[start:end]
+				name := filepath.Join(*dumpBlocks, fmt.Sprintf("block_%04dkb_%04d.raw", bsz/1024, idx))
+				if err := os.WriteFile(name, block, 0o644); err != nil {
+					fmt.Fprintf(os.Stderr, "comment-bench: write %s: %v\n", name, err)
+					os.Exit(1)
+				}
+			}
+		}
+		fmt.Fprintf(os.Stderr, "comment-bench: block files written to %s\n", *dumpBlocks)
 	}
 
 	// ── Sanity report ──────────────────────────────────────────────────────
