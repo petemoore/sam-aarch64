@@ -226,7 +226,7 @@ overlay for patched slots. Tractable; the slot enum tells it which fields to
 suppress.
 
 **Implementation risk.** *Medium.* The slot/fold-rule enum must be exhaustive
-and exactly mirror the encoder, or output won't byte-match GNU (the m6-release
+and exactly mirror the encoder, or output won't byte-match GNU (the release-gate
 gate). Mitigation: derive the slot table mechanically from the encoder's own
 slot kinds; add a round-trip property test (assemble→overlay→assemble, require
 byte-identical) extending the existing `disasm-roundtrip` gate.
@@ -556,7 +556,7 @@ not recommended as a target**, documented to show the curve flattening.
 ## 5. Recommendation
 
 **Target Format B, reached in three phases — each independently shippable behind
-the m6-release byte-match gate.**
+the release-gate byte-match gate.**
 
 The reasoning:
 
@@ -589,7 +589,7 @@ The reasoning:
 
 - **Phase 1 (Format A):** INSN_RUN with literal/overlay modes (3.2 + 3.3) +
   header delta-varint label table (3.4). Replaces LIT_INSTS *and* symbolic INST.
-  Gate: m6-release byte-match + extended `disasm-roundtrip` (assemble→overlay→
+  Gate: release-gate byte-match + extended `disasm-roundtrip` (assemble→overlay→
   assemble byte-identical). Target ~44 KB. **Ship.**
 - **Phase 2:** name-table front-coding + page-group split so the assembler
   doesn't map the name page; comments + `.global` → editor sidecar (3.5/3.6/3.7).
@@ -695,7 +695,7 @@ The §6 questions are resolved as follows; **Format B is the agreed target.**
 label/offset table; one `.tbn` v2 file with a contiguous **evictable editor region**
 (comments, name strings, base hints, `.global` flags); name-table front-coding;
 bitfield-packing as later polish. Projected ~38.6 KB file / ~34.5 KB
-assembler-resident (−32% vs today's 51 KB), in 3 phases behind the m6-release gate.
+assembler-resident (−32% vs today's 51 KB), in 3 phases behind the release-gate gate.
 
 **Next:** the Phase 1 implementation plan (instruction overlay + header label
 table), to be written under `docs/plans/`.

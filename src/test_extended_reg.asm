@@ -4,7 +4,7 @@
 ; Mirrors tools/refenc/pass2.go:1131-1179 (encodeExtendedRegInst).
 ;
 ; One vector covers the option-3 / imm3 / X-form path; Layer 3
-; (tests/m5/sources/inst_extended.s) covers the sxtw (no #N) shape via
+; (tests/operands/sources/inst_extended.s) covers the sxtw (no #N) shape via
 ; the parser end-to-end.
 ;
 ;   add x0, x1, w2, uxtw #2   →  0x8b224820

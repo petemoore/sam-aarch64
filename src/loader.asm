@@ -268,7 +268,7 @@ load_page13_payload:
 ; -----------------------------------------------------------------------
 ; UIFA name block for "sd13" (sysreg_data, both variants).
 ;
-; The on-disk catalogue entry is created Mac-side by build-m3-disk
+; The on-disk catalogue entry is created Mac-side by build-disk
 ; (using samfile) when invoked with the -sysreg-data flag.
 ; -----------------------------------------------------------------------
 name_sysreg_data:
@@ -295,7 +295,7 @@ load_page15_payload:
 ; -----------------------------------------------------------------------
 ; UIFA name block for "d15" (disasm, both variants).
 ;
-; The on-disk catalogue entry is created by build-m3-disk when invoked
+; The on-disk catalogue entry is created by build-disk when invoked
 ; with the -disasm flag.
 ; -----------------------------------------------------------------------
 name_disasm:    defb    19
@@ -336,9 +336,9 @@ load_test_mem_off_axis:
 ; -----------------------------------------------------------------------
 ; UIFA name block for "test_mem" (BUILD_TESTS only).
 ;
-; The on-disk catalogue entry is created Mac-side by build-m3-disk
+; The on-disk catalogue entry is created Mac-side by build-disk
 ; (using samfile) when invoked with the -test-mem flag, matching the
-; same `tools/build-m3-disk/main.go` pattern used for enctab.enc.
+; same `tools/build-disk/main.go` pattern used for enctab.enc.
 ; -----------------------------------------------------------------------
 name_test_mem:  defb    19
                 defm    "test_mem  "   ; 10 chars (8 + 2 trailing spaces)
@@ -376,7 +376,7 @@ load_offaxis_cluster:
 ; -----------------------------------------------------------------------
 ; UIFA name block for "cluster" (BUILD_TESTS only).
 ;
-; The on-disk catalogue entry is created Mac-side by build-m3-disk
+; The on-disk catalogue entry is created Mac-side by build-disk
 ; (using samfile) when invoked with the -cluster flag.
 ; -----------------------------------------------------------------------
 name_cluster:   defb    19
@@ -413,7 +413,7 @@ load_page14_payload:
 ; -----------------------------------------------------------------------
 ; UIFA name block for "p14" (BUILD_TESTS only).
 ;
-; The on-disk catalogue entry is created Mac-side by build-m3-disk
+; The on-disk catalogue entry is created Mac-side by build-disk
 ; (using samfile) when invoked with the -paged-call flag.
 ; -----------------------------------------------------------------------
 name_page14:    defb    19

@@ -30,7 +30,7 @@
 //     DISASM_COMM_PC at &7EBD) surfaces here as a FAIL banner with its tag,
 //     not as a CI failure minutes later.
 //
-// Requires (all from `make m3-asm enctab sysreg-data disasm-test-payload
+// Requires (all from `make assembler enctab sysreg-data disasm-test-payload
 // test-mem-offaxis cluster-offaxis paged-call-payload sam-aarch64`):
 //
 //	build/assembler.bin   build/enctab.enc   build/sysreg_data.bin
@@ -64,11 +64,11 @@ func TestBootSelfTestsPass(t *testing.T) {
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
 	samPath := filepath.Join(root, "build", "sam-aarch64")
-	fixturePath := filepath.Join(root, "tests", "m3", "sources", "inst_nop_ret.s")
+	fixturePath := filepath.Join(root, "tests", "core", "sources", "inst_nop_ret.s")
 
 	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path, samPath, fixturePath} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make m3-asm enctab sysreg-data disasm-test-payload test-mem-offaxis cluster-offaxis paged-call-payload sam-aarch64`", p)
+			t.Skipf("prerequisite missing: %s\n  run `make assembler enctab sysreg-data disasm-test-payload test-mem-offaxis cluster-offaxis paged-call-payload sam-aarch64`", p)
 		}
 	}
 

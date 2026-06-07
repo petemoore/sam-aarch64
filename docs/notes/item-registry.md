@@ -66,7 +66,7 @@ tables.
 | **i15** | `adds` 3-register form (Z80) | 🧭 | deferred-backlog row |
 | **i16** | Replace `cls` test instruction with a real spectrum4 one | 🧭 (was tentatively "i13" in conversation) | `docs/ROADMAP.md` deferred checklist |
 | **i17** | Deep reviews of `main_loop.asm` + `litpool.asm` + `SYMTAB_*` equ sentinels | ⏳ | repo-audit §6 |
-| **i18** | Wider naming review (`tests/m{N}`, `ci-m{N}`, `build-m3-disk`, milestone fixtures) | ⏳ | scope row "Directory naming" |
+| **i18** | Wider naming review (`tests/m{N}`, `ci-m{N}`, `build-m3-disk`, milestone fixtures) | ✅ **DONE** — i52 PR 5/5 (branch `cleanup-5-renames`) | scope row "Directory naming" |
 | **i19** | Subagent worktree-isolation leak — harden | 🧭 | scope row |
 | **i20** | Linker-layout coupling (`spectrum4.ld` hardcoded in flatten) | 🧭 | scope row |
 | **i21** | Go-harness fidelity follow-ups (watchpoint, `make harness-sweep`, USAGE.md) | ⏳ | scope row |

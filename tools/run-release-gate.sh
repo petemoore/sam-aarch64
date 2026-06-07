@@ -52,10 +52,10 @@ if ! command -v "$SAMFILE" >/dev/null 2>&1; then
 fi
 
 ORIGIN="0xfffffff000000000"
-CTBN="$ROOT/build/m6-release.compact.tbn"        # compact .tbn (i1 PR1)
-GO_IMG="$ROOT/build/m6-release.go.img"           # toolchain 2 output
-GO_IMG_C="$ROOT/build/m6-release.go.compact.img" # toolchain 2 via compact .tbn
-SAM_IMG="$ROOT/build/m6-release.sam.img"         # toolchain 3 output
+CTBN="$ROOT/build/release.compact.tbn"        # compact .tbn (i1 PR1)
+GO_IMG="$ROOT/build/release.go.img"           # toolchain 2 output
+GO_IMG_C="$ROOT/build/release.go.compact.img" # toolchain 2 via compact .tbn
+SAM_IMG="$ROOT/build/release.sam.img"         # toolchain 3 output
 
 echo "=== [1/5] build SAM + Go tools (+ &C000 budget check) ==="
 make -s sam-aarch64 enctab sysreg-data disasm-payload build-disk assembler-prod check-budget
@@ -88,23 +88,23 @@ echo "=== [4/5] Z80 toolchain: SAM assembler on SimCoupé → OUT (from the COMP
 # REC_KIND_LIT_INSTS decode memcpys the pre-assembled literal runs to
 # OUT. Proving OUT == release.img from the compact source exercises that
 # decode path under SimCoupé (the symbolic Z80 path is covered by the
-# m3..m6 fixture jobs + the harness).
+# core..paged fixture jobs + the harness).
 "$ROOT/build/build-disk" \
     -sysreg-data "$ROOT/build/sysreg_data.bin" \
     -disasm "$ROOT/build/disasm.bin" \
     "$ROOT/build/assembler-prod.bin" "$ROOT/build/enctab.enc" \
     "$CTBN" \
-    "$ROOT/build/m6-release.mgt"
+    "$ROOT/build/release.mgt"
 "$ROOT/tools/run-simcoupe.sh" \
-    "$ROOT/build/m6-release.mgt" \
-    "$ROOT/build/m6-release.status.log"
-status=$(tr -d '\r\n ' < "$ROOT/build/m6-release.status.log" || true)
+    "$ROOT/build/release.mgt" \
+    "$ROOT/build/release.status.log"
+status=$(tr -d '\r\n ' < "$ROOT/build/release.status.log" || true)
 if [ "$status" != "OK" ]; then
     echo "FAIL: SAM assembler status '${status}' (expected OK)" >&2
-    sed 's/^/    /' "$ROOT/build/m6-release.status.log" >&2 || true
+    sed 's/^/    /' "$ROOT/build/release.status.log" >&2 || true
     exit 1
 fi
-"$SAMFILE" cat -i "$ROOT/build/m6-release.mgt" -f OUT > "$SAM_IMG"
+"$SAMFILE" cat -i "$ROOT/build/release.mgt" -f OUT > "$SAM_IMG"
 
 echo "=== [5/5] 3-way byte-compare ==="
 gnu_sz=$(wc -c < "$GNU" | tr -d ' ')

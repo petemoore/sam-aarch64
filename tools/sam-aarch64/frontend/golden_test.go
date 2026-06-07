@@ -9,12 +9,12 @@ import (
 	assemble "github.com/petemoore/sam-aarch64/tools/sam-aarch64/assemble"
 )
 
-// TestGoldenCorpus assembles every fixture under tests/m1/sources/ through the
+// TestGoldenCorpus assembles every fixture under tests/format/sources/ through the
 // in-memory pipeline (Translate → Pass1 → Pass2) and byte-compares the result
 // against the GNU oracle (aarch64-none-elf-as + ld -Ttext=0 + objcopy -O
-// binary) — the same oracle tests/m1/run-refenc-roundtrip.sh uses.
+// binary) — the same oracle tests/format/run-refenc-roundtrip.sh uses.
 //
-// This replaces the former string-matched goldens under tests/m1/golden/: a
+// This replaces the former string-matched goldens under tests/format/golden/: a
 // re-assemble-and-byte-check makes a frozen-wrong golden impossible (the
 // dir_skip_symbolic 80-vs-96 incident). It skips cleanly if the GNU toolchain
 // is not on PATH.
@@ -26,7 +26,7 @@ func TestGoldenCorpus(t *testing.T) {
 	ld := toolName("AARCH64_LD", deriveTool(as, "ld"))
 	objcopy := toolName("AARCH64_OBJCOPY", deriveTool(as, "objcopy"))
 
-	matches, err := filepath.Glob("../../../tests/m1/sources/*.s")
+	matches, err := filepath.Glob("../../../tests/format/sources/*.s")
 	if err != nil {
 		t.Fatal(err)
 	}

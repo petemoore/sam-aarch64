@@ -346,7 +346,7 @@ run_slot_self_tests:
 ; were removed 2026-05-29 (PR-3c) along with the now-dead
 ; slots/bitfield_imm.asm.  The live bfi/ubfx path is the mnemonic-id
 ; intercept (intercepts.asm::encode_bitfield_word); it stays covered
-; end-to-end by tests/m6/sources/inst_bitfield.s, which byte-matches GNU.
+; end-to-end by tests/paged/sources/inst_bitfield.s, which byte-matches GNU.
 
 ; All assertions passed.
                 ret

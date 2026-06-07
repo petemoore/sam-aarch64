@@ -17,7 +17,7 @@
 ;
 ;   Task 10 - Signed loads: ldrsb / ldrsh / ldrsw (sf opc=10/11 selector).
 ;
-; The Layer-3 fixture corpus under tests/m5/sources/ exercises the same
+; The Layer-3 fixture corpus under tests/operands/sources/ exercises the same
 ; shapes end-to-end via the parser; this file isolates the encoder for
 ; per-routine assertion before the corpus sweep runs.
 

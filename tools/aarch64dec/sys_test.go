@@ -5,7 +5,7 @@ import "testing"
 // TestDecodeSys covers the System instruction group: mrs / msr (register
 // and PSTATE-immediate), the SYS family (dc / tlbi), and the barriers
 // (dsb / dmb / isb).  Words + expected text cross-checked against
-// aarch64-none-elf-objdump on tests/m6/release/release.img.
+// aarch64-none-elf-objdump on tests/release/release.img.
 func TestDecodeSys(t *testing.T) {
 	tests := []struct {
 		name     string

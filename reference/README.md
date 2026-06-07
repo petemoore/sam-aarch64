@@ -13,4 +13,4 @@ hermetic. Never edited, only re-vendored.
   (`docs/specs/samdos-file-io.md` cites it).
 - `comet-disk/` — the original COMET disk contents the decode came from.
 - `samdos/` — `samdos2.bin`, the SAMDOS 2 binary packed into every bootable
-  disk image by `tools/build-m3-disk`.
+  disk image by `tools/build-disk`.

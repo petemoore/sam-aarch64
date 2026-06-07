@@ -165,7 +165,7 @@ touch the following. `[A]`/`[B]` tag which decision; "NEW" = file added by i39a 
 - `sam-aarch64-format/{kinds,reader,writer,litinsts}_test.go` `[A]` — drop/rewrite symbolic-format assertions.
 - `aarch64enc/overlay_test.go` (NEW), `encode_test.go` `[B]` — add `FoldMovzAuto` hw-from-value vectors; assert the syntactic form errors.
 - `refenc/compact_test.go`, `pass2_test.go` `[A][B]` — v2-only compaction; fold-dispatch tests.
-- `text2bin/internal/translate/{parser_*,golden,integration}_test.go`, `strip_test.go` `[A]` — in-memory IR / v2 assertions. **The M1 string-matched goldens (`tests/m1/golden/`) become re-assemble-and-byte-check round-trips** so a frozen-wrong golden can't slip again (the `dir_skip_symbolic` 80-vs-96 incident).
+- `text2bin/internal/translate/{parser_*,golden,integration}_test.go`, `strip_test.go` `[A]` — in-memory IR / v2 assertions. **The M1 string-matched goldens (`tests/format/golden/`) become re-assemble-and-byte-check round-trips** so a frozen-wrong golden can't slip again (the `dir_skip_symbolic` 80-vs-96 incident).
 - `bin2text/emit/*_test.go` `[A]` — overlay-only render.
 
 ### Z80 code (`src/`)
@@ -182,12 +182,12 @@ touch the following. `[A]`/`[B]` tag which decision; "NEW" = file added by i39a 
 
 ### End-to-end / round-trip gates
 - `tools/run-disasm-roundtrip.sh` `[A][B]` — overlay legs already added (i39a PR(b)); they exercise the refined folds via byte-identity.
-- `tools/run-m6-release-gate.sh` `[A][B]` — 3-way byte-match; Z80 arm green after PR(c) with the refined folds.
+- `tools/run-release-gate.sh` `[A][B]` — 3-way byte-match; Z80 arm green after PR(c) with the refined folds.
 - `tests/disasm/run-oracle-comparison.sh` — keep (aarch64dec vs objdump; unaffected).
-- `tools/revendor-m6-release.sh` — keep (vendors `release.s`/`release.img`, not `.tbn`).
+- `tools/revendor-release.sh` — keep (vendors `release.s`/`release.img`, not `.tbn`).
 
 ### CI (`.github/workflows/ci.yml`) + Makefile
-- No config change. Required checks `m1`/`m2`/`disasm`/`disasm-roundtrip`/`sysreg-sync` stay green; `m3`/`m4{,-prod}`/`m5{,-prod}`/`m6{,-prod}`/`m6-release` go green when PR(c) lands the v2 Z80 reader + refined folds.
+- No config change. Required checks `format`/`encoder`/`disasm`/`disasm-roundtrip`/`sysreg-sync` stay green; `core`/`symbols{,-prod}`/`operands{,-prod}`/`paged{,-prod}`/`release-gate` go green when PR(c) lands the v2 Z80 reader + refined folds.
 
 ### Docs (the scrub — Decision A's "no old format in head")
 - `docs/specs/tbn-binary-format-reference.md` `[A]` — **full rewrite to overlay-only** (i48d). It currently says `Version = 1` and documents the symbolic record kinds as current; that is correct for `main` *today* (v2 is unmerged), so the rewrite lands **with** the v2/elimination, not before — until then it carries a banner pointing here. **This is the doc Pete specifically flagged.**
@@ -229,7 +229,7 @@ so no head doc describes a format the code doesn't produce.
 ## 9. Risks
 
 - **Byte-fidelity of the `FoldMovzAuto` change.** Moving `hw` into the fold changes the
-  movz-auto base word; the m6-release 3-way gate + `disasm-roundtrip` overlay legs catch
+  movz-auto base word; the release-gate 3-way gate + `disasm-roundtrip` overlay legs catch
   any divergence. Land the Go change and confirm green before porting to Z80.
 - **Front-end extraction churn.** `text2bin`'s preprocessing (`.include`/`.if`/`.macro`/
   `-flatten`) is substantial; the shared-lib extraction is the bulk of i48a. Mitigate by

@@ -12,7 +12,7 @@
 ; (name bytes go into a scratch buffer at test_sysname_name_buf,
 ; OPVAL[..+2..+5] points at that buffer), then calls the encoder.
 ;
-; To falsify: change one expected byte in any vector; ci-m3 will fail
+; To falsify: change one expected byte in any vector; ci-core will fail
 ; loudly via assert_eq32_de_hl_imm.
 
 

@@ -90,7 +90,7 @@ the reason "full v8.0-A" is dominated by NEON, not by the integer core.
 
 ## 2. Today's subset — concrete current numbers
 
-Measured in this worktree (`make enctab`, `make m3-asm-prod`):
+Measured in this worktree (`make enctab`, `make assembler-prod`):
 
 | Metric | Value | Source |
 |---|---|---|
@@ -101,7 +101,7 @@ Measured in this worktree (`make enctab`, `make m3-asm-prod`):
 | Encoder **slot kinds** (operand-encoder families) | **19** | `tools/aarch64enc/types.go:16-36` |
 | Z80 **slot-encoder** modules | **11** | `src/slots/*.asm` |
 | Z80 **disassembler** decode families | **~16** | `src/disasm.asm` `disasm_try_*` (movewide, addsubimm, logimm, bitfield, condsel, mul3, shiftvar, dpreg, dpreg-alias, branch, tbranch, sys, nop, udf, mem, …) |
-| prod assembler binary | **14475 B**, code_end `&B88B`, **1909 B headroom** to the `&C000` cliff | `make m3-asm-prod` budget line |
+| prod assembler binary | **14475 B**, code_end `&B88B`, **1909 B headroom** to the `&C000` cliff | `make assembler-prod` budget line |
 
 Derived ratios (used for extrapolation in §3):
 
@@ -210,7 +210,7 @@ The hard constraint is **address-space code budget**, not total RAM.
 Both assembler variants link at `org &8000`; scratch/stack starts at `&C000`
 (`SP = &C100`). If `code_end` reaches `&C000` the build silently boot-hangs —
 turned into a numbered failure by `tools/check-code-budget.sh`
-(`CEILING=0xC000`), run at the tail of every `make m3-asm{,-prod}`
+(`CEILING=0xC000`), run at the tail of every `make assembler{,-prod}`
 (`docs/notes/memory-layout.md` §"Code-budget ceiling"; `tools/check-code-budget.sh:28`).
 
 - Today's prod binary: code_end `&B88B`, **only 1909 B of headroom**.
@@ -285,7 +285,7 @@ Repo facts (file:line cited inline): `tools/aarch64enc/manual_forms.go`,
 `src/slots/*.asm`, `src/disasm.asm`, `docs/notes/memory-layout.md`,
 `tools/check-code-budget.sh:28`, `docs/notes/sam-paging.md:80`,
 `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m7-status.md`. Live measurements: `make enctab` (148 forms /
-3676 B), `make m3-asm-prod` (code_end &B88B, 1909 B headroom).
+3676 B), `make assembler-prod` (code_end &B88B, 1909 B headroom).
 
 ARM ISA facts:
 - [weinholt.se — *Structure of the ARM A64 instruction set*](https://weinholt.se/articles/arm-a64-instruction-set/) (442 mnemonics; ~1000–2000 variants; four-level decode table).

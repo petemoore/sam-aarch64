@@ -38,7 +38,7 @@ editor region; uniform symbol resolution in the assembler (numeric locals
 `1f`/`1b` stay first-class; `.global` preserved non-destructively as a
 ~1-bit/symbol flag). Projected **~38.6 KB file / ~34.5 KB
 assembler-resident (−32% vs the i1 51 KB)**, in 3 phases behind the
-m6-release byte-match gate.
+release-gate byte-match gate.
 
 **Editing principle (do NOT assume in-place `.tbn` editing; i41).** The `.tbn`
 is the *serialized* storage/assembly form; the editor edits a separate
@@ -70,7 +70,7 @@ the v2 merge so no head doc describes a format the code doesn't produce.
 ## i39a Phase-1 progress (the v2 overlay flip)
 
 All on branch **`i39a-instruction-overlay`** (PR **#131**, draft — single
-branch holds PR(a)-(d), merges once the m6-release 3-way byte-match is green
+branch holds PR(a)-(d), merges once the release-gate 3-way byte-match is green
 for the full v2 stack; CLAUDE.md §5 long-lived-branch-until-green).
 
 **✅ PR(a) — format v2 + overlay emit + Go assemble (done; Go byte-match verified).**
@@ -96,8 +96,8 @@ for the full v2 stack; CLAUDE.md §5 long-lived-branch-until-green).
   green (unaffected — it uses the symbolic `.tbn`).
 
 **Feature-branch CI state (PR #131): ALL 14 checks GREEN as of PR(c)
-(2026-06-09).** The full SimCoupé matrix — **m3, m4, m4-prod, m5, m5-prod, m6,
-m6-prod, m6-release** — plus build-image, disasm, disasm-roundtrip, m1, m2,
+(2026-06-09).** The full SimCoupé matrix — **core, symbols, symbols-prod, operands, operands-prod, paged,
+paged-prod, release-gate** — plus build-image, disasm, disasm-roundtrip, format, encoder,
 sysreg-sync. (Between PR(a) and PR(c) the Z80 jobs were red, expected — the v2
 version bump tripped the Z80 reader's `version == 1` check before PR(c) added the
 v2 reader + `INSN_RUN` decoder.)
@@ -146,7 +146,7 @@ v2 reader + `INSN_RUN` decoder.)
   golden had locked in). (2) `printExpr` ignored `OpPushImm64` (64-bit litpool
   constants). (3) a negative immediate rendered the malformed `0x-N` → now
   `-0xN`. `bin2text`/`text2bin` go.mod gained the `aarch64dec`/`aarch64enc`
-  deps. All Go suites + `ci-m1` (incl. the GNU-as cross-check of the corrected
+  deps. All Go suites + `ci-format` (incl. the GNU-as cross-check of the corrected
   golden) + `disasm-roundtrip` green; Z80 jobs stay red until PR(c).
 
 **✅ i48b — `FoldMovzAuto` computes hw in the fold (DONE, 2026-06-09; commit `0162f52`).**
@@ -238,14 +238,14 @@ banners on the M1/i1 design docs.
   re-assemble-and-byte-check vs GNU (`golden_test.go`); the 36 dead goldens removed.
   Byte-neutral: GNU == Go(source) == Go(compact .tbn) (21752 B / 45,189 B), all Go
   suites + the koron-go/z80 harness + disasm-roundtrip (104/104), and **all 14 CI checks
-  green incl. the SimCoupé matrix + m6-release 3-way byte-match**; §3 review = MERGE.
+  green incl. the SimCoupé matrix + release-gate 3-way byte-match**; §3 review = MERGE.
   Post-merge cleanup (#146): the review's `WriteRaw` follow-up + a dead-code
   sweep dropped `WriteRaw`, three orphaned `Reset()` helpers, and
   `SymbolTable.Name`/`Len`; a `staticcheck` (unused/U1000) CI gate now guards
   the core Go modules against re-accumulation.
 
 **✅ MERGED (PR #131, merge commit `e68e0bf`, 2026-06-09 #3).** All 14 CI checks
-green incl. the full SimCoupé matrix + the m6-release 3-way byte-match (GNU == Go ==
+green incl. the full SimCoupé matrix + the release-gate 3-way byte-match (GNU == Go ==
 Z80/SAM — the first authoritative SimCoupé verdict on PR(d), confirming the harness);
 the §3 pre-merge review returned MERGE (all items PASS, recorded on the PR). **The
 i48a follow-up then landed in full: PR1 (#141) + PR2 (#142) + PR3 (#144) — i48a is

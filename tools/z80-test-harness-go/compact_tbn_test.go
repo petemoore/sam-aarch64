@@ -7,11 +7,11 @@
 // stored literal words correctly and keeps PASS_PC in lockstep, the
 // compact source assembles to the identical 21752-byte release binary.
 //
-// Requires (make m3-asm-prod enctab sam-aarch64 sysreg-data disasm-payload):
+// Requires (make assembler-prod enctab sam-aarch64 sysreg-data disasm-payload):
 //
 //	build/assembler-prod.bin build/enctab.enc build/sysreg_data.bin
 //	build/disasm.bin build/sam-aarch64
-//	tests/m6/release/release.{s,img}
+//	tests/release/release.{s,img}
 //
 // Skipped automatically if any build artefact is absent.  SimCoupé
 // remains the sole CI gate; this is an inner-loop check.
@@ -35,12 +35,12 @@ func TestCompactTbnAssembly(t *testing.T) {
 	sd13Path := filepath.Join(root, "build", "sysreg_data.bin")
 	d15Path := filepath.Join(root, "build", "disasm.bin")
 	samPath := filepath.Join(root, "build", "sam-aarch64")
-	releaseSrc := filepath.Join(root, "tests", "m6", "release", "release.s")
-	releaseImg := filepath.Join(root, "tests", "m6", "release", "release.img")
+	releaseSrc := filepath.Join(root, "tests", "release", "release.s")
+	releaseImg := filepath.Join(root, "tests", "release", "release.img")
 
 	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, samPath, releaseSrc, releaseImg} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make m3-asm-prod enctab sam-aarch64 sysreg-data disasm-payload`", p)
+			t.Skipf("prerequisite missing: %s\n  run `make assembler-prod enctab sam-aarch64 sysreg-data disasm-payload`", p)
 		}
 	}
 
@@ -52,7 +52,7 @@ func TestCompactTbnAssembly(t *testing.T) {
 	// origin). thin-comments keeps a bounded subset of release.s's ~335 KB of
 	// comments (M8 / i39b-2) so a populated editor region rides the full Z80
 	// round-trip while the .tbn stays under the 96 KB IN ceiling — mirrors the
-	// m6-release SimCoupé gate. Comments are assembly no-ops, so the OUT must
+	// release-gate SimCoupé gate. Comments are assembly no-ops, so the OUT must
 	// still byte-match release.img.
 	cmd := exec.Command(samPath, "-flatten", "-thin-comments=20",
 		"-origin", "0xfffffff000000000", "-o", goImg, "-emit-tbn", compactTbn, releaseSrc)

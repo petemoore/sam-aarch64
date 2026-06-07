@@ -45,10 +45,10 @@ make -s sam-aarch64 aarch64dec
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
 FIXTURE_DIRS=(
-    tests/m3/sources
-    tests/m4/sources
-    tests/m5/sources
-    tests/m6/sources
+    tests/core/sources
+    tests/symbols/sources
+    tests/operands/sources
+    tests/paged/sources
 )
 
 passed=0
@@ -156,7 +156,7 @@ echo "=== [2b/3] Round-trip release.s (code-only, -strip-data) ==="
 # pools).  -strip-data removes all data-emitting directive records and
 # ldr Xn,=expr (literal-pool load) instructions, producing a code-only .tbn
 # so the round-trip never encounters .inst entries from embedded data words.
-release_src="$ROOT/tests/m6/release/release.s"
+release_src="$ROOT/tests/release/release.s"
 if [ -f "$release_src" ]; then
     rel_v1_bin="$tmp/release_v1.bin"
     rel_disasm_s="$tmp/release_disasm.s"
@@ -318,7 +318,7 @@ if [ -f "$release_src" ]; then
     rel_ov_compact="$tmp/rel_ov_compact.tbn"
     rel_ov_dis="$tmp/rel_ov_overlay.s"
     rel_ov_v2_bin="$tmp/rel_ov_v2.bin"
-    rel_img="$ROOT/tests/m6/release/release.img"
+    rel_img="$ROOT/tests/release/release.img"
 
     if ! "$ROOT/build/sam-aarch64" -flatten -strip-comments -o "$rel_ov_v1_bin" --emit-tbn "$rel_ov_compact" "$release_src" 2>/dev/null; then
         echo "    FAIL(sam-aarch64-compact) release.s (overlay)"; fail_names+=("release.s [overlay compact]"); failed=$((failed + 1))
@@ -355,7 +355,7 @@ echo "=== [2f/3] Overlay round-trip release.s WITH comments (editor-region fidel
 if [ -f "$release_src" ]; then
     relc_v1="$tmp/relc_v1.bin"; relc_tbn="$tmp/relc.tbn"
     relc_dis="$tmp/relc_overlay.s"; relc_v2="$tmp/relc_v2.bin"
-    rel_img="$ROOT/tests/m6/release/release.img"
+    rel_img="$ROOT/tests/release/release.img"
     if ! "$ROOT/build/sam-aarch64" -flatten -origin 0xfffffff000000000 -o "$relc_v1" --emit-tbn "$relc_tbn" "$release_src" 2>/dev/null; then
         echo "    FAIL(sam-aarch64-compact) release.s (with comments)"; fail_names+=("release.s [wc compact]"); failed=$((failed + 1))
     elif ! "$ROOT/build/sam-aarch64" --render "$relc_tbn" > "$relc_dis" 2>/dev/null; then

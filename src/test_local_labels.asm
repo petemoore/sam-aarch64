@@ -6,7 +6,7 @@
 ;
 ; Mirrors test_symbols.asm's structure: runs from start: BEFORE
 ; load_enctab, with assertion failures going `jp fail` (red border +
-; printer-channel "FAIL" banner, ci-m3 reports fail immediately).
+; printer-channel "FAIL" banner, ci-core reports fail immediately).
 ;
 ; Test coverage:
 ;   1. After local_label_table_init, lookup of any digit returns CF=1.

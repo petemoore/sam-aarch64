@@ -117,9 +117,9 @@ RUN git clone https://github.com/simonowen/simcoupe.git /tmp/simcoupe \
 # image for the byte-compare against GNU.
 #
 # (The M0 build-disk Go tool used to be compiled in-image here too; it
-# was retired with the rest of the M0 stub chain. The live M3+ disk
-# builder, tools/build-m3-disk/, is built on-demand via `make
-# build-m3-disk`, not baked into the image.)
+# was retired with the rest of the M0 stub chain. The live disk
+# builder, tools/build-disk/, is built on-demand via `make
+# build-disk`, not baked into the image.)
 RUN go install github.com/petemoore/samfile/v3/cmd/samfile@latest \
  && cp /root/go/bin/samfile /usr/local/bin/samfile \
  && rm -rf /root/go /root/.cache

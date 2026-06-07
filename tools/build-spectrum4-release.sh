@@ -39,7 +39,7 @@ mkdir -p "$BUILD"
 # Toolchain selection.  Prefer aarch64-none-elf-* (Pete's macOS install),
 # fall back to aarch64-linux-gnu-* (dev container / CI).  Override via the
 # AARCH64_AS / AARCH64_LD / AARCH64_OBJCOPY env vars (mirrors
-# tools/run-m6-roundtrip.sh).
+# tools/run-roundtrip.sh).
 AS="${AARCH64_AS:-aarch64-none-elf-as}"
 LD="${AARCH64_LD:-aarch64-none-elf-ld}"
 OBJCOPY="${AARCH64_OBJCOPY:-aarch64-none-elf-objcopy}"

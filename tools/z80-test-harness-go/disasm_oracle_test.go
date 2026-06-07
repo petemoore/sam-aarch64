@@ -4,7 +4,7 @@
 // standalone at org &8000) inside the koron-go/z80 emulator and compares
 // its (mnemonic, operands) output word-by-word against the Go disassembler
 // oracle (aarch64dec.DecodeAt) over the real GNU release corpus
-// (tests/m6/release/release.img, 21752 bytes = 5438 words).
+// (tests/release/release.img, 21752 bytes = 5438 words).
 //
 // # Why this exists
 //
@@ -242,9 +242,9 @@ func TestDisasmOracle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read build/disasm.bin (build it with `pyz80 --obj=build/disasm.bin src/disasm.asm` from repo root): %v", err)
 	}
-	corpus, err := os.ReadFile("../../tests/m6/release/release.img")
+	corpus, err := os.ReadFile("../../tests/release/release.img")
 	if err != nil {
-		t.Fatalf("read tests/m6/release/release.img: %v", err)
+		t.Fatalf("read tests/release/release.img: %v", err)
 	}
 	if len(corpus)%4 != 0 {
 		t.Fatalf("corpus length %d is not a multiple of 4", len(corpus))
@@ -296,7 +296,7 @@ func TestDisasmOracle(t *testing.T) {
 	pct := 100.0 * float64(matches) / float64(nWords)
 
 	t.Logf("=== Z80 disasm oracle vs Go aarch64dec — release corpus ===")
-	t.Logf("corpus: tests/m6/release/release.img  (%d bytes = %d words)", len(corpus), nWords)
+	t.Logf("corpus: tests/release/release.img  (%d bytes = %d words)", len(corpus), nWords)
 	t.Logf("MATCH RATIO: %d/%d = %.1f%%   (mismatches: %d)", matches, nWords, pct, nWords-matches)
 	t.Logf("sanity: NOP (0xd503201f) matched=%v ; .inst data words matched=%d", nopMatched, instMatched)
 

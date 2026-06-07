@@ -17,7 +17,7 @@
 ;   3. Assert DEHL = expected encoded bits.
 ;
 ; All assertions live in assert_eq32_de_hl_imm (defined in test_slots.asm).
-; On any mismatch: jp fail (red border + printer-channel "FAIL" banner, ci-m3 reports fail immediately).
+; On any mismatch: jp fail (red border + printer-channel "FAIL" banner, ci-core reports fail immediately).
 ;
 ; Coverage:
 ;   1. BranchImm26 forward            (PC=0x100, target=0x128 → +10 instr).

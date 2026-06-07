@@ -14,7 +14,7 @@ The HSAVE call site is already designed in `docs/specs/samdos-file-io.md`; this 
 
 1. The assembler code (sections C + D content) MUST keep running normally throughout pass 2.  Anything that disturbs HMPR breaks the running code, the stack, or both.
 2. The encoder needs ENCTAB live in section A throughout pass 2 (LMPR = `LMPR_ENCTAB`).  Any LMPR change to reach OUT must restore LMPR_ENCTAB before the encoder makes its next read.
-3. Production code budget is 420 B headroom (`m3-asm-prod` = 11868 / 12288).  Net cost must stay well under that — target ≤ 100 B added.
+3. Production code budget is 420 B headroom (`assembler-prod` = 11868 / 12288).  Net cost must stay well under that — target ≤ 100 B added.
 4. OUT_LEN is 16-bit (cap 64 KB).  Sufficient for release.bin (~22 KB).  Debug builds (~274 KB) are out of scope for M6.
 
 ## Design
@@ -177,11 +177,11 @@ Add a self-test routine `run_out_paged_self_tests` that:
 
 (Don't add a page-crossing test in this PR — that would require emitting 16 KB which slows boot.  Verify via a fixture instead.)
 
-The self-test is included in the `m3-asm` (test) variant only; production omits it.  Existing pattern from M3/M4/M5 — gate via `if defined(BUILD_TESTS)`.
+The self-test is included in the `assembler` (test) variant only; production omits it.  Existing pattern from M3/M4/M5 — gate via `if defined(BUILD_TESTS)`.
 
 ### Fixtures
 
-Add a fixture `tests/m6/sources/inst_long_emit.s` (or similar) that exercises >2 KB of output to verify the paged path works end-to-end against GNU `as`:
+Add a fixture `tests/paged/sources/inst_long_emit.s` (or similar) that exercises >2 KB of output to verify the paged path works end-to-end against GNU `as`:
 
 ```asm
 .text

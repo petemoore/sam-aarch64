@@ -11,4 +11,4 @@ package's constants.
 table — `make sysreg-sync-check` (CI job `sysreg-sync`) asserts the two
 cannot drift.
 
-Imported by `sam-aarch64` and `aarch64dec`; tested via `make ci-m1`/`ci-m2`.
+Imported by `sam-aarch64` and `aarch64dec`; tested via `make ci-format`/`ci-encoder`.

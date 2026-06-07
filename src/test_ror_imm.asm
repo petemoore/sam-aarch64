@@ -3,7 +3,7 @@
 ; Mirrors tools/refenc/pass2.go:1460-1492 (encodeRorImm).
 ;
 ; Two vectors cover the two bases and exercise the imm6 shift, Rs / Rd
-; packing, and bits 20:16 OR.  Layer 3 (tests/m5/sources/inst_alu_single.s)
+; packing, and bits 20:16 OR.  Layer 3 (tests/operands/sources/inst_alu_single.s)
 ; covers the same encoder via the parser end-to-end.
 ;
 ;   ror w0, w1, #5  →  0x13811420  (32-bit base 0x13800000)

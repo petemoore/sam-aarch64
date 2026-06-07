@@ -3,7 +3,7 @@
 # sam-aarch64 and byte-compare against
 # `aarch64-none-elf-as` + `ld -Ttext=0` + `objcopy -O binary`.
 #
-# Mirrors tests/m1/run-refenc-roundtrip.sh but for the spectrum4
+# Mirrors tests/format/run-refenc-roundtrip.sh but for the spectrum4
 # fixture corpus: real (or near-real) routines lifted from the
 # spectrum4 kernel that exercise our pipeline against actual
 # kernel-style code.

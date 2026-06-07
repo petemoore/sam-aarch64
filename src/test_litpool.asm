@@ -17,7 +17,7 @@
 ; PASS_MODE is set to PASS_PASS1 throughout — flush's pass-1 path
 ; advances PASS_PC without emitting OUT bytes, which is what the test
 ; verifies.  Pass-2 emit behaviour is covered by the Layer-3 round-trip
-; (tests/m5/sources/inst_ldr_litpool*.s).
+; (tests/operands/sources/inst_ldr_litpool*.s).
 
 run_litpool_self_tests:
                 call    litpool_init

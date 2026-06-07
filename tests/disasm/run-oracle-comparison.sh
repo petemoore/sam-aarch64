@@ -11,13 +11,12 @@
 # those data bytes as whatever they happen to encode — exotic SIMD/SVE/SME/
 # atomic instructions — which is noise, not a disassembler gap.  So instead
 # of disassembling the real release.img, we take the vendored flattened
-# release SOURCE (tests/m6/release/release.s), strip the data-emitting
+# release SOURCE (tests/release/release.s), strip the data-emitting
 # directives (.hword/.byte/.asciz/.word/.quad/.space/…) while keeping every
 # label + instruction, and reassemble with GNU binutils into a binary that
 # is *only* instructions.  Disassembling that is a clean apples-to-apples
 # comparison against objdump.  (This stripping is for the disassembler oracle
-# ONLY — text2bin and the m6-release byte-match gate keep the full source,
-# data and all.)
+# ONLY — the release-gate byte-match gate keeps the full source, data and all.)
 #
 # Pass criterion — EXACT MATCH.  Because all data is removed at source (both
 # data directives and the `ldr =imm` pseudo-ops that materialise literal
@@ -28,13 +27,13 @@
 #
 # Env: OBJDUMP / AS / LD / OBJCOPY override the binutils tools (defaults try
 # the aarch64-linux-gnu-* then aarch64-none-elf-* variants); RELEASE_S the
-# source (default tests/m6/release/release.s).
+# source (default tests/release/release.s).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-RELEASE_S="${RELEASE_S:-tests/m6/release/release.s}"
+RELEASE_S="${RELEASE_S:-tests/release/release.s}"
 [ -f "$RELEASE_S" ] || { echo "ERROR: release source not found at $RELEASE_S" >&2; exit 2; }
 
 # Resolve a binutils tool from a list of candidate names.
