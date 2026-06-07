@@ -17,14 +17,8 @@ __pycache__/
 # parent-dir build form and the in-cmd-dir build form.
 tools/aarch64dec/aarch64dec
 tools/aarch64dec/cmd/aarch64dec/aarch64dec
-tools/basic-detokeniser-spike/basic-detokeniser-spike
-tools/basic-detokeniser-sweep/basic-detokeniser-sweep
-tools/basic-emulator-spike/basic-emulator-spike
 tools/build-m3-disk/build-m3-disk
 tools/enctab-gen/enctab-gen
-tools/llist-capture/llist-capture
-tools/llist-normalise/llist-normalise
-tools/llist-sweep/llist-sweep
 tools/z80-test-harness-go/z80-test-harness-go
 
 # sam-aarch64's default .tbn output beside a vendored source (release.s is

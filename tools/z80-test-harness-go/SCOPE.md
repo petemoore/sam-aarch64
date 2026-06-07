@@ -45,7 +45,7 @@ adversarial use of the harness on a real failure):
   `fail` entry) — answers "who jumped here?".
 
 ### Faithful (implemented correctly)
-- **SAM paging model**: LMPR (port &FA) for sections A+B, HMPR (port &FB) for sections C+D; bits 5-7 of HMPR are mode-3 CLUT, preserved on all HMPR writes.  Sourced verbatim from `tools/basic-emulator-spike/main.go` comments citing Tech Manual v3.0 §6.10.
+- **SAM paging model**: LMPR (port &FA) for sections A+B, HMPR (port &FB) for sections C+D; bits 5-7 of HMPR are mode-3 CLUT, preserved on all HMPR writes.  Sourced from <https://github.com/petemoore/sam-aarch64/blob/c0f62fa/tools/basic-emulator-spike/main.go> comments citing Tech Manual v3.0 §6.10.
 - **RST 8 dispatch**: a 7-byte stub at &0008 in the fake ROM correctly extracts the hook code from the DEFB immediately following RST 8, dispatches via port &FD, and returns to the instruction after the DEFB.  The EX (SP),HL trick is position-independent and HL-preserving.
 - **Printer ports &E8/&E9**: data latched on rising strobe edge, matching SimCoupé's Centronics model.
 - **OUT buffer capture (HSAVE, hook 132)**: reads UIFA[31..36] to find start page + length; reads directly from physical pages 5+6 bypassing current LMPR/HMPR (the correct approach since the assembler may have changed paging state between emit and save).
