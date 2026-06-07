@@ -43,6 +43,14 @@ func WithPlaceholder(note string) Option {
 	return func(s *Screen) { s.noFont = true; s.noteMsg = note }
 }
 
+// WithPalette overrides the power-on CLUT. The SAM CLUT is software-loaded
+// (TM p30), so an editor is free to program its own colours; a MODE 3 screen
+// uses entries 0–3 as its quadruple. Design variants use this to choose a
+// deliberate palette instead of the ROM default.
+func WithPalette(p samscreen.Palette) Option {
+	return func(s *Screen) { s.pal = p }
+}
+
 // New builds a mockup Screen for geom with font (may be nil with
 // WithPlaceholder) and the default power-on CLUT.
 func New(geom samscreen.Geometry, font samscreen.Font, opts ...Option) *Screen {
