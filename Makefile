@@ -79,7 +79,7 @@ sysreg-sync-check:
 # modules to STATICCHECK_MODULES as they appear.
 .PHONY: staticcheck
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.7.0
-STATICCHECK_MODULES := comment-bench sam-aarch64-format sam-aarch64 aarch64enc aarch64dec enctab-gen z80-test-harness-go zx0-greedy
+STATICCHECK_MODULES := comment-bench sam-aarch64-format sam-aarch64 aarch64enc aarch64dec enctab-gen z80-test-harness-go zx0-greedy editor-prototype
 staticcheck:
 	for m in $(STATICCHECK_MODULES); do \
 	    echo "=== staticcheck (U1000) $$m ==="; \
@@ -464,6 +464,19 @@ release-unstripped-tbn: sam-aarch64
 comment-bench: release-unstripped-tbn
 	cd tools/comment-bench && go build -o $(CURDIR)/$(BUILD)/comment-bench .
 	$(BUILD)/comment-bench $(BUILD)/release-unstripped.tbn
+
+# Generate the editor-prototype mockup sheets (i76 P1): a PNG + SAM SCREEN$
+# `.mgt` per screen geometry, rendering the real release `.tbn` through the
+# samscreen abstraction. 8×8 geometries render real glyphs; 6-px geometries
+# render a placeholder note until the font-proof leg vendors their font.
+# Output: build/mockups/ (gitignored). Run: make editor-mockups
+.PHONY: editor-mockups
+editor-mockups: release-unstripped-tbn
+	mkdir -p $(BUILD)/mockups
+	cd tools/editor-prototype && go run . -mockup \
+	    -tbn $(CURDIR)/$(BUILD)/release-unstripped.tbn \
+	    -o $(CURDIR)/$(BUILD)/mockups/
+	@echo "editor-mockups: $$(ls $(BUILD)/mockups/*.png | wc -l) PNG sheets in $(BUILD)/mockups/"
 
 # Generate ZX0 test blocks for harness T-state measurement (i60a).
 # Requires: the real ZX0 compressor (zx0 binary on PATH or at /tmp/zx0).
