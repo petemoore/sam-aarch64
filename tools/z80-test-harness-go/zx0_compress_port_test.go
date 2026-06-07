@@ -174,11 +174,11 @@ func TestZX0CompressPort(t *testing.T) {
 	goParams := zx0greedy.Params{HashSize: 512, ChainDepth: 16}
 
 	type result struct {
-		name      string
-		rawLen    int
-		goLen     int
-		z80Len    int
-		tstates   uint64
+		name    string
+		rawLen  int
+		goLen   int
+		z80Len  int
+		tstates uint64
 	}
 
 	var results []result

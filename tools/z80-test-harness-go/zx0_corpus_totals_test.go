@@ -15,10 +15,12 @@
 //     and asserts byte-identity against the raw block.
 //  4. Decompresses the same stream with dzx0_turbo and asserts byte-identity.
 //  5. Decompresses the same stream with dzx0_mega and asserts byte-identity.
+//  6. Decompresses the same stream with dzx0_fast (spke) and asserts
+//     byte-identity.
 //
 // T-states are summed across all blocks of each blocking for: (a) Z80
 // compression, (b) dzx0_standard decode, (c) dzx0_turbo decode, (d) dzx0_mega
-// decode. The decode input is the greedy-compressed stream — the bytes the
+// decode, (e) dzx0_fast decode. The decode input is the greedy-compressed stream — the bytes the
 // editor pipeline will actually decode on the SAM — not the optimal-parse
 // .zx0 files used by TestZX0DecodeBench.
 //
@@ -63,6 +65,7 @@ func TestZX0CorpusTotals(t *testing.T) {
 	standardBin := assembleZX0Decoder(t, tdDir, "dzx0_standard")
 	turboBin := assembleZX0Decoder(t, tdDir, "dzx0_turbo")
 	megaBin := assembleZX0Decoder(t, tdDir, "dzx0_mega")
+	fastBin := assembleZX0Decoder(t, tdDir, "dzx0_fast")
 
 	goParams := zx0greedy.Params{HashSize: 512, ChainDepth: 16}
 
@@ -74,6 +77,7 @@ func TestZX0CorpusTotals(t *testing.T) {
 		stdTS      uint64
 		turboTS    uint64
 		megaTS     uint64
+		fastTS     uint64
 	}
 
 	for _, blockSize := range []int{4096, 8192} {
@@ -129,6 +133,15 @@ func TestZX0CorpusTotals(t *testing.T) {
 				t.Fatalf("%s: dzx0_mega round-trip MISMATCH", name)
 			}
 
+			// (6) dzx0_fast round-trip + decode T-states.
+			fts, fastOut, err := runZX0Decoder(fastBin, z80Compressed, len(raw), rtMaxSteps)
+			if err != nil {
+				t.Fatalf("%s: dzx0_fast error: %v", name, err)
+			}
+			if string(fastOut) != string(raw) {
+				t.Fatalf("%s: dzx0_fast round-trip MISMATCH", name)
+			}
+
 			tot.blocks++
 			tot.rawBytes += len(raw)
 			tot.compBytes += len(z80Compressed)
@@ -136,6 +149,7 @@ func TestZX0CorpusTotals(t *testing.T) {
 			tot.stdTS += sts
 			tot.turboTS += tts
 			tot.megaTS += mts
+			tot.fastTS += fts
 		}
 
 		secs := func(ts uint64) float64 { return float64(ts) / samClockHz }
@@ -150,6 +164,7 @@ func TestZX0CorpusTotals(t *testing.T) {
 		t.Logf("%-22s  %14d  %10.3f  %8.1f", "Z80 compress", tot.compressTS, secs(tot.compressTS), tpb(tot.compressTS))
 		t.Logf("%-22s  %14d  %10.3f  %8.1f", "dzx0_standard decode", tot.stdTS, secs(tot.stdTS), tpb(tot.stdTS))
 		t.Logf("%-22s  %14d  %10.3f  %8.1f", "dzx0_turbo decode", tot.turboTS, secs(tot.turboTS), tpb(tot.turboTS))
+		t.Logf("%-22s  %14d  %10.3f  %8.1f", "dzx0_fast decode", tot.fastTS, secs(tot.fastTS), tpb(tot.fastTS))
 		t.Logf("%-22s  %14d  %10.3f  %8.1f", "dzx0_mega decode", tot.megaTS, secs(tot.megaTS), tpb(tot.megaTS))
 	}
 }
