@@ -10,14 +10,16 @@
 //
 // src/disasm.asm is ported family-by-family (strand-B PR-4); the Go oracle
 // already decodes the full aarch64 subset and round-trips release.s.  This
-// test drives the Z80 disassembler toward equivalence: it prints the exact
-// match ratio plus a per-Go-mnemonic mismatch breakdown — the worklist for
-// the next family to port, biggest first — and enforces a ratchet floor
-// (matchFloor below) that each landed family raises.  It is green on main
-// throughout the port and fails only on a regression below the floor; when
-// the floor reaches nWords the Z80 disassembler is proven equivalent to the
-// Go oracle.  TestDisasmSelfTest additionally runs the on-page boot
-// self-test (entry &8003) and asserts BC=0.
+// test asserts full per-word equivalence and prints the exact match ratio
+// plus a per-Go-mnemonic mismatch breakdown — the worklist for the next
+// family, biggest first.  It is developed on the PR-4 feature branch and
+// fails (TDD red) until the port is complete; that is fine because the
+// harness is never a CI gate and the branch is not merged until it reaches
+// 100% (so main never sees a red test — no ratchet needed).  When green,
+// the Z80 disassembler is proven equivalent to the Go oracle, so both
+// run-disasm-roundtrip.sh gates pass for it too.  It also asserts the
+// paged_call ABI (BC/IX/IY preserved) on every word.  TestDisasmSelfTest
+// additionally runs the on-page boot self-test (entry &8003) → BC=0.
 //
 // # disasm_entry ABI (src/disasm.asm lines 40-100)
 //
@@ -54,6 +56,7 @@ const (
 	disasmSelfTestEntry = 0x8003 // DISASM_SELF_TEST_ENTRY (jump-table slot)
 	disasmCommMnem      = 0x7E99
 	disasmCommOps       = 0x7EA3
+	disasmCommPC        = 0x7EBD // DISASM_COMM_PC (8-byte LE instruction PC)
 )
 
 // flatMem is a flat 64 KB RAM implementing z80.Memory + z80.IO.  The
@@ -86,15 +89,27 @@ func (m *flatMem) readCString(addr uint16) string {
 }
 
 // runZ80Disasm loads disasmBin at &8000 into a fresh flat memory, sets
-// BC = high16, IX = low16, and runs disasm_entry to completion, returning
-// the (mnemonic, operands) strings it wrote to the comm buffer.
+// BC = high16, IX = low16, writes pc (8 bytes LE) into DISASM_COMM_PC, and
+// runs disasm_entry to completion, returning the (mnemonic, operands)
+// strings it wrote to the comm buffer.
+//
+// pc feeds the PC-relative families (b/bl/b.cc/cbz/cbnz/tbz/tbnz/adr/adrp/
+// ldr-literal); it arrives via the memory slot, not a register, so the
+// BC/IX/IY ABI assertions below are unchanged (IY stays a preserved
+// sentinel).  This mirrors the Go oracle's DecodeAt(pc, word).
 //
 // Return detection: a sentinel return address 0x0000 is pushed before entry;
 // the routine's terminating `ret` pops it into PC, so we step until PC==0
 // (or until a step cap, to guard against runaway code).
-func runZ80Disasm(disasmBin []byte, word uint32) (mnem, ops string, err error) {
+func runZ80Disasm(disasmBin []byte, word uint32, pc uint64) (mnem, ops string, err error) {
 	m := &flatMem{}
 	copy(m.ram[disasmEntry:], disasmBin)
+
+	// Write the instruction PC as an 8-byte little-endian value into the
+	// section-B comm slot the decoder reads for PC-relative targets.
+	for i := 0; i < 8; i++ {
+		m.ram[disasmCommPC+i] = byte(pc >> (8 * uint(i)))
+	}
 
 	cpu := &z80.CPU{Memory: m, IO: m}
 
@@ -143,10 +158,13 @@ func runZ80Disasm(disasmBin []byte, word uint32) (mnem, ops string, err error) {
 // fail-tag would halt the assembler in the SimCoupé CI gate.  Verifying it
 // here (no SimCoupé / no Docker needed) catches a broken self-test before
 // CI does.  Keep its fixtures in lock-step with the ported families.
+// Reads build/disasm-test.bin — the TEST variant (-D BUILD_TESTS=1), which
+// is the only build that carries the &8003 self-test entry + fixtures.  The
+// shipped prod build/disasm.bin strips them.
 func TestDisasmSelfTest(t *testing.T) {
-	disasmBin, err := os.ReadFile("../../build/disasm.bin")
+	disasmBin, err := os.ReadFile("../../build/disasm-test.bin")
 	if err != nil {
-		t.Fatalf("read build/disasm.bin (build it with `pyz80 --obj=build/disasm.bin src/disasm.asm`): %v", err)
+		t.Fatalf("read build/disasm-test.bin (build it with `pyz80 -D BUILD_TESTS=1 --obj=build/disasm-test.bin src/disasm.asm`): %v", err)
 	}
 	m := &flatMem{}
 	copy(m.ram[disasmEntry:], disasmBin)
@@ -187,6 +205,9 @@ func goOracle(pc uint64, word uint32) (mnem, ops string) {
 	return m, o
 }
 
+// Reads build/disasm.bin — the PROD variant (no BUILD_TESTS flag), which is
+// the binary actually shipped on production disks.  Verifying the shipped
+// decoder (not the test build) is the point: this is the 100% gate.
 func TestDisasmOracle(t *testing.T) {
 	disasmBin, err := os.ReadFile("../../build/disasm.bin")
 	if err != nil {
@@ -221,7 +242,7 @@ func TestDisasmOracle(t *testing.T) {
 
 		goMnem, goOps := goOracle(pc, word)
 
-		z80Mnem, z80Ops, rerr := runZ80Disasm(disasmBin, word)
+		z80Mnem, z80Ops, rerr := runZ80Disasm(disasmBin, word, pc)
 		if rerr != nil {
 			t.Fatalf("Z80 run failed at word %d (pc=%#x word=%#08x): %v", i, pc, word, rerr)
 		}
@@ -280,27 +301,19 @@ func TestDisasmOracle(t *testing.T) {
 			s.pc, s.word, s.goMnem, s.goOps, s.z80Mnem, s.z80Ops)
 	}
 
-	// Ratchet floor.  The Z80 disassembler is ported family-by-family
-	// (strand-B PR-4); each increment must raise — and may never lower —
-	// the count of words that match the Go oracle exactly.  The ultimate
-	// target is matches == nWords (5438); when we reach it the
-	// disassembler is proven equivalent to the Go oracle that already
-	// round-trips release.s.
-	//
-	// RAISE THIS FLOOR whenever a family lands (the test prints the new
-	// ratio).  Keeping it a floor — not a flat "== nWords" — lets the
-	// test stay green on main throughout the port while still failing
-	// loudly on any regression below the families already ported.
-	const matchFloor = 2254 // NOP + .inst data + udf + move-wide (movz/movn/movk/mov)
-
-	if matches < matchFloor {
-		t.Errorf("REGRESSION: Z80 disasm matches Go oracle on only %d/%d words (= %.1f%%), "+
-			"below the ratchet floor of %d. A previously-ported family stopped matching; "+
-			"see the breakdown above.", matches, nWords, pct, matchFloor)
-	}
-	if matches < nWords {
-		t.Logf("TDD progress: %d/%d words match (%.1f%%); %d still fall through to .inst. "+
-			"Port the next family (biggest in the breakdown above) and raise matchFloor.",
-			matches, nWords, pct, nWords-matches)
+	// This test asserts FULL equivalence: every release.img word must
+	// decode identically to the Go oracle.  It is developed entirely on
+	// the strand-B PR-4 feature branch and fails (TDD red) until the port
+	// is complete — which is fine, because the harness is never a CI gate
+	// and the branch is not merged to main until the port reaches 100%.
+	// (No ratchet / "allowed failure rate": a feature branch can stay red
+	// until it passes — see the per-Go-mnemonic breakdown above for the
+	// remaining worklist.)  When this is green the Z80 disassembler is
+	// proven equivalent to the Go oracle that already round-trips
+	// release.s, so both run-disasm-roundtrip.sh gates pass for it too.
+	if matches != nWords {
+		t.Errorf("Z80 disasm matches the Go oracle on %d/%d words (%.1f%%); %d still "+
+			"differ (mostly fall through to .inst). Port the next family — biggest in "+
+			"the breakdown above — until this reaches 100%%.", matches, nWords, pct, nWords-matches)
 	}
 }

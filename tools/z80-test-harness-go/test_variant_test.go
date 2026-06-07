@@ -35,10 +35,12 @@ func TestVariantBootSelfTests(t *testing.T) {
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
 	sd13Path := filepath.Join(root, "build", "sysreg_data.bin")
+	// BUILD_TESTS assembler boot runs the disasm self-test → TEST disasm.
+	d15Path := filepath.Join(root, "build", "disasm-test.bin")
 	encPath := filepath.Join(root, "build", "enctab.enc")
 	text2binPath := filepath.Join(root, "build", "text2bin")
 	fixturePath := filepath.Join(root, "tests", "m3", "sources", "inst_nop_ret.s")
-	for _, p := range []string{tmPath, clusterPath, p14Path, sd13Path, encPath, text2binPath, fixturePath} {
+	for _, p := range []string{tmPath, clusterPath, p14Path, sd13Path, d15Path, encPath, text2binPath, fixturePath} {
 		if _, err := os.Stat(p); err != nil {
 			t.Skipf("prerequisite missing: %s", p)
 		}
@@ -56,6 +58,7 @@ func TestVariantBootSelfTests(t *testing.T) {
 	cluster, _ := os.ReadFile(clusterPath)
 	p14, _ := os.ReadFile(p14Path)
 	sd13, _ := os.ReadFile(sd13Path)
+	d15, _ := os.ReadFile(d15Path)
 	enc, _ := os.ReadFile(encPath)
 	in, _ := os.ReadFile(tbnPath)
 
@@ -83,6 +86,13 @@ func TestVariantBootSelfTests(t *testing.T) {
 			// boot; cluster_dispatch runs it via one LMPR swap.
 			{Name: "cluster", Content: cluster, TargetPage: 12},
 			{Name: "p14", Content: p14, TargetPage: 14},
+			// The disassembler payload, HLOAD'd by load_page15_payload
+			// (src/loader.asm) as SAMDOS CODE file "d15" into physical
+			// page 15.  The BUILD_TESTS boot does a paged_call to
+			// DISASM_SELF_TEST_ENTRY (&8003) on that page; without it
+			// served, page 15 is empty and the paged_call jumps into a
+			// zero page (trap → &0038).
+			{Name: "d15", Content: d15, TargetPage: 15},
 		},
 		Timeout: 10 * time.Second,
 		TraceLo: 0xB800, TraceHi: 0xBA00,
