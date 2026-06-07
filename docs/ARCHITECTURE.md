@@ -1,0 +1,365 @@
+# Architecture
+
+A synthesized overview of the whole system — the first document to read
+after the root `README.md`. Each section summarizes one subsystem and links
+the deep spec or reference that owns the detail; nothing here is normative
+on its own. For current milestone state see `notes/m8-status.md`; for the
+work backlog and open questions see `notes/item-registry.md` and
+`notes/question-registry.md`.
+
+## 1. What this is
+
+A single Z80 program that runs on a SAM Coupé and assembles **aarch64**
+(ARMv8-A 64-bit) machine code — making the SAM the development box for
+Pete's bare-metal Raspberry Pi 400 kernel (`spectrum4`). The end-state
+combines three subsystems on the SAM: a structured **editor** for aarch64
+source, the **assembler** that turns that source into a flat
+`kernel8.img`-style binary, and a **TFTP server** that netboots the result
+straight onto a Pi over a Quazar Trinity ethernet interface. The
+development loop closes without leaving the SAM.
+
+The work is phased ([specs/vision.md](specs/vision.md)):
+
+- **Phase 1 — standalone assembler** ([specs/phase1-assembler.md](specs/phase1-assembler.md)):
+  source from disk → flat binary on disk. No editor, no network. This is
+  the bulk of the repo today: the SAM-side Z80 assembler, its host-side Go
+  toolchain, and the byte-match gates that prove correctness.
+- **Phase 2 — visual editor**: a SAM-native structured editor producing the
+  binary source format directly ([specs/editor-edit-model-design.md](specs/editor-edit-model-design.md)).
+- **Phase 3 — TFTP server** over a direct SAM↔Pi ethernet link
+  ([specs/phase3-tftp-design.md](specs/phase3-tftp-design.md)).
+
+## 2. System shape
+
+Two halves, one correctness contract: the **host Go toolchain** implements
+everything first and serves as the authority; the **SAM-side Z80 program**
+is a faithful port of the pieces that must run on the SAM. Both must
+produce byte-identical output (§7).
+
+### 2.1 SAM side — `src/`
+
+`src/` holds the Z80 assembler that runs on the SAM (real hardware or
+SimCoupé). [`src/README.md`](../src/README.md) is its index; the essentials:
+
+- **One translation unit.** `assembler.asm` (`org &8000`, entry
+  `jp start`) `include`s every other in-section file in a **load-bearing
+  order** — code lands in section C in that sequence. The full ordered list
+  (io → trampoline → loader → `slots/` per-operand encoders → expression
+  evaluator → form lookup → encoder → record handlers → reader → two-pass
+  driver → symbols → local labels → literal pool → print) lives in
+  `src/README.md`.
+- **Two build variants from the same source**, split by the `BUILD_TESTS`
+  define: the test variant (`make m3-asm` → `build/assembler.bin`)
+  compiles in all boot-time self-test suites and exports
+  `build/assembler.sym`; the production variant (`make m3-asm-prod` →
+  `build/assembler-prod.bin`) omits them. Both emit identical output bytes
+  on every fixture; CI verifies the variants against each other (§7).
+- **Off-axis payloads on physical pages 12–15.** Standalone binaries
+  assembled separately and HLOAD'd at boot, reached by paging rather than
+  `include`: the big self-test suites (`test_cluster.bin` → page 12,
+  `test_mem.bin` → page 13, both `BUILD_TESTS` only), the production
+  sysreg/dc/tlbi/pstate lookup tables (`sysreg_data.bin` → page 13, every
+  build), the `paged_call` self-test stub (page 14, `BUILD_TESTS` only),
+  and the on-SAM disassembler (`disasm.bin` → page 15, every build). §5
+  covers the paging machinery.
+
+### 2.2 Host side — `tools/`
+
+[`tools/README.md`](../tools/README.md) is the full index. The production
+core:
+
+- **`tools/sam-aarch64/`** — the integrated host assembler, one binary
+  built from three Go libraries: `frontend` (text → in-memory symbolic IR:
+  lexer, parser, preprocessor, `-flatten`, strip passes), `assemble`
+  (pass 1 / pass 2 / compaction to the `.tbn` overlay), and `render`
+  (overlay → text). Modes: source → {binary, compact `.tbn`}
+  (`--emit-tbn`), `.tbn` → binary, `--render` (`.tbn` → text), `-E`
+  (preprocess only). The symbolic IR is **in-memory only — never
+  serialized** ([specs/i48-syntactic-encoder-design.md](specs/i48-syntactic-encoder-design.md),
+  Decision A).
+- **`tools/sam-aarch64-format/`** — Go library (`package format`)
+  implementing the `.tbn` container, record kinds, operand encoding,
+  expression bytecode, and the directive/mnemonic tables (§6). Imported by
+  `sam-aarch64` and `aarch64dec`.
+- **`tools/aarch64enc/`** — the instruction **encoding authority** (§3, §4).
+- **`tools/aarch64dec/`** — the instruction **decoding authority**: the Go
+  disassembler the Z80 `src/disasm.asm` is ported from, oracle-gated
+  against binutils `objdump` (§7).
+- **`tools/enctab-gen/`** — generates the encoder form table (§4).
+- **`tools/build-m3-disk/`** — packs assembler + enctab + payloads + a
+  `.tbn` into a bootable `.mgt` disk image (§7).
+
+## 3. The authority model
+
+The project's standing rule (see [`CLAUDE.md`](../CLAUDE.md), "If Go
+already implements it, the Z80 side is a port, not a design"): **Go
+implements first; the Z80 side mirrors it.**
+
+- **Encoding truth lives in `tools/aarch64enc/`** — the form table plus the
+  per-slot operand encoders and the overlay fold rules. When a Z80 encoding
+  is wrong, the fix is to read the corresponding Go function and port it
+  faithfully; the Go code already settles the design questions.
+- **Decoding truth lives in `tools/aarch64dec/`**, which is itself held to
+  GNU binutils: the `disasm` CI job asserts an exact match between
+  `aarch64dec` and `objdump` on the vendored release. We match binutils'
+  alias choices rather than inventing our own canonical forms.
+- **Ultimate truth is GNU binutils**: every gate byte-compares our output
+  against `as` (+ `ld -Ttext=0` where relocations need resolving) +
+  `objcopy -O binary` (§7).
+- Where the Z80 carries a hand-maintained copy of Go-side data (the
+  sysreg/pstate/dc/tlbi tables), a sync guard (`make sysreg-sync-check`,
+  CI job `sysreg-sync`) asserts the two cannot drift.
+
+For *execution* there is a parallel split (see `CLAUDE.md`, "Development
+inner loop for Z80 changes"): **SimCoupé (run only inside the dev
+container) is the sole CI gate** for SAM-side behaviour. The
+`koron-go/z80` harness (`tools/z80-test-harness-go/`) exists to make
+iteration fast, but it is a dev tool that is allowed to crash or mislead —
+when it disagrees with SimCoupé, SimCoupé wins (§8).
+
+## 4. Encoder tables
+
+The aarch64 encoder is table-driven: a **form** is one
+(mnemonic, operand-kind-tuple) pair with a 32-bit pattern, a fixed-bits
+mask, and a list of operand slots (kind, bit position, width). The pipeline:
+
+```
+reference/arm-mra/  (vendored ARM Machine Readable Architecture XML)
+        │
+        ▼
+tools/enctab-gen          make enctab            make enctab-regen-source
+        ├────────────────► build/enctab.enc      ├─► tools/aarch64enc/data.go
+        │                  (binary form table,       (the same MRA projection,
+        │                   loaded by the Z80)        as Go source)
+        │
+tools/aarch64enc/manual_forms.go   (hand-curated; never regenerated)
+```
+
+- **`data.go` is purely the MRA projection** and is rewritten verbatim by
+  `make enctab-regen-source`. **`manual_forms.go` is hand-curated** and
+  holds everything the MRA snapshot does not cover: mnemonics absent from
+  the vendored XML, encoder choices where GNU `as` prefers a different
+  alias than the MRA (e.g. `mov Xd, Xn` as ORR rather than ADD-imm-#0),
+  register-form variants, and the bare 0-operand `ret`. Manual forms are
+  consulted first in the linear scan, so they win ties.
+- `make enctab` builds **`build/enctab.enc`** from both halves; the binary
+  mirrors the Go runtime form table, so the Z80 and Go encoders share one
+  table by construction.
+- On the SAM, `enctab.enc` is HLOAD'd at boot into physical page 4 and read
+  through section A under `LMPR_ENCTAB` (§5).
+- **`ENCTAB_LEN` sync rule**: `src/loader.asm` carries the table's byte
+  size as a build-time constant (`ENCTAB_LEN`), and it must equal
+  `wc -c build/enctab.enc` exactly — a stale value truncates the HLOAD and
+  surfaces as failures on unrelated mnemonics. Update it whenever the form
+  table grows.
+
+## 5. Memory + paging model
+
+The SAM divides the Z80's 64 KB address space into four 16 KB **sections**
+A–D; **LMPR** (port `&FA`) selects the physical page pair for A/B, **HMPR**
+(port `&FB`) for C/D, out of 32 physical 16 KB pages on a 512 K machine.
+[`notes/sam-paging.md`](notes/sam-paging.md) is the hardware reference
+(ports, REL PAGE FORM, ROM/SAMDOS conventions).
+
+The assembler's map — mirrored in
+[`notes/memory-layout.md`](notes/memory-layout.md); the source of truth is
+the header block of `src/assembler.asm`:
+
+| Range | Section | Contents |
+|-------|---------|----------|
+| `&0000-&3FFF` | A | ROM0 by default; **or** ENCTAB (page 4) under `LMPR_ENCTAB`; **or** an IN page inside the reader bracket |
+| `&4000-&7FFF` | B | Mostly unused; trampoline copy at `&7E00`. Under `LMPR_ENCTAB`, section B = page 5 = the OUT-low emit window |
+| `&8000-&BFFF` | C | **Assembler code** — the buffers all live off-axis, so the whole 16 KB is code budget |
+| `&C000-&FFFF` | D | Stack (`SP = &C100`) + scratch: OPVAL arrays, SYMTAB, litpool tables, `STAGING_BUF`, expression pool |
+
+Everything bulky lives **off-axis** in physical pages that are paged into
+a section only for the duration of an access:
+
+- **Section-B paging helpers.** At startup the assembler copies two small
+  helper bodies to `&7E00` in section B (`src/trampoline.asm`): the
+  **HLOAD trampoline** and **`paged_call`**. Both exist because they
+  remap sections C/D (HMPR) while running — so they must execute, with a
+  safe stack, from a section that stays put.
+- **ENCTAB** (page 4) — HLOAD'd at boot through the HLOAD trampoline
+  (which swaps HMPR so the SAMDOS load lands in page 4 via the section C
+  window), then mapped into section A under `LMPR_ENCTAB` for encoder
+  reads.
+- **Paged IN** (pages 7–12, a 96 KB ceiling) — the `.tbn` source is
+  HLOAD'd once at startup; each record is staged into section D's
+  `STAGING_BUF` through a per-record LMPR bracket into section A. Design
+  rationale: [specs/paged-in-design.md](specs/paged-in-design.md).
+- **Paged OUT** (pages 5–6, 32 KB) — `emit_byte` writes the low zone
+  through section B (free under `LMPR_ENCTAB`) and the high zone through a
+  per-emit LMPR bracket; at end of pass 2, HSAVE reads the buffer through
+  section C with the save's start-page (UIFA) set to the OUT base page,
+  auto-paging across `&C000`. Design rationale:
+  [specs/paged-out-design.md](specs/paged-out-design.md).
+- **`paged_call`** — the generic "call a routine in another physical
+  page" helper (call shape: `call paged_call / defw addr / defb page`):
+  it saves HMPR, maps the target page into sections C/D, switches to a
+  safe section-B stack, `CALL`s the target, and restores HMPR
+  bit-identically on return. The page-13 sysname matcher and the page-15
+  disassembler are invoked this way. Its static save slots are one deep —
+  calls must not nest. (The big `BUILD_TESTS` off-axis suites use a
+  direct LMPR-swap bracket instead.)
+
+The disk I/O underneath (why HLOAD needs the trampoline, why HSAVE does
+not, hook register-clobbering facts) is
+[specs/samdos-file-io.md](specs/samdos-file-io.md).
+
+**The `&C000` cliff**: both variants link at `org &8000` and must end
+below `&C000`, where the stack page begins. Overrunning it produces a
+silent boot-hang, so
+[`scripts/check-code-budget.sh`](../scripts/check-code-budget.sh) turns
+the cliff into a build failure with a number; it runs inline at the tail
+of every assembler build and as `make check-budget` in CI.
+
+## 6. The `.tbn` v2 source format
+
+Source files on the SAM are not text: they are **`.tbn`** ("tokenised
+binary") files — the hand-off format from the host assembler to the SAM,
+and the format the Phase 2 editor will edit in place. The normative
+encoding reference is
+[specs/tbn-binary-format-reference.md](specs/tbn-binary-format-reference.md);
+the design rationale is
+[specs/compact-tbn-nextgen-design.md](specs/compact-tbn-nextgen-design.md).
+The shape:
+
+- There is exactly **one on-disk form: the compact instruction overlay**
+  (`Version = 2`). The container is `"SA64"` magic, version, flags, then a
+  `u32` **`editor_region_offset`** that splits the file into an
+  **assembler-facing region** and a trailing **editor region** the SAM
+  assembler never reads.
+- The assembler-facing region opens with two **header position tables**
+  (label table: `name_id` → offset-from-origin; local table: digit →
+  offset; both delta-encoded), then a flat **record stream** of three
+  kinds: `DIRECTIVE` (operands carried as self-describing encodings plus a
+  stack-machine **expression bytecode** for anything symbolic),
+  `LIT_DATA` (runs of constant data stored as raw assembled bytes), and
+  `INSN_RUN` (runs of instructions — mode 0 is packed literal 32-bit
+  words; mode 1 is base-word-plus-sparse-overlay: the relocated bitfield
+  is zeroed and a patch carries a fold-slot id plus the expression that
+  fills it at pass 2).
+- The **editor region** holds the interned name table (front-coded),
+  `.global` provenance flags, and the comment sidecar (comments anchored
+  to output PC) — pure round-trip data for the renderer/editor.
+- The Go package `tools/sam-aarch64-format/` is the code authority; the
+  Z80 reader/decoder (`src/reader.asm`, `src/main_loop.asm`,
+  `src/insn_run.asm`) mirrors the same constants.
+
+**The invariant is binary-identity, not `.tbn`-identity**: the `.tbn` is a
+working representation free to evolve (shrink, re-pack, relocate data),
+and correctness is defined entirely by the **assembled output bytes** —
+GNU, the Go path, and the Z80 path must agree byte-for-byte, and a `.tbn`
+must round-trip through `--render` to source that reassembles to those
+same bytes. The full spectrum4 release source fits in a ~44 KB compact
+`.tbn`, under the SAM's 96 KB IN ceiling.
+
+## 7. Build + test pipeline
+
+[`Makefile`](../Makefile) drives everything;
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) maps the gates
+to CI jobs.
+
+**Build**: `make all` builds both assembler variants (`m3-asm`,
+`m3-asm-prod`), each tail-checked by the code-budget script. `make
+m3-disk` assembles the bootable test disk: `tools/build-m3-disk` packs
+`assembler.bin`, `enctab.enc`, and the off-axis payloads (`-test-mem`,
+`-cluster`, `-paged-call`, `-sysreg-data`, `-disasm`) into a `.mgt` image.
+
+**The round-trip oracle** (the heart of the project): for each fixture
+`.s`, host and SAM both assemble it, and the result is byte-compared
+against GNU (`as` [+ `ld -Ttext=0` from the `tests/m4` corpus onward] +
+`objcopy -O binary`). Each corpus dir (`tests/m3`, `tests/m4`, `tests/m5`,
+`tests/m6`) carries a `run-roundtrip.sh` that sweeps its `sources/*.s`,
+invoking the matching per-fixture driver (`tools/run-m3-roundtrip.sh`,
+`run-m4-roundtrip.sh`, `run-m5-roundtrip.sh`, `run-m6-roundtrip.sh`):
+`sam-aarch64` (source → compact `.tbn`) → `build-m3-disk` →
+SimCoupé headless (`tools/run-simcoupe.sh`, `-exitonhalt`) → `samfile`
+extracts the OUT file → byte-diff. The corpora are cumulative feature
+tiers: `tests/m3` (core emit), `tests/m4` (symbols/two-pass), `tests/m5`
+(compound operands + directives), `tests/m6` (paged IN/OUT at scale);
+`tests/m1` and `tests/spectrum4` are host-side format/encoder corpora.
+
+**The release gate**: `tools/run-m6-release-gate.sh` is the headline
+3-way byte-match — the vendored spectrum4 release (`tests/m6/release/`,
+21 752 bytes) must come out byte-identical from (1) GNU binutils (the
+vendored `release.img`), (2) our Go toolchain, and (3) our Z80 toolchain
+on SimCoupé. It is hermetic (both inputs vendored, refreshed via
+`tools/revendor-m6-release.sh`) and also runs `make check-budget`.
+
+**Pure-Go gates** (no container): `ci-m1` (format + host-assembler unit
+tests, GNU-as cross-check), `ci-m2` (encoder + `enctab-gen` tests, plus
+host-side round-trips over the `tests/m1` and `tests/spectrum4`
+corpora), `ci-disasm` (the `aarch64dec` vs `objdump`
+oracle), `ci-disasm-roundtrip` (encode→decode→encode self-consistency,
+including the overlay `--render` leg), `sysreg-sync-check`, and
+`staticcheck` (dead-code gate, U1000, across the core Go modules).
+
+**CI job map** (`ci.yml`): `build-image` builds the dev container
+(pyz80 + SimCoupé + Go) and pushes it to ghcr.io multi-arch; every
+SimCoupé job pulls that image by sha tag and runs inside it. The jobs:
+
+| Job | Runs |
+|-----|------|
+| `build-image` | dev image build + push |
+| `m1`, `m2` | `make ci-m1` / `ci-m2` (host-only) |
+| `disasm`, `disasm-roundtrip` | `make ci-disasm` / `ci-disasm-roundtrip` (host-only) |
+| `sysreg-sync`, `staticcheck` | sync guard / dead-code gate (host-only) |
+| `m3`, `m4`, `m5`, `m6` | fixture-corpus round-trips on SimCoupé (test variant) |
+| `m4-prod`, `m5-prod`, `m6-prod` | same corpora with the production variant (variant-divergence guard) |
+| `m6-release` | the 3-way release byte-match + code budget |
+
+Branch protection on `main` requires the status checks configured in the
+repo settings (see `CLAUDE.md` §2); merges are merge commits only.
+
+## 8. Dev inner loop
+
+The standing rule (see `CLAUDE.md`, "Development inner loop for Z80
+changes"): **don't use CI as the inner loop**. The pipeline is a test
+pyramid — each layer is slower and more authoritative than the one above:
+
+1. **Host checks (fastest)** — `go test ./...` across the Go modules, plus
+   `pyz80` to confirm the Z80 still assembles. Pure host, no container.
+2. **The Go Z80 harness** (`tools/z80-test-harness-go/`, see its
+   [README](../tools/z80-test-harness-go/README.md)) — runs the real
+   assembler binary under `koron-go/z80` at ~1 ms per fixture, emulating
+   just enough SAMDOS (HGTHD/HLOAD/HSAVE hooks, paged RAM) to run the full
+   pipeline, including the **paged boot path**: `TestBootSelfTestsPass`
+   boots the `BUILD_TESTS` assembler with all page-12–15 payloads and
+   asserts every boot self-test passes in ~30 ms
+   (`TestBootSelfTestsFailProbe` is the negative control). It also gives
+   PC traces and register snapshots on failure. It is **not a gate**: it
+   may crash or mislead without blocking anything, agents evolve it as
+   normal work, and SimCoupé wins every disagreement. Gotcha: always pass
+   `-sysreg-data` for the production assembler.
+3. **SimCoupé in Docker** — the real-emulation confirmation before
+   pushing. SimCoupé runs only inside the dev container
+   (`tools/Dockerfile.dev`; see
+   [`notes/headless-simcoupe.md`](notes/headless-simcoupe.md)), never on
+   the host.
+4. **CI** — the final pre-merge gate (§7), not a per-iteration tool: a CI
+   round-trip costs minutes, the harness costs milliseconds.
+
+The boot self-tests themselves are the bottom of a second pyramid, inside
+the SAM binary: per-routine encoder/table assertions (`src/test_*.asm`)
+run at boot before any fixture round-trip, so a regression names its
+routine instead of surfacing as a byte-diff. The fixture corpora then
+exercise combinations, and the release gate exercises everything at once.
+
+## Going deeper
+
+- SAM-side code: [`../src/README.md`](../src/README.md) ·
+  [`notes/memory-layout.md`](notes/memory-layout.md) ·
+  [`notes/sam-paging.md`](notes/sam-paging.md)
+- Host toolchain: [`../tools/README.md`](../tools/README.md)
+- Format: [specs/tbn-binary-format-reference.md](specs/tbn-binary-format-reference.md)
+- Disk/file plumbing: [specs/samdos-file-io.md](specs/samdos-file-io.md) ·
+  [`notes/sam-disk-format.md`](notes/sam-disk-format.md) ·
+  [`notes/sam-file-header.md`](notes/sam-file-header.md)
+- Roadmap + tracking: [`ROADMAP.md`](ROADMAP.md) ·
+  [`notes/m8-status.md`](notes/m8-status.md) ·
+  [`notes/item-registry.md`](notes/item-registry.md) ·
+  [`notes/question-registry.md`](notes/question-registry.md)
+- Working agreements (authority model, inner loop, PR workflow):
+  [`../CLAUDE.md`](../CLAUDE.md)
