@@ -5,6 +5,7 @@ use (
 	./tools/aarch64enc
 	./tools/build-disk
 	./tools/comment-bench
+	./tools/editor-prototype
 	./tools/enctab-gen
 	./tools/i62-bdos-experiment/build-i62-disk
 	./tools/sam-aarch64
