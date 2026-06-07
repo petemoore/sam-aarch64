@@ -19,11 +19,11 @@ go run . -tbn build/release-unstripped.tbn                 # interactive, MODE 3
 go run . -tbn build/release-unstripped.tbn -geometry mode4-8x8
 go run . -mockup -tbn build/release-unstripped.tbn -o build/mockups/   # PNG+SCREEN$ sheets, all geometries
 go run . -frames 3 -tbn build/release-unstripped.tbn -o build/mockups/ # non-interactive smoke
+go run . -designs -design-line 3255 -tbn ... -o build/mockups/         # comment-aware layout mockups (V1-V3 + reader)
 ```
 
 Keys: arrows scroll · space/b page · g/G top/bottom · w wrap toggle · q/ESC quit.
-Geometries: `mode3-8x8` (default) · `mode3-6x8` · `mode3-6x6` · `mode4-8x8` ·
-`mode4-6x8` · `mode4-6x6`.
+Geometries: `mode3-8x8` (default) · `mode3-6x8` · `mode3-6x6` · `mode4-8x8` · `mode4-6x8` · `mode4-6x6`.
 
 Fonts live in `fonts/` (8×8 vendored; 6-px drop in by path — see its README).
 Design authority: `docs/specs/editor-tui-prototype-design.md`.
