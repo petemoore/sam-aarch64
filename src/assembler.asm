@@ -16,7 +16,7 @@
 ;   &8000-&BFFF  section C — assembler code (this file + all includes).
 ;                  The IN/OUT/ENCTAB buffers live off-axis (below), so
 ;                  the whole 16 KB section is code budget.
-;                  scripts/check-code-budget.sh (run at the tail of
+;                  tools/check-code-budget.sh (run at the tail of
 ;                  make m3-asm / m3-asm-prod) enforces code_end < &C000
 ;                  — the stack page starts there.
 ;   &C000-&C0FF  stack (SP = &C100, grows down into section D RAM)
