@@ -277,6 +277,15 @@ disasm-payload: $(BUILD)/disasm.bin
 
 disasm-test-payload: $(BUILD)/disasm-test.bin
 
+# zx0_compress.bin — standalone ZX0 greedy compressor (i60b-2, not yet wired
+# into the SAM build; placement is i60c design work).
+$(BUILD)/zx0_compress.bin: src/zx0_compress.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/zx0_compress.bin src/zx0_compress.asm
+
+.PHONY: zx0-compress-payload
+zx0-compress-payload: $(BUILD)/zx0_compress.bin
+
 $(BUILD)/build-disk: tools/build-disk/main.go tools/build-disk/go.mod
 	@mkdir -p $(BUILD)
 	cd tools/build-disk && go build -o ../../$(BUILD)/build-disk .
