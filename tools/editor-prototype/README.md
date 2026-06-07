@@ -20,6 +20,8 @@ go run . -tbn build/release-unstripped.tbn -geometry mode4-8x8
 go run . -mockup -tbn build/release-unstripped.tbn -o build/mockups/   # PNG+SCREEN$ sheets, all geometries
 go run . -frames 3 -tbn build/release-unstripped.tbn -o build/mockups/ # non-interactive smoke
 go run . -designs -design-line 3255 -tbn ... -o build/mockups/         # comment-aware layout mockups (V1-V3 + reader)
+go run . -iter2-stats -tbn ...                                         # rendering-ladder corpus measurement (markdown)
+go run . -iter2-mockups -tbn ... -o build/mockups/                     # compressed-rendering mockups, MODE 3 64×24
 ```
 
 Keys: arrows scroll · space/b page · g/G top/bottom · w wrap toggle · q/ESC quit.

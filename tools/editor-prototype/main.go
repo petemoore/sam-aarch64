@@ -40,6 +40,8 @@ func main() {
 	frames := flag.Int("frames", 0, "non-interactive smoke: render N viewer frames to PNG (scrolls one page between frames) and exit")
 	designs := flag.Bool("designs", false, "render the comment-aware design-variant mockups (V1-V3 + comment reader) instead of the raw viewer")
 	designLine := flag.Int("design-line", 0, "designs: 0-based document line the cursor sits on")
+	iter2Stats := flag.Bool("iter2-stats", false, "print the iteration-2 rendering-ladder corpus measurement (markdown) and exit")
+	iter2Mockups := flag.Bool("iter2-mockups", false, "render the iteration-2 compressed-rendering mockup PNGs (MODE 3 64x24) into -o")
 	crt := flag.Bool("crt", false, "mockup: apply the scanline-CRT darkening variant")
 	fontDir := flag.String("font-dir", "tools/editor-prototype/fonts", "directory holding vendored 6-px fonts (font6x8.sam / font6x6.sam)")
 	flag.Parse()
@@ -58,6 +60,14 @@ func main() {
 	}
 
 	switch {
+	case *iter2Stats:
+		if err := runIter2Stats(doc, os.Stdout); err != nil {
+			log.Fatalf("iter2-stats: %v", err)
+		}
+	case *iter2Mockups:
+		if err := runIter2Mockups(doc, *outDir, *fontDir); err != nil {
+			log.Fatalf("iter2-mockups: %v", err)
+		}
 	case *designs:
 		if err := runDesigns(doc, *outDir, *fontDir, *designLine); err != nil {
 			log.Fatalf("designs: %v", err)
