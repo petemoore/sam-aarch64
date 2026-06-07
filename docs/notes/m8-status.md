@@ -239,7 +239,10 @@ banners on the M1/i1 design docs.
   Byte-neutral: GNU == Go(source) == Go(compact .tbn) (21752 B / 45,189 B), all Go
   suites + the koron-go/z80 harness + disasm-roundtrip (104/104), and **all 14 CI checks
   green incl. the SimCoupé matrix + m6-release 3-way byte-match**; §3 review = MERGE.
-  Follow-up: drop the now-unused `format.RecordWriter.WriteRaw` (review YELLOW).
+  Post-merge cleanup (#146): the review's `WriteRaw` follow-up + a dead-code
+  sweep dropped `WriteRaw`, three orphaned `Reset()` helpers, and
+  `SymbolTable.Name`/`Len`; a `staticcheck` (unused/U1000) CI gate now guards
+  the core Go modules against re-accumulation.
 
 **✅ MERGED (PR #131, merge commit `e68e0bf`, 2026-06-09 #3).** All 14 CI checks
 green incl. the full SimCoupé matrix + the m6-release 3-way byte-match (GNU == Go ==

@@ -67,6 +67,24 @@ ci-m1: test-m1
 sysreg-sync-check:
 	cd tools/sam-aarch64-format && go test -run TestSysregZ80Sync -v ./...
 
+# staticcheck — dead-code gate (the `unused`/U1000 check, i.e. the same
+# analysis golangci-lint's `unused` linter wraps) across the core host
+# toolchain modules.  Pure Go, no container.  Pinned + forced to build with
+# go1.26.1 via GOTOOLCHAIN: a released staticcheck builds with go1.25 and
+# can't parse the go1.26 modules, so GOTOOLCHAIN=go1.26.1 makes `go run`
+# build the checker with the matching toolchain (downloaded if absent).
+# Scoped to U1000 so it is green on a never-linted tree and precisely
+# catches dead code; broaden the -checks set later if desired.  Add new
+# modules to STATICCHECK_MODULES as they appear.
+.PHONY: staticcheck
+STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.7.0
+STATICCHECK_MODULES := sam-aarch64-format sam-aarch64 aarch64enc aarch64dec enctab-gen z80-test-harness-go
+staticcheck:
+	for m in $(STATICCHECK_MODULES); do \
+	    echo "=== staticcheck (U1000) $$m ==="; \
+	    ( cd tools/$$m && GOTOOLCHAIN=go1.26.1 go run $(STATICCHECK) -checks U1000 ./... ); \
+	done
+
 .PHONY: enctab-gen enctab test-m2 ci-m2
 
 enctab-gen:

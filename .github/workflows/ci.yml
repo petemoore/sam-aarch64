@@ -160,6 +160,19 @@ jobs:
       - name: Run sysreg Go↔Z80 sync guard
         run: make sysreg-sync-check
 
+  # staticcheck — dead-code (unused / U1000) gate across the core host
+  # toolchain modules. Pure Go, no container; the checker is built with
+  # go1.26.1 (the modules' toolchain) via GOTOOLCHAIN inside the recipe.
+  staticcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: staticcheck unused-code gate
+        run: make staticcheck
+
   # M3 — sweeps the fixture corpus end-to-end on the dev container:
   #   text2bin → build-m3-disk → SimCoupé (Xvfb 24bit) → samfile extract
   #   → byte-diff against GNU as + objcopy.
