@@ -28,7 +28,7 @@
 *Updated in place each session — this is the live handover. Keep it ≤15 lines; history lives in the milestone status docs, the registries, and `git log`.*
 
 - **Milestone:** **M8 active** (`docs/notes/m8-status.md`). M0–M7 ✅ complete. Branch protection requires the status checks defined in `.github/workflows/ci.yml`. (M8 close + next-milestone choice queued for the 2026-06-12 triage.)
-- **Last landed:** overnight batch 2026-06-12 — i54 ✅ (#183: synthetic oracle corpus, EXTR/ROR-imm decode gap found+fixed) · i17 ✅ (#185: litpool `.ltorg` pass-desync C1 fix + silent-truncation guards; residuals → i73) · i71 ✅ (#186: B-DOS 1.5a vendored to `reference/bdos/` + Trinity-fork analysis — hook surface verified untouched) · i72 ✅ (#NNN: B-DOS reorientation + `build-disk -dos` prep). Before that: i40+i51 ✅ (#181).
+- **Last landed:** overnight batch 2026-06-12 — i54 ✅ (#183: synthetic oracle corpus, EXTR/ROR-imm decode gap found+fixed) · i17 ✅ (#185: litpool `.ltorg` pass-desync C1 fix + silent-truncation guards; residuals → i73) · i71 ✅ (#186: B-DOS 1.5a vendored to `reference/bdos/` + Trinity-fork analysis — hook surface verified untouched) · i72 ✅ (#187: B-DOS reorientation + `build-disk -dos` prep). Before that: i40+i51 ✅ (#181).
 - **In flight:** PR #184 (i7 codegen-tables spec) — awaiting Pete's spec-gate approval; implementation not started.
 - **Open questions:** q1 (i5 graphics — Pete), q10 (boot-disk SAMDOS 2→B-DOS swap — Pete). **Parked:** i50, i66, i39c; i48c is editor-phase.
 - **NEXT ACTION:** joint qN/iN triage with Pete (2026-06-12): M8 close + next milestone, q10 decision, PR #184 approval. Then proceed per outcomes.
