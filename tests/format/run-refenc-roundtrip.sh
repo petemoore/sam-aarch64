@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Layer 3 round-trip: for every fixture under tests/m1/sources/,
+# Layer 3 round-trip: for every fixture under tests/format/sources/,
 # build via sam-aarch64 and byte-compare against
 # `aarch64-none-elf-as` + `ld -Ttext=0` + `objcopy -O binary`.
 #
@@ -43,7 +43,7 @@ fi
 
 fail=0
 total=0
-for src in "$ROOT"/tests/m1/sources/*.s; do
+for src in "$ROOT"/tests/format/sources/*.s; do
     base=$(basename "$src" .s)
     total=$((total + 1))
     work="$ROOT/build/refenc-roundtrip/$base"

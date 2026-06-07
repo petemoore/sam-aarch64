@@ -10,7 +10,7 @@ if ! command -v "$AS" >/dev/null; then
 fi
 
 fail=0
-for f in "$ROOT"/tests/m1/sources/*.s; do
+for f in "$ROOT"/tests/format/sources/*.s; do
     if ! "$AS" -o /dev/null "$f" 2>/dev/null; then
         echo "FAIL: GNU as rejected $f"
         "$AS" -o /dev/null "$f" || true
@@ -23,4 +23,4 @@ if [ "$fail" -ne 0 ]; then
     exit 1
 fi
 
-echo "GNU as cross-check passed for $(ls "$ROOT"/tests/m1/sources/*.s | wc -l) fixtures"
+echo "GNU as cross-check passed for $(ls "$ROOT"/tests/format/sources/*.s | wc -l) fixtures"
