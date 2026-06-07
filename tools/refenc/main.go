@@ -1,12 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"os"
 
 	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
+	assemble "github.com/petemoore/sam-aarch64/tools/sam-aarch64/assemble"
 )
 
 func main() {
@@ -31,7 +31,7 @@ func main() {
 		os.Exit(2)
 	}
 	if dumpUsage {
-		usage = newUsage()
+		assemble.EnableUsage()
 	}
 	in, err := os.ReadFile(flag.Arg(0))
 	if err != nil {
@@ -41,22 +41,25 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	p1, err := Pass1(f)
+	p1, err := assemble.Pass1(f)
 	if err != nil {
 		fail(err)
 	}
 	if emitCompact != "" {
-		if err := writeCompactTBN(emitCompact, f, p1); err != nil {
+		b, err := assemble.CompactTBNBytes(f, p1)
+		if err != nil {
+			fail(err)
+		}
+		if err := os.WriteFile(emitCompact, b, 0644); err != nil {
 			fail(err)
 		}
 	}
-	out, err := Pass2(f, p1)
+	out, err := assemble.Pass2(f, p1)
 	if err != nil {
 		fail(err)
 	}
 	if dumpUsage {
-		usage.TotalOutBytes = len(out)
-		usage.Dump(os.Stderr)
+		assemble.DumpUsage(os.Stderr, len(out))
 	}
 	if outFlag == "" {
 		os.Stdout.Write(out)
@@ -65,26 +68,6 @@ func main() {
 	if err := os.WriteFile(outFlag, out, 0644); err != nil {
 		fail(err)
 	}
-}
-
-// writeCompactTBN compacts f's record stream and writes it as a new
-// .tbn at path, reusing f's name table (rebuilt by interning the names
-// in ID order, which reproduces the same IDs the records reference).
-func writeCompactTBN(path string, f *format.File, p1 *Pass1Result) error {
-	compacted, err := Compact(f, p1)
-	if err != nil {
-		return err
-	}
-	st := format.NewSymbolTable()
-	for _, n := range f.Names {
-		st.Intern(n)
-	}
-	labels, locals := headerRows(f, p1)
-	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, st, labels, locals, compacted); err != nil {
-		return err
-	}
-	return os.WriteFile(path, buf.Bytes(), 0644)
 }
 
 func fail(err error) {

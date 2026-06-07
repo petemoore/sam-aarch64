@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	translate "github.com/petemoore/sam-aarch64/tools/text2bin/internal/translate"
+	frontend "github.com/petemoore/sam-aarch64/tools/sam-aarch64/frontend"
 )
 
 // includeDirsFlag is a repeatable -I flag specifying directories to search
@@ -67,8 +67,8 @@ func main() {
 			fmt.Fprintln(os.Stderr, "-E cannot be combined with -flatten or -strip-comments or -strip-data")
 			os.Exit(2)
 		}
-		expanded, err := translate.Preprocess(src, in,
-			translate.PreprocessOptions{IncludeDirs: incDirs})
+		expanded, err := frontend.Preprocess(src, in,
+			frontend.PreprocessOptions{IncludeDirs: incDirs})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -92,30 +92,30 @@ func main() {
 			fmt.Fprintf(os.Stderr, "bad -origin %q: %v\n", originStr, err)
 			os.Exit(2)
 		}
-		out, err = translate.TranslateAndFlatten(src, in,
-			translate.PreprocessOptions{IncludeDirs: incDirs},
-			translate.FlattenOptions{OriginVMA: origin})
+		out, err = frontend.TranslateAndFlatten(src, in,
+			frontend.PreprocessOptions{IncludeDirs: incDirs},
+			frontend.FlattenOptions{OriginVMA: origin})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 	} else {
-		out, err = translate.TranslateWithOptions(src, in,
-			translate.PreprocessOptions{IncludeDirs: incDirs})
+		out, err = frontend.TranslateWithOptions(src, in,
+			frontend.PreprocessOptions{IncludeDirs: incDirs})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 	}
 	if stripCommentsFlag {
-		out, err = stripCommentRecords(out)
+		out, err = frontend.StripCommentRecords(out)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "strip-comments: %v\n", err)
 			os.Exit(1)
 		}
 	}
 	if stripDataFlag {
-		out, err = stripDataRecords(out)
+		out, err = frontend.StripDataRecords(out)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "strip-data: %v\n", err)
 			os.Exit(1)
