@@ -444,3 +444,11 @@ zx0-blocks: release-unstripped-tbn
 	    $(ZX0_BINARY) "$$f" "$${f%.raw}.zx0" 2>/dev/null || true; \
 	done
 	@echo "zx0-blocks: $$(ls $(BUILD)/zx0-blocks/*.zx0 | wc -l) compressed blocks written to $(BUILD)/zx0-blocks/"
+
+# Dump the full flat comment corpus for whole-corpus T-state totals (i67).
+# Produces: build/zx0-corpus.raw (consumed by TestZX0CorpusTotals).
+# Run: make zx0-corpus
+.PHONY: zx0-corpus
+zx0-corpus: release-unstripped-tbn
+	cd tools/comment-bench && go build -o $(CURDIR)/$(BUILD)/comment-bench .
+	$(BUILD)/comment-bench --dump-corpus=$(BUILD)/zx0-corpus.raw $(BUILD)/release-unstripped.tbn > /dev/null

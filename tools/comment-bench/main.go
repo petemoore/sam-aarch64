@@ -20,6 +20,11 @@
 // their ZX0-ready form (callers compress separately with the zx0 tool).
 // This is used by tools/z80-test-harness-go to measure real decode T-states.
 //
+// When --dump-corpus=FILE is specified, the full flat corpus (bodies in PC
+// order, newline-separated) is written to FILE. tools/z80-test-harness-go
+// splits it into blocks itself to measure whole-corpus compress/decode
+// T-state totals (TestZX0CorpusTotals).
+//
 // Outputs a text report to stdout. Run from the repo root via:
 //
 //	make comment-bench
@@ -42,10 +47,11 @@ import (
 
 func main() {
 	dumpBlocks := flag.String("dump-blocks", "", "write raw block files to this directory")
+	dumpCorpus := flag.String("dump-corpus", "", "write the full flat corpus to this file")
 	flag.Parse()
 	args := flag.Args()
 	if len(args) != 1 {
-		fmt.Fprintf(os.Stderr, "usage: comment-bench [--dump-blocks=DIR] <release-unstripped.tbn>\n")
+		fmt.Fprintf(os.Stderr, "usage: comment-bench [--dump-blocks=DIR] [--dump-corpus=FILE] <release-unstripped.tbn>\n")
 		os.Exit(1)
 	}
 	data, err := os.ReadFile(args[0])
@@ -74,6 +80,15 @@ func main() {
 		totalChars += len(c.Body)
 		corpus = append(corpus, c.Body...)
 		corpus = append(corpus, '\n')
+	}
+
+	// ── Optional corpus dump (--dump-corpus) ──────────────────────────────
+	if *dumpCorpus != "" {
+		if err := os.WriteFile(*dumpCorpus, corpus, 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "comment-bench: write %s: %v\n", *dumpCorpus, err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "comment-bench: corpus (%d B) written to %s\n", len(corpus), *dumpCorpus)
 	}
 
 	// ── Optional block dump (--dump-blocks) ───────────────────────────────
