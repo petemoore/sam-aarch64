@@ -500,3 +500,21 @@ zx0-blocks: release-unstripped-tbn
 zx0-corpus: release-unstripped-tbn
 	cd tools/comment-bench && go build -o $(CURDIR)/$(BUILD)/comment-bench .
 	$(BUILD)/comment-bench --dump-corpus=$(BUILD)/zx0-corpus.raw $(BUILD)/release-unstripped.tbn > /dev/null
+
+# i76 P1b font-proof (editor-tui-prototype-design.md §5): bootable disks
+# that render a release.s window on a real SAM MODE 3 screen — 85x32 with
+# the vendored 6x6 font, and 64x24 with the ROM 8x8 charset as reference.
+# The start line picks a representative stretch of handle_irq_bcm283x /
+# handle_irq_bcm2711: banner comments, prose, labels, and code lines with
+# long trailing comments. Capture: tools/font-proof/run-capture.sh.
+# GOWORK=off: the throwaway probe tool stays out of the workspace.
+.PHONY: font-proof
+font-proof:
+	mkdir -p $(BUILD)
+	cd tools/font-proof && GOWORK=off go build -o $(CURDIR)/$(BUILD)/fontproof-tool .
+	$(BUILD)/fontproof-tool font -header tools/editor-prototype/fonts/five_pixel_font.h -o $(BUILD)/font6.bin
+	$(BUILD)/fontproof-tool text -src tests/release/release.s -start-line 3837 -rows 32 -cols 85 -o $(BUILD)/text6.bin
+	$(BUILD)/fontproof-tool text -src tests/release/release.s -start-line 3837 -rows 24 -cols 64 -o $(BUILD)/text8.bin
+	pyz80 --obj=$(BUILD)/fontproof.bin tools/font-proof/fontproof.asm
+	$(BUILD)/fontproof-tool disk -dos reference/samdos/samdos2.bin -bin $(BUILD)/fontproof.bin -call 32768 -o $(BUILD)/font-proof.mgt
+	$(BUILD)/fontproof-tool disk -dos reference/samdos/samdos2.bin -bin $(BUILD)/fontproof.bin -call 32771 -o $(BUILD)/font-proof-8x8.mgt
