@@ -79,6 +79,7 @@ zx0_compress:
         ld      (zxc_it_src+1), hl      ; patch src base into zxc_insert_tail
         ld      (zxc_dst),     bc
         ld      (zxc_src_len), de
+        ld      (zxc_ml_len+1), de      ; patch src_len into the main loop
 
         ; ws_base is in IX; save to a module variable too.
         push    ix
@@ -159,7 +160,8 @@ zx0_compress:
 zxc_main_loop:
         ; Exit when pos >= src_len.
         ld      hl, (zxc_pos)
-        ld      de, (zxc_src_len)
+zxc_ml_len:
+        ld      de, 0                   ; SMC: src_len, patched at entry
         ld      a, l
         sub     e
         ld      a, h
@@ -403,16 +405,18 @@ zxc_insert_tail:
         dec     a
         ld      ixl, a                  ; count = bestLen-1 (>= 1)
         ld      de, (zxc_pos)
-zxc_it_loop:
-        inc     de                      ; i = pos+k
-        ; &chain[i] = chain_base + i*2, parked while the hash runs.
+        ; Park &chain[pos+1] in the cslot immediate; the loop advances
+        ; it by 2 per iteration (chain slots are consecutive).
         ld      h, d
         ld      l, e
+        inc     hl
         add     hl, hl
 zxc_it_chain:
         ld      bc, 0                   ; SMC: chain_base, patched at entry
         add     hl, bc
         ld      (zxc_it_cslot+1), hl
+zxc_it_loop:
+        inc     de                      ; i = pos+k
         ; Inline zxc_hash2 body (see there for the boundary-check proof).
         ld      h, d
         ld      l, e
@@ -444,6 +448,8 @@ zxc_it_cslot:
         ld      (hl), c
         inc     hl
         ld      (hl), b                 ; chain[i] = old head
+        inc     hl
+        ld      (zxc_it_cslot+1), hl    ; advance to &chain[i+1]
         dec     ixl
         jp      nz, zxc_it_loop
         ret
