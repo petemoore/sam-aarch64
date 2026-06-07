@@ -29,7 +29,7 @@ gcc -O2 -o /tmp/zx0 src/compress.c src/memory.c src/optimize.c src/zx0.c
 ```
 
 The `tools/z80-test-harness-go/testdata/` directory contains pyz80 ports of the
-three Z80 decoders (syntax-only changes; upstream logic unchanged).
+four Z80 decoders (syntax-only changes; upstream logic unchanged).
 
 ## Usage
 

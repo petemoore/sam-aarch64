@@ -59,7 +59,6 @@ HASH_SIZE:       equ     512     ; power of two in {256,512,1024,2048}
 CHAIN_DEPTH:     equ     16      ; in {4,8,16,32}
 HASH_MASK:       equ     (HASH_SIZE - 1)
 HASH_SIZE_BYTES: equ     (HASH_SIZE * 2)
-ZX0_MAX_OFFSET:  equ     32640   ; compress.go: zx0MaxOffset
 
                 org     0
 
