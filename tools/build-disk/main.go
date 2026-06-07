@@ -18,6 +18,10 @@
 //	8  d15        (after)      (page-15 disassembler binary, if provided —
 //	                            strand-B PR-3; deposited for BOTH variants;
 //	                            needed by editor at runtime)
+//	9  zx013      (after)      (page-13 zx0 compressor+decoder payload at
+//	                            &8400, if provided — i68; deposited for
+//	                            BOTH variants; needed by the editor's
+//	                            comment-block compress/decode paths)
 //
 // The AUTO BASIC references "assembler" (not "stub" as in M0).
 //
@@ -85,9 +89,10 @@ func main() {
 	clusterPath := flag.String("cluster", "", "path to the off-axis page-12 M5+misc encoder self-test cluster (build/test_cluster.bin; BUILD_TESTS only; M6 budget-relief)")
 	sysregDataPath := flag.String("sysreg-data", "", "path to the page-13 sysreg lookup data (build/sysreg_data.bin; PRODUCTION + test; PR-2)")
 	disasmPath := flag.String("disasm", "", "path to the page-15 disassembler binary (build/disasm.bin; PRODUCTION + test; strand-B PR-3)")
+	zx0Path := flag.String("zx0", "", "path to the page-13 zx0 compressor+decoder payload (build/zx0.bin; PRODUCTION + test; i68)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
-			"usage: %s [-test-mem <path>] [-paged-call <path>] [-cluster <path>] [-sysreg-data <path>] [-disasm <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n",
+			"usage: %s [-test-mem <path>] [-paged-call <path>] [-cluster <path>] [-sysreg-data <path>] [-disasm <path>] [-zx0 <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n",
 			os.Args[0])
 		flag.PrintDefaults()
 	}
@@ -330,6 +335,28 @@ func main() {
 		}
 	}
 
+	// Slot 9 (optional): page-13 zx0 payload (zx013). Loaded at boot by
+	// src/loader.asm::load_zx0_payload via HGTHD + trampoline into
+	// physical page 13 at &8400 — alongside the sd13 sysreg data at
+	// &8000 (the two co-reside at disjoint offsets; see
+	// src/zx0_comm.inc). Holds the greedy ZX0 compressor (&8400) + the
+	// turbo decoder (&8B00) per docs/specs/comment-storage-design.md §5.
+	// PRODUCTION feature — deposited for BOTH variants (the editor's
+	// compress-at-save / decode-at-read paths need it); the test disk
+	// ships the BUILD_TESTS variant (zx0-test.bin) carrying the &AFA0
+	// boot self-test + baked fixture. Recorded load address &8400 is
+	// documentary but matches the runtime HL the loader passes.
+	if *zx0Path != "" {
+		zx0Data, err := os.ReadFile(*zx0Path)
+		if err != nil {
+			log.Fatalf("read zx0 payload: %v", err)
+		}
+		const Zx0LoadAddress uint32 = 0x8400
+		if err := disk.AddCodeFile("zx013", zx0Data, Zx0LoadAddress, 0); err != nil {
+			log.Fatalf("AddCodeFile(zx013): %v", err)
+		}
+	}
+
 	if err := disk.Save(outputPath); err != nil {
 		log.Fatalf("save %s: %v", outputPath, err)
 	}
@@ -364,6 +391,10 @@ func main() {
 	if *disasmPath != "" {
 		disasmSize, _ := os.Stat(*disasmPath)
 		fmt.Printf("d15:        %d bytes\n", disasmSize.Size())
+	}
+	if *zx0Path != "" {
+		zx0Size, _ := os.Stat(*zx0Path)
+		fmt.Printf("zx013:      %d bytes\n", zx0Size.Size())
 	}
 	fmt.Printf("Built %s\n", outputPath)
 }

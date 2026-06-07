@@ -214,18 +214,33 @@ name_enctab:    defb    19
 ; Called via JP from each load_pageN_payload stub.  Each stub provides:
 ;   HL = UIFA name block (type + 10-char name + 4-char ext, 15 bytes).
 ;   A  = target physical page (5-bit page number).
+; The file lands at the start of the target page (HLOAD destination
+; &8000, the bottom of the section-C window).
+;
+; load_payload_generic_at is the offset-bearing entry: DE supplies the
+; HLOAD destination address (&8000..&BFFF), so a payload can land at a
+; non-zero offset within the target page — used by load_zx0_payload to
+; place the zx0 payload at &8400, beside sysreg_data at &8000 on the
+; same page.  The destination is parked in a static (lpg_dest) because
+; the SAMDOS hook clobbers E and the DIFA read below needs DE.
 ;
 ; The body does:
-;   push A (saves target page), fill_uifa, HOOK_HGTHD, read
-;   DIFA+34/35 for page-count + length-mod-16K, pop A into B, then
-;   call TRAMPOLINE_DST to execute the section-B HLOAD trampoline.
+;   stash DE (dest), push A (saves target page), fill_uifa, HOOK_HGTHD,
+;   read DIFA+34/35 for page-count + length-mod-16K, pop A into B,
+;   reload HL = dest, then call TRAMPOLINE_DST to execute the section-B
+;   HLOAD trampoline.
 ;
-; Input:  HL = name block, A = target page.
+; Input:  HL = name block, A = target page
+;         (+ DE = destination address for the _at entry).
 ;         Precondition: enctab_trampoline_setup has been called.
-; Output: file in target page, HMPR restored on return.
+; Output: file in target page at the destination offset, HMPR restored
+;         on return.
 ; Clobbers: A, BC, DE, HL, IX.
 ; -----------------------------------------------------------------------
 load_payload_generic:
+                ld      de, &8000      ; default destination: page start
+load_payload_generic_at:
+                ld      (lpg_dest), de ; park dest (E dies in the hook)
                 push    af             ; save A = target page
                 call    fill_uifa
                 rst     8
@@ -243,9 +258,14 @@ load_payload_generic:
                 ld      c, a           ; C = pages count
                 pop     af             ; restore A = target page
                 ld      b, a           ; B = target page for HLOAD trampoline
-                ld      hl, &8000      ; section-C window (HLOAD requirement)
+                ld      hl, (lpg_dest) ; section-C window (HLOAD requirement)
                 call    TRAMPOLINE_DST
                 ret
+
+; Static destination slot for load_payload_generic_at.  Section-C RAM;
+; written and read under the caller's HMPR (the trampoline's HMPR swap
+; happens strictly inside TRAMPOLINE_DST, after the read).
+lpg_dest:       defw    0
 
 
 ; -----------------------------------------------------------------------
@@ -274,6 +294,41 @@ load_page13_payload:
 name_sysreg_data:
                 defb    19
                 defm    "sd13      "   ; 10 chars (4 + 6 trailing spaces)
+                defm    "    "         ; 4-char ext (unused)
+
+
+; -----------------------------------------------------------------------
+; load_zx0_payload — PRODUCTION feature (both variants).  HLOAD the
+; page-13 zx0 payload (compressor &8400 + turbo decoder &8B00; CODE
+; file "zx013") into physical page 13 at ZX0_LOAD_ADDR = &8400 — the
+; only payload that loads at a non-page-start offset, so it goes via
+; load_payload_generic_at.  It co-resides with sysreg_data.bin, which
+; occupies the same page at &8000-&83B3 (addresses pinned in
+; src/zx0_comm.inc per docs/specs/comment-storage-design.md §5).
+;
+; Needed by EVERY build: the editor's comment-block compress-at-save /
+; decode-at-read paths call ZX0_COMPRESS_ENTRY / ZX0_DECODE_ENTRY via
+; paged_call.  ORDERING: identical to load_page13_payload — after
+; enctab_trampoline_setup and, in BUILD_TESTS, after the test_mem
+; self-tests (page 13 is time-multiplexed with test_mem.bin at boot);
+; before the BUILD_TESTS zx0 self-test paged_call and before
+; main_assemble.
+; -----------------------------------------------------------------------
+load_zx0_payload:
+                ld      hl, name_zx0
+                ld      de, ZX0_LOAD_ADDR
+                ld      a, ZX0_PAGE
+                jp      load_payload_generic_at
+
+
+; -----------------------------------------------------------------------
+; UIFA name block for "zx013" (zx0 payload, both variants).
+;
+; The on-disk catalogue entry is created by build-disk when invoked
+; with the -zx0 flag.
+; -----------------------------------------------------------------------
+name_zx0:       defb    19
+                defm    "zx013     "   ; 10 chars (5 + 5 trailing spaces)
                 defm    "    "         ; 4-char ext (unused)
 
 
