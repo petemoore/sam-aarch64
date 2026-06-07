@@ -174,6 +174,8 @@ func tstatesForInstruction(cpu *z80.CPU, mem *flatRAM) uint64 {
 			return 20 // LD (nn),IX / LD IX,(nn) = 20 T
 		case 0x23, 0x2B:
 			return 10 // INC/DEC IX = 10 T
+		case 0x26, 0x2E:
+			return 11 // LD IXH,n / LD IXL,n (undocumented) = 11 T
 		case 0x34, 0x35:
 			return 23 // INC/DEC (IX+d) = 23 T
 		case 0x36:
@@ -212,6 +214,8 @@ func tstatesForInstruction(cpu *z80.CPU, mem *flatRAM) uint64 {
 			return 20
 		case 0x23, 0x2B:
 			return 10
+		case 0x26, 0x2E:
+			return 11 // LD IYH,n / LD IYL,n (undocumented) = 11 T
 		case 0x34, 0x35:
 			return 23
 		case 0x36:

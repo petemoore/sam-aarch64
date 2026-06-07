@@ -60,6 +60,8 @@ zx0_compress:
         ; Stash entry arguments.
         ld      (zxc_src),     hl
         ld      (zxc_h2_src+1), hl      ; patch src base into zxc_hash2
+        ld      (zxc_fb_src1+1), hl     ; patch src base into zxc_find_best
+        ld      (zxc_fb_src2+1), hl
         ld      (zxc_dst),     bc
         ld      (zxc_src_len), de
 
@@ -69,18 +71,13 @@ zx0_compress:
         ld      (zxc_ws_base), hl
         ld      (zxc_h2_ws+1), hl       ; patch hashHead base into zxc_hash2
 
-        ; Compute:
-        ;   chain_base  = ws_base + HASH_SIZE_BYTES
-        ;   state_base  = ws_base + HASH_SIZE_BYTES + src_len*2
+        ; chain_base = ws_base + HASH_SIZE_BYTES, patched into every
+        ; chain-array user.
         ld      bc, HASH_SIZE_BYTES
         add     hl, bc                  ; HL = chain_base
-        ld      (zxc_chain_base), hl
         ld      (zxc_ins_chain+1), hl   ; patch chain_base into zxc_insert
-
-        ld      bc, (zxc_src_len)
-        add     hl, bc
-        add     hl, bc                  ; HL = state_base
-        ld      (zxc_state), hl
+        ld      (zxc_fb_chain+1), hl    ; patch chain_base into zxc_find_best
+        ld      (zxc_fb_chain2+1), hl
 
         ; ── Fill hash table with &FF (sentinel &FFFF) ─────────────────
         ; Go: newMatchFinder initialises hashHead[] = 0xFFFF.
@@ -414,174 +411,191 @@ zxc_it_loop:
 ; zxc_find_best — find best match at pos; insert pos into chain.
 ; Go: matchFinder.findBest (compress.go lines 402–438).
 ; Updates zxc_best_len, zxc_best_off.
-; Clobbers: A, HL, DE, BC.
+; Clobbers: A, HL, DE, BC, IXh, IXl, IYl.
+;
+; Walk-loop register allocation:
+;   DE  = candidate index        BC = pos_ptr (src + pos, constant)
+;   IXh = bestLen so far         IXl = chain steps remaining
+;   HL  = scratch                IYl = deep-compare counter
+; Walk constants live in immediates patched per call (pos, maxML,
+; screen byte/base, hashHead slot) or at entry (src, chain_base).
+;
+; Time-only deviations from the Go shape (output proven identical by
+; the byte-identity oracle):
+;
+; * Screen test: cand_ptr[bestLen] is compared with pos_ptr[bestLen]
+;   before a full compare.  A candidate failing it has ml <= bestLen,
+;   which cannot change (bestLen, bestOff): Go updates only on
+;   ml > bestLen, and its ml == bestLen tie case rewrites the same
+;   values.  Candidates are walked in the same order with the same
+;   chain-depth budget, so the selected match is identical.
+; * Go's off-range checks are dropped: off <= 0 is impossible (every
+;   chain entry is a previously-inserted position strictly below the
+;   probing pos) and off > 32640 is impossible at src_len <= 8192.
+; * Ceiling exit: once bestLen == maxML no candidate can satisfy
+;   ml > bestLen, and the walk has no side effects, so it ends early.
+; * The sentinel test checks D == &FF only: positions are <= 8191
+;   (D <= &1F), so D == &FF occurs exactly for the &FFFF sentinel.
 ; ════════════════════════════════════════════════════════════════════
 zxc_find_best:
-        ld      hl, 0
-        ld      (zxc_best_len), hl
-        ld      (zxc_best_off), hl
+        ; bestLen = 0.  zxc_best_off is left stale: the main loop reads
+        ; it only when bestLen > 0, and any update writes it first.
+        ld      ixh, 0
+
+        ; Patch pos into the off-computation immediates.
+        ld      de, (zxc_pos)
+        ld      (zxc_fb_pos2+1), de
+        ld      (zxc_fb_pos3+1), de
+
+        ; maxML = min(255, src_len - pos), patched into both users.
+        ld      hl, (zxc_src_len)
+        or      a
+        sbc     hl, de                  ; HL = src_len - pos (>= 1)
+        ld      a, h
+        or      a
+        jp      z, zxc_fb_ml_ok
+        ld      l, 255
+zxc_fb_ml_ok:
+        ld      a, l
+        ld      (zxc_fb_maxml+1), a
+        ld      (zxc_fb_maxml2+1), a
+
+        ; Hash pos before pos_ptr lands in BC (zxc_hash2 clobbers BC).
+        ; The slot address is cached for the post-walk insert (the walk
+        ; never writes hashHead, so the probed slot is still current).
+        ld      h, d
+        ld      l, e
+        call    zxc_hash2               ; HL = &hashHead[h]; DE preserved
+        ld      (zxc_fb_slot+1), hl
+        push    hl                      ; save slot for the candidate read
+
+        ; pos_ptr = src + pos -> BC; screen byte for bestLen=0 is
+        ; src[pos]; screen base for bestLen=0 is src itself.
+zxc_fb_src1:
+        ld      hl, 0                   ; SMC: src, patched at entry
+        add     hl, de
+        ld      b, h
+        ld      c, l                    ; BC = pos_ptr
+        ld      a, (hl)
+        ld      (zxc_fb_scrv+1), a      ; screen byte = src[pos]
+        ld      hl, (zxc_src)
+        ld      (zxc_fb_scrb+1), hl     ; screen base = src + bestLen(0)
 
         ; candidate = hashHead[hash2(pos)]
-        ld      hl, (zxc_pos)
-        call    zxc_hash2               ; HL = &hashHead[h]
+        pop     hl
         ld      e, (hl)
         inc     hl
         ld      d, (hl)                 ; DE = candidate
-
-        ld      a, CHAIN_DEPTH
-        ld      (zxc_chain_ctr), a
+        ld      ixl, CHAIN_DEPTH
 
 zxc_fb_loop:
-        ; Sentinel: candidate == &FFFF?
         ld      a, d
-        and     e
-        inc     a
+        inc     a                       ; D == &FF <=> sentinel &FFFF
         jp      z, zxc_fb_done
-
-        ld      a, (zxc_chain_ctr)
-        or      a
-        jp      z, zxc_fb_done
-
-        ; off = pos - candidate.  Valid: 0 < off <= ZX0_MAX_OFFSET.
-        ld      hl, (zxc_pos)
-        ld      a, l
-        sub     e
-        ld      l, a
-        ld      a, h
-        sbc     a, d
-        ld      h, a                    ; HL = off
-
-        ld      a, h
-        or      l
-        jp      z, zxc_fb_skip
-
-        ld      a, h
-        cp      &80
-        jp      nc, zxc_fb_skip
-        cp      &7F
-        jp      c, zxc_fb_ok
-        ld      a, l
-        cp      &81
-        jp      nc, zxc_fb_skip
-zxc_fb_ok:
-        ; HL = off.  Count match length.
-        push    de                      ; save candidate (DE)
-        push    hl                      ; save off (HL)
-
-        ; pos_ptr = src + pos
-        ld      hl, (zxc_src)
-        ld      de, (zxc_pos)
-        add     hl, de                  ; HL = pos_ptr
-
-        ; cand_ptr = pos_ptr - off
-        pop     de                      ; DE = off
-        push    de                      ; re-save off
-        ld      a, l
-        sub     e
-        ld      l, a
-        ld      a, h
-        sbc     a, d
-        ld      h, a                    ; HL = cand_ptr
-
-        ; pos_ptr is now: recompute into BC (we've clobbered HL above).
-        ld      bc, (zxc_src)
-        ld      de, (zxc_pos)
-        ld      a, c
-        add     a, e
-        ld      c, a
-        ld      a, b
-        adc     a, d
-        ld      b, a                    ; BC = src + pos = pos_ptr
-
-        ; maxML = src_len - pos, capped at 255.
-        ; Save cand_ptr (HL) first because computing maxML clobbers HL.
-        push    hl                      ; save cand_ptr
-        ld      de, (zxc_src_len)
-        ld      hl, (zxc_pos)
-        ld      a, e
-        sub     l
-        ld      e, a
-        ld      a, d
-        sbc     a, h
-        ld      d, a                    ; DE = src_len - pos
-        ld      a, d
-        or      a
-        jp      z, zxc_fb_ml_ok
-        ld      e, 255
-        ld      d, 0
-zxc_fb_ml_ok:
-        pop     hl                      ; restore cand_ptr
-        ; E = maxML, HL = cand_ptr, BC = pos_ptr.
-        xor     a                       ; A = 0 (match-length counter)
-        ld      (zxc_ml_count), a       ; initialise counter variable
-
-zxc_fb_cmp:
-        ld      a, e
-        or      a
-        jp      z, zxc_fb_cmp_done
-        ld      a, (bc)
-        cp      (hl)
-        jp      nz, zxc_fb_cmp_done
-        inc     hl
-        inc     bc
-        ld      a, (zxc_ml_count)
-        inc     a
-        ld      (zxc_ml_count), a
-        dec     e
-        jp      nz, zxc_fb_cmp          ; more bytes available: continue
-zxc_fb_cmp_done:
-        pop     de                      ; DE = off (re-saved before cand_ptr compute)
-        pop     hl                      ; HL = candidate (original push de = candidate)
-
-        ld      a, (zxc_ml_count)       ; A = ml
-        or      a
-        jp      z, zxc_fb_adv
-
-        ld      b, a                    ; B = ml
-        ld      a, (zxc_best_len)
-        cp      b
-        jp      nc, zxc_fb_adv
-        ; ml > bestLen: update.
-        ld      a, b
-        ld      (zxc_best_len), a
-        xor     a
-        ld      (zxc_best_len+1), a
-        ld      a, e
-        ld      (zxc_best_off),   a     ; off lo
-        ld      a, d
-        ld      (zxc_best_off+1), a     ; off hi
-
-zxc_fb_adv:
-        ; candidate = chain[candidate].  candidate index is in HL.
-        add     hl, hl
-        ld      de, (zxc_chain_base)
+        ; Screen: src[candidate + bestLen] vs src[pos + bestLen].
+zxc_fb_scrb:
+        ld      hl, 0                   ; SMC: src + bestLen
+        add     hl, de
+        ld      a, (hl)
+zxc_fb_scrv:
+        cp      0                       ; SMC: src[pos + bestLen]
+        jp      z, zxc_fb_deep
+zxc_fb_next:
+        ; candidate = chain[candidate]
+zxc_fb_chain:
+        ld      hl, 0                   ; SMC: chain_base, patched at entry
+        add     hl, de
         add     hl, de
         ld      e, (hl)
         inc     hl
-        ld      d, (hl)                 ; DE = chain[old_candidate] = next candidate
-        ld      a, (zxc_chain_ctr)
-        dec     a
-        ld      (zxc_chain_ctr), a
-        jp      zxc_fb_loop             ; top-of-loop re-checks counter + sentinel
-
-zxc_fb_skip:
-        ; off out of range: advance chain.  DE = candidate.
-        ld      h, d
-        ld      l, e
-        add     hl, hl
-        ld      bc, (zxc_chain_base)
-        add     hl, bc
-        ld      e, (hl)
-        inc     hl
         ld      d, (hl)
-        ld      a, (zxc_chain_ctr)
-        dec     a
-        ld      (zxc_chain_ctr), a
-        jp      zxc_fb_loop             ; top-of-loop re-checks counter + sentinel
+        dec     ixl
+        jp      nz, zxc_fb_loop
+        jp      zxc_fb_done
 
+; ── Deep compare: screen passed; count the match length ──────────────
+zxc_fb_deep:
+        push    de                      ; save candidate
+zxc_fb_src2:
+        ld      hl, 0                   ; SMC: src, patched at entry
+        add     hl, de                  ; HL = cand_ptr
+        ld      d, b
+        ld      e, c                    ; DE = pos_ptr (advancing copy)
+zxc_fb_maxml:
+        ld      a, 0                    ; SMC: maxML
+        ld      iyl, a                  ; IYl = compare budget
+zxc_fb_dloop:
+        ld      a, (de)
+        cp      (hl)
+        jp      nz, zxc_fb_dend
+        inc     de
+        inc     hl
+        dec     iyl
+        jp      nz, zxc_fb_dloop
+zxc_fb_dend:
+        ; ml = E - C (exact: ml <= 255)
+        ld      a, e
+        sub     c                       ; A = ml
+        cp      ixh
+        jp      c, zxc_fb_nextp         ; ml < bestLen: no improvement
+        jp      z, zxc_fb_nextp         ; ml == bestLen: Go tie rewrite is a no-op
+        ; ── ml > bestLen: update bestLen/bestOff ─────────────────────
+        ld      ixh, a                  ; bestLen = ml
+        pop     de                      ; DE = candidate
+        push    de
+zxc_fb_pos2:
+        ld      hl, 0                   ; SMC: pos
+        or      a
+        sbc     hl, de                  ; HL = off = pos - candidate
+        ld      (zxc_best_off), hl
+        ; Ceiling: bestLen == maxML ends the walk (no side effects left).
+zxc_fb_maxml2:
+        cp      0                       ; SMC: maxML
+        jp      z, zxc_fb_done_pop
+        ; Repatch the screen for the new bestLen:
+        ; screen byte = pos_ptr[bestLen]; screen base = src + bestLen.
+        ld      l, a
+        ld      h, 0
+        add     hl, bc                  ; HL = pos_ptr + bestLen
+        ld      a, (hl)
+        ld      (zxc_fb_scrv+1), a
+zxc_fb_pos3:
+        ld      de, 0                   ; SMC: pos
+        or      a
+        sbc     hl, de                  ; HL = src + bestLen
+        ld      (zxc_fb_scrb+1), hl
+        pop     de                      ; DE = candidate
+        jp      zxc_fb_next
+
+zxc_fb_nextp:
+        pop     de                      ; DE = candidate
+        jp      zxc_fb_next
+
+zxc_fb_done_pop:
+        pop     de                      ; discard saved candidate
 zxc_fb_done:
+        ; Publish bestLen for the main loop.
+        ld      a, ixh
+        ld      (zxc_best_len), a
+        xor     a
+        ld      (zxc_best_len+1), a
+        ; Insert pos using the cached hashHead slot (no second hash2).
         ld      de, (zxc_pos)
-        call    zxc_insert
+zxc_fb_slot:
+        ld      hl, 0                   ; SMC: &hashHead[hash2(pos)]
+        ld      c, (hl)
+        ld      (hl), e
+        inc     hl
+        ld      b, (hl)
+        ld      (hl), d                 ; BC = old head; hashHead[h] = pos
+        ex      de, hl
+        add     hl, hl
+zxc_fb_chain2:
+        ld      de, 0                   ; SMC: chain_base, patched at entry
+        add     hl, de
+        ld      (hl), c
+        inc     hl
+        ld      (hl), b                 ; chain[pos] = old head
         ret
 
 
@@ -889,8 +903,6 @@ zxc_ws_base:     defw    0       ; ws_base (IX on entry)
 zxc_src:         defw    0       ; src block pointer
 zxc_dst:         defw    0       ; dst buffer pointer
 zxc_src_len:     defw    0       ; src block length
-zxc_chain_base:  defw    0       ; ws_base + HASH_SIZE_BYTES
-zxc_state:       defw    0       ; (unused direct-access; chain_base is the sentinel)
 zxc_out_ptr:     defw    0       ; output write pointer
 zxc_bit_byte_ptr: defw   0       ; pointer to current bit-holder byte in output
 zxc_bit_mask:    defb    0       ; bit position mask (128..1; 0=need new byte)
@@ -901,8 +913,6 @@ zxc_prevlit:     defb    0       ; prevWasLit flag
 zxc_lastoff:     defw    0       ; lastOffset (ZX0 state)
 zxc_best_len:    defw    0       ; best match length scratch
 zxc_best_off:    defw    0       ; best match offset scratch
-zxc_chain_ctr:   defb    0       ; chain-depth step counter
-zxc_ml_count:    defb    0       ; match-length counting scratch
 
 ; ════════════════════════════════════════════════════════════════════
 ; Hash lookup tables (assemble-time).  zxc_tab31lo[x] = (x*31) & &FF;
