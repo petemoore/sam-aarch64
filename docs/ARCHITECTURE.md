@@ -272,8 +272,10 @@ working representation free to evolve (shrink, re-pack, relocate data),
 and correctness is defined entirely by the **assembled output bytes** —
 GNU, the Go path, and the Z80 path must agree byte-for-byte, and a `.tbn`
 must round-trip through `--render` to source that reassembles to those
-same bytes. The full spectrum4 release source fits in a ~44 KB compact
-`.tbn`, under the SAM's 96 KB IN ceiling.
+same bytes. The SAM loads only the assembler-facing prefix of a compact
+`.tbn` (~38.6 KB for the full spectrum4 release, bounded by
+`editor_region_offset`), so the 96 KB IN ceiling constrains the prefix,
+not the file — the fully-commented release `.tbn` is ~363 KB on disk.
 
 ## 7. Build + test pipeline
 

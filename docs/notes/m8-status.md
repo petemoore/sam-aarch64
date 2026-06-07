@@ -292,7 +292,7 @@ byte-identical with 7,014 `//` lines).
 editor-only data onto a separable region); the load-path half of i40 lands that
 mechanism — see the i40 prose block below.
 
-## i40 — two-phase prefix-only load + i51 full-comment gate (PR #N)
+## i40 — two-phase prefix-only load + i51 full-comment gate (PR #181)
 
 `src/main_loop.asm::load_in_file` is reworked as a two-phase load so the SAM
 reads only the assembler-facing prefix of the `.tbn`:

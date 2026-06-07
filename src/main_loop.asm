@@ -1528,10 +1528,10 @@ load_in_head_call:
                 call    TRAMPOLINE_DST      ; head read: 512 bytes into page 7
 
 ; -- Read editor_region_offset from file offset 8 in the just-loaded head --
-; Page 7 is now at section C (HMPR = IN_BASE_PAGE, set by the trampoline
-; before the RST 8).  Bracket LMPR (port 250) to map page 7 into section A
-; so we can read from &0008..&000A.  Interrupts are already DI throughout
-; the assembler; the stack lives in section D (independent of LMPR change).
+; The trampoline restored HMPR on return, so page 7 is not mapped anywhere;
+; bracket LMPR (port 250) to map page 7 into section A and read
+; &0008..&000A.  Interrupts are already DI throughout the assembler; the
+; stack lives in section D (independent of LMPR change).
                 in      a, (250)            ; save current LMPR
                 ld      (in_lmpr_save), a
                 ld      a, LMPR_IN_BASE     ; map IN page 7 into section A
@@ -1609,9 +1609,11 @@ load_in_prefix_pages_ok:
 
 ; Compute (IN_END_PAGE, IN_END_OFFSET) from the prefix geometry.
 ; The `or &20` sets the RAM0 bit so IN_END_PAGE stores a full LMPR value,
-; matching the IN_POS_PAGE convention.  reader_init will later overwrite
-; IN_END with the same editor_region_offset boundary it derives from the
-; loaded header — the values are identical by construction.
+; matching the IN_POS_PAGE convention.  reader_init later overwrites IN_END
+; with the boundary it derives from the loaded header — the same boundary,
+; though at a page-aligned offset the two representations differ (page N
+; offset 0 here vs page N-1 offset &4000 after the SAMDOS pages/remainder
+; normalisation above); nothing reads IN_END before reader_init runs.
                 ld      a, (in_file_pages)
                 add     a, IN_BASE_PAGE
                 or      &20
