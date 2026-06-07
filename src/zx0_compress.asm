@@ -16,7 +16,20 @@
 ;
 ; Return:
 ;   HL = compressed length (bytes written starting at dst)
-;   All other registers undefined.
+;   All other registers undefined, including IX, IY and the full
+;   shadow set (BC'/DE'/HL'/AF').
+;
+; Requirements:
+;   * Interrupts must be disabled (or the interrupt handler must
+;     preserve the shadow registers): the bit-writer state lives in
+;     BC'/DE'/HL' for the whole run.
+;   * The code is self-modifying (constants are patched into
+;     immediates at entry), so it must run from RAM and is not
+;     reentrant.
+;   * Undocumented-but-universal Z80 ops are used (IXh/IXl/IYl
+;     register halves).  These work on all NMOS Z80s including the
+;     SAM's Z80B, and are implemented by SimCoupé and koron-go/z80;
+;     pyz80 assembles them natively.
 ;
 ; ── Workspace layout (mirroring Go: compress.go ScratchBytes) ────────
 ;
@@ -32,12 +45,13 @@
 ;
 ; ── Implementation note on state access ──────────────────────────────
 ;
-; The state block is accessed via absolute 16-bit addresses stored in
-; module-level variables (zxc_*).  The IX register is NOT used for
-; (IX+d) indexed addressing because Z80 only has LD r,(IX+d) for 8-bit
-; registers r; there is no LD HL,(IX+d).  Instead, the hot-path variables
-; (pos, litStart, lastOffset, prevWasLit, out_ptr, bit_mask, backtrack)
-; are accessed via their absolute addresses using LD HL,(nn) / LD (nn),HL.
+; Hot state is register-resident: the bit writer lives in the shadow
+; bank (D'E' = out_ptr, H'L' = bit_byte_ptr, C' = mask, B' =
+; backtrack) and the match-finder walk keeps its working set in
+; DE/BC/IXh/IXl/IYl with per-call constants patched into instruction
+; immediates (self-modifying code; legal because the payload runs from
+; RAM).  Only the cold parse state (pos, litStart, lastOffset,
+; prevWasLit, best_len, best_off) uses absolute-addressed variables.
 ;
 ; ── Parameters (Go: DefaultParams = Params{HashSize:512, ChainDepth:16}) ─
 
@@ -103,18 +117,16 @@ zx0_compress:
         ; written before it can be read and the fill value never reaches
         ; the output (oracle-verified; saves ~66 T per input byte).
 
-        ; ── Initialise module-level state variables ───────────────────
-        ; src_base, src_len, dst_base, hash_base, chain_base are already set.
-
-        ; out_ptr = dst_base
-        ld      hl, (zxc_dst)
-        ld      (zxc_out_ptr), hl
-
-        ; bit_mask = 0, backtrack = 1 (Go: newBitWriter initial state)
-        xor     a
-        ld      (zxc_bit_mask), a
-        ld      a, 1
-        ld      (zxc_backtrack), a
+        ; ── Initialise the bit writer in the shadow registers ─────────
+        ; Go: newBitWriter (bitMask = 0, backtrack = true).
+        ; Shadow bank, resident until return:
+        ;   D'E' = out_ptr   H'L' = bit_byte_ptr (valid once a holder opens)
+        ;   C'   = bit_mask  B'   = backtrack flag (0/1)
+        exx
+        ld      de, (zxc_dst)           ; out_ptr = dst
+        ld      c, 0                    ; bit_mask = 0
+        ld      b, 1                    ; backtrack = 1
+        exx
 
         ; pos = 0, litStart = 0, lastOffset = 1, prevWasLit = 0
         ld      hl, 0
@@ -131,7 +143,12 @@ zx0_compress:
         or      l
         jp      nz, zxc_main_loop
 
-        call    zxc_bit1
+        ; Go consumes the initial backtrack bit without writing (its
+        ; len(out) > 0 guard): clear the flag instead of calling
+        ; zxc_bit1, which would touch dst[-1].
+        exx
+        ld      b, 0
+        exx
         ld      hl, 256
         call    zxc_eg_inv
         jp      zxc_return_len
@@ -328,14 +345,13 @@ zxc_end_marker:
         call    zxc_eg_inv
 
 zxc_return_len:
-        ld      hl, (zxc_out_ptr)
+        exx
+        push    de                      ; D'E' = final out_ptr
+        exx
+        pop     hl
         ld      de, (zxc_dst)
-        ld      a, l
-        sub     e
-        ld      l, a
-        ld      a, h
-        sbc     a, d
-        ld      h, a
+        or      a
+        sbc     hl, de                  ; HL = compressed length
         ret
 
 
@@ -348,32 +364,24 @@ zxc_return_len:
 zxc_flush_lits:
         ld      hl, (zxc_pos)
         ld      de, (zxc_litstart)
-        ld      a, l
-        sub     e
-        ld      l, a
-        ld      a, h
-        sbc     a, d
-        ld      h, a                    ; HL = count
-        ld      a, h
-        or      l
+        or      a
+        sbc     hl, de                  ; HL = count (DE = litStart kept)
         ret     z
         ld      b, h
         ld      c, l                    ; BC = count
         ld      hl, (zxc_src)
-        ld      de, (zxc_litstart)
         add     hl, de                  ; HL = &src[litStart]
-zxc_fl_loop:
-        ld      a, (hl)
-        push    hl                      ; zxc_write_byte clobbers HL (out_ptr)
-        push    bc
-        call    zxc_write_byte
-        pop     bc
-        pop     hl                      ; restore source pointer
-        inc     hl
-        dec     bc
-        ld      a, b
-        or      c
-        jp      nz, zxc_fl_loop
+        ; LDIR straight into the output: fetch out_ptr from the shadow
+        ; bank, copy, and put the advanced pointer back.
+        exx
+        push    de
+        exx
+        pop     de                      ; DE = out_ptr
+        ldir
+        push    de
+        exx
+        pop     de                      ; out_ptr += count
+        exx
         ld      a, 1
         ld      (zxc_prevlit), a
         ret
@@ -677,88 +685,91 @@ zxc_h2_ws:
 
 ; ════════════════════════════════════════════════════════════════════
 ; Bit-writer routines.  Go: bitWriter methods (compress.go lines 206–240).
+;
+; All bit-writer state is resident in the shadow registers (see the
+; init block in zx0_compress): D'E' = out_ptr, H'L' = bit_byte_ptr,
+; C' = bit_mask, B' = backtrack.  Each routine banks in with EXX and
+; clobbers only A and flags in the primary bank, so callers (the
+; Elias-gamma loops in particular) keep their values across calls.
 ; ════════════════════════════════════════════════════════════════════
 
 ; ── zxc_bit0 — write bit 0 ───────────────────────────────────────────
-; Go: bitWriter.writeBit(0).  Clobbers: A, HL.
+; Go: bitWriter.writeBit(0).  Clobbers: A.
 zxc_bit0:
-        ld      a, (zxc_backtrack)
+        exx
+        ld      a, b
         or      a
-        jp      z, zxc_b0_normal
-        xor     a
-        ld      (zxc_backtrack), a
-        ret                             ; bit=0: nothing to OR
-zxc_b0_normal:
-        ld      a, (zxc_bit_mask)
+        jp      nz, zxc_b0_bt
+        ld      a, c
         or      a
-        jp      nz, zxc_b0_shift
-        ; New bit-holder byte.
-        ld      hl, (zxc_out_ptr)
-        ld      (zxc_bit_byte_ptr), hl
+        jp      z, zxc_b0_new
+        srl     c                       ; advance mask; holder keeps 0 here
+        exx
+        ret
+zxc_b0_new:
+        ; Open a new bit-holder byte (Go: append 0, mask = 128 >> 1).
+        ld      h, d
+        ld      l, e                    ; bit_byte_ptr = out_ptr
         ld      (hl), 0
-        inc     hl
-        ld      (zxc_out_ptr), hl
-        ld      a, 128
-        ld      (zxc_bit_mask), a
-zxc_b0_shift:
-        ld      a, (zxc_bit_mask)
-        srl     a
-        ld      (zxc_bit_mask), a
+        inc     de
+        ld      c, 64
+        exx
+        ret
+zxc_b0_bt:
+        ld      b, 0                    ; consume backtrack; bit=0 writes nothing
+        exx
         ret
 
 
 ; ── zxc_bit1 — write bit 1 ───────────────────────────────────────────
-; Go: bitWriter.writeBit(1).  Clobbers: A, HL.
+; Go: bitWriter.writeBit(1).  Clobbers: A.
 zxc_bit1:
-        ld      a, (zxc_backtrack)
+        exx
+        ld      a, b
         or      a
-        jp      z, zxc_b1_normal
-        xor     a
-        ld      (zxc_backtrack), a
-        ld      hl, (zxc_out_ptr)
+        jp      nz, zxc_b1_bt
+        ld      a, c
+        or      a
+        jp      z, zxc_b1_new
+        or      (hl)                    ; set the mask bit in the holder
+        ld      (hl), a
+        srl     c
+        exx
+        ret
+zxc_b1_new:
+        ; Open a new bit-holder byte with bit 7 already set.
+        ld      h, d
+        ld      l, e
+        ld      (hl), 128
+        inc     de
+        ld      c, 64
+        exx
+        ret
+zxc_b1_bt:
+        ; Backtrack: OR 1 into the last written byte (out_ptr - 1).
+        ; The holder pointer in HL must survive (the open holder's mask
+        ; bits may still be pending), so the work happens in DE/HL
+        ; swapped and swapped back.
+        ld      b, 0
+        ex      de, hl                  ; HL = out_ptr, DE = bit_byte_ptr
         dec     hl
         ld      a, (hl)
         or      1
         ld      (hl), a
-        ret
-zxc_b1_normal:
-        ld      a, (zxc_bit_mask)
-        or      a
-        jp      nz, zxc_b1_have_mask
-        ld      hl, (zxc_out_ptr)
-        ld      (zxc_bit_byte_ptr), hl
-        ld      (hl), 0
         inc     hl
-        ld      (zxc_out_ptr), hl
-        ld      a, 128
-        ld      (zxc_bit_mask), a
-zxc_b1_have_mask:
-        ld      hl, (zxc_bit_byte_ptr)
-        ld      a, (zxc_bit_mask)
-        or      (hl)
-        ld      (hl), a
-        ld      a, (zxc_bit_mask)
-        srl     a
-        ld      (zxc_bit_mask), a
-        ret
-
-
-; ── zxc_write_byte — append byte A to output ─────────────────────────
-; Go: bitWriter.writeByte.  Clobbers: HL.
-zxc_write_byte:
-        ld      hl, (zxc_out_ptr)
-        ld      (hl), a
-        inc     hl
-        ld      (zxc_out_ptr), hl
+        ex      de, hl                  ; restore out_ptr / bit_byte_ptr
+        exx
         ret
 
 
 ; ── zxc_write_bbt — writeByteWithBacktrack(A) ────────────────────────
-; Go: bitWriter.writeByteWithBacktrack.  Clobbers: HL.
+; Go: bitWriter.writeByteWithBacktrack.  Clobbers: nothing (A kept).
 zxc_write_bbt:
-        call    zxc_write_byte
-        ld      a, 1
-        ld      (zxc_backtrack), a
+        exx
+        ld      (de), a                 ; append byte
+        inc     de
+        ld      b, 1                    ; next bit lands in this byte's LSB
+        exx
         ret
 
 
@@ -803,27 +814,19 @@ zxc_eg_bits:
         ld      a, b
         or      c
         jp      z, zxc_eg_term
-        push    bc
-        push    de
-        call    zxc_bit0
-        pop     de
-        pop     bc
+        call    zxc_bit0                ; direction bit (A-only clobber)
         ld      a, c
         and     e
         ld      h, a
         ld      a, b
         and     d
         or      h
-        push    bc
-        push    de
         jp      z, zxc_eg_bit0
         call    zxc_bit1
         jp      zxc_eg_bitdone          ; bit written; advance BC
 zxc_eg_bit0:
         call    zxc_bit0
 zxc_eg_bitdone:
-        pop     de
-        pop     bc
         srl     b
         rr      c
         jp      zxc_eg_bits             ; check loop termination at top
@@ -871,11 +874,7 @@ zxc_egi_bits:
         ld      a, b
         or      c
         jp      z, zxc_egi_term
-        push    bc
-        push    de
-        call    zxc_bit0
-        pop     de
-        pop     bc
+        call    zxc_bit0                ; direction bit (A-only clobber)
         ; Inverted bit: (v & BC)==0 → 1, else → 0.
         ld      a, c
         and     e
@@ -883,16 +882,12 @@ zxc_egi_bits:
         ld      a, b
         and     d
         or      h
-        push    bc
-        push    de
         jp      z, zxc_egi_bit1
         call    zxc_bit0
         jp      zxc_egi_bitdone         ; bit written; advance BC
 zxc_egi_bit1:
         call    zxc_bit1
 zxc_egi_bitdone:
-        pop     de
-        pop     bc
         srl     b
         rr      c
         jp      zxc_egi_bits            ; check loop termination at top
@@ -907,10 +902,6 @@ zxc_ws_base:     defw    0       ; ws_base (IX on entry)
 zxc_src:         defw    0       ; src block pointer
 zxc_dst:         defw    0       ; dst buffer pointer
 zxc_src_len:     defw    0       ; src block length
-zxc_out_ptr:     defw    0       ; output write pointer
-zxc_bit_byte_ptr: defw   0       ; pointer to current bit-holder byte in output
-zxc_bit_mask:    defb    0       ; bit position mask (128..1; 0=need new byte)
-zxc_backtrack:   defb    0       ; backtrack flag (non-zero=true)
 zxc_pos:         defw    0       ; current input position (index)
 zxc_litstart:    defw    0       ; litStart (pending literal run start index)
 zxc_prevlit:     defb    0       ; prevWasLit flag
