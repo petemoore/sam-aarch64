@@ -4,8 +4,8 @@
 ; physical RAM page (page 4) via SAMDOS HGTHD (hook 129) + HLOAD
 ; (hook 130), then validates the magic "ENC1" and version=1 in RAM.
 ;
-; Per docs/specs/2026-05-24-m3-z80-emitter-design.md §2.3.
-; Format citation: docs/specs/2026-05-24-m2-encoder-tables-design.md §2.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §2.3.
+; Format citation: https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m2-encoder-tables-design.md §2.
 ;
 ; M5 budget-lever change: ENCTAB no longer lives in section C
 ; -----------------------------------------------------------
@@ -170,7 +170,7 @@ load_enctab:
 ; -- Validate version = 1 ------------------------------------------------
 ; Version is u16 LE at bytes 4-5 of the file (ENCTAB_BASE+4, +5).
 ; Expect version_lo = 1, version_hi = 0.
-; Citation: docs/specs/2026-05-24-m2-encoder-tables-design.md §2.
+; Citation: https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m2-encoder-tables-design.md §2.
                 inc     hl             ; hl = ENCTAB_BASE + 4 (version_lo)
                 ld      a, (hl)
                 cp      1
@@ -253,7 +253,7 @@ load_payload_generic:
 ; sysreg lookup-data binary (build/sysreg_data.bin, CODE file "sd13")
 ; into physical page 13.
 ;
-; Per docs/plans/2026-05-29-m6-closure-release-bytematch.md PR-2.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-29-m6-closure-release-bytematch.md PR-2.
 ; Needed by EVERY build (sysreg/dc/tlbi/pstate operands appear in
 ; production sources).  ORDERING: after enctab_trampoline_setup and,
 ; in BUILD_TESTS, after test_mem self-tests (page 13 is reused); before
@@ -282,7 +282,7 @@ name_sysreg_data:
 ; disassembler binary (build/disasm.bin, CODE file "d15") into physical
 ; page 15.
 ;
-; Per docs/notes/2026-06-07-disassembler-page-placement.md (strand-B PR-3).
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-07-disassembler-page-placement.md (strand-B PR-3).
 ; ORDERING: after enctab_trampoline_setup; before the BUILD_TESTS
 ; disasm self-test paged_call.
 ; -----------------------------------------------------------------------
@@ -310,8 +310,8 @@ if defined(BUILD_TESTS)
 ;                           test_mem binary into physical page 13 via
 ;                           the trampoline.
 ;
-; Per plan-PR 3 of docs/notes/2026-05-28-paged-call-architecture.md
-; (re-ordered per docs/notes/2026-05-28-session-handoff.md): the
+; Per plan-PR 3 of https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md
+; (re-ordered per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/2026-05-28-session-handoff.md): the
 ; largest single BUILD_TESTS-only self-test suite (test_mem.asm,
 ; ~780 B of section-C code) is moved off-axis so the test variant's
 ; binary tail doesn't spill past &C100 into OPVAL_ARRAY scratch.
@@ -389,7 +389,7 @@ name_cluster:   defb    19
 ;                       test payload into physical page 14 via the
 ;                       trampoline.
 ;
-; Per plan-PR 1 of docs/notes/2026-05-28-paged-call-architecture.md.
+; Per plan-PR 1 of https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md.
 ; Structural cousin of load_test_mem_off_axis above (and load_enctab):
 ; HGTHD + HLOAD-via-trampoline.  The only differences are file name
 ; ("p14"), target page (PAGED_CALL_TEST_PAGE = 14), and the payload

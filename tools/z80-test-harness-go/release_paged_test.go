@@ -1,7 +1,7 @@
 // release_paged_test.go — drives the full ~88 KB spectrum4 release .tbn (a
 // 6-page paged-IN load, physical pages 7..12) through the prod assembler in
 // the harness.  This is the regression guard for the "Go-harness paged-path
-// trap" root-caused in docs/notes/2026-05-29-go-harness-paged-trap-rootcause.md.
+// trap" root-caused in https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-go-harness-paged-trap-rootcause.md.
 //
 // Two assertions:
 //

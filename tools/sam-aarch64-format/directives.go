@@ -16,7 +16,7 @@ var DirectiveTable = []string{
 	// .section NAME, "flags"[, %type] — GNU as section directive.
 	// text2bin parses it for syntactic completeness; the current refenc
 	// layout is single-section flat, so .section is a no-op at encoding
-	// time. See docs/notes/m2-status.md for the multi-section layout gap.
+	// time. See https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m2-status.md for the multi-section layout gap.
 	".section",
 	// .arch / .cpu — GNU as architecture / CPU selection directives.
 	// text2bin accepts these for syntactic completeness; refenc treats

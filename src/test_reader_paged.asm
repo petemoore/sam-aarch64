@@ -1,6 +1,6 @@
 ; test_reader_paged.asm — boot-time self-tests for the paged IN reader.
 ;
-; Per docs/plans/2026-05-27-m6-paged-in.md Task 6.  Verifies the runtime
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-27-m6-paged-in.md Task 6.  Verifies the runtime
 ; reader path described in
 ; docs/specs/paged-in-design.md.
 ;

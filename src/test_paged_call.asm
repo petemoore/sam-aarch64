@@ -1,7 +1,7 @@
 ; test_paged_call.asm — boot-time self-test for the section-B paged_call
 ; helper.  BUILD_TESTS only.
 ;
-; Per docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1 of §6.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1 of §6.
 ; Exercises the mechanism described in §3 (paged_call) only — the §4
 ; split-bracket primitives (paged_data_map_hmpr / unmap) were removed
 ; during the PR-#50 salvage (see the §4 editorial patch); the

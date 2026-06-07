@@ -1,6 +1,6 @@
 ; main_loop.asm — top-level M3/M4 driver.
 ;
-; M4 two-pass design (see docs/specs/2026-05-24-m4-symbols-multipass-design.md
+; M4 two-pass design (see https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md
 ; §2.1):
 ;
 ; 1. Load IN .tbn into IN_BUF via HGTHD+HLOAD (once, before pass 1).
@@ -25,7 +25,7 @@
 ;
 ; 4. After pass 2, HSAVE OUT_BUF[0..OUT_LEN] as "OUT".
 ;
-; Per docs/specs/2026-05-24-m3-z80-emitter-design.md §2.6 / §2.5 / §3.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §2.6 / §2.5 / §3.
 ; Operand kind / directive id values come from
 ; tools/sam-aarch64-format/{operands,directives,kinds}.go.
 ;

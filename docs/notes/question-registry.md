@@ -16,7 +16,7 @@ instant it's answered; land on `main` via PR so Pete sees it where he reads.
 This doc is **never archived**: when a milestone status doc is superseded, its
 questions live on here, so an open question is never stranded in an archived
 `m{N}-status` doc. (Created 2026-06-08 by extracting the `qN` list out of
-`m7-status.md` — mirroring the i*N* item-registry extraction in PR #128 — because
+`https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m7-status.md` — mirroring the i*N* item-registry extraction in PR #128 — because
 M7 was winding down while open questions like q1 were still live. See the
 `feedback_capture_open_questions` memory.)
 

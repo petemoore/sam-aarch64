@@ -1,6 +1,6 @@
 // Package format implements the M1 binary tokenised aarch64 source
 // format. Section numbers (§N) in comments refer to
-// docs/specs/2026-05-23-m1-binary-tokenised-format-design.md.
+// https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-23-m1-binary-tokenised-format-design.md.
 package format
 
 // Magic is the 4-byte file header tag (§2).

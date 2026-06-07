@@ -4,8 +4,8 @@
 current as of 2026-06-09 (M8 / i48a). This is the single normative
 description of the on-disk `.tbn` format. It **supersedes the format sections
 (§2–§6) of the M1 design spec**
-(`docs/specs/2026-05-23-m1-binary-tokenised-format-design.md`) and the i1
-compaction note (`docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`),
+(`https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-23-m1-binary-tokenised-format-design.md`) and the i1
+compaction note (`https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`),
 both now historical milestone records.
 
 ### One serialized format — the compact overlay
@@ -655,13 +655,13 @@ assembler never reads them. The host's `-strip-comments` drops them entirely
   compact overlay the only serialized form and the symbolic records an
   in-memory IR).
 - **History / rationale / tooling**: M1 spec
-  `docs/specs/2026-05-23-m1-binary-tokenised-format-design.md` (§7 tooling,
+  `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-23-m1-binary-tokenised-format-design.md` (§7 tooling,
   §8 test pyramid, §9 open items still apply; its §2–§6 format tables are
   superseded by this doc).
 - **i1 compaction baseline** (`LIT_INSTS`+`LIT_DATA`):
-  `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`.
+  `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`.
 - **Disassembler (the bytes→text inverse)**:
-  `docs/plans/2026-05-28-go-aarch64-disassembler.md`; `tools/aarch64dec/`.
+  `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-28-go-aarch64-disassembler.md`; `tools/aarch64dec/`.
 - **Code authority**: `tools/sam-aarch64-format/` (`kinds.go`,
   `operands.go`, `expr.go`, `directives.go`, `mnemonics.go`, `symbols.go`,
   `reader.go`, `writer.go`, `header_tables.go`, `litinsts.go`, `format.go`);

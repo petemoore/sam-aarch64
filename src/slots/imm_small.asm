@@ -24,7 +24,7 @@
 ;   ShiftAmount = 0x12  (bit_width = 6, typical)
 ;
 ; Slot-record byte layout (4 bytes, per
-; docs/specs/2026-05-24-m2-encoder-tables-design.md §2 lines 71-75):
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m2-encoder-tables-design.md §2 lines 71-75):
 ;   offset 0  slot_kind
 ;   offset 1  expected_kind
 ;   offset 2  bit_position

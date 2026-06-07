@@ -1012,9 +1012,9 @@ For SAMDOS to then auto-load a user `auto` file:
   directory entry per-byte tables, HDR/HDL 80-byte buffer.
 - `docs/notes/sam-paging.md` — REL PAGE FORM, LMPR/HMPR/VMPR, the
   exec-address-encoding question.
-- `docs/notes/sam-file-io.md` — UIFA layout (48 bytes; same fields as
+- `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/sam-file-io.md` — UIFA layout (48 bytes; same fields as
   directory entry's metadata block, different offsets).
-- `docs/notes/samdos2-auto-run-analysis.md` — second-stage auto-load
+- `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/samdos2-auto-run-analysis.md` — second-stage auto-load
   hook 128 details (separate from the ROM BOOT mechanism).
 
 ---

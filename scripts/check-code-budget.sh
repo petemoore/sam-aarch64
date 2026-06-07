@@ -11,7 +11,7 @@
 #
 # This script turns that silent cliff into a CI/build failure WITH A
 # NUMBER ("code_end &C0xx ≥ &C000 — N bytes over").  It is the structural
-# fix recommended in docs/notes/2026-05-29-go-harness-fidelity-investigation.md
+# fix recommended in https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-go-harness-fidelity-investigation.md
 # and promoted into the M6-closure CI gate (PR-5).
 #
 # Usage:

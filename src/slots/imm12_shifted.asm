@@ -65,7 +65,7 @@
 ; Implementation notes:
 ;
 ;   • The slot record's bit_position is at offset 2 (per
-;     docs/specs/2026-05-24-m2-encoder-tables-design.md §2 lines 71-75).
+;     https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m2-encoder-tables-design.md §2 lines 71-75).
 ;     We grab it into A early, before the BCDE-consuming checks, and
 ;     park it in a scratch slot (encode_imm12_shifted_bp) because the
 ;     Z80 has no spare register pair once HL is freed.

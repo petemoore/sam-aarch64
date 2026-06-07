@@ -190,7 +190,7 @@ Add a fixture `tests/m6/sources/inst_long_emit.s` (or similar) that exercises >2
   .endr
 ```
 
-(`.rept` is a `text2bin`-side macro per `docs/specs/2026-05-25-macro-expansion-research.md`; verify it works on the SAM side or precompute the 4000-byte source.)
+(`.rept` is a `text2bin`-side macro per `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-25-macro-expansion-research.md`; verify it works on the SAM side or precompute the 4000-byte source.)
 
 If `.rept` isn't supported by `text2bin`, generate the source via a small shell helper at the top of the M6 fixture sweep.
 

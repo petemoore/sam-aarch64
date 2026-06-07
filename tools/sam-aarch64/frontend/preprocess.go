@@ -2,7 +2,7 @@ package frontend
 
 // Preprocess is a GNU-as–style text-substitution pass that runs in front of
 // Lex. It handles the subset of GNU `as` directives that spectrum4 actually
-// uses (see docs/superpowers/specs/2026-05-25-macro-expansion-research.md):
+// uses (see https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-25-macro-expansion-research.md):
 //
 //   • .include "file.s"           — inline another file, searched along an
 //                                   include path (including-file's dir plus

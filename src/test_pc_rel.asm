@@ -1,8 +1,8 @@
 ; test_pc_rel.asm — boot-time self-tests for the M4 PC-relative slot
 ; encoders.
 ;
-; Per docs/plans/2026-05-24-m4-symbols-multipass.md Task 6.
-; Per docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.5.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-24-m4-symbols-multipass.md Task 6.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.5.
 ;
 ; M4 changed the calling convention for the BranchImm26 / BranchImm19 /
 ; BranchImm14 / AdrpImm slot encoders.  Pre-M4 callers passed a raw

@@ -5,7 +5,7 @@ recommendation, not a frozen spec)
 
 **Grounding reads (the real constraints, cited inline):**
 `docs/notes/memory-layout.md`, `docs/notes/sam-paging.md`, `src/reader.asm`,
-`src/assembler.asm` (header map), `docs/notes/m7-status.md` ("IN/OUT
+`src/assembler.asm` (header map), `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m7-status.md` ("IN/OUT
 paged-buffer ceiling" row + items i2/i40), and the v2 serialize target:
 `docs/specs/compact-tbn-nextgen-design.md` (§7 decisions) +
 `docs/specs/tbn-binary-format-reference.md`. Editor interaction model:
@@ -23,12 +23,12 @@ save/assemble.
 
 ### 1.1 What the editor must hold
 
-The SAM is the *whole* development platform (project remit; `m7-status.md` i2
-reframing). A codebase is **grown dynamically on-device over a session** — the
+The SAM is the *whole* development platform (project remit;
+`https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m7-status.md` i2 reframing). A codebase is **grown dynamically on-device over a session** — the
 edit buffer expands throughout, and the dominant use is *not* "load
 `release.tbn`, assemble once." A serious session plausibly holds **400 KB+ of
 aarch64 source text** resident (the flattened `release.s` is ~408 KB;
-`m7-status.md:333`). The SAM has 512 KB of RAM in 32 physical 16 KB pages
+`https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m7-status.md` line 333). The SAM has 512 KB of RAM in 32 physical 16 KB pages
 (`sam-paging.md` §1); after reserving DOS (1 page, `DOSFLG`) and screen (2 pages)
 and the assembler/editor code, roughly **~25 pages (~400 KB) are available** for
 a document — i.e. a large document fills essentially all free RAM. So the model

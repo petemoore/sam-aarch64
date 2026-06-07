@@ -1,5 +1,5 @@
 ; M3 Z80 assembler — top-level.
-; Per docs/specs/2026-05-24-m3-z80-emitter-design.md §2.1.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §2.1.
 ;
 ; Boot via M0's BASIC autorun pattern:
 ;   CLEAR&7FFF: LOAD CODE "assembler" 32768: CALL 32768
@@ -100,7 +100,7 @@ OPVAL_KINDS:    equ     &C150          ; 7 bytes — kinds[] for form_lookup_mat
 ; M4: which assembly pass is currently active.  Pass 1 walks records to
 ; assign PC and populate the symbol / local-label tables; pass 2 walks
 ; them again and emits resolved bytes.  See
-; docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.1.  Pass 1
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.1.  Pass 1
 ; never touches OUT_BUF; pass 2 alone emits.  PASS_MODE is set by
 ; main_assemble (which now owns both pass-1 and pass-2 setup) and is
 ; read by every record handler that diverges per pass.
@@ -306,7 +306,7 @@ endif
 ; The actual run_mem_self_tests invocation below swaps LMPR briefly,
 ; calls into the off-axis entry, then restores.
 ;
-; See docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md.
+; See https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md.
 if defined(BUILD_TESTS)
                 call    load_test_mem_off_axis
 
@@ -329,7 +329,7 @@ if defined(BUILD_TESTS)
 ; The payload is 3 bytes (`ld a, &42; ret`); the test calls
 ; paged_call into it and asserts A=&42 + HMPR-bit-identity on
 ; return.  See plan-PR 1 of
-; docs/notes/2026-05-28-paged-call-architecture.md.
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md.
                 call    load_page14_payload
                 call    run_paged_call_self_tests
 endif
@@ -460,7 +460,7 @@ if defined(BUILD_TESTS)
                 ; Root cause (now resolved upstream by PR #52, not by this
                 ; PR): the original failure was the stack-vs-own-code
                 ; collision documented in
-                ; docs/notes/2026-05-28-reader-paged-self-test-investigation.md
+                ; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-reader-paged-self-test-investigation.md
                 ; — on the pre-PR-#52 layout the test function spilled above
                 ; &C000 into the SP=&C100 stack page, so its own opcodes were
                 ; overwritten by stack pushes.  PR #52 ported test_mem.asm
@@ -474,7 +474,7 @@ if defined(BUILD_TESTS)
                 ;
                 ; Verified: harness PASS + SimCoupé ci-m{3,4,5,6} all green
                 ; with this call live.  See
-                ; docs/notes/2026-05-28-reader-paged-self-test-investigation.md
+                ; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-reader-paged-self-test-investigation.md
                 ; (PR-6 resolution section at the foot).
                 call    run_reader_paged_self_tests
 endif
@@ -593,7 +593,7 @@ if defined(BUILD_TESTS)
                 ; in the M6 budget-relief PR (2026-05-29) to drop the test
                 ; variant back below &C000.  See
                 ; src/test_offaxis_cluster.asm and
-                ; docs/notes/2026-05-29-test-variant-budget-relief.md.
+                ; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-test-variant-budget-relief.md.
                 ;
                 ; test_mem.asm likewise lives off-axis (physical page 13);
                 ; see load_test_mem_off_axis / plan-PR 3 (PR #52).

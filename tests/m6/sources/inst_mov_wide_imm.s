@@ -4,7 +4,7 @@
         // the movz shift (lsl #0/#16/#32/#48).  Mac-side oracle:
         // tools/refenc/pass2.go tryEncodeMovImm step 1 (direct movz chunk
         // search) + tools/aarch64enc/encode.go:53-66.  Class 2 of
-        // docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md.
+        // https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md.
         //
         // 64-bit: chunk in each of the four slots.
         mov     x0, #0x80000000

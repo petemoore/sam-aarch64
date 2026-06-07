@@ -127,13 +127,13 @@ E-Tracker uses this verbatim (verified at FRED 30 `E1:&8104`+) and writes a 25-b
 
 ## Closing — recommendation skeleton
 
-Three viable architectures, with swap-count costs traced back to the memory-layout brainstorm at `docs/notes/2026-05-28-memory-layout-brainstorm.md` §3 (which already reserves **page 29** for "Music pattern data + SAA driver scratch").
+Three viable architectures, with swap-count costs traced back to the memory-layout brainstorm at `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-memory-layout-brainstorm.md` §3 (which already reserves **page 29** for "Music pattern data + SAA driver scratch").
 
 ### Option A — static E-Tracker driver on page 29, tunes paged in on demand
 
 Driver + tune both live on page 29; IM2 wrapper sits at a low fixed address in section A under LMPR_DEFAULT (mirror of INT-MUSIC's `&4000-&4073`); per-tick the wrapper switches LMPR to page 29, calls the player at `&8006`-equivalent, restores LMPR.
 
-- **Tick swap count: 2** (LMPR in + out). Already costed in `2026-05-28-memory-layout-brainstorm.md:83` ("~30 T × 50 Hz = 1500 T-states/s = < 0.05 % CPU"). Lowest-cost option.
+- **Tick swap count: 2** (LMPR in + out). Already costed in `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-memory-layout-brainstorm.md` line 83 ("~30 T × 50 Hz = 1500 T-states/s = < 0.05 % CPU"). Lowest-cost option.
 - **Sizing:** ~3 KB driver + ~5 KB tune ≈ 8 KB of page 29 used; ~8 KB headroom remains.
 - **Build pipeline:** Mac-side, run E-Tracker `COMPILER` under SimCoupé, extract the resulting CODE file with `samfile cat`, package as an HLOAD payload alongside the editor.
 - **Best for:** Editor users who want a single chosen ambient tune, swappable between sessions but not mid-edit.
@@ -180,4 +180,4 @@ External:
 
 Disks (`~/sam-corpus/disks/`): `E-Tunes Player (19xx) (Andrew Collier).mgt` (actually PT2), `E-Tracker Program Disk (19xx) (FRED Publishing).mgt` (INT-MUSIC), `E-Tracker Program Disk V1.2 (19xx) (FRED Publishing).mgt` (COMPILER), `FRED Magazine Issue 25/28/30/35.mgt`, `Sound Machine (1991) (Paul Angel).mgt` (partly corrupted), `Blitz Magazine Issue 4B - Sound Machine (1997) (Persona) _b1_.mgt`.
 
-Internal: `docs/ROADMAP.md` §Editor vision; `docs/specs/vision.md`; `docs/notes/2026-05-28-memory-layout-brainstorm.md` §3 (page-29 reservation) + §4 (swap-count line 83); `docs/notes/sam-paging.md`; `docs/sam/sam-coupe_tech-man_v3-0.txt` (lines 1056-1061 SAA ports, 1288 STATUS, 1333-1543 SAA programming, 1788 IM2 vector, 2534-2545 FRAMIV/LINIV, 3990 `&5B70` Reserved); `docs/saa1099/SAA1099_493200_DS.pdf`; `reference/comet-decoded/comet.asm:4495,4880` (BEEP-based feedback precedent).
+Internal: `docs/ROADMAP.md` §Editor vision; `docs/specs/vision.md`; `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-memory-layout-brainstorm.md` §3 (page-29 reservation) + §4 (swap-count line 83); `docs/notes/sam-paging.md`; `docs/sam/sam-coupe_tech-man_v3-0.txt` (lines 1056-1061 SAA ports, 1288 STATUS, 1333-1543 SAA programming, 1788 IM2 vector, 2534-2545 FRAMIV/LINIV, 3990 `&5B70` Reserved); `docs/saa1099/SAA1099_493200_DS.pdf`; `reference/comet-decoded/comet.asm:4495,4880` (BEEP-based feedback precedent).

@@ -3,7 +3,7 @@
 ; run_paged_call_self_tests in src/test_paged_call.asm; not used in
 ; any production path.
 ;
-; Per docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1.
 ;
 ; Contents:
 ;   &8000  ld a, &42 / ret — trivial paged-target stub used by the

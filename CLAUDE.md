@@ -98,6 +98,7 @@ If you find files in `docs/superpowers/`, they're a stray slip — migrate them 
 
 ## Pointers for first-session-on-this-repo
 
+- System overview (the first read): `docs/ARCHITECTURE.md`.
 - Project overview + roadmap: `docs/ROADMAP.md`.
 - Current state + milestone status: `docs/notes/m8-status.md` (active milestone) + `docs/notes/item-registry.md` / `question-registry.md`.
 - SAM Coupé paging primer: `docs/notes/sam-paging.md`.

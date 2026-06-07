@@ -1,7 +1,7 @@
 // Package aarch64enc holds the aarch64 encoder-table types and the
 // reference encoder used by refenc.
 //
-// §N references point at docs/specs/2026-05-24-m2-encoder-tables-design.md.
+// §N references point at https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m2-encoder-tables-design.md.
 package aarch64enc
 
 import (

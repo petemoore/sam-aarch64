@@ -1,7 +1,7 @@
 ; litpool.asm — literal pool data structures + pass-1 / pass-2 helpers.
 ;
-; Per docs/specs/2026-05-27-m5-compound-operands-directives-design.md §2.3
-; and docs/plans/2026-05-27-m5-compound-operands-directives.md Task 13.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-m5-compound-operands-directives-design.md §2.3
+; and https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-27-m5-compound-operands-directives.md Task 13.
 ;
 ; Mac-side reference: tools/refenc/pass1.go:60-218 (pool slot allocation +
 ; dedup + flush) and tools/refenc/pass2.go:21-76 (flush emit) +

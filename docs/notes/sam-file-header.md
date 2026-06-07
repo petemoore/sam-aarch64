@@ -661,8 +661,8 @@ path) — that's purely about file body offsets 247–250.
 
 - **Existing project notes** — `/Users/pmoore/git/sam-aarch64/docs/notes/`:
   - `sam-disk-format.md` — covers MGT geometry, sector map, BAM, type byte assignment.
-  - `sam-file-io.md` — UIFA struct (matches directory entry's metadata block) and SAMDOS hook-code calling convention.
-  - `samdos2-auto-run-analysis.md` — orthogonal: why SAMDOS's hook-128 doesn't auto-RUN.
+  - `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/sam-file-io.md` — UIFA struct (matches directory entry's metadata block) and SAMDOS hook-code calling convention.
+  - `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/samdos2-auto-run-analysis.md` — orthogonal: why SAMDOS's hook-128 doesn't auto-RUN.
 
 - **Real-world reference disk inspections**:
   - `/Users/pmoore/Downloads/GoodSamC2/x.mgt` — multiple Type 16 SAM BASIC files; CHOMPER body bytes `10 df 0f d5 9c ff ff 01 00`, dir 0xDD–0xDF = `00 05 92`. Concrete evidence for the format of a real SAVE.

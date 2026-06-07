@@ -6,7 +6,7 @@
 // The release-corpus oracle (disasm_oracle_test.go::TestDisasmOracle) reaches
 // 100% but is *corpus-bounded*: it only ever compares the instruction families
 // that actually appear in tests/m6/release/release.img.  The i10 capability
-// report (docs/notes/2026-06-08-go-vs-z80-disasm-capability-parity.md) found
+// report (https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-08-go-vs-z80-disasm-capability-parity.md) found
 // ~two dozen families that src/disasm.asm *handles* but the oracle never
 // exercises, so their Z80 correctness was asserted only *structurally* (the
 // handler exists, mirrors the Go source) — never *empirically tested*.
@@ -33,7 +33,7 @@
 // csinv/csneg forms were genuine Z80↔Go disagreements surfaced by an earlier
 // run of this sweep; items i36 + i37 closed them at source (encoder + both
 // decoders + binutils now all agree), so they are certified here rather than
-// pinned.  See docs/notes/2026-06-08-z80-go-disasm-parity-i9.md.
+// pinned.  See https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-08-z80-go-disasm-parity-i9.md.
 //
 // Not a CI gate — same philosophy as the oracle (SimCoupé is the only gate).
 // Requires GNU `as` (aarch64-none-elf-as or aarch64-linux-gnu-as) and a built

@@ -229,7 +229,7 @@ RAM page, paged into section A on demand via the COMET trampoline —
 physical pages are plentiful: a 512K machine has **32 pages (0–31)**;
 the project already uses 4 (BASIC) + ENCTAB(4) + OUT(5–6) + IN(7–12) +
 payloads(13–14), leaving **pages 15..31 ≈ 272 KB free**
-(`docs/notes/m7-status.md`, IN/OUT-ceiling row; `docs/notes/sam-paging.md:80`).
+(`https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m7-status.md`, IN/OUT-ceiling row; `docs/notes/sam-paging.md:80`).
 So the **encoder table cost (§3b) is a non-issue** — paging it across a few
 free pages is exactly the established off-axis pattern.
 
@@ -284,7 +284,7 @@ Repo facts (file:line cited inline): `tools/aarch64enc/manual_forms.go`,
 `tools/sam-aarch64-format/mnemonics.go`, `src/loader.asm:92`,
 `src/slots/*.asm`, `src/disasm.asm`, `docs/notes/memory-layout.md`,
 `scripts/check-code-budget.sh:28`, `docs/notes/sam-paging.md:80`,
-`docs/notes/m7-status.md`. Live measurements: `make enctab` (148 forms /
+`https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m7-status.md`. Live measurements: `make enctab` (148 forms /
 3676 B), `make m3-asm-prod` (code_end &B88B, 1909 B headroom).
 
 ARM ISA facts:

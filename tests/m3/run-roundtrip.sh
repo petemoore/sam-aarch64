@@ -2,7 +2,7 @@
 # tests/m3/run-roundtrip.sh — sweep every fixture under tests/m3/sources/
 # and byte-diff the M3 round-trip output against `aarch64-{none-elf,linux-gnu}-as`.
 #
-# Per docs/specs/2026-05-24-m3-z80-emitter-design.md §3 (Layer 2).
+# Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §3 (Layer 2).
 # Invoked by `make test-m3` and the m3 CI job.
 
 set -euo pipefail

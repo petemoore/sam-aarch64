@@ -3,9 +3,11 @@
 The on-disk layout of a SAM BASIC file (file type `0x10`) and the
 in-memory invariants the ROM expects after a clean `LOAD`.
 
-This document supersedes the experimental theories in
-`clear-investigation.md`, `clear-mechanism.md`,
-`clear-actual-mechanism.md`, and `clear-remaining-diff.md` — the actual
+This document supersedes the experimental `clear-*` theory notes
+(`https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/clear-investigation.md`,
+`https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/clear-mechanism.md`,
+`https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/clear-actual-mechanism.md`,
+`https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/clear-remaining-diff.md`) — the actual
 M0-blocker turned out to be missing trailer bytes documented here.
 
 ## TL;DR

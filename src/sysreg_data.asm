@@ -1,6 +1,6 @@
 ; sysreg_data.asm — page-13 sysname lookup tables + self-contained matcher.
 ;
-; Per docs/plans/2026-05-29-m6-closure-release-bytematch.md PR-2, AS
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-29-m6-closure-release-bytematch.md PR-2, AS
 ; CORRECTED by the PR-2 implementation spec (the plan's "leaf-only,
 ; lift verbatim" assumption was wrong — see the PR body / the sysname.asm
 ; header for the split-design rationale).

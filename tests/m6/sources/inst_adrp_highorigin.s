@@ -24,7 +24,7 @@
         // observable at the release origin; the authoritative oracle for
         // Class 5 is refenc with -origin 0xfffffff000000000 vs the SAM OUT,
         // and the full release byte-match.  See
-        // docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md Class 5.
+        // https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md Class 5.
         adrp    x2, 0xff841000
         adrp    x1, 0xff842000
         adrp    x10, 0xfd500000

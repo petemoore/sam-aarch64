@@ -15,7 +15,7 @@
         // itself is only observable at the release origin — the authoritative
         // oracle for Class 1 is refenc with -origin 0xfffffff000000000 vs
         // the SAM OUT (and the full release byte-match).  See
-        // docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md Class 1.
+        // https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md Class 1.
         // Mac-side reference: tools/refenc/pass2.go:1775 (evalImmsAsBytes)
         // over a symbol value seeded from OriginVMA (pass1.go:154 / 18).
 target:

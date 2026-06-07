@@ -84,7 +84,7 @@ echo "--- sam-aarch64 (assemble + emit compact .tbn) ---"
 # For the test variant only, also deposit:
 #   - the off-axis test_mem.bin (plan-PR 3), and
 #   - the paged_call self-test page-14 payload (plan-PR 1).
-# See docs/notes/2026-05-28-paged-call-architecture.md.
+# See https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md.
 echo "--- build-m3-disk ---"
 test_variant_flags=()
 # The disasm self-test runs at boot only under BUILD_TESTS (the test

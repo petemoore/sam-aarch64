@@ -6,7 +6,7 @@
 this doc: `tools/sam-aarch64-format/{kinds,operands,expr,directives,symbols,reader,writer,litinsts}.go`,
 `tools/refenc/{compact,pass1,pass2}.go`, `tools/aarch64dec/`, and the Z80 side
 `src/{reader,main_loop,encoder}.asm`. The prior format/disassembler design note
-is `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`; this doc is
+is `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`; this doc is
 its successor for the *density* question.
 
 ---

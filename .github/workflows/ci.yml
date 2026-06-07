@@ -108,9 +108,8 @@ jobs:
   # on a CODE-ONLY build of the release (release.s with all data removed at
   # source — data directives AND `ldr =imm` literal-pool pseudo-ops —
   # reassembled by GNU) so objdump's linear sweep sees only instructions.
-  # Asserts an EXACT match. Pure Go + binutils, no container. GREEN as of the
-  # strand-B disassembler PR; candidate to promote to a required status check
-  # once confirmed stable on main.
+  # Asserts an EXACT match. Pure Go + binutils, no container. A required
+  # status check in the branch protection on main.
   disasm:
     runs-on: ubuntu-latest
     steps:

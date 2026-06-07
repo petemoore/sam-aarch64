@@ -3,7 +3,7 @@
 # and byte-diff the M4 round-trip output against
 # `aarch64-*-as + ld -Ttext=0 + objcopy -O binary`.
 #
-# Per docs/specs/2026-05-24-m4-symbols-multipass-design.md §3.
+# Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md §3.
 # Invoked by `make test-m4` and the m4 CI job.
 #
 # Pattern mirrors tests/m3/run-roundtrip.sh.

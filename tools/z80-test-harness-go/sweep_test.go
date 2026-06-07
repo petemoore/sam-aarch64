@@ -4,7 +4,7 @@
 // matrix runs) through the Go harness in BOTH the prod and the BUILD_TESTS
 // variant, and compares the harness OUT bytes against the GNU oracle
 // (aarch64-*-as + ld -Ttext=0 + objcopy -O binary).  Produces a divergence
-// map for docs/notes/2026-05-29-go-harness-fidelity-investigation.md.
+// map for https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-go-harness-fidelity-investigation.md.
 //
 // Not a CI gate.  Gated behind SWEEP=1 so normal `go test ./...` skips it.
 //

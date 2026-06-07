@@ -19,7 +19,7 @@
 # HALT` and exit cleanly within ~100 ms, and the status file
 # distinguishes OK from FAIL.
 #
-# Implementation derived from docs/notes/simcoupe-batch.md (M0 spike,
+# Implementation derived from https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/simcoupe-batch.md (M0 spike,
 # Task 1) with the printer-channel extension added in PR #24.
 #
 # The recommended invocation uses the -exitonhalt flag introduced by

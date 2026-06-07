@@ -268,10 +268,10 @@ LMPR_IN_BASE:   equ     &20 + IN_BASE_PAGE
 
 
 ; Off-axis test-payload page (BUILD_TESTS only — see plan-PR 3 of
-; docs/notes/2026-05-28-paged-call-architecture.md and the brief at
-; docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md).
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md and the brief at
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md).
 ;
-; Page 13 is reserved by docs/notes/2026-05-28-memory-layout-brainstorm.md
+; Page 13 is reserved by https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-memory-layout-brainstorm.md
 ; §3 for "disasm aux + sysreg DB + rewrite-hint table".  That role
 ; lands in a later strand-B PR; until then plan-PR 3 reuses page 13
 ; as the off-axis test payload page.  When PR #50 is salvaged and the
@@ -312,7 +312,7 @@ LMPR_TEST_CLUSTER:  equ     &20 + TEST_CLUSTER_PAGE     ; = &2C
 
 
 ; paged_call test-payload page (BUILD_TESTS only — see plan-PR 1 of
-; docs/notes/2026-05-28-paged-call-architecture.md).
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md).
 ;
 ; Page 14 holds the boot self-test target stub for the section-B
 ; paged_call helper.  Picked distinct from page 13 (which plan-PR 3
@@ -330,7 +330,7 @@ PAGED_CALL_TEST_PAGE:   equ     14
 
 ; sysreg lookup data page (PRODUCTION feature — both variants).
 ;
-; Per docs/plans/2026-05-29-m6-closure-release-bytematch.md PR-2, as
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-29-m6-closure-release-bytematch.md PR-2, as
 ; corrected by the PR-2 implementation spec.  The four sysname lookup
 ; tables (sysreg / pstate / dc / tlbi) and the generic table-walker
 ; were moved off the section-C code budget into physical page 13.  The
@@ -392,7 +392,7 @@ SYSREG_COMM_RESULT:     equ     TRAMPOLINE_DST + &91    ; = &7E91, up to 8 bytes
 
 ; Disassembler page (PRODUCTION feature — both variants).
 ;
-; Per docs/notes/2026-06-07-disassembler-page-placement.md.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-07-disassembler-page-placement.md.
 ; Page 15 holds disasm.bin (standalone stub, assembles at org &8000).
 ; Invoked via paged_call (BUILD_TESTS: run_disasm_self_test at
 ; DISASM_SELF_TEST_ENTRY; runtime: on-SAM editor).  Not re-entrant —
@@ -440,7 +440,7 @@ HMPR_SAVE:      equ     TRAMPOLINE_DST + 32
 ; HLOAD), and the RST 8 hardware push lands wherever SP points —
 ; if that's in section D, the saved return address is corrupted by
 ; HLOAD's spillover for files > 16632 B.  Per
-; docs/notes/2026-05-28-hload-16k-limit-investigation.md.
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-hload-16k-limit-investigation.md.
 SP_SAVE:        equ     TRAMPOLINE_DST + 33    ; 2 bytes (33, 34)
 
 ; TRAMP_SAFE_SP — value SP is switched to during the RST 8.  Chosen
@@ -461,7 +461,7 @@ TRAMP_SAFE_SP:  equ     TRAMPOLINE_DST + 256   ; = &7F00
 ; paged_call — section-B helper for generic paged target routines.
 ; =======================================================================
 ;
-; Per docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1 of §6.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1 of §6.
 ;
 ; Lives in section B (LMPR-stable) alongside the HLOAD trampoline.
 ; Generalises the HLOAD trampoline's "swap HMPR, dispatch, swap back"
@@ -635,7 +635,7 @@ trampoline_body_end:
 ;
 ; With the switch in place, paged-IN files up to ≥ 32 KB load cleanly
 ; (verified empirically per
-; docs/notes/2026-05-28-hload-16k-limit-investigation.md).
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-hload-16k-limit-investigation.md).
 
 
 ; -----------------------------------------------------------------------

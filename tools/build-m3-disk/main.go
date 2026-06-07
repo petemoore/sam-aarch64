@@ -1,6 +1,6 @@
 // build-m3-disk constructs the M3 round-trip disk image.
 //
-// Layout (per docs/specs/2026-05-24-m3-z80-emitter-design.md §2.2):
+// Layout (per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §2.2):
 //
 //	0  samdos2    T4S1..T5S10  (20 sectors; ROM BOOT reads T4S1 raw)
 //	1  auto       T6S1..T6S2   (BASIC AUTO: CLEAR + LOAD "assembler" + CALL)

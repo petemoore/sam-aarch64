@@ -1,6 +1,6 @@
 ; reader.asm — .tbn record stream walker (paged IN — M6 PR 2).
 ;
-; Per docs/specs/2026-05-23-m1-binary-tokenised-format-design.md §2-§3
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-23-m1-binary-tokenised-format-design.md §2-§3
 ; for the format; docs/specs/paged-in-design.md for the
 ; paging design.
 ;

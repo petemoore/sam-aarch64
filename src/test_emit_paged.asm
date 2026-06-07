@@ -1,6 +1,6 @@
 ; test_emit_paged.asm — boot-time self-tests for paged emit.
 ;
-; Per docs/plans/2026-05-27-m6-paged-out.md Task 5.  Verifies the
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-27-m6-paged-out.md Task 5.  Verifies the
 ; runtime emit path described in
 ; docs/specs/paged-out-design.md.
 ;

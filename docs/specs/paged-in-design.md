@@ -2,7 +2,7 @@
 
 **Status**: design spec.  Pairs with `docs/specs/paged-out-design.md` (the OUT-side counterpart) and `docs/specs/samdos-file-io.md` (the COMET-style HLOAD trampoline pattern).  Date: 2026-05-27.
 
-This is the design for the second M6 PR.  Scope: relocate the IN `.tbn` buffer out of section C so that inputs larger than 2 KB are possible.  Compaction of the `.tbn` format itself is a separate strand (M6 PR 3 — `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`).
+This is the design for the second M6 PR.  Scope: relocate the IN `.tbn` buffer out of section C so that inputs larger than 2 KB are possible.  Compaction of the `.tbn` format itself is a separate strand (M6 PR 3 — `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`).
 
 ## Goal
 

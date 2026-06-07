@@ -42,7 +42,7 @@
 ; Output format: lowercase hex matching binutils objdump conventions
 ; (tools/aarch64dec/ is the Go-side authority).
 ;
-; See docs/notes/2026-06-07-disassembler-page-placement.md for the
+; See https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-07-disassembler-page-placement.md for the
 ; full design rationale and page-placement decision.
 
 ; Comm-buffer addresses and self-test entry — shared with

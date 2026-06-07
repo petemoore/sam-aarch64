@@ -1,7 +1,7 @@
 ; test_expr_eval_m4.asm — boot-time self-tests for the M4 additions to
 ; the expression-bytecode evaluator (expr_eval.asm).
 ;
-; Per docs/plans/2026-05-24-m4-symbols-multipass.md Task 5.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-24-m4-symbols-multipass.md Task 5.
 ;
 ; Mirrors test_symbols.asm / test_local_labels.asm: runs from start:
 ; BEFORE load_enctab, hard-coded bytecode buffers + table state, no

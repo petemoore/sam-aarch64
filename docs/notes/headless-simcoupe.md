@@ -99,7 +99,7 @@ import -window root /tmp/screenshot.png
 
 Captures the current Xvfb display contents to a PNG. Useful when
 investigating why a real-world disk like FRED 56 boots or doesn't —
-see `docs/notes/fred-disk-inspection.md` for an example. Comes from
+see `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/fred-disk-inspection.md` for an example. Comes from
 the `imagemagick` apt package.
 
 ## Getting the dev container
@@ -261,6 +261,6 @@ tested (Apple clang on arm64, gcc-13 on Linux amd64+arm64, GHA
 - `tools/run-simcoupe.sh` — invocation wrapper used by `make`.
 - `.github/workflows/ci.yml` — builds + publishes the image; runs the
   round-trip in it.
-- `docs/notes/m0-status.md` — current state of the M0 milestone.
-- `docs/notes/fred-disk-inspection.md` — example of using ImageMagick
+- `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m0-status.md` — current state of the M0 milestone.
+- `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/fred-disk-inspection.md` — example of using ImageMagick
   `import` to verify a real disk boots.

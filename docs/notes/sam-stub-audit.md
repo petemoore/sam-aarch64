@@ -17,7 +17,7 @@
 
 This audit was triggered by the symptom: the patched SimCoupé times out
 at 30 s when running the stub end-to-end. The stub never reaches its
-exit sequence. `docs/notes/sam-file-io.md` is the project's
+exit sequence. `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/sam-file-io.md` is the project's
 own pre-Task-7 spike — this audit confirms the calling convention it
 documents but identifies a hard real bug in canonical SAMDOS 2's
 `HOFLE` / `SBYT` / `CFSM` paths that breaks the stub.
@@ -32,7 +32,7 @@ documents but identifies a hard real bug in canonical SAMDOS 2's
 | 2 | **REAL BUG** | stub flow: `write_byte` → `sbyt` | `sbyt` at `c.s:533-551` reads `(IX+bufl=15)`/`(IX+bufh=16)`/`(IX+rptl=13)`/`(IX+rpth=14)` to find the in-buffer write pointer. With `IX=&4B00` (or whatever `IX` was last left as by hofle/fill_uifa) those four bytes are not the buffer pointer SAMDOS needs. The `ld (hl), a` write at `c.s:547` then either writes garbage somewhere (best case) or hits ROM and silently no-ops (`&FFxx`). |
 | 3 | **REAL BUG** | stub flow: `close_output` → `cfsm` | `cfsm` at `c.s:1306-1343` likewise relies on `IX = dchan`-shaped FCB. With `IX=&4B00` it (a) flushes garbage bytes to a "current sector" pointed at by garbage `(IX+bufl..)`, then (b) at `cfm3:1334-1338` copies 256 bytes from `(IX+ffsa..)` into the directory entry. Result: directory entry filled with whatever was at `&4B13..&4C12` in SAMDOS bank — i.e. SAMDOS code bytes — not a valid sector address map. |
 | 4 | **NON-CANONICAL** | `sam_io.inc:62-71` `fill_uifa` | Pads UIFA bytes 15–47 with `&FF`. Tech Manual `docs/sam/sam-coupe_tech-man_v3-0.txt:4459-4496` and SAMDOS source `b.s:278-290` agree the layout is `type / name(10) / ext(4) / filler(16,&FF) / startpage / pageoffset(2) / pages / lenmod16k(2) / execpage / execofs(2) / spare(8,&00)`. For our type-19 (code) **streaming-write** use, fields 31–47 are not consulted by `hofle`/`sbyt` — but bytes 40–47 should be `&00` not `&FF` to match a vanilla SAMDOS-saved UIFA. Cosmetic for our use, important if a load hook later parses the saved file. |
-| 5 | **QUESTIONABLE** | `stub.asm:43` open_input then `stub.asm:50-52` open_output without intermediate read | Per `docs/notes/sam-file-io.md:155-163` the comment says "abandoning the read is safe". The SAMDOS source confirms there is **no separate FCB for IN vs OUT** — `dchan` is single-channel (`a.s:133`). The act of `hofle` (after `hgfle`) overwrites `dchan`'s state. **However, this is moot** given bug #1: hofle never proceeds correctly anyway. If bug #1 is fixed, the IN-then-OUT-without-read pattern still works because it relies on `gtfle`'s post-state being entirely replaced by `ofsm`'s setup. |
+| 5 | **QUESTIONABLE** | `stub.asm:43` open_input then `stub.asm:50-52` open_output without intermediate read | Per `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/sam-file-io.md` lines 155-163 the comment says "abandoning the read is safe". The SAMDOS source confirms there is **no separate FCB for IN vs OUT** — `dchan` is single-channel (`a.s:133`). The act of `hofle` (after `hgfle`) overwrites `dchan`'s state. **However, this is moot** given bug #1: hofle never proceeds correctly anyway. If bug #1 is fixed, the IN-then-OUT-without-read pattern still works because it relies on `gtfle`'s post-state being entirely replaced by `ofsm`'s setup. |
 | 6 | **OK** | `sam_io.inc:81-84` `open_input` | `hgfle` at `h.s:252-257` is the **only one of our four hooks that sets `IX=dchan` internally** (via `gtfle:1348` → `fdhr:984 ld ix, dchan`). So `hgfle` works correctly when called externally with `IX = caller's UIFA`. |
 
 The fix for bugs #1–#3 is the same: **the streaming byte-stream API
@@ -614,14 +614,14 @@ SAMDOS-related variables for the magic-port test.
    then call hooks. The `LD (HL), value` sequence is straightforward;
    the paging dance is messy. **Possible but out of scope for M0.**
 
-4. **Why does the existing `docs/notes/sam-file-io.md` claim the
+4. **Why does the existing `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/sam-file-io.md` claim the
    streaming API works?** That doc was written as a Task 6 spike based
    on the Tech Manual + COMET (which uses HGTHD/HLOAD only,
    `comet.asm:194-203, 1273-1284`). The spike did NOT verify against
    the SAMDOS source's `ofsm` / `sbyt` / `cfsm` IX dependency. The
-   conclusion in `sam-file-io.md` that the streaming API "works for
+   conclusion in that spike doc that the streaming API "works for
    M0" is **incorrect** as written; this audit supersedes it on the
-   point of HOFLE/SBYT/CFSM. The `sam-file-io.md:155-163` claim that
+   point of HOFLE/SBYT/CFSM. Its lines-155-163 claim that
    "abandoning the read is safe" is correct in isolation; the broader
    API claim is wrong.
 
@@ -653,7 +653,7 @@ SAMDOS-related variables for the magic-port test.
   `HDR EQU:1236`, `HDL EQU:1237`.
 - `docs/sam/sam-coupe_tech-man_v3-0.txt` — UIFA layout `:4459-4496`,
   hook list `:4515-4541`, hook descriptions `:4544-4627`.
-- `docs/notes/sam-file-io.md` — pre-Task-7 spike (superseded for the
+- `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/sam-file-io.md` — pre-Task-7 spike (superseded for the
   streaming API by this audit).
 - `docs/notes/sam-paging.md` — paging mechanics, especially
   `:541-560` (sysvars) and `:600-654` (SAMDOS hook dispatch paging).
