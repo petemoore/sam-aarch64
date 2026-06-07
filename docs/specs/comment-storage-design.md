@@ -177,7 +177,7 @@ more dirty data than free RAM allows recompressing.
 The machinery that recompression *needs* is **pre-reserved**, not allocated
 at compress time (§5): the 9,246 B workspace and the compressor live in page
 13's free space, and the src/dst staging block (one 4 KB block in, one
-4 KB + headroom out ≈ 8.3 KB) is reserved on page 14. The decoded-block
+4 KB + headroom out — 8,448 B, §5) is reserved on page 14. The decoded-block
 cache needs no reserve — it holds *clean* copies and is discarded instantly
 under pressure (eviction tier 0). So recompressing one block allocates
 **zero** pages; the only allocation hazard left is **store growth** (a
@@ -240,8 +240,8 @@ page 14 at section D), exactly the established sysreg/disasm idiom:
 | **zx0 compressor** | `&8400–&8AFF` (256 B-aligned³) | 1,792 B |
 | **zx0 decoder (turbo, §6)** | `&8B00–&8B7D` | 126 B |
 | **workspace** | `&8B80–&AF9D` | 9,246 B |
-| spare (sysreg growth etc.) | `&AF9E–&BFFF` | ~4.2 KB |
-| **staging: src 4 KB + dst 4 KB + headroom⁴** | page 14 = section D, `&C000–&E0FF` | ~8.4 KB |
+| spare (sysreg growth etc.) | `&AF9E–&BFFF` | 4,194 B |
+| **staging: src 4 KB + dst 4 KB + headroom⁴** | page 14 = section D, `&C000–&E0FF` | 8,448 B |
 
 ³ The i67 payload contains assemble-time page-aligned hash tables; its load
 address must preserve 256 B alignment.
