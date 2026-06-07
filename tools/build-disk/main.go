@@ -1,4 +1,4 @@
-// build-m3-disk constructs the M3 round-trip disk image.
+// build-disk constructs the round-trip disk image.
 //
 // Layout (per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §2.2):
 //
@@ -23,7 +23,7 @@
 //
 // Usage:
 //
-//	build-m3-disk [-test-mem <path>] [-paged-call <path>] \
+//	build-disk [-test-mem <path>] [-paged-call <path>] \
 //	    <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>
 //
 // Three-positional form (legacy): no IN file is added — used by
@@ -78,7 +78,7 @@ const (
 
 func main() {
 	log.SetFlags(0)
-	log.SetPrefix("build-m3-disk: ")
+	log.SetPrefix("build-disk: ")
 
 	testMemPath := flag.String("test-mem", "", "path to off-axis test_mem.bin (BUILD_TESTS only; plan-PR 3)")
 	pagedCallPath := flag.String("paged-call", "", "path to the paged_call self-test page-14 payload (BUILD_TESTS only; plan-PR 1)")

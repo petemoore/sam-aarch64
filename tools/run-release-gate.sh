@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# run-m6-release-gate.sh — the M6 headline gate (3-way byte-match).
+# run-release-gate.sh — the release-gate (3-way byte-match).
 #
 # Standing guard for "spectrum4 release.bin byte-match on SAM".  It takes
-# the VENDORED spectrum4 release source (tests/m6/release/release.s — the
+# the VENDORED spectrum4 release source (tests/release/release.s — the
 # whole release flattened into one self-contained file by `sam-aarch64 -E`)
 # and proves three independent toolchains agree on its bytes:
 #
-#   1. GNU binutils — the vendored tests/m6/release/release.img (spectrum4's
+#   1. GNU binutils — the vendored tests/release/release.img (spectrum4's
 #      own as+ld+objcopy build; we trust + freeze it, so CI needs no
 #      aarch64 binutils).
 #   2. Our Go toolchain — sam-aarch64 (source → binary + compact .tbn).
@@ -16,7 +16,7 @@
 # (sam-aarch64's flatten/strip + the Go encoder, and the Z80 encoder) on the
 # real release, with no spectrum4 checkout / tup / GNU toolchain at CI
 # time — only the two small vendored files.  Refresh them with
-# tools/revendor-m6-release.sh when spectrum4's release.img changes.
+# tools/revendor-release.sh when spectrum4's release.img changes.
 #
 # A mismatch prints the differing bytes (not just "differs"), so you can
 # see WHAT diverged.  Run INSIDE the dev container (SimCoupé needs it);
@@ -30,13 +30,13 @@ cd "$ROOT"
 
 export SIMCOUPE_TIMEOUT="${SIMCOUPE_TIMEOUT:-900}"
 
-FIXTURE_DIR="$ROOT/tests/m6/release"
+FIXTURE_DIR="$ROOT/tests/release"
 SRC="$FIXTURE_DIR/release.s"
 GNU="$FIXTURE_DIR/release.img"          # toolchain 1 (vendored GNU output)
 for f in "$SRC" "$GNU"; do
     if [ ! -f "$f" ]; then
         echo "ERROR: vendored fixture missing: $f" >&2
-        echo "       run tools/revendor-m6-release.sh to (re)generate it." >&2
+        echo "       run tools/revendor-release.sh to (re)generate it." >&2
         exit 2
     fi
 done
@@ -58,7 +58,7 @@ GO_IMG_C="$ROOT/build/m6-release.go.compact.img" # toolchain 2 via compact .tbn
 SAM_IMG="$ROOT/build/m6-release.sam.img"         # toolchain 3 output
 
 echo "=== [1/5] build SAM + Go tools (+ &C000 budget check) ==="
-make -s sam-aarch64 enctab sysreg-data disasm-payload build-m3-disk m3-asm-prod check-budget
+make -s sam-aarch64 enctab sysreg-data disasm-payload build-disk assembler-prod check-budget
 
 # Keep one-in-20 of release.s's ~335 KB of comments (M8 / i39b-2): the SAM
 # can't fit all of them in the 96 KB IN buffer, but a bounded subset (~15 KB →
@@ -89,7 +89,7 @@ echo "=== [4/5] Z80 toolchain: SAM assembler on SimCoupé → OUT (from the COMP
 # OUT. Proving OUT == release.img from the compact source exercises that
 # decode path under SimCoupé (the symbolic Z80 path is covered by the
 # m3..m6 fixture jobs + the harness).
-"$ROOT/build/build-m3-disk" \
+"$ROOT/build/build-disk" \
     -sysreg-data "$ROOT/build/sysreg_data.bin" \
     -disasm "$ROOT/build/disasm.bin" \
     "$ROOT/build/assembler-prod.bin" "$ROOT/build/enctab.enc" \

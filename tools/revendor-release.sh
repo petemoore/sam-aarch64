@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# revendor-m6-release.sh — refresh the vendored M6 release fixture.
+# revendor-release.sh — refresh the vendored release fixture.
 #
-# The m6-release gate (tools/run-m6-release-gate.sh) proves a 3-way
+# The release-gate (tools/run-release-gate.sh) proves a 3-way
 # byte-match (GNU == our Go toolchain == our Z80 toolchain) on a FROZEN,
 # vendored spectrum4 release:
 #
-#   tests/m6/release/release.s     the release flattened into ONE
-#                                  self-contained source file (sam-aarch64 -E:
-#                                  includes resolved, macros expanded, .if
-#                                  evaluated, test suites dropped), comments
-#                                  kept, cpp line-markers stripped.
-#   tests/m6/release/release.img   the expected output — spectrum4's own
+#   tests/release/release.s     the release flattened into ONE
+#                                self-contained source file (sam-aarch64 -E:
+#                                includes resolved, macros expanded, .if
+#                                evaluated, test suites dropped), comments
+#                                kept, cpp line-markers stripped.
+#   tests/release/release.img   the expected output — spectrum4's own
 #                                  GNU as+ld+objcopy build of release.img.
 #
 # Run THIS to regenerate that pair from a spectrum4 checkout — e.g. after
@@ -42,7 +42,7 @@ if [ ! -d "$SPECTRUM4_SRC" ]; then
     exit 2
 fi
 
-FIXTURE_DIR="$ROOT/tests/m6/release"
+FIXTURE_DIR="$ROOT/tests/release"
 mkdir -p "$FIXTURE_DIR"
 
 RELEASE_IMG="$SPECTRUM4_SRC/targets/release.img"
@@ -87,16 +87,16 @@ src_sz=$(wc -c < "$FIXTURE_DIR/release.s" | tr -d ' ')
 img_sz=$(wc -c < "$FIXTURE_DIR/release.img" | tr -d ' ')
 echo
 echo "Re-vendored:"
-echo "    tests/m6/release/release.s    ($src_sz bytes)"
-echo "    tests/m6/release/release.img  ($img_sz bytes)"
+echo "    tests/release/release.s    ($src_sz bytes)"
+echo "    tests/release/release.img  ($img_sz bytes)"
 
 # 4. Confirm the 3-way gate still passes (unless explicitly skipped).
 if [ "${SKIP_GATE:-0}" = "1" ]; then
     echo
     echo "SKIP_GATE=1 — not running the confirming gate."
-    echo "Run it yourself in the dev container: tools/run-m6-release-gate.sh"
+    echo "Run it yourself in the dev container: tools/run-release-gate.sh"
     exit 0
 fi
 echo
 echo "=== confirming 3-way gate ==="
-exec "$ROOT/tools/run-m6-release-gate.sh"
+exec "$ROOT/tools/run-release-gate.sh"

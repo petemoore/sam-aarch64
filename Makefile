@@ -1,7 +1,7 @@
 # sam-aarch64 build — the SAM-side Z80 aarch64 assembler + its Go-side
 # host toolchain (sam-aarch64 / enctab-gen) and round-trip gates.
 # (The original M0 nop-to-disk round-trip oracle was retired once the
-# M3–M6 fixture corpora + the m6-release 3-way gate fully subsumed it.)
+# core–paged fixture corpora + the release-gate 3-way gate fully subsumed it.)
 
 SHELL := /usr/bin/env bash
 .SHELLFLAGS := -euo pipefail -c
@@ -13,12 +13,12 @@ TESTS := tests
 
 # Default build: the two shipping assembler variants (the recipe for each
 # also runs tools/check-code-budget.sh inline).
-all: m3-asm m3-asm-prod
+all: assembler assembler-prod
 
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: sam-aarch64 test-m1 ci-m1
+.PHONY: sam-aarch64 test-format ci-format
 
 # sam-aarch64 — the integrated host assembler: source -> {binary, compact .tbn},
 # .tbn -> binary, .tbn -> text. Replaces the former text2bin/refenc/bin2text
@@ -45,24 +45,25 @@ ci-disasm: test-disasm
 	./tests/disasm/run-oracle-comparison.sh
 
 # Round-trip gate: encode→decode→encode must produce identical bytes for
-# all M3-M6 fixture sources.  Pure Go pipeline, no binutils or container.
+# all core–paged fixture sources.  Pure Go pipeline, no binutils or container.
 ci-disasm-roundtrip: test-disasm
 	./tools/run-disasm-roundtrip.sh
 
-test-m1: sam-aarch64
+test-format: sam-aarch64
 	cd tools/sam-aarch64-format && go test ./...
 	cd tools/sam-aarch64 && go test ./...
-	./tests/m1/run-gnu-as-check.sh
+	./tests/format/run-gnu-as-check.sh
 
-ci-m1: test-m1
+ci-format: test-format
 
 # sysreg-sync-check — Go↔Z80 sysreg/pstate/dc/tlbi table sync guard
 # (repo-audit 2026-05-29 §5 / §6 item #9).  Asserts every entry in the
 # hand-maintained Z80 table src/sysreg_data.asm matches the Go authority
 # tools/sam-aarch64-format/sysregs.go byte-for-byte, so the two can't
 # silently drift.  Cheap (pure Go, no container) — also runs implicitly
-# inside test-m1 / test-m2's `go test ./...`, but is exposed here as a
-# standalone target so it can be a named CI check / branch-protection gate.
+# inside test-format / test-encoder's `go test ./...`, but is exposed here
+# as a standalone target so it can be a named CI check / branch-protection
+# gate.
 .PHONY: sysreg-sync-check
 sysreg-sync-check:
 	cd tools/sam-aarch64-format && go test -run TestSysregZ80Sync -v ./...
@@ -93,7 +94,7 @@ staticcheck:
 check-doc-links:
 	bash tools/check-doc-links.sh
 
-.PHONY: enctab-gen enctab test-m2 ci-m2
+.PHONY: enctab-gen enctab test-encoder ci-encoder
 
 enctab-gen:
 	cd tools/enctab-gen && go build -o $(CURDIR)/$(BUILD)/enctab-gen .
@@ -118,50 +119,49 @@ enctab-regen-source: enctab-gen
 	    -gopkg tools/aarch64enc/data.go \
 	    -out $(BUILD)/enctab.enc
 
-test-m2: sam-aarch64
+test-encoder: sam-aarch64
 	cd tools/sam-aarch64-format && go test ./...
 	cd tools/aarch64enc && go test ./...
 	cd tools/enctab-gen && go test ./...
 	cd tools/sam-aarch64 && go test ./...
-	./tests/m1/run-refenc-roundtrip.sh
+	./tests/format/run-refenc-roundtrip.sh
 	./tests/spectrum4/run-roundtrip.sh
 
-ci-m2: test-m2
+ci-encoder: test-encoder
 
-.PHONY: m3-asm m3-asm-prod build-m3-disk m3-disk test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-payload disasm-test-payload test-m3 ci-m3 check-budget
+.PHONY: assembler assembler-prod build-disk disk test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-payload disasm-test-payload test-core ci-core check-budget
 
 # check-budget — fail if either assembler variant has grown into the
 # &C000 stack page (the silent boot-hang cliff; see
 # tools/check-code-budget.sh + memory/feedback_test_variant_fragility.md).
 # The same assertion also runs inline at the tail of each assembler build
-# recipe, so any `make m3-asm` / `make m3-asm-prod` enforces it too; this
-# target is the explicit both-variants entry point used by CI.
-check-budget: m3-asm m3-asm-prod
+# recipe, so any `make assembler` / `make assembler-prod` enforces it too;
+# this target is the explicit both-variants entry point used by CI.
+check-budget: assembler assembler-prod
 	./tools/check-code-budget.sh
 
 # Two build variants of the SAM-side assembler:
 #
-#   m3-asm       (test variant, default for dev / ci-m3 / ci-m4)
-#                Includes all boot-time self-tests (slots / symbols /
-#                local labels / M4 expr_eval / PC-rel).  Larger binary
-#                but catches per-routine regressions before the
-#                fixture-corpus round-trip even runs.  This is what
-#                tests/m{3,4}/run-roundtrip.sh expect.
+#   assembler       (test variant, default for dev / ci-core / ci-symbols)
+#                   Includes all boot-time self-tests (slots / symbols /
+#                   local labels / expr_eval / PC-rel).  Larger binary
+#                   but catches per-routine regressions before the
+#                   fixture-corpus round-trip even runs.  This is what
+#                   tests/core/run-roundtrip.sh expect.
 #
-#   m3-asm-prod  (production variant, for end-user shipping)
-#                Self-tests #ifdef'd out via `-D BUILD_TESTS=0` (i.e.
-#                BUILD_TESTS is undefined; `if defined(BUILD_TESTS)`
-#                blocks in src/assembler.asm are skipped).  Smaller
-#                binary — frees code budget for M5.  Identical OUT
-#                bytes on every fixture (the self-tests don't affect
-#                the assemble path); the build-split-status target
-#                verifies this.
+#   assembler-prod  (production variant, for end-user shipping)
+#                   Self-tests #ifdef'd out via `-D BUILD_TESTS=0` (i.e.
+#                   BUILD_TESTS is undefined; `if defined(BUILD_TESTS)`
+#                   blocks in src/assembler.asm are skipped).  Smaller
+#                   binary — frees code budget.  Identical OUT bytes on
+#                   every fixture (the self-tests don't affect the assemble
+#                   path); the build-split-status target verifies this.
 #
-# Both variants byte-match GNU on the M3 + M4 fixture corpora.
+# Both variants byte-match GNU on all fixture corpora.
 
-m3-asm: $(BUILD)/assembler.bin
+assembler: $(BUILD)/assembler.bin
 
-m3-asm-prod: $(BUILD)/assembler-prod.bin
+assembler-prod: $(BUILD)/assembler-prod.bin
 
 # Test-variant build also exports the symbol table for the off-axis
 # test_mem.bin to import (plan-PR 3 — see
@@ -195,7 +195,7 @@ $(BUILD)/test_mem.bin: src/test_mem_offaxis.asm src/test_mem.asm $(BUILD)/assemb
 
 test-mem-offaxis: $(BUILD)/test_mem.bin
 
-# Off-axis "M5 + misc encoder" cluster build (BUILD_TESTS only).
+# Off-axis "operands + misc encoder" cluster build (BUILD_TESTS only).
 #
 # test_offaxis_cluster.asm is a thin wrapper that does `org &0000` then
 # includes the pc_rel / directives_m5 / ror_imm / shifted_reg /
@@ -205,8 +205,7 @@ test-mem-offaxis: $(BUILD)/test_mem.bin
 # just-built assembler.sym.  The resulting build/test_cluster.bin
 # (~1225 B) is HLOADed at boot into physical page 12 by
 # src/loader.asm::load_offaxis_cluster and invoked via one LMPR swap.
-# M6 budget-relief PR (2026-05-29); mirrors the test_mem off-axis
-# pattern (PR #52).  See src/test_offaxis_cluster.asm.
+# See src/test_offaxis_cluster.asm.
 $(BUILD)/test_cluster.bin: src/test_offaxis_cluster.asm \
 		src/test_slots.asm src/test_pc_rel.asm \
 		src/test_directives_m5.asm src/test_ror_imm.asm \
@@ -258,8 +257,9 @@ sysreg-data: $(BUILD)/sysreg_data.bin
 # importfile user — assembles standalone.
 #
 #   disasm.bin       (PROD)  no flag — decoder only, self-test stripped.
-#                    Ships on every production disk (m4/m5/m6-prod,
-#                    m6-release) where no boot self-test runs.
+#                    Ships on every production disk (symbols-prod,
+#                    operands-prod, paged-prod, release-gate) where no
+#                    boot self-test runs.
 #
 #   disasm-test.bin  (TEST)  -D BUILD_TESTS=1 — includes the &8003
 #                    self-test entry + fixtures.  Ships only on the test
@@ -277,98 +277,96 @@ disasm-payload: $(BUILD)/disasm.bin
 
 disasm-test-payload: $(BUILD)/disasm-test.bin
 
-$(BUILD)/build-m3-disk: tools/build-m3-disk/main.go tools/build-m3-disk/go.mod
+$(BUILD)/build-disk: tools/build-disk/main.go tools/build-disk/go.mod
 	@mkdir -p $(BUILD)
-	cd tools/build-m3-disk && go build -o ../../$(BUILD)/build-m3-disk .
+	cd tools/build-disk && go build -o ../../$(BUILD)/build-disk .
 
-build-m3-disk: $(BUILD)/build-m3-disk
+build-disk: $(BUILD)/build-disk
 
-# m3-disk uses the TEST assembler (assembler.bin, BUILD_TESTS=1), whose
+# disk uses the TEST assembler (assembler.bin, BUILD_TESTS=1), whose
 # boot sequence calls the disasm &8003 self-test via paged_call — so it
 # must ship the TEST disasm binary (disasm-test.bin).
-m3-disk: m3-asm test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-test-payload enctab $(BUILD)/build-m3-disk
-	$(BUILD)/build-m3-disk \
+disk: assembler test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-test-payload enctab $(BUILD)/build-disk
+	$(BUILD)/build-disk \
 	    -test-mem $(BUILD)/test_mem.bin \
 	    -cluster $(BUILD)/test_cluster.bin \
 	    -paged-call $(BUILD)/paged_call_test_payload.bin \
 	    -sysreg-data $(BUILD)/sysreg_data.bin \
 	    -disasm $(BUILD)/disasm-test.bin \
-	    $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/m3-test.mgt
+	    $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/test.mgt
 
-# test-m3 — sweep every fixture under tests/m3/sources/ end-to-end:
-# sam-aarch64 → build-m3-disk → SimCoupé → samfile extract OUT →
+# test-core — sweep every fixture under tests/core/sources/ end-to-end:
+# sam-aarch64 → build-disk → SimCoupé → samfile extract OUT →
 # byte-compare against aarch64-{none-elf,linux-gnu}-as + objcopy -O binary.
-test-m3: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk sam-aarch64
-	./tests/m3/run-roundtrip.sh
+test-core: assembler test-mem-offaxis paged-call-payload enctab $(BUILD)/build-disk sam-aarch64
+	./tests/core/run-roundtrip.sh
 
-ci-m3: test-m3
+ci-core: test-core
 
-.PHONY: test-m4 ci-m4
+.PHONY: test-symbols ci-symbols
 
-# test-m4 — sweep every fixture under tests/m4/sources/.  Reuses the M3
-# assembler binary (which is M4-capable post-PR-#22) and build-m3-disk,
-# but feeds it M4-fixture .tbn inputs and uses an oracle that includes
-# `ld -Ttext=0` so :lo12: / branch-to-label relocations resolve.  See
+# test-symbols — sweep every fixture under tests/symbols/sources/.  Reuses
+# the assembler binary and build-disk, but feeds it symbols-fixture .tbn
+# inputs and uses an oracle that includes `ld -Ttext=0` so :lo12: /
+# branch-to-label relocations resolve.  See
 # https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md §3.
-test-m4: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk sam-aarch64
-	./tests/m4/run-roundtrip.sh
+test-symbols: assembler test-mem-offaxis paged-call-payload enctab $(BUILD)/build-disk sam-aarch64
+	./tests/symbols/run-roundtrip.sh
 
-ci-m4: test-m4
+ci-symbols: test-symbols
 
-.PHONY: test-m3-prod test-m4-prod ci-m3-prod ci-m4-prod
+.PHONY: test-core-prod test-symbols-prod ci-core-prod ci-symbols-prod
 
 # Production-variant sweeps — same fixture corpora, same oracle, but
 # with the smaller assembler binary that omits the boot-time self-tests.
 # Useful as a correctness check that the BUILD_TESTS=1 / undefined
-# fork in src/assembler.asm doesn't accidentally change emit
-# behaviour.  ci-m{3,4} cover the test variant; these cover prod.
-test-m3-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk sam-aarch64
-	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m3/run-roundtrip.sh
+# fork in src/assembler.asm doesn't accidentally change emit behaviour.
+# ci-core/ci-symbols cover the test variant; these cover prod.
+test-core-prod: assembler-prod enctab $(BUILD)/build-disk sam-aarch64
+	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/core/run-roundtrip.sh
 
-test-m4-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk sam-aarch64
-	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m4/run-roundtrip.sh
+test-symbols-prod: assembler-prod enctab $(BUILD)/build-disk sam-aarch64
+	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/symbols/run-roundtrip.sh
 
-ci-m3-prod: test-m3-prod
+ci-core-prod: test-core-prod
 
-ci-m4-prod: test-m4-prod
+ci-symbols-prod: test-symbols-prod
 
-.PHONY: test-m5 ci-m5 test-m5-prod ci-m5-prod
+.PHONY: test-operands ci-operands test-operands-prod ci-operands-prod
 
-# test-m5 — sweep every fixture under tests/m5/sources/.  Same pipeline
-# as test-m4 (sam-aarch64 → build-m3-disk → SimCoupé → samfile extract OUT →
-# byte-compare against aarch64-*-as + ld -Ttext=0 + objcopy -O binary).
-# Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-m5-compound-operands-directives-design.md §3.
-#
-# The GitHub Actions `m5` job is added in M5 PR E (the final integration
-# PR); for now ci-m5 / ci-m5-prod run locally + via the dev container.
-test-m5: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk sam-aarch64
-	./tests/m5/run-roundtrip.sh
+# test-operands — sweep every fixture under tests/operands/sources/.  Same
+# pipeline as test-symbols (sam-aarch64 → build-disk → SimCoupé → samfile
+# extract OUT → byte-compare against aarch64-*-as + ld -Ttext=0 +
+# objcopy -O binary).  Per
+# https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-m5-compound-operands-directives-design.md §3.
+test-operands: assembler test-mem-offaxis paged-call-payload enctab $(BUILD)/build-disk sam-aarch64
+	./tests/operands/run-roundtrip.sh
 
-test-m5-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk sam-aarch64
-	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m5/run-roundtrip.sh
+test-operands-prod: assembler-prod enctab $(BUILD)/build-disk sam-aarch64
+	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/operands/run-roundtrip.sh
 
-ci-m5: test-m5
+ci-operands: test-operands
 
-ci-m5-prod: test-m5-prod
+ci-operands-prod: test-operands-prod
 
-.PHONY: test-m6 ci-m6 test-m6-prod ci-m6-prod
+.PHONY: test-paged ci-paged test-paged-prod ci-paged-prod
 
-# test-m6 — sweep every fixture under tests/m6/sources/.  Same pipeline
-# as test-m5 (sam-aarch64 → build-m3-disk → SimCoupé → samfile extract OUT
-# → byte-compare against aarch64-*-as + ld -Ttext=0 + objcopy -O binary).
-# Per docs/specs/paged-out-design.md.  The M6 fixtures
-# exercise the paged-OUT machinery (sections-B emit + HSAVE auto-paging
-# across &C000) by emitting > 16 KB of output to cross the OUT_ZONE
-# low → high boundary.
-test-m6: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk sam-aarch64
-	./tests/m6/run-roundtrip.sh
+# test-paged — sweep every fixture under tests/paged/sources/.  Same
+# pipeline as test-operands (sam-aarch64 → build-disk → SimCoupé → samfile
+# extract OUT → byte-compare against aarch64-*-as + ld -Ttext=0 +
+# objcopy -O binary).  Per docs/specs/paged-out-design.md.  The paged
+# fixtures exercise the paged-OUT machinery (sections-B emit + HSAVE
+# auto-paging across &C000) by emitting > 16 KB of output to cross the
+# OUT_ZONE low → high boundary.
+test-paged: assembler test-mem-offaxis paged-call-payload enctab $(BUILD)/build-disk sam-aarch64
+	./tests/paged/run-roundtrip.sh
 
-test-m6-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk sam-aarch64
-	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m6/run-roundtrip.sh
+test-paged-prod: assembler-prod enctab $(BUILD)/build-disk sam-aarch64
+	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/paged/run-roundtrip.sh
 
-ci-m6: test-m6
+ci-paged: test-paged
 
-ci-m6-prod: test-m6-prod
+ci-paged-prod: test-paged-prod
 
 .PHONY: release-stripped-tbn
 

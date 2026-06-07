@@ -1,4 +1,4 @@
-module github.com/petemoore/sam-aarch64/tools/build-m3-disk
+module github.com/petemoore/sam-aarch64/tools/build-disk
 
 go 1.22
 
