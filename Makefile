@@ -281,7 +281,7 @@ disasm-test-payload: $(BUILD)/disasm-test.bin
 # into the SAM build; placement is i60c design work).
 $(BUILD)/zx0_compress.bin: src/zx0_compress.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/zx0_compress.bin src/zx0_compress.asm
+	pyz80 --obj=$(BUILD)/zx0_compress.bin --mapfile=$(BUILD)/zx0_compress.map src/zx0_compress.asm
 
 .PHONY: zx0-compress-payload
 zx0-compress-payload: $(BUILD)/zx0_compress.bin
