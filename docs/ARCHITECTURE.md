@@ -59,9 +59,10 @@ SimCoupé). [`src/README.md`](../src/README.md) is its index; the essentials:
   `include`: the big self-test suites (`test_cluster.bin` → page 12,
   `test_mem.bin` → page 13, both `BUILD_TESTS` only), the production
   sysreg/dc/tlbi/pstate lookup tables (`sysreg_data.bin` → page 13, every
-  build), the `paged_call` self-test stub (page 14, `BUILD_TESTS` only),
-  and the on-SAM disassembler (`disasm.bin` → page 15, every build). §5
-  covers the paging machinery.
+  build), the ZX0 compressor + decoder (`zx0.bin` → page 13 at `&8400`,
+  every build), the `paged_call` self-test stub (page 14, `BUILD_TESTS`
+  only), and the on-SAM disassembler (`disasm.bin` → page 15, every
+  build). §5 covers the paging machinery.
 
 ### 2.2 Host side — `tools/`
 
@@ -155,9 +156,21 @@ tools/aarch64enc/manual_forms.go   (hand-curated; never regenerated)
 
 ## 5. Memory + paging model
 
-The SAM divides the Z80's 64 KB address space into four 16 KB **sections**
-A–D; **LMPR** (port `&FA`) selects the physical page pair for A/B, **HMPR**
-(port `&FB`) for C/D, out of 32 physical 16 KB pages on a 512 K machine.
+The right mental model for SAM memory is BASIC's, not the Z80's: the
+machine is **one flat linear address space over all physical RAM** — 256
+or 512 KB in 16 KB pages, addressed page:offset, the space SAM BASIC's
+own POKE/PEEK address directly — and that flat space is the canonical
+home of everything: code, buffers, tables, the document. The CPU's 64 KB
+address space is not the memory; it is a **4-section window (A–D, 16 KB
+each) that slides over the flat space**, LMPR selecting the page pair
+under A/B and HMPR the pair under C/D. **Paging is the linker**: a
+routine reaches code or data elsewhere in the flat space by mapping its
+page into a section for the duration of the access — `paged_call`, the
+reader bracket, and the emit bracket are this model's link-time fixups,
+binding a window-visible address to a flat-space location at run time.
+
+In hardware terms: **LMPR** is port `&FA`, **HMPR** is port `&FB`, and a
+512 K machine has 32 physical 16 KB pages.
 [`notes/sam-paging.md`](notes/sam-paging.md) is the hardware reference
 (ports, REL PAGE FORM, ROM/SAMDOS conventions).
 
@@ -198,10 +211,17 @@ a section only for the duration of an access:
   page" helper (call shape: `call paged_call / defw addr / defb page`):
   it saves HMPR, maps the target page into sections C/D, switches to a
   safe section-B stack, `CALL`s the target, and restores HMPR
-  bit-identically on return. The page-13 sysname matcher and the page-15
-  disassembler are invoked this way. Its static save slots are one deep —
-  calls must not nest. (The big `BUILD_TESTS` off-axis suites use a
-  direct LMPR-swap bracket instead.)
+  bit-identically on return. The page-13 sysname matcher, the page-13
+  ZX0 compressor/decoder, and the page-15 disassembler are invoked this
+  way. Its static save slots are one deep — calls must not nest. (The
+  big `BUILD_TESTS` off-axis suites use a direct LMPR-swap bracket
+  instead.)
+- **ZX0 payload** (page 13 at `&8400`, beside the sysname tables at
+  `&8000`) — the greedy ZX0 compressor + turbo decoder for the editor's
+  compressed-resident comment store, with its staging area on page 14
+  (mapped at section D for free under `HMPR=13`). Placement, workspace,
+  and watermark math:
+  [specs/comment-storage-design.md](specs/comment-storage-design.md) §5.
 
 The disk I/O underneath (why HLOAD needs the trampoline, why HSAVE does
 not, hook register-clobbering facts) is

@@ -1,7 +1,7 @@
 # Comment storage — compressed-resident design (i60c)
 
-**Status:** awaiting Pete's approval. · **Item:** i60 (c) — the design third of the
-on-SAM ZX0 work; implementation companion is **i68**.
+**Status:** approved (Pete, 2026-06-11; merged in PR #173). · **Item:** i60 (c) —
+the design third of the on-SAM ZX0 work; implementation companion is **i68**.
 
 This is the living spec for how the editor holds the comment corpus resident:
 immutable ZX0-compressed blocks + an uncompressed dirty overlay in the i41
