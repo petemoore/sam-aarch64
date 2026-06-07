@@ -7,7 +7,7 @@ sole CI gate; this harness is a developer-side tool.
 
 At ~1 ms per fixture (vs ~0.5 s for SimCoupé-in-Docker) it slots into the inner
 loop: edit → test → iterate without containers. See
-[`docs/notes/2026-05-28-test-harness-bakeoff-evaluation.md`](../../docs/notes/2026-05-28-test-harness-bakeoff-evaluation.md)
+[the test-harness bakeoff evaluation](https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-test-harness-bakeoff-evaluation.md)
 for the design decision and full workflow guidance.
 
 ## When to use it

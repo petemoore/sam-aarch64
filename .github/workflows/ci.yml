@@ -157,6 +157,7 @@ jobs:
   # staticcheck — dead-code (unused / U1000) gate across the core host
   # toolchain modules. Pure Go, no container; the checker is built with
   # go1.26.1 (the modules' toolchain) via GOTOOLCHAIN inside the recipe.
+  # Also hosts the doc link checker (dangling-markdown-link guard).
   staticcheck:
     runs-on: ubuntu-latest
     steps:
@@ -166,6 +167,8 @@ jobs:
           go-version: '1.26.1'
       - name: staticcheck unused-code gate
         run: make staticcheck
+      - name: doc link checker
+        run: make check-doc-links
 
   # M3 — sweeps the fixture corpus end-to-end on the dev container:
   #   text2bin → build-m3-disk → SimCoupé (Xvfb 24bit) → samfile extract

@@ -85,6 +85,14 @@ staticcheck:
 	    ( cd tools/$$m && GOTOOLCHAIN=go1.26.1 go run $(STATICCHECK) -checks U1000 ./... ); \
 	done
 
+# check-doc-links — assert every relative markdown link in the entry docs
+# (README.md, CLAUDE.md, src/README.md) and under docs/, tools/, tests/
+# resolves to an existing path.  Pure shell, no toolchain; runs as an
+# extra step of the staticcheck CI job.
+.PHONY: check-doc-links
+check-doc-links:
+	bash tools/check-doc-links.sh
+
 .PHONY: enctab-gen enctab test-m2 ci-m2
 
 enctab-gen:
