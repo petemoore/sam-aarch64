@@ -311,7 +311,7 @@ if defined(BUILD_TESTS)
                 call    load_test_mem_off_axis
 
 ; -- BUILD_TESTS only: HLOAD the off-axis "M5 + misc encoder" cluster
-; (pc_rel / directives_m5 / ror_imm / shifted_reg / extended_reg /
+; (pc_rel / directives / ror_imm / shifted_reg / extended_reg /
 ; litpool) into physical page 12.  Run later, after the inline
 ; symbol/local-label suites, via the LMPR-swap call site.  Loaded here
 ; (alongside test_mem) so all off-axis HLOADs happen up front.  Page 12
@@ -349,7 +349,7 @@ endif
 if defined(BUILD_TESTS)
                 call    run_symbol_table_self_tests
                 call    run_local_label_self_tests
-                ; run_expr_eval_m4_self_tests moved off-axis into the page-12
+                ; run_expr_eval_self_tests moved off-axis into the page-12
                 ; cluster (PR-3c, 2026-05-29) to reclaim ~449 B of section-C/D
                 ; budget for the MUL/DIV evaluator code.  It runs first in
                 ; cluster_dispatch, preserving its prior relative order (after
@@ -360,7 +360,7 @@ if defined(BUILD_TESTS)
                 ; via section A under the swap, like the slots suite already
                 ; relies on.
 
-; -- The slot / pc_rel / directives_m5 / ror_imm / shifted_reg /
+; -- The slot / pc_rel / directives / ror_imm / shifted_reg /
 ; extended_reg / litpool suites live off-axis on physical page 12 (M6
 ; budget-relief PR,
 ; 2026-05-29).  Same LMPR-swap-call-restore mechanism as the test_mem
@@ -583,9 +583,9 @@ if defined(BUILD_TESTS)
                 include "test_assert_eq32.asm"
                 include "test_symbols.asm"
                 include "test_local_labels.asm"
-                ; test_expr_eval_m4 moved off-axis into the page-12 cluster
+                ; test_expr_eval moved off-axis into the page-12 cluster
                 ; (PR-3c, 2026-05-29) — see the call-site comment above.
-                ; test_slots / test_pc_rel / test_directives_m5 / test_ror_imm /
+                ; test_slots / test_pc_rel / test_directives / test_ror_imm /
                 ; test_shifted_reg / test_extended_reg / test_litpool now
                 ; live off-axis on physical page 12 (the "M5 + misc encoder"
                 ; cluster), assembled separately into build/test_cluster.bin

@@ -24,10 +24,10 @@
 ; PR #52) exactly.
 ;
 ; WHICH suites live here (and why they are LMPR-swap-safe):
-;   expr_eval_m4, slots, pc_rel, directives_m5, ror_imm, shifted_reg,
+;   expr_eval, slots, pc_rel, directives, ror_imm, shifted_reg,
 ;   extended_reg, litpool.
 ;
-;   expr_eval_m4 was relocated here in PR-3c (2026-05-29) to reclaim
+;   expr_eval was relocated here in PR-3c (2026-05-29) to reclaim
 ;   ~449 B for the MUL/DIV evaluator routines.  It runs FIRST, preserving
 ;   its prior inline order (after the resident symbol/local suites, before
 ;   slots).  Its dependencies — eval_expr_const (now incl. ml_mul/ml_div),
@@ -81,20 +81,20 @@
 ; HMPR-stable) and halts before returning.
 ; -----------------------------------------------------------------------
 cluster_dispatch:
-                call    run_expr_eval_m4_self_tests
+                call    run_expr_eval_self_tests
                 call    run_slot_self_tests
                 call    run_pc_rel_self_tests
-                call    run_directives_m5_self_tests
+                call    run_directives_self_tests
                 call    run_ror_imm_self_tests
                 call    run_shifted_reg_self_tests
                 call    run_extended_reg_self_tests
                 call    run_litpool_self_tests
                 ret
 
-                include "test_expr_eval_m4.asm"
+                include "test_expr_eval.asm"
                 include "test_slots.asm"
                 include "test_pc_rel.asm"
-                include "test_directives_m5.asm"
+                include "test_directives.asm"
                 include "test_ror_imm.asm"
                 include "test_shifted_reg.asm"
                 include "test_extended_reg.asm"

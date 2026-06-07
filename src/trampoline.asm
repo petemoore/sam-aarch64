@@ -291,7 +291,7 @@ LMPR_TEST_MEM:  equ     &20 + TEST_MEM_PAGE         ; = &2D
 ; Off-axis "M5 + misc encoder" cluster page (BUILD_TESTS only — M6
 ; budget-relief PR, 2026-05-29; see src/test_offaxis_cluster.asm).
 ;
-; Holds the relocated pc_rel / directives_m5 / ror_imm / shifted_reg /
+; Holds the relocated pc_rel / directives / ror_imm / shifted_reg /
 ; extended_reg / litpool self-test suites (1225 B), HLOADed at boot and
 ; invoked once via an LMPR swap (cluster_dispatch at section-A &0000).
 ;

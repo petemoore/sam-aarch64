@@ -256,7 +256,7 @@ func main() {
 	// Loaded at boot by src/loader.asm::load_offaxis_cluster via
 	// HGTHD+trampoline into physical page 12 (section A at &0000 when
 	// LMPR = LMPR_TEST_CLUSTER), then invoked via one LMPR swap
-	// (cluster_dispatch).  Holds the relocated pc_rel / directives_m5 /
+	// (cluster_dispatch).  Holds the relocated pc_rel / directives /
 	// ror_imm / shifted_reg / extended_reg / litpool self-test suites.
 	// BUILD_TESTS variant only; production builds omit -cluster.  M6
 	// budget-relief PR (2026-05-29) — mirrors the test_mem off-axis

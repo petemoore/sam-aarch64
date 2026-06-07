@@ -354,7 +354,7 @@ name_test_mem:  defb    19
 ; load_test_mem_off_axis above: HGTHD + HLOAD-via-trampoline.  The only
 ; differences are the file name ("cluster") and the target page
 ; (TEST_CLUSTER_PAGE = 12).  The payload (~1225 B) holds the relocated
-; pc_rel / directives_m5 / ror_imm / shifted_reg / extended_reg /
+; pc_rel / directives / ror_imm / shifted_reg / extended_reg /
 ; litpool suites; its entry is cluster_dispatch at section-A &0000.
 ;
 ; The off-axis binary is assembled separately (src/test_offaxis_cluster.asm
