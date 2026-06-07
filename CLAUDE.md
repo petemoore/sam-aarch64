@@ -34,6 +34,27 @@ For **building up a branch locally before opening the PR**, squash / amend / reb
 
 See also: `feedback_merge_commits` memory entry; `docs/notes/2026-05-28-test-variant-ci-regression.md` for the PR #43 incident.
 
+### 3. Pre-merge review — mandatory before every `gh pr merge`
+
+Before running `gh pr merge` on any PR, spawn a review subagent with this checklist. The agent must explicitly pass each item or flag it as a blocker. Do not merge if any item is RED.
+
+**What to review** (subagent should read `gh pr diff <N>` as its primary source — the *final* diff, not intermediate commits):
+
+1. **Test-wiring completeness.** For every `src/test_*.asm` file touched or added by the PR:
+   - Confirm the file's entry-point function is called from one of the three wiring sites: inline in `src/assembler.asm` (inside `ifdef BUILD_TESTS`), the off-axis page-12 cluster (`src/test_offaxis_cluster.asm`), or the off-axis page-13 wrapper (`src/test_mem_offaxis.asm`).
+   - Confirm every symbol the test file references (e.g. `DISASM_ENTRY`, `DISASM_PAGE`, `DISASM_COMM_MNEM`) is defined somewhere in the final build — search `src/trampoline.asm`, `src/assembler.asm`, and any loader files. An undefined symbol is a silent test-never-runs bug.
+   - Green: all test files are wired and all symbols are defined. Red: any file unwired or any symbol undefined.
+
+2. **Loader / disk-image wiring.** For every new file that gets HLOAD'd at boot (pages 12-15 etc.), confirm: (a) `loader.asm` has a `load_pageN_payload` function, (b) it is called from `assembler.asm` at boot, (c) the corresponding filename appears in the `build-m3-disk` step of `Makefile` / `tools/build-disk.sh`. Green: all three present. Red: any missing.
+
+3. **PR description accuracy vs final diff.** Read the PR title + body, then compare against the actual diff. The description must describe what `018a8ac`-equivalent "last commit before merge" state looks like — not what any intermediate commit intended. Flag any claim in the description that is NOT present in the final diff as inaccurate. This is the specific failure mode that produced the PR #99 / session #4 inaccuracy (wiring reverted in final commit; handover said "wiring proven"). Green: description matches final diff. Red: any claim in the description is contradicted by the diff.
+
+4. **No new orphaned symbols.** Run `grep -n 'equ\|label\|entry' src/trampoline.asm` and check that any `equ` added by the PR is referenced somewhere in the build. Orphaned equates are harmless but a code-smell early warning. Green: all new equates used. Yellow (non-blocking): unused equates flagged for review.
+
+The subagent returns a one-line PASS/FAIL verdict per item plus a final MERGE / DO NOT MERGE. Treat any RED as a blocker — fix it, push a new commit, re-run CI, then re-run the review before merging.
+
+**Why this rule:** PR #99 (2026-06-07) had integration wiring reverted in its final commit; the handover doc described intermediate-commit state and claimed "paging mechanics proven end-to-end." A pre-merge review with item #3 would have caught this immediately. Item #1 would have caught the orphaned `test_disasm_paged.asm`.
+
 ## Development inner loop for Z80 changes
 
 When iterating on SAM-side Z80 code (the assembler in `src/`, tests, paging trampoline, etc.), use `tools/z80-test-harness-go/` for fast (~1 ms/fixture) feedback during inner-loop development. See its README for usage. Before pushing, run SimCoupé under Docker locally for a real-hardware confirmation; CI runs the SimCoupé matrix as the gate.
