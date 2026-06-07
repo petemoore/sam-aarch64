@@ -19,7 +19,7 @@ without ever leaving the SAM Coupé.
 M0–M7 are complete; **M8 is the active milestone** (see
 `docs/notes/m8-status.md`). The SAM-side Z80 assembler, running in
 SimCoupé, byte-matches GNU `as + ld -Ttext=0 + objcopy -O binary`
-end-to-end for every fixture corpus, and assembles the **full
+end-to-end for the M3–M6 fixture corpora, and assembles the **full
 spectrum4 `release.bin` (21 752 bytes) byte-identical to GNU** on
 real SAM paging. A full aarch64 **disassembler** runs on the SAM
 (oracle-verified word-for-word against the Go authority), and the
