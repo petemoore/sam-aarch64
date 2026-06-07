@@ -12,5 +12,12 @@ hermetic. Never edited, only re-vendored.
   SAM-era prior art our SAMDOS paging/file-io idioms were studied from
   (`docs/specs/samdos-file-io.md` cites it).
 - `comet-disk/` — the original COMET disk contents the decode came from.
-- `samdos/` — `samdos2.bin`, the SAMDOS 2 binary packed into every bootable
-  disk image by `tools/build-disk`.
+- `bdos/` — B-DOS 1.5a (Edwin Blink's freeware improved SAMDOS with
+  mass-storage support): the pristine release disk image + detokenised Z80
+  source + the Atom Lite 1.5a binary the i62 rig boots. B-DOS is the project's
+  target DOS going forward (i72); its hook surface is SAMDOS-compatible. See
+  `bdos/README.md` for provenance + the freeware/public-domain licence basis.
+- `samdos/` — `samdos2.bin`, the SAMDOS 2 binary currently packed into every
+  bootable disk image by `tools/build-disk`. Remains the shipped boot DOS
+  pending the B-DOS migration (q10); the target DOS going forward is B-DOS
+  (i72, vendored in `bdos/`).
