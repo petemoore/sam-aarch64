@@ -20,6 +20,8 @@ Three kinds of file live here:
   [`sam-stub-audit.md`](sam-stub-audit.md)), spike findings
   ([`basic-detokeniser-spike.md`](basic-detokeniser-spike.md)), and
   unconsumed research feeding future decisions
-  ([`sam-music-playback-research.md`](sam-music-playback-research.md),
+  ([`comment-compression-research.md`](comment-compression-research.md),
+  [`trinity-capabilities.md`](trinity-capabilities.md),
+  [`sam-music-playback-research.md`](sam-music-playback-research.md),
   [`a64-isa-footprint-research.md`](a64-isa-footprint-research.md),
   [`simcoupe-paste-control-plane.md`](simcoupe-paste-control-plane.md)).
