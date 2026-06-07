@@ -27,11 +27,11 @@
 
 *Updated in place each session — this is the live handover. Keep it ≤15 lines; history lives in the milestone status docs, the registries, and `git log`.*
 
-- **Milestone:** **M8 active** (`docs/notes/m8-status.md`). M0–M7 ✅ complete. Branch protection requires the status checks defined in `.github/workflows/ci.yml`.
-- **Last landed:** i40 load-path + i51 ✅ (PR #181) — two-phase prefix-only HLOAD: the SAM reads only the assembler-facing prefix (38,584 B / 3 IN pages); editor region never enters the IN buffer. Full-comment release `.tbn` (363,295 B) flows through the SAM gate; OUT byte-matches GNU 21,752 B. Before that: i62 ✅ B-DOS proof (#179).
-- **In flight:** nothing.
-- **Open questions:** q1 (i5 graphics — Pete). **Parked:** i50, i66.
-- **NEXT ACTION:** M7 tail: i7 (codegen tables from the Go authority), i17 (deep reviews of main_loop/litpool/SYMTAB sentinels). i39c parked (fold into the next overlay-decoder touch).
+- **Milestone:** **M8 active** (`docs/notes/m8-status.md`). M0–M7 ✅ complete. Branch protection requires the status checks defined in `.github/workflows/ci.yml`. (M8 close + next-milestone choice queued for the 2026-06-12 triage.)
+- **Last landed:** overnight batch 2026-06-12 — i54 ✅ (#183: synthetic oracle corpus, EXTR/ROR-imm decode gap found+fixed) · i17 ✅ (#185: litpool `.ltorg` pass-desync C1 fix + silent-truncation guards; residuals → i73) · i71 ✅ (#186: B-DOS 1.5a vendored to `reference/bdos/` + Trinity-fork analysis — hook surface verified untouched) · i72 ✅ (#NNN: B-DOS reorientation + `build-disk -dos` prep). Before that: i40+i51 ✅ (#181).
+- **In flight:** PR #184 (i7 codegen-tables spec) — awaiting Pete's spec-gate approval; implementation not started.
+- **Open questions:** q1 (i5 graphics — Pete), q10 (boot-disk SAMDOS 2→B-DOS swap — Pete). **Parked:** i50, i66, i39c; i48c is editor-phase.
+- **NEXT ACTION:** joint qN/iN triage with Pete (2026-06-12): M8 close + next milestone, q10 decision, PR #184 approval. Then proceed per outcomes.
 - Every strand keeps the **assembled-binary byte-identical** invariant (the `release-gate` 3-way byte-match); the i39 invariant is binary-identity + round-trip + `.tbn`-shrinks-or-holds, NOT `.tbn` byte-identity.
 <!-- HANDOVER-PROTOCOL-END -->
 
@@ -69,8 +69,8 @@ These are patterns or research findings that get applied *within* milestones rat
 |---|---|---|
 | `docs/ARCHITECTURE.md` | **The first read**: the synthesized system overview (system shape, authority model, encoder tables, memory + paging, `.tbn` v2, build/test pipeline, dev inner loop). Each section links its deep spec. | ✅ living overview |
 | `docs/specs/tbn-binary-format-reference.md` | The single authoritative reference for the complete `.tbn` binary encoding (header, records, operands, expr bytecode, directives, compaction levels). Read/cite this whenever touching the format; supersedes the retired M1 spec's tables. | ✅ living reference |
-| `docs/specs/samdos-file-io.md` | Reference for any SAMDOS file read/write: the HLOAD trampoline pattern (READ), the HSAVE UIFA pattern (WRITE), hook register-clobbering facts, pre-built Z80 snippets. | ✅ living reference |
-| `docs/notes/sam-stub-audit.md` | Already applied (PR #13 loader fix used findings). Keep as reference for any future SAMDOS hook work. | ✅ applied; reference |
+| `docs/specs/samdos-file-io.md` | Reference for the DOS file-I/O hook layer (SAMDOS 2 / B-DOS): the HLOAD trampoline pattern (READ), the HSAVE UIFA pattern (WRITE), hook register-clobbering facts, pre-built Z80 snippets. | ✅ living reference |
+| `docs/notes/sam-stub-audit.md` | Already applied (PR #13 loader fix used findings). Keep as reference for any future DOS hook work. | ✅ applied; reference |
 | `docs/notes/sam-paging.md` | Reference for any LMPR/HMPR work. | ✅ reference |
 
 ## How to extend this doc

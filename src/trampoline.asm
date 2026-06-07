@@ -5,7 +5,8 @@
 ;
 ; Purpose
 ; -------
-; The SAMDOS HLOAD hook requires HL ∈ &8000..&BFFF (section C) and the
+; The DOS HLOAD hook (SAMDOS 2 / B-DOS) requires HL ∈ &8000..&BFFF
+; (section C) and the
 ; destination physical page mapped via HMPR.  When the caller wants the
 ; file to land somewhere OTHER than the caller's own current section-C
 ; page (i.e. where the running code lives), the canonical SAM pattern
@@ -32,9 +33,10 @@
 ; Why we copy into section B at TRAMPOLINE_DST instead of section A
 ; -----------------------------------------------------------------
 ; Section A normally holds ROM0 (LMPR bit 5 = 0).  `RST 8` jumps to
-; &0008 (in ROM0), so SAMDOS hooks REQUIRE ROM0 to be in section A
+; &0008 (in ROM0), so DOS hooks (SAMDOS 2 / B-DOS) REQUIRE ROM0 to be in
+; section A
 ; during dispatch.  Replacing section A with the trampoline page would
-; break every subsequent SAMDOS hook call.  Section B (page 1 = BASIC
+; break every subsequent DOS hook call.  Section B (page 1 = BASIC
 ; system page in the default LMPR=&00 state) is free for us to
 ; overwrite once we've finished with BASIC — which we have, by the
 ; time `enctab_trampoline_setup` runs (BASIC's only job was the AUTO
