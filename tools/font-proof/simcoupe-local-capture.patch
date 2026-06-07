@@ -1,0 +1,159 @@
+X and no Docker (the route the i76 P1b screenshots were produced with).
+Applies to the CI-pinned upstream SHA 0e8a69f3096fe00a00a29bd2303db6a7358021ad
+(v1.2.16). Three independent hunks:
+
+1. SDL/SDL20.cpp — fall back to SDL's software renderer when
+   SDL_RENDERER_ACCELERATED is unavailable (the i62 local patch, described in
+   docs/notes/bdos-version-landscape.md §i62; lets SimCoupé run under
+   SDL_VIDEODRIVER=dummy with no display at all).
+
+2. Base/SimCoupe.h — add __aarch64__ to the little-endian platform list.
+   Upstream's list covers __arm__ (32-bit) but not 64-bit ARM, so Linux/arm64
+   builds define __BIG_ENDIAN__ and the PNG screenshot writer emits its
+   length/IHDR fields without byteswapping, producing unreadable files.
+   Genuine upstream bug, candidate for an upstream report.
+
+3. -pngonhalt (Options + CPU.h + Frame.cpp) — with -exitonhalt, a DI;HALT
+   requests a PNG of the final frame (SimCoupé's own SavePNG path, written
+   by Frame::End() into -outpath as simcNNNN.png) and quits once it is
+   written, instead of quitting immediately. Gives an exact, deterministic
+   capture of a probe's final screen with no window, no Xvfb and no timing
+   guesswork.
+
+Usage: tools/font-proof/run-capture.sh (the SIMCOUPE_PNGONHALT=1 route).
+
+diff --git a/Base/CPU.cpp b/Base/CPU.cpp
+index d1dbc67..3f29738 100644
+--- a/Base/CPU.cpp
++++ b/Base/CPU.cpp
+@@ -55,6 +55,7 @@ sam_cpu cpu;
+ 
+ bool g_fBreak, g_fPaused;
+ bool g_fQuit;
++bool g_fPngHalt;
+ int g_nTurbo;
+ 
+ constexpr auto max_boot_frames{ 200 };
+diff --git a/Base/CPU.h b/Base/CPU.h
+index fc42dcf..512ddb3 100644
+--- a/Base/CPU.h
++++ b/Base/CPU.h
+@@ -66,6 +66,7 @@ extern uint8_t last_in_val, last_out_val;
+ 
+ extern bool g_fBreak, g_fPaused;
+ extern bool g_fQuit;
++extern bool g_fPngHalt;
+ extern int g_nTurbo;
+ 
+ #ifdef _DEBUG
+@@ -181,8 +182,19 @@ struct sam_cpu : public z80::z80_cpu<sam_cpu>
+         // the next interrupt.
+         if (GetOption(exitonhalt) && !base::on_get_iff1())
+         {
+-            g_fQuit = true;
+-            g_fBreak = true;
++            // Local font-proof patch: with -pngonhalt, request a PNG of the
++            // final frame instead of quitting at once; Frame::End() writes
++            // the PNG and then quits. The frame content is static by the
++            // time a probe halts, so the capture is exact.
++            if (GetOption(pngonhalt))
++            {
++                g_fPngHalt = true;
++            }
++            else
++            {
++                g_fQuit = true;
++                g_fBreak = true;
++            }
+         }
+         base::on_halt();
+     }
+diff --git a/Base/Frame.cpp b/Base/Frame.cpp
+index 88be685..7f79b16 100644
+--- a/Base/Frame.cpp
++++ b/Base/Frame.cpp
+@@ -21,6 +21,8 @@
+ #include "SimCoupe.h"
+ #include "Frame.h"
+ 
++#include "CPU.h"
++
+ #include "Audio.h"
+ #include "AtaAdapter.h"
+ #include "AVI.h"
+@@ -254,10 +256,21 @@ void End()
+     }
+     else
+     {
++        if (g_fPngHalt)
++            save_png = true;
++
+         if (save_png)
+         {
+             PNG::Save(*pFrameBuffer);
+             save_png = false;
++
++            // Local font-proof patch: the PNG request came from DI;HALT
++            // (-pngonhalt in CPU.h on_halt); quit now that it is written.
++            if (g_fPngHalt)
++            {
++                g_fQuit = true;
++                g_fBreak = true;
++            }
+         }
+ 
+         if (save_ssx)
+diff --git a/Base/Options.cpp b/Base/Options.cpp
+index dbf93c1..d23d2ff 100644
+--- a/Base/Options.cpp
++++ b/Base/Options.cpp
+@@ -170,6 +170,7 @@ auto set_named_value(const std::string& option_name, const std::string& str) ->
+     else if (name == "fkeys") { set_value(g_config.fkeys, str); }
+     else if (name == "rasterdebug") { set_value(g_config.rasterdebug, str); }
+     else if (name == "exitonhalt") { set_value(g_config.exitonhalt, str); }
++    else if (name == "pngonhalt") { set_value(g_config.pngonhalt, str); }
+     else
+     {
+         return false;
+diff --git a/Base/Options.h b/Base/Options.h
+index 5ba7355..ad4532b 100644
+--- a/Base/Options.h
++++ b/Base/Options.h
+@@ -132,6 +132,7 @@ struct Config
+     bool rasterdebug = true;            // Raster-accurate debugger display
+ 
+     bool exitonhalt = false;            // Quit when Z80 executes DI;HALT? (batch mode; not saved, same as autoboot)
++    bool pngonhalt = false;             // With exitonhalt: save a PNG of the final frame, then quit
+ 
+     std::string fkeys =                 // Function key bindings
+         "F1=InsertDisk1,SF1=EjectDisk1,AF1=NewDisk1,CF1=SaveDisk1,"
+diff --git a/Base/SimCoupe.h b/Base/SimCoupe.h
+index 32efcca..0cec312 100644
+--- a/Base/SimCoupe.h
++++ b/Base/SimCoupe.h
+@@ -28,7 +28,7 @@
+ /* If it's not one of these we'll assume big endian (we have a run-time check to fall back on anyway) */
+ #if (defined(__LITTLE_ENDIAN__) || defined(__i386__) || defined(__ia64__) || defined(__x86_64__) || \
+     (defined(__alpha__) || defined(__alpha)) || (defined(__mips__) && defined(__MIPSEL__)) || \
+-     defined(__arm__) || defined(__SYMBIAN32__) || defined(_WIN32_WCE) || defined(_WIN32)) \
++     defined(__arm__) || defined(__aarch64__) || defined(__SYMBIAN32__) || defined(_WIN32_WCE) || defined(_WIN32)) \
+      && !defined(__BIG_ENDIAN__)
+ #ifndef __LITTLE_ENDIAN__
+ #define __LITTLE_ENDIAN__
+diff --git a/SDL/SDL20.cpp b/SDL/SDL20.cpp
+index 89b988e..cbead62 100644
+--- a/SDL/SDL20.cpp
++++ b/SDL/SDL20.cpp
+@@ -61,6 +61,12 @@ bool SDLTexture::Init()
+     m_renderer.reset(
+         SDL_CreateRenderer(m_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE));
+ 
++    // Local i62 patch: fall back to any available renderer (e.g. the software
++    // renderer under SDL_VIDEODRIVER=dummy) so the emulator can run fully
++    // headless without X. Rendering backend has no effect on Z80/ATA emulation.
++    if (!m_renderer)
++        m_renderer.reset(SDL_CreateRenderer(m_window, -1, 0));
++
+     if (!m_renderer)
+         return false;
+ 
