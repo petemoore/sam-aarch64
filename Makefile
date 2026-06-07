@@ -166,7 +166,7 @@ assembler-prod: $(BUILD)/assembler-prod.bin
 # Test-variant build also exports the symbol table for the off-axis
 # test_mem.bin to import (plan-PR 3 — see
 # https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md).
-$(BUILD)/assembler.bin $(BUILD)/assembler.sym: src/assembler.asm $(wildcard src/*.asm) $(wildcard src/**/*.asm) src/sam_io.inc
+$(BUILD)/assembler.bin $(BUILD)/assembler.sym: src/assembler.asm $(wildcard src/*.asm) $(wildcard src/**/*.asm) $(wildcard src/*.inc)
 	@mkdir -p $(BUILD)
 	pyz80 -D BUILD_TESTS=1 \
 	    --obj=$(BUILD)/assembler.bin \
@@ -174,7 +174,7 @@ $(BUILD)/assembler.bin $(BUILD)/assembler.sym: src/assembler.asm $(wildcard src/
 	    src/assembler.asm
 	@./tools/check-code-budget.sh $(BUILD)/assembler.bin test
 
-$(BUILD)/assembler-prod.bin: src/assembler.asm $(wildcard src/*.asm) $(wildcard src/**/*.asm) src/sam_io.inc
+$(BUILD)/assembler-prod.bin: src/assembler.asm $(wildcard src/*.asm) $(wildcard src/**/*.asm) $(wildcard src/*.inc)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/assembler-prod.bin src/assembler.asm
 	@./tools/check-code-budget.sh $(BUILD)/assembler-prod.bin prod
@@ -277,14 +277,51 @@ disasm-payload: $(BUILD)/disasm.bin
 
 disasm-test-payload: $(BUILD)/disasm-test.bin
 
-# zx0_compress.bin — standalone ZX0 greedy compressor (i60b-2, not yet wired
-# into the SAM build; placement is i60c design work).
+# zx0_compress.bin — standalone ZX0 greedy compressor (org &8400, the
+# page-13 product address).  Byte-identical to the compressor head of the
+# combined zx0 payload below; consumed by the harness battery
+# (tools/z80-test-harness-go zx0_*_test.go).
 $(BUILD)/zx0_compress.bin: src/zx0_compress.asm
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/zx0_compress.bin --mapfile=$(BUILD)/zx0_compress.map src/zx0_compress.asm
 
 .PHONY: zx0-compress-payload
 zx0-compress-payload: $(BUILD)/zx0_compress.bin
+
+# Page-13 zx0 payload (PRODUCTION feature — both variants): greedy
+# compressor (&8400) + turbo decoder (&8B00), per
+# docs/specs/comment-storage-design.md §5/§6.  HLOAD'd at boot into
+# physical page 13 at &8400 (alongside sysreg_data at &8000) by
+# src/loader.asm::load_zx0_payload.  Two variants, mirroring the disasm
+# split:
+#
+#   zx0.bin       (PROD)  compressor + decoder only (~2 KB).
+#   zx0-test.bin  (TEST)  -D BUILD_TESTS=1 — adds the boot self-test
+#                 driver + the baked Go-authority fixture at &AFA0
+#                 (generated below); pads across the &8B80 workspace
+#                 region, so ~11 KB.  Ships only on the test disk.
+$(BUILD)/zx0.bin: src/zx0_payload.asm src/zx0_compress.asm src/dzx0_turbo.asm src/zx0_comm.inc
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/zx0.bin src/zx0_payload.asm
+
+$(BUILD)/zx0-test.bin: src/zx0_payload.asm src/zx0_compress.asm src/dzx0_turbo.asm src/zx0_comm.inc $(BUILD)/zx0_selftest_fixture.inc
+	@mkdir -p $(BUILD)
+	pyz80 -D BUILD_TESTS=1 --obj=$(BUILD)/zx0-test.bin src/zx0_payload.asm
+
+# Baked self-test fixture: a fixed 1 KB block of tests/release/release.s
+# comment text + its greedy-compressed bytes (H=512 D=16), emitted by the
+# Go authority so the boot self-tests are exact byte-compares
+# (comment-storage-design §7.1).
+$(BUILD)/zx0_selftest_fixture.inc: tests/release/release.s tools/zx0-greedy/compress.go tools/zx0-greedy/cmd/zx0fixture/main.go
+	@mkdir -p $(BUILD)
+	cd tools/zx0-greedy && go run ./cmd/zx0fixture \
+	    -src $(CURDIR)/tests/release/release.s \
+	    -out $(CURDIR)/$(BUILD)/zx0_selftest_fixture.inc
+
+.PHONY: zx0-payload zx0-test-payload
+zx0-payload: $(BUILD)/zx0.bin
+
+zx0-test-payload: $(BUILD)/zx0-test.bin
 
 $(BUILD)/build-disk: tools/build-disk/main.go tools/build-disk/go.mod
 	@mkdir -p $(BUILD)
@@ -293,15 +330,17 @@ $(BUILD)/build-disk: tools/build-disk/main.go tools/build-disk/go.mod
 build-disk: $(BUILD)/build-disk
 
 # disk uses the TEST assembler (assembler.bin, BUILD_TESTS=1), whose
-# boot sequence calls the disasm &8003 self-test via paged_call — so it
-# must ship the TEST disasm binary (disasm-test.bin).
-disk: assembler test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-test-payload enctab $(BUILD)/build-disk
+# boot sequence calls the disasm &8003 and zx0 &AFA0 self-tests via
+# paged_call — so it must ship the TEST disasm + zx0 binaries
+# (disasm-test.bin, zx0-test.bin).
+disk: assembler test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-test-payload zx0-test-payload enctab $(BUILD)/build-disk
 	$(BUILD)/build-disk \
 	    -test-mem $(BUILD)/test_mem.bin \
 	    -cluster $(BUILD)/test_cluster.bin \
 	    -paged-call $(BUILD)/paged_call_test_payload.bin \
 	    -sysreg-data $(BUILD)/sysreg_data.bin \
 	    -disasm $(BUILD)/disasm-test.bin \
+	    -zx0 $(BUILD)/zx0-test.bin \
 	    $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/test.mgt
 
 # test-core — sweep every fixture under tests/core/sources/ end-to-end:
@@ -407,21 +446,18 @@ release-stripped-tbn: sam-aarch64
 	    $(SPECTRUM4_SRC)/targets/release.target
 	@echo "release-stripped.tbn: $$(stat -f%z $(BUILD)/release-stripped.tbn 2>/dev/null || stat -c%s $(BUILD)/release-stripped.tbn) bytes"
 
-# Build the full (comment-retaining) flattened spectrum4 release .tbn, used
-# as input to comment-bench.  Comments are NOT stripped so the editor-region
-# comment sidecar carries the full corpus (i57).
+# Build the full (comment-retaining) flattened release .tbn, used as input
+# to comment-bench.  Comments are NOT stripped so the editor-region comment
+# sidecar carries the full corpus (i57).  Reads the VENDORED release source
+# (tests/release/release.s — the whole release pre-flattened into one
+# self-contained file, the same input the release-gate uses), so no
+# spectrum4 checkout is needed (i68 §7.5).
 release-unstripped-tbn: sam-aarch64
 	$(BUILD)/sam-aarch64 -flatten \
-	    -I $(SPECTRUM4_SRC) \
-	    -I $(SPECTRUM4_SRC)/kernel \
-	    -I $(SPECTRUM4_SRC)/roms \
-	    -I $(SPECTRUM4_SRC)/tests \
-	    -I $(SPECTRUM4_SRC)/demo \
-	    -I $(SPECTRUM4_SRC)/libextra \
 	    -origin 0xfffffff000000000 \
 	    -o $(BUILD)/release-unstripped.img \
 	    --emit-tbn $(BUILD)/release-unstripped.tbn \
-	    $(SPECTRUM4_SRC)/targets/release.target
+	    tests/release/release.s
 	@echo "release-unstripped.tbn: $$(stat -f%z $(BUILD)/release-unstripped.tbn 2>/dev/null || stat -c%s $(BUILD)/release-unstripped.tbn) bytes"
 
 # Run the comment-compression benchmark against the unstripped release .tbn.

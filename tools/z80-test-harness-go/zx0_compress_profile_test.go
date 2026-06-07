@@ -103,7 +103,7 @@ func TestZX0CompressProfile(t *testing.T) {
 		0x01, byte(zxcDstBase & 0xFF), byte(zxcDstBase >> 8), // LD BC,dst
 		0x11, byte(len(src) & 0xFF), byte(len(src) >> 8), // LD DE,srcLen
 		0x21, byte(zxcSrcBase & 0xFF), byte(zxcSrcBase >> 8), // LD HL,src
-		0xCD, 0x00, 0x00, // CALL 0
+		0xCD, byte(zxcCodeBase & 0xFF), byte(zxcCodeBase >> 8), // CALL zxcCodeBase
 		0x76, // HALT
 	}
 	copy(mem.mem[tAddr:], tramp)
@@ -118,7 +118,7 @@ func TestZX0CompressProfile(t *testing.T) {
 	const maxSteps = 100_000_000
 	for steps := 0; steps < maxSteps && !cpu.HALT; steps++ {
 		ts := tstatesForInstruction(cpu, mem)
-		if cpu.PC < zxcTrampolineBase {
+		if cpu.PC >= zxcCodeBase {
 			regionTS[symbolFor(syms, cpu.PC)] += ts
 		}
 		total += ts
