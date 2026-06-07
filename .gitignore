@@ -27,9 +27,9 @@ tools/llist-normalise/llist-normalise
 tools/llist-sweep/llist-sweep
 tools/z80-test-harness-go/z80-test-harness-go
 
-# text2bin's default output beside a vendored source (release.s is tracked; its
-# compiled .tbn is a derived artifact — the canonical gate scripts write .tbn to
-# build/, never here).
+# sam-aarch64's default .tbn output beside a vendored source (release.s is
+# tracked; its compiled .tbn is a derived artifact — the canonical gate scripts
+# write .tbn to build/, never here).
 tests/m6/release/release.s.tbn
 
 go.work
