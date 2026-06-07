@@ -20,17 +20,11 @@ tools/aarch64dec/cmd/aarch64dec/aarch64dec
 tools/basic-detokeniser-spike/basic-detokeniser-spike
 tools/basic-detokeniser-sweep/basic-detokeniser-sweep
 tools/basic-emulator-spike/basic-emulator-spike
-tools/bin2text/bin2text
-tools/build-disk/build-disk
 tools/build-m3-disk/build-m3-disk
-tools/build-screen-disk/build-screen-disk
 tools/enctab-gen/enctab-gen
-tools/flatten-s/flatten-s
 tools/llist-capture/llist-capture
 tools/llist-normalise/llist-normalise
 tools/llist-sweep/llist-sweep
-tools/refenc/refenc
-tools/text2bin/text2bin
 tools/z80-test-harness-go/z80-test-harness-go
 
 # text2bin's default output beside a vendored source (release.s is tracked; its
