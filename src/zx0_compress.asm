@@ -59,6 +59,7 @@ ZX0_MAX_OFFSET:  equ     32640   ; compress.go: zx0MaxOffset
 zx0_compress:
         ; Stash entry arguments.
         ld      (zxc_src),     hl
+        ld      (zxc_h2_src+1), hl      ; patch src base into zxc_hash2
         ld      (zxc_dst),     bc
         ld      (zxc_src_len), de
 
@@ -66,6 +67,7 @@ zx0_compress:
         push    ix
         pop     hl                      ; HL = ws_base
         ld      (zxc_ws_base), hl
+        ld      (zxc_h2_ws+1), hl       ; patch hashHead base into zxc_hash2
 
         ; Compute:
         ;   chain_base  = ws_base + HASH_SIZE_BYTES
@@ -422,10 +424,7 @@ zxc_find_best:
 
         ; candidate = hashHead[hash2(pos)]
         ld      hl, (zxc_pos)
-        call    zxc_hash2               ; HL = hash h
-        add     hl, hl
-        ld      de, (zxc_ws_base)
-        add     hl, de                  ; &hashHead[h]
+        call    zxc_hash2               ; HL = &hashHead[h]
         ld      e, (hl)
         inc     hl
         ld      d, (hl)                 ; DE = candidate
@@ -588,68 +587,44 @@ zxc_fb_done:
 
 
 ; ════════════════════════════════════════════════════════════════════
-; zxc_hash2 — compute hash for position HL.
+; zxc_hash2 — hash position HL; return HL = &hashHead[hash].
 ; Go: matchFinder.hash2 (compress.go lines 371–377).
 ;
-; Entry: HL = position i.
-; Return: HL = hash in [0, HASH_MASK].
-; Clobbers: A, DE, BC.
+; hash = (src[i]*31 ^ src[i+1]) & HASH_MASK, looked up via the
+; assemble-time tables zxc_tab31lo/zxc_tab31hi (page-aligned, one page
+; each), so the *31 is an H/L substitution instead of 16-bit shifts.
+;
+; Go's i+1 boundary check (single-byte hash at the last position) is
+; dropped as a time-only optimisation: position srclen-1 is the only
+; one it affects, and the hash chosen there cannot reach the output —
+; the probe at srclen-1 is bounded by maxML = 1, below both match
+; thresholds (rep >= 2, new >= 3), and an insert at srclen-1 is never
+; probed afterwards because the parse ends.  src[srclen] is read as a
+; don't-care byte (oracle-verified byte-identical).
+;
+; Entry: HL = position i.  The zxc_h2_src/zxc_h2_ws immediates are
+; patched at zx0_compress entry.
+; Return: HL = &hashHead[hash].
+; Clobbers: A, DE.
 ; ════════════════════════════════════════════════════════════════════
 zxc_hash2:
-        ld      de, (zxc_src)
+zxc_h2_src:
+        ld      de, 0                   ; SMC: src base, patched at entry
         add     hl, de                  ; HL = &src[i]
-
-        ; Boundary: need &src[i]+1 < src_end.
-        ld      de, (zxc_src)
-        ld      bc, (zxc_src_len)
-        ld      a, e
-        add     a, c
-        ld      e, a
-        ld      a, d
-        adc     a, b
-        ld      d, a                    ; DE = src_end
-
-        push    hl                      ; save &src[i]
+        ld      a, (hl)                 ; A = src[i]
         inc     hl
-        ld      a, l
-        sub     e
-        ld      a, h
-        sbc     a, d                    ; borrow if HL+1 < src_end
-        pop     hl
-        jp      nc, zxc_h2_single
-
-        ; Two-byte hash: (src[i]*31 ^ src[i+1]) & HASH_MASK
-        ; Must use 16-bit arithmetic: src[i]*31 overflows 8 bits for src[i]>=9.
-        ; Strategy: src[i]*31 = src[i]*32 - src[i], computed in HL (16-bit).
-        ld      e, (hl)                 ; E = src[i]
-        inc     hl
-        ld      d, (hl)                 ; D = src[i+1]
-        ld      l, e
-        ld      h, 0                    ; HL = src[i]
-        add     hl, hl
-        add     hl, hl
-        add     hl, hl
-        add     hl, hl
-        add     hl, hl                  ; HL = src[i]*32 (16-bit, no overflow)
-        ld      a, l
-        sub     e
-        ld      l, a
-        ld      a, h
-        sbc     a, 0                    ; A = (src[i]*31) >> 8
-        ld      h, a                    ; H = high byte of src[i]*31
-        ld      a, l
-        xor     d                       ; A = (src[i]*31 & 0xFF) ^ src[i+1]
-        ld      l, a
-        ld      a, h
-        and     1                       ; keep only bit 8 of the 9-bit HASH_MASK (511=0x1FF)
-        ld      h, a                    ; HL = 9-bit hash value
-        ret
-
-zxc_h2_single:
-        ld      a, (hl)
-        and     HASH_MASK & &FF
-        ld      l, a
-        ld      h, 0
+        ld      e, (hl)                 ; E = src[i+1] (don't-care at srclen-1)
+        ld      h, zxc_tab31lo >> 8     ; tables are page-aligned
+        ld      l, a                    ; HL = &tab31lo[src[i]]
+        ld      a, (hl)                 ; A = (src[i]*31) & &FF
+        xor     e                       ; A = hash low byte
+        inc     h                       ; HL = &tab31hi[src[i]]
+        ld      h, (hl)                 ; H = hash bit 8 (0 or 1)
+        ld      l, a                    ; HL = 9-bit hash
+        add     hl, hl                  ; HL = hash * 2
+zxc_h2_ws:
+        ld      de, 0                   ; SMC: hashHead base, patched at entry
+        add     hl, de                  ; HL = &hashHead[hash]
         ret
 
 
@@ -662,11 +637,7 @@ zxc_h2_single:
 ; ════════════════════════════════════════════════════════════════════
 zxc_insert:
         push    hl                      ; save i
-        call    zxc_hash2               ; HL = hash h
-        ; &hashHead[h] = ws_base + h*2
-        add     hl, hl
-        ld      de, (zxc_ws_base)
-        add     hl, de                  ; HL = &hashHead[h]
+        call    zxc_hash2               ; HL = &hashHead[h]
         ; old = hashHead[h]
         ld      c, (hl)
         inc     hl
@@ -943,3 +914,16 @@ zxc_best_len:    defw    0       ; best match length scratch
 zxc_best_off:    defw    0       ; best match offset scratch
 zxc_chain_ctr:   defb    0       ; chain-depth step counter
 zxc_ml_count:    defb    0       ; match-length counting scratch
+
+; ════════════════════════════════════════════════════════════════════
+; Hash lookup tables (assemble-time).  zxc_tab31lo[x] = (x*31) & &FF;
+; zxc_tab31hi[x] = ((x*31) >> 8) & 1 — the bit kept by the 9-bit
+; HASH_MASK.  Page-aligned and adjacent so zxc_hash2 switches tables
+; with INC H.
+; ════════════════════════════════════════════════════════════════════
+        align   256
+zxc_tab31lo:
+        for 256, defb ((FOR*31) & &FF)
+zxc_tab31hi:
+        for 256, defb (((FOR*31) >> 8) & 1)
+        assert  zxc_tab31hi == zxc_tab31lo + 256

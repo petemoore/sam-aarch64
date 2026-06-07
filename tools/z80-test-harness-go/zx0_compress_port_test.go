@@ -17,13 +17,13 @@
 //
 // # Memory layout (flat 64 KB)
 //
-//	0x0000–0x05FF  zx0_compress.bin code (1163 B fits)
-//	0x0600         trampoline: LD IX/BC/DE/HL ; CALL 0x0000 ; HALT
-//	0x0700–0x26FF  src block (max 8 KB input)
-//	0x2700–0x46FF  dst buffer (max 8 KB + overhead)
-//	0x4700–...     workspace (HASH_SIZE*2 + blockLen*2 + 30 bytes)
+//	0x0000–0x07FF  zx0_compress.bin code + aligned hash tables
+//	0x0800         trampoline: LD IX/BC/DE/HL ; CALL 0x0000 ; HALT
+//	0x0900–0x28FF  src block (max 8 KB input)
+//	0x2900–0x48FF  dst buffer (max 8 KB + overhead)
+//	0x4900–...     workspace (HASH_SIZE*2 + blockLen*2 + 30 bytes)
 //
-// Stack: SP = 0x06FE (descends; above trampoline, below src).
+// Stack: SP = 0x08FE (descends; above trampoline, below src).
 //
 // # Running
 //
@@ -47,13 +47,14 @@ import (
 
 const (
 	// Memory addresses for the compressor harness.
-	// zx0_compress.bin is 1163 bytes; trampoline must start after it.
+	// zx0_compress.bin (code + aligned hash tables) must fit below the
+	// trampoline.
 	zxcCodeBase       = 0x0000 // zx0_compress.bin loaded here (org 0)
-	zxcTrampolineBase = 0x0600 // LD IX/BC/DE/HL setup + CALL 0x0000 + HALT
-	zxcSrcBase        = 0x0700 // HL on entry (src block)
-	zxcDstBase        = 0x2700 // BC on entry (dst buffer)
-	zxcWsBase         = 0x4700 // IX on entry (scratch workspace)
-	zxcInitialSP      = 0x06FE // stack descends from here
+	zxcTrampolineBase = 0x0800 // LD IX/BC/DE/HL setup + CALL 0x0000 + HALT
+	zxcSrcBase        = 0x0900 // HL on entry (src block)
+	zxcDstBase        = 0x2900 // BC on entry (dst buffer)
+	zxcWsBase         = 0x4900 // IX on entry (scratch workspace)
+	zxcInitialSP      = 0x08FE // stack descends from here
 )
 
 // runZX0Compressor runs the Z80 zx0_compress.bin over src and returns
@@ -75,7 +76,7 @@ func runZX0Compressor(compressorBin, src []byte, maxSteps uint64) (tstates uint6
 	// Load compressor at 0x0000.
 	copy(mem.mem[zxcCodeBase:], compressorBin)
 
-	// Trampoline at 0x0200:
+	// Trampoline at zxcTrampolineBase:
 	//   LD IX, wsBase      (DD 21 lo hi)   ; 4 bytes
 	//   LD BC, dstBase     (01 lo hi)       ; 3 bytes
 	//   LD DE, srcLen      (11 lo hi)       ; 3 bytes
