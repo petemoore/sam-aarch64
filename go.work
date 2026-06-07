@@ -1,0 +1,11 @@
+go 1.26.1
+
+use (
+	./tools/aarch64dec
+	./tools/aarch64enc
+	./tools/build-m3-disk
+	./tools/enctab-gen
+	./tools/sam-aarch64
+	./tools/sam-aarch64-format
+	./tools/z80-test-harness-go
+)

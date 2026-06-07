@@ -26,8 +26,6 @@ tools/z80-test-harness-go/z80-test-harness-go
 # write .tbn to build/, never here).
 tests/m6/release/release.s.tbn
 
-go.work
-go.work.sum
 
 # --- Override global ~/.gitignore_global for this (personal) repo ---
 # The global excludesfile ignores the whole .claude/ directory + superpowers
