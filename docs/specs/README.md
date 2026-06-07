@@ -23,3 +23,7 @@ design doc is deleted (git history is the archive).
   Pi over direct LAN) direction.
 - [`samdos-file-io.md`](samdos-file-io.md) — SAMDOS read/write idioms:
   HLOAD trampoline, HSAVE UIFA pattern, hook clobber facts, Z80 snippets.
+- [`editor-vision.md`](editor-vision.md) — Phase 2 editor design pointers
+  (feeds the future Phase-2 spec): explanation panels, register simulator,
+  retro UI affordances, keyboard-driven interaction model, edit-model pointer
+  (i41).
