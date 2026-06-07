@@ -18,7 +18,7 @@
 #   - The spectrum4 source tree lives at ~/git/spectrum4/src/spectrum4
 #     (overridable via SPECTRUM4_SRC).
 #
-# Usage:  scripts/build-spectrum4-release.sh
+# Usage:  tools/build-spectrum4-release.sh
 # Output: build/release.bin and (on success) "BYTE-MATCH OK"
 #         build/release.gnu.img is left for inspection.
 

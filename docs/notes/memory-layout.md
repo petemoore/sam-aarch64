@@ -10,7 +10,7 @@ The assembler links at `org &8000` (entry `jp start`; `CALL 32768` lands on the 
 |-------|---------|----------|
 | `&0000-&3FFF` | A | ROM0 by default; **or** ENCTAB (physical page 4) under `LMPR_ENCTAB`; **or** an IN page under `LMPR_IN_BASE + N` inside the reader bracket (see `reader.asm`). |
 | `&4000-&7FFF` | B | Page 1 (BASIC sys area, mostly unused). Trampoline copy at `TRAMPOLINE_DST` (`&7E00`). Under `LMPR_ENCTAB`, section B = page 5 = OUT-low (the OUT emit window — see `emit_byte`). |
-| `&8000-&BFFF` | C | **Assembler code** (`assembler.asm` + all includes). The IN/OUT/ENCTAB buffers live off-axis, so the whole 16 KB section is code budget; `scripts/check-code-budget.sh` (run at the tail of `make m3-asm` / `m3-asm-prod`) enforces `code_end < &C000` — the stack page starts there. |
+| `&8000-&BFFF` | C | **Assembler code** (`assembler.asm` + all includes). The IN/OUT/ENCTAB buffers live off-axis, so the whole 16 KB section is code budget; `tools/check-code-budget.sh` (run at the tail of `make m3-asm` / `m3-asm-prod`) enforces `code_end < &C000` — the stack page starts there. |
 | `&C000-&C0FF` | D | Stack (`SP = &C100`, grows down). |
 | `&C100-&D4FF` | D | Scratch — OPVAL arrays, SYMTAB, litpool table + counters (sub-allocations below). |
 | `&D500-&D8FF` | D | `STAGING_BUF` — paged-IN per-record staging area (M6 PR 2). |
@@ -69,7 +69,7 @@ Defined in `assembler.asm` (and allocated/used by the named files). Addresses, c
 
 Both assembler variants link at `org &8000`; their scratch/stack starts at `&C000` (`SP = &C100`). If a build's `code_end` reaches `&C000` it collides with the stack page, and the failure manifests as a **silent deterministic boot-hang** (rc=124) with no diagnostic — the exact "test-variant fragility" class that bit PR #43 (see `memory/feedback_test_variant_fragility.md`).
 
-`scripts/check-code-budget.sh` turns that silent cliff into a build/CI failure **with a number** (`code_end &C0xx ≥ ceiling &C000 — N bytes over`). It runs at the tail of every `make m3-asm` / `m3-asm-prod` recipe, and `make check-budget` checks both variants explicitly (the M6-closure CI gate). Defaults: `ORG=0x8000`, `CEILING=0xC000`.
+`tools/check-code-budget.sh` turns that silent cliff into a build/CI failure **with a number** (`code_end &C0xx ≥ ceiling &C000 — N bytes over`). It runs at the tail of every `make m3-asm` / `m3-asm-prod` recipe, and `make check-budget` checks both variants explicitly (the M6-closure CI gate). Defaults: `ORG=0x8000`, `CEILING=0xC000`.
 
 - **prod variant** (`build/assembler-prod.bin`) — smaller; self-tests `#ifdef`'d out.
 - **test variant** (`build/assembler.bin`) — larger; includes in-section self-tests. The off-axis moves (test_mem → page 13, the M5/misc cluster → page 12, the IN/OUT/ENCTAB buffers → pages 4–12) exist specifically to keep both variants under the cliff. The script prints the headroom-to-ceiling for each.
@@ -80,4 +80,4 @@ Both assembler variants link at `org &8000`; their scratch/stack starts at `&C00
 - `src/README.md` — assembler taxonomy (prod/test, off-axis modules, include order).
 - `docs/notes/sam-paging.md` — SAM Coupé paging primer (sections, LMPR/HMPR).
 - Memory-layout brainstorm (blob-pinned: <https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-memory-layout-brainstorm.md>) — design discussion behind the off-axis layout.
-- `scripts/check-code-budget.sh` — the budget gate.
+- `tools/check-code-budget.sh` — the budget gate.

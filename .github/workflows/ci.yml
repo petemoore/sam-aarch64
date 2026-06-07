@@ -526,7 +526,7 @@ jobs:
   #
   # Also runs `make check-budget`, so a code-size overrun past the &C000
   # stack-page cliff fails here with a number rather than as a silent
-  # boot-hang (the test-variant fragility class; scripts/check-code-budget.sh).
+  # boot-hang (the test-variant fragility class; tools/check-code-budget.sh).
   m6-release:
     runs-on: ubuntu-latest
     needs: build-image

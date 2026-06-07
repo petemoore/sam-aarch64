@@ -12,7 +12,7 @@ TESTS := tests
 .PHONY: all clean
 
 # Default build: the two shipping assembler variants (the recipe for each
-# also runs scripts/check-code-budget.sh inline).
+# also runs tools/check-code-budget.sh inline).
 all: m3-asm m3-asm-prod
 
 clean:
@@ -132,12 +132,12 @@ ci-m2: test-m2
 
 # check-budget — fail if either assembler variant has grown into the
 # &C000 stack page (the silent boot-hang cliff; see
-# scripts/check-code-budget.sh + memory/feedback_test_variant_fragility.md).
+# tools/check-code-budget.sh + memory/feedback_test_variant_fragility.md).
 # The same assertion also runs inline at the tail of each assembler build
 # recipe, so any `make m3-asm` / `make m3-asm-prod` enforces it too; this
 # target is the explicit both-variants entry point used by CI.
 check-budget: m3-asm m3-asm-prod
-	./scripts/check-code-budget.sh
+	./tools/check-code-budget.sh
 
 # Two build variants of the SAM-side assembler:
 #
@@ -172,12 +172,12 @@ $(BUILD)/assembler.bin $(BUILD)/assembler.sym: src/assembler.asm $(wildcard src/
 	    --obj=$(BUILD)/assembler.bin \
 	    --exportfile=$(BUILD)/assembler.sym \
 	    src/assembler.asm
-	@./scripts/check-code-budget.sh $(BUILD)/assembler.bin test
+	@./tools/check-code-budget.sh $(BUILD)/assembler.bin test
 
 $(BUILD)/assembler-prod.bin: src/assembler.asm $(wildcard src/*.asm) $(wildcard src/**/*.asm) src/sam_io.inc
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/assembler-prod.bin src/assembler.asm
-	@./scripts/check-code-budget.sh $(BUILD)/assembler-prod.bin prod
+	@./tools/check-code-budget.sh $(BUILD)/assembler-prod.bin prod
 
 # Off-axis test_mem build (BUILD_TESTS only).
 #

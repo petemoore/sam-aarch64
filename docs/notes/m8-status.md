@@ -216,7 +216,7 @@ banners on the M1/i1 design docs.
   `.tbn → binary`, `--render`, `-E`; `SA64`-magic input detection; the **symbolic
   record stream lives only in memory** (frontend → in-memory buffer → `format.ReadFile`
   → pass1/pass2 — never on disk; i48 decision A). Rewired all ~150 call sites
-  (Makefile + 14 shell gates + 7 koron-go/z80 harness tests + `scripts/`); deleted
+  (Makefile + 14 shell gates + 7 koron-go/z80 harness tests + `tools/`); deleted
   the three old wrapper modules; `release-stripped-tbn` now emits the compact `.tbn`
   the SAM reads. Byte-neutral across 89 M1–M6 fixtures + release (== GNU, 21752 B;
   compact `.tbn` 45,189 B) + render + `-E`. All 14 CI checks green incl. the SimCoupé

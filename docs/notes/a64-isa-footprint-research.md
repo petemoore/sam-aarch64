@@ -209,9 +209,9 @@ The hard constraint is **address-space code budget**, not total RAM.
 
 Both assembler variants link at `org &8000`; scratch/stack starts at `&C000`
 (`SP = &C100`). If `code_end` reaches `&C000` the build silently boot-hangs —
-turned into a numbered failure by `scripts/check-code-budget.sh`
+turned into a numbered failure by `tools/check-code-budget.sh`
 (`CEILING=0xC000`), run at the tail of every `make m3-asm{,-prod}`
-(`docs/notes/memory-layout.md` §"Code-budget ceiling"; `scripts/check-code-budget.sh:28`).
+(`docs/notes/memory-layout.md` §"Code-budget ceiling"; `tools/check-code-budget.sh:28`).
 
 - Today's prod binary: code_end `&B88B`, **only 1909 B of headroom**.
 - The §3(c) estimate is **+15–35 KB of code**.
@@ -283,7 +283,7 @@ Repo facts (file:line cited inline): `tools/aarch64enc/manual_forms.go`,
 `tools/aarch64enc/data.go`, `tools/aarch64enc/types.go:16-36`,
 `tools/sam-aarch64-format/mnemonics.go`, `src/loader.asm:92`,
 `src/slots/*.asm`, `src/disasm.asm`, `docs/notes/memory-layout.md`,
-`scripts/check-code-budget.sh:28`, `docs/notes/sam-paging.md:80`,
+`tools/check-code-budget.sh:28`, `docs/notes/sam-paging.md:80`,
 `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m7-status.md`. Live measurements: `make enctab` (148 forms /
 3676 B), `make m3-asm-prod` (code_end &B88B, 1909 B headroom).
 

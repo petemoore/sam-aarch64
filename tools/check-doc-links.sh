@@ -4,7 +4,7 @@
 # Scans the entry docs (README.md, CLAUDE.md, src/README.md) and every
 # markdown file under docs/, tools/, tests/ for inline link targets
 # `[text](target)`. A target that is a path into the repo — either
-# repo-root-relative (docs/, src/, tools/, tests/, reference/, scripts/, …)
+# repo-root-relative (docs/, src/, tools/, tests/, reference/, …)
 # or relative to the containing file's directory — must exist. URLs
 # (including immutable blob/<sha> pins), mailto: links, and in-page
 # anchors are skipped.
