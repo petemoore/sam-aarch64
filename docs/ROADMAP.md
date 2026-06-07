@@ -29,7 +29,7 @@
 
 - **Milestone:** **M8 active** (`docs/notes/m8-status.md`). M0–M7 ✅ complete. Branch protection requires the status checks defined in `.github/workflows/ci.yml`.
 - **Last landed:** i39b-2 editor-region split (PR #153) — compact `.tbn` v2 now has a separable editor region the assembler never reads; binary byte-identity invariant held (GNU == Go == Z80/SAM, 21 752 B).
-- **In flight:** repo cleanup i52 (spec: `docs/specs/2026-06-10-repo-cleanup-design.md`, 5 PRs).
+- **In flight:** nothing — i52 repo cleanup complete (PRs #155-#159).
 - **Open questions:** q1 (i5 graphics — Pete). **Parked:** i50. **Blocked:** i51 (on i40).
 - **NEXT ACTION:** i39c (overlay bitfield polish; low priority — fold into the next overlay-decoder touch) then i40 (assembler-side editor-region eviction; unblocks i51). Then the M7 tail: i7 codegen tables, i17 deep reviews, i18 naming.
 - Every strand keeps the **assembled-binary byte-identical** invariant (the `release-gate` 3-way byte-match); the i39 invariant is binary-identity + round-trip + `.tbn`-shrinks-or-holds, NOT `.tbn` byte-identity.
