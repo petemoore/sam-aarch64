@@ -14,10 +14,14 @@ hermetic. Never edited, only re-vendored.
 - `comet-disk/` — the original COMET disk contents the decode came from.
 - `bdos/` — B-DOS 1.5a (Edwin Blink's freeware improved SAMDOS with
   mass-storage support): the pristine release disk image + detokenised Z80
-  source + the Atom Lite 1.5a binary the i62 rig boots. B-DOS is the project's
-  target DOS going forward (i72); its hook surface is SAMDOS-compatible. See
-  `bdos/README.md` for provenance + the freeware/public-domain licence basis.
-- `samdos/` — `samdos2.bin`, the SAMDOS 2 binary currently packed into every
-  bootable disk image by `tools/build-disk`. Remains the shipped boot DOS
-  pending the B-DOS migration (q10); the target DOS going forward is B-DOS
-  (i72, vendored in `bdos/`).
+  source + the Atom Lite 1.5a binary (`al-bdos15a.bin`). This binary is the
+  shipped boot DOS as of i75 — `tools/build-disk` packs it into every bootable
+  disk image by default. Its hook surface is SAMDOS-compatible (verified i62),
+  and it boots on a plain floppy machine with no mass storage attached (proven
+  i75). See `bdos/README.md` for provenance + the freeware/public-domain
+  licence basis.
+- `samdos/` — `samdos2.bin`, the SAMDOS 2 binary. Retained for compatibility
+  builds: `tools/build-disk -dos reference/samdos/samdos2.bin -dos-name
+  samdos2 -dos-load 491529` packs it instead of the default B-DOS. SAMDOS 2's
+  source stays authoritative for the shared RST-8 hook semantics
+  (`docs/specs/samdos-file-io.md`).

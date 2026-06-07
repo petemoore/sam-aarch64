@@ -9,9 +9,11 @@ error-path facts any caller must respect.
 
 **This is the project's DOS hook-layer reference.** The hooks documented here
 (HGTHD / HLOAD / HSAVE / HOFLE / HSBYT …) are the **SAMDOS 2 hook interface**,
-which **B-DOS implements compatibly** — and B-DOS is the project's **target
-DOS** (it supplies the Trinity/Atom mass-storage records that Phase 2/3 need),
-with SAMDOS 2 remaining the shipped boot DOS pending q10. Hook portability
+which **B-DOS implements compatibly** — and B-DOS is the project's **boot DOS**:
+as of i75 (the q10 resolution) `tools/build-disk` packs B-DOS AL 1.5a into
+every shipped/CI disk by default, and it supplies the Trinity/Atom mass-storage
+records that Phase 2/3 need. SAMDOS 2 is retained as a compatibility build
+(`tools/build-disk -dos reference/samdos/samdos2.bin …`). Hook portability
 SAMDOS 2 ↔ B-DOS AL is **verified**: i62 booted one probe binary under both
 SAMDOS 2 + floppy and B-DOS AL 1.5a + emulated Atom Lite and round-tripped
 HSAVE / HGTHD / HLOAD through both backends, and i71 verified statically that
