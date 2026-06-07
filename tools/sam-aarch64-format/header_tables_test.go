@@ -68,8 +68,8 @@ func TestHeaderTablesRoundTrip(t *testing.T) {
 	}
 
 	// The record stream after the tables must survive intact.
-	if !bytes.Equal(f.Records, rw.Bytes()) {
-		t.Errorf("records mismatch:\n got % X\nwant % X", f.Records, rw.Bytes())
+	if len(f.Records) != 1 || f.Records[0].Kind != KindComment || string(f.Records[0].Body) != " marker" {
+		t.Errorf("records mismatch: got %+v", f.Records)
 	}
 }
 

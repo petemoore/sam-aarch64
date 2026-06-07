@@ -8,7 +8,7 @@ import (
 
 func TestParseInstAddRegImm(t *testing.T) {
 	f := parseHelper(t, "add x0, x1, #4\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	if rec.Kind != format.KindInst {
 		t.Fatalf("rec.Kind = %v", rec.Kind)
@@ -41,7 +41,7 @@ func TestParseInstAddRegImm(t *testing.T) {
 
 func TestParseInstZeroOperand(t *testing.T) {
 	f := parseHelper(t, "nop\nret\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	if rec.MnemonicID != 0 || rec.OperandCount != 0 {
 		t.Errorf("nop: %+v", rec)
@@ -55,7 +55,7 @@ func TestParseInstZeroOperand(t *testing.T) {
 
 func TestParseInstSPAndZR(t *testing.T) {
 	f := parseHelper(t, "mov sp, x0\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	or := format.NewOperandReader(rec.Operands)
 	o, _ := or.Next()
@@ -70,7 +70,7 @@ func TestParseInstSPAndZR(t *testing.T) {
 
 func TestParseInstLdrLitPoolXInt(t *testing.T) {
 	f := parseHelper(t, "ldr x0, =0x30d0088a\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	if rec.Kind != format.KindInst {
 		t.Fatalf("rec.Kind = %v", rec.Kind)
@@ -102,7 +102,7 @@ func TestParseInstLdrLitPoolXInt(t *testing.T) {
 
 func TestParseInstLdrLitPoolWInt(t *testing.T) {
 	f := parseHelper(t, "ldr w2, =0xdeadbeef\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	or := format.NewOperandReader(rec.Operands)
 	o, _ := or.Next()
@@ -125,7 +125,7 @@ func TestParseInstLdrLitPoolWInt(t *testing.T) {
 
 func TestParseInstLdrLitPoolSym(t *testing.T) {
 	f := parseHelper(t, "ldr x1, =msg\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	or := format.NewOperandReader(rec.Operands)
 	_, _ = or.Next() // x1
@@ -147,7 +147,7 @@ func TestParseInstLdrRegular(t *testing.T) {
 	// Ensure the literal-pool intercept doesn't break ordinary
 	// `ldr Xt, [Xn, #off]` syntax.
 	f := parseHelper(t, "ldr x0, [x1, #8]\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	or := format.NewOperandReader(rec.Operands)
 	_, _ = or.Next() // x0
@@ -160,7 +160,7 @@ func TestParseInstLdrRegular(t *testing.T) {
 func TestParseInstBarrierZeroOperand(t *testing.T) {
 	// eret / wfi are 0-operand mnemonics.
 	f := parseHelper(t, "eret\nwfi\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	eretID, _ := format.MnemonicID("eret")
 	if rec.MnemonicID != eretID || rec.OperandCount != 0 {
@@ -176,7 +176,7 @@ func TestParseInstBarrierZeroOperand(t *testing.T) {
 func TestParseInstISBDefaultArg(t *testing.T) {
 	// isb with no argument defaults to sy (CRm=0xf).
 	f := parseHelper(t, "isb\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	isbID, _ := format.MnemonicID("isb")
 	if rec.MnemonicID != isbID || rec.OperandCount != 1 {
@@ -214,7 +214,7 @@ func TestParseInstDSBWithBarrierArgs(t *testing.T) {
 	dsbID, _ := format.MnemonicID("dsb")
 	for _, c := range cases {
 		f := parseHelper(t, c.src)
-		r := format.NewRecordReader(f.Records)
+		r := newRecCursor(f.Records)
 		rec, _ := r.Next()
 		if rec.MnemonicID != dsbID || rec.OperandCount != 1 {
 			t.Errorf("%s: rec = %+v", c.src, rec)
@@ -232,7 +232,7 @@ func TestParseInstDSBWithBarrierArgs(t *testing.T) {
 func TestParseInstDMBMandatoryArg(t *testing.T) {
 	dmbID, _ := format.MnemonicID("dmb")
 	f := parseHelper(t, "dmb ish\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	if rec.MnemonicID != dmbID || rec.OperandCount != 1 {
 		t.Fatalf("dmb: %+v", rec)
@@ -251,7 +251,7 @@ func TestParseInstDMBMandatoryArg(t *testing.T) {
 
 func TestParseInstRorImm(t *testing.T) {
 	f := parseHelper(t, "ror x0, x1, #5\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	rorID, _ := format.MnemonicID("ror")
 	if rec.MnemonicID != rorID || rec.OperandCount != 3 {
@@ -278,7 +278,7 @@ func TestParseInstRorImm(t *testing.T) {
 
 func TestParseInstRorReg(t *testing.T) {
 	f := parseHelper(t, "ror w0, w1, w2\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	if rec.OperandCount != 3 {
 		t.Fatalf("ror reg: %+v", rec)
@@ -294,7 +294,7 @@ func TestParseInstRorReg(t *testing.T) {
 
 func TestParseInstMulUdivSxtw(t *testing.T) {
 	f := parseHelper(t, "mul x0, x1, x2\nudiv x0, x1, x2\nsxtw x0, w1\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	mulID, _ := format.MnemonicID("mul")
 	udivID, _ := format.MnemonicID("udiv")
 	sxtwID, _ := format.MnemonicID("sxtw")
@@ -331,7 +331,7 @@ func TestParseInstSturLdur(t *testing.T) {
 	}
 	for _, c := range cases {
 		f := parseHelper(t, c.src)
-		r := format.NewRecordReader(f.Records)
+		r := newRecCursor(f.Records)
 		rec, _ := r.Next()
 		mid, _ := format.MnemonicID(c.mnem)
 		if rec.MnemonicID != mid {
@@ -365,7 +365,7 @@ func TestParseInstSturLdur(t *testing.T) {
 
 func TestParseInstMrs(t *testing.T) {
 	f := parseHelper(t, "mrs x0, sctlr_el1\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	id, _ := format.MnemonicID("mrs")
 	if rec.MnemonicID != id {
@@ -387,7 +387,7 @@ func TestParseInstMrs(t *testing.T) {
 
 func TestParseInstMrsGenericSysReg(t *testing.T) {
 	f := parseHelper(t, "mrs x0, s3_1_c11_c0_2\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	or := format.NewOperandReader(rec.Operands)
 	_, _ = or.Next()
@@ -399,7 +399,7 @@ func TestParseInstMrsGenericSysReg(t *testing.T) {
 
 func TestParseInstMsrRegisterForm(t *testing.T) {
 	f := parseHelper(t, "msr cntp_cval_el0, x1\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	id, _ := format.MnemonicID("msr")
 	if rec.MnemonicID != id {
@@ -421,7 +421,7 @@ func TestParseInstMsrRegisterForm(t *testing.T) {
 
 func TestParseInstMsrPstateImmediate(t *testing.T) {
 	f := parseHelper(t, "msr daifset, #3\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	or := format.NewOperandReader(rec.Operands)
 	o0, _ := or.Next()
@@ -440,7 +440,7 @@ func TestParseInstMsrPstateImmediate(t *testing.T) {
 
 func TestParseInstDc(t *testing.T) {
 	f := parseHelper(t, "dc civac, x10\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	id, _ := format.MnemonicID("dc")
 	if rec.MnemonicID != id {
@@ -462,7 +462,7 @@ func TestParseInstDc(t *testing.T) {
 
 func TestParseInstTlbiNoReg(t *testing.T) {
 	f := parseHelper(t, "tlbi vmalle1\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	id, _ := format.MnemonicID("tlbi")
 	if rec.MnemonicID != id {
@@ -480,7 +480,7 @@ func TestParseInstTlbiNoReg(t *testing.T) {
 
 func TestParseInstTlbiWithReg(t *testing.T) {
 	f := parseHelper(t, "tlbi vae1is, x3\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	if rec.OperandCount != 2 {
 		t.Fatalf("operand_count=%d want 2", rec.OperandCount)
@@ -498,7 +498,7 @@ func TestParseInstTlbiWithReg(t *testing.T) {
 
 func TestParseInstAnds(t *testing.T) {
 	f := parseHelper(t, "ands w0, w1, #0x3\nands x0, x0, #0x3\nands w0, w1, w2\nands x0, x1, x2\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	andsID, _ := format.MnemonicID("ands")
 	for i := 0; i < 4; i++ {
 		rec, err := r.Next()
@@ -517,7 +517,7 @@ func TestParseInstMovzMovn(t *testing.T) {
 		"movn w0, #0x1234\n" +
 		"movn x0, #0x1234, lsl #16\n"
 	f := parseHelper(t, src)
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	movzID, _ := format.MnemonicID("movz")
 	movnID, _ := format.MnemonicID("movn")
 	want := []uint16{movzID, movzID, movnID, movnID}
@@ -538,7 +538,7 @@ func TestParseInstBfcSbfx(t *testing.T) {
 		"sbfx w0, w1, #5, #10\n" +
 		"sbfx x0, x1, #32, #1\n"
 	f := parseHelper(t, src)
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	bfcID, _ := format.MnemonicID("bfc")
 	sbfxID, _ := format.MnemonicID("sbfx")
 	r1, _ := r.Next()
@@ -571,7 +571,7 @@ func TestParseInstMovkSymbolic(t *testing.T) {
 	f := parseHelper(t, src)
 	// Just make sure we parsed without "movk: immediate must be a
 	// constant" — the records should be present and have two operands.
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	r.Next() // .set
 	for i := 0; i < 2; i++ {
 		rec, err := r.Next()
@@ -589,7 +589,7 @@ func TestParseInstSymbolRef(t *testing.T) {
 	if len(f.Names) != 1 || f.Names[0] != "target" {
 		t.Errorf("names = %v", f.Names)
 	}
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	or := format.NewOperandReader(rec.Operands)
 	o, _ := or.Next()

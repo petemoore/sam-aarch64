@@ -11,7 +11,7 @@ func TestWriteFileMinimal(t *testing.T) {
 	st.Intern("exit")
 
 	var rw RecordWriter
-	rw.WriteLabelDef(0)
+	rw.WriteComment(0, []byte("x"))
 
 	var buf bytes.Buffer
 	if err := WriteFile(&buf, st, nil, nil, rw.Bytes()); err != nil {

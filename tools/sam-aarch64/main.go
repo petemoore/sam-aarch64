@@ -114,19 +114,24 @@ func isTBN(buf []byte) bool {
 
 // runAssemble turns SRC (source text or a .tbn) into a binary, optionally
 // also emitting the compact overlay .tbn. When the input is source the
-// symbolic record stream lives only in memory: the frontend serializes it
-// to an in-memory buffer that pass-1/pass-2 read back — it never touches
-// disk (i48 decision A).
+// symbolic record IR lives only in memory — the front-end hands the
+// *format.File straight to pass-1/pass-2, never serializing it (i48
+// decision A). Only an existing on-disk `.tbn` (overlay format) is decoded
+// via format.ReadFile.
 func runAssemble(src []byte, path string, incDirs includeDirsFlag,
 	flatten bool, originStr string, stripComments, stripData bool,
 	emitTBN, outFlag string, dumpUsage bool) {
 
 	tbnIsInput := isTBN(src)
-	var tbn []byte
+	var f *format.File
 	if tbnIsInput {
-		tbn = src
 		if emitTBN != "" {
 			fail(fmt.Errorf("--emit-tbn ignored: input %q is already a .tbn", path))
+		}
+		var err error
+		f, err = format.ReadFile(src)
+		if err != nil {
+			fail(err)
 		}
 	} else {
 		var err error
@@ -135,34 +140,26 @@ func runAssemble(src []byte, path string, incDirs includeDirsFlag,
 			if perr != nil {
 				fail(fmt.Errorf("bad -origin %q: %v", originStr, perr))
 			}
-			tbn, err = frontend.TranslateAndFlatten(src, path,
+			f, err = frontend.TranslateAndFlatten(src, path,
 				frontend.PreprocessOptions{IncludeDirs: incDirs},
 				frontend.FlattenOptions{OriginVMA: origin})
 		} else {
-			tbn, err = frontend.TranslateWithOptions(src, path,
+			f, err = frontend.TranslateWithOptions(src, path,
 				frontend.PreprocessOptions{IncludeDirs: incDirs})
 		}
 		if err != nil {
 			fail(err)
 		}
 		if stripComments {
-			if tbn, err = frontend.StripCommentRecords(tbn); err != nil {
-				fail(fmt.Errorf("strip-comments: %v", err))
-			}
+			f.Records = frontend.StripCommentRecords(f.Records)
 		}
 		if stripData {
-			if tbn, err = frontend.StripDataRecords(tbn); err != nil {
-				fail(fmt.Errorf("strip-data: %v", err))
-			}
+			f.Records = frontend.StripDataRecords(f.Records)
 		}
 	}
 
 	if dumpUsage {
 		assemble.EnableUsage()
-	}
-	f, err := format.ReadFile(tbn)
-	if err != nil {
-		fail(err)
 	}
 	p1, err := assemble.Pass1(f)
 	if err != nil {

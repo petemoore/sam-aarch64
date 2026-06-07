@@ -26,11 +26,7 @@ func TestIntegrationAllConstructs(t *testing.T) {
 		"",
 	}, "\n") + "\n"
 
-	out, err := Translate([]byte(src), "x.s")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f, err := format.ReadFile(out)
+	f, err := Translate([]byte(src), "x.s")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +43,7 @@ func TestIntegrationAllConstructs(t *testing.T) {
 		}
 	}
 	counts := map[format.RecordKind]int{}
-	rr := format.NewRecordReader(f.Records)
+	rr := newRecCursor(f.Records)
 	for !rr.AtEnd() {
 		rec, err := rr.Next()
 		if err != nil {

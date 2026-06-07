@@ -8,7 +8,7 @@ import (
 
 func TestParseDirectiveByte(t *testing.T) {
 	f := parseHelper(t, ".byte 1, 2, 3\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	if rec.Kind != format.KindDirective {
 		t.Fatalf("kind = %v", rec.Kind)
@@ -21,7 +21,7 @@ func TestParseDirectiveByte(t *testing.T) {
 
 func TestParseDirectiveHword(t *testing.T) {
 	f := parseHelper(t, ".hword 0x1234, 0x5678, 0xabcd\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	if rec.Kind != format.KindDirective {
 		t.Fatalf("kind = %v", rec.Kind)
@@ -34,7 +34,7 @@ func TestParseDirectiveHword(t *testing.T) {
 
 func TestParseDirectiveAscii(t *testing.T) {
 	f := parseHelper(t, ".ascii \"hi\"\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	or := format.NewOperandReader(rec.Operands)
 	o, _ := or.Next()
@@ -45,7 +45,7 @@ func TestParseDirectiveAscii(t *testing.T) {
 
 func TestParseBCondOperand(t *testing.T) {
 	f := parseHelper(t, "b.eq target\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	id, _ := format.MnemonicID("b.eq")
 	if rec.MnemonicID != id {
@@ -55,7 +55,7 @@ func TestParseBCondOperand(t *testing.T) {
 
 func TestParseCselWithCond(t *testing.T) {
 	f := parseHelper(t, "csel x0, x1, x2, ne\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	or := format.NewOperandReader(rec.Operands)
 	or.Next()
@@ -77,7 +77,7 @@ func TestParseCselWithCond(t *testing.T) {
 // stored text so bin2text can round-trip it.
 func TestParseDirectiveSectionFull(t *testing.T) {
 	f := parseHelper(t, ".section bss_kernel, \"aw\", %nobits\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, err := r.Next()
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestParseDirectiveSectionFull(t *testing.T) {
 //	.section text_tests, "ax"
 func TestParseDirectiveSectionFlagsOnly(t *testing.T) {
 	f := parseHelper(t, ".section text_tests, \"ax\"\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	if rec.Kind != format.KindDirective || rec.OperandCount != 2 {
 		t.Fatalf("rec = %+v", rec)
@@ -133,7 +133,7 @@ func TestParseDirectiveSectionFlagsOnly(t *testing.T) {
 //	.section .rodata
 func TestParseDirectiveSectionBareName(t *testing.T) {
 	f := parseHelper(t, ".section .rodata\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	if rec.Kind != format.KindDirective || rec.OperandCount != 1 {
 		t.Fatalf("rec = %+v", rec)
@@ -151,7 +151,7 @@ func TestParseDirectiveSectionBareName(t *testing.T) {
 // them into a single OpSysName "armv8-a".
 func TestParseDirectiveArch(t *testing.T) {
 	f := parseHelper(t, ".arch armv8-a\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, err := r.Next()
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +176,7 @@ func TestParseDirectiveArch(t *testing.T) {
 // TestParseDirectiveCpu covers `.cpu cortex-a53` — same shape as .arch.
 func TestParseDirectiveCpu(t *testing.T) {
 	f := parseHelper(t, ".cpu cortex-a53\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	wantID, _ := format.DirectiveID(".cpu")
 	if rec.DirectiveID != wantID || rec.OperandCount != 1 {
@@ -191,7 +191,7 @@ func TestParseDirectiveCpu(t *testing.T) {
 
 func TestParseLo12(t *testing.T) {
 	f := parseHelper(t, "add x0, x1, :lo12:msg\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	or := format.NewOperandReader(rec.Operands)
 	or.Next()

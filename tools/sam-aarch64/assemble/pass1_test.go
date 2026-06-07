@@ -1,7 +1,6 @@
 package assemble
 
 import (
-	"bytes"
 	"testing"
 
 	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
@@ -10,15 +9,12 @@ import (
 func TestPass1_PCAssignment(t *testing.T) {
 	st := format.NewSymbolTable()
 	mainID := st.Intern("main")
-	var rw format.RecordWriter
-	rw.WriteLabelDef(mainID)
 	nopID, _ := format.MnemonicID("nop")
-	rw.WriteInst(nopID, 0, nil)
-	rw.WriteInst(nopID, 0, nil)
-
-	var buf bytes.Buffer
-	format.WriteFile(&buf, st, nil, nil, rw.Bytes())
-	f, _ := format.ReadFile(buf.Bytes())
+	f := fileFromRecords(st.Names(), []format.Record{
+		labelRec(mainID),
+		instRec(nopID, 0, nil),
+		instRec(nopID, 0, nil),
+	})
 
 	res, err := Pass1(f)
 	if err != nil {
@@ -33,8 +29,6 @@ func TestPass1_PCAssignment(t *testing.T) {
 }
 
 func TestPass1_DirectiveBytes(t *testing.T) {
-	st := format.NewSymbolTable()
-	var rw format.RecordWriter
 	var ow format.OperandWriter
 	for _, v := range []int64{1, 2, 3} {
 		var ew format.ExprWriter
@@ -42,11 +36,7 @@ func TestPass1_DirectiveBytes(t *testing.T) {
 		ow.WriteImmExpr(ew.Bytes())
 	}
 	id, _ := format.DirectiveID(".byte")
-	rw.WriteDirective(id, 3, ow.Bytes())
-
-	var buf bytes.Buffer
-	format.WriteFile(&buf, st, nil, nil, rw.Bytes())
-	f, _ := format.ReadFile(buf.Bytes())
+	f := fileFromRecords(nil, []format.Record{dirRec(id, 3, ow.Bytes())})
 
 	res, err := Pass1(f)
 	if err != nil {
@@ -58,17 +48,13 @@ func TestPass1_DirectiveBytes(t *testing.T) {
 }
 
 func TestPass1_LocalLabels(t *testing.T) {
-	st := format.NewSymbolTable()
-	var rw format.RecordWriter
 	nopID, _ := format.MnemonicID("nop")
-	rw.WriteInst(nopID, 0, nil)
-	rw.WriteLocalDef(1)
-	rw.WriteInst(nopID, 0, nil)
-	rw.WriteLocalDef(1)
-
-	var buf bytes.Buffer
-	format.WriteFile(&buf, st, nil, nil, rw.Bytes())
-	f, _ := format.ReadFile(buf.Bytes())
+	f := fileFromRecords(nil, []format.Record{
+		instRec(nopID, 0, nil),
+		localRec(1),
+		instRec(nopID, 0, nil),
+		localRec(1),
+	})
 
 	res, err := Pass1(f)
 	if err != nil {

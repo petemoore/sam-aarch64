@@ -9,7 +9,7 @@ import (
 func firstInst(t *testing.T, src string) format.Record {
 	t.Helper()
 	f := parseHelper(t, src)
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	if rec.Kind != format.KindInst {
 		t.Fatalf("not INST: %+v", rec)

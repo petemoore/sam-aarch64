@@ -1,12 +1,17 @@
 package frontend
 
 import (
-	"bytes"
+	"reflect"
 	"testing"
 
 	emit "github.com/petemoore/sam-aarch64/tools/sam-aarch64/render"
 )
 
+// TestIdempotency confirms the text → IR → text round-trip is stable: parsing
+// a source to the in-memory IR, rendering it back to canonical text, and
+// re-parsing yields an identical IR (records + name table). Translate now
+// returns the in-memory *format.File directly, so the comparison is over the
+// decoded records rather than serialized bytes.
 func TestIdempotency(t *testing.T) {
 	sources := []string{
 		"  nop\n",
@@ -28,24 +33,28 @@ func TestIdempotency(t *testing.T) {
 		".cpu cortex-a53\n",
 	}
 	for _, src := range sources {
-		bin1, err := Translate([]byte(src), "test.s")
+		f1, err := Translate([]byte(src), "test.s")
 		if err != nil {
 			t.Errorf("first Translate of %q: %v", src, err)
 			continue
 		}
-		canon, err := emit.Emit(bin1)
+		canon, err := emit.EmitFile(f1)
 		if err != nil {
 			t.Errorf("Emit %q: %v", src, err)
 			continue
 		}
-		bin2, err := Translate(canon, "test.s")
+		f2, err := Translate(canon, "test.s")
 		if err != nil {
 			t.Errorf("second Translate %q: %v", src, err)
 			continue
 		}
-		if !bytes.Equal(bin1, bin2) {
-			t.Errorf("idempotency failed for %q:\n bin1 = % X\n bin2 = % X\n canon = %q",
-				src, bin1, bin2, string(canon))
+		if !reflect.DeepEqual(f1.Records, f2.Records) {
+			t.Errorf("idempotency failed for %q:\n recs1 = %+v\n recs2 = %+v\n canon = %q",
+				src, f1.Records, f2.Records, string(canon))
+		}
+		if !reflect.DeepEqual(f1.Names, f2.Names) {
+			t.Errorf("idempotency failed (names) for %q:\n names1 = %v\n names2 = %v",
+				src, f1.Names, f2.Names)
 		}
 	}
 }

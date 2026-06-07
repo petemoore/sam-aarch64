@@ -8,12 +8,8 @@ import (
 )
 
 func TestPass2_Nop(t *testing.T) {
-	var rw format.RecordWriter
 	nopID, _ := format.MnemonicID("nop")
-	rw.WriteInst(nopID, 0, nil)
-	var buf bytes.Buffer
-	format.WriteFile(&buf, format.NewSymbolTable(), nil, nil, rw.Bytes())
-	f, _ := format.ReadFile(buf.Bytes())
+	f := fileFromRecords(nil, []format.Record{instRec(nopID, 0, nil)})
 
 	res, _ := Pass1(f)
 	out, err := Pass2(f, res)
@@ -106,8 +102,6 @@ func TestMemInstOpc_SignedExtendLoads(t *testing.T) {
 }
 
 func TestPass2_DirectiveBytes(t *testing.T) {
-	st := format.NewSymbolTable()
-	var rw format.RecordWriter
 	var ow format.OperandWriter
 	for _, v := range []int64{1, 2, 3} {
 		var ew format.ExprWriter
@@ -115,11 +109,7 @@ func TestPass2_DirectiveBytes(t *testing.T) {
 		ow.WriteImmExpr(ew.Bytes())
 	}
 	id, _ := format.DirectiveID(".byte")
-	rw.WriteDirective(id, 3, ow.Bytes())
-
-	var buf bytes.Buffer
-	format.WriteFile(&buf, st, nil, nil, rw.Bytes())
-	f, _ := format.ReadFile(buf.Bytes())
+	f := fileFromRecords(nil, []format.Record{dirRec(id, 3, ow.Bytes())})
 
 	res, _ := Pass1(f)
 	out, err := Pass2(f, res)

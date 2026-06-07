@@ -25,27 +25,19 @@ func buildMixedTBN(t *testing.T) *format.File {
 		t.Fatal("b not in mnemonic table")
 	}
 
-	var rw format.RecordWriter
-	rw.WriteLabelDef(startID) // start:
-	rw.WriteInst(nopID, 0, nil)
-	rw.WriteInst(nopID, 0, nil)
 	// b start — symbol-bearing, must stay symbolic.
 	var ew format.ExprWriter
 	ew.WriteSym(startID)
 	var ow format.OperandWriter
 	ow.WriteImmExpr(ew.Bytes())
-	rw.WriteInst(bID, 1, ow.Bytes())
-	rw.WriteInst(nopID, 0, nil)
 
-	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, st, nil, nil, rw.Bytes()); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	f, err := format.ReadFile(buf.Bytes())
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	return f
+	return fileFromRecords(st.Names(), []format.Record{
+		labelRec(startID), // start:
+		instRec(nopID, 0, nil),
+		instRec(nopID, 0, nil),
+		instRec(bID, 1, ow.Bytes()),
+		instRec(nopID, 0, nil),
+	})
 }
 
 func assemble(t *testing.T, f *format.File) []byte {
@@ -107,12 +99,7 @@ func TestCompact_RoundTripIdentical(t *testing.T) {
 	if len(cf.Labels) != 1 || cf.Names[cf.Labels[0].NameID] != "start" {
 		t.Errorf("header label table = %+v, want one row for \"start\"", cf.Labels)
 	}
-	rr := format.NewRecordReader(cf.Records)
-	for !rr.AtEnd() {
-		rec, err := rr.Next()
-		if err != nil {
-			t.Fatalf("reader: %v", err)
-		}
+	for _, rec := range cf.Records {
 		if rec.Kind == format.KindLabelDef || rec.Kind == format.KindLocalDef {
 			t.Errorf("compact record stream still carries %s", rec.Kind.Name())
 		}
@@ -197,31 +184,23 @@ func buildDataTBN(t *testing.T) *format.File {
 	quadID, _ := format.DirectiveID(".quad")
 	byteID, _ := format.DirectiveID(".byte")
 
-	var rw format.RecordWriter
-	rw.WriteLabelDef(startID)
-	n, ops := immOps(1, 2, 3)
-	rw.WriteDirective(wordID, n, ops) // .word 1,2,3
-	n, ops = immOps(4)
-	rw.WriteDirective(wordID, n, ops) // .word 4  (same dir → merges)
-	rw.WriteInst(nopID, 0, nil)       // nop (literal inst run)
 	// .quad start — symbol-bearing, stays symbolic.
 	var sew format.ExprWriter
 	sew.WriteSym(startID)
 	var sow format.OperandWriter
 	sow.WriteImmExpr(sew.Bytes())
-	rw.WriteDirective(quadID, 1, sow.Bytes())
-	n, ops = immOps(0xaa, 0xbb)
-	rw.WriteDirective(byteID, n, ops) // .byte 0xaa,0xbb (different dir → own run)
 
-	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, st, nil, nil, rw.Bytes()); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-	f, err := format.ReadFile(buf.Bytes())
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	return f
+	n1, ops1 := immOps(1, 2, 3)
+	n2, ops2 := immOps(4)
+	n3, ops3 := immOps(0xaa, 0xbb)
+	return fileFromRecords(st.Names(), []format.Record{
+		labelRec(startID),
+		dirRec(wordID, n1, ops1), // .word 1,2,3
+		dirRec(wordID, n2, ops2), // .word 4  (same dir → merges)
+		instRec(nopID, 0, nil),   // nop (literal inst run)
+		dirRec(quadID, 1, sow.Bytes()),
+		dirRec(byteID, n3, ops3), // .byte 0xaa,0xbb (different dir → own run)
+	})
 }
 
 func TestCompact_DataRoundTripIdentical(t *testing.T) {

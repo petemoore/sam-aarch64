@@ -75,12 +75,7 @@ func Compact(f *format.File, p1 *Pass1Result) ([]byte, error) {
 	// instIdx indexes p1.InstPC: the Nth KindInst this loop sees is the Nth
 	// pass1 recorded, so InstPC[instIdx] is its true PC.
 	instIdx := 0
-	rr := format.NewRecordReader(f.Records)
-	for !rr.AtEnd() {
-		rec, err := rr.Next()
-		if err != nil {
-			return nil, err
-		}
+	for _, rec := range f.Records {
 		// Position-labels and numeric-local defs move out of the record
 		// stream into the header label/local tables (§2.4). Drop them here
 		// WITHOUT flushing the open instruction run, so a run spans the
@@ -125,7 +120,18 @@ func Compact(f *format.File, p1 *Pass1Result) ([]byte, error) {
 			// encode error: fall through and keep the record symbolic.
 		}
 		flushAll()
-		w.WriteRaw(rec.Kind, rec.Raw)
+		// Re-serialise the pass-through record from its struct fields. Only
+		// DIRECTIVE and COMMENT records reach here (INST/LABEL_DEF/LOCAL_DEF
+		// and collapsible data are handled above); both re-emit byte-for-byte
+		// identically to the former WriteRaw(rec.Kind, rec.Raw) path.
+		switch rec.Kind {
+		case format.KindComment:
+			w.WriteComment(rec.Placement, rec.Body)
+		case format.KindDirective:
+			w.WriteDirective(rec.DirectiveID, rec.OperandCount, rec.Operands)
+		default:
+			return nil, fmt.Errorf("compact: unexpected pass-through record kind %s", rec.Kind.Name())
+		}
 	}
 	flushAll()
 	return w.Bytes(), nil

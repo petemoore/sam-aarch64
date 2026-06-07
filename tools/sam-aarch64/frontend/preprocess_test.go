@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
 )
 
 // preprocOnly runs the preprocessor in isolation and returns the expanded
@@ -356,13 +354,9 @@ func TestTranslateIncludeViaSearchPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	src, _ := os.ReadFile(filepath.Join(rootDir, "main.s"))
-	out, err := TranslateWithOptions(src, filepath.Join(rootDir, "main.s"), PreprocessOptions{IncludeDirs: []string{incDir}})
+	f, err := TranslateWithOptions(src, filepath.Join(rootDir, "main.s"), PreprocessOptions{IncludeDirs: []string{incDir}})
 	if err != nil {
 		t.Fatalf("Translate: %v", err)
-	}
-	f, err := format.ReadFile(out)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
 	}
 	found := false
 	for _, n := range f.Names {
@@ -437,13 +431,9 @@ func TestTranslateMacroAndIf(t *testing.T) {
 		"  ret",
 		"",
 	}, "\n")
-	out, err := Translate([]byte(src), "x.s")
+	f, err := Translate([]byte(src), "x.s")
 	if err != nil {
 		t.Fatalf("Translate: %v", err)
-	}
-	f, err := format.ReadFile(out)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
 	}
 	gotNames := strings.Join(f.Names, ",")
 	if !strings.Contains(gotNames, "start") {

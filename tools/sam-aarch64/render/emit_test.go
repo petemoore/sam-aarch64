@@ -1,16 +1,13 @@
 package render
 
 import (
-	"bytes"
 	"testing"
 
 	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
 )
 
 func TestEmitEmpty(t *testing.T) {
-	var buf bytes.Buffer
-	format.WriteFile(&buf, format.NewSymbolTable(), nil, nil, nil)
-	out, err := Emit(buf.Bytes())
+	out, err := EmitFile(fileFromRecords(nil, nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,11 +19,7 @@ func TestEmitEmpty(t *testing.T) {
 func TestEmitLabelDef(t *testing.T) {
 	st := format.NewSymbolTable()
 	st.Intern("loop")
-	var rw format.RecordWriter
-	rw.WriteLabelDef(0)
-	var buf bytes.Buffer
-	format.WriteFile(&buf, st, nil, nil, rw.Bytes())
-	out, err := Emit(buf.Bytes())
+	out, err := EmitFile(fileFromRecords(st.Names(), []format.Record{labelRec(0)}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,26 +30,20 @@ func TestEmitLabelDef(t *testing.T) {
 }
 
 func TestEmitLocalDef(t *testing.T) {
-	var rw format.RecordWriter
-	rw.WriteLocalDef(3)
-	var buf bytes.Buffer
-	format.WriteFile(&buf, format.NewSymbolTable(), nil, nil, rw.Bytes())
-	out, _ := Emit(buf.Bytes())
+	out, _ := EmitFile(fileFromRecords(nil, []format.Record{localRec(3)}))
 	if string(out) != "3:\n" {
 		t.Errorf("emit = %q, want %q", string(out), "3:\n")
 	}
 }
 
 func TestEmitCommentPlacement(t *testing.T) {
-	var rw format.RecordWriter
-	rw.WriteComment(0, []byte(" standalone"))
-	rw.WriteLabelDef(0)
-	rw.WriteComment(1, []byte(" trailing"))
 	st := format.NewSymbolTable()
 	st.Intern("x")
-	var buf bytes.Buffer
-	format.WriteFile(&buf, st, nil, nil, rw.Bytes())
-	out, _ := Emit(buf.Bytes())
+	out, _ := EmitFile(fileFromRecords(st.Names(), []format.Record{
+		commentRec(0, []byte(" standalone")),
+		labelRec(0),
+		commentRec(1, []byte(" trailing")),
+	}))
 	want := "// standalone\nx: // trailing\n"
 	if string(out) != want {
 		t.Errorf("got %q, want %q", string(out), want)

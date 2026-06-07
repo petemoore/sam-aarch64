@@ -115,10 +115,7 @@ func TestConstDataWidth_NotNumericData(t *testing.T) {
 		t.Errorf(".text: ConstDataWidth ok=true, want false")
 	}
 	// A non-directive record (INST) is never const data.
-	var iw RecordWriter
-	iw.WriteInst(0, 0, nil)
-	irr := NewRecordReader(iw.Bytes())
-	irec, _ := irr.Next()
+	irec := Record{Kind: KindInst, MnemonicID: 0, OperandCount: 0}
 	if _, ok := ConstDataWidth(irec); ok {
 		t.Errorf("INST: ConstDataWidth ok=true, want false")
 	}
