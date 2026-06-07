@@ -62,6 +62,7 @@ zx0_compress:
         ld      (zxc_h2_src+1), hl      ; patch src base into zxc_hash2
         ld      (zxc_fb_src1+1), hl     ; patch src base into zxc_find_best
         ld      (zxc_fb_src2+1), hl
+        ld      (zxc_it_src+1), hl      ; patch src base into zxc_insert_tail
         ld      (zxc_dst),     bc
         ld      (zxc_src_len), de
 
@@ -70,14 +71,15 @@ zx0_compress:
         pop     hl                      ; HL = ws_base
         ld      (zxc_ws_base), hl
         ld      (zxc_h2_ws+1), hl       ; patch hashHead base into zxc_hash2
+        ld      (zxc_it_ws+1), hl       ; patch hashHead base into zxc_insert_tail
 
         ; chain_base = ws_base + HASH_SIZE_BYTES, patched into every
         ; chain-array user.
         ld      bc, HASH_SIZE_BYTES
         add     hl, bc                  ; HL = chain_base
-        ld      (zxc_ins_chain+1), hl   ; patch chain_base into zxc_insert
         ld      (zxc_fb_chain+1), hl    ; patch chain_base into zxc_find_best
         ld      (zxc_fb_chain2+1), hl
+        ld      (zxc_it_chain+1), hl    ; patch chain_base into zxc_insert_tail
 
         ; ── Fill hash table with &FF (sentinel &FFFF) ─────────────────
         ; Go: newMatchFinder initialises hashHead[] = 0xFFFF.
@@ -380,29 +382,61 @@ zxc_fl_loop:
 ; ════════════════════════════════════════════════════════════════════
 ; zxc_insert_tail — insert positions pos+1..pos+bestLen-1 into chain.
 ; Go: compress.go lines 157–159.
-; Clobbers: A, HL, DE, BC.
+;
+; The loop keeps i in DE and the count in IXl (bestLen-1 <= 254 fits
+; 8 bits; both callers guarantee bestLen >= 2, so the count is >= 1),
+; and inlines the insert with its hash so nothing is saved across a
+; call.  &chain[i] is computed first and parked in an immediate while
+; the hash clobbers BC.
+; Clobbers: A, HL, DE, BC, IXl.
 ; ════════════════════════════════════════════════════════════════════
 zxc_insert_tail:
-        ld      hl, (zxc_best_len)
-        ld      a, h
-        or      l
-        ret     z
-        dec     hl                      ; loop count = bestLen-1
-        ld      a, h
-        or      l
-        ret     z
+        ld      a, (zxc_best_len)       ; bestLen (<= 255)
+        dec     a
+        ld      ixl, a                  ; count = bestLen-1 (>= 1)
         ld      de, (zxc_pos)
-        inc     de                      ; DE = pos+1
 zxc_it_loop:
-        push    hl
-        push    de
-        call    zxc_insert
-        pop     de
-        inc     de
-        pop     hl
-        dec     hl
-        ld      a, h
-        or      l
+        inc     de                      ; i = pos+k
+        ; &chain[i] = chain_base + i*2, parked while the hash runs.
+        ld      h, d
+        ld      l, e
+        add     hl, hl
+zxc_it_chain:
+        ld      bc, 0                   ; SMC: chain_base, patched at entry
+        add     hl, bc
+        ld      (zxc_it_cslot+1), hl
+        ; Inline zxc_hash2 body (see there for the boundary-check proof).
+        ld      h, d
+        ld      l, e
+zxc_it_src:
+        ld      bc, 0                   ; SMC: src base, patched at entry
+        add     hl, bc                  ; HL = &src[i]
+        ld      a, (hl)
+        inc     hl
+        ld      c, (hl)
+        ld      h, zxc_tab31lo >> 8
+        ld      l, a
+        ld      a, (hl)
+        xor     c
+        inc     h
+        ld      h, (hl)
+        ld      l, a
+        add     hl, hl
+zxc_it_ws:
+        ld      bc, 0                   ; SMC: hashHead base, patched at entry
+        add     hl, bc                  ; HL = &hashHead[hash]
+        ; Old head out, i in.
+        ld      c, (hl)
+        ld      (hl), e
+        inc     hl
+        ld      b, (hl)
+        ld      (hl), d                 ; BC = old head; hashHead[h] = i
+zxc_it_cslot:
+        ld      hl, 0                   ; SMC: &chain[i]
+        ld      (hl), c
+        inc     hl
+        ld      (hl), b                 ; chain[i] = old head
+        dec     ixl
         jp      nz, zxc_it_loop
         ret
 
@@ -618,7 +652,7 @@ zxc_fb_chain2:
 ; Entry: HL = position i.  The zxc_h2_src/zxc_h2_ws immediates are
 ; patched at zx0_compress entry.
 ; Return: HL = &hashHead[hash].
-; Clobbers: A, BC.  Preserves DE (zxc_insert keeps i there).
+; Clobbers: A, BC.  Preserves DE (zxc_find_best keeps pos there).
 ; ════════════════════════════════════════════════════════════════════
 zxc_hash2:
 zxc_h2_src:
@@ -638,36 +672,6 @@ zxc_h2_src:
 zxc_h2_ws:
         ld      bc, 0                   ; SMC: hashHead base, patched at entry
         add     hl, bc                  ; HL = &hashHead[hash]
-        ret
-
-
-; ════════════════════════════════════════════════════════════════════
-; zxc_insert — insert position DE into hash chain.
-; Go: matchFinder.insert (compress.go lines 383–387).
-;
-; Entry: DE = position i.  The zxc_ins_chain immediate is patched at
-; zx0_compress entry.
-; Clobbers: A, HL, DE, BC.
-; ════════════════════════════════════════════════════════════════════
-zxc_insert:
-        ld      h, d
-        ld      l, e
-        call    zxc_hash2               ; HL = &hashHead[h]; DE = i preserved
-        ; Grab old head and store i in one pass.
-        ld      c, (hl)
-        ld      (hl), e
-        inc     hl
-        ld      b, (hl)
-        ld      (hl), d                 ; BC = old head; hashHead[h] = i
-        ; chain[i] = old head.  &chain[i] = chain_base + i*2.
-        ex      de, hl                  ; HL = i
-        add     hl, hl                  ; HL = i*2
-zxc_ins_chain:
-        ld      de, 0                   ; SMC: chain_base, patched at entry
-        add     hl, de                  ; HL = &chain[i]
-        ld      (hl), c
-        inc     hl
-        ld      (hl), b                 ; chain[i] = old head
         ret
 
 
