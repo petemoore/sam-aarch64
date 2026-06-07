@@ -202,22 +202,45 @@ as **two profiles of one v2 container** — the symbolic intermediate (host-only
 SAM/shipped form). `LIT_INSTS` (0x07) marked retained-but-unproduced. Superseded
 banners on the M1/i1 design docs.
 
-**↪ i48a — SPLIT to its own follow-up PR (Pete, 2026-06-09 #3).** Host front-end
-unification (merge `text2bin`+`refenc` into one integrated tool so the symbolic
-`.tbn` lives only in-memory; drop the dead Go `KindLitInsts` arm) is a **~200-site,
-byte-neutral host-tooling refactor** independent of the overlay — it reviews far
-better on its own, and the shipped SAM format is already overlay-only after PR(d).
-So the symbolic `.tbn` remains a host build-intermediate after this merge. Scope
-map + the non-byte-affecting Decision-B strictness items (symbolic mem → error,
-add/sub `lsl#12` syntactic, mov→movz fallback) + the **q7** GNU-rewrite sweep all
-ride the i48a follow-up. See `docs/notes/item-registry.md` (i48a).
+**↪ i48a — host front-end unification, in 3 phased PRs (Pete, 2026-06-09). PR1 +
+PR2 MERGED (2026-06-09 #4); PR3 is the final strand.** Plan:
+`docs/plans/2026-06-09-i48a-host-frontend-unification.md`.
+- **✅ PR1 (#141, merge commit `271b202`) — byte-neutral library extraction.** The
+  three host tools became thin wrappers over one new module `tools/sam-aarch64`
+  with three Go-authoritative shared libs: `frontend` (text→symbolic-IR + strip,
+  from `text2bin/internal/translate` + `strip.go`), `assemble` (pass1/pass2/compact/
+  overlay, from `refenc`), `render` (overlay→text, from `bin2text/emit`). Zero
+  call-site churn. All 14 CI checks green; §3 review = MERGE.
+- **✅ PR2 (#142, merge commit `1c2c0f9`) — integrated tool + drop on-disk symbolic
+  `.tbn`.** `tools/sam-aarch64/main.go`: `source → {binary, compact .tbn}`,
+  `.tbn → binary`, `--render`, `-E`; `SA64`-magic input detection; the **symbolic
+  record stream lives only in memory** (frontend → in-memory buffer → `format.ReadFile`
+  → pass1/pass2 — never on disk; i48 decision A). Rewired all ~150 call sites
+  (Makefile + 14 shell gates + 7 koron-go/z80 harness tests + `scripts/`); deleted
+  the three old wrapper modules; `release-stripped-tbn` now emits the compact `.tbn`
+  the SAM reads. Byte-neutral across 89 M1–M6 fixtures + release (== GNU, 21752 B;
+  compact `.tbn` 45,189 B) + render + `-E`. All 14 CI checks green incl. the SimCoupé
+  matrix; §3 review = MERGE.
+- **📋 PR3 (next) — Decision-B strictness + q7 sweep + i48d overlay-only docs +
+  symbolic-record-kind removal.** (1) symbolic mem → `FoldMemImm12`-or-error (no silent
+  imm9 rewrite); add/sub `lsl #12` syntactic; `mov`→`movz` default + assemble-time
+  `orr`/`movn` fallback — non-byte-affecting (design measured 0 corpus sites). (2) the
+  **q7** GNU-rewrite sweep. (3) the **i48d** overlay-only rewrite of
+  `tbn-binary-format-reference.md` (the symbolic intermediate no longer exists on disk
+  after PR2). (4) **remove the symbolic record kinds** (`KindInst`/`KindLabelDef`/
+  `KindLocalDef`/`KindLitInsts`) from `tools/sam-aarch64-format/{kinds,reader,writer,
+  litinsts}.go` + `assemble/{compact,pass1}.go` + tests — *deferred from PR2* because
+  they're woven through the format lib + assemble (a real format change, not a dead-arm
+  snip); the symbolic kinds stay only as the in-memory IR types. (5) convert the M1
+  string goldens to re-assemble-and-byte-check round-trips. Hard invariant: overlay bytes
+  byte-identical (m6-release + harness guard).
 
 **✅ MERGED (PR #131, merge commit `e68e0bf`, 2026-06-09 #3).** All 14 CI checks
 green incl. the full SimCoupé matrix + the m6-release 3-way byte-match (GNU == Go ==
 Z80/SAM — the first authoritative SimCoupé verdict on PR(d), confirming the harness);
-the §3 pre-merge review returned MERGE (all items PASS, recorded on the PR). **Next:
-open the i48a follow-up PR** (the host front-end unification — scope above + in the
-item registry).
+the §3 pre-merge review returned MERGE (all items PASS, recorded on the PR). **The
+i48a follow-up then landed as PR1 (#141) + PR2 (#142); i48a PR3 is next** — see the
+i48a entry above.
 
 ## Open questions for Pete (M8)
 

@@ -1,6 +1,6 @@
 # `src/` — the SAM-side Z80 aarch64 assembler
 
-This directory is the SAM Coupé Z80 program that implements an aarch64 assembler: it reads a binary tokenised `.tbn` source (the M1 format, produced by `tools/text2bin`), performs two-pass assembly, and writes the resolved machine-code image — byte-identical to GNU `as` + `ld` + `objcopy` on the supported corpus. It runs on real SAM hardware and under SimCoupé.
+This directory is the SAM Coupé Z80 program that implements an aarch64 assembler: it reads a binary tokenised `.tbn` source (the compact v2 instruction-overlay format, produced by the host `tools/sam-aarch64` assembler), performs two-pass assembly, and writes the resolved machine-code image — byte-identical to GNU `as` + `ld` + `objcopy` on the supported corpus. It runs on real SAM hardware and under SimCoupé.
 
 > **Naming note:** this code formerly lived in `src/m3/` — "m3" was a *historical milestone* name (Milestone 3, the first SimCoupé byte-match), not a description of contents. It was flattened into `src/` in M7 so the layout reads as a logical component (the SAM-side Z80 assembler) rather than a chronology.
 
