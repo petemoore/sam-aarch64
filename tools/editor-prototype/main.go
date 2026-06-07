@@ -44,6 +44,9 @@ func main() {
 	iter2Mockups := flag.Bool("iter2-mockups", false, "render the iteration-2 compressed-rendering mockup PNGs (MODE 3 64x24) into -o")
 	crt := flag.Bool("crt", false, "mockup: apply the scanline-CRT darkening variant")
 	fontDir := flag.String("font-dir", "tools/editor-prototype/fonts", "directory holding vendored 6-px fonts (font6x8.sam / font6x6.sam)")
+	configPath := flag.String("config", "", "the configurable rendering lab: launch the interactive lab over -tbn with this `config` file (every rendering feature is a key); see configs/")
+	samPNG := flag.String("sam-png", "", "render the -config screen as a SAM-faithful PNG to this `path` and exit (refuses relax_palette configs)")
+	samLine := flag.Int("sam-line", 0, "-sam-png: the 0-based document line the rendered screen centres on")
 	flag.Parse()
 
 	if *tbnPath == "" {
@@ -57,6 +60,25 @@ func main() {
 	doc, err := viewer.LoadDocument(*tbnPath, data)
 	if err != nil {
 		log.Fatalf("load: %v", err)
+	}
+
+	// The configurable rendering lab (i76 P2): -config launches the interactive
+	// lab; -config + -sam-png renders that config as a SAM PNG.
+	if *configPath != "" {
+		cfg, err := parseLabConfigFile(*configPath)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if *samPNG != "" {
+			if err := runLabPNG(doc, cfg, *samPNG, *samLine); err != nil {
+				log.Fatalf("sam-png: %v", err)
+			}
+			return
+		}
+		if err := runLab(doc, cfg); err != nil {
+			log.Fatalf("lab: %v", err)
+		}
+		return
 	}
 
 	switch {
