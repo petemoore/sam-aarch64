@@ -272,9 +272,23 @@ literal classification fails the gate.
   `src/main_loop.asm` (after the COMMENT case, ~`:442`); pass-1 sizing +
   pass-2 memcpy-to-OUT handlers; switch the SAM side of the gate to consume
   the compact `.tbn`. Re-measure the IN-buffer headroom (the 92% → ?).
-- **PR 3+ (future):** `KindLitInsts` for constant data directives
-  (`.word`/`.byte` runs); Level 3 per-project frequency dictionary; then the
-  disassembler (bytes→text), which inverts exactly this encode.
+- **PR 3 (constant data runs) — `KindLitData = 0x08`:** a *separate* record
+  kind for runs of consecutive **same-directive, all-constant** numeric data
+  (`.byte`/`.short`/`.hword`/`.word`/`.quad`), stored as raw assembled bytes:
+  `[kind 0x08][len u16][directive_id u8][raw LE bytes…]`. The leading
+  `directive_id` byte **preserves which directive the author wrote** (Pete,
+  2026-06-08) — a `.hword` table and a `.word` table with identical bytes
+  must stay distinguishable so the disassembler round-trips the source
+  spelling — so only same-`directive_id` runs merge, and symbol-bearing data
+  (`.quad label`) stays a symbolic `DIRECTIVE`. **Measured estimate** (release,
+  over the compact `.tbn`): 1,745 collapsible numeric records occupy 21,892 B
+  (31.8% of the 68,755 B file) but assemble to 4,046 B → projected **~13–18 KB
+  saved**, compact `.tbn` → ~51–56 KB (**−37% to −43% vs the 88,644 B
+  symbolic**; `.hword` dominates so the realistic result skews to the
+  merged-run ~51–53 KB end). Full record layout + estimate in
+  `docs/specs/2026-06-08-tbn-binary-format-reference.md` §7.3.
+- **PR 4+ (future):** Level 3 per-project frequency dictionary; the
+  disassembler (bytes→text) inverts exactly this encode.
 
 ### Open questions for Pete (tracked; not blocking — chosen defaults noted)
 
@@ -282,10 +296,14 @@ literal classification fails the gate.
    Level 2 alone should clear the ceiling; the dictionary adds a per-project
    artifact + a 4th level of decoder complexity for diminishing returns.
    Revisit if Level 2's measured ratio is insufficient for the debug build.
-2. **Compact constant *data* directives too (`.word`/`.byte` runs)?** Default:
-   **defer to PR 3** — keep PR 1/2 scoped to instructions (Pete's exact
-   framing). `.word`/`.byte` already emit fairly tight records; folding runs
-   of them into a raw-bytes record is a smaller, separable win.
+2. **Compact constant *data* directives too (`.word`/`.byte` runs)?**
+   **RESOLVED → yes, as PR 3 (Pete 2026-06-08).** PR 1/2 shipped
+   instructions-only (Pete's framing); PR 3 adds `KindLitData = 0x08`, a
+   raw-bytes data run that **preserves the source directive** via a leading
+   `directive_id` byte (Pete's explicit requirement). Measurement showed this
+   is *not* a smaller win — collapsible numeric data is 31.8% of the compact
+   file (~5× bloat today), worth ~13–18 KB. See the PR 3 bullet above + the
+   format reference §7.3.
 3. **Where should the user-facing compaction flag live long-term?** Default:
    `refenc -emit-compact-tbn` for now (least code, reuses the encoder). If a
    cleaner CLI surface is wanted later (e.g. `text2bin -compact` that links a

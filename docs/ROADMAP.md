@@ -102,6 +102,7 @@ These are patterns or research findings that get applied *within* milestones rat
 
 | Note | When to apply | Status |
 |---|---|---|
+| `docs/specs/2026-06-08-tbn-binary-format-reference.md` | The single authoritative reference for the complete `.tbn` binary encoding (header, records, operands, expr bytecode, directives, compaction levels). Read/cite this whenever touching the format; supersedes the M1 spec's §2–§6 tables. | ✅ living reference |
 | `docs/specs/2026-05-27-samdos-load-idiom.md` | When M3/M4 needs to load paged data (e.g. source > section C, symbol table > section C). Reference the COMET trampoline pattern. | 📋 ready to apply when needed |
 | `docs/notes/sam-stub-audit.md` | Already applied (PR #13 loader fix used findings). Keep as reference for any future SAMDOS hook work. | ✅ applied; reference |
 | `docs/notes/sam-paging.md` | Reference for any LMPR/HMPR work. | ✅ reference |
