@@ -106,10 +106,9 @@ the libSAASound copy to the workflow.
 - `tools/build-disk.sh` — disk constructor. Trimmed (2026-05-10) of
   experimental notes; format authority is `sam-basic-save-format.md`
   and `test-mgt-byte-layout.md`.
-- `tools/simcoupe-exitonhalt.patch` — vendored simcoupé patch:
-  `on_halt` quit on Z80 `DI; HALT` when `-exitonhalt 1` is passed.
-  Single-mechanism; upstream PR at `simonowen/simcoupe#109`.
-- `tools/Dockerfile.dev` — dev container recipe.
+- `tools/Dockerfile.dev` — dev container recipe; builds SimCoupé from
+  upstream v1.2.16 source, which provides `-exitonhalt` natively
+  (`on_halt` quits on Z80 `DI; HALT` when `-exitonhalt 1` is passed).
 - `reference/samdos/samdos2.bin` — vendored SAMDOS binary (10000 bytes,
   byte-identical to upstream).
 - `.github/workflows/ci.yml` — CI recipe.

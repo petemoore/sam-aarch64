@@ -237,7 +237,7 @@ sector starts at 0xA000 with the 9-byte header `13 10 27 09 80 ff ff 00
               9:  3e 04             LD A, 4
               11: d3 fe             OUT (0xFE), A    ; set border colour register
               13: f3                DI
-              14: 76                HALT             ; -exitonhalt patch detects DI;HALT and exits 0
+              14: 76                HALT             ; -exitonhalt detects DI;HALT and exits 0
 0xF5FE-0xF5FF 00 00     end-of-chain
 ```
 

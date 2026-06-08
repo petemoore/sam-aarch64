@@ -26,8 +26,7 @@ This directory holds the Go-side toolchain, build helpers, and exploratory spike
 | `revendor-m6-release.sh` | Refresh the vendored stripped release `.tbn` fixture from a spectrum4 checkout. | — |
 | `flatten-s/` | Recursively expands GNU-`as` `.include` directives in a `.s` file (does *not* expand macros). Pre-processing helper. | — |
 | `session-handover.sh` | Session-start helper; warns about stray `docs/superpowers/` files. | — |
-| `Dockerfile.dev` | Dev-container image (pyz80 + SimCoupé + Go). SimCoupé runs only in this container. | — |
-| `simcoupe-exitonhalt.patch` | Vendored SimCoupé patch (exit-on-`HALT`); superseded upstream but Dockerfile.dev not yet bumped. | — |
+| `Dockerfile.dev` | Dev-container image (pyz80 + SimCoupé + Go). SimCoupé is built from upstream v1.2.16 source, which ships `-exitonhalt` natively. SimCoupé runs only in this container. | — |
 
 ## Dev tools
 

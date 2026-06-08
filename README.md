@@ -84,7 +84,7 @@ reference/
 
 src/             Z80 assembler source for the new tool (Phase 1: assembler)
 tools/           Mac-side helpers (encoder-table generator, test harness,
-                 vendored simcoupe-exitonhalt patch)
+                 SimCoupé dev-container recipe)
 tests/           Test fixtures and round-trip scripts
 build/           Build outputs (gitignored)
 ```
