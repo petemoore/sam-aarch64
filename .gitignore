@@ -9,12 +9,35 @@ build/
 __pycache__/
 .DS_Store
 .worktrees/
-tools/build-disk/build-disk
-tools/basic-emulator-spike/basic-emulator-spike
+# In-tree Go build binaries. `go build` inside a tools/<pkg> package drops a
+# binary named after its directory alongside the source, where it's easy to
+# `git add` by accident. One precise entry per main-package output path (no
+# blanket tools/** that could mask real source). The produced binary is
+# <dir>/<dirname>; aarch64dec's main lives under cmd/, so it has both the
+# parent-dir build form and the in-cmd-dir build form.
+tools/aarch64dec/aarch64dec
+tools/aarch64dec/cmd/aarch64dec/aarch64dec
 tools/basic-detokeniser-spike/basic-detokeniser-spike
 tools/basic-detokeniser-sweep/basic-detokeniser-sweep
-tools/z80-test-harness-go/z80-test-harness-go
+tools/basic-emulator-spike/basic-emulator-spike
+tools/bin2text/bin2text
+tools/build-disk/build-disk
+tools/build-m3-disk/build-m3-disk
+tools/build-screen-disk/build-screen-disk
+tools/enctab-gen/enctab-gen
+tools/flatten-s/flatten-s
+tools/llist-capture/llist-capture
+tools/llist-normalise/llist-normalise
+tools/llist-sweep/llist-sweep
 tools/refenc/refenc
+tools/text2bin/text2bin
+tools/z80-test-harness-go/z80-test-harness-go
+
+# text2bin's default output beside a vendored source (release.s is tracked; its
+# compiled .tbn is a derived artifact — the canonical gate scripts write .tbn to
+# build/, never here).
+tests/m6/release/release.s.tbn
+
 go.work
 go.work.sum
 
