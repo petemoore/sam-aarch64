@@ -106,6 +106,11 @@ for dir in "${FIXTURE_DIRS[@]}"; do
         # those, only the .inst-free assertion is relaxed.
         inst_allowed=false
         [ "$name" = "inst_ldr_literal" ] && inst_allowed=true
+        # inst_logical_noncanon.s embeds a non-canonical logical-immediate
+        # word (0x32200013) that decodeBitMasks correctly DECLINES; it must
+        # round-trip as `.inst` (exact bytes preserved), so the .inst-free
+        # assertion is relaxed while the byte-compare still runs.
+        [ "$name" = "inst_logical_noncanon" ] && inst_allowed=true
 
         if ! $inst_allowed && grep -q $'\t\.inst' "$disasm_s"; then
             count=$(grep -c $'\t\.inst' "$disasm_s")
