@@ -60,6 +60,7 @@ REC_KIND_LABEL_DEF:     equ     &02
 REC_KIND_LOCAL_DEF:     equ     &03
 REC_KIND_DIRECTIVE:     equ     &04
 REC_KIND_COMMENT:       equ     &05
+REC_KIND_LIT_INSTS:     equ     &07
 
 ; -----------------------------------------------------------------------
 ; Directive ID constants (tools/sam-aarch64-format/directives.go).
@@ -441,6 +442,8 @@ walk_records:
                 jp      z, main_handle_directive
                 cp      REC_KIND_COMMENT
                 jp      z, walk_records             ; skip (both passes)
+                cp      REC_KIND_LIT_INSTS
+                jp      z, main_handle_lit_insts
                 jp      fail
 
 
@@ -1225,6 +1228,50 @@ main_handle_inst_pass1:
 
 
 ; -----------------------------------------------------------------------
+; main_handle_lit_insts — KindLitInsts (0x07) record handler.
+;
+; A run of fully-literal instructions stored as their assembled words
+; (compact `.tbn`, i1 — produced by `refenc -emit-compact-tbn`).
+; Payload: [count u8][word0..word{count-1}], each word 4 bytes LE; the
+; run occupies 4*count output bytes.
+;
+;   Pass 1: PASS_PC += 4*count.  No operand parse, no litpool scan
+;           (a literal run never references the pool).
+;   Pass 2: memcpy the 4*count word bytes straight to OUT (zero encoding
+;           work), then PASS_PC += 4*count — keeping PASS_PC == OUT_LEN.
+;
+; PC accounting is identical to the count separate KindInst records this
+; run replaced, so label positions and 2-pass values are unchanged.
+;
+; Input:  HL = payload ptr, BC = payload len (= 1 + 4*count).
+; Output: jp walk_records.
+; -----------------------------------------------------------------------
+main_handle_lit_insts:
+; nbytes = 4*count = payload_len - 1 (the leading count byte), so BC-1
+; is the word-byte count directly — no need to read or multiply count.
+                dec     bc                  ; BC = nbytes = 4*count
+                inc     hl                  ; HL → first word byte
+                ld      a, (PASS_MODE)
+                cp      PASS_PASS1
+                jr      z, advance_bc_and_walk      ; pass 1: no emit
+; Pass 2: copy nbytes from (HL) to OUT (no encoding work).
+                push    bc                  ; save nbytes across the emit
+                call    main_emit_string_bytes  ; HL=ptr, BC=len → OUT
+                pop     bc                  ; BC = nbytes
+; fall through into advance_bc_and_walk
+
+
+; advance_bc_and_walk — PASS_PC += BC (zero-extended), then jp
+; walk_records.  Shared tail for the lit-insts handler and the directive
+; size-advance paths (both arrive with the byte count in BC).
+advance_bc_and_walk:
+                ld      d, b
+                ld      e, c                ; DE = byte count
+                call    pass_pc_advance_de
+                jp      walk_records
+
+
+; -----------------------------------------------------------------------
 ; Directives: .byte / .short / .word / .quad / .ascii / .asciz / .hword.
 ;
 ; Both passes parse the directive header (dir_id + op_count), then:
@@ -1297,10 +1344,7 @@ main_handle_directive_pass1:
                 jp      z, main_dir_ltorg
 
                 call    compute_directive_size      ; result → BC (size, 16-bit)
-                ld      d, b
-                ld      e, c
-                call    pass_pc_advance_de
-                jp      walk_records
+                jp      advance_bc_and_walk
 
 
 ; ----- Pass 2: emit, then advance PASS_PC by directive size ------------
@@ -1809,10 +1853,7 @@ main_dir_asciz_emit:
 ; which are untouched by the emit loops.
 dir_emit_done:
                 call    compute_directive_size
-                ld      d, b
-                ld      e, c
-                call    pass_pc_advance_de
-                jp      walk_records
+                jp      advance_bc_and_walk
 
 
 ; -----------------------------------------------------------------------
