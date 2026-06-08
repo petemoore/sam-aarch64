@@ -141,6 +141,19 @@ var MnemonicTable = []string{
 	// exactly — same encoding template, opcode bit10 set: udiv base 0x1ac00800
 	// (opcode 000010), sdiv base 0x1ac00c00 (opcode 000011). ID 99.
 	"sdiv",
+	// ccmn: Conditional Compare Negative (ARM ARM C6.2.41 / C6.2.42). The
+	// add-flavoured sibling of ccmp (ID 88): op=0 selects ccmn, op=1 ccmp.
+	//   ccmn Rn, #imm5, #nzcv, cond   — immediate form.
+	//   ccmn Rn, Rm,    #nzcv, cond   — register form.
+	// Both have 32-bit (Wn) and 64-bit (Xn) variants. ID 100.
+	"ccmn",
+	// csinv: Conditional Select Invert (ARM ARM C6.2.55). Base 4-operand
+	// form `csinv Rd, Rn, Rm, cond`; the Rn==Rm alias shapes render as
+	// csetm (Rn==Rm==zr) / cinv (Rn==Rm) — those aliases decode separately,
+	// but the non-alias base form (Rn != Rm) needs its own entry. ID 101.
+	// csneg: Conditional Select Negate (ARM ARM C6.2.56). Base form
+	// `csneg Rd, Rn, Rm, cond`; cneg is the Rn==Rm alias. ID 102.
+	"csinv", "csneg",
 }
 
 var mnemonicIndex = func() map[string]uint16 {

@@ -155,16 +155,14 @@ func TestDecode_Imm5_CCMP(t *testing.T) {
 	//     aarch64-elf-objdump -D -b binary -m aarch64 /tmp/t.bin
 	//   → 0:  fa450803  ccmp  x0, #0x5, #0x3, eq
 	//
-	// objdump emits `#0x5`/`#0x3` (hex) for ccmp's immediates; our
-	// Imm5 decoder is generic across the 4-bit nzcv and 5-bit imm5
-	// usages and emits `#<decimal>`.  Known formatting divergence
-	// (`#5` vs `#0x5`); reconcile in a follow-up if/when we add a
-	// per-Form hint for hex vs decimal rendering.
+	// objdump emits `#0x5`/`#0x3` (hex) for ccmp's immediates; the
+	// Imm5 decoder renders hex to match (Imm5 is used only by
+	// ccmp/ccmn's imm5 + nzcv fields).
 	mnem, ops, ok := Decode(0xfa450803)
 	if !ok {
 		t.Fatalf("Decode(0xfa450803) not ok")
 	}
-	want := "x0, #5, #3, eq"
+	want := "x0, #0x5, #0x3, eq"
 	if mnem != "ccmp" || ops != want {
 		t.Errorf("Decode(0xfa450803): got mnem=%q ops=%q; want mnem=\"ccmp\" ops=%q", mnem, ops, want)
 	}
@@ -172,7 +170,8 @@ func TestDecode_Imm5_CCMP(t *testing.T) {
 
 func TestDecodeSlot_Imm6(t *testing.T) {
 	// Imm6 has no Form using it; exercise directly.  6-bit field at
-	// BitPosition=10 with value 63 → "#63".
+	// BitPosition=10 with value 63 → "#0x3f" (Imm5/Imm6 render hex to
+	// match objdump's ccmp/ccmn rendering — the only forms that use them).
 	slot := aarch64enc.OperandSlot{
 		SlotKind:    aarch64enc.Imm6,
 		BitPosition: 10,
@@ -180,8 +179,8 @@ func TestDecodeSlot_Imm6(t *testing.T) {
 	}
 	word := uint32(63) << 10
 	got, ok := decodeSlot(decodeCtx{word: word}, slot)
-	if !ok || got != "#63" {
-		t.Errorf("Imm6(63): got (%q, %v); want (\"#63\", true)", got, ok)
+	if !ok || got != "#0x3f" {
+		t.Errorf("Imm6(63): got (%q, %v); want (\"#0x3f\", true)", got, ok)
 	}
 }
 

@@ -108,12 +108,50 @@ byte-for-byte agreement (Go is the authority; `.inst` fallback included).
 Like the oracle, this is a dev-tool test (not a CI gate; SimCoupé remains the
 sole gate). It skips cleanly if GNU `as` or `build/disasm.bin` is absent.
 
-## 3. FINDINGS — genuine Z80↔Go DECODE disagreements (reported, not worked around)
+## 3. FINDINGS — genuine Z80↔Go DECODE disagreements (RESOLVED by i36 + i37)
 
-Building the sweep surfaced two real disagreement classes. Per the prime
-directive they are reported here for triage rather than papered over; both are
-**decoder-only** and invisible to the oracle because no release.img word
-exercises them.
+Building the sweep surfaced two real disagreement classes. They were first
+reported here for triage rather than papered over, then closed at source by
+items **i36 + i37** (this is the "fix at source" follow-up the prime directive
+calls for). Both were **decoder-side** and invisible to the oracle because no
+release.img word exercises them.
+
+**Resolution summary (i36 + i37):** the encoder, the Go decoder, the Z80
+decoder, and binutils now ALL agree for `ccmp`, `ccmn`, base `csinv`, and base
+`csneg`. The former `TestSyntheticParity_KnownDisagreements` skip is removed;
+both families are certified by `TestSyntheticParity_CondCmp` and
+`TestSyntheticParity_CondSel` (plus the focused
+`TestSyntheticParity_KnownDisagreementsResolved` regression guard).
+
+| mnemonic | encodable | Go decode | Z80 decode | binutils | before → after |
+|---|---|---|---|---|---|
+| `ccmp` | yes (was) | yes (was) | **now** | `#0xN` | Z80 `.inst` → decodes; Go imm `#N`→`#0xN` |
+| `ccmn` | **now** | **now** | **now** | `#0xN` | unimplemented all sides → full coverage |
+| `csinv` (base) | **now** | **now** | yes (was) | base form | Go `.inst` → decodes (Z80 already did) |
+| `csneg` (base) | **now** | **now** | yes (was) | base form | Go `.inst` → decodes (Z80 already did) |
+
+Changes (all faithful ports / binutils alignment):
+
+- **Encoder** (`tools/sam-aarch64-format/mnemonics.go`,
+  `tools/aarch64enc/manual_forms.go`): added `ccmn` (ID 100, 4 forms mirroring
+  `ccmp`), base `csinv` (ID 101, W/X) and `csneg` (ID 102, W/X). These flow
+  through the generic form-table path — no Z80 `assembler.bin` code growth,
+  only `enctab.enc` grows (3730 → 3970 B; `ENCTAB_LEN` in `src/loader.asm`
+  bumped to match, 150 → 158 forms). Byte-matches GNU `as` on all 12 new forms.
+- **Go decoder** (`tools/aarch64dec/slots.go`): `Imm5`/`Imm6` now render hex
+  (`#0xN`) to match objdump's ccmp/ccmn rendering (those are the only forms
+  using the kind). The base `csinv`/`csneg` forms decode via the form walk
+  now that they exist in `AllForms()`; `decodeCondSelAlias` still runs first
+  and shadows the `Rn==Rm` alias shapes (`csetm`/`cinv`/`cneg`), exactly as
+  `csel`/`csinc` coexist with `cset`/`cinc`.
+- **Z80 decoder** (`src/disasm.asm`): new `disasm_try_ccmp` family decodes
+  ccmp/ccmn (immediate + register, W/X), rendering
+  `<mnem> Rn, #0x<imm5>|Rm, #0x<nzcv>, <cond>`. The conditional-compare class
+  fixes bit29 (the "S" slot) = 1 — unlike conditional-select where it is 0 —
+  which is the one bit that distinguishes the two discriminators (0xD2 vs
+  0xD4). Base `csinv`/`csneg` already decoded correctly on the Z80.
+
+The original per-finding analysis (kept for context) follows.
 
 ### Finding A — `ccmp` / `ccmn` (conditional compare): Z80 decoder MISSING
 
@@ -155,7 +193,8 @@ the Z80 to match Go's current omission?). Per the "align with binutils" memory
 the likely answer is "add `csinv`/`csneg` base forms to Go", but that is a
 deliberate authority change, so it is reported here rather than made under i9.
 
-Both findings are pinned by `TestSyntheticParity_KnownDisagreements` (skipped by
-default; `PARITY_DISAGREEMENTS=1` asserts the current split state so a future fix
-that closes a row trips the test and prompts promoting that family into a
-certified sweep).
+Both findings are now **closed** (see the resolution summary at the top of this
+section). The former `TestSyntheticParity_KnownDisagreements` skip is gone; the
+families are certified by `TestSyntheticParity_CondCmp` /
+`TestSyntheticParity_CondSel` and re-asserted by
+`TestSyntheticParity_KnownDisagreementsResolved`.
