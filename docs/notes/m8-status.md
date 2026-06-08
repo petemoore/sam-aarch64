@@ -5,7 +5,7 @@ Entry point for any session picking up M8. **M8 = the next-gen compact
 2026-06-08. It supersedes the i1 LIT_INSTS/LIT_DATA compaction (M7) and is
 the storage foundation for the on-SAM editor.
 
-**Items still use the global `iN` registry in `docs/notes/m7-status.md`**
+**Items use the project-wide `iN` registry at `docs/notes/item-registry.md`**
 (the id space is project-wide, not per-milestone). M8's items are `i39`
 (the design) with implementation phases **i39a / i39b / i39c**, plus `i40`
 (editor-region eviction). This doc is the M8 per-strand source of truth;
@@ -40,6 +40,14 @@ editor region; uniform symbol resolution in the assembler (numeric locals
 assembler-resident (−32% vs the i1 51 KB)**, in 3 phases behind the
 m6-release byte-match gate.
 
+**Editing principle (do NOT assume in-place `.tbn` editing; i41).** The `.tbn`
+is the *serialized* storage/assembly form; the editor edits a separate
+insertion-friendly in-memory document model and serializes to `.tbn` on save —
+the `.tbn` is never mutated in place. The v2/i39 work designs the on-disk and
+assembler-resident encoding only; it must not bake in any assumption that edits
+shift `.tbn` bytes (a contiguous edit buffer would blow the ~1 s/edit bound at
+~400 KB source). See **i41** for the edit-model rationale.
+
 ## M8 scope / strands
 
 Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
@@ -63,5 +71,5 @@ those will be captured here + in the plan when it lands.
 - Design (Format B + decisions): `docs/specs/2026-06-08-compact-tbn-nextgen-design.md`.
 - v1 baseline encoding: `docs/specs/2026-06-08-tbn-binary-format-reference.md`.
 - Phase-1 plan: `docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md` (in progress).
-- Global item registry: `docs/notes/m7-status.md` "Item index".
-- Predecessor (i1 compaction this builds on): `docs/notes/m7-status.md` i1 rows.
+- Global item registry: `docs/notes/item-registry.md`.
+- Predecessor (i1 compaction this builds on): `docs/notes/item-registry.md` i1 row; `docs/notes/m7-status.md` i1 scope row.
