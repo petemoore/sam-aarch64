@@ -17,13 +17,17 @@ package format
 // each side's own tests but silently diverge (the release byte-match
 // only catches it if a fixture happens to exercise the changed entry).
 //
-// This test closes that gap. The Z80 table is intentionally a SUBSET of
-// the Go table (it carries only the entries the M5/M6 fixtures exercise;
-// everything else is handled at runtime by the generic Sn_op1_Cm_Cn_op2
-// parser). So the invariant we enforce is:
+// This test closes that gap. The sysreg_table is intentionally a SUBSET of
+// the Go table (unnamed registers are handled at runtime by the generic
+// Sn_op1_Cm_Cn_op2 parser on both sides). The pstate / dc / tlbi tables,
+// however, are at FULL parity: those three families have NO generic
+// fallback in Go, so a Go name missing from the Z80 table would make the
+// SAM assembler fail-hard on input Go encodes (item i9). The invariants:
 //
-//	every entry present in src/sysreg_tables.inc MUST appear in the
-//	corresponding Go map with a BYTE-IDENTICAL encoding.
+//	(subset, all four tables)  every entry in src/sysreg_tables.inc MUST
+//	   appear in the corresponding Go map with a BYTE-IDENTICAL encoding.
+//	(complete, pstate/dc/tlbi)  every entry in the Go map MUST also appear
+//	   in the Z80 table (no fail-hard gap).
 //
 // A Z80 entry whose name is absent from Go, or whose (op0,op1,CRn,CRm,
 // op2) / (op1,op2) / (op1,CRn,CRm,op2) / (op1,CRn,CRm,op2,NeedsXt) fields
@@ -232,6 +236,34 @@ func checkSubset(t *testing.T, table string, z80 []z80Entry, goFields func(name 
 	}
 }
 
+// checkComplete asserts every name in the Go map is ALSO present in the Z80
+// table — the reverse-direction invariant.  Used for the pstate / dc / tlbi
+// families, which have NO generic Sn_op1_Cm_Cn_op2 fallback in Go: a Go name
+// missing from the Z80 table would make the SAM assembler `jp fail` (hard
+// halt) on input Go encodes (see src/sysname.asm's lookup-miss paths and
+// item i9).  The sysreg_table is deliberately exempt — unnamed system
+// registers there are reachable via the generic form on both sides.
+func checkComplete(t *testing.T, table string, z80 []z80Entry, goNames []string) {
+	t.Helper()
+	have := make(map[string]bool, len(z80))
+	for _, e := range z80 {
+		have[e.name] = true
+	}
+	var missing []string
+	for _, n := range goNames {
+		if !have[n] {
+			missing = append(missing, fmt.Sprintf(
+				"  %-14q present in Go %s but ABSENT from the Z80 table", n, table))
+		}
+	}
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		t.Errorf("%s: Go has names the Z80 src/sysreg_tables.inc lacks — the %s family has no "+
+			"generic Sn_ fallback, so a missing entry makes the SAM assembler fail-hard on input "+
+			"Go encodes (item i9). Add the entry to src/sysreg_tables.inc:\n%s", table, table, strings.Join(missing, "\n"))
+	}
+}
+
 func bytesEqual(a, b []byte) bool {
 	if len(a) != len(b) {
 		return false
@@ -272,6 +304,12 @@ func TestSysregZ80SyncPState(t *testing.T) {
 		}
 		return []byte{pf.Op1, pf.Op2}, true
 	})
+	// pstate has no generic fallback → require FULL parity (item i9).
+	names := make([]string, 0, len(pstateFields))
+	for n := range pstateFields {
+		names = append(names, n)
+	}
+	checkComplete(t, "pstate_table", z80, names)
 }
 
 func TestSysregZ80SyncDC(t *testing.T) {
@@ -287,6 +325,12 @@ func TestSysregZ80SyncDC(t *testing.T) {
 		}
 		return []byte{op.Op1, op.CRn, op.CRm, op.Op2}, true
 	})
+	// dc has no generic fallback → require FULL parity (item i9).
+	names := make([]string, 0, len(dcOps))
+	for n := range dcOps {
+		names = append(names, n)
+	}
+	checkComplete(t, "dc_table", z80, names)
 }
 
 func TestSysregZ80SyncTLBI(t *testing.T) {
@@ -306,4 +350,10 @@ func TestSysregZ80SyncTLBI(t *testing.T) {
 		}
 		return []byte{op.Op1, op.CRn, op.CRm, op.Op2, needsXt}, true
 	})
+	// tlbi has no generic fallback → require FULL parity (item i9).
+	names := make([]string, 0, len(tlbiOps))
+	for n := range tlbiOps {
+		names = append(names, n)
+	}
+	checkComplete(t, "tlbi_table", z80, names)
 }
