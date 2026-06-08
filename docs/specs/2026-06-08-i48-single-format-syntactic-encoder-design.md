@@ -60,12 +60,21 @@ therefore means the tokenize step and the pass-1/overlay-emit step must share a 
 or library — i.e. **extract `refenc`'s front-end (tokenize-feed → pass-1 → overlay-emit)
 into shared logic** so the symbolic records live only in memory.
 
-**Shape (recommended; see open question Q1):** keep `text2bin` and `refenc` as two CLIs
-over a shared front-end library; `text2bin` emits the overlay `.tbn`, `refenc`/Z80
-consume it. The symbolic IR is in-memory in the shared lib. (Host pass-1 then runs twice
-— once to emit the overlay, once to fold it into the binary — which is minor and
-correctness-neutral. The alternative is one merged tool; that removes the duplication
-but retires `text2bin` as a command.)
+**Shape — RESOLVED to one integrated tool (q5, Pete 2026-06-09).** The substantive
+decision is the **library factoring**, not the CLI count: the three core capabilities —
+text→overlay encoder, overlay→bytes assembler, overlay→text renderer — become clean,
+**Go-authoritative shared libraries**, because *those* (not the CLI structure) are what
+get ported to the Z80 (the dual-target reference, §2). On top of that, the host is **one
+integrated tool**, not two CLIs — because the SAM has a **single integrated assembler**
+(the editor does text→overlay→bytes in one program, no `text2bin`/`refenc` seam), so a
+single host tool is the cleanest port reference. The staged invocations the test gates
+need become **flags/subcommands** (`asm src --emit-tbn x.tbn`; `asm x.tbn -o out.bin`),
+so rewiring is trivial and the inspectable overlay `.tbn` is preserved; the production
+path is then a **single pass-1** (`source → {overlay .tbn, bytes}`), eliminating the
+host pass-1 duplication a two-CLI split would incur. The two-binary split was a milestone
+(M1–M6) artifact, not a fundamental need. *(This supersedes an earlier two-CLI lean —
+once the SAM has to do text→overlay itself, the host's job is to mirror that single
+assembler, so the split stopped being free.)*
 
 **What drops from the on-disk format / format package:** `KindInst`, `KindLabelDef`,
 `KindLocalDef`, `KindLitInsts` serialization. (`KindLitInsts` (0x07) is already dead —
@@ -193,7 +202,7 @@ touch the following. `[A]`/`[B]` tag which decision; "NEW" = file added by i39a 
 
 ## 7. Work strands & sequencing
 
-- **i48a** — host front-end unification: shared tokenize/pass-1/overlay-emit lib; `text2bin` emits the overlay; drop symbolic serialization (`KindInst`/`LabelDef`/`LocalDef`/`LitInsts`); in-memory IR. *(Absorbs the standalone `KindLitInsts`-removal item.)*
+- **i48a** — host front-end unification: factor the three core capabilities (text→overlay encoder, overlay→bytes assembler, overlay→text renderer) as Go-authoritative shared libs, composed into **one integrated host tool** (q5; staged modes via flags); the symbolic IR lives only in memory; drop symbolic serialization (`KindInst`/`LabelDef`/`LocalDef`/`LitInsts`). *(Absorbs the standalone `KindLitInsts`-removal item.)*
 - **i48b** — syntactic encoder + fold-time value-work: `FoldMovzAuto` computes `hw`; symbolic mem → `FoldMemImm12`-or-error (no imm9 rewrite); add/sub `lsl #12` syntactic; `mov` movz-default + assemble-time orr/movn fallback. **Has a format-byte effect (movz-auto base word), so its Go change must precede/accompany i39a PR(c)** so the Z80 fold port targets the final rule.
 - **i48c** — Z80 text→overlay encoder (editor input path) — future (editor phase); Go i48b is the authority.
 - **i48d** — doc unification: rewrite the tbn format reference to overlay-only; scrub head docs; historical banners on M1/i1 design docs. Lands with the v2/elimination so docs and code agree.
@@ -205,14 +214,15 @@ so no head doc describes a format the code doesn't produce.
 
 ## 8. Open questions (→ `question-registry.md`)
 
-- **q5 — host packaging.** Two CLIs over a shared front-end lib (recommended; keeps
-  `text2bin` as a command; minor host pass-1 duplication) vs one merged tool (no
-  duplication; retires `text2bin`). Pete to confirm.
-- **q6 — editor in-memory model for value-dependent base words.** At edit time a
-  referenced symbol may be unresolved, so the editor can't always pick the final base
-  word. Strategy (keep tentative/symbolic until assemble vs default+validate) interacts
-  with **i41** (edit-model). Resolve at editor phase.
-- **q7 — strictness scope.** We forego `ldr→ldur` and `add` `lsl #12` auto-rewrite.
+- **q5 — host packaging. ✅ RESOLVED (Pete 2026-06-09) → one integrated tool** (§3): the
+  library factoring is the decision (shared, dual-target, Go-authoritative libs); the
+  host is one integrated tool mirroring the SAM's single assembler, staged modes as
+  flags. Supersedes the earlier two-CLI lean.
+- **q6 — editor in-memory model for value-dependent base words. ✅ RESOLVED (via i41
+  decision #3 + i48b)** — the editor holds the symbolic IR, not base words, so there is
+  no edit-time base word to pick; value-dependent bits are computed in the fold at
+  serialize/assemble. See `docs/specs/2026-06-08-editor-edit-model-design.md` §7.3.
+- **q7 — strictness scope.** ⏳ We forego `ldr→ldur` and `add` `lsl #12` auto-rewrite.
   Any other GNU "generous" rewrites in the corpus to treat the same way? (Sweep when
   implementing i48b.)
 

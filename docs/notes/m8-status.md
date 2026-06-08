@@ -173,9 +173,10 @@ path jobs) + every Go unit suite. PR(c) makes the Z80 jobs green again.
 The 5 i39 design questions are all resolved (design §7), and PR(a) confirmed the
 v1→v2 flip needs **no re-vendoring** (the m6 gate re-derives the `.tbn` from
 `release.s`). Open questions live in the milestone-neutral **`docs/notes/question-registry.md`**
-(`qN`). The i48 ones — none blocking i39a/PR(c) — are **q5** host packaging (two CLIs +
-shared lib vs one tool), **q6** editor model for value-dependent base words with
-unresolved symbols (interacts with i41), **q7** any other GNU rewrites to forego.
+(`qN`). The i48 ones are mostly resolved: **q5** host packaging → **one integrated tool**
+(Pete 2026-06-09); **q6** editor value-dependent base words → resolved by i41 decision #3
+(editor holds the symbolic IR, not base words). Remaining: **q7** any other GNU rewrites
+to forego (sweep at i48b). None blocking i39a/PR(c).
 
 ## Authoritative references
 

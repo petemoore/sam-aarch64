@@ -55,8 +55,8 @@ The open-question registry has **moved to its canonical, milestone-neutral home:
 `docs/notes/question-registry.md`** (`qN` ids, project-wide, never archived — the
 sibling of the item registry; see that file or the item-registry header for the
 shared registry discipline that governs *both* `iN` items and `qN` questions). The
-still-open **q1** (i5 graphics) and the M8/i48 open questions **q5–q8**, plus the
-resolved **q2/q3/q4**, all live there now — **do not duplicate them here**; add new
+still-open **q1** (i5 graphics), **q7/q8** (i48 strictness sweep / LLIST), plus the
+resolved **q2–q6**, all live there now — **do not duplicate them here**; add new
 questions to the registry the moment they arise. (Extracted 2026-06-08, mirroring the
 i*N* item-registry extraction in PR #128, so open questions are never stranded in a
 winding-down milestone doc.)
