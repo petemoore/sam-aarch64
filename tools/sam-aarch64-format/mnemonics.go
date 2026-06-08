@@ -137,6 +137,10 @@ var MnemonicTable = []string{
 	// Symmetric with subs (ID 45): same encoding template, op=0 S=1 → base 0x31/0xb1.
 	// ID 98.
 	"adds",
+	// sdiv: Signed Divide (ARM ARM C6.2.202). DP-2-source, mirrors udiv (ID 72)
+	// exactly — same encoding template, opcode bit10 set: udiv base 0x1ac00800
+	// (opcode 000010), sdiv base 0x1ac00c00 (opcode 000011). ID 99.
+	"sdiv",
 }
 
 var mnemonicIndex = func() map[string]uint16 {

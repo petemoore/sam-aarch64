@@ -6,5 +6,7 @@
     mul x0, x1, x2
     udiv w0, w1, w2
     udiv x0, x1, x2
+    sdiv w0, w1, w2
+    sdiv x0, x1, x2
     sxtw x0, w1
     sxtw x5, w7

@@ -89,9 +89,9 @@
 ENCTAB_LOAD_HL: equ     &8000
 
 STACK_TOP:      equ     &C100          ; SP before any call (grows down into section D)
-ENCTAB_LEN:     equ     3676           ; current enctab.enc body size; build-time
+ENCTAB_LEN:     equ     3730           ; current enctab.enc body size; build-time
                                        ; constant (matches build/enctab.enc;
-                                       ; 148 forms = 100 manual + 48 MRA-derived)
+                                       ; 150 forms = 102 manual + 48 MRA-derived)
 
 
 ; -----------------------------------------------------------------------
