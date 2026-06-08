@@ -16,12 +16,15 @@
 ; terminated by name_len == 0 — so a future refactor that has BOTH
 ; sysreg_data.asm (name→encoding, page 13) and disasm.asm
 ; (encoding→name, page 15) `include` ONE shared file is mechanical.
-; That de-dup is deferred: the sync guard
-; tools/sam-aarch64-format/sysregs_z80sync_test.go parses
-; sysreg_data.asm's literal source and does NOT follow `include`s, so
-; moving sysreg_data.asm's bodies into an include today would break it.
-; The encodings below are copied verbatim from sysreg_data.asm (which
-; the sync guard verifies against Go), so the two cannot disagree.
+; That de-dup is deferred but NOT blocked by the sync guard: the guard
+; (tools/sam-aarch64-format/sysregs_z80sync_test.go) parses ONLY the four
+; `<name>_table:` sections and nothing else from sysreg_data.asm, so it
+; does not need to follow `include`s — once those four blocks move into a
+; shared `.inc`, just repoint the guard's asmPath at that `.inc` (keeping
+; the four label names) and it stays faithful, reading the exact bytes
+; both pages embed. The encodings below are copied verbatim from
+; sysreg_data.asm (which the sync guard verifies against Go), so the two
+; cannot disagree.
 ;
 ; Field order per table (matches sysreg_data.asm):
 ;   disasm_sysreg_tbl  — op0, op1, CRn, CRm, op2          (5 fields)
