@@ -272,21 +272,20 @@ literal classification fails the gate.
   `src/main_loop.asm` (after the COMMENT case, ~`:442`); pass-1 sizing +
   pass-2 memcpy-to-OUT handlers; switch the SAM side of the gate to consume
   the compact `.tbn`. Re-measure the IN-buffer headroom (the 92% → ?).
-- **PR 3 (constant data runs) — `KindLitData = 0x08`:** a *separate* record
-  kind for runs of consecutive **same-directive, all-constant** numeric data
-  (`.byte`/`.short`/`.hword`/`.word`/`.quad`), stored as raw assembled bytes:
-  `[kind 0x08][len u16][directive_id u8][raw LE bytes…]`. The leading
-  `directive_id` byte **preserves which directive the author wrote** (Pete,
-  2026-06-08) — a `.hword` table and a `.word` table with identical bytes
+- **PR 3 (constant data runs) — `KindLitData = 0x08` — ✅ DONE (PR #124):** a
+  *separate* record kind for runs of consecutive **same-directive, all-constant**
+  numeric data (`.byte`/`.short`/`.hword`/`.word`/`.quad`), stored as raw
+  assembled bytes: `[kind 0x08][len u16][directive_id u8][raw LE bytes…]`. The
+  leading `directive_id` byte **preserves which directive the author wrote**
+  (Pete, 2026-06-08) — a `.hword` table and a `.word` table with identical bytes
   must stay distinguishable so the disassembler round-trips the source
   spelling — so only same-`directive_id` runs merge, and symbol-bearing data
-  (`.quad label`) stays a symbolic `DIRECTIVE`. **Measured estimate** (release,
-  over the compact `.tbn`): 1,745 collapsible numeric records occupy 21,892 B
-  (31.8% of the 68,755 B file) but assemble to 4,046 B → projected **~13–18 KB
-  saved**, compact `.tbn` → ~51–56 KB (**−37% to −43% vs the 88,644 B
-  symbolic**; `.hword` dominates so the realistic result skews to the
-  merged-run ~51–53 KB end). Full record layout + estimate in
-  `docs/specs/2026-06-08-tbn-binary-format-reference.md` §7.3.
+  (`.quad label`) stays a symbolic `DIRECTIVE`. **Measured (PR #124):** the
+  1,745 collapsible numeric records (21,892 B / 31.8% of the 68,755 B PR1/PR2
+  file, assembling to 4,046 B) collapse the compact `.tbn` to **51,117 B —
+  −42.3% vs the 88,644 B symbolic**, −25.7% vs PR1/PR2, **5 IN pages → 4**,
+  byte-identical to GNU. Records split at 1016 B for the Z80 `STAGING_BUF`. Full
+  record layout in `docs/specs/2026-06-08-tbn-binary-format-reference.md` §7.3.
 - **PR 4+ (future):** Level 3 per-project frequency dictionary; the
   disassembler (bytes→text) inverts exactly this encode.
 
@@ -302,8 +301,8 @@ literal classification fails the gate.
    raw-bytes data run that **preserves the source directive** via a leading
    `directive_id` byte (Pete's explicit requirement). Measurement showed this
    is *not* a smaller win — collapsible numeric data is 31.8% of the compact
-   file (~5× bloat today), worth ~13–18 KB. See the PR 3 bullet above + the
-   format reference §7.3.
+   file (~5× bloat today); PR #124 measured **−17,638 B** (68,755 → 51,117).
+   See the PR 3 bullet above + the format reference §7.3.
 3. **Where should the user-facing compaction flag live long-term?** Default:
    `refenc -emit-compact-tbn` for now (least code, reuses the encoder). If a
    cleaner CLI surface is wanted later (e.g. `text2bin -compact` that links a

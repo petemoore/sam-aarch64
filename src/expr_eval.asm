@@ -19,7 +19,8 @@
 ;     64-bit `a*b` (low 64 bits) and signed `a/b` truncating toward
 ;     zero, div-by-zero → 0.  Implemented via ml_mul / ml_div.
 ;
-; Opcode values (tools/sam-aarch64-format/expr.go lines 12-66):
+; Opcode values (tools/sam-aarch64-format/expr.go lines 12-66; full
+; normative table in docs/specs/2026-06-08-tbn-binary-format-reference.md §5):
 ;
 ;   0x01 PUSH_IMM8        [s8]
 ;   0x02 PUSH_IMM16       [s16 LE]
@@ -31,8 +32,8 @@
 ;
 ;   0x10 ADD              (binary)
 ;   0x11 SUB              (binary)
-;   0x12 MUL              (M4 — fail)
-;   0x13 DIV              (M4 — fail)
+;   0x12 MUL              (binary; signed 64-bit, low 64 bits)
+;   0x13 DIV              (binary; signed truncating, div-by-zero → 0)
 ;   0x14 AND              (binary)
 ;   0x15 OR               (binary)
 ;   0x16 XOR              (binary)
