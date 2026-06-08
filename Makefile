@@ -220,7 +220,7 @@ paged-call-payload: $(BUILD)/paged_call_test_payload.bin
 # correction documented in src/sysreg_data.asm).  Needed by EVERY
 # build, not just BUILD_TESTS — sysreg/dc/tlbi/pstate operands appear
 # in shipping sources.
-$(BUILD)/sysreg_data.bin: src/sysreg_data.asm
+$(BUILD)/sysreg_data.bin: src/sysreg_data.asm src/sysreg_tables.inc
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/sysreg_data.bin src/sysreg_data.asm
 
@@ -243,11 +243,11 @@ sysreg-data: $(BUILD)/sysreg_data.bin
 #                    self-test entry + fixtures.  Ships only on the test
 #                    disk (the BUILD_TESTS assembler boot calls &8003 via
 #                    paged_call to verify the decoder).
-$(BUILD)/disasm.bin: src/disasm.asm
+$(BUILD)/disasm.bin: src/disasm.asm src/sysreg_names.inc src/sysreg_tables.inc
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/disasm.bin src/disasm.asm
 
-$(BUILD)/disasm-test.bin: src/disasm.asm
+$(BUILD)/disasm-test.bin: src/disasm.asm src/sysreg_names.inc src/sysreg_tables.inc
 	@mkdir -p $(BUILD)
 	pyz80 -D BUILD_TESTS=1 --obj=$(BUILD)/disasm-test.bin src/disasm.asm
 
