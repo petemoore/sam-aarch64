@@ -63,6 +63,17 @@ func (w *RecordWriter) WriteLitInsts(words []uint32) {
 	}
 }
 
+// WriteLitData writes a LIT_DATA record: a run of constant data from a
+// single numeric data directive, stored as its raw assembled bytes. The
+// leading directiveID byte records which directive produced the bytes
+// (.byte/.short/.hword/.word/.quad) so the disassembler round-trips the
+// source spelling.
+func (w *RecordWriter) WriteLitData(directiveID byte, raw []byte) {
+	w.writeHeader(KindLitData, 1+len(raw))
+	w.buf = append(w.buf, directiveID)
+	w.buf = append(w.buf, raw...)
+}
+
 // WriteRaw writes a record with an already-encoded payload verbatim.
 // Used by the compaction pass to pass non-literal records through
 // unchanged (the payload is the Record.Raw slice from the reader).

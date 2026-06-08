@@ -25,6 +25,12 @@ type Record struct {
 	LitCount byte
 	LitWords []byte
 
+	// LitDataDirID and LitData are populated for KindLitData records.
+	// LitData is the raw assembled little-endian data bytes (ready to
+	// memcpy to OUT); LitDataDirID is the source directive's ID.
+	LitDataDirID byte
+	LitData      []byte
+
 	Raw []byte
 }
 
@@ -98,6 +104,12 @@ func (r *RecordReader) Next() (Record, error) {
 			return rec, fmt.Errorf("LIT_INSTS: count %d implies %d word bytes, have %d",
 				rec.LitCount, 4*int(rec.LitCount), len(rec.LitWords))
 		}
+	case KindLitData:
+		if len(payload) < 1 {
+			return rec, fmt.Errorf("LIT_DATA: payload too short")
+		}
+		rec.LitDataDirID = payload[0]
+		rec.LitData = payload[1:]
 	}
 	return rec, nil
 }

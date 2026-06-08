@@ -96,6 +96,11 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 			// words straight to OUT — no encoding work.
 			out = append(out, rec.LitWords...)
 			pc += 4 * int64(rec.LitCount)
+		case format.KindLitData:
+			// Pre-assembled constant data run: copy the stored bytes
+			// straight to OUT.
+			out = append(out, rec.LitData...)
+			pc += int64(len(rec.LitData))
 		case format.KindDirective:
 			name := format.DirectiveName(rec.DirectiveID)
 			if name == ".ltorg" {

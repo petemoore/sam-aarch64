@@ -47,6 +47,49 @@ func IsFullyLiteral(rec Record) bool {
 	return true
 }
 
+// ConstDataWidth reports whether rec is a numeric data directive
+// (.byte/.short/.hword/.word/.quad) whose every operand is a pure
+// constant expression — i.e. a run-collapsible constant data record —
+// and returns its per-element output width (1/2/4/8). ok=false for any
+// other record, a data directive with a symbol/local/PC/reloc operand
+// (must stay symbolic for relocation), or an empty operand list.
+func ConstDataWidth(rec Record) (width int, ok bool) {
+	if rec.Kind != KindDirective {
+		return 0, false
+	}
+	switch DirectiveName(rec.DirectiveID) {
+	case ".byte":
+		width = 1
+	case ".short", ".hword":
+		width = 2
+	case ".word":
+		width = 4
+	case ".quad":
+		width = 8
+	default:
+		return 0, false
+	}
+	or := NewOperandReader(rec.Operands)
+	n := 0
+	for !or.AtEnd() {
+		o, err := or.Next()
+		if err != nil {
+			return 0, false
+		}
+		n++
+		if o.Kind != OpImmExpr {
+			return 0, false
+		}
+		if _, isConst := EvalConst(o.Expr); !isConst {
+			return 0, false
+		}
+	}
+	if n == 0 {
+		return 0, false
+	}
+	return width, true
+}
+
 // exprHasContextDep reports whether an expression bytecode stream
 // contains any opcode whose value depends on the symbol table, a local
 // label, the PC, or a relocation — anything that makes the enclosing
