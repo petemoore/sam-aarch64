@@ -22,6 +22,29 @@ tables carry the same ids. (The ids below were assigned in the 2026-06-08
 planning session; `i13` is locked to "gitignore" to match shipped PR #107, so the
 "replace `cls`" item — tentatively i13 in conversation — is registered as `i16`.)
 
+### Two registries, one discipline (read this for *both* items and questions)
+
+There are **two sibling registries**, and they follow the **same governance** — so
+learning one teaches the other:
+
+- **Items** → this file (`docs/notes/item-registry.md`), ids **`iN`** — tracked *work*.
+- **Questions for Pete** → `docs/notes/question-registry.md`, ids **`qN`** —
+  *unresolved decisions* (things an agent can't settle itself, or defers rather than
+  guessing). Every open question goes there the moment it arises — not just in chat
+  (chat questions get lost in simultaneous-edit races); the registry is the single
+  sure-fire list of what's still open. (See the `feedback_capture_open_questions`
+  memory.)
+
+Shared rules for **both** `iN` and `qN`: (1) **stable ids, locked** once they appear
+in a PR/branch/commit — never renumbered; (2) **milestone-neutral and never
+archived** — when a milestone status doc is superseded, its items *and* questions live
+on in their registry, never stranded in an archived `m{N}-status` doc; (3) **marked
+done/resolved, not deleted** (`✅` with the resolution + where it was decided), so the
+id is never reused; (4) referenced by id everywhere; (5) **landed on `main`** via PR
+(branch-protection forbids direct pushes) so Pete sees them where he reads. Milestone
+status docs and the ROADMAP **reference** both registries; they do not duplicate the
+tables.
+
 | id | item | status | pointer |
 |----|------|--------|---------|
 | **i1** | Compact-`.tbn` format change (hybrid bytes/symbolic; `KindLitInsts` + `KindLitData`) | ✅ PR1 #121 + PR2 #122 + PR3 #124 all merged — **88,644 → 51,117 B (−42.3%)**, 6 IN pages → 4, byte-identical to GNU. Next-gen redesign explored as **i39**. | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`; `docs/specs/2026-06-08-tbn-binary-format-reference.md` (§7) |
@@ -59,7 +82,7 @@ planning session; `i13` is locked to "gitignore" to match shipped PR #107, so th
 | **i31** | On-SAM preprocessor (`.if` build-constraints + macros) | 🧭 beyond-M7 | "Beyond-M7 / future ideas" |
 | **i32** | Multiple source files + staged/partial loading | 🧭 beyond-M7 | "Beyond-M7 / future ideas" |
 | **i33** | Trinity SD/flash storage → bigger-kernel architecture | 🧭 beyond-M7 | `memory/trinity_hardware.md` |
-| **i34** | Untrack accidentally-committed Go binaries | ⏳ partial — `enctab-gen` untracked (PR #111); `llist-normalise` pending LLIST disposition (open-Q5) | `.gitignore`; open-question 5 |
+| **i34** | Untrack accidentally-committed Go binaries | ⏳ partial — `enctab-gen` untracked (PR #111); `llist-normalise` pending LLIST disposition (question **q8**) | `.gitignore`; question registry q8 |
 | **i35** | `sdiv` missing across the whole stack (no mnemonic/Form → `.inst`; unencodable) | ✅ DONE (PR #115) | deferred-backlog row; mirrored `udiv` ID 72 |
 | **i36** | Z80 disasm: ccmp/ccmn decode (was → `.inst`) — added decode + encoder (ccmn ID 100); binutils-aligned | ✅ DONE (PR #119) | `docs/notes/2026-06-08-z80-go-disasm-parity-i9.md` |
 | **i37** | base csinv/csneg (Rn≠Rm): Go `aarch64dec` now decodes them (IDs 101/102), encoder coverage added; aliases intact | ✅ DONE (PR #119) | same analysis doc. The i9 sweep skip is removed; families now certified |
