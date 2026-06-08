@@ -4,6 +4,10 @@ Entry point for any session picking up M7. The M7 backlog (gathered from
 notes + memory so nothing was lost in the M6 → M7 transition) is the scope
 table below; it will keep being refined / re-prioritised as M7 proceeds.
 
+**Items are tracked with stable `iN` ids** — see the **"Item index — the `iN`
+registry"** section below for the authoritative id↔item map and the naming
+convention. Refer to work by its id (e.g. "i1", "i12a") in PRs and conversation.
+
 **M7 — ACTIVE (opened 2026-05-29; M6 closed via PR #76).** Housekeeping
 batch 1 has landed (PRs #78–#82: dead-code removal, sysreg sync guard,
 index READMEs + memory-layout doc, decision bookkeeping, the `src/m3` →
@@ -17,7 +21,7 @@ Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not
 | Strand | Status | Spec/Source | Notes |
 |---|---|---|---|
 | Bump-arena allocator (Go-slices-vs-fixed-arrays for the Z80 data structures) | ❌ YAGNI | `docs/specs/2026-05-29-bump-arena-risk-census.md` (the census); Pete 2026-05-29 (accepted) | **NOT building it.** The risk-census (PR #84) found no fixed section-D array is a real overrun time-bomb — all SAFE today, only 3 go at-risk at a full ~5× kernel and are trivially bumpable in place. Pete confirmed YAGNI. The genuinely tight ceiling is elsewhere — the IN/OUT paged byte buffers (next row), fixed by claiming free pages, not an allocator. **Revisit trigger** (census §4): a measured at-risk overrun, or the symbol table heading toward ~2× its 512 cap. |
-| IN/OUT paged-buffer ceiling (claim more SAM pages) | 🧭 | `docs/specs/2026-05-29-bump-arena-risk-census.md` §IN/OUT | The real near-term constraint surfaced by the bump-arena census: the **IN `.tbn` buffer is at 92% of its 96 KB / 6-page cap today** (88,644 B; fail tag `03`), OUT at 68% of 32 KB (fail tag `b0`). Physical pages 15..31 (~272 KB) are free, so the fix is a bounds bump (more pages), not an allocator. Not urgent (release fits), but the closest ceiling — do before a substantially larger source lands. Pairs with the compact-`.tbn` strand. |
+| IN/OUT paged-buffer ceiling (claim more SAM pages) | 🧭 | `docs/specs/2026-05-29-bump-arena-risk-census.md` §IN/OUT | The real near-term constraint surfaced by the bump-arena census: the **IN `.tbn` buffer is at 92% of its 96 KB / 6-page cap today** (88,644 B; fail tag `03`), OUT at 68% of 32 KB (fail tag `b0`). Physical pages 15..31 (~272 KB) are free, so the fix is a bounds bump (more pages), not an allocator. Not urgent (release fits), but the closest ceiling — do before a substantially larger source lands. Pairs with the compact-`.tbn` strand. **Editor-centric reframing (Pete, 2026-06-08):** this strand is really the *on-SAM IDE memory model*, not a batch-assembler-buffer concern. The SAM is the whole platform — editor + assembler + kernel/firmware server, per the project remit — and a codebase is *grown dynamically on-device*, so the edit buffer expands throughout a session (the main use is NOT "load `release.tbn`, assemble once"). The right design is "claim all free RAM at boot (size to `PRAMTP`), show remaining, grow buffers on demand from the free-page pool" — DOS (1 page, `DOSFLG`) + screen (2 pages) stay reserved; discover the rest via `PRAMTP` + the ROM `ALLOCT`/`LASTPAGE` reservation table. Deeper design (contiguous-bump vs per-buffer page-list for a dynamic IN/OUT ratio) deferred until editor development, where it belongs. See ROADMAP "Editor vision". |
 | Codegen sysreg / mnemonic / form tables from Go authority | 📋 | M6-closure plan §M7 sketch (PR-A), `tools/sam-aarch64-format/sysregs.go` | Kills hand-sync drift. Depends on M6 PR-2's page-13 binary build glue. |
 | On-SAM disassembler (strand B) — Go side | ✅ PR #93 (disasm) ✅ PR #97 (round-trip) ✅ PR #98 (EXTR + .inst-free) ✅ session #3 parity + fix (direct commits) | `docs/plans/2026-05-28-go-aarch64-disassembler.md`; `tools/aarch64dec/`; `docs/specs/2026-06-07-disasm-round-trip-design.md` | **PR #93:** 100.00% objdump match; `disasm` required check. **PR #97 (strand-B PR-2):** `BranchTarget` + `WriteAsm` + `-asm` flag + `tools/run-disasm-roundtrip.sh`; 48/48 M3-M6 instruction fixtures round-trip; `disasm-roundtrip` the 14th required check; 5 new encodings (`udf`, `sxth`, `sxtb`, `uxtb`, `uxth`) + `.inst` in refenc. **PR #98:** `tryDecodeExtr` + per-fixture `.inst`-free assertion; 47/47 fixtures pass. **Session #3 parity work (direct commits on main, all CI green):** (a) 5 new mnemonics across Go + Z80 — **sturh=94 / sturb=95 / ldurh=96 / ldurb=97 / adds=98** — in `mnemonics.go`, `manual_forms.go`, `parser.go`, `refenc/pass2.go`, `src/intercepts.asm`, `src/slots/mem.asm`; madd/msub W-forms added; `ENCTAB_LEN` 3622→3676 (commit 7a2db59). (b) **Non-canonical logical-immediate decoder fix** — `decodeBitMasks` rejects `immr ≥ esize` → falls through to `.inst` preserving exact bits (commit b24b618); `[2c/3]` full-binary round-trip wired (commit 999b060). (c) Z80 budget: range-check compaction saves 25 B (commit c2b970d). **Fixture count: 49.** **Next: PR-3 Z80 port** of the disassembler. SIMD/atomics declined (full-ISA strand). See `memory/feedback_disassembler_first_decouple`, `memory/feedback_align_with_binutils`. |
 | On-SAM disassembler (strand B) — release.s round-trip | ✅ code-only [2b/3] commit f2ab814 ✅ full-binary [2c/3] commit 999b060 | `tools/run-disasm-roundtrip.sh`; `tests/m6/release/release.s` | **[2b/3] DONE 2026-06-07 (session #2):** `text2bin -strip-data` + code-only round-trip; 0 `.inst` entries, 3908 instructions. **[2c/3] DONE 2026-06-07 (session #3):** full `release.s` (code+data) assembled → disassembled → reassembled → byte-compared; **PASS: 21752 B, 747 `.inst` entries from embedded data words** (`.word`/`.quad` tables + literal-pool entries — all undecodeable data preserved verbatim via `.inst`). Non-canonical `orr w19, w0, #0x1` (tvt_data bytes `0x13 0x00 0x20 0x32`, immr=32 > esize=32) now correctly emits `.inst 0x32200013`. |
@@ -38,6 +42,58 @@ Legend: ✅ done · ⏳ in progress · 📋 designed/plan-ready · 🧭 idea/not
 | SAM screen-mode decision (editor) | 🧭 | Pete 2026-05-29; ROADMAP "Editor vision" | MODE 3 currently assumed. Decide mode(s) by colour-vs-resolution + aesthetics nearer the editor; the choice consumes display RAM / pages, so it feeds the memory-layout doc (the ✅ row above). **Pete 2026-05-29:** consider offering it as a **user preference** — high-resolution/fewer-colours vs lower-resolution/more-colours — rather than a fixed choice. |
 | Full ARMv8-A instruction-set footprint — research | ✅ DELIVERED (`docs/notes/2026-06-08-armv8-a64-isa-footprint-research.md`) | Pete 2026-05-29 | **Isolated research project:** estimate how much additional memory (encoder tables + Z80 code) it would take to support the **full ARMv8.0-A A64 instruction set** (A64 only — no AArch32/Thumb; ARMv8.0 only, not later v8.x), vs today's spectrum4-release-only subset. Include the **FP + Advanced SIMD/NEON** extensions (Pete: "is that NEON? — yes"). **Findings:** ~442 mnemonics full-ISA vs 99 today; NEON/FP is ~40–45% by mnemonic / >50% by encoding-variant — the dominant cost. Estimate +1100–1850 encoder Forms, `enctab.enc` 3.7 KB → ~30–50 KB (cheap — pages onto the free 272 KB), **+15–35 KB of Z80 code**. **Verdict:** does NOT fit the flat `&8000–&C000` window (1.9 KB code headroom vs +15–35 KB) → needs a **paged-code/overlay** subsystem; table growth already solved by the existing off-axis pattern; Trinity storage not required on a 512K machine. Motivation: decide whether broad-ISA support is worth it for future kernel dev or ingesting LLVM-compiled output. Builds on the #87 parity audit (which found the *current* coverage is structurally complete for the subset). |
 | Trinity SD/flash storage → bigger-kernel architecture | 🧭 *(beyond-M7)* | Pete 2026-05-29; `memory/trinity_hardware.md` | Trinity's SD/MMC slot lifts the implicit single-floppy ceiling, enabling much larger kernels/debug builds (spectrum4 may be ~5× when complete). The binding constraint eventually shifts from code budget to storage. Quazar docs to be scanned. Distant future. |
+
+## Item index — the `iN` registry (naming convention)
+
+**Convention (Pete, 2026-06-08):** every tracked item has a stable **`iN`** id
+(`i` = item). This table is the **registry** — the authoritative id↔item map.
+Rules: (1) once an id appears in a PR title, branch, or commit it is **locked** —
+never renumber it; (2) sub-items take letter suffixes (`i12a`/`i12b`/`i12c`);
+(3) a new item gets the next free integer; (4) reference items by id in
+conversation, PRs, and these docs. The scope table above and the deferred-backlog
+table below carry the same ids. (The ids below were assigned in the 2026-06-08
+planning session; `i13` is locked to "gitignore" to match shipped PR #107, so the
+"replace `cls`" item — tentatively i13 in conversation — is registered as `i16`.)
+
+| id | item | status | pointer |
+|----|------|--------|---------|
+| **i1** | Compact-`.tbn` format change (hybrid bytes/symbolic; `KindLitInsts`) | 📋 planned (the sequenced-next big strand) | `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md` |
+| **i2** | On-SAM IDE memory model (edit buffer + IN/OUT paging; "claim all free RAM, grow on demand") | 🧭 reframed; deferred to editor work | scope row "IN/OUT paged-buffer ceiling" |
+| **i3** | Editor groundwork (Phase 2) — full vision | 🧭 | ROADMAP "Editor vision" |
+| **i4** | Basic read-only listing/scroll viewer (centre-locked cursor; up/down only) | 🧭 new 2026-06-08 | — (Pete's idea; precursor to i3) |
+| **i5** | UI visual prototyping via image generation (MODE 3 64×24 vs MODE 4 32×24 mockups) | 🧭 new 2026-06-08 | — (Pete's idea) |
+| **i6** | SAM screen-mode decision (MODE 3 vs 4, or user preference) | 🧭 | ROADMAP "Editor vision"; scope row |
+| **i7** | Codegen sysreg/mnemonic/form tables from Go authority | 📋 | scope row |
+| **i8** | Sysreg-table de-dup into shared `src/sysreg_tables.inc` | ✅ DONE (PR #108) | `src/sysreg_tables.inc` |
+| **i9** | Parity robustness seeds (sysname fail-soft + untested-form empirical sweep) | ⏳ in progress (agent) | `docs/notes/2026-05-29-z80-go-parity-audit.md`; scope row |
+| **i10** | Go-vs-Z80 capability parity report | ✅ DONE (PR #109) | `docs/notes/2026-06-08-go-vs-z80-disasm-capability-parity.md` |
+| **i11** | Full ARMv8.0-A A64 ISA footprint research | ✅ DONE (PR #110) | `docs/notes/2026-06-08-armv8-a64-isa-footprint-research.md` |
+| **i12a** | SimCoupé v1.2.16 bump (pin SHA to upstream, drop vendored `-exitonhalt` patch) | ⏳ in progress (agent) | `tools/Dockerfile.dev` |
+| **i12b** | Editor-testing input injection (`-keyin` vs `FLAGS`/`LASTK` memory injection) | 🧭 new 2026-06-08 | `tools/run-simcoupe.sh`; for automated editor tests |
+| **i12c** | Rebase/upstream macOS+Linux paste support | ✅ RESOLVED/MOOT — upstreamed (`87f2a69`); arrives free with i12a | `~/.claude/.../memory/project_simcoupe_sdl_paste_branch.md` |
+| **i13** | gitignore in-tree Go build binaries | ✅ DONE (PR #107) | `.gitignore` |
+| **i14** | Non-canonical logical-immediate decoder tests (`decodeBitMasks` `immr≥esize` reject) | 🧭 | deferred-backlog row |
+| **i15** | `adds` 3-register form (Z80) | 🧭 | deferred-backlog row |
+| **i16** | Replace `cls` test instruction with a real spectrum4 one | 🧭 (was tentatively "i13" in conversation) | `docs/ROADMAP.md` deferred checklist |
+| **i17** | Deep reviews of `main_loop.asm` + `litpool.asm` + `SYMTAB_*` equ sentinels | ⏳ | repo-audit §6 |
+| **i18** | Wider naming review (`tests/m{N}`, `ci-m{N}`, `build-m3-disk`, milestone fixtures) | ⏳ | scope row "Directory naming" |
+| **i19** | Subagent worktree-isolation leak — harden | 🧭 | scope row |
+| **i20** | Linker-layout coupling (`spectrum4.ld` hardcoded in flatten) | 🧭 | scope row |
+| **i21** | Go-harness fidelity follow-ups (watchpoint, `make harness-sweep`, USAGE.md) | ⏳ | scope row |
+| **i22** | Per-fail-site diagnostic strings | 🧭 | deferred-backlog row |
+| **i23** | Paged-IN >16.5 KB HLOAD-ceiling lift | 🧭 | deferred-backlog row |
+| **i24** | 64 KB output / 16-bit `OUT_LEN` limit | 🧭 | deferred-backlog row |
+| **i25** | `(hksp)` HSAVE/HLOAD error handler | 🧭 | deferred-backlog row |
+| **i26** | text2bin operand-kind validation (Task 21) | 🧭 | deferred-backlog row |
+| **i27** | Cortex-A53 errata workarounds (`--fix-cortex-a53-*`) | 🧭 | deferred-backlog row |
+| **i28** | Absolute `.set` high-word edge vs Go | 🧭 | deferred-backlog row |
+| **i29** | Harden slot self-test `PASS_PC` dependency | 🧭 | deferred-backlog row |
+| **i30** | LDIR-fan-out for cross-page-shared blocks (smaller binary + faster boot) | 🧭 deferred/possible | `docs/plans/2026-06-07-strand-b-pr4-z80-disassembler-port.md` "Future enhancements" |
+| **i31** | On-SAM preprocessor (`.if` build-constraints + macros) | 🧭 beyond-M7 | "Beyond-M7 / future ideas" |
+| **i32** | Multiple source files + staged/partial loading | 🧭 beyond-M7 | "Beyond-M7 / future ideas" |
+| **i33** | Trinity SD/flash storage → bigger-kernel architecture | 🧭 beyond-M7 | `memory/trinity_hardware.md` |
+| **i34** | Untrack accidentally-committed Go binaries | ⏳ partial — `enctab-gen` untracked (PR #111); `llist-normalise` pending LLIST disposition (open-Q5) | `.gitignore`; open-question 5 |
+| **i35** | `sdiv` missing across the whole stack (no mnemonic/Form → `.inst`; unencodable) | 🧭 new 2026-06-08 | deferred-backlog row; mirror `udiv` ID 72 |
 
 ## Open questions for Pete (awaiting input)
 
@@ -352,6 +408,7 @@ to the level of a named strand. One line each, with the cited source.
 | Harden slot self-test PASS_PC dependency | `docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md` review §3 | `run_slot_self_tests` computes the ADRP test vs PASS_PC before `pass_pc_reset` (relies on cold-boot RAM=0). Pre-existing; add an explicit `pass_pc_reset` before the page-12 cluster to harden. |
 | Non-canonical logical-immediate decoder tests | `tools/aarch64dec/slots_logical.go` | `decodeBitMasks` now rejects non-canonical `immr` (immr ≥ esize) so callers fall through to `.inst`. Add unit tests with crafted words (e.g. `0x32200013`: esize=32, immr=32) asserting decode returns `.inst`, plus roundtrip fixtures that contain such words. These invariants must also be ported to the Z80 `decodeBitMasks` equivalent when the Z80 disassembler is implemented in strand-B PR-3. |
 | `adds` 3-register form (Z80) | `src/slots/shifted_reg.asm`; `src/intercepts.asm` | `adds` shifted-reg form needs `is_shifted_reg_mnemonic` to include ID 98 AND the `shifted_reg_table` entry restored. Currently both are absent (deferred to save budget in PR-2b). Not in release.s; add when test coverage exists or budget allows. |
+| `sdiv` missing across the whole stack (i35) | i10 report `docs/notes/2026-06-08-go-vs-z80-disasm-capability-parity.md`; `tools/sam-aarch64-format/mnemonics.go`; `tools/aarch64enc/manual_forms.go` | Surfaced by the i10 capability-parity report: `sdiv` is absent everywhere — not in `mnemonics.go`, no `manual_forms.go` Form (so the decoder emits `.inst`), and unencodable. Invisible because release.img never uses it (`udiv` ID 72 exists, `sdiv` does not). Fix: add `sdiv` mirroring `udiv` across encoder authority + decoder (+ Z80 if not already). Small, clean. Excluded from the i9 sweep; tracked here. |
 
 **Beyond M7** (noted so they're not mistaken for M7 strands): Phase 3 (TFTP
 shipper to the Pi 400 over the direct LAN cable, `docs/ROADMAP.md` M-table
