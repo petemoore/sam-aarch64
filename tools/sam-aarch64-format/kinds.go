@@ -9,6 +9,12 @@ const (
 	KindLocalDef  RecordKind = 0x03
 	KindDirective RecordKind = 0x04
 	KindComment   RecordKind = 0x05
+	// KindLitInsts is a run of consecutive fully-literal instructions
+	// stored as their assembled machine code (compact `.tbn`, Level 2).
+	// Payload: [count:1][word0:4 LE]…[word{count-1}:4 LE]. The assembler
+	// memcpys the words straight to OUT — zero encoding work. See
+	// docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md.
+	KindLitInsts RecordKind = 0x07
 )
 
 // Name returns the symbolic name of the record kind, or "UNKNOWN" for
@@ -25,6 +31,8 @@ func (k RecordKind) Name() string {
 		return "DIRECTIVE"
 	case KindComment:
 		return "COMMENT"
+	case KindLitInsts:
+		return "LIT_INSTS"
 	}
 	return "UNKNOWN"
 }

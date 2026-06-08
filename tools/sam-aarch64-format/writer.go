@@ -44,6 +44,33 @@ func (w *RecordWriter) WriteInst(mnemonicID uint16, operandCount byte, operands 
 	w.buf = append(w.buf, operands...)
 }
 
+// WriteLitInsts writes a LIT_INSTS record: a run of fully-literal
+// instructions stored as their assembled little-endian words. The run
+// length must be 1..255 (the caller splits longer runs into successive
+// records); WriteLitInsts panics on a zero or over-long run, which is a
+// programming error in the compaction pass.
+func (w *RecordWriter) WriteLitInsts(words []uint32) {
+	if len(words) == 0 || len(words) > 255 {
+		panic("WriteLitInsts: run length must be 1..255")
+	}
+	payloadLen := 1 + 4*len(words)
+	w.writeHeader(KindLitInsts, payloadLen)
+	w.buf = append(w.buf, byte(len(words)))
+	var tmp [4]byte
+	for _, word := range words {
+		binary.LittleEndian.PutUint32(tmp[:], word)
+		w.buf = append(w.buf, tmp[:]...)
+	}
+}
+
+// WriteRaw writes a record with an already-encoded payload verbatim.
+// Used by the compaction pass to pass non-literal records through
+// unchanged (the payload is the Record.Raw slice from the reader).
+func (w *RecordWriter) WriteRaw(kind RecordKind, payload []byte) {
+	w.writeHeader(kind, len(payload))
+	w.buf = append(w.buf, payload...)
+}
+
 // WriteDirective writes a DIRECTIVE record. operands is the
 // already-encoded operand stream.
 func (w *RecordWriter) WriteDirective(directiveID, operandCount byte, operands []byte) {

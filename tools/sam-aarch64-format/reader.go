@@ -19,6 +19,12 @@ type Record struct {
 	OperandCount byte
 	Operands     []byte
 
+	// LitCount and LitWords are populated for KindLitInsts records.
+	// LitWords is the raw little-endian word stream (4*LitCount bytes),
+	// ready to memcpy straight to OUT.
+	LitCount byte
+	LitWords []byte
+
 	Raw []byte
 }
 
@@ -82,6 +88,16 @@ func (r *RecordReader) Next() (Record, error) {
 		rec.DirectiveID = payload[0]
 		rec.OperandCount = payload[1]
 		rec.Operands = payload[2:]
+	case KindLitInsts:
+		if len(payload) < 1 {
+			return rec, fmt.Errorf("LIT_INSTS: payload too short")
+		}
+		rec.LitCount = payload[0]
+		rec.LitWords = payload[1:]
+		if len(rec.LitWords) != 4*int(rec.LitCount) {
+			return rec, fmt.Errorf("LIT_INSTS: count %d implies %d word bytes, have %d",
+				rec.LitCount, 4*int(rec.LitCount), len(rec.LitWords))
+		}
 	}
 	return rec, nil
 }

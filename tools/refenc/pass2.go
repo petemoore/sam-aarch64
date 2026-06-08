@@ -91,6 +91,11 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 			binary.LittleEndian.PutUint32(buf[:], word)
 			out = append(out, buf[:]...)
 			pc += 4
+		case format.KindLitInsts:
+			// Pre-assembled literal run: copy the stored little-endian
+			// words straight to OUT — no encoding work.
+			out = append(out, rec.LitWords...)
+			pc += 4 * int64(rec.LitCount)
 		case format.KindDirective:
 			name := format.DirectiveName(rec.DirectiveID)
 			if name == ".ltorg" {
