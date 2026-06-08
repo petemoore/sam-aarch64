@@ -94,9 +94,9 @@ planning session; `i13` is locked to "gitignore" to match shipped PR #107, so th
 | **i33** | Trinity SD/flash storage → bigger-kernel architecture | 🧭 beyond-M7 | `memory/trinity_hardware.md` |
 | **i34** | Untrack accidentally-committed Go binaries | ⏳ partial — `enctab-gen` untracked (PR #111); `llist-normalise` pending LLIST disposition (open-Q5) | `.gitignore`; open-question 5 |
 | **i35** | `sdiv` missing across the whole stack (no mnemonic/Form → `.inst`; unencodable) | ✅ DONE (PR #115) | deferred-backlog row; mirrored `udiv` ID 72 |
-| **i36** | Z80 disasm: ccmp/ccmn (conditional-compare) not decoded → `.inst` (encoder has parity; Go decodes) | ⏳ in progress (agent) | found by i9 sweep; `docs/notes/2026-06-08-z80-go-disasm-parity-i9.md` |
-| **i37** | base csinv/csneg (Rn≠Rm): Go `aarch64dec` declines them (less capable than binutils + than our Z80); align Go decoder + ensure encoder coverage | ⏳ in progress (agent) | found by i9 sweep; same analysis doc. Fixed together with i36 |
-| **i38** | Audit for other skipped/excluded tests + PRs that left gaps rather than fixing them | ⏳ in progress (agent) | `docs/notes/2026-06-08-skipped-tests-and-gaps-audit.md` (forthcoming) |
+| **i36** | Z80 disasm: ccmp/ccmn decode (was → `.inst`) — added decode + encoder (ccmn ID 100); binutils-aligned | ✅ DONE (PR #119) | `docs/notes/2026-06-08-z80-go-disasm-parity-i9.md` |
+| **i37** | base csinv/csneg (Rn≠Rm): Go `aarch64dec` now decodes them (IDs 101/102), encoder coverage added; aliases intact | ✅ DONE (PR #119) | same analysis doc. The i9 sweep skip is removed; families now certified |
+| **i38** | Audit for other skipped/excluded tests + PRs that left gaps rather than fixing them | ✅ DONE (PR #118) — 14 skip sites, 13 legitimate, only the i9 gap (now fixed by i36/i37); no other papered-over gaps | `docs/notes/2026-06-08-skipped-tests-and-gaps-audit.md` |
 
 ## Open questions for Pete (awaiting input)
 
