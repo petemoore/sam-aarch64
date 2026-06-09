@@ -4,14 +4,13 @@
 #
 # Pipeline:
 #
-#   1. Build text2bin and refenc binaries.
-#   2. text2bin -flatten release.target → release.tbn
+#   1. Build the sam-aarch64 binary.
+#   2. sam-aarch64 -flatten release.target → release.bin (our spectrum4.img).
 #         (flatten step folds spectrum4's linker script + section layout
 #          into a single linear record stream; see flatten.go for the
 #          layout encoded in this pass.)
-#   3. refenc release.tbn → release.bin (our spectrum4.img).
-#   4. Build the GNU oracle (release.gnu.img) for byte-match comparison.
-#   5. cmp release.bin release.gnu.img — exit 0 on match, non-zero on
+#   3. Build the GNU oracle (release.gnu.img) for byte-match comparison.
+#   4. cmp release.bin release.gnu.img — exit 0 on match, non-zero on
 #      mismatch (with a brief summary).
 #
 # This script assumes:
@@ -49,12 +48,12 @@ if ! command -v "$AS" >/dev/null 2>&1; then
 fi
 
 # 1. Build tools.
-echo "[1/5] Building text2bin and refenc..."
-make -C "$SAMDIR" text2bin refenc >/dev/null
+echo "[1/4] Building sam-aarch64..."
+make -C "$SAMDIR" sam-aarch64 >/dev/null
 
-# 2. Run text2bin -flatten on release.target.
-echo "[2/5] text2bin -flatten release.target → release.tbn"
-"$BUILD/text2bin" -flatten \
+# 2. Run sam-aarch64 -flatten on release.target → release.bin.
+echo "[2/4] sam-aarch64 -flatten release.target → release.bin"
+"$BUILD/sam-aarch64" -flatten \
     -I "$SPECTRUM4_SRC" \
     -I "$SPECTRUM4_SRC/kernel" \
     -I "$SPECTRUM4_SRC/roms" \
@@ -62,16 +61,12 @@ echo "[2/5] text2bin -flatten release.target → release.tbn"
     -I "$SPECTRUM4_SRC/demo" \
     -I "$SPECTRUM4_SRC/libextra" \
     -origin 0xfffffff000000000 \
-    -o "$BUILD/release.tbn" \
+    -o "$BUILD/release.bin" \
     "$SPECTRUM4_SRC/targets/release.target"
-
-# 3. Run refenc to produce release.bin.
-echo "[3/5] refenc release.tbn → release.bin"
-"$BUILD/refenc" -o "$BUILD/release.bin" "$BUILD/release.tbn"
 echo "       $(wc -c <"$BUILD/release.bin") bytes"
 
-# 4. Build the GNU oracle.
-echo "[4/5] Building GNU oracle release.gnu.img..."
+# 3. Build the GNU oracle.
+echo "[3/4] Building GNU oracle release.gnu.img..."
 GNUTMP="$(mktemp -d)"
 trap 'rm -rf "$GNUTMP"' EXIT
 "$AS" \
@@ -96,8 +91,8 @@ trap 'rm -rf "$GNUTMP"' EXIT
 "$OBJCOPY" "$GNUTMP/release.elf" -O binary "$BUILD/release.gnu.img"
 echo "       $(wc -c <"$BUILD/release.gnu.img") bytes"
 
-# 5. Compare.
-echo "[5/5] cmp release.bin release.gnu.img"
+# 4. Compare.
+echo "[4/4] cmp release.bin release.gnu.img"
 if cmp -s "$BUILD/release.bin" "$BUILD/release.gnu.img"; then
     echo
     echo "BYTE-MATCH OK"

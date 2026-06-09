@@ -10,7 +10,7 @@
 //	build/test_mem.bin                   (make test-mem-offaxis)
 //	build/paged_call_test_payload.bin    (make paged-call-payload)
 //	build/enctab.enc                     (make enctab)
-//	build/text2bin                       (make text2bin)
+//	build/sam-aarch64                     (make sam-aarch64)
 //
 // Skipped automatically if build/assembler.bin is absent.
 package main
@@ -29,7 +29,7 @@ func TestVariantBootSelfTests(t *testing.T) {
 
 	asmPath := filepath.Join(root, "build", "assembler.bin")
 	if _, err := os.Stat(asmPath); err != nil {
-		t.Skip("build/assembler.bin absent — run `make m3-asm test-mem-offaxis paged-call-payload enctab text2bin`")
+		t.Skip("build/assembler.bin absent — run `make m3-asm test-mem-offaxis paged-call-payload enctab sam-aarch64`")
 	}
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
@@ -38,31 +38,23 @@ func TestVariantBootSelfTests(t *testing.T) {
 	// BUILD_TESTS assembler boot runs the disasm self-test → TEST disasm.
 	d15Path := filepath.Join(root, "build", "disasm-test.bin")
 	encPath := filepath.Join(root, "build", "enctab.enc")
-	text2binPath := filepath.Join(root, "build", "text2bin")
-	refencPath := filepath.Join(root, "build", "refenc")
+	samPath := filepath.Join(root, "build", "sam-aarch64")
 	fixturePath := filepath.Join(root, "tests", "m3", "sources", "inst_nop_ret.s")
-	for _, p := range []string{tmPath, clusterPath, p14Path, sd13Path, d15Path, encPath, text2binPath, refencPath, fixturePath} {
+	for _, p := range []string{tmPath, clusterPath, p14Path, sd13Path, d15Path, encPath, samPath, fixturePath} {
 		if _, err := os.Stat(p); err != nil {
 			t.Skipf("prerequisite missing: %s", p)
 		}
 	}
 
-	// Symbolic .tbn → compact .tbn (refenc -emit-compact-tbn): the SAM
-	// assembler consumes the compact v2 .tbn (INSN_RUN decoder), not the raw
-	// symbolic text2bin output.
+	// Assemble the fixture to a binary + compact .tbn (sam-aarch64 --emit-tbn):
+	// the SAM assembler consumes the compact v2 .tbn (INSN_RUN decoder).
 	tmp := t.TempDir()
-	symTbnPath := filepath.Join(tmp, "inst_nop_ret.tbn")
 	tbnPath := filepath.Join(tmp, "inst_nop_ret.compact.tbn")
 	goImgPath := filepath.Join(tmp, "inst_nop_ret.go.img")
-	cmd := exec.Command(text2binPath, "-o", symTbnPath, fixturePath)
+	cmd := exec.Command(samPath, "-o", goImgPath, "-emit-tbn", tbnPath, fixturePath)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("text2bin failed: %v\n%s", err, out)
-	}
-	cmd = exec.Command(refencPath, "-o", goImgPath, "-emit-compact-tbn", tbnPath, symTbnPath)
-	cmd.Dir = root
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("refenc failed: %v\n%s", err, out)
+		t.Fatalf("sam-aarch64 failed: %v\n%s", err, out)
 	}
 
 	asm, _ := os.ReadFile(asmPath)

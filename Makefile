@@ -1,5 +1,5 @@
 # sam-aarch64 build — the SAM-side Z80 aarch64 assembler + its Go-side
-# host toolchain (text2bin / refenc / enctab-gen) and round-trip gates.
+# host toolchain (sam-aarch64 / enctab-gen) and round-trip gates.
 # (The original M0 nop-to-disk round-trip oracle was retired once the
 # M3–M6 fixture corpora + the m6-release 3-way gate fully subsumed it.)
 
@@ -18,13 +18,14 @@ all: m3-asm m3-asm-prod
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: text2bin bin2text test-m1 ci-m1
+.PHONY: sam-aarch64 test-m1 ci-m1
 
-text2bin:
-	cd tools/text2bin && go build -o $(CURDIR)/$(BUILD)/text2bin .
-
-bin2text:
-	cd tools/bin2text && go build -o $(CURDIR)/$(BUILD)/bin2text .
+# sam-aarch64 — the integrated host assembler: source -> {binary, compact .tbn},
+# .tbn -> binary, .tbn -> text. Replaces the former text2bin/refenc/bin2text
+# trio; the "symbolic" record stream is an in-memory IR, never serialized to
+# disk (i48 decision A).
+sam-aarch64:
+	cd tools/sam-aarch64 && go build -o $(CURDIR)/$(BUILD)/sam-aarch64 .
 
 # aarch64dec — Go-side aarch64 disassembler (strand B); inverse of aarch64enc.
 .PHONY: aarch64dec test-disasm ci-disasm ci-disasm-roundtrip
@@ -48,7 +49,7 @@ ci-disasm: test-disasm
 ci-disasm-roundtrip: test-disasm
 	./tools/run-disasm-roundtrip.sh
 
-test-m1: text2bin bin2text
+test-m1: sam-aarch64
 	cd tools/sam-aarch64-format && go test ./...
 	cd tools/sam-aarch64 && go test ./...
 	./tests/m1/run-gnu-as-check.sh
@@ -66,13 +67,10 @@ ci-m1: test-m1
 sysreg-sync-check:
 	cd tools/sam-aarch64-format && go test -run TestSysregZ80Sync -v ./...
 
-.PHONY: enctab-gen refenc enctab test-m2 ci-m2
+.PHONY: enctab-gen enctab test-m2 ci-m2
 
 enctab-gen:
 	cd tools/enctab-gen && go build -o $(CURDIR)/$(BUILD)/enctab-gen .
-
-refenc:
-	cd tools/refenc && go build -o $(CURDIR)/$(BUILD)/refenc .
 
 # Build the binary enctab.enc artefact from the vendored MRA snapshot.
 # Includes both MRA-derived (data.go) and hand-curated (manual_forms.go)
@@ -94,7 +92,7 @@ enctab-regen-source: enctab-gen
 	    -gopkg tools/aarch64enc/data.go \
 	    -out $(BUILD)/enctab.enc
 
-test-m2: refenc text2bin
+test-m2: sam-aarch64
 	cd tools/sam-aarch64-format && go test ./...
 	cd tools/aarch64enc && go test ./...
 	cd tools/enctab-gen && go test ./...
@@ -272,9 +270,9 @@ m3-disk: m3-asm test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data 
 	    $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/m3-test.mgt
 
 # test-m3 — sweep every fixture under tests/m3/sources/ end-to-end:
-# text2bin → build-m3-disk → SimCoupé → samfile extract OUT →
+# sam-aarch64 → build-m3-disk → SimCoupé → samfile extract OUT →
 # byte-compare against aarch64-{none-elf,linux-gnu}-as + objcopy -O binary.
-test-m3: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk text2bin
+test-m3: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk sam-aarch64
 	./tests/m3/run-roundtrip.sh
 
 ci-m3: test-m3
@@ -286,7 +284,7 @@ ci-m3: test-m3
 # but feeds it M4-fixture .tbn inputs and uses an oracle that includes
 # `ld -Ttext=0` so :lo12: / branch-to-label relocations resolve.  See
 # docs/specs/2026-05-24-m4-symbols-multipass-design.md §3.
-test-m4: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk text2bin
+test-m4: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk sam-aarch64
 	./tests/m4/run-roundtrip.sh
 
 ci-m4: test-m4
@@ -298,10 +296,10 @@ ci-m4: test-m4
 # Useful as a correctness check that the BUILD_TESTS=1 / undefined
 # fork in src/assembler.asm doesn't accidentally change emit
 # behaviour.  ci-m{3,4} cover the test variant; these cover prod.
-test-m3-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
+test-m3-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk sam-aarch64
 	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m3/run-roundtrip.sh
 
-test-m4-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
+test-m4-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk sam-aarch64
 	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m4/run-roundtrip.sh
 
 ci-m3-prod: test-m3-prod
@@ -311,16 +309,16 @@ ci-m4-prod: test-m4-prod
 .PHONY: test-m5 ci-m5 test-m5-prod ci-m5-prod
 
 # test-m5 — sweep every fixture under tests/m5/sources/.  Same pipeline
-# as test-m4 (text2bin → build-m3-disk → SimCoupé → samfile extract OUT →
+# as test-m4 (sam-aarch64 → build-m3-disk → SimCoupé → samfile extract OUT →
 # byte-compare against aarch64-*-as + ld -Ttext=0 + objcopy -O binary).
 # Per docs/specs/2026-05-27-m5-compound-operands-directives-design.md §3.
 #
 # The GitHub Actions `m5` job is added in M5 PR E (the final integration
 # PR); for now ci-m5 / ci-m5-prod run locally + via the dev container.
-test-m5: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk text2bin
+test-m5: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk sam-aarch64
 	./tests/m5/run-roundtrip.sh
 
-test-m5-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
+test-m5-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk sam-aarch64
 	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m5/run-roundtrip.sh
 
 ci-m5: test-m5
@@ -330,16 +328,16 @@ ci-m5-prod: test-m5-prod
 .PHONY: test-m6 ci-m6 test-m6-prod ci-m6-prod
 
 # test-m6 — sweep every fixture under tests/m6/sources/.  Same pipeline
-# as test-m5 (text2bin → build-m3-disk → SimCoupé → samfile extract OUT
+# as test-m5 (sam-aarch64 → build-m3-disk → SimCoupé → samfile extract OUT
 # → byte-compare against aarch64-*-as + ld -Ttext=0 + objcopy -O binary).
 # Per docs/specs/2026-05-27-m6-paged-out-design.md.  The M6 fixtures
 # exercise the paged-OUT machinery (sections-B emit + HSAVE auto-paging
 # across &C000) by emitting > 16 KB of output to cross the OUT_ZONE
 # low → high boundary.
-test-m6: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk text2bin
+test-m6: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk sam-aarch64
 	./tests/m6/run-roundtrip.sh
 
-test-m6-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk text2bin
+test-m6-prod: m3-asm-prod enctab $(BUILD)/build-m3-disk sam-aarch64
 	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-prod.bin ./tests/m6/run-roundtrip.sh
 
 ci-m6: test-m6
@@ -348,18 +346,22 @@ ci-m6-prod: test-m6-prod
 
 .PHONY: release-stripped-tbn
 
-# Build the comment-stripped, flattened spectrum4 release.tbn (~88 KB)
-# that fits the SAM assembler's 96 KB IN-buffer ceiling.  Used for the
+# Build the comment-stripped, flattened spectrum4 release .tbn that fits
+# the SAM assembler's 96 KB IN-buffer ceiling.  Used for the
 # release-bytematch milestone iteration (FAIL40+ coverage-gap closure).
-# Without -strip-comments the flattened release.tbn is ~408 KB and the
+# Without -strip-comments the flattened release source is ~408 KB and the
 # assembler trips FAIL03 (in_file_pages > 6) immediately at load.
+#
+# Emits the COMPACT overlay .tbn (the form the SAM reader consumes since
+# the v2 instruction-overlay flip); the discardable -o binary is the Go-side
+# assembly of the same source.
 #
 # SPECTRUM4_SRC defaults to ~/git/spectrum4/src/spectrum4; override on
 # the command line if your checkout lives elsewhere.
 SPECTRUM4_SRC ?= $(HOME)/git/spectrum4/src/spectrum4
 
-release-stripped-tbn: text2bin
-	$(BUILD)/text2bin -flatten -strip-comments \
+release-stripped-tbn: sam-aarch64
+	$(BUILD)/sam-aarch64 -flatten -strip-comments \
 	    -I $(SPECTRUM4_SRC) \
 	    -I $(SPECTRUM4_SRC)/kernel \
 	    -I $(SPECTRUM4_SRC)/roms \
@@ -367,6 +369,7 @@ release-stripped-tbn: text2bin
 	    -I $(SPECTRUM4_SRC)/demo \
 	    -I $(SPECTRUM4_SRC)/libextra \
 	    -origin 0xfffffff000000000 \
-	    -o $(BUILD)/release-stripped.tbn \
+	    -o $(BUILD)/release-stripped.img \
+	    --emit-tbn $(BUILD)/release-stripped.tbn \
 	    $(SPECTRUM4_SRC)/targets/release.target
 	@echo "release-stripped.tbn: $$(stat -f%z $(BUILD)/release-stripped.tbn 2>/dev/null || stat -c%s $(BUILD)/release-stripped.tbn) bytes"

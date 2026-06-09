@@ -18,7 +18,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
 # Build all prerequisites once at the top so per-fixture runs are quick.
-make -s text2bin enctab m3-asm build-m3-disk
+make -s sam-aarch64 enctab m3-asm build-m3-disk
 
 fail=0
 total=0

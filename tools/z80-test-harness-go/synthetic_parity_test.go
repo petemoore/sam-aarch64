@@ -255,13 +255,9 @@ func TestSyntheticParity_ExtendedSysName(t *testing.T) {
 	// boot; serve both so the HGTHD requests resolve.
 	d15, _ := os.ReadFile(filepath.Join(root, "build", "disasm.bin"))
 
-	text2bin := filepath.Join(root, "build", "text2bin")
-	if _, e := os.Stat(text2bin); e != nil {
-		t.Skipf("build/text2bin not built: %v", e)
-	}
-	refenc := filepath.Join(root, "build", "refenc")
-	if _, e := os.Stat(refenc); e != nil {
-		t.Skipf("build/refenc not built: %v", e)
+	sam := filepath.Join(root, "build", "sam-aarch64")
+	if _, e := os.Stat(sam); e != nil {
+		t.Skipf("build/sam-aarch64 not built: %v", e)
 	}
 	tmp := t.TempDir()
 	srcPath := filepath.Join(tmp, "sysn.s")
@@ -272,17 +268,12 @@ func TestSyntheticParity_ExtendedSysName(t *testing.T) {
 	if err := os.WriteFile(srcPath, body, 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	// Symbolic .tbn → compact .tbn (refenc -emit-compact-tbn): the SAM
-	// assembler consumes the compact v2 .tbn (INSN_RUN decoder), not the raw
-	// symbolic text2bin output.
-	symTbnPath := filepath.Join(tmp, "sysn.tbn")
+	// Assemble to a binary + compact .tbn (sam-aarch64 --emit-tbn): the SAM
+	// assembler consumes the compact v2 .tbn (INSN_RUN decoder).
 	tbnPath := filepath.Join(tmp, "sysn.compact.tbn")
 	goImgPath := filepath.Join(tmp, "sysn.go.img")
-	if out, e := exec.Command(text2bin, "-o", symTbnPath, srcPath).CombinedOutput(); e != nil {
-		t.Fatalf("text2bin failed on the extended sysname fixture:\n%s", out)
-	}
-	if out, e := exec.Command(refenc, "-o", goImgPath, "-emit-compact-tbn", tbnPath, symTbnPath).CombinedOutput(); e != nil {
-		t.Fatalf("refenc failed on the extended sysname fixture:\n%s", out)
+	if out, e := exec.Command(sam, "-o", goImgPath, "-emit-tbn", tbnPath, srcPath).CombinedOutput(); e != nil {
+		t.Fatalf("sam-aarch64 failed on the extended sysname fixture:\n%s", out)
 	}
 	tbn, _ := os.ReadFile(tbnPath)
 

@@ -3,8 +3,8 @@
 #
 # Pipeline per docs/specs/2026-05-24-m3-z80-emitter-design.md §3 (Layer 2):
 #
-#   1. text2bin INPUT.s   → INPUT.tbn
-#   2. build-m3-disk assembler.bin enctab.enc INPUT.tbn → OUT.mgt
+#   1. sam-aarch64 INPUT.s → INPUT.img + INPUT.compact.tbn
+#   2. build-m3-disk assembler.bin enctab.enc INPUT.compact.tbn → OUT.mgt
 #   3. SimCoupé runs the disk; M3 reads IN, writes OUT.
 #   4. samfile cat OUT → ours.bin
 #   5. aarch64-{none,linux-gnu}-as INPUT.s | objcopy -O binary → gnu.bin
@@ -61,7 +61,7 @@ mkdir -p build
 # because that would force the test variant even when the caller wants
 # the prod variant.
 ASSEMBLER_BIN="${ASSEMBLER_BIN:-$ROOT/build/assembler.bin}"
-make -s text2bin refenc enctab build-m3-disk sysreg-data disasm-payload
+make -s sam-aarch64 enctab build-m3-disk sysreg-data disasm-payload
 
 if [ ! -f "$ASSEMBLER_BIN" ]; then
     echo "ERROR: assembler binary not found: $ASSEMBLER_BIN" >&2
@@ -69,15 +69,13 @@ if [ ! -f "$ASSEMBLER_BIN" ]; then
     exit 2
 fi
 
-# 1. text2bin → INPUT.tbn (symbolic), then refenc → INPUT.compact.tbn.
+# 1. sam-aarch64 INPUT.s → INPUT.img + INPUT.compact.tbn.
 #
 # The SAM assembler consumes the COMPACT v2 .tbn (the INSN_RUN decoder);
-# the raw symbolic text2bin output is fed to refenc -emit-compact-tbn to
-# produce it.  build-m3-disk below gets the compact .tbn as IN.
-echo "--- text2bin ---"
-"$ROOT/build/text2bin" -o "build/${base}.tbn" "$fixture"
-echo "--- refenc (emit compact .tbn) ---"
-"$ROOT/build/refenc" -o "build/${base}.img" -emit-compact-tbn "build/${base}.compact.tbn" "build/${base}.tbn"
+# the integrated tool assembles the source and emits the compact .tbn
+# directly via --emit-tbn.  build-m3-disk below gets the compact .tbn as IN.
+echo "--- sam-aarch64 (assemble + emit compact .tbn) ---"
+"$ROOT/build/sam-aarch64" -o "build/${base}.img" --emit-tbn "build/${base}.compact.tbn" "$fixture"
 
 # 2. build-m3-disk with the COMPACT .tbn as IN.
 #

@@ -5,7 +5,7 @@
 # This is the M6 headline check: "spectrum4 release.bin byte-match on SAM".
 #
 # Pipeline:
-#   1. text2bin -flatten -strip-comments release.target → release-stripped.tbn (~88 KB)
+#   1. sam-aarch64 -flatten -strip-comments release.target → release-stripped.tbn (~88 KB)
 #   2. build the production assembler + a disk image with the .tbn as IN
 #   3. SimCoupé assembles it (two passes, paged IN across pages 7..12,
 #      paged OUT, HSAVE) and emits OUT
@@ -50,7 +50,7 @@ if ! command -v "$SAMFILE" >/dev/null 2>&1; then
 fi
 
 echo "=== [1/5] build Mac/Go-side tools + production assembler ==="
-make -s text2bin refenc enctab sysreg-data disasm-payload build-m3-disk m3-asm-prod
+make -s sam-aarch64 enctab sysreg-data disasm-payload build-m3-disk m3-asm-prod
 
 echo "=== [2/5] flatten + strip release.target → release-stripped.tbn ==="
 make -s release-stripped-tbn
