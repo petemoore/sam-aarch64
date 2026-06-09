@@ -23,7 +23,7 @@ func handCraftedFiles() [][]byte {
 		id, _ := format.MnemonicID("mov")
 		rw.WriteInst(id, 4, ow.Bytes())
 		var buf bytes.Buffer
-		format.WriteFile(&buf, st, rw.Bytes())
+		format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 		out = append(out, buf.Bytes())
 	}
 
@@ -41,7 +41,7 @@ func handCraftedFiles() [][]byte {
 			rw.WriteInst(id, 4, ow.Bytes())
 		}
 		var buf bytes.Buffer
-		format.WriteFile(&buf, st, rw.Bytes())
+		format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 		out = append(out, buf.Bytes())
 	}
 
@@ -80,7 +80,7 @@ func handCraftedFiles() [][]byte {
 			rw.WriteInst(id, 2, ow.Bytes())
 		}
 		var buf bytes.Buffer
-		format.WriteFile(&buf, st, rw.Bytes())
+		format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 		out = append(out, buf.Bytes())
 	}
 
@@ -101,7 +101,7 @@ func handCraftedFiles() [][]byte {
 			rw.WriteInst(id, 3, ow.Bytes())
 		}
 		var buf bytes.Buffer
-		format.WriteFile(&buf, st, rw.Bytes())
+		format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 		out = append(out, buf.Bytes())
 	}
 
@@ -124,7 +124,7 @@ func handCraftedFiles() [][]byte {
 			rw.WriteInst(id, 3, ow.Bytes())
 		}
 		var buf bytes.Buffer
-		format.WriteFile(&buf, st, rw.Bytes())
+		format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 		out = append(out, buf.Bytes())
 	}
 
@@ -157,7 +157,7 @@ func handCraftedFiles() [][]byte {
 		}
 
 		var buf bytes.Buffer
-		format.WriteFile(&buf, st, rw.Bytes())
+		format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 		out = append(out, buf.Bytes())
 	}
 
@@ -175,7 +175,7 @@ func handCraftedFiles() [][]byte {
 		retID, _ := format.MnemonicID("ret")
 		rw.WriteInst(retID, 0, nil)
 		var buf bytes.Buffer
-		format.WriteFile(&buf, st, rw.Bytes())
+		format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 		out = append(out, buf.Bytes())
 	}
 
@@ -204,7 +204,7 @@ func handCraftedFiles() [][]byte {
 		}
 
 		var buf bytes.Buffer
-		format.WriteFile(&buf, st, rw.Bytes())
+		format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 		out = append(out, buf.Bytes())
 	}
 

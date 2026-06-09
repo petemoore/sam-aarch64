@@ -88,9 +88,9 @@ reader_init:
                 jp      nz, fail
                 inc     hl
 
-; -- Validate version u16 LE = 1 ---------------------------------------
+; -- Validate version u16 LE = 2 (compact-`.tbn` v2, M8 / i39a) ---------
                 ld      a, (hl)
-                cp      1
+                cp      2
                 jp      nz, fail
                 inc     hl
                 ld      a, (hl)
@@ -112,7 +112,7 @@ reader_init:
 reader_init_skip_names:
                 ld      a, d
                 or      e
-                jr      z, reader_init_done
+                jr      z, reader_init_header_tables
 
                 push    de                  ; remaining count
                 ld      c, (hl)
@@ -128,7 +128,325 @@ reader_init_skip_names:
                 dec     de
                 jp      reader_init_skip_names
 
+
+; -----------------------------------------------------------------------
+; Header tables (compact `.tbn` v2 — i39a PR(d)).
+;
+; Between the name table and the first record the file carries two tables
+; that move label / numeric-local DEFINITIONS out of the record stream:
+;
+;   Label table:  [count u16 LE]  then count rows: [name_id u16 LE][delta uvarint]
+;   Local table:  [count u16 LE]  then count rows: [digit u8][delta uvarint]
+;
+; Each row's `delta` is the increase in the byte offset from the origin
+; over the previous row; rows are in ascending-offset order, so the
+; absolute offset = running sum of deltas (each table's accumulator
+; starts at 0).  See tools/sam-aarch64-format/header_tables.go
+; (write/readLabelTable, write/readLocalTable) — this mirrors it.
+;
+; Origin-offset == symbol value (load-bearing assumption): every gated
+; target/fixture origin is 4GB-aligned (low 32 bits == 0 — spectrum4 is
+; 0xfffffff000000000, fixtures are 0), so `offset` IS the low-32-bits
+; value the Z80 stores as a symbol's PASS_PC-style address.  We therefore
+; store the accumulated offset DIRECTLY as the symbol/local value — no
+; origin arithmetic.  The m6-release byte-match gate is the backstop that
+; would catch any future non-4GB-aligned origin (none exists today).
+;
+; reader_init runs once per pass.  Seeding the symbol / local tables must
+; happen exactly once, so it is gated on PASS_MODE == PASS_PASS1
+; (symbol_table_init / local_label_table_init run before pass 1's
+; reset_reader_to_in_buf; pass 2 reuses the built tables — it must parse
+; the tables to advance HL past them, but must NOT re-insert).  We latch
+; pass-1-ness once into reader_seed_pass1 and reuse it for both tables.
+;
+; The accumulator doubles as both the running 32-bit offset AND the value
+; symbol_insert / local_def_append consume: symbol_value_buf for labels,
+; local_label_pc_buf for locals — both live in fixed RAM, so they survive
+; the insert calls (which clobber all registers).
+; -----------------------------------------------------------------------
+reader_init_header_tables:
+; The IN reading cursor lives in (reader_in_cursor) throughout this stage
+; — a single memory pointer, since the insert calls (symbol_insert /
+; local_def_append) clobber all registers including HL.  Seed it from the
+; HL we arrived with (section-A offset of the label-table count word).
+                ld      (reader_in_cursor), hl
+
+; Latch pass-1-ness once (1 = seed, 0 = parse-only) for both tables.
+                ld      a, (PASS_MODE)
+                cp      PASS_PASS1
+                ld      a, 0
+                jr      nz, reader_seed_set
+                inc     a                           ; A = 1
+reader_seed_set:
+                ld      (reader_seed_pass1), a
+
+; ----- Label table ----------------------------------------------------
+; Read count u16 LE → reader_table_count.
+                call    reader_read_next_byte       ; A = count LSB
+                ld      c, a
+                call    reader_read_next_byte       ; A = count MSB
+                ld      b, a
+                ld      (reader_table_count), bc
+
+; Zero the label accumulator (symbol_value_buf) — running 32-bit offset.
+                xor     a
+                ld      (symbol_value_buf + 0), a
+                ld      (symbol_value_buf + 1), a
+                ld      (symbol_value_buf + 2), a
+                ld      (symbol_value_buf + 3), a
+
+reader_label_loop:
+                ld      bc, (reader_table_count)
+                ld      a, b
+                or      c
+                jr      z, reader_label_done
+                dec     bc
+                ld      (reader_table_count), bc
+
+; Row: [name_id u16 LE][delta uvarint].
+                call    reader_read_next_byte       ; name_id LSB
+                ld      c, a
+                call    reader_read_next_byte       ; name_id MSB
+                ld      b, a
+                ld      (reader_row_name_id), bc
+
+; Decode delta and add it (32-bit) into symbol_value_buf in place.
+                ld      hl, symbol_value_buf
+                call    reader_uvarint_add
+
+; Seed only on pass 1.  symbol_value_buf already holds the accumulated
+; value; symbol_insert wants HL = name_id.  The reading cursor is in
+; (reader_in_cursor) (untouched by the insert), so no save/restore of it
+; is needed; we persist the LMPR page into IN_POS_PAGE first so a later
+; in_map_current re-maps the right IN page after the insert clobbers LMPR.
+                ld      a, (reader_seed_pass1)
+                or      a
+                jr      z, reader_label_loop
+                in      a, (250)                    ; snapshot current IN LMPR
+                ld      (IN_POS_PAGE), a
+                ld      hl, (reader_row_name_id)
+                call    symbol_insert               ; clobbers A,BC,DE,HL
+                call    in_map_current              ; re-map IN page after insert
+                jr      reader_label_loop
+
+reader_label_done:
+
+; ----- Local table ----------------------------------------------------
+; Read count u16 LE → reader_table_count.
+                call    reader_read_next_byte       ; A = count LSB
+                ld      c, a
+                call    reader_read_next_byte       ; A = count MSB
+                ld      b, a
+                ld      (reader_table_count), bc
+
+; Zero the local accumulator (local_label_pc_buf).
+                xor     a
+                ld      (local_label_pc_buf + 0), a
+                ld      (local_label_pc_buf + 1), a
+                ld      (local_label_pc_buf + 2), a
+                ld      (local_label_pc_buf + 3), a
+
+reader_local_loop:
+                ld      bc, (reader_table_count)
+                ld      a, b
+                or      c
+                jr      z, reader_local_done
+                dec     bc
+                ld      (reader_table_count), bc
+
+; Row: [digit u8][delta uvarint].
+                call    reader_read_next_byte       ; A = digit
+                ld      (reader_row_digit), a
+
+; Decode delta and add it (32-bit) into local_label_pc_buf in place.
+                ld      hl, local_label_pc_buf
+                call    reader_uvarint_add
+
+                ld      a, (reader_seed_pass1)
+                or      a
+                jr      z, reader_local_loop
+                in      a, (250)                    ; snapshot current IN LMPR
+                ld      (IN_POS_PAGE), a
+                ld      a, (reader_row_digit)
+                call    local_def_append            ; clobbers regs
+                call    in_map_current              ; re-map IN page after append
+                jr      reader_local_loop
+
+reader_local_done:
+; Hand the reading cursor back to HL for reader_init_done's persist.
+                ld      hl, (reader_in_cursor)
+                jp      reader_init_done
+
+
+; -----------------------------------------------------------------------
+; reader_read_next_byte — page-safe single-byte read from the IN cursor
+; held in (reader_in_cursor).
+;
+; Normalises the cursor into section A (bumping LMPR if a page boundary
+; was crossed) so multi-byte rows / varints that straddle &4000 read
+; correct bytes, then A := (cursor); cursor++.  Mirrors how the
+; name-table skip and the reader_next_kind copy loop renormalise.
+;
+; The cursor is in memory (not a register) because the table loops call
+; symbol_insert / local_def_append between reads, and those clobber HL.
+;
+; Input:  (reader_in_cursor) = section-A offset of the next byte; IN page
+;         mapped (LMPR is only bumped here / by the inserts' re-map, never
+;         reset, until reader_init_done).
+; Output: A = byte; (reader_in_cursor) advanced by 1 (normalised first).
+; Clobbers: A, HL.
+; -----------------------------------------------------------------------
+reader_read_next_byte:
+                ld      hl, (reader_in_cursor)
+                call    in_normalise_hl             ; clobbers A only
+                ld      a, (hl)
+                inc     hl
+                ld      (reader_in_cursor), hl
+                ret
+
+
+; -----------------------------------------------------------------------
+; reader_uvarint_add — decode an unsigned LEB128 varint from the IN
+; cursor and add the decoded 32-bit value to the 4-byte LE accumulator
+; whose address is passed in HL.
+;
+; LEB128: low 7 bits of each byte are data, high bit = continuation;
+; groups are little-endian (first byte = least-significant 7 bits).  We
+; decode into a 4-byte LE temp (reader_varint_tmp), shifting each group
+; into bits [shift, shift+7).  A value wider than 32 bits (a 6th group, or
+; any group landing entirely above bit 31) is impossible for this tool
+; (>4GB offset) — jp fail, honest rather than silent.
+;
+; Input:  HL = address of a 4-byte LE accumulator (in fixed RAM).  The IN
+;         reading cursor is (reader_in_cursor); reader_read_next_byte
+;         advances it.
+; Output: (accumulator) += decoded value.  (reader_in_cursor) advanced
+;         past the varint.  Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+reader_uvarint_add:
+                ld      (reader_varint_acc_ptr), hl
+
+; Zero the 4-byte decode temp and the shift counter.
+                xor     a
+                ld      (reader_varint_tmp + 0), a
+                ld      (reader_varint_tmp + 1), a
+                ld      (reader_varint_tmp + 2), a
+                ld      (reader_varint_tmp + 3), a
+                ld      (reader_varint_shift), a    ; bit position of next group
+
+reader_uvarint_byte:
+                call    reader_read_next_byte       ; A = byte (cursor advanced)
+                ld      (reader_varint_byte), a
+
+; Merge low 7 bits into reader_varint_tmp at reader_varint_shift.
+                push    af
+                call    reader_varint_merge_group
+                pop     af
+
+; Continuation? high bit set → more groups follow.
+                and     &80
+                jr      z, reader_uvarint_done
+
+; Advance shift by 7.  If shift reaches 35 (a 6th group) the value cannot
+; fit 32 bits — fail.  (The shift==28 group's bits above 31 are caught in
+; reader_varint_merge_group's overflow guard.)
+                ld      a, (reader_varint_shift)
+                add     a, 7
+                ld      (reader_varint_shift), a
+                cp      35
+                jr      c, reader_uvarint_byte
+                jp      fail                        ; >32-bit varint impossible
+
+reader_uvarint_done:
+; acc += reader_varint_tmp (32-bit LE add).
+                ld      hl, (reader_varint_acc_ptr)
+                ld      de, reader_varint_tmp
+                ld      b, 4
+                or      a                           ; clear CF
+reader_uvarint_add_loop:
+                ld      a, (de)
+                adc     a, (hl)
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    reader_uvarint_add_loop
+                ret
+
+
+; reader_varint_merge_group — OR the low 7 bits of reader_varint_byte
+; into reader_varint_tmp (4-byte LE) starting at bit reader_varint_shift.
+;
+; shift is a multiple of 7 in {0,7,14,21,28}.  We compute the byte index
+; (shift / 8) and bit position (shift % 8), then shift the 7-bit group
+; into a 16-bit window straddling at most two accumulator bytes.  For the
+; shift==28 group (bits 28..34), any bit at position >= 32 must be 0
+; (the value can't exceed 32 bits) — guarded explicitly.
+; Clobbers: A, BC, DE, HL.
+reader_varint_merge_group:
+                ld      a, (reader_varint_byte)
+                and     &7F                         ; A = 7-bit data group
+                ld      e, a                        ; E = group value (bits 0..6)
+                ld      d, 0                         ; DE = group, 16-bit
+
+; Shift DE left by (reader_varint_shift % 8) bits.
+                ld      a, (reader_varint_shift)
+                and     7                           ; A = bit offset within a byte
+                jr      z, reader_merge_shift_done
+                ld      b, a
+reader_merge_shift_loop:
+                sla     e
+                rl      d
+                djnz    reader_merge_shift_loop
+reader_merge_shift_done:
+; Byte index = reader_varint_shift / 8.
+                ld      a, (reader_varint_shift)
+                rrca
+                rrca
+                rrca
+                and     &1F                         ; A = shift / 8 (0..4)
+; index 0..2: the 16-bit window (DE) lands wholly within tmp[idx..idx+1].
+; index 3   : low byte → tmp[3]; high byte must be 0 (bits >= 32).
+; index >=4 : both bytes would be >= bit 32 — impossible.
+                cp      4
+                jr      c, reader_merge_idx_ok
+                jp      fail                        ; group entirely above bit 31
+reader_merge_idx_ok:
+                ld      c, a                        ; C = byte index
+                ld      b, 0
+                ld      hl, reader_varint_tmp
+                add     hl, bc                      ; HL → tmp[idx]
+; tmp[idx] |= E.
+                ld      a, (hl)
+                or      e
+                ld      (hl), a
+; The high half (D) lands in tmp[idx+1].  If idx == 3, tmp[idx+1] would be
+; tmp[4] which doesn't exist — D must be 0 (no bits above 31).
+                ld      a, c
+                cp      3
+                jr      nz, reader_merge_high_ok
+                ld      a, d
+                or      a
+                jp      nz, fail                    ; bits above 31 set
+                ret
+reader_merge_high_ok:
+                inc     hl                          ; HL → tmp[idx+1]
+                ld      a, (hl)
+                or      d
+                ld      (hl), a
+                ret
+
+
+; reader_init_done is reached after both header tables are parsed (and,
+; on pass 1, seeded).  HL = section-A offset of the first record byte.
 reader_init_done:
+; Normalise a page-boundary cursor before persisting.  The header-table
+; parse (PR(d)) hands HL straight from reader_in_cursor, which may sit at
+; &4000 when the last byte read ended on an IN page boundary; persisting
+; (page N, &4000) instead of (page N+1, 0) would later confuse
+; reader_at_end (same false-"not at end" trap reader_next_kind guards at
+; its in_normalise_hl).  No-op on the name-table-skip entry path (HL is
+; already < &4000 there).
+                call    in_normalise_hl
 ; Persist position back to the cursor, then restore LMPR_ENCTAB so the
 ; encoder can read ENCTAB.
                 call    in_persist_hl
@@ -263,3 +581,16 @@ reader_name_count:      defw    0
 reader_curr_kind:       defb    0
 reader_curr_payload:    defw    0
 reader_curr_len:        defw    0
+
+; Header-table parse scratch (i39a PR(d) — reader_init_header_tables).
+reader_in_cursor:       defw    0   ; section-A read cursor (held in RAM so
+                                    ;   symbol_insert/local_def_append can
+                                    ;   clobber registers between byte reads)
+reader_seed_pass1:      defb    0   ; 1 = pass 1 (seed tables); 0 = parse-only
+reader_table_count:     defw    0   ; rows remaining in the current table
+reader_row_name_id:     defw    0   ; current label row's name_id
+reader_row_digit:       defb    0   ; current local row's digit
+reader_varint_acc_ptr:  defw    0   ; address of the 4-byte LE accumulator
+reader_varint_tmp:      defb    0, 0, 0, 0  ; decoded varint (4-byte LE)
+reader_varint_byte:     defb    0   ; the LEB128 byte being merged
+reader_varint_shift:    defb    0   ; bit position of the next group

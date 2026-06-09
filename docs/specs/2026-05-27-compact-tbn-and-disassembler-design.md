@@ -1,12 +1,13 @@
 # Compact `.tbn` format + built-in disassembler
 
-> ⚠️ **Historical (i1 baseline) — superseded by the v2 overlay format (M8 / i39 + i48).**
-> This note designed the **i1** compaction (`KindLitInsts` + `KindLitData`,
-> shipped as PRs #121/#122/#124). The next-gen v2 redesign — the instruction
-> overlay that unifies literal and symbolic instructions into one run, with a
-> single serialized format and a pass-free syntactic encoder — supersedes it.
-> Current design: `docs/specs/2026-06-08-compact-tbn-nextgen-design.md` (i39)
-> and `docs/specs/2026-06-08-i48-single-format-syntactic-encoder-design.md`
+> ⚠️ **Superseded baseline.** This note designed the **i1** compaction
+> (`KindLitInsts` + `KindLitData`, shipped as PRs #121/#122/#124). The v2
+> instruction-overlay format — which unifies literal and symbolic
+> instructions into one `KindInsnRun` record — supersedes it. The current
+> authoritative on-disk encoding is
+> **`docs/specs/2026-06-08-tbn-binary-format-reference.md`** (v2); the v2
+> design rationale is `docs/specs/2026-06-08-compact-tbn-nextgen-design.md`
+> (i39) and `docs/specs/2026-06-08-i48-single-format-syntactic-encoder-design.md`
 > (i48). Retained as the i1 historical record.
 
 **Status**: planning note, no code yet. Added 2026-05-27 to capture the design discussion before it's lost.

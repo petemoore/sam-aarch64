@@ -45,25 +45,36 @@ func TestReleasePagedInLoad(t *testing.T) {
 	sd13Path := filepath.Join(root, "build", "sysreg_data.bin")
 	d15Path := filepath.Join(root, "build", "disasm.bin")
 	text2binPath := filepath.Join(root, "build", "text2bin")
+	refencPath := filepath.Join(root, "build", "refenc")
 	releaseSrc := filepath.Join(root, "tests", "m6", "release", "release.s")
 	releaseImg := filepath.Join(root, "tests", "m6", "release", "release.img")
 
-	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, text2binPath, releaseSrc, releaseImg} {
+	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, text2binPath, refencPath, releaseSrc, releaseImg} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make m3-asm-prod enctab text2bin sysreg-data disasm-payload`", p)
+			t.Skipf("prerequisite missing: %s\n  run `make m3-asm-prod enctab text2bin refenc sysreg-data disasm-payload`", p)
 		}
 	}
 
 	// Build the flattened, comment-stripped release .tbn at the release origin
-	// (matches `make release-stripped-tbn`).  ~88 KB → 6 IN pages (7..12).
-	tbnPath := filepath.Join(t.TempDir(), "release.tbn")
+	// (matches `make release-stripped-tbn`), then compact it
+	// (refenc -emit-compact-tbn).  ~88 KB symbolic → 6 IN pages (7..12); the
+	// SAM assembler consumes the compact v2 .tbn (INSN_RUN decoder).
+	tmp := t.TempDir()
+	symTbnPath := filepath.Join(tmp, "release.tbn")
+	tbnPath := filepath.Join(tmp, "release.compact.tbn")
+	goImgPath := filepath.Join(tmp, "release.go.img")
 	cmd := exec.Command(text2binPath,
 		"-flatten", "-strip-comments",
 		"-origin", "0xfffffff000000000",
-		"-o", tbnPath, releaseSrc)
+		"-o", symTbnPath, releaseSrc)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("text2bin failed: %v\n%s", err, out)
+	}
+	cmd = exec.Command(refencPath, "-o", goImgPath, "-emit-compact-tbn", tbnPath, symTbnPath)
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("refenc failed: %v\n%s", err, out)
 	}
 
 	asm, _ := os.ReadFile(asmPath)
@@ -72,14 +83,18 @@ func TestReleasePagedInLoad(t *testing.T) {
 	d15, _ := os.ReadFile(d15Path)
 	in, err := os.ReadFile(tbnPath)
 	if err != nil {
-		t.Fatalf("read release.tbn: %v", err)
+		t.Fatalf("read release.compact.tbn: %v", err)
 	}
 	wantImg, _ := os.ReadFile(releaseImg)
 
+	// The compact .tbn collapses literal runs, so the ~88 KB symbolic source
+	// shrinks to ~47 KB → 3 IN pages (vs 6 for the symbolic form).  The
+	// regression this guards is multi-page paged-IN HLOAD fidelity, so assert
+	// >1 page; the byte-match below is the real correctness check.
 	wantPages := (len(in) + pageSize - 1) / pageSize
-	t.Logf("release.tbn: %d bytes (%d IN pages)", len(in), wantPages)
-	if wantPages < 6 {
-		t.Fatalf("release.tbn is only %d pages; expected >=6 for the paged-IN regression", wantPages)
+	t.Logf("release.compact.tbn: %d bytes (%d IN pages)", len(in), wantPages)
+	if wantPages < 2 {
+		t.Fatalf("release.compact.tbn is only %d page; expected >=2 for the paged-IN regression", wantPages)
 	}
 
 	// (1) WITH sd13 + d15 → completes + byte-matches the vendored oracle.
@@ -106,10 +121,21 @@ func TestReleasePagedInLoad(t *testing.T) {
 		t.Logf("OUT byte-matches release.img (%d B)", len(wantImg))
 	}
 
-	// (2) WITHOUT sd13 → traps, and the diagnostic names "sd13" as unserved.
-	resNo := RunWithFiles(asm, enc, in, nil, 30*time.Second)
-	if resNo.Passed {
-		t.Fatalf("expected a trap without sd13, but the run PASSED")
+	// (2) WITHOUT sd13 (d15 still served) → the compact `.tbn` still assembles
+	// and byte-matches.  The v2 overlay folds every sysreg instruction into its
+	// literal 4-byte word at compaction time, so the SAM no longer does the
+	// runtime page-13 sysreg-name lookup — sd13 is requested at boot (and shows
+	// up unserved) but is not a hard dependency for assembling compact input.
+	resNo := RunWithFiles(asm, enc, in,
+		[]NamedFile{{Name: "d15", Content: d15, TargetPage: 15}},
+		30*time.Second)
+	if !resNo.Passed {
+		t.Fatalf("compact run FAILED without sd13 (expected pass — sysreg insts are pre-folded): exit=%q printer=%q regs=%s",
+			resNo.ExitReason, resNo.PrinterCapture, resNo.FaultRegs)
+	}
+	if !bytes.Equal(resNo.OutBytes, wantImg) {
+		t.Errorf("OUT without sd13 does not byte-match release.img (got %d B, want %d B)",
+			len(resNo.OutBytes), len(wantImg))
 	}
 	found := false
 	for _, n := range resNo.UnservedFiles {
@@ -118,9 +144,9 @@ func TestReleasePagedInLoad(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("expected 'sd13' in UnservedFiles when -sysreg-data omitted; got %v (exit=%q)",
-			resNo.UnservedFiles, resNo.ExitReason)
+		t.Errorf("expected 'sd13' reported unserved when -sysreg-data omitted; got %v",
+			resNo.UnservedFiles)
 	} else {
-		t.Logf("trap diagnostic correctly names sd13: %q", resNo.ExitReason)
+		t.Logf("compact assembles without sd13; it is reported unserved as expected")
 	}
 }

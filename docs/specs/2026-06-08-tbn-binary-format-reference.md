@@ -1,33 +1,47 @@
 # `.tbn` binary tokenised format — complete encoding reference
 
-> ⚠️ **Being superseded by the v2 overlay-only format (M8 / i39 + i48).** This
-> doc describes the **v1 / symbolic** format, which is what `main` serializes
-> *today* (the v2 work is on the `i39a-instruction-overlay` branch, unmerged).
-> Under the agreed design the v1 symbolic record kinds (`KindInst`/`LabelDef`/
-> `LocalDef`/`LitInsts`) are retired — the compact **overlay** (`INSN_RUN` +
-> `LIT_DATA`) becomes the *only* serialized form, and this reference will be
-> **rewritten to overlay-only** when v2 lands (item **i48d**). See
-> `docs/specs/2026-06-08-compact-tbn-nextgen-design.md` (format) and
-> `docs/specs/2026-06-08-i48-single-format-syntactic-encoder-design.md`
-> (the single-format + syntactic-encoder decisions). Until then, the **v1**
-> description below is accurate for `main`.
+**Status**: living reference for the **v2 / instruction-overlay** format,
+current as of 2026-06-08 (M8 / i39a). This is the single normative
+description of the on-disk `.tbn` format. It **supersedes the format sections
+(§2–§6) of the M1 design spec**
+(`docs/specs/2026-05-23-m1-binary-tokenised-format-design.md`) and the i1
+compaction note (`docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`),
+both now historical milestone records.
 
-**Status**: living reference for the **v1 / symbolic** format, current as of
-2026-06-08. This is the single normative description of the on-disk v1 `.tbn`
-format as actually implemented on `main`. It **supersedes the format sections (§2–§6) of the M1
-design spec** (`docs/specs/2026-05-23-m1-binary-tokenised-format-design.md`),
-which is now a historical milestone record and predates several
-additions (`KindLitInsts`, `OpLitPool`, the grown directive table).
+### v2 has two profiles of one container
+
+v2 introduces the **instruction overlay** (`KindInsnRun`, 0x09) plus the
+**header label/local position tables**, and bumps the container `Version`
+1 → 2. The same v2 container is written in **two profiles**, distinguished by
+*which record kinds and header tables they populate*, not by any header flag:
+
+- **Symbolic intermediate** (host-internal). `text2bin` emits this: the
+  symbolic record kinds (`KindInst` 0x01, `KindLabelDef` 0x02,
+  `KindLocalDef` 0x03, `KindDirective` 0x04, `KindComment` 0x05) with the two
+  header tables **empty** (`WriteFile(st, nil, nil, …)`,
+  `translate.go:34,63`). This is the build intermediate `refenc` consumes to
+  produce machine code or to emit the compact overlay; it never reaches the
+  SAM. Eliminating it (so `text2bin` writes the overlay directly) is the
+  deferred **i48a** follow-up — until then `main` still serializes these
+  symbolic kinds.
+- **Compact overlay** (the SAM / shipped form). `refenc -emit-compact-tbn`
+  emits this (`refenc/main.go:writeCompactTBN`, `refenc/compact.go`): every
+  instruction folded into `KindInsnRun` (0x09) runs, constant data into
+  `KindLitData` (0x08), `KindDirective`/`KindComment` passed through verbatim,
+  and the header label/local tables **populated** with resolved byte offsets.
+  The SAM loads only this profile (`src/main_loop.asm`, `src/insn_run.asm`).
+
+Both profiles share the magic/version/flags header (§2), the name table (§2),
+the operand encoding (§4), and the expression bytecode (§5). Section 3 marks
+each record kind with the profile(s) it appears in.
 
 **Authority**: the Go package `tools/sam-aarch64-format/` is the source
-of truth; this doc cites it inline (`file.go`). If this doc and the code
-ever disagree, the code wins and this doc is the bug. The Z80 side
-(`src/main_loop.asm`, `src/reader.asm`, …) mirrors the same constants
-(see the `REC_KIND_*` / `OP_KIND_*` equs).
-
-Related: the compaction design lives in
-`docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`; this doc
-describes the *format* those levels produce.
+of truth; this doc cites it inline (`file.go`). The overlay fold-rules live
+in `tools/aarch64enc/overlay.go` (the `FoldSlot` enum) and the compaction
+pass that produces overlay records is `tools/refenc/compact.go`. If this doc
+and the code ever disagree, the code wins and this doc is the bug. The Z80
+side (`src/main_loop.asm`, `src/insn_run.asm`, `src/reader.asm`, …) mirrors
+the same constants (see the `REC_KIND_*` / `OP_KIND_*` equs).
 
 ---
 
@@ -55,34 +69,94 @@ are length-prefixed (u16 LE), never NUL-terminated.
 ```
 ┌─────────────────────────────────────────────┐
 │ Magic    "SA64"      4 bytes  (0x53 41 36 34)│  format.go:7
-│ Version  u16 LE      = 1                     │  format.go:10
-│ Flags    u16 LE      = 0  (reserved)         │  format.go:13
+│ Version  u16 LE      = 2                     │  format.go:13
+│ Flags    u16 LE      = 0  (reserved)         │  format.go:16
 ├─────────────────────────────────────────────┤
-│ Name table                                   │  reader.go:130 / writer.go:69
+│ Name table                                   │  reader.go:217 / writer.go:158
 │   count   u16 LE                             │
 │   name₀   [len u16 LE][UTF-8 bytes]          │
 │   name₁   …                                  │
 │   …                                          │
 ├─────────────────────────────────────────────┤
-│ Record stream                                │  reader.go:36
+│ Label table  (§2.4)                          │  header_tables.go:35,90
+│   count   u16 LE                             │
+│   row₀    [name_id u16 LE][offset_delta uvarint]
+│   …                                          │
+├─────────────────────────────────────────────┤
+│ Local table  (§2.4)                          │  header_tables.go:64,117
+│   count   u16 LE                             │
+│   row₀    [digit u8][offset_delta uvarint]   │
+│   …                                          │
+├─────────────────────────────────────────────┤
+│ Record stream                                │  reader.go:71
 │   record₀ record₁ … recordₙ₋₁                │
 │   (length-framed; no terminator)             │
 └─────────────────────────────────────────────┘
 ```
 
 - **Magic / version / flags** (8 bytes total). `ReadFile` rejects a bad
-  magic or a version ≠ 1 (`reader.go:117`,`:121`); `Flags` is reserved
-  and must be 0.
+  magic or a version ≠ 2 (`reader.go:202`,`:205`); `Flags` is reserved
+  and must be 0. The version check is a clean break — a v1 file is rejected,
+  not down-converted.
 - **Name table** — the interned label/symbol names, in first-encounter
   order. Each name's **zero-based index is its symbol ID**, referenced by
-  `LABEL_DEF` records and `PUSH_SYM` expression opcodes. The interner
-  (`symbols.go:16`) assigns IDs sequentially from 0, so re-interning the
-  same names in order reproduces identical IDs — which is why the
-  compaction pass can rebuild the table from `File.Names`
-  (`refenc/main.go:writeCompactTBN`).
+  `LABEL_DEF` records, the **label table** rows (§2.4), and `PUSH_SYM`
+  expression opcodes. The interner (`symbols.go:16`) assigns IDs
+  sequentially from 0, so re-interning the same names in order reproduces
+  identical IDs — which is why the compaction pass can rebuild the table
+  from `File.Names` (`refenc/main.go:writeCompactTBN`).
+- **Label table** and **local table** — the v2 header **position tables**
+  (§2.4). They sit **after the name table and before the record stream**
+  (a label row references a `name_id` into the name table, so the names
+  must precede it; `writer.go:138`). In the **symbolic intermediate** both
+  tables are empty (`count = 0`) — `text2bin` has no resolved PCs yet
+  (`translate.go:34,63`). In the **compact overlay** they carry one row per
+  resolved position-label / numeric-local def site.
 - **Record stream** — a flat sequence of length-framed records (§3). EOF
-  is implicit: the reader stops when no bytes remain (`reader.go:34`).
+  is implicit: the reader stops when no bytes remain (`reader.go:69`).
   There is no end-of-stream sentinel.
+
+### 2.4 Header position tables (label / local) — v2
+
+The v2 compact overlay moves **position-labels and numeric-local def sites
+out of the record stream** into two header tables that map a name (or a
+digit) to a **byte offset from the origin VMA** (`header_tables.go`). The
+overlay no longer carries `LABEL_DEF` / `LOCAL_DEF` records — a `KindInsnRun`
+run spans the labels embedded in it without interruption
+(`compact.go:97` drops the two kinds without flushing the open run), and the
+Z80 resolves a label's PC as `OriginVMA + offset` straight from the table
+(`pass1.go:309,313`).
+
+Offset = `symbolVMA − OriginVMA`, always ≥ 0 (`compact.go:headerRows`,
+`header_tables.go:14`). Both tables share a layout:
+
+```
+Label table   header_tables.go:35 (write) / :90 (read)
+  count   u16 LE
+  row     [name_id u16 LE][offset_delta uvarint]   ×count
+
+Local table   header_tables.go:64 (write) / :117 (read)
+  count   u16 LE
+  row     [digit u8][offset_delta uvarint]          ×count
+```
+
+- **`name_id`** (label table) indexes the name table (§2); **`digit`**
+  (local table) is the numeric-local digit (1–99). The same digit may
+  repeat across rows (multiple def sites) — pass 2 keeps the full ordered
+  list per digit for `Nf`/`Nb` resolution.
+- **Rows are sorted by offset ascending** (ties by `name_id` / `digit`
+  ascending), and the offset is stored as a **delta from the previous row's
+  offset** — the first row's previous is 0, so its delta is its absolute
+  offset (`header_tables.go:48,77`). The reader accumulates deltas back into
+  absolute offsets (`header_tables.go:109,136`). `WriteFile` sorts copies of
+  the caller's rows, so the increasing-offset delta invariant always holds
+  regardless of input order (`writer.go:147`).
+- **`offset_delta` is an unsigned LEB128 varint** (`binary.PutUvarint` /
+  `binary.Uvarint`): 7 data bits per byte, low byte first, high bit = "more
+  bytes follow". Each delta is ≥ 0 (offsets are sorted ascending), so the
+  unsigned encoding is sufficient.
+- A truncated table (count past EOF, or a row's bytes missing) is a hard
+  error (`header_tables.go:92`…`:133`).
 
 ---
 
@@ -105,26 +179,42 @@ readers' framing — though an old reader cannot render an unknown kind's
 
 ### Record kinds
 
-| Hex    | Name        | Payload | Defined |
-|--------|-------------|---------|---------|
-| `0x01` | `INST`      | `[mnemonic_id u16][operand_count u8][operands…]` (§4) | kinds.go:7 |
-| `0x02` | `LABEL_DEF` | `[symbol_id u16]` — defines a global label at the current PC | kinds.go:8 |
-| `0x03` | `LOCAL_DEF` | `[digit u8]` — defines a numeric local label (1–99) | kinds.go:9 |
-| `0x04` | `DIRECTIVE` | `[directive_id u8][operand_count u8][operands…]` (§4, §6) | kinds.go:10 |
-| `0x05` | `COMMENT`   | `[placement u8][bytes…]` — `0`=standalone, `1`=trailing | kinds.go:11 |
-| `0x07` | `LIT_INSTS` | `[count u8][word₀…word₍count₋₁₎]`, each word 4 bytes LE — a run of fully-literal instructions stored as assembled machine code (§7.2) | kinds.go:17 |
-| `0x08` | `LIT_DATA`  | `[directive_id u8][raw LE bytes…]` — a run of constant numeric data stored as assembled bytes, tagged with its source directive (§7.3) | kinds.go:18 |
+The **Profile** column says which of the two v2 profiles (§"v2 has two
+profiles") a kind appears in: **S** = symbolic intermediate (host-internal),
+**O** = compact overlay (the SAM/shipped form).
+
+| Hex    | Name        | Profile | Payload | Defined |
+|--------|-------------|---------|---------|---------|
+| `0x01` | `INST`      | S | `[mnemonic_id u16][operand_count u8][operands…]` (§4) | kinds.go:7 |
+| `0x02` | `LABEL_DEF` | S | `[symbol_id u16]` — defines a global label at the current PC | kinds.go:8 |
+| `0x03` | `LOCAL_DEF` | S | `[digit u8]` — defines a numeric local label (1–99) | kinds.go:9 |
+| `0x04` | `DIRECTIVE` | S+O | `[directive_id u8][operand_count u8][operands…]` (§4, §6) | kinds.go:10 |
+| `0x05` | `COMMENT`   | S+O | `[placement u8][bytes…]` — `0`=standalone, `1`=trailing | kinds.go:11 |
+| `0x07` | `LIT_INSTS` | — (legacy, unused) | `[count u8][word₀…word₍count₋₁₎]`, each word 4 bytes LE (§7.2) | kinds.go:17 |
+| `0x08` | `LIT_DATA`  | O | `[directive_id u8][raw LE bytes…]` — a run of constant numeric data stored as assembled bytes, tagged with its source directive (§7.3) | kinds.go:18 |
+| `0x09` | `INSN_RUN`  | O | `[mode u8][elements…]` — a run of instructions; mode 0 = packed literal words, mode 1 = base-word + sparse overlay patches (§7.2) | kinds.go:34 |
 
 Reserved / not-yet-defined: `0x00`; `0x06` (was earmarked for a *single*
-literal instruction — not used, a `count=1` LIT_INSTS run covers it);
-`0x09`–`0xFF`.
+literal instruction — never used); `0x0A`–`0xFF`.
+
+**`LIT_INSTS` (0x07) is a retained-but-unproduced constant.** No code path
+emits it — `WriteLitInsts` has no production caller (only
+`litinsts_test.go`), because **`INSN_RUN` mode 0 subsumes it**: a run of
+fully-literal words is now a mode-0 `INSN_RUN`. The kind constant, the
+reader decode (`reader.go:120`), and the Z80 handler equ
+(`REC_KIND_LIT_INSTS`) are kept so an older artefact still decodes, but a
+freshly-written v2 file never contains a 0x07 record (`main_loop.asm:410`:
+"old LIT_INSTS (0x07) run is gone — INSN_RUN mode 0 subsumes it").
 
 Notes:
 
-- `LABEL_DEF` / `LOCAL_DEF` consume no PC. The next `INST` / `DIRECTIVE`
-  / `LIT_INSTS` is the labelled site.
+- **`LABEL_DEF` / `LOCAL_DEF` appear in the symbolic intermediate only.**
+  They consume no PC; the next `INST` / `DIRECTIVE` is the labelled site.
+  The compact overlay carries no such records — labels live in the header
+  position tables (§2.4) instead, so a `KindInsnRun` run is not broken at a
+  label.
 - A source line carrying a label *and* an instruction emits **two**
-  records back-to-back: `LABEL_DEF` then `INST`.
+  symbolic records back-to-back: `LABEL_DEF` then `INST`.
 - `.equ FOO, expr` is a `DIRECTIVE` whose operand list is
   `[symbol-ref operand, value-expression operand]`; there is no separate
   EQU kind (`refenc/pass1.go:resolveEquDirective`).
@@ -301,22 +391,26 @@ text2bin maps name → id; refenc / the Z80 map id → encoder form.
 (removals + renumberings allowed in lockstep across all consumers)
 **only because no `.tbn` files are persisted outside `build/`/`/tmp/`**.
 The policy's own trigger to **freeze it strictly append-only** is "once
-`.tbn` files start being shipped or persisted." ⚠️ **The compact-`.tbn`
-work (i1) is exactly that trigger** — if compact `.tbn` artefacts ever get
-committed/shipped, the mnemonic *and* directive tables must become
-append-only and any removal needs a `Version` bump. Until artefacts are
-actually persisted, the interim mutable policy still holds.
+`.tbn` files start being shipped or persisted." ⚠️ The compact overlay
+`.tbn` is the artefact that would pull this trigger — if a compact `.tbn`
+ever gets committed/shipped, the mnemonic *and* directive tables must
+become append-only and any removal needs a `Version` bump. Until artefacts
+are actually persisted, the interim mutable policy still holds.
 
 ---
 
-## 7. Compaction (literal collapse)
+## 7. The compact overlay profile
 
-The base format above is the **symbolic** form (the compaction design doc
-calls it Level 0/1). Two further forms collapse literal content to its
-assembled bytes; both are produced by `refenc` as a `.tbn`→`.tbn`
-transform (`refenc -emit-compact-tbn`, `refenc/compact.go`) and both
-assemble to the byte-identical binary — verified by the m6-release 3-way
-gate.
+The symbolic intermediate above is the host-internal form. The **compact
+overlay** is what the SAM loads: `refenc -emit-compact-tbn`
+(`refenc/compact.go`) rewrites the symbolic record stream so every
+instruction becomes an element of an `INSN_RUN` (0x09) run and every
+constant-data run becomes a `LIT_DATA` (0x08) record, while position-labels
+move into the header tables (§2.4). The overlay assembles to the
+byte-identical binary as the symbolic form — verified by the m6-release 3-way
+gate. The redesign's organising idea is that **literal and symbol/PC-bearing
+instructions live in one record kind**: a literal is a bare word, a symbolic
+one is a base word (relocated field zeroed) plus a sparse overlay patch.
 
 ### 7.1 "Fully literal" predicate
 
@@ -326,26 +420,89 @@ reference — i.e. every embedded expression passes `EvalConst` and no
 operand is `LIT_POOL`. Such an instruction's encoding depends on neither
 the symbol table nor (structurally) the PC. The compaction pass adds a
 **PC-invariance guard** on top: it encodes the instruction at two
-different PCs and only collapses it if the words match — so a
-constant-target PC-relative form (e.g. `b 0x1000`, structurally literal
-but PC-dependent) is correctly kept symbolic (`refenc/compact.go:literalWord`).
+different PCs and only collapses it to a bare literal word if they match —
+so a constant-target PC-relative form (e.g. `b 0x1000`, structurally literal
+but PC-dependent) becomes an overlay patch element instead
+(`refenc/compact.go:literalWord`).
 
-### 7.2 `LIT_INSTS` (0x07) — instruction runs (**implemented**, i1 PR1/PR2)
+### 7.2 `INSN_RUN` (0x09) — instruction runs
 
-A run of consecutive fully-literal, PC-invariant instructions is stored as
-their assembled words:
+Every instruction in the overlay is an **element** of an `INSN_RUN` record.
+The record is a run of consecutive instructions sharing a `mode`:
 
 ```
-[kind 0x07][len u16][count u8][word₀…word₍count₋₁₎]   each word 4 bytes LE
-len = 1 + 4*count ;  count ∈ 1..255  (longer runs split into successive records)
+[kind 0x09][len u16][mode u8][elements…]                    writer.go:82 / reader.go:136
 ```
 
-PC accounting is exact (a run occupies `4*count` bytes, identical to the
-`count` `INST` records it replaced), so label positions and the 2-pass
-values for the surviving symbolic instructions are unchanged. The Z80
-assembler memcpys the words straight to OUT — zero encoding work
-(`src/main_loop.asm:main_handle_lit_insts`). On the vendored spectrum4
-release this shrinks the `.tbn` from 88,644 → 68,755 B (−22.4%).
+**mode 0 — packed literal words.** Each element is a bare 4-byte assembled
+word, little-endian; no per-element framing. This is the `LIT_INSTS` floor
+folded into the unified kind:
+
+```
+mode 0:  [00][word₀ u32 LE][word₁ u32 LE]…       payload len = 1 + 4*count
+```
+
+The reader requires the post-mode body length to be a multiple of 4
+(`reader.go:144`). The Z80 memcpys the words straight to OUT — zero encoding
+work, shared with `LIT_DATA` (`main_loop.asm:main_handle_lit_insts`).
+
+**mode 1 — base word + sparse overlay patches.** Each element is an
+assembled base word with its relocated bitfield(s) **zeroed**, followed by a
+patch count and that many patches. Pass 2 evaluates each patch's expression
+to a value, the **slot** byte selects a fold-rule that turns the value into
+the field's bits, and those bits are **ORed into the zeroed field**:
+
+```
+mode 1:  [01]  then per element:
+         [base_word u32 LE]
+         [patch_count u8]
+         patch_count × ( [slot u8][expr_len u8][expr bytes] )   writer.go:93 / reader.go:152
+```
+
+- A **patch-free element** in mode 1 (`patch_count = 0`) is a fully-literal
+  instruction absorbed into an overlay frame to avoid splitting a run; it is
+  identical in meaning to a mode-0 word. The packer (`compact.go:emitInsnRunFrames`)
+  emits maximal patch-free stretches as mode-0 frames and only absorbs short
+  literal gaps (< `litBreak` = 4) into a surrounding mode-1 frame — a
+  size choice that never changes the assembled bytes.
+- **`expr_len` and `patch_count` are single bytes** (the writer panics if a
+  patch expression exceeds 255 bytes or an element exceeds 255 patches —
+  compaction bugs, `writer.go:95,101`). The patch expression is the same
+  length-prefixed expression bytecode as §5, but with a **u8** length here
+  (the §4 operand `IMM_EXPR` uses a u16 length — these are distinct framings).
+- **PC accounting is exact**: each element occupies 4 output bytes, so label
+  offsets and the 2-pass values are unchanged from the symbolic form.
+
+#### 7.2.1 Fold slots (`aarch64enc.FoldSlot`, `overlay.go:16`)
+
+The `slot` byte selects which bitfield the patch writes and the conversion
+applied (`Fold`, `overlay.go:45`). Each rule mirrors *exactly* the conversion
+the literal encoder performs for that field (cited in `overlay.go` against
+the `pass2.go` slot encoders), so the overlay and literal paths cannot
+diverge. The byte values are an **append-only wire contract** shared with the
+Z80 slot dispatch.
+
+| ID | Slot | Field | Fold (`value` = evaluated patch expr; `pc` = element PC) |
+|----|------|-------|----------------------------------------------------------|
+| 1  | `FoldBranch26`    | imm26 @0  | `b`/`bl`: `(target − pc)/4` |
+| 2  | `FoldBranch19`    | imm19 @5  | `b.cc`/`cbz`/`cbnz`/`ldr`-literal: `(target − pc)/4` |
+| 3  | `FoldBranch14`    | imm14 @5  | `tbz`/`tbnz`: `(target − pc)/4` |
+| 4  | `FoldAdr`         | immlo@29:immhi@5 | `adr`: `target − pc` (raw byte offset) |
+| 5  | `FoldAdrp`        | immlo@29:immhi@5 | `adrp`: `(page(target) − page(pc)) / 4096` |
+| 6  | `FoldAddSubImm12` | (sh,imm12) @10 | `add`/`sub`/`cmp` imm: value used directly (`:lo12:`, symbol-diff) |
+| 7  | `FoldMemImm12`    | imm12 @10 | `ldr`/`str` scaled: `byteOff / scale` (scale from base-word size field) |
+| 8  | `FoldMemImm9`     | imm9 @12  | `stur`/`ldur`/pre/post: signed byte offset |
+| 9  | `FoldMovkImm16`   | imm16 @5  | explicit `movz`/`movk`: `value & 0xFFFF` (hw stays in the base word) |
+| 10 | `FoldLogical`     | N:immr:imms @10 | `orr`/`and`/`eor`/`bic` imm: bitmask immediate (is64 from sf) |
+| 11 | `FoldPairImm7`    | imm7 @15  | `ldp`/`stp`: signed `byteOff / scale` (scale 8/4 from sf) |
+| 12 | `FoldLitpool19`   | imm19 @5  | `ldr =expr`: `(poolPC − pc)/4` — `value` is the pool-entry PC, not an eval result |
+| 13 | `FoldMovzAuto`    | imm16 @5 + hw @21 | `mov Rd,#value` → `movz` (i48b): the fold computes both the 16-bit chunk and the `hw` shift |
+
+(`FoldSlotForKind`, `overlay.go:146`, maps a form-table `SlotKind` to its
+overlay slot for the straightforward families; the hand-rolled families —
+mem, litpool, tbz, ldr-literal, mov-imm — are classified by their encoder
+path. `ZeroSlot`, `overlay.go:171`, clears exactly the bits a slot's `Fold`
+writes; `TestZeroSlotClearsFoldBits` locks the two together.)
 
 ### 7.3 `LIT_DATA` (0x08) — constant data runs (**implemented**, i1 PR3 — PR #124)
 
@@ -376,18 +533,20 @@ bytes come from the one encoder (`refenc`'s `encodeDirective`), so a
 A run is split into records of at most **1016 data bytes** (on whole-element
 boundaries) so each payload stays under the Z80 reader's 1024-byte
 `STAGING_BUF` (`src/reader.asm`). On the SAM the decode is shared with
-`LIT_INSTS` — both are "skip the 1-byte tag, memcpy `len-1` bytes to OUT"
-(`src/main_loop.asm:main_handle_lit_insts`); the `directive_id` matters only
-to the disassembler.
+`INSN_RUN` **mode 0** — both are "skip the 1-byte tag, memcpy the remaining
+bytes to OUT" (`src/main_loop.asm:main_handle_lit_insts`); the `directive_id`
+matters only to the disassembler.
 
-**Measured result** (vendored spectrum4 release; PR #124, byte-identical to
-GNU `release.img`): 1,745 collapsible numeric records that occupied
-**21,892 B** (31.8%) of the 68,755 B PR1/PR2 file — assembling to just
-4,046 B of output — collapse the compact `.tbn` to **51,117 B**. That is
-**−25.7% vs the PR1/PR2 file** and **−42.3% vs the original 88,644 B
-symbolic** form, and drops the paged-IN load from **5 IN pages to 4**.
-`.hword` tables dominate the collapsible set (17.5 KB) and are contiguous,
-so the result landed at the merged-run end the estimate predicted.
+**Measured result** (i1 baseline; vendored spectrum4 release; PR #124,
+byte-identical to GNU `release.img`): 1,745 collapsible numeric records that
+occupied **21,892 B** (31.8%) of the 68,755 B PR1/PR2 file — assembling to
+just 4,046 B of output — collapsed the compact `.tbn` to **51,117 B**. That
+is **−25.7% vs the PR1/PR2 file** and **−42.3% vs the original 88,644 B
+symbolic** form, and dropped the paged-IN load from **5 IN pages to 4**.
+`.hword` tables dominate the collapsible set (17.5 KB) and are contiguous.
+(These figures predate the v2 instruction overlay — they measure the i1
+`LIT_INSTS`+`LIT_DATA` floor, which `INSN_RUN` mode 0 now subsumes and the
+overlay extends to symbolic instructions.)
 
 ### 7.4 Level 3 dictionary (future)
 
@@ -406,12 +565,19 @@ a separate future lever (M1 spec §9 "Level 1").
 
 ## 8. Resolution semantics (for implementers)
 
-**Local labels** (`LOCAL_DEF [digit]`): defined at the current PC; multiple
-defs of the same digit are legal. At pass 1 the assembler keeps, per digit,
-an in-order list of PCs. At pass 2 `PUSH_LOCAL d, dir` resolves: `dir=0`
+**Local labels**: defined at the current PC; multiple defs of the same digit
+are legal. The def sites come from `LOCAL_DEF [digit]` records in the
+symbolic intermediate, and from the **header local table** (§2.4) in the
+compact overlay — both feed the same pass-1 structure: per digit, an in-order
+list of PCs (`pass1.go:313`). At pass 2 `PUSH_LOCAL d, dir` resolves: `dir=0`
 (forward `Nf`) → the nearest def after the reference; `dir=1` (backward
 `Nb`) → the nearest def at-or-before. Digits 1–99 are supported (the table
 is a sorted `(digit, pc)` list — see the multi-digit-local-labels work).
+
+**Position labels** behave analogously: a `LABEL_DEF [symbol_id]` record in
+the symbolic intermediate, a **header label table** row (§2.4) in the
+overlay; both resolve the named symbol to `OriginVMA + offset`
+(`pass1.go:309`).
 
 **Literal pool**: `ldr Xn/Wn, =expr` (a `LIT_POOL` operand) allocates a
 pool slot deduplicated by `(width, expr-bytes)`; `.ltorg` (or end-of-input)
@@ -429,15 +595,22 @@ none.
 
 ## 9. Cross-references
 
+- **v2 overlay design** (the instruction-overlay redesign this doc
+  describes): `docs/specs/2026-06-08-compact-tbn-nextgen-design.md` (i39
+  format) and `docs/specs/2026-06-08-i48-single-format-syntactic-encoder-design.md`
+  (the single-format + syntactic-encoder decisions, incl. the deferred i48a
+  symbolic-intermediate elimination).
 - **History / rationale / tooling**: M1 spec
   `docs/specs/2026-05-23-m1-binary-tokenised-format-design.md` (§7 tooling,
   §8 test pyramid, §9 open items still apply; its §2–§6 format tables are
   superseded by this doc).
-- **Compaction design + increment plan**:
+- **i1 compaction baseline** (`LIT_INSTS`+`LIT_DATA`):
   `docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`.
 - **Disassembler (the bytes→text inverse)**:
   `docs/plans/2026-05-28-go-aarch64-disassembler.md`; `tools/aarch64dec/`.
 - **Code authority**: `tools/sam-aarch64-format/` (`kinds.go`,
   `operands.go`, `expr.go`, `directives.go`, `mnemonics.go`, `symbols.go`,
-  `reader.go`, `writer.go`, `litinsts.go`, `format.go`); Z80 mirror
-  `src/main_loop.asm` + `src/reader.asm`.
+  `reader.go`, `writer.go`, `header_tables.go`, `litinsts.go`, `format.go`);
+  overlay fold-rules `tools/aarch64enc/overlay.go`; compaction pass
+  `tools/refenc/compact.go`; Z80 mirror `src/main_loop.asm`,
+  `src/insn_run.asm`, `src/reader.asm`.

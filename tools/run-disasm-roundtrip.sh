@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
-# tools/run-disasm-roundtrip.sh — strand-B PR-2 round-trip gate.
+# tools/run-disasm-roundtrip.sh — Go encoder/decoder round-trip gate.
 #
-# Proves that the Go encoder (refenc) and decoder (aarch64dec) are true
-# inverses on the M3-M6 fixture corpus:
+# Two complementary round-trips over the M3-M6 fixture corpus + release.s,
+# both pure Go (no aarch64 binutils or SimCoupé required):
 #
-#   source.s → text2bin → refenc → v1.bin
-#   v1.bin → aarch64dec -asm → disasm.s → text2bin → refenc → v2.bin
-#   assert v1.bin == v2.bin
+# [2/3] binary disassembler (strand-B): refenc and aarch64dec are inverses on
+#   the assembled binary —
+#     source.s → text2bin → refenc → v1.bin
+#     v1.bin → aarch64dec -asm → disasm.s → text2bin → refenc → v2.bin
+#     assert v1.bin == v2.bin
 #
-# Pure Go pipeline — no aarch64 binutils or SimCoupé required.
+# [2d/3]+[2e/3] compact-`.tbn` v2 instruction overlay (M8 / i39a): bin2text
+#   renders the compact overlay back to text faithfully —
+#     source.s → text2bin → refenc -emit-compact-tbn → compact_v2.tbn
+#     compact_v2.tbn → bin2text → overlay.s → text2bin → refenc → v2.bin
+#     assert v1.bin == v2.bin
+#   This is the slot/fold-enum *rendering* fidelity guard: a one-bit error in
+#   turning a {FoldSlot, expression} patch back into its symbolic operand fails
+#   the byte-compare. The overlay renderer handles data and literal-pool loads
+#   natively, so the overlay legs skip no fixtures.
 #
 # Fixtures are skipped (not failed) under two principled conditions:
 #
@@ -30,7 +40,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 echo "=== [1/3] Build tools ==="
-make -s text2bin refenc aarch64dec
+make -s text2bin refenc aarch64dec bin2text
 
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
 
@@ -268,6 +278,107 @@ if [ -f "$release_src" ]; then
         fi
         fail_names+=("release.s full [mismatch]")
         failed=$((failed + 1))
+    fi
+else
+    echo "    SKIP release.s (not found at $release_src)"
+fi
+
+echo ""
+echo "=== [2d/3] Overlay round-trip each fixture (compact v2 → bin2text → re-assemble) ==="
+# Proves the compact-`.tbn` v2 instruction overlay (M8 / i39a) is faithful:
+#   source.s → text2bin → refenc -emit-compact-tbn → compact_v2.tbn
+#   compact_v2.tbn → bin2text → overlay.s → text2bin → refenc → v2.bin
+#   assert v1.bin == v2.bin
+# This exercises the slot/fold enum's *rendering* direction (bin2text turns each
+# {FoldSlot, expression} patch back into its symbolic operand); a one-bit
+# slot-rendering error fails the byte-compare deterministically. Unlike the
+# binary-disassembler legs above, the overlay renderer handles data (LIT_DATA)
+# and literal-pool loads natively, so no fixture is skipped.
+for dir in "${FIXTURE_DIRS[@]}"; do
+    for src in "$ROOT/$dir"/*.s; do
+        [ -f "$src" ] || continue
+        name="$(basename "$src" .s)"
+
+        ov_v1_tbn="$tmp/ov_${dir//\//_}_${name}_v1.tbn"
+        ov_v1_bin="$tmp/ov_${dir//\//_}_${name}_v1.bin"
+        ov_compact="$tmp/ov_${dir//\//_}_${name}_compact.tbn"
+        ov_dis="$tmp/ov_${dir//\//_}_${name}_overlay.s"
+        ov_v2_tbn="$tmp/ov_${dir//\//_}_${name}_v2.tbn"
+        ov_v2_bin="$tmp/ov_${dir//\//_}_${name}_v2.bin"
+
+        if ! "$ROOT/build/text2bin" -o "$ov_v1_tbn" "$src" 2>/dev/null; then
+            echo "    FAIL(text2bin) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay text2bin]"); failed=$((failed + 1)); continue
+        fi
+        if ! "$ROOT/build/refenc" -o "$ov_v1_bin" -emit-compact-tbn "$ov_compact" "$ov_v1_tbn" 2>/dev/null; then
+            echo "    FAIL(refenc-compact) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay compact]"); failed=$((failed + 1)); continue
+        fi
+        if ! "$ROOT/build/bin2text" "$ov_compact" > "$ov_dis" 2>/dev/null; then
+            echo "    FAIL(bin2text) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay render]"); failed=$((failed + 1)); continue
+        fi
+        if ! "$ROOT/build/text2bin" -o "$ov_v2_tbn" "$ov_dis" 2>/dev/null; then
+            echo "    FAIL(text2bin2) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay re-asm]"); failed=$((failed + 1)); continue
+        fi
+        if ! "$ROOT/build/refenc" -o "$ov_v2_bin" "$ov_v2_tbn" 2>/dev/null; then
+            echo "    FAIL(refenc2) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay re-enc]"); failed=$((failed + 1)); continue
+        fi
+        if cmp -s "$ov_v1_bin" "$ov_v2_bin"; then
+            ov_sz=$(wc -c < "$ov_v1_bin")
+            echo "    PASS $dir/$name.s ($ov_sz B)"
+            passed=$((passed + 1))
+        else
+            first_diff=$(cmp -l "$ov_v1_bin" "$ov_v2_bin" 2>/dev/null | head -1 | awk '{print $1}') || true
+            if [ -n "$first_diff" ]; then
+                byte_off=$(( (first_diff - 1) & ~3 ))
+                v1_word=$(od -j "$byte_off" -N4 -An -t x4 "$ov_v1_bin" | tr -d ' \n')
+                v2_word=$(od -j "$byte_off" -N4 -An -t x4 "$ov_v2_bin" | tr -d ' \n')
+                echo "    FAIL(mismatch) $dir/$name.s [byte $byte_off: v1=0x$v1_word v2=0x$v2_word]"
+            else
+                echo "    FAIL(mismatch) $dir/$name.s [sizes differ]"
+            fi
+            fail_names+=("$dir/$name.s [overlay mismatch]")
+            failed=$((failed + 1))
+        fi
+    done
+done
+
+echo ""
+echo "=== [2e/3] Overlay round-trip release.s (full binary — code + data) ==="
+# The headline guard: the whole spectrum4 release assembled through the v2
+# instruction overlay, rendered back to text, and re-assembled byte-identically
+# (and byte-identical to the vendored GNU release.img).
+if [ -f "$release_src" ]; then
+    rel_ov_v1_tbn="$tmp/rel_ov_v1.tbn"
+    rel_ov_v1_bin="$tmp/rel_ov_v1.bin"
+    rel_ov_compact="$tmp/rel_ov_compact.tbn"
+    rel_ov_dis="$tmp/rel_ov_overlay.s"
+    rel_ov_v2_tbn="$tmp/rel_ov_v2.tbn"
+    rel_ov_v2_bin="$tmp/rel_ov_v2.bin"
+    rel_img="$ROOT/tests/m6/release/release.img"
+
+    if ! "$ROOT/build/text2bin" -flatten -strip-comments -o "$rel_ov_v1_tbn" "$release_src" 2>/dev/null; then
+        echo "    FAIL(text2bin) release.s (overlay)"; fail_names+=("release.s [overlay text2bin]"); failed=$((failed + 1))
+    elif ! "$ROOT/build/refenc" -o "$rel_ov_v1_bin" -emit-compact-tbn "$rel_ov_compact" "$rel_ov_v1_tbn" 2>/dev/null; then
+        echo "    FAIL(refenc-compact) release.s (overlay)"; fail_names+=("release.s [overlay compact]"); failed=$((failed + 1))
+    elif ! "$ROOT/build/bin2text" "$rel_ov_compact" > "$rel_ov_dis" 2>/dev/null; then
+        echo "    FAIL(bin2text) release.s (overlay)"; fail_names+=("release.s [overlay render]"); failed=$((failed + 1))
+    elif ! "$ROOT/build/text2bin" -o "$rel_ov_v2_tbn" "$rel_ov_dis" 2>/dev/null; then
+        echo "    FAIL(text2bin2) release.s (overlay)"; fail_names+=("release.s [overlay re-asm]"); failed=$((failed + 1))
+    elif ! "$ROOT/build/refenc" -o "$rel_ov_v2_bin" "$rel_ov_v2_tbn" 2>/dev/null; then
+        echo "    FAIL(refenc2) release.s (overlay)"; fail_names+=("release.s [overlay re-enc]"); failed=$((failed + 1))
+    elif ! cmp -s "$rel_ov_v1_bin" "$rel_ov_v2_bin"; then
+        first_diff=$(cmp -l "$rel_ov_v1_bin" "$rel_ov_v2_bin" 2>/dev/null | head -1 | awk '{print $1}') || true
+        byte_off=$(( (first_diff - 1) & ~3 ))
+        v1_word=$(od -j "$byte_off" -N4 -An -t x4 "$rel_ov_v1_bin" | tr -d ' \n')
+        v2_word=$(od -j "$byte_off" -N4 -An -t x4 "$rel_ov_v2_bin" | tr -d ' \n')
+        echo "    FAIL(mismatch) release.s (overlay) [byte $byte_off: v1=0x$v1_word v2=0x$v2_word]"
+        fail_names+=("release.s [overlay mismatch]"); failed=$((failed + 1))
+    elif [ -f "$rel_img" ] && ! cmp -s "$rel_ov_v1_bin" "$rel_img"; then
+        echo "    FAIL(vs GNU) release.s (overlay) [round-trip self-consistent but != release.img]"
+        fail_names+=("release.s [overlay != GNU]"); failed=$((failed + 1))
+    else
+        rel_ov_sz=$(wc -c < "$rel_ov_v1_bin")
+        echo "    PASS release.s overlay ($rel_ov_sz B, == GNU release.img)"
+        passed=$((passed + 1))
     fi
 else
     echo "    SKIP release.s (not found at $release_src)"

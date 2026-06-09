@@ -64,22 +64,33 @@ func TestBootSelfTestsPass(t *testing.T) {
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
 	text2binPath := filepath.Join(root, "build", "text2bin")
+	refencPath := filepath.Join(root, "build", "refenc")
 	fixturePath := filepath.Join(root, "tests", "m3", "sources", "inst_nop_ret.s")
 
-	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path, text2binPath, fixturePath} {
+	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path, text2binPath, refencPath, fixturePath} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make m3-asm enctab sysreg-data disasm-test-payload test-mem-offaxis cluster-offaxis paged-call-payload text2bin`", p)
+			t.Skipf("prerequisite missing: %s\n  run `make m3-asm enctab sysreg-data disasm-test-payload test-mem-offaxis cluster-offaxis paged-call-payload text2bin refenc`", p)
 		}
 	}
 
-	// Assemble the trivial fixture to .tbn so main_assemble has something to
-	// chew on after the self-test block; reaching its "OK" proves the boot
-	// got all the way through the self-tests.
-	tbnPath := filepath.Join(t.TempDir(), "inst_nop_ret.tbn")
-	cmd := exec.Command(text2binPath, "-o", tbnPath, fixturePath)
+	// Assemble the trivial fixture to a symbolic .tbn, then compact it
+	// (refenc -emit-compact-tbn) so main_assemble has something to chew on
+	// after the self-test block; reaching its "OK" proves the boot got all
+	// the way through the self-tests.  The SAM assembler consumes the compact
+	// v2 .tbn (INSN_RUN decoder), not the raw symbolic text2bin output.
+	tmp := t.TempDir()
+	symTbnPath := filepath.Join(tmp, "inst_nop_ret.tbn")
+	tbnPath := filepath.Join(tmp, "inst_nop_ret.compact.tbn")
+	goImgPath := filepath.Join(tmp, "inst_nop_ret.go.img")
+	cmd := exec.Command(text2binPath, "-o", symTbnPath, fixturePath)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("text2bin failed: %v\n%s", err, out)
+	}
+	cmd = exec.Command(refencPath, "-o", goImgPath, "-emit-compact-tbn", tbnPath, symTbnPath)
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("refenc failed: %v\n%s", err, out)
 	}
 
 	asm, _ := os.ReadFile(asmPath)

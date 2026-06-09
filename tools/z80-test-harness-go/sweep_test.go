@@ -36,6 +36,10 @@ func TestCorpusSweep(t *testing.T) {
 	build := filepath.Join(root, "build")
 
 	text2bin := filepath.Join(build, "text2bin")
+	refenc := filepath.Join(build, "refenc")
+	if _, e := os.Stat(refenc); e != nil {
+		t.Skipf("build/refenc not built (run `make refenc`): %v", e)
+	}
 	enctab, err := os.ReadFile(filepath.Join(build, "enctab.enc"))
 	if err != nil {
 		t.Fatalf("read enctab: %v", err)
@@ -96,9 +100,18 @@ func TestCorpusSweep(t *testing.T) {
 			base := filepath.Base(src)
 			base = base[:len(base)-len(".s")]
 
-			tbnPath := filepath.Join(tmp, base+".tbn")
-			if out, e := exec.Command(text2bin, "-o", tbnPath, src).CombinedOutput(); e != nil {
+			// Symbolic .tbn → compact .tbn (refenc -emit-compact-tbn): the
+			// SAM assembler consumes the compact v2 .tbn (INSN_RUN decoder),
+			// not the raw symbolic text2bin output.
+			symTbnPath := filepath.Join(tmp, base+".tbn")
+			if out, e := exec.Command(text2bin, "-o", symTbnPath, src).CombinedOutput(); e != nil {
 				rows = append(rows, row{m, base, "-", false, false, 0, 0, "text2bin-fail", string(out)})
+				continue
+			}
+			tbnPath := filepath.Join(tmp, base+".compact.tbn")
+			goImgPath := filepath.Join(tmp, base+".go.img")
+			if out, e := exec.Command(refenc, "-o", goImgPath, "-emit-compact-tbn", tbnPath, symTbnPath).CombinedOutput(); e != nil {
+				rows = append(rows, row{m, base, "-", false, false, 0, 0, "refenc-fail", string(out)})
 				continue
 			}
 			tbn, _ := os.ReadFile(tbnPath)

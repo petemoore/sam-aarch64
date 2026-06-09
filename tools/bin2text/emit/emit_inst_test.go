@@ -10,7 +10,7 @@ import (
 func emitFile(t *testing.T, st *format.SymbolTable, rw format.RecordWriter) string {
 	t.Helper()
 	var buf bytes.Buffer
-	format.WriteFile(&buf, st, rw.Bytes())
+	format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 	out, err := Emit(buf.Bytes())
 	if err != nil {
 		t.Fatal(err)

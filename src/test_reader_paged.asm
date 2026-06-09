@@ -13,10 +13,11 @@
 ;   1. page-cross helper (in_normalise_hl): set IN_POS_PAGE =
 ;      LMPR_IN_BASE, HL = &7FFE.  Call in_normalise_hl.  Assert
 ;      H < &40 (= &3FFE) and LMPR low 5 bits incremented by 1.
-;   2. synthetic record read: stamp a 14-byte ".tbn" blob into page 7
-;      via an LMPR=&27 bracket.  Blob = "SA64", version=1, flags=0,
-;      name_count=0, then one record [kind=&77][len=&02 &00][&AB &CD].
-;      Set IN_END = (page=&27, offset=14).  Call reset_reader_to_in_buf
+;   2. synthetic record read: stamp a 19-byte ".tbn" blob into page 7
+;      via an LMPR=&27 bracket.  Blob = "SA64", version=2, flags=0,
+;      name_count=0, label_count=0, local_count=0, then one record
+;      [kind=&77][len=&02 &00][&AB &CD].
+;      Set IN_END = (page=&27, offset=19).  Call reset_reader_to_in_buf
 ;      (which tail-calls reader_init), then reader_at_end → not at end,
 ;      then reader_next_kind.  Assert A=&77, BC=2, (STAGING_BUF)=&AB,
 ;      (STAGING_BUF+1)=&CD, then reader_at_end → at end (Z=1).
@@ -75,7 +76,7 @@ run_reader_paged_self_tests:
 
 ; ----- (2) synthetic record fetch ---------------------------------------
 ;
-; Stamp a 14-byte blob into physical page 7 (= LMPR_IN_BASE) at offset
+; Stamp a 19-byte blob into physical page 7 (= LMPR_IN_BASE) at offset
 ; 0.  We do this from the test code itself, using a brief LMPR bracket
 ; so the source bytes (in section C) and the dest (section A under
 ; LMPR_IN_BASE) are both reachable.  The bytes-to-stamp live in
@@ -83,14 +84,16 @@ run_reader_paged_self_tests:
 ; doesn't displace them.  The blob is:
 ;
 ;   offset 0..3   : "SA64"
-;   offset 4..5   : version u16 LE = 0x0001
+;   offset 4..5   : version u16 LE = 0x0002
 ;   offset 6..7   : flags u16 LE = 0x0000
 ;   offset 8..9   : name_count u16 LE = 0x0000
-;   offset 10     : record kind = &77
-;   offset 11..12 : payload length u16 LE = 2
-;   offset 13..14 : payload bytes &AB, &CD
+;   offset 10..11 : label_count u16 LE = 0x0000  (compact `.tbn` v2 header table)
+;   offset 12..13 : local_count u16 LE = 0x0000  (compact `.tbn` v2 header table)
+;   offset 14     : record kind = &77
+;   offset 15..16 : payload length u16 LE = 2
+;   offset 17..18 : payload bytes &AB, &CD
 ;
-; Total = 15 bytes; IN_END_OFFSET = 15.
+; Total = 19 bytes; IN_END_OFFSET = 19.
 ;
 ; Note: writes go to section A under LMPR_IN_BASE, so the page-7
 ; physical bytes are clobbered (no other test relies on those bytes
@@ -199,13 +202,15 @@ reader_paged_fail_with_lmpr:
 
 
 ; -----------------------------------------------------------------------
-; Synthetic .tbn blob — 15 bytes.  Used by the record-fetch test above.
+; Synthetic .tbn blob — 19 bytes.  Used by the record-fetch test above.
 ; -----------------------------------------------------------------------
 reader_paged_synthetic_tbn:
                 defm    "SA64"              ; magic (4 bytes)
-                defw    1                   ; version u16 LE = 1
+                defw    2                   ; version u16 LE = 2 (compact `.tbn` v2)
                 defw    0                   ; flags u16 LE = 0
                 defw    0                   ; name_count u16 LE = 0
+                defw    0                   ; label_count u16 LE = 0 (header table)
+                defw    0                   ; local_count u16 LE = 0 (header table)
                 defb    &77                 ; record kind
                 defw    2                   ; record payload length
                 defb    &AB, &CD            ; payload

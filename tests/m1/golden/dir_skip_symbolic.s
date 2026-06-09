@@ -3,7 +3,7 @@
 // uses, since `.set` defines symbols *before* the directives use them.
   .set SIZE_A, 16
   .set SIZE_B, 32
-  .set BLOCK, (SIZE_A + SIZE_B * 2)
+  .set BLOCK, ((SIZE_A + SIZE_B) * 2)
   .set ALIGN, 8
   .data
   .balign ALIGN

@@ -259,6 +259,10 @@ func TestSyntheticParity_ExtendedSysName(t *testing.T) {
 	if _, e := os.Stat(text2bin); e != nil {
 		t.Skipf("build/text2bin not built: %v", e)
 	}
+	refenc := filepath.Join(root, "build", "refenc")
+	if _, e := os.Stat(refenc); e != nil {
+		t.Skipf("build/refenc not built: %v", e)
+	}
 	tmp := t.TempDir()
 	srcPath := filepath.Join(tmp, "sysn.s")
 	var body []byte
@@ -268,9 +272,17 @@ func TestSyntheticParity_ExtendedSysName(t *testing.T) {
 	if err := os.WriteFile(srcPath, body, 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	tbnPath := filepath.Join(tmp, "sysn.tbn")
-	if out, e := exec.Command(text2bin, "-o", tbnPath, srcPath).CombinedOutput(); e != nil {
+	// Symbolic .tbn → compact .tbn (refenc -emit-compact-tbn): the SAM
+	// assembler consumes the compact v2 .tbn (INSN_RUN decoder), not the raw
+	// symbolic text2bin output.
+	symTbnPath := filepath.Join(tmp, "sysn.tbn")
+	tbnPath := filepath.Join(tmp, "sysn.compact.tbn")
+	goImgPath := filepath.Join(tmp, "sysn.go.img")
+	if out, e := exec.Command(text2bin, "-o", symTbnPath, srcPath).CombinedOutput(); e != nil {
 		t.Fatalf("text2bin failed on the extended sysname fixture:\n%s", out)
+	}
+	if out, e := exec.Command(refenc, "-o", goImgPath, "-emit-compact-tbn", tbnPath, symTbnPath).CombinedOutput(); e != nil {
+		t.Fatalf("refenc failed on the extended sysname fixture:\n%s", out)
 	}
 	tbn, _ := os.ReadFile(tbnPath)
 

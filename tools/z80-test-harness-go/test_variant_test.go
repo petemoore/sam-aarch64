@@ -39,18 +39,30 @@ func TestVariantBootSelfTests(t *testing.T) {
 	d15Path := filepath.Join(root, "build", "disasm-test.bin")
 	encPath := filepath.Join(root, "build", "enctab.enc")
 	text2binPath := filepath.Join(root, "build", "text2bin")
+	refencPath := filepath.Join(root, "build", "refenc")
 	fixturePath := filepath.Join(root, "tests", "m3", "sources", "inst_nop_ret.s")
-	for _, p := range []string{tmPath, clusterPath, p14Path, sd13Path, d15Path, encPath, text2binPath, fixturePath} {
+	for _, p := range []string{tmPath, clusterPath, p14Path, sd13Path, d15Path, encPath, text2binPath, refencPath, fixturePath} {
 		if _, err := os.Stat(p); err != nil {
 			t.Skipf("prerequisite missing: %s", p)
 		}
 	}
 
-	tbnPath := filepath.Join(t.TempDir(), "inst_nop_ret.tbn")
-	cmd := exec.Command(text2binPath, "-o", tbnPath, fixturePath)
+	// Symbolic .tbn → compact .tbn (refenc -emit-compact-tbn): the SAM
+	// assembler consumes the compact v2 .tbn (INSN_RUN decoder), not the raw
+	// symbolic text2bin output.
+	tmp := t.TempDir()
+	symTbnPath := filepath.Join(tmp, "inst_nop_ret.tbn")
+	tbnPath := filepath.Join(tmp, "inst_nop_ret.compact.tbn")
+	goImgPath := filepath.Join(tmp, "inst_nop_ret.go.img")
+	cmd := exec.Command(text2binPath, "-o", symTbnPath, fixturePath)
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("text2bin failed: %v\n%s", err, out)
+	}
+	cmd = exec.Command(refencPath, "-o", goImgPath, "-emit-compact-tbn", tbnPath, symTbnPath)
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("refenc failed: %v\n%s", err, out)
 	}
 
 	asm, _ := os.ReadFile(asmPath)

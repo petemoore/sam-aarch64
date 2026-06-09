@@ -31,7 +31,30 @@ type Record struct {
 	LitDataDirID byte
 	LitData      []byte
 
+	// Mode and Elements are populated for KindInsnRun records. Mode is the
+	// run's element encoding (0 = packed literal words, 1 = base+patch
+	// overlay); Elements is the decoded element list (mode 0 yields
+	// patch-free elements).
+	Mode     byte
+	Elements []InsnElement
+
 	Raw []byte
+}
+
+// InsnElement is one instruction in a KindInsnRun record: its assembled
+// base word (with relocated bitfields zeroed in the overlay case) plus zero
+// or more patches. A patch-free element is a fully-literal instruction.
+type InsnElement struct {
+	BaseWord uint32
+	Patches  []InsnPatch
+}
+
+// InsnPatch is one relocated field of an overlay instruction: the slot id
+// (see aarch64enc.FoldSlot) selecting the bit-range and fold-rule, and the
+// expression bytecode whose evaluated value folds into that field.
+type InsnPatch struct {
+	Slot byte
+	Expr []byte
 }
 
 type RecordReader struct {
@@ -110,6 +133,50 @@ func (r *RecordReader) Next() (Record, error) {
 		}
 		rec.LitDataDirID = payload[0]
 		rec.LitData = payload[1:]
+	case KindInsnRun:
+		if len(payload) < 1 {
+			return rec, fmt.Errorf("INSN_RUN: payload too short")
+		}
+		rec.Mode = payload[0]
+		body := payload[1:]
+		switch rec.Mode {
+		case 0:
+			if len(body)%4 != 0 {
+				return rec, fmt.Errorf("INSN_RUN mode 0: payload %d not a multiple of 4", len(body))
+			}
+			for i := 0; i < len(body); i += 4 {
+				rec.Elements = append(rec.Elements, InsnElement{
+					BaseWord: binary.LittleEndian.Uint32(body[i:]),
+				})
+			}
+		case 1:
+			pos := 0
+			for pos < len(body) {
+				if pos+5 > len(body) {
+					return rec, fmt.Errorf("INSN_RUN mode 1: truncated element at %d", pos)
+				}
+				el := InsnElement{BaseWord: binary.LittleEndian.Uint32(body[pos:])}
+				pos += 4
+				patchCount := int(body[pos])
+				pos++
+				for p := 0; p < patchCount; p++ {
+					if pos+2 > len(body) {
+						return rec, fmt.Errorf("INSN_RUN mode 1: truncated patch header at %d", pos)
+					}
+					slot := body[pos]
+					exprLen := int(body[pos+1])
+					pos += 2
+					if pos+exprLen > len(body) {
+						return rec, fmt.Errorf("INSN_RUN mode 1: truncated patch expr at %d", pos)
+					}
+					el.Patches = append(el.Patches, InsnPatch{Slot: slot, Expr: body[pos : pos+exprLen]})
+					pos += exprLen
+				}
+				rec.Elements = append(rec.Elements, el)
+			}
+		default:
+			return rec, fmt.Errorf("INSN_RUN: unknown mode %d", rec.Mode)
+		}
 	}
 	return rec, nil
 }
@@ -119,6 +186,11 @@ type File struct {
 	Version uint16
 	Flags   uint16
 	Names   []string
+	// Labels and Locals are the header position tables (§2.4): named
+	// position-labels and numeric-local def sites resolved to byte offsets
+	// from the origin VMA. Empty for a symbolic `.tbn` from text2bin.
+	Labels  []LabelRow
+	Locals  []LocalRow
 	Records []byte
 }
 
@@ -156,10 +228,21 @@ func ReadFile(buf []byte) (*File, error) {
 		pos += n
 	}
 
+	labels, pos, err := readLabelTable(buf, pos)
+	if err != nil {
+		return nil, err
+	}
+	locals, pos, err := readLocalTable(buf, pos)
+	if err != nil {
+		return nil, err
+	}
+
 	return &File{
 		Version: version,
 		Flags:   flags,
 		Names:   names,
+		Labels:  labels,
+		Locals:  locals,
 		Records: buf[pos:],
 	}, nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	enc "github.com/petemoore/sam-aarch64/tools/aarch64enc"
 	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
 )
 
@@ -37,7 +38,7 @@ func buildMixedTBN(t *testing.T) *format.File {
 	rw.WriteInst(nopID, 0, nil)
 
 	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, st, rw.Bytes()); err != nil {
+	if err := format.WriteFile(&buf, st, nil, nil, rw.Bytes()); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	f, err := format.ReadFile(buf.Bytes())
@@ -60,10 +61,13 @@ func assemble(t *testing.T, f *format.File) []byte {
 	return out
 }
 
-func TestCompact_RoundTripIdentical(t *testing.T) {
-	f := buildMixedTBN(t)
-	want := assemble(t, f)
-
+// compactFile runs the full compaction round-trip the refenc binary does:
+// Pass1 → Compact → WriteFile (with the header label/local tables built from
+// pass1) → ReadFile. The returned File is a v2 compact `.tbn` whose labels
+// and numeric-locals live in the header tables (NOT in the record stream),
+// exactly as writeCompactTBN produces.
+func compactFile(t *testing.T, f *format.File) *format.File {
+	t.Helper()
 	p1, err := Pass1(f)
 	if err != nil {
 		t.Fatalf("Pass1: %v", err)
@@ -72,12 +76,46 @@ func TestCompact_RoundTripIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
+	st := format.NewSymbolTable()
+	for _, n := range f.Names {
+		st.Intern(n)
+	}
+	labels, locals := headerRows(f, p1)
+	var buf bytes.Buffer
+	if err := format.WriteFile(&buf, st, labels, locals, compacted); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cf, err := format.ReadFile(buf.Bytes())
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	return cf
+}
 
-	cf := &format.File{Version: f.Version, Flags: f.Flags, Names: f.Names, Records: compacted}
+func TestCompact_RoundTripIdentical(t *testing.T) {
+	f := buildMixedTBN(t)
+	want := assemble(t, f)
+
+	cf := compactFile(t, f)
 	got := assemble(t, cf)
 
 	if !bytes.Equal(got, want) {
 		t.Errorf("compact assembly differs:\n got % X\nwant % X", got, want)
+	}
+
+	// The label moved to the header table; no LABEL_DEF record survives.
+	if len(cf.Labels) != 1 || cf.Names[cf.Labels[0].NameID] != "start" {
+		t.Errorf("header label table = %+v, want one row for \"start\"", cf.Labels)
+	}
+	rr := format.NewRecordReader(cf.Records)
+	for !rr.AtEnd() {
+		rec, err := rr.Next()
+		if err != nil {
+			t.Fatalf("reader: %v", err)
+		}
+		if rec.Kind == format.KindLabelDef || rec.Kind == format.KindLocalDef {
+			t.Errorf("compact record stream still carries %s", rec.Kind.Name())
+		}
 	}
 }
 
@@ -92,7 +130,9 @@ func TestCompact_CollapsesLiteralRun(t *testing.T) {
 		t.Fatalf("Compact: %v", err)
 	}
 
-	var litRuns, litInsts, symInsts int
+	var insnRuns, litElems, overlayElems int
+	var overlaySlot byte = 0xff
+	noPlainInst := true
 	rr := format.NewRecordReader(compacted)
 	for !rr.AtEnd() {
 		rec, err := rr.Next()
@@ -100,23 +140,37 @@ func TestCompact_CollapsesLiteralRun(t *testing.T) {
 			t.Fatalf("reader: %v", err)
 		}
 		switch rec.Kind {
-		case format.KindLitInsts:
-			litRuns++
-			litInsts += int(rec.LitCount)
-		case format.KindInst:
-			symInsts++
+		case format.KindInsnRun:
+			insnRuns++
+			for _, el := range rec.Elements {
+				if len(el.Patches) == 0 {
+					litElems++
+				} else {
+					overlayElems++
+					overlaySlot = el.Patches[0].Slot
+				}
+			}
+		case format.KindInst, format.KindLitInsts:
+			noPlainInst = false
 		}
 	}
-	// The two leading nops collapse into one run; the trailing nop is a
-	// second run of one. The `b start` stays a symbolic INST.
-	if litRuns != 2 {
-		t.Errorf("lit runs = %d, want 2", litRuns)
+	// v2 unifies instructions into INSN_RUN: the three nops are patch-free
+	// elements; `b start` is one overlay element (a Branch26 patch). No
+	// KindInst / KindLitInsts records survive in the compact stream.
+	if !noPlainInst {
+		t.Errorf("compact stream still has KindInst/KindLitInsts records")
 	}
-	if litInsts != 3 {
-		t.Errorf("collapsed insts = %d, want 3 (three nops)", litInsts)
+	if insnRuns == 0 {
+		t.Errorf("no INSN_RUN records emitted")
 	}
-	if symInsts != 1 {
-		t.Errorf("symbolic insts = %d, want 1 (b start)", symInsts)
+	if litElems != 3 {
+		t.Errorf("literal elements = %d, want 3 (three nops)", litElems)
+	}
+	if overlayElems != 1 {
+		t.Errorf("overlay elements = %d, want 1 (b start)", overlayElems)
+	}
+	if overlaySlot != byte(enc.FoldBranch26) {
+		t.Errorf("overlay slot = %d, want FoldBranch26 (%d)", overlaySlot, enc.FoldBranch26)
 	}
 }
 
@@ -160,7 +214,7 @@ func buildDataTBN(t *testing.T) *format.File {
 	rw.WriteDirective(byteID, n, ops) // .byte 0xaa,0xbb (different dir → own run)
 
 	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, st, rw.Bytes()); err != nil {
+	if err := format.WriteFile(&buf, st, nil, nil, rw.Bytes()); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	f, err := format.ReadFile(buf.Bytes())
@@ -174,18 +228,16 @@ func TestCompact_DataRoundTripIdentical(t *testing.T) {
 	f := buildDataTBN(t)
 	want := assemble(t, f)
 
-	p1, err := Pass1(f)
-	if err != nil {
-		t.Fatalf("Pass1: %v", err)
-	}
-	compacted, err := Compact(f, p1)
-	if err != nil {
-		t.Fatalf("Compact: %v", err)
-	}
-	cf := &format.File{Version: f.Version, Flags: f.Flags, Names: f.Names, Records: compacted}
+	cf := compactFile(t, f)
 	got := assemble(t, cf)
 	if !bytes.Equal(got, want) {
 		t.Errorf("compact data assembly differs:\n got % X\nwant % X", got, want)
+	}
+
+	// The `start` label (referenced by `.quad start`) is resolved from the
+	// header table, not a LABEL_DEF record.
+	if len(cf.Labels) != 1 || cf.Names[cf.Labels[0].NameID] != "start" {
+		t.Errorf("header label table = %+v, want one row for \"start\"", cf.Labels)
 	}
 }
 

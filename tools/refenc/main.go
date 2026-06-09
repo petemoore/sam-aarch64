@@ -20,10 +20,11 @@ func main() {
 			"pool, expr evaluator, OPVAL buffer, record stream) to "+
 			"stderr — used for sizing the Z80-side fixed tables.")
 	flag.StringVar(&emitCompact, "emit-compact-tbn", "",
-		"also write a compacted .tbn to this path: runs of fully-"+
-			"literal instructions are collapsed to KindLitInsts records "+
-			"(assembled bytes), shrinking the file while assembling to "+
-			"the identical binary. The normal -o binary is unaffected.")
+		"also write a compacted v2 .tbn to this path: instructions are "+
+			"collapsed into INSN_RUN records (assembled base words plus a "+
+			"sparse overlay patch for symbol/PC-bearing fields), shrinking "+
+			"the file while assembling to the identical binary. The normal "+
+			"-o binary is unaffected.")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: refenc INPUT.tbn -o OUTPUT.bin [--dump-usage]")
@@ -78,8 +79,9 @@ func writeCompactTBN(path string, f *format.File, p1 *Pass1Result) error {
 	for _, n := range f.Names {
 		st.Intern(n)
 	}
+	labels, locals := headerRows(f, p1)
 	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, st, compacted); err != nil {
+	if err := format.WriteFile(&buf, st, labels, locals, compacted); err != nil {
 		return err
 	}
 	return os.WriteFile(path, buf.Bytes(), 0644)

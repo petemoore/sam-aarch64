@@ -54,7 +54,7 @@ Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
 
 | Strand | Status | Source |
 |---|---|---|
-| **i39a** — Phase 1: instruction overlay (unify literal/symbolic INST into one run) + header label/offset table; v2 format flip | ⏳ **PR(a)+(b)+i48b+(c) done — all 14 CI checks GREEN incl. the full SimCoupé matrix; PR(d) remaining** (see below) | `docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md`; branch `i39a-instruction-overlay`, PR #131 |
+| **i39a** — Phase 1: instruction overlay (unify literal/symbolic INST into one run) + header label/offset table; v2 format flip | ✅ **PR(a)+(b)+i48b+(c)+(d) + i48d DONE on the branch; ready to merge** (push + CI + §3 review pending). i48a split to its own follow-up PR (see below). | `docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md`; branch `i39a-instruction-overlay`, PR #131 |
 | **i39b** — Phase 2: name-table front-coding + comment/`.global`/base-hint editor sidecars (evictable region) | 🧭 designed (design §3.6/§3.7) | design §5 phase 2 |
 | **i39c** — Phase 3: bitfield-packing polish on the overlay slot bytes | 🧭 designed (low priority) | design §3.1 |
 | **i40** — assembler-side editor-region eviction (write editor region/`.tbn` to disk before assembling, reuse RAM as OUT/scratch, reload to restore) | 🧭 future (editor phase) | design §7 decision 1 |
@@ -171,18 +171,50 @@ smaller** (test `&BE7F`, 385 B headroom). Gates + harness feed the compact `.tbn
 `KindLitInsts` reader arm is left for i48a, per the i48 design — the Z80 budget-
 critical removal is done.)*
 
-**⏳ Remaining (same feature branch, before merge):**
-- **PR(d)** — header label/offset table (delta-varint); labels stop splitting
-  runs; closes toward the ~44 KB target. A byte-affecting format change (Go +
-  Z80, full byte-match re-verification) — the overlay is already correct with
-  labels as records, so this is an optimization, not a correctness prerequisite.
-- **i48a** — host front-end unification (the compact overlay becomes the only
-  serialized `.tbn`; symbolic kinds → in-memory IR; drops the dead Go
-  `KindLitInsts` arm). Independent of the Z80; can run in parallel.
-- **i48d** — doc scrub (rewrite `tbn-binary-format-reference.md` to overlay-only).
-  **Must land WITH the merge to `main`** — `main`'s code+doc both describe v1
-  today (consistent); merging the v2 code without i48d would leave a head doc
-  describing a format `main` no longer produces (the i48 §9 skew risk).
+**✅ PR(d) — header label/offset table DONE (commits `f6d15ba` Go + `61f4a08` Z80).**
+Label/local defs move out of the record stream into two delta-varint header
+tables (`[count u16]` + `[name_id u16|digit u8][offset_delta uvarint]`, LEB128,
+offset = symbolVMA − OriginVMA, sorted) between the name table and the records,
+so the instruction run spans labels. **Go side** (`f6d15ba`): `format` emits/parses
+the tables (`header_tables.go`); `refenc` drops LABEL_DEF/LOCAL_DEF from `Compact`
+(flushing only the data run), builds rows from `p1` (a new `LabelDefs` provenance
+set excludes `.equ`), and seeds `Symbols`/`LocalDefs` from the tables at
+end-of-pass1; `bin2text` renders each def at its PC. Compact `.tbn` **47,067 →
+45,189 B** (−4.0%); Go arms byte-match (compact == symbolic == GNU release.img).
+**Z80 side** (`61f4a08`): `src/reader.asm` parses the tables at `reader_init` and
+seeds the symbol/local tables (gated on `PASS_MODE == PASS_PASS1`; a page-safe byte
+reader + a LEB128 uvarint decoder + 32-bit accumulate; stored offset == the symbol
+value because every target/fixture origin is 4GB-aligned — the m6 byte-match is the
+backstop); `src/main_loop.asm` deletes the LABEL_DEF/LOCAL_DEF dispatch + handlers +
+the now-dead `copy_pass_pc_to_*` helpers + orphaned equates; `reader_init_done` now
+normalises a page-boundary cursor (a latent large-source bug fixed at source).
+Verified on the koron-go/z80 harness (`TestCompactTbnAssembly` +
+`TestReleasePagedInLoad` byte-match release.img over multi-byte varints + hundreds
+of labels) + the booted reader-paged self-test; `make check-budget` test **&BF68
+(152 B headroom)**, prod 2043 B — under `&C000`, nothing ratcheted. SimCoupé
+deferred to CI (no Docker locally; the harness is the faithful inner-loop proxy).
+
+**✅ i48d — `.tbn` format reference → v2 DONE (commit `dc2b993`).** Scoped to
+**v2-accurate** (NOT the overlay-only rewrite, since i48a is now deferred — see
+below): documents the INSN_RUN record + the header tables + the 13 FoldSlots, framed
+as **two profiles of one v2 container** — the symbolic intermediate (host-only
+`text2bin` handoff, empty header tables, pending i48a) vs the compact overlay (the
+SAM/shipped form). `LIT_INSTS` (0x07) marked retained-but-unproduced. Superseded
+banners on the M1/i1 design docs.
+
+**↪ i48a — SPLIT to its own follow-up PR (Pete, 2026-06-09 #3).** Host front-end
+unification (merge `text2bin`+`refenc` into one integrated tool so the symbolic
+`.tbn` lives only in-memory; drop the dead Go `KindLitInsts` arm) is a **~200-site,
+byte-neutral host-tooling refactor** independent of the overlay — it reviews far
+better on its own, and the shipped SAM format is already overlay-only after PR(d).
+So the symbolic `.tbn` remains a host build-intermediate after this merge. Scope
+map + the non-byte-affecting Decision-B strictness items (symbolic mem → error,
+add/sub `lsl#12` syntactic, mov→movz fallback) + the **q7** GNU-rewrite sweep all
+ride the i48a follow-up. See `docs/notes/item-registry.md` (i48a).
+
+**⏳ Remaining before merge (this PR):** push the branch → monitor CI (14 checks
+incl. the SimCoupé matrix — the first authoritative SimCoupé verdict on PR(d)) →
+the §3 pre-merge review → `gh pr merge --merge --delete-branch`.
 
 ## Open questions for Pete (M8)
 

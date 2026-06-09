@@ -12,7 +12,7 @@ func TestPass2_Nop(t *testing.T) {
 	nopID, _ := format.MnemonicID("nop")
 	rw.WriteInst(nopID, 0, nil)
 	var buf bytes.Buffer
-	format.WriteFile(&buf, format.NewSymbolTable(), rw.Bytes())
+	format.WriteFile(&buf, format.NewSymbolTable(), nil, nil, rw.Bytes())
 	f, _ := format.ReadFile(buf.Bytes())
 
 	res, _ := Pass1(f)
@@ -118,7 +118,7 @@ func TestPass2_DirectiveBytes(t *testing.T) {
 	rw.WriteDirective(id, 3, ow.Bytes())
 
 	var buf bytes.Buffer
-	format.WriteFile(&buf, st, rw.Bytes())
+	format.WriteFile(&buf, st, nil, nil, rw.Bytes())
 	f, _ := format.ReadFile(buf.Bytes())
 
 	res, _ := Pass1(f)

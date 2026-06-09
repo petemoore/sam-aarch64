@@ -101,6 +101,39 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 			// straight to OUT.
 			out = append(out, rec.LitData...)
 			pc += int64(len(rec.LitData))
+		case format.KindInsnRun:
+			// Overlay run: emit each element's base word ORed with every
+			// patch's folded bits. A patch-free element (mode 0, or a
+			// literal carried in a mode-1 run) emits its base word verbatim.
+			for _, el := range rec.Elements {
+				word := el.BaseWord
+				for _, patch := range el.Patches {
+					slot := enc.FoldSlot(patch.Slot)
+					var value int64
+					if slot == enc.FoldLitpool19 {
+						idx, ok := p1.LdrPoolIdx[pc]
+						if !ok {
+							return nil, fmt.Errorf("pc=0x%x: INSN_RUN litpool patch with no pool index", uint64(pc))
+						}
+						value = p1.PoolEntries[idx].PC
+					} else {
+						v, err := EvalUsage(patch.Expr, makeCtx(pc, p1, f), usage)
+						if err != nil {
+							return nil, fmt.Errorf("pc=0x%x: INSN_RUN patch eval: %w", uint64(pc), err)
+						}
+						value = v
+					}
+					bits, err := enc.Fold(slot, value, pc, el.BaseWord)
+					if err != nil {
+						return nil, fmt.Errorf("pc=0x%x: INSN_RUN fold(slot %d): %w", uint64(pc), patch.Slot, err)
+					}
+					word |= bits
+				}
+				var buf [4]byte
+				binary.LittleEndian.PutUint32(buf[:], word)
+				out = append(out, buf[:]...)
+				pc += 4
+			}
 		case format.KindDirective:
 			name := format.DirectiveName(rec.DirectiveID)
 			if name == ".ltorg" {

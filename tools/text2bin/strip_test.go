@@ -17,7 +17,7 @@ func buildTbn(t *testing.T, names []string, recordBytes []byte) []byte {
 		st.Intern(n)
 	}
 	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, st, recordBytes); err != nil {
+	if err := format.WriteFile(&buf, st, nil, nil, recordBytes); err != nil {
 		t.Fatal(err)
 	}
 	return buf.Bytes()

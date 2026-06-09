@@ -3,18 +3,16 @@
 **Status**: approved 2026-05-23. Read alongside `2026-05-09-vision.md`
 and `2026-05-09-phase1-assembler.md`.
 
-> ⚠️ **The format-reference sections of this doc (§2–§6) are SUPERSEDED.**
-> The single normative description of the on-disk `.tbn` format — current
-> with `KindLitInsts`, `OpLitPool`, the grown directive table, and the
-> compaction record kinds — now lives in
-> **`docs/specs/2026-06-08-tbn-binary-format-reference.md`**. The tables in
-> §2–§6 below predate those additions and are retained only as the
+> ⚠️ **Superseded baseline.** This doc describes the original M1 (v1)
+> format. The current authoritative on-disk encoding is the **v2 /
+> instruction-overlay** format in
+> **`docs/specs/2026-06-08-tbn-binary-format-reference.md`** — read that for
+> any current question about the format; if the two disagree the reference
+> (and the Go authority it cites) wins. This doc is retained only as the
 > historical M1 milestone record (and for the §7–§9 tooling / test-pyramid /
-> open-items content, which still applies). For any *current* question about
-> record kinds, operand kinds, the expression bytecode, the directive table,
-> the header/name-table layout, or record framing, read the reference doc
-> instead — if the two disagree, the reference (and the Go authority it cites)
-> wins.
+> open-items content, which still applies); its §2–§6 format tables predate
+> `KindInsnRun`, the header position tables, `KindLitData`, `OpLitPool`, and
+> the grown directive table.
 
 ## 1. Goal & boundaries
 

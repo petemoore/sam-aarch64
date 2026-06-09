@@ -204,6 +204,7 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
                 include "sysname.asm"
                 include "reader.asm"
                 include "main_loop.asm"
+                include "insn_run.asm"
                 include "symbols.asm"
                 include "local_labels.asm"
                 include "litpool.asm"
