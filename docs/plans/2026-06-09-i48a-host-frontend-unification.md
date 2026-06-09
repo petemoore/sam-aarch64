@@ -12,6 +12,8 @@
 
 **Hard invariant (all PRs):** the overlay `.tbn` bytes and the assembled binary stay byte-identical to today. PR1 and PR2 are *byte-neutral by construction* (same code, relocated / same records, in-memory instead of on-disk). PR3's strictness changes are designed to be zero-corpus-cost (the spec measured 0 affected sites).
 
+> **STATUS (2026-06-09 #4):** ✅ **PR1 MERGED** (#141, `271b202`) · ✅ **PR2 MERGED** (#142, `1c2c0f9`) · 📋 **PR3 next.** Both PR1 and PR2 landed byte-neutral with all 14 CI checks green (incl. the SimCoupé matrix) and §3 reviews = MERGE. **Scope adjustment carried into PR2:** the `KindLitInsts`/symbolic-record-kind removal listed under "PR2 step 5" below was **deferred to PR3** — it is woven through the format library (`sam-aarch64-format/{kinds,reader,writer,litinsts}.go`) *and* the `assemble` package (`compact.go`/`pass1.go`) + their tests, i.e. a real format change rather than a dead-arm snip, so it belongs with PR3's format cleanup. PR2 stayed a pure plumbing change with zero format-library edits.
+
 ---
 
 ## Current architecture (the seam to remove)
