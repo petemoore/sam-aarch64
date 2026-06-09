@@ -193,18 +193,32 @@ func ReadFile(buf []byte) (*File, error) {
 	count := int(binary.LittleEndian.Uint16(buf[pos:]))
 	pos += 2
 
+	// Front-coded entries (§ name table): each is
+	// [shared_prefix_len uvarint][suffix_len uvarint][suffix bytes];
+	// reconstruct by copying `shared` bytes from the previous name.
 	names := make([]string, count)
+	var prev string
 	for i := 0; i < count; i++ {
-		if pos+2 > len(buf) {
-			return nil, fmt.Errorf("file: truncated name length at %d", i)
+		shared, ns := binary.Uvarint(buf[pos:])
+		if ns <= 0 {
+			return nil, fmt.Errorf("file: truncated name shared-prefix-len at %d", i)
 		}
-		n := int(binary.LittleEndian.Uint16(buf[pos:]))
-		pos += 2
-		if pos+n > len(buf) {
+		pos += ns
+		slen, nl := binary.Uvarint(buf[pos:])
+		if nl <= 0 {
+			return nil, fmt.Errorf("file: truncated name suffix-len at %d", i)
+		}
+		pos += nl
+		if int(shared) > len(prev) {
+			return nil, fmt.Errorf("file: name %d shared-prefix-len %d exceeds previous name length %d", i, shared, len(prev))
+		}
+		if pos+int(slen) > len(buf) {
 			return nil, fmt.Errorf("file: truncated name body at %d", i)
 		}
-		names[i] = string(buf[pos : pos+n])
-		pos += n
+		name := prev[:shared] + string(buf[pos:pos+int(slen)])
+		pos += int(slen)
+		names[i] = name
+		prev = name
 	}
 
 	labels, pos, err := readLabelTable(buf, pos)
