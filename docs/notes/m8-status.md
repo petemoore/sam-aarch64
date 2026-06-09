@@ -54,7 +54,7 @@ Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
 
 | Strand | Status | Source |
 |---|---|---|
-| **i39a** — Phase 1: instruction overlay (unify literal/symbolic INST into one run) + header label/offset table; v2 format flip | ✅ **PR(a)+(b)+i48b+(c)+(d) + i48d DONE on the branch; ready to merge** (push + CI + §3 review pending). i48a split to its own follow-up PR (see below). | `docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md`; branch `i39a-instruction-overlay`, PR #131 |
+| **i39a** — Phase 1: instruction overlay (unify literal/symbolic INST into one run) + header label/offset table; v2 format flip | ✅ **MERGED to `main`** — PR #131, merge commit `e68e0bf` (all 14 CI checks green incl. the SimCoupé matrix; §3 review = MERGE). PR(a)+(b)+i48b+(c)+(d) + i48d. i48a split to its own follow-up PR (see below). | `docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md`; PR #131 (merged) |
 | **i39b** — Phase 2: name-table front-coding + comment/`.global`/base-hint editor sidecars (evictable region) | 🧭 designed (design §3.6/§3.7) | design §5 phase 2 |
 | **i39c** — Phase 3: bitfield-packing polish on the overlay slot bytes | 🧭 designed (low priority) | design §3.1 |
 | **i40** — assembler-side editor-region eviction (write editor region/`.tbn` to disk before assembling, reuse RAM as OUT/scratch, reload to restore) | 🧭 future (editor phase) | design §7 decision 1 |
@@ -212,9 +212,12 @@ map + the non-byte-affecting Decision-B strictness items (symbolic mem → error
 add/sub `lsl#12` syntactic, mov→movz fallback) + the **q7** GNU-rewrite sweep all
 ride the i48a follow-up. See `docs/notes/item-registry.md` (i48a).
 
-**⏳ Remaining before merge (this PR):** push the branch → monitor CI (14 checks
-incl. the SimCoupé matrix — the first authoritative SimCoupé verdict on PR(d)) →
-the §3 pre-merge review → `gh pr merge --merge --delete-branch`.
+**✅ MERGED (PR #131, merge commit `e68e0bf`, 2026-06-09 #3).** All 14 CI checks
+green incl. the full SimCoupé matrix + the m6-release 3-way byte-match (GNU == Go ==
+Z80/SAM — the first authoritative SimCoupé verdict on PR(d), confirming the harness);
+the §3 pre-merge review returned MERGE (all items PASS, recorded on the PR). **Next:
+open the i48a follow-up PR** (the host front-end unification — scope above + in the
+item registry).
 
 ## Open questions for Pete (M8)
 
