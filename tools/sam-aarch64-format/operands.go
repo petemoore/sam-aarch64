@@ -136,7 +136,6 @@ func (c CondCode) Name() string {
 type OperandWriter struct{ buf []byte }
 
 func (w *OperandWriter) Bytes() []byte { return w.buf }
-func (w *OperandWriter) Reset()        { w.buf = w.buf[:0] }
 
 // WriteReg writes a register operand; kind must be one of OpRegX,
 // OpRegW, OpRegXSP, OpRegWSP.

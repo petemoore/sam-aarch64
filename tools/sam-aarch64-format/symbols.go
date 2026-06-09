@@ -23,20 +23,6 @@ func (st *SymbolTable) Intern(name string) uint16 {
 	return id
 }
 
-// Name returns the interned name for an ID, or "" if the ID is out
-// of range.
-func (st *SymbolTable) Name(id uint16) string {
-	if int(id) >= len(st.names) {
-		return ""
-	}
-	return st.names[id]
-}
-
-// Len returns the number of distinct names interned.
-func (st *SymbolTable) Len() int {
-	return len(st.names)
-}
-
 // Names returns the name table in ID order. The caller must not
 // mutate the returned slice.
 func (st *SymbolTable) Names() []string {
