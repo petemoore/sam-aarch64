@@ -33,7 +33,7 @@ for the design decision and full workflow guidance.
 Build the required artefacts from the repo root:
 
 ```
-make m3-asm-prod enctab text2bin
+make m3-asm-prod enctab sam-aarch64
 ```
 
 ## Run the unit test
@@ -75,7 +75,7 @@ BUILD_TESTS variant (runs the boot-time self-test suites, including
 page-14 payload so HGTHD/HLOAD can serve them:
 
 ```
-make m3-asm test-mem-offaxis paged-call-payload enctab text2bin
+make m3-asm test-mem-offaxis paged-call-payload enctab sam-aarch64
 /tmp/z80-harness \
     -assembler ../../build/assembler.bin \
     -enctab ../../build/enctab.enc \

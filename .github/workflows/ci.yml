@@ -514,7 +514,7 @@ jobs:
   # three independent toolchains agree, byte-for-byte, on the vendored
   # spectrum4 release:
   #   1. GNU binutils  — the vendored tests/m6/release/release.img.
-  #   2. our Go path   — text2bin (release.s → .tbn) + refenc (.tbn → bin).
+  #   2. our Go path   — sam-aarch64 (release.s → .tbn → bin).
   #   3. our Z80 path  — the SAM assembler on SimCoupé (.tbn → OUT).
   # Without it, the origin-dependent encoder logic (ORIGIN_HIGH /
   # SYMTAB_ABS_BITMAP / 33-bit-ADRP) could silently regress, because the m6
@@ -523,8 +523,8 @@ jobs:
   # Hermetic + fast: BOTH inputs are vendored (tests/m6/release/), so this
   # needs no spectrum4 checkout, no tup, and no aarch64 binutils at CI time
   # — just the dev image.  release.s is the whole release flattened into one
-  # self-contained source by `text2bin -E`; the gate regenerates the .tbn
-  # from it, so it also exercises text2bin's flatten/strip pipeline (if .tbn
+  # self-contained source by `sam-aarch64 -E`; the gate regenerates the .tbn
+  # from it, so it also exercises sam-aarch64's flatten/strip pipeline (if .tbn
   # generation broke, the Go and Z80 outputs would diverge from the GNU
   # image).  Refresh both files with tools/revendor-m6-release.sh.
   #

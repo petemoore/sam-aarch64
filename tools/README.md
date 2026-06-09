@@ -22,7 +22,6 @@ This directory holds the Go-side toolchain, build helpers, and exploratory spike
 | `run-m3-roundtrip.sh`, `run-m4-roundtrip.sh`, `run-m5-roundtrip.sh`, `run-m6-roundtrip.sh` | Per-milestone end-to-end round-trip drivers (sam-aarch64 → disk → SimCoupé → extract → byte-compare vs GNU). | (called by `tests/m{3,4,5,6}/run-roundtrip.sh`) |
 | `run-m6-release-gate.sh`, `run-m6-release-stripped.sh`, `run-release-sam.sh` | Drive the spectrum4 `release.bin` byte-match on SAM (the M6 headline gate / iteration helpers). | — |
 | `revendor-m6-release.sh` | Refresh the vendored stripped release `.tbn` fixture from a spectrum4 checkout. | — |
-| `flatten-s/` | Recursively expands GNU-`as` `.include` directives in a `.s` file (does *not* expand macros). Pre-processing helper. | — |
 | `session-handover.sh` | Session-start helper; warns about stray `docs/superpowers/` files. | — |
 | `Dockerfile.dev` | Dev-container image (pyz80 + SimCoupé + Go). SimCoupé is built from upstream v1.2.16 source, which ships `-exitonhalt` natively. SimCoupé runs only in this container. | — |
 
@@ -39,7 +38,6 @@ This directory holds the Go-side toolchain, build helpers, and exploratory spike
 | `basic-emulator-spike/` | Text BASIC → tokenised `.mgt` via SAM ROM emulation. Findings: see memory `spike_basic_rom_emulation`. |
 | `basic-detokeniser-spike/` | Inverse: tokenised BASIC → text via EDIT/EDKY/ELINE ROM emulation. Findings: `docs/notes/basic-detokeniser-spike.md`. |
 | `basic-detokeniser-sweep/` | Corpus validator: walks the SAM BASIC corpus and compares the detokeniser-spike output against `samfile basic-to-text`. |
-| `build-screen-disk/` | Builds a `.mgt` carrying a SAMDOS2 + mode-4 `SCREEN$` dump. Ad-hoc screen-mode exploration. |
 
 ## Superseded — LLIST cluster
 
