@@ -4,19 +4,21 @@
 ; for the format; docs/specs/2026-05-27-m6-paged-in-design.md for the
 ; paging design.
 ;
-;   File layout:
-;     ┌────────────────────────────┐
-;     │ Magic   "SA64"   (4 bytes) │
-;     │ Version u16 LE             │
-;     │ Flags   u16 LE             │
-;     ├────────────────────────────┤
-;     │ Name table                 │
-;     │   [count u16][name₀][name₁]…
-;     │   each name: [len u16][bytes]
-;     ├────────────────────────────┤
-;     │ Statement records          │
-;     │   [kind u8][len u16][payload]
-;     └────────────────────────────┘
+;   File layout (compact `.tbn` v2; editor-region split, M8 / i39b-2):
+;     ┌──────────────────────────────────┐
+;     │ Magic   "SA64"   (4 bytes)       │
+;     │ Version u16 LE                   │
+;     │ Flags   u16 LE                   │
+;     │ editor_region_offset u32 LE      │ section index → start of editor region
+;     ├──────────────────────────────────┤ ── assembler-facing region ──
+;     │ Header label table               │  [count u16][name_id u16][delta uvarint]…
+;     │ Header local table               │  [count u16][digit u8][delta uvarint]…
+;     │ Statement records                │  [kind u8][len u16][payload]…
+;     ├──────────────────────────────────┤ ── editor region (at editor_region_offset) ──
+;     │ Name table (front-coded)         │  the assembler NEVER reads these:
+;     │ .global flags                    │  it stops the record walk at the
+;     │ Comment sidecar                  │  boundary (IN_END) and resolves
+;     └──────────────────────────────────┘  symbols by name_id via the header tables.
 ;
 ; Record kinds (M1 §3):
 ;   0x01 INST       [mnemonic_id u16][operand_count u8][operands…]
@@ -38,32 +40,25 @@
 
 
 ; -----------------------------------------------------------------------
-; reader_init — validate magic + version, skip name table, position the
-; cursor at the first record's kind byte.
+; reader_init — validate magic + version, read the section index to bound
+; the record walk at the editor region, then parse the header tables and
+; position the cursor at the first record's kind byte.
 ;
 ; Input:  cursor (IN_POS_*) initialised to the start of IN by
-;         reset_reader_to_in_buf; IN_END_* set by load_in_file.
-; Output: cursor advanced past the header + name table.  LMPR restored
-;         to LMPR_ENCTAB on success.
+;         reset_reader_to_in_buf; IN_END_* set by load_in_file (overwritten
+;         here with the editor-region boundary).
+; Output: IN_END_* = the editor-region boundary; cursor advanced past the
+;         header tables to the first record.  LMPR restored to LMPR_ENCTAB
+;         on success.
 ; On bad magic / version: jp fail (without restoring LMPR — fail's
 ; printer-channel banner runs under DI'd interrupts; the wrong LMPR
 ; doesn't affect anything before halt).
 ; Clobbers: A, BC, DE, HL.
 ;
-; Note on the magic / version / flags reads: HL starts at &0000 and we
-; do at most 8 INC HL before reaching the name-count word.  HL stays
-; well under &4000 (section A) throughout, so no page-cross
-; renormalisation is needed before the name table.
-;
-; Implementation detail (intentional, not a bug): if a future on-disk
-; header were to grow past 8 bytes such that the magic/version/flags
-; sequence crossed &4000, the high bytes would be read via section B
-; under LMPR=&27.  Section B at LMPR=&27 maps to page 8 = IN[1], the
-; next IN page — which gives the correct bytes by virtue of section B =
-; LMPR-low+1.  This matches the COMET adjustpo idiom and is robust.
-; The name-table walk below DOES call in_normalise_hl after each
-; cursor += suffix_len step because a suffix may be tens of bytes — too
-; large to rely on the section-B implicit window.
+; Note on the header reads: HL starts at &0000 and we do at most 12 INC HL
+; (magic 4 + version 2 + flags 2 + section index 4) before the header
+; tables.  HL stays well under &4000 (section A) throughout, so no
+; page-cross renormalisation is needed reading the fixed header.
 ; -----------------------------------------------------------------------
 reader_init:
                 call    in_map_current
@@ -102,57 +97,51 @@ reader_init:
                 inc     hl
                 inc     hl
 
-; -- Name table: [count u16] then front-coded entries (i39b-1).  Each
-;    entry = [shared_prefix_len uvarint][suffix_len uvarint][suffix bytes].
-;    The assembler resolves symbols by name_id via the header tables and
-;    NEVER decodes a name string, so the skip only advances the cursor
-;    past each entry.  We drive it through (reader_in_cursor) so we can
-;    reuse the LEB128 decoder (reader_uvarint_add) the header tables use.
-                ld      e, (hl)
+; -- Section index: editor_region_offset u32 LE (M8 / i39b-2) ----------
+;    The assembler-facing records end at this byte offset from file start;
+;    the editor region (front-coded name table, .global flags, comment
+;    sidecar) follows it and the assembler NEVER reads it — symbols
+;    resolve by name_id via the header tables.  Set the record-walk
+;    terminator (IN_END) to this boundary so walk_records stops there,
+;    then jump straight to the header tables (no name table at the front).
+;    HL is at section-A offset 8 (< &4000), so the bytes read with plain
+;    INC HL — no page-cross handling.  A loadable .tbn is < 96 KB, so the
+;    offset is < &18000: byte 3 is zero and the page index (0..5) fits.
+                ld      a, (hl)                     ; b0 = offset bits 0..7
                 inc     hl
-                ld      d, (hl)
-                inc     hl                  ; HL → first entry; DE = count
-                ld      (reader_name_count), de
-                ld      (reader_in_cursor), hl
+                ld      e, a
+                ld      a, (hl)                     ; b1 = offset bits 8..15
+                inc     hl
+                ld      d, a
+                ld      a, (hl)                     ; b2 = offset bits 16..23
+                ld      c, a
 
-reader_init_skip_names:
-                ld      a, d
-                or      e
-                jr      z, reader_init_skip_names_done
+;   page_index = (b2 << 2) | (b1 >> 6);  offset = ((b1 & &3F) << 8) | b0.
+;   IN_END = (LMPR_IN_BASE + page_index, offset) — one past the last
+;   assembler-facing byte.  Overwrites load_in_file's true-file-end IN_END
+;   (only reader_at_end reads IN_END; the editor region past the boundary
+;   is never walked).  reader_init runs once per pass — the recompute is
+;   idempotent.
+                ld      a, d                        ; b1
+                rlca
+                rlca
+                and     3                           ; A = b1 >> 6
+                ld      b, a
+                ld      a, c                        ; b2 (0 or 1 for ≤96 KB)
+                rlca
+                rlca                                ; A = b2 << 2
+                add     a, b                        ; A = page_index (0..5)
+                add     a, LMPR_IN_BASE             ; A = end LMPR (RAM0 already in base)
+                ld      (IN_END_PAGE), a
+                ld      a, d                        ; b1
+                and     &3F
+                ld      h, a
+                ld      l, e                        ; HL = ((b1 & &3F) << 8) | b0
+                ld      (IN_END_OFFSET), hl
 
-                push    de                  ; remaining count
-
-; shared_prefix_len uvarint — consume + discard (only the cursor advance
-; matters; the decoded value lands in a scratch we never read).
-                ld      hl, reader_name_skip_tmp
-                call    reader_uvarint_add
-
-; suffix_len uvarint — decode into a zeroed scratch to recover its value.
-                xor     a
-                ld      (reader_name_skip_tmp + 0), a
-                ld      (reader_name_skip_tmp + 1), a
-                ld      (reader_name_skip_tmp + 2), a
-                ld      (reader_name_skip_tmp + 3), a
-                ld      hl, reader_name_skip_tmp
-                call    reader_uvarint_add  ; scratch = suffix_len
-
-; cursor += suffix_len.  A symbol name is far under one IN page (16 KB),
-; so the high two bytes are zero and one in_normalise_hl pass (it bumps
-; LMPR on a single &4000 crossing) suffices.
-                ld      hl, (reader_in_cursor)
-                ld      bc, (reader_name_skip_tmp)  ; low 16 bits = suffix_len
-                add     hl, bc
-                call    in_normalise_hl
-                ld      (reader_in_cursor), hl
-
-                pop     de
-                dec     de
-                jp      reader_init_skip_names
-
-reader_init_skip_names_done:
-; Hand the (normalised) cursor back to HL — reader_init_header_tables
-; re-seeds reader_in_cursor from it.
-                ld      hl, (reader_in_cursor)
+;   The header label/local tables start at the fixed byte offset 12
+;   (magic 4 + version 2 + flags 2 + section index 4).
+                ld      hl, 12
                 jp      reader_init_header_tables
 
 
@@ -604,7 +593,6 @@ reader_next_kind_no_payload:
 ; -----------------------------------------------------------------------
 ; Scratch / globals.
 ; -----------------------------------------------------------------------
-reader_name_count:      defw    0
 reader_curr_kind:       defb    0
 reader_curr_payload:    defw    0
 reader_curr_len:        defw    0
@@ -621,4 +609,3 @@ reader_varint_acc_ptr:  defw    0   ; address of the 4-byte LE accumulator
 reader_varint_tmp:      defb    0, 0, 0, 0  ; decoded varint (4-byte LE)
 reader_varint_byte:     defb    0   ; the LEB128 byte being merged
 reader_varint_shift:    defb    0   ; bit position of the next group
-reader_name_skip_tmp:   defb    0, 0, 0, 0  ; name-table-skip uvarint decode (4-byte LE)

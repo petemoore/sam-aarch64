@@ -55,9 +55,9 @@ Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
 | Strand | Status | Source |
 |---|---|---|
 | **i39a** — Phase 1: instruction overlay (unify literal/symbolic INST into one run) + header label/offset table; v2 format flip | ✅ **MERGED to `main`** — PR #131, merge commit `e68e0bf` (all 14 CI checks green incl. the SimCoupé matrix; §3 review = MERGE). PR(a)+(b)+i48b+(c)+(d) + i48d. i48a split to its own follow-up PR (see below). | `docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md`; PR #131 (merged) |
-| **i39b** — Phase 2: name-table front-coding + comment/`.global`/base-hint editor sidecars (evictable region) | ⏳ **in progress — i39b-1 DONE (merged PR #151, `add0356`), i39b-2 next.** Split per the plan into **i39b-1** front-coding (✅ DONE; all CI incl. SimCoupé green) + **i39b-2** sidecars/page-split (🧭 next). The invariant shifted from i39a's "`.tbn` byte-identical" to "assembled binary identical + round-trip holds + `.tbn` shrinks": i39b-1 takes the compact `.tbn` **45,189 → 44,207 B** (−982 B, −2.2%, encounter-order sharing) with the assembled binary byte-identical (GNU == Go == Z80/SAM, 21752 B) and budget test `&BF94` (108 B headroom). | `docs/plans/2026-06-09-i39b-nametable-frontcoding-sidecars.md`; design §3.5/§3.6/§3.7, §4 Format B, §5 |
+| **i39b** — Phase 2: name-table front-coding + comment/`.global`/base-hint editor sidecars (evictable region) | ⏳ **in progress — i39b-1 DONE (merged PR #151, `add0356`); i39b-2 DONE (PR #153, OPEN — in review).** Split per the plan into **i39b-1** front-coding (✅ DONE; all CI incl. SimCoupé green) + **i39b-2** editor-region split (✅ DONE on its branch; PR #153 open). The invariant is "assembled binary identical + round-trip holds + `.tbn` shrinks-or-holds" (NOT `.tbn` byte-identity). i39b-1 took the compact `.tbn` **45,189 → 44,207 B** (−982 B). i39b-2 splits the file into an **assembler-facing region** (header position tables + record stream) and a trailing **editor region** (front-coded name table + `.global` flags + comment sidecar) bounded by a new `editor_region_offset` u32 section index at file offset 8 — see the i39b-2 prose block below. | `docs/plans/2026-06-09-i39b-nametable-frontcoding-sidecars.md`; design §3.5/§3.6/§3.7, §4 Format B, §5 |
 | **i39c** — Phase 3: bitfield-packing polish on the overlay slot bytes | 🧭 designed (low priority) | design §3.1 |
-| **i40** — assembler-side editor-region eviction (write editor region/`.tbn` to disk before assembling, reuse RAM as OUT/scratch, reload to restore) | 🧭 future (editor phase) | design §7 decision 1 |
+| **i40** — assembler-side editor-region eviction — **conditional/last-resort**: keep the editor region resident when free RAM allows (no disk round-trip, preferred); only when RAM would be insufficient, persist the `.tbn` to disk, reuse the editor-region pages as OUT/scratch during the build, reload to restore the editor view. **i39b-2 ENABLES this (the separable region exists); i40 ENFORCES it (the eviction mechanism).** Full un-stripping of all 335 KB of release comments on the SAM-side m6 gate is **an i40 dependency** (load only the assembler-facing prefix) — or an IN-buffer expansion, which would defeat the resident goal. | 🧭 future (editor phase) | design §7 decision 1 |
 | **i48** — single serialized format + pass-free syntactic encoder (refines i39/i39a). **A:** overlay is the *only* serialized `.tbn`; symbolic kinds become in-memory IR (old format buried, in no head doc). **B:** text→overlay is syntactic (no symbol pass); value-bits computed in the fold; forego GNU's silent `ldr→ldur`/`add lsl#12` rewrite (→ syntactic/error); narrow `mov`→`movz`/`orr`/`movn` assemble-time fallback. Driver: the SAM must do text→overlay too (editor), so the host should mirror that flow. | ✅ **host side DONE** — **i48a** (#141/#142/#144) host front-end unification + in-memory IR + symbolic-serialization removal · **i48b** syntactic encoder + fold value-work · **i48d** overlay-only doc rewrite — all merged. **i48c** (Z80 text→overlay encoder) is future (editor phase). | `docs/specs/2026-06-08-i48-single-format-syntactic-encoder-design.md`; item registry i48 |
 
 **i48 ↔ i39a interaction.** i48b refines a fold-rule with a **format-byte effect**
@@ -252,6 +252,50 @@ i48a follow-up then landed in full: PR1 (#141) + PR2 (#142) + PR3 (#144) — i48
 COMPLETE.** Decision A (overlay-only serialized; symbolic = in-memory IR) and Decision
 B (syntactic encode) are realised on the host; only i48c (the Z80 text→overlay encoder,
 editor phase) remains. See the i48a entry above.
+
+## i39b-2 — editor-region split (PR #153, OPEN — in review)
+
+The compact `.tbn` v2 is split into an **assembler-facing region** (header
+position tables + record stream) and a trailing **editor region** (front-coded
+name table + `.global` flags + comment sidecar) that the SAM assembler never
+reads. A new **`editor_region_offset` u32 section index at file offset 8** bounds
+the record walk and marks the editor region.
+
+- **Comments** relocate to a comment sidecar anchored to their output PC
+  (delta-varint + a placement byte). **`.global`** becomes a name_id flag list.
+  Both stop appearing in the assembler record stream (and no longer break the
+  instruction run). A latent multi-line `/* */` block-comment render bug was
+  fixed (each body line now gets its own `//`).
+- **Z80 `src/reader.asm`** `reader_init` reads the section index, sets `IN_END`
+  to the editor boundary, and **deletes the name-table skip**
+  (`reader_init_skip_names`) — the assembler stops mapping the name/comment page.
+- New host flag **`-thin-comments=N`** (keep 1-in-N comments).
+
+**Measured.** `release.s` comment text = **335,461 B** (7,502 `//` lines, ≈49% of
+the 683,982-byte source). Compact `.tbn`: **44,206 B** with `-strip-comments`
+(3 IN pages); **59,539 B** with `-thin-comments=20` (4 IN pages) — both well under
+the 96 KB / 6-page IN ceiling. The assembler-facing prefix is **byte-identical**
+between stripped and thinned (`editor_region_offset` = 38,584 both). Reclaimable
+editor region = **5,622 B** stripped (the name table alone, ≈ the design's ~5.6 KB
+estimate) / **20,955 B** thinned.
+
+**Budget.** Test **`&BF73`** (141 B headroom — *more* than i39b-1's `&BF94`, since
+deleting the name-skip saved code), prod **`&B80E`**.
+
+**Verification.** Assembled binary byte-identical: GNU == Go(source) == Go(.tbn)
+== Z80/SAM = **21,752 B**. disasm-roundtrip **105/105** (added a per-fixture
+comment-count check + a host with-comments release leg that renders + re-assembles
+byte-identical with 7,014 `//` lines).
+
+**The invariant** is binary-identity + round-trip + `.tbn`-shrinks-or-holds (NOT
+`.tbn` byte-identity). **i39b-2 ENABLES eviction** (it relocates the editor-only
+data onto a separable region so eviction *becomes possible*); it does **not**
+touch the loader and does **not** evict. Full un-stripping of all 335 KB of
+comments on the SAM-side m6 gate is **blocked on i40** (load only the
+assembler-facing prefix) or an IN-buffer expansion (which would defeat the
+resident goal); this PR flows a *thinned* (1-in-20) subset through the full SAM
+round-trip instead. See **i40** for the conditional/last-resort eviction
+mechanism this unlocks.
 
 ## Open questions for Pete (M8)
 

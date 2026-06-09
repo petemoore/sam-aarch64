@@ -12,12 +12,14 @@ both now historical milestone records.
 
 There is exactly one on-disk `.tbn` form: the **compact overlay** (v2). Every
 instruction is folded into a `KindInsnRun` (0x09) run, constant numeric data
-into a `KindLitData` (0x08) record, `KindDirective` (0x04) and `KindComment`
-(0x05) are carried verbatim, and the resolved position-labels / numeric-local
-def sites live in the two **header position tables** (the label table and the
-local table, §2.4). The `Version` field is `2`. This is the form the host
-emits with `sam-aarch64 SRC.s -o OUT.img --emit-tbn OUT.tbn` and the only form
-the SAM loads (`src/main_loop.asm`, `src/insn_run.asm`, `src/reader.asm`).
+into a `KindLitData` (0x08) record, `KindDirective` (0x04) records are carried
+verbatim, and the resolved position-labels / numeric-local def sites live in
+the two **header position tables** (§2.4). Editor-only data — the name strings,
+`.global` provenance, and comments — relocates out of the assembler-facing
+record stream into a trailing **editor region** (M8 / i39b-2, §2.3/§2.5): the
+SAM assembler never reads it. The `Version` field is `2`. This is the form the
+host emits with `sam-aarch64 SRC.s -o OUT.img --emit-tbn OUT.tbn` and the only
+form the SAM loads (`src/main_loop.asm`, `src/insn_run.asm`, `src/reader.asm`).
 
 The host front-end does build a *symbolic* intermediate representation while
 turning source text into the overlay (one record per instruction / label /
@@ -68,13 +70,8 @@ are length-prefixed (u16 LE), never NUL-terminated.
 │ Magic    "SA64"      4 bytes  (0x53 41 36 34)│  format.go:7
 │ Version  u16 LE      = 2                     │  format.go:13
 │ Flags    u16 LE      = 0  (reserved)         │  format.go:16
-├─────────────────────────────────────────────┤
-│ Name table                                   │  reader.go:217 / writer.go:158
-│   count   u16 LE                             │
-│   name₀   [len u16 LE][UTF-8 bytes]          │
-│   name₁   …                                  │
-│   …                                          │
-├─────────────────────────────────────────────┤
+│ editor_region_offset u32 LE  (§2.3)          │  writer.go / reader.go
+├─────────────────────── assembler-facing region ──────────────┤
 │ Label table  (§2.4)                          │  header_tables.go:35,90
 │   count   u16 LE                             │
 │   row₀    [name_id u16 LE][offset_delta uvarint]
@@ -87,30 +84,87 @@ are length-prefixed (u16 LE), never NUL-terminated.
 ├─────────────────────────────────────────────┤
 │ Record stream                                │  reader.go:71
 │   record₀ record₁ … recordₙ₋₁                │
-│   (length-framed; no terminator)             │
+│   (length-framed; ends at editor_region_offset)
+├───────── editor region (at editor_region_offset, §2.3) ───────┤
+│ Name table                                   │  editor_region.go
+│   count   u16 LE                             │
+│   name₀   [shared_prefix_len uvarint][suffix_len uvarint][suffix]
+│   …  (front-coded against the previous name; i39b-1)
+│ Global flags  [count u16][name_id u16]…      │  editor_region.go
+│ Comment sidecar (§2.5)                       │  editor_region.go
+│   [count u16] then [anchor_delta uvarint][placement u8][len u16][text]…
 └─────────────────────────────────────────────┘
 ```
 
-- **Magic / version / flags** (8 bytes total). `ReadFile` rejects a bad
-  magic or a version ≠ 2 (`reader.go:202`,`:205`); `Flags` is reserved
-  and must be 0. The version check is a clean break — a v1 file is rejected,
-  not down-converted.
-- **Name table** — the interned label/symbol names, in first-encounter
-  order. Each name's **zero-based index is its symbol ID**, referenced by
-  the **label table** rows (§2.4) and `PUSH_SYM` expression opcodes. The
-  interner (`symbols.go:16`) assigns IDs sequentially from 0, so re-interning
-  the same names in order reproduces identical IDs — which is why the
-  compaction pass can rebuild the table from `File.Names`
-  (`tools/sam-aarch64/assemble/api.go`).
+The file splits at `editor_region_offset` into an **assembler-facing region**
+(everything the SAM Z80 assembler reads) and a trailing **editor region**
+(data only the renderer / editor needs). The editor-region split is M8 / i39b-2;
+see `docs/specs/2026-06-08-compact-tbn-nextgen-design.md` §3.5/§3.6/§3.7.
+
+- **Magic / version / flags / editor_region_offset** (12 bytes total).
+  `ReadFile` rejects a bad magic or a version ≠ 2; `Flags` is reserved and
+  must be 0. The version check is a clean break — a v1 file is rejected, not
+  down-converted.
 - **Label table** and **local table** — the v2 header **position tables**
-  (§2.4). They sit **after the name table and before the record stream**
-  (a label row references a `name_id` into the name table, so the names
-  must precede it; `writer.go:138`). They carry one row per resolved
-  position-label / numeric-local def site, so a `KindInsnRun` run spans the
-  labels embedded in it without interruption.
-- **Record stream** — a flat sequence of length-framed records (§3). EOF
-  is implicit: the reader stops when no bytes remain (`reader.go:69`).
-  There is no end-of-stream sentinel.
+  (§2.4). They head the assembler-facing region. They carry one row per
+  resolved position-label / numeric-local def site, so a `KindInsnRun` run
+  spans the labels embedded in it without interruption. The rows reference a
+  `name_id` but never the name *string*, so the name table can follow the
+  records (it does — in the editor region).
+- **Record stream** — a flat sequence of length-framed records (§3). It ends
+  at `editor_region_offset` (NOT at EOF): the editor region follows. The Z80
+  reader sets its walk terminator to that boundary (`src/reader.asm`
+  `reader_init`) and never maps the editor region.
+- **Name table** — the interned label/symbol names, in first-encounter order,
+  front-coded (i39b-1). Each name's **zero-based index is its symbol ID**,
+  referenced by the **label table** rows (§2.4) and `PUSH_SYM` expression
+  opcodes. The interner (`symbols.go:16`) assigns IDs sequentially from 0, so
+  re-interning the same names in order reproduces identical IDs — which is why
+  the compaction pass can rebuild the table from `File.Names`. The assembler
+  **never decodes a name string** (it resolves by `name_id` via the position
+  tables); the name table is editor/renderer-only, which is why it lives in
+  the editor region.
+- **Global flags / comment sidecar** — the `.global` provenance and the
+  relocated comments (§2.5), both editor-only.
+
+### 2.3 Section index — `editor_region_offset`
+
+A `u32 LE` at file offset 8 giving the byte offset where the **editor region**
+begins (= the byte just past the record stream). It is the one structural
+addition of the editor-region split (M8 / i39b-2): it bounds the assembler's
+record walk (the records no longer run to EOF) and marks the start of the
+trailing, editor-only data a future build can leave on disk / reuse the RAM of
+(item **i40** — assembler-resident eviction; see the nextgen design §7
+decision 1). The split is **groundwork**: i39b-2 relocates the editor-only data
+so eviction *becomes possible*; it does not itself evict (the loader still
+loads the whole file).
+
+### 2.5 Comment sidecar (editor region) — v2 / i39b-2
+
+Comments are pure round-trip data the assembler never reads (it skips
+`KindComment` in both passes). In v2 they do **not** appear as `KindComment`
+records in the assembler stream — they relocate to a sidecar in the editor
+region, each anchored to the **output PC it attaches to**:
+
+```
+Comment sidecar   editor_region.go
+  count   u16 LE
+  row     [anchor_delta uvarint][placement u8][len u16][text]   ×count
+```
+
+- **`anchor`** is the output PC (byte offset from the origin VMA, ≥ 0) the
+  comment attaches to — the same offset space as the label table. Rows are
+  sorted by anchor ascending and the anchor is stored as a **delta** from the
+  previous row (first row's previous = 0). The renderer, walking the records
+  and tracking PC, emits each comment when its PC walk reaches the anchor.
+- **`placement`** is `0` = standalone (own line) / `1` = trailing (appends to
+  the preceding statement's line) — as for the `KindComment` record (§8). A
+  comment whose body carries embedded newlines (a `/* … */` block comment)
+  renders as one `//`-prefixed line per body line.
+- The host's `-strip-comments` drops comments entirely (empty sidecar);
+  `-thin-comments=N` keeps one in every N (a bounded subset that flows a
+  populated editor region through the SAM round-trip while the `.tbn` stays
+  under the 96 KB IN ceiling — the m6 gate uses this).
 
 ### 2.4 Header position tables (label / local) — v2
 
@@ -174,19 +228,21 @@ readers' framing — though an old reader cannot render an unknown kind's
 
 ### Record kinds
 
-The on-disk overlay uses four record kinds:
+The on-disk overlay record stream uses three record kinds:
 
 | Hex    | Name        | Payload | Defined |
 |--------|-------------|---------|---------|
 | `0x04` | `DIRECTIVE` | `[directive_id u8][operand_count u8][operands…]` (§4, §6) | kinds.go:10 |
-| `0x05` | `COMMENT`   | `[placement u8][bytes…]` — `0`=standalone, `1`=trailing | kinds.go:11 |
 | `0x08` | `LIT_DATA`  | `[directive_id u8][raw LE bytes…]` — a run of constant numeric data stored as assembled bytes, tagged with its source directive (§7.3) | kinds.go:18 |
 | `0x09` | `INSN_RUN`  | `[mode u8][elements…]` — a run of instructions; mode 0 = packed literal words, mode 1 = base-word + sparse overlay patches (§7.2) | kinds.go:34 |
 
-Reserved / not used by the overlay: `0x00`; `0x06`; `0x0A`–`0xFF`. The
-record-kind constants `0x01`–`0x03` and `0x07` exist in `kinds.go` for the
-host front-end's in-memory IR but are **never serialized to a `.tbn`** (§1),
-so an on-disk overlay file contains only the four kinds above.
+Reserved / not used by the overlay record stream: `0x00`; `0x06`; `0x0A`–`0xFF`.
+`COMMENT` (`0x05`) is still a `RecordReader`-decodable kind and the host's
+in-memory IR vocabulary, but in v2 / i39b-2 comments do **not** appear in the
+on-disk record stream — they relocate to the editor-region comment sidecar
+(§2.5). The record-kind constants `0x01`–`0x03` and `0x07` exist in `kinds.go`
+for the host front-end's in-memory IR but are **never serialized** (§1), so an
+on-disk overlay record stream contains only the three kinds above.
 
 Notes:
 
@@ -580,11 +636,13 @@ is an `INSN_RUN` element whose patch carries the `FoldLitpool19` slot; the
 fold's `value` is the pool slot's PC (`pass2.go:encodeLdrLitPoolInst`), and
 it encodes as a PC-relative load of that slot.
 
-**Comments** (`COMMENT [placement]`): `0`=standalone (own line[s]),
-`1`=trailing (same line as the preceding statement). The renderer emits
-bodies verbatim. The host's `-strip-comments` drops them entirely (the
-assembler ignores them either way), which is why a stripped compact `.tbn`
-carries none.
+**Comments**: in v2 / i39b-2 they live in the editor-region comment sidecar
+(§2.5), each anchored to the output PC it attaches to, with `placement`
+`0`=standalone (own line[s]) / `1`=trailing (same line as the preceding
+statement). The renderer emits bodies verbatim, one `//`-prefixed line per
+body line (so a `/* … */` block comment's multi-line body re-parses). The
+assembler never reads them. The host's `-strip-comments` drops them entirely
+(empty sidecar); `-thin-comments=N` keeps one in every N.
 
 ---
 

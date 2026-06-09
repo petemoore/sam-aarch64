@@ -165,16 +165,25 @@ type File struct {
 	// front-end.
 	Labels []LabelRow
 	Locals []LocalRow
+	// GlobalNameIDs and Comments are the editor region (compact `.tbn` v2,
+	// M8 / i39b-2): name_ids that carried `.global`, and the comment sidecar
+	// (each comment's PC anchor / placement / body). They are read from the
+	// tail of the file and used only by the renderer / editor — the assembler
+	// never reads them. Empty for an in-memory symbolic IR built by the
+	// front-end (where comments are still inline KindComment records).
+	GlobalNameIDs []uint16
+	Comments      []CommentRow
 	// Records is the decoded statement stream. For a File built by the
 	// front-end it is the in-memory symbolic IR (KindInst/KindLabelDef/
 	// KindLocalDef/KindDirective/KindComment); for one read from disk via
-	// ReadFile it is the overlay stream (KindInsnRun/KindLitData/KindDirective/
-	// KindComment).
+	// ReadFile it is the overlay stream (KindInsnRun/KindLitData/KindDirective)
+	// — comments and `.global` are in the editor region, not the record stream.
 	Records []Record
 }
 
 func ReadFile(buf []byte) (*File, error) {
-	if len(buf) < 8 {
+	const headerLen = 4 + 2 + 2 + 4 // magic + version + flags + editor_region_offset
+	if len(buf) < headerLen {
 		return nil, fmt.Errorf("file: too short for header")
 	}
 	if string(buf[0:4]) != "SA64" {
@@ -185,42 +194,14 @@ func ReadFile(buf []byte) (*File, error) {
 		return nil, fmt.Errorf("file: unsupported version %d (want %d)", version, Version)
 	}
 	flags := binary.LittleEndian.Uint16(buf[6:8])
-	pos := 8
-
-	if pos+2 > len(buf) {
-		return nil, fmt.Errorf("file: truncated name table count")
+	editorOffset := int(binary.LittleEndian.Uint32(buf[8:12]))
+	if editorOffset < headerLen || editorOffset > len(buf) {
+		return nil, fmt.Errorf("file: editor_region_offset %d out of range (file %d bytes)", editorOffset, len(buf))
 	}
-	count := int(binary.LittleEndian.Uint16(buf[pos:]))
-	pos += 2
+	pos := headerLen
 
-	// Front-coded entries (§ name table): each is
-	// [shared_prefix_len uvarint][suffix_len uvarint][suffix bytes];
-	// reconstruct by copying `shared` bytes from the previous name.
-	names := make([]string, count)
-	var prev string
-	for i := 0; i < count; i++ {
-		shared, ns := binary.Uvarint(buf[pos:])
-		if ns <= 0 {
-			return nil, fmt.Errorf("file: truncated name shared-prefix-len at %d", i)
-		}
-		pos += ns
-		slen, nl := binary.Uvarint(buf[pos:])
-		if nl <= 0 {
-			return nil, fmt.Errorf("file: truncated name suffix-len at %d", i)
-		}
-		pos += nl
-		if int(shared) > len(prev) {
-			return nil, fmt.Errorf("file: name %d shared-prefix-len %d exceeds previous name length %d", i, shared, len(prev))
-		}
-		if pos+int(slen) > len(buf) {
-			return nil, fmt.Errorf("file: truncated name body at %d", i)
-		}
-		name := prev[:shared] + string(buf[pos:pos+int(slen)])
-		pos += int(slen)
-		names[i] = name
-		prev = name
-	}
-
+	// Assembler-facing region: header position tables then the record stream,
+	// which ends at editor_region_offset (the editor region follows).
 	labels, pos, err := readLabelTable(buf, pos)
 	if err != nil {
 		return nil, err
@@ -229,12 +210,15 @@ func ReadFile(buf []byte) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
+	if pos > editorOffset {
+		return nil, fmt.Errorf("file: header tables overran editor region (%d > %d)", pos, editorOffset)
+	}
 
-	// Decode the remaining byte stream into the in-memory record slice.
-	// An on-disk `.tbn` only carries overlay-format records (INSN_RUN/
-	// LIT_DATA/DIRECTIVE/COMMENT).
+	// Decode the record stream (assembler-facing) up to the editor region.
+	// An on-disk `.tbn` only carries overlay records (INSN_RUN/LIT_DATA/
+	// DIRECTIVE); comments and `.global` live in the editor region.
 	var records []Record
-	rr := NewRecordReader(buf[pos:])
+	rr := NewRecordReader(buf[pos:editorOffset])
 	for !rr.AtEnd() {
 		rec, err := rr.Next()
 		if err != nil {
@@ -243,12 +227,20 @@ func ReadFile(buf []byte) (*File, error) {
 		records = append(records, rec)
 	}
 
+	// Editor region: name table, global flags, comment sidecar.
+	names, globals, comments, _, err := readEditorRegion(buf, editorOffset)
+	if err != nil {
+		return nil, err
+	}
+
 	return &File{
-		Version: version,
-		Flags:   flags,
-		Names:   names,
-		Labels:  labels,
-		Locals:  locals,
-		Records: records,
+		Version:       version,
+		Flags:         flags,
+		Names:         names,
+		Labels:        labels,
+		Locals:        locals,
+		GlobalNameIDs: globals,
+		Comments:      comments,
+		Records:       records,
 	}, nil
 }

@@ -2,6 +2,7 @@ package format
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 )
 
@@ -10,9 +11,12 @@ import (
 // plus the remaining suffix, both as LEB128 uvarints. Decode reconstructs a
 // name by copying `shared` bytes from the prior name and appending the suffix.
 
-// nameTableBytes returns the slice of NAME-TABLE entry bytes (everything after
-// the magic+version+flags+count header, up to the start of the header tables).
-// With no labels/locals/records the tables are two zero count words.
+// nameTableBytes returns the slice of NAME-TABLE entry bytes (the front-coded
+// entries only — after the name count, before the global-flags/comment
+// sidecars). The name table now lives in the editor region (M8 / i39b-2),
+// located via the section index at bytes 8..12. With no labels/locals/records
+// the editor region is name-table + empty global-flags(2) + empty comment
+// sidecar(2), so the entries run up to the last 4 bytes.
 func nameTableBytes(t *testing.T, names ...string) []byte {
 	t.Helper()
 	st := NewSymbolTable()
@@ -20,13 +24,13 @@ func nameTableBytes(t *testing.T, names ...string) []byte {
 		st.Intern(n)
 	}
 	var buf bytes.Buffer
-	if err := WriteFile(&buf, st, nil, nil, nil); err != nil {
+	if err := WriteFile(&buf, st, nil, nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	b := buf.Bytes()
-	// magic(4)+ver(2)+flags(2)+count(2) = 10 bytes of header before entries;
-	// trailing 4 bytes are the empty label+local table count words.
-	return b[10 : len(b)-4]
+	editorOff := int(binary.LittleEndian.Uint32(b[8:12]))
+	// editor region: [name count u16][entries…][global count u16=0][comment count u16=0]
+	return b[editorOff+2 : len(b)-4]
 }
 
 func TestNameTableFrontCodeGolden(t *testing.T) {
@@ -53,7 +57,7 @@ func TestNameTableFrontCodeRoundtrip(t *testing.T) {
 		st.Intern(n)
 	}
 	var buf bytes.Buffer
-	if err := WriteFile(&buf, st, nil, nil, nil); err != nil {
+	if err := WriteFile(&buf, st, nil, nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	f, err := ReadFile(buf.Bytes())

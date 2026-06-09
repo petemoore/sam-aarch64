@@ -87,78 +87,60 @@ func (w *RecordWriter) WriteDirective(directiveID, operandCount byte, operands [
 	w.buf = append(w.buf, operands...)
 }
 
-// WriteFile serialises a complete .tbn file to w: magic, version, flags,
-// the symbol table's name list, the header label/local tables, and the
-// record stream. The two header tables sit AFTER the name table and BEFORE
-// the record stream (a label row references a name_id into the name table).
+// WriteFile serialises a complete compact `.tbn` v2 file to w. The file
+// splits into an assembler-facing region and a trailing editor region
+// (M8 / i39b-2):
+//
+//	magic "SA64" · version u16 · flags u16
+//	editor_region_offset u32 LE       — section index: where the editor region starts
+//	── assembler-facing region ──
+//	label table · local table         — header position tables (§2.4)
+//	record stream                     — INSN_RUN / LIT_DATA / DIRECTIVE
+//	── editor region (at editor_region_offset) ──
+//	name table · global flags · comment sidecar   (editor_region.go)
+//
+// The name strings, `.global` flags, and comments are data the assembler
+// never reads (it resolves symbols by name_id via the header tables), so they
+// move to the tail; the assembler stops its record walk at
+// editor_region_offset and never maps the editor region. The label/local rows
+// only carry name_ids, so the name strings can follow the records.
 //
 // labels/locals carry resolved position offsets (= symbolVMA - OriginVMA);
-// the symbolic `.tbn` from text2bin passes both nil (no resolved PCs yet).
-// WriteFile sorts copies of the rows by offset ascending (ties by
-// NameID/Digit ascending) so the increasing-offset delta-varint invariant
-// always holds regardless of the caller's row order.
-func WriteFile(w io.Writer, st *SymbolTable, labels []LabelRow, locals []LocalRow, records []byte) error {
-	if _, err := w.Write(Magic[:]); err != nil {
-		return err
-	}
-	var hdr [4]byte
-	binary.LittleEndian.PutUint16(hdr[0:2], Version)
-	binary.LittleEndian.PutUint16(hdr[2:4], Flags)
-	if _, err := w.Write(hdr[:]); err != nil {
-		return err
-	}
-
-	names := st.Names()
-	var cnt [2]byte
-	binary.LittleEndian.PutUint16(cnt[:], uint16(len(names)))
-	if _, err := w.Write(cnt[:]); err != nil {
-		return err
-	}
-	// Front-code each entry against the PREVIOUS name (encounter order, no
-	// sort — ids are wired through every PUSH_SYM patch and the header
-	// tables, so the order must stay stable). An entry is
-	// [shared_prefix_len uvarint][suffix_len uvarint][suffix bytes]; decode
-	// copies `shared` bytes from the prior name and appends the suffix.
-	var prev string
-	var tmp [binary.MaxVarintLen64]byte
-	for _, n := range names {
-		shared := commonPrefixLen(prev, n)
-		suffix := n[shared:]
-		k := binary.PutUvarint(tmp[:], uint64(shared))
-		if _, err := w.Write(tmp[:k]); err != nil {
-			return err
-		}
-		k = binary.PutUvarint(tmp[:], uint64(len(suffix)))
-		if _, err := w.Write(tmp[:k]); err != nil {
-			return err
-		}
-		if _, err := w.Write([]byte(suffix)); err != nil {
-			return err
-		}
-		prev = n
-	}
-
+// globals is the list of name_ids that were `.global`; comments is the
+// relocated comment sidecar. WriteFile sorts the rows into their on-disk
+// order, so the caller's slice order does not matter.
+func WriteFile(w io.Writer, st *SymbolTable, labels []LabelRow, locals []LocalRow, records []byte, globals []uint16, comments []CommentRow) error {
 	tables := writeLabelTable(nil, labels)
 	tables = writeLocalTable(tables, locals)
+
+	// editor_region_offset = bytes before the editor region:
+	// magic(4)+version(2)+flags(2)+section_index(4) + tables + records.
+	const headerLen = 4 + 2 + 2 + 4
+	editorOffset := headerLen + len(tables) + len(records)
+
+	hdr := make([]byte, 0, headerLen)
+	hdr = append(hdr, Magic[:]...)
+	var u16 [2]byte
+	binary.LittleEndian.PutUint16(u16[:], Version)
+	hdr = append(hdr, u16[:]...)
+	binary.LittleEndian.PutUint16(u16[:], Flags)
+	hdr = append(hdr, u16[:]...)
+	var u32 [4]byte
+	binary.LittleEndian.PutUint32(u32[:], uint32(editorOffset))
+	hdr = append(hdr, u32[:]...)
+
+	if _, err := w.Write(hdr); err != nil {
+		return err
+	}
 	if _, err := w.Write(tables); err != nil {
 		return err
 	}
-
 	if _, err := w.Write(records); err != nil {
 		return err
 	}
+	editor := appendEditorRegion(nil, st.Names(), globals, comments)
+	if _, err := w.Write(editor); err != nil {
+		return err
+	}
 	return nil
-}
-
-// commonPrefixLen returns the number of leading bytes a and b share.
-func commonPrefixLen(a, b string) int {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
-	i := 0
-	for i < n && a[i] == b[i] {
-		i++
-	}
-	return i
 }

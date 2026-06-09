@@ -276,6 +276,15 @@ for dir in "${FIXTURE_DIRS[@]}"; do
         if ! "$ROOT/build/sam-aarch64" --render "$ov_compact" > "$ov_dis" 2>/dev/null; then
             echo "    FAIL(render) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay render]"); failed=$((failed + 1)); continue
         fi
+        # Comment relocation fidelity (M8 / i39b-2): comments move to the editor
+        # region and re-render from it, so every source `//` line must reappear.
+        # The byte-compare below can't see this (comments are assembly no-ops).
+        src_cc=$(grep -c '//' "$src" 2>/dev/null || true)
+        ren_cc=$(grep -c '//' "$ov_dis" 2>/dev/null || true)
+        if [ "$src_cc" != "$ren_cc" ]; then
+            echo "    FAIL(comment-roundtrip) $dir/$name.s [source //=$src_cc rendered //=$ren_cc]"
+            fail_names+=("$dir/$name.s [comment count]"); failed=$((failed + 1)); continue
+        fi
         if ! "$ROOT/build/sam-aarch64" -o "$ov_v2_bin" "$ov_dis" 2>/dev/null; then
             echo "    FAIL(sam-aarch64-2) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay re-asm]"); failed=$((failed + 1)); continue
         fi
@@ -334,6 +343,39 @@ if [ -f "$release_src" ]; then
     fi
 else
     echo "    SKIP release.s (not found at $release_src)"
+fi
+
+echo ""
+echo "=== [2f/3] Overlay round-trip release.s WITH comments (editor-region fidelity) ==="
+# i39b-2: release.s assembled WITHOUT -strip-comments — its ~335 KB of comments
+# relocate to the editor region, render back from it, and the result must
+# re-assemble byte-identically to release.img (comments are no-ops) AND carry
+# the comments through (a substantial `//` count). The host has no 96 KB IN
+# ceiling, so this exercises full-scale comment relocation the SAM gate can't.
+if [ -f "$release_src" ]; then
+    relc_v1="$tmp/relc_v1.bin"; relc_tbn="$tmp/relc.tbn"
+    relc_dis="$tmp/relc_overlay.s"; relc_v2="$tmp/relc_v2.bin"
+    rel_img="$ROOT/tests/m6/release/release.img"
+    if ! "$ROOT/build/sam-aarch64" -flatten -origin 0xfffffff000000000 -o "$relc_v1" --emit-tbn "$relc_tbn" "$release_src" 2>/dev/null; then
+        echo "    FAIL(sam-aarch64-compact) release.s (with comments)"; fail_names+=("release.s [wc compact]"); failed=$((failed + 1))
+    elif ! "$ROOT/build/sam-aarch64" --render "$relc_tbn" > "$relc_dis" 2>/dev/null; then
+        echo "    FAIL(render) release.s (with comments)"; fail_names+=("release.s [wc render]"); failed=$((failed + 1))
+    elif ! "$ROOT/build/sam-aarch64" -o "$relc_v2" "$relc_dis" 2>/dev/null; then
+        echo "    FAIL(re-asm) release.s (with comments)"; fail_names+=("release.s [wc re-asm]"); failed=$((failed + 1))
+    elif [ -f "$rel_img" ] && ! cmp -s "$relc_v2" "$rel_img"; then
+        echo "    FAIL(vs GNU) release.s (with comments) [render→re-asm != release.img]"; fail_names+=("release.s [wc != GNU]"); failed=$((failed + 1))
+    else
+        relc_cc=$(grep -c '//' "$relc_dis" 2>/dev/null || true)
+        # The vendored release has 7000+ comment lines; require the bulk survive.
+        if [ "$relc_cc" -lt 5000 ]; then
+            echo "    FAIL(comments-lost) release.s (with comments) [only $relc_cc // lines rendered]"; fail_names+=("release.s [wc comments-lost]"); failed=$((failed + 1))
+        else
+            echo "    PASS release.s with comments ($(wc -c < "$relc_v1") B == GNU; $relc_cc // lines round-tripped, .tbn $(wc -c < "$relc_tbn") B)"
+            passed=$((passed + 1))
+        fi
+    fi
+else
+    echo "    SKIP release.s with comments (not found)"
 fi
 
 echo ""

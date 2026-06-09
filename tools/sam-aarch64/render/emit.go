@@ -3,9 +3,33 @@ package render
 import (
 	"bytes"
 	"fmt"
+	"strings"
 
 	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
 )
+
+// emitCommentBody renders a comment body as one or more "//"-prefixed lines.
+// A `//` line comment's body is a single line; a `/* … */` block comment's
+// body carries embedded newlines, so each line must get its own `//` prefix
+// (or the continuation lines re-parse as bare code). Placement 1 (trailing)
+// appends the FIRST line to the open statement line; every other line, and a
+// standalone comment, takes its own line.
+func emitCommentBody(out *bytes.Buffer, body []byte, placement byte, prevWasStatement *bool) {
+	for i, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if i == 0 && placement == 1 && *prevWasStatement {
+			out.WriteByte(' ')
+			fmt.Fprintf(out, "//%s\n", line)
+			*prevWasStatement = false
+			continue
+		}
+		if *prevWasStatement {
+			out.WriteByte('\n')
+		}
+		fmt.Fprintf(out, "//%s\n", line)
+		*prevWasStatement = false
+	}
+}
 
 // Emit reads .tbn bytes and returns canonically-formatted text.
 func Emit(in []byte) ([]byte, error) {
@@ -22,15 +46,27 @@ func EmitFile(f *format.File) ([]byte, error) {
 	var out bytes.Buffer
 	var prevWasStatement bool
 
+	// `.global` flags live in the editor region (compact `.tbn` v2, M8 /
+	// i39b-2), not as DIRECTIVE records. `.global` is encoding-irrelevant, so
+	// re-emit each at the top of the file; reassembly is byte-identical
+	// regardless of placement.
+	for _, id := range f.GlobalNameIDs {
+		fmt.Fprintf(&out, "  .global %s\n", f.Names[id])
+	}
+
 	// Header-table label/local definitions (compact `.tbn` v2). Inert for a
 	// symbolic `.tbn` (empty tables); there the LABEL_DEF/LOCAL_DEF records
 	// below render inline.
 	hd := newHeaderDefs(f)
-	// PC tracking exists solely to place header-table definitions. A symbolic
-	// `.tbn` has none, so PC bookkeeping (which can fail on a non-constant
-	// directive size like `.skip SYM`) is skipped entirely — labels/locals
-	// render from their inline LABEL_DEF/LOCAL_DEF records instead.
-	trackPC := !hd.empty()
+	// Comments live in the editor-region sidecar (compact `.tbn` v2, M8 /
+	// i39b-2), anchored to their output PC. Inert for a symbolic `.tbn` (no
+	// sidecar); there the inline KindComment records below render instead.
+	cc := newCommentCursor(f)
+	// PC tracking places header-table definitions AND comment-sidecar entries.
+	// A symbolic `.tbn` has neither, so PC bookkeeping (which can fail on a
+	// non-constant directive size like `.skip SYM`) is skipped entirely —
+	// labels/locals/comments render from their inline records instead.
+	trackPC := !hd.empty() || !cc.empty()
 	var pc int64        // running offset from origin
 	var originVMA int64 // set by the leading injected `.org`
 
@@ -47,7 +83,17 @@ func EmitFile(f *format.File) ([]byte, error) {
 		}
 		prevWasStatement = true
 	}
-	flush := func() { hd.flushAt(pc, emitDef) }
+	// emitComment renders one sidecar comment (handles multi-line block-comment
+	// bodies + placement via the shared helper).
+	emitComment := func(c format.CommentRow) {
+		emitCommentBody(&out, c.Body, c.Placement, &prevWasStatement)
+	}
+	// flushComments drains sidecar comments due at the current PC; flush also
+	// drains header definitions. At a shared PC comments emit before labels
+	// (a trailing comment belongs to the just-rendered statement; a standalone
+	// comment precedes the next one).
+	flushComments := func() { cc.flushAt(pc, emitComment) }
+	flush := func() { flushComments(); hd.flushAt(pc, emitDef) }
 
 	for _, rec := range f.Records {
 		switch rec.Kind {
@@ -64,20 +110,10 @@ func EmitFile(f *format.File) ([]byte, error) {
 			fmt.Fprintf(&out, "%d:", rec.Digit)
 			prevWasStatement = true
 		case format.KindComment:
-			// Comments occupy no PC; a label at this PC still belongs before
-			// the next byte-emitting statement, so don't flush here.
-			if rec.Placement == 1 && prevWasStatement {
-				out.WriteByte(' ')
-				fmt.Fprintf(&out, "//%s", string(rec.Body))
-				out.WriteByte('\n')
-				prevWasStatement = false
-				continue
-			}
-			if prevWasStatement {
-				out.WriteByte('\n')
-			}
-			fmt.Fprintf(&out, "//%s\n", string(rec.Body))
-			prevWasStatement = false
+			// Inline comment (symbolic-IR render path). Comments occupy no PC;
+			// a label at this PC still belongs before the next byte-emitting
+			// statement, so don't flush here.
+			emitCommentBody(&out, rec.Body, rec.Placement, &prevWasStatement)
 		case format.KindInst:
 			flush()
 			if prevWasStatement {
@@ -99,6 +135,10 @@ func EmitFile(f *format.File) ([]byte, error) {
 			// label at the post-.org PC is flushed by the next byte-producer.
 			if format.DirectiveName(rec.DirectiveID) != ".org" {
 				flush()
+			} else {
+				// Comments are origin-neutral, so drain them before `.org`; only
+				// the label flush is held until after `.org` (origin semantics).
+				flushComments()
 			}
 			if prevWasStatement {
 				out.WriteByte('\n')
@@ -152,11 +192,16 @@ func EmitFile(f *format.File) ([]byte, error) {
 			prevWasStatement = false
 		}
 	}
-	// Flush any definition at the final PC (an end-of-stream label).
+	// Flush any definition/comment at the final PC (an end-of-stream label or
+	// trailing comment).
 	flush()
 	if leftover := hd.remaining(); len(leftover) > 0 {
 		return nil, fmt.Errorf("render: %d header definition(s) not placed by PC walk (first at offset %#x) — PC accounting bug or corrupt header table",
 			len(leftover), leftover[0].offset)
+	}
+	if leftover := cc.remaining(); len(leftover) > 0 {
+		return nil, fmt.Errorf("render: %d comment(s) not placed by PC walk (first at offset %#x) — PC accounting bug or corrupt comment sidecar",
+			len(leftover), leftover[0].Anchor)
 	}
 	if prevWasStatement {
 		out.WriteByte('\n')

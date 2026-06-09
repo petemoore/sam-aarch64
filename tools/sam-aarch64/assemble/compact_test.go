@@ -64,7 +64,7 @@ func compactFile(t *testing.T, f *format.File) *format.File {
 	if err != nil {
 		t.Fatalf("Pass1: %v", err)
 	}
-	compacted, err := Compact(f, p1)
+	compacted, comments, globals, err := Compact(f, p1)
 	if err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
@@ -74,7 +74,7 @@ func compactFile(t *testing.T, f *format.File) *format.File {
 	}
 	labels, locals := headerRows(f, p1)
 	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, st, labels, locals, compacted); err != nil {
+	if err := format.WriteFile(&buf, st, labels, locals, compacted, globals, comments); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	cf, err := format.ReadFile(buf.Bytes())
@@ -112,7 +112,7 @@ func TestCompact_CollapsesLiteralRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Pass1: %v", err)
 	}
-	compacted, err := Compact(f, p1)
+	compacted, _, _, err := Compact(f, p1)
 	if err != nil {
 		t.Fatalf("Compact: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestCompact_CollapsesDataRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Pass1: %v", err)
 	}
-	compacted, err := Compact(f, p1)
+	compacted, _, _, err := Compact(f, p1)
 	if err != nil {
 		t.Fatalf("Compact: %v", err)
 	}

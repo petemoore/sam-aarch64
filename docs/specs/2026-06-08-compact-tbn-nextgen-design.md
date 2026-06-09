@@ -652,14 +652,27 @@ The reasoning:
 The §6 questions are resolved as follows; **Format B is the agreed target.**
 
 1. **Resident-vs-file priority → resident RAM is the driver; on-disk file size is
-   secondary.** Pete's key refinement (the unlock): the SAM can **write the `.tbn`
-   to disk before assembling, reuse the comment/name RAM as OUT/scratch during the
-   build, write the assembled binary to disk, then reload the `.tbn`** to restore
-   the editor view. So the editor-only content need not be a separate file or a
-   permanently-unmapped page — it lives **inline in the one file** in a
-   **contiguous, temporally-evictable region** that is swapped to disk during a
-   build. This reconciles "everything in one file" (Q2) with "minimise resident
-   bytes" (Q1). Tracked as a concrete future mechanism: **i40**.
+   secondary.** Pete's key refinement (the unlock): eviction is **conditional /
+   last-resort**, not unconditional. When free RAM allows, the SAM **keeps the
+   editor region resident** through the build — no disk round-trip, which is the
+   preferable path. Only when free RAM would otherwise be insufficient does the
+   SAM **persist the `.tbn` to disk, reuse the editor-region pages as OUT/scratch
+   during the build, write the assembled binary, then reload the `.tbn`** to
+   restore the editor view. So the editor-only content need not be a separate
+   file or a permanently-unmapped page — it lives **inline in the one file** in a
+   **contiguous, temporally-evictable region** that is swapped to disk *only if
+   needed*. This reconciles "everything in one file" (Q2) with "minimise resident
+   bytes" (Q1). **The split of work is sharp: i39b-2 ENABLES, i40 ENFORCES.**
+   i39b-2 relocates the editor-only data (comments, name strings, `.global`
+   flags) onto a separable trailing region bounded by a section index, so
+   eviction *becomes possible*; it does **not** touch the loader and does **not**
+   evict. i40 is the assembler-side mechanism that actually does the conditional
+   eviction. The concrete justification is measured: the release's comment text
+   alone is **335 KB** (`release.s`'s 7,502 `//` lines, ≈49% of the source), far
+   too much to hold resident alongside a build — so the full un-stripping of all
+   comments on the SAM-side m6 gate is **blocked on i40** (load only the
+   assembler-facing prefix) or an IN-buffer expansion (which would defeat the
+   resident goal). Tracked as a concrete future mechanism: **i40**.
 2. **Editor sidecar location → one `.tbn` file** (no companion file). The
    editor-only content is a section *within* that file (the evictable region above).
 3. **Version bump → clean breaking v2.** Pre-release; nothing is committed to v1,

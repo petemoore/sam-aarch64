@@ -30,7 +30,7 @@ func emitOverlayLine(t *testing.T, st *format.SymbolTable, base uint32, slot enc
 	var rw format.RecordWriter
 	rw.WriteInsnRun(1, []format.InsnElement{el})
 	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, st, nil, nil, rw.Bytes()); err != nil {
+	if err := format.WriteFile(&buf, st, nil, nil, rw.Bytes(), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	out, err := Emit(buf.Bytes())
@@ -149,7 +149,7 @@ func TestOverlayLiteralElement(t *testing.T) {
 		{BaseWord: 0x8b010000}, // add x0, x0, x1
 	})
 	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, format.NewSymbolTable(), nil, nil, rw.Bytes()); err != nil {
+	if err := format.WriteFile(&buf, format.NewSymbolTable(), nil, nil, rw.Bytes(), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	out, err := Emit(buf.Bytes())
@@ -170,7 +170,7 @@ func TestOverlayLitData(t *testing.T) {
 	var rw format.RecordWriter
 	rw.WriteLitData(byte(id), data)
 	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, format.NewSymbolTable(), nil, nil, rw.Bytes()); err != nil {
+	if err := format.WriteFile(&buf, format.NewSymbolTable(), nil, nil, rw.Bytes(), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	out, err := Emit(buf.Bytes())
