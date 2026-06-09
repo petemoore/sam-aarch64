@@ -8,19 +8,56 @@ type parser struct {
 	toks []Tok
 	pos  int
 	st   *format.SymbolTable
-	rw   format.RecordWriter
+	recs []format.Record
 }
 
-// Parse turns a token stream into a record stream and the populated
-// symbol table.
-func Parse(toks []Tok) ([]byte, *format.SymbolTable, error) {
+// Parse turns a token stream into the in-memory symbolic record IR and the
+// populated symbol table. The records are never serialized — they are handed
+// directly to the assembler (i48 decision A).
+func Parse(toks []Tok) ([]format.Record, *format.SymbolTable, error) {
 	p := &parser{toks: toks, st: format.NewSymbolTable()}
 	for !p.atEOF() {
 		if err := p.parseLine(); err != nil {
 			return nil, nil, err
 		}
 	}
-	return p.rw.Bytes(), p.st, nil
+	return p.recs, p.st, nil
+}
+
+// emitInst appends an INST record to the in-memory IR. operands is the
+// already-encoded operand stream produced by OperandWriter.
+func (p *parser) emitInst(mnemonicID uint16, operandCount byte, operands []byte) {
+	p.recs = append(p.recs, format.Record{
+		Kind:         format.KindInst,
+		MnemonicID:   mnemonicID,
+		OperandCount: operandCount,
+		Operands:     operands,
+	})
+}
+
+// emitLabelDef appends a LABEL_DEF record to the in-memory IR.
+func (p *parser) emitLabelDef(symID uint16) {
+	p.recs = append(p.recs, format.Record{Kind: format.KindLabelDef, SymbolID: symID})
+}
+
+// emitLocalDef appends a LOCAL_DEF record to the in-memory IR.
+func (p *parser) emitLocalDef(digit byte) {
+	p.recs = append(p.recs, format.Record{Kind: format.KindLocalDef, Digit: digit})
+}
+
+// emitComment appends a COMMENT record to the in-memory IR.
+func (p *parser) emitComment(placement byte, body []byte) {
+	p.recs = append(p.recs, format.Record{Kind: format.KindComment, Placement: placement, Body: body})
+}
+
+// emitDirective appends a DIRECTIVE record to the in-memory IR.
+func (p *parser) emitDirective(directiveID, operandCount byte, operands []byte) {
+	p.recs = append(p.recs, format.Record{
+		Kind:         format.KindDirective,
+		DirectiveID:  directiveID,
+		OperandCount: operandCount,
+		Operands:     operands,
+	})
 }
 
 func (p *parser) atEOF() bool { return p.toks[p.pos].Kind == TokEOF }
@@ -49,11 +86,11 @@ func (p *parser) parseLine() error {
 			if emittedStatement {
 				placement = 1
 			}
-			p.rw.WriteComment(placement, t.Bytes)
+			p.emitComment(placement, t.Bytes)
 			p.pos++
 		case TokInt:
 			if p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokColon && t.Int >= 1 && t.Int <= 99 {
-				p.rw.WriteLocalDef(byte(t.Int))
+				p.emitLocalDef(byte(t.Int))
 				p.pos += 2
 				emittedStatement = true
 				continue
@@ -62,7 +99,7 @@ func (p *parser) parseLine() error {
 		case TokIdent:
 			if p.pos+1 < len(p.toks) && p.toks[p.pos+1].Kind == TokColon {
 				id := p.st.Intern(t.Text)
-				p.rw.WriteLabelDef(id)
+				p.emitLabelDef(id)
 				p.pos += 2
 				emittedStatement = true
 				continue
@@ -115,7 +152,7 @@ func (p *parser) parseDirective(t Tok) error {
 	for {
 		switch p.cur().Kind {
 		case TokEOL, TokEOF, TokLineComment, TokBlockComment:
-			p.rw.WriteDirective(id, count, ow.Bytes())
+			p.emitDirective(id, count, ow.Bytes())
 			return nil
 		case TokComma:
 			if count == 0 {
@@ -154,7 +191,7 @@ func (p *parser) parseOrgRHS() error {
 	ow.WriteImmExpr(expr)
 	switch p.cur().Kind {
 	case TokEOL, TokEOF, TokLineComment, TokBlockComment:
-		p.rw.WriteDirective(id, 1, ow.Bytes())
+		p.emitDirective(id, 1, ow.Bytes())
 		return nil
 	}
 	return newErr(p.cur().Pos, "unexpected token after '. = expr'")
@@ -224,7 +261,7 @@ func (p *parser) parseDirectiveSection(id uint8) error {
 	// statement-terminators here just like for any other directive).
 	switch p.cur().Kind {
 	case TokEOL, TokEOF, TokLineComment, TokBlockComment:
-		p.rw.WriteDirective(id, count, ow.Bytes())
+		p.emitDirective(id, count, ow.Bytes())
 		return nil
 	}
 	return newErr(p.cur().Pos, ".section: unexpected token after operands")
@@ -253,7 +290,7 @@ func (p *parser) parseDirectiveRestOfLineAsSysName(id uint8) error {
 				ow.WriteSysName(string(text))
 				count = 1
 			}
-			p.rw.WriteDirective(id, count, ow.Bytes())
+			p.emitDirective(id, count, ow.Bytes())
 			return nil
 		}
 		text = append(text, tokSpelling(t)...)
@@ -402,7 +439,7 @@ func (p *parser) parseInst(t Tok) error {
 	for {
 		switch p.cur().Kind {
 		case TokEOL, TokEOF, TokLineComment, TokBlockComment:
-			p.rw.WriteInst(id, count, ow.Bytes())
+			p.emitInst(id, count, ow.Bytes())
 			return nil
 		case TokComma:
 			if count == 0 {
@@ -607,7 +644,7 @@ func (p *parser) parseMovk(id uint16) error {
 	}
 	ow.WriteImmExpr(folded.Bytes())
 
-	p.rw.WriteInst(id, 2, ow.Bytes())
+	p.emitInst(id, 2, ow.Bytes())
 	return nil
 }
 
@@ -661,7 +698,7 @@ func (p *parser) parseBarrier(id uint16, optional bool) error {
 		var e format.ExprWriter
 		e.WriteImm(0xf)
 		ow.WriteImmExpr(e.Bytes())
-		p.rw.WriteInst(id, 1, ow.Bytes())
+		p.emitInst(id, 1, ow.Bytes())
 		return nil
 	}
 
@@ -674,7 +711,7 @@ func (p *parser) parseBarrier(id uint16, optional bool) error {
 	var e format.ExprWriter
 	e.WriteImm(crm)
 	ow.WriteImmExpr(e.Bytes())
-	p.rw.WriteInst(id, 1, ow.Bytes())
+	p.emitInst(id, 1, ow.Bytes())
 	return nil
 }
 
@@ -726,7 +763,7 @@ func (p *parser) parseMovl() error {
 			var e1 format.ExprWriter
 			e1.WriteImm((int64(1) << 16) | hi16)
 			ow1.WriteImmExpr(e1.Bytes())
-			p.rw.WriteInst(uint16(movzID), 2, ow1.Bytes())
+			p.emitInst(uint16(movzID), 2, ow1.Bytes())
 			return nil
 		}
 		// Emit MOVZ Rd, #lo16.
@@ -736,7 +773,7 @@ func (p *parser) parseMovl() error {
 			var e1 format.ExprWriter
 			e1.WriteImm(lo16)
 			ow1.WriteImmExpr(e1.Bytes())
-			p.rw.WriteInst(uint16(movzID), 2, ow1.Bytes())
+			p.emitInst(uint16(movzID), 2, ow1.Bytes())
 		}
 		// If hi16 != 0, emit MOVK Rd, #hi16, lsl #16.
 		if hi16 != 0 {
@@ -745,7 +782,7 @@ func (p *parser) parseMovl() error {
 			var e2 format.ExprWriter
 			e2.WriteImm((int64(1) << 16) | hi16)
 			ow2.WriteImmExpr(e2.Bytes())
-			p.rw.WriteInst(movkID, 2, ow2.Bytes())
+			p.emitInst(movkID, 2, ow2.Bytes())
 		}
 		return nil
 	}
@@ -764,7 +801,7 @@ func (p *parser) parseMovl() error {
 		e1.AppendRaw(immExpr)
 		e1.WriteOp(format.OpRelAbsG0NC)
 		ow1.WriteImmExpr(e1.Bytes())
-		p.rw.WriteInst(uint16(movzID), 2, ow1.Bytes())
+		p.emitInst(uint16(movzID), 2, ow1.Bytes())
 	}
 	{
 		var ow2 format.OperandWriter
@@ -777,7 +814,7 @@ func (p *parser) parseMovl() error {
 		e2.WriteOp(format.OpRelAbsG1)
 		e2.WriteOp(format.OpOr) // (1<<16) | :abs_g1:sym
 		ow2.WriteImmExpr(e2.Bytes())
-		p.rw.WriteInst(movkID, 2, ow2.Bytes())
+		p.emitInst(movkID, 2, ow2.Bytes())
 	}
 	return nil
 }
@@ -817,7 +854,7 @@ func (p *parser) parseMrs(id uint16) error {
 	ow.WriteSysName(nameTok.Text)
 	p.pos++
 
-	p.rw.WriteInst(id, 2, ow.Bytes())
+	p.emitInst(id, 2, ow.Bytes())
 	return nil
 }
 
@@ -859,7 +896,7 @@ func (p *parser) parseMsr(id uint16) error {
 			}
 			ow.WriteReg(kind, reg)
 			p.pos++
-			p.rw.WriteInst(id, 2, ow.Bytes())
+			p.emitInst(id, 2, ow.Bytes())
 			return nil
 		}
 	}
@@ -868,7 +905,7 @@ func (p *parser) parseMsr(id uint16) error {
 	if err := p.parseOperand(&ow); err != nil {
 		return err
 	}
-	p.rw.WriteInst(id, 2, ow.Bytes())
+	p.emitInst(id, 2, ow.Bytes())
 	return nil
 }
 
@@ -906,7 +943,7 @@ func (p *parser) parseDcTlbi(id uint16, xtOptional bool) error {
 		return newErr(p.cur().Pos, "expected ',' and register operand")
 	}
 
-	p.rw.WriteInst(id, count, ow.Bytes())
+	p.emitInst(id, count, ow.Bytes())
 	return nil
 }
 
@@ -963,7 +1000,7 @@ func (p *parser) tryParseLdrLitPool(id uint16) (bool, error) {
 	var ow format.OperandWriter
 	ow.WriteReg(regKind, reg)
 	ow.WriteLitPool(width, expr)
-	p.rw.WriteInst(id, 2, ow.Bytes())
+	p.emitInst(id, 2, ow.Bytes())
 	return true, nil
 }
 

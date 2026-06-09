@@ -1,7 +1,6 @@
 package format
 
 import (
-	"encoding/binary"
 	"testing"
 )
 
@@ -17,47 +16,11 @@ func TestKindLitInstsValue(t *testing.T) {
 	}
 }
 
-func TestLitInstsRoundTrip(t *testing.T) {
-	words := []uint32{0xd503201f, 0xd65f03c0, 0x910003fd} // nop, ret, mov x29,sp
-	var rw RecordWriter
-	rw.WriteLitInsts(words)
-
-	rr := NewRecordReader(rw.Bytes())
-	rec, err := rr.Next()
-	if err != nil {
-		t.Fatalf("Next: %v", err)
-	}
-	if rec.Kind != KindLitInsts {
-		t.Fatalf("Kind = %s, want LIT_INSTS", rec.Kind.Name())
-	}
-	if int(rec.LitCount) != len(words) {
-		t.Fatalf("LitCount = %d, want %d", rec.LitCount, len(words))
-	}
-	if len(rec.LitWords) != 4*len(words) {
-		t.Fatalf("LitWords len = %d, want %d", len(rec.LitWords), 4*len(words))
-	}
-	for i, want := range words {
-		got := binary.LittleEndian.Uint32(rec.LitWords[4*i:])
-		if got != want {
-			t.Errorf("word %d = 0x%08x, want 0x%08x", i, got, want)
-		}
-	}
-	if !rr.AtEnd() {
-		t.Errorf("reader not at end after single record")
-	}
-}
-
-// readSingleRecord serialises one record via the writer and reads it
-// back as a decoded Record, so IsFullyLiteral can be tested against the
-// same shape the reader produces in refenc.
-func readSingleRecord(t *testing.T, rw *RecordWriter) Record {
-	t.Helper()
-	rr := NewRecordReader(rw.Bytes())
-	rec, err := rr.Next()
-	if err != nil {
-		t.Fatalf("Next: %v", err)
-	}
-	return rec
+// instRecord builds an in-memory INST record directly (the form the
+// front-end produces), so IsFullyLiteral can be tested against the same
+// shape the assembler sees.
+func instRecord(mnemonicID uint16, operandCount byte, operands []byte) Record {
+	return Record{Kind: KindInst, MnemonicID: mnemonicID, OperandCount: operandCount, Operands: operands}
 }
 
 func TestIsFullyLiteral_RegisterOnly(t *testing.T) {
@@ -66,9 +29,7 @@ func TestIsFullyLiteral_RegisterOnly(t *testing.T) {
 	ow.WriteReg(OpRegX, 0)
 	ow.WriteReg(OpRegX, 1)
 	ow.WriteReg(OpRegX, 2)
-	var rw RecordWriter
-	rw.WriteInst(1, 3, ow.Bytes())
-	if !IsFullyLiteral(readSingleRecord(t, &rw)) {
+	if !IsFullyLiteral(instRecord(1, 3, ow.Bytes())) {
 		t.Errorf("register-only inst: IsFullyLiteral = false, want true")
 	}
 }
@@ -80,9 +41,7 @@ func TestIsFullyLiteral_ConstImm(t *testing.T) {
 	var ow OperandWriter
 	ow.WriteReg(OpRegX, 0)
 	ow.WriteImmExpr(ew.Bytes())
-	var rw RecordWriter
-	rw.WriteInst(40, 2, ow.Bytes())
-	if !IsFullyLiteral(readSingleRecord(t, &rw)) {
+	if !IsFullyLiteral(instRecord(40, 2, ow.Bytes())) {
 		t.Errorf("const-immediate inst: IsFullyLiteral = false, want true")
 	}
 }
@@ -94,9 +53,7 @@ func TestIsFullyLiteral_SymbolRef(t *testing.T) {
 	var ow OperandWriter
 	ow.WriteReg(OpRegX, 0)
 	ow.WriteImmExpr(ew.Bytes())
-	var rw RecordWriter
-	rw.WriteInst(40, 2, ow.Bytes())
-	if IsFullyLiteral(readSingleRecord(t, &rw)) {
+	if IsFullyLiteral(instRecord(40, 2, ow.Bytes())) {
 		t.Errorf("symbol-ref inst: IsFullyLiteral = true, want false")
 	}
 }
@@ -107,9 +64,7 @@ func TestIsFullyLiteral_LocalRef(t *testing.T) {
 	var ow OperandWriter
 	ow.WriteReg(OpRegX, 0)
 	ow.WriteImmExpr(ew.Bytes())
-	var rw RecordWriter
-	rw.WriteInst(40, 2, ow.Bytes())
-	if IsFullyLiteral(readSingleRecord(t, &rw)) {
+	if IsFullyLiteral(instRecord(40, 2, ow.Bytes())) {
 		t.Errorf("local-ref inst: IsFullyLiteral = true, want false")
 	}
 }
@@ -120,9 +75,7 @@ func TestIsFullyLiteral_PCRef(t *testing.T) {
 	var ow OperandWriter
 	ow.WriteReg(OpRegX, 0)
 	ow.WriteImmExpr(ew.Bytes())
-	var rw RecordWriter
-	rw.WriteInst(40, 2, ow.Bytes())
-	if IsFullyLiteral(readSingleRecord(t, &rw)) {
+	if IsFullyLiteral(instRecord(40, 2, ow.Bytes())) {
 		t.Errorf("PC-ref inst: IsFullyLiteral = true, want false")
 	}
 }
@@ -135,9 +88,7 @@ func TestIsFullyLiteral_Reloc(t *testing.T) {
 	var ow OperandWriter
 	ow.WriteReg(OpRegX, 0)
 	ow.WriteImmExpr(ew.Bytes())
-	var rw RecordWriter
-	rw.WriteInst(40, 2, ow.Bytes())
-	if IsFullyLiteral(readSingleRecord(t, &rw)) {
+	if IsFullyLiteral(instRecord(40, 2, ow.Bytes())) {
 		t.Errorf("reloc inst: IsFullyLiteral = true, want false")
 	}
 }
@@ -149,9 +100,7 @@ func TestIsFullyLiteral_LitPool(t *testing.T) {
 	var ow OperandWriter
 	ow.WriteReg(OpRegX, 0)
 	ow.WriteLitPool(8, ew.Bytes())
-	var rw RecordWriter
-	rw.WriteInst(5, 2, ow.Bytes())
-	if IsFullyLiteral(readSingleRecord(t, &rw)) {
+	if IsFullyLiteral(instRecord(5, 2, ow.Bytes())) {
 		t.Errorf("litpool inst: IsFullyLiteral = true, want false")
 	}
 }
@@ -163,9 +112,7 @@ func TestIsFullyLiteral_MemConstOffset(t *testing.T) {
 	var off ExprWriter
 	off.WriteImm(8)
 	ow.WriteMemBaseOff(MemBaseOff, 1, off.Bytes())
-	var rw RecordWriter
-	rw.WriteInst(5, 2, ow.Bytes())
-	if !IsFullyLiteral(readSingleRecord(t, &rw)) {
+	if !IsFullyLiteral(instRecord(5, 2, ow.Bytes())) {
 		t.Errorf("const-offset mem inst: IsFullyLiteral = false, want true")
 	}
 }
@@ -178,17 +125,13 @@ func TestIsFullyLiteral_MemSymbolOffset(t *testing.T) {
 	off.WriteSym(0)
 	off.WriteOp(OpRelLo12)
 	ow.WriteMemBaseOff(MemBaseOff, 1, off.Bytes())
-	var rw RecordWriter
-	rw.WriteInst(5, 2, ow.Bytes())
-	if IsFullyLiteral(readSingleRecord(t, &rw)) {
+	if IsFullyLiteral(instRecord(5, 2, ow.Bytes())) {
 		t.Errorf("symbol-offset mem inst: IsFullyLiteral = true, want false")
 	}
 }
 
 func TestIsFullyLiteral_NotAnInst(t *testing.T) {
-	var rw RecordWriter
-	rw.WriteLabelDef(0)
-	if IsFullyLiteral(readSingleRecord(t, &rw)) {
+	if IsFullyLiteral(Record{Kind: KindLabelDef}) {
 		t.Errorf("label-def record: IsFullyLiteral = true, want false")
 	}
 }

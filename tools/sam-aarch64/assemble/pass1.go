@@ -151,12 +151,7 @@ func Pass1(f *format.File) (*Pass1Result, error) {
 		pendingLdrSites = 0
 	}
 
-	rr := format.NewRecordReader(f.Records)
-	for !rr.AtEnd() {
-		rec, err := rr.Next()
-		if err != nil {
-			return nil, err
-		}
+	for _, rec := range f.Records {
 		usage.observeRecord(rec)
 		switch rec.Kind {
 		case format.KindLabelDef:

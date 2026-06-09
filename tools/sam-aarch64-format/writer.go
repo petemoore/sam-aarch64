@@ -18,49 +18,11 @@ func (w *RecordWriter) writeHeader(kind RecordKind, payloadLen int) {
 	w.buf = append(w.buf, tmp[:]...)
 }
 
-func (w *RecordWriter) WriteLabelDef(symID uint16) {
-	w.writeHeader(KindLabelDef, 2)
-	w.buf = append(w.buf, byte(symID), byte(symID>>8))
-}
-
-func (w *RecordWriter) WriteLocalDef(digit byte) {
-	w.writeHeader(KindLocalDef, 1)
-	w.buf = append(w.buf, digit)
-}
-
 // WriteComment writes a comment record. placement: 0=standalone, 1=trailing.
 func (w *RecordWriter) WriteComment(placement byte, body []byte) {
 	w.writeHeader(KindComment, 1+len(body))
 	w.buf = append(w.buf, placement)
 	w.buf = append(w.buf, body...)
-}
-
-// WriteInst writes an INST record. operands is the already-encoded
-// operand stream produced by OperandWriter.
-func (w *RecordWriter) WriteInst(mnemonicID uint16, operandCount byte, operands []byte) {
-	payloadLen := 2 + 1 + len(operands)
-	w.writeHeader(KindInst, payloadLen)
-	w.buf = append(w.buf, byte(mnemonicID), byte(mnemonicID>>8), operandCount)
-	w.buf = append(w.buf, operands...)
-}
-
-// WriteLitInsts writes a LIT_INSTS record: a run of fully-literal
-// instructions stored as their assembled little-endian words. The run
-// length must be 1..255 (the caller splits longer runs into successive
-// records); WriteLitInsts panics on a zero or over-long run, which is a
-// programming error in the compaction pass.
-func (w *RecordWriter) WriteLitInsts(words []uint32) {
-	if len(words) == 0 || len(words) > 255 {
-		panic("WriteLitInsts: run length must be 1..255")
-	}
-	payloadLen := 1 + 4*len(words)
-	w.writeHeader(KindLitInsts, payloadLen)
-	w.buf = append(w.buf, byte(len(words)))
-	var tmp [4]byte
-	for _, word := range words {
-		binary.LittleEndian.PutUint32(tmp[:], word)
-		w.buf = append(w.buf, tmp[:]...)
-	}
 }
 
 // WriteLitData writes a LIT_DATA record: a run of constant data from a

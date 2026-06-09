@@ -66,8 +66,17 @@ func Fold(slot FoldSlot, value int64, pc int64, baseWord uint32) (uint32, error)
 		}
 		return encodeAdrpImm(OperandSlot{}, diff)
 	case FoldAddSubImm12:
-		// Imm12Shifted: no PC conversion; value used directly (sh bit @22).
-		return encodeImm12Shifted(OperandSlot{BitPosition: 10}, value)
+		// Symbolic add/sub immediate (:lo12:, symbol-diff). The lsl #12
+		// shift is SYNTACTIC (i48 decision B): the sh bit @22 comes from the
+		// source (it sits in the base word, not zeroed), and the fold fills
+		// ONLY the imm12 field @10. A value that doesn't fit an unsigned
+		// imm12 is a loud error ("use #x, lsl #12"), never GNU's silent
+		// large-immediate split. (Zero corpus cost: every symbolic add/sub
+		// immediate in the vendored release is a 12-bit :lo12:/diff value.)
+		if value < 0 || value >= (1<<12) {
+			return 0, fmt.Errorf("FoldAddSubImm12: value %d does not fit unsigned imm12 (lsl #12 must be explicit)", value)
+		}
+		return uint32(value) << 10, nil
 	case FoldMemImm12:
 		// encodeMemInst MemBaseOff: imm12 = byteOffset/scale @10; scale is
 		// recoverable from the base word's size field (bits 31:30).
@@ -178,7 +187,12 @@ func ZeroSlot(word uint32, slot FoldSlot) uint32 {
 		return word &^ (0x3FFF << 5)
 	case FoldAdr, FoldAdrp:
 		return word &^ ((0x3 << 29) | (0x7FFFF << 5))
-	case FoldAddSubImm12, FoldLogical:
+	case FoldAddSubImm12:
+		// imm12 @10 only; the sh bit @22 stays in the base word (syntactic
+		// lsl #12), so it is NOT cleared here.
+		return word &^ (0xFFF << 10)
+	case FoldLogical:
+		// N:immr:imms — a 13-bit logical-immediate field @10.
 		return word &^ (0x1FFF << 10)
 	case FoldMemImm12:
 		return word &^ (0xFFF << 10)

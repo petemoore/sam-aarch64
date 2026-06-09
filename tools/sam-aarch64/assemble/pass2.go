@@ -75,12 +75,7 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 		return nil
 	}
 
-	rr := format.NewRecordReader(f.Records)
-	for !rr.AtEnd() {
-		rec, err := rr.Next()
-		if err != nil {
-			return nil, err
-		}
+	for _, rec := range f.Records {
 		switch rec.Kind {
 		case format.KindInst:
 			word, err := encodeInst(rec, pc, p1, f)

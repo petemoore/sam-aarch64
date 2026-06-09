@@ -204,19 +204,14 @@ func classifyMem(rec format.Record, ops []format.Operand, pc int64, p1 *Pass1Res
 
 	switch mem.MemShape {
 	case format.MemBaseOff:
-		// Scaled unsigned imm12, unless the offset can't be a scaled imm12
-		// (negative / non-multiple) and GNU's unscaled-imm9 rewrite applies.
-		v, err := EvalUsage(mem.Expr, makeCtx(pc, p1, f), usage)
-		if err != nil {
-			return 0, nil, false, 0, 0, err
-		}
-		_, scale := memInstSize(rec.MnemonicID, ops[0].Kind)
-		if v < 0 || v%scale != 0 || v/scale >= (1<<12) {
-			if v >= -256 && v <= 255 {
-				return enc.FoldMemImm9, mem.Expr, false, 0, 0, nil
-			}
-			return 0, nil, false, 0, 0, fmt.Errorf("overlay: mem offset %d not encodable (mnem %d)", v, rec.MnemonicID)
-		}
+		// The mnemonic the user typed fixes the form by syntax (i48
+		// decision B): `ldr`/`str` (not `ldur`/`stur`) is always the scaled
+		// unsigned-imm12 form. The offset is NEVER evaluated here to re-pick
+		// the form — if the resolved value doesn't fit the scaled imm12
+		// field, FoldMemImm12 errors at assemble time ("use ldur"), rather
+		// than GNU's silent unscaled-imm9 rewrite. (Zero corpus cost: every
+		// symbolic scaled offset in the vendored release fits imm12; the
+		// only unscaled uses are constants the author wrote as `ldur`.)
 		return enc.FoldMemImm12, mem.Expr, false, 0, 0, nil
 	case format.MemBaseOffPre, format.MemBaseOffPost:
 		return enc.FoldMemImm9, mem.Expr, false, 0, 0, nil
@@ -224,9 +219,14 @@ func classifyMem(rec format.Record, ops []format.Operand, pc int64, p1 *Pass1Res
 	return 0, nil, false, 0, 0, fmt.Errorf("overlay: mem shape %v has no symbolic encoding (mnem %d)", mem.MemShape, rec.MnemonicID)
 }
 
-// classifyMovImm decides whether a symbol-bearing `mov Rd, #expr` lands in
-// the movz imm16 field or the orr-immediate (logical) field, replicating
-// tryEncodeMovImm's selection (pass2.go).
+// classifyMovImm picks the overlay slot for a symbol-bearing `mov Rd, #expr`.
+// Per i48 decision B the family default is movz (FoldMovzAuto) — chosen
+// without needing the source to spell `movz` — with the orr-immediate
+// (FoldLogical) form as the narrow assemble-time fallback for the one
+// value-dependent opcode case (a value that isn't a single 16-bit chunk but
+// is a valid bitmask immediate). movn is not modelled (no corpus use); a
+// value that is neither movz- nor orr-encodable is a loud error, never a
+// silent miss. Mirrors tryEncodeMovImm's selection (pass2.go).
 func classifyMovImm(ops []format.Operand, pc int64, p1 *Pass1Result, f *format.File) (enc.FoldSlot, []byte, bool, byte, byte, error) {
 	imm, err := EvalUsage(ops[1].Expr, makeCtx(pc, p1, f), usage)
 	if err != nil {

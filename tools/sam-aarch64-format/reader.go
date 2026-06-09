@@ -87,29 +87,12 @@ func (r *RecordReader) Next() (Record, error) {
 
 	rec := Record{Kind: kind, Raw: payload}
 	switch kind {
-	case KindLabelDef:
-		if len(payload) != 2 {
-			return rec, fmt.Errorf("LABEL_DEF: payload len = %d, want 2", len(payload))
-		}
-		rec.SymbolID = binary.LittleEndian.Uint16(payload)
-	case KindLocalDef:
-		if len(payload) != 1 {
-			return rec, fmt.Errorf("LOCAL_DEF: payload len = %d, want 1", len(payload))
-		}
-		rec.Digit = payload[0]
 	case KindComment:
 		if len(payload) < 1 {
 			return rec, fmt.Errorf("COMMENT: payload too short")
 		}
 		rec.Placement = payload[0]
 		rec.Body = payload[1:]
-	case KindInst:
-		if len(payload) < 3 {
-			return rec, fmt.Errorf("INST: payload too short")
-		}
-		rec.MnemonicID = binary.LittleEndian.Uint16(payload)
-		rec.OperandCount = payload[2]
-		rec.Operands = payload[3:]
 	case KindDirective:
 		if len(payload) < 2 {
 			return rec, fmt.Errorf("DIRECTIVE: payload too short")
@@ -117,16 +100,6 @@ func (r *RecordReader) Next() (Record, error) {
 		rec.DirectiveID = payload[0]
 		rec.OperandCount = payload[1]
 		rec.Operands = payload[2:]
-	case KindLitInsts:
-		if len(payload) < 1 {
-			return rec, fmt.Errorf("LIT_INSTS: payload too short")
-		}
-		rec.LitCount = payload[0]
-		rec.LitWords = payload[1:]
-		if len(rec.LitWords) != 4*int(rec.LitCount) {
-			return rec, fmt.Errorf("LIT_INSTS: count %d implies %d word bytes, have %d",
-				rec.LitCount, 4*int(rec.LitCount), len(rec.LitWords))
-		}
 	case KindLitData:
 		if len(payload) < 1 {
 			return rec, fmt.Errorf("LIT_DATA: payload too short")
@@ -188,10 +161,16 @@ type File struct {
 	Names   []string
 	// Labels and Locals are the header position tables (§2.4): named
 	// position-labels and numeric-local def sites resolved to byte offsets
-	// from the origin VMA. Empty for a symbolic `.tbn` from text2bin.
-	Labels  []LabelRow
-	Locals  []LocalRow
-	Records []byte
+	// from the origin VMA. Empty for an in-memory symbolic IR built by the
+	// front-end.
+	Labels []LabelRow
+	Locals []LocalRow
+	// Records is the decoded statement stream. For a File built by the
+	// front-end it is the in-memory symbolic IR (KindInst/KindLabelDef/
+	// KindLocalDef/KindDirective/KindComment); for one read from disk via
+	// ReadFile it is the overlay stream (KindInsnRun/KindLitData/KindDirective/
+	// KindComment).
+	Records []Record
 }
 
 func ReadFile(buf []byte) (*File, error) {
@@ -237,12 +216,25 @@ func ReadFile(buf []byte) (*File, error) {
 		return nil, err
 	}
 
+	// Decode the remaining byte stream into the in-memory record slice.
+	// An on-disk `.tbn` only carries overlay-format records (INSN_RUN/
+	// LIT_DATA/DIRECTIVE/COMMENT).
+	var records []Record
+	rr := NewRecordReader(buf[pos:])
+	for !rr.AtEnd() {
+		rec, err := rr.Next()
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, rec)
+	}
+
 	return &File{
 		Version: version,
 		Flags:   flags,
 		Names:   names,
 		Labels:  labels,
 		Locals:  locals,
-		Records: buf[pos:],
+		Records: records,
 	}, nil
 }

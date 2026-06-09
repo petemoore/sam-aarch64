@@ -9,15 +9,7 @@ import (
 
 func parseHelper(t *testing.T, src string) *format.File {
 	t.Helper()
-	out, err := Translate([]byte(src), "test.s")
-	if err != nil {
-		t.Fatal(err)
-	}
-	f, err := format.ReadFile(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return f
+	return translateFile(t, src)
 }
 
 func TestParseLabelDef(t *testing.T) {
@@ -25,7 +17,7 @@ func TestParseLabelDef(t *testing.T) {
 	if len(f.Names) != 1 || f.Names[0] != "loop" {
 		t.Errorf("names = %v", f.Names)
 	}
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	if rec.Kind != format.KindLabelDef || rec.SymbolID != 0 {
 		t.Errorf("rec = %+v", rec)
@@ -34,7 +26,7 @@ func TestParseLabelDef(t *testing.T) {
 
 func TestParseLocalLabelDef(t *testing.T) {
 	f := parseHelper(t, "3:\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	if rec.Kind != format.KindLocalDef || rec.Digit != 3 {
 		t.Errorf("rec = %+v", rec)
@@ -43,7 +35,7 @@ func TestParseLocalLabelDef(t *testing.T) {
 
 func TestParseStandaloneComment(t *testing.T) {
 	f := parseHelper(t, "// banner\n/* block */\n")
-	r := format.NewRecordReader(f.Records)
+	r := newRecCursor(f.Records)
 	rec, _ := r.Next()
 	if rec.Kind != format.KindComment || rec.Placement != 0 || string(rec.Body) != " banner" {
 		t.Errorf("rec0 = %+v", rec)
@@ -57,13 +49,13 @@ func TestParseStandaloneComment(t *testing.T) {
 func TestParseBlankLinesSkipped(t *testing.T) {
 	f := parseHelper(t, "\n\n\n")
 	if len(f.Records) != 0 {
-		t.Errorf("expected no records, got % X", f.Records)
+		t.Errorf("expected no records, got %+v", f.Records)
 	}
 }
 
 func TestParseLabelOnSameLineAsAnotherToken(t *testing.T) {
 	f := parseHelper(t, "exit: // bye\n")
-	rr := format.NewRecordReader(f.Records)
+	rr := newRecCursor(f.Records)
 	rec, _ := rr.Next()
 	if rec.Kind != format.KindLabelDef {
 		t.Errorf("rec0 = %+v", rec)

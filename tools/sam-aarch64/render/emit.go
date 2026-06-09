@@ -13,8 +13,13 @@ func Emit(in []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return EmitFile(f)
+}
+
+// EmitFile renders a decoded File (in-memory symbolic IR or an on-disk
+// overlay File) to canonically-formatted text.
+func EmitFile(f *format.File) ([]byte, error) {
 	var out bytes.Buffer
-	rr := format.NewRecordReader(f.Records)
 	var prevWasStatement bool
 
 	// Header-table label/local definitions (compact `.tbn` v2). Inert for a
@@ -44,11 +49,7 @@ func Emit(in []byte) ([]byte, error) {
 	}
 	flush := func() { hd.flushAt(pc, emitDef) }
 
-	for !rr.AtEnd() {
-		rec, err := rr.Next()
-		if err != nil {
-			return nil, err
-		}
+	for _, rec := range f.Records {
 		switch rec.Kind {
 		case format.KindLabelDef:
 			if prevWasStatement {

@@ -29,7 +29,6 @@ package frontend
 // with proper `.balign 0x10`.
 
 import (
-	"bytes"
 	"fmt"
 
 	enc "github.com/petemoore/sam-aarch64/tools/aarch64enc"
@@ -83,7 +82,7 @@ func canonicalSectionIndex(name string) int {
 // reuses ids from the same name table (no symbols are added to it —
 // label names already interned during parsing are reused). Returns the
 // new record stream.
-func Flatten(records []byte, names []string, opts FlattenOptions) ([]byte, error) {
+func Flatten(records []format.Record, names []string, opts FlattenOptions) ([]format.Record, error) {
 	// Bucket records by current section. The walker observes
 	// `.text` / `.data` / `.section X` directives and switches the
 	// current bucket; those directive records are *consumed* (not
@@ -95,12 +94,7 @@ func Flatten(records []byte, names []string, opts FlattenOptions) ([]byte, error
 	dataID, _ := format.DirectiveID(".data")
 	sectionID, _ := format.DirectiveID(".section")
 
-	rr := format.NewRecordReader(records)
-	for !rr.AtEnd() {
-		rec, err := rr.Next()
-		if err != nil {
-			return nil, err
-		}
+	for _, rec := range records {
 		if rec.Kind == format.KindDirective {
 			switch rec.DirectiveID {
 			case textID:
@@ -210,7 +204,7 @@ func Flatten(records []byte, names []string, opts FlattenOptions) ([]byte, error
 	}
 
 	// Build the output record stream.
-	var rw format.RecordWriter
+	var out []format.Record
 
 	orgID, ok := format.DirectiveID(".org")
 	if !ok {
@@ -231,18 +225,16 @@ func Flatten(records []byte, names []string, opts FlattenOptions) ([]byte, error
 		var ew format.ExprWriter
 		ew.WriteImm(opts.OriginVMA)
 		ow.WriteImmExpr(ew.Bytes())
-		rw.WriteDirective(orgID, 1, ow.Bytes())
+		out = append(out, directiveRecord(orgID, 1, ow.Bytes()))
 	}
 
 	// 2. All `.text` records in source order.
-	for _, rec := range sections[0].records {
-		writeRecord(&rw, rec)
-	}
+	out = append(out, sections[0].records...)
 
 	// 3. Trailing `.ltorg` to flush the literal pool inside `.text`.
 	//    (refenc would flush at EOF anyway, but we want the pool bytes
 	//    to count toward `.text` size for VMA computation correctness.)
-	rw.WriteDirective(ltorgID, 0, nil)
+	out = append(out, directiveRecord(ltorgID, 0, nil))
 
 	// 4. `.data` records (if any) — emit with a leading `.balign 0x10`
 	//    to match the linker-script's `.data : ALIGN(0x10)` clause.
@@ -253,10 +245,8 @@ func Flatten(records []byte, names []string, opts FlattenOptions) ([]byte, error
 		var ew format.ExprWriter
 		ew.WriteImm(0x10)
 		ow.WriteImmExpr(ew.Bytes())
-		rw.WriteDirective(balignID, 1, ow.Bytes())
-		for _, rec := range sections[1].records {
-			writeRecord(&rw, rec)
-		}
+		out = append(out, directiveRecord(balignID, 1, ow.Bytes()))
+		out = append(out, sections[1].records...)
 	}
 
 	// 5. For each non-.text/.data section, emit `.equ NAME, VMA` for
@@ -272,16 +262,26 @@ func Flatten(records []byte, names []string, opts FlattenOptions) ([]byte, error
 		}
 		for _, lbl := range labels {
 			vma := s.start + lbl.Offset
-			emitEqu(&rw, equID, lbl.SymbolID, vma)
+			out = append(out, equRecord(equID, lbl.SymbolID, vma))
 		}
 	}
 
-	return rw.Bytes(), nil
+	return out, nil
 }
 
-// emitEqu emits a `.equ NAME, VMA` directive record where NAME is the
+// directiveRecord builds a DIRECTIVE record from its fields.
+func directiveRecord(directiveID, operandCount byte, operands []byte) format.Record {
+	return format.Record{
+		Kind:         format.KindDirective,
+		DirectiveID:  directiveID,
+		OperandCount: operandCount,
+		Operands:     operands,
+	}
+}
+
+// equRecord builds a `.equ NAME, VMA` directive record where NAME is the
 // symbol-table entry for the given symbol id.
-func emitEqu(rw *format.RecordWriter, equID byte, symID uint16, vma int64) {
+func equRecord(equID byte, symID uint16, vma int64) format.Record {
 	var ow format.OperandWriter
 	// Operand 1: PUSH_SYM(symID) — the symbol being defined.
 	var nameExpr format.ExprWriter
@@ -291,25 +291,7 @@ func emitEqu(rw *format.RecordWriter, equID byte, symID uint16, vma int64) {
 	var valExpr format.ExprWriter
 	valExpr.WriteImm(vma)
 	ow.WriteImmExpr(valExpr.Bytes())
-	rw.WriteDirective(equID, 2, ow.Bytes())
-}
-
-// writeRecord re-serialises a decoded record into rw. Used to copy
-// instruction / directive / label-def records from the per-section
-// buckets into the output stream.
-func writeRecord(rw *format.RecordWriter, rec format.Record) {
-	switch rec.Kind {
-	case format.KindLabelDef:
-		rw.WriteLabelDef(rec.SymbolID)
-	case format.KindLocalDef:
-		rw.WriteLocalDef(rec.Digit)
-	case format.KindComment:
-		rw.WriteComment(rec.Placement, rec.Body)
-	case format.KindInst:
-		rw.WriteInst(rec.MnemonicID, rec.OperandCount, rec.Operands)
-	case format.KindDirective:
-		rw.WriteDirective(rec.DirectiveID, rec.OperandCount, rec.Operands)
-	}
+	return directiveRecord(equID, 2, ow.Bytes())
 }
 
 func alignUp(v, align int64) int64 {
@@ -664,9 +646,3 @@ func extractSymIDFromExpr(expr []byte) (uint16, bool) {
 	}
 	return uint16(expr[1]) | uint16(expr[2])<<8, true
 }
-
-// Ensure the bytes package import is referenced (used by file io
-// elsewhere in the package — keep available for future use without
-// triggering "imported and not used"). The blank identifier suppresses
-// import errors while making the dependency explicit.
-var _ = bytes.NewBuffer

@@ -10,9 +10,10 @@ func TestReadFileRoundtrip(t *testing.T) {
 	st.Intern("loop")
 	st.Intern("exit")
 
+	// The on-disk record stream carries overlay-format records only.
 	var rw RecordWriter
-	rw.WriteLabelDef(0)
-	rw.WriteLabelDef(1)
+	rw.WriteComment(0, []byte("loop body"))
+	rw.WriteInsnRun(0, []InsnElement{{BaseWord: 0xd503201f}})
 
 	var buf bytes.Buffer
 	if err := WriteFile(&buf, st, nil, nil, rw.Bytes()); err != nil {
@@ -29,8 +30,15 @@ func TestReadFileRoundtrip(t *testing.T) {
 	if len(f.Names) != 2 || f.Names[0] != "loop" || f.Names[1] != "exit" {
 		t.Errorf("names = %v", f.Names)
 	}
-	if !bytes.Equal(f.Records, rw.Bytes()) {
-		t.Errorf("records mismatch:\n got: % X\nwant: % X", f.Records, rw.Bytes())
+	if len(f.Records) != 2 {
+		t.Fatalf("records = %d, want 2", len(f.Records))
+	}
+	if f.Records[0].Kind != KindComment || string(f.Records[0].Body) != "loop body" {
+		t.Errorf("rec0 = %+v", f.Records[0])
+	}
+	if f.Records[1].Kind != KindInsnRun || len(f.Records[1].Elements) != 1 ||
+		f.Records[1].Elements[0].BaseWord != 0xd503201f {
+		t.Errorf("rec1 = %+v", f.Records[1])
 	}
 }
 
