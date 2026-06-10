@@ -1,0 +1,2 @@
+# Assembled decoder binaries — built by the test from the .asm sources.
+*.bin

@@ -81,12 +81,14 @@ The maximum comment body is 1,691 B (a large block comment).
 
 ## Z80 decoder cost table
 
-Decoder sizes are documented in the respective project READMEs / assembly source headers. Cycle counts (T-states/byte) are not published by those projects; the figures below are unverified estimates based on the instruction-level complexity of each scheme.
+Decoder sizes are documented in the respective project READMEs / assembly source headers.
+
+ZX0 T-states/byte figures are **measured** (see "Measured decode latency" section below); all other figures are unverified estimates.
 
 | Scheme | Decoder bytes | Decode speed | Source |
 |--------|---------------|--------------|--------|
-| ZX0 standard | 68 | unverified estimate | <https://github.com/einar-saukas/ZX0> README: "68 bytes only" |
-| ZX0 turbo | 126 | ~21% faster than standard | <https://github.com/einar-saukas/ZX0> README |
+| ZX0 standard | 68 | **see table below** | measured via harness; `tools/z80-test-harness-go/zx0_decode_bench_test.go` |
+| ZX0 turbo | 126 | **see table below** | measured via harness; `tools/z80-test-harness-go/zx0_decode_bench_test.go` |
 | LZSA1 small | 67 | unverified estimate | <https://github.com/emmanuel-marty/lzsa> `asm/z80/unlzsa1_small.asm` header |
 | LZSA2 small | 134 | unverified estimate | <https://github.com/emmanuel-marty/lzsa> `asm/z80/unlzsa2_small.asm` header |
 | canonical Huffman | ~80–120 est. | ~40–60 T/byte est. | unverified estimate; classic Z80 Huffman decoders |
@@ -94,9 +96,60 @@ Decoder sizes are documented in the respective project READMEs / assembly source
 | BPE 256-entry | ~80–120 est. | ~50–100 T/byte est. | unverified estimate; recursive expansion; stack-intensive |
 | flate level-9 | N/A (not Z80) | N/A | not feasible on Z80 |
 
-T-state decode speed is relevant for in-editor decompression on demand (e.g. decompressing a comment block when the cursor reaches it). At 6 MHz, 1 T-state ≈ 167 ns; a 1 KB block at 60 T/byte ≈ 10 ms — perceptible but not jarring. At 40 T/byte ≈ 7 ms.
+T-state decode speed is relevant for in-editor decompression on demand (e.g. decompressing a comment block when the cursor reaches it). At 6 MHz, 1 T-state ≈ 167 ns.
 
 No credible published Go port of ZX0, ZX7, or LZSA was found on pkg.go.dev (checked 2026-06-10). The LZ77 implementation here is a greedy stand-in and its output should be treated as an upper bound; real ZX0 optimal parse produces ~2–5% smaller output.
+
+## Measured decode latency (i60a)
+
+Real ZX0 decode speed measured by running the upstream Z80 decoders
+(`reference/zx0/z80/dzx0_standard.asm`, `dzx0_turbo.asm`, commit
+`ecde3a2`) inside the koron-go/z80 emulator over 6 blocks per block size
+sampled from the real comment corpus (first 4 + 2 from the corpus midpoint).
+Compressed with the real ZX0 v2.2 optimal-parse compressor.
+
+**Counting method**: instruction-level T-state table; koron-go/z80 v0.10.2
+does not expose T-state counts, so each `cpu.Step()` call is preceded by
+reading the opcode at PC and looking it up in a Zilog UM0080 Table-2 table.
+Data-dependent instructions (LDIR, conditional JR/JP/CALL/RET) read
+pre-step CPU state to pick the taken/not-taken count.
+Label: "instruction-level T-state table (koron-go/z80 v0.10.2)".
+
+**Correctness**: every block's decompressed output was byte-compared against
+the original raw block. All 24 blocks × 2 decoders = 48 checks passed.
+
+**Contention caveat**: figures are for uncontended RAM.  Real SAM RAM in
+screen-visible VRAM pages can incur up to 1 extra T-state per memory M-cycle
+during ULA DMA, but comment pages are allocated in non-VRAM pages so
+contention is negligible in normal use.
+
+**Reproduction**:
+
+```
+make zx0-blocks   # requires zx0 binary on PATH or at /tmp/zx0
+cd tools/z80-test-harness-go && go test -run TestZX0DecodeBench -v -count=1 .
+```
+
+### Results
+
+| Block size | ZX0 standard T/byte | Std ms/block | ZX0 turbo T/byte | Turbo ms/block | N | Avg compress ratio |
+|------------|---------------------|--------------|-----------------|----------------|---|--------------------|
+| 1 KB | 68.7 | 11.7 | 55.2 | 9.4 | 6 | 0.406 |
+| 2 KB | 67.2 | 22.9 | 54.2 | 18.5 | 6 | 0.355 |
+| 4 KB | 66.2 | 45.2 | 53.3 | 36.4 | 6 | 0.316 |
+| 8 KB | 64.4 | 87.9 | 51.9 | 70.8 | 6 | 0.285 |
+
+The upstream README claims "~21% faster" for the turbo decoder; the measured
+ratio is (55.2−68.7)/68.7 = −19.6% for 1 KB blocks and (51.9−64.4)/64.4 =
+−19.4% for 8 KB blocks — very close to the advertised figure.
+
+**Design implication**: at 1 KB blocks (smallest practical size), the turbo
+decoder decompresses in 9.4 ms at 6 MHz — 9.4 ms to recover 1 KB of comment
+text. A 4 KB block takes 36 ms (turbo). For cursor-on-block interactive
+decompression, 4 KB is near the boundary of "perceptible but acceptable"
+(< 100 ms is the usual threshold for UI responsiveness). 8 KB blocks at
+70 ms are still within the interactive budget. The sweet spot is likely 4–8 KB
+blocks balancing compression ratio (0.316–0.285) against latency.
 
 ## Capacity table
 

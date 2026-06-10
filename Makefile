@@ -420,3 +420,18 @@ release-unstripped-tbn: sam-aarch64
 comment-bench: release-unstripped-tbn
 	cd tools/comment-bench && go build -o $(CURDIR)/$(BUILD)/comment-bench .
 	$(BUILD)/comment-bench $(BUILD)/release-unstripped.tbn
+
+# Generate ZX0 test blocks for harness T-state measurement (i60a).
+# Requires: the real ZX0 compressor (zx0 binary on PATH or at /tmp/zx0).
+# Produces: build/zx0-blocks/block_NNkb_NNNN.{raw,zx0}
+# Run: make zx0-blocks
+.PHONY: zx0-blocks
+ZX0_BINARY ?= $(shell which zx0 2>/dev/null || echo /tmp/zx0)
+zx0-blocks: release-unstripped-tbn
+	cd tools/comment-bench && go build -o $(CURDIR)/$(BUILD)/comment-bench .
+	mkdir -p $(BUILD)/zx0-blocks
+	$(BUILD)/comment-bench --dump-blocks=$(BUILD)/zx0-blocks $(BUILD)/release-unstripped.tbn > /dev/null
+	@for f in $(BUILD)/zx0-blocks/*.raw; do \
+	    $(ZX0_BINARY) "$$f" "$${f%.raw}.zx0" 2>/dev/null || true; \
+	done
+	@echo "zx0-blocks: $$(ls $(BUILD)/zx0-blocks/*.zx0 | wc -l) compressed blocks written to $(BUILD)/zx0-blocks/"
