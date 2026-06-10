@@ -291,7 +291,7 @@ func (h *Hardware) installFakeROM() {
 // For reads, it uses the current LMPR/HMPR; for writes, same logic but ROM
 // writes are silently dropped (handled in Set).
 //
-// Memory map (SAM Coupé Tech Manual v3.0 §6.10, verbatim from basic-emulator-spike):
+// Memory map (SAM Coupé Tech Manual v3.0 §6.10):
 //
 //	Section A (0x0000-0x3FFF): ROM 0 if LMPR bit5=0; else RAM page (LMPR & 0x1F)
 //	Section B (0x4000-0x7FFF): RAM page (LMPR & 0x1F + 1) mod 32; LMPR bit7=WPRAM (ignored)

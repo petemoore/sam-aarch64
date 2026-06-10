@@ -78,9 +78,8 @@ reference/
                     plain-text Z80 source — for study and selective porting
 
 src/             Z80 assembler source for the new tool (Phase 1: assembler)
-tools/           Mac-side helpers (encoder-table generator, test harness,
-                 SimCoupé dev-container recipe)
-scripts/         Build-gate helpers (code budget, release pipeline)
+tools/           Host helpers: Go toolchain, build-gate scripts, dev tools,
+                 and the SimCoupé dev-container recipe
 tests/           Test fixtures and round-trip scripts
 build/           Build outputs (gitignored)
 ```

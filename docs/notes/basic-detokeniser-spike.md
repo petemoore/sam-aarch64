@@ -1,12 +1,14 @@
 # basic-detokeniser-spike — design + findings
 
-Symmetric counterpart to `tools/basic-emulator-spike/` (text → tokenised
-BASIC). Takes a tokenised SAM BASIC file (`.mgt` + filename) and recovers
+Symmetric counterpart to the forward (text → tokenised BASIC) emulator spike.
+Takes a tokenised SAM BASIC file (`.mgt` + filename) and recovers
 the source text by running the SAM ROM under koron-go/z80 and driving
 the editor's EDIT key per line, capturing ELINE post-EDIT.
 
-Lives at `tools/basic-detokeniser-spike/` (the spike) and
-`tools/basic-detokeniser-sweep/` (the corpus validator).
+The spike code lives in git history:
+- Forward spike: <https://github.com/petemoore/sam-aarch64/blob/c0f62fa/tools/basic-emulator-spike/>
+- Detokeniser spike: <https://github.com/petemoore/sam-aarch64/blob/c0f62fa/tools/basic-detokeniser-spike/>
+- Corpus validator: <https://github.com/petemoore/sam-aarch64/blob/c0f62fa/tools/basic-detokeniser-sweep/>
 
 ## Mechanism
 
@@ -41,11 +43,11 @@ The spike drives this by:
 | Line 0 not extractable | EDKY explicitly RETs for line 0 (rom-disasm:03A1, "DON'T EDIT LINE ZERO") | Skip in spike + strip from samfile in sweep comparator |
 | Programs > ~24KB fail | PROG starts at 0x9CD5 in section C; the spike's loadProgViaPoke clears LMPR bit 6 temporarily so writes can reach into section D (RAM page (HMPR+1)&0x1F). Restores LMPR before EDIT so the ROM sees the standard layout. Hard ceiling is 0xFFFF — programs that genuinely need HMPR-paged extended addressing still fail. | Skip with clear error; full HMPR-paged support not implemented (low remainder: ~0.8% of corpus) |
 | Lines with embedded 0x0D | OUTLINE itself truncates at first 0x0D byte (rom-disasm:F38D-F38F), matching SAM's actual LIST/EDIT behaviour. Spike inherits this faithfully. samfile basic-to-text faithful mode reads full line per length header and includes embedded 0x0D as content. | One DIFFER in 500-job sample; treated as known ambiguity |
-| "Pretty listing" leading spaces | EDKY sets LISTFLG=0; SAM's leading-space-before-keyword logic (SPACES at rom-disasm:F36E) is gated by that flag and disabled in our path. samfile-faithful inserts them for readability. | Normalised away in sweep comparator via `stripSpacesOutsideStrings` (lifted from llist-sweep) |
+| "Pretty listing" leading spaces | EDKY sets LISTFLG=0; SAM's leading-space-before-keyword logic (SPACES at rom-disasm:F36E) is gated by that flag and disabled in our path. samfile-faithful inserts them for readability. | Normalised away in sweep comparator via `stripSpacesOutsideStrings` |
 
 ## Validation strategy
 
-`tools/basic-detokeniser-sweep/` compares spike output against
+The corpus validator compares spike output against
 `samfile basic-to-text` (faithful mode, no `--lossy`). Both are
 un-wrapped per-line decoders, so direct byte comparison works after
 normalisation:
@@ -102,7 +104,6 @@ diverges on these specific cases.
 - Optional: replace subprocess-per-file with in-process library
   (move spike's emulation core into a `package detokeniser`,
   amortise ROM boot across all files in a sweep run).
-- Optional: wrapToLLIST + extend `tools/llist-sweep` with
-  `--uut=spike` for direct spike-vs-LLIST comparison (covers wrap
+- Optional: wrapToLLIST + direct spike-vs-LLIST comparison (covers wrap
   rules + cursor `>` rendering). Currently we validate against
   samfile basic-to-text faithful as a proxy.

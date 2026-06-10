@@ -210,7 +210,7 @@ not, hook register-clobbering facts) is
 **The `&C000` cliff**: both variants link at `org &8000` and must end
 below `&C000`, where the stack page begins. Overrunning it produces a
 silent boot-hang, so
-[`scripts/check-code-budget.sh`](../scripts/check-code-budget.sh) turns
+[`tools/check-code-budget.sh`](../tools/check-code-budget.sh) turns
 the cliff into a build failure with a number; it runs inline at the tail
 of every assembler build and as `make check-budget` in CI.
 

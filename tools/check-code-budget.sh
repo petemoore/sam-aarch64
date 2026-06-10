@@ -15,8 +15,8 @@
 # and promoted into the M6-closure CI gate (PR-5).
 #
 # Usage:
-#   scripts/check-code-budget.sh                  # checks both default binaries
-#   scripts/check-code-budget.sh <binary> <label> # checks one binary
+#   tools/check-code-budget.sh                  # checks both default binaries
+#   tools/check-code-budget.sh <binary> <label> # checks one binary
 #
 # Env overrides (defaults match the current memory map):
 #   ORG      load origin            (default 0x8000)
