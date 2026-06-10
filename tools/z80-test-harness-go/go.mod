@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/koron-go/z80 v0.10.2
 	github.com/petemoore/sam-aarch64/tools/aarch64dec v0.0.0
+	github.com/petemoore/sam-aarch64/tools/zx0-greedy v0.0.0
 )
 
 require (
@@ -13,6 +14,8 @@ require (
 )
 
 replace github.com/petemoore/sam-aarch64/tools/aarch64dec => ../aarch64dec
+
+replace github.com/petemoore/sam-aarch64/tools/zx0-greedy => ../zx0-greedy
 
 // Transitive replaces: aarch64dec imports aarch64enc + sam-aarch64-format,
 // both local modules (see tools/aarch64dec/go.mod).

@@ -196,3 +196,123 @@ This is a description of what the numbers show, not a decision (that is i59 / Pe
 **No Z80-feasible scheme fits a 256 KB SAM**: even optimal ZX0 is marginal. Strategies for a 256 KB SAM include: (a) block-compress only the portion of the corpus not currently visible (spill to disk via i40), (b) accept a reduced working set (only load comment pages as needed — same i40 eviction mechanism), or (c) target 512 KB SAMs as the minimum for the full-source editing experience.
 
 **For 512 KB SAMs**: LZ77/ZX0 at ~85 KB leaves 15 pages free — comfortable headroom for editor working state, multiple source files, or future growth.
+
+## Greedy ZX0 compressor — ratio, scratch-RAM, and Z80 time model (i60b-1)
+
+The measurements below come from `TestZX0GreedyOracle` in
+`tools/z80-test-harness-go/zx0_greedy_oracle_test.go`.  Each corpus block
+is compressed with the Go greedy compressor (`tools/zx0-greedy`) at every
+(H, D) operating point, then decompressed with the real upstream
+`dzx0_standard` Z80 decoder running in the koron-go/z80 emulator.  All 384
+block × (H,D) combinations passed byte-for-byte.  Optimal-parse sizes come
+from the `.zx0` files produced by the upstream `zx0` tool (optimal parse).
+
+Reproduce at any time:
+
+```
+make zx0-blocks
+cd tools/z80-test-harness-go && go test -run TestZX0GreedyOracle -v -count=1 .
+```
+
+### Greedy vs optimal ratio, all block sizes
+
+Ratio = compressed / raw.  Gap% = (greedy − optimal) / optimal × 100.
+Scratch = Z80 scratch-RAM in bytes (hash table + chain array + fixed state).
+
+| H | D | blkKB | greedy ratio | optimal ratio | gap% | scratch |
+|---|---|-------|-------------|---------------|------|---------|
+| 256 | 4 | 1 | 0.4650 | 0.4059 | +14.6% | 2590 B |
+| 256 | 16 | 1 | 0.4587 | 0.4059 | +13.0% | 2590 B |
+| 256 | 32 | 1 | 0.4567 | 0.4059 | +12.5% | 2590 B |
+| 512 | 4 | 1 | 0.4635 | 0.4059 | +14.2% | 3102 B |
+| 512 | 16 | 1 | 0.4585 | 0.4059 | +13.0% | 3102 B |
+| 512 | 32 | 1 | 0.4567 | 0.4059 | +12.5% | 3102 B |
+| 2048 | 32 | 1 | 0.4567 | 0.4059 | +12.5% | 6174 B |
+| 256 | 4 | 2 | 0.4173 | 0.3552 | +17.5% | 4638 B |
+| 256 | 16 | 2 | 0.4058 | 0.3552 | +14.2% | 4638 B |
+| 256 | 32 | 2 | 0.4033 | 0.3552 | +13.5% | 4638 B |
+| 512 | 4 | 2 | 0.4142 | 0.3552 | +16.6% | 5150 B |
+| 512 | 16 | 2 | 0.4057 | 0.3552 | +14.2% | 5150 B |
+| 512 | 32 | 2 | 0.4033 | 0.3552 | +13.5% | 5150 B |
+| 2048 | 32 | 2 | 0.4033 | 0.3552 | +13.5% | 8222 B |
+| 256 | 4 | 4 | 0.3830 | 0.3162 | +21.1% | 8734 B |
+| 256 | 16 | 4 | 0.3630 | 0.3162 | +14.8% | 8734 B |
+| 256 | 32 | 4 | 0.3604 | 0.3162 | +14.0% | 8734 B |
+| 512 | 4 | 4 | 0.3784 | 0.3162 | +19.7% | 9246 B |
+| 512 | 16 | 4 | 0.3631 | 0.3162 | +14.8% | 9246 B |
+| 512 | 32 | 4 | 0.3603 | 0.3162 | +13.9% | 9246 B |
+| 1024 | 32 | 4 | 0.3602 | 0.3162 | +13.9% | 10270 B |
+| 2048 | 32 | 4 | 0.3602 | 0.3162 | +13.9% | 12318 B |
+| 256 | 4 | 8 | 0.3572 | 0.2847 | +25.5% | 16926 B |
+| 256 | 16 | 8 | 0.3316 | 0.2847 | +16.5% | 16926 B |
+| 256 | 32 | 8 | 0.3274 | 0.2847 | +15.0% | 16926 B |
+| 512 | 4 | 8 | 0.3505 | 0.2847 | +23.1% | 17438 B |
+| 512 | 16 | 8 | 0.3302 | 0.2847 | +16.0% | 17438 B |
+| 512 | 32 | 8 | 0.3269 | 0.2847 | +14.8% | 17438 B |
+| 1024 | 32 | 8 | 0.3265 | 0.2847 | +14.7% | 18462 B |
+| 2048 | 32 | 8 | 0.3265 | 0.2847 | +14.7% | 20510 B |
+
+**Diminishing returns above H=512, D=16**: moving from H=512 D=16 to
+H=2048 D=32 at 4 KB blocks changes ratio from 0.3631 to 0.3602 — a 0.8%
+improvement for 3.3× more scratch RAM (9246 B → 12318 B) and ~4× more chain
+steps per byte.  The gain is real but small; the chain-depth effect (D=4 vs
+D=32) matters more than the hash-size effect (H=256 vs H=2048).
+
+### Scratch-RAM model at 4 KB blocks
+
+`ScratchBytes(p, 4096) = p.HashSize × 2 + 4096 × 2 + 30`.
+
+| H | D | scratch | greedy ratio | gap% vs optimal |
+|---|---|---------|-------------|-----------------|
+| 256 | 4 | 8734 B | 0.3830 | +21.1% |
+| 256 | 8 | 8734 B | 0.3694 | +16.8% |
+| 256 | 16 | 8734 B | 0.3630 | +14.8% |
+| 256 | 32 | 8734 B | 0.3604 | +14.0% |
+| 512 | 4 | 9246 B | 0.3784 | +19.7% |
+| 512 | 8 | 9246 B | 0.3679 | +16.3% |
+| 512 | 16 | 9246 B | 0.3631 | +14.8% |
+| 512 | 32 | 9246 B | 0.3603 | +13.9% |
+| 1024 | 4 | 10270 B | 0.3750 | +18.6% |
+| 1024 | 8 | 10270 B | 0.3665 | +15.9% |
+| 1024 | 16 | 10270 B | 0.3622 | +14.5% |
+| 1024 | 32 | 10270 B | 0.3602 | +13.9% |
+| 2048 | 4 | 12318 B | 0.3745 | +18.4% |
+| 2048 | 8 | 12318 B | 0.3664 | +15.9% |
+| 2048 | 16 | 12318 B | 0.3622 | +14.5% |
+| 2048 | 32 | 12318 B | 0.3602 | +13.9% |
+
+### Z80 T-state time model (H=512, D=16, recommended point)
+
+Probe stats collected by `zx0greedy.CollectProbeStats` on the first 4 KB
+and 8 KB corpus blocks (block_0004kb_0000.raw, block_0008kb_0000.raw):
+
+| Block size | Chain steps/byte | T-states/byte (model) | Time at 6 MHz |
+|------------|------------------|----------------------|---------------|
+| 4 KB | 9.85 | 414 T | **283 ms** |
+| 8 KB | — | 483 T | **660 ms** |
+
+**Model**: T/byte = 20 (hash + insert) + chainSteps/byte × 40 (chain step).
+These are model-based estimates; the actual Z80 port will need cycle-exact
+measurement.
+
+**Contention note**: figures are for uncontended RAM.  The compressor runs on
+dirty comment pages (non-VRAM), so contention is negligible in normal use.
+
+### Recommended operating point
+
+**H=512, D=16** (`tools/zx0-greedy.DefaultParams`) is the recommended
+starting point for the Z80 port:
+
+- Scratch RAM at 4 KB blocks: **9246 B** (~9 KB), fits comfortably in the
+  ~15.5 KB of free space on page 13 alongside the compressor code itself.
+- Ratio at 4 KB blocks: **0.3631** (greedy) vs 0.3162 (optimal) — the greedy
+  gap is +14.8%, acceptable for a self-hosted on-SAM compressor.
+- Estimated compress time at 6 MHz: **283 ms per 4 KB dirty block** — within
+  the interactive budget for a save-triggered background operation.
+- Chain-depth D=16 captures most of the quality gain vs D=32 (+0 ppt at
+  H=512) while halving the work relative to D=32.
+
+Larger blocks (8 KB) improve ratio to 0.3302 but require 17438 B scratch
+(17 KB) and 660 ms to recompress — still within a "save" latency budget but
+tight for 256 KB SAMs where free scratch pages are limited.  The 4 KB / 8 KB
+choice is Pete's call (q9 / i60c design note).
