@@ -41,7 +41,7 @@ This directory holds the Go-side toolchain, build helpers, and exploratory spike
 
 ## Superseded — LLIST cluster
 
-The LLIST-based BASIC-to-text approach is **superseded by the EDIT/EDKY detokeniser spike** (`basic-detokeniser-spike/`, findings in `docs/notes/basic-detokeniser-spike.md`). It is retained, not deleted: **disposition pending** — see the LLIST open question in `docs/notes/m7-status.md`. Do not delete without Pete's confirmation.
+The LLIST-based BASIC-to-text approach is **superseded by the EDIT/EDKY detokeniser spike** (`basic-detokeniser-spike/`, findings in `docs/notes/basic-detokeniser-spike.md`). It is retained, not deleted: **disposition pending** — tracked as **q8** in `docs/notes/question-registry.md`. Do not delete without Pete's confirmation.
 
 | Path | Purpose |
 |------|---------|

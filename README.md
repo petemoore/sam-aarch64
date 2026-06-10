@@ -16,30 +16,25 @@ without ever leaving the SAM Coupé.
 
 ## Status
 
-M0–M6 are complete; **M7 is the active milestone** (see
-`docs/notes/m7-status.md`). The SAM-side Z80 assembler, running in
+M0–M7 are complete; **M8 is the active milestone** (see
+`docs/notes/m8-status.md`). The SAM-side Z80 assembler, running in
 SimCoupé, byte-matches GNU `as + ld -Ttext=0 + objcopy -O binary`
-end-to-end for the M3–M6 fixture corpora, and — the M6 headline —
-assembles the **full spectrum4 `release.bin` (21 752 bytes)
-byte-identical to GNU** on real SAM paging (paged source-IN, paged
-OUT, off-axis tables via `paged_call`). The `m6-release` GitHub
-Actions job stands guard as a hermetic 3-way byte-match (GNU == our
-Go toolchain == our Z80/SAM toolchain). See `docs/ROADMAP.md` for
-the milestone index, `docs/specs/` for design documents, and
-`docs/plans/` for milestone plans.
+end-to-end for the M3–M6 fixture corpora, and assembles the **full
+spectrum4 `release.bin` (21 752 bytes) byte-identical to GNU** on
+real SAM paging. A full aarch64 **disassembler** runs on the SAM
+(oracle-verified word-for-word against the Go authority), and the
+source format is the compact **`.tbn` v2** instruction-overlay
+(44 KB for the full release, with a separable editor region — the
+foundation for the Phase 2 on-SAM editor). The `m6-release` CI job
+stands guard as a hermetic 3-way byte-match (GNU == our Go toolchain
+== our Z80/SAM toolchain). See `docs/ROADMAP.md` for the milestone
+index and `docs/specs/` for design documents.
 
 The round-trip gates pass under every environment we exercise:
 GitHub Actions on `ubuntu-latest` (inside the dev image published to
 `ghcr.io/petemoore/sam-aarch64-dev` on every push), the dev image
 locally under Docker on both `linux/amd64` and `linux/arm64`, and
 natively on macOS against a locally-built patched SimCoupé.
-
-> Historical note: the original M0 milestone was a `nop`-to-disk
-> round-trip oracle (a Z80 stub + a one-instruction fixture). It was
-> fully subsumed by the M3–M6 fixture corpora + the `m6-release`
-> gate and retired in M7; the M0 design record survives at
-> `docs/plans/2026-05-09-m0-toolchain-bootstrap.md` and
-> `docs/notes/m0-status.md`.
 
 ## Local development
 
@@ -70,21 +65,22 @@ step.
 docs/
 ├── specs/        Design documents (vision + per-phase specs)
 ├── plans/        Per-milestone implementation plans
-├── notes/        Spike outputs (SimCoupé batch mode, SAM file I/O)
+├── notes/        Technical references (paging, disk format) + the iN/qN registries
 ├── comet/        COMET assembler reference: PDF manual, decoded source
 ├── sam/          SAM Coupé hardware refs: tech manual, user guide, ROM disasm
-├── saa1099/      SAA-1099 sound chip datasheet (for future chiptune work)
-├── aarch64/      ARM ISA notes and (later) generated encoder tables
-└── trinity/      Quazar Trinity hardware programming notes
+└── saa1099/      SAA-1099 sound chip datasheet (for future chiptune work)
 
 reference/
+├── arm-mra/         ARM Machine Readable Architecture XML (encoder-table source)
 ├── comet-disk/      Original COMET 1.44" disk, files extracted as-is
+├── samdos/          SAMDOS 2 binary (disk building)
 └── comet-decoded/   Same files run through Simon Owen's comet2txt to give
                     plain-text Z80 source — for study and selective porting
 
 src/             Z80 assembler source for the new tool (Phase 1: assembler)
 tools/           Mac-side helpers (encoder-table generator, test harness,
                  SimCoupé dev-container recipe)
+scripts/         Build-gate helpers (code budget, release pipeline)
 tests/           Test fixtures and round-trip scripts
 build/           Build outputs (gitignored)
 ```

@@ -5,18 +5,12 @@ on:
     branches: [main]
   pull_request:
 
-# Workflow has two jobs:
-#
-#   build-image: builds the dev image from tools/Dockerfile.dev and pushes
-#                it to ghcr.io. Multi-arch (amd64 + arm64) via QEMU. Runs
-#                on every push/PR; nothing-changed runs are cheap because
-#                the registry-mode buildx cache makes most layers no-ops.
-#
-#   test:        pulls the image just published by build-image, runs the
-#                M0 round-trip oracle inside it.
-#
-# Both jobs see the same `github.sha`, so the test job can refer to the
-# image by `sha-<full-sha>` tag and is guaranteed to find it.
+# build-image builds the dev image from tools/Dockerfile.dev and pushes it
+# to ghcr.io (multi-arch via QEMU; registry-mode buildx cache keeps
+# nothing-changed runs cheap). Every other job is a gate that pulls that
+# image by sha tag and runs inside it — see the `jobs:` map below for the
+# authoritative list (round-trip corpora, disassembler oracle + round-trip,
+# static checks, and the release byte-match gate).
 
 permissions:
   contents: read
