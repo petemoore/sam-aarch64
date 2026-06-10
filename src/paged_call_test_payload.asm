@@ -15,7 +15,7 @@
 ; src/loader.asm).
 ;
 ; Build pipeline: pyz80 emits build/paged_call_test_payload.bin from
-; this file; build-m3-disk's -paged-call flag deposits it as CODE file
+; this file; build-disk's -paged-call flag deposits it as CODE file
 ; "p14" on the test disk image; src/loader.asm::load_page14_payload
 ; HLOADs it into physical page 14 via the trampoline.
 

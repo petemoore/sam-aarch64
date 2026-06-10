@@ -459,7 +459,7 @@ front-end's in-memory record stream into the overlay: every instruction
 becomes an element of an `INSN_RUN` (0x09) run, every constant-data run
 becomes a `LIT_DATA` (0x08) record, and position-labels move into the header
 tables (§2.4). The overlay assembles to a byte-identical binary to the
-literal-encoder path — verified by the m6-release 3-way gate and the
+literal-encoder path — verified by the release-gate 3-way gate and the
 disasm-roundtrip overlay legs.
 
 ### 7.1 "Fully literal" predicate

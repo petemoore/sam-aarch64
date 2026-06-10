@@ -165,7 +165,7 @@ reader_init:
 ; 0xfffffff000000000, fixtures are 0), so `offset` IS the low-32-bits
 ; value the Z80 stores as a symbol's PASS_PC-style address.  We therefore
 ; store the accumulated offset DIRECTLY as the symbol/local value — no
-; origin arithmetic.  The m6-release byte-match gate is the backstop that
+; origin arithmetic.  The release-gate byte-match gate is the backstop that
 ; would catch any future non-4GB-aligned origin (none exists today).
 ;
 ; reader_init runs once per pass.  Seeding the symbol / local tables must

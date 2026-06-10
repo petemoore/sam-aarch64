@@ -17,17 +17,15 @@ __pycache__/
 # parent-dir build form and the in-cmd-dir build form.
 tools/aarch64dec/aarch64dec
 tools/aarch64dec/cmd/aarch64dec/aarch64dec
-tools/build-m3-disk/build-m3-disk
+tools/build-disk/build-disk
 tools/enctab-gen/enctab-gen
 tools/z80-test-harness-go/z80-test-harness-go
 
 # sam-aarch64's default .tbn output beside a vendored source (release.s is
 # tracked; its compiled .tbn is a derived artifact — the canonical gate scripts
 # write .tbn to build/, never here).
-tests/m6/release/release.s.tbn
+tests/release/release.s.tbn
 
-go.work
-go.work.sum
 
 # --- Override global ~/.gitignore_global for this (personal) repo ---
 # The global excludesfile ignores the whole .claude/ directory + superpowers

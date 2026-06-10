@@ -34,7 +34,7 @@ const litDataMaxBytes = 1016
 // to KindLitData; every other record passes through verbatim. PC accounting
 // is preserved exactly (each instruction occupies 4 bytes), so label
 // positions, the literal pool, and the 2-pass values are unchanged — the
-// m6-release gate verifies this by byte-matching the assembled output of the
+// release-gate verifies this by byte-matching the assembled output of the
 // compact .tbn against the symbolic one.
 //
 // Editor-only data is relocated out of the record stream (M8 / i39b-2): COMMENT

@@ -1,12 +1,12 @@
 // test_variant_test.go — drives the BUILD_TESTS variant assembler.bin
 // through the harness, exercising the boot-time self-test suites (including
 // run_reader_paged_self_tests).  This is the harness-side cousin of the
-// SimCoupé ci-m3 test-variant job.  SimCoupé remains the sole CI gate; this
+// SimCoupé ci-core test-variant job.  SimCoupé remains the sole CI gate; this
 // test is a fast inner-loop check that the test variant boots clean.
 //
 // Requires the BUILD_TESTS artefacts:
 //
-//	build/assembler.bin                  (make m3-asm)
+//	build/assembler.bin                  (make assembler)
 //	build/test_mem.bin                   (make test-mem-offaxis)
 //	build/paged_call_test_payload.bin    (make paged-call-payload)
 //	build/enctab.enc                     (make enctab)
@@ -29,7 +29,7 @@ func TestVariantBootSelfTests(t *testing.T) {
 
 	asmPath := filepath.Join(root, "build", "assembler.bin")
 	if _, err := os.Stat(asmPath); err != nil {
-		t.Skip("build/assembler.bin absent — run `make m3-asm test-mem-offaxis paged-call-payload enctab sam-aarch64`")
+		t.Skip("build/assembler.bin absent — run `make assembler test-mem-offaxis paged-call-payload enctab sam-aarch64`")
 	}
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")

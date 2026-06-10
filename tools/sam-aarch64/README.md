@@ -8,6 +8,6 @@ binary, `--render`, `-E`. The symbolic IR is in-memory only — never
 serialized (`docs/specs/i48-syntactic-encoder-design.md`, Decision A).
 
 Entry point: `main.go`. Build: `make sam-aarch64` (→ `build/sam-aarch64`);
-exercised by `make ci-m1` / `ci-m2` and every round-trip driver;
+exercised by `make ci-format` / `ci-encoder` and every round-trip driver;
 `make release-stripped-tbn` builds the release fixture `.tbn`.
 See `docs/ARCHITECTURE.md` §2.2.

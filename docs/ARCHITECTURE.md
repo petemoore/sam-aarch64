@@ -49,9 +49,9 @@ SimCoupé). [`src/README.md`](../src/README.md) is its index; the essentials:
   driver → symbols → local labels → literal pool → print) lives in
   `src/README.md`.
 - **Two build variants from the same source**, split by the `BUILD_TESTS`
-  define: the test variant (`make m3-asm` → `build/assembler.bin`)
+  define: the test variant (`make assembler` → `build/assembler.bin`)
   compiles in all boot-time self-test suites and exports
-  `build/assembler.sym`; the production variant (`make m3-asm-prod` →
+  `build/assembler.sym`; the production variant (`make assembler-prod` →
   `build/assembler-prod.bin`) omits them. Both emit identical output bytes
   on every fixture; CI verifies the variants against each other (§7).
 - **Off-axis payloads on physical pages 12–15.** Standalone binaries
@@ -86,7 +86,7 @@ core:
   disassembler the Z80 `src/disasm.asm` is ported from, oracle-gated
   against binutils `objdump` (§7).
 - **`tools/enctab-gen/`** — generates the encoder form table (§4).
-- **`tools/build-m3-disk/`** — packs assembler + enctab + payloads + a
+- **`tools/build-disk/`** — packs assembler + enctab + payloads + a
   `.tbn` into a bootable `.mgt` disk image (§7).
 
 ## 3. The authority model
@@ -261,36 +261,36 @@ same bytes. The full spectrum4 release source fits in a ~44 KB compact
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) maps the gates
 to CI jobs.
 
-**Build**: `make all` builds both assembler variants (`m3-asm`,
-`m3-asm-prod`), each tail-checked by the code-budget script. `make
-m3-disk` assembles the bootable test disk: `tools/build-m3-disk` packs
+**Build**: `make all` builds both assembler variants (`assembler`,
+`assembler-prod`), each tail-checked by the code-budget script. `make
+disk` assembles the bootable test disk: `tools/build-disk` packs
 `assembler.bin`, `enctab.enc`, and the off-axis payloads (`-test-mem`,
 `-cluster`, `-paged-call`, `-sysreg-data`, `-disasm`) into a `.mgt` image.
 
 **The round-trip oracle** (the heart of the project): for each fixture
 `.s`, host and SAM both assemble it, and the result is byte-compared
-against GNU (`as` [+ `ld -Ttext=0` from the `tests/m4` corpus onward] +
-`objcopy -O binary`). Each corpus dir (`tests/m3`, `tests/m4`, `tests/m5`,
-`tests/m6`) carries a `run-roundtrip.sh` that sweeps its `sources/*.s`,
-invoking the matching per-fixture driver (`tools/run-m3-roundtrip.sh`,
-`run-m4-roundtrip.sh`, `run-m5-roundtrip.sh`, `run-m6-roundtrip.sh`):
-`sam-aarch64` (source → compact `.tbn`) → `build-m3-disk` →
+against GNU (`as` [+ `ld -Ttext=0` from the `symbols` corpus onward] +
+`objcopy -O binary`). Each corpus dir (`tests/core`, `tests/symbols`,
+`tests/operands`, `tests/paged`) carries a `run-roundtrip.sh` that sweeps
+its `sources/*.s`, invoking `tools/run-roundtrip.sh <corpus> <fixture.s>`:
+`sam-aarch64` (source → compact `.tbn`) → `build-disk` →
 SimCoupé headless (`tools/run-simcoupe.sh`, `-exitonhalt`) → `samfile`
 extracts the OUT file → byte-diff. The corpora are cumulative feature
-tiers: `tests/m3` (core emit), `tests/m4` (symbols/two-pass), `tests/m5`
-(compound operands + directives), `tests/m6` (paged IN/OUT at scale);
-`tests/m1` and `tests/spectrum4` are host-side format/encoder corpora.
+tiers: `tests/core` (core emit), `tests/symbols` (symbols/two-pass),
+`tests/operands` (compound operands + directives), `tests/paged` (paged
+IN/OUT at scale); `tests/format` and `tests/spectrum4` are host-side
+format/encoder corpora.
 
-**The release gate**: `tools/run-m6-release-gate.sh` is the headline
-3-way byte-match — the vendored spectrum4 release (`tests/m6/release/`,
+**The release gate**: `tools/run-release-gate.sh` is the headline
+3-way byte-match — the vendored spectrum4 release (`tests/release/`,
 21 752 bytes) must come out byte-identical from (1) GNU binutils (the
 vendored `release.img`), (2) our Go toolchain, and (3) our Z80 toolchain
 on SimCoupé. It is hermetic (both inputs vendored, refreshed via
-`tools/revendor-m6-release.sh`) and also runs `make check-budget`.
+`tools/revendor-release.sh`) and also runs `make check-budget`.
 
-**Pure-Go gates** (no container): `ci-m1` (format + host-assembler unit
-tests, GNU-as cross-check), `ci-m2` (encoder + `enctab-gen` tests, plus
-host-side round-trips over the `tests/m1` and `tests/spectrum4`
+**Pure-Go gates** (no container): `ci-format` (format + host-assembler unit
+tests, GNU-as cross-check), `ci-encoder` (encoder + `enctab-gen` tests, plus
+host-side round-trips over the `tests/format` and `tests/spectrum4`
 corpora), `ci-disasm` (the `aarch64dec` vs `objdump`
 oracle), `ci-disasm-roundtrip` (encode→decode→encode self-consistency,
 including the overlay `--render` leg), `sysreg-sync-check`, and
@@ -303,12 +303,12 @@ SimCoupé job pulls that image by sha tag and runs inside it. The jobs:
 | Job | Runs |
 |-----|------|
 | `build-image` | dev image build + push |
-| `m1`, `m2` | `make ci-m1` / `ci-m2` (host-only) |
+| `format`, `encoder` | `make ci-format` / `ci-encoder` (host-only) |
 | `disasm`, `disasm-roundtrip` | `make ci-disasm` / `ci-disasm-roundtrip` (host-only) |
 | `sysreg-sync`, `staticcheck` | sync guard / dead-code gate (host-only) |
-| `m3`, `m4`, `m5`, `m6` | fixture-corpus round-trips on SimCoupé (test variant) |
-| `m4-prod`, `m5-prod`, `m6-prod` | same corpora with the production variant (variant-divergence guard) |
-| `m6-release` | the 3-way release byte-match + code budget |
+| `core`, `symbols`, `operands`, `paged` | fixture-corpus round-trips on SimCoupé (test variant) |
+| `symbols-prod`, `operands-prod`, `paged-prod` | same corpora with the production variant (variant-divergence guard) |
+| `release-gate` | the 3-way release byte-match + code budget |
 
 Branch protection on `main` requires the status checks configured in the
 repo settings (see `CLAUDE.md` §2); merges are merge commits only.

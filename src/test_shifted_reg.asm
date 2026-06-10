@@ -5,7 +5,7 @@
 ;   1. add x0, x1, x2, lsl #4   → 0x8b021020  (arithmetic 3-op)
 ;   2. tst x0, x1, asr #3       → 0xea810c1f  (logical 2-op w/ Rd=xzr)
 ;
-; Layer 3 (tests/m5/sources/inst_shifted.s and inst_ands.s) covers the
+; Layer 3 (tests/operands/sources/inst_shifted.s and inst_ands.s) covers the
 ; remaining mnemonics and shift kinds end-to-end against GNU.
 ;
 ; Mirrors tools/refenc/pass2.go:1005-1067 (encodeShiftedRegInst).

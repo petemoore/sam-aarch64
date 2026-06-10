@@ -25,7 +25,7 @@ real SAM paging. A full aarch64 **disassembler** runs on the SAM
 (oracle-verified word-for-word against the Go authority), and the
 source format is the compact **`.tbn` v2** instruction-overlay
 (44 KB for the full release, with a separable editor region — the
-foundation for the Phase 2 on-SAM editor). The `m6-release` CI job
+foundation for the Phase 2 on-SAM editor). The `release-gate` CI job
 stands guard as a hermetic 3-way byte-match (GNU == our Go toolchain
 == our Z80/SAM toolchain). See `docs/ROADMAP.md` for the milestone
 index and `docs/specs/` for design documents.
@@ -46,7 +46,7 @@ docker pull ghcr.io/petemoore/sam-aarch64-dev:latest
 docker run -d --name sam-aarch64-ci \
     -v "$PWD:/work" -w /work \
     ghcr.io/petemoore/sam-aarch64-dev:latest sleep infinity
-docker exec sam-aarch64-ci bash -lc 'cd /work && make ci-m3 ci-m4 ci-m5 ci-m6 && tools/run-m6-release-gate.sh'
+docker exec sam-aarch64-ci bash -lc 'cd /work && make ci-core ci-symbols ci-operands ci-paged && tools/run-release-gate.sh'
 ```
 
 The image is multi-arch (`linux/amd64` + `linux/arm64`); Docker picks

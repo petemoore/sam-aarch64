@@ -76,16 +76,16 @@ adversarial use of the harness on a real failure):
 
 | Task | Hours |
 |---|---|
-| Drive all m3 fixtures (trivial loop around `Run()`) | 0.5 |
-| Drive m4 fixtures (same binary, different .tbn files) | 0.5 |
-| Drive m5 fixtures (same; larger .tbn, possibly multi-page IN) | 1 |
-| Drive m6 fixtures (large OUT; test HSAVE multi-page capture) | 2 |
+| Drive all core fixtures (trivial loop around `Run()`) | 0.5 |
+| Drive symbols fixtures (same binary, different .tbn files) | 0.5 |
+| Drive operands fixtures (same; larger .tbn, possibly multi-page IN) | 1 |
+| Drive paged fixtures (large OUT; test HSAVE multi-page capture) | 2 |
 | Test variant (BUILD_TESTS=1 binary): run self-tests path + fixtures | 1 |
-| Integration into Makefile (`make ci-m3-fast`) | 0.5 |
+| Integration into Makefile (`make ci-core-fast`) | 0.5 |
 | CI job (`.github/workflows/`) | 0.5 |
 | Total | 6 |
 
-The m6 estimate is higher because the m6 fixtures emit >16 KB of OUT, requiring
+The paged estimate is higher because the paged fixtures emit >16 KB of OUT, requiring
 HSAVE to read across both page 5 and page 6.  The harness `readPageBytes` function
 already supports this, but it needs an integration test.
 

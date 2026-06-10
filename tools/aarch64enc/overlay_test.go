@@ -2,7 +2,7 @@ package aarch64enc
 
 import "testing"
 
-// Hand-computed fold vectors for every overlay slot the m6-release fixture
+// Hand-computed fold vectors for every overlay slot the release-gate fixture
 // exercises (plus the two non-exercised-but-structural slots, Logical and
 // MemImm9). Each `want` is derived by hand from the corresponding pass2.go
 // conversion + aarch64enc slot encoder, so a one-bit drift in Fold fails

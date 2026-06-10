@@ -7,7 +7,7 @@
 //
 //   - WITH build/sysreg_data.bin served as "sd13" on page 13, the harness runs
 //     the full 6-page IN load to completion (OK banner) and the OUT bytes
-//     byte-match the vendored tests/m6/release/release.img (21752 B).  This
+//     byte-match the vendored tests/release/release.img (21752 B).  This
 //     proves the multi-page paged-IN HLOAD emulation is faithful — there is no
 //     6-page paging fidelity bug.
 //
@@ -15,14 +15,14 @@
 //     empty), and the harness's trap diagnostic now names "sd13" as an
 //     unserved HGTHD file — so the cryptic trap is self-explaining.
 //
-// Requires (all produced by `make m3-asm-prod enctab sam-aarch64 sysreg-data`):
+// Requires (all produced by `make assembler-prod enctab sam-aarch64 sysreg-data`):
 //
 //	build/assembler-prod.bin
 //	build/enctab.enc
 //	build/sysreg_data.bin
 //	build/sam-aarch64
-//	tests/m6/release/release.s   (vendored; always present)
-//	tests/m6/release/release.img (vendored oracle; always present)
+//	tests/release/release.s   (vendored; always present)
+//	tests/release/release.img (vendored oracle; always present)
 //
 // Skipped automatically if any build artefact is absent.  SimCoupé remains the
 // sole CI gate; this is an inner-loop check.
@@ -45,12 +45,12 @@ func TestReleasePagedInLoad(t *testing.T) {
 	sd13Path := filepath.Join(root, "build", "sysreg_data.bin")
 	d15Path := filepath.Join(root, "build", "disasm.bin")
 	samPath := filepath.Join(root, "build", "sam-aarch64")
-	releaseSrc := filepath.Join(root, "tests", "m6", "release", "release.s")
-	releaseImg := filepath.Join(root, "tests", "m6", "release", "release.img")
+	releaseSrc := filepath.Join(root, "tests", "release", "release.s")
+	releaseImg := filepath.Join(root, "tests", "release", "release.img")
 
 	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, samPath, releaseSrc, releaseImg} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make m3-asm-prod enctab sam-aarch64 sysreg-data disasm-payload`", p)
+			t.Skipf("prerequisite missing: %s\n  run `make assembler-prod enctab sam-aarch64 sysreg-data disasm-payload`", p)
 		}
 	}
 

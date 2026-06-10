@@ -31,8 +31,8 @@ This directory is the SAM Coupé Z80 program that implements an aarch64 assemble
 
 Two binaries are built from the same `assembler.asm`, distinguished by the `BUILD_TESTS` define:
 
-- **test variant** (`build/assembler.bin`, `make m3-asm`) — built with `-D BUILD_TESTS=1`. Includes all boot-time self-test suites (`if defined(BUILD_TESTS)` blocks compile in). Larger binary; catches per-routine regressions before the fixture round-trip runs. This is what `ci-m{3,4,5,6}` and `tests/m{3,4,5,6}/run-roundtrip.sh` use. The build also exports `build/assembler.sym` for the off-axis test modules to import.
-- **production variant** (`build/assembler-prod.bin`, `make m3-asm-prod`) — built with `BUILD_TESTS` *undefined*, so the self-test blocks are skipped. Smaller binary, more code budget. Emits identical OUT bytes on every fixture (the self-tests don't touch the assemble path); `ci-m{3,4,5,6}-prod` verify this.
+- **test variant** (`build/assembler.bin`, `make assembler`) — built with `-D BUILD_TESTS=1`. Includes all boot-time self-test suites (`if defined(BUILD_TESTS)` blocks compile in). Larger binary; catches per-routine regressions before the fixture round-trip runs. This is what `ci-{core,symbols,operands,paged}` and `tests/{core,symbols,operands,paged}/run-roundtrip.sh` use. The build also exports `build/assembler.sym` for the off-axis test modules to import.
+- **production variant** (`build/assembler-prod.bin`, `make assembler-prod`) — built with `BUILD_TESTS` *undefined*, so the self-test blocks are skipped. Smaller binary, more code budget. Emits identical OUT bytes on every fixture (the self-tests don't touch the assemble path); `ci-{symbols,operands,paged}-prod` verify this.
 
 Both variants link at `org &8000` and must stay below the `&C000` stack-page cliff — `tools/check-code-budget.sh` enforces this at the tail of each build and via `make check-budget`. See `docs/notes/memory-layout.md`.
 

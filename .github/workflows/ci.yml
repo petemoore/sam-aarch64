@@ -76,7 +76,7 @@ jobs:
           cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max
 
-  m1:
+  format:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,12 +85,12 @@ jobs:
           go-version: '1.26.1'
       - name: Install aarch64 binutils
         run: sudo apt-get update && sudo apt-get install -y binutils-aarch64-linux-gnu
-      - name: Run M1 tests
+      - name: Run format tests
         env:
           AARCH64_AS: aarch64-linux-gnu-as
-        run: make ci-m1
+        run: make ci-format
 
-  m2:
+  encoder:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -99,10 +99,10 @@ jobs:
           go-version: '1.26.1'
       - name: Install aarch64 binutils
         run: sudo apt-get update && sudo apt-get install -y binutils-aarch64-linux-gnu
-      - name: Run M2 tests
+      - name: Run encoder tests
         env:
           AARCH64_AS: aarch64-linux-gnu-as
-        run: make ci-m2
+        run: make ci-encoder
 
   # disasm — strand-B Go disassembler oracle: aarch64dec vs binutils objdump
   # on a CODE-ONLY build of the release (release.s with all data removed at
@@ -125,7 +125,7 @@ jobs:
         run: make ci-disasm
 
   # disasm-roundtrip — strand-B PR-2: proves encode→decode→encode is
-  # self-consistent for the M3-M6 fixture corpus.  Pure Go pipeline,
+  # self-consistent for the core–paged fixture corpus.  Pure Go pipeline,
   # no aarch64 binutils or SimCoupé required.
   disasm-roundtrip:
     runs-on: ubuntu-latest
@@ -142,7 +142,7 @@ jobs:
   # byte-for-byte with the Go authority tools/sam-aarch64-format/sysregs.go
   # for every sysreg/pstate/dc/tlbi entry the Z80 side carries, so the two
   # copies can't silently drift. Pure Go, no container, no binutils —
-  # mirrors the lightweight m1/m2 jobs.
+  # mirrors the lightweight format/encoder jobs.
   sysreg-sync:
     runs-on: ubuntu-latest
     steps:
@@ -169,12 +169,10 @@ jobs:
       - name: doc link checker
         run: make check-doc-links
 
-  # M3 — sweeps the fixture corpus end-to-end on the dev container:
-  #   text2bin → build-m3-disk → SimCoupé (Xvfb 24bit) → samfile extract
+  # core — sweeps the fixture corpus end-to-end on the dev container:
+  #   sam-aarch64 → build-disk → SimCoupé (Xvfb 24bit) → samfile extract
   #   → byte-diff against GNU as + objcopy.
-  # Mirrors the `test:` job's container setup but builds the M3 disks
-  # and runs each fixture in turn via tests/m3/run-roundtrip.sh.
-  m3:
+  core:
     runs-on: ubuntu-latest
     needs: build-image
     container:
@@ -204,27 +202,27 @@ jobs:
       - name: Mark workspace as a safe git directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Run M3 fixture corpus
-        run: make ci-m3
+      - name: Run core fixture corpus
+        run: make ci-core
 
       - name: Post-mortem disk inspection on failure
         if: failure()
         run: |
-          echo "===== M3 fixtures ====="
-          ls tests/m3/sources/
+          echo "===== core fixtures ====="
+          ls tests/core/sources/
           echo "===== build/ artefacts ====="
           ls -la build/ | grep -E 'mgt|tbn|bin' || true
-          for log in /tmp/m3-*.log; do
+          for log in /tmp/core-*.log; do
             [ -f "$log" ] || continue
             echo "===== $(basename $log) ====="
             tail -20 "$log"
           done
 
-  # M4 — sweeps the M4 fixture corpus end-to-end.  Same container as the
-  # M3 job, but uses tests/m4/run-roundtrip.sh which runs the oracle
-  # through `ld -Ttext=0` so :lo12: / branch-to-label relocations
-  # resolve.  Reuses the M3 assembler binary (M4-capable post-PR-#22).
-  m4:
+  # symbols — sweeps the symbols fixture corpus end-to-end.  Same container
+  # as the core job, but uses tests/symbols/run-roundtrip.sh which runs the
+  # oracle through `ld -Ttext=0` so :lo12: / branch-to-label relocations
+  # resolve.  Reuses the same assembler binary (symbols-capable).
+  symbols:
     runs-on: ubuntu-latest
     needs: build-image
     container:
@@ -250,30 +248,30 @@ jobs:
       - name: Mark workspace as a safe git directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Run M4 fixture corpus
-        run: make ci-m4
+      - name: Run symbols fixture corpus
+        run: make ci-symbols
 
       - name: Post-mortem disk inspection on failure
         if: failure()
         run: |
-          echo "===== M4 fixtures ====="
-          ls tests/m4/sources/
+          echo "===== symbols fixtures ====="
+          ls tests/symbols/sources/
           echo "===== build/ artefacts ====="
           ls -la build/ | grep -E 'mgt|tbn|bin' || true
-          for log in /tmp/m4-*.log; do
+          for log in /tmp/symbols-*.log; do
             [ -f "$log" ] || continue
             echo "===== $(basename $log) ====="
             tail -20 "$log"
           done
 
-  # M4 production-variant sweep — same M4 fixture corpus, but uses the
-  # smaller production assembler binary (no boot-time self-tests).
+  # symbols-prod — production-variant sweep — same symbols fixture corpus,
+  # but uses the smaller production assembler binary (no boot-time self-tests).
   # Guards against accidental divergence between the two variants:
-  # both must produce byte-identical OUT for every fixture.  M3-prod
+  # both must produce byte-identical OUT for every fixture.  core-prod
   # is omitted because the prod variant only differs in self-test
-  # presence (not operand handling), so passing the harder M4 corpus
-  # implies the M3 corpus also passes.
-  m4-prod:
+  # presence (not operand handling), so passing the harder symbols corpus
+  # implies the core corpus also passes.
+  symbols-prod:
     runs-on: ubuntu-latest
     needs: build-image
     container:
@@ -299,29 +297,29 @@ jobs:
       - name: Mark workspace as a safe git directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Run M4 fixture corpus (production assembler)
-        run: make ci-m4-prod
+      - name: Run symbols fixture corpus (production assembler)
+        run: make ci-symbols-prod
 
       - name: Post-mortem disk inspection on failure
         if: failure()
         run: |
-          echo "===== M4 fixtures (prod variant) ====="
-          ls tests/m4/sources/
+          echo "===== symbols fixtures (prod variant) ====="
+          ls tests/symbols/sources/
           echo "===== build/ artefacts ====="
           ls -la build/ | grep -E 'mgt|tbn|bin' || true
-          for log in /tmp/m4-*.log; do
+          for log in /tmp/symbols-*.log; do
             [ -f "$log" ] || continue
             echo "===== $(basename $log) ====="
             tail -20 "$log"
           done
 
-  # M5 — sweeps the M5 fixture corpus end-to-end.  Same container as
-  # the M3 / M4 jobs but runs `make ci-m5`, which exercises the M5
+  # operands — sweeps the operands fixture corpus end-to-end.  Same container
+  # as the core / symbols jobs; runs `make ci-operands`, which exercises the
   # compound-operand encoders (OpShiftedReg, OpExtendedReg, OpMem,
-  # OpSysName, OpLitPool), the ror-imm intercept, and the M5
+  # OpSysName, OpLitPool), the ror-imm intercept, and the operands
   # directives (.set / .equ / .balign / .align / .org / .skip /
   # .space / .inst / .ltorg / no-op family).
-  m5:
+  operands:
     runs-on: ubuntu-latest
     needs: build-image
     container:
@@ -347,27 +345,27 @@ jobs:
       - name: Mark workspace as a safe git directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Run M5 fixture corpus
-        run: make ci-m5
+      - name: Run operands fixture corpus
+        run: make ci-operands
 
       - name: Post-mortem disk inspection on failure
         if: failure()
         run: |
-          echo "===== M5 fixtures ====="
-          ls tests/m5/sources/
+          echo "===== operands fixtures ====="
+          ls tests/operands/sources/
           echo "===== build/ artefacts ====="
           ls -la build/ | grep -E 'mgt|tbn|bin' || true
-          for log in /tmp/m5-*.log; do
+          for log in /tmp/operands-*.log; do
             [ -f "$log" ] || continue
             echo "===== $(basename $log) ====="
             tail -20 "$log"
           done
 
-  # M5 production-variant sweep — same M5 fixture corpus, but uses
-  # the smaller production assembler binary (no boot-time self-tests).
-  # Catches any divergence between the test and production variants
-  # in the new M5 encoders / directives.
-  m5-prod:
+  # operands-prod — same operands fixture corpus, but uses the smaller
+  # production assembler binary (no boot-time self-tests).  Catches any
+  # divergence between the test and production variants in the operand
+  # encoders / directives.
+  operands-prod:
     runs-on: ubuntu-latest
     needs: build-image
     container:
@@ -393,31 +391,30 @@ jobs:
       - name: Mark workspace as a safe git directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Run M5 fixture corpus (production assembler)
-        run: make ci-m5-prod
+      - name: Run operands fixture corpus (production assembler)
+        run: make ci-operands-prod
 
       - name: Post-mortem disk inspection on failure
         if: failure()
         run: |
-          echo "===== M5 fixtures (prod variant) ====="
-          ls tests/m5/sources/
+          echo "===== operands fixtures (prod variant) ====="
+          ls tests/operands/sources/
           echo "===== build/ artefacts ====="
           ls -la build/ | grep -E 'mgt|tbn|bin' || true
-          for log in /tmp/m5-*.log; do
+          for log in /tmp/operands-*.log; do
             [ -f "$log" ] || continue
             echo "===== $(basename $log) ====="
             tail -20 "$log"
           done
 
-  # M6 — sweeps the M6 fixture corpus end-to-end.  Same container as
-  # M3..M5; runs `make ci-m6` which exercises the paged-OUT machinery
-  # introduced in M6 PR 1 (sections-B emit during the LMPR_ENCTAB
-  # window + LMPR_OUT_HIGH bracket for the high zone + HSAVE
-  # auto-paging across &C000).  The fixture corpus is currently a
-  # single >16 KB long-emit fixture that crosses the OUT_ZONE
-  # low → high boundary.  See
+  # paged — sweeps the paged fixture corpus end-to-end.  Same container as
+  # core..operands; runs `make ci-paged` which exercises the paged-OUT
+  # machinery introduced by paged IN/OUT (sections-B emit during the
+  # LMPR_ENCTAB window + LMPR_OUT_HIGH bracket for the high zone + HSAVE
+  # auto-paging across &C000).  The fixture corpus contains a >16 KB
+  # long-emit fixture that crosses the OUT_ZONE low → high boundary.  See
   # docs/specs/paged-out-design.md.
-  m6:
+  paged:
     runs-on: ubuntu-latest
     needs: build-image
     container:
@@ -443,27 +440,26 @@ jobs:
       - name: Mark workspace as a safe git directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Run M6 fixture corpus
-        run: make ci-m6
+      - name: Run paged fixture corpus
+        run: make ci-paged
 
       - name: Post-mortem disk inspection on failure
         if: failure()
         run: |
-          echo "===== M6 fixtures ====="
-          ls tests/m6/sources/
+          echo "===== paged fixtures ====="
+          ls tests/paged/sources/
           echo "===== build/ artefacts ====="
           ls -la build/ | grep -E 'mgt|tbn|bin' || true
-          for log in /tmp/m6-*.log; do
+          for log in /tmp/paged-*.log; do
             [ -f "$log" ] || continue
             echo "===== $(basename $log) ====="
             tail -20 "$log"
           done
 
-  # M6 production-variant sweep — same M6 fixture corpus, but uses
-  # the smaller production assembler binary (no boot-time self-tests).
-  # Catches divergence between the test and production variants on
-  # the paged-OUT code path.
-  m6-prod:
+  # paged-prod — same paged fixture corpus, but uses the smaller production
+  # assembler binary (no boot-time self-tests).  Catches divergence between
+  # the test and production variants on the paged-OUT code path.
+  paged-prod:
     runs-on: ubuntu-latest
     needs: build-image
     container:
@@ -489,45 +485,45 @@ jobs:
       - name: Mark workspace as a safe git directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Run M6 fixture corpus (production assembler)
-        run: make ci-m6-prod
+      - name: Run paged fixture corpus (production assembler)
+        run: make ci-paged-prod
 
       - name: Post-mortem disk inspection on failure
         if: failure()
         run: |
-          echo "===== M6 fixtures (prod variant) ====="
-          ls tests/m6/sources/
+          echo "===== paged fixtures (prod variant) ====="
+          ls tests/paged/sources/
           echo "===== build/ artefacts ====="
           ls -la build/ | grep -E 'mgt|tbn|bin' || true
-          for log in /tmp/m6-*.log; do
+          for log in /tmp/paged-*.log; do
             [ -f "$log" ] || continue
             echo "===== $(basename $log) ====="
             tail -20 "$log"
           done
 
-  # m6-release — THE M6 HEADLINE GATE (3-way byte-match).  Proves the
+  # release-gate — THE HEADLINE GATE (3-way byte-match).  Proves the
   # standing claim "spectrum4 release.bin byte-match on SAM" by showing
   # three independent toolchains agree, byte-for-byte, on the vendored
   # spectrum4 release:
-  #   1. GNU binutils  — the vendored tests/m6/release/release.img.
+  #   1. GNU binutils  — the vendored tests/release/release.img.
   #   2. our Go path   — sam-aarch64 (release.s → .tbn → bin).
   #   3. our Z80 path  — the SAM assembler on SimCoupé (.tbn → OUT).
   # Without it, the origin-dependent encoder logic (ORIGIN_HIGH /
-  # SYMTAB_ABS_BITMAP / 33-bit-ADRP) could silently regress, because the m6
+  # SYMTAB_ABS_BITMAP / 33-bit-ADRP) could silently regress, because the
   # roundtrip links at -Ttext=0 and never exercises the release origin.
   #
-  # Hermetic + fast: BOTH inputs are vendored (tests/m6/release/), so this
+  # Hermetic + fast: BOTH inputs are vendored (tests/release/), so this
   # needs no spectrum4 checkout, no tup, and no aarch64 binutils at CI time
   # — just the dev image.  release.s is the whole release flattened into one
   # self-contained source by `sam-aarch64 -E`; the gate regenerates the .tbn
-  # from it, so it also exercises sam-aarch64's flatten/strip pipeline (if .tbn
-  # generation broke, the Go and Z80 outputs would diverge from the GNU
-  # image).  Refresh both files with tools/revendor-m6-release.sh.
+  # from it, so it also exercises sam-aarch64's flatten/strip pipeline (if
+  # .tbn generation broke, the Go and Z80 outputs would diverge from the
+  # GNU image).  Refresh both files with tools/revendor-release.sh.
   #
   # Also runs `make check-budget`, so a code-size overrun past the &C000
   # stack-page cliff fails here with a number rather than as a silent
   # boot-hang (the test-variant fragility class; tools/check-code-budget.sh).
-  m6-release:
+  release-gate:
     runs-on: ubuntu-latest
     needs: build-image
     container:
@@ -552,16 +548,16 @@ jobs:
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: spectrum4 release 3-way byte-match (GNU == Go == Z80)
-        run: tools/run-m6-release-gate.sh
+        run: tools/run-release-gate.sh
 
       - name: Post-mortem on failure
         if: failure()
         run: |
           echo "===== SAM assembler status log ====="
-          cat build/m6-release.status.log 2>/dev/null || echo "(no status log)"
+          cat build/release.status.log 2>/dev/null || echo "(no status log)"
           echo "===== sizes ====="
-          wc -c tests/m6/release/release.img build/m6-release.go.img build/m6-release.sam.img 2>/dev/null || true
+          wc -c tests/release/release.img build/release.go.img build/release.sam.img 2>/dev/null || true
           echo "===== GNU vs Go ====="
-          cmp -l tests/m6/release/release.img build/m6-release.go.img 2>/dev/null | head -20 || true
+          cmp -l tests/release/release.img build/release.go.img 2>/dev/null | head -20 || true
           echo "===== GNU vs Z80 (SAM) ====="
-          cmp -l tests/m6/release/release.img build/m6-release.sam.img 2>/dev/null | head -20 || true
+          cmp -l tests/release/release.img build/release.sam.img 2>/dev/null | head -20 || true

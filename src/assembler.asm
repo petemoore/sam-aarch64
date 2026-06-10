@@ -17,7 +17,7 @@
 ;                  The IN/OUT/ENCTAB buffers live off-axis (below), so
 ;                  the whole 16 KB section is code budget.
 ;                  tools/check-code-budget.sh (run at the tail of
-;                  make m3-asm / m3-asm-prod) enforces code_end < &C000
+;                  make assembler / assembler-prod) enforces code_end < &C000
 ;                  — the stack page starts there.
 ;   &C000-&C0FF  stack (SP = &C100, grows down into section D RAM)
 ;   &C100-&D4FF  scratch (OPVAL arrays, SYMTAB, litpool TABLE+counters) —
@@ -337,7 +337,7 @@ endif
 ; -- Boot-time self-tests (compiled in only when BUILD_TESTS=1) --------
 ; Five suites run in fixed order BEFORE load_enctab so they have no
 ; disk-state dependency.  Any assertion failure does `jp fail` (red
-; border + printer-channel "FAIL" banner, ci-m3 reports fail
+; border + printer-channel "FAIL" banner, ci-core reports fail
 ; immediately).  All five are omitted from a production build (the
 ; corresponding test_* includes are also skipped — see below).
 ;

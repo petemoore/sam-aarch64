@@ -5,7 +5,7 @@
 //
 // The release-corpus oracle (disasm_oracle_test.go::TestDisasmOracle) reaches
 // 100% but is *corpus-bounded*: it only ever compares the instruction families
-// that actually appear in tests/m6/release/release.img.  The i10 capability
+// that actually appear in tests/release/release.img.  The i10 capability
 // report (https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-08-go-vs-z80-disasm-capability-parity.md) found
 // ~two dozen families that src/disasm.asm *handles* but the oracle never
 // exercises, so their Z80 correctness was asserted only *structurally* (the

@@ -529,9 +529,9 @@ Gate via `if defined(BUILD_TESTS)` per the existing pattern (M3/M4/M5 + M6 PR 1'
 
 ### Fixtures
 
-Add a fixture `tests/m6/sources/in_long_source.s` that emits a long enough source to require IN page-crossing (>16 KB of `.tbn`).  Use `.rept 4000` of a one-line instruction, or generate via shell helper if `.rept` isn't supported by `text2bin`.
+Add a fixture `tests/paged/sources/in_long_source.s` that emits a long enough source to require IN page-crossing (>16 KB of `.tbn`).  Use `.rept 4000` of a one-line instruction, or generate via shell helper if `.rept` isn't supported by `text2bin`.
 
-Cross-fixture for ENCTAB×IN bracket: run M3/M4/M5 fixtures unchanged — they exercise both ENCTAB reads and IN reads through `reader_next_kind`, so any LMPR-bracket bug surfaces as a wrong byte.
+Cross-fixture for ENCTAB×IN bracket: run core/symbols/operands fixtures unchanged — they exercise both ENCTAB reads and IN reads through `reader_next_kind`, so any LMPR-bracket bug surfaces as a wrong byte.
 
 ## What's NOT in this PR
 
