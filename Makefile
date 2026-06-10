@@ -281,7 +281,7 @@ disasm-test-payload: $(BUILD)/disasm-test.bin
 # into the SAM build; placement is i60c design work).
 $(BUILD)/zx0_compress.bin: src/zx0_compress.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/zx0_compress.bin src/zx0_compress.asm
+	pyz80 --obj=$(BUILD)/zx0_compress.bin --mapfile=$(BUILD)/zx0_compress.map src/zx0_compress.asm
 
 .PHONY: zx0-compress-payload
 zx0-compress-payload: $(BUILD)/zx0_compress.bin
@@ -444,3 +444,11 @@ zx0-blocks: release-unstripped-tbn
 	    $(ZX0_BINARY) "$$f" "$${f%.raw}.zx0" 2>/dev/null || true; \
 	done
 	@echo "zx0-blocks: $$(ls $(BUILD)/zx0-blocks/*.zx0 | wc -l) compressed blocks written to $(BUILD)/zx0-blocks/"
+
+# Dump the full flat comment corpus for whole-corpus T-state totals (i67).
+# Produces: build/zx0-corpus.raw (consumed by TestZX0CorpusTotals).
+# Run: make zx0-corpus
+.PHONY: zx0-corpus
+zx0-corpus: release-unstripped-tbn
+	cd tools/comment-bench && go build -o $(CURDIR)/$(BUILD)/comment-bench .
+	$(BUILD)/comment-bench --dump-corpus=$(BUILD)/zx0-corpus.raw $(BUILD)/release-unstripped.tbn > /dev/null

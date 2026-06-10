@@ -16,7 +16,20 @@
 ;
 ; Return:
 ;   HL = compressed length (bytes written starting at dst)
-;   All other registers undefined.
+;   All other registers undefined, including IX, IY and the full
+;   shadow set (BC'/DE'/HL'/AF').
+;
+; Requirements:
+;   * Interrupts must be disabled (or the interrupt handler must
+;     preserve the shadow registers): the bit-writer state lives in
+;     BC'/DE'/HL' for the whole run.
+;   * The code is self-modifying (constants are patched into
+;     immediates at entry), so it must run from RAM and is not
+;     reentrant.
+;   * Undocumented-but-universal Z80 ops are used (IXh/IXl/IYl
+;     register halves).  These work on all NMOS Z80s including the
+;     SAM's Z80B, and are implemented by SimCoupé and koron-go/z80;
+;     pyz80 assembles them natively.
 ;
 ; ── Workspace layout (mirroring Go: compress.go ScratchBytes) ────────
 ;
@@ -32,12 +45,13 @@
 ;
 ; ── Implementation note on state access ──────────────────────────────
 ;
-; The state block is accessed via absolute 16-bit addresses stored in
-; module-level variables (zxc_*).  The IX register is NOT used for
-; (IX+d) indexed addressing because Z80 only has LD r,(IX+d) for 8-bit
-; registers r; there is no LD HL,(IX+d).  Instead, the hot-path variables
-; (pos, litStart, lastOffset, prevWasLit, out_ptr, bit_mask, backtrack)
-; are accessed via their absolute addresses using LD HL,(nn) / LD (nn),HL.
+; Hot state is register-resident: the bit writer lives in the shadow
+; bank (D'E' = out_ptr, H'L' = bit_byte_ptr, C' = mask, B' =
+; backtrack) and the match-finder walk keeps its working set in
+; DE/BC/IXh/IXl/IYl with per-call constants patched into instruction
+; immediates (self-modifying code; legal because the payload runs from
+; RAM).  Only the cold parse state (pos, litStart, lastOffset,
+; prevWasLit, best_len, best_off) uses absolute-addressed variables.
 ;
 ; ── Parameters (Go: DefaultParams = Params{HashSize:512, ChainDepth:16}) ─
 
@@ -45,7 +59,6 @@ HASH_SIZE:       equ     512     ; power of two in {256,512,1024,2048}
 CHAIN_DEPTH:     equ     16      ; in {4,8,16,32}
 HASH_MASK:       equ     (HASH_SIZE - 1)
 HASH_SIZE_BYTES: equ     (HASH_SIZE * 2)
-ZX0_MAX_OFFSET:  equ     32640   ; compress.go: zx0MaxOffset
 
                 org     0
 
@@ -59,76 +72,61 @@ ZX0_MAX_OFFSET:  equ     32640   ; compress.go: zx0MaxOffset
 zx0_compress:
         ; Stash entry arguments.
         ld      (zxc_src),     hl
+        ld      (zxc_h2_src+1), hl      ; patch src base into zxc_hash2
+        ld      (zxc_fb_src1+1), hl     ; patch src base into zxc_find_best
+        ld      (zxc_fb_src2+1), hl
+        ld      (zxc_it_src+1), hl      ; patch src base into zxc_insert_tail
         ld      (zxc_dst),     bc
         ld      (zxc_src_len), de
+        ld      (zxc_ml_len+1), de      ; patch src_len into the main loop
 
         ; ws_base is in IX; save to a module variable too.
         push    ix
         pop     hl                      ; HL = ws_base
         ld      (zxc_ws_base), hl
+        ld      (zxc_h2_ws+1), hl       ; patch hashHead base into zxc_hash2
+        ld      (zxc_it_ws+1), hl       ; patch hashHead base into zxc_insert_tail
 
-        ; Compute:
-        ;   chain_base  = ws_base + HASH_SIZE_BYTES
-        ;   state_base  = ws_base + HASH_SIZE_BYTES + src_len*2
+        ; chain_base = ws_base + HASH_SIZE_BYTES, patched into every
+        ; chain-array user.
         ld      bc, HASH_SIZE_BYTES
         add     hl, bc                  ; HL = chain_base
-        ld      (zxc_chain_base), hl
-
-        ld      bc, (zxc_src_len)
-        add     hl, bc
-        add     hl, bc                  ; HL = state_base
-        ld      (zxc_state), hl
+        ld      (zxc_fb_chain+1), hl    ; patch chain_base into zxc_find_best
+        ld      (zxc_fb_chain2+1), hl
+        ld      (zxc_it_chain+1), hl    ; patch chain_base into zxc_insert_tail
 
         ; ── Fill hash table with &FF (sentinel &FFFF) ─────────────────
         ; Go: newMatchFinder initialises hashHead[] = 0xFFFF.
+        ; LDIR ripple-fill: write the first byte, then copy each byte to
+        ; the next address (21 T/byte vs ~33 T/byte for a manual loop).
         ld      hl, (zxc_ws_base)
-        ld      b, HASH_SIZE_BYTES >> 8 ; = 4 (for 1024 bytes)
-        ld      c, HASH_SIZE_BYTES & &FF ; = 0
-        ld      a, &FF
-zxc_fill_hash:
-        ld      (hl), a
-        inc     hl
-        dec     bc
-        ld      a, b
-        or      c
-        ld      a, &FF
-        jp      nz, zxc_fill_hash
+        ld      (hl), &FF
+        ld      d, h
+        ld      e, l
+        inc     de
+        ld      bc, HASH_SIZE_BYTES - 1
+        ldir
 
-        ; ── Fill chain array with &FF ─────────────────────────────────
-        ; Go: newMatchFinder initialises chain[] = 0xFFFF.
-        ; HL = chain_base (immediately after hash table).
-        ld      de, (zxc_src_len)
-        ld      a, d
-        or      e
-        jp      z, zxc_chain_done
-        ; BC = src_len * 2
-        ld      b, d
-        ld      c, e
-        sla     c
-        rl      b                       ; BC = src_len * 2
-        ld      a, &FF
-zxc_fill_chain:
-        ld      (hl), a
-        inc     hl
-        dec     bc
-        ld      a, b
-        or      c
-        ld      a, &FF
-        jp      nz, zxc_fill_chain
-zxc_chain_done:
+        ; The chain array is NOT initialised.  Go fills chain[] = 0xFFFF,
+        ; but that fill is unobservable: chain[c] is only ever read for a
+        ; candidate c obtained from hashHead[] or a previous chain read,
+        ; and every non-sentinel candidate enters those structures via
+        ; insert(c), which writes chain[c] BEFORE publishing c in
+        ; hashHead[].  The 0xFFFF sentinel terminates the walk before
+        ; chain[0xFFFF] could be read.  Hence every chain entry is
+        ; written before it can be read and the fill value never reaches
+        ; the output (oracle-verified; saves ~66 T per input byte).
 
-        ; ── Initialise module-level state variables ───────────────────
-        ; src_base, src_len, dst_base, hash_base, chain_base are already set.
-
-        ; out_ptr = dst_base
-        ld      hl, (zxc_dst)
-        ld      (zxc_out_ptr), hl
-
-        ; bit_mask = 0, backtrack = 1 (Go: newBitWriter initial state)
-        xor     a
-        ld      (zxc_bit_mask), a
-        ld      a, 1
-        ld      (zxc_backtrack), a
+        ; ── Initialise the bit writer in the shadow registers ─────────
+        ; Go: newBitWriter (bitMask = 0, backtrack = true).
+        ; Shadow bank, resident until return:
+        ;   D'E' = out_ptr   H'L' = bit_byte_ptr (valid once a holder opens)
+        ;   C'   = bit_mask  B'   = backtrack flag (0/1)
+        exx
+        ld      de, (zxc_dst)           ; out_ptr = dst
+        ld      c, 0                    ; bit_mask = 0
+        ld      b, 1                    ; backtrack = 1
+        exx
 
         ; pos = 0, litStart = 0, lastOffset = 1, prevWasLit = 0
         ld      hl, 0
@@ -145,7 +143,12 @@ zxc_chain_done:
         or      l
         jp      nz, zxc_main_loop
 
-        call    zxc_bit1
+        ; Go consumes the initial backtrack bit without writing (its
+        ; len(out) > 0 guard): clear the flag instead of calling
+        ; zxc_bit1, which would touch dst[-1].
+        exx
+        ld      b, 0
+        exx
         ld      hl, 256
         call    zxc_eg_inv
         jp      zxc_return_len
@@ -156,7 +159,8 @@ zxc_chain_done:
 zxc_main_loop:
         ; Exit when pos >= src_len.
         ld      hl, (zxc_pos)
-        ld      de, (zxc_src_len)
+zxc_ml_len:
+        ld      de, 0                   ; SMC: src_len, patched at entry
         ld      a, l
         sub     e
         ld      a, h
@@ -342,14 +346,13 @@ zxc_end_marker:
         call    zxc_eg_inv
 
 zxc_return_len:
-        ld      hl, (zxc_out_ptr)
+        exx
+        push    de                      ; D'E' = final out_ptr
+        exx
+        pop     hl
         ld      de, (zxc_dst)
-        ld      a, l
-        sub     e
-        ld      l, a
-        ld      a, h
-        sbc     a, d
-        ld      h, a
+        or      a
+        sbc     hl, de                  ; HL = compressed length
         ret
 
 
@@ -362,32 +365,24 @@ zxc_return_len:
 zxc_flush_lits:
         ld      hl, (zxc_pos)
         ld      de, (zxc_litstart)
-        ld      a, l
-        sub     e
-        ld      l, a
-        ld      a, h
-        sbc     a, d
-        ld      h, a                    ; HL = count
-        ld      a, h
-        or      l
+        or      a
+        sbc     hl, de                  ; HL = count (DE = litStart kept)
         ret     z
         ld      b, h
         ld      c, l                    ; BC = count
         ld      hl, (zxc_src)
-        ld      de, (zxc_litstart)
         add     hl, de                  ; HL = &src[litStart]
-zxc_fl_loop:
-        ld      a, (hl)
-        push    hl                      ; zxc_write_byte clobbers HL (out_ptr)
-        push    bc
-        call    zxc_write_byte
-        pop     bc
-        pop     hl                      ; restore source pointer
-        inc     hl
-        dec     bc
-        ld      a, b
-        or      c
-        jp      nz, zxc_fl_loop
+        ; LDIR straight into the output: fetch out_ptr from the shadow
+        ; bank, copy, and put the advanced pointer back.
+        exx
+        push    de
+        exx
+        pop     de                      ; DE = out_ptr
+        ldir
+        push    de
+        exx
+        pop     de                      ; out_ptr += count
+        exx
         ld      a, 1
         ld      (zxc_prevlit), a
         ret
@@ -396,31 +391,65 @@ zxc_fl_loop:
 ; ════════════════════════════════════════════════════════════════════
 ; zxc_insert_tail — insert positions pos+1..pos+bestLen-1 into chain.
 ; Go: compress.go lines 157–159.
-; Clobbers: A, HL, DE, BC.
+;
+; The loop keeps i in DE and the count in IXl (bestLen-1 <= 254 fits
+; 8 bits; both callers guarantee bestLen >= 2, so the count is >= 1),
+; and inlines the insert with its hash so nothing is saved across a
+; call.  &chain[i] is computed first and parked in an immediate while
+; the hash clobbers BC.
+; Clobbers: A, HL, DE, BC, IXl.
 ; ════════════════════════════════════════════════════════════════════
 zxc_insert_tail:
-        ld      hl, (zxc_best_len)
-        ld      a, h
-        or      l
-        ret     z
-        dec     hl                      ; loop count = bestLen-1
-        ld      a, h
-        or      l
-        ret     z
+        ld      a, (zxc_best_len)       ; bestLen (<= 255)
+        dec     a
+        ld      ixl, a                  ; count = bestLen-1 (>= 1)
         ld      de, (zxc_pos)
-        inc     de                      ; DE = pos+1
-zxc_it_loop:
-        push    hl
-        push    de
+        ; Park &chain[pos+1] in the cslot immediate; the loop advances
+        ; it by 2 per iteration (chain slots are consecutive).
         ld      h, d
         ld      l, e
-        call    zxc_insert
-        pop     de
-        inc     de
-        pop     hl
-        dec     hl
-        ld      a, h
-        or      l
+        inc     hl
+        add     hl, hl
+zxc_it_chain:
+        ld      bc, 0                   ; SMC: chain_base, patched at entry
+        add     hl, bc
+        ld      (zxc_it_cslot+1), hl
+zxc_it_loop:
+        inc     de                      ; i = pos+k
+        ; Inline zxc_hash2 body (see there for the boundary-check proof).
+        ld      h, d
+        ld      l, e
+zxc_it_src:
+        ld      bc, 0                   ; SMC: src base, patched at entry
+        add     hl, bc                  ; HL = &src[i]
+        ld      a, (hl)
+        inc     hl
+        ld      c, (hl)
+        ld      h, zxc_tab31lo >> 8
+        ld      l, a
+        ld      a, (hl)
+        xor     c
+        inc     h
+        ld      h, (hl)
+        ld      l, a
+        add     hl, hl
+zxc_it_ws:
+        ld      bc, 0                   ; SMC: hashHead base, patched at entry
+        add     hl, bc                  ; HL = &hashHead[hash]
+        ; Old head out, i in.
+        ld      c, (hl)
+        ld      (hl), e
+        inc     hl
+        ld      b, (hl)
+        ld      (hl), d                 ; BC = old head; hashHead[h] = i
+zxc_it_cslot:
+        ld      hl, 0                   ; SMC: &chain[i]
+        ld      (hl), c
+        inc     hl
+        ld      (hl), b                 ; chain[i] = old head
+        inc     hl
+        ld      (zxc_it_cslot+1), hl    ; advance to &chain[i+1]
+        dec     ixl
         jp      nz, zxc_it_loop
         ret
 
@@ -429,374 +458,388 @@ zxc_it_loop:
 ; zxc_find_best — find best match at pos; insert pos into chain.
 ; Go: matchFinder.findBest (compress.go lines 402–438).
 ; Updates zxc_best_len, zxc_best_off.
-; Clobbers: A, HL, DE, BC.
+; Clobbers: A, HL, DE, BC, IXh, IXl, IYl.
+;
+; Walk-loop register allocation:
+;   DE  = candidate index        BC = pos_ptr (src + pos, constant)
+;   IXh = bestLen so far         IXl = chain steps remaining
+;   HL  = scratch                IYl = deep-compare counter
+; Walk constants live in immediates patched per call (pos, maxML,
+; screen byte/base, hashHead slot) or at entry (src, chain_base).
+;
+; Time-only deviations from the Go shape (output proven identical by
+; the byte-identity oracle):
+;
+; * Screen test: cand_ptr[bestLen] is compared with pos_ptr[bestLen]
+;   before a full compare.  A candidate failing it has ml <= bestLen,
+;   which cannot change (bestLen, bestOff): Go updates only on
+;   ml > bestLen, and its ml == bestLen tie case rewrites the same
+;   values.  Candidates are walked in the same order with the same
+;   chain-depth budget, so the selected match is identical.
+; * Go's off-range checks are dropped: off <= 0 is impossible (every
+;   chain entry is a previously-inserted position strictly below the
+;   probing pos) and off > 32640 is impossible at src_len <= 8192.
+; * Ceiling exit: once bestLen == maxML no candidate can satisfy
+;   ml > bestLen, and the walk has no side effects, so it ends early.
+; * The sentinel test checks D == &FF only: positions are <= 8191
+;   (D <= &1F), so D == &FF occurs exactly for the &FFFF sentinel.
 ; ════════════════════════════════════════════════════════════════════
 zxc_find_best:
-        ld      hl, 0
-        ld      (zxc_best_len), hl
-        ld      (zxc_best_off), hl
+        ; bestLen = 0.  zxc_best_off is left stale: the main loop reads
+        ; it only when bestLen > 0, and any update writes it first.
+        ld      ixh, 0
+
+        ; Patch pos into the off-computation immediates.
+        ld      de, (zxc_pos)
+        ld      (zxc_fb_pos2+1), de
+        ld      (zxc_fb_pos3+1), de
+
+        ; maxML = min(255, src_len - pos), patched into both users.
+        ld      hl, (zxc_src_len)
+        or      a
+        sbc     hl, de                  ; HL = src_len - pos (>= 1)
+        ld      a, h
+        or      a
+        jp      z, zxc_fb_ml_ok
+        ld      l, 255
+zxc_fb_ml_ok:
+        ld      a, l
+        ld      (zxc_fb_maxml+1), a
+        ld      (zxc_fb_maxml2+1), a
+
+        ; Hash pos before pos_ptr lands in BC (zxc_hash2 clobbers BC).
+        ; The slot address is cached for the post-walk insert (the walk
+        ; never writes hashHead, so the probed slot is still current).
+        ld      h, d
+        ld      l, e
+        call    zxc_hash2               ; HL = &hashHead[h]; DE preserved
+        ld      (zxc_fb_slot+1), hl
+        push    hl                      ; save slot for the candidate read
+
+        ; pos_ptr = src + pos -> BC; screen byte for bestLen=0 is
+        ; src[pos]; screen base for bestLen=0 is src itself.
+zxc_fb_src1:
+        ld      hl, 0                   ; SMC: src, patched at entry
+        add     hl, de
+        ld      b, h
+        ld      c, l                    ; BC = pos_ptr
+        ld      a, (hl)
+        ld      (zxc_fb_scrv+1), a      ; screen byte = src[pos]
+        ld      hl, (zxc_src)
+        ld      (zxc_fb_scrb+1), hl     ; screen base = src + bestLen(0)
 
         ; candidate = hashHead[hash2(pos)]
-        ld      hl, (zxc_pos)
-        call    zxc_hash2               ; HL = hash h
-        add     hl, hl
-        ld      de, (zxc_ws_base)
-        add     hl, de                  ; &hashHead[h]
+        pop     hl
         ld      e, (hl)
         inc     hl
         ld      d, (hl)                 ; DE = candidate
-
-        ld      a, CHAIN_DEPTH
-        ld      (zxc_chain_ctr), a
+        ld      ixl, CHAIN_DEPTH
 
 zxc_fb_loop:
-        ; Sentinel: candidate == &FFFF?
         ld      a, d
-        and     e
-        inc     a
+        inc     a                       ; D == &FF <=> sentinel &FFFF
         jp      z, zxc_fb_done
-
-        ld      a, (zxc_chain_ctr)
-        or      a
-        jp      z, zxc_fb_done
-
-        ; off = pos - candidate.  Valid: 0 < off <= ZX0_MAX_OFFSET.
-        ld      hl, (zxc_pos)
-        ld      a, l
-        sub     e
-        ld      l, a
-        ld      a, h
-        sbc     a, d
-        ld      h, a                    ; HL = off
-
-        ld      a, h
-        or      l
-        jp      z, zxc_fb_skip
-
-        ld      a, h
-        cp      &80
-        jp      nc, zxc_fb_skip
-        cp      &7F
-        jp      c, zxc_fb_ok
-        ld      a, l
-        cp      &81
-        jp      nc, zxc_fb_skip
-zxc_fb_ok:
-        ; HL = off.  Count match length.
-        push    de                      ; save candidate (DE)
-        push    hl                      ; save off (HL)
-
-        ; pos_ptr = src + pos
-        ld      hl, (zxc_src)
-        ld      de, (zxc_pos)
-        add     hl, de                  ; HL = pos_ptr
-
-        ; cand_ptr = pos_ptr - off
-        pop     de                      ; DE = off
-        push    de                      ; re-save off
-        ld      a, l
-        sub     e
-        ld      l, a
-        ld      a, h
-        sbc     a, d
-        ld      h, a                    ; HL = cand_ptr
-
-        ; pos_ptr is now: recompute into BC (we've clobbered HL above).
-        ld      bc, (zxc_src)
-        ld      de, (zxc_pos)
-        ld      a, c
-        add     a, e
-        ld      c, a
-        ld      a, b
-        adc     a, d
-        ld      b, a                    ; BC = src + pos = pos_ptr
-
-        ; maxML = src_len - pos, capped at 255.
-        ; Save cand_ptr (HL) first because computing maxML clobbers HL.
-        push    hl                      ; save cand_ptr
-        ld      de, (zxc_src_len)
-        ld      hl, (zxc_pos)
-        ld      a, e
-        sub     l
-        ld      e, a
-        ld      a, d
-        sbc     a, h
-        ld      d, a                    ; DE = src_len - pos
-        ld      a, d
-        or      a
-        jp      z, zxc_fb_ml_ok
-        ld      e, 255
-        ld      d, 0
-zxc_fb_ml_ok:
-        pop     hl                      ; restore cand_ptr
-        ; E = maxML, HL = cand_ptr, BC = pos_ptr.
-        xor     a                       ; A = 0 (match-length counter)
-        ld      (zxc_ml_count), a       ; initialise counter variable
-
-zxc_fb_cmp:
-        ld      a, e
-        or      a
-        jp      z, zxc_fb_cmp_done
-        ld      a, (bc)
-        cp      (hl)
-        jp      nz, zxc_fb_cmp_done
-        inc     hl
-        inc     bc
-        ld      a, (zxc_ml_count)
-        inc     a
-        ld      (zxc_ml_count), a
-        dec     e
-        jp      nz, zxc_fb_cmp          ; more bytes available: continue
-zxc_fb_cmp_done:
-        pop     de                      ; DE = off (re-saved before cand_ptr compute)
-        pop     hl                      ; HL = candidate (original push de = candidate)
-
-        ld      a, (zxc_ml_count)       ; A = ml
-        or      a
-        jp      z, zxc_fb_adv
-
-        ld      b, a                    ; B = ml
-        ld      a, (zxc_best_len)
-        cp      b
-        jp      nc, zxc_fb_adv
-        ; ml > bestLen: update.
-        ld      a, b
-        ld      (zxc_best_len), a
-        xor     a
-        ld      (zxc_best_len+1), a
-        ld      a, e
-        ld      (zxc_best_off),   a     ; off lo
-        ld      a, d
-        ld      (zxc_best_off+1), a     ; off hi
-
-zxc_fb_adv:
-        ; candidate = chain[candidate].  candidate index is in HL.
-        add     hl, hl
-        ld      de, (zxc_chain_base)
+        ; Screen: src[candidate + bestLen] vs src[pos + bestLen].
+zxc_fb_scrb:
+        ld      hl, 0                   ; SMC: src + bestLen
+        add     hl, de
+        ld      a, (hl)
+zxc_fb_scrv:
+        cp      0                       ; SMC: src[pos + bestLen]
+        jp      z, zxc_fb_deep
+zxc_fb_next:
+        ; candidate = chain[candidate]
+zxc_fb_chain:
+        ld      hl, 0                   ; SMC: chain_base, patched at entry
+        add     hl, de
         add     hl, de
         ld      e, (hl)
         inc     hl
-        ld      d, (hl)                 ; DE = chain[old_candidate] = next candidate
-        ld      a, (zxc_chain_ctr)
-        dec     a
-        ld      (zxc_chain_ctr), a
-        jp      zxc_fb_loop             ; top-of-loop re-checks counter + sentinel
-
-zxc_fb_skip:
-        ; off out of range: advance chain.  DE = candidate.
-        ld      h, d
-        ld      l, e
-        add     hl, hl
-        ld      bc, (zxc_chain_base)
-        add     hl, bc
-        ld      e, (hl)
-        inc     hl
         ld      d, (hl)
-        ld      a, (zxc_chain_ctr)
-        dec     a
-        ld      (zxc_chain_ctr), a
-        jp      zxc_fb_loop             ; top-of-loop re-checks counter + sentinel
+        dec     ixl
+        jp      nz, zxc_fb_loop
+        jp      zxc_fb_done
 
-zxc_fb_done:
-        ld      hl, (zxc_pos)
-        call    zxc_insert
-        ret
-
-
-; ════════════════════════════════════════════════════════════════════
-; zxc_hash2 — compute hash for position HL.
-; Go: matchFinder.hash2 (compress.go lines 371–377).
-;
-; Entry: HL = position i.
-; Return: HL = hash in [0, HASH_MASK].
-; Clobbers: A, DE, BC.
-; ════════════════════════════════════════════════════════════════════
-zxc_hash2:
-        ld      de, (zxc_src)
-        add     hl, de                  ; HL = &src[i]
-
-        ; Boundary: need &src[i]+1 < src_end.
-        ld      de, (zxc_src)
-        ld      bc, (zxc_src_len)
+; ── Deep compare: screen passed; count the match length ──────────────
+zxc_fb_deep:
+        push    de                      ; save candidate
+zxc_fb_src2:
+        ld      hl, 0                   ; SMC: src, patched at entry
+        add     hl, de                  ; HL = cand_ptr
+        ld      d, b
+        ld      e, c                    ; DE = pos_ptr (advancing copy)
+zxc_fb_maxml:
+        ld      a, 0                    ; SMC: maxML
+        ld      iyl, a                  ; IYl = compare budget
+zxc_fb_dloop:
+        ld      a, (de)
+        cp      (hl)
+        jp      nz, zxc_fb_dend
+        inc     de
+        inc     hl
+        dec     iyl
+        jp      nz, zxc_fb_dloop
+zxc_fb_dend:
+        ; ml = E - C (exact: ml <= 255)
         ld      a, e
-        add     a, c
-        ld      e, a
-        ld      a, d
-        adc     a, b
-        ld      d, a                    ; DE = src_end
-
-        push    hl                      ; save &src[i]
-        inc     hl
-        ld      a, l
-        sub     e
-        ld      a, h
-        sbc     a, d                    ; borrow if HL+1 < src_end
-        pop     hl
-        jp      nc, zxc_h2_single
-
-        ; Two-byte hash: (src[i]*31 ^ src[i+1]) & HASH_MASK
-        ; Must use 16-bit arithmetic: src[i]*31 overflows 8 bits for src[i]>=9.
-        ; Strategy: src[i]*31 = src[i]*32 - src[i], computed in HL (16-bit).
-        ld      e, (hl)                 ; E = src[i]
-        inc     hl
-        ld      d, (hl)                 ; D = src[i+1]
-        ld      l, e
-        ld      h, 0                    ; HL = src[i]
-        add     hl, hl
-        add     hl, hl
-        add     hl, hl
-        add     hl, hl
-        add     hl, hl                  ; HL = src[i]*32 (16-bit, no overflow)
-        ld      a, l
-        sub     e
-        ld      l, a
-        ld      a, h
-        sbc     a, 0                    ; A = (src[i]*31) >> 8
-        ld      h, a                    ; H = high byte of src[i]*31
-        ld      a, l
-        xor     d                       ; A = (src[i]*31 & 0xFF) ^ src[i+1]
-        ld      l, a
-        ld      a, h
-        and     1                       ; keep only bit 8 of the 9-bit HASH_MASK (511=0x1FF)
-        ld      h, a                    ; HL = 9-bit hash value
-        ret
-
-zxc_h2_single:
-        ld      a, (hl)
-        and     HASH_MASK & &FF
+        sub     c                       ; A = ml
+        cp      ixh
+        jp      c, zxc_fb_nextp         ; ml < bestLen: no improvement
+        jp      z, zxc_fb_nextp         ; ml == bestLen: Go tie rewrite is a no-op
+        ; ── ml > bestLen: update bestLen/bestOff ─────────────────────
+        ld      ixh, a                  ; bestLen = ml
+        pop     de                      ; DE = candidate
+        push    de
+zxc_fb_pos2:
+        ld      hl, 0                   ; SMC: pos
+        or      a
+        sbc     hl, de                  ; HL = off = pos - candidate
+        ld      (zxc_best_off), hl
+        ; Ceiling: bestLen == maxML ends the walk (no side effects left).
+zxc_fb_maxml2:
+        cp      0                       ; SMC: maxML
+        jp      z, zxc_fb_done_pop
+        ; Repatch the screen for the new bestLen:
+        ; screen byte = pos_ptr[bestLen]; screen base = src + bestLen.
         ld      l, a
         ld      h, 0
+        add     hl, bc                  ; HL = pos_ptr + bestLen
+        ld      a, (hl)
+        ld      (zxc_fb_scrv+1), a
+zxc_fb_pos3:
+        ld      de, 0                   ; SMC: pos
+        or      a
+        sbc     hl, de                  ; HL = src + bestLen
+        ld      (zxc_fb_scrb+1), hl
+        pop     de                      ; DE = candidate
+        jp      zxc_fb_next
+
+zxc_fb_nextp:
+        pop     de                      ; DE = candidate
+        jp      zxc_fb_next
+
+zxc_fb_done_pop:
+        pop     de                      ; discard saved candidate
+zxc_fb_done:
+        ; Publish bestLen for the main loop.
+        ld      a, ixh
+        ld      (zxc_best_len), a
+        xor     a
+        ld      (zxc_best_len+1), a
+        ; Insert pos using the cached hashHead slot (no second hash2).
+        ld      de, (zxc_pos)
+zxc_fb_slot:
+        ld      hl, 0                   ; SMC: &hashHead[hash2(pos)]
+        ld      c, (hl)
+        ld      (hl), e
+        inc     hl
+        ld      b, (hl)
+        ld      (hl), d                 ; BC = old head; hashHead[h] = pos
+        ex      de, hl
+        add     hl, hl
+zxc_fb_chain2:
+        ld      de, 0                   ; SMC: chain_base, patched at entry
+        add     hl, de
+        ld      (hl), c
+        inc     hl
+        ld      (hl), b                 ; chain[pos] = old head
         ret
 
 
 ; ════════════════════════════════════════════════════════════════════
-; zxc_insert — insert position HL into hash chain.
-; Go: matchFinder.insert (compress.go lines 383–387).
+; zxc_hash2 — hash position HL; return HL = &hashHead[hash].
+; Go: matchFinder.hash2 (compress.go lines 371–377).
 ;
-; Entry: HL = position i.
-; Clobbers: A, HL, DE, BC.
+; hash = (src[i]*31 ^ src[i+1]) & HASH_MASK, looked up via the
+; assemble-time tables zxc_tab31lo/zxc_tab31hi (page-aligned, one page
+; each), so the *31 is an H/L substitution instead of 16-bit shifts.
+;
+; Go's i+1 boundary check (single-byte hash at the last position) is
+; dropped as a time-only optimisation: position srclen-1 is the only
+; one it affects, and the hash chosen there cannot reach the output —
+; the probe at srclen-1 is bounded by maxML = 1, below both match
+; thresholds (rep >= 2, new >= 3), and an insert at srclen-1 is never
+; probed afterwards because the parse ends.  src[srclen] is read as a
+; don't-care byte (oracle-verified byte-identical).
+;
+; Entry: HL = position i.  The zxc_h2_src/zxc_h2_ws immediates are
+; patched at zx0_compress entry.
+; Return: HL = &hashHead[hash].
+; Clobbers: A, BC.  Preserves DE (zxc_find_best keeps pos there).
 ; ════════════════════════════════════════════════════════════════════
-zxc_insert:
-        push    hl                      ; save i
-        call    zxc_hash2               ; HL = hash h
-        ; &hashHead[h] = ws_base + h*2
-        add     hl, hl
-        ld      de, (zxc_ws_base)
-        add     hl, de                  ; HL = &hashHead[h]
-        ; old = hashHead[h]
-        ld      c, (hl)
+zxc_hash2:
+zxc_h2_src:
+        ld      bc, 0                   ; SMC: src base, patched at entry
+        add     hl, bc                  ; HL = &src[i]
+        ld      a, (hl)                 ; A = src[i]
         inc     hl
-        ld      b, (hl)
-        dec     hl                      ; HL = &hashHead[h]; BC = old head
-        pop     de                      ; DE = i
-        ; chain[i] = old.  &chain[i] = chain_base + i*2.
-        ; At entry to this block: HL = &hashHead[h], BC = old_head, DE = i.
-        push    hl                      ; → stack: [&hH[h], ret]
-        push    bc                      ; → stack: [old, &hH[h], ret]
-        push    de                      ; → stack: [i, old, &hH[h], ret]
-        ld      h, d
-        ld      l, e                    ; HL = i
-        add     hl, hl                  ; HL = i*2
-        ld      de, (zxc_chain_base)
-        add     hl, de                  ; HL = &chain[i]; DE = chain_base (stale)
-        pop     de                      ; DE = i      → [old, &hH[h], ret]
-        pop     bc                      ; BC = old    → [&hH[h], ret]
-        ; Write chain[i] = old_head.  HL = &chain[i], BC = old_head, DE = i.
-        ld      (hl), c
-        inc     hl
-        ld      (hl), b                 ; chain[i] = old_head
-        pop     hl                      ; HL = &hashHead[h]  → [ret]
-        ; DE = i (unchanged since pop de above).
-        ld      (hl), e
-        inc     hl
-        ld      (hl), d                 ; hashHead[h] = i
+        ld      c, (hl)                 ; C = src[i+1] (don't-care at srclen-1)
+        ld      h, zxc_tab31lo >> 8     ; tables are page-aligned
+        ld      l, a                    ; HL = &tab31lo[src[i]]
+        ld      a, (hl)                 ; A = (src[i]*31) & &FF
+        xor     c                       ; A = hash low byte
+        inc     h                       ; HL = &tab31hi[src[i]]
+        ld      h, (hl)                 ; H = hash bit 8 (0 or 1)
+        ld      l, a                    ; HL = 9-bit hash
+        add     hl, hl                  ; HL = hash * 2
+zxc_h2_ws:
+        ld      bc, 0                   ; SMC: hashHead base, patched at entry
+        add     hl, bc                  ; HL = &hashHead[hash]
         ret
 
 
 ; ════════════════════════════════════════════════════════════════════
 ; Bit-writer routines.  Go: bitWriter methods (compress.go lines 206–240).
+;
+; All bit-writer state is resident in the shadow registers (see the
+; init block in zx0_compress): D'E' = out_ptr, H'L' = bit_byte_ptr,
+; C' = bit_mask, B' = backtrack.  Each routine banks in with EXX and
+; clobbers only A and flags in the primary bank, so callers (the
+; Elias-gamma loops in particular) keep their values across calls.
 ; ════════════════════════════════════════════════════════════════════
 
 ; ── zxc_bit0 — write bit 0 ───────────────────────────────────────────
-; Go: bitWriter.writeBit(0).  Clobbers: A, HL.
+; Go: bitWriter.writeBit(0).  Clobbers: A.
 zxc_bit0:
-        ld      a, (zxc_backtrack)
+        exx
+        ld      a, b
         or      a
-        jp      z, zxc_b0_normal
-        xor     a
-        ld      (zxc_backtrack), a
-        ret                             ; bit=0: nothing to OR
-zxc_b0_normal:
-        ld      a, (zxc_bit_mask)
+        jp      nz, zxc_b0_bt
+        ld      a, c
         or      a
-        jp      nz, zxc_b0_shift
-        ; New bit-holder byte.
-        ld      hl, (zxc_out_ptr)
-        ld      (zxc_bit_byte_ptr), hl
+        jp      z, zxc_b0_new
+        srl     c                       ; advance mask; holder keeps 0 here
+        exx
+        ret
+zxc_b0_new:
+        ; Open a new bit-holder byte (Go: append 0, mask = 128 >> 1).
+        ld      h, d
+        ld      l, e                    ; bit_byte_ptr = out_ptr
         ld      (hl), 0
-        inc     hl
-        ld      (zxc_out_ptr), hl
-        ld      a, 128
-        ld      (zxc_bit_mask), a
-zxc_b0_shift:
-        ld      a, (zxc_bit_mask)
-        srl     a
-        ld      (zxc_bit_mask), a
+        inc     de
+        ld      c, 64
+        exx
+        ret
+zxc_b0_bt:
+        ld      b, 0                    ; consume backtrack; bit=0 writes nothing
+        exx
         ret
 
 
 ; ── zxc_bit1 — write bit 1 ───────────────────────────────────────────
-; Go: bitWriter.writeBit(1).  Clobbers: A, HL.
+; Go: bitWriter.writeBit(1).  Clobbers: A.
 zxc_bit1:
-        ld      a, (zxc_backtrack)
+        exx
+        ld      a, b
         or      a
-        jp      z, zxc_b1_normal
-        xor     a
-        ld      (zxc_backtrack), a
-        ld      hl, (zxc_out_ptr)
+        jp      nz, zxc_b1_bt
+        ld      a, c
+        or      a
+        jp      z, zxc_b1_new
+        or      (hl)                    ; set the mask bit in the holder
+        ld      (hl), a
+        srl     c
+        exx
+        ret
+zxc_b1_new:
+        ; Open a new bit-holder byte with bit 7 already set.
+        ld      h, d
+        ld      l, e
+        ld      (hl), 128
+        inc     de
+        ld      c, 64
+        exx
+        ret
+zxc_b1_bt:
+        ; Backtrack: OR 1 into the last written byte (out_ptr - 1).
+        ; The holder pointer in HL must survive (the open holder's mask
+        ; bits may still be pending), so the work happens in DE/HL
+        ; swapped and swapped back.
+        ld      b, 0
+        ex      de, hl                  ; HL = out_ptr, DE = bit_byte_ptr
         dec     hl
         ld      a, (hl)
         or      1
         ld      (hl), a
-        ret
-zxc_b1_normal:
-        ld      a, (zxc_bit_mask)
-        or      a
-        jp      nz, zxc_b1_have_mask
-        ld      hl, (zxc_out_ptr)
-        ld      (zxc_bit_byte_ptr), hl
-        ld      (hl), 0
         inc     hl
-        ld      (zxc_out_ptr), hl
-        ld      a, 128
-        ld      (zxc_bit_mask), a
-zxc_b1_have_mask:
-        ld      hl, (zxc_bit_byte_ptr)
-        ld      a, (zxc_bit_mask)
-        or      (hl)
-        ld      (hl), a
-        ld      a, (zxc_bit_mask)
-        srl     a
-        ld      (zxc_bit_mask), a
-        ret
-
-
-; ── zxc_write_byte — append byte A to output ─────────────────────────
-; Go: bitWriter.writeByte.  Clobbers: HL.
-zxc_write_byte:
-        ld      hl, (zxc_out_ptr)
-        ld      (hl), a
-        inc     hl
-        ld      (zxc_out_ptr), hl
+        ex      de, hl                  ; restore out_ptr / bit_byte_ptr
+        exx
         ret
 
 
 ; ── zxc_write_bbt — writeByteWithBacktrack(A) ────────────────────────
-; Go: bitWriter.writeByteWithBacktrack.  Clobbers: HL.
+; Go: bitWriter.writeByteWithBacktrack.  Clobbers: nothing (A kept).
 zxc_write_bbt:
-        call    zxc_write_byte
-        ld      a, 1
-        ld      (zxc_backtrack), a
+        exx
+        ld      (de), a                 ; append byte
+        inc     de
+        ld      b, 1                    ; next bit lands in this byte's LSB
+        exx
+        ret
+
+
+; ── zxc_bitpair — emit direction bit 0 then value bit A ──────────────
+; Go: the writeBit(0) + writeBit(v) pair inside writeEliasGamma /
+; writeEliasGammaInv.  One EXX round serves both bits, and the value
+; bit skips the backtrack test: after the direction bit, backtrack is
+; always clear (it was either already clear or consumed by that bit).
+; Entry: A = 0 emits (0,0); A != 0 emits (0,1).  Clobbers: A.
+zxc_bitpair:
+        exx
+        push    af                      ; park the value bit
+        ; ── direction bit 0 ──
+        ld      a, b
+        or      a
+        jp      nz, zxc_bp0_bt
+        ld      a, c
+        or      a
+        jp      z, zxc_bp0_new
+        srl     c
+        jp      zxc_bp_second
+zxc_bp0_new:
+        ld      h, d
+        ld      l, e                    ; open a new holder
+        ld      (hl), 0
+        inc     de
+        ld      c, 64
+        jp      zxc_bp_second
+zxc_bp0_bt:
+        ld      b, 0                    ; consume backtrack; 0 writes nothing
+zxc_bp_second:
+        ; ── value bit (backtrack known clear) ──
+        pop     af
+        or      a
+        jp      z, zxc_bp_v0
+        ld      a, c
+        or      a
+        jp      z, zxc_bp1_new
+        or      (hl)                    ; set the mask bit in the holder
+        ld      (hl), a
+        srl     c
+        exx
+        ret
+zxc_bp1_new:
+        ld      h, d
+        ld      l, e
+        ld      (hl), 128
+        inc     de
+        ld      c, 64
+        exx
+        ret
+zxc_bp_v0:
+        ld      a, c
+        or      a
+        jp      z, zxc_bp0n2
+        srl     c
+        exx
+        ret
+zxc_bp0n2:
+        ld      h, d
+        ld      l, e
+        ld      (hl), 0
+        inc     de
+        ld      c, 64
+        exx
         ret
 
 
@@ -841,27 +884,13 @@ zxc_eg_bits:
         ld      a, b
         or      c
         jp      z, zxc_eg_term
-        push    bc
-        push    de
-        call    zxc_bit0
-        pop     de
-        pop     bc
         ld      a, c
         and     e
         ld      h, a
         ld      a, b
         and     d
-        or      h
-        push    bc
-        push    de
-        jp      z, zxc_eg_bit0
-        call    zxc_bit1
-        jp      zxc_eg_bitdone          ; bit written; advance BC
-zxc_eg_bit0:
-        call    zxc_bit0
-zxc_eg_bitdone:
-        pop     de
-        pop     bc
+        or      h                       ; A = v & p (any nonzero = bit 1)
+        call    zxc_bitpair             ; emit (0, value bit); A-only clobber
         srl     b
         rr      c
         jp      zxc_eg_bits             ; check loop termination at top
@@ -909,11 +938,6 @@ zxc_egi_bits:
         ld      a, b
         or      c
         jp      z, zxc_egi_term
-        push    bc
-        push    de
-        call    zxc_bit0
-        pop     de
-        pop     bc
         ; Inverted bit: (v & BC)==0 → 1, else → 0.
         ld      a, c
         and     e
@@ -921,16 +945,9 @@ zxc_egi_bits:
         ld      a, b
         and     d
         or      h
-        push    bc
-        push    de
-        jp      z, zxc_egi_bit1
-        call    zxc_bit0
-        jp      zxc_egi_bitdone         ; bit written; advance BC
-zxc_egi_bit1:
-        call    zxc_bit1
-zxc_egi_bitdone:
-        pop     de
-        pop     bc
+        cp      1
+        sbc     a, a                    ; A = (v&p)==0 ? &FF : 0 (inverted)
+        call    zxc_bitpair             ; emit (0, value bit); A-only clobber
         srl     b
         rr      c
         jp      zxc_egi_bits            ; check loop termination at top
@@ -945,17 +962,22 @@ zxc_ws_base:     defw    0       ; ws_base (IX on entry)
 zxc_src:         defw    0       ; src block pointer
 zxc_dst:         defw    0       ; dst buffer pointer
 zxc_src_len:     defw    0       ; src block length
-zxc_chain_base:  defw    0       ; ws_base + HASH_SIZE_BYTES
-zxc_state:       defw    0       ; (unused direct-access; chain_base is the sentinel)
-zxc_out_ptr:     defw    0       ; output write pointer
-zxc_bit_byte_ptr: defw   0       ; pointer to current bit-holder byte in output
-zxc_bit_mask:    defb    0       ; bit position mask (128..1; 0=need new byte)
-zxc_backtrack:   defb    0       ; backtrack flag (non-zero=true)
 zxc_pos:         defw    0       ; current input position (index)
 zxc_litstart:    defw    0       ; litStart (pending literal run start index)
 zxc_prevlit:     defb    0       ; prevWasLit flag
 zxc_lastoff:     defw    0       ; lastOffset (ZX0 state)
 zxc_best_len:    defw    0       ; best match length scratch
 zxc_best_off:    defw    0       ; best match offset scratch
-zxc_chain_ctr:   defb    0       ; chain-depth step counter
-zxc_ml_count:    defb    0       ; match-length counting scratch
+
+; ════════════════════════════════════════════════════════════════════
+; Hash lookup tables (assemble-time).  zxc_tab31lo[x] = (x*31) & &FF;
+; zxc_tab31hi[x] = ((x*31) >> 8) & 1 — the bit kept by the 9-bit
+; HASH_MASK.  Page-aligned and adjacent so zxc_hash2 switches tables
+; with INC H.
+; ════════════════════════════════════════════════════════════════════
+        align   256
+zxc_tab31lo:
+        for 256, defb ((FOR*31) & &FF)
+zxc_tab31hi:
+        for 256, defb (((FOR*31) >> 8) & 1)
+        assert  zxc_tab31hi == zxc_tab31lo + 256

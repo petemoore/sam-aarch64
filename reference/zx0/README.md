@@ -19,6 +19,8 @@
 | `src/Makefile` | Upstream build rules (not used here; we compile directly) |
 | `z80/dzx0_standard.asm` | Z80 "Standard" decoder, 68 bytes, ZX0 bitstream |
 | `z80/dzx0_turbo.asm` | Z80 "Turbo" decoder, 126 bytes, ~21% faster |
+| `z80/dzx0_mega.asm` | Z80 "Mega" decoder, 673 bytes, ~28% faster (vendored 2026-06-11 for i67, same commit) |
+| `z80/dzx0_fast.asm` | Speed-optimized decoder by spke, 187 bytes, ~turbo+5% (vendored 2026-06-11 for i67, same commit; carries its own zlib-style licence notice) |
 
 ## Building the compressor
 
@@ -27,7 +29,7 @@ gcc -O2 -o /tmp/zx0 src/compress.c src/memory.c src/optimize.c src/zx0.c
 ```
 
 The `tools/z80-test-harness-go/testdata/` directory contains pyz80 ports of the
-two Z80 decoders (syntax-only changes; upstream logic unchanged).
+four Z80 decoders (syntax-only changes; upstream logic unchanged).
 
 ## Usage
 
