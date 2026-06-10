@@ -28,10 +28,10 @@
 *Updated in place each session — this is the live handover. Keep it ≤15 lines; history lives in the milestone status docs, the registries, and `git log`.*
 
 - **Milestone:** **M8 active** (`docs/notes/m8-status.md`). M0–M7 ✅ complete. Branch protection requires the status checks defined in `.github/workflows/ci.yml`.
-- **Last landed:** i39b-2 editor-region split (PR #153) — compact `.tbn` v2 now has a separable editor region the assembler never reads; binary byte-identity invariant held (GNU == Go == Z80/SAM, 21 752 B).
-- **In flight:** nothing. Recent: i52 cleanup (#155-#160); i57 compression benchmark + i58 Trinity research landed (#161 + this PR) — results feed q9.
+- **Last landed:** i60 a/b1/b2 (#163/#164/#165) — ZX0 comment compression measured + built: decode 52 T/byte (turbo), greedy Z80 compressor byte-identical to the Go authority, ~1.75 s per 4 KB dirty block. i61 corpus sweep + i62 B-DOS research done (notes landed this PR).
+- **In flight:** i63 (superpowers extraction — CLAUDE.md draft with Pete). Recent: i52 cleanup (#155-#160), i57/i58 (#161/#162).
 - **Open questions:** q1 (i5 graphics — Pete), **q9 (comment-residency strategy — data ready, Pete's call)**. **Parked:** i50. **Blocked:** i51 (on i40/q9).
-- **NEXT ACTION:** **i60** (on-SAM ZX0 comment compression: measure → design → build; Pete 2026-06-10). Then i40 (editor-region eviction; unblocks i51) — i60's block architecture feeds it. i39c stays parked (fold into the next overlay-decoder touch). Then the M7 tail: i7 codegen tables, i17 deep reviews (i18 naming closed by i52 PR 5).
+- **NEXT ACTION:** **i60c** (design note: dirty-block watermark math, block-size sweet spot, off-axis page placement) → **i62** (B-DOS/Atom-Lite SimCoupé experiment — the storage-backend proof). Then i40 (eviction; unblocks i51). i39c parked (fold into the next overlay-decoder touch); M7 tail: i7, i17.
 - Every strand keeps the **assembled-binary byte-identical** invariant (the `release-gate` 3-way byte-match); the i39 invariant is binary-identity + round-trip + `.tbn`-shrinks-or-holds, NOT `.tbn` byte-identity.
 <!-- HANDOVER-PROTOCOL-END -->
 

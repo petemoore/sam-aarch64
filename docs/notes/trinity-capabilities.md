@@ -1,6 +1,6 @@
 # Trinity Hardware Capabilities
 
-**Purpose:** Establish what the Quazar Trinity interface actually provides in terms of storage and I/O, to ground two sam-aarch64 design questions: (a) can the Trinity serve as spill storage for large comment data that doesn't fit in SAM RAM, and (b) what can Phase-3 TFTP work rely on? (Research: i58, 2026-06-10.)
+**Purpose:** Establish what the Quazar Trinity interface actually provides in terms of storage and I/O, to ground two sam-aarch64 design questions: (a) can the Trinity serve as spill storage for large comment data that doesn't fit in SAM RAM, and (b) what can Phase-3 TFTP work rely on? (Research: i58, 2026-06-10; updated with i61 corpus findings same day. Companion: `bdos-version-landscape.md`.)
 
 ---
 
@@ -51,7 +51,7 @@ All four Trinity ports are in the range `&DC`–`&DF`:
 
 Bit 3 read back from `&DC` = **busy flag**: `wait_ready` polls `IN A,(&DC); AND %00001000; JR NZ,wait_ready`. [Source: `encdrv.asm` lines 391–394, `github.com/simonowen/encdrv`.]
 
-The SD card (`&DF`) enable/disable values are **not in any public source** — they would require Colin Piggot's Quazar programming manual (paper copy; Pete has it, not yet scanned). **UNKNOWN: exact port-`&DC` select byte for the SD card.**
+The SD card (`&DF`) select values are **not in any public source**, but have been **recovered empirically from period Trinity utility software (private archive)**: `&30` = SD deselect, `&31` = SD select, `&38` = SD initialise (microcontroller command; returns 1 for MMC, 2 for SD), `&3F` = SD select with auto-null. The Quazar programming manual (private reference materials) remains the authoritative confirmation source.
 
 ---
 
@@ -61,7 +61,7 @@ SPI is **full duplex**: every `OUT (port), byte` is simultaneously paired with a
 
 For **MAC registers** in the ENC28J60, there is an additional hardware latency requiring a **double read** (two dummy writes). [Source: `encdrv.asm` `rd_m_reg` function, lines 292–302.]
 
-The **auto-null feature** (firmware `&2F` / `enullon`) has the microcontroller automatically issue the dummy null write, removing it from the Z80 side of the bulk read loop. This is used in `rd_buf_mem` for bulk Ethernet frame reads (`encdrv.asm` lines 352, 368). **UNKNOWN: whether auto-null mode extends to port `&DF` (SD card) or is Ethernet-only.**
+The **auto-null feature** (firmware `&2F` / `enullon`) has the microcontroller automatically issue the dummy null write, removing it from the Z80 side of the bulk read loop. This is used in `rd_buf_mem` for bulk Ethernet frame reads (`encdrv.asm` lines 352, 368). **Auto-null for the SD port is available**: the `&3F` select value (parallel to Ethernet's `&2F`) is used in period software's bulk SD read path (private archive). 
 
 ---
 
@@ -75,7 +75,7 @@ This is important for comment-spill use: **there is no FAT layer** accessible to
 
 **Existing Z80 driver code:**
 
-- **SD read**: Colin Piggot published raw-sector read routines in **SAM Revival issue 21** (print), including CMD0/CMD8/CMD55/ACMD41/CMD16/CMD17 sequences for SD initialisation and single-block read. Source code was included on the accompanying disk. [Source: https://www.worldofsam.org/products/sam-revival-issue-21.] **This source is not in any public GitHub repository** — recovery from Pete's SAM Revival 21 copy would unlock it.
+- **SD read**: Colin Piggot published raw-sector read routines in **SAM Revival issue 21** (print), including CMD0/CMD8/CMD55/ACMD41/CMD16/CMD17 sequences for SD initialisation and single-block read. Source code was included on the accompanying disk. [Source: https://www.worldofsam.org/products/sam-revival-issue-21.] **This source is not in any public repository** — per samcoupe.com/samrevival.htm the SR21 cover disk carries both the article source AND the B-DOS 1.5t source+executable; available in private reference materials.
 - **SD write**: The same SAM Revival 21 article covers write (CMD24). B-DOS 1.5t itself performs writes. **Write support exists conceptually, but no public Z80 source is available.**
 - **EEPROM read/write**: Fully public in `eeprom.asm` (`github.com/simonowen/trinload`). Colin Piggot is the author. Both read and write functions are present and well-commented.
 
@@ -158,8 +158,8 @@ The idea: use the Trinity SD card as overflow storage for comment data that does
 | Ethernet driver ready for TFTP reuse | **VERIFIED** (`trinload`/`encdrv.asm`) |
 | Throughput ~70–110 KB/s bulk (Ethernet path) | **LIKELY** (derived from T-state analysis) |
 | Throughput ~20–80 KB/s SD sectors | **LIKELY** (estimated; no SD benchmark found) |
-| Auto-null mode works for SD port `&DF` | **UNKNOWN** (only confirmed for `&DE`) |
-| Port `&DC` select byte value for SD | **UNKNOWN** (not in public source; in Quazar programming manual) |
+| Auto-null mode works for SD port `&DF` | **LIKELY** (`&3F` select-with-auto-null observed in period software's bulk SD path — private archive) |
+| Port `&DC` select byte value for SD | **VERIFIED** (`&30`/`&31`/`&38`/`&3F` — recovered from period Trinity utility software, private archive) |
 | Trinity PHY supports Auto-MDIX | **UNKNOWN** (ENC28J60 does not natively; board-level unclear) |
 | No RTC or extra RAM on board | **LIKELY** (not mentioned anywhere; name = "Trinity" = 3 things) |
 
@@ -167,12 +167,12 @@ The idea: use the Trinity SD card as overflow storage for comment data that does
 
 ## 9. Open Questions (Require Hardware or Documentation)
 
-1. **Port `&DC` SD-select byte value**: what value enables port `&DF` for the SD card? Required before writing any SD driver. Source: Quazar programming manual (Pete has paper copy).
-2. **Auto-null for `&DF`**: does the microcontroller firmware support auto-nulling for the SD SPI port, as it does for Ethernet? Affects throughput significantly.
+1. ~~Port `&DC` SD-select byte value~~ — **RESOLVED** (`&31` select / `&30` deselect / `&38` init / `&3F` auto-null; recovered from period Trinity utility software, private archive).
+2. ~~Auto-null for `&DF`~~ — **RESOLVED (LIKELY)**: `&3F` is the SD select-with-auto-null value (same evidence).
 3. **SD initialisation sequence timing**: real cards can hold `CMD17` response for 1–10 ms. Does the Trinity's microcontroller buffer this, or does the Z80 poll a status register?
 4. **Auto-MDIX**: does the Trinity's ENC28J60 circuit include MDI/MDI-X switching, or does Phase-3 need a crossover cable?
 5. **EEPROM address space above 64 K**: the 128 K EEPROM needs a 17-bit address, but the `eeprom.asm` driver only emits a 2-byte address after the opcode. Is the upper half reached via a bank-select mechanism in the microcontroller, or inaccessible? Affects how much EEPROM is truly usable.
-6. **SD write source recovery**: is Colin Piggot's SAM Revival 21 source code recoverable from Pete's copy? That would unlock SD read+write without reimplementation.
+6. **SD write source recovery**: the SAM Revival 21 cover disk carries the SD driver article source AND the B-DOS 1.5t source+executable (samcoupe.com/samrevival.htm); available in private reference materials. NOTE: the B-DOS hook route (see `bdos-version-landscape.md`) may make a raw SPI driver unnecessary.
 
 ---
 

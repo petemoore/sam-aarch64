@@ -22,6 +22,7 @@ Three kinds of file live here:
   unconsumed research feeding future decisions
   ([`comment-compression-research.md`](comment-compression-research.md),
   [`trinity-capabilities.md`](trinity-capabilities.md),
+  [`bdos-version-landscape.md`](bdos-version-landscape.md),
   [`sam-music-playback-research.md`](sam-music-playback-research.md),
   [`a64-isa-footprint-research.md`](a64-isa-footprint-research.md),
   [`simcoupe-paste-control-plane.md`](simcoupe-paste-control-plane.md)).
