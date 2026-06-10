@@ -107,6 +107,7 @@ If you find files in `docs/superpowers/`, they're a stray slip — migrate them 
 - Name new artifacts (dirs, scripts, make targets, CI jobs) after their **function**, never after the milestone that introduced them.
 - Superseded code/tooling is deleted in the PR that supersedes it; if a deletion needs Pete's sign-off, raise a `qN` immediately rather than parking the artifact indefinitely.
 - Every top-level directory and every Go module carries a ≤30-line README (*what is this, how does it relate, where is the canonical deep doc* — link, never restate). A PR that creates a new directory ships its README in the same PR.
+- **READMEs are about the software, not the project.** No milestone numbers, phase plans, status reports, or history narration in any README — that lives in `docs/ROADMAP.md`, the registries, and git history. The root README is the product pitch: what it is, what it does today, how to try it, what's planned — clean, lean, factual, compelling. (Pete, 2026-06-10.)
 
 ## Pointers for first-session-on-this-repo
 

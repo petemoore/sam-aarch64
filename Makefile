@@ -198,7 +198,7 @@ test-mem-offaxis: $(BUILD)/test_mem.bin
 # Off-axis "operands + misc encoder" cluster build (BUILD_TESTS only).
 #
 # test_offaxis_cluster.asm is a thin wrapper that does `org &0000` then
-# includes the pc_rel / directives_m5 / ror_imm / shifted_reg /
+# includes the pc_rel / directives / ror_imm / shifted_reg /
 # extended_reg / litpool self-test suites behind a small dispatcher.
 # Imports section-C/D production symbols (encode_*, litpool_*, symbol_*,
 # compute_directive_size, assert_eq32_de_hl_imm, fail, ...) from the
@@ -208,7 +208,7 @@ test-mem-offaxis: $(BUILD)/test_mem.bin
 # See src/test_offaxis_cluster.asm.
 $(BUILD)/test_cluster.bin: src/test_offaxis_cluster.asm \
 		src/test_slots.asm src/test_pc_rel.asm \
-		src/test_directives_m5.asm src/test_ror_imm.asm \
+		src/test_directives.asm src/test_ror_imm.asm \
 		src/test_shifted_reg.asm src/test_extended_reg.asm \
 		src/test_litpool.asm \
 		$(BUILD)/assembler.sym

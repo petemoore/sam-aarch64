@@ -1,4 +1,4 @@
-; test_directives_m5.asm — boot-time self-tests for M5 PR-A directives.
+; test_directives.asm — boot-time self-tests for directives.
 ;
 ; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-m5-compound-operands-directives-design.md §3.
 ;
@@ -31,12 +31,12 @@ DIR_TEST_PC_SCRATCH:    equ     &CF80          ; 32-byte synthetic payload buf
 
 
 ; -----------------------------------------------------------------------
-; run_directives_m5_self_tests — entry from assembler.asm start:.
+; run_directives_self_tests — entry from assembler.asm start:.
 ;
 ; Input:  none.  Output: returns on success; jp fail on any mismatch.
 ; Clobbers: A, BC, DE, HL.
 ; -----------------------------------------------------------------------
-run_directives_m5_self_tests:
+run_directives_self_tests:
 
 ; -- (1) compute_directive_size for .inst → 4 --------------------------
                 ld      a, DIR_INST
@@ -52,7 +52,7 @@ run_directives_m5_self_tests:
                 jp      nz, fail
 
 ; -- (2) compute_directive_size for .balign at PC=0 with N=8 → 0 -------
-                call    test_dir_m5_setup_skip_8
+                call    test_dir_setup_skip_8
                 ld      a, DIR_BALIGN
                 ld      (main_dir_id), a
                 call    pass_pc_reset
@@ -77,7 +77,7 @@ run_directives_m5_self_tests:
                 call    pass_pc_reset
 
 ; -- (4) compute_directive_size for .align at PC=0 with N=3 (1<<3=8) → 0
-                call    test_dir_m5_setup_skip_3
+                call    test_dir_setup_skip_3
                 ld      a, DIR_ALIGN
                 ld      (main_dir_id), a
                 call    pass_pc_reset
@@ -102,7 +102,7 @@ run_directives_m5_self_tests:
                 call    pass_pc_reset
 
 ; -- (6) compute_directive_size for .skip 16 → 16 ----------------------
-                call    test_dir_m5_setup_skip_16
+                call    test_dir_setup_skip_16
                 ld      a, DIR_SKIP
                 ld      (main_dir_id), a
                 call    pass_pc_reset
@@ -237,16 +237,16 @@ run_directives_m5_self_tests:
 ;
 ; Layout written:  [0x05][len=2][0][PUSH_IMM8 = 0x01][value]
 ; -----------------------------------------------------------------------
-test_dir_m5_setup_skip_8:
+test_dir_setup_skip_8:
                 ld      a, 8
-                jp      test_dir_m5_setup_skip_n
-test_dir_m5_setup_skip_3:
+                jp      test_dir_setup_skip_n
+test_dir_setup_skip_3:
                 ld      a, 3
-                jp      test_dir_m5_setup_skip_n
-test_dir_m5_setup_skip_16:
+                jp      test_dir_setup_skip_n
+test_dir_setup_skip_16:
                 ld      a, 16
                 ; fall through
-test_dir_m5_setup_skip_n:
+test_dir_setup_skip_n:
                 ld      hl, DIR_TEST_PC_SCRATCH
                 ld      (main_dir_payload_after_header), hl
                 ld      (hl), &05                   ; IMM_EXPR kind

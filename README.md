@@ -1,45 +1,48 @@
 # sam-aarch64
 
-An aarch64 (ARMv8-A 64-bit) assembler that runs on a SAM Coupé.
+An ARMv8-A (aarch64) assembler that runs on a SAM Coupé — a 6 MHz,
+8-bit Z80 home computer from 1989 — and produces binaries
+byte-identical to GNU binutils.
 
-A self-hosting development environment for writing aarch64 assembly code on
-a SAM Coupé. The eventual product is a single Z80 program that runs on the
-SAM and combines:
+The end goal is a self-hosted development loop that never leaves the
+SAM: write aarch64 source in an editor on the SAM, assemble it on the
+SAM, and serve the binary over ethernet so a Raspberry Pi netboots it
+as its kernel. A 1989 machine building and shipping code for a CPU
+three decades its junior.
 
-1. A visual editor for aarch64 source code
-2. An aarch64 assembler producing flat binaries
-3. A TFTP server that serves the assembled binary directly to a Raspberry Pi
-   over a Quazar Trinity ethernet interface
+## What it does today
 
-The Pi netboots the kernel built on the SAM. The development loop closes
-without ever leaving the SAM Coupé.
+- **Assembles real aarch64 on the SAM.** The complete spectrum4
+  bare-metal kernel (21 752 bytes of ARMv8-A) assembles on the SAM —
+  under SimCoupé and on real hardware — byte-identical to GNU
+  `as + ld + objcopy`. The 256 KB of banked RAM does the heavy
+  lifting: paged source-in, paged output, and encoder tables swapped
+  through a 32 KB visible window.
+- **Disassembles too.** A full aarch64 disassembler runs on the SAM,
+  decoding word-for-word identically to `objdump` (its alias choices
+  included) across the entire kernel.
+- **Compact source format.** Source travels as `.tbn`, an
+  instruction-overlay format that fits the whole kernel — comments
+  and all — in well under the machine's paged memory budget, with an
+  editor-facing region the assembler never has to load.
+- **A twin toolchain on the host.** The same assembler and
+  disassembler exist in Go (`tools/`). The Go side is the reference
+  implementation and test oracle; the Z80 side is its faithful port.
 
-## Status
+## How we know it's correct
 
-M0–M7 are complete; **M8 is the active milestone** (see
-`docs/notes/m8-status.md`). The SAM-side Z80 assembler, running in
-SimCoupé, byte-matches GNU `as + ld -Ttext=0 + objcopy -O binary`
-end-to-end for the M3–M6 fixture corpora, and assembles the **full
-spectrum4 `release.bin` (21 752 bytes) byte-identical to GNU** on
-real SAM paging. A full aarch64 **disassembler** runs on the SAM
-(oracle-verified word-for-word against the Go authority), and the
-source format is the compact **`.tbn` v2** instruction-overlay
-(44 KB for the full release, with a separable editor region — the
-foundation for the Phase 2 on-SAM editor). The `release-gate` CI job
-stands guard as a hermetic 3-way byte-match (GNU == our Go toolchain
-== our Z80/SAM toolchain). See `docs/ROADMAP.md` for the milestone
-index and `docs/specs/` for design documents.
+Every fixture in `tests/` is assembled by our toolchains and
+byte-compared against GNU binutils — if GNU and this assembler
+disagree on a single byte, this assembler is wrong. The headline gate
+assembles the full kernel three ways — GNU binutils, the Go
+toolchain, and the Z80 toolchain running in SimCoupé — and requires
+all three outputs byte-identical. CI runs the whole matrix, including
+the emulated SAM, on every push.
 
-The round-trip gates pass under every environment we exercise:
-GitHub Actions on `ubuntu-latest` (inside the dev image published to
-`ghcr.io/petemoore/sam-aarch64-dev` on every push), the dev image
-locally under Docker on both `linux/amd64` and `linux/arm64`, and
-natively on macOS against a locally-built patched SimCoupé.
+## Try it
 
-## Local development
-
-The same image CI uses is published publicly. Pull it and run the
-round-trip sweep inside:
+The CI image is public and has everything pre-installed (SimCoupé,
+pyz80, samfile, aarch64 binutils):
 
 ```bash
 docker pull ghcr.io/petemoore/sam-aarch64-dev:latest
@@ -49,70 +52,60 @@ docker run -d --name sam-aarch64-ci \
 docker exec sam-aarch64-ci bash -lc 'cd /work && make ci-core ci-symbols ci-operands ci-paged && tools/run-release-gate.sh'
 ```
 
-The image is multi-arch (`linux/amd64` + `linux/arm64`); Docker picks
-the variant matching your host. SimCoupé, pyz80, samfile, the
-aarch64 cross binutils, and the SimCoupé ROM resources are all
-pre-installed in it — the round-trip targets work against it with no
-further setup.
+That runs the SimCoupé round-trip suites and the three-way kernel
+byte-match. The image is multi-arch (`linux/amd64` + `linux/arm64`).
+For native macOS setup see `docs/notes/headless-simcoupe.md`.
 
-For native macOS (no Docker), see the "Native macOS" section of
-`docs/notes/headless-simcoupe.md`; setup is a one-time brew + CMake
-step.
+## Planned
+
+- **A visual editor on the SAM** — not just a text editor but a
+  guide: per-instruction explanation panels, a register simulator you
+  can seed and step, system-register documentation under a function
+  key, and period-correct flourishes (the SAA1099 deserves chiptunes).
+  Keyboard-driven throughout, as 1989 intended.
+- **TFTP over ethernet** — a Quazar Trinity interface in the SAM
+  serves the assembled kernel directly to a netbooting Raspberry Pi,
+  closing the loop without a disk ever leaving the room.
+- **Further out** — a terminal over TCP, so the SAM earns its place
+  as a daily-driver development machine.
 
 ## Repository layout
 
 ```
 docs/
-├── specs/        Design documents (vision + per-phase specs)
-├── plans/        Per-milestone implementation plans
-├── notes/        Technical references (paging, disk format) + the iN/qN registries
-├── comet/        COMET assembler reference: PDF manual, decoded source
-├── sam/          SAM Coupé hardware refs: tech manual, user guide, ROM disasm
-└── saa1099/      SAA-1099 sound chip datasheet (for future chiptune work)
+├── ARCHITECTURE.md  System overview — the first read
+├── specs/           Living design documents
+├── plans/           In-flight implementation plans (usually empty)
+├── notes/           Technical references + work tracking
+├── comet/           COMET assembler reference: PDF manual
+├── sam/             SAM Coupé hardware refs: tech manual, user guide, ROM disasm
+└── saa1099/         SAA-1099 sound chip datasheet
 
 reference/
 ├── arm-mra/         ARM Machine Readable Architecture XML (encoder-table source)
-├── comet-disk/      Original COMET 1.44" disk, files extracted as-is
-├── samdos/          SAMDOS 2 binary (disk building)
-└── comet-decoded/   Same files run through Simon Owen's comet2txt to give
-                    plain-text Z80 source — for study and selective porting
+├── comet-disk/      Original COMET disk, files extracted as-is
+├── comet-decoded/   The same files as plain-text Z80 source
+└── samdos/          SAMDOS 2 binary (disk building)
 
-src/             Z80 assembler source for the new tool (Phase 1: assembler)
-tools/           Host helpers: Go toolchain, build-gate scripts, dev tools,
-                 and the SimCoupé dev-container recipe
-tests/           Test fixtures and round-trip scripts
+src/             The SAM-side Z80 assembler + disassembler
+tools/           Host toolchain (Go), build scripts, dev-container recipe
+tests/           Fixture corpora and round-trip drivers
 build/           Build outputs (gitignored)
 ```
 
-## Validation strategy
+`docs/ARCHITECTURE.md` explains how the pieces fit; `docs/ROADMAP.md`
+tracks development state.
 
-Every aarch64 instruction we emit is round-tripped through
-`aarch64-none-elf-as`. If GNU `as` and our assembler disagree on the bytes
-for the same input, our assembler is wrong.
+## Built with
 
-## External tools and references
-
-- `~/git/comet2txt` — Simon Owen's COMET source detokeniser (used to
-  populate `reference/comet-decoded/`).
-- `~/git/trinload` — Simon Owen's SAM netboot loader. Source for the
-  ENC28J60 ethernet driver and IP/UDP stack.
-- `~/git/samfile` — Pete's tool for adding/extracting files in `.mgt` SAM
-  disk images. Used by the test harness to round-trip source files into
-  SimCoupé.
-- pyz80 (https://github.com/simonowen/pyz80) — Mac-side Z80 assembler
-  used to build this tool.
-- SimCoupé (https://simonowen.com/simcoupe/) — SAM Coupé emulator used
-  for automated test runs before deploying to real hardware.
-- COMET manual: `docs/comet/comet_v1-3_manual.pdf`
-
-## Phase plan
-
-- **Phase 1** — Standalone assembler. Source from disk, binary to disk.
-  Validates encoding against `aarch64-none-elf-as`.
-- **Phase 2** — Visual editor on the SAM. Replaces "load source from
-  external disk" with on-SAM editing.
-- **Phase 3** — TFTP server. Replaces "transfer binary out manually" with
-  "Pi pulls directly from the SAM over the LAN". May also serve Pi
-  firmware files from SD card on the Trinity.
-- **Future** — Terminal app over TCP, so the SAM can be a daily-driver
-  workstation for SSH-tunnel-from-Mac sessions.
+- [SimCoupé](https://simonowen.com/simcoupe/) — SAM Coupé emulator;
+  runs the entire test matrix.
+- [pyz80](https://github.com/simonowen/pyz80) — Z80 cross-assembler
+  that builds the SAM-side program.
+- samfile — Pete's tool for reading/writing `.mgt` SAM disk images.
+- comet2txt — Simon Owen's COMET source detokeniser; produced
+  `reference/comet-decoded/`.
+- [trinload](https://github.com/simonowen/trinload) — Simon Owen's
+  SAM netboot loader; the reference for the planned TFTP work.
+- spectrum4 — Pete's bare-metal aarch64 kernel; the real-world corpus
+  this assembler is proven against.

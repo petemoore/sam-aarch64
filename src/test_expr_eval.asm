@@ -1,5 +1,5 @@
-; test_expr_eval_m4.asm — boot-time self-tests for the M4 additions to
-; the expression-bytecode evaluator (expr_eval.asm).
+; test_expr_eval.asm — boot-time self-tests for the expression-bytecode
+; evaluator (expr_eval.asm).
 ;
 ; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-24-m4-symbols-multipass.md Task 5.
 ;
@@ -33,7 +33,7 @@
 
 
 ; -----------------------------------------------------------------------
-; run_expr_eval_m4_self_tests — entry point called from assembler.asm
+; run_expr_eval_self_tests — entry point called from assembler.asm
 ; start: (between run_local_label_self_tests and load_enctab).
 ;
 ; Input:  none.
@@ -52,7 +52,7 @@
 ; local-label tables ARE re-initialised at the top because the prior
 ; suites (test_symbols, test_local_labels) populated them.
 ; -----------------------------------------------------------------------
-run_expr_eval_m4_self_tests:
+run_expr_eval_self_tests:
 
 ; -- (1) PUSH_PC --------------------------------------------------------
 ; PASS_PC = 0x12345678; bytecode = [0x07]; expect 78 56 34 12 00 00 00 00.
