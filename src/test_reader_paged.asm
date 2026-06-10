@@ -1,8 +1,8 @@
 ; test_reader_paged.asm — boot-time self-tests for the paged IN reader.
 ;
-; Per docs/plans/2026-05-27-m6-paged-in.md Task 6.  Verifies the runtime
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-27-m6-paged-in.md Task 6.  Verifies the runtime
 ; reader path described in
-; docs/specs/2026-05-27-m6-paged-in-design.md.
+; docs/specs/paged-in-design.md.
 ;
 ; Preconditions: load_enctab has completed (so LMPR_DEFAULT_RUNTIME is
 ; live).  Self-tests run BEFORE main_assemble — so IN_BUF (now pages

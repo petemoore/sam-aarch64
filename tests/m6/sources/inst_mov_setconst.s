@@ -24,7 +24,7 @@
         // authoritative oracle is refenc with -flatten -origin
         // 0xfffffff000000000 vs the SAM OUT, plus the full release
         // byte-match.  See
-        // docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md.
+        // https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md.
         .set RAM_DISK_SIZE, 0x10000000
         .set HEAP_SIZE,     0x10000000
         mov     x9, RAM_DISK_SIZE

@@ -362,7 +362,7 @@ run_slot_self_tests:
 ; -----------------------------------------------------------------------
 ; Static slot-record literals for the self-tests.
 ;
-; Layout (per docs/specs/2026-05-24-m2-encoder-tables-design.md §2):
+; Layout (per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m2-encoder-tables-design.md §2):
 ;   defb slot_kind, expected_kind, bit_position, bit_width
 ;
 ; slot_kind values (per tools/aarch64enc/types.go lines 16-22, 24-25,

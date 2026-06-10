@@ -452,7 +452,7 @@ func directiveSizeAtPC(rec format.Record, pc int64, res *Pass1Result, f *format.
 	case ".section":
 		// .section is parsed for syntactic completeness but the current
 		// refenc layout emits everything into a single flat stream. See
-		// docs/notes/m2-status.md for the multi-section layout gap.
+		// https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m2-status.md for the multi-section layout gap.
 		return 0, nil
 	case ".arch", ".cpu":
 		// .arch / .cpu are architecture/CPU selection directives. The

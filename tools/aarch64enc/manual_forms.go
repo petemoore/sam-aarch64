@@ -32,7 +32,7 @@ package aarch64enc
 // is required — `make enctab-regen-source` only touches data.go.
 //
 // Cited section/page references for each block are inline.  See
-// docs/notes/m2-status.md for the higher-level history of why this
+// https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m2-status.md for the higher-level history of why this
 // table is hand-curated rather than fully MRA-derived.
 
 var manualForms = []Form{

@@ -1,8 +1,8 @@
 ; test_emit_paged.asm — boot-time self-tests for paged emit.
 ;
-; Per docs/plans/2026-05-27-m6-paged-out.md Task 5.  Verifies the
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-27-m6-paged-out.md Task 5.  Verifies the
 ; runtime emit path described in
-; docs/specs/2026-05-27-m6-paged-out-design.md.
+; docs/specs/paged-out-design.md.
 ;
 ; Preconditions: load_enctab has completed so LMPR_DEFAULT_RUNTIME is
 ; live and LMPR is currently = LMPR_DEFAULT_RUNTIME (post-map_out).

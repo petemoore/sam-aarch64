@@ -1,8 +1,8 @@
 ; test_local_labels.asm — boot-time self-tests for the M4 local-label
 ; table.
 ;
-; Per docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.3 and the
-; M4 plan (docs/plans/2026-05-24-m4-symbols-multipass.md Task 3).
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.3 and the
+; M4 plan (https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-24-m4-symbols-multipass.md Task 3).
 ;
 ; Mirrors test_symbols.asm's structure: runs from start: BEFORE
 ; load_enctab, with assertion failures going `jp fail` (red border +

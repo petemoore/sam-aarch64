@@ -1,7 +1,7 @@
 ; test_sysreg_paged.asm — boot-time self-test for the page-13 sysreg
 ; lookup matcher reached via paged_call.  BUILD_TESTS only.
 ;
-; Per docs/plans/2026-05-29-m6-closure-release-bytematch.md PR-2, as
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-29-m6-closure-release-bytematch.md PR-2, as
 ; corrected by the PR-2 implementation spec.
 ;
 ; Preconditions (set up in assembler.asm before the call):

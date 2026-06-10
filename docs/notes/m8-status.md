@@ -21,7 +21,7 @@ editor era — a clean milestone boundary, marked by the version bump.
 
 ## The agreed design (Format B)
 
-Full design + reasoning: `docs/specs/2026-06-08-compact-tbn-nextgen-design.md`
+Full design + reasoning: `docs/specs/compact-tbn-nextgen-design.md`
 (§3.2 overlay, §3.4 header label table, §5 phased path, **§7 Pete's
 decisions**). Headline: store every instruction as its assembled 4-byte
 word with relocated bitfields **zeroed** + a sparse overlay
@@ -54,11 +54,11 @@ Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
 
 | Strand | Status | Source |
 |---|---|---|
-| **i39a** — Phase 1: instruction overlay (unify literal/symbolic INST into one run) + header label/offset table; v2 format flip | ✅ **MERGED to `main`** — PR #131, merge commit `e68e0bf` (all 14 CI checks green incl. the SimCoupé matrix; §3 review = MERGE). PR(a)+(b)+i48b+(c)+(d) + i48d. i48a split to its own follow-up PR (see below). | `docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md`; PR #131 (merged) |
-| **i39b** — Phase 2: name-table front-coding + comment/`.global`/base-hint editor sidecars (evictable region) | ✅ **DONE — i39b-1 (merged PR #151, `add0356`) + i39b-2 (merged PR #153, `fbbd729`).** Split per the plan into **i39b-1** front-coding (✅ DONE; all CI incl. SimCoupé green) + **i39b-2** editor-region split (✅ DONE; PR #153 merged `fbbd729`). The invariant is "assembled binary identical + round-trip holds + `.tbn` shrinks-or-holds" (NOT `.tbn` byte-identity). i39b-1 took the compact `.tbn` **45,189 → 44,207 B** (−982 B). i39b-2 splits the file into an **assembler-facing region** (header position tables + record stream) and a trailing **editor region** (front-coded name table + `.global` flags + comment sidecar) bounded by a new `editor_region_offset` u32 section index at file offset 8 — see the i39b-2 prose block below. | `docs/plans/2026-06-09-i39b-nametable-frontcoding-sidecars.md`; design §3.5/§3.6/§3.7, §4 Format B, §5 |
+| **i39a** — Phase 1: instruction overlay (unify literal/symbolic INST into one run) + header label/offset table; v2 format flip | ✅ **MERGED to `main`** — PR #131, merge commit `e68e0bf` (all 14 CI checks green incl. the SimCoupé matrix; §3 review = MERGE). PR(a)+(b)+i48b+(c)+(d) + i48d. i48a split to its own follow-up PR (see below). | `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md`; PR #131 (merged) |
+| **i39b** — Phase 2: name-table front-coding + comment/`.global`/base-hint editor sidecars (evictable region) | ✅ **DONE — i39b-1 (merged PR #151, `add0356`) + i39b-2 (merged PR #153, `fbbd729`).** Split per the plan into **i39b-1** front-coding (✅ DONE; all CI incl. SimCoupé green) + **i39b-2** editor-region split (✅ DONE; PR #153 merged `fbbd729`). The invariant is "assembled binary identical + round-trip holds + `.tbn` shrinks-or-holds" (NOT `.tbn` byte-identity). i39b-1 took the compact `.tbn` **45,189 → 44,207 B** (−982 B). i39b-2 splits the file into an **assembler-facing region** (header position tables + record stream) and a trailing **editor region** (front-coded name table + `.global` flags + comment sidecar) bounded by a new `editor_region_offset` u32 section index at file offset 8 — see the i39b-2 prose block below. | `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-06-09-i39b-nametable-frontcoding-sidecars.md`; design §3.5/§3.6/§3.7, §4 Format B, §5 |
 | **i39c** — Phase 3: bitfield-packing polish on the overlay slot bytes | 🧭 designed (low priority) | design §3.1 |
 | **i40** — assembler-side editor-region eviction — **conditional/last-resort**: keep the editor region resident when free RAM allows (no disk round-trip, preferred); only when RAM would be insufficient, persist the `.tbn` to disk, reuse the editor-region pages as OUT/scratch during the build, reload to restore the editor view. **i39b-2 ENABLES this (the separable region exists); i40 ENFORCES it (the eviction mechanism).** Full un-stripping of all 335 KB of release comments on the SAM-side m6 gate is **an i40 dependency** (load only the assembler-facing prefix) — or an IN-buffer expansion, which would defeat the resident goal. | 🧭 future (editor phase) | design §7 decision 1 |
-| **i48** — single serialized format + pass-free syntactic encoder (refines i39/i39a). **A:** overlay is the *only* serialized `.tbn`; symbolic kinds become in-memory IR (old format buried, in no head doc). **B:** text→overlay is syntactic (no symbol pass); value-bits computed in the fold; forego GNU's silent `ldr→ldur`/`add lsl#12` rewrite (→ syntactic/error); narrow `mov`→`movz`/`orr`/`movn` assemble-time fallback. Driver: the SAM must do text→overlay too (editor), so the host should mirror that flow. | ✅ **host side DONE** — **i48a** (#141/#142/#144) host front-end unification + in-memory IR + symbolic-serialization removal · **i48b** syntactic encoder + fold value-work · **i48d** overlay-only doc rewrite — all merged. **i48c** (Z80 text→overlay encoder) is future (editor phase). | `docs/specs/2026-06-08-i48-single-format-syntactic-encoder-design.md`; item registry i48 |
+| **i48** — single serialized format + pass-free syntactic encoder (refines i39/i39a). **A:** overlay is the *only* serialized `.tbn`; symbolic kinds become in-memory IR (old format buried, in no head doc). **B:** text→overlay is syntactic (no symbol pass); value-bits computed in the fold; forego GNU's silent `ldr→ldur`/`add lsl#12` rewrite (→ syntactic/error); narrow `mov`→`movz`/`orr`/`movn` assemble-time fallback. Driver: the SAM must do text→overlay too (editor), so the host should mirror that flow. | ✅ **host side DONE** — **i48a** (#141/#142/#144) host front-end unification + in-memory IR + symbolic-serialization removal · **i48b** syntactic encoder + fold value-work · **i48d** overlay-only doc rewrite — all merged. **i48c** (Z80 text→overlay encoder) is future (editor phase). | `docs/specs/i48-syntactic-encoder-design.md`; item registry i48 |
 
 **i48 ↔ i39a interaction.** i48b refines a fold-rule with a **format-byte effect**
 (`FoldMovzAuto` computes `hw` instead of reading it from a pre-baked base word), so its
@@ -204,7 +204,7 @@ banners on the M1/i1 design docs.
 
 **↪ i48a — host front-end unification, in 3 phased PRs (Pete, 2026-06-09).
 ✅ ALL THREE MERGED (2026-06-09 #5) — i48a is COMPLETE.** Plan:
-`docs/plans/2026-06-09-i48a-host-frontend-unification.md`.
+`https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-06-09-i48a-host-frontend-unification.md`.
 - **✅ PR1 (#141, merge commit `271b202`) — byte-neutral library extraction.** The
   three host tools became thin wrappers over one new module `tools/sam-aarch64`
   with three Go-authoritative shared libs: `frontend` (text→symbolic-IR + strip,
@@ -309,8 +309,8 @@ to forego (sweep at i48b). None blocking i39a/PR(c).
 
 ## Authoritative references
 
-- Design (Format B + decisions): `docs/specs/2026-06-08-compact-tbn-nextgen-design.md`.
-- v1 baseline encoding: `docs/specs/2026-06-08-tbn-binary-format-reference.md`.
-- Phase-1 plan: `docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md` (written; PR(a) executed — see "i39a Phase-1 progress" above).
+- Design (Format B + decisions): `docs/specs/compact-tbn-nextgen-design.md`.
+- v1 baseline encoding: `docs/specs/tbn-binary-format-reference.md`.
+- Phase-1 plan: `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md` (written; PR(a) executed — see "i39a Phase-1 progress" above).
 - Global item registry: `docs/notes/item-registry.md`.
-- Predecessor (i1 compaction this builds on): `docs/notes/item-registry.md` i1 row; `docs/notes/m7-status.md` i1 scope row.
+- Predecessor (i1 compaction this builds on): `docs/notes/item-registry.md` i1 row; `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m7-status.md` i1 scope row.

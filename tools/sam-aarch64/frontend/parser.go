@@ -214,7 +214,7 @@ func (p *parser) parseOrgRHS() error {
 // The current refenc / layout pipeline treats .section as a no-op (flat
 // single-section output). Honouring multiple sections requires linker-
 // script support and is intentionally out of scope here. See
-// docs/notes/m2-status.md for the layout gap this leaves.
+// https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m2-status.md for the layout gap this leaves.
 func (p *parser) parseDirectiveSection(id uint8) error {
 	var ow format.OperandWriter
 	count := byte(0)

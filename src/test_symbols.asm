@@ -1,6 +1,6 @@
 ; test_symbols.asm — boot-time self-tests for the M4 symbol table.
 ;
-; Per docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.2.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.2.
 ;
 ; These run BEFORE load_enctab (see assembler.asm start:) so they
 ; exercise the symbol-table routines against hard-coded ids/addresses

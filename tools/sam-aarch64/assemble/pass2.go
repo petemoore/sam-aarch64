@@ -1787,7 +1787,7 @@ func encodeDirective(rec format.Record, pc int64, p1 *Pass1Result, f *format.Fil
 		return nil, nil
 	case ".section":
 		// .section is a no-op in the current flat-layout pipeline. See
-		// docs/notes/m2-status.md for the multi-section gap this leaves.
+		// https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m2-status.md for the multi-section gap this leaves.
 		return nil, nil
 	case ".arch", ".cpu":
 		// .arch / .cpu architecture-selection directives are no-ops at

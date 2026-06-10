@@ -1,5 +1,5 @@
 ; M3 Z80 assembler — top-level.
-; Per docs/specs/2026-05-24-m3-z80-emitter-design.md §2.1.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §2.1.
 ;
 ; Boot via M0's BASIC autorun pattern:
 ;   CLEAR&7FFF: LOAD CODE "assembler" 32768: CALL 32768
@@ -13,11 +13,12 @@
 ;                  trampoline copy at TRAMPOLINE_DST (&7E00).  Under
 ;                  LMPR_ENCTAB section B = page 5 = OUT-low (used as
 ;                  the OUT emit window — see emit_byte).
-;   &8000-&AFFF  assembler code (12 KB; this file + all M3/M4/M5/M6 includes)
-;   &B000-&BFFF  reserved (4 KB freed by M6 — was IN_BUF + OUT_BUF
-;                  pre-M6.  Both are now paged out of section C;
-;                  available for future use.  M6 PR 1 freed &B800-&BFFF
-;                  (OUT); M6 PR 2 freed &B000-&B7FF (IN).
+;   &8000-&BFFF  section C — assembler code (this file + all includes).
+;                  The IN/OUT/ENCTAB buffers live off-axis (below), so
+;                  the whole 16 KB section is code budget.
+;                  scripts/check-code-budget.sh (run at the tail of
+;                  make m3-asm / m3-asm-prod) enforces code_end < &C000
+;                  — the stack page starts there.
 ;   &C000-&C0FF  stack (SP = &C100, grows down into section D RAM)
 ;   &C100-&D4FF  scratch (OPVAL arrays, SYMTAB, litpool TABLE+counters) —
 ;                  section D RAM.  See per-file headers and the detailed
@@ -42,26 +43,38 @@
 ;     page 6 reached via LMPR=LMPR_OUT_HIGH bracket per emit
 ;     (high zone, bytes 16384..32767).  HSAVE at end of pass 2 reads
 ;     the buffer via section C with UIFA[31] = OUT_BASE_PAGE.  See
-;     docs/specs/2026-05-27-m6-paged-out-design.md and
-;     docs/specs/2026-05-27-samdos-save-idiom.md.
+;     docs/specs/paged-out-design.md and
+;     docs/specs/samdos-file-io.md.
 ;   Physical pages 7..12 (off-axis): IN .tbn buffer — 6 contiguous
 ;     pages = 96 KB ceiling (bumped from 4 pages / 64 KB on 2026-05-28
 ;     to fit spectrum4's 88 KB stripped release.tbn).  HLOAD'd once at
 ;     startup via load_in_file_paged; read via per-record LMPR-bracket
 ;     into section A on each reader_next_kind call.  See
-;     docs/specs/2026-05-27-m6-paged-in-design.md.
-;   Physical page 13 (off-axis, BUILD_TESTS only): test_mem.bin — the
-;     largest BUILD_TESTS-only self-test suite, ported off-axis to
-;     free section-C budget.  HLOAD'd at boot via
-;     load_test_mem_off_axis (loader.asm); invoked via LMPR-swap-
-;     CALL-restore from `start:` in this file.  See plan-PR 3 of
-;     docs/notes/2026-05-28-paged-call-architecture.md and the brief
-;     at docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md.
+;     docs/specs/paged-in-design.md.
+;   Physical page 12 (off-axis, BUILD_TESTS only): test_cluster.bin —
+;     the off-axis encoder self-test cluster
+;     (src/test_offaxis_cluster.asm), HLOAD'd at boot and invoked once
+;     via an LMPR swap.  Time-multiplexed with the IN buffer, which is
+;     not HLOAD'd until main_assemble.
+;   Physical page 13 (off-axis): sysreg_data.bin — the sysname lookup
+;     tables + matcher (src/sysreg_data.asm), reached via paged_call;
+;     loaded in BOTH variants by load_page13_payload (loader.asm).
+;     Under BUILD_TESTS the page first holds test_mem.bin (the largest
+;     self-test suite, HLOAD'd via load_test_mem_off_axis and invoked
+;     via LMPR-swap-CALL-restore from `start:`); sysreg_data.bin
+;     overwrites it once that suite completes.
+;   Physical page 14 (off-axis, BUILD_TESTS only):
+;     paged_call_test_payload.bin — the paged_call boot self-test stub
+;     (see src/trampoline.asm PAGED_CALL_TEST_PAGE).
+;   Physical page 15 (off-axis): disasm.bin — the on-SAM disassembler
+;     (src/disasm.asm), HLOAD'd at boot in EVERY build via
+;     load_page15_payload (loader.asm, DISASM_PAGE) and invoked via
+;     paged_call.
 ;
 ; Pre-M5 layout placed ENCTAB at &A000-&AFFF in section C, consuming
 ; 4 KB of the code section.  M5's compound-operand encoders pushed
 ; code size past the resulting 8 KB code budget; paging ENCTAB out
-; recovers that 4 KB.  See docs/specs/2026-05-27-samdos-load-idiom.md
+; recovers that 4 KB.  See docs/specs/samdos-file-io.md
 ; for the design rationale.  M6 PR 1 extends the off-axis pattern to
 ; OUT, freeing 2 KB at &B800 and lifting the output ceiling from
 ; 2 KB to 32 KB.  M6 PR 2 extends it to IN, freeing another 2 KB
@@ -71,7 +84,7 @@
 ; The org directive sets the load address; the entry point is the
 ; first byte.
 
-; IN buffer paging — see docs/specs/2026-05-27-m6-paged-in-design.md.
+; IN buffer paging — see docs/specs/paged-in-design.md.
 ;   pages 7..12  ── IN .tbn (HLOAD destination); 96 KB ceiling
 ;   STAGING_BUF  ── per-record staging window in section D
 ;   LITPOOL_EXPR_BUF ── cross-pass copy of litpool expr bytecode
@@ -87,7 +100,7 @@ OPVAL_KINDS:    equ     &C150          ; 7 bytes — kinds[] for form_lookup_mat
 ; M4: which assembly pass is currently active.  Pass 1 walks records to
 ; assign PC and populate the symbol / local-label tables; pass 2 walks
 ; them again and emits resolved bytes.  See
-; docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.1.  Pass 1
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.1.  Pass 1
 ; never touches OUT_BUF; pass 2 alone emits.  PASS_MODE is set by
 ; main_assemble (which now owns both pass-1 and pass-2 setup) and is
 ; read by every record handler that diverges per pass.
@@ -293,7 +306,7 @@ endif
 ; The actual run_mem_self_tests invocation below swaps LMPR briefly,
 ; calls into the off-axis entry, then restores.
 ;
-; See docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md.
+; See https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md.
 if defined(BUILD_TESTS)
                 call    load_test_mem_off_axis
 
@@ -316,7 +329,7 @@ if defined(BUILD_TESTS)
 ; The payload is 3 bytes (`ld a, &42; ret`); the test calls
 ; paged_call into it and asserts A=&42 + HMPR-bit-identity on
 ; return.  See plan-PR 1 of
-; docs/notes/2026-05-28-paged-call-architecture.md.
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md.
                 call    load_page14_payload
                 call    run_paged_call_self_tests
 endif
@@ -447,7 +460,7 @@ if defined(BUILD_TESTS)
                 ; Root cause (now resolved upstream by PR #52, not by this
                 ; PR): the original failure was the stack-vs-own-code
                 ; collision documented in
-                ; docs/notes/2026-05-28-reader-paged-self-test-investigation.md
+                ; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-reader-paged-self-test-investigation.md
                 ; — on the pre-PR-#52 layout the test function spilled above
                 ; &C000 into the SP=&C100 stack page, so its own opcodes were
                 ; overwritten by stack pushes.  PR #52 ported test_mem.asm
@@ -461,7 +474,7 @@ if defined(BUILD_TESTS)
                 ;
                 ; Verified: harness PASS + SimCoupé ci-m{3,4,5,6} all green
                 ; with this call live.  See
-                ; docs/notes/2026-05-28-reader-paged-self-test-investigation.md
+                ; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-reader-paged-self-test-investigation.md
                 ; (PR-6 resolution section at the foot).
                 call    run_reader_paged_self_tests
 endif
@@ -580,7 +593,7 @@ if defined(BUILD_TESTS)
                 ; in the M6 budget-relief PR (2026-05-29) to drop the test
                 ; variant back below &C000.  See
                 ; src/test_offaxis_cluster.asm and
-                ; docs/notes/2026-05-29-test-variant-budget-relief.md.
+                ; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-test-variant-budget-relief.md.
                 ;
                 ; test_mem.asm likewise lives off-axis (physical page 13);
                 ; see load_test_mem_off_axis / plan-PR 3 (PR #52).

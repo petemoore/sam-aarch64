@@ -3,7 +3,7 @@
 # and byte-diff the M5 round-trip output against
 # `aarch64-*-as + ld -Ttext=0 + objcopy -O binary`.
 #
-# Per docs/specs/2026-05-27-m5-compound-operands-directives-design.md §3.
+# Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-m5-compound-operands-directives-design.md §3.
 # Invoked by `make test-m5` and the m5 CI job (added in a later PR).
 #
 # Pattern mirrors tests/m4/run-roundtrip.sh.

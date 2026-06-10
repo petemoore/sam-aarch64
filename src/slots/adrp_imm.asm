@@ -31,7 +31,7 @@
 ; value of a label or PC-relative expression).  The adrp instruction
 ; computes target_page - pc_page, where each "page" is the 4 KB-aligned
 ; address (low 12 bits zero).  Per
-; docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.5:
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.5:
 ;
 ;   if slot.SlotKind == AdrpImm:
 ;       value = (value & ~0xFFF) - (current_pc & ~0xFFF)

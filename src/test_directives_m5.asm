@@ -1,6 +1,6 @@
 ; test_directives_m5.asm — boot-time self-tests for M5 PR-A directives.
 ;
-; Per docs/specs/2026-05-27-m5-compound-operands-directives-design.md §3.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-m5-compound-operands-directives-design.md §3.
 ;
 ; Tests covered (Layer 1):
 ;

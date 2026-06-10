@@ -1,6 +1,6 @@
 // build-m3-disk constructs the M3 round-trip disk image.
 //
-// Layout (per docs/specs/2026-05-24-m3-z80-emitter-design.md §2.2):
+// Layout (per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §2.2):
 //
 //	0  samdos2    T4S1..T5S10  (20 sectors; ROM BOOT reads T4S1 raw)
 //	1  auto       T6S1..T6S2   (BASIC AUTO: CLEAR + LOAD "assembler" + CALL)
@@ -202,8 +202,8 @@ func main() {
 
 	// Slot 3: enctab.enc CODE file. Loaded at startup by src/loader.asm
 	// via SAMDOS HGTHD + trampoline_hload into physical page 4 (outside
-	// section C — see src/trampoline.asm and docs/specs/2026-05-27-
-	// samdos-load-idiom.md for the trampoline pattern that makes this
+	// section C — see src/trampoline.asm and docs/specs/samdos-file-io.md
+	// for the trampoline pattern that makes this
 	// possible).  The recorded load address here is documentary only:
 	// HGTHD reads it into DIFA at runtime but our loader.asm supplies
 	// its own HL (= &8000) and HMPR-target-page (= 4) values when

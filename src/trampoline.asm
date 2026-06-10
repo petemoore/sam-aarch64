@@ -1,7 +1,7 @@
 ; trampoline.asm — paged-RAM trampoline machinery for HLOAD and ENCTAB
 ; runtime reads.
 ;
-; Per docs/specs/2026-05-27-samdos-load-idiom.md (the design source).
+; Per docs/specs/samdos-file-io.md (the design source).
 ;
 ; Purpose
 ; -------
@@ -45,7 +45,7 @@
 ;
 ; Stack handling — static-save-in-section-B pattern
 ; --------------------------------------------------
-; The design note (`docs/specs/2026-05-27-samdos-load-idiom.md`
+; The design note (`docs/specs/samdos-file-io.md`
 ; §"Pre-built trampoline reference") shows a `push af / ... / pop af`
 ; pair BRACKETING the HMPR change (push BEFORE the change, pop AFTER).
 ; That works only if SP points into LMPR-stable memory (section A or
@@ -172,7 +172,7 @@
 ;       pattern in COMET because we already had its source; the
 ;       broader corpus may have other examples).
 ;    c) Write the design up alongside
-;       `docs/specs/2026-05-27-samdos-load-idiom.md` (a follow-up
+;       `docs/specs/samdos-file-io.md` (a follow-up
 ;       note in the same `docs/specs/` directory).
 ;    d) Open the implementation PR AFTER the design note is in.
 ;
@@ -232,7 +232,7 @@ LMPR_ENCTAB:    equ     &20 + ENCTAB_PAGE
 
 ; OUT-buffer paged-output constants.
 ;
-; Per docs/specs/2026-05-27-m6-paged-out-design.md.  OUT lives in
+; Per docs/specs/paged-out-design.md.  OUT lives in
 ; physical pages 5..6 across two zones:
 ;
 ;   Low zone  (bytes 0..16383)   — section B during LMPR_ENCTAB window;
@@ -244,7 +244,7 @@ LMPR_ENCTAB:    equ     &20 + ENCTAB_PAGE
 ;
 ; HSAVE at end of pass 2 reads via section C with UIFA[31]=OUT_BASE_PAGE
 ; (= 5), HMPR auto-paging at &C000 to reach page 6 (see
-; docs/specs/2026-05-27-samdos-save-idiom.md).
+; docs/specs/samdos-file-io.md).
 
 OUT_BASE_PAGE:  equ     5              ; first physical page of OUT
 LMPR_OUT_HIGH:  equ     &25            ; RAM0 + low5=5; A=page 5, B=page 6
@@ -252,7 +252,7 @@ LMPR_OUT_HIGH:  equ     &25            ; RAM0 + low5=5; A=page 5, B=page 6
 
 ; IN-buffer paged-input constants.
 ;
-; Per docs/specs/2026-05-27-m6-paged-in-design.md.  IN lives in physical
+; Per docs/specs/paged-in-design.md.  IN lives in physical
 ; pages 7..12 (6 contiguous pages = 96 KB ceiling, raised 2026-05-28
 ; from the original 4-page / 64 KB allocation to fit spectrum4's 88 KB
 ; stripped release.tbn), HLOAD'd once at startup.  Each
@@ -268,10 +268,10 @@ LMPR_IN_BASE:   equ     &20 + IN_BASE_PAGE
 
 
 ; Off-axis test-payload page (BUILD_TESTS only — see plan-PR 3 of
-; docs/notes/2026-05-28-paged-call-architecture.md and the brief at
-; docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md).
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md and the brief at
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md).
 ;
-; Page 13 is reserved by docs/notes/2026-05-28-memory-layout-brainstorm.md
+; Page 13 is reserved by https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-memory-layout-brainstorm.md
 ; §3 for "disasm aux + sysreg DB + rewrite-hint table".  That role
 ; lands in a later strand-B PR; until then plan-PR 3 reuses page 13
 ; as the off-axis test payload page.  When PR #50 is salvaged and the
@@ -312,7 +312,7 @@ LMPR_TEST_CLUSTER:  equ     &20 + TEST_CLUSTER_PAGE     ; = &2C
 
 
 ; paged_call test-payload page (BUILD_TESTS only — see plan-PR 1 of
-; docs/notes/2026-05-28-paged-call-architecture.md).
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md).
 ;
 ; Page 14 holds the boot self-test target stub for the section-B
 ; paged_call helper.  Picked distinct from page 13 (which plan-PR 3
@@ -330,7 +330,7 @@ PAGED_CALL_TEST_PAGE:   equ     14
 
 ; sysreg lookup data page (PRODUCTION feature — both variants).
 ;
-; Per docs/plans/2026-05-29-m6-closure-release-bytematch.md PR-2, as
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-29-m6-closure-release-bytematch.md PR-2, as
 ; corrected by the PR-2 implementation spec.  The four sysname lookup
 ; tables (sysreg / pstate / dc / tlbi) and the generic table-walker
 ; were moved off the section-C code budget into physical page 13.  The
@@ -392,7 +392,7 @@ SYSREG_COMM_RESULT:     equ     TRAMPOLINE_DST + &91    ; = &7E91, up to 8 bytes
 
 ; Disassembler page (PRODUCTION feature — both variants).
 ;
-; Per docs/notes/2026-06-07-disassembler-page-placement.md.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-07-disassembler-page-placement.md.
 ; Page 15 holds disasm.bin (standalone stub, assembles at org &8000).
 ; Invoked via paged_call (BUILD_TESTS: run_disasm_self_test at
 ; DISASM_SELF_TEST_ENTRY; runtime: on-SAM editor).  Not re-entrant —
@@ -440,7 +440,7 @@ HMPR_SAVE:      equ     TRAMPOLINE_DST + 32
 ; HLOAD), and the RST 8 hardware push lands wherever SP points —
 ; if that's in section D, the saved return address is corrupted by
 ; HLOAD's spillover for files > 16632 B.  Per
-; docs/notes/2026-05-28-hload-16k-limit-investigation.md.
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-hload-16k-limit-investigation.md.
 SP_SAVE:        equ     TRAMPOLINE_DST + 33    ; 2 bytes (33, 34)
 
 ; TRAMP_SAFE_SP — value SP is switched to during the RST 8.  Chosen
@@ -461,7 +461,7 @@ TRAMP_SAFE_SP:  equ     TRAMPOLINE_DST + 256   ; = &7F00
 ; paged_call — section-B helper for generic paged target routines.
 ; =======================================================================
 ;
-; Per docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1 of §6.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1 of §6.
 ;
 ; Lives in section B (LMPR-stable) alongside the HLOAD trampoline.
 ; Generalises the HLOAD trampoline's "swap HMPR, dispatch, swap back"
@@ -635,7 +635,7 @@ trampoline_body_end:
 ;
 ; With the switch in place, paged-IN files up to ≥ 32 KB load cleanly
 ; (verified empirically per
-; docs/notes/2026-05-28-hload-16k-limit-investigation.md).
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-hload-16k-limit-investigation.md).
 
 
 ; -----------------------------------------------------------------------

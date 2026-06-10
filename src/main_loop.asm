@@ -1,6 +1,6 @@
 ; main_loop.asm — top-level M3/M4 driver.
 ;
-; M4 two-pass design (see docs/specs/2026-05-24-m4-symbols-multipass-design.md
+; M4 two-pass design (see https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md
 ; §2.1):
 ;
 ; 1. Load IN .tbn into IN_BUF via HGTHD+HLOAD (once, before pass 1).
@@ -25,7 +25,7 @@
 ;
 ; 4. After pass 2, HSAVE OUT_BUF[0..OUT_LEN] as "OUT".
 ;
-; Per docs/specs/2026-05-24-m3-z80-emitter-design.md §2.6 / §2.5 / §3.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §2.6 / §2.5 / §3.
 ; Operand kind / directive id values come from
 ; tools/sam-aarch64-format/{operands,directives,kinds}.go.
 ;
@@ -177,7 +177,7 @@ reset_reader_to_in_buf:
 ;
 ; Called before pass 2 only (pass 1 never emits).
 ;
-; Per docs/specs/2026-05-27-m6-paged-out-design.md the OUT buffer
+; Per docs/specs/paged-out-design.md the OUT buffer
 ; lives in physical pages 5+6, reached via section B (&4000..&7FFF).
 ; OUT_PC starts at the section-B base; OUT_ZONE starts at 0 (= low
 ; zone, section B = page 5 for free under LMPR_ENCTAB).
@@ -199,7 +199,7 @@ reset_out_buffer:
 ; -----------------------------------------------------------------------
 ; Paged-IN cursor helpers.
 ;
-; Per docs/specs/2026-05-27-m6-paged-in-design.md.  Three primitives:
+; Per docs/specs/paged-in-design.md.  Three primitives:
 ;   in_map_current   — write IN_POS_PAGE to LMPR, mapping the current
 ;                      IN page into section A (&0000..&3FFF).
 ;   in_persist_hl    — write HL back to IN_POS_OFFSET and snapshot the
@@ -1441,7 +1441,7 @@ main_eval_next_imm:
 ; -----------------------------------------------------------------------
 ; load_in_file — HGTHD + trampoline-HLOAD "IN" into pages 7..12.
 ;
-; Per docs/specs/2026-05-27-m6-paged-in-design.md.  IN lands in
+; Per docs/specs/paged-in-design.md.  IN lands in
 ; physical pages 7..12 (off-axis; 96 KB ceiling) via the section-B HLOAD trampoline,
 ; same pattern as load_enctab.  HLOAD's destination is &8000 — a
 ; section-C address — and SAMDOS's internal ctas auto-pages HMPR
@@ -1523,7 +1523,7 @@ in_file_pages_ok:
 ; -----------------------------------------------------------------------
 ; save_out_file — HSAVE the paged OUT buffer as file "OUT".
 ;
-; Per docs/specs/2026-05-27-samdos-save-idiom.md.  HSAVE manages its
+; Per docs/specs/samdos-file-io.md.  HSAVE manages its
 ; own HMPR (saves at entry, restores at exit) and auto-pages across
 ; &C000 inside its save loop (`samdos/src/c.s:354-369 ctas`).  So the
 ; caller only has to populate UIFA[31..36]:
@@ -1614,7 +1614,7 @@ main_dir_equ_pending_id:        defw    0
 ; Globals shared between reader / encoder / main_loop.
 ; -----------------------------------------------------------------------
 
-; Paged IN cursor — see docs/specs/2026-05-27-m6-paged-in-design.md.
+; Paged IN cursor — see docs/specs/paged-in-design.md.
 ;
 ; IN lives in physical pages 7..12 (off-axis; 96 KB ceiling).  The
 ; 24-bit cursor is stored as a (page, offset) pair: IN_POS_PAGE holds
@@ -1631,7 +1631,7 @@ IN_POS_OFFSET:          defw    0           ; current offset in that page
 IN_END_PAGE:            defb    0           ; last byte's LMPR low5+RAM0
 IN_END_OFFSET:          defw    0           ; last byte's offset in that page
 
-; Paged OUT cursor state — see docs/specs/2026-05-27-m6-paged-out-design.md.
+; Paged OUT cursor state — see docs/specs/paged-out-design.md.
 ; OUT_PC walks section B (&4000..&7FFF); OUT_ZONE flips 0 → 1 at the
 ; first byte 16384 to switch from page 5 (under LMPR_ENCTAB) to page 6
 ; (under LMPR_OUT_HIGH).  OUT_LEN is the total emitted byte count

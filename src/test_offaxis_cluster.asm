@@ -2,7 +2,7 @@
 ; "M5 + misc encoder" boot self-test suites.
 ;
 ; M6 budget-relief PR (2026-05-29).  See
-; docs/notes/2026-05-29-test-variant-budget-relief.md.
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-test-variant-budget-relief.md.
 ;
 ; This file is its own pyz80 entry point — it is NOT included from
 ; src/assembler.asm.  The Makefile invokes pyz80 separately on this
@@ -19,7 +19,7 @@
 ; code) below &C000 restores ~1 KB of headroom so the remaining FAIL40
 ; encoder families (ldr-literal, lsl/lsr-imm, bitfield, tbz/tbnz) can
 ; land without re-crossing.  See feedback_test_variant_fragility and
-; docs/notes/2026-05-28-test-variant-ci-regression.md for the cliff
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-test-variant-ci-regression.md for the cliff
 ; history; this mirrors the test_mem off-axis precedent (plan-PR 3 /
 ; PR #52) exactly.
 ;

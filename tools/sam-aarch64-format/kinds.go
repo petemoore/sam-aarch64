@@ -13,7 +13,7 @@ const (
 	// stored as their assembled machine code (compact `.tbn`, Level 2).
 	// Payload: [count:1][word0:4 LE]…[word{count-1}:4 LE]. The assembler
 	// memcpys the words straight to OUT — zero encoding work. See
-	// docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md.
+	// https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md.
 	KindLitInsts RecordKind = 0x07
 	// KindLitData is a run of constant data from a single numeric data
 	// directive (.byte/.short/.hword/.word/.quad), stored as its raw
@@ -30,7 +30,7 @@ const (
 	// (with relocated bitfields zeroed) followed by [patch_count u8] and
 	// patch_count × [slot u8][expr_len u8][expr bytes]; pass 2 evaluates
 	// each patch expression and ORs the folded bits into the zeroed field.
-	// See docs/specs/2026-06-08-compact-tbn-nextgen-design.md.
+	// See docs/specs/compact-tbn-nextgen-design.md.
 	KindInsnRun RecordKind = 0x09
 )
 

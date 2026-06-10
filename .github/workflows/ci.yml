@@ -108,9 +108,8 @@ jobs:
   # on a CODE-ONLY build of the release (release.s with all data removed at
   # source — data directives AND `ldr =imm` literal-pool pseudo-ops —
   # reassembled by GNU) so objdump's linear sweep sees only instructions.
-  # Asserts an EXACT match. Pure Go + binutils, no container. GREEN as of the
-  # strand-B disassembler PR; candidate to promote to a required status check
-  # once confirmed stable on main.
+  # Asserts an EXACT match. Pure Go + binutils, no container. A required
+  # status check in the branch protection on main.
   disasm:
     runs-on: ubuntu-latest
     steps:
@@ -157,6 +156,7 @@ jobs:
   # staticcheck — dead-code (unused / U1000) gate across the core host
   # toolchain modules. Pure Go, no container; the checker is built with
   # go1.26.1 (the modules' toolchain) via GOTOOLCHAIN inside the recipe.
+  # Also hosts the doc link checker (dangling-markdown-link guard).
   staticcheck:
     runs-on: ubuntu-latest
     steps:
@@ -166,6 +166,8 @@ jobs:
           go-version: '1.26.1'
       - name: staticcheck unused-code gate
         run: make staticcheck
+      - name: doc link checker
+        run: make check-doc-links
 
   # M3 — sweeps the fixture corpus end-to-end on the dev container:
   #   text2bin → build-m3-disk → SimCoupé (Xvfb 24bit) → samfile extract
@@ -414,7 +416,7 @@ jobs:
   # auto-paging across &C000).  The fixture corpus is currently a
   # single >16 KB long-emit fixture that crosses the OUT_ZONE
   # low → high boundary.  See
-  # docs/specs/2026-05-27-m6-paged-out-design.md.
+  # docs/specs/paged-out-design.md.
   m6:
     runs-on: ubuntu-latest
     needs: build-image

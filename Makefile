@@ -39,7 +39,7 @@ test-disasm:
 
 # Oracle gate: aarch64dec vs binutils objdump on the vendored release.img.
 # RED until the decoder is complete (TDD); the diff is the worklist.  See
-# docs/plans/2026-05-28-go-aarch64-disassembler.md.  Needs an aarch64
+# https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-28-go-aarch64-disassembler.md.  Needs an aarch64
 # objdump (binutils-aarch64-linux-gnu) + Go; no SimCoupé/container.
 ci-disasm: test-disasm
 	./tests/disasm/run-oracle-comparison.sh
@@ -85,6 +85,14 @@ staticcheck:
 	    ( cd tools/$$m && GOTOOLCHAIN=go1.26.1 go run $(STATICCHECK) -checks U1000 ./... ); \
 	done
 
+# check-doc-links — assert every relative markdown link in the entry docs
+# (README.md, CLAUDE.md, src/README.md) and under docs/, tools/, tests/
+# resolves to an existing path.  Pure shell, no toolchain; runs as an
+# extra step of the staticcheck CI job.
+.PHONY: check-doc-links
+check-doc-links:
+	bash tools/check-doc-links.sh
+
 .PHONY: enctab-gen enctab test-m2 ci-m2
 
 enctab-gen:
@@ -102,7 +110,7 @@ enctab: enctab-gen
 # Regenerate tools/aarch64enc/data.go from the vendored MRA snapshot.
 # Safe to run at any time: data.go is purely the MRA projection; all
 # hand-curated forms live in tools/aarch64enc/manual_forms.go which
-# this target never touches.  See docs/notes/m2-status.md.
+# this target never touches.  See https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m2-status.md.
 .PHONY: enctab-regen-source
 enctab-regen-source: enctab-gen
 	$(BUILD)/enctab-gen \
@@ -157,7 +165,7 @@ m3-asm-prod: $(BUILD)/assembler-prod.bin
 
 # Test-variant build also exports the symbol table for the off-axis
 # test_mem.bin to import (plan-PR 3 — see
-# docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md).
+# https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md).
 $(BUILD)/assembler.bin $(BUILD)/assembler.sym: src/assembler.asm $(wildcard src/*.asm) $(wildcard src/**/*.asm) src/sam_io.inc
 	@mkdir -p $(BUILD)
 	pyz80 -D BUILD_TESTS=1 \
@@ -216,7 +224,7 @@ cluster-offaxis: $(BUILD)/test_cluster.bin
 # A 3-byte standalone binary (`ld a, &42; ret`) HLOAD'd at boot into
 # physical page 14 by src/loader.asm::load_page14_payload.
 # Exercised by src/test_paged_call.asm.  Per plan-PR 1 of
-# docs/notes/2026-05-28-paged-call-architecture.md.
+# https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md.
 $(BUILD)/paged_call_test_payload.bin: src/paged_call_test_payload.asm
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/paged_call_test_payload.bin src/paged_call_test_payload.asm
@@ -230,7 +238,7 @@ paged-call-payload: $(BUILD)/paged_call_test_payload.bin
 # org &8000.  HLOAD'd at boot into physical page 13 by
 # src/loader.asm::load_page13_payload and read at runtime by the
 # sysname_lookup_* routines via paged_call.  Per PR-2 of
-# docs/plans/2026-05-29-m6-closure-release-bytematch.md (split-design
+# https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-29-m6-closure-release-bytematch.md (split-design
 # correction documented in src/sysreg_data.asm).  Needed by EVERY
 # build, not just BUILD_TESTS — sysreg/dc/tlbi/pstate operands appear
 # in shipping sources.
@@ -301,7 +309,7 @@ ci-m3: test-m3
 # assembler binary (which is M4-capable post-PR-#22) and build-m3-disk,
 # but feeds it M4-fixture .tbn inputs and uses an oracle that includes
 # `ld -Ttext=0` so :lo12: / branch-to-label relocations resolve.  See
-# docs/specs/2026-05-24-m4-symbols-multipass-design.md §3.
+# https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md §3.
 test-m4: m3-asm test-mem-offaxis paged-call-payload enctab $(BUILD)/build-m3-disk sam-aarch64
 	./tests/m4/run-roundtrip.sh
 
@@ -329,7 +337,7 @@ ci-m4-prod: test-m4-prod
 # test-m5 — sweep every fixture under tests/m5/sources/.  Same pipeline
 # as test-m4 (sam-aarch64 → build-m3-disk → SimCoupé → samfile extract OUT →
 # byte-compare against aarch64-*-as + ld -Ttext=0 + objcopy -O binary).
-# Per docs/specs/2026-05-27-m5-compound-operands-directives-design.md §3.
+# Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-m5-compound-operands-directives-design.md §3.
 #
 # The GitHub Actions `m5` job is added in M5 PR E (the final integration
 # PR); for now ci-m5 / ci-m5-prod run locally + via the dev container.
@@ -348,7 +356,7 @@ ci-m5-prod: test-m5-prod
 # test-m6 — sweep every fixture under tests/m6/sources/.  Same pipeline
 # as test-m5 (sam-aarch64 → build-m3-disk → SimCoupé → samfile extract OUT
 # → byte-compare against aarch64-*-as + ld -Ttext=0 + objcopy -O binary).
-# Per docs/specs/2026-05-27-m6-paged-out-design.md.  The M6 fixtures
+# Per docs/specs/paged-out-design.md.  The M6 fixtures
 # exercise the paged-OUT machinery (sections-B emit + HSAVE auto-paging
 # across &C000) by emitting > 16 KB of output to cross the OUT_ZONE
 # low → high boundary.

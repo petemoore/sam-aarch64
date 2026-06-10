@@ -4,7 +4,7 @@
         // valid logical (bitmask) immediate.  GNU as emits ORR Rd, XZR, #imm.
         // Mac-side oracle: tools/refenc/pass2.go tryEncodeMovImm step 3
         // (orr-immediate via encodeLogicalImm).  Class 3 of
-        // docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md.
+        // https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-m6-bytematch-encoder-divergences.md.
         // (Verified against aarch64-none-elf-as: each value below disassembles
         // to an `orr Rd, xzr, #imm` i.e. base 0xb2.../0x32...).
         mov     x15, #0xcccccccccccccccc

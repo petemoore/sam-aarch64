@@ -1,6 +1,6 @@
 ; symbols.asm — global symbol table for the M4 multi-pass assembler.
 ;
-; Per docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.2.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.2.
 ;
 ; Hash-bucketed by `symbol_id mod 256` (low byte of the u16 id).  Symbol
 ; IDs are dense and allocated by text2bin in source order, so the low
@@ -20,7 +20,7 @@
 ; SYMTAB_OVERFLOW at &E800 is a parallel flat array of overflow entries
 ; with the same 8-byte layout.  Up to 256 overflow entries fit in the
 ; 2 KB reservation (&E800..&EFFF inclusive).  Bumped from 128 to 256
-; on 2026-05-28 per `docs/notes/2026-05-28-z80-table-sizing-census.md`:
+; on 2026-05-28 per `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-z80-table-sizing-census.md`:
 ; release.tbn populates 474 unique symbols (282 LabelDef + 193
 ; .equ/.set/.global; 1 duplicate landed pre-existing), versus 256
 ; primary buckets, so worst-case 474 − 256 = 218 entries spill into the

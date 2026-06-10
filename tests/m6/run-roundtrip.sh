@@ -3,11 +3,11 @@
 # and byte-diff the M6 round-trip output against
 # `aarch64-*-as + ld -Ttext=0 + objcopy -O binary`.
 #
-# Per docs/specs/2026-05-27-m6-paged-out-design.md (PR 1 of M6).  M6
+# Per docs/specs/paged-out-design.md (PR 1 of M6).  M6
 # fixtures exercise > 2 KB output via the paged-OUT machinery
 # (sections-B emit with LMPR_ENCTAB low zone, LMPR_OUT_HIGH high zone,
 # HSAVE auto-paging across &C000).  See also
-# docs/specs/2026-05-27-samdos-save-idiom.md.
+# docs/specs/samdos-file-io.md.
 #
 # Invoked by `make test-m6` / `make ci-m6` and the m6 CI job.  Pattern
 # mirrors tests/m5/run-roundtrip.sh.

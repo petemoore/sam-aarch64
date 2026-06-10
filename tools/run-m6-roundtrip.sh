@@ -3,7 +3,7 @@
 #
 # Pipeline (mirror of run-m5-roundtrip.sh — same oracle, same disk
 # format, just the M6 fixture corpus).  See
-# docs/specs/2026-05-27-m6-paged-out-design.md.
+# docs/specs/paged-out-design.md.
 #
 #   1. sam-aarch64 INPUT.s → INPUT.img + INPUT.compact.tbn
 #   2. build-m3-disk assembler.bin enctab.enc INPUT.compact.tbn → OUT.mgt
@@ -84,7 +84,7 @@ echo "--- sam-aarch64 (assemble + emit compact .tbn) ---"
 # For the test variant only, also deposit:
 #   - the off-axis test_mem.bin (plan-PR 3), and
 #   - the paged_call self-test page-14 payload (plan-PR 1).
-# See docs/notes/2026-05-28-paged-call-architecture.md.
+# See https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md.
 echo "--- build-m3-disk ---"
 test_variant_flags=()
 # The disasm self-test runs at boot only under BUILD_TESTS (the test

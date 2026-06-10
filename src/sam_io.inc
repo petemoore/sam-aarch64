@@ -1,5 +1,5 @@
 ; SAM disk file I/O wrappers.
-; Derived from docs/notes/sam-file-io.md (M0 Task 6 spike).
+; Derived from https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/sam-file-io.md (M0 Task 6 spike).
 ;
 ; Convention used by SAMDOS / MasterDOS / Pro-DOS: applications enter the
 ; OS via the Z80 RST 8 instruction followed by an immediate "hook code"

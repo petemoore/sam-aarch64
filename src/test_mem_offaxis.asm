@@ -1,7 +1,7 @@
 ; test_mem_offaxis.asm — off-axis assembly wrapper for test_mem.asm.
 ;
 ; plan-PR 3 of the M6-strand-A paging-architecture rollout.  See
-; docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md.
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md.
 ;
 ; This file is its own pyz80 entry point — it is NOT included from
 ; src/assembler.asm.  The Makefile invokes pyz80 separately on this

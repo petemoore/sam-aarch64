@@ -9,7 +9,7 @@ import (
 // LabelRow is one entry of the compact `.tbn` v2 header label table: a
 // named position-label resolved to a byte offset from the origin VMA
 // (offset = symbolVMA - OriginVMA, always ≥ 0). NameID indexes the name
-// table. See docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md
+// table. See https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md
 // §2.4.
 type LabelRow struct {
 	NameID uint16

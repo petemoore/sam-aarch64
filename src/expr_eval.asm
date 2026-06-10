@@ -3,8 +3,8 @@
 ; Z80 port of tools/sam-aarch64-format/expr.go::EvalConst and
 ; tools/aarch64enc/expr.go::Eval for the full M4 opcode set.
 ;
-; Per docs/specs/2026-05-24-m3-z80-emitter-design.md §2.5 and
-; docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.5:
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §2.5 and
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.5:
 ;   • M3 subset (constant-only): PUSH_IMM8/16/32/64, ADD, SUB, AND, OR,
 ;     XOR, SHL, SHR, NEG, NOT.
 ;   • M4 additions: PUSH_SYM, PUSH_LOCAL, PUSH_PC, REL_LO12, REL_HI12,
@@ -20,7 +20,7 @@
 ;     zero, div-by-zero → 0.  Implemented via ml_mul / ml_div.
 ;
 ; Opcode values (tools/sam-aarch64-format/expr.go lines 12-66; full
-; normative table in docs/specs/2026-06-08-tbn-binary-format-reference.md §5):
+; normative table in docs/specs/tbn-binary-format-reference.md §5):
 ;
 ;   0x01 PUSH_IMM8        [s8]
 ;   0x02 PUSH_IMM16       [s16 LE]

@@ -1,6 +1,6 @@
 ; paged_bodies.asm — section-B body source for paged_call.
 ;
-; Per docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1 of §6.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md plan-PR 1 of §6.
 ;
 ; The body is NOT executed from its source location in section C; the
 ; bytes are LDIR'd into section B at boot by enctab_trampoline_setup
@@ -26,8 +26,8 @@
 ; section-C/D callers, the right shape is a `paged_call` to a target
 ; routine in the data page that does its work and returns; that's
 ; what the SAM ROM / COMET prior art does.  See
-; docs/notes/2026-05-28-paged-call-architecture.md §4 (post-salvage
-; revision) and docs/notes/2026-05-28-session-handoff.md "Critical
+; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md §4 (post-salvage
+; revision) and https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/2026-05-28-session-handoff.md "Critical
 ; read of PR #50" point #2.
 
 

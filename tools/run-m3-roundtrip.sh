@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run-m3-roundtrip.sh — end-to-end M3 fixture round-trip driver.
 #
-# Pipeline per docs/specs/2026-05-24-m3-z80-emitter-design.md §3 (Layer 2):
+# Pipeline per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §3 (Layer 2):
 #
 #   1. sam-aarch64 INPUT.s → INPUT.img + INPUT.compact.tbn
 #   2. build-m3-disk assembler.bin enctab.enc INPUT.compact.tbn → OUT.mgt
@@ -81,16 +81,16 @@ echo "--- sam-aarch64 (assemble + emit compact .tbn) ---"
 #
 # For the test variant only, also deposit:
 #   - the off-axis test_mem.bin (plan-PR 3 of the paging architecture,
-#     see docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md), and
+#     see https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md), and
 #   - the paged_call self-test page-14 payload (plan-PR 1 of the same
 #     architecture, see
-#     docs/notes/2026-05-28-paged-call-architecture.md).
+#     https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md).
 # Production builds don't include either code path, so neither file
 # is needed.
 #
 # The page-13 sysreg lookup data (-sysreg-data) is deposited for BOTH
 # variants — sysreg/dc/tlbi/pstate lookups are a production feature
-# (PR-2 of docs/plans/2026-05-29-m6-closure-release-bytematch.md).
+# (PR-2 of https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-29-m6-closure-release-bytematch.md).
 echo "--- build-m3-disk ---"
 test_variant_flags=()
 # The disasm self-test runs at boot only under BUILD_TESTS (the test

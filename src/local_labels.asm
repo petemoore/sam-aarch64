@@ -1,7 +1,7 @@
 ; local_labels.asm — local-label table for the M4+ assembler.
 ;
-; Per docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.3 (v2,
-; multi-digit) and docs/plans/2026-05-27-multi-digit-local-labels.md.
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.3 (v2,
+; multi-digit) and https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-27-multi-digit-local-labels.md.
 ;
 ; Local labels are written as a decimal digit `1..99` and are
 ; referenced as either `Nf` (forward — next occurrence with PC strictly

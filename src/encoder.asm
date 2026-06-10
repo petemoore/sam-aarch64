@@ -25,7 +25,7 @@ OPVAL_STRIDE:           equ     10
 ; ---------------------------------------------------------------------
 ; emit_byte — append one byte to the output buffer at PC, advance PC.
 ;
-; Per docs/specs/2026-05-27-m6-paged-out-design.md.  OUT lives in
+; Per docs/specs/paged-out-design.md.  OUT lives in
 ; physical pages 5 (low zone) + 6 (high zone), reached via section B
 ; (&4000-&7FFF):
 ;

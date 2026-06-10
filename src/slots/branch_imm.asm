@@ -33,7 +33,7 @@
 ; pack body.  The subtracted result IS the signed byteOffset the older
 ; M3-style body operated on.
 ;
-; Per docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.5:
+; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m4-symbols-multipass-design.md §2.5:
 ;   if slot.SlotKind in {BranchImm26, BranchImm19, BranchImm14}:
 ;       value = value - current_pc
 ;

@@ -7,7 +7,7 @@ sole CI gate; this harness is a developer-side tool.
 
 At ~1 ms per fixture (vs ~0.5 s for SimCoupé-in-Docker) it slots into the inner
 loop: edit → test → iterate without containers. See
-[`docs/notes/2026-05-28-test-harness-bakeoff-evaluation.md`](../../docs/notes/2026-05-28-test-harness-bakeoff-evaluation.md)
+[the test-harness bakeoff evaluation](https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-test-harness-bakeoff-evaluation.md)
 for the design decision and full workflow guidance.
 
 ## When to use it
@@ -68,7 +68,7 @@ paging bug but is really a missing input.  The harness now detects this and
 names the unserved `"sd13"` file in the trap message.  (Small sources with no
 sysreg operands happen to survive without it, which is why this was easy to
 miss.)  Build it with `make sysreg-data`.  See
-`docs/notes/2026-05-29-go-harness-paged-trap-rootcause.md`.
+`https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-go-harness-paged-trap-rootcause.md`.
 
 BUILD_TESTS variant (runs the boot-time self-test suites, including
 `run_reader_paged_self_tests`).  Pass the off-axis test_mem binary and the
