@@ -437,6 +437,239 @@ func (mf *matchFinder) findBest(pos int) (bestLen, bestOff int) {
 	return bestLen, bestOff
 }
 
+// BitEvent records a single bit written during compression, with context.
+type BitEvent struct {
+	OutBitPos int    // bit position in the output stream (0 = first bit after backtrack)
+	Bit       int    // 0 or 1
+	InputPos  int    // input position when this bit was written
+	Field     string // human-readable field name (e.g. "litSep", "gammaDir", "gammaVal", "endMsb")
+}
+
+// CompressWithTrace compresses src and records every bit written, returning the
+// compressed bytes and the bit-event trace.  Used by the Z80 harness to pinpoint
+// which field diverges between Go and Z80 output.
+func CompressWithTrace(src []byte, p Params) ([]byte, []BitEvent) {
+	n := len(src)
+	var events []BitEvent
+
+	bw := newBitWriter()
+	curPos := 0
+	curField := "?"
+
+	recordBit := func(v int) {
+		// Determine the output bit position: current output length * 8 + (8 - bits in current byte).
+		bitPos := len(bw.out) * 8
+		if bw.bitMask != 0 {
+			// Count how many bits have been written in the current byte.
+			m := byte(128); consumed := 0
+			for m > bw.bitMask { consumed++; m >>= 1 }
+			bitPos = (len(bw.out)-1)*8 + consumed
+		}
+		events = append(events, BitEvent{OutBitPos: bitPos, Bit: v, InputPos: curPos, Field: curField})
+		bw.writeBit(v)
+	}
+	_ = recordBit // used below via writeBitTraced
+
+	// We need a clean implementation. Let's inline the compression with tracing.
+	// This duplicates Compress() but adds event recording.
+
+	if n == 0 {
+		curField = "endSep"; bw.writeBit(1)
+		curField = "endMsb"; bw.writeEliasGammaInv(256)
+		return bw.bytes(), events
+	}
+
+	mf := newMatchFinder(src, p)
+	pos := 0; litStart := 0; lastOffset := 1; prevWasLit := false
+	curPos = 0
+
+	emitBit := func(v int, field string) {
+		bitPos := len(bw.out) * 8
+		if bw.bitMask != 0 {
+			m := byte(128); consumed := 0
+			for m > bw.bitMask { consumed++; m >>= 1 }
+			bitPos = (len(bw.out)-1)*8 + consumed
+		}
+		events = append(events, BitEvent{OutBitPos: bitPos, Bit: v, InputPos: pos, Field: field})
+		bw.writeBit(v)
+	}
+	emitByte := func(b byte, field string) {
+		bitPos := len(bw.out) * 8
+		events = append(events, BitEvent{OutBitPos: bitPos, Bit: int(b), InputPos: pos, Field: field + "(byte)"})
+		bw.writeByte(b)
+	}
+	emitByteBT := func(b byte, field string) {
+		bitPos := len(bw.out) * 8
+		events = append(events, BitEvent{OutBitPos: bitPos, Bit: int(b), InputPos: pos, Field: field + "(bbt)"})
+		bw.writeByteWithBacktrack(b)
+	}
+	emitGamma := func(v int, field string) {
+		p2 := 1; for p2*2 <= v { p2 <<= 1 }
+		for p2 >>= 1; p2 > 0; p2 >>= 1 {
+			emitBit(0, field+"_dir")
+			if v&p2 != 0 { emitBit(1, field+"_val") } else { emitBit(0, field+"_val") }
+		}
+		emitBit(1, field+"_term")
+	}
+	emitGammaInv := func(v int, field string) {
+		p2 := 1; for p2*2 <= v { p2 <<= 1 }
+		for p2 >>= 1; p2 > 0; p2 >>= 1 {
+			emitBit(0, field+"_dir")
+			if v&p2 != 0 { emitBit(0, field+"_val") } else { emitBit(1, field+"_val") }
+		}
+		emitBit(1, field+"_term")
+	}
+
+	for pos < n {
+		bestLen, bestOff := mf.findBest(pos)
+		litCount := pos - litStart
+		canRep := (prevWasLit || litCount > 0) && bestOff == lastOffset && bestLen >= 2
+		isNew := bestOff != lastOffset && bestLen >= 3
+
+		if !canRep && !isNew {
+			pos++
+			continue
+		}
+		isRep := canRep
+
+		if litCount > 0 {
+			emitBit(0, "litSep")
+			emitGamma(litCount, "litCount")
+			for i := litStart; i < pos; i++ {
+				emitByte(src[i], "litByte")
+			}
+			prevWasLit = true
+		}
+
+		if isRep {
+			emitBit(0, "repSep")
+			emitGamma(bestLen, "repLen")
+			prevWasLit = false
+		} else {
+			emitBit(1, "newSep")
+			msb := (bestOff-1)/128 + 1
+			emitGammaInv(msb, "newMsb")
+			lsbByte := byte((127 - (bestOff-1)%128) << 1)
+			emitByteBT(lsbByte, "newLsb")
+			emitGamma(bestLen-1, "newLen")
+			lastOffset = bestOff
+			prevWasLit = false
+		}
+
+		for k := 1; k < bestLen; k++ { mf.insert(pos + k) }
+		pos += bestLen; litStart = pos
+	}
+
+	litCount := n - litStart
+	if litCount > 0 {
+		emitBit(0, "trailSep")
+		emitGamma(litCount, "trailCount")
+		for i := litStart; i < n; i++ { emitByte(src[i], "trailByte") }
+	}
+
+	emitBit(1, "endSep")
+	emitGammaInv(256, "endMsb")
+
+	return bw.bytes(), events
+}
+
+// GetChainAt runs the greedy parse up to (but not including) targetPos and
+// returns the chain candidates that findBest(targetPos) would probe.
+// Used by the Z80 harness to compare chain state.
+func GetChainAt(src []byte, p Params, targetPos int) []int {
+	n := len(src)
+	mf := newMatchFinder(src, p)
+	pos := 0; litStart := 0; lastOffset := 1; prevWasLit := false
+
+	for pos < n && pos < targetPos {
+		bl, bo := mf.findBest(pos)
+		litCount := pos - litStart
+		canRep := (prevWasLit || litCount > 0) && bo == lastOffset && bl >= 2
+		isNew := bo != lastOffset && bl >= 3
+		if !canRep && !isNew {
+			pos++; continue
+		}
+		if litCount > 0 { prevWasLit = true }
+		if canRep {
+			prevWasLit = false
+		} else {
+			lastOffset = bo; prevWasLit = false
+		}
+		for k := 1; k < bl; k++ { mf.insert(pos + k) }
+		pos += bl; litStart = pos
+	}
+
+	// Now collect the chain for hash2(targetPos) without modifying state.
+	if targetPos >= n { return nil }
+	h := mf.hash2(targetPos)
+	var chain []int
+	cand := int(mf.hashHead[h])
+	for cand != int(noEntry) && len(chain) < p.ChainDepth+5 {
+		chain = append(chain, cand)
+		cand = int(mf.chain[cand])
+	}
+	return chain
+}
+
+// FindBestResult records one findBest call result from the greedy parse.
+type FindBestResult struct {
+	Pos     int
+	BestLen int
+	BestOff int
+}
+
+// CollectFindBestResults simulates the greedy parse loop and returns every
+// findBest(pos) result in order (one per position visited by the greedy parse).
+// The chain state mirrors the real compressor exactly.  Used by the Z80 harness
+// to compare match-finder decisions against the Z80 compressor step-by-step.
+func CollectFindBestResults(src []byte, p Params) []FindBestResult {
+	n := len(src)
+	if n == 0 {
+		return nil
+	}
+	mf := newMatchFinder(src, p)
+	var results []FindBestResult
+
+	pos := 0
+	litStart := 0
+	lastOffset := 1
+	prevWasLit := false
+
+	for pos < n {
+		bl, bo := mf.findBest(pos)
+		results = append(results, FindBestResult{Pos: pos, BestLen: bl, BestOff: bo})
+
+		litCount := pos - litStart
+		canRep := (prevWasLit || litCount > 0) && bo == lastOffset && bl >= 2
+		isNew := bo != lastOffset && bl >= 3
+
+		if !canRep && !isNew {
+			pos++
+			continue
+		}
+
+		if litCount > 0 {
+			prevWasLit = true
+		}
+
+		if canRep {
+			prevWasLit = false
+		} else {
+			lastOffset = bo
+			prevWasLit = false
+		}
+
+		// Insert intermediate positions (mirrors insert_tail in Z80).
+		for k := 1; k < bl; k++ {
+			mf.insert(pos + k)
+		}
+
+		pos += bl
+		litStart = pos
+	}
+	return results
+}
+
 // probeStats counts chain steps and byte comparisons at pos WITHOUT inserting
 // pos or updating bestLen/bestOff.  Used by CollectProbeStats to gather the
 // T-state model data for the Z80 port estimate.

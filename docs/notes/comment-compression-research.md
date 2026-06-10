@@ -298,6 +298,42 @@ measurement.
 **Contention note**: figures are for uncontended RAM.  The compressor runs on
 dirty comment pages (non-VRAM), so contention is negligible in normal use.
 
+### Measured Z80 compressor T-state performance (i60b-2)
+
+Real measurement from running `src/zx0_compress.asm` (the Z80 port, `build/zx0_compress.bin`, 1182 B)
+inside the koron-go/z80 emulator.  Same instruction-level T-state counting method as the decode bench
+(Zilog UM0080 Table-2, data-dependent instructions read pre-step CPU state).
+
+All 24 blocks (6 per block size, from `build/zx0-blocks/`) passed byte-identity against Go and round-trip
+via `dzx0_standard`.
+
+Reproduce:
+
+```
+make zx0-compress-payload zx0-blocks
+cd tools/z80-test-harness-go && go test -run TestZX0CompressPort -v -count=1 .
+```
+
+| Block size | N | avg T/byte | avg ms/block | vs model (283 ms) |
+|------------|---|-----------|--------------|-------------------|
+| 1 KB | 6 | 2188 | 373 ms | — |
+| 2 KB | 6 | 2272 | 775 ms | — |
+| 4 KB | 6 | 2557 | 1745 ms | +517% |
+| 8 KB | 6 | 2788 | 3806 ms | — |
+
+The model prediction (283 ms / 4 KB at H=512, D=16) underestimated by ~6×.  The per-byte T-state
+cost (~2557 T/byte measured vs 414 T/byte modelled) reflects that the model counted only hash
+probe + chain steps and missed the substantial overhead of the main loop, bit-writer calls,
+Elias-gamma encoding, literal flushing, and memory-variable access (the Z80 port uses
+absolute-address LD (nn),rr / LD rr,(nn) for every state variable rather than register-cached
+values, each costing 16 T-states per access).
+
+At 4 KB blocks the compressor takes ~1745 ms at 6 MHz — outside the 100 ms interactive budget
+but acceptable for a background save operation.  If the design requires faster
+on-SAM compression, the path is to cache hot state variables in registers across the inner loop
+rather than reading/writing them via absolute addresses.  That optimisation is deferred to
+a later item (see q9 / i60c).
+
 ### Recommended operating point
 
 **H=512, D=16** (`tools/zx0-greedy.DefaultParams`) is the recommended
