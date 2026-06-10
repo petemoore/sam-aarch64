@@ -16,6 +16,9 @@ design doc is deleted (git history is the archive).
   single-format syntactic encoder; drives the future i48c SAM-side work.
 - [`editor-edit-model-design.md`](editor-edit-model-design.md) — the
   Phase-2 editor's in-memory edit model.
+- [`comment-storage-design.md`](comment-storage-design.md) — compressed-
+  resident comment storage (i60c): ZX0 blocks + dirty overlay + streaming
+  save + watermark math + page placement.
 - [`paged-in-design.md`](paged-in-design.md) /
   [`paged-out-design.md`](paged-out-design.md) — the paging-architecture
   rationale for source IN and output OUT.
