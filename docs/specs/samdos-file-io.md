@@ -8,7 +8,7 @@ the two halves below explain both patterns, why they work, and the register /
 error-path facts any caller must respect.
 
 Source-citation conventions: `samdos/src/*.s` line references are to the
-SAMDOS 2 source (cloned at `~/git/samdos`; the assembled binary is vendored at
+SAMDOS 2 source (cloned at `~/git/samdos` from https://github.com/stefandrissen/samdos — the reconstructed, commented SAMDOS 2 source; the assembled binary is vendored at
 `reference/samdos/samdos2.bin`); `comet.asm` references are to
 `reference/comet-decoded/comet.asm`; ROM references are to
 `docs/sam/sam-coupe_rom-v3.0_annotated-disassembly.txt` and Tech Manual
