@@ -6,6 +6,7 @@ use (
 	./tools/build-disk
 	./tools/comment-bench
 	./tools/enctab-gen
+	./tools/i62-bdos-experiment/build-i62-disk
 	./tools/sam-aarch64
 	./tools/sam-aarch64-format
 	./tools/z80-test-harness-go

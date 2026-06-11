@@ -67,7 +67,42 @@ Preservation copies of the items below are archived locally (outside the repo).
 
 - **SimCoupé / CI experiments: B-DOS AL 1.5a** (confidence HIGH — sam.speccy.cz documents SimCoupé Atom Lite support with AL 1.5a; SimCoupé's `AtomLiteDevice` enforces the non-byte-swapped B-DOS signature).
 - **Real Trinity hardware: B-DOS 1.5t beta 6** (confidence HIGH — the only Trinity-capable B-DOS; beta 6 strictly supersedes betas 4/5).
-- Development transfers between them at the hook level (LIKELY — identical hook tables across B-DOS builds; no cross-backend runtime regression test published, which is exactly what the i62 SimCoupé experiment will provide).
+- Development transfers between them at the hook level — **VERIFIED for the SAMDOS ↔ B-DOS AL 1.5a (Atom Lite) pair** by the i62 dual-run experiment below; the Trinity 1.5t leg remains LIKELY (SimCoupé has no Trinity emulation, so it can only be executed on real hardware).
+
+## Empirical verification (i62)
+
+**2026-06-11, SimCoupé v1.2.16 (CI-pinned SHA `0e8a69f`), B-DOS AL 1.5a (the 10701-byte 2009 `AL-BDOS15a` build, extracted from the worldofsam `megaboot-alplus.mgt`).** One probe binary (`tools/i62-bdos-experiment/i62test.asm`) was booted twice and passed both runs — the hook-portability claim above is now **execution-verified** for the floppy/SAMDOS ↔ Atom-Lite/B-DOS pair.
+
+### What ran
+
+| run | setup | transcript (printer status channel) |
+|-----|-------|--------------------------------------|
+| control | SAMDOS 2 boot floppy, no mass storage | `I62` · `DOS:SAMDOS` · `P2` · `P3` · `P4` · `OK` |
+| B-DOS | AL-BDOS15a boot floppy + Atom Lite HDF (`-drive2 3 -atomdisk0 … -atombootrom 0`) | `I62` · `DOS:BDOS V=05 R=000B` · `P1` · `P2` · `P3` · `P4` · `OK` |
+
+The probe exercises the full `samdos-file-io.md` sequence: DVAR-7 B-DOS detection → `HRECORD` record 1 (B-DOS branch only) → `HSAVE` a 1553-byte pattern from `&9000` → `HGTHD` (+ length validation from the `&4B50` DIFA) → `HLOAD` into `&A000` → byte-compare. The **same binary** runs both paths; the only backend-conditional step is the DVAR-7-gated `HRECORD` call. After the B-DOS run, the HDF independently contained the `I62DATA` directory entry at record 1's first directory sector and the pattern bytes at record-relative track 4 sector 1 + 9-byte header — `HSAVE` really wrote through the emulated Atom Lite.
+
+### Hook-level findings
+
+1. **DVAR access from machine code works exactly as the 1.7n manual documents** (`LD A,(&5BC2)` / `OUT (&FB),A` / `LD HL,(32768)` → DVAR-0 pointer): under AL 1.5a the pointer lands in `&8000-&BFFF` and `DVAR 7 = 5` (version·10−10 for 1.5x). Under SAMDOS, page offset 0 of the DOS page holds code bytes, so the pointer-range check rejects it cleanly — the probe triple-checks (pointer range, version < 20, record count ≠ 0) before taking the B-DOS branch. The detection must execute from section A/B since it transits the DOS page through section C.
+2. **`HRECORD` (hook 156) semantics confirmed**: A=0 + record number in HL selects the record and switches the ambient device to D2; every subsequent hook call (`HGTHD`/`HSAVE`/`HLOAD`) then targets the record with **byte-identical call sites** to the SAMDOS floppy versions — same UIFA at `&4B00`, same DIFA at `&4B50`, same register contracts, same `set 7,d` length marker from HGTHD. No clobber or semantic deltas were observed at any of the call shapes the production assembler uses.
+3. **AL 1.5a's record math equals the public 1.5a source's math.** The HDF was built programmatically from the formulas in the `Bdos15a.zip` source (`hd.init`: base = ⌊(⌊total/1600⌋+32)/32⌋+1, record n at base+(n−1)·1600, partial last record counted when ≥5 leftover tracks). The AL build reported `R=000B` = 11 records for the 16128-sector test disk — exactly the predicted 10 full + 1 partial — and found the BDOS ID where those formulas placed it. SimCoupé's `IsBDOSDisk` uses the same base formula, so all three agree.
+4. **The BDOS ID stamp is load-bearing and survives file saves.** 1.5a's `exp.rcd` → `get.label` errors with "Invalid record" (rep81) when the stamp is missing, so an unstamped record cannot be `HRECORD`-selected. B-DOS wrote the probe's directory entry into slot 0 of the record's first directory sector while **preserving** the `BDOS` ID at bytes 232-235 of that same 256-byte entry (the entry-0 bytes 210-255 are the record's label/ID region).
+5. **A B-DOS record is formattable programmatically**: zero-fill 1600 sectors + stamp `BDOS` at byte 232 of the record's first sector is equivalent to what `FORMAT` leaves (the 1.7n manual: hard-disk FORMAT zero-fills; the ID is the selection gate). B-DOS AL booted against such records, auto-selected its default record, and used them without complaint — no on-SAM formatter run was needed.
+
+### Rig and repro
+
+`tools/i62-bdos-experiment/run-experiment.sh` rebuilds everything and asserts both transcripts plus the HDF post-check; `tools/i62-bdos-experiment/README.md` has the exact invocations. Components: the probe (pyz80), a `build-i62-disk` Go tool (same boot-disk recipe as `tools/build-disk`, with the DOS slot swappable — SAMDOS 2 at start-address 491529 or `AL-BDOS15a` at 32777, both with the 0x60 start-page unused-bits pattern their source disks carry), and `make-atomlite-hdf.py` (RS-IDE v1.1 + ATA identify + stamped records; every field cites SimCoupé's `HardDisk.cpp`/`ATA.cpp` or the B-DOS source). The B-DOS boot disk and HDF are built at run time from the worldofsam images in `~/sam-archive/bdos/` — nothing from the archive is committed.
+
+Verified on a Linux/ARM host with no X available: SimCoupé at the CI-pinned SHA built with `-DSIMCOUPE_PORTABLE=1` (static SDL2) runs fully headless under `SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy` **plus a 6-line local patch** falling back to SDL's software renderer when `SDL_RENDERER_ACCELERATED` is unavailable (stock SimCoupé hard-requires an accelerated renderer; the rendering backend has no effect on Z80/ATA emulation — the patched build first reproduced the standard CI fixture round-trip byte-for-byte before being trusted for i62). The CI dev container should run the script unmodified via the stock Xvfb x11 recipe from `headless-simcoupe.md` (same SimCoupé SHA, same flags as every CI fixture run) — expected but not yet executed there, since this host has no Docker and the experiment is deliberately **not** a CI gate (the B-DOS disk images stay outside the repo). Software rendering is slow on small hosts — `-speed 1000` plus a small window keeps wall-clock sane.
+
+`-atombootrom 0` was passed in the B-DOS run so the standard SAM ROM boots the floppy exactly like the control run (with the option on, SimCoupé swaps in its Atom Lite boot ROM, which is the hard-disk-boot path — a separate mechanism from what i62 tests).
+
+### Status consequences
+
+- Hook-level portability SAMDOS ↔ B-DOS AL 1.5a: LIKELY → **VERIFIED** (this experiment).
+- The spill route for i40/i59 (SAMDOS hooks → B-DOS records) is proven viable on the CI tier: record selection + whole-file save/load against an 800 KB record slice works with the production call shapes.
+- Trinity/1.5t leg: still LIKELY — same 1.5a-descended hook layer, but no emulator can execute it; needs real hardware.
 
 ## Open questions
 
