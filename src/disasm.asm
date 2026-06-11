@@ -210,6 +210,12 @@ disasm_not_mul3:
                 jp      disasm_try_shiftvar
 disasm_not_shiftvar:
 
+; --- EXTR / ROR-immediate (extract register, 32- or 64-bit) -----------
+; aarch64dec tryDecodeExtr (aliases.go:778) inside decodeAlias; runs
+; after decodeMovk and before decodeAlias returns.  Rm==Rn → ror alias.
+                jp      disasm_try_extr
+disasm_not_extr:
+
 ; --- dp-register aliases (mov/mvn/cmp/cmn/tst/neg/negs/ngc) ------------
 ; Per Go DecodeAt order the register-space aliases (decodeDPRegAlias,
 ; inside decodeAlias) run BEFORE the base decodeDPReg form walk, so they
@@ -4117,6 +4123,192 @@ disasm_sv_sf:           defb    0
 disasm_sv_rm:           defb    0
 disasm_sv_rn:           defb    0
 disasm_sv_rd:           defb    0
+
+
+; =======================================================================
+; EXTR (extract register) / ROR-immediate — Z80 port of tryDecodeExtr
+; (tools/aarch64dec/aliases.go:778).
+;
+; Encoding (ARM ARM C6.2.72):
+;   sf | 00100111 | N | 0 | Rm(5) | imms(6) | Rn(5) | Rd(5)
+;
+;   mask 0xFFE00000 captures bits[31:21]:
+;     32-bit: sf=0, N=0 → pattern 0x13800000 → B=0x13, C & 0xE0 = 0x80
+;     64-bit: sf=1, N=1 → pattern 0x93C00000 → B=0x93, C & 0xE0 = 0xC0
+;
+;   Discriminator: bits[30:24] == 0x13 (B & 0x7f == 0x13), and
+;   bit23=1 (C & 0x80 == 0x80), bit21=0 (C & 0x20 == 0).
+;   Combined: (B & 0x7f == 0x13) AND (C & 0xA0 == 0x80).
+;   Additionally N (bit22 = (C>>6)&1) must equal sf.
+;
+; When Rm==Rn: `ror Rd, Rn, #imms`.  When Rm!=Rn: `extr Rd, Rn, Rm, #imms`.
+;
+; Fields (B=bits31:24, C=bits23:16, D=bits15:8, E=bits7:0):
+;   sf = B >> 7
+;   Rm = C & 0x1f
+;   imms = (D >> 2) & 0x3f
+;   Rn = ((D & 3) << 3) | (E >> 5)
+;   Rd = E & 0x1f
+; =======================================================================
+disasm_try_extr:
+; bits[30:24] must equal 0x13: (B & 0x7f) == 0x13.
+                ld      a, b
+                and     &7f
+                cp      &13
+                jp      nz, disasm_not_extr
+; bit23=1 and bit21=0: (C & 0xA0) == 0x80.
+                ld      a, c
+                and     &a0
+                cp      &80
+                jp      nz, disasm_not_extr
+; N (bit22 = (C>>6)&1) must equal sf (B>>7).
+                ld      a, c
+                rlca
+                rlca
+                and     1                    ; N
+                ld      l, a
+                ld      a, b
+                rlca
+                and     1                    ; sf
+                cp      l                    ; sf == N?
+                jp      nz, disasm_not_extr
+; sf.
+                ld      (disasm_ex_sf), a
+; Rm = C & 0x1f.
+                ld      a, c
+                and     &1f
+                ld      (disasm_ex_rm), a
+; imms = (D >> 2) & 0x3f.
+                ld      a, d
+                rrca
+                rrca
+                and     &3f
+                ld      (disasm_ex_imms), a
+; Rn = ((D & 3) << 3) | (E >> 5).
+                ld      a, d
+                and     3
+                add     a, a
+                add     a, a
+                add     a, a
+                ld      l, a
+                ld      a, e
+                rlca
+                rlca
+                rlca
+                and     7
+                or      l
+                ld      (disasm_ex_rn), a
+; Rd = E & 0x1f.
+                ld      a, e
+                and     &1f
+                ld      (disasm_ex_rd), a
+
+; Past the last decline — commit; save BC/IX.
+                push    bc
+                push    ix
+
+; Rm==Rn? → ror; else → extr.
+                ld      a, (disasm_ex_rm)
+                ld      l, a
+                ld      a, (disasm_ex_rn)
+                cp      l
+                jr      nz, disasm_ex_extr
+
+; ror Rd, Rn, #imms.
+                ld      hl, disasm_dpr_ror_txt
+                call    disasm_ex_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                call    disasm_ex_emit_rd
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                call    disasm_ex_emit_rn
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      (hl), "#"
+                inc     hl
+                ld      a, (disasm_ex_imms)
+                ld      e, a
+                ld      d, 0
+                call    disasm_emit_dec16
+                ld      (hl), 0
+                jp      disasm_ex_done
+
+; extr Rd, Rn, Rm, #imms.
+disasm_ex_extr:
+                ld      hl, disasm_ex_extr_txt
+                call    disasm_ex_set_mnem
+                ld      hl, DISASM_COMM_OPS
+                call    disasm_ex_emit_rd
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                call    disasm_ex_emit_rn
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+; Rm at full width (same as Rn for EXTR).
+                ld      a, (disasm_ex_rm)
+                ld      c, a
+                ld      a, (disasm_ex_sf)
+                ld      b, a
+                call    disasm_br_emit_reg
+                ld      (hl), ","
+                inc     hl
+                ld      (hl), " "
+                inc     hl
+                ld      (hl), "#"
+                inc     hl
+                ld      a, (disasm_ex_imms)
+                ld      e, a
+                ld      d, 0
+                call    disasm_emit_dec16
+                ld      (hl), 0
+                jp      disasm_ex_done
+
+disasm_ex_emit_rd:
+                ld      a, (disasm_ex_rd)
+                ld      c, a
+                ld      a, (disasm_ex_sf)
+                ld      b, a
+                jp      disasm_br_emit_reg
+
+disasm_ex_emit_rn:
+                ld      a, (disasm_ex_rn)
+                ld      c, a
+                ld      a, (disasm_ex_sf)
+                ld      b, a
+                jp      disasm_br_emit_reg
+
+disasm_ex_set_mnem:
+                ld      de, DISASM_COMM_MNEM
+disasm_ex_set_mnem_loop:
+                ld      a, (hl)
+                ld      (de), a
+                or      a
+                ret     z
+                inc     hl
+                inc     de
+                jr      disasm_ex_set_mnem_loop
+
+disasm_ex_done:
+                pop     ix
+                pop     bc
+                ret
+
+disasm_ex_extr_txt:     defm    "extr"
+                        defb    0
+
+disasm_ex_sf:           defb    0
+disasm_ex_rm:           defb    0
+disasm_ex_imms:         defb    0
+disasm_ex_rn:           defb    0
+disasm_ex_rd:           defb    0
 
 
 ; =======================================================================
