@@ -162,6 +162,13 @@ type NamedFile struct {
 	Name       string // SAMDOS catalogue name, up to 10 chars (no padding needed)
 	Content    []byte
 	TargetPage int // physical page the assembler will load this file into
+	// LoadOffset is the offset within TargetPage where the content lands
+	// (the HLOAD destination's &3FFF residue).  Zero for every payload
+	// that loads at the bottom of the section-C window (&8000); &0400
+	// for the zx0 payload, which loads at &8400 beside sysreg_data.
+	// Used by the belt-and-braces pre-deposit; the HLOAD emulation
+	// itself honours the caller's live HL.
+	LoadOffset int
 }
 
 // Hardware implements the koron-go/z80 Memory and IO interfaces.
@@ -430,10 +437,17 @@ func (h *Hardware) depositInPages(data []byte) {
 
 // depositPage copies data into a single physical page (offset 0).
 func (h *Hardware) depositPage(page int, data []byte) {
-	if len(data) > pageSize {
-		panic(fmt.Sprintf("depositPage: data (%d B) exceeds pageSize", len(data)))
+	h.depositPageAt(page, 0, data)
+}
+
+// depositPageAt copies data into a single physical page starting at the
+// given offset (the &3FFF residue of the payload's HLOAD destination —
+// e.g. &0400 for the zx0 payload loading at &8400).
+func (h *Hardware) depositPageAt(page, offset int, data []byte) {
+	if offset+len(data) > pageSize {
+		panic(fmt.Sprintf("depositPageAt: offset %d + data (%d B) exceeds pageSize", offset, len(data)))
 	}
-	copy(h.ram[page][:], data)
+	copy(h.ram[page][offset:], data)
 }
 
 // depositPagesFrom copies data into consecutive physical pages starting at
@@ -550,7 +564,7 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 		f := files[i]
 		hw.files[f.Name] = &files[i]
 		if f.TargetPage >= 0 && f.TargetPage < numPages {
-			hw.depositPage(f.TargetPage, f.Content)
+			hw.depositPageAt(f.TargetPage, f.LoadOffset, f.Content)
 		}
 	}
 
@@ -694,9 +708,13 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 
 		case hookHLOAD:
 			// HLOAD: copy the current file (selected by the preceding HGTHD)
-			// into the physical page currently mapped at section C.  The COMET
-			// trampoline sets HMPR := target page and HL := &8000 before the
-			// RST 8, so HLOAD writes to section C = physical page (HMPR & 0x1F).
+			// into the physical page currently mapped at section C, at the
+			// destination the caller supplies in HL.  The COMET trampoline
+			// sets HMPR := target page and HL := the section-C destination
+			// (&8000 for every payload except the zx0 payload's &8400)
+			// before the RST 8, so HLOAD writes from section C = physical
+			// page (HMPR & 0x1F) at offset (HL & &3FFF).  HL is live here:
+			// the fake-ROM RST-8 stub restores it before the OUT dispatch.
 			//
 			// This is faithful to HLOAD's *effect*.  When currentFile is nil
 			// (legacy IN / enctab path), the data was pre-deposited into the
@@ -704,18 +722,20 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 			// harness behaviour exactly.
 			if hw.currentFile != nil {
 				// Deposit across consecutive physical pages starting at the
-				// section-C page (HMPR & 0x1F), mirroring SAMDOS's ctas
-				// auto-paging which advances HMPR every &C000-boundary
-				// crossing (samdos/src/c.s:354-369).  This makes a re-HLOAD
-				// of a file faithfully restore ALL its pages — critical for
-				// the BUILD_TESTS reader self-test, which clobbers IN page 7
-				// and relies on main_assemble's load_in_file re-reading the
-				// real IN file from disk to restore it.
+				// section-C page (HMPR & 0x1F) + the HL offset, mirroring
+				// SAMDOS's ctas auto-paging which advances HMPR every
+				// &C000-boundary crossing (samdos/src/c.s:354-369).  This
+				// makes a re-HLOAD of a file faithfully restore ALL its
+				// pages — critical for the BUILD_TESTS reader self-test,
+				// which clobbers IN page 7 and relies on main_assemble's
+				// load_in_file re-reading the real IN file from disk to
+				// restore it.
 				dstPage := int(hw.hmpr & 0x1F)
+				dstOff := int(hw.cpu.HL.U16()) & 0x3FFF
 				content := hw.currentFile.Content
 				for i, b := range content {
-					pg := (dstPage + i/pageSize) & 0x1F
-					hw.ram[pg][i%pageSize] = b
+					pg := (dstPage + (dstOff+i)/pageSize) & 0x1F
+					hw.ram[pg][(dstOff+i)%pageSize] = b
 				}
 				hw.currentFile = nil
 			}

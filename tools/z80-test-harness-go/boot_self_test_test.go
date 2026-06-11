@@ -2,7 +2,7 @@
 // variant assembler boots clean through ALL of its boot-time self-test
 // suites, INCLUDING the page-15 disassembler self-test.
 //
-// Why this exists
+// # Why this exists
 //
 // The disasm boot path (load_page15_payload HLOADs "d15" into physical page
 // 15; the BUILD_TESTS boot then paged_call's DISASM_SELF_TEST_ENTRY = &8003
@@ -16,8 +16,10 @@
 //   - Loads the test-variant assembler.bin plus every payload the boot
 //     HLOADs: enctab.enc (page 4), sysreg_data.bin as "sd13" (page 13),
 //     test_mem.bin as "test_mem" (page 13), the off-axis cluster as "cluster"
-//     (page 12), the paged_call payload as "p14" (page 14), and — the piece
-//     this test is really about — disasm.bin as "d15" (page 15).
+//     (page 12), the paged_call payload as "p14" (page 14), the zx0
+//     compressor+decoder payload as "zx013" (page 13 at offset &0400 — the
+//     i68 boot self-test compresses + decodes a baked fixture through it),
+//     and disasm.bin as "d15" (page 15).
 //   - Boots the assembler with a trivial fixture (nop; ret).  The boot runs
 //     the five inline self-test suites + the off-axis suites + the disasm
 //     paged-call self-test BEFORE it reaches load_enctab / main_assemble, so
@@ -31,10 +33,12 @@
 //     not as a CI failure minutes later.
 //
 // Requires (all from `make assembler enctab sysreg-data disasm-test-payload
-// test-mem-offaxis cluster-offaxis paged-call-payload sam-aarch64`):
+// zx0-test-payload test-mem-offaxis cluster-offaxis paged-call-payload
+// sam-aarch64`):
 //
 //	build/assembler.bin   build/enctab.enc   build/sysreg_data.bin
-//	build/disasm-test.bin build/test_mem.bin build/test_cluster.bin
+//	build/disasm-test.bin build/zx0-test.bin build/test_mem.bin
+//	build/test_cluster.bin
 //	build/paged_call_test_payload.bin   build/sam-aarch64
 //
 // Skipped automatically if any artefact is absent.  SimCoupé remains the sole
@@ -63,12 +67,15 @@ func TestBootSelfTestsPass(t *testing.T) {
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
+	// The zx0 boot self-test (i68) paged_calls into the BUILD_TESTS zx0
+	// payload (zx0-test.bin), so the test disk equivalent must serve it.
+	zx0Path := filepath.Join(root, "build", "zx0-test.bin")
 	samPath := filepath.Join(root, "build", "sam-aarch64")
 	fixturePath := filepath.Join(root, "tests", "core", "sources", "inst_nop_ret.s")
 
-	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path, samPath, fixturePath} {
+	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path, zx0Path, samPath, fixturePath} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make assembler enctab sysreg-data disasm-test-payload test-mem-offaxis cluster-offaxis paged-call-payload sam-aarch64`", p)
+			t.Skipf("prerequisite missing: %s\n  run `make assembler enctab sysreg-data disasm-test-payload zx0-test-payload test-mem-offaxis cluster-offaxis paged-call-payload sam-aarch64`", p)
 		}
 	}
 
@@ -93,9 +100,10 @@ func TestBootSelfTestsPass(t *testing.T) {
 	tm, _ := os.ReadFile(tmPath)
 	cluster, _ := os.ReadFile(clusterPath)
 	p14, _ := os.ReadFile(p14Path)
+	zx0, _ := os.ReadFile(zx0Path)
 	in, _ := os.ReadFile(tbnPath)
 
-	res := runBootSelfTests(asm, enc, in, sd13, d15, tm, cluster, p14)
+	res := runBootSelfTests(asm, enc, in, sd13, d15, tm, cluster, p14, zx0)
 
 	t.Logf("Exit: %s", res.ExitReason)
 	t.Logf("Printer: %q", res.PrinterCapture)
@@ -137,7 +145,7 @@ func TestBootSelfTestsPass(t *testing.T) {
 // runBootSelfTests wires every boot payload (in the same page assignments the
 // boot expects) and runs the test-variant assembler to completion.  The d15
 // disasm payload on page 15 is the piece the earlier harness lacked.
-func runBootSelfTests(asm, enc, in, sd13, d15, tm, cluster, p14 []byte) Result {
+func runBootSelfTests(asm, enc, in, sd13, d15, tm, cluster, p14, zx0 []byte) Result {
 	return RunWithFiles(asm, enc, in, []NamedFile{
 		// sd13 before test_mem so test_mem wins the initial page-13
 		// pre-deposit (run_mem_self_tests runs first); the boot later
@@ -146,6 +154,12 @@ func runBootSelfTests(asm, enc, in, sd13, d15, tm, cluster, p14 []byte) Result {
 		{Name: "test_mem", Content: tm, TargetPage: 13},
 		{Name: "cluster", Content: cluster, TargetPage: 12},
 		{Name: "p14", Content: p14, TargetPage: 14},
+		// The zx0 compressor+decoder payload on physical page 13 at
+		// offset &0400 (it HLOADs at &8400, beside sd13 at &8000):
+		// HLOAD'd by load_zx0_payload as "zx013", then exercised by the
+		// BUILD_TESTS paged_call to ZX0_SELF_TEST_ENTRY, which runs the
+		// compressor AND the turbo decoder over a baked fixture.
+		{Name: "zx013", Content: zx0, TargetPage: 13, LoadOffset: 0x0400},
 		// The disassembler payload on physical page 15: HLOAD'd by
 		// load_page15_payload as "d15", then exercised by the BUILD_TESTS
 		// paged_call to DISASM_SELF_TEST_ENTRY.

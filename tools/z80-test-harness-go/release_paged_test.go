@@ -15,11 +15,13 @@
 //     empty), and the harness's trap diagnostic now names "sd13" as an
 //     unserved HGTHD file — so the cryptic trap is self-explaining.
 //
-// Requires (all produced by `make assembler-prod enctab sam-aarch64 sysreg-data`):
+// Requires (all produced by `make assembler-prod enctab sam-aarch64
+// sysreg-data disasm-payload zx0-payload`):
 //
 //	build/assembler-prod.bin
 //	build/enctab.enc
 //	build/sysreg_data.bin
+//	build/zx0.bin
 //	build/sam-aarch64
 //	tests/release/release.s   (vendored; always present)
 //	tests/release/release.img (vendored oracle; always present)
@@ -44,13 +46,17 @@ func TestReleasePagedInLoad(t *testing.T) {
 	encPath := filepath.Join(root, "build", "enctab.enc")
 	sd13Path := filepath.Join(root, "build", "sysreg_data.bin")
 	d15Path := filepath.Join(root, "build", "disasm.bin")
+	// The prod boot HLOADs the zx0 payload ("zx013") unconditionally
+	// (load_zx0_payload, i68) — serve the PROD payload so it isn't
+	// flagged unserved.
+	zx0Path := filepath.Join(root, "build", "zx0.bin")
 	samPath := filepath.Join(root, "build", "sam-aarch64")
 	releaseSrc := filepath.Join(root, "tests", "release", "release.s")
 	releaseImg := filepath.Join(root, "tests", "release", "release.img")
 
-	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, samPath, releaseSrc, releaseImg} {
+	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, zx0Path, samPath, releaseSrc, releaseImg} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make assembler-prod enctab sam-aarch64 sysreg-data disasm-payload`", p)
+			t.Skipf("prerequisite missing: %s\n  run `make assembler-prod enctab sam-aarch64 sysreg-data disasm-payload zx0-payload`", p)
 		}
 	}
 
@@ -74,6 +80,7 @@ func TestReleasePagedInLoad(t *testing.T) {
 	enc, _ := os.ReadFile(encPath)
 	sd13, _ := os.ReadFile(sd13Path)
 	d15, _ := os.ReadFile(d15Path)
+	zx0, _ := os.ReadFile(zx0Path)
 	in, err := os.ReadFile(tbnPath)
 	if err != nil {
 		t.Fatalf("read release.compact.tbn: %v", err)
@@ -97,6 +104,7 @@ func TestReleasePagedInLoad(t *testing.T) {
 	res := RunWithFiles(asm, enc, in,
 		[]NamedFile{
 			{Name: "sd13", Content: sd13, TargetPage: 13},
+			{Name: "zx013", Content: zx0, TargetPage: 13, LoadOffset: 0x0400},
 			{Name: "d15", Content: d15, TargetPage: 15},
 		},
 		30*time.Second)
@@ -120,7 +128,10 @@ func TestReleasePagedInLoad(t *testing.T) {
 	// runtime page-13 sysreg-name lookup — sd13 is requested at boot (and shows
 	// up unserved) but is not a hard dependency for assembling compact input.
 	resNo := RunWithFiles(asm, enc, in,
-		[]NamedFile{{Name: "d15", Content: d15, TargetPage: 15}},
+		[]NamedFile{
+			{Name: "zx013", Content: zx0, TargetPage: 13, LoadOffset: 0x0400},
+			{Name: "d15", Content: d15, TargetPage: 15},
+		},
 		30*time.Second)
 	if !resNo.Passed {
 		t.Fatalf("compact run FAILED without sd13 (expected pass — sysreg insts are pre-folded): exit=%q printer=%q regs=%s",

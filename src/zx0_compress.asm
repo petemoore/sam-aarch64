@@ -1,4 +1,6 @@
-; zx0_compress.asm — greedy ZX0-format compressor (standalone, org 0).
+; zx0_compress.asm — greedy ZX0-format compressor (org &8400; assembled
+; standalone for the harness AND included by src/zx0_payload.asm as the
+; head of the page-13 zx0 payload — identical bytes either way).
 ;
 ; Z80 port of tools/zx0-greedy/compress.go (Go authority).
 ; Every routine maps to a named Go function; the Go function name is
@@ -60,7 +62,15 @@ CHAIN_DEPTH:     equ     16      ; in {4,8,16,32}
 HASH_MASK:       equ     (HASH_SIZE - 1)
 HASH_SIZE_BYTES: equ     (HASH_SIZE * 2)
 
-                org     0
+; org &8400 = ZX0_COMPRESS_ENTRY (src/zx0_comm.inc): the page-13
+; section-C address the i68 payload loads to, per
+; docs/specs/comment-storage-design.md §5.  Must stay 256 B-aligned —
+; the assemble-time hash tables at the end of this file are
+; page-aligned (`align 256`) and zxc_hash2 relies on table entries
+; sharing a high byte.  The harness battery (tools/z80-test-harness-go
+; zx0_*_test.go) loads the standalone build/zx0_compress.bin at this
+; same address.
+                org     &8400
 
 ; ════════════════════════════════════════════════════════════════════
 ; zx0_compress — top-level entry point.

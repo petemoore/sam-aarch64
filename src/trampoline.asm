@@ -414,6 +414,24 @@ DISASM_ENTRY:   equ     &8000
                 include "disasm_comm.inc"
 
 
+; ZX0 payload constants (PRODUCTION feature — both variants).
+;
+; Per docs/specs/comment-storage-design.md §5: the greedy ZX0 compressor
+; (&8400) + turbo decoder (&8B00) co-reside on page 13 with sysreg_data
+; (&8000-&83B3), loaded at boot by load_zx0_payload (loader.asm) at the
+; non-page-start offset &8400 and invoked via paged_call (HMPR=13, which
+; also maps page 14 — the staging area — at section D).  ZX0_PAGE equals
+; SYSREG_DATA_PAGE; the same BUILD_TESTS boot-time multiplex applies
+; (test_mem.bin first, fully consumed, then sysreg_data + zx0).
+;
+; Constants (ZX0_PAGE, ZX0_LOAD_ADDR, ZX0_COMPRESS_ENTRY,
+; ZX0_DECODE_ENTRY, ZX0_WORKSPACE, ZX0_SELF_TEST_ENTRY,
+; ZX0_STAGING_SRC/DST) are defined in src/zx0_comm.inc — shared with
+; src/zx0_payload.asm (assembled standalone), which asserts its layout
+; against them so the two builds cannot drift.
+                include "zx0_comm.inc"
+
+
 TRAMPOLINE_DST: equ     &7E00          ; section-B copy destination
                                        ; (under LMPR_DEFAULT, section B
                                        ; = page 1).  Near the top of

@@ -88,7 +88,7 @@ mkdir -p build
 # because that would force the test variant even when the caller wants
 # the prod variant.
 ASSEMBLER_BIN="${ASSEMBLER_BIN:-$ROOT/build/assembler.bin}"
-make -s sam-aarch64 enctab build-disk sysreg-data disasm-payload
+make -s sam-aarch64 enctab build-disk sysreg-data disasm-payload zx0-payload
 
 if [ ! -f "$ASSEMBLER_BIN" ]; then
     echo "ERROR: assembler binary not found: $ASSEMBLER_BIN" >&2
@@ -109,16 +109,18 @@ echo "--- sam-aarch64 (assemble + emit compact .tbn) ---"
 # For the test variant only, also deposit:
 #   - the off-axis test_mem.bin (HLOADed into physical page 13), and
 #   - the paged_call self-test page-14 payload.
-# The disasm self-test runs at boot only under BUILD_TESTS (the test
-# assembler), so the test disk ships disasm-test.bin and prod disks
-# ship the stripped disasm.bin.
+# The disasm + zx0 self-tests run at boot only under BUILD_TESTS (the
+# test assembler), so the test disk ships disasm-test.bin + zx0-test.bin
+# and prod disks ship the stripped disasm.bin + zx0.bin.
 echo "--- build-disk ---"
 test_variant_flags=()
 disasm_bin="$ROOT/build/disasm.bin"
+zx0_bin="$ROOT/build/zx0.bin"
 if [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler.bin" ]; then
-    # Test variant — needs the off-axis payloads + the self-test disasm.
-    make -s test-mem-offaxis paged-call-payload cluster-offaxis disasm-test-payload
+    # Test variant — needs the off-axis payloads + the self-test disasm + zx0.
+    make -s test-mem-offaxis paged-call-payload cluster-offaxis disasm-test-payload zx0-test-payload
     disasm_bin="$ROOT/build/disasm-test.bin"
+    zx0_bin="$ROOT/build/zx0-test.bin"
     test_variant_flags=(
         -test-mem "$ROOT/build/test_mem.bin"
         -paged-call "$ROOT/build/paged_call_test_payload.bin"
@@ -129,6 +131,7 @@ fi
     "${test_variant_flags[@]}" \
     -sysreg-data "$ROOT/build/sysreg_data.bin" \
     -disasm "$disasm_bin" \
+    -zx0 "$zx0_bin" \
     "$ASSEMBLER_BIN" build/enctab.enc \
     "build/${base}.compact.tbn" \
     "build/${base}.mgt"

@@ -30,8 +30,9 @@ func TestBootSelfTestsFailProbe(t *testing.T) {
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
+	zx0Path := filepath.Join(root, "build", "zx0-test.bin")
 
-	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path} {
+	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path, zx0Path} {
 		if _, err := os.Stat(p); err != nil {
 			t.Skipf("prerequisite missing: %s", p)
 		}
@@ -44,6 +45,7 @@ func TestBootSelfTestsFailProbe(t *testing.T) {
 	tm, _ := os.ReadFile(tmPath)
 	cluster, _ := os.ReadFile(clusterPath)
 	p14, _ := os.ReadFile(p14Path)
+	zx0, _ := os.ReadFile(zx0Path)
 
 	// No IN .tbn needed: the disasm self-test runs long before main_assemble,
 	// so the boot fails before it would consume IN.  An empty IN is fine.
@@ -59,7 +61,7 @@ func TestBootSelfTestsFailProbe(t *testing.T) {
 	broken := append([]byte(nil), d15...)
 	copy(broken[3:], []byte{0x01, 0xEE, 0x00, 0xC9})
 
-	res := runBootSelfTests(asm, enc, in, sd13, broken, tm, cluster, p14)
+	res := runBootSelfTests(asm, enc, in, sd13, broken, tm, cluster, p14, zx0)
 
 	t.Logf("Exit: %s", res.ExitReason)
 	t.Logf("Printer: %q", res.PrinterCapture)
@@ -76,5 +78,74 @@ func TestBootSelfTestsFailProbe(t *testing.T) {
 		t.Errorf("expected fail tag EE from the injected fault, got %q (printer=%q)", tag, res.PrinterCapture)
 	} else {
 		t.Logf("gate correctly caught the broken disasm self-test with fail tag %q", tag)
+	}
+}
+
+// TestBootSelfTestsZX0FailProbe is the same negative control for the i68
+// zx0 boot self-test: it corrupts run_zx0_self_test in the zx0-test.bin
+// payload so the paged_call returns a non-zero fail tag, and asserts the
+// boot halts with that tag's FAIL banner.  Proves the zx0 gate fails
+// loudly rather than passing vacuously — the page-13 time-multiplex seam
+// the i60c design review flagged as the riskiest part of the wiring.
+func TestBootSelfTestsZX0FailProbe(t *testing.T) {
+	root := repoRoot(t)
+
+	asmPath := filepath.Join(root, "build", "assembler.bin")
+	encPath := filepath.Join(root, "build", "enctab.enc")
+	sd13Path := filepath.Join(root, "build", "sysreg_data.bin")
+	d15Path := filepath.Join(root, "build", "disasm-test.bin")
+	tmPath := filepath.Join(root, "build", "test_mem.bin")
+	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
+	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
+	zx0Path := filepath.Join(root, "build", "zx0-test.bin")
+
+	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path, zx0Path} {
+		if _, err := os.Stat(p); err != nil {
+			t.Skipf("prerequisite missing: %s", p)
+		}
+	}
+
+	asm, _ := os.ReadFile(asmPath)
+	enc, _ := os.ReadFile(encPath)
+	sd13, _ := os.ReadFile(sd13Path)
+	d15, _ := os.ReadFile(d15Path)
+	tm, _ := os.ReadFile(tmPath)
+	cluster, _ := os.ReadFile(clusterPath)
+	p14, _ := os.ReadFile(p14Path)
+	zx0, _ := os.ReadFile(zx0Path)
+
+	var in []byte
+
+	// Corrupt run_zx0_self_test.  The zx0-test payload loads at &8400 and
+	// the self-test entry is ZX0_SELF_TEST_ENTRY = &AFA0 (src/zx0_comm.inc),
+	// i.e. file offset &AFA0 - &8400.  Overwrite the entry so it returns a
+	// non-zero fail tag immediately:
+	//   01 E9 00   ld bc, &00E9   ; C = 0xE9 probe tag, B = 0
+	//   C9         ret
+	// On return the boot sees BC != 0 → `ld a,c; jp fail_with_tag`.
+	const zx0SelfTestFileOff = 0xAFA0 - 0x8400
+	if len(zx0) <= zx0SelfTestFileOff {
+		t.Fatalf("zx0-test.bin too short (%d B) to contain the &AFA0 self-test entry — payload layout drifted?", len(zx0))
+	}
+	broken := append([]byte(nil), zx0...)
+	copy(broken[zx0SelfTestFileOff:], []byte{0x01, 0xE9, 0x00, 0xC9})
+
+	res := runBootSelfTests(asm, enc, in, sd13, d15, tm, cluster, p14, broken)
+
+	t.Logf("Exit: %s", res.ExitReason)
+	t.Logf("Printer: %q", res.PrinterCapture)
+
+	if res.Passed {
+		t.Fatalf("BROKEN zx0 self-test still produced a passing boot — the gate is vacuous!")
+	}
+	if !strings.HasPrefix(res.PrinterCapture, "FAIL") {
+		t.Fatalf("expected a FAIL banner from the broken zx0 self-test, got printer=%q exit=%q",
+			res.PrinterCapture, res.ExitReason)
+	}
+	tag := strings.TrimSpace(strings.TrimPrefix(res.PrinterCapture, "FAIL"))
+	if !strings.EqualFold(tag, "e9") {
+		t.Errorf("expected fail tag E9 from the injected fault, got %q (printer=%q)", tag, res.PrinterCapture)
+	} else {
+		t.Logf("gate correctly caught the broken zx0 self-test with fail tag %q", tag)
 	}
 }

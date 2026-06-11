@@ -58,7 +58,7 @@ GO_IMG_C="$ROOT/build/release.go.compact.img" # toolchain 2 via compact .tbn
 SAM_IMG="$ROOT/build/release.sam.img"         # toolchain 3 output
 
 echo "=== [1/5] build SAM + Go tools (+ &C000 budget check) ==="
-make -s sam-aarch64 enctab sysreg-data disasm-payload build-disk assembler-prod check-budget
+make -s sam-aarch64 enctab sysreg-data disasm-payload zx0-payload build-disk assembler-prod check-budget
 
 # Keep one-in-20 of release.s's ~335 KB of comments (M8 / i39b-2): the SAM
 # can't fit all of them in the 96 KB IN buffer, but a bounded subset (~15 KB →
@@ -92,6 +92,7 @@ echo "=== [4/5] Z80 toolchain: SAM assembler on SimCoupé → OUT (from the COMP
 "$ROOT/build/build-disk" \
     -sysreg-data "$ROOT/build/sysreg_data.bin" \
     -disasm "$ROOT/build/disasm.bin" \
+    -zx0 "$ROOT/build/zx0.bin" \
     "$ROOT/build/assembler-prod.bin" "$ROOT/build/enctab.enc" \
     "$CTBN" \
     "$ROOT/build/release.mgt"

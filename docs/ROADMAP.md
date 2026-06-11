@@ -28,10 +28,10 @@
 *Updated in place each session — this is the live handover. Keep it ≤15 lines; history lives in the milestone status docs, the registries, and `git log`.*
 
 - **Milestone:** **M8 active** (`docs/notes/m8-status.md`). M0–M7 ✅ complete. Branch protection requires the status checks defined in `.github/workflows/ci.yml`.
-- **Last landed:** i60 a/b1/b2 (#163/#164/#165) — ZX0 comment compression measured + built: decode 52 T/byte (turbo), greedy Z80 compressor byte-identical to the Go authority, ~1.75 s per 4 KB dirty block. i61 corpus sweep + i62 B-DOS research done (notes landed this PR).
-- **In flight:** nothing. Recent: i52 cleanup (#155-#160), i57-i64 (#161-#168) — compression measured+built, Trinity/B-DOS research, superpowers extracted into the Development discipline (plugin retired), q9 resolved.
-- **Open questions:** q1 (i5 graphics — Pete). **Parked:** i50, i66. **Blocked:** i51 (route via compression + 512 KB-configured gate now plausible — revisit at i60c).
-- **NEXT ACTION:** **i60c** (design note: dirty-block watermark math, block-size sweet spot, off-axis page placement) → **i62** (B-DOS/Atom-Lite SimCoupé experiment — the storage-backend proof). Then i40 (eviction; unblocks i51). i39c parked (fold into the next overlay-decoder touch); M7 tail: i7, i17.
+- **Last landed:** i60 ✅ + i68 ✅ — the whole on-SAM ZX0 strand. i60c design approved + merged (#173: 4 KB blocks H=512 D=16, turbo decoder, page-13 co-residency, watermark R=2); i68 integration (#176): compressor (&8400) + turbo decoder (&8B00) are product code on page 13 in BOTH variants, baked-bytes boot self-tests run in every SimCoupé CI job (the standing kosarev/z80 IXH/IXL execution proof), comment-bench corpus vendored (zero delta vs research figures).
+- **In flight:** nothing. Recent: i67 night-shift optimization (#170/#171: 2698→972 T/byte), i60 a/b (#163-#165), i52 cleanup (#155-#160), i57-i64 (#161-#168), q9 resolved.
+- **Open questions:** q1 (i5 graphics — Pete). **Parked:** i50, i66. **Blocked:** i51 (route via compression + 512 KB-configured gate now plausible — design landed; revisit when the editor store exists).
+- **NEXT ACTION:** **i62** (B-DOS/Atom-Lite SimCoupé experiment — the storage-backend proof). Then i40 (eviction; unblocks i51). i39c parked (fold into the next overlay-decoder touch); M7 tail: i7, i17.
 - Every strand keeps the **assembled-binary byte-identical** invariant (the `release-gate` 3-way byte-match); the i39 invariant is binary-identity + round-trip + `.tbn`-shrinks-or-holds, NOT `.tbn` byte-identity.
 <!-- HANDOVER-PROTOCOL-END -->
 

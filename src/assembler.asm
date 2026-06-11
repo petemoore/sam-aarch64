@@ -56,16 +56,27 @@
 ;     (src/test_offaxis_cluster.asm), HLOAD'd at boot and invoked once
 ;     via an LMPR swap.  Time-multiplexed with the IN buffer, which is
 ;     not HLOAD'd until main_assemble.
-;   Physical page 13 (off-axis): sysreg_data.bin — the sysname lookup
-;     tables + matcher (src/sysreg_data.asm), reached via paged_call;
-;     loaded in BOTH variants by load_page13_payload (loader.asm).
+;   Physical page 13 (off-axis): two co-resident PRODUCTION payloads,
+;     loaded in BOTH variants (loader.asm):
+;       &8000-&83B3  sysreg_data.bin — the sysname lookup tables +
+;         matcher (src/sysreg_data.asm), via load_page13_payload,
+;         reached via paged_call.
+;       &8400-&8B7D  zx0.bin — greedy ZX0 compressor (&8400) + turbo
+;         decoder (&8B00) (src/zx0_payload.asm), via load_zx0_payload,
+;         reached via paged_call; workspace &8B80-&AF9D; the test disk
+;         ships zx0-test.bin which adds the &AFA0 boot self-test +
+;         baked fixture.  Per docs/specs/comment-storage-design.md §5.
 ;     Under BUILD_TESTS the page first holds test_mem.bin (the largest
 ;     self-test suite, HLOAD'd via load_test_mem_off_axis and invoked
-;     via LMPR-swap-CALL-restore from `start:`); sysreg_data.bin
-;     overwrites it once that suite completes.
-;   Physical page 14 (off-axis, BUILD_TESTS only):
+;     via LMPR-swap-CALL-restore from `start:`); the two production
+;     payloads overwrite it once that suite completes.
+;   Physical page 14 (off-axis): zx0 staging area (§5 of the
+;     comment-storage design) — &C000-&E0FF in the section-D view under
+;     HMPR=13: raw block in at &C000, compressed result out at &D000.
+;     Under BUILD_TESTS the page first holds
 ;     paged_call_test_payload.bin — the paged_call boot self-test stub
-;     (see src/trampoline.asm PAGED_CALL_TEST_PAGE).
+;     (see src/trampoline.asm PAGED_CALL_TEST_PAGE), 3 bytes at offset
+;     0, fully consumed before the zx0 self-test stages over it.
 ;   Physical page 15 (off-axis): disasm.bin — the on-SAM disassembler
 ;     (src/disasm.asm), HLOAD'd at boot in EVERY build via
 ;     load_page15_payload (loader.asm, DISASM_PAGE) and invoked via
@@ -400,7 +411,15 @@ if defined(BUILD_TESTS)
 ; the tables via paged_call).  Page 13 is overwritten: test_mem is fully
 ; consumed by run_mem_self_tests above, so the overwrite is safe.  See
 ; loader.asm::load_page13_payload header for the ordering contract.
+;
+; The zx0 payload (compressor + decoder, i68) shares page 13 at &8400+
+; and follows the SAME sequencing contract — loaded here, after the
+; test_mem suite has fully consumed its page-13 payload, and before the
+; zx0 self-test paged_call below.  (test_mem.bin is ~780 B at page
+; offset 0, so it never reached &8400 — but the ordering keeps the
+; time-multiplex discipline explicit and future-proof.)
                 call    load_page13_payload
+                call    load_zx0_payload
                 call    run_sysreg_paged_self_tests
 
                 call    run_sysname_self_tests
@@ -423,6 +442,32 @@ if defined(BUILD_TESTS)
                 ld      a, c
                 jp      fail_with_tag
 disasm_paged_test_ok:
+
+; -- ZX0 self-test: invoke run_zx0_self_test on page 13 via paged_call
+; (i68; docs/specs/comment-storage-design.md §7.1).  The driver (in
+; zx0-test.bin at ZX0_SELF_TEST_ENTRY) stages a baked 1 KB comment
+; block to page 14 (section D under HMPR=13), runs the page-13
+; compressor over it and byte-compares against the Go authority's
+; compressed bytes, then decodes the baked compressed bytes with the
+; turbo decoder and byte-compares against the raw block.  Exact tests
+; both ways — greedy is deterministic.  On return BC=0 signals success;
+; non-zero BC carries the fail tag in C (&E1/&E2/&E3).
+;
+; Must run AFTER load_zx0_payload above (page-13 multiplex: test_mem
+; consumed → sysreg + zx0 loaded) and after run_paged_call_self_tests
+; (the staging copy overwrites the 3-byte p14 stub at page 14 offset 0,
+; which that suite has fully consumed by this point).  The compressor
+; needs DI (bit-writer state in the shadow registers) — interrupts are
+; disabled throughout the boot self-tests.
+                call    paged_call
+                defw    ZX0_SELF_TEST_ENTRY
+                defb    ZX0_PAGE
+                ld      a, b
+                or      c
+                jr      z, zx0_paged_test_ok
+                ld      a, c
+                jp      fail_with_tag
+zx0_paged_test_ok:
 endif
 
 ; -- Load the sysreg lookup data into page 13 (PRODUCTION path, and a
@@ -434,7 +479,12 @@ endif
 ; keep this unconditional (rather than `if defined(BUILD_TESTS)==0`,
 ; which pyz80 doesn't parse) for simplicity — the extra HLOAD costs a
 ; few ms at boot only.  Must run before main_assemble's first lookup.
+;
+; The zx0 payload follows the same pattern: this unconditional call is
+; the ONLY load in a production build (the editor's compress/decode
+; paths need it resident), and an idempotent reload in the test variant.
                 call    load_page13_payload
+                call    load_zx0_payload
 
 ; -- Load and validate enctab.enc header --------------------------------
 ; load_enctab uses the trampoline to land the file in physical page 4
