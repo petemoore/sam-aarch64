@@ -346,45 +346,34 @@ if defined(BUILD_TESTS)
 endif
 
 ; -- Boot-time self-tests (compiled in only when BUILD_TESTS=1) --------
-; Five suites run in fixed order BEFORE load_enctab so they have no
-; disk-state dependency.  Any assertion failure does `jp fail` (red
-; border + printer-channel "FAIL" banner, ci-core reports fail
-; immediately).  All five are omitted from a production build (the
-; corresponding test_* includes are also skipped — see below).
+; The off-axis page-12 cluster (test_offaxis_cluster.asm) runs ALL
+; suite suites that exercise symbol_*, local_*, encode_*, and related
+; HMPR-stable section-C/D production routines.  The cluster call below
+; runs them in a single LMPR-swap-call-restore sequence (9 bytes).
+; Any assertion failure does `jp fail` (red border + printer-channel
+; "FAIL" banner, ci-core reports fail immediately).  This block is
+; omitted from a production build (corresponding includes skipped too —
+; see below).
 ;
-; Ordering note: M4 expr_eval / PC-rel suites MUST run AFTER the
-; symbol-table + local-label suites, because the M4 tests destructively
-; re-init both tables and need a known starting point.  PASS_PC is
-; also clobbered but is re-zeroed by main_assemble's pass_pc_reset
-; call, so it doesn't need explicit restoration here.
+; Ordering inside the cluster: symbol → local_label → expr_eval →
+; slots → pc_rel → …  The pc_rel suite re-uses the local-label table
+; state left by the symbol/local suites that precede it; that ordering
+; is preserved because symbol + local_label run FIRST in cluster_dispatch.
+; PASS_PC is clobbered by expr_eval but re-zeroed by main_assemble's
+; pass_pc_reset call, so it does not need explicit restoration here.
 if defined(BUILD_TESTS)
-                call    run_symbol_table_self_tests
-                call    run_local_label_self_tests
-                ; run_expr_eval_self_tests moved off-axis into the page-12
-                ; cluster (PR-3c, 2026-05-29) to reclaim ~449 B of section-C/D
-                ; budget for the MUL/DIV evaluator code.  It runs first in
-                ; cluster_dispatch, preserving its prior relative order (after
-                ; symbol/local, before slots).  The suite is LMPR-swap-safe:
-                ; verified call-graph-free of paged_call / section-B / LMPR
-                ; routines (only eval_expr_const, symbol_*, local_* — all
-                ; HMPR-stable section-C/D), and its inline `defb` literals read
-                ; via section A under the swap, like the slots suite already
-                ; relies on.
-
-; -- The slot / pc_rel / directives / ror_imm / shifted_reg /
-; extended_reg / litpool suites live off-axis on physical page 12 (M6
-; budget-relief PR,
-; 2026-05-29).  Same LMPR-swap-call-restore mechanism as the test_mem
-; off-axis call below: 9 bytes here vs 6×3 for the inline calls they
-; replace, net section-C/D saving ~1.2 KB.  HMPR is unchanged, so the
-; off-axis cluster's calls to production routines (encode_*, litpool_*,
-; symbol_*, compute_directive_size, pass_pc_reset, assert_eq32_de_hl_imm,
-; fail) resolve to their section-C/D addresses.  Verified by call-graph
-; analysis that none of those routines reach paged_call / the section-B
+; -- All test suites with HMPR-stable dependencies live off-axis on
+; physical page 12 (i69 lever 1, i69 lever 0 / PR-3c).  Same
+; LMPR-swap-call-restore mechanism as the test_mem off-axis call
+; below: 9 bytes here vs N×3 for the equivalent inline calls.
+; HMPR is unchanged, so the off-axis cluster's calls to production
+; routines (symbol_*, local_*, encode_*, litpool_*,
+; compute_directive_size, pass_pc_reset, assert_eq32_de_hl_imm, fail)
+; resolve to their section-C/D addresses.  Verified by transitive
+; call-graph analysis that none reach paged_call / the section-B
 ; trampoline, which the LMPR swap would relocate.  Stack (section D,
 ; HMPR) unaffected.  See src/test_offaxis_cluster.asm for the full
-; safety argument.  Must run AFTER the inline symbol/local-label suites
-; above (pc_rel re-uses the local-label table they leave initialised).
+; safety argument.
                 ld      a, LMPR_TEST_CLUSTER
                 out     (250), a
                 call    &0000                       ; off-axis cluster_dispatch
@@ -631,21 +620,16 @@ if defined(BUILD_TESTS)
                 ; main binary so both inline and off-axis suites resolve it
                 ; (the off-axis cluster + test_mem reach it via importfile).
                 include "test_assert_eq32.asm"
-                include "test_symbols.asm"
-                include "test_local_labels.asm"
-                ; test_expr_eval moved off-axis into the page-12 cluster
-                ; (PR-3c, 2026-05-29) — see the call-site comment above.
-                ; test_slots / test_pc_rel / test_directives / test_ror_imm /
-                ; test_shifted_reg / test_extended_reg / test_litpool now
-                ; live off-axis on physical page 12 (the "M5 + misc encoder"
-                ; cluster), assembled separately into build/test_cluster.bin
-                ; and HLOADed at boot via load_offaxis_cluster.  Relocated
-                ; in the M6 budget-relief PR (2026-05-29) to drop the test
-                ; variant back below &C000.  See
-                ; src/test_offaxis_cluster.asm and
-                ; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-test-variant-budget-relief.md.
+                ; test_symbols.asm and test_local_labels.asm live off-axis
+                ; in the page-12 cluster (test_offaxis_cluster.asm).
+                ; test_expr_eval, test_slots, test_pc_rel, test_directives,
+                ; test_ror_imm, test_shifted_reg, test_extended_reg, and
+                ; test_litpool likewise live off-axis in the same cluster,
+                ; assembled separately into build/test_cluster.bin and
+                ; HLOADed at boot via load_offaxis_cluster.  See
+                ; src/test_offaxis_cluster.asm.
                 ;
-                ; test_mem.asm likewise lives off-axis (physical page 13);
+                ; test_mem.asm lives off-axis on physical page 13;
                 ; see load_test_mem_off_axis / plan-PR 3 (PR #52).
                 include "test_sysname.asm"
                 ; test_litpool.asm is NOT included inline: its

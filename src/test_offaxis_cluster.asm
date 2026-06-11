@@ -24,18 +24,31 @@
 ; PR #52) exactly.
 ;
 ; WHICH suites live here (and why they are LMPR-swap-safe):
-;   expr_eval, slots, pc_rel, directives, ror_imm, shifted_reg,
-;   extended_reg, litpool.
+;   symbols, local_labels, expr_eval, slots, pc_rel, directives,
+;   ror_imm, shifted_reg, extended_reg, litpool.
 ;
-;   expr_eval was relocated here in PR-3c (2026-05-29) to reclaim
-;   ~449 B for the MUL/DIV evaluator routines.  It runs FIRST, preserving
-;   its prior inline order (after the resident symbol/local suites, before
-;   slots).  Its dependencies — eval_expr_const (now incl. ml_mul/ml_div),
-;   symbol_*, local_* — are all HMPR-stable section-C/D routines; none
-;   reach paged_call / section B.  It re-inits the symbol + local tables
-;   itself, so it is order-independent.  Its inline `defb` bytecode +
-;   expectation literals read via section A under the swap (same caveat as
-;   the slots suite).
+;   symbols and local_labels are LMPR-swap-safe: their production
+;   routines (symbol_table_init, symbol_lookup, symbol_insert,
+;   local_label_table_init, local_def_append, local_find_forward,
+;   local_find_backward) are pure in-memory hash-table / linked-list
+;   operations residing in HMPR-stable section-C/D (src/symbols.asm,
+;   src/local_labels.asm).  Transitive call-graph: the only non-trivial
+;   helpers they call are symbol_abs_bit_ptr (pure bit arithmetic,
+;   section C) and cmp_pc_at_hl_vs_ref (pure comparison, section C) —
+;   NONE reach paged_call, the section-B trampoline, or any port I/O.
+;   Their inline `defb` literals read via section A under the swap, the
+;   same caveat the slots and expr_eval suites already rely on.
+;   They run FIRST in cluster_dispatch (symbols → local_labels →
+;   expr_eval → …) so expr_eval and pc_rel see a clean, initialised
+;   table state, preserving the ordering those suites depend on.
+;
+;   expr_eval was relocated here to reclaim ~449 B for the MUL/DIV
+;   evaluator routines.  Its dependencies — eval_expr_const (incl.
+;   ml_mul/ml_div), symbol_*, local_* — are all HMPR-stable section-C/D
+;   routines; none reach paged_call / section B.  It re-inits the symbol
+;   + local tables itself, so it is order-independent beyond needing the
+;   tables present.  Its inline `defb` bytecode + expectation literals
+;   read via section A under the swap (same caveat as the slots suite).
 ;
 ;   Every production routine these call is HMPR-stable (section C/D) and
 ;   — verified by transitive call-graph analysis — NONE reach `paged_call`
@@ -45,12 +58,12 @@
 ;   paged_call body (e.g. the sysreg encoders used by test_sysname) would
 ;   break.  Those suites stay inline in the main binary.
 ;
-;   `assert_eq32_de_hl_imm` (defined in test_slots.asm, which stays in the
-;   main binary) is reached via importfile.  Its inline-literal `pop bc;
-;   (bc)` reads land in section A — which IS the off-axis page under the
-;   swap — so the `defb` literals following each call read correctly.
-;   This is the identical caveat that the test_mem off-axis path relies
-;   on (see test_mem_offaxis.asm:36-43).
+;   `assert_eq32_de_hl_imm` (defined in test_assert_eq32.asm, resident
+;   in the main binary) is reached via importfile.  Its inline-literal
+;   `pop bc; (bc)` reads land in section A — which IS the off-axis page
+;   under the swap — so the `defb` literals following each call read
+;   correctly.  This is the identical caveat that the test_mem off-axis
+;   path relies on (see test_mem_offaxis.asm:36-43).
 ;
 ; Mechanism at boot (in src/assembler.asm and src/loader.asm):
 ;   1.  enctab_trampoline_setup installs the HLOAD trampoline.
@@ -81,6 +94,8 @@
 ; HMPR-stable) and halts before returning.
 ; -----------------------------------------------------------------------
 cluster_dispatch:
+                call    run_symbol_table_self_tests
+                call    run_local_label_self_tests
                 call    run_expr_eval_self_tests
                 call    run_slot_self_tests
                 call    run_pc_rel_self_tests
@@ -91,6 +106,8 @@ cluster_dispatch:
                 call    run_litpool_self_tests
                 ret
 
+                include "test_symbols.asm"
+                include "test_local_labels.asm"
                 include "test_expr_eval.asm"
                 include "test_slots.asm"
                 include "test_pc_rel.asm"
