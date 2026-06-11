@@ -1439,66 +1439,166 @@ main_eval_next_imm:
 
 
 ; -----------------------------------------------------------------------
-; load_in_file — HGTHD + trampoline-HLOAD "IN" into pages 7..12.
+; load_in_file — two-phase HGTHD + trampoline-HLOAD loading ONLY the
+; assembler-facing prefix of the "IN" .tbn into pages 7..12.
 ;
-; Per docs/specs/paged-in-design.md.  IN lands in
-; physical pages 7..12 (off-axis; 96 KB ceiling) via the section-B HLOAD trampoline,
-; same pattern as load_enctab.  HLOAD's destination is &8000 — a
-; section-C address — and SAMDOS's internal ctas auto-pages HMPR
-; across the &C000 boundary, so a multi-page load to HMPR=N actually
-; leaves the file spread across physical pages N, N+1, ...,
-; N+(C-1) (Citation: samdos/src/c.s:354-369 ctas).
+; Per docs/specs/paged-in-design.md and docs/specs/samdos-file-io.md.
 ;
-; The on-disk IN file size is recorded in the file's body header.
-; SAMDOS's HGTHD reads that header, populates internal `difa`, then
-; copies difa to &4B50 (= UIFA + 80) via txhed (samdos/src/h.s:txrom).
-; So after HGTHD:
-;   (&4B50 + 34) = page count (C-only-of-BC for HLOAD)
-;   (&4B50 + 35..36) = length-mod-16K
-;     with bit 15 set by SAMDOS's `set 7, d` line (h.s:hgthd) —
-;     we must `res 7` on the high byte before passing to HLOAD.
+; WHY TWO PHASES: the byte count HLOAD needs is caller-supplied via C/DE
+; (samdos-file-io.md trampoline contract; trampoline.asm::trampoline_body
+; comment "C = pages count, DE = length modulo 16K"), and the assembler-
+; facing prefix length lives at file offset 8 — so a small head read must
+; come first to discover the prefix boundary before the full load.
 ;
-; Output: IN_END_PAGE / IN_END_OFFSET set; IN paged-in-resident; LMPR
-;         restored to whatever the caller had (TRAMPOLINE_DST touches
-;         HMPR only).
+; WHY EARLY TRUNCATION IS SAFE: SAMDOS's count-driven HLOAD loop
+; (samdos/src/c.s:354-369 ctas) stops at the requested byte exactly.
+; This is the same mechanism that ends every normal whole-file load
+; mid-sector at the file tail — requesting fewer bytes than the on-disk
+; file holds is safe.  The full file stays on disk; only the prefix
+; enters the IN buffer.
 ;
-; Citation: samdos/src/h.s::hgthd lines 59-67 + ::txhed lines that
-; transfer difa to &4B50.
+; WHAT THIS BUYS (i40 load-path / i51): the editor region (front-coded
+; name table, .global flags, comment sidecar at editor_region_offset)
+; never enters the IN buffer, so comment volume no longer limits what
+; the SAM can assemble.  reader_init derives the same editor_region_offset
+; boundary and overwrites IN_END with it, so the record walk stops at
+; exactly the assembler-facing prefix end — consistent with the load.
+;
+; Phase 1 (head read): fill_uifa + HGTHD.  Read the whole-file geometry
+; from DIFA (&4B50+34..36), masking bit 7 of the high length byte as
+; SAMDOS's `set 7, d` marker (h.s:hgthd).  Load 512 bytes into page 7
+; (clamped to the full file when the file is smaller), enough to cover
+; the fixed 12-byte header plus both header tables.
+;
+; Phase 2 (prefix load): re-issue fill_uifa + HGTHD (HLOAD consumes the
+; sector-chain state HGTHD arms, so HGTHD must be re-issued for the
+; second load).  Decode editor_region_offset from bytes &0008..&000A of
+; the head-loaded page 7 (same decode as reader_init, mirroring
+; reader.asm::reader_init lines ~110-140).  Normalise to SAMDOS's
+; pages/remainder convention: if remainder == 0 and pages > 0, adjust
+; to pages-1 / 16384 (HGTHD emits pages-1/16384 for page-aligned lengths
+; — see harness HGTHD emulation and samdos-file-io.md register contract).
+; Bounds-check the prefix (≤ 6 pages; tag &03 otherwise — the FILE may
+; exceed 6 pages, but the prefix must fit in the IN buffer), store into
+; in_file_pages / in_file_len, call TRAMPOLINE_DST.
+;
+; Output: IN_END_PAGE / IN_END_OFFSET set to the prefix end; the prefix
+;         is resident in pages 7..7+pages-1; LMPR restored to whatever
+;         the caller had (TRAMPOLINE_DST touches HMPR only).
+;
+; Citation: samdos/src/h.s::hgthd lines 59-67 + ::txhed; c.s:354-369
+; ctas (count-driven stop); trampoline.asm::trampoline_body register
+; contract.  The editor_region_offset decode mirrors
+; reader.asm::reader_init lines ~110-140.
 ; -----------------------------------------------------------------------
 load_in_file:
+; -- Phase 1: head read — 512 bytes into page 7 --------------------------
                 ld      hl, name_IN
                 call    fill_uifa
                 rst     8
                 defb    HOOK_HGTHD          ; longjmps on file-not-found
 
-; Read length-mod-16K from the SAMDOS-deposited header at &4B50+35.
+; Read the whole-file geometry from DIFA (&4B50+34..36).
                 ld      hl, (&4B50 + 35)
                 ld      a, h
                 and     &7F                 ; clear SAMDOS's `set 7, d` marker
                 ld      h, a
-                ld      (in_file_len), hl
-
-; Read page count from &4B50+34 (low byte only).
+                ld      (in_file_len), hl   ; whole-file length-mod-16K (temp)
                 ld      a, (&4B50 + 34)
-; Bounds check: IN is allocated 6 contiguous physical pages (7..12) in
-; the LMPR-low5 axis (= 96 KB ceiling).  The first 4 (7..10) are the
-; original M6 PR 2 allocation; pages 11..12 were added 2026-05-28 to fit
-; the 88 KB spectrum4 release.tbn — they're "00H unused" per the
-; Tech Manual page-allocation table cited at trampoline.asm:188-208.
-; Files exceeding 6 pages spill into pages 13+ — those may be reserved
-; for other allocations; fail cleanly rather than overwrite them.
-                cp      7                   ; allow up to 6 pages (= 96 KB ceiling)
-                jr      c, in_file_pages_ok
-                ld      a, &03
-                jp      fail_with_tag       ; tag 03: in_file_pages > 6
-in_file_pages_ok:
-                ld      (in_file_pages), a
+                ld      (in_file_pages), a  ; whole-file page count (temp)
 
-; Call the section-B trampoline.
+; Request a 512-byte head load, clamped to the actual file size when the
+; file is < 512 bytes (small fixtures).  Request C=0, DE=512 unless the
+; whole file fits in fewer bytes, in which case use the whole-file size.
+; (A file is < 512 bytes only when pages == 0 and length-mod-16K < 512.)
+                ld      b, IN_BASE_PAGE
+                ld      c, 0                ; 0 full pages
+                ld      de, 512             ; 512 bytes
+                ld      a, (in_file_pages)
+                or      a
+                jr      nz, load_in_head_call   ; pages > 0 — head fits
+                ld      hl, (in_file_len)
+                ld      a, h
+                cp      2                       ; HL >= 512?
+                jr      nc, load_in_head_call   ; yes — head fits
+                ld      d, h
+                ld      e, l                    ; no — clamp to actual size (DE = HL)
+load_in_head_call:
+                ld      hl, &8000
+                call    TRAMPOLINE_DST      ; head read: 512 bytes into page 7
+
+; -- Read editor_region_offset from file offset 8 in the just-loaded head --
+; The trampoline restored HMPR on return, so page 7 is not mapped anywhere;
+; bracket LMPR (port 250) to map page 7 into section A and read
+; &0008..&000A.  Interrupts are already DI throughout the assembler; the
+; stack lives in section D (independent of LMPR change).
+                in      a, (250)            ; save current LMPR
+                ld      (in_lmpr_save), a
+                ld      a, LMPR_IN_BASE     ; map IN page 7 into section A
+                out     (250), a
+                ld      a, (&0008)          ; b0 = editor_region_offset bits 0..7
+                ld      e, a
+                ld      a, (&0009)          ; b1 = bits 8..15
+                ld      d, a
+                ld      a, (&000A)          ; b2 = bits 16..23 (0..5 for ≤96 KB)
+                ld      c, a
+                ld      a, (in_lmpr_save)   ; restore LMPR
+                out     (250), a
+
+; Decode: page_index = (b2<<2)|(b1>>6); remainder = ((b1 & &3F)<<8)|b0.
+; Mirrors reader.asm::reader_init's identical decode (~lines 119-140).
+                ld      a, d                ; b1
+                rlca
+                rlca
+                and     3                   ; A = b1 >> 6
+                ld      b, a
+                ld      a, c                ; b2
+                rlca
+                rlca                        ; A = b2 << 2
+                add     a, b                ; A = page_index (0..5)
+                ld      (in_file_pages), a  ; prefix page count
+                ld      a, d                ; b1
+                and     &3F
+                ld      h, a
+                ld      l, e                ; HL = ((b1 & &3F)<<8)|b0 = remainder
+
+; Normalise to SAMDOS pages/remainder convention: if remainder == 0 and
+; pages > 0, adjust to pages-1 / 16384 (page-aligned prefix).  HGTHD
+; emits this form for page-aligned file lengths (samdos-file-io.md).
+                ld      a, h
+                or      l
+                jr      nz, load_in_prefix_normed   ; remainder != 0 — already normal
+                ld      a, (in_file_pages)
+                or      a
+                jr      z, load_in_prefix_normed    ; pages == 0 — zero-length ok
+                dec     a
+                ld      (in_file_pages), a  ; pages - 1
+                ld      hl, 16384           ; remainder = 16384
+load_in_prefix_normed:
+                ld      (in_file_len), hl   ; prefix length-mod-16K
+
+; -- Phase 2: prefix load -------------------------------------------------
+; Bounds check: the assembler-facing prefix must fit in the 6-page (96 KB)
+; IN buffer.  The full file may exceed 6 pages; only the prefix counts here.
+                ld      a, (in_file_pages)
+                cp      7                   ; allow up to 6 pages (= 96 KB ceiling)
+                jr      c, load_in_prefix_pages_ok
+                ld      a, &03
+                jp      fail_with_tag       ; tag 03: prefix pages > 6
+load_in_prefix_pages_ok:
+; Re-issue fill_uifa + HGTHD: HLOAD consumed the sector-chain state
+; HGTHD armed for the head read, so HGTHD must be re-issued before the
+; prefix HLOAD.
+                ld      hl, name_IN
+                call    fill_uifa
+                rst     8
+                defb    HOOK_HGTHD          ; longjmps on file-not-found
+
+; Call the section-B trampoline with the prefix geometry.
 ;   HL = &8000      (section-C window; HLOAD's required start address)
 ;   B  = IN_BASE_PAGE
-;   C  = pages count
-;   DE = length-mod-16K
+;   C  = prefix pages count
+;   DE = prefix length-mod-16K
 ;   IX = UIFA (already set by fill_uifa)
                 ld      hl, &8000
                 ld      b, IN_BASE_PAGE
@@ -1507,10 +1607,13 @@ in_file_pages_ok:
                 ld      de, (in_file_len)
                 call    TRAMPOLINE_DST
 
-; Compute (IN_END_PAGE, IN_END_OFFSET) = LMPR_IN_BASE + pages, offset
-; = in_file_len (length within that last page).  The `or &20` sets the
-; RAM0 bit so IN_END_PAGE stores a full LMPR value, matching the
-; IN_POS_PAGE convention.
+; Compute (IN_END_PAGE, IN_END_OFFSET) from the prefix geometry.
+; The `or &20` sets the RAM0 bit so IN_END_PAGE stores a full LMPR value,
+; matching the IN_POS_PAGE convention.  reader_init later overwrites IN_END
+; with the boundary it derives from the loaded header — the same boundary,
+; though at a page-aligned offset the two representations differ (page N
+; offset 0 here vs page N-1 offset &4000 after the SAMDOS pages/remainder
+; normalisation above); nothing reads IN_END before reader_init runs.
                 ld      a, (in_file_pages)
                 add     a, IN_BASE_PAGE
                 or      &20
@@ -1518,6 +1621,10 @@ in_file_pages_ok:
                 ld      hl, (in_file_len)
                 ld      (IN_END_OFFSET), hl
                 ret
+
+
+; Scratch byte for LMPR save during load_in_file's LMPR bracket.
+in_lmpr_save:   defb    0
 
 
 ; -----------------------------------------------------------------------

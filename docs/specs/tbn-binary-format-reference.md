@@ -162,9 +162,10 @@ Comment sidecar   editor_region.go
   comment whose body carries embedded newlines (a `/* … */` block comment)
   renders as one `//`-prefixed line per body line.
 - The host's `-strip-comments` drops comments entirely (empty sidecar);
-  `-thin-comments=N` keeps one in every N (a bounded subset that flows a
-  populated editor region through the SAM round-trip while the `.tbn` stays
-  under the 96 KB IN ceiling — the m6 gate uses this).
+  `-thin-comments=N` keeps one in every N. The m6 gate flows the full
+  unstripped comment corpus: the SAM loads only the assembler-facing prefix
+  (bounded by `editor_region_offset`), so editor-region size is not
+  constrained by the 96 KB IN ceiling.
 
 ### 2.4 Header position tables (label / local) — v2
 

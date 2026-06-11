@@ -60,15 +60,14 @@ SAM_IMG="$ROOT/build/release.sam.img"         # toolchain 3 output
 echo "=== [1/5] build SAM + Go tools (+ &C000 budget check) ==="
 make -s sam-aarch64 enctab sysreg-data disasm-payload zx0-payload build-disk assembler-prod check-budget
 
-# Keep one-in-20 of release.s's ~335 KB of comments (M8 / i39b-2): the SAM
-# can't fit all of them in the 96 KB IN buffer, but a bounded subset (~15 KB →
-# the .tbn stays ~4 pages, well under the ceiling) flows a populated editor
-# region through the full Z80 round-trip — proving the record walk stops at the
-# editor boundary and comments don't leak into the assembled bytes. Comments are
-# assembly no-ops, so the 3-way byte-match is unchanged (the assembler-facing
-# region is byte-identical to the all-stripped form).
-echo "=== [2/5] sam-aarch64: vendored release.s → binary (+ emit compact .tbn) (flatten + thin-comments=20) ==="
-"$ROOT/build/sam-aarch64" -flatten -thin-comments=20 -origin "$ORIGIN" -o "$GO_IMG" --emit-tbn "$CTBN" "$SRC"
+# Retain ALL of release.s's ~335 KB of comments (i40 load-path + i51): the
+# two-phase prefix-only load means the SAM reads only the assembler-facing
+# prefix (~38,584 B / 3 IN pages); the full editor region — including every
+# comment — never enters the IN buffer.  The 3-way byte-match holds because
+# comments are assembly no-ops and the assembler-facing prefix is byte-identical
+# to the stripped form.
+echo "=== [2/5] sam-aarch64: vendored release.s → binary (+ emit compact .tbn) (flatten + all comments) ==="
+"$ROOT/build/sam-aarch64" -flatten -origin "$ORIGIN" -o "$GO_IMG" --emit-tbn "$CTBN" "$SRC"
 echo "    compact .tbn: $(wc -c < "$CTBN" | tr -d ' ') bytes"
 
 echo "=== [3/5] compact .tbn: assemble + verify byte-identical ==="

@@ -418,11 +418,10 @@ ci-paged-prod: test-paged-prod
 
 .PHONY: release-stripped-tbn release-unstripped-tbn comment-bench
 
-# Build the comment-stripped, flattened spectrum4 release .tbn that fits
-# the SAM assembler's 96 KB IN-buffer ceiling.  Used for the
-# release-bytematch milestone iteration (FAIL40+ coverage-gap closure).
-# Without -strip-comments the flattened release source is ~408 KB and the
-# assembler trips FAIL03 (in_file_pages > 6) immediately at load.
+# Build the comment-stripped, flattened spectrum4 release .tbn.  Used for the
+# release-bytematch milestone iteration (FAIL40+ coverage-gap closure).  The
+# two-phase prefix-only load (i40) means the full-comment .tbn is now also
+# loadable on the SAM; this stripped target is retained for benchmark use.
 #
 # Emits the COMPACT overlay .tbn (the form the SAM reader consumes since
 # the v2 instruction-overlay flip); the discardable -o binary is the Go-side

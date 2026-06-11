@@ -423,14 +423,24 @@ func (h *Hardware) last200PC() []uint16 {
 }
 
 // depositInPages copies data into consecutive physical pages starting at
-// inBasePage (page 7).  Up to 6 pages (96 KB) are supported.
+// inBasePage (page 7), up to the 6-page (96 KB) IN ceiling.
+//
+// For a full-comment .tbn (i40 / i51) the file can exceed 96 KB; only the
+// first 96 KB are deposited here (the assembler-facing prefix fits in that
+// window).  The HGTHD/HLOAD path (hookHGTHD / hookHLOAD) serves the
+// registered "IN" file and the two-phase load in load_in_file copies only
+// the prefix bytes into the IN pages — so the pre-deposit just needs to
+// seed the initial head that the first HLOAD writes.  Any bytes past the
+// ceiling are not deposited; they remain in the registered NamedFile and
+// the HLOAD handler copies only what the caller's C/DE registers request.
 func (h *Hardware) depositInPages(data []byte) {
+	const inMaxBytes = 6 * pageSize // 96 KB ceiling
+	if len(data) > inMaxBytes {
+		data = data[:inMaxBytes]
+	}
 	for i, b := range data {
 		page := inBasePage + i/pageSize
 		offset := i % pageSize
-		if page >= inBasePage+6 {
-			panic(fmt.Sprintf("IN data exceeds 6-page (96 KB) ceiling at byte %d", i))
-		}
 		h.ram[page][offset] = b
 	}
 }
@@ -730,9 +740,31 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 				// which clobbers IN page 7 and relies on main_assemble's
 				// load_in_file re-reading the real IN file from disk to
 				// restore it.
+				//
+				// Honour the caller's requested byte count from the live
+				// C and DE registers (trampoline_body in src/trampoline.asm
+				// passes C/DE unmodified from the caller to the RST 8; B is
+				// consumed for HMPR before the RST 8).  Contract:
+				//   C  = pages count  (samdos-file-io.md trampoline contract)
+				//   DE = length mod 16K (with SAMDOS marker bit already
+				//        cleared by the Z80 caller before the TRAMPOLINE_DST
+				//        call — load_in_file masks bit 7 of D via `and &7F`)
+				// n = C*16384 + DE.  For a two-phase prefix load this is
+				// smaller than len(content), so we copy only the prefix bytes;
+				// a >96 KB full file would otherwise wrap dstPage into
+				// unrelated physical pages.  For normal whole-file loads n ==
+				// len(content) (HGTHD deposits the exact file length into DIFA
+				// and the caller passes it unchanged), so min(n, len(content))
+				// is a no-op for those callers.
+				reqC := int(hw.cpu.BC.Lo)
+				reqDE := int(hw.cpu.DE.U16())
+				n := reqC*pageSize + reqDE
+				content := hw.currentFile.Content
+				if n < len(content) {
+					content = content[:n]
+				}
 				dstPage := int(hw.hmpr & 0x1F)
 				dstOff := int(hw.cpu.HL.U16()) & 0x3FFF
-				content := hw.currentFile.Content
 				for i, b := range content {
 					pg := (dstPage + (dstOff+i)/pageSize) & 0x1F
 					hw.ram[pg][(dstOff+i)%pageSize] = b
