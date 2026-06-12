@@ -1,0 +1,4906 @@
+
+;BDOS 1.5 Improved SAMDOS with hard disk support
+
+;Compatible with ROM 2.0 and 3.0
+
+;Current length 10176 Bytes (Max length=14080)
+
+;BDOS 1.5a11-11-98       floppy master,slave at top dir
+;                        printed with or
+               JR   NZ,diga2
+               LD   A," "
+               JR   C,diga3        ;CY skip leading zero
+diga2:         LD   A,"0"
+               ADD  B              ;clears CY
+diga3:         LD   (HL),A
+               INC  HL
+               RET
+
+;- Error message table -----------------------------------------
+
+;- Error message sub tokens -
+
+;0  'Invalid '
+;1  'without '        16 'long'
+;2  'Missing '        17 'not '
+;3  'too '            18 'name '
+;4  'is already open' 19 'String'
+;5  'palette'         20 'Too many '
+;6  'of '             21 'tetement'
+;7  'error'           22 'STOP '
+;8  'tream'           23 'file'
+;9  'umber'           24 'colour'
+;10 'NEXT'            25 'in'
+;11 'No '             26 'PROC'
+;12 'BREAK '          27 'LOOP'
+;13 'creen'           28 'to'
+;14 'array: '         29 'de'
+;15 'Note'            30 'me'
+;                     31 'ar'
+
+;----------------------------------
+
+;'81 Invalid record' NEW !!
+
+error.mess:    DEFB 0
+               DEFM "recor"
+               DEFB "d"+128
+
+;'82 Record not found' NEW !!
+
+               DEFM "Record"
+               DEFB 17
+               DEFM "foun"
+               DEFB "d"+128
+
+;'83 Track ***,sector***,not found' NEW !!
+
+               DEFM "Trk."
+er.trk:        DEFM "***,sct."
+er.sct:        DEFM "***"
+er.tsl:        EQU  $-er.trk
+               DEFB ","
+               DEFB 17
+               DEFM "foun"
+               DEFB "d"+128
+
+;'84 Escape requested'
+
+               DEFM "Escape requeste"
+               DEFB "d"+128
+
+;'85 Track ***,sector,error'
+
+               DEFM "Trk."
+er.ts2:        DEFM "***,sct."
+               DEFM "***,"
+               DEFB 7+128 ;error
+
+;'86 Track***,sector***,lost'
+
+               DEFM "Trk."
+er.ts3:        DEFM "***,sct."
+               DEFM "***, los"
+               DEFB "t"+128
+
+               DEFB "?"+128
+               DEFB "?"+128
+               DEFB "?"+128
+               DEFB "?"+128
+               DEFB "?"+128
+               DEFB "?"+128
+
+;'93 Verify error'
+
+               DEFM "Verify"
+               DEFB 7+128    ;error
+
+               DEFM "Wrong "                              ;94
+               DEFB 23       ;file
+               DEFM " typ"
+               DEFB "e"+128
+
+               DEFB "?"+128
+               DEFB "?"+128
+               DEFB "?"+128
+               DEFB "?"+128
+               DEFB "?"+128
+               DEFB "?"+128
+
+               DEFM "No AUTO* "                           ;101
+               DEFB 23+128         ;file
+
+               DEFB "?"+128
+
+               DEFB 11             ;No
+               DEFM "such driv"                           ;103
+               DEFB "e"+128
+
+               DEFM "Disk is protecte"                    ;104
+               DEFB "d"+128
+
+               DEFM "Not enough space on dis"             ;105
+               DEFB "k"+128
+
+               DEFM "Direc"                               ;106
+               DEFB 28             ;to
+               DEFM "ry ful"
+               DEFB "l"+128
+
+               DEFM "File"                                ;107
+               DEFB 17             ;not
+               DEFM "foun"
+               DEFB "d"+128
+
+               DEFM "End"                                ;108
+               DEFB 6              ;of
+               DEFB 23+128         ;file
+
+               DEFM "File"                               ;109
+               DEFB 18             ;name
+               DEFM " use"
+               DEFB "d"+128
+
+;- TEST ESCAPE KEY -
+
+tst.esc:       LD   A,247
+               IN   A,(249)
+               AND  32
+               RET  NZ             ;ret ESC not pressed
+               DEC  A
+               OUT  (&F5),A        ;HD io out
+
+rep84:         CALL L20133         ;error ESC requested
+               DEFB 84
+
+;- DPEEK svars -
+
+dpeek:         EX   (SP),HL
+               PUSH DE
+               CALL L19814
+               PUSH DE
+               CALL sys.call
+               DEFW &00AC          ;LD A,(HL)
+               LD   C,A
+               INC  HL
+               CALL sys.call
+               DEFW &00AC
+               LD   B,A
+               POP  HL
+               POP  DE
+               EX   (SP),HL
+               RET
+
+;- PEEK svar -
+
+peek:          EX   (SP),HL
+               PUSH DE
+               CALL L19814
+               PUSH DE
+               CALL sys.call
+               DEFW &00AC          ;LD A,(HL)
+               POP  HL
+               POP  DE
+               EX   (SP),HL
+               RET
+
+;- DPOKE svars -
+
+dpoke:         EX   (SP),HL
+               PUSH DE
+               CALL L19814
+               PUSH DE
+               LD   A,C
+               CALL sys.call
+               DEFW &000D          ;LD (HL),A
+               INC  HL
+               LD   A,B
+               CALL sys.call
+               DEFW &000D          ;LD (HL),A
+               POP  HL
+               POP  DE
+               EX   (SP),HL
+               RET
+
+;- POKE in svars -
+
+poke:          EX   (SP),HL
+               PUSH DE
+               CALL L19814
+               PUSH DE
+               CALL sys.call
+               DEFW &000D          ;LD (HL),A
+               POP  HL
+               POP  DE
+               EX   (SP),HL
+               RET
+
+;- get value at HL -
+
+L19814:        LD   E,(HL)
+               INC  HL
+               LD   D,(HL)
+               INC  HL
+               EX   DE,HL          ;HL = value at HL
+               RET
+
+;- TEST SET RES FLAGS routines ---------------------------------
+
+L19820:        EX   (SP),HL
+               PUSH HL
+               LD   HL,L30732
+               RET
+
+s0flag:        CALL L19820         ;set file found flag
+               SET  0,(HL)
+               POP  HL
+               RET
+
+s1flag:        CALL L19820         ;set over vlag
+               SET  1,(HL)
+               POP  HL
+               RET
+
+s4flag:        CALL L19820         ;signal verify          NEW !
+               SET  4,(HL)
+               POP  HL
+               RET
+
+s6flag:        CALL L19820         ;set by HLDBK & HSVBK
+               SET  6,(HL)         ;for page adjust(seek)
+               POP  HL
+               RET
+
+s7flag:        CALL L19820         ;set for ZX file
+               SET  7,(HL)
+               POP  HL
+               RET
+
+;- test flag bits -
+
+tb1flag:       CALL L19820         ;5x
+               BIT  1,(HL)
+               POP  HL
+               RET
+
+tb4flag:       CALL L19820         ;set signal verify      NEW !
+               BIT  4,(HL)
+               POP  HL
+               RET
+
+tb7flag:       CALL L19820         ;NZ ZX file
+               BIT  7,(HL)
+               POP  HL
+               RET
+
+;- reset sector buffer -
+
+res.buf:       LD   IX,L30720
+               LD   HL,L30995      ;buffer address
+               LD   (L30735),HL    ;=(IX+15)
+
+buf.pos0:      LD   (IX+13),0      ;set buf pos 0
+               LD   (IX+14),0
+               RET
+
+;- get sector buffer address -
+
+get.buf.st:    LD   L,(IX+15)
+               LD   H,(IX+16)
+               RET
+
+dentry.st:     LD   (IX+13),0
+
+get.buf.ad:    CALL get.buf.st
+               LD   B,(IX+14)
+               LD   C,(IX+13)
+               ADD  HL,BC
+               RET
+
+inc.buf.pos:   INC  (IX+13)
+               RET  NZ
+               INC  (IX+14)
+               RET
+
+L19594:        LD   D,(IX+18)
+               LD   E,(IX+17)
+               RET
+
+L19601:        LD   (IX+18),D
+               LD   (IX+17),E
+               RET
+
+L19608:        CALL L19594
+               LD   (IX+18),H
+               LD   (IX+17),L
+               RET
+
+;- get HDR at entry IX to dos HDR ------------------------------
+
+L23809:        PUSH BC
+               PUSH DE
+               PUSH HL
+               LD   HL,(hk.ix)     ;entry IX
+               LD   B,48
+               LD   DE,hdr
+L23820:        CALL sys.call
+               DEFW &00AC
+               LD   (DE),A
+               INC  HL
+               INC  DE
+               DJNZ L23820
+               POP  HL
+               POP  DE
+               POP  BC
+
+               CALL defaults
+               LD   HL,hdr+1       ;HDR name
+               CALL strip.dev      ;strip copy name
+               LD   A,(hdr)
+               LD   (uifa),A       ;type
+               LD   (L16713),A
+               LD   A,(L16796)     ;start page
+               LD   (L16721),A
+               LD   HL,(L16797)    ;start offs
+               LD   (L16716),HL
+               LD   A,(L16799)     ;len page
+               AND  31
+               LD   (page.cnt),A
+               LD   HL,(L16800)    ;len offs
+               RES  7,H
+               LD   (L16800),HL
+               LD   (L16714),HL
+               RET
+
+;- HOOK CODE: GET FILE HEADER ----------------------------------
+
+HGTHD:         CALL L23809
+               CALL set.drive
+               CALL res.buf
+               CALL L19258         ;adjust headers
+               LD   DE,(L16848)
+               SET  7,D
+               LD   (L16848),DE    ;and enter hdl to hdl
+
+;- copy dos HDL to sys HDL -
+
+hdl2hdl:       LD   L,80
+               LD   DE,hdl
+
+L23848:        LD   H,&4B
+               LD   B,48
+
+L23857:        LD   A,(DE)
+               CALL sys.call
+               DEFW &000D
+               INC  HL
+               INC  DE
+               DJNZ L23857
+               RET
+
+;- copy dos HDR to sys HDR -
+
+hdr2hdr:       LD   L,0
+               LD   DE,hdr
+               JR   L23848
+
+;- get file start & len & point to 1st byte of file -
+
+L23900:        CALL res.buf
+               LD   DE,(L30722)    ;1st trk sect file
+               CALL rd.buff
+               CALL load9          ;drop 9 bytes
+               LD   HL,(hk.hl)
+               LD   (L16716),HL    ;mem addr
+               LD   BC,(hk.bc)
+               LD   A,C
+               LD   (page.cnt),A   ;len page
+               LD   DE,(hk.de)
+               RES  7,D
+               LD   (L16714),DE    ;len offset
+               RET
+
+;- HOOKCODE SAVE -----------------------------------------------
+
+HSAVE:         CALL L23809
+               CALL set.drive
+               IN   A,(251)
+               LD   (L16688),A     ;save himem
+               AND  224
+               LD   B,A
+               LD   A,(L16796)
+               AND  31
+               OR   B
+               OUT  (251),A        ;select file himem
+               CALL res.buf
+               CALL open.file
+               JR   C,L24036       ;jr restore himem
+               CALL save9
+               LD   HL,(L16716)
+               LD   DE,(L16714)
+               CALL HSVBK
+               CALL HCFSM
+L24036:        LD   A,(L16688)     ;restore himem
+               OUT  (251),A
+               RET
+
+;-HOOK CODE put DVAR address on basic stack --------------------
+
+HVAR:          PUSH HL             ;restore entry IX
+               POP  IX
+               CALL sys.call
+               DEFW &0121          ;get integer in BC
+               LD   HL,dvars
+               ADD  HL,BC
+               PUSH HL             ;Read clock if DVAR 39 (date)
+               LD   BC,date        ;is addressed
+               SBC  HL,BC
+               CALL Z,read.clock
+               POP  HL
+               CALL peek
+               DEFW &5BC2          ;dospage+1
+               INC  A
+               ADD  HL,HL
+               ADD  HL,HL          ;4*dospage+1
+               LD   B,150
+L24075:        DEC  B
+               ADD  HL,HL
+               RLA
+               BIT  7,A
+               JR   Z,L24075
+               RES  7,A
+               LD   E,A
+               LD   A,B
+               LD   D,H
+               LD   C,L
+               LD   B,0
+               CALL sys.call
+               DEFW &0127
+               RET
+
+;-load "auto*" basic/code HOOKCODE -----------------------------
+
+HAUTO:         LD   A,149          ;'LOAD' token
+               CALL poke
+               DEFW &5B74          ;current command
+               LD   HL,auto.hdr
+               LD   DE,dev.no+1     ;copy AUTO header
+               LD   BC,27          ; to ?
+               LDIR
+               CALL get.device
+
+o24146:        CALL set.drive
+               CALL res.buf
+               LD   A,16
+               CALL L18667         ;search name only
+               JR   NZ,rep101      ;jr no auto file found
+               CALL L19273
+               JP   L23159
+
+rep101:        CALL L20133
+               DEFB 101            ;no auto file
+
+;- get file hook code -
+
+HGFLE:         CALL L23809
+               CALL L19258
+               LD   DE,(L30722)
+               CALL rd.buff
+
+;-load 9 bytes (drop 9) -
+
+load9:         LD   B,9
+ld9:           CALL LBYTE          ;drop a byte
+               DJNZ ld9
+               RET
+
+
+;= WRITE AT BASIC COMMAND ======================================
+
+;READ AT drive,track,sector,addr(,sectors)
+;WRITE AT drive,track,sector,addr(,sectors)
+;VERIFY AT drive,track,sector,addr(,sectors)
+
+;drive = drive number or 0 for last drive used
+;addr  = address in memory from 16384 to 540671
+;sectors = number of sectors
+
+;Note: After each sector the memory pointer is increased by 512
+;      for sectors with the sizes 128/256/1024 bytes, 'sectors'
+;      must be 1 for correct operation.
+
+write.bas:     CALL xat.sub
+WMSAD:         LD   HL,wr.buff
+               JR   xsad
+
+;= READ AT BASIC COMMAND =======================================
+
+read.bas:      CALL xat.sub
+RMSAD:         LD   HL,rd.buff
+               JR   xsad
+
+;= VERIFY AT BASIC COMMAND =====================================
+
+veri.bas:      CALL xat.sub
+VMSAD:         LD   HL,ve.buff
+               JR   xsad
+
+;- WRITE SECTOR AT DE hook code --------------------------------
+
+HWSAD:         LD   HL,wr.buff
+               JR   rwsad
+
+;- READ SECTOR AT DE hook code ---------------------------------
+
+;A= drive number
+;DE= track sector
+;HL= memory address 16384 to 65535
+
+HRSAD:         LD   HL,rd.buff
+
+rwsad:         PUSH HL
+               LD   HL,(hk.hl)
+               LD   A,H
+               AND  192
+               JR   Z,rep30        ;error if HL<16384
+               SUB  64
+               RLCA
+               RLCA
+               LD   (hk.bc),A      ;select page at CD
+               LD   A,H
+               AND  63
+               LD   (hk.hl+1),A
+               LD   HL,1
+               LD   (hk.ix),HL
+               POP  HL
+
+;- rd/wr/ve/ hk.IX sectors drive A at DE to page C offset HL -
+
+xsad:          PUSH HL             ;=rd buff wr buff or ve buff
+               LD   A,(hk.a)
+bckup.rd:      CALL set.drive.a
+               CALL res.buf
+               IN   A,(251)
+               LD   (L16686),A
+               LD   BC,(hk.ix)     ;sectors
+               LD   A,B
+               OR   C              ;error if sectors=0
+               JR   Z,rep30
+               LD   DE,(hk.de)     ;track sector
+               LD   HL,(hk.hl)     ;set memory address
+               SET  7,H
+               LD   A,(hk.bc)
+               OUT  (251),A
+sad1:
+               LD   (L30735),HL    ;set buf ad at memory
+               POP  HL
+               PUSH HL
+               PUSH BC
+               CALL &0005          ;jp (hl)
+               INC  H              ;HL=HL+512
+               INC  H
+               CALL inc.sct
+               JR   NZ,sad2        ;jr no trk change
+               INC  D
+               BIT  6,H
+               JR   Z,sad2         ;jrr no page change
+
+               RES  6,H
+               IN   A,(251)
+               INC  A
+               OUT  (251),A
+
+sad2:          POP  BC
+               DEC  BC
+               LD   A,B
+               OR   C
+               JR   NZ,sad1
+               POP  BC             ;drop service call
+
+               LD   A,(L16686)
+               OUT  (251),A
+               RET
+
+rep30:         CALL L20133         ;integer out of range
+               DEFB 30
+
+;- READ/WRITE VERI AT subroutine -
+
+xat.sub:       CALL res.buf
+               LD   C,135            ;'AT'
+               CALL exp.c
+               CALL exp.drive      ;drive number
+               CALL exp.sep
+               CALL exp1num        ;track
+               PUSH HL
+
+               CALL exp.sep
+               CALL exp1num        ;sector
+               POP  BC
+               LD   H,C
+               PUSH HL
+
+               CALL exp.sep
+               CALL exp.addr
+               PUSH BC             ;page
+               PUSH HL             ;offset
+
+               CALL skip.sep
+               LD   HL,1
+               JR   NZ,l23049x     ;jr no seperator for sectors
+               CALL exp1num
+
+l23049x:       PUSH HL
+               CALL exp.end
+               POP  HL
+               LD   (hk.ix),HL
+               POP  HL
+               LD   (hk.hl),HL
+               POP  HL
+               LD   (hk.bc),HL
+               POP  HL
+               LD   (hk.de),HL
+               LD   A,(dev.no)
+               LD   (hk.a),A
+               RET
+
+;---------------------------------------------------------------
+
+;- strip device from filename and move to UIFA -
+
+strip.device:  CALL get.device
+strip.d:       LD   HL,L16699
+               CALL strip.dev
+               JP   set.device
+
+strip.dev:     LD   (L30725),HL    ;name addr
+               LD   A,(HL)
+               AND  223            ;strip case
+               LD   C,A            ;save pos dev chr for later
+               INC  HL
+               LD   A,(HL)
+               CP   ":"
+               JR   Z,L24438       ;jr device '?:' found
+               SUB  "0"
+               CP   10
+               JR   NC,L24445      ;jr no device
+               LD   D,A            ;D=digit
+               INC  HL
+               LD   A,(HL)
+               CP   ":"
+               JR   Z,L24434       ;jr device '?n:'found
+               SUB  "0"
+               CP   10
+               JR   NC,L24445      ;jr no device
+               LD   E,A
+               LD   A,D
+               ADD  A
+               ADD  A
+               ADD  D
+               ADD  A
+               ADD  E
+               LD   D,A            ;D=10 * D + E
+               INC  HL
+               LD   A,(HL)
+               CP   ":"
+               JR   NZ,L24445      ;jr no device
+L24434:        LD   A,D
+               LD   (dev.no),A      ;store  device number
+L24438:        LD   A,C
+               LD   (dev.chr),A      ;store device chr
+               INC  HL             ;point to 1st name chr
+               JR   L24448
+
+L24445:        LD   HL,(L30725)     ;get start of file name
+
+L24448:        LD   BC,10
+               LD   DE,L16699
+               LDIR                 ;copy filename to ?
+               LD   B,4
+               CALL sp.to.de       ;add 4 spaces
+               LD   A,(dev.chr)
+               CP   "D"
+               RET  Z              ;ret device 'D'
+
+rep91:         CALL L20133
+               DEFB 20             ;invalid device
+
+;= '.' POINT command ===========================================
+
+;.filename,parameters
+;loads file 'filename' from command record into current active
+;screen. By adding a seperator parameters can be added.
+;Parameters are skipped during syntax. During runtime CHADD
+;points to 1st chr after the seperator to be used by command.
+;code.
+
+point.bas:     LD   B,11
+               LD   DE,uifa+1
+pntb0:         CALL tst.end
+               JR   Z,pntb1        ;end of file name
+
+               LD   (DE),A
+               INC  DE
+               CALL nxt.chr
+               DJNZ pntb0
+               JP   rep29          ;error name >10chrs
+
+pntb1:         CALL exp.end        ;exit if syntax checking
+
+pntb2:         INC  B              ;pad name with spaces
+               INC  B
+               INC  B
+               CALL sp.to.de
+
+               LD   HL,(com.record)
+               LD   (record.t),HL  ;select command record
+               SCF
+               CALL exp.rcd
+
+               CALL res.buf
+               CALL L22875         ;find file
+               JP   NZ,rep107      ;file not found
+               LD   A,(HL)         ;HL=dir entry
+               AND  31
+               CP   19             ;code file
+               JP   NZ,rep94       ;wrong file
+               LD   (HL),A
+
+;error if file start not => 32768
+
+               PUSH HL
+               LD   BC,236
+               ADD  HL,BC
+               CALL pt.scrof
+               LD   C,6
+               ADD  HL,BC
+               DEC  (HL)
+               CALL pt.scrof
+               INC  (HL)
+               POP  HL
+               CALL point.sub      ;move file info to hdr/hdl
+
+;Blank screen for command
+
+               LD   A,&DB          ;OUT (),A >> IN A,()
+               CALL blanking.on
+               LD   A,128
+               OUT  (254),A
+
+;MAKE sure the file is loaded & run correctly
+
+               LD   A,149          ;'LOAD' token
+               CALL poke           ;as current command
+               DEFW &5B74
+               LD   HL,&7FFF       ;Make sure that ROM 1 is
+               SET  6,(HL)         ;switched in by RST 8 code
+               JP   L23310         ;hdr2hdr hdl2hdl,exit&load
+
+;-add VPAGE to start / exec page -
+
+pt.scrof:
+               LD   A,(HL)         ;address must be 32768-65535
+               AND  31
+               DEC  A
+               CP   2
+               JP   NC,rep94
+               LD   C,A
+               IN   A,(252)
+               AND  31
+               ADD  C              ;C=start page
+               LD   (HL),A         ;set scr as start
+               RET
+
+;- hook code select record -------------------------------------
+
+HRECORD:       LD   HL,(hk.hl)     ;rcd no. or name addr
+               CP   1              ;A: 0=number 1=name
+               JR   C,hrcd1        ;Cy: select record no.HL
+
+               LD   B,16
+               LD   DE,rcd.name
+hrcd0:         CALL sys.call
+               DEFW &00AC
+               LD   (DE),A
+               INC  HL
+               INC  DE
+               DJNZ hrcd0
+hrcd1:         CALL exp.rcd
+               JR   hrcd2
+
+;= RECORD BASIC COMMAND ========================================
+
+record:        CALL tst.rex
+               JP   Z,list.record
+               CALL exp.record
+               CALL exp.end
+hrcd2:         LD   A,(dev.no)
+               CP   2              ;jr for D1 (no record set)
+               JR   NZ,rcd.da
+               LD   HL,(record.t)
+               LD   (record.no),HL ;set permanet record
+rcd.da:        CALL poke           ;set svar device drive
+               DEFW &5A07
+               RET
+
+;- test RECORD (Z record,NZ no record)
+
+tst.record:    PUSH AF
+               CALL get.device
+               POP  AF
+               LD   C,239
+               CALL skip.c
+               RET  NZ             ;ret no RECORD token
+               CALL tst.rex        ;test RECORD seperator
+               JR   NZ,exp.record  ;jr exp expression
+
+rcd0:          LD   HL,dev.no
+               LD   (HL),2
+               RET                   ;Z record
+
+rep82:         CALL L20133
+               DEFB 82
+
+;- expect record number/name -
+
+exp.record:    CALL exp.exp        ;get rec number or name
+               RET  Z              ;ret syntax
+
+exp.rcd:     ; CALL chk.hd.ex
+               PUSH AF
+               CALL NC,find.rec    ;find record name
+               JR   NC,rep82       ;record name not found
+               LD   A,H
+               OR   L
+               JR   NZ,exprcd0
+               INC  A
+               LD   (dev.no),A
+               CALL set.device
+               JR   exprcd1        ;restore A and exit
+
+exprcd0:       CALL chk.hd.ex
+               EX   DE,HL
+               LD   HL,(last.record)
+              ;SCF
+              ;DEC  DE             ;record 0 =65535
+               SBC  HL,DE
+              ;INC  DE
+               EX   DE,HL
+               JR   C,rep81        ;jr invalid record
+
+;check record has BDOS ID and get WP status
+
+               LD   (record.t),HL
+               CALL rcd0           ;set drive 2 and select
+               CALL set.device     ;record
+               CALL get.label      ;get disk label
+               JR   C,rep81        ;invalid record if no bdos id
+               LD   (hd.wp),A      ;set wp status
+exprcd1:       POP  AF             ;A=cur chr AF'=drive
+               CP   A              ;Z record
+               RET
+
+rep81:         CALL L20133
+               DEFB 81
+
+;- RECORD(,"*") list record names -
+
+list.record:   LD   HL,rcd.name
+               LD   (HL),"*"
+               LD   HL,stream
+               LD   (HL),2
+               CALL tst.stream
+               CALL skip.sep
+               CALL Z,exp.rname
+               CALL exp.end
+               CALL chk.hd.ex      ;!!!
+               CALL cls.stream
+               CALL prt.mess
+               DEFM "Record names:"
+               DEFB 13,13+128
+
+               LD   A,frec3x-frec3
+               DEFB &FE            ;CP nn to skip XOR A
+
+;- search record list for record number -
+
+find.rec:      XOR  A
+               CALL chk.hd.ex
+               LD   (rcd.ctrl+1),A ;set offset JR
+               CALL res.buf        ;set sector buffer addr
+               LD   HL,1           ;start+1 =first t sector
+               LD   DE,(last.record)
+
+frec1:         XOR  A
+               PUSH HL             ;= record list sector
+               PUSH DE             ;= record count
+               CALL sel.base       ;set base for record list
+               CALL seek.base
+               CALL hd.lbuf        ;read hd record list sector
+               POP  DE
+               LD   C,32
+
+frec2:         PUSH DE             ;record count
+               LD   DE,rcd.name
+               LD   B,16
+
+rcd.ctrl:      JR   $+2            ;jr freq3/freq3x
+frec3:         LD   A,(DE)
+               XOR  (HL)
+               AND  %01011111      ;strip case and bit 7
+               JR   NZ,frec4
+               INC  DE
+               INC  HL
+               DJNZ frec3
+               POP  DE
+               POP  HL              ;drop base pointer
+get.rno:       LD   HL,(last.record)
+               SBC  HL,DE
+               INC  HL             ;HL=record number
+               SCF                   ;signal found
+               RET
+
+;print record list entry
+
+frec3x:        LD   A,(HL)
+               AND  127
+               JR   Z,frec4        ;jr no record name
+               PUSH HL
+               CALL match.rcd
+               POP  HL
+               LD   B,16
+               JR   NZ,frec4
+
+               POP  DE             ;record count
+               PUSH DE
+               PUSH BC
+               PUSH HL
+               CALL get.rno        ;last rec - count
+               CALL prt10000sp
+               CALL prt.mess
+               DEFB " ",":"," "+128
+               POP  HL
+               POP  BC
+               CALL L18652         ;print name
+               CALL prt.cr
+
+;next record entry
+
+frec4:         POP  DE             ;unstack rcd count
+               LD   A,L              ;HL=next record entry
+               ADD  B              ;B=16 or 0
+               LD   L,A
+               JR   NC,$+3
+               INC  H
+               DEC  DE
+               LD   A,D
+               OR   E
+               JR   Z,rcd.nf       ;error not found
+               DEC  C
+               JR   NZ,frec2       ;next entry same sector
+
+;next record list sector
+
+               POP  HL
+               INC  HL             ;next record list sector
+               JR   frec1
+
+rcd.nf:        POP  HL             ;restore base ?
+               RET
+
+; - select temp record routine -
+
+sel.record:    LD   DE,(record.t)
+
+sel.rcd:       LD   HL,(last.record)
+               SCF
+               DEC  DE              ;record 0 = 65535
+               SBC  HL,DE           ;test valid record number
+               JP   C,rep81
+               LD   A,&D0           ;=normal record size
+               JR   NZ,nwrc0        ;jr not last record
+               LD   A,(last.recs)
+nwrc0:         LD   (L16531),A      ;set drive tracks
+               EX   DE,HL           ;HL=record no.
+               LD   BC,1600
+               CALL mult16
+               LD   A,C             ;AHL=sectors*record
+
+;adjust base sectors for boot/record list
+
+               LD   BC,(base)
+               ADD  HL,BC
+               ADC  0
+
+sel.base:      LD   C,0
+               LD   DE,(hd.sct)     ;DE= hd*cylinders
+               CALL div24
+               LD   (st.c),DE       ;base cylinder
+               LD   DE,(max.s)
+               LD   D,C             ;D=0
+               DEC  E               ;CDE =sectors per track
+               CALL div24
+               LD   A,E            ;
+               LD   (st.h),A       ;store base head
+               LD   A,L
+               INC  A
+               LD   (st.s),A       ;store base sector
+               RET
+
+;-16 bit multiply routine (result is 24bit)
+
+mult16:        EX   DE,HL            ;BCHL=HL*BC
+               LD   A,B
+               LD   B,16
+               LD   HL,0
+
+clcm1:         ADD  HL,HL
+               RL   C
+               RLA
+               JR   NC,clcm2
+               ADD  HL,DE
+               JR   NC,$+3
+               INC  C
+clcm2:         DJNZ clcm1
+               LD   B,A
+               RET
+
+;- 24 bit division using 16bit input CDE=HL/DE,AHL=HL MOD DE -
+
+div16:         XOR  A
+               LD   C,A
+
+;-24 bit division  routine CDE=AHL/CDE,AHL= AHL MOD CDE -
+
+div24:         PUSH HL
+               LD   HL,0
+               EXX
+               POP  HL
+               LD   C,A          ;CHL'=AHL
+               XOR  A
+               LD   B,24
+
+dv1:           ADC  HL,HL
+               RL   C
+               EXX
+               ADC  HL,HL
+               ADC  A
+               SBC  HL,DE
+               SBC  C
+               JR   NC,$+4
+               ADD  HL,DE
+               ADC  C
+               CCF
+               EXX
+               DJNZ dv1
+               ADC  HL,HL
+               RL   C
+               EX   DE,HL          ;CDE=result
+               EXX
+               PUSH HL
+               EXX
+               POP  HL             ;AHL =mod
+               RET
+
+;- convert drive data to max sectors -
+
+drive.size:    LD   D,A            ;A=drive data
+               LD   E,1
+
+;- conver trk D sct E to logical sector -
+
+conv.de:       LD   A,D
+               ADD  A
+               JR   NC,$+4         ;jr not side 2
+               ADD  160            ;adjust for side 2
+               LD   L,A
+               RLA
+               AND  1
+               LD   H,A            ;HL=2* log track*2
+               LD   A,E
+               DEC  A
+               ADD  L
+               LD   C,A            ;BC=HL+E-1
+               LD   A,H
+               ADC  0
+               LD   B,A
+               ADD  HL,HL
+               ADD  HL,HL
+               ADD  HL,BC          ;HL=tracks * 10 + sector-1
+               RET
+
+;= RESTORE DEVICE COMMAND ======================================
+
+rest.bas:      LD   C,240          ;DEVICE
+               CALL exp.c
+               CALL exp.end
+               LD   HL,(last.record)
+               LD   A,H
+               OR   L
+               JP   Z,rep103       ;no hard disk
+               LD   A,2
+               CALL rcd.da         ;set device d2
+               CALL def.rec        ;restore D2 data by selecting
+               CALL sel.record     ;default record
+               JP   sres           ;reset drive logic
+
+;= DEVICE BASIC COMMAND ========================================
+
+;DEVICE OFF(,n) puts HD in stand by mode (,n: sets APD)
+;DEVICE ON(,n)  gives the HD a kick in the butt
+;               puts HD in idle mode (,n:sets APD)
+;DEVICE STOP    will sing the hard disk asleep
+
+dev.bas:       LD   C,137            ;'OFF'
+               CALL skip.c
+               JR   NZ,dev.on
+               CALL tst.end
+               JR   Z,def.off      ;jr DEVICE OFF
+               LD   B,&E2          ;stand by apd
+dev.apd:       PUSH BC
+               CALL exp1num
+               PUSH HL
+               CALL exp.end
+               POP  HL
+               CALL hd.busy
+               LD   A,&F2
+               OUT  (&F5),A
+               LD   A,L
+               OUT  (&F7),A        ;apd number
+               POP  AF
+               JR   hd.chk
+
+def.off:       CALL exp.end
+
+hd.stand.by:   LD   A,&E0          ;stand by immediate
+               JR   hd.chk
+
+dev.on:        LD   C,222          ;'ON'
+               CALL skip.c
+               JR   NZ,dev.stop
+               CALL tst.end
+               LD   B,&E3          ;idle apd
+               JR   NZ,dev.apd
+               CALL exp.end
+
+
+hd.idle:       LD   A,&E1          ;idle immediate
+               JR   hd.chk
+
+dev.stop:      LD   C,177          ;'STOP'
+               CALL exp.c
+               CALL exp.end
+               CALL hd.sleep
+               XOR  A
+               LD   (L16531),A     ;no d2 data for no such drive
+               INC  A
+               JP   rcd.da         ;set device d1
+
+hd.sleep:      LD   A,&E6          ;HD sleep command
+
+hd.chk:        CALL chk.hd.ex
+
+;- send command to hard disk -
+
+wr.com:        EX   AF,AF'
+               CALL hd.busy
+               LD   A,&F7
+               OUT  (&F5),A        ;select register
+               EX   AF,AF'
+               OUT  (&F7),A
+               CALL hd.busy
+io.out:        LD   A,&FF          ;chip select off
+               OUT  (&F5),A
+               RET
+
+;- reset hard disk -
+
+sres:          LD   A,&EE
+               OUT  (&F5),A
+               OUT  (&F7),A         ;Software reset
+               LD   A,&FA
+               OUT  (&F7),A
+               JR   io.out
+
+hd.ready:      CALL hd.busy
+               OR   &16            ;drq and index
+               CP   &B6
+               RET  Z
+               JR   hd.ready
+
+;- wait while busy and test ESC -
+
+hd.busy:       LD   A,&F7          ;get busy stat in carry
+               OUT  (&F5),A
+hdbs:          CALL tst.esc
+               IN   A,(&F6)
+               IN   A,(&F7)
+               ADD  A
+               JR   C,hdbs
+               RET
+
+wait.drq:      LD   A,&F7          ;wait for data request
+               OUT  (&F5),A
+wdrq:          IN   A,(&F6)
+               IN   A,(&F7)
+               AND  %00001001
+               JR   Z,wdrq
+               RRA
+               JR   C,hd.error     ;command error
+               LD   A,&F0          ;select data reg
+               OUT  (&F5),A        ;note Carry is error
+               LD   BC,&FEF7
+               RET
+
+hd.error:      CALL sres
+               JP   rep85
+
+rep83:         CALL L20133
+               DEFB 83             ;sector not found
+
+;= Seek track D sector E from offset'base' =====================
+
+hd.seek:       LD   A,D            ;check valid track and sector
+               ADD  A              ;first to prevent corruption
+               CP   2*79+1         ;in next record
+               JR   NC,rep83       ;tracks >79 invalid
+               LD   A,E
+               AND  A
+               JR   Z,rep83          ;sector 0 invalid
+               CP   11               ;sector >10 invalid
+               JR   NC,rep83
+               PUSH DE
+               PUSH HL
+               CALL conv.de
+               LD   BC,(hd.sct)    ;A=HL/(hd*sct)
+               XOR  A
+               INC  A
+               SBC  HL,BC
+               JR   NC,$-3
+               ADD  HL,BC
+               DEC  A
+               LD   D,A            ;D=cylinder offset
+
+               LD   BC,(max.s)    ;A=HL/(sct)
+               DEC  C
+               XOR  A
+               LD   B,A
+               INC  A
+               SBC  HL,BC
+               JR   NC,$-3
+               ADD  HL,BC
+               DEC  A
+               LD   E,A            ;E=heads offset
+
+;add page ofset
+
+               LD   A,L            ;sector offset
+               LD   HL,(st.s)
+               ADD  L
+               CP   H
+               JR   C,nsb
+               DEC  H
+               SUB  H
+               INC  E
+nsb:           EX   AF,AF'         ;save sector
+
+               LD   A,E            ;heads
+               LD   HL,(st.h)
+               ADD  L
+               CP   H
+               JR   C,nhb
+               SUB  H              ;heads start at 0
+               INC  D
+nhb:           CALL hd.mix         ;mix hd drive to E
+               LD   B,0
+               LD   C,D            ;cyls
+               LD   HL,(st.c)
+               ADD  HL,BC          ;HL=cyl E=head
+                                   ;A'=sector
+;-send C H S to HD -
+
+set.chs:       CALL hd.busy
+               LD   BC,&01F7
+               LD   A,&F2
+               OUT  (&F5),A
+               OUT  (C),B
+               INC  A
+               OUT  (&F5),A
+               EX   AF,AF'
+               OUT  (C),A
+               EX   AF,AF'
+               INC  A
+               OUT  (&F5),A
+               OUT  (C),L
+               INC  A
+               OUT  (&F5),A
+               OUT  (C),H
+               INC  A
+               OUT  (&F5),A
+               OUT  (C),E
+               LD   A,&FF
+               OUT  (&F5),A
+               POP  HL
+               POP  DE
+               JP   adbor
+
+;- seek base sector (for record) -
+
+seek.base:     PUSH DE
+               PUSH HL
+               LD   HL,(st.c)
+               LD   A,(st.h)
+               CALL hd.mix         ;mix hd drive select
+               LD   A,(st.s)
+               EX   AF,AF'
+               JR   set.chs
+
+hd.mix:        LD   E,A
+               LD   A,(hd.drive)
+               OR   E
+               LD   E,A
+               RET
+;---------------------------------------------------------------
+
+hd.sbuf:       CALL get.buf.st
+               CALL hd.svb
+               DEC  C              ;B=0
+               OUTI                 ;do 2 OUTIs (512 MOD 6=2)
+               INC  C
+               OUTI
+               CALL hd.busy
+               JR   hdlse
+
+;- hd save 510 sector -
+
+hd.svbk:
+               LD   HL,(L30725)
+               CALL hd.svb
+               LD   A,(last.page)
+               OUT  (251),A
+               EX   DE,HL
+               LD   HL,(L16684)
+               DEC  C              ;B=0
+               OUTI                 ;do 2 OUTIs (512 MOD 6=2)
+               INC  C
+               OUTI
+               LD   A,(L16686)
+               OUT  (251),A
+               CALL hd.busy
+               LD   A,(last.page)
+               OUT  (251),A
+               JP   L18477
+
+hd.svb:        LD   A,(hd.wp)      ;test record write protect
+               AND  A
+               JP   NZ,rep104
+
+               LD   A,&30          ;save sector with retry
+               CALL wr.com
+               CALL wait.drq
+hdsvb1:        DEC  C
+               OUTI
+               INC  C
+               OUTI
+               DEC  C
+               OUTI
+               INC  C
+               OUTI
+               DEC  C
+               OUTI
+               INC  C
+               OUTI
+               JR   NZ,hdsvb1
+               RET
+
+;-hd load sector buff ------------------------------------------
+
+hd.lbuf:       CALL get.buf.st
+               CALL hd.ldb
+               DEC  C              ;B=0
+               INI                   ;do 2 INIs (512 MOD 6=2)
+               INC  C
+               INI
+hdlse:
+               CALL buf.pos0
+               JP   get.buf.st
+
+;- hd load 510 sector -
+
+hd.ldbk:       CALL tb4flag
+               LD   HL,(L30725)
+               JR   NZ,hd.vbk      ;jr for verify
+               CALL hd.ldb
+               EX   DE,HL
+               CALL get.buf.st
+               DEC  C              ;B=0
+               INI                   ;do 2 INIs (512 MOD 6=2)
+               INC  C
+               INI
+               JP   lbk6
+
+hd.ldb:        LD   A,&20          ;load sector with retry
+               CALL wr.com
+               CALL wait.drq
+hdldb1:        DEC  C
+               INI
+               INC  C
+               INI
+               DEC  C
+               INI
+               INC  C
+               INI
+               DEC  C
+               INI
+               INC  C
+               INI
+               JR   NZ,hdldb1
+               RET
+
+;- verify 510 sector -
+
+hd.vbk:        CALL hd.veb
+               EX   DE,HL
+               CALL get.buf.st
+               LD   C,&F6          ;port
+               INI                   ;do 2 INIs (512 MOD 6=2)
+               INC  C
+               INI
+               CALL lbk5           ;check verify error
+               JP   lbk6
+
+hd.vbuf:       CALL hd.veb
+               LD   C,2            ;2 more
+               CALL hdveb1
+               CALL hdlse
+               JP   lbk5           ;check verify error
+
+hd.veb:        LD   A,&20          ;load sector with retry
+               CALL wr.com
+               CALL wait.drq
+               LD   BC,510           ;BC=510 bytes
+               XOR  A
+               EX   AF,AF'         ;signal verify ok
+
+hdveb1:        IN   A,(&F6)
+               CPI
+               JR   Z,$+3
+               EX   AF,AF'
+               IN   A,(&F7)
+               CPI
+               JR   Z,$+3
+               EX   AF,AF'
+               LD   A,B
+               OR   C
+               JR   NZ,hdveb1
+               RET
+
+;- load dir sector -
+
+hd.lds:        CALL get.buf.st
+               LD   A,&20          ;load sector with retry
+               CALL wr.com
+               CALL wait.drq
+
+               EXX
+               LD   L,&FF
+               EXX
+               LD   B,0
+lds1:          IN   A,(&F6)
+               LD   (HL),A         ;byte to buffer
+               INC  HL
+               EXX
+               INC  L
+               JR   NZ,lds2         ;jr first dir entry byte
+               LD   H,&77          ;HL=BAM at &77xx
+               AND  A
+               JR   NZ,lds2        ;jr file entry used
+               LD   H,A            ;erased enty so drop in rom
+lds2:          OR   (HL)           ;other wise mix with previous
+               LD   (HL),A         ;data
+               EXX
+               IN   A,(&F7)
+               LD   (HL),A
+               INC  HL
+               EXX
+               INC  L
+nfstb:         OR   (HL)           ;other wise mix with previous
+               LD   (HL),A         ;data
+               EXX
+               DJNZ lds1
+               JP   hdlse
+
+;= HOOK CODE 135 INITIALIZE HARD DISK ==========================
+
+
+;check hard disk connected
+
+HDINIT:
+               IN   A,(251)
+               PUSH AF
+               CALL tst.logo
+               JR   C,test.clock
+
+               CALL stream2
+               CALL prt.mess
+               DEFB 22,1,11
+               DEFM "B-DOS Version 1.5a 1997/1998 by Edwin Blin"
+               DEFM "k"
+               DEFB 22,3,18+128
+               IN   A,(252)
+               AND  31
+               OUT  (251),A
+               LD   HL,&8300       ;draw red line
+               LD   B,&80
+               CALL hori
+               LD   B,L            ;B=&80
+               LD   HL,&8900
+               CALL hori
+
+; Test if SAMBUS or DALLAS clock is connected ------------------
+
+;Test SAMBUS CLOCK
+
+test.clock:    LD   BC,&B0EF       ;year register
+               LD   D,15
+               IN   E,(C)
+ck.sbc:        OUT  (C),D
+               IN   A,(C)
+               AND  15
+               CP   D
+               JR   NZ,no.sbc
+               DEC  D
+               JR   ck.sbc
+no.sbc:        OUT  (C),E
+               INC  D               ;Z,A=15 SAMBUS CLOCK
+               JR   Z,clk.mes
+
+;test DALLAS CLOCK
+
+tst.ds.clock:  LD   DE,&003F
+               CALL rd.clk.reg
+               EX   AF,AF'
+tst.dsc:       LD   A,D
+               CALL wr.clk.reg
+               CALL rd.clk.reg
+               CP   D
+               JR   NZ,no.dsc
+               DEC  D
+               JR   NZ,tst.dsc
+no.dsc:        EX   AF,AF'
+               CALL wr.clk.reg
+               EX   AF,AF'
+
+clk.mes:       LD   HL,select.clock
+               JR   Z,clk.con
+               LD   (HL),no.clock-select.clock-1
+
+               CALL prt.boot
+               DEFB "N","o"+128
+               JR   prt.clk.det
+
+clk.con:       DEC  A
+               JR   Z,dsc.con
+               LD   (HL),SAMBUS.clock-select.clock-1
+
+               CALL prt.boot
+               DEFM "SAMBU"
+               DEFB "S"+128
+               JR   prt.clk.det
+
+dsc.con:       LD   (HL),DALLAS.clock-select.clock-1
+               CALL prt.boot
+               DEFM "DALLA"
+               DEFB "S"+128
+
+prt.clk.det:   CALL prt.boot
+               DEFM " clock detected"
+               DEFB 22,5,18+128
+
+;-- detect hard disk --
+
+               LD   A,&F6
+               OUT  (&F5),A        ;head/drive reg.
+               LD   A,(hd.drive)
+               OUT  (&F7),A        ;select master/slave
+               LD   A,&EF
+               OUT  (&F5),A        ;device control
+               LD   B,0            ;256 retries
+tsthd0:        LD   C,255          ;256 times valid
+tsthd1:        IN   A,(&F6)
+               IN   A,(&F7)
+               CPL
+               AND  3
+               JR   NZ,tsthd2      ;possible hard disk
+               DJNZ tsthd0
+
+no.hd:         CALL prt.boot
+               DEFM "No hard disk detecte"
+               DEFB "d"+128
+               POP  AF
+               OUT  (251),A        ;restore himem
+               RET
+
+tsthd2:        DEC  C
+               JR   NZ,tsthd1
+
+hd.found:      CALL prt.boot
+               DEFM "Waiting for hard disk .."
+               DEFB "."+128
+
+;'get hard disk ID'
+
+ihd0:          CALL hd.ready       ;wait for hd ready
+
+               LD   A,&EC          ;Identify command
+               OUT  (&F7),A
+               CALL hd.busy
+               BIT  1,A
+               JR   NZ,ihd0        ;jr retry if error
+               BIT  4,A
+               JR   Z,ihd0         ;jr retry no drq
+               CALL wait.drq
+               LD   HL,L30735      ;sector buffer
+               LD   B,0
+ihd2:          DEC  C
+               INI
+               INC  C
+               INI
+               JR   NZ,ihd2
+
+               CALL tst.logo
+               JR   C,no.logo
+
+               LD   HL,&A311       ;model box
+               LD   BC,&5E14
+               CALL box
+
+               LD   HL,&B52F       ;CHS box
+               LD   BC,&221D
+               CALL box
+
+               LD   HL,&CBA9       ;Record box
+               LD   BC,&300B
+               CALL box
+
+               CALL prt.mess
+               DEFB 22,8,9
+               DEFM "Model"
+               DEFB " "+128
+               LD   HL,L30735+54  ;model
+               LD   B,40
+               CALL L18652
+
+               CALL prt.mess
+               DEFB 22,9,9
+               DEFM "Revision"
+               DEFB " "+128
+               LD   HL,L30735+46
+               LD   B,8
+               CALL L18652         ;print revision
+
+               CALL prt.mess
+               DEFB 22,12,24+128
+
+;get and print Cylinders Heads Sectors
+
+no.logo:       LD   HL,(L30735+2) ;Cylinders
+               LD   A,H
+               LD   H,L
+               LD   L,A
+               LD   (max.c),HL
+               PUSH HL
+               CALL tst.logo
+               JR   C,no.logo1
+
+               CALL prt10000sp     ;print no of cyls
+               CALL prt.mess
+               DEFM " Cylinders"
+               DEFB 22,13,24+128
+
+no.logo1:      LD   A,(L30735+7)  ;heads
+               LD   (max.h),A
+               LD   H,0
+               LD   L,A
+               PUSH HL             ;H=0 L=heads
+
+               CALL tst.logo
+               JR   C,no.logo2
+
+               CALL prt10000sp     ;print no.s heads
+               CALL prt.mess
+               DEFM " Heads"
+               DEFB 22,14,24+128
+
+no.logo2:      LD   A,(L30735+13)  ;sectors
+               LD   H,0
+               LD   L,A
+               INC  A
+               LD   (max.s),A
+               PUSH HL
+
+               CALL tst.logo
+               JR   C,no.logo3
+
+               CALL prt10000sp     ;print no.s sectors
+               CALL prt.mess
+               DEFM " Sectors"
+               DEFB 22,17,21+128
+
+no.logo3:      POP  BC             ;=sectors
+               POP  HL             ;=Heads
+
+               CALL mult16
+               LD   (hd.sct),HL    ;heads*sectors
+               POP  BC             ;=cyls
+
+               CALL mult16         ;hds*sct*cyls
+               LD   A,C
+               LD   (tot.sct+2),A  ;AHL=total sectors on dis
+               LD   (tot.sct),HL
+               PUSH AF
+               PUSH HL
+               LD   C,B            ;BC=0
+               LD   DE,1600
+               CALL div24          ;(sectors)/1600=records
+               EX   DE,HL
+               LD   DE,32          ;DE=records+1+31 for trunc
+               ADD  HL,DE
+               CALL div24          ;get records/32=sct needed
+               INC  DE             ;one extra sct for boot
+               LD   (base),DE
+               POP  HL
+               POP  AF
+
+;substract base sectors for boot/record list
+
+               AND  A
+               SBC  HL,DE          ;AHL=AHL-(base)
+               SBC  C              ;C=0
+
+;calc records available
+
+               LD   DE,1600        ;C=0
+               CALL div24
+               PUSH DE             ;DE=no of records
+               LD   DE,10
+               CALL div24            ;remaining sectors/10
+               LD   A,E              ;= remaining tracks
+               POP  DE               ;records
+               CP   5                ;at least 5 tracks
+               JR   C,hdi4           ;no extra record
+               INC  DE               ;records +1
+               CP   80
+               JR   C,hdi5
+               ADD  48               ;adjust side 2
+               JR   hdi5
+hdi4:          LD   A,&D0
+hdi5:          LD   (last.recs),A    ;size of last record
+               LD   (last.record),DE ;last record number
+
+               CALL tst.logo
+               JR   C,no.logo4
+
+               EX   DE,HL
+               CALL prt10000x        ;print records
+               CALL prt.mess
+               DEFM " Records availabl"
+               DEFB "e"+128
+
+no.logo4:      POP  AF
+               OUT  (251),A          ;restore himem
+
+               CALL def.rec
+               CALL get.rec          ;select default record
+
+hdi6:          LD   HL,$             ;intercep error to loop
+               PUSH HL               ;back here if hd error due
+               LD   (nmi.sp),SP      ;to hd initialisation
+               CALL get.label
+               POP  HL               ;drop error loop
+               LD   HL,0             ;no error intercept
+               LD   (nmi.sp),HL
+               JR   NC,hdi7          ;jr BDOS ID found,set WP
+               LD   (record.no),HL   ;else signal no record
+               RET
+
+hdi7:          LD   (hd.wp),A        ;set WP status
+               RET
+
+box:           PUSH BC
+               PUSH HL
+               CALL hori
+               DEC  HL
+               LD   A,&05
+               CALL vert
+               POP  HL
+               LD   A,&50
+               CALL vert
+               POP  BC
+
+hori:          LD   A,&55
+hor0:          LD   (HL),A
+               INC  HL
+               DJNZ hor0
+               RET
+
+;- draw vertical line at hl using A -
+
+vert:          LD   B,C            ;draw vertical line
+               LD   DE,128
+ver0:          ADD  HL,DE
+               LD   (HL),A
+               DJNZ ver0
+               RET
+
+;DALLAS CLOCK Read date and time and convert to decimal numbers
+
+read.clock:    LD   HL,date
+               JR   SAMBUS.clock   ;POKED no/DALLAS/SAMBUS clock
+select.clock:  EQU  $-1
+
+DALLAS.clock:  CALL clk.hold
+               LD   E,7
+rd.date:       CALL rd.clk.reg
+               CALL conv.bcd
+               INC  E
+               LD   A,E
+               CP   10
+               JR   NZ,rd.date
+               CALL adj2000
+               LD   E,4
+rd.time:       CALL rd.clk.reg
+               CALL conv.bcd
+               DEC  E
+               DEC  E
+               JP   P,rd.time
+
+;- continue clock update -
+
+clk.cont:      LD   E,11
+               CALL rd.clk.reg
+               RES  7,A
+               JR   wr.clk.reg
+
+;- hold clock update -
+
+clk.hold:      LD   E,11
+               CALL rd.clk.reg
+               SET  7,A
+
+;- write D to clock addres A -
+
+wr.clk.reg:    LD   BC,&FEEF
+               OUT  (C),E
+               INC  B
+               OUT  (C),A
+               RET
+
+;- read A from clock addres E -
+
+rd.clk.reg:    LD   BC,&FEEF
+               OUT  (C),E
+               INC  B
+               IN   A,(C)
+               RET
+
+;- convert BCD in A to Decimal to (HL) -
+
+conv.bcd:      LD   D,A
+               AND  240            ;A = hi BCD *16
+               RRA                   ;*8
+               LD   B,A
+               RRA                   ;*4
+               RRA                   ;*2
+               SUB  B              ;*-6
+               ADD  D
+               LD   (HL),A
+               INC  HL
+no.clock:      RET
+
+;---------------------------------------------------------------
+
+SAMBUS.clock:                      ;= Control reg
+               CALL sbclk0
+               PUSH HL
+               LD   HL,&4002
+               CALL sbclk0
+               POP  DE
+               LD   B,6
+sbclk:         DEC  HL
+               DEC  DE
+               LD   A,(DE)
+               CP   (HL)
+               JR   NZ,read.clock  ;read clock again
+               DJNZ sbclk
+               RET
+
+sbclk0:        LD   BC,&70EF
+               CALL rd.dec
+               LD   B,&90
+               CALL rd.dec
+               LD   B,&B0
+               CALL rd.dec
+               CALL adj2000
+               LD   B,&50
+sbclk1:        CALL rd.dec
+               LD   A,B
+               SUB  16
+               LD   B,A
+               JR   NC,sbclk1
+               RET
+
+;- read double BCD digit and convert to decimal -
+
+rd.dec:        IN   A,(C)          ;read BCD digit from port
+               AND  15
+               ADD  A
+               LD   E,A
+               ADD  A
+               ADD  A
+               ADD  E
+               LD   E,A
+               LD   A,B            ;next port
+               SUB  16
+               LD   B,A
+               IN   A,(C)
+               AND  15
+               ADD  E
+               LD   (HL),A
+               INC  HL
+               RET
+
+adj2000:       DEC  HL             ;adjust for year 2000
+               LD   A,(HL)
+               CP   80             ;year < 80
+               JR   NC,$+4
+               ADD  100            ;becomes 100+
+               LD   (HL),A
+               INC  HL
+               RET
+
+;--- FAST DIR ----
+
+             ; PUSH DE
+             ; CALL track00
+             ; CALL rd.buff
+             ; LD   BC,15
+             ; LDIR
+             ; LD   C,195
+             ; ADD  HL,BC
+             ; LD   C,46
+             ; LDIR
+
+             ; AND  A
+             ; JR   Z,tst.end
+
+
+
+
+;=INITALIZE CODE AT LOCATION C(&8000/&BFFF) ====================
+
+               ORG  $+16384
+
+init.svar:     XOR  A              ;Enable ESC key
+               LD   (&5B41),A
+
+init.retry:    LD   A,(date.flag+16384)
+               ADD  A
+               LD   A,2
+               LD   (&5A35),A      ;8 bit wide chr$
+               CALL NC,mode
+
+               RST  8
+               DEFB 135
+               XOR  A
+               LD   (&5A35),A
+
+               LD   A,(date.flag+16384)
+               ADD  A
+               JR   C,logo.w3
+
+               LD   B,150
+logo.wait:     HALT
+               LD   A,127
+               IN   A,(&FE)
+               AND  2
+               JR   Z,logo.w1
+               DJNZ logo.wait
+               JR   logo.w3
+
+logo.w1:       LD   A,127
+               IN   A,(&FE)
+               AND  2
+               JR   Z,logo.w1
+
+logo.w3:       LD   A,3
+
+;- Select screen mode -
+
+;this routine will put a small routine on the stack to select -
+;screen mode A on entry.(&015A:MODE works only in location B)
+
+mode:          LD   (mode.ret+1),SP
+               LD   BC,&C941       ;POP BC
+               PUSH BC             ;OUT (C),B
+               LD   BC,&EDC1       ;RET
+               PUSH BC
+               LD   HL,0
+               ADD  HL,SP          ;addr of routine
+               LD   BC,mode.ret
+               PUSH BC
+               LD   C,251
+               IN   B,(C)
+               PUSH BC
+               PUSH HL             ;stack routine addr
+               JP   &015A
+mode.ret:      LD   SP,0
+               RET
+
+total.lenght:  EQU  $-&8009
+
+
+;/// END OF SOURCE /////////////////////////////////////////////
+
+;Things to do:
+
+;decimal point command
+;faster DIR command and dir searching for read only commands.
+
+;quick dir map in scr with RAM check.
+;for floppy use system frames for updating dirlayout.
+;(2 seconds time out after a disk command has finished).
+;;; [detok] zero gap of 141 bytes in source dump here (file offset 0x69fe)
+------------------------
+
+
+HSVBKx:        CALL bk.regs
+
+HSVBK:         CALL s6flag
+               JR   L18274
+
+L18264:        LD   (HL),D
+               CALL inc.buf.pos
+               LD   HL,(L30725)
+               INC  HL
+               POP  DE
+               DEC  DE
+L18274:        CALL adj.len
+               RET  Z              ;ret done
+               PUSH DE
+               LD   D,(HL)
+               LD   (L30725),HL
+               CALL bc510z
+               JR   NZ,L18264      ;jr next to buff
+               POP  DE
+               LD   (L30722),DE    ;len count
+               CALL find.free
+               LD   (HL),D         ;store next track
+               INC  HL
+               LD   (HL),E         ;sector
+               EX   DE,HL
+               CALL L19608         ;store swap
+               CALL wr.buff        ;write sector buffer
+               DI
+               CALL test.last      ;18309 CD1947
+               JP   C,L18516       ;jr last
+
+;create sector list for block to save
+
+               CALL sel.scr        ;select himem
+               LD   HL,&A280       ;sector list
+               LD   BC,0           ;sector count
+               JR   L18352
+
+L18326:        PUSH HL
+               CALL test.last
+               PUSH HL
+               POP  DE
+               POP  HL
+               JR   C,L18358       ;jr last sector
+               INC  DE
+               LD   (L30722),DE
+               CALL find.free
+               LD   (HL),D         ;track
+               INC  HL
+               LD   (HL),E         ;sector
+               INC  HL
+               LD   BC,(L16680)    ;sector count
+               INC  BC
+L18352:        LD   (L16680),BC
+               JR   L18326
+
+;save block
+
+L18358:        LD   HL,&A280
+               CALL L18249         ;restore himem
+L18364:        XOR  A
+               LD   (retries),A
+               CALL L19594         ;get DE
+
+L18371:        CALL seek.track
+               CALL drive.port
+               JP   NZ,hd.svbk
+
+               LD   DE,(L16684)    ;sector list
+               LD   HL,(L30725)    ;mem pointer
+               LD   BC,510
+               CALL fdc.svb        ;write sector
+               AND  14
+               JR   Z,L18477       ;jr no error
+
+               LD   A,(L16686)     ;restore himem
+               OUT  (251),A
+               CALL L19594
+               CALL L17607
+               JR   L18371         ;retry
+
+L18477:        LD   (L30725),DE    ;mem pointer
+               LD   (L16684),HL    ;sector list
+               DEC  HL
+               LD   E,(HL)         ;next sct
+               DEC  HL
+               LD   D,(HL)         ;next trk
+               LD   A,(L16686)
+               OUT  (251),A        ;restore himem
+               CALL L19601
+
+               LD   BC,(L16680)
+               DEC  BC             ;dec file sector count
+               LD   (L16680),BC
+               LD   A,B
+               OR   C
+               JR   NZ,L18364      ;jr more sectors to save
+L18516:
+               CALL buf.pos0
+               LD   DE,(L30722)
+               LD   HL,(L30725)
+               JP   HSVBK          ;save last sector
+
+;- find a free sector ------------------------------------------
+
+find.free:     PUSH HL
+               PUSH BC
+               LD   HL,L30479      ;=&770f =Sct Addr Map
+               LD   DE,&0401       ;first available trk sct
+               LD   C,0
+L18542:        LD   A,(HL)
+               CP   255
+               JR   NZ,L18565      ;jr not 8 sectors used
+               LD   A,E
+               ADD  8              ;sector + 8
+               LD   E,A
+               SUB  10
+               JR   C,L18561       ;jr E<10
+               JR   Z,L18561       ;jr E=10
+               LD   E,A            ;E=E-10
+               CALL inc.trk        ;inc track
+L18561:        INC  C
+               INC  HL
+               JR   L18542
+
+;get free sector from SAM byte
+
+L18565:        LD   B,1
+L18567:        LD   A,(HL)
+               AND  B
+               JR   Z,L18599       ;jr free sector found
+               CALL inc.sct
+               CALL Z,inc.trk
+               RLC  B
+               JR   L18567
+
+
+L18599:        LD   A,(HL)         ;set sector used now
+               OR   B
+               LD   (HL),A         ;marked in Sct Addr Map
+               LD   A,B
+               LD   B,0
+               PUSH IX
+               ADD  IX,BC          ;marked in file dir entry
+               OR   (IX+34)
+               LD   (IX+34),A
+               POP  IX
+               INC  (IX+31)        ;inc sct count
+               JR   NZ,L18625
+               INC  (IX+30)
+L18625:        POP  BC
+               POP  HL
+               RET
+
+inc.sct:       INC  E
+               LD   A,E
+               CP   11
+               RET  NZ             ;NZ no track change
+               LD   E,1
+               RET
+
+inc.trk:       INC  D
+               CALL get.dr.dat
+               CP   D
+               JR   Z,rep105       ;error if reached end of disk
+               LD   A,80
+               CP   D
+               RET  NZ
+               LD   D,128
+               RET
+
+rep105:        CALL L20133
+               DEFB 105            ;not enough space on disk
+
+;- get drive data -
+
+get.dr.dat:    LD   A,(L30731)     ;drive no
+               DEC  A
+               LD   A,(L16530)     ;drive 1 data
+               RET  Z              ;Z floppy disk
+               LD   A,(L16531)     ;drive 2 data
+               RET                   ;NZ hard disk
+
+;- close file sector map ---------------------------------------
+
+
+;- fill last sector with zeros
+
+HCFSM:         CALL get.buf.ad    ;fill last sector with 0s
+               LD   A,C
+               AND  A
+               JR   NZ,L19200
+               LD   A,B
+               CP   2
+               JR   Z,L19207
+L19200:        LD   (HL),0
+               CALL inc.buf.pos
+               JR   HCFSM
+
+L19207:        CALL L19594         ;get t/s last file sector
+               CALL wr.buff        ;save it
+               PUSH IX
+               LD   A,64
+               CALL L18667         ;search free entry
+zxok:          JR   NZ,rep106
+               CALL dentry.st
+               LD   (L30727),IX
+               POP  IX
+               PUSH IX
+               LD   A,E            ;first entry D=0,E=1,B=0
+               DEC  A
+               OR   D
+               OR   B
+               LD   B,0
+               JR   NZ,L19239x     ;copy all if not 1st entry
+               LD   A,(IX+19)      ;zx files can not be on 1st
+               CP   16             ;dir entry
+               JR   NC,notzx
+
+;prevent 1st dir entry used by zx files
+
+               LD   IX,(L30727)
+               INC  HL             ;=1st chr erased filename
+               LD   A,(HL)
+               AND  A
+               JR   NZ,prezx       ;jr files on disk
+               LD   (HL)," "       ;signal not end of dir
+               LD   (IX+14),1      ;set 2nd dir entry
+               JR   zxok           ;Z flag
+
+prezx:         CALL L18884         ;search continue
+               JR   zxok           ;Z ok NZ dir full
+
+notzx:         LD   BC,&D20A       ;copy 210 (0 to 209) skip 10
+               CALL ix19tohl       ;(diskname/write protect)
+
+               LD   BC,&0C04       ;copy 12 (220 to 231) skip 4
+               CALL ix19tohl       ;('BDOS' ID)
+               LD   B,14           ;copy 14 (236 to 249)
+
+L19239x:       CALL ix19tohl
+
+               LD   IX,(L30727)
+               CALL wr.buff        ;write new dir sector
+               POP  IX
+               RET
+
+ix19tohl:      LD   A,(IX+19)      ;copy B bytes
+               LD   (HL),A
+               INC  IX
+               INC  HL
+               DJNZ ix19tohl
+               ADD  HL,BC          ;skip C bytes
+               ADD  IX,BC
+               RET
+
+rep106:        CALL L20133
+               DEFB 106            ;error directory full
+
+;- file type sub for LOAD n/HGTHD/HGTLE) -----------------------
+
+L19258:        LD   A,(file.no)    ;file no
+               INC  A              ;&FF search file name
+               LD   A,16           ;<>&FF search number
+               JR   Z,$+4          ;jr not file no
+               LD   A,1
+               CALL L18667         ;search file number
+               JP   NZ,rep107      ;not found
+
+L19273:        CALL dentry.st
+               LD   A,(HL)
+               AND  31             ;type only
+               CP   16
+               JR   NC,L19289      ;jr SAM types
+               DEC  A
+               OR   16             ;ZX type to SAM type
+               CALL s7flag         ;signal ZX type
+
+L19289:        LD   (HL),A         ;store type
+               LD   A,(file.no)
+               INC  A
+               JR   Z,L19365       ;jr no number search
+
+;move dir info to headers
+
+point.sub:     LD   DE,uifa        ;copy type&name from dir to
+               LD   BC,11          ;UIFA
+               LDIR
+               LD   B,4            ;Add 4 zeros
+               XOR  A
+               CALL a.to.de
+               LD   (IX+13),211
+               CALL get.buf.ad     ;dir entry +211
+               LD   BC,9
+               LDIR                 ;move 9 zx info
+               CALL dentry.st
+               LD   DE,hdr         ;copy dir to hdr
+               LD   BC,11
+               PUSH HL
+               LDIR
+               POP  HL
+               LD   B,15           ;set dont cares as file info
+               CALL sp.to.de       ;15 spaces to DE
+               LD   B,22
+               LD   A,255
+               CALL a.to.de        ;22 * FF to DE
+
+;code file can be loaded as screen$
+
+L19365:        LD   A,(uifa)
+               CP   19
+               JR   NZ,L19382      ;jr not code
+               LD   A,(HL)         ;dir type
+               CP   20
+               JR   NZ,L19393      ;jr not screen
+               DEC  A              ;screen > code
+               JR   L19392
+
+;screen$ can be loaded as code
+
+L19382:        CP   20
+               JR   NZ,L19393      ;jr not screen
+               LD   A,(HL)
+               CP   19
+               JR   NZ,L19393      ;jr not code
+               INC  A              ;code > screen
+
+;check same file type to load
+
+L19392:        LD   (HL),A
+
+L19393:        LD   A,(uifa)
+               CP   (HL)
+               JR   NZ,rep94       ;wrong type
+
+               LD   DE,L16741      ;DIFA info area
+               LD   (IX+13),211
+               CALL get.buf.ad
+               LD   BC,9
+               LDIR
+               LD   DE,&7EEA       ;copy Z80 regs SNAPSHOT
+               LD   BC,22
+               LDIR
+               CALL dentry.st      ;copy type name to HDL
+               LD   DE,hdl
+               LD   BC,11
+               LDIR
+               LD   B,4
+               CALL sp.to.de       ;add 4 spaces
+               CALL tb7flag
+               JR   Z,L19499       ;jr SAM file
+
+;adjust for ZX files
+
+               LD   B,11           ;clear HDL file info
+               CALL sp.to.de       ;add 11 spaces
+               LD   B,22
+               LD   A,&FF
+               CALL a.to.de        ;22 * &FF
+               LD   HL,(L16742)    ;len ofs(=zx len)
+               CALL hl2ahl         ;HL to page offset
+               LD   (L16847),A
+               LD   (L16748),A
+               LD   (L16848),HL
+               LD   (L16742),HL
+               LD   HL,(L16744)    ;start ofs
+               CALL hl2ahl         ;HL to page,offs
+               DEC  A
+               AND  31
+               LD   (L16844),A
+               LD   (L16749),A
+               SET  7,H
+               LD   (L16845),HL
+               LD   (L16744),HL
+               JR   L19511
+
+rep94:         CALL L20133
+               DEFB 94             ;wrong file type
+
+L19499:        LD   (IX+13),220    ;move 33 SAM bytes
+               CALL get.buf.ad
+               LD   BC,33
+               LDIR
+
+L19511:        LD   (IX+13),13
+               CALL get.buf.ad     ;get trk sct file
+               LD   D,(HL)
+               INC  HL
+               LD   E,(HL)
+               LD   (L30722),DE
+               RET
+
+;-convert HL to page,offset -
+
+hl2ahl:        XOR  A              ;A=HL/16484
+               RL   H
+               RLA                   ;HL = HL MODulo 16384
+               RL   H
+               RLA
+               RR   H
+               RR   H
+               RET
+
+;- fill B spaces at DE -
+
+sp.to.de:      LD   A," "
+a.to.de:       LD   (DE),A
+               INC  DE
+               DJNZ a.to.de
+               RET
+
+;- CALL MODE BASIC COMMAND -------------------------------------
+
+call.mode:     LD   C,170            ;'MODE'
+               CALL exp.c
+               CALL exp1num        ;get number
+L22246:        CALL exp.end
+               LD   A,C
+               AND  A
+               JR   NZ,L22266
+                                   ;CALL MODE 0
+               LD   A,3
+               OUT  (251),A
+               LD   A,4            ;mode 0 screen 4
+               OUT  (252),A
+               DI
+               JP   &B914          ;jp to snap ?
+
+L22266:        DEC  A
+               JP   NZ,rep29       ;error not CALL MODE 1
+               LD   A,4            ;mode 0 screen 4
+               OUT  (252),A
+                                   ;continue with nmi.ret
+
+;-re enter snapshot --------------------------------------------
+
+nmi.ret:       DI
+               LD   A,3
+               OUT  (251),A
+               LD   HL,0           ;clear NMI SP
+               LD   (nmi.sp),HL
+               LD   SP,&7EEA       ;snapshot regs
+               POP  IY
+               POP  IX
+               POP  DE
+               POP  BC
+               POP  HL
+               POP  AF
+               EX   AF,AF'
+               EXX
+               LD   HL,nmi
+               LD   (&B8F6),HL     ;set NMI service address
+               LD   A,(L16646)     ;lomem
+               LD   (&B8F8),A
+               LD   A,(L16647)     ;himem
+               LD   (&B8F9),A
+               LD   A,(scr1)
+               LD   (&B8FA),A      ;screen page
+               POP  DE
+               POP  BC
+               POP  HL
+               POP  AF
+               LD   I,A
+               AND  A              ;was CP 0
+               JR   Z,L21019
+               CP   63
+               JR   Z,L21019
+               IM   2
+L21019:        LD   SP,(&7EFE)
+               JP   &B900          ;nmi code in spectrum 'ROM'
+
+;= NMI button pressed from emulator ============================
+
+nmi:           LD   (&7EFE),SP     ;save spectrum SP and regs
+               LD   SP,&7EFE
+               LD   A,I
+               PUSH AF
+               PUSH HL
+               PUSH BC
+               PUSH DE
+               EX   AF,AF'
+               EXX
+               PUSH AF
+               PUSH HL
+               PUSH BC
+               PUSH DE
+               PUSH IX
+               PUSH IY
+               LD   HL,nmi.ret     ;set stack to return to snap
+               PUSH HL             ;on error
+               LD   (nmi.sp),SP
+             ; LD   A,4
+             ; OUT  (251),A
+             ; LD   HL,&8000       ;set later on
+               IM   1
+L20732:        LD   BC,&F7FE       ;read  keys 1 to 5
+               IN   E,(C)
+               BIT  1,E
+               RET  Z              ;'2' return to spectrum
+               BIT  2,E
+               JR   NZ,L20751      ;jr not '3'
+
+               LD   A,19           ;code
+               LD   HL,6912        ;screen len
+               JR   L20803
+
+L20751:        BIT  3,E
+               JR   Z,snap.shot   ;jr '4'
+
+L20762:        INC  A              ;change border color
+               AND  7
+               OUT  (C),A
+               LD   B,C            ;read key 'x'
+               IN   E,(C)
+               BIT  2,E
+               JR   NZ,L20732      ;jr not pressed
+L20775:        IN   E,(C)
+               BIT  2,E
+               JR   Z,L20775       ;wait key X released
+
+             ; LD   BC,0           ;BC=&FEFE long enough del
+L20784:        DEC  BC
+               LD   A,B
+               OR   C
+               JR   NZ,L20784
+
+               LD   A,(L16647)     ;restore himem (was L16647)
+               OUT  (251),A
+               LD   A,(scr1)       ;restore screen
+               OUT  (252),A
+               EI
+               JP   syntax.exit    ;return to program
+
+;- SAVE SNAP SHOT -
+
+snap.shot:
+               LD   A,5            ;snap shot
+               LD   HL,&C000
+
+L20803:        LD   (uifa),A       ;store SNAP type
+               LD   (snp.l),HL     ;store len
+             ; LD   IX,L30720      ; ix = set on search entry
+               LD   B,C            ;=&FE=shift row
+               IN   A,(C)
+               RRA                   ;test shift key
+               LD   A,1            ;drive 1 no shift pressed
+               JR   C,L20829
+               INC  A              ;drive 2 if shift pressed
+L20829:        CALL set.drive.a
+               LD   A,64
+               CALL L18667         ;search free entry
+               RET  NZ             ;ret dir full
+               LD   A,D            ;get SNAP?? name
+               AND  7
+               JR   Z,L20848       ;no chr if 0
+               ADD  "0"            ;get first chr track
+               LD   (snp.chr1),A
+L20848:        LD   L,E
+               SLA  L
+               DEC  L              ;L=2*sector -1
+               LD   A,(IX+14)      ;1st/2nd dir entry
+               ADD  L
+               ADD  "A"-1
+               LD   (snp.chr2),A     ;store 2nd snap chr
+               LD   HL,snp.hdr
+               LD   DE,uifa+1
+               LD   BC,23
+               LDIR
+               XOR  A
+               LD   (L30732),A     ;clear flags
+               LD   (page.cnt),A   ;no pages
+               CALL open.file
+
+               LD   HL,&7EEA       ;22 snap regs for SNAPSHOT
+               LD   BC,22
+               LD   A,(uifa)
+               CP   5
+               JR   Z,L20904
+
+               CALL save9          ;save 9 bytes for screen$
+               LD   HL,L20922
+               LD   BC,33
+
+L20904:        LD   DE,L30959      ;=&78EF
+               LDIR
+
+               LD   DE,(snp.l)     ;C = 0 DE = len
+               LD   A,4
+               OUT  (251),A
+               LD   HL,&8000       ;was LD HL,(snp.st)
+               CALL HSVBK          ;save SNAP bytes
+               JP   HCFSM
+
+;- 33 bytes SNAP screen info -
+
+L20922:        DEFB " "            ;1  type
+               DEFM "          "   ;10 name
+               DEFB &FF
+               DEFB &FF
+               DEFB &FF
+               DEFB &FF
+               DEFB &FF
+               DEFB &6E            ;start po (bas addr 245760)
+               DEFW &8000
+               DEFB 0
+               DEFW &1B00          ;len
+               DEFB &FF,&FF,&FF,&FF,&FF,&FF,&FF,&FF,&FF,&FF,&FF
+
+;=FORMAT BASIC COMMANDO ========================================
+
+;FORMAT (OVER) ("label")
+;FORMAT (OVER) RECORD (n or "name")(,"label")
+
+format:        CALL tst.over
+               CALL tst.record
+               CALL Z,skip.sep
+               JR   Z,fm0         ;jr FORMAT RECORD n(,)"NAME"
+               CALL tst.end
+               JR   NZ,fm0        ;jr FORMAT "NAME"
+
+               LD   DE,rcd.name   ;signal no name
+               XOR  A
+               LD   B,16
+               CALL a.to.de       ;16 0s at DE
+               JR   fm1
+
+fm0:           CALL exp.rname
+fm1:           CALL exp.end
+
+fm2:           CALL set.device
+
+               CALL res.buf
+               CALL track00
+               JR   Z,fm21         ;jr for floppy disk
+
+               CALL rd.buff        ;read 1st sector
+               CALL fm.req         ;request format
+               CALL fm.mess
+               CALL prt.rec        ;print record n
+
+               CALL get.buf.st
+               LD   D,H
+               LD   E,L
+               INC  DE
+               LD   BC,511
+               LD   (HL),0
+               LDIR
+               LD   DE,&0001
+fmhd1:         CALL wr.buff
+               CALL inc.sct
+               JR   NZ,fmhd1
+               INC  D
+               CALL get.dr.dat
+               CP   D
+               JR   Z,fmhd2
+               AND  127
+               CP   D
+               JR   NZ,fmhd1
+               LD   D,128
+               JR   fmhd1
+fmhd2:
+               JR   fmt3
+
+fm21:          CALL get.buf.st     ;read first sector
+               LD   A,&80
+               CALL fdc.lds
+               EI
+               AND  14
+               JR   NZ,fm3         ;jr no 1st sector found
+
+               CALL fm.req         ;request format y/n
+               LD   D,10           ;extra delay for write head
+fm22:          CALL step.in
+               DEC  D
+               JR   NZ,fm22
+               CALL track00
+
+fm3:           PUSH DE
+               CALL fm.mess
+               CALL prt.mess
+               DEFM "at track:"
+               DEFB " "+128
+               POP  DE
+
+fmt0:          PUSH DE             ;print track number
+               LD   A,26
+               CALL poke           ;set column 21 in lower
+               DEFW &5A6E          ;window
+               LD   L,D
+               LD   H,0
+               LD   A," "          ;leading 0s > space
+               CALL prt10          ;print track number
+               POP  DE
+
+fmt1:          CALL format.track
+
+               LD   A,(L16530)
+               BIT  7,D
+               SET  7,D
+               JR   Z,fmt1
+               INC  D
+               CP   D
+               JR   Z,fmt3         ;jr end of disk
+               RES  7,D
+               CALL step.in
+               DEC  E              ;E=E-1: skew factor 1
+               JR   NZ,fmt0
+               LD   E,10
+               JR   fmt0           ;next track
+
+;floppy/hard disk rejoin here
+
+fmt3:          CALL cls.low
+
+;- set new disk label and write protect -
+
+new.lab:       CALL get.label
+
+               PUSH DE
+               EX   DE,HL
+               LD   HL,rcd.name
+               RES  7,(HL)         ;no WP
+               LD   C,10
+               LDIR                 ;move name
+               LD   HL,12
+               ADD  HL,DE
+               EX   DE,HL
+               LD   HL,bdos.id
+               LD   C,4
+               LDIR                 ;move BDOS id
+               LD   HL,14
+               ADD  HL,DE
+               EX   DE,HL
+               LD   HL,rcd.name+10
+               LD   C,6
+               LDIR
+               POP  DE
+               CALL wr.buff        ;new label to disk
+               LD   A,(L30731)
+               DEC  A
+               RET  Z              ;return drive 1
+
+;change label in record list
+
+new.rec:       LD   HL,(record.t)
+               DEC  HL             ;AHL=record no-1
+               LD   DE,32
+               CALL div16
+               PUSH HL             ;save mod
+               EX   DE,HL          ;AHL=base sector
+               INC  HL             ;skip boot sector
+               CALL sel.base
+               POP  HL
+               LD   BC,16          ;get ofset in record sector
+               CALL mult16
+               PUSH HL
+               CALL seek.base
+               CALL hd.lbuf        ;load record list sector
+               POP  BC
+               ADD  HL,BC
+               EX   DE,HL          ;DE=address of record entry
+               LD   HL,rcd.name
+               LD   BC,16
+               LDIR                 ;copy new label
+               CALL seek.base
+               CALL hd.sbuf        ;save it
+               JP   sel.record     ;restore record base
+
+fm.mess:       CALL prt.cls
+               DEFM "Format & verify"
+               DEFB " "+128
+               RET
+
+bdos.id:       DEFM "BDOS"
+
+;- get disk label/write protect from disk -
+
+get.label:     CALL track00
+               CALL res.buf
+               CALL rd.buff
+get.lab:       PUSH DE
+               PUSH HL
+               LD   BC,232
+               ADD  HL,BC
+               LD   DE,bdos.id
+               LD   B,4
+gtlb0:         LD   A,(DE)
+               CP   (HL)
+               INC  DE
+               INC  HL
+               JR   NZ,gtlb1
+               DJNZ gtlb0
+gtlb1:         POP  HL
+               POP  DE
+               EX   AF,AF'
+               LD   BC,210         ;point to disk name
+               ADD  HL,BC          ;point to disk label
+               EX   AF,AF'
+               SCF
+               RET  NZ             ;ret Carry no BDOS ID
+               LD   A,(HL)
+               AND  128            ;NC BDOS ID NZ WP on
+               RET
+
+;- FORMAT "Label" (y/n) request --------------------------------
+
+fm.req:        CALL tb1flag
+               RET  NZ             ;ret if FORMAT OVER
+               CALL prt.mess
+               DEFM "Format "
+               DEFB ""+128
+               CALL prt.label      ;print 'FORMAT label(Y/N)'
+               CALL yes.no
+               RET  Z              ;ret Yes
+               POP  BC             ;drop ret
+               RET                   ;exit
+
+;-FD Format track ---------------------------------------------
+
+format.track:  DI
+               BIT  7,D
+               LD   A,&E0
+               JR   Z,fmtrk1
+               LD   A,&E4
+fmtrk1:        LD   C,A
+               LD   (com.port),A
+               LD   (fmport1),A
+               LD   (fmport3),A
+               ADD  3
+               LD   (fmport2),A
+               LD   (fmport4),A
+             ; DEC  A
+             ; LD   (fmport5),A
+fmtrk0:        LD   A,&F0          ;write track com
+               CALL fdc.com
+
+               LD   BC,&3C4E       ;60*&4E
+               CALL format.BC
+               LD   HL,&0A0A
+
+fmtrk2:        LD   BC,&0C00       ;12 * 00
+               CALL format.BC
+               LD   BC,&03F5       ; 3 * &F5 (writes A1)
+               CALL format.BC
+               LD   C,&FE          ; 1 * &FE (ID address mark)
+               CALL format.C
+               LD   C,D            ; 1 * track
+               RES  7,C
+               CALL format.C
+               XOR  D                ; 1 * side
+               RLCA
+               LD   C,A
+               CALL format.C
+               LD   C,E            ; 1 * sector
+               INC  E
+               INC  B
+               CALL format.C
+               CP   H              ;1 * size
+               JR   NZ,fmtrk3
+               LD   E,B
+fmtrk3:        LD   C,2
+               CALL format.C
+               LD   C,&F7          ;1  * F7 (write 2 CRC's)
+               CALL format.C
+               LD   BC,&164E       ;22 * 4E
+               CALL format.BC
+               LD   BC,&0C00       ;12 * 00
+               CALL format.BC
+               LD   BC,&03F5       ;3  * F5
+               CALL format.BC
+               LD   C,&FB          ;1  * FB (DATA address mark)
+               CALL format.C
+               LD   C,B            ;512 * 0
+               CALL format.BC
+               CALL format.BC
+               LD   C,&F7          ;1  * F7 (write 2 CRC's)
+               CALL format.C
+               LD   BC,&184E       ;24 * 4E
+               CALL format.BC
+               DEC  L
+               JR   NZ,fmtrk2      ;next sector
+
+               CALL format.BC      ;768* 4E
+               CALL format.BC
+               CALL format.BC
+               RET
+
+format.C:      IN   A,(&E0)        ;poked
+fmport1:       EQU  $-1
+               BIT  1,A
+               JR   NZ,fmc
+               RRA
+               JR   C,format.C
+               JR   fmce
+
+fmc:           LD   A,C
+               OUT  (&E3),A
+fmport2:       EQU  $-1
+               RET
+
+format.BC:     IN   A,(&E0)        ;poked
+fmport3:       EQU  $-1
+               BIT  1,A
+               JR   NZ,fmbc
+               RRA
+               JR   C,format.BC
+
+fmce:          POP  BC             ;drop ret addr
+               CALL sbk5           ;error if WP
+               AND  14
+               JP   NZ,format.track ;format again if error
+
+;-check formatted sectors -
+
+               LD   B,10           ;10 to verify
+fmve0:         PUSH BC
+               CALL rd.buff
+
+             ; LD   HL,0           ;HL=0 drop to rom
+             ; LD   A,E            ; sector to port
+             ; OUT  (&E2),A
+;fmport5:       EQU  $-1
+;              LD   A,&80          ;read sector command
+;              CALL fdc.lds
+;              AND  14
+;              JP   NZ,rep85
+
+               CALL inc.sct        ;next sector
+               POP  BC
+               DJNZ fmve0
+               RET
+
+fmbc:          LD   A,C
+               OUT  (&E3),A
+fmport4:       EQU  $-1
+               DJNZ format.BC
+               RET
+
+;= COPY BASIC COMMAND ==========================================
+
+;COPY OVER "*" to "*"
+;COPY OVER RECORD /n/"" to RECORD /n/""
+;COPY FORMAT to "name"
+;COPY FORMAT RECORD /n/"" TO RECORD /n/"","new name"
+
+;-copy RECORD syntax --
+
+copy.rcd:      CALL tst.record
+               JR   NZ,cprc        ;jr not record
+               LD   HL,L16699
+               LD   (HL),"*"       ;set all files to copy
+               CALL skip.sep
+               RET  NZ             ;ret no wild card
+cprc:          JP   exp.name       ;get wildcard
+
+;file copy or sector copy ?
+
+copy:        ; LD   C,145            ;'FORMAT'
+             ; CALL skip.c
+             ; JR   NZ,copy.files
+
+;sector copy ; CALL tst.record
+
+             ; call define.buf
+             ; LD   A,B
+             ; CP   25             ;25 pages for one side
+             ; JR   C,bkup0        ;jr
+             ; LD   B,25           ; max size
+             ; PUSH BC
+bkup0:       ; LD   C,B
+             ; LD   B,0
+             ; LD   HL,32
+             ; CALL mult16         ;> HL=buffer sectors
+             ; PUSH HL
+             ; LD   HL,0
+             ; LD   DE,10          ;start LBA
+
+             ; CALL div16
+             ; LD   A,E
+             ; CP   80
+             ; JR   C,$+4          ;jr no side 2 adjust
+             ; ADD  48
+             ; LD   D,A            ;D = track
+             ; LD   E,L
+             ; INC  E              ;E = sector
+             ; POP  IX
+             ; POP  BC             ;C=page
+
+             ; insert source
+
+             ; PUSH BC
+             ; PUSH DE
+             ; PUSH IX
+             ; LD   HL,&8000
+             ; CALL bckup.rd
+             ; POP  IX
+             ; POP  DE
+             ; POP  BC
+
+             ; insert target
+
+             ; PUSH BC
+             ; PUSH DE
+             ; PUSH IX
+             ; LD   HL,&8000
+             ; CALL bckup.rd
+             ; POP  IX
+             ; POP  DE
+             ; POP  BC
+
+             ; CALL conv.de        ;HL=LBA
+             ; POP  DE             ;Sector count
+             ; ADD  HL,DE          ;HL=Next LBA
+
+;file copy
+
+copy.files:    CALL tst.over
+               CALL copy.rcd
+               LD   C,142            ;'TO'
+               CALL exp.c
+               CALL swap
+               CALL copy.rcd
+               CALL swap
+               LD   C,"?"
+               CALL skip.c         ;skip possible "?"
+               CALL Z,s7flag       ;set 7 if "?"
+               CALL exp.end
+
+               CALL res.buf
+               CALL tb1flag
+               JR   Z,L22317       ;jr not COPY OVER ..
+               XOR  A
+L22317:        CALL poke           ;set over vlag
+               DEFW &5BB9
+
+;- init copy -
+
+               CALL strip.d        ;source name
+               CALL swap
+               CALL strip.d        ;target name
+
+               LD   HL,L16699      ;copy UIFA target name
+               LD   DE,copy.name   ;to copy mask
+               LD   BC,14
+               LDIR
+
+               CALL cpybuf         ;duplicate sector buffer
+               LDIR
+
+               CALL define.buf
+               LD   (cbuf.s),A
+               LD   A,C
+               LD   (cbuf.p),A
+
+;search a file to copy
+
+copy.lp:       CALL swap.buf
+copy.no:       CALL copy.src       ;find name
+               JP   NC,search.end  ;file not found
+               CALL dentry.st
+               LD   A,(HL)
+               AND  31
+               CP   21
+               JR   Z,copy.no      ;skip MasterDOS DIRs
+               CALL tb7flag        ;request copy if required
+               CALL NZ,copy.req
+               JR   NZ,copy.no     ;jr not copy file
+
+;-file from dir entry to HDR and read 1st sector to buffer -
+
+               CALL prt.cls
+               DEFM "Loading "
+               DEFB ""+128
+               CALL prt.name
+               CALL prt.quote
+
+               CALL dentry.st
+               LD   DE,hdr
+               LD   BC,11
+               LDIR
+               LD   B,4            ;4 spaces to DE
+               CALL sp.to.de
+               LD   C,220-11       ;=entry+220(file info)
+               ADD  HL,BC
+               LD   C,33
+               LDIR
+               LD   BC,-240        ;=entry+13 (track/sector)
+               ADD  HL,BC
+               LD   D,(HL)
+               INC  HL
+               LD   E,(HL)
+               CALL rd.buff        ;load 1st file sector
+               LD   A,(hdr)
+               CP   16
+               LD   DE,9
+               JR   NC,nozxcopy
+               CP   5              ;test zx snap
+               INC  HL
+               LD   A,(HL)         ;get zx len  from filehead
+               INC  HL
+               LD   H,(HL)
+               LD   L,A
+               JR   NZ,nozxsnap
+               LD   HL,&C000       ;= len for ZXSNAP(not in head
+nozxsnap:      ADD  HL,DE          ;add 9 bytes  head
+               CALL hl2ahl
+               JR   copy.part
+nozxcopy:
+               LD   HL,(hdr+35)    ;HDL file len ofs
+               ADD  HL,DE
+               LD   A,(hdr+34)     ;HDL file pages
+               BIT  6,H
+               JR   Z,$+5          ;jr no adjust
+               RES  6,H
+               INC  A
+
+copy.part:     EX   DE,HL            ;signal last part
+               LD   HL,L30732
+               RES  5,(HL)
+               EX   DE,HL
+
+               LD   C,0
+cbuf.s:        EQU  $-1
+               CP   C
+               JR   C,cbuf.ok      ;jr file fits buffer
+               SUB  C
+               LD   (cfil.p),A     ;pages left to copy
+               LD   (cfil.o),HL    ;offset left to copy
+               EX   DE,HL
+               SET  5,(HL)         ;signal not last part
+               LD   A,C
+               LD   HL,0
+
+cbuf.ok:       LD   (cbuf.lp),A    ;pages to copy
+               LD   (cbuf.lo),HL   ;offset to copy
+
+               CALL L22437         ;add 9 to file len
+               CALL HLDBK          ;load block to page 3,0
+
+               CALL swap.buf       ;get save buffer
+               CALL L22194         ;enter target disk
+
+               LD   HL,L30732
+               BIT  3,(HL)
+               JR   NZ,cpy.svbk    ;jr file opend already
+               RES  6,(HL)
+               SET  3,(HL)
+               CALL L23711         ;mix target name to UIFA
+               LD   HL,date.flag
+               SET  1,(HL)         ;disable date
+               CALL open.file      ;file type name from UIFA
+                                   ;file parametes from HDR+15
+               JR   C,copy.nxt     ;jr no save (overwrite N)
+
+               LD   A,(uifa)
+               CP   16             ;zx files need 9 byte head
+               JR   NC,nozx        ;restored
+               CALL L22437         ;select copy buffer
+               EX   DE,HL
+               PUSH IX
+               POP  HL
+               LD   BC,19+211      ;point to ZX info bytes
+               ADD  HL,BC
+               EX   DE,HL
+               LD   C,9            ;copy 9 bytes head
+               LDIR                 ;to dir entry
+
+nozx:          CALL prt.cls
+               DEFM "Saving "
+               DEFB ""+128
+               LD   HL,uifa+1
+               CALL L18650         ;print name at HL
+               CALL prt.quote
+
+cpy.svbk:      CALL L22437         ;add 9 to len
+               CALL HSVBK          ;save block from page 3,0
+
+               LD   HL,L30732
+               BIT  5,(HL)
+               JR   Z,copy.last    ;jr close file
+
+               CALL swap.buf
+               CALL L22222
+               LD   A,0
+cfil.p:        EQU  $-1
+               LD   HL,0
+cfil.o:        EQU  $-2
+               JP   copy.part
+
+copy.last:     CALL HCFSM
+
+;copy next file
+
+copy.nxt:      LD   HL,L30732
+               LD   A,(HL)
+               AND  %10110110
+               INC  A              ;file found flag
+               LD   (HL),A
+               CALL L22222         ;enter source disk
+               JP   copy.lp        ;copy next file
+
+;- define copy buffer -
+
+;B=number of pages,C=1st page
+
+define.buf:    XOR  A
+               OUT  (251),A
+               LD   HL,&511D+&4001 ;page allocation table
+               LD   B,A              ;=buffer pages
+dfb0:
+               XOR  A
+dfb1:          DEC  L
+               JR   Z,dfb3         ;jr end of table
+               CP   (HL)
+               JR   NZ,dfb1        ;jr page used
+
+               LD   E,A            ;pages size
+dfb2:          DEC  L
+               INC  E
+               CP   (HL)
+               JR   Z,dfb2         ;jr page below not used
+               INC  L              ;pont to last free page
+
+               LD   A,B            ;last size
+               CP   E              ;new size
+               JR   NC,dfb0        ;jr new smaller
+               LD   B,E
+               LD   C,L            ;C=start buffer page
+               JR   dfb0
+
+dfb3:          OR   B
+               RET  NZ             ;A=B=size,C=start page
+
+rep1:          CALL L20133
+               DEFB 1              ;out  of memory
+
+;-prepare copy regs for HLDBK/HSVBK -
+
+L22437:        LD   A,3            ;poked copy buf page
+cbuf.p:        EQU  $-1
+               OUT  (251),A
+               LD   (L16686),A
+               LD   A,0
+cbuf.lp:       EQU  $-1
+               LD   (page.cnt),A
+               LD   DE,0
+cbuf.lo:       EQU  $-2
+               LD   HL,&8000
+               RET
+
+;- swap copy buffers -
+
+swap.buf:      CALL swap
+               CALL set.drive
+
+               CALL cpybuf         ;swap buffer
+swpbf:         LD   A,(DE)
+               LDI
+               DEC  HL
+               LD   (HL),A
+               INC  HL
+               JP   PE,swpbf
+               RET
+
+cpybuf:        CALL sel.scr        ;select screen
+               LD   HL,h780D       ;=IX
+               LD   DE,&BC00       ;>&1580 for sector list
+               LD   BC,&0306       ;pointers,sector buffer
+               RET
+
+;- get target name (copy only) -
+
+;mixes source name in HDL with disk name in UIFA
+
+L23711:        LD   HL,hdr
+               LD   DE,uifa
+               LD   BC,15
+               LDIR
+               LD   HL,copy.name   ;file name
+               LD   DE,L16699      ;UIFA name
+               LD   B,10           ;10 chrs
+L23730:        LD   A,(HL)
+               CP   "*"
+               JR   Z,L23745
+               CP   "?"
+               JR   Z,L23740       ;jr use UIFA chr
+               LD   (DE),A
+L23740:        INC  HL
+               INC  DE
+               DJNZ L23730
+               RET
+
+L23745:        INC  HL
+               LD   A,(HL)
+               CP   "."
+               RET  NZ
+L23750:        LD   A,(DE)
+               CP   "."
+               JR   Z,L23740
+               INC  DE
+               DJNZ L23750
+               RET
+
+;= ERASE BASIC COMMAND =========================================
+
+erase.bas:     CALL tst.over
+               CALL exp.name
+               LD   C,"?"
+               CALL skip.c
+               CALL Z,s7flag
+               CALL exp.end
+               CALL strip.device
+L22672:        CALL L23467
+               JR   NC,search.end  ;jr end of dir
+               CALL tb7flag
+               CALL NZ,erase.req
+               JR   NZ,L22672
+               CALL tb1flag
+               JR   NZ,L22695      ;jr erase over
+               CALL dentry.st
+               LD   A,(HL)
+               BIT  6,A
+               JR   Z,L22695       ;jr not protected file
+               CALL beep
+               JR   L22672
+
+L22695:        CALL dentry.st
+               LD   (HL),0         ;erase file
+               LD   DE,(L16676)    ;get trk sct
+               CALL wr.buff        ;write sector buffer
+               CALL s0flag         ;set bit 0 flags file found
+               JR   L22672
+
+search.end:
+               CALL L19820         ;used 1x
+               BIT  0,(HL)
+               POP  HL
+               RET  NZ             ;ret file found before
+rep107:        CALL L20133
+               DEFB 107            ;file not found error
+
+;- ERASE HOOK CODE -
+
+HERAZ:         CALL L23809         ;get sys HDR
+               CALL set.drive
+               CALL L22875         ;test file exists
+               JP   NZ,rep107      ;error file not found
+               LD   (HL),0
+               JP   wr.buff        ;write sector buffer
+
+;= RENAME BASIC COMMAND ========================================
+
+;RENAME TO "NewLabel"
+;RENAME RECORD n TO "Newlabel"
+
+;RENAME "dx:Old name" TO "New name"
+;RENAME RECORD n,"Old name" TO "New name"
+
+;also allowes case change: RENAME "oldname" to "OldName"
+
+
+rename:        CALL tst.record
+               CALL Z,skip.sep
+               JR   Z,rena0        ;jr RENAME RECORD n,
+               LD   C,142            ;TO
+               CALL skip.c
+               JR   NZ,rena0       ;jr RENAME "" ..
+
+;rename disk label
+
+               CALL exp.rname      ;get new disk name
+               CALL exp.end
+               CALL set.device
+               JP   new.lab
+
+;rename a file
+
+rena0:         CALL exp.name       ;get old name
+
+               LD   C,142            ;'TO'
+               CALL exp.c
+
+               CALL swap
+
+               CALL exp.n10        ;get 2nd new name
+               CALL exp.end
+
+               LD   HL,L16722
+               LD   DE,dev.no      ;duplicate device to name 2
+               LD   BC,4
+               LDIR
+               CALL def.rec        ;set temp record
+
+               CALL set.device
+
+               CALL L22875         ;search 2nd name
+               JR   NZ,rena1       ;jr file name not used
+
+;allow case change if new and old name are the same name
+
+               LD   HL,uifa+1
+               LD   DE,L16727
+               LD   B,14
+rena1x:        LD   A,(DE)
+               XOR  (HL)
+               AND  %11011111      ;strip case
+               JR   NZ,rep109      ;not same so file name used
+               INC  HL
+               INC  DE
+               DJNZ rena1x
+
+rena1:         CALL swap
+               CALL L22875         ;search 1st name
+               JP   NZ,rep107      ;jp file not found
+               INC  HL
+               PUSH DE
+               LD   DE,L16727      ;copy new name to dir entry
+               EX   DE,HL
+               LD   BC,10
+               LDIR
+               POP  DE
+               JP   wr.buff        ;save buffer
+
+rep109:        CALL L20133
+               DEFB 109            ;file name used
+
+;-search file name only -
+
+;used by ERASE hookcode (note erase basic uses a different one)
+; "   "  RENAME
+
+L22875:        LD   A,16
+               CALL L18667         ;search name only
+               JP   dentry.st      ;start dir entry
+
+;= PROTECT BASIC COMMAND =======================================
+
+prot.bas:      EX   AF,AF'
+               LD   A,64
+               JR   L22889
+
+;= HIDE BASIC COMMAND =============
+
+hide.bas:      EX   AF,AF'
+               LD   A,192
+
+L22889:        LD   (L16693),A
+               EX   AF,AF'
+               LD   C,137          ;'OFF'
+               CALL skip.c
+               CALL Z,s1flag       ;signal function off
+               CALL tst.record
+               JR   Z,prot.rec
+L22905:        CALL exp.name
+               CALL exp.end
+               CALL strip.device
+L22920:        CALL L23467         ;search dir
+               JP   NC,search.end
+
+L22934:        LD   (IX+13),0
+               CALL get.buf.ad
+               LD   A,(L16693)
+               LD   C,A
+               CPL
+               LD   B,A
+               LD   A,(HL)
+               AND  B
+               CALL tb1flag
+               JR   NZ,L22955      ;jr fuction on
+               OR   C              ;clear function
+L22955:        LD   (HL),A
+               CALL wr.buff
+               CALL s0flag         ;signal file found
+               JR   L22920
+
+;PROTECT (OFF) RECORD
+
+prot.rec:      LD   HL,L16693
+               BIT  7,(HL)
+               JP   NZ,rep29       ;error if HIDE RECORD
+               CALL exp.end
+               CALL set.device
+               RET  Z              ;RET if RECORD 0 (Floppy)
+               CALL get.label
+               CALL tb1flag
+               RES  7,(HL)
+               JR   NZ,$+4         ;jr WP off
+               SET  7,(HL)         ;else WP on
+               PUSH AF
+               XOR  A
+               LD   (hd.wp),A      ;signal no Write protect
+               CALL wr.buff
+               POP  AF
+               RET  NZ             ;ret new WP = off
+               LD   A,1
+               LD   (hd.wp),A      ;set new WP on
+               RET
+
+;= LOAD BASIC COMMAND ==========================================
+
+load.n:        PUSH HL             ;HL =current chr addr
+               CALL res.buf
+               CALL syntax.z
+               POP  HL
+               JR   NZ,L23141      ;jr runtime
+
+;remove 5 byte number form
+
+L23122:        LD   A,(HL)
+               CP   14
+               JR   NZ,L23135      ;jr no 5 bytr number
+               LD   BC,6           ;remove marker+ number
+               CALL sys.call
+               DEFW &0163
+L23135:        LD   A,(HL)
+               INC  HL
+               CP   13
+               JR   NZ,L23122      ;jr not end of line
+
+L23141:
+               CALL exp1num        ;get file number to load
+               PUSH AF
+               LD   A,C
+               LD   (file.no),A    ;store file number
+               POP  AF
+               CALL exp.end
+
+             ; CALL get.device
+               CALL set.device
+               CALL L19258         ;load n sub
+
+L23159:        LD   A,(hdl)
+               CP   20             ;(5-1+16)
+               JR   NZ,L23219      ;jr not screen/SNP 48K
+
+               CALL tb7flag
+               JR   Z,L23219       ;jr not ZX SNP 48K
+
+;LOAD n= ZX SNP 48K
+
+               LD   DE,(L30722)    ;read 1st sector
+               CALL rd.buff
+               IN   A,(250)
+               LD   (L16646),A     ;save lomem
+               IN   A,(251)
+               LD   (L16647),A     ;save himem
+               IN   A,(252)
+               LD   (scr1),A      ;save vpage
+               LD   A,4
+               OUT  (251),A        ;himem = page 4
+               OUT  (252),A        ;mode 0 page 4
+               LD   SP,&7EEA       ;snapshot SP and regs
+               LD   HL,&8000
+               LD   DE,&4000       ;48K
+               LD   A,2
+               LD   (page.cnt),A
+               CALL HLDBK
+               JP   nmi.ret
+
+L23219:        CP   16
+               JR   NZ,L23310
+
+               CALL tb7flag
+               JP   NZ,rep94       ;error ZX BASIC
+
+;LOAD n = SAM BASIC
+
+               CALL dpeek
+               DEFW &5AA0
+               PUSH BC
+               POP  HL
+               CALL peek
+               DEFW &5A9F
+               LD   (L16796),A
+               LD   (L16797),HL
+               EX   DE,HL
+               LD   C,A
+               PUSH BC
+               CALL dpeek
+               DEFW &5A94
+               PUSH BC
+               POP  HL
+               CALL peek
+               DEFW &5A93
+               POP  BC
+               DEC  HL
+               BIT  7,H
+               JR   NZ,L23269
+               DEC  A
+L23269:        PUSH BC
+               PUSH DE
+               CALL ahl.to.19bit
+               PUSH AF
+               EX   DE,HL
+               LD   A,C
+               CALL ahl.to.19bit
+               EX   DE,HL
+               LD   C,A
+               POP  AF
+               AND  A
+               SBC  HL,DE
+               SBC  C
+               POP  DE
+               POP  BC
+               RL   H
+               RLA
+               RL   H
+               RLA
+               RR   H
+               SCF
+               RR   H
+               LD   (L16799),A
+               LD   (L16800),HL
+               XOR  A
+               LD   (L16780),A
+
+L23310:        CALL hdr2hdr
+               CALL hdl2hdl
+               LD   E,1            ;load file
+               JP   load.exit
+
+;- covert page A,offset HL to 19 bit number -
+
+ahl.to.19bit:  RLC  H
+               RLC  H
+               RRA          ;A=A/4, H = H + 64* (A BAND 3)
+               RR   H
+               RRA
+               RR   H
+               AND  7
+               RET
+
+;- expect record number or record name -
+
+exp.exp:       CALL sys.call
+               DEFW &011E          ;expexpr
+               CALL syntax.z
+               RET  Z              ;ret syntax
+
+               JR   C,exp1n        ;jr numeric
+exp.rnm:       PUSH AF
+               LD   HL,-17
+               CALL unstack.s
+               LD   DE,rcd.name
+               PUSH DE
+               LD   B,17
+               CALL sp.to.de       ;17 spaces
+               POP  DE
+               JR   unstk.s        ;move record name to rcd.name
+
+exp.rname:     CALL sys.call
+               DEFW &011B          ;expect string
+               CALL syntax.z
+               JR   NZ,exp.rnm
+               RET
+
+;- expect drive number -
+
+exp.drive:     CALL exp1num
+               PUSH AF
+               LD   A,C
+               LD   (dev.no),A
+               POP  AF
+               RET
+
+;-expect a number -
+
+exp1num:       CALL exp.num
+               RET  Z              ;ret syntax
+
+exp1n:         PUSH AF
+               CALL sys.call       ;get integer in HL
+               DEFW &0121          ;BC=HL
+               POP  AF             ;NZ flag A=cur chr
+               RET
+
+exp.num:       CALL sys.call
+               DEFW &0118          ;expect 1 number
+               JP   syntax.z
+
+;- expect a address (in AHL) -
+
+exp.addr:      CALL exp.num
+               RET  Z              ;ret syntax
+               PUSH AF
+               CALL sys.call       ;unstack as page,offset
+               DEFW &3F8C          ;ok for ROM 2/3
+               SET  7,H
+               AND  A
+               JP   Z,rep30        ;error <16384
+               DEC  A
+               LD   C,A
+               POP  AF
+               RET
+
+;- expect file name -
+
+;note this one should be split in two
+;1 expect file name only
+;2 expect file name with optional device
+
+exp.n10:       LD   HL,-11
+               JR   expn
+
+exp.name:      LD   HL,-15
+expn:          PUSH HL
+               CALL sys.call
+               DEFW &011B          ;expect string
+               CALL syntax.z
+               POP  HL
+               RET  Z              ;ret syntax
+
+               PUSH AF             ;save chr in A
+               CALL unstack.s
+               LD   DE,uifa
+
+               LD   B,15
+               CALL sp.to.de       ;15 spaces
+               LD   DE,L16699
+
+unstk.s:       IN   A,(251)
+               EX   AF,AF'         ;save himem
+               AND  31
+               OUT  (251),A        ;select $ page
+               LDIR                 ;copy $
+               EX   AF,AF'
+               OUT  (251),A        ;restore himem
+               POP  AF
+               RET
+
+unstack.s:     PUSH HL             ;HL=-maxlength-1
+               CALL sys.call
+               DEFW &0124          ;unstack
+               EX   AF,AF'         ;save string page
+               LD   A,C            ;test null string
+               OR   B
+               JR   Z,rep89        ;jr file name ""
+               POP  HL
+               ADD  HL,BC
+               EX   DE,HL          ;HL=str address
+               RET  NC
+
+rep89:         CALL L20133
+               DEFB 18             ;Invalid file name
+
+;- expect a 2nd file name -
+
+exp.name2:     CALL swap
+               CALL exp.name
+
+;-swap UIFA,DIFA -
+
+swap:          PUSH AF
+               PUSH BC
+               PUSH DE
+               PUSH HL
+               LD   DE,dev.no
+               LD   HL,L16722
+               LD   BC,28
+               CALL swpbf
+               LD   HL,(record.t)
+               LD   DE,(record.a)
+               LD   (record.t),DE
+               LD   (record.a),HL
+               POP  HL
+               POP  DE
+               POP  BC
+               POP  AF
+               RET
+
+;-new search file for copy -
+
+copy.src:      LD   HL,L30732
+               BIT  2,(HL)
+               JR   Z,copy.s0      ;jr 1st entry
+               LD   DE,(L16676)    ;last track sct
+               LD   A,(copy.pos)   ;dir entry pointer
+               AND  A
+               CALL Z,rd.buff      ;reload for 2nd entry
+               JR   L23513         ;point to 2nd entry
+
+;- search dir if file exists -
+
+;used by erase & hide
+
+L23467:        LD   HL,L30732
+               BIT  2,(HL)
+               JR   NZ,L23513      ;jr not 1st entry
+copy.s0:
+               SET  2,(HL)         ;signal search next file
+               LD   IX,L30720
+               XOR  A
+               LD   (IX+4),A
+               CALL track00
+L23486:        CALL rd.buff
+               LD   (L16676),DE
+
+L23493:        CALL dentry.st      ;start dir entry
+               LD   A,(IX+14)
+               LD   (copy.pos),A   ;store 1st/2nd dir entry
+               LD   A,(HL)
+               AND  A
+               JR   Z,L23513a      ;jr no dir entry
+               CALL L18929         ;match names
+               JR   NZ,L23513      ;jr no match
+               SCF                   ;signal file exists
+               RET
+
+L23513a:       INC  HL
+               OR   (HL)
+               RET  Z              ;NC,Z end of dir
+
+L23513:        LD   A,(copy.pos)
+               LD   (IX+14),A
+               DEC  A
+               JR   Z,L23531       ;jr 2nd dir entry
+               CALL buf.pos0
+               INC  (IX+14)        ;point to 2nd entry
+               JR   L23493
+
+L23531:        LD   DE,(L16676)    ;get trk sct
+               CALL inc.sct
+               JR   NZ,L23486      ;jr same track
+               INC  D
+               LD   A,D
+               CP   4
+               RET  NC             ;ret end of dir
+               JR   L23486
+
+;= DIRECTORY COMMAND ===========================================
+
+def.dir:       CALL res.buf
+               LD   A,"*"          ;all files
+               LD   (L16699),A
+               LD   A,2            ;default stream
+               LD   (stream),A
+               RET
+
+dir:           CALL def.dir
+               CALL tst.end
+               JR   Z,di3          ;jr'DIR' only
+
+               CALL tst.stream     ;test/set stream
+
+               CALL Z,exp.sep      ;seperator if stream
+
+               CALL tst.record
+               CALL NZ,exp.drive   ;get drive if no record no.
+
+               CALL skip.sep       ;Z if seperator skiped
+               CALL Z,exp.n10      ;get wildcard
+               LD   C,"!"
+               CALL skip.c
+               JR   NZ,di4         ;jr for long dir
+
+di3:           CALL exp.end
+               CALL set.drive
+               LD   A,2            ;signal short dir
+               JR   PCAT
+
+rep90:         CALL L20133
+               DEFB 21             ;invalid stream number
+
+tst.stream:    LD   C,"#"
+               CALL skip.c         ;jr no stream
+               RET  NZ
+               CALL exp1num
+               RET  Z
+               PUSH AF
+               LD   A,C
+               CP   16
+               JR   NC,rep90
+               LD   (stream),A
+               POP  AF
+               CP   A              ;Z flag for stream found
+               RET
+
+;- HOOK CODE HDIR ----------------------------------------------
+
+HDIR:          PUSH AF
+               CALL def.dir
+               JR   pcat2
+
+;- signal long dir -
+
+di4:           CALL exp.end
+               CALL set.drive
+               LD   A,4
+
+PCAT:          PUSH AF             ;SAVE SHORT /LONG DIR
+pcat2:         CALL cls.stream     ;select stream
+               CALL datim
+
+             ; CALL prt.mess
+             ; DEFM "Drive"
+             ; DEFB " "+128
+
+             ; LD   A,(L30731)     ;print drive number
+             ; AND  7
+             ; OR   "0"
+             ; CALL prt.a
+             ; CP   "1"
+             ; LD   A,","
+             ; CALL NZ,prt.a
+             ; CALL NZ,prt.dir.rec ;print record number
+
+               CALL prt.rec
+
+L21899:        CALL prt.mess
+               DEFB ":"," "+128
+
+               XOR  A
+               LD   H,A
+               LD   L,A
+               LD   (L16670),A     ;file count
+               LD   (L16654),HL    ;clear sector count
+               POP  AF
+               CALL L18667         ;search and print files
+
+;print end of directory
+
+               BIT  1,(IX+4)
+               JR   Z,noxcr        ;jr not short dir
+               LD   A,(L16674)
+               AND  A
+               CALL NZ,prt.cr      ;extra CR if not 1st column
+noxcr:         CALL prt.cr
+
+               LD   HL,(L16670)
+               XOR  A
+               LD   H,A            ;HL=files used
+               PUSH HL
+               CALL prt10
+               CALL prt.mess       ;print 'n file(s), '
+               DEFM " Fil"
+               DEFB "e"+128
+               POP  HL
+               CALL prt.s          ;(s)
+               CALL prt.csp
+               EX   DE,HL
+               XOR  A              ;print'x free slot(s)'
+               LD   H,A
+               LD   L,80
+               SBC  HL,DE          ;HL=free slots
+               PUSH HL
+               CALL prt10
+               CALL prt.mess
+               DEFM " free slo"
+               DEFB "t"+128
+               POP  HL
+               CALL prt.s          ;(s)
+
+
+               CALL test.mode3
+               CALL NZ,prt.cr
+               CALL Z,prt.csp
+
+               LD   HL,(L16654)    ;used sectors
+               PUSH HL
+               CALL prt.kb
+               CALL prt.mess
+               DEFM " Kb used,"
+               DEFB " "+128
+               CALL get.dr.dat
+               SUB  4
+               LD   D,A
+               LD   E,1
+               CALL conv.de        ;HL= usable disk sectors
+               POP  DE             ;used sectors
+               XOR  A
+               SBC  HL,DE          ;HL=free sectors
+               LD   A,"?"
+               CALL C,prt.a
+               CALL NC,prt.kb      ;print Kb free
+
+               CALL prt.mess
+               DEFM " Kb free."
+               DEFB 13+128
+               RET
+
+test.mode3:    LD   A,(stream)
+               CP   2
+               JR   Z,tstm3
+               XOR  A
+               RET
+
+tstm3:         IN   A,(252)        ;test mode 3
+               AND  96
+               CP   64
+               RET
+
+;- print HL sectors in Kb -
+
+prt.kb:        SRL  H
+               RR   L              ;HL=free Ks
+               PUSH AF
+               XOR  A              ;22634 AF
+               CALL prt1000
+               POP  AF
+               RET  NC
+               CALL prt.mess
+               DEFB ".","5"+128
+               RET
+
+;prt.dir.rec:   CALL test.mode3
+;              JR   Z,prt.rec      ;jr print 'record'
+;              CALL prt.mess       ;MODE <> 3 and screen 'Rcd.'
+;              DEFM "Rcd"
+;              DEFB "."+128
+;              JR   prtrec2
+
+;- print RECORD n -
+
+prt.rec:       CALL prt.mess
+               DEFM "Record"
+               DEFB " "+128
+               LD   HL,(L30731)    ;
+               DEC  L
+               LD   H,L
+               JR   Z,prtrec3      ;jr record 0 for floppy
+prtrec2:       LD   HL,(record.t)
+prtrec3:       JP   prt10000x
+
+;- print disk label-
+
+prt.label:     CALL get.buf.st
+               CALL get.lab
+
+               LD   A,(HL)
+               JR   C,prtlb1
+
+               CALL prtlb2
+               AND  A
+               RET  Z              ;ret null name
+               LD   C,30           ;B=0
+               ADD  HL,BC
+               LD   B,6            ;print last 6 chrs
+               JR   L18652
+
+prtlb1:        CP   "*"
+               RET  Z              ;masterdos null name
+prtlb2:        AND  127
+               RET  Z              ;samdos/bdos null name
+               JR   L18650
+
+;-print file name/ disk name
+
+prt.name:      LD   (IX+13),1
+prt.lbl:       CALL get.buf.ad
+L18650:        LD   B,10
+L18652:        LD   A,(HL)
+               AND  127            ;bit 7 removed
+               CP   " "+1
+               JR   NC,L18660
+               LD   A,(L16534)     ;use space replace chr for
+L18660:        CALL prt.a          ;chrs < "!"
+               INC  HL
+               DJNZ L18652
+               RET
+
+;- search file in directory ------------------------------------
+
+;used by DIR/HK ERASE,RENAME/HK OPEN FILE/HCFSM/LDn,HGRHD,HGFLE
+;        ave snapshot/AUTO/
+
+;on entry A:   bit 0: NZ search file number
+;              bit 1: NZ short dir
+;              bit 2: NZ extended dir
+;              bit 3:  Z match name NZ match type+name NOT USED
+;              bit 4: NZ match using bit 3
+;              bit 5: ?? set by OPEN FILE
+;              bit 6: NZ search for a free entry
+;              bit 7: NZ print disk name                    NEW!
+
+L18667:        LD   IX,L30720
+               LD   (IX+4),A       ;store flag
+               XOR  A
+               LD   (L16674),A
+               CALL track00
+
+L18681:        CALL L17506         ;read dir sector
+               LD   A,E
+               DEC  A
+               OR   D
+               JR   NZ,L18684      ;jr not 1st
+               LD   A,(IX+4)
+               AND  6
+               JR   Z,L18684       ;not a dir
+
+               CALL prt.label      ;print disk label
+               CALL prt.2cr
+
+L18684:        CALL dentry.st      ;get/set start dir entry
+               LD   A,(HL)
+               AND  A
+               JP   Z,L18915       ;jp no entry
+               BIT  0,(IX+4)
+               JR   Z,L18710       ;jr not searcing file number
+
+               CALL L17938         ;A=file number
+               LD   B,A
+               LD   A,(file.no)     ;wanted file number
+               CP   B
+               RET  Z              ;ret file number found
+               JP   L18884
+
+L18710:        BIT  1,(IX+4)
+               JR   NZ,L18723      ;jr short dir
+               BIT  2,(IX+4)
+               JP   Z,L18867       ;jp not ext dir
+
+;-for dir only -
+
+L18723:        LD   (IX+13),11
+               CALL get.buf.ad
+               LD   B,(HL)         ;get sectors used by file
+               INC  HL
+               LD   C,(HL)
+               LD   (L30720),BC
+               LD   HL,(L16654)
+               ADD  HL,BC
+               LD   (L16654),HL    ;disk capacity used
+               LD   HL,L16670
+               INC  (HL)           ;inc files used
+               BIT  7,A
+               JP   NZ,L18884      ;jp hidden file
+
+;match wildcart
+
+               CALL L18929         ;match wildcart
+               JP   NZ,L18884      ;jp no match
+
+               BIT  1,(IX+4)
+               JR   NZ,L18798      ;jr short dir
+
+               CALL dentry.st      ;get start dir entry
+               LD   A,(HL)
+               BIT  6,A
+               JR   Z,L18782       ;jr not protected file
+
+;print protected file
+
+               CALL prt.mess       ;inverse for protected
+               DEFB 20,1+128       ;files
+
+;print file number
+
+L18782:        CALL L17938         ;get file number in A
+               PUSH DE
+               LD   H,0
+               LD   L,A
+               LD   A," "          ;leading spaces
+               CALL prt10
+               POP  DE
+               CALL prt.mess
+               DEFB 20,0," "+128   ;inverse off
+
+L18798:        CALL prt.name
+
+               BIT  1,(IX+4)
+               JR   Z,L18845       ;jr extended file
+
+;columns for shor dir
+
+               LD   B,3            ;2 COLUMS +1
+               CALL test.mode3
+               JR   NZ,L18820      ;JR NOT MODE 3
+               SLA  B
+               DEC  B              ;B= 5
+L18820:        LD   A,(L16674)
+               INC  A
+               CP   B
+               JR   NZ,$+3         ;jr not last column
+               XOR  A
+               LD   (L16674),A     ;clear colum count
+               CALL NZ,prt.sp
+               CALL Z,prt.cr
+               JR   L18884
+
+;print sectors used (ext)
+
+L18845:        PUSH DE
+               LD   HL,(L30720)    ;sectors used
+               LD   A," "          ;leading spaces
+               CALL prt100         ;print number
+               CALL prt.sp
+               CALL dentry.st      ;start entry
+               LD   A,(HL)
+               CALL ext.dir        ;print extras
+               POP  DE
+               JR   L18884
+
+L18867:        BIT  3,(IX+4)
+               JR   NZ,L18879      ;match type name
+
+               BIT  4,(IX+4)
+               JR   Z,L18884       ;no name matching
+
+L18879:        CALL L18929         ;match name
+               RET  Z              ;ret found
+
+;get next entry
+
+L18884:        LD   A,(IX+14)
+               CP   1
+               JR   Z,L18900       ;jr 2nd entry
+               CALL buf.pos0
+               INC  (IX+14)        ;set 2nd entry
+               JP   L18684
+
+L18900:        CALL inc.sct        ;next dir sector
+               JP   NZ,L18681
+               INC  D              ;next dir track
+               LD   A,D
+               CP   4
+               JP   NZ,L18681      ;jp not end of dir
+               AND  A              ;NZ NC not found
+               RET
+
+;check end of dir
+
+L18915:        LD   A,(IX+4)       ;test free entry wanted
+               CPL
+               BIT  6,A
+               RET  Z              ;ret found free entry
+               INC  HL
+               LD   A,(HL)
+               AND  A
+               JR   NZ,L18884      ;jr not end of dir
+               INC  A              ;NZ for not found
+               RET
+
+;- track sector to file number -
+
+L17938:        PUSH DE
+               POP  BC
+               XOR  A
+               DEC  B              ;T-1
+               JP   M,L17951
+L17945:        ADD  10
+               DEC  B
+               JP   P,L17945
+L17951:        LD   B,A            ;B=10*T
+               SLA  B
+               SLA  C
+               DEC  C
+               LD   A,(IX+14)
+               ADD  C
+               ADD  B
+               RET                   ;A=file number
+
+
+match.rcd:     PUSH IX             ;B=16
+               PUSH DE
+               POP  IX             ;DE=rcd.name
+               JR   match.ix
+
+;- match dir file with UIFA -
+
+L18929:        PUSH IX
+               CALL dentry.st
+               LD   B,11
+               BIT  3,(IX+4)       ;bit 3 is never set
+               LD   IX,uifa
+               JR   Z,L18962       ;jr match name only
+
+match.ix:      LD   A,(IX)
+               CP   "*"
+               JR   Z,L18971
+               CP   "?"
+               JR   Z,L18962
+               XOR  (HL)
+               AND  %11011111
+               JR   NZ,L18968      ;jr no match
+L18962:        INC  IX
+               INC  HL
+               DJNZ match.ix       ;next file chr
+L18967:        XOR  A              ;signal match
+L18968:        POP  IX
+               RET
+
+L18971:        INC  IX
+               INC  HL
+               DJNZ L18971a
+               JR   L18967
+
+L18971a:       LD   A,(IX)
+               CP   "."
+               JR   NZ,L18967
+L18981:        LD   A,(HL)
+               CP   "."
+               JR   Z,L18962
+               INC  HL
+               DJNZ L18981
+               JR   L18968
+
+;- PRINT DATE AND EXTENDED FILE INFO -
+
+ext.dir:
+               AND  31             ;strip protect/hide
+               PUSH AF
+               LD   HL,type.tab
+               LD   BC,tptl
+               CPIR
+L21454:        LD   A,(HL)
+               CP   32
+               JR   C,L21465
+               CALL prt.a
+               INC  HL
+               JR   L21454
+
+L21465:        POP  AF
+               CP   1
+               JR   NZ,sam.bas
+               LD   (IX+13),217
+               JR   zxbas
+
+sam.bas:       CP   16
+               JR   NZ,L21492      ;jr not basic
+               LD   (IX+13),242
+zxbas:         CALL get.buf.ad
+               LD   A,(HL)
+               AND  192
+               JR   NZ,prt.date    ;jr no auto line number
+               INC  HL
+               LD   E,(HL)
+               INC  HL
+               LD   D,(HL)
+               EX   DE,HL
+               CALL prt10000x
+               JR   prt.date
+
+L21492:        CP   19
+               JR   NZ,L21530      ;jr not code
+               LD   (IX+13),236
+               CALL get.buf.ad
+L21503:        CALL L21569         ;get CDE
+               INC  C
+               RES  5,C
+               EX   DE,HL          ;CHL= start addr
+               PUSH DE             ;save pointer
+               XOR  A
+               CALL prt100000      ;print start addr
+
+               LD   A,","
+               CALL prt.a
+               POP  HL
+               CALL L21569         ;get CDE
+               EX   DE,HL
+               PUSH DE
+               XOR  A
+               CALL prt100000      ;print len
+               POP  HL
+
+               LD   A,(HL)
+               INC  A
+               JR   Z,prt.date     ;jr no execute address
+               CALL test.mode3
+               JR   NZ,prt.date    ;jr not mode 3
+               LD   A,","
+               CALL prt.a
+               CALL L21569
+               EX   DE,HL
+               XOR  A
+               CALL prt100000      ;print len
+
+L21530:        CP   4
+               JR   NZ,prt.date    ;jr not ZX CODE
+               LD   (IX+13),215
+               CALL get.buf.ad
+               LD   D,(HL)
+               DEC  HL
+               LD   E,(HL)
+               EX   DE,HL
+               PUSH DE
+               CALL prt10000x
+               LD   A,","
+               CALL prt.a
+               POP  HL
+               DEC  HL
+               LD   D,(HL)
+               DEC  HL
+               LD   E,(HL)
+               EX   DE,HL
+               CALL prt10000x
+
+;test if mode 3 and bit 0 date flag and valid day/month
+
+prt.date:      CALL test.mode3
+               JR   NZ,prt.cr
+               CALL prt.mess       ;tab 40
+               DEFB 23,40,128
+               LD   (IX+13),245
+               CALL get.buf.ad
+               LD   A,(date.flag)
+               RRA
+               JR   NC,prt.cr
+               CALL valid.date
+               CALL C,prtdt0
+
+prt.cr:        LD   A,13           ;CR
+               JP   prt.a
+
+;print date and time
+
+prtdt0:        CALL prtdts         ;HL points to date
+               LD   A,"/"
+               CALL prt.a
+               CALL prtdts
+
+               PUSH HL
+               LD   L,(HL)
+               LD   H,0
+               LD   BC,1900
+               ADD  HL,BC
+               LD   A,"/"
+               CALL prt10000
+               CALL prt.sp
+               POP  HL
+               INC  HL
+               CALL prtdts
+prtdt1:        LD   A,":"
+               CALL prt.a
+
+prtdts:
+               PUSH HL
+               LD   L,(HL)
+               LD   H,0
+               LD   A,"0"
+               CALL prt10
+               POP  HL
+               INC  HL
+               RET
+
+datim:         CALL read.clock
+               LD   A,(dev.no)
+               DEC  A
+               JR   NZ,fms1
+               CALL prt.mess
+               DEFM "Flopp"
+               DEFB "y"+128
+               JR   fms3
+
+fms1:          LD   HL,hd.drive
+               BIT  4,(HL)
+               JR   NZ,fms2
+               CALL prt.mess
+               DEFM "Maste"
+               DEFB "r"+128
+               JR   fms3
+
+fms2:          CALL prt.mess
+               DEFM "Slav"
+               DEFB "e"+128
+
+fms3:          CALL prt.mess
+               DEFM " Dir."
+               DEFB 23,13,13+128
+               LD   HL,date
+               CALL valid.date
+               JR   NC,prt.2cr
+
+               CALL prtdt0
+               CALL prtdt1         ;print seconds also
+
+prt.2cr:       CALL prt.mess
+               DEFB 13,13+128
+               RET
+
+valid.date:    LD   A,(HL)
+               DEC  A
+               CP   31
+               RET  NC             ;NC: invalid day
+               INC  HL
+               LD   A,(HL)
+               DEC  A
+               CP   12
+               RET  NC             ;NC: invalid month
+               INC  HL
+               LD   A,(HL)
+               DEC  HL
+               DEC  HL
+               INC  A              ;<80 or &FF
+               CP   81
+               CCF                   ;NC: invalid year (<80)
+               RET
+
+;- get page offset from HL -
+
+L21569:        LD   A,(HL)         ;CDE from (HL)
+               AND  31
+               LD   C,A            ;C=page only
+get.ofs:       INC  HL
+               LD   E,(HL)
+               INC  HL
+               LD   D,(HL)
+               RES  7,D            ;DE=ofset only
+               INC  HL
+               RET
+
+;- file types table (dir) -
+
+
+type.tab:      DEFB 1
+               DEFM "ZX BASIC "
+               DEFB 16
+               DEFM "BASIC "
+               DEFB 2
+               DEFM "ZX D.ARRAY"
+               DEFB 17
+               DEFM "D.ARRAY"
+               DEFB 3
+               DEFM "ZX $.ARRAY"
+               DEFB 18
+               DEFM "$.ARRAY"
+               DEFB 4
+               DEFM "ZX "
+               DEFB 19
+               DEFM "C "
+               DEFB 5
+               DEFM "ZX SNP 48k"
+               DEFB 6
+               DEFM "MD.FILE"
+               DEFB 7
+               DEFM "ZX SCREEN$"
+               DEFB 20
+               DEFM "SCREEN$"
+               DEFB 8
+               DEFM "SPECIAL"
+               DEFB 9
+               DEFM "ZX SNP 128k"
+               DEFB 10
+               DEFM "OPENTYPE"
+               DEFB 11
+               DEFM "N/A EXECUTE"
+               DEFB 21
+               DEFM "MDOS DIR"
+               DEFB 22
+               DEFM "DEFECT LIST"                       ;NEW  !!
+               DEFB 12
+tptl:          EQU  $-type.tab
+
+               DEFM "WHAT?"
+               DEFB 0
+
+;= printing subroutines ========================================
+
+;for all print numbers A=0:skip leading zeros A<>0:zeros = chr A
+
+
+prt100000:     EX   AF,AF'         ;store leading zero ctrl
+               XOR  A              ;convert page C,offset HL
+               LD   DE,0           ;to 3 byte number
+               RR   C
+               RR   D
+               RR   C
+               RR   D
+               LD   A,D
+               ADD  H
+               LD   H,A
+               LD   A,C
+               ADC  E
+               LD   B,A
+               LD   DE,&86A0       ;=100000-65536
+               LD   C,1            ;=65536
+               EX   AF,AF'            ;get leading zero ctrl
+               CALL L21801
+               JR   L21767
+
+prt10000sp:    LD   A," "          ;leading zeros > spaces
+               DEFB &FE            ;CP nn to skip XOR A
+prt10000x:     XOR  A              ;skip leading zeros
+
+;- print 10000 number -
+
+prt10000:      LD   B,0            ;0 pages
+L21767:        LD   C,0            ;0 pages
+               LD   DE,10000
+               CALL L21801
+
+;- print 1000 number -
+
+prt1000:       LD   DE,1000
+               CALL L21798
+
+;- print 100 number -
+
+prt100:        LD   DE,100
+               CALL L21798
+
+;print 10 number -
+
+prt10:         LD   DE,10
+               CALL L21798
+               LD   A,L
+               ADD  "0"
+               JR   prt.a
+
+
+L21798:        LD   BC,0           ;24 bit = 16 bit number
+
+;- print digit AHL/CDE -
+
+L21801:        PUSH AF             ;leading zero ctrl
+               LD   A,B
+               LD   B,0
+               AND  A              ;AHL-CDE
+L21806:        SBC  HL,DE
+               SBC  C
+               JR   C,L21814       ;jr overvlow
+               INC  B
+               JR   L21806         ;more to SUB
+
+L21814:        ADD  HL,DE          ;restore modulus
+               ADC  C
+               LD   C,A
+               LD   A,B            ;A=digit
+               LD   B,C
+               AND  A
+               JR   NZ,L21827      ;jr NZ
+               POP  DE
+               ADD  D              ;add zero chr
+               RET  Z              ;ret no print
+               JR   prt.a          ;print chr
+
+L21827:        ADD  "0"
+               CALL prt.a
+               POP  DE             ;drop leading zero chr
+               LD   A,"0"          ;signal print zeros
+               RET
+
+;- clear lower and print message after call -
+
+prt.cls:       CALL cls.low
+
+;- print message after call -
+
+prt.mess:      POP  HL
+L21837:        LD   A,(HL)
+               INC  HL
+               RLCA
+               SRL  A
+               CALL prt.a
+               JR   NC,L21837
+               JP   (HL)           ;return
+
+prt.boot:      CALL tst.logo
+               JR   NC,prt.mess
+               POP  HL
+prt.bt:        LD   A,(HL)
+               INC  HL
+               RLCA
+               SRL  A
+               JR   NC,prt.bt
+               JP   (HL)           ;return
+
+tst.logo:      LD   A,(date.flag)
+               ADD  A
+               RET
+
+;- print comma and space -
+
+prt.csp:       LD   A,","
+               CALL prt.a
+
+;- print space -
+
+prt.sp:        LD   A," "
+
+;- print character A -
+
+prt.a:         PUSH AF
+               CALL sys.call
+               DEFW &0010          ;prt chr all regs saved
+               POP  AF
+               RET
+
+prt.quote:     LD   A,""
+               JR   prt.a
+
+L22222:        CALL single.dr
+               RET  NZ
+               CALL prt.cls
+               DEFB 13
+               DEFM "Enter source disk press any ke"
+               DEFB "y"+128
+               JR   get.key
+
+L22194:        CALL single.dr
+               RET  NZ
+               CALL prt.cls
+               DEFM "Enter target disk press any ke"
+               DEFB "y"+128
+
+;- wait key and cls lower screen -
+
+get.key:       CALL sys.call
+               DEFW &0169
+               JR   NC,get.key
+               PUSH AF             ;save key
+L22209:        CALL sys.call
+               DEFW &0169
+               JR   C,L22209
+               CALL cls.low
+               POP  AF             ;A=KEY
+               AND  223
+               CP   "Y"
+               RET
+
+cls.low:       PUSH IX
+               CALL sys.call       ;cls lower screen
+               DEFW &0151
+               POP  IX
+               RET
+
+
+cls.stream:    LD   A,(stream)     ;select stream and cls
+               CP   2              ;if #2
+               JR   NZ,sel.stream
+
+cls:           XOR  A
+               CALL sys.call
+               DEFW &014E          ;clear entire screen
+stream2:       LD   A,2
+sel.stream:    CALL sys.call       ;select S
+               DEFW &0112
+               RET
+
+;-request (Yes No Continue End) sub for erase copy -
+
+erase.req:     CALL prt.cls
+               DEFM "Erase "
+               DEFB ""+128
+               JR   request
+
+copy.req:      CALL prt.cls
+               DEFM "Copy "
+               DEFB ""+128
+
+request:       CALL prt.name       ;print file name"(Y/N/C/E)
+               CALL prt.mess
+               DEFB ""
+               DEFM " (Y/N/C/E) "
+               DEFB "?"+128
+
+reqst0:        CALL get.key
+               RET  Z              ;ret 'Y' pressed
+               CP   "C"
+               JR   Z,reqst1       ;'C' cancel request
+               CP   "E"
+               RET  NZ             ;ret for 'N' or other key
+               POP  BC             ;'E' end command by unstack
+               JP   search.end     ;error if no file handled
+
+reqst1:        LD   HL,L30732
+               RES  7,(HL)
+               RET
+
+yes.no:        CALL prt.mess
+               DEFB ""
+               DEFM " (Y/N"
+               DEFB ")"+128
+               CALL beep
+               JP   get.key
+                                   ;Z if 'Y' pressed
+;- BEEP -
+
+beep:          PUSH HL
+               PUSH DE
+               PUSH BC
+               PUSH IX
+               LD   HL,874
+               LD   DE,133
+               CALL sys.call
+               DEFW &016F
+               POP  IX
+               POP  BC
+               POP  DE
+               POP  HL
+               RET
+
+single.dr:     LD   A,(dev.no)
+               LD   B,A
+               LD   A,(L16722)
+               CP   B
+               RET  NZ
+               DEC  A
+               RET                   ;Z floppy disk only
+
+;= error handler ===============================================
+
+L20133:        CALL blanking.off
+               CALL rest.bor
+               LD   HL,(nmi.sp)
+               LD   A,H
+               OR   L
+               JR   Z,L20145       ;jr return to SAM
+               LD   SP,HL
+               RET                   ;to NMI
+
+;- poke track sector in error message -
+
+L20145:        LD   HL,er.trk      ;track digits to error mess
+               PUSH HL
+               LD   A,D
+               CALL dig.thl
+               LD   HL,er.sct
+               LD   A,E            ;add  sector digits
+               CALL dig.thl
+               POP  HL
+               PUSH HL
+               LD   DE,er.ts2      ;copy to sct. error message
+               LD   BC,er.tsl
+               LDIR
+               POP  HL
+               LD   DE,er.ts3      ;copy to sct. lost message
+               LD   C,er.tsl
+               LDIR
+
+               CALL dpeek
+               DEFW &5A97
+               CALL dpoke
+               DEFW &5AA3
+               XOR  A
+               LD   (L30732),A     ;clear flags
+               LD   E,A            ;no action
+               POP  HL
+               LD   A,(HL)         ;get error code after call
+               LD   SP,(ent.sp)
+               RET
+
+;- convert number A to digits at HL -
+
+dig.thl:       EX   AF,AF'
+               SCF                   ;signal leading zero = space
+               LD   BC,100
+               CALL dig.a
+               LD   BC,10
+               CALL dig.a
+               EX   AF,AF'
+               LD   B,A
+               JR   diga2
+
+dig.a:         EX   AF,AF'
+diga1:         INC  B
+               SUB  C
+               JR   NC,diga1
+               ADD  C
+               EX   AF,AF'
+               DEC

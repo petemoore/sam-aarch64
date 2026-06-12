@@ -51,7 +51,7 @@ All four Trinity ports are in the range `&DC`–`&DF`:
 
 Bit 3 read back from `&DC` = **busy flag**: `wait_ready` polls `IN A,(&DC); AND %00001000; JR NZ,wait_ready`. [Source: `encdrv.asm` lines 391–394, `github.com/simonowen/encdrv`.]
 
-The SD card (`&DF`) select values are **not in any public source**, but have been **recovered empirically from period Trinity utility software (private archive)**: `&30` = SD deselect, `&31` = SD select, `&38` = SD initialise (microcontroller command; returns 1 for MMC, 2 for SD), `&3F` = SD select with auto-null. The Quazar programming manual (private reference materials) remains the authoritative confirmation source.
+The SD card (`&DF`) select values are **confirmed by B-DOS 1.5t itself** — the fork is their canonical consumer (the B-DOS 1.5t analysis, i71, `bdos-trinity-fork-analysis.md`), upgrading the earlier empirical recovery from period Trinity utility software: `&30` = SD deselect, `&31` = SD select, `&38` = SD initialise (microcontroller command; returns 1 for MMC, 2 for SD), `&3F` = SD select with auto-null. In addition, `&04` is the SD-idle / all-deselect state the fork writes around every transaction (auto-null off). The microcontroller identity probe writes commands `&08` then `&09` to `&DC` and reads the replies — expected `'T'`,`'R'` — from port `&DD` (the EEPROM SPI data port, not `&DF`). `IN (&DC)` bit 1 = card present; bit 2 = the write-protect switch sense, inverted.
 
 ---
 
@@ -61,7 +61,7 @@ SPI is **full duplex**: every `OUT (port), byte` is simultaneously paired with a
 
 For **MAC registers** in the ENC28J60, there is an additional hardware latency requiring a **double read** (two dummy writes). [Source: `encdrv.asm` `rd_m_reg` function, lines 292–302.]
 
-The **auto-null feature** (firmware `&2F` / `enullon`) has the microcontroller automatically issue the dummy null write, removing it from the Z80 side of the bulk read loop. This is used in `rd_buf_mem` for bulk Ethernet frame reads (`encdrv.asm` lines 352, 368). **Auto-null for the SD port is available**: the `&3F` select value (parallel to Ethernet's `&2F`) is used in period software's bulk SD read path (private archive). 
+The **auto-null feature** (firmware `&2F` / `enullon`) has the microcontroller automatically issue the dummy null write, removing it from the Z80 side of the bulk read loop. This is used in `rd_buf_mem` for bulk Ethernet frame reads (`encdrv.asm` lines 352, 368). **Auto-null for the SD port is VERIFIED**: the B-DOS 1.5t analysis (i71, `bdos-trinity-fork-analysis.md`) finds the fork's bulk SD read *and* write loops run under the `&3F` select (parallel to Ethernet's `&2F`) with no per-byte dummy writes — pure `INI`/`OUTI` gated on the busy flag.
 
 ---
 
@@ -69,7 +69,7 @@ The **auto-null feature** (firmware `&2F` / `enullon`) has the microcontroller a
 
 **Medium and capacity:** Standard MMC and SD/SDHC cards. B-DOS 1.5t beta 6 supports cards up to 64 GB. [Source: https://www.worldofsam.org/products/b-dos.]
 
-**Filesystem / access model:** B-DOS does not use FAT. The SD card is divided into 800 KB **records**, each formatted identically to a SAM floppy disk (80 tracks × 10 sectors × 512 bytes × 2 sides ≈ 800 KB). B-DOS commands operate on records via raw sector access (READ AT / WRITE AT / VERIFY AT). [Source: https://www.worldofsam.org/products/b-dos.]
+**Filesystem / access model:** B-DOS does not use FAT. The SD card is divided into 800 KB **records**, each formatted identically to a SAM floppy disk (80 tracks × 10 sectors × 512 bytes × 2 sides ≈ 800 KB). B-DOS commands operate on records via raw sector access (READ AT / WRITE AT / VERIFY AT). [Source: https://www.worldofsam.org/products/b-dos.] The record model is **confirmed from the implementation side** by the B-DOS 1.5t analysis (i71, `bdos-trinity-fork-analysis.md`): the fork uses the same 1600-sector record stride, the same record-list/base formulas as the public 1.5a source, and the same `BDOS` record-ID stamp — so sub-8 GB Trinity media and Atom-era media remain interchangeable at the format level (which is why SimCoupé's Atom Lite path mounts under-8 GB Trinity images at all).
 
 This is important for comment-spill use: **there is no FAT layer** accessible to arbitrary Z80 programs. A Z80 program wanting to use the SD card must either (a) go through B-DOS record/sector calls, or (b) implement its own raw-sector SPI driver and choose a storage layout.
 
@@ -98,9 +98,9 @@ All estimates below are **derived** from T-state counting of `encdrv.asm` at the
 
 **SD card sector read (512-byte block, ESTIMATED):**
 - Command phase (~8 SPI bytes at register-read speed): ~164 µs.
-- Data phase (512 bytes at bulk speed, _if_ auto-null works for `&DF`): ~4.5 ms.
+- Data phase (512 bytes at bulk speed under `&3F` auto-null — now confirmed for `&DF`): ~4.5 ms.
 - Total best-case: ~4.7 ms → ~110 KB/s.
-- Realistic (without confirmed auto-null, additional busy-waits): **20–80 KB/s** is a conservative working estimate.
+- Realistic (additional busy-waits): **20–80 KB/s** is a conservative working estimate. The B-DOS 1.5t analysis (i71, `bdos-trinity-fork-analysis.md`) confirms the loop model these figures assume — busy-poll on `&DC` bit 3 + `INI`/`OUTI` per byte under auto-null — so the working band stands with the auto-null caveat resolved in its favour.
 
 **These figures are Z80-side-only.** SD card command-response latency (CMD17 → data token: typically 1–10 ms for a real card) is not included and would dominate at low transfer counts.
 
@@ -158,8 +158,9 @@ The idea: use the Trinity SD card as overflow storage for comment data that does
 | Ethernet driver ready for TFTP reuse | **VERIFIED** (`trinload`/`encdrv.asm`) |
 | Throughput ~70–110 KB/s bulk (Ethernet path) | **LIKELY** (derived from T-state analysis) |
 | Throughput ~20–80 KB/s SD sectors | **LIKELY** (estimated; no SD benchmark found) |
-| Auto-null mode works for SD port `&DF` | **LIKELY** (`&3F` select-with-auto-null observed in period software's bulk SD path — private archive) |
-| Port `&DC` select byte value for SD | **VERIFIED** (`&30`/`&31`/`&38`/`&3F` — recovered from period Trinity utility software, private archive) |
+| Auto-null mode works for SD port `&DF` | **VERIFIED** (B-DOS 1.5t bulk SD read+write loops run under `&3F` with no per-byte dummy writes — i71 analysis) |
+| Port `&DC` select byte value for SD | **VERIFIED** (`&30`/`&31`/`&38`/`&3F` — confirmed by B-DOS 1.5t itself, i71 analysis; earlier recovered from period Trinity utility software) |
+| Microcontroller identity probe + card-present / WP status bits | **VERIFIED** (probe `&08`/`&09`→`&DC`, replies `'T','R'` from `&DD`; `IN(&DC)` bit 1 = card present, bit 2 = WP inverted — i71 analysis) |
 | Trinity PHY supports Auto-MDIX | **UNKNOWN** (ENC28J60 does not natively; board-level unclear) |
 | No RTC or extra RAM on board | **LIKELY** (not mentioned anywhere; name = "Trinity" = 3 things) |
 
@@ -169,10 +170,10 @@ The idea: use the Trinity SD card as overflow storage for comment data that does
 
 1. ~~Port `&DC` SD-select byte value~~ — **RESOLVED** (`&31` select / `&30` deselect / `&38` init / `&3F` auto-null; recovered from period Trinity utility software, private archive).
 2. ~~Auto-null for `&DF`~~ — **RESOLVED (LIKELY)**: `&3F` is the SD select-with-auto-null value (same evidence).
-3. **SD initialisation sequence timing**: real cards can hold `CMD17` response for 1–10 ms. Does the Trinity's microcontroller buffer this, or does the Z80 poll a status register?
+3. ~~**SD initialisation sequence timing**: real cards can hold `CMD17` response for 1–10 ms. Does the Trinity's microcontroller buffer this, or does the Z80 poll a status register?~~ — **ANSWERED (i71, `bdos-trinity-fork-analysis.md`)**: the Z80 polls everything (R1 response, data token, write-busy completion — each a bounded retry loop), with the microcontroller's `&38` SD-init command run once before the Z80-driven SPI init ladder. The microcontroller's only per-byte role is the busy flag on `&DC` bit 3.
 4. **Auto-MDIX**: does the Trinity's ENC28J60 circuit include MDI/MDI-X switching, or does Phase-3 need a crossover cable?
 5. **EEPROM address space above 64 K**: the 128 K EEPROM needs a 17-bit address, but the `eeprom.asm` driver only emits a 2-byte address after the opcode. Is the upper half reached via a bank-select mechanism in the microcontroller, or inaccessible? Affects how much EEPROM is truly usable.
-6. **SD write source recovery**: the SAM Revival 21 cover disk carries the SD driver article source AND the B-DOS 1.5t source+executable (samcoupe.com/samrevival.htm); available in private reference materials. NOTE: the B-DOS hook route (see `bdos-version-landscape.md`) may make a raw SPI driver unnecessary.
+6. **SD write source recovery**: the SAM Revival 21 cover disk carries the SD driver article source AND the B-DOS 1.5t source+executable (samcoupe.com/samrevival.htm); available in private reference materials. NOTE: the B-DOS hook route (see `bdos-version-landscape.md`) makes a raw SPI driver unnecessary — the B-DOS 1.5t analysis (i71, `bdos-trinity-fork-analysis.md`) confirms the fork's own SD write path is reached through the unchanged hook surface, so HSAVE/HOFLE+HSBYT via HRECORD covers writes without a separate driver.
 
 ---
 
@@ -188,4 +189,5 @@ The idea: use the Trinity SD card as overflow storage for comment data that does
 - World of SAM — SAM Revival issue 21: https://www.worldofsam.org/products/sam-revival-issue-21
 - World of SAM — Trinity Boot ROM: https://www.worldofsam.org/products/trinity-boot-rom
 - `docs/specs/phase3-tftp-design.md`
+- `bdos-trinity-fork-analysis.md` — the B-DOS 1.5t (Trinity fork) static analysis (i71): the canonical consumer of the `&DC`/`&DF` SD port values, confirming the select bytes, auto-null, probe, and status bits documented above
 - Memory entry `trinity_hardware` (verified against the above rather than trusted)
