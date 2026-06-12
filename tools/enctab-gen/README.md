@@ -7,6 +7,6 @@ from the vendored ARM MRA snapshot (`reference/arm-mra/`) plus the
 hand-curated `tools/aarch64enc/manual_forms.go`.
 
 The `.enc` mirrors the Go runtime form table by construction, so the Z80
-and Go encoders share one table. **`ENCTAB_LEN` sync rule**: after any
-change that grows the table, `src/loader.asm:ENCTAB_LEN` must equal
-`wc -c build/enctab.enc` exactly. See `docs/ARCHITECTURE.md` §4.
+and Go encoders share one table.  The loader reads the file length from the
+SAMDOS DIFA header deposited by HGTHD, so no assembly-time length constant
+is needed (i7 phase A eliminated `ENCTAB_LEN`).  See `docs/ARCHITECTURE.md` §4.

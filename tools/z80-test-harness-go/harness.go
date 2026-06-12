@@ -42,7 +42,8 @@
 // assembler uses:
 //
 //	129 HGTHD — fake: populate &4B50+34 (pages) and &4B50+35-36 (length)
-//	            for the IN file; enctab.enc uses hardcoded constants.
+//	            for the IN file and for enctab.enc (i7 phase A: load_enctab
+//	            now reads the DIFA header instead of a hardcoded constant).
 //	130 HLOAD — no-op: data already pre-deposited in the target pages.
 //	132 HSAVE — capture: read OUT bytes from UIFA[31..36] + pages 5-6.
 //
@@ -590,6 +591,16 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 		hw.files["IN"] = inFile
 	}
 
+	// Register "enctab.enc" so that HGTHD populates &4B50+34/35 with its
+	// true length.  After i7 phase A, load_enctab reads the DIFA header
+	// just like load_payload_generic, so the harness must supply it.
+	// Pre-deposit is still done below (belt-and-braces); HLOAD remains a
+	// no-op because the data is already in page 4.
+	if _, ok := hw.files["enctab.enc"]; !ok && len(enctabData) > 0 {
+		enctabFile := &NamedFile{Name: "enctab.enc", Content: enctabData, TargetPage: enctabPage}
+		hw.files["enctab.enc"] = enctabFile
+	}
+
 	// Deposit assembler binary starting at section C (page 2 = HMPR_DEFAULT
 	// low-5).  The binary is built for org &8000; its first 16 KB load into
 	// physical page 2 (section C) when HMPR = hmprDefault, and any overflow
@@ -684,17 +695,9 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 				hw.ram[copyPage][copyOffset+35] = uint8(lenWithFlag)
 				hw.ram[copyPage][copyOffset+36] = uint8(lenWithFlag >> 8)
 			} else {
-				// Unknown file.  Two sub-cases:
-				//
-				//  (a) Known pre-deposited legacy file: "enctab.enc" is
-				//      pre-deposited into page 4 directly, and the legacy
-				//      IN path (handled by the HasPrefix branch above) is
-				//      pre-deposited into pages 7..  Their HLOADs are
-				//      legitimate no-ops.  No DIFA update needed because
-				//      that caller doesn't read it back.
-				//
-				//  (b) A file the harness was never given (e.g. "sd13" /
-				//      sysreg_data when -sysreg-data is omitted).  Here the
+				// Unknown file.  A file the harness was never given
+				// (e.g. "sd13" / sysreg_data when -sysreg-data is
+				// omitted).  Here the
 				//      subsequent HLOAD is a SILENT no-op, leaving the
 				//      target page zero/garbage — which on real SAM would
 				//      be a SAMDOS "file not found" longjmp to a FAIL

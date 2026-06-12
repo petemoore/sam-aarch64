@@ -89,9 +89,6 @@
 ENCTAB_LOAD_HL: equ     &8000
 
 STACK_TOP:      equ     &C100          ; SP before any call (grows down into section D)
-ENCTAB_LEN:     equ     3970           ; current enctab.enc body size; build-time
-                                       ; constant (matches build/enctab.enc;
-                                       ; 158 forms = 110 manual + 48 MRA-derived)
 
 
 ; -----------------------------------------------------------------------
@@ -131,16 +128,28 @@ load_enctab:
 ; is currently running from (page 2).  See `src/trampoline.asm` and
 ; `docs/specs/samdos-file-io.md` for the full pattern.
 ;
+; Read length-mod-16K from the SAMDOS-deposited DIFA header at &4B50+35,
+; clearing the `set 7, d` marker left by HGTHD (same pattern as
+; load_payload_generic at src/loader.asm:248-255).  The length comes from
+; the on-disk truth written by build-disk, so no assembly-time constant
+; is needed and the ENCTAB_LEN equ is gone (i7 phase A).
+;
 ; Calling convention (mirrors COMET's `comet.asm:1191-1200`):
 ;   HL = &8000      (section-C window; satisfies Tech Manual constraint)
 ;   B  = ENCTAB_PAGE (target physical page for the load)
-;   C  = 0          (0 full 16 KB pages used; whole file < 16 KB)
-;   DE = ENCTAB_LEN (length modulo 16 KB)
+;   C  = page count from DIFA+34 (0 for any payload < 16 KB)
+;   DE = length-mod-16K from DIFA+35 (on-disk truth)
 ;   IX = UIFA       (already set by fill_uifa above)
-                ld      hl, ENCTAB_LOAD_HL
+                ld      hl, (&4B50 + 35)
+                ld      a, h
+                and     &7F
+                ld      h, a
+                ld      e, l
+                ld      d, h           ; DE = length-mod-16K
+                ld      a, (&4B50 + 34)
+                ld      c, a           ; C = page count
                 ld      b, ENCTAB_PAGE
-                ld      c, 0
-                ld      de, ENCTAB_LEN
+                ld      hl, ENCTAB_LOAD_HL
                 call    TRAMPOLINE_DST  ; runs the trampoline copy in section B
 
 ; -- Validate magic "ENC1" via section-A mapping -------------------------
