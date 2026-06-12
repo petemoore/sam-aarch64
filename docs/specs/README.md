@@ -14,6 +14,9 @@ design doc is deleted (git history is the archive).
   `.tbn` v2 instruction-overlay design (M8; i39c/i40/i51 pending).
 - [`i48-syntactic-encoder-design.md`](i48-syntactic-encoder-design.md) —
   single-format syntactic encoder; drives the future i48c SAM-side work.
+- [`codegen-tables-design.md`](codegen-tables-design.md) — generate the
+  Z80 data tables (sysreg, constants, mnemonic IDs) from the Go authority
+  (i7; spec gate — awaiting approval).
 - [`editor-edit-model-design.md`](editor-edit-model-design.md) — the
   Phase-2 editor's in-memory edit model.
 - [`comment-storage-design.md`](comment-storage-design.md) — compressed-
