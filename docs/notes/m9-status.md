@@ -28,7 +28,7 @@ Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
 |---|---|---|
 | **i7** — codegen sysreg/mnemonic/form tables from the Go authority (the **first brick**) | 📋 **spec approved** (Pete 2026-06-12; PR #184) — phases A–C queued now; phase D = i74 | `docs/specs/codegen-tables-design.md`; item registry i7, i74 |
 | **i74** — i7 phase D: at/ic/barrier operand-table codegen (spec §6 Q3) | 📋 queued — after i7 A–C land | `docs/specs/codegen-tables-design.md` §6; i7 |
-| **i75** — B-DOS boot-disk swap (the q10 resolution, incremental) | 📋 next — prove the B-DOS-booted matrix green, then flip the default | item registry i75; q10; `docs/notes/bdos-trinity-fork-analysis.md` |
+| **i75** — B-DOS boot-disk swap (the q10 resolution, incremental) | ✅ done — B-DOS-booted gate suite proven green locally (no Atom Lite attached), shipped/CI default flipped to B-DOS, samdos2 retained via flags | item registry i75; q10; `docs/notes/bdos-trinity-fork-analysis.md` |
 | **i41** — editor edit-model implementation (paged block-list) | 📋 design agreed (Pete 2026-06-08, §7 — 5 decisions locked) | `docs/specs/editor-edit-model-design.md` §7; item registry i41 |
 | **i48c** — Z80 text→overlay encoder (SAM-side editor input path; absorbs i39c) | 🧭 M9 strand — Go front-end i48b is the authority | `docs/specs/i48-syntactic-encoder-design.md` §2; item registry i48c, i39c |
 | **i4** — read-only listing/scroll viewer (precursor to i3) | 🧭 M9 strand | item registry i4; ROADMAP "Editor vision" |
@@ -51,12 +51,23 @@ automatically gets done rather than silently dropped.
 q10 resolved (Pete 2026-06-12): **incremental swap.** The mechanics prep landed
 in i72 (PR #187 — the `-dos`/`-dos-name`/`-dos-load` flags on `tools/build-disk`)
 and the reference binary was vendored in i71 (PR #186 — `reference/bdos/`).
-i75 executes the swap: (1) build B-DOS boot-disk variants via `build-disk -dos`;
-(2) prove the full SimCoupé gate suite green booting B-DOS — including AL 1.5a
-behaviour with **no Atom Lite attached** (the one untested corner — the SD layer
-is only reached on explicit record selection, observed statically in the i71
-fork analysis but not yet exercised on the emulated matrix); (3) flip the
-shipped/CI default to B-DOS, retaining samdos2 build capability.
+i75 executed the swap: (1) built B-DOS boot-disk variants via the `-dos` flag;
+(2) proved the full SimCoupé gate suite green booting B-DOS — including AL 1.5a
+behaviour with **no Atom Lite attached** (the previously-untested corner: a
+plain floppy machine, no HDF); (3) flipped the shipped/CI default to B-DOS,
+retaining samdos2 build capability via the flags.
+
+**Done (i75 PR).** `tools/build-disk`'s default DOS is now B-DOS AL 1.5a
+(`reference/bdos/al-bdos15a.bin`, recorded name `bdos`, start address 32777);
+the SAMDOS 2 path stays fully functional via `-dos reference/samdos/samdos2.bin
+-dos-name samdos2 -dos-load 491529`. Because every gate script calls
+`build-disk` with the default DOS, the PR's own CI matrix (all SimCoupé jobs)
+boots B-DOS — that matrix is the formal proof. Locally, the full suite was
+green booting B-DOS on a plain floppy machine under SimCoupé v1.2.16 (no Atom
+Lite / no HDF attached): core 9/9, symbols 5/5 + symbols-prod 5/5, operands
+22/22 + operands-prod 22/22, paged + paged-prod, and the release-gate 3-way
+byte-match (GNU == Go == Z80) — plus `go test ./...`, the boot self-tests, and
+`make check-budget` unchanged.
 
 ## i41 — editor edit-model (paged block-list)
 

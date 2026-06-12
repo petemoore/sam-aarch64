@@ -3,8 +3,8 @@
 // Layout (per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §2.2):
 //
 //	0  <dos>      T4S1..T5S10  (20 sectors; ROM BOOT reads T4S1 raw;
-//	                            SAMDOS 2 by default, -dos swaps in a
-//	                            hook-compatible image such as B-DOS)
+//	                            B-DOS AL 1.5a by default, -dos swaps in a
+//	                            hook-compatible image such as SAMDOS 2)
 //	1  auto       T6S1..T6S2   (BASIC AUTO: CLEAR + LOAD "assembler" + CALL)
 //	2  assembler  T6S3         (the M3 Z80 assembler binary)
 //	3  enctab.enc T6S4         (encoder table produced by enctab-gen)
@@ -33,11 +33,14 @@
 //	    [-test-mem <path>] [-paged-call <path>] \
 //	    <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>
 //
-// -dos / -dos-name / -dos-load select the boot DOS (default SAMDOS 2 at
-// reference/samdos/samdos2.bin, recorded name "samdos2", load 491529).
-// B-DOS implements the same RST-8 hook interface (verified i62), so a
-// B-DOS image boots the same recipe — the actual default/CI swap is
-// gated on q10. The default invocation is byte-identical to before.
+// -dos / -dos-name / -dos-load select the boot DOS (default B-DOS AL 1.5a
+// at reference/bdos/al-bdos15a.bin, recorded name "bdos", load 32777).
+// SAMDOS 2 implements the same RST-8 hook interface, so it boots the same
+// recipe — pass -dos reference/samdos/samdos2.bin -dos-name samdos2
+// -dos-load 491529 for a SAMDOS 2 compatibility build. B-DOS became the
+// shipped/CI boot DOS in i75 (q10 resolution); the swap is hook-portable
+// (verified i62) and floppy-capable with no mass storage attached
+// (the no-Atom-Lite corner proven in i75).
 //
 // Three-positional form (legacy): no IN file is added — used by
 // Task-3 boot tests where the assembler exits before reading IN.
@@ -83,32 +86,50 @@ const (
 	// This matches src/assembler.asm's `org &8000`.
 	LoadAddress uint32 = 0x8000
 
-	// SamdosLoadAddress is the address recorded in the samdos2 body header.
+	// SamdosPath is the SAMDOS 2 reference binary. Passing -dos with this
+	// exact path selects the compatibility build and triggers the byte-exact
+	// size guard below.
+	SamdosPath = "reference/samdos/samdos2.bin"
+
+	// SamdosLoadAddress is the directory-entry start address recorded in the
+	// samdos2 body header (page 29 + offset &8009). Retained for the SAMDOS 2
+	// compatibility path (-dos reference/samdos/samdos2.bin -dos-load 491529).
 	// Inherited from the original M0 build-disk tool (since deleted; see
 	// git history for tools/build-disk/main.go).
 	SamdosLoadAddress uint32 = 491529
 
 	// DefaultDosPath / DefaultDosName / DefaultDosLoad are the shipped boot
-	// DOS: SAMDOS 2 at page 29 (491529). The DOS is a swappable boot file —
-	// B-DOS implements the same RST-8 hook interface (verified i62), so a
-	// B-DOS image (e.g. reference/bdos/al-bdos15a.bin, -dos-load 32777,
-	// -dos-name bdos) boots the same recipe. The default keeps SAMDOS 2 as
-	// the shipped DOS pending q10. See docs/specs/samdos-file-io.md and
-	// docs/notes/bdos-version-landscape.md.
-	DefaultDosPath = "reference/samdos/samdos2.bin"
-	DefaultDosName = "samdos2"
-	DefaultDosLoad = SamdosLoadAddress
+	// DOS: B-DOS AL 1.5a (Edwin Blink's freeware "Improved SAMDOS"), at the
+	// directory-entry start address 32777 (page 1 + offset &8009) the
+	// worldofsam AL disks record — the same convention the i62 rig verified
+	// (docs/notes/bdos-version-landscape.md §"Empirical verification"). B-DOS
+	// implements the same RST-8 hook interface as SAMDOS 2 (verified i62,
+	// static-verified for the Trinity 1.5t fork in i71), is floppy-capable
+	// with no mass storage attached (the no-Atom-Lite corner proven in i75),
+	// and is licence-clean to ship. The SAMDOS 2 path stays fully functional
+	// via -dos/-dos-name/-dos-load (reference/samdos/samdos2.bin, "samdos2",
+	// 491529). See docs/specs/samdos-file-io.md.
+	DefaultDosPath = "reference/bdos/al-bdos15a.bin"
+	DefaultDosName = "bdos"
+	DefaultDosLoad = BdosLoadAddress
+
+	// BdosLoadAddress is the directory-entry start address for B-DOS AL 1.5a:
+	// page 1 + offset &8009 = 32777, the value the worldofsam AL disks carry
+	// (and the 0x60 start-page unused-bits pattern, set below via
+	// SetStartAddressPageUnusedBits). Verified by the i62 rig.
+	BdosLoadAddress uint32 = 32777
 
 	// SamdosExactSize is the byte-exact length of the shipped samdos2.bin.
-	// The hard equality check applies only when -dos is the default path —
-	// for any other DOS image a generous boot-region sanity bound is used
-	// instead (B-DOS AL 1.5a, for instance, is 10701 bytes).
+	// The hard equality check applies only when -dos is the SAMDOS 2
+	// reference file — for any other DOS image (the B-DOS default included) a
+	// generous boot-region sanity bound is used instead.
 	SamdosExactSize = 10000
 
-	// DosMaxSize is the sanity ceiling for a non-default DOS image: well
-	// above any real SAM DOS (B-DOS AL 1.5a is 10701 B) yet small enough to
-	// catch a wrong file passed by mistake. samfile.AddCodeFile still does
-	// the authoritative free-sector check.
+	// DosMaxSize is the sanity ceiling for a DOS image that is not the
+	// byte-exact samdos2.bin reference: well above any real SAM DOS (B-DOS
+	// AL 1.5a is 10701 B) yet small enough to catch a wrong file passed by
+	// mistake. samfile.AddCodeFile still does the authoritative free-sector
+	// check.
 	DosMaxSize = 16384
 )
 
@@ -116,7 +137,7 @@ func main() {
 	log.SetFlags(0)
 	log.SetPrefix("build-disk: ")
 
-	dosPath := flag.String("dos", DefaultDosPath, "path to the boot DOS binary (default SAMDOS 2; B-DOS is hook-compatible, e.g. reference/bdos/al-bdos15a.bin)")
+	dosPath := flag.String("dos", DefaultDosPath, "path to the boot DOS binary (default B-DOS AL 1.5a; SAMDOS 2 is hook-compatible: reference/samdos/samdos2.bin)")
 	dosName := flag.String("dos-name", DefaultDosName, "directory-entry name for the boot DOS file")
 	dosLoad := flag.Uint("dos-load", uint(DefaultDosLoad), "directory-entry start address for the boot DOS file (samdos2: 491529; B-DOS AL 1.5a: 32777)")
 	testMemPath := flag.String("test-mem", "", "path to off-axis test_mem.bin (BUILD_TESTS only; plan-PR 3)")
@@ -155,15 +176,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("read dos: %v", err)
 	}
-	if *dosPath == DefaultDosPath {
+	if *dosPath == SamdosPath {
 		// The shipped samdos2.bin is byte-exact; a wrong size means a
 		// corrupt or wrong reference file.
 		if len(dosBin) != SamdosExactSize {
 			log.Fatalf("samdos2: expected %d bytes, got %d", SamdosExactSize, len(dosBin))
 		}
 	} else if len(dosBin) > DosMaxSize {
-		// Non-default DOS image: a generous boot-region sanity bound
-		// (samfile.AddCodeFile does the authoritative free-sector check).
+		// Any other DOS image (the B-DOS default included): a generous
+		// boot-region sanity bound (samfile.AddCodeFile does the
+		// authoritative free-sector check).
 		log.Fatalf("dos %s: %d bytes exceeds the %d-byte boot-region sanity bound", *dosPath, len(dosBin), DosMaxSize)
 	}
 
@@ -180,7 +202,7 @@ func main() {
 	disk := samfile.NewDiskImage()
 
 	// Slot 0: the boot DOS. ROM BOOT reads T4S1 raw; same layout as M0.
-	// SAMDOS 2 by default; -dos swaps in a hook-compatible image (B-DOS).
+	// B-DOS AL 1.5a by default; -dos swaps in a hook-compatible image (SAMDOS 2).
 	if err := disk.AddCodeFile(*dosName, dosBin, uint32(*dosLoad), 0); err != nil {
 		log.Fatalf("AddCodeFile(%s): %v", *dosName, err)
 	}
