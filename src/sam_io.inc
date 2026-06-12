@@ -15,6 +15,13 @@
 ; (line 497+); concrete implementations live in c.s, f.s, h.s. See the
 ; spike doc for full register conventions and gotchas.
 ;
+; The hook codes below are the SAMDOS 2 hook interface, which B-DOS (the
+; project's target DOS) implements compatibly — verified end-to-end in i62
+; (one probe round-tripped HSAVE/HGTHD/HLOAD under SAMDOS 2 + floppy and
+; B-DOS AL 1.5a + Atom Lite). B-DOS layers a record selector (HRECORD &9C)
+; on top for mass storage; the codes here are device-neutral. See
+; docs/specs/samdos-file-io.md and docs/notes/bdos-version-landscape.md.
+;
 ; Buffer addresses we use:
 ;   UIFA     = &4B00  ; 48-byte user-information area: name + type + addr
 ;                     ;        + length, populated before HOFLE / HGFLE.

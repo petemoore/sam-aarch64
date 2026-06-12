@@ -2,7 +2,9 @@
 //
 // Layout (per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §2.2):
 //
-//	0  samdos2    T4S1..T5S10  (20 sectors; ROM BOOT reads T4S1 raw)
+//	0  <dos>      T4S1..T5S10  (20 sectors; ROM BOOT reads T4S1 raw;
+//	                            SAMDOS 2 by default, -dos swaps in a
+//	                            hook-compatible image such as B-DOS)
 //	1  auto       T6S1..T6S2   (BASIC AUTO: CLEAR + LOAD "assembler" + CALL)
 //	2  assembler  T6S3         (the M3 Z80 assembler binary)
 //	3  enctab.enc T6S4         (encoder table produced by enctab-gen)
@@ -27,8 +29,15 @@
 //
 // Usage:
 //
-//	build-disk [-test-mem <path>] [-paged-call <path>] \
+//	build-disk [-dos <path>] [-dos-name <name>] [-dos-load <addr>] \
+//	    [-test-mem <path>] [-paged-call <path>] \
 //	    <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>
+//
+// -dos / -dos-name / -dos-load select the boot DOS (default SAMDOS 2 at
+// reference/samdos/samdos2.bin, recorded name "samdos2", load 491529).
+// B-DOS implements the same RST-8 hook interface (verified i62), so a
+// B-DOS image boots the same recipe — the actual default/CI swap is
+// gated on q10. The default invocation is byte-identical to before.
 //
 // Three-positional form (legacy): no IN file is added — used by
 // Task-3 boot tests where the assembler exits before reading IN.
@@ -78,12 +87,38 @@ const (
 	// Inherited from the original M0 build-disk tool (since deleted; see
 	// git history for tools/build-disk/main.go).
 	SamdosLoadAddress uint32 = 491529
+
+	// DefaultDosPath / DefaultDosName / DefaultDosLoad are the shipped boot
+	// DOS: SAMDOS 2 at page 29 (491529). The DOS is a swappable boot file —
+	// B-DOS implements the same RST-8 hook interface (verified i62), so a
+	// B-DOS image (e.g. reference/bdos/al-bdos15a.bin, -dos-load 32777,
+	// -dos-name bdos) boots the same recipe. The default keeps SAMDOS 2 as
+	// the shipped DOS pending q10. See docs/specs/samdos-file-io.md and
+	// docs/notes/bdos-version-landscape.md.
+	DefaultDosPath = "reference/samdos/samdos2.bin"
+	DefaultDosName = "samdos2"
+	DefaultDosLoad = SamdosLoadAddress
+
+	// SamdosExactSize is the byte-exact length of the shipped samdos2.bin.
+	// The hard equality check applies only when -dos is the default path —
+	// for any other DOS image a generous boot-region sanity bound is used
+	// instead (B-DOS AL 1.5a, for instance, is 10701 bytes).
+	SamdosExactSize = 10000
+
+	// DosMaxSize is the sanity ceiling for a non-default DOS image: well
+	// above any real SAM DOS (B-DOS AL 1.5a is 10701 B) yet small enough to
+	// catch a wrong file passed by mistake. samfile.AddCodeFile still does
+	// the authoritative free-sector check.
+	DosMaxSize = 16384
 )
 
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("build-disk: ")
 
+	dosPath := flag.String("dos", DefaultDosPath, "path to the boot DOS binary (default SAMDOS 2; B-DOS is hook-compatible, e.g. reference/bdos/al-bdos15a.bin)")
+	dosName := flag.String("dos-name", DefaultDosName, "directory-entry name for the boot DOS file")
+	dosLoad := flag.Uint("dos-load", uint(DefaultDosLoad), "directory-entry start address for the boot DOS file (samdos2: 491529; B-DOS AL 1.5a: 32777)")
 	testMemPath := flag.String("test-mem", "", "path to off-axis test_mem.bin (BUILD_TESTS only; plan-PR 3)")
 	pagedCallPath := flag.String("paged-call", "", "path to the paged_call self-test page-14 payload (BUILD_TESTS only; plan-PR 1)")
 	clusterPath := flag.String("cluster", "", "path to the off-axis page-12 M5+misc encoder self-test cluster (build/test_cluster.bin; BUILD_TESTS only; M6 budget-relief)")
@@ -92,7 +127,7 @@ func main() {
 	zx0Path := flag.String("zx0", "", "path to the page-13 zx0 compressor+decoder payload (build/zx0.bin; PRODUCTION + test; i68)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
-			"usage: %s [-test-mem <path>] [-paged-call <path>] [-cluster <path>] [-sysreg-data <path>] [-disasm <path>] [-zx0 <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n",
+			"usage: %s [-dos <path>] [-dos-name <name>] [-dos-load <addr>] [-test-mem <path>] [-paged-call <path>] [-cluster <path>] [-sysreg-data <path>] [-disasm <path>] [-zx0 <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n",
 			os.Args[0])
 		flag.PrintDefaults()
 	}
@@ -116,12 +151,20 @@ func main() {
 		os.Exit(2)
 	}
 
-	samdos2, err := os.ReadFile("reference/samdos/samdos2.bin")
+	dosBin, err := os.ReadFile(*dosPath)
 	if err != nil {
-		log.Fatalf("read samdos2: %v", err)
+		log.Fatalf("read dos: %v", err)
 	}
-	if len(samdos2) != 10000 {
-		log.Fatalf("samdos2: expected 10000 bytes, got %d", len(samdos2))
+	if *dosPath == DefaultDosPath {
+		// The shipped samdos2.bin is byte-exact; a wrong size means a
+		// corrupt or wrong reference file.
+		if len(dosBin) != SamdosExactSize {
+			log.Fatalf("samdos2: expected %d bytes, got %d", SamdosExactSize, len(dosBin))
+		}
+	} else if len(dosBin) > DosMaxSize {
+		// Non-default DOS image: a generous boot-region sanity bound
+		// (samfile.AddCodeFile does the authoritative free-sector check).
+		log.Fatalf("dos %s: %d bytes exceeds the %d-byte boot-region sanity bound", *dosPath, len(dosBin), DosMaxSize)
 	}
 
 	assemblerBin, err := os.ReadFile(assemblerPath)
@@ -136,12 +179,13 @@ func main() {
 
 	disk := samfile.NewDiskImage()
 
-	// Slot 0: samdos2. ROM BOOT reads T4S1 raw; same layout as M0.
-	if err := disk.AddCodeFile("samdos2", samdos2, SamdosLoadAddress, 0); err != nil {
-		log.Fatalf("AddCodeFile(samdos2): %v", err)
+	// Slot 0: the boot DOS. ROM BOOT reads T4S1 raw; same layout as M0.
+	// SAMDOS 2 by default; -dos swaps in a hook-compatible image (B-DOS).
+	if err := disk.AddCodeFile(*dosName, dosBin, uint32(*dosLoad), 0); err != nil {
+		log.Fatalf("AddCodeFile(%s): %v", *dosName, err)
 	}
-	if err := disk.SetStartAddressPageUnusedBits("samdos2", 3); err != nil {
-		log.Fatalf("SetStartAddressPageUnusedBits(samdos2): %v", err)
+	if err := disk.SetStartAddressPageUnusedBits(*dosName, 3); err != nil {
+		log.Fatalf("SetStartAddressPageUnusedBits(%s): %v", *dosName, err)
 	}
 
 	// Slot 1: AUTO BASIC.
@@ -361,7 +405,7 @@ func main() {
 		log.Fatalf("save %s: %v", outputPath, err)
 	}
 
-	fmt.Printf("samdos2:    %d bytes  T4S1-T5S10\n", len(samdos2))
+	fmt.Printf("%-12s%d bytes  T4S1-T5S10\n", *dosName+":", len(dosBin))
 	fmt.Printf("auto:       %d bytes   T6S1-T6S2  (PROG=%d, +VARS=%d, +GAP=%d)\n",
 		len(auto.Bytes()), auto.NVARSOffset(),
 		auto.NUMENDOffset()-auto.NVARSOffset(),

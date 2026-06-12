@@ -7,6 +7,26 @@ performs. The READ side needs a paging trampoline; the WRITE side does not —
 the two halves below explain both patterns, why they work, and the register /
 error-path facts any caller must respect.
 
+**This is the project's DOS hook-layer reference.** The hooks documented here
+(HGTHD / HLOAD / HSAVE / HOFLE / HSBYT …) are the **SAMDOS 2 hook interface**,
+which **B-DOS implements compatibly** — and B-DOS is the project's **target
+DOS** (it supplies the Trinity/Atom mass-storage records that Phase 2/3 need),
+with SAMDOS 2 remaining the shipped boot DOS pending q10. Hook portability
+SAMDOS 2 ↔ B-DOS AL is **verified**: i62 booted one probe binary under both
+SAMDOS 2 + floppy and B-DOS AL 1.5a + emulated Atom Lite and round-tripped
+HSAVE / HGTHD / HLOAD through both backends, and i71 verified statically that
+the Trinity fork (B-DOS 1.5t) leaves all 39 hook vectors and their handler
+bodies untouched — only the sector-device layer is swapped. The hook table
+(`docs/notes/bdos-version-landscape.md` §"SAMDOS compatibility") confirms every
+hook the idioms below use is present and SAMDOS-compatible in B-DOS, with the
+empirical proof in §"Empirical verification (i62)" and the static fork analysis
+in `docs/notes/bdos-trinity-fork-analysis.md`. On top of the SAMDOS-compatible
+surface B-DOS adds the record layer — HRECORD (&9C, the one backend-conditional
+step: RECORD 0 = floppy, RECORD n = an 800 KB mass-storage slice) and friends
+(HVEBK &9D, HLBYT &9F, …). The line-level source citations below remain to the
+**SAMDOS 2 source** (`samdos/src/*.s`), which stays authoritative for the
+shared hook semantics; the B-DOS additions sit above that surface.
+
 Source-citation conventions: `samdos/src/*.s` line references are to the
 SAMDOS 2 source (cloned at `~/git/samdos` from https://github.com/stefandrissen/samdos — the reconstructed, commented SAMDOS 2 source; the assembled binary is vendored at
 `reference/samdos/samdos2.bin`); `comet.asm` references are to

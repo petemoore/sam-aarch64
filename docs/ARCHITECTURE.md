@@ -172,7 +172,7 @@ binding a window-visible address to a flat-space location at run time.
 In hardware terms: **LMPR** is port `&FA`, **HMPR** is port `&FB`, and a
 512 K machine has 32 physical 16 KB pages.
 [`notes/sam-paging.md`](notes/sam-paging.md) is the hardware reference
-(ports, REL PAGE FORM, ROM/SAMDOS conventions).
+(ports, REL PAGE FORM, ROM / DOS conventions).
 
 The assembler's map — mirrored in
 [`notes/memory-layout.md`](notes/memory-layout.md); the source of truth is
@@ -194,7 +194,7 @@ a section only for the duration of an access:
   remap sections C/D (HMPR) while running — so they must execute, with a
   safe stack, from a section that stays put.
 - **ENCTAB** (page 4) — HLOAD'd at boot through the HLOAD trampoline
-  (which swaps HMPR so the SAMDOS load lands in page 4 via the section C
+  (which swaps HMPR so the DOS load lands in page 4 via the section C
   window), then mapped into section A under `LMPR_ENCTAB` for encoder
   reads.
 - **Paged IN** (pages 7–12, a 96 KB ceiling) — the `.tbn` source is
@@ -223,8 +223,8 @@ a section only for the duration of an access:
   and watermark math:
   [specs/comment-storage-design.md](specs/comment-storage-design.md) §5.
 
-The disk I/O underneath (why HLOAD needs the trampoline, why HSAVE does
-not, hook register-clobbering facts) is
+The disk I/O underneath — the DOS hook layer (SAMDOS 2 / B-DOS): why HLOAD
+needs the trampoline, why HSAVE does not, hook register-clobbering facts — is
 [specs/samdos-file-io.md](specs/samdos-file-io.md).
 
 **The `&C000` cliff**: both variants link at `org &8000` and must end
@@ -346,7 +346,8 @@ pyramid — each layer is slower and more authoritative than the one above:
 2. **The Go Z80 harness** (`tools/z80-test-harness-go/`, see its
    [README](../tools/z80-test-harness-go/README.md)) — runs the real
    assembler binary under `koron-go/z80` at ~1 ms per fixture, emulating
-   just enough SAMDOS (HGTHD/HLOAD/HSAVE hooks, paged RAM) to run the full
+   just enough of the DOS hooks (SAMDOS 2 / B-DOS: HGTHD/HLOAD/HSAVE, paged
+   RAM) to run the full
    pipeline, including the **paged boot path**: `TestBootSelfTestsPass`
    boots the `BUILD_TESTS` assembler with all page-12–15 payloads and
    asserts every boot self-test passes in ~30 ms
@@ -376,7 +377,8 @@ exercise combinations, and the release gate exercises everything at once.
   [`notes/sam-paging.md`](notes/sam-paging.md)
 - Host toolchain: [`../tools/README.md`](../tools/README.md)
 - Format: [specs/tbn-binary-format-reference.md](specs/tbn-binary-format-reference.md)
-- Disk/file plumbing: [specs/samdos-file-io.md](specs/samdos-file-io.md) ·
+- Disk/file plumbing — the DOS hook layer (SAMDOS 2 / B-DOS):
+  [specs/samdos-file-io.md](specs/samdos-file-io.md) ·
   [`notes/sam-disk-format.md`](notes/sam-disk-format.md) ·
   [`notes/sam-file-header.md`](notes/sam-file-header.md)
 - Roadmap + tracking: [`ROADMAP.md`](ROADMAP.md) ·
