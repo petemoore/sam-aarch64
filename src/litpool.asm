@@ -641,9 +641,19 @@ litpool_enc_x_base:
 ; Clobbers: A, BC, DE, HL.
 ; -----------------------------------------------------------------------
 litpool_flush:
-                ld      a, (LITPOOL_COUNT)
-                or      a
-                ret     z
+; No early-out on LITPOOL_COUNT == 0: a flush with zero pending slots
+; (e.g. a leading `.ltorg` before any `ldr =X`, or a `.ltorg` whose
+; pending literals were all emitted by an earlier flush) must still
+; advance LITPOOL_SEGMENT_FLUSH / LITPOOL_SEGMENT_ALLOC so the two
+; passes agree on segment numbering.  LITPOOL_COUNT is per-FILE
+; slots-allocated and is never reset between passes (pass 2's
+; litpool_reset_pending resets only FLUSH), so an early-return keyed on
+; it bumps nothing in pass 1 (count still 0 at a leading .ltorg) yet
+; DOES run the flush body in pass 2 (count carries pass-1's final
+; value), shifting pass-2 segment numbers relative to pass 1 and
+; desyncing pass-2 PC from pass-1 label values.  The downstream helpers
+; all tolerate a zero-slot flush: litpool_any_pending returns Z=0 (skips
+; padding) and litpool_emit_by_width early-returns when LITPOOL_COUNT==0.
 
 ; Pad to 4 if any pending Wn exist.  litpool_any_pending returns Z=1
 ; when found; we want to call pad in that case.

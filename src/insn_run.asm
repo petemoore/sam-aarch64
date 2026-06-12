@@ -345,7 +345,34 @@ fold_mem_imm12_placed:
                 jp      field_place
 
 ; ---- stur/ldur/pre/post imm9 (signed): @12 ----------------------------
+; Mirrors overlay.go FoldMemImm9 (overlay.go:88-93): the signed byte
+; offset must be in [-256, 255]; otherwise fail rather than silently
+; mask to 9 bits.
+;
+; The range is checked over the low 32 bits of expr_result interpreted as
+; a signed i32.  Bytes 4..7 are NOT consulted: a deferred fold of an
+; absolute symbol (e.g. `.set OFF, -256` then `stur x0, [x1, #OFF]`)
+; carries the value with its high 32 bits reconstructed as 0
+; (eval_push_sym_zero_high), so only the low 32 bits are reliable — and
+; they suffice, matching GNU for every offset that fits i32.
+;   value in [-256,255]  ⟺  byte1 ∈ {0x00 (0..255), 0xFF (-256..-1)} and
+;   bytes 2,3 equal byte1 (so the i32 is a clean sign-extension of the
+;   imm9, rejecting e.g. 0x0000FF00 = 65280).
 fold_mem_imm9:
+                ld      hl, (expr_result + 2)       ; H = byte3, L = byte2
+                ld      a, (expr_result + 1)        ; byte1
+                cp      l
+                jr      nz, fold_mem_imm9_oor
+                cp      h
+                jr      nz, fold_mem_imm9_oor
+                or      a
+                jr      z, fold_mem_imm9_ok         ; byte1==byte2==byte3==0x00 → 0..255
+                inc     a
+                jr      z, fold_mem_imm9_ok         ; all == 0xFF → -256..-1
+fold_mem_imm9_oor:
+                ld      a, &b1
+                jp      fail_with_tag               ; tag b1: stur/ldur/pre/post imm9 out of [-256,255]
+fold_mem_imm9_ok:
                 ld      hl, (expr_result)           ; low 16 bits
                 ld      a, h
                 and     &01                         ; HL &= 0x01FF (signed 9)
@@ -354,17 +381,69 @@ fold_mem_imm9:
                 jp      field_place
 
 ; ---- ldp/stp imm7 (signed scaled): @15 --------------------------------
+; Mirrors overlay.go FoldPairImm7 (overlay.go:127-141): the signed byte
+; offset must be a multiple of the scale (4 for W-pair, 8 for X-pair) and
+; the scaled offset must be in [-64, 63]; otherwise fail.  As for imm9 the
+; range is checked over the low 32 bits as a signed i32 (bytes 4..7 are an
+; absolute symbol's unreliable zero-high), which matches GNU for every
+; pair offset that fits i32.
 fold_pair_imm7:
-                ld      hl, (expr_result)           ; signed byte offset
+; First require the byte offset to be a clean i32 sign-extension of its
+; low 16 bits (bytes 2,3 == sign of bit 15): the scaled-offset range is
+; +-64*8 = +-512, so any in-range value fits i16, and rejecting wider
+; values here keeps the arithmetic-shift range check below exact.
+                ld      hl, (expr_result + 2)       ; H = byte3, L = byte2
+                ld      a, (expr_result + 1)        ; byte1
+                add     a, a                        ; bit 15 of low word -> carry
+                sbc     a, a                        ; A = sign byte S (0x00 / 0xFF)
+                cp      l
+                jr      nz, fold_pair_imm7_b2_fail
+                cp      h
+                jr      nz, fold_pair_imm7_b2_fail
+                ld      hl, (expr_result)           ; HL = signed i16 byte offset
                 ld      a, (insn_base + 3)
-                add     a, a                        ; bit 31 -> carry
+                add     a, a                        ; bit 31 -> carry (X-pair if set)
                 ld      b, 2                        ; W-pair: scale 4 (>>2)
-                jr      nc, fold_pair_imm7_shr
+                jr      nc, fold_pair_imm7_have_scale
                 ld      b, 3                        ; X-pair: scale 8 (>>3)
+fold_pair_imm7_have_scale:
+; Multiple-of-scale check: the low B bits of the value must be zero.
+                ld      a, 1
+                ld      c, b
+fold_pair_imm7_mask:
+                add     a, a
+                dec     c
+                jr      nz, fold_pair_imm7_mask
+                dec     a                           ; A = (1<<scale_bits) - 1
+                and     l
+                jr      z, fold_pair_imm7_shr
+                ld      a, &b2
+                jp      fail_with_tag               ; tag b2: ldp/stp byte offset not a multiple of scale, or scaled out of [-64,63]
 fold_pair_imm7_shr:
                 sra     h
                 rr      l                           ; arithmetic /scale
                 djnz    fold_pair_imm7_shr
+; Range check: the scaled signed value (HL) must be in [-64, 63].  After
+; an arithmetic shift the sign-extension is preserved, so HL high byte is
+; 0x00 (0..63) or 0xFF (-64..-1); any other high byte is out of range.
+                ld      a, h
+                or      a
+                jr      nz, fold_pair_imm7_neg
+                ld      a, l
+                cp      64
+                jr      c, fold_pair_imm7_place     ; scaled in [0,63]
+                ld      a, &b2
+                jp      fail_with_tag               ; tag b2: scaled offset >= 64
+fold_pair_imm7_neg:
+                inc     a
+                jr      nz, fold_pair_imm7_b2_fail  ; high byte != 0xFF → out of range
+                ld      a, l
+                cp      &c0
+                jr      nc, fold_pair_imm7_place    ; scaled in [-64,-1] (0xC0 = -64)
+fold_pair_imm7_b2_fail:
+                ld      a, &b2
+                jp      fail_with_tag               ; tag b2: scaled offset < -64
+fold_pair_imm7_place:
                 ld      a, l
                 and     &7F                         ; imm7
                 ld      l, a

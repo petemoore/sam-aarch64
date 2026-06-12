@@ -1134,8 +1134,36 @@ main_dir_equ_high_cmp:
                 djnz    main_dir_equ_high_cmp
                 jr      main_dir_equ_do_insert      ; high == ORIGIN_HIGH → origin-relative
 main_dir_equ_mark_abs:
+; Absolute classification: SYMTAB stores only the low 32 bits.  A 64-bit
+; consumer (.quad, X-register movz) needs the full value, so a constant
+; whose magnitude exceeds 32 bits would silently lose its high word.  The
+; faithful representation in low-32 storage is exactly a value that
+; sign-extends from bit 31: high32 must equal 0x00000000 (non-negative,
+; bit 31 clear) or 0xFFFFFFFF (negative, bit 31 set).  Anything else
+; (e.g. 0x1_00000000) genuinely truncates — refuse it with a tagged fail
+; rather than emit wrong bytes.  Negative absolutes (high32 = 0xFFFFFFFF)
+; pass here and round-trip correctly through every <=32-bit consumer;
+; eval reconstructs their high word as 0 (eval_push_sym_zero_high), which
+; only matters for a 64-bit consumer of a negative .set — a distinct,
+; pre-existing limitation, not made worse here (i73).
+                ld      a, (expr_result + 3)
+                add     a, a                ; bit 31 -> carry
+                sbc     a, a                ; A = 0x00 (CY=0) or 0xFF (CY=1) = expected sign byte
+                ld      e, a
+                ld      hl, expr_result + 4
+                ld      b, 4
+main_dir_equ_signext_cmp:
+                ld      a, (hl)
+                cp      e
+                jr      nz, main_dir_equ_trunc_fail
+                inc     hl
+                djnz    main_dir_equ_signext_cmp
                 ld      hl, (main_dir_equ_pending_id)
                 call    symbol_mark_absolute
+                jr      main_dir_equ_do_insert
+main_dir_equ_trunc_fail:
+                ld      a, &64
+                jp      fail_with_tag       ; tag 64: .equ/.set absolute value exceeds signed/unsigned 32-bit range
 main_dir_equ_do_insert:
 
 ; Insert (id, value) — duplicate id → symbol_insert does jp fail.
@@ -1525,6 +1553,11 @@ load_in_file:
                 ld      e, l                    ; no — clamp to actual size (DE = HL)
 load_in_head_call:
                 ld      hl, &8000
+; The preceding RST 8 HGTHD ran ROM PTDOS, which does EI — re-enabling
+; interrupts.  The trampoline's documented entry contract requires DI
+; (trampoline.asm:589-593): an interrupt during its HMPR-set window could
+; see a deranged section C/D map.  Re-assert DI before the call.
+                di
                 call    TRAMPOLINE_DST      ; head read: 512 bytes into page 7
 
 ; -- Read editor_region_offset from file offset 8 in the just-loaded head --
@@ -1605,6 +1638,10 @@ load_in_prefix_pages_ok:
                 ld      a, (in_file_pages)
                 ld      c, a
                 ld      de, (in_file_len)
+; As at the head read: the RST 8 HGTHD above re-enabled interrupts (PTDOS
+; EI), so re-assert DI to honour the trampoline's DI-entry contract
+; (trampoline.asm:589-593) before calling.
+                di
                 call    TRAMPOLINE_DST
 
 ; Compute (IN_END_PAGE, IN_END_OFFSET) from the prefix geometry.

@@ -484,12 +484,16 @@ reader_at_end:
                 ld      hl, (IN_POS_OFFSET)
                 ld      de, (IN_END_OFFSET)
                 or      a                   ; clear CF
-                sbc     hl, de
-                ret     z                   ; equal → Z=1 (at end)
-                ; pos > end is impossible under correct walking; we
-                ; conservatively treat it as "at end" same as the old
-                ; flat-pointer reader did.
-                ret     c                   ; SBC underflowed → pos > end (impossible)
+                sbc     hl, de              ; HL = pos - end
+                ret     z                   ; pos == end → Z=1 (at end)
+                ; sbc borrows (CF=1) exactly when pos < end, the normal
+                ; "records remain" case → not at end.  CF=0 here means
+                ; pos > end, an overrun (corrupt input or a walking bug);
+                ; treat pos >= end as at end so the walk stops rather than
+                ; running off the buffer.
+                jr      c, reader_at_end_no ; pos < end → not at end (Z=0)
+                xor     a                   ; pos > end → Z=1 (at end)
+                ret
 reader_at_end_no:
                 ld      a, 1
                 or      a                   ; Z=0
