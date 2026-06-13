@@ -161,6 +161,17 @@ answer options with an OACK where supported, and run the DATA-send / ACK-wait lo
 per boot and several MB total (the GPU firmware dominates), streamed block-by-block
 from the Trinity store.
 
+**Confirmed from the captures** ([`../notes/pi-netboot-capture-analysis.md`](../notes/pi-netboot-capture-analysis.md),
+a real Pi 400 netboot): the server must implement the **OACK** path — the Pi boot
+ROM negotiates `octet` + `tsize=0` (the server answers the file's real size) +
+`blksize` (1024 and 1468 both seen); it does *not* use windowsize (that is a
+client-side concern). It must serve **by name** from the flat store, return **TFTP
+ERROR(1) for every miss and keep going** (the boot ROM probes a long list of
+optional files — `recovery.elf`, `pieeprom.sig`, `dt-blob.bin`, … — and proceeds on
+not-found; choking on a miss breaks the boot), and tolerate the Pi's
+**serial-number subdirectory prefix** (`<serial>/start4.elf`) by 404-ing it so the
+Pi falls back to root.
+
 ### 6.3 DHCP is required — the SAM must speak it (i86)
 
 This is the key correction to the prior sketch. **Pi-3-class netboot has no static
@@ -168,10 +179,14 @@ path** — the boot ROM always broadcasts DHCP to learn its address, the TFTP se
 and the bootfile. Pete's own working setup confirms it: `dnsmasq` does DHCP *and*
 TFTP. So the SAM must provide a **minimal DHCP/bootp responder** (item **i86**):
 answer `DISCOVER`/`REQUEST` with an `OFFER`/`ACK` carrying an address from the pool,
-the subnet, the next-server (itself) and bootfile, plus whatever Raspberry-Pi
-netboot DHCP conventions the boot ROM requires (the vendor-class identifier and any
-option-43 sub-options — a *research* detail to confirm by capture, §9, but a
-uniform Pi convention, **not** per-model config). It is incremental on trinload's
+the subnet, and the next-server (`siaddr` = itself), plus the Raspberry-Pi netboot
+DHCP conventions — now **confirmed from a real capture**
+([`../notes/pi-netboot-capture-analysis.md`](../notes/pi-netboot-capture-analysis.md)):
+echo vendor-class **`PXEClient`** (opt 60 — the Pi rejects an offer without it),
+send the fixed 32-byte **option-43 PXE blob** containing the literal `Raspberry Pi
+Boot`, echo the client UUID (opt 97), and set `siaddr` to the TFTP server (no opt 67
+bootfile needed — the Pi requests its own filenames). A uniform Pi convention,
+**not** per-model config. It is incremental on trinload's
 UDP stack (DHCP is two UDP broadcasts on ports 67/68), but it does mean the server
 is "DHCP + TFTP", not TFTP-only. The Pi 4/400 static-EEPROM netboot path
 (`TFTP_IP`/`CLIENT_IP`/…) is therefore *not* relied on — building DHCP covers every
@@ -179,12 +194,14 @@ model with one code path and matches Pete's proven flow.
 
 ### 6.4 Per-Pi netboot research (execution detail, not a Pete decision)
 
-To populate the store and satisfy the handshake, the build needs: the exact file
-list each target Pi's boot ROM requests, and the DHCP handshake conventions. These
-come straight from materials we hold — Pete's `/private/tftpboot` contents, his
-`~/git/rpi400-bare-metal-dev` / `~/git/spectrum4` projects, the Raspberry Pi
-bootloader docs, and (decisively) a real packet capture (§9). Model-general
-research; no SAM-side per-model code.
+To populate the store and satisfy the handshake, the build needs the exact file
+list each target Pi requests and the DHCP conventions — now **settled** from a real
+Pi 400 capture, distilled into the implementation spec
+[`../notes/pi-netboot-capture-analysis.md`](../notes/pi-netboot-capture-analysis.md)
+(the exact DHCP option-43 blob, the OACK `tsize`/`blksize` options, the served-file
+list, and the ERROR(1)-tolerant probe sequence). A **Pi 3** capture (item **i89**)
+will confirm the older family the same way; its file set is already known from
+Pete's `tftproot`. Model-general; no SAM-side per-model code.
 
 ### 6.5 Model B is rejected
 
@@ -193,18 +210,30 @@ Linux, plus a Pi-side reboot trigger) is **not pursued**: it needs a cooperating
 and a host-side daemon on the Pi, which violates the self-hosting / no-host-tools
 goal and does not boot a bare Pi. Recorded for context only.
 
-## 7. Firmware self-provisioning (i70) — on-SAM HTTP fetch
+## 7. Firmware self-provisioning (i70) — getting the Pi firmware into the store
 
 Model A needs the Pi firmware blobs resident in the Trinity store. To keep this
-host-tool-free, **the SAM fetches them itself over HTTP** from the internet (the
-Raspberry Pi Foundation publishes the same firmware files for all models; distinct
-revisions get distinct names). This needs a real **TCP stack — uIP** (ARP/IPv4/TCP,
-present on the corpus Trinity utility disk, i61; trinload's stack is UDP-only) plus
-a minimal HTTP client. It is a one-time / rare operation (firmware is stable per
-chosen revision), so it is **not on the daily-loop critical path** and can land
-*after* the client+server+DHCP core; in the meantime the TFTP client (§5) bridges
-provisioning from a standard TFTP source. The host-side-tool alternative (a PC
-writing B-DOS records) is rejected — it reintroduces a host dependency.
+host-tool-free, **the SAM fetches them itself over the network**, source-agnostic: a
+plain **HTTP or TFTP** fetch from any reachable server covers the interim (e.g.
+Pete's Mac, which already serves the firmware). It is a one-time / rare operation
+(firmware is stable per chosen revision), **not on the daily-loop critical path**,
+and lands *after* the client+server+DHCP core; the TFTP client (§5) bridges it
+meanwhile. The host-side-tool alternative (a PC writing B-DOS records) is rejected —
+it reintroduces a host dependency. uIP (i61) provides the TCP/IP the HTTP client
+sits on.
+
+**The canonical source is GitHub (HTTPS-only) → item i88 (a stretch goal).** The
+purest form — and the one that lowers the **barrier to entry for *other* SAM+Trinity
+contributors** (fetch firmware on-SAM, no SD-card dance) — is the SAM fetching
+directly from the Raspberry Pi firmware repo on GitHub. That needs **TLS on the
+Z80** (**i88**), the single hardest component in the project: feasible but large.
+The tractable route is to **pin GitHub's certificate/public key** (we control both
+ends, so no CA store is needed) and use the Z80-friendliest TLS 1.3 suite —
+**X25519 + ChaCha20-Poly1305 + SHA-256** (ARX-only; no AES S-boxes, no GHASH). The
+handshake is slow (seconds) but firmware-fetch is rare, so that is fine. i88 is a
+**deliberate stretch**: the daily loop never needs it, the interim plain-HTTP/TFTP
+path covers provisioning, and the next agent should also check whether a plain-HTTP
+RPi-firmware mirror exists (which would make on-SAM HTTPS optional).
 
 ## 8. Storage model
 
@@ -213,7 +242,11 @@ surface (`HSAVE`/`HRECORD`/sector hooks, `samdos-file-io.md`; i62 dual-run proof
 i71 fork analysis). Files are addressed by name (the TFTP filename ↔ a stored
 object); the kernel and each firmware blob are objects in the store. One 800 KB
 B-DOS record ≈ one floppy image; large objects span record(s). No FAT, no custom
-SPI driver — the B-DOS route subsumes both (i58/i71).
+SPI driver — the B-DOS route subsumes both (i58/i71). The store's *contents* are a
+provisioning choice that **varies** by project, firmware revision, and features
+(e.g. HDMI audio → extra `.dtbo` overlays) — the server is indifferent, serving
+whatever is present and `ERROR(1)`-ing the rest, so the file set is never hard-coded
+anywhere.
 
 ## 9. Host-side iteration (i80) + the empirical oracle
 
@@ -229,19 +262,23 @@ gate.
 and the Pi, run Wireshark, and mirror the captured DHCP+TFTP exchange byte-for-byte.
 This is a proven technique here: Pete documented trinload's ethernet frames exactly
 this way (trinload commit `9ff9099`, `test/README.md`). Pete's Mac `dnsmasq` is the
-reference server to diff our responses against. Pete may also have **existing
-DHCP/TFTP capture logs on his Mac** from real Pi netboots — those would directly
-settle §6.3/§6.4 (the Pi's requested filenames, option set, and DHCP conventions)
-before any SAM code is written; folding them in is the natural first build step.
+reference server to diff our responses against. Pete **provided real captures**
+(`~/tftp-logs`: `rpi400-boot-spectrum4.pcapng` + `dnsmasq.log`), now distilled into
+[`../notes/pi-netboot-capture-analysis.md`](../notes/pi-netboot-capture-analysis.md)
+— so §6.3/§6.4 (the Pi's filenames, OACK options, and the exact DHCP option-43 blob)
+are already settled from ground truth. A **Pi 3** capture (i89) will extend this to
+the older family.
 
 ## 10. Phasing
 
 1. **3a — inbound client (i82).** Fully designable now; bootstrap via trinload or
    the patched ROM. Gate: a real-Trinity fetch of an image to a record, booted.
 2. **3b — outbound server (i83) + DHCP responder (i86).** Model A. The daily-loop
-   headline; the per-Pi research (§6.4) is settled by capture during the build.
-3. **3c — HTTP self-provisioning (i70).** After the core; bridged by the client
-   meanwhile.
+   headline; the per-Pi handshake is **already settled** by the captured oracle
+   ([`../notes/pi-netboot-capture-analysis.md`](../notes/pi-netboot-capture-analysis.md)
+   — OACK `tsize`/`blksize`, serve-by-name + ERROR(1)-tolerant, the option-43 blob).
+3. **3c — firmware self-provisioning (i70).** After the core; bridged by the client
+   meanwhile. **HTTPS-direct-from-GitHub (i88) is a later stretch.**
 4. **Cross-cutting — i80** (SimCoupé Trinity-net emulation) for host iteration, and
    **i87** (dump + reverse Pete's patched SAM ROM) when his SAM is next online.
 
@@ -253,8 +290,8 @@ host design removes.
 - **q12 → resolved:** Model A only (PXE pull, bare Pi). Model B rejected (§6.5).
 - **q11 → resolved:** no Colin dependency (materials in hand + Pete's patched ROM,
   §3); DHCP is in scope and wanted (§6.3); bootstrap via the patched ROM (dump =
-  i87). The residual — the exact Pi file list + DHCP conventions — is *research*,
-  not a Pete decision (§6.4), confirmed by capture (§9).
+  i87). The residual research — the Pi file list + DHCP conventions — is now
+  **settled** from real captures ([`../notes/pi-netboot-capture-analysis.md`](../notes/pi-netboot-capture-analysis.md), §9).
 - (For context: the inbound RRQ option set is settled, i82 §5.7; the storage layer
   is settled, §8; the target-RAM stance is q9.)
 
@@ -267,6 +304,9 @@ old sketch).
 
 ## 13. Related
 
+- [`../notes/pi-netboot-capture-analysis.md`](../notes/pi-netboot-capture-analysis.md)
+  — **the DHCP+TFTP server oracle** (real Pi 400 capture distilled into the i83/i86
+  implementation spec: option-43 blob, OACK options, probe/ERROR behaviour).
 - [`../notes/tftp-protocol-research.md`](../notes/tftp-protocol-research.md) — i82
   protocol authority (RFC corpus + trinload reuse map + client delta).
 - [`../notes/trinity-capabilities.md`](../notes/trinity-capabilities.md) — ENC28J60
@@ -277,8 +317,9 @@ old sketch).
 - [`samdos-file-io.md`](samdos-file-io.md) — the DOS hooks the store reuses.
 - `~/git/trinload` (incl. `test/README.md`, commit `9ff9099`, captured frames),
   `~/sam-corpus/disks/trinity.mgt` (+ uIP), `~/sam-archive/bdos/analysis/`.
-- Item registry: i82 (client), i83 (server), i86 (DHCP responder), i70 (HTTP
-  self-provisioning), i80 (SimCoupé Trinity-net emulation), i87 (patched-ROM dump),
-  i58/i61/i62/i71 (Trinity + B-DOS research).
+- Item registry: i82 (client), i83 (server), i86 (DHCP responder), i70 (firmware
+  self-provisioning), i88 (HTTPS-from-GitHub stretch), i80 (SimCoupé Trinity-net
+  emulation), i87 (patched-ROM dump), i89 (Pi 3 capture), i58/i61/i62/i71 (Trinity +
+  B-DOS research).
 - [`phase3-tftp-design.md`](phase3-tftp-design.md) — the prior sketch this
   supersedes.
