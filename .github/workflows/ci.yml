@@ -154,6 +154,27 @@ jobs:
       - name: Netboot oracle (DHCP/TFTP golden vectors)
         run: make ci-netboot-oracle
 
+  # netboot-z80 — the SAM-side Z80 port of the netboot protocol logic
+  # (src/netboot/*.asm), assembled with pyz80 and run under the flat-memory
+  # koron-go/z80 harness, byte-compared against the same golden vectors the Go
+  # authority is checked against (tools/netboot-oracle/z80).  This gates the
+  # host-verifiable half of the Z80 port: the packet builders are pure
+  # arithmetic + memory writes, so the emitted bytes are a real, observable
+  # verification.  Needs pyz80 (so a pip install), unlike the pure-Go
+  # netboot-oracle job; still no SimCoupé container.  The ENC28J60 wire I/O +
+  # end-to-end Pi boot remain NOT host-verifiable (gated on i80/real-Trinity).
+  netboot-z80:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: Install pyz80
+        run: pip install --break-system-packages git+https://github.com/simonowen/pyz80
+      - name: Netboot Z80 routines vs golden vectors
+        run: make ci-netboot-z80
+
   # sysreg-sync — Go↔Z80 sysreg table sync guard (repo-audit §5 / §6 #9).
   # Asserts the hand-maintained Z80 table src/sysreg_data.asm agrees
   # byte-for-byte with the Go authority tools/sam-aarch64-format/sysregs.go

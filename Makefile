@@ -59,6 +59,24 @@ ci-disasm-roundtrip: test-disasm
 ci-netboot-oracle:
 	cd tools/netboot-oracle && go test ./...
 
+# netboot Z80 routines — the SAM-side port (src/netboot/*.asm) of the netboot
+# protocol logic, assembled with pyz80 to a standalone &8000 binary + symbol
+# map.  Host-verifiable: ci-netboot-z80 runs each routine under the flat-memory
+# koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
+# packet against the same golden vectors the Go authority is checked against.
+# Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
+.PHONY: netboot-build-udp-frame ci-netboot-z80
+$(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/netboot_build_udp_frame.bin \
+	    --mapfile=$(BUILD)/netboot_build_udp_frame.map \
+	    src/netboot/build_udp_frame.asm
+
+netboot-build-udp-frame: $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map
+
+ci-netboot-z80: netboot-build-udp-frame
+	cd tools/netboot-oracle/z80 && go test ./...
+
 test-format: sam-aarch64
 	cd tools/sam-aarch64-format && go test ./...
 	cd tools/sam-aarch64 && go test ./...
@@ -89,7 +107,7 @@ sysreg-sync-check:
 # modules to STATICCHECK_MODULES as they appear.
 .PHONY: staticcheck
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.7.0
-STATICCHECK_MODULES := comment-bench sam-aarch64-format sam-aarch64 aarch64enc aarch64dec enctab-gen z80-test-harness-go zx0-greedy editor-prototype netboot-oracle
+STATICCHECK_MODULES := comment-bench sam-aarch64-format sam-aarch64 aarch64enc aarch64dec enctab-gen z80-test-harness-go zx0-greedy editor-prototype netboot-oracle netboot-oracle/z80
 staticcheck:
 	for m in $(STATICCHECK_MODULES); do \
 	    echo "=== staticcheck (U1000) $$m ==="; \

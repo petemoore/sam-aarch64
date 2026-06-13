@@ -16,6 +16,10 @@ an end-to-end Pi boot, which stay gated on i80 / real Trinity.
 - `tftp` — RRQ/OACK/DATA/ACK/ERROR + serve-by-name resolve + the client/server
   transfer-loop state machines (the Go reference for the Z80 DATA/ACK loops).
 - `pcap` — dependency-free libpcap/pcapng reader. `golden` — masked vectors.
+- `z80/` — a nested Go module: a flat-memory koron-go/z80 harness that runs the
+  SAM-side Z80 port (`src/netboot/*.asm`) and byte-compares its output against
+  these golden vectors (`make ci-netboot-z80`, the `netboot-z80` CI job). Nested
+  so this pure-Go module stays dependency-free; the Z80/pyz80 deps live there.
 
 ## Run
 
