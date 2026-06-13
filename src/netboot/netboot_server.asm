@@ -58,13 +58,11 @@
 ; Frame field offsets in the received frame (the §1.2 offset contract; RX_
 ; prefix so they don't clash with the included primitives' OFF_*/AR_OFF_*).
 ; ===========================================================================
-RX_ETH_DSTMAC:    equ 0
 RX_ETH_SRCMAC:    equ 6
 RX_ETHERTYPE:     equ 12
 RX_IP_FLAGS:      equ 20
 RX_IP_PROTO:      equ 23
 RX_IP_SRC:        equ 26
-RX_IP_DST:        equ 30
 RX_UDP_SRCPORT:   equ 34                 ; big-endian on the wire
 RX_UDP_DSTPORT:   equ 36                 ; big-endian on the wire
 RX_UDP_PAYLOAD:   equ 42
