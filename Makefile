@@ -65,7 +65,7 @@ ci-netboot-oracle:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-z80-routines ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -241,8 +241,44 @@ netboot-smoke-disk: $(BUILD)/netboot_smoke_boot.bin $(BUILD)/build-disk
 	$(BUILD)/build-disk -netboot $(BUILD)/netboot_smoke_boot.bin -netboot-name smoke \
 	    $(BUILD)/netboot_smoke.mgt
 
+# netboot-server (i95) — the integrated netboot server: one main-loop dispatcher
+# (netboot_serve_once) that routes a received frame to ARP / DHCP / TFTP-RRQ /
+# TFTP-ACK, composing the host-verified builders/parsers + the real driver.  Two
+# builds from one source:
+#   * the host-test binary (NETBOOT_HOSTTEST) excludes netboot_main + eeprom.asm
+#     so the harness drives netboot_serve_once directly; netboot_server_test.go
+#     asserts a full DISCOVER->OFFER->REQUEST->ACK->ARP->RRQ->OACK->ACK->DATA
+#     session on the virtual wire matches the Go server.Server.OnFrame authority
+#     byte-for-byte.
+#   * the bootable binary (no flag) includes netboot_main + eeprom.asm so it
+#     reads the SAM's real MAC/IP, sets a fixed DHCP pool, and serves on real
+#     Trinity (the disk built by netboot-server-disk).
+$(BUILD)/netboot_server.bin $(BUILD)/netboot_server.map: src/netboot/netboot_server.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/dhcp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_HOSTTEST=1 \
+	    --obj=$(BUILD)/netboot_server.bin \
+	    --mapfile=$(BUILD)/netboot_server.map \
+	    src/netboot/netboot_server.asm
+
+netboot-server: $(BUILD)/netboot_server.bin $(BUILD)/netboot_server.map
+
+# The bootable integrated-server binary: the full program including the EEPROM
+# config read + the fixed-pool netboot_main forever-loop, for real Trinity.
+$(BUILD)/netboot_server_boot.bin: src/netboot/netboot_server.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/dhcp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/netboot_server_boot.bin src/netboot/netboot_server.asm
+
+netboot-server-boot: $(BUILD)/netboot_server_boot.bin
+
+# A bootable SAM disk image that auto-runs the integrated netboot server on
+# power-on.  Boot it on a SAM + Trinity, then point a Pi at the SAM and watch it
+# netboot (see docs/notes/netboot-trinity-testing.md "Increment 2").
+netboot-server-disk: $(BUILD)/netboot_server_boot.bin $(BUILD)/build-disk
+	$(BUILD)/build-disk -netboot $(BUILD)/netboot_server_boot.bin -netboot-name netboot \
+	    $(BUILD)/netboot_server.mgt
+
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server
 
 ci-netboot-z80: netboot-z80-routines
 	cd tools/netboot-oracle/z80 && go test ./...
