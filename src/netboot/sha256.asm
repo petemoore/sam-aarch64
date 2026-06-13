@@ -467,12 +467,12 @@ sha_copy4:
 
 ; ---------------------------------------------------------------------------
 ; sha_add4 — 32-bit add mod 2^32: (HL word) += (DE word), big-endian, carry
-; propagated from LSB (byte 3) up to MSB (byte 0).
+; propagated from LSB (byte 3) up to MSB (byte 0). HL/DE are NOT preserved (they
+; walk down to dst-1/src-1); every caller reloads them before reuse, so the add
+; avoids the push/pop on this hot helper (called ~648x per compression).
 ; In: HL -> dst word, DE -> src word. Out: dst += src. Clobbers A,B,DE,HL.
 ; ---------------------------------------------------------------------------
 sha_add4:
-                push    hl
-                push    de
                 ld      bc, 3
                 add     hl, bc                  ; HL -> dst+3 (LSB)
                 ex      de, hl
@@ -488,8 +488,6 @@ sha_add4_lp:
                 dec     hl
                 dec     de
                 djnz    sha_add4_lp
-                pop     de
-                pop     hl
                 ret
 
 ; ---------------------------------------------------------------------------
