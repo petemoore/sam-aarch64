@@ -186,3 +186,34 @@ func TestTFTPClientFrontIgnoresNonMatch(t *testing.T) {
 		t.Errorf("tftp_recv_arp BC=%d after the matching reply, want 1", res.BC)
 	}
 }
+
+// TestTFTPClientFrontLearnsSHA pins that the server MAC is learned from the ARP
+// sender-hardware-address (SHA), not the Ethernet source MAC — matching the Go
+// authority frame.ParseARPReply (which reads p[8:14]). A reply whose Ethernet
+// source differs from its SHA must yield the SHA as the learned MAC.
+func TestTFTPClientFrontLearnsSHA(t *testing.T) {
+	mac := loadTFTPFront(t)
+	_ = fillTFTPFront(t, mac, "config.txt")
+	enc := z80h.NewENC28J60()
+	initTFTPFrontDriver(t, mac, enc)
+
+	// Build a reply whose Ethernet source MAC is a decoy, while the ARP SHA is
+	// the true server MAC (the field the parser must trust).
+	sha := frame.MAC{0x02, 0x00, 0x00, 0x00, 0x00, 0xAB}
+	ethSrc := frame.MAC{0x02, 0x00, 0x00, 0x00, 0x00, 0xCD}
+	reply := arpReplyFromServer(sha, mask.ServerIP)
+	copy(reply[frame.OffSrcMAC:frame.OffSrcMAC+6], ethSrc[:]) // decoy Eth source
+
+	enc.InjectRX(reply)
+	res, err := mac.Call("tftp_recv_arp")
+	if err != nil {
+		t.Fatalf("call tftp_recv_arp: %v", err)
+	}
+	if res.BC != 1 {
+		t.Fatalf("tftp_recv_arp BC=%d, want 1 (learned)", res.BC)
+	}
+	got := mac.Read(symAddr(t, mac, "SERVER_MAC"), 6)
+	if !bytes.Equal(got, sha[:]) {
+		t.Errorf("learned SERVER_MAC = %x, want the ARP SHA %x (not the Eth source %x)", got, sha, ethSrc)
+	}
+}

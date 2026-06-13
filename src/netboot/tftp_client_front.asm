@@ -41,17 +41,26 @@
                 org     &8000
 
 ; ---------------------------------------------------------------------------
-; Frame field offsets shared with the receive side (RX_ prefix to avoid a clash
-; with the build_udp_frame OFF_* equs included below). ARP payload offsets are
-; measured from the Ethernet header (14) like build_arp_request's.
+; Frame field offsets shared with the receive side (FR_ prefix to avoid a clash
+; with the build_udp_frame OFF_* equs included below). ARP payload field
+; offsets are measured from the Ethernet header (14), matching the Go
+; frame.ParseARPReply layout and build_arp_request's.
 ; ---------------------------------------------------------------------------
-FR_ETH_SRCMAC:    equ 6
 FR_ETHERTYPE:     equ 12
 FR_ARP_BASE:      equ 14                 ; ARP payload begins after the Eth header
-FR_ARP_OPER:      equ 14 + 6             ; OPER field (offset 6 within the payload)
-FR_ARP_SPA:       equ 14 + 14            ; sender protocol address (sender IP)
+FR_ARP_HTYPE:     equ 14 + 0             ; 2 bytes  hardware type
+FR_ARP_PTYPE:     equ 14 + 2             ; 2 bytes  protocol type
+FR_ARP_HLEN:      equ 14 + 4             ; 1 byte   hardware address length
+FR_ARP_PLEN:      equ 14 + 5             ; 1 byte   protocol address length
+FR_ARP_OPER:      equ 14 + 6             ; 2 bytes  operation
+FR_ARP_SHA:       equ 14 + 8             ; 6 bytes  sender hardware address (MAC)
+FR_ARP_SPA:       equ 14 + 14            ; 4 bytes  sender protocol address (IP)
 
 ETYPE_ARP:        equ &0806
+ARP_HTYPE_ETH:    equ 1                  ; hardware type: Ethernet
+ARP_PTYPE_IPV4:   equ &0800              ; protocol type: IPv4
+ARP_HLEN:         equ 6                  ; MAC length
+ARP_PLEN:         equ 4                  ; IPv4 length
 ARP_OP_REPLY:     equ 2
 
 UDP_PORT_TFTP:    equ 69                 ; the server's RRQ listen port
@@ -82,8 +91,14 @@ tftp_send_arp:
                 ret
 
 ; ---------------------------------------------------------------------------
-; tftp_recv_arp — read one frame; if it is an ARP reply for SERVER_IP, learn the
-; server MAC. Out: BC = 1 if the server MAC was learned, 0 otherwise.
+; tftp_recv_arp — read one frame; if it is a well-formed ARP reply for
+; SERVER_IP, learn the server MAC. Out: BC = 1 if learned, 0 otherwise.
+;
+; The accept tests + the learned field mirror the Go authority
+; frame.ParseARPReply: EtherType ARP, HTYPE=Ethernet, PTYPE=IPv4, HLEN=6,
+; PLEN=4, OPER=reply; the server MAC is the ARP sender-hardware-address (SHA),
+; not the Ethernet source (the two are equal in a conformant reply, but SHA is
+; the authoritative field), and the sender-protocol-address must equal SERVER_IP.
 ; ---------------------------------------------------------------------------
 tftp_recv_arp:
                 ld      hl, RXBUF
@@ -98,6 +113,28 @@ tftp_recv_arp:
                 jr      nz, arp_no
                 ld      a, (RXBUF + FR_ETHERTYPE + 1)
                 cp      ETYPE_ARP & &ff
+                jr      nz, arp_no
+
+                ; HTYPE == Ethernet (1, big-endian)?
+                ld      a, (RXBUF + FR_ARP_HTYPE)
+                or      a
+                jr      nz, arp_no             ; high byte must be 0
+                ld      a, (RXBUF + FR_ARP_HTYPE + 1)
+                cp      ARP_HTYPE_ETH
+                jr      nz, arp_no
+                ; PTYPE == IPv4 (&0800, big-endian)?
+                ld      a, (RXBUF + FR_ARP_PTYPE)
+                cp      ARP_PTYPE_IPV4 >> 8
+                jr      nz, arp_no
+                ld      a, (RXBUF + FR_ARP_PTYPE + 1)
+                cp      ARP_PTYPE_IPV4 & &ff
+                jr      nz, arp_no
+                ; HLEN == 6, PLEN == 4?
+                ld      a, (RXBUF + FR_ARP_HLEN)
+                cp      ARP_HLEN
+                jr      nz, arp_no
+                ld      a, (RXBUF + FR_ARP_PLEN)
+                cp      ARP_PLEN
                 jr      nz, arp_no
 
                 ; OPER == reply (2, big-endian)?
@@ -120,8 +157,8 @@ arp_ip_cmp:
                 inc     de
                 djnz    arp_ip_cmp
 
-                ; match: learn the server MAC from the Ethernet source.
-                ld      hl, RXBUF + FR_ETH_SRCMAC
+                ; match: learn the server MAC from the ARP sender-hardware-addr.
+                ld      hl, RXBUF + FR_ARP_SHA
                 ld      de, SERVER_MAC
                 ld      bc, 6
                 ldir
