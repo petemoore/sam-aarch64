@@ -31,7 +31,31 @@ func loadFE(t *testing.T) *z80h.Machine {
 	if err != nil {
 		t.Fatalf("load x25519: %v", err)
 	}
+	// mul8 uses the quarter-square table, which x25519 builds at its entry but the
+	// field-op entries (fe_mul/fe_sqr/fe_invert/...) assume already built — so the
+	// standalone tests build it here, once per freshly-loaded machine.
+	if _, err := mac.Call("qsq_init"); err != nil {
+		t.Fatalf("qsq_init: %v", err)
+	}
 	return mac
+}
+
+// TestMul8Exhaustive verifies the quarter-square byte multiply against the true
+// product for ALL 256x256 operand pairs — a complete correctness proof of mul8
+// (and therefore of qsq_table), independent of the higher-level field tests.
+func TestMul8Exhaustive(t *testing.T) {
+	mac := loadFE(t)
+	for a := 0; a < 256; a++ {
+		for e := 0; e < 256; e++ {
+			res, err := mac.CallEntry("mul8", z80h.Entry{A: uint8(a), DE: uint16(e)})
+			if err != nil {
+				t.Fatalf("mul8(%d,%d): %v", a, e, err)
+			}
+			if want := uint16(a * e); res.HL != want {
+				t.Fatalf("mul8(%d,%d) = %d, want %d", a, e, res.HL, want)
+			}
+		}
+	}
 }
 
 // fePrime is p = 2^255 - 19.
