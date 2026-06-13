@@ -40,7 +40,7 @@ var DefaultCLUT = [16]uint8{
 	2:  32,  // red
 	3:  48,  // magenta
 	4:  64,  // green
-	5:  18,  // cyan
+	5:  80,  // cyan
 	6:  96,  // yellow
 	7:  120, // white
 	8:  0,   // black (bright variant of 0)
