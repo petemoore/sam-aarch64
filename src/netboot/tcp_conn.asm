@@ -48,9 +48,8 @@
                 org     &8000
 
 ; Inbound frame offsets (mirror tcp/tcp.go; CRX_ prefix to avoid a clash with
-; the build_tcp_segment TCP_OFF_* equates it includes).
-CRX_ETH_SRCMAC:   equ 6
-CRX_IP_SRC:       equ 26
+; the build_tcp_segment TCP_OFF_* equates it includes). The connection is keyed
+; by ports + the pre-configured server endpoint, so only the L4 fields are read.
 CRX_TCP_SRCPORT:  equ 34                 ; big-endian on the wire
 CRX_TCP_DSTPORT:  equ 36
 CRX_TCP_SEQ:      equ 38                 ; 4 bytes big-endian
