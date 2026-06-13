@@ -48,6 +48,7 @@
 ; ===========================================================================
 BODY_HDR_DONE:    defb 0          ; 0 until the "\r\n\r\n" header terminator is seen
 
+                if defined(NETBOOT_STANDALONE)
 ; BODY_IN — the input staging the host test writes each chunk into before calling
 ; body_sink_write (HL = BODY_IN, BC = chunk length).  Sized well above any test
 ; chunk; the real adapter is handed the connection's flush buffer, not this.
@@ -61,6 +62,7 @@ BODY_OUT_LEN:     defs 2          ; total body bytes forwarded so far
 BODY_CHUNK_COUNT: defs 2          ; number of forwarded Writes
 BODY_CHUNKS:      defs 128        ; per-Write lengths (16-bit LE), up to 64 writes
 BODY_OUT:         defs 8192       ; concatenation of all forwarded body bytes
+                endif
 
 ; ===========================================================================
 ; body_sink_write — process one flushed window (the bodySink.Write port).
@@ -207,12 +209,37 @@ bfh_drop:
                 ret
 
 ; ===========================================================================
-; body_dst_write — the recording test double (the dst Sink).  Append BC bytes
-; from HL to BODY_OUT, record the write length into BODY_CHUNKS, bump the count.
-; The Z80 analogue of tcp.ChunkSink.Write; the real adapter forwards to the
-; storage sink instead.  In: HL = ptr, BC = length (> 0).  Clobbers A, BC, DE, HL.
+; body_dst_write — the call-through to (BODY_DST_PTR).
+;
+; In the standalone build (NETBOOT_STANDALONE) BODY_DST_PTR defaults to
+; body_record_leaf (the recording test double); in the composed http_main build
+; the orchestration sets BODY_DST_PTR = storage_sink_leaf before use, routing
+; the body bytes into the hash + record path.
+;
+; In: HL = ptr, BC = length (> 0).  Clobbers: A, BC, DE, HL, IX (and whatever
+; the callee clobbers).
 ; ===========================================================================
 body_dst_write:
+                ; Load the function pointer into IX and tail-call through it.
+                ; HL (data ptr) and BC (length) are preserved for the callee.
+                ld      ix, (BODY_DST_PTR)
+                jp      (ix)
+
+; BODY_DST_PTR — the forwarding target for body_dst_write.  Default points to
+; body_record_leaf (the standalone recording double); the composed build sets
+; this to storage_sink_leaf before the body arrives.
+                if defined(NETBOOT_STANDALONE)
+BODY_DST_PTR:   defw    body_record_leaf
+                else
+BODY_DST_PTR:   defw    0                      ; composed build: caller sets before use
+                endif
+
+                if defined(NETBOOT_STANDALONE)
+; body_record_leaf — the recording test double (the dst Sink).  Append BC bytes
+; from HL to BODY_OUT, record the write length into BODY_CHUNKS, bump the count.
+; The Z80 analogue of tcp.ChunkSink.Write.
+; In: HL = ptr, BC = length (> 0).  Clobbers A, BC, DE, HL.
+body_record_leaf:
                 push    bc                      ; save length
                 ; append [HL, HL+BC) to BODY_OUT at its tail.
                 ld      de, (BODY_OUT_LEN)
@@ -241,3 +268,4 @@ body_dst_write:
                 inc     hl
                 ld      (BODY_CHUNK_COUNT), hl
                 ret
+                endif

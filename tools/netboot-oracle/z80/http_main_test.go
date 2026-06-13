@@ -47,7 +47,8 @@ func TestHTTPMainComposes(t *testing.T) {
 		"http_fetch_first", "http_fetch_onframe",
 		// the pinned manifest + the per-file path builder (fw_source.asm)
 		"fw_plan_path", "fw_manifest_entry", "FW_PATH", "FW_MANIFEST",
-		// (body_sink.asm's body_sink_write joins in Brick 3 — see the plan)
+		// the HTTP header-skip filter (body_sink.asm, joined in Brick 3)
+		"body_sink_write", "storage_sink_leaf",
 		// the streaming sink + the SHA-256 verify (tcp_conn.asm, NETBOOT_HOSTTEST)
 		"CONN_SINK_ENABLED", "storage_sink_flush", "conn_verify_init", "conn_verify_final",
 		"CONN_PINNED_HASH", "CONN_HASH_MATCH",

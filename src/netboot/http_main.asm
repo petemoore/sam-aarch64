@@ -35,7 +35,11 @@
                                                 ; build_tcp_segment + encdrv + sha256
                 include "fw_source.asm"         ; FW_MANIFEST + fw_plan_path
                                                 ; (NETBOOT_STANDALONE off -> no org)
-                                                ; body_sink.asm joins in Brick 3.
+                include "body_sink.asm"         ; body_sink_write (header skip);
+                                                ; recording doubles (BODY_IN/BODY_OUT)
+                                                ; guarded behind NETBOOT_STANDALONE so
+                                                ; the composed binary fits the &8000-
+                                                ; &10000 window (Brick 3).
 
 ; prov_skeleton — the Brick 1 placeholder entry so the composed binary has a
 ; public label to assemble. Superseded by prov_first/prov_onframe/prov_next in

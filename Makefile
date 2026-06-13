@@ -445,7 +445,7 @@ netboot-http: $(BUILD)/netboot_http.bin $(BUILD)/netboot_http.map
 # body_sink.asm joins in Brick 3). Host-test build (NETBOOT_HOSTTEST) — the prov_*
 # driver is host-verified against the Go authority; see
 # docs/plans/z80-http-main-port-plan.md.
-$(BUILD)/netboot_http_main.bin $(BUILD)/netboot_http_main.map: src/netboot/http_main.asm src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/sha256.asm src/netboot/fw_source.asm
+$(BUILD)/netboot_http_main.bin $(BUILD)/netboot_http_main.map: src/netboot/http_main.asm src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/sha256.asm src/netboot/fw_source.asm src/netboot/body_sink.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_HOSTTEST=1 \
 	    --obj=$(BUILD)/netboot_http_main.bin \
