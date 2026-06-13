@@ -762,3 +762,58 @@ func rebuildRRQ(name string) []byte {
 		Payload: tftp.BuildRRQ(name, "octet", []tftp.Option{{Name: "tsize", Value: "0"}, {Name: "blksize", Value: "1024"}}),
 	})
 }
+
+// TestClientLoopFrames drives the i82 client receive loop authority (the framed
+// DATA/ACK loop the Z80 tftp_client_loop.asm ports): the captured DATA block 1
+// yields an ACK frame back to the server TID (learned from that first DATA),
+// then a short final block ends the transfer; the SAS timeout retransmits the
+// last ACK frame only.
+func TestClientLoopFrames(t *testing.T) {
+	const blksize = 1024
+	clientTID := uint16(30574)
+	cl := tftp.NewClientLoop(mask.ClientMAC, mask.ClientIP, clientTID, blksize)
+
+	// Block 1: the captured DATA frame (server -> client). The loop learns the
+	// server TID (its source port) and ACKs block 1 back to it.
+	ackFrame := cl.OnDATA(golden.TFTPData)
+	if ackFrame == nil {
+		t.Fatal("client loop produced no ACK for DATA block 1")
+	}
+	au, ok := frame.ParseUDP(ackFrame)
+	if !ok || au.SrcPort != clientTID {
+		t.Fatalf("ACK src port = %d, want client TID %d", au.SrcPort, clientTID)
+	}
+	// The captured DATA's source port is the server TID; the ACK must go there.
+	du, _ := frame.ParseUDP(golden.TFTPData)
+	if au.DstPort != du.SrcPort {
+		t.Errorf("ACK dst port = %d, want learned server TID %d", au.DstPort, du.SrcPort)
+	}
+	// The captured DATA is block 1; the loop (acked starts at 0) accepts it and
+	// ACKs block 1.
+	if blk, err := tftp.ParseACK(au.Payload); err != nil || blk != 1 {
+		t.Errorf("ACK block = %d (err %v), want 1", blk, err)
+	}
+
+	// A stray DATA from a different server TID -> ERROR(5), not an ACK.
+	stray := frame.BuildUDPFrame(frame.UDP{
+		DstMAC: mask.ClientMAC, SrcMAC: mask.ServerMAC,
+		SrcIP: mask.ServerIP, DstIP: mask.ClientIP,
+		SrcPort: du.SrcPort + 1, DstPort: clientTID,
+		Payload: tftp.BuildDATA(99, make([]byte, blksize)),
+	})
+	sf := cl.OnDATA(stray)
+	su, _ := frame.ParseUDP(sf)
+	if code, _, _ := tftp.ParseError(su.Payload); code != tftp.ErrUnknownTID {
+		t.Errorf("stray-TID reply code = %d, want 5 (unknown TID)", code)
+	}
+
+	// The SAS timeout retransmits the last ACK frame only (never an RRQ).
+	rt := cl.OnTimeout()
+	if rt == nil {
+		t.Fatal("timeout after an ACK should retransmit the last ACK")
+	}
+	ru, _ := frame.ParseUDP(rt)
+	if tftp.Opcode(ru.Payload) != tftp.OpACK {
+		t.Errorf("SAS violation: timeout retransmitted opcode %d, want ACK", tftp.Opcode(ru.Payload))
+	}
+}
