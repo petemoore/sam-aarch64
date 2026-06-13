@@ -71,7 +71,7 @@ http_build_request:
                 call    http_copy_cstr
                 ld      hl, http_lit_ver
                 call    http_copy_cstr
-                ld      hl, HTTP_HOST
+                ld      hl, (HTTP_HOST_PTR)     ; the per-file host (default HTTP_HOST)
                 call    http_copy_cstr
                 ld      hl, http_lit_end
                 call    http_copy_cstr
@@ -261,12 +261,15 @@ HTTP_PATH:      defm "/firmware/start4.elf"
 HTTP_HOST:      defm "fw.local"
                 defb 0
 
-; The path http_build_request copies — settable so the multi-file fetch loop
-; (http_main's prov_start) can point each request at the file's fw_plan_path
-; output (FW_PATH). Defaults to the baked HTTP_PATH, so the single-file fetch and
-; the bootable build are behaviourally unchanged. Placed after the strings above
-; so their addresses (which the harness reads back) are unshifted.
+; The path + host http_build_request copies — settable so the multi-file fetch
+; loop (http_main's prov_start) can point each request at the file's fw_plan_path
+; output (FW_PATH) and the firmware host (FW_HOST). Both default to the baked
+; HTTP_PATH / HTTP_HOST, so the single-file fetch and the bootable build are
+; behaviourally unchanged. Placed after the strings above so their addresses
+; (which the harness reads back) are unshifted. `ld hl,(nn)` is the same length as
+; `ld hl,nn`, so the only bootable growth is these two defw words.
 HTTP_PATH_PTR:  defw HTTP_PATH
+HTTP_HOST_PTR:  defw HTTP_HOST
 
 ; http_parse_response outputs (the harness reads these).
 HTTP_OK:        defs 1
