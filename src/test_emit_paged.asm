@@ -19,8 +19,8 @@
 ;      LMPR=LMPR_OUT_HIGH section-B window).
 ;   5. The 32768th byte fills the buffer exactly: emit succeeds and
 ;      parks OUT_PC at the &8000 "buffer full" sentinel with
-;      OUT_LEN = 32768 (i73 L1 — the off-by-one that used to reject a
-;      full 32768-byte output).
+;      OUT_LEN = 32768 (i73 L1 — the buffer's full 32768-byte capacity
+;      is usable).
 ;
 ; A failure does `jp fail` — same red-border + printer-channel "FAIL"
 ; banner as every other self-test suite.  When the test owns an LMPR
@@ -137,8 +137,8 @@ run_emit_paged_self_tests:
 ; Force the zone-1 final position (OUT_PC = &7FFF, zone 1, 32767 bytes
 ; already emitted).  Emitting one more writes byte #32768 at &7FFF
 ; (page 6) and must leave OUT_PC at the &8000 "buffer full" sentinel with
-; OUT_LEN = 32768 — the legal full-buffer state.  Before the i73 L1 fix
-; this byte spuriously did jp fail (tag b0).
+; OUT_LEN = 32768 — the legal full-buffer state.  It must succeed: a
+; spurious tag-b0 jp fail on this byte is the i73 L1 regression.
                 ld      a, 1
                 ld      (OUT_ZONE), a
                 ld      hl, &7FFF
