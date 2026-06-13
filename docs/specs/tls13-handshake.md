@@ -8,8 +8,10 @@ capstone **brick 6 (state machine)** remains. **q17 (the `&10000` memory budget)
 RESOLVED** (Pete 2026-06-15: use paging, the agent owns the layout), so brick 6 is
 unblocked on memory architecture; its remaining gate is the bootable/hardware integration
 (the real `RST 8` path on Trinity, partly hardware-gated like `http_main`). The host-side
-Go authority that brick 6 mirrors is fully unblocked — see
-`docs/plans/tls-go-authority-plan.md`. i88 is the project's **lowest-priority** work (build only
+**Go authority that brick 6 mirrors has LANDED** (2026-06-16): `tools/netboot-oracle/tls/`
+— a `Client` that completes a real 1-RTT handshake against Go `crypto/tls.Server` over
+`net.Pipe`, cross-checking every derived secret against the server's `KeyLogWriter`. The
+Z80 brick-6 state machine ports it (CLAUDE.md §6). i88 is the project's **lowest-priority** work (build only
 when nothing else remains) — see `docs/notes/item-registry-open.md` i88 and
 `phase3-delivery-design.md` §7 for the rationale (the active firmware-fetch path is
 plain HTTP via `cdn.githubraw.com` + a SHA-256 content pin; TLS is the durable
@@ -158,7 +160,11 @@ Each is a standalone, host-verified PR, mirroring the primitive cadence:
    Finished, switch to application keys, then run the HTTP GET through
    `tls_record_seal`/`open`. This is the integration capstone (q17 resolved — use
    paging; the remaining gate is the tcp_conn streaming + the bootable/hardware
-   integration, partly hardware-gated like `http_main`).
+   integration, partly hardware-gated like `http_main`). **Go authority landed**
+   (2026-06-16): `tools/netboot-oracle/tls/`'s `Client` is the byte-for-byte
+   reference — it completes a real handshake against `crypto/tls.Server` over
+   `net.Pipe` with a `KeyLogWriter` secret cross-check; the Z80 port mirrors its
+   `First()`/`OnRecord` sequencing.
 
 ## Verification strategy
 

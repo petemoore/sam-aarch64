@@ -1,0 +1,218 @@
+package tls
+
+// The capstone: drive our Client through a complete 1-RTT handshake against a
+// real crypto/tls.Server over net.Pipe, and cross-check every derived secret
+// against the server's SSLKEYLOGFILE output. crypto/tls accepting our Finished
+// (Handshake() == nil) proves the orchestration; the keylog match proves our
+// independent key schedule + ECDHE agree with the stdlib's, byte for byte.
+
+import (
+	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	gotls "crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"strings"
+	"testing"
+	"time"
+)
+
+// selfSignedCert builds a throwaway ECDSA-P256 certificate for the test server.
+// We offer ecdsa_secp256r1_sha256, so the server can sign CertificateVerify with
+// it. We never validate it (i88 scope), but TLS 1.3 requires the server present one.
+func selfSignedCert(t *testing.T) gotls.Certificate {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		DNSNames:     []string{"github.com"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return gotls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv}
+}
+
+// readRecord reads one full TLS record (5-byte header + payload) from conn.
+func readRecord(conn net.Conn) ([]byte, error) {
+	hdr := make([]byte, 5)
+	if _, err := io.ReadFull(conn, hdr); err != nil {
+		return nil, err
+	}
+	n := int(hdr[3])<<8 | int(hdr[4])
+	body := make([]byte, n)
+	if _, err := io.ReadFull(conn, body); err != nil {
+		return nil, err
+	}
+	return append(hdr, body...), nil
+}
+
+func serverConfig(t *testing.T, keylog io.Writer) *gotls.Config {
+	return &gotls.Config{
+		Certificates:           []gotls.Certificate{selfSignedCert(t)},
+		CipherSuites:           []uint16{gotls.TLS_CHACHA20_POLY1305_SHA256},
+		CurvePreferences:       []gotls.CurveID{gotls.X25519},
+		MinVersion:             gotls.VersionTLS13,
+		MaxVersion:             gotls.VersionTLS13,
+		KeyLogWriter:           keylog,
+		SessionTicketsDisabled: true, // no post-handshake tickets -> no pipe deadlock
+	}
+}
+
+func TestHandshakeAgainstCryptoTLS(t *testing.T) {
+	cli, srv := net.Pipe()
+	deadline := time.Now().Add(10 * time.Second)
+	cli.SetDeadline(deadline)
+	srv.SetDeadline(deadline)
+
+	var keylog bytes.Buffer
+	srvErr := make(chan error, 1)
+	go func() {
+		s := gotls.Server(srv, serverConfig(t, &keylog))
+		err := s.Handshake()
+		srv.Close()
+		srvErr <- err
+	}()
+
+	c, err := NewClient("github.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tx := c.First()
+	if _, err := cli.Write(tx); err != nil {
+		t.Fatalf("write ClientHello: %v", err)
+	}
+	for {
+		rx, err := readRecord(cli)
+		if err != nil {
+			t.Fatalf("read record (phase %d): %v", c.Phase(), err)
+		}
+		out, st, err := c.OnRecord(rx)
+		if err != nil {
+			t.Fatalf("OnRecord (phase %d): %v", c.Phase(), err)
+		}
+		if out != nil {
+			if _, err := cli.Write(out); err != nil {
+				t.Fatalf("write record: %v", err)
+			}
+		}
+		if st == StatusDone {
+			break
+		}
+	}
+	cli.Close()
+
+	if err := <-srvErr; err != nil {
+		t.Fatalf("server Handshake() rejected our handshake: %v", err)
+	}
+	if c.Phase() != PhaseDone {
+		t.Fatalf("client phase = %d, want PhaseDone", c.Phase())
+	}
+
+	checkKeylog(t, keylog.String(), c)
+}
+
+// checkKeylog cross-checks the four TLS 1.3 traffic secrets logged by the server
+// against our independently derived schedule, keyed by our ClientHello.random.
+func checkKeylog(t *testing.T, keylog string, c *Client) {
+	t.Helper()
+	clientRandom := c.ClientRandom()
+	cr := hex.EncodeToString(clientRandom[:])
+	ks := c.Schedule()
+	want := map[string][]byte{
+		"CLIENT_HANDSHAKE_TRAFFIC_SECRET": ks.CHS,
+		"SERVER_HANDSHAKE_TRAFFIC_SECRET": ks.SHS,
+		"CLIENT_TRAFFIC_SECRET_0":         ks.CAP,
+		"SERVER_TRAFFIC_SECRET_0":         ks.SAP,
+	}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(keylog), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 3 {
+			continue
+		}
+		label, lineRandom, secretHex := f[0], f[1], f[2]
+		w, ok := want[label]
+		if !ok {
+			continue
+		}
+		if lineRandom != cr {
+			continue // a different handshake's line
+		}
+		if secretHex != hex.EncodeToString(w) {
+			t.Errorf("%s mismatch:\n server %s\n   ours %s", label, secretHex, hex.EncodeToString(w))
+		}
+		seen[label] = true
+	}
+	for label := range want {
+		if !seen[label] {
+			t.Errorf("server keylog missing %s for our client_random %s", label, cr)
+		}
+	}
+}
+
+// TestClientHelloAcceptedByServer is a localized signal for staged debug: it
+// confirms crypto/tls parses our ClientHello into the offer we built (so a
+// full-handshake failure is downstream of the ClientHello).
+func TestClientHelloAcceptedByServer(t *testing.T) {
+	c, err := NewClient("github.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := c.First()[5:] // strip the record header -> the ClientHello handshake message
+
+	cli, srv := net.Pipe()
+	deadline := time.Now().Add(5 * time.Second)
+	cli.SetDeadline(deadline)
+	srv.SetDeadline(deadline)
+	captured := make(chan *gotls.ClientHelloInfo, 1)
+
+	go func() {
+		cfg := &gotls.Config{
+			GetConfigForClient: func(chi *gotls.ClientHelloInfo) (*gotls.Config, error) {
+				ci := *chi
+				captured <- &ci
+				return nil, fmt.Errorf("captured; stop")
+			},
+		}
+		_ = gotls.Server(srv, cfg).Handshake()
+		srv.Close()
+	}()
+	go io.Copy(io.Discard, cli)
+	rec := append([]byte{0x16, 0x03, 0x01, byte(len(ch) >> 8), byte(len(ch))}, ch...)
+	go cli.Write(rec)
+
+	select {
+	case chi := <-captured:
+		if chi.ServerName != "github.com" {
+			t.Errorf("ServerName = %q, want github.com", chi.ServerName)
+		}
+		var hasSuite bool
+		for _, s := range chi.CipherSuites {
+			if s == gotls.TLS_CHACHA20_POLY1305_SHA256 {
+				hasSuite = true
+			}
+		}
+		if !hasSuite {
+			t.Errorf("offer missing TLS_CHACHA20_POLY1305_SHA256")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("crypto/tls did not parse our ClientHello")
+	}
+	cli.Close()
+}
