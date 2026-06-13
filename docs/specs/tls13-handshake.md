@@ -1,8 +1,10 @@
 # On-SAM TLS 1.3 handshake — implementation spec (i88)
 
-Status: **design / not yet implemented.** The cipher-suite primitives below are
-all built and host-verified; this doc is the plan for composing them into a
-working TLS 1.3 client. i88 is the project's **lowest-priority** work (build only
+Status: **in progress.** The cipher-suite primitives below are all built and
+host-verified; this doc is the plan for composing them into a working TLS 1.3
+client. Bricks **1 (key schedule), 2 (record), 3 (ClientHello), 5 (transcript)**
+are landed (standalone, host-verified leaves); brick **4 (server-flight parser)**
+is next, and the capstone **brick 6 (state machine)** is gated on q17. i88 is the project's **lowest-priority** work (build only
 when nothing else remains) — see `docs/notes/item-registry.md` i88 and
 `phase3-delivery-design.md` §7 for the rationale (the active firmware-fetch path is
 plain HTTP via `cdn.githubraw.com` + a SHA-256 content pin; TLS is the durable
@@ -119,10 +121,15 @@ Each is a standalone, host-verified PR, mirroring the primitive cadence:
    + the header-AAD AEAD wrapper. Verified by a seal→open round-trip + an
    independent Go reconstruction of the §5.2/§5.3 framing fed through the verified
    `aead_encrypt` (byte-exact record) + tamper/wrong-sequence rejection.
-3. **ClientHello builder** (`tls_build_client_hello`): emit the CH bytes for our
-   fixed offer (X25519 key_share from a supplied ephemeral pub, the four required
-   extensions + SNI). Verify the byte layout against a fixed golden vector + a Go
-   `crypto/tls`-parser cross-check (the oracle parses our CH).
+3. **ClientHello builder** (`tls_build_client_hello`) — **LANDED**
+   (`src/netboot/tls_client_hello.asm`, `tls_client_hello_test.go`): emit the CH
+   bytes for our fixed offer (X25519 key_share from a supplied ephemeral pub, the
+   four required extensions + SNI). Pure byte assembly with back-patched container
+   lengths. Verified three ways: byte-identical to an independent Go reconstruction
+   of the §4.1.2 framing; parsed by Go `crypto/tls` into a `tls.ClientHelloInfo`
+   (the stdlib TLS implementation as an independent structural oracle — it rejects
+   a malformed message and reports the offer we built); and a hand-written TLV walk
+   recovering the x25519 key_share = the supplied public key.
 4. **Server-flight parser** (`tls_parse_server_hello` + the encrypted-flight walk):
    extract the server key_share from ServerHello; walk EncryptedExtensions /
    Certificate / CertificateVerify / Finished after decryption, feeding each into
