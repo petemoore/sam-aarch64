@@ -22,6 +22,10 @@ design doc is deleted (git history is the archive).
 - [`comment-storage-design.md`](comment-storage-design.md) — compressed-
   resident comment storage (i60c): ZX0 blocks + dirty overlay + streaming
   save + watermark math + page placement.
+- [`source-structure-preservation-design.md`](source-structure-preservation-design.md)
+  — preserving blank lines + comment paragraph structure on round-trip (i78):
+  a blank-run row kind in the editor-region sidecar + the multi-line-comment
+  grouping rule; indentation deferred behind the i76 interface sign-off.
 - [`paged-in-design.md`](paged-in-design.md) /
   [`paged-out-design.md`](paged-out-design.md) — the paging-architecture
   rationale for source IN and output OUT.
