@@ -65,7 +65,7 @@ ci-netboot-oracle:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -160,6 +160,18 @@ $(BUILD)/netboot_hmac_sha256.bin $(BUILD)/netboot_hmac_sha256.map: src/netboot/h
 	    src/netboot/hmac_sha256.asm
 
 netboot-hmac-sha256: $(BUILD)/netboot_hmac_sha256.bin $(BUILD)/netboot_hmac_sha256.map
+
+# netboot-hkdf (i88) — HKDF (RFC 5869) over HMAC-SHA256, the TLS 1.3 key schedule.
+# hkdf_extract (PRK = HMAC(salt, IKM)) + hkdf_expand (the T(i) chain to L bytes);
+# orchestration over hmac_sha256.asm, no new arithmetic.  Standalone leaf,
+# host-verified by hkdf_test.go vs Go crypto/hkdf over the RFC 5869 vectors.
+$(BUILD)/netboot_hkdf.bin $(BUILD)/netboot_hkdf.map: src/netboot/hkdf.asm src/netboot/hmac_sha256.asm src/netboot/sha256.asm
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_hkdf.bin \
+	    --mapfile=$(BUILD)/netboot_hkdf.map \
+	    src/netboot/hkdf.asm
+
+netboot-hkdf: $(BUILD)/netboot_hkdf.bin $(BUILD)/netboot_hkdf.map
 
 # encdrv — the vendored Trinity ENC28J60 driver (simonowen/trinload, verbatim),
 # orged at &8000 by encdrv_harness.asm.  The i80 emulation test (enc28j60_test)
@@ -510,7 +522,7 @@ netboot-client-disk: $(BUILD)/netboot_client_boot.bin $(BUILD)/build-disk
 	    $(BUILD)/netboot_client.mgt
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-body-sink netboot-fw-span netboot-http netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-body-sink netboot-fw-span netboot-http netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client
 
 ci-netboot-z80: netboot-z80-routines
 	cd tools/netboot-oracle/z80 && go test ./...
