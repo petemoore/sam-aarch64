@@ -25,8 +25,15 @@ design doc is deleted (git history is the archive).
 - [`paged-in-design.md`](paged-in-design.md) /
   [`paged-out-design.md`](paged-out-design.md) — the paging-architecture
   rationale for source IN and output OUT.
+- [`phase3-delivery-design.md`](phase3-delivery-design.md) — Phase 3
+  end-to-end delivery design (i84): the bidirectional self-hosting loop
+  (inbound TFTP client → B-DOS records; outbound TFTP server → Pi PXE),
+  bootstrap chain, storage model, i80 host-iteration dependency. **SPEC
+  GATE — awaiting Pete's approval.** Extends/supersedes-on-approval the
+  sketch below.
 - [`phase3-tftp-design.md`](phase3-tftp-design.md) — Phase 3 (TFTP to the
-  Pi over direct LAN) direction.
+  Pi over direct LAN) **prior direction sketch** (2026-05-27); superseded
+  on approval of the delivery design above.
 - [`samdos-file-io.md`](samdos-file-io.md) — SAMDOS read/write idioms:
   HLOAD trampoline, HSAVE UIFA pattern, hook clobber facts, Z80 snippets.
 - [`editor-vision.md`](editor-vision.md) — Phase 2 editor design pointers
