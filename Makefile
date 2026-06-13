@@ -65,7 +65,7 @@ ci-netboot-oracle:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -189,19 +189,42 @@ $(BUILD)/netboot_http_get.bin $(BUILD)/netboot_http_get.map: src/netboot/http_ge
 
 netboot-http-get: $(BUILD)/netboot_http_get.bin $(BUILD)/netboot_http_get.map
 
-# netboot-http (i70 capstone) — the integrated HTTP fetch phase machine:
-# http_fetch_first broadcasts the ARP, http_fetch_onframe drives ARP -> TCP
-# handshake -> GET -> response/ACK -> FIN.  Composes http_get.asm (which pulls in
-# tcp_conn + build_tcp_segment + encdrv) with build_arp_request; the i80 emulation
-# test (netboot_http_test) asserts the ARP/SYN/GET/ACK/FIN-ACK wire frames match
-# the Go http.Fetcher authority byte-for-byte.
-$(BUILD)/netboot_http.bin $(BUILD)/netboot_http.map: src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/encdrv.asm
+# netboot-http (i70 capstone) — the integrated HTTP fetch phase machine + the
+# bootable HTTP-fetch disk.  http_fetch_first broadcasts the ARP, http_fetch_onframe
+# drives ARP -> TCP handshake -> GET -> response/ACK -> FIN.  Composes http_get.asm
+# (which pulls in tcp_conn + build_tcp_segment + encdrv) with build_arp_request +
+# bdos_seam (the storage seam).  Two builds from one source:
+#   * the host-test binary (NETBOOT_HOSTTEST) excludes http_main + eeprom.asm + the
+#     B-DOS hook dispatch so the harness drives http_fetch_first/http_fetch_onframe
+#     directly; netboot_http_test.go asserts the ARP/SYN/GET/ACK/FIN-ACK wire frames
+#     + the accumulated body match the Go http.Fetcher authority byte-for-byte (the
+#     B-DOS HSAVE write-out is real-hardware-only, not exercised).
+#   * the bootable binary (no flag) includes http_main + eeprom.asm + the B-DOS HSAVE
+#     so it reads the SAM's real MAC/IP, fetches the firmware blob, and writes it to
+#     Trinity storage (the disk built by netboot-http-disk).
+$(BUILD)/netboot_http.bin $(BUILD)/netboot_http.map: src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_http.bin \
+	pyz80 -D NETBOOT_HOSTTEST=1 \
+	    --obj=$(BUILD)/netboot_http.bin \
 	    --mapfile=$(BUILD)/netboot_http.map \
 	    src/netboot/netboot_http.asm
 
 netboot-http: $(BUILD)/netboot_http.bin $(BUILD)/netboot_http.map
+
+# The bootable HTTP-fetch binary: the full program including the EEPROM config read
+# + the http_main fetch-then-HSAVE flow, for real Trinity.
+$(BUILD)/netboot_http_boot.bin: src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/netboot_http_boot.bin src/netboot/netboot_http.asm
+
+netboot-http-boot: $(BUILD)/netboot_http_boot.bin
+
+# A bootable SAM disk image that auto-runs the HTTP fetch on power-on: it fetches
+# the configured firmware blob from the configured HTTP server and writes it to
+# Trinity storage (see docs/notes/netboot-trinity-testing.md "HTTP fetch").
+netboot-http-disk: $(BUILD)/netboot_http_boot.bin $(BUILD)/build-disk
+	$(BUILD)/build-disk -netboot $(BUILD)/netboot_http_boot.bin -netboot-name httpfetch \
+	    $(BUILD)/netboot_http.mgt
 
 # tftp-server-loop — the i83 TFTP server transfer loop (state machine):
 # drv_read an RRQ, parse + resolve, reply with an OACK (hit) or ERROR(1) (miss),
