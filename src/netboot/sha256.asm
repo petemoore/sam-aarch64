@@ -529,6 +529,24 @@ sha_rotr1_do:
                 rr      (hl)                    ; byte3 (LSB)
                 ret
 
+; sha_rotl1_do — rotate sha_word left by 1 bit (32-bit big-endian), the mirror of
+; sha_rotr1_do. The MSB (byte0 bit7) wraps into the LSB (byte3 bit0): capture that
+; wrap bit into the carry, then `rl` through the 4 bytes LSB->MSB (carry flows LSB
+; bit0 up, each byte's bit7 into the next byte's carry, the final MSB bit7
+; discarded because it was already saved as the wrap). Clobbers A,HL.
+sha_rotl1_do:
+                ld      a, (sha_word)           ; MSB byte
+                rlca                            ; bit7 -> carry (A discarded)
+                ld      hl, sha_word+3
+                rl      (hl)                    ; byte3 (LSB): carry(in)=wrap -> bit0
+                dec     hl
+                rl      (hl)                    ; byte2
+                dec     hl
+                rl      (hl)                    ; byte1
+                dec     hl
+                rl      (hl)                    ; byte0 (MSB)
+                ret
+
 ; sha_shr1 — logical shift sha_word right by 1 (32-bit big-endian), MSB->LSB,
 ; feeding 0 into the top. Clobbers A,HL.
 sha_shr1:
@@ -541,6 +559,24 @@ sha_shr1:
                 rr      (hl)                    ; byte2
                 inc     hl
                 rr      (hl)                    ; byte3
+                ret
+
+; sha_shr8 — logical shift sha_word right by 8 (32-bit big-endian): every byte
+; moves one position toward the LSB, a zero feeds the MSB, the old LSB is dropped.
+; Done LSB-end first so each source byte is read before it is overwritten.
+; Clobbers A,HL.
+sha_shr8:
+                ld      hl, sha_word+2
+                ld      a, (hl)                 ; old byte2
+                ld      (sha_word+3), a         ; byte3 = old byte2
+                dec     hl
+                ld      a, (hl)                 ; old byte1
+                ld      (sha_word+2), a         ; byte2 = old byte1
+                dec     hl
+                ld      a, (hl)                 ; old byte0
+                ld      (sha_word+1), a         ; byte1 = old byte0
+                xor     a
+                ld      (sha_word), a           ; byte0 = 0
                 ret
 
 ; sha_rotr8 — rotate sha_word right by 8 (a whole-byte cyclic shift).
@@ -564,6 +600,29 @@ sha_rotr8:
                 ld      (hl), c                 ; byte3 = old byte2
                 ret
 
+; sha_rotl8 — rotate sha_word left by 8 (a whole-byte cyclic shift), the mirror of
+; sha_rotr8: the MSB byte wraps round to the LSB. ROTL8 == ROTR24, so it is the
+; cheap way to reach the high rotate amounts (e.g. ROTR22 = ROTL8 then ROTL2).
+; Clobbers A,C,DE,HL (preserves B).
+sha_rotl8:
+                ld      hl, sha_word
+                ld      a, (hl)                 ; byte0 (MSB) -> becomes LSB
+                inc     hl
+                ld      e, (hl)                 ; byte1
+                inc     hl
+                ld      d, (hl)                 ; byte2
+                inc     hl
+                ld      c, (hl)                 ; byte3
+                ld      hl, sha_word
+                ld      (hl), e                 ; byte0 = old byte1
+                inc     hl
+                ld      (hl), d                 ; byte1 = old byte2
+                inc     hl
+                ld      (hl), c                 ; byte2 = old byte3
+                inc     hl
+                ld      (hl), a                 ; byte3 = old byte0
+                ret
+
 ; sha_xor_into_tmpa — sha_tmpa ^= sha_word (4 bytes). Clobbers A,B,DE,HL.
 sha_xor_into_tmpa:
                 ld      hl, sha_word
@@ -578,33 +637,19 @@ sha_xor_lp:
                 djnz    sha_xor_lp
                 ret
 
-; sha_rotr_word_by — rotate sha_word right by C bits (0..31): rotr8 for each
-; whole byte, then rotr1_do for the remaining bits. In: C = bit count. The count
-; is held in B across the byte loop because sha_rotr8 clobbers A and C.
-; Clobbers A,B,C,DE,HL.
-sha_rotr_word_by:
-                ld      b, c                    ; B = remaining bit count
-sha_rwb_bytes:
-                ld      a, b
-                cp      8
-                jr      c, sha_rwb_bits         ; < 8 bits left: do them one-by-one
-                push    bc
-                call    sha_rotr8               ; rotate a whole byte (clobbers A,C)
-                pop     bc
-                ld      a, b
-                sub     8
-                ld      b, a                    ; B -= 8
-                jr      sha_rwb_bytes
-sha_rwb_bits:
-                or      a                       ; A == B == remaining bits (<8)
-                ret     z
-                ; B already holds the remaining bit count.
-sha_rwb_bitlp:
-                push    bc
-                call    sha_rotr1_do
-                pop     bc
-                djnz    sha_rwb_bitlp
-                ret
+; ---------------------------------------------------------------------------
+; Rotation strategy. Each sigma/Sigma term is a fixed-distance rotate-right.
+; Rather than rotating right the full distance one bit at a time, each term is
+; built from the cheapest mix of whole-byte rotates (rotr8/rotl8, 8 bits per op)
+; and single-bit rotates (rotr1/rotl1), reaching the target by the SHORT way:
+;   ROTR(k) == ROTR(8*q) then a small bit residual, where the residual rotates
+;   LEFT when that is nearer. So e.g. ROTR7 = ROTR8 + ROTL1 (2 ops, not 7),
+;   ROTR22 = ROTL8 + ROTL2 (3 ops, not 8), ROTR25 = ROTL8 + ROTR1 (2 ops).
+; SHR by >=8 likewise uses sha_shr8 (a whole-byte logical shift) plus the bit
+; remainder: SHR10 = SHR8 + SHR1 + SHR1 (3 ops, not 10). Every term is still
+; recomputed from a fresh sha_load_word, so it is auditable against the spec one
+; line at a time; the byte-for-byte NIST-vector test is the guardrail.
+; ---------------------------------------------------------------------------
 
 ; ---------------------------------------------------------------------------
 ; sha_sigma0 — s0(x) = ROTR7(x) ^ ROTR18(x) ^ SHR3(x). In: HL -> x.
@@ -612,17 +657,19 @@ sha_rwb_bitlp:
 ; ---------------------------------------------------------------------------
 sha_sigma0:
                 push    hl
-                ; term1 = ROTR7(x) -> sha_tmpa
+                ; term1 = ROTR7(x) = ROTR8 + ROTL1 -> sha_tmpa
                 call    sha_load_word
-                ld      c, 7
-                call    sha_rotr_word_by
+                call    sha_rotr8
+                call    sha_rotl1_do
                 call    sha_word_to_tmpa
-                ; term2 = ROTR18(x) -> xor into tmpa
+                ; term2 = ROTR18(x) = ROTR16 + ROTR2 -> xor into tmpa
                 pop     hl
                 push    hl
                 call    sha_load_word
-                ld      c, 18
-                call    sha_rotr_word_by
+                call    sha_rotr8
+                call    sha_rotr8
+                call    sha_rotr1_do
+                call    sha_rotr1_do
                 call    sha_xor_into_tmpa
                 ; term3 = SHR3(x) -> xor into tmpa
                 pop     hl
@@ -636,64 +683,81 @@ sha_sigma0:
 ; sha_sigma1 — s1(x) = ROTR17(x) ^ ROTR19(x) ^ SHR10(x). In: HL -> x.
 sha_sigma1:
                 push    hl
+                ; term1 = ROTR17(x) = ROTR16 + ROTR1
                 call    sha_load_word
-                ld      c, 17
-                call    sha_rotr_word_by
+                call    sha_rotr8
+                call    sha_rotr8
+                call    sha_rotr1_do
                 call    sha_word_to_tmpa
+                ; term2 = ROTR19(x) = ROTR16 + ROTR3
                 pop     hl
                 push    hl
                 call    sha_load_word
-                ld      c, 19
-                call    sha_rotr_word_by
+                call    sha_rotr8
+                call    sha_rotr8
+                call    sha_rotr1_do
+                call    sha_rotr1_do
+                call    sha_rotr1_do
                 call    sha_xor_into_tmpa
+                ; term3 = SHR10(x) = SHR8 + SHR2
                 pop     hl
                 call    sha_load_word
-                ld      b, 10
-sha_sig1_shr:
-                push    bc
+                call    sha_shr8
                 call    sha_shr1
-                pop     bc
-                djnz    sha_sig1_shr
+                call    sha_shr1
                 call    sha_xor_into_tmpa
                 ret
 
 ; sha_bigsigma0 — S0(x) = ROTR2(x) ^ ROTR13(x) ^ ROTR22(x). In: HL -> x.
 sha_bigsigma0:
                 push    hl
+                ; term1 = ROTR2(x)
                 call    sha_load_word
-                ld      c, 2
-                call    sha_rotr_word_by
+                call    sha_rotr1_do
+                call    sha_rotr1_do
                 call    sha_word_to_tmpa
+                ; term2 = ROTR13(x) = ROTR16 + ROTL3
                 pop     hl
                 push    hl
                 call    sha_load_word
-                ld      c, 13
-                call    sha_rotr_word_by
+                call    sha_rotr8
+                call    sha_rotr8
+                call    sha_rotl1_do
+                call    sha_rotl1_do
+                call    sha_rotl1_do
                 call    sha_xor_into_tmpa
+                ; term3 = ROTR22(x) = ROTL8 + ROTL2
                 pop     hl
                 call    sha_load_word
-                ld      c, 22
-                call    sha_rotr_word_by
+                call    sha_rotl8
+                call    sha_rotl1_do
+                call    sha_rotl1_do
                 call    sha_xor_into_tmpa
                 ret
 
 ; sha_bigsigma1 — S1(x) = ROTR6(x) ^ ROTR11(x) ^ ROTR25(x). In: HL -> x.
 sha_bigsigma1:
                 push    hl
+                ; term1 = ROTR6(x) = ROTR8 + ROTL2
                 call    sha_load_word
-                ld      c, 6
-                call    sha_rotr_word_by
+                call    sha_rotr8
+                call    sha_rotl1_do
+                call    sha_rotl1_do
                 call    sha_word_to_tmpa
+                ; term2 = ROTR11(x) = ROTR8 + ROTR3
                 pop     hl
                 push    hl
                 call    sha_load_word
-                ld      c, 11
-                call    sha_rotr_word_by
+                call    sha_rotr8
+                call    sha_rotr1_do
+                call    sha_rotr1_do
+                call    sha_rotr1_do
                 call    sha_xor_into_tmpa
+                ; term3 = ROTR25(x) = ROTL8 + ROTR1
                 pop     hl
                 call    sha_load_word
-                ld      c, 25
-                call    sha_rotr_word_by
+                call    sha_rotl8
+                call    sha_rotr1_do
                 call    sha_xor_into_tmpa
                 ret
 
