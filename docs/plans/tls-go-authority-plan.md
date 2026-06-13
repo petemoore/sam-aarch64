@@ -4,8 +4,11 @@
 Go authority only* — a `tools/netboot-oracle/tls/` package whose `Client` completes a
 real TLS-1.3 1-RTT handshake against Go `crypto/tls` over `net.Pipe`. This is the
 reference the later Z80 brick-6 state machine (`tls_client_*.asm`) will mirror
-(CLAUDE.md §6: Go is the authority, the Z80 is a port). The Z80 capstone itself stays
-gated on **q17** (the `&10000` footprint / paging call for Pete) and is out of scope here.
+(CLAUDE.md §6: Go is the authority, the Z80 is a port). The Z80 capstone is out of scope
+here; note **q17 is RESOLVED** (Pete 2026-06-15 delegated the paging strategy to the agent
+— "use paging, agent owns the layout"), so the capstone is not memory-architecture-blocked
+— its remaining gate is the bootable/hardware integration (partly hardware-gated like
+`http_main`).
 
 **Why a plan, not the code:** the handshake driver's verification is all-or-nothing
 (crypto/tls completes the handshake or emits an opaque alert), so it wants a fresh
@@ -104,7 +107,8 @@ pattern, `z80/tls_client_hello_test.go:219`):
 - A `tls/README.md` (≤30 lines: what it is, that it's the Go authority for the Z80
   brick-6 TLS handshake, link to `docs/specs/tls13-handshake.md`).
 - On completion: delete this plan; flip the i88 registry row (the Go authority landed;
-  the Z80 capstone remains q17-gated); note in `m9-status` / ROADMAP.
+  the Z80 capstone remains, its gate now the bootable/hardware integration, q17 resolved);
+  note in `m9-status` / ROADMAP.
 
 ## Risks / notes
 
