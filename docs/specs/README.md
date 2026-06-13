@@ -49,3 +49,9 @@ design doc is deleted (git history is the archive).
   host-side Go TUI editor prototype at SAM-faithful geometry (i76): the
   SAM-screen abstraction, terminal + PNG/SCREEN$ mockup backends, geometry
   matrix, i41 op mapping (approved with amendments — P1 in flight).
+- [`editor-rendering-rules-design.md`](editor-rendering-rules-design.md) —
+  the editor's rendering-rule specification (i76): the per-record render
+  ladder, long-line wrap/shift, colour roles + token marking, cursor-line
+  expansion, comment placement, truncation, chrome — the written contract for
+  the config lab. The default shipping config is recommended (§10) pending
+  Pete's sign-off (q13); geometry/font stay gated on the i6 P3 memo.
