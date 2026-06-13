@@ -2,6 +2,7 @@ package format
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 )
 
@@ -15,11 +16,11 @@ func TestReadFileRoundtrip(t *testing.T) {
 	var rw RecordWriter
 	rw.WriteInsnRun(0, []InsnElement{{BaseWord: 0xd503201f}})
 
-	comments := []CommentRow{{Anchor: 0, Placement: 0, Body: []byte("loop body")}}
+	sidecar := []SidecarRow{{Kind: SidecarComment, Comment: CommentRow{Anchor: 0, Placement: 0, Body: []byte("loop body")}}}
 	globals := []uint16{1} // "exit" is .global
 
 	var buf bytes.Buffer
-	if err := WriteFile(&buf, st, nil, nil, rw.Bytes(), globals, comments); err != nil {
+	if err := WriteFile(&buf, st, nil, nil, rw.Bytes(), globals, sidecar); err != nil {
 		t.Fatal(err)
 	}
 
@@ -46,6 +47,116 @@ func TestReadFileRoundtrip(t *testing.T) {
 	if len(f.GlobalNameIDs) != 1 || f.GlobalNameIDs[0] != 1 {
 		t.Errorf("globals = %+v", f.GlobalNameIDs)
 	}
+}
+
+func TestSidecarBlankRunRoundtrip(t *testing.T) {
+	st := NewSymbolTable()
+	var rw RecordWriter
+	rw.WriteInsnRun(0, []InsnElement{{BaseWord: 0xd503201f}})
+
+	// Interleaved comment + blank-run rows at assorted anchors, including two
+	// rows sharing an anchor (source order must survive): a comment then a
+	// 2-line blank run both at anchor 4.
+	sidecar := []SidecarRow{
+		{Kind: SidecarComment, Comment: CommentRow{Anchor: 0, Placement: 0, Body: []byte(" header")}},
+		{Kind: SidecarBlank, Blank: BlankRun{Anchor: 0, RunLen: 1}},
+		{Kind: SidecarComment, Comment: CommentRow{Anchor: 4, Placement: 0, Body: []byte(" mid")}},
+		{Kind: SidecarBlank, Blank: BlankRun{Anchor: 4, RunLen: 2}},
+	}
+
+	var buf bytes.Buffer
+	if err := WriteFile(&buf, st, nil, nil, rw.Bytes(), nil, sidecar); err != nil {
+		t.Fatal(err)
+	}
+	f, err := ReadFile(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Flags&FlagTaggedSidecar == 0 {
+		t.Errorf("expected FlagTaggedSidecar set, flags=%#x", f.Flags)
+	}
+	if len(f.Sidecar) != 4 {
+		t.Fatalf("sidecar rows = %d, want 4: %+v", len(f.Sidecar), f.Sidecar)
+	}
+	// Row order: anchor-sorted, stable in source order at a tie. So:
+	// [comment@0 "header"], [blank@0 x1], [comment@4 "mid"], [blank@4 x2].
+	want := []struct {
+		kind   SidecarKind
+		anchor int64
+		runLen uint32
+		body   string
+	}{
+		{SidecarComment, 0, 0, " header"},
+		{SidecarBlank, 0, 1, ""},
+		{SidecarComment, 4, 0, " mid"},
+		{SidecarBlank, 4, 2, ""},
+	}
+	for i, w := range want {
+		r := f.Sidecar[i]
+		if r.Kind != w.kind || r.Anchor() != w.anchor {
+			t.Errorf("row %d kind/anchor = %d/%d, want %d/%d", i, r.Kind, r.Anchor(), w.kind, w.anchor)
+		}
+		if r.Kind == SidecarBlank && r.Blank.RunLen != w.runLen {
+			t.Errorf("row %d run_len = %d, want %d", i, r.Blank.RunLen, w.runLen)
+		}
+		if r.Kind == SidecarComment && string(r.Comment.Body) != w.body {
+			t.Errorf("row %d body = %q, want %q", i, r.Comment.Body, w.body)
+		}
+	}
+	// The comment-only projection is the two comment rows.
+	if len(f.Comments) != 2 || string(f.Comments[0].Body) != " header" || string(f.Comments[1].Body) != " mid" {
+		t.Errorf("comments projection = %+v", f.Comments)
+	}
+}
+
+func TestSidecarLegacyUntaggedReadsAsComments(t *testing.T) {
+	// A file written WITHOUT FlagTaggedSidecar (the pre-i78 shape) must still
+	// read: every row is an untagged comment. Hand-build such a file.
+	st := NewSymbolTable()
+	var rw RecordWriter
+	rw.WriteInsnRun(0, []InsnElement{{BaseWord: 0xd503201f}})
+
+	// Build the file then clear the tagged bit AND rewrite the sidecar untagged.
+	// Easiest: serialise the untagged sidecar by hand into the editor region.
+	records := rw.Bytes()
+	tables := []byte{0, 0, 0, 0} // empty label + local tables (count u16 each)
+	const headerLen = 4 + 2 + 2 + 4
+	editorOffset := headerLen + len(tables) + len(records)
+
+	var buf bytes.Buffer
+	buf.Write(Magic[:])
+	var u16 [2]byte
+	binary.LittleEndian.PutUint16(u16[:], Version)
+	buf.Write(u16[:])
+	binary.LittleEndian.PutUint16(u16[:], 0) // flags = 0 → untagged
+	buf.Write(u16[:])
+	var u32 [4]byte
+	binary.LittleEndian.PutUint32(u32[:], uint32(editorOffset))
+	buf.Write(u32[:])
+	buf.Write(tables)
+	buf.Write(records)
+	// Editor region: empty name table, empty globals, then an UNTAGGED sidecar
+	// (no kind byte): one comment row [anchor_delta][placement][len][text].
+	buf.Write([]byte{0, 0}) // name count 0
+	buf.Write([]byte{0, 0}) // global count 0
+	buf.Write([]byte{1, 0}) // sidecar count 1
+	buf.WriteByte(0)        // anchor_delta = 0 (uvarint)
+	buf.WriteByte(0)        // placement 0
+	binary.LittleEndian.PutUint16(u16[:], uint16(len("legacy")))
+	buf.Write(u16[:])
+	buf.WriteString("legacy")
+
+	f, err := ReadFile(buf.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Flags&FlagTaggedSidecar != 0 {
+		t.Errorf("expected untagged flags, got %#x", f.Flags)
+	}
+	if len(f.Sidecar) != 1 || f.Sidecar[0].Kind != SidecarComment || string(f.Sidecar[0].Comment.Body) != "legacy" {
+		t.Errorf("legacy sidecar = %+v", f.Sidecar)
+	}
+	_ = st
 }
 
 func TestReadFileWrongMagic(t *testing.T) {

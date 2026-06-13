@@ -10,10 +10,13 @@ import (
 type Record struct {
 	Kind RecordKind
 
-	SymbolID     uint16
-	Digit        byte
-	Placement    byte
-	Body         []byte
+	SymbolID  uint16
+	Digit     byte
+	Placement byte
+	Body      []byte
+	// RunLen is the number of consecutive blank source lines, populated for
+	// KindBlankRun records (i78). In-memory IR only.
+	RunLen       uint32
 	MnemonicID   uint16
 	DirectiveID  byte
 	OperandCount byte
@@ -165,13 +168,18 @@ type File struct {
 	// front-end.
 	Labels []LabelRow
 	Locals []LocalRow
-	// GlobalNameIDs and Comments are the editor region (compact `.tbn` v2,
-	// M8 / i39b-2): name_ids that carried `.global`, and the comment sidecar
-	// (each comment's PC anchor / placement / body). They are read from the
-	// tail of the file and used only by the renderer / editor — the assembler
-	// never reads them. Empty for an in-memory symbolic IR built by the
-	// front-end (where comments are still inline KindComment records).
+	// GlobalNameIDs, Sidecar, and Comments are the editor region (compact
+	// `.tbn` v2, M8 / i39b-2 + i78): name_ids that carried `.global`, and the
+	// editor-region sidecar. Sidecar is the ordered tagged row stream (comments
+	// + blank-line runs, in source order) — the renderer's authority. Comments
+	// is the comment-only projection of Sidecar, retained for callers that only
+	// want comments (comment-bench, tests). They are read from the tail of the
+	// file and used only by the renderer / editor — the assembler never reads
+	// them. Empty for an in-memory symbolic IR built by the front-end (where
+	// comments and blank runs are still inline KindComment / KindBlankRun
+	// records).
 	GlobalNameIDs []uint16
+	Sidecar       []SidecarRow
 	Comments      []CommentRow
 	// Records is the decoded statement stream. For a File built by the
 	// front-end it is the in-memory symbolic IR (KindInst/KindLabelDef/
@@ -227,10 +235,20 @@ func ReadFile(buf []byte) (*File, error) {
 		records = append(records, rec)
 	}
 
-	// Editor region: name table, global flags, comment sidecar.
-	names, globals, comments, _, err := readEditorRegion(buf, editorOffset)
+	// Editor region: name table, global flags, sidecar. The tagged-sidecar bit
+	// in the header flags selects the row shape (a file written by this version
+	// always sets it; a legacy untagged file parses as all-comments).
+	tagged := flags&FlagTaggedSidecar != 0
+	names, globals, sidecar, _, err := readEditorRegion(buf, editorOffset, tagged)
 	if err != nil {
 		return nil, err
+	}
+
+	var comments []CommentRow
+	for _, r := range sidecar {
+		if r.Kind == SidecarComment {
+			comments = append(comments, r.Comment)
+		}
 	}
 
 	return &File{
@@ -240,6 +258,7 @@ func ReadFile(buf []byte) (*File, error) {
 		Labels:        labels,
 		Locals:        locals,
 		GlobalNameIDs: globals,
+		Sidecar:       sidecar,
 		Comments:      comments,
 		Records:       records,
 	}, nil

@@ -92,36 +92,43 @@ func (h *headerDefs) remaining() []headerDef {
 	return h.defs[h.cursor:]
 }
 
-// commentCursor walks the editor-region comment sidecar (compact `.tbn` v2,
-// M8 / i39b-2) in anchor order, emitting each comment when the renderer's PC
-// walk reaches its anchor offset. Comments no longer appear as inline COMMENT
-// records — they live in the editor region keyed by output PC, exactly like the
-// header label table.
-type commentCursor struct {
-	rows   []format.CommentRow
+// sidecarCursor walks the editor-region sidecar (compact `.tbn` v2, M8 /
+// i39b-2 + i78) in anchor order, emitting each row when the renderer's PC walk
+// reaches its anchor offset. Comments and blank-line runs no longer appear as
+// inline COMMENT / BLANK_RUN records — they live in the editor region keyed by
+// output PC, in source order, exactly like the header label table. Within one
+// anchor, stored order is source order, so interleaved comments and blank runs
+// render in the order the author wrote them.
+type sidecarCursor struct {
+	rows   []format.SidecarRow
 	cursor int
 }
 
-func newCommentCursor(f *format.File) *commentCursor {
+func newSidecarCursor(f *format.File) *sidecarCursor {
 	// ReadFile already returns them anchor-sorted (the sidecar is delta-coded
-	// in ascending order); copy defensively.
-	return &commentCursor{rows: append([]format.CommentRow(nil), f.Comments...)}
+	// in ascending order, stable in source order at a tie); copy defensively.
+	return &sidecarCursor{rows: append([]format.SidecarRow(nil), f.Sidecar...)}
 }
 
-func (c *commentCursor) empty() bool { return len(c.rows) == 0 }
+func (c *sidecarCursor) empty() bool { return len(c.rows) == 0 }
 
-// flushAt emits every comment whose anchor is at or before pc, advancing the
-// cursor. The "or before" (rather than exact ==) is robustness: a comment is
-// always anchored to a statement-boundary PC the walk hits, but draining
-// at-or-before guarantees no comment is stranded if PC accounting ever drifts.
-func (c *commentCursor) flushAt(pc int64, em func(format.CommentRow)) {
-	for c.cursor < len(c.rows) && c.rows[c.cursor].Anchor <= pc {
-		em(c.rows[c.cursor])
+// flushAt emits every row whose anchor is at or before pc, advancing the
+// cursor. The "or before" (rather than exact ==) is robustness: a row is always
+// anchored to a statement-boundary PC the walk hits, but draining at-or-before
+// guarantees nothing is stranded if PC accounting ever drifts.
+func (c *sidecarCursor) flushAt(pc int64, emComment func(format.CommentRow), emBlank func(format.BlankRun)) {
+	for c.cursor < len(c.rows) && c.rows[c.cursor].Anchor() <= pc {
+		r := c.rows[c.cursor]
+		if r.Kind == format.SidecarBlank {
+			emBlank(r.Blank)
+		} else {
+			emComment(r.Comment)
+		}
 		c.cursor++
 	}
 }
 
-func (c *commentCursor) remaining() []format.CommentRow {
+func (c *sidecarCursor) remaining() []format.SidecarRow {
 	if c.cursor >= len(c.rows) {
 		return nil
 	}

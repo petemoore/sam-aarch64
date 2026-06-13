@@ -38,6 +38,47 @@ type CommentRow struct {
 	Body      []byte
 }
 
+// BlankRun is one entry of the sidecar (i78 source-structure preservation): a
+// run of consecutive blank source lines. Anchor is the output PC of the next
+// statement (the same anchor a comment preceding that statement uses); RunLen
+// is the number of blank lines (≥ 1). A blank run carries no text and no
+// placement — a blank line is always standalone. It is distinct from a textless
+// `//` comment (a CommentRow with an empty Body): they render differently and
+// the kind discriminator keeps them apart on disk.
+type BlankRun struct {
+	Anchor int64
+	RunLen uint32
+}
+
+// SidecarKind discriminates the kinds of sidecar row on disk (the leading
+// kind u8, present when the header carries FlagTaggedSidecar).
+type SidecarKind byte
+
+const (
+	SidecarComment SidecarKind = 0 // a CommentRow
+	SidecarBlank   SidecarKind = 1 // a BlankRun
+	// 2+ reserved (e.g. i78 part-c indentation rows).
+)
+
+// SidecarRow is one tagged entry of the editor-region sidecar in source order.
+// Exactly one of Comment / Blank is meaningful, selected by Kind. Carrying both
+// kinds in one ordered slice preserves the source order of interleaved blank
+// runs and comments at a shared anchor (design §2/§3.2: stored order is source
+// order, and the renderer emits in stored order).
+type SidecarRow struct {
+	Kind    SidecarKind
+	Comment CommentRow
+	Blank   BlankRun
+}
+
+// Anchor returns the row's output-PC anchor regardless of kind.
+func (r SidecarRow) Anchor() int64 {
+	if r.Kind == SidecarBlank {
+		return r.Blank.Anchor
+	}
+	return r.Comment.Anchor
+}
+
 // commonPrefixLen returns the number of leading bytes a and b share.
 func commonPrefixLen(a, b string) int {
 	n := len(a)
@@ -143,88 +184,126 @@ func readGlobalFlags(buf []byte, pos int) ([]uint16, int, error) {
 	return ids, pos, nil
 }
 
-// appendCommentSidecar writes [count u16] then, per comment (sorted by anchor
-// ascending, ties stable in source order), [anchor_delta uvarint][placement u8]
-// [len u16][text]. Anchors are delta-coded from the previous comment's anchor
-// (first row's previous is 0); since anchors are ≥ 0 and sorted ascending the
-// deltas are unsigned.
-func appendCommentSidecar(buf []byte, comments []CommentRow) []byte {
-	rows := append([]CommentRow(nil), comments...)
-	sort.SliceStable(rows, func(i, j int) bool { return rows[i].Anchor < rows[j].Anchor })
+// appendSidecar writes [count u16] then, per row (sorted by anchor ascending,
+// ties stable in source order so interleaved blank runs and comments keep their
+// source order), a tagged row. Anchors are delta-coded from the previous row's
+// anchor (first row's previous is 0); since anchors are ≥ 0 and sorted ascending
+// the deltas are unsigned.
+//
+// A tagged row is [kind u8][anchor_delta uvarint] then the kind-specific tail:
+//
+//	kind 0 (comment):  [placement u8][len u16][text]
+//	kind 1 (blank-run): [run_len uvarint]
+//
+// The kind byte is always written here (the writer always sets
+// FlagTaggedSidecar). A legacy untagged file omits it; readSidecar parses both
+// shapes per the tagged flag.
+func appendSidecar(buf []byte, rows []SidecarRow) []byte {
+	sorted := append([]SidecarRow(nil), rows...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Anchor() < sorted[j].Anchor() })
 	var cnt [2]byte
-	binary.LittleEndian.PutUint16(cnt[:], uint16(len(rows)))
+	binary.LittleEndian.PutUint16(cnt[:], uint16(len(sorted)))
 	buf = append(buf, cnt[:]...)
 	var prev int64
 	var tmp [binary.MaxVarintLen64]byte
-	for _, c := range rows {
-		delta := c.Anchor - prev
+	for _, r := range sorted {
+		buf = append(buf, byte(r.Kind))
+		delta := r.Anchor() - prev
 		if delta < 0 {
 			delta = 0 // defensive: anchors are sorted, so this never fires
 		}
 		n := binary.PutUvarint(tmp[:], uint64(delta))
 		buf = append(buf, tmp[:n]...)
-		buf = append(buf, c.Placement)
-		var l [2]byte
-		binary.LittleEndian.PutUint16(l[:], uint16(len(c.Body)))
-		buf = append(buf, l[:]...)
-		buf = append(buf, c.Body...)
-		prev = c.Anchor
+		switch r.Kind {
+		case SidecarBlank:
+			n = binary.PutUvarint(tmp[:], uint64(r.Blank.RunLen))
+			buf = append(buf, tmp[:n]...)
+		default: // SidecarComment
+			buf = append(buf, r.Comment.Placement)
+			var l [2]byte
+			binary.LittleEndian.PutUint16(l[:], uint16(len(r.Comment.Body)))
+			buf = append(buf, l[:]...)
+			buf = append(buf, r.Comment.Body...)
+		}
+		prev = r.Anchor()
 	}
 	return buf
 }
 
-// readCommentSidecar parses the comment sidecar at buf[pos], accumulating
-// anchor deltas back into absolute offsets.
-func readCommentSidecar(buf []byte, pos int) ([]CommentRow, int, error) {
+// readSidecar parses the sidecar at buf[pos], accumulating anchor deltas back
+// into absolute offsets. tagged selects the row shape: when true each row leads
+// with a kind u8 (comment / blank-run); when false (a legacy file without
+// FlagTaggedSidecar) every row is an untagged comment.
+func readSidecar(buf []byte, pos int, tagged bool) ([]SidecarRow, int, error) {
 	if pos+2 > len(buf) {
-		return nil, pos, fmt.Errorf("file: truncated comment sidecar count")
+		return nil, pos, fmt.Errorf("file: truncated sidecar count")
 	}
 	count := int(binary.LittleEndian.Uint16(buf[pos:]))
 	pos += 2
 	if count == 0 {
 		return nil, pos, nil
 	}
-	rows := make([]CommentRow, count)
+	rows := make([]SidecarRow, count)
 	var prev int64
 	for i := 0; i < count; i++ {
+		kind := SidecarComment
+		if tagged {
+			if pos+1 > len(buf) {
+				return nil, pos, fmt.Errorf("file: truncated sidecar kind at %d", i)
+			}
+			kind = SidecarKind(buf[pos])
+			pos++
+		}
 		delta, n := binary.Uvarint(buf[pos:])
 		if n <= 0 {
-			return nil, pos, fmt.Errorf("file: truncated comment anchor delta at %d", i)
+			return nil, pos, fmt.Errorf("file: truncated sidecar anchor delta at %d", i)
 		}
 		pos += n
 		prev += int64(delta)
-		if pos+1 > len(buf) {
-			return nil, pos, fmt.Errorf("file: truncated comment placement at %d", i)
+		switch kind {
+		case SidecarBlank:
+			runLen, m := binary.Uvarint(buf[pos:])
+			if m <= 0 {
+				return nil, pos, fmt.Errorf("file: truncated blank-run length at %d", i)
+			}
+			pos += m
+			rows[i] = SidecarRow{Kind: SidecarBlank, Blank: BlankRun{Anchor: prev, RunLen: uint32(runLen)}}
+		case SidecarComment:
+			if pos+1 > len(buf) {
+				return nil, pos, fmt.Errorf("file: truncated comment placement at %d", i)
+			}
+			placement := buf[pos]
+			pos++
+			if pos+2 > len(buf) {
+				return nil, pos, fmt.Errorf("file: truncated comment len at %d", i)
+			}
+			blen := int(binary.LittleEndian.Uint16(buf[pos:]))
+			pos += 2
+			if pos+blen > len(buf) {
+				return nil, pos, fmt.Errorf("file: truncated comment body at %d", i)
+			}
+			body := append([]byte(nil), buf[pos:pos+blen]...)
+			pos += blen
+			rows[i] = SidecarRow{Kind: SidecarComment, Comment: CommentRow{Anchor: prev, Placement: placement, Body: body}}
+		default:
+			return nil, pos, fmt.Errorf("file: unknown sidecar kind %d at row %d", kind, i)
 		}
-		placement := buf[pos]
-		pos++
-		if pos+2 > len(buf) {
-			return nil, pos, fmt.Errorf("file: truncated comment len at %d", i)
-		}
-		blen := int(binary.LittleEndian.Uint16(buf[pos:]))
-		pos += 2
-		if pos+blen > len(buf) {
-			return nil, pos, fmt.Errorf("file: truncated comment body at %d", i)
-		}
-		body := append([]byte(nil), buf[pos:pos+blen]...)
-		pos += blen
-		rows[i] = CommentRow{Anchor: prev, Placement: placement, Body: body}
 	}
 	return rows, pos, nil
 }
 
 // appendEditorRegion writes the whole editor region (name table, global flags,
-// comment sidecar) to buf.
-func appendEditorRegion(buf []byte, names []string, globals []uint16, comments []CommentRow) []byte {
+// sidecar) to buf.
+func appendEditorRegion(buf []byte, names []string, globals []uint16, sidecar []SidecarRow) []byte {
 	buf = appendNameTable(buf, names)
 	buf = appendGlobalFlags(buf, globals)
-	buf = appendCommentSidecar(buf, comments)
+	buf = appendSidecar(buf, sidecar)
 	return buf
 }
 
-// readEditorRegion parses the editor region (name table, global flags, comment
-// sidecar) starting at buf[pos].
-func readEditorRegion(buf []byte, pos int) (names []string, globals []uint16, comments []CommentRow, _ int, err error) {
+// readEditorRegion parses the editor region (name table, global flags, sidecar)
+// starting at buf[pos]. tagged comes from the header FlagTaggedSidecar bit.
+func readEditorRegion(buf []byte, pos int, tagged bool) (names []string, globals []uint16, sidecar []SidecarRow, _ int, err error) {
 	names, pos, err = readNameTable(buf, pos)
 	if err != nil {
 		return nil, nil, nil, pos, err
@@ -233,9 +312,9 @@ func readEditorRegion(buf []byte, pos int) (names []string, globals []uint16, co
 	if err != nil {
 		return nil, nil, nil, pos, err
 	}
-	comments, pos, err = readCommentSidecar(buf, pos)
+	sidecar, pos, err = readSidecar(buf, pos, tagged)
 	if err != nil {
 		return nil, nil, nil, pos, err
 	}
-	return names, globals, comments, pos, nil
+	return names, globals, sidecar, pos, nil
 }

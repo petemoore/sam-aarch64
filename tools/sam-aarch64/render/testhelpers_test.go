@@ -38,6 +38,10 @@ func commentRec(placement byte, body []byte) format.Record {
 	return format.Record{Kind: format.KindComment, Placement: placement, Body: body}
 }
 
+func blankRunRec(runLen uint32) format.Record {
+	return format.Record{Kind: format.KindBlankRun, RunLen: runLen}
+}
+
 func dirRec(directiveID, operandCount byte, operands []byte) format.Record {
 	return format.Record{
 		Kind:         format.KindDirective,
