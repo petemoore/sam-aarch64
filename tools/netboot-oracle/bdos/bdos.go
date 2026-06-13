@@ -35,17 +35,16 @@ import "errors"
 
 // UIFA / DIFA field layout (docs/specs/samdos-file-io.md; src/sam_io.inc).
 const (
-	UIFALen     = 48                // a UIFA / DIFA is 48 bytes
-	OffType     = 0                 // file type (19 = CODE, 16 = BASIC)
-	OffName     = 1                 // 10 bytes, space-padded
-	OffExt      = 11                // 4 bytes, space-padded (unused for CODE)
-	OffPage     = 31                // HSAVE: source physical page (low 5 bits -> HMPR)
-	OffLoad     = 32                // HSAVE: source offset in section C (LE word)
-	OffPages    = 34                // pages-count (number of whole 16 KB pages)
-	OffLength   = 35                // length-mod-16K (LE word; HGTHD sets bit 7 of the high byte)
-	NameLen     = 10                // the on-disk filename field width
-	ExtLen      = 4                 // the on-disk extension field width
-	NameExtSpan = OffPage - OffName // 30: name(10)+ext(4)+filler(16) up to byte 31
+	UIFALen   = 48 // a UIFA / DIFA is 48 bytes
+	OffType   = 0  // file type (19 = CODE, 16 = BASIC)
+	OffName   = 1  // 10 bytes, space-padded
+	OffExt    = 11 // 4 bytes, space-padded (unused for CODE)
+	OffPage   = 31 // HSAVE: source physical page (low 5 bits -> HMPR)
+	OffLoad   = 32 // HSAVE: source offset in section C (LE word)
+	OffPages  = 34 // pages-count (number of whole 16 KB pages)
+	OffLength = 35 // length-mod-16K (LE word; HGTHD sets bit 7 of the high byte)
+	NameLen   = 10 // the on-disk filename field width
+	ExtLen    = 4  // the on-disk extension field width
 )
 
 // TypeCode is the SAM file type for a machine-code file (the type the netboot
