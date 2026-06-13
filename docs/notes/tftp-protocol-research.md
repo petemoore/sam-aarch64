@@ -109,7 +109,7 @@ For Phase-3 use (kernel images are a few MB), wraparound is not a concern at any
 
 ### 1.7 Sorcerer's Apprentice Syndrome
 
-RFC 1350 §6 documents a classic TFTP livelock:
+RFC 1123 §4.2.3.4 documents a classic TFTP livelock (reference [4] in RFC 1350; RFC 1350's acknowledgements credit its May-1992 revision with fixing this "Sorcerer's Apprentice" bug — §6 of RFC 1350 itself is "Normal Termination", not this):
 
 1. Client sends RRQ; no ACK arrives in time (network loss or slow server).
 2. Client retransmits RRQ.
@@ -171,7 +171,7 @@ Values outside this range must be rejected by the server with ERROR 8.
 
 ### 3.2 MTU and Throughput
 
-RFC 2348 §2 recommends 1428 bytes as the Ethernet-optimal value: 1500 byte Ethernet MTU − 20 byte IP header − 8 byte UDP header − 4 byte TFTP DATA header = 1468 bytes, then 40 bytes of headroom for some implementations = 1428 bytes.
+RFC 2348 §2 gives 1428 as the Ethernet-optimal value — the Ethernet MTU less the IP, UDP, and TFTP header lengths — without spelling out the arithmetic. Stripping 20 + 8 + 4 = 32 header bytes from the 1500-byte MTU leaves 1468; the further 40-byte margin down to 1428 is the conventional headroom for IP options (editorial interpretation, not stated in the RFC).
 At 1428 bytes versus 512 bytes the RFC reports a 2.8× throughput improvement from fewer round-trips.
 
 On the Trinity's 10BASE-T link (half-duplex, ~10 Mbps wire speed), each round-trip costs approximately one RTT.
@@ -450,7 +450,7 @@ The trinload approach of a single flat `packet` buffer at a known address works 
 
 4. **LIKELY: EEPROM "Trinity Network " chunk format.** The chunk layout (`sam_mac equ chunk+0`, `sam_ip equ chunk+6`, `trinload.asm:414–415`) is observed from trinload source and confirmed by the `drv_init` call (`hl=chunk+0`).
    The exact byte layout of the chunk (MAC 6 bytes at +0, then 0 bytes at +6? or IP directly?) needs a hardware confirmation.
-   `trinload.asm:46–50` checks `sam_mac+0` (MAC first byte) and `sam_ip+6` — the `+6` offset for the IP start is consistent with MAC bytes at offsets 0–5 and IP at 6–9.
+   The equ defines `sam_mac equ chunk+0` and `sam_ip equ chunk+6` (`trinload.asm:414–415`), implying MAC at `chunk+0..5` and IP at `chunk+6..9`. However trinload's own all-zero-config sanity check is internally inconsistent with that: it reads `sam_mac+0` and `sam_ip+6` (= `chunk+12`) with the comment "first byte of IP" (`trinload.asm:47–48`), which does not square with `sam_ip = chunk+6`. The exact chunk layout therefore needs a hardware read to confirm before the TFTP client relies on it.
 
 5. **UNKNOWN: B-DOS HRECORD behaviour on Trinity SD without Atom Lite emulation.** The i62 proof verified HRECORD via B-DOS AL 1.5a under a floppy/Atom Lite setup.
    The Trinity 1.5t fork's sector-device swap (SD SPI) is known from the i71 analysis.
