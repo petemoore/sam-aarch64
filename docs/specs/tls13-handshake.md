@@ -2,9 +2,9 @@
 
 Status: **in progress.** The cipher-suite primitives below are all built and
 host-verified; this doc is the plan for composing them into a working TLS 1.3
-client. Bricks **1 (key schedule), 2 (record), 3 (ClientHello), 5 (transcript)**
-are landed (standalone, host-verified leaves); brick **4 (server-flight parser)**
-is next, and the capstone **brick 6 (state machine)** is gated on q17. i88 is the project's **lowest-priority** work (build only
+client. Bricks **1 (key schedule), 2 (record), 3 (ClientHello), 4 (server-flight
+parser), 5 (transcript)** are landed (standalone, host-verified leaves); only the
+capstone **brick 6 (state machine)** remains, and it is gated on q17. i88 is the project's **lowest-priority** work (build only
 when nothing else remains) — see `docs/notes/item-registry.md` i88 and
 `phase3-delivery-design.md` §7 for the rationale (the active firmware-fetch path is
 plain HTTP via `cdn.githubraw.com` + a SHA-256 content pin; TLS is the durable
@@ -130,11 +130,18 @@ Each is a standalone, host-verified PR, mirroring the primitive cadence:
    (the stdlib TLS implementation as an independent structural oracle — it rejects
    a malformed message and reports the offer we built); and a hand-written TLV walk
    recovering the x25519 key_share = the supplied public key.
-4. **Server-flight parser** (`tls_parse_server_hello` + the encrypted-flight walk):
-   extract the server key_share from ServerHello; walk EncryptedExtensions /
-   Certificate / CertificateVerify / Finished after decryption, feeding each into
-   the transcript; capture the server Finished for verification. Verify against
-   RFC 8448 / Go-generated flights.
+4. **Server-flight parser** (`tls_parse_server_hello` + the encrypted-flight walk)
+   — **LANDED** (`src/netboot/tls_server_flight.asm`, `tls_server_flight_test.go`):
+   `tls_parse_server_hello` extracts the server key_share from ServerHello and
+   validates the negotiated suite/version (rejecting a wrong cipher, a missing
+   key_share, a non-1.3 version, and the HRR sentinel random). `tls_walk_server
+   _flight` walks EncryptedExtensions / Certificate / CertificateVerify / Finished
+   after decryption, folding each into the transcript, snapshotting
+   Hash(CH..CertificateVerify) just before the Finished, and capturing the server
+   Finished verify_data. Verified vs Go-generated flights: the captured Finished +
+   all four message flags, with `SF_HASH_BEFORE_FIN` = Go SHA-256(EE‖Cert‖CertVerify)
+   and a post-walk snapshot = Go SHA-256(the whole flight), incl. a CH..SH-prefixed
+   transcript variant.
 5. **Transcript** (`tls_transcript_*`) — **LANDED** (`src/netboot/tls_transcript.asm`,
    `tls_transcript_test.go`): running SHA-256 over the handshake messages
    (a thin `sha256_update` accumulator + a "snapshot the digest now" via a
