@@ -137,6 +137,23 @@ jobs:
       - name: Disassembler round-trip (encode→decode→encode)
         run: make ci-disasm-roundtrip
 
+  # netboot-oracle — Phase-3 host harness: the DHCP/TFTP packet builders +
+  # parsers (the SAM-side Z80 i82 client / i83 server / i86 DHCP authority)
+  # replayed against masked golden vectors extracted from a real Pi 400
+  # netboot capture.  Pure Go, no container, no binutils, no off-repo captures
+  # (the committed golden vectors are the fixtures).  This gates the protocol
+  # logic in isolation; the Z80 execution + ENC28J60 hardware + end-to-end Pi
+  # boot are NOT host-verifiable and stay gated on i80/real-Trinity.
+  netboot-oracle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: Netboot oracle (DHCP/TFTP golden vectors)
+        run: make ci-netboot-oracle
+
   # sysreg-sync — Go↔Z80 sysreg table sync guard (repo-audit §5 / §6 #9).
   # Asserts the hand-maintained Z80 table src/sysreg_data.asm agrees
   # byte-for-byte with the Go authority tools/sam-aarch64-format/sysregs.go
