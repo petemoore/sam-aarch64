@@ -37,8 +37,11 @@ an end-to-end Pi boot, which stay gated on i80 / real Trinity.
   for the Z80 DATA/ACK loops + the ARP-for-server/RRQ-send front).
 - `bdos` — the storage seam: the UIFA/DIFA field arithmetic gluing the server
   (serve by name) + client (write by name) to the B-DOS hooks, plus a flat-
-  directory model. Models the field maths only — the RST 8 hook dispatch is
-  NOT host-verifiable (no ROM in the harness) and stays gated on real Trinity.
+  directory model and the firmware-spanning convention (`span.go`: `SpanPlan`
+  splits a large object into bounded, plain-`HSAVE`'d records reassembled in
+  order at serve time — the i99/q16 authority the Z80 `fw_span.asm` mirrors).
+  Models the field maths only — the RST 8 hook dispatch is NOT host-verifiable
+  (no ROM in the harness) and stays gated on real Trinity.
 - `pcap` — dependency-free libpcap/pcapng reader. `golden` — masked vectors.
 - `z80/` — a nested Go module: a flat-memory koron-go/z80 harness that runs the
   SAM-side Z80 port (`src/netboot/*.asm`) and byte-compares its output against
