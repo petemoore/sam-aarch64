@@ -26,11 +26,12 @@ design doc is deleted (git history is the archive).
   [`paged-out-design.md`](paged-out-design.md) — the paging-architecture
   rationale for source IN and output OUT.
 - [`phase3-delivery-design.md`](phase3-delivery-design.md) — Phase 3
-  end-to-end delivery design (i84): the bidirectional self-hosting loop
-  (inbound TFTP client → B-DOS records; outbound TFTP server → Pi PXE),
-  bootstrap chain, storage model, i80 host-iteration dependency. **SPEC
-  GATE — awaiting Pete's approval.** Extends/supersedes-on-approval the
-  sketch below.
+  end-to-end delivery design (i84): the self-hosting loop — SAM as
+  **DHCP+TFTP netboot server** (serves firmware + kernel by name, model-
+  agnostic) for any aarch64 Pi, plus a TFTP client and on-SAM HTTP firmware
+  self-provisioning. **Direction confirmed (Pete 2026-06-14, q11/q12
+  resolved)**; remaining gate = go-ahead to implement. Supersedes the sketch
+  below on go-ahead.
 - [`phase3-tftp-design.md`](phase3-tftp-design.md) — Phase 3 (TFTP to the
   Pi over direct LAN) **prior direction sketch** (2026-05-27); superseded
   on approval of the delivery design above.
