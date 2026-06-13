@@ -16,5 +16,6 @@ The **protocol logic is host-verifiable**: `tools/netboot-oracle/z80/` assembles
 - `dhcp_reply.asm` — build the DHCP OFFER/ACK body the responder (i86) emits (the option template + the fixed option-43 "Raspberry Pi Boot" blob + the echoed client UUID); the port of `dhcp/dhcp.go::BuildReply`.
 - `tftp_build.asm` — the i83 TFTP server's reply-packet builders: OACK, DATA, ERROR; the port of `tftp/tftp.go::BuildOACK`/`BuildDATA`/`BuildError`.
 - `tftp_parse.asm` — the i83 TFTP server's request side: parse an incoming RRQ (`parse_request`) and resolve its filename against the flat store (`resolve`: 404 serial-subdir, OACK a hit, ERROR(1) every miss); the port of `tftp/tftp.go::ParseRequest` and `tftp/server.go::Resolve`.
+- `tftp_client.asm` — the i82 TFTP client's request side: build a read request (`build_rrq`) and parse the server's option-acknowledgement (`parse_oack` + `find_option`, learning the negotiated blksize / file tsize); the port of `tftp/tftp.go::BuildRRQ` and `::ParseOACK`.
 
 Design + sequencing: `docs/plans/phase3-netboot-implementation-plan.md`; wire-level oracle: `docs/notes/pi-netboot-capture-analysis.md`.
