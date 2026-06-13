@@ -10,7 +10,7 @@ import (
 )
 
 // TestRegenProducesCanonicalDataGo asserts that running
-// `enctab-gen -mra reference/arm-mra -gopkg <tmp>` against the
+// `tables-gen -mra reference/arm-mra -gopkg <tmp>` against the
 // committed MRA snapshot produces a file byte-identical to the
 // checked-in tools/aarch64enc/data.go.  This is the guarantee that
 // makes `make enctab-regen-source` safe to run: regenerating data.go
@@ -18,14 +18,14 @@ import (
 // projection.  All hand-curated forms live in manual_forms.go, which
 // this tool never touches.
 //
-// The test invokes the locally built `enctab-gen` binary instead of
+// The test invokes the locally built `tables-gen` binary instead of
 // calling `main()` directly so that the same code path the Makefile
 // exercises is exercised here.
 func TestRegenProducesCanonicalDataGo(t *testing.T) {
 	repoRoot := findRepoRoot(t)
-	bin := filepath.Join(repoRoot, "build", "enctab-gen")
+	bin := filepath.Join(repoRoot, "build", "tables-gen")
 	if _, err := os.Stat(bin); err != nil {
-		t.Skipf("enctab-gen binary not found at %s; run `make enctab-gen` first", bin)
+		t.Skipf("tables-gen binary not found at %s; run `make tables-gen` first", bin)
 	}
 
 	tmp := t.TempDir()
@@ -40,7 +40,7 @@ func TestRegenProducesCanonicalDataGo(t *testing.T) {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		t.Fatalf("enctab-gen failed: %v\nstderr:\n%s", err, stderr.String())
+		t.Fatalf("tables-gen failed: %v\nstderr:\n%s", err, stderr.String())
 	}
 
 	got, err := os.ReadFile(outGo)
@@ -77,7 +77,7 @@ func TestRegenProducesCanonicalDataGo(t *testing.T) {
 
 func findRepoRoot(t *testing.T) string {
 	t.Helper()
-	// We're in tools/enctab-gen; walk up until we see a Makefile.
+	// We're in tools/tables-gen; walk up until we see a Makefile.
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")

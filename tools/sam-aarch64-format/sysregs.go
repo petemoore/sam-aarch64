@@ -362,3 +362,44 @@ func ParseTLBI(name string) (TLBIOp, bool) {
 	op, ok := tlbiOps[strings.ToLower(name)]
 	return op, ok
 }
+
+// The accessors below expose the four System-group name→encoding maps so
+// the table generator (tools/tables-gen) can project them into the Z80
+// src/sysreg_tables.inc byte streams. They return defensive copies so a
+// caller cannot mutate the package's authority maps.
+
+// NamedSysRegs returns a copy of the architectural-name → SysReg map.
+func NamedSysRegs() map[string]SysReg {
+	out := make(map[string]SysReg, len(namedSysRegs))
+	for k, v := range namedSysRegs {
+		out[k] = v
+	}
+	return out
+}
+
+// PStateFields returns a copy of the PSTATE-field-name → PState map.
+func PStateFields() map[string]PState {
+	out := make(map[string]PState, len(pstateFields))
+	for k, v := range pstateFields {
+		out[k] = v
+	}
+	return out
+}
+
+// DCOps returns a copy of the DC-op-name → DCOp map.
+func DCOps() map[string]DCOp {
+	out := make(map[string]DCOp, len(dcOps))
+	for k, v := range dcOps {
+		out[k] = v
+	}
+	return out
+}
+
+// TLBIOps returns a copy of the TLBI-op-name → TLBIOp map.
+func TLBIOps() map[string]TLBIOp {
+	out := make(map[string]TLBIOp, len(tlbiOps))
+	for k, v := range tlbiOps {
+		out[k] = v
+	}
+	return out
+}

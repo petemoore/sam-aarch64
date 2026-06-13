@@ -26,7 +26,7 @@ Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
 
 | Strand | Status | Source |
 |---|---|---|
-| **i7** — codegen sysreg/mnemonic/form tables from the Go authority (the **first brick**) | 📋 **spec approved** (Pete 2026-06-12; PR #184) — phases A–C queued now; phase D = i74 | `docs/specs/codegen-tables-design.md`; item registry i7, i74 |
+| **i7** — codegen sysreg/mnemonic/form tables from the Go authority (the **first brick**) | 🔨 **phases A + B landed** — A deleted ENCTAB_LEN; B renamed the tool to `tables-gen`, generates `src/sysreg_tables.inc` from `sysregs.go` + the `make tables` / `tables-sync-check` freshness gate. Phase C next; phase D = i74 | `docs/specs/codegen-tables-design.md`; item registry i7, i74 |
 | **i74** — i7 phase D: at/ic/barrier operand-table codegen (spec §6 Q3) | 📋 queued — after i7 A–C land | `docs/specs/codegen-tables-design.md` §6; i7 |
 | **i75** — B-DOS boot-disk swap (the q10 resolution, incremental) | ✅ done — B-DOS-booted gate suite proven green locally (no Atom Lite attached), shipped/CI default flipped to B-DOS, samdos2 retained via flags | item registry i75; q10; `docs/notes/bdos-trinity-fork-analysis.md` |
 | **i41** — editor edit-model implementation (paged block-list) | 📋 design agreed (Pete 2026-06-08, §7 — 5 decisions locked) | `docs/specs/editor-edit-model-design.md` §7; item registry i41 |
@@ -43,11 +43,22 @@ Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
 The spec (`docs/specs/codegen-tables-design.md`) is approved (Pete 2026-06-12,
 PR #184 merged). It generates the Z80 sysreg/mnemonic/form tables from the Go
 authority so the Z80 constants follow the encoder tables automatically instead
-of being hand-maintained. Approving the spec approved phases A–C2 as specified;
-implementation starts now. **Phase D** (at/ic/barrier operand tables) requires
-first refactoring `aarch64dec/sys.go` switches into exported data, so it is
-deferred by sequencing only — tracked as **i74**, queued after A–C land, so it
-automatically gets done rather than silently dropped.
+of being hand-maintained. Approving the spec approved phases A–C2 as specified.
+
+**Phase A landed** (delete ENCTAB_LEN, DIFA-read refactor in `load_enctab`).
+**Phase B landed**: the generator `tools/enctab-gen` was renamed to
+`tools/tables-gen` (its function is now "generate every Z80 data table whose
+authority is Go source"); a `-sysreg-inc` emitter projects the four
+System-group tables (sysreg / pstate / dc / tlbi) from
+`tools/sam-aarch64-format/sysregs.go` into `src/sysreg_tables.inc` (name-sorted,
+byte-neutral — the page-13/15 payload bytes are unchanged from the reordered
+commit-1 build). `make tables` regenerates in place; `make tables-sync-check`
+(a step of the `sysreg-sync` CI job) fails on any drift; `TestSysregZ80Sync`
+shifted from a hand-sync guard to a generator-fidelity guard. **Phase C**
+(constants / mnemonic-ID equates) is next. **Phase D** (at/ic/barrier operand
+tables) requires first refactoring `aarch64dec/sys.go` switches into exported
+data, so it is deferred by sequencing only — tracked as **i74**, queued after
+A–C land, so it automatically gets done rather than silently dropped.
 
 ## i75 — B-DOS boot-disk swap (q10 resolution)
 

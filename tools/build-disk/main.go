@@ -7,7 +7,7 @@
 //	                            hook-compatible image such as SAMDOS 2)
 //	1  auto       T6S1..T6S2   (BASIC AUTO: CLEAR + LOAD "assembler" + CALL)
 //	2  assembler  T6S3         (the M3 Z80 assembler binary)
-//	3  enctab.enc T6S4         (encoder table produced by enctab-gen)
+//	3  enctab.enc T6S4         (encoder table produced by tables-gen)
 //	4  IN         (after)      (the .tbn source file, if provided)
 //	5  test_mem   (after)      (off-axis test_mem.bin, if provided —
 //	                            plan-PR 3 of the paging architecture)
