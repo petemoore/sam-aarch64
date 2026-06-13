@@ -809,25 +809,23 @@ provision_demo:
 sv_chunk_name:    defm "Trinity Network "     ; the flash chunk holding MAC+IP
 
 ; --- the baked-in demo files -----------------------------------------------
-; Two tiny text files served by name. STORE format (resolve walks it):
-;   name\0 | 4-byte LE size, then a 0 sentinel.
-; SRC_TABLE format (resolve_src walks it):
-;   name\0 | 2-byte LE source ptr | 4-byte LE size, then a 0 sentinel.
-hello_name:       defm "hello.txt"
-                  defb 0
+; Two tiny text files served by name. The filenames live (once) in the
+; demo_store_tmpl / demo_src_tmpl directories below; here are their byte bodies.
 hello_data:       defm "Hello from a SAM Coupe over Trinity TFTP!"
                   defb 13, 10
 hello_end:
 hello_len:        equ hello_end - hello_data
 
-readme_name:      defm "readme.txt"
-                  defb 0
 readme_data:      defm "This SAM Coupe is serving files over TFTP via a Quazar Trinity."
                   defb 13, 10
                   defm "No Pi, no DHCP - just plain TFTP. Try: tftp <ip> then get hello.txt"
                   defb 13, 10
 readme_end:
 readme_len:       equ readme_end - readme_data
+
+; STORE format (resolve walks it):    name\0 | 4-byte LE size, then a 0 sentinel.
+; SRC_TABLE format (resolve_src walks it):
+;                       name\0 | 2-byte LE source ptr | 4-byte LE size, then a 0.
 
 demo_store_tmpl:
                   defm "hello.txt"
