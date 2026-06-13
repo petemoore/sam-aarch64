@@ -118,7 +118,6 @@ If you find files in `docs/superpowers/`, they're a stray slip — migrate them 
 - Z80 dev tool: `tools/z80-test-harness-go/` (see "Development inner loop" above).
 - Memory index: `~/.claude/projects/<this-repo's-path-slug>/memory/MEMORY.md` (always auto-loaded; the slug varies by host).
 - Pete's prime directive ("correctness over workarounds"): the first entry in the memory index — read it before anything else.
-- Autonomous-development workflow (Conductor + Builder two-tier model): `docs/process/` — launch a Conductor with "Read `docs/process/conductor.md` and begin."
 
 ## Development discipline
 
