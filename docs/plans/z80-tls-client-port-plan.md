@@ -26,48 +26,72 @@ the i88 row). The whole effort lives on a feature branch per CLAUDE.md §5 until
 
 ---
 
-## Part 0 — prerequisite: include-once guards on the shared leaves
+## Part 0 — prerequisite: dedupe the one shared double-include (sha256), via a `-D` flag
 
 **Why:** bricks 1-5 each `include` their full dependency chain as standalone
-leaves. Composing them double-includes shared modules — e.g. `sha256.asm` arrives
-via `tls_keyschedule`→`hkdf_expand_label`→`hkdf`→`hmac_sha256`→`sha256` **and**
-via `tls_transcript`→`sha256` **and** via `tls_server_flight`→`tls_transcript`→
-`sha256`. A second include redefines every label → assembly error. The org guard
-(`if defined(NETBOOT_STANDALONE)`) only guards the `org`, not the body.
+leaves. In the 6a include set (the five bricks + `x25519`), exactly **one** leaf
+is reachable via two paths and so is emitted twice — `sha256.asm`, via
+`tls_keyschedule`→`hkdf_expand_label`→`hkdf`→`hmac_sha256`→`sha256` **and** via
+`tls_server_flight`→`tls_transcript`→`sha256`. Tracing the rest: `hkdf_expand_label`/
+`hkdf`/`hmac_sha256` come only through key-schedule; `tls_transcript` only through
+server-flight; `aead`/`chacha20`/`poly1305` only through `tls_record`; `x25519`/
+`tls_client_hello` pull nothing. So **sha256 is the sole collision.** A second
+emission redefines every `sha256` label → an assembly error. (The org guard
+`if defined(NETBOOT_STANDALONE)` only guards the `org`, not the body.)
 
-**Fix:** wrap each shared-leaf body in a pyz80 include-once guard. Idiom (using
-`sha256.asm` as the example — apply verbatim, renaming the sentinel per file):
+**Do NOT use a generic include-once guard.** pyz80 (verified by reading
+`pyz80/pyz80.py` + a reproducer, 2026-06-16) runs exactly **two passes** and
+**never resets `symboltable` between them** (`for p in 1,2:`, no clear). So the
+classic guard
 
 ```asm
-; after the file's header comment, BEFORE the org guard:
-                if !defined(INCLUDED_SHA256)
-INCLUDED_SHA256 equ 1
-
-                if defined(NETBOOT_STANDALONE)
-                org     &8000
+                if defined(INCLUDED_SHA256)     ; <-- DOES NOT WORK in pyz80
+                else
+INCLUDED_SHA256: equ 1
+; ... body ...
                 endif
-
-; ... the entire existing body unchanged ...
-
-                endif                   ; INCLUDED_SHA256
 ```
 
-**Files to guard** (sentinel name in parens): `sha256.asm` (`INCLUDED_SHA256`),
-`hmac_sha256.asm` (`INCLUDED_HMAC_SHA256`), `hkdf.asm` (`INCLUDED_HKDF`),
-`hkdf_expand_label.asm` (`INCLUDED_HKDF_EXPAND_LABEL`), `chacha20.asm`
-(`INCLUDED_CHACHA20`), `poly1305.asm` (`INCLUDED_POLY1305`), `aead.asm`
-(`INCLUDED_AEAD`), `tls_transcript.asm` (`INCLUDED_TLS_TRANSCRIPT`). The five
-brick top-level files (`tls_keyschedule`/`tls_record`/`tls_client_hello`/
-`tls_server_flight`) need no guard — each is included once by 6a — but guarding
-them too is harmless and future-proof.
+defines `INCLUDED_SHA256` in pass 1, which **persists into pass 2**, so the
+`if defined(...)` is true on pass 2 and the `else` body is **skipped on pass 2**.
+A self-contained standalone leaf survives this (pass-1 memory persists, its
+labels are set once), which is why a naive guard *looks* fine when built alone —
+but any file with labels **after** an include of a guarded body phase-errors
+(`Symbol X: expected <hi> but calculated 32768, has this symbol been used
+twice?` — the included body emitted on pass 1, skipped on pass 2). This was
+observed on `tls_keyschedule`/`tls_record`/`tls_server_flight`. Guards are a dead
+end here.
 
-**Verification (this is its own mergeable PR, or step 1 of the 6a branch):** every
-existing standalone brick build is unchanged — a single guarded include behaves
-identically. Run the full `make ci-netboot-z80` brick tests
-(`netboot-tls-keyschedule`/`-record`/`-client-hello`/`-server-flight`/
-`-transcript`, plus `netboot-sha256`/`-hmac`/`-hkdf`/`-aead`/`-chacha20`/
-`-poly1305`) and confirm all `tls_*_test.go` + leaf tests still pass byte-for-byte.
-A green run proves the refactor is behaviour-preserving.
+**Fix (verified): suppress the redundant include with a `-D` build flag** — a
+command-line define is set before pass 1 and is consistent across **both** passes,
+so no phase error. The composite `tls_client.asm` is built with
+`-D NETBOOT_TLS_CLIENT=1`; have the **second** sha256 path skip its own include
+under that flag, so sha256 arrives exactly once (via the key-schedule chain, which
+6a includes first). One edit, in `tls_transcript.asm` — wrap its
+`include "sha256.asm"`:
+
+```asm
+                if defined(NETBOOT_TLS_CLIENT)
+                else                            ; standalone / server-flight build:
+                include "sha256.asm"            ; sha256 comes from here
+                endif                           ; in the 6a composite it comes via
+                                                ; the key-schedule chain (included first)
+```
+
+Standalone `tls_transcript` / `tls_server_flight` builds (no `NETBOOT_TLS_CLIENT`)
+include sha256 as before — byte-identical. This change is **folded into the 6a
+PR**, not a separate PR (it is only meaningful *together with* 6a's composite, so
+they review as one unit). Suppressing `tls_transcript`'s include makes the
+key-schedule chain the **sole** sha256 emitter — the invariant is "emitted exactly
+once," which the `-D` flag guarantees independent of include order (pyz80's two
+passes resolve forward references either way). (If 6b later composes another
+sha256 source, e.g. `tcp_conn` under `NETBOOT_HOSTTEST`, apply the same one-line
+flag-suppression there.)
+
+**Verification:** `tls_client.asm` assembles with sha256 present once; every
+standalone brick/leaf build stays byte-identical (run the `make ci-netboot-z80`
+brick targets + `tls_*_test.go`). A reproducer for the pyz80 two-pass behaviour
+lived in `/tmp` during this analysis; the conclusion above is what matters.
 
 ---
 
@@ -80,12 +104,15 @@ A green run proves the refactor is behaviour-preserving.
                 org     &8000
                 endif
 
-                include "tls_keyschedule.asm"   ; brick 1 (+ expand_label→hkdf→hmac→sha256)
+                include "tls_keyschedule.asm"   ; brick 1 (+ expand_label→hkdf→hmac→SHA256 — first sha256)
                 include "tls_record.asm"         ; brick 2 (+ aead→chacha20+poly1305)
                 include "tls_client_hello.asm"   ; brick 3
-                include "tls_server_flight.asm"  ; brick 4 (+ tls_transcript→sha256, deduped)
+                include "tls_server_flight.asm"  ; brick 4 (+ tls_transcript; its sha256 suppressed, Part 0)
                 include "x25519.asm"             ; ECDHE + client pubkey
-; tls_transcript arrives via tls_server_flight; sha256 via several paths (deduped by Part 0).
+; sha256 is emitted exactly once — via the key-schedule chain — because
+; tls_transcript's own sha256 include is flag-suppressed in this composite
+; (Part 0). pyz80 is 2-pass, so forward refs resolve regardless of order;
+; keeping tls_keyschedule first is just for readability, not correctness.
 ```
 
 Build with `-D NETBOOT_TLS_CLIENT=1` (so each leaf's `NETBOOT_STANDALONE` org
