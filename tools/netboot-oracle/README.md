@@ -18,10 +18,13 @@ an end-to-end Pi boot, which stay gated on i80 / real Trinity.
 - `server` — the integrated netboot server (i95): one `OnFrame` dispatcher that
   routes a received frame to ARP / DHCP / TFTP, composing `smoke`+`dhcp`+`tftp`.
   The Go authority for the Z80 integrated main loop (`netboot_server.asm`, to come).
-- `tcp` — the TCP/IPv4/Ethernet segment build + parse (i70): the one new
-  transport the firmware-self-provisioning HTTP client rides on (the rest of the
-  stack is UDP-only). The Go authority for the Z80 `build_tcp_segment` primitive,
-  incl. the mandatory pseudo-header checksum UDP did not need.
+- `tcp` — the TCP transport (i70): the one new transport the
+  firmware-self-provisioning HTTP client rides on (the rest of the stack is
+  UDP-only). `tcp.go` builds + parses the segment (the Go authority for the Z80
+  `build_tcp_segment` primitive, incl. the mandatory pseudo-header checksum UDP
+  did not need); `conn.go::Conn` is the client connection state machine (active
+  open SYN→SYN-ACK→ACK, seq/ack tracking, data ACK cadence, FIN teardown) — the
+  Go authority for the Z80 `tcp_conn.asm`.
 - `dhcp` — DHCP parse + the OFFER/ACK builder (i86), incl. the option-43 blob.
 - `tftp` — RRQ/OACK/DATA/ACK/ERROR + serve-by-name resolve + the client/server
   transfer-loop state machines + the client originate front (the Go reference
