@@ -27,11 +27,11 @@
 
 *Updated in place each session — this is the live handover. Keep it ≤15 lines; history lives in the milestone status docs, the registries, and `git log`.*
 
-- **Milestone:** **M9 active — the editor era** (`docs/notes/m9-status.md`). M0–M8 ✅ complete. Branch protection requires the status checks defined in `.github/workflows/ci.yml`.
-- **Last landed:** M8 closed + M9 opened (#188, this PR) after the 2026-06-12 triage; i7 spec approved + merged (#184). Overnight batch before that: i54 (#183), i17 fixes (#185), i71 B-DOS reference (#186), i72 reorientation (#187).
-- **In flight:** i7 phase A + i75 B-DOS-boot proof — launching as agent PRs immediately after this merges.
-- **Open questions:** q1 (i5 graphics — Pete; gates the i4/i6 UI strand only).
-- **NEXT ACTION:** land i7 phases A–C (then i74) and i75; then i41 edit-model implementation + i48c per `docs/notes/m9-status.md`.
+- **Milestone:** **M9 active — the editor era** (`docs/notes/m9-status.md`). M0–M8 ✅ complete. A **Phase-3 design strand** (i80–i84: TFTP, SimCoupé Trinity-net, delivery design) runs alongside, per Pete 2026-06-13.
+- **Last landed:** the i76 editor-prototype stack — re-landed 2026-06-13 as six clean 1:1 PRs (#199–#204) off current main, each individually §3-reviewed, after a GitHub per-ref Actions incident wedged the originals (#190/#192/#193/#195/#196/#197, now closed). main's `tools/editor-prototype` tree is byte-identical to the original green stack; one palette bug surfaced by the per-unit reviews → i79.
+- **In flight:** nothing (all six re-land PRs merged).
+- **Open questions:** none open (q1 resolved 2026-06-12).
+- **NEXT ACTION:** (M9) drive the editor rendering design via the config lab (`tools/editor-prototype`) toward the on-SAM editor; (Phase-3) the i84 end-to-end design + i82 TFTP RFC research (no hardware needed); plus the i79 palette fix and i77/i78 editor-region work. Pete to steer ordering.
 - Every strand keeps the **assembled-binary byte-identical** invariant (the `release-gate` 3-way byte-match); the i39 invariant is binary-identity + round-trip + `.tbn`-shrinks-or-holds, NOT `.tbn` byte-identity.
 <!-- HANDOVER-PROTOCOL-END -->
 
@@ -58,7 +58,7 @@ See `docs/specs/vision.md` for the long-form pitch and `docs/specs/phase1-assemb
 | M8 | Next-gen compact `.tbn` **v2** — the instruction-overlay format (Format B): assembled-word + zeroed-bits + sparse expression overlay unifying literal/symbolic instructions; header label/offset table; one file with an evictable editor region; name front-coding. Foundation for the on-SAM editor. | `docs/specs/compact-tbn-nextgen-design.md` (design, §7 decisions) + `docs/specs/tbn-binary-format-reference.md` (v1 baseline) | — | ✅ done (closed 2026-06-12) — v2 overlay format shipped end-to-end: i39a/#131, i39b-1/#151 + i39b-2/#153, i40 + i51/#181, i48 host side/#141–#144. The B-DOS era opened at close: i71/#186 (reference vendored) + i72/#187 (`build-disk -dos` prep). Residuals migrated to M9 (i39c → i48c). |
 | M9 | Editor era — Phase 2 foundations: codegen tables (i7), B-DOS boot-disk swap (i75), paged block-list edit model (i41), SAM-side text→overlay encoder (i48c, absorbs i39c), read-only viewer (i4), UI decisions (i6/i5/q1) | `docs/specs/editor-edit-model-design.md` + `docs/specs/comment-storage-design.md` + `docs/specs/codegen-tables-design.md` | `docs/notes/m9-status.md` | ⏳ active |
 | (Phase 2) | On-SAM editor | `docs/specs/phase1-assembler.md` §editor + `docs/specs/editor-vision.md` (design pointers) + future Phase-2 spec | — | ⏳ started — M9 carries the foundations |
-| (Phase 3) | TFTP shipper to Pi 400 (Quazar Trinity) over direct LAN cable | `docs/specs/phase3-tftp-design.md` | — | 📋 design direction captured; reference: `simonowen/trinload` |
+| (Phase 3) | TFTP shipper to Pi 400 (Quazar Trinity) over direct LAN cable | `docs/specs/phase3-tftp-design.md` | — | 📋 design-ready — items i80–i84 registered (TFTP client/server, SimCoupé Trinity-net emulation, end-to-end delivery design); reference: `simonowen/trinload` |
 
 Legend: ✅ done · ⏳ in progress · 📋 designed, not started
 
