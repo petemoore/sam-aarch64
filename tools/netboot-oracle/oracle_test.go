@@ -380,3 +380,147 @@ func TestAcceptedBlksize(t *testing.T) {
 		}
 	}
 }
+
+// --- Transfer-loop state machines (i82 client / i83 server, plan §6.1) ---
+
+// TestClientTransferLoop drives the i82 client receive model with the captured
+// DATA block 1 then a synthesised short final block, asserting block numbering,
+// ACK emission, and short-final-block termination (plan §2 steps 3-4).
+func TestClientTransferLoop(t *testing.T) {
+	u, _ := frame.ParseUDP(golden.TFTPData)
+	const serverTID = 4242
+	c := tftp.NewClientXfer(1024, serverTID)
+
+	// Block 1: the captured full block.
+	act := c.OnData(serverTID, u.Payload)
+	if blk, _ := tftp.ParseACK(act.Reply); blk != 1 {
+		t.Errorf("block-1 ACK = %d, want 1", blk)
+	}
+	if act.Done {
+		t.Error("transfer ended on a full block")
+	}
+
+	// A wrong-TID DATA must be rejected with ERROR(5), not ACKed.
+	stray := c.OnData(serverTID+1, tftp.BuildDATA(2, make([]byte, 1024)))
+	if code, _, _ := tftp.ParseError(stray.Reply); code != tftp.ErrUnknownTID {
+		t.Errorf("stray-TID reply code = %d, want 5 (unknown TID)", code)
+	}
+
+	// Block 2: a short final block ends the transfer.
+	final := c.OnData(serverTID, tftp.BuildDATA(2, []byte("tail")))
+	if blk, _ := tftp.ParseACK(final.Reply); blk != 2 {
+		t.Errorf("block-2 ACK = %d, want 2", blk)
+	}
+	if !final.Done || !c.Done() {
+		t.Error("short final block did not end the transfer")
+	}
+
+	_, data, _ := tftp.ParseDATA(u.Payload)
+	if len(c.Bytes()) != len(data)+4 {
+		t.Errorf("accumulated %d bytes, want %d", len(c.Bytes()), len(data)+4)
+	}
+}
+
+// TestClientSorcerersApprentice asserts the SAS fix: a timeout retransmits the
+// last ACK only, never the RRQ (research note §1.7).
+func TestClientSorcerersApprentice(t *testing.T) {
+	c := tftp.NewClientXfer(512, 4242)
+	if c.OnTimeout() != nil {
+		t.Error("timeout before any ACK should retransmit nothing (caller re-sends RRQ)")
+	}
+	c.OnData(4242, tftp.BuildDATA(1, make([]byte, 512))) // ACK block 1
+	rt := c.OnTimeout()
+	if blk, err := tftp.ParseACK(rt); err != nil || blk != 1 {
+		t.Errorf("timeout retransmit = %x (blk %d), want ACK block 1", rt, blk)
+	}
+	if tftp.Opcode(rt) != tftp.OpACK {
+		t.Errorf("SAS violation: timeout retransmitted opcode %d, want ACK (never RRQ)", tftp.Opcode(rt))
+	}
+}
+
+// TestServerTransferLoop drives the i83 server send model over a 3.5-block file
+// at blksize 1024, asserting block numbering, the streamed read, and the
+// short-final-block termination (plan §3 steps 4-5; oracle §2).
+func TestServerTransferLoop(t *testing.T) {
+	const blksize = 1024
+	file := make([]byte, 3*blksize+200) // 3 full blocks + a 200-byte tail
+	for i := range file {
+		file[i] = byte(i)
+	}
+	s := tftp.NewServerXfer(tftp.ByteSource(file), blksize)
+
+	for wantBlk := uint16(1); ; wantBlk++ {
+		data := s.NextData()
+		if data == nil {
+			t.Fatalf("server ran out of DATA before completing")
+		}
+		blk, payload, err := tftp.ParseDATA(data)
+		if err != nil {
+			t.Fatalf("server DATA parse: %v", err)
+		}
+		if blk != wantBlk {
+			t.Errorf("server block = %d, want %d", blk, wantBlk)
+		}
+		// Verify the streamed bytes are the right slice of the file.
+		off := (int(wantBlk) - 1) * blksize
+		if !bytes.Equal(payload, file[off:off+len(payload)]) {
+			t.Errorf("block %d payload != file slice", wantBlk)
+		}
+		if s.OnAck(blk) {
+			if wantBlk != 4 || len(payload) != 200 {
+				t.Errorf("transfer ended at block %d len %d, want block 4 len 200", wantBlk, len(payload))
+			}
+			break
+		}
+		if wantBlk > 10 {
+			t.Fatal("server transfer did not terminate")
+		}
+	}
+	if !s.Done() {
+		t.Error("server transfer not marked done")
+	}
+}
+
+// TestServerExactMultipleFinalBlock asserts the protocol's zero-length final
+// block when the file size is an exact multiple of blksize (RFC 1350).
+func TestServerExactMultipleFinalBlock(t *testing.T) {
+	const blksize = 512
+	file := make([]byte, 2*blksize) // exactly 2 full blocks
+	s := tftp.NewServerXfer(tftp.ByteSource(file), blksize)
+
+	d1 := s.NextData()
+	b1, _, _ := tftp.ParseDATA(d1)
+	if s.OnAck(b1) {
+		t.Fatal("transfer ended after block 1 of an exact-multiple file")
+	}
+	d2 := s.NextData()
+	b2, p2, _ := tftp.ParseDATA(d2)
+	if len(p2) != blksize {
+		t.Errorf("block 2 len = %d, want full %d", len(p2), blksize)
+	}
+	if s.OnAck(b2) {
+		t.Fatal("exact-multiple file must send a zero-length final block, not end here")
+	}
+	d3 := s.NextData()
+	b3, p3, _ := tftp.ParseDATA(d3)
+	if len(p3) != 0 {
+		t.Errorf("final block len = %d, want 0 (exact-multiple terminator)", len(p3))
+	}
+	if !s.OnAck(b3) {
+		t.Error("zero-length final block did not end the transfer")
+	}
+}
+
+// TestServerRetransmitOnTimeout asserts the server retransmits the last DATA
+// (not the next) on an ACK timeout (RFC 1350 server recovery).
+func TestServerRetransmitOnTimeout(t *testing.T) {
+	s := tftp.NewServerXfer(tftp.ByteSource(make([]byte, 4096)), 1024)
+	d1 := s.NextData()
+	rt := s.OnTimeout()
+	if !bytes.Equal(d1, rt) {
+		t.Errorf("timeout retransmit != last DATA sent")
+	}
+	if blk, _, _ := tftp.ParseDATA(rt); blk != 1 {
+		t.Errorf("retransmitted block = %d, want 1 (the unacked block)", blk)
+	}
+}

@@ -16,8 +16,11 @@ gated on i80 / real Trinity hardware.
   the one routine trinload lacks).
 - `dhcp` — DHCP body parse + the OFFER/ACK builder (i86), incl. the fixed
   option-43 "Raspberry Pi Boot" blob.
-- `tftp` — RRQ/OACK/DATA/ACK/ERROR build+parse (i82 client / i83 server) + the
-  serve-by-name resolve rules (404 serial-subdir, ERROR(1)-on-miss-keep-serving).
+- `tftp` — RRQ/OACK/DATA/ACK/ERROR build+parse (i82 client / i83 server), the
+  serve-by-name resolve rules (404 serial-subdir, ERROR(1)-on-miss-keep-serving),
+  and the transfer-loop state machines (client receive with the Sorcerer's-
+  Apprentice retransmit fix; server streamed send with short-final-block
+  termination) — the Go reference for the Z80 DATA/ACK loops.
 - `pcap` — dependency-free libpcap/pcapng reader (no cgo/libpcap).
 - `golden` — committed, masked golden vectors (`vectors_gen.go`, generated).
 
