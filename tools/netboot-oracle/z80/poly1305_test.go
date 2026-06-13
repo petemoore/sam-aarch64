@@ -36,6 +36,27 @@ func loadPoly(t *testing.T) *z80h.Machine {
 	return mac
 }
 
+// TestPoly1305Mul8Exhaustive verifies poly1305's quarter-square byte multiply
+// against the true product for ALL 256x256 operand pairs — a complete, copy-
+// independent correctness proof of this leaf's mul8 and its qsq_table.
+func TestPoly1305Mul8Exhaustive(t *testing.T) {
+	mac := loadPoly(t)
+	if _, err := mac.Call("qsq_init"); err != nil {
+		t.Fatalf("qsq_init: %v", err)
+	}
+	for a := 0; a < 256; a++ {
+		for e := 0; e < 256; e++ {
+			res, err := mac.CallEntry("mul8", z80h.Entry{A: uint8(a), DE: uint16(e)})
+			if err != nil {
+				t.Fatalf("mul8(%d,%d): %v", a, e, err)
+			}
+			if want := uint16(a * e); res.HL != want {
+				t.Fatalf("mul8(%d,%d) = %d, want %d", a, e, res.HL, want)
+			}
+		}
+	}
+}
+
 // polyZ80 drives poly1305_mac on a fresh machine and returns the 16-byte tag.
 func polyZ80(t *testing.T, key, msg []byte) []byte {
 	t.Helper()
