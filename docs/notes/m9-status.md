@@ -31,8 +31,9 @@ Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
 | **i75** — B-DOS boot-disk swap (the q10 resolution, incremental) | ✅ done — B-DOS-booted gate suite proven green locally (no Atom Lite attached), shipped/CI default flipped to B-DOS, samdos2 retained via flags | item registry i75; q10; `docs/notes/bdos-trinity-fork-analysis.md` |
 | **i41** — editor edit-model implementation (paged block-list) | 📋 design agreed (Pete 2026-06-08, §7 — 5 decisions locked) | `docs/specs/editor-edit-model-design.md` §7; item registry i41 |
 | **i48c** — Z80 text→overlay encoder (SAM-side editor input path; absorbs i39c) | 🧭 M9 strand — Go front-end i48b is the authority | `docs/specs/i48-syntactic-encoder-design.md` §2; item registry i48c, i39c |
-| **i4** — read-only listing/scroll viewer (precursor to i3) | 🧭 M9 strand | item registry i4; ROADMAP "Editor vision" |
-| **i6 / i5** — SAM screen-mode decision + UI visual mockups | 🧭 gated on **q1** (the only open question) | item registry i5, i6; q1 |
+| **i76** — host-side Go TUI editor prototype at SAM-faithful geometry (the functional UX authority; terminal + PNG/SCREEN$ mockup backends; **i4/i5/i6 fold into it** — P1 = the i4 viewer, the mockup backend = i5/q1, the geometry flag + P3 memo = i6) | 📋 **spec approved with amendments** (Pete 2026-06-12, §8 decisions) — implementation may begin (P1) | `docs/specs/editor-tui-prototype-design.md`; item registry i76 |
+| **i4** — read-only listing/scroll viewer (precursor to i3) | 🧭 carried forward by **i76 P1** | item registry i4, i76; ROADMAP "Editor vision" |
+| **i6 / i5** — SAM screen-mode decision + UI visual mockups | 🧭 carried forward by **i76** (q1 resolved 2026-06-12 → the i76 mockup backend) | item registry i5, i6, i76; q1 |
 | **i65** — SAM-side save-without-comments (later editor-phase) | 🧭 editor phase | item registry i65; q9 |
 
 ## The first brick — i7 codegen tables
@@ -90,14 +91,13 @@ SAM byte-matching the host over the fixture corpus.
 ## Open questions for Pete (M9)
 
 Open questions live in the milestone-neutral **`docs/notes/question-registry.md`**
-(`qN`). At M9 open, exactly one is still ⏳:
+(`qN`). None are currently ⏳: **q1 resolved 2026-06-12** (Pete, via the i76
+brief — a programmatic SAM-faithful renderer, built as the i76 mockup backend),
+which ungates the i4/i6/i5 UI strand via i76. The i76 spec gate cleared
+2026-06-12 (approved with amendments — decisions recorded in
+`docs/specs/editor-tui-prototype-design.md` §8); the strand is unblocked.
 
-- **q1** — i5 graphics tooling for editor UI mockups at SAM-accurate resolution.
-  Parked on Pete's side (researching tools the agent can drive); no agent action
-  meanwhile. It gates the i4/i6/i5 UI strand only — every other M9 strand
-  proceeds without it.
-
-(q10 resolved at M8 close → i75; q5/q6/q7 resolved during M8.)
+(q1 resolved → i76; q10 resolved at M8 close → i75; q5/q6/q7 resolved during M8.)
 
 ## Done-criterion (PROPOSED — Pete may adjust)
 
