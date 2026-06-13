@@ -50,6 +50,10 @@ fe_rp:          defs 2                  ; running source pointer (b / high)
 fe_pq:          defs 2                  ; running PROD / T destination pointer
 fe_car:         defs 1                  ; the inner-loop byte carry
 
+INV_I:          defs 32                 ; fe_invert: the saved input i
+INV_C:          defs 32                 ; fe_invert: the running accumulator
+inv_a:          defs 1                  ; fe_invert: the addition-chain step counter
+
 ; 2p = 2*(2^255-19) = 2^256 - 38 = 0x...FFDA (byte0 = 0xDA, bytes 1..31 = 0xFF).
 FE_2P:          defb &DA, &FF, &FF, &FF, &FF, &FF, &FF, &FF
                 defb &FF, &FF, &FF, &FF, &FF, &FF, &FF, &FF
@@ -430,3 +434,66 @@ fe_acc_addhl_loop:
                 inc     hl
                 djnz    fe_acc_addhl_loop
                 ret
+
+; ---------------------------------------------------------------------------
+; cp32 — copy 32 bytes from (HL) to (DE).  Clobbers BC, DE, HL.
+; ---------------------------------------------------------------------------
+cp32:
+                ld      bc, 32
+                ldir
+                ret
+
+; ===========================================================================
+; fe_invert — FE_OUT = FE_A^(p-2) mod p = FE_A^-1 (Fermat's little theorem).
+; A faithful port of TweetNaCl's inv25519: c = i; for a = 253..0: c = c^2, and
+; c = c*i except at a == 2 and a == 4 (the addition chain for the exponent
+; p-2 = 2^255 - 21).  Squaring is fe_mul(c, c).  Clobbers everything + scratch.
+; ===========================================================================
+fe_invert:
+                ld      hl, FE_A                ; INV_I = i ; INV_C = i
+                ld      de, INV_I
+                call    cp32
+                ld      hl, FE_A
+                ld      de, INV_C
+                call    cp32
+                ld      a, 253
+                ld      (inv_a), a
+fe_inv_loop:
+                ; INV_C = INV_C^2
+                ld      hl, INV_C
+                ld      de, FE_A
+                call    cp32
+                ld      hl, INV_C
+                ld      de, FE_B
+                call    cp32
+                call    fe_mul
+                ld      hl, FE_OUT
+                ld      de, INV_C
+                call    cp32
+
+                ld      a, (inv_a)              ; multiply unless a == 2 or a == 4
+                cp      2
+                jr      z, fe_inv_skip
+                cp      4
+                jr      z, fe_inv_skip
+                ld      hl, INV_C               ; INV_C = INV_C * INV_I
+                ld      de, FE_A
+                call    cp32
+                ld      hl, INV_I
+                ld      de, FE_B
+                call    cp32
+                call    fe_mul
+                ld      hl, FE_OUT
+                ld      de, INV_C
+                call    cp32
+fe_inv_skip:
+                ld      a, (inv_a)
+                or      a
+                jr      z, fe_inv_done
+                dec     a
+                ld      (inv_a), a
+                jr      fe_inv_loop
+fe_inv_done:
+                ld      hl, INV_C
+                ld      de, FE_OUT
+                jp      cp32

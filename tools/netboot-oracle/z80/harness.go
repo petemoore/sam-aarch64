@@ -214,6 +214,11 @@ type Entry struct {
 	HL uint16
 	BC uint16
 	DE uint16
+	// StepCap overrides the default maxSteps runaway guard for this call. Zero
+	// uses maxSteps. The multi-precision crypto routines (e.g. the X25519 field
+	// inversion / Montgomery ladder, tens of millions of byte-ops) legitimately
+	// run far past the default; they pass a higher cap.
+	StepCap uint64
 }
 
 // CallResult is what a routine returns to the harness.
@@ -256,6 +261,10 @@ func (mac *Machine) CallEntry(entry string, in Entry) (CallResult, error) {
 	mac.m.ram[0x6FFF] = byte(haltTrap >> 8)
 	mac.m.ram[haltTrap] = 0x76 // HALT opcode
 
+	cap := uint64(maxSteps)
+	if in.StepCap != 0 {
+		cap = in.StepCap
+	}
 	var steps uint64
 	for {
 		if cpu.PC == haltTrap {
@@ -266,7 +275,7 @@ func (mac *Machine) CallEntry(entry string, in Entry) (CallResult, error) {
 		if cpu.HALT {
 			break
 		}
-		if steps >= maxSteps {
+		if steps >= cap {
 			return CallResult{}, fmt.Errorf("z80: routine %q did not return after %d steps (PC=&%04X)", entry, steps, cpu.PC)
 		}
 	}
