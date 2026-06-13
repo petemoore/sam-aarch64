@@ -116,6 +116,13 @@ type Machine struct {
 	symbols map[string]uint16
 }
 
+// New returns an empty machine: a zeroed 64 KB space with no symbols. Used by
+// the cycle-counting anchors to stage hand-assembled opcode bytes and RunFrom
+// them.
+func New() *Machine {
+	return &Machine{m: &mem{}, symbols: map[string]uint16{}}
+}
+
 // Load reads a pyz80 .bin (assembled at &8000) into a fresh 64 KB space and
 // parses its mapfile (ADDR=NAME text, one per line) for name->address lookup.
 func Load(binPath, mapPath string) (*Machine, error) {
@@ -223,8 +230,9 @@ type Entry struct {
 
 // CallResult is what a routine returns to the harness.
 type CallResult struct {
-	BC    uint16 // the BC register at RET (routines return a length in BC)
-	Steps uint64
+	BC      uint16 // the BC register at RET (routines return a length in BC)
+	Steps   uint64
+	TStates uint64 // total Z80 cycles executed (cycle-exact; see tstates.go)
 }
 
 // Call runs the routine named `entry` to its RET with zeroed entry registers.
@@ -247,7 +255,23 @@ func (mac *Machine) CallEntry(entry string, in Entry) (CallResult, error) {
 	if err != nil {
 		return CallResult{}, err
 	}
+	return mac.run(entry, pc, in)
+}
 
+// RunFrom runs from a raw entry address (no symbol lookup) to the HALT trap,
+// with HL/BC/DE preloaded from `in`. It is the cycle-counting primitive the
+// per-instruction T-state anchors use: stage opcode bytes at an address, RunFrom
+// it, and read the measured TStates. The run setup is identical to CallEntry
+// (SP, HALT trap, step cap), so the timing is directly comparable.
+func (mac *Machine) RunFrom(addr uint16, in Entry) (CallResult, error) {
+	return mac.run(fmt.Sprintf("&%04X", addr), addr, in)
+}
+
+// run is the shared run loop: it sets SP to a safe stack top, pushes the
+// HALT-trap return address, plants the HALT there, points PC at `pc`, and steps
+// until the trap (the routine's RET landing on it) or the step cap, accumulating
+// steps and T-states. `name` only labels error messages.
+func (mac *Machine) run(name string, pc uint16, in Entry) (CallResult, error) {
 	cpu := &z80.CPU{Memory: mac.m, IO: mac.m}
 	mac.m.cpu = cpu // for the INI/IND port correction in mem.In
 	cpu.PC = pc
@@ -265,19 +289,27 @@ func (mac *Machine) CallEntry(entry string, in Entry) (CallResult, error) {
 	if in.StepCap != 0 {
 		cap = in.StepCap
 	}
-	var steps uint64
+	var steps, tstates uint64
 	for {
 		if cpu.PC == haltTrap {
 			break
 		}
+		// Cost the instruction from the live CPU state BEFORE stepping it, so
+		// conditional branches and repeating block ops are timed against the
+		// flags / loop counters as they stand on entry to the instruction.
+		t, err := instrTStates(mac.m, cpu)
+		if err != nil {
+			return CallResult{}, fmt.Errorf("z80: routine %q: %w", name, err)
+		}
+		tstates += uint64(t)
 		cpu.Step()
 		steps++
 		if cpu.HALT {
 			break
 		}
 		if steps >= cap {
-			return CallResult{}, fmt.Errorf("z80: routine %q did not return after %d steps (PC=&%04X)", entry, steps, cpu.PC)
+			return CallResult{}, fmt.Errorf("z80: routine %q did not return after %d steps (PC=&%04X)", name, steps, cpu.PC)
 		}
 	}
-	return CallResult{BC: cpu.BC.U16(), Steps: steps}, nil
+	return CallResult{BC: cpu.BC.U16(), Steps: steps, TStates: tstates}, nil
 }
