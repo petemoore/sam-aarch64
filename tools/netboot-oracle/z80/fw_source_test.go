@@ -104,3 +104,48 @@ func TestFWManifest(t *testing.T) {
 		}
 	}
 }
+
+// TestFWHost: the FW_HOST constant matches the Go authority http.GithubRawHost —
+// the request Host every firmware fetch uses (the cdn.githubraw.com proxy).
+func TestFWHost(t *testing.T) {
+	mac := loadFWSource(t)
+	if got := readCStr(t, mac, "FW_HOST"); got != http.GithubRawHost {
+		t.Errorf("FW_HOST = %q, want %q", got, http.GithubRawHost)
+	}
+}
+
+// TestFWPlanPath: fw_plan_path(i) builds the cdn.githubraw.com request path for
+// manifest file i byte-for-byte the Go authority http.Manifest.Plan's per-spec
+// Path — the per-file fetch loop's "build each selected file's URL" step, proven
+// for every file in the reference manifest (nil selection = all, in order).
+func TestFWPlanPath(t *testing.T) {
+	mac := loadFWSource(t)
+
+	plan, err := http.RPiFirmware.Plan(nil)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+
+	pathAddr, err := mac.Sym("FW_PATH")
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+
+	for i, spec := range plan {
+		res, err := mac.CallEntry("fw_plan_path", z80h.Entry{BC: uint16(i)})
+		if err != nil {
+			t.Fatalf("fw_plan_path(%d): %v", i, err)
+		}
+		raw := mac.Read(pathAddr, 256)
+		n := bytes.IndexByte(raw, 0)
+		if n < 0 {
+			t.Fatalf("file %d: FW_PATH not NUL-terminated", i)
+		}
+		if got := string(raw[:n]); got != spec.Path {
+			t.Errorf("fw_plan_path(%d) = %q, want %q", i, got, spec.Path)
+		}
+		if int(res.BC) != len(spec.Path) {
+			t.Errorf("fw_plan_path(%d) returned BC=%d, want path length %d", i, res.BC, len(spec.Path))
+		}
+	}
+}
