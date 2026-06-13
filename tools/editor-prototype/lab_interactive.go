@@ -176,6 +176,14 @@ func (st *labState) handleKey(k samscreen.Key) bool {
 		st.cfg.RelaxPalette = !st.cfg.RelaxPalette
 	case 'E': // tighten_exprs
 		st.cfg.TightenExprs = !st.cfg.TightenExprs
+	case 'M': // max_instruction_width: off -> 40 -> off (cycle through a useful default)
+		if st.cfg.MaxInstructionWidth == 0 {
+			st.cfg.MaxInstructionWidth = 40
+		} else {
+			st.cfg.MaxInstructionWidth = 0
+		}
+	case 'b': // render_constants: cycle source -> hex -> dec -> source
+		st.cfg.RenderConstants = (st.cfg.RenderConstants + 1) % 3
 	}
 	return false
 }
@@ -227,6 +235,8 @@ var helpLines = []string{
 	" c comment layout    C comment column rule  ; semicolon     ",
 	" e expand cursor line  w wrap   l current-line band         ",
 	" p relax palette     E tighten exprs                        ",
+	" M max instr width (off/40 toggle)                          ",
+	" b render_constants cycle (source/hex/dec)                  ",
 	"                                                            ",
 	" S  snapshot current settings -> lab-snapshot-N.config      ",
 	"                                                            ",

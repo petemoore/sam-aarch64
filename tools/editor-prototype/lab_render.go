@@ -107,13 +107,63 @@ func (r *labRenderer) immTransform(s string) string {
 	return s
 }
 
+// renderConstantsTransform applies the render_constants base rewrite to
+// operand text. "hex" forces every integer constant to SAM &HEX (or 0x when
+// imm_hex_amp is off); "dec" forces decimal. "source" is a no-op. Applied
+// after the immTransform pass so the two compose cleanly.
+
+// reAnyHex matches &HEXDIGITS or 0xHEXDIGITS (existing hex constants).
+var reAnyHex = regexp.MustCompile(`(?:&|0x)([0-9a-fA-F]+)`)
+
+// reDecAfterSep matches a decimal integer following an immediate marker (#),
+// a comma boundary, an open bracket, or a sign (+/-), so register indices
+// like x0 and w3 are not converted.
+var reDecAfterSep = regexp.MustCompile(`(#|,\s*|\[\s*|(?:[+\-]\s*))([0-9]+)`)
+
+func (r *labRenderer) renderConstantsTransform(s string) string {
+	switch r.cfg.RenderConstants {
+	case rcHex:
+		// Step 1: existing hex constants — normalise sigil and uppercase digits.
+		s = reAnyHex.ReplaceAllStringFunc(s, func(m string) string {
+			g := reAnyHex.FindStringSubmatch(m)
+			if r.cfg.ImmHexAmp {
+				return "&" + strings.ToUpper(g[1])
+			}
+			return "0x" + strings.ToUpper(g[1])
+		})
+		// Step 2: convert decimal immediates to hex. Only tokens after #, [, or
+		// a sign are converted, so register indices (x0, w3) are safe.
+		s = reDecAfterSep.ReplaceAllStringFunc(s, func(m string) string {
+			g := reDecAfterSep.FindStringSubmatch(m)
+			var v uint64
+			fmt.Sscanf(g[2], "%d", &v)
+			if r.cfg.ImmHexAmp {
+				return g[1] + fmt.Sprintf("&%X", v)
+			}
+			return g[1] + fmt.Sprintf("0x%X", v)
+		})
+	case rcDec:
+		// Convert hex constants to decimal.
+		s = reAnyHex.ReplaceAllStringFunc(s, func(m string) string {
+			g := reAnyHex.FindStringSubmatch(m)
+			var v uint64
+			fmt.Sscanf(g[1], "%x", &v)
+			return fmt.Sprintf("%d", v)
+		})
+	}
+	return s
+}
+
 // opsDisplay returns the operand text for line l with every config TEXT
-// transform applied (immediates, tight commas, label truncation, R6 exprs).
-// The register strip + marking is a per-token paint decision (paintOperands),
-// not a text rewrite, so it is NOT applied here.
+// transform applied (immediates, tight commas, label truncation, R6 exprs,
+// constant base rendering). The register strip + marking is a per-token paint
+// decision (paintOperands), not a text rewrite, so it is NOT applied here.
 func (r *labRenderer) opsDisplay(l srcLine) string {
 	ops := l.operands
 	ops = r.immTransform(ops)
+	if r.cfg.RenderConstants != rcSource {
+		ops = r.renderConstantsTransform(ops)
+	}
 	if r.cfg.TightCommas {
 		ops = tightenSeps(ops)
 	}
@@ -226,10 +276,9 @@ func (r *labRenderer) commentText(l srcLine) string {
 	return l.trailing
 }
 
-// codeWidth is the rendered code-line width (no indent) of instruction line l
-// under the active config: it mirrors paintCode's layout without painting, used
-// for the comment-column computation.
-func (r *labRenderer) codeWidth(l srcLine) int {
+// codeWidthRaw is the raw rendered code-line width (no indent) before any
+// max_instruction_width cap. Used internally by codeWidth and displayWidth.
+func (r *labRenderer) codeWidthRaw(l srcLine) int {
 	if !isInstruction(l) {
 		// Directive/label: full statement width.
 		if l.kind == lkLabel {
@@ -253,6 +302,18 @@ func (r *labRenderer) codeWidth(l srcLine) int {
 		col = len(l.mnemonic) + 1
 	}
 	return col + r.displayLen(l, ops)
+}
+
+// codeWidth is the displayed code-line width for column-computation purposes.
+// When max_instruction_width is set, it caps the width so truncated lines do
+// not drag the comment column right.
+func (r *labRenderer) codeWidth(l srcLine) int {
+	w := r.codeWidthRaw(l)
+	if r.cfg.MaxInstructionWidth > 0 && w > r.cfg.MaxInstructionWidth {
+		// A truncated line ends at MaxInstructionWidth−1 content + 1 ellipsis.
+		return r.cfg.MaxInstructionWidth
+	}
+	return w
 }
 
 // displayLen is the on-screen cell length of operand text after the register
@@ -442,6 +503,22 @@ func (r *labRenderer) putPlain(row []labCell, x int, s string, andGlyph bool) in
 // these in the accent pen instead of every register.
 var reLabImm = regexp.MustCompile(`#?-?(0x|&)?[0-9A-Fa-f]+\b|#-?[0-9]+`)
 
+// truncateVirtualRow truncates row to n cells, writing the ellipsis glyph at
+// position n-1 in the code pen. Cells beyond n are blanked.
+func (r *labRenderer) truncateVirtualRow(row []labCell, n int) {
+	if n < 1 {
+		n = 1
+	}
+	// Write ellipsis at position n-1.
+	if n-1 < len(row) {
+		row[n-1] = labCell{labGlyphEllipsis, r.code, r.paper}
+	}
+	// Blank everything beyond n.
+	for i := n; i < len(row); i++ {
+		row[i] = labCell{' ', r.code, r.paper}
+	}
+}
+
 // --- screen composition ---------------------------------------------------
 
 // labStatus holds the dynamic status fields the template fills.
@@ -517,14 +594,31 @@ func (r *labRenderer) renderScreen(scr samscreen.Screen, cursor, offset int, st 
 	cursorRow := -1
 	wrapExpand := r.cfg.ExpandCursorLine == expandWrap && r.cfg.ExpandK > 0
 	for i := lo; i < hi; i++ {
+		isCursorLine := i == cursor
 		// In wrap-expansion the cursor line's comment moves to the expansion
 		// rows, so suppress it on the code row (no duplication).
-		suppress := wrapExpand && i == cursor && r.m[i].trailing != ""
+		suppress := wrapExpand && isCursorLine && r.m[i].trailing != ""
+		// When max_instruction_width is active, a non-cursor code line whose
+		// raw width exceeds the limit is truncated: suppress its same-line
+		// comment so it does not float against a fake column. The comment
+		// remains reachable via cursor-expansion and F7 paths.
+		lineTruncated := false
+		if !isCursorLine && r.cfg.MaxInstructionWidth > 0 && r.m[i].isCode() {
+			if r.codeWidthRaw(r.m[i]) > r.cfg.MaxInstructionWidth {
+				lineTruncated = true
+				suppress = true
+			}
+		}
 		vr := r.row(r.m[i], indent, suppress)
 		for vi, vrow := range vr {
-			isCur := i == cursor && vi == len(vr)-1
+			isCur := isCursorLine && vi == len(vr)-1
 			if isCur {
 				cursorRow = len(disp)
+			}
+			// Apply max_instruction_width truncation to the virtual row (not
+			// the cursor line, which always shows in full).
+			if lineTruncated && vi == len(vr)-1 {
+				r.truncateVirtualRow(vrow, indent+r.cfg.MaxInstructionWidth)
 			}
 			disp = append(disp, drow{vrow, isCur})
 			// Wrap-expansion: after the cursor's code row, unfold its full
