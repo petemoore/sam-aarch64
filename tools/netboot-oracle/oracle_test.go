@@ -92,6 +92,62 @@ func TestBuildUDPFrameRoundTrips(t *testing.T) {
 	}
 }
 
+// TestBuildARPRequest asserts BuildARPRequest (the Z80 build_arp_request
+// authority, §5.1) constructs a structurally-correct RFC 826 Ethernet ARP
+// request: broadcast L2 destination, ARP EtherType, and the 28-byte payload
+// with our sender MAC/IP, a zeroed target MAC, and the resolved target IP.
+// (No ARP frame is in the Pi netboot capture — the Pi's RRQ presupposes the
+// client already knows the server MAC; this pins the on-wire structure the Z80
+// must emit.)
+func TestBuildARPRequest(t *testing.T) {
+	srcMAC := frame.MAC{0x02, 0x11, 0x22, 0x33, 0x44, 0x55}
+	srcIP := frame.IPv4{192, 168, 50, 1}
+	targetIP := frame.IPv4{192, 168, 50, 10}
+
+	f := frame.BuildARPRequest(srcMAC, srcIP, targetIP)
+	if len(f) != frame.ARPFrameLen {
+		t.Fatalf("ARP frame len = %d, want %d", len(f), frame.ARPFrameLen)
+	}
+
+	// Ethernet header: broadcast dst, our src, ARP EtherType.
+	if !bytes.Equal(f[frame.OffDstMAC:frame.OffDstMAC+6], frame.BroadcastMAC[:]) {
+		t.Errorf("dst MAC = %x, want broadcast", f[0:6])
+	}
+	if !bytes.Equal(f[frame.OffSrcMAC:frame.OffSrcMAC+6], srcMAC[:]) {
+		t.Errorf("src MAC = %x, want %x", f[6:12], srcMAC)
+	}
+	if et := uint16(f[frame.OffEtherType])<<8 | uint16(f[frame.OffEtherType+1]); et != frame.EtherTypeARP {
+		t.Errorf("EtherType = %#x, want ARP %#x", et, frame.EtherTypeARP)
+	}
+
+	// ARP payload at offset 14.
+	p := f[frame.EthHeaderLen:]
+	if htype := uint16(p[0])<<8 | uint16(p[1]); htype != frame.ARPHTypeEthernet {
+		t.Errorf("HTYPE = %d, want Ethernet", htype)
+	}
+	if ptype := uint16(p[2])<<8 | uint16(p[3]); ptype != frame.ARPPTypeIPv4 {
+		t.Errorf("PTYPE = %#x, want IPv4", ptype)
+	}
+	if p[4] != frame.ARPHLen || p[5] != frame.ARPPLen {
+		t.Errorf("HLEN/PLEN = %d/%d, want %d/%d", p[4], p[5], frame.ARPHLen, frame.ARPPLen)
+	}
+	if oper := uint16(p[6])<<8 | uint16(p[7]); oper != frame.ARPOpRequest {
+		t.Errorf("OPER = %d, want request", oper)
+	}
+	if !bytes.Equal(p[8:14], srcMAC[:]) {
+		t.Errorf("sender MAC = %x, want %x", p[8:14], srcMAC)
+	}
+	if !bytes.Equal(p[14:18], srcIP[:]) {
+		t.Errorf("sender IP = %x, want %x", p[14:18], srcIP)
+	}
+	if !bytes.Equal(p[18:24], []byte{0, 0, 0, 0, 0, 0}) {
+		t.Errorf("target MAC = %x, want zero", p[18:24])
+	}
+	if !bytes.Equal(p[24:28], targetIP[:]) {
+		t.Errorf("target IP = %x, want %x", p[24:28], targetIP)
+	}
+}
+
 // ipChecksumValid reports whether a 20-byte IP header's checksum verifies
 // (the one's-complement sum of all words is 0xffff).
 func ipChecksumValid(hdr []byte) bool {
