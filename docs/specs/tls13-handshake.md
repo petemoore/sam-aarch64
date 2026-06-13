@@ -128,9 +128,12 @@ Each is a standalone, host-verified PR, mirroring the primitive cadence:
    Certificate / CertificateVerify / Finished after decryption, feeding each into
    the transcript; capture the server Finished for verification. Verify against
    RFC 8448 / Go-generated flights.
-5. **Transcript** (`tls_transcript_*`): running SHA-256 over the handshake messages
-   (a thin `sha256_update` accumulator + a "snapshot the digest now" for the
-   Derive-Secret contexts). Verify the snapshot hashes against 8448.
+5. **Transcript** (`tls_transcript_*`) — **LANDED** (`src/netboot/tls_transcript.asm`,
+   `tls_transcript_test.go`): running SHA-256 over the handshake messages
+   (a thin `sha256_update` accumulator + a "snapshot the digest now" via a
+   save/final/restore of the 105-byte SHA-256 state, for the Derive-Secret
+   contexts). Verified vs Go crypto/sha256 (empty + interleaved snapshots across
+   the block boundary).
 6. **The state machine** (`tls_client_*`): drive 1→5 over `tcp_conn.asm` — send CH,
    read+decrypt the server flight, derive keys, verify server Finished, send client
    Finished, switch to application keys, then run the HTTP GET through
