@@ -232,6 +232,10 @@ fetch_handshake:
 fetch_recv:
                 call    tcp_conn_recv           ; reads + ACKs DATA / FIN-ACKs FIN,
                                                 ; accumulates into CONN_DATA, BC = tx
+                ; The server FIN moves the connection to FIN_WAIT -> done. We test
+                ; only ST_FIN_WAIT (where the Go Fetcher also accepts ST_CLOSED):
+                ; reaching FIN_WAIT sets PH_DONE here, so PH_RECV never runs again
+                ; and ST_CLOSED (the final-ACK transition) is unreachable mid-recv.
                 ld      a, (CONN_STATE)
                 cp      ST_FIN_WAIT
                 ret     nz                      ; still established: BC preserved
