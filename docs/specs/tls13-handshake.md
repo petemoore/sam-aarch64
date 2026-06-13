@@ -200,3 +200,47 @@ Each is a standalone, host-verified PR, mirroring the primitive cadence:
   **i102** (the crypto T-state/size optimizations — all four leaves now optimized).
   Bricks 1–5 are host-verifiable standalone leaves regardless. **Server Finished** MAC:
   **verified** (it proves the peer derived the same handshake secret; cheap and correct).
+- **Resolved (was q19): the real-hardware entropy source for the ephemeral X25519
+  scalar.** A **build-time-injected per-build seed** (32 bytes of host `/dev/urandom`
+  baked into a generated, gitignored asm block at `make` time) is the default. It is
+  adequate because the i88 security model rests on the **SHA-256 content pin**, not on
+  the transport — the firmware is public and hash-verified, so even a fixed scalar would
+  be "secure" for that purpose, and a per-build *random, unpublished* scalar is not even
+  breakable by a passive eavesdropper (ECDH hardness, unlike Konamiman's known `priv=1`).
+  Caveats (all moot here): no forward secrecy; the seed is extractable from the disk
+  artifact; a *distributed* release `.mgt` shares one seed (so confidentiality holds only
+  for user-built images). Upgrade path for a generally-secure library: mix the seed (a
+  per-device salt) with per-handshake runtime entropy (the Z80 `R` register, the 50 Hz
+  frame timer, ENC28J60 packet-arrival jitter) through SHA-256. Details: closed q19.
+
+## Prior art / novelty
+
+A 2026-06-16 survey of native TLS on Z80 and adjacent 8-bit CPUs (web + GitHub):
+
+- **Konamiman's TLSforZ80** (<https://github.com/Konamiman/TLSforZ80>, MIT, 2025) is the
+  closest classic-Z80 prior art: a TLS 1.3 client, one suite `AES_128_GCM_SHA256`, with
+  real AES-GCM / SHA-256 / HMAC / HKDF hand-written in Z80 asm — **but it stubs the key
+  exchange** (`p256.asm` hardcodes the secp256r1 private key to `1`, so the shared secret
+  is just the first half of the server's public key; the README states it is "as secure
+  as not using TLS at all"). No certificate validation. It exercises the TLS 1.3 *protocol*
+  without doing the elliptic-curve math.
+- The only **real X25519 in the Z80 *family*** runs on the **eZ80** (TI-84+ CE), which has
+  a hardware `MLT` multiply the classic Z80 lacks — so it is neither classic-Z80 prior art
+  nor performance-transferable.
+- The only **real native 8-bit TLS 1.3** found at all is on **6502** — JC-000's `c64-https`
+  (Commodore 64), which independently chose **the same suite as us**
+  (`TLS_CHACHA20_POLY1305_SHA256`) with real X25519 and even cert validation, at ~2–3 hours
+  per handshake. Independent confirmation that ChaCha20-Poly1305 + X25519 is the natural
+  no-hardware-multiply 8-bit choice, and that real EC is achievable but glacial.
+- Everything else ("HTTPS on retro hardware") **offloads** TLS to a WiFi coprocessor
+  (ESP8266/ESP32) or a PC proxy — the 8-bit CPU only ever sees plaintext. The SAM/Trinity
+  world has no TLS of any kind.
+
+**Novelty:** on this evidence, a classic-Z80 TLS 1.3 client with a *real* (non-stubbed,
+non-offloaded) X25519 key exchange — i.e. this project's `tls_client.asm` once the state
+machine lands — appears to be the **first TLS handshake and the first real elliptic-curve
+key exchange executed on a classic Z80**. (Caveat: web/GitHub search, not exhaustive; a
+private/demoscene/non-English release could exist.) This is the context that makes our
+slow-but-real X25519 (i102: ~1.6 billion T-states/ladder, ~4–5 min at 6 MHz) a deliberate,
+differentiated choice — everyone else stubbed or offloaded exactly that piece, and the
+"slow handshake is fine, it's a one-shot fetch" premise is what makes it viable.
