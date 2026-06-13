@@ -30,7 +30,12 @@
 ; action/size. The wire receive (ENC28J60 I/O) is NOT host-verifiable (gated on
 ; i80 / real Trinity).
 
+                ; org only when assembled standalone (the host harness builds
+                ; this file on its own with -D NETBOOT_STANDALONE=1); when a
+                ; state-machine file `include`s it, that file supplies the org.
+                if defined(NETBOOT_STANDALONE)
                 org     &8000
+                endif
 
 OP_RRQ:           equ 1
 OP_WRQ:           equ 2

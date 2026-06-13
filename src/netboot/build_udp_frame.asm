@@ -26,7 +26,12 @@
 ; transmission itself (ENC28J60 I/O) is NOT host-verifiable — that is gated on
 ; i80 / real Trinity and lives elsewhere.
 
+                ; org only when assembled standalone (the host harness builds
+                ; this file on its own with -D NETBOOT_STANDALONE=1); when a
+                ; state-machine file `include`s it, that file supplies the org.
+                if defined(NETBOOT_STANDALONE)
                 org     &8000
+                endif
 
 ; ---------------------------------------------------------------------------
 ; Frame field offsets (the §1.2 offset contract — mirror frame/frame.go).

@@ -65,10 +65,10 @@ ci-netboot-oracle:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-encdrv netboot-z80-routines ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-encdrv netboot-dhcp-loop netboot-z80-routines ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_build_udp_frame.bin \
+	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
 	    --mapfile=$(BUILD)/netboot_build_udp_frame.map \
 	    src/netboot/build_udp_frame.asm
 
@@ -76,7 +76,7 @@ netboot-build-udp-frame: $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_b
 
 $(BUILD)/netboot_dhcp_reply.bin $(BUILD)/netboot_dhcp_reply.map: src/netboot/dhcp_reply.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_dhcp_reply.bin \
+	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_dhcp_reply.bin \
 	    --mapfile=$(BUILD)/netboot_dhcp_reply.map \
 	    src/netboot/dhcp_reply.asm
 
@@ -84,7 +84,7 @@ netboot-dhcp-reply: $(BUILD)/netboot_dhcp_reply.bin $(BUILD)/netboot_dhcp_reply.
 
 $(BUILD)/netboot_tftp_build.bin $(BUILD)/netboot_tftp_build.map: src/netboot/tftp_build.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_tftp_build.bin \
+	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_tftp_build.bin \
 	    --mapfile=$(BUILD)/netboot_tftp_build.map \
 	    src/netboot/tftp_build.asm
 
@@ -92,7 +92,7 @@ netboot-tftp-build: $(BUILD)/netboot_tftp_build.bin $(BUILD)/netboot_tftp_build.
 
 $(BUILD)/netboot_tftp_parse.bin $(BUILD)/netboot_tftp_parse.map: src/netboot/tftp_parse.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_tftp_parse.bin \
+	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_tftp_parse.bin \
 	    --mapfile=$(BUILD)/netboot_tftp_parse.map \
 	    src/netboot/tftp_parse.asm
 
@@ -100,7 +100,7 @@ netboot-tftp-parse: $(BUILD)/netboot_tftp_parse.bin $(BUILD)/netboot_tftp_parse.
 
 $(BUILD)/netboot_tftp_client.bin $(BUILD)/netboot_tftp_client.map: src/netboot/tftp_client.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_tftp_client.bin \
+	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_tftp_client.bin \
 	    --mapfile=$(BUILD)/netboot_tftp_client.map \
 	    src/netboot/tftp_client.asm
 
@@ -108,7 +108,7 @@ netboot-tftp-client: $(BUILD)/netboot_tftp_client.bin $(BUILD)/netboot_tftp_clie
 
 $(BUILD)/netboot_build_arp_request.bin $(BUILD)/netboot_build_arp_request.map: src/netboot/build_arp_request.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_build_arp_request.bin \
+	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_arp_request.bin \
 	    --mapfile=$(BUILD)/netboot_build_arp_request.map \
 	    src/netboot/build_arp_request.asm
 
@@ -126,8 +126,22 @@ $(BUILD)/netboot_encdrv.bin $(BUILD)/netboot_encdrv.map: src/netboot/encdrv_harn
 
 netboot-encdrv: $(BUILD)/netboot_encdrv.bin $(BUILD)/netboot_encdrv.map
 
+# dhcp-loop — the i86 DHCP responder loop (state machine): drv_read a DISCOVER/
+# REQUEST, dispatch + build the OFFER/ACK, drv_write it.  Composes the
+# host-verified primitives (build_udp_frame + dhcp_reply) and the real driver
+# (encdrv.asm) into one binary; the i80 emulation test (dhcp_loop_test) runs it
+# against the emulated Trinity and asserts the wire frame matches the Go
+# Responder authority byte-for-byte.
+$(BUILD)/netboot_dhcp_loop.bin $(BUILD)/netboot_dhcp_loop.map: src/netboot/dhcp_loop.asm src/netboot/build_udp_frame.asm src/netboot/dhcp_reply.asm src/netboot/encdrv.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/netboot_dhcp_loop.bin \
+	    --mapfile=$(BUILD)/netboot_dhcp_loop.map \
+	    src/netboot/dhcp_loop.asm
+
+netboot-dhcp-loop: $(BUILD)/netboot_dhcp_loop.bin $(BUILD)/netboot_dhcp_loop.map
+
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-encdrv
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-encdrv netboot-dhcp-loop
 
 ci-netboot-z80: netboot-z80-routines
 	cd tools/netboot-oracle/z80 && go test ./...
