@@ -22,7 +22,7 @@ the limit, so nothing is summarised away. The session stays interactive and
    the model, so it can't wake the agent on its own; the nudge (a real text line,
    *not* the startup prompt) creates the next turn so the agent reads the readout
    and acts.
-3. Agent: **≥20% free → next item** (loop); **<20% free → wind down** (write the
+3. Agent: **≥50% free → next item** (loop); **<50% free → wind down** (write the
    ROADMAP handover) → `touch ~/.claude/autonomous-loop/wound-down`.
 4. Monitor stuffs `/clear` + the startup prompt → clean reset. Repeat.
 
