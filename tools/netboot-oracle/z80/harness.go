@@ -7,9 +7,16 @@
 // This is the host-verifiable half of the Z80 netboot port: a routine like
 // build_udp_frame is pure arithmetic + memory writes, so running it and
 // comparing its output buffer to the golden frame proves the port faithful —
-// the same byte-for-byte check the Go authority gets (oracle_test.go). The wire
-// transmission (ENC28J60 I/O) and an end-to-end Pi boot are NOT host-verifiable
-// and stay gated on i80 / real Trinity (plan §6.2).
+// the same byte-for-byte check the Go authority gets (oracle_test.go).
+//
+// The ENC28J60 wire I/O is host-verifiable too (i80): enc28j60.go emulates the
+// Trinity Ethernet path (the microcontroller's port-&DC select/busy + &DD
+// identity probe and the ENC28J60 SPI chip on port &DE) so the *real* vendored
+// driver (src/netboot/encdrv.asm) runs under this harness with frame bytes
+// in/out asserted byte-exact (enc28j60_test.go). What remains NOT host-
+// verifiable: an end-to-end Pi boot + real-silicon TX/RX timing — gated on real
+// Trinity hardware (the final integration gate; plan §6.2). Emulation-verified
+// is not hardware-verified.
 package z80
 
 import (
@@ -35,16 +42,73 @@ const haltTrap = 0x7000
 // maxSteps caps a run so a runaway routine fails fast instead of hanging.
 const maxSteps = 5_000_000
 
-// mem is a flat 64 KB Z80 address space implementing z80.Memory and z80.IO.
-// The netboot packet-builder routines do no port I/O, so In/Out are inert.
-type mem struct {
-	ram [0x10000]byte
+// IODevice models a port-mapped peripheral. The packet-builder routines do no
+// port I/O, so by default the harness has no device and In/Out are inert; the
+// i80 Trinity emulation (enc28j60.go) plugs one in to drive the real ENC28J60
+// driver (encdrv.asm) host-side.
+type IODevice interface {
+	In(port uint8) uint8
+	Out(port uint8, value uint8)
 }
 
-func (m *mem) Get(addr uint16) uint8       { return m.ram[addr] }
+// mem is a flat 64 KB Z80 address space implementing z80.Memory and z80.IO. Port
+// I/O is delegated to an optional IODevice (nil => inert, reads return 0xFF).
+type mem struct {
+	ram [0x10000]byte
+	io  IODevice
+	cpu *z80.CPU // back-reference, for the INI/IND port correction in In
+}
+
+func (m *mem) Get(addr uint16) uint8        { return m.ram[addr] }
 func (m *mem) Set(addr uint16, value uint8) { m.ram[addr] = value }
-func (m *mem) In(port uint8) uint8          { return 0xff }
-func (m *mem) Out(port uint8, value uint8)  {}
+
+// In returns the byte read from a port. It corrects a Z80 spec-conformance
+// quirk in koron-go/z80 v0.10.2 before delegating: the block-input
+// instructions INI/INIR/IND/INDR pass the B register as the port
+// (cpu.IO.In(cpu.BC.Hi)), whereas the Z80 addresses port C on those — only the
+// `IN A,(n)`/`IN r,(C)` forms and OUTI/OTIR use the right register. The
+// difference matters here: the Trinity driver's bulk-buffer read (encdrv.asm
+// rd_buf_lp) loads B with the byte count and clocks data out of port C (&DE)
+// with INI; left uncorrected, the device would see the loop counter as the
+// port. We detect an INI-family instruction by inspecting the two opcode bytes
+// just executed and substitute the true port (C = cpu.BC.Lo). This corrects the
+// emulator at our own boundary for every device, with no ambiguity.
+func (m *mem) In(port uint8) uint8 {
+	if m.io == nil {
+		return 0xff
+	}
+	if m.cpu != nil && m.isBlockInputPort(port) {
+		port = m.cpu.BC.Lo
+	}
+	return m.io.In(port)
+}
+
+// isBlockInputPort reports whether the IN currently being serviced is an
+// INI/INIR/IND/INDR (ED A2 / ED B2 / ED AA / ED BA), whose koron-go port is the
+// (wrong) B register. At the IO-call point the CPU's PC has advanced past the
+// 2-byte opcode, so it sits two bytes after the ED prefix.
+func (m *mem) isBlockInputPort(port uint8) bool {
+	pc := m.cpu.PC
+	if pc < 2 {
+		return false
+	}
+	if m.ram[pc-2] != 0xED {
+		return false
+	}
+	switch m.ram[pc-1] {
+	case 0xA2, 0xB2, 0xAA, 0xBA: // INI, INIR, IND, INDR
+		// Only correct when B (the koron-go port) actually differs from C; if
+		// the driver were genuinely reading port C and B==C this is a no-op.
+		return port == m.cpu.BC.Hi
+	}
+	return false
+}
+
+func (m *mem) Out(port uint8, value uint8) {
+	if m.io != nil {
+		m.io.Out(port, value)
+	}
+}
 
 // Machine is a loaded routine binary plus its symbol map, ready to run.
 type Machine struct {
@@ -134,25 +198,57 @@ func (mac *Machine) Read(addr uint16, n int) []byte {
 	return out
 }
 
+// AttachIO plugs a port-mapped peripheral (e.g. the emulated Trinity in
+// enc28j60.go) into the machine. Subsequent IN/OUT instructions are routed to
+// it. Pass nil to detach.
+func (mac *Machine) AttachIO(dev IODevice) {
+	mac.m.io = dev
+}
+
+// Entry holds the register values a routine reads on entry. The ENC28J60 driver
+// takes HL -> MAC / packet buffer and BC = length (for drv_write); the
+// packet-builder routines read their inputs from memory parameter blocks and
+// ignore these. Zero values leave the register undisturbed for callers that do
+// not need them (HL=0/BC=0 are harmless to those routines).
+type Entry struct {
+	HL uint16
+	BC uint16
+	DE uint16
+}
+
 // CallResult is what a routine returns to the harness.
 type CallResult struct {
 	BC    uint16 // the BC register at RET (routines return a length in BC)
 	Steps uint64
 }
 
-// Call runs the routine named `entry` to its RET. It sets SP to a safe stack
-// top, pushes the HALT-trap return address, plants a HALT there, points PC at
-// the entry, and steps until the HALT (the routine's RET landing on the trap)
-// or the step cap. Inputs must already be written into the routine's parameter
-// block via Write/WriteU16LE.
+// Call runs the routine named `entry` to its RET with zeroed entry registers.
+// Inputs must already be written into the routine's parameter block via
+// Write/WriteU16LE.
 func (mac *Machine) Call(entry string) (CallResult, error) {
+	return mac.CallEntry(entry, Entry{})
+}
+
+// CallEntry runs the routine named `entry` to its RET, with HL/BC/DE preloaded
+// from `in`. It sets SP to a safe stack top, pushes the HALT-trap return
+// address, plants a HALT there, points PC at the entry, and steps until the
+// HALT (the routine's RET landing on the trap) or the step cap.
+//
+// The ENC28J60 driver entry points read these registers (HL -> MAC for
+// drv_init; HL -> packet buffer and BC = length for drv_write/drv_read), so
+// CallEntry is how the i80 emulation tests drive the real driver.
+func (mac *Machine) CallEntry(entry string, in Entry) (CallResult, error) {
 	pc, err := mac.Sym(entry)
 	if err != nil {
 		return CallResult{}, err
 	}
 
 	cpu := &z80.CPU{Memory: mac.m, IO: mac.m}
+	mac.m.cpu = cpu // for the INI/IND port correction in mem.In
 	cpu.PC = pc
+	cpu.HL.SetU16(in.HL)
+	cpu.BC.SetU16(in.BC)
+	cpu.DE.SetU16(in.DE)
 	// Stack just below the trap; push the trap as the return address so the
 	// routine's RET returns to it.
 	cpu.SP = 0x6FFE
