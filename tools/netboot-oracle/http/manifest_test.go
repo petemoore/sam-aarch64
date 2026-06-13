@@ -36,6 +36,88 @@ func TestRPiFirmwareManifest(t *testing.T) {
 	}
 }
 
+// TestPlanAll: Plan(nil) yields every file in manifest order, each spec carrying
+// the cdn path, the cdn host, and the file's pinned hash.
+func TestPlanAll(t *testing.T) {
+	m := RPiFirmware
+	specs, err := m.Plan(nil)
+	if err != nil {
+		t.Fatalf("Plan(nil): %v", err)
+	}
+	if len(specs) != len(m.Files) {
+		t.Fatalf("Plan(nil) len = %d, want %d", len(specs), len(m.Files))
+	}
+	for i, s := range specs {
+		f := m.Files[i]
+		if s.Name != f.Name {
+			t.Errorf("spec %d name = %q, want %q", i, s.Name, f.Name)
+		}
+		if s.Host != GithubRawHost {
+			t.Errorf("spec %d host = %q, want %q", i, s.Host, GithubRawHost)
+		}
+		if want := m.PathFor(f); s.Path != want {
+			t.Errorf("spec %d path = %q, want %q", i, s.Path, want)
+		}
+		if s.SHA256 != f.SHA256 {
+			t.Errorf("spec %d sha256 = %x, want %x", i, s.SHA256, f.SHA256)
+		}
+	}
+}
+
+// TestPlanSubset: a selection picks a subset, in the given order.
+func TestPlanSubset(t *testing.T) {
+	m := RPiFirmware
+	specs, err := m.Plan([]int{3, 2}) // start4.elf, then start.elf
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(specs) != 2 || specs[0].Name != "start4.elf" || specs[1].Name != "start.elf" {
+		t.Fatalf("Plan([3,2]) = %v, want [start4.elf start.elf]", names(specs))
+	}
+	if want := "/raspberrypi/firmware/" + m.SHA + "/boot/start4.elf"; specs[0].Path != want {
+		t.Errorf("spec 0 path = %q, want %q", specs[0].Path, want)
+	}
+}
+
+// TestPlanOutOfRange: an out-of-range index errors (does not panic).
+func TestPlanOutOfRange(t *testing.T) {
+	if _, err := RPiFirmware.Plan([]int{99}); err == nil {
+		t.Error("Plan([99]) = nil error, want out-of-range error")
+	}
+}
+
+// TestSelectByName resolves names to indices in order, and errors on an unknown.
+func TestSelectByName(t *testing.T) {
+	m := RPiFirmware
+	got, err := m.SelectByName([]string{"start4.elf", "fixup.dat"})
+	if err != nil {
+		t.Fatalf("SelectByName: %v", err)
+	}
+	if len(got) != 2 || got[0] != 3 || got[1] != 4 {
+		t.Errorf("SelectByName = %v, want [3 4]", got)
+	}
+	if _, err := m.SelectByName([]string{"no-such-file"}); err == nil {
+		t.Error("SelectByName(unknown) = nil error, want error")
+	}
+	// Compose: SelectByName -> Plan yields the named files in order.
+	sel, _ := m.SelectByName([]string{"bootcode.bin", "start.elf"})
+	specs, err := m.Plan(sel)
+	if err != nil {
+		t.Fatalf("Plan(sel): %v", err)
+	}
+	if names(specs)[0] != "bootcode.bin" || names(specs)[1] != "start.elf" {
+		t.Errorf("composed plan = %v, want [bootcode.bin start.elf]", names(specs))
+	}
+}
+
+func names(specs []FetchSpec) []string {
+	out := make([]string, len(specs))
+	for i, s := range specs {
+		out[i] = s.Name
+	}
+	return out
+}
+
 // TestManifestHashesMatchLocalFiles verifies the pinned hashes are the real
 // content hashes — by re-hashing the actual firmware files when they are present
 // (Pete's spectrum4 checkout). This is a local-only dev guard: the multi-MB
