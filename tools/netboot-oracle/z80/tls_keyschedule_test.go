@@ -161,3 +161,67 @@ func TestTLSKeySchedule(t *testing.T) {
 		})
 	}
 }
+
+// TestTLSKeyScheduleTwoPhase verifies the split entry points the brick-6 state
+// machine uses: tls_key_schedule_handshake (after the ServerHello, when the
+// application transcript hash is not yet known) then tls_key_schedule_application
+// (after the server Finished). The handshake phase must derive the handshake
+// secrets WITHOUT reading KS_HASH_AP, and the two phases together must reproduce
+// the one-shot schedule (the ports of KeySchedule.DeriveHandshake /
+// DeriveApplication, keyschedule.go).
+func TestTLSKeyScheduleTwoPhase(t *testing.T) {
+	ecdhe := unhex(t, "8bd4054fb55b9d63fdfbacf9f04b9f0d35e6d63f537563efd46272900f89492d")
+	hashHS := bytes.Repeat([]byte{0x11}, 32)
+	hashAP := bytes.Repeat([]byte{0x22}, 32)
+	ref := goKeyScheduleRef(ecdhe, hashHS, hashAP)
+
+	mac := loadKS(t)
+	out := func(sym string, n int) []byte { return mac.Read(mustSym(t, mac, sym), n) }
+
+	mac.Write(mustSym(t, mac, "KS_ECDHE"), ecdhe)
+	mac.Write(mustSym(t, mac, "KS_HASH_HS"), hashHS)
+	// At handshake time the application hash is NOT known. Fill KS_HASH_AP with
+	// garbage to prove the handshake phase never reads it.
+	mac.Write(mustSym(t, mac, "KS_HASH_AP"), bytes.Repeat([]byte{0xEE}, 32))
+
+	if _, err := mac.CallEntry("tls_key_schedule_handshake", z80h.Entry{StepCap: 60_000_000}); err != nil {
+		t.Fatalf("tls_key_schedule_handshake: %v", err)
+	}
+	hsChecks := []struct {
+		sym  string
+		n    int
+		want []byte
+	}{
+		{"KS_EARLY", 32, ref.early}, {"KS_DERIVED", 32, ref.derived},
+		{"KS_HANDSHAKE", 32, ref.handshake}, {"KS_DERIVED2", 32, ref.derived2},
+		{"KS_CHS", 32, ref.chs}, {"KS_SHS", 32, ref.shs},
+		{"KS_CHS_KEY", 32, ref.chsKey}, {"KS_CHS_IV", 12, ref.chsIV}, {"KS_CHS_FIN", 32, ref.chsFin},
+		{"KS_SHS_KEY", 32, ref.shsKey}, {"KS_SHS_IV", 12, ref.shsIV}, {"KS_SHS_FIN", 32, ref.shsFin},
+	}
+	for _, c := range hsChecks {
+		if got := out(c.sym, c.n); !bytes.Equal(got, c.want) {
+			t.Errorf("after handshake phase: %s = %x, want %x", c.sym, got, c.want)
+		}
+	}
+
+	// The server Finished is in: the application transcript hash is now known.
+	mac.Write(mustSym(t, mac, "KS_HASH_AP"), hashAP)
+	if _, err := mac.CallEntry("tls_key_schedule_application", z80h.Entry{StepCap: 60_000_000}); err != nil {
+		t.Fatalf("tls_key_schedule_application: %v", err)
+	}
+	apChecks := []struct {
+		sym  string
+		n    int
+		want []byte
+	}{
+		{"KS_MASTER", 32, ref.master},
+		{"KS_CAP", 32, ref.cap}, {"KS_SAP", 32, ref.sap},
+		{"KS_CAP_KEY", 32, ref.capKey}, {"KS_CAP_IV", 12, ref.capIV}, {"KS_CAP_FIN", 32, ref.capFin},
+		{"KS_SAP_KEY", 32, ref.sapKey}, {"KS_SAP_IV", 12, ref.sapIV}, {"KS_SAP_FIN", 32, ref.sapFin},
+	}
+	for _, c := range apChecks {
+		if got := out(c.sym, c.n); !bytes.Equal(got, c.want) {
+			t.Errorf("after application phase: %s = %x, want %x", c.sym, got, c.want)
+		}
+	}
+}

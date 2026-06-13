@@ -18,6 +18,14 @@
 ; the two "derived" steps are Transcript-Hash("") = SHA-256("") (computed here),
 ; while the key/iv/finished contexts are the empty string (length 0).
 ;
+; Three entry points: tls_key_schedule derives the whole tree in one shot (the
+; brick-1 oracle, pinned to RFC 8448); tls_key_schedule_handshake +
+; tls_key_schedule_application are the two-phase split the brick-6 state machine
+; needs — the application transcript hash is only known after the server Finished,
+; so the handshake secrets must derive first (ports of KeySchedule.DeriveHandshake
+; / DeriveApplication, tools/netboot-oracle/tls/keyschedule.go). The one-shot entry
+; is exactly the two phases run back-to-back.
+;
 ; Built with -D NETBOOT_TLS_KS (NOT NETBOOT_STANDALONE), so the include chain's org
 ; guard (in sha256.asm, the base) stays inert and this file sets the org once — the
 ; primitives' own standalone builds are unchanged (the aead.asm composition idiom).
@@ -93,10 +101,27 @@ ks_l_iv:        defm "iv"               ; 2
 ks_l_fin:       defm "finished"         ; 8
 
 ; ===========================================================================
-; tls_key_schedule — derive the whole tree from KS_ECDHE / KS_HASH_HS / KS_HASH_AP.
-; Clobbers A, BC, DE, HL, IX + all the hkdf/hmac/sha256 scratch.
+; tls_key_schedule — the one-shot whole-tree derivation (the brick-1 oracle entry,
+; pinned to RFC 8448 by the host test): the handshake secrets then the application
+; secrets, from KS_ECDHE / KS_HASH_HS / KS_HASH_AP.  Identical output to the
+; two-phase split below — the per-secret traffic-key derivations are independent of
+; how they are grouped.  Clobbers A, BC, DE, HL, IX + all the hkdf/hmac/sha256
+; scratch.
 ; ===========================================================================
 tls_key_schedule:
+                call    tls_key_schedule_handshake
+                jp      tls_key_schedule_application
+
+; ===========================================================================
+; tls_key_schedule_handshake — port of KeySchedule.DeriveHandshake
+; (tools/netboot-oracle/tls/keyschedule.go).  From KS_ECDHE + KS_HASH_HS derive
+; Early / derived / Handshake, the client+server handshake-traffic secrets and
+; their key/iv/finished, and derived2.  The two-phase state machine calls this
+; after the ServerHello (hashHS known) — before the application hash exists.  Also
+; establishes the shared KS_ZERO + KS_EMPTY_HASH scratch that the application phase
+; reuses.  Clobbers A, BC, DE, HL, IX + scratch.
+; ===========================================================================
+tls_key_schedule_handshake:
                 ; KS_ZERO = 32 zero bytes
                 ld      hl, KS_ZERO
                 ld      (hl), 0
@@ -161,6 +186,35 @@ tls_key_schedule:
                 ld      bc, 7
                 call    ks_derive_secret
 
+                ; c hs traffic record key/iv/finished
+                ld      hl, KS_CHS
+                ld      (ks_sec), hl
+                ld      hl, KS_CHS_KEY
+                ld      (ks_ko), hl
+                ld      hl, KS_CHS_IV
+                ld      (ks_io), hl
+                ld      hl, KS_CHS_FIN
+                ld      (ks_fo), hl
+                call    ks_traffic_keys
+                ; s hs traffic record key/iv/finished
+                ld      hl, KS_SHS
+                ld      (ks_sec), hl
+                ld      hl, KS_SHS_KEY
+                ld      (ks_ko), hl
+                ld      hl, KS_SHS_IV
+                ld      (ks_io), hl
+                ld      hl, KS_SHS_FIN
+                ld      (ks_fo), hl
+                jp      ks_traffic_keys         ; tail call returns to our caller
+
+; ===========================================================================
+; tls_key_schedule_application — port of KeySchedule.DeriveApplication.  From the
+; derived2 left by tls_key_schedule_handshake + KS_HASH_AP derive Master and the
+; client+server application-traffic secrets + their key/iv/finished.  REQUIRES a
+; prior tls_key_schedule_handshake (it consumes KS_DERIVED2 and reuses KS_ZERO).
+; Clobbers A, BC, DE, HL, IX + scratch.
+; ===========================================================================
+tls_key_schedule_application:
                 ; Master = HKDF-Extract(salt=derived2, IKM=0)
                 ld      hl, KS_DERIVED2
                 ld      de, KS_ZERO
@@ -187,25 +241,7 @@ tls_key_schedule:
                 ld      bc, 12
                 call    ks_derive_secret
 
-                ; per-secret record keys
-                ld      hl, KS_CHS
-                ld      (ks_sec), hl
-                ld      hl, KS_CHS_KEY
-                ld      (ks_ko), hl
-                ld      hl, KS_CHS_IV
-                ld      (ks_io), hl
-                ld      hl, KS_CHS_FIN
-                ld      (ks_fo), hl
-                call    ks_traffic_keys
-                ld      hl, KS_SHS
-                ld      (ks_sec), hl
-                ld      hl, KS_SHS_KEY
-                ld      (ks_ko), hl
-                ld      hl, KS_SHS_IV
-                ld      (ks_io), hl
-                ld      hl, KS_SHS_FIN
-                ld      (ks_fo), hl
-                call    ks_traffic_keys
+                ; c ap traffic record key/iv/finished
                 ld      hl, KS_CAP
                 ld      (ks_sec), hl
                 ld      hl, KS_CAP_KEY
@@ -215,6 +251,7 @@ tls_key_schedule:
                 ld      hl, KS_CAP_FIN
                 ld      (ks_fo), hl
                 call    ks_traffic_keys
+                ; s ap traffic record key/iv/finished
                 ld      hl, KS_SAP
                 ld      (ks_sec), hl
                 ld      hl, KS_SAP_KEY
