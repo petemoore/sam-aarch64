@@ -24,10 +24,13 @@
 ; B-DOS HSAVE write) is the only non-host-verifiable part (CLAUDE.md §5).
 ;
 ; This file is built incrementally per docs/plans/z80-http-main-port-plan.md.
-; Brick 1 (this commit) establishes the composition: it pulls the three include
-; trees into one binary and proves every symbol the later bricks need resolves,
-; with no label/org collisions and no behaviour change. The prov_* routines and
-; the per-file store land in the following bricks.
+; It currently carries: the composition of the three include trees;
+; prov_start — the per-file connection re-init (port/ISS/state reset, path +
+; pinned-hash wiring, the bodySink seam armed); and store_begin/store_end — the
+; per-file store double (the Z80 port of the Go MemStore) that demarcates each
+; file's slice of CONN_SINK_OUT and records its verify verdict. The prov_first/
+; prov_onframe/prov_next packet loop and the bootable migration land in the
+; remaining bricks.
 
                 include "netboot_http.asm"      ; org &8000 + the fetch machine +
                                                 ; tcp_conn (+ streaming/verify under
@@ -144,13 +147,21 @@ ps_mac_zero:    ld      (hl), a
                 ld      (HTTP_PATH_PTR), hl
                 pop     bc                      ; restore BC=i
 
-                ; --- step 8: fw_manifest_entry(BC=i) -> copy rec+4 -> CONN_PINNED_HASH ---
-                call    fw_manifest_entry       ; BC=i -> BC = record ptr
+                ; --- step 8: fw_manifest_entry(BC=i) -> copy rec+4 -> CONN_PINNED_HASH;
+                ;             also stash the record's name ptr (rec+0) for store_begin ---
+                call    fw_manifest_entry       ; BC=i -> BC = record ptr (preserved
+                                                ; until the ldir below clobbers it)
                 ; record layout: name ptr@0, path ptr@2, SHA-256@4 (32 bytes), size@36.
                 ld      h, b
-                ld      l, c                    ; HL = record ptr
+                ld      l, c                    ; HL = record ptr (rec+0)
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                 ; DE = name ptr (from rec+0)
+                push    de                      ; save name ptr for step 10 (store_begin)
+                ld      h, b
+                ld      l, c                    ; HL = record ptr again
                 ld      de, 4
-                add     hl, de                  ; HL = record + 4 = SHA-256 field
+                add     hl, de                  ; HL = rec+4 = SHA-256 field
                 ld      de, CONN_PINNED_HASH
                 ld      bc, 32
                 ldir                            ; copy 32 bytes to CONN_PINNED_HASH
@@ -163,13 +174,104 @@ ps_mac_zero:    ld      (hl), a
                 ld      hl, storage_sink_leaf
                 ld      (BODY_DST_PTR), hl
 
-                ; --- step 10: call store_begin (placeholder until Brick 5) ---
+                ; --- step 10: store_begin(HL = manifest name ptr) ---
+                ; Opens this file in the per-file store double: records its name +
+                ; the current sink-out offset as the file's start boundary.
+                pop     hl                      ; HL = name ptr (saved in step 8)
                 call    store_begin
                 ret
 
 ; ===========================================================================
-; store_begin — placeholder for Brick 5 (the real per-file store open).
-; Until Brick 5 lands, this is a no-op that makes the call site exist so the
-; assembler resolves the label and the test harness can verify it compiles.
+; Brick 5 — the per-file store double (the Z80 port of the Go MemStore).
+;
+; The Go authority Provisioner.start(i) does `hash = NewHashingSink(store.Begin(
+; name))` per file and, on file completion, records `Verified = (hash.Sum() ==
+; spec.SHA256)` then `store.End(name)`. The Z80 mirror keeps one shared append-
+; only sink buffer (CONN_SINK_OUT, the recording double for the real B-DOS
+; bounded write) and DEMARCATES each file's slice of it by recording the sink-out
+; length at the file's open (store_begin) and close (store_end) — so file i's
+; body is CONN_SINK_OUT[PROV_STORE_OFFS[i] : PROV_STORE_OFFS[i+1]]. The verdict
+; per file is CONN_HASH_MATCH (conn_verify_final's body-vs-pin compare).
+;
+; This is the host-test recording double only (NETBOOT_HOSTTEST): it uses the
+; streaming-sink state (CONN_SINK_OUT_LEN / CONN_HASH_MATCH / conn_verify_final),
+; all of which exist only in the host-test build. The bootable build's real
+; store_begin/store_end (the B-DOS HSAVE leaf, q16/i93) land in Brick 7; until
+; then they are no-ops there.
 ; ===========================================================================
+                if defined(NETBOOT_HOSTTEST)
+; PROV_STORE_COUNT — number of files closed so far (store_end increments). It is
+; the live index store_begin/store_end write into, so store_begin for file i sees
+; i and store_end for file i sets it to i+1.
+PROV_STORE_COUNT:   defw 0
+; PROV_STORE_NAMES — one name pointer per file (2 B each), in fetch order; the
+; Go MemStore.Order analogue.
+PROV_STORE_NAMES:   defs 16     ; up to 8 files
+; PROV_STORE_OFFS — the file boundaries within CONN_SINK_OUT (2 B each): file i's
+; body is [OFFS[i], OFFS[i+1]). store_begin writes the start at OFFS[i], store_end
+; the end at OFFS[i+1], so N files leave N+1 boundaries.
+PROV_STORE_OFFS:    defs 18     ; up to 9 boundaries
+; PROV_FILE_VERDICTS — CONN_HASH_MATCH per file (1 B each): 1 if the streamed
+; body's SHA-256 matched the pinned hash, else 0 (the Go FileResult.Verified).
+PROV_FILE_VERDICTS: defs 8      ; up to 8 files
+
+; ---------------------------------------------------------------------------
+; store_begin — open file (PROV_STORE_COUNT) in the store double.
+; In:  HL = the file's name pointer (NUL-terminated string).
+; Records the name + the current sink-out offset as the file's start boundary.
+; Clobbers: A, BC, DE, HL.
+; ---------------------------------------------------------------------------
+store_begin:
+                ex      de, hl                  ; DE = name ptr
+                ld      hl, (PROV_STORE_COUNT)
+                add     hl, hl                  ; HL = idx*2 (word index)
+                push    hl                      ; save idx*2 for the OFFS store
+                ld      bc, PROV_STORE_NAMES
+                add     hl, bc                  ; HL = &PROV_STORE_NAMES[idx]
+                ld      (hl), e
+                inc     hl
+                ld      (hl), d                 ; PROV_STORE_NAMES[idx] = name ptr
+                pop     hl                      ; HL = idx*2
+                ld      bc, PROV_STORE_OFFS
+                add     hl, bc                  ; HL = &PROV_STORE_OFFS[idx]
+                ld      bc, (CONN_SINK_OUT_LEN)
+                ld      (hl), c
+                inc     hl
+                ld      (hl), b                 ; PROV_STORE_OFFS[idx] = start offset
+                ret
+
+; ---------------------------------------------------------------------------
+; store_end — close the current file: finish + verify its hash, record the
+; verdict and the end boundary, advance the file count.
+; In:  CONN_PINNED_HASH filled (by prov_start), the body fully streamed.
+; Clobbers: A, BC, DE, HL, IX (conn_verify_final).
+; ---------------------------------------------------------------------------
+store_end:
+                call    conn_verify_final       ; CONN_HASH + CONN_HASH_MATCH
+                ; PROV_FILE_VERDICTS[idx] = CONN_HASH_MATCH (1 byte per file).
+                ld      hl, (PROV_STORE_COUNT)
+                ld      de, PROV_FILE_VERDICTS
+                add     hl, de                  ; HL = &PROV_FILE_VERDICTS[idx]
+                ld      a, (CONN_HASH_MATCH)
+                ld      (hl), a
+                ; PROV_STORE_OFFS[idx+1] = current sink-out length (end boundary).
+                ld      hl, (PROV_STORE_COUNT)
+                inc     hl                      ; idx+1
+                add     hl, hl                  ; (idx+1)*2
+                ld      de, PROV_STORE_OFFS
+                add     hl, de                  ; HL = &PROV_STORE_OFFS[idx+1]
+                ld      bc, (CONN_SINK_OUT_LEN)
+                ld      (hl), c
+                inc     hl
+                ld      (hl), b
+                ; PROV_STORE_COUNT = idx+1.
+                ld      hl, (PROV_STORE_COUNT)
+                inc     hl
+                ld      (PROV_STORE_COUNT), hl
+                ret
+                else
+; Bootable build: the real B-DOS HSAVE store leaf lands in Brick 7. Until then
+; these are no-ops so prov_start (which is assembled into the bootable) links.
 store_begin:    ret
+store_end:      ret
+                endif
