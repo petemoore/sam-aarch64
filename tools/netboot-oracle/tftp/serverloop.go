@@ -56,8 +56,22 @@ func (s *ServerLoop) SetSource(src Source) { s.xfer = nil; s.pendingSrc = src }
 
 // OnRRQ processes a received RRQ frame and returns the reply frame (an OACK on a
 // hit, an ERROR(1) on a miss / serial-subdir). It records the client endpoint
-// (MAC/IP/TID) for the subsequent DATA frames.
+// (MAC/IP/TID) for the subsequent DATA frames. This is the Pi-boot-ROM path: the
+// ROM always sends options, so a hit is always answered with an OACK (the client
+// then ACKs block 0 to start the data flow).
 func (s *ServerLoop) OnRRQ(rrqFrame []byte) []byte {
+	return s.StartTransfer(rrqFrame, true)
+}
+
+// StartTransfer is the shared RRQ handler for both the OACK path (sendOACK=true,
+// the Pi boot ROM, which always negotiates options) and the plain-client path
+// (sendOACK=false: a bare RRQ with no options, RFC 2347 — the server must NOT
+// send an OACK and instead streams DATA block 1 straight away at the default
+// 512-byte block size). It parses + resolves the request, learns the client
+// endpoint, and on a hit either returns the OACK or the first DATA frame; on a
+// miss it returns ERROR(1) and keeps serving. A nil return means the frame was
+// not a TFTP RRQ this loop should answer.
+func (s *ServerLoop) StartTransfer(rrqFrame []byte, sendOACK bool) []byte {
 	u, ok := frame.ParseUDP(rrqFrame)
 	if !ok || u.DstPort != 69 {
 		return nil // not a TFTP-server-bound frame
@@ -77,6 +91,14 @@ func (s *ServerLoop) OnRRQ(rrqFrame []byte) []byte {
 		// ERROR(1) on every miss and keep serving (the headline robustness rule).
 		s.xfer = nil
 		return s.wrap(BuildError(ErrFileNotFound, "File not found"))
+	}
+
+	if !sendOACK {
+		// RFC 2347 bare-RRQ path: no options were requested, so the server omits
+		// the OACK and begins the transfer at the 512-byte default, sending DATA
+		// block 1 right away.
+		s.xfer = NewServerXfer(s.pendingSrc, 512)
+		return s.wrap(s.xfer.NextData())
 	}
 
 	// A hit: negotiate the blksize (echo within bounds, else 512) and start the

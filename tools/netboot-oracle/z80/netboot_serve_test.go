@@ -1,0 +1,280 @@
+// netboot_serve_test.go — the i96 host-verification of the serve-files TFTP demo
+// server. It runs the real composed state machine (src/netboot/netboot_serve.asm:
+// the driver encdrv.asm + the host-verified build_udp_frame/build_arp_reply/
+// tftp_build/tftp_parse primitives) under the flat-memory koron-go/z80 harness with
+// the emulated Trinity (enc28j60.go) attached, and asserts that the served frames —
+// an ARP reply, a bare-RRQ -> DATA-block-1 transfer (RFC 2347, no OACK), an
+// optioned-RRQ -> OACK transfer, and a miss -> ERROR(1) — driven through the single
+// serve_serve_once dispatcher match the Go authority serve.Responder.OnFrame
+// byte-for-byte.
+//
+// This is the demo server made host-verifiable end-to-end by the i80 emulation. It
+// is emulation verification, NOT hardware verification — the real ENC28J60 silicon
+// and an end-to-end run on real hardware (with a stock tftp/curl client) stay gated
+// on real Trinity (CLAUDE.md §5).
+package z80_test
+
+import (
+	"bytes"
+	"encoding/binary"
+	"os"
+	"testing"
+
+	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
+	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/serve"
+	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/tftp"
+	z80h "github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80"
+)
+
+const (
+	srvDemoBinPath = "../../../build/netboot_serve.bin"
+	srvDemoMapPath = "../../../build/netboot_serve.map"
+
+	demoServerTID = 40136
+	demoClientTID = 30574
+
+	// Where the test stages each demo file's source bytes in Z80 RAM.
+	demoSrcOrgA = 0xC000
+	demoSrcOrgB = 0xD000
+)
+
+var (
+	demoServerMAC = [6]byte{0x02, 0x00, 0x00, 0x00, 0x00, 0x01}
+	demoServerIP  = [4]byte{192, 0, 2, 1}
+	demoClientMAC = [6]byte{0x02, 0x00, 0x00, 0x00, 0x00, 0x44}
+	demoClientIP  = [4]byte{192, 0, 2, 44}
+)
+
+func loadServeDemo(t *testing.T) *z80h.Machine {
+	t.Helper()
+	if _, err := os.Stat(srvDemoBinPath); err != nil {
+		t.Skipf("netboot_serve binary not built (%s); run `make netboot-serve`", srvDemoBinPath)
+	}
+	mac, err := z80h.Load(srvDemoBinPath, srvDemoMapPath)
+	if err != nil {
+		t.Fatalf("load netboot_serve: %v", err)
+	}
+	return mac
+}
+
+// demoFile is one served file: a name, its bytes, and where the test stages those
+// bytes in Z80 RAM (the SRC_TABLE points there).
+type demoFile struct {
+	name string
+	data []byte
+	org  uint16
+}
+
+// fillServeConfig writes the CONFIG_* block + the flat STORE + the SRC_TABLE +
+// every file's source bytes, and returns the matching Go serve.Responder.
+func fillServeConfig(t *testing.T, mac *z80h.Machine, files []demoFile) *serve.Responder {
+	t.Helper()
+	put := func(sym string, data []byte) {
+		mac.Write(symAddr(t, mac, sym), data)
+	}
+	be16 := func(v uint16) []byte { return []byte{byte(v >> 8), byte(v & 0xff)} }
+
+	put("CONFIG_SERVERMAC", demoServerMAC[:])
+	put("CONFIG_SERVERIP", demoServerIP[:])
+	put("CONFIG_SERVERTID", be16(demoServerTID))
+
+	// STORE: name\0 + 4-byte LE size per file, then a single NUL terminator.
+	var store bytes.Buffer
+	// SRC_TABLE: name\0 + 2-byte LE source ptr + 4-byte LE size, then a NUL.
+	var srcTab bytes.Buffer
+	goFiles := map[string][]byte{}
+	for _, f := range files {
+		mac.Write(f.org, f.data)
+		goFiles[f.name] = f.data
+
+		var sz [4]byte
+		binary.LittleEndian.PutUint32(sz[:], uint32(len(f.data)))
+
+		store.WriteString(f.name)
+		store.WriteByte(0)
+		store.Write(sz[:])
+
+		srcTab.WriteString(f.name)
+		srcTab.WriteByte(0)
+		srcTab.Write([]byte{byte(f.org & 0xff), byte(f.org >> 8)})
+		srcTab.Write(sz[:])
+	}
+	store.WriteByte(0)
+	srcTab.WriteByte(0)
+	put("STORE", store.Bytes())
+	put("SRC_TABLE", srcTab.Bytes())
+
+	goStore := tftp.MapStore{}
+	for name, b := range goFiles {
+		goStore[name] = uint64(len(b))
+	}
+	cfg := serve.Config{ServerMAC: demoServerMAC, ServerIP: demoServerIP, ServerTID: demoServerTID}
+	return serve.New(cfg, goStore, func(name string) tftp.Source { return tftp.ByteSource(goFiles[name]) })
+}
+
+func initServeDriver(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60) {
+	t.Helper()
+	mac.AttachIO(enc)
+	macAddr := symAddr(t, mac, "CONFIG_SERVERMAC")
+	mac.Write(macAddr, demoServerMAC[:])
+	res, err := mac.CallEntry("drv_init", z80h.Entry{HL: macAddr})
+	if err != nil {
+		t.Fatalf("call drv_init: %v", err)
+	}
+	if res.BC != 1 {
+		t.Fatalf("drv_init returned BC=%d, want 1", res.BC)
+	}
+}
+
+// serveDemo injects req (if non-nil) and runs one serve_serve_once, returning the
+// single frame the driver transmitted (or nil if it sent nothing).
+func serveDemo(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, req []byte) []byte {
+	t.Helper()
+	before := len(enc.TXFrames())
+	if req != nil {
+		enc.InjectRX(req)
+	}
+	res, err := mac.Call("serve_serve_once")
+	if err != nil {
+		t.Fatalf("call serve_serve_once: %v", err)
+	}
+	tx := enc.TXFrames()
+	if res.BC == 0 {
+		if len(tx) != before {
+			t.Fatalf("serve_serve_once returned BC=0 but transmitted a frame")
+		}
+		return nil
+	}
+	if len(tx) != before+1 {
+		t.Fatalf("serve_serve_once transmitted %d frames, want 1", len(tx)-before)
+	}
+	out := tx[len(tx)-1]
+	if int(res.BC) != len(out) {
+		t.Fatalf("serve_serve_once returned BC=%d but the wire frame is %d bytes", res.BC, len(out))
+	}
+	return out
+}
+
+// demoRRQ builds the client's RRQ frame for name with the given options.
+func demoRRQ(name string, opts []tftp.Option) []byte {
+	return frame.BuildUDPFrame(frame.UDP{
+		DstMAC: demoServerMAC, SrcMAC: demoClientMAC,
+		SrcIP: demoClientIP, DstIP: demoServerIP,
+		SrcPort: demoClientTID, DstPort: 69,
+		Payload: tftp.BuildRRQ(name, "octet", opts),
+	})
+}
+
+// demoAck builds the client's ACK frame (client TID -> server TID).
+func demoAck(block uint16) []byte {
+	return frame.BuildUDPFrame(frame.UDP{
+		DstMAC: demoServerMAC, SrcMAC: demoClientMAC,
+		SrcIP: demoClientIP, DstIP: demoServerIP,
+		SrcPort: demoClientTID, DstPort: demoServerTID,
+		Payload: tftp.BuildACK(block),
+	})
+}
+
+func eqFrame(t *testing.T, label string, got, want []byte) {
+	t.Helper()
+	if got == nil {
+		t.Fatalf("%s: dispatch sent nothing", label)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("%s != Go authority\n  z80 %x\n  go  %x", label, got, want)
+	}
+}
+
+// TestServeDemoFullSession is the headline i96 host check: a full demo session
+// driven through serve_serve_once matches serve.Responder.OnFrame byte-for-byte —
+// an ARP reply, a bare-RRQ DATA transfer, an optioned-RRQ OACK transfer, and a miss
+// ERROR. The Go authority and the Z80 share one identity + store, so they produce
+// identical bytes.
+func TestServeDemoFullSession(t *testing.T) {
+	fileA := makeFile(512 + 200) // bare-RRQ at 512: 1 full block + 200-byte tail
+	fileB := makeFile(1024 + 50) // optioned-RRQ at 1024: 1 full block + 50-byte tail
+	mac := loadServeDemo(t)
+	ref := fillServeConfig(t, mac, []demoFile{
+		{"hello.txt", fileA, demoSrcOrgA},
+		{"readme.txt", fileB, demoSrcOrgB},
+	})
+	enc := z80h.NewENC28J60()
+	initServeDriver(t, mac, enc)
+
+	// 1. ARP request for the SAM's IP -> an ARP reply.
+	arpReq := frame.BuildARPRequest(demoClientMAC, demoClientIP, demoServerIP)
+	eqFrame(t, "ARP reply", serveDemo(t, mac, enc, arpReq), ref.OnFrame(arpReq))
+
+	// 2. Bare RRQ for hello.txt (no options) -> DATA block 1 directly (no OACK).
+	bare := demoRRQ("hello.txt", nil)
+	eqFrame(t, "bare DATA 1", serveDemo(t, mac, enc, bare), ref.OnFrame(bare))
+	// 3. ACK 1 -> DATA block 2 (short final, 200 bytes).
+	a1 := demoAck(1)
+	d2 := serveDemo(t, mac, enc, a1)
+	eqFrame(t, "bare DATA 2", d2, ref.OnFrame(a1))
+	if _, p, _ := tftp.ParseDATA(udpPayload(t, d2)); len(p) != 200 {
+		t.Errorf("bare final block = %d bytes, want 200", len(p))
+	}
+	// 4. ACK 2 -> transfer complete, nothing sent.
+	a2 := demoAck(2)
+	if fin := serveDemo(t, mac, enc, a2); fin != nil {
+		t.Errorf("ACK of the short final block should end the transfer, got %x", fin)
+	}
+	_ = ref.OnFrame(a2) // keep the reference in lockstep
+
+	// 5. Optioned RRQ for readme.txt -> OACK.
+	opt := demoRRQ("readme.txt", []tftp.Option{{Name: "blksize", Value: "1024"}, {Name: "tsize", Value: "0"}})
+	eqFrame(t, "OACK", serveDemo(t, mac, enc, opt), ref.OnFrame(opt))
+	// 6. ACK 0 -> DATA block 1 (the OACK-path FirstData handoff).
+	a0 := demoAck(0)
+	d1 := serveDemo(t, mac, enc, a0)
+	eqFrame(t, "opt DATA 1", d1, ref.OnFrame(a0))
+	if _, p, _ := tftp.ParseDATA(udpPayload(t, d1)); len(p) != 1024 {
+		t.Errorf("opt block 1 = %d bytes, want 1024", len(p))
+	}
+	// 7. ACK 1 -> DATA block 2 (short final, 50 bytes).
+	a1b := demoAck(1)
+	d2b := serveDemo(t, mac, enc, a1b)
+	eqFrame(t, "opt DATA 2", d2b, ref.OnFrame(a1b))
+	// 8. ACK 2 -> complete.
+	a2b := demoAck(2)
+	if fin := serveDemo(t, mac, enc, a2b); fin != nil {
+		t.Errorf("opt ACK of the short final block should end the transfer, got %x", fin)
+	}
+	_ = ref.OnFrame(a2b)
+}
+
+// TestServeDemoMiss confirms a request for an unknown name gets ERROR(1) and the
+// server keeps serving (a subsequent valid RRQ still works).
+func TestServeDemoMiss(t *testing.T) {
+	file := makeFile(100)
+	mac := loadServeDemo(t)
+	ref := fillServeConfig(t, mac, []demoFile{{"hello.txt", file, demoSrcOrgA}})
+	enc := z80h.NewENC28J60()
+	initServeDriver(t, mac, enc)
+
+	miss := demoRRQ("nope.txt", nil)
+	got := serveDemo(t, mac, enc, miss)
+	eqFrame(t, "ERROR(1)", got, ref.OnFrame(miss))
+	code, _, err := tftp.ParseError(udpPayload(t, got))
+	if err != nil || code != tftp.ErrFileNotFound {
+		t.Fatalf("miss should be ERROR(1), got code %d err %v", code, err)
+	}
+	// A valid RRQ after a miss still serves.
+	good := demoRRQ("hello.txt", nil)
+	eqFrame(t, "after-miss DATA 1", serveDemo(t, mac, enc, good), ref.OnFrame(good))
+}
+
+// TestServeDemoArpOtherIPIgnored confirms an ARP request for a different IP is not
+// answered (matching the Go authority).
+func TestServeDemoArpOtherIPIgnored(t *testing.T) {
+	mac := loadServeDemo(t)
+	fillServeConfig(t, mac, []demoFile{{"hello.txt", makeFile(10), demoSrcOrgA}})
+	enc := z80h.NewENC28J60()
+	initServeDriver(t, mac, enc)
+
+	other := frame.BuildARPRequest(demoClientMAC, demoClientIP, demoClientIP)
+	if r := serveDemo(t, mac, enc, other); r != nil {
+		t.Errorf("answered an ARP request for a different IP: %x", r)
+	}
+}

@@ -176,7 +176,7 @@ jobs:
       - name: Netboot Z80 routines vs golden vectors
         run: make ci-netboot-z80
       - name: Bootable netboot disks build
-        run: make netboot-smoke-disk
+        run: make netboot-smoke-disk netboot-server-disk netboot-serve-disk
 
   # sysreg-sync — Go↔Z80 sysreg table sync guard (repo-audit §5 / §6 #9).
   # Two complementary checks, both pure Go (no container, no binutils):
