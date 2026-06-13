@@ -102,12 +102,7 @@ cc_rounds:
                 ld      b, 16
 cc_addstate:
                 push    bc
-                call    cc_add                  ; (HL) += (DE), preserves HL/DE
-                ld      bc, 4
-                add     hl, bc                  ; advance HL one word
-                ex      de, hl
-                add     hl, bc
-                ex      de, hl                  ; advance DE one word
+                call    cc_add                  ; (HL) += (DE); leaves HL,DE += 4
                 pop     bc
                 djnz    cc_addstate
 
@@ -248,11 +243,12 @@ cc_qr:
                 jp      cc_rotl7
 
 ; ---------------------------------------------------------------------------
-; cc_add — (HL) += (DE), 32-bit little-endian.  HL/DE unchanged on return.
+; cc_add — (HL) += (DE), 32-bit little-endian.  Walks LSB->MSB, so on return
+; HL and DE are ADVANCED by 4 (to the next word) — cc_qr reloads them anyway,
+; and cc_addstate uses that to step through its 16 words for free. Clobbers
+; A, B, HL, DE.
 ; ---------------------------------------------------------------------------
 cc_add:
-                push    hl
-                push    de
                 or      a                       ; clear carry
                 ld      b, 4
 cc_add_lp:
@@ -262,16 +258,13 @@ cc_add_lp:
                 inc     hl
                 inc     de
                 djnz    cc_add_lp
-                pop     de
-                pop     hl
                 ret
 
 ; ---------------------------------------------------------------------------
-; cc_xor — (HL) ^= (DE), 4 bytes.  HL/DE unchanged on return.
+; cc_xor — (HL) ^= (DE), 4 bytes.  Clobbers A, B, HL, DE (advances both by 4);
+; every cc_qr caller reloads HL/DE before its next use.
 ; ---------------------------------------------------------------------------
 cc_xor:
-                push    hl
-                push    de
                 ld      b, 4
 cc_xor_lp:
                 ld      a, (de)
@@ -280,8 +273,6 @@ cc_xor_lp:
                 inc     hl
                 inc     de
                 djnz    cc_xor_lp
-                pop     de
-                pop     hl
                 ret
 
 ; ---------------------------------------------------------------------------
