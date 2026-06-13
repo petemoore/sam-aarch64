@@ -251,9 +251,9 @@ check-doc-links:
 
 .PHONY: tables-gen enctab test-encoder ci-encoder
 
-# tables-gen — the Z80-table generator (renamed from enctab-gen as it grew
-# the sysreg/pstate/dc/tlbi emitter; the function is now "generate every Z80
-# data table whose authority is Go source", i7).  Imports both authority
+# tables-gen — generates every Z80 data table whose authority is Go source:
+# the binary enctab.enc form table (make enctab) and the sysreg/pstate/dc/tlbi
+# tables in src/sysreg_tables.inc (make tables).  Imports both authority
 # packages (aarch64enc, sam-aarch64-format).
 tables-gen:
 	cd tools/tables-gen && go build -o $(CURDIR)/$(BUILD)/tables-gen .
