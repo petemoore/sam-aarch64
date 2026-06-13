@@ -10,7 +10,7 @@
 ; The last block may be short: the 0x01 byte is appended after its bytes.
 ;
 ; The Z80 has no multiply, so everything is byte-radix (radix 2^8) big-integer
-; arithmetic.  mul8 is an 8x8->16 shift-add; poly_mul_a_r is the 17x16 schoolbook
+; arithmetic.  mul8 is the 8x8->16 quarter-square multiply (qsq.asm); poly_mul_a_r is the 17x16 schoolbook
 ; product (a < 2^131, r < 2^124, so the product < 2^256, 32 bytes).  Reduction mod
 ; 2^130 - 5 uses 2^130 == 5 (mod p): split P = low + 2^130*high and replace with
 ; low + 5*high, folding until the value drops below 2^130.  poly_freeze does the
@@ -54,13 +54,6 @@ poly_ai:        defs 1                  ; A[i], the current multiplier byte
 poly_rp:        defs 2                  ; running source pointer (R / HIGH)
 poly_pq:        defs 2                  ; running PROD / T destination pointer
 poly_car:       defs 1                  ; the inner-loop byte carry
-
-; qsq_table — the quarter-square multiply lookup, QSQ[n] = floor(n^2/4) for
-; n = 0..510 (511 little-endian 16-bit entries, 1022 bytes). mul8 computes
-; a*b = QSQ[a+b] - QSQ[|a-b|]. Pure regenerable scratch (qsq_init rebuilds it via
-; a running recurrence, no multiply), so it lives in RAM above the module image —
-; costing zero file/ROM bytes — rather than as emitted data.
-qsq_table:      equ &C000
 
 ; ===========================================================================
 ; poly1305_mac — the Poly1305 tag of (POLY_MSG_PTR, POLY_MSG_LEN) keyed by
@@ -228,85 +221,10 @@ add_byte_loop:
                 ret
 
 ; ---------------------------------------------------------------------------
-; mul8 — HL = A * E (8x8 -> 16) via the quarter-square identity
-;   a*b = floor((a+b)^2/4) - floor((a-b)^2/4) = QSQ[a+b] - QSQ[|a-b|],
-; exact because a+b and a-b share parity. Two table lookups + a 16-bit subtract
-; replace the 8-iteration shift-add loop — the hot inner multiply of the
-; schoolbook. qsq_table must already be built (poly1305_mac builds it at entry).
-; In: A, E = the two byte operands (D ignored). Out: HL = A*E.
-; Clobbers A, BC, DE, HL. (Both callers reload BC/DE after the call.)
-mul8:
-                ld      b, a                    ; B = multiplier
-                ld      c, e                    ; C = multiplicand
-                add     a, e                    ; A = (a+b) & 0xFF, CF = bit8
-                ld      l, a
-                ld      h, 0
-                rl      h                       ; H = bit8 -> HL = a+b (0..510)
-                add     hl, hl                  ; 2*(a+b) for the 16-bit stride
-                ld      de, qsq_table
-                add     hl, de
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)                 ; DE = QSQ[a+b]
-                push    de
-                ld      a, b
-                sub     c                       ; A = a-b, CF if a<b
-                jr      nc, mul8_diff_pos
-                neg                             ; A = |a-b|
-mul8_diff_pos:
-                ld      l, a
-                ld      h, 0
-                add     hl, hl                  ; 2*|a-b|
-                ld      de, qsq_table
-                add     hl, de
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)                 ; DE = QSQ[|a-b|]
-                pop     hl                      ; HL = QSQ[a+b]
-                or      a
-                sbc     hl, de                  ; HL = QSQ[a+b] - QSQ[|a-b|] = a*b
-                ret
-
-; qsq_init — build qsq_table: QSQ[n] = floor(n^2/4) for n = 0..510, via the
-; recurrence QSQ[n] = QSQ[n-2] + (n-1) (exact, pure 16-bit adds, no multiply).
-; Runs once before any mul8. Clobbers A, BC, DE, HL.
-qsq_init:
-                ld      hl, qsq_table
-                ld      (hl), 0                 ; QSQ[0] = 0
-                inc     hl
-                ld      (hl), 0
-                inc     hl
-                ld      (hl), 0                 ; QSQ[1] = 0
-                inc     hl
-                ld      (hl), 0
-                inc     hl                      ; HL -> &QSQ[2]
-                ld      bc, 1                   ; BC = (n-1); n starts at 2
-qsq_init_loop:
-                dec     hl
-                dec     hl
-                dec     hl
-                dec     hl                      ; HL -> &QSQ[n-2]
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)                 ; DE = QSQ[n-2]
-                inc     hl
-                inc     hl
-                inc     hl                      ; HL -> &QSQ[n]
-                ex      de, hl                  ; HL = QSQ[n-2], DE = &QSQ[n]
-                add     hl, bc                  ; HL = QSQ[n-2] + (n-1) = QSQ[n]
-                ex      de, hl                  ; DE = QSQ[n], HL = &QSQ[n]
-                ld      (hl), e
-                inc     hl
-                ld      (hl), d
-                inc     hl                      ; HL -> &QSQ[n+1]
-                inc     bc                      ; advance (n-1)
-                ld      a, b                    ; stop once (n-1) reaches 510: B=1,C=254
-                cp      1
-                jr      nz, qsq_init_loop
-                ld      a, c
-                cp      254
-                jr      nz, qsq_init_loop
-                ret
+; mul8 (8x8 -> 16, quarter-square) + qsq_init + the qsq_table equate — the shared
+; i102 multiply, extracted to qsq.asm and included by both poly1305.asm and
+; x25519.asm. poly1305_mac calls qsq_init once at entry before any mul8.
+                include "qsq.asm"
 
 ; ---------------------------------------------------------------------------
 ; poly_mul_a_r — POLY_PROD (34 bytes) = POLY_A (17) * POLY_R (16), schoolbook.
