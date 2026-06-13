@@ -294,9 +294,16 @@ conn_payload_len:
 ; In:  HL = payload length.  Clobbers: A, BC, DE, HL.
 ; ---------------------------------------------------------------------------
 conn_accumulate:
+                if defined(NETBOOT_HOSTTEST)
+                ; Streaming is host-test-only until the q16-gated http_main
+                ; migration; the bootable image (no NETBOOT_HOSTTEST) carries
+                ; neither the sink branch nor its buffers, so the boot footprint
+                ; is unchanged. CONN_SINK_ENABLED is 0 by default, so even in the
+                ; host build the legacy path is taken unless a test opts in.
                 ld      a, (CONN_SINK_ENABLED)
                 or      a
                 jp      nz, conn_accumulate_sink
+                endif
                 ; --- legacy: append to CONN_DATA ---
                 push    hl                     ; save length
                 ld      de, (CONN_DATA_LEN)
@@ -314,11 +321,15 @@ conn_accumulate:
                 ld      (CONN_DATA_LEN), hl
                 ret
 
+                if defined(NETBOOT_HOSTTEST)
 ; --- streaming: append to CONN_FLUSH_BUF, flush full windows -----------------
 ; Mirrors conn.go::acceptPayload's sink branch. First copy the whole payload to
 ; the tail of CONN_FLUSH_BUF (advancing CONN_FLUSH_LEN), then flush as many full
 ; windows as the buffer now holds, copying any overflow down to the front so the
 ; backing store stays bounded (the Z80 analogue of the Go copy-down reslice).
+; Host-test-only: the bootable image (no NETBOOT_HOSTTEST) never streams (the
+; q16-gated http_main migration will add the real flush), so the sink code + its
+; buffers are excluded to keep the boot footprint under &10000.
 conn_accumulate_sink:
                 ; --- append payload to the buffer tail ---
                 push    hl                     ; save payload length
@@ -359,6 +370,7 @@ conn_flush_loop:
                 ld      de, CONN_FLUSH_BUF     ; DE = dest (front) for ldir
                 ldir
                 jr      conn_flush_loop
+                endif
 
 ; ---------------------------------------------------------------------------
 ; conn_flush_final — drain any partial remainder to the sink at end-of-body (the
@@ -373,6 +385,7 @@ conn_flush_loop:
 ; Clobbers: A, BC, DE, HL.
 ; ---------------------------------------------------------------------------
 conn_flush_final:
+                if defined(NETBOOT_HOSTTEST)
                 ld      a, (CONN_SINK_ENABLED)
                 or      a
                 ret     z                      ; legacy: CONN_DATA already complete
@@ -384,7 +397,11 @@ conn_flush_final:
                 ld      hl, 0
                 ld      (CONN_FLUSH_LEN), hl
                 ret
+                else
+                ret                            ; streaming not built (host-test only)
+                endif
 
+                if defined(NETBOOT_HOSTTEST)
 ; ---------------------------------------------------------------------------
 ; storage_sink_flush — the host-test sink (the Z80 port of conn.go's sink.Write
 ; via ChunkSink): record one bounded flush of HL bytes from the FRONT of
@@ -432,6 +449,7 @@ storage_sink_flush:
                 inc     hl
                 ld      (CONN_SINK_CHUNK_COUNT), hl
                 ret
+                endif  ; NETBOOT_HOSTTEST (streaming sink)
 
 ; ---------------------------------------------------------------------------
 ; conn_build_and_send — fill the build_tcp_segment param block from the
@@ -604,7 +622,12 @@ CONN_DATA:        defs 4096                ; accumulated response body (test ins
 ; The real B-DOS bounded write (the q16/hardware-gated flush to Trinity storage)
 ; binds in storage_sink_flush — NOT here; CONN_SINK_OUT/CONN_SINK_CHUNKS are a
 ; test double for host verification only.
+;
+; Host-test-only (NETBOOT_HOSTTEST): these ~6.6 KB of streaming buffers are
+; excluded from the bootable image (which never streams until the q16-gated
+; http_main migration), keeping its footprint under &10000.
 ; ===========================================================================
+                if defined(NETBOOT_HOSTTEST)
 CONN_SINK_ENABLED: defs 1                  ; 0 = legacy accumulate; !=0 = stream
 CONN_FLUSH_WINDOW: defs 2                   ; flush chunk size (the test sets it)
 CONN_FLUSH_LEN:    defs 2                   ; bytes currently buffered toward a flush
@@ -613,6 +636,7 @@ CONN_SINK_OUT_LEN: defs 2                   ; bytes streamed to the test sink so
 CONN_SINK_CHUNK_COUNT: defs 2              ; number of recorded flushes
 CONN_SINK_CHUNKS:  defs 512                 ; per-flush length list (<=256 entries, 2 B each)
 CONN_SINK_OUT:     defs 4096                ; concatenation of all flushes (test inspects)
+                endif  ; NETBOOT_HOSTTEST (streaming sink)
 
 ; ===========================================================================
 ; The host-verified packet primitive + the real driver, composed in.

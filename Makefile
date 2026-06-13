@@ -165,9 +165,13 @@ netboot-dhcp-loop: $(BUILD)/netboot_dhcp_loop.bin $(BUILD)/netboot_dhcp_loop.map
 # drv_read a segment, dispatch on the connection state (SYN-SENT/ESTABLISHED/
 # FIN-WAIT), and emit the right control segment (ACK / FIN-ACK).  Composes the
 # host-verified build_tcp_segment primitive and the real driver (encdrv.asm).
+# Built with NETBOOT_HOSTTEST so the standalone test binary carries the i99
+# streaming sink (CONN_SINK_* + the flush code); the sink is excluded from the
+# bootable images (which don't pass the flag) to keep them under &10000. The
+# existing oracle tests are unaffected — CONN_SINK_ENABLED defaults to 0.
 $(BUILD)/netboot_tcp_conn.bin $(BUILD)/netboot_tcp_conn.map: src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/encdrv.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_tcp_conn.bin \
+	pyz80 -D NETBOOT_HOSTTEST=1 --obj=$(BUILD)/netboot_tcp_conn.bin \
 	    --mapfile=$(BUILD)/netboot_tcp_conn.map \
 	    src/netboot/tcp_conn.asm
 
