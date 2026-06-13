@@ -8,6 +8,8 @@ overview and the first document to read after the root `README.md`. Then:
   milestone table.
 - [`specs/`](specs/README.md) — the living design docs (evergreen names,
   one per subsystem still being designed against).
+- [`process/`](process/README.md) — the autonomous-development workflow
+  (Conductor + Builder two-tier model).
 - [`plans/`](plans/README.md) — ephemeral implementation plans; empty is
   the healthy state.
 - [`notes/`](notes/README.md) — durable technical references, the `iN`/`qN`
