@@ -15,6 +15,9 @@ an end-to-end Pi boot, which stay gated on i80 / real Trinity.
   plus the ARP request/reply build + parse functions.
 - `smoke` — the bring-up smoke-test responder (i94): answer an ARP request for
   the SAM's IP. The Go authority for the Z80 `smoke_test.asm` bring-up program.
+- `server` — the integrated netboot server (i95): one `OnFrame` dispatcher that
+  routes a received frame to ARP / DHCP / TFTP, composing `smoke`+`dhcp`+`tftp`.
+  The Go authority for the Z80 integrated main loop (`netboot_server.asm`, to come).
 - `dhcp` — DHCP parse + the OFFER/ACK builder (i86), incl. the option-43 blob.
 - `tftp` — RRQ/OACK/DATA/ACK/ERROR + serve-by-name resolve + the client/server
   transfer-loop state machines + the client originate front (the Go reference
