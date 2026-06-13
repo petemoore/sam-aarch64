@@ -8,6 +8,7 @@ package z80_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"testing"
 
@@ -66,5 +67,40 @@ func TestFWBuildPath(t *testing.T) {
 	}
 	if int(res.BC) != len(want) {
 		t.Errorf("fw_build_path returned BC=%d, want path length %d", res.BC, len(want))
+	}
+}
+
+// TestFWManifest: the Z80 FW_MANIFEST table matches the Go authority
+// http.RPiFirmware — each record's output name, in-repo path, and pinned SHA-256,
+// reached via fw_manifest_entry by index. Iterating all files (and so reaching
+// the last record) implicitly covers the count. The manifest's revision must
+// also be the FW_SHA the path builder uses.
+func TestFWManifest(t *testing.T) {
+	mac := loadFWSource(t)
+
+	if got := readCStr(t, mac, "FW_SHA"); got != http.RPiFirmware.SHA {
+		t.Errorf("FW_SHA = %q, want the manifest revision %q", got, http.RPiFirmware.SHA)
+	}
+
+	for i, want := range http.RPiFirmware.Files {
+		res, err := mac.CallEntry("fw_manifest_entry", z80h.Entry{BC: uint16(i)})
+		if err != nil {
+			t.Fatalf("fw_manifest_entry(%d): %v", i, err)
+		}
+		rec := res.BC
+		// record layout: name ptr(2), path ptr(2), pinned SHA-256(32).
+		namePtr := binary.LittleEndian.Uint16(mac.Read(rec, 2))
+		pathPtr := binary.LittleEndian.Uint16(mac.Read(rec+2, 2))
+		hash := mac.Read(rec+4, 32)
+
+		if got := readCStrAt(mac, namePtr); got != want.Name {
+			t.Errorf("file %d name = %q, want %q", i, got, want.Name)
+		}
+		if got := readCStrAt(mac, pathPtr); got != want.Path {
+			t.Errorf("file %d path = %q, want %q", i, got, want.Path)
+		}
+		if !bytes.Equal(hash, want.SHA256[:]) {
+			t.Errorf("file %d sha256 = %x, want %x", i, hash, want.SHA256)
+		}
 	}
 }
