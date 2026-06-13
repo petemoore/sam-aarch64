@@ -11,7 +11,10 @@ an end-to-end Pi boot, which stay gated on i80 / real Trinity.
 ## Packages
 
 - `frame` — the Ethernet/IPv4/UDP offset contract + `BuildUDPFrame`, the Go
-  authority for the Z80 `build_udp_frame` fresh-frame primitive trinload lacks.
+  authority for the Z80 `build_udp_frame` fresh-frame primitive trinload lacks,
+  plus the ARP request/reply build + parse functions.
+- `smoke` — the bring-up smoke-test responder (i94): answer an ARP request for
+  the SAM's IP. The Go authority for the Z80 `smoke_test.asm` bring-up program.
 - `dhcp` — DHCP parse + the OFFER/ACK builder (i86), incl. the option-43 blob.
 - `tftp` — RRQ/OACK/DATA/ACK/ERROR + serve-by-name resolve + the client/server
   transfer-loop state machines + the client originate front (the Go reference

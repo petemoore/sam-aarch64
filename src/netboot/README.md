@@ -2,6 +2,8 @@
 
 A standalone SAM Coupé Z80 program (separate from the `src/` assembler) that turns a SAM + Quazar Trinity into an aarch64 **netboot server**: it answers a Raspberry Pi's DHCP and TFTP requests so the Pi boots over the network from images the SAM holds. It also contains the TFTP **client** used to fetch images onto the SAM. It shares no memory map, paging trampoline, or build target with the assembler.
 
+**Bootable programs** (the runnable artifacts, built to bootable SAM disks via `tools/build-disk -netboot`): `smoke_test.asm` is increment 1 — the Trinity bring-up smoke test. The integrated netboot server and client are later increments. How to run them on real Trinity hardware: [`docs/notes/netboot-trinity-testing.md`](../../docs/notes/netboot-trinity-testing.md).
+
 It sits on the trinload UDP/IP/Ethernet stack (simonowen/trinload, Simon Owen; BSD-style licence) and adds the DHCP responder (i86), TFTP server (i83) and TFTP client (i82) state machines.
 
 ## Authority and verification
@@ -16,6 +18,8 @@ The **ENC28J60 wire I/O is now host-verifiable too (i80)**: `tools/netboot-oracl
 
 - `build_udp_frame.asm` — originate a fresh UDP/IPv4/Ethernet frame (plan §5.1), the primitive trinload lacks; the port of `frame/frame.go::BuildUDPFrame`.
 - `build_arp_request.asm` — originate a fresh Ethernet ARP request (plan §5.1, RFC 826) so the client learns the server's MAC before its RRQ; the port of `frame/frame.go::BuildARPRequest`.
+- `build_arp_reply.asm` — originate a fresh Ethernet ARP reply (RFC 826), the inverse of the request: a unicast frame back to an asker announcing the SAM's MAC for its IP; the port of `frame/frame.go::BuildARPReply`. Used by the bring-up smoke test.
+- `smoke_test.asm` — **increment 1**, the bring-up smoke test (i94): a bootable program that runs `drv_init` on the real Trinity then answers ARP requests for the SAM's IP — one observable network action confirming the Ethernet path comes up and talks. `smoke_serve_once` is host-verified over the i80 emulation (the ARP reply is byte-for-byte `smoke/smoke.go::Responder.OnFrame`); the bootable `smoke_main` (EEPROM config read + drv_init + the forever loop) runs on real Trinity. The port of `smoke/smoke.go`.
 - `dhcp_reply.asm` — build the DHCP OFFER/ACK body the responder (i86) emits (the option template + the fixed option-43 "Raspberry Pi Boot" blob + the echoed client UUID); the port of `dhcp/dhcp.go::BuildReply`.
 - `tftp_build.asm` — the i83 TFTP server's reply-packet builders: OACK, DATA, ERROR; the port of `tftp/tftp.go::BuildOACK`/`BuildDATA`/`BuildError`.
 - `tftp_parse.asm` — the i83 TFTP server's request side: parse an incoming RRQ (`parse_request`) and resolve its filename against the flat store (`resolve`: 404 serial-subdir, OACK a hit, ERROR(1) every miss); the port of `tftp/tftp.go::ParseRequest` and `tftp/server.go::Resolve`.
@@ -24,5 +28,6 @@ The **ENC28J60 wire I/O is now host-verifiable too (i80)**: `tools/netboot-oracl
 - `tftp_client_front.asm` — the i82 client's **request-origination front** (the step before the receive loop): `tftp_send_arp` broadcasts an ARP request, `tftp_recv_arp` learns the server MAC from the reply, `tftp_send_rrq` sends the RRQ; the port of `tftp/clientfront.go::ClientFront` (+ `frame.ParseARPReply`).
 - `bdos_seam.asm` — the **storage seam**: the UIFA/DIFA field arithmetic (`bdos_name_to_uifa` / `bdos_difa_to_size` / `bdos_fill_save_uifa`) that glues the i83 server (serve a file by name) and the i82 client (write a received file by name) to the B-DOS hooks; the port of `bdos/bdos.go`. The field maths is host-verifiable; the RST 8 hook dispatch (HGTHD/HLOAD/HSAVE/HRECORD, behind `NETBOOT_HOSTTEST`) is **not** host-verifiable (no ROM/SAMDOS in the harness) and stays gated on real Trinity.
 - `encdrv.asm` — the vendored Quazar Trinity ENC28J60 driver (simonowen/trinload, Simon Owen, verbatim): the real wire-I/O `drv_init`/`drv_read`/`drv_write` the netboot stack sits on. Not reimplemented (port/reuse the authority). `encdrv_harness.asm` orgs it at `&8000` so the i80 emulation can run it.
+- `eeprom.asm` — the vendored Quazar Trinity EEPROM library (Colin Piggot, via simonowen/trinload, verbatim): `find_index` + `read_chunk` read the "Trinity Network " flash chunk so a bootable program (the smoke test, later the server/client) uses the SAM's real MAC + IP on hardware. NOT host-verifiable (no EEPROM behind port `&DD` in the harness; the chunk's `sam_ip` offset is a flagged hardware unknown, plan §7.5 #4) — real-Trinity path only.
 
 Design + sequencing: `docs/plans/phase3-netboot-implementation-plan.md`; wire-level oracle: `docs/notes/pi-netboot-capture-analysis.md`.

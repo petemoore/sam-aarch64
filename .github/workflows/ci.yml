@@ -175,6 +175,8 @@ jobs:
         run: pip install --break-system-packages git+https://github.com/simonowen/pyz80
       - name: Netboot Z80 routines vs golden vectors
         run: make ci-netboot-z80
+      - name: Bootable netboot disks build
+        run: make netboot-smoke-disk
 
   # sysreg-sync — Go↔Z80 sysreg table sync guard (repo-audit §5 / §6 #9).
   # Two complementary checks, both pure Go (no container, no binutils):

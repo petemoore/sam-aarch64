@@ -146,15 +146,33 @@ func main() {
 	sysregDataPath := flag.String("sysreg-data", "", "path to the page-13 sysreg lookup data (build/sysreg_data.bin; PRODUCTION + test; PR-2)")
 	disasmPath := flag.String("disasm", "", "path to the page-15 disassembler binary (build/disasm.bin; PRODUCTION + test; strand-B PR-3)")
 	zx0Path := flag.String("zx0", "", "path to the page-13 zx0 compressor+decoder payload (build/zx0.bin; PRODUCTION + test; i68)")
+	netbootPath := flag.String("netboot", "", "path to a standalone netboot CODE binary (org &8000); builds a minimal bootable disk (DOS + AUTO that LOADs+CALLs it) and ignores the assembler positional args")
+	netbootName := flag.String("netboot-name", "netboot", "directory-entry name for the -netboot CODE file (the AUTO BASIC LOADs this name)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
-			"usage: %s [-dos <path>] [-dos-name <name>] [-dos-load <addr>] [-test-mem <path>] [-paged-call <path>] [-cluster <path>] [-sysreg-data <path>] [-disasm <path>] [-zx0 <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n",
-			os.Args[0])
+			"usage: %s [-dos <path>] [-dos-name <name>] [-dos-load <addr>] [-test-mem <path>] [-paged-call <path>] [-cluster <path>] [-sysreg-data <path>] [-disasm <path>] [-zx0 <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n   or: %s -netboot <code.bin> [-netboot-name <name>] [-dos ...] <output.mgt>\n",
+			os.Args[0], os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
 	args := flag.Args()
+
+	// -netboot mode: a minimal bootable disk that auto-runs a single standalone
+	// CODE binary (the Phase-3 netboot programs — the smoke test, later the
+	// server/client). Same boot mechanism as the assembler disk (ROM BOOT reads
+	// the DOS at T4S1; the AUTO BASIC CLEARs, LOADs the CODE file, and CALLs it),
+	// but with one arbitrary CODE file in place of the assembler + enctab + tests.
+	if *netbootPath != "" {
+		if len(args) != 1 {
+			flag.Usage()
+			os.Exit(2)
+		}
+		if err := buildNetbootDisk(*dosPath, *dosName, uint32(*dosLoad), *netbootPath, *netbootName, args[0]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	var assemblerPath, enctabPath, inPath, outputPath string
 	switch len(args) {
@@ -463,4 +481,79 @@ func main() {
 		fmt.Printf("zx013:      %d bytes\n", zx0Size.Size())
 	}
 	fmt.Printf("Built %s\n", outputPath)
+}
+
+// buildNetbootDisk writes a minimal bootable disk that auto-runs a single
+// standalone netboot CODE binary (org &8000). The boot mechanism is identical
+// to the assembler disk — ROM BOOT reads the DOS at T4S1, then the AUTO BASIC
+// (StartLine 10) does CLEAR &7FFF : LOAD "<name>" CODE 32768 : CALL 32768 — but
+// the payload is one arbitrary CODE file instead of the assembler + enctab +
+// test cluster. Used by the Phase-3 netboot programs (the i94 bring-up smoke
+// test, later the server/client) so Pete can boot one on real Trinity hardware.
+func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeName, outputPath string) error {
+	dosBin, err := os.ReadFile(dosPath)
+	if err != nil {
+		return fmt.Errorf("read dos: %w", err)
+	}
+	if dosPath == SamdosPath {
+		if len(dosBin) != SamdosExactSize {
+			return fmt.Errorf("samdos2: expected %d bytes, got %d", SamdosExactSize, len(dosBin))
+		}
+	} else if len(dosBin) > DosMaxSize {
+		return fmt.Errorf("dos %s: %d bytes exceeds the %d-byte boot-region sanity bound", dosPath, len(dosBin), DosMaxSize)
+	}
+
+	codeBin, err := os.ReadFile(codePath)
+	if err != nil {
+		return fmt.Errorf("read netboot code: %w", err)
+	}
+
+	disk := samfile.NewDiskImage()
+
+	// Slot 0: the boot DOS (ROM BOOT reads T4S1 raw).
+	if err := disk.AddCodeFile(dosName, dosBin, dosLoad, 0); err != nil {
+		return fmt.Errorf("AddCodeFile(%s): %w", dosName, err)
+	}
+	if err := disk.SetStartAddressPageUnusedBits(dosName, 3); err != nil {
+		return fmt.Errorf("SetStartAddressPageUnusedBits(%s): %w", dosName, err)
+	}
+
+	// Slot 1: AUTO BASIC — CLEAR &7FFF : LOAD "<name>" CODE 32768 : CALL 32768.
+	auto := &sambasic.File{
+		StartLine: 10,
+		Lines: []sambasic.Line{
+			{Number: 10, Tokens: []sambasic.Token{
+				sambasic.CLEAR,
+				sambasic.Number(uint16(LoadAddress - 1)),
+			}},
+			{Number: 20, Tokens: []sambasic.Token{
+				sambasic.LOAD,
+				sambasic.String(`"` + codeName + `"`),
+				sambasic.CODE,
+				sambasic.Number(uint16(LoadAddress)),
+			}},
+			{Number: 30, Tokens: []sambasic.Token{
+				sambasic.CALL,
+				sambasic.Number(uint16(LoadAddress)),
+			}},
+		},
+	}
+	if err := disk.AddBasicFile("auto", auto); err != nil {
+		return fmt.Errorf("AddBasicFile(auto): %w", err)
+	}
+
+	// Slot 2: the netboot CODE file at &8000 (matches the program's org &8000).
+	if err := disk.AddCodeFile(codeName, codeBin, LoadAddress, 0); err != nil {
+		return fmt.Errorf("AddCodeFile(%s): %w", codeName, err)
+	}
+
+	if err := disk.Save(outputPath); err != nil {
+		return fmt.Errorf("save %s: %w", outputPath, err)
+	}
+
+	fmt.Printf("%-12s%d bytes  T4S1-T5S10\n", dosName+":", len(dosBin))
+	fmt.Printf("auto:       %d bytes   (LOAD \"%s\" CODE 32768 : CALL 32768)\n", len(auto.Bytes()), codeName)
+	fmt.Printf("%-12s%d bytes\n", codeName+":", len(codeBin))
+	fmt.Printf("Built %s (bootable netboot disk)\n", outputPath)
+	return nil
 }

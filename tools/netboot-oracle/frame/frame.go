@@ -197,6 +197,78 @@ func ParseARPReply(f []byte) (senderMAC MAC, senderIP IPv4, ok bool) {
 	return senderMAC, senderIP, true
 }
 
+// ARPRequest is the decoded view of an incoming Ethernet ARP request returned
+// by ParseARPRequest: who is asking (sender MAC/IP) and which IP they want.
+type ARPRequest struct {
+	SenderMAC MAC
+	SenderIP  IPv4
+	TargetIP  IPv4
+}
+
+// ParseARPRequest decodes an Ethernet ARP request (RFC 826) — the Go authority
+// for the Z80 ARP-request parse the netboot bring-up smoke test does to answer
+// "who has my IP?". It accepts a frame iff it is an ARP request (EtherType
+// 0x0806, OPER=1) for Ethernet/IPv4 (HTYPE=1, PTYPE=0x0800, HLEN=6, PLEN=4); the
+// sender fields identify the asker (the reply's destination) and TargetIP is the
+// address being resolved (the SAM answers only when this equals its own IP).
+func ParseARPRequest(f []byte) (ARPRequest, bool) {
+	if len(f) < ARPFrameLen {
+		return ARPRequest{}, false
+	}
+	if binary.BigEndian.Uint16(f[OffEtherType:]) != EtherTypeARP {
+		return ARPRequest{}, false
+	}
+	p := f[EthHeaderLen:]
+	if binary.BigEndian.Uint16(p[0:]) != ARPHTypeEthernet {
+		return ARPRequest{}, false
+	}
+	if binary.BigEndian.Uint16(p[2:]) != ARPPTypeIPv4 {
+		return ARPRequest{}, false
+	}
+	if p[4] != ARPHLen || p[5] != ARPPLen {
+		return ARPRequest{}, false
+	}
+	if binary.BigEndian.Uint16(p[6:]) != ARPOpRequest {
+		return ARPRequest{}, false
+	}
+	var r ARPRequest
+	copy(r.SenderMAC[:], p[8:14]) // sender hardware address
+	copy(r.SenderIP[:], p[14:18]) // sender protocol address
+	copy(r.TargetIP[:], p[24:28]) // target protocol address (the IP being asked about)
+	return r, true
+}
+
+// BuildARPReply originates a fresh Ethernet ARP reply (RFC 826) answering a
+// "who has TargetIP?" request — the Go authority for the Z80 `build_arp_reply`
+// primitive. It is the inverse of BuildARPRequest: a unicast frame back to the
+// asker (dst = the request's sender MAC) saying "TargetIP is at srcMAC".
+//
+// The frame is the 14-byte Ethernet header (dst = dstMAC, src = srcMAC,
+// EtherType 0x0806) followed by the 28-byte ARP payload: HTYPE=Ethernet,
+// PTYPE=IPv4, HLEN=6, PLEN=4, OPER=reply, sender MAC/IP = ours (the answer),
+// target MAC/IP = the asker's (echoed from the request).
+func BuildARPReply(srcMAC, dstMAC MAC, srcIP, dstIP IPv4) []byte {
+	f := make([]byte, ARPFrameLen)
+
+	// Ethernet header: unicast back to the asker, our source, ARP EtherType.
+	copy(f[OffDstMAC:], dstMAC[:])
+	copy(f[OffSrcMAC:], srcMAC[:])
+	binary.BigEndian.PutUint16(f[OffEtherType:], EtherTypeARP)
+
+	// ARP payload begins at offset 14.
+	p := f[EthHeaderLen:]
+	binary.BigEndian.PutUint16(p[0:], ARPHTypeEthernet)
+	binary.BigEndian.PutUint16(p[2:], ARPPTypeIPv4)
+	p[4] = ARPHLen
+	p[5] = ARPPLen
+	binary.BigEndian.PutUint16(p[6:], ARPOpReply)
+	copy(p[8:], srcMAC[:])  // sender hardware address = ours (the answer)
+	copy(p[14:], srcIP[:])  // sender protocol address = ours
+	copy(p[18:], dstMAC[:]) // target hardware address = the asker's
+	copy(p[24:], dstIP[:])  // target protocol address = the asker's
+	return f
+}
+
 // ipChecksum computes the RFC 1071 one's-complement header checksum over a
 // 20-byte IPv4 header whose checksum field (bytes 10-11) is zero. This is the
 // Go form of trinload's checksum_ip / chksum_blk (trinload.asm:306, :360).
