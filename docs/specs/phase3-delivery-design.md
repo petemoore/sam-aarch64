@@ -50,9 +50,9 @@ for fetch, server for serve).
 
  OUTBOUND (i83 — TFTP server on the SAM)
    ┌────────────┐  RRQ (netboot)   ┌──────────────┐
-   │  Pi 400    │ ───────────────► │   SAM Coupé  │   serves: bootcode/start*.elf,
-   │ boot ROM   │ ◄─────────────── │ TFTP *server*│   fixup*.dat, config.txt,
-   │ (TFTP clnt)│   OACK/DATA       └──────────────┘   cmdline.txt, kernel image
+   │  Pi 400    │ ───────────────► │   SAM Coupé  │   serves: start4.elf, fixup4.dat,
+   │ boot ROM   │ ◄─────────────── │ TFTP *server*│   config.txt, cmdline.txt,
+   │ (TFTP clnt)│   OACK/DATA       └──────────────┘   kernel image
    └────────────┘                         ▲
          │ executes spectrum4 kernel       │ images sourced from Trinity SD
          ▼                                  │ (fetched inbound, or self-provisioned)
@@ -154,14 +154,16 @@ and carries the most external unknowns (the Pi's exact boot behaviour).
 
 ### 6.1 How a Pi 400 network-boots
 
-The Pi 4/400 boot ROM can TFTP-netboot: it fetches the GPU firmware stage
-(`bootcode`/`start4.elf`/`fixup4.dat`), `config.txt`/`cmdline.txt`, and finally
-the kernel image, acting as the **TFTP client**. In the standard flow it first
-uses DHCP to learn the TFTP server address and boot path; the Pi 4 bootloader
-EEPROM also supports a **static netboot** configuration (`TFTP_IP` / `TFTP_PREFIX`
-EEPROM settings) that hard-codes the server, removing the DHCP requirement. (These
-are claims to verify against current Raspberry Pi bootloader docs and on real
-hardware — → q11.)
+The Pi 4/400 boot ROM can TFTP-netboot, acting as the **TFTP client**. Unlike the
+Pi 3, its second-stage bootloader lives in the Pi's own SPI EEPROM and is never
+fetched over the network; the netboot then pulls the GPU firmware
+(`start4.elf`/`fixup4.dat`), `config.txt`/`cmdline.txt`, and finally the kernel
+image. In the standard flow the Pi first uses DHCP to learn the TFTP server
+address and boot path; the Pi 4 bootloader EEPROM also supports a **static
+netboot** configuration (set `TFTP_IP` together with `CLIENT_IP`/`SUBNET`/`GATEWAY`
+— `TFTP_PREFIX` only selects the served subdirectory) that hard-codes the
+addressing and removes the DHCP requirement. (Verify the exact settings + file set
+against current Raspberry Pi bootloader docs and on real hardware — → q11.)
 
 ### 6.2 What the SAM must therefore be
 
@@ -265,9 +267,12 @@ amount of host design removes.
 ## 11. Questions for Pete (mirrored to the qN registry)
 
 - **q11 — Pi netboot mechanics + Colin Boot ROM specifics.** Confirm: (a) the Pi
-  400 boot ROM EEPROM *static netboot* path (`TFTP_IP`/`TFTP_PREFIX`) works so the
-  SAM needs only a TFTP server and no DHCP (§6.3); (b) the exact firmware file set
-  + option set the Pi's TFTP client requests; (c) the Trinity Boot ROM's autoboot
+  400 boot ROM EEPROM *static netboot* path (`TFTP_IP` + `CLIENT_IP`/`SUBNET`/`GATEWAY`,
+  `TFTP_PREFIX` for the subdir) works so the SAM needs only a TFTP server and no
+  DHCP (§6.3); (b) the exact firmware file set + option set the Pi's TFTP client
+  requests (on the Pi 4 the second-stage bootloader is in the Pi's own SPI EEPROM,
+  so `bootcode.bin` is not served over TFTP — that is Pi 3 behaviour); (c) the
+  Trinity Boot ROM's autoboot
   affordances and how to obtain/configure it (ask-Colin). All hardware/contact
   gated.
 - **q12 — outbound delivery model.** Model A (PXE pull, bare-Pi, the goal) as the
