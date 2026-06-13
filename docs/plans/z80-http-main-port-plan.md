@@ -1,5 +1,16 @@
 # Plan: port the Go `http.Provisioner` to a host-verifiable Z80 `http_main` multi-file fetch loop
 
+> **STATUS (2026-06-16): Bricks 1–6 ✅ DONE (the full host-verifiable slice) — PRs #308–#314.
+> Brick 7 is DEFERRED to hardware/Pete — see [`q18`](../notes/question-registry-open.md).**
+> Brick 7 (the bootable migration + the real B-DOS HSAVE-per-record store leaf) is NOT
+> autonomous: the record cap is "a hardware detail pinned when the real persist is built"
+> (`bdos/span.go`), and the HSAVE leaf is non-host-verifiable (the q16 hardware gate), so it
+> would merge unverified hardware code with a guessed cap. The plan's own risk note (Brick 7)
+> already sanctions this: "if the B-DOS spanning Store isn't ready, ship Bricks 1–6 (all
+> host-verified) and defer Brick 7 (the legacy `http_main` stays meanwhile)." This plan stays
+> in flight until Brick 7 lands (deleted by that PR); do NOT re-attempt Brick 7 autonomously
+> without q18 resolved.
+
 **Item:** i100 / i101 (the HTTP firmware-fetch deliverable). **Authority:** `tools/netboot-oracle/http/provision.go` (`Provisioner`, landed in the i100 Go-authority PR) — the byte-for-byte porting target. **Lifecycle:** this plan is committed as execution starts (Brick 1 in the same PR); it is **deleted by the PR that completes Brick 7**.
 
 The Z80 side fetches firmware from `cdn.githubraw.com`, one TCP connection per file, streaming each body through the HTTP header-skip + a SHA-256 verify into a per-file store, recording whether each file matched its pinned hash. The Go `Provisioner` is the authority; this is a mechanical, host-verified port done in **7 ordered, independently-mergeable bricks**, each keeping `ci-netboot-z80` green and the bootable image byte-identical until the final brick intentionally rewrites it.
@@ -72,7 +83,8 @@ Every brick: build the host-test binary, run its `go test`, and check the bootab
 - **Verify:** `make netboot-http-main` ; `go test -run 'TestProvision.*Z80' ./...` ; `make ci-netboot-z80` ; bootable: the `HTTP_HOST_PTR` edit grows it ~2 bytes (behavior-preserving, re-verified by `TestNetbootHTTPFullFetch`); legacy bootable `http_main` runtime unchanged.
 - **Risk:** the "synthetic body, real manifest path" test construction — build the Go plan from the Z80-read-back paths; fallback: a host-test-only manifest override hook (prefer the read-back to a second source of truth).
 
-### Brick 7 (FINAL — intentionally rewrites the bootable)
+### Brick 7 (FINAL — intentionally rewrites the bootable) ⏸ DEFERRED — hardware/Pete (q18)
+(Deferred 2026-06-16: the record cap is a real-Trinity RAM decision `bdos/span.go` leaves to "when the real persist is built", and the HSAVE leaf is non-host-verifiable (the q16 gate) + footprint-sensitive — so building it now means merging unverified hardware code with a guessed cap. The plan's own Risk (1) below sanctions shipping Bricks 1–6 and deferring this. Resolve **q18** before re-attempting.)
 - **Goal:** the real `http_main` drives the SAME `prov_*` loop (streaming), so hardware runs the host-verified path; the only hardware-gated leaf is the real B-DOS HSAVE.
 - **Files:** move the bootable entry into `http_main.asm`: EEPROM MAC/IP → fill config + `BASE_*`/`PROV_*`/`CONN_SINK_ENABLED=1`/window → `drv_init` → `prov_first` → loop `prov_onframe`/`prov_next` → halt. Hardware (non-`NETBOOT_HOSTTEST`) `storage_sink_leaf`/`store_begin`/`store_end` = `fw_span` + `bdos_seam` bounded HSAVE per window. Delete the legacy bootable `http_main` from `netboot_http.asm` (keep `http_fetch_*`). Repoint the Makefile `netboot_http_boot.bin` recipe to `http_main.asm` (+ fw_source/body_sink/fw_span/eeprom prereqs).
 - **Test:** `netboot_http_test.go` + all `TestProvision*Z80` stay green (host path intact). No new host test (the HSAVE leaf is the q16 hardware gate).
