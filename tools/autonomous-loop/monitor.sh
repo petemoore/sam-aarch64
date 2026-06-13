@@ -26,7 +26,7 @@ STARTUP_PROMPT="${ALOOP_PROMPT:-Continue per docs/ROADMAP.md. AUTONOMOUS-LOOP RU
 POLL="${ALOOP_POLL:-10}"                    # seconds between polls
 HANG_TIMEOUT="${ALOOP_HANG_TIMEOUT:-1800}"  # seconds with no signal -> nudge an idle session
 CLEAR_SETTLE="${ALOOP_CLEAR_SETTLE:-2}"     # seconds for /clear to settle before re-prompting
-SUBMIT=$'\r'                                # Enter key; if the TUI ignores it, try $'\n'
+SUBMIT=$'\r'                                # Enter key -- \r confirmed to submit in the Claude Code TUI (live test 2026-06-15)
 
 TASK_DONE="$SEMA_DIR/task-done"
 WOUND_DOWN="$SEMA_DIR/wound-down"
