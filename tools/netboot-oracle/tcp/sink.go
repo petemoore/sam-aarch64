@@ -1,5 +1,10 @@
 package tcp
 
+import (
+	"crypto/sha256"
+	"hash"
+)
+
 // Sink is the streaming target for an inbound TCP body — the Go-authority
 // abstraction the i99 streaming receive routes payload into instead of growing
 // Conn.Data without bound. On real hardware this is the B-DOS bounded write (the
@@ -45,4 +50,49 @@ func (s *ChunkSink) Bytes() []byte {
 		out = append(out, c...)
 	}
 	return out
+}
+
+// HashingSink wraps an inner Sink and runs SHA-256 over every Write before
+// forwarding it — the Go authority for the streamed-body verify (i100, q15
+// option c). It hashes the body incrementally AS it streams (never buffering the
+// whole body), exactly mirroring the Z80 path: storage_sink_flush feeds each
+// flushed window through sha256_update, then conn_verify_final compares the
+// digest against the pinned hash. Sum() returns the running digest; Verify
+// compares it against an expected hash. The inner Sink still records / persists
+// the bytes; HashingSink only adds the hash, so it composes with ChunkSink (host
+// tests) or a real storage sink (hardware) without changing where bytes land.
+type HashingSink struct {
+	inner Sink
+	h     hash.Hash
+}
+
+// NewHashingSink wraps inner so every Write is hashed (SHA-256) and then
+// forwarded to inner. inner may be nil to hash without recording.
+func NewHashingSink(inner Sink) *HashingSink {
+	return &HashingSink{inner: inner, h: sha256.New()}
+}
+
+// Write hashes the chunk into the running SHA-256, then forwards it to the inner
+// sink. The order matches the Z80 (hash the window, then record/persist it), so
+// every body byte is hashed exactly once, in arrival order.
+func (s *HashingSink) Write(chunk []byte) {
+	s.h.Write(chunk)
+	if s.inner != nil {
+		s.inner.Write(chunk)
+	}
+}
+
+// Sum returns the SHA-256 digest of everything streamed so far — equal to
+// sha256.Sum256(body) once the full body has been written, byte-for-byte the
+// value conn_verify_final writes into CONN_HASH on the Z80.
+func (s *HashingSink) Sum() [32]byte {
+	var out [32]byte
+	copy(out[:], s.h.Sum(nil))
+	return out
+}
+
+// Verify reports whether the streamed body's digest equals expected — the Go
+// analogue of conn_verify_final's CONN_HASH == CONN_PINNED_HASH check.
+func (s *HashingSink) Verify(expected [32]byte) bool {
+	return s.Sum() == expected
 }

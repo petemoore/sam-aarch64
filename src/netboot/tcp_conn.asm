@@ -416,9 +416,20 @@ conn_flush_final:
 ; gated and deliberately OUT OF SCOPE for this host-verifiable foundation.
 ;
 ; In:  HL = flush length (bytes from the front of CONN_FLUSH_BUF).
-; Clobbers: A, BC, DE, HL.
+; Clobbers: A, BC, DE, HL, IX.
 ; ---------------------------------------------------------------------------
 storage_sink_flush:
+                ; Hash this window into the running SHA-256 (the streamed-body
+                ; verify, i100). Every body byte passes through here exactly once,
+                ; in arrival order, so sha256_update over the window covers the whole
+                ; body in order — the digest matches crypto/sha256 of the body.
+                ; conn_verify_init resets the SHA state before the body arrives.
+                push    hl                     ; save flush length (HL) across the hash
+                ld      b, h
+                ld      c, l                   ; BC = flush length for sha256_update
+                ld      hl, CONN_FLUSH_BUF     ; HL = window bytes (front of buffer)
+                call    sha256_update          ; hash the window (clobbers IX + scratch)
+                pop     hl                     ; restore flush length for the recorder
                 push    hl                     ; save flush length
                 ; append CONN_FLUSH_BUF[0..len) to CONN_SINK_OUT at its tail.
                 ld      de, (CONN_SINK_OUT_LEN)
@@ -448,6 +459,51 @@ storage_sink_flush:
                 ld      hl, (CONN_SINK_CHUNK_COUNT)
                 inc     hl
                 ld      (CONN_SINK_CHUNK_COUNT), hl
+                ret
+
+; ---------------------------------------------------------------------------
+; conn_verify_init — start the streamed-body SHA-256 (i100, q15 option c). Reset
+; the hash state so storage_sink_flush hashes the body fresh. The host test calls
+; this once, before the body arrives (alongside enabling the sink); on hardware
+; the http_main migration will call it at the same point. Resetting the hash is
+; separate from CONN_HASH_MATCH (which conn_verify_final sets), so this only needs
+; sha256_init.
+; In:  (nothing)   Out: (nothing)   Clobbers: A, BC, DE, HL.
+; ---------------------------------------------------------------------------
+conn_verify_init:
+                call    sha256_init
+                ret
+
+; ---------------------------------------------------------------------------
+; conn_verify_final — finish the streamed-body hash and check it against the
+; pinned hash. Writes the 32-byte digest of the whole streamed body into
+; CONN_HASH, then byte-compares CONN_HASH against CONN_PINNED_HASH (which the
+; caller fills before the fetch) and sets CONN_HASH_MATCH = 1 on a full match,
+; 0 otherwise. Call this at end-of-body — after the FIN flush has drained the
+; partial remainder through storage_sink_flush (so every body byte is hashed).
+; In:  CONN_PINNED_HASH filled.   Out: CONN_HASH = digest; CONN_HASH_MATCH = 0/1.
+; Clobbers: A, BC, DE, HL, IX, and all SHA scratch.
+; ---------------------------------------------------------------------------
+conn_verify_final:
+                ld      hl, CONN_HASH
+                call    sha256_final           ; CONN_HASH = SHA-256 of the body
+                ; byte-compare CONN_HASH vs CONN_PINNED_HASH (32 bytes).
+                ld      hl, CONN_HASH
+                ld      de, CONN_PINNED_HASH
+                ld      b, 32
+conn_vf_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, conn_vf_mismatch
+                inc     hl
+                inc     de
+                djnz    conn_vf_cmp
+                ld      a, 1                   ; all 32 bytes equal: match
+                ld      (CONN_HASH_MATCH), a
+                ret
+conn_vf_mismatch:
+                xor     a                      ; a byte differed: mismatch
+                ld      (CONN_HASH_MATCH), a
                 ret
                 endif  ; NETBOOT_HOSTTEST (streaming sink)
 
@@ -636,6 +692,16 @@ CONN_SINK_OUT_LEN: defs 2                   ; bytes streamed to the test sink so
 CONN_SINK_CHUNK_COUNT: defs 2              ; number of recorded flushes
 CONN_SINK_CHUNKS:  defs 512                 ; per-flush length list (<=256 entries, 2 B each)
 CONN_SINK_OUT:     defs 4096                ; concatenation of all flushes (test inspects)
+
+; Streamed-body SHA-256 verify state (i100, q15 option c). conn_verify_init
+; resets the running hash; storage_sink_flush feeds each flushed window into it;
+; conn_verify_final writes the digest into CONN_HASH and sets CONN_HASH_MATCH by
+; comparing it against CONN_PINNED_HASH (the caller fills the pin). All
+; host-test-only (NETBOOT_HOSTTEST), like the rest of the streaming sink, so the
+; bootable image carries no SHA-256 code or state.
+CONN_HASH:         defs 32                  ; SHA-256 of the streamed body (digest out)
+CONN_PINNED_HASH:  defs 32                  ; expected hash the caller pins
+CONN_HASH_MATCH:   defs 1                   ; 1 = CONN_HASH == CONN_PINNED_HASH, else 0
                 endif  ; NETBOOT_HOSTTEST (streaming sink)
 
 ; ===========================================================================
@@ -643,3 +709,15 @@ CONN_SINK_OUT:     defs 4096                ; concatenation of all flushes (test
 ; ===========================================================================
                 include "build_tcp_segment.asm"
                 include "encdrv.asm"
+
+; ===========================================================================
+; The SHA-256 primitive, composed in for the streamed-body verify (i100). Only
+; the host-test build (NETBOOT_HOSTTEST) — which carries the streaming sink that
+; uses it — includes it; the bootable image (no NETBOOT_HOSTTEST) excludes both,
+; so its footprint stays under &10000. sha256.asm's NETBOOT_STANDALONE org is off
+; here (we don't define it), so it lays down after the code above with no org
+; collision; its labels (SHA_*, wv_*, sha_*) don't clash with this file's.
+; ===========================================================================
+                if defined(NETBOOT_HOSTTEST)
+                include "sha256.asm"
+                endif
