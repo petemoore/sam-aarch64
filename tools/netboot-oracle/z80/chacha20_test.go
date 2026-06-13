@@ -108,3 +108,71 @@ func TestChaCha20Block(t *testing.T) {
 		})
 	}
 }
+
+const (
+	ccMsgStage = 0x4000
+	ccEncOut   = 0x5000
+)
+
+// ccEncrypt drives chacha20_encrypt on a fresh machine and returns the output.
+func ccEncrypt(t *testing.T, mac *z80h.Machine, key []byte, counter uint32, nonce, msg []byte) []byte {
+	t.Helper()
+	mac.Write(mustSym(t, mac, "CC_KEY"), key)
+	mac.Write(mustSym(t, mac, "CC_COUNTER"), []byte{byte(counter), byte(counter >> 8), byte(counter >> 16), byte(counter >> 24)})
+	mac.Write(mustSym(t, mac, "CC_NONCE"), nonce)
+	mac.Write(ccMsgStage, msg)
+	mac.WriteU16LE(mustSym(t, mac, "CC_MSG_PTR"), ccMsgStage)
+	mac.WriteU16LE(mustSym(t, mac, "CC_MSG_LEN"), uint16(len(msg)))
+	if _, err := mac.CallEntry("chacha20_encrypt", z80h.Entry{HL: ccEncOut}); err != nil {
+		t.Fatalf("chacha20_encrypt: %v", err)
+	}
+	return mac.Read(ccEncOut, len(msg))
+}
+
+// TestChaCha20Encrypt: the RFC 8439 §2.4.2 stream-cipher worked example (a
+// 114-byte plaintext spanning two blocks, the block counter starting at 1).
+func TestChaCha20Encrypt(t *testing.T) {
+	key := unhex(t, "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+	nonce := unhex(t, "000000000000004a00000000")
+	plain := []byte("Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.")
+	wantCipher := unhex(t, "6e2e359a2568f98041ba0728dd0d6981"+
+		"e97e7aec1d4360c20a27afccfd9fae0b"+
+		"f91b65c5524733ab8f593dabcd62b357"+
+		"1639d624e65152ab8f530c359f0861d8"+
+		"07ca0dbf500d6a6156a38e088a22b65e"+
+		"52bc514d16ccf806818ce91ab7793736"+
+		"5af90bbf74a35be6b40b8eedf2785e42"+
+		"874d")
+
+	mac := loadChaCha(t)
+	got := ccEncrypt(t, mac, key, 1, nonce, plain)
+	if !bytes.Equal(got, wantCipher) {
+		t.Errorf("ciphertext = %x,\n      want = %x", got, wantCipher)
+	}
+}
+
+// TestChaCha20EncryptRoundTrip: encrypt then decrypt (same key/counter/nonce)
+// recovers the plaintext, across the block boundaries (1, 63, 64, 65, 128, 200
+// bytes) — exercising the multi-block loop, the partial final block, and the
+// per-block counter increment independently of a hard-coded vector.
+func TestChaCha20EncryptRoundTrip(t *testing.T) {
+	key := unhex(t, "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f")
+	nonce := unhex(t, "070000004041424344454647")
+	const counter = 5
+	for _, n := range []int{0, 1, 63, 64, 65, 128, 200} {
+		plain := make([]byte, n)
+		for i := range plain {
+			plain[i] = byte(i*7 + 3)
+		}
+		mac := loadChaCha(t)
+		cipher := ccEncrypt(t, mac, key, counter, nonce, plain)
+		if n > 0 && bytes.Equal(cipher, plain) {
+			t.Errorf("n=%d: ciphertext equals plaintext (not encrypted)", n)
+		}
+		mac2 := loadChaCha(t)
+		back := ccEncrypt(t, mac2, key, counter, nonce, cipher)
+		if !bytes.Equal(back, plain) {
+			t.Errorf("n=%d: round-trip mismatch\n got %x\nwant %x", n, back, plain)
+		}
+	}
+}

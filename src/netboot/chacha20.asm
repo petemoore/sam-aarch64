@@ -46,6 +46,15 @@ cc_pc:          defs 2
 cc_pd:          defs 2
 cc_round_ctr:   defs 1                  ; the 10-double-round counter (memory, not B)
 
+; chacha20_encrypt (the stream cipher, RFC 8439 §2.4) parameters + state.
+CC_MSG_PTR:     defs 2                  ; in: the plaintext/ciphertext input pointer
+CC_MSG_LEN:     defs 2                  ; in: the message length in bytes
+CC_KS:          defs 64                 ; one keystream block buffer
+cc_enc_src:     defs 2                  ; running input pointer
+cc_enc_out:     defs 2                  ; running output pointer
+cc_enc_rem:     defs 2                  ; bytes still to process
+cc_enc_n:       defs 1                  ; this block's byte count (<= 64)
+
 cc_const:       defm "expand 32-byte k" ; the 16 constant bytes (4 LE words)
 
 ; ===========================================================================
@@ -383,3 +392,89 @@ cc_rotl12:
 cc_rotl7:
                 call    cc_rotl8
                 jp      cc_rotr1
+
+; ===========================================================================
+; chacha20_encrypt — the ChaCha20 stream cipher (RFC 8439 §2.4): XOR the message
+; with the keystream, one 64-byte block at a time, incrementing the block counter
+; per block (so this both encrypts and decrypts).
+; In:  HL = output pointer; CC_MSG_PTR / CC_MSG_LEN / CC_KEY / CC_COUNTER /
+;      CC_NONCE set (CC_COUNTER is the starting block counter).
+; Out: CC_MSG_LEN bytes at the output pointer; CC_COUNTER advanced past the last
+;      block.  Clobbers A, BC, DE, HL, IX.
+; ===========================================================================
+chacha20_encrypt:
+                ld      (cc_enc_out), hl
+                ld      hl, (CC_MSG_PTR)
+                ld      (cc_enc_src), hl
+                ld      hl, (CC_MSG_LEN)
+                ld      (cc_enc_rem), hl
+cc_enc_loop:
+                ld      hl, (cc_enc_rem)
+                ld      a, h
+                or      l
+                ret     z                       ; all bytes processed
+
+                ; keystream block for the current counter.
+                ld      hl, CC_KS
+                call    chacha20_block
+
+                ; n = min(64, remaining).
+                ld      hl, (cc_enc_rem)
+                ld      a, h
+                or      a
+                jr      nz, cc_enc_n64          ; remaining >= 256 -> full block
+                ld      a, l
+                cp      64
+                jr      c, cc_enc_have_n        ; remaining < 64 -> partial final block
+cc_enc_n64:
+                ld      a, 64
+cc_enc_have_n:
+                ld      (cc_enc_n), a
+
+                ; XOR n bytes: out[i] = src[i] ^ keystream[i].
+                ld      b, a                    ; B = n (<= 64)
+                ld      hl, (cc_enc_src)        ; HL = source
+                ld      de, CC_KS               ; DE = keystream
+                ld      ix, (cc_enc_out)        ; IX = output
+cc_enc_xor:
+                ld      a, (de)
+                xor     (hl)
+                ld      (ix+0), a
+                inc     hl
+                inc     de
+                inc     ix
+                djnz    cc_enc_xor
+
+                ; advance src/out by n, remaining -= n.
+                ld      a, (cc_enc_n)
+                ld      c, a
+                ld      b, 0                    ; BC = n
+                ld      hl, (cc_enc_src)
+                add     hl, bc
+                ld      (cc_enc_src), hl
+                ld      hl, (cc_enc_out)
+                add     hl, bc
+                ld      (cc_enc_out), hl
+                ld      hl, (cc_enc_rem)
+                or      a
+                sbc     hl, bc
+                ld      (cc_enc_rem), hl
+
+                ; next block uses the next counter.
+                call    cc_counter_inc
+                jr      cc_enc_loop
+
+; cc_counter_inc — CC_COUNTER += 1 (32-bit little-endian).  Clobbers A, HL.
+cc_counter_inc:
+                ld      hl, CC_COUNTER
+                inc     (hl)
+                ret     nz
+                inc     hl
+                inc     (hl)
+                ret     nz
+                inc     hl
+                inc     (hl)
+                ret     nz
+                inc     hl
+                inc     (hl)
+                ret
