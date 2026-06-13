@@ -17,7 +17,11 @@ the limit, so nothing is summarised away. The session stays interactive and
 ## Protocol (the startup prompt tells the agent to follow this)
 
 1. Finish one work item (a merged PR) → `touch ~/.claude/autonomous-loop/task-done` → end the turn.
-2. Monitor stuffs `/context`; the readout reaches the agent.
+2. Monitor stuffs `/context` **then a short resume nudge**. The nudge is required:
+   `/context` is a *local* command — it renders the readout but does not invoke
+   the model, so it can't wake the agent on its own; the nudge (a real text line,
+   *not* the startup prompt) creates the next turn so the agent reads the readout
+   and acts.
 3. Agent: **≥20% free → next item** (loop); **<20% free → wind down** (write the
    ROADMAP handover) → `touch ~/.claude/autonomous-loop/wound-down`.
 4. Monitor stuffs `/clear` + the startup prompt → clean reset. Repeat.
@@ -43,7 +47,7 @@ is what produced the duplicate-`/clear` glitch below.
 
 ## Status
 
-Core built; **first live test 2026-06-15** (Pete), two failure modes found and
+Core built; **first live test 2026-06-15** (Pete), three failure modes found and
 fixed — treat as **improving, not yet proven** (question-registry **q14**):
 
 1. **A long stuffed line didn't submit.** `screen -X stuff "<line>\r"` sends the
@@ -55,6 +59,15 @@ fixed — treat as **improving, not yet proven** (question-registry **q14**):
    left **two** instances polling the same semaphores → each fired once → the
    agent saw `/clear` twice and the interleaved stuffs mangled the startup prompt.
    Fix: the single-instance lock above.
+3. **`/context` alone never resumed the agent (the ~1-item/hour stall).** The
+   task-done branch stuffed only `/context` — a *local* command that renders the
+   readout but does **not** invoke the model — so the agent sat idle after every
+   item until the hourly hang-timeout nudge (a real prompt) kicked it. The 8-hour
+   live log showed it unmistakably: every `TASK_DONE -> /context` was followed by
+   ~60 min of silence, then a `nudge`, then the next item. Fix: the task-done
+   branch now stuffs `/context` **then a short resume nudge** (`ALOOP_RESUME`) —
+   a real text line that creates the next turn immediately. The nudge is *not*
+   the startup prompt: the live agent keeps full context and must not re-ground.
 
 **Agent-side mitigation (load-bearing):** a control signal (`/clear`, `/context`)
 that arrives **mid-turn** lands as a literal user message, not a command — the
