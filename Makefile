@@ -65,7 +65,7 @@ ci-netboot-oracle:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -231,6 +231,21 @@ $(BUILD)/netboot_fw_source.bin $(BUILD)/netboot_fw_source.map: src/netboot/fw_so
 	    src/netboot/fw_source.asm
 
 netboot-fw-source: $(BUILD)/netboot_fw_source.bin $(BUILD)/netboot_fw_source.map
+
+# netboot-body-sink (i100) — the HTTP-header-skip sink adapter (the bodySink Z80
+# port): the filter that drops the HTTP/1.0 response header so the streamed body
+# reaching storage + the SHA-256 verify begins at the first body byte.  Standalone
+# leaf (NETBOOT_STANDALONE, org &8000), host-verified by body_sink_test.go vs the
+# Go authority http.NewBodySink — NOT wired into the bootable image yet (which
+# stays byte-identical).
+$(BUILD)/netboot_body_sink.bin $(BUILD)/netboot_body_sink.map: src/netboot/body_sink.asm
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_STANDALONE=1 \
+	    --obj=$(BUILD)/netboot_body_sink.bin \
+	    --mapfile=$(BUILD)/netboot_body_sink.map \
+	    src/netboot/body_sink.asm
+
+netboot-body-sink: $(BUILD)/netboot_body_sink.bin $(BUILD)/netboot_body_sink.map
 
 # netboot-http (i70 capstone) — the integrated HTTP fetch phase machine + the
 # bootable HTTP-fetch disk.  http_fetch_first broadcasts the ARP, http_fetch_onframe
@@ -469,7 +484,7 @@ netboot-client-disk: $(BUILD)/netboot_client_boot.bin $(BUILD)/build-disk
 	    $(BUILD)/netboot_client.mgt
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-http netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-body-sink netboot-http netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client
 
 ci-netboot-z80: netboot-z80-routines
 	cd tools/netboot-oracle/z80 && go test ./...
