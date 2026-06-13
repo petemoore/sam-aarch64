@@ -21,6 +21,14 @@
 ;        OPVAL_ARRAY (only kind bytes for dispatch).
 ;
 ; ---------------------------------------------------------------------
+
+; MNEM_<NAME> mnemonic-ID equates — the dispatch IDs this file compares
+; against.  Generated from the Go authority tools/sam-aarch64-format/
+; mnemonics.go (MnemonicTable) by tools/tables-gen (make tables); a hand edit
+; or a forgotten regen fails `make tables-sync-check` in CI.  Equates only —
+; zero runtime bytes.
+                include "mnemonic_ids.inc"
+
 try_mnemonic_intercept:
                 ld      hl, (main_mnemonic_id)
                 ld      a, h
@@ -30,7 +38,7 @@ try_mnemonic_intercept:
                 ld      (try_intercept_mnem), a
 
 ; -- ror (ID 70) — EXTR alias when operand 2 is OpImmExpr -------------
-                cp      70
+                cp      MNEM_ROR
                 jp      nz, try_intercept_post_ror
                 ld      a, (main_op_count)
                 cp      3
@@ -59,7 +67,7 @@ try_intercept_post_ror:
 ; The OpCond operand is operand 1; its cond byte lives at +2 of the
 ; operand record (see encoder.asm encode_slot_cond: cond stored at +2).
                 ld      a, (try_intercept_mnem)
-                cp      52
+                cp      MNEM_CSETM
                 jp      nz, try_intercept_post_csetm
                 ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2)
                 xor     1                   ; invert: EQ<->NE, CS<->CC, ...
@@ -79,7 +87,7 @@ try_intercept_post_csetm:
 ; the (Rd, Rn, #imm) shape is intercepted; the register form
 ; (bic Rd,Rn,Rm{,shift}) is handled by the shifted-reg path below.
                 ld      a, (try_intercept_mnem)
-                cp      47
+                cp      MNEM_BIC
                 jr      nz, try_intercept_post_bic
                 ld      a, (main_op_count)
                 cp      3
@@ -110,7 +118,7 @@ try_intercept_post_bic:
 ; own mnemonics, and `mov Rd, Rs` (register move) is a different shape
 ; the form table still handles.
                 ld      a, (try_intercept_mnem)
-                cp      3
+                cp      MNEM_MOV
                 jr      nz, try_intercept_post_mov
                 ld      a, (main_op_count)
                 cp      2
@@ -142,7 +150,7 @@ try_intercept_post_mov:
                 jp      nz, try_intercept_post_shift
 
                 ld      a, (try_intercept_mnem)
-                cp      46                  ; tst → 2-operand path
+                cp      MNEM_TST             ; tst → 2-operand path
                 jp      z, try_intercept_tst
 
 ; 3-operand mnemonics: op_count=3 required.  Then operand 2 selects the
@@ -168,9 +176,9 @@ try_intercept_extended_dispatch:
 ; already enforces this, but reject up-front anything else so we fall
 ; through to form lookup (which will then fail cleanly).
                 ld      a, (try_intercept_mnem)
-                cp      1
+                cp      MNEM_ADD
                 jr      z, try_intercept_ext_call
-                cp      2
+                cp      MNEM_SUB
                 jp      nz, try_intercept_post_shift
 try_intercept_ext_call:
                 call    encode_extended_reg_word
@@ -223,9 +231,9 @@ try_intercept_post_shift:
                 jp      nz, try_intercept_post_mem
 
 ; Pair (ldp=7, stp=8): require 3 operands, kind[2] == OpMem.
-                cp      7
+                cp      MNEM_LDP
                 jp      z, try_intercept_pair_check
-                cp      8
+                cp      MNEM_STP
                 jp      z, try_intercept_pair_check
 
 ; Non-pair: require >= 2 operands and kind[1] == OpMem.  If the
@@ -268,7 +276,7 @@ try_intercept_post_mem:
 ; looks up the slot's entry_pc to compute imm19.  No form-table entry
 ; exists for OpLitPool, so falling through here would always fail.
                 ld      a, (try_intercept_mnem)
-                cp      5
+                cp      MNEM_LDR
                 jp      nz, try_intercept_post_litpool
                 ld      a, (main_op_count)
                 cp      2
@@ -291,7 +299,7 @@ try_intercept_post_litpool:
 ; fall through to form lookup → FAIL40.  Grounded against
 ; aarch64-none-elf-as + ARM ARM C6.2.131 (LDR literal).
                 ld      a, (try_intercept_mnem)
-                cp      5
+                cp      MNEM_LDR
                 jp      nz, try_intercept_post_ldrlit
                 ld      a, (main_op_count)
                 cp      2
@@ -313,9 +321,9 @@ try_intercept_post_ldrlit:
 ; would fall through to FAIL40.  Grounded against aarch64-none-elf-as +
 ; ARM ARM C6.2.218/.222 (LSL/LSR imm) and C6.2.219/.223 (LSLV/LSRV).
                 ld      a, (try_intercept_mnem)
-                cp      17
+                cp      MNEM_LSL
                 jr      z, try_intercept_lslsr
-                cp      18
+                cp      MNEM_LSR
                 jp      nz, try_intercept_post_lslsr
 try_intercept_lslsr:
                 ld      a, (main_op_count)
@@ -336,15 +344,15 @@ try_intercept_post_lslsr:
 ; would fall through to FAIL40.  Grounded against aarch64-none-elf-as +
 ; ARM ARM C6.2.40/.42/.335/.41/.270.
                 ld      a, (try_intercept_mnem)
-                cp      49
+                cp      MNEM_BFI
                 jr      z, try_intercept_bitfield
-                cp      50
+                cp      MNEM_BFXIL
                 jr      z, try_intercept_bitfield
-                cp      51
+                cp      MNEM_UBFX
                 jr      z, try_intercept_bitfield
-                cp      83
+                cp      MNEM_BFC
                 jr      z, try_intercept_bitfield
-                cp      84
+                cp      MNEM_SBFX
                 jp      nz, try_intercept_post_bitfield
 try_intercept_bitfield:
                 ld      a, (try_intercept_mnem)
@@ -360,9 +368,9 @@ try_intercept_post_bitfield:
 ; entry exists, so a miss here would fall through to FAIL40.  Grounded
 ; against aarch64-none-elf-as + ARM ARM C6.2.317 (TBZ) / C6.2.318 (TBNZ).
                 ld      a, (try_intercept_mnem)
-                cp      22
+                cp      MNEM_TBZ
                 jr      z, try_intercept_tbz
-                cp      23
+                cp      MNEM_TBNZ
                 jp      nz, try_intercept_post_tbz
 try_intercept_tbz:
                 ld      a, (main_op_count)
@@ -383,11 +391,11 @@ try_intercept_post_tbz:
 ; these, so a miss here would always fall through to fail anyway —
 ; unconditional intercept, like the sysname block below.
                 ld      a, (try_intercept_mnem)
-                cp      66
+                cp      MNEM_ISB
                 jp      z, try_intercept_barrier
-                cp      67
+                cp      MNEM_DSB
                 jp      z, try_intercept_barrier
-                cp      68
+                cp      MNEM_DMB
                 jp      z, try_intercept_barrier
                 jp      try_intercept_post_barrier
 try_intercept_barrier:
@@ -408,13 +416,13 @@ try_intercept_post_barrier:
 ; intercepts: the four mnemonics have no form-table entries, so a miss
 ; here would always fall through to form_lookup_match → fail anyway.
                 ld      a, (try_intercept_mnem)
-                cp      76
+                cp      MNEM_MRS
                 jp      z, try_intercept_mrs
-                cp      77
+                cp      MNEM_MSR
                 jp      z, try_intercept_msr
-                cp      78
+                cp      MNEM_DC
                 jp      z, try_intercept_dc
-                cp      79
+                cp      MNEM_TLBI
                 jp      z, try_intercept_tlbi
                 jp      try_intercept_no_match
 
@@ -458,39 +466,39 @@ try_intercept_no_match:
 ; Preserves A.
 ; -----------------------------------------------------------------------
 is_mem_mnemonic_id:
-                cp      5
+                cp      MNEM_LDR
                 ret     z
-                cp      6
+                cp      MNEM_STR
                 ret     z
-                cp      7
+                cp      MNEM_LDP
                 ret     z
-                cp      8
+                cp      MNEM_STP
                 ret     z
-                cp      54
+                cp      MNEM_LDRB
                 ret     z
-                cp      55
+                cp      MNEM_STRB
                 ret     z
-                cp      56
+                cp      MNEM_LDRH
                 ret     z
-                cp      57
+                cp      MNEM_STRH
                 ret     z
-                cp      74
+                cp      MNEM_STUR
                 ret     z
-                cp      75
+                cp      MNEM_LDUR
                 ret     z
-                cp      85
+                cp      MNEM_LDRSB
                 ret     z
-                cp      86
+                cp      MNEM_LDRSH
                 ret     z
-                cp      87
+                cp      MNEM_LDRSW
                 ret     z
-                cp      94
+                cp      MNEM_STURH
                 ret     z
-                cp      95
+                cp      MNEM_STURB
                 ret     z
-                cp      96
+                cp      MNEM_LDURH
                 ret     z
-                cp      97
+                cp      MNEM_LDURB
                 ret
 
 
@@ -531,23 +539,23 @@ operands012_all_plain_gpr:
 ;   Preserves A.
 ; -----------------------------------------------------------------------
 is_shifted_reg_mnemonic:
-                cp      1
+                cp      MNEM_ADD
                 ret     z
-                cp      2
+                cp      MNEM_SUB
                 ret     z
-                cp      14
+                cp      MNEM_AND
                 ret     z
-                cp      15
+                cp      MNEM_ORR
                 ret     z
-                cp      16
+                cp      MNEM_EOR
                 ret     z
-                cp      45
+                cp      MNEM_SUBS
                 ret     z
-                cp      46
+                cp      MNEM_TST
                 ret     z
-                cp      47
+                cp      MNEM_BIC
                 ret     z
-                cp      80
+                cp      MNEM_ANDS
                 ret
 
 
@@ -1121,11 +1129,11 @@ encode_mov_imm_orr_slot:         defb    &24, 0, 10, 13
 ; Errors: jp fail on CRm > 15 or non-zero high bytes (not a small u8).
 ; -----------------------------------------------------------------------
 encode_barrier_word:
-                cp      66
+                cp      MNEM_ISB
                 jp      z, encode_barrier_isb
-                cp      67
+                cp      MNEM_DSB
                 jp      z, encode_barrier_dsb
-                cp      68
+                cp      MNEM_DMB
                 jp      z, encode_barrier_dmb
                 jp      fail                ; unreachable (intercept gates ids)
 encode_barrier_isb:
@@ -1433,7 +1441,7 @@ encode_lslsr_imm_rs_set:
 
 ; -- Compute immr/imms by mnemonic ------------------------------------
                 ld      a, (encode_lslsr_mnem)
-                cp      18
+                cp      MNEM_LSR
                 jp      z, encode_lslsr_lsr_imm
 
 ; LSL: immr = (-shift) & (regsize-1); imms = regsize-1-shift
@@ -1522,7 +1530,7 @@ encode_lslsr_reg_w:
                 ld      de, &1ac0
 encode_lslsr_reg_lo:
                 ld      a, (encode_lslsr_mnem)
-                cp      18
+                cp      MNEM_LSR
                 jr      z, encode_lslsr_reg_lsr
                 ld      hl, &2000           ; LSLV low16
                 jr      encode_lslsr_reg_pack
@@ -1625,7 +1633,7 @@ encode_bf_size_set:
 ; -- Locate operand slots (bfc shifts lsb/width down by one) ----------
 ; Rn and lsb/width source offsets differ for bfc (83).
                 ld      a, (encode_bf_mnem)
-                cp      83
+                cp      MNEM_BFC
                 jr      z, encode_bf_bfc
 
 ; 4-operand: Rn = op1 reg; lsb = op2 LE byte 0; width = op3 LE byte 0.
@@ -1686,9 +1694,9 @@ encode_bf_width_ok:
 ; bfi(49) and bfc(83): immr=(-lsb)&(regsize-1), imms=width-1
 ; bfxil(50)/ubfx(51)/sbfx(84): immr=lsb, imms=lsb+width-1
                 ld      a, (encode_bf_mnem)
-                cp      49
+                cp      MNEM_BFI
                 jr      z, encode_bf_immr_neg
-                cp      83
+                cp      MNEM_BFC
                 jr      z, encode_bf_immr_neg
 
 ; immr = lsb; imms = lsb + width - 1
@@ -1734,9 +1742,9 @@ encode_bf_base:
 ;   ubfx          : UBFM — X 0xd340 / W 0x5300
 ;   sbfx          : SBFM — X 0x9340 / W 0x1300
                 ld      a, (encode_bf_mnem)
-                cp      51
+                cp      MNEM_UBFX
                 jr      z, encode_bf_base_ubfm
-                cp      84
+                cp      MNEM_SBFX
                 jr      z, encode_bf_base_sbfm
 ; BFM (bfi/bfxil/bfc)
                 ld      a, (encode_bf_regsize)
@@ -1989,7 +1997,7 @@ encode_tbz_pack:
                 ld      c, a
 ; op bit: tbnz (23) → 1, tbz (22) → 0.
                 ld      a, (encode_tbz_op)
-                cp      23
+                cp      MNEM_TBNZ
                 jr      nz, encode_tbz_op_zero
                 ld      a, c
                 or      &01                 ; op = 1 → bit0

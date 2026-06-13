@@ -32,32 +32,38 @@ import (
 	"testing"
 )
 
-// constantsIncPath resolves src/tbn_constants.inc relative to this test file,
-// so it works regardless of the caller's working directory.
-func constantsIncPath(t *testing.T) string {
+// srcIncPath resolves a src/<base> .inc path relative to this test file, so it
+// works regardless of the caller's working directory.
+func srcIncPath(t *testing.T, base string) string {
 	t.Helper()
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed; cannot locate test source")
 	}
 	repoRoot := filepath.Join(filepath.Dir(thisFile), "..", "..")
-	p, err := filepath.Abs(filepath.Join(repoRoot, "src", "tbn_constants.inc"))
+	p, err := filepath.Abs(filepath.Join(repoRoot, "src", base))
 	if err != nil {
-		t.Fatalf("resolving tbn_constants.inc path: %v", err)
+		t.Fatalf("resolving %s path: %v", base, err)
 	}
 	if _, err := os.Stat(p); err != nil {
-		t.Fatalf("tbn_constants.inc not found at %s: %v", p, err)
+		t.Fatalf("%s not found at %s: %v", base, p, err)
 	}
 	return p
 }
 
-// parseEquates reads `NAME: equ VALUE` lines from tbn_constants.inc and returns
-// name→value. Values are decimal or `&XX` hex; comments and blanks are ignored.
+// parseEquates reads `NAME: equ VALUE` lines from tbn_constants.inc.
 func parseEquates(t *testing.T) map[string]int {
 	t.Helper()
-	f, err := os.Open(constantsIncPath(t))
+	return parseEquatesFrom(t, "tbn_constants.inc")
+}
+
+// parseEquatesFrom reads `NAME: equ VALUE` lines from src/<base> and returns
+// name→value. Values are decimal or `&XX` hex; comments and blanks are ignored.
+func parseEquatesFrom(t *testing.T, base string) map[string]int {
+	t.Helper()
+	f, err := os.Open(srcIncPath(t, base))
 	if err != nil {
-		t.Fatalf("opening tbn_constants.inc: %v", err)
+		t.Fatalf("opening %s: %v", base, err)
 	}
 	defer f.Close()
 
@@ -85,7 +91,7 @@ func parseEquates(t *testing.T) map[string]int {
 		out[name] = v
 	}
 	if err := sc.Err(); err != nil {
-		t.Fatalf("scanning tbn_constants.inc: %v", err)
+		t.Fatalf("scanning %s: %v", base, err)
 	}
 	return out
 }

@@ -16,12 +16,13 @@ import (
 )
 
 func main() {
-	var mraDir, outEnc, outGo, outSysregInc, outConstantsInc string
+	var mraDir, outEnc, outGo, outSysregInc, outConstantsInc, outMnemonicIDsInc string
 	flag.StringVar(&mraDir, "mra", "reference/arm-mra", "MRA snapshot dir")
 	flag.StringVar(&outEnc, "out", "", "binary .enc output (optional)")
 	flag.StringVar(&outGo, "gopkg", "", "regenerate the MRA-derived Go source at this path.  Only emits MRA-derived forms; hand-curated forms live in tools/aarch64enc/manual_forms.go and are not touched by this tool.")
 	flag.StringVar(&outSysregInc, "sysreg-inc", "", "regenerate the Z80 sysreg/pstate/dc/tlbi tables (src/sysreg_tables.inc) from tools/sam-aarch64-format/sysregs.go.")
 	flag.StringVar(&outConstantsInc, "constants-inc", "", "regenerate the Z80 OP_KIND_*/REC_KIND_*/DIR_* equates (src/tbn_constants.inc) from tools/sam-aarch64-format/{operands,kinds,directives}.go.")
+	flag.StringVar(&outMnemonicIDsInc, "mnemonic-ids-inc", "", "regenerate the Z80 MNEM_<NAME> equates (src/mnemonic_ids.inc) from tools/sam-aarch64-format/mnemonics.go.")
 	flag.Parse()
 
 	// The sysreg .inc is projected straight from the Go format package; it
@@ -51,6 +52,20 @@ func main() {
 		}
 		out.Close()
 		fmt.Printf("Wrote %s (OP_KIND_*/REC_KIND_*/DIR_* equates from operands/kinds/directives.go).\n", outConstantsInc)
+	}
+
+	// The mnemonic-id .inc is likewise a straight Go-package projection.
+	if outMnemonicIDsInc != "" {
+		out, err := os.Create(outMnemonicIDsInc)
+		if err != nil {
+			fail(err)
+		}
+		if err := emit.RenderMnemonicIDsInc(out); err != nil {
+			out.Close()
+			fail(err)
+		}
+		out.Close()
+		fmt.Printf("Wrote %s (MNEM_<NAME> equates from mnemonics.go).\n", outMnemonicIDsInc)
 	}
 
 	// The MRA walk only feeds the -out / -gopkg emitters. When only the

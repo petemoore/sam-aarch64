@@ -23,6 +23,10 @@ Outputs:
     assembly-time equates that interpret a `.tbn` record stream, projected
     from `operands.go` / `kinds.go` / `directives.go` (i7 phase C1). The
     `REC_KIND_*` block is the 6-of-9 subset the Z80 dispatches on.
+  - `src/mnemonic_ids.inc` — the `MNEM_<NAME>` mnemonic-ID equates the Z80
+    intercepts dispatch on (`src/intercepts.asm`), projected from
+    `mnemonics.go` `MnemonicTable` (i7 phase C2). Conditional-branch names
+    lose their `.` to `_`: `b.eq` → `MNEM_B_EQ`.
 
   `make tables-sync-check` fails CI if any committed file drifts from the
   generator output.
