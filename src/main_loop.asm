@@ -36,57 +36,12 @@
 ;   by the same per-record amount, so the invariant follows.
 
 
-; -----------------------------------------------------------------------
-; OperandKind constants (mirror of tools/sam-aarch64-format/operands.go).
-; -----------------------------------------------------------------------
-OP_KIND_REG_X:          equ     &01
-OP_KIND_REG_W:          equ     &02
-OP_KIND_REG_XSP:        equ     &03
-OP_KIND_REG_WSP:        equ     &04
-OP_KIND_IMM_EXPR:       equ     &05
-OP_KIND_SHIFTED_REG:    equ     &06
-OP_KIND_EXTENDED_REG:   equ     &07
-OP_KIND_MEM:            equ     &08
-OP_KIND_STRING:         equ     &09
-OP_KIND_COND:           equ     &0A
-OP_KIND_SYS_NAME:       equ     &0B
-OP_KIND_LIT_POOL:       equ     &0C
-
-; -----------------------------------------------------------------------
-; RecordKind constants (mirror of tools/sam-aarch64-format/kinds.go).
-; -----------------------------------------------------------------------
-REC_KIND_INST:          equ     &01
-REC_KIND_DIRECTIVE:     equ     &04
-REC_KIND_COMMENT:       equ     &05
-REC_KIND_LIT_INSTS:     equ     &07
-REC_KIND_LIT_DATA:      equ     &08
-REC_KIND_INSN_RUN:      equ     &09
-
-; -----------------------------------------------------------------------
-; Directive ID constants (tools/sam-aarch64-format/directives.go).
-; -----------------------------------------------------------------------
-DIR_TEXT:               equ     0   ; .text
-DIR_DATA:               equ     1   ; .data
-DIR_BYTE:               equ     2   ; .byte
-DIR_SHORT:              equ     3   ; .short
-DIR_WORD:               equ     4   ; .word
-DIR_QUAD:               equ     5   ; .quad
-DIR_ASCII:              equ     6   ; .ascii
-DIR_ASCIZ:              equ     7   ; .asciz
-DIR_EQU:                equ     8   ; .equ
-DIR_SET:                equ     9   ; .set
-DIR_GLOBAL:             equ     10  ; .global
-DIR_BALIGN:             equ     11  ; .balign
-DIR_ORG:                equ     12  ; .org
-DIR_SKIP:               equ     13  ; .skip
-DIR_SPACE:              equ     14  ; .space
-DIR_INST:               equ     15  ; .inst
-DIR_ALIGN:              equ     16  ; .align (2^N)
-DIR_LTORG:              equ     17  ; .ltorg
-DIR_SECTION:            equ     18  ; .section
-DIR_ARCH:               equ     19  ; .arch
-DIR_CPU:                equ     20  ; .cpu
-DIR_HWORD:              equ     21  ; .hword (synonym of .short)
+; OperandKind / RecordKind / Directive-ID constants — the OP_KIND_* /
+; REC_KIND_* / DIR_* equates that interpret a .tbn record stream.  Generated
+; from the Go authority tools/sam-aarch64-format/{operands,kinds,directives}.go
+; by tools/tables-gen (make tables); a hand edit or a forgotten regen fails
+; `make tables-sync-check` in CI.  Equates only — zero runtime bytes.
+                include "tbn_constants.inc"
 
 
 ; -----------------------------------------------------------------------

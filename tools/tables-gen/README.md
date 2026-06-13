@@ -15,10 +15,17 @@ Outputs:
   `ENCTAB_LEN`).
 - `make enctab-regen-source` → `tools/aarch64enc/data.go` — the Go mirror of
   the same MRA projection.
-- `make tables` → `src/sysreg_tables.inc` — the four AArch64 System-group
-  name↔encoding tables (sysreg / pstate / dc / tlbi), projected from
-  `tools/sam-aarch64-format/sysregs.go` (i7 phase B). `make tables-sync-check`
-  fails CI if the committed file drifts from the generator output.
+- `make tables` regenerates every committed generated `.inc` in place:
+  - `src/sysreg_tables.inc` — the four AArch64 System-group name↔encoding
+    tables (sysreg / pstate / dc / tlbi), projected from
+    `tools/sam-aarch64-format/sysregs.go` (i7 phase B).
+  - `src/tbn_constants.inc` — the `OP_KIND_*` / `REC_KIND_*` / `DIR_*`
+    assembly-time equates that interpret a `.tbn` record stream, projected
+    from `operands.go` / `kinds.go` / `directives.go` (i7 phase C1). The
+    `REC_KIND_*` block is the 6-of-9 subset the Z80 dispatches on.
+
+  `make tables-sync-check` fails CI if any committed file drifts from the
+  generator output.
 
 The `.enc` and `.inc` mirror the Go authority by construction, so the Z80 and
 Go sides share one table. See `docs/ARCHITECTURE.md` §4.
