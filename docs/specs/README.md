@@ -34,7 +34,7 @@ design doc is deleted (git history is the archive).
   below on go-ahead.
 - [`phase3-tftp-design.md`](phase3-tftp-design.md) — Phase 3 (TFTP to the
   Pi over direct LAN) **prior direction sketch** (2026-05-27); superseded
-  on approval of the delivery design above.
+  on the implementation go-ahead of the delivery design above.
 - [`samdos-file-io.md`](samdos-file-io.md) — SAMDOS read/write idioms:
   HLOAD trampoline, HSAVE UIFA pattern, hook clobber facts, Z80 snippets.
 - [`editor-vision.md`](editor-vision.md) — Phase 2 editor design pointers
