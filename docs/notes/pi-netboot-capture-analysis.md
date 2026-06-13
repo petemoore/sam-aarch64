@@ -46,7 +46,7 @@ REQUEST → ACK cycle, broadcast.
 | 1 netmask | `255.255.255.0` |
 | 28 broadcast | the subnet broadcast |
 | 3 router | the SAM's IP (it is the only host) |
-| **60 vendor-class** | **`PXEClient`** (9 bytes) — **mandatory**: the Pi ignores an OFFER that does not echo `PXEClient`, so it won't grab a non-PXE DHCP server on a shared LAN |
+| **60 vendor-class** | **`PXEClient`** (9 bytes) — **echo it.** Every working capture carries it (dnsmasq emits it by default) and the PXE convention tags a netboot offer `PXEClient`; whether the Pi boot ROM *strictly* requires it (vs. the option-43 `Raspberry Pi Boot` string below, which is the confirmed requirement) is unverified — so echoing it is the safe, observed-correct behaviour, and it also stops the Pi grabbing a non-PXE DHCP server on a shared LAN |
 | 97 client-machine-id | **echo** the client's 17-byte UUID back verbatim |
 | **43 vendor-encap** | **the 32-byte PXE blob below — mandatory** |
 | `siaddr` / next-server | the SAM's IP (this is how the Pi learns the TFTP server) |

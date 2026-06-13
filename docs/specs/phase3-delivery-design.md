@@ -182,7 +182,7 @@ answer `DISCOVER`/`REQUEST` with an `OFFER`/`ACK` carrying an address from the p
 the subnet, and the next-server (`siaddr` = itself), plus the Raspberry-Pi netboot
 DHCP conventions — now **confirmed from a real capture**
 ([`../notes/pi-netboot-capture-analysis.md`](../notes/pi-netboot-capture-analysis.md)):
-echo vendor-class **`PXEClient`** (opt 60 — the Pi rejects an offer without it),
+echo vendor-class **`PXEClient`** (opt 60 — present in every working capture, so echo it; strict necessity vs. the option-43 string is unverified),
 send the fixed 32-byte **option-43 PXE blob** containing the literal `Raspberry Pi
 Boot`, echo the client UUID (opt 97), and set `siaddr` to the TFTP server (no opt 67
 bootfile needed — the Pi requests its own filenames). A uniform Pi convention,
