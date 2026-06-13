@@ -37,7 +37,8 @@ Every brick: build the host-test binary, run its `go test`, and check the bootab
 - **Verify:** `make netboot-http-main` ; `cd tools/netboot-oracle/z80 && go test -run TestHTTPMainComposes ./...` ; `make netboot-http-boot` (byte-identical — netboot_http.asm unedited).
 - **Boundary / identity:** fully host-verifiable; bootable byte-identical.
 
-### Brick 2 — dynamic path: `HTTP_PATH_PTR` in `http_get.asm`
+### Brick 2 — dynamic path: `HTTP_PATH_PTR` in `http_get.asm` ✅ DONE
+(Bootable grew exactly +2 B: 31314 → 31316, the one `defw`; runtime GET bytes identical, proven by `TestNetbootHTTPFullFetch` staying green. `HTTP_PATH_PTR` placed after `HTTP_PATH`/`HTTP_HOST` so their read-back addresses are unshifted.)
 - **Files:** add `HTTP_PATH_PTR: defw HTTP_PATH`; `http_build_request`: `ld hl,HTTP_PATH` → `ld hl,(HTTP_PATH_PTR)`.
 - **Test:** extend `http_get_test.go::TestHTTPBuildRequestDynamicPath` — point `HTTP_PATH_PTR` at a scratch path, assert the GET == `http.BuildRequest(scratch, HTTP_HOST)`; and the default still == `http.BuildRequest(HTTP_PATH, HTTP_HOST)`.
 - **Verify:** `make netboot-http-get netboot-http` ; `go test -run 'TestHTTPGet|TestHTTPBuildRequest|TestNetbootHTTP' ./...` ; `make netboot-http-boot` (assembles, < &10000).

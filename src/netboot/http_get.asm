@@ -67,7 +67,7 @@ http_build_request:
                 ld      de, CONN_TX_PAYLOAD     ; running dest pointer
                 ld      hl, http_lit_get
                 call    http_copy_cstr
-                ld      hl, HTTP_PATH
+                ld      hl, (HTTP_PATH_PTR)     ; the per-file path (default HTTP_PATH)
                 call    http_copy_cstr
                 ld      hl, http_lit_ver
                 call    http_copy_cstr
@@ -260,6 +260,13 @@ HTTP_PATH:      defm "/firmware/start4.elf"
                 defb 0
 HTTP_HOST:      defm "fw.local"
                 defb 0
+
+; The path http_build_request copies — settable so the multi-file fetch loop
+; (http_main's prov_start) can point each request at the file's fw_plan_path
+; output (FW_PATH). Defaults to the baked HTTP_PATH, so the single-file fetch and
+; the bootable build are behaviourally unchanged. Placed after the strings above
+; so their addresses (which the harness reads back) are unshifted.
+HTTP_PATH_PTR:  defw HTTP_PATH
 
 ; http_parse_response outputs (the harness reads these).
 HTTP_OK:        defs 1
