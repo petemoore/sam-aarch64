@@ -15,15 +15,26 @@ runs on either.
 ## Run
 
 ```
-go run . -tbn build/release-unstripped.tbn                 # interactive, MODE 3 64×24
-go run . -tbn build/release-unstripped.tbn -geometry mode4-8x8
-go run . -mockup -tbn build/release-unstripped.tbn -o build/mockups/   # PNG+SCREEN$ sheets, all geometries
-go run . -frames 3 -tbn build/release-unstripped.tbn -o build/mockups/ # non-interactive smoke
+go run . -tbn build/release-unstripped.tbn                            # raw viewer, MODE 3 64×24
+go run . -mockup -tbn ... -o build/mockups/                           # PNG+SCREEN$ sheets, all geometries
+go run . -frames 3 -tbn ... -o build/mockups/                         # non-interactive smoke
+go run . -iter2-stats -tbn ...                                        # rendering-ladder corpus measurement
 ```
 
-Keys: arrows scroll · space/b page · g/G top/bottom · w wrap toggle · q/ESC quit.
-Geometries: `mode3-8x8` (default) · `mode3-6x8` · `mode3-6x6` · `mode4-8x8` ·
-`mode4-6x8` · `mode4-6x6`.
+### The configurable rendering lab
 
-Fonts live in `fonts/` (8×8 vendored; 6-px drop in by path — see its README).
+`-config FILE` launches a live lab where every rendering feature is one key in a
+hand-editable config (`#` comments, zero deps; documented starters in
+`configs/`). Flip features with single keys (`?` shows the overlay), `S`
+snapshots a combination to a relaunchable config, then `-sam-png` renders that
+config as a SAM-faithful PNG — the zero-translation path from combo to screen.
+
+```
+go run . -tbn build/release-unstripped.tbn -config configs/compressed.config        # live lab
+go run . -tbn ... -config configs/compressed.config -sam-png out.png -sam-line 53    # SAM PNG
+```
+
+Editor keys stay SAM-faithful (arrows, PgUp/Dn, q/ESC); lab keys are lab-only.
+Starters: `binutils-baseline` (R0) · `compressed` (recommendation) ·
+`comet-minimal` (chromeless) · `dreamer` (`relax_palette`).
 Design authority: `docs/specs/editor-tui-prototype-design.md`.

@@ -17,6 +17,7 @@ vendored: it uses the ROM charset read from the live machine — sysvar CHARS
 | `fpf_texture_atlas_full_size.png` | Pristine upstream specimen: the 64×64 glyph atlas at 1:1. | same |
 | `fpf_texture_atlas_6x_size.png` | Pristine upstream specimen: the atlas at 6× for eyeballing. | same |
 | `five-pixel-font-6x6.bin` | Converted SAM form: 96 glyphs (chars 32–127), 6 bytes/glyph, one byte per row, the 6 pixel columns in bits 7..2 (MSB = leftmost). Char 127 = the atlas hollow box, mirroring upstream's `fpf_get_glyph_position`. | generated from `five_pixel_font.h` by `fontproof font` (`tools/font-proof/main.go`) |
+| `font6x6.sam` | The same 96 glyphs in the loader's layout: glyph 0 first (chars 0–31 are 192 leading zero bytes), and each row shifted right two bits — the `.bin` keeps columns in bits 7..2 (Z80-renderer-friendly), `LoadRowPadded` expects bit (w-1) = bit 5 leftmost. This is the file `FontFor` reads. | derived from `five-pixel-font-6x6.bin` (same licence) |
 
 The 6-px fonts are loaded by path: `FontFor` reads `font6x8.sam` / `font6x6.sam`
 (row-padded binary, the format `LoadRowPadded` consumes and `RowPaddedBytes`

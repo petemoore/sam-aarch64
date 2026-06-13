@@ -25,6 +25,17 @@ type Screen struct {
 
 // New initialises a tcell screen for geom. Call Close when done.
 func New(geom samscreen.Geometry) (*Screen, error) {
+	return newScreen(geom, samscreen.DefaultPalette(), false)
+}
+
+// NewWithPalette initialises a tcell screen for geom with a chosen CLUT. When
+// offSAM is true the grid lifts the mode's colour ceiling (the lab's
+// relax_palette dreaming mode); otherwise the SAM quadruple constraint stands.
+func NewWithPalette(geom samscreen.Geometry, pal samscreen.Palette, offSAM bool) (*Screen, error) {
+	return newScreen(geom, pal, offSAM)
+}
+
+func newScreen(geom samscreen.Geometry, pal samscreen.Palette, offSAM bool) (*Screen, error) {
 	ts, err := tcell.NewScreen()
 	if err != nil {
 		return nil, fmt.Errorf("tcell.NewScreen: %w", err)
@@ -34,10 +45,14 @@ func New(geom samscreen.Geometry) (*Screen, error) {
 	}
 	ts.SetStyle(tcell.StyleDefault)
 	ts.Clear()
+	grid := samscreen.NewGrid(geom)
+	if offSAM {
+		grid = samscreen.NewOffSAMGrid(geom)
+	}
 	return &Screen{
-		Grid: samscreen.NewGrid(geom),
+		Grid: grid,
 		ts:   ts,
-		pal:  samscreen.DefaultPalette(),
+		pal:  pal,
 	}, nil
 }
 
