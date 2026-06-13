@@ -54,6 +54,32 @@ INV_I:          defs 32                 ; fe_invert: the saved input i
 INV_C:          defs 32                 ; fe_invert: the running accumulator
 inv_a:          defs 1                  ; fe_invert: the addition-chain step counter
 
+; --- X25519 scalar-mult I/O + Montgomery-ladder working set ---
+X25519_K:       defs 32                 ; in: the 32-byte scalar
+X25519_U:       defs 32                 ; in: the 32-byte u-coordinate
+X25519_OUT:     defs 32                 ; out: the 32-byte shared u-coordinate
+
+K_CLAMPED:      defs 32                 ; the clamped scalar
+LX1:            defs 32                 ; x1 = u (constant through the ladder)
+LX2:            defs 32                 ; the ladder state (x2, z2, x3, z3)
+LZ2:            defs 32
+LX3:            defs 32
+LZ3:            defs 32
+LA:             defs 32                 ; ladderstep temporaries
+LAA:            defs 32
+LB:             defs 32
+LBB:            defs 32
+LE:             defs 32
+LC:             defs 32
+LD:             defs 32
+LDA:            defs 32
+LCB:            defs 32
+LT1:            defs 32                 ; general scratch
+LT2:            defs 32
+lad_t:          defs 1                  ; the current scalar bit index (254..0)
+lad_swap:       defs 1                  ; the running cswap flag
+lad_kt:         defs 1                  ; this iteration's scalar bit
+
 ; 2p = 2*(2^255-19) = 2^256 - 38 = 0x...FFDA (byte0 = 0xDA, bytes 1..31 = 0xFF).
 FE_2P:          defb &DA, &FF, &FF, &FF, &FF, &FF, &FF, &FF
                 defb &FF, &FF, &FF, &FF, &FF, &FF, &FF, &FF
@@ -497,3 +523,321 @@ fe_inv_done:
                 ld      hl, INV_C
                 ld      de, FE_OUT
                 jp      cp32
+
+; ---------------------------------------------------------------------------
+; to_A / to_B / from_OUT — the field-op marshaling helpers.  to_A/to_B copy 32
+; bytes from (HL) into FE_A/FE_B; from_OUT copies FE_OUT to (DE).  These make the
+; ladder readable: "compute dst = op(s1,s2)" becomes load s1->A, s2->B, call op,
+; store OUT->dst.  Clobber BC, DE, HL (to_A/to_B) / BC, HL (from_OUT).
+; ---------------------------------------------------------------------------
+to_A:
+                ld      de, FE_A
+                ld      bc, 32
+                ldir
+                ret
+to_B:
+                ld      de, FE_B
+                ld      bc, 32
+                ldir
+                ret
+from_OUT:
+                ld      hl, FE_OUT
+                ld      bc, 32
+                ldir
+                ret
+
+; ---------------------------------------------------------------------------
+; swap_bytes — exchange B bytes between (HL) and (DE).  Clobbers A, B, C, DE, HL.
+; ---------------------------------------------------------------------------
+swap_bytes:
+                ld      a, (de)                 ; a = the (DE) byte
+                ld      c, (hl)                 ; c = the (HL) byte
+                ld      (hl), a                 ; (HL) = old (DE)
+                ld      a, c
+                ld      (de), a                 ; (DE) = old (HL)
+                inc     hl
+                inc     de
+                djnz    swap_bytes
+                ret
+
+; ---------------------------------------------------------------------------
+; cond_swap_state — if A != 0, exchange (LX2,LX3) and (LZ2,LZ3); the Montgomery
+; ladder's two cswaps share one bit.  Not constant-time (branches on the bit).
+; Clobbers A, BC, DE, HL.
+; ---------------------------------------------------------------------------
+cond_swap_state:
+                or      a
+                ret     z
+                ld      hl, LX2
+                ld      de, LX3
+                ld      b, 32
+                call    swap_bytes
+                ld      hl, LZ2
+                ld      de, LZ3
+                ld      b, 32
+                jp      swap_bytes
+
+; ---------------------------------------------------------------------------
+; ladderstep — one Montgomery ladder differential add-and-double (RFC 7748 §5),
+; updating (LX2,LZ2,LX3,LZ3) from themselves and x1 = LX1.  a24 = 121665.
+; Clobbers everything + scratch.
+; ---------------------------------------------------------------------------
+ladderstep:
+                ld      hl, LX2                 ; A = x2 + z2
+                call    to_A
+                ld      hl, LZ2
+                call    to_B
+                call    fe_add
+                ld      de, LA
+                call    from_OUT
+
+                ld      hl, LA                  ; AA = A^2
+                call    to_A
+                ld      hl, LA
+                call    to_B
+                call    fe_mul
+                ld      de, LAA
+                call    from_OUT
+
+                ld      hl, LX2                 ; B = x2 - z2
+                call    to_A
+                ld      hl, LZ2
+                call    to_B
+                call    fe_sub
+                ld      de, LB
+                call    from_OUT
+
+                ld      hl, LB                  ; BB = B^2
+                call    to_A
+                ld      hl, LB
+                call    to_B
+                call    fe_mul
+                ld      de, LBB
+                call    from_OUT
+
+                ld      hl, LAA                 ; E = AA - BB
+                call    to_A
+                ld      hl, LBB
+                call    to_B
+                call    fe_sub
+                ld      de, LE
+                call    from_OUT
+
+                ld      hl, LX3                 ; C = x3 + z3
+                call    to_A
+                ld      hl, LZ3
+                call    to_B
+                call    fe_add
+                ld      de, LC
+                call    from_OUT
+
+                ld      hl, LX3                 ; D = x3 - z3
+                call    to_A
+                ld      hl, LZ3
+                call    to_B
+                call    fe_sub
+                ld      de, LD
+                call    from_OUT
+
+                ld      hl, LD                  ; DA = D * A
+                call    to_A
+                ld      hl, LA
+                call    to_B
+                call    fe_mul
+                ld      de, LDA
+                call    from_OUT
+
+                ld      hl, LC                  ; CB = C * B
+                call    to_A
+                ld      hl, LB
+                call    to_B
+                call    fe_mul
+                ld      de, LCB
+                call    from_OUT
+
+                ld      hl, LDA                 ; x3 = (DA + CB)^2
+                call    to_A
+                ld      hl, LCB
+                call    to_B
+                call    fe_add
+                ld      de, LT1
+                call    from_OUT
+                ld      hl, LT1
+                call    to_A
+                ld      hl, LT1
+                call    to_B
+                call    fe_mul
+                ld      de, LX3
+                call    from_OUT
+
+                ld      hl, LDA                 ; z3 = x1 * (DA - CB)^2
+                call    to_A
+                ld      hl, LCB
+                call    to_B
+                call    fe_sub
+                ld      de, LT1
+                call    from_OUT
+                ld      hl, LT1
+                call    to_A
+                ld      hl, LT1
+                call    to_B
+                call    fe_mul
+                ld      de, LT2
+                call    from_OUT
+                ld      hl, LX1
+                call    to_A
+                ld      hl, LT2
+                call    to_B
+                call    fe_mul
+                ld      de, LZ3
+                call    from_OUT
+
+                ld      hl, LAA                 ; x2 = AA * BB
+                call    to_A
+                ld      hl, LBB
+                call    to_B
+                call    fe_mul
+                ld      de, LX2
+                call    from_OUT
+
+                ld      hl, LE                  ; z2 = E * (AA + a24 * E)
+                call    to_A
+                call    fe_mul121665            ; FE_OUT = a24 * E
+                ld      de, LT1
+                call    from_OUT
+                ld      hl, LAA
+                call    to_A
+                ld      hl, LT1
+                call    to_B
+                call    fe_add
+                ld      de, LT1                 ; T1 = AA + a24*E
+                call    from_OUT
+                ld      hl, LE
+                call    to_A
+                ld      hl, LT1
+                call    to_B
+                call    fe_mul
+                ld      de, LZ2
+                call    from_OUT
+                ret
+
+; ===========================================================================
+; x25519 — X25519(scalar, u) per RFC 7748 §5: clamp the scalar, decode u, run
+; the Montgomery ladder, and return x2 * z2^-1 (frozen) as 32 LE bytes.
+; In:  X25519_K (scalar) and X25519_U (u) filled.  Out: X25519_OUT.
+; The caller must allow a large step budget (tens of millions of byte-ops).
+; ===========================================================================
+x25519:
+                ld      hl, X25519_K            ; clamp the scalar
+                ld      de, K_CLAMPED
+                ld      bc, 32
+                ldir
+                ld      a, (K_CLAMPED)
+                and     248
+                ld      (K_CLAMPED), a
+                ld      a, (K_CLAMPED + 31)
+                and     127
+                or      64
+                ld      (K_CLAMPED + 31), a
+
+                ld      hl, X25519_U            ; decode u: mask the top bit, x1 = x3 = u
+                ld      de, LX1
+                ld      bc, 32
+                ldir
+                ld      a, (LX1 + 31)
+                and     127
+                ld      (LX1 + 31), a
+                ld      hl, LX1
+                ld      de, LX3
+                ld      bc, 32
+                ldir
+
+                ld      hl, LX2                 ; x2 = 1
+                ld      (hl), 0
+                ld      de, LX2 + 1
+                ld      bc, 31
+                ldir
+                ld      a, 1
+                ld      (LX2), a
+                ld      hl, LZ2                 ; z2 = 0
+                ld      (hl), 0
+                ld      de, LZ2 + 1
+                ld      bc, 31
+                ldir
+                ld      hl, LZ3                 ; z3 = 1
+                ld      (hl), 0
+                ld      de, LZ3 + 1
+                ld      bc, 31
+                ldir
+                ld      a, 1
+                ld      (LZ3), a
+
+                xor     a                       ; swap = 0
+                ld      (lad_swap), a
+                ld      a, 254                  ; t = 254 down to 0
+                ld      (lad_t), a
+x25519_loop:
+                ; k_t = (K_CLAMPED >> t) & 1
+                ld      a, (lad_t)
+                and     7
+                ld      b, a                    ; b = bit index within the byte
+                ld      a, (lad_t)
+                srl     a
+                srl     a
+                srl     a                       ; a = byte index (t >> 3)
+                ld      e, a
+                ld      d, 0
+                ld      hl, K_CLAMPED
+                add     hl, de
+                ld      a, (hl)                 ; a = K_CLAMPED[byte index]
+x25519_shift:
+                dec     b
+                jp      m, x25519_shifted
+                srl     a
+                jp      x25519_shift
+x25519_shifted:
+                and     1
+                ld      (lad_kt), a             ; k_t
+
+                ld      a, (lad_swap)           ; swap ^= k_t
+                ld      hl, lad_kt
+                xor     (hl)
+                ld      (lad_swap), a
+                call    cond_swap_state         ; A = swap
+                ld      a, (lad_kt)             ; swap = k_t
+                ld      (lad_swap), a
+
+                call    ladderstep
+
+                ld      a, (lad_t)
+                or      a
+                jr      z, x25519_after
+                dec     a
+                ld      (lad_t), a
+                jp      x25519_loop
+x25519_after:
+                ld      a, (lad_swap)           ; the final cswap
+                call    cond_swap_state
+
+                ld      hl, LZ2                 ; T1 = z2^-1
+                call    to_A
+                call    fe_invert
+                ld      de, LT1
+                call    from_OUT
+                ld      hl, LX2                 ; T2 = x2 * z2^-1
+                call    to_A
+                ld      hl, LT1
+                call    to_B
+                call    fe_mul
+                ld      de, LT2
+                call    from_OUT
+                ld      hl, LT2                 ; freeze -> X25519_OUT
+                ld      de, FE_A
+                ld      bc, 32
+                ldir
+                call    fe_freeze
+                ld      hl, FE_OUT
+                ld      de, X25519_OUT
+                ld      bc, 32
+                ldir
+                ret
