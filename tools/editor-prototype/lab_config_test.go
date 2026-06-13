@@ -39,6 +39,8 @@ comment_gap = 3
 comment_semicolon = on
 comment_column = commented-lines-only
 expand_cursor_line = wrap:3
+expand_only_if_needed = on
+cursor_block_style = frame
 wrap = off
 viewport_step = 6
 current_line_highlight = on
@@ -47,6 +49,10 @@ status_message = hi
 tighten_exprs = on
 max_instruction_width = 40
 render_constants = hex
+role_mnemonic = 3
+role_expression = 1
+role_register = 2 inverse
+role_immediate = 2
 `)
 	c, err := parseLabConfigFile(p)
 	if err != nil {
@@ -75,6 +81,14 @@ render_constants = hex
 		{"CommentColumnCommentedOnly", c.CommentColumnCommentedOnly, true},
 		{"ExpandCursorLine", c.ExpandCursorLine, expandWrap},
 		{"ExpandK", c.ExpandK, 3},
+		{"ExpandOnlyIfNeeded", c.ExpandOnlyIfNeeded, true},
+		{"CursorBlockStyle", c.CursorBlockStyle, cblFrame},
+		{"RoleMnemonicPen", c.RoleMnemonic.Pen, 3},
+		{"RoleMnemonicInverse", c.RoleMnemonic.Inverse, false},
+		{"RoleExpressionPen", c.RoleExpression.Pen, 1},
+		{"RoleRegisterPen", c.RoleRegister.Pen, 2},
+		{"RoleRegisterInverse", c.RoleRegister.Inverse, true},
+		{"RoleImmediatePen", c.RoleImmediate.Pen, 2},
 		{"Wrap", c.Wrap, false},
 		{"ViewportStep", c.ViewportStep, 6},
 		{"CurrentLineHighlight", c.CurrentLineHighlight, true},
@@ -157,6 +171,8 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	orig.CommentColumnCommentedOnly = true
 	orig.ExpandCursorLine = expandPanel
 	orig.ExpandK = 4
+	orig.ExpandOnlyIfNeeded = true
+	orig.CursorBlockStyle = cblBand
 	orig.Wrap = false
 	orig.ViewportStep = 5
 	orig.CurrentLineHighlight = true
@@ -165,6 +181,10 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	orig.TightenExprs = true
 	orig.MaxInstructionWidth = 32
 	orig.RenderConstants = rcDec
+	orig.RoleMnemonic = roleSpec{Pen: 2, Inverse: false}
+	orig.RoleExpression = roleSpec{Pen: 1, Inverse: false}
+	orig.RoleRegister = roleSpec{Pen: 3, Inverse: true}
+	orig.RoleImmediate = roleSpec{Pen: 2, Inverse: false}
 
 	p := writeConfig(t, orig.Snapshot())
 	got, err := parseLabConfigFile(p)
