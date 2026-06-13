@@ -19,8 +19,8 @@ const Flags uint16 = FlagTaggedSidecar
 
 // FlagTaggedSidecar marks an editor region whose comment-sidecar rows carry a
 // leading kind u8 discriminator (0 = comment, 1 = blank-run), per the i78
-// source-structure design. A reader sets by this bit parses tagged rows; a
-// reader of a file without the bit parses the legacy untagged shape, where
+// source-structure design. A reader of a file with this bit parses tagged
+// rows; a reader of a file without the bit parses the legacy untagged shape, where
 // every row is definitionally a comment. The discriminator is editor-region
 // only — the assembler-facing region and the assembled binary are unchanged,
 // so the byte-match invariant is unaffected.
