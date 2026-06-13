@@ -103,6 +103,7 @@ If you find files in `docs/superpowers/`, they're a stray slip — migrate them 
 - Plans (`docs/plans/`) are **ephemeral** execution artifacts: committed when execution starts, **deleted in the PR that completes the work** (the completing PR's description links the plan's final blob). A directory with no plan files in it is the healthy steady state.
 - `docs/specs/` holds only **living** design docs with **evergreen (undated) filenames**. When a design ships, fold its durable rationale into `docs/ARCHITECTURE.md` or a reference doc and delete the design doc in the same PR.
 - Milestone status docs are **deleted at milestone close**, after the registry walk (contract rule 3). Git history is the archive.
+- **The `iN`/`qN` registries are split by state** (item i105): each is two files — `docs/notes/item-registry-open.md` + `item-registry-closed.md`, and `docs/notes/question-registry-open.md` + `question-registry-closed.md`. A fresh agent reads only the **open** files to see outstanding work. **Resolving an item/question MOVES its row from the open file to the closed file in the same PR that resolves it** (mirrors "delete the plan in the completing PR"). Ids are globally unique across both halves and never reused. **Controlled status vocabulary:** every status cell starts with exactly one token — `OPEN` / `BLOCKED:<what>` (open files) or `DONE` / `WONTFIX` (closed files) — then optional prose. **Atomic items:** one row = one deliverable = one status; a row bundling independently-completable deliverables is split into letter sub-ids (`i81a`/`i81b`…) so no outstanding sub-part hides inside a done-looking row.
 - No `YYYY-MM-DD` filename prefixes anywhere under `docs/` — git history carries the dates. This deliberately overrides the superpowers skills' dated-filename convention.
 - Name new artifacts (dirs, scripts, make targets, CI jobs) after their **function**, never after the milestone that introduced them.
 - Superseded code/tooling is deleted in the PR that supersedes it; if a deletion needs Pete's sign-off, raise a `qN` immediately rather than parking the artifact indefinitely.
@@ -113,7 +114,7 @@ If you find files in `docs/superpowers/`, they're a stray slip — migrate them 
 
 - System overview (the first read): `docs/ARCHITECTURE.md`.
 - Project overview + roadmap: `docs/ROADMAP.md`.
-- Current state + milestone status: `docs/notes/m9-status.md` (active milestone) + `docs/notes/item-registry.md` / `question-registry.md`.
+- Current state + milestone status: `docs/notes/m9-status.md` (active milestone) + `docs/notes/item-registry-open.md` / `question-registry-open.md` (open work; resolved rows live in the `*-closed.md` siblings).
 - SAM Coupé paging primer: `docs/notes/sam-paging.md`.
 - Z80 dev tool: `tools/z80-test-harness-go/` (see "Development inner loop" above).
 - Memory index: `~/.claude/projects/<this-repo's-path-slug>/memory/MEMORY.md` (always auto-loaded; the slug varies by host).

@@ -2,10 +2,13 @@
 
 Three kinds of file live here:
 
-- **Tracking registries** — [`item-registry.md`](item-registry.md) (`iN`
-  work items) and [`question-registry.md`](question-registry.md) (`qN`
-  open questions for Pete). Milestone-neutral, never archived; the
-  registry discipline is documented in each file's header.
+- **Tracking registries** — [`item-registry-open.md`](item-registry-open.md) (`iN`
+  work items) and [`question-registry-open.md`](question-registry-open.md) (`qN`
+  open questions for Pete), each with a `*-closed.md` sibling holding resolved
+  rows ([items](item-registry-closed.md), [questions](question-registry-closed.md)).
+  Read the **open** files for outstanding work; resolving a row moves it open→closed
+  in the same PR. Milestone-neutral, never archived; the registry discipline +
+  controlled status vocabulary are documented in each open file's header.
 - **The active milestone status doc** — [`m9-status.md`](m9-status.md),
   the per-strand source of truth for the milestone in flight. Deleted at
   milestone close after the registry walk (see `docs/ROADMAP.md`).

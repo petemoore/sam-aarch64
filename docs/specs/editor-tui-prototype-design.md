@@ -439,7 +439,7 @@ open questions remain in this spec:**
 
 ## 9. Registry / lifecycle
 
-i76 in `docs/notes/item-registry.md`; strand row in `docs/notes/m9-status.md`
+i76 in `docs/notes/item-registry-open.md`; strand row in `docs/notes/m9-status.md`
 (i4 folds into P1; i5 into the §2.4 mockup backend; i6 into the §3 flag +
 P3 memo). q1 resolved as §2.4. This spec is a living design doc (evergreen
 filename); when the prototype ships and its durable rationale folds into

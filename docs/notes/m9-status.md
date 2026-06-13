@@ -5,7 +5,7 @@ foundations.** M8 (the `.tbn` v2 overlay format + prefix-only load path) closed
 complete on 2026-06-12; it existed to be the editor's storage foundation. M9
 builds the first editor-era bricks on top of it.
 
-**Items use the project-wide `iN` registry at `docs/notes/item-registry.md`**
+**Items use the project-wide `iN` registry at `docs/notes/item-registry-open.md`**
 (the id space is project-wide, not per-milestone). This doc is the M9 per-strand
 source of truth; the ROADMAP "Current State" block is the live session view.
 
@@ -107,7 +107,7 @@ SAM byte-matching the host over the fixture corpus.
 
 ## Open questions for Pete (M9)
 
-Open questions live in the milestone-neutral **`docs/notes/question-registry.md`**
+Open questions live in the milestone-neutral **`docs/notes/question-registry-open.md`**
 (`qN`). None are currently ⏳: **q1 resolved 2026-06-12** (Pete, via the i76
 brief — a programmatic SAM-faithful renderer, built as the i76 mockup backend),
 which ungates the i4/i6/i5 UI strand via i76. The i76 spec gate cleared
@@ -144,5 +144,5 @@ A *proposal*, not yet locked. M9 is done when:
 - Syntactic encoder (i48) design: `docs/specs/i48-syntactic-encoder-design.md`.
 - Codegen tables design (i7): `docs/specs/codegen-tables-design.md`.
 - B-DOS Trinity-fork analysis: `docs/notes/bdos-trinity-fork-analysis.md`.
-- Global item registry: `docs/notes/item-registry.md`.
-- Open-questions registry: `docs/notes/question-registry.md`.
+- Global item registry: `docs/notes/item-registry-open.md`.
+- Open-questions registry: `docs/notes/question-registry-open.md`.
