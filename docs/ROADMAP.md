@@ -27,11 +27,11 @@
 
 *Updated in place each session — this is the live handover. Keep it ≤15 lines; history lives in the milestone status docs, the registries, and `git log`.*
 
-- **Milestone:** **M9 active — the editor era** (`docs/notes/m9-status.md`). M0–M8 ✅ complete. A **Phase-3 design strand** (i80–i84: TFTP, SimCoupé Trinity-net, delivery design) runs alongside, per Pete 2026-06-13.
-- **Last landed:** the i76 editor-prototype stack — re-landed 2026-06-13 as six clean 1:1 PRs (#199–#204) off current main, each individually §3-reviewed, after a GitHub per-ref Actions incident wedged the originals (#190/#192/#193/#195/#196/#197, now closed). main's `tools/editor-prototype` tree is byte-identical to the original green stack; one palette bug surfaced by the per-unit reviews → i79.
-- **In flight:** nothing (all six re-land PRs merged).
+- **Milestone:** **M9 active — the editor era** (`docs/notes/m9-status.md`). M0–M8 ✅ complete. A **Phase-3 design strand** (i80–i84) runs alongside, per Pete 2026-06-13.
+- **Last landed:** i79 ✅ (#206 — `samscreen.DefaultCLUT[5]` 18→80, true cyan, verified against the SAM ROM power-on CLUT). Earlier 2026-06-13: the i76 editor-prototype stack re-landed as six clean 1:1 PRs (#199–#204) off current main after a GitHub per-ref Actions incident wedged the originals (#190/#192/#193/#195/#196/#197, now closed; main's editor tree byte-identical to the original green stack); registry capture of i77–i84 (#205).
+- **In flight:** nothing.
 - **Open questions:** none open (q1 resolved 2026-06-12).
-- **NEXT ACTION:** (M9) drive the editor rendering design via the config lab (`tools/editor-prototype`) toward the on-SAM editor; (Phase-3) the i84 end-to-end design + i82 TFTP RFC research (no hardware needed); plus the i79 palette fix and i77/i78 editor-region work. Pete to steer ordering.
+- **NEXT ACTION (autonomous, no Pete input needed):** Phase-3 strand — (1) i82 TFTP RFC-corpus research note (RFC 1350 + 2347/2348/2349 + 7440, plus a trinload analysis); (2) i84 end-to-end delivery design draft (spec-gate — lands awaiting Pete's approval, like the i7 spec did); (3) i81 SimCoupé upstream issue triage (the aarch64 PNG-endian fix is a ready contribution). In parallel (M9): drive the editor rendering design via the config lab (`tools/editor-prototype`) toward the on-SAM editor. Deferred (need design/hardware first): i80 SimCoupé Trinity-net emulation, i83 TFTP server. Remaining editor-region work: i77 succinctification, i78 blank-line/comment-structure.
 - Every strand keeps the **assembled-binary byte-identical** invariant (the `release-gate` 3-way byte-match); the i39 invariant is binary-identity + round-trip + `.tbn`-shrinks-or-holds, NOT `.tbn` byte-identity.
 <!-- HANDOVER-PROTOCOL-END -->
 
