@@ -817,3 +817,109 @@ func TestClientLoopFrames(t *testing.T) {
 		t.Errorf("SAS violation: timeout retransmitted opcode %d, want ACK", tftp.Opcode(ru.Payload))
 	}
 }
+
+// --- Client originate front (i82 ARP-for-server + RRQ-send, plan §2 1-2) ----
+
+// buildARPReply constructs an Ethernet ARP reply (RFC 826) from senderMAC/IP to
+// the asker — the frame the netboot server (or its router) returns to the
+// client's broadcast ARP request. It is the input the Z80 tftp_recv_arp parses.
+func buildARPReply(senderMAC frame.MAC, senderIP frame.IPv4, targetMAC frame.MAC, targetIP frame.IPv4) []byte {
+	f := make([]byte, frame.ARPFrameLen)
+	copy(f[frame.OffDstMAC:], targetMAC[:]) // unicast to the asker
+	copy(f[frame.OffSrcMAC:], senderMAC[:])
+	f[frame.OffEtherType] = byte(frame.EtherTypeARP >> 8)
+	f[frame.OffEtherType+1] = byte(frame.EtherTypeARP & 0xff)
+	p := f[frame.EthHeaderLen:]
+	p[0], p[1] = byte(frame.ARPHTypeEthernet>>8), byte(frame.ARPHTypeEthernet&0xff)
+	p[2], p[3] = byte(frame.ARPPTypeIPv4>>8), byte(frame.ARPPTypeIPv4&0xff)
+	p[4], p[5] = frame.ARPHLen, frame.ARPPLen
+	p[6], p[7] = byte(frame.ARPOpReply>>8), byte(frame.ARPOpReply&0xff)
+	copy(p[8:14], senderMAC[:])
+	copy(p[14:18], senderIP[:])
+	copy(p[18:24], targetMAC[:])
+	copy(p[24:28], targetIP[:])
+	return f
+}
+
+// TestParseARPReply pins the ARP-reply parser the Z80 tftp_recv_arp ports: an
+// ARP reply yields the sender's MAC + IP; a request, a non-ARP frame, and a
+// too-short frame are rejected.
+func TestParseARPReply(t *testing.T) {
+	reply := buildARPReply(mask.ServerMAC, mask.ServerIP, mask.ClientMAC, mask.ClientIP)
+	mac, ip, ok := frame.ParseARPReply(reply)
+	if !ok {
+		t.Fatal("ParseARPReply rejected a valid reply")
+	}
+	if mac != mask.ServerMAC {
+		t.Errorf("sender MAC = %x, want %x", mac, mask.ServerMAC)
+	}
+	if ip != mask.ServerIP {
+		t.Errorf("sender IP = %v, want %v", ip, mask.ServerIP)
+	}
+
+	// An ARP *request* (OPER=1) is not a reply.
+	req := frame.BuildARPRequest(mask.ClientMAC, mask.ClientIP, mask.ServerIP)
+	if _, _, ok := frame.ParseARPReply(req); ok {
+		t.Error("ParseARPReply accepted an ARP request")
+	}
+	// A UDP frame is not ARP.
+	if _, _, ok := frame.ParseARPReply(golden.TFTPData); ok {
+		t.Error("ParseARPReply accepted a non-ARP frame")
+	}
+	// A truncated frame is rejected.
+	if _, _, ok := frame.ParseARPReply(reply[:10]); ok {
+		t.Error("ParseARPReply accepted a truncated frame")
+	}
+}
+
+// TestClientFrontOriginate is the headline i82 originate-front check: the client
+// broadcasts an ARP request, learns the server MAC from the reply, and sends the
+// RRQ to the learned MAC — the ARP request and the RRQ frame both byte-exact.
+func TestClientFrontOriginate(t *testing.T) {
+	const cliTID = 30574
+	cf := tftp.NewClientFront(mask.ClientMAC, mask.ClientIP, mask.ServerIP, cliTID)
+
+	// 1. The ARP request is the fresh-frame ARP primitive's output.
+	arp := cf.ARPRequest()
+	wantARP := frame.BuildARPRequest(mask.ClientMAC, mask.ClientIP, mask.ServerIP)
+	if !bytes.Equal(arp, wantARP) {
+		t.Errorf("ARP request != BuildARPRequest\n  got  %x\n  want %x", arp, wantARP)
+	}
+
+	// 2. A non-matching ARP reply (wrong IP) is ignored.
+	otherIP := frame.IPv4{192, 0, 2, 99}
+	if cf.OnARPReply(buildARPReply(mask.ServerMAC, otherIP, mask.ClientMAC, mask.ClientIP)) {
+		t.Error("OnARPReply accepted a reply for the wrong IP")
+	}
+	if cf.GotMAC() {
+		t.Error("GotMAC true after a non-matching reply")
+	}
+
+	// 3. The matching ARP reply learns the server MAC.
+	if !cf.OnARPReply(buildARPReply(mask.ServerMAC, mask.ServerIP, mask.ClientMAC, mask.ClientIP)) {
+		t.Fatal("OnARPReply rejected the matching reply")
+	}
+	if cf.ServerMAC() != mask.ServerMAC {
+		t.Errorf("learned server MAC = %x, want %x", cf.ServerMAC(), mask.ServerMAC)
+	}
+
+	// 4. The RRQ frame is the RRQ payload wrapped UDP (client TID -> server :69).
+	rrq := cf.RRQFrame("config.txt")
+	wantRRQ := frame.BuildUDPFrame(frame.UDP{
+		DstMAC: mask.ServerMAC, SrcMAC: mask.ClientMAC,
+		SrcIP: mask.ClientIP, DstIP: mask.ServerIP,
+		SrcPort: cliTID, DstPort: 69,
+		Payload: tftp.BuildRRQ("config.txt", "octet", tftp.ClientOptionSet),
+	})
+	if !bytes.Equal(rrq, wantRRQ) {
+		t.Errorf("RRQ frame != expected\n  got  %x\n  want %x", rrq, wantRRQ)
+	}
+	// And it parses as a UDP RRQ to port 69.
+	u, ok := frame.ParseUDP(rrq)
+	if !ok || u.DstPort != 69 || u.SrcPort != cliTID {
+		t.Errorf("RRQ frame UDP = src %d dst %d, want src %d dst 69", u.SrcPort, u.DstPort, cliTID)
+	}
+	if tftp.Opcode(u.Payload) != tftp.OpRRQ {
+		t.Errorf("RRQ frame opcode = %d, want RRQ", tftp.Opcode(u.Payload))
+	}
+}
