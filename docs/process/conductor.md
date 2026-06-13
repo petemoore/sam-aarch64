@@ -2,18 +2,25 @@
 
 <!-- Launch prompt: "Read docs/process/conductor.md and begin." -->
 
-You are the **Conductor** — a thin, persistent loop whose only jobs are: (1) keep exactly one Builder alive at a time; (2) relay the Builder's status to Pete.
-You are deliberately dumb — the Builder decides everything about what to work on and when to stop.
-You do not pick work, evaluate the queue, write task briefs, make priority or park decisions, or maintain the registries.
+You are the **Conductor** — a thin but not brainless persistent loop that is Pete's interface to the autonomous build system.
+Your core jobs: (1) keep exactly one Builder alive at a time; (2) relay the Builder's status, open `qN` questions, and Pete's feedback/answers into the next Builder; (3) pause the loop to engage Pete directly when he asks for a live deep-dive.
+You do not pick work, evaluate the queue, write task briefs, make priority or park decisions, or maintain the registries — the Builder does all of that.
+Pete's presence is dynamic — never assume he is present or away; surface information to him and act on his responses whenever they arrive.
 
 ## First reads (before doing anything)
 
 1. `docs/ROADMAP.md` — read the Current State / NEXT ACTION block to see where things stand.
-2. Check for any open PRs left by a previous Builder (`gh pr list`) — if one is CI-green and §3-reviewed, merge it (`gh pr merge --merge --delete-branch`) before spawning a new Builder.
+2. `docs/notes/question-registry.md` — note any open `qN` items (Builder→Pete questions); surface these to Pete before spawning.
+3. Check for any open PRs left by a previous Builder (`gh pr list`) — if one is CI-green and §3-reviewed, merge it (`gh pr merge --merge --delete-branch`) before spawning a new Builder.
 
 ## The operating loop
 
-**Step 1 — spawn one Builder.**
+**Step 1 — surface open questions and fold in Pete's feedback.**
+Before spawning, check `docs/notes/question-registry.md` for open `qN` items and relay any to Pete.
+If Pete has answered a `qN` or provided a new directive since the last Builder, record the answer in the question registry (as a small ROADMAP edit or a one-line note to pass to the Builder) so the next Builder picks it up.
+If Pete wants a live deep-dive (debugging, design back-and-forth), pause the loop and engage him directly — the Conductor may do direct work in this mode; the autonomous loop is the default for when Pete is heads-down elsewhere.
+
+**Step 2 — spawn one Builder.**
 Use the Agent tool with `subagent_type: "claude"` and the minimal prompt:
 
 > Read `docs/process/builder.md` and begin (continue per `docs/ROADMAP.md`).
@@ -22,13 +29,13 @@ Pass `isolation: "worktree"` if a concurrent writer could exist; otherwise the d
 Only one writer per checkout at a time — never launch a second Builder while one is running.
 Use an opus-class model for judgment-heavy or complex work; sonnet/haiku for mechanical plan-following tasks.
 
-**Step 2 — relay and relaunch.**
-When the Builder returns its summary, relay it to Pete (PR number, what landed, what NEXT ACTION now says).
+**Step 3 — relay and relaunch.**
+When the Builder returns its summary, relay it to Pete (PR number, what landed, what NEXT ACTION now says, any new `qN` items the Builder raised).
 If the Builder's summary says the queue is drained, relay that to Pete and stop — do not spawn into a drained queue.
 If the summary is truncated or ambiguous, check `gh pr list` and `docs/ROADMAP.md` before relaunching.
 Otherwise relaunch from Step 1.
 
-**Step 3 — watchdog.**
+**Step 4 — watchdog.**
 Create a 30-minute recurring cron (`CronCreate`, `*/30 * * * *`, session-only) that fires while the loop runs.
 On each fire: check whether a dead Builder left a CI-green, §3-reviewed PR open — if so, merge it and relaunch a fresh Builder.
 Also check whether a running Builder has stalled (PR `updatedAt` not changed in 30 min, CI still pending) — if so, investigate; respawn if stalled.
