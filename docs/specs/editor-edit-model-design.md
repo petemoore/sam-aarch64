@@ -768,3 +768,57 @@ the parameters.
    reuse), and **id reuse breaks correctness** — a recycled id can mis-anchor a
    comment or corrupt an undo-of-a-delete. So u24 is simpler, faster, *and* safer; the
    ~4 % space is well worth it.
+
+---
+
+## 8. Implementation status + i48-IR integration scoping (i41a–i41e)
+
+The host-side Go authority (`tools/sam-aarch64/editmodel`) is built incrementally;
+the Z80 port (i41d) mirrors it (CLAUDE.md §6 — Go is the authority).
+
+**Landed:**
+
+- **i41a — core block-list + serialize seam** (PR #383). ½-page blocks, u24
+  never-reused ids, the record-id→stable-block-pointer location table maintained
+  O(½ block) per split/merge (no global reindex — §3.4), insert/delete/goto-by-id/
+  render, behind a separable `EMDL` serialize seam. §5.1 property test green.
+- **i41b — bounded ring-journal undo/redo** (PR #384). `maxUndoDepth` ring,
+  drop-oldest; undo-of-delete restores the **same id** (§3 id-stability).
+- **i41c — real v2 `.tbn` serialize seam** (this PR). `SerializeTBN`/`LoadTBN`
+  compose the existing `frontend.Translate` → `assemble.Pass1` →
+  `assemble.CompactTBNBytes` (save) and `render.EmitLinesFromBytes` (load), so the
+  editor reads/writes the project's native storage format. The `.tbn`-level
+  round-trip is byte-stable (mirrors the `disasm-roundtrip` gate). `EMDL` is
+  retained as the internal exact-round-trip structural seam the i41a/i41b property
+  tests depend on. **Deliberate limitation:** `SerializeTBN` requires a *complete,
+  valid* assembly (the encoder resolves all symbols/PCs); an invalid or partial
+  document **fails loud**. The line payload is still raw text — the i48-IR payload
+  swap is the remaining work (i41e).
+
+**Remaining — i41e (i48-IR record payload + symbol table + hybrid record) is a
+larger integration with genuinely-open design surface** (not a mechanical port of
+existing Go), so it is split out and gated on design rather than bundled with the
+mechanical serialize seam above:
+
+1. **Symbol-table ownership at edit time.** Holding `format.Record` per line
+   couples the document to a document-global `*format.SymbolTable` (records
+   reference interned name-ids; `frontend/parser.go`). The frontend's symbol table
+   is build-once-per-parse, not incrementally-edited; the editmodel needs an
+   incremental name-id lifecycle + a `name-id → defining-record-id` side-table
+   (§3, none exists yet).
+2. **The hybrid record type** (§7.3): committed = parsed `format.Record`, active
+   line = raw text, invalid line = raw/error record. `format.Record` has no raw/
+   error variant today — a wrapper sum type must be designed.
+3. **Per-line text→IR entry.** There is no per-line parser; `frontend.Parse` is a
+   whole-token-stream pass threading the shared symbol table. "Parse one line in
+   isolation" ≠ the assembler's validation (context, forward refs) — the per-line
+   validation semantics need pinning.
+4. **Partial / invalid-document serialize (the sharpest, → qN).** The existing
+   `Compact`/`Pass1` encoder assumes a fully-resolvable assembly and errors
+   otherwise. How a document containing raw/error lines serializes — refuse to
+   save until valid (the i41c fail-loud default), save valid-lines-only, or save
+   raw text + error records — is an **editor-UX product choice** for Pete, tracked
+   in the question registry. i41c's fail-loud is the safe interim; i41e needs the
+   answer.
+5. **`name-id ↔ record-id` side-tables** (§3) — for goto-label / rename; absent
+   today (only the record-id→block `loc` table exists).
