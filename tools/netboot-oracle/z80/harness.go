@@ -236,6 +236,7 @@ type Entry struct {
 type CallResult struct {
 	BC      uint16 // the BC register at RET (routines return a length in BC)
 	HL      uint16 // the HL register at RET (byte-level leaves return a value in HL)
+	A       uint8  // the A register at RET (routines returning a flag/byte use A)
 	Steps   uint64
 	TStates uint64 // total Z80 cycles executed (cycle-exact; see tstates.go)
 }
@@ -317,5 +318,5 @@ func (mac *Machine) run(name string, pc uint16, in Entry) (CallResult, error) {
 			return CallResult{}, fmt.Errorf("z80: routine %q did not return after %d steps (PC=&%04X)", name, steps, cpu.PC)
 		}
 	}
-	return CallResult{BC: cpu.BC.U16(), HL: cpu.HL.U16(), Steps: steps, TStates: tstates}, nil
+	return CallResult{BC: cpu.BC.U16(), HL: cpu.HL.U16(), A: cpu.AF.Hi, Steps: steps, TStates: tstates}, nil
 }
