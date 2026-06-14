@@ -516,37 +516,34 @@ kmul16_outer:
                 ld      (fe_ai), a
                 ld      ix, (k_mul_b)           ; B source, held across the inner loop
                 ld      iy, (fe_pp)             ; dest pointer, held across the inner loop
-                xor     a
-                ld      (fe_car), a
+                ld      c, 0                    ; running inner-loop carry, kept in C
                 ld      b, 16                   ; inner: j = 0..15
 kmul16_inner:
-                push    bc
+                push    bc                      ; preserve counter B + carry C across mul8
                 ld      a, (ix+0)               ; B[j]
                 inc     ix
                 ld      e, a
                 ld      a, (fe_ai)
                 call    mul8                    ; HL = A[i] * B[j] (mul8 ignores D)
+                pop     bc                      ; B = counter, C = running carry
 
-                ld      a, (iy+0)
-                ld      c, a
-                ld      b, 0
-                add     hl, bc                  ; += dest[i+j]
-                ld      a, (fe_car)
-                ld      c, a
-                ld      b, 0
-                add     hl, bc                  ; += carry
+                ld      a, c                    ; dest[i+j] + carry, folded into one add
+                add     a, (iy+0)               ; A = low byte, CF = bit 8
+                ld      e, a
+                ld      a, 0
+                adc     a, 0
+                ld      d, a                    ; DE = dest[i+j] + carry (9-bit value)
+                add     hl, de                  ; HL = product + dest[i+j] + carry
 
                 ld      a, l
                 ld      (iy+0), a
                 inc     iy
-                ld      a, h
-                ld      (fe_car), a
-                pop     bc
+                ld      c, h                    ; new carry stays in C
                 djnz    kmul16_inner
 
                 push    iy                      ; add final carry at dest[i+16]..
                 pop     de
-                ld      a, (fe_car)
+                ld      a, c
 kmul16_carry:
                 or      a
                 jr      z, kmul16_carry_done
@@ -631,37 +628,34 @@ fe_sqr_outer:
                 push    hl                      ; b-source (a[i+1]) held in IX
                 pop     ix
                 ld      iy, (fe_pp)             ; PROD dest (PROD[2i+1]) held in IY
-                xor     a
-                ld      (fe_car), a
+                ld      c, 0                    ; running inner-loop carry, kept in C
                                                 ; B still = outer counter = inner count
 fe_sqr_inner:
-                push    bc
+                push    bc                      ; preserve counter B + carry C across mul8
                 ld      a, (ix+0)
                 inc     ix
                 ld      e, a
                 ld      a, (fe_ai)
                 call    mul8                    ; HL = a[i] * a[j] (mul8 ignores D)
+                pop     bc                      ; B = counter, C = running carry
 
-                ld      a, (iy+0)
-                ld      c, a
-                ld      b, 0
-                add     hl, bc                  ; += PROD[i+j]
-                ld      a, (fe_car)
-                ld      c, a
-                ld      b, 0
-                add     hl, bc                  ; += carry
+                ld      a, c                    ; PROD[i+j] + carry, folded into one add
+                add     a, (iy+0)               ; A = low byte, CF = bit 8
+                ld      e, a
+                ld      a, 0
+                adc     a, 0
+                ld      d, a                    ; DE = PROD[i+j] + carry (9-bit value)
+                add     hl, de                  ; HL = product + PROD[i+j] + carry
 
                 ld      a, l
                 ld      (iy+0), a
                 inc     iy
-                ld      a, h
-                ld      (fe_car), a
-                pop     bc
+                ld      c, h                    ; new carry stays in C
                 djnz    fe_sqr_inner
 
                 push    iy                      ; propagate the final row carry upward
                 pop     de
-                ld      a, (fe_car)
+                ld      a, c
 fe_sqr_carry:
                 or      a
                 jr      z, fe_sqr_carry_done
