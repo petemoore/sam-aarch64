@@ -160,16 +160,6 @@ rotr8_bcde:     MACRO
                 ld      b, a
 ENDM
 
-; rotl8_bcde — rotate B,C,D,E left by 8 (== ROTR24): [b0 b1 b2 b3] -> [b1 b2 b3
-; b0]. The MSB becomes the new LSB. 20T. Clobbers A.
-rotl8_bcde:     MACRO
-                ld      a, b
-                ld      b, c
-                ld      c, d
-                ld      d, e
-                ld      e, a
-ENDM
-
 ; rotr16_bcde — rotate B,C,D,E right by 16: [b0 b1 b2 b3] -> [b2 b3 b0 b1]. 16T.
 ; Clobbers A.
 rotr16_bcde:    MACRO
