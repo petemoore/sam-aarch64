@@ -640,3 +640,125 @@ func TestServerRetransmitOnTimeout(t *testing.T) {
 		t.Errorf("retransmitted block = %d, want 1 (the unacked block)", blk)
 	}
 }
+
+// TestServerLoopFrames drives the i83 server loop authority (the framed
+// reply-driven state machine the Z80 tftp_server_loop.asm ports): a captured
+// RRQ for a stored file yields an OACK frame back to the client TID; the
+// subsequent DATA frames carry the streamed file at the negotiated blksize,
+// ending on a short final block; a miss yields an ERROR(1) frame and serves
+// nothing. The server TID + client endpoint come from the RRQ frame.
+func TestServerLoopFrames(t *testing.T) {
+	const blksize = 1024
+	const serverTID = 40136 // an ephemeral source port for the transfer
+	file := make([]byte, 2*blksize+300)
+	for i := range file {
+		file[i] = byte(i * 7)
+	}
+	store := tftp.MapStore{"config.txt": uint64(len(file))}
+	sl := tftp.NewServerLoop(store, mask.ServerMAC, mask.ServerIP, serverTID)
+	sl.SetSource(tftp.ByteSource(file))
+
+	// RRQ (captured config.txt, blksize=1024) -> OACK frame to the client TID.
+	oackFrame := sl.OnRRQ(golden.TFTPRrqRoot1024)
+	if oackFrame == nil {
+		t.Fatal("server loop ignored a valid RRQ")
+	}
+	ou, ok := frame.ParseUDP(oackFrame)
+	if !ok || ou.SrcPort != serverTID || ou.DstPort != 30574 { // 30574 = captured client TID
+		t.Fatalf("OACK frame ports src=%d dst=%d, want %d -> 30574", ou.SrcPort, ou.DstPort, serverTID)
+	}
+	opts, err := tftp.ParseOACK(ou.Payload)
+	if err != nil {
+		t.Fatalf("parse OACK: %v", err)
+	}
+	if bs, _ := tftp.OptionUint(opts, "blksize"); bs != blksize {
+		t.Errorf("OACK blksize = %d, want %d", bs, blksize)
+	}
+	if ts, _ := tftp.OptionUint(opts, "tsize"); ts != uint64(len(file)) {
+		t.Errorf("OACK tsize = %d, want %d (real file size)", ts, len(file))
+	}
+
+	// Client ACKs block 0 -> first DATA (block 1, full block).
+	first := sl.FirstData()
+	b1, p1, _ := tftp.ParseDATA(mustPayload(t, first))
+	if b1 != 1 || len(p1) != blksize {
+		t.Errorf("first DATA block=%d len=%d, want 1/%d", b1, len(p1), blksize)
+	}
+	if !bytes.Equal(p1, file[:blksize]) {
+		t.Error("first DATA payload != file[0:blksize]")
+	}
+
+	// ACK 1 -> DATA 2 (full); ACK 2 -> DATA 3 (short, 300 bytes); ACK 3 -> done.
+	ackFrame := func(block uint16) []byte {
+		return frame.BuildUDPFrame(frame.UDP{
+			DstMAC: mask.ServerMAC, SrcMAC: mask.ClientMAC,
+			SrcIP: mask.ClientIP, DstIP: mask.ServerIP,
+			SrcPort: 30574, DstPort: serverTID,
+			Payload: tftp.BuildACK(block),
+		})
+	}
+	d2 := sl.OnACK(ackFrame(1))
+	b2, p2, _ := tftp.ParseDATA(mustPayload(t, d2))
+	if b2 != 2 || len(p2) != blksize {
+		t.Errorf("DATA 2 block=%d len=%d, want 2/%d", b2, len(p2), blksize)
+	}
+	d3 := sl.OnACK(ackFrame(2))
+	b3, p3, _ := tftp.ParseDATA(mustPayload(t, d3))
+	if b3 != 3 || len(p3) != 300 {
+		t.Errorf("DATA 3 block=%d len=%d, want 3/300 (short final)", b3, len(p3))
+	}
+	if fin := sl.OnACK(ackFrame(3)); fin != nil {
+		t.Errorf("ACK of the short final block should end the transfer, got a frame")
+	}
+	if !sl.Done() {
+		t.Error("transfer not marked done after final ACK")
+	}
+
+	// A miss -> ERROR(1), no data served.
+	miss := tftp.NewServerLoop(store, mask.ServerMAC, mask.ServerIP, serverTID)
+	miss.SetSource(tftp.ByteSource(file))
+	errFrame := miss.OnRRQ(rebuildRRQ("recovery.elf"))
+	eu, _ := frame.ParseUDP(errFrame)
+	if code, _, _ := tftp.ParseError(eu.Payload); code != tftp.ErrFileNotFound {
+		t.Errorf("miss reply code = %d, want 1 (file not found)", code)
+	}
+	if miss.FirstData() != nil {
+		t.Error("server served data for a missed file")
+	}
+
+	// A serial-subdir prefix -> ERROR(1) too (the Pi retries at root).
+	serial := tftp.NewServerLoop(store, mask.ServerMAC, mask.ServerIP, serverTID)
+	serial.SetSource(tftp.ByteSource(file))
+	if ef := serial.OnRRQ(golden.TFTPRrqSerial); ef == nil {
+		t.Error("serial-subdir RRQ ignored")
+	} else {
+		su, _ := frame.ParseUDP(ef)
+		if code, _, _ := tftp.ParseError(su.Payload); code != tftp.ErrFileNotFound {
+			t.Errorf("serial-subdir reply code = %d, want 1", code)
+		}
+	}
+}
+
+// mustPayload extracts a UDP payload from a frame or fails the test.
+func mustPayload(t *testing.T, f []byte) []byte {
+	t.Helper()
+	if f == nil {
+		t.Fatal("expected a reply frame, got nil")
+	}
+	u, ok := frame.ParseUDP(f)
+	if !ok {
+		t.Fatal("reply frame did not parse as UDP")
+	}
+	return u.Payload
+}
+
+// rebuildRRQ builds a minimal RRQ frame (client -> server:69) for name, matching
+// the captured client's option set, for the miss/serial cases.
+func rebuildRRQ(name string) []byte {
+	return frame.BuildUDPFrame(frame.UDP{
+		DstMAC: mask.ServerMAC, SrcMAC: mask.ClientMAC,
+		SrcIP: mask.ClientIP, DstIP: mask.ServerIP,
+		SrcPort: 30574, DstPort: 69,
+		Payload: tftp.BuildRRQ(name, "octet", []tftp.Option{{Name: "tsize", Value: "0"}, {Name: "blksize", Value: "1024"}}),
+	})
+}
