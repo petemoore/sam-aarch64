@@ -694,20 +694,19 @@ sha_sigma0:
                 push    hl
                 ld      de, sha_word
                 copy4_body                      ; sha_word = x (HL=src, DE=dst)
-                ; term1 = ROTR7(x) = ROTR8 + ROTL1 -> sha_tmpa
                 ld      hl, sha_word
                 ld_bcde
+                ; term1 = ROTR7 = ROTR8 + ROTL1
                 rotr8_bcde
                 rotl1_bcde
                 st_bcde_tmpa
-                ; term2 = ROTR18(x) = ROTR16 + ROTR2 -> xor
-                ld      hl, sha_word
-                ld_bcde
-                rotr16_bcde
+                ; term2 = ROTR18 = ROTR7 then +ROTR11 (ROTR8 + ROTR3)
+                rotr8_bcde
+                rotr1_bcde
                 rotr1_bcde
                 rotr1_bcde
                 xor_bcde_tmpa
-                ; term3 = SHR3(x) -> xor
+                ; term3 = SHR3(x) (reload pristine; shift loses bits)
                 ld      hl, sha_word
                 ld_bcde
                 shr1_bcde
@@ -722,21 +721,17 @@ sha_sigma1:
                 push    hl
                 ld      de, sha_word
                 copy4_body
-                ; term1 = ROTR17(x) = ROTR16 + ROTR1
                 ld      hl, sha_word
                 ld_bcde
+                ; term1 = ROTR17 = ROTR16 + ROTR1
                 rotr16_bcde
                 rotr1_bcde
                 st_bcde_tmpa
-                ; term2 = ROTR19(x) = ROTR16 + ROTR3
-                ld      hl, sha_word
-                ld_bcde
-                rotr16_bcde
-                rotr1_bcde
+                ; term2 = ROTR19 = ROTR17 then +ROTR2
                 rotr1_bcde
                 rotr1_bcde
                 xor_bcde_tmpa
-                ; term3 = SHR10(x) = SHR8 + SHR2 (SHR8: relabel + zero MSB)
+                ; term3 = SHR10 = SHR8 + SHR2 (reload pristine; shift loses bits)
                 ld      hl, sha_word
                 ld_bcde
                 ; SHR8: [b0 b1 b2 b3] -> [0 b0 b1 b2]
@@ -755,26 +750,21 @@ sha_bigsigma0:
                 push    hl
                 ld      de, sha_word
                 copy4_body
-                ; term1 = ROTR2(x)
                 ld      hl, sha_word
                 ld_bcde
+                ; term1 = ROTR2
                 rotr1_bcde
                 rotr1_bcde
                 st_bcde_tmpa
-                ; term2 = ROTR13(x) = ROTR16 + ROTL3
-                ld      hl, sha_word
-                ld_bcde
-                rotr16_bcde
-                rotl1_bcde
-                rotl1_bcde
-                rotl1_bcde
+                ; term2 = ROTR13 = ROTR2 then +ROTR11 (ROTR8 + ROTR3)
+                rotr8_bcde
+                rotr1_bcde
+                rotr1_bcde
+                rotr1_bcde
                 xor_bcde_tmpa
-                ; term3 = ROTR22(x) = ROTL8 + ROTL2
-                ld      hl, sha_word
-                ld_bcde
-                rotl8_bcde
-                rotl1_bcde
-                rotl1_bcde
+                ; term3 = ROTR22 = ROTR13 then +ROTR9 (ROTR8 + ROTR1)
+                rotr8_bcde
+                rotr1_bcde
                 xor_bcde_tmpa
                 pop     hl
                 ret
@@ -784,26 +774,23 @@ sha_bigsigma1:
                 push    hl
                 ld      de, sha_word
                 copy4_body
-                ; term1 = ROTR6(x) = ROTR8 + ROTL2
                 ld      hl, sha_word
                 ld_bcde
+                ; term1 = ROTR6 = ROTR8 + ROTL2
                 rotr8_bcde
                 rotl1_bcde
                 rotl1_bcde
                 st_bcde_tmpa
-                ; term2 = ROTR11(x) = ROTR8 + ROTR3
-                ld      hl, sha_word
-                ld_bcde
+                ; term2 = ROTR11 = ROTR6 then +ROTR5 (ROTR8 + ROTL3)
                 rotr8_bcde
-                rotr1_bcde
-                rotr1_bcde
-                rotr1_bcde
+                rotl1_bcde
+                rotl1_bcde
+                rotl1_bcde
                 xor_bcde_tmpa
-                ; term3 = ROTR25(x) = ROTL8 + ROTR1
-                ld      hl, sha_word
-                ld_bcde
-                rotl8_bcde
-                rotr1_bcde
+                ; term3 = ROTR25 = ROTR11 then +ROTR14 (ROTR16 + ROTL2)
+                rotr16_bcde
+                rotl1_bcde
+                rotl1_bcde
                 xor_bcde_tmpa
                 pop     hl
                 ret
