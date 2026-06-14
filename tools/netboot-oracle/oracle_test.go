@@ -18,6 +18,7 @@ import (
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/golden"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/internal/mask"
+	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/server"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/smoke"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/tftp"
 )
@@ -737,6 +738,112 @@ func TestServerLoopFrames(t *testing.T) {
 		if code, _, _ := tftp.ParseError(su.Payload); code != tftp.ErrFileNotFound {
 			t.Errorf("serial-subdir reply code = %d, want 1", code)
 		}
+	}
+}
+
+// TestIntegratedServerDispatch drives the i95 integrated netboot server
+// (server.Server.OnFrame, the combined dispatcher the Z80 netboot_server.asm
+// ports): one frame-in/reply-out handler routes ARP / DHCP / TFTP. It runs a
+// full netboot session — DISCOVER->OFFER, REQUEST->ACK, an ARP request,
+// RRQ->OACK, ACK->DATA to the short final block — and asserts each reply matches
+// the standalone sub-responder authority byte-for-byte, plus that a non-matching
+// frame is ignored.
+func TestIntegratedServerDispatch(t *testing.T) {
+	const blksize = 1024
+	const serverTID = 40136
+	const clientTID = 30574 // the captured client RRQ source port
+	file := make([]byte, 2*blksize+300)
+	for i := range file {
+		file[i] = byte(i * 7)
+	}
+	store := tftp.MapStore{"config.txt": uint64(len(file))}
+
+	cfg := server.Config{
+		ServerMAC: mask.ServerMAC, ServerIP: mask.ServerIP,
+		Subnet: [4]byte{255, 255, 255, 0}, Broadcast: mask.Broadcast,
+		PoolBase: [4]byte{192, 0, 2, 100}, PoolSize: 8,
+		LeaseSecs: 7200, T1: 3600, T2: 6300, ServerTID: serverTID,
+	}
+	srv := server.New(cfg, store, func(string) tftp.Source { return tftp.ByteSource(file) })
+
+	// Standalone references the dispatch must match byte-for-byte.
+	refDHCP := dhcp.NewResponder(cfg.ServerMAC, cfg.ServerIP, cfg.Subnet, cfg.Broadcast,
+		cfg.PoolBase, cfg.PoolSize, cfg.LeaseSecs, cfg.T1, cfg.T2)
+	refARP := smoke.NewResponder(cfg.ServerMAC, cfg.ServerIP)
+	refTFTP := tftp.NewServerLoop(store, cfg.ServerMAC, cfg.ServerIP, serverTID)
+	refTFTP.SetSource(tftp.ByteSource(file))
+
+	eq := func(label string, got, want []byte) {
+		t.Helper()
+		if !bytes.Equal(got, want) {
+			t.Errorf("%s != standalone authority\n  dispatch %x\n  ref      %x", label, got, want)
+		}
+	}
+
+	// 1. DHCP DISCOVER -> OFFER.
+	eq("OFFER", srv.OnFrame(golden.DHCPDiscover), refDHCP.OnRequest(golden.DHCPDiscover))
+	// 2. DHCP REQUEST -> ACK.
+	eq("DHCP ACK", srv.OnFrame(golden.DHCPRequest), refDHCP.OnRequest(golden.DHCPRequest))
+	// 3. An ARP request for the SAM's IP -> an ARP reply.
+	arpReq := frame.BuildARPRequest(mask.ClientMAC, mask.ClientIP, mask.ServerIP)
+	eq("ARP reply", srv.OnFrame(arpReq), refARP.OnFrame(arpReq))
+	// 4. TFTP RRQ -> OACK (arms the transfer).
+	eq("OACK", srv.OnFrame(golden.TFTPRrqRoot1024), refTFTP.OnRRQ(golden.TFTPRrqRoot1024))
+
+	ack := func(block uint16) []byte {
+		return frame.BuildUDPFrame(frame.UDP{
+			DstMAC: mask.ServerMAC, SrcMAC: mask.ClientMAC,
+			SrcIP: mask.ClientIP, DstIP: mask.ServerIP,
+			SrcPort: clientTID, DstPort: serverTID,
+			Payload: tftp.BuildACK(block),
+		})
+	}
+	// 5. ACK 0 -> first DATA (block 1); the dispatch routes it to FirstData.
+	eq("DATA 1", srv.OnFrame(ack(0)), refTFTP.FirstData())
+	// 6. ACK 1 -> DATA 2 (full).
+	eq("DATA 2", srv.OnFrame(ack(1)), refTFTP.OnACK(ack(1)))
+	// 7. ACK 2 -> DATA 3 (short final, 300 bytes).
+	eq("DATA 3", srv.OnFrame(ack(2)), refTFTP.OnACK(ack(2)))
+	// 8. ACK 3 -> transfer complete, nothing sent.
+	if fin := srv.OnFrame(ack(3)); fin != nil {
+		t.Errorf("ACK of the short final block should end the transfer, got %x", fin)
+	}
+	_ = refTFTP.OnACK(ack(3)) // keep the reference in lockstep
+
+	// 9. A non-matching frame (an ARP request for a different IP) is ignored.
+	if r := srv.OnFrame(frame.BuildARPRequest(mask.ClientMAC, mask.ClientIP, mask.ClientIP)); r != nil {
+		t.Errorf("dispatch replied to an ARP request for a different IP: %x", r)
+	}
+}
+
+// TestIntegratedServerMiss confirms the integrated dispatch serves ERROR(1) on a
+// TFTP miss and keeps going (no transfer armed).
+func TestIntegratedServerMiss(t *testing.T) {
+	store := tftp.MapStore{"config.txt": 100}
+	cfg := server.Config{
+		ServerMAC: mask.ServerMAC, ServerIP: mask.ServerIP,
+		Subnet: [4]byte{255, 255, 255, 0}, Broadcast: mask.Broadcast,
+		PoolBase: [4]byte{192, 0, 2, 100}, PoolSize: 8, ServerTID: 40136,
+	}
+	srv := server.New(cfg, store, func(string) tftp.Source { return tftp.ByteSource(make([]byte, 100)) })
+
+	errFrame := srv.OnFrame(rebuildRRQ("recovery.elf"))
+	if errFrame == nil {
+		t.Fatal("dispatch ignored a TFTP miss")
+	}
+	eu, _ := frame.ParseUDP(errFrame)
+	if code, _, _ := tftp.ParseError(eu.Payload); code != tftp.ErrFileNotFound {
+		t.Errorf("miss reply code = %d, want 1 (file not found)", code)
+	}
+	// An ACK after a miss is not part of any transfer -> ignored.
+	ack := frame.BuildUDPFrame(frame.UDP{
+		DstMAC: mask.ServerMAC, SrcMAC: mask.ClientMAC,
+		SrcIP: mask.ClientIP, DstIP: mask.ServerIP,
+		SrcPort: 30574, DstPort: 40136,
+		Payload: tftp.BuildACK(0),
+	})
+	if r := srv.OnFrame(ack); r != nil {
+		t.Errorf("dispatch sent data after a miss: %x", r)
 	}
 }
 
