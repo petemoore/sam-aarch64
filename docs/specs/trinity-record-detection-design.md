@@ -211,20 +211,20 @@ shape three ways:
 | offset | size | field | citation |
 |--------|------|-------|----------|
 | +0 | 1 | name byte 0; **bit 7 = write-protect**; bits 0–6 = first char | `bdos15a.src.txt:2778` (`RES 7,(HL) ;no WP` clears bit 7 of `rcd.name[0]` for an un-WP'd name); the free test masks bit 7 (§4.4) |
-| +0..+9 | 10 | **record name**, space-padded; high bits stripped on compare/print | `new.lab:2780-2782` (`LD C,10 / LDIR` moves the 10-byte name); print loop masks `AND 127` (`bdos15a.src.txt:4108`, `L18652`) |
-| +10..+15 | 6 | **trailing 6 bytes** — copied verbatim with the name; **content not pinned by the disassembly** | see "ambiguous" note below |
+| +0..+15 | 16 | **the record name** (up to 16 chars), space-padded; bit 7 of each byte stripped on compare/print | `new.rec` copies the full 16-byte `rcd.name` into the entry (`:2801-2820`); `find.rec` compares 16 (`:921-930`); the print loop runs with `B=16`, masking `AND 127` per byte (`L18652`, `:4107-4114`) |
 
-**Ambiguity flagged (not invented):** the 16-byte entry is `name(10) +
-trailing(6)`. The disassembly proves the entry is exactly the 16-byte `rcd.name`
-and that bytes +10..+15 are copied verbatim (`new.rec`, `new.lab:2788-2792` copies
-`rcd.name+10` for 6 bytes into the *disk-label sector* at offset +14). It does
-**not** unambiguously pin what those 6 bytes *mean* in the list entry (they may be
-a longer-name tail, padding, or unused). For free-record detection we **do not
-need** them: the free test reads only byte +0 (§4.4), and the name we present
-reads bytes +0..+9 (§5). Any use of +10..+15 must be confirmed on hardware before
-relying on it. (Note: `new.lab`'s disk-*label*-sector layout is name(10) at +0,
-`"BDOS"` at +12, then 6 bytes at +14 — a different structure from the list entry;
-do not conflate the two.)
+**The whole 16-byte entry is the record name** (corrected 2026-06-19 — Pete
+caught this). The manual confirms names run to 16 chars: `RECORD "Trinity
+Software"` (16) and `RECORD "Shadebobs Demo"` (14) — a 10-byte field couldn't hold
+them (`IMG_20260617_162823.txt`). An earlier draft mis-split this as `name(10) +
+trailing(6)`; that "10" came from `new.lab`, which writes a **different** structure
+— the per-record **disk label** in the record's *own* sector, where the name is
+laid out non-contiguously: `name[0..9]` at +210, the `"BDOS"` id, then
+`name[10..15]` (`new.lab:2780-2792`). **Do not conflate the two:** the central
+**list** entry is a clean, contiguous **16-byte name**; the per-record **disk
+label** (§4.5) is that same name *split around* the `"BDOS"` id. For display, read
+the name from the **16-byte list entry** — the disk-label `+210` read yields only
+the first 10 chars of a longer name.
 
 ### 4.4 The free-entry test
 
@@ -286,12 +286,13 @@ per-record stamp/label confirms the chosen record before the write.
 - **Free** = an unnamed list entry (masked byte 0 == 0). This matches the
   manual's "empty and unnamed" formatted state and B-DOS's own `frec3x` test
   (§4.4).
-- **Named / in use** = a non-zero masked byte 0; present the name by copying
-  bytes +0..+9 and masking bit 7 off each (the WP/high bits), the way `L18652`
-  prints it (`bdos15a.src.txt:4107-4114`).
+- **Named / in use** = a non-zero masked byte 0; present the name by copying the
+  full **16 bytes (+0..+15)** and masking bit 7 off each (the WP/high bits), the
+  way `L18652` prints it with `B=16` (`bdos15a.src.txt:4107-4114`).
 - **Presenting a record's name.** Trailing spaces are trimmed for display; a free
-  record is shown as "free / unnamed". (The name length is implicit — 10 bytes
-  space-padded; there is no stored length field in the entry.)
+  record is shown as "free / unnamed". (The name is **16 bytes** space-padded —
+  there is no stored length field in the entry. Read it from the list entry, not
+  the per-record disk label, which only holds the first 10 chars of a longer name.)
 - **Relationship to "empty".** "Unnamed" (list byte 0 == 0) and "empty"
   (formatted, no files) are distinct: a record can be named but empty, or
   formatted-and-unnamed. The manual's formatter produces *empty and unnamed*. For
@@ -400,18 +401,14 @@ flagged the genuine "B2" follow-up as a **card-absolute list-read path** — the
   `src/netboot/bdos_seam.asm`, `tools/netboot-oracle/z80/bdos_store.go`.
 
 **Open verification items (flagged, not guessed):**
-1. **The 6 trailing bytes of the 16-byte list entry (+10..+15)** are copied
-   verbatim with the name but their *meaning* is not pinned by the disassembly
-   (§4.3). Detection does not need them; do not rely on them without hardware
-   confirmation.
-2. **The raw-SD CMD17 / `&DC`–`&DF` port sequence** is reconstructed from the
+1. **The raw-SD CMD17 / `&DC`–`&DF` port sequence** is reconstructed from the
    B-DOS 1.5t fork RE (`ANALYSIS.md §7`) and `trinity-capabilities.md`. The
    primary period source (SAM Revival 21, "Using the MMC/SD Flash card") is not
    in the photo set, so the exact init/read recipe needs **final confirmation on
    real hardware** before the standalone list-read SPI routine is built. (Until
    then, going through B-DOS's own selected-record reads — §7 — needs no raw SPI;
    the card-absolute list read is the part that needs the standalone SPI routine.)
-3. **`base` at the 32-multiple boundary** (§4.2) — the `+32 then /32` adds a full
+2. **`base` at the 32-multiple boundary** (§4.2) — the `+32 then /32` adds a full
    extra list sector when `records` is an exact multiple of 32; harmless for
    sweeping `1..base-1` (an empty trailing list sector reads as all-free, and the
    `recordNumber > records` guard in §5 stops the walk), but worth a hardware
