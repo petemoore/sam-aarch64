@@ -3,11 +3,15 @@
 Execution plan for the design in `docs/specs/registry-source-of-truth-design.md`.
 Ephemeral: deleted by the completing PR (`i115e`).
 
-Decisions (locked with Pete): enum `OPEN/BLOCKED/DONE/WONTFIX` (in-progress is an
-`OPEN` decoration); sub-ids hyphenated `i48c-b5a` (umbrella + leaves, each leaf one
-completing PR); `qN` folded into the same tooling; the ~6 wall-of-text rows
-reshaped into umbrella+leaves during import; YAML via `gopkg.in/yaml.v3`;
-`description` bound 600 chars (provisional, confirmed at migration).
+Decisions (locked with Pete; **substantially revised 2026-06-19 — see "Model
+revision" below**): enum `OPEN/IN_PROGRESS/DONE/WONTFIX` (**no `BLOCKED`** — it is
+derived from the dependency graph); `depends_on` edges (targeting items *or*
+questions) are a **core** field; **questions are transient** (markdown body, no
+`answer` field, no `answered` status, no closed file — answered → curate dependents
+→ delete); sub-ids hyphenated `i48c-b5a` (umbrella + leaves, each leaf one
+completing PR); `qN` folded into the same tooling; wall-of-text rows reshaped into
+umbrella+leaves; YAML via `gopkg.in/yaml.v3`; `description` bound 600 chars
+(provisional, confirmed at the i115f reshape).
 
 Constraints honoured throughout: merge-commit PRs (`gh pr merge --merge
 --delete-branch`); the mandatory §3 pre-merge review on every PR; `docs/specs` =
@@ -19,6 +23,39 @@ Pattern to mirror at every step: `tools/tables-gen/` + `Makefile` targets
 `tables-gen` (build) / `tables` (regen in place) / `tables-sync-check` (drift
 gate) + the `sysreg-sync` CI job (`.github/workflows/ci.yml`) +
 `tools/tables-gen/regen_survives_test.go` (round-trip proof).
+
+## Model revision (2026-06-19) — dependency DAG, no `BLOCKED`, transient questions
+
+A design session with Pete materially evolved the model (folded into
+`docs/specs/registry-source-of-truth-design.md`). The changes — and what they
+imply for the phases below:
+
+- **`BLOCKED` is removed from the status enum.** "Blocked" is a *derived* property
+  of a `depends_on` edge to an unresolved node. `depends_on` (targeting items *or*
+  questions) is a **core** schema field — the dependency DAG is foundational, not
+  the later priority-queue phase. New validator invariants: acyclic DAG, every edge
+  resolves to an existing node, **no non-WONTFIX item may depend on a WONTFIX node**
+  (a coherency error forcing edge cleanup).
+- **Questions are transient.** No `answer` field, no `answered` status, no
+  `question-registry-closed.md`. Answering a question = curate every dependent item
+  (apply the decision: redefine / split / WONTFIX / spawn items / raise follow-up
+  questions, drop the edge), then **delete** the question. The delete-gate (a
+  question can't be deleted while anything depends on it) is the structural
+  no-information-loss guarantee. The decision lives in the item + git history.
+- **Generated views drop to three** — `item-registry-{open,closed}.md` +
+  `question-registry-open.md` (no closed-questions view).
+- **i115f (the audited content reshape) runs FIRST**, before any other i115 part
+  (Pete; agreed earlier but never tracked — exactly the ordering-tracking gap this
+  whole effort fixes). It is the semantic reshape (atomic rows, BLOCKED→edges,
+  history→git, rationale→design docs), independently audited for information loss,
+  so the later phases assume clean, validator-passing rows.
+
+**Rework implied:** `i115a` (skeleton, merged #437) and `i115b` (generator, PR #443
+on hold) were built against the OLD schema (`BLOCKED` + `blocker`, two question
+views). Their `model.go`/`validate.go`/`gen.go` + the question-view generation need
+updating to this model; PR #443's parity test is also superseded (it asserted
+parity with today's messy `.md`, which we are explicitly *not* preserving). The
+phase content below is updated by this revision where it conflicts.
 
 ## Phase tracking
 
@@ -162,11 +199,35 @@ SessionStart hook prints the new guard without erroring; §3 review confirms
 single-source-of-truth (no policy restated in two homes). Delete this plan file in
 this PR (the completing PR for the `i115` umbrella).
 
-## Sequencing
+## Sequencing (revised 2026-06-19)
 
-PR-0 → `i115a` → `i115b` → `i115c` → `i115d` → `i115e`, strictly serial. PRs
-`i115a`–`i115c` add a dormant tool and cannot break the live registry. `i115d` is
-the single risky cutover. `i115e` is docs/automation only.
+The model revision reorders the work:
+
+1. **Model lockdown** — the spec + this plan + the tracking revision (the PR
+   carrying this revision).
+2. **i115f — the audited content reshape, FIRST.** Reshape the live markdown into
+   clean atomic rows (umbrellas→leaves, history→git, rationale→cited design docs,
+   `BLOCKED`→explicit dependency notation), **independently audited for information
+   loss** (implementer ≠ reviewer). This is the semantic cleanup that makes every
+   later phase mechanical. (One open sub-question — whether the reshape lands in the
+   markdown first or directly in validated YAML at migration — is raised as a `qN`
+   with this PR; it does not block building the tool.)
+3. **Tool rework to the new model** (supersedes the dormant `i115a`/`i115b` as
+   built): schema (no `BLOCKED`, `depends_on`, transient questions), validator (the
+   new DAG + WONTFIX-coherency + delete-gate invariants), generator (three views,
+   new status rendering), CLI mutators incl. `dep add|rm` and `answer`. Dormant —
+   no live source, no CI gate — so `main` stays green.
+4. **Migration + cutover** — mechanical import of the i115f-cleaned content into
+   YAML, generate the three `.md` in place, wire the `registry-sync` CI job.
+5. **Doc / automation rewiring** — point CLAUDE.md / ROADMAP / the SessionStart
+   hook / the autonomous-loop docs at the YAML source; the completing PR deletes
+   this plan.
+6. **i115g (later) — priority queue + `ready`** on top of the now-core dependency
+   DAG.
+
+A dormant tool (step 3) or a content reshape (step 2) cannot break the live
+generated registry — it doesn't exist until the step-4 cutover — so `main` stays
+green throughout.
 
 ## Flagged / provisional
 
