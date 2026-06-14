@@ -56,6 +56,15 @@
   owner: pete
   refs: [i76, "docs/specs/editor-tui-prototype-design.md §3", "docs/specs/editor-tui-prototype-design.md §5", docs/ROADMAP.md]
 
+- id: i7
+  title: Codegen sysreg/mnemonic/form tables from Go authority
+  description: |
+    Phases A+B+C done: A deleted ENCTAB_LEN; B renamed enctab-gen->tables-gen, added -sysreg-inc emitter + CI job sysreg-sync, src/sysreg_tables.inc generated from sysregs.go; C1 added -constants-inc + src/tbn_constants.inc (OP_KIND_*/REC_KIND_*/DIR_* equates); C2 added -mnemonic-ids-inc + src/mnemonic_ids.inc (MNEM_<NAME> equates, all bare-numeric cp dispatchers now named). PRs #184 (spec), #189 (A), #198 (B), #218 (C1/C2). Three sync tests guard all .inc files. Phase D = i74 (gated on aarch64dec/sys.go code->data refactor) is the only remaining work.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/codegen-tables-design.md, i74]
+
 - id: i8
   title: Sysreg-table de-dup into shared src/sysreg_tables.inc
   description: ""
@@ -1178,6 +1187,15 @@
   owner: agent
   refs: [docs/plans/phase3-netboot-implementation-plan.md, docs/specs/phase3-delivery-design.md, src/netboot/dhcp_loop.asm, tools/netboot-oracle/dhcp/responder.go, i80, i83, i84]
 
+- id: i87
+  title: Dump + reverse-engineer Pete's patched SAM ROM (Phase-3)
+  description: |
+    Pete's SAM runs a modified system ROM giving Trinity-interface access at power-on (no B-DOS floppy needed). When his SAM is next online he dumps the ROM to disk; we then diff it against the stock SAM ROM to document exactly how Trinity-at-boot is patched in, so the boot mechanism is reproducible/understood. Not a blocker — trinload can net-load the client/server in the interim, and trinity.mgt + reference/bdos cover the interface. Hardware-gated: artifact production needs Pete's hardware.
+  status: OPEN
+  kind: leaf
+  owner: pete
+  refs: ["docs/specs/phase3-delivery-design.md §3", i84]
+
 - id: i88
   title: On-SAM HTTPS/TLS-1.3 client to fetch Pi firmware directly from GitHub
   description: |
@@ -1509,6 +1527,16 @@
   parent: i102
   refs: [src/netboot/qsq.asm, src/netboot/x25519.asm, i102]
 
+- id: i102m
+  title: i102 sha256 throughput rewrite for the firmware-verify path
+  description: |
+    Increments i102n-i102r landed (closed registry): sha256 729,795->315,355 T/block (-56.8%) — fastest verified Z80 SHA-256. i102r (register-accumulator round, -8.0%, PR #377) was the last sizeable architectural lever. Recalibration: the ~112k reference floor is not grounded — first-principles analysis caps practically-capturable further gains at single-digit %. Remaining: the message-schedule extend loop still does 3 term adds memory-to-memory (add4_body); applying BCDE += accumulate there is ~2% more — one clean lever left. Low priority (world-best already, no deadline).
+  status: IN_PROGRESS
+  kind: umbrella
+  owner: agent
+  parent: i102
+  refs: [src/netboot/sha256.asm, tools/sha256-unroll-gen/, src/netboot/tcp_conn.asm, i100, i101, i102]
+
 - id: i102n
   title: "i102 sha256 register-oriented rewrite — increment 1 (729,795->418,843 T/block, -42.6%)"
   description: |
@@ -1569,6 +1597,24 @@
   parent: i102m
   refs: [src/netboot/sha256.asm, tools/sha256-unroll-gen/, tools/netboot-oracle/z80/tstates_baseline_test.go, i102m, i102q]
 
+- id: i103
+  title: Autonomous-loop monitor — activity-gated quiescence
+  description: |
+    When non-Pete backlog is drained, the monitor keeps waking an idle session. Fix: agent writes a quiescence semaphore on confirming a drain; monitor stops nudging while the file exists AND session transcript has not grown past the recorded mark. The instant the transcript grows (Pete writes back or any new turn) the monitor deletes the file and resumes. Auto-expires on first sign of life — no manual restart, no permanently-deaf loop. Record the transcript mark when monitor first sees the file (not file mtime) to avoid spurious re-wake. Builds on i97.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [i97, tools/autonomous-loop/monitor.sh]
+
+- id: i104
+  title: Per-session retro reports
+  description: |
+    At wind-down each session writes a short blameless retrospective to ~/claude-retro/ on genuine process/workflow friction, written independently (not reading other sessions' reports first) so converging signal across sessions is real, not echoed. Rule: say what genuinely happened; 'nothing notable' is a valid report; each friction grounded in a specific incident. Reviewed by hand every few sessions / at milestone close -> recurring frictions become actionable changes (CLAUDE.md / memory / qN). Distinct from the diary (~/claude-diary/). Practice started 2026-06-15.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [~/claude-retro/README.md, docs/ROADMAP.md]
+
 - id: i105
   title: "Registry restructure — atomic items, status vocabulary, open/closed split"
   description: |
@@ -1579,6 +1625,15 @@
   prs:
     - {num: 306, role: completing}
   refs: [docs/notes/item-registry-open.md, docs/notes/question-registry-open.md, CLAUDE.md, docs/ROADMAP.md]
+
+- id: i106
+  title: "SAM-as-terminal: SSH (or telnet) client to Pete's Mac over the physical LAN"
+  description: |
+    KEX-stub SSH the sweet spot: send constant X25519 basepoint as client ephemeral pubkey; use server's received pubkey as shared secret — zero EC math, instant connect, interoperates with stock OpenSSH sshd. Skip host-key verification (drops Ed25519+SHA-512). Per-byte: ChaCha20-Poly1305 ~few hundred B/s, usable for SAM MODE 3 64x24. Secure-mode toggle (real X25519, ~10-min) nearly free via existing i88 X25519. Telnet fallback: minimal SAM code but needs Homebrew inetutils on Mac. Reuses i88 crypto + i70 tcp_conn.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [i88, i70, "docs/specs/tls13-handshake.md §Prior art"]
 
 - id: i107a
   title: Status-discipline process rule (go-forward codification)
@@ -1613,6 +1668,15 @@
     - {num: 352, role: completing}
   refs: [i107b, i73, i83]
 
+- id: i109
+  title: Collapse the now-unarmed encode_logical_imm soft-reject hook
+  description: |
+    PR #371 (q20/i73-L9 sweep) deleted encode_logical_imm_try, the only caller that ever armed encode_logical_imm_soft; with no armer, encode_logical_imm_reject always jp fails. The soft branch + encode_logical_imm_soft/encode_logical_imm_rejected flags are vestigial. Collapsing back to a plain jp fail + dropping the two equates is behaviourally identical (flag never set) -> release.bin byte-identical. LOW priority (touches v2-production code). The hook may be re-armed by the future i48c editor encoder — decide when i48c's encoder is designed.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [src/slots/logical_imm.asm, i73, i48c]
+
 - id: i110
   title: "Fix netboot bootable boot-entry: jp *_main at &8000 in all four programs"
   description: |
@@ -1623,6 +1687,61 @@
   prs:
     - {num: 374, role: completing}
   refs: [src/netboot/smoke_test.asm, src/netboot/netboot_server.asm, src/netboot/netboot_serve.asm, src/netboot/netboot_client.asm, i100b]
+
+- id: i111
+  title: Memory-read coverage / generic dead-code finder
+  description: |
+    Instrument the koron-go/z80 harness to record every byte read (opcode fetch + data load) while running the whole test corpus, then report bytes inside a build's code/data image never touched. Each unread region is a candidate: either genuinely dead (delete, reclaim code window) or a coverage gap (add a fixture). Phase 1 (flat payloads, paging-free): hook mac.Read/opcode-fetch + use .map symbol ranges. Phase 2 (paged binary): trace must record (physical page, offset) and hook the paging port. Exclude known-acceptable-unread ranges via MARKER SYMBOLS from the pyz80 .map — drift-proof.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [tools/z80-test-harness-go/, i109, i73]
+
+- id: i112
+  title: Restore the SAM opening screen that Colin's Trinity boot-ROM patch tramples
+  description: |
+    Colin's custom ROM boots straight from Trinity (no B-DOS floppy) but overwrites the normal power-on opening screen. Restore by appending code to end of B-DOS (Trinity flash) that redraws the opening screen. The screen is not a clean re-callable subroutine — it is the inline RAINBOW SCREEN block at ROM &ED1B: set MODE 3, init PALTAB, build LINICOLS rainbow table, print MGT banner. Restoration = reproduce that draw in appended Z80, not call a routine. Touches non-redistributable B-DOS 1.5t Trinity fork; modifying Colin's B-DOS may warrant his input (Pete's call).
+  status: OPEN
+  depends_on: [i87]
+  kind: leaf
+  owner: agent
+  refs: [docs/sam/sam-coupe_rom-v3.0_annotated-disassembly.txt, i87, ~/sam-archive/bdos/analysis/]
+
+- id: i113
+  title: "Scrape, QA, and integrate the recovered Trinity documentation"
+  description: |
+    Pete recovered the full Trinity docs as 51 photographs (closes i61 gap: Quazar manual NOT found). Off-repo workspace ~/sam-archive/trinity-docs/ (third-party copyrighted; preservation-only). Three immutable layers: photos/ -> text/ (raw OCR via ocr_docs.py, Tesseract + rotation auto-detect) -> docs/notes/trinity-capabilities.md (verified facts only). Pipeline: OCR -> QA agent (prose errors + data-point inventory; wrong digits must be photo-verified) -> discovery agent (what's new vs current knowledge) -> photo-verify flagged data -> fold only photo-confirmed facts into trinity-capabilities.md.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  refs: [~/sam-archive/trinity-docs/README.md, docs/notes/trinity-capabilities.md, i61, i80, i87]
+
+- id: i114
+  title: Netboot serve manifest + record-allocation strategy
+  description: |
+    A manifest on the booted record maps TFTP names/paths -> B-DOS records, decoupling the served namespace from B-DOS 10-char flat filename limits. Entries carry {locator(s), span count, size, optional SHA-256}. Storage-allocation strategy in manifest header (first-free / highest-free / fixed-list; never silently steal a record). Multi-project use with shared-files-by-reference. Sub-choices settled: encoding=text, locator key=number+name, span naming=hash-derived, default=highest-free. Storage-class: trinity-sam-disks/ prefix = validated raw-record disk. Design at §6.5.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: ["docs/specs/netboot-storage-manifest-design.md §6.5", i93, i95, i99, i70, i100, i101, i119, i122]
+
+- id: i116
+  title: Harness measurement / byte-match tests must assert the build succeeded — no stale-.bin reads
+  description: |
+    A failed pyz80/make build leaves the previous .bin in place (or a timestamp-keyed target no-ops after a source restore), so a T-state or byte-identical check reads the stale artifact and reports a false pass. Bit the project 4 sessions: sha256-fastest-z80, i88-tls-go-authority-arc, i48c-expr-parser-bricks, and a timestamp-keyed variant. Fix is structural (the i21 USAGE.md doc note did not take): make harness measurement/oracle tests depend on the .bin build target (or assert build exit-0 / a freshness check) so they cannot run against a stale artifact.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [tools/z80-test-harness-go/, i104, i21]
+
+- id: i118
+  title: i82 TFTP client — OACK handling / standard-TFTP-server interop
+  description: |
+    The i82 client requests RRQ options (blksize/tsize/timeout/windowsize) but has no OACK (opcode 6) handling. A standards-compliant server (e.g. macOS tftpd) answers an optioned RRQ with OACK before DATA; the client ignores it, never ACKs block 0, and hangs. Fix: on OACK -> learn server endpoint + adopt negotiated blksize (512 default if absent) + send ACK block 0; on direct DATA -> 512 default (today's hard-coded 1428 truncates); drop windowsize from request. Mirrored in Go authority + host tests. PR #422 landed the Go/Z80/host side; hardware test pending.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  refs: [tools/netboot-oracle/tftp/tftp.go, tools/netboot-oracle/tftp/clientloop.go, tools/netboot-oracle/client/client.go, src/netboot/netboot_client.asm, src/netboot/tftp_client_front.asm, i82, i119, i120]
 
 - id: i119
   title: i82 TFTP client — persistence write-out on real hardware
@@ -1685,6 +1804,24 @@
   owner: agent
   parent: i119
   refs: [src/netboot/netboot_client.asm, src/netboot/bdos_seam.asm, docs/specs/samdos-file-io.md, i119, i99]
+
+- id: i120
+  title: Windowed TFTP (RFC 7440) for the netboot client/server — throughput optimization
+  description: |
+    i118 drops windowsize from the client RRQ to stay a correct lock-step (one ACK per block) client. That costs round-trips on large transfers (an 800 KB .mgt at blksize 1428 ~574 lock-step round-trips over the SAM's slow ~20-80 KB/s SPI stack). Windowed delivery (window 4 -> ~4x fewer round-trips) is the throughput win. Requires the receiver to ACK only the last block of each window (+ handle lost-block/out-of-window rewind) on both client (i82) and server (i83/i95); re-add windowsize to ClientOptionSet only once windowed logic exists on both sides + is host-verified.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [tools/netboot-oracle/tftp/, src/netboot/netboot_client.asm, docs/notes/tftp-protocol-research.md, i118, i82, i83, i95]
+
+- id: i121
+  title: "SAM TFTP server — WRQ (write / accept-in) support: push disk images to the SAM, auto-slotted"
+  description: |
+    Pete's PRIMARY netboot use case: boot SAM, 'tftp put' a disk image from the Mac, the SAM writes it to the next free Trinity record, then boot+test immediately. A standard TFTP server handles both RRQ (serve-out) and WRQ (accept-in), so this combines with the existing i83/i95 serve-out server into one program. Reuses the i82 receive loop (DATA accumulate + ACK) + i119 storage write-out; adds WRQ parsing + server-side OACK/ACK-0 (the i83/i95 server already builds OACKs for serve-out) + auto-slot allocation (i114 manifest / highest-free strategy).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [src/netboot/, tools/netboot-oracle/tftp/, i82, i83, i95, i114, i119, i70]
 
 - id: i125
   title: Section-C fit gate for every bootable netboot program (build + CI)
