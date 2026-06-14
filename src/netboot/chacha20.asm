@@ -39,7 +39,6 @@ CC_NONCE:       defs 12                 ; in: the 96-bit nonce (little-endian wo
 CC_STATE:       defs 64                 ; the initial 16-word state
 CC_WORK:        defs 64                 ; the working state (rounds mutate this)
 
-cc_tmp4:        defs 4                  ; a scratch word for the byte-permute rotates
 cc_pa:          defs 2                  ; the four quarter-round word pointers
 cc_pb:          defs 2
 cc_pc:          defs 2
@@ -275,62 +274,43 @@ cc_xor_lp:
                 djnz    cc_xor_lp
                 ret
 
-; ---------------------------------------------------------------------------
-; cc_load_tmp — cc_tmp4 = the 4 bytes at HL; HL preserved.
-; ---------------------------------------------------------------------------
-cc_load_tmp:
-                ld      a, (hl)
-                ld      (cc_tmp4), a
-                inc     hl
-                ld      a, (hl)
-                ld      (cc_tmp4+1), a
-                inc     hl
-                ld      a, (hl)
-                ld      (cc_tmp4+2), a
-                inc     hl
-                ld      a, (hl)
-                ld      (cc_tmp4+3), a
-                dec     hl
-                dec     hl
-                dec     hl
-                ret
-
-; cc_rotl16 — ROTL the LE word at HL by 16 bits: new bytes [b2,b3,b0,b1].
+; cc_rotl16 — ROTL the LE word at HL by 16 bits: new bytes [b2,b3,b0,b1].  The
+; four bytes are read into registers and written back permuted in place — no
+; memory temp — and HL is left at the word base.  Clobbers A, B, C, D.
 cc_rotl16:
-                call    cc_load_tmp
-                ld      a, (cc_tmp4+2)
-                ld      (hl), a
+                ld      a, (hl)                 ; A = b0
                 inc     hl
-                ld      a, (cc_tmp4+3)
-                ld      (hl), a
+                ld      b, (hl)                 ; B = b1
                 inc     hl
-                ld      a, (cc_tmp4+0)
-                ld      (hl), a
+                ld      c, (hl)                 ; C = b2
                 inc     hl
-                ld      a, (cc_tmp4+1)
-                ld      (hl), a
+                ld      d, (hl)                 ; D = b3 (HL now at b3)
+                ld      (hl), b                 ; [3] <- b1
                 dec     hl
+                ld      (hl), a                 ; [2] <- b0
                 dec     hl
+                ld      (hl), d                 ; [1] <- b3
                 dec     hl
+                ld      (hl), c                 ; [0] <- b2
                 ret
 
-; cc_rotl8 — ROTL the LE word at HL by 8 bits: new bytes [b3,b0,b1,b2].
+; cc_rotl8 — ROTL the LE word at HL by 8 bits: new bytes [b3,b0,b1,b2].  In-place
+; register permute as for cc_rotl16.  Clobbers A, B, C, D.
 cc_rotl8:
-                call    cc_load_tmp
-                ld      a, (cc_tmp4+3)
-                ld      (hl), a
+                ld      a, (hl)                 ; A = b0
                 inc     hl
-                ld      a, (cc_tmp4+0)
-                ld      (hl), a
+                ld      b, (hl)                 ; B = b1
                 inc     hl
-                ld      a, (cc_tmp4+1)
-                ld      (hl), a
+                ld      c, (hl)                 ; C = b2
                 inc     hl
-                ld      a, (cc_tmp4+2)
-                ld      (hl), a
+                ld      d, (hl)                 ; D = b3 (HL now at b3)
+                ld      (hl), c                 ; [3] <- b2
                 dec     hl
+                ld      (hl), b                 ; [2] <- b1
                 dec     hl
+                ld      (hl), a                 ; [1] <- b0
                 dec     hl
+                ld      (hl), d                 ; [0] <- b3
                 ret
 
 ; cc_rotl1 — ROTL the LE word at HL by 1 bit.  HL preserved.
