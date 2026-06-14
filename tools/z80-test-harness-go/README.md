@@ -36,6 +36,12 @@ Build the required artefacts from the repo root:
 make assembler-prod enctab sam-aarch64
 ```
 
+The above suffices for the standalone binary. To build **every** artefact the
+full `go test ./...` suite needs and run it in one shot, use `make
+harness-sweep` from the repo root. For the full how-to — running the suite, the
+stale-payload / test-cache gotchas, and how to write a new test (boot self-test
+vs. `RunWithFiles` guard test) — see [USAGE.md](USAGE.md).
+
 ## Run the unit test
 
 ```
