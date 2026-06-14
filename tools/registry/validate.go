@@ -253,17 +253,21 @@ func validateWith(reg *Registry, opts validateOpts) *ValidationError {
 
 		// Invariant 8: bounded fields. Lengths are counted in runes (the spec's
 		// "chars"), so multibyte content (em dashes, accents) is not penalised.
+		// The trailing newline a YAML block scalar appends on round-trip is
+		// trimmed first, so the bound measures content, not the serialization
+		// artifact (an in-memory 600-char desc stays valid after reload).
 		if n := utf8.RuneCountInString(it.Title); n > 120 {
 			ve.add(id, fmt.Sprintf("title exceeds 120 chars (%d)", n))
 		}
 		if strings.ContainsRune(it.Title, '\n') {
 			ve.add(id, "title must be single-line")
 		}
-		if n := utf8.RuneCountInString(it.Description); n > 600 {
+		desc := strings.TrimRight(it.Description, "\n")
+		if n := utf8.RuneCountInString(desc); n > 600 {
 			ve.add(id, fmt.Sprintf("description exceeds 600 chars (%d)", n))
 		}
-		if strings.Count(it.Description, "\n") >= 6 {
-			ve.add(id, fmt.Sprintf("description exceeds 6 lines (%d newlines)", strings.Count(it.Description, "\n")))
+		if n := strings.Count(desc, "\n"); n >= 6 {
+			ve.add(id, fmt.Sprintf("description exceeds 6 lines (%d newlines)", n))
 		}
 
 		// Invariant 9: required fields per status.
@@ -364,12 +368,13 @@ func validateWith(reg *Registry, opts validateOpts) *ValidationError {
 			firstQ = false
 		}
 
-		// Invariant 8: question body bounded.
-		if n := utf8.RuneCountInString(q.Body); n > 600 {
+		// Invariant 8: question body bounded (trailing newline trimmed — see items).
+		body := strings.TrimRight(q.Body, "\n")
+		if n := utf8.RuneCountInString(body); n > 600 {
 			ve.add(id, fmt.Sprintf("body exceeds 600 chars (%d)", n))
 		}
-		if strings.Count(q.Body, "\n") >= 6 {
-			ve.add(id, fmt.Sprintf("body exceeds 6 lines (%d newlines)", strings.Count(q.Body, "\n")))
+		if n := strings.Count(body, "\n"); n >= 6 {
+			ve.add(id, fmt.Sprintf("body exceeds 6 lines (%d newlines)", n))
 		}
 	}
 
