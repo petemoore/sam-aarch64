@@ -212,7 +212,7 @@ func runNextID(args []string, paths mutatorPaths) {
 	}
 }
 
-// runAdd implements `add --id … --title … --desc … --status … --owner … [--parent …] [--dep …]… [--ref …]…`.
+// runAdd implements `add --id … --title … --desc … --status … --owner … [--kind …] [--pr N [--role …]] [--parent …] [--dep …]… [--ref …]…`.
 // Appends a canonical record (item or question by id shape), re-canonicalizes,
 // validates, and runs gen.
 func runAdd(args []string, paths mutatorPaths) {
@@ -223,6 +223,9 @@ func runAdd(args []string, paths mutatorPaths) {
 	status := fs.String("status", "", "status: OPEN|IN_PROGRESS|DONE|WONTFIX (items only)")
 	owner := fs.String("owner", "", "owner: agent|pete|name")
 	parent := fs.String("parent", "", "umbrella parent id (items only, optional)")
+	kind := fs.String("kind", "leaf", "item kind: leaf|umbrella (items only)")
+	prNum := fs.Int("pr", 0, "completing PR number to attach (items only; required for a DONE leaf)")
+	prRole := fs.String("role", "completing", "role for --pr: completing|followup")
 	var deps, refs multiFlag
 	fs.Var(&deps, "dep", "depends_on edge (repeatable; items only)")
 	fs.Var(&refs, "ref", "ref entry (repeatable; items only)")
@@ -271,10 +274,13 @@ func runAdd(args []string, paths mutatorPaths) {
 			Description: *desc,
 			Status:      Status(*status),
 			DependsOn:   []string(deps),
-			Kind:        "leaf",
+			Kind:        *kind,
 			Owner:       *owner,
 			Parent:      *parent,
 			Refs:        []string(refs),
+		}
+		if *prNum > 0 {
+			it.PRs = append(it.PRs, PRRef{Num: *prNum, Role: PRRole(*prRole)})
 		}
 		if it.DependsOn == nil {
 			it.DependsOn = []string{}

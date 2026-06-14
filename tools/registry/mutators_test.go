@@ -627,3 +627,63 @@ func TestAnswer_FailsWhenDependentExists_ViaValidation(t *testing.T) {
 		t.Errorf("expected dangling-edge error; got: %v", ve.msgs)
 	}
 }
+
+// TestAdd_DonePR_OneCommand confirms `add --status DONE --pr N` attaches the
+// completing PR in one command (so a DONE leaf validates without a follow-up
+// set-status). This is the migration's one-command DONE-item path.
+func TestAdd_DonePR_OneCommand(t *testing.T) {
+	paths := setupMutatorFixture(t)
+
+	runAdd([]string{
+		"--id", "i6",
+		"--title", "Done in one command",
+		"--desc", "A completed leaf migrated with its PR.",
+		"--status", "DONE",
+		"--owner", "agent",
+		"--pr", "73",
+	}, paths)
+
+	assertValidFromPaths(t, paths)
+
+	reg := loadRegFromPaths(t, paths)
+	for _, it := range reg.Items {
+		if it.ID == "i6" {
+			if it.Status != StatusDone {
+				t.Errorf("i6.Status: got %q, want DONE", it.Status)
+			}
+			if len(it.PRs) != 1 || it.PRs[0].Num != 73 || it.PRs[0].Role != RoleCompleting {
+				t.Errorf("i6.PRs: got %+v, want one completing PR #73", it.PRs)
+			}
+			return
+		}
+	}
+	t.Error("i6 not found after add")
+}
+
+// TestAdd_KindUmbrella confirms `add --kind umbrella` creates an umbrella record
+// (carrying no PRs), so a pre-existing-umbrella item migrates in one command.
+func TestAdd_KindUmbrella(t *testing.T) {
+	paths := setupMutatorFixture(t)
+
+	runAdd([]string{
+		"--id", "i6",
+		"--title", "Umbrella item",
+		"--desc", "Groups its leaf children.",
+		"--status", "OPEN",
+		"--owner", "agent",
+		"--kind", "umbrella",
+	}, paths)
+
+	assertValidFromPaths(t, paths)
+
+	reg := loadRegFromPaths(t, paths)
+	for _, it := range reg.Items {
+		if it.ID == "i6" {
+			if !it.isUmbrella() {
+				t.Errorf("i6.Kind: got %q, want umbrella", it.Kind)
+			}
+			return
+		}
+	}
+	t.Error("i6 not found after add")
+}
