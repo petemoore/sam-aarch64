@@ -102,12 +102,84 @@ those are the next increments.
 
 ---
 
+## Increment 2 — the integrated netboot server (i95: ARP + DHCP + TFTP)
+
+**What it is.** The headline Phase-3 program: one main loop that reads a frame
+and answers it as the **DHCP + TFTP server** a netbooting Pi needs (plus the
+bring-up ARP from increment 1). It boots, reads the SAM's MAC + IP from the
+EEPROM, sets a fixed DHCP pool on the SAM's own subnet, initialises the ENC28J60,
+then loops forever serving:
+
+- **ARP** who-has for the SAM's IP → an ARP reply (as increment 1);
+- **DHCP** DISCOVER → OFFER, REQUEST → ACK — handing the Pi an address from the
+  pool, with `siaddr` = the SAM (so the Pi learns the SAM is the TFTP server) and
+  the fixed PXE option-43 "Raspberry Pi Boot" blob the Pi 4 boot ROM requires;
+- **TFTP** RRQ → OACK (serve a stored file by name) / ERROR(1) (every miss, and
+  keep serving — the boot ROM probes a long list of optional files), then the
+  streamed DATA/ACK transfer to the short final block.
+
+The dispatch is a byte-for-byte port of the Go authority
+`tools/netboot-oracle/server/server.go::Server.OnFrame`; the full
+DISCOVER→OFFER→REQUEST→ACK→ARP→RRQ→OACK→ACK→DATA session is host-verified over the
+i80 emulation (`TestServerFullSession`).
+
+**Build the disk:**
+
+```sh
+make netboot-server-disk
+# -> build/netboot_server.mgt   (B-DOS boot + AUTO + the server at &8000)
+```
+
+**Run it:**
+
+1. Boot `build/netboot_server.mgt` on the SAM + Trinity. As with the smoke test,
+   a bring-up failure sets a **border colour and halts** (red = no Trinity / blank
+   EEPROM settings; blue = `drv_init` failed). On success it is silently serving.
+
+2. Point a Raspberry Pi (configured for network boot) at the SAM:
+   - **Direct cable** (point-to-point): connect the Pi's Ethernet straight to the
+     Trinity and power the Pi on. The SAM is the only DHCP server it can see.
+   - **Shared LAN**: put the SAM/Trinity and the Pi on the same switch. Make sure
+     no *other* DHCP server will answer the Pi's PXE DISCOVER first (the pool is
+     tiny and the SAM does not arbitrate against another server) — for a clean
+     test, an isolated switch or a direct cable is simplest.
+
+   The store must already hold the files the Pi asks for (`start4.elf`,
+   `fixup4.dat`, the kernel, the device tree, `config.txt`, …) under their flat
+   root names; on real hardware those records are resolved through the B-DOS seam
+   (i93). Until the store is provisioned (i70), expect the Pi to TFTP-probe and
+   the SAM to ERROR(1) the missing files — which still confirms the DHCP + TFTP
+   dispatch is alive.
+
+3. Watch the exchange from another machine on the LAN:
+
+   ```sh
+   sudo tcpdump -i eth0 -n 'arp or port 67 or port 68 or port 69'
+   ```
+
+   A working session shows, in order: the Pi's `ARP who-has` answered by the SAM;
+   `BOOTP/DHCP … Discover` → `… Offer`, `… Request` → `… ACK` from the SAM; then
+   `TFTP … RRQ "start4.elf" octet …` → an OACK and a stream of DATA/ACK pairs (or
+   `ERROR (1) File not found` for files not yet in the store).
+
+**What a pass looks like.** With the store provisioned, the Pi reaches its kernel
+(the firmware rainbow splash, then the boot). This is the headline Phase-3 result.
+With the store empty/partial, a pass of the *server mechanism* is the clean
+DHCP DORA + the TFTP RRQ/OACK (or RRQ/ERROR-keep-serving) exchange on the wire —
+the Pi talking to the SAM as its boot server.
+
+**What this confirms / does not (host-verified vs hardware-gated).** The host
+harness already proves the ARP/DHCP/TFTP dispatch + the streamed transfer +
+serve-by-name + ERROR(1)-on-miss byte-for-byte. This on-hardware run confirms what
+the harness cannot: the real ENC28J60 silicon timing under back-to-back DATA/ACK,
+the EEPROM config read, the **B-DOS RST-8 hook dispatch** that backs the real file
+source (the harness uses an in-RAM source), and a real Pi accepting the SAM's
+OFFER + booting. Emulation-verified is not hardware-verified (CLAUDE.md §5).
+
+---
+
 ## Later increments (placeholders — filled in as they land)
 
-- **Increment 2 — the netboot server (i86 DHCP + i83 TFTP + i93 store).** Boot the
-  server disk, point a Pi on the same LAN at netboot, and the Pi pulls its boot
-  files from the SAM. Pass = the Pi reaches the kernel. (The real B-DOS RST-8 hook
-  dispatch and the real ENC28J60 streaming of multi-MB files are confirmed here.)
 - **Increment 3 — the client (i82).** Boot the client disk, point it at a TFTP
   source, and it fetches a file into a B-DOS record. Pass = the file lands on the
   SAM's storage byte-correct.
