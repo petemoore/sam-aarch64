@@ -695,7 +695,7 @@ netboot-serve-disk: $(BUILD)/netboot_serve_boot.bin $(BUILD)/build-disk
 #   * the bootable binary (no flag) includes client_main + eeprom.asm + the B-DOS
 #     HSAVE so it reads the SAM's real MAC/IP, fetches, and writes to Trinity (the
 #     disk built by netboot-client-disk).
-$(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm
+$(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/enc_link.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_HOSTTEST=1 \
 	    --obj=$(BUILD)/netboot_client.bin \
@@ -706,7 +706,7 @@ netboot-client: $(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map
 
 # The bootable client binary: the full program including the EEPROM config read +
 # the client_main fetch-then-HSAVE flow, for real Trinity.
-$(BUILD)/netboot_client_boot.bin $(BUILD)/netboot_client_boot.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+$(BUILD)/netboot_client_boot.bin $(BUILD)/netboot_client_boot.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/eeprom.asm
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_client_boot.bin \
 	    --mapfile=$(BUILD)/netboot_client_boot.map \

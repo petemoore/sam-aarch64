@@ -154,3 +154,42 @@ func TestClientBootReachesFirstTX(t *testing.T) {
 		t.Errorf("client_main halted (PC=&%04X border=%d); expected it to spin awaiting the ARP reply", res.PC, border)
 	}
 }
+
+// TestDrvWaitLinkWaitsThenSucceeds verifies the i127 fix's core: drv_wait_link
+// polls PHSTAT2.LSTAT over the MII and blocks until the link reads up. It is a
+// CODE-correctness check (does the poll loop wait, then return success), not a
+// claim that link-up is record-13's hardware cause — that stays hardware-gated.
+//
+// With the link modelled up immediately, it returns at once; with a modelled
+// delay, it must spin (more steps) and still return success once LSTAT reads up.
+func TestDrvWaitLinkWaitsThenSucceeds(t *testing.T) {
+	run := func(linkUpAfterOps int) z80h.CallResult {
+		mac, err := z80h.Load(cliBootBin, cliBootMap)
+		if err != nil {
+			t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		}
+		enc := z80h.NewENC28J60()
+		enc.SetLinkUpAfterOps(linkUpAfterOps)
+		mac.AttachIO(enc)
+		res, err := mac.CallEntry("drv_wait_link", z80h.Entry{StepCap: bootStepCap})
+		if err != nil {
+			t.Fatalf("drv_wait_link (linkUpAfterOps=%d): %v", linkUpAfterOps, err)
+		}
+		return res
+	}
+
+	immediate := run(0)
+	if immediate.BC != 1 {
+		t.Fatalf("link up immediately: drv_wait_link returned BC=%d, want 1 (link up)", immediate.BC)
+	}
+	delayed := run(3000) // LSTAT reads down until ~3000 SPI ops have elapsed
+	if delayed.BC != 1 {
+		t.Fatalf("delayed link-up: drv_wait_link returned BC=%d, want 1 — the poll must wait then succeed", delayed.BC)
+	}
+	if delayed.Steps <= immediate.Steps {
+		t.Fatalf("delayed run took %d steps, not more than the immediate %d — the poll did not actually wait for link",
+			delayed.Steps, immediate.Steps)
+	}
+	t.Logf("drv_wait_link: immediate=%d steps, delayed(LSTAT up after 3000 ops)=%d steps (waited)",
+		immediate.Steps, delayed.Steps)
+}
