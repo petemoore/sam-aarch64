@@ -1,4 +1,4 @@
-; asmparse.asm — aarch64 assembler-source parser, i48c Brick B3c (text→records).
+; asmparse.asm — aarch64 assembler-source parser, i48c Brick B5a (text→records).
 ;
 ; SAM-side Z80 port of the Go authority's parser:
 ;   tools/sam-aarch64/frontend/parser.go  (Parse / parseInst / parseOperand /
@@ -60,10 +60,25 @@
 ;          An unknown reloc name or malformed `:name:` sets PARSE_ERR.
 ;        The parse_operand dispatch is extended to route TOK_DOT, TOK_LOCALREF
 ;        and TOK_COLON to parse_operand_expr. With B3c, the full expression
-;        parser (B3a–B3c) is complete. The `,lsl #12` suffix, mem operands,
-;        special-form insts, directives, labels, comments and blank-runs are
-;        later bricks (B4-B7) — a line that needs one is outside this domain
-;        and sets PARSE_ERR.
+;        parser (B3a–B3c) is complete.
+;   B4 (B4/B4b/B4c): the remaining operand kinds — memory operands
+;        (parse_operand_mem, the 7 `[...]` shapes), register shift/extend
+;        suffixes (`x0, lsl #3` / `w0, uxtb`, via parse_operand_reg's lookahead),
+;        and condition-code operands (`csel …, eq`, via match_cond). With B4 the
+;        generic operand parser is complete.
+;   B5a (this): the first special-form instruction intercept — movk/movz/movn.
+;        These take `<Rd>, #imm16 [, lsl #N]` (N ∈ {0,16,32,48}); the lsl slot
+;        index hw=N/16 selects which 16-bit slot to write and is folded into
+;        bits[17:16] of the emitted immediate so the encoder can recover it
+;        without a new operand kind (port of parseMovk, parser.go:592-665). A
+;        constant immediate is range-checked to [0,65535] and folded to a single
+;        literal `(hw<<16)|imm`; a symbolic immediate emits the expression
+;        `(hw<<16) | (immExpr & 0xffff)`. parse_inst dispatches to parse_movk on
+;        the movk/movz/movn mnemonic ids before the generic operand loop.
+;        The remaining special forms (movl / ldr= / barriers / mrs-msr / dc-tlbi,
+;        B5b-B5f), directives, labels, comments and blank-runs are later bricks
+;        (B5b-B7) — a line that needs one is outside this domain and sets
+;        PARSE_ERR.
 ;
 ; INST record (emission form — original framing for the host harness; the
 ; OPERAND bytes are byte-faithful to format.OperandWriter):
@@ -90,6 +105,14 @@
 ; (lex_run, the TOK_* equates, the LEX_SRC/LEX_TOKS buffers).
                 include "tbn_constants.inc"
                 include "asmlex.asm"
+
+; MNEM_<NAME> equates (generated; zero runtime bytes) — the B5 special-form
+; intercepts in parse_inst dispatch on these mnemonic ids by name. In the
+; integrated build (B8) src/intercepts.asm already provides these, so include
+; them only for the standalone asmparse.bin (mirrors the org guard above).
+                if defined(ASMPARSE_STANDALONE)
+                include "mnemonic_ids.inc"
+                endif
 
 ; Expression-bytecode opcodes (ExprOp in tools/sam-aarch64-format/expr.go; the
 ; existing evaluator src/expr_eval.asm dispatches on the same bare values).
@@ -193,6 +216,17 @@ parse_inst:
                 ld      (PI_OPSPTR), hl     ; operand-bytes write ptr
                 xor     a
                 ld      (PI_COUNT), a       ; operand count
+                ; --- B5 special-form intercepts (dispatch on mnemonic id) ---
+                ld      a, (PI_MNEMID+1)    ; id high byte
+                or      a
+                jr      nz, pi_loop         ; id >= 256: no B5 special form
+                ld      a, (PI_MNEMID)      ; id low byte
+                cp      MNEM_MOVK
+                jp      z, parse_movk       ; B5a: movk/movz/movn
+                cp      MNEM_MOVZ
+                jp      z, parse_movk
+                cp      MNEM_MOVN
+                jp      z, parse_movk
 pi_loop:
                 ld      hl, (PARSE_TOK)
                 ld      a, (hl)
@@ -226,6 +260,309 @@ pi_err:
                 ld      a, 1
                 ld      (PARSE_ERR), a
                 scf
+                ret
+
+; ===========================================================================
+; parse_movk — B5a special-form parse for movk/movz/movn. (Port of parseMovk,
+; parser.go:592-665.) Syntax `<mn> Rd, #imm16 [, lsl #N]`, N in {0,16,32,48};
+; the slot index hw=N/16 is folded into bits[17:16] of the emitted immediate so
+; the encoder recovers it without a new operand kind. A constant immediate is
+; range-checked to [0,65535] and folded to a single literal `(hw<<16)|imm`; a
+; symbolic immediate emits `(hw<<16) | (immExpr & 0xffff)`. Entry (from the
+; parse_inst dispatch): PI_MNEMID/PI_OPSPTR/PI_COUNT set up, mnemonic consumed.
+; Exit: one INST record emitted via pi_emit (CY clear); on error jumps pi_err
+; (sets PARSE_ERR, CY).
+; ===========================================================================
+parse_movk:
+                ; Operand 1: destination register.
+                call    parse_operand
+                jp      c, pi_err
+                ; Expect ',' after the register.
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_COMMA
+                jp      nz, pi_err
+                call    parse_advance_tok
+                ; Operand 2: immediate expression -> EXPR_BUF, then fold to the
+                ; parseExpression() form (single PUSH_IMMn if constant, else raw).
+                ld      hl, EXPR_BUF
+                ld      (EXPR_PTR), hl
+                xor     a                   ; minPrec = 0
+                call    parse_expr_prec
+                jp      c, pi_err
+                call    expr_fold
+                ; Save the folded immExpr bytecode: the optional shift parse and
+                ; the rebuild below both reuse EXPR_BUF.
+                ld      hl, (EXPR_PTR)
+                ld      de, EXPR_BUF
+                or      a
+                sbc     hl, de
+                ld      (MOVK_IMMLEN), hl
+                ld      b, h
+                ld      c, l
+                ld      hl, EXPR_BUF
+                ld      de, MOVK_IMMEXPR
+                ld      a, b
+                or      c
+                jr      z, pmk_saved        ; (defensive) zero-length expr
+                ldir
+pmk_saved:
+                ; Constant or symbolic? expr_buf_single_imm loads IMM_VAL and
+                ; clears CY when EXPR_BUF holds a single folded literal.
+                call    expr_buf_single_imm
+                jr      c, pmk_symbolic
+                ; Constant: range-check immConst to [0,65535] — valid iff bytes
+                ; 2..7 of the sign-extended int64 are all zero (non-negative and
+                ; < 2^16).
+                ld      hl, IMM_VAL+2
+                ld      b, 6
+pmk_rng:
+                ld      a, (hl)
+                or      a
+                jp      nz, pi_err
+                inc     hl
+                djnz    pmk_rng
+                ; Save the constant value for the rebuild.
+                ld      hl, IMM_VAL
+                ld      de, MOVK_IMM
+                ld      bc, 8
+                ldir
+                ld      a, 1
+                ld      (MOVK_ISCONST), a
+                jr      pmk_shift
+pmk_symbolic:
+                xor     a
+                ld      (MOVK_ISCONST), a
+pmk_shift:
+                ; Optional `, lsl #N` suffix -> hw in {0,1,2,3} (default 0).
+                xor     a
+                ld      (MOVK_HW), a
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_COMMA
+                jr      nz, pmk_build       ; no suffix
+                call    parse_advance_tok
+                ; Expect the `lsl` keyword.
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_IDENT
+                jp      nz, pi_err
+                call    movk_tok_is_lsl
+                jp      c, pi_err
+                call    parse_advance_tok   ; consume `lsl`
+                ; Expect `#`.
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_HASH
+                jp      nz, pi_err
+                call    parse_advance_tok
+                ; Parse + fold the shift amount; it must be a constant.
+                ld      hl, EXPR_BUF
+                ld      (EXPR_PTR), hl
+                xor     a
+                call    parse_expr_prec
+                jp      c, pi_err
+                call    expr_fold
+                call    expr_buf_single_imm
+                jp      c, pi_err           ; shift amount must be a constant
+                ; Validate {0,16,32,48}: bytes 1..7 zero, byte0 <= 48, byte0%16=0.
+                ld      hl, IMM_VAL+1
+                ld      b, 7
+pmk_shrng:
+                ld      a, (hl)
+                or      a
+                jp      nz, pi_err
+                inc     hl
+                djnz    pmk_shrng
+                ld      a, (IMM_VAL)
+                cp      49
+                jp      nc, pi_err          ; > 48
+                ld      c, a
+                and     &0f
+                jp      nz, pi_err          ; not a multiple of 16
+                ld      a, c
+                rrca
+                rrca
+                rrca
+                rrca                        ; A = byte0 / 16 (byte0 in {0,16,32,48})
+                ld      (MOVK_HW), a
+pmk_build:
+                ; Rebuild the emitted immediate expression in EXPR_BUF.
+                ld      hl, EXPR_BUF
+                ld      (EXPR_PTR), hl
+                ld      a, (MOVK_ISCONST)
+                or      a
+                jr      z, pmk_build_sym
+                ; Constant path: value = (hw<<16) | immConst.
+                call    movk_set_immval_zero
+                ld      a, (MOVK_IMM)
+                ld      (IMM_VAL), a        ; byte0 = imm low
+                ld      a, (MOVK_IMM+1)
+                ld      (IMM_VAL+1), a      ; byte1 = imm high
+                ld      a, (MOVK_HW)
+                ld      (IMM_VAL+2), a      ; byte2 = hw
+                call    expr_emit_imm_from_immval
+                jr      pmk_emit
+pmk_build_sym:
+                ; Symbolic path: PUSH (hw<<16), AppendRaw immExpr, PUSH 0xffff,
+                ; AND, OR  ->  (hw<<16) | (immExpr & 0xffff).
+                call    movk_set_immval_zero
+                ld      a, (MOVK_HW)
+                ld      (IMM_VAL+2), a      ; byte2 = hw  (value = hw<<16)
+                call    expr_emit_imm_from_immval
+                ld      hl, MOVK_IMMEXPR
+                ld      bc, (MOVK_IMMLEN)
+                call    expr_append_raw
+                call    movk_set_immval_zero
+                ld      a, &ff
+                ld      (IMM_VAL), a
+                ld      (IMM_VAL+1), a      ; value = 0x0000ffff
+                call    expr_emit_imm_from_immval
+                ld      a, EXPR_OP_AND
+                call    expr_emit_byte
+                ld      a, EXPR_OP_OR
+                call    expr_emit_byte
+pmk_emit:
+                call    emit_imm_expr_operand
+                ld      a, 2
+                ld      (PI_COUNT), a
+                jp      pi_emit
+
+; ===========================================================================
+; movk_set_immval_zero — zero the 8-byte IMM_VAL scratch. Clobbers A/B/HL.
+; ===========================================================================
+movk_set_immval_zero:
+                ld      hl, IMM_VAL
+                ld      b, 8
+                xor     a
+msiz_loop:
+                ld      (hl), a
+                inc     hl
+                djnz    msiz_loop
+                ret
+
+; ===========================================================================
+; movk_tok_is_lsl — CY clear iff the current token (PARSE_TOK, a TOK_IDENT)
+; spans exactly the three bytes "lsl". (Go: parseMovk's `cur().Text == "lsl"`,
+; parser.go:623.) Token layout: kind:1, span_ptr:2, span_len:2, base:1, val:8.
+; Clobbers A/DE/HL.
+; ===========================================================================
+movk_tok_is_lsl:
+                ld      hl, (PARSE_TOK)
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = span ptr
+                inc     hl
+                ld      a, (hl)             ; span_len low
+                cp      3
+                jr      nz, mtil_no
+                inc     hl
+                ld      a, (hl)             ; span_len high
+                or      a
+                jr      nz, mtil_no
+                ld      a, (de)
+                cp      &6c                 ; 'l'
+                jr      nz, mtil_no
+                inc     de
+                ld      a, (de)
+                cp      &73                 ; 's'
+                jr      nz, mtil_no
+                inc     de
+                ld      a, (de)
+                cp      &6c                 ; 'l'
+                jr      nz, mtil_no
+                or      a                   ; clear carry: match
+                ret
+mtil_no:
+                scf
+                ret
+
+; ===========================================================================
+; expr_buf_single_imm — if EXPR_BUF..(EXPR_PTR) holds exactly one PUSH_IMMn (the
+; folded-constant form produced by expr_fold), load its sign-extended int64 into
+; IMM_VAL and return CY clear. Otherwise (a symbolic/raw bytecode stream, or a
+; literal push with trailing bytes) return CY set, IMM_VAL untouched. Clobbers
+; A/BC/DE/HL.
+; ===========================================================================
+expr_buf_single_imm:
+                ld      hl, EXPR_BUF
+                ld      a, (hl)
+                cp      EXPR_PUSH_IMM8
+                jr      z, ebsi_n1
+                cp      EXPR_PUSH_IMM16
+                jr      z, ebsi_n2
+                cp      EXPR_PUSH_IMM32
+                jr      z, ebsi_n4
+                cp      EXPR_PUSH_IMM64
+                jr      z, ebsi_n8
+                scf
+                ret                         ; not a literal push -> symbolic
+ebsi_n1:        ld      b, 1
+                jr      ebsi_chk
+ebsi_n2:        ld      b, 2
+                jr      ebsi_chk
+ebsi_n4:        ld      b, 4
+                jr      ebsi_chk
+ebsi_n8:        ld      b, 8
+ebsi_chk:
+                ; require total length == 1 + B, else there are trailing ops
+                ; (a non-folded stream that merely starts with a literal).
+                ld      hl, (EXPR_PTR)
+                ld      de, EXPR_BUF
+                or      a
+                sbc     hl, de              ; HL = total bytes
+                ld      a, h
+                or      a
+                jr      nz, ebsi_sym        ; length >= 256 -> symbolic
+                ld      a, b
+                inc     a                   ; 1 + B
+                cp      l
+                jr      nz, ebsi_sym
+                ; constant: copy B value bytes, then sign-extend to 8.
+                ld      hl, EXPR_BUF+1
+                ld      de, IMM_VAL
+                ld      c, b
+                ld      b, 0
+                push    bc                  ; save width
+                ldir                        ; copy C value bytes
+                pop     bc                  ; C = width
+                ; sign byte from the last value byte IMM_VAL[width-1].
+                ld      hl, IMM_VAL
+                dec     bc                  ; width-1
+                add     hl, bc              ; HL -> IMM_VAL[width-1]
+                inc     bc                  ; restore width
+                ld      a, (hl)
+                add     a, a                ; bit7 -> carry
+                sbc     a, a                ; A = 0x00 / 0xFF sign fill
+                inc     hl                  ; HL -> first fill byte
+                ld      d, a                ; D = fill byte
+                ld      a, 8
+                sub     c                   ; A = 8 - width = fill count
+                jr      z, ebsi_ok
+                ld      b, a
+ebsi_fill:
+                ld      (hl), d
+                inc     hl
+                djnz    ebsi_fill
+ebsi_ok:
+                or      a                   ; clear carry: constant, IMM_VAL set
+                ret
+ebsi_sym:
+                scf
+                ret
+
+; ===========================================================================
+; expr_append_raw — copy BC bytes from HL to (EXPR_PTR), advancing (EXPR_PTR).
+; A zero count is a no-op (never an ldir of 65536). Clobbers A/BC/DE/HL.
+; ===========================================================================
+expr_append_raw:
+                ld      a, b
+                or      c
+                ret     z
+                ld      de, (EXPR_PTR)
+                ldir
+                ld      (EXPR_PTR), de
                 ret
 
 ; ===========================================================================
@@ -515,6 +852,18 @@ parse_operand_expr:
                 call    parse_expr_prec
                 ret     c                   ; parse error -> propagate CY
                 call    expr_fold           ; collapse a pure-constant stream
+                call    emit_imm_expr_operand
+                or      a                   ; clear carry: success
+                ret
+
+; ===========================================================================
+; emit_imm_expr_operand — append an OP_KIND_IMM_EXPR operand at (PI_OPSPTR)
+; carrying the expression bytecode currently in EXPR_BUF..(EXPR_PTR). Advances
+; (PI_OPSPTR) past the new operand. (The WriteImmExpr tail of parseOperand's
+; expression path, shared by parse_operand_expr and the B5 special forms.)
+; Clobbers A/BC/DE/HL.
+; ===========================================================================
+emit_imm_expr_operand:
                 ; expr_len = EXPR_PTR - EXPR_BUF
                 ld      hl, (EXPR_PTR)
                 ld      de, EXPR_BUF
@@ -533,11 +882,10 @@ parse_operand_expr:
                 ld      hl, EXPR_BUF        ; HL = source bytecode
                 ld      a, b
                 or      c
-                jr      z, poe_nocopy       ; (defensive) zero-length expr
+                jr      z, eieo_nocopy      ; (defensive) zero-length expr
                 ldir                        ; copy expr bytes; DE -> end
-poe_nocopy:
+eieo_nocopy:
                 ld      (PI_OPSPTR), de
-                or      a                   ; clear carry: success
                 ret
 
 ; ===========================================================================
@@ -2681,6 +3029,11 @@ PI_MNEMID:      defs 2          ; parse_inst: current mnemonic ID
 PI_OPSPTR:      defs 2          ; parse_inst: operand-bytes write pointer
 PI_COUNT:       defs 1          ; parse_inst: operand count
 IMM_VAL:        defs 8          ; scratch int64 (LE) for the shortest-PUSH_IMMn emit
+MOVK_ISCONST:   defs 1          ; parse_movk: 1 if the immediate folded to a constant
+MOVK_IMM:       defs 8          ; parse_movk: saved constant immediate (LE int64)
+MOVK_HW:        defs 1          ; parse_movk: lsl-slot index hw (0/1/2/3)
+MOVK_IMMLEN:    defs 2          ; parse_movk: saved immExpr bytecode length
+MOVK_IMMEXPR:   defs 256        ; parse_movk: saved immExpr bytecode (symbolic rebuild)
 PARSE_OPSBUF:   defs 256        ; one instruction's operand bytes (staging)
 EXPR_BUF:       defs 256        ; one operand's expression bytecode (build buffer)
 EXPR_PTR:       defs 2          ; expression-bytecode write pointer (into EXPR_BUF)
