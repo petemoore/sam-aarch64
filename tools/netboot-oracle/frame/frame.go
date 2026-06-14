@@ -115,6 +115,55 @@ func BuildUDPFrame(u UDP) []byte {
 	return f
 }
 
+// ARP constants (RFC 826). The client originates an ARP request to learn the
+// netboot server's MAC before sending its RRQ (plan §5.1, §2 step 1) — trinload
+// has no fresh-frame origination, so this (like BuildUDPFrame) is new code.
+const (
+	ARPHTypeEthernet = 1      // hardware type: Ethernet
+	ARPPTypeIPv4     = 0x0800 // protocol type: IPv4
+	ARPHLen          = 6      // hardware address length (MAC)
+	ARPPLen          = 4      // protocol address length (IPv4)
+	ARPOpRequest     = 1      // operation: request
+	ARPOpReply       = 2      // operation: reply
+
+	// ARPFrameLen is the wire length of an Ethernet ARP request: the 14-byte
+	// Ethernet header + the 28-byte ARP payload (no trailing padding; the NIC
+	// pads to the 60-byte minimum on TX).
+	ARPFrameLen = EthHeaderLen + 28
+)
+
+// BuildARPRequest originates a fresh Ethernet ARP request (RFC 826) asking
+// "who has targetIP?" — the Go authority for the Z80 `build_arp_request`
+// primitive (plan §5.1, the ARP variant of the fresh-frame need). The client
+// sends it broadcast to learn the server's MAC before its RRQ.
+//
+// The frame is the 14-byte Ethernet header (broadcast dst, srcMAC, EtherType
+// 0x0806) followed by the 28-byte ARP payload: HTYPE=Ethernet, PTYPE=IPv4,
+// HLEN=6, PLEN=4, OPER=request, sender MAC/IP = ours, target MAC = zero
+// (unknown — the point of the request), target IP = the address we are
+// resolving.
+func BuildARPRequest(srcMAC MAC, srcIP, targetIP IPv4) []byte {
+	f := make([]byte, ARPFrameLen)
+
+	// Ethernet header: broadcast destination, our source, ARP EtherType.
+	copy(f[OffDstMAC:], BroadcastMAC[:])
+	copy(f[OffSrcMAC:], srcMAC[:])
+	binary.BigEndian.PutUint16(f[OffEtherType:], EtherTypeARP)
+
+	// ARP payload begins at offset 14.
+	p := f[EthHeaderLen:]
+	binary.BigEndian.PutUint16(p[0:], ARPHTypeEthernet)
+	binary.BigEndian.PutUint16(p[2:], ARPPTypeIPv4)
+	p[4] = ARPHLen
+	p[5] = ARPPLen
+	binary.BigEndian.PutUint16(p[6:], ARPOpRequest)
+	copy(p[8:], srcMAC[:]) // sender hardware address
+	copy(p[14:], srcIP[:]) // sender protocol address
+	// target hardware address (p[18:24]) left zero — unknown.
+	copy(p[24:], targetIP[:]) // target protocol address
+	return f
+}
+
 // ipChecksum computes the RFC 1071 one's-complement header checksum over a
 // 20-byte IPv4 header whose checksum field (bytes 10-11) is zero. This is the
 // Go form of trinload's checksum_ip / chksum_blk (trinload.asm:306, :360).
