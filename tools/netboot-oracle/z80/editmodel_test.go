@@ -759,3 +759,207 @@ func TestEditModelUndoDropOldestZ80(t *testing.T) {
 		t.Fatalf("after %d undos: can_redo = %d, want 1", undos, cr.A)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Brick 4a — EMDL exact serialize/load.
+// ---------------------------------------------------------------------------
+
+// emExpectedEMDL builds the EMDL v1 byte stream for an ordered line sequence,
+// mirroring Serialize in tools/sam-aarch64/editmodel/serialize.go:
+//
+//	"EMDL" | ver:1 | linecount:4 LE | per line { id:3 LE | textlen:2 LE | text }
+func emExpectedEMDL(oracle []oracleLine) []byte {
+	var buf bytes.Buffer
+	buf.WriteString("EMDL")
+	buf.WriteByte(0x01)
+	var u32 [4]byte
+	binary.LittleEndian.PutUint32(u32[:], uint32(len(oracle)))
+	buf.Write(u32[:])
+	for _, l := range oracle {
+		buf.WriteByte(byte(l.id))
+		buf.WriteByte(byte(l.id >> 8))
+		buf.WriteByte(byte(l.id >> 16))
+		var u16 [2]byte
+		binary.LittleEndian.PutUint16(u16[:], uint16(len(l.text)))
+		buf.Write(u16[:])
+		buf.Write(l.text)
+	}
+	return buf.Bytes()
+}
+
+// TestEditModelSerializeZ80 verifies em_serialize / em_load (Brick 4a): the Z80
+// EMDL bytes match the format spec, the stream round-trips losslessly (same id +
+// text sequence, same reserialized bytes), nextID is restored to maxID+1, and a
+// corrupt header fails loud without disturbing the live document.
+func TestEditModelSerializeZ80(t *testing.T) {
+	for _, seed := range []int64{42, 137, 999} {
+		seed := seed
+		t.Run(fmt.Sprintf("seed%d", seed), func(t *testing.T) {
+			testEditModelSerializeWithSeed(t, seed)
+		})
+	}
+}
+
+func testEditModelSerializeWithSeed(t *testing.T, seed int64) {
+	mac := loadEditModel(t)
+
+	symInText := emSym(t, mac, "EM_IN_TEXT")
+	symInID := emSym(t, mac, "EM_IN_ID")
+	symOutID := emSym(t, mac, "EM_OUT_ID")
+	symOutText := emSym(t, mac, "EM_OUT_TEXT")
+	symSerBuf := emSym(t, mac, "EM_SER_BUF")
+
+	if _, err := mac.Call("em_reset"); err != nil {
+		t.Fatalf("em_reset: %v", err)
+	}
+
+	rng := rand.New(rand.NewSource(seed))
+	// Bound the document so the serialized stream fits EM_SER_BUF (3072): 50
+	// lines * (5 + <=40) + 9 header <= ~2259 bytes.
+	const numLines = 50
+	oracle := make([]oracleLine, 0, numLines)
+	for step := 0; step < numLines; step++ {
+		at := rng.Intn(len(oracle) + 1)
+		textLen := 8 + rng.Intn(33)
+		text := emRandText(rng, textLen)
+		mac.Write(symInText, text)
+		if _, err := mac.CallEntry("em_insert", z80h.Entry{BC: uint16(at), A: uint8(textLen)}); err != nil {
+			t.Fatalf("em_insert(at=%d): %v", at, err)
+		}
+		newID := emReadU24LE(mac.Read(symOutID, 3))
+		if newID == 0 {
+			t.Fatalf("em_insert returned id=0")
+		}
+		oracle = append(oracle, oracleLine{})
+		copy(oracle[at+1:], oracle[at:])
+		oracle[at] = oracleLine{id: newID, text: text}
+	}
+
+	// Splits must have occurred, so the serialize block-walk spans >1 block.
+	if bc, err := mac.Call("em_block_count"); err != nil {
+		t.Fatalf("em_block_count: %v", err)
+	} else if bc.HL <= 1 {
+		t.Fatalf("em_block_count = %d, want > 1 (need multi-block coverage)", bc.HL)
+	}
+
+	// --- serialize and compare against the EMDL spec bytes ---
+	serRes, err := mac.Call("em_serialize")
+	if err != nil {
+		t.Fatalf("em_serialize: %v", err)
+	}
+	serLen := int(serRes.HL)
+	got := mac.Read(symSerBuf, serLen)
+	want := emExpectedEMDL(oracle)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("em_serialize: %d bytes mismatch vs EMDL spec (want %d bytes)", len(got), len(want))
+	}
+
+	// --- reset, load the same bytes, verify the document is reconstructed ---
+	if _, err := mac.Call("em_reset"); err != nil {
+		t.Fatalf("em_reset: %v", err)
+	}
+	mac.Write(symSerBuf, want) // bytes persist across em_reset, but be explicit
+	ldRes, err := mac.Call("em_load")
+	if err != nil {
+		t.Fatalf("em_load: %v", err)
+	}
+	if ldRes.A != 1 {
+		t.Fatalf("em_load returned A=%d, want 1 (valid stream)", ldRes.A)
+	}
+
+	lcRes, err := mac.Call("em_line_count")
+	if err != nil {
+		t.Fatalf("em_line_count: %v", err)
+	}
+	if int(lcRes.HL) != len(oracle) {
+		t.Fatalf("after load: line_count = %d, want %d", lcRes.HL, len(oracle))
+	}
+	for i, wantLine := range oracle {
+		if _, err := mac.CallEntry("em_line_at", z80h.Entry{BC: uint16(i)}); err != nil {
+			t.Fatalf("em_line_at(%d): %v", i, err)
+		}
+		gotID := emReadU24LE(mac.Read(symOutID, 3))
+		if gotID != wantLine.id {
+			t.Fatalf("after load: line_at(%d) id = %d, want %d", i, gotID, wantLine.id)
+		}
+		gotLen := int(mac.Read(symOutText, 1)[0])
+		if gotLen != len(wantLine.text) {
+			t.Fatalf("after load: line_at(%d) len = %d, want %d", i, gotLen, len(wantLine.text))
+		}
+		if gotLen > 0 {
+			if g := mac.Read(symOutText+1, gotLen); !bytes.Equal(g, wantLine.text) {
+				t.Fatalf("after load: line_at(%d) text mismatch", i)
+			}
+		}
+	}
+	// goto-by-id must resolve every loaded line.
+	for i, wantLine := range oracle {
+		var idBuf [3]byte
+		idBuf[0] = byte(wantLine.id)
+		idBuf[1] = byte(wantLine.id >> 8)
+		idBuf[2] = byte(wantLine.id >> 16)
+		mac.Write(symInID, idBuf[:])
+		g, err := mac.Call("em_goto")
+		if err != nil {
+			t.Fatalf("em_goto(id=%d): %v", wantLine.id, err)
+		}
+		if g.A != 1 || int(g.HL) != i {
+			t.Fatalf("after load: em_goto(id=%d) found=%d index=%d, want 1/%d", wantLine.id, g.A, g.HL, i)
+		}
+	}
+
+	// --- reserialize: must be byte-identical (partition-independent format) ---
+	ser2Res, err := mac.Call("em_serialize")
+	if err != nil {
+		t.Fatalf("em_serialize #2: %v", err)
+	}
+	got2 := mac.Read(symSerBuf, int(ser2Res.HL))
+	if !bytes.Equal(got2, want) {
+		t.Fatalf("reserialize after load is not byte-stable")
+	}
+
+	// --- nextID restored to maxID+1: the next insert gets a fresh, unused id ---
+	var maxID uint32
+	for _, l := range oracle {
+		if l.id > maxID {
+			maxID = l.id
+		}
+	}
+	probe := emRandText(rng, 10)
+	mac.Write(symInText, probe)
+	if _, err := mac.CallEntry("em_insert", z80h.Entry{BC: uint16(len(oracle)), A: 10}); err != nil {
+		t.Fatalf("probe em_insert: %v", err)
+	}
+	probeID := emReadU24LE(mac.Read(symOutID, 3))
+	if probeID != maxID+1 {
+		t.Fatalf("after load: next allocated id = %d, want maxID+1 = %d", probeID, maxID+1)
+	}
+
+	// --- corrupt header fails loud without disturbing the live document ---
+	// Re-serialize the current doc, corrupt the magic, and confirm em_load
+	// returns A=0 and leaves the document intact (validation precedes reset).
+	if _, err := mac.Call("em_serialize"); err != nil {
+		t.Fatalf("em_serialize #3: %v", err)
+	}
+	liveCount, err := mac.Call("em_line_count")
+	if err != nil {
+		t.Fatalf("em_line_count: %v", err)
+	}
+	mac.Write(symSerBuf, []byte{'X'}) // clobber the 'E'
+	badRes, err := mac.Call("em_load")
+	if err != nil {
+		t.Fatalf("em_load(bad magic): %v", err)
+	}
+	if badRes.A != 0 {
+		t.Fatalf("em_load(bad magic) returned A=%d, want 0 (fail-loud)", badRes.A)
+	}
+	afterBad, err := mac.Call("em_line_count")
+	if err != nil {
+		t.Fatalf("em_line_count after bad load: %v", err)
+	}
+	if afterBad.HL != liveCount.HL {
+		t.Fatalf("em_load(bad magic) disturbed the document: line_count %d -> %d", liveCount.HL, afterBad.HL)
+	}
+
+	t.Logf("seed=%d: serialize/load round-trip ok, %d lines, %d serialized bytes", seed, len(oracle), serLen)
+}
