@@ -1043,3 +1043,58 @@
   prs:
     - {num: 424, role: completing}
   refs: [src/netboot/enc_link.asm, src/netboot/netboot_client.asm, tools/netboot-oracle/z80/enc28j60.go, i124, i82, i119, i128, i131]
+
+- id: i128
+  title: Apply drv_wait_link to http_main (the 2nd proactive netboot transmitter)
+  description: |
+    One-line mirror of the hardware-confirmed i127 client fix: wait for PHY link after drv_init before prov_first's ARP, with a yellow-border (6) fail path. Emulation regression http_main_boot_test.go (TestHTTPMainBootReachesFirstTX + TestHTTPMainRecoversFromLinkDownStart, flat-loaded) mirrors the client's; the silent-wire model (i131) makes removing the fix go red.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 432, role: completing}
+  refs: [src/netboot/http_main.asm, src/netboot/enc_link.asm, tools/netboot-oracle/z80/http_main_boot_test.go, i127, i70, i82]
+
+- id: i131
+  title: Feed hardware-confirmed PHY-link-up behaviour back into the emulator (i127 rule-7 loop)
+  description: |
+    enc28j60.go doTransmit drops a frame while PHY link is down (still signalling TXIF/TXRTS — the datasheet behaviour hiding the loss), atop the already-modelled PHSTAT2.LSTAT down-then-up read (PR #424). Tests: TestDrvWriteSilentWireWhileLinkDown (drv_write while link down egresses nothing, then egresses once up) + TestClientBootRecoversFromLinkDownStart (fixed client_main with link starting down egresses its one ARP; FirstTXOps self-calibrates so removing the fix → 0 frames → red). Whole transmit-before-link-up class caught in emulation; link-up timing stays hardware-gated (CLAUDE.md §5).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 427, role: completing}
+  refs: [tools/netboot-oracle/z80/enc28j60.go, tools/netboot-oracle/z80/enc28j60_test.go, tools/netboot-oracle/z80/netboot_boot_test.go, tools/netboot-oracle/z80/README.md, i127, i124, i126]
+
+- id: i132
+  title: Run trinload itself in the emulation harness — validate the push→run→return cycle
+  description: |
+    Load trinload.bin (org &6000, vendored at src/netboot/trinload.asm) in the koron-z80 harness with the i124 ENC + EEPROM emulation; inject the trinload UDP protocol (? → ! reply; @+page+offset+data → LDIR; X+page+addr → pushed program executes + RETs to trinload start). Confirms control returns after the pushed program RETs (try_exec pushes hl=start before jp hl). De-risks every future trinload push. Ships: vendored trinload.asm, make netboot-trinload, TestTrinloadPushRunReturn + TestTrinloadDataWriteToOffset, LoadAt/StopPC/StopPCSkip in harness.go, HMPR snoop in enc28j60.go.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 431, role: completing}
+  refs: [tools/netboot-oracle/z80/trinload_test.go, src/netboot/trinload.asm, i124, i126, i129, i133]
+
+- id: i134
+  title: "Harness SD/B-DOS write-out model: RST-8/HRECORD/HSAVE in emulation (prerequisite for emulation-testing i119)"
+  description: |
+    Generic RST-vector hook in harness.go (rstHandlers — PC intercept at RST target, runs handler, resumes past inline operand) + bdos_store.go (BDOSStore + Machine.AttachBDOS) modelling HRECORD (record select) + HSAVE (capture+decode 48-byte UIFA at IX). Tests: mechanism test (bdos_select_record/bdos_save_hook → UIFA captured) + TestClientBootWriteOutCaptured (real client_main through TFTP transfer to write-out). Reproduces i119 record-selection bug in emulation (record 0 = floppy selected). Finding: filename >10 chars truncates in SAM UIFA. Models digital dispatch only (CLAUDE.md §5).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 429, role: completing}
+  refs: [tools/netboot-oracle/z80/bdos_store.go, tools/netboot-oracle/z80/bdos_store_test.go, tools/netboot-oracle/z80/harness.go, tools/netboot-oracle/z80/README.md, src/netboot/bdos_seam.asm, i119, i124, i126]
+
+- id: i136
+  title: "Autonomous-loop monitor: resume nudge lost to /context TUI redraw"
+  description: |
+    Pete hit a ~1h stall 2026-06-19: only /context arrived after a merged item; the agent sat idle until woken by hand. TASK_DONE branch stuffed the RESUME_NUDGE immediately after /context, but /context is a local command that redraws the whole TUI — nudge keystrokes stuffed during the redraw were lost (same stall class as earlier /context-alone-never-resumed bug). Fix: sleep ALOOP_CONTEXT_SETTLE (default 5s) between the /context submit and the nudge stuff. The 1s SUBMIT_SETTLE inside submit() was too short to outlast the render.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 428, role: completing}
+  refs: [tools/autonomous-loop/monitor.sh, tools/autonomous-loop/README.md]
