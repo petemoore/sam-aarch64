@@ -4,7 +4,7 @@
 // Usage:
 //
 //	registry validate <items.yaml> [questions.yaml]
-//	registry gen     <items.yaml> <questions.yaml>
+//	registry gen     <items.yaml> <questions.yaml> [--templates-dir <dir>]
 //
 // Exit codes: 0 = ok, 1 = validation or drift error, 2 = usage error.
 package main
@@ -13,6 +13,8 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 func main() {
@@ -36,7 +38,7 @@ func main() {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  registry validate <items.yaml> [questions.yaml]")
-	fmt.Fprintln(os.Stderr, "  registry gen      <items.yaml> <questions.yaml>")
+	fmt.Fprintln(os.Stderr, "  registry gen      <items.yaml> <questions.yaml> [--templates-dir <dir>]")
 }
 
 func runValidate(args []string) {
@@ -71,19 +73,45 @@ func runValidate(args []string) {
 }
 
 func runGen(args []string) {
-	if len(args) < 2 {
+	// Parse positional args and optional --templates-dir flag.
+	var positional []string
+	templatesDir := ""
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--templates-dir" && i+1 < len(args) {
+			templatesDir = args[i+1]
+			i++
+		} else if strings.HasPrefix(args[i], "--templates-dir=") {
+			templatesDir = strings.TrimPrefix(args[i], "--templates-dir=")
+		} else {
+			positional = append(positional, args[i])
+		}
+	}
+
+	if len(positional) < 2 {
 		fmt.Fprintln(os.Stderr, "registry gen: need <items.yaml> <questions.yaml>")
 		os.Exit(2)
 	}
 
+	// If no explicit templates dir, try to locate the repo root via the items
+	// path so the binary can be run from any working directory.
+	if templatesDir == "" {
+		repoRoot := findRepoRootFromPath(positional[0])
+		if repoRoot != "" {
+			candidate := filepath.Join(repoRoot, defaultTemplatesDir)
+			if _, err := os.Stat(candidate); err == nil {
+				templatesDir = candidate
+			}
+		}
+	}
+
 	reg := &Registry{}
 	var err error
-	reg.Items, err = loadItems(args[0])
+	reg.Items, err = loadItems(positional[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	reg.Questions, err = loadQuestions(args[1])
+	reg.Questions, err = loadQuestions(positional[1])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -98,11 +126,11 @@ func runGen(args []string) {
 	}
 
 	var itemsOpen, itemsClosed, qOpen, qClosed bytes.Buffer
-	if err := genItemsOpenClosed(reg, &itemsOpen, &itemsClosed); err != nil {
+	if err := genItemsOpenClosedWithTemplates(reg, &itemsOpen, &itemsClosed, templatesDir); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if err := genQuestionsOpenClosed(reg, &qOpen, &qClosed); err != nil {
+	if err := genQuestionsOpenClosedWithTemplates(reg, &qOpen, &qClosed, templatesDir); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -115,4 +143,20 @@ func runGen(args []string) {
 	os.Stdout.Write(qOpen.Bytes())
 	fmt.Print("\n=== question-registry-closed ===\n")
 	os.Stdout.Write(qClosed.Bytes())
+}
+
+// findRepoRootFromPath walks up from the given file path looking for a
+// Makefile, which marks the repo root.
+func findRepoRootFromPath(path string) string {
+	dir := filepath.Dir(filepath.Clean(path))
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "Makefile")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
 }

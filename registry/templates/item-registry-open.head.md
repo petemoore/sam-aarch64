@@ -1,0 +1,72 @@
+# Item index — open items (`iN` registry, open half)
+
+This is the **open half** of the canonical, milestone-neutral `iN` registry. A
+fresh agent reads **only this file** to see all outstanding work — every row here
+is unresolved. When an item is resolved, its row **moves** to
+`item-registry-closed.md` **in the same PR that resolves it** (mirroring "delete
+the plan in the completing PR"). Ids are **globally unique** across both halves
+and are **never reused**.
+
+The companion registry for open questions is `docs/notes/question-registry-open.md`.
+
+## Id conventions
+
+Every tracked item has a stable **`iN`** id (`i` = item). Rules: (1) once an id
+appears in a PR title, branch, or commit it is **locked** — never renumber it;
+(2) sub-items take letter suffixes (`i12a`/`i12b`/`i12c`); (3) a new item gets
+the next free integer; (4) reference items by id in conversation, PRs, and these
+docs. (`i13` is locked to "gitignore" to match shipped PR #107, so the "replace
+`cls`" item — tentatively i13 in conversation — is registered as `i16`.)
+
+## Controlled status vocabulary
+
+Every status cell starts with exactly one token:
+- `OPEN` — outstanding, no blocker
+- `BLOCKED:<what>` — outstanding but gated on the named prerequisite or person
+
+A status cell is the **token + a short phrase + an optional PR/commit reference** —
+e.g. `OPEN — narrow multiply, next i102 lever` or `DONE — PR #346`. It is **not** a
+multi-paragraph narrative of sub-results. If a status cell is growing into a list
+of completed sub-parts (`Opt-1 … Opt-8`, `Brick 1 … Brick 7`, `PR(a)/(b)/(c)`),
+that growth **is the signal that the row should have been split into sub-items** —
+each completed part belongs in its own `DONE — PR #N` sub-row (in the closed file),
+not stacked inside one parent's status. Per-increment detail (T-state numbers,
+methodology, what each PR changed) lives in the PR descriptions and `git log`, the
+project's archive — not in the live status cell.
+
+## Atomic items
+
+One row = one deliverable = one status. Rows that bundle multiple independently-
+completable deliverables are split into letter sub-ids (the existing `i12a`/`i48a`
+convention) so no outstanding sub-part hides in a done-looking row.
+
+**Split the moment the work is decided to be multi-part — not at a later audit.**
+The instant you realise an item will span more than one PR (or bundles more than
+one independently-completable deliverable), update the table *then*: keep the
+umbrella row with a terse status and add the sub-items (`iNa`/`iNb`…), each its own
+one-PR deliverable with its own status. Resolving a sub-part moves *its* row to the
+closed file with a `DONE — PR #N` status. This is the live counterpart to "tracking
+is part of done": a wall-of-text status that accreted because splitting was deferred
+is a tracking miss, the same as a missing row. (Codified by i107a; the retroactive
+sweep of rows that already accreted is tracked as i107b.)
+
+## Two registries, one discipline (read this for *both* items and questions)
+
+There are **two sibling registries**, and they follow the **same governance** — so
+learning one teaches the other:
+
+- **Items** → `item-registry-open.md` (this file) + `item-registry-closed.md`, ids **`iN`** — tracked *work*.
+- **Questions for Pete** → `docs/notes/question-registry-open.md` + `question-registry-closed.md`, ids **`qN`** —
+  *unresolved decisions* (things an agent can't settle itself, or defers rather than
+  guessing). Every open question goes there the moment it arises — not just in chat
+  (chat questions get lost in simultaneous-edit races); the registry is the single
+  sure-fire list of what's still open.
+
+Shared rules for **both** `iN` and `qN`: (1) **stable ids, locked** once they appear
+in a PR/branch/commit — never renumbered; (2) **milestone-neutral** — when a milestone
+status doc is superseded, its items *and* questions live on in their registry, never
+stranded in an archived `m{N}-status` doc; (3) **marked done/resolved by moving to
+the closed file**, so the id is never reused; (4) referenced by id everywhere; (5)
+**landed on `main`** via PR (branch-protection forbids direct pushes) so Pete sees
+them where he reads.
+

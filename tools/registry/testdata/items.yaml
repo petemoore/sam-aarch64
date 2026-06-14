@@ -40,10 +40,11 @@
 - id: i115b
   title: "registry generator finalised + header templates"
   description: "gen.go: escaping, banner, header-template concat. registry-sync-check Makefile target (not yet CI-wired)."
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
   parent: i115
+  prs: [{num: 442, role: completing}]
   refs: [i115]
 
 - id: i116

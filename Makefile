@@ -818,13 +818,30 @@ staticcheck:
 check-doc-links:
 	bash tools/check-doc-links.sh
 
-.PHONY: registry-gen tables-gen enctab test-encoder ci-encoder
+.PHONY: registry-gen registry-sync-check tables-gen enctab test-encoder ci-encoder
 
 # registry-gen — build the registry validate/gen CLI.  Operates on
 # registry/*.yaml sources; generates the four docs/notes/*-registry-*.md views.
-# Phase 1: dormant (fixture-only); no live registry source, no CI gate.
+# Phase 1-2: dormant (fixture-only); no live registry source, no CI gate.
 registry-gen:
 	cd tools/registry && go build -o $(CURDIR)/$(BUILD)/registry .
+
+# registry-sync-check — smoke-test the generator against the fixture sources:
+# build the tool, validate the testdata fixtures, regenerate into build/gen/registry/,
+# and confirm the gen step exits cleanly.  This target operates on the FIXTURE
+# sources (tools/registry/testdata/) rather than the live registry/ sources, which
+# don't exist yet (Phase 4 creates them).  The diff check is intentionally omitted
+# here because no committed .md files are generated from the fixture; the
+# purpose of this target is to confirm the tool builds + validates + generates
+# without error, exercising the full pipeline including header-template loading.
+# Phase 4 repoints the target at registry/ → docs/notes/ (live sources) and
+# adds the diff gate and the CI `registry-sync` job.
+# This target is NOT added to any CI job; it does not fail a normal `make`.
+registry-sync-check: registry-gen
+	@mkdir -p $(BUILD)/gen/registry
+	$(BUILD)/registry validate tools/registry/testdata/items.yaml tools/registry/testdata/questions.yaml
+	$(BUILD)/registry gen tools/registry/testdata/items.yaml tools/registry/testdata/questions.yaml > /dev/null
+	@echo "registry-sync-check: validate + gen passed (fixture smoke test — Phase 4 adds the live-source diff gate)."
 
 # tables-gen — generates every Z80 data table whose authority is Go source:
 # the binary enctab.enc form table (make enctab) and the sysreg/pstate/dc/tlbi

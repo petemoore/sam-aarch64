@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -22,6 +24,10 @@ const generatedBannerQuestions = `<!--
   Validated in CI by the ` + "`registry-sync`" + ` job. Hand edits FAIL CI.
 -->
 `
+
+// defaultTemplatesDir is the path to the header templates relative to the
+// repo root.  It is used when no explicit templates directory is given.
+const defaultTemplatesDir = "registry/templates"
 
 // escapeCell applies the escaping rules for a markdown table cell:
 // pipe characters become \|, and newlines become <br>.
@@ -120,15 +126,44 @@ func parseInt(s string) (int, error) {
 	return n, nil
 }
 
+// loadTemplate reads a header template file by name from the templates
+// directory.  The name is one of the four canonical base names (without
+// the ".head.md" suffix), e.g. "item-registry-open".  An error is returned
+// only if the file cannot be read; the caller decides how to handle absence.
+func loadTemplate(templatesDir, name string) (string, error) {
+	path := filepath.Join(templatesDir, name+".head.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("load template %s: %w", path, err)
+	}
+	return string(data), nil
+}
+
 // genItemsOpenClosed writes the open and closed item registry tables to their
-// respective writers.  Phase 1: writes to any io.Writer (typically a buffer).
+// respective writers.  The banner is written first, then the header template
+// (if a templatesDir is provided and the template exists), then the table.
 func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
+	return genItemsOpenClosedWithTemplates(reg, openW, closedW, "")
+}
+
+// genItemsOpenClosedWithTemplates is the implementation behind
+// genItemsOpenClosed; callers that want templates pass a non-empty
+// templatesDir.  An empty string skips template loading (Phase-1 behaviour,
+// keeps existing tests passing).
+func genItemsOpenClosedWithTemplates(reg *Registry, openW, closedW io.Writer, templatesDir string) error {
 	items := sortedItems(reg.Items)
 
 	header := "| **id** | title | status | refs |\n|---|---|---|---|\n"
 
 	// Open items.
 	fmt.Fprint(openW, generatedBannerItems)
+	if templatesDir != "" {
+		tmpl, err := loadTemplate(templatesDir, "item-registry-open")
+		if err != nil {
+			return err
+		}
+		fmt.Fprint(openW, tmpl)
+	}
 	fmt.Fprint(openW, "\n")
 	fmt.Fprint(openW, header)
 	for _, it := range items {
@@ -144,6 +179,13 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 
 	// Closed items.
 	fmt.Fprint(closedW, generatedBannerItems)
+	if templatesDir != "" {
+		tmpl, err := loadTemplate(templatesDir, "item-registry-closed")
+		if err != nil {
+			return err
+		}
+		fmt.Fprint(closedW, tmpl)
+	}
 	fmt.Fprint(closedW, "\n")
 	fmt.Fprint(closedW, header)
 	for _, it := range items {
@@ -161,11 +203,25 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 
 // genQuestionsOpenClosed writes the open and closed question registry tables.
 func genQuestionsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
+	return genQuestionsOpenClosedWithTemplates(reg, openW, closedW, "")
+}
+
+// genQuestionsOpenClosedWithTemplates is the implementation behind
+// genQuestionsOpenClosed; callers that want templates pass a non-empty
+// templatesDir.
+func genQuestionsOpenClosedWithTemplates(reg *Registry, openW, closedW io.Writer, templatesDir string) error {
 	questions := sortedQuestions(reg.Questions)
 
 	header := "| **id** | title | status | refs |\n|---|---|---|---|\n"
 
 	fmt.Fprint(openW, generatedBannerQuestions)
+	if templatesDir != "" {
+		tmpl, err := loadTemplate(templatesDir, "question-registry-open")
+		if err != nil {
+			return err
+		}
+		fmt.Fprint(openW, tmpl)
+	}
 	fmt.Fprint(openW, "\n")
 	fmt.Fprint(openW, header)
 	for _, q := range questions {
@@ -180,6 +236,13 @@ func genQuestionsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	}
 
 	fmt.Fprint(closedW, generatedBannerQuestions)
+	if templatesDir != "" {
+		tmpl, err := loadTemplate(templatesDir, "question-registry-closed")
+		if err != nil {
+			return err
+		}
+		fmt.Fprint(closedW, tmpl)
+	}
 	fmt.Fprint(closedW, "\n")
 	fmt.Fprint(closedW, header)
 	for _, q := range questions {
