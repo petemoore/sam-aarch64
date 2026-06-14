@@ -185,3 +185,180 @@
   prs:
     - {num: 119, role: completing}
   refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-08-z80-go-disasm-parity-i9.md"]
+
+- id: i38
+  title: Audit for other skipped/excluded tests + PRs that left gaps rather than fixing them
+  description: |
+    Audited 14 skip sites: 13 legitimate, only the i9 gap (now fixed by i36/i37); no other papered-over gaps found.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 118, role: completing}
+  refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-08-skipped-tests-and-gaps-audit.md"]
+
+- id: i39
+  title: Next-gen maximally-efficient compact .tbn encoding (the design)
+  description: |
+    Instruction overlay (assembled word + zeroed bits + sparse expression overlay, unifying literal/symbolic INST into one run), header label/offset table, one .tbn v2 with a contiguous evictable editor region, name front-coding, bitfield-packing polish. Shipped as milestone M8 (closed 2026-06-12). Design agreed as Format B (Pete 2026-06-08; all 5 open Qs resolved, §7). Shipped via i39a (PR #131) + i39b-1 (PR #151) + i39b-2 (PR #153). Residual i39c migrated to M9 (folds into i48c; reparented to i48c — not a child of i39).
+  status: DONE
+  kind: umbrella
+  owner: agent
+  refs: [docs/specs/compact-tbn-nextgen-design.md, i39a, i39b]
+
+- id: i39a
+  title: M8 Phase 1 — instruction overlay + header label/offset table; the v2 format flip
+  description: |
+    v2 format (KindInsnRun) + overlay Fold/ZeroSlot (13 slots); refenc emit/decode + bin2text render + round-trip gate; Z80 v2 reader + INSN_RUN decoder (src/insn_run.asm) with the symbolic form-table path retired (net −370 B). The spectrum4 release byte-matches GNU on the SAM via the v2 compact .tbn (88,644→47,067 B; OUT 21,752 B) + all 53 M3–M6 fixtures. PR(d) done — header label/offset table; compact .tbn 47,067→45,189 B. i48b (FoldMovzAuto) co-shipped. Multi-PR delivery: PR(a)+(b)+i48b+(c)+(d) all part of PR #131. i48a split to a follow-up PR.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 131, role: completing}
+  parent: i39
+  refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-06-08-i39-phase1-instruction-overlay-plan.md"]
+
+- id: i39b
+  title: M8 Phase 2 — name-table front-coding + editor-region split for compact .tbn v2
+  description: |
+    Delivered in two PRs. #151 (was id i39b-1, front-coding): each name-table entry becomes [shared_prefix_len][suffix_len][suffix] shared with the previous name in encounter order (no sort, so name_ids stay stable); .tbn 45,189->44,207 B. #153 (was id i39b-2, editor-region split): splits .tbn into an assembler-facing region and a trailing editor region bounded by editor_region_offset u32 at offset 8; -thin-comments host flag; enables i40 eviction. Assembled binary byte-identical (GNU==Go==Z80/SAM). Design §3.5-3.7.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 153, role: completing}
+  parent: i39
+  refs: [docs/specs/compact-tbn-nextgen-design.md, "https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-06-09-i39b-nametable-frontcoding-sidecars.md", "https://github.com/petemoore/sam-aarch64/blob/d874a69/docs/notes/m8-status.md"]
+
+- id: i40
+  title: Assembler-side editor-region eviction
+  description: |
+    Load-path DONE (PR #181): SAM loads only the assembler-facing .tbn prefix (two-phase HGTHD+HLOAD — head read to discover editor_region_offset, then prefix HLOAD); the editor region never enters the IN buffer on any machine size. The conditional-residency/reload half is superseded by the comment-storage design (docs/specs/comment-storage-design.md): the editor holds comments as a compressed-resident block store with watermark math. Residual: page-aligned editor_region_offset normalisation verified against harness convention only — no page-aligned SimCoupé fixture yet (PR #181 review note).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 181, role: completing}
+  refs: ["https://github.com/petemoore/sam-aarch64/blob/d874a69/docs/notes/m8-status.md", docs/specs/comment-storage-design.md, i51]
+
+- id: i41a
+  title: Editor edit-model — core paged block-list + cleanly-separable serialize/load seam
+  description: |
+    First i41 brick; host-side Go authority for the eventual Z80 port (i41d). Package tools/sam-aarch64/editmodel: half-page (8 KB) blocks, u24 never-reused record-ids, a record-id to stable-block-pointer location table maintained O(half block) per split/merge (no global reindex, the design defining bounded-cost property), insert/delete/goto-by-id/render, and a separable EMDL serialize/load seam (swapped for real v2 .tbn in i41c). Proven by property test (5 seeds x 7000 random ops vs oracle) + 15 unit tests. CI-gated via go test + staticcheck U1000. SAM byte-layout and paging latency are i41d.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 383, role: completing}
+  parent: i41
+  refs: [tools/sam-aarch64/editmodel/, docs/specs/editor-edit-model-design.md]
+
+- id: i41b
+  title: Editor edit-model — bounded ring-journal undo/redo
+  description: |
+    Adds bounded ring-journal undo/redo to tools/sam-aarch64/editmodel (editEntry ring, maxUndoDepth=256, drop-oldest cap). Undo-of-insert deletes by IndexOf(id) (drift-robust); undo-of-delete re-inserts at the recorded index with the same RecordID (id-stability, anchors/comments stay valid); a fresh edit clears the redo stack. Proven by TestPropertyUndoRedo (5 seeds x 3000-step random walk vs reference state history) + 10 unit tests. CI-gated via go test + staticcheck.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 384, role: completing}
+  parent: i41
+  refs: [tools/sam-aarch64/editmodel/, docs/specs/editor-edit-model-design.md]
+
+- id: i41c
+  title: Editor edit-model — real v2 .tbn serialize seam
+  description: |
+    Adds SerializeTBN/LoadTBN to tools/sam-aarch64/editmodel (tbn.go): save = join lines + frontend.Translate + assemble.Pass1 + CompactTBNBytes; load = render.EmitLinesFromBytes + fresh editmodel lines. The EMDL seam is retained as the internal exact-round-trip seam the i41a/i41b property tests depend on. Deliberate limitation: SerializeTBN requires a complete valid assembly — an invalid/partial document fails loud; incremental/partial serialize is i41e (q24). Proven by TestSerializeTBNRoundTrip + fail-loud + load round-trip tests.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 385, role: completing}
+  parent: i41
+  refs: [tools/sam-aarch64/editmodel/, docs/specs/editor-edit-model-design.md, q24]
+
+- id: i48
+  title: Single serialized format + pass-free syntactic encoder (the design)
+  description: |
+    Design for single serialized format + pass-free syntactic encoder. Decision A: the compact overlay is the only serialized .tbn; the symbolic kinds (KindInst/LabelDef/LocalDef/LitInsts) become an in-memory IR, never written. Decision B: text->overlay is a pure syntactic transform; value-dependent bits computed in the fold at assemble time; forego GNU silent rewrites; narrow assemble-time mov->movz/orr/movn fallback. Host side COMPLETE (i48a #144, i48b, i48d). i48c (Z80 text->overlay encoder) is the M9 carry-forward.
+  status: IN_PROGRESS
+  kind: umbrella
+  owner: agent
+  refs: [docs/specs/i48-syntactic-encoder-design.md, "https://github.com/petemoore/sam-aarch64/blob/d874a69/docs/notes/m8-status.md", i48c]
+
+- id: i48a
+  title: Host front-end unification — factor encoder/assembler/renderer as shared Go libs
+  description: |
+    Host front-end unification into shared libs. PR1 (#141): 3 host tools became thin wrappers over tools/sam-aarch64 with shared libs frontend/assemble/render. PR2 (#142): integrated sam-aarch64 binary (source->{binary,compact .tbn}, .tbn->binary, --render, -E); symbolic .tbn in-memory IR; 3 old modules deleted. PR3 (#144, final): symbolic records are pure in-memory []format.Record IR; Decision-B strictness (symbolic mem->error; lsl#12 syntactic; mov->movz default); q7 sweep resolved; 36 dead goldens removed. Post-#144 cleanup (#146): dead-code sweep. All byte-neutral; 14 CI checks green.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 144, role: completing}
+  parent: i48
+  refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-06-09-i48a-host-frontend-unification.md"]
+
+- id: i48b
+  title: Syntactic encoder + fold-time value-work
+  description: |
+    Syntactic encoder + fold-time value-work. FoldMovzAuto (hw computed in the fold; ZeroSlot clears bits 22:21) landed in commit 0162f52 with i39a (PR #131). The non-byte-affecting strictness items (symbolic mem -> FoldMemImm12-or-error; add/sub lsl#12 syntactic via the fold + a split ZeroSlot; mov->movz default) + q7 sweep (no further GNU silent form-rewrites in corpus) landed in i48a PR3 (#144, final). Byte-neutral on the corpus (0 affected sites confirmed by q7 sweep). Two-PR delivery: first PR #131, final PR #144.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 144, role: completing}
+  parent: i48
+  refs: [docs/specs/i48-syntactic-encoder-design.md]
+
+- id: i48d
+  title: Doc unification — bring tbn-binary-format-reference.md to v2 overlay-only format
+  description: |
+    First brought v2-accurate (both profiles) in commit dc2b993 (part of i39a PR #131). Then fully rewritten overlay-only in i48a PR3 (#144, final) once the symbolic form became in-memory-only: tbn-binary-format-reference.md now documents a single on-disk format (compact overlay v2 — header + name table + label/local header tables + INSN_RUN/LIT_DATA/DIRECTIVE/COMMENT + 13 FoldSlots), with symbolic kinds noted as in-memory IR only. Also: historical banners on the M1 + compact-tbn design docs. Two-PR delivery: first PR #131, final PR #144.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 144, role: completing}
+  parent: i48
+  refs: [docs/specs/tbn-binary-format-reference.md, docs/specs/i48-syntactic-encoder-design.md]
+
+- id: i49
+  title: tools/ cleanup — delete orphan tool dirs and prune stale .gitignore entries
+  description: |
+    Delete two orphan tool dirs (flatten-s, build-screen-disk; off the build/CI/module path), prune 6 stale .gitignore binary-guard entries (4 for tools deleted in i48a/M0, 2 for the dirs removed here), drop their README rows, fix post-i48a doc-rot (harness README make text2bin -> make sam-aarch64; ci.yml m6-release comment). A follow-up commit also refreshed the last stale .gitignore text2bin comment.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 149, role: completing}
+
+- id: i51
+  title: Un-strip all comments on the SAM-side m6 gate
+  description: |
+    Flow the full 335 KB of release.s comment text (7,502 // lines) through the SAM round-trip. DONE (PR #181): full unstripped compact .tbn (363,295 B; assembler-facing prefix 38,584 B / 3 IN pages) flows through the release gate; SAM-assembled OUT byte-matches GNU 21,752 B. Depends on i40 load-path.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 181, role: completing}
+  refs: ["https://github.com/petemoore/sam-aarch64/blob/d874a69/docs/notes/m8-status.md", i40]
+
+- id: i53
+  title: Bump-arena reclamation for the fixed section-D scratch arrays
+  description: |
+    YAGNI per the risk census: every section-D table is SAFE under ~5x kernel growth and the real ceilings (IN/OUT paged buffers) are page-allocation bumps, not arena problems. Revisit only if the census §4 trigger fires (fixed section-D array overflows at >5x kernel scale).
+  status: WONTFIX
+  kind: leaf
+  owner: agent
+  refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-29-bump-arena-risk-census.md"]
+
+- id: i54
+  title: Synthetic-fixture oracle sweep for the on-SAM disassembler
+  description: |
+    Synthetic-fixture oracle sweep for the on-SAM disassembler: 102-word corpus covering every family the Go decoder handles but release.img never exercises (cond-compare/select, extended-reg add/sub, signed multiplies, load/store option matrix — §B of the i10 capability-parity report). Converts §B from structurally-ported to empirically-certified. 11 new TestSyntheticParity_* functions. One genuine Z80 gap found and fixed: EXTR/ROR-immediate decoder missing from src/disasm.asm (ported from tryDecodeExtr, aliases.go:778). All 17 TestSyntheticParity_* + TestDisasmOracle 5438/5438 pass.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 183, role: completing}
+  refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-08-go-vs-z80-disasm-capability-parity.md"]
