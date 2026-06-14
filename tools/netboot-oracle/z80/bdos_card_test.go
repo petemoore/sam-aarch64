@@ -91,3 +91,65 @@ func TestCardModelRecordEntry(t *testing.T) {
 		t.Errorf("RecordEntry(100) should be all-zero for an uninitialised card")
 	}
 }
+
+// TestInspectRecord drives the real Z80 bdos_inspect_record routine (i119 brick 2)
+// — the user-reachable record-identity primitive that free-record detection is
+// built on. For each record it performs the reachable sequence (HRECORD select →
+// bdos_read_sector the first directory sector → bdos_inspect_record) and asserts
+// the routine extracts the "BDOS" stamp flag (+232) and the disk label (+210)
+// correctly. Record 1 is a formatted, named B-DOS record; record 2 is raw (no
+// stamp, no name) — the two states the detection scan must tell apart.
+func TestInspectRecord(t *testing.T) {
+	mac, err := z80h.Load(cliBootBin, cliBootMap)
+	if err != nil {
+		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+	}
+	store := z80h.NewBDOSStore()
+	card := z80h.NewCardModel()
+
+	// Record 1: a formatted B-DOS record named "MYDISK".
+	card.SetBDOSStamp(1)
+	card.SetRecordLabel(1, "MYDISK")
+	// Record 2: raw — no stamp, no label.
+
+	store.AttachCard(card)
+	mac.AttachBDOS(store)
+
+	inspect := func(record int) (isBDOS byte, name []byte) {
+		t.Helper()
+		if _, err := mac.CallEntry("bdos_select_record", z80h.Entry{A: uint8(record)}); err != nil {
+			t.Fatalf("bdos_select_record(%d): %v", record, err)
+		}
+		// Read the record's first directory sector (track 0, sector 1 → linear 0).
+		mac.Write(symAddr(t, mac, "BD_READ_TRACK"), []byte{0})
+		mac.Write(symAddr(t, mac, "BD_READ_SECTOR"), []byte{1})
+		if _, err := mac.CallEntry("bdos_read_sector", z80h.Entry{}); err != nil {
+			t.Fatalf("bdos_read_sector(record=%d): %v", record, err)
+		}
+		if _, err := mac.CallEntry("bdos_inspect_record", z80h.Entry{}); err != nil {
+			t.Fatalf("bdos_inspect_record(record=%d): %v", record, err)
+		}
+		isBDOS = mac.Read(symAddr(t, mac, "BD_REC_IS_BDOS"), 1)[0]
+		name = mac.Read(symAddr(t, mac, "BD_REC_NAME"), 10)
+		return isBDOS, name
+	}
+
+	// Record 1: stamped + named.
+	isBDOS, name := inspect(1)
+	if isBDOS != 1 {
+		t.Errorf("record 1: BD_REC_IS_BDOS = %d, want 1 (formatted B-DOS record)", isBDOS)
+	}
+	wantName := []byte("MYDISK    ") // 10 bytes, space-padded
+	if !bytes.Equal(name, wantName) {
+		t.Errorf("record 1: BD_REC_NAME = %q, want %q", name, wantName)
+	}
+
+	// Record 2: raw — no stamp, label reads as all-zero (sector never written).
+	isBDOS, name = inspect(2)
+	if isBDOS != 0 {
+		t.Errorf("record 2: BD_REC_IS_BDOS = %d, want 0 (raw/unformatted record)", isBDOS)
+	}
+	if !bytes.Equal(name, make([]byte, 10)) {
+		t.Errorf("record 2: BD_REC_NAME = %q, want all-zero (raw record)", name)
+	}
+}

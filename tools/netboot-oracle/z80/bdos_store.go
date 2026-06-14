@@ -65,17 +65,39 @@ const (
 	// bdBDOSStampOffset is the byte offset of the 4-byte "BDOS" stamp within the
 	// first data sector (linear sector 0) of a B-DOS-formatted record.
 	bdBDOSStampOffset = 232
+	// bdRecordLabelOffset is the byte offset of the 10-byte disk label (volume
+	// name) within a record's first data sector. B-DOS get.label reads the record's
+	// name here (bdos15a.src.txt:2852, "LD BC,210 ;point to disk name"); bit 7 of
+	// the first byte is the write-protect flag. This is the per-record name
+	// reachable from a user program (the central record LIST is not — see below).
+	bdRecordLabelOffset = 210
+	// bdRecordLabelLen is the length of the disk-label name field (new.lab copies
+	// 10 bytes: bdos15a.src.txt:2780-2782 "LD C,10 / LDIR").
+	bdRecordLabelLen = 10
 )
 
-// CardModel is the harness model of a Trinity SD card: a record list (up to 256
-// entries of 16 bytes each) and per-record sector data (at least sector 0, the
-// first data sector). Used by the HRSAD handler to serve reads.
+// CardModel is the harness model of a Trinity SD card: a central record list (in
+// the boot area) and per-record sector data (at least sector 0, the first data
+// sector). Used by the HRSAD handler to serve reads.
 //
 // Linear sector index within a record = track*10 + (sector-1), matching the
 // `conv.de` formula in the SAMDOS source (D=track 0-79, E=sector 1-10).
+//
+// REACHABILITY (the i119 detection finding): the central RecordList exists on the
+// medium but is NOT reachable from a user program — no RST-8 hook reads a
+// card-absolute sector, and HRSAD/HWSAD are clamped to the selected record's own
+// 800 KB (hd.seek adds the record base; bdos15a.src.txt:1243-1297). B-DOS reads
+// the list only via internal find.rec/seek.base/hd.lbuf (no hook slot). So a
+// record's reachable identity comes from its OWN first sector after selecting it:
+// the "BDOS" stamp at +232 (SetBDOSStamp) and the disk label at +210
+// (SetRecordLabel) — what bdos_inspect_record reads. RecordList is retained
+// because it models the real medium (and a future hardware-only path could use
+// it), but the host-verifiable detection path goes through the per-record sector,
+// not the list.
 type CardModel struct {
 	// RecordList holds the 16-byte record-list entries, indexed by record number
 	// minus 1 (entry 0 = record 1). Entries beyond len(RecordList) read as all-zero.
+	// NOT user-reachable via any hook (see the type doc) — models the medium only.
 	RecordList [][16]byte
 	// Sectors holds the 512-byte sectors for each record (outer index = record
 	// number minus 1, inner index = linear sector within the record:
@@ -154,6 +176,26 @@ func (c *CardModel) SetBDOSStamp(n int) {
 	existing := c.Sector(n, 0)
 	copy(sec[:], existing[:])
 	copy(sec[bdBDOSStampOffset:], []byte("BDOS"))
+	c.SetSector(n, 0, sec)
+}
+
+// SetRecordLabel writes the 10-byte disk label (volume name) at offset 210 of
+// record n's first data sector — the per-record name bdos_inspect_record reads
+// (the user-reachable name; the central RecordList is not reachable, see the type
+// doc). The name is space-padded to 10 bytes and truncated to 10 if longer. Bit 7
+// of the first byte is the write-protect flag on real hardware; callers that need
+// it set should OR it into the first character themselves.
+func (c *CardModel) SetRecordLabel(n int, name string) {
+	var sec [bdSectorSize]byte
+	existing := c.Sector(n, 0)
+	copy(sec[:], existing[:])
+	for i := 0; i < bdRecordLabelLen; i++ {
+		if i < len(name) {
+			sec[bdRecordLabelOffset+i] = name[i]
+		} else {
+			sec[bdRecordLabelOffset+i] = ' '
+		}
+	}
 	c.SetSector(n, 0, sec)
 }
 
