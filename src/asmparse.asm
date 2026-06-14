@@ -16,14 +16,22 @@
 ;        comma-separated (commas optional, per parser.go) operand list; B2b
 ;        handles register operands (reg/reg/reg, mov reg/reg, ret, br reg, …),
 ;        emitting an INST record.
-;   B2c (this): the `#imm` operand — `add x0, x1, #4`. A `#`-prefixed or bare
-;        integer literal becomes an OP_KIND_IMM_EXPR operand whose expression
-;        bytecode is a single folded immediate (port of parseOperand's TokHash/
-;        TokInt path → parseExpression constant-fold → ExprWriter.WriteImm).
-;        Multi-term/symbol/PC expressions, the `,lsl #12` suffix, mem operands,
-;        special-form insts, directives, labels, comments and blank-runs are
-;        later bricks (B3-B7) — a line that needs one is outside this domain and
-;        sets PARSE_ERR.
+;   B2c: the `#imm` operand — `add x0, x1, #4`. A `#`-prefixed or bare integer
+;        literal becomes an OP_KIND_IMM_EXPR operand whose expression bytecode is
+;        a single folded immediate.
+;   B3a (this): the constant-expression operand — `add x0, x1, #4+1`, `mov x0,
+;        ~0`, `mov x0, -(1+2)&7`. A `#`/int/`-`/`~`/`(`-leading operand becomes an
+;        OP_KIND_IMM_EXPR whose bytecode is built by a precedence-climbing parser
+;        (port of parseExprPrec / parseExprPrimary / tokPrec, parser.go:1149-1290)
+;        and then collapsed to a single folded immediate by a self-contained
+;        constant evaluator (port of format.EvalConst, expr.go:223). B3a covers
+;        the operators `+ - & | ^` and the unary `- ~` plus parens; the genuinely
+;        harder iterative arithmetic — shifts `<< >>` and `* /` — and the
+;        non-constant primaries (symbol idents, `.`, local-refs, `:reloc:`) are
+;        later sub-bricks (B3a2/B3a3/B3b/B3c). The `,lsl #12` suffix, mem
+;        operands, special-form insts, directives, labels, comments and
+;        blank-runs are later bricks (B4-B7) — a line that needs one is outside
+;        this domain and sets PARSE_ERR.
 ;
 ; INST record (emission form — original framing for the host harness; the
 ; OPERAND bytes are byte-faithful to format.OperandWriter):
@@ -32,12 +40,15 @@
 ; immediate operand is `OP_KIND_IMM_EXPR:1, expr_len:2 LE, expr[]` where expr is
 ; `PUSH_IMMn:1, value:n LE` (n = 1/2/4/8, the shortest signed fit).
 ;
-; PROVENANCE: algorithmic port of parser.go + format/operands.go; the name→id
-; table is generated from the Go authority (tables-gen -mnemonic-names-inc →
-; src/mnemonic_names.inc). VERIFICATION: tools/netboot-oracle/z80/asmparse_test.go
-; drives mnemonic_lookup + parse_run under koron-go/z80 and compares against the
-; authority (format.MnemonicID for the table; a faithful refParse built on the
-; real format.OperandWriter for the INST records), with mutation-tested teeth.
+; PROVENANCE: algorithmic port of parser.go (parseInst / parseOperand /
+; parseExprPrec / parseExprPrimary / tokPrec) + format/operands.go + format/
+; expr.go (ExprWriter / EvalConst); the name→id table is generated from the Go
+; authority (tables-gen -mnemonic-names-inc → src/mnemonic_names.inc).
+; VERIFICATION: tools/netboot-oracle/z80/asmparse_test.go drives mnemonic_lookup
+; + parse_run under koron-go/z80 and compares against the authority
+; (format.MnemonicID for the table; a faithful refParse built on the real
+; format.OperandWriter / format.ExprWriter / format.EvalConst for the INST
+; records), with mutation-tested teeth.
 
                 if defined(ASMPARSE_STANDALONE)
                 org     &8000
@@ -48,13 +59,19 @@
                 include "tbn_constants.inc"
                 include "asmlex.asm"
 
-; Expression-bytecode push-immediate opcodes (ExprOp in
-; tools/sam-aarch64-format/expr.go; the existing evaluator src/expr_eval.asm
-; dispatches on the same bare values 1..4).
+; Expression-bytecode opcodes (ExprOp in tools/sam-aarch64-format/expr.go; the
+; existing evaluator src/expr_eval.asm dispatches on the same bare values).
 EXPR_PUSH_IMM8:  equ &01
 EXPR_PUSH_IMM16: equ &02
 EXPR_PUSH_IMM32: equ &03
 EXPR_PUSH_IMM64: equ &04
+EXPR_OP_ADD:     equ &10
+EXPR_OP_SUB:     equ &11
+EXPR_OP_AND:     equ &14
+EXPR_OP_OR:      equ &15
+EXPR_OP_XOR:     equ &16
+EXPR_OP_NEG:     equ &20
+EXPR_OP_NOT:     equ &21
 
 ; ===========================================================================
 ; parse_run — tokenise LEX_SRC (BC = length) and parse it into INST records.
@@ -164,28 +181,28 @@ pi_err:
 ; ===========================================================================
 ; parse_operand — dispatch one operand at the current token. (Port of
 ; parseOperand's switch, parser.go:1023-1090, restricted to the register and
-; #imm shapes.) A register identifier -> parse_operand_reg; a `#`-prefixed or
-; bare integer literal -> parse_operand_imm; anything else (shifted/extended
-; reg, mem operand, symbol/expression immediate) is a later brick -> CY set.
+; constant-expression shapes.) A register identifier -> parse_operand_reg; an
+; expression-leading token (`#` / int / unary `-` / `~` / `(`) -> the constant
+; expression path parse_operand_expr. The non-register identifier (a symbol),
+; `.`, local-refs and `:reloc:` are later bricks (B3b/B3c); the shift/extend
+; suffix and mem operands are B4 — all set CY (out of domain).
 ; ===========================================================================
 parse_operand:
                 ld      hl, (PARSE_TOK)
                 ld      a, (hl)
-                cp      TOK_HASH
-                jr      z, po_hash
-                cp      TOK_INT
-                jp      z, parse_operand_imm
                 cp      TOK_IDENT
-                jr      z, parse_operand_reg
-                scf                         ; out of domain
-                ret
-po_hash:
-                call    parse_advance_tok   ; consume '#'
-                ld      hl, (PARSE_TOK)
-                ld      a, (hl)
+                jp      z, parse_operand_reg ; register; non-reg ident -> B3b
+                cp      TOK_HASH
+                jr      z, parse_operand_expr
                 cp      TOK_INT
-                jp      z, parse_operand_imm
-                scf                         ; '#' not followed by an int -> B3
+                jr      z, parse_operand_expr
+                cp      TOK_MINUS
+                jr      z, parse_operand_expr
+                cp      TOK_TILDE
+                jr      z, parse_operand_expr
+                cp      TOK_LPAREN
+                jr      z, parse_operand_expr
+                scf                         ; out of domain (.,localref,:,[ -> later)
                 ret
 
 ; ===========================================================================
@@ -223,46 +240,255 @@ por_err:
                 ret
 
 ; ===========================================================================
-; parse_operand_imm — parse one immediate operand: the current token is a
-; TOK_INT (the `#` prefix, if any, is already consumed). Append an
-; OP_KIND_IMM_EXPR operand whose expression bytecode is the single folded
-; immediate `PUSH_IMMn, value[n]` (port of parseOperand's TokInt path ->
-; parseExpression constant-fold -> ExprWriter.WriteImm). Always succeeds (CY
-; clear); the lexer already validated and computed the int64 value.
+; parse_operand_expr — parse one constant-expression operand. The current token
+; leads an expression (`#` / int / `-` / `~` / `(`). Build the expression
+; bytecode into EXPR_BUF via the precedence-climbing parser, collapse it to a
+; single folded immediate (every B3a expression is pure-constant), then append
+; an `OP_KIND_IMM_EXPR:1, expr_len:2 LE, expr[]` operand at (PI_OPSPTR). (Port
+; of parseOperand's expression path -> parseExpression -> WriteImmExpr.)
+; Exit: CY clear on success (tokens consumed), CY set on a parse error.
 ; ===========================================================================
-parse_operand_imm:
-                ; copy the token's 8-byte value (record offset 6) to IMM_VAL.
+parse_operand_expr:
+                ld      hl, EXPR_BUF
+                ld      (EXPR_PTR), hl      ; reset the bytecode build buffer
+                xor     a                   ; minPrec = 0
+                call    parse_expr_prec
+                ret     c                   ; parse error -> propagate CY
+                call    expr_fold           ; collapse a pure-constant stream
+                ; expr_len = EXPR_PTR - EXPR_BUF
+                ld      hl, (EXPR_PTR)
+                ld      de, EXPR_BUF
+                or      a
+                sbc     hl, de
+                ld      b, h
+                ld      c, l                ; BC = expr byte length
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_IMM_EXPR
+                inc     hl
+                ld      (hl), c             ; expr_len low
+                inc     hl
+                ld      (hl), b             ; expr_len high
+                inc     hl
+                ex      de, hl              ; DE = operand dest (after the header)
+                ld      hl, EXPR_BUF        ; HL = source bytecode
+                ld      a, b
+                or      c
+                jr      z, poe_nocopy       ; (defensive) zero-length expr
+                ldir                        ; copy expr bytes; DE -> end
+poe_nocopy:
+                ld      (PI_OPSPTR), de
+                or      a                   ; clear carry: success
+                ret
+
+; ===========================================================================
+; parse_expr_prec — precedence-climbing expression parse. (Port of
+; parseExprPrec, parser.go:1170-1201.) Entry: A = minPrec. Emits expression
+; bytecode into (EXPR_PTR), consuming tokens. Exit: CY set on a parse error,
+; CY clear on success. Recursive (depth bounded by the precedence levels and
+; nesting of one operand expression).
+; ===========================================================================
+parse_expr_prec:
+                push    af                  ; save minPrec (high byte of AF)
+                call    parse_expr_primary
+                jr      c, pep_err1
+pep_loop:
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)             ; current token kind
+                call    tok_prec            ; A = precedence (0xFF if not an op)
+                cp      &FF
+                jr      z, pep_done
+                pop     bc                  ; B = minPrec
+                push    bc                  ; keep it on the stack
+                cp      b
+                jr      c, pep_done         ; prec < minPrec -> expression ends
+                ; the operator binds: remember its kind, recurse with prec+1.
+                ld      hl, (PARSE_TOK)
+                ld      c, (hl)             ; C = operator token kind
+                inc     a                   ; A = prec + 1 (recursion's minPrec)
+                push    bc                  ; save operator kind (in C)
+                ld      hl, (PARSE_TOK)     ; advance past the operator token
+                ld      de, TOK_REC_SIZE
+                add     hl, de
+                ld      (PARSE_TOK), hl
+                call    parse_expr_prec     ; right operand (minPrec = A)
+                jr      c, pep_err2
+                pop     bc                  ; C = operator kind
+                ld      a, c
+                call    expr_emit_binop     ; emit the ExprOp for this operator
+                jr      c, pep_err1
+                jr      pep_loop
+pep_done:
+                pop     af                  ; discard minPrec
+                or      a                   ; clear carry: success
+                ret
+pep_err2:
+                pop     bc                  ; discard saved operator kind
+pep_err1:
+                pop     af                  ; discard minPrec
+                scf
+                ret
+
+; ===========================================================================
+; parse_expr_primary — parse one primary at the current token. (Port of
+; parseExprPrimary, parser.go:1203-1290, B3a subset.) Emits bytecode into
+; (EXPR_PTR). Exit: CY set on error. Handles `#` (consume + recurse), an
+; integer literal, unary `-`/`~`, and a parenthesised sub-expression. The
+; symbol-ident, `.`, local-ref and `:reloc:` primaries are later bricks.
+; ===========================================================================
+parse_expr_primary:
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_HASH
+                jr      z, ppr_hash
+                cp      TOK_INT
+                jr      z, ppr_int
+                cp      TOK_MINUS
+                jr      z, ppr_neg
+                cp      TOK_TILDE
+                jr      z, ppr_not
+                cp      TOK_LPAREN
+                jr      z, ppr_paren
+                scf                         ; not a B3a primary -> error
+                ret
+ppr_hash:
+                call    parse_advance_tok   ; consume '#'
+                jr      parse_expr_primary  ; tail-recurse on the next primary
+ppr_int:
+                call    expr_emit_imm_from_tok
+                call    parse_advance_tok   ; consume the int token
+                or      a                   ; clear carry: success
+                ret
+ppr_neg:
+                call    parse_advance_tok   ; consume '-'
+                call    parse_expr_primary
+                ret     c
+                ld      a, EXPR_OP_NEG
+                call    expr_emit_byte
+                or      a
+                ret
+ppr_not:
+                call    parse_advance_tok   ; consume '~'
+                call    parse_expr_primary
+                ret     c
+                ld      a, EXPR_OP_NOT
+                call    expr_emit_byte
+                or      a
+                ret
+ppr_paren:
+                call    parse_advance_tok   ; consume '('
+                xor     a                   ; minPrec = 0 inside the parens
+                call    parse_expr_prec
+                ret     c
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_RPAREN
+                jr      nz, ppr_err
+                call    parse_advance_tok   ; consume ')'
+                or      a
+                ret
+ppr_err:
+                scf
+                ret
+
+; ===========================================================================
+; tok_prec — binary-operator precedence for a token kind. (Port of tokPrec,
+; parser.go:1149-1163.) Entry: A = token kind. Exit: A = precedence, or 0xFF
+; when the token is not a B3a binary operator (the `<< >> * /` operators are
+; later sub-bricks, so they read as not-an-operator here and end the
+; expression). Clobbers F only.
+; ===========================================================================
+tok_prec:
+                cp      TOK_PIPE
+                jr      z, tp_0
+                cp      TOK_CARET
+                jr      z, tp_0
+                cp      TOK_AMP
+                jr      z, tp_1
+                cp      TOK_PLUS
+                jr      z, tp_3
+                cp      TOK_MINUS
+                jr      z, tp_3
+                ld      a, &FF              ; not a B3a operator
+                ret
+tp_0:           xor     a                   ; precedence 0 (| ^)
+                ret
+tp_1:           ld      a, 1                ; precedence 1 (&)
+                ret
+tp_3:           ld      a, 3                ; precedence 3 (+ -)
+                ret
+
+; ===========================================================================
+; expr_emit_binop — emit the ExprOp byte for a binary-operator token kind.
+; Entry: A = token kind. Exit: CY clear on success, CY set for an unsupported
+; operator (cannot happen: tok_prec gates which operators reach here).
+; ===========================================================================
+expr_emit_binop:
+                cp      TOK_PLUS
+                jr      z, eeb_add
+                cp      TOK_MINUS
+                jr      z, eeb_sub
+                cp      TOK_AMP
+                jr      z, eeb_and
+                cp      TOK_PIPE
+                jr      z, eeb_or
+                cp      TOK_CARET
+                jr      z, eeb_xor
+                scf
+                ret
+eeb_add:        ld      a, EXPR_OP_ADD
+                jr      eeb_emit
+eeb_sub:        ld      a, EXPR_OP_SUB
+                jr      eeb_emit
+eeb_and:        ld      a, EXPR_OP_AND
+                jr      eeb_emit
+eeb_or:         ld      a, EXPR_OP_OR
+                jr      eeb_emit
+eeb_xor:        ld      a, EXPR_OP_XOR
+eeb_emit:
+                call    expr_emit_byte
+                or      a                   ; clear carry: success
+                ret
+
+; ===========================================================================
+; expr_emit_byte — append A to EXPR_BUF, advancing (EXPR_PTR). Clobbers HL.
+; ===========================================================================
+expr_emit_byte:
+                ld      hl, (EXPR_PTR)
+                ld      (hl), a
+                inc     hl
+                ld      (EXPR_PTR), hl
+                ret
+
+; ===========================================================================
+; expr_emit_imm_from_tok — emit the shortest PUSH_IMMn for the current INT
+; token's int64 value (record offset 6). (Port of ExprWriter.WriteImm via the
+; TokInt primary.) Clobbers A/BC/DE/HL.
+; ===========================================================================
+expr_emit_imm_from_tok:
                 ld      hl, (PARSE_TOK)
                 ld      de, 6
                 add     hl, de
                 ld      de, IMM_VAL
                 ld      bc, 8
-                ldir
+                ldir                        ; IMM_VAL = token's int64 (LE)
+                ; fall through
+
+; ===========================================================================
+; expr_emit_imm_from_immval — emit the shortest PUSH_IMMn for the 8-byte LE
+; value in IMM_VAL, appending to EXPR_BUF. (Port of ExprWriter.WriteImm.)
+; Clobbers A/BC/DE/HL.
+; ===========================================================================
+expr_emit_imm_from_immval:
                 call    expr_imm_width      ; A = PUSH_IMMn opcode, B = n
-                ld      (IMM_OP), a
-                ld      a, b
-                ld      (IMM_N), a
-                ld      hl, (PI_OPSPTR)
-                ld      (hl), OP_KIND_IMM_EXPR
+                ld      hl, (EXPR_PTR)
+                ld      (hl), a             ; opcode
                 inc     hl
-                ld      a, (IMM_N)
-                inc     a                   ; expr_len = 1 (opcode) + n
-                ld      (hl), a             ; expr_len low
-                inc     hl
-                ld      (hl), 0             ; expr_len high (expr is <= 9 bytes)
-                inc     hl
-                ld      a, (IMM_OP)
-                ld      (hl), a             ; PUSH_IMMn opcode
-                inc     hl
-                ex      de, hl              ; DE = dest (after the opcode)
-                ld      hl, IMM_VAL         ; source = the low n value bytes
-                ld      a, (IMM_N)
-                ld      c, a
+                ld      c, b                ; BC = n (value byte count)
                 ld      b, 0
+                ld      de, IMM_VAL
+                ex      de, hl              ; HL = IMM_VAL (src), DE = dest
                 ldir                        ; copy n value bytes; DE -> end
-                ld      (PI_OPSPTR), de
-                call    parse_advance_tok   ; consume the int token
-                or      a                   ; clear carry: success
+                ld      (EXPR_PTR), de
                 ret
 
 ; ===========================================================================
@@ -324,6 +550,264 @@ all_equal_c:
                 inc     hl
                 djnz    all_equal_c
                 ret                         ; last cp left ZF set (equal)
+
+; ===========================================================================
+; expr_fold — constant-fold the bytecode in EXPR_BUF..EXPR_PTR. (Port of
+; parseExpression's fold step: format.EvalConst + a re-emitted WriteImm,
+; parser.go:1133-1147.) If every push is a literal and the stream reduces to
+; exactly one value, EXPR_BUF is rewritten to that single folded PUSH_IMMn and
+; EXPR_PTR updated. Otherwise (any PUSH_SYM/PC/LOCAL/REL or a malformed stream)
+; the raw bytecode is kept unchanged. Never errors. The value stack is 8-byte
+; LE int64 cells in FOLD_STACK; FOLD_SP points past the top cell.
+; ===========================================================================
+expr_fold:
+                ld      hl, FOLD_STACK
+                ld      (FOLD_SP), hl       ; empty value stack
+                ld      hl, EXPR_BUF
+                ld      (FOLD_CUR), hl      ; bytecode read cursor
+fold_loop:
+                ld      hl, (FOLD_CUR)
+                ld      de, (EXPR_PTR)
+                or      a
+                sbc     hl, de
+                jr      nc, fold_end        ; cursor >= end -> stream consumed
+                ld      hl, (FOLD_CUR)
+                ld      a, (hl)             ; next opcode
+                inc     hl
+                ld      (FOLD_CUR), hl
+                cp      EXPR_PUSH_IMM8
+                jp      z, fold_push8
+                cp      EXPR_PUSH_IMM16
+                jp      z, fold_push16
+                cp      EXPR_PUSH_IMM32
+                jp      z, fold_push32
+                cp      EXPR_PUSH_IMM64
+                jp      z, fold_push64
+                cp      EXPR_OP_ADD
+                jp      z, fold_do_add
+                cp      EXPR_OP_SUB
+                jp      z, fold_do_sub
+                cp      EXPR_OP_AND
+                jp      z, fold_do_and
+                cp      EXPR_OP_OR
+                jp      z, fold_do_or
+                cp      EXPR_OP_XOR
+                jp      z, fold_do_xor
+                cp      EXPR_OP_NEG
+                jp      z, fold_do_neg
+                cp      EXPR_OP_NOT
+                jp      z, fold_do_not
+                jr      fold_fail           ; non-constant / unknown -> keep raw
+fold_end:
+                ; success requires exactly one value on the stack.
+                ld      hl, (FOLD_SP)
+                ld      de, FOLD_STACK
+                or      a
+                sbc     hl, de              ; HL = used byte count
+                ld      de, 8
+                or      a
+                sbc     hl, de
+                jr      nz, fold_fail       ; not exactly one cell -> keep raw
+                ld      hl, FOLD_STACK      ; the single result value
+                ld      de, IMM_VAL
+                ld      bc, 8
+                ldir
+                ld      hl, EXPR_BUF        ; rewrite EXPR_BUF as one folded imm
+                ld      (EXPR_PTR), hl
+                jp      expr_emit_imm_from_immval
+fold_fail:
+                ret                         ; keep the raw bytecode as-is
+
+; fold_push8/16/32/64 — push a sign-extended literal from the bytecode onto the
+; value stack and advance FOLD_CUR past its operand bytes.
+fold_push8:
+                ld      b, 1
+                jr      fold_push_n
+fold_push16:
+                ld      b, 2
+                jr      fold_push_n
+fold_push32:
+                ld      b, 4
+                jr      fold_push_n
+fold_push64:
+                ld      b, 8
+fold_push_n:                                ; B = operand width (1/2/4/8)
+                ld      hl, (FOLD_SP)       ; dest = top free cell
+                ld      de, (FOLD_CUR)      ; src = operand bytes
+                ld      c, b
+fpn_copy:
+                ld      a, (de)
+                ld      (hl), a
+                inc     de
+                inc     hl
+                dec     c
+                jr      nz, fpn_copy
+                ld      (FOLD_CUR), de      ; advance past the operand bytes
+                dec     hl                  ; HL -> last value byte
+                ld      a, (hl)
+                inc     hl                  ; HL -> first fill byte (base + width)
+                add     a, a                ; bit7 -> carry
+                sbc     a, a                ; A = 0x00 / 0xFF sign fill
+                ld      d, a
+                ld      a, 8
+                sub     b                   ; A = 8 - width = fill count
+                jr      z, fpn_done
+                ld      b, a
+fpn_fill:
+                ld      (hl), d
+                inc     hl
+                djnz    fpn_fill
+fpn_done:
+                ld      (FOLD_SP), hl       ; HL = base + 8 = new top
+                jp      fold_loop
+
+; fold_do_* — binary/unary operations on the value stack (8-byte LE int64).
+fold_do_add:
+                call    fold_ab_ptrs        ; HL -> a, DE -> b; CY on underflow
+                jp      c, fold_fail
+                or      a                   ; clear carry
+                ld      b, 8
+fda_loop:
+                ld      a, (de)
+                ld      c, a
+                ld      a, (hl)
+                adc     a, c
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    fda_loop
+                call    fold_pop1
+                jp      fold_loop
+fold_do_sub:
+                call    fold_ab_ptrs
+                jp      c, fold_fail
+                or      a                   ; clear borrow
+                ld      b, 8
+fds_loop:
+                ld      a, (de)
+                ld      c, a
+                ld      a, (hl)
+                sbc     a, c
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    fds_loop
+                call    fold_pop1
+                jp      fold_loop
+fold_do_and:
+                call    fold_ab_ptrs
+                jp      c, fold_fail
+                ld      b, 8
+fan_loop:
+                ld      a, (de)
+                and     (hl)
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    fan_loop
+                call    fold_pop1
+                jp      fold_loop
+fold_do_or:
+                call    fold_ab_ptrs
+                jp      c, fold_fail
+                ld      b, 8
+for_loop:
+                ld      a, (de)
+                or      (hl)
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    for_loop
+                call    fold_pop1
+                jp      fold_loop
+fold_do_xor:
+                call    fold_ab_ptrs
+                jp      c, fold_fail
+                ld      b, 8
+fxr_loop:
+                ld      a, (de)
+                xor     (hl)
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    fxr_loop
+                call    fold_pop1
+                jp      fold_loop
+fold_do_neg:
+                call    fold_top_ptr        ; HL -> top; CY on underflow
+                jp      c, fold_fail
+                or      a                   ; clear borrow
+                ld      b, 8
+fne_loop:
+                ld      a, 0
+                sbc     a, (hl)             ; 0 - x with borrow = two's complement
+                ld      (hl), a
+                inc     hl
+                djnz    fne_loop
+                jp      fold_loop
+fold_do_not:
+                call    fold_top_ptr
+                jp      c, fold_fail
+                ld      b, 8
+fno_loop:
+                ld      a, (hl)
+                cpl
+                ld      (hl), a
+                inc     hl
+                djnz    fno_loop
+                jp      fold_loop
+
+; fold_ab_ptrs — for a binary op: HL -> the second-from-top cell (a), DE -> the
+; top cell (b). CY set (and registers undefined) if fewer than two cells.
+fold_ab_ptrs:
+                call    fold_depth          ; HL = used byte count
+                ld      de, 16
+                or      a
+                sbc     hl, de
+                jr      c, fab_under        ; used < 16 -> underflow
+                ld      hl, (FOLD_SP)
+                ld      de, -8
+                add     hl, de              ; HL = top (b)
+                push    hl
+                add     hl, de              ; HL = second (a)
+                pop     de                  ; DE = top (b)
+                or      a                   ; clear carry: success
+                ret
+fab_under:
+                scf
+                ret
+
+; fold_top_ptr — for a unary op: HL -> the top cell. CY set if the stack empty.
+fold_top_ptr:
+                call    fold_depth          ; HL = used byte count
+                ld      de, 8
+                or      a
+                sbc     hl, de
+                jr      c, ftp_under        ; used < 8 -> empty
+                ld      hl, (FOLD_SP)
+                ld      de, -8
+                add     hl, de              ; HL = top
+                or      a                   ; clear carry: success
+                ret
+ftp_under:
+                scf
+                ret
+
+; fold_depth — HL = FOLD_SP - FOLD_STACK (used byte count). Clobbers DE.
+fold_depth:
+                ld      hl, (FOLD_SP)
+                ld      de, FOLD_STACK
+                or      a
+                sbc     hl, de
+                ret
+
+; fold_pop1 — discard the top value cell (FOLD_SP -= 8). Clobbers HL/DE.
+fold_pop1:
+                ld      hl, (FOLD_SP)
+                ld      de, -8
+                add     hl, de
+                ld      (FOLD_SP), hl
+                ret
 
 ; ===========================================================================
 ; match_reg — is the identifier (HL = ptr, A = length) a register name?
@@ -578,10 +1062,13 @@ PARSE_RECN:     defs 2          ; INST records emitted so far
 PI_MNEMID:      defs 2          ; parse_inst: current mnemonic ID
 PI_OPSPTR:      defs 2          ; parse_inst: operand-bytes write pointer
 PI_COUNT:       defs 1          ; parse_inst: operand count
-IMM_VAL:        defs 8          ; parse_operand_imm: the immediate's int64 (LE)
-IMM_OP:         defs 1          ; parse_operand_imm: chosen PUSH_IMMn opcode
-IMM_N:          defs 1          ; parse_operand_imm: value byte count (1/2/4/8)
+IMM_VAL:        defs 8          ; scratch int64 (LE) for the shortest-PUSH_IMMn emit
 PARSE_OPSBUF:   defs 256        ; one instruction's operand bytes (staging)
+EXPR_BUF:       defs 256        ; one operand's expression bytecode (build buffer)
+EXPR_PTR:       defs 2          ; expression-bytecode write pointer (into EXPR_BUF)
+FOLD_CUR:       defs 2          ; expr_fold: bytecode read cursor
+FOLD_SP:        defs 2          ; expr_fold: value-stack pointer (past the top cell)
+FOLD_STACK:     defs 128        ; expr_fold: 16 cells of 8-byte LE int64
 
 ; ===========================================================================
 ; Public I/O buffers

@@ -5,17 +5,20 @@
 // harness and asserts the returned ID matches format.MnemonicID for every name
 // in MnemonicTable, plus a batch of non-mnemonics (asserting not-found).
 //
-// B2b/B2c (parse_run / parse_inst): drives the instruction parse and compares
-// the emitted INST records against a faithful Go reference. The operand-byte
-// authority is the real format.OperandWriter + format.ExprWriter (imported
-// directly); the lexing reuses refLex (already authority-validated in
-// asmlex_test.go); only the small control-flow port (matchReg + the generic
-// operand loop) is transcribed — refMatchReg below is verbatim parser.go
-// matchReg. The B2b/B2c domain is instruction lines with register and
-// single-literal-#imm operands (no blank-runs/labels/comments/directives/multi-
-// term-or-symbol expressions/mem operands, and none of the special-form
-// mnemonics parseInst intercepts before its generic loop), so refParse mirrors
-// Parse exactly on that domain.
+// B2b/B2c/B3a (parse_run / parse_inst): drives the instruction parse and
+// compares the emitted INST records against a faithful Go reference. The
+// operand-byte authority is the real format.OperandWriter + format.ExprWriter +
+// format.EvalConst (imported directly); the lexing reuses refLex (already
+// authority-validated in asmlex_test.go); only the small control-flow port
+// (matchReg + the generic operand loop + the precedence-climbing expression
+// parser) is transcribed — refMatchReg / refTokPrec / refExprParser below are
+// verbatim parser.go matchReg / tokPrec / parseExprPrec+parseExprPrimary,
+// restricted to the B3a operator domain. That domain is instruction lines with
+// register operands and constant-expression operands over `+ - & | ^` + unary
+// `- ~` + parens (no shifts/`* /`, no symbol/PC/local/reloc primaries, no
+// blank-runs/labels/comments/directives/mem operands, and none of the
+// special-form mnemonics parseInst intercepts before its generic loop), so
+// refParse mirrors Parse exactly on that domain.
 //
 // Unlike asmlex_test.go (which transcribes the heavyweight frontend lexer), the
 // authority here is the pure-stdlib leaf package sam-aarch64-format, imported
@@ -162,11 +165,130 @@ func refMatchReg(name string) (format.OperandKind, byte, bool) {
 	return format.OpRegW, byte(num), true
 }
 
-// refParse is a faithful transcription of parser.go's Parse restricted to B2b's
-// domain (register-only instruction lines). It lexes via refLex (the
-// authority-validated lexer reference), looks up mnemonics via format.MnemonicID,
-// and builds operand bytes via the real format.OperandWriter. Returns ok=false
-// on any out-of-domain construct, matching how asmparse sets PARSE_ERR.
+// refTokPrec is a transcription of parser.go's tokPrec restricted to B3a's
+// operator set: `| ^` (0), `&` (1), `+ -` (3). The shift (`<< >>`, prec 2) and
+// `* /` (prec 4) operators are later sub-bricks, so here they read as
+// not-an-operator (-1) and terminate an expression — exactly as tok_prec does
+// in src/asmparse.asm for B3a.
+func refTokPrec(k int) int {
+	switch k {
+	case tPipe, tCaret:
+		return 0
+	case tAmp:
+		return 1
+	case tPlus, tMinus:
+		return 3
+	}
+	return -1
+}
+
+// refExprParser is a precedence-climbing expression parser over a refTok slice,
+// a verbatim transcription of parser.go's parseExprPrec + parseExprPrimary
+// restricted to the B3a domain (no symbol/PC/local/reloc primaries). It builds
+// bytecode into a real format.ExprWriter.
+type refExprParser struct {
+	toks []refTok
+	pos  int
+}
+
+func (p *refExprParser) cur() refTok {
+	if p.pos < len(p.toks) {
+		return p.toks[p.pos]
+	}
+	return refTok{kind: tEOF}
+}
+
+func (p *refExprParser) parsePrec(w *format.ExprWriter, minPrec int) bool {
+	if !p.parsePrimary(w) {
+		return false
+	}
+	for {
+		k := p.cur().kind
+		prec := refTokPrec(k)
+		if prec < minPrec {
+			return true
+		}
+		opKind := k
+		p.pos++
+		if !p.parsePrec(w, prec+1) {
+			return false
+		}
+		switch opKind {
+		case tPlus:
+			w.WriteOp(format.OpAdd)
+		case tMinus:
+			w.WriteOp(format.OpSub)
+		case tAmp:
+			w.WriteOp(format.OpAnd)
+		case tPipe:
+			w.WriteOp(format.OpOr)
+		case tCaret:
+			w.WriteOp(format.OpXor)
+		}
+	}
+}
+
+func (p *refExprParser) parsePrimary(w *format.ExprWriter) bool {
+	switch p.cur().kind {
+	case tHash:
+		p.pos++
+		return p.parsePrimary(w)
+	case tInt:
+		w.WriteImm(int64(p.cur().val))
+		p.pos++
+		return true
+	case tMinus:
+		p.pos++
+		if !p.parsePrimary(w) {
+			return false
+		}
+		w.WriteOp(format.OpNeg)
+		return true
+	case tTilde:
+		p.pos++
+		if !p.parsePrimary(w) {
+			return false
+		}
+		w.WriteOp(format.OpNot)
+		return true
+	case tLParen:
+		p.pos++
+		if !p.parsePrec(w, 0) {
+			return false
+		}
+		if p.cur().kind != tRParen {
+			return false
+		}
+		p.pos++
+		return true
+	}
+	return false
+}
+
+// refParseExpr parses one constant-expression operand starting at toks[pos],
+// returning the folded operand bytecode (format.EvalConst + a re-emitted
+// WriteImm, matching parseExpression), the position after the expression, and
+// ok. Mirrors parse_operand_expr + expr_fold in src/asmparse.asm.
+func refParseExpr(toks []refTok, pos int) (expr []byte, newPos int, ok bool) {
+	p := refExprParser{toks: toks, pos: pos}
+	var w format.ExprWriter
+	if !p.parsePrec(&w, 0) {
+		return nil, pos, false
+	}
+	if v, ok := format.EvalConst(w.Bytes()); ok {
+		var folded format.ExprWriter
+		folded.WriteImm(v)
+		return folded.Bytes(), p.pos, true
+	}
+	return w.Bytes(), p.pos, true
+}
+
+// refParse is a faithful transcription of parser.go's Parse restricted to B3a's
+// domain (register operands + constant-expression operands). It lexes via
+// refLex (the authority-validated lexer reference), looks up mnemonics via
+// format.MnemonicID, and builds operand bytes via the real format.OperandWriter
+// / format.ExprWriter / format.EvalConst. Returns ok=false on any out-of-domain
+// construct, matching how asmparse sets PARSE_ERR.
 func refParse(src []byte) (recs []parseRec, ok bool) {
 	toks, lok := refLex(src)
 	if !lok {
@@ -209,27 +331,23 @@ func refParse(src []byte) (recs []parseRec, ok bool) {
 				case tIdent:
 					rk, reg, isReg := refMatchReg(string(toks[pos].span))
 					if !isReg {
-						return nil, false
+						return nil, false // symbol operand -> B3b
 					}
 					ow.WriteReg(rk, reg)
 					count++
 					pos++
-				case tHash:
-					// `#` immediate prefix: must be followed by an int literal
-					// (a single-literal immediate; expressions are B3).
-					pos++
-					if pos >= len(toks) || toks[pos].kind != tInt {
+				case tHash, tInt, tMinus, tTilde, tLParen:
+					// A constant-expression operand (B3a): `#4+1`, `~0`,
+					// `-(1+2)&7`, … folded to a single immediate.
+					expr, npos, ok := refParseExpr(toks, pos)
+					if !ok {
 						return nil, false
 					}
-					fallthrough
-				case tInt:
-					var ew format.ExprWriter
-					ew.WriteImm(int64(toks[pos].val))
-					ow.WriteImmExpr(ew.Bytes())
+					ow.WriteImmExpr(expr)
 					count++
-					pos++
+					pos = npos
 				default:
-					return nil, false // mem operand / symbol expr -> later brick
+					return nil, false // mem operand / . / localref / : / * / / / << >> -> later brick
 				}
 			}
 			recs = append(recs, parseRec{mnemonicID: id, count: count, ops: ow.Bytes()})
@@ -450,6 +568,133 @@ func TestParseImmHandCases(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// B3a — constant-expression operands (parse_expr_prec / parse_expr_primary /
+// expr_fold).
+// ---------------------------------------------------------------------------
+
+// TestParseExprHandCases pins INST records for constant-expression operands,
+// exercising the B3a operators (`+ - & | ^`, unary `- ~`), operator precedence,
+// parentheses, and the fold's width re-selection. Every B3a expression is
+// pure-constant, so each folds to a single immediate; the expected record is
+// authority-built (format.ExprWriter.WriteImm of the folded value). Cross-checks
+// against refParse.
+func TestParseExprHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	cases := []struct {
+		src  string
+		want []parseRec
+	}{
+		// binary operators, each width-folding to a single immediate
+		{"add x0, x1, #4+1\n", []parseRec{mkRec2(t, "add", rOp(X, 0), rOp(X, 1), iOp(5))}},
+		{"mov x0, #1+2+3\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(6))}},
+		{"mov x0, #8-3-2\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(3))}}, // left-assoc
+		{"mov x0, #0xff & 0x0f\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x0f))}},
+		{"mov x0, #1 | 2\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(3))}},
+		{"mov x0, #5 ^ 1\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(4))}},
+		// unary operators
+		{"mov x0, ~0\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-1))}},
+		{"mov x0, -5\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-5))}},
+		{"mov x0, #-5\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-5))}},
+		{"mov x0, #--5\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(5))}}, // double unary
+		{"mov x0, #-5+3\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-2))}},
+		// precedence: & binds tighter than |, + tighter than &
+		{"mov x0, #1 | 2 & 3\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(3))}},
+		{"mov x0, #1+2 & 3\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(3))}},
+		// parentheses override precedence / associativity
+		{"mov x0, #(1+2)&7\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(3))}},
+		{"mov x0, -(1+2)\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-3))}},
+		{"mov x0, ~(0xf0 | 0x0f)\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-256))}},
+		{"mov x0, #(8-3)-2\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(3))}},
+		// the fold re-selects the shortest width for the result
+		{"mov x0, #0x7fff+1\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x8000))}},   // imm16
+		{"mov x0, #0xffff+1\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x10000))}},  // imm32
+		{"mov x0, #0x7fffffff+1\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x80000000))}},
+		{"mov x0, #0-1\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-1))}},
+		// expression as a non-final operand (commas optional)
+		{"add x0 #1+1 x2\n", []parseRec{mkRec2(t, "add", rOp(X, 0), iOp(2), rOp(X, 2))}},
+	}
+	for _, c := range cases {
+		got, errFlag := parseZ80(t, mac, []byte(c.src))
+		if errFlag {
+			t.Errorf("%q: PARSE_ERR set unexpectedly", c.src)
+			continue
+		}
+		compareRecs(t, fmt.Sprintf("%q", c.src), got, c.want)
+		ref, ok := refParse([]byte(c.src))
+		if !ok {
+			t.Fatalf("%q: refParse reported error on a valid case", c.src)
+		}
+		compareRecs(t, fmt.Sprintf("%q (vs refParse)", c.src), got, ref)
+	}
+}
+
+// apExprLeaves are literal leaves for the expression fuzz, spanning every
+// PUSH_IMMn width plus char literals.
+var apExprLeaves = []string{
+	"0", "1", "2", "3", "7", "15", "0xff", "0x100",
+	"127", "128", "255", "256", "1000", "0x7fff", "0x8000",
+	"0xffff", "0x10000", "0x7fffffff", "0xdeadbeef",
+	"'A'", "'0'",
+}
+
+// apExprBinOps are the B3a binary operators (deliberately excluding `* / << >>`,
+// which are later sub-bricks).
+var apExprBinOps = []string{"+", "-", "&", "|", "^"}
+
+// randExpr builds a random valid B3a constant expression string of bounded
+// depth (literals combined with the B3a operators, unary `- ~`, and parens).
+func randExpr(rng *rand.Rand, depth int) string {
+	if depth <= 0 || rng.Intn(3) == 0 {
+		return apExprLeaves[rng.Intn(len(apExprLeaves))]
+	}
+	switch rng.Intn(6) {
+	case 0:
+		return "-" + randExpr(rng, depth-1)
+	case 1:
+		return "~" + randExpr(rng, depth-1)
+	case 2:
+		return "(" + randExpr(rng, depth-1) + ")"
+	default:
+		op := apExprBinOps[rng.Intn(len(apExprBinOps))]
+		sep := ""
+		if rng.Intn(2) == 0 {
+			sep = " "
+		}
+		return randExpr(rng, depth-1) + sep + op + sep + randExpr(rng, depth-1)
+	}
+}
+
+// TestParseExprFuzz compares asmparse against refParse over random constant
+// expressions embedded as `#imm` operands. refParse (the real format.ExprWriter
+// + format.EvalConst) is the oracle for the folded operand bytes; asmparse's
+// expr_fold must agree bit-for-bit, including the wrap-around of 64-bit
+// arithmetic and the fold's width re-selection.
+func TestParseExprFuzz(t *testing.T) {
+	mac := loadAsmparse(t)
+	for _, seed := range []int64{3, 11, 29, 101, 5000} {
+		rng := rand.New(rand.NewSource(seed))
+		var src []byte
+		lines := 8 + rng.Intn(8)
+		for li := 0; li < lines; li++ {
+			src = append(src, "mov x0, #"...)
+			src = append(src, randExpr(rng, 3)...)
+			src = append(src, '\n')
+		}
+		want, ok := refParse(src)
+		if !ok {
+			t.Fatalf("seed %d: refParse reported error on generated B3a source:\n%s", seed, src)
+		}
+		got, errFlag := parseZ80(t, mac, src)
+		if errFlag {
+			t.Fatalf("seed %d: PARSE_ERR set on valid B3a source:\n%s", seed, src)
+		}
+		compareRecs(t, fmt.Sprintf("seed%d", seed), got, want)
+		t.Logf("seed=%d: %d source bytes, %d expr records matched", seed, len(src), len(got))
+	}
+}
+
 // apImmPool are immediate operands spanning every PUSH_IMMn width plus the
 // signed wraparound of large hex literals and char literals.
 var apImmPool = []string{
@@ -528,12 +773,22 @@ func TestParseInstError(t *testing.T) {
 		src  string
 	}{
 		{"unknown mnemonic", "frobnicate x0, x1\n"},
-		{"multi-term expression (B3, not B2c)", "add x0, x1, #4+1\n"},
 		{"bare # without an int", "add x0, #\n"},
-		{"symbol / non-register ident operand (B3)", "add x0, foo\n"},
+		{"symbol / non-register ident operand (B3b)", "add x0, foo\n"},
 		{"leading comma", "add , x0\n"},
 		{"line-leading number", "5 x0\n"},
 		{"directive (B6, not B2b)", ".text\n"},
+		// B3a's operator domain excludes `* /` (B3a3) and `<< >>` (B3a2): the
+		// leftover operator token reads as a stray operand and errors.
+		{"multiply (B3a3, not B3a)", "add x0, x1, #4*2\n"},
+		{"divide (B3a3, not B3a)", "mov x0, #6/2\n"},
+		{"left shift (B3a2, not B3a)", "mov x0, #1<<4\n"},
+		{"right shift (B3a2, not B3a)", "mov x0, #256>>2\n"},
+		// malformed expressions
+		{"unbalanced paren", "mov x0, #(1+2\n"},
+		{"empty parens", "mov x0, ()\n"},
+		{"trailing binary operator", "mov x0, #4+\n"},
+		{"double unary then nothing", "mov x0, -\n"},
 	}
 	for _, c := range cases {
 		_, errFlag := parseZ80(t, mac, []byte(c.src))
