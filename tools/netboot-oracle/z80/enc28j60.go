@@ -145,6 +145,13 @@ type ENC28J60 struct {
 	lastBorder    byte
 	borderWritten bool
 
+	// lastHMPR records the most recent OUT (&FB) value (the HMPR page trinload
+	// selects in its @/X handlers). The flat harness does not relocate on it (no
+	// paging model), but recording it verifies trinload parsed and applied the page
+	// byte. True paging fidelity stays hardware-gated.
+	lastHMPR    byte
+	hmprWritten bool
+
 	// PHY link-up model (i127, hardware-confirmed 2026-06-19). On real silicon the
 	// ENC28J60's 10BASE-T link is down for a while after init (link-pulse
 	// detection; the datasheet gives no duration and the chip has no auto-
@@ -209,6 +216,12 @@ func (e *ENC28J60) TXFrames() [][]byte { return e.txFrames }
 // LastBorder returns the most recent OUT (&FE) value and whether any border write
 // happened — the boot wrappers' outcome signal (red/blue/green).
 func (e *ENC28J60) LastBorder() (byte, bool) { return e.lastBorder, e.borderWritten }
+
+// LastHMPR returns the most recent OUT (&FB) value (the RAM page trinload's @/X
+// handlers selected) and whether any HMPR write happened. The flat harness does
+// not relocate on it (no paging model), but recording it verifies trinload parsed
+// and applied the page byte. True paging fidelity stays hardware-gated.
+func (e *ENC28J60) LastHMPR() (byte, bool) { return e.lastHMPR, e.hmprWritten }
 
 func (e *ENC28J60) softReset() {
 	for b := range e.regs {
@@ -329,6 +342,10 @@ func (e *ENC28J60) Out(port uint8, value uint8) {
 		// Record the border colour the boot wrappers paint on each outcome.
 		e.lastBorder = value
 		e.borderWritten = true
+	case 0xFB:
+		// HMPR (page select); flat harness records it but doesn't relocate — page fidelity is hardware-gated
+		e.lastHMPR = value
+		e.hmprWritten = true
 	case portTrinitySD:
 		// SD data writes: no model needed here.
 	}

@@ -239,7 +239,7 @@ func TestTCPConnStreamMultiWindow(t *testing.T) {
 	ref.Connect()
 
 	srvSeq := establishStream(t, mac, enc, ref)
-	body := bytes.Repeat([]byte("abcd"), 16) // 64 bytes = 4 full windows of 16
+	body := bytes.Repeat([]byte("abcd"), 16)                // 64 bytes = 4 full windows of 16
 	srvSeq = feedBodyZ80(t, mac, enc, ref, srvSeq, body, 7) // odd seg size straddles windows
 
 	if got := readWord(t, mac, "CONN_SINK_CHUNK_COUNT"); got != 4 {

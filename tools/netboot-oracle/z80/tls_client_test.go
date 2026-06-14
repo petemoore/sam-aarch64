@@ -11,6 +11,7 @@
 //     crypto/ecdh derives from that scalar (proves the ECDHE pubkey step);
 //   - run tls_client_first and assert TC_TX[:TC_TX_LEN] == the byte-for-byte
 //     ClientHello record the Go client's First() emits.
+//
 // TestTLSClientHandshakeReplay drives the full record-level state machine
 // (tls_client_on_record -> on_server_hello / on_encrypted) by replaying a captured
 // handshake (capture.go) and asserting the Z80 reproduces every client output +

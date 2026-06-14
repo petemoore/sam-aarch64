@@ -155,25 +155,32 @@ func New() *Machine {
 	return &Machine{m: &mem{}, symbols: map[string]uint16{}}
 }
 
-// Load reads a pyz80 .bin (assembled at &8000) into a fresh 64 KB space and
-// parses its mapfile (ADDR=NAME text, one per line) for name->address lookup.
-func Load(binPath, mapPath string) (*Machine, error) {
+// LoadAt is Load with an explicit load origin (org). trinload assembles to
+// &6000, not the &8000 the netboot routines use, so its test loads it here.
+// Flat all-RAM (no boot ROM model): trinload pages RAM into the top 32K via HMPR
+// at runtime, so &8000-&FFFF is RAM for it, not the boot-time ROM1.
+func LoadAt(binPath, mapPath string, org uint16) (*Machine, error) {
 	code, err := os.ReadFile(binPath)
 	if err != nil {
 		return nil, fmt.Errorf("z80: read bin: %w", err)
 	}
-	if loadOrg+len(code) > 0x10000 {
-		return nil, fmt.Errorf("z80: bin of %d bytes overflows from &%04X", len(code), loadOrg)
+	if int(org)+len(code) > 0x10000 {
+		return nil, fmt.Errorf("z80: bin of %d bytes overflows from &%04X", len(code), org)
 	}
 	machine := &Machine{m: &mem{}, symbols: map[string]uint16{}}
-	copy(machine.m.ram[loadOrg:], code)
-
+	copy(machine.m.ram[org:], code)
 	syms, err := parseMap(mapPath)
 	if err != nil {
 		return nil, err
 	}
 	machine.symbols = syms
 	return machine, nil
+}
+
+// Load reads a pyz80 .bin (assembled at &8000) into a fresh 64 KB space and
+// parses its mapfile (ADDR=NAME text, one per line) for name->address lookup.
+func Load(binPath, mapPath string) (*Machine, error) {
+	return LoadAt(binPath, mapPath, loadOrg)
 }
 
 // LoadBoot loads a bootable netboot .bin the way the SAM does at boot, modelling
@@ -305,17 +312,25 @@ type Entry struct {
 	// inversion / Montgomery ladder, tens of millions of byte-ops) legitimately
 	// run far past the default; they pass a higher cap.
 	StepCap uint64
+	// StopPC, when non-zero, stops the run when execution reaches this address
+	// after skipping the first StopPCSkip occurrences. Used to detect a return to
+	// a routine's entry: run from `start` with StopPC=start, StopPCSkip=1 stops on
+	// the SECOND arrival at `start` (the first is the initial entry) — i.e. when a
+	// pushed program RETs back into trinload. Zero disables it.
+	StopPC     uint16
+	StopPCSkip int
 }
 
 // CallResult is what a routine returns to the harness.
 type CallResult struct {
-	BC      uint16 // the BC register at RET (routines return a length in BC)
-	HL      uint16 // the HL register at RET (byte-level leaves return a value in HL)
-	A       uint8  // the A register at RET (routines returning a flag/byte use A)
-	Steps   uint64
-	TStates uint64 // total Z80 cycles executed (cycle-exact; see tstates.go)
-	PC      uint16 // the PC where the run stopped (the spin site if it did not halt)
-	Halted  bool   // true if the run reached a HALT / RET-to-trap; false if it span out
+	BC          uint16 // the BC register at RET (routines return a length in BC)
+	HL          uint16 // the HL register at RET (byte-level leaves return a value in HL)
+	A           uint8  // the A register at RET (routines returning a flag/byte use A)
+	Steps       uint64
+	TStates     uint64 // total Z80 cycles executed (cycle-exact; see tstates.go)
+	PC          uint16 // the PC where the run stopped (the spin site if it did not halt)
+	Halted      bool   // true if the run reached a HALT / RET-to-trap; false if it span out
+	ReachedStop bool   // true if the run stopped at Entry.StopPC (not a halt/cap)
 }
 
 // Call runs the routine named `entry` to its RET with zeroed entry registers.
@@ -395,7 +410,16 @@ func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (Call
 	}
 	var steps, tstates uint64
 	halted := false
+	stopVisits := 0
+	reachedStop := false
 	for {
+		if in.StopPC != 0 && cpu.PC == in.StopPC {
+			stopVisits++
+			if stopVisits > in.StopPCSkip {
+				reachedStop = true
+				break
+			}
+		}
 		if cpu.PC == haltTrap {
 			halted = true
 			break
@@ -441,5 +465,6 @@ func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (Call
 	return CallResult{
 		BC: cpu.BC.U16(), HL: cpu.HL.U16(), A: cpu.AF.Hi,
 		Steps: steps, TStates: tstates, PC: cpu.PC, Halted: halted,
+		ReachedStop: reachedStop,
 	}, nil
 }
