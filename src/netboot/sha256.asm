@@ -468,38 +468,36 @@ sha256_compress:
                 ld      a, 48                   ; 48 words to extend (16..63);
                 ld      (sha_ext_ctr), a        ; memory counter (body > djnz range)
 sha_extend:
-                ; tmp1 = s1(W[t-2])
-                ld      de, -2*4
-                call    sha_woff                ; HL -> W[t-2]
-                call    sha_sigma1
-                ld      hl, sha_tmpa
-                ld      de, sha_tmp1
-                copy4_body
-                ; tmp1 += W[t-7]
-                ld      de, -7*4
-                call    sha_woff
-                ex      de, hl                  ; DE -> W[t-7]
-                ld      hl, sha_tmp1
-                add4_body                       ; sha_tmp1 += W[t-7]
-                ; tmp2 = s0(W[t-15])
+                ; tmp2 = s0(W[t-15])  (computed first; the running sum lives in
+                ; sha_tmpa, which sha_sigma0/1 overwrite, so stash s0 aside)
                 ld      de, -15*4
                 call    sha_woff
                 call    sha_sigma0
                 ld      hl, sha_tmpa
                 ld      de, sha_tmp2
                 copy4_body
-                ; tmp1 += tmp2
+                ; sha_tmpa = s1(W[t-2])  (the running accumulator)
+                ld      de, -2*4
+                call    sha_woff                ; HL -> W[t-2]
+                call    sha_sigma1
+                ; sha_tmpa += s0(W[t-15])
                 ld      de, sha_tmp2
-                ld      hl, sha_tmp1
+                ld      hl, sha_tmpa
                 add4_body
-                ; tmp1 += W[t-16]
+                ; sha_tmpa += W[t-7]
+                ld      de, -7*4
+                call    sha_woff
+                ex      de, hl                  ; DE -> W[t-7]
+                ld      hl, sha_tmpa
+                add4_body
+                ; sha_tmpa += W[t-16]
                 ld      de, -16*4
                 call    sha_woff
                 ex      de, hl                  ; DE -> W[t-16]
-                ld      hl, sha_tmp1
+                ld      hl, sha_tmpa
                 add4_body
-                ; W[t] = tmp1
-                ld      hl, sha_tmp1
+                ; W[t] = sha_tmpa
+                ld      hl, sha_tmpa
                 ld      de, (sha_wt)            ; DE -> W[t]
                 copy4_body
                 ; advance to W[t+1]
