@@ -2,6 +2,32 @@
 
 Generated 2026-06-19 as a read-only pre-pass for the i115f/i115d migration.
 
+## PROGRESS (update as batches land)
+
+- **Batches 1–7 DONE = ALL 101 closed items migrated** (99 records in `items.yaml`;
+  the closed `.old` file has zero data rows). Each batch independently
+  info-loss-reviewed; all PASS.
+- **Remaining: the 94 open items (batches 8–14) + 5 open questions; 23 closed
+  questions RETIRE** (fold each decision into its item, then do NOT migrate the
+  closed question — confirm per the "Closed-question disposition" section below).
+
+### CORRECTION to the batch list below (next session, read this)
+
+The batches-7/8 `i48c-bN` entries in the list below are **phantoms** — those bricks
+are described *inside* the single `i48c` wall-of-text row (which is OPEN, in
+`item-registry-open.md.old`); they are NOT separate `.old` rows. They get **minted
+when `i48c` is split** during its batch (the i48c umbrella is in batch 9). So:
+ignore the `i48c-bN` ids in batches 7–8; when migrating `i48c`, `add` the umbrella
+then `add`/`split` one leaf per brick (b1–b4 + b5a DONE with their PRs; b5b–b8
+OPEN), per the briefing's "Splitting" section. The real remaining `.old` open-item
+rows are what drives batches 8–14.
+
+The `--migrating` flag + the umbrella-status-derived rule + preserve-all-refs are
+all in `MIGRATION-AGENT-BRIEFING.md`. Open items will have real `depends_on` edges
+(old `BLOCKED:<x>` / blocked-on prose → an edge to the gating item/question); set
+them with `--dep`. Closed questions are referenced by some items — fold the decision
+into the item's desc, never `--ref` a q-id that will retire.
+
 ---
 
 ## 1. Row counts
