@@ -257,9 +257,10 @@ RXBUF:            defs 1518
 rrq_mode_octet:   defm "octet"
                   defb 0
 
-; The settled ClientOptionSet (research note §5.7), pre-formatted as the wire
-; bytes build_rrq copies verbatim: each "name",0,"value",0. Byte-identical to
-; the Go tftp.ClientOptionSet ordering (blksize, tsize, timeout, windowsize).
+; The ClientOptionSet, pre-formatted as the wire bytes build_rrq copies verbatim:
+; each "name",0,"value",0. Byte-identical to the Go tftp.ClientOptionSet ordering
+; (blksize, tsize, timeout). windowsize is NOT requested: a lock-step receiver
+; must not ask for RFC 7440 windowed delivery it cannot handle (i118/i120).
 rrq_opt_template:
                   defm "blksize"
                   defb 0
@@ -272,10 +273,6 @@ rrq_opt_template:
                   defm "timeout"
                   defb 0
                   defm "2"
-                  defb 0
-                  defm "windowsize"
-                  defb 0
-                  defm "4"
                   defb 0
 RRQ_OPT_LEN:      equ $ - rrq_opt_template
 

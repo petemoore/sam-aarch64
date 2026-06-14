@@ -17,8 +17,9 @@
 //	OnFrame(rx)     -> the next frame to send, plus done:
 //	  phase ARP : an ARP reply for ServerIP   -> the RRQ frame   (learn server MAC)
 //	              any other frame              -> nil, false      (keep waiting)
-//	  phase XFER: a DATA frame to our TID      -> the ACK frame   (accumulate)
-//	              the short final block        -> the ACK frame, done=true
+//	  phase XFER: an OACK (optioned-RRQ server) -> ACK 0           (start transfer)
+//	              a DATA frame to our TID       -> the ACK frame   (accumulate)
+//	              the short final block         -> the ACK frame, done=true
 //	              a DATA from a stray TID       -> an ERROR(5)     (per RFC 1350 §4)
 //	OnTimeout()     -> the SAS retransmit (the last ACK only), or the RRQ if no ACK yet
 //	Bytes()         -> the accumulated file bytes (after Done)
@@ -59,7 +60,6 @@ type Config struct {
 	ServerIP  [4]byte
 	ClientTID uint16 // the client's own source port (its TID)
 	Filename  string // the file to fetch
-	Blksize   int    // the negotiated block size (the client requests ClientOptionSet)
 }
 
 // Client is the combined fetch driver.
@@ -70,19 +70,17 @@ type Client struct {
 	loop  *tftp.ClientLoop
 }
 
-// New builds a client fetch driver for cfg. The block size is the client's
-// requested blksize (ClientOptionSet asks 1428); a server that omits the OACK
-// (a bare-RRQ server) would stream 512-byte blocks, but the SAM netboot server
-// always OACKs the requested size, so Blksize is the negotiated value.
+// New builds a client fetch driver for cfg. The transfer's effective block size
+// is negotiated at run time: it starts at the 512-byte TFTP default and is raised
+// to the server's OACK-granted blksize (the RRQ requests ClientOptionSet's 1428);
+// a server that sends no OACK keeps the 512 default. The client handles both.
 func New(cfg Config) *Client {
-	if cfg.Blksize <= 0 {
-		cfg.Blksize = 512
-	}
 	return &Client{
 		cfg:   cfg,
 		phase: PhaseARP,
 		front: tftp.NewClientFront(cfg.ClientMAC, cfg.ClientIP, cfg.ServerIP, cfg.ClientTID),
-		loop:  tftp.NewClientLoop(cfg.ClientMAC, cfg.ClientIP, cfg.ClientTID, cfg.Blksize),
+		// The loop starts at the 512-byte TFTP default; an OACK negotiates up.
+		loop: tftp.NewClientLoop(cfg.ClientMAC, cfg.ClientIP, cfg.ClientTID, 512),
 	}
 }
 
@@ -94,8 +92,9 @@ func (c *Client) First() []byte {
 
 // OnFrame processes one received frame and returns the next frame to send (or nil)
 // plus whether the transfer has completed. In the ARP phase a matching ARP reply
-// yields the RRQ frame and advances to the transfer phase; in the transfer phase a
-// DATA frame yields the ACK (or ERROR) frame and, on the short final block, done.
+// yields the RRQ frame and advances to the transfer phase; in the transfer phase
+// the server's OACK yields ACK 0 (adopting the negotiated blksize) and a DATA
+// frame yields the ACK (or ERROR) frame, with the short final block ending it.
 func (c *Client) OnFrame(rx []byte) (tx []byte, done bool) {
 	switch c.phase {
 	case PhaseARP:
@@ -106,12 +105,12 @@ func (c *Client) OnFrame(rx []byte) (tx []byte, done bool) {
 		c.phase = PhaseXFER
 		return c.front.RRQFrame(c.cfg.Filename), false
 	case PhaseXFER:
-		ack := c.loop.OnDATA(rx)
+		reply := c.loop.OnServerReply(rx)
 		if c.loop.Done() {
 			c.phase = PhaseDone
-			return ack, true
+			return reply, true
 		}
-		return ack, false
+		return reply, false
 	default:
 		return nil, true
 	}

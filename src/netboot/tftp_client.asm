@@ -3,10 +3,10 @@
 ;
 ; These are the SAM-side Z80 ports of the netboot-oracle Go authorities
 ; tools/netboot-oracle/tftp/tftp.go::BuildRRQ and ::ParseOACK. The client
-; originates an RRQ to a server's port 69 (octet mode), requesting the settled
-; option set (blksize=1428, tsize=0, timeout=2, windowsize=4 — research note
-; §5.7), then parses the OACK to learn the negotiated blksize and the file's
-; tsize (which sizes the B-DOS pre-allocation).
+; originates an RRQ to a server's port 69 (octet mode), requesting the option
+; set (blksize=1428, tsize=0, timeout=2 — windowsize is not requested, i118/i120),
+; then parses the OACK to learn the negotiated blksize and the file's tsize (which
+; sizes the B-DOS pre-allocation).
 ;
 ; An RRQ payload is: a 2-byte big-endian opcode (1 = RRQ), then NUL-terminated
 ; C-strings: filename, mode, then each option name NUL value NUL. An OACK is a

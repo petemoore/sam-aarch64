@@ -707,6 +707,13 @@ netboot-client: $(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map
 $(BUILD)/netboot_client_boot.bin: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_client_boot.bin src/netboot/netboot_client.asm
+	@sz=$$(stat -c%s $(BUILD)/netboot_client_boot.bin); \
+	 if [ $$sz -gt 16384 ]; then \
+	   echo "ERROR: netboot_client_boot.bin is $$sz bytes — a bootable netboot program must fit"; \
+	   echo "section C (<=16384, &8000-&BFFF). Section D is ROM1 at boot, so code/data above"; \
+	   echo "&BFFF is NOT loaded into RAM and the program crashes. See i119/i125."; \
+	   exit 1; \
+	 else echo "section-C fit OK: $$sz/16384 bytes (ends &$$(printf '%04X' $$((32768+sz))))"; fi
 
 netboot-client-boot: $(BUILD)/netboot_client_boot.bin
 

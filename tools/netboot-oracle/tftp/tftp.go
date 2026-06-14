@@ -37,14 +37,20 @@ const (
 	ErrOptionNegRefused = 8
 )
 
-// ClientOptionSet is the RRQ option set the i82 client requests (the settled
-// recommendation, research note §5.7). blksize=1428 fits one Ethernet frame
-// (no reassembly); windowsize=4 fits the 6.5 KB ENC RX ring.
+// ClientOptionSet is the RRQ option set the i82 client requests. blksize=1428
+// fits one Ethernet frame (no reassembly); tsize=0 asks the server to report the
+// file's size in the OACK; timeout=2 is the retransmit hint.
+//
+// windowsize is deliberately NOT requested: per RFC 7440 a client that asks for
+// windowsize must handle windowed delivery (ACK only the last block of each
+// window, not every block), which this lock-step receiver does not — requesting
+// it would break against any server that grants it (e.g. macOS tftpd OACKs
+// windowsize). Windowed transfer is a future throughput optimization; until then
+// the client stays a correct lock-step (one ACK per block) RFC 1350/2347 client.
 var ClientOptionSet = []Option{
 	{"blksize", "1428"},
 	{"tsize", "0"},
 	{"timeout", "2"},
-	{"windowsize", "4"},
 }
 
 // Option is one TFTP option (name=value, both NUL-terminated on the wire).
