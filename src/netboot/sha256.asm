@@ -35,8 +35,8 @@
 
 ; ===========================================================================
 ; Inline-able macros for the hot 4-byte primitives. Defined as pyz80 MACROs so
-; the hot call sites can emit the body directly and elide the call/ret (27T)
-; per invocation — sha_add4 alone runs ~648x per compression. Each macro body
+; the hot call sites emit the body directly and elide the call/ret (27T) per
+; invocation — the 4-byte add runs ~768x per compression. Each macro body
 ; carries NO internal label (the byte loop is fully unrolled) so it can expand
 ; any number of times.
 ; ===========================================================================
