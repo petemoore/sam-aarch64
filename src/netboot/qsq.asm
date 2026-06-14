@@ -57,9 +57,10 @@ mul8:
                 add     hl, de
                 ld      e, (hl)
                 inc     hl
-                ld      d, (hl)                 ; DE = QSQ[a+b]
-                push    de                      ; save QSQ[a+b]
-                ; QSQ[|a-b|]: build the |difference| index, fetch the entry.
+                ld      d, (hl)                 ; DE = QSQ[a+b], kept here across the next lookup
+                ; QSQ[|a-b|]: build the |difference| index, fetch the entry.  B/C (the
+                ; saved operands) are dead after the difference, so the second lookup
+                ; reuses BC for the table base and entry — no push/pop of QSQ[a+b].
                 ld      a, b
                 sub     c                       ; A = a-b, CF if a<b
                 jr      nc, mul8_diff_pos
@@ -68,14 +69,15 @@ mul8_diff_pos:
                 ld      l, a
                 ld      h, 0
                 add     hl, hl                  ; 2*|a-b|
-                ld      de, qsq_table
-                add     hl, de
-                ld      e, (hl)
+                ld      bc, qsq_table
+                add     hl, bc
+                ld      c, (hl)
                 inc     hl
-                ld      d, (hl)                 ; DE = QSQ[|a-b|]
-                pop     hl                      ; HL = QSQ[a+b]
+                ld      b, (hl)                 ; BC = QSQ[|a-b|]
+                ld      l, e
+                ld      h, d                    ; HL = QSQ[a+b]
                 or      a                       ; clear carry
-                sbc     hl, de                  ; HL = QSQ[a+b] - QSQ[|a-b|] = a*b
+                sbc     hl, bc                  ; HL = QSQ[a+b] - QSQ[|a-b|] = a*b
                 ret
 
 ; ---------------------------------------------------------------------------

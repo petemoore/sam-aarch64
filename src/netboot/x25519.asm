@@ -212,9 +212,8 @@ fe_121665_inner:
                 ld      a, (ix+0)
                 inc     ix
                 ld      e, a
-                ld      d, 0
                 ld      a, (fe_ai)
-                call    mul8                    ; HL = a[i] * c[j]
+                call    mul8                    ; HL = a[i] * c[j] (mul8 ignores D)
 
                 ld      a, (iy+0)
                 ld      c, a
@@ -525,9 +524,8 @@ kmul16_inner:
                 ld      a, (ix+0)               ; B[j]
                 inc     ix
                 ld      e, a
-                ld      d, 0
                 ld      a, (fe_ai)
-                call    mul8                    ; HL = A[i] * B[j]
+                call    mul8                    ; HL = A[i] * B[j] (mul8 ignores D)
 
                 ld      a, (iy+0)
                 ld      c, a
@@ -641,9 +639,8 @@ fe_sqr_inner:
                 ld      a, (ix+0)
                 inc     ix
                 ld      e, a
-                ld      d, 0
                 ld      a, (fe_ai)
-                call    mul8                    ; HL = a[i] * a[j]
+                call    mul8                    ; HL = a[i] * a[j] (mul8 ignores D)
 
                 ld      a, (iy+0)
                 ld      c, a
@@ -769,8 +766,7 @@ fe_m38_loop:
                 ld      a, (ix+0)
                 inc     ix
                 ld      e, 38
-                ld      d, 0
-                call    mul8                    ; HL = H[i] * 38
+                call    mul8                    ; HL = H[i] * 38 (mul8 ignores D)
                 ld      a, (fe_car)
                 ld      c, a
                 ld      b, 0
@@ -832,8 +828,7 @@ fe_reduce33:
 
                 ld      a, c                    ; HL = 19 * hi
                 ld      e, 19
-                ld      d, 0
-                call    mul8
+                call    mul8                    ; (mul8 ignores D)
                 call    fe_acc_add_hl           ; FE_ACC += HL
                 jr      fe_reduce33
 
