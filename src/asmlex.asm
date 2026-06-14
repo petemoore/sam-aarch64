@@ -1,8 +1,8 @@
-; asmlex.asm — aarch64 assembler-source tokenizer, i48c Brick B1.
+; asmlex.asm — aarch64 assembler-source tokenizer, i48c Bricks B1–B1d.
 ;
 ; SAM-side Z80 port of the Go authority's lexer:
 ;   tools/sam-aarch64/frontend/lexer.go  (Lex / lexer.next / readIdent /
-;   readNumber / readLineComment / readBlockComment).
+;   readNumber / readLineComment / readBlockComment / readCharLit / readString).
 ;
 ; i48c is the editor input path — the SAM-side mirror of the host front-end
 ; (text -> symbolic overlay). asmlex is the TOKENIZER: it splits source bytes
@@ -10,10 +10,11 @@
 ; integer BASE, and the int64 VALUE. Brick B1 built the token extents (kind +
 ; span + base); B1b added the int64 value of numeric literals (parseIntInBase)
 ; and character literals (readCharLit); B1c added local-label refs (Nf/Nb,
-; readNumberOrLocal). Still deferred to Brick B1d: string literals. cpp
-; line-directives are out of scope (a preprocessor artifact, like the host
-; Preprocess pass — a line-start '#' lexes as a line comment). asmlex is
-; byte-faithful to Lex on the input domain spanned by the supported tokens.
+; readNumberOrLocal); B1d adds string literals (readString). This completes the
+; editor lexer. cpp line-directives are out of scope (a preprocessor artifact,
+; like the host Preprocess pass — a line-start '#' lexes as a line comment).
+; asmlex is byte-faithful to Lex on the input domain spanned by the supported
+; tokens.
 ;
 ; TOKEN RECORD (LEX_TOKS, 14 bytes each, in emission order):
 ;   kind:1 | span_ptr:2 LE | span_len:2 LE | base:1 | value:8 LE
@@ -22,9 +23,11 @@
 ; AFTER any 0x/0b prefix (matching Go's Tok.Text), base is 2/10/16, and value is
 ; the parsed int64; for a character-literal TOK_INT value is the char code and
 ; there is no span; for the two comment kinds the span is the comment body
-; (matching Go's Tok.Bytes). For TOK_LOCALREF the value holds the label digit
-; and base holds the 'f'/'b' direction char (no span). Other tokens carry a zero
-; span/base/value. The trailing TOK_EOF token is emitted and ends the stream.
+; (matching Go's Tok.Bytes). For TOK_STRING the span points into LEX_STRPOOL and
+; holds the DECODED body bytes (escapes resolved, matching Go's Tok.Bytes), not
+; the raw source. For TOK_LOCALREF the value holds the label digit and base holds
+; the 'f'/'b' direction char (no span). Other tokens carry a zero span/base/value.
+; The trailing TOK_EOF token is emitted and ends the stream.
 ;
 ; PROVENANCE: algorithmic port of lexer.go; the flat token-array layout is
 ; original for the Z80 port. VERIFICATION: tools/netboot-oracle/z80/asmlex_test.go
@@ -44,7 +47,7 @@ TOK_EOF:          equ 0
 TOK_EOL:          equ 1
 TOK_IDENT:        equ 2
 TOK_INT:          equ 3
-TOK_STRING:       equ 4     ; deferred to B1d
+TOK_STRING:       equ 4     ; span -> decoded body in LEX_STRPOOL
 TOK_COMMA:        equ 5
 TOK_HASH:         equ 6
 TOK_COLON:        equ 7
@@ -91,6 +94,8 @@ lex_run:
                 ld      (LEX_ERR), a
                 ld      hl, LEX_TOKS
                 ld      (LEX_TOKPTR), hl
+                ld      hl, LEX_STRPOOL
+                ld      (LEX_STRP), hl      ; string-pool write ptr
                 ld      hl, 0
                 ld      (LEX_TOKN), hl
 lex_run_loop:
@@ -347,9 +352,11 @@ lex_d_identchk:
                 jp      c, lex_read_ident
                 cp      &27                 ; '\'' char literal
                 jp      z, lex_read_char
-                ; '"' (string) is Brick B1d; cpp line-directives are out of scope
-                ; (a preprocessor artifact, like the host Preprocess pass); a
-                ; line-start '#' is handled above as a line comment. Else error.
+                cp      &22                 ; '"' string literal
+                jp      z, lex_read_string
+                ; cpp line-directives are out of scope (a preprocessor artifact,
+                ; like the host Preprocess pass); a line-start '#' is handled
+                ; above as a line comment. Else error.
 lex_op_err:
                 ld      a, 1
                 ld      (LEX_ERR), a
@@ -890,6 +897,136 @@ lex_char_err:
                 jp      lex_put_simple
 
 ; ---------------------------------------------------------------------------
+; lex_read_string — TOK_STRING from a "..." literal (port of readString). The
+; decoded body bytes are appended to the string pool at (LEX_STRP); the token
+; span points at them (ptr/len), matching Go's Tok.Bytes (the decoded bytes, not
+; the raw source). Escapes: n r t \ " ' 0 and \xNN. Unterminated string, a
+; truncated/bad \xNN, or an unknown escape -> LEX_ERR.
+; ---------------------------------------------------------------------------
+lex_read_string:
+                call    lex_advance         ; past opening '"'
+                ld      hl, (LEX_STRP)
+                ld      (LEX_RP), hl        ; span start = pool write ptr
+lex_str_loop:
+                call    lex_at_end
+                jr      c, lex_str_err      ; unterminated string literal
+                ld      hl, (LEX_CUR)
+                ld      a, (hl)
+                call    lex_advance         ; consume c
+                cp      &22                 ; '"' -> end of string
+                jr      z, lex_str_end
+                cp      &5C                 ; '\' -> escape
+                jr      z, lex_str_escape
+                call    lex_str_emit        ; literal byte: append A to pool
+                jr      lex_str_loop
+lex_str_escape:
+                call    lex_at_end
+                jr      c, lex_str_err      ; unterminated string escape
+                ld      hl, (LEX_CUR)
+                ld      a, (hl)
+                call    lex_advance         ; consume escape char
+                cp      &78                 ; 'x' -> \xNN hex escape
+                jr      z, lex_str_hex
+                call    lex_char_escape     ; n/r/t/\/'/"/0; CY set if unknown
+                jr      c, lex_str_err
+                call    lex_str_emit
+                jr      lex_str_loop
+lex_str_hex:
+                ; Need two hex-digit chars present (Go: l.pos+1 >= len -> trunc;
+                ; at this point CUR points at the first hex digit).
+                ld      hl, (LEX_CUR)
+                inc     hl
+                ld      de, (LEX_END)
+                or      a
+                sbc     hl, de              ; (CUR+1)-END; carry iff CUR+1 < END
+                jr      nc, lex_str_err     ; CUR+1 >= END: truncated \xNN
+                ld      hl, (LEX_CUR)
+                ld      a, (hl)
+                call    lex_advance
+                call    lex_hex_nibble      ; A = 0..15, CY set if not hex
+                jr      c, lex_str_err
+                add     a, a                ; hi nibble * 16
+                add     a, a
+                add     a, a
+                add     a, a
+                ld      c, a                ; save hi*16 (lex_hex_nibble preserves C)
+                ld      hl, (LEX_CUR)
+                ld      a, (hl)
+                call    lex_advance
+                call    lex_hex_nibble
+                jr      c, lex_str_err
+                add     a, c                ; hi*16 + lo
+                call    lex_str_emit
+                jr      lex_str_loop
+lex_str_end:
+                ld      hl, (LEX_STRP)
+                ld      de, (LEX_RP)
+                or      a
+                sbc     hl, de              ; span length = STRP - RP (decoded body)
+                ld      (LEX_RL), hl
+                call    lex_val_zero
+                xor     a
+                ld      (LEX_RB), a
+                ld      a, TOK_STRING
+                ld      (LEX_RK), a
+                jp      lex_put
+lex_str_err:
+                ld      a, 1
+                ld      (LEX_ERR), a
+                ld      a, TOK_EOF
+                jp      lex_put_simple
+
+; ---------------------------------------------------------------------------
+; lex_str_emit — append the byte in A to the string pool at (LEX_STRP); STRP++.
+; Preserves A.
+; ---------------------------------------------------------------------------
+lex_str_emit:
+                push    hl
+                ld      hl, (LEX_STRP)
+                ld      (hl), a
+                inc     hl
+                ld      (LEX_STRP), hl
+                pop     hl
+                ret
+
+; ---------------------------------------------------------------------------
+; lex_hex_nibble — A = char; returns A = 0..15 (CY clear) for a hex digit
+; (0-9/a-f/A-F), or CY set if not a hex digit. (Port of hexNibble's -1 sentinel.)
+; Preserves C.
+; ---------------------------------------------------------------------------
+lex_hex_nibble:
+                cp      &30
+                jr      c, lhn_bad
+                cp      &39+1
+                jr      c, lhn_dec          ; '0'..'9'
+                cp      &61
+                jr      c, lhn_upper        ; between '9'+1 and 'a' -> try A-F
+                cp      &66+1
+                jr      c, lhn_lower        ; 'a'..'f'
+                jr      lhn_bad
+lhn_upper:
+                cp      &41
+                jr      c, lhn_bad
+                cp      &46+1
+                jr      c, lhn_upval        ; 'A'..'F'
+                jr      lhn_bad
+lhn_dec:
+                sub     &30
+                or      a                   ; clear carry
+                ret
+lhn_lower:
+                sub     &61-10              ; 'a'..'f' -> 10..15
+                or      a
+                ret
+lhn_upval:
+                sub     &41-10              ; 'A'..'F' -> 10..15
+                or      a
+                ret
+lhn_bad:
+                scf
+                ret
+
+; ---------------------------------------------------------------------------
 ; lex_at_end — carry set iff LEX_CUR >= LEX_END (no more input).
 ; ---------------------------------------------------------------------------
 lex_at_end:
@@ -1061,6 +1198,7 @@ LEX_RL:         defs 2          ; staging: span length
 LEX_RB:         defs 1          ; staging: base (TOK_INT) else 0
 LEX_RV:         defs 8          ; staging: int64 value (TOK_INT) else 0
 LEX_VTMP:       defs 8          ; scratch for the multiply-by-base step
+LEX_STRP:       defs 2          ; string-pool write pointer (TOK_STRING bodies)
 
 ; ===========================================================================
 ; Public I/O buffers
@@ -1068,3 +1206,4 @@ LEX_VTMP:       defs 8          ; scratch for the multiply-by-base step
 LEX_ERR:        defs 1          ; non-zero after a lexical error
 LEX_SRC:        defs 2048       ; input source bytes (caller writes; BC = len)
 LEX_TOKS:       defs 3584       ; output token records (14 B each -> 256 tokens)
+LEX_STRPOOL:    defs 2048       ; decoded TOK_STRING bodies (span ptr/len index here)
