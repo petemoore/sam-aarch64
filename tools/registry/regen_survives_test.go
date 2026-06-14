@@ -134,6 +134,38 @@ func TestDependsOnRoundTrip(t *testing.T) {
 	}
 }
 
+// TestGenItemCellRendersDescription is the real-content guard: the generator must
+// render the item's DESCRIPTION (not just the short title) in the item cell, with
+// correct escaping — a bold title lead-in, literal pipes escaped, internal newlines
+// as <br>, and NO spurious trailing <br> from a block scalar's trailing newline.
+// (The other fixtures have one-line descriptions, so this is the case that caught
+// the original "title-only" rendering bug.)
+func TestGenItemCellRendersDescription(t *testing.T) {
+	reg := &Registry{Items: []Item{{
+		ID:          "i900",
+		Title:       "Priority queue",
+		Description: "First line with a|b pipe.\nSecond line after a newline.\n",
+		Status:      StatusOpen,
+	}}}
+	var open, closed bytes.Buffer
+	if err := genItemsOpenClosed(reg, &open, &closed); err != nil {
+		t.Fatalf("gen: %v", err)
+	}
+	out := open.String()
+	if !contains(out, "**Priority queue** — First line") {
+		t.Errorf("item cell missing the bold-title lead-in + description:\n%s", out)
+	}
+	if !contains(out, `a\|b`) {
+		t.Errorf("literal pipe not escaped to a\\|b:\n%s", out)
+	}
+	if !contains(out, "pipe.<br>Second line") {
+		t.Errorf("internal newline not rendered as <br>:\n%s", out)
+	}
+	if contains(out, "newline.<br> |") {
+		t.Errorf("spurious trailing <br> at the cell end (block-scalar trailing newline):\n%s", out)
+	}
+}
+
 // TestBinaryGenMatchesValidFixture builds the registry binary (if present) and
 // confirms `validate` exits 0 on the fixture and `gen` exits 0.
 func TestBinaryGenMatchesValidFixture(t *testing.T) {
