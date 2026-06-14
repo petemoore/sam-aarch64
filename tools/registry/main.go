@@ -6,13 +6,26 @@
 //	registry validate <items.yaml> [questions.yaml]
 //	registry gen     <items.yaml> <questions.yaml>
 //
-// Exit codes: 0 = ok, 1 = validation or drift error, 2 = usage error.
+//	Mutating subcommands (operate on testdata/ and registry/.id-ledger.txt;
+//	tool is dormant — does NOT touch docs/notes/*.md):
+//
+//	registry next-id [--space items|questions]
+//	registry add     --id … --title … --desc … --status … --owner … [--parent …] [--dep …]… [--ref …]…
+//	registry split   --parent iN --child-id iN-bM --title …
+//	registry set-status --id iN --status … [--pr N]
+//	registry set-pr  --id iN --pr N [--role completing|followup]
+//	registry dep     add|rm --id iN --on iM|qN
+//	registry answer  --id qN
+//
+// Exit codes: 0 = ok, 1 = validation or operation error, 2 = usage error.
 package main
 
 import (
 	"bytes"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 )
 
 func main() {
@@ -26,6 +39,20 @@ func main() {
 		runValidate(os.Args[2:])
 	case "gen":
 		runGen(os.Args[2:])
+	case "next-id":
+		runNextID(os.Args[2:], defaultMutatorPaths())
+	case "add":
+		runAdd(os.Args[2:], defaultMutatorPaths())
+	case "split":
+		runSplit(os.Args[2:], defaultMutatorPaths())
+	case "set-status":
+		runSetStatus(os.Args[2:], defaultMutatorPaths())
+	case "set-pr":
+		runSetPR(os.Args[2:], defaultMutatorPaths())
+	case "dep":
+		runDep(os.Args[2:], defaultMutatorPaths())
+	case "answer":
+		runAnswer(os.Args[2:], defaultMutatorPaths())
 	default:
 		fmt.Fprintf(os.Stderr, "registry: unknown subcommand %q\n", cmd)
 		usage()
@@ -37,6 +64,39 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  registry validate <items.yaml> [questions.yaml]")
 	fmt.Fprintln(os.Stderr, "  registry gen      <items.yaml> <questions.yaml>")
+	fmt.Fprintln(os.Stderr, "  registry next-id  [--space items|questions]")
+	fmt.Fprintln(os.Stderr, "  registry add      --id … --title … --desc … --status … --owner … [--parent …] [--dep …]… [--ref …]…")
+	fmt.Fprintln(os.Stderr, "  registry split    --parent iN --child-id iN-bM --title …")
+	fmt.Fprintln(os.Stderr, "  registry set-status --id iN --status … [--pr N]")
+	fmt.Fprintln(os.Stderr, "  registry set-pr   --id iN --pr N [--role completing|followup]")
+	fmt.Fprintln(os.Stderr, "  registry dep      add|rm --id iN --on iM|qN")
+	fmt.Fprintln(os.Stderr, "  registry answer   --id qN")
+}
+
+// defaultMutatorPaths returns the testdata paths used by all mutating
+// subcommands. The tool is dormant (spec §"Rollout discipline"): it operates
+// only on testdata/ and the .id-ledger.txt in its own directory, never on
+// docs/notes/*.md.
+func defaultMutatorPaths() mutatorPaths {
+	dir := toolDir()
+	return mutatorPaths{
+		itemsYAML:     filepath.Join(dir, "testdata", "items.yaml"),
+		questionsYAML: filepath.Join(dir, "testdata", "questions.yaml"),
+		registryDir:   dir, // .id-ledger.txt lives here alongside the tool sources
+	}
+}
+
+// toolDir returns the directory containing the registry tool source.
+// Uses runtime.Caller so the path is correct regardless of the working directory
+// from which the binary is invoked.
+func toolDir() string {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		// Fallback: use the executable's directory.
+		exe, _ := os.Executable()
+		return filepath.Dir(exe)
+	}
+	return filepath.Dir(thisFile)
 }
 
 func runValidate(args []string) {
