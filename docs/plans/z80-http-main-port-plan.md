@@ -1,15 +1,15 @@
 # Plan: port the Go `http.Provisioner` to a host-verifiable Z80 `http_main` multi-file fetch loop
 
-> **STATUS (2026-06-16): Bricks 1–6 ✅ DONE (the full host-verifiable slice) — PRs #308–#314.
-> Brick 7 is DEFERRED to hardware/Pete — see [`q18`](../notes/question-registry-open.md).**
-> Brick 7 (the bootable migration + the real B-DOS HSAVE-per-record store leaf) is NOT
-> autonomous: the record cap is "a hardware detail pinned when the real persist is built"
-> (`bdos/span.go`), and the HSAVE leaf is non-host-verifiable (the q16 hardware gate), so it
-> would merge unverified hardware code with a guessed cap. The plan's own risk note (Brick 7)
-> already sanctions this: "if the B-DOS spanning Store isn't ready, ship Bricks 1–6 (all
-> host-verified) and defer Brick 7 (the legacy `http_main` stays meanwhile)." This plan stays
-> in flight until Brick 7 lands (deleted by that PR); do NOT re-attempt Brick 7 autonomously
-> without q18 resolved.
+> **STATUS (2026-06-17): Bricks 1–6 ✅ DONE (the full host-verifiable slice) — PRs #308–#314.
+> Brick 7 is now UNBLOCKED — q18 RESOLVED (Pete 2026-06-17): build it speculatively.**
+> Build Brick 7 now: assemble + fit under &10000 + host loop-tests green, with the record cap
+> as a decoupled provisional `equ` constant (real value pinned on hardware → q22) and the
+> HSAVE store leaf honestly marked **unverified until Pete's Trinity test** (CLAUDE.md §5 — no
+> faked success). **A 2026-06-17 read-only feasibility pass (recorded in the Brick 7 section
+> below) DISPROVED the footprint fear**: deleting the legacy 16 KB `STAGING` buffer more than
+> funds sha256 — at a provisional cap ≤ 4 KB the bootable lands ~27–28 KB with ~4–7 KB headroom
+> under &10000. So this is a BOUNDED, single-PR mechanical migration, not a design. This plan
+> stays in flight until Brick 7 lands (deleted by that PR).
 
 **Item:** i100 / i101 (the HTTP firmware-fetch deliverable). **Authority:** `tools/netboot-oracle/http/provision.go` (`Provisioner`, landed in the i100 Go-authority PR) — the byte-for-byte porting target. **Lifecycle:** this plan is committed as execution starts (Brick 1 in the same PR); it is **deleted by the PR that completes Brick 7**.
 
@@ -83,8 +83,11 @@ Every brick: build the host-test binary, run its `go test`, and check the bootab
 - **Verify:** `make netboot-http-main` ; `go test -run 'TestProvision.*Z80' ./...` ; `make ci-netboot-z80` ; bootable: the `HTTP_HOST_PTR` edit grows it ~2 bytes (behavior-preserving, re-verified by `TestNetbootHTTPFullFetch`); legacy bootable `http_main` runtime unchanged.
 - **Risk:** the "synthetic body, real manifest path" test construction — build the Go plan from the Z80-read-back paths; fallback: a host-test-only manifest override hook (prefer the read-back to a second source of truth).
 
-### Brick 7 (FINAL — intentionally rewrites the bootable) ⏸ DEFERRED — hardware/Pete (q18)
-(Deferred 2026-06-16: the record cap is a real-Trinity RAM decision `bdos/span.go` leaves to "when the real persist is built", and the HSAVE leaf is non-host-verifiable (the q16 gate) + footprint-sensitive — so building it now means merging unverified hardware code with a guessed cap. The plan's own Risk (1) below sanctions shipping Bricks 1–6 and deferring this. Resolve **q18** before re-attempting.)
+### Brick 7 (FINAL — intentionally rewrites the bootable) ▶ UNBLOCKED — q18 resolved (build speculatively)
+**Feasibility CONFIRMED (read-only pass, 2026-06-17 — i100b).** All builds load at `org &8000`, limit `&10000`. Measured: current bootable `netboot_http_boot.bin` = 31318 B (ends &FA56) — it carries a 16 KB `STAGING` buffer and the legacy single-file `http_main`, and **no sha256 / no verify**. Brick 7 deletes `STAGING` + the legacy main and un-guards sha256 + streaming + verify into the bootable. The 16 KB `STAGING` removal dominates the +5.2 KB sha256 + ~1.5 KB streaming/verify/fw_span/leaf, so it shrinks net. A hard build experiment (flip the 6 `NETBOOT_HOSTTEST` guards on, drop `STAGING`, size `CONN_SINK_OUT` = record cap) measured: cap 2048 → 26010 B (6758 B headroom); cap 4096 → 28058 B (4710 B headroom); cap 8192 → 32154 B (614 B, tight); cap 16384 → overflow. **Recommend provisional cap = 4096** (comfortable; `BD_SAVE_SIZE` is 2 bytes so the cap is ≤65535 regardless; footprint forces it far smaller). **pyz80 does NOT error on >&10000 overflow** (confirmed) — Brick 7 MUST add an explicit scripted `end < &10000` fit-assertion (the Makefile recipe + a check step); it is not automatic.
+- **Un-guard (the exact guards):** in `tcp_conn.asm` the streaming/verify/sha256 block is `NETBOOT_HOSTTEST`-only — `:297,:306` (sink-branch dispatch), `:324-373` (`conn_flush_loop`), `:388-402` (`conn_flush_final`), `:404-538` (`storage_sink_flush`/`storage_sink_leaf`/`conn_verify_init`/`conn_verify_final`), the `CONN_SINK_*`/`CONN_HASH*` data `:716-735`, and `include "sha256.asm"` `:751-753`. Convert these to be in BOTH builds (always-on, or a `NETBOOT_STREAM` symbol defined by both targets). In `http_main.asm` the no-op `store_begin`/`store_end` (`:279-280`) become the real leaf.
+- **Legacy-test caveat (resolve during impl):** `netboot_http_test.go::TestNetbootHTTPFullFetch`/`TestNetbootHTTPIgnoresStrayARP` exercise the legacy bootable fetch. Deleting the legacy `http_main` may break them — confirm whether they test `http_fetch_*` (kept → stay green) or the legacy main (deleted → update/remove the test). Do NOT silently weaken; fix or re-point honestly.
+- **HSAVE leaf:** `storage_sink_leaf` per flushed window calls `fw_span_chunk_len` (`fw_span.asm:57`, `min(cap, remaining)`) + `fw_span_record_name` (`:90`, `<prefix7><NNN>`) + `bdos_fill_save_uifa` (`bdos_seam.asm:176`, host-verified UIFA arithmetic) then the **hardware-gated** `bdos_select_record`/`bdos_save_hook` (`bdos_seam.asm:211-257`, `rst 8`/`defb 132` HSAVE — non-host-verifiable, q16 gate). Host-verifiable: all UIFA/DIFA + span length/naming. Hardware-only: the RST 8 dispatch + EEPROM read + ENC silicon + end-to-end fetch.
 - **Goal:** the real `http_main` drives the SAME `prov_*` loop (streaming), so hardware runs the host-verified path; the only hardware-gated leaf is the real B-DOS HSAVE.
 - **Files:** move the bootable entry into `http_main.asm`: EEPROM MAC/IP → fill config + `BASE_*`/`PROV_*`/`CONN_SINK_ENABLED=1`/window → `drv_init` → `prov_first` → loop `prov_onframe`/`prov_next` → halt. Hardware (non-`NETBOOT_HOSTTEST`) `storage_sink_leaf`/`store_begin`/`store_end` = `fw_span` + `bdos_seam` bounded HSAVE per window. Delete the legacy bootable `http_main` from `netboot_http.asm` (keep `http_fetch_*`). Repoint the Makefile `netboot_http_boot.bin` recipe to `http_main.asm` (+ fw_source/body_sink/fw_span/eeprom prereqs).
 - **Test:** `netboot_http_test.go` + all `TestProvision*Z80` stay green (host path intact). No new host test (the HSAVE leaf is the q16 hardware gate).
