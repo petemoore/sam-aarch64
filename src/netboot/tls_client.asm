@@ -4,13 +4,17 @@
 ; is a mechanical port.  This file COMPOSES the five landed handshake bricks plus
 ; x25519 into one binary and adds the client driver on top.
 ;
-; This increment lands the composition + the ClientHello sub-brick:
+; This file carries the full 6a record-driven state machine:
 ;   tls_client_init  — mirror NewClientDeterministic + the X25519 pubkey step.
 ;   tls_client_first — mirror Client.First (build ClientHello, fold the transcript,
 ;                      emit the plaintext handshake record).
-; The record-driven state machine (tls_client_on_record, mirroring Client.OnRecord)
-; is the next increment.  TC_* below lays out the full 6a state block now so that
-; increment does not reshuffle the host-test ABI.
+;   tls_client_on_record — mirror Client.OnRecord: dispatch one inbound record on
+;                      its type to tls_client_on_server_hello (0x16 — parse the
+;                      ServerHello, fold the transcript, run the ECDHE and derive
+;                      the handshake secrets) or tls_client_on_encrypted (0x17 —
+;                      decrypt the server flight through to Finished and seal the
+;                      client Finished); ChangeCipherSpec (0x14) is ignored.
+; TC_* below lays out the full 6a state block.
 ;
 ; AUTHORITY / VERIFICATION: host-verified by tls_client_test.go (capture-then-
 ; replay against the Go authority): drive NewClientDeterministic against
