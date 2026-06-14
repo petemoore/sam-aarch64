@@ -14,7 +14,12 @@ an end-to-end Pi boot, which stay gated on i80 / real Trinity.
   authority for the Z80 `build_udp_frame` fresh-frame primitive trinload lacks.
 - `dhcp` — DHCP parse + the OFFER/ACK builder (i86), incl. the option-43 blob.
 - `tftp` — RRQ/OACK/DATA/ACK/ERROR + serve-by-name resolve + the client/server
-  transfer-loop state machines (the Go reference for the Z80 DATA/ACK loops).
+  transfer-loop state machines + the client originate front (the Go reference
+  for the Z80 DATA/ACK loops + the ARP-for-server/RRQ-send front).
+- `bdos` — the storage seam: the UIFA/DIFA field arithmetic gluing the server
+  (serve by name) + client (write by name) to the B-DOS hooks, plus a flat-
+  directory model. Models the field maths only — the RST 8 hook dispatch is
+  NOT host-verifiable (no ROM in the harness) and stays gated on real Trinity.
 - `pcap` — dependency-free libpcap/pcapng reader. `golden` — masked vectors.
 - `z80/` — a nested Go module: a flat-memory koron-go/z80 harness that runs the
   SAM-side Z80 port (`src/netboot/*.asm`) and byte-compares its output against

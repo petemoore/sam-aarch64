@@ -65,7 +65,7 @@ ci-netboot-oracle:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-z80-routines ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-z80-routines ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -183,8 +183,23 @@ $(BUILD)/netboot_tftp_client_front.bin $(BUILD)/netboot_tftp_client_front.map: s
 
 netboot-tftp-client-front: $(BUILD)/netboot_tftp_client_front.bin $(BUILD)/netboot_tftp_client_front.map
 
+# bdos-seam — the netboot storage seam: the UIFA/DIFA field arithmetic gluing the
+# i83 server (serve by name) + i82 client (write by name) to the B-DOS hooks.
+# Built with NETBOOT_HOSTTEST so the RST 8 hook dispatch (HGTHD/HSAVE/HRECORD,
+# NOT host-verifiable — no ROM/SAMDOS in the harness) is excluded; the host test
+# (bdos_seam_test) byte-compares the built UIFA + decoded size vs the Go authority
+# (tools/netboot-oracle/bdos).  The hook path stays unverified until real Trinity.
+$(BUILD)/netboot_bdos_seam.bin $(BUILD)/netboot_bdos_seam.map: src/netboot/bdos_seam.asm
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_STANDALONE=1 -D NETBOOT_HOSTTEST=1 \
+	    --obj=$(BUILD)/netboot_bdos_seam.bin \
+	    --mapfile=$(BUILD)/netboot_bdos_seam.map \
+	    src/netboot/bdos_seam.asm
+
+netboot-bdos-seam: $(BUILD)/netboot_bdos_seam.bin $(BUILD)/netboot_bdos_seam.map
+
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam
 
 ci-netboot-z80: netboot-z80-routines
 	cd tools/netboot-oracle/z80 && go test ./...
