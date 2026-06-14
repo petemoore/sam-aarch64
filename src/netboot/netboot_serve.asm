@@ -49,6 +49,14 @@
 
                 org     &8000
 
+                ; The boot entry (CALL 32768) must be the first instruction at
+                ; &8000. serve_main is defined later (under NETBOOT_HOSTTEST==0);
+                ; the host harness invokes routines by symbol and never CALLs
+                ; 32768, so this jp is bootable-only.
+                if defined(NETBOOT_HOSTTEST)==0
+                jp      serve_main
+                endif
+
 ; ===========================================================================
 ; Frame field offsets in the received frame (RX_ prefix so they don't clash with
 ; the included primitives' OFF_*/AR_OFF_*).

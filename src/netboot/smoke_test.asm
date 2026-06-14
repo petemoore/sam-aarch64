@@ -46,6 +46,14 @@
 
                 org     &8000
 
+                ; The boot entry (CALL 32768) must be the first instruction at
+                ; &8000. smoke_main is defined later (under NETBOOT_HOSTTEST==0);
+                ; the host harness invokes routines by symbol and never CALLs
+                ; 32768, so this jp is bootable-only.
+                if defined(NETBOOT_HOSTTEST)==0
+                jp      smoke_main
+                endif
+
 ; ===========================================================================
 ; The composed state machine. It supplies the single org; the included
 ; primitives org only under -D NETBOOT_STANDALONE, so here they inherit this
