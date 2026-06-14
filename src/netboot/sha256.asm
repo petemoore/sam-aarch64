@@ -536,6 +536,9 @@ sha_round:
                 ld      hl, sha_t1+3
                 add4_body
                 ; T1 += Ch(e,f,g)  (clobbers IX/IY — that is why W/K are in memory)
+                ld      hl, wv_e                ; HL -> e (caller sets Ch's sources)
+                ld      de, wv_f                ; DE -> f
+                ld      ix, wv_g                ; IX -> g
                 call    sha_ch                  ; result in sha_tmpa
                 ld      de, sha_tmpa+3
                 ld      hl, sha_t1+3
@@ -555,6 +558,9 @@ sha_round:
                 ld      de, sha_t2
                 copy4_body
                 ; T2 += Maj(a,b,c)
+                ld      hl, wv_a                ; HL -> a (caller sets Maj's sources)
+                ld      ix, wv_b                ; IX -> b
+                ld      iy, wv_c                ; IY -> c
                 call    sha_maj                 ; result in sha_tmpa
                 ld      de, sha_tmpa+3
                 ld      hl, sha_t2+3
@@ -741,12 +747,11 @@ sha_bigsigma1:
 ; ---------------------------------------------------------------------------
 ; sha_ch — Ch(e,f,g) = (e AND f) XOR ((NOT e) AND g), computed in the simplified
 ; form g XOR (e AND (f XOR g)) — one fewer op per byte and no CPL.
-; Reads wv_e/wv_f/wv_g. Out: sha_tmpa = result. Clobbers A,B,DE,HL,IX,IY.
+; Source pointers come FROM THE CALLER: HL -> e[i], DE -> f[i], IX -> g[i] (the
+; unrolled round path picks rotated slots; the rolled path passes wv_e/f/g).
+; Out: sha_tmpa = result. Clobbers A,B,DE,HL,IX,IY.
 ; ---------------------------------------------------------------------------
 sha_ch:
-                ld      hl, wv_e                ; HL -> e[i]
-                ld      de, wv_f                ; DE -> f[i]
-                ld      ix, wv_g                ; IX -> g[i]
                 ld      iy, sha_tmpa            ; IY -> dst[i]
                 ld      b, 4
 sha_ch_lp:
@@ -765,12 +770,11 @@ sha_ch_lp:
 ; ---------------------------------------------------------------------------
 ; sha_maj — Maj(a,b,c) = (a AND b) XOR (a AND c) XOR (b AND c), computed in the
 ; simplified form (a AND b) OR (c AND (a XOR b)) — 1 XOR + 2 AND + 1 OR.
-; Reads wv_a/wv_b/wv_c. Out: sha_tmpa = result. Clobbers A,B,C,DE,HL,IX,IY.
+; Source pointers come FROM THE CALLER: HL -> a[i], IX -> b[i], IY -> c[i] (the
+; unrolled round path picks rotated slots; the rolled path passes wv_a/b/c).
+; Out: sha_tmpa = result. Clobbers A,B,C,DE,HL,IX,IY.
 ; ---------------------------------------------------------------------------
 sha_maj:
-                ld      hl, wv_a               ; HL -> a[i]
-                ld      ix, wv_b               ; IX -> b[i]
-                ld      iy, wv_c               ; IY -> c[i]
                 ld      de, sha_tmpa            ; DE -> dst[i]
                 ld      b, 4
 sha_maj_lp:
