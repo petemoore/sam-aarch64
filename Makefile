@@ -488,11 +488,26 @@ $(BUILD)/netboot_http_main.bin $(BUILD)/netboot_http_main.map: src/netboot/http_
 
 netboot-http-main: $(BUILD)/netboot_http_main.bin $(BUILD)/netboot_http_main.map
 
-# The bootable HTTP-fetch binary: the full program including the EEPROM config read
-# + the http_main fetch-then-HSAVE flow, for real Trinity.
-$(BUILD)/netboot_http_boot.bin: src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+# The bootable HTTP-fetch binary: the full program for real Trinity — the EEPROM
+# config read + the multi-file provisioning loop (http_main.asm) that streams each
+# firmware file through the SHA-256 verify into bounded HSAVE records. Built with
+# -D NETBOOT_STREAM=1 (no NETBOOT_HOSTTEST): the streaming sink + verify + sha256
+# build in, and http_main.asm owns the &8000 org so `jp http_main` is the boot
+# entry. The fit-check asserts the image ends at or before &10000 — pyz80 does NOT
+# error on an org overrun, so without it an over-budget boot image would assemble
+# silently (buildNetbootDisk enforces the same ceiling at disk-build time, but the
+# standalone `make netboot-http-boot` must catch it too).
+$(BUILD)/netboot_http_boot.bin $(BUILD)/netboot_http_boot.map: src/netboot/http_main.asm src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/eeprom.asm src/netboot/sha256.asm src/netboot/fw_source.asm src/netboot/body_sink.asm src/netboot/fw_span.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_http_boot.bin src/netboot/netboot_http.asm
+	pyz80 -D NETBOOT_STREAM=1 --obj=$(BUILD)/netboot_http_boot.bin \
+	    --mapfile=$(BUILD)/netboot_http_boot.map \
+	    src/netboot/http_main.asm
+	@end=$$(( 0x8000 + $$(wc -c < $(BUILD)/netboot_http_boot.bin) )); \
+	  if [ $$end -gt 65536 ]; then \
+	    printf 'netboot_http_boot.bin overflows the &10000 boot ceiling: ends at &%04X (%d bytes over)\n' $$end $$(( end - 65536 )) >&2; \
+	    exit 1; \
+	  fi; \
+	  printf 'netboot_http_boot.bin fits: ends at &%04X (%d bytes free under &10000)\n' $$end $$(( 65536 - end ))
 
 netboot-http-boot: $(BUILD)/netboot_http_boot.bin
 

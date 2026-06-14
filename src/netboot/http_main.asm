@@ -33,10 +33,21 @@
 ; Provisioner.First/OnFrame/Next). The bootable migration to this loop is the
 ; remaining brick.
 
+                ; Bootable build (NETBOOT_STREAM, no NETBOOT_HOSTTEST): own the
+                ; org so the boot entry is the first instruction at &8000 — the
+                ; address the netboot AUTO BASIC CALLs (CALL 32768). tcp_conn.asm
+                ; suppresses its own org under NETBOOT_STREAM so this is the single
+                ; org. The host-test build keeps tcp_conn as the org provider (this
+                ; block is skipped), so its layout is unchanged.
+                if defined(NETBOOT_HOSTTEST)==0
+                org     &8000
+                jp      http_main
+                endif
+
                 include "netboot_http.asm"      ; org &8000 + the fetch machine +
-                                                ; tcp_conn (+ streaming/verify under
-                                                ; NETBOOT_HOSTTEST) + http_get +
-                                                ; build_tcp_segment + encdrv + sha256
+                                                ; tcp_conn (+ streaming/verify) +
+                                                ; http_get + build_tcp_segment +
+                                                ; encdrv + sha256
                 include "fw_source.asm"         ; FW_MANIFEST + fw_plan_path
                                                 ; (NETBOOT_STANDALONE off -> no org)
                 include "body_sink.asm"         ; body_sink_write (header skip);
@@ -273,12 +284,10 @@ store_end:
                 inc     hl
                 ld      (PROV_STORE_COUNT), hl
                 ret
-                else
-; Bootable build: the real B-DOS HSAVE store leaf lands in Brick 7. Until then
-; these are no-ops so prov_start (which is assembled into the bootable) links.
-store_begin:    ret
-store_end:      ret
-                endif
+                endif  ; NETBOOT_HOSTTEST (host store double)
+                ; The bootable build's real store_begin / store_end /
+                ; storage_sink_leaf (the fw_span + B-DOS HSAVE-per-record leaf) are
+                ; in the "Brick 7" bootable section at the foot of this file.
 
 ; ===========================================================================
 ; Brick 6 — the rx-driven download loop: prov_first / prov_onframe / prov_next,
@@ -370,3 +379,228 @@ prov_next:
 PROV_IDX:        defw 0                 ; index of the file currently being fetched
 PROV_FILE_COUNT: defw FW_FILE_COUNT     ; number of files to fetch (host test sets it)
 PROV_STATUS:     defb PROV_CONTINUE     ; last prov_onframe status (Continue/File/All)
+
+; ===========================================================================
+; Brick 7 — the real-hardware bootable entry + the B-DOS HSAVE store leaf.
+;
+; This is the non-host-verifiable half (CLAUDE.md §5): the Trinity EEPROM
+; identity read, the ENC28J60 silicon init, and the per-record HSAVE to Trinity
+; storage cannot run in the flat-memory koron-go/z80 harness (no ROM / SAMDOS /
+; RST 8). It ships UNVERIFIED until exercised on real Trinity hardware. The wire +
+; fetch + verify path it drives (prov_first / prov_onframe / prov_next + the
+; streaming SHA-256) IS host-verified by the TestProvision*Z80 oracle tests over
+; the i80 emulation. Emulation-verified is not hardware-verified.
+;
+; The store leaf streams each fetched firmware file to Trinity as a sequence of
+; bounded HSAVE records (the i99/q16 record-spanning store): conn_accumulate's
+; streaming sink flushes one FW_RECORD_CAP-byte window at a time to
+; storage_sink_leaf, which hashes the window into the running verify and HSAVEs it
+; under the record name <prefix><NNN> (fw_span_record_name). Every record (incl.
+; a single-record small file) takes the suffixed <prefix><NNN> form — the serve
+; side (i101) reads the same convention from the manifest-known size; both are
+; hardware-gated, so the persist/serve naming is consistent rather than matching
+; bdos.SpanPlan's plain-name-when-single optimisation.
+; ===========================================================================
+                if defined(NETBOOT_HOSTTEST)==0
+
+                include "fw_span.asm"          ; fw_span_record_name (<prefix><NNN>)
+
+; The per-record HSAVE capacity (q22 — PROVISIONAL; confirm on Trinity). It is
+; the RAM budget for one HSAVE source; the record-split arithmetic is correct for
+; any cap, so the value is decoupled (a one-line change). It must be large enough
+; that the largest firmware file fits the 1000-record (3-digit index) bound:
+; start.elf is ~2.98 MB, so cap >= 2983; 4096 leaves headroom (727 records) and,
+; with CONN_FLUSH_BUF = one window + one max inbound payload, keeps the bootable
+; inside the &10000 budget.
+FW_RECORD_CAP:    equ 4096
+
+; --- the bootable firmware-fetch driver --------------------------------------
+; http_main — read the SAM's MAC + IP from the Trinity EEPROM, fill the connection
+; config + the per-file base port/ISS, init the ENC28J60, then drive the
+; multi-file provisioning loop: fetch each manifest file end to end, streaming its
+; body through the SHA-256 verify into bounded HSAVE records on Trinity storage.
+; On a bring-up failure it sets a distinctive border colour and halts; on success
+; (all files fetched) it sets a green border and halts. CALL 32768 (the boot AUTO
+; BASIC) reaches this via the `jp http_main` at &8000.
+http_main:
+                di
+                ; --- locate + read the "Trinity Network " flash chunk ---
+                ld      a, 1
+                ld      (part), a
+                ld      (total), a
+                ld      hl, ht_chunk_name
+                ld      de, name
+                ld      bc, 16
+                ldir
+                call    find_index
+                ld      a, (value)
+                and     a
+                jp      z, ht_fail_cfg
+                call    read_chunk
+                ld      a, (value)
+                and     a
+                jp      z, ht_fail_cfg
+
+                ; copy sam_mac (chunk+0) / sam_ip (chunk+6) into the conn config.
+                ld      hl, chunk + 0
+                ld      de, CONN_CLIENT_MAC
+                ld      bc, 6
+                ldir
+                ld      hl, chunk + 6
+                ld      de, CONN_CLIENT_IP
+                ld      bc, 4
+                ldir
+
+                ; --- the rest of the connection config (edit for your network) --
+                ; per-file base client port (an ephemeral high port), big-endian;
+                ; prov_start derives each file's port as BASE_PORT + file index.
+                ld      a, &C0
+                ld      (BASE_PORT), a
+                ld      a, &00
+                ld      (BASE_PORT + 1), a
+                ; the firmware HTTP server IP (the cdn.githubraw.com proxy / mirror).
+                ld      hl, ht_server_ip
+                ld      de, CONN_SERVER_IP
+                ld      bc, 4
+                ldir
+                ; the server port = 80 (HTTP), big-endian.
+                ld      a, 80 >> 8
+                ld      (CONN_SERVER_PORT), a
+                ld      a, 80 & &ff
+                ld      (CONN_SERVER_PORT + 1), a
+                ; per-file base initial send sequence (big-endian); prov_start
+                ; derives each file's ISS as BASE_ISS + index*0x10000.
+                ld      hl, ht_iss
+                ld      de, BASE_ISS
+                ld      bc, 4
+                ldir
+
+                ; --- arm the streaming sink: each window is one HSAVE record ---
+                ld      a, 1
+                ld      (CONN_SINK_ENABLED), a
+                ld      hl, FW_RECORD_CAP
+                ld      (CONN_FLUSH_WINDOW), hl
+
+                ; --- init the ENC28J60 with the SAM's real MAC ----------
+                ld      hl, CONN_CLIENT_MAC
+                call    drv_init
+                ld      a, b
+                or      c
+                jp      z, ht_fail_init
+
+                ; --- drive the multi-file provisioning loop --------------
+                call    prov_first              ; file 0's ARP
+ht_prov_loop:
+                call    prov_onframe            ; one rx frame -> reply; sets PROV_STATUS
+                ld      a, (PROV_STATUS)
+                cp      PROV_ALL_DONE
+                jr      z, ht_done
+                cp      PROV_FILE_DONE
+                jr      nz, ht_prov_loop        ; PROV_CONTINUE: keep fetching this file
+                call    prov_next               ; file complete: next file's ARP
+                jr      ht_prov_loop
+ht_done:
+                ; success: all files fetched + stored. green border, halt.
+                ld      a, 4
+                out     (&fe), a
+                di
+                halt
+
+ht_fail_cfg:
+                ld      a, 2                    ; red border: no/bad network settings
+                out     (&fe), a
+                di
+                halt
+ht_fail_init:
+                ld      a, 1                    ; blue border: ENC28J60 init failed
+                out     (&fe), a
+                di
+                halt
+
+ht_chunk_name:    defm "Trinity Network "      ; the flash chunk holding MAC+IP
+; The fixed firmware-fetch target — edit for your network. Each file's HTTP path +
+; Host come from the pinned manifest (fw_source.asm); prov_start wires them.
+ht_server_ip:     defb 192, 168, 0, 1          ; the HTTP server (firmware mirror)
+ht_iss:           defb 0, 0, 4, 0              ; per-file base initial send sequence (BE)
+
+; --- the real B-DOS HSAVE store leaf (hardware-gated, q16/q22) ----------------
+; FW_REC_IDX — the record index within the current file (0-based); store_begin
+; resets it, storage_sink_leaf increments it per flushed window.
+FW_REC_IDX:        defs 2
+; FW_STORE_NAME_PTR — the current file's logical name pointer (the manifest name
+; ptr prov_start passes to store_begin); fw_span_record_name builds each record
+; name from it.
+FW_STORE_NAME_PTR: defs 2
+
+; store_begin(HL = the file's logical name ptr) — open a file in the store:
+; remember its name for record naming and reset the record index. No HSAVE yet;
+; the body is written window-by-window by storage_sink_leaf as it streams.
+; Clobbers HL.
+store_begin:
+                ld      (FW_STORE_NAME_PTR), hl
+                ld      hl, 0
+                ld      (FW_REC_IDX), hl
+                ret
+
+; store_end — close the current file: finish the streamed-body SHA-256 and compare
+; it against the pinned hash (conn_verify_final sets CONN_HASH_MATCH). The fetched
+; bytes are already persisted (storage_sink_leaf HSAVE'd each window); this only
+; finalises the verify verdict. Acting on a mismatch — reject / retry / surface it
+; — is the picker UX (i100c). Clobbers A, BC, DE, HL, IX.
+store_end:
+                jp      conn_verify_final
+
+; storage_sink_leaf(HL = window ptr, BC = window length) — the per-window store
+; leaf the streaming flush reaches (through the body-skip filter). It (1) hashes
+; the window into the running verify, then (2) HSAVEs it to Trinity as the next
+; bounded record <prefix><NNN>. NOT host-verifiable (no RST 8 / SAMDOS in the
+; harness) — unverified until Pete's Trinity test (CLAUDE.md §5).
+;
+; The HSAVE source-paging (page = ptr>>14, offset = ptr&0x3FFF | &8000) follows
+; the assembler's own save sites' convention; the exact physical-page mapping for
+; the loaded image is the q16 hardware detail confirmed on Trinity. Clobbers A,
+; BC, DE, HL, IX.
+storage_sink_leaf:
+                ; --- (1) hash this window into the running SHA-256 verify ---
+                push    hl                      ; save window ptr across the hash
+                push    bc                      ; save window length across the hash
+                call    sha256_update           ; hash BC bytes at HL
+                pop     bc                      ; restore length
+                pop     hl                      ; restore ptr
+
+                ; --- (2) HSAVE this window as the next record ---
+                push    hl                      ; save window ptr (HSAVE source addr)
+                push    bc                      ; save window length (HSAVE size)
+                ; build the record name <prefix><NNN> from the logical name + index.
+                ld      hl, (FW_STORE_NAME_PTR) ; HL = logical name ptr
+                ld      bc, (FW_REC_IDX)        ; BC = record index
+                call    fw_span_record_name     ; FW_SPAN_NAME = <prefix><NNN>
+                ld      hl, FW_SPAN_NAME
+                ld      (BD_NAME_PTR), hl
+                pop     bc                      ; BC = window length (HSAVE size)
+                pop     hl                      ; HL = window ptr (HSAVE source addr)
+                ld      (BD_SAVE_SIZE), bc      ; HSAVE byte count = window length
+                ; page = ptr >> 14 (top 2 bits of H); bdos masks to the low 5 bits.
+                ld      a, h
+                rlca
+                rlca
+                and     3
+                ld      (BD_SAVE_PAGE), a
+                ; section-C source offset = (ptr & 0x3FFF) | &8000.
+                ld      a, h
+                and     &3F
+                or      &80
+                ld      h, a
+                ld      (BD_SAVE_ADDR), hl
+                call    bdos_fill_save_uifa     ; build the HSAVE UIFA
+                xor     a
+                call    bdos_select_record      ; record 0 = the Trinity flat store
+                call    bdos_save_hook          ; HSAVE (real B-DOS only)
+
+                ; --- advance the record index for the next window ---
+                ld      hl, (FW_REC_IDX)
+                inc     hl
+                ld      (FW_REC_IDX), hl
+                ret
+
+                endif  ; !NETBOOT_HOSTTEST (bootable entry + store leaf)
