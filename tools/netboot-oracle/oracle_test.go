@@ -269,6 +269,66 @@ func TestBuildReplyMatchesTemplate(t *testing.T) {
 	}
 }
 
+// TestResponderDORA drives the i86 DHCP responder loop authority through a full
+// DORA cycle with the captured DISCOVER + REQUEST: a DISCOVER yields an OFFER, a
+// REQUEST yields an ACK, both addressed to the same pooled yiaddr (lease keyed
+// by client MAC), each wrapped as a UDP 67->68 broadcast. This is the Go
+// reference the Z80 dhcp_loop.asm dispatch + pool logic ports (plan §3.1).
+func TestResponderDORA(t *testing.T) {
+	r := dhcp.NewResponder(
+		mask.ServerMAC, mask.ServerIP,
+		[4]byte{255, 255, 255, 0}, mask.Broadcast,
+		[4]byte{192, 0, 2, 100}, 8, // pool 192.0.2.100 .. .107
+		7200, 3600, 6300,
+	)
+
+	// DISCOVER -> OFFER.
+	offerFrame := r.OnRequest(golden.DHCPDiscover)
+	if offerFrame == nil {
+		t.Fatal("responder ignored a DISCOVER")
+	}
+	ou, ok := frame.ParseUDP(offerFrame)
+	if !ok || ou.SrcPort != 67 || ou.DstPort != 68 {
+		t.Fatalf("OFFER not UDP 67->68 (ok=%v src=%d dst=%d)", ok, ou.SrcPort, ou.DstPort)
+	}
+	if !bytes.Equal(offerFrame[0:6], frame.BroadcastMAC[:]) {
+		t.Errorf("OFFER not L2-broadcast: dst MAC %x", offerFrame[0:6])
+	}
+	offer, err := dhcp.Parse(ou.Payload)
+	if err != nil {
+		t.Fatalf("parse OFFER body: %v", err)
+	}
+	if offer.MsgType() != dhcp.MsgOffer {
+		t.Errorf("DISCOVER reply msg type = %d, want OFFER", offer.MsgType())
+	}
+	wantIP := [4]byte{192, 0, 2, 100}
+	if offer.YIAddr != wantIP {
+		t.Errorf("OFFER yiaddr = %v, want first pool addr %v", offer.YIAddr, wantIP)
+	}
+
+	// REQUEST -> ACK, same address (same client MAC).
+	ackFrame := r.OnRequest(golden.DHCPRequest)
+	if ackFrame == nil {
+		t.Fatal("responder ignored a REQUEST")
+	}
+	au, _ := frame.ParseUDP(ackFrame)
+	ack, err := dhcp.Parse(au.Payload)
+	if err != nil {
+		t.Fatalf("parse ACK body: %v", err)
+	}
+	if ack.MsgType() != dhcp.MsgACK {
+		t.Errorf("REQUEST reply msg type = %d, want ACK", ack.MsgType())
+	}
+	if ack.YIAddr != offer.YIAddr {
+		t.Errorf("ACK yiaddr %v != OFFER yiaddr %v (lease not stable per MAC)", ack.YIAddr, offer.YIAddr)
+	}
+
+	// A non-DHCP frame is ignored (keep serving).
+	if r.OnRequest(golden.TFTPRrqRoot1024) != nil {
+		t.Error("responder replied to a non-DHCP frame")
+	}
+}
+
 // --- TFTP (i82 client + i83 server) -------------------------------------
 
 // TestRRQBuilderMatchesClientOptionSet asserts the i82 client's RRQ builder

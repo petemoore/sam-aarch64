@@ -135,6 +135,15 @@ type ENC28J60 struct {
 	// Virtual wire.
 	txFrames [][]byte // frames the driver transmitted (control byte stripped)
 	rxQueue  [][]byte // frames waiting to be delivered to drv_read
+
+	// rxWritePos is the chip's own RX-FIFO write position — where the receive
+	// engine deposits the next incoming packet. It follows the next-packet-
+	// pointer chain the driver reads out of each packet header (NOT ERXRDPT,
+	// which the driver sets to read_ptr-1 as the R5 errata barrier). Tracking it
+	// internally is what makes multi-packet receive correct: each packet's
+	// header next-pointer is where the following packet's header lands, exactly
+	// as silicon writes them sequentially around the ring.
+	rxWritePos int
 }
 
 // NewENC28J60 returns a freshly reset emulated Trinity Ethernet path with the
@@ -181,6 +190,7 @@ func (e *ENC28J60) softReset() {
 	e.regs[0][regECON2] = econ2AUTOINC
 	e.encSelected = false
 	e.spiByteIdx = 0
+	e.rxWritePos = rxStartHW
 }
 
 // --- register access helpers (honour the common-register window) -------------
@@ -468,12 +478,14 @@ func (e *ENC28J60) doTransmit() {
 // --- receive ------------------------------------------------------------------
 
 // materialiseRX delivers the next queued frame into the RX FIFO at the chip's
-// current write position (ERXRDPT-relative is the driver's read side; the chip
-// writes at its hardware write pointer). The emulator writes the 6-byte header
-// (2-byte next-packet pointer LE + 4-byte RSV LE with the byte count in the low
-// 16 bits, including the 4-byte CRC) then the frame + a 4-byte zero CRC, exactly
-// where the driver's read_ptr points, and increments EPKTCNT. Called lazily when
-// the driver reads EPKTCNT so the frame lands at the driver's expected offset.
+// own write position (rxWritePos), which follows the next-packet-pointer chain
+// the driver reads out of each packet header — NOT ERXRDPT, which the driver
+// sets to read_ptr-1 as the R5 errata read barrier. The emulator writes the
+// 6-byte header (2-byte next-packet pointer LE + 4-byte RSV LE with the byte
+// count in the low 16 bits, including the 4-byte CRC) then the frame + a 4-byte
+// zero CRC, and increments EPKTCNT. Called lazily when the driver reads EPKTCNT
+// so the frame lands where the driver's read_ptr (== the previous packet's
+// next-pointer) will point. This is what makes multi-packet receive correct.
 func (e *ENC28J60) materialiseRX() {
 	if len(e.rxQueue) == 0 {
 		return
@@ -481,23 +493,20 @@ func (e *ENC28J60) materialiseRX() {
 	frame := e.rxQueue[0]
 	e.rxQueue = e.rxQueue[1:]
 
-	// The driver tracks its own read_ptr (rx_start initially), points ERDPT at
-	// it, then reads the 6-byte header followed by (rsv_len - 4) frame bytes.
-	// We write the packet at the driver's current read position. On the first
-	// receive that is rx_start; subsequent packets chain via the next-packet
-	// pointer the driver reads out of the header. We model the chip write
-	// position with ERXRDPT (the driver keeps ERXRDPT == its read_ptr).
-	start := int(e.reg16(regERXRDPTL))
+	start := e.rxWritePos
 	if start < rxStartHW || start > rxEndHW {
 		start = rxStartHW
 	}
 
 	// On-wire length includes the 4-byte CRC.
 	rxLen := len(frame) + 4
-	// Next-packet pointer: start + 6 (header) + rxLen, wrapped into the RX ring,
-	// forced odd-1 (driver expects the errata-corrected odd value). The exact
-	// value only matters for chained reads; for byte-exactness of the frame it
-	// is the byte count in the RSV that the driver uses.
+	// Next-packet pointer: the byte just past this packet (start + 6-byte header
+	// + rxLen), wrapped into the RX ring. The driver reads this out of the
+	// header and uses it verbatim as its next read_ptr, so the following packet
+	// must be deposited exactly there — which is what advancing rxWritePos to
+	// `next` below does. (The real chip keeps the pointer even per the datasheet;
+	// the driver's separate errata-odd adjustment applies only to ERXRDPT, the
+	// read barrier, not to where the next packet is written.)
 	next := start + 6 + rxLen
 	if next > rxEndHW {
 		next = rxStartHW + (next - rxEndHW - 1)
@@ -526,5 +535,9 @@ func (e *ENC28J60) materialiseRX() {
 		put(0)
 	}
 
+	// Advance the chip's write position to the next-packet pointer just written,
+	// so the following frame's header lands where the driver's read_ptr (which
+	// it set from this header) will point.
+	e.rxWritePos = next
 	e.regs[1][regEPKTCNT]++
 }
