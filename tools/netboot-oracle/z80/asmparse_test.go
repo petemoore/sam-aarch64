@@ -409,10 +409,57 @@ func refParse(src []byte) (recs []parseRec, ok bool) {
 				}
 				switch k {
 				case tIdent:
-					if rk, reg, isReg := refMatchReg(string(toks[pos].span)); isReg {
+					rk, reg, isReg := refMatchReg(string(toks[pos].span))
+					if isReg {
+						pos++ // consume register
+						// B4b shift/extend lookahead: only for X or W registers.
+						if (rk == format.OpRegX || rk == format.OpRegW) &&
+							pos < len(toks) && toks[pos].kind == tComma &&
+							pos+1 < len(toks) && toks[pos+1].kind == tIdent {
+							next := string(toks[pos+1].span)
+							if sk, skOk := refMatchShiftKind(next); skOk {
+								pos += 2 // consume comma + shift keyword
+								if pos >= len(toks) || toks[pos].kind != tHash {
+									return nil, false
+								}
+								pos++ // consume '#'
+								expr, npos, ok2 := refParseExpr(toks, pos, st)
+								if !ok2 {
+									return nil, false
+								}
+								pos = npos
+								width := byte(0)
+								if rk == format.OpRegX {
+									width = 1
+								}
+								ow.WriteShiftedReg(width, reg, sk, expr)
+								count++
+								break
+							}
+							if ek, ekOk := refMatchExtend(next); ekOk {
+								pos += 2 // consume comma + extend keyword
+								var amt []byte
+								if pos < len(toks) && toks[pos].kind == tHash {
+									pos++ // consume '#'
+									a, npos, ok2 := refParseExpr(toks, pos, st)
+									if !ok2 {
+										return nil, false
+									}
+									amt = a
+									pos = npos
+								}
+								width := byte(0)
+								if rk == format.OpRegX {
+									width = 1
+								}
+								ow.WriteExtendedReg(width, reg, ek, amt)
+								count++
+								break
+							}
+						}
+						// plain register (no shift/extend, or XSP/WSP)
 						ow.WriteReg(rk, reg)
 						count++
-						pos++
 						break
 					}
 					// A non-register identifier is a symbol expression (B3b).
@@ -1751,4 +1798,450 @@ func TestParseInstError(t *testing.T) {
 			t.Errorf("%s (%q): refParse should report an error", c.name, c.src)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// B4b — register shift/extend operand suffix (parse_operand_reg shift/extend
+// lookahead, WriteShiftedReg/WriteExtendedReg).
+// ---------------------------------------------------------------------------
+
+// refMatchShiftKind is a verbatim port of parser.go's matchShiftKind
+// (parser.go:1407). Returns the ShiftKind and true on a match.
+func refMatchShiftKind(name string) (format.ShiftKind, bool) {
+	for i := 0; i < 4; i++ {
+		if format.ShiftKind(i).Name() == name {
+			return format.ShiftKind(i), true
+		}
+	}
+	return 0, false
+}
+
+// refParseWithShiftExt mirrors refParse but with the B4b shift/extend
+// lookahead wired into the register-operand path, mirroring parseOperand
+// (parser.go:1032-1073).
+func refParseWithShiftExt(src []byte) (recs []parseRec, ok bool) {
+	toks, lok := refLex(src)
+	if !lok {
+		return nil, false
+	}
+	st := format.NewSymbolTable()
+	pos := 0
+	for {
+		if pos >= len(toks) {
+			return recs, true
+		}
+		switch toks[pos].kind {
+		case tEOF:
+			return recs, true
+		case tEOL:
+			pos++
+		case tIdent:
+			id, found := format.MnemonicID(string(toks[pos].span))
+			if !found {
+				return nil, false
+			}
+			pos++
+			var ow format.OperandWriter
+			count := byte(0)
+			for {
+				if pos >= len(toks) {
+					return nil, false
+				}
+				k := toks[pos].kind
+				if k == tEOL || k == tEOF || k == tLineComment || k == tBlockComment {
+					break
+				}
+				if k == tComma {
+					if count == 0 {
+						return nil, false
+					}
+					pos++
+					continue
+				}
+				switch k {
+				case tLBracket:
+					npos, memOk := refParseMem(toks, pos, st, &ow)
+					if !memOk {
+						return nil, false
+					}
+					count++
+					pos = npos
+				case tIdent:
+					rk, reg, isReg := refMatchReg(string(toks[pos].span))
+					if isReg {
+						pos++ // consume register
+						// shift/extend lookahead: X or W only
+						if (rk == format.OpRegX || rk == format.OpRegW) &&
+							pos < len(toks) && toks[pos].kind == tComma &&
+							pos+1 < len(toks) && toks[pos+1].kind == tIdent {
+							next := string(toks[pos+1].span)
+							if sk, skOk := refMatchShiftKind(next); skOk {
+								pos += 2 // consume comma + shift keyword
+								if pos >= len(toks) || toks[pos].kind != tHash {
+									return nil, false
+								}
+								pos++ // consume '#'
+								expr, npos, ok2 := refParseExpr(toks, pos, st)
+								if !ok2 {
+									return nil, false
+								}
+								pos = npos
+								width := byte(0)
+								if rk == format.OpRegX {
+									width = 1
+								}
+								ow.WriteShiftedReg(width, reg, sk, expr)
+								count++
+								break
+							}
+							if ek, ekOk := refMatchExtend(next); ekOk {
+								pos += 2 // consume comma + extend keyword
+								var amt []byte
+								if pos < len(toks) && toks[pos].kind == tHash {
+									pos++ // consume '#'
+									a, npos, ok2 := refParseExpr(toks, pos, st)
+									if !ok2 {
+										return nil, false
+									}
+									amt = a
+									pos = npos
+								}
+								width := byte(0)
+								if rk == format.OpRegX {
+									width = 1
+								}
+								ow.WriteExtendedReg(width, reg, ek, amt)
+								count++
+								break
+							}
+						}
+						// plain register
+						ow.WriteReg(rk, reg)
+						count++
+						break
+					}
+					// non-register identifier -> symbol expression
+					fallthrough
+				case tHash, tInt, tMinus, tTilde, tLParen,
+					tDot, tLocalRef, tColon:
+					expr, npos, ok2 := refParseExpr(toks, pos, st)
+					if !ok2 {
+						return nil, false
+					}
+					ow.WriteImmExpr(expr)
+					count++
+					pos = npos
+				default:
+					return nil, false
+				}
+			}
+			recs = append(recs, parseRec{mnemonicID: id, count: count, ops: ow.Bytes()})
+		default:
+			return nil, false
+		}
+	}
+}
+
+// shiftedRegBytes hand-builds expected bytes for a SHIFTED_REG operand per the
+// layout spec in operands.go:
+//   [OP_KIND_SHIFTED_REG=0x06, width, reg, shiftKind, len_lo, len_hi, expr...]
+func shiftedRegBytes(width, reg byte, sk format.ShiftKind, amtExpr []byte) []byte {
+	b := []byte{0x06, width, reg, byte(sk), byte(len(amtExpr)), byte(len(amtExpr) >> 8)}
+	return append(b, amtExpr...)
+}
+
+// extendedRegBytes hand-builds expected bytes for an EXTENDED_REG operand per
+// the layout spec in operands.go:
+//   [OP_KIND_EXTENDED_REG=0x07, width, reg, extKind, len_lo, len_hi, expr...]
+func extendedRegBytes(width, reg byte, ek format.ExtendKind, amtExpr []byte) []byte {
+	b := []byte{0x07, width, reg, byte(ek), byte(len(amtExpr)), byte(len(amtExpr) >> 8)}
+	return append(b, amtExpr...)
+}
+
+// TestParseShiftExtHandCases pins explicit hand-authored expected operand bytes
+// for shift/extend register operands (B4b), then cross-checks against
+// refParseWithShiftExt. Every expected operand byte array is computed
+// independently from the format spec as a separate authority.
+func TestParseShiftExtHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	W := format.OpRegW
+
+	// folded immediate expressions for small amounts
+	imm := func(v int64) []byte { return immExprBytes(v) }
+
+	cases := []struct {
+		desc string
+		src  string
+		want []parseRec
+	}{
+		// --- ShiftedReg cases ---
+		// add x0, x1, x2, lsl #3 -> X(0), X(1), ShiftedReg(width=1, reg=2, sk=LSL=0, amt=3)
+		{
+			"x reg lsl #3",
+			"add x0, x1, x2, lsl #3\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "add"), count: 3,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					shiftedRegBytes(1, 2, format.ShiftLSL, imm(3)),
+				)}},
+		},
+		// lsr #1
+		{
+			"x reg lsr #1",
+			"add x0, x1, x2, lsr #1\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "add"), count: 3,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					shiftedRegBytes(1, 2, format.ShiftLSR, imm(1)),
+				)}},
+		},
+		// asr #2
+		{
+			"x reg asr #2",
+			"add x0, x1, x2, asr #2\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "add"), count: 3,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					shiftedRegBytes(1, 2, format.ShiftASR, imm(2)),
+				)}},
+		},
+		// ror #4
+		{
+			"x reg ror #4",
+			"add x0, x1, x2, ror #4\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "add"), count: 3,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					shiftedRegBytes(1, 2, format.ShiftROR, imm(4)),
+				)}},
+		},
+		// W register: add w0, w1, w2, lsl #1 -> width=0
+		{
+			"w reg lsl #1 (width 0)",
+			"add w0, w1, w2, lsl #1\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "add"), count: 3,
+				ops: concat(
+					[]byte{byte(W), 0},
+					[]byte{byte(W), 1},
+					shiftedRegBytes(0, 2, format.ShiftLSL, imm(1)),
+				)}},
+		},
+		// shift with expression amount: lsl #(1+2) folds to 3
+		{
+			"x reg lsl #(1+2)",
+			"add x0, x1, x2, lsl #(1+2)\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "add"), count: 3,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					shiftedRegBytes(1, 2, format.ShiftLSL, imm(3)),
+				)}},
+		},
+		// --- ExtendedReg cases ---
+		// add x0, x1, w2, uxtw #2 -> ExtendedReg(width=0 from w2, reg=2, ek=UXTW=2, amt=2)
+		{
+			"w reg uxtw #2",
+			"add x0, x1, w2, uxtw #2\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "add"), count: 3,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					extendedRegBytes(0, 2, format.ExtUXTW, imm(2)),
+				)}},
+		},
+		// add x0, x1, x2, sxtx -> ExtendedReg(width=1, reg=2, ek=SXTX=7, no #amt => len=0)
+		{
+			"x reg sxtx no amt",
+			"add x0, x1, x2, sxtx\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "add"), count: 3,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					extendedRegBytes(1, 2, format.ExtSXTX, nil),
+				)}},
+		},
+		// add x0, x1, w2, uxtw -> extend, no amt (len 0)
+		{
+			"w reg uxtw no amt",
+			"add x0, x1, w2, uxtw\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "add"), count: 3,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					extendedRegBytes(0, 2, format.ExtUXTW, nil),
+				)}},
+		},
+		// --- Plain register cases (no suffix) ---
+		// add x0, x1, x2 -> three plain regs
+		{
+			"plain regs no suffix",
+			"add x0, x1, x2\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "add"), count: 3,
+				ops: []byte{byte(X), 0, byte(X), 1, byte(X), 2}}},
+		},
+		// add x0, x1, sp -> sp is XSP, no extend attempted
+		{
+			"sp plain reg no extend",
+			"add x0, x1, sp\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "add"), count: 3,
+				ops: []byte{byte(X), 0, byte(X), 1, byte(format.OpRegXSP), 31}}},
+		},
+		// add x0, x1, sp, lsl #3: sp is XSP so X/W-only guard fires; sp emits
+		// as plain reg and comma+lsl+#3 become separate operands (sym+imm).
+		{
+			"xsp guard: sp comma lsl not a shifted reg",
+			"add x0, x1, sp, lsl #3\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "add"), count: 5,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					[]byte{byte(format.OpRegXSP), 31},
+					immExprWithSym(0),    // lsl -> symbol id 0
+					immExprOperand(3),    // #3 as full IMM_EXPR operand
+				)}},
+		},
+		// add x0, x1, x2, foo where foo is not a shift/extend kw -> plain reg x2 + sym foo
+		{
+			"unknown suffix -> plain reg + symbol",
+			"add x0, x1, x2, foo\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "add"), count: 4,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					[]byte{byte(X), 2},
+					immExprWithSym(0), // foo -> symbol id 0
+				)}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			got, errFlag := parseZ80(t, mac, []byte(c.src))
+			if errFlag {
+				t.Fatalf("PARSE_ERR set unexpectedly")
+			}
+			compareRecs(t, "Z80 vs hand", got, c.want)
+			ref, refOk := refParseWithShiftExt([]byte(c.src))
+			if !refOk {
+				t.Fatalf("refParseWithShiftExt failed on valid case")
+			}
+			compareRecs(t, "Z80 vs ref", got, ref)
+		})
+	}
+}
+
+// TestParseShiftExtError checks that `add x0, x1, x2, lsl x3` (no '#' after
+// lsl) sets PARSE_ERR in the Z80 and refParseWithShiftExt reports error.
+func TestParseShiftExtError(t *testing.T) {
+	mac := loadAsmparse(t)
+	src := "add x0, x1, x2, lsl x3\n"
+	_, errFlag := parseZ80(t, mac, []byte(src))
+	if !errFlag {
+		t.Errorf("%q: PARSE_ERR not set (expected error: no # after lsl)", src)
+	}
+	if _, ok := refParseWithShiftExt([]byte(src)); ok {
+		t.Errorf("%q: refParseWithShiftExt should report error", src)
+	}
+}
+
+// apShiftNames are the four shift keywords.
+var apShiftNames = []string{"lsl", "lsr", "asr", "ror"}
+
+// apExtendNamesX are extend names valid with X-width index registers.
+var apExtendNamesX = []string{"uxtx", "sxtx"}
+
+// apExtendNamesW are extend names valid with W-width index registers.
+var apExtendNamesW = []string{"uxtb", "uxth", "uxtw", "sxtb", "sxth", "sxtw"}
+
+// TestParseShiftExtFuzz compares asmparse against refParseWithShiftExt over
+// random add/sub lines with random base regs, random shift/extend kinds, and
+// random small expression amounts (randomly omitted for extend).
+func TestParseShiftExtFuzz(t *testing.T) {
+	mac := loadAsmparse(t)
+	xRegs := []string{"x0", "x1", "x2", "x5", "x9", "x10", "x19", "x28"}
+	wRegs := []string{"w0", "w1", "w2", "w5", "w9", "w10", "w19", "w28"}
+	mnems := []string{"add", "sub"}
+
+	for _, seed := range []int64{17, 53, 101, 409, 2027} {
+		rng := rand.New(rand.NewSource(seed))
+		var src []byte
+		lines := 10 + rng.Intn(10)
+		for li := 0; li < lines; li++ {
+			mnem := mnems[rng.Intn(len(mnems))]
+			dst := xRegs[rng.Intn(len(xRegs))]
+			base := xRegs[rng.Intn(len(xRegs))]
+			var suffix string
+			switch rng.Intn(4) {
+			case 0: // shift with X reg
+				idx := xRegs[rng.Intn(len(xRegs))]
+				sk := apShiftNames[rng.Intn(len(apShiftNames))]
+				amt := rng.Intn(64)
+				suffix = fmt.Sprintf("%s, %s #%d", idx, sk, amt)
+			case 1: // extend with X reg (uxtx/sxtx)
+				idx := xRegs[rng.Intn(len(xRegs))]
+				ek := apExtendNamesX[rng.Intn(len(apExtendNamesX))]
+				if rng.Intn(2) == 0 {
+					amt := rng.Intn(8)
+					suffix = fmt.Sprintf("%s, %s #%d", idx, ek, amt)
+				} else {
+					suffix = fmt.Sprintf("%s, %s", idx, ek)
+				}
+			case 2: // extend with W reg
+				idx := wRegs[rng.Intn(len(wRegs))]
+				ek := apExtendNamesW[rng.Intn(len(apExtendNamesW))]
+				if rng.Intn(2) == 0 {
+					amt := rng.Intn(8)
+					suffix = fmt.Sprintf("%s, %s #%d", idx, ek, amt)
+				} else {
+					suffix = fmt.Sprintf("%s, %s", idx, ek)
+				}
+			case 3: // plain reg, no suffix
+				idx := xRegs[rng.Intn(len(xRegs))]
+				suffix = idx
+			}
+			line := fmt.Sprintf("%s %s, %s, %s\n", mnem, dst, base, suffix)
+			src = append(src, line...)
+		}
+		want, ok := refParseWithShiftExt(src)
+		if !ok {
+			t.Fatalf("seed %d: refParseWithShiftExt reported error on generated B4b source:\n%s", seed, src)
+		}
+		got, errFlag := parseZ80(t, mac, src)
+		if errFlag {
+			t.Fatalf("seed %d: PARSE_ERR set on valid B4b source:\n%s", seed, src)
+		}
+		compareRecs(t, fmt.Sprintf("seed%d", seed), got, want)
+		t.Logf("seed=%d: %d source bytes, %d records matched", seed, len(src), len(got))
+	}
+}
+
+// concat concatenates multiple byte slices.
+func concat(slices ...[]byte) []byte {
+	var result []byte
+	for _, s := range slices {
+		result = append(result, s...)
+	}
+	return result
+}
+
+// immExprWithSym builds a PUSH_SYM,id expression byte slice for symbol id.
+func immExprWithSym(id uint16) []byte {
+	var ew format.ExprWriter
+	ew.WriteSym(id)
+	expr := ew.Bytes()
+	// wrap in OP_KIND_IMM_EXPR header: [0x05, len_lo, len_hi, expr...]
+	b := []byte{0x05, byte(len(expr)), byte(len(expr) >> 8)}
+	return append(b, expr...)
+}
+
+// immExprOperand builds a complete OP_KIND_IMM_EXPR operand for a literal
+// integer v: [0x05, len_lo, len_hi, expr_bytes...].
+func immExprOperand(v int64) []byte {
+	expr := immExprBytes(v)
+	b := []byte{0x05, byte(len(expr)), byte(len(expr) >> 8)}
+	return append(b, expr...)
 }

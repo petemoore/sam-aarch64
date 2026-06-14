@@ -213,4 +213,19 @@ func TestTbnConstantsZ80Sync(t *testing.T) {
 			t.Errorf("%s = %d; Go ExtendKind = %d", name, got, i)
 		}
 	}
+
+	// SHIFT_* — every ShiftKind present at its value.
+	for i := 0; i < 4; i++ {
+		sk := ShiftKind(i)
+		suffix := strings.ToUpper(sk.Name())
+		name := "SHIFT_" + suffix
+		got, ok := eq[name]
+		if !ok {
+			t.Errorf("%s: missing from tbn_constants.inc", name)
+			continue
+		}
+		if got != i {
+			t.Errorf("%s = %d; Go ShiftKind = %d", name, got, i)
+		}
+	}
 }
