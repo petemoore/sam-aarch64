@@ -16,13 +16,14 @@ import (
 )
 
 func main() {
-	var mraDir, outEnc, outGo, outSysregInc, outConstantsInc, outMnemonicIDsInc string
+	var mraDir, outEnc, outGo, outSysregInc, outConstantsInc, outMnemonicIDsInc, outMnemonicNamesInc string
 	flag.StringVar(&mraDir, "mra", "reference/arm-mra", "MRA snapshot dir")
 	flag.StringVar(&outEnc, "out", "", "binary .enc output (optional)")
 	flag.StringVar(&outGo, "gopkg", "", "regenerate the MRA-derived Go source at this path.  Only emits MRA-derived forms; hand-curated forms live in tools/aarch64enc/manual_forms.go and are not touched by this tool.")
 	flag.StringVar(&outSysregInc, "sysreg-inc", "", "regenerate the Z80 sysreg/pstate/dc/tlbi tables (src/sysreg_tables.inc) from tools/sam-aarch64-format/sysregs.go.")
 	flag.StringVar(&outConstantsInc, "constants-inc", "", "regenerate the Z80 OP_KIND_*/REC_KIND_*/DIR_* equates (src/tbn_constants.inc) from tools/sam-aarch64-format/{operands,kinds,directives}.go.")
 	flag.StringVar(&outMnemonicIDsInc, "mnemonic-ids-inc", "", "regenerate the Z80 MNEM_<NAME> equates (src/mnemonic_ids.inc) from tools/sam-aarch64-format/mnemonics.go.")
+	flag.StringVar(&outMnemonicNamesInc, "mnemonic-names-inc", "", "regenerate the Z80 name→id lookup table (src/mnemonic_names.inc) from tools/sam-aarch64-format/mnemonics.go.")
 	flag.Parse()
 
 	// The sysreg .inc is projected straight from the Go format package; it
@@ -66,6 +67,21 @@ func main() {
 		}
 		out.Close()
 		fmt.Printf("Wrote %s (MNEM_<NAME> equates from mnemonics.go).\n", outMnemonicIDsInc)
+	}
+
+	// The mnemonic-names .inc is the runtime-data twin of the equates above —
+	// a length-prefixed name→id table for the Z80 parser's mnemonic_lookup.
+	if outMnemonicNamesInc != "" {
+		out, err := os.Create(outMnemonicNamesInc)
+		if err != nil {
+			fail(err)
+		}
+		if err := emit.RenderMnemonicNamesInc(out); err != nil {
+			out.Close()
+			fail(err)
+		}
+		out.Close()
+		fmt.Printf("Wrote %s (name→id lookup table from mnemonics.go).\n", outMnemonicNamesInc)
 	}
 
 	// The MRA walk only feeds the -out / -gopkg emitters. When only the
@@ -163,9 +179,9 @@ func main() {
 // slotSortOrder returns a sort key for a raw operand slot name so that
 // the generated slot list matches assembler syntax order:
 //
-//	1. Destination registers (Rd, Rt, Rt2)
-//	2. Source registers (Rn, Rm, Ra, Rs)
-//	3. Immediates and everything else
+//  1. Destination registers (Rd, Rt, Rt2)
+//  2. Source registers (Rn, Rm, Ra, Rs)
+//  3. Immediates and everything else
 //
 // Within each group, slots are ordered by descending bit position (MSB
 // of their field) so that ties fall in the same order the MRA regdiagram
