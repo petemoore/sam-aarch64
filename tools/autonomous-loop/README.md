@@ -38,7 +38,8 @@ ALOOP_SESSION=<your-screen-session> tools/autonomous-loop/monitor.sh
 
 Run it in a **second** screen window; claude runs in window 0 (the `cl` window).
 Tunable via env: `ALOOP_WINDOW`, `ALOOP_PROMPT`, `ALOOP_POLL`,
-`ALOOP_HANG_TIMEOUT`, `ALOOP_CLEAR_SETTLE`, `ALOOP_SUBMIT_SETTLE`.
+`ALOOP_HANG_TIMEOUT`, `ALOOP_CLEAR_SETTLE`, `ALOOP_CONTEXT_SETTLE`,
+`ALOOP_SUBMIT_SETTLE`.
 
 **Run exactly one monitor per session.** A single-instance lock
 (`$SEMA_DIR/monitor.lock`) makes a second monitor refuse to start; if you
@@ -69,6 +70,14 @@ fixed — treat as **improving, not yet proven** (question-registry **q14**):
    branch now stuffs `/context` **then a short resume nudge** (`ALOOP_RESUME`) —
    a real text line that creates the next turn immediately. The nudge is *not*
    the startup prompt: the live agent keeps full context and must not re-ground.
+4. **The resume nudge was stuffed into `/context`'s redraw and dropped (i136).**
+   The task-done branch fired the nudge immediately after submitting `/context`,
+   with no settle. `/context` is a local command that **redraws the whole TUI**;
+   nudge keystrokes stuffed during that redraw are lost, so the nudge never
+   became a turn and the agent again sat idle until the ~1h hang-timeout — Pete
+   hit this 2026-06-19 and had to wake the agent by hand. Fix: sleep
+   `ALOOP_CONTEXT_SETTLE` (default 5s) between the `/context` submit and the
+   nudge stuff — the `/context` analogue of `CLEAR_SETTLE` on the wound-down path.
 
 **Agent-side mitigation (load-bearing):** a control signal (`/clear`, `/context`)
 that arrives **mid-turn** lands as a literal user message, not a command — the
