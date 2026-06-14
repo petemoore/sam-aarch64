@@ -107,9 +107,12 @@
                 include "asmlex.asm"
 
 ; MNEM_<NAME> equates (generated; zero runtime bytes) — the B5 special-form
-; intercepts in parse_inst dispatch on these mnemonic ids by name. In the
-; integrated build (B8) src/intercepts.asm already provides these, so include
-; them only for the standalone asmparse.bin (mirrors the org guard above).
+; intercepts in parse_inst dispatch on these mnemonic ids by name. Nothing in
+; the integrated assembler build includes mnemonic_ids.inc today, so the
+; standalone asmparse.bin pulls it in itself; the guard keeps that include out
+; of a future B8 integrated build, where the integrator owns where the equates
+; come from and a second include here would double-define (mirrors the org
+; guard above).
                 if defined(ASMPARSE_STANDALONE)
                 include "mnemonic_ids.inc"
                 endif
