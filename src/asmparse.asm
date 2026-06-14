@@ -26,14 +26,19 @@
 ;        and then collapsed to a single folded immediate by a self-contained
 ;        constant evaluator (port of format.EvalConst, expr.go:223). B3a covers
 ;        the operators `+ - & | ^` and the unary `- ~` plus parens.
-;   B3a2 (this): the shift operators `<< >>` (precedence 2) — `mov x0, #1<<8`,
+;   B3a2: the shift operators `<< >>` (precedence 2) — `mov x0, #1<<8`,
 ;        `mov x0, ~0>>1`. The fold runs a variable-count 64-bit shift: logical
 ;        left and arithmetic right, with Go's >=64-count clamp (a<<n -> 0;
-;        a>>n -> sign extension). `* /` (B3a3) and the non-constant primaries
-;        (symbol idents, `.`, local-refs, `:reloc:`, B3b/B3c) remain later
-;        sub-bricks. The `,lsl #12` suffix, mem operands, special-form insts,
-;        directives, labels, comments and blank-runs are later bricks (B4-B7) —
-;        a line that needs one is outside this domain and sets PARSE_ERR.
+;        a>>n -> sign extension).
+;   B3a3 (this): the multiply operator `*` (precedence 4) — `mov x0, #2*3`,
+;        `add x0, x1, #(1+2)*4`. The fold runs a 64-bit shift-add multiply
+;        keeping the low 64 bits (port of applyBinary(OpMul): a*b wraps mod
+;        2^64; signed and unsigned agree on the low word). Division `/` (B3a4)
+;        and the non-constant primaries (symbol idents, `.`, local-refs,
+;        `:reloc:`, B3b/B3c) remain later sub-bricks. The `,lsl #12` suffix, mem
+;        operands, special-form insts, directives, labels, comments and
+;        blank-runs are later bricks (B4-B7) — a line that needs one is outside
+;        this domain and sets PARSE_ERR.
 ;
 ; INST record (emission form — original framing for the host harness; the
 ; OPERAND bytes are byte-faithful to format.OperandWriter):
@@ -69,6 +74,7 @@ EXPR_PUSH_IMM32: equ &03
 EXPR_PUSH_IMM64: equ &04
 EXPR_OP_ADD:     equ &10
 EXPR_OP_SUB:     equ &11
+EXPR_OP_MUL:     equ &12
 EXPR_OP_AND:     equ &14
 EXPR_OP_OR:      equ &15
 EXPR_OP_XOR:     equ &16
@@ -416,6 +422,8 @@ tok_prec:
                 jr      z, tp_3
                 cp      TOK_MINUS
                 jr      z, tp_3
+                cp      TOK_STAR
+                jr      z, tp_4
                 ld      a, &FF              ; not yet an operator
                 ret
 tp_0:           xor     a                   ; precedence 0 (| ^)
@@ -425,6 +433,8 @@ tp_1:           ld      a, 1                ; precedence 1 (&)
 tp_2:           ld      a, 2                ; precedence 2 (<< >>)
                 ret
 tp_3:           ld      a, 3                ; precedence 3 (+ -)
+                ret
+tp_4:           ld      a, 4                ; precedence 4 (*)
                 ret
 
 ; ===========================================================================
@@ -447,8 +457,12 @@ expr_emit_binop:
                 jr      z, eeb_shl
                 cp      TOK_SHR
                 jr      z, eeb_shr
+                cp      TOK_STAR
+                jr      z, eeb_mul
                 scf
                 ret
+eeb_mul:        ld      a, EXPR_OP_MUL
+                jr      eeb_emit
 eeb_add:        ld      a, EXPR_OP_ADD
                 jr      eeb_emit
 eeb_sub:        ld      a, EXPR_OP_SUB
@@ -605,6 +619,8 @@ fold_loop:
                 jp      z, fold_do_add
                 cp      EXPR_OP_SUB
                 jp      z, fold_do_sub
+                cp      EXPR_OP_MUL
+                jp      z, fold_do_mul
                 cp      EXPR_OP_AND
                 jp      z, fold_do_and
                 cp      EXPR_OP_OR
@@ -823,6 +839,60 @@ fshr_big:
                 call    fold_pop1
                 jp      fold_loop
 
+; fold_do_mul — a * b keeping the low 64 bits (port of applyBinary(OpMul): the
+; product wraps mod 2^64, and the low word is the same for signed and unsigned).
+; Shift-add: for each bit i of b (LSB first), add a<<i into the accumulator.
+; MUL_A holds a shifted left, MUL_B holds b shifted right (logical), MUL_R the
+; running sum. 64 iterations.
+fold_do_mul:
+                call    fold_ab_ptrs        ; HL -> a, DE -> b
+                jp      c, fold_fail
+                push    hl                  ; save a's stack slot (result dest)
+                ex      de, hl              ; HL = b
+                ld      de, MUL_B
+                ld      bc, 8
+                ldir                        ; MUL_B = b
+                pop     hl                  ; HL = a's slot
+                push    hl
+                ld      de, MUL_A
+                ld      bc, 8
+                ldir                        ; MUL_A = a
+                ld      hl, MUL_R
+                call    fold_zero_a         ; MUL_R = 0
+                ld      b, 64
+mul_loop:
+                push    bc                  ; save the iteration counter
+                ld      a, (MUL_B)          ; low byte of b's running value
+                and     1                   ; current LSB
+                jr      z, mul_noadd
+                ld      hl, MUL_R           ; MUL_R += MUL_A (8-byte add)
+                ld      de, MUL_A
+                or      a                   ; clear carry
+                ld      b, 8
+mul_add:
+                ld      a, (de)
+                ld      c, a
+                ld      a, (hl)
+                adc     a, c
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    mul_add
+mul_noadd:
+                ld      hl, MUL_A
+                call    shl1_8              ; MUL_A <<= 1
+                ld      hl, MUL_B
+                call    srl1_8              ; MUL_B >>= 1 (logical)
+                pop     bc
+                djnz    mul_loop
+                pop     hl                  ; HL = a's slot (dest)
+                ld      de, MUL_R
+                ex      de, hl              ; HL = MUL_R (src), DE = dest
+                ld      bc, 8
+                ldir
+                call    fold_pop1
+                jp      fold_loop
+
 ; shl1_8 — one-bit logical left shift of the 8-byte LE value at HL. HL/BC kept.
 shl1_8:
                 push    hl
@@ -850,6 +920,23 @@ sra1_loop:
                 dec     hl
                 rr      (hl)                ; bytes 6..0: CY <- in, bit0 -> CY
                 djnz    sra1_loop
+                pop     bc
+                pop     hl
+                ret
+
+; srl1_8 — one-bit logical right shift of the 8-byte LE value at HL (a 0 fills
+; the vacated MSB). HL/BC kept.
+srl1_8:
+                push    hl
+                push    bc
+                ld      bc, 7
+                add     hl, bc              ; HL -> byte7 (MSB)
+                srl     (hl)                ; byte7: bit0 -> CY, bit7 <- 0
+                ld      b, 7
+srl1_loop:
+                dec     hl
+                rr      (hl)                ; bytes 6..0: CY <- in, bit0 -> CY
+                djnz    srl1_loop
                 pop     bc
                 pop     hl
                 ret
@@ -1227,6 +1314,9 @@ EXPR_PTR:       defs 2          ; expression-bytecode write pointer (into EXPR_B
 FOLD_CUR:       defs 2          ; expr_fold: bytecode read cursor
 FOLD_SP:        defs 2          ; expr_fold: value-stack pointer (past the top cell)
 FOLD_STACK:     defs 128        ; expr_fold: 16 cells of 8-byte LE int64
+MUL_A:          defs 8          ; fold_do_mul: multiplicand, shifted left each step
+MUL_B:          defs 8          ; fold_do_mul: multiplier, shifted right each step
+MUL_R:          defs 8          ; fold_do_mul: running product (low 64 bits)
 
 ; ===========================================================================
 ; Public I/O buffers
