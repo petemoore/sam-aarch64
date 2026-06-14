@@ -15,10 +15,22 @@ inline `Ch(e,f,g)` and `Maj(a,b,c)` with their operand addresses baked in,
 instead of calling the shared `sha_ch`/`sha_maj` subroutines. The subroutines
 take their three source pointers at runtime and so pay a 19T `(ix+d)`/`(iy+d)`
 indexed access per operand byte plus call/`djnz` overhead; the inline form loads
-each operand with a plain `ld a,(nnnn)` and does the boolean in A with H,L,D as
-scratch. That drops per-block compress from 377,371 to 346,267 T-states. (The
-shared subroutines remain — the rolled `NETBOOT_TLS_CLIENT` path still calls
-them.)
+each operand with a plain `ld a,(nnnn)` and does the boolean in A with H,L (and
+D, for Maj) as scratch. That drops per-block compress from 377,371 to 346,267
+T-states. (The shared subroutines remain — the rolled `NETBOOT_TLS_CLIENT` path
+still calls them.)
+
+The round then accumulates `T1 = h + S1(e) + Ch + K[t] + W[t]` and
+`T2 = S0(a) + Maj` in the register quad `B,C,D,E` (B=MSB..E=LSB, big-endian)
+rather than memory-to-memory: each term folds in with a `BCDE += memory` carry
+chain, so the four intermediate write-backs of the T1 chain and both of the T2
+chain are gone — only the final `new e`/`new a` words touch memory. The sigma
+subroutines own B,C,D,E to rotate, so each sigma is computed to `sha_tmpa` first
+and the accumulator is loaded after it returns; `Ch` is written with A,H,L only
+so it can run while the T1 accumulator sits in B,C,D,E, and `Maj` parks its
+result in `sha_majs` while S0 occupies `sha_tmpa`. That drops per-block compress
+from 342,747 to 315,355 T-states (and, as a side effect of the more compact
+sequence, shrinks the emitted block too).
 
 The block is generated rather than written with pyz80's `EQU FOR` because that
 loop's rewind desyncs when a MACRO expands inside its body, corrupting the
