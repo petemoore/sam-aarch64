@@ -63,7 +63,7 @@ them where he reads.
 | **i16** | Replace `cls` test instruction with a real spectrum4 one | OPEN — 🧭 (was tentatively "i13" in conversation) | `docs/ROADMAP.md` deferred checklist |
 | **i19** | Subagent worktree-isolation leak — harden | OPEN — 🧭 | scope row |
 | **i20** | Linker-layout coupling (`spectrum4.ld` hardcoded in flatten) | OPEN — 🧭 | scope row |
-| **i21** | Go-harness fidelity follow-ups (watchpoint, `make harness-sweep`, USAGE.md) | OPEN — ⏳ | scope row |
+| **i21** | Go-harness fidelity follow-ups: ✅ **`make harness-sweep`** (PR #341 — one-shot build-all-deps + `go test -count=1 ./...`, verified from a clean `build/`) + ✅ **USAGE.md** (PR #341 — full-suite run, the stale-payload / test-cache gotchas, and the boot-self-test vs `RunWithFiles`-guard test-authoring patterns). **Remaining:** the memory **watchpoint** inspection feature — deferred until a debugging session needs it (the harness is agent-owned; add ad hoc per the README's "Evolving the harness"). | OPEN — ⏳ harness-sweep + USAGE.md done (PR #341); watchpoint remains | scope row |
 | **i22** | Per-fail-site diagnostic strings | OPEN — 🧭 | deferred-backlog row |
 | **i23** | Paged-IN >16.5 KB HLOAD-ceiling lift | OPEN — 🧭 | deferred-backlog row |
 | **i24** | 64 KB output / 16-bit `OUT_LEN` limit | OPEN — 🧭 | deferred-backlog row |
