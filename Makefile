@@ -65,7 +65,7 @@ ci-netboot-oracle:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-z80-routines ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -74,7 +74,18 @@ $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/n
 
 netboot-build-udp-frame: $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map
 
-ci-netboot-z80: netboot-build-udp-frame
+$(BUILD)/netboot_dhcp_reply.bin $(BUILD)/netboot_dhcp_reply.map: src/netboot/dhcp_reply.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/netboot_dhcp_reply.bin \
+	    --mapfile=$(BUILD)/netboot_dhcp_reply.map \
+	    src/netboot/dhcp_reply.asm
+
+netboot-dhcp-reply: $(BUILD)/netboot_dhcp_reply.bin $(BUILD)/netboot_dhcp_reply.map
+
+# Every netboot routine binary the harness tests load.
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply
+
+ci-netboot-z80: netboot-z80-routines
 	cd tools/netboot-oracle/z80 && go test ./...
 
 test-format: sam-aarch64
