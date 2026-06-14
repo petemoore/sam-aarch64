@@ -37,17 +37,11 @@
 ; ===========================================================================
 
 ; add4_body — 32-bit add mod 2^32: (HL word) += (DE word), big-endian, carry
-; from LSB (byte 3) up to MSB (byte 0). In: HL=dst, DE=src (both -> word base).
-; Out: dst += src. Clobbers A, DE, HL (HL ends at dst+0, DE at src+0).
+; from LSB (byte 3) up to MSB (byte 0). In: HL=dst+3, DE=src+3 (both -> the LSB,
+; the HIGH byte address of the big-endian word). Out: dst += src. Clobbers A, DE,
+; HL (HL ends at dst+0, DE at src+0). Callers pass `label+3` (free for a literal
+; label) so the macro skips any LSB-positioning.
 add4_body:      MACRO
-                inc     hl
-                inc     hl
-                inc     hl                      ; HL -> dst+3 (LSB)
-                ex      de, hl
-                inc     hl
-                inc     hl
-                inc     hl                      ; HL -> src+3 (LSB)
-                ex      de, hl                  ; HL=dst+3, DE=src+3
                 or      a                       ; clear carry
                 ld      a, (de)
                 adc     a, (hl)
@@ -481,20 +475,20 @@ sha_extend:
                 call    sha_woff                ; HL -> W[t-2]
                 call    sha_sigma1
                 ; sha_tmpa += s0(W[t-15])
-                ld      de, sha_tmp2
-                ld      hl, sha_tmpa
+                ld      de, sha_tmp2+3
+                ld      hl, sha_tmpa+3
                 add4_body
                 ; sha_tmpa += W[t-7]
-                ld      de, -7*4
-                call    sha_woff
-                ex      de, hl                  ; DE -> W[t-7]
-                ld      hl, sha_tmpa
+                ld      de, -7*4+3
+                call    sha_woff                ; HL -> W[t-7]+3 (LSB)
+                ex      de, hl                  ; DE -> W[t-7]+3
+                ld      hl, sha_tmpa+3
                 add4_body
                 ; sha_tmpa += W[t-16]
-                ld      de, -16*4
-                call    sha_woff
-                ex      de, hl                  ; DE -> W[t-16]
-                ld      hl, sha_tmpa
+                ld      de, -16*4+3
+                call    sha_woff                ; HL -> W[t-16]+3 (LSB)
+                ex      de, hl                  ; DE -> W[t-16]+3
+                ld      hl, sha_tmpa+3
                 add4_body
                 ; W[t] = sha_tmpa
                 ld      hl, sha_tmpa
@@ -534,21 +528,27 @@ sha_round:
                 ; T1 += S1(e)
                 ld      hl, wv_e
                 call    sha_bigsigma1
-                ld      de, sha_tmpa
-                ld      hl, sha_t1
+                ld      de, sha_tmpa+3
+                ld      hl, sha_t1+3
                 add4_body
                 ; T1 += Ch(e,f,g)  (clobbers IX/IY — that is why W/K are in memory)
                 call    sha_ch                  ; result in sha_tmpa
-                ld      de, sha_tmpa
-                ld      hl, sha_t1
+                ld      de, sha_tmpa+3
+                ld      hl, sha_t1+3
                 add4_body
                 ; T1 += K[t]
-                ld      de, (sha_kt)
-                ld      hl, sha_t1
+                ld      de, (sha_kt)            ; DE -> K[t] base
+                inc     de
+                inc     de
+                inc     de                      ; DE -> K[t]+3 (LSB)
+                ld      hl, sha_t1+3
                 add4_body
                 ; T1 += W[t]
-                ld      de, (sha_wptr)
-                ld      hl, sha_t1
+                ld      de, (sha_wptr)          ; DE -> W[t] base
+                inc     de
+                inc     de
+                inc     de                      ; DE -> W[t]+3 (LSB)
+                ld      hl, sha_t1+3
                 add4_body
                 ; T2 = S0(a)
                 ld      hl, wv_a
@@ -558,8 +558,8 @@ sha_round:
                 copy4_body
                 ; T2 += Maj(a,b,c)
                 call    sha_maj                 ; result in sha_tmpa
-                ld      de, sha_tmpa
-                ld      hl, sha_t2
+                ld      de, sha_tmpa+3
+                ld      hl, sha_t2+3
                 add4_body
 
                 ; Rotate the working vars. Move from h downward so we don't
@@ -570,17 +570,16 @@ sha_round:
                 ld      de, wv_h+3
                 ld      bc, 28
                 lddr                            ; shift a..g up into b..h
-                ; e = d + T1  (d currently holds the old d, already shifted? No:
-                ; after the shift, e holds old d. So e += T1 gives d+T1.)
-                ld      de, sha_t1
-                ld      hl, wv_e
+                ; e = d + T1  (after the shift, e holds old d, so e += T1 = d+T1)
+                ld      de, sha_t1+3
+                ld      hl, wv_e+3
                 add4_body
                 ; a = T1 + T2
                 ld      hl, sha_t1
                 ld      de, wv_a
                 copy4_body
-                ld      de, sha_t2
-                ld      hl, wv_a
+                ld      de, sha_t2+3
+                ld      hl, wv_a+3
                 add4_body
 
                 ; advance W and K pointers
