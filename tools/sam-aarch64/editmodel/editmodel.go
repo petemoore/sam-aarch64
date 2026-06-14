@@ -1,9 +1,10 @@
 // Package editmodel implements the paged block-list document model for the
-// on-SAM editor (item i41a). It is a host-side correctness prototype of the
-// block-list + record-id location-table algorithm; the exact SAM byte layout
-// and Z80 paging mechanics are the Z80 port's concern (i41d).
+// on-SAM editor (items i41a, i41b). It is a host-side correctness prototype of
+// the block-list + record-id location-table algorithm and the bounded ring-journal
+// undo/redo; the exact SAM byte layout, Z80 paging mechanics, and the actual
+// ring-buffer data structure are the Z80 port's concern (i41d).
 //
-// Design authority: docs/specs/editor-edit-model-design.md.
+// Design authority: docs/specs/editor-edit-model-design.md (§4.4, §7.2).
 package editmodel
 
 import (
@@ -70,8 +71,36 @@ func (b *block) bytes() int {
 	return total
 }
 
+// maxUndoDepth is the tunable cap on the undo ring journal (design §7.2).
+// It is the bounded depth beyond which the oldest entries are dropped.
+// The Z80 port (i41d) implements the actual ring buffer; this host model
+// captures the capped-depth + drop-oldest semantics faithfully.
+const maxUndoDepth = 256
+
+// opKind distinguishes whether an editEntry records an insert or a delete.
+type opKind uint8
+
+const (
+	opInsert opKind = iota
+	opDelete
+)
+
+// editEntry records a single public edit for the undo/redo journal.
+// For an insert, at is the document index where the line was inserted and
+// id/text are the inserted line's identity and content. For a delete, at is
+// the index that was deleted and id/text are the removed line's identity and
+// content. A copy of text is always stored so the entry is independent of
+// any external slice.
+type editEntry struct {
+	op   opKind
+	at   int
+	id   RecordID
+	text []byte
+}
+
 // Document is the in-RAM document the editor mutates. It holds the logical
-// sequence of lines partitioned into blocks.
+// sequence of lines partitioned into blocks, together with a bounded ring-journal
+// undo/redo history (design §4.4, §7.2).
 //
 //   - blocks is the ordered list of blocks; each block holds a contiguous run
 //     of lines. Block boundaries are not part of the logical document — they
@@ -85,13 +114,20 @@ func (b *block) bytes() int {
 //     updated (design §3.4). IndexOf locates a block's position by a small
 //     scan of the resident block list (design §2.5 accepts this ~50-entry
 //     scan). Entries are added on insert and removed on delete.
+//   - undo is the undo journal stack (top = most recent edit); capped at
+//     maxUndoDepth entries — the oldest is dropped when the cap is reached.
+//   - redo is the redo stack rebuilt by Undo; cleared by any fresh public edit.
 type Document struct {
 	blocks []*block
 	nextID RecordID
 	loc    map[RecordID]*block
+	undo   []editEntry
+	redo   []editEntry
 }
 
 // New returns an empty Document. nextID starts at 1 (RecordID 0 is reserved).
+// The undo and redo stacks start empty (nil slices); no history is synthesised
+// for the initial empty state.
 func New() *Document {
 	return &Document{
 		nextID: 1,
@@ -135,20 +171,13 @@ func (d *Document) blockAndLocalIndex(at int) (blockIdx, localIdx int) {
 	return 0, 0
 }
 
-// InsertLine inserts a new line before the line at document index at.
-// at == LineCount() appends to the end. Returns the new line's RecordID.
-// Panics if at ∉ [0, LineCount()].
-func (d *Document) InsertLine(at int, text []byte) RecordID {
-	lc := d.LineCount()
-	if at < 0 || at > lc {
-		panic(fmt.Sprintf("editmodel: InsertLine index %d out of range [0, %d]", at, lc))
-	}
-	if d.nextID > maxRecordID {
-		panic(fmt.Sprintf("editmodel: RecordID exhausted (max 0x%X)", maxRecordID))
-	}
-	id := d.nextID
-	d.nextID++
-
+// doInsert performs a pure structural insert of a line with the given explicit
+// id and text into position at. It does NOT allocate a new id and does NOT
+// touch d.nextID; callers supply the id. text is copied so the caller can
+// reuse its buffer. This primitive is used by both InsertLine (which allocates
+// a fresh id and journals) and Undo/Redo (which replay with the original id
+// and must not journal).
+func (d *Document) doInsert(at int, id RecordID, text []byte) {
 	// Copy text so callers can reuse their buffer.
 	t := make([]byte, len(text))
 	copy(t, text)
@@ -159,7 +188,7 @@ func (d *Document) InsertLine(at int, text []byte) RecordID {
 		b := &block{lines: []line{l}}
 		d.blocks = append(d.blocks, b)
 		d.loc[id] = b
-		return id
+		return
 	}
 
 	blockIdx, localIdx := d.blockAndLocalIndex(at)
@@ -174,20 +203,21 @@ func (d *Document) InsertLine(at int, text []byte) RecordID {
 	if b.bytes() > blockCapacityBytes && len(b.lines) >= 2 {
 		d.splitBlock(blockIdx)
 	}
-	return id
 }
 
-// DeleteLine deletes the line at document index at and returns its (now-dead,
-// never-to-be-reused) RecordID. Panics if at ∉ [0, LineCount()).
-func (d *Document) DeleteLine(at int) RecordID {
-	lc := d.LineCount()
-	if at < 0 || at >= lc {
-		panic(fmt.Sprintf("editmodel: DeleteLine index %d out of range [0, %d)", at, lc))
-	}
-
+// doDelete performs a pure structural delete of the line at position at.
+// It returns the removed line's id and a copy of its text. This primitive is
+// used by both DeleteLine (which journals) and Undo/Redo (which must not
+// journal).
+func (d *Document) doDelete(at int) (RecordID, []byte) {
 	blockIdx, localIdx := d.blockAndLocalIndex(at)
 	b := d.blocks[blockIdx]
-	id := b.lines[localIdx].id
+	l := b.lines[localIdx]
+	id := l.id
+
+	// Copy text before removing, so the caller owns an independent slice.
+	textCopy := make([]byte, len(l.text))
+	copy(textCopy, l.text)
 
 	// Remove from loc before mutating the block.
 	delete(d.loc, id)
@@ -199,7 +229,7 @@ func (d *Document) DeleteLine(at int) RecordID {
 		// Remove the empty block. No loc updates needed: other blocks' pointers
 		// are unchanged and the deleted line's entry was already removed above.
 		d.blocks = append(d.blocks[:blockIdx], d.blocks[blockIdx+1:]...)
-		return id
+		return id, textCopy
 	}
 
 	// Try to merge an underflowing block with a neighbour.
@@ -207,8 +237,139 @@ func (d *Document) DeleteLine(at int) RecordID {
 		d.tryMerge(blockIdx)
 	}
 
+	return id, textCopy
+}
+
+// pushUndo appends an entry to the undo journal, dropping the oldest entry
+// when the cap is reached (drop-oldest ring semantics, design §7.2).
+func (d *Document) pushUndo(e editEntry) {
+	d.undo = append(d.undo, e)
+	if len(d.undo) > maxUndoDepth {
+		d.undo = d.undo[1:]
+	}
+}
+
+// InsertLine inserts a new line before the line at document index at.
+// at == LineCount() appends to the end. Returns the new line's RecordID.
+// Records an undo entry and clears the redo stack.
+// Panics if at ∉ [0, LineCount()].
+func (d *Document) InsertLine(at int, text []byte) RecordID {
+	lc := d.LineCount()
+	if at < 0 || at > lc {
+		panic(fmt.Sprintf("editmodel: InsertLine index %d out of range [0, %d]", at, lc))
+	}
+	if d.nextID > maxRecordID {
+		panic(fmt.Sprintf("editmodel: RecordID exhausted (max 0x%X)", maxRecordID))
+	}
+	id := d.nextID
+	d.nextID++
+
+	d.doInsert(at, id, text)
+
+	// Journal this edit and clear redo (a fresh edit invalidates any pending redo).
+	textCopy := make([]byte, len(text))
+	copy(textCopy, text)
+	d.pushUndo(editEntry{op: opInsert, at: at, id: id, text: textCopy})
+	d.redo = d.redo[:0]
+
 	return id
 }
+
+// DeleteLine deletes the line at document index at and returns its (now-dead,
+// never-to-be-reused) RecordID. Records an undo entry and clears the redo stack.
+// Panics if at ∉ [0, LineCount()).
+func (d *Document) DeleteLine(at int) RecordID {
+	lc := d.LineCount()
+	if at < 0 || at >= lc {
+		panic(fmt.Sprintf("editmodel: DeleteLine index %d out of range [0, %d)", at, lc))
+	}
+
+	id, text := d.doDelete(at)
+
+	// Journal this edit and clear redo (a fresh edit invalidates any pending redo).
+	d.pushUndo(editEntry{op: opDelete, at: at, id: id, text: text})
+	d.redo = d.redo[:0]
+
+	return id
+}
+
+// Undo reverses the most recent public edit. Returns true if an edit was
+// undone, false if the undo stack is empty.
+//
+// For undo-of-insert: the line with e.id currently exists; its current index
+// is found via IndexOf(e.id) — robust to any position drift since the original
+// edit — then doDelete removes it.
+//
+// For undo-of-delete: the line is re-inserted at the recorded e.at index using
+// the original e.id (preserving id-stability — design §3; anchors keyed on
+// e.id remain valid). e.at is the correct re-insertion position because undo is
+// strictly LIFO: the operation being inverted is always the most-recent boundary,
+// so the position has not drifted since it was recorded.
+func (d *Document) Undo() bool {
+	if len(d.undo) == 0 {
+		return false
+	}
+	e := d.undo[len(d.undo)-1]
+	d.undo = d.undo[:len(d.undo)-1]
+
+	switch e.op {
+	case opInsert:
+		// Invert an insert: find the line by id (robust to drift) and delete it.
+		idx, ok := d.IndexOf(e.id)
+		if !ok {
+			panic(fmt.Sprintf("editmodel: Undo: id %d not found (should be live)", e.id))
+		}
+		d.doDelete(idx)
+	case opDelete:
+		// Invert a delete: re-insert at the recorded position with the same id.
+		d.doInsert(e.at, e.id, e.text)
+	}
+
+	d.redo = append(d.redo, e)
+	return true
+}
+
+// Redo re-applies the most recently undone edit. Returns true if a redo was
+// available, false if the redo stack is empty.
+//
+// The redo stack is cleared whenever a fresh public edit (InsertLine or
+// DeleteLine) is made.
+//
+// For redo-of-insert: re-insert at e.at with the original e.id (same LIFO
+// position reasoning as Undo's delete direction — the redo is the top of the
+// redo stack, so the position is current).
+//
+// For redo-of-delete: find the line by e.id via IndexOf and delete it.
+func (d *Document) Redo() bool {
+	if len(d.redo) == 0 {
+		return false
+	}
+	e := d.redo[len(d.redo)-1]
+	d.redo = d.redo[:len(d.redo)-1]
+
+	switch e.op {
+	case opInsert:
+		// Re-apply an insert: re-insert at the recorded position with the same id.
+		d.doInsert(e.at, e.id, e.text)
+	case opDelete:
+		// Re-apply a delete: find the line by id (robust to drift) and delete it.
+		idx, ok := d.IndexOf(e.id)
+		if !ok {
+			panic(fmt.Sprintf("editmodel: Redo: id %d not found (should be live)", e.id))
+		}
+		d.doDelete(idx)
+	}
+
+	// Push back onto undo, respecting the cap.
+	d.pushUndo(e)
+	return true
+}
+
+// CanUndo reports whether there is at least one edit available to undo.
+func (d *Document) CanUndo() bool { return len(d.undo) > 0 }
+
+// CanRedo reports whether there is at least one undone edit available to redo.
+func (d *Document) CanRedo() bool { return len(d.redo) > 0 }
 
 // tryMerge attempts to merge the block at blockIdx with an adjacent block
 // when the combined bytes fit within blockCapacityBytes.
