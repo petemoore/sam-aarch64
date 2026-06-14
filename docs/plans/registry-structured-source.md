@@ -266,14 +266,26 @@ defers ONLY invariant 10 (ref-existence)** — far smaller than deferring the wh
 cross-node suite. Strict `validate` (incl. refs) runs once at the end. (Small,
 isolated tool addition + a red-fixture test.)
 
-### Commit 1 — rename + seed + empty generated views
-- Rename the four live registries to `*.old` (`item-registry-open.md` →
-  `item-registry-open.md.old`, + `-closed`, `question-registry-open`, `-closed`).
-- Seed `registry/.id-ledger.txt` with **every existing id** from all four `.old`
-  files — ids are **preserved verbatim** on migration (they are locked in merged
+### Commit 1 — seed + scratch worklist (live `docs/notes/*.md` stay intact)
+**Refinement (2026-06-19, implementation): the worklist is a *scratch copy*, not an
+in-place rename.** The four live `docs/notes/*-registry-*.md` are left UNTOUCHED
+until one atomic cutover commit at the end; this keeps the branch green and every
+cross-doc link valid throughout (renaming `question-registry-closed.md` → `.old`
+mid-migration would dangle its references in CLAUDE.md/ROADMAP/etc. — that file
+retires and has no regenerated replacement). The agreed *process* is unchanged
+(dependency-ordered batches, per-batch info-loss review, shrinking-worklist progress
+tracker, push-once-at-end); only the scratch *location* moved.
+- Create `registry/` with empty canonical `items.yaml` + `questions.yaml`, a
+  `README.md`, and `_migration/` holding **full copies** of the four live registries
+  as `*.md.old` (the shrinking worklist — rows deleted as they migrate).
+- Seed `registry/.id-ledger.txt` with **every existing id** (223) from the four
+  files — ids are **preserved verbatim** on migration (locked in merged
   PRs/branches/commits); only **new split-leaves** mint new hyphenated ids.
-- Create empty `registry/items.yaml` + `questions.yaml`; `make registry` → the three
-  generated `.md` (open/closed items + open questions), initially empty (banner only).
+- During migration `REGISTRY_OUTDIR` stays UNSET (mutators regen to stdout,
+  harmless); the generated `docs/notes/*.md` are produced only at the final cutover
+  (`make registry` with `REGISTRY_OUTDIR=docs/notes`), replacing the live files,
+  deleting `question-registry-closed.md` + rewiring its references, and deleting
+  `registry/_migration/`.
 
 ### Commits 2..N — bounded batches (~15-20 items each)
 Each batch, a **migration agent**:
