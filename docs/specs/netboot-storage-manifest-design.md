@@ -2,7 +2,7 @@
 
 **Status:** design captured 2026-06-18 (Pete). Implementation is **hardware-gated** —
 the real `RST 8` B-DOS persist/serve dispatch is the live-Trinity gate (CLAUDE.md §5,
-same gate as q16/i93/i95). Four buildable sub-decisions are open (§6, tracked as **q26**).
+same gate as q16/i93/i95). The four design sub-decisions are **resolved** (§6, q26 — Pete, 2026-06-18).
 
 This refines the serve-time *name → record* resolution that **i93** (the B-DOS storage
 seam) left as a hand-wavy "store walk", and pairs with the **q16/i99** record-spanning
@@ -100,21 +100,23 @@ fresh one).
   isn't duplicated. (64 GB makes duplication harmless too, but reference-sharing means a
   firmware update touches one place.)
 
-## 6. Open decisions (q26 — Pete's call; defaults proposed so the doc is buildable)
+## 6. Decisions (q26 RESOLVED — Pete, 2026-06-18)
 
-1. **Manifest encoding** — *proposed: human-editable line-based text* (small file set;
-   debuggable; hand-editable; fits the editor-era ethos). Alt: packed binary (smaller,
-   faster to parse, but opaque).
-2. **Remote locator key** — *proposed: both* — record **number** as the primary key (the
-   provisioner wrote it and knows it) + an optional record **name/label** (portable across
-   card copies, and what `samdisk list` / `DIR` shows a human).
-3. **Internal span-record naming** — *proposed: sequential tokens* (`fw000`, `fw001`, …)
-   chosen by the provisioner. With a manifest these are never user-visible, so the existing
-   7-char-prefix `SpanRecordName` truncation (and its collision risk for the broader file
-   set) is no longer needed. Alt: hash-derived names (content-addressed → natural dedup of
-   identical blobs).
-4. **Default storage strategy** — *proposed: s3 highest-free* (respects the user's existing
-   low-numbered disks, per Pete's reasoning). Alt: s1 first-free (denser packing).
+1. **Manifest encoding → human-editable line-based text.** Hand-editable, debuggable, fits
+   the editor-era ethos; the file set is small, so the parse/size cost is nil. (Not packed
+   binary — opacity isn't worth the marginal speed at this scale.)
+2. **Remote locator key → both.** Record **number** is the primary key (the provisioner
+   wrote it and knows it); an optional record **name/label** rides alongside for portability
+   across card copies, and is what `samdisk list` / `DIR` shows a human.
+3. **Internal span-record naming → hash-derived (content-addressed).** A blob's records are
+   keyed by its content hash, so two projects that fetch the *identical* file land on the
+   *same* records automatically — the §5 "shared files by reference" dedup falls out for
+   free, with no separate dedup logic. The 7-char-prefix `SpanRecordName` truncation is
+   dropped; these names are internal, never user-visible. (Chosen over plain sequential
+   tokens precisely for the automatic dedup.)
+4. **Default storage strategy → s3 highest-free.** Keeps the user's low, memorable record
+   slots for their own disks (games, etc.); TFTP storage grows downward from the top.
+   Overridable per the §4 strategy field.
 
 ## 7. Verification line (CLAUDE.md §5)
 
