@@ -343,6 +343,17 @@
     - {num: 181, role: completing}
   refs: ["https://github.com/petemoore/sam-aarch64/blob/d874a69/docs/notes/m8-status.md", i40]
 
+- id: i52
+  title: "Repo cleanup: docs restructure + tracking consolidation + tooling hygiene + functional renames"
+  description: |
+    Delivered across PRs #155-#159 (2026-06-10). Spec in git history at 2f4c898/docs/specs/2026-06-10-repo-cleanup-design.md. Includes: docs restructure (ARCHITECTURE.md, specs/, plans/), tracking consolidation (iN/qN registries), tooling hygiene, and functional renames (tests/format|core|symbols|operands|paged|release, build-disk, CI jobs). i55/i56 were deferred sub-scope items.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 159, role: completing}
+  refs: ["https://github.com/petemoore/sam-aarch64/blob/2f4c898/docs/specs/2026-06-10-repo-cleanup-design.md"]
+
 - id: i53
   title: Bump-arena reclamation for the fixed section-D scratch arrays
   description: |
@@ -362,3 +373,167 @@
   prs:
     - {num: 183, role: completing}
   refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-08-go-vs-z80-disasm-capability-parity.md"]
+
+- id: i57
+  title: "Comment-compression experiment (host-side, Go): benchmark Z80-feasible schemes"
+  description: |
+    Benchmarked static word dictionary, digram/BPE, canonical Huffman, dictionary+Huffman hybrid, block-based LZ (ZX0/ZX7/LZSA-class) at 1/2/4/8 KB blocks, and flate as ceiling, against the real unstripped release editor region (335,461 B comment text, 7,502 comments). Result: best Z80-feasible = greedy LZ77/ZX0-style 85,526 B (ratio 0.287, 6 pages); no scheme fits 256 KB SAM; 512 KB SAM comfortable (15 pages free). Feeds i59 decision. Tool: tools/comment-bench/.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 161, role: completing}
+  refs: [i59, docs/notes/comment-compression-research.md]
+
+- id: i58
+  title: "Trinity interface capabilities research: storage, SPI access, Z80 driver feasibility"
+  description: |
+    Researched Quazar Trinity SD storage (port &DF/SPI VERIFIED; raw-sector 800 KB-record model; no public Z80 SD driver — source in SAM Revival 21 print; ethernet driver ready for Phase-3). Findings in docs/notes/trinity-capabilities.md. Cited sources required per item scope.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 162, role: completing}
+  refs: [i59, docs/notes/trinity-capabilities.md]
+
+- id: i59
+  title: Full-fidelity source residency on SAM — decide comment-storage strategy
+  description: |
+    Decision (Pete, 2026-06-10): compressed-resident on 512 KB; stripped-save (i65) covers 256 KB assembly; Trinity persistence deferred (i66). i40 urgency drops (eviction is no longer the 256 KB story). Reducing comments at source rejected (dev experience is the product goal). Consumes i57 + i58 results; informs i40 scope and i51 full-comment gate. Resolved as part of q9 closure (PR #168).
+  status: DONE
+  kind: leaf
+  owner: pete
+  prs:
+    - {num: 168, role: completing}
+  refs: [i57, i58, i60, i65, i66, docs/notes/comment-compression-research.md]
+
+- id: i60
+  title: "On-SAM ZX0-format comment compression — measurement, compressor, and design"
+  description: |
+    Decision (Pete): greedy ZX0-bitstream compressor ON the SAM for self-hostedness. (a) harness T-states measured (PR #163); (b) Go-first greedy compressor (tools/zx0-greedy, H=512 D=16: ratio 0.3631 at 4 KB, 9246 B scratch) + Z80 port src/zx0_compress.asm (24/24 blocks byte-identical, post-i67 972 T/byte); (c) design approved PR #173: docs/specs/comment-storage-design.md — 4 KB blocks, turbo decoder, page-13 co-residency + page-14 staging, watermark R=2. Implementation: i68.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 173, role: completing}
+  refs: [i59, docs/notes/comment-compression-research.md, docs/specs/comment-storage-design.md]
+
+- id: i61
+  title: Corpus sweep for Trinity/B-DOS/SAM-Revival artifacts (800 disk images)
+  description: |
+    Found (2026-06-10): B-DOS 1.5t beta 6 binary + period Trinity utilities (SD select bytes recovered); B-DOS 1.5a complete Z80 source; 1.6c/1.7D/1.7J/1.7N binaries; a uIP TCP/IP stack for the SAM (Phase-3 relevant). NOT found: any SAM Revival disk, the Quazar manual. Detailed catalogue in private session records (publication policy). trinity-capabilities.md updated.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 166, role: completing}
+  refs: [docs/notes/trinity-capabilities.md]
+
+- id: i62
+  title: "B-DOS storage-backend investigation: prove SAMDOS hook-level portability end-to-end"
+  description: |
+    Boot B-DOS AL 1.5a + emulated Atom Lite under SimCoupé; exercised SAMDOS-hook file-io (DVAR-7 detect → HRECORD 1 → HSAVE/HGTHD/HLOAD round-trip) against a B-DOS record. Hook portability SAMDOS ↔ B-DOS AL: LIKELY → VERIFIED; Trinity/1.5t leg stays LIKELY (no emulation). Rig tools/i62-bdos-experiment/ is re-runnable. Findings: docs/notes/bdos-version-landscape.md §Empirical verification (i62).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 179, role: completing}
+  refs: [docs/notes/bdos-version-landscape.md, tools/i62-bdos-experiment/README.md]
+
+- id: i63
+  title: "Superpowers extraction: keep/adapt/drop skills, encode as repo-native rules"
+  description: |
+    Studied obra/superpowers (MIT); keeps encoded as native CLAUDE.md rules (PR #167, Pete-approved verbatim); plugin disabled for this project 2026-06-10. The bare-run test is every subsequent item. Rationale on the i63 PR.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 167, role: completing}
+  refs: [~/git/superpowers]
+
+- id: i64
+  title: "Blog post: the 2026-06-10 session log (repo cleanup → compression → superpowers)"
+  description: |
+    First post published 2026-06-10 (petemoore.github.io: 'When the agent helps choose its own process'); drafted by agent with consent, privacy pass per publication policy before publishing. The blogging tradition continues per private memory. Closed in registry by PR #169 (session-close) alongside i63.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 169, role: completing}
+
+- id: i67
+  title: Night-shift T-state optimization of the Z80 ZX0 compression path
+  description: |
+    Baseline then optimize src/zx0_compress.asm under a hard byte-identity invariant. Result (2026-06-11): compress 804.1M → 289.7M T (−64.0%) at 4 KB blocking; 134.0 s → 48.3 s at 6 MHz. 2698 → 972 T/byte; oracle byte-identical on all 110 whole-corpus blocks. Decode side: vendored + measured dzx0_fast (48.8 T/B) and dzx0_mega (46.6 T/B) vs standard 63.6 / turbo 50.9. Undocumented-opcode support matrix documented. PRs #170 + #171.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 171, role: completing}
+  refs: [i60, docs/notes/comment-compression-research.md]
+
+- id: i68
+  title: "ZX0 integration: promote decoder to src/, wire into boot path, boot self-tests"
+  description: |
+    i60c design implementation: (1) dzx0_turbo.asm promoted to src/ (org &8B00); (2) page-13 payload zx0.bin/zx0-test.bin, -zx0 build-disk flag, load_zx0_payload in both variants; (3) baked-bytes boot self-tests (1 KB comment fixture, tags &E1-&E3) — green in SimCoupé matrix, kosarev/z80 IXH/IXL proof; (4) release-unstripped-tbn re-pointed at vendored tests/release/release.s; (5) ARCHITECTURE §5 rewritten. Budget: test 141→86 B headroom, prod +38 B.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 176, role: completing}
+  refs: [i60, docs/notes/comment-compression-research.md]
+
+- id: i71
+  title: "B-DOS reference + Trinity-fork deep-dive: vendor, disassemble, diff, re-point rig"
+  description: |
+    (a) Vendored reference/bdos/: Bdos15a.zip + bdos15a.src.txt + al-bdos15a.bin + provenance README (Edwin Blink FREEWARE; 1.5t NOT vendored — WoS 'Copyrights Declined'). (b) B-DOS 1.5t beta 6 disassembled + diffed vs 1.5a: hook surface VERIFIED-STATIC (all 39 vectors map 1:1; only sector-device layer swapped). Findings: docs/notes/bdos-trinity-fork-analysis.md. (c) i62 rig re-pointed at reference/bdos/al-bdos15a.bin. Runtime confirmation on real Trinity hardware remains outstanding (no emulator covers the ports).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 186, role: completing}
+  refs: [docs/notes/bdos-trinity-fork-analysis.md, docs/notes/bdos-version-landscape.md, docs/notes/trinity-capabilities.md, reference/bdos/README.md]
+
+- id: i72
+  title: SAMDOS→B-DOS reorientation across living docs and build tooling
+  description: |
+    B-DOS becomes the documented target DOS: samdos-file-io.md reframed (B-DOS = target, SAMDOS 2 = shipped boot DOS pending q10 swap); ARCHITECTURE.md + ROADMAP table reframed; src/sam_io.inc + src/trampoline.asm comments DOS-neutral (byte-identical built binaries); tools/build-disk gains -dos/-dos-name/-dos-load (default SAMDOS 2, byte-identical before). SAMDOS source citation trail restored (https://github.com/stefandrissen/samdos). Default/CI swap decision was q10 → executed in i75.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 187, role: completing}
+  refs: [i62, docs/specs/samdos-file-io.md]
+
+- id: i75
+  title: "B-DOS boot-disk swap execution: prove SimCoupé matrix green, flip shipped default"
+  description: |
+    tools/build-disk default DOS flipped from SAMDOS 2 to B-DOS AL 1.5a (reference/bdos/al-bdos15a.bin, name bdos, start address 32777); samdos2 byte-exact size guard re-keyed off reference path so SAMDOS 2 compatibility build stays fully functional. Local proof (plain floppy, no Atom Lite, SimCoupé v1.2.16): every gate passed. CI matrix boots B-DOS = formal proof. Resolved q10.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 191, role: completing}
+  refs: [docs/notes/bdos-trinity-fork-analysis.md, docs/notes/m9-status.md]
+
+- id: i78
+  title: "Source-structure preservation in the v2 editor region (blank lines, comment grouping, indentation)"
+  description: |
+    (a) IMPLEMENTED (PR #218): kind u8 sidecar discriminator (0=comment, 1=blank-run) + FlagTaggedSidecar header bit; KindBlankRun IR record; corpus round-trip assertion — all 109 fixtures green incl. release.s (1340 blank lines). Finding → i90: BSS section blanks not preserved through -flatten (pre-existing property). (b) Multi-line grouping DECIDED: one sidecar entry per source comment with embedded body newlines. (c) Indentation DEFERRED: gated downstream of i76 interface sign-off.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 218, role: completing}
+  refs: [docs/specs/source-structure-preservation-design.md, docs/specs/comment-storage-design.md, i41, i48c, i39b, i85, i90]
+
+- id: i79
+  title: "samscreen.DefaultCLUT[5] palette fix: 18 (purple-blue) → 80 (true cyan)"
+  description: |
+    Found by PR #200 (P1a re-land) scoped review. Verified against SAM ROM power-on CLUT at 0x7d51 (two independent ROM copies): index 5 = 80 (true cyan), not 18; every other DefaultCLUT entry already matched the ROM. One-line fix in tools/editor-prototype/samscreen/palette.go; editor-prototype tests green. Affects MODE 4 mockup PNGs only; MODE 3 viewer (CLUT 0–3) unaffected.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 206, role: completing}
+  refs: [tools/editor-prototype/samscreen/palette.go]
