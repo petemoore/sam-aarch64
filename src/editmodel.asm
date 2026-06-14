@@ -1,9 +1,10 @@
-; editmodel.asm — flat-memory block-list document model, Brick 1.
+; editmodel.asm — flat-memory block-list document model, Brick 1a+1b.
 ;
 ; SAM-side Z80 port of the Go authority:
 ;   tools/sam-aarch64/editmodel/editmodel.go
-; Scoped to Brick 1: insert, split, line-at, goto-by-id, line-count,
-; block-count. Delete, merge, undo, and serialize are later bricks.
+; Brick 1a: insert, split, line-at, goto-by-id, line-count, block-count.
+; Brick 1b: delete, block merge-on-underflow, descriptor free-list.
+; Undo and serialize are later bricks.
 ;
 ; FLAT MEMORY (no SAM paging): blocks are descriptor-indexed regions of 64 KB
 ; flat memory. EM_BLOCK_CAP=256 keeps the test small so splits occur with a
@@ -16,19 +17,21 @@
 ; EM_DESC[d].line_count records reside there.
 ;
 ; DESCRIPTOR TABLE  EM_DESC[d] = { data_ptr:2LE, line_count:1 }  (3 bytes).
-; Descriptor index is a STABLE BLOCK REFERENCE — descriptors never move once
-; allocated (Brick 1: no delete/merge, so descriptors only grow).
+; Descriptor index is a STABLE BLOCK REFERENCE — descriptors are reused via
+; a free-list stack when freed by delete/merge (Brick 1b), else high-water
+; allocated.
 ;
-; LOCATION TABLE  EM_LOC[id] = descriptor index holding id. Survives order-
-; array shifts on block insert because only moved records are re-pointed —
-; the design's O(½ block) bounded-cost property (§3/§8.1 of the spec).
+; LOCATION TABLE  EM_LOC[id] = descriptor index holding id, or EM_LOC_ABSENT
+; (&FF) if the id has been deleted. Survives order-array shifts on block
+; insert/remove because only moved records are re-pointed — the design's
+; O(½ block) bounded-cost property (§3/§8.1 of the spec).
 ;
 ; PROVENANCE: algorithmic port of editmodel.go; flat-memory layout is
 ; original for the Z80 port.
 ;
 ; VERIFICATION: tools/netboot-oracle/z80/editmodel_test.go drives this under
-; koron-go/z80, replays random inserts, and asserts LineAt and goto-by-id
-; match the Go oracle on every step.
+; koron-go/z80, replays random inserts+deletes, and asserts LineAt and
+; goto-by-id match the Go oracle on every step.
 
                 ; org only when assembled standalone (host harness uses
                 ; -D EM_STANDALONE=1); an including file supplies its own org.
@@ -51,15 +54,26 @@ EM_MAX_BLOCKS:  equ 80
 ; EM_MAX_IDS: loc-array size; valid ids are 1..EM_MAX_IDS-1.
 EM_MAX_IDS:     equ 2048
 
+; EM_LOC_ABSENT: sentinel stored in EM_LOC[id] when a line has been deleted.
+; Descriptor indices are < EM_MAX_BLOCKS (80) < &FF, so &FF is unambiguous.
+EM_LOC_ABSENT:  equ &FF
+
+; EM_MERGE_THRESH: used-bytes threshold below which a block is a merge
+; candidate after a delete. Mirrors blockMergeThresholdBytes = blockCapacityBytes/4
+; in editmodel.go.
+EM_MERGE_THRESH: equ EM_BLOCK_CAP/4
+
 ; ===========================================================================
 ; em_reset — initialise document to empty.
 ;
-; Sets EM_NBLOCKS=0, EM_NEXT_DESC=0, EM_NEXTID=1 (u24 LE).
+; Sets EM_NBLOCKS=0, EM_NEXT_DESC=0, EM_NEXTID=1 (u24 LE),
+; EM_FREE_COUNT=0.
 ; ===========================================================================
 em_reset:
                 xor     a
                 ld      (EM_NBLOCKS), a
                 ld      (EM_NEXT_DESC), a
+                ld      (EM_FREE_COUNT), a
                 ld      a, 1
                 ld      (EM_NEXTID), a
                 xor     a
@@ -378,10 +392,12 @@ em_goto:
                 pop     hl
                 jp      nc, em_goto_notfound ; id >= EM_MAX_IDS
 
-                ; desc = EM_LOC[id].
+                ; desc = EM_LOC[id]. &FF means the id was deleted — not found.
                 ld      de, EM_LOC
                 add     hl, de              ; HL -> EM_LOC[id]
-                ld      a, (hl)             ; A = desc
+                ld      a, (hl)             ; A = desc (or EM_LOC_ABSENT if deleted)
+                cp      EM_LOC_ABSENT
+                jp      z, em_goto_notfound ; &FF sentinel: deleted id
                 ld      (EM_W_DESC), a
 
                 ; Scan EM_ORDER[0..NBLOCKS-1] for desc to get order position P.
@@ -502,7 +518,10 @@ em_goto_notfound:
 ; ===========================================================================
 
 ; ---------------------------------------------------------------------------
-; em_alloc_desc — allocate the next descriptor, return its index in A.
+; em_alloc_desc — allocate a descriptor, return its index in A.
+;
+; Pops from EM_FREE_LIST when non-empty (reuse a freed descriptor), else
+; falls back to the high-water EM_NEXT_DESC++.
 ;
 ; data_ptr = EM_DATA + index * EM_BLOCK_CAP (EM_BLOCK_CAP=256).
 ; Since multiplying by 256 only affects the high byte:
@@ -510,21 +529,47 @@ em_goto_notfound:
 ;   data_ptr_hi = (EM_DATA >> 8) + index
 ; ---------------------------------------------------------------------------
 em_alloc_desc:
+                ; Pop from free-list if available.
+                ld      a, (EM_FREE_COUNT)
+                or      a
+                jr      z, em_alloc_highwater
+
+                ; Free-list non-empty: pop the top entry.
+                dec     a
+                ld      (EM_FREE_COUNT), a
+                ld      hl, EM_FREE_LIST
+                ld      d, 0
+                ld      e, a
+                add     hl, de
+                ld      a, (hl)             ; A = recycled descriptor index
+                push    af
+                jr      em_alloc_init_desc
+
+em_alloc_highwater:
                 ld      a, (EM_NEXT_DESC)
                 push    af                  ; save index
+
+                ; Increment EM_NEXT_DESC.
+                ld      hl, EM_NEXT_DESC
+                inc     (hl)
+
+em_alloc_init_desc:
+                ; A = descriptor index (on stack). Compute data_ptr and write the
+                ; descriptor entry: {data_ptr_lo, data_ptr_hi, line_count=0}.
+                pop     af
+                push    af                  ; save index again
 
                 ; data_ptr = EM_DATA + index * 256.
                 ; Low byte = EM_DATA_LO (constant); high byte = EM_DATA_HI + index.
                 ld      hl, EM_DATA
                 ld      b, h                ; B = EM_DATA_HI
-                ld      a, (EM_NEXT_DESC)
                 add     a, b                ; A = EM_DATA_HI + index
                 ld      d, a
                 ld      e, l                ; E = EM_DATA_LO  (low byte of EM_DATA)
                 ; DE = data_ptr
 
                 ; Write descriptor: {data_ptr_lo, data_ptr_hi, line_count=0}.
-                pop     af                  ; A = index (restored)
+                pop     af                  ; A = index
                 push    af
                 call    em_desc_ptr_a       ; HL -> descriptor[index]
                 ld      (hl), e             ; data_ptr_lo = EM_DATA_LO
@@ -533,11 +578,27 @@ em_alloc_desc:
                 inc     hl
                 ld      (hl), 0             ; line_count = 0
 
-                ; Increment EM_NEXT_DESC.
-                ld      hl, EM_NEXT_DESC
-                inc     (hl)
-
                 pop     af                  ; A = allocated index
+                ret
+
+; ---------------------------------------------------------------------------
+; em_free_desc — push descriptor index A onto the free-list for later reuse.
+;
+; Called when a block becomes empty (delete) or is absorbed by a merge.
+; The free-list is a stack with EM_FREE_COUNT as the top index.
+; ---------------------------------------------------------------------------
+em_free_desc:
+                push    hl
+                push    de
+                ld      hl, EM_FREE_COUNT
+                ld      d, 0
+                ld      e, (hl)             ; E = current count
+                inc     (hl)                ; EM_FREE_COUNT++
+                ld      hl, EM_FREE_LIST
+                add     hl, de              ; HL -> EM_FREE_LIST[old_count]
+                ld      (hl), a             ; store the freed descriptor index
+                pop     de
+                pop     hl
                 ret
 
 ; ---------------------------------------------------------------------------
@@ -977,6 +1038,524 @@ em_sp_loc_done:
                 ret
 
 ; ===========================================================================
+; em_delete — delete the line at document index BC.
+;
+; Entry: BC = document index (0..line_count-1).
+; Effect: marks EM_LOC[id] = EM_LOC_ABSENT; closes the intra-block gap by
+; shifting packed records after the deleted one down; decrements line_count.
+; Then: if block becomes empty, removes its descriptor from EM_ORDER and frees
+; it. Else if block underflows (used_bytes < EM_MERGE_THRESH), tries to merge
+; with an adjacent block (em_try_merge). Mirrors doDelete in editmodel.go.
+; ===========================================================================
+em_delete:
+                ld      (EM_W_DOCI), bc
+                ; Find block + local index.
+                call    em_block_and_local  ; sets EM_W_DPOS, EM_W_DESC, EM_W_LOCAL
+
+                ; Walk to the deleted record to find its id and record size.
+                ld      a, (EM_W_DESC)
+                call    em_desc_dataptr_a   ; HL = data base
+                ld      b, 0                ; B = records skipped
+                ld      a, (EM_W_LOCAL)
+                ld      c, a                ; C = target local index
+em_del_skip_loop:
+                ld      a, b
+                cp      c
+                jr      z, em_del_at_rec    ; b == local: arrived
+                ; skip record: id(3) + len(1) + text(len)
+                inc     hl
+                inc     hl
+                inc     hl
+                ld      a, (hl)             ; len
+                inc     hl
+                or      a
+                jr      z, em_del_skip_nolen
+                ld      d, 0
+                ld      e, a
+                add     hl, de
+em_del_skip_nolen:
+                inc     b
+                jr      em_del_skip_loop
+
+em_del_at_rec:
+                ; HL -> start of the record to delete.
+                ld      (EM_W_DEL_PTR), hl  ; save pointer to deleted record
+
+                ; Read the id (3 bytes LE) and mark it absent in EM_LOC.
+                ld      a, (hl)
+                ld      (EM_W_ID), a
+                inc     hl
+                ld      a, (hl)
+                ld      (EM_W_ID+1), a
+                inc     hl
+                ld      a, (hl)
+                ld      (EM_W_ID+2), a
+                inc     hl
+                ; HL now at len byte
+                ld      a, (hl)             ; len
+                ld      (EM_W_LEN), a
+                ; rec_size = 4 + len
+                add     a, 4
+                ld      (EM_W_REC_SIZE), a
+
+                ; EM_LOC[id] = EM_LOC_ABSENT (&FF).
+                ; id is u24 but EM_LOC is indexed by the low 16 bits (id < EM_MAX_IDS).
+                ld      hl, (EM_W_ID)       ; HL = id[1]:id[0]
+                ld      de, EM_LOC
+                add     hl, de
+                ld      (hl), EM_LOC_ABSENT
+
+                ; Compute END_PTR for this block by walking all records.
+                ld      a, (EM_W_DESC)
+                call    em_desc_dataptr_a   ; HL = data base
+                ld      (EM_W_DATA_BASE), hl
+                ld      a, (EM_W_DESC)
+                call    em_desc_linecount_a ; A = line_count (before decrement)
+                ld      (EM_W_NLINES), a
+                call    em_find_end_ptr     ; sets EM_W_END_PTR
+
+                ; Close the gap: shift bytes from (DEL_PTR + rec_size) .. (END_PTR-1)
+                ; down by rec_size. Use LDIR (src > dst = forward copy is safe).
+                ld      hl, (EM_W_DEL_PTR)
+                ld      a, (EM_W_REC_SIZE)
+                ld      d, 0
+                ld      e, a
+                add     hl, de              ; HL = src (first byte after deleted record)
+                ld      de, (EM_W_DEL_PTR)  ; DE = dst (where deleted record was)
+
+                ; shift_count = END_PTR - src
+                ld      (EM_W_TMP2), hl     ; save src
+                ld      hl, (EM_W_END_PTR)
+                ld      bc, (EM_W_TMP2)
+                or      a
+                sbc     hl, bc              ; HL = shift_count
+                ld      a, h
+                or      l
+                jr      z, em_del_gap_done  ; nothing to shift
+                ld      b, h
+                ld      c, l
+                ld      hl, (EM_W_TMP2)     ; restore src
+                ldir
+
+em_del_gap_done:
+                ; Decrement line_count in the descriptor.
+                ld      a, (EM_W_DESC)
+                call    em_desc_ptr_a       ; HL -> descriptor base
+                inc     hl
+                inc     hl                  ; HL -> line_count byte
+                dec     (hl)
+
+                ; If line_count is now 0, remove this block entirely.
+                ld      a, (hl)
+                or      a
+                jr      z, em_del_remove_block
+
+                ; Block still has lines. Check if it underflows.
+                ; Compute used_bytes via em_used_bytes_a.
+                ld      a, (EM_W_DESC)
+                call    em_used_bytes_a     ; HL = used_bytes
+
+                ; if used_bytes < EM_MERGE_THRESH, try merge.
+                ld      de, EM_MERGE_THRESH
+                or      a
+                sbc     hl, de              ; carry if used_bytes < EM_MERGE_THRESH
+                jr      nc, em_del_done
+                ld      a, (EM_W_DPOS)
+                call    em_try_merge
+em_del_done:
+                ret
+
+em_del_remove_block:
+                ; The block is empty. Remove its descriptor index from EM_ORDER
+                ; (shift the order array left from DPOS..NBLOCKS-2), free the descriptor,
+                ; and decrement EM_NBLOCKS.
+                ld      a, (EM_NBLOCKS)
+                dec     a                   ; A = NBLOCKS-1 (= index of last entry)
+                ld      c, a                ; C = NBLOCKS-1 (loop limit)
+                ld      a, (EM_W_DPOS)
+                ld      d, a                ; D = current dst index (starts at DPOS)
+
+em_del_shift_loop:
+                ld      a, d
+                cp      c                   ; d == NBLOCKS-1?
+                jr      nc, em_del_order_shifted ; d >= NBLOCKS-1: done
+                ; ORDER[d] = ORDER[d+1]
+                ld      hl, EM_ORDER
+                ld      e, d
+                ld      d, 0
+                add     hl, de              ; HL -> ORDER[d]
+                inc     hl                  ; HL -> ORDER[d+1]
+                ld      a, (hl)
+                dec     hl                  ; HL -> ORDER[d]
+                ld      (hl), a
+                ld      d, e                ; restore loop counter D from E (e = old d)
+                inc     d
+                jr      em_del_shift_loop
+
+em_del_order_shifted:
+                ; Free the descriptor and decrement NBLOCKS.
+                ld      a, (EM_W_DESC)
+                call    em_free_desc
+                ld      hl, EM_NBLOCKS
+                dec     (hl)
+                ret
+
+; ===========================================================================
+; em_try_merge — attempt to merge the underflowing block at order position A
+; with an adjacent block.
+;
+; Mirrors tryMerge in editmodel.go: try next neighbour first, then previous.
+; "Absorb next into D" means copy next's packed records into D's data region,
+; re-point only next's records' EM_LOC to D, remove next from EM_ORDER, free
+; next's descriptor, EM_NBLOCKS--. "Absorb D into prev" is the symmetric case.
+; Re-pointing only moved records preserves the O(½ block) cost (§3/§8.1).
+;
+; Fits test: combined <= EM_BLOCK_CAP.  After "sbc hl,de" (HL=combined,
+; DE=cap): carry means combined < cap (fits); Z (no carry, HL=0) means
+; combined == cap (also fits); no carry + HL!=0 means combined > cap (skip).
+; So "fits" iff carry OR zero — equivalent to checking combined-1 < cap,
+; i.e. decrement HL by 1 then check carry-only, or just branch on c or z.
+; ===========================================================================
+em_try_merge:
+                ld      (EM_W_MPOS), a      ; save order position of underflowing block
+
+                ; desc of the underflowing block.
+                ld      hl, EM_ORDER
+                ld      d, 0
+                ld      e, a
+                add     hl, de
+                ld      a, (hl)
+                ld      (EM_W_MDESC), a     ; D (the underflowing descriptor)
+
+                ; ---------------------------------------------------------------
+                ; Try next neighbour first: MPOS+1 < NBLOCKS?
+                ; ---------------------------------------------------------------
+                ld      a, (EM_W_MPOS)
+                inc     a                   ; A = MPOS+1
+                ld      b, a                ; B = MPOS+1
+                ld      a, (EM_NBLOCKS)
+                cp      b                   ; NBLOCKS - (MPOS+1); carry if NBLOCKS < MPOS+1
+                jr      z, em_merge_try_prev ; NBLOCKS == MPOS+1: no next (MPOS is last)
+                jr      c, em_merge_try_prev ; NBLOCKS < MPOS+1: impossible but safe
+
+                ; next descriptor at ORDER[MPOS+1].
+                ld      hl, EM_ORDER
+                ld      d, 0
+                ld      e, b                ; E = MPOS+1
+                add     hl, de
+                ld      a, (hl)
+                ld      (EM_W_MNEXT), a     ; next descriptor
+
+                ; Compute used(D) + used(next). Merge if combined <= EM_BLOCK_CAP.
+                ld      a, (EM_W_MDESC)
+                call    em_used_bytes_a     ; HL = used(D)
+                ld      (EM_W_MTMP), hl
+                ld      a, (EM_W_MNEXT)
+                call    em_used_bytes_a     ; HL = used(next)
+                ld      de, (EM_W_MTMP)
+                add     hl, de              ; HL = combined
+                ld      de, EM_BLOCK_CAP
+                or      a
+                sbc     hl, de              ; carry iff combined < cap; Z iff combined == cap
+                jr      c, em_do_merge_next ; combined < cap: fits
+                jr      z, em_do_merge_next ; combined == cap: fits exactly
+
+                ; combined > cap: fall through to try prev.
+
+em_merge_try_prev:
+                ; Try previous neighbour: MPOS > 0?
+                ld      a, (EM_W_MPOS)
+                or      a
+                ret     z                   ; MPOS == 0: no previous neighbour
+
+                ; prev descriptor at ORDER[MPOS-1].
+                dec     a                   ; A = MPOS-1
+                ld      hl, EM_ORDER
+                ld      d, 0
+                ld      e, a
+                add     hl, de
+                ld      a, (hl)
+                ld      (EM_W_MPREV), a     ; prev descriptor
+
+                ; Compute used(prev) + used(D). Merge if combined <= EM_BLOCK_CAP.
+                ld      a, (EM_W_MPREV)
+                call    em_used_bytes_a     ; HL = used(prev)
+                ld      (EM_W_MTMP), hl
+                ld      a, (EM_W_MDESC)
+                call    em_used_bytes_a     ; HL = used(D)
+                ld      de, (EM_W_MTMP)
+                add     hl, de              ; HL = combined
+                ld      de, EM_BLOCK_CAP
+                or      a
+                sbc     hl, de              ; carry iff combined < cap; Z iff combined == cap
+                jp      c, em_do_merge_prev ; combined < cap: fits
+                jp      z, em_do_merge_prev ; combined == cap: fits exactly
+                ret                         ; combined > cap: no merge possible
+
+; ---------------------------------------------------------------------------
+; em_do_merge_next — absorb next block into D (the underflowing block).
+; On entry: EM_W_MDESC = D, EM_W_MNEXT = next descriptor, EM_W_MPOS = pos of D.
+; ---------------------------------------------------------------------------
+em_do_merge_next:
+                ; Copy next's packed records to the end of D's data region.
+                ; Compute D's end pointer BEFORE calling em_used_bytes_a, which
+                ; clobbers EM_W_DATA_BASE, EM_W_NLINES, EM_W_END_PTR, and DE.
+                ; Save D's end in EM_W_MTMP so it survives the em_used_bytes_a call.
+                ld      a, (EM_W_MDESC)
+                call    em_used_bytes_a     ; HL = used(D); also clobbers EM_W_END_PTR to D's end
+                ; EM_W_END_PTR now = D's data_base + used(D) = D's end.
+                ld      de, (EM_W_END_PTR)  ; DE = destination (D's end = append point)
+                ld      (EM_W_MTMP), de     ; save D's end; em_used_bytes_a(next) will clobber EM_W_END_PTR
+
+                ; Get byte count = used(next), and source = next's data base.
+                ld      a, (EM_W_MNEXT)
+                call    em_used_bytes_a     ; HL = used(next); EM_W_END_PTR now = next's end, DE clobbered
+                ld      b, h
+                ld      c, l                ; BC = byte count
+                ld      de, (EM_W_MTMP)     ; DE = D's end (destination, restored from EM_W_MTMP)
+                ld      a, b
+                or      c
+                jr      z, em_mn_copy_done
+                ld      a, (EM_W_MNEXT)
+                call    em_desc_dataptr_a   ; HL = next's data base (source)
+                ld      de, (EM_W_MTMP)     ; restore DE = D's end; em_desc_dataptr_a's EX DE,HL clobbered it
+                ldir                        ; copy next's records into D
+
+em_mn_copy_done:
+                ; Add next's line_count to D's line_count.
+                ld      a, (EM_W_MNEXT)
+                call    em_desc_linecount_a ; A = next's line_count
+                ld      c, a
+                ld      a, (EM_W_MDESC)
+                call    em_desc_ptr_a
+                inc     hl
+                inc     hl                  ; HL -> D's line_count byte
+                ld      a, (hl)
+                add     a, c
+                ld      (hl), a
+
+                ; Re-point EM_LOC for next's records to D. Only next's records move.
+                ; Get line_count first: em_desc_linecount_a clobbers HL, so call it
+                ; before em_desc_dataptr_a (which sets HL to the data base we need).
+                ld      a, (EM_W_MNEXT)
+                call    em_desc_linecount_a ; A = next's line_count
+                ld      b, a
+                ld      a, (EM_W_MDESC)
+                ld      c, a                ; C = D (new home for moved records)
+                ld      a, (EM_W_MNEXT)
+                call    em_desc_dataptr_a   ; HL = next's data base (em_desc_linecount_a clobbered HL)
+em_mn_reloc:
+                ld      a, b
+                or      a
+                jr      z, em_mn_reloc_done
+                ld      e, (hl)             ; id[0]
+                inc     hl
+                ld      d, (hl)             ; id[1]
+                inc     hl
+                inc     hl                  ; skip id[2]
+                push    hl
+                push    bc
+                ld      hl, EM_LOC
+                add     hl, de
+                ld      (hl), c             ; EM_LOC[id] = D
+                pop     bc
+                pop     hl
+                ld      a, (hl)             ; len
+                inc     hl
+                or      a
+                jr      z, em_mn_reloc_skip
+                ld      d, 0
+                ld      e, a
+                add     hl, de
+em_mn_reloc_skip:
+                dec     b
+                jr      em_mn_reloc
+em_mn_reloc_done:
+
+                ; Remove ORDER[MPOS+1] (next) from ORDER: shift ORDER[MPOS+2..NBLOCKS-1] left.
+                ; dst = MPOS+1, src = MPOS+2.
+                ld      a, (EM_W_MPOS)
+                add     a, 2                ; A = MPOS+2 (source start)
+                ld      d, a                ; D = source index
+em_mn_shift:
+                ld      a, (EM_NBLOCKS)
+                cp      d                   ; NBLOCKS - d; carry if NBLOCKS < d
+                jr      z, em_mn_shifted    ; d == NBLOCKS: done
+                jr      c, em_mn_shifted    ; d > NBLOCKS: done
+                ; ORDER[d-1] = ORDER[d]
+                ld      hl, EM_ORDER
+                ld      e, d
+                ld      d, 0
+                add     hl, de              ; HL -> ORDER[d]
+                ld      a, (hl)             ; ORDER[d]
+                dec     hl                  ; HL -> ORDER[d-1]
+                ld      (hl), a
+                ld      d, e                ; restore D from E (E = old d)
+                inc     d
+                jr      em_mn_shift
+em_mn_shifted:
+                ld      a, (EM_W_MNEXT)
+                call    em_free_desc
+                ld      hl, EM_NBLOCKS
+                dec     (hl)
+                ret
+
+; ---------------------------------------------------------------------------
+; em_do_merge_prev — absorb D (the underflowing block) into the previous block.
+; On entry: EM_W_MDESC = D, EM_W_MPREV = prev descriptor, EM_W_MPOS = pos of D.
+; ---------------------------------------------------------------------------
+em_do_merge_prev:
+                ; Copy D's packed records to the end of prev's data region.
+                ; Compute prev's end BEFORE calling em_used_bytes_a, which clobbers
+                ; EM_W_DATA_BASE, EM_W_NLINES, EM_W_END_PTR, and the DE register.
+                ; Save prev's end in EM_W_MTMP so it survives the call.
+                ld      a, (EM_W_MPREV)
+                call    em_used_bytes_a     ; HL = used(prev); EM_W_END_PTR = prev's end, DE clobbered
+                ld      de, (EM_W_END_PTR)  ; DE = prev's end (destination)
+                ld      (EM_W_MTMP), de     ; save; em_used_bytes_a(D) will clobber EM_W_END_PTR
+
+                ; Get byte count = used(D), and source = D's data base.
+                ld      a, (EM_W_MDESC)
+                call    em_used_bytes_a     ; HL = used(D); EM_W_END_PTR now = D's end, DE clobbered
+                ld      b, h
+                ld      c, l                ; BC = byte count
+                ld      de, (EM_W_MTMP)     ; DE = prev's end (destination, restored from EM_W_MTMP)
+                ld      a, b
+                or      c
+                jr      z, em_mp_copy_done
+                ld      a, (EM_W_MDESC)
+                call    em_desc_dataptr_a   ; HL = D's data base (source)
+                ld      de, (EM_W_MTMP)     ; restore DE = prev's end; em_desc_dataptr_a's EX DE,HL clobbered it
+                ldir                        ; copy D's records into prev
+
+em_mp_copy_done:
+                ; Add D's line_count to prev's line_count.
+                ld      a, (EM_W_MDESC)
+                call    em_desc_linecount_a ; A = D's line_count
+                ld      c, a
+                ld      a, (EM_W_MPREV)
+                call    em_desc_ptr_a
+                inc     hl
+                inc     hl                  ; HL -> prev's line_count byte
+                ld      a, (hl)
+                add     a, c
+                ld      (hl), a
+
+                ; Re-point EM_LOC for D's records to prev. Only D's records move.
+                ; Get line_count first: em_desc_linecount_a clobbers HL, so call it
+                ; before em_desc_dataptr_a (which sets HL to the data base we need).
+                ld      a, (EM_W_MDESC)
+                call    em_desc_linecount_a ; A = D's line_count
+                ld      b, a
+                ld      a, (EM_W_MPREV)
+                ld      c, a                ; C = prev (new home for moved records)
+                ld      a, (EM_W_MDESC)
+                call    em_desc_dataptr_a   ; HL = D's data base (em_desc_linecount_a clobbered HL)
+em_mp_reloc:
+                ld      a, b
+                or      a
+                jr      z, em_mp_reloc_done
+                ld      e, (hl)             ; id[0]
+                inc     hl
+                ld      d, (hl)             ; id[1]
+                inc     hl
+                inc     hl                  ; skip id[2]
+                push    hl
+                push    bc
+                ld      hl, EM_LOC
+                add     hl, de
+                ld      (hl), c             ; EM_LOC[id] = prev
+                pop     bc
+                pop     hl
+                ld      a, (hl)             ; len
+                inc     hl
+                or      a
+                jr      z, em_mp_reloc_skip
+                ld      d, 0
+                ld      e, a
+                add     hl, de
+em_mp_reloc_skip:
+                dec     b
+                jr      em_mp_reloc
+em_mp_reloc_done:
+
+                ; Remove ORDER[MPOS] (D) from ORDER: shift ORDER[MPOS+1..NBLOCKS-1] left.
+                ; dst = MPOS, src = MPOS+1.
+                ld      a, (EM_W_MPOS)
+                inc     a                   ; A = MPOS+1 (source start)
+                ld      d, a                ; D = source index
+em_mp_shift:
+                ld      a, (EM_NBLOCKS)
+                cp      d                   ; NBLOCKS - d; carry if NBLOCKS < d
+                jr      z, em_mp_shifted    ; d == NBLOCKS: done
+                jr      c, em_mp_shifted    ; d > NBLOCKS: done
+                ; ORDER[d-1] = ORDER[d]
+                ld      hl, EM_ORDER
+                ld      e, d
+                ld      d, 0
+                add     hl, de              ; HL -> ORDER[d]
+                ld      a, (hl)             ; ORDER[d]
+                dec     hl                  ; HL -> ORDER[d-1]
+                ld      (hl), a
+                ld      d, e                ; restore D from E (E = old d)
+                inc     d
+                jr      em_mp_shift
+em_mp_shifted:
+                ld      a, (EM_W_MDESC)
+                call    em_free_desc
+                ld      hl, EM_NBLOCKS
+                dec     (hl)
+                ret
+
+; ---------------------------------------------------------------------------
+; em_find_end_ptr — compute EM_W_END_PTR by walking EM_W_NLINES records
+; from EM_W_DATA_BASE. Unlike em_find_offsets (which also sets INS_PTR),
+; this only computes the end pointer — used internally by delete/merge to
+; find the tail of the data region.
+; ---------------------------------------------------------------------------
+em_find_end_ptr:
+                ld      hl, (EM_W_DATA_BASE)
+                ld      a, (EM_W_NLINES)
+                or      a
+                jr      z, em_fep_done
+                ld      b, a                ; B = records to walk
+em_fep_loop:
+                inc     hl                  ; skip id[0]
+                inc     hl                  ; skip id[1]
+                inc     hl                  ; skip id[2]
+                ld      a, (hl)             ; len
+                inc     hl                  ; skip len
+                or      a
+                jr      z, em_fep_notext
+                ld      d, 0
+                ld      e, a
+                add     hl, de
+em_fep_notext:
+                djnz    em_fep_loop
+em_fep_done:
+                ld      (EM_W_END_PTR), hl
+                ret
+
+; ---------------------------------------------------------------------------
+; em_used_bytes_a — given descriptor index in A, return used byte count in HL.
+; ---------------------------------------------------------------------------
+em_used_bytes_a:
+                push    af
+                call    em_desc_dataptr_a   ; HL = data base
+                ld      (EM_W_DATA_BASE), hl
+                pop     af
+                push    af
+                call    em_desc_linecount_a ; A = line_count
+                ld      (EM_W_NLINES), a
+                call    em_find_end_ptr     ; EM_W_END_PTR = data end
+                ld      hl, (EM_W_END_PTR)
+                ld      de, (EM_W_DATA_BASE)
+                or      a
+                sbc     hl, de              ; HL = used_bytes
+                pop     af
+                ret
+
+; ===========================================================================
 ; Working storage (scratch variables used across routines)
 ; ===========================================================================
 EM_W_DOCI:      defs 2          ; document index for current insert
@@ -1002,6 +1581,14 @@ EM_W_SMID_PTR:  defs 2          ; pointer to start of second half
 EM_W_SRHALF_CNT: defs 1         ; second-half record count
 EM_W_SRSIZE:    defs 2          ; byte size of second half
 EM_W_SDESC2:    defs 1          ; new descriptor index (D2)
+; Delete/merge working storage.
+EM_W_DEL_PTR:   defs 2          ; pointer to record being deleted
+EM_W_TMP2:      defs 2          ; scratch pointer (gap-close source)
+EM_W_MPOS:      defs 1          ; order position of underflowing block
+EM_W_MDESC:     defs 1          ; descriptor of underflowing block (D)
+EM_W_MNEXT:     defs 1          ; descriptor of next neighbour
+EM_W_MPREV:     defs 1          ; descriptor of previous neighbour
+EM_W_MTMP:      defs 2          ; scratch for used-byte sums in merge
 
 ; ===========================================================================
 ; Document state
@@ -1009,6 +1596,12 @@ EM_W_SDESC2:    defs 1          ; new descriptor index (D2)
 EM_NBLOCKS:     defs 1          ; blocks in use
 EM_NEXT_DESC:   defs 1          ; high-water descriptor allocator
 EM_NEXTID:      defs 3          ; next id (u24 LE), initialised to 1
+
+; Free-list stack for descriptor reuse (Brick 1b delete/merge).
+; EM_FREE_LIST[0..EM_FREE_COUNT-1] holds freed descriptor indices.
+; em_free_desc pushes, em_alloc_desc pops when non-empty.
+EM_FREE_COUNT:  defs 1
+EM_FREE_LIST:   defs EM_MAX_BLOCKS
 
 ; Descriptor pool: EM_MAX_BLOCKS × 3 bytes = {data_ptr:2LE, line_count:1}.
 EM_DESC:        defs EM_MAX_BLOCKS*3

@@ -853,9 +853,16 @@ Makefile payload target + the test, gated by the existing `netboot-z80` CI job.
     check). Flat-memory, small `EM_BLOCK_CAP=256` (the real SAM ½-page 8 KB is set
     at Brick 2); the koron-go/z80 harness gained an additive `CallResult.A` field
     for the found-flag. Gated by the existing `netboot-z80` CI job.
-  - **Brick 1b (remaining):** `em_delete` + block **merge on underflow** (port of
-    `doDelete`/`tryMerge`), with the oracle test extended to interleaved
-    insert/delete. Builds directly on 1a.
+  - **Brick 1b (LANDED — PR #389):** `em_delete` (gap-close + decrement + the
+    `EM_LOC_ABSENT=&FF` sentinel so `em_goto` reports a deleted id as not-found)
+    + block **merge on underflow** (port of `doDelete`/`tryMerge`: combine with a
+    neighbour when `used ≤ EM_BLOCK_CAP`, re-pointing only the moved records'
+    `EM_LOC`) + a descriptor **free-list** (so merge/empty-block descriptors are
+    reused, replacing 1a's high-water-only allocator). Verified by
+    `TestEditModelDeleteMergeZ80` (3 seeds: 120-insert build-up + 200 interleaved
+    insert/delete ops vs a parallel oracle → every `em_line_at`/`em_goto`-live
+    matches, deleted ids report not-found, block count stays bounded = merges
+    fire). **Brick 1 (the flat-memory block-list core) is now complete.**
 - **Brick 2 — paging integration:** map blocks onto real i2 free-page-pool pages
   via `OUT (251)`, claim/return pages on split/merge, block list resident in
   section D. The **only** part that genuinely needs SAM paging hardware →
