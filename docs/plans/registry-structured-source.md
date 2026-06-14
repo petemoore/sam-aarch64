@@ -104,8 +104,11 @@ open/closed item-count reconciliation (pre vs post, modulo the reshape leaves).
 
 ## Phase 5 — doc / automation rewiring (PR `i115e`)
 
-Lands (every reader/writer enumerated):
-- `CLAUDE.md`: §3 item 6 + the doc-lifecycle rules + the open→closed move rule →
+Lands (every reader/writer enumerated). **All `CLAUDE.md` edits target the in-repo
+`/home/pmoore/git/sam-aarch64/CLAUDE.md` ONLY — never the global
+`~/.claude/CLAUDE.md` or the `~/git/CLAUDE.md` sibling (repo scope-discipline
+rule).**
+- `CLAUDE.md` (in-repo): §3 item 6 + the doc-lifecycle rules + the open→closed move rule →
   point at `registry/items.yaml` as the source; the `.md` are generated and must
   never be hand-edited (CI `registry-sync` enforces). Add the explicit
   agent-guidance block (below).

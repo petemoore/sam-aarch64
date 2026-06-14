@@ -64,7 +64,7 @@ and shows in the diff.
 ### Schema (per item record)
 
 ```yaml
-- id: i48c              # required; items ^i[0-9]+([a-z]|-b[0-9]+[a-z]?)?$ ; questions ^q[0-9]+[a-z]?$
+- id: i48c              # required; items ^i[0-9]+[a-z]?(-b[0-9]+[a-z]?)?$ ; questions ^q[0-9]+[a-z]?$
   title: "..."          # required; <= 120 chars, single line
   description: |        # block scalar; bounded: <= 600 chars, <= 6 lines
     ...
@@ -146,11 +146,35 @@ one-PR rule.
 - A single PR number may appear on several records (a refactor closing one item
   and a follow-up on another) — the one-PR constraint is per-record, not global.
 
-### Sub-id grammar
+### Id grammar, nesting depth, and sort order
 
-Bricks under a letter sub-item use a hyphenated suffix: `i48c-b1`, `i48c-b1b`, …
-`i48c-b5a`. This preserves the brick names already locked into shipped PR titles,
-commits, and branches (#393–#435). Id grammar: `^i[0-9]+([a-z]|-b[0-9]+[a-z]?)?$`.
+Ids are **prescribed to a bounded shape — no arbitrary nesting.** An item id is at
+most three components deep:
+
+```
+i<N>                       base item            e.g. i115
+i<N><letter>               sub-item (level 1)   e.g. i48c
+i<N><letter>-b<M>          brick (level 2)      e.g. i48c-b5
+i<N><letter>-b<M><letter>  brick part           e.g. i48c-b5a
+```
+
+Regex: `^i[0-9]+[a-z]?(-b[0-9]+[a-z]?)?$` (questions: `^q[0-9]+[a-z]?$`, no
+bricks). `b` denotes "brick" (the i48c term). The hyphenated brick suffix
+preserves the names already locked into shipped PR titles/commits/branches
+(#393–#435). **Maximum depth is base → sub-item → brick** (plus an optional
+brick-part letter); anything deeper or otherwise shaped — `i236-g4a-c3-6-a17`,
+multi-letter segments, nested `-b…-b…` — is **rejected by the validator**. If a
+brick ever needs further subdivision, that is a signal to restructure (add sibling
+bricks, or promote the brick to its own item with a `ref`), not to nest deeper.
+
+**Sort order** is by a typed key, not string comparison: each id parses into
+`(N:int, letter:str, brickN:int, brickLetter:str)`; integer fields compare
+numerically, letter fields lexically, absent fields sort first. So `i5 < i41 <
+i237`, `i48 < i48a < i48c`, and `i48c-b1 < i48c-b5a < i48c-b9 < i48c-b10` (the
+brick number is numeric, so b10 follows b9). This canonical order is **enforced in
+CI two ways**: `registry validate` (invariant 3) errors if the source is out of
+order, and `registry gen` emits in this order so the `registry-sync` drift diff
+fails on any mis-sort.
 
 ## Invariants (the validator)
 
@@ -160,8 +184,9 @@ message:
 1. **Ids globally unique; never reused** — relative to an append-only
    `registry/.id-ledger.txt` high-water list, so a deleted id cannot be re-minted.
 2. **Well-formed ids** — the grammar above (items / questions).
-3. **True numeric sort** — ascending `(N, letter, brick)`; sub-items grouped under
-   their parent.
+3. **Canonical typed sort** — records in the typed-key order defined under "Id
+   grammar" (integer fields numeric, letter fields lexical); sub-items grouped
+   under their parent. Enforced by `validate` AND the `gen`/sync-check drift diff.
 4. **Status in the closed enum** with the required payload per status.
 5. **Item→PR mapping structured** — `prs` is a list of `{num, role}`.
 6. **One completing PR per leaf; umbrellas carry none** (semantics above).
