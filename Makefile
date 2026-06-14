@@ -49,6 +49,16 @@ ci-disasm: test-disasm
 ci-disasm-roundtrip: test-disasm
 	./tools/run-disasm-roundtrip.sh
 
+# netboot-oracle — Phase-3 host harness: the DHCP/TFTP packet builders +
+# parsers (the Z80 i82/i83/i86 authority) replayed against masked golden
+# vectors extracted from a real Pi 400 netboot capture.  Pure Go, no
+# container, no off-repo captures (the committed golden vectors are the
+# fixtures).  Validates the protocol logic in isolation — NOT the Z80
+# execution or the ENC28J60 hardware (those are gated on i80/real-Trinity).
+.PHONY: ci-netboot-oracle
+ci-netboot-oracle:
+	cd tools/netboot-oracle && go test ./...
+
 test-format: sam-aarch64
 	cd tools/sam-aarch64-format && go test ./...
 	cd tools/sam-aarch64 && go test ./...
@@ -79,7 +89,7 @@ sysreg-sync-check:
 # modules to STATICCHECK_MODULES as they appear.
 .PHONY: staticcheck
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.7.0
-STATICCHECK_MODULES := comment-bench sam-aarch64-format sam-aarch64 aarch64enc aarch64dec enctab-gen z80-test-harness-go zx0-greedy editor-prototype
+STATICCHECK_MODULES := comment-bench sam-aarch64-format sam-aarch64 aarch64enc aarch64dec enctab-gen z80-test-harness-go zx0-greedy editor-prototype netboot-oracle
 staticcheck:
 	for m in $(STATICCHECK_MODULES); do \
 	    echo "=== staticcheck (U1000) $$m ==="; \

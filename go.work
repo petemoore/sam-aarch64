@@ -8,6 +8,7 @@ use (
 	./tools/editor-prototype
 	./tools/enctab-gen
 	./tools/i62-bdos-experiment/build-i62-disk
+	./tools/netboot-oracle
 	./tools/sam-aarch64
 	./tools/sam-aarch64-format
 	./tools/z80-test-harness-go
