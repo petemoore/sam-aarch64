@@ -691,7 +691,6 @@ sha_add4_lp:
 ; sha_sigma0 — s0(x) = ROTR7(x) ^ ROTR18(x) ^ SHR3(x). In: HL -> x.
 ; Out: sha_tmpa = result. Clobbers A,BC,DE,HL.
 sha_sigma0:
-                push    hl
                 ld      de, sha_word
                 copy4_body                      ; sha_word = x (HL=src, DE=dst)
                 ld      hl, sha_word
@@ -713,12 +712,10 @@ sha_sigma0:
                 shr1_bcde
                 shr1_bcde
                 xor_bcde_tmpa
-                pop     hl
                 ret
 
 ; sha_sigma1 — s1(x) = ROTR17(x) ^ ROTR19(x) ^ SHR10(x). In: HL -> x.
 sha_sigma1:
-                push    hl
                 ld      de, sha_word
                 copy4_body
                 ld      hl, sha_word
@@ -742,16 +739,13 @@ sha_sigma1:
                 shr1_bcde
                 shr1_bcde
                 xor_bcde_tmpa
-                pop     hl
                 ret
 
 ; sha_bigsigma0 — S0(x) = ROTR2(x) ^ ROTR13(x) ^ ROTR22(x). In: HL -> x.
+; The rotation chain needs the word only once, so it loads B,C,D,E straight
+; from the source — no copy to sha_word.
 sha_bigsigma0:
-                push    hl
-                ld      de, sha_word
-                copy4_body
-                ld      hl, sha_word
-                ld_bcde
+                ld_bcde                          ; B,C,D,E <- x (HL walks to x+3)
                 ; term1 = ROTR2
                 rotr1_bcde
                 rotr1_bcde
@@ -766,16 +760,11 @@ sha_bigsigma0:
                 rotr8_bcde
                 rotr1_bcde
                 xor_bcde_tmpa
-                pop     hl
                 ret
 
 ; sha_bigsigma1 — S1(x) = ROTR6(x) ^ ROTR11(x) ^ ROTR25(x). In: HL -> x.
 sha_bigsigma1:
-                push    hl
-                ld      de, sha_word
-                copy4_body
-                ld      hl, sha_word
-                ld_bcde
+                ld_bcde                          ; B,C,D,E <- x (HL walks to x+3)
                 ; term1 = ROTR6 = ROTR8 + ROTL2
                 rotr8_bcde
                 rotl1_bcde
@@ -792,7 +781,6 @@ sha_bigsigma1:
                 rotl1_bcde
                 rotl1_bcde
                 xor_bcde_tmpa
-                pop     hl
                 ret
 
 ; ---------------------------------------------------------------------------
