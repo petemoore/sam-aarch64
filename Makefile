@@ -597,11 +597,13 @@ netboot-smoke-test: $(BUILD)/netboot_smoke_test.bin $(BUILD)/netboot_smoke_test.
 
 # The bootable smoke-test binary: the full program including the EEPROM config
 # read + the smoke_main forever-loop, for real Trinity hardware.
-$(BUILD)/netboot_smoke_boot.bin: src/netboot/smoke_test.asm src/netboot/build_arp_reply.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+$(BUILD)/netboot_smoke_boot.bin $(BUILD)/netboot_smoke_boot.map: src/netboot/smoke_test.asm src/netboot/build_arp_reply.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_smoke_boot.bin src/netboot/smoke_test.asm
+	pyz80 --obj=$(BUILD)/netboot_smoke_boot.bin \
+	    --mapfile=$(BUILD)/netboot_smoke_boot.map \
+	    src/netboot/smoke_test.asm
 
-netboot-smoke-boot: $(BUILD)/netboot_smoke_boot.bin
+netboot-smoke-boot: $(BUILD)/netboot_smoke_boot.bin $(BUILD)/netboot_smoke_boot.map
 
 # A bootable SAM disk image that auto-runs the smoke test on power-on.  Boot it
 # on a SAM + Trinity, then from another machine on the same LAN `ping <sam-ip>`
@@ -704,9 +706,11 @@ netboot-client: $(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map
 
 # The bootable client binary: the full program including the EEPROM config read +
 # the client_main fetch-then-HSAVE flow, for real Trinity.
-$(BUILD)/netboot_client_boot.bin: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+$(BUILD)/netboot_client_boot.bin $(BUILD)/netboot_client_boot.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_client_boot.bin src/netboot/netboot_client.asm
+	pyz80 --obj=$(BUILD)/netboot_client_boot.bin \
+	    --mapfile=$(BUILD)/netboot_client_boot.map \
+	    src/netboot/netboot_client.asm
 	@sz=$$(stat -c%s $(BUILD)/netboot_client_boot.bin); \
 	 if [ $$sz -gt 16384 ]; then \
 	   echo "ERROR: netboot_client_boot.bin is $$sz bytes — a bootable netboot program must fit"; \
@@ -715,7 +719,7 @@ $(BUILD)/netboot_client_boot.bin: src/netboot/netboot_client.asm src/netboot/bui
 	   exit 1; \
 	 else echo "section-C fit OK: $$sz/16384 bytes (ends &$$(printf '%04X' $$((32768+sz))))"; fi
 
-netboot-client-boot: $(BUILD)/netboot_client_boot.bin
+netboot-client-boot: $(BUILD)/netboot_client_boot.bin $(BUILD)/netboot_client_boot.map
 
 # A bootable SAM disk image that auto-runs the TFTP client on power-on: it fetches
 # the configured file from the configured TFTP server and writes it to Trinity
@@ -758,7 +762,7 @@ $(BUILD)/asmparse.bin $(BUILD)/asmparse.map: src/asmparse.asm src/mnemonic_names
 asmparse-z80: $(BUILD)/asmparse.bin $(BUILD)/asmparse.map
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-smoke-boot netboot-client-boot
 
 ci-netboot-z80: netboot-z80-routines editmodel-z80 asmlex-z80 asmparse-z80
 	cd tools/netboot-oracle/z80 && go test ./...
