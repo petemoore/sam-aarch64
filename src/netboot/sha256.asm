@@ -601,19 +601,24 @@ sha_round:
                 jp      nz, sha_round
 
                 ; --- H0..H7 += a..h ------------------------------------------
-                ld      ix, SHA_H
-                ld      iy, wv_abcdefgh
+                ; Both regions are 8 contiguous 4-byte big-endian words. Walk a
+                ; pair of LSB pointers (word base +3) up by 4 per word, adding
+                ; in place with add4_body (which walks each word LSB->MSB).
                 ld      b, 8                    ; 8 words
+                ld      hl, SHA_H+3             ; HL -> H[0] LSB
+                ld      de, wv_abcdefgh+3       ; DE -> a LSB
 sha_addstate:
                 push    bc
-                push    ix
-                pop     hl                      ; HL -> H[i]
-                push    iy
-                pop     de                      ; DE -> working[i]
-                call    sha_add4                ; H[i] += working[i]
+                push    hl                      ; save word-base LSB pointers
+                push    de
+                add4_body                       ; H[i] += working[i] (HL,DE walk down)
+                pop     de
+                pop     hl
                 ld      bc, 4
-                add     ix, bc
-                add     iy, bc
+                add     hl, bc                  ; -> next H[i] LSB
+                ex      de, hl
+                add     hl, bc                  ; -> next working[i] LSB
+                ex      de, hl
                 pop     bc
                 djnz    sha_addstate
                 ret
@@ -630,39 +635,6 @@ sha_addstate:
 sha_woff:
                 ld      hl, (sha_wt)
                 add     hl, de
-                ret
-
-; ---------------------------------------------------------------------------
-; sha_copy4 — copy a 4-byte word. In: HL=src, DE=dst. Clobbers BC,DE,HL.
-; ---------------------------------------------------------------------------
-sha_copy4:
-                ld      bc, 4
-                ldir
-                ret
-
-; ---------------------------------------------------------------------------
-; sha_add4 — 32-bit add mod 2^32: (HL word) += (DE word), big-endian, carry
-; propagated from LSB (byte 3) up to MSB (byte 0). HL/DE are NOT preserved (they
-; walk down to dst-1/src-1); every caller reloads them before reuse, so the add
-; avoids the push/pop on this hot helper (called ~648x per compression).
-; In: HL -> dst word, DE -> src word. Out: dst += src. Clobbers A,B,DE,HL.
-; ---------------------------------------------------------------------------
-sha_add4:
-                ld      bc, 3
-                add     hl, bc                  ; HL -> dst+3 (LSB)
-                ex      de, hl
-                ld      bc, 3
-                add     hl, bc                  ; HL -> src+3 (LSB)
-                ex      de, hl                  ; HL=dst+3, DE=src+3
-                or      a                       ; clear carry
-                ld      b, 4
-sha_add4_lp:
-                ld      a, (de)
-                adc     a, (hl)
-                ld      (hl), a
-                dec     hl
-                dec     de
-                djnz    sha_add4_lp
                 ret
 
 ; ---------------------------------------------------------------------------
