@@ -21,8 +21,13 @@
 ; ALL 32-bit values are stored BIG-ENDIAN (4 bytes, MSB first). That matches the
 ; FIPS spec's word/byte order, makes the K table a plain big-endian defb list,
 ; and means the final digest is just the 32 state bytes copied out verbatim. The
-; Z80 has no 32-bit ops, so every word operation (rotate-right, shift-right, xor,
-; and, not, add-mod-2^32) is done byte-at-a-time by small helpers below.
+; Z80 has no 32-bit ops, so each word operation is built from byte ops: the
+; rotate/shift/xor work happens in registers (the *_bcde macros load a word into
+; B,C,D,E and rotate it there — whole-byte rotates are free register relabels,
+; residual bits are 8T register rotates), the add-mod-2^32 walks the 4 bytes
+; LSB->MSB (add4_body), and the round/schedule loops keep their running sums in a
+; small page of scratch. The compression body is hand-optimised for T-states; the
+; byte-for-byte NIST-vector test is the correctness guardrail.
 
                 if defined(NETBOOT_STANDALONE)
                 org     &8000
