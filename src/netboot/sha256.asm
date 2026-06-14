@@ -191,6 +191,52 @@ xor_bcde_tmpa:  MACRO
                 ld      (hl), a
 ENDM
 
+; xor_bcde_tmpa_bwd — sha_tmpa ^= (B,C,D,E), walking BACKWARD from HL = sha_tmpa+3
+; (where a preceding st_bcde_tmpa / xor_bcde_tmpa_fwd left HL). This drops the
+; `ld hl, sha_tmpa` reload of the plain xor_bcde_tmpa: XOR per byte is independent,
+; so the reverse order gives the identical result. The intervening rotate macros
+; preserve HL, so HL is still sha_tmpa+3 on entry. In: HL = sha_tmpa+3. Out: HL =
+; sha_tmpa. Clobbers A. (B,C,D,E preserved.)
+xor_bcde_tmpa_bwd: MACRO
+                ld      a, e
+                xor     (hl)
+                ld      (hl), a
+                dec     hl
+                ld      a, d
+                xor     (hl)
+                ld      (hl), a
+                dec     hl
+                ld      a, c
+                xor     (hl)
+                ld      (hl), a
+                dec     hl
+                ld      a, b
+                xor     (hl)
+                ld      (hl), a
+ENDM
+
+; xor_bcde_tmpa_fwd — sha_tmpa ^= (B,C,D,E), walking FORWARD from HL = sha_tmpa
+; (where a preceding xor_bcde_tmpa_bwd left HL). Drops the `ld hl, sha_tmpa` reload
+; just like the backward form. In: HL = sha_tmpa. Out: HL = sha_tmpa+3. Clobbers A.
+; (B,C,D,E preserved.)
+xor_bcde_tmpa_fwd: MACRO
+                ld      a, b
+                xor     (hl)
+                ld      (hl), a
+                inc     hl
+                ld      a, c
+                xor     (hl)
+                ld      (hl), a
+                inc     hl
+                ld      a, d
+                xor     (hl)
+                ld      (hl), a
+                inc     hl
+                ld      a, e
+                xor     (hl)
+                ld      (hl), a
+ENDM
+
 ; st_bcde_tmpa — sha_tmpa = (B,C,D,E). Clobbers A,HL. (B,C,D,E preserved.)
 st_bcde_tmpa:   MACRO
                 ld      hl, sha_tmpa
@@ -3182,14 +3228,15 @@ sha_sigma0:
                 ; term1 = ROTR7 = ROTR8 + ROTL1
                 rotr8_bcde
                 rotl1_bcde
-                st_bcde_tmpa
+                st_bcde_tmpa                      ; HL -> sha_tmpa+3
                 ; term2 = ROTR18 = ROTR7 then +ROTR11 (ROTR8 + ROTR3)
                 rotr8_bcde
                 rotr1_bcde
                 rotr1_bcde
                 rotr1_bcde
-                xor_bcde_tmpa
-                ; term3 = SHR3(x) (reload pristine; shift loses bits)
+                xor_bcde_tmpa_bwd                 ; HL +3 -> sha_tmpa (no reload)
+                ; term3 = SHR3(x) (reload pristine; shift loses bits — HL clobbered,
+                ; so the plain forward xor reloads sha_tmpa here)
                 pop     hl
                 ld_bcde
                 shr1_bcde
@@ -3205,11 +3252,11 @@ sha_sigma1:
                 ; term1 = ROTR17 = ROTR16 + ROTR1
                 rotr16_bcde
                 rotr1_bcde
-                st_bcde_tmpa
+                st_bcde_tmpa                      ; HL -> sha_tmpa+3
                 ; term2 = ROTR19 = ROTR17 then +ROTR2
                 rotr1_bcde
                 rotr1_bcde
-                xor_bcde_tmpa
+                xor_bcde_tmpa_bwd                 ; HL +3 -> sha_tmpa (no reload)
                 ; term3 = SHR10 = SHR8 + SHR2 (reload pristine; shift loses bits)
                 pop     hl
                 ld_bcde
@@ -3231,17 +3278,17 @@ sha_bigsigma0:
                 ; term1 = ROTR2
                 rotr1_bcde
                 rotr1_bcde
-                st_bcde_tmpa
+                st_bcde_tmpa                      ; HL -> sha_tmpa+3
                 ; term2 = ROTR13 = ROTR2 then +ROTR11 (ROTR8 + ROTR3)
                 rotr8_bcde
                 rotr1_bcde
                 rotr1_bcde
                 rotr1_bcde
-                xor_bcde_tmpa
+                xor_bcde_tmpa_bwd                 ; HL +3 -> sha_tmpa (no reload)
                 ; term3 = ROTR22 = ROTR13 then +ROTR9 (ROTR8 + ROTR1)
                 rotr8_bcde
                 rotr1_bcde
-                xor_bcde_tmpa
+                xor_bcde_tmpa_fwd                 ; HL -> sha_tmpa+3 (no reload)
                 ret
 
 ; sha_bigsigma1 — S1(x) = ROTR6(x) ^ ROTR11(x) ^ ROTR25(x). In: HL -> x.
@@ -3251,18 +3298,18 @@ sha_bigsigma1:
                 rotr8_bcde
                 rotl1_bcde
                 rotl1_bcde
-                st_bcde_tmpa
+                st_bcde_tmpa                      ; HL -> sha_tmpa+3
                 ; term2 = ROTR11 = ROTR6 then +ROTR5 (ROTR8 + ROTL3)
                 rotr8_bcde
                 rotl1_bcde
                 rotl1_bcde
                 rotl1_bcde
-                xor_bcde_tmpa
+                xor_bcde_tmpa_bwd                 ; HL +3 -> sha_tmpa (no reload)
                 ; term3 = ROTR25 = ROTR11 then +ROTR14 (ROTR16 + ROTL2)
                 rotr16_bcde
                 rotl1_bcde
                 rotl1_bcde
-                xor_bcde_tmpa
+                xor_bcde_tmpa_fwd                 ; HL -> sha_tmpa+3 (no reload)
                 ret
 
 ; ---------------------------------------------------------------------------
