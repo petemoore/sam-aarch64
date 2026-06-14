@@ -190,6 +190,49 @@ func TestFEMul(t *testing.T) {
 	}
 }
 
+// TestFEMulRandom drives fe_mul over many independent pseudo-random ASYMMETRIC
+// operand pairs (a != b) versus a math/big reference. The fixed feElements set
+// (11 values, 121 pairs) is sparse on the carry edge cases the Karatsuba 32x32
+// multiply introduces — the half-operand sums/differences, the sign of the
+// middle term (a_lo-a_hi)*(b_lo-b_hi), and the carry plumbing of the combine.
+// Random asymmetric pairs hit both signs of the middle term and arbitrary
+// half-boundary carries that a*a (TestFESqrMatchesMul) can't, exercising the
+// new code path far more thoroughly. Reuses one machine: each op rewrites its
+// own inputs/output, so state carries over safely.
+func TestFEMulRandom(t *testing.T) {
+	mac := loadFE(t)
+	feA := mustSym(t, mac, "FE_A")
+	feB := mustSym(t, mac, "FE_B")
+	feOut := mustSym(t, mac, "FE_OUT")
+	p := fePrime()
+	seed := uint32(0xC0FFEE11)
+	next := func() ([]byte, *big.Int) {
+		b := make([]byte, 32)
+		for i := range b {
+			seed = seed*1664525 + 1013904223
+			b[i] = byte(seed >> 16)
+		}
+		b[31] &= 0x7f // keep < 2^255
+		return b, leToBig(b)
+	}
+	for n := 0; n < 1024; n++ {
+		aLE, aV := next()
+		bLE, bV := next()
+		mac.Write(feA, aLE)
+		mac.Write(feB, bLE)
+		if _, err := mac.CallEntry("fe_mul", z80h.Entry{}); err != nil {
+			t.Fatalf("fe_mul: %v", err)
+		}
+		got := mac.Read(feOut, 32)
+		assertReduced(t, "fe_mul", got)
+		want := new(big.Int).Mod(new(big.Int).Mul(aV, bV), p)
+		if new(big.Int).Mod(leToBig(got), p).Cmp(want) != 0 {
+			t.Fatalf("fe_mul(%x,%x): got %x (mod p %x), want %x",
+				aLE, bLE, got, feToLE32(new(big.Int).Mod(leToBig(got), p)), feToLE32(want))
+		}
+	}
+}
+
 // TestFESqr: the dedicated symmetric squarer must equal a^2 mod p. fe_sqr is the
 // dominant x25519 win (the ladder squares 4x per step + 254x in fe_invert), so it
 // gets both a math/big reference pin here and a direct fe_sqr-vs-fe_mul(a,a)
