@@ -516,6 +516,63 @@
     - {num: 191, role: completing}
   refs: [docs/notes/bdos-trinity-fork-analysis.md, docs/notes/m9-status.md]
 
+- id: i76
+  title: Host-side Go TUI editor prototype at SAM-faithful geometry — the functional UX authority for the Phase-2 editor
+  description: |
+    Umbrella for the i76 TUI editor prototype phases: samscreen abstraction (tcell + PNG/SCREEN$ backends), i4-parity viewer, font-proof geometry evidence, config-lab, and rendering-rules spec. See docs/specs/editor-tui-prototype-design.md §8 for decisions. Children: i76a/b/c/d (all DONE).
+  status: DONE
+  kind: umbrella
+  owner: agent
+  refs: [docs/specs/editor-tui-prototype-design.md, docs/specs/editor-rendering-rules-design.md, tools/editor-prototype/, tools/font-proof/, docs/notes/m9-status.md, i4, i5, i6, i41, i48]
+
+- id: i76a
+  title: "P1a: samscreen abstraction, tcell backend, PNG/SCREEN$ mockup, i4-parity viewer, -geometry matrix"
+  description: |
+    P1a of the i76 TUI editor prototype: samscreen abstraction + tcell terminal backend + PNG/SCREEN$ mockup backend + i4-parity read-only viewer + -geometry mode×font matrix (tools/editor-prototype).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 200, role: completing}
+  parent: i76
+  refs: [tools/editor-prototype/, docs/specs/editor-tui-prototype-design.md, i4, i5, i6]
+
+- id: i76b
+  title: "P1b font-proof: five-pixel-font vendored; make font-proof screenshots 85×32 (6×6) vs 64×24 (ROM 8×8)"
+  description: |
+    P1b of the i76 TUI editor prototype: five-pixel-font vendored; make font-proof produces real-frame screenshots 85×32 (6×6) vs 64×24 (ROM 8×8) — the i6 geometry evidence.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 201, role: completing}
+  parent: i76
+  refs: [tools/font-proof/, i6]
+
+- id: i76c
+  title: "P2 config-lab: tools/editor-prototype -config rendering lab over the real release .tbn at locked MODE 3 64×24"
+  description: |
+    P2 of the i76 prototype: interactive rendering lab (-config flag) over the real release .tbn at locked MODE 3 64×24. Delivered across PRs #202 (initial lab), #203 (v1.1 instruction truncation), #204 (v1.2 inline-if-fits + cursor-block demarcation); PR #204 is the completing increment.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 204, role: completing}
+  parent: i76
+  refs: [tools/editor-prototype/configs/, q13]
+
+- id: i76d
+  title: Rendering-rules spec landed; default-config recommendation tracked as q13
+  description: |
+    docs/specs/editor-rendering-rules-design.md §3–§10 rendering-rules spec landed; default-config recommendation (tuned compressed.config) tracked as open question q13.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 217, role: completing}
+  parent: i76
+  refs: [docs/specs/editor-rendering-rules-design.md, q13]
+
 - id: i78
   title: "Source-structure preservation in the v2 editor region (blank lines, comment grouping, indentation)"
   description: |
@@ -537,3 +594,81 @@
   prs:
     - {num: 206, role: completing}
   refs: [tools/editor-prototype/samscreen/palette.go]
+
+- id: i81
+  title: Upstream SimCoupé issue triage — review open issues and assist where we can
+  description: |
+    Umbrella for SimCoupé upstream community contributions. Triage complete (2026-06-13): produced contributions i81a (PNG-endian fix PR — BLOCKED:Pete), i81b (issue #28 comment — DONE PR #370), i81c (SDL headless fallback — BLOCKED:Pete). i81a and i81c remain open; i81b is done.
+  status: IN_PROGRESS
+  kind: umbrella
+  owner: agent
+  refs: [tools/font-proof/simcoupe-local-capture.patch, i80]
+
+- id: i81b
+  title: "Comment on upstream SimCoupé issue #28 offering our CI pass/fail idiom"
+  description: |
+    Offer our DI;HALT + -exitonhalt + printer-channel pass/fail detection idiom on simonowen/simcoupe#28. Note: our idiom routes results to the capturable printer port (src/print.asm), not a BC-return (SimCoupé cannot read BC externally). Pete posted the comment (simonowen/simcoupe#28 comment-4724317311). Tracking PR #370.
+  status: DONE
+  kind: leaf
+  owner: pete
+  prs:
+    - {num: 370, role: completing}
+  parent: i81
+  refs: [i81, tools/run-simcoupe.sh, src/print.asm]
+
+- id: i82
+  title: "SAM TFTP client (RFC-conformant): RRQ/OACK/DATA/ACK client with ARP + RFC 1350/2347/2348/2349/7440 support"
+  description: |
+    trinload-evolved RFC-conformant TFTP client (RRQ pull). Closed by PR #244 (client boot disk netboot_client.asm), delivered across PR #210 (RFC research + trinload analysis), #225 (build_rrq/parse_oack via i92), #231 (transfer loop + SAS fix), #232 (origination front: ARP-for-server + RRQ send), #244. All host-verified over i80 emulation; HSAVE write-out is hardware-gated (Pete's Trinity test). RFC 2347 OACK compliance + the section-C fit gate were added post-close under i118 (PR #422).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 244, role: completing}
+  refs: [docs/notes/tftp-protocol-research.md, docs/specs/phase3-delivery-design.md, src/netboot/netboot_client.asm, src/netboot/tftp_client_loop.asm, src/netboot/tftp_client_front.asm, tools/netboot-oracle/client/client.go, simonowen/trinload, i80, i83, i84, i86, i93, i118]
+
+- id: i84
+  title: Phase-3 end-to-end delivery design — integrating spec for the self-hosting boot/delivery loop
+  description: |
+    Design confirmed (Pete 2026-06-14): docs/specs/phase3-delivery-design.md. Model A only: SAM = DHCP+TFTP server serving by name (all aarch64 TFTP-boot Pis). Bootstrap via Pete's patched SAM ROM (i87). q11 (Pi netboot mechanics) and q12 (delivery model) both RESOLVED as part of this design. New items spawned: i86 (DHCP), i87 (ROM dump).
+  status: DONE
+  kind: leaf
+  owner: pete
+  prs:
+    - {num: 211, role: completing}
+  refs: [docs/specs/phase3-delivery-design.md, docs/notes/tftp-protocol-research.md, i70, i80, i82, i83, i86, i87]
+
+- id: i85
+  title: Whole-file ZX0 vs compact overlay — size measurement (one-shot)
+  description: |
+    Measured: zx0(full interleaved release.s) = 201,587 B vs current hybrid 170,132 B (38,584 B overlay + 131,548 B zx0(comments)) → whole-file is +18.5% LARGER. Conclusion: do not rewrite for size; overlay earns its keep on assembly speed. Whitespace preservation tracked as i78.
+  status: DONE
+  kind: leaf
+  owner: pete
+  prs:
+    - {num: 208, role: completing}
+  refs: [docs/notes/comment-compression-research.md, i78, i57, i60]
+
+- id: i88a
+  title: "i88 6a — host-verifiable TLS-1.3 client: all crypto primitives + handshake bricks 1–5 + brick-6a state machine"
+  description: |
+    Full TLS-1.3 client host-verifiable slice: SHA-256, HMAC-SHA256, HKDF, HKDF-Expand-Label, ChaCha20, Poly1305, X25519, AEAD_CHACHA20_POLY1305, handshake bricks 1–5 (key-schedule, record-protection, transcript-hash, ClientHello, server-flight parser), Go authority, qsq extraction, 6a state machine. Delivered across PRs #269–#337; PR #335 completes 6a. All host-verified byte-for-byte vs Go authority. Brick 6b (bootable/hardware) stays in i88.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 335, role: completing}
+  parent: i88
+  refs: [src/netboot/tls_client.asm, tools/netboot-oracle/tls/, docs/specs/tls13-handshake.md, i88]
+
+- id: i88b
+  title: "i88 6b — TLS-record reassembler: host-verifiable wire framing layer"
+  description: |
+    tls_reasm.asm (tls_reasm_feed) frames complete TLS records out of arbitrary TCP byte chunks (incremental consume; REASM_BUF sized to TLS-1.3 max 5+2^14+256). Go authority tools/netboot-oracle/tls/reassembler.go + tls_reasm_test.go: mis-aligned chunk sequences byte-exact. Remaining 6b (hardware-gated): wire into tcp_conn CONN_SINK_FILTER + paging layout + bootable disk + real RST 8 on Trinity.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 360, role: completing}
+  parent: i88
+  refs: [src/netboot/tls_reasm.asm, tools/netboot-oracle/tls/reassembler.go, tools/netboot-oracle/z80/tls_reasm_test.go, i88]

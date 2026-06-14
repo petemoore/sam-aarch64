@@ -97,9 +97,10 @@ breakdown.
    (with the env prefix) → "validate OK".
 4. Confirm every batch id is present in items.yaml (or questions.yaml) and gone from
    `.old`.
-5. EYEBALL `build/registry gen registry/items.yaml registry/questions.yaml` (no
-   OUTDIR → stdout): tables render cleanly, pipes escaped, status cells read
-   "DONE — PR #N" / "WONTFIX — <reason>", item cell shows title — description.
+5. EYEBALL `build/registry gen --migrating registry/items.yaml registry/questions.yaml`
+   (no OUTDIR → stdout; `--migrating` needed so forward refs don't abort gen):
+   tables render cleanly, pipes escaped, status cells read "DONE — PR #N" /
+   "WONTFIX — <reason>", item cell shows title — description.
 6. `g add registry/` (use `g`, not `git`) and commit (NO Co-Authored-By):
    `i115d: registry migration batch <N> — <short note>`. Do NOT push.
 
