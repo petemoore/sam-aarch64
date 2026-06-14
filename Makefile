@@ -65,7 +65,7 @@ ci-netboot-oracle:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-z80-routines ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-z80-routines ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -113,6 +113,14 @@ $(BUILD)/netboot_build_arp_request.bin $(BUILD)/netboot_build_arp_request.map: s
 	    src/netboot/build_arp_request.asm
 
 netboot-build-arp-request: $(BUILD)/netboot_build_arp_request.bin $(BUILD)/netboot_build_arp_request.map
+
+$(BUILD)/netboot_build_arp_reply.bin $(BUILD)/netboot_build_arp_reply.map: src/netboot/build_arp_reply.asm
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_arp_reply.bin \
+	    --mapfile=$(BUILD)/netboot_build_arp_reply.map \
+	    src/netboot/build_arp_reply.asm
+
+netboot-build-arp-reply: $(BUILD)/netboot_build_arp_reply.bin $(BUILD)/netboot_build_arp_reply.map
 
 # encdrv — the vendored Trinity ENC28J60 driver (simonowen/trinload, verbatim),
 # orged at &8000 by encdrv_harness.asm.  The i80 emulation test (enc28j60_test)
@@ -198,8 +206,43 @@ $(BUILD)/netboot_bdos_seam.bin $(BUILD)/netboot_bdos_seam.map: src/netboot/bdos_
 
 netboot-bdos-seam: $(BUILD)/netboot_bdos_seam.bin $(BUILD)/netboot_bdos_seam.map
 
+# smoke-test (i94) — the Trinity bring-up smoke test: drv_read a frame, answer an
+# ARP request for the SAM's IP with build_arp_reply, drv_write the reply.  Two
+# builds from one source:
+#   * the host-test binary (NETBOOT_HOSTTEST) excludes the EEPROM read + the
+#     bootable forever-loop so the harness can drive smoke_serve_once directly;
+#     smoke_test_test.go asserts the ARP reply on the virtual wire matches the Go
+#     smoke.Responder authority byte-for-byte.
+#   * the bootable binary (no flag) includes smoke_main + the vendored eeprom.asm
+#     so it reads the SAM's real MAC/IP and runs on real Trinity (the disk built
+#     by netboot-smoke-disk).
+$(BUILD)/netboot_smoke_test.bin $(BUILD)/netboot_smoke_test.map: src/netboot/smoke_test.asm src/netboot/build_arp_reply.asm src/netboot/encdrv.asm
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_HOSTTEST=1 \
+	    --obj=$(BUILD)/netboot_smoke_test.bin \
+	    --mapfile=$(BUILD)/netboot_smoke_test.map \
+	    src/netboot/smoke_test.asm
+
+netboot-smoke-test: $(BUILD)/netboot_smoke_test.bin $(BUILD)/netboot_smoke_test.map
+
+# The bootable smoke-test binary: the full program including the EEPROM config
+# read + the smoke_main forever-loop, for real Trinity hardware.
+$(BUILD)/netboot_smoke_boot.bin: src/netboot/smoke_test.asm src/netboot/build_arp_reply.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/netboot_smoke_boot.bin src/netboot/smoke_test.asm
+
+netboot-smoke-boot: $(BUILD)/netboot_smoke_boot.bin
+
+# A bootable SAM disk image that auto-runs the smoke test on power-on.  Boot it
+# on a SAM + Trinity, then from another machine on the same LAN `ping <sam-ip>`
+# or `arping <sam-ip>` and watch the SAM's MAC come back (see
+# docs/notes/netboot-trinity-testing.md).
+netboot-smoke-disk: $(BUILD)/netboot_smoke_boot.bin $(BUILD)/build-disk
+	$(BUILD)/build-disk -netboot $(BUILD)/netboot_smoke_boot.bin -netboot-name smoke \
+	    $(BUILD)/netboot_smoke.mgt
+
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test
 
 ci-netboot-z80: netboot-z80-routines
 	cd tools/netboot-oracle/z80 && go test ./...

@@ -18,6 +18,7 @@ import (
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/golden"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/internal/mask"
+	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/smoke"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/tftp"
 )
 
@@ -869,6 +870,85 @@ func TestParseARPReply(t *testing.T) {
 	// A truncated frame is rejected.
 	if _, _, ok := frame.ParseARPReply(reply[:10]); ok {
 		t.Error("ParseARPReply accepted a truncated frame")
+	}
+}
+
+// TestBuildARPReply pins frame.BuildARPReply (the Z80 build_arp_reply primitive,
+// used by the i94 smoke test): it must produce the same bytes as the established
+// in-test reply builder, a unicast reply back to the asker announcing the
+// sender's MAC for its IP.
+func TestBuildARPReply(t *testing.T) {
+	// BuildARPReply(srcMAC, dstMAC, srcIP, dstIP): the SAM answers the asker.
+	got := frame.BuildARPReply(mask.ServerMAC, mask.ClientMAC, mask.ServerIP, mask.ClientIP)
+	// The in-test helper takes (senderMAC, senderIP, targetMAC, targetIP).
+	want := buildARPReply(mask.ServerMAC, mask.ServerIP, mask.ClientMAC, mask.ClientIP)
+	if !bytes.Equal(got, want) {
+		t.Errorf("BuildARPReply != reference\n  got  %x\n  want %x", got, want)
+	}
+	// It round-trips through ParseARPReply as the sender's MAC/IP.
+	mac, ip, ok := frame.ParseARPReply(got)
+	if !ok || mac != mask.ServerMAC || ip != mask.ServerIP {
+		t.Errorf("BuildARPReply output does not parse back to the sender (mac=%x ip=%v ok=%v)", mac, ip, ok)
+	}
+}
+
+// TestParseARPRequest pins the ARP-request parser the Z80 smoke test ports: an
+// ARP request yields the asker's MAC/IP + the target IP; a reply, a non-ARP
+// frame, and a too-short frame are rejected.
+func TestParseARPRequest(t *testing.T) {
+	req := frame.BuildARPRequest(mask.ClientMAC, mask.ClientIP, mask.ServerIP)
+	r, ok := frame.ParseARPRequest(req)
+	if !ok {
+		t.Fatal("ParseARPRequest rejected a valid request")
+	}
+	if r.SenderMAC != mask.ClientMAC {
+		t.Errorf("sender MAC = %x, want %x", r.SenderMAC, mask.ClientMAC)
+	}
+	if r.SenderIP != mask.ClientIP {
+		t.Errorf("sender IP = %v, want %v", r.SenderIP, mask.ClientIP)
+	}
+	if r.TargetIP != mask.ServerIP {
+		t.Errorf("target IP = %v, want %v", r.TargetIP, mask.ServerIP)
+	}
+	// An ARP *reply* (OPER=2) is not a request.
+	reply := buildARPReply(mask.ServerMAC, mask.ServerIP, mask.ClientMAC, mask.ClientIP)
+	if _, ok := frame.ParseARPRequest(reply); ok {
+		t.Error("ParseARPRequest accepted an ARP reply")
+	}
+	// A UDP frame is not ARP.
+	if _, ok := frame.ParseARPRequest(golden.TFTPData); ok {
+		t.Error("ParseARPRequest accepted a non-ARP frame")
+	}
+	// A truncated frame is rejected.
+	if _, ok := frame.ParseARPRequest(req[:10]); ok {
+		t.Error("ParseARPRequest accepted a truncated frame")
+	}
+}
+
+// TestSmokeResponder is the i94 bring-up authority check: smoke.Responder.OnFrame
+// answers an ARP request for the SAM's IP with a unicast reply, and stays silent
+// for anything else (a request for a different IP, a non-ARP frame).
+func TestSmokeResponder(t *testing.T) {
+	r := smoke.NewResponder(mask.ServerMAC, mask.ServerIP)
+
+	// An ARP request for the SAM's IP is answered with the matching reply.
+	req := frame.BuildARPRequest(mask.ClientMAC, mask.ClientIP, mask.ServerIP)
+	reply := r.OnFrame(req)
+	if reply == nil {
+		t.Fatal("OnFrame ignored an ARP request for the SAM's IP")
+	}
+	want := frame.BuildARPReply(mask.ServerMAC, mask.ClientMAC, mask.ServerIP, mask.ClientIP)
+	if !bytes.Equal(reply, want) {
+		t.Errorf("OnFrame reply != BuildARPReply\n  got  %x\n  want %x", reply, want)
+	}
+
+	// An ARP request for a different IP is ignored.
+	if r.OnFrame(frame.BuildARPRequest(mask.ClientMAC, mask.ClientIP, mask.ClientIP)) != nil {
+		t.Error("OnFrame answered a request for a different IP")
+	}
+	// A non-ARP frame is ignored.
+	if r.OnFrame(golden.DHCPDiscover) != nil {
+		t.Error("OnFrame answered a non-ARP frame")
 	}
 }
 
