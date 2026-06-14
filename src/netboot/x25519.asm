@@ -46,7 +46,6 @@ FE_ACC:         defs 34                 ; the reduction accumulator (< 2^263)
 fe_ap:          defs 2                  ; &a[i] in the schoolbook outer loop
 fe_pp:          defs 2                  ; &PROD[i] in the schoolbook outer loop
 fe_ai:          defs 1                  ; a[i], the current multiplier byte
-fe_car:         defs 1                  ; the inner-loop byte carry
 
 ; --- Karatsuba working set (fe_schoolbook, the 32x32 multiply) ---
 k_mul_a:        defs 2                  ; kmul16 operand-A base pointer
@@ -204,37 +203,34 @@ fe_121665_outer:
                 ld      (fe_ai), a              ; a[i]
                 ld      ix, FE_121665           ; constant byte source (3 bytes), held in IX
                 ld      iy, (fe_pp)             ; PROD dest, held in IY
-                xor     a
-                ld      (fe_car), a
+                ld      c, 0                    ; running inner-loop carry, kept in C
                 ld      b, 3                    ; inner: the 3 constant bytes
 fe_121665_inner:
-                push    bc
+                push    bc                      ; preserve counter B + carry C across mul8
                 ld      a, (ix+0)
                 inc     ix
                 ld      e, a
                 ld      a, (fe_ai)
                 call    mul8                    ; HL = a[i] * c[j] (mul8 ignores D)
+                pop     bc                      ; B = counter, C = running carry
 
-                ld      a, (iy+0)
-                ld      c, a
-                ld      b, 0
-                add     hl, bc                  ; += PROD[i+j]
-                ld      a, (fe_car)
-                ld      c, a
-                ld      b, 0
-                add     hl, bc                  ; += carry
+                ld      a, c                    ; PROD[i+j] + carry, folded into one add
+                add     a, (iy+0)               ; A = low byte, CF = bit 8
+                ld      e, a
+                ld      a, 0
+                adc     a, 0
+                ld      d, a                    ; DE = PROD[i+j] + carry (9-bit value)
+                add     hl, de                  ; HL = product + PROD[i+j] + carry
 
                 ld      a, l
                 ld      (iy+0), a
                 inc     iy
-                ld      a, h
-                ld      (fe_car), a
-                pop     bc
+                ld      c, h                    ; new carry stays in C
                 djnz    fe_121665_inner
 
                 push    iy                      ; propagate the final row carry upward
                 pop     de
-                ld      a, (fe_car)
+                ld      a, c
 fe_121665_carry:
                 or      a
                 jr      z, fe_121665_carry_done
@@ -493,7 +489,7 @@ fe_asm_cprop:
 ; Zeroes the 32-byte destination, then for each row i adds A[i]*B[j] into
 ; dest[i+j] with a running carry (final row carry propagated at dest[i+16]).
 ; The inner loop holds its pointers in IX (B source) and IY (dest) across the
-; mul8 call (mul8 preserves IX/IY).  Clobbers A, BC, DE, HL, IX, IY + fe_ai/fe_car.
+; mul8 call (mul8 preserves IX/IY).  Clobbers A, BC, DE, HL, IX, IY + fe_ai.
 ; ---------------------------------------------------------------------------
 kmul16:
                 ld      hl, (k_mul_d)           ; zero dest (32 bytes)
@@ -752,27 +748,25 @@ fe_reduce_prod:
 fe_mul38_high:
                 ld      ix, FE_PROD + 32        ; high-half source, held in IX
                 ld      iy, FE_T                ; dest, held in IY
-                xor     a
-                ld      (fe_car), a
+                ld      c, 0                    ; running carry, kept in C
                 ld      b, 32
 fe_m38_loop:
-                push    bc
+                push    bc                      ; preserve counter B + carry C across mul8
                 ld      a, (ix+0)
                 inc     ix
                 ld      e, 38
                 call    mul8                    ; HL = H[i] * 38 (mul8 ignores D)
-                ld      a, (fe_car)
-                ld      c, a
-                ld      b, 0
-                add     hl, bc                  ; += carry
-                ld      a, l
-                ld      (iy+0), a
+                pop     bc                      ; B = counter, C = running carry
+
+                ld      a, c                    ; HL += carry (the only addend here)
+                add     a, l                    ; A = low byte, CF = carry-out
+                ld      (iy+0), a               ; store FE_T[i]
                 inc     iy
                 ld      a, h
-                ld      (fe_car), a
-                pop     bc
+                adc     a, 0                    ; new carry = H + carry-out
+                ld      c, a                    ; keep it in C
                 djnz    fe_m38_loop
-                ld      a, (fe_car)             ; FE_T[32] = the final carry
+                ld      a, c                    ; FE_T[32] = the final carry
                 ld      (iy+0), a
                 ret
 
