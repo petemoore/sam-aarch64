@@ -164,6 +164,39 @@ func BuildARPRequest(srcMAC MAC, srcIP, targetIP IPv4) []byte {
 	return f
 }
 
+// ParseARPReply decodes an Ethernet ARP reply (RFC 826) and returns the sender's
+// MAC + IP — the Go authority for the Z80 ARP-reply parse the i82 client does to
+// learn the server's MAC (plan §2 step 1). It accepts a frame iff it is an ARP
+// reply (EtherType 0x0806, OPER=2) for Ethernet/IPv4 (HTYPE=1, PTYPE=0x0800,
+// HLEN=6, PLEN=4); the sender hardware/protocol addresses are the answer to the
+// "who has targetIP?" request. The target fields (the asker's own MAC/IP) are
+// not validated here — the caller already knows them and matches the sender IP
+// against the server IP it asked about.
+func ParseARPReply(f []byte) (senderMAC MAC, senderIP IPv4, ok bool) {
+	if len(f) < ARPFrameLen {
+		return MAC{}, IPv4{}, false
+	}
+	if binary.BigEndian.Uint16(f[OffEtherType:]) != EtherTypeARP {
+		return MAC{}, IPv4{}, false
+	}
+	p := f[EthHeaderLen:]
+	if binary.BigEndian.Uint16(p[0:]) != ARPHTypeEthernet {
+		return MAC{}, IPv4{}, false
+	}
+	if binary.BigEndian.Uint16(p[2:]) != ARPPTypeIPv4 {
+		return MAC{}, IPv4{}, false
+	}
+	if p[4] != ARPHLen || p[5] != ARPPLen {
+		return MAC{}, IPv4{}, false
+	}
+	if binary.BigEndian.Uint16(p[6:]) != ARPOpReply {
+		return MAC{}, IPv4{}, false
+	}
+	copy(senderMAC[:], p[8:14]) // sender hardware address
+	copy(senderIP[:], p[14:18]) // sender protocol address
+	return senderMAC, senderIP, true
+}
+
 // ipChecksum computes the RFC 1071 one's-complement header checksum over a
 // 20-byte IPv4 header whose checksum field (bytes 10-11) is zero. This is the
 // Go form of trinload's checksum_ip / chksum_blk (trinload.asm:306, :360).
