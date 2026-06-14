@@ -1624,6 +1624,68 @@
     - {num: 374, role: completing}
   refs: [src/netboot/smoke_test.asm, src/netboot/netboot_server.asm, src/netboot/netboot_serve.asm, src/netboot/netboot_client.asm, i100b]
 
+- id: i119
+  title: i82 TFTP client — persistence write-out on real hardware
+  description: |
+    Wire the i82 client's B-DOS persistence write-out; deferred by Pete (first test = receive only; persistence later). Gaps: (1) record-0-selection bug — client_main selects record 0 = floppy; (2) HRECORD-stamp question — whether a build-disk .mgt record is HRECORD-selectable; (3) large-file staging via the i99 fw_span port; (4) filename >10-char UIFA truncation. Free-record detection reads the on-card list directly per docs/specs/trinity-record-detection-design.md (Trinity SD is SHARED — show-name + confirm-before-overwrite mandatory). HSAVE write-out + raw-SD list read stay hardware-gated.
+  status: IN_PROGRESS
+  kind: umbrella
+  owner: agent
+  refs: [src/netboot/netboot_client.asm, src/netboot/bdos_seam.asm, docs/specs/trinity-record-detection-design.md, docs/specs/samdos-file-io.md, i82, i93, i99, i114, i134]
+
+- id: i119a
+  title: B1 — record-layer model + Z80 raw-sector read (harness CardModel)
+  description: |
+    B1: established the record-layer model in the harness (CardModel) and implemented Z80 raw-sector read, the prerequisite for card-absolute list-sector access.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 440, role: completing}
+  parent: i119
+
+- id: i119b
+  title: B2 — per-record inspect primitive bdos_inspect_record (stamp@232 + disk-label@210)
+  description: |
+    B2: implemented bdos_inspect_record — reads the BDOS stamp at byte 232 and the disk label at byte 210 from a record's own sector. Host-verified. The safety check backing the mandatory show-name + confirm-before-overwrite gate.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 442, role: completing}
+  parent: i119
+
+- id: i119c
+  title: "B3 — card-absolute list-read: read list sectors 1..base-1, parse 16-byte entries, free ⇔ masked first-name-byte==0"
+  description: |
+    B3: implement the card-absolute list-read routine. Read list sectors 1..base-1 sequentially, parse each 16-byte entry per the frozen on-card layout (free ⇔ masked first-name byte == 0, per docs/specs/trinity-record-detection-design.md §3 and bdos15a.src.txt:946-948). Build against the harness CardModel first (emulation-first); no HRECORD, no error 81, no B-DOS internal addresses.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i119
+  refs: [docs/specs/trinity-record-detection-design.md, i119]
+
+- id: i119d
+  title: "B4 — record-selection UX: list / manual-pick / auto-pick-free + show-name + overwrite-confirm"
+  description: |
+    B4: the user-facing record picker — enumerate records (using B3's list-read), show names, let the user manually pick or auto-select first free, then display the chosen record's name (or 'free/unnamed') and require confirmation before any write. Needs the i138 keyboard-sysvar stub to exercise the keypress flow in emulation.
+  status: OPEN
+  depends_on: [i138]
+  kind: leaf
+  owner: agent
+  parent: i119
+  refs: [docs/specs/trinity-record-detection-design.md, i119, i138]
+
+- id: i119e
+  title: B5 — wire into client_main (replace record-0=floppy bug) + full emulation E2E; HSAVE write-out hardware-gated
+  description: |
+    B5: integrate B3 list-read + B4 record picker into client_main, replacing the record-0=floppy selection bug with the correct HRECORD record-n>=1 -> HSAVE flow. Run a full E2E test in emulation (harness CardModel + BDOS write-out model + i138 key injection). The HSAVE write-out to real hardware and the raw-SD list read stay hardware-gated.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i119
+  refs: [src/netboot/netboot_client.asm, src/netboot/bdos_seam.asm, docs/specs/samdos-file-io.md, i119, i99]
+
 - id: i125
   title: Section-C fit gate for every bootable netboot program (build + CI)
   description: |
@@ -1700,3 +1762,12 @@
   prs:
     - {num: 428, role: completing}
   refs: [tools/autonomous-loop/monitor.sh, tools/autonomous-loop/README.md]
+
+- id: i138
+  title: "Emulator keyboard-input support: stub LASTK/FLAGS/KSTATE sysvars to feed keypresses without interrupts"
+  description: |
+    The Go/koron-z80 harness never fires interrupts or models the keyboard, so a program awaiting a keypress (the i119 record-selection UX) can't run in emulation. Cheap approach (Pete's pointer): stub the keyboard sysvars the interrupt populates — LASTK (0x5C08) / FLAGS bit 5 (new-key) / KSTATE — inject keys directly, bypassing 50 Hz interrupt + key-matrix decode. Precedent: BASIC ROM-emulation spike (blob c0f62fa) intercepts LASTK/FLAGS to feed a key queue; samfile's etunes uses a port-level stub. Full interrupt emulation is the heavier fallback. Foundation for editor-era input (i48c/i41).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [tools/netboot-oracle/z80/, tools/z80-test-harness-go/, i119, i126, i48c, i41]
