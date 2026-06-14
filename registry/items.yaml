@@ -200,11 +200,11 @@
 - id: i39
   title: Next-gen maximally-efficient compact .tbn encoding (the design)
   description: |
-    Instruction overlay (assembled word + zeroed bits + sparse expression overlay, unifying literal/symbolic INST into one run), header label/offset table, one .tbn v2 with a contiguous evictable editor region, name front-coding, bitfield-packing polish. Shipped as milestone M8 (closed 2026-06-12). Design agreed as Format B (Pete 2026-06-08; all 5 open Qs resolved, §7). Shipped via i39a (PR #131) + i39b-1 (PR #151) + i39b-2 (PR #153). Residual i39c migrated to M9 (folds into i48c; reparented to i48c — not a child of i39).
+    Instruction overlay (assembled word + zeroed bits + sparse expression overlay, unifying literal/symbolic INST into one run), header label/offset table, one .tbn v2 with a contiguous evictable editor region, name front-coding, bitfield-packing polish. Shipped as milestone M8 (closed 2026-06-12). Design agreed as Format B (Pete 2026-06-08; all 5 open Qs resolved, §7). Shipped via i39a (PR #131) + i39b (PRs #151, #153). Residual i39c migrated to M9 (folds into i48c; reparented to i48c — not a child of i39).
   status: DONE
   kind: umbrella
   owner: agent
-  refs: [docs/specs/compact-tbn-nextgen-design.md, i39a, i39b]
+  refs: [docs/specs/compact-tbn-nextgen-design.md, i39a, i39b, i39c]
 
 - id: i39a
   title: M8 Phase 1 — instruction overlay + header label/offset table; the v2 format flip
@@ -244,7 +244,7 @@
 - id: i41a
   title: Editor edit-model — core paged block-list + cleanly-separable serialize/load seam
   description: |
-    First i41 brick; host-side Go authority for the eventual Z80 port (i41d). Package tools/sam-aarch64/editmodel: half-page (8 KB) blocks, u24 never-reused record-ids, a record-id to stable-block-pointer location table maintained O(half block) per split/merge (no global reindex, the design defining bounded-cost property), insert/delete/goto-by-id/render, and a separable EMDL serialize/load seam (swapped for real v2 .tbn in i41c). Proven by property test (5 seeds x 7000 random ops vs oracle) + 15 unit tests. CI-gated via go test + staticcheck U1000. SAM byte-layout and paging latency are i41d.
+    First i41 brick; host-side Go authority for the eventual Z80 port (i41d). Package tools/sam-aarch64/editmodel: half-page (8 KB) blocks, u24 never-reused record-ids, a record-id to stable-block-pointer location table maintained O(half block) per split/merge (no global reindex — the bounded-cost property), insert/delete/goto-by-id/render, and a separable EMDL serialize/load seam (swapped for real v2 .tbn in i41c). Proven by property test (5 seeds x 7000 random ops vs oracle) + 15 unit tests + a teeth test (corrupted loc caught). CI-gated. SAM byte-layout and paging latency are i41d.
   status: DONE
   kind: leaf
   owner: agent

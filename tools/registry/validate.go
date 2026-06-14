@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // itemIDRe matches the item id grammar:
@@ -250,15 +251,16 @@ func validateWith(reg *Registry, opts validateOpts) *ValidationError {
 			}
 		}
 
-		// Invariant 8: bounded fields.
-		if len(it.Title) > 120 {
-			ve.add(id, fmt.Sprintf("title exceeds 120 chars (%d)", len(it.Title)))
+		// Invariant 8: bounded fields. Lengths are counted in runes (the spec's
+		// "chars"), so multibyte content (em dashes, accents) is not penalised.
+		if n := utf8.RuneCountInString(it.Title); n > 120 {
+			ve.add(id, fmt.Sprintf("title exceeds 120 chars (%d)", n))
 		}
 		if strings.ContainsRune(it.Title, '\n') {
 			ve.add(id, "title must be single-line")
 		}
-		if len(it.Description) > 600 {
-			ve.add(id, fmt.Sprintf("description exceeds 600 chars (%d)", len(it.Description)))
+		if n := utf8.RuneCountInString(it.Description); n > 600 {
+			ve.add(id, fmt.Sprintf("description exceeds 600 chars (%d)", n))
 		}
 		if strings.Count(it.Description, "\n") >= 6 {
 			ve.add(id, fmt.Sprintf("description exceeds 6 lines (%d newlines)", strings.Count(it.Description, "\n")))
@@ -363,8 +365,8 @@ func validateWith(reg *Registry, opts validateOpts) *ValidationError {
 		}
 
 		// Invariant 8: question body bounded.
-		if len(q.Body) > 600 {
-			ve.add(id, fmt.Sprintf("body exceeds 600 chars (%d)", len(q.Body)))
+		if n := utf8.RuneCountInString(q.Body); n > 600 {
+			ve.add(id, fmt.Sprintf("body exceeds 600 chars (%d)", n))
 		}
 		if strings.Count(q.Body, "\n") >= 6 {
 			ve.add(id, fmt.Sprintf("body exceeds 6 lines (%d newlines)", strings.Count(q.Body, "\n")))

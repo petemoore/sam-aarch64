@@ -28,7 +28,10 @@ wrong. The orchestrator gives you the batch's ids.
 ## Per-id checks
 
 1. **id** preserved exactly; **status** matches the original token (incl.
-   BLOCKED→OPEN+edge).
+   BLOCKED→OPEN+edge). EXCEPTION — **umbrellas**: status is DERIVED from children,
+   not the original token. If the old registry filed an umbrella as DONE but it has
+   an OPEN/IN_PROGRESS child, IN_PROGRESS is CORRECT (and more accurate), not an
+   error — the validator forbids a DONE umbrella with a non-DONE child anyway.
 2. **completing PR** correct: number matches the cell; exactly one per DONE leaf;
    multi-PR handled as above; an INFERRED PR (cell had none) is faithful + the real
    mechanism is clear in desc.
