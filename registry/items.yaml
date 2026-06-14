@@ -12,6 +12,50 @@
     - {num: 124, role: completing}
   refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md", "docs/specs/tbn-binary-format-reference.md (§7)"]
 
+- id: i2
+  title: "On-SAM IDE memory model (edit buffer + IN/OUT paging; claim all free RAM, grow on demand)"
+  description: |
+    Scope row for the IDE memory model: the edit buffer and IN/OUT paging strategy. The design claim-all-free-RAM-grow-on-demand is the paged-buffer ceiling framing; full design deferred to editor work.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i3
+  title: Editor groundwork (Phase 2) — full vision
+  description: |
+    Phase-2 editor full vision umbrella. The editor groundwork encompasses all Phase-2 editor sub-features (see i43–i47 and sub-items). Full scope in ROADMAP.
+  status: OPEN
+  kind: umbrella
+  owner: agent
+  refs: [docs/ROADMAP.md]
+
+- id: i4
+  title: Basic read-only listing/scroll viewer (centre-locked cursor; up/down only)
+  description: |
+    SAM-side read-only viewer ported from the host prototype. The i76 P1 host viewer is the functional authority this SAM implementation will port. Carried forward by i76 Phase-1.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [i76, "docs/specs/editor-tui-prototype-design.md §5"]
+
+- id: i5
+  title: UI visual prototyping via image generation (MODE 3 64x24 vs MODE 4 32x24 mockups)
+  description: |
+    Mockup tooling for editor UI at SAM-accurate resolution. Carried forward by the i76 mockup backend. q1 resolved (2026-06-12): use a programmatic SAM-faithful renderer (PNG + SCREEN$ at exact mode geometry, real palette, correct pixel aspect) — generic AI image gen rejected; hand-authored retro art deferred to post-port.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [i76, "docs/specs/editor-tui-prototype-design.md §2.4"]
+
+- id: i6
+  title: "SAM screen-mode decision (MODE 3 vs 4, or user preference)"
+  description: |
+    Decide the default screen mode for the editor. To be settled empirically via i76 (geometry flag + font sheets + P3 memo). Design in editor-tui-prototype-design.md §3/§5 and ROADMAP Editor vision.
+  status: OPEN
+  kind: leaf
+  owner: pete
+  refs: [i76, "docs/specs/editor-tui-prototype-design.md §3", "docs/specs/editor-tui-prototype-design.md §5", docs/ROADMAP.md]
+
 - id: i8
   title: Sysreg-table de-dup into shared src/sysreg_tables.inc
   description: ""
@@ -63,6 +107,15 @@
     - {num: 112, role: completing}
   refs: [tools/Dockerfile.dev]
 
+- id: i12b
+  title: Editor-testing input injection (-keyin vs FLAGS/LASTK memory injection)
+  description: |
+    New 2026-06-08. Determine and implement the right input-injection mechanism for automated editor tests in SimCoupé: the -keyin flag approach vs direct FLAGS/LASTK memory injection.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [tools/run-simcoupe.sh]
+
 - id: i12c
   title: Rebase/upstream macOS+Linux paste support
   description: |
@@ -103,6 +156,15 @@
   owner: agent
   refs: [src/insn_run.asm, src/slots/shifted_reg.asm, tools/sam-aarch64/assemble/pass2.go, "CLAUDE.md §6"]
 
+- id: i16
+  title: Replace cls test instruction with a real spectrum4 one
+  description: |
+    The cls instruction used in the test fixture is synthetic/placeholder; replace it with a real spectrum4 instruction. Tracked in the ROADMAP deferred checklist. (Note: id was tentatively i13 in conversation but locked as i16 to match shipped PR #107.)
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [docs/ROADMAP.md]
+
 - id: i17
   title: "Deep reviews of main_loop.asm + litpool.asm + SYMTAB_* equ sentinels"
   description: |
@@ -124,6 +186,62 @@
     - {num: 159, role: completing}
   refs: ["scope row \"Directory naming\""]
 
+- id: i19
+  title: Subagent worktree-isolation leak — harden
+  description: |
+    Harden subagent worktree isolation to prevent one subagent's filesystem changes from leaking into another's checkout. Scope row — specifics TBD.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i20
+  title: Linker-layout coupling (spectrum4.ld hardcoded in flatten)
+  description: |
+    The flatten step has spectrum4.ld hardcoded; decouple the linker layout so other projects can use the toolchain without baking spectrum4-specific layout assumptions. Scope row.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i21
+  title: "Go-harness fidelity follow-ups: make harness-sweep, USAGE.md, memory watchpoint"
+  description: |
+    Harness-sweep (one-shot build-all-deps + go test -count=1 ./...) and USAGE.md (full-suite run, stale-payload/test-cache gotchas, boot-self-test authoring patterns) DONE in PR #341. Remaining: memory watchpoint inspection feature — deferred until a debugging session needs it (agent-owned; add ad hoc per the README Evolving the harness).
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i22
+  title: Per-fail-site diagnostic strings
+  description: |
+    Add per-fail-site diagnostic strings to test failures so failures are more easily identified without a disassembler. Deferred-backlog item.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i23
+  title: "Paged-IN HLOAD-ceiling lift (current ceiling: 96 KB = 6 pages 7..12, src/assembler.asm:49)"
+  description: |
+    The current IN-file ceiling is 96 KB (6 pages, 7–12, hardcoded src/assembler.asm line 49). Lift this ceiling to support larger source files via additional paged HLOAD slots. Deferred-backlog item.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i24
+  title: "16-bit OUT_LEN / 32 KB-output limit (OUT_LEN: defw 0 src/main_loop.asm; 32768-byte OUT ceiling src/encoder.asm)"
+  description: |
+    The output length field is 16-bit and the output buffer ceiling is 32768 bytes (src/encoder.asm). Lift the OUT_LEN field and ceiling to support assemblies larger than 32 KB. Deferred-backlog item.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i25
+  title: (hksp) HSAVE/HLOAD error handler
+  description: |
+    Add a proper error handler for HSAVE/HLOAD failures invoked via (hksp); currently errors are not surfaced to the user. Deferred-backlog item.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
 - id: i26
   title: text2bin operand-kind validation (Task 21)
   description: |
@@ -132,6 +250,14 @@
   kind: leaf
   owner: agent
   refs: [tools/README.md, Makefile, tools/sam-aarch64/]
+
+- id: i27
+  title: "Cortex-A53 errata workarounds (--fix-cortex-a53-*)"
+  description: |
+    Implement or wire errata workarounds for the Cortex-A53 (--fix-cortex-a53-* flags). Deferred-backlog item.
+  status: OPEN
+  kind: leaf
+  owner: agent
 
 - id: i28
   title: "Absolute .set/.equ high-word edge: negative absolute emitted wrong high word (0x00000000 vs 0xFFFFFFFF)"
