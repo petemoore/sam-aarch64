@@ -1,0 +1,75 @@
+- id: i48c
+  title: "Z80 text→overlay encoder (editor input path)"
+  description: |
+    SAM-side mirror of the host front-end; Go i48b is the authority.
+    Large multi-PR port, decomposed into bricks as sub-items.
+  status: IN_PROGRESS
+  kind: umbrella
+  owner: agent
+  refs: [i48c-b5a]
+
+- id: i48c-b5a
+  title: "B5a — movk/movz/movn special-form parse"
+  description: "#imm16 [, lsl #N]; hw=N/16 folded into bits[17:16]; range-checked."
+  status: DONE
+  kind: leaf
+  owner: agent
+  parent: i48c
+  prs: [{num: 435, role: completing}]
+  refs: [i48c]
+
+- id: i115
+  title: "Registry as structured source (umbrella)"
+  description: |
+    Convert the hand-edited iN/qN markdown tables to a validated YAML source
+    with a codegen pipeline. Phased rollout; leaves i115a-i115e.
+  status: OPEN
+  kind: umbrella
+  owner: agent
+  refs: ["docs/specs/registry-source-of-truth-design.md"]
+
+- id: i115a
+  title: "registry tool skeleton (validate + gen-to-buffer)"
+  description: "Dormant Go module: invariant validator + gen-to-Writer. Fixture only; no live registry, no CI gate."
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i115
+  refs: [i115, "tools/registry/"]
+
+- id: i115b
+  title: "registry generator finalised + header templates"
+  description: "gen.go: escaping, banner, header-template concat. registry-sync-check Makefile target (not yet CI-wired)."
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i115
+  refs: [i115]
+
+- id: i116
+  title: "Blocked example item"
+  description: "Waiting on i115 to complete before migration can begin."
+  status: BLOCKED
+  blocker: "i115 not yet complete"
+  kind: leaf
+  owner: agent
+  refs: [i115]
+
+- id: i200
+  title: "Completed leaf with followup PR"
+  description: "An item that is done with a followup fix PR recorded."
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 100, role: completing}
+    - {num: 105, role: followup}
+  refs: []
+
+- id: i201
+  title: "WONTFIX item"
+  description: "Decided not to implement this; approach superseded by i200."
+  status: WONTFIX
+  kind: leaf
+  owner: agent
+  refs: [i200]

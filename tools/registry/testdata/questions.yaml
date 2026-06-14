@@ -1,0 +1,14 @@
+- id: q1
+  title: "What YAML library should the registry tool use?"
+  description: "gopkg.in/yaml.v3 chosen: well-maintained, supports block scalars for clean multi-line descriptions."
+  status: DONE
+  owner: agent
+  prs: [{num: 436, role: completing}]
+  refs: [i115a]
+
+- id: q2
+  title: "Should description bound be 600 chars or higher?"
+  description: "Provisional at 600; confirmed empirically by i115f reshape experiment before Phase 4 enforces it."
+  status: OPEN
+  owner: pete
+  refs: [i115]
