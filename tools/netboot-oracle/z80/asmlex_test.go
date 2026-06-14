@@ -1,23 +1,25 @@
-// asmlex_test.go — host-verification of src/asmlex.asm (i48c Brick B1: the
-// aarch64 assembler-source tokenizer).
+// asmlex_test.go — host-verification of src/asmlex.asm (i48c: the aarch64
+// assembler-source tokenizer; Bricks B1 + B1b).
 //
 // Drives lex_run under the flat-memory koron-go/z80 harness and compares every
-// emitted token (kind + source-span + integer base) against a Go reference.
+// emitted token (kind + source-span + integer base + int64/char value) against
+// a Go reference.
 //
 // The Go authority is tools/sam-aarch64/frontend/lexer.go (Lex). That package
 // lives in a different Go module and pulls in the whole assembler front-end, so
 // — as the editmodel harness test does for editmodel.go — refLex below is a
-// faithful transcription of lexer.go's Brick-B1 subset (kinds, spans, and the
-// 0x/0b base), and the canonical hand cases assert kind sequences taken straight
-// from frontend/lexer_test.go (authority-anchored). On B1's input domain (no
-// string/char literals, no local-label refs, no cpp line-directives — all
-// deferred to B1b) refLex is identical to frontend.Lex, since none of the
-// deferred constructs can arise without a '"', '\”, a digit-then-f/b, or a
-// quoted line directive, none of which the corpus emits.
+// faithful transcription of lexer.go's supported subset (kinds, spans, the
+// 0x/0b base, the int64 value, and char-literal values), and the canonical hand
+// cases assert kind sequences taken straight from frontend/lexer_test.go
+// (authority-anchored). Still deferred to Brick B1c: string literals, local-label
+// refs (Nf/Nb), and cpp line-directives. On that input domain refLex is identical
+// to frontend.Lex, since none of the deferred constructs can arise without a '"',
+// a digit-then-f/b, or a quoted line directive, none of which the corpus emits.
 package z80_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"math/rand"
 	"os"
@@ -82,6 +84,7 @@ type refTok struct {
 	kind int
 	span []byte
 	base int
+	val  uint64 // for TOK_INT (numeric or character literal)
 }
 
 func refIsIdentStart(c byte) bool {
@@ -89,6 +92,40 @@ func refIsIdentStart(c byte) bool {
 }
 func refIsIdentCont(c byte) bool {
 	return refIsIdentStart(c) || (c >= '0' && c <= '9')
+}
+
+// refDigitVal maps a digit char to its value (port of parseIntInBase's switch).
+func refDigitVal(c byte) uint64 {
+	switch {
+	case c >= '0' && c <= '9':
+		return uint64(c - '0')
+	case c >= 'a' && c <= 'f':
+		return uint64(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return uint64(c-'A') + 10
+	}
+	return 0
+}
+
+// refEscape decodes a char-literal escape (port of readCharLit's switch).
+func refEscape(e byte) (byte, bool) {
+	switch e {
+	case 'n':
+		return '\n', true
+	case 'r':
+		return '\r', true
+	case 't':
+		return '\t', true
+	case '\\':
+		return '\\', true
+	case '\'':
+		return '\'', true
+	case '"':
+		return '"', true
+	case '0':
+		return 0, true
+	}
+	return 0, false
 }
 func refDigitForBase(c byte, base int) bool {
 	switch base {
@@ -252,7 +289,35 @@ func refLex(src []byte) (toks []refTok, ok bool) {
 			for pos < n && refDigitForBase(src[pos], base) {
 				pos++
 			}
-			emit(refTok{kind: tInt, span: src[start:pos], base: base})
+			span := src[start:pos]
+			var val uint64
+			for _, dc := range span {
+				val = val*uint64(base) + refDigitVal(dc)
+			}
+			emit(refTok{kind: tInt, span: span, base: base, val: val})
+		case c == '\'':
+			pos++ // opening '
+			if pos >= n {
+				return toks, false
+			}
+			ch := src[pos]
+			pos++
+			if ch == '\\' {
+				if pos >= n {
+					return toks, false
+				}
+				dec, ok := refEscape(src[pos])
+				if !ok {
+					return toks, false
+				}
+				ch = dec
+				pos++
+			}
+			if pos >= n || src[pos] != '\'' {
+				return toks, false
+			}
+			pos++ // closing '
+			emit(refTok{kind: tInt, val: uint64(ch)})
 		case refIsIdentStart(c):
 			start := pos
 			for pos < n && refIsIdentCont(src[pos]) {
@@ -281,16 +346,17 @@ func lexZ80(t *testing.T, mac *z80h.Machine, src []byte) (toks []refTok, errFlag
 	}
 	count := int(res.BC)
 	for i := 0; i < count; i++ {
-		rec := mac.Read(symToks+uint16(i*6), 6)
+		rec := mac.Read(symToks+uint16(i*14), 14)
 		kind := int(rec[0])
 		ptr := uint16(rec[1]) | uint16(rec[2])<<8
 		ln := int(uint16(rec[3]) | uint16(rec[4])<<8)
 		base := int(rec[5])
+		val := binary.LittleEndian.Uint64(rec[6:14])
 		var span []byte
 		if ln > 0 {
 			span = mac.Read(ptr, ln)
 		}
-		toks = append(toks, refTok{kind: kind, span: span, base: base})
+		toks = append(toks, refTok{kind: kind, span: span, base: base, val: val})
 	}
 	errFlag = mac.Read(symErr, 1)[0] != 0
 	return toks, errFlag
@@ -325,8 +391,13 @@ func compareToks(t *testing.T, label string, got, want []refTok) {
 			t.Fatalf("%s: tok[%d] (%s) span = %q, want %q",
 				label, i, kindName(got[i].kind), got[i].span, want[i].span)
 		}
-		if want[i].kind == tInt && got[i].base != want[i].base {
-			t.Fatalf("%s: tok[%d] int base = %d, want %d", label, i, got[i].base, want[i].base)
+		if want[i].kind == tInt {
+			if got[i].base != want[i].base {
+				t.Fatalf("%s: tok[%d] int base = %d, want %d", label, i, got[i].base, want[i].base)
+			}
+			if got[i].val != want[i].val {
+				t.Fatalf("%s: tok[%d] int value = %d, want %d", label, i, got[i].val, want[i].val)
+			}
 		}
 	}
 }
@@ -355,8 +426,13 @@ func TestAsmLexHandCases(t *testing.T) {
 		{"add x0, x1, #4\n", []int{tIdent, tIdent, tComma, tIdent, tComma, tHash, tInt, tEOL, tEOF}},
 		// frontend/lexer_test.go TestLexComments
 		{"// hi\nadd /* mid */ x0\n", []int{tLineComment, tEOL, tIdent, tBlockComment, tIdent, tEOL, tEOF}},
-		// number bases (values are B1b; kinds + bases here)
+		// number bases — all three encode 42 (value checked via compareToks)
 		{"42 0x2a 0b101010\n", []int{tInt, tInt, tInt, tEOL, tEOF}},
+		// large hex value (exercises the 64-bit accumulator)
+		{".quad 0x0123456789abcdef\n", []int{tIdent, tInt, tEOL, tEOF}},
+		// character literals lex as TOK_INT with the char's value
+		{"mov x0, #'A'\n", []int{tIdent, tIdent, tComma, tHash, tInt, tEOL, tEOF}},
+		{"'A' '0' '\\n' '\\t' '\\\\' ' '\n", []int{tInt, tInt, tInt, tInt, tInt, tInt, tEOL, tEOF}},
 		// memory operand shape + writeback
 		{"ldr x0, [x1, #8]!\n", []int{tIdent, tIdent, tComma, tLBracket, tIdent, tComma, tHash, tInt, tRBracket, tBang, tEOL, tEOF}},
 		// directive + shift operator
@@ -401,6 +477,8 @@ var alPieces = []string{
 	"add", "sub", "ldr", "mov", "b", "ret", "cmp", "orr", "x0", "x1", "x29", "w5",
 	"sp", "xzr", "lr", "loop", "_start", "foo", ".text", ".word", ".quad", ".align",
 	"0", "1", "4", "42", "255", "0x1f", "0xFF", "0xdead", "0b1010", "0b0", "1000",
+	"0x0123456789abcdef", "65535", "0xcafef00d",
+	"'A'", "'z'", "'0'", "' '", "'\\n'", "'\\t'", "'\\\\'", "'\\''",
 	"#", ",", ":", "!", "[", "]", "(", ")", "+", "-", "*", "/", "&", "|", "^", "~",
 	"=", "%", "<<", ">>", ".", "/* blk */",
 }
