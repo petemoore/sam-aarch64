@@ -479,7 +479,7 @@ netboot-http: $(BUILD)/netboot_http.bin $(BUILD)/netboot_http.map
 # body_sink.asm joins in Brick 3). Host-test build (NETBOOT_HOSTTEST) — the prov_*
 # driver is host-verified against the Go authority; see
 # docs/plans/z80-http-main-port-plan.md.
-$(BUILD)/netboot_http_main.bin $(BUILD)/netboot_http_main.map: src/netboot/http_main.asm src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/sha256.asm src/netboot/fw_source.asm src/netboot/body_sink.asm
+$(BUILD)/netboot_http_main.bin $(BUILD)/netboot_http_main.map: src/netboot/http_main.asm src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/sha256.asm src/netboot/fw_source.asm src/netboot/body_sink.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_HOSTTEST=1 \
 	    --obj=$(BUILD)/netboot_http_main.bin \
@@ -497,7 +497,7 @@ netboot-http-main: $(BUILD)/netboot_http_main.bin $(BUILD)/netboot_http_main.map
 # error on an org overrun, so without it an over-budget boot image would assemble
 # silently (buildNetbootDisk enforces the same ceiling at disk-build time, but the
 # standalone `make netboot-http-boot` must catch it too).
-$(BUILD)/netboot_http_boot.bin $(BUILD)/netboot_http_boot.map: src/netboot/http_main.asm src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/eeprom.asm src/netboot/sha256.asm src/netboot/fw_source.asm src/netboot/body_sink.asm src/netboot/fw_span.asm
+$(BUILD)/netboot_http_boot.bin $(BUILD)/netboot_http_boot.map: src/netboot/http_main.asm src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/eeprom.asm src/netboot/sha256.asm src/netboot/fw_source.asm src/netboot/body_sink.asm src/netboot/fw_span.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STREAM=1 --obj=$(BUILD)/netboot_http_boot.bin \
 	    --mapfile=$(BUILD)/netboot_http_boot.map \
@@ -774,7 +774,7 @@ $(BUILD)/asmparse.bin $(BUILD)/asmparse.map: src/asmparse.asm src/mnemonic_names
 asmparse-z80: $(BUILD)/asmparse.bin $(BUILD)/asmparse.map
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-smoke-boot netboot-client-boot netboot-trinload
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-smoke-boot netboot-client-boot netboot-trinload
 
 ci-netboot-z80: netboot-z80-routines editmodel-z80 asmlex-z80 asmparse-z80
 	cd tools/netboot-oracle/z80 && go test ./...

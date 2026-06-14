@@ -55,6 +55,7 @@
                                                 ; guarded behind NETBOOT_STANDALONE so
                                                 ; the composed binary fits the &8000-
                                                 ; &10000 window (Brick 3).
+                include "enc_link.asm"          ; drv_wait_link (PHY link-up, i127/i128)
 
 ; prov_skeleton — the Brick 1 placeholder entry so the composed binary has a
 ; public label to assemble. Superseded by prov_first/prov_onframe/prov_next in
@@ -488,6 +489,18 @@ http_main:
                 or      c
                 jp      z, ht_fail_init
 
+                ; --- wait for the PHY link before the first (proactive) TX -
+                ; prov_first broadcasts an ARP request immediately; a frame sent
+                ; before the 10BASE-T link is up is silently dropped, and drv_init
+                ; does not wait for link. A reactive server gets this for free (its
+                ; first send is a reply); a proactive transmitter (this, like the
+                ; TFTP client) must wait. (i127/i128 — root-caused via the i124
+                ; boot-path emulation; mirrors netboot_client.asm.)
+                call    drv_wait_link
+                ld      a, b
+                or      c
+                jp      z, ht_fail_link
+
                 ; --- drive the multi-file provisioning loop --------------
                 call    prov_first              ; file 0's ARP
 ht_prov_loop:
@@ -514,6 +527,11 @@ ht_fail_cfg:
 ht_fail_init:
                 ld      a, 1                    ; blue border: ENC28J60 init failed
                 out     (&fe), a
+                di
+                halt
+ht_fail_link:
+                ld      a, 6                    ; yellow border: PHY link never came up
+                out     (&fe), a                ; (cable unplugged, or no link partner)
                 di
                 halt
 
