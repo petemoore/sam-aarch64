@@ -66,11 +66,15 @@ A row is `| **id** | <item cell> | <status cell> | <refs cell> |`.
   "blocked on iX" / "gated on qY" prose into an edge. A `BLOCKED:Pete` with no
   existing question stays OPEN with `owner: pete` and no edge (note it) — do NOT mint
   a question unless the orchestrator says to.
-- **--ref** (repeatable): each refs-cell entry. File paths / URLs / `§` pass through.
-  An id-shaped ref MUST be a BARE id (`i52`, not "i52 PR 4" — that fails strict
-  validate; move the "PR 4" detail to --desc). NEVER ref a closed question (q-ids in
-  question-registry-closed.md retire and won't exist) — fold its decision into --desc
-  if relevant.
+- **--ref** (repeatable): **preserve EVERY entry from the original refs/pointer
+  cell** — every primary source file, doc (use the EXACT path the original cites;
+  do NOT substitute a "related" doc), and sibling/umbrella cross-id. Dropping or
+  swapping a ref is information loss the reviewer will flag. File paths / URLs / `§`
+  pass through (keep the `§N` suffix on a path as part of that ref string). An
+  id-shaped ref MUST be a BARE id (`i52`, not "i52 PR 4" — that fails strict
+  validate; move the "PR 4" detail to --desc). The ONE exception: NEVER ref a closed
+  question (q-ids in question-registry-closed.md retire and won't exist) — fold its
+  decision into --desc instead.
 
 ## WONTFIX
 
