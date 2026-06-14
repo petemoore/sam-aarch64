@@ -65,7 +65,7 @@ ci-netboot-oracle:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -121,6 +121,19 @@ $(BUILD)/netboot_build_arp_reply.bin $(BUILD)/netboot_build_arp_reply.map: src/n
 	    src/netboot/build_arp_reply.asm
 
 netboot-build-arp-reply: $(BUILD)/netboot_build_arp_reply.bin $(BUILD)/netboot_build_arp_reply.map
+
+# build-tcp-segment — the fresh TCP/IPv4/Ethernet segment builder (i70), the TCP
+# analogue of build_udp_frame.  TCP is the transport the firmware-self-provisioning
+# HTTP client rides on; the UDP-only trinload stack does not provide it.  Host-
+# verified: tcp_segment_test.go byte-compares the emitted segment (incl. the
+# mandatory pseudo-header checksum) against the Go authority tcp.BuildSegment.
+$(BUILD)/netboot_build_tcp_segment.bin $(BUILD)/netboot_build_tcp_segment.map: src/netboot/build_tcp_segment.asm
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_tcp_segment.bin \
+	    --mapfile=$(BUILD)/netboot_build_tcp_segment.map \
+	    src/netboot/build_tcp_segment.asm
+
+netboot-build-tcp-segment: $(BUILD)/netboot_build_tcp_segment.bin $(BUILD)/netboot_build_tcp_segment.map
 
 # encdrv — the vendored Trinity ENC28J60 driver (simonowen/trinload, verbatim),
 # orged at &8000 by encdrv_harness.asm.  The i80 emulation test (enc28j60_test)
@@ -348,7 +361,7 @@ netboot-client-disk: $(BUILD)/netboot_client_boot.bin $(BUILD)/build-disk
 	    $(BUILD)/netboot_client.mgt
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client
 
 ci-netboot-z80: netboot-z80-routines
 	cd tools/netboot-oracle/z80 && go test ./...
