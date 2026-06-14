@@ -270,6 +270,48 @@
     - {num: 379, role: completing}
   refs: ["src/expr_eval.asm (eval_push_sym_sign_high)", "src/main_loop.asm (main_dir_equ_mark_abs)", tests/symbols/sources/set_neg_highword.s, "CLAUDE.md §6 (Go authority)"]
 
+- id: i29
+  title: Harden slot self-test PASS_PC dependency
+  description: |
+    Deferred-backlog item. Hardens the slot self-test PASS_PC dependency to make it more robust.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i30
+  title: LDIR-fan-out for cross-page-shared blocks (smaller binary + faster boot)
+  description: |
+    Deferred/possible future enhancement. Using LDIR fan-out for blocks shared across pages could reduce binary size and speed up boot. Noted in the strand-B PR4 disassembler plan under 'Future enhancements'.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-06-07-strand-b-pr4-z80-disassembler-port.md"]
+
+- id: i31
+  title: On-SAM preprocessor (.if build-constraints + macros)
+  description: |
+    Beyond-M7 / future idea. On-SAM preprocessor supporting .if build-constraints and macro expansion, reducing reliance on the host-side preprocess step.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i32
+  title: Multiple source files + staged/partial loading
+  description: |
+    Beyond-M7 / future idea. Support for assembling from multiple source files with staged or partial loading, enabling larger projects than currently fit in a single-file workflow.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i33
+  title: "Trinity mass-storage: leverage B-DOS record seam for staged/overlaid assembly (i23/i24 ceiling lift)"
+  description: |
+    Use the proven Trinity B-DOS storage seam (src/netboot/bdos_seam.asm; spanning records in src/netboot/fw_span.asm) for staged/overlaid assembly, lifting the i23 96 KB IN / i24 32 KB OUT ceilings. Storage-access half proven by netboot work. Assembler still uses plain HSAVE/HLOAD for single-file IN→OUT; this item extends that to mass-storage-backed staging. Rescoped 2026-06-17: netboot proved records are accessible + writable; remaining deliverable is the assembler-scale integration.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [memory/trinity_hardware.md, src/netboot/bdos_seam.asm, i23, i24]
+
 - id: i34
   title: Untrack accidentally-committed Go binaries
   description: |
@@ -356,6 +398,15 @@
   parent: i39
   refs: [docs/specs/compact-tbn-nextgen-design.md, "https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-06-09-i39b-nametable-frontcoding-sidecars.md", "https://github.com/petemoore/sam-aarch64/blob/d874a69/docs/notes/m8-status.md"]
 
+- id: i39c
+  title: Phase 3 — bitfield-packing polish on the overlay slot bytes
+  description: |
+    Bitfield-packing polish on the overlay slot bytes (design §3.1). Migrated to M9 at M8 close (2026-06-12). Folds into / absorbed into the i48c overlay-encoder work, specifically i48c-b7 (comments/blank-runs + overlay slot bitfield-packing brick).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: ["docs/specs/i48-syntactic-encoder-design.md §3.1", docs/notes/m9-status.md, i48c, i48c-b7]
+
 - id: i40
   title: Assembler-side editor-region eviction
   description: |
@@ -366,6 +417,15 @@
   prs:
     - {num: 181, role: completing}
   refs: ["https://github.com/petemoore/sam-aarch64/blob/d874a69/docs/notes/m8-status.md", docs/specs/comment-storage-design.md, i51]
+
+- id: i41
+  title: Editor edit-buffer data structure — insertion performance for large source
+  description: |
+    Architectural decision: the editor holds source in a separate insertion-friendly in-memory document model (paged block-list: block = page, intra-block gap buffer, record-id side-tables; worst-case edit ~30–80 ms at 400 KB) and serializes to .tbn on save/assemble. Unifies the editor document model with i48's IR (edit-model records = in-memory symbolic IR). Design agreed (opus, 2026-06-08), 5 key decisions in docs/specs/editor-edit-model-design.md §7. Decomposed into i41a–i41e.
+  status: IN_PROGRESS
+  kind: umbrella
+  owner: agent
+  refs: ["docs/specs/editor-edit-model-design.md §7", docs/notes/m9-status.md, i41a, i41b, i41c, i41d, i41e]
 
 - id: i41a
   title: Editor edit-model — core paged block-list + cleanly-separable serialize/load seam
@@ -402,6 +462,65 @@
     - {num: 385, role: completing}
   parent: i41
   refs: [tools/sam-aarch64/editmodel/, docs/specs/editor-edit-model-design.md, q24]
+
+- id: i42
+  title: CRC / signature in the .tbn file header (integrity check)
+  description: |
+    Deferred since M1. The v1 header has magic/version/flags but no integrity field. Add a CRC or signature field to the .tbn header for integrity checking. Referenced in the M1 status 'Known gaps' list.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m1-status.md"]
+
+- id: i43
+  title: "Editor: register simulator with user-chosen seeds + replay-on-edit"
+  description: |
+    Phase-2 editor sub-feature. Register simulator with user-chosen seeds: step instructions, inject/randomise source regs, show dest regs/flags/memory, and replay-on-edit. Described in docs/ROADMAP.md 'Editor vision'.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i3
+  refs: [docs/ROADMAP.md]
+
+- id: i44
+  title: "Editor: inline instruction-explanation panel (prose semantics, flags, regs, bit-field layout)"
+  description: |
+    Phase-2 editor sub-feature. Inline instruction-explanation panel showing prose semantics, flags set, regs read/written, and bit-field layout. Described in docs/ROADMAP.md 'Editor vision'.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i3
+  refs: [docs/ROADMAP.md]
+
+- id: i45
+  title: "Editor: 'did you mean a simpler instruction?' result-equivalent rewrite hint"
+  description: |
+    Phase-2 editor sub-feature. Suggests result-equivalent but simpler instruction rewrites when a more concise encoding exists. Described in docs/ROADMAP.md 'Editor vision'.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i3
+  refs: [docs/ROADMAP.md]
+
+- id: i46
+  title: "Editor: system-register documentation panel (ARM MRA subset + editorial overlay)"
+  description: |
+    Phase-2 editor sub-feature. System-register documentation panel surfaced from the cursor line, embedding an ARM MRA subset with editorial overlay. Described in docs/ROADMAP.md 'Editor vision'.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i3
+  refs: [docs/ROADMAP.md]
+
+- id: i47
+  title: "Editor: inverse-flow navigation + retro UI affordances (chiptune, period fonts, animations)"
+  description: |
+    Phase-2 editor sub-features. 'Why is this instruction here?' inverse-flow navigation plus retro UI affordances including chiptune audio, period fonts, and animations. Described in docs/ROADMAP.md 'Editor vision'.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i3
+  refs: [docs/ROADMAP.md]
 
 - id: i48
   title: Single serialized format + pass-free syntactic encoder (the design)
@@ -607,6 +726,14 @@
   prs:
     - {num: 149, role: completing}
 
+- id: i50
+  title: Host Go-tool CLI shape — deferred design question (one binary vs three vs pandoc-style)
+  description: |
+    Deferred design question (Pete 2026-06-09): whether host tools stay one format-aware front door (sam-aarch64, auto-detects SA64 magic), revert to three binaries (encode/decode/translate), or adopt pandoc-style --from/--to. Three concerns are already cleanly separated as libraries (aarch64enc / aarch64dec / sam-aarch64-format+frontend); CLI count is a thin presentation choice, orthogonal to the i48 in-memory-only-symbolic-form win. Revisit when bulk GNU→.tbn import and listings host features land. Go tools are Z80-port scaffolding + oracle (memory/project_go_tools_are_z80_scaffolding.md).
+  status: OPEN
+  kind: leaf
+  owner: pete
+
 - id: i51
   title: Un-strip all comments on the SAM-side m6 gate
   description: |
@@ -648,6 +775,22 @@
   prs:
     - {num: 183, role: completing}
   refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-06-08-go-vs-z80-disasm-capability-parity.md"]
+
+- id: i55
+  title: Multi-section / linker-script honouring in refenc
+  description: |
+    Explicitly punted in favour of the text2bin -flatten approach. Multi-section / linker-script handling in refenc would only be needed if a non-spectrum4-shaped project surfaces. Deferred; from ROADMAP deferred checklist (retired in i52 PR 3).
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i56
+  title: SpectrumFourLayout extraction (-layout flag or linker-script parser)
+  description: |
+    Not worth doing unless a second project surfaces. SpectrumFourLayout extraction via -layout flag or linker-script parser is a Pete-gated call; deferred. From ROADMAP deferred checklist (retired in i52 PR 3).
+  status: OPEN
+  kind: leaf
+  owner: pete
 
 - id: i57
   title: "Comment-compression experiment (host-side, Go): benchmark Z80-feasible schemes"
@@ -735,6 +878,15 @@
   owner: agent
   prs:
     - {num: 169, role: completing}
+
+- id: i65
+  title: SAM-side save-without-comments option (editor phase)
+  description: |
+    On-SAM counterpart to the host -strip-comments/-thin-comments flags. Saves a .tbn with the editor region stripped/thinned so a 256 KB SAM can assemble sources authored on a 512 KB machine. q9 resolved (Pete 2026-06-10): the tool targets both 256 and 512 KB SAMs; the full unstripped release .tbn is allowed to exceed 256 KB, but a 256 KB user must still be able to assemble via this stripped disk handoff. Host equivalent already exists.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [i59]
 
 - id: i67
   title: Night-shift T-state optimization of the Z80 ZX0 compression path
