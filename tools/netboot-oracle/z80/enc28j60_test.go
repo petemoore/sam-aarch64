@@ -228,6 +228,72 @@ func TestDrvWriteThenReadLoopback(t *testing.T) {
 	}
 }
 
+// TestDrvWriteSilentWireWhileLinkDown is the i131 silent-wire reproduction: a
+// transmit issued while the PHY link is still down egresses NOTHING, yet the
+// driver sees a clean transmit (drv_write returns BC=1). This is the exact
+// hardware failure Pete saw — a proactive transmitter (ARP-before-link-up, no
+// drv_wait_link) clocks its frame into the ENC before 10BASE-T link-pulse
+// detection completes, the PHY drops it, and the driver, none the wiser, waits
+// forever for a reply that can't come. It is the un-fixed half of i127; the
+// fixed client (drv_wait_link first) recovers, asserted in the boot test.
+//
+// The same drv_write that put a frame on the wire in TestDrvWriteFrameOnWire is
+// reused here, the only difference being the modelled link state — so the test
+// isolates "link down" as the sole cause of the silent wire.
+func TestDrvWriteSilentWireWhileLinkDown(t *testing.T) {
+	mac := loadEnc(t)
+	enc := z80h.NewENC28J60()
+	initDriver(t, mac, enc)
+
+	// Model the link as down from here on (resets the op counter; the threshold
+	// is far beyond any op count drv_write reaches, so it never comes up during
+	// this test). This is the proactive case: no drv_wait_link precedes the send.
+	enc.SetLinkUpAfterOps(1 << 30)
+
+	frame := []byte{
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, // dst (broadcast)
+		0x02, 0x53, 0x41, 0x4d, 0x00, 0x01, // src (our MAC)
+		0x08, 0x06, // ethertype ARP
+		0x00, 0x01, 0x08, 0x00, 0x06, 0x04, 0x00, 0x01,
+		0x02, 0x53, 0x41, 0x4d, 0x00, 0x01, 0x0a, 0x00,
+		0x00, 0x01, 0xde, 0xad,
+	}
+	pkt := sym(t, mac, "PACKET")
+	mac.Write(pkt, frame)
+	res, err := mac.CallEntry("drv_write", z80h.Entry{HL: pkt, BC: uint16(len(frame))})
+	if err != nil {
+		t.Fatalf("call drv_write: %v", err)
+	}
+	// The driver believes it succeeded — TXIF set, TXRTS cleared, clean status —
+	// which is precisely why the loss is silent and the client then livelocks.
+	if res.BC != 1 {
+		t.Fatalf("drv_write returned BC=%d, want 1 (the driver sees a clean transmit even though the link silently dropped the frame)", res.BC)
+	}
+	if n := len(enc.TXFrames()); n != 0 {
+		t.Fatalf("link down: %d frames egressed, want 0 — a TX before link-up must be silently dropped (i127 silent-wire reproduction)", n)
+	}
+
+	// Bring the link up and transmit the same frame: now it reaches the wire
+	// byte-exact. Proves the drop is gated solely on link state, not a broken
+	// transmit path (and that drv_wait_link's job — waiting for this — is real).
+	enc.SetLinkUpAfterOps(0)
+	mac.Write(pkt, frame)
+	res, err = mac.CallEntry("drv_write", z80h.Entry{HL: pkt, BC: uint16(len(frame))})
+	if err != nil {
+		t.Fatalf("call drv_write (link up): %v", err)
+	}
+	if res.BC != 1 {
+		t.Fatalf("drv_write (link up) returned BC=%d, want 1", res.BC)
+	}
+	tx := enc.TXFrames()
+	if len(tx) != 1 {
+		t.Fatalf("link up: %d frames egressed, want exactly 1 (only the post-link-up send)", len(tx))
+	}
+	if !bytes.Equal(tx[0], frame) {
+		t.Errorf("post-link-up frame != input\n  wire %x\n   in  %x", tx[0], frame)
+	}
+}
+
 // TestDrvReadEmptyReturnsZero: with nothing on the wire, drv_read returns BC=0
 // (the EPKTCNT==0 path) rather than garbage.
 func TestDrvReadEmptyReturnsZero(t *testing.T) {

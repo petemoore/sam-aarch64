@@ -155,6 +155,84 @@ func TestClientBootReachesFirstTX(t *testing.T) {
 	}
 }
 
+// TestClientBootRecoversFromLinkDownStart is the i131 recovery half: the REAL
+// fixed client_main, booted with the PHY link modelled DOWN at start, still puts
+// exactly its one ARP request on the wire — because drv_wait_link blocks until
+// the link comes up before the proactive client_first send. With the emulator now
+// dropping a transmit issued while the link is down (the silent wire, asserted in
+// TestDrvWriteSilentWireWhileLinkDown), this is a genuine regression guard for the
+// i127 fix: were drv_wait_link removed from client_main, client_first would clock
+// the ARP out while the link is still down, the frame would be dropped, and this
+// test would see 0 frames.
+//
+// The guard is self-calibrating (no magic op-count): a baseline run with the link
+// up from the start records FirstTXOps — the exact op-count at which client_main
+// puts the ARP on the wire, i.e. the moment an un-fixed client would transmit.
+// The guarded run then models the link as still down at that op-count (threshold
+// FirstTXOps + a small margin), so an un-fixed client would necessarily transmit
+// into a down link and lose the frame; the fixed client's drv_wait_link spins past
+// that point and the ARP still egresses, byte-identical to the baseline.
+//
+// Link-up *timing* stays hardware-gated (CLAUDE.md §5); this asserts the code's
+// wait-then-send logic against the hardware-confirmed silent-wire model.
+func TestClientBootRecoversFromLinkDownStart(t *testing.T) {
+	run := func(linkUpAfterOps int) (z80h.CallResult, *z80h.ENC28J60) {
+		mac, err := z80h.LoadBoot(cliBootBin, cliBootMap, romBaseBoot)
+		if err != nil {
+			t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		}
+		enc := z80h.NewENC28J60()
+		enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)
+		enc.SetLinkUpAfterOps(linkUpAfterOps)
+		mac.AttachIO(enc)
+		// No RX queued: after the ARP egresses, cl_fetch_loop spins awaiting a
+		// reply that never comes, so RunBoot stops at the step cap (not halted).
+		res, err := mac.RunBoot("client_main", z80h.Entry{StepCap: bootStepCap})
+		if err != nil {
+			t.Fatalf("RunBoot client_main (linkUpAfterOps=%d): %v", linkUpAfterOps, err)
+		}
+		return res, enc
+	}
+
+	// Baseline: link up immediately. Exactly one ARP egresses; FirstTXOps records
+	// the op-count at which it did — the point an un-fixed client would transmit.
+	_, immENC := run(0)
+	if n := len(immENC.TXFrames()); n != 1 {
+		t.Fatalf("link up immediately: client_main put %d frames on the wire, want 1 (the ARP)", n)
+	}
+	unfixedTXOps := immENC.FirstTXOps()
+	if unfixedTXOps <= 0 {
+		t.Fatalf("baseline FirstTXOps = %d, want > 0 (no frame egressed?)", unfixedTXOps)
+	}
+
+	// Guarded run: model the link as still DOWN at unfixedTXOps (+ a margin to
+	// cover the few ops client_first spends between drv_wait_link returning and the
+	// actual send), coming up just after. An un-fixed client transmits at ~unfixed
+	// TXOps < threshold → into a down link → dropped (0 frames). The fixed client
+	// waits past the threshold, so its ARP still reaches the wire.
+	const margin = 200
+	threshold := unfixedTXOps + margin
+	_, dlyENC := run(threshold)
+	tx := dlyENC.TXFrames()
+	if len(tx) != 1 {
+		border, _ := dlyENC.LastBorder()
+		t.Fatalf("link down at start (up after %d ops): client_main put %d frames on the wire, want exactly 1 — "+
+			"0 means the ARP was dropped (drv_wait_link missing/broken: the i127 fix regressed); border=%d",
+			threshold, len(tx), border)
+	}
+	if !bytes.Equal(tx[0], immENC.TXFrames()[0]) {
+		t.Errorf("ARP after waiting for link != ARP with link up immediately\n  delayed %x\n  imm     %x", tx[0], immENC.TXFrames()[0])
+	}
+	// The ARP must have egressed only after the link came up — i.e. the fixed
+	// client genuinely waited past the point an un-fixed one would have sent.
+	if got := dlyENC.FirstTXOps(); got < threshold {
+		t.Fatalf("guarded run egressed the ARP at op %d, before the link-up threshold %d — "+
+			"client_first did not wait for link (the i127 fix is not in effect)", got, threshold)
+	}
+	t.Logf("client_main recovers: un-fixed TX would land at op %d; fixed client (link up after %d ops) sent its ARP at op %d — both exactly 1 ARP, byte-identical",
+		unfixedTXOps, threshold, dlyENC.FirstTXOps())
+}
+
 // TestDrvWaitLinkWaitsThenSucceeds verifies the i127 fix's core: drv_wait_link
 // polls PHSTAT2.LSTAT over the MII and blocks until the link reads up. It is a
 // CODE-correctness check (does the poll loop wait, then return success), not a

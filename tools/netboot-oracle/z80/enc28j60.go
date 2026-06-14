@@ -145,16 +145,24 @@ type ENC28J60 struct {
 	lastBorder    byte
 	borderWritten bool
 
-	// PHY link-up model (i127). On real silicon the ENC28J60's 10BASE-T link is
-	// down for a while after init (link-pulse detection; the datasheet gives no
-	// duration and the chip has no auto-negotiation), and a transmit issued before
-	// the link is up is SILENTLY lost (TXRTS clears + TXIF sets, but the bytes
-	// never egress). ops counts SPI port accesses as a proxy for elapsed time;
-	// the link is up once ops reaches linkUpAfterOps. Default 0 = up immediately
-	// (the behaviour every pre-i127 test relies on); a test sets it >0 to model
-	// the delay and exercise the wait-for-link path.
+	// PHY link-up model (i127, hardware-confirmed 2026-06-19). On real silicon the
+	// ENC28J60's 10BASE-T link is down for a while after init (link-pulse
+	// detection; the datasheet gives no duration and the chip has no auto-
+	// negotiation), and a transmit issued before the link is up is SILENTLY lost
+	// (TXRTS clears + TXIF sets, but the bytes never egress — modelled in
+	// doTransmit). ops counts SPI port accesses as a proxy for elapsed time; the
+	// link is up once ops reaches linkUpAfterOps. Default 0 = up immediately (the
+	// behaviour every pre-i127 test relies on); a test sets it >0 to model the
+	// delay and exercise both the wait-for-link path and the silent-wire drop.
 	ops            int
 	linkUpAfterOps int
+	// firstTXOps is the value of ops when the first frame actually egressed (-1
+	// until then). It is the op-count at which a proactive transmitter put its
+	// first frame on the wire — exactly the moment an un-fixed client (no
+	// drv_wait_link) would transmit — so a test can pin the link-down window to
+	// straddle it (FirstTXOps). It survives SetLinkUpAfterOps resets so it can be
+	// read after a full run.
+	firstTXOps int
 
 	// Virtual wire.
 	txFrames [][]byte // frames the driver transmitted (control byte stripped)
@@ -175,7 +183,7 @@ type ENC28J60 struct {
 // the emulator appends a 4-byte zero CRC as silicon would store it). Inject more
 // later with InjectRX.
 func NewENC28J60(rxFrames ...[]byte) *ENC28J60 {
-	e := &ENC28J60{}
+	e := &ENC28J60{firstTXOps: -1}
 	e.softReset()
 	for _, f := range rxFrames {
 		e.InjectRX(f)
@@ -376,20 +384,28 @@ func (e *ENC28J60) ProgramTrinityNetwork(mac [6]byte, ip [4]byte) {
 
 // SetLinkUpAfterOps models the PHY link coming up only after `n` SPI port
 // accesses (a proxy for the post-init link-pulse-detection delay): until then,
-// a read of PHSTAT2.LSTAT reports the link DOWN. n=0 (default) keeps the link up
-// from the start (every pre-i127 test relies on that). It resets the op counter.
+// a read of PHSTAT2.LSTAT reports the link DOWN and a transmit issued is silently
+// dropped (doTransmit). n=0 (default) keeps the link up from the start (every
+// pre-i127 test relies on that). It resets the op counter.
 //
-// Scope note (i127): this models only the LSTAT *read* — the datasheet-confirmed
-// link-status mechanism a proactive transmitter must poll before its first send.
-// It deliberately does NOT yet gate transmit/receive on link state (the "a frame
-// sent before link-up is silently lost" reproduction): that is held until the
-// fix is confirmed on real hardware, so the emulator never encodes an unconfirmed
-// cause as its contract. Once hardware confirms, the drop-while-down behaviour
-// and its regression test land here.
+// Scope note (i127): the emulator models both the LSTAT *read* (the datasheet-
+// confirmed link-status mechanism a proactive transmitter must poll before its
+// first send) and the *transmit drop while link-down* (the silent wire). The
+// latter was held back until the fix was confirmed on real Trinity — rec 13 ran
+// the full network path and failed only at the B-DOS write-out, vs the old
+// dead-silent client (i127, 2026-06-19) — so the emulator now encodes a
+// hardware-confirmed cause, not a guess. What stays hardware-gated is the link-up
+// *timing*: the emulator never claims a specific post-init delay (CLAUDE.md §5).
 func (e *ENC28J60) SetLinkUpAfterOps(n int) { e.linkUpAfterOps = n; e.ops = 0 }
 
 // linkUp reports whether the modelled PHY link is up yet (ops past the threshold).
 func (e *ENC28J60) linkUp() bool { return e.ops >= e.linkUpAfterOps }
+
+// FirstTXOps returns the op-count at which the first frame egressed, or -1 if
+// none has. It marks the moment a proactive transmitter put its first frame on
+// the wire — the op-count at which an un-fixed client (no drv_wait_link) would
+// transmit — letting a test set a link-down window that straddles it.
+func (e *ENC28J60) FirstTXOps() int { return e.firstTXOps }
 
 // miiReadByte returns the byte an RCR of a MAC/MII register yields, modelling the
 // MII path to the PHY registers for the one register the driver reads: PHSTAT2
@@ -550,25 +566,42 @@ func (e *ENC28J60) wbmWrite(v byte) {
 // completion the way the driver waits for it: EIR.TXIF set, TXERIF clear, TXRTS
 // self-cleared. It also writes a benign 7-byte transmit status vector after
 // ETXND so the driver's status read sees no late collision.
+//
+// PHY link-up gate (i127, hardware-confirmed 2026-06-19): a transmit issued
+// while the 10BASE-T link is still down is SILENTLY lost — the datasheet says
+// TXRTS clears and TXIF sets (the driver's status poll sees a clean transmit),
+// but the bytes never egress. So when the link is down we run the full
+// completion signalling below (the driver believes it succeeded) yet do NOT
+// append the frame to the wire. This is what makes the un-fixed proactive
+// transmitter (ARP-before-link-up, no drv_wait_link) reproduce the silent wire
+// Pete saw on real hardware, and the fixed client (drv_wait_link first) recover.
 func (e *ENC28J60) doTransmit() {
 	st := e.reg16(regETXSTL)
 	nd := e.reg16(regETXNDL)
-	// Frame = bytes (ETXST+1 .. ETXND): the byte at ETXST is the per-packet
-	// control byte (tx_flags); the frame proper follows.
-	frame := make([]byte, 0, int(nd-st))
-	for a := int(st) + 1; a <= int(nd); a++ {
-		frame = append(frame, e.buf[a&0x1FFF])
+	if e.linkUp() {
+		// Frame = bytes (ETXST+1 .. ETXND): the byte at ETXST is the per-packet
+		// control byte (tx_flags); the frame proper follows.
+		frame := make([]byte, 0, int(nd-st))
+		for a := int(st) + 1; a <= int(nd); a++ {
+			frame = append(frame, e.buf[a&0x1FFF])
+		}
+		e.txFrames = append(e.txFrames, frame)
+		if e.firstTXOps < 0 {
+			e.firstTXOps = e.ops
+		}
 	}
-	e.txFrames = append(e.txFrames, frame)
 
 	// 7-byte transmit status vector at ETXND+1, all zero (no error, no late
 	// collision) — the driver reads 8 bytes of status starting at tx_start+1
 	// + length, checks EIR.TXERIF then tx_status+3 bit 5 (late collision).
+	// Written regardless of link state: on real silicon the transmit logic still
+	// runs and posts a clean status; only the egress is lost.
 	for i := 0; i < 7; i++ {
 		e.buf[(int(nd)+1+i)&0x1FFF] = 0
 	}
 
-	// Completion: TXIF set, TXERIF clear; TXRTS self-clears.
+	// Completion: TXIF set, TXERIF clear; TXRTS self-clears. These fire even with
+	// the link down (the datasheet behaviour that hides the loss from the driver).
 	e.regs[0][regEIR] |= eirTXIF
 	e.regs[0][regEIR] &^= eirTXERIF
 	e.regs[0][regECON1] &^= econ1TXRTS
