@@ -177,11 +177,18 @@ jobs:
         run: make ci-netboot-z80
 
   # sysreg-sync — Go↔Z80 sysreg table sync guard (repo-audit §5 / §6 #9).
-  # Asserts the hand-maintained Z80 table src/sysreg_data.asm agrees
-  # byte-for-byte with the Go authority tools/sam-aarch64-format/sysregs.go
-  # for every sysreg/pstate/dc/tlbi entry the Z80 side carries, so the two
-  # copies can't silently drift. Pure Go, no container, no binutils —
-  # mirrors the lightweight format/encoder jobs.
+  # Two complementary checks, both pure Go (no container, no binutils):
+  #
+  #   sysreg-sync-check  — decodes the Z80 table src/sysreg_tables.inc and
+  #     asserts it agrees byte-for-byte with the Go authority
+  #     tools/sam-aarch64-format/sysregs.go for every sysreg/pstate/dc/tlbi
+  #     entry (TestSysregZ80Sync).  Emitter-faithfulness guard (i7): catches a
+  #     generator bug — wrong field order, missing terminator.
+  #   tables-sync-check  — regenerates the committed generated tables with
+  #     tools/tables-gen and diffs against the in-tree copies; fails on any
+  #     drift (a Go-side edit that forgot `make tables`, or a hand edit to a
+  #     generated file).  Freshness guard (i7): closes the hand-sync drift
+  #     class for src/sysreg_tables.inc.
   sysreg-sync:
     runs-on: ubuntu-latest
     steps:
@@ -191,6 +198,8 @@ jobs:
           go-version: '1.26.1'
       - name: Run sysreg Go↔Z80 sync guard
         run: make sysreg-sync-check
+      - name: Run generated-table freshness guard
+        run: make tables-sync-check
 
   # staticcheck — dead-code (unused / U1000) gate across the core host
   # toolchain modules. Pure Go, no container; the checker is built with

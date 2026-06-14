@@ -1,5 +1,5 @@
 // Package mra parses ARM MRA (Machine Readable Architecture) XML
-// instruction-class files into a structure the enctab-gen generator
+// instruction-class files into a structure the tables-gen generator
 // can map into aarch64enc Forms.
 //
 // Schema notes (this release of the ARM MRA):
@@ -39,7 +39,7 @@ type ParsedForm struct {
 }
 
 // RawOperandSlot is one named box in the regdiagram that is a variable
-// (non-fixed) field; converted to an aarch64enc.OperandSlot by enctab-gen's
+// (non-fixed) field; converted to an aarch64enc.OperandSlot by tables-gen's
 // field-mapping logic.
 type RawOperandSlot struct {
 	Name        string

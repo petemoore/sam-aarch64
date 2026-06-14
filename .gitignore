@@ -19,7 +19,7 @@ __pycache__/
 tools/aarch64dec/aarch64dec
 tools/aarch64dec/cmd/aarch64dec/aarch64dec
 tools/build-disk/build-disk
-tools/enctab-gen/enctab-gen
+tools/tables-gen/tables-gen
 tools/comment-bench/comment-bench
 tools/z80-test-harness-go/z80-test-harness-go
 tools/i62-bdos-experiment/build-i62-disk/build-i62-disk

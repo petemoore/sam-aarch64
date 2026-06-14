@@ -11,16 +11,38 @@ import (
 	enc "github.com/petemoore/sam-aarch64/tools/aarch64enc"
 	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
 
-	"github.com/petemoore/sam-aarch64/tools/enctab-gen/emit"
-	"github.com/petemoore/sam-aarch64/tools/enctab-gen/mra"
+	"github.com/petemoore/sam-aarch64/tools/tables-gen/emit"
+	"github.com/petemoore/sam-aarch64/tools/tables-gen/mra"
 )
 
 func main() {
-	var mraDir, outEnc, outGo string
+	var mraDir, outEnc, outGo, outSysregInc string
 	flag.StringVar(&mraDir, "mra", "reference/arm-mra", "MRA snapshot dir")
 	flag.StringVar(&outEnc, "out", "", "binary .enc output (optional)")
 	flag.StringVar(&outGo, "gopkg", "", "regenerate the MRA-derived Go source at this path.  Only emits MRA-derived forms; hand-curated forms live in tools/aarch64enc/manual_forms.go and are not touched by this tool.")
+	flag.StringVar(&outSysregInc, "sysreg-inc", "", "regenerate the Z80 sysreg/pstate/dc/tlbi tables (src/sysreg_tables.inc) from tools/sam-aarch64-format/sysregs.go.")
 	flag.Parse()
+
+	// The sysreg .inc is projected straight from the Go format package; it
+	// needs no MRA parse, so handle it before the (slower) XML walk.
+	if outSysregInc != "" {
+		out, err := os.Create(outSysregInc)
+		if err != nil {
+			fail(err)
+		}
+		if err := emit.RenderSysregInc(out); err != nil {
+			out.Close()
+			fail(err)
+		}
+		out.Close()
+		fmt.Printf("Wrote %s (sysreg/pstate/dc/tlbi tables from sysregs.go).\n", outSysregInc)
+	}
+
+	// The MRA walk only feeds the -out / -gopkg emitters. When only the
+	// sysreg .inc was requested, skip it (and the MRA snapshot dependency).
+	if outEnc == "" && outGo == "" {
+		return
+	}
 
 	xmls, err := filepath.Glob(filepath.Join(mraDir, "*.xml"))
 	if err != nil {

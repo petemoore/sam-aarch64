@@ -4,7 +4,7 @@ Third-party material vendored so the build and the research trail are
 hermetic. Never edited, only re-vendored.
 
 - `arm-mra/` — snapshot of ARM's Machine Readable Architecture XML for the
-  instructions we encode. The input to `tools/enctab-gen` (→
+  instructions we encode. The input to `tools/tables-gen` (→
   `build/enctab.enc` + `tools/aarch64enc/data.go`); see
   `docs/ARCHITECTURE.md` §4. `manifest.json` records the snapshot
   provenance.

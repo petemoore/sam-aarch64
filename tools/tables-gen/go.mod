@@ -1,4 +1,4 @@
-module github.com/petemoore/sam-aarch64/tools/enctab-gen
+module github.com/petemoore/sam-aarch64/tools/tables-gen
 
 go 1.26.1
 
