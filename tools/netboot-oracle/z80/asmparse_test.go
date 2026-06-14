@@ -1,11 +1,11 @@
 // asmparse_test.go — host-verification of src/asmparse.asm (i48c: the aarch64
-// assembler-source parser; Bricks B2a–B2c).
+// assembler-source parser; Bricks B2a–B3c).
 //
 // B2a (mnemonic_lookup): drives the lookup under the flat-memory koron-go/z80
 // harness and asserts the returned ID matches format.MnemonicID for every name
 // in MnemonicTable, plus a batch of non-mnemonics (asserting not-found).
 //
-// B2b/B2c/B3a..B3b (parse_run / parse_inst): drives the instruction parse and
+// B2b/B2c/B3a..B3c (parse_run / parse_inst): drives the instruction parse and
 // compares the emitted INST records against a faithful Go reference. The
 // operand-byte authority is the real format.OperandWriter + format.ExprWriter +
 // format.EvalConst + format.SymbolTable (imported directly); the lexing reuses
@@ -15,8 +15,8 @@
 // refExprParser below are verbatim parser.go matchReg / tokPrec / parseExprPrec
 // + parseExprPrimary, covering the complete binary-operator set
 // `+ - & | ^ << >> * /` + unary `- ~` + parens + symbol identifiers (interned
-// via a per-document format.SymbolTable). The remaining out-of-domain
-// constructs are the PC/local/reloc primaries (B3c), blank-runs/labels/comments/
+// via a per-document format.SymbolTable) + PC (`.`) + local-refs + reloc ops.
+// The remaining out-of-domain constructs are blank-runs/labels/comments/
 // directives/mem operands, and the special-form mnemonics parseInst intercepts
 // before its generic loop; on the in-domain subset refParse mirrors Parse exactly.
 //
@@ -185,11 +185,36 @@ func refTokPrec(k int) int {
 	return -1
 }
 
+// refRelocOp is a verbatim port of parser.go's relocOp: maps a relocation name
+// string to its ExprOp byte. Returns (op, true) on success; (0, false) otherwise.
+func refRelocOp(name string) (format.ExprOp, bool) {
+	switch name {
+	case "lo12":
+		return format.OpRelLo12, true
+	case "hi12":
+		return format.OpRelHi12, true
+	case "abs_g0":
+		return format.OpRelAbsG0, true
+	case "abs_g0_nc":
+		return format.OpRelAbsG0NC, true
+	case "abs_g1":
+		return format.OpRelAbsG1, true
+	case "abs_g1_nc":
+		return format.OpRelAbsG1NC, true
+	case "abs_g2":
+		return format.OpRelAbsG2, true
+	case "abs_g2_nc":
+		return format.OpRelAbsG2NC, true
+	case "abs_g3":
+		return format.OpRelAbsG3, true
+	}
+	return 0, false
+}
+
 // refExprParser is a precedence-climbing expression parser over a refTok slice,
-// a verbatim transcription of parser.go's parseExprPrec + parseExprPrimary
-// (no PC/local/reloc primaries — those are B3c). It builds bytecode into a real
-// format.ExprWriter and interns symbol identifiers via the real
-// format.SymbolTable, exactly as the Go authority does.
+// a verbatim transcription of parser.go's parseExprPrec + parseExprPrimary.
+// It builds bytecode into a real format.ExprWriter and interns symbol identifiers
+// via the real format.SymbolTable, exactly as the Go authority does.
 type refExprParser struct {
 	toks []refTok
 	pos  int
@@ -254,6 +279,39 @@ func (p *refExprParser) parsePrimary(w *format.ExprWriter) bool {
 		id := p.st.Intern(string(p.cur().span))
 		w.WriteSym(id)
 		p.pos++
+		return true
+	case tDot:
+		w.WritePC()
+		p.pos++
+		return true
+	case tLocalRef:
+		digit := byte(p.cur().val)
+		dir := byte(0)
+		if p.cur().base == int('b') {
+			dir = 1
+		}
+		w.WriteLocal(digit, dir)
+		p.pos++
+		return true
+	case tColon:
+		p.pos++ // consume ':'
+		if p.cur().kind != tIdent {
+			return false
+		}
+		name := string(p.cur().span)
+		p.pos++ // consume name
+		if p.cur().kind != tColon {
+			return false
+		}
+		p.pos++ // consume ':'
+		if !p.parsePrimary(w) {
+			return false
+		}
+		op, ok := refRelocOp(name)
+		if !ok {
+			return false
+		}
+		w.WriteOp(op)
 		return true
 	case tMinus:
 		p.pos++
@@ -357,10 +415,11 @@ func refParse(src []byte) (recs []parseRec, ok bool) {
 					}
 					// A non-register identifier is a symbol expression (B3b).
 					fallthrough
-				case tHash, tInt, tMinus, tTilde, tLParen:
-					// A constant- or symbol-expression operand: `#4+1`, `~0`,
-					// `foo`, `label+4`. Constant exprs fold to an immediate;
-					// symbol exprs keep the raw bytecode.
+				case tHash, tInt, tMinus, tTilde, tLParen,
+					tDot, tLocalRef, tColon:
+					// An expression-leading operand: constant/symbol/PC/local/reloc.
+					// Constant exprs fold to an immediate; non-constant keep raw
+					// bytecode.
 					expr, npos, ok := refParseExpr(toks, pos, st)
 					if !ok {
 						return nil, false
@@ -369,7 +428,7 @@ func refParse(src []byte) (recs []parseRec, ok bool) {
 					count++
 					pos = npos
 				default:
-					return nil, false // mem operand / . / localref / : -> later brick
+					return nil, false // mem operand / label / directive -> later brick
 				}
 			}
 			recs = append(recs, parseRec{mnemonicID: id, count: count, ops: ow.Bytes()})
@@ -1048,6 +1107,92 @@ var apMnemPool = []string{
 	"ret", "br", "blr", "b", "bl", "sxtw",
 }
 
+// ---------------------------------------------------------------------------
+// B3c — PC (`.`), local-ref, and reloc primaries.
+// ---------------------------------------------------------------------------
+
+// pOp builds an expression operand whose bytecode is produced by a closure
+// over a real format.ExprWriter (like xOp but named for the primary tests).
+func pOp(build func(w *format.ExprWriter)) opspec {
+	var ew format.ExprWriter
+	build(&ew)
+	return opspec{isExpr: true, exprRaw: ew.Bytes()}
+}
+
+// TestParsePrimaryHandCases pins INST records for B3c primaries: PC (`.`),
+// local-refs (`1f`, `2b`), and reloc prefixes (`:lo12:foo`). These primaries
+// produce non-constant expression bytecode (PC/local/reloc), so the operand
+// keeps the raw bytecode rather than folding. Cross-checks against refParse.
+func TestParsePrimaryHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	cases := []struct {
+		src  string
+		want []parseRec
+	}{
+		// PC primary: '.' emits PUSH_PC
+		{"mov x0, .\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), pOp(func(w *format.ExprWriter) {
+			w.WritePC()
+		}))}},
+		// PC in an arithmetic expression: `. + 4`
+		{"add x0, x1, .+4\n", []parseRec{mkRec2(t, "add", rOp(X, 0), rOp(X, 1), pOp(func(w *format.ExprWriter) {
+			w.WritePC()
+			w.WriteImm(4)
+			w.WriteOp(format.OpAdd)
+		}))}},
+		// local-ref forward: `1f` (digit=1, dir=0)
+		{"b 1f\n", []parseRec{mkRec2(t, "b", pOp(func(w *format.ExprWriter) {
+			w.WriteLocal(1, 0)
+		}))}},
+		// local-ref backward: `2b` (digit=2, dir=1)
+		{"b 2b\n", []parseRec{mkRec2(t, "b", pOp(func(w *format.ExprWriter) {
+			w.WriteLocal(2, 1)
+		}))}},
+		// local-ref with a larger digit: `9f`
+		{"br 9f\n", []parseRec{mkRec2(t, "br", pOp(func(w *format.ExprWriter) {
+			w.WriteLocal(9, 0)
+		}))}},
+		// reloc primary: `:lo12:foo` — symbol interns as id 0
+		{"mov x0, :lo12:foo\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), pOp(func(w *format.ExprWriter) {
+			w.WriteSym(0)
+			w.WriteOp(format.OpRelLo12)
+		}))}},
+		// reloc primary: `:hi12:bar` — symbol interns as id 0 (fresh document)
+		{"mov x0, :hi12:bar\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), pOp(func(w *format.ExprWriter) {
+			w.WriteSym(0)
+			w.WriteOp(format.OpRelHi12)
+		}))}},
+		// reloc primary: `:abs_g0:label` — id 0
+		{"mov x0, :abs_g0:label\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), pOp(func(w *format.ExprWriter) {
+			w.WriteSym(0)
+			w.WriteOp(format.OpRelAbsG0)
+		}))}},
+		// reloc primary: `:abs_g0_nc:label`
+		{"mov x0, :abs_g0_nc:label\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), pOp(func(w *format.ExprWriter) {
+			w.WriteSym(0)
+			w.WriteOp(format.OpRelAbsG0NC)
+		}))}},
+		// multiple reloc operands on one line — each gets an id
+		{"add x0, :lo12:foo, :hi12:foo\n", []parseRec{mkRec2(t, "add", rOp(X, 0),
+			pOp(func(w *format.ExprWriter) { w.WriteSym(0); w.WriteOp(format.OpRelLo12) }),
+			pOp(func(w *format.ExprWriter) { w.WriteSym(0); w.WriteOp(format.OpRelHi12) }),
+		)}},
+	}
+	for _, c := range cases {
+		got, errFlag := parseZ80(t, mac, []byte(c.src))
+		if errFlag {
+			t.Errorf("%q: PARSE_ERR set unexpectedly", c.src)
+			continue
+		}
+		compareRecs(t, fmt.Sprintf("%q", c.src), got, c.want)
+		ref, ok := refParse([]byte(c.src))
+		if !ok {
+			t.Fatalf("%q: refParse reported error on a valid case", c.src)
+		}
+		compareRecs(t, fmt.Sprintf("%q (vs refParse)", c.src), got, ref)
+	}
+}
+
 // TestParseInstFuzz compares asmparse against refParse over random register
 // instruction lines (no blanks/comments/labels/immediates).
 func TestParseInstFuzz(t *testing.T) {
@@ -1087,10 +1232,10 @@ func TestParseInstFuzz(t *testing.T) {
 	}
 }
 
-// TestParseInstError checks that out-of-B2b-domain lines set PARSE_ERR (and
-// that refParse agrees). Each is a real parser path with teeth: an unknown
-// mnemonic, a non-register operand (immediate), a leading comma, and a
-// line-leading non-identifier.
+// TestParseInstError checks that out-of-domain lines set PARSE_ERR (and that
+// refParse agrees). Each is a real parser path with teeth: an unknown mnemonic,
+// malformed expressions, and B3c-specific error cases (unknown reloc name,
+// malformed `:name:` syntax).
 func TestParseInstError(t *testing.T) {
 	mac := loadAsmparse(t)
 	cases := []struct {
@@ -1102,9 +1247,6 @@ func TestParseInstError(t *testing.T) {
 		{"leading comma", "add , x0\n"},
 		{"line-leading number", "5 x0\n"},
 		{"directive (B6, not B2b)", ".text\n"},
-		// a bare symbol followed by a stray operator that ends the expression
-		// then reads as a stray operand (the `:` reloc primary is B3c)
-		{"reloc primary not yet supported (B3c)", "mov x0, :lo12:foo\n"},
 		// malformed expressions
 		{"unbalanced paren", "mov x0, #(1+2\n"},
 		{"empty parens", "mov x0, ()\n"},
@@ -1112,6 +1254,10 @@ func TestParseInstError(t *testing.T) {
 		{"trailing shift operator", "mov x0, #4<<\n"},
 		{"trailing divide operator", "mov x0, #4/\n"},
 		{"double unary then nothing", "mov x0, -\n"},
+		// B3c error cases: reloc primaries with bad structure
+		{"unknown reloc name", "mov x0, :bogus:foo\n"},
+		{"reloc missing second colon", "mov x0, :lo12 foo\n"},
+		{"reloc colon with no name", "mov x0, ::foo\n"},
 	}
 	for _, c := range cases {
 		_, errFlag := parseZ80(t, mac, []byte(c.src))
