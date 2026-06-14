@@ -527,10 +527,13 @@ sha_extend:
                 ; h=g; g=f; f=e; e=d+T1; d=c; c=b; b=a; a=T1+T2
                 ld      a, 64                   ; round counter (in memory: the
                 ld      (sha_round_ctr), a      ; loop body is too big for djnz's
-                ld      hl, SHA_W               ; 8-bit displacement)
-                ld      (sha_wptr), hl          ; W[t] address, kept in memory:
-                ld      hl, sha256_k            ; sha_ch/sha_maj clobber IX/IY, so
-                ld      (sha_kt), hl            ; the W/K pointers cannot live there
+                ld      hl, SHA_W+3             ; 8-bit displacement). The W/K
+                ld      (sha_wptr), hl          ; pointers track the word LSB (+3)
+                ld      hl, sha256_k+3          ; so add4_body (LSB-first) consumes
+                ld      (sha_kt), hl            ; them directly; the +4/round
+                                                ; advance still lands on the next
+                                                ; word's LSB. (Kept in memory:
+                                                ; sha_ch/sha_maj clobber IX/IY.)
 sha_round:
                 ; T1 = h
                 ld      hl, wv_h
@@ -548,17 +551,11 @@ sha_round:
                 ld      hl, sha_t1+3
                 add4_body
                 ; T1 += K[t]
-                ld      de, (sha_kt)            ; DE -> K[t] base
-                inc     de
-                inc     de
-                inc     de                      ; DE -> K[t]+3 (LSB)
+                ld      de, (sha_kt)            ; DE -> K[t]+3 (LSB)
                 ld      hl, sha_t1+3
                 add4_body
                 ; T1 += W[t]
-                ld      de, (sha_wptr)          ; DE -> W[t] base
-                inc     de
-                inc     de
-                inc     de                      ; DE -> W[t]+3 (LSB)
+                ld      de, (sha_wptr)          ; DE -> W[t]+3 (LSB)
                 ld      hl, sha_t1+3
                 add4_body
                 ; T2 = S0(a)
