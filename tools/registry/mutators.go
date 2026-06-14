@@ -15,6 +15,9 @@ type mutatorPaths struct {
 	itemsYAML     string
 	questionsYAML string
 	registryDir   string // directory containing .id-ledger.txt
+	templatesDir  string // directory containing *.head.md header templates
+	outDir        string // write generated .md files here; empty → stdout mode
+	migrating     bool   // defer invariant 10 (id-shaped ref existence)
 }
 
 // applyAndCommit is the canonical end-of-mutator pipeline:
@@ -24,7 +27,7 @@ type mutatorPaths struct {
 //  2. validate the registry — if it fails print errors and exit 1, leaving
 //     the source files unchanged;
 //  3. write canonical YAML to the source files;
-//  4. re-load from disk and run gen (printing the three views to stdout),
+//  4. re-load from disk and run gen (to stdout or to paths.outDir),
 //     so the caller can confirm the regenerated output is consistent.
 //
 // Because mutators modify reg in memory first and only write here (after
@@ -35,7 +38,7 @@ func applyAndCommit(reg *Registry, paths mutatorPaths) {
 	reg.Items = sortedItems(reg.Items)
 	reg.Questions = sortedQuestions(reg.Questions)
 
-	ve := validate(reg)
+	ve := validateWith(reg, validateOpts{migrating: paths.migrating})
 	if ve.hasErrors() {
 		for _, msg := range ve.msgs {
 			fmt.Fprintln(os.Stderr, msg)
@@ -50,14 +53,14 @@ func applyAndCommit(reg *Registry, paths mutatorPaths) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	// Re-load from disk and regenerate the three views (printed to stdout).
+	// Re-load from disk and regenerate the three views.
 	// Re-loading ensures the canonical serializer's output round-trips cleanly.
 	reg2, err := loadReg(paths)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	genToStdout(reg2)
+	genToOutDirOrStdout(reg2, paths)
 }
 
 // loadReg loads both YAML files into a Registry.
@@ -73,9 +76,10 @@ func loadReg(paths mutatorPaths) (*Registry, error) {
 	return &Registry{Items: items, Questions: questions}, nil
 }
 
-// genToStdout runs the gen pipeline and prints the three generated views to
-// stdout (dormant mode: does not touch docs/notes/*.md).
-func genToStdout(reg *Registry) {
+// genToOutDirOrStdout runs the gen pipeline. When paths.outDir is set, it
+// writes the three .md files into that directory (in-place mode). When outDir
+// is empty, it prints the three views to stdout (dormant/stdout mode).
+func genToOutDirOrStdout(reg *Registry, paths mutatorPaths) {
 	var itemsOpen, itemsClosed, qOpen bytes.Buffer
 	if err := genItemsOpenClosed(reg, &itemsOpen, &itemsClosed); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -85,12 +89,96 @@ func genToStdout(reg *Registry) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	fmt.Print("=== item-registry-open ===\n")
-	os.Stdout.Write(itemsOpen.Bytes())
-	fmt.Print("\n=== item-registry-closed ===\n")
-	os.Stdout.Write(itemsClosed.Bytes())
-	fmt.Print("\n=== question-registry-open ===\n")
-	os.Stdout.Write(qOpen.Bytes())
+
+	if paths.outDir == "" {
+		fmt.Print("=== item-registry-open ===\n")
+		os.Stdout.Write(itemsOpen.Bytes())
+		fmt.Print("\n=== item-registry-closed ===\n")
+		os.Stdout.Write(itemsClosed.Bytes())
+		fmt.Print("\n=== question-registry-open ===\n")
+		os.Stdout.Write(qOpen.Bytes())
+		return
+	}
+
+	// In-place mode: write each view with its template header inserted between
+	// the banner and the table (spec §"Generator" — in-place gen).
+	writes := []struct {
+		filename string
+		tmpl     string
+		content  []byte
+	}{
+		{"item-registry-open.md", "item-registry-open.head.md", itemsOpen.Bytes()},
+		{"item-registry-closed.md", "item-registry-closed.head.md", itemsClosed.Bytes()},
+		{"question-registry-open.md", "question-registry-open.head.md", qOpen.Bytes()},
+	}
+	for _, w := range writes {
+		data, err := assembleGenFile(paths.templatesDir, w.tmpl, w.content)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		outPath := paths.outDir + "/" + w.filename
+		if err := os.WriteFile(outPath, data, 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "registry gen: write %s: %v\n", outPath, err)
+			os.Exit(1)
+		}
+	}
+}
+
+// assembleGenFile builds the content for one generated registry .md file:
+// (a) the generated banner (already at the start of genContent), (b) a blank
+// line, (c) the template header prose read from templatesDir/tmplName, (d) the
+// generated markdown table (everything after the banner in genContent).
+//
+// The genContent produced by genItemsOpenClosed / genQuestionsOpen is:
+//   banner + "\n" + table
+//
+// We splice the template between the banner-trailing-newline and the table.
+func assembleGenFile(templatesDir, tmplName string, genContent []byte) ([]byte, error) {
+	tmplPath := templatesDir + "/" + tmplName
+	tmplData, err := os.ReadFile(tmplPath)
+	if err != nil {
+		return nil, fmt.Errorf("registry gen: read template %s: %w", tmplPath, err)
+	}
+
+	// genContent layout: "<banner>\n<table...>".
+	// Find the end of the banner block (the first blank line, i.e. "\n\n").
+	sep := []byte("\n\n")
+	idx := indexBytes(genContent, sep)
+	if idx < 0 {
+		// Fallback: no blank line found; treat the whole content as table.
+		return append(append(tmplData, '\n'), genContent...), nil
+	}
+
+	// banner is everything up to and including the first "\n" after the block.
+	banner := genContent[:idx+1]  // up to (but not including) the second \n
+	table := genContent[idx+1:]   // starts at the blank line then the table
+
+	// Output: banner + "\n" + template + table
+	// (The template files already end with a trailing newline, so no extra needed.)
+	var out []byte
+	out = append(out, banner...)
+	out = append(out, '\n')
+	out = append(out, tmplData...)
+	out = append(out, table...)
+	return out, nil
+}
+
+// indexBytes returns the index of the first occurrence of sep in s, or -1.
+func indexBytes(s, sep []byte) int {
+	for i := 0; i <= len(s)-len(sep); i++ {
+		match := true
+		for j := 0; j < len(sep); j++ {
+			if s[i+j] != sep[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return i
+		}
+	}
+	return -1
 }
 
 // runNextID implements `next-id [--space items|questions]`.

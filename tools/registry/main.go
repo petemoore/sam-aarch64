@@ -3,25 +3,36 @@
 //
 // Usage:
 //
-//	registry validate <items.yaml> [questions.yaml]
-//	registry gen     <items.yaml> <questions.yaml>
+//	registry [--migrating] validate <items.yaml> [questions.yaml]
+//	registry [--migrating] gen     <items.yaml> <questions.yaml>
 //
 //	Mutating subcommands (operate on testdata/ and registry/.id-ledger.txt;
 //	tool is dormant — does NOT touch docs/notes/*.md):
 //
-//	registry next-id [--space items|questions]
-//	registry add     --id … --title … --desc … --status … --owner … [--parent …] [--dep …]… [--ref …]…
-//	registry split   --parent iN --child-id iN-bM --title …
-//	registry set-status --id iN --status … [--pr N]
-//	registry set-pr  --id iN --pr N [--role completing|followup]
-//	registry dep     add|rm --id iN --on iM|qN
-//	registry answer  --id qN
+//	registry [--migrating] next-id [--space items|questions]
+//	registry [--migrating] add     --id … --title … --desc … --status … --owner … [--parent …] [--dep …]… [--ref …]…
+//	registry [--migrating] split   --parent iN --child-id iN-bM --title …
+//	registry [--migrating] set-status --id iN --status … [--pr N]
+//	registry [--migrating] set-pr  --id iN --pr N [--role completing|followup]
+//	registry [--migrating] dep     add|rm --id iN --on iM|qN
+//	registry [--migrating] answer  --id qN
+//
+// --migrating is a global flag: it may appear anywhere before the subcommand
+// and defers only invariant 10 (id-shaped ref existence). Invariants 11/12/13
+// (depends_on DAG, no-WONTFIX-target, delete-gate) remain strict.
+//
+// Environment variables (all optional; override the testdata defaults):
+//
+//	REGISTRY_ITEMS      path to items.yaml         (default: <toolDir>/testdata/items.yaml)
+//	REGISTRY_QUESTIONS  path to questions.yaml      (default: <toolDir>/testdata/questions.yaml)
+//	REGISTRY_DIR        directory for .id-ledger.txt (default: <toolDir>)
+//	REGISTRY_TEMPLATES  directory of *.head.md templates (default: <toolDir>/templates)
+//	REGISTRY_OUTDIR     directory to write generated .md files; empty → stdout mode
 //
 // Exit codes: 0 = ok, 1 = validation or operation error, 2 = usage error.
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,30 +40,46 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
+	args := os.Args[1:]
+
+	// Strip the first --migrating occurrence from args (global flag).
+	migrating := false
+	filtered := args[:0:len(args)]
+	for _, a := range args {
+		if a == "--migrating" && !migrating {
+			migrating = true
+		} else {
+			filtered = append(filtered, a)
+		}
+	}
+	args = filtered
+
+	if len(args) < 1 {
 		usage()
 		os.Exit(2)
 	}
-	cmd := os.Args[1]
+	cmd := args[0]
+	paths := defaultMutatorPaths()
+	paths.migrating = migrating
 	switch cmd {
 	case "validate":
-		runValidate(os.Args[2:])
+		runValidate(args[1:], migrating)
 	case "gen":
-		runGen(os.Args[2:])
+		runGen(args[1:], paths)
 	case "next-id":
-		runNextID(os.Args[2:], defaultMutatorPaths())
+		runNextID(args[1:], paths)
 	case "add":
-		runAdd(os.Args[2:], defaultMutatorPaths())
+		runAdd(args[1:], paths)
 	case "split":
-		runSplit(os.Args[2:], defaultMutatorPaths())
+		runSplit(args[1:], paths)
 	case "set-status":
-		runSetStatus(os.Args[2:], defaultMutatorPaths())
+		runSetStatus(args[1:], paths)
 	case "set-pr":
-		runSetPR(os.Args[2:], defaultMutatorPaths())
+		runSetPR(args[1:], paths)
 	case "dep":
-		runDep(os.Args[2:], defaultMutatorPaths())
+		runDep(args[1:], paths)
 	case "answer":
-		runAnswer(os.Args[2:], defaultMutatorPaths())
+		runAnswer(args[1:], paths)
 	default:
 		fmt.Fprintf(os.Stderr, "registry: unknown subcommand %q\n", cmd)
 		usage()
@@ -62,27 +89,59 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
-	fmt.Fprintln(os.Stderr, "  registry validate <items.yaml> [questions.yaml]")
-	fmt.Fprintln(os.Stderr, "  registry gen      <items.yaml> <questions.yaml>")
-	fmt.Fprintln(os.Stderr, "  registry next-id  [--space items|questions]")
-	fmt.Fprintln(os.Stderr, "  registry add      --id … --title … --desc … --status … --owner … [--parent …] [--dep …]… [--ref …]…")
-	fmt.Fprintln(os.Stderr, "  registry split    --parent iN --child-id iN-bM --title …")
-	fmt.Fprintln(os.Stderr, "  registry set-status --id iN --status … [--pr N]")
-	fmt.Fprintln(os.Stderr, "  registry set-pr   --id iN --pr N [--role completing|followup]")
-	fmt.Fprintln(os.Stderr, "  registry dep      add|rm --id iN --on iM|qN")
-	fmt.Fprintln(os.Stderr, "  registry answer   --id qN")
+	fmt.Fprintln(os.Stderr, "  registry [--migrating] validate <items.yaml> [questions.yaml]")
+	fmt.Fprintln(os.Stderr, "  registry [--migrating] gen      <items.yaml> <questions.yaml>")
+	fmt.Fprintln(os.Stderr, "  registry [--migrating] next-id  [--space items|questions]")
+	fmt.Fprintln(os.Stderr, "  registry [--migrating] add      --id … --title … --desc … --status … --owner … [--parent …] [--dep …]… [--ref …]…")
+	fmt.Fprintln(os.Stderr, "  registry [--migrating] split    --parent iN --child-id iN-bM --title …")
+	fmt.Fprintln(os.Stderr, "  registry [--migrating] set-status --id iN --status … [--pr N]")
+	fmt.Fprintln(os.Stderr, "  registry [--migrating] set-pr   --id iN --pr N [--role completing|followup]")
+	fmt.Fprintln(os.Stderr, "  registry [--migrating] dep      add|rm --id iN --on iM|qN")
+	fmt.Fprintln(os.Stderr, "  registry [--migrating] answer   --id qN")
 }
 
-// defaultMutatorPaths returns the testdata paths used by all mutating
-// subcommands. The tool is dormant (spec §"Rollout discipline"): it operates
-// only on testdata/ and the .id-ledger.txt in its own directory, never on
-// docs/notes/*.md.
+// defaultMutatorPaths returns paths for all mutating subcommands, reading
+// overrides from environment variables. When env vars are unset the tool
+// operates on testdata/ (dormant mode — never touches docs/notes/*.md).
+//
+// Environment variables:
+//
+//	REGISTRY_ITEMS      override items.yaml path
+//	REGISTRY_QUESTIONS  override questions.yaml path
+//	REGISTRY_DIR        override .id-ledger.txt directory
+//	REGISTRY_TEMPLATES  override templates directory
+//	REGISTRY_OUTDIR     set to enable in-place .md generation
 func defaultMutatorPaths() mutatorPaths {
 	dir := toolDir()
+
+	itemsYAML := os.Getenv("REGISTRY_ITEMS")
+	if itemsYAML == "" {
+		itemsYAML = filepath.Join(dir, "testdata", "items.yaml")
+	}
+
+	questionsYAML := os.Getenv("REGISTRY_QUESTIONS")
+	if questionsYAML == "" {
+		questionsYAML = filepath.Join(dir, "testdata", "questions.yaml")
+	}
+
+	registryDir := os.Getenv("REGISTRY_DIR")
+	if registryDir == "" {
+		registryDir = dir // .id-ledger.txt lives alongside the tool sources
+	}
+
+	templatesDir := os.Getenv("REGISTRY_TEMPLATES")
+	if templatesDir == "" {
+		templatesDir = filepath.Join(dir, "templates")
+	}
+
+	outDir := os.Getenv("REGISTRY_OUTDIR") // empty = stdout mode
+
 	return mutatorPaths{
-		itemsYAML:     filepath.Join(dir, "testdata", "items.yaml"),
-		questionsYAML: filepath.Join(dir, "testdata", "questions.yaml"),
-		registryDir:   dir, // .id-ledger.txt lives here alongside the tool sources
+		itemsYAML:     itemsYAML,
+		questionsYAML: questionsYAML,
+		registryDir:   registryDir,
+		templatesDir:  templatesDir,
+		outDir:        outDir,
 	}
 }
 
@@ -99,7 +158,7 @@ func toolDir() string {
 	return filepath.Dir(thisFile)
 }
 
-func runValidate(args []string) {
+func runValidate(args []string, migrating bool) {
 	if len(args) < 1 {
 		fmt.Fprintln(os.Stderr, "registry validate: need at least <items.yaml>")
 		os.Exit(2)
@@ -120,7 +179,7 @@ func runValidate(args []string) {
 		}
 	}
 
-	ve := validate(reg)
+	ve := validateWith(reg, validateOpts{migrating: migrating})
 	if ve.hasErrors() {
 		for _, msg := range ve.msgs {
 			fmt.Fprintln(os.Stderr, msg)
@@ -130,7 +189,7 @@ func runValidate(args []string) {
 	fmt.Println("registry: validate OK")
 }
 
-func runGen(args []string) {
+func runGen(args []string, paths mutatorPaths) {
 	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "registry gen: need <items.yaml> <questions.yaml>")
 		os.Exit(2)
@@ -149,7 +208,7 @@ func runGen(args []string) {
 		os.Exit(1)
 	}
 
-	ve := validate(reg)
+	ve := validateWith(reg, validateOpts{migrating: paths.migrating})
 	if ve.hasErrors() {
 		for _, msg := range ve.msgs {
 			fmt.Fprintln(os.Stderr, msg)
@@ -159,20 +218,6 @@ func runGen(args []string) {
 
 	// Three views: item-open, item-closed, question-open (no closed question view).
 	// Spec §"Generator" and §"Questions — transient by design".
-	var itemsOpen, itemsClosed, qOpen bytes.Buffer
-	if err := genItemsOpenClosed(reg, &itemsOpen, &itemsClosed); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	if err := genQuestionsOpen(reg, &qOpen); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-
-	fmt.Print("=== item-registry-open ===\n")
-	os.Stdout.Write(itemsOpen.Bytes())
-	fmt.Print("\n=== item-registry-closed ===\n")
-	os.Stdout.Write(itemsClosed.Bytes())
-	fmt.Print("\n=== question-registry-open ===\n")
-	os.Stdout.Write(qOpen.Bytes())
+	// genToOutDirOrStdout handles both stdout and in-place file modes.
+	genToOutDirOrStdout(reg, paths)
 }

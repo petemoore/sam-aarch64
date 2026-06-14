@@ -386,6 +386,65 @@ func TestValidate_Inv13_DeletedQuestionLeavesEdge(t *testing.T) {
 	assertError(t, reg, "i1", "dangling edge")
 }
 
+// --- --migrating flag (validateOpts.migrating) ---
+
+// TestValidate_Migrating_Inv10Deferred asserts that an id-shaped ref pointing
+// at a non-existent id passes under --migrating (invariant 10 deferred).
+func TestValidate_Migrating_Inv10Deferred(t *testing.T) {
+	reg := &Registry{
+		Items: []Item{
+			{ID: "i1", Title: "item with dangling ref", Status: StatusOpen, Kind: "leaf", Owner: "agent",
+				Refs: []string{"i999"}}, // i999 does not exist
+		},
+	}
+	// Strict: fails.
+	veStrict := validate(reg)
+	if !veStrict.hasErrors() {
+		t.Fatal("expected inv-10 error in strict mode; got none")
+	}
+	found := false
+	for _, msg := range veStrict.msgs {
+		if strings.Contains(msg, `"i999"`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected inv-10 error mentioning i999 in strict mode; got: %v", veStrict.msgs)
+	}
+
+	// Migrating: passes (invariant 10 deferred).
+	veMigrating := validateWith(reg, validateOpts{migrating: true})
+	if veMigrating.hasErrors() {
+		t.Fatalf("expected no errors in --migrating mode for dangling ref; got:\n%s",
+			strings.Join(veMigrating.msgs, "\n"))
+	}
+}
+
+// TestValidate_Migrating_Inv11StillStrict asserts that a dangling depends_on
+// target fails even under --migrating (only inv 10 is deferred, not inv 11).
+func TestValidate_Migrating_Inv11StillStrict(t *testing.T) {
+	reg := &Registry{
+		Items: []Item{
+			{ID: "i1", Title: "gated on ghost", Status: StatusOpen, Kind: "leaf", Owner: "agent",
+				DependsOn: []string{"i999"}}, // dangling depends_on
+		},
+	}
+	// Fails even with --migrating.
+	ve := validateWith(reg, validateOpts{migrating: true})
+	if !ve.hasErrors() {
+		t.Fatal("expected inv-11 dangling-edge error under --migrating; got none")
+	}
+	found := false
+	for _, msg := range ve.msgs {
+		if strings.Contains(msg, "dangling edge") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected dangling-edge error under --migrating; got: %v", ve.msgs)
+	}
+}
+
 // assertError checks that validation produces at least one error message for
 // the given id containing the given substring.
 func assertError(t *testing.T, reg *Registry, id, substr string) {

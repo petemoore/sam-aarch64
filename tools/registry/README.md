@@ -1,28 +1,29 @@
 # tools/registry
 
-CLI tool for validating and generating the `iN`/`qN` work-item registries from
-structured YAML source.
+CLI for validating and generating the `iN`/`qN` work-item registries from YAML.
 
-## What it does
+Subcommands: `validate`, `gen`, `add`, `split`, `set-status`, `set-pr`, `dep`, `answer`, `next-id`.
 
-- `registry validate <items.yaml> [questions.yaml]` — enforce all 10 schema
-  invariants (id uniqueness, sort order, status payloads, one-PR-per-leaf,
-  bounded fields, ref integrity); exit 1 on any violation.
-- `registry gen <items.yaml> <questions.yaml>` — render the four split
-  open/closed markdown views to stdout (Phase 1: to a buffer; Phase 4: in
-  place to `docs/notes/`).
+## `--migrating` flag
 
-Subcommands for mutation (`add`, `split`, `set-status`, `set-pr`, `next-id`)
-land in Phase 3.
+Defers invariant 10 (id-shaped ref existence) so refs may point at ids not yet
+in YAML. Invariants 11/12/13 (depends_on DAG, WONTFIX-target, delete-gate) remain strict.
 
-## How to use
+## Environment variables
 
-```
-make registry-gen           # build the binary to build/registry
-build/registry validate tools/registry/testdata/items.yaml
-build/registry validate tools/registry/testdata/items.yaml tools/registry/testdata/questions.yaml
-build/registry gen     tools/registry/testdata/items.yaml tools/registry/testdata/questions.yaml
-```
+| Variable | Default | Purpose |
+|---|---|---|
+| `REGISTRY_ITEMS` | `<toolDir>/testdata/items.yaml` | items YAML path |
+| `REGISTRY_QUESTIONS` | `<toolDir>/testdata/questions.yaml` | questions YAML path |
+| `REGISTRY_DIR` | `<toolDir>` | directory for `.id-ledger.txt` |
+| `REGISTRY_TEMPLATES` | `<toolDir>/templates` | `*.head.md` template files |
+| `REGISTRY_OUTDIR` | _(empty = stdout)_ | write generated `.md` files here |
+
+## Makefile targets
+
+`make registry-gen` — build binary.
+`make registry` — regen `docs/notes/*` in place (needs `registry/` from i115d migration).
+`make registry-sync-check` — diff views against YAML (not yet wired to CI).
 
 ## Canonical design doc
 

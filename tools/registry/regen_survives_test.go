@@ -200,6 +200,105 @@ func TestBinaryGenMatchesValidFixture(t *testing.T) {
 	}
 }
 
+// TestGenToOutDir asserts that gen with REGISTRY_OUTDIR set writes exactly
+// three .md files, each beginning with the generated banner comment, containing
+// the template H1, and containing the table header row. Also confirms the
+// load→gen→load fixed-point: row counts match source.
+func TestGenToOutDir(t *testing.T) {
+	repoRoot := findRepoRootRegistry(t)
+	reg := loadTestFixture(t)
+
+	outDir := t.TempDir()
+	templatesDir := filepath.Join(repoRoot, "tools", "registry", "templates")
+
+	paths := mutatorPaths{
+		outDir:       outDir,
+		templatesDir: templatesDir,
+	}
+
+	genToOutDirOrStdout(reg, paths)
+
+	expectedFiles := []struct {
+		name string
+		h1   string
+	}{
+		{"item-registry-open.md", "# Item registry — open"},
+		{"item-registry-closed.md", "# Item registry — closed"},
+		{"question-registry-open.md", "# Question registry — open"},
+	}
+	for _, ef := range expectedFiles {
+		path := filepath.Join(outDir, ef.name)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("expected %s to be written; got error: %v", ef.name, err)
+		}
+		content := string(data)
+		// Must begin with the banner comment.
+		if !contains(content, "<!-- ") {
+			t.Errorf("%s: does not begin with generated banner comment", ef.name)
+		}
+		// Must contain the template H1.
+		if !contains(content, ef.h1) {
+			t.Errorf("%s: missing template H1 %q", ef.name, ef.h1)
+		}
+		// Must contain a markdown table header row.
+		if !contains(content, "| **id** |") {
+			t.Errorf("%s: missing table header row", ef.name)
+		}
+	}
+
+	// Fixed-point: row counts match source. Use countGenTableRows which counts
+	// only the rows in the LAST (generated) table, after the "| **id** |" header.
+	openCount, closedCount := 0, 0
+	for _, it := range reg.Items {
+		if isOpen(it.Status) {
+			openCount++
+		} else {
+			closedCount++
+		}
+	}
+	openData, _ := os.ReadFile(filepath.Join(outDir, "item-registry-open.md"))
+	closedData, _ := os.ReadFile(filepath.Join(outDir, "item-registry-closed.md"))
+	if got := countGenTableRows(string(openData)); got != openCount {
+		t.Errorf("item-registry-open.md has %d rows, want %d", got, openCount)
+	}
+	if got := countGenTableRows(string(closedData)); got != closedCount {
+		t.Errorf("item-registry-closed.md has %d rows, want %d", got, closedCount)
+	}
+}
+
+// TestGenToOutDir_EmptyRegistry asserts that gen with an empty registry still
+// produces valid output (banner + template + table header, zero data rows).
+func TestGenToOutDir_EmptyRegistry(t *testing.T) {
+	repoRoot := findRepoRootRegistry(t)
+	outDir := t.TempDir()
+	templatesDir := filepath.Join(repoRoot, "tools", "registry", "templates")
+
+	reg := &Registry{}
+	paths := mutatorPaths{
+		outDir:       outDir,
+		templatesDir: templatesDir,
+	}
+	genToOutDirOrStdout(reg, paths)
+
+	for _, name := range []string{"item-registry-open.md", "item-registry-closed.md", "question-registry-open.md"} {
+		data, err := os.ReadFile(filepath.Join(outDir, name))
+		if err != nil {
+			t.Fatalf("expected %s to exist for empty registry; got: %v", name, err)
+		}
+		content := string(data)
+		if !contains(content, "<!-- ") {
+			t.Errorf("%s (empty registry): missing banner", name)
+		}
+		if !contains(content, "| **id** |") {
+			t.Errorf("%s (empty registry): missing table header", name)
+		}
+		if countGenTableRows(content) != 0 {
+			t.Errorf("%s (empty registry): expected 0 data rows, got %d", name, countGenTableRows(content))
+		}
+	}
+}
+
 // loadTestFixture loads the testdata fixtures and returns a Registry.
 func loadTestFixture(t *testing.T) *Registry {
 	t.Helper()
@@ -216,7 +315,7 @@ func loadTestFixture(t *testing.T) *Registry {
 }
 
 // countTableRows counts the data rows in a generated markdown table (excludes
-// the header row and separator row).
+// the header row and separator row). It finds the FIRST table in the content.
 func countTableRows(s string) int {
 	count := 0
 	headerSeen := false
@@ -234,6 +333,41 @@ func countTableRows(s string) int {
 		}
 		if len(line) > 0 && line[0] == '|' {
 			count++
+		}
+	}
+	return count
+}
+
+// countGenTableRows counts the data rows in the generated registry table — the
+// table whose header contains "| **id** |". Template files may contain their
+// own tables (e.g. the status-vocabulary table); this function skips those and
+// counts only the last table headed by "| **id** |".
+func countGenTableRows(s string) int {
+	// Find the generated table: look for the header line "| **id** |".
+	// We scan forward until we find it, then count subsequent data rows.
+	const genHeader = "| **id** |"
+	lines := splitLines(s)
+	genHeaderIdx := -1
+	for i, line := range lines {
+		if contains(line, genHeader) {
+			genHeaderIdx = i
+		}
+	}
+	if genHeaderIdx < 0 {
+		return 0
+	}
+	// Skip the header line and the separator line, then count data rows.
+	count := 0
+	separatorSeen := false
+	for _, line := range lines[genHeaderIdx+1:] {
+		if !separatorSeen {
+			separatorSeen = true
+			continue
+		}
+		if len(line) > 0 && line[0] == '|' {
+			count++
+		} else {
+			break // end of table
 		}
 	}
 	return count
