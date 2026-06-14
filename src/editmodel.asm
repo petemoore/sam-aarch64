@@ -63,6 +63,15 @@ EM_LOC_ABSENT:  equ &FF
 ; in editmodel.go.
 EM_MERGE_THRESH: equ EM_BLOCK_CAP/4
 
+; Undo/redo journal (Brick 3) test-scale constants. Like EM_BLOCK_CAP, these are
+; sized for the flat-memory harness; the real SAM journal arena is sized to the
+; editor's RAM budget without structural change. The harness keeps every line's
+; text <= EM_UNDO_TEXT_MAX. Mirrors maxUndoDepth in editmodel.go.
+EM_MAX_UNDO:     equ 16             ; ring depth; edits beyond this drop the oldest
+EM_UNDO_TEXT_MAX: equ 64            ; max journaled line length
+EM_UNDO_SLOT_SIZE: equ 7+EM_UNDO_TEXT_MAX ; op:1 at:2 id:3 len:1 text:MAX
+EM_OP_DELETE:    equ 1              ; op byte of a delete entry (insert = 0)
+
 ; ===========================================================================
 ; em_reset — initialise document to empty.
 ;
@@ -79,6 +88,10 @@ em_reset:
                 xor     a
                 ld      (EM_NEXTID+1), a
                 ld      (EM_NEXTID+2), a
+                ; Clear the undo/redo journal (A is 0 here).
+                ld      (EM_UNDO_START), a
+                ld      (EM_UNDO_COUNT), a
+                ld      (EM_REDO_COUNT), a
                 ret
 
 ; ===========================================================================
@@ -147,7 +160,22 @@ em_insert:
                 inc     hl
                 inc     (hl)
 em_ins_id_done:
+                call    em_do_insert        ; structural insert (EM_W_DOCI/LEN/ID + EM_IN_TEXT)
+                ; Journal this edit: push an opInsert entry, then clear redo
+                ; (a fresh edit invalidates any pending redo).
+                call    em_ent_set_insert
+                call    em_push_undo
+                call    em_clear_redo
+                ret
 
+; ===========================================================================
+; em_do_insert — structural insert with an EXPLICIT id (no id allocation, no
+; journaling). Entry: EM_W_DOCI = doc index, EM_W_LEN = text length, EM_W_ID =
+; id (u24 LE), text in EM_IN_TEXT. Used by em_insert (public, which allocates
+; the id and journals) and by em_undo/em_redo (which replay with the original
+; id and must NOT journal). Mirrors doInsert in editmodel.go.
+; ===========================================================================
+em_do_insert:
                 ; Handle empty document: allocate first block.
                 ld      a, (EM_NBLOCKS)
                 or      a
@@ -1047,7 +1075,22 @@ em_sp_loc_done:
 ; it. Else if block underflows (used_bytes < EM_MERGE_THRESH), tries to merge
 ; with an adjacent block (em_try_merge). Mirrors doDelete in editmodel.go.
 ; ===========================================================================
-em_delete:
+em_delete:                              ; public — structural delete + journal
+                call    em_do_delete        ; BC = doc index; captures id/len/text
+                ; Journal this edit: push an opDelete entry, then clear redo.
+                call    em_ent_set_delete
+                call    em_push_undo
+                call    em_clear_redo
+                ret
+
+; ===========================================================================
+; em_do_delete — structural delete of the line at document index BC (no
+; journaling). Before closing the intra-block gap it captures the removed
+; line's id (EM_W_ID), length (EM_W_LEN), and a copy of its text (EM_DEL_TEXT)
+; so the caller can journal the edit. Used by em_delete (public) and by
+; em_undo/em_redo. Mirrors doDelete in editmodel.go.
+; ===========================================================================
+em_do_delete:
                 ld      (EM_W_DOCI), bc
                 ; Find block + local index.
                 call    em_block_and_local  ; sets EM_W_DPOS, EM_W_DESC, EM_W_LOCAL
@@ -1097,6 +1140,23 @@ em_del_at_rec:
                 ; rec_size = 4 + len
                 add     a, 4
                 ld      (EM_W_REC_SIZE), a
+
+                ; Capture the deleted line's text into EM_DEL_TEXT (for the undo
+                ; journal) BEFORE the gap-close shift overwrites it. Source is
+                ; EM_W_DEL_PTR + 4 (past the 3-byte id and 1-byte len).
+                ld      a, (EM_W_LEN)
+                or      a
+                jr      z, em_del_text_done
+                ld      c, a
+                ld      b, 0
+                ld      hl, (EM_W_DEL_PTR)
+                inc     hl
+                inc     hl
+                inc     hl
+                inc     hl                  ; HL -> text
+                ld      de, EM_DEL_TEXT
+                ldir
+em_del_text_done:
 
                 ; EM_LOC[id] = EM_LOC_ABSENT (&FF).
                 ; id is u24 but EM_LOC is indexed by the low 16 bits (id < EM_MAX_IDS).
@@ -1556,6 +1616,297 @@ em_used_bytes_a:
                 ret
 
 ; ===========================================================================
+; Undo/redo journal (Brick 3) — bounded ring journal, port of editmodel.go
+; i41b (pushUndo / InsertLine / DeleteLine / Undo / Redo).
+;
+; The undo stack is a RING of EM_MAX_UNDO fixed-size slots with drop-oldest
+; semantics; the redo stack is a plain LIFO bounded by the same depth (it never
+; holds more entries than the undo stack did). A journal slot is:
+;   op:1 | at:2 LE | id:3 LE | len:1 | text:EM_UNDO_TEXT_MAX
+; EM_ENT is the staging slot built by the public edits and consumed by push.
+; ===========================================================================
+
+; ---------------------------------------------------------------------------
+; em_slot_offset — HL = A * EM_UNDO_SLOT_SIZE (the byte offset of slot index A).
+; ---------------------------------------------------------------------------
+em_slot_offset:
+                ld      hl, 0
+                or      a
+                ret     z
+                ld      de, EM_UNDO_SLOT_SIZE
+                ld      b, a
+em_soff_loop:
+                add     hl, de
+                djnz    em_soff_loop
+                ret
+
+; ---------------------------------------------------------------------------
+; em_ent_set_insert / em_ent_set_delete — build the staging entry EM_ENT from
+; the current edit's EM_W_DOCI (at), EM_W_ID, EM_W_LEN and the text source
+; (EM_IN_TEXT for an insert, EM_DEL_TEXT for a delete).
+; ---------------------------------------------------------------------------
+em_ent_set_insert:
+                xor     a
+                ld      (EM_ENT+0), a       ; op = insert
+                ld      de, EM_IN_TEXT
+                jr      em_ent_fill
+em_ent_set_delete:
+                ld      a, EM_OP_DELETE
+                ld      (EM_ENT+0), a       ; op = delete
+                ld      de, EM_DEL_TEXT
+em_ent_fill:
+                ; DE = text source.
+                ld      hl, (EM_W_DOCI)
+                ld      (EM_ENT+1), hl      ; at (2 LE)
+                ld      a, (EM_W_ID)
+                ld      (EM_ENT+3), a
+                ld      a, (EM_W_ID+1)
+                ld      (EM_ENT+4), a
+                ld      a, (EM_W_ID+2)
+                ld      (EM_ENT+5), a
+                ld      a, (EM_W_LEN)
+                ld      (EM_ENT+6), a       ; len
+                or      a
+                ret     z                   ; len == 0: no text body
+                ld      c, a
+                ld      b, 0
+                ld      h, d
+                ld      l, e                ; HL = text source
+                ld      de, EM_ENT+7        ; DE = dest (text body)
+                ldir
+                ret
+
+; ---------------------------------------------------------------------------
+; em_push_undo — copy EM_ENT into the undo ring at (START+COUNT) and advance,
+; dropping the oldest entry when the ring is full (drop-oldest, design §7.2).
+; ---------------------------------------------------------------------------
+em_push_undo:
+                ld      a, (EM_UNDO_START)
+                ld      b, a
+                ld      a, (EM_UNDO_COUNT)
+                add     a, b                ; A = START + COUNT
+                cp      EM_MAX_UNDO
+                jr      c, em_pu_nomod
+                sub     EM_MAX_UNDO
+em_pu_nomod:
+                call    em_slot_offset      ; HL = pos * slot
+                ld      de, EM_UNDO_BASE
+                add     hl, de              ; HL = dest slot
+                ex      de, hl              ; DE = dest
+                ld      hl, EM_ENT
+                ld      bc, EM_UNDO_SLOT_SIZE
+                ldir
+                ; advance: if COUNT < MAX then COUNT++ else drop oldest (START++).
+                ld      a, (EM_UNDO_COUNT)
+                cp      EM_MAX_UNDO
+                jr      nc, em_pu_full
+                inc     a
+                ld      (EM_UNDO_COUNT), a
+                ret
+em_pu_full:
+                ld      a, (EM_UNDO_START)
+                inc     a
+                cp      EM_MAX_UNDO
+                jr      c, em_pu_sok
+                xor     a
+em_pu_sok:
+                ld      (EM_UNDO_START), a
+                ret
+
+; ---------------------------------------------------------------------------
+; em_pop_undo — copy the top undo slot (START+COUNT-1) into EM_ENT, COUNT--.
+; Caller must ensure EM_UNDO_COUNT > 0.
+; ---------------------------------------------------------------------------
+em_pop_undo:
+                ld      a, (EM_UNDO_COUNT)
+                dec     a
+                ld      (EM_UNDO_COUNT), a  ; COUNT-- (now = old top offset from START)
+                ld      b, a
+                ld      a, (EM_UNDO_START)
+                add     a, b                ; START + (COUNT-1)
+                cp      EM_MAX_UNDO
+                jr      c, em_popu_nomod
+                sub     EM_MAX_UNDO
+em_popu_nomod:
+                call    em_slot_offset
+                ld      de, EM_UNDO_BASE
+                add     hl, de              ; HL = src slot
+                ld      de, EM_ENT
+                ld      bc, EM_UNDO_SLOT_SIZE
+                ldir
+                ret
+
+; ---------------------------------------------------------------------------
+; em_push_redo — push EM_ENT onto the redo LIFO at index COUNT, COUNT++.
+; (Redo depth is bounded by the undo depth, so no overflow check is needed.)
+; ---------------------------------------------------------------------------
+em_push_redo:
+                ld      a, (EM_REDO_COUNT)
+                call    em_slot_offset
+                ld      de, EM_REDO_BASE
+                add     hl, de              ; HL = dest slot
+                ex      de, hl              ; DE = dest
+                ld      hl, EM_ENT
+                ld      bc, EM_UNDO_SLOT_SIZE
+                ldir
+                ld      a, (EM_REDO_COUNT)
+                inc     a
+                ld      (EM_REDO_COUNT), a
+                ret
+
+; ---------------------------------------------------------------------------
+; em_pop_redo — pop the top redo slot (COUNT-1) into EM_ENT, COUNT--.
+; Caller must ensure EM_REDO_COUNT > 0.
+; ---------------------------------------------------------------------------
+em_pop_redo:
+                ld      a, (EM_REDO_COUNT)
+                dec     a
+                ld      (EM_REDO_COUNT), a
+                call    em_slot_offset
+                ld      de, EM_REDO_BASE
+                add     hl, de              ; HL = src slot
+                ld      de, EM_ENT
+                ld      bc, EM_UNDO_SLOT_SIZE
+                ldir
+                ret
+
+; ---------------------------------------------------------------------------
+; em_clear_redo — empty the redo stack (a fresh public edit invalidates redo).
+; ---------------------------------------------------------------------------
+em_clear_redo:
+                xor     a
+                ld      (EM_REDO_COUNT), a
+                ret
+
+; ---------------------------------------------------------------------------
+; em_ent_id_to_inid — EM_IN_ID = EM_ENT.id (so em_goto can locate the line).
+; ---------------------------------------------------------------------------
+em_ent_id_to_inid:
+                ld      a, (EM_ENT+3)
+                ld      (EM_IN_ID), a
+                ld      a, (EM_ENT+4)
+                ld      (EM_IN_ID+1), a
+                ld      a, (EM_ENT+5)
+                ld      (EM_IN_ID+2), a
+                ret
+
+; ---------------------------------------------------------------------------
+; em_ent_to_insert_params — set up em_do_insert's inputs from EM_ENT:
+; EM_W_DOCI = at, EM_W_ID = id, EM_W_LEN = len, EM_IN_TEXT = text body.
+; ---------------------------------------------------------------------------
+em_ent_to_insert_params:
+                ld      hl, (EM_ENT+1)
+                ld      (EM_W_DOCI), hl     ; at
+                ld      a, (EM_ENT+3)
+                ld      (EM_W_ID), a
+                ld      a, (EM_ENT+4)
+                ld      (EM_W_ID+1), a
+                ld      a, (EM_ENT+5)
+                ld      (EM_W_ID+2), a
+                ld      a, (EM_ENT+6)
+                ld      (EM_W_LEN), a
+                or      a
+                ret     z                   ; len == 0: no text body
+                ld      c, a
+                ld      b, 0
+                ld      hl, EM_ENT+7
+                ld      de, EM_IN_TEXT
+                ldir
+                ret
+
+; ===========================================================================
+; em_undo — reverse the most recent public edit. Returns A=1 if an edit was
+; undone, A=0 if the undo stack is empty. The popped entry moves to the redo
+; stack. Inversion uses the non-journaling primitives so it does not itself
+; record history. Mirrors Undo in editmodel.go.
+;   undo-of-insert: find the line by id (em_goto, drift-robust) and delete it.
+;   undo-of-delete: re-insert at the recorded at with the original id/text
+;                   (position valid by the strict-LIFO argument, design §7.2).
+; ===========================================================================
+em_undo:
+                ld      a, (EM_UNDO_COUNT)
+                or      a
+                jr      z, em_undo_none
+                call    em_pop_undo         ; EM_ENT <- top undo entry
+                ld      a, (EM_ENT+0)
+                or      a
+                jr      nz, em_undo_was_del
+                ; op == insert: invert by deleting the line with EM_ENT.id.
+                call    em_ent_id_to_inid
+                call    em_goto             ; HL = current index (must be live)
+                ld      b, h
+                ld      c, l
+                call    em_do_delete
+                jr      em_undo_finish
+em_undo_was_del:
+                ; op == delete: invert by re-inserting at EM_ENT.at, same id.
+                call    em_ent_to_insert_params
+                call    em_do_insert
+em_undo_finish:
+                call    em_push_redo
+                ld      a, 1
+                ret
+em_undo_none:
+                xor     a
+                ret
+
+; ===========================================================================
+; em_redo — re-apply the most recently undone edit. Returns A=1 if a redo was
+; performed, A=0 if the redo stack is empty. The popped entry moves back to the
+; undo stack (respecting the drop-oldest cap). Mirrors Redo in editmodel.go.
+;   redo-of-insert: re-insert at the recorded at with the original id/text.
+;   redo-of-delete: find the line by id (em_goto) and delete it.
+; ===========================================================================
+em_redo:
+                ld      a, (EM_REDO_COUNT)
+                or      a
+                jr      z, em_redo_none
+                call    em_pop_redo         ; EM_ENT <- top redo entry
+                ld      a, (EM_ENT+0)
+                or      a
+                jr      nz, em_redo_was_del
+                ; op == insert: re-apply the insert at EM_ENT.at, same id.
+                call    em_ent_to_insert_params
+                call    em_do_insert
+                jr      em_redo_finish
+em_redo_was_del:
+                ; op == delete: re-apply the delete of EM_ENT.id.
+                call    em_ent_id_to_inid
+                call    em_goto
+                ld      b, h
+                ld      c, l
+                call    em_do_delete
+em_redo_finish:
+                call    em_push_undo
+                ld      a, 1
+                ret
+em_redo_none:
+                xor     a
+                ret
+
+; ---------------------------------------------------------------------------
+; em_can_undo / em_can_redo — A=1 if at least one entry is available, else 0.
+; ---------------------------------------------------------------------------
+em_can_undo:
+                ld      a, (EM_UNDO_COUNT)
+                or      a
+                jr      z, em_cu_no
+                ld      a, 1
+                ret
+em_cu_no:
+                xor     a
+                ret
+em_can_redo:
+                ld      a, (EM_REDO_COUNT)
+                or      a
+                jr      z, em_cr_no
+                ld      a, 1
+                ret
+em_cr_no:
+                xor     a
+                ret
+
+; ===========================================================================
 ; Working storage (scratch variables used across routines)
 ; ===========================================================================
 EM_W_DOCI:      defs 2          ; document index for current insert
@@ -1624,3 +1975,14 @@ EM_IN_TEXT:     defs 256        ; input text for em_insert
 EM_IN_ID:       defs 3          ; input id for em_goto (u24 LE)
 EM_OUT_ID:      defs 3          ; output id: em_insert result / em_line_at result
 EM_OUT_TEXT:    defs 257        ; output [len:1][text:len] from em_line_at
+
+; ===========================================================================
+; Undo/redo journal storage (Brick 3)
+; ===========================================================================
+EM_DEL_TEXT:    defs EM_UNDO_TEXT_MAX   ; captured text of the line being deleted
+EM_ENT:         defs EM_UNDO_SLOT_SIZE  ; staging journal entry
+EM_UNDO_START:  defs 1                  ; ring index of the oldest undo entry
+EM_UNDO_COUNT:  defs 1                  ; live undo entries (0..EM_MAX_UNDO)
+EM_REDO_COUNT:  defs 1                  ; live redo entries (0..EM_MAX_UNDO)
+EM_UNDO_BASE:   defs EM_MAX_UNDO*EM_UNDO_SLOT_SIZE  ; undo ring slots
+EM_REDO_BASE:   defs EM_MAX_UNDO*EM_UNDO_SLOT_SIZE  ; redo LIFO slots

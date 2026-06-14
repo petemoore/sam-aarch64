@@ -13,9 +13,22 @@
 //	120 inserts, then an interleaved phase of ~200 ops (~50% insert / ~50%
 //	delete). Verifies em_delete, merge-on-underflow, descriptor reuse, and
 //	the EM_LOC_ABSENT sentinel for em_goto on deleted ids.
+//
+// TestEditModelUndoRedoZ80: Brick 3 (bounded ring-journal undo/redo). A random
+//
+//	walk of insert/delete/undo/redo ops compared after every step against a Go
+//	reference that mirrors the bounded-journal semantics (drop-oldest cap,
+//	id-stable undo-of-delete). Verifies em_undo, em_redo, em_can_undo,
+//	em_can_redo.
+//
+// TestEditModelUndoDropOldestZ80: Brick 3 deterministic drop-oldest check —
+//
+//	EM_MAX_UNDO+5 inserts, then undo until em_can_undo is false; exactly
+//	EM_MAX_UNDO undos succeed and the oldest 5 lines survive.
 package z80_test
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
@@ -399,5 +412,350 @@ func testEditModelDeleteMergeWithSeed(t *testing.T, seed int64) {
 		if res.A != 0 {
 			t.Errorf("em_goto(deleted id=%d): found=%d, want 0 (EM_LOC_ABSENT sentinel broken)", delID, res.A)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Brick 3 — bounded ring-journal undo/redo.
+// ---------------------------------------------------------------------------
+
+// emMaxUndo MUST match EM_MAX_UNDO in src/editmodel.asm. The Z80 ring is sized
+// for the flat-memory harness; this constant lets the reference apply the same
+// drop-oldest cap so the two agree bit-for-bit on undo availability.
+const emMaxUndo = 16
+
+// refEntry mirrors editmodel.go's editEntry: an insert or delete with the
+// document index, record id, and a copy of the line text.
+type refEntry struct {
+	op   int // 0 = insert, 1 = delete
+	at   int
+	id   uint32
+	text []byte
+}
+
+// refDoc is an independent Go reference for the Z80 edit model: a flat slice of
+// lines plus undo/redo stacks implementing the exact editmodel.go semantics
+// (doInsert/doDelete/IndexOf/pushUndo/Undo/Redo) at the Z80's EM_MAX_UNDO cap.
+type refDoc struct {
+	lines []oracleLine
+	undo  []refEntry
+	redo  []refEntry
+}
+
+func (d *refDoc) doInsert(at int, id uint32, text []byte) {
+	t := append([]byte(nil), text...)
+	d.lines = append(d.lines, oracleLine{})
+	copy(d.lines[at+1:], d.lines[at:])
+	d.lines[at] = oracleLine{id: id, text: t}
+}
+
+func (d *refDoc) doDelete(at int) (uint32, []byte) {
+	id := d.lines[at].id
+	text := append([]byte(nil), d.lines[at].text...)
+	d.lines = append(d.lines[:at], d.lines[at+1:]...)
+	return id, text
+}
+
+func (d *refDoc) indexOf(id uint32) (int, bool) {
+	for i := range d.lines {
+		if d.lines[i].id == id {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// pushUndo appends to the undo stack with drop-oldest at emMaxUndo (design §7.2).
+func (d *refDoc) pushUndo(e refEntry) {
+	d.undo = append(d.undo, e)
+	if len(d.undo) > emMaxUndo {
+		d.undo = d.undo[1:]
+	}
+}
+
+// insert is the public insert: structural insert + journal + clear redo. The id
+// is taken from the Z80 (em_insert allocates it), so both models share ids.
+func (d *refDoc) insert(at int, id uint32, text []byte) {
+	d.doInsert(at, id, text)
+	d.pushUndo(refEntry{op: 0, at: at, id: id, text: append([]byte(nil), text...)})
+	d.redo = d.redo[:0]
+}
+
+func (d *refDoc) delete(at int) {
+	id, text := d.doDelete(at)
+	d.pushUndo(refEntry{op: 1, at: at, id: id, text: text})
+	d.redo = d.redo[:0]
+}
+
+func (d *refDoc) undoOp() bool {
+	if len(d.undo) == 0 {
+		return false
+	}
+	e := d.undo[len(d.undo)-1]
+	d.undo = d.undo[:len(d.undo)-1]
+	if e.op == 0 {
+		idx, ok := d.indexOf(e.id)
+		if !ok {
+			panic("ref undoOp insert: id not live")
+		}
+		d.doDelete(idx)
+	} else {
+		d.doInsert(e.at, e.id, e.text)
+	}
+	d.redo = append(d.redo, e)
+	return true
+}
+
+func (d *refDoc) redoOp() bool {
+	if len(d.redo) == 0 {
+		return false
+	}
+	e := d.redo[len(d.redo)-1]
+	d.redo = d.redo[:len(d.redo)-1]
+	if e.op == 0 {
+		d.doInsert(e.at, e.id, e.text)
+	} else {
+		idx, ok := d.indexOf(e.id)
+		if !ok {
+			panic("ref redoOp delete: id not live")
+		}
+		d.doDelete(idx)
+	}
+	d.pushUndo(e)
+	return true
+}
+
+func (d *refDoc) canUndo() bool { return len(d.undo) > 0 }
+func (d *refDoc) canRedo() bool { return len(d.redo) > 0 }
+
+// emRandText builds n bytes of printable ASCII. n must stay <= EM_UNDO_TEXT_MAX.
+func emRandText(rng *rand.Rand, n int) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = byte(0x20 + rng.Intn(0x5f))
+	}
+	return b
+}
+
+// emCompareDoc asserts the Z80 model's full line sequence equals the reference.
+func emCompareDoc(t *testing.T, mac *z80h.Machine, ref *refDoc, symOutID, symOutText uint16, step int, label string) {
+	t.Helper()
+	lcRes, err := mac.Call("em_line_count")
+	if err != nil {
+		t.Fatalf("step %d (%s): em_line_count: %v", step, label, err)
+	}
+	if int(lcRes.HL) != len(ref.lines) {
+		t.Fatalf("step %d (%s): line_count = %d, want %d", step, label, lcRes.HL, len(ref.lines))
+	}
+	for i, want := range ref.lines {
+		if _, err := mac.CallEntry("em_line_at", z80h.Entry{BC: uint16(i)}); err != nil {
+			t.Fatalf("step %d (%s): em_line_at(%d): %v", step, label, i, err)
+		}
+		gotID := emReadU24LE(mac.Read(symOutID, 3))
+		if gotID != want.id {
+			t.Fatalf("step %d (%s): line_at(%d) id = %d, want %d", step, label, i, gotID, want.id)
+		}
+		gotLen := int(mac.Read(symOutText, 1)[0])
+		if gotLen != len(want.text) {
+			t.Fatalf("step %d (%s): line_at(%d) len = %d, want %d", step, label, i, gotLen, len(want.text))
+		}
+		if gotLen > 0 {
+			if got := mac.Read(symOutText+1, gotLen); !bytes.Equal(got, want.text) {
+				t.Fatalf("step %d (%s): line_at(%d) text mismatch", step, label, i)
+			}
+		}
+	}
+}
+
+// emCompareFlags asserts em_can_undo / em_can_redo match the reference.
+func emCompareFlags(t *testing.T, mac *z80h.Machine, ref *refDoc, step int, label string) {
+	t.Helper()
+	cu, err := mac.Call("em_can_undo")
+	if err != nil {
+		t.Fatalf("step %d (%s): em_can_undo: %v", step, label, err)
+	}
+	if (cu.A == 1) != ref.canUndo() {
+		t.Fatalf("step %d (%s): can_undo = %d, want %v", step, label, cu.A, ref.canUndo())
+	}
+	cr, err := mac.Call("em_can_redo")
+	if err != nil {
+		t.Fatalf("step %d (%s): em_can_redo: %v", step, label, err)
+	}
+	if (cr.A == 1) != ref.canRedo() {
+		t.Fatalf("step %d (%s): can_redo = %d, want %v", step, label, cr.A, ref.canRedo())
+	}
+}
+
+// TestEditModelUndoRedoZ80 drives a random walk of insert/delete/undo/redo and
+// compares the Z80 model against the Go reference after every step.
+func TestEditModelUndoRedoZ80(t *testing.T) {
+	for _, seed := range []int64{42, 137, 999} {
+		seed := seed
+		t.Run(fmt.Sprintf("seed%d", seed), func(t *testing.T) {
+			testEditModelUndoRedoWithSeed(t, seed)
+		})
+	}
+}
+
+func testEditModelUndoRedoWithSeed(t *testing.T, seed int64) {
+	mac := loadEditModel(t)
+
+	symInText := emSym(t, mac, "EM_IN_TEXT")
+	symOutID := emSym(t, mac, "EM_OUT_ID")
+	symOutText := emSym(t, mac, "EM_OUT_TEXT")
+
+	if _, err := mac.Call("em_reset"); err != nil {
+		t.Fatalf("em_reset: %v", err)
+	}
+
+	rng := rand.New(rand.NewSource(seed))
+	ref := &refDoc{}
+
+	doInsert := func(at int) {
+		textLen := 8 + rng.Intn(33) // 8..40, <= EM_UNDO_TEXT_MAX
+		text := emRandText(rng, textLen)
+		mac.Write(symInText, text)
+		if _, err := mac.CallEntry("em_insert", z80h.Entry{BC: uint16(at), A: uint8(textLen)}); err != nil {
+			t.Fatalf("em_insert(at=%d): %v", at, err)
+		}
+		newID := emReadU24LE(mac.Read(symOutID, 3))
+		if newID == 0 {
+			t.Fatalf("em_insert returned id=0")
+		}
+		ref.insert(at, newID, text)
+	}
+	doDelete := func(at int) {
+		if _, err := mac.CallEntry("em_delete", z80h.Entry{BC: uint16(at)}); err != nil {
+			t.Fatalf("em_delete(at=%d): %v", at, err)
+		}
+		ref.delete(at)
+	}
+	doUndo := func(step int) {
+		res, err := mac.Call("em_undo")
+		if err != nil {
+			t.Fatalf("em_undo: %v", err)
+		}
+		if got, want := res.A == 1, ref.undoOp(); got != want {
+			t.Fatalf("step %d: em_undo performed=%v, want %v", step, got, want)
+		}
+	}
+	doRedo := func(step int) {
+		res, err := mac.Call("em_redo")
+		if err != nil {
+			t.Fatalf("em_redo: %v", err)
+		}
+		if got, want := res.A == 1, ref.redoOp(); got != want {
+			t.Fatalf("step %d: em_redo performed=%v, want %v", step, got, want)
+		}
+	}
+
+	const steps = 300
+	for step := 0; step < steps; step++ {
+		r := rng.Intn(100)
+		switch {
+		case len(ref.lines) == 0:
+			doInsert(0)
+		case r < 45:
+			doInsert(rng.Intn(len(ref.lines) + 1))
+		case r < 62:
+			doDelete(rng.Intn(len(ref.lines)))
+		case r < 85:
+			doUndo(step)
+		default:
+			doRedo(step)
+		}
+		emCompareDoc(t, mac, ref, symOutID, symOutText, step, "walk")
+		emCompareFlags(t, mac, ref, step, "walk")
+	}
+
+	t.Logf("seed=%d: %d lines after %d-step undo/redo walk", seed, len(ref.lines), steps)
+}
+
+// TestEditModelUndoDropOldestZ80 deterministically exercises the drop-oldest
+// cap: after EM_MAX_UNDO+5 end-inserts, only the most recent EM_MAX_UNDO are
+// undoable, so exactly EM_MAX_UNDO undos succeed and the oldest 5 lines survive.
+func TestEditModelUndoDropOldestZ80(t *testing.T) {
+	mac := loadEditModel(t)
+
+	symInText := emSym(t, mac, "EM_IN_TEXT")
+	symOutID := emSym(t, mac, "EM_OUT_ID")
+
+	if _, err := mac.Call("em_reset"); err != nil {
+		t.Fatalf("em_reset: %v", err)
+	}
+
+	rng := rand.New(rand.NewSource(7))
+	const n = emMaxUndo + 5
+	ids := make([]uint32, n)
+	for i := 0; i < n; i++ {
+		textLen := 8 + rng.Intn(20)
+		text := emRandText(rng, textLen)
+		mac.Write(symInText, text)
+		if _, err := mac.CallEntry("em_insert", z80h.Entry{BC: uint16(i), A: uint8(textLen)}); err != nil {
+			t.Fatalf("em_insert #%d: %v", i, err)
+		}
+		ids[i] = emReadU24LE(mac.Read(symOutID, 3))
+	}
+
+	lc, err := mac.Call("em_line_count")
+	if err != nil {
+		t.Fatalf("em_line_count: %v", err)
+	}
+	if int(lc.HL) != n {
+		t.Fatalf("after %d inserts: line_count = %d, want %d", n, lc.HL, n)
+	}
+
+	// Undo until em_can_undo reports empty, counting the successful undos.
+	undos := 0
+	for {
+		cu, err := mac.Call("em_can_undo")
+		if err != nil {
+			t.Fatalf("em_can_undo: %v", err)
+		}
+		if cu.A == 0 {
+			break
+		}
+		res, err := mac.Call("em_undo")
+		if err != nil {
+			t.Fatalf("em_undo: %v", err)
+		}
+		if res.A != 1 {
+			t.Fatalf("em_undo returned 0 while em_can_undo was 1")
+		}
+		undos++
+		if undos > n+5 {
+			t.Fatalf("undo did not terminate (cap broken)")
+		}
+	}
+	if undos != emMaxUndo {
+		t.Fatalf("drop-oldest: %d undos succeeded, want %d", undos, emMaxUndo)
+	}
+
+	// The oldest (n - emMaxUndo) lines were never undoable and must survive in order.
+	remain := n - emMaxUndo
+	lc2, err := mac.Call("em_line_count")
+	if err != nil {
+		t.Fatalf("em_line_count: %v", err)
+	}
+	if int(lc2.HL) != remain {
+		t.Fatalf("after undo: line_count = %d, want %d", lc2.HL, remain)
+	}
+	for i := 0; i < remain; i++ {
+		if _, err := mac.CallEntry("em_line_at", z80h.Entry{BC: uint16(i)}); err != nil {
+			t.Fatalf("em_line_at(%d): %v", i, err)
+		}
+		gotID := emReadU24LE(mac.Read(symOutID, 3))
+		if gotID != ids[i] {
+			t.Fatalf("after undo: line %d id = %d, want %d (oldest survivors)", i, gotID, ids[i])
+		}
+	}
+
+	// em_can_redo must now report the undone edits are redoable.
+	cr, err := mac.Call("em_can_redo")
+	if err != nil {
+		t.Fatalf("em_can_redo: %v", err)
+	}
+	if cr.A != 1 {
+		t.Fatalf("after %d undos: can_redo = %d, want 1", undos, cr.A)
 	}
 }
