@@ -233,8 +233,9 @@ pi_err:
 ; parseOperand's switch, parser.go:1023-1090.) An identifier -> parse_operand_reg,
 ; which resolves it to a register operand or, if it is not a register, a symbol
 ; expression. An expression-leading token (`#` / int / unary `-` / `~` / `(`) ->
-; parse_operand_expr. The `.`, local-refs and `:reloc:` primaries are B3c; the
-; shift/extend suffix and mem operands are B4 — all set CY (out of domain).
+; parse_operand_expr. The `.`, local-refs and `:reloc:` primaries are B3c. A
+; `[` token -> parse_operand_mem (B4, this brick). The register shift/extend
+; suffix (WriteShiftedReg/WriteExtendedReg) is B4b — not done here.
 ; ===========================================================================
 parse_operand:
                 ld      hl, (PARSE_TOK)
@@ -257,7 +258,9 @@ parse_operand:
                 jr      z, parse_operand_expr
                 cp      TOK_COLON
                 jr      z, parse_operand_expr
-                scf                         ; out of domain ([ -> B4)
+                cp      TOK_LBRACKET
+                jp      z, parse_operand_mem ; B4: memory operands
+                scf                         ; out of domain
                 ret
 
 ; ===========================================================================
@@ -265,7 +268,9 @@ parse_operand:
 ; its `kind:1, reg:1` bytes to (PI_OPSPTR); a non-register identifier is a
 ; symbol, so it falls through to parse_operand_expr (parseOperand's matchReg-
 ; then-parseExpression structure, parser.go:1023-1090, minus the shift/extend
-; lookahead which is B4). Exit: CY clear on success (token consumed).
+; lookahead which is B4b — the register shift/extend suffix
+; WriteShiftedReg/WriteExtendedReg is a follow-on brick).
+; Exit: CY clear on success (token consumed).
 ; ===========================================================================
 parse_operand_reg:
                 ld      hl, (PARSE_TOK)
@@ -1480,6 +1485,505 @@ mr_notreg:
                 ret
 
 ; ===========================================================================
+; match_extend — is the identifier (HL = ptr, A = length) an extend keyword?
+; (Port of matchExtend, parser.go:1398, + ExtendKind, operands.go.) The 8
+; extend names are exact lowercase: uxtb uxth uxtw uxtx sxtb sxth sxtw sxtx.
+; `lsl` is NOT in this table — it is handled separately by parse_operand_mem.
+; Entry: HL = name ptr, A = length. Exit: CY set with A = ExtendKind value
+; (0..7) if matched; CY clear otherwise. Clobbers A/BC/DE/HL.
+; ===========================================================================
+match_extend:
+                ld      (ME_PTR), hl
+                ld      (ME_LEN), a
+                ld      de, EXT_NAMES
+me_loop:
+                ld      a, (de)             ; name length (0 = end)
+                or      a
+                jr      z, me_notfound
+                ld      b, a                ; B = name length
+                ld      a, (ME_LEN)
+                cp      b
+                jr      nz, me_skip         ; length mismatch
+                push    de                  ; save entry pointer (at length byte)
+                inc     de                  ; DE -> entry name bytes
+                ld      hl, (ME_PTR)        ; HL -> candidate bytes
+me_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, me_cmp_fail
+                inc     de
+                inc     hl
+                djnz    me_cmp
+                ; matched: DE -> value byte
+                ld      a, (de)
+                pop     hl                  ; discard saved entry pointer
+                scf                         ; CY set: matched, A = value
+                ret
+me_cmp_fail:
+                pop     de                  ; restore entry pointer (length byte)
+me_skip:
+                ; advance DE past: length(1) + name[len] + value(1)
+                ld      a, (de)
+                add     a, 2
+                add     a, e
+                ld      e, a
+                jr      nc, me_skip_nc
+                inc     d
+me_skip_nc:
+                jr      me_loop
+me_notfound:
+                or      a                   ; clear carry: not matched
+                ret
+
+; ===========================================================================
+; EXT_NAMES — extend name → ExtendKind value table (port of matchExtend,
+; parser.go:1398 + ExtendKind.Name(), operands.go). Record: len:1 | name[len]
+; | value:1; a 0-length record terminates. Names are exact lowercase.
+; ===========================================================================
+EXT_NAMES:
+                defb    4
+                defm    "uxtb"
+                defb    EXT_UXTB
+                defb    4
+                defm    "uxth"
+                defb    EXT_UXTH
+                defb    4
+                defm    "uxtw"
+                defb    EXT_UXTW
+                defb    4
+                defm    "uxtx"
+                defb    EXT_UXTX
+                defb    4
+                defm    "sxtb"
+                defb    EXT_SXTB
+                defb    4
+                defm    "sxth"
+                defb    EXT_SXTH
+                defb    4
+                defm    "sxtw"
+                defb    EXT_SXTW
+                defb    4
+                defm    "sxtx"
+                defb    EXT_SXTX
+                defb    0                   ; sentinel
+
+; ===========================================================================
+; parse_operand_mem — parse a memory operand starting with `[`. (Port of
+; parseMem, parser.go:1278-1388.) Handles all 7 MEM shapes:
+;   MemBase           [xn]
+;   MemBaseOff        [xn, #off] (unsigned offset)
+;   MemBaseOffPre     [xn, #off]!
+;   MemBaseOffPost    [xn], #off
+;   MemBaseIdx        [xn, xm/wm]
+;   MemBaseIdxShifted [xn, xm, lsl #N]
+;   MemBaseIdxExtended [xn, wm/xm, extend #N]
+; Entry: current token is TOK_LBRACKET.
+; Exit: CY clear on success (tokens consumed, operand bytes appended at
+;       PI_OPSPTR); CY set on parse error (PARSE_ERR set).
+; ===========================================================================
+parse_operand_mem:
+                ; consume '['
+                call    parse_advance_tok
+
+                ; base register must be a TOK_IDENT
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_IDENT
+                jp      nz, pom_err         ; not an ident after '['
+
+                ; extract name ptr and length from the token
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = span_ptr
+                inc     hl
+                ld      a, (hl)             ; A = span_len low
+                ex      de, hl              ; HL = span_ptr
+                call    match_reg           ; CY = is-reg, B = kind, C = reg
+                jp      nc, pom_err         ; not a register
+                ld      a, b
+                cp      OP_KIND_REG_X
+                jr      z, pom_base_x
+                cp      OP_KIND_REG_XSP
+                jr      z, pom_base_x
+                jp      pom_err             ; W / WSP registers not allowed as base
+pom_base_x:
+                ld      a, c
+                ld      (POM_BASE), a       ; save base register number
+                call    parse_advance_tok   ; consume the base ident
+
+                ; --- check for ']' (plain base or post-index) ---
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_RBRACKET
+                jr      nz, pom_not_rbracket
+
+                ; consumed the ']' — check for post-index: [base], #imm
+                call    parse_advance_tok   ; consume ']'
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_COMMA
+                jr      nz, pom_plain_base  ; no comma -> plain [base]
+
+                ; lookahead: next token after the comma must be in
+                ; {TokHash, TokInt, TokMinus, TokIdent, TokLParen}
+                ld      hl, (PARSE_TOK)
+                ld      de, TOK_REC_SIZE
+                add     hl, de              ; HL -> token after comma
+                ld      a, (hl)             ; token kind
+                cp      TOK_HASH
+                jr      z, pom_post_consume_comma
+                cp      TOK_INT
+                jr      z, pom_post_consume_comma
+                cp      TOK_MINUS
+                jr      z, pom_post_consume_comma
+                cp      TOK_IDENT
+                jr      z, pom_post_consume_comma
+                cp      TOK_LPAREN
+                jr      z, pom_post_consume_comma
+                jr      pom_plain_base      ; lookahead not in set -> plain [base]
+
+pom_post_consume_comma:
+                call    parse_advance_tok   ; consume ','
+
+                ; parse the post-index offset expression
+                call    pom_parse_off_expr
+                ret     c                   ; parse error in expression
+                ; emit OP_KIND_MEM, MEM_SHAPE_BASE_OFF_POST, base, len_lo, len_hi, expr...
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_MEM
+                inc     hl
+                ld      (hl), MEM_SHAPE_BASE_OFF_POST
+                inc     hl
+                ld      a, (POM_BASE)
+                ld      (hl), a
+                inc     hl
+                ld      (PI_OPSPTR), hl     ; update ptr past the 3-byte header
+                ; write expr len (LE) and copy bytes
+                call    pom_write_expr
+                or      a                   ; clear carry: success
+                ret
+
+pom_plain_base:
+                ; emit OP_KIND_MEM, MEM_SHAPE_BASE, base (3 bytes)
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_MEM
+                inc     hl
+                ld      (hl), MEM_SHAPE_BASE
+                inc     hl
+                ld      a, (POM_BASE)
+                ld      (hl), a
+                inc     hl
+                ld      (PI_OPSPTR), hl
+                or      a                   ; clear carry: success
+                ret
+
+                ; --- comma after base: index register or offset expression ---
+pom_not_rbracket:
+                cp      TOK_COMMA
+                jp      nz, pom_err         ; not ']' and not ',' -> error
+                call    parse_advance_tok   ; consume ','
+
+                ; check if the next token is an ident that is an X or W register
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_IDENT
+                jp      nz, pom_offset      ; not an ident -> offset expression
+
+                ; attempt to match as a register
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl
+                ld      a, (hl)
+                ex      de, hl
+                call    match_reg
+                jp      nc, pom_offset      ; not a register -> offset expression
+                ld      a, b
+                cp      OP_KIND_REG_X
+                jr      z, pom_idx_x
+                cp      OP_KIND_REG_W
+                jr      z, pom_idx_w
+                jp      pom_offset          ; XSP/WSP not valid index registers
+
+pom_idx_x:
+                ld      a, 1
+                jr      pom_idx_common
+pom_idx_w:
+                ld      a, 0
+pom_idx_common:
+                ld      (POM_WIDTH), a      ; width: 0=W, 1=X
+                ld      a, c
+                ld      (POM_IDX), a        ; save index register number
+                call    parse_advance_tok   ; consume the index register ident
+
+                ; check for optional ', mod' suffix
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_COMMA
+                jp      nz, pom_emit_baseidx ; no modifier -> plain BaseIdx
+
+                ; comma present: expect a modifier keyword (lsl or extend)
+                call    parse_advance_tok   ; consume ','
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_IDENT
+                jp      nz, pom_err         ; expected ident keyword
+
+                ; extract the keyword span
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = span_ptr
+                inc     hl
+                ld      a, (hl)             ; A = span_len low
+                ld      (POM_KWLEN), a
+                ld      (POM_KWPTR), de
+
+                ; check for "lsl"
+                cp      3
+                jr      nz, pom_try_extend
+                ex      de, hl              ; HL = span_ptr
+                ld      a, (hl)
+                cp      &6C                 ; 'l'
+                jr      nz, pom_try_extend
+                inc     hl
+                ld      a, (hl)
+                cp      &73                 ; 's'
+                jr      nz, pom_try_extend
+                inc     hl
+                ld      a, (hl)
+                cp      &6C                 ; 'l'
+                jr      nz, pom_try_extend
+
+                ; matched "lsl" — consume it, then expect '#', then TOK_INT
+                call    parse_advance_tok   ; consume 'lsl'
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_HASH
+                jp      nz, pom_err         ; expected '#'
+                call    parse_advance_tok   ; consume '#'
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_INT
+                jp      nz, pom_err         ; expected literal int
+                ; read shift amount: low byte of token value (offset 6)
+                ld      hl, (PARSE_TOK)
+                ld      de, 6
+                add     hl, de
+                ld      a, (hl)             ; A = low byte of int64 value
+                ld      (POM_AMT), a
+                call    parse_advance_tok   ; consume the int
+                ; expect ']'
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_RBRACKET
+                jp      nz, pom_err
+                call    parse_advance_tok   ; consume ']'
+                ; emit OP_KIND_MEM, MEM_SHAPE_BASE_IDX_SHIFTED, base, idx, idxWidth, shiftAmt
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_MEM
+                inc     hl
+                ld      (hl), MEM_SHAPE_BASE_IDX_SHIFTED
+                inc     hl
+                ld      a, (POM_BASE)
+                ld      (hl), a
+                inc     hl
+                ld      a, (POM_IDX)
+                ld      (hl), a
+                inc     hl
+                ld      a, (POM_WIDTH)
+                ld      (hl), a
+                inc     hl
+                ld      a, (POM_AMT)
+                ld      (hl), a
+                inc     hl
+                ld      (PI_OPSPTR), hl
+                or      a                   ; clear carry: success
+                ret
+
+pom_try_extend:
+                ; not "lsl" — try matchExtend on the keyword
+                ld      hl, (POM_KWPTR)
+                ld      a, (POM_KWLEN)
+                call    match_extend
+                jp      nc, pom_err         ; unknown extend keyword
+                ld      (POM_EXT), a        ; save ExtendKind value
+                call    parse_advance_tok   ; consume the extend keyword
+                ; optional '#N'
+                xor     a
+                ld      (POM_AMT), a        ; default amt = 0
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_HASH
+                jr      nz, pom_emit_extended ; no '#' -> amt stays 0
+                call    parse_advance_tok   ; consume '#'
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_INT
+                jp      nz, pom_err         ; expected literal int after '#'
+                ; read extend amount: low byte of token value
+                ld      hl, (PARSE_TOK)
+                ld      de, 6
+                add     hl, de
+                ld      a, (hl)
+                ld      (POM_AMT), a
+                call    parse_advance_tok   ; consume the int
+pom_emit_extended:
+                ; expect ']'
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_RBRACKET
+                jp      nz, pom_err
+                call    parse_advance_tok   ; consume ']'
+                ; emit OP_KIND_MEM, MEM_SHAPE_BASE_IDX_EXTENDED, base, idx, idxWidth, extend, shiftAmt
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_MEM
+                inc     hl
+                ld      (hl), MEM_SHAPE_BASE_IDX_EXTENDED
+                inc     hl
+                ld      a, (POM_BASE)
+                ld      (hl), a
+                inc     hl
+                ld      a, (POM_IDX)
+                ld      (hl), a
+                inc     hl
+                ld      a, (POM_WIDTH)
+                ld      (hl), a
+                inc     hl
+                ld      a, (POM_EXT)
+                ld      (hl), a
+                inc     hl
+                ld      a, (POM_AMT)
+                ld      (hl), a
+                inc     hl
+                ld      (PI_OPSPTR), hl
+                or      a                   ; clear carry: success
+                ret
+
+pom_emit_baseidx:
+                ; expect ']'
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_RBRACKET
+                jp      nz, pom_err
+                call    parse_advance_tok   ; consume ']'
+                ; emit OP_KIND_MEM, MEM_SHAPE_BASE_IDX, base, idx, idxWidth
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_MEM
+                inc     hl
+                ld      (hl), MEM_SHAPE_BASE_IDX
+                inc     hl
+                ld      a, (POM_BASE)
+                ld      (hl), a
+                inc     hl
+                ld      a, (POM_IDX)
+                ld      (hl), a
+                inc     hl
+                ld      a, (POM_WIDTH)
+                ld      (hl), a
+                inc     hl
+                ld      (PI_OPSPTR), hl
+                or      a                   ; clear carry: success
+                ret
+
+pom_offset:
+                ; general case: offset expression [base, expr] with optional '!' or post
+                ; parse the offset expression
+                call    pom_parse_off_expr
+                ret     c                   ; parse error
+                ; expect ']'
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_RBRACKET
+                jp      nz, pom_err
+                call    parse_advance_tok   ; consume ']'
+                ; check for '!' (pre-index)
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_BANG
+                jr      nz, pom_emit_off    ; no '!' -> plain offset
+                call    parse_advance_tok   ; consume '!'
+                ; emit OP_KIND_MEM, MEM_SHAPE_BASE_OFF_PRE, base, len_lo, len_hi, expr...
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_MEM
+                inc     hl
+                ld      (hl), MEM_SHAPE_BASE_OFF_PRE
+                inc     hl
+                ld      a, (POM_BASE)
+                ld      (hl), a
+                inc     hl
+                ld      (PI_OPSPTR), hl     ; update ptr past the 3-byte header
+                call    pom_write_expr
+                or      a                   ; clear carry: success
+                ret
+
+pom_emit_off:
+                ; emit OP_KIND_MEM, MEM_SHAPE_BASE_OFF, base, len_lo, len_hi, expr...
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_MEM
+                inc     hl
+                ld      (hl), MEM_SHAPE_BASE_OFF
+                inc     hl
+                ld      a, (POM_BASE)
+                ld      (hl), a
+                inc     hl
+                ld      (PI_OPSPTR), hl     ; update ptr past the 3-byte header
+                call    pom_write_expr
+                or      a                   ; clear carry: success
+                ret
+
+pom_err:
+                ld      a, 1
+                ld      (PARSE_ERR), a
+                scf
+                ret
+
+; pom_parse_off_expr — parse an offset expression into EXPR_BUF and fold it,
+; storing the byte count in POM_EXPRLEN. Reuses the parse_operand_expr idiom:
+; reset EXPR_BUF/EXPR_PTR, call parse_expr_prec (minPrec 0), call expr_fold.
+pom_parse_off_expr:
+                ld      hl, EXPR_BUF
+                ld      (EXPR_PTR), hl      ; reset the bytecode build buffer
+                xor     a                   ; minPrec = 0
+                call    parse_expr_prec
+                ret     c                   ; parse error -> propagate CY
+                call    expr_fold
+                ld      hl, (EXPR_PTR)
+                ld      de, EXPR_BUF
+                or      a
+                sbc     hl, de
+                ld      (POM_EXPRLEN), hl   ; save expr byte count (16-bit)
+                or      a                   ; clear carry: success
+                ret
+
+; pom_write_expr — write expr length (LE u16) then copy the EXPR_BUF bytes to
+; (PI_OPSPTR), updating PI_OPSPTR. POM_EXPRLEN must be set. Clobbers BC/DE/HL.
+pom_write_expr:
+                ld      hl, (PI_OPSPTR)     ; HL = write pointer (just past header)
+                ; write len_lo
+                ld      a, (POM_EXPRLEN)    ; low byte of expr length
+                ld      (hl), a
+                inc     hl
+                ld      a, (POM_EXPRLEN+1)  ; high byte of expr length
+                ld      (hl), a
+                inc     hl
+                ; copy expr bytes (BC = length)
+                ld      bc, (POM_EXPRLEN)
+                ld      a, b
+                or      c
+                jr      z, pom_we_nocopy    ; zero-length expr (defensive)
+                ex      de, hl              ; DE = dest
+                ld      hl, EXPR_BUF        ; HL = source
+                ldir                        ; copy; DE -> end
+                ld      (PI_OPSPTR), de
+                ret
+pom_we_nocopy:
+                ld      (PI_OPSPTR), hl
+                ret
+
+; ===========================================================================
 ; parse_emit_inst — write one INST record from PI_MNEMID / PI_COUNT / the
 ; operand bytes in PARSE_OPSBUF, advancing PARSE_RECPTR and PARSE_RECN.
 ; ===========================================================================
@@ -1811,6 +2315,16 @@ ROL_PTR:        defs 2          ; reloc_op_lookup: saved candidate pointer
 ROL_LEN:        defs 1          ; reloc_op_lookup: saved candidate length
 SI_PTR:         defs 2          ; sym_intern: saved candidate pointer
 SI_LEN:         defs 1          ; sym_intern: saved candidate length
+ME_PTR:         defs 2          ; match_extend: saved candidate pointer
+ME_LEN:         defs 1          ; match_extend: saved candidate length
+POM_BASE:       defs 1          ; parse_operand_mem: base register number
+POM_IDX:        defs 1          ; parse_operand_mem: index register number
+POM_WIDTH:      defs 1          ; parse_operand_mem: index width (0=W, 1=X)
+POM_AMT:        defs 1          ; parse_operand_mem: shift/extend amount byte
+POM_EXT:        defs 1          ; parse_operand_mem: ExtendKind value
+POM_KWPTR:      defs 2          ; parse_operand_mem: keyword span pointer
+POM_KWLEN:      defs 1          ; parse_operand_mem: keyword span length
+POM_EXPRLEN:    defs 2          ; parse_operand_mem: offset expression byte count
 SYM_NAMES:      defs 2048       ; document symbol table: `len,name` records + sentinel
 
 ; ===========================================================================

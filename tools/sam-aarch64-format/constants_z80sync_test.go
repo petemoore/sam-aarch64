@@ -176,4 +176,41 @@ func TestTbnConstantsZ80Sync(t *testing.T) {
 			}
 		}
 	}
+
+	// MEM_SHAPE_* — every MemShape sub-code present at its value.
+	memShapeSuffix := map[MemShape]string{
+		MemBase:            "BASE",
+		MemBaseOff:         "BASE_OFF",
+		MemBaseOffPre:      "BASE_OFF_PRE",
+		MemBaseOffPost:     "BASE_OFF_POST",
+		MemBaseIdx:         "BASE_IDX",
+		MemBaseIdxShifted:  "BASE_IDX_SHIFTED",
+		MemBaseIdxExtended: "BASE_IDX_EXTENDED",
+	}
+	for shape, suffix := range memShapeSuffix {
+		name := "MEM_SHAPE_" + suffix
+		got, ok := eq[name]
+		if !ok {
+			t.Errorf("%s: missing from tbn_constants.inc", name)
+			continue
+		}
+		if got != int(shape) {
+			t.Errorf("%s = %d; Go MemShape = %d", name, got, int(shape))
+		}
+	}
+
+	// EXT_* — every ExtendKind present at its value.
+	for i := 0; i < 8; i++ {
+		ext := ExtendKind(i)
+		suffix := strings.ToUpper(ext.Name())
+		name := "EXT_" + suffix
+		got, ok := eq[name]
+		if !ok {
+			t.Errorf("%s: missing from tbn_constants.inc", name)
+			continue
+		}
+		if got != i {
+			t.Errorf("%s = %d; Go ExtendKind = %d", name, got, i)
+		}
+	}
 }
