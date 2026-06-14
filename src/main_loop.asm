@@ -1114,10 +1114,10 @@ main_dir_equ_mark_abs:
 ; bit 31 clear) or 0xFFFFFFFF (negative, bit 31 set).  Anything else
 ; (e.g. 0x1_00000000) genuinely truncates — refuse it with a tagged fail
 ; rather than emit wrong bytes.  Negative absolutes (high32 = 0xFFFFFFFF)
-; pass here and round-trip correctly through every <=32-bit consumer;
-; eval reconstructs their high word as 0 (eval_push_sym_zero_high), which
-; only matters for a 64-bit consumer of a negative .set — a distinct,
-; pre-existing limitation, not made worse here (i73).
+; pass here and round-trip correctly through every consumer: eval
+; reconstructs the high word as the sign-extension of bit 31
+; (eval_push_sym_sign_high), so a 64-bit consumer of a negative .set
+; (.quad, X-register movz) now emits 0xFFFFFFFF and matches GNU/Go (i28).
                 ld      a, (expr_result + 3)
                 add     a, a                ; bit 31 -> carry
                 sbc     a, a                ; A = 0x00 (CY=0) or 0xFF (CY=1) = expected sign byte
