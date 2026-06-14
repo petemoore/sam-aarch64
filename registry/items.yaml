@@ -763,6 +763,210 @@
   parent: i100
   refs: [src/netboot/http_main.asm, src/netboot/tcp_conn.asm, src/netboot/netboot_http.asm, src/netboot/fw_span.asm, tools/netboot-oracle/bdos/span.go, i100, i100a, i110]
 
+- id: i102a
+  title: i102 measurement infra — cycle-exact T-state counter in koron-go/z80 harness
+  description: |
+    Cycle-exact T-state counter in the koron-go/z80 harness (tools/netboot-oracle/z80/tstates.go, anchor-verified + error-on-unknown completeness) wired into CallResult.TStates, plus the recorded crypto baselines (tstates_baseline_test.go). The benchmark every later i102 opt measures against.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 316, role: completing}
+  parent: i102
+  refs: [tools/netboot-oracle/z80/tstates.go, tstates_baseline_test.go, i102]
+
+- id: i102b
+  title: i102 SHA-256 speedups — short-distance rotations and redundant push/pop removal
+  description: |
+    Opt-1: short-distance rotations (whole-byte sha_rotr8/sha_rotl8 + a minimal bit residual + sha_shr8; deleted the bit-at-a-time sha_rotr_word_by); Opt-5: dropped the redundant push/pop in sha_add4 (callers already reload HL/DE). Documented opcodes only; NIST vectors byte-exact. Delivered in PRs #318 (−27.4%) + #322 (−2.7%); SHA-256 ~29.4% below baseline (6.45M→4.55M T).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 322, role: completing}
+  parent: i102
+  refs: [src/netboot/sha256.asm, i102]
+
+- id: i102c
+  title: i102 quarter-square 8x8 multiply — replaced shift-add loop with QSQ identity
+  description: |
+    Replaced the mul8 shift-add loop with the quarter-square identity a*b = QSQ[a+b] - QSQ[|a-b|] (QSQ[n]=floor(n^2/4), a 1022-byte RAM table built by qsq_init via a pure-add recurrence). Opt-2: x25519; Opt-3: poly1305 (identical loop). Exhaustive TestMul8Exhaustive/TestPoly1305Mul8Exhaustive (all 65536 pairs) + RFC/e2e byte-exact. Delivered in PRs #319 (x25519 -23.0%) + #320 (poly1305 -9.5% / aead -11.5%); later DRY-extracted to qsq.asm.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 320, role: completing}
+  parent: i102
+  refs: [src/netboot/qsq.asm, src/netboot/x25519.asm, src/netboot/poly1305.asm, i102]
+
+- id: i102d
+  title: i102 chacha20 redundant push/pop removal — cc_add/cc_xor callers already reload HL/DE
+  description: |
+    cc_add/cc_xor preserved HL/DE that every cc_qr caller reloads; dropping the push/pop also let cc_addstate's manual word-advance go (faster AND smaller). RFC 8439 + aead byte-exact. First i102 increment to shrink code.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 321, role: completing}
+  parent: i102
+  refs: [src/netboot/chacha20.asm, i102]
+
+- id: i102e
+  title: "i102 x25519 structural opts — fe_sqr, fe_mul121665, IX/IY pointer hold"
+  description: |
+    Opt-6: dedicated symmetric squaring fe_sqr (496 off-diagonal products doubled + 32 diagonal terms, ~half a multiply); Opt-7: constant-aware fe_mul121665 (96 vs 1024 mul8 for the 3-byte a24); Opt-8: hold the schoolbook inner-loop pointers in IX/IY across mul8. Field pins + RFC 7748 + Go-curve25519 e2e byte-exact. Delivered in PRs #343 (-18.7%) + #345 (-8.6%) + #346 (-5.64%, -45 B); x25519 cumulative 1.604G->1.125G = -29.9%.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 346, role: completing}
+  parent: i102
+  refs: [src/netboot/x25519.asm, i102]
+
+- id: i102f
+  title: "i102 x25519 Karatsuba field multiply — one level of Karatsuba over 32x32->64 schoolbook"
+  description: |
+    fe_schoolbook replaced its flat 1024-mul8 schoolbook with one level of Karatsuba: split at 16 bytes, three 16x16 sub-multiplies (kmul16) for z0/z2/middle (768 mul8), middle via the subtractive identity z1=z0+z2-(a_lo-a_hi)(b_lo-b_hi) with tracked sign bit, then multi-byte combine (kadd/ksub). fe_sqr left untouched. New TestFEMulRandom (1024 random pairs) + field pins + RFC 7748 + Go-curve25519 e2e all byte-exact. x25519 cumulative 1.604G->0.973G = -39.3%.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 354, role: completing}
+  parent: i102
+  refs: [src/netboot/x25519.asm, tools/netboot-oracle/z80/x25519_field_test.go, i102]
+
+- id: i102g
+  title: "i102 mul8 micro-opts — drop internal push de/pop hl and dead ld d,0 before calls"
+  description: |
+    (1) drop mul8's internal push de/pop hl: saved operands B/C are dead once the difference is taken, so the second QSQ[|a-b|] lookup reuses BC for the table base+entry while QSQ[a+b] stays in DE; (2) remove the dead ld d,0 before every mul8 call across the x25519 + poly1305 byte-radix loops (mul8 reads only A and E). TestMul8Exhaustive + TestPoly1305Mul8Exhaustive (all 65536 pairs each) + RFC 7748 / RFC 8439 / Go e2e byte-exact. x25519 cumulative 1.604G->0.934G = -41.8%.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 355, role: completing}
+  parent: i102
+  refs: [src/netboot/qsq.asm, src/netboot/x25519.asm, src/netboot/poly1305.asm, i102]
+
+- id: i102h
+  title: "i102 chacha20 register-based rotates — cc_rotl16/cc_rotl8 use registers, not cc_tmp4"
+  description: |
+    cc_rotl16/cc_rotl8 (the quarter-round's byte-permute rotates, each invoked ~80x per block: ROTL16 once + ROTL8 thrice via ROTL8/ROTL12/ROTL7) read the 4 word bytes into registers A/B/C/D and write them back permuted in place, instead of bouncing them through the cc_tmp4 memory temp via cc_load_tmp (now deleted — faster and smaller). RFC 8439 KAT + block/encrypt + AEAD + TLS-client composite byte-exact. chacha20_block -15.5% (345.5K->292.0K); chacha20_encrypt -15.3%; also speeds aead.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 356, role: completing}
+  parent: i102
+  refs: [src/netboot/chacha20.asm, i102]
+
+- id: i102i
+  title: i102 x25519 schoolbook carry in a register — ride carry in C through push bc/pop bc
+  description: |
+    The multiply/square inner loops (kmul16, the Karatsuba 16x16; fe_sqr off-diagonal — together ~88% of x25519's mul8 calls) kept the running byte carry in memory (fe_car). The loops already push bc/pop bc around mul8 to preserve the djnz counter B; riding the carry in C through that same push/pop drops both memory accesses for free, and dest[i+j]+carry is folded into one add a,(iy+0). math/big field pins + TestFEMulRandom + TestFESqr* + RFC 7748 + Go-curve25519 e2e byte-exact. x25519 -6.6% (934.1M->872.4M).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 357, role: completing}
+  parent: i102
+  refs: [src/netboot/x25519.asm, i102]
+
+- id: i102j
+  title: i102 mul8 page-aligned table index — high-byte-only address formation for qsq_table
+  description: |
+    qsq_table is page-aligned (low byte 0) and lookup index 2*(a+b) / 2*|a-b| is <= 1020, so each entry address is formed by adding only the high byte (ld a,qsq_table>>8; add a,h; ld h,a) instead of a full ld de,qsq_table; add hl,de — the index's low byte is already the address low byte. Saves ~12 T per mul8 call (~1.77M calls per x25519). Invariant documented at the qsq_table equ and guarded by exhaustive TestMul8Exhaustive/TestPoly1305Mul8Exhaustive (all 65536 pairs) — any non-page-aligned base fails CI. x25519 -2.7% (872.4M->848.7M); also speeds poly1305.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 358, role: completing}
+  parent: i102
+  refs: [src/netboot/qsq.asm, i102]
+
+- id: i102k
+  title: i102 reduction/constant-multiply carry in a register — fe_mul38_high and fe_121665_inner
+  description: |
+    Applied the i102i carry-in-C pattern to the two remaining byte-radix multiply loops: fe_mul38_high (the x38 high-half fold, run on every fe_mul and fe_sqr reduction) and fe_121665_inner (the xa24 curve-constant multiply). Both kept carry in fe_car memory; now rides the existing push bc/pop bc in C, addend folded into one add. Completes carry-register conversion across all byte-radix multiply loops; fe_car scratch byte fully dead and removed. Field pins + TestFEMul121665 + RFC 7748 + Go-curve25519 e2e byte-exact. x25519 -0.5% (848.7M->844.5M).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 359, role: completing}
+  parent: i102
+  refs: [src/netboot/x25519.asm, i102]
+
+- id: i102l
+  title: i102 mul8 inlined at the two hottest x25519 sites — kmul16_inner and fe_sqr_inner
+  description: |
+    The mul8 body (8x8->16 multiply, ~1.8M calls per x25519) was a called subroutine paying call+ret (27 T). Refactored into a pyz80 mul8_body MACRO (mul8 = mul8_body+ret) and expanded inline at kmul16_inner and fe_sqr_inner (~96% of calls). Branch over neg uses jr nc,$+4 so the macro carries no internal label. fe_sqr_diag + poly1305 + host field tests keep calling the subroutine. TestMul8Exhaustive (all 65536 pairs) + RFC 7748 + Go-curve25519 e2e + TLS-client composite headroom assertion byte-exact. x25519 -5.77% (844.5M->795.8M).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 363, role: completing}
+  parent: i102
+  refs: [src/netboot/qsq.asm, src/netboot/x25519.asm, i102]
+
+- id: i102n
+  title: "i102 sha256 register-oriented rewrite — increment 1 (729,795->418,843 T/block, -42.6%)"
+  description: |
+    Replaced sha256_compress (memory-to-memory) with a register-resident design: inline add4/copy4 macros; sigma/Sigma rotates held in B/C/D/E (8T rr r, not 15T rr (hl)); simplified Ch/Maj; chained rotations; in-place W schedule. ABI byte-preserved. Fastest verified Z80 SHA-256 (timewave0/ZARC ~480-485k; oisee's 45k is fabricated AI code). q21 resolution: Pete 2026-06-16 decided to do the full rewrite + keep cryptographic SHA-256 (firmware from third-party CDN, SHA-256 pin is the integrity guarantee). NIST KAT + million-a + start.elf (2.98 MB) byte-exact.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 365, role: completing}
+  parent: i102m
+  refs: [src/netboot/sha256.asm, i102m, i100, i101]
+
+- id: i102o
+  title: "i102 sha256 8x circular-renaming unroll — increment 2 (418,843->377,371 T/block, -9.9%)"
+  description: |
+    Unrolls 64 rounds into an 8-phase group looped 8x: with circular renaming a..h never physically move (28-byte lddr shuffle gone — each phase hard-codes which wv_ slot is a..h). Generated flat (ordinary mnemonics, no pyz80 EQU FOR — sidesteps the EQU FOR*macro rewind bug) by tools/sha256-unroll-gen/gen_sha256_unrolled.py; drift-guarded byte-for-byte by regen_guard_test.go. Gated behind if defined(NETBOOT_TLS_CLIENT) — the TLS composite keeps the smaller rolled loop. Cumulative sha256 729,795->377,371 (-48.3%). NIST KAT + million-a + start.elf byte-exact.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 367, role: completing}
+  parent: i102m
+  refs: [src/netboot/sha256.asm, tools/sha256-unroll-gen/, i102m, i102n, i100, i101]
+
+- id: i102p
+  title: "i102 sha256 inline Ch/Maj — increment 3 (377,371->346,267 T/block, -8.2%)"
+  description: |
+    In the unrolled round path the operand slots for Ch(e,f,g) and Maj(a,b,c) are compile-time constants, so 8 generated phases now inline both instead of calling shared sha_ch/sha_maj subroutines. Inline: each operand loads with ld a,(nnnn) and the boolean is done in A with H,L,D as scratch (Ch 76 T/byte vs ~135; Maj 92 T/byte vs ~141). Emitted by gen_sha256_unrolled.py (ch_inline/maj_inline), drift-guarded by regen_guard_test.go. Shared subroutines untouched — the rolled TLS_CLIENT composite is byte-identical. Cumulative 729,795->346,267 (-52.6%). NIST KAT + million-a (15,625 blocks) byte-exact
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 369, role: completing}
+  parent: i102m
+  refs: [src/netboot/sha256.asm, tools/sha256-unroll-gen/, i102m, i102n, i102o, i100, i101]
+
+- id: i102q
+  title: i102 sha256 increment 4 — alternating sha_tmpa forward/backward walk (-1.0%)
+  description: |
+    sha_bigsigma0/1/sha_sigma0/1 interleave st_bcde_tmpa + 1-2 xor_bcde_tmpa passes over the 4-byte sha_tmpa, each reloading ld hl,sha_tmpa (10 T). Since the intervening rotate macros preserve HL and XOR is per-byte order-independent, each pass after the first can chain from where the previous left HL: new xor_bcde_tmpa_bwd / xor_bcde_tmpa_fwd macros drop the reload. Saves 2 reloads each in Sigma functions (x64 rounds) + 1 each in sigma functions (x48 extend words) = -3520 T/block: 346,267->342,747 (-1.0%). NIST KAT byte-exact; 8x-unroll generator + regen guard untouched.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 375, role: completing}
+  parent: i102m
+  refs: [src/netboot/sha256.asm, tools/netboot-oracle/z80/tstates_baseline_test.go, i102m, i102p]
+
+- id: i102r
+  title: "i102 sha256 increment 5 — register-accumulator round (342,747->315,355 T/block, -8.0%)"
+  description: |
+    T1/T2 accumulated in register quad B,C,D,E instead of memory-to-memory: each term folds in with BCDE += memory carry chain (~92 T, no write-back), so four intermediate T1 stores + both T2 stores are gone; only final new e/new a words touch memory. Ch rewritten to use A,H,L only; Maj parks in new sha_majs while S0 holds sha_tmpa. Emitted by gen_sha256_unrolled.py (rewritten phase_real), drift-guarded by regen_guard_test.go. Cumulative 729,795->315,355 (-56.8%). Also shrinks firmware-fetch bootable (http_main) by 478 B. Composite untouched.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 377, role: completing}
+  parent: i102m
+  refs: [src/netboot/sha256.asm, tools/sha256-unroll-gen/, tools/netboot-oracle/z80/tstates_baseline_test.go, i102m, i102q]
+
 - id: i105
   title: "Registry restructure — atomic items, status vocabulary, open/closed split"
   description: |
@@ -817,3 +1021,25 @@
   prs:
     - {num: 374, role: completing}
   refs: [src/netboot/smoke_test.asm, src/netboot/netboot_server.asm, src/netboot/netboot_serve.asm, src/netboot/netboot_client.asm, i100b]
+
+- id: i125
+  title: Section-C fit gate for every bootable netboot program (build + CI)
+  description: |
+    A bootable netboot program loads at &8000; &C000-&FFFF is ROM1 at boot, so code/data above the budget is never written to RAM (the i119 over-size class). Generalised the down-payment client check to all *_boot.bin targets via shared script tools/netboot-boot-fit-check.sh: smoke/serve/server/client gated to 16384 (section C), http to 32768 (section-D overlay per phase3-delivery-design.md §13.1). Wired into CI by adding netboot-server-boot + netboot-serve-boot to ci-netboot-z80 so an over-size bootable image fails CI, not hardware.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 433, role: completing}
+  refs: [tools/netboot-boot-fit-check.sh, Makefile, "docs/specs/phase3-delivery-design.md §13.1", i119, i124]
+
+- id: i127
+  title: "netboot client: transmit the ARP only once the ENC PHY link is up"
+  description: |
+    client_main broadcast its proactive ARP immediately after drv_init, but drv_init never waited for PHY link-up; on real hardware the PHY silently dropped the first ARP, causing a livelock (flickering-border, silent-wire symptom). Fix (a): drv_wait_link (enc_link.asm) polls PHSTAT2.LSTAT over the MII until link is up, called in client_main between drv_init and client_first. Built + emulation-verified PR #424; HARDWARE-CONFIRMED 2026-06-19 rec 13. Fix (b) ARP-retransmit-on-timeout NOT implemented — (a) alone is sufficient. Emulator model + regression landed as i131 (PR #427).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 424, role: completing}
+  refs: [src/netboot/enc_link.asm, src/netboot/netboot_client.asm, tools/netboot-oracle/z80/enc28j60.go, i124, i82, i119, i128, i131]
