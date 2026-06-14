@@ -436,6 +436,155 @@
   parent: i48
   refs: [docs/specs/i48-syntactic-encoder-design.md]
 
+- id: i48c
+  title: Z80 text→overlay encoder (editor input path)
+  description: |
+    SAM-side mirror of the host front-end (tools/sam-aarch64/frontend: lexer→parser→records). Go i48b is the authority. Absorbs i39c (overlay slot bitfield-packing polish). Large multi-PR port decomposed into bricks B1–B8 (scoped 2026-06-17). B1–B7 are flat-memory-autonomous (koron-go/z80 harness, netboot-z80 CI). B8 is assembler-coupled, lands last. Host Preprocess (.include/.macro/.if) is out of scope (host-only bulk-import concern).
+  status: IN_PROGRESS
+  kind: umbrella
+  owner: agent
+  refs: [src/asmlex.asm, src/asmparse.asm, tools/netboot-oracle/z80/asmlex_test.go, tools/netboot-oracle/z80/asmparse_test.go, tools/sam-aarch64/frontend/lexer.go, tools/sam-aarch64/frontend/parser.go, "docs/specs/i48-syntactic-encoder-design.md §2", "docs/specs/i48-syntactic-encoder-design.md §7", docs/notes/m9-status.md, i39c, i109]
+
+- id: i48c-b1
+  title: Lexer core — tokenizer kind/span/base + literal types + local-label refs + string literals
+  description: |
+    Completes the editor lexer (src/asmlex.asm). B1: tokenizer kind/span/base. B1b: int64 literal value (parseIntInBase) + char literals (readCharLit). B1c: local-label refs Nf/Nb (readNumberOrLocal). B1d: string literals (readString — cpp line-directives out of scope, preprocessor artifact). Delivered across PRs #393 (B1) + #394 (B1b) + #395 (B1c) + #397 (B1d).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 397, role: completing}
+  parent: i48c
+  refs: [src/asmlex.asm, tools/netboot-oracle/z80/asmlex_test.go]
+
+- id: i48c-b2
+  title: "Simple-inst parse → INST record (mnemonic table + reg/reg/reg + reg/reg/#imm)"
+  description: |
+    B2a: generated src/mnemonic_names.inc from Go authority + Z80 mnemonic_lookup (runtime-data twin of mnemonic_ids.inc). B2b: generic reg/reg/reg parse (matchReg + operand loop + emitInst → INST record). B2c: reg/reg/#imm (single-literal immediate: WriteImmExpr + folded WriteImm), host-verified vs format.ExprWriter/OperandWriter. Delivered across PRs #398 (B2a) + #399 (B2b) + #400 (B2c).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 400, role: completing}
+  parent: i48c
+  refs: [src/asmparse.asm, tools/netboot-oracle/z80/asmparse_test.go, tools/sam-aarch64/frontend/parser.go]
+
+- id: i48c-b3
+  title: Expression parser — precedence→expr bytecode (full arithmetic grammar + symbol-intern + PC/reloc primaries)
+  description: |
+    B3a: scaffold (parseExprPrec/Primary/tokPrec) + constant-fold over + - & | ^ / unary - ~ / parens. B3a2: shifts << >>. B3a3: * (64-bit shift-add multiply). B3a4: / (signed 64-bit restoring long division — truncate-toward-zero, MinInt64/-1→MinInt64, div0→0). B3b: symbol-intern + WriteSym (document symbol-table seam; per-document reset). B3c: PC . / local-ref Nf/Nb / :reloc: primaries. All host-verified vs format.ExprWriter+EvalConst. PRs #402+#403+#404+#406+#407+#412.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 412, role: completing}
+  parent: i48c
+  refs: [src/asmparse.asm, tools/netboot-oracle/z80/asmparse_test.go, tools/sam-aarch64/frontend/parser.go]
+
+- id: i48c-b4
+  title: "Operand suffixes — memory operands (7 [...] shapes), register shift/extend suffix, condition-code operand"
+  description: |
+    B4: parse_operand_mem — all 7 [...] shapes; match_extend — ExtendKind table scan; MEM_SHAPE_*/EXT_* constants in tbn_constants.inc via tables-gen; host-verified vs Go parseMem/matchExtend. B4b: match_shift_kind + lookahead in parse_operand_reg; SHIFT_* constants; mutation-verified vs WriteShiftedReg/WriteExtendedReg. B4c: match_cond + COND_NAMES table (18 records: 16 canonical + 2 GNU aliases); mutation-verified. Delivered PRs #414 (B4) + #415 (B4b) + #417 (B4c).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 417, role: completing}
+  parent: i48c
+  refs: [src/asmparse.asm, tools/netboot-oracle/z80/asmparse_test.go, tools/sam-aarch64/frontend/parser.go]
+
+- id: i48c-b5a
+  title: "movk/movz/movn special-form (#imm16 [, lsl #N], hw=N/16 folded into bits[17:16], range-checked)"
+  description: |
+    parse_movk dispatched on movk/movz/movn mnemonic ids before generic loop. #imm16 [, lsl #N] with hw=N/16 folded into bits[17:16]; constant imm range-checked to [0,65535] + folded to (hw<<16)|imm; symbolic imm emits (hw<<16)|(immExpr & 0xffff). Helpers: emit_imm_expr_operand/expr_buf_single_imm/expr_append_raw. Standalone build now includes mnemonic_ids.inc. 11 hand + 10 error + 5 fuzz seeds; host-verified vs format.ExprWriter/EvalConst/OperandWriter.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 435, role: completing}
+  parent: i48c
+  refs: [src/asmparse.asm, tools/netboot-oracle/z80/asmparse_test.go]
+
+- id: i48c-b5b
+  title: "movl pseudo (movz+movk expansion / :abs_g0_nc:+:abs_g1:)"
+  description: |
+    Implement the movl pseudo-instruction: expands to movz+movk pair; handles :abs_g0_nc: and :abs_g1: reloc operands.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i48c
+  refs: [src/asmparse.asm, tools/sam-aarch64/frontend/parser.go]
+
+- id: i48c-b5c
+  title: Barriers dsb/dmb/isb (barrier-arg keyword→CRm)
+  description: |
+    Parse barrier instructions dsb/dmb/isb: map barrier-arg keyword (e.g. sy, ish, nsh, ...) to the CRm encoding field.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i48c
+  refs: [src/asmparse.asm, tools/sam-aarch64/frontend/parser.go]
+
+- id: i48c-b5d
+  title: mrs/msr — sysreg/PSTATE name→OpSysName
+  description: |
+    Parse mrs/msr instructions: map sysreg and PSTATE register name strings to the OpSysName encoding (name lookup table).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i48c
+  refs: [src/asmparse.asm, tools/sam-aarch64/frontend/parser.go]
+
+- id: i48c-b5e
+  title: dc/tlbi — op-name + optional Xt
+  description: |
+    Parse dc/tlbi instructions: map operation-name string to encoding + accept optional Xt register operand.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i48c
+  refs: [src/asmparse.asm, tools/sam-aarch64/frontend/parser.go]
+
+- id: i48c-b5f
+  title: ldr = literal-pool pseudo (OpLitPool)
+  description: |
+    Parse ldr= pseudo-instruction: captures the pool-value expression into an OpLitPool operand for later literal-pool placement and PC-relative load emission.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i48c
+  refs: [src/asmparse.asm, tools/sam-aarch64/frontend/parser.go]
+
+- id: i48c-b6
+  title: Directives parser
+  description: |
+    Parse assembler directives (.set, .balign, .org, .skip, .ltorg, .inst, .section, etc.) into their respective overlay record types via src/asmparse.asm.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i48c
+  refs: [src/asmparse.asm, tools/sam-aarch64/frontend/parser.go]
+
+- id: i48c-b7
+  title: Comments/blank-runs + i39c overlay slot bitfield-packing
+  description: |
+    Parse comment and blank-run record types. Absorbs i39c: implement the overlay slot bitfield-packing polish (design §3.1) as part of the parser completion.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i48c
+  refs: [src/asmparse.asm, "docs/specs/i48-syntactic-encoder-design.md §3.1", i39c]
+
+- id: i48c-b8
+  title: "Integration/fixture round-trip (assembler-coupled, lands last)"
+  description: |
+    Wire the completed text→overlay encoder into the full assembler path and verify end-to-end fixture round-trips. Assembler-coupled (like i41d Brick 4b); depends on B1–B7 being complete. Lands last in the i48c sequence.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i48c
+  refs: [src/assembler.asm, src/asmparse.asm]
+
 - id: i48d
   title: Doc unification — bring tbn-binary-format-reference.md to v2 overlay-only format
   description: |
