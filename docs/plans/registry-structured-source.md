@@ -23,8 +23,20 @@ gate) + the `sysreg-sync` CI job (`.github/workflows/ci.yml`) +
 ## Phase tracking
 
 The work is registered as: `i115` (umbrella) with leaves `i115a` (Phase 1),
-`i115b` (Phase 2), `i115c` (Phase 3), `i115d` (Phase 4), `i115e` (Phase 5). PR-0
-(this PR) lands the spec + this plan + the tracking rows; it completes no leaf.
+`i115b` (Phase 2), `i115c` (Phase 3), `i115d` (Phase 4), `i115e` (Phase 5), plus
+`i115f` (the reshape experiment, run before the bounded-description invariant is
+enforced) and `i115g` (priority queue + dependency graph — a later phase building
+on the core). PR-0 (this PR) lands the spec + this plan + the tracking rows; it
+completes no leaf.
+
+`i115f` (experiment) runs **before** Phase 4: it reshapes today's wall-of-text
+rows into atomic single-status items (each independently audited for information
+loss) and so validates the bounded-description invariant empirically. Because the
+semantic reshape happens here, the Phase-4 importer becomes a **pure
+markdown→YAML format conversion** with no reshaping. `i115g` (priority +
+dependencies) lands after the core (i115a-e) — it adds the ordered queue, the
+`depends_on` DAG, the topological-order validation, and the `ready`/`prioritize`/
+`dep` CLI commands; see the spec's "Priority queue + dependency graph" section.
 
 ## Phase 1 — tool skeleton: validate + gen-to-buffer + round-trip test (PR `i115a`)
 

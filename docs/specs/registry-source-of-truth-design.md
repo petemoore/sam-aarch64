@@ -68,7 +68,7 @@ and shows in the diff.
   title: "..."          # required; <= 120 chars, single line
   description: |        # block scalar; bounded: <= 600 chars, <= 6 lines
     ...
-  status: OPEN          # enum: OPEN | BLOCKED | DONE | WONTFIX
+  status: OPEN          # enum: OPEN | IN_PROGRESS | BLOCKED | DONE | WONTFIX
   blocker: ""           # required iff status==BLOCKED; names the prereq/person
   kind: leaf            # leaf (default) | umbrella
   owner: agent          # required; "agent" | "pete" | a name
@@ -120,16 +120,20 @@ one-PR rule.
 
 ## Status enum
 
-`OPEN` · `BLOCKED` · `DONE` · `WONTFIX` (the existing controlled vocabulary).
+`OPEN` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `WONTFIX`.
 
+- `IN_PROGRESS` is a **first-class status**, not an unstructured 🔨 decoration —
+  so "what is being worked right now" is a real, machine-readable query
+  (`registry list --status IN_PROGRESS` / filter the open view by the status
+  column) rather than prose buried in a cell. It is especially load-bearing on
+  **umbrellas** (an umbrella like `i48c` is legitimately IN_PROGRESS for weeks
+  while its bricks land); a leaf flips OPEN → IN_PROGRESS when picked up → DONE
+  when its PR merges.
 - Payload lives in structured fields, never packed into the token: `BLOCKED` →
   `blocker:`; `DONE` → the `prs` completing entry; `WONTFIX` → reason in
   `description`.
-- Open vs closed half is **computed**: `{OPEN, BLOCKED}` → open view; `{DONE,
-  WONTFIX}` → closed view.
-- "In progress" is a decoration on `OPEN` (e.g. a 🔨 marker in the generated
-  cell), not a distinct status. (A first-class `IN_PROGRESS` can be added later
-  if wanted; deferred for now.)
+- Open vs closed half is **computed**: `{OPEN, IN_PROGRESS, BLOCKED}` → open
+  view; `{DONE, WONTFIX}` → closed view.
 
 ## One-PR / umbrella semantics
 
@@ -194,13 +198,56 @@ message:
    ("split into sub-items").
 8. **Bounded description/status** — `title` ≤ 120 chars/1 line; `description` ≤
    600 chars/6 lines; `blocker` ≤ 200 chars. Detail belongs in the PR/git log.
-   (600 is provisional, confirmed against the corpus at migration.)
+   **The exact bound is PROVISIONAL** — validated empirically by the i115f
+   experiment (which reshapes today's wall-of-text rows into atomic single-status
+   items and independently audits each for information loss). If some nuance
+   proves genuinely irreducible, the bound is raised or a structured `notes`
+   field added, rather than forcing loss.
 9. **Required-fields-per-status** — `DONE` ⇒ closed + (leaf) one completing PR;
-   `BLOCKED` ⇒ non-empty `blocker`; `OPEN` ⇒ open + empty `blocker`; `WONTFIX` ⇒
-   closed.
+   `BLOCKED` ⇒ non-empty `blocker`; `OPEN`/`IN_PROGRESS` ⇒ open + empty
+   `blocker`; `WONTFIX` ⇒ closed.
 10. **Refs well-formed** — every id-shaped ref (`^[iq][0-9]`) exists in the union;
     non-id refs (paths, `§`, URLs) pass through (path-existence is left to the
     existing `check-doc-links` gate, single-source).
+
+## Priority queue + dependency graph (i115g — later phase)
+
+The open items are not just a set — they are a **curated priority queue with a
+dependency DAG**, so an autonomous agent can pull "the next unblocked,
+highest-priority work" deterministically and an interactive session can re-rank
+without breaking dependency safety. This **supersedes** the prose "proposed
+implementation sequence" in `docs/ROADMAP.md` (single source of truth). It is a
+later i115 phase — it builds on the structured source + validator + CLI, so it
+lands after the core migration.
+
+- **Priority order** — a committed ordered list of open **pullable** item ids
+  (highest priority first). "Pullable" = a leaf or a childless item; **umbrellas
+  are not queue entries** (they are spanned by their leaves). The validator
+  enforces the list is a **permutation of exactly the open pullable items** —
+  each once, nothing missing/extra/closed, no umbrellas.
+- **Splitting in place** — when `iN` splits into `iNa`/`iNb`/`iNc`, the queue slot
+  `iN` held is replaced **in place** by its new leaves (the parent becomes an
+  umbrella and leaves the queue). The `split` CLI does this.
+- **Dependencies** — an item may declare `depends_on: [ids]`. The validator
+  enforces **no cycles** (a DAG) and that the priority order is a **topological
+  extension** (nothing sequenced before something it depends on). A dep on a DONE
+  item is trivially satisfied.
+- **Split-rewrites-dependents** — when a depended-on `iN` is split, every item
+  with `depends_on: [iN]` is rewritten to depend on `iN`'s new leaves (default:
+  **all** children — the conservative "the whole thing must finish" reading),
+  which a curator can then narrow to the specific blocking child. The CLI rewrites;
+  curation refines.
+- **Ready set** — `registry ready` returns the open pullable items whose
+  dependencies are all satisfied (DONE), in priority order: the answer to "what
+  can be worked next." Drives both the autonomous loop's work-pull and an
+  interactive "what should I pick up?" suggestion that a human session adjusts.
+
+The CLI gains (this phase): `ready` (the unblocked-work query), `prioritize`/`move`
+(re-rank the queue), `dep add|rm` (edit dependency edges). Open sub-decisions
+(settled at i115g design time): order storage (separate `priority.yaml` vs an
+in-`items.yaml` sequence); whether `depends_on` also derives a "blocked-by-open-dep"
+status vs staying purely advisory for ordering; the split-rewrite default
+(all-children vs prompt).
 
 ## Generator
 
