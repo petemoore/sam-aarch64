@@ -30,6 +30,12 @@
 ; straddles &C000), so under NETBOOT_TLS_CLIENT the table relocates to &FB00 —
 ; above the composite image and below the top of RAM (the host test asserts the
 ; image stays clear of it: tls_client_end < qsq_table).
+;
+; qsq_table MUST be page-aligned (low byte 0): mul8 forms each entry address as
+; base + 2*index by adding only the high byte (the index's low byte is already
+; the address low byte), which is correct only when the base low byte is 0.  Both
+; placements below are page boundaries; the exhaustive mul8 host tests (all 65536
+; operand pairs) would fail immediately if this invariant were ever broken.
                 if defined(NETBOOT_TLS_CLIENT)
 qsq_table:      equ &FB00
                 else
@@ -52,9 +58,10 @@ mul8:
                 ld      l, a
                 ld      h, 0
                 rl      h                       ; H = bit8 -> HL = a+b (0..510)
-                add     hl, hl                  ; 2*(a+b) for the 16-bit stride
-                ld      de, qsq_table
-                add     hl, de
+                add     hl, hl                  ; 2*(a+b) for the 16-bit stride (H = 0..3)
+                ld      a, qsq_table >> 8       ; page-aligned base: add only the high byte
+                add     a, h
+                ld      h, a                    ; HL = &qsq_table[2*(a+b)] (L already correct)
                 ld      e, (hl)
                 inc     hl
                 ld      d, (hl)                 ; DE = QSQ[a+b], kept here across the next lookup
@@ -68,9 +75,10 @@ mul8:
 mul8_diff_pos:
                 ld      l, a
                 ld      h, 0
-                add     hl, hl                  ; 2*|a-b|
-                ld      bc, qsq_table
-                add     hl, bc
+                add     hl, hl                  ; 2*|a-b| (H = 0..1)
+                ld      a, qsq_table >> 8       ; page-aligned base: add only the high byte
+                add     a, h
+                ld      h, a                    ; HL = &qsq_table[2*|a-b|] (L already correct)
                 ld      c, (hl)
                 inc     hl
                 ld      b, (hl)                 ; BC = QSQ[|a-b|]
