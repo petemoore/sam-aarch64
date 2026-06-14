@@ -277,8 +277,43 @@ netboot-server-disk: $(BUILD)/netboot_server_boot.bin $(BUILD)/build-disk
 	$(BUILD)/build-disk -netboot $(BUILD)/netboot_server_boot.bin -netboot-name netboot \
 	    $(BUILD)/netboot_server.mgt
 
+# netboot-serve (i96) — the serve-files TFTP demo server: ARP + TFTP only (no DHCP,
+# no Pi PXE blob), serving a few files baked into the binary to a plain TFTP/curl
+# client.  Two builds from one source:
+#   * the host-test binary (NETBOOT_HOSTTEST) excludes serve_main + eeprom.asm so
+#     the harness drives serve_serve_once directly; netboot_serve_test.go asserts a
+#     full ARP + bare-RRQ->DATA + optioned-RRQ->OACK + miss->ERROR(1) session on the
+#     virtual wire matches the Go serve.Responder.OnFrame authority byte-for-byte.
+#   * the bootable binary (no flag) includes serve_main + eeprom.asm so it reads the
+#     SAM's real MAC/IP, provisions the baked-in demo files, and serves on real
+#     Trinity (the disk built by netboot-serve-disk).
+$(BUILD)/netboot_serve.bin $(BUILD)/netboot_serve.map: src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_HOSTTEST=1 \
+	    --obj=$(BUILD)/netboot_serve.bin \
+	    --mapfile=$(BUILD)/netboot_serve.map \
+	    src/netboot/netboot_serve.asm
+
+netboot-serve: $(BUILD)/netboot_serve.bin $(BUILD)/netboot_serve.map
+
+# The bootable serve-files binary: the full program including the EEPROM config
+# read + provision_demo + the serve_main forever-loop, for real Trinity.
+$(BUILD)/netboot_serve_boot.bin: src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/netboot_serve_boot.bin src/netboot/netboot_serve.asm
+
+netboot-serve-boot: $(BUILD)/netboot_serve_boot.bin
+
+# A bootable SAM disk image that auto-runs the serve-files TFTP demo on power-on.
+# Boot it on a SAM + Trinity, then from any LAN machine `tftp <sam-ip>` + `get
+# hello.txt`, or `curl tftp://<sam-ip>/hello.txt` (see
+# docs/notes/netboot-trinity-testing.md "Serve-files demo").
+netboot-serve-disk: $(BUILD)/netboot_serve_boot.bin $(BUILD)/build-disk
+	$(BUILD)/build-disk -netboot $(BUILD)/netboot_serve_boot.bin -netboot-name serve \
+	    $(BUILD)/netboot_serve.mgt
+
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve
 
 ci-netboot-z80: netboot-z80-routines
 	cd tools/netboot-oracle/z80 && go test ./...

@@ -178,6 +178,93 @@ OFFER + booting. Emulation-verified is not hardware-verified (CLAUDE.md §5).
 
 ---
 
+## Serve-files demo (i96) — a plain-TFTP server, no Pi needed
+
+**What it is.** A focused demo that turns the SAM + Trinity into an ordinary TFTP
+server. It serves a couple of small files **baked into the program** to any TFTP
+client on the LAN — busybox/BSD `tftp`, `curl tftp://…`, a Windows `tftp` client.
+**TFTP only: no DHCP, no Pi, no PXE.** That makes it the easiest netboot program to
+prove end-to-end: you do not need a Raspberry Pi or any DHCP setup — just a machine
+with a stock `tftp`/`curl` client and the SAM's IP. It is distinct from the Pi
+netboot server (increment 2), which adds DHCP + the PXE option-43 blob a Pi
+requires.
+
+It boots, reads the SAM's MAC + IP from the EEPROM, provisions the demo files,
+initialises the ENC28J60, then loops forever serving:
+
+- **ARP** who-has for the SAM's IP → an ARP reply (so a plain TFTP client can
+  resolve the SAM's MAC with no DHCP);
+- **TFTP RRQ** → the file by name. A *bare* RRQ with no options (what a classic
+  `tftp get` sends) is answered per RFC 2347 with **DATA block 1 directly** at the
+  512-byte default — no OACK; an RRQ that *does* request options (e.g. `curl`'s
+  `tsize`) is answered with an **OACK** then the streamed transfer. A request for a
+  name that is not baked in gets **ERROR(1) File not found**, and the server keeps
+  serving.
+
+The baked-in files are `hello.txt` and `readme.txt` (a couple of lines each).
+
+**Build the disk:**
+
+```sh
+make netboot-serve-disk
+# -> build/netboot_serve.mgt   (B-DOS boot + AUTO + the demo server at &8000)
+```
+
+**Run it:**
+
+1. Boot `build/netboot_serve.mgt` on the SAM + Trinity. As with the smoke test, a
+   bring-up failure sets a **border colour and halts** (red = no Trinity / blank
+   EEPROM settings; blue = `drv_init` failed). On success it is silently serving.
+
+2. From any machine on the same LAN, fetch a file by name:
+
+   ```sh
+   # classic tftp client (bare RRQ -> DATA, no options)
+   tftp <sam-ip>
+   tftp> binary
+   tftp> get hello.txt
+   tftp> get readme.txt
+   tftp> quit
+   cat hello.txt          # "Hello from a SAM Coupe over Trinity TFTP!"
+
+   # or curl (sends a tsize option -> OACK path)
+   curl -o hello.txt tftp://<sam-ip>/hello.txt
+   curl tftp://<sam-ip>/readme.txt
+   ```
+
+   A request for a name that is not baked in returns "File not found" and the
+   server keeps serving:
+
+   ```sh
+   tftp> get nope.txt     # Error code 1: File not found
+   tftp> get hello.txt    # still works
+   ```
+
+3. (Optional) Watch the exchange:
+
+   ```sh
+   sudo tcpdump -i eth0 -n 'arp or port 69'
+   ```
+
+   You should see the client's `ARP who-has` answered by the SAM, then
+   `TFTP … RRQ "hello.txt" octet …` followed by an OACK (curl) or a DATA stream
+   (bare tftp) and the ACKs.
+
+**What a pass looks like.** `hello.txt` / `readme.txt` arrive byte-for-byte
+identical to the baked-in text. Both the bare-RRQ (`tftp`) and the optioned-RRQ
+(`curl`) paths fetch correctly; a missing name returns File-not-found without
+killing the server.
+
+**What this confirms / does not (host-verified vs hardware-gated).** The host
+harness already proves the ARP reply + the bare-RRQ→DATA path + the optioned-RRQ→
+OACK path + ERROR(1)-on-miss byte-for-byte over the i80 emulation
+(`netboot_serve_test.go`, `make ci-netboot-z80`). This on-hardware run confirms what
+the harness cannot: the real ENC28J60 silicon timing, the EEPROM config read, and a
+real stock TFTP/curl client interoperating with the SAM. Emulation-verified is not
+hardware-verified (CLAUDE.md §5).
+
+---
+
 ## Later increments (placeholders — filled in as they land)
 
 - **Increment 3 — the client (i82).** Boot the client disk, point it at a TFTP
