@@ -125,6 +125,14 @@ shr1_bcde:      MACRO
                 rr      e
 ENDM
 
+; woff_body — HL := (sha_wt) + DE, the address of W[t-k] (or its LSB) for a
+; signed byte offset already in DE. Inlined in the extend loop to elide the
+; call/ret. Clobbers HL; consumes DE.
+woff_body:      MACRO
+                ld      hl, (sha_wt)
+                add     hl, de
+ENDM
+
 ; ld_bcde — load the 4-byte big-endian word at (HL) into B,C,D,E in natural
 ; order (B=byte0/MSB ... E=byte3/LSB). HL ends at word+3. Clobbers HL.
 ld_bcde:        MACRO
@@ -453,8 +461,8 @@ sha256_compress:
                 ; --- W[16..63] = s1(W[t-2]) + W[t-7] + s0(W[t-15]) + W[t-16] ---
                 ; t runs 16..63; each W is a 4-byte big-endian word at SHA_W+4*t.
                 ; sha_wt holds the address of W[t]; the source words are at fixed
-                ; negative offsets from it (-k*4). Z80 cannot `add hl,ix`, so the
-                ; pointer arithmetic is done in HL via the sha_woff helper.
+                ; negative offsets from it (-k*4). The woff_body macro forms
+                ; W[t]+offset in HL inline.
                 ld      hl, SHA_W+16*4
                 ld      (sha_wt), hl            ; W[t] for t=16
                 ld      a, 48                   ; 48 words to extend (16..63);
@@ -463,14 +471,14 @@ sha_extend:
                 ; tmp2 = s0(W[t-15])  (computed first; the running sum lives in
                 ; sha_tmpa, which sha_sigma0/1 overwrite, so stash s0 aside)
                 ld      de, -15*4
-                call    sha_woff
+                woff_body
                 call    sha_sigma0
                 ld      hl, sha_tmpa
                 ld      de, sha_tmp2
                 copy4_body
                 ; sha_tmpa = s1(W[t-2])  (the running accumulator)
                 ld      de, -2*4
-                call    sha_woff                ; HL -> W[t-2]
+                woff_body                        ; HL -> W[t-2]
                 call    sha_sigma1
                 ; sha_tmpa += s0(W[t-15])
                 ld      de, sha_tmp2+3
@@ -478,13 +486,13 @@ sha_extend:
                 add4_body
                 ; sha_tmpa += W[t-7]
                 ld      de, -7*4+3
-                call    sha_woff                ; HL -> W[t-7]+3 (LSB)
+                woff_body                        ; HL -> W[t-7]+3 (LSB)
                 ex      de, hl                  ; DE -> W[t-7]+3
                 ld      hl, sha_tmpa+3
                 add4_body
                 ; sha_tmpa += W[t-16]
                 ld      de, -16*4+3
-                call    sha_woff                ; HL -> W[t-16]+3 (LSB)
+                woff_body                        ; HL -> W[t-16]+3 (LSB)
                 ex      de, hl                  ; DE -> W[t-16]+3
                 ld      hl, sha_tmpa+3
                 add4_body
@@ -624,16 +632,6 @@ sha_addstate:
 ; ===========================================================================
 ; 32-bit word helpers. Words are 4 bytes BIG-ENDIAN (byte 0 = MSB).
 ; ===========================================================================
-
-; ---------------------------------------------------------------------------
-; sha_woff — return (sha_wt + DE) in HL: the address of W[t-k] for a signed
-; offset DE = -k*4. In: DE = signed byte offset. Out: HL = sha_wt + DE.
-; Clobbers HL only (DE preserved-as-input is consumed).
-; ---------------------------------------------------------------------------
-sha_woff:
-                ld      hl, (sha_wt)
-                add     hl, de
-                ret
 
 ; ---------------------------------------------------------------------------
 ; Rotation strategy. Each sigma/Sigma term is a fixed-distance rotate-right,
