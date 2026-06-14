@@ -225,10 +225,8 @@ wv_g:          defs 4
 wv_h:          defs 4
 sha_t1:         defs 4
 sha_t2:         defs 4
-sha_tmp1:       defs 4
-sha_tmp2:       defs 4
-sha_tmpa:       defs 4                  ; helper result word
-sha_word:       defs 4                  ; rotate/shift workspace
+sha_tmp2:       defs 4                  ; s0(W[t-15]) stash during the extend loop
+sha_tmpa:       defs 4                  ; sigma/Ch/Maj result word
 sha_wt:         defs 2                  ; address of W[t] during the extend loop
 sha_wptr:       defs 2                  ; address of W[t] during the round loop
 sha_kt:         defs 2                  ; address of K[t] during the round loop
@@ -651,19 +649,19 @@ sha_woff:
 ; ---------------------------------------------------------------------------
 ; The sigma/Sigma functions compute their three rotated/shifted terms in
 ; registers (B,C,D,E = byte0/MSB..byte3/LSB), XOR-reducing into sha_tmpa. Each
-; term reloads the source from sha_word (a 1-time copy of the input word at
-; entry), applies the whole-byte rotate by register relabel, then the residual
-; bit rotate/shift. The decompositions mirror the verified memory-based ones:
-; the byte-for-byte NIST-vector test is the guardrail.
+; loads the word into B,C,D,E and rotates it PROGRESSIVELY through the three
+; targets — st_bcde_tmpa at the first, xor_bcde_tmpa at the next two — so a
+; rotated form is never recomputed from scratch. The two sigmas with a SHR term
+; (s0,s1) save the source pointer and reload it for the shift (which loses bits
+; and cannot sit in the rotation chain). Each composed step's NET rotation
+; equals the term's target; the byte-for-byte NIST-vector test is the guardrail.
 ; ---------------------------------------------------------------------------
 
 ; sha_sigma0 — s0(x) = ROTR7(x) ^ ROTR18(x) ^ SHR3(x). In: HL -> x.
 ; Out: sha_tmpa = result. Clobbers A,BC,DE,HL.
 sha_sigma0:
-                ld      de, sha_word
-                copy4_body                      ; sha_word = x (HL=src, DE=dst)
-                ld      hl, sha_word
-                ld_bcde
+                push    hl                       ; save source (the shift term reloads)
+                ld_bcde                          ; B,C,D,E <- x
                 ; term1 = ROTR7 = ROTR8 + ROTL1
                 rotr8_bcde
                 rotl1_bcde
@@ -675,7 +673,7 @@ sha_sigma0:
                 rotr1_bcde
                 xor_bcde_tmpa
                 ; term3 = SHR3(x) (reload pristine; shift loses bits)
-                ld      hl, sha_word
+                pop     hl
                 ld_bcde
                 shr1_bcde
                 shr1_bcde
@@ -685,10 +683,8 @@ sha_sigma0:
 
 ; sha_sigma1 — s1(x) = ROTR17(x) ^ ROTR19(x) ^ SHR10(x). In: HL -> x.
 sha_sigma1:
-                ld      de, sha_word
-                copy4_body
-                ld      hl, sha_word
-                ld_bcde
+                push    hl                       ; save source (the shift term reloads)
+                ld_bcde                          ; B,C,D,E <- x
                 ; term1 = ROTR17 = ROTR16 + ROTR1
                 rotr16_bcde
                 rotr1_bcde
@@ -698,7 +694,7 @@ sha_sigma1:
                 rotr1_bcde
                 xor_bcde_tmpa
                 ; term3 = SHR10 = SHR8 + SHR2 (reload pristine; shift loses bits)
-                ld      hl, sha_word
+                pop     hl
                 ld_bcde
                 ; SHR8: [b0 b1 b2 b3] -> [0 b0 b1 b2]
                 ld      e, d
@@ -711,8 +707,8 @@ sha_sigma1:
                 ret
 
 ; sha_bigsigma0 — S0(x) = ROTR2(x) ^ ROTR13(x) ^ ROTR22(x). In: HL -> x.
-; The rotation chain needs the word only once, so it loads B,C,D,E straight
-; from the source — no copy to sha_word.
+; A pure rotate (no SHR term), so the chain needs the word only once: it loads
+; B,C,D,E straight from the source, no save/reload.
 sha_bigsigma0:
                 ld_bcde                          ; B,C,D,E <- x (HL walks to x+3)
                 ; term1 = ROTR2
