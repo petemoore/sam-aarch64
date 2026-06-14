@@ -25,7 +25,7 @@ SEMA_DIR="${ALOOP_SEMA_DIR:-$HOME/.claude/autonomous-loop}"
 STARTUP_PROMPT="${ALOOP_PROMPT:-Continue per docs/ROADMAP.md. AUTONOMOUS-LOOP RUN: after you complete each work item (a merged PR), run 'touch ~/.claude/autonomous-loop/task-done' and end your turn -- the monitor will then show you /context; if it reports under 20% free context, write your ROADMAP Current-State handover and then run 'touch ~/.claude/autonomous-loop/wound-down', otherwise pick the next item and continue. Never block on Pete while unblocked work remains -- put any question in the qN registry and keep working. Full protocol: tools/autonomous-loop/README.md.}"
 POLL="${ALOOP_POLL:-10}"                    # seconds between polls
 HANG_TIMEOUT="${ALOOP_HANG_TIMEOUT:-1800}"  # seconds with no signal -> nudge an idle session
-CLEAR_SETTLE="${ALOOP_CLEAR_SETTLE:-2}"     # seconds for /clear to settle before re-prompting
+CLEAR_SETTLE="${ALOOP_CLEAR_SETTLE:-30}"    # seconds for /clear to fully reset the TUI before re-prompting
 SUBMIT=$'\r'                                # Enter key -- \r confirmed to submit in the Claude Code TUI (live test 2026-06-15)
 
 TASK_DONE="$SEMA_DIR/task-done"
@@ -46,7 +46,11 @@ log "semaphores under: $SEMA_DIR"
 last_signal=$SECONDS
 while true; do
   if [ -e "$WOUND_DOWN" ]; then
-    log "WOUND_DOWN -> /clear + restart"
+    log "WOUND_DOWN -> flush input, /clear, settle ${CLEAR_SETTLE}s, restart"
+    # Submit any half-typed line first so /clear starts on a clean input line
+    # and can't get merged into a partial human message. (Pete, 2026-06-15.)
+    screen -S "$SESSION" -p "$WINDOW" -X stuff "$SUBMIT"
+    sleep 1
     stuff "/clear"
     sleep "$CLEAR_SETTLE"
     stuff "$STARTUP_PROMPT"
