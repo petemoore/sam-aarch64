@@ -283,6 +283,27 @@ parse_operand_reg:
                 inc     hl
                 ld      a, (hl)             ; A = span_len low (reg names < 256)
                 ex      de, hl              ; HL = span_ptr
+                ; check for condition-code name before register (Go: matchCond first,
+                ; parser.go:1027)
+                call    match_cond          ; CY set + A = CondCode if matched
+                jr      nc, por_try_reg     ; not a cond name -> try register
+                ; condition-code matched: A = cond value; save it across parse_advance_tok
+                ld      (MC_COND), a
+                call    parse_advance_tok   ; consume the cond token
+                ; emit [OP_KIND_COND, condValue] at (PI_OPSPTR)
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_COND
+                inc     hl
+                ld      a, (MC_COND)
+                ld      (hl), a
+                inc     hl
+                ld      (PI_OPSPTR), hl
+                or      a                   ; clear carry: success
+                ret
+por_try_reg:
+                ; restore HL = span_ptr and A = span_len for match_reg
+                ld      hl, (MC_PTR)
+                ld      a, (MC_LEN)
                 call    match_reg           ; CY = is-reg, B = kind, C = reg
                 jp      nc, parse_operand_expr ; not a register -> symbol expression
                 ; register matched: save kind (B) and reg (C) and consume the token
@@ -368,17 +389,6 @@ por_shift_emit:
                 ld      (hl), a
                 inc     hl
                 ; write expr length (LE u16) and copy expr bytes
-                ld      de, (EXPR_PTR)
-                ld      bc, EXPR_BUF
-                ex      de, hl              ; HL = EXPR_PTR, DE = EXPR_BUF
-                or      a
-                sbc     hl, de              ; HL = expr length
-                ex      de, hl              ; DE = expr length, HL = PI_OPSPTR+4
-                ld      hl, (PI_OPSPTR)
-                ld      de, 4
-                add     hl, de              ; HL -> len_lo slot
-                ld      a, (POR_WIDTH)      ; recalculate HL position (already at len_lo)
-                ; recompute expr length
                 ld      hl, (EXPR_PTR)
                 ld      de, EXPR_BUF
                 or      a
@@ -1828,6 +1838,124 @@ SHIFT_NAMES:
                 defb    0                   ; sentinel
 
 ; ===========================================================================
+; match_cond — is the identifier (HL = ptr, A = length) a condition-code name?
+; (Port of matchCond, parser.go:1416, + CondCode.Name(), operands.go:128.) The
+; 16 canonical names in value order are: eq(0) ne(1) cs(2) cc(3) mi(4) pl(5)
+; vs(6) vc(7) hi(8) ls(9) ge(10) lt(11) gt(12) le(13) al(14) nv(15), plus two
+; GNU as aliases hs(->2) and lo(->3). Values are the aarch64 condition-code
+; ISA encoding.
+; Entry: HL = name ptr, A = length. Exit: CY set with A = CondCode value
+; (0..15) if matched; CY clear otherwise. Clobbers A/BC/DE/HL.
+; ===========================================================================
+match_cond:
+                ld      (MC_PTR), hl
+                ld      (MC_LEN), a
+                ld      de, COND_NAMES
+mc_loop:
+                ld      a, (de)             ; name length (0 = end)
+                or      a
+                jr      z, mc_notfound
+                ld      b, a                ; B = name length
+                ld      a, (MC_LEN)
+                cp      b
+                jr      nz, mc_skip         ; length mismatch
+                push    de                  ; save entry pointer (at length byte)
+                inc     de                  ; DE -> entry name bytes
+                ld      hl, (MC_PTR)        ; HL -> candidate bytes
+mc_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, mc_cmp_fail
+                inc     de
+                inc     hl
+                djnz    mc_cmp
+                ; matched: DE -> value byte
+                ld      a, (de)
+                pop     hl                  ; discard saved entry pointer
+                scf                         ; CY set: matched, A = value
+                ret
+mc_cmp_fail:
+                pop     de                  ; restore entry pointer (length byte)
+mc_skip:
+                ; advance DE past: length(1) + name[len] + value(1)
+                ld      a, (de)
+                add     a, 2
+                add     a, e
+                ld      e, a
+                jr      nc, mc_skip_nc
+                inc     d
+mc_skip_nc:
+                jr      mc_loop
+mc_notfound:
+                or      a                   ; clear carry: not matched
+                ret
+
+; ===========================================================================
+; COND_NAMES — condition-code name → CondCode value table (port of matchCond,
+; parser.go:1416 + CondCode.Name(), operands.go:128). Record: len:1 | name[len]
+; | value:1; a 0-length record terminates. The 16 canonical names appear first
+; in value order (values 0..15 are the aarch64 ISA encoding), followed by the
+; two GNU as aliases hs(->2/CS) and lo(->3/CC). Names are exact lowercase.
+; ===========================================================================
+COND_NAMES:
+                defb    2
+                defm    "eq"
+                defb    0                   ; CondEQ
+                defb    2
+                defm    "ne"
+                defb    1                   ; CondNE
+                defb    2
+                defm    "cs"
+                defb    2                   ; CondCS
+                defb    2
+                defm    "cc"
+                defb    3                   ; CondCC
+                defb    2
+                defm    "mi"
+                defb    4                   ; CondMI
+                defb    2
+                defm    "pl"
+                defb    5                   ; CondPL
+                defb    2
+                defm    "vs"
+                defb    6                   ; CondVS
+                defb    2
+                defm    "vc"
+                defb    7                   ; CondVC
+                defb    2
+                defm    "hi"
+                defb    8                   ; CondHI
+                defb    2
+                defm    "ls"
+                defb    9                   ; CondLS
+                defb    2
+                defm    "ge"
+                defb    10                  ; CondGE
+                defb    2
+                defm    "lt"
+                defb    11                  ; CondLT
+                defb    2
+                defm    "gt"
+                defb    12                  ; CondGT
+                defb    2
+                defm    "le"
+                defb    13                  ; CondLE
+                defb    2
+                defm    "al"
+                defb    14                  ; CondAL
+                defb    2
+                defm    "nv"
+                defb    15                  ; CondNV
+                ; GNU as aliases (parser.go:1421-1428)
+                defb    2
+                defm    "hs"
+                defb    2                   ; alias for CondCS
+                defb    2
+                defm    "lo"
+                defb    3                   ; alias for CondCC
+                defb    0                   ; sentinel
+
+; ===========================================================================
 ; parse_operand_mem — parse a memory operand starting with `[`. (Port of
 ; parseMem, parser.go:1278-1388.) Handles all 7 MEM shapes:
 ;   MemBase           [xn]
@@ -2579,6 +2707,9 @@ ME_PTR:         defs 2          ; match_extend: saved candidate pointer
 ME_LEN:         defs 1          ; match_extend: saved candidate length
 MSK_PTR:        defs 2          ; match_shift_kind: saved candidate pointer
 MSK_LEN:        defs 1          ; match_shift_kind: saved candidate length
+MC_PTR:         defs 2          ; match_cond: saved candidate pointer
+MC_LEN:         defs 1          ; match_cond: saved candidate length
+MC_COND:        defs 1          ; parse_operand_reg: matched condition-code value
 POR_KIND:       defs 1          ; parse_operand_reg: saved register kind
 POR_REG:        defs 1          ; parse_operand_reg: saved register number
 POR_WIDTH:      defs 1          ; parse_operand_reg: 0=W, 1=X (shift/extend width)
