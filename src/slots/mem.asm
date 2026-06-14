@@ -8,9 +8,8 @@
 ;   tools/refenc/pass2.go:668-716  (memInstSize / memInstOpc helpers)
 ;
 ; OpMem is operand-kind-driven (not slot-driven); the form table has no
-; MEM-slot entries.  Dispatch happens via try_mnemonic_intercept
-; (src/intercepts.asm) for the eleven memory mnemonics that share
-; this encoding family:
+; MEM-slot entries.  In production the v2 instruction overlay (insn_run.asm)
+; pre-folds the eleven memory mnemonics that share this encoding family:
 ;   ldr=5    str=6    ldp=7    stp=8
 ;   ldrb=54  strb=55  ldrh=56  strh=57
 ;   stur=74  ldur=75
