@@ -43,14 +43,20 @@ qsq_table:      equ &C000
                 endif
 
 ; ---------------------------------------------------------------------------
-; mul8 — HL = A * E (8x8 -> 16) via the quarter-square identity
-;   a*b = floor((a+b)^2/4) - floor((a-b)^2/4) = QSQ[a+b] - QSQ[|a-b|].
-; qsq_table must already be built (the caller runs qsq_init once at entry).
-; In: A, E = the two byte operands (D is ignored). Out: HL = A*E.
-; Clobbers A, BC, DE, HL. (Every caller reloads BC/DE after the call, so mul8
-; does not preserve them — that saves the push/pop on the hot inner multiply.)
+; mul8_body — the quarter-square 8×8→16 multiply, defined as a MACRO so it can be
+; emitted both as the mul8 subroutine (below) and INLINED at the two hottest
+; x25519 inner-loop call sites (kmul16_inner, fe_sqr_inner) to elide the call/ret
+; (27 T-states) on each of the ~1.6M field multiplies — the bulk of the x25519
+; T-state cost. The macro body is the single source-of-truth (the DRY extraction
+; is preserved): the assembled code is duplicated, the source is not.
+;
+; HL = A * E (8x8 -> 16) via  a*b = QSQ[a+b] - QSQ[|a-b|].  qsq_table must already
+; be built (the caller runs qsq_init once at entry).  In: A, E = the two byte
+; operands (D is ignored).  Out: HL = A*E.  Clobbers A, BC, DE, HL.  The branch
+; over neg uses jr nc,$+4 (skip the 2-byte neg) so the body carries NO internal
+; label and can expand any number of times.
 ; ---------------------------------------------------------------------------
-mul8:
+mul8_body:      MACRO
                 ld      b, a                    ; B = multiplier
                 ld      c, e                    ; C = multiplicand
                 ; QSQ[a+b]: build the sum index (0..510) in HL, fetch the entry.
@@ -70,9 +76,8 @@ mul8:
                 ; reuses BC for the table base and entry — no push/pop of QSQ[a+b].
                 ld      a, b
                 sub     c                       ; A = a-b, CF if a<b
-                jr      nc, mul8_diff_pos
+                jr      nc, $+4                  ; skip the 2-byte neg when a >= b
                 neg                             ; A = b-a (absolute value)
-mul8_diff_pos:
                 ld      l, a
                 ld      h, 0
                 add     hl, hl                  ; 2*|a-b| (H = 0..1)
@@ -86,6 +91,13 @@ mul8_diff_pos:
                 ld      h, d                    ; HL = QSQ[a+b]
                 or      a                       ; clear carry
                 sbc     hl, bc                  ; HL = QSQ[a+b] - QSQ[|a-b|] = a*b
+ENDM
+
+; mul8 — the subroutine form (one emitted copy of mul8_body + ret), for the call
+; sites that are not hot enough to inline: fe_sqr_diag, poly1305, and the host
+; field tests that call mul8 directly.
+mul8:
+                mul8_body
                 ret
 
 ; ---------------------------------------------------------------------------
