@@ -46,8 +46,6 @@ FE_ACC:         defs 34                 ; the reduction accumulator (< 2^263)
 fe_ap:          defs 2                  ; &a[i] in the schoolbook outer loop
 fe_pp:          defs 2                  ; &PROD[i] in the schoolbook outer loop
 fe_ai:          defs 1                  ; a[i], the current multiplier byte
-fe_rp:          defs 2                  ; running source pointer (b / high)
-fe_pq:          defs 2                  ; running PROD / T destination pointer
 fe_car:         defs 1                  ; the inner-loop byte carry
 
 INV_I:          defs 32                 ; fe_invert: the saved input i
@@ -163,7 +161,7 @@ fe_sub_subb:
                 jp      fe_store_out
 
 ; ===========================================================================
-; fe_mul — FE_OUT = (FE_A * FE_B) mod p.  Clobbers A, BC, DE, HL + scratch.
+; fe_mul — FE_OUT = (FE_A * FE_B) mod p.  Clobbers A, BC, DE, HL, IX, IY + scratch.
 ; ===========================================================================
 fe_mul:
                 call    fe_schoolbook           ; FE_PROD = FE_A * FE_B (64 bytes)
@@ -175,7 +173,7 @@ fe_mul:
 ; 3 bytes (0x01DB41), so a narrow schoolbook — FE_A's 32 bytes times the 3
 ; constant bytes, 96 mul8 — replaces the full 32×32 (1024 mul8) of fe_mul against
 ; a zero-padded operand.  The 34-byte product reuses the shared reduction path.
-; Clobbers A, BC, DE, HL + scratch.
+; Clobbers A, BC, DE, HL, IX, IY + scratch.
 ; ===========================================================================
 fe_mul121665:
                 ld      hl, FE_PROD             ; zero PROD (65 bytes)
@@ -194,26 +192,21 @@ fe_121665_outer:
                 ld      hl, (fe_ap)
                 ld      a, (hl)
                 ld      (fe_ai), a              ; a[i]
-                ld      hl, FE_121665
-                ld      (fe_rp), hl             ; constant byte source (3 bytes)
-                ld      hl, (fe_pp)
-                ld      (fe_pq), hl
+                ld      ix, FE_121665           ; constant byte source (3 bytes), held in IX
+                ld      iy, (fe_pp)             ; PROD dest, held in IY
                 xor     a
                 ld      (fe_car), a
                 ld      b, 3                    ; inner: the 3 constant bytes
 fe_121665_inner:
                 push    bc
-                ld      hl, (fe_rp)
-                ld      a, (hl)
-                inc     hl
-                ld      (fe_rp), hl
+                ld      a, (ix+0)
+                inc     ix
                 ld      e, a
                 ld      d, 0
                 ld      a, (fe_ai)
                 call    mul8                    ; HL = a[i] * c[j]
 
-                ld      de, (fe_pq)
-                ld      a, (de)
+                ld      a, (iy+0)
                 ld      c, a
                 ld      b, 0
                 add     hl, bc                  ; += PROD[i+j]
@@ -223,15 +216,15 @@ fe_121665_inner:
                 add     hl, bc                  ; += carry
 
                 ld      a, l
-                ld      (de), a
-                inc     de
-                ld      (fe_pq), de
+                ld      (iy+0), a
+                inc     iy
                 ld      a, h
                 ld      (fe_car), a
                 pop     bc
                 djnz    fe_121665_inner
 
-                ld      de, (fe_pq)             ; propagate the final row carry upward
+                push    iy                      ; propagate the final row carry upward
+                pop     de
                 ld      a, (fe_car)
 fe_121665_carry:
                 or      a
@@ -263,7 +256,7 @@ fe_121665_carry_done:
 ; off-diagonal byte products once, doubles, then adds the 32 diagonal a[i]^2
 ; terms: ~528 mul8 calls vs the 1024 of fe_mul(a,a).  The Montgomery ladder is
 ; squaring-heavy (4 of every ladderstep's ~10 multiplies, plus 254 in fe_invert),
-; so this is the dominant x25519 win.  Clobbers A, BC, DE, HL + scratch.
+; so this is the dominant x25519 win.  Clobbers A, BC, DE, HL, IX, IY + scratch.
 ; ===========================================================================
 fe_sqr:
                 call    fe_sqr_schoolbook       ; FE_PROD = FE_A^2 (64 bytes)
@@ -334,7 +327,12 @@ fe_frz_sub:
 ; ---------------------------------------------------------------------------
 ; fe_schoolbook — FE_PROD (64 bytes) = FE_A (32) * FE_B (32), schoolbook.
 ; PROD zeroed first; each row i adds A[i]*B[j] into PROD[i+j] with a running
-; carry, then the final carry is propagated upward.  Clobbers A, BC, DE, HL.
+; carry, then the final carry is propagated upward.  The inner loop holds its
+; running pointers in IX (B source) and IY (PROD dest) across the mul8 call —
+; mul8 preserves IX/IY — so each iteration avoids reloading and storing the
+; pointers through memory, which dominated the old per-byte cost.  The other
+; byte-radix loops (fe_sqr_schoolbook off-diagonal, fe_mul121665, fe_mul38_high)
+; use the same IX/IY idiom.  Clobbers A, BC, DE, HL, IX, IY.
 ; ---------------------------------------------------------------------------
 fe_schoolbook:
                 ld      hl, FE_PROD             ; zero PROD (65 bytes)
@@ -354,26 +352,21 @@ fe_sb_outer:
                 ld      a, (hl)
                 ld      (fe_ai), a
 
-                ld      hl, FE_B
-                ld      (fe_rp), hl
-                ld      hl, (fe_pp)
-                ld      (fe_pq), hl
+                ld      ix, FE_B                ; B source pointer, held across the inner loop
+                ld      iy, (fe_pp)             ; PROD dest pointer, held across the inner loop
                 xor     a
                 ld      (fe_car), a
                 ld      b, 32                   ; inner: j = 0..31
 fe_sb_inner:
                 push    bc
-                ld      hl, (fe_rp)
-                ld      a, (hl)
-                inc     hl
-                ld      (fe_rp), hl
+                ld      a, (ix+0)               ; B[j]
+                inc     ix
                 ld      e, a
                 ld      d, 0
                 ld      a, (fe_ai)
                 call    mul8                    ; HL = A[i] * B[j]
 
-                ld      de, (fe_pq)
-                ld      a, (de)
+                ld      a, (iy+0)
                 ld      c, a
                 ld      b, 0
                 add     hl, bc                  ; += PROD[i+j]
@@ -383,15 +376,15 @@ fe_sb_inner:
                 add     hl, bc                  ; += carry
 
                 ld      a, l
-                ld      (de), a
-                inc     de
-                ld      (fe_pq), de
+                ld      (iy+0), a
+                inc     iy
                 ld      a, h
                 ld      (fe_car), a
                 pop     bc
                 djnz    fe_sb_inner
 
-                ld      de, (fe_pq)             ; add final carry at PROD[i+32]..
+                push    iy                      ; add final carry at PROD[i+32]..
+                pop     de
                 ld      a, (fe_car)
 fe_sb_carry:
                 or      a
@@ -422,8 +415,9 @@ fe_sb_carry_done:
 ; i multiplies a[i] by a[i+1..31] into PROD[2i+1..], 496 products total — half a
 ; full schoolbook).  Phase 2 doubles PROD in place (left shift by 1).  Phase 3
 ; adds the 32 diagonal a[i]^2 terms at PROD[2i].  The exact square stays < 2^512,
-; so the doubled-then-diagonal sum never carries past PROD[63].
-; Clobbers A, BC, DE, HL.
+; so the doubled-then-diagonal sum never carries past PROD[63].  The off-diagonal
+; phase holds its pointers in IX/IY across mul8 (the double/diagonal phases don't).
+; Clobbers A, BC, DE, HL, IX, IY.
 ; ---------------------------------------------------------------------------
 fe_sqr_schoolbook:
                 ld      hl, FE_PROD             ; zero PROD (65 bytes)
@@ -444,25 +438,22 @@ fe_sqr_outer:
                 ld      a, (hl)
                 ld      (fe_ai), a              ; a[i]
                 inc     hl
-                ld      (fe_rp), hl             ; b-source starts at a[i+1]
-                ld      hl, (fe_pp)
-                ld      (fe_pq), hl             ; PROD dest starts at PROD[2i+1]
+                push    hl                      ; b-source (a[i+1]) held in IX
+                pop     ix
+                ld      iy, (fe_pp)             ; PROD dest (PROD[2i+1]) held in IY
                 xor     a
                 ld      (fe_car), a
                                                 ; B still = outer counter = inner count
 fe_sqr_inner:
                 push    bc
-                ld      hl, (fe_rp)
-                ld      a, (hl)
-                inc     hl
-                ld      (fe_rp), hl
+                ld      a, (ix+0)
+                inc     ix
                 ld      e, a
                 ld      d, 0
                 ld      a, (fe_ai)
                 call    mul8                    ; HL = a[i] * a[j]
 
-                ld      de, (fe_pq)
-                ld      a, (de)
+                ld      a, (iy+0)
                 ld      c, a
                 ld      b, 0
                 add     hl, bc                  ; += PROD[i+j]
@@ -472,15 +463,15 @@ fe_sqr_inner:
                 add     hl, bc                  ; += carry
 
                 ld      a, l
-                ld      (de), a
-                inc     de
-                ld      (fe_pq), de
+                ld      (iy+0), a
+                inc     iy
                 ld      a, h
                 ld      (fe_car), a
                 pop     bc
                 djnz    fe_sqr_inner
 
-                ld      de, (fe_pq)             ; propagate the final row carry upward
+                push    iy                      ; propagate the final row carry upward
+                pop     de
                 ld      a, (fe_car)
 fe_sqr_carry:
                 or      a
@@ -558,7 +549,7 @@ fe_sqr_diag_adv:
 ; ---------------------------------------------------------------------------
 ; fe_reduce_prod — FE_ACC = FE_PROD (64 bytes) mod p, result < 2^255.
 ; Fold the high half in via 2^256 ≡ 38, then fe_reduce33.
-; Clobbers A, BC, DE, HL.
+; Clobbers A, BC, DE, HL, IX, IY.
 ; ---------------------------------------------------------------------------
 fe_reduce_prod:
                 call    fe_mul38_high           ; FE_T = 38 * FE_PROD[32..63]
@@ -573,22 +564,18 @@ fe_reduce_prod:
                 jp      fe_reduce33
 
 ; ---------------------------------------------------------------------------
-; fe_mul38_high — FE_T (33 bytes) = 38 * FE_PROD[32..63].  Clobbers A, BC, DE, HL.
+; fe_mul38_high — FE_T (33 bytes) = 38 * FE_PROD[32..63].  Clobbers A, BC, DE, HL, IX, IY.
 ; ---------------------------------------------------------------------------
 fe_mul38_high:
-                ld      hl, FE_PROD + 32
-                ld      (fe_rp), hl
-                ld      hl, FE_T
-                ld      (fe_pq), hl
+                ld      ix, FE_PROD + 32        ; high-half source, held in IX
+                ld      iy, FE_T                ; dest, held in IY
                 xor     a
                 ld      (fe_car), a
                 ld      b, 32
 fe_m38_loop:
                 push    bc
-                ld      hl, (fe_rp)
-                ld      a, (hl)
-                inc     hl
-                ld      (fe_rp), hl
+                ld      a, (ix+0)
+                inc     ix
                 ld      e, 38
                 ld      d, 0
                 call    mul8                    ; HL = H[i] * 38
@@ -596,18 +583,15 @@ fe_m38_loop:
                 ld      c, a
                 ld      b, 0
                 add     hl, bc                  ; += carry
-                ld      de, (fe_pq)
                 ld      a, l
-                ld      (de), a
-                inc     de
-                ld      (fe_pq), de
+                ld      (iy+0), a
+                inc     iy
                 ld      a, h
                 ld      (fe_car), a
                 pop     bc
                 djnz    fe_m38_loop
-                ld      de, (fe_pq)             ; FE_T[32] = the final carry
-                ld      a, (fe_car)
-                ld      (de), a
+                ld      a, (fe_car)             ; FE_T[32] = the final carry
+                ld      (iy+0), a
                 ret
 
 ; ---------------------------------------------------------------------------
