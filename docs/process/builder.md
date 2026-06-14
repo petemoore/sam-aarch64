@@ -31,10 +31,20 @@ Hardware-gated *verification* does not block *writing* — write the code, host-
 
 Start from ROADMAP NEXT ACTION; if that item is Pete-gated or already done, run the full registry scan before concluding the queue is drained.
 
+## Questions
+
+Never assume Pete is present or away — never block on him either way.
+When you hit a genuinely fundamental question (per `feedback_implementation_autonomy` — not already settled by the spec, the Go authority, or prior discussion, and Pete might totally disagree), do three things in order:
+1. Write a `qN` row in `docs/notes/question-registry.md` (in the same PR or a quick prior commit on the branch).
+2. Proceed on your best judgment — do not stall.
+3. Flag the open `qN` in your handover summary so the Conductor can surface it to Pete.
+
+The `qN` registry is the Builder→Pete question channel; the Conductor relays open questions to Pete and folds his answers into the next Builder.
+
 ## Implementation discipline
 
 **Decide and proceed.** Implementation is authorized — do not block asking for approval on decisions already settled by the spec, the Go authority, or prior discussion.
-Only stop and surface something to Pete when it is *genuinely fundamental*, not already covered, and you think he might totally disagree.
+When a question is genuinely fundamental (not already covered, and you think Pete might totally disagree), write a `qN`, proceed on best judgment, and flag it in handover — see the Questions section above.
 
 **Verify what is verifiable — never fake success.**
 Run the Go harness (`tools/z80-test-harness-go/`, `make ci-netboot-z80`, etc.) for fast inner-loop feedback.
