@@ -29,6 +29,68 @@
                 endif
 
 ; ===========================================================================
+; Inline-able macros for the hot 4-byte primitives. Defined as pyz80 MACROs so
+; the hot call sites can emit the body directly and elide the call/ret (27T)
+; per invocation — sha_add4 alone runs ~648x per compression. Each macro body
+; carries NO internal label (the byte loop is fully unrolled) so it can expand
+; any number of times.
+; ===========================================================================
+
+; add4_body — 32-bit add mod 2^32: (HL word) += (DE word), big-endian, carry
+; from LSB (byte 3) up to MSB (byte 0). In: HL=dst, DE=src (both -> word base).
+; Out: dst += src. Clobbers A, DE, HL (HL ends at dst+0, DE at src+0).
+add4_body:      MACRO
+                inc     hl
+                inc     hl
+                inc     hl                      ; HL -> dst+3 (LSB)
+                ex      de, hl
+                inc     hl
+                inc     hl
+                inc     hl                      ; HL -> src+3 (LSB)
+                ex      de, hl                  ; HL=dst+3, DE=src+3
+                or      a                       ; clear carry
+                ld      a, (de)
+                adc     a, (hl)
+                ld      (hl), a                 ; byte3 (LSB)
+                dec     hl
+                dec     de
+                ld      a, (de)
+                adc     a, (hl)
+                ld      (hl), a                 ; byte2
+                dec     hl
+                dec     de
+                ld      a, (de)
+                adc     a, (hl)
+                ld      (hl), a                 ; byte1
+                dec     hl
+                dec     de
+                ld      a, (de)
+                adc     a, (hl)
+                ld      (hl), a                 ; byte0 (MSB)
+ENDM
+
+; copy4_body — copy a 4-byte word. In: HL=src, DE=dst. Out: HL=src+4, DE=dst+4.
+; Clobbers A, DE, HL.
+copy4_body:     MACRO
+                ld      a, (hl)
+                ld      (de), a
+                inc     hl
+                inc     de
+                ld      a, (hl)
+                ld      (de), a
+                inc     hl
+                inc     de
+                ld      a, (hl)
+                ld      (de), a
+                inc     hl
+                inc     de
+                ld      a, (hl)
+                ld      (de), a
+                inc     hl
+                inc     de
+ENDM
+
+; ===========================================================================
 ; State + scratch (the data block the host test can read/reset). Placed FIRST
 ; so every data label is defined before the code references it — a forward data
 ; reference confuses pyz80's two-pass size estimation here.
@@ -296,34 +358,34 @@ sha_extend:
                 call    sha_sigma1
                 ld      hl, sha_tmpa
                 ld      de, sha_tmp1
-                call    sha_copy4
+                copy4_body
                 ; tmp1 += W[t-7]
                 ld      de, -7*4
                 call    sha_woff
                 ex      de, hl                  ; DE -> W[t-7]
                 ld      hl, sha_tmp1
-                call    sha_add4                ; sha_tmp1 += W[t-7]
+                add4_body                       ; sha_tmp1 += W[t-7]
                 ; tmp2 = s0(W[t-15])
                 ld      de, -15*4
                 call    sha_woff
                 call    sha_sigma0
                 ld      hl, sha_tmpa
                 ld      de, sha_tmp2
-                call    sha_copy4
+                copy4_body
                 ; tmp1 += tmp2
                 ld      de, sha_tmp2
                 ld      hl, sha_tmp1
-                call    sha_add4
+                add4_body
                 ; tmp1 += W[t-16]
                 ld      de, -16*4
                 call    sha_woff
                 ex      de, hl                  ; DE -> W[t-16]
                 ld      hl, sha_tmp1
-                call    sha_add4
+                add4_body
                 ; W[t] = tmp1
                 ld      hl, sha_tmp1
                 ld      de, (sha_wt)            ; DE -> W[t]
-                call    sha_copy4
+                copy4_body
                 ; advance to W[t+1]
                 ld      hl, (sha_wt)
                 ld      bc, 4
@@ -354,37 +416,37 @@ sha_round:
                 ; T1 = h
                 ld      hl, wv_h
                 ld      de, sha_t1
-                call    sha_copy4
+                copy4_body
                 ; T1 += S1(e)
                 ld      hl, wv_e
                 call    sha_bigsigma1
                 ld      de, sha_tmpa
                 ld      hl, sha_t1
-                call    sha_add4
+                add4_body
                 ; T1 += Ch(e,f,g)  (clobbers IX/IY — that is why W/K are in memory)
                 call    sha_ch                  ; result in sha_tmpa
                 ld      de, sha_tmpa
                 ld      hl, sha_t1
-                call    sha_add4
+                add4_body
                 ; T1 += K[t]
                 ld      de, (sha_kt)
                 ld      hl, sha_t1
-                call    sha_add4
+                add4_body
                 ; T1 += W[t]
                 ld      de, (sha_wptr)
                 ld      hl, sha_t1
-                call    sha_add4
+                add4_body
                 ; T2 = S0(a)
                 ld      hl, wv_a
                 call    sha_bigsigma0
                 ld      hl, sha_tmpa
                 ld      de, sha_t2
-                call    sha_copy4
+                copy4_body
                 ; T2 += Maj(a,b,c)
                 call    sha_maj                 ; result in sha_tmpa
                 ld      de, sha_tmpa
                 ld      hl, sha_t2
-                call    sha_add4
+                add4_body
 
                 ; Rotate the working vars. Move from h downward so we don't
                 ; clobber a source before it is copied:
@@ -398,14 +460,14 @@ sha_round:
                 ; after the shift, e holds old d. So e += T1 gives d+T1.)
                 ld      de, sha_t1
                 ld      hl, wv_e
-                call    sha_add4
+                add4_body
                 ; a = T1 + T2
                 ld      hl, sha_t1
                 ld      de, wv_a
-                call    sha_copy4
+                copy4_body
                 ld      de, sha_t2
                 ld      hl, wv_a
-                call    sha_add4
+                add4_body
 
                 ; advance W and K pointers
                 ld      hl, (sha_wptr)
