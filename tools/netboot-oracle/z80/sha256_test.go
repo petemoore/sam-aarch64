@@ -19,9 +19,14 @@ const (
 )
 
 // Scratch RAM regions the SHA-256 driver routines read/write. They sit clear of
-// the loaded code (≈ &8000..&8668) and of the harness stack/trap (&6FFE/&7000).
+// the loaded code AND of the harness stack/trap (&6FFE/&7000). The standalone
+// image is org &8000; with the 8x-unrolled round block it grows to ≈ &9062 (the
+// K table ends there), so the message stage must sit ABOVE that, not at the old
+// &9000 (which then landed inside the K table and corrupted the high rounds).
+// &A000 leaves a ~4 KB margin over the code and ≈24 KB of headroom for the
+// longest chunk the streaming tests stage (the 999-byte long-vector chunk).
 const (
-	shaInputStage  = 0x9000 // where the test stages the message bytes
+	shaInputStage  = 0xA000 // where the test stages the message bytes
 	shaOutputStage = 0x5000 // where sha256_final writes the 32-byte digest
 )
 

@@ -12,6 +12,7 @@ use (
 	./tools/netboot-oracle/z80
 	./tools/sam-aarch64
 	./tools/sam-aarch64-format
+	./tools/sha256-unroll-gen
 	./tools/z80-test-harness-go
 	./tools/zx0-greedy
 )
