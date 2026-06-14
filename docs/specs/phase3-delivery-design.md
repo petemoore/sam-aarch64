@@ -1,292 +1,269 @@
 # Phase 3 — end-to-end delivery design (the self-hosting boot/delivery loop)
 
-**Item:** i84 · **Type:** design spec · **Status:** SPEC GATE — awaiting Pete's
-approval; **no Phase-3 implementation begins until approved** (repo CLAUDE.md
-"Development discipline" rule 1, the i7 precedent).
+**Item:** i84 · **Type:** design spec · **Status:** **design direction CONFIRMED
+by Pete (2026-06-14)** — the two open decisions are resolved (q12 = Model A only;
+q11 = drop the Colin dependency, DHCP is in scope, bootstrap via Pete's patched
+SAM ROM). The remaining gate is the **final go-ahead to begin implementation**;
+the only open work is *research*, not a Pete decision (the exact Pi netboot file
+list + DHCP handshake conventions, settled during the i83/i86 build).
 
-**Relationship to the prior sketch:** this extends and, on approval, supersedes
+**Relationship to the prior sketch:** this supersedes
 [`phase3-tftp-design.md`](phase3-tftp-design.md) (the 2026-05-27 ship-only
-direction sketch). That sketch framed Phase 3 as a one-way *push* of `release.img`
-from the SAM to a Pi already running `tftpd`; this document broadens it to the
-full bidirectional self-hosting loop (fetch code *onto* the SAM; serve images
-*to* a bare Pi for PXE boot) and folds the sketch's push model in as one outbound
-option (§6.4). On approval, the sketch is deleted and its content lives here.
+direction sketch, which framed Phase 3 as a one-way *push* of `release.img` to a
+Pi already running `tftpd` — now rejected as Model B, §6.5). On the implementation
+go-ahead the sketch is deleted.
 
 **Reads first:** [`../notes/tftp-protocol-research.md`](../notes/tftp-protocol-research.md)
-(i82 — the TFTP RFC corpus + trinload analysis, the protocol authority for this
-design) and [`../notes/trinity-capabilities.md`](../notes/trinity-capabilities.md)
-(the ENC28J60 / EEPROM / SD hardware facts). This document does not restate
-their protocol or hardware detail — it composes them into an architecture.
+(i82 — the TFTP RFC corpus + trinload analysis, the protocol authority) and
+[`../notes/trinity-capabilities.md`](../notes/trinity-capabilities.md) (the
+ENC28J60 / EEPROM / SD hardware facts). This document composes them into an
+architecture; it does not restate their detail.
 
 ---
 
 ## 1. Goal
 
 Close the loop so the SAM Coupé is a *self-hosting* aarch64 development machine:
-code reaches the SAM and assembled images reach the Pi 400 **without physically
-shuffling floppies**. Two opposite data flows:
+the daily development cycle never leaves the SAM, and no host-side tools are
+required. Two opposite data flows over the one Quazar Trinity ENC28J60:
 
-- **Inbound (fetch):** pull disk and firmware images onto the SAM over the
-  network and persist them to Trinity storage — the near-term bootstrap enabler
-  (item **i82**). This is what removes the sneakernet from the daily loop.
-- **Outbound (serve):** ship the freshly-assembled spectrum4 kernel (plus the Pi
-  firmware blobs the Pi needs to reach it) to the Pi 400 for a network boot — the
-  Phase-3 headline (item **i83**).
+- **Outbound (serve) — the headline (i83).** The SAM is a **TFTP server** that
+  network-boots a *bare* Raspberry Pi: it serves the Pi firmware blobs the Pi's
+  boot ROM requests, plus the assembled `spectrum4.img` kernel. This is what lets
+  "edit → assemble → boot on the Pi" happen entirely from the SAM.
+- **Inbound (fetch) — the bootstrap enabler (i82).** The SAM is also a **TFTP
+  client**, used to pull images *onto* the SAM and avoid the SD-card dance.
+  trinload was already almost a TFTP client; making it a *real* one keeps it
+  broadly compatible with standard boot mechanisms.
 
-Both flows ride the same Quazar Trinity ENC28J60 Ethernet hardware and reuse the
-same trinload-derived UDP/ARP/IP stack; they differ only in TFTP *role* (client
-for fetch, server for serve).
+Both ride the same trinload-derived ENC28J60 / ARP / IPv4 / UDP stack and differ
+only in TFTP role. Phase 3 also needs two supporting pieces the old sketch missed:
+a **minimal DHCP responder** (§6.3 — mandatory for Pi-3-class netboot and for
+serving several machines on a LAN) and an on-SAM **HTTP fetch** for one-time
+firmware self-provisioning (§7 — keeps provisioning host-tool-free).
 
-## 2. The two loops at a glance
+## 2. The loops at a glance
 
 ```
- INBOUND (i82 — TFTP client on the SAM)
-   ┌────────────┐  RRQ/OACK/DATA   ┌──────────────┐  HRECORD/HSBYT  ┌────────────┐
-   │ TFTP server│ ───────────────► │   SAM Coupé  │ ──────────────► │ Trinity SD │
-   │ (Pete's Mac│ ◄─────────────── │ TFTP *client*│                 │ (B-DOS recs)│
-   └────────────┘      ACK         └──────────────┘                 └────────────┘
-                                          │ boot the fetched record
-                                          ▼
+ OUTBOUND  (i83 — the SAM is the netboot server: DHCP + TFTP)
+   ┌──────────────┐  DHCP DISCOVER/REQUEST   ┌──────────────────────────┐
+   │  Raspberry    │ ───────────────────────► │        SAM Coupé          │
+   │  Pi (3/4/400/ │ ◄─────────────────────── │  DHCP responder (i86) +   │
+   │  …) boot ROM  │   DHCP OFFER/ACK          │  TFTP *server* (i83)      │
+   │  = TFTP client│                           │                           │
+   │               │  RRQ "start4.elf" …       │  serves whatever file is  │
+   │               │ ───────────────────────► │  requested, by name, from │
+   │               │ ◄─────────────────────── │  a flat Trinity store     │
+   │               │   OACK/DATA               │  (firmware + spectrum4.img)│
+   └──────────────┘                           └──────────────────────────┘
+         │ executes the kernel                            ▲
+         ▼                                                │ store populated by ↓
 
- OUTBOUND (i83 — TFTP server on the SAM)
-   ┌────────────┐  RRQ (netboot)   ┌──────────────┐
-   │  Pi 400    │ ───────────────► │   SAM Coupé  │   serves: start4.elf, fixup4.dat,
-   │ boot ROM   │ ◄─────────────── │ TFTP *server*│   config.txt, cmdline.txt,
-   │ (TFTP clnt)│   OACK/DATA       └──────────────┘   kernel image
-   └────────────┘                         ▲
-         │ executes spectrum4 kernel       │ images sourced from Trinity SD
-         ▼                                  │ (fetched inbound, or self-provisioned)
+ INBOUND  (i82 — the SAM is a TFTP client)        SELF-PROVISIONING (i70)
+   ┌────────────┐  RRQ/OACK/DATA  ┌────────────┐    SAM ──HTTP over uIP──► internet
+   │ TFTP server│ ──────────────► │ SAM Coupé  │    (fetch Pi firmware once → store)
+   │ (e.g. Mac) │ ◄────────────── │ TFTP client│
+   └────────────┘     ACK         └────────────┘
 
- SELF-PROVISIONING (i70 — fill Trinity SD with Pi firmware once)
-   online source ──HTTP/FTP on SAM (uIP)──► Trinity SD     (option A)
-   online source ──host tool writes records─► Trinity SD    (option B)
+ Topologies (§4): direct SAM↔Pi cable, OR SAM + several Pis on a shared LAN.
 ```
 
-## 3. The bootstrap chain (resolving the chicken-and-egg)
+## 3. Bootstrap — how the SAM reaches Trinity storage + runs the server at boot
 
-The inbound loop's value is "no physical disk needed", but *something* must put
-the first TFTP client on the SAM and give it Trinity-storage access at power-on.
-Two independent mechanisms, usable separately or together:
+The "no physical disk" property comes from **Pete's patched SAM ROM**: his SAM has
+a modified system ROM installed that adds Trinity-interface support, so the Trinity
+(and its SD storage, via B-DOS) is usable the instant the machine powers on — no
+B-DOS floppy needed. The server disk lives in Trinity storage and autoboots.
 
-### 3.1 Colin Piggot's Trinity Boot ROM (the durable enabler)
+- This is **not a Colin dependency.** We hold the materials to understand and
+  reproduce the mechanism: the `trinity.mgt` disk (`~/sam-corpus/disks/trinity.mgt`,
+  decoded `~/sam-corpus/outputs/trinity.txt`) carries code for all the Trinity
+  features; `reference/bdos/` has the B-DOS 1.5a source; and the 1.5t Trinity-fork
+  delta is analysed in `~/sam-archive/bdos/analysis/`. The one artifact still to
+  capture is Pete's actual patched ROM — when his SAM is next online he will dump
+  it to disk, and we reverse the patch then (**i87**).
+- **Interim path without the patched ROM:** trinload's purpose is to load code over
+  the network into RAM and run it (i82 §6.1). So a plain SAM + Trinity can boot a
+  tiny trinload disk, pull the server/client code over the wire, and run it — the
+  inbound loop is demonstrable before any ROM work.
+- **Layering:** everything sits on trinload's ENC28J60 driver, ARP responder, and
+  IPv4/UDP framing (i82 §6.8 catalogues the reusable routines).
 
-The Trinity Boot ROM is a ROM-chip option that replaces the standard SAM ROM page
-and auto-loads B-DOS from the Trinity EEPROM (chunk 1 holds a 1 KB B-DOS
-bootblock) at power-on — giving Trinity SD access at boot with **no floppy in the
-drive** ([`trinity-capabilities.md`](../notes/trinity-capabilities.md) §1). With
-this ROM, a SAM that has our TFTP-client disk written to a Trinity SD record can
-boot straight into it. This is the clean end state: power on → B-DOS from EEPROM →
-autoboot the fetch client from an SD record.
+## 4. Network topology and addressing — support both
 
-**Dependency:** obtaining/configuring the Boot ROM is an *ask-Colin* item (Pete
-makes the contact, never the agent — memory `project_sam_community_contacts`).
-Its exact autoboot affordances need confirmation from Colin or the product
-documentation (→ q11).
+The direct SAM↔Pi cable was the original wish, but a shared LAN is explicitly
+**also** in scope, because it lets one SAM netboot **several** machines (Pete runs
+both a Pi 400 and a Pi 3). The design must not hard-code a single peer.
 
-### 3.2 trinload as the interim bootstrap (no custom ROM needed)
+- **Direct cable:** SAM ↔ one Pi, link-local. ENC28J60 is 10BASE-T half-duplex;
+  Auto-MDIX is unconfirmed for the Trinity board (`trinity-capabilities.md` §6), so
+  assume a crossover cable or an Auto-MDIX peer.
+- **Shared LAN:** SAM + N Pis through a switch/hub. The SAM's DHCP responder hands
+  out addresses from a small pool (mirroring Pete's `dnsmasq` range
+  `192.168.50.10–.20`, server `192.168.50.1`); each Pi then TFTPs from the SAM.
+  A hub here doubles as the packet-capture point (§9).
+- The SAM holds one MAC/IP (the EEPROM "Trinity Network " chunk, i82 §6.7) and
+  plays server toward the Pi(s); when used as a *client* (§5) it talks to an
+  external server — never both roles in the same session.
 
-trinload's whole purpose is to load code over the network into RAM and run it
-([`tftp-protocol-research.md`](../notes/tftp-protocol-research.md) §6.1). So even
-without the Boot ROM, a stock SAM with a Trinity card can boot a tiny trinload
-disk, pull our TFTP client over the wire into RAM, and execute it — the client
-then fetches the real images and writes them to SD. This makes the inbound loop
-demonstrable on a plain machine before the Boot ROM is in hand, and is the natural
-first integration target.
-
-### 3.3 Layering
-
-Both paths sit on the same foundation: trinload's ENC28J60 driver (`encdrv.asm`),
-ARP responder, IPv4/UDP framing, and EEPROM MAC/IP config. The TFTP client/server
-are new state machines layered on top — see i82 §6.8 for the reusable-routine
-catalogue and §6.9 for the precise client delta.
-
-## 4. Network topology and addressing
-
-Direct cable, link-local, no switch/router/DNS/DHCP-on-the-LAN in the common case
-(the old sketch's premise, retained). The SAM has one ENC28J60; it plays TFTP
-*client* toward the Mac and TFTP *server* toward the Pi — never both
-simultaneously in one session, so one MAC/IP suffices.
-
-- **Addressing:** fixed IPs compiled in / read from the EEPROM "Trinity Network "
-  chunk (MAC + IP — i82 §6.7; exact chunk layout pending a hardware read, i82
-  §7.5 Q4). SAM = e.g. `192.168.1.1`, peer = `192.168.1.2`.
-- **PHY:** ENC28J60 is 10BASE-T half-duplex; Auto-MDIX is unconfirmed for the
-  Trinity board (`trinity-capabilities.md` §6), so assume a crossover cable or an
-  Auto-MDIX peer until proven otherwise.
-- **Why no DHCP for the inbound leg:** the client knows the server's address; it
-  just sends an RRQ. DHCP only re-enters the picture for the *outbound* PXE leg,
-  and even there it can be avoided (§6.3).
+**Reference architecture (the thing the SAM replaces):** Pete's Mac runs
+`dnsmasq` providing **DHCP + TFTP from one process** bound to a USB NIC (`en7`),
+serving `/private/tftpboot` (both Pi-3 and Pi-4 firmware sets + `spectrum4.img`).
+The SAM server reproduces this `dnsmasq` behaviour in Z80.
 
 ## 5. Inbound — the SAM TFTP client (i82)
 
-The protocol mechanics, packet layouts, option semantics, Sorcerer's-Apprentice
-fix, TID handling, and the trinload reuse map are all specified in the i82
-research note; this section states only the *delivery* decisions.
+Protocol mechanics, packet layouts, options, the Sorcerer's-Apprentice fix, TID
+handling, and the trinload reuse-map are specified in the i82 research note; only
+the delivery decisions live here.
 
-- **Mode:** octet (binary). **RRQ option set:** `blksize=1428, tsize=0,
-  timeout=2, windowsize=4`, with graceful fallback to RFC-1350 lock-step if the
-  server sends no OACK (i82 §5.7, §7.1).
-- **`tsize=0` is load-bearing:** the OACK returns the exact byte count, so the
-  Z80 pre-computes the B-DOS record count (`⌈tsize / 819200⌉`, one 800 KB record
-  per floppy-equivalent image) and allocates before the first DATA block lands
-  (i82 §4.2, §7.3).
-- **Where blocks land:** received DATA → a staging page in the top 32 KB (HMPR) →
-  B-DOS records via the hook layer (`HRECORD` to select the record, then the
-  sector-write hooks), the path verified portable SAMDOS↔B-DOS by i62 and
-  static-verified for the Trinity SD fork by i71. No raw SPI driver is needed —
-  the unchanged B-DOS hook surface reaches the SD write path
-  ([`bdos-version-landscape.md`](../notes/bdos-version-landscape.md);
-  `trinity-capabilities.md` §9 Q6).
-- **Fetch targets:** (a) **disk images** — a full 800 KB record fetched and
-  written, then booted (this is how new tools/dialects arrive on the SAM); (b)
-  **Pi firmware blobs** — staged for the outbound leg / self-provisioning (§7).
-- **Code budget:** ~150–200 lines of new Z80 for the client state machine on top
-  of trinload (i82 §6.9). Lives in a high RAM page alongside the trinload stack.
+- Octet mode; RRQ option set `blksize=1428, tsize=0, timeout=2, windowsize=4`, with
+  graceful fallback to RFC-1350 lock-step if the server sends no OACK (i82 §5.7).
+- `tsize=0` returns the byte count in the OACK, so the Z80 pre-allocates the right
+  number of B-DOS records before the first DATA block (i82 §4.2, §7.3).
+- Received DATA → a staging page (HMPR) → B-DOS records via the unchanged hook
+  surface (i62 verified SAMDOS↔B-DOS; i71 static-verified the Trinity SD fork). No
+  raw SPI driver needed.
+- **Also the interim firmware bridge:** until the on-SAM HTTP fetch (§7) exists, the
+  client can pull the Pi firmware from any standard TFTP source (e.g. Pete's Mac)
+  into the Trinity store, so the outbound server is not blocked on §7.
 
-This is the **near-term, fully-designable** half: every dependency except the
-real-Trinity integration test is in hand.
+## 6. Outbound — the SAM netboot server (i83 + i86), Model A
 
-## 6. Outbound — the SAM TFTP server (i83), the PXE shipper
+The headline: boot a *bare* Pi over the network from images the SAM holds. This is
+the harder role (the SAM answers requests it did not initiate) and is two
+cooperating servers: a TFTP server and a small DHCP responder.
 
-The headline goal: boot a *bare* Pi 400 over the cable from images the SAM holds.
-This is the harder protocol role (the SAM answers requests it does not initiate)
-and carries the most external unknowns (the Pi's exact boot behaviour).
+### 6.1 The Pi is the client; the SAM serves files by name
 
-### 6.1 How a Pi 400 network-boots
+A Raspberry Pi boot ROM that network-boots **is the TFTP client**: it DHCPs to find
+the server, then TFTP-requests the specific files it wants, *by name*. **The server
+needs no model awareness** — it just serves whatever filename is requested if that
+file exists in the store. The firmware filenames are already distinct across
+families (Pi 3: `bootcode.bin`, `start.elf`, `fixup.dat`; Pi 4/400:
+`start4.elf`, `fixup4.dat`, `bcm2711-rpi-400.dtb`; plus `config.txt` and the
+kernel `spectrum4.img`), so **one flat store serves every model** — exactly how
+Pete's `dnsmasq` works. There is no per-machine configuration on the SAM.
 
-The Pi 4/400 boot ROM can TFTP-netboot, acting as the **TFTP client**. Unlike the
-Pi 3, its second-stage bootloader lives in the Pi's own SPI EEPROM and is never
-fetched over the network; the netboot then pulls the GPU firmware
-(`start4.elf`/`fixup4.dat`), `config.txt`/`cmdline.txt`, and finally the kernel
-image. In the standard flow the Pi first uses DHCP to learn the TFTP server
-address and boot path; the Pi 4 bootloader EEPROM also supports a **static
-netboot** configuration (set `TFTP_IP` together with `CLIENT_IP`/`SUBNET`/`GATEWAY`
-— `TFTP_PREFIX` only selects the served subdirectory) that hard-codes the
-addressing and removes the DHCP requirement. (Verify the exact settings + file set
-against current Raspberry Pi bootloader docs and on real hardware — → q11.)
+This means "support all TFTP-bootable aarch64 Pis" costs essentially nothing
+extra in the server: the same serve-by-name loop covers Pi 3 / 3+ / 4 / 400 / CM /
+Pi 5. The *only* model-dependent variable is **which files are present in the
+store** — a provisioning choice (each project decides which firmware revision and
+which files to ship, §7), not server logic. (Pi 3 and Pi 400 are the two Pete
+owns, so they are the first-light targets; the rest follow for free.)
 
-### 6.2 What the SAM must therefore be
+### 6.2 The TFTP server state machine
 
-For the Pi to pull from the SAM, the SAM runs a **TFTP server**: it listens on UDP
-69, parses incoming RRQs, optionally answers options with an OACK, and streams
-DATA while honouring the Pi's ACK cadence. The server delta vs the i82 client:
-build/parse the RRQ-handler and the DATA-send loop (instead of RRQ-builder +
-DATA-receive loop); the ARP/IP/UDP framing and `ack_len`-style send primitive are
-the same trinload reuse. The server must serve several files per boot and several
-MB total (the GPU firmware dominates) — these come from Trinity SD records
-(fetched inbound or self-provisioned), streamed out block by block.
+The delta from the i82 client: parse incoming RRQs (filename + mode + options),
+answer options with an OACK where supported, and run the DATA-send / ACK-wait loop
+(instead of building RRQs and receiving DATA). The ARP/IP/UDP framing and the
+`ack_len`-style send primitive are the same trinload reuse. It serves several files
+per boot and several MB total (the GPU firmware dominates), streamed block-by-block
+from the Trinity store.
 
-### 6.3 Avoiding DHCP
+### 6.3 DHCP is required — the SAM must speak it (i86)
 
-If the Pi bootloader EEPROM static-netboot path (§6.1) works, the SAM needs
-**only** a TFTP server — no DHCP/proxyDHCP. This is the strongly-preferred target:
-DHCP on the Z80 is real extra scope. If static netboot proves unavailable, a
-minimal proxyDHCP responder (answer DISCOVER with our TFTP address + filename, no
-address leasing) is the fallback. The design assumes static-netboot until
-hardware says otherwise (→ q11).
+This is the key correction to the prior sketch. **Pi-3-class netboot has no static
+path** — the boot ROM always broadcasts DHCP to learn its address, the TFTP server,
+and the bootfile. Pete's own working setup confirms it: `dnsmasq` does DHCP *and*
+TFTP. So the SAM must provide a **minimal DHCP/bootp responder** (item **i86**):
+answer `DISCOVER`/`REQUEST` with an `OFFER`/`ACK` carrying an address from the pool,
+the subnet, the next-server (itself) and bootfile, plus whatever Raspberry-Pi
+netboot DHCP conventions the boot ROM requires (the vendor-class identifier and any
+option-43 sub-options — a *research* detail to confirm by capture, §9, but a
+uniform Pi convention, **not** per-model config). It is incremental on trinload's
+UDP stack (DHCP is two UDP broadcasts on ports 67/68), but it does mean the server
+is "DHCP + TFTP", not TFTP-only. The Pi 4/400 static-EEPROM netboot path
+(`TFTP_IP`/`CLIENT_IP`/…) is therefore *not* relied on — building DHCP covers every
+model with one code path and matches Pete's proven flow.
 
-### 6.4 Two delivery models (the design fork → q12)
+### 6.4 Per-Pi netboot research (execution detail, not a Pete decision)
 
-- **Model A — PXE pull (recommended, the true bare-Pi goal):** SAM = TFTP server;
-  Pi = TFTP client via its boot ROM; SAM serves firmware + kernel from SD. Boots a
-  bare Pi with no OS pre-installed. More SAM-side work (server role; firmware
-  self-provisioning) but it is the actual "ship the kernel to bare metal" vision.
-- **Model B — WRQ push (the old sketch's model, a simpler interim):** SAM = TFTP
-  *client* doing a WRQ to a `tftpd` on a Pi **already running Linux**, then a
-  Pi-side watcher reboots into the new image. Far less SAM-side work (reuses the
-  i82 client; no server, no firmware serving) but it does not boot a bare Pi and
-  needs a cooperating OS + reboot trigger on the Pi.
+To populate the store and satisfy the handshake, the build needs: the exact file
+list each target Pi's boot ROM requests, and the DHCP handshake conventions. These
+come straight from materials we hold — Pete's `/private/tftpboot` contents, his
+`~/git/rpi400-bare-metal-dev` / `~/git/spectrum4` projects, the Raspberry Pi
+bootloader docs, and (decisively) a real packet capture (§9). Model-general
+research; no SAM-side per-model code.
 
-Recommendation: **Model A is the goal; Model B is a legitimate early milestone**
-that proves the cable + assembled-kernel handoff while the server role is built.
-Pete's call on whether to bother with B as a stepping stone (→ q12).
+### 6.5 Model B is rejected
 
-## 7. Firmware self-provisioning (i70)
+Model B (SAM = TFTP *client* doing a WRQ to a `tftpd` on a Pi already running
+Linux, plus a Pi-side reboot trigger) is **not pursued**: it needs a cooperating OS
+and a host-side daemon on the Pi, which violates the self-hosting / no-host-tools
+goal and does not boot a bare Pi. Recorded for context only.
 
-Model A needs the Pi's firmware blobs (several MB) resident on Trinity SD. The
-friction: B-DOS media is raw 800 KB records, **not FAT**, so a newcomer cannot
-just drag firmware files onto the SD on a PC (`trinity-capabilities.md` §4, §7).
-Two ways to populate it:
+## 7. Firmware self-provisioning (i70) — on-SAM HTTP fetch
 
-- **Option A — the SAM fetches firmware itself, once:** the SAM speaks HTTP or FTP
-  over a real TCP stack, pulls the firmware from an online location, and writes it
-  to SD via B-DOS hooks. Natural base: the **uIP** TCP/IP stack found on the
-  corpus Trinity utility disk (ARP/IPv4/TCP — i61), since trinload's stack is
-  UDP-only. Keeps the workflow self-hosted (no PC needed) but is the larger build.
-- **Option B — a host-side tool writes B-DOS records to SD from a PC:** smaller,
-  but reintroduces a PC dependency for the firmware step.
-
-These are not mutually exclusive (B now, A later). Deferred-but-tracked under i70;
-the choice is a future sub-decision, not a blocker for i82/i83 design.
+Model A needs the Pi firmware blobs resident in the Trinity store. To keep this
+host-tool-free, **the SAM fetches them itself over HTTP** from the internet (the
+Raspberry Pi Foundation publishes the same firmware files for all models; distinct
+revisions get distinct names). This needs a real **TCP stack — uIP** (ARP/IPv4/TCP,
+present on the corpus Trinity utility disk, i61; trinload's stack is UDP-only) plus
+a minimal HTTP client. It is a one-time / rare operation (firmware is stable per
+chosen revision), so it is **not on the daily-loop critical path** and can land
+*after* the client+server+DHCP core; in the meantime the TFTP client (§5) bridges
+provisioning from a standard TFTP source. The host-side-tool alternative (a PC
+writing B-DOS records) is rejected — it reintroduces a host dependency.
 
 ## 8. Storage model
 
-One home, already proven: **B-DOS records on Trinity SD**, reached through the
-unchanged DOS hook surface.
+A **flat file store on Trinity SD**, reached through the unchanged B-DOS hook
+surface (`HSAVE`/`HRECORD`/sector hooks, `samdos-file-io.md`; i62 dual-run proof,
+i71 fork analysis). Files are addressed by name (the TFTP filename ↔ a stored
+object); the kernel and each firmware blob are objects in the store. One 800 KB
+B-DOS record ≈ one floppy image; large objects span record(s). No FAT, no custom
+SPI driver — the B-DOS route subsumes both (i58/i71).
 
-- One record ≈ one 800 KB floppy image (80 trk × 10 sec × 512 B × 2 sides); a
-  fetched disk image maps 1:1 to a record. Firmware/kernel blobs occupy
-  record(s) sized to fit.
-- Writes use the same `HSAVE`/`HRECORD`/sector hooks the assembler already uses
-  for OUT (`samdos-file-io.md`), with `HRECORD` selecting the record — the i62
-  dual-run proof (SAMDOS↔B-DOS) and the i71 static fork analysis cover this layer.
-- No FAT, no custom SPI driver: the B-DOS hook route subsumes both (i58/i71).
+## 9. Host-side iteration (i80) + the empirical oracle
 
-## 9. Host-side iteration and the i80 dependency
+SimCoupé does not emulate the Trinity network hardware, so today the stack only
+runs on real Trinity hardware. **i80** (emulate the ENC28J60 SPI path in SimCoupé,
+bridged to a host/virtual network) is the enabler for a fast host inner loop; its
+scope now spans DHCP + TFTP + HTTP, so it must carry enough of a virtual network to
+exercise a netbooting-Pi handshake. Until i80 exists, design/unit-test the protocol
+state machines in isolation and treat real-Trinity runs as the scarce integration
+gate.
 
-SimCoupé does not emulate the Trinity network hardware, so today the net stack can
-only run on real Trinity hardware — breaking the project's fast inner loop. **i80**
-(emulate the ENC28J60 SPI path in SimCoupé) is the enabler that lets the TFTP
-client/server be iterated host-side at the usual ~ms cadence, with real Trinity as
-the integration gate. Until i80 exists:
-
-- Design and unit-test the protocol *state machines* in isolation (Go model +
-  the Z80 harness for the framing/parsing logic) where they don't need live
-  hardware.
-- Treat real-Trinity runs as the scarce integration gate — batch them.
-
-i80 is therefore on the critical path for *efficient* Phase-3 work, even though
-i82's logic can be written and reviewed without it. Pairs with the SD-emulation
-interest already noted for SimCoupé.
+**The implementation oracle is a real packet capture.** Put a hub between the SAM
+and the Pi, run Wireshark, and mirror the captured DHCP+TFTP exchange byte-for-byte.
+This is a proven technique here: Pete documented trinload's ethernet frames exactly
+this way (trinload commit `9ff9099`, `test/README.md`). Pete's Mac `dnsmasq` is the
+reference server to diff our responses against. Pete may also have **existing
+DHCP/TFTP capture logs on his Mac** from real Pi netboots — those would directly
+settle §6.3/§6.4 (the Pi's requested filenames, option set, and DHCP conventions)
+before any SAM code is written; folding them in is the natural first build step.
 
 ## 10. Phasing
 
-1. **3a — inbound client (i82).** Fully designable now. Build the RRQ client on
-   trinload; land blocks to SD via B-DOS hooks. Bootstrap via trinload (§3.2).
-   Gate: a real-Trinity fetch of a disk image, written to a record, booted.
-2. **3b — outbound server (i83).** The PXE shipper (Model A). Depends on §6
-   unknowns (q11/q12) being resolved with Pete + hardware.
-3. **3c — self-provisioning (i70).** Fill SD with Pi firmware (Option B first,
-   Option A later).
-4. **Cross-cutting — i80** (SimCoupé Trinity-net emulation): start early; it makes
-   3a/3b iterable host-side.
+1. **3a — inbound client (i82).** Fully designable now; bootstrap via trinload or
+   the patched ROM. Gate: a real-Trinity fetch of an image to a record, booted.
+2. **3b — outbound server (i83) + DHCP responder (i86).** Model A. The daily-loop
+   headline; the per-Pi research (§6.4) is settled by capture during the build.
+3. **3c — HTTP self-provisioning (i70).** After the core; bridged by the client
+   meanwhile.
+4. **Cross-cutting — i80** (SimCoupé Trinity-net emulation) for host iteration, and
+   **i87** (dump + reverse Pete's patched SAM ROM) when his SAM is next online.
 
 Each integration step is gated on real-Trinity confirmation — the one unknown no
-amount of host design removes.
+host design removes.
 
-## 11. Questions for Pete (mirrored to the qN registry)
+## 11. Resolved decisions / residual research
 
-- **q11 — Pi netboot mechanics + Colin Boot ROM specifics.** Confirm: (a) the Pi
-  400 boot ROM EEPROM *static netboot* path (`TFTP_IP` + `CLIENT_IP`/`SUBNET`/`GATEWAY`,
-  `TFTP_PREFIX` for the subdir) works so the SAM needs only a TFTP server and no
-  DHCP (§6.3); (b) the exact firmware file set + option set the Pi's TFTP client
-  requests (on the Pi 4 the second-stage bootloader is in the Pi's own SPI EEPROM,
-  so `bootcode.bin` is not served over TFTP — that is Pi 3 behaviour); (c) the
-  Trinity Boot ROM's autoboot
-  affordances and how to obtain/configure it (ask-Colin). All hardware/contact
-  gated.
-- **q12 — outbound delivery model.** Model A (PXE pull, bare-Pi, the goal) as the
-  target, with Model B (WRQ push to a Linux Pi) as an optional early milestone —
-  or skip B and go straight to A? (§6.4).
-- (Already settled, recorded for context:) the inbound RRQ option set (i82 §5.7);
-  the target-machine RAM stance (q9 — both 256/512 KB, full release may exceed
-  256 KB); the storage layer (i62/i71, §8).
+- **q12 → resolved:** Model A only (PXE pull, bare Pi). Model B rejected (§6.5).
+- **q11 → resolved:** no Colin dependency (materials in hand + Pete's patched ROM,
+  §3); DHCP is in scope and wanted (§6.3); bootstrap via the patched ROM (dump =
+  i87). The residual — the exact Pi file list + DHCP conventions — is *research*,
+  not a Pete decision (§6.4), confirmed by capture (§9).
+- (For context: the inbound RRQ option set is settled, i82 §5.7; the storage layer
+  is settled, §8; the target-RAM stance is q9.)
 
 ## 12. Out of scope (Phase 3)
 
-General internet access / routing / DNS; a full DHCP server (only static-netboot
-or a minimal proxyDHCP if forced — §6.3); encryption/auth (the cable is the
-boundary); wireless. These remain as the old sketch framed them.
+General internet *routing*/DNS beyond the single HTTP firmware-fetch (§7); serving
+non-Pi / non-aarch64 targets; encryption/auth (the cable/LAN is the boundary);
+wireless. DHCP and a single HTTP-fetch are now **in** scope (they were out in the
+old sketch).
 
 ## 13. Related
 
@@ -297,9 +274,11 @@ boundary); wireless. These remain as the old sketch framed them.
 - [`../notes/bdos-version-landscape.md`](../notes/bdos-version-landscape.md) /
   [`../notes/bdos-trinity-fork-analysis.md`](../notes/bdos-trinity-fork-analysis.md)
   — the B-DOS hook surface + Trinity SD sector layer.
-- [`samdos-file-io.md`](samdos-file-io.md) — the DOS write hooks the inbound leg
-  reuses.
+- [`samdos-file-io.md`](samdos-file-io.md) — the DOS hooks the store reuses.
+- `~/git/trinload` (incl. `test/README.md`, commit `9ff9099`, captured frames),
+  `~/sam-corpus/disks/trinity.mgt` (+ uIP), `~/sam-archive/bdos/analysis/`.
+- Item registry: i82 (client), i83 (server), i86 (DHCP responder), i70 (HTTP
+  self-provisioning), i80 (SimCoupé Trinity-net emulation), i87 (patched-ROM dump),
+  i58/i61/i62/i71 (Trinity + B-DOS research).
 - [`phase3-tftp-design.md`](phase3-tftp-design.md) — the prior sketch this
-  extends/supersedes.
-- Item registry: i82 (client), i83 (server), i80 (SimCoupé Trinity-net emulation),
-  i70 (firmware self-provisioning), i58/i61/i62/i71 (Trinity + B-DOS research).
+  supersedes.
