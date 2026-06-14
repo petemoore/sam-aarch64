@@ -809,23 +809,21 @@ sha_bigsigma1:
                 ret
 
 ; ---------------------------------------------------------------------------
-; sha_ch — Ch(e,f,g) = (e AND f) XOR ((NOT e) AND g). Reads wv_e/wv_f/wv_g.
-; Out: sha_tmpa = result. Clobbers A,B,C,DE,HL,IX,IY.
+; sha_ch — Ch(e,f,g) = (e AND f) XOR ((NOT e) AND g), computed in the simplified
+; form g XOR (e AND (f XOR g)) — one fewer op per byte and no CPL.
+; Reads wv_e/wv_f/wv_g. Out: sha_tmpa = result. Clobbers A,B,DE,HL,IX,IY.
 ; ---------------------------------------------------------------------------
 sha_ch:
-                ld      hl, wv_e
-                ld      de, wv_f
-                ld      ix, wv_g
-                ld      iy, sha_tmpa
+                ld      hl, wv_e                ; HL -> e[i]
+                ld      de, wv_f                ; DE -> f[i]
+                ld      ix, wv_g                ; IX -> g[i]
+                ld      iy, sha_tmpa            ; IY -> dst[i]
                 ld      b, 4
 sha_ch_lp:
                 ld      a, (de)                 ; f
-                and     (hl)                    ; e & f
-                ld      c, a                    ; save (e&f)
-                ld      a, (hl)                 ; e
-                cpl                             ; ~e
-                and     (ix+0)                  ; ~e & g
-                xor     c                       ; (e&f) ^ (~e&g)
+                xor     (ix+0)                  ; f ^ g
+                and     (hl)                    ; e & (f^g)
+                xor     (ix+0)                  ; g ^ (e & (f^g))
                 ld      (iy+0), a
                 inc     hl
                 inc     de
@@ -835,7 +833,8 @@ sha_ch_lp:
                 ret
 
 ; ---------------------------------------------------------------------------
-; sha_maj — Maj(a,b,c) = (a AND b) XOR (a AND c) XOR (b AND c).
+; sha_maj — Maj(a,b,c) = (a AND b) XOR (a AND c) XOR (b AND c), computed in the
+; simplified form (a AND b) OR (c AND (a XOR b)) — 1 XOR + 2 AND + 1 OR.
 ; Reads wv_a/wv_b/wv_c. Out: sha_tmpa = result. Clobbers A,B,C,DE,HL,IX,IY.
 ; ---------------------------------------------------------------------------
 sha_maj:
@@ -846,15 +845,12 @@ sha_maj:
                 ld      b, 4
 sha_maj_lp:
                 ld      a, (hl)                 ; a
-                and     (ix+0)                  ; a & b
-                ld      c, a                    ; save (a&b)
+                xor     (ix+0)                  ; a ^ b
+                and     (iy+0)                  ; c & (a^b)
+                ld      c, a                    ; save c & (a^b)
                 ld      a, (hl)                 ; a
-                and     (iy+0)                  ; a & c
-                xor     c                       ; (a&b)^(a&c)
-                ld      c, a
-                ld      a, (ix+0)               ; b
-                and     (iy+0)                  ; b & c
-                xor     c                       ; result byte
+                and     (ix+0)                  ; a & b
+                or      c                       ; (a&b) | (c & (a^b))
                 ld      (de), a
                 inc     hl
                 inc     de
