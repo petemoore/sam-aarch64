@@ -909,6 +909,15 @@
   owner: agent
   refs: [i59]
 
+- id: i66
+  title: Trinity page-persistence as a general persist-to-mass-storage technique
+  description: |
+    Persist SAM pages to Trinity B-DOS records as a general storage technique. Deferred by Pete's decision (2026-06-10, q9 resolved): 'no value implementing right now'; revisit only if a concrete need appears. Conditional on i66's reactivation being Pete's call.
+  status: OPEN
+  kind: leaf
+  owner: pete
+  refs: [docs/notes/bdos-version-landscape.md]
+
 - id: i67
   title: Night-shift T-state optimization of the Z80 ZX0 compression path
   description: |
@@ -931,6 +940,24 @@
     - {num: 176, role: completing}
   refs: [i60, docs/notes/comment-compression-research.md]
 
+- id: i69
+  title: "Test-memory architecture: relieve section-C test-variant squeeze using test-coexistence principle"
+  description: |
+    Relieve section-C test-variant squeeze (principle: tests need not coexist in memory). Levers in order: (1) evict suites off-axis (PR #52 pattern); (2) serial test bay (page-13 time-multiplex generalised); (3) chunked payloads across more pages/disk; (4) multiple boots. Lever 1 partially applied (PR #180): test_symbols + test_local_labels evicted; test variant code_end &BFAA→&BCA3 (86B→861B headroom). Remaining levers ready for next pressure event.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [i68, src/README.md]
+
+- id: i70
+  title: "Phase-3 firmware self-provisioning: SAM fetches Pi firmware blobs via HTTP and persists to Trinity storage"
+  description: |
+    SAM IP stack fetches Pi firmware (several MB) from cdn.githubraw.com over HTTP (q11 resolved: on-SAM HTTP via uIP, host-tool-free; q12 resolved: Model A only). Full host-verifiable HTTP-fetch path complete + host-verified across Bricks 1–6 (#245/#247/#254/#256/#257/#259 netboot_http.asm). Remaining: hardware-gated (EEPROM read + section-C paging + HSAVE RST-8 dispatch on real Trinity; emulation-verified != hardware-verified, CLAUDE.md §5). i82 TFTP client bridges provisioning meanwhile; HTTPS stretch is i88.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/phase3-delivery-design.md, docs/notes/trinity-capabilities.md, docs/notes/bdos-version-landscape.md, src/netboot/netboot_http.asm, docs/notes/netboot-trinity-testing.md, i61, i66, i84, i88]
+
 - id: i71
   title: "B-DOS reference + Trinity-fork deep-dive: vendor, disassemble, diff, re-point rig"
   description: |
@@ -952,6 +979,24 @@
   prs:
     - {num: 187, role: completing}
   refs: [i62, docs/specs/samdos-file-io.md]
+
+- id: i73
+  title: i17 review residuals — LOW-severity hardening and dead-code findings
+  description: |
+    Low-severity hardening items split from i17 (PR #185). Landed: L1 emit_byte off-by-one (PR #338), L6 .align>=16 silent no-op (PR #339), L7 pass-1 backward-.org check missing (PR #340), L9 retired symbolic-encoder path removed (PR #371, q20 sweep). Open: L3 symbol_abs_bit_ptr missing id<512 bound; L4 exactly-full-buffer conservative rejections; L5 zero-length LIT_INSTS BC underflow; L10 u8 segment-counter wrap; L11 load_in_file editor-offset wrap; L12 .set redefinition divergence. Follow-up i109 (vestigial soft-reject hook).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: ["PR #185", i17]
+
+- id: i74
+  title: i7 phase D — at/ic/barrier operand-table codegen from the Go authority
+  description: |
+    Codegen the at/ic/barrier operand tables from the Go authority (spec §6 Q3). Deferred by sequencing only (Pete 2026-06-12: tracked so it automatically gets done); queue after i7 phases A–C land. Gated on the aarch64dec/sys.go code→data refactor (i7 phase D prerequisite).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/codegen-tables-design.md, i7]
 
 - id: i75
   title: "B-DOS boot-disk swap execution: prove SimCoupé matrix green, flip shipped default"
@@ -1021,6 +1066,15 @@
   parent: i76
   refs: [docs/specs/editor-rendering-rules-design.md, q13]
 
+- id: i77
+  title: spectrum4 source succinctification — comments + pathological constant expressions
+  description: |
+    Agent-driven, section-by-section, human-reviewed (Pete 2026-06-12): (a) comments rewritten aggressively succinct but still readable; (b) pathological constant expressions replaced with named equates (e.g. the longest instruction in the corpus: `movk w0, (65536 | (((BORDER_COLOUR >> 16) & 65535) & 65535)), lsl #16`). Coordinate with upstream spectrum4 (content originates there; release.s re-flattens). Ties to editor-tui spec D1 (all comments <256B → u16 record length can revert to u8). Parked (editor era).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/editor-tui-prototype-design.md, i76]
+
 - id: i78
   title: "Source-structure preservation in the v2 editor region (blank lines, comment grouping, indentation)"
   description: |
@@ -1042,6 +1096,15 @@
   prs:
     - {num: 206, role: completing}
   refs: [tools/editor-prototype/samscreen/palette.go]
+
+- id: i80
+  title: Trinity network-interface emulation — ENC28J60 Ethernet SPI emulation for host-side Z80 netboot iteration
+  description: |
+    Emulate Quazar Trinity ENC28J60 Ethernet (SPI via port &DE) so the SAM network stack can be iterated host-side. Go-first: enc28j60.go emulates Trinity microcontroller + ENC28J60 SPI (4 banks, 8KB RX/TX buffer, MAC/MII read-dummy). Real Z80 driver (src/netboot/encdrv.asm, trinload verbatim) runs against it; CI via netboot-z80 job. Landed: init/write/read/DHCP loopback verified (PR landed). Remaining: wire-I/O state machines (DHCP/TFTP transfer-loop) + end-to-end Pi boot on real Trinity (hardware-gated, CLAUDE.md §5).
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  refs: [docs/notes/trinity-capabilities.md, docs/specs/phase3-delivery-design.md, src/netboot/encdrv.asm, tools/netboot-oracle/z80/enc28j60.go, i58, i82, i83, i86, i92]
 
 - id: i81
   title: Upstream SimCoupé issue triage — review open issues and assist where we can
@@ -1075,6 +1138,15 @@
     - {num: 244, role: completing}
   refs: [docs/notes/tftp-protocol-research.md, docs/specs/phase3-delivery-design.md, src/netboot/netboot_client.asm, src/netboot/tftp_client_loop.asm, src/netboot/tftp_client_front.asm, tools/netboot-oracle/client/client.go, simonowen/trinload, i80, i83, i84, i86, i93, i118]
 
+- id: i83
+  title: SAM TFTP server (Phase-3 PXE shipper) — serve spectrum4 kernel and Pi firmware over TFTP
+  description: |
+    Phase-3 headline goal: SAM+Trinity netboots a Pi by serving boot files by name from one flat Trinity store. Design confirmed (Pete 2026-06-14): Model A (DHCP+TFTP server, model-general, any aarch64 Pi). Transfer loop landed + host-verified end-to-end (PR #230 — tftp_server_loop.asm vs Go ServerLoop, over i80 emulation; name→record seam is i93 bdos_seam). Pairs with i70 (firmware self-provisioning). Remaining: DHCP server (i86, mandatory for Pi-3+multi-client) + real B-DOS RST 8 HGTHD/HLOAD hook dispatch on Trinity (hardware-gated, Pete's test).
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  refs: [docs/plans/phase3-netboot-implementation-plan.md, docs/specs/phase3-delivery-design.md, docs/notes/pi-netboot-capture-analysis.md, src/netboot/tftp_server_loop.asm, tools/netboot-oracle/tftp/serverloop.go, i70, i80, i82, i84, i86, i89, i93]
+
 - id: i84
   title: Phase-3 end-to-end delivery design — integrating spec for the self-hosting boot/delivery loop
   description: |
@@ -1096,6 +1168,24 @@
   prs:
     - {num: 208, role: completing}
   refs: [docs/notes/comment-compression-research.md, i78, i57, i60]
+
+- id: i86
+  title: Minimal SAM DHCP/bootp responder — netboot server's DHCP half
+  description: |
+    Answer Pi boot ROM DHCP DISCOVER/REQUEST with OFFER/ACK: address from small pool, subnet, next-server (siaddr=SAM), PXEClient echo (opt 60), fixed 32-byte option-43 'Raspberry Pi Boot' blob, client UUID echo (opt 97); no opt-67. Confirmed from real capture (pi-netboot-capture-analysis.md). Responder loop LANDED + host-verified end-to-end: dhcp_loop.asm DORA (DISCOVER→OFFER, REQUEST→ACK, stable per-MAC lease) byte-for-byte vs Go authority dhcp/responder.go, over i80 emulated Trinity; wired to ci-netboot-z80. Remaining: end-to-end Pi boot on real Trinity (hardware-gated, CLAUDE.md §5).
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  refs: [docs/plans/phase3-netboot-implementation-plan.md, docs/specs/phase3-delivery-design.md, src/netboot/dhcp_loop.asm, tools/netboot-oracle/dhcp/responder.go, i80, i83, i84]
+
+- id: i88
+  title: On-SAM HTTPS/TLS-1.3 client to fetch Pi firmware directly from GitHub
+  description: |
+    Phase-3 stretch, LOWEST priority (Pete: only when nothing else is left). TLS-crypto-only: github.com-only, pinned public key, no CA store (content is SHA-256-pinned so cert verification is skipped). 6a host-verifiable state machine DONE (i88a); 6b record-reassembly layer DONE (i88b: tls_reasm.asm). Remaining 6b is hardware-gated integration: wire tls_reasm_feed into tcp_conn CONN_SINK_FILTER, paging layout, bootable disk, real RST 8 on Trinity. Prerequisite: TC_RX must grow 1056->16645 B (TLS max) before a real Certificate record fits.
+  status: IN_PROGRESS
+  kind: umbrella
+  owner: agent
+  refs: [docs/specs/phase3-delivery-design.md, src/netboot/tls_client.asm, tools/netboot-oracle/tls/, docs/specs/tls13-handshake.md, i70, i84, i100]
 
 - id: i88a
   title: "i88 6a — host-verifiable TLS-1.3 client: all crypto primitives + handshake bricks 1–5 + brick-6a state machine"
@@ -1121,6 +1211,15 @@
   parent: i88
   refs: [src/netboot/tls_reasm.asm, tools/netboot-oracle/tls/reassembler.go, tools/netboot-oracle/z80/tls_reasm_test.go, i88]
 
+- id: i90
+  title: "%nobits/BSS section bodies dropped by -flatten — source-structure loss"
+  description: |
+    When source is flattened (-flatten, the release path), the entire body of every %nobits/BSS section (bss_kernel/bss_roms/…) is discarded: contributes zero bytes, so blank lines/comments inside BSS don't round-trip (release.s: 132 of 1472 blank lines, all in NOBITS sections). Pre-existing flatten property, not an i78 bug — i78 blank/comment preservation is exact for PROGBITS. Only matters once the SAM editor edits a flattened source with BSS content. Captured only — decide whether to preserve NOBITS editor content if/when the flattened-edit path needs it.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/source-structure-preservation-design.md, tools/sam-aarch64/frontend/flatten.go, i78]
+
 - id: i91
   title: Phase-3 netboot host oracle harness (tools/netboot-oracle/)
   description: |
@@ -1132,6 +1231,24 @@
     - {num: 219, role: completing}
   refs: [tools/netboot-oracle/, "docs/plans/phase3-netboot-implementation-plan.md §6/§8.1", docs/notes/pi-netboot-capture-analysis.md, i82, i83, i86, i80]
 
+- id: i92
+  title: "Phase-3 netboot Z80 port of protocol logic (src/netboot/*.asm)"
+  description: |
+    SAM-side Z80 implementation of DHCP/TFTP packet builders/parsers, ported from i91 Go authority (tools/netboot-oracle/) and host-verified byte-for-byte via koron-go/z80 harness (ci-netboot-z80 job). Landed (all host-verified): build_udp_frame (#221), build_dhcp_reply (#222), build_oack/build_data/build_error, parse_request/resolve, build_rrq/parse_oack/find_option, build_arp_request. All packet build/parse logic ported. Remaining: wire-I/O state machines (ENC28J60 send/receive, DHCP/TFTP/transfer loops) — NOT host-verifiable; gated on i80/real-Trinity.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  refs: [src/netboot/, tools/netboot-oracle/z80/, docs/plans/phase3-netboot-implementation-plan.md, docs/notes/pi-netboot-capture-analysis.md, i82, i83, i86, i91]
+
+- id: i93
+  title: Phase-3 netboot B-DOS storage seam (bdos_seam.asm) — name-to-record glue
+  description: |
+    Name→record glue shared by i83 server and i82 client. Three routines from Go authority bdos/bdos.go, host-verified: bdos_name_to_uifa (name→48-byte UIFA), bdos_difa_to_size (DIFA→32-bit size for OACK tsize), bdos_fill_save_uifa (name+page+offset+size→HSAVE UIFA). Field conventions from src/io.asm/loader.asm/main_loop.asm + samdos-file-io.md. Seam arithmetic LANDED + host-verified. Remaining: RST 8 hook dispatch (HGTHD/HLOAD/HSAVE/HRECORD) stays unverified until real Trinity (hardware-gated, CLAUDE.md §5).
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  refs: [src/netboot/bdos_seam.asm, tools/netboot-oracle/bdos/, docs/specs/samdos-file-io.md, docs/notes/bdos-version-landscape.md, i82, i83, i62, i71]
+
 - id: i94
   title: Phase-3 netboot bring-up smoke test (ARP responder)
   description: |
@@ -1142,6 +1259,15 @@
   prs:
     - {num: 238, role: completing}
   refs: [src/netboot/smoke_test.asm, src/netboot/build_arp_reply.asm, tools/netboot-oracle/smoke/smoke.go, docs/notes/netboot-trinity-testing.md, i80, i91, i92, i93]
+
+- id: i95
+  title: Phase-3 netboot integrated server — single dispatch loop (ARP+DHCP+TFTP)
+  description: |
+    Headline Phase-3 program: SAM+Trinity netboots a Pi by answering ARP+DHCP+TFTP in one loop, serving boot files by name from the flat store. Go authority + Z80 netboot_serve_once LANDED + host-verified: full DISCOVER→OFFER→REQUEST→ACK→ARP→RRQ→OACK→DATA session vs Go byte-for-byte. Bootable disk shipped. Hardware first-light (2026-06-18): ARP+TFTP sub-responders real-Trinity-verified (i96). Remaining: DHCP server + B-DOS store provisioning (i93) + Pi-boot gated on real Trinity.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  refs: [tools/netboot-oracle/server/server.go, src/netboot/netboot_server.asm, docs/plans/phase3-netboot-implementation-plan.md, docs/notes/pi-netboot-capture-analysis.md, docs/notes/netboot-trinity-testing.md, i80, i83, i86, i93, i94]
 
 - id: i96
   title: "Phase-3 serve-files TFTP demo (ARP + TFTP, no DHCP)"
@@ -1187,6 +1313,15 @@
     - {num: 283, role: completing}
   refs: [src/netboot/netboot_http.asm, src/netboot/tcp_conn.asm, src/netboot/fw_span.asm, src/netboot/bdos_seam.asm, tools/netboot-oracle/tcp/conn.go, tools/netboot-oracle/bdos/span.go, docs/notes/sam-stub-audit.md, docs/specs/phase3-delivery-design.md, i70, i93, i24]
 
+- id: i100
+  title: Firmware-download provisioning UX — user-selectable revision and file subset
+  description: |
+    On-SAM multi-file firmware downloader with user-selectable revision pin and file subset. Host-verified slice complete as i100a; bootable migration + real HSAVE store leaf complete as i100b (closed). Remaining: i100c picker UX (Pete-gated interface design).
+  status: IN_PROGRESS
+  kind: umbrella
+  owner: agent
+  refs: [src/netboot/fw_source.asm, src/netboot/http_main.asm, docs/specs/phase3-delivery-design.md, i100a, i100b, i100c]
+
 - id: i100a
   title: i100 http_main host slice — Go authority http.Provisioner + Z80 Bricks 1-6
   description: |
@@ -1210,6 +1345,25 @@
     - {num: 373, role: completing}
   parent: i100
   refs: [src/netboot/http_main.asm, src/netboot/tcp_conn.asm, src/netboot/netboot_http.asm, src/netboot/fw_span.asm, tools/netboot-oracle/bdos/span.go, i100, i100a, i110]
+
+- id: i100c
+  title: Picker UX — user-facing revision/file-selection interface for the firmware downloader
+  description: |
+    User-facing revision/file-selection interface for the firmware downloader. Interface design is Pete's call (editor-era UX, no autonomous decision here). No specific qN gates it — bare Pete decision.
+  status: OPEN
+  kind: leaf
+  owner: pete
+  parent: i100
+  refs: [docs/specs/phase3-delivery-design.md, i100]
+
+- id: i102
+  title: Aggressive T-state optimization of the netboot crypto / TLS-1.3 cipher-suite Z80
+  description: |
+    Drive down T-states and code size of host-verified crypto leaves (sha256, hmac_sha256, hkdf, chacha20, poly1305, x25519, aead) using full Z80 opcode set including undocumented instructions; bit-exact reproducibility preserved (byte-for-byte host tests are the guardrail). Craft/fun exercise, no deadline. Landed as sub-items i102a–i102l + i102n–i102r (all DONE, closed registry): x25519 cumulative -50.4% (1.604G→0.796G), SHA-256 -56.8% (729K→315K T/block, fastest verified Z80 SHA-256). Remaining: i102m (sha256 throughput umbrella — sub-items mostly done, one small lever left).
+  status: IN_PROGRESS
+  kind: umbrella
+  owner: agent
+  refs: [i88, src/netboot/, tools/netboot-oracle/z80/]
 
 - id: i102a
   title: i102 measurement infra — cycle-exact T-state counter in koron-go/z80 harness
