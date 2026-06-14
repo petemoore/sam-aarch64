@@ -234,21 +234,37 @@ green throughout.
 
 ## Migration execution process (q28 → bounded-batch audited migration)
 
-Pete's process for the single-PR cutover (2026-06-19), with the refinements agreed
-in review. **One PR; push only at the very end** — both agent roles run the checks
-**locally** per batch so issues surface without a CI round-trip. **Status: PROPOSED
-— pending Pete's sign-off on the `--migrating` mode + the i119 review; nothing is
-executed until then.**
+Pete's process for the single-PR cutover (2026-06-19), refined in review. **One PR;
+push only at the very end** — both agent roles run the checks **locally** per batch
+so issues surface without a CI round-trip. **Status: AGREED (Pete, 2026-06-19).**
+This is the **FIRST implementation step** — done after the design write-up and once
+`main` is clean/synced, and **before** any SAM-program implementation.
 
-### Prerequisite tool change — a `--migrating` partial-validation mode
-The mutators run `validate` after every op, and strict validation requires every
-`depends_on` target and id-shaped ref to already exist (invariants 10/11) + no
-non-WONTFIX→WONTFIX (12). Mid-migration that **fails on any forward reference** to a
-not-yet-migrated node. Fix: a `--migrating` flag (or `REGISTRY_MIGRATING=1`) that
-runs the **structural** invariants (ids unique + well-formed, canonical sort,
-status enum, one-PR, bounded fields) but **defers the cross-node checks (10/11/12/13)**.
-Batches use `--migrating`; the final pre-switchover commit runs **strict** `validate`
-once every node exists. (Small, isolated tool addition + its own red-fixture test.)
+### Dependency-ordered batches — the forward-reference solution (Pete, 2026-06-19)
+The mutators `validate` after every op, and strict validation requires every
+`depends_on` target + id-shaped ref to exist (invariants 10/11) and no
+non-WONTFIX→WONTFIX (12). A naive batch order would fail on any forward reference
+to a not-yet-migrated node. **Solution: migrate in dependency order** — a node is
+migrated only *after* (or alongside, in correct intra-batch order) everything it
+`depends_on`. Then **`depends_on` validation (11/12/13) passes strictly per batch**,
+because every dep target already exists. Migrate "leaves first, up the DAG" (start
+from nodes that depend on nothing, work toward their dependents), keeping
+umbrellas+leaves together.
+
+**The orchestrator runs a dependency PRE-PASS first** (read-only): extract the DAG
+from the old registry's `BLOCKED`/blocked-on prose + refs, topologically sort it,
+and chunk into ~15-20-item batches that respect that order (a deep chain spans
+several *ordered* batches — its bottom migrated first — so there's never a forward
+reference *and* never a giant batch). The pre-pass also surfaces the dependency
+structure (today buried in prose) for a sanity check before anything is touched.
+
+**The one residual — refs, not deps.** The `refs`/"see also" column is cross-links,
+not dependencies, and can be **cyclic** (i119 refs i114, i114 refs i119), so it
+can't be topologically ordered. A ref to a not-yet-migrated item would trip
+invariant 10. So the only per-batch deferral needed is a **`--migrating` flag that
+defers ONLY invariant 10 (ref-existence)** — far smaller than deferring the whole
+cross-node suite. Strict `validate` (incl. refs) runs once at the end. (Small,
+isolated tool addition + a red-fixture test.)
 
 ### Commit 1 — rename + seed + empty generated views
 - Rename the four live registries to `*.old` (`item-registry-open.md` →
@@ -288,6 +304,18 @@ Special cases:
   its decision is already captured in the relevant item (or fold it in) **before**
   deleting it; the reviewer verifies no decision is lost.
 - **Closed items migrate** as `DONE`/`WONTFIX` records (→ generated `item-registry-closed.md`).
+
+### The tools are unproven on real data — both roles surface tool bugs
+The registry tools have only ever run on a ~10-record synthetic fixture; the
+migration is their first real-data exercise and the **de-facto integration test**.
+A 5-minute grob test already found two generator bugs — the item cell dropped the
+description, and a spurious trailing `<br>` — both fixed (PR #451). So **both agent
+briefings say explicitly: the tools may be at fault.** If `gen` produces wrong/ugly
+output or `validate` fails spuriously, suspect the **TOOL**, not the migration —
+surface it. Fix it in the batch PR if it is small and clear-cut; otherwise feed it
+back to the orchestrator, who fixes the tool and re-runs the batch. The migration is
+a **tool-hardening pass** too. Treat the **first batch as a proving batch** — extra
+scrutiny on the generated output's readability before scaling up.
 
 ### Final commits — strict validate + switchover
 - Once the `.old` files are empty, **delete** them.
