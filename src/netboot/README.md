@@ -8,7 +8,9 @@ It sits on the trinload UDP/IP/Ethernet stack (simonowen/trinload, Simon Owen; B
 
 The host Go module `tools/netboot-oracle/` is the **authority**: its `frame`/`dhcp`/`tftp` packages build and parse the same packets, verified byte-for-byte against masked golden vectors from a real Pi 400 capture. Each routine here is a faithful port of the matching Go function (memory `feedback_go_is_encoding_authority`) — port, do not reinvent.
 
-The **protocol logic is host-verifiable**: `tools/netboot-oracle/z80/` assembles each routine with pyz80, runs it under a flat-memory koron-go/z80 harness, and asserts its emitted packet equals the golden vector (`make ci-netboot-z80`, the `netboot-z80` CI job). The **ENC28J60 wire I/O and an end-to-end Pi boot are NOT host-verifiable** — they are gated on i80 (SimCoupé Trinity-net emulation) or real Trinity hardware, and live on an unmerged branch until one of those can exercise them.
+The **protocol logic is host-verifiable**: `tools/netboot-oracle/z80/` assembles each routine with pyz80, runs it under a flat-memory koron-go/z80 harness, and asserts its emitted packet equals the golden vector (`make ci-netboot-z80`, the `netboot-z80` CI job).
+
+The **ENC28J60 wire I/O is now host-verifiable too (i80)**: `tools/netboot-oracle/z80/enc28j60.go` emulates the Trinity microcontroller (port `&DC` select/busy, `&DD` identity probe) and the ENC28J60 SPI chip (port `&DE`: the RCR/WCR/RBM/WBM/BFS/BFC command set, the four register banks, the 8 KB RX/TX buffer, the MAC/MII read-dummy), grounded in the ENC28J60 datasheet (DS39662E) and the driver's own port usage. The test runs the *real* vendored driver (`encdrv.asm`) against it and asserts `drv_init` succeeds, `drv_write` puts a frame on the virtual wire byte-exact, and an injected RX frame comes back through `drv_read` byte-exact. This is **emulation verification, not hardware verification** — an **end-to-end Pi boot and real-silicon TX/RX remain gated on real Trinity hardware** (the final integration gate; `docs/notes/trinity-capabilities.md`).
 
 ## Files
 
@@ -18,5 +20,6 @@ The **protocol logic is host-verifiable**: `tools/netboot-oracle/z80/` assembles
 - `tftp_build.asm` — the i83 TFTP server's reply-packet builders: OACK, DATA, ERROR; the port of `tftp/tftp.go::BuildOACK`/`BuildDATA`/`BuildError`.
 - `tftp_parse.asm` — the i83 TFTP server's request side: parse an incoming RRQ (`parse_request`) and resolve its filename against the flat store (`resolve`: 404 serial-subdir, OACK a hit, ERROR(1) every miss); the port of `tftp/tftp.go::ParseRequest` and `tftp/server.go::Resolve`.
 - `tftp_client.asm` — the i82 TFTP client's request side: build a read request (`build_rrq`) and parse the server's option-acknowledgement (`parse_oack` + `find_option`, learning the negotiated blksize / file tsize); the port of `tftp/tftp.go::BuildRRQ` and `::ParseOACK`.
+- `encdrv.asm` — the vendored Quazar Trinity ENC28J60 driver (simonowen/trinload, Simon Owen, verbatim): the real wire-I/O `drv_init`/`drv_read`/`drv_write` the netboot stack sits on. Not reimplemented (port/reuse the authority). `encdrv_harness.asm` orgs it at `&8000` so the i80 emulation can run it.
 
 Design + sequencing: `docs/plans/phase3-netboot-implementation-plan.md`; wire-level oracle: `docs/notes/pi-netboot-capture-analysis.md`.

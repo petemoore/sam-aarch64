@@ -154,15 +154,16 @@ jobs:
       - name: Netboot oracle (DHCP/TFTP golden vectors)
         run: make ci-netboot-oracle
 
-  # netboot-z80 — the SAM-side Z80 port of the netboot protocol logic
-  # (src/netboot/*.asm), assembled with pyz80 and run under the flat-memory
-  # koron-go/z80 harness, byte-compared against the same golden vectors the Go
-  # authority is checked against (tools/netboot-oracle/z80).  This gates the
-  # host-verifiable half of the Z80 port: the packet builders are pure
-  # arithmetic + memory writes, so the emitted bytes are a real, observable
-  # verification.  Needs pyz80 (so a pip install), unlike the pure-Go
-  # netboot-oracle job; still no SimCoupé container.  The ENC28J60 wire I/O +
-  # end-to-end Pi boot remain NOT host-verifiable (gated on i80/real-Trinity).
+  # netboot-z80 — the SAM-side Z80 port of the netboot logic (src/netboot/*.asm),
+  # assembled with pyz80 and run under the flat-memory koron-go/z80 harness
+  # (tools/netboot-oracle/z80).  Two host-verifiable layers: (1) the packet
+  # builders/parsers are pure arithmetic + memory writes, byte-compared against
+  # the same golden vectors the Go authority is checked against; (2) the ENC28J60
+  # wire I/O (i80) — the harness emulates the Trinity board (enc28j60.go) and runs
+  # the real driver (encdrv.asm) with frame bytes in/out asserted byte-exact.
+  # Needs pyz80 (so a pip install), unlike the pure-Go netboot-oracle job; still
+  # no SimCoupé container.  An end-to-end Pi boot + real-silicon TX/RX timing
+  # remain NOT host-verifiable (gated on real Trinity hardware).
   netboot-z80:
     runs-on: ubuntu-latest
     steps:
