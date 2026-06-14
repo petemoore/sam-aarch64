@@ -143,6 +143,20 @@ func (c *Conn) OnSegment(f []byte) []byte {
 	return nil
 }
 
+// Send pushes application payload as a data segment (PSH|ACK) over an
+// established connection and advances sndNxt by the payload length (data
+// consumes len, RFC 793 §3.3). Returns the frame for drv_write, or nil if the
+// connection is not established. The i70 HTTP client uses this to send its GET
+// request; this state machine then ACKs the streamed response.
+func (c *Conn) Send(payload []byte) []byte {
+	if c.State != StateEstablished {
+		return nil
+	}
+	seg := c.build(FlagPSH|FlagACK, payload)
+	c.sndNxt += uint32(len(payload))
+	return seg
+}
+
 // Close originates the teardown from our side (the HTTP client uses this once it
 // has the whole body): emit our FIN|ACK and move to FIN-WAIT. Returns nil unless
 // the connection is established.
