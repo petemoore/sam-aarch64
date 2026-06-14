@@ -360,7 +360,75 @@ non-Pi / non-aarch64 targets; encryption/auth (the cable/LAN is the boundary);
 wireless. DHCP and a single HTTP-fetch are now **in** scope (they were out in the
 old sketch).
 
-## 13. Related
+## 13. Capstone integration (i101) — one bootable disk: boot → fetch → assemble → serve
+
+The capstone composes the three already-built layers — the i100 firmware fetch, the
+SAM-side aarch64 assembler (M6 release byte-match), and the i83/i86 netboot server —
+into a single bootable SAM disk that, on power-on, fetches the pinned Pi firmware,
+assembles the spectrum4 kernel **on the SAM**, and serves both to a real Pi 400.
+This section records the integration architecture (the new orchestration work);
+the per-component internals live in §5–§8.
+
+### 13.1 The three layers cannot co-reside — they run as sequential overlays
+
+All three programs are org `&8000` and each claims overlapping memory: section-C code
+(`&8000–&BFFF`) + section-D scratch (`&C100+`), and the assembler additionally claims
+physical pages 4–12 (ENCTAB / OUT / IN). They **cannot be resident simultaneously**.
+But they need not be: the three phases are **sequential and one-shot-then-daily** —
+fetch runs **once** (provisioning), assemble runs **once** (build the kernel), serve
+runs as the **daily loop**. So the deliverable loads each phase binary at `&8000` in
+turn (a chain-load / overlay), exactly as the assembler's ENCTAB COMET trampoline
+pages code in for one job. This sidesteps the "fit three big things under `&10000` at
+once" problem entirely — only one phase is resident at a time.
+
+| phase | binary (org &8000) | role | reads | writes |
+|-------|--------------------|------|-------|--------|
+| fetch | `http_main` (i100b, ends &EB0F) | download 6 pinned firmware files | network (cdn.githubraw.com) | store: firmware span records |
+| assemble | `assembler` (M6, prod ~11.4 KB) | build the spectrum4 kernel | store/disk: `release.tbn` (staged) | store: `kernel8.img` |
+| serve | `netboot_server` (i95) | DHCP+TFTP-serve files by name | store: firmware + kernel | network (the Pi) |
+
+### 13.2 Trinity B-DOS storage is the shared hand-off medium
+
+The phases never share RAM — they hand off through the **flat B-DOS store** (§8). The
+fetch phase writes each firmware file as one-or-more span records (`<prefix><NNN>`,
+`fw_span.asm`); the assemble phase writes `kernel8.img`; the serve phase resolves every
+TFTP request by name from the same store. The on-store record encoding (the 48-byte
+UIFA / DIFA: type-19 CODE, name, page/offset, `pages·16384 + lengthMod16K`) is a
+**single contract host-verified on both the write side and the read side**
+(`bdos_seam.asm` ↔ `tools/netboot-oracle/bdos/`, `bdos_seam_test.go`/`fw_span_test.go`),
+so a file written by fetch is byte-faithfully served by the server with no conversion.
+`release.tbn` is **staged on the deliverable disk** (it is the spectrum4 source, not
+fetched); the assembler reads it as its `IN` file and emits `OUT` = the kernel, which
+the orchestration then names so the server serves it.
+
+### 13.3 Verification: component logic is autonomous; the chained boot is hardware-gated
+
+Each layer's **logic** is already independently verified — the assembler end-to-end in
+SimCoupé (the `release-gate` 3-way byte-match), and the fetch + serve state machines in
+the koron-go/z80 harness (`TestProvisionMultiFileZ80`, `TestServerFullSession`). What
+is **NOT** emulation-runnable is the *chained real boot*: SimCoupé does not emulate
+Trinity's ENC28J60 network or SD storage (that is the absent **i80**), and the
+koron-go/z80 harness runs one routine in flat memory, not a disk-booted multi-phase
+chain over real B-DOS `RST 8` hooks. So the genuine single-disk
+boot→fetch→assemble→serve, and the Pi 400 booting from it, are **Pete's hardware gate**
+(CLAUDE.md §5 — emulation-verified ≠ hardware-verified). The **autonomously-buildable**
+remainder is: (a) the orchestrator's phase-selection + chain-load decision logic, and
+(b) a harness-level composition test driving fetch→assemble→serve data flow through the
+Go `bdos.Store` as the hand-off — both host-verifiable without real hardware.
+
+### 13.4 The open decision — the orchestration UX (q23)
+
+The one genuinely new product choice is **how the phases are sequenced for the user**:
+one auto-sequencing disk that detects provisioning state (markers in the store) and
+runs fetch → assemble → serve automatically; vs three separate single-purpose disks the
+user boots in sequence (no new orchestrator, just the shared store + a documented
+order); vs a boot menu. This shapes whether i101 needs a new resident orchestrator
+(`i101a`-to-be) or is mostly store-output-naming wiring + documentation. It is an
+editor-era-style UX call Pete owns (cf. i100c) — tracked as **q23**, and the next
+concrete i101 increment waits on it. The hardcoded-pin fetch (`FW_SHA`, 6-file manifest)
+means **no i100c picker is required** for the capstone under any of these models.
+
+## 14. Related
 
 - [`../notes/pi-netboot-capture-analysis.md`](../notes/pi-netboot-capture-analysis.md)
   — **the DHCP+TFTP server oracle** (real Pi 400 capture distilled into the i83/i86
