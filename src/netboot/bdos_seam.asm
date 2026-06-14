@@ -215,6 +215,7 @@ BD_DIFA_ADDR:     equ &4B50              ; SAMDOS deposits the DIFA here
 BD_HOOK_HRECORD:  equ &9C                ; B-DOS record select (156)
 BD_HOOK_HGTHD:    equ 129                ; get file header (find by name)
 BD_HOOK_HSAVE:    equ 132                ; save whole file
+BD_HOOK_HRSAD:    equ 160                ; read raw 512-byte sector (HRSAD)
 
 ; bdos_select_record — HRECORD: select the mass-storage record (0 = floppy).
 ; In: A = record number. On real B-DOS, all subsequent HGTHD/HSAVE/HLOAD use it.
@@ -254,6 +255,26 @@ bdos_save_hook:
                 defb    BD_HOOK_HSAVE
                 ret
 
+; bdos_read_sector — read 512 bytes from the selected record at (track, sector).
+;
+; In:  BD_READ_TRACK   1 byte   track (0-79)
+;      BD_READ_SECTOR  1 byte   sector (1-10)
+; Out: BD_READ_BUF   512 bytes  the sector data
+; Clobbers: A, DE, HL.
+;
+; On real hardware the hook dispatch routes this through the B-DOS sector cache
+; and the Trinity SD driver. In the harness the HRSAD handler (i119 brick 1)
+; intercepts the RST 8 and fills BD_READ_BUF from the CardModel.
+bdos_read_sector:
+                ld      a, (BD_READ_TRACK)
+                ld      d, a
+                ld      a, (BD_READ_SECTOR)
+                ld      e, a
+                ld      hl, BD_READ_BUF
+                rst     8
+                defb    BD_HOOK_HRSAD
+                ret
+
                 endif
 
 ; ===========================================================================
@@ -267,3 +288,7 @@ BD_SIZE:          defs 4                 ; bdos_difa_to_size output (LE)
 
 BD_UIFA:          defs BD_UIFA_LEN       ; the built UIFA (host-inspectable)
 BD_DIFA:          defs BD_UIFA_LEN       ; the DIFA to decode (harness-filled)
+
+BD_READ_TRACK:    defs 1                 ; bdos_read_sector: track to read (0-79)
+BD_READ_SECTOR:   defs 1                 ; bdos_read_sector: sector to read (1-10)
+BD_READ_BUF:      defs 512               ; bdos_read_sector: output (512 bytes)
