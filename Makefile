@@ -729,7 +729,7 @@ $(BUILD)/editmodel.bin $(BUILD)/editmodel.map: src/editmodel.asm
 
 editmodel-z80: $(BUILD)/editmodel.bin $(BUILD)/editmodel.map
 
-# asmlex-z80 — aarch64 assembler-source tokenizer, i48c Brick B1 (flat-memory).
+# asmlex-z80 — aarch64 assembler-source tokenizer, i48c (flat-memory).
 # Same standalone flat-memory harness as editmodel; gated by ci-netboot-z80.
 $(BUILD)/asmlex.bin $(BUILD)/asmlex.map: src/asmlex.asm
 	@mkdir -p $(BUILD)

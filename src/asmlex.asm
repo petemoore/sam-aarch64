@@ -42,7 +42,7 @@ TOK_EOF:          equ 0
 TOK_EOL:          equ 1
 TOK_IDENT:        equ 2
 TOK_INT:          equ 3
-TOK_STRING:       equ 4     ; deferred to B1b
+TOK_STRING:       equ 4     ; deferred to B1c
 TOK_COMMA:        equ 5
 TOK_HASH:         equ 6
 TOK_COLON:        equ 7
@@ -64,7 +64,7 @@ TOK_SHL:          equ 22
 TOK_SHR:          equ 23
 TOK_LINECOMMENT:  equ 24
 TOK_BLOCKCOMMENT: equ 25
-TOK_LOCALREF:     equ 26    ; deferred to B1b
+TOK_LOCALREF:     equ 26    ; deferred to B1c
 TOK_EQUALS:       equ 27
 TOK_PERCENT:      equ 28
 
@@ -335,7 +335,7 @@ lex_d_gt:
                 ld      a, TOK_SHR
                 jp      lex_put_simple
 lex_d_num:
-                ; Leading digit -> number (local-ref Nf/Nb deferred to B1b).
+                ; Leading digit -> number (local-ref Nf/Nb deferred to B1c).
                 cp      &30
                 jr      c, lex_d_identchk
                 cp      &39+1
@@ -380,9 +380,9 @@ lex_ident_end:
                 jp      lex_put
 
 ; ---------------------------------------------------------------------------
-; lex_read_number — TOK_INT spanning the digits of a base-2/10/16 literal.
-; Records the prefix-stripped digit span and the base. Value computation is
-; deferred to B1b. (Mirrors readNumber's extent + base detection.)
+; lex_read_number — TOK_INT for a base-2/10/16 literal. Records the
+; prefix-stripped digit span, the base, and the parsed int64 value in LEX_RV.
+; (Mirrors readNumber + parseIntInBase.)
 ; ---------------------------------------------------------------------------
 lex_read_number:
                 ld      a, 10
@@ -550,7 +550,7 @@ lex_span_len:
                 ret
 
 ; ---------------------------------------------------------------------------
-; lex_put — write the 6-byte record at (LEX_TOKPTR) from LEX_RK/RP/RL/RB.
+; lex_put — write the 14-byte record at (LEX_TOKPTR) from LEX_RK/RP/RL/RB.
 ; lex_put_simple — write kind A with a zero span/base.
 ; ---------------------------------------------------------------------------
 lex_put:
