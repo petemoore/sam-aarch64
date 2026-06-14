@@ -527,9 +527,13 @@ sha_extend:
                 ;    its regen test).  a..h NEVER move; each of the 8 phases
                 ;    hard-codes which wv_ slot is a..h, so only the two written
                 ;    words (new a, new e) are stored per phase — the lddr shuffle
-                ;    is gone (~37k T-states/block of pure movement).  ~2.4 KB
-                ;    bigger, so it stays OUT of the composite.  Per-block compress
-                ;    drops 418,843 -> 377,371 T-states (the i102 unroll win).
+                ;    is gone (~37k T-states/block of pure movement).  The phases
+                ;    also inline Ch/Maj with the operand slots baked in as
+                ;    constants (no sha_ch/sha_maj call, no (ix+d)/(iy+d) 19T
+                ;    indexed access, no djnz loop) — the shared subroutines stay
+                ;    for the rolled path only.  Bigger, so it stays OUT of the
+                ;    composite.  Per-block compress: 418,843 (register rewrite)
+                ;    -> 377,371 (unroll) -> 346,267 (inline Ch/Maj) T-states.
                 ;
                 ; Shared pre-setup (both paths): the W/K pointers track the word
                 ; LSB (+3) so add4_body (LSB-first) consumes them directly; the
@@ -677,10 +681,46 @@ sha_round_group:
                 ld      a, (de)
                 adc     a, (hl)
                 ld      (hl), a
-                ld      hl, wv_abcdefgh + 4*((4 - 0) & 7)
-                ld      de, wv_abcdefgh + 4*((5 - 0) & 7)
-                ld      ix, wv_abcdefgh + 4*((6 - 0) & 7)
-                call    sha_ch
+                ld      a, (wv_abcdefgh + 4*((5 - 0) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 0) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 0) & 7) + 0)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((5 - 0) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 0) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 0) & 7) + 1)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((5 - 0) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 0) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 0) & 7) + 2)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((5 - 0) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 0) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 0) & 7) + 3)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t1+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -764,10 +804,58 @@ sha_round_group:
                 ld      (de), a
                 inc     hl
                 inc     de
-                ld      hl, wv_abcdefgh + 4*((0 - 0) & 7)
-                ld      ix, wv_abcdefgh + 4*((1 - 0) & 7)
-                ld      iy, wv_abcdefgh + 4*((2 - 0) & 7)
-                call    sha_maj
+                ld      a, (wv_abcdefgh + 4*((0 - 0) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 0) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 0) & 7) + 0)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((0 - 0) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 0) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 0) & 7) + 1)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((0 - 0) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 0) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 0) & 7) + 2)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((0 - 0) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 0) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 0) & 7) + 3)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t2+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -903,10 +991,46 @@ sha_round_group:
                 ld      a, (de)
                 adc     a, (hl)
                 ld      (hl), a
-                ld      hl, wv_abcdefgh + 4*((4 - 1) & 7)
-                ld      de, wv_abcdefgh + 4*((5 - 1) & 7)
-                ld      ix, wv_abcdefgh + 4*((6 - 1) & 7)
-                call    sha_ch
+                ld      a, (wv_abcdefgh + 4*((5 - 1) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 1) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 1) & 7) + 0)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((5 - 1) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 1) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 1) & 7) + 1)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((5 - 1) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 1) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 1) & 7) + 2)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((5 - 1) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 1) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 1) & 7) + 3)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t1+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -990,10 +1114,58 @@ sha_round_group:
                 ld      (de), a
                 inc     hl
                 inc     de
-                ld      hl, wv_abcdefgh + 4*((0 - 1) & 7)
-                ld      ix, wv_abcdefgh + 4*((1 - 1) & 7)
-                ld      iy, wv_abcdefgh + 4*((2 - 1) & 7)
-                call    sha_maj
+                ld      a, (wv_abcdefgh + 4*((0 - 1) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 1) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 1) & 7) + 0)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((0 - 1) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 1) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 1) & 7) + 1)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((0 - 1) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 1) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 1) & 7) + 2)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((0 - 1) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 1) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 1) & 7) + 3)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t2+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -1129,10 +1301,46 @@ sha_round_group:
                 ld      a, (de)
                 adc     a, (hl)
                 ld      (hl), a
-                ld      hl, wv_abcdefgh + 4*((4 - 2) & 7)
-                ld      de, wv_abcdefgh + 4*((5 - 2) & 7)
-                ld      ix, wv_abcdefgh + 4*((6 - 2) & 7)
-                call    sha_ch
+                ld      a, (wv_abcdefgh + 4*((5 - 2) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 2) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 2) & 7) + 0)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((5 - 2) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 2) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 2) & 7) + 1)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((5 - 2) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 2) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 2) & 7) + 2)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((5 - 2) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 2) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 2) & 7) + 3)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t1+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -1216,10 +1424,58 @@ sha_round_group:
                 ld      (de), a
                 inc     hl
                 inc     de
-                ld      hl, wv_abcdefgh + 4*((0 - 2) & 7)
-                ld      ix, wv_abcdefgh + 4*((1 - 2) & 7)
-                ld      iy, wv_abcdefgh + 4*((2 - 2) & 7)
-                call    sha_maj
+                ld      a, (wv_abcdefgh + 4*((0 - 2) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 2) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 2) & 7) + 0)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((0 - 2) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 2) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 2) & 7) + 1)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((0 - 2) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 2) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 2) & 7) + 2)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((0 - 2) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 2) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 2) & 7) + 3)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t2+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -1355,10 +1611,46 @@ sha_round_group:
                 ld      a, (de)
                 adc     a, (hl)
                 ld      (hl), a
-                ld      hl, wv_abcdefgh + 4*((4 - 3) & 7)
-                ld      de, wv_abcdefgh + 4*((5 - 3) & 7)
-                ld      ix, wv_abcdefgh + 4*((6 - 3) & 7)
-                call    sha_ch
+                ld      a, (wv_abcdefgh + 4*((5 - 3) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 3) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 3) & 7) + 0)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((5 - 3) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 3) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 3) & 7) + 1)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((5 - 3) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 3) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 3) & 7) + 2)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((5 - 3) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 3) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 3) & 7) + 3)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t1+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -1442,10 +1734,58 @@ sha_round_group:
                 ld      (de), a
                 inc     hl
                 inc     de
-                ld      hl, wv_abcdefgh + 4*((0 - 3) & 7)
-                ld      ix, wv_abcdefgh + 4*((1 - 3) & 7)
-                ld      iy, wv_abcdefgh + 4*((2 - 3) & 7)
-                call    sha_maj
+                ld      a, (wv_abcdefgh + 4*((0 - 3) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 3) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 3) & 7) + 0)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((0 - 3) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 3) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 3) & 7) + 1)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((0 - 3) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 3) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 3) & 7) + 2)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((0 - 3) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 3) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 3) & 7) + 3)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t2+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -1581,10 +1921,46 @@ sha_round_group:
                 ld      a, (de)
                 adc     a, (hl)
                 ld      (hl), a
-                ld      hl, wv_abcdefgh + 4*((4 - 4) & 7)
-                ld      de, wv_abcdefgh + 4*((5 - 4) & 7)
-                ld      ix, wv_abcdefgh + 4*((6 - 4) & 7)
-                call    sha_ch
+                ld      a, (wv_abcdefgh + 4*((5 - 4) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 4) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 4) & 7) + 0)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((5 - 4) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 4) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 4) & 7) + 1)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((5 - 4) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 4) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 4) & 7) + 2)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((5 - 4) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 4) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 4) & 7) + 3)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t1+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -1668,10 +2044,58 @@ sha_round_group:
                 ld      (de), a
                 inc     hl
                 inc     de
-                ld      hl, wv_abcdefgh + 4*((0 - 4) & 7)
-                ld      ix, wv_abcdefgh + 4*((1 - 4) & 7)
-                ld      iy, wv_abcdefgh + 4*((2 - 4) & 7)
-                call    sha_maj
+                ld      a, (wv_abcdefgh + 4*((0 - 4) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 4) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 4) & 7) + 0)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((0 - 4) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 4) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 4) & 7) + 1)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((0 - 4) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 4) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 4) & 7) + 2)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((0 - 4) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 4) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 4) & 7) + 3)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t2+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -1807,10 +2231,46 @@ sha_round_group:
                 ld      a, (de)
                 adc     a, (hl)
                 ld      (hl), a
-                ld      hl, wv_abcdefgh + 4*((4 - 5) & 7)
-                ld      de, wv_abcdefgh + 4*((5 - 5) & 7)
-                ld      ix, wv_abcdefgh + 4*((6 - 5) & 7)
-                call    sha_ch
+                ld      a, (wv_abcdefgh + 4*((5 - 5) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 5) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 5) & 7) + 0)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((5 - 5) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 5) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 5) & 7) + 1)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((5 - 5) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 5) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 5) & 7) + 2)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((5 - 5) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 5) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 5) & 7) + 3)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t1+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -1894,10 +2354,58 @@ sha_round_group:
                 ld      (de), a
                 inc     hl
                 inc     de
-                ld      hl, wv_abcdefgh + 4*((0 - 5) & 7)
-                ld      ix, wv_abcdefgh + 4*((1 - 5) & 7)
-                ld      iy, wv_abcdefgh + 4*((2 - 5) & 7)
-                call    sha_maj
+                ld      a, (wv_abcdefgh + 4*((0 - 5) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 5) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 5) & 7) + 0)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((0 - 5) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 5) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 5) & 7) + 1)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((0 - 5) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 5) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 5) & 7) + 2)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((0 - 5) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 5) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 5) & 7) + 3)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t2+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -2033,10 +2541,46 @@ sha_round_group:
                 ld      a, (de)
                 adc     a, (hl)
                 ld      (hl), a
-                ld      hl, wv_abcdefgh + 4*((4 - 6) & 7)
-                ld      de, wv_abcdefgh + 4*((5 - 6) & 7)
-                ld      ix, wv_abcdefgh + 4*((6 - 6) & 7)
-                call    sha_ch
+                ld      a, (wv_abcdefgh + 4*((5 - 6) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 6) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 6) & 7) + 0)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((5 - 6) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 6) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 6) & 7) + 1)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((5 - 6) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 6) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 6) & 7) + 2)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((5 - 6) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 6) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 6) & 7) + 3)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t1+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -2120,10 +2664,58 @@ sha_round_group:
                 ld      (de), a
                 inc     hl
                 inc     de
-                ld      hl, wv_abcdefgh + 4*((0 - 6) & 7)
-                ld      ix, wv_abcdefgh + 4*((1 - 6) & 7)
-                ld      iy, wv_abcdefgh + 4*((2 - 6) & 7)
-                call    sha_maj
+                ld      a, (wv_abcdefgh + 4*((0 - 6) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 6) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 6) & 7) + 0)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((0 - 6) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 6) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 6) & 7) + 1)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((0 - 6) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 6) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 6) & 7) + 2)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((0 - 6) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 6) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 6) & 7) + 3)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t2+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -2259,10 +2851,46 @@ sha_round_group:
                 ld      a, (de)
                 adc     a, (hl)
                 ld      (hl), a
-                ld      hl, wv_abcdefgh + 4*((4 - 7) & 7)
-                ld      de, wv_abcdefgh + 4*((5 - 7) & 7)
-                ld      ix, wv_abcdefgh + 4*((6 - 7) & 7)
-                call    sha_ch
+                ld      a, (wv_abcdefgh + 4*((5 - 7) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 7) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 7) & 7) + 0)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((5 - 7) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 7) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 7) & 7) + 1)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((5 - 7) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 7) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 7) & 7) + 2)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((5 - 7) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((6 - 7) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((4 - 7) & 7) + 3)
+                and     d
+                xor     l
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t1+3
                 ld      de, sha_tmpa+3
                 or      a
@@ -2346,10 +2974,58 @@ sha_round_group:
                 ld      (de), a
                 inc     hl
                 inc     de
-                ld      hl, wv_abcdefgh + 4*((0 - 7) & 7)
-                ld      ix, wv_abcdefgh + 4*((1 - 7) & 7)
-                ld      iy, wv_abcdefgh + 4*((2 - 7) & 7)
-                call    sha_maj
+                ld      a, (wv_abcdefgh + 4*((0 - 7) & 7) + 0)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 7) & 7) + 0)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 7) & 7) + 0)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 0), a
+                ld      a, (wv_abcdefgh + 4*((0 - 7) & 7) + 1)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 7) & 7) + 1)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 7) & 7) + 1)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 1), a
+                ld      a, (wv_abcdefgh + 4*((0 - 7) & 7) + 2)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 7) & 7) + 2)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 7) & 7) + 2)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 2), a
+                ld      a, (wv_abcdefgh + 4*((0 - 7) & 7) + 3)
+                ld      h, a
+                ld      a, (wv_abcdefgh + 4*((1 - 7) & 7) + 3)
+                ld      l, a
+                xor     h
+                ld      d, a
+                ld      a, (wv_abcdefgh + 4*((2 - 7) & 7) + 3)
+                and     d
+                ld      d, a
+                ld      a, h
+                and     l
+                or      d
+                ld      (sha_tmpa + 3), a
                 ld      hl, sha_t2+3
                 ld      de, sha_tmpa+3
                 or      a

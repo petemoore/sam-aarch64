@@ -63,9 +63,12 @@ func TestBaselineSHA256(t *testing.T) {
 // scales linearly, so the difference is exactly one extra compress. This is the
 // i102 optimization's headline number. The standalone (NETBOOT_STANDALONE)
 // build takes the 8x circular-renamed unrolled round path, so the figure here
-// is the unrolled cost; it must stay at or below the increment-1 register-
-// rewrite baseline (418,843 T/block) — a regression past that means the unroll
-// silently fell back to the rolled path or grew a new cost.
+// is the unrolled cost; it must stay at or below the current floor — a
+// regression past that means the unroll silently fell back to the rolled path
+// or grew a new cost. The ceiling tracks the latest landed increment so the
+// gain is locked in: 418,843 (register rewrite, #365) -> 377,371 (8x unroll,
+// #367) -> 346,267 (inline Ch/Maj, i102p). A future improvement lowers it; a
+// regression trips it.
 func TestSHA256PerBlockCompress(t *testing.T) {
 	measure := func(n int) uint64 {
 		mac := loadSHA256Machine(t)
@@ -84,10 +87,10 @@ func TestSHA256PerBlockCompress(t *testing.T) {
 		return res.TStates
 	}
 	perBlock := measure(128) - measure(64)
-	const incr1Baseline = 418843 // register-rewrite (PR #365), before the unroll
-	t.Logf("i102 sha256 per-block compress = %d T-states (increment-1 was %d)", perBlock, incr1Baseline)
-	if perBlock > incr1Baseline {
-		t.Fatalf("per-block compress %d T regressed past the %d baseline", perBlock, incr1Baseline)
+	const ceiling = 346267 // inline Ch/Maj (i102p); lower this when a new increment lands
+	t.Logf("i102 sha256 per-block compress = %d T-states (current floor %d)", perBlock, ceiling)
+	if perBlock > ceiling {
+		t.Fatalf("per-block compress %d T regressed past the %d floor", perBlock, ceiling)
 	}
 }
 
