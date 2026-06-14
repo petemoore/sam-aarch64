@@ -112,12 +112,27 @@ func (ve *ValidationError) hasErrors() bool {
 	return len(ve.msgs) > 0
 }
 
-// validate runs all invariants 1–10 on the registry.  It returns the
+// validate runs all invariants 1-13 on the registry. It returns the
 // ValidationError (non-nil always; call hasErrors() to test).
+//
+// Invariant summary (spec §"Invariants (the validator)"):
+//  1. Ids globally unique.
+//  2. Well-formed ids.
+//  3. Canonical typed sort.
+//  4. Status in the enum with required payload per status.
+//  5. PR entries have num > 0 and a valid role.
+//  6. One completing PR per DONE leaf; umbrellas carry none.
+//  7. Atomic items: non-umbrella with >1 completing PR -> split.
+//  8. Bounded description (title <= 120 chars/1 line; description <= 600 chars/6 lines).
+//  9. Required-fields-per-status (DONE => closed + leaf has completing PR; etc.).
+//  10. Id-shaped refs exist in the union.
+//  11. Dependencies form a DAG: every depends_on target exists; no cycles.
+//  12. No non-WONTFIX item depends on a WONTFIX node.
+//  13. Question delete-gate: falls out of inv 11's existence check (tested explicitly).
 func validate(reg *Registry) *ValidationError {
 	ve := &ValidationError{}
 
-	// Build id sets for cross-reference checks (invariant 10).
+	// Build id sets for cross-reference checks (invariants 10, 11, 13).
 	allIDs := map[string]bool{}
 	for _, it := range reg.Items {
 		if it.ID != "" {
@@ -128,6 +143,12 @@ func validate(reg *Registry) *ValidationError {
 		if q.ID != "" {
 			allIDs[q.ID] = true
 		}
+	}
+
+	// Build status map for invariant 12.
+	itemStatus := map[string]Status{}
+	for _, it := range reg.Items {
+		itemStatus[it.ID] = it.Status
 	}
 
 	// --- Items ---
@@ -167,14 +188,14 @@ func validate(reg *Registry) *ValidationError {
 			firstItem = false
 		}
 
-		// Invariant 4: status in the closed enum.
+		// Invariant 4: status in the enum (no BLOCKED — spec §"Status enum").
 		switch it.Status {
-		case StatusOpen, StatusInProgress, StatusBlocked, StatusDone, StatusWontfix:
+		case StatusOpen, StatusInProgress, StatusDone, StatusWontfix:
 			// valid
 		case "":
 			ve.add(id, "missing status field")
 		default:
-			ve.add(id, fmt.Sprintf("unknown status %q (must be OPEN|IN_PROGRESS|BLOCKED|DONE|WONTFIX)", it.Status))
+			ve.add(id, fmt.Sprintf("unknown status %q (must be OPEN|IN_PROGRESS|DONE|WONTFIX)", it.Status))
 		}
 
 		// Invariant 5: prs entries have num and role.
@@ -227,26 +248,32 @@ func validate(reg *Registry) *ValidationError {
 		if strings.Count(it.Description, "\n") >= 6 {
 			ve.add(id, fmt.Sprintf("description exceeds 6 lines (%d newlines)", strings.Count(it.Description, "\n")))
 		}
-		if len(it.Blocker) > 200 {
-			ve.add(id, fmt.Sprintf("blocker exceeds 200 chars (%d)", len(it.Blocker)))
-		}
 
 		// Invariant 9: required fields per status.
-		switch it.Status {
-		case StatusBlocked:
-			if strings.TrimSpace(it.Blocker) == "" {
-				ve.add(id, "BLOCKED status requires a non-empty blocker field")
-			}
-		case StatusOpen, StatusInProgress:
-			if strings.TrimSpace(it.Blocker) != "" {
-				ve.add(id, fmt.Sprintf("%s status must have empty blocker (found %q)", it.Status, it.Blocker))
-			}
+		// WONTFIX => reason in description (spec §"Status enum").
+		if it.Status == StatusWontfix && strings.TrimSpace(it.Description) == "" {
+			ve.add(id, "WONTFIX item must have a non-empty description explaining the reason")
 		}
 
 		// Invariant 10: id-shaped refs exist in the union.
 		for _, ref := range it.Refs {
 			if idRefRe.MatchString(ref) && !allIDs[ref] {
 				ve.add(id, fmt.Sprintf("ref %q is id-shaped but not found in the registry", ref))
+			}
+		}
+
+		// Invariant 11 (existence part): every depends_on target exists.
+		// Invariant 12: no non-WONTFIX item depends on a WONTFIX node.
+		// Invariant 13: a deleted question leaves a dangling edge => caught here.
+		for _, dep := range it.DependsOn {
+			if !allIDs[dep] {
+				ve.add(id, fmt.Sprintf("depends_on %q: target does not exist in the registry (dangling edge — possible deleted question)", dep))
+			} else if it.Status != StatusWontfix {
+				// Invariant 12: check for WONTFIX target among items only
+				// (questions that exist are open by definition).
+				if targetStatus, ok := itemStatus[dep]; ok && targetStatus == StatusWontfix {
+					ve.add(id, fmt.Sprintf("depends_on %q: non-WONTFIX item may not depend on a WONTFIX node (stale gate — drop or re-point the edge)", dep))
+				}
 			}
 		}
 	}
@@ -259,14 +286,6 @@ func validate(reg *Registry) *ValidationError {
 			parentChildren[it.Parent] = append(parentChildren[it.Parent], it.ID)
 		}
 	}
-	itemStatus := map[string]Status{}
-	for _, it := range reg.Items {
-		itemStatus[it.ID] = it.Status
-	}
-	itemKind := map[string]string{}
-	for _, it := range reg.Items {
-		itemKind[it.ID] = it.Kind
-	}
 	for _, it := range reg.Items {
 		if !it.isUmbrella() || it.Status != StatusDone {
 			continue
@@ -277,6 +296,18 @@ func validate(reg *Registry) *ValidationError {
 				ve.add(it.ID, fmt.Sprintf("umbrella marked DONE but child %s is %s", childID, childStatus))
 			}
 		}
+	}
+
+	// Invariant 11 (acyclicity): dependency graph must be a DAG.
+	// Build adjacency list (items only; questions have no outgoing edges).
+	adj := map[string][]string{}
+	for _, it := range reg.Items {
+		if len(it.DependsOn) > 0 {
+			adj[it.ID] = append(adj[it.ID], it.DependsOn...)
+		}
+	}
+	if cycle := findCycle(adj); len(cycle) > 0 {
+		ve.add(cycle[0], fmt.Sprintf("depends_on cycle detected: %s", strings.Join(cycle, " -> ")))
 	}
 
 	// --- Questions ---
@@ -305,22 +336,7 @@ func validate(reg *Registry) *ValidationError {
 
 		// Invariant 3: canonical sort (question-space is q<N>[letter]).
 		if questionIDRe.MatchString(id) {
-			n, _ := strconv.Atoi(id[1:func() int {
-				for k, c := range id[1:] {
-					if c < '0' || c > '9' {
-						return k + 1
-					}
-				}
-				return len(id)
-			}()])
-			letter := ""
-			for k, c := range id[1:] {
-				if c < '0' || c > '9' {
-					letter = id[1+k:]
-					break
-				}
-			}
-			key := sortKey{n: n, letter: letter, brickN: -1}
+			key := parseQSortKey(id)
 			if !firstQ && !prevQKey.less(key) && prevQKey != key {
 				ve.add(id, "out of canonical sort order (run `registry gen` to re-sort)")
 			}
@@ -328,65 +344,92 @@ func validate(reg *Registry) *ValidationError {
 			firstQ = false
 		}
 
-		// Invariant 4: status enum.
-		switch q.Status {
-		case StatusOpen, StatusInProgress, StatusBlocked, StatusDone, StatusWontfix:
-		case "":
-			ve.add(id, "missing status field")
-		default:
-			ve.add(id, fmt.Sprintf("unknown status %q", q.Status))
+		// Invariant 8: question body bounded.
+		if len(q.Body) > 600 {
+			ve.add(id, fmt.Sprintf("body exceeds 600 chars (%d)", len(q.Body)))
 		}
-
-		// Invariant 5: prs entries.
-		for j, pr := range q.PRs {
-			if pr.Num <= 0 {
-				ve.add(id, fmt.Sprintf("prs[%d]: num must be a positive integer", j))
-			}
-			switch pr.Role {
-			case RoleCompleting, RoleFollowup:
-			case "":
-				ve.add(id, fmt.Sprintf("prs[%d]: missing role", j))
-			default:
-				ve.add(id, fmt.Sprintf("prs[%d]: unknown role %q", j, pr.Role))
-			}
-		}
-
-		// Invariant 8: bounded fields.
-		if len(q.Title) > 120 {
-			ve.add(id, fmt.Sprintf("title exceeds 120 chars (%d)", len(q.Title)))
-		}
-		if strings.ContainsRune(q.Title, '\n') {
-			ve.add(id, "title must be single-line")
-		}
-		if len(q.Description) > 600 {
-			ve.add(id, fmt.Sprintf("description exceeds 600 chars (%d)", len(q.Description)))
-		}
-		if strings.Count(q.Description, "\n") >= 6 {
-			ve.add(id, fmt.Sprintf("description exceeds 6 lines (%d newlines)", strings.Count(q.Description, "\n")))
-		}
-		if len(q.Blocker) > 200 {
-			ve.add(id, fmt.Sprintf("blocker exceeds 200 chars (%d)", len(q.Blocker)))
-		}
-
-		// Invariant 9: per-status required fields.
-		switch q.Status {
-		case StatusBlocked:
-			if strings.TrimSpace(q.Blocker) == "" {
-				ve.add(id, "BLOCKED status requires a non-empty blocker field")
-			}
-		case StatusOpen, StatusInProgress:
-			if strings.TrimSpace(q.Blocker) != "" {
-				ve.add(id, fmt.Sprintf("%s status must have empty blocker (found %q)", q.Status, q.Blocker))
-			}
-		}
-
-		// Invariant 10: id-shaped refs must exist.
-		for _, ref := range q.Refs {
-			if idRefRe.MatchString(ref) && !allIDs[ref] {
-				ve.add(id, fmt.Sprintf("ref %q is id-shaped but not found in the registry", ref))
-			}
+		if strings.Count(q.Body, "\n") >= 6 {
+			ve.add(id, fmt.Sprintf("body exceeds 6 lines (%d newlines)", strings.Count(q.Body, "\n")))
 		}
 	}
 
 	return ve
+}
+
+// findCycle detects a cycle in the directed graph given by adj (id -> []id).
+// Returns the cycle path (with the triggering node appended) if found, or nil.
+// Uses recursive DFS with color marking (white/gray/black).
+func findCycle(adj map[string][]string) []string {
+	// Collect nodes in a stable order for deterministic output.
+	nodes := make([]string, 0, len(adj))
+	for n := range adj {
+		nodes = append(nodes, n)
+	}
+	// Sort for determinism.
+	sortStrings(nodes)
+
+	const (
+		white = 0 // unvisited
+		gray  = 1 // in current DFS path
+		black = 2 // fully processed
+	)
+	color := map[string]int{}
+	parent := map[string]string{}
+
+	var dfs func(node string) []string
+	dfs = func(node string) []string {
+		color[node] = gray
+		neighbors := make([]string, len(adj[node]))
+		copy(neighbors, adj[node])
+		sortStrings(neighbors)
+		for _, neighbor := range neighbors {
+			if color[neighbor] == gray {
+				// Cycle found: reconstruct the path from neighbor to node via the
+				// parent chain, then close it back to neighbor.
+				// path = [neighbor, ..., node, neighbor]
+				path := []string{node}
+				cur := node
+				for cur != neighbor {
+					p, ok := parent[cur]
+					if !ok {
+						break
+					}
+					cur = p
+					path = append([]string{cur}, path...)
+				}
+				path = append(path, neighbor) // close the cycle
+				return path
+			}
+			if color[neighbor] == white {
+				parent[neighbor] = node
+				if cyc := dfs(neighbor); len(cyc) > 0 {
+					return cyc
+				}
+			}
+		}
+		color[node] = black
+		return nil
+	}
+
+	for _, n := range nodes {
+		if color[n] == white {
+			if cyc := dfs(n); len(cyc) > 0 {
+				return cyc
+			}
+		}
+	}
+	return nil
+}
+
+// sortStrings sorts a string slice in place (insertion sort for small slices).
+func sortStrings(ss []string) {
+	for i := 1; i < len(ss); i++ {
+		key := ss[i]
+		j := i - 1
+		for j >= 0 && ss[j] > key {
+			ss[j+1] = ss[j]
+			j--
+		}
+		ss[j+1] = key
+	}
 }

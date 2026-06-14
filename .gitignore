@@ -24,6 +24,7 @@ tools/comment-bench/comment-bench
 tools/z80-test-harness-go/z80-test-harness-go
 tools/i62-bdos-experiment/build-i62-disk/build-i62-disk
 tools/font-proof/font-proof
+tools/registry/registry
 
 # sam-aarch64's default .tbn output beside a vendored source (release.s is
 # tracked; its compiled .tbn is a derived artifact — the canonical gate scripts

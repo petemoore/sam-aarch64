@@ -97,12 +97,14 @@ func runGen(args []string) {
 		os.Exit(1)
 	}
 
-	var itemsOpen, itemsClosed, qOpen, qClosed bytes.Buffer
+	// Three views: item-open, item-closed, question-open (no closed question view).
+	// Spec §"Generator" and §"Questions — transient by design".
+	var itemsOpen, itemsClosed, qOpen bytes.Buffer
 	if err := genItemsOpenClosed(reg, &itemsOpen, &itemsClosed); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if err := genQuestionsOpenClosed(reg, &qOpen, &qClosed); err != nil {
+	if err := genQuestionsOpen(reg, &qOpen); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -113,6 +115,4 @@ func runGen(args []string) {
 	os.Stdout.Write(itemsClosed.Bytes())
 	fmt.Print("\n=== question-registry-open ===\n")
 	os.Stdout.Write(qOpen.Bytes())
-	fmt.Print("\n=== question-registry-closed ===\n")
-	os.Stdout.Write(qClosed.Bytes())
 }

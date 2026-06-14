@@ -9,8 +9,10 @@ import (
 	"testing"
 )
 
-// TestGenByteStable asserts that calling genItemsOpenClosed twice on the same
+// TestGenByteStable asserts that calling the gen functions twice on the same
 // registry produces byte-identical output (determinism guarantee).
+// Spec §"Generator": "Deterministic — true-numeric sort, no map iteration,
+// identical across machines".
 func TestGenByteStable(t *testing.T) {
 	reg := loadTestFixture(t)
 
@@ -29,26 +31,24 @@ func TestGenByteStable(t *testing.T) {
 		t.Error("item-closed output differs between two gen calls (not deterministic)")
 	}
 
-	var qopen1, qclosed1, qopen2, qclosed2 bytes.Buffer
-	if err := genQuestionsOpenClosed(reg, &qopen1, &qclosed1); err != nil {
+	// Questions: one open view only (no closed view — questions are transient).
+	var qopen1, qopen2 bytes.Buffer
+	if err := genQuestionsOpen(reg, &qopen1); err != nil {
 		t.Fatalf("first q gen: %v", err)
 	}
-	if err := genQuestionsOpenClosed(reg, &qopen2, &qclosed2); err != nil {
+	if err := genQuestionsOpen(reg, &qopen2); err != nil {
 		t.Fatalf("second q gen: %v", err)
 	}
 
 	if !bytes.Equal(qopen1.Bytes(), qopen2.Bytes()) {
 		t.Error("question-open output differs between two gen calls (not deterministic)")
 	}
-	if !bytes.Equal(qclosed1.Bytes(), qclosed2.Bytes()) {
-		t.Error("question-closed output differs between two gen calls (not deterministic)")
-	}
 }
 
-// TestLoadGenLoadFixedPoint asserts that load → gen → load produces the same
-// registry as the original load (the gen output is a faithful view of the source
-// data, not a lossy transform).  This is checked by validating the reloaded
-// registry against the original on key fields.
+// TestLoadGenLoadFixedPoint asserts that load -> gen produces a table whose
+// row counts match the source (the generator does not discard or hallucinate
+// records).
+// Spec §"CI sync-check + regen": round-trip test.
 func TestLoadGenLoadFixedPoint(t *testing.T) {
 	reg := loadTestFixture(t)
 
@@ -59,15 +59,14 @@ func TestLoadGenLoadFixedPoint(t *testing.T) {
 	}
 
 	// Gen is byte-stable (checked by TestGenByteStable); the fixed-point
-	// here checks that the item/question counts are preserved across two
-	// gen calls — the generator does not discard or hallucinate records.
+	// here checks that item counts are preserved across two gen calls.
 	var open1, closed1 bytes.Buffer
 	if err := genItemsOpenClosed(reg, &open1, &closed1); err != nil {
 		t.Fatalf("gen: %v", err)
 	}
 
 	// Count open vs closed items in source and verify the generated tables
-	// contain the matching counts of rows.
+	// contain the matching row counts.
 	openCount, closedCount := 0, 0
 	for _, it := range reg.Items {
 		if isOpen(it.Status) {
@@ -84,6 +83,54 @@ func TestLoadGenLoadFixedPoint(t *testing.T) {
 	}
 	if gotClosed != closedCount {
 		t.Errorf("closed table has %d rows, want %d", gotClosed, closedCount)
+	}
+
+	// Question view: all questions appear in the single open view.
+	var qopen bytes.Buffer
+	if err := genQuestionsOpen(reg, &qopen); err != nil {
+		t.Fatalf("q gen: %v", err)
+	}
+	gotQOpen := countTableRows(qopen.String())
+	if gotQOpen != len(reg.Questions) {
+		t.Errorf("question-open table has %d rows, want %d", gotQOpen, len(reg.Questions))
+	}
+}
+
+// TestDependsOnRoundTrip verifies that depends_on edges survive load->gen->load:
+// items with depends_on in the testdata fixture have those edges after load,
+// and the gated-on: prefix appears in the generated refs/links column.
+func TestDependsOnRoundTrip(t *testing.T) {
+	reg := loadTestFixture(t)
+
+	// Find at least one item with a depends_on edge.
+	var gatedItem *Item
+	for i := range reg.Items {
+		if len(reg.Items[i].DependsOn) > 0 {
+			gatedItem = &reg.Items[i]
+			break
+		}
+	}
+	if gatedItem == nil {
+		t.Fatal("testdata has no item with depends_on — fixture needs updating")
+	}
+
+	// Generate and check that the gated-on: prefix appears in the open table.
+	var open, closed bytes.Buffer
+	if err := genItemsOpenClosed(reg, &open, &closed); err != nil {
+		t.Fatalf("gen: %v", err)
+	}
+
+	combined := open.String() + closed.String()
+	found := false
+	for _, dep := range gatedItem.DependsOn {
+		needle := "gated-on:" + dep
+		if contains(combined, needle) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("depends_on edges of %s not visible as gated-on: in generated output", gatedItem.ID)
 	}
 }
 
@@ -173,6 +220,18 @@ func splitLines(s string) []string {
 		lines = append(lines, s[start:])
 	}
 	return lines
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		func() bool {
+			for i := 0; i <= len(s)-len(substr); i++ {
+				if s[i:i+len(substr)] == substr {
+					return true
+				}
+			}
+			return false
+		}())
 }
 
 func findRepoRootRegistry(t *testing.T) string {
