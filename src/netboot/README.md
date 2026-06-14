@@ -14,5 +14,6 @@ The **protocol logic is host-verifiable**: `tools/netboot-oracle/z80/` assembles
 
 - `build_udp_frame.asm` — originate a fresh UDP/IPv4/Ethernet frame (plan §5.1), the primitive trinload lacks; the port of `frame/frame.go::BuildUDPFrame`.
 - `dhcp_reply.asm` — build the DHCP OFFER/ACK body the responder (i86) emits (the option template + the fixed option-43 "Raspberry Pi Boot" blob + the echoed client UUID); the port of `dhcp/dhcp.go::BuildReply`.
+- `tftp_build.asm` — the i83 TFTP server's reply-packet builders: OACK, DATA, ERROR; the port of `tftp/tftp.go::BuildOACK`/`BuildDATA`/`BuildError`.
 
 Design + sequencing: `docs/plans/phase3-netboot-implementation-plan.md`; wire-level oracle: `docs/notes/pi-netboot-capture-analysis.md`.
