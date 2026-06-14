@@ -22,8 +22,9 @@ the limit, so nothing is summarised away. The session stays interactive and
    the model, so it can't wake the agent on its own; the nudge (a real text line,
    *not* the startup prompt) creates the next turn so the agent reads the readout
    and acts.
-3. Agent: **≥50% free → next item** (loop); **<50% free → wind down** (write the
-   ROADMAP handover) → `touch ~/.claude/autonomous-loop/wound-down`.
+3. Agent: follow the resume nudge — it carries the continue-vs-wind-down
+   decision rule (the authoritative wording is `RESUME_NUDGE` in `monitor.sh`;
+   on wind-down, write the ROADMAP handover → `touch ~/.claude/autonomous-loop/wound-down`).
 4. Monitor stuffs `/clear` + the startup prompt → clean reset. Repeat.
 
 The agent never blocks on Pete: questions go in the `qN` registry and it keeps
