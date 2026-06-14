@@ -8,11 +8,12 @@
 ; (text -> symbolic overlay). asmlex is the TOKENIZER: it splits source bytes
 ; into typed tokens, recording each token's KIND, its source-text SPAN, the
 ; integer BASE, and the int64 VALUE. Brick B1 built the token extents (kind +
-; span + base); Brick B1b added the int64 value of numeric literals (port of
-; parseIntInBase) and character literals (port of readCharLit). Still deferred
-; to Brick B1c: string literals, local-label refs (Nf/Nb), and cpp
-; line-directives. asmlex is byte-faithful to Lex on the input domain spanned by
-; the supported tokens.
+; span + base); B1b added the int64 value of numeric literals (parseIntInBase)
+; and character literals (readCharLit); B1c added local-label refs (Nf/Nb,
+; readNumberOrLocal). Still deferred to Brick B1d: string literals. cpp
+; line-directives are out of scope (a preprocessor artifact, like the host
+; Preprocess pass — a line-start '#' lexes as a line comment). asmlex is
+; byte-faithful to Lex on the input domain spanned by the supported tokens.
 ;
 ; TOKEN RECORD (LEX_TOKS, 14 bytes each, in emission order):
 ;   kind:1 | span_ptr:2 LE | span_len:2 LE | base:1 | value:8 LE
@@ -21,8 +22,9 @@
 ; AFTER any 0x/0b prefix (matching Go's Tok.Text), base is 2/10/16, and value is
 ; the parsed int64; for a character-literal TOK_INT value is the char code and
 ; there is no span; for the two comment kinds the span is the comment body
-; (matching Go's Tok.Bytes). Other tokens carry a zero span/base/value. The
-; trailing TOK_EOF token is emitted and ends the stream.
+; (matching Go's Tok.Bytes). For TOK_LOCALREF the value holds the label digit
+; and base holds the 'f'/'b' direction char (no span). Other tokens carry a zero
+; span/base/value. The trailing TOK_EOF token is emitted and ends the stream.
 ;
 ; PROVENANCE: algorithmic port of lexer.go; the flat token-array layout is
 ; original for the Z80 port. VERIFICATION: tools/netboot-oracle/z80/asmlex_test.go
@@ -42,7 +44,7 @@ TOK_EOF:          equ 0
 TOK_EOL:          equ 1
 TOK_IDENT:        equ 2
 TOK_INT:          equ 3
-TOK_STRING:       equ 4     ; deferred to B1c
+TOK_STRING:       equ 4     ; deferred to B1d
 TOK_COMMA:        equ 5
 TOK_HASH:         equ 6
 TOK_COLON:        equ 7
@@ -64,7 +66,7 @@ TOK_SHL:          equ 22
 TOK_SHR:          equ 23
 TOK_LINECOMMENT:  equ 24
 TOK_BLOCKCOMMENT: equ 25
-TOK_LOCALREF:     equ 26    ; deferred to B1c
+TOK_LOCALREF:     equ 26    ; digit in value, 'f'/'b' direction in base
 TOK_EQUALS:       equ 27
 TOK_PERCENT:      equ 28
 
@@ -335,17 +337,19 @@ lex_d_gt:
                 ld      a, TOK_SHR
                 jp      lex_put_simple
 lex_d_num:
-                ; Leading digit -> number (local-ref Nf/Nb deferred to B1c).
+                ; Leading digit -> a number or a local-label ref (Nf/Nb).
                 cp      &30
                 jr      c, lex_d_identchk
                 cp      &39+1
-                jp      c, lex_read_number
+                jp      c, lex_read_number_or_local
 lex_d_identchk:
                 call    lex_is_ident_start
                 jp      c, lex_read_ident
                 cp      &27                 ; '\'' char literal
                 jp      z, lex_read_char
-                ; '"' (string) / local-ref / line-directive are B1c; else error.
+                ; '"' (string) is Brick B1d; cpp line-directives are out of scope
+                ; (a preprocessor artifact, like the host Preprocess pass); a
+                ; line-start '#' is handled above as a line comment. Else error.
 lex_op_err:
                 ld      a, 1
                 ld      (LEX_ERR), a
@@ -378,6 +382,155 @@ lex_ident_end:
                 ld      a, TOK_IDENT
                 ld      (LEX_RK), a
                 jp      lex_put
+
+; ---------------------------------------------------------------------------
+; lex_read_number_or_local — a leading digit begins either a local-label ref
+; (one/two decimal digits + 'f'/'b', not followed by an ident-cont char) or a
+; numeric literal. (Port of readNumberOrLocal.) A local ref emits TOK_LOCALREF
+; with the digit in LEX_RV (low byte) and the direction char in LEX_RB; any
+; other shape falls through to lex_read_number.
+; ---------------------------------------------------------------------------
+lex_read_number_or_local:
+                ; --- try a 2-digit local: need CUR+2 < END ---
+                ld      hl, (LEX_CUR)
+                ld      bc, 2
+                add     hl, bc
+                ld      de, (LEX_END)
+                or      a
+                sbc     hl, de              ; (CUR+2)-END; carry iff CUR+2 < END
+                jr      nc, lex_trylocal1
+                ld      hl, (LEX_CUR)
+                ld      a, (hl)
+                call    lex_is_dec_digit
+                jr      nc, lex_trylocal1
+                inc     hl
+                ld      a, (hl)
+                call    lex_is_dec_digit
+                jr      nc, lex_trylocal1
+                inc     hl
+                ld      a, (hl)             ; src[CUR+2] = direction candidate
+                call    lex_is_fb
+                jr      nc, lex_trylocal1
+                ; src[CUR+3] (if present) must not be an ident-cont char.
+                ld      hl, (LEX_CUR)
+                ld      bc, 3
+                add     hl, bc
+                ld      de, (LEX_END)
+                or      a
+                sbc     hl, de              ; (CUR+3)-END; carry iff CUR+3 < END
+                jr      nc, lex_local2_ok   ; CUR+3 >= END: nothing follows
+                ld      hl, (LEX_CUR)
+                ld      bc, 3
+                add     hl, bc
+                ld      a, (hl)
+                call    lex_is_ident_cont
+                jr      c, lex_trylocal1    ; ident-cont follows: not a local ref
+lex_local2_ok:
+                ; direction = src[CUR+2].
+                ld      hl, (LEX_CUR)
+                ld      bc, 2
+                add     hl, bc
+                ld      a, (hl)
+                ld      (LEX_RB), a
+                ; digit = hi*10 + lo.
+                ld      hl, (LEX_CUR)
+                ld      a, (hl)
+                sub     &30
+                ld      b, a                ; hi
+                add     a, a                ; *2
+                add     a, a                ; *4
+                add     a, b                ; *5
+                add     a, a                ; *10
+                ld      b, a
+                inc     hl
+                ld      a, (hl)
+                sub     &30                 ; lo
+                add     a, b                ; hi*10 + lo
+                push    af
+                call    lex_val_zero
+                pop     af
+                ld      (LEX_RV), a
+                call    lex_advance
+                call    lex_advance
+                call    lex_advance
+                jr      lex_emit_local
+lex_trylocal1:
+                ; --- try a 1-digit local: need CUR+1 < END ---
+                ld      hl, (LEX_CUR)
+                inc     hl
+                ld      de, (LEX_END)
+                or      a
+                sbc     hl, de              ; (CUR+1)-END; carry iff CUR+1 < END
+                jp      nc, lex_read_number
+                ld      hl, (LEX_CUR)
+                ld      a, (hl)
+                call    lex_is_dec_digit
+                jp      nc, lex_read_number
+                inc     hl
+                ld      a, (hl)             ; src[CUR+1] = direction candidate
+                call    lex_is_fb
+                jp      nc, lex_read_number
+                ; src[CUR+2] (if present) must not be an ident-cont char.
+                ld      hl, (LEX_CUR)
+                ld      bc, 2
+                add     hl, bc
+                ld      de, (LEX_END)
+                or      a
+                sbc     hl, de              ; (CUR+2)-END; carry iff CUR+2 < END
+                jr      nc, lex_local1_ok
+                ld      hl, (LEX_CUR)
+                ld      bc, 2
+                add     hl, bc
+                ld      a, (hl)
+                call    lex_is_ident_cont
+                jp      c, lex_read_number  ; ident-cont follows: not a local ref
+lex_local1_ok:
+                ld      hl, (LEX_CUR)
+                inc     hl
+                ld      a, (hl)             ; direction = src[CUR+1]
+                ld      (LEX_RB), a
+                ld      hl, (LEX_CUR)
+                ld      a, (hl)
+                sub     &30                 ; digit
+                push    af
+                call    lex_val_zero
+                pop     af
+                ld      (LEX_RV), a
+                call    lex_advance
+                call    lex_advance
+lex_emit_local:
+                ld      hl, 0
+                ld      (LEX_RP), hl        ; no span
+                ld      (LEX_RL), hl
+                ld      a, TOK_LOCALREF
+                ld      (LEX_RK), a
+                jp      lex_put
+
+; ---------------------------------------------------------------------------
+; lex_is_dec_digit — A=char; carry set iff '0'-'9'. A preserved.
+; lex_is_fb — A=char; carry set iff 'f' or 'b'. A preserved.
+; ---------------------------------------------------------------------------
+lex_is_dec_digit:
+                cp      &30
+                jr      c, lidd_no
+                cp      &39+1
+                jr      c, lidd_yes
+lidd_no:
+                or      a
+                ret
+lidd_yes:
+                scf
+                ret
+lex_is_fb:
+                cp      &66                 ; 'f'
+                jr      z, lifb_yes
+                cp      &62                 ; 'b'
+                jr      z, lifb_yes
+                or      a
+                ret
+lifb_yes:
+                scf
+                ret
 
 ; ---------------------------------------------------------------------------
 ; lex_read_number — TOK_INT for a base-2/10/16 literal. Records the

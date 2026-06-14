@@ -9,12 +9,13 @@
 // lives in a different Go module and pulls in the whole assembler front-end, so
 // — as the editmodel harness test does for editmodel.go — refLex below is a
 // faithful transcription of lexer.go's supported subset (kinds, spans, the
-// 0x/0b base, the int64 value, and char-literal values), and the canonical hand
-// cases assert kind sequences taken straight from frontend/lexer_test.go
-// (authority-anchored). Still deferred to Brick B1c: string literals, local-label
-// refs (Nf/Nb), and cpp line-directives. On that input domain refLex is identical
-// to frontend.Lex, since none of the deferred constructs can arise without a '"',
-// a digit-then-f/b, or a quoted line directive, none of which the corpus emits.
+// 0x/0b base, the int64 value, char-literal values, and local-label refs), and
+// the canonical hand cases assert kind sequences taken straight from
+// frontend/lexer_test.go (authority-anchored). Still deferred to Brick B1d:
+// string literals; cpp line-directives are out of scope (a preprocessor
+// artifact). On that input domain refLex is identical to frontend.Lex, since
+// neither a string ('"') nor a cpp directive can arise — the corpus emits
+// neither.
 package z80_test
 
 import (
@@ -105,6 +106,40 @@ func refDigitVal(c byte) uint64 {
 		return uint64(c-'A') + 10
 	}
 	return 0
+}
+
+// refTryLocal tries to match a local-label ref at src[pos] (port of the
+// tryLocal closures in readNumberOrLocal): one or two decimal digits + 'f'/'b',
+// not followed by an ident-cont char. Returns the digit, the direction byte,
+// the bytes consumed, and ok.
+func refTryLocal(src []byte, pos int) (digit int, dir byte, adv int, ok bool) {
+	n := len(src)
+	isDig := func(c byte) bool { return c >= '0' && c <= '9' }
+	try := func(nd int) (byte, bool) {
+		if pos+nd >= n {
+			return 0, false
+		}
+		for i := 0; i < nd; i++ {
+			if !isDig(src[pos+i]) {
+				return 0, false
+			}
+		}
+		d := src[pos+nd]
+		if d != 'f' && d != 'b' {
+			return 0, false
+		}
+		if pos+nd+1 < n && refIsIdentCont(src[pos+nd+1]) {
+			return 0, false
+		}
+		return d, true
+	}
+	if d, okk := try(2); okk {
+		return int(src[pos]-'0')*10 + int(src[pos+1]-'0'), d, 3, true
+	}
+	if d, okk := try(1); okk {
+		return int(src[pos] - '0'), d, 2, true
+	}
+	return 0, 0, 0, false
 }
 
 // refEscape decodes a char-literal escape (port of readCharLit's switch).
@@ -274,6 +309,14 @@ func refLex(src []byte) (toks []refTok, ok bool) {
 				return toks, false
 			}
 		case c >= '0' && c <= '9':
+			// Local-label ref first (port of readNumberOrLocal): 1-2 decimal
+			// digits + 'f'/'b', not followed by an ident-cont char.
+			if dig, dir, adv, ok := refTryLocal(src, pos); ok {
+				pos += adv
+				emit(refTok{kind: tLocalRef, val: uint64(dig), base: int(dir)})
+				atLineStart = wasEOL
+				continue
+			}
 			base := 10
 			if c == '0' && pos+1 < n {
 				switch src[pos+1] {
@@ -399,6 +442,15 @@ func compareToks(t *testing.T, label string, got, want []refTok) {
 				t.Fatalf("%s: tok[%d] int value = %d, want %d", label, i, got[i].val, want[i].val)
 			}
 		}
+		if want[i].kind == tLocalRef {
+			// val holds the label digit; base holds the 'f'/'b' direction char.
+			if got[i].val != want[i].val {
+				t.Fatalf("%s: tok[%d] localref digit = %d, want %d", label, i, got[i].val, want[i].val)
+			}
+			if got[i].base != want[i].base {
+				t.Fatalf("%s: tok[%d] localref dir = %q, want %q", label, i, rune(got[i].base), rune(want[i].base))
+			}
+		}
 	}
 }
 
@@ -439,8 +491,13 @@ func TestAsmLexHandCases(t *testing.T) {
 		{".word 1 << 4\n", []int{tIdent, tInt, tShl, tInt, tEOL, tEOF}},
 		// label + assorted operators
 		{"loop: x0 + x1 - 1 & 2 | 3 ^ ~4\n", []int{tIdent, tColon, tIdent, tPlus, tIdent, tMinus, tInt, tAmp, tInt, tPipe, tInt, tCaret, tTilde, tInt, tEOL, tEOF}},
-		// '#' at start of line is a comment (cpp directive handling is B1b)
+		// '#' at start of line is a comment (cpp directives are out of scope)
 		{"# a note\nmov x0\n", []int{tLineComment, tEOL, tIdent, tIdent, tEOL, tEOF}},
+		// local-label refs (frontend/lexer_test.go TestLexLocalLabelRef + 2-digit)
+		{"b 1f\n", []int{tIdent, tLocalRef, tEOL, tEOF}},
+		{"bne 10b cbz x0, 2f\n", []int{tIdent, tLocalRef, tIdent, tIdent, tComma, tLocalRef, tEOL, tEOF}},
+		// 0b followed by a digit is a binary literal, not a 0/'b' local ref
+		{"0b101 5f\n", []int{tInt, tLocalRef, tEOL, tEOF}},
 		// lone dot, parens, equals, percent, shr
 		{". ( ) = %x 8 >> 2\n", []int{tDot, tLParen, tRParen, tEquals, tPercent, tIdent, tInt, tShr, tInt, tEOL, tEOF}},
 		// empty input
@@ -478,6 +535,7 @@ var alPieces = []string{
 	"sp", "xzr", "lr", "loop", "_start", "foo", ".text", ".word", ".quad", ".align",
 	"0", "1", "4", "42", "255", "0x1f", "0xFF", "0xdead", "0b1010", "0b0", "1000",
 	"0x0123456789abcdef", "65535", "0xcafef00d",
+	"1f", "1b", "2f", "9b", "10f", "42b", "99f",
 	"'A'", "'z'", "'0'", "' '", "'\\n'", "'\\t'", "'\\\\'", "'\\''",
 	"#", ",", ":", "!", "[", "]", "(", ")", "+", "-", "*", "/", "&", "|", "^", "~",
 	"=", "%", "<<", ">>", ".", "/* blk */",
