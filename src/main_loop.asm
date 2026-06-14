@@ -640,13 +640,26 @@ compute_dir_size_balign:
 ; small N (corpus values are 2..4), so we just shift in place.
 compute_dir_size_align:
                 call    main_eval_first_imm         ; expr_result = N (s64)
-; align = 1 << N.  Take low byte of N as the shift count.
+; `.align N` aligns to 2^N bytes.  Valid N on the SAM is 1..15: the OUT
+; buffer is 32 KB (pages 5 + 6), so an alignment of 2^16 or more can
+; never be reached within it and the 16-bit pad machinery cannot hold it.
+; Reject N >= 16 (and negatives / N >= 256, which show up as a non-zero
+; byte above the low byte) with tag a0, rather than letting 1<<N overflow
+; HL to a silent no-op.
+                ld      hl, expr_result + 1
+                ld      b, 7
+                xor     a
+compute_dir_size_align_hi:
+                or      (hl)                        ; A = OR of bytes 1..7
+                inc     hl                          ; (16-bit inc: no flags)
+                djnz    compute_dir_size_align_hi   ; (no flags)
+                jp      nz, compute_dir_size_align_bad  ; N negative or >= 256
                 ld      a, (expr_result + 0)
                 or      a
-                jr      z, compute_dir_size_align_pad0
-                cp      32
-                jp      nc, fail
-; HL = 1 << A (build a 16-bit alignment for now; PR-A fixtures stay <= 16).
+                jr      z, compute_dir_size_align_pad0  ; N == 0 → pad 0
+                cp      16
+                jp      nc, compute_dir_size_align_bad  ; N >= 16 → too large
+; HL = 1 << A for N in 1..15 (alignment 2..32768, 16-bit representable).
                 ld      hl, 1
 compute_dir_size_align_shift:
                 add     hl, hl
@@ -663,6 +676,10 @@ compute_dir_size_align_shift:
                 ld      (expr_result + 2), a
                 ld      (expr_result + 3), a
                 jp      compute_balign_pad_from_n
+
+compute_dir_size_align_bad:
+                ld      a, &a0
+                jp      fail_with_tag               ; tag a0: .align exponent out of SAM range
 
 compute_dir_size_align_pad0:
                 ld      bc, 0
