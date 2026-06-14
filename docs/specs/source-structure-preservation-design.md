@@ -1,11 +1,17 @@
 # Source-structure preservation in the v2 editor region (i78)
 
-**Status:** design — the **blank-run half (part a) is ready to build now**; the
-multi-line-comment grouping (part b) is **decided here** (single sidecar entry
-with embedded newlines, §4); the indentation half (part c) is **deferred,
+**Status:** design — the **blank-run half (part a) is IMPLEMENTED host-first +
+CI-gated** (PR #218; the `kind u8` sidecar discriminator + `FlagTaggedSidecar`,
+the `KindBlankRun` IR record, blank emission in both renderers, the corpus
+round-trip blank-line assertion); the multi-line-comment grouping (part b) is
+**decided here** (single sidecar entry with embedded newlines, §4) and needs no
+code beyond the existing format; the indentation half (part c) is **deferred,
 gated downstream of the i76 editor-interface sign-off** and only captured, not
-designed (§5). · **Item:** i78 · Lives alongside the editor-region format it
-extends.
+designed (§5). The Z80 half (parse/render on the SAM) rides i48c. Finding from
+the build (→ i90): blanks inside `%nobits`/BSS sections are dropped by
+`-flatten` (the whole section body has no flat-image PC) — a pre-existing
+flatten property, not an i78 loss; PROGBITS preservation is exact. · **Item:**
+i78 · Lives alongside the editor-region format it extends.
 
 **The invariant this serves (i78 registry row):** *render-to-text reproduces the
 source's blank/comment structure exactly.* A round-trip (text → `.tbn` → text)

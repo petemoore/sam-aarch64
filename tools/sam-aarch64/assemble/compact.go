@@ -37,12 +37,13 @@ const litDataMaxBytes = 1016
 // release-gate verifies this by byte-matching the assembled output of the
 // compact .tbn against the symbolic one.
 //
-// Editor-only data is relocated out of the record stream (M8 / i39b-2): COMMENT
-// records become comment-sidecar rows (anchored to their output PC) and
-// `.global` directives become a list of name_ids — both returned for the
-// editor region (writeCompactTBN passes them to WriteFile). Neither flushes the
-// open instruction run, so a run spans the comments / `.global`s embedded in it.
-func Compact(f *format.File, p1 *Pass1Result) (recordsOut []byte, commentsOut []format.CommentRow, globalsOut []uint16, _ error) {
+// Editor-only data is relocated out of the record stream (M8 / i39b-2 + i78):
+// COMMENT and BLANK_RUN records become tagged editor-region sidecar rows
+// (anchored to their output PC, in source order) and `.global` directives
+// become a list of name_ids — both returned for the editor region
+// (writeCompactTBN passes them to WriteFile). None flush the open instruction
+// run, so a run spans the comments / blank runs / `.global`s embedded in it.
+func Compact(f *format.File, p1 *Pass1Result) (recordsOut []byte, sidecarOut []format.SidecarRow, globalsOut []uint16, _ error) {
 	var w format.RecordWriter
 
 	// Two run accumulators: instruction-run elements (INSN_RUN) and
@@ -109,10 +110,29 @@ func Compact(f *format.File, p1 *Pass1Result) (recordsOut []byte, commentsOut []
 			if anchor < 0 {
 				anchor = 0 // a comment before the origin-setting `.org` renders at the top
 			}
-			commentsOut = append(commentsOut, format.CommentRow{
-				Anchor:    anchor,
-				Placement: rec.Placement,
-				Body:      rec.Body,
+			sidecarOut = append(sidecarOut, format.SidecarRow{
+				Kind: format.SidecarComment,
+				Comment: format.CommentRow{
+					Anchor:    anchor,
+					Placement: rec.Placement,
+					Body:      rec.Body,
+				},
+			})
+			continue
+		}
+		// Blank-line runs (i78) relocate to the sidecar like comments: anchored
+		// to their output PC, no bytes, and they do NOT flush the open run.
+		// Storing them in the same ordered slice preserves source order at a
+		// shared anchor (blank-before-comment vs comment-before-blank render
+		// differently).
+		if rec.Kind == format.KindBlankRun {
+			anchor := p1.RecordPC[i] - p1.OriginVMA
+			if anchor < 0 {
+				anchor = 0
+			}
+			sidecarOut = append(sidecarOut, format.SidecarRow{
+				Kind:  format.SidecarBlank,
+				Blank: format.BlankRun{Anchor: anchor, RunLen: rec.RunLen},
 			})
 			continue
 		}
@@ -164,7 +184,7 @@ func Compact(f *format.File, p1 *Pass1Result) (recordsOut []byte, commentsOut []
 		}
 	}
 	flushAll()
-	return w.Bytes(), commentsOut, globalsOut, nil
+	return w.Bytes(), sidecarOut, globalsOut, nil
 }
 
 // headerRows builds the compact `.tbn` header label/local tables from pass1

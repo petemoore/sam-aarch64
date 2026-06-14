@@ -62,7 +62,7 @@ func EmitLines(f *format.File) ([]Line, error) {
 	}
 
 	hd := newHeaderDefs(f)
-	cc := newCommentCursor(f)
+	cc := newSidecarCursor(f)
 	trackPC := !hd.empty() || !cc.empty()
 	var pc int64
 	var originVMA int64
@@ -81,11 +81,14 @@ func EmitLines(f *format.File) ([]Line, error) {
 	emitComment := func(c format.CommentRow) {
 		emitCommentBody(&out, c.Body, c.Placement, &prevWasStatement)
 	}
-	// flushComments / flush drain sidecar entries due at the current PC. They
-	// are tagged -1 via emitSpan: the calling record records its own bytes
-	// separately, below.
+	emitBlank := func(b format.BlankRun) {
+		emitBlankRun(&out, b.RunLen, &prevWasStatement)
+	}
+	// flushComments / flush drain sidecar entries (comments + blank runs) due at
+	// the current PC. They are tagged -1 via emitSpan: the calling record
+	// records its own bytes separately, below.
 	flushComments := func() {
-		_ = emitSpan(-1, func() error { cc.flushAt(pc, emitComment); return nil })
+		_ = emitSpan(-1, func() error { cc.flushAt(pc, emitComment, emitBlank); return nil })
 	}
 	flush := func() {
 		flushComments()
@@ -121,6 +124,13 @@ func EmitLines(f *format.File) ([]Line, error) {
 		case format.KindComment:
 			if err := emitSpan(i, func() error {
 				emitCommentBody(&out, rec.Body, rec.Placement, &prevWasStatement)
+				return nil
+			}); err != nil {
+				return nil, err
+			}
+		case format.KindBlankRun:
+			if err := emitSpan(i, func() error {
+				emitBlankRun(&out, rec.RunLen, &prevWasStatement)
 				return nil
 			}); err != nil {
 				return nil, err
@@ -220,8 +230,8 @@ func EmitLines(f *format.File) ([]Line, error) {
 			len(leftover), leftover[0].offset)
 	}
 	if leftover := cc.remaining(); len(leftover) > 0 {
-		return nil, fmt.Errorf("render: %d comment(s) not placed by PC walk (first at offset %#x)",
-			len(leftover), leftover[0].Anchor)
+		return nil, fmt.Errorf("render: %d sidecar row(s) not placed by PC walk (first at offset %#x)",
+			len(leftover), leftover[0].Anchor())
 	}
 	if prevWasStatement {
 		out.WriteByte('\n')

@@ -31,6 +31,20 @@ func emitCommentBody(out *bytes.Buffer, body []byte, placement byte, prevWasStat
 	}
 }
 
+// emitBlankRun renders a run of blank source lines (i78) as runLen empty lines.
+// If a statement line is open, it is closed first (its trailing newline is the
+// line the statement sits on, not one of the blanks), then runLen blank lines
+// follow.
+func emitBlankRun(out *bytes.Buffer, runLen uint32, prevWasStatement *bool) {
+	if *prevWasStatement {
+		out.WriteByte('\n')
+		*prevWasStatement = false
+	}
+	for k := uint32(0); k < runLen; k++ {
+		out.WriteByte('\n')
+	}
+}
+
 // Emit reads .tbn bytes and returns canonically-formatted text.
 func Emit(in []byte) ([]byte, error) {
 	f, err := format.ReadFile(in)
@@ -58,10 +72,11 @@ func EmitFile(f *format.File) ([]byte, error) {
 	// symbolic `.tbn` (empty tables); there the LABEL_DEF/LOCAL_DEF records
 	// below render inline.
 	hd := newHeaderDefs(f)
-	// Comments live in the editor-region sidecar (compact `.tbn` v2, M8 /
-	// i39b-2), anchored to their output PC. Inert for a symbolic `.tbn` (no
-	// sidecar); there the inline KindComment records below render instead.
-	cc := newCommentCursor(f)
+	// Comments and blank-line runs live in the editor-region sidecar (compact
+	// `.tbn` v2, M8 / i39b-2 + i78), anchored to their output PC. Inert for a
+	// symbolic `.tbn` (no sidecar); there the inline KindComment / KindBlankRun
+	// records below render instead.
+	cc := newSidecarCursor(f)
 	// PC tracking places header-table definitions AND comment-sidecar entries.
 	// A symbolic `.tbn` has neither, so PC bookkeeping (which can fail on a
 	// non-constant directive size like `.skip SYM`) is skipped entirely —
@@ -84,15 +99,19 @@ func EmitFile(f *format.File) ([]byte, error) {
 		prevWasStatement = true
 	}
 	// emitComment renders one sidecar comment (handles multi-line block-comment
-	// bodies + placement via the shared helper).
+	// bodies + placement via the shared helper); emitBlank renders one blank-run
+	// row as empty lines.
 	emitComment := func(c format.CommentRow) {
 		emitCommentBody(&out, c.Body, c.Placement, &prevWasStatement)
 	}
-	// flushComments drains sidecar comments due at the current PC; flush also
-	// drains header definitions. At a shared PC comments emit before labels
-	// (a trailing comment belongs to the just-rendered statement; a standalone
-	// comment precedes the next one).
-	flushComments := func() { cc.flushAt(pc, emitComment) }
+	emitBlank := func(b format.BlankRun) {
+		emitBlankRun(&out, b.RunLen, &prevWasStatement)
+	}
+	// flushComments drains sidecar rows (comments + blank runs) due at the
+	// current PC; flush also drains header definitions. At a shared PC sidecar
+	// rows emit before labels (a trailing comment belongs to the just-rendered
+	// statement; a standalone comment / blank run precedes the next one).
+	flushComments := func() { cc.flushAt(pc, emitComment, emitBlank) }
 	flush := func() { flushComments(); hd.flushAt(pc, emitDef) }
 
 	for _, rec := range f.Records {
@@ -114,6 +133,9 @@ func EmitFile(f *format.File) ([]byte, error) {
 			// a label at this PC still belongs before the next byte-emitting
 			// statement, so don't flush here.
 			emitCommentBody(&out, rec.Body, rec.Placement, &prevWasStatement)
+		case format.KindBlankRun:
+			// Inline blank-run (symbolic-IR render path, i78). Occupies no PC.
+			emitBlankRun(&out, rec.RunLen, &prevWasStatement)
 		case format.KindInst:
 			flush()
 			if prevWasStatement {
@@ -200,8 +222,8 @@ func EmitFile(f *format.File) ([]byte, error) {
 			len(leftover), leftover[0].offset)
 	}
 	if leftover := cc.remaining(); len(leftover) > 0 {
-		return nil, fmt.Errorf("render: %d comment(s) not placed by PC walk (first at offset %#x) — PC accounting bug or corrupt comment sidecar",
-			len(leftover), leftover[0].Anchor)
+		return nil, fmt.Errorf("render: %d sidecar row(s) not placed by PC walk (first at offset %#x) — PC accounting bug or corrupt sidecar",
+			len(leftover), leftover[0].Anchor())
 	}
 	if prevWasStatement {
 		out.WriteByte('\n')

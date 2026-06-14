@@ -46,10 +46,50 @@ func TestParseStandaloneComment(t *testing.T) {
 	}
 }
 
-func TestParseBlankLinesSkipped(t *testing.T) {
+func TestParseBlankLinesBecomeBlankRun(t *testing.T) {
+	// i78: blank source lines are preserved as a single BLANK_RUN record
+	// carrying the run length, so the renderer can reproduce them.
 	f := parseHelper(t, "\n\n\n")
-	if len(f.Records) != 0 {
-		t.Errorf("expected no records, got %+v", f.Records)
+	if len(f.Records) != 1 {
+		t.Fatalf("expected one blank-run record, got %+v", f.Records)
+	}
+	rec := f.Records[0]
+	if rec.Kind != format.KindBlankRun || rec.RunLen != 3 {
+		t.Errorf("rec = %+v (want KindBlankRun RunLen=3)", rec)
+	}
+}
+
+func TestParseBlankRunBetweenStatements(t *testing.T) {
+	// A blank run between two statements is one record between them; a textless
+	// `//` is a separate KindComment (empty body), not a blank run.
+	f := parseHelper(t, "  nop\n\n\n  nop\n")
+	var kinds []format.RecordKind
+	var runLen uint32
+	for _, r := range f.Records {
+		kinds = append(kinds, r.Kind)
+		if r.Kind == format.KindBlankRun {
+			runLen = r.RunLen
+		}
+	}
+	// inst, blank-run(2), inst
+	if len(kinds) != 3 || kinds[0] != format.KindInst || kinds[1] != format.KindBlankRun || kinds[2] != format.KindInst {
+		t.Fatalf("kinds = %v", kinds)
+	}
+	if runLen != 2 {
+		t.Errorf("blank run len = %d, want 2", runLen)
+	}
+}
+
+func TestParseTextlessCommentIsNotBlankRun(t *testing.T) {
+	// A `//` with no body is a comment row (empty body), distinct from a blank
+	// source line (design §1 disambiguation).
+	f := parseHelper(t, "//\n")
+	if len(f.Records) != 1 {
+		t.Fatalf("records = %+v", f.Records)
+	}
+	rec := f.Records[0]
+	if rec.Kind != format.KindComment || len(rec.Body) != 0 {
+		t.Errorf("rec = %+v (want empty-body KindComment)", rec)
 	}
 }
 

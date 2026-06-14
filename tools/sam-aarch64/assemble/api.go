@@ -28,7 +28,7 @@ func DumpUsage(w io.Writer, totalOut int) {
 // tables. Byte-for-byte identical to the former refenc -emit-compact-tbn
 // output.
 func CompactTBNBytes(f *format.File, p1 *Pass1Result) ([]byte, error) {
-	compacted, comments, globals, err := Compact(f, p1)
+	compacted, sidecar, globals, err := Compact(f, p1)
 	if err != nil {
 		return nil, err
 	}
@@ -38,7 +38,7 @@ func CompactTBNBytes(f *format.File, p1 *Pass1Result) ([]byte, error) {
 	}
 	labels, locals := headerRows(f, p1)
 	var buf bytes.Buffer
-	if err := format.WriteFile(&buf, st, labels, locals, compacted, globals, comments); err != nil {
+	if err := format.WriteFile(&buf, st, labels, locals, compacted, globals, sidecar); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil

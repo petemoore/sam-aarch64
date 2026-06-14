@@ -285,6 +285,17 @@ for dir in "${FIXTURE_DIRS[@]}"; do
             echo "    FAIL(comment-roundtrip) $dir/$name.s [source //=$src_cc rendered //=$ren_cc]"
             fail_names+=("$dir/$name.s [comment count]"); failed=$((failed + 1)); continue
         fi
+        # Blank-line structure fidelity (i78): blank source lines relocate to the
+        # editor region as blank-run rows and must re-render identically. These
+        # per-axis fixtures are not flattened and have no %nobits sections, so the
+        # whole-file blank count must round-trip exactly. (The release check below
+        # restricts to PROGBITS sections, since flatten drops NOBITS bodies.)
+        src_bl=$(grep -c '^[[:space:]]*$' "$src" 2>/dev/null || true)
+        ren_bl=$(grep -c '^[[:space:]]*$' "$ov_dis" 2>/dev/null || true)
+        if [ "$src_bl" != "$ren_bl" ]; then
+            echo "    FAIL(blank-roundtrip) $dir/$name.s [source blanks=$src_bl rendered blanks=$ren_bl]"
+            fail_names+=("$dir/$name.s [blank count]"); failed=$((failed + 1)); continue
+        fi
         if ! "$ROOT/build/sam-aarch64" -o "$ov_v2_bin" "$ov_dis" 2>/dev/null; then
             echo "    FAIL(sam-aarch64-2) $dir/$name.s"; fail_names+=("$dir/$name.s [overlay re-asm]"); failed=$((failed + 1)); continue
         fi
@@ -366,11 +377,32 @@ if [ -f "$release_src" ]; then
         echo "    FAIL(vs GNU) release.s (with comments) [render→re-asm != release.img]"; fail_names+=("release.s [wc != GNU]"); failed=$((failed + 1))
     else
         relc_cc=$(grep -c '//' "$relc_dis" 2>/dev/null || true)
+        # Blank-line structure fidelity (i78) for the real corpus. release.s is
+        # FLATTENED, and flatten drops every %nobits/BSS section's body (it
+        # contributes no bytes to the flat image, so its blank lines / comments
+        # have no PC region to anchor to). So the round-trippable blank count is
+        # the source's PROGBITS (.text/.data, non-%nobits) blank lines, which must
+        # reproduce EXACTLY in the render — no fudge factor. (The 132-line gap
+        # between the 1472 total source blanks and the 1340 PROGBITS blanks is
+        # entirely those NOBITS-section blanks, a pre-existing flatten property,
+        # not an i78 loss.)
+        src_progbits_bl=$(awk '
+            BEGIN { prog=1 }
+            { d=$0; sub(/^[[:space:]]+/,"",d)
+              if (d ~ /^\.section[[:space:]]/) { if (d ~ /%nobits/) prog=0; else prog=1; next }
+              if (d ~ /^\.text([[:space:]]|$)/) { prog=1; next }
+              if (d ~ /^\.data([[:space:]]|$)/) { prog=1; next }
+              if (d ~ /^\.bss([[:space:]]|$)/)  { prog=0; next }
+              if (prog && $0 ~ /^[[:space:]]*$/) n++ }
+            END { print n+0 }' "$release_src")
+        ren_bl=$(grep -c '^[[:space:]]*$' "$relc_dis" 2>/dev/null || true)
         # The vendored release has 7000+ comment lines; require the bulk survive.
         if [ "$relc_cc" -lt 5000 ]; then
             echo "    FAIL(comments-lost) release.s (with comments) [only $relc_cc // lines rendered]"; fail_names+=("release.s [wc comments-lost]"); failed=$((failed + 1))
+        elif [ "$src_progbits_bl" != "$ren_bl" ]; then
+            echo "    FAIL(blank-roundtrip) release.s [PROGBITS source blanks=$src_progbits_bl rendered blanks=$ren_bl]"; fail_names+=("release.s [blank count]"); failed=$((failed + 1))
         else
-            echo "    PASS release.s with comments ($(wc -c < "$relc_v1") B == GNU; $relc_cc // lines round-tripped, .tbn $(wc -c < "$relc_tbn") B)"
+            echo "    PASS release.s with comments ($(wc -c < "$relc_v1") B == GNU; $relc_cc // lines, $ren_bl blank lines round-tripped, .tbn $(wc -c < "$relc_tbn") B)"
             passed=$((passed + 1))
         fi
     fi

@@ -12,5 +12,16 @@ var Magic = [4]byte{'S', 'A', '6', '4'}
 // patch overlay. It is a clean break — the reader rejects any other version.
 const Version uint16 = 2
 
-// Flags is reserved in v1 and must be zero.
-const Flags uint16 = 0
+// Flags is the header flags word written by this version (§2.1). It records
+// editor-region capabilities the reader needs to know before parsing the
+// sidecar. Files written here carry FlagTaggedSidecar.
+const Flags uint16 = FlagTaggedSidecar
+
+// FlagTaggedSidecar marks an editor region whose comment-sidecar rows carry a
+// leading kind u8 discriminator (0 = comment, 1 = blank-run), per the i78
+// source-structure design. A reader of a file with this bit parses tagged
+// rows; a reader of a file without the bit parses the legacy untagged shape, where
+// every row is definitionally a comment. The discriminator is editor-region
+// only — the assembler-facing region and the assembled binary are unchanged,
+// so the byte-match invariant is unaffected.
+const FlagTaggedSidecar uint16 = 1 << 0

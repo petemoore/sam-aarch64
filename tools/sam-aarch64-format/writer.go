@@ -97,19 +97,21 @@ func (w *RecordWriter) WriteDirective(directiveID, operandCount byte, operands [
 //	label table · local table         — header position tables (§2.4)
 //	record stream                     — INSN_RUN / LIT_DATA / DIRECTIVE
 //	── editor region (at editor_region_offset) ──
-//	name table · global flags · comment sidecar   (editor_region.go)
+//	name table · global flags · sidecar   (editor_region.go)
 //
-// The name strings, `.global` flags, and comments are data the assembler
-// never reads (it resolves symbols by name_id via the header tables), so they
-// move to the tail; the assembler stops its record walk at
+// The name strings, `.global` flags, comments, and blank-line runs are data the
+// assembler never reads (it resolves symbols by name_id via the header tables),
+// so they move to the tail; the assembler stops its record walk at
 // editor_region_offset and never maps the editor region. The label/local rows
 // only carry name_ids, so the name strings can follow the records.
 //
 // labels/locals carry resolved position offsets (= symbolVMA - OriginVMA);
-// globals is the list of name_ids that were `.global`; comments is the
-// relocated comment sidecar. WriteFile sorts the rows into their on-disk
-// order, so the caller's slice order does not matter.
-func WriteFile(w io.Writer, st *SymbolTable, labels []LabelRow, locals []LocalRow, records []byte, globals []uint16, comments []CommentRow) error {
+// globals is the list of name_ids that were `.global`; sidecar is the relocated
+// editor-region sidecar (comments + blank-line runs, in source order). WriteFile
+// stable-sorts the sidecar rows by anchor into their on-disk order, so the
+// caller's slice order only matters for ties at a shared anchor (which it
+// preserves — that is the source order).
+func WriteFile(w io.Writer, st *SymbolTable, labels []LabelRow, locals []LocalRow, records []byte, globals []uint16, sidecar []SidecarRow) error {
 	tables := writeLabelTable(nil, labels)
 	tables = writeLocalTable(tables, locals)
 
@@ -138,7 +140,7 @@ func WriteFile(w io.Writer, st *SymbolTable, labels []LabelRow, locals []LocalRo
 	if _, err := w.Write(records); err != nil {
 		return err
 	}
-	editor := appendEditorRegion(nil, st.Names(), globals, comments)
+	editor := appendEditorRegion(nil, st.Names(), globals, sidecar)
 	if _, err := w.Write(editor); err != nil {
 		return err
 	}

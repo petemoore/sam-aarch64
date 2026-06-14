@@ -69,7 +69,7 @@ are length-prefixed (u16 LE), never NUL-terminated.
 ┌─────────────────────────────────────────────┐
 │ Magic    "SA64"      4 bytes  (0x53 41 36 34)│  format.go:7
 │ Version  u16 LE      = 2                     │  format.go:13
-│ Flags    u16 LE      = 0  (reserved)         │  format.go:16
+│ Flags    u16 LE      bit0 = tagged sidecar   │  format.go:16
 │ editor_region_offset u32 LE  (§2.3)          │  writer.go / reader.go
 ├─────────────────────── assembler-facing region ──────────────┤
 │ Label table  (§2.4)                          │  header_tables.go:35,90
@@ -91,8 +91,10 @@ are length-prefixed (u16 LE), never NUL-terminated.
 │   name₀   [shared_prefix_len uvarint][suffix_len uvarint][suffix]
 │   …  (front-coded against the previous name; i39b-1)
 │ Global flags  [count u16][name_id u16]…      │  editor_region.go
-│ Comment sidecar (§2.5)                       │  editor_region.go
-│   [count u16] then [anchor_delta uvarint][placement u8][len u16][text]…
+│ Sidecar (§2.5)                               │  editor_region.go
+│   [count u16] then per row [kind u8][anchor_delta uvarint] + kind tail
+│     kind 0 comment:   [placement u8][len u16][text]
+│     kind 1 blank-run: [run_len uvarint]      (i78)
 └─────────────────────────────────────────────┘
 ```
 
@@ -102,9 +104,14 @@ The file splits at `editor_region_offset` into an **assembler-facing region**
 see `docs/specs/compact-tbn-nextgen-design.md` §3.5/§3.6/§3.7.
 
 - **Magic / version / flags / editor_region_offset** (12 bytes total).
-  `ReadFile` rejects a bad magic or a version ≠ 2; `Flags` is reserved and
-  must be 0. The version check is a clean break — a v1 file is rejected, not
-  down-converted.
+  `ReadFile` rejects a bad magic or a version ≠ 2. `Flags` bit 0
+  (`FlagTaggedSidecar`, `format.go`) marks an editor region whose sidecar rows
+  carry a leading `kind u8` discriminator (comment / blank-run, §2.5 / i78); a
+  file written by the current toolchain sets it, and a reader of an older file
+  without the bit parses the legacy untagged shape (every row a comment). The
+  SAM Z80 reader skips the flags word entirely (`reader.asm:96`) — the bit is
+  editor-region metadata the assembler never reads. The version check is a clean
+  break — a v1 file is rejected, not down-converted.
 - **Label table** and **local table** — the v2 header **position tables**
   (§2.4). They head the assembler-facing region. They carry one row per
   resolved position-label / numeric-local def site, so a `KindInsnRun` run
@@ -139,28 +146,49 @@ decision 1). The split is **groundwork**: i39b-2 relocates the editor-only data
 so eviction *becomes possible*; it does not itself evict (the loader still
 loads the whole file).
 
-### 2.5 Comment sidecar (editor region) — v2 / i39b-2
+### 2.5 Sidecar (editor region) — v2 / i39b-2 + i78
 
-Comments are pure round-trip data the assembler never reads (it skips
-`KindComment` in both passes). In v2 they do **not** appear as `KindComment`
-records in the assembler stream — they relocate to a sidecar in the editor
-region, each anchored to the **output PC it attaches to**:
+The sidecar carries pure round-trip source-structure data the assembler never
+reads: **comments** and **blank-line runs**. In v2 neither appears in the
+assembler record stream — they relocate to a sidecar in the editor region, each
+anchored to the **output PC it attaches to**, in source order:
 
 ```
-Comment sidecar   editor_region.go
+Sidecar   editor_region.go
   count   u16 LE
-  row     [anchor_delta uvarint][placement u8][len u16][text]   ×count
+  row     [kind u8][anchor_delta uvarint] + kind tail               ×count
+            kind 0 comment:   [placement u8][len u16][text]
+            kind 1 blank-run: [run_len uvarint]                     (i78)
+            kind 2+ reserved (e.g. i78 part-c indentation rows)
 ```
 
-- **`anchor`** is the output PC (byte offset from the origin VMA, ≥ 0) the
-  comment attaches to — the same offset space as the label table. Rows are
-  sorted by anchor ascending and the anchor is stored as a **delta** from the
-  previous row (first row's previous = 0). The renderer, walking the records
-  and tracking PC, emits each comment when its PC walk reaches the anchor.
-- **`placement`** is `0` = standalone (own line) / `1` = trailing (appends to
-  the preceding statement's line) — as for the `KindComment` record (§8). A
-  comment whose body carries embedded newlines (a `/* … */` block comment)
-  renders as one `//`-prefixed line per body line.
+The leading `kind u8` is present only when the header carries
+`FlagTaggedSidecar` (§2.1) — a file written by the current toolchain. A reader
+of an older untagged file (no flag bit) parses every row as a comment with no
+kind byte (the legacy shape).
+
+- **`anchor`** is the output PC (byte offset from the origin VMA, ≥ 0) the row
+  attaches to — the same offset space as the label table. Rows are sorted by
+  anchor ascending (**stable in source order at a tie**, so interleaved comments
+  and blank runs at one anchor keep their source order) and the anchor is stored
+  as a **delta** from the previous row (first row's previous = 0). The renderer,
+  walking the records and tracking PC, emits each row when its PC walk reaches
+  the anchor, in stored (source) order.
+- **Comment (`kind 0`)**: `placement` is `0` = standalone (own line) / `1` =
+  trailing (appends to the preceding statement's line) — as for the
+  `KindComment` record (§8). A comment whose body carries embedded newlines (a
+  `/* … */` block comment) renders as one `//`-prefixed line per body line.
+- **Blank-run (`kind 1`, i78)**: `run_len` is the number of consecutive blank
+  source lines (≥ 1); the renderer emits that many empty lines. A blank line is
+  distinct from a textless `//` comment (a `kind 0` row with an empty body) —
+  the kind discriminator keeps them apart, so `//\n` and `\n` round-trip as
+  themselves. Blank runs cost the assembler nothing (editor-region only) and do
+  not touch the 96 KB IN ceiling. **Round-trip caveat:** a blank line inside a
+  `%nobits`/BSS section is not preserved when the source is flattened — flatten
+  drops the whole NOBITS section body (it contributes no bytes, so it has no PC
+  region to anchor to). Blank structure in PROGBITS (`.text`/`.data`) is
+  reproduced exactly; the corpus round-trip gate asserts this (PROGBITS-only for
+  the flattened release source). See `docs/specs/source-structure-preservation-design.md`.
 - The host's `-strip-comments` drops comments entirely (empty sidecar);
   `-thin-comments=N` keeps one in every N. The m6 gate flows the full
   unstripped comment corpus: the SAM loads only the assembler-facing prefix
@@ -237,13 +265,14 @@ The on-disk overlay record stream uses three record kinds:
 | `0x08` | `LIT_DATA`  | `[directive_id u8][raw LE bytes…]` — a run of constant numeric data stored as assembled bytes, tagged with its source directive (§7.3) | kinds.go:18 |
 | `0x09` | `INSN_RUN`  | `[mode u8][elements…]` — a run of instructions; mode 0 = packed literal words, mode 1 = base-word + sparse overlay patches (§7.2) | kinds.go:34 |
 
-Reserved / not used by the overlay record stream: `0x00`; `0x06`; `0x0A`–`0xFF`.
-`COMMENT` (`0x05`) is still a `RecordReader`-decodable kind and the host's
-in-memory IR vocabulary, but in v2 / i39b-2 comments do **not** appear in the
-on-disk record stream — they relocate to the editor-region comment sidecar
-(§2.5). The record-kind constants `0x01`–`0x03` and `0x07` exist in `kinds.go`
-for the host front-end's in-memory IR but are **never serialized** (§1), so an
-on-disk overlay record stream contains only the three kinds above.
+Reserved / not used by the overlay record stream: `0x00`; `0x0A`–`0xFF`.
+`COMMENT` (`0x05`) and `BLANK_RUN` (`0x06`, i78 — a run of blank source lines)
+are `kinds.go` constants in the host's in-memory IR vocabulary, but in v2 /
+i39b-2 + i78 neither appears in the on-disk record stream — both relocate to the
+editor-region sidecar (§2.5). The record-kind constants `0x01`–`0x03`, `0x05`,
+`0x06`, and `0x07` exist in `kinds.go` for the host front-end's in-memory IR but
+are **never serialized** (§1), so an on-disk overlay record stream contains only
+the three kinds above.
 
 Notes:
 

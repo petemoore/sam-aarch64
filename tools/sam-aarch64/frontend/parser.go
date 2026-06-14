@@ -50,6 +50,12 @@ func (p *parser) emitComment(placement byte, body []byte) {
 	p.recs = append(p.recs, format.Record{Kind: format.KindComment, Placement: placement, Body: body})
 }
 
+// emitBlankRun appends a BLANK_RUN record to the in-memory IR (i78), recording
+// n consecutive blank source lines so the renderer can reproduce them.
+func (p *parser) emitBlankRun(n int) {
+	p.recs = append(p.recs, format.Record{Kind: format.KindBlankRun, RunLen: uint32(n)})
+}
+
 // emitDirective appends a DIRECTIVE record to the in-memory IR.
 func (p *parser) emitDirective(directiveID, operandCount byte, operands []byte) {
 	p.recs = append(p.recs, format.Record{
@@ -64,8 +70,18 @@ func (p *parser) atEOF() bool { return p.toks[p.pos].Kind == TokEOF }
 func (p *parser) cur() Tok    { return p.toks[p.pos] }
 
 func (p *parser) parseLine() error {
+	// Count consecutive blank source lines (i78). Each TokEOL here is a genuine
+	// blank line: the TokEOL that terminates a non-blank statement line is
+	// consumed at the bottom of the inner loop below (case TokEOL: return), so
+	// it never reaches this counter. A run becomes one BLANK_RUN record anchored
+	// (in pass1) to the next statement's PC.
+	blanks := 0
 	for p.cur().Kind == TokEOL {
 		p.pos++
+		blanks++
+	}
+	if blanks > 0 {
+		p.emitBlankRun(blanks)
 	}
 	if p.atEOF() {
 		return nil

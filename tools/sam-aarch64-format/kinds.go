@@ -9,6 +9,15 @@ const (
 	KindLocalDef  RecordKind = 0x03
 	KindDirective RecordKind = 0x04
 	KindComment   RecordKind = 0x05
+	// KindBlankRun is a run of consecutive blank source lines (i78 source-
+	// structure preservation). It is an in-memory IR record only: like a
+	// comment it carries no assembled bytes and is relocated to the editor-
+	// region sidecar (as a blank-run row) before serialisation, so it never
+	// appears in an on-disk record stream. RunLen holds the number of
+	// consecutive blank lines (≥ 1). A blank line is distinct from a textless
+	// `//` comment (a KindComment with an empty Body) — the parser tells them
+	// apart by whether the source line is empty or is a `//` with no body.
+	KindBlankRun RecordKind = 0x06
 	// KindLitInsts is a run of consecutive fully-literal instructions
 	// stored as their assembled machine code (compact `.tbn`, Level 2).
 	// Payload: [count:1][word0:4 LE]…[word{count-1}:4 LE]. The assembler
@@ -48,6 +57,8 @@ func (k RecordKind) Name() string {
 		return "DIRECTIVE"
 	case KindComment:
 		return "COMMENT"
+	case KindBlankRun:
+		return "BLANK_RUN"
 	case KindLitInsts:
 		return "LIT_INSTS"
 	case KindLitData:
