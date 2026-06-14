@@ -265,10 +265,76 @@ hardware-verified (CLAUDE.md §5).
 
 ---
 
+## Increment 3 — the TFTP client (i82): fetch a .mgt and save it to Trinity
+
+**What it is.** The other direction: instead of *serving* files, the SAM is a
+TFTP **client** that fetches a file (a `.mgt` disk image) from a TFTP server on the
+LAN and **writes it to Trinity storage** via the B-DOS record hooks. It boots,
+reads the SAM's MAC + IP from the EEPROM, broadcasts an ARP request to learn the
+server's MAC, sends a TFTP read request for the configured filename, receives the
+streamed DATA blocks (ACKing each, accumulating the bytes), and on the short final
+block HSAVEs the assembled image to Trinity storage under that name. On success it
+sets a **green border** and halts.
+
+**Configure the target first.** The fetch target is fixed in the program (edit and
+rebuild for your network): in `src/netboot/netboot_client.asm`, `cl_server_ip` is
+the TFTP server's IP and `cl_filename` is the file to fetch (default
+`recovery.mgt`). Set them to a server you control and a file it holds, then
+`make netboot-client-disk`.
+
+**Build the disk:**
+
+```sh
+make netboot-client-disk
+# -> build/netboot_client.mgt   (B-DOS boot + AUTO + the client at &8000)
+```
+
+**Run it:**
+
+1. On another machine on the same LAN, run a TFTP server that holds the `.mgt`
+   image you want to fetch:
+
+   ```sh
+   # e.g. a one-off read-only tftpd serving the current directory
+   sudo in.tftpd -L -s "$PWD" &
+   ls recovery.mgt          # the file the SAM will ask for
+   ```
+
+2. Boot `build/netboot_client.mgt` on the SAM + Trinity. A bring-up failure sets a
+   **border colour and halts** (red = no Trinity / blank EEPROM settings; blue =
+   `drv_init` failed). On success it broadcasts the ARP, sends the RRQ, and pulls
+   the file; a **green border** on completion means the image was HSAVEd to Trinity
+   storage.
+
+3. (Optional) Watch the exchange:
+
+   ```sh
+   sudo tcpdump -i eth0 -n 'arp or port 69'
+   ```
+
+   You should see the SAM's `ARP who-has <server-ip>` answered by the server, then
+   `TFTP … RRQ "recovery.mgt" octet …` from the SAM followed by an OACK and a
+   stream of DATA/ACK pairs, ending on a short final block.
+
+**What a pass looks like.** The green border, and the fetched `.mgt` present on the
+SAM's Trinity storage (browse it from B-DOS — `DIR` the record), byte-correct
+versus the file the server served.
+
+**What this confirms / does not (host-verified vs hardware-gated).** The host
+harness already proves the client's **wire side** byte-for-byte over the i80
+emulation (`netboot_client_test.go`, `make ci-netboot-z80`): the broadcast ARP
+request, the RRQ after the ARP reply, the ACK cadence, and the **accumulated bytes
+in the staging buffer** all match the Go authority `client.Client`. What it cannot
+prove — and what this on-hardware run confirms — is the **B-DOS RST-8 HSAVE
+write-out** (the harness has no ROM/SAMDOS/RST 8, so the bytes-to-storage step is
+unverified until real Trinity; the i93 seam's field arithmetic *is* host-verified,
+only the hook dispatch is not), the real ENC28J60 silicon timing, the EEPROM config
+read, and the end-to-end fetch with a real TFTP server. Emulation-verified is not
+hardware-verified (CLAUDE.md §5).
+
+---
+
 ## Later increments (placeholders — filled in as they land)
 
-- **Increment 3 — the client (i82).** Boot the client disk, point it at a TFTP
-  source, and it fetches a file into a B-DOS record. Pass = the file lands on the
-  SAM's storage byte-correct.
 - **HTTP / HTTPS provisioning (i70 / i88).** Fetch the Pi firmware blobs onto the
   SAM directly, so the store is self-provisioned.

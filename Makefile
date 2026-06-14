@@ -312,8 +312,43 @@ netboot-serve-disk: $(BUILD)/netboot_serve_boot.bin $(BUILD)/build-disk
 	$(BUILD)/build-disk -netboot $(BUILD)/netboot_serve_boot.bin -netboot-name serve \
 	    $(BUILD)/netboot_serve.mgt
 
+# netboot-client (i82) — the TFTP client boot disk: fetch a file (a .mgt image)
+# from a TFTP server and write it to Trinity storage via the B-DOS hooks.  Two
+# builds from one source:
+#   * the host-test binary (NETBOOT_HOSTTEST) excludes client_main + eeprom.asm +
+#     the B-DOS hook dispatch so the harness drives client_first/client_run_once
+#     directly; netboot_client_test.go asserts the ARP request + the RRQ + the ACK
+#     cadence + the accumulated STAGING bytes match the Go client.Client authority
+#     byte-for-byte (the B-DOS HSAVE write-out is real-hardware-only, not exercised).
+#   * the bootable binary (no flag) includes client_main + eeprom.asm + the B-DOS
+#     HSAVE so it reads the SAM's real MAC/IP, fetches, and writes to Trinity (the
+#     disk built by netboot-client-disk).
+$(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_HOSTTEST=1 \
+	    --obj=$(BUILD)/netboot_client.bin \
+	    --mapfile=$(BUILD)/netboot_client.map \
+	    src/netboot/netboot_client.asm
+
+netboot-client: $(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map
+
+# The bootable client binary: the full program including the EEPROM config read +
+# the client_main fetch-then-HSAVE flow, for real Trinity.
+$(BUILD)/netboot_client_boot.bin: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/netboot_client_boot.bin src/netboot/netboot_client.asm
+
+netboot-client-boot: $(BUILD)/netboot_client_boot.bin
+
+# A bootable SAM disk image that auto-runs the TFTP client on power-on: it fetches
+# the configured file from the configured TFTP server and writes it to Trinity
+# storage (see docs/notes/netboot-trinity-testing.md "Increment 3").
+netboot-client-disk: $(BUILD)/netboot_client_boot.bin $(BUILD)/build-disk
+	$(BUILD)/build-disk -netboot $(BUILD)/netboot_client_boot.bin -netboot-name client \
+	    $(BUILD)/netboot_client.mgt
+
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-encdrv netboot-dhcp-loop netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client
 
 ci-netboot-z80: netboot-z80-routines
 	cd tools/netboot-oracle/z80 && go test ./...
