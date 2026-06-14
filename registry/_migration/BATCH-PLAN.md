@@ -4,12 +4,34 @@ Generated 2026-06-19 as a read-only pre-pass for the i115f/i115d migration.
 
 ## PROGRESS (update as batches land)
 
-- **Batches 1–7 DONE = ALL 101 closed items migrated** (99 records in `items.yaml`;
-  the closed `.old` file has zero data rows). Each batch independently
-  info-loss-reviewed; all PASS.
-- **Remaining: the 94 open items (batches 8–14) + 5 open questions; 23 closed
-  questions RETIRE** (fold each decision into its item, then do NOT migrate the
-  closed question — confirm per the "Closed-question disposition" section below).
+- **Batches 1–7 DONE = ALL 101 closed items migrated.** Each independently reviewed; all PASS.
+- **Batch 8 DONE** (open items i2–i27; i3 set kind:umbrella).
+- **i48c SPLIT DONE** — umbrella + 13 brick leaves (b1–b4, b5a DONE; b5b–b8 OPEN).
+- **Batch 9 remainder DONE** (i29–i65 open items + the i41 umbrella IN_PROGRESS).
+- **All 5 OPEN questions migrated** (q13/q22/q23/q24/q25) + **i41 family completed**
+  (i41d OPEN; i41e OPEN depends_on q24). Open questions went early so later dependent
+  items can carry `--dep qN` and pass strict invariant-11.
+- **STATE: 147 item records + 5 questions migrated; ~59 open-item rows remain** in
+  `item-registry-open.md.old`. Every batch reviewed; all PASS.
+- **REMAINING:** the ~59 open items (rest of batches 10–14 below) — several are
+  UMBRELLAS whose children are already migrated (i100, i102, i102m → `--kind umbrella`,
+  status DERIVED from children) — plus i7/i87/i111/i112/i119, the netboot cluster
+  (i118/i120–i140), the BLOCKED:Pete items (i81a/i81c/i89/i117/i117a → owner:pete),
+  i101 (--dep q23). Then **retire the 23 closed questions** (fold each decision into
+  its item; do NOT migrate the closed question). Then the **CUTOVER**: strict
+  `validate`, generate `.md` in place (`make registry` w/ `REGISTRY_OUTDIR=docs/notes`),
+  retire `question-registry-closed.md` + rewire its refs, wire the `registry-sync` CI
+  job + branch-protection check, i115e doc rewiring (CLAUDE.md/ROADMAP/SessionStart
+  hook/autonomous-loop), dedupe the id-ledger, delete `_migration/` + the plan, §3
+  review, single push → green → merge.
+
+### Notes for the next session
+- The 5 open questions are DONE — ignore them in the batch-12 list below. An item the
+  old registry shows `BLOCKED:qN` → add `--dep qN`. An item gated on a bare Pete
+  decision with no question → `--owner pete` (don't invent a qN).
+- Tool hardened on-branch since the pre-pass: `add --kind/--pr/--role`; rune- (not
+  byte-) length counting; trailing-newline trimmed before the 600-char bound. Run
+  `make registry-gen` after checkout to rebuild `build/registry`.
 
 ### CORRECTION to the batch list below (next session, read this)
 
