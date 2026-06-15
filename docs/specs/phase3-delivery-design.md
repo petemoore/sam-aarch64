@@ -284,10 +284,27 @@ arrive, and each window/record-sized chunk is one bounded `HSAVE`. **A single B-
 file is *not* limited to 64 KB** — the UIFA encodes size as page-count(+34) × 16384
 + length-mod-16K(+35..36), a **32-bit** value (`bdos_difa_to_size`), so a file may be
 up to ~4 MB (255 × 16 KB pages); the binding limits are RAM (the HSAVE source) and
-the ~800 KB per-record capacity, not a 64 KB file ceiling (the 64 KB is the 16-bit
-*addressable window*, distinct from i24's assembler `OUT_LEN`). The open detail is a
-spanning-file naming/ordering convention + the serve-time reassembly — host-verifiable
-in the i80 emulation; the real `RST 8` `HSAVE`-per-record stays the hardware gate.
+the per-record capacity, not a 64 KB file ceiling (the 64 KB is the 16-bit
+*addressable window*, distinct from i24's assembler `OUT_LEN`).
+
+**The spanning convention (Go authority `bdos.SpanPlan`).** A logical object
+(`name`, `size`) at a per-record cap is split into the ordered records `SpanPlan`
+returns — both the persist write plan (HSAVE each) and the serve read order (HLOAD
+each in order, concatenated into one TFTP stream). A **non-spanned** object
+(`size` ≤ cap) is a single record under its **plain** name, so the kernel and
+small files are stored/served by their natural TFTP name through the existing
+flat store, unchanged. A **spanned** object's records are named `<prefix><NNN>` —
+the name truncated to 7 chars + a 3-digit zero-padded index — and the server
+derives the record count from the object's **known size** (`N = ceil(size/cap)`,
+the manifest carries the size), so **no on-disk index record is needed**: it reads
+`<prefix>000…<prefix>(N-1)` and streams them in order. The per-record cap is
+**RAM-bounded** (the HSAVE source must be contiguous in paged RAM); its exact
+value is pinned when the hardware persist is built, so it is a parameter, not a
+baked constant. Constraint: spanned objects need unique 7-char name prefixes (the
+six RPi firmware files satisfy it). The split arithmetic + naming are
+host-verified in `bdos/span_test.go`; the Z80 port (`src/netboot/fw_span.asm`,
+mirroring the per-record length + naming) and the real `RST 8` `HSAVE`/`HLOAD`
+per record stay the hardware gate.
 
 ## 9. Host-side iteration (i80) + the empirical oracle
 
