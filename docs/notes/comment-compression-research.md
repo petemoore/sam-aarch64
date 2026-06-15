@@ -29,7 +29,7 @@ make comment-bench
 | Distinct byte values | 103 |
 
 The sidecar has 7,012 rows versus 7,502 source `//` lines (item i39b-2 in
-`docs/notes/item-registry.md`). The difference is expected: multi-line block comments `/* … */` are
+`docs/notes/item-registry-open.md`). The difference is expected: multi-line block comments `/* … */` are
 stored as one sidecar row with embedded newlines. Body text (291,038 B) is also
 shorter than the 335,461 B source figure: the sidecar bodies carry the text
 *after* `//` prefix stripping and `/* */` delimiter removal, while the

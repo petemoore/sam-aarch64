@@ -22,6 +22,6 @@ These shape the editor's design but aren't on the immediate critical path. Use a
 
 - **Replay-on-edit**: when an instruction is changed, re-run the register simulator from the most recent label and show what changed downstream. Tight feedback loop for understanding the blast radius of an edit.
 
-- **Edit-model design pointer (i41).** The `.tbn` is the *serialized* storage/assembly form; the editor edits a separate insertion-friendly in-memory document model (gap buffer / piece table / record linked-list) and serializes to `.tbn` on save — the `.tbn` is never mutated in place. This keeps insert latency local (no whole-buffer byte-shift) within the ~1 s/edit bound even at ~400 KB source. See **i41** in `docs/notes/item-registry.md` for the rationale.
+- **Edit-model design pointer (i41).** The `.tbn` is the *serialized* storage/assembly form; the editor edits a separate insertion-friendly in-memory document model (gap buffer / piece table / record linked-list) and serializes to `.tbn` on save — the `.tbn` is never mutated in place. This keeps insert latency local (no whole-buffer byte-shift) within the ~1 s/edit bound even at ~400 KB source. See **i41** in `docs/notes/item-registry-open.md` for the rationale.
 
 These are explicitly Phase 2+ surface.

@@ -5,7 +5,7 @@ host-verified; this doc is the plan for composing them into a working TLS 1.3
 client. Bricks **1 (key schedule), 2 (record), 3 (ClientHello), 4 (server-flight
 parser), 5 (transcript)** are landed (standalone, host-verified leaves); only the
 capstone **brick 6 (state machine)** remains, and it is gated on q17. i88 is the project's **lowest-priority** work (build only
-when nothing else remains) — see `docs/notes/item-registry.md` i88 and
+when nothing else remains) — see `docs/notes/item-registry-open.md` i88 and
 `phase3-delivery-design.md` §7 for the rationale (the active firmware-fetch path is
 plain HTTP via `cdn.githubraw.com` + a SHA-256 content pin; TLS is the durable
 fallback for fetching directly from canonical GitHub).

@@ -13,7 +13,7 @@ source for every figure is `docs/notes/comment-compression-research.md`
 
 ## 1. Decisions already made (cited, not re-argued)
 
-1. **q9 — the 256/512 KB stance** (Pete, 2026-06-10; `docs/notes/question-registry.md` q9):
+1. **q9 — the 256/512 KB stance** (Pete, 2026-06-10; `docs/notes/question-registry-open.md` q9):
    the tool targets both machine sizes *in principle*, but the full unstripped
    release `.tbn` is **allowed to exceed a 256 KB SAM** — no over-optimising
    compression (the kernel grows over time anyway). A 256 KB SAM must still be
