@@ -271,6 +271,24 @@ provisioning choice that **varies** by project, firmware revision, and features
 whatever is present and `ERROR(1)`-ing the rest, so the file set is never hard-coded
 anywhere.
 
+**Persisting a multi-MB firmware (q16 RESOLVED — Pete, 2026-06-15).** A real Pi
+firmware blob (`start4.elf` ≈ 3 MB) exceeds both the SAM's RAM and one ~800 KB
+B-DOS record, so it is persisted as a **sequence of bounded files spanning multiple
+records/disks**, each written with a plain **`HSAVE`** (the only *verified* save
+hook — the byte-stream append hooks `HOFLE`/`HSBYT` are broken for external `RST 8`
+callers per `sam-stub-audit.md`, so this **avoids appending to a growing file**
+entirely), reassembled in order at serve time (the TFTP server streams DATA blocks
+across the spanning files). This pairs with the i99 download-streaming: the HTTP
+fetch can't hold a multi-MB body in RAM, so it streams windows to storage as they
+arrive, and each window/record-sized chunk is one bounded `HSAVE`. **A single B-DOS
+file is *not* limited to 64 KB** — the UIFA encodes size as page-count(+34) × 16384
++ length-mod-16K(+35..36), a **32-bit** value (`bdos_difa_to_size`), so a file may be
+up to ~4 MB (255 × 16 KB pages); the binding limits are RAM (the HSAVE source) and
+the ~800 KB per-record capacity, not a 64 KB file ceiling (the 64 KB is the 16-bit
+*addressable window*, distinct from i24's assembler `OUT_LEN`). The open detail is a
+spanning-file naming/ordering convention + the serve-time reassembly — host-verifiable
+in the i80 emulation; the real `RST 8` `HSAVE`-per-record stays the hardware gate.
+
 ## 9. Host-side iteration (i80) + the empirical oracle
 
 SimCoupé does not emulate the Trinity network hardware, so today the stack only
