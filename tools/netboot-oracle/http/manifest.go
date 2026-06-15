@@ -1,6 +1,9 @@
 package http
 
-import "encoding/hex"
+import (
+	"encoding/hex"
+	"fmt"
+)
 
 // A firmware manifest pins an exact revision and the set of files available to
 // download from it — the data the i100 downloader UX drives: the user picks a
@@ -34,6 +37,60 @@ type Manifest struct {
 // PathFor returns the cdn.githubraw.com request path for one file in the manifest.
 func (m Manifest) PathFor(f FirmwareFile) string {
 	return GithubRawPath(m.Owner, m.Repo, m.SHA, f.Path)
+}
+
+// FetchSpec is everything the per-file fetch loop needs for one file: where to
+// GET it (the cdn.githubraw.com path + host) and the pinned SHA-256 to verify
+// the streamed bytes against.
+type FetchSpec struct {
+	Name   string
+	Path   string
+	Host   string
+	SHA256 [32]byte
+}
+
+// Plan builds the ordered fetch specs for the selected files of a manifest — the
+// download plan the per-file fetch loop executes, and the backend of the
+// revision + file-subset picker. selection is file indices, in the order to
+// fetch; a nil/empty selection means all files in manifest order. It errors on
+// an out-of-range index rather than panicking, since a selection may come from
+// user input.
+func (m Manifest) Plan(selection []int) ([]FetchSpec, error) {
+	idx := selection
+	if len(idx) == 0 {
+		idx = make([]int, len(m.Files))
+		for i := range m.Files {
+			idx[i] = i
+		}
+	}
+	specs := make([]FetchSpec, len(idx))
+	for i, j := range idx {
+		if j < 0 || j >= len(m.Files) {
+			return nil, fmt.Errorf("file index %d out of range [0,%d)", j, len(m.Files))
+		}
+		f := m.Files[j]
+		specs[i] = FetchSpec{Name: f.Name, Path: m.PathFor(f), Host: GithubRawHost, SHA256: f.SHA256}
+	}
+	return specs, nil
+}
+
+// SelectByName resolves output names (e.g. "start4.elf") to manifest indices,
+// preserving the given order and erroring on an unknown name. The picker uses it
+// to turn a user's file choices into a selection for Plan.
+func (m Manifest) SelectByName(names []string) ([]int, error) {
+	byName := make(map[string]int, len(m.Files))
+	for i, f := range m.Files {
+		byName[f.Name] = i
+	}
+	out := make([]int, len(names))
+	for i, n := range names {
+		j, ok := byName[n]
+		if !ok {
+			return nil, fmt.Errorf("manifest %s has no file %q", m.SHA, n)
+		}
+		out[i] = j
+	}
+	return out, nil
 }
 
 // hexHash decodes a 64-char hex SHA-256 literal into a [32]byte. It panics on a
