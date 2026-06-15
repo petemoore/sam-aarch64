@@ -65,7 +65,7 @@ ci-netboot-oracle:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -188,6 +188,20 @@ $(BUILD)/netboot_http_get.bin $(BUILD)/netboot_http_get.map: src/netboot/http_ge
 	    src/netboot/http_get.asm
 
 netboot-http-get: $(BUILD)/netboot_http_get.bin $(BUILD)/netboot_http_get.map
+
+# netboot-http (i70 capstone) — the integrated HTTP fetch phase machine:
+# http_fetch_first broadcasts the ARP, http_fetch_onframe drives ARP -> TCP
+# handshake -> GET -> response/ACK -> FIN.  Composes http_get.asm (which pulls in
+# tcp_conn + build_tcp_segment + encdrv) with build_arp_request; the i80 emulation
+# test (netboot_http_test) asserts the ARP/SYN/GET/ACK/FIN-ACK wire frames match
+# the Go http.Fetcher authority byte-for-byte.
+$(BUILD)/netboot_http.bin $(BUILD)/netboot_http.map: src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/encdrv.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/netboot_http.bin \
+	    --mapfile=$(BUILD)/netboot_http.map \
+	    src/netboot/netboot_http.asm
+
+netboot-http: $(BUILD)/netboot_http.bin $(BUILD)/netboot_http.map
 
 # tftp-server-loop — the i83 TFTP server transfer loop (state machine):
 # drv_read an RRQ, parse + resolve, reply with an OACK (hit) or ERROR(1) (miss),
@@ -389,7 +403,7 @@ netboot-client-disk: $(BUILD)/netboot_client_boot.bin $(BUILD)/build-disk
 	    $(BUILD)/netboot_client.mgt
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client
 
 ci-netboot-z80: netboot-z80-routines
 	cd tools/netboot-oracle/z80 && go test ./...
