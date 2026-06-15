@@ -114,13 +114,18 @@ fw_emit_loop:
 ; ===========================================================================
 ; The pinned firmware manifest — the i100 downloader's file list.  The six files
 ; from spectrum4's firmware/Tupfile at revision FW_SHA, each with its output
-; name, its in-repo path, and its pinned SHA-256 (the trusted hash the fetch
-; verifies the proxy-served bytes against — cdn.githubraw.com is untrusted).  The
-; SHA-256s are the content of each file AT THIS COMMIT; a fetch whose bytes hash
-; to anything else is rejected.  The Go authority is http.RPiFirmware.
+; name, its in-repo path, its pinned SHA-256 (the trusted hash the fetch verifies
+; the proxy-served bytes against — cdn.githubraw.com is untrusted), and its size
+; in bytes (a 32-bit count).  The SHA-256s are the content of each file AT THIS
+; COMMIT; a fetch whose bytes hash to anything else is rejected.  The size is
+; metadata the downstream consumers need: the picker UI (show each file's size),
+; the OACK tsize when the stored object is served, and the record-spanning split
+; count (size / per-record capacity).  The Go authority is http.RPiFirmware
+; (FirmwareFile.Size).
 ; ===========================================================================
 FW_FILE_COUNT:  equ 6
-FW_REC_LEN:     equ 36          ; per record: name ptr(2) + path ptr(2) + hash(32)
+FW_REC_LEN:     equ 40          ; per record: name ptr(2) + path ptr(2) + hash(32)
+                                ; + size(4, 32-bit LE)
 
 ; Strings first, so the table's pointers are backward references (no forward data
 ; reference for pyz80's two-pass sizing).
@@ -149,44 +154,53 @@ fw_nm_fixup4:   defm "fixup4.dat"
 fw_pp_fixup4:   defm "boot/fixup4.dat"
                 defb 0
 
-; The record array: { name ptr (defw), path ptr (defw), pinned SHA-256 (32 B) }.
+; The record array: { name ptr (defw), path ptr (defw), pinned SHA-256 (32 B),
+; size (32-bit LE: low word then high word) }.  Each size is split into two
+; 16-bit defw (low, high) — a self-checking form (the host test re-derives the
+; 32-bit value and compares it to the Go authority).
 FW_MANIFEST:
                 defw fw_nm_licence
                 defw fw_pp_licence
                 ; LICENCE.broadcom  sha256
                 defb &c7,&28,&3f,&f5,&1f,&86,&3d,&93,&a2,&75,&c6,&6e,&3b,&4c,&b0,&80
                 defb &21,&a5,&dd,&4d,&8c,&1e,&7a,&cc,&47,&d8,&72,&fb,&e5,&2d,&3d,&6b
+                defw 1594, 0                    ; size = 1594
                 defw fw_nm_bootcode
                 defw fw_pp_bootcode
                 ; bootcode.bin  sha256
                 defb &af,&60,&3e,&bd,&97,&e7,&b6,&92,&c3,&01,&95,&56,&3f,&7b,&25,&65
                 defb &6e,&b0,&5d,&57,&83,&8c,&f1,&a7,&15,&eb,&b4,&70,&d1,&61,&4c,&e4
+                defw 52476, 0                   ; size = 52476
                 defw fw_nm_start
                 defw fw_pp_start
                 ; start.elf  sha256
                 defb &dd,&9b,&42,&04,&1b,&56,&6d,&8b,&94,&52,&9a,&6e,&da,&68,&de,&d1
                 defb &47,&fd,&18,&c6,&a4,&b5,&d6,&b9,&74,&32,&26,&08,&21,&14,&ec,&84
+                defw 30176, 45                  ; size = 2979296 (45*65536 + 30176)
                 defw fw_nm_start4
                 defw fw_pp_start4
                 ; start4.elf  sha256
                 defb &e1,&ee,&99,&39,&c2,&3d,&25,&3e,&c2,&78,&a1,&19,&54,&d7,&a3,&57
                 defb &62,&d6,&be,&0d,&9f,&1d,&2d,&35,&a6,&56,&fe,&1a,&e3,&a0,&30,&4e
+                defw 26848, 34                  ; size = 2255072 (34*65536 + 26848)
                 defw fw_nm_fixup
                 defw fw_pp_fixup
                 ; fixup.dat  sha256
                 defb &d8,&b5,&5a,&35,&20,&26,&84,&52,&7a,&97,&3e,&e4,&71,&40,&37,&6f
                 defb &44,&0f,&ee,&00,&d9,&67,&9d,&c4,&a8,&52,&ed,&0f,&22,&eb,&1b,&be
+                defw 7274, 0                    ; size = 7274
                 defw fw_nm_fixup4
                 defw fw_pp_fixup4
                 ; fixup4.dat  sha256
                 defb &5f,&2d,&92,&2a,&87,&bb,&3a,&75,&f9,&ae,&7b,&50,&78,&f5,&2a,&83
                 defb &d6,&b8,&3a,&2a,&86,&62,&23,&a6,&4d,&32,&83,&41,&e5,&b4,&35,&1e
+                defw 5413, 0                    ; size = 5413
 
 ; ===========================================================================
 ; fw_manifest_entry — point at one manifest record by index.
 ; In:  BC = file index (0..FW_FILE_COUNT-1).
 ; Out: BC = pointer to the record (read fields at offsets 0 name-ptr, 2 path-ptr,
-;      4 the 32-byte SHA-256).  Clobbers A, DE, HL.
+;      4 the 32-byte SHA-256, 36 the 32-bit LE size).  Clobbers A, DE, HL.
 ; ===========================================================================
 fw_manifest_entry:
                 ld      hl, FW_MANIFEST

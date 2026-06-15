@@ -88,10 +88,11 @@ func TestFWManifest(t *testing.T) {
 			t.Fatalf("fw_manifest_entry(%d): %v", i, err)
 		}
 		rec := res.BC
-		// record layout: name ptr(2), path ptr(2), pinned SHA-256(32).
+		// record layout: name ptr(2), path ptr(2), pinned SHA-256(32), size(4, LE).
 		namePtr := binary.LittleEndian.Uint16(mac.Read(rec, 2))
 		pathPtr := binary.LittleEndian.Uint16(mac.Read(rec+2, 2))
 		hash := mac.Read(rec+4, 32)
+		size := binary.LittleEndian.Uint32(mac.Read(rec+36, 4))
 
 		if got := readCStrAt(mac, namePtr); got != want.Name {
 			t.Errorf("file %d name = %q, want %q", i, got, want.Name)
@@ -101,6 +102,9 @@ func TestFWManifest(t *testing.T) {
 		}
 		if !bytes.Equal(hash, want.SHA256[:]) {
 			t.Errorf("file %d sha256 = %x, want %x", i, hash, want.SHA256)
+		}
+		if int(size) != want.Size {
+			t.Errorf("file %d size = %d, want %d", i, size, want.Size)
 		}
 	}
 }
