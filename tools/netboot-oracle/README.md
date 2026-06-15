@@ -25,10 +25,12 @@ an end-to-end Pi boot, which stay gated on i80 / real Trinity.
   did not need); `conn.go::Conn` is the client connection state machine (active
   open SYN→SYN-ACK→ACK, seq/ack tracking, data ACK cadence, FIN teardown) — the
   Go authority for the Z80 `tcp_conn.asm`.
-- `http` — the minimal HTTP/1.0 GET client (i70): `BuildRequest` (the
-  `GET … HTTP/1.0` request bytes) + `ParseResponse` (status code + body offset)
-  + a thin `Client` riding a `tcp.Conn` — the Go authority for the Z80
-  `http_get.asm`.
+- `http` — the HTTP/1.0 GET client (i70): `BuildRequest` (the `GET … HTTP/1.0`
+  request bytes) + `ParseResponse` (status code + body offset) + a thin `Client`
+  riding a `tcp.Conn` (the Go authority for the Z80 `http_get.asm`), and
+  `Fetcher` — the integrated fetch phase machine (ARP → handshake → GET →
+  accumulate → FIN), the HTTP analogue of the TFTP `client.Client` and the
+  authority for the forthcoming Z80 `netboot_http.asm`.
 - `dhcp` — DHCP parse + the OFFER/ACK builder (i86), incl. the option-43 blob.
 - `tftp` — RRQ/OACK/DATA/ACK/ERROR + serve-by-name resolve + the client/server
   transfer-loop state machines + the client originate front (the Go reference
