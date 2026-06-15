@@ -105,7 +105,8 @@ Expand-Label(secret, "finished", "", 32)`.
 
 Each is a standalone, host-verified PR, mirroring the primitive cadence:
 
-1. **Key schedule** (`tls_key_schedule`): given the ECDHE shared secret + the two
+1. **Key schedule** (`tls_key_schedule`) — **LANDED** (`src/netboot/tls_keyschedule.asm`,
+   `tls_keyschedule_test.go`): given the ECDHE shared secret + the two
    transcript hashes (CH..SH and CH..serverFin), produce all secrets + per-secret
    key/iv/finished. Verify against **RFC 8448 §3** (the worked TLS-1.3 handshake):
    the secrets, `iv`, and `finished` are hash-based and **cipher-independent**, so
