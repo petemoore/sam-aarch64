@@ -235,6 +235,29 @@ handshake is slow (seconds) but firmware-fetch is rare, so that is fine. i88 is 
 path covers provisioning, and the next agent should also check whether a plain-HTTP
 RPi-firmware mirror exists (which would make on-SAM HTTPS optional).
 
+**Finding (2026-06-15): a plain-HTTP source exists — on-SAM TLS (i88) is OPTIONAL,
+not necessary.** Verified end-to-end (a real firmware `.deb` downloaded + unpacked
+over port 80, no TLS): the **Raspberry Pi apt archive** `http://archive.raspberrypi.org/debian/`
+serves the *complete* Pi 3 + Pi 4/400 netboot firmware set over **plain HTTP** — the
+GPU firmware/bootloader blobs (`bootcode.bin`, `start*.elf`, `fixup*.dat`) ship in
+`raspberrypi-bootloader_*.deb`, the kernels + DTBs in the sibling
+`raspberrypi-kernel_*.deb`, both under
+`…/pool/main/r/raspberrypi-firmware/`, and apt's own default source line for this
+archive is `http://` (no redirect to HTTPS). So the i70 HTTP/1.x client already
+built (no TLS) **suffices** to self-provision firmware; only GitHub itself is
+HTTPS-locked (301→https, empty body on :80), which is what would have forced i88.
+The trade is **format work, not crypto**: the blobs sit inside a `.deb` (an `ar`
+archive wrapping an **xz**-compressed `tar`), so the SAM must parse ar + xz-inflate +
+untar `data.tar.xz` to extract `./boot/*`. That is far smaller than a TLS stack, and
+sidesteppable by pointing the client at any HTTP server hosting the **already-extracted**
+boot files (a one-time host/community step, host-tool-free for the end user). apt's
+integrity is GPG-signed (verifiable **without** transport security), so dropping TLS
+loses nothing apt itself relies on. **Consequence:** i88 drops from "needed for the
+purest form" to a genuine stretch; the open choice is the extraction strategy —
+on-SAM `.deb`/xz handling vs a pre-extracted HTTP mirror vs host-side staging
+(question **q15**). Sources: live archive fetch + GitHub :80 redirect check (2026-06-15);
+the apt archive pool dir; the netboot file-set references in the i70/i84 research.
+
 ## 8. Storage model
 
 A **flat file store on Trinity SD**, reached through the unchanged B-DOS hook
