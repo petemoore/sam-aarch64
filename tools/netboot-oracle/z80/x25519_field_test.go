@@ -179,3 +179,57 @@ func TestFEMul121665(t *testing.T) {
 		}
 	}
 }
+
+// feInvertStepCap bounds one fe_invert (a ~37M-byte-op Fermat exponentiation,
+// far past the default runaway guard); generous so it never trips on real runs.
+const feInvertStepCap = 200_000_000
+
+// TestFEInvert: fe_invert computes the modular inverse (a^(p-2) mod p). The
+// defining property a·a^-1 ≡ 1 (mod p) is checked for every non-zero element,
+// plus equality with math/big's ModInverse; 0 (and p ≡ 0) invert to 0 (0^(p-2)).
+func TestFEInvert(t *testing.T) {
+	p := fePrime()
+	// A focused subset (each inversion is seconds of emulation): include 0 and p
+	// (both ≡ 0 → 0) and a spread of non-zero elements.
+	els := []*big.Int{
+		big.NewInt(0),
+		new(big.Int).Set(p), // ≡ 0
+		big.NewInt(1),
+		big.NewInt(2),
+		big.NewInt(121665),
+		new(big.Int).Sub(p, big.NewInt(1)), // p-1
+		new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 255), big.NewInt(1)), // 2^255-1
+		new(big.Int).SetBytes([]byte{
+			0x7e, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff,
+			0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10,
+		}),
+	}
+	for _, a := range els {
+		mac := loadFE(t)
+		mac.Write(mustSym(t, mac, "FE_A"), feToLE32(a))
+		if _, err := mac.CallEntry("fe_invert", z80h.Entry{StepCap: feInvertStepCap}); err != nil {
+			t.Fatalf("fe_invert(%x): %v", feToLE32(a), err)
+		}
+		got := mac.Read(mustSym(t, mac, "FE_OUT"), 32)
+		assertReduced(t, "fe_invert", got)
+		gotV := new(big.Int).Mod(leToBig(got), p)
+
+		aModP := new(big.Int).Mod(a, p)
+		if aModP.Sign() == 0 {
+			if gotV.Sign() != 0 {
+				t.Errorf("fe_invert(%x): got %x, want 0 (0^(p-2))", feToLE32(a), got)
+			}
+			continue
+		}
+		// Defining property: a · a^-1 ≡ 1 (mod p).
+		prod := new(big.Int).Mod(new(big.Int).Mul(aModP, gotV), p)
+		if prod.Cmp(big.NewInt(1)) != 0 {
+			t.Errorf("fe_invert(%x): a·inv = %d, want 1", feToLE32(a), prod)
+		}
+		// And equality with math/big's inverse.
+		want := new(big.Int).ModInverse(aModP, p)
+		if gotV.Cmp(want) != 0 {
+			t.Errorf("fe_invert(%x): got %x, want %x", feToLE32(a), feToLE32(gotV), feToLE32(want))
+		}
+	}
+}
