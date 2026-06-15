@@ -103,7 +103,17 @@ func NewFetcher(cfg FetchConfig) *Fetcher {
 // header never straddles two windows, so bodySink only has to scan its first
 // received chunk.
 func (f *Fetcher) StreamTo(dst tcp.Sink, window int) {
-	f.conn.SetSink(&bodySink{dst: dst}, window)
+	f.conn.SetSink(NewBodySink(dst), window)
+}
+
+// NewBodySink wraps dst with the HTTP-header skip: it drops everything up to and
+// including the first "\r\n\r\n", then forwards body bytes to dst (and forwards
+// every subsequent chunk whole). StreamTo uses it internally; it is exported as
+// the authority the Z80 src/netboot/body_sink.asm is host-verified against
+// (z80/body_sink_test.go feeds this and the Z80 port the same chunk sequence and
+// compares the forwarded body bytes + per-Write boundaries).
+func NewBodySink(dst tcp.Sink) tcp.Sink {
+	return &bodySink{dst: dst}
 }
 
 // First returns the broadcast ARP request frame — the first thing on the wire
