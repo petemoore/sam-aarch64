@@ -273,3 +273,60 @@ func assertRespMatch(t *testing.T, name string, got z80Resp, want http.Response,
 		t.Errorf("%s: bodyOff = %d, want %d", name, got.bodyOff, want.BodyOff)
 	}
 }
+
+// TestHTTPBuildRequestDynamicPath: http_build_request copies the path from the
+// settable HTTP_PATH_PTR (default = the baked HTTP_PATH), so the multi-file fetch
+// loop (http_main's prov_start) can point each request at a per-file path. The
+// built request matches the Go authority http.BuildRequest for both the default
+// pointer and an overridden one.
+func TestHTTPBuildRequestDynamicPath(t *testing.T) {
+	buildReq := func(t *testing.T, mac *z80h.Machine) []byte {
+		t.Helper()
+		res, err := mac.Call("http_build_request")
+		if err != nil {
+			t.Fatalf("call http_build_request: %v", err)
+		}
+		addr, err := mac.Sym("CONN_TX_PAYLOAD")
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+		return mac.Read(addr, int(res.BC))
+	}
+
+	t.Run("default path", func(t *testing.T) {
+		mac := loadHTTPGet(t)
+		got := buildReq(t, mac)
+		want := http.BuildRequest(readCStr(t, mac, "HTTP_PATH"), readCStr(t, mac, "HTTP_HOST"))
+		if !bytes.Equal(got, want) {
+			t.Errorf("default request != Go authority\n  z80 %q\n  go  %q", got, want)
+		}
+	})
+
+	t.Run("overridden path", func(t *testing.T) {
+		mac := loadHTTPGet(t)
+		const altPath = "/raspberrypi/firmware/a43df3a0/boot/start4.elf"
+		// CONN_DATA is a receive buffer, untouched by the request build — use it as
+		// scratch for the alternate NUL-terminated path string.
+		scratch, err := mac.Sym("CONN_DATA")
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+		mac.Write(scratch, append([]byte(altPath), 0))
+		ptr, err := mac.Sym("HTTP_PATH_PTR")
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+		mac.WriteU16LE(ptr, scratch)
+
+		got := buildReq(t, mac)
+		host := readCStr(t, mac, "HTTP_HOST")
+		if want := http.BuildRequest(altPath, host); !bytes.Equal(got, want) {
+			t.Errorf("overridden request != Go authority\n  z80 %q\n  go  %q", got, want)
+		}
+		// It must differ from the default — proves the override took effect, not a
+		// coincidental match.
+		if def := http.BuildRequest(readCStr(t, mac, "HTTP_PATH"), host); bytes.Equal(got, def) {
+			t.Errorf("overridden request equals the default — HTTP_PATH_PTR was not honoured")
+		}
+	})
+}
