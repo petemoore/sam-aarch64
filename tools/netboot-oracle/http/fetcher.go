@@ -86,6 +86,26 @@ func NewFetcher(cfg FetchConfig) *Fetcher {
 	return &Fetcher{cfg: cfg, conn: conn, phase: PhaseARP}
 }
 
+// StreamTo opts this fetch into streaming mode (i99): the response body is
+// flushed to dst in bounded windows of the given size (0 selects the connection
+// default) as it arrives, instead of accumulating whole in the connection's
+// Data. The HTTP response header is skipped — the first byte handed to dst is
+// the first body byte (see bodySink for the header-skip mechanics). Call this
+// once, before driving the fetch.
+//
+// The header skip lives here, at the HTTP layer, not in tcp.Conn: the connection
+// is a pure byte transport with no notion of an HTTP header, so it streams the
+// header bytes too. This Fetcher knows the stream is an HTTP/1.0 response, so it
+// interposes a bodySink that drops everything up to the \r\n\r\n terminator
+// before forwarding to dst. Because a flush window comfortably exceeds any
+// HTTP/1.0 header (defaultFlushWindow >> a status line + a few headers), the
+// terminator always lands within the first window the connection flushes — the
+// header never straddles two windows, so bodySink only has to scan its first
+// received chunk.
+func (f *Fetcher) StreamTo(dst tcp.Sink, window int) {
+	f.conn.SetSink(&bodySink{dst: dst}, window)
+}
+
 // First returns the broadcast ARP request frame — the first thing on the wire
 // (the client must learn the server MAC before opening the connection).
 func (f *Fetcher) First() []byte {
@@ -144,3 +164,40 @@ func (f *Fetcher) Response() (Response, bool) { return ParseResponse(f.conn.Data
 
 // ServerMAC returns the learned server MAC (valid after the ARP phase).
 func (f *Fetcher) ServerMAC() frame.MAC { return f.conn.ServerMAC }
+
+// bodySink adapts a body-only tcp.Sink to the header+body byte stream the
+// connection flushes. It drops the HTTP response header (everything up to and
+// including the \r\n\r\n terminator) before forwarding the first body bytes to
+// dst; once the header is past, every subsequent flush is forwarded whole.
+//
+// The header-skip assumption (documented at StreamTo): the terminator falls
+// within the first flush window, so it is found in the first Write — there is no
+// straddle case to buffer across windows. If a malformed response somehow had no
+// terminator in its first chunk (header larger than the window), bodySink
+// forwards nothing for that chunk and keeps scanning subsequent ones, so the
+// failure is a missing/short body, never a panic or a header leak.
+type bodySink struct {
+	dst        tcp.Sink
+	headerDone bool // the \r\n\r\n terminator has been seen and skipped
+}
+
+// Write skips the header on the first relevant chunk, then forwards body bytes.
+func (b *bodySink) Write(chunk []byte) {
+	if b.headerDone {
+		if len(chunk) > 0 {
+			b.dst.Write(chunk)
+		}
+		return
+	}
+	r, ok := ParseResponse(chunk)
+	if !ok || !r.Complete {
+		// No header terminator in this chunk: nothing of the body has arrived
+		// here yet (the header-fits-in-first-window assumption holds for any
+		// real HTTP/1.0 response). Drop it and keep scanning the next chunk.
+		return
+	}
+	b.headerDone = true
+	if body := chunk[r.BodyOff:]; len(body) > 0 {
+		b.dst.Write(body)
+	}
+}

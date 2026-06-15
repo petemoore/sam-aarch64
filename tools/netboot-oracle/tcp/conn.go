@@ -8,8 +8,10 @@ import (
 // client-side connection management the Z80 src/netboot/tcp_conn.asm ports. It
 // drives the active-open handshake (SYN -> SYN-ACK -> ACK), tracks the send and
 // receive sequence numbers across the connection, accepts and ACKs inbound
-// server data (accumulating it for the HTTP response body), and handles the FIN
-// teardown the server initiates after the response.
+// server data, and handles the FIN teardown the server initiates after the
+// response. Inbound body bytes either accumulate whole in Data (the default) or,
+// with a Sink installed via SetSink, stream out in bounded flush windows (i99) —
+// the wire behavior is identical either way.
 //
 // This brick is connection management only: it originates the SYN and emits the
 // right control segments (ACK / FIN-ACK), but it does not send application
@@ -41,6 +43,17 @@ type Conn struct {
 	iss    uint32 // our initial send sequence number
 
 	Data []byte // accumulated inbound payload (the response body, later)
+
+	// Streaming sink (i99): opt-in bounded flush of inbound body bytes instead
+	// of accumulating them whole in Data. nil sink = the legacy behavior (append
+	// every payload to Data). When set, payload is buffered into flushBuf and a
+	// full flushWindow is handed to sink.Write whenever the buffer fills; the
+	// final partial buffer flushes at the FIN. The wire behavior (ACK cadence,
+	// seq/ack arithmetic, every emitted frame) is byte-identical in both modes —
+	// only where the bytes land differs. See SetSink and tcp/sink.go.
+	sink        Sink
+	flushWindow int    // flush chunk size; >0 only when sink is set
+	flushBuf    []byte // bytes accumulated toward the next flush (len < flushWindow between flushes)
 }
 
 // ConnState is the TCP connection state (a minimal active-open client subset of
@@ -72,6 +85,34 @@ func NewConn(clientMAC frame.MAC, clientIP frame.IPv4, clientPort uint16,
 // ENC28J60 has an 8 KB RX buffer; 5840 mirrors a common Linux default and is
 // well within it.
 const connWindow = 5840
+
+// defaultFlushWindow is the streaming chunk size used when SetSink is given a
+// window of 0. It is the RAM bound the streaming receive holds at once — large
+// enough to comfortably exceed any HTTP/1.0 response header (so the header never
+// straddles two windows; see http.bodySink) yet small relative to a multi-MB
+// firmware blob, which is the whole point of streaming.
+const defaultFlushWindow = 1024
+
+// SetSink opts this connection into streaming mode (i99): inbound body bytes are
+// routed to s in bounded flushes of window bytes instead of accumulating whole
+// in Data. A window of 0 selects defaultFlushWindow. Passing a nil sink reverts
+// to the legacy accumulate-to-Data behavior.
+//
+// Set the sink before any data segment arrives (the streaming spec is "flush as
+// it arrives", with no retroactive draining of already-accumulated Data).
+func (c *Conn) SetSink(s Sink, window int) {
+	c.sink = s
+	if s == nil {
+		c.flushWindow = 0
+		c.flushBuf = nil
+		return
+	}
+	if window <= 0 {
+		window = defaultFlushWindow
+	}
+	c.flushWindow = window
+	c.flushBuf = make([]byte, 0, window)
+}
 
 // Connect originates the active open: it emits the SYN segment (seq=ISS, ack=0),
 // advances sndNxt past the SYN's one consumed sequence number, and moves to
@@ -113,10 +154,11 @@ func (c *Conn) OnSegment(f []byte) []byte {
 			}
 			// Account any payload riding on the FIN segment before the FIN bit.
 			if len(s.Payload) > 0 {
-				c.Data = append(c.Data, s.Payload...)
+				c.acceptPayload(s.Payload)
 				c.rcvNxt += uint32(len(s.Payload))
 			}
-			c.rcvNxt++ // FIN consumes one sequence number
+			c.flushFinal() // end-of-body: drain the partial remainder to the sink
+			c.rcvNxt++     // FIN consumes one sequence number
 			seg := c.build(FlagFIN|FlagACK, nil)
 			c.sndNxt++ // our FIN consumes one
 			c.State = StateFinWait
@@ -129,7 +171,7 @@ func (c *Conn) OnSegment(f []byte) []byte {
 		if s.Seq != c.rcvNxt {
 			return nil // out-of-order / duplicate: ignore (no gap filling)
 		}
-		c.Data = append(c.Data, s.Payload...)
+		c.acceptPayload(s.Payload)
 		c.rcvNxt += uint32(len(s.Payload))
 		return c.build(FlagACK, nil)
 
@@ -168,6 +210,36 @@ func (c *Conn) Close() []byte {
 	c.sndNxt++ // our FIN consumes one sequence number
 	c.State = StateFinWait
 	return seg
+}
+
+// acceptPayload records one in-order payload: it appends to Data in legacy mode
+// (nil sink), or buffers into flushBuf and flushes full windows to the sink in
+// streaming mode. In streaming mode Data is left untouched, so it never holds
+// the whole body — the i99 RAM bound.
+func (c *Conn) acceptPayload(payload []byte) {
+	if c.sink == nil {
+		c.Data = append(c.Data, payload...)
+		return
+	}
+	c.flushBuf = append(c.flushBuf, payload...)
+	for len(c.flushBuf) >= c.flushWindow {
+		c.sink.Write(c.flushBuf[:c.flushWindow])
+		// Drop the flushed window, keeping any overflow for the next flush. Copy
+		// down rather than reslice so flushBuf's backing array stays bounded.
+		n := copy(c.flushBuf, c.flushBuf[c.flushWindow:])
+		c.flushBuf = c.flushBuf[:n]
+	}
+}
+
+// flushFinal drains any partial remainder to the sink at end-of-body (the FIN).
+// In legacy mode it is a no-op (Data already holds everything). A zero-length
+// remainder emits no Write, so an empty body produces no spurious flush.
+func (c *Conn) flushFinal() {
+	if c.sink == nil || len(c.flushBuf) == 0 {
+		return
+	}
+	c.sink.Write(c.flushBuf)
+	c.flushBuf = c.flushBuf[:0]
 }
 
 // build frames a segment from this connection's current seq/ack with the given
