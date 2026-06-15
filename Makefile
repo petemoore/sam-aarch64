@@ -65,7 +65,7 @@ ci-netboot-oracle:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -165,13 +165,27 @@ netboot-dhcp-loop: $(BUILD)/netboot_dhcp_loop.bin $(BUILD)/netboot_dhcp_loop.map
 # drv_read a segment, dispatch on the connection state (SYN-SENT/ESTABLISHED/
 # FIN-WAIT), and emit the right control segment (ACK / FIN-ACK).  Composes the
 # host-verified build_tcp_segment primitive and the real driver (encdrv.asm).
+# Built with NETBOOT_HOSTTEST so the standalone test binary carries the i99
+# streaming sink (CONN_SINK_* + the flush code); the sink is excluded from the
+# bootable images (which don't pass the flag) to keep them under &10000. The
+# existing oracle tests are unaffected — CONN_SINK_ENABLED defaults to 0.
 $(BUILD)/netboot_tcp_conn.bin $(BUILD)/netboot_tcp_conn.map: src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/encdrv.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_tcp_conn.bin \
+	pyz80 -D NETBOOT_HOSTTEST=1 --obj=$(BUILD)/netboot_tcp_conn.bin \
 	    --mapfile=$(BUILD)/netboot_tcp_conn.map \
 	    src/netboot/tcp_conn.asm
 
 netboot-tcp-conn: $(BUILD)/netboot_tcp_conn.bin $(BUILD)/netboot_tcp_conn.map
+
+# netboot-tcp-conn-stream — the i99 host-verification of tcp_conn.asm's opt-in
+# streaming sink: drive a handshake + multi-segment body + FIN through the same
+# netboot_tcp_conn binary with CONN_SINK_ENABLED=1 + a small CONN_FLUSH_WINDOW,
+# and assert the recording test-double sink (CONN_SINK_OUT / CONN_SINK_CHUNKS)
+# captured the body byte-for-byte across bounded flushes (the streaming analogue
+# of the accumulated-CONN_DATA assert).  Mirrors the Go-authority streaming tests
+# (PR #263).  Also covered by ci-netboot-z80 (which runs the whole package).
+netboot-tcp-conn-stream: $(BUILD)/netboot_tcp_conn.bin $(BUILD)/netboot_tcp_conn.map
+	cd tools/netboot-oracle/z80 && go test -run TestTCPConnStream ./...
 
 # http-get — the i70 HTTP/1.0 GET client (firmware self-provisioning): build the
 # request, send it over the established TCP connection (tcp_conn.asm), and parse

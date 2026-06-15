@@ -507,6 +507,16 @@ func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeNam
 	if err != nil {
 		return fmt.Errorf("read netboot code: %w", err)
 	}
+	// The AUTO BASIC does LOAD "<name>" CODE 32768 : CALL 32768, so the image
+	// loads at LoadAddress (&8000) and must end at or before &10000 — the top of
+	// the Z80 address space. A larger image runs past &FFFF and cannot load on a
+	// real SAM (the SimCoupé matrix only checks the disk *builds*, so without this
+	// guard an over-budget boot image would pass CI; it caught a >&10000 i99
+	// regression, 2026-06-15).
+	if end := LoadAddress + uint32(len(codeBin)); end > 0x10000 {
+		return fmt.Errorf("netboot code %s: %d bytes loads at &%04X..&%05X, past the &10000 ceiling by %d bytes (won't load on a real SAM)",
+			codePath, len(codeBin), LoadAddress, end, end-0x10000)
+	}
 
 	disk := samfile.NewDiskImage()
 
