@@ -39,6 +39,10 @@ design doc is deleted (git history is the archive).
 - [`phase3-tftp-design.md`](phase3-tftp-design.md) — Phase 3 (TFTP to the
   Pi over direct LAN) **prior direction sketch** (2026-05-27); superseded
   on the implementation go-ahead of the delivery design above.
+- [`tls13-handshake.md`](tls13-handshake.md) — Phase 3 (i88) on-SAM TLS 1.3
+  client: the handshake plan composing the built cipher-suite primitives
+  (X25519 + ChaCha20-Poly1305 + SHA-256) into host-verifiable bricks; the
+  bootable-integration memory budget is q17.
 - [`samdos-file-io.md`](samdos-file-io.md) — SAMDOS read/write idioms:
   HLOAD trampoline, HSAVE UIFA pattern, hook clobber facts, Z80 snippets.
 - [`editor-vision.md`](editor-vision.md) — Phase 2 editor design pointers
