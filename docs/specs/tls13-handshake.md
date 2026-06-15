@@ -114,9 +114,11 @@ Each is a standalone, host-verified PR, mirroring the primitive cadence:
    ChaCha20 `key` derivation is the same verified `expand_label` (len 32) — covered
    by the existing `hkdf_expand_label` tests. (Brick also exposes `tls_derive_secret`
    = `expand_label` with a transcript-hash context.)
-2. **Record protection** (`tls_record_seal`/`tls_record_open`): nonce construction
-   + the header-AAD AEAD wrapper. Verify against RFC 8448 record samples (the
-   secrets there are reproducible) and a self round-trip.
+2. **Record protection** (`tls_record_seal`/`tls_record_open`) — **LANDED**
+   (`src/netboot/tls_record.asm`, `tls_record_test.go`): nonce construction
+   + the header-AAD AEAD wrapper. Verified by a seal→open round-trip + an
+   independent Go reconstruction of the §5.2/§5.3 framing fed through the verified
+   `aead_encrypt` (byte-exact record) + tamper/wrong-sequence rejection.
 3. **ClientHello builder** (`tls_build_client_hello`): emit the CH bytes for our
    fixed offer (X25519 key_share from a supplied ephemeral pub, the four required
    extensions + SNI). Verify the byte layout against a fixed golden vector + a Go
