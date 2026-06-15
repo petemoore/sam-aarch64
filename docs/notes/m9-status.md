@@ -26,8 +26,8 @@ Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
 
 | Strand | Status | Source |
 |---|---|---|
-| **i7** — codegen sysreg/mnemonic/form tables from the Go authority (the **first brick**) | 🔨 **phases A + B landed** — A deleted ENCTAB_LEN; B renamed the tool to `tables-gen`, generates `src/sysreg_tables.inc` from `sysregs.go` + the `make tables` / `tables-sync-check` freshness gate. Phase C next; phase D = i74 | `docs/specs/codegen-tables-design.md`; item registry i7, i74 |
-| **i74** — i7 phase D: at/ic/barrier operand-table codegen (spec §6 Q3) | 📋 queued — after i7 A–C land | `docs/specs/codegen-tables-design.md` §6; i7 |
+| **i7** — codegen sysreg/mnemonic/form tables from the Go authority (the **first brick**) | ✅ **phases A–C landed** — A deleted ENCTAB_LEN; B renamed the tool to `tables-gen`, generates `src/sysreg_tables.inc` from `sysregs.go`; C generates `src/tbn_constants.inc` (OP_KIND/REC_KIND/DIR equates, PR #235) + `src/mnemonic_ids.inc` (MNEM_* mnemonic-ID equates, PR #236), both byte-neutral; all guarded by `make tables` / `tables-sync-check`. Only phase D = i74 remains (gated) | `docs/specs/codegen-tables-design.md`; item registry i7, i74 |
+| **i74** — i7 phase D: at/ic/barrier operand-table codegen (spec §6 Q3) | 📋 queued (gated) — i7 A–C all landed; phase D needs the `aarch64dec/sys.go` at/ic/barrier switches refactored into exported data first | `docs/specs/codegen-tables-design.md` §6; i7 |
 | **i75** — B-DOS boot-disk swap (the q10 resolution, incremental) | ✅ done — B-DOS-booted gate suite proven green locally (no Atom Lite attached), shipped/CI default flipped to B-DOS, samdos2 retained via flags | item registry i75; q10; `docs/notes/bdos-trinity-fork-analysis.md` |
 | **i41** — editor edit-model implementation (paged block-list) | 📋 design agreed (Pete 2026-06-08, §7 — 5 decisions locked) | `docs/specs/editor-edit-model-design.md` §7; item registry i41 |
 | **i48c** — Z80 text→overlay encoder (SAM-side editor input path; absorbs i39c) | 🧭 M9 strand — Go front-end i48b is the authority | `docs/specs/i48-syntactic-encoder-design.md` §2; item registry i48c, i39c |
@@ -54,8 +54,12 @@ System-group tables (sysreg / pstate / dc / tlbi) from
 byte-neutral — the page-13/15 payload bytes are unchanged from the reordered
 commit-1 build). `make tables` regenerates in place; `make tables-sync-check`
 (a step of the `sysreg-sync` CI job) fails on any drift; `TestSysregZ80Sync`
-shifted from a hand-sync guard to a generator-fidelity guard. **Phase C**
-(constants / mnemonic-ID equates) is next. **Phase D** (at/ic/barrier operand
+shifted from a hand-sync guard to a generator-fidelity guard. **Phase C landed**:
+C1 (PR #235) generates `src/tbn_constants.inc` — the `OP_KIND_*`/`REC_KIND_*`/`DIR_*`
+equates from `operands.go`/`kinds.go`/`directives.go`; C2 (PR #236) generates
+`src/mnemonic_ids.inc` — the `MNEM_*` mnemonic-ID equates from `mnemonics.go`; both
+byte-neutral (equates resolve at assembly time), guarded by `tables-sync-check` +
+`TestTbnConstantsZ80Sync`/`TestMnemonicIDsZ80Sync`. **Phase D** (at/ic/barrier operand
 tables) requires first refactoring `aarch64dec/sys.go` switches into exported
 data, so it is deferred by sequencing only — tracked as **i74**, queued after
 A–C land, so it automatically gets done rather than silently dropped.
