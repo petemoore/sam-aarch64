@@ -1,4 +1,4 @@
-; fw_source.asm — the firmware-source URL builder for the i100 downloader.
+; fw_source.asm — the firmware-source URL builder + manifest for the i100 downloader.
 ;
 ; Builds the cdn.githubraw.com request path for a commit-pinned firmware file:
 ;   /<owner>/<repo>/<sha>/<path>   e.g. /raspberrypi/firmware/<sha>/boot/start4.elf
@@ -9,12 +9,22 @@
 ; tcp_conn.asm's conn_verify_*. Reference: item i100 and
 ; docs/specs/phase3-delivery-design.md §7.
 ;
+; Three layers, each mirroring a Go authority:
+;   * fw_build_path / fw_build_path_for — the path builder (http.GithubRawPath):
+;     fw_build_path_for takes any in-repo path pointer; fw_build_path is the
+;     fixed-FW_REPOPATH wrapper.  FW_HOST is the request Host (http.GithubRawHost).
+;   * FW_MANIFEST / fw_manifest_entry — the pinned file list (http.RPiFirmware).
+;   * fw_plan_path — build the cdn path for manifest file N (http.Manifest.Plan's
+;     per-spec Path), the per-file fetch loop's "build each selected file's URL"
+;     step; the spec's other fields come straight off the record (name ptr, the
+;     32-byte SHA-256) and the FW_HOST constant.
+;
 ; AUTHORITY / VERIFICATION: host-verifiable in the project's standard way.
-; tools/netboot-oracle/z80/fw_source_test.go assembles this file, runs
-; fw_build_path under the koron-go/z80 harness, reads the FW_* config strings
-; back out of the binary and feeds them to the Go authority http.GithubRawPath,
-; then asserts FW_PATH equals it byte-for-byte — the same one-source-of-truth
-; pattern as http_get's HTTP_PATH/HTTP_HOST.
+; tools/netboot-oracle/z80/fw_source_test.go assembles this file, runs the
+; builders under the koron-go/z80 harness, reads the FW_* config back out of the
+; binary, and asserts FW_PATH / FW_HOST / the per-file plan paths equal the Go
+; authorities (http.GithubRawPath / GithubRawHost / Manifest.Plan) byte-for-byte —
+; the same one-source-of-truth pattern as http_get's HTTP_PATH/HTTP_HOST.
 
                 if defined(NETBOOT_STANDALONE)
                 org     &8000
@@ -40,12 +50,30 @@ FW_SHA:         defm "a43df3a002f60c4c2243a416d045eb5937585e8b"
 FW_REPOPATH:    defm "boot/start4.elf"
                 defb 0
 
+; The request Host for every firmware fetch (mirrors http.GithubRawHost).  Fixed
+; — only the path varies per file/revision.
+FW_HOST:        defm "cdn.githubraw.com"
+                defb 0
+
 ; ===========================================================================
-; fw_build_path — build /<owner>/<repo>/<sha>/<path> into FW_PATH, NUL-terminated.
-; Mirrors the Go authority http.GithubRawPath byte-for-byte.
+; fw_build_path — build /<owner>/<repo>/<sha>/<path> for the fixed FW_REPOPATH
+; (the configured single file) into FW_PATH.  Thin wrapper over fw_build_path_for.
 ; Out: HL = FW_PATH, BC = path length (excl. NUL).  Clobbers A, DE, HL.
 ; ===========================================================================
 fw_build_path:
+                ld      hl, FW_REPOPATH
+                ; fall through to fw_build_path_for
+
+; ===========================================================================
+; fw_build_path_for — build /<owner>/<repo>/<sha>/<path> into FW_PATH,
+; NUL-terminated, taking the in-repo <path> from a caller-supplied pointer (so the
+; per-file fetch loop can build any manifest file's URL, not just FW_REPOPATH).
+; Mirrors the Go authority http.GithubRawPath byte-for-byte with path = *HL.
+; In:  HL = pointer to a NUL-terminated in-repo path (e.g. "boot/start4.elf").
+; Out: HL = FW_PATH, BC = path length (excl. NUL).  Clobbers A, DE, HL.
+; ===========================================================================
+fw_build_path_for:
+                push    hl                      ; save the in-repo path pointer
                 ld      de, FW_PATH             ; running dest pointer
                 ld      hl, FW_OWNER
                 call    fw_emit_seg             ; "/" + owner
@@ -53,7 +81,7 @@ fw_build_path:
                 call    fw_emit_seg             ; "/" + repo
                 ld      hl, FW_SHA
                 call    fw_emit_seg             ; "/" + sha
-                ld      hl, FW_REPOPATH
+                pop     hl                      ; the caller's in-repo path pointer
                 call    fw_emit_seg             ; "/" + path
                 xor     a
                 ld      (de), a                 ; NUL-terminate
@@ -174,3 +202,26 @@ fw_me_done:
                 ld      b, h
                 ld      c, l
                 ret
+
+; ===========================================================================
+; fw_plan_path — build the cdn.githubraw.com path for manifest file BC into
+; FW_PATH.  The Z80 analogue of http.Manifest.Plan's per-spec Path (=
+; PathFor(Files[index])): it composes fw_manifest_entry (index -> record) with
+; fw_build_path_for (build the path from that record's in-repo path), so the
+; per-file fetch loop can build each selected file's request path.  The spec's
+; other fields are reached directly: the output name pointer is at record+0, the
+; pinned SHA-256 at record+4, and the Host is the FW_HOST constant.
+; In:  BC = file index (0..FW_FILE_COUNT-1).
+; Out: HL = FW_PATH, BC = path length (excl. NUL).  Clobbers A, DE, HL.
+; ===========================================================================
+fw_plan_path:
+                call    fw_manifest_entry       ; BC = pointer to record[index]
+                ld      h, b
+                ld      l, c                    ; HL = record pointer
+                inc     hl
+                inc     hl                      ; HL -> the path-pointer field (record+2)
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                 ; DE = the in-repo path pointer
+                ex      de, hl                  ; HL = the in-repo path pointer
+                jp      fw_build_path_for       ; build /owner/repo/sha/<path>
