@@ -15,7 +15,7 @@
 #      it renders the readout but does NOT invoke the model, so it cannot, by
 #      itself, wake the agent for another turn. A real text line is what creates
 #      the turn; the agent then reads the (already-rendered) readout and either
-#      continues to the next item (>=20% free) or winds down (writes its ROADMAP
+#      continues to the next item (>=50% free) or winds down (writes its ROADMAP
 #      handover) and `touch $WOUND_DOWN`. The nudge is NOT the startup prompt --
 #      the live agent still holds full context and must not re-ground from scratch.
 #   3. monitor sees WOUND_DOWN -> stuffs `/clear` + the startup prompt: a
@@ -27,13 +27,13 @@ set -uo pipefail
 SESSION="${ALOOP_SESSION:-}"               # screen session name (see `screen -ls`); REQUIRED
 WINDOW="${ALOOP_WINDOW:-0}"                 # window claude runs in (Pete: 0, the `cl` window)
 SEMA_DIR="${ALOOP_SEMA_DIR:-$HOME/.claude/autonomous-loop}"
-STARTUP_PROMPT="${ALOOP_PROMPT:-Continue per docs/ROADMAP.md. AUTONOMOUS-LOOP RUN: after you complete each work item (a merged PR), run 'touch ~/.claude/autonomous-loop/task-done' and end your turn -- the monitor will then show you /context; if it reports under 20% free context, write your ROADMAP Current-State handover and then run 'touch ~/.claude/autonomous-loop/wound-down', otherwise pick the next item and continue. Never block on Pete while unblocked work remains -- put any question in the qN registry and keep working. Full protocol: tools/autonomous-loop/README.md.}"
+STARTUP_PROMPT="${ALOOP_PROMPT:-Continue per docs/ROADMAP.md. AUTONOMOUS-LOOP RUN: after you complete each work item (a merged PR), run 'touch ~/.claude/autonomous-loop/task-done' and end your turn -- the monitor will then show you /context; if it reports under 50% free context, write your ROADMAP Current-State handover and then run 'touch ~/.claude/autonomous-loop/wound-down', otherwise pick the next item and continue. Never block on Pete while unblocked work remains -- put any question in the qN registry and keep working. Full protocol: tools/autonomous-loop/README.md.}"
 # RESUME_NUDGE wakes the agent for its next turn AFTER the task-done /context
 # readout. It is deliberately short and is NOT the startup prompt: the live agent
 # keeps its full session context, so it needs only a real text line (any prompt)
 # to take a turn -- re-grounding from ROADMAP here would be wasteful and is only
 # for the post-/clear path. Override via env.
-RESUME_NUDGE="${ALOOP_RESUME:-Autonomous-loop checkpoint: you just finished a work item and the /context readout just above is yours. Per the protocol, if it shows under 20% free context, write your ROADMAP Current-State handover then run 'touch ~/.claude/autonomous-loop/wound-down'. Otherwise pick the next docs/ROADMAP.md item and continue now -- you still hold full session context, so do not re-read ROADMAP from scratch.}"
+RESUME_NUDGE="${ALOOP_RESUME:-Autonomous-loop checkpoint: you just finished a work item and the /context readout just above is yours. Per the protocol, if it shows under 50% free context, write your ROADMAP Current-State handover then run 'touch ~/.claude/autonomous-loop/wound-down'. Otherwise pick the next docs/ROADMAP.md item and continue now -- you still hold full session context, so do not re-read ROADMAP from scratch.}"
 POLL="${ALOOP_POLL:-10}"                    # seconds between polls
 HANG_TIMEOUT="${ALOOP_HANG_TIMEOUT:-1800}"  # seconds with no signal -> nudge an idle session
 CLEAR_SETTLE="${ALOOP_CLEAR_SETTLE:-30}"    # seconds for /clear to fully reset the TUI before re-prompting
