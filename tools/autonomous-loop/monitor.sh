@@ -27,19 +27,42 @@ POLL="${ALOOP_POLL:-10}"                    # seconds between polls
 HANG_TIMEOUT="${ALOOP_HANG_TIMEOUT:-1800}"  # seconds with no signal -> nudge an idle session
 CLEAR_SETTLE="${ALOOP_CLEAR_SETTLE:-30}"    # seconds for /clear to fully reset the TUI before re-prompting
 SUBMIT=$'\r'                                # Enter key -- \r confirmed to submit in the Claude Code TUI (live test 2026-06-15)
+SUBMIT_SETTLE="${ALOOP_SUBMIT_SETTLE:-1}"   # seconds to let a stuffed line settle before the confirming Enter
 
 TASK_DONE="$SEMA_DIR/task-done"
 WOUND_DOWN="$SEMA_DIR/wound-down"
+LOCK="$SEMA_DIR/monitor.lock"               # single-instance guard (see preflight)
 
 log()   { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 stuff() { screen -S "$SESSION" -p "$WINDOW" -X stuff "$1$SUBMIT"; }
+# submit() sends a standalone Enter, AFTER a short settle, as its own keystroke.
+# A long line stuffed in one burst can have its trailing \r absorbed into the
+# paste (the TUI is still ingesting the text), so the line sits unsubmitted in
+# the input -- the failure Pete hit 2026-06-15. Sending a separate, settled Enter
+# reliably confirms it. (If the line already submitted, this Enter lands on an
+# empty input line, a harmless no-op.) Tune ALOOP_SUBMIT_SETTLE if 1s is tight.
+submit() { sleep "$SUBMIT_SETTLE"; screen -S "$SESSION" -p "$WINDOW" -X stuff "$SUBMIT"; }
 
 # --- preflight -------------------------------------------------------------
 [ -n "$SESSION" ] || { echo "ERROR: set ALOOP_SESSION to your screen session (see 'screen -ls')." >&2; exit 1; }
 command -v screen >/dev/null || { echo "ERROR: 'screen' not found." >&2; exit 1; }
 mkdir -p "$SEMA_DIR"
+
+# Single-instance guard. TWO monitors driving the same session is the likely
+# cause of the duplicate-/clear glitch (Pete, 2026-06-15): restarting without
+# killing the old one leaves both polling $SEMA_DIR, so each fires once on the
+# same semaphore -> the agent sees /clear twice and the interleaved stuffs mangle
+# the startup prompt. Refuse to start if a live monitor holds the lock; replace a
+# stale lock (whose PID is gone) and continue.
+if [ -e "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
+  echo "ERROR: a monitor is already running (PID $(cat "$LOCK")). Kill it first, or remove $LOCK if it is stale." >&2
+  exit 1
+fi
+echo $$ > "$LOCK"
+trap 'rm -f "$LOCK"' EXIT
+
 rm -f "$TASK_DONE" "$WOUND_DOWN"            # start from a clean slate
-log "monitor up: session='$SESSION' window=$WINDOW poll=${POLL}s hang=${HANG_TIMEOUT}s"
+log "monitor up: session='$SESSION' window=$WINDOW poll=${POLL}s hang=${HANG_TIMEOUT}s (pid $$)"
 log "semaphores under: $SEMA_DIR"
 
 # --- loop ------------------------------------------------------------------
@@ -49,21 +72,24 @@ while true; do
     log "WOUND_DOWN -> flush input, /clear, settle ${CLEAR_SETTLE}s, restart"
     # Submit any half-typed line first so /clear starts on a clean input line
     # and can't get merged into a partial human message. (Pete, 2026-06-15.)
-    screen -S "$SESSION" -p "$WINDOW" -X stuff "$SUBMIT"
-    sleep 1
+    submit
     stuff "/clear"
+    submit
     sleep "$CLEAR_SETTLE"
     stuff "$STARTUP_PROMPT"
+    submit
     rm -f "$WOUND_DOWN" "$TASK_DONE"
     last_signal=$SECONDS
   elif [ -e "$TASK_DONE" ]; then
     log "TASK_DONE -> /context (agent decides: continue or wind down)"
     stuff "/context"
+    submit
     rm -f "$TASK_DONE"
     last_signal=$SECONDS
   elif [ $((SECONDS - last_signal)) -ge "$HANG_TIMEOUT" ]; then
     log "no signal for ${HANG_TIMEOUT}s -> nudge (in case the session went idle)"
     stuff "If you are idle and waiting on nothing, resume autonomously per docs/ROADMAP.md and the autonomous-loop protocol (tools/autonomous-loop/README.md). If you are mid-task, ignore this."
+    submit
     last_signal=$SECONDS
   fi
   sleep "$POLL"
