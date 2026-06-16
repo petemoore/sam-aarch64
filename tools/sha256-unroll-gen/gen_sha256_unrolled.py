@@ -100,21 +100,67 @@ def add4_ptr(dst_lsb, ptr_expr):
         "                ld      a, (de)", "                adc     a, (hl)", "                ld      (hl), a",
     ]
 
+# ch_inline / maj_inline — Ch(e,f,g) and Maj(a,b,c) emitted FLAT with the slot
+# addresses baked in as constants (the unrolled path knows each role's slot at
+# assemble time). This beats the shared sha_ch/sha_maj subroutines, which pay a
+# 19T (ix+d)/(iy+d) indexed access per operand byte plus the call/djnz overhead,
+# because they must take their three source pointers at runtime. Here e/f/g (or
+# a/b/c) load with plain `ld a,(nnnn)` (13T) and the boolean is done in A with
+# H,L,D as scratch — no index registers, no loop, no call. Result goes to
+# sha_tmpa, exactly as the subroutines did, so the following add4 is unchanged.
+# (The shared subroutines remain for the rolled NETBOOT_TLS_CLIENT path.)
+def ch_inline(E, F, G):
+    # Ch(e,f,g) = g ^ (e & (f ^ g)). H := f, L := g; A walks f^g -> e&(f^g) -> ^g.
+    out = []
+    for i in range(4):
+        out += [
+            f"                ld      a, ({F} + {i})",   # f
+            "                ld      h, a",
+            f"                ld      a, ({G} + {i})",   # g
+            "                ld      l, a",
+            "                xor     h",                  # f ^ g
+            "                ld      d, a",
+            f"                ld      a, ({E} + {i})",   # e
+            "                and     d",                  # e & (f^g)
+            "                xor     l",                  # ^ g
+            f"                ld      (sha_tmpa + {i}), a",
+        ]
+    return out
+
+def maj_inline(A, B, C):
+    # Maj(a,b,c) = (a & b) | (c & (a ^ b)). H := a, L := b; one load each, no reload.
+    out = []
+    for i in range(4):
+        out += [
+            f"                ld      a, ({A} + {i})",   # a
+            "                ld      h, a",
+            f"                ld      a, ({B} + {i})",   # b
+            "                ld      l, a",
+            "                xor     h",                  # a ^ b
+            "                ld      d, a",
+            f"                ld      a, ({C} + {i})",   # c
+            "                and     d",                  # c & (a^b)
+            "                ld      d, a",
+            "                ld      a, h",               # a
+            "                and     l",                  # a & b
+            "                or      d",                  # (a&b) | (c&(a^b))
+            f"                ld      (sha_tmpa + {i}), a",
+        ]
+    return out
+
 def phase_real(p):
     L = [f"                ; ---- phase {p} ----"]
     A, B, C, D, E, F, G, H = (slot(r, p) for r in range(8))
     L += copy4("sha_t1", H)                                   # T1 = h
     L += [f"                ld      hl, {E}", "                call    sha_bigsigma1"]
     L += add4("sha_t1+3", "sha_tmpa+3")                       # T1 += S1(e)
-    L += [f"                ld      hl, {E}", f"                ld      de, {F}",
-          f"                ld      ix, {G}", "                call    sha_ch"]
+    L += ch_inline(E, F, G)                                   # sha_tmpa = Ch(e,f,g)
     L += add4("sha_t1+3", "sha_tmpa+3")                       # T1 += Ch
     L += add4_ptr("sha_t1+3", "(sha_kt)")                     # T1 += K[t]  (ptr is LSB)
     L += add4_ptr("sha_t1+3", "(sha_wptr)")                   # T1 += W[t]
     L += [f"                ld      hl, {A}", "                call    sha_bigsigma0"]
     L += copy4("sha_t2", "sha_tmpa")                          # T2 = S0(a)
-    L += [f"                ld      hl, {A}", f"                ld      ix, {B}",
-          f"                ld      iy, {C}", "                call    sha_maj"]
+    L += maj_inline(A, B, C)                                  # sha_tmpa = Maj(a,b,c)
     L += add4("sha_t2+3", "sha_tmpa+3")                       # T2 += Maj
     L += add4(f"{slot(3,p)} + 3", "sha_t1+3")                 # new e = old d + T1 (slot d)
     L += copy4(slot(7, p), "sha_t1")                          # new a = T1 ...

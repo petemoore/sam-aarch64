@@ -10,6 +10,16 @@ a..h, so only the two written words (new a, new e) are stored per phase. That
 removes the rolled loop's 28-byte `lddr` shuffle (~37k T-states/block of pure
 data movement), dropping per-block compress from 418,843 to 377,371 T-states.
 
+Because the slots are compile-time constants in this branch, the phases also
+inline `Ch(e,f,g)` and `Maj(a,b,c)` with their operand addresses baked in,
+instead of calling the shared `sha_ch`/`sha_maj` subroutines. The subroutines
+take their three source pointers at runtime and so pay a 19T `(ix+d)`/`(iy+d)`
+indexed access per operand byte plus call/`djnz` overhead; the inline form loads
+each operand with a plain `ld a,(nnnn)` and does the boolean in A with H,L,D as
+scratch. That drops per-block compress from 377,371 to 346,267 T-states. (The
+shared subroutines remain — the rolled `NETBOOT_TLS_CLIENT` path still calls
+them.)
+
 The block is generated rather than written with pyz80's `EQU FOR` because that
 loop's rewind desyncs when a MACRO expands inside its body, corrupting the
 assembly of earlier code; emitting flat, macro-free text sidesteps the bug.
