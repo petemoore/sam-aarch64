@@ -221,6 +221,10 @@ type Entry struct {
 	HL uint16
 	BC uint16
 	DE uint16
+	// A preloads the accumulator (A = AF.Hi). Most routines take their inputs in
+	// HL/BC/DE or a parameter block, but byte-level leaves (e.g. x25519 mul8) take
+	// an operand in A, so register-level tests need to drive it.
+	A uint8
 	// StepCap overrides the default maxSteps runaway guard for this call. Zero
 	// uses maxSteps. The multi-precision crypto routines (e.g. the X25519 field
 	// inversion / Montgomery ladder, tens of millions of byte-ops) legitimately
@@ -231,6 +235,7 @@ type Entry struct {
 // CallResult is what a routine returns to the harness.
 type CallResult struct {
 	BC      uint16 // the BC register at RET (routines return a length in BC)
+	HL      uint16 // the HL register at RET (byte-level leaves return a value in HL)
 	Steps   uint64
 	TStates uint64 // total Z80 cycles executed (cycle-exact; see tstates.go)
 }
@@ -278,6 +283,7 @@ func (mac *Machine) run(name string, pc uint16, in Entry) (CallResult, error) {
 	cpu.HL.SetU16(in.HL)
 	cpu.BC.SetU16(in.BC)
 	cpu.DE.SetU16(in.DE)
+	cpu.AF.Hi = in.A
 	// Stack just below the trap; push the trap as the return address so the
 	// routine's RET returns to it.
 	cpu.SP = 0x6FFE
@@ -311,5 +317,5 @@ func (mac *Machine) run(name string, pc uint16, in Entry) (CallResult, error) {
 			return CallResult{}, fmt.Errorf("z80: routine %q did not return after %d steps (PC=&%04X)", name, steps, cpu.PC)
 		}
 	}
-	return CallResult{BC: cpu.BC.U16(), Steps: steps, TStates: tstates}, nil
+	return CallResult{BC: cpu.BC.U16(), HL: cpu.HL.U16(), Steps: steps, TStates: tstates}, nil
 }
