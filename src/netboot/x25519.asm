@@ -87,8 +87,8 @@ FE_2P:          defb &DA, &FF, &FF, &FF, &FF, &FF, &FF, &FF
                 defb &FF, &FF, &FF, &FF, &FF, &FF, &FF, &FF
 
 ; 121665 = 0x0001DB41 (little-endian byte0=0x41, byte1=0xDB, byte2=0x01).
+; fe_mul121665 reads only these 3 bytes (the narrow schoolbook).
 FE_121665:      defb &41, &DB, &01
-                defs 29
 
 ; ===========================================================================
 ; fe_add — FE_OUT = (FE_A + FE_B) mod p.  Clobbers A, BC, DE, HL.
@@ -115,7 +115,7 @@ fe_add_loop:
                 xor     a
                 ld      (FE_ACC + 33), a
                 call    fe_reduce33
-                jr      fe_store_out
+                jp      fe_store_out
 
 ; ===========================================================================
 ; fe_sub — FE_OUT = (FE_A - FE_B) mod p, via FE_A + 2p - FE_B (always positive).
@@ -160,7 +160,7 @@ fe_sub_subb:
                 sbc     a, 0
                 ld      (FE_ACC + 32), a
                 call    fe_reduce33
-                jr      fe_store_out
+                jp      fe_store_out
 
 ; ===========================================================================
 ; fe_mul — FE_OUT = (FE_A * FE_B) mod p.  Clobbers A, BC, DE, HL + scratch.
@@ -168,18 +168,94 @@ fe_sub_subb:
 fe_mul:
                 call    fe_schoolbook           ; FE_PROD = FE_A * FE_B (64 bytes)
                 call    fe_reduce_prod          ; FE_ACC = FE_PROD mod p (< 2^255)
-                jr      fe_store_out
+                jp      fe_store_out
 
 ; ===========================================================================
-; fe_mul121665 — FE_OUT = (FE_A * 121665) mod p, via fe_mul with the constant.
-; Clobbers FE_B and the fe_mul scratch.
+; fe_mul121665 — FE_OUT = (FE_A * 121665) mod p.  The curve constant a24 is only
+; 3 bytes (0x01DB41), so a narrow schoolbook — FE_A's 32 bytes times the 3
+; constant bytes, 96 mul8 — replaces the full 32×32 (1024 mul8) of fe_mul against
+; a zero-padded operand.  The 34-byte product reuses the shared reduction path.
+; Clobbers A, BC, DE, HL + scratch.
 ; ===========================================================================
 fe_mul121665:
-                ld      hl, FE_121665
-                ld      de, FE_B
-                ld      bc, 32
+                ld      hl, FE_PROD             ; zero PROD (65 bytes)
+                ld      (hl), 0
+                ld      de, FE_PROD + 1
+                ld      bc, 64
                 ldir
-                jr      fe_mul
+
+                ld      hl, FE_A
+                ld      (fe_ap), hl             ; &a[i], i = 0..31
+                ld      hl, FE_PROD
+                ld      (fe_pp), hl             ; &PROD[i]
+                ld      b, 32
+fe_121665_outer:
+                push    bc
+                ld      hl, (fe_ap)
+                ld      a, (hl)
+                ld      (fe_ai), a              ; a[i]
+                ld      hl, FE_121665
+                ld      (fe_rp), hl             ; constant byte source (3 bytes)
+                ld      hl, (fe_pp)
+                ld      (fe_pq), hl
+                xor     a
+                ld      (fe_car), a
+                ld      b, 3                    ; inner: the 3 constant bytes
+fe_121665_inner:
+                push    bc
+                ld      hl, (fe_rp)
+                ld      a, (hl)
+                inc     hl
+                ld      (fe_rp), hl
+                ld      e, a
+                ld      d, 0
+                ld      a, (fe_ai)
+                call    mul8                    ; HL = a[i] * c[j]
+
+                ld      de, (fe_pq)
+                ld      a, (de)
+                ld      c, a
+                ld      b, 0
+                add     hl, bc                  ; += PROD[i+j]
+                ld      a, (fe_car)
+                ld      c, a
+                ld      b, 0
+                add     hl, bc                  ; += carry
+
+                ld      a, l
+                ld      (de), a
+                inc     de
+                ld      (fe_pq), de
+                ld      a, h
+                ld      (fe_car), a
+                pop     bc
+                djnz    fe_121665_inner
+
+                ld      de, (fe_pq)             ; propagate the final row carry upward
+                ld      a, (fe_car)
+fe_121665_carry:
+                or      a
+                jr      z, fe_121665_carry_done
+                ld      c, a
+                ld      a, (de)
+                add     a, c
+                ld      (de), a
+                inc     de
+                ld      a, 0
+                adc     a, 0
+                jr      fe_121665_carry
+fe_121665_carry_done:
+                ld      hl, (fe_ap)             ; &a[i] += 1
+                inc     hl
+                ld      (fe_ap), hl
+                ld      hl, (fe_pp)             ; &PROD[i] += 1
+                inc     hl
+                ld      (fe_pp), hl
+                pop     bc
+                djnz    fe_121665_outer
+
+                call    fe_reduce_prod          ; FE_ACC = FE_PROD mod p (< 2^255)
+                jp      fe_store_out
 
 ; ===========================================================================
 ; fe_sqr — FE_OUT = (FE_A)^2 mod p.  Squaring is symmetric — every off-diagonal
@@ -192,7 +268,7 @@ fe_mul121665:
 fe_sqr:
                 call    fe_sqr_schoolbook       ; FE_PROD = FE_A^2 (64 bytes)
                 call    fe_reduce_prod          ; FE_ACC = FE_PROD mod p (< 2^255)
-                jr      fe_store_out
+                jp      fe_store_out
 
 ; ---------------------------------------------------------------------------
 ; fe_store_out — copy FE_ACC[0..31] to FE_OUT.  (Shared op tail.)
