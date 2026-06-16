@@ -1034,6 +1034,18 @@ disk: assembler test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data 
 	    -zx0 $(BUILD)/zx0-test.bin \
 	    $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/test.mgt
 
+# harness-sweep — one-shot "build every artefact the koron-go/z80 harness
+# reads, then run its full Go test suite" (tools/z80-test-harness-go).
+# The per-variant prerequisites in that dir's README cover the standalone
+# binary; the full `go test ./...` suite (boot self-tests + the fold / align /
+# org guards + the disasm oracle + compact-.tbn round-trip) needs the complete
+# artefact set below.  The corpus-dependent zx0 profiling tests skip when their
+# inputs are absent — expected, not a failure.  Dev convenience, NOT a CI gate
+# (SimCoupé is the gate); see tools/z80-test-harness-go/USAGE.md.
+.PHONY: harness-sweep
+harness-sweep: assembler assembler-prod enctab cluster-offaxis test-mem-offaxis paged-call-payload sysreg-data disasm-payload disasm-test-payload zx0-payload zx0-test-payload zx0-compress-payload sam-aarch64
+	cd tools/z80-test-harness-go && go test -count=1 ./...
+
 # test-core — sweep every fixture under tests/core/sources/ end-to-end:
 # sam-aarch64 → build-disk → SimCoupé → samfile extract OUT →
 # byte-compare against aarch64-{none-elf,linux-gnu}-as + objcopy -O binary.
