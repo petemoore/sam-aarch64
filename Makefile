@@ -707,6 +707,9 @@ netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-bu
 
 ci-netboot-z80: netboot-z80-routines
 	cd tools/netboot-oracle/z80 && go test ./...
+	# Guard: the 8x-unrolled SHA-256 round block inlined in sha256.asm still
+	# matches its generator (tools/sha256-unroll-gen) byte-for-byte.
+	cd tools/sha256-unroll-gen && go test ./...
 
 test-format: sam-aarch64
 	cd tools/sam-aarch64-format && go test ./...

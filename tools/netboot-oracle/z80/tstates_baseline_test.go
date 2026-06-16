@@ -57,6 +57,40 @@ func TestBaselineSHA256(t *testing.T) {
 	t.Logf("i102 baseline: sha256(256B total) = %d T-states (%d steps)", total.TStates, total.Steps)
 }
 
+// TestSHA256PerBlockCompress measures the cost of one 64-byte compression in
+// isolation, by differencing update(128) - update(64): each update runs N/64
+// full-block compresses, and the per-byte bitlen-add + block-copy overhead
+// scales linearly, so the difference is exactly one extra compress. This is the
+// i102 optimization's headline number. The standalone (NETBOOT_STANDALONE)
+// build takes the 8x circular-renamed unrolled round path, so the figure here
+// is the unrolled cost; it must stay at or below the increment-1 register-
+// rewrite baseline (418,843 T/block) — a regression past that means the unroll
+// silently fell back to the rolled path or grew a new cost.
+func TestSHA256PerBlockCompress(t *testing.T) {
+	measure := func(n int) uint64 {
+		mac := loadSHA256Machine(t)
+		if _, err := mac.Call("sha256_init"); err != nil {
+			t.Fatalf("sha256_init: %v", err)
+		}
+		msg := make([]byte, n)
+		for i := range msg {
+			msg[i] = byte(i*7 + 3)
+		}
+		mac.Write(shaInputStage, msg)
+		res, err := mac.CallEntry("sha256_update", z80h.Entry{HL: shaInputStage, BC: uint16(n)})
+		if err != nil {
+			t.Fatalf("sha256_update(%d): %v", n, err)
+		}
+		return res.TStates
+	}
+	perBlock := measure(128) - measure(64)
+	const incr1Baseline = 418843 // register-rewrite (PR #365), before the unroll
+	t.Logf("i102 sha256 per-block compress = %d T-states (increment-1 was %d)", perBlock, incr1Baseline)
+	if perBlock > incr1Baseline {
+		t.Fatalf("per-block compress %d T regressed past the %d baseline", perBlock, incr1Baseline)
+	}
+}
+
 // TestBaselineHMACSHA256 MACs a fixed message under a fixed key.
 func TestBaselineHMACSHA256(t *testing.T) {
 	mac := loadHMAC(t)
