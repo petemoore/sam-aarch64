@@ -44,8 +44,12 @@ OPVAL_STRIDE:           equ     10
 ;       §6.10 and the existing trampoline / enctab_map_in usage.)
 ;
 ; OUT_PC walks &4000..&7FFF; when it hits &8000 we flip OUT_ZONE to 1
-; and wrap OUT_PC back to &4000.  A second wrap (i.e. OUT_LEN reaching
-; 32768) is an error — jp fail.
+; and wrap OUT_PC back to &4000.  The OUT buffer spans both zones
+; (pages 5 + 6 = 32768 bytes), so a full 32768-byte output is legal:
+; writing the final byte (zone 1, OUT_PC &7FFF) leaves OUT_PC at the
+; &8000 "buffer full" sentinel with OUT_LEN = 32768.  The *next*
+; emit_byte (the 32769th byte) finds the sentinel and is the error —
+; jp fail.
 ;
 ; Input:    A = byte to emit.
 ; Output:   byte stored; OUT_PC advanced; OUT_LEN incremented; on a
@@ -59,7 +63,7 @@ emit_byte:
                 ld      hl, (OUT_PC)
                 ld      a, (OUT_ZONE)
                 or      a
-                jr      nz, emit_byte_high
+                jr      nz, emit_byte_high_or_full
 
 ; ----- Low zone — write to section B with LMPR_ENCTAB live -----------
                 pop     de
@@ -71,6 +75,20 @@ emit_byte:
 ; ----- High zone — bracket the store with LMPR=LMPR_OUT_HIGH ---------
 ; Port 250 is LMPR (sections A+B); port 251 is HMPR (sections C+D).
 ; The OUT buffer is reached via section B so we touch LMPR only.
+;
+; First reject a write into a full buffer: in zone 1, OUT_PC == &8000 is
+; the "buffer full" sentinel left by the 32768th byte (see the
+; zone-boundary handling in emit_byte_advance).  A write here would be
+; the 32769th byte — past the 32768-byte OUT ceiling.
+emit_byte_high_or_full:
+                ld      a, h
+                cp      &80
+                jr      nz, emit_byte_high
+                pop     de
+                pop     bc
+                pop     af                  ; discard the byte; nothing emitted
+                ld      a, &b0
+                jp      fail_with_tag       ; tag b0: OUT > 32 KB
 emit_byte_high:
                 in      a, (250)
                 ld      (emit_lmpr_save), a
@@ -91,15 +109,15 @@ emit_byte_advance:
                 cp      &80
                 jr      nz, emit_byte_no_zone_cross
 
-; Hit &8000 — last byte of the current zone was just written.  Flip
-; OUT_ZONE 0 → 1 and wrap OUT_PC back to &4000.  A second crossing
-; (OUT_ZONE already 1) means OUT_LEN ≥ 32768 — past the M6 ceiling.
+; Hit &8000 — last byte of the current zone was just written.  In zone 0
+; this is the 16384-byte boundary: flip OUT_ZONE 0 → 1 and wrap OUT_PC
+; back to &4000.  In zone 1 it is the 32768-byte boundary: the buffer is
+; now exactly full, so leave OUT_PC at the &8000 "buffer full" sentinel
+; (emit_byte rejects the next write at entry) and bump OUT_LEN to 32768
+; normally.
                 ld      a, (OUT_ZONE)
                 or      a
-                jr      z, emit_byte_zone_room_ok
-                ld      a, &b0
-                jp      fail_with_tag       ; tag b0: OUT > 32 KB
-emit_byte_zone_room_ok:
+                jr      nz, emit_byte_no_zone_cross   ; zone 1 → keep &8000 sentinel
                 ld      a, 1
                 ld      (OUT_ZONE), a
                 ld      hl, &4000

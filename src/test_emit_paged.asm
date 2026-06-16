@@ -17,6 +17,10 @@
 ;      OUT_ZONE to 1 and wraps OUT_PC to &4000.
 ;   4. emit_byte in high zone writes to page 6 (read-back via
 ;      LMPR=LMPR_OUT_HIGH section-B window).
+;   5. The 32768th byte fills the buffer exactly: emit succeeds and
+;      parks OUT_PC at the &8000 "buffer full" sentinel with
+;      OUT_LEN = 32768 (i73 L1 — the buffer's full 32768-byte capacity
+;      is usable).
 ;
 ; A failure does `jp fail` — same red-border + printer-channel "FAIL"
 ; banner as every other self-test suite.  When the test owns an LMPR
@@ -126,6 +130,51 @@ run_emit_paged_self_tests:
                 cp      &91
                 jp      nz, emit_paged_fail_with_lmpr
 
+                ld      a, (lmpr_save_test)
+                out     (250), a
+
+; ----- (5) buffer-full boundary — the 32768th byte fills it exactly -----
+; Force the zone-1 final position (OUT_PC = &7FFF, zone 1, 32767 bytes
+; already emitted).  Emitting one more writes byte #32768 at &7FFF
+; (page 6) and must leave OUT_PC at the &8000 "buffer full" sentinel with
+; OUT_LEN = 32768 — the legal full-buffer state.  It must succeed: a
+; spurious tag-b0 jp fail on this byte is the i73 L1 regression.
+                ld      a, 1
+                ld      (OUT_ZONE), a
+                ld      hl, &7FFF
+                ld      (OUT_PC), hl
+                ld      hl, 32767
+                ld      (OUT_LEN), hl
+
+                ld      a, &5A              ; the 32768th (final) byte
+                call    emit_byte           ; must succeed, not jp fail
+
+                ld      a, (OUT_ZONE)       ; still zone 1
+                cp      1
+                jp      nz, emit_paged_fail
+                ld      hl, (OUT_PC)        ; OUT_PC parked at the &8000 sentinel
+                ld      a, h
+                cp      &80
+                jp      nz, emit_paged_fail
+                ld      a, l
+                or      a
+                jp      nz, emit_paged_fail
+                ld      hl, (OUT_LEN)       ; OUT_LEN = 32768
+                ld      a, h
+                cp      &80
+                jp      nz, emit_paged_fail
+                ld      a, l
+                or      a
+                jp      nz, emit_paged_fail
+
+; Read byte #32768 back at &7FFF (page 6 in section B under LMPR_OUT_HIGH).
+                in      a, (250)
+                ld      (lmpr_save_test), a
+                ld      a, LMPR_OUT_HIGH
+                out     (250), a
+                ld      a, (&7FFF)
+                cp      &5A
+                jp      nz, emit_paged_fail_with_lmpr
                 ld      a, (lmpr_save_test)
                 out     (250), a
 
