@@ -403,63 +403,93 @@ conn_flush_final:
 
                 if defined(NETBOOT_HOSTTEST)
 ; ---------------------------------------------------------------------------
-; storage_sink_flush — the host-test sink (the Z80 port of conn.go's sink.Write
-; via ChunkSink): record one bounded flush of HL bytes from the FRONT of
-; CONN_FLUSH_BUF in arrival order. It appends those bytes to the observable
-; CONN_SINK_OUT buffer (advancing CONN_SINK_OUT_LEN) so a test can assert the
-; concatenation equals the body, and records the flush length into the
-; CONN_SINK_CHUNKS list (advancing CONN_SINK_CHUNK_COUNT) so a test can assert
-; the per-flush chunk sizes / count.
+; storage_sink_flush — the Brick 3 dispatcher: sets HL = CONN_FLUSH_BUF (the
+; front of the flush buffer), BC = flush length (passed in HL by the caller),
+; then dispatches on CONN_SINK_FILTER_MODE:
+;   0 (default) — tail-calls storage_sink_leaf directly (raw bytes, hash +
+;                 record the whole window; preserves the pre-Brick-3 behaviour).
+;   1           — tail-calls CONN_SINK_FILTER (default = storage_sink_leaf;
+;                 the composed build sets it to body_sink_write, the HTTP
+;                 header-skip filter, which forwards body bytes to
+;                 storage_sink_leaf via BODY_DST_PTR).
 ;
-; This is a TEST DOUBLE. The real flush — the B-DOS bounded write to Trinity
-; storage (RST 8 / record append) — binds HERE on hardware; it is q16/hardware-
-; gated and deliberately OUT OF SCOPE for this host-verifiable foundation.
+; A function pointer (CONN_SINK_FILTER) is used instead of a hardcoded
+; `jp body_sink_write` because tcp_conn.asm does not include body_sink.asm —
+; the label body_sink_write is only defined in the composed http_main build.
+; Mode 0 still calls storage_sink_leaf directly (no indirection cost on the
+; hot, unfiltered path used by all existing stream tests).
 ;
-; In:  HL = flush length (bytes from the front of CONN_FLUSH_BUF).
-; Clobbers: A, BC, DE, HL, IX.
+; In:  HL = flush length.
+; Clobbers: A, BC, DE, HL, IX (and whatever the callee clobbers).
 ; ---------------------------------------------------------------------------
 storage_sink_flush:
+                ld      b, h
+                ld      c, l                   ; BC = flush length
+                ld      hl, CONN_FLUSH_BUF     ; HL = pointer to the window bytes
+                ld      a, (CONN_SINK_FILTER_MODE)
+                or      a
+                jr      z, ssf_leaf            ; mode 0: raw (default, no indirection)
+                ; mode 1: load the filter ptr into IX and tail-call through it.
+                ; HL (data ptr) and BC (length) are preserved for the callee.
+                ld      ix, (CONN_SINK_FILTER)
+                jp      (ix)
+ssf_leaf:
+                jp      storage_sink_leaf
+
+; ---------------------------------------------------------------------------
+; storage_sink_leaf — the hash + record body (the renamed pre-Brick-3 core of
+; storage_sink_flush). Takes an arbitrary ptr + len so body_sink_write can call
+; it after the header skip (the body starts at an offset inside the window, not
+; necessarily at CONN_FLUSH_BUF front).
+;
+; This is a TEST DOUBLE for the real B-DOS bounded write (q16/hardware-gated).
+;
+; In:  HL = pointer to bytes to hash + record, BC = length.
+; Clobbers: A, BC, DE, HL, IX.
+; ---------------------------------------------------------------------------
+storage_sink_leaf:
                 ; Hash this window into the running SHA-256 (the streamed-body
                 ; verify, i100). Every body byte passes through here exactly once,
                 ; in arrival order, so sha256_update over the window covers the whole
                 ; body in order — the digest matches crypto/sha256 of the body.
                 ; conn_verify_init resets the SHA state before the body arrives.
-                push    hl                     ; save flush length (HL) across the hash
-                ld      b, h
-                ld      c, l                   ; BC = flush length for sha256_update
-                ld      hl, CONN_FLUSH_BUF     ; HL = window bytes (front of buffer)
-                call    sha256_update          ; hash the window (clobbers IX + scratch)
-                pop     hl                     ; restore flush length for the recorder
-                push    hl                     ; save flush length
-                ; append CONN_FLUSH_BUF[0..len) to CONN_SINK_OUT at its tail.
+                push    hl                     ; save ptr across the hash
+                push    bc                     ; save length across the hash
+                call    sha256_update          ; hash BC bytes at HL (clobbers IX + scratch)
+                pop     bc                     ; restore length
+                pop     hl                     ; restore ptr
+                push    bc                     ; save length for the recorder
+                ; append [HL, HL+BC) to CONN_SINK_OUT at its tail.
                 ld      de, (CONN_SINK_OUT_LEN)
+                push    hl                     ; save source ptr
                 ld      hl, CONN_SINK_OUT
                 add     hl, de                 ; HL = dest (sink-out tail)
                 ex      de, hl                 ; DE = dest
-                ld      hl, CONN_FLUSH_BUF     ; HL = source (front of the buffer)
-                pop     bc                     ; BC = flush length
-                push    bc
-                ldir
-                pop     bc                     ; BC = flush length again
-                push    bc
+                pop     hl                     ; HL = source
+                ldir                           ; copy BC bytes (BC consumed)
                 ; CONN_SINK_OUT_LEN += length.
+                pop     bc                     ; BC = length again
+                push    bc
                 ld      hl, (CONN_SINK_OUT_LEN)
                 add     hl, bc
                 ld      (CONN_SINK_OUT_LEN), hl
-                ; record this flush length into CONN_SINK_CHUNKS[count] (2 BE bytes
-                ; stored little-endian via ld (addr),hl) and bump the count.
+                ; record this flush length into CONN_SINK_CHUNKS[count] (2 bytes
+                ; little-endian) and bump the count.
                 ld      hl, (CONN_SINK_CHUNK_COUNT)
                 add     hl, hl                 ; *2 (each entry is 2 bytes)
                 ld      de, CONN_SINK_CHUNKS
                 add     hl, de                 ; HL = &CONN_SINK_CHUNKS[count]
-                pop     bc                     ; BC = flush length
+                pop     bc                     ; BC = length
                 ld      (hl), c
                 inc     hl
-                ld      (hl), b                ; store the length (low, high)
+                ld      (hl), b                ; store length (low, high)
                 ld      hl, (CONN_SINK_CHUNK_COUNT)
                 inc     hl
                 ld      (CONN_SINK_CHUNK_COUNT), hl
                 ret
+
+CONN_SINK_FILTER_MODE: defb 0             ; 0 = raw (storage_sink_leaf); 1 = via CONN_SINK_FILTER
+CONN_SINK_FILTER: defw  storage_sink_leaf ; filter fn pointer; composed build sets body_sink_write
 
 ; ---------------------------------------------------------------------------
 ; conn_verify_init — start the streamed-body SHA-256 (i100, q15 option c). Reset
