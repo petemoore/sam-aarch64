@@ -31,7 +31,11 @@
                 org     &8000
                 endif
 
+                if defined(NETBOOT_TLS_CLIENT)
+                else                           ; standalone / server-flight build:
                 include "sha256.asm"           ; sha256_init/update/final + SHA_H..SHA_BLOCK
+                endif                          ; in the 6a composite sha256 arrives via
+                                               ; the key-schedule chain (included first)
 
 ; The SHA-256 persistent state is SHA_H(32) || SHA_BITLEN(8) || SHA_FILL(1) ||
 ; SHA_BLOCK(64) = 105 contiguous bytes starting at SHA_H.

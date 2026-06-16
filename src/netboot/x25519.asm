@@ -236,7 +236,11 @@ fe_frz_sub:
 ; i102 multiply, extracted to qsq.asm and included by both x25519.asm and
 ; poly1305.asm. The x25519 entry calls qsq_init once at entry; the host field
 ; tests call qsq_init after load.
+                if defined(NETBOOT_TLS_CLIENT)
+                else                            ; standalone build: qsq comes from here
                 include "qsq.asm"
+                endif                           ; in the 6a composite qsq arrives via
+                                                ; tls_record -> aead -> poly1305 (first)
 
 ; ---------------------------------------------------------------------------
 ; fe_schoolbook — FE_PROD (64 bytes) = FE_A (32) * FE_B (32), schoolbook.

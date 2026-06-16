@@ -25,8 +25,16 @@
 ; n = 0..510 (511 little-endian 16-bit entries, 1022 bytes).  Pure regenerable
 ; scratch (qsq_init rebuilds it via a running recurrence, no multiply), so it lives
 ; in RAM above the module image — costing zero file/ROM bytes — rather than as
-; emitted data.
+; emitted data.  The standalone bricks are tiny, so &C000 is safely above their
+; images.  The i88 6a TLS-client composite is large (its SF_FLIGHT buffer alone
+; straddles &C000), so under NETBOOT_TLS_CLIENT the table relocates to &FB00 —
+; above the composite image and below the top of RAM (the host test asserts the
+; image stays clear of it: tls_client_end < qsq_table).
+                if defined(NETBOOT_TLS_CLIENT)
+qsq_table:      equ &FB00
+                else
 qsq_table:      equ &C000
+                endif
 
 ; ---------------------------------------------------------------------------
 ; mul8 — HL = A * E (8x8 -> 16) via the quarter-square identity
