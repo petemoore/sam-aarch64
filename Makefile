@@ -201,7 +201,7 @@ netboot-chacha20: $(BUILD)/netboot_chacha20.bin $(BUILD)/netboot_chacha20.map
 # the ChaCha20-Poly1305 MAC: byte-radix multi-precision (8x8 mul8, a 17x16
 # schoolbook product, reduction mod 2^130-5).  Standalone leaf, host-verified by
 # poly1305_test.go vs the RFC 8439 §2.5.2 KAT + a math/big reference.
-$(BUILD)/netboot_poly1305.bin $(BUILD)/netboot_poly1305.map: src/netboot/poly1305.asm
+$(BUILD)/netboot_poly1305.bin $(BUILD)/netboot_poly1305.map: src/netboot/poly1305.asm src/netboot/qsq.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_poly1305.bin \
 	    --mapfile=$(BUILD)/netboot_poly1305.map \
@@ -214,7 +214,7 @@ netboot-poly1305: $(BUILD)/netboot_poly1305.bin $(BUILD)/netboot_poly1305.map
 # 32x32 schoolbook product, reduction via 2^256≡38 + 2^255≡19).  Standalone leaf,
 # host-verified by x25519_field_test.go vs a math/big reference (the ladder builds
 # on this in a follow-up).
-$(BUILD)/netboot_x25519.bin $(BUILD)/netboot_x25519.map: src/netboot/x25519.asm
+$(BUILD)/netboot_x25519.bin $(BUILD)/netboot_x25519.map: src/netboot/x25519.asm src/netboot/qsq.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_x25519.bin \
 	    --mapfile=$(BUILD)/netboot_x25519.map \
@@ -227,7 +227,7 @@ netboot-x25519-field: $(BUILD)/netboot_x25519.bin $(BUILD)/netboot_x25519.map
 # -D NETBOOT_AEAD so their NETBOOT_STANDALONE org guard stays inert and this file
 # sets the org once).  Standalone leaf, host-verified by aead_test.go vs the RFC
 # 8439 §2.8.2 (encrypt) + §2.6.2 (key-gen) KATs + a decrypt round-trip + tamper.
-$(BUILD)/netboot_aead.bin $(BUILD)/netboot_aead.map: src/netboot/aead.asm src/netboot/chacha20.asm src/netboot/poly1305.asm
+$(BUILD)/netboot_aead.bin $(BUILD)/netboot_aead.map: src/netboot/aead.asm src/netboot/chacha20.asm src/netboot/poly1305.asm src/netboot/qsq.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_AEAD=1 --obj=$(BUILD)/netboot_aead.bin \
 	    --mapfile=$(BUILD)/netboot_aead.map \
@@ -255,7 +255,7 @@ netboot-tls-keyschedule: $(BUILD)/netboot_tls_keyschedule.bin $(BUILD)/netboot_t
 # modules' org guards stay inert and this file sets the org once).  Standalone leaf,
 # host-verified by tls_record_test.go (seal->open round-trip + a Go framing
 # cross-check via the in-binary aead_encrypt + tamper/seq rejection).
-$(BUILD)/netboot_tls_record.bin $(BUILD)/netboot_tls_record.map: src/netboot/tls_record.asm src/netboot/aead.asm src/netboot/chacha20.asm src/netboot/poly1305.asm
+$(BUILD)/netboot_tls_record.bin $(BUILD)/netboot_tls_record.map: src/netboot/tls_record.asm src/netboot/aead.asm src/netboot/chacha20.asm src/netboot/poly1305.asm src/netboot/qsq.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_TLS_RECORD=1 --obj=$(BUILD)/netboot_tls_record.bin \
 	    --mapfile=$(BUILD)/netboot_tls_record.map \

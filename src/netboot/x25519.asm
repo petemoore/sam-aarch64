@@ -6,7 +6,7 @@
 ; reduced" form: every operation folds its result below 2^255 but not necessarily
 ; below p = 2^255 - 19; fe_freeze produces the canonical < p form for output).
 ; The Z80 has no multiply, so this is byte-radix (radix 2^8) big-integer code:
-;   * mul8          — 8x8 -> 16 shift-add
+;   * mul8          — 8x8 -> 16 quarter-square multiply (qsq.asm)
 ;   * fe_schoolbook — the 32x32 -> 64-byte product
 ;   * fe_mul        — schoolbook + reduction mod 2^255-19
 ;   * fe_add/fe_sub — modular add/subtract
@@ -89,13 +89,6 @@ FE_2P:          defb &DA, &FF, &FF, &FF, &FF, &FF, &FF, &FF
 ; 121665 = 0x0001DB41 (little-endian byte0=0x41, byte1=0xDB, byte2=0x01).
 FE_121665:      defb &41, &DB, &01
                 defs 29
-
-; qsq_table — the quarter-square multiply lookup, QSQ[n] = floor(n^2/4) for
-; n = 0..510, 511 little-endian 16-bit entries (1022 bytes). mul8 computes
-; a*b = QSQ[a+b] - QSQ[|a-b|]. It is pure regenerable scratch (qsq_init rebuilds
-; it from a running recurrence, no multiply needed), so it lives in RAM ABOVE the
-; module image — costing zero file/ROM bytes — rather than as emitted data.
-qsq_table:      equ &C000
 
 ; ===========================================================================
 ; fe_add — FE_OUT = (FE_A + FE_B) mod p.  Clobbers A, BC, DE, HL.
@@ -239,94 +232,11 @@ fe_frz_sub:
                 ret
 
 ; ---------------------------------------------------------------------------
-; mul8 — HL = A * E (8x8 -> 16) via the quarter-square identity
-;   a*b = floor((a+b)^2/4) - floor((a-b)^2/4) = QSQ[a+b] - QSQ[|a-b|],
-; exact because a+b and a-b share parity (their sum 2a is even), so each floor
-; is exact. Two table lookups + a 16-bit subtract replace the 8-iteration
-; shift-add loop — the hot inner multiply of the whole field layer. The table
-; (qsq_table) must already be built; x25519 builds it once at entry, and the
-; host field tests call qsq_init after load. Documented opcodes only.
-; In: A, E = the two byte operands (D is ignored). Out: HL = A*E.
-; Clobbers A, BC, DE, HL. (Every caller reloads BC/DE after the call, so mul8
-; does not preserve them — that saves the push/pop on the hot inner multiply.)
-; ---------------------------------------------------------------------------
-mul8:
-                ld      b, a                    ; B = multiplier
-                ld      c, e                    ; C = multiplicand
-                ; QSQ[a+b]: build the sum index (0..510) in HL, fetch the entry.
-                add     a, e                    ; A = (a+b) & 0xFF, CF = bit8
-                ld      l, a
-                ld      h, 0
-                rl      h                       ; H = bit8 -> HL = a+b (0..510)
-                add     hl, hl                  ; 2*(a+b) for the 16-bit stride
-                ld      de, qsq_table
-                add     hl, de
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)                 ; DE = QSQ[a+b]
-                push    de                      ; save QSQ[a+b]
-                ; QSQ[|a-b|]: build the |difference| index, fetch the entry.
-                ld      a, b
-                sub     c                       ; A = a-b, CF if a<b
-                jr      nc, mul8_diff_pos
-                neg                             ; A = b-a (absolute value)
-mul8_diff_pos:
-                ld      l, a
-                ld      h, 0
-                add     hl, hl                  ; 2*|a-b|
-                ld      de, qsq_table
-                add     hl, de
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)                 ; DE = QSQ[|a-b|]
-                pop     hl                      ; HL = QSQ[a+b]
-                or      a                       ; clear carry
-                sbc     hl, de                  ; HL = QSQ[a+b] - QSQ[|a-b|] = a*b
-                ret
-
-; ---------------------------------------------------------------------------
-; qsq_init — build qsq_table: QSQ[n] = floor(n^2/4) for n = 0..510, via the
-; recurrence QSQ[n] = QSQ[n-2] + (n-1) (exact, pure 16-bit adds, no multiply).
-; Runs once before any mul8. Clobbers A, BC, DE, HL.
-; ---------------------------------------------------------------------------
-qsq_init:
-                ld      hl, qsq_table
-                ld      (hl), 0                 ; QSQ[0] = 0
-                inc     hl
-                ld      (hl), 0
-                inc     hl
-                ld      (hl), 0                 ; QSQ[1] = 0
-                inc     hl
-                ld      (hl), 0
-                inc     hl                      ; HL -> &QSQ[2]
-                ld      bc, 1                   ; BC = (n-1); n starts at 2
-qsq_init_loop:
-                dec     hl
-                dec     hl
-                dec     hl
-                dec     hl                      ; HL -> &QSQ[n-2]
-                ld      e, (hl)
-                inc     hl
-                ld      d, (hl)                 ; DE = QSQ[n-2]
-                inc     hl
-                inc     hl
-                inc     hl                      ; HL -> &QSQ[n]
-                ex      de, hl                  ; HL = QSQ[n-2], DE = &QSQ[n]
-                add     hl, bc                  ; HL = QSQ[n-2] + (n-1) = QSQ[n]
-                ex      de, hl                  ; DE = QSQ[n], HL = &QSQ[n]
-                ld      (hl), e
-                inc     hl
-                ld      (hl), d
-                inc     hl                      ; HL -> &QSQ[n+1]
-                inc     bc                      ; advance (n-1)
-                ; stop once (n-1) reaches 510 (i.e. QSQ[510] just written): B=1,C=254
-                ld      a, b
-                cp      1
-                jr      nz, qsq_init_loop
-                ld      a, c
-                cp      254
-                jr      nz, qsq_init_loop
-                ret
+; mul8 (8x8 -> 16, quarter-square) + qsq_init + the qsq_table equate — the shared
+; i102 multiply, extracted to qsq.asm and included by both x25519.asm and
+; poly1305.asm. The x25519 entry calls qsq_init once at entry; the host field
+; tests call qsq_init after load.
+                include "qsq.asm"
 
 ; ---------------------------------------------------------------------------
 ; fe_schoolbook — FE_PROD (64 bytes) = FE_A (32) * FE_B (32), schoolbook.
