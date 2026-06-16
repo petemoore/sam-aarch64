@@ -1153,7 +1153,31 @@ main_dir_equ_do_insert:
 ; Mac-side reference: refenc/pass1.go:194-203.
 main_dir_org_pass1:
                 call    main_eval_first_imm         ; expr_result = target
+; Backward .org is an error in pass 1 too — without this, pass 1 sets
+; PASS_PC backward and computes garbage label addresses before pass 2's
+; mirror check catches it (tag a1; mirrors Go pass1.go:297).  PASS_PC
+; tracks the low 32 bits, so compare target's low 32 against PASS_PC
+; within the current origin window.  A leading origin .org (e.g.
+; 0xfffffff0_00000000) has low 32 == PASS_PC == 0 at the start of the
+; pass, so it is not backward.
+                ld      a, (expr_result + 0)
+                ld      hl, PASS_PC
+                sub     (hl)
+                ld      a, (expr_result + 1)
+                inc     hl
+                sbc     a, (hl)
+                ld      a, (expr_result + 2)
+                inc     hl
+                sbc     a, (hl)
+                ld      a, (expr_result + 3)
+                inc     hl
+                sbc     a, (hl)                      ; CY = (target_low32 < PASS_PC)
+                jp      c, main_dir_org_backward
                 jp      main_dir_org_set_pc
+
+main_dir_org_backward:
+                ld      a, &a1
+                jp      fail_with_tag               ; tag a1: backward .org
 
 ; ---- .org (pass 2) — zero-fill from current PC to target ------------
 ;
