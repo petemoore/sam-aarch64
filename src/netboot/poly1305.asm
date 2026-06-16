@@ -263,9 +263,8 @@ poly_mul_inner:
                 inc     hl
                 ld      (poly_rp), hl
                 ld      e, a
-                ld      d, 0
                 ld      a, (poly_ai)            ; multiplier = A[i]
-                call    mul8                    ; HL = A[i] * R[j]   (<= 0xFE01)
+                call    mul8                    ; HL = A[i] * R[j]   (<= 0xFE01; mul8 ignores D)
 
                 ld      de, (poly_pq)           ; HL += PROD[i+j]
                 ld      a, (de)
@@ -391,8 +390,7 @@ poly_mul5_loop:
                 inc     hl
                 ld      (poly_rp), hl
                 ld      e, 5
-                ld      d, 0
-                call    mul8                    ; HL = HIGH[i] * 5
+                call    mul8                    ; HL = HIGH[i] * 5 (mul8 ignores D)
                 ld      a, (poly_car)
                 ld      c, a
                 ld      b, 0
