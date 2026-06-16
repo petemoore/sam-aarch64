@@ -48,6 +48,16 @@ fe_pp:          defs 2                  ; &PROD[i] in the schoolbook outer loop
 fe_ai:          defs 1                  ; a[i], the current multiplier byte
 fe_car:         defs 1                  ; the inner-loop byte carry
 
+; --- Karatsuba working set (fe_schoolbook, the 32x32 multiply) ---
+k_mul_a:        defs 2                  ; kmul16 operand-A base pointer
+k_mul_b:        defs 2                  ; kmul16 operand-B base pointer
+k_mul_d:        defs 2                  ; kmul16 32-byte destination pointer
+KDA:            defs 16                 ; |a_lo - a_hi| (16-byte absolute difference)
+KDB:            defs 16                 ; |b_lo - b_hi|
+KM:             defs 34                 ; |a_lo-a_hi| * |b_lo-b_hi| (32 bytes + 2 zero slack)
+KZ1:            defs 34                 ; the middle coefficient z1 = z0 + z2 -/+ KM
+k_sign:         defs 1                  ; sign of (a_lo-a_hi)*(b_lo-b_hi): 0 = +, 1 = -
+
 INV_I:          defs 32                 ; fe_invert: the saved input i
 INV_C:          defs 32                 ; fe_invert: the running accumulator
 inv_a:          defs 1                  ; fe_invert: the addition-chain step counter
@@ -325,39 +335,192 @@ fe_frz_sub:
                                                 ; tls_record -> aead -> poly1305 (first)
 
 ; ---------------------------------------------------------------------------
-; fe_schoolbook — FE_PROD (64 bytes) = FE_A (32) * FE_B (32), schoolbook.
-; PROD zeroed first; each row i adds A[i]*B[j] into PROD[i+j] with a running
-; carry, then the final carry is propagated upward.  The inner loop holds its
-; running pointers in IX (B source) and IY (PROD dest) across the mul8 call —
-; mul8 preserves IX/IY — so each iteration avoids reloading and storing the
-; pointers through memory, which dominated the old per-byte cost.  The other
-; byte-radix loops (fe_sqr_schoolbook off-diagonal, fe_mul121665, fe_mul38_high)
-; use the same IX/IY idiom.  Clobbers A, BC, DE, HL, IX, IY.
+; fe_schoolbook — FE_PROD (64 bytes) = FE_A (32) * FE_B (32) via one level of
+; Karatsuba.  Split each operand at the 16-byte boundary: a = a_lo + a_hi*2^128,
+; b = b_lo + b_hi*2^128.  Then
+;   a*b = z0 + z1*2^128 + z2*2^256,  where
+;   z0 = a_lo*b_lo,  z2 = a_hi*b_hi,  z1 = a_lo*b_hi + a_hi*b_lo.
+; Karatsuba computes z1 with one extra half-multiply instead of two, using the
+; subtractive identity  z1 = z0 + z2 - (a_lo-a_hi)*(b_lo-b_hi).  Working with the
+; *absolute* differences |a_lo-a_hi|, |b_lo-b_hi| keeps both multiply operands
+; exactly 16 bytes (no carry-out to special-case); the sign of their product is
+; tracked in one bit (k_sign) and decides whether z1 = z0+z2 - m or z0+z2 + m.
+; Three 16x16 schoolbooks (768 mul8) replace the flat 32x32 (1024 mul8); the
+; combine is a handful of multi-byte adds/subs.  Clobbers A, BC, DE, HL, IX, IY.
 ; ---------------------------------------------------------------------------
 fe_schoolbook:
-                ld      hl, FE_PROD             ; zero PROD (65 bytes)
-                ld      (hl), 0
-                ld      de, FE_PROD + 1
-                ld      bc, 64
-                ldir
-
-                ld      hl, FE_A
-                ld      (fe_ap), hl
+                ld      hl, FE_A                ; z0 = a_lo * b_lo -> PROD[0..31]
+                ld      (k_mul_a), hl
+                ld      hl, FE_B
+                ld      (k_mul_b), hl
                 ld      hl, FE_PROD
+                ld      (k_mul_d), hl
+                call    kmul16
+
+                ld      hl, FE_A + 16           ; z2 = a_hi * b_hi -> PROD[32..63]
+                ld      (k_mul_a), hl
+                ld      hl, FE_B + 16
+                ld      (k_mul_b), hl
+                ld      hl, FE_PROD + 32
+                ld      (k_mul_d), hl
+                call    kmul16
+
+                ; KDA = |a_lo - a_hi|, KDB = |b_lo - b_hi|; k_sign = sign(product).
+                ld      hl, FE_A                ; KDA = a_lo (then subtract a_hi)
+                ld      de, KDA
+                ld      bc, 16
+                ldir
+                ld      hl, KDA
+                ld      de, FE_A + 16
+                or      a
+                ld      b, 16
+fe_kda_sub:
+                ld      a, (de)
+                ld      c, a
+                ld      a, (hl)
+                sbc     a, c
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    fe_kda_sub
+                ld      a, 0                    ; CF (final borrow) survives ld/inc/djnz
+                jr      nc, fe_kda_done         ; a_lo >= a_hi -> positive, sign 0
+                ld      hl, KDA                 ; negate KDA in place (16-byte two's complement)
+                or      a
+                ld      b, 16
+fe_kda_neg:
+                ld      a, 0
+                sbc     a, (hl)
+                ld      (hl), a
+                inc     hl
+                djnz    fe_kda_neg
+                ld      a, 1
+fe_kda_done:
+                ld      (k_sign), a             ; provisional sign = sign(a_lo - a_hi)
+
+                ld      hl, FE_B                ; KDB = b_lo (then subtract b_hi)
+                ld      de, KDB
+                ld      bc, 16
+                ldir
+                ld      hl, KDB
+                ld      de, FE_B + 16
+                or      a
+                ld      b, 16
+fe_kdb_sub:
+                ld      a, (de)
+                ld      c, a
+                ld      a, (hl)
+                sbc     a, c
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    fe_kdb_sub
+                ld      a, 0
+                jr      nc, fe_kdb_done
+                ld      hl, KDB                 ; negate KDB in place
+                or      a
+                ld      b, 16
+fe_kdb_neg:
+                ld      a, 0
+                sbc     a, (hl)
+                ld      (hl), a
+                inc     hl
+                djnz    fe_kdb_neg
+                ld      a, 1
+fe_kdb_done:
+                ld      hl, k_sign              ; k_sign = sign(a_lo-a_hi) XOR sign(b_lo-b_hi)
+                xor     (hl)
+                ld      (hl), a
+
+                ld      hl, KDA                 ; KM = |a_lo-a_hi| * |b_lo-b_hi|
+                ld      (k_mul_a), hl
+                ld      hl, KDB
+                ld      (k_mul_b), hl
+                ld      hl, KM
+                ld      (k_mul_d), hl
+                call    kmul16
+                xor     a                       ; KM is 32 bytes; zero the 2-byte slack
+                ld      (KM + 32), a            ; so the 34-byte add/sub below reads 0 there
+                ld      (KM + 33), a
+
+                ld      hl, FE_PROD             ; KZ1 = z0 (low 32 bytes of the product)
+                ld      de, KZ1
+                ld      bc, 32
+                ldir
+                xor     a
+                ld      (KZ1 + 33), a           ; KZ1[33] = 0 (KZ1[32] set from the carry below)
+                ld      hl, KZ1                 ; KZ1 += z2 (PROD[32..63]); carry -> KZ1[32]
+                ld      de, FE_PROD + 32
+                ld      b, 32
+                call    kadd
+                ld      a, 0
+                adc     a, 0
+                ld      (KZ1 + 32), a           ; KZ1 = z0 + z2 (33 bytes)
+
+                ld      a, (k_sign)             ; z1 = (z0+z2) - m  (sign +) or + m (sign -)
+                or      a
+                jr      nz, fe_z1_addm
+                ld      hl, KZ1
+                ld      de, KM
+                ld      b, 34
+                call    ksub                    ; KZ1 -= KM
+                jr      fe_z1_done
+fe_z1_addm:
+                ld      hl, KZ1
+                ld      de, KM
+                ld      b, 34
+                call    kadd                    ; KZ1 += KM
+fe_z1_done:
+                ld      hl, FE_PROD + 16        ; PROD[16..] += z1 (the middle coefficient)
+                ld      de, KZ1
+                ld      b, 34
+                call    kadd                    ; HL -> PROD+50, CF = carry-out of byte 49
+                ld      a, 0
+                adc     a, 0
+fe_asm_cprop:
+                or      a                       ; propagate the carry up through PROD[50..63]
+                ret     z
+                ld      c, a
+                ld      a, (hl)
+                add     a, c
+                ld      (hl), a
+                inc     hl
+                ld      a, 0
+                adc     a, 0
+                jr      fe_asm_cprop
+
+; ---------------------------------------------------------------------------
+; kmul16 — (k_mul_d)[0..31] = (k_mul_a)[0..15] * (k_mul_b)[0..15], schoolbook.
+; Zeroes the 32-byte destination, then for each row i adds A[i]*B[j] into
+; dest[i+j] with a running carry (final row carry propagated at dest[i+16]).
+; The inner loop holds its pointers in IX (B source) and IY (dest) across the
+; mul8 call (mul8 preserves IX/IY).  Clobbers A, BC, DE, HL, IX, IY + fe_ai/fe_car.
+; ---------------------------------------------------------------------------
+kmul16:
+                ld      hl, (k_mul_d)           ; zero dest (32 bytes)
+                ld      (hl), 0
+                push    hl
+                ld      d, h
+                ld      e, l
+                inc     de
+                ld      bc, 31
+                ldir
+                pop     hl                      ; HL = dest base
                 ld      (fe_pp), hl
-                ld      b, 32                   ; outer: i = 0..31
-fe_sb_outer:
+                ld      hl, (k_mul_a)
+                ld      (fe_ap), hl
+                ld      b, 16                   ; outer: i = 0..15
+kmul16_outer:
                 push    bc
                 ld      hl, (fe_ap)
                 ld      a, (hl)
                 ld      (fe_ai), a
-
-                ld      ix, FE_B                ; B source pointer, held across the inner loop
-                ld      iy, (fe_pp)             ; PROD dest pointer, held across the inner loop
+                ld      ix, (k_mul_b)           ; B source, held across the inner loop
+                ld      iy, (fe_pp)             ; dest pointer, held across the inner loop
                 xor     a
                 ld      (fe_car), a
-                ld      b, 32                   ; inner: j = 0..31
-fe_sb_inner:
+                ld      b, 16                   ; inner: j = 0..15
+kmul16_inner:
                 push    bc
                 ld      a, (ix+0)               ; B[j]
                 inc     ix
@@ -369,7 +532,7 @@ fe_sb_inner:
                 ld      a, (iy+0)
                 ld      c, a
                 ld      b, 0
-                add     hl, bc                  ; += PROD[i+j]
+                add     hl, bc                  ; += dest[i+j]
                 ld      a, (fe_car)
                 ld      c, a
                 ld      b, 0
@@ -381,14 +544,14 @@ fe_sb_inner:
                 ld      a, h
                 ld      (fe_car), a
                 pop     bc
-                djnz    fe_sb_inner
+                djnz    kmul16_inner
 
-                push    iy                      ; add final carry at PROD[i+32]..
+                push    iy                      ; add final carry at dest[i+16]..
                 pop     de
                 ld      a, (fe_car)
-fe_sb_carry:
+kmul16_carry:
                 or      a
-                jr      z, fe_sb_carry_done
+                jr      z, kmul16_carry_done
                 ld      c, a
                 ld      a, (de)
                 add     a, c
@@ -396,8 +559,8 @@ fe_sb_carry:
                 inc     de
                 ld      a, 0
                 adc     a, 0
-                jr      fe_sb_carry
-fe_sb_carry_done:
+                jr      kmul16_carry
+kmul16_carry_done:
                 ld      hl, (fe_ap)
                 inc     hl
                 ld      (fe_ap), hl
@@ -405,7 +568,36 @@ fe_sb_carry_done:
                 inc     hl
                 ld      (fe_pp), hl
                 pop     bc
-                djnz    fe_sb_outer
+                djnz    kmul16_outer
+                ret
+
+; ---------------------------------------------------------------------------
+; kadd — (HL)[0..B-1] += (DE)[0..B-1], little-endian, with carry.  On return CF
+; is the final carry-out and HL/DE point one past the operands.  Clobbers A.
+; ksub — the matching (HL) -= (DE); on return CF is the final borrow.
+; ---------------------------------------------------------------------------
+kadd:
+                or      a                       ; clear carry-in
+kadd_loop:
+                ld      a, (de)
+                adc     a, (hl)
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    kadd_loop
+                ret
+
+ksub:
+                or      a                       ; clear borrow-in
+ksub_loop:
+                ld      a, (de)                 ; subtrahend (no sbc a,(de) on Z80)
+                ld      c, a
+                ld      a, (hl)
+                sbc     a, c
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    ksub_loop
                 ret
 
 ; ---------------------------------------------------------------------------
