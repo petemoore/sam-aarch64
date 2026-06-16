@@ -4,7 +4,12 @@ Status: **in progress.** The cipher-suite primitives below are all built and
 host-verified; this doc is the plan for composing them into a working TLS 1.3
 client. Bricks **1 (key schedule), 2 (record), 3 (ClientHello), 4 (server-flight
 parser), 5 (transcript)** are landed (standalone, host-verified leaves); only the
-capstone **brick 6 (state machine)** remains, and it is gated on q17. i88 is the project's **lowest-priority** work (build only
+capstone **brick 6 (state machine)** remains. **q17 (the `&10000` memory budget) is
+RESOLVED** (Pete 2026-06-15: use paging, the agent owns the layout), so brick 6 is
+unblocked on memory architecture; its remaining gate is the bootable/hardware integration
+(the real `RST 8` path on Trinity, partly hardware-gated like `http_main`). The host-side
+Go authority that brick 6 mirrors is fully unblocked — see
+`docs/plans/tls-go-authority-plan.md`. i88 is the project's **lowest-priority** work (build only
 when nothing else remains) — see `docs/notes/item-registry-open.md` i88 and
 `phase3-delivery-design.md` §7 for the rationale (the active firmware-fetch path is
 plain HTTP via `cdn.githubraw.com` + a SHA-256 content pin; TLS is the durable
@@ -151,9 +156,9 @@ Each is a standalone, host-verified PR, mirroring the primitive cadence:
 6. **The state machine** (`tls_client_*`): drive 1→5 over `tcp_conn.asm` — send CH,
    read+decrypt the server flight, derive keys, verify server Finished, send client
    Finished, switch to application keys, then run the HTTP GET through
-   `tls_record_seal`/`open`. This is the integration capstone (see q17 — memory
-   budget + the tcp_conn streaming integration; partly hardware-gated like
-   `http_main`).
+   `tls_record_seal`/`open`. This is the integration capstone (q17 resolved — use
+   paging; the remaining gate is the tcp_conn streaming + the bootable/hardware
+   integration, partly hardware-gated like `http_main`).
 
 ## Verification strategy
 
@@ -174,18 +179,18 @@ Each is a standalone, host-verified PR, mirroring the primitive cadence:
 - **Settled (RFC-mechanical or Pete's prior scope):** the cipher suite (one
   suite), no cert-chain validation (content is SHA-256-pinned), 1-RTT only, SNI =
   the github host, X25519-only groups.
-- **Open → q17** (the crux): the **SAM RAM / `&10000` memory budget** for putting
-  the *whole* TLS stack into the bootable fetch. Today the primitives are standalone
-  leaves *not* in the bootable image; a real TLS fetch must carry SHA-256 + HMAC +
-  HKDF + Expand-Label + ChaCha20 + Poly1305 + X25519 + AEAD + the handshake code +
-  their working buffers (X25519 alone needs ~1 KB of field temporaries; AEAD ~4 KB;
-  the server flight — github's cert chain is several KB — must be buffered to
-  decrypt). The bootable `netboot_http_boot.bin` already ends near `&FA52`. Whether
-  the combined stack fits under `&10000`, or needs paging / a dedicated overlay
-  loaded only for the one-time fetch, is an **architecture decision Pete should
-  weigh in on** before the capstone (brick 6) is built. Bricks 1–5 are
-  host-verifiable standalone leaves and do **not** depend on this — they proceed
-  regardless; only the bootable integration is gated. A secondary, minor open point
-  (agent will default to "verify"): whether to verify the **server Finished** MAC
-  given cert-verification is skipped (it proves the peer derived the same handshake
-  secret; cheap and correct to verify, so the default is yes).
+- **Resolved (was q17, the crux): the SAM RAM / `&10000` memory budget** for putting
+  the *whole* TLS stack into the bootable fetch. The primitives are standalone leaves
+  *not* in the bootable image; a real TLS fetch must carry SHA-256 + HMAC + HKDF +
+  Expand-Label + ChaCha20 + Poly1305 + X25519 + AEAD + the handshake code + their
+  working buffers (X25519 alone needs ~1 KB of field temporaries; AEAD ~4 KB; the
+  server flight — github's cert chain is several KB — must be buffered to decrypt),
+  and `netboot_http_boot.bin` already ends near `&FA52`, so it will not all fit
+  resident. **q17 RESOLVED (Pete 2026-06-15): use paging — the agent owns the layout.**
+  The plan: **(c)** stream-and-discard the server flight (no cert-chain buffering, since
+  cert validation is skipped) for RAM headroom, **+ (a)** page the TLS code + working
+  buffers in for the one-time fetch (ENCTAB-COMET-trampoline style; a rare, slow paged
+  path is fine). Shrinking the combined footprint to ease the paging is tracked as
+  **i102** (the crypto T-state/size optimizations — all four leaves now optimized).
+  Bricks 1–5 are host-verifiable standalone leaves regardless. **Server Finished** MAC:
+  **verified** (it proves the peer derived the same handshake secret; cheap and correct).
