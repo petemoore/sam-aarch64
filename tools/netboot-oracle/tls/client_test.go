@@ -8,57 +8,25 @@ package tls
 
 import (
 	"bytes"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	gotls "crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/hex"
 	"fmt"
 	"io"
-	"math/big"
 	"net"
 	"strings"
 	"testing"
 	"time"
 )
 
-// selfSignedCert builds a throwaway ECDSA-P256 certificate for the test server.
-// We offer ecdsa_secp256r1_sha256, so the server can sign CertificateVerify with
-// it. We never validate it (i88 scope), but TLS 1.3 requires the server present one.
+// selfSignedCert is the test-side wrapper over buildServerCert (capture.go), the
+// shared throwaway ECDSA-P256 certificate for the in-process server.
 func selfSignedCert(t *testing.T) gotls.Certificate {
 	t.Helper()
-	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	cert, err := buildServerCert()
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "test"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-		DNSNames:     []string{"github.com"},
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return gotls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv}
-}
-
-// readRecord reads one full TLS record (5-byte header + payload) from conn.
-func readRecord(conn net.Conn) ([]byte, error) {
-	hdr := make([]byte, 5)
-	if _, err := io.ReadFull(conn, hdr); err != nil {
-		return nil, err
-	}
-	n := int(hdr[3])<<8 | int(hdr[4])
-	body := make([]byte, n)
-	if _, err := io.ReadFull(conn, body); err != nil {
-		return nil, err
-	}
-	return append(hdr, body...), nil
+	return cert
 }
 
 func serverConfig(t *testing.T, keylog io.Writer) *gotls.Config {
