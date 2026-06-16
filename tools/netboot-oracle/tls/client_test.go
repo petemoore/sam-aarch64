@@ -73,7 +73,11 @@ func serverConfig(t *testing.T, keylog io.Writer) *gotls.Config {
 	}
 }
 
-func TestHandshakeAgainstCryptoTLS(t *testing.T) {
+// driveHandshake runs c through a complete 1-RTT handshake against a real
+// crypto/tls.Server over net.Pipe and returns the server's SSLKEYLOGFILE output.
+// It fails the test if the handshake does not complete.
+func driveHandshake(t *testing.T, c *Client) string {
+	t.Helper()
 	cli, srv := net.Pipe()
 	deadline := time.Now().Add(10 * time.Second)
 	cli.SetDeadline(deadline)
@@ -87,11 +91,6 @@ func TestHandshakeAgainstCryptoTLS(t *testing.T) {
 		srv.Close()
 		srvErr <- err
 	}()
-
-	c, err := NewClient("github.com")
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	tx := c.First()
 	if _, err := cli.Write(tx); err != nil {
@@ -123,8 +122,47 @@ func TestHandshakeAgainstCryptoTLS(t *testing.T) {
 	if c.Phase() != PhaseDone {
 		t.Fatalf("client phase = %d, want PhaseDone", c.Phase())
 	}
+	return keylog.String()
+}
 
-	checkKeylog(t, keylog.String(), c)
+func TestHandshakeAgainstCryptoTLS(t *testing.T) {
+	c, err := NewClient("github.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkKeylog(t, driveHandshake(t, c), c)
+}
+
+// TestDeterministicClient: NewClientDeterministic is reproducible (same inputs ->
+// identical ClientHello), the raw scalar round-trips, and a deterministic client
+// still completes a real handshake. This is the foundation of the Z80 brick-6
+// capture-then-replay oracle (the port plan, Part 2/3).
+func TestDeterministicClient(t *testing.T) {
+	var priv, random, sid [32]byte
+	for i := range priv {
+		priv[i] = byte(i + 1)
+		random[i] = byte(i*3 + 7)
+		sid[i] = byte(i*5 + 0x40)
+	}
+	mk := func() *Client {
+		c, err := NewClientDeterministic("github.com", priv[:], random, sid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	// Same key/random/sid -> identical ClientHello record (so the Z80 port, fed
+	// the same inputs, builds the same message).
+	if !bytes.Equal(mk().First(), mk().First()) {
+		t.Error("ClientHello not deterministic for fixed key/random/sid")
+	}
+	// The raw scalar round-trips (the value the Z80 loads into TC_CLIENT_PRIV).
+	if got := mk().PrivateScalar(); !bytes.Equal(got, priv[:]) {
+		t.Errorf("PrivateScalar = %x, want %x", got, priv[:])
+	}
+	// A deterministic client still completes a real handshake; secrets match keylog.
+	c := mk()
+	checkKeylog(t, driveHandshake(t, c), c)
 }
 
 // checkKeylog cross-checks the four TLS 1.3 traffic secrets logged by the server

@@ -92,9 +92,30 @@ func NewClient(host string) (*Client, error) {
 	return c, nil
 }
 
+// NewClientDeterministic builds a client from a caller-supplied X25519 private
+// scalar, ClientHello.random, and legacy_session_id — for reproducible handshakes.
+// The Z80 brick-6 host test (the capture-then-replay oracle in the port plan)
+// injects the same scalar/random/sid into tls_client.asm and replays the captured
+// server records, asserting the Z80 produces byte-identical client output. priv is
+// the raw 32-byte scalar (X25519 clamps internally, on both sides).
+func NewClientDeterministic(host string, priv []byte, random, sid [32]byte) (*Client, error) {
+	pk, err := ecdh.X25519().NewPrivateKey(priv)
+	if err != nil {
+		return nil, err
+	}
+	c := &Client{priv: pk, host: host, transcript: sha256.New()}
+	c.random = random
+	c.sid = sid
+	return c, nil
+}
+
 // ClientRandom is the ClientHello.random — the key for matching this handshake's
 // secrets in a server SSLKEYLOGFILE.
 func (c *Client) ClientRandom() [32]byte { return c.random }
+
+// PrivateScalar returns the client's raw 32-byte X25519 scalar — the value to
+// load into the Z80 port's TC_CLIENT_PRIV so its ECDHE matches this client's.
+func (c *Client) PrivateScalar() []byte { return c.priv.Bytes() }
 
 // Schedule returns the derived key schedule (handshake secrets after ServerHello,
 // application secrets after the server Finished).
