@@ -26,18 +26,39 @@ the i88 row). The whole effort lives on a feature branch per CLAUDE.md §5 until
 
 ---
 
-## Part 0 — prerequisite: dedupe the one shared double-include (sha256), via a `-D` flag
+## Part 0 — prerequisite: resolve the TWO cross-brick collisions (sha256 + qsq)
 
-**Why:** bricks 1-5 each `include` their full dependency chain as standalone
-leaves. In the 6a include set (the five bricks + `x25519`), exactly **one** leaf
-is reachable via two paths and so is emitted twice — `sha256.asm`, via
-`tls_keyschedule`→`hkdf_expand_label`→`hkdf`→`hmac_sha256`→`sha256` **and** via
-`tls_server_flight`→`tls_transcript`→`sha256`. Tracing the rest: `hkdf_expand_label`/
-`hkdf`/`hmac_sha256` come only through key-schedule; `tls_transcript` only through
-server-flight; `aead`/`chacha20`/`poly1305` only through `tls_record`; `x25519`/
-`tls_client_hello` pull nothing. So **sha256 is the sole collision.** A second
-emission redefines every `sha256` label → an assembly error. (The org guard
-`if defined(NETBOOT_STANDALONE)` only guards the `org`, not the body.)
+**Verified 2026-06-16** by actually building the composition (`pyz80 -D
+NETBOOT_TLS_CLIENT=1` over a skeleton `tls_client.asm` including the five bricks
++ `x25519`) and intersecting the standalone brick symbol maps. There are **two**
+distinct collisions, of two different kinds — the original plan only saw the first:
+
+**(1) sha256 — a double-INCLUDE.** `sha256.asm` is reachable via two include paths:
+`tls_keyschedule`→`hkdf_expand_label`→`hkdf`→`hmac_sha256`→`sha256` **and**
+`tls_server_flight`→`tls_transcript`→`sha256`. A second emission redefines every
+`sha256` label → assembly error. (The org guard `if defined(NETBOOT_STANDALONE)`
+only guards the `org`, not the body.) **Fix:** flag-suppress the second include
+(below).
+
+**(2) qsq — a duplicate DEFINITION across two bricks.** `poly1305.asm` (via
+`tls_record`→`aead`) and `x25519.asm` each independently define the i102
+quarter-square multiply: the symbols `mul8`, `mul8_diff_pos`, `qsq_init`,
+`qsq_init_loop` and the `QSQ`/`qsq_table` (511 LE 16-bit entries, `a·b =
+QSQ[a+b] − QSQ[|a−b|]`). They were never in one binary before 6a. The two are the
+**same algorithm + same table** (poly1305's was ported from x25519's, i102 #319→
+#320) — confirmed they differ only in comments. Build fails at
+`poly1305.asm: Symbol mul8: ... used twice`. (Map-intersection confirms these
+four + the QSQ table are the *only* non-sha256 cross-brick collisions: the other
+shared leaves — hmac/hkdf/expand_label/transcript — are each on a single path.)
+**Fix:** extract the shared quarter-square into a new `src/netboot/qsq.asm` leaf
+that both `poly1305.asm` and `x25519.asm` `include` (replacing their in-file
+copies), then flag-suppress one of the two includes in the composite (same `-D`
+pattern as sha256). This is a clean DRY win independent of 6a, but it **refactors
+i102-optimized crypto multiply** — do it as its own PR, gated on `poly1305_test`
++ `x25519_test` + `aead_test` staying green (correctness is the gate; byte-identity
+is not required for these host tests). It touches sensitive optimized code, so it
+wants careful (ideally fresh) context — this is why the probe stopped here and
+documented rather than rushing it.
 
 **Do NOT use a generic include-once guard.** pyz80 (verified by reading
 `pyz80/pyz80.py` + a reproducer, 2026-06-16) runs exactly **two passes** and
@@ -88,10 +109,19 @@ passes resolve forward references either way). (If 6b later composes another
 sha256 source, e.g. `tcp_conn` under `NETBOOT_HOSTTEST`, apply the same one-line
 flag-suppression there.)
 
-**Verification:** `tls_client.asm` assembles with sha256 present once; every
-standalone brick/leaf build stays byte-identical (run the `make ci-netboot-z80`
-brick targets + `tls_*_test.go`). A reproducer for the pyz80 two-pass behaviour
-lived in `/tmp` during this analysis; the conclusion above is what matters.
+The **qsq** collision (2) gets the *same* `-D NETBOOT_TLS_CLIENT` flag-suppression
+once it is a shared `qsq.asm` leaf: in the composite, `poly1305.asm` (via the
+`tls_record` chain) and `x25519.asm` both `include "qsq.asm"`, so suppress one of
+those two includes under the flag — qsq then arrives exactly once. The qsq
+**extraction** itself (moving the shared multiply out of both files into
+`qsq.asm`) is the prerequisite PR; the flag-suppression of the duplicate include
+folds into the 6a composite PR alongside sha256's.
+
+**Verification:** `tls_client.asm` assembles with sha256 AND qsq each present once;
+every standalone brick/leaf build stays correct (run the `make ci-netboot-z80`
+brick targets + `tls_*_test.go`; `poly1305_test`/`x25519_test`/`aead_test` gate the
+qsq extraction). A reproducer for the pyz80 two-pass behaviour lived in `/tmp`
+during this analysis; the conclusions above are what matter.
 
 ---
 
@@ -108,11 +138,12 @@ lived in `/tmp` during this analysis; the conclusion above is what matters.
                 include "tls_record.asm"         ; brick 2 (+ aead→chacha20+poly1305)
                 include "tls_client_hello.asm"   ; brick 3
                 include "tls_server_flight.asm"  ; brick 4 (+ tls_transcript; its sha256 suppressed, Part 0)
-                include "x25519.asm"             ; ECDHE + client pubkey
-; sha256 is emitted exactly once — via the key-schedule chain — because
-; tls_transcript's own sha256 include is flag-suppressed in this composite
-; (Part 0). pyz80 is 2-pass, so forward refs resolve regardless of order;
-; keeping tls_keyschedule first is just for readability, not correctness.
+                include "x25519.asm"             ; ECDHE + client pubkey (+ qsq, the second qsq path)
+; Part 0 dedups TWO shared bits so each is emitted once: (1) sha256 — emitted via
+; the key-schedule chain; tls_transcript's own sha256 include is flag-suppressed.
+; (2) qsq (the i102 quarter-square multiply) — once it is a shared qsq.asm leaf,
+; it arrives via tls_record→aead→poly1305 AND via x25519; flag-suppress one of
+; those two includes. pyz80 is 2-pass, so forward refs resolve regardless of order.
 ```
 
 Build with `-D NETBOOT_TLS_CLIENT=1` (so each leaf's `NETBOOT_STANDALONE` org
