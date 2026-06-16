@@ -190,6 +190,62 @@ func TestFEMul(t *testing.T) {
 	}
 }
 
+// TestFESqr: the dedicated symmetric squarer must equal a^2 mod p. fe_sqr is the
+// dominant x25519 win (the ladder squares 4x per step + 254x in fe_invert), so it
+// gets both a math/big reference pin here and a direct fe_sqr-vs-fe_mul(a,a)
+// cross-check (TestFESqrMatchesMul) on a wider input set.
+func TestFESqr(t *testing.T) {
+	p := fePrime()
+	for _, a := range feElements() {
+		got := feOp1(t, "fe_sqr", a)
+		assertReduced(t, "fe_sqr", got)
+		want := new(big.Int).Mod(new(big.Int).Mul(a, a), p)
+		if new(big.Int).Mod(leToBig(got), p).Cmp(want) != 0 {
+			t.Errorf("fe_sqr(%x): got %x (mod p %x), want %x",
+				feToLE32(a), got, feToLE32(new(big.Int).Mod(leToBig(got), p)), feToLE32(want))
+		}
+	}
+}
+
+// TestFESqrMatchesMul cross-checks fe_sqr(a) == fe_mul(a,a) for a spread of
+// deterministic pseudo-random elements < 2^255 — exercising carry chains the
+// 11-element feElements set doesn't reach. Reuses one machine: each op rewrites
+// its inputs and FE_OUT, so state carries over safely.
+func TestFESqrMatchesMul(t *testing.T) {
+	mac := loadFE(t)
+	feA := mustSym(t, mac, "FE_A")
+	feB := mustSym(t, mac, "FE_B")
+	feOut := mustSym(t, mac, "FE_OUT")
+	// A simple LCG over 32 bytes gives reproducible operands without an import.
+	seed := uint32(0x12345678)
+	next := func() []byte {
+		b := make([]byte, 32)
+		for i := range b {
+			seed = seed*1664525 + 1013904223
+			b[i] = byte(seed >> 16)
+		}
+		b[31] &= 0x7f // keep < 2^255
+		return b
+	}
+	for n := 0; n < 256; n++ {
+		a := next()
+		mac.Write(feA, a)
+		if _, err := mac.CallEntry("fe_sqr", z80h.Entry{}); err != nil {
+			t.Fatalf("fe_sqr: %v", err)
+		}
+		sq := append([]byte(nil), mac.Read(feOut, 32)...)
+		mac.Write(feA, a)
+		mac.Write(feB, a)
+		if _, err := mac.CallEntry("fe_mul", z80h.Entry{}); err != nil {
+			t.Fatalf("fe_mul: %v", err)
+		}
+		ml := mac.Read(feOut, 32)
+		if !bytes.Equal(sq, ml) {
+			t.Fatalf("fe_sqr(%x)=%x != fe_mul(a,a)=%x", a, sq, ml)
+		}
+	}
+}
+
 func TestFEMul121665(t *testing.T) {
 	p := fePrime()
 	c := big.NewInt(121665)

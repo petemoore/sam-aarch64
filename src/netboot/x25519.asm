@@ -181,6 +181,19 @@ fe_mul121665:
                 ldir
                 jr      fe_mul
 
+; ===========================================================================
+; fe_sqr — FE_OUT = (FE_A)^2 mod p.  Squaring is symmetric — every off-diagonal
+; product a[i]*a[j] (i<j) appears twice — so a dedicated squarer computes the 496
+; off-diagonal byte products once, doubles, then adds the 32 diagonal a[i]^2
+; terms: ~528 mul8 calls vs the 1024 of fe_mul(a,a).  The Montgomery ladder is
+; squaring-heavy (4 of every ladderstep's ~10 multiplies, plus 254 in fe_invert),
+; so this is the dominant x25519 win.  Clobbers A, BC, DE, HL + scratch.
+; ===========================================================================
+fe_sqr:
+                call    fe_sqr_schoolbook       ; FE_PROD = FE_A^2 (64 bytes)
+                call    fe_reduce_prod          ; FE_ACC = FE_PROD mod p (< 2^255)
+                jr      fe_store_out
+
 ; ---------------------------------------------------------------------------
 ; fe_store_out — copy FE_ACC[0..31] to FE_OUT.  (Shared op tail.)
 ; ---------------------------------------------------------------------------
@@ -327,6 +340,146 @@ fe_sb_carry_done:
                 ret
 
 ; ---------------------------------------------------------------------------
+; fe_sqr_schoolbook — FE_PROD (64 bytes) = FE_A (32) squared, exploiting symmetry.
+;   c = sum_i a[i]^2 * 256^(2i)  +  2 * sum_{i<j} a[i]*a[j] * 256^(i+j)
+; Phase 1 accumulates the strictly-upper-triangle off-diagonal sum into PROD (row
+; i multiplies a[i] by a[i+1..31] into PROD[2i+1..], 496 products total — half a
+; full schoolbook).  Phase 2 doubles PROD in place (left shift by 1).  Phase 3
+; adds the 32 diagonal a[i]^2 terms at PROD[2i].  The exact square stays < 2^512,
+; so the doubled-then-diagonal sum never carries past PROD[63].
+; Clobbers A, BC, DE, HL.
+; ---------------------------------------------------------------------------
+fe_sqr_schoolbook:
+                ld      hl, FE_PROD             ; zero PROD (65 bytes)
+                ld      (hl), 0
+                ld      de, FE_PROD + 1
+                ld      bc, 64
+                ldir
+
+                ; --- phase 1: off-diagonal sum_{i<j} a[i]*a[j] at PROD[i+j] ---
+                ld      hl, FE_A
+                ld      (fe_ap), hl             ; &a[i], i = 0..30
+                ld      hl, FE_PROD + 1
+                ld      (fe_pp), hl             ; &PROD[2i+1]
+                ld      b, 31                   ; outer i = 0..30; B = 31-i = inner count
+fe_sqr_outer:
+                push    bc                      ; [outer counter]
+                ld      hl, (fe_ap)
+                ld      a, (hl)
+                ld      (fe_ai), a              ; a[i]
+                inc     hl
+                ld      (fe_rp), hl             ; b-source starts at a[i+1]
+                ld      hl, (fe_pp)
+                ld      (fe_pq), hl             ; PROD dest starts at PROD[2i+1]
+                xor     a
+                ld      (fe_car), a
+                                                ; B still = outer counter = inner count
+fe_sqr_inner:
+                push    bc
+                ld      hl, (fe_rp)
+                ld      a, (hl)
+                inc     hl
+                ld      (fe_rp), hl
+                ld      e, a
+                ld      d, 0
+                ld      a, (fe_ai)
+                call    mul8                    ; HL = a[i] * a[j]
+
+                ld      de, (fe_pq)
+                ld      a, (de)
+                ld      c, a
+                ld      b, 0
+                add     hl, bc                  ; += PROD[i+j]
+                ld      a, (fe_car)
+                ld      c, a
+                ld      b, 0
+                add     hl, bc                  ; += carry
+
+                ld      a, l
+                ld      (de), a
+                inc     de
+                ld      (fe_pq), de
+                ld      a, h
+                ld      (fe_car), a
+                pop     bc
+                djnz    fe_sqr_inner
+
+                ld      de, (fe_pq)             ; propagate the final row carry upward
+                ld      a, (fe_car)
+fe_sqr_carry:
+                or      a
+                jr      z, fe_sqr_carry_done
+                ld      c, a
+                ld      a, (de)
+                add     a, c
+                ld      (de), a
+                inc     de
+                ld      a, 0
+                adc     a, 0
+                jr      fe_sqr_carry
+fe_sqr_carry_done:
+                ld      hl, (fe_ap)             ; &a[i] += 1
+                inc     hl
+                ld      (fe_ap), hl
+                ld      hl, (fe_pp)             ; &PROD[2i+1] += 2
+                inc     hl
+                inc     hl
+                ld      (fe_pp), hl
+                pop     bc
+                djnz    fe_sqr_outer
+
+                ; --- phase 2: PROD *= 2 (little-endian left shift across 64 bytes) ---
+                ld      hl, FE_PROD
+                ld      b, 64
+                or      a                       ; clear carry into bit 0
+fe_sqr_double:
+                ld      a, (hl)
+                rla                             ; A <<= 1 through carry; CF = old bit7
+                ld      (hl), a
+                inc     hl
+                djnz    fe_sqr_double
+
+                ; --- phase 3: add the diagonal a[i]^2 at PROD[2i], i = 0..31 ---
+                ld      hl, FE_A
+                ld      (fe_ap), hl
+                ld      hl, FE_PROD
+                ld      (fe_pp), hl             ; &PROD[2i]
+                ld      b, 32
+fe_sqr_diag:
+                push    bc
+                ld      hl, (fe_ap)
+                ld      a, (hl)
+                inc     hl
+                ld      (fe_ap), hl
+                ld      e, a                    ; E = a[i]; A = a[i] (mul8 ignores D)
+                call    mul8                    ; HL = a[i]^2
+
+                ld      de, (fe_pp)
+                ld      a, (de)                 ; PROD[2i] += low byte
+                add     a, l
+                ld      (de), a
+                inc     de
+                ld      a, (de)                 ; PROD[2i+1] += high byte + carry
+                adc     a, h
+                ld      (de), a
+                inc     de
+                jr      nc, fe_sqr_diag_adv
+fe_sqr_diag_cprop:
+                ld      a, (de)                 ; propagate the carry upward
+                inc     a
+                ld      (de), a
+                inc     de
+                jr      z, fe_sqr_diag_cprop    ; a 0xFF->0x00 wrap carries on
+fe_sqr_diag_adv:
+                ld      hl, (fe_pp)             ; &PROD[2i] += 2
+                inc     hl
+                inc     hl
+                ld      (fe_pp), hl
+                pop     bc
+                djnz    fe_sqr_diag
+                ret
+
+; ---------------------------------------------------------------------------
 ; fe_reduce_prod — FE_ACC = FE_PROD (64 bytes) mod p, result < 2^255.
 ; Fold the high half in via 2^256 ≡ 38, then fe_reduce33.
 ; Clobbers A, BC, DE, HL.
@@ -468,7 +621,7 @@ cp32:
 ; fe_invert — FE_OUT = FE_A^(p-2) mod p = FE_A^-1 (Fermat's little theorem).
 ; A faithful port of TweetNaCl's inv25519: c = i; for a = 253..0: c = c^2, and
 ; c = c*i except at a == 2 and a == 4 (the addition chain for the exponent
-; p-2 = 2^255 - 21).  Squaring is fe_mul(c, c).  Clobbers everything + scratch.
+; p-2 = 2^255 - 21).  Squaring uses fe_sqr.  Clobbers everything + scratch.
 ; ===========================================================================
 fe_invert:
                 ld      hl, FE_A                ; INV_I = i ; INV_C = i
@@ -484,10 +637,7 @@ fe_inv_loop:
                 ld      hl, INV_C
                 ld      de, FE_A
                 call    cp32
-                ld      hl, INV_C
-                ld      de, FE_B
-                call    cp32
-                call    fe_mul
+                call    fe_sqr
                 ld      hl, FE_OUT
                 ld      de, INV_C
                 call    cp32
@@ -588,9 +738,7 @@ ladderstep:
 
                 ld      hl, LA                  ; AA = A^2
                 call    to_A
-                ld      hl, LA
-                call    to_B
-                call    fe_mul
+                call    fe_sqr
                 ld      de, LAA
                 call    from_OUT
 
@@ -604,9 +752,7 @@ ladderstep:
 
                 ld      hl, LB                  ; BB = B^2
                 call    to_A
-                ld      hl, LB
-                call    to_B
-                call    fe_mul
+                call    fe_sqr
                 ld      de, LBB
                 call    from_OUT
 
@@ -659,9 +805,7 @@ ladderstep:
                 call    from_OUT
                 ld      hl, LT1
                 call    to_A
-                ld      hl, LT1
-                call    to_B
-                call    fe_mul
+                call    fe_sqr
                 ld      de, LX3
                 call    from_OUT
 
@@ -674,9 +818,7 @@ ladderstep:
                 call    from_OUT
                 ld      hl, LT1
                 call    to_A
-                ld      hl, LT1
-                call    to_B
-                call    fe_mul
+                call    fe_sqr
                 ld      de, LT2
                 call    from_OUT
                 ld      hl, LX1
