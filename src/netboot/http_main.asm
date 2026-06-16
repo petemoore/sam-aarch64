@@ -24,13 +24,14 @@
 ; B-DOS HSAVE write) is the only non-host-verifiable part (CLAUDE.md §5).
 ;
 ; This file is built incrementally per docs/plans/z80-http-main-port-plan.md.
-; It currently carries: the composition of the three include trees;
-; prov_start — the per-file connection re-init (port/ISS/state reset, path +
-; pinned-hash wiring, the bodySink seam armed); and store_begin/store_end — the
-; per-file store double (the Z80 port of the Go MemStore) that demarcates each
-; file's slice of CONN_SINK_OUT and records its verify verdict. The prov_first/
-; prov_onframe/prov_next packet loop and the bootable migration land in the
-; remaining bricks.
+; It currently carries: the composition of the three include trees; prov_start —
+; the per-file connection re-init (port/ISS/state reset, path + host + pinned-hash
+; wiring, the bodySink seam armed); store_begin/store_end — the per-file store
+; double (the Z80 port of the Go MemStore) that demarcates each file's slice of
+; CONN_SINK_OUT and records its verify verdict; and prov_first/prov_onframe/
+; prov_next — the rx-driven download loop over the manifest (the port of
+; Provisioner.First/OnFrame/Next). The bootable migration to this loop is the
+; remaining brick.
 
                 include "netboot_http.asm"      ; org &8000 + the fetch machine +
                                                 ; tcp_conn (+ streaming/verify under
@@ -138,13 +139,16 @@ ps_mac_zero:    ld      (hl), a
                 call    conn_verify_init
                 pop     bc                      ; restore BC=i
 
-                ; --- step 7: fw_plan_path(BC=i) -> HTTP_PATH_PTR = FW_PATH ---
+                ; --- step 7: fw_plan_path(BC=i) -> HTTP_PATH_PTR = FW_PATH;
+                ;             HTTP_HOST_PTR = FW_HOST (every fetch's Host header) ---
                 ; fw_plan_path clobbers BC (returns path length in BC on exit).
                 ; Save i across the call so we can recover it for step 8.
                 push    bc                      ; save BC=i
                 call    fw_plan_path            ; BC=i in -> HL=FW_PATH, BC=path_len out
                 ld      hl, FW_PATH
                 ld      (HTTP_PATH_PTR), hl
+                ld      hl, FW_HOST
+                ld      (HTTP_HOST_PTR), hl
                 pop     bc                      ; restore BC=i
 
                 ; --- step 8: fw_manifest_entry(BC=i) -> copy rec+4 -> CONN_PINNED_HASH;
@@ -275,3 +279,94 @@ store_end:
 store_begin:    ret
 store_end:      ret
                 endif
+
+; ===========================================================================
+; Brick 6 — the rx-driven download loop: prov_first / prov_onframe / prov_next,
+; the Z80 port of Provisioner.First / OnFrame / Next.
+;
+; The driver walks files 0..PROV_FILE_COUNT-1 of the manifest, one TCP connection
+; per file, reusing the single-file fetch phase machine (http_fetch_first /
+; http_fetch_onframe) for the per-file wire work and adding only the cross-file
+; sequencing:
+;
+;   tx := prov_first              ; file 0's ARP — the first frame on the wire
+;   loop:
+;     drv_write tx
+;     rx := drv_read
+;     call prov_onframe           ; BC = this frame's reply (or 0); PROV_STATUS set
+;     PROV_CONTINUE  : keep going (BC is the fetch's reply)
+;     PROV_FILE_DONE : drv_write BC (the FIN-ACK); tx := prov_next ; loop
+;     PROV_ALL_DONE  : drv_write BC (the last FIN-ACK); done
+;
+; PROV_STATUS mirrors the Go Status enum (Continue=0 / FileDone=1 / AllDone=2).
+; The done edge is FETCH_PHASE == PH_DONE (the fetch's FIN moved the connection to
+; FIN_WAIT). On done, store_end closes the file (verify + record verdict) and the
+; idx-vs-count compare picks FileDone or AllDone — exactly Provisioner.OnFrame.
+; ===========================================================================
+PROV_CONTINUE:  equ 0           ; still fetching the current file
+PROV_FILE_DONE: equ 1           ; current file complete; more remain
+PROV_ALL_DONE:  equ 2           ; last file complete; the plan is exhausted
+
+; ---------------------------------------------------------------------------
+; prov_first — start file 0's fetch (the Z80 port of Provisioner.First).
+; Out: BC = the broadcast ARP frame length (the first frame on the wire).
+; ---------------------------------------------------------------------------
+prov_first:
+                ld      hl, 0
+                ld      (PROV_IDX), hl          ; idx = 0
+                ld      bc, 0
+                call    prov_start              ; prov_start(0): per-file re-init
+                jp      http_fetch_first        ; ARP, BC = frame length
+
+; ---------------------------------------------------------------------------
+; prov_onframe — drive the current file's fetch with one received frame (the Z80
+; port of Provisioner.OnFrame). Sets PROV_STATUS; on file completion runs
+; store_end (verify + record verdict) and reports AllDone (last file) or FileDone.
+; Out: BC = bytes transmitted (the fetch's reply / the FIN-ACK; 0 if none).
+; ---------------------------------------------------------------------------
+prov_onframe:
+                call    http_fetch_onframe      ; BC = tx length (0 if none)
+                ld      a, (FETCH_PHASE)
+                cp      PH_DONE
+                jr      z, prov_onframe_done
+                ; still fetching: PROV_STATUS = Continue, BC = the fetch's reply.
+                ld      a, PROV_CONTINUE
+                ld      (PROV_STATUS), a
+                ret
+prov_onframe_done:
+                ; file complete: close the store (verify + record verdict). store_end
+                ; clobbers BC, so save the tx length (this file's FIN-ACK) across it.
+                push    bc
+                call    store_end
+                pop     bc
+                ; PROV_STATUS = AllDone if idx+1 == count (last file), else FileDone.
+                ld      hl, (PROV_IDX)
+                inc     hl                      ; idx+1
+                ld      de, (PROV_FILE_COUNT)
+                or      a
+                sbc     hl, de                  ; Z iff idx+1 == count
+                ld      a, PROV_ALL_DONE
+                jr      z, prov_onframe_status
+                ld      a, PROV_FILE_DONE
+prov_onframe_status:
+                ld      (PROV_STATUS), a
+                ret                             ; BC = the FIN-ACK length
+
+; ---------------------------------------------------------------------------
+; prov_next — start the next file's fetch after a FileDone (the Z80 port of
+; Provisioner.Next). The caller must have already sent the FileDone FIN-ACK.
+; Out: BC = the next file's broadcast ARP frame length.
+; ---------------------------------------------------------------------------
+prov_next:
+                ld      hl, (PROV_IDX)
+                inc     hl
+                ld      (PROV_IDX), hl          ; idx++
+                ld      b, h
+                ld      c, l                    ; BC = idx (for prov_start)
+                call    prov_start              ; prov_start(idx): per-file re-init
+                jp      http_fetch_first        ; ARP, BC = frame length
+
+; Loop state (both builds — prov_* reference these unconditionally).
+PROV_IDX:        defw 0                 ; index of the file currently being fetched
+PROV_FILE_COUNT: defw FW_FILE_COUNT     ; number of files to fetch (host test sets it)
+PROV_STATUS:     defb PROV_CONTINUE     ; last prov_onframe status (Continue/File/All)
