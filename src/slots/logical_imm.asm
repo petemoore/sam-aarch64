@@ -681,13 +681,14 @@ encode_logical_imm_rotated:
 ; -----------------------------------------------------------------------
 ; encode_logical_imm_reject — shared reject target.
 ;
-; All reject sites in encode_logical_imm jump here (replacing their former
-; `jp fail`).  The default behaviour is unchanged: `jp fail` aborts
-; assembly.  But the MOV-bitmask alias path (intercepts.asm
-; encode_logical_imm_try) needs a recoverable "not encodable" signal so it
-; can fall through to the next alias form.  When that caller has armed the
-; soft flag, this handler instead records the rejection and RETs — landing
-; back in encode_logical_imm_try, which maps it to CY=1.
+; All reject sites in encode_logical_imm jump here.  By default
+; (encode_logical_imm_soft == 0) it does `jp fail`, aborting assembly — the
+; normal and/orr-imm behaviour.  A caller that wants a recoverable "not
+; encodable" signal instead (to try logical-imm as one alias form and fall
+; through to the next) can arm the soft flag; this handler then records the
+; rejection and RETs, mapping to CY=1 at the caller.  No caller currently arms
+; it, so reject hard-fails; the hook is kept for a future alias-fallback
+; encoder (e.g. the i48c on-SAM editor text→overlay encoder).  See i73-L9.
 ;
 ; Every reject site is at a stack-balanced point (only the encoder's own
 ; return address is on the stack), so the RET returns to the correct

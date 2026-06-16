@@ -224,8 +224,17 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
                 include "expr_eval.asm"
                 include "form_lookup.asm"
                 include "encoder.asm"
+                ; intercepts.asm (encode_ror_imm_word) and sysname.asm
+                ; (mrs/msr/dc/tlbi encoders) are the retired symbolic-encoder
+                ; path: production pre-folds every instruction in the v2 overlay
+                ; (insn_run.asm) and reaches sysregs via sysreg_data.asm, so the
+                ; only callers left are the boot self-tests (test_ror_imm.asm,
+                ; test_sysname.asm). Include them under BUILD_TESTS only — they
+                ; cost production nothing (i73-L9 / q20).
+                if defined(BUILD_TESTS)
                 include "intercepts.asm"
                 include "sysname.asm"
+                endif
                 include "reader.asm"
                 include "main_loop.asm"
                 include "insn_run.asm"

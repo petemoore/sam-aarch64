@@ -342,11 +342,10 @@ run_slot_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &00, &8c, &00, &00  ; 0x00008C00 LE
 
-; BitfieldImm Layer-1 unit tests (encode_bitfield_bfi / encode_bitfield_ubfx)
-; were removed 2026-05-29 (PR-3c) along with the now-dead
-; slots/bitfield_imm.asm.  The live bfi/ubfx path is the mnemonic-id
-; intercept (intercepts.asm::encode_bitfield_word); it stays covered
-; end-to-end by tests/paged/sources/inst_bitfield.s, which byte-matches GNU.
+; BitfieldImm Layer-1 unit tests were removed 2026-05-29 (PR-3c) along with
+; the now-dead slots/bitfield_imm.asm.  The live bfi/ubfx path is the v2
+; instruction overlay (insn_run.asm), covered end-to-end by
+; tests/paged/sources/inst_bitfield.s, which byte-matches GNU.
 
 ; All assertions passed.
                 ret

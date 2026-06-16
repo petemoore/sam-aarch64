@@ -12,12 +12,14 @@
 ;   dc <op>, Xt                 ID 78   ARM ARM C6.2.66
 ;   tlbi <op>[, Xt]             ID 79   ARM ARM C6.2.281
 ;
-; Dispatch is via try_mnemonic_intercept (intercepts.asm).  Each
-; encoder reads OPVAL_ARRAY[k] +2..+5 to get the (ptr, len) of the
-; sysname (a 16-bit pointer into STAGING_BUF and a 16-bit length, set by
-; main_parse_sys_name in main_loop.asm), looks the name up in the
-; appropriate table, packs the encoding, and returns DE:HL = 32-bit
-; word for intercept_emit_dehl to emit.
+; These encoders are the retired symbolic-encoder path: production pre-folds
+; every instruction in the v2 overlay (insn_run.asm) and reaches sysregs via
+; sysreg_data.asm, so the only callers left are the boot self-tests
+; (test_sysname.asm), and this file is included under BUILD_TESTS only (see
+; assembler.asm).  Each encoder reads OPVAL_ARRAY[k] +2..+5 to get the (ptr,
+; len) of the sysname (a 16-bit pointer into STAGING_BUF and a 16-bit length,
+; set by main_parse_sys_name in main_loop.asm), looks the name up in the
+; appropriate table, packs the encoding, and returns DE:HL = 32-bit word.
 ;
 ; Table format (compact, option-(a) in the PR brief):
 ;   [name_len u8][name_bytes...][fields...]
