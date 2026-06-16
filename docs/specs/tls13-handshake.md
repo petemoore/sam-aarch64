@@ -2,12 +2,17 @@
 
 Status: **in progress.** The cipher-suite primitives below are all built and
 host-verified; this doc is the plan for composing them into a working TLS 1.3
-client. Bricks **1 (key schedule), 2 (record), 3 (ClientHello), 4 (server-flight
-parser), 5 (transcript)** are landed (standalone, host-verified leaves); only the
-capstone **brick 6 (state machine)** remains. **q17 (the `&10000` memory budget) is
-RESOLVED** (Pete 2026-06-15: use paging, the agent owns the layout), so brick 6 is
-unblocked on memory architecture; its remaining gate is the bootable/hardware integration
-(the real `RST 8` path on Trinity, partly hardware-gated like `http_main`). The host-side
+client. Bricks **1–5** are landed (standalone, host-verified leaves) and **brick 6a
+— the record-level state machine** (`tls_client.asm`: `tls_client_init` / `_first` /
+`_on_record` / `_on_server_hello` / `_on_encrypted`) is **LANDED and host-verified
+end-to-end**: the capture-then-replay oracle (`tls/capture.go`) drives a complete
+1-RTT handshake and the Z80 reproduces the captured client Finished record **+ all
+four traffic secrets byte-for-byte** (plus an AEAD-tamper negative control). Remaining:
+**brick 6b** — the TLS-over-TCP integration + the paging layout for the bootable.
+**q17 (the `&10000` memory budget) is RESOLVED** (Pete 2026-06-15: use paging, the
+agent owns the layout), so 6b is unblocked on memory architecture; its remaining gate
+is the bootable/hardware integration (the real `RST 8` path on Trinity, partly
+hardware-gated like `http_main` brick 7). The host-side
 **Go authority that brick 6 mirrors has LANDED** (2026-06-16): `tools/netboot-oracle/tls/`
 — a `Client` that completes a real 1-RTT handshake against Go `crypto/tls.Server` over
 `net.Pipe`, cross-checking every derived secret against the server's `KeyLogWriter`. The
