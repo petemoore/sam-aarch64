@@ -520,7 +520,7 @@ kmul16_inner:
                 inc     ix
                 ld      e, a
                 ld      a, (fe_ai)
-                call    mul8                    ; HL = A[i] * B[j] (mul8 ignores D)
+                mul8_body                       ; HL = A[i] * B[j] inline (mul8 ignores D)
                 pop     bc                      ; B = counter, C = running carry
 
                 ld      a, c                    ; dest[i+j] + carry, folded into one add
@@ -632,7 +632,7 @@ fe_sqr_inner:
                 inc     ix
                 ld      e, a
                 ld      a, (fe_ai)
-                call    mul8                    ; HL = a[i] * a[j] (mul8 ignores D)
+                mul8_body                       ; HL = a[i] * a[j] inline (mul8 ignores D)
                 pop     bc                      ; B = counter, C = running carry
 
                 ld      a, c                    ; PROD[i+j] + carry, folded into one add
