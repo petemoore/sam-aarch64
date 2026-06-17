@@ -822,3 +822,36 @@ mechanical serialize seam above:
    answer.
 5. **`name-id ↔ record-id` side-tables** (§3) — for goto-label / rename; absent
    today (only the record-id→block `loc` table exists).
+
+### 8.1. i41d — Z80/SAM port decomposition (scoped 2026-06-17)
+
+The Z80 port of the (now-complete) Go authority decomposes into bricks, most of
+which are **host-verifiable in flat memory** — they need no SAM paging hardware,
+so they run under the existing **koron-go/z80 flat-memory harness**
+(`tools/netboot-oracle/z80/`), exactly as the netboot protocol routines do. The
+harness already supports the stateful drive-and-compare pattern a block-list
+needs: `Load` once, then a sequence of `Call("em_insert")`/`Call("em_delete")`/
+`Call("em_goto")` with params poked via `Write`/`WriteU16LE` and results read via
+`Read`/`Sym`, comparing the resulting line order + goto results against the i41a
+Go `Document` driven through the identical op-sequence (the proven
+`tcp_conn_test.go` shape). **No new harness scaffolding is required** — only a
+Makefile payload target + the test, gated by the existing `netboot-z80` CI job.
+
+- **Brick 1 (the clean first brick — green-on-main, NOT red-until-done):**
+  flat-memory block-list core — block storage layout, the in-block line offset
+  table, `insert`/`lineAt`(render)/`delete` with intra-block shift, **split on
+  overflow / merge on underflow**, the **record-id→block-ref location table**, and
+  **goto-by-id**. A faithful mechanical port of `editmodel.go`'s `doInsert`/
+  `doDelete`/`splitBlock`/`tryMerge`/`IndexOf`/`LineAt`/`Render` (CLAUDE.md §6).
+  Verified by a koron-go/z80 op-sequence-replay test vs the i41a `Document`.
+  Est. ~400–700 lines Z80 + ~150–250 lines harness Go. Each `src/` routine lands
+  on `main` individually green (the netboot-port precedent), not on a feature
+  branch — Brick 1 is a complete, fully-oracle-verifiable unit, not a
+  half-decoder that must stay red until the rest exists.
+- **Brick 2 — paging integration:** map blocks onto real i2 free-page-pool pages
+  via `OUT (251)`, claim/return pages on split/merge, block list resident in
+  section D. The **only** part that genuinely needs SAM paging hardware →
+  **SimCoupé-gated** (per §5.2). Not flat-memory-verifiable.
+- **Brick 3 — bounded ring-journal undo/redo** (port of i41b). Flat-memory-testable.
+- **Brick 4 — serialize/load** (the `EMDL` exact form + the real v2 `.tbn` path,
+  which on-SAM wires to the existing assembler/reader). Largely flat-memory-testable.
