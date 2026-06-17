@@ -19,19 +19,21 @@
 ;   B2c: the `#imm` operand — `add x0, x1, #4`. A `#`-prefixed or bare integer
 ;        literal becomes an OP_KIND_IMM_EXPR operand whose expression bytecode is
 ;        a single folded immediate.
-;   B3a (this): the constant-expression operand — `add x0, x1, #4+1`, `mov x0,
-;        ~0`, `mov x0, -(1+2)&7`. A `#`/int/`-`/`~`/`(`-leading operand becomes an
+;   B3a: the constant-expression operand — `add x0, x1, #4+1`, `mov x0, ~0`,
+;        `mov x0, -(1+2)&7`. A `#`/int/`-`/`~`/`(`-leading operand becomes an
 ;        OP_KIND_IMM_EXPR whose bytecode is built by a precedence-climbing parser
 ;        (port of parseExprPrec / parseExprPrimary / tokPrec, parser.go:1149-1290)
 ;        and then collapsed to a single folded immediate by a self-contained
 ;        constant evaluator (port of format.EvalConst, expr.go:223). B3a covers
-;        the operators `+ - & | ^` and the unary `- ~` plus parens; the genuinely
-;        harder iterative arithmetic — shifts `<< >>` and `* /` — and the
-;        non-constant primaries (symbol idents, `.`, local-refs, `:reloc:`) are
-;        later sub-bricks (B3a2/B3a3/B3b/B3c). The `,lsl #12` suffix, mem
-;        operands, special-form insts, directives, labels, comments and
-;        blank-runs are later bricks (B4-B7) — a line that needs one is outside
-;        this domain and sets PARSE_ERR.
+;        the operators `+ - & | ^` and the unary `- ~` plus parens.
+;   B3a2 (this): the shift operators `<< >>` (precedence 2) — `mov x0, #1<<8`,
+;        `mov x0, ~0>>1`. The fold runs a variable-count 64-bit shift: logical
+;        left and arithmetic right, with Go's >=64-count clamp (a<<n -> 0;
+;        a>>n -> sign extension). `* /` (B3a3) and the non-constant primaries
+;        (symbol idents, `.`, local-refs, `:reloc:`, B3b/B3c) remain later
+;        sub-bricks. The `,lsl #12` suffix, mem operands, special-form insts,
+;        directives, labels, comments and blank-runs are later bricks (B4-B7) —
+;        a line that needs one is outside this domain and sets PARSE_ERR.
 ;
 ; INST record (emission form — original framing for the host harness; the
 ; OPERAND bytes are byte-faithful to format.OperandWriter):
@@ -70,6 +72,8 @@ EXPR_OP_SUB:     equ &11
 EXPR_OP_AND:     equ &14
 EXPR_OP_OR:      equ &15
 EXPR_OP_XOR:     equ &16
+EXPR_OP_SHL:     equ &17
+EXPR_OP_SHR:     equ &18
 EXPR_OP_NEG:     equ &20
 EXPR_OP_NOT:     equ &21
 
@@ -393,9 +397,9 @@ ppr_err:
 ; ===========================================================================
 ; tok_prec — binary-operator precedence for a token kind. (Port of tokPrec,
 ; parser.go:1149-1163.) Entry: A = token kind. Exit: A = precedence, or 0xFF
-; when the token is not a B3a binary operator (the `<< >> * /` operators are
-; later sub-bricks, so they read as not-an-operator here and end the
-; expression). Clobbers F only.
+; when the token is not yet a binary operator (the `* /` operators are later
+; sub-bricks, so they read as not-an-operator here and end the expression).
+; Clobbers F only.
 ; ===========================================================================
 tok_prec:
                 cp      TOK_PIPE
@@ -404,15 +408,21 @@ tok_prec:
                 jr      z, tp_0
                 cp      TOK_AMP
                 jr      z, tp_1
+                cp      TOK_SHL
+                jr      z, tp_2
+                cp      TOK_SHR
+                jr      z, tp_2
                 cp      TOK_PLUS
                 jr      z, tp_3
                 cp      TOK_MINUS
                 jr      z, tp_3
-                ld      a, &FF              ; not a B3a operator
+                ld      a, &FF              ; not yet an operator
                 ret
 tp_0:           xor     a                   ; precedence 0 (| ^)
                 ret
 tp_1:           ld      a, 1                ; precedence 1 (&)
+                ret
+tp_2:           ld      a, 2                ; precedence 2 (<< >>)
                 ret
 tp_3:           ld      a, 3                ; precedence 3 (+ -)
                 ret
@@ -433,6 +443,10 @@ expr_emit_binop:
                 jr      z, eeb_or
                 cp      TOK_CARET
                 jr      z, eeb_xor
+                cp      TOK_SHL
+                jr      z, eeb_shl
+                cp      TOK_SHR
+                jr      z, eeb_shr
                 scf
                 ret
 eeb_add:        ld      a, EXPR_OP_ADD
@@ -444,6 +458,10 @@ eeb_and:        ld      a, EXPR_OP_AND
 eeb_or:         ld      a, EXPR_OP_OR
                 jr      eeb_emit
 eeb_xor:        ld      a, EXPR_OP_XOR
+                jr      eeb_emit
+eeb_shl:        ld      a, EXPR_OP_SHL
+                jr      eeb_emit
+eeb_shr:        ld      a, EXPR_OP_SHR
 eeb_emit:
                 call    expr_emit_byte
                 or      a                   ; clear carry: success
@@ -593,6 +611,10 @@ fold_loop:
                 jp      z, fold_do_or
                 cp      EXPR_OP_XOR
                 jp      z, fold_do_xor
+                cp      EXPR_OP_SHL
+                jp      z, fold_do_shl
+                cp      EXPR_OP_SHR
+                jp      z, fold_do_shr
                 cp      EXPR_OP_NEG
                 jp      z, fold_do_neg
                 cp      EXPR_OP_NOT
@@ -756,6 +778,142 @@ fno_loop:
                 inc     hl
                 djnz    fno_loop
                 jp      fold_loop
+
+; fold_do_shl — a << b (logical left, port of applyBinary(OpShl)). The shift
+; count is uint64(b): a count >= 64 yields 0 (Go's >=width-shift rule), else a
+; is shifted left `count` bits.
+fold_do_shl:
+                call    fold_ab_ptrs        ; HL -> a (value), DE -> b (count)
+                jp      c, fold_fail
+                call    fold_shift_count    ; A = count (CY set if >= 64); HL kept
+                jr      c, fshl_big
+                or      a
+                jr      z, fshl_done        ; count 0 -> unchanged
+                ld      b, a
+fshl_loop:
+                call    shl1_8
+                djnz    fshl_loop
+fshl_done:
+                call    fold_pop1
+                jp      fold_loop
+fshl_big:
+                call    fold_zero_a         ; count >= 64 -> 0
+                call    fold_pop1
+                jp      fold_loop
+
+; fold_do_shr — a >> b (arithmetic right, port of applyBinary(OpShr); a is
+; int64). A count >= 64 yields the sign extension of a (0 if a >= 0, -1 if
+; a < 0), else a is shifted right `count` bits with the sign preserved.
+fold_do_shr:
+                call    fold_ab_ptrs        ; HL -> a (value), DE -> b (count)
+                jp      c, fold_fail
+                call    fold_shift_count
+                jr      c, fshr_big
+                or      a
+                jr      z, fshr_done
+                ld      b, a
+fshr_loop:
+                call    sra1_8
+                djnz    fshr_loop
+fshr_done:
+                call    fold_pop1
+                jp      fold_loop
+fshr_big:
+                call    fold_signext_a      ; count >= 64 -> sign extension
+                call    fold_pop1
+                jp      fold_loop
+
+; shl1_8 — one-bit logical left shift of the 8-byte LE value at HL. HL/BC kept.
+shl1_8:
+                push    hl
+                push    bc
+                sla     (hl)                ; byte0: bit7 -> CY, bit0 <- 0
+                ld      b, 7
+shl1_loop:
+                inc     hl
+                rl      (hl)                ; bytes 1..7: CY <- in, bit7 -> CY
+                djnz    shl1_loop
+                pop     bc
+                pop     hl
+                ret
+
+; sra1_8 — one-bit arithmetic right shift of the 8-byte LE value at HL (sign
+; bit preserved). HL/BC kept.
+sra1_8:
+                push    hl
+                push    bc
+                ld      bc, 7
+                add     hl, bc              ; HL -> byte7 (MSB)
+                sra     (hl)                ; byte7: bit0 -> CY, bit7 preserved
+                ld      b, 7
+sra1_loop:
+                dec     hl
+                rr      (hl)                ; bytes 6..0: CY <- in, bit0 -> CY
+                djnz    sra1_loop
+                pop     bc
+                pop     hl
+                ret
+
+; fold_shift_count — DE -> the 8-byte LE shift count b. Exit: CY clear with
+; A = count (0..63) when uint64(b) < 64 (b's bytes 1..7 all zero and byte0 <=
+; 63); CY set when uint64(b) >= 64 (covers b >= 64 and any negative b, whose
+; uint64 cast is huge). HL/DE preserved. Clobbers A, B.
+fold_shift_count:
+                push    de
+                inc     de                  ; DE -> b byte1
+                ld      b, 7
+fsc_hiloop:
+                ld      a, (de)
+                or      a
+                jr      nz, fsc_hi_nonzero   ; a high byte set -> >= 64 (or negative)
+                inc     de
+                djnz    fsc_hiloop
+                pop     de
+                ld      a, (de)             ; byte0 (bytes 1..7 are zero)
+                cp      64
+                jr      nc, fsc_toobig      ; byte0 >= 64 -> >= 64
+                or      a                   ; clear carry; A = count
+                ret
+fsc_hi_nonzero:
+                pop     de
+fsc_toobig:
+                scf
+                ret
+
+; fold_zero_a — set the 8-byte value at HL to 0. HL/BC kept.
+fold_zero_a:
+                push    hl
+                push    bc
+                ld      b, 8
+                xor     a
+fza_loop:
+                ld      (hl), a
+                inc     hl
+                djnz    fza_loop
+                pop     bc
+                pop     hl
+                ret
+
+; fold_signext_a — set the 8-byte value at HL to the sign extension of its MSB
+; (0x00.. or 0xFF.. by byte7's bit7). HL/BC kept.
+fold_signext_a:
+                push    hl
+                push    bc
+                push    hl                  ; base for the fill
+                ld      bc, 7
+                add     hl, bc              ; HL -> byte7 (MSB)
+                ld      a, (hl)
+                add     a, a                ; bit7 -> CY
+                sbc     a, a                ; A = 0x00 / 0xFF
+                pop     hl                  ; HL -> base
+                ld      b, 8
+fsa_loop:
+                ld      (hl), a
+                inc     hl
+                djnz    fsa_loop
+                pop     bc
+                pop     hl
+                ret
 
 ; fold_ab_ptrs — for a binary op: HL -> the second-from-top cell (a), DE -> the
 ; top cell (b). CY set (and registers undefined) if fewer than two cells.
