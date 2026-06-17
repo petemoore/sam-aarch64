@@ -56,7 +56,15 @@
 ; host-verifiable: a real TCP handshake against a live server — gated on real
 ; Trinity (CLAUDE.md §5). Emulation-verified is not hardware-verified.
 
+                ; tcp_conn is the org provider for every netboot build that
+                ; composes it (the standalone tcp_conn, http_get, netboot_http and
+                ; the host-test http_main binaries all inherit this &8000). The one
+                ; exception is the real bootable (NETBOOT_STREAM): there the
+                ; composing http_main.asm owns the org so it can place a `jp
+                ; http_main` at &8000 — the address the boot AUTO BASIC CALLs.
+                if defined(NETBOOT_STREAM)==0
                 org     &8000
+                endif
 
 ; Inbound frame offsets (mirror tcp/tcp.go; CRX_ prefix to avoid a clash with
 ; the build_tcp_segment TCP_OFF_* equates it includes). The connection is keyed
@@ -294,12 +302,12 @@ conn_payload_len:
 ; In:  HL = payload length.  Clobbers: A, BC, DE, HL.
 ; ---------------------------------------------------------------------------
 conn_accumulate:
-                if defined(NETBOOT_HOSTTEST)
-                ; Streaming is host-test-only until the q16-gated http_main
-                ; migration; the bootable image (no NETBOOT_HOSTTEST) carries
-                ; neither the sink branch nor its buffers, so the boot footprint
-                ; is unchanged. CONN_SINK_ENABLED is 0 by default, so even in the
-                ; host build the legacy path is taken unless a test opts in.
+                if defined(NETBOOT_HOSTTEST) | defined(NETBOOT_STREAM)
+                ; The streaming sink builds into the host harness
+                ; (NETBOOT_HOSTTEST) and the real bootable (NETBOOT_STREAM).
+                ; CONN_SINK_ENABLED selects the path at run time: 0 (the default)
+                ; takes the legacy CONN_DATA accumulate; the bootable sets it to 1
+                ; so the body streams in bounded windows to the HSAVE store leaf.
                 ld      a, (CONN_SINK_ENABLED)
                 or      a
                 jp      nz, conn_accumulate_sink
@@ -321,15 +329,14 @@ conn_accumulate:
                 ld      (CONN_DATA_LEN), hl
                 ret
 
-                if defined(NETBOOT_HOSTTEST)
+                if defined(NETBOOT_HOSTTEST) | defined(NETBOOT_STREAM)
 ; --- streaming: append to CONN_FLUSH_BUF, flush full windows -----------------
 ; Mirrors conn.go::acceptPayload's sink branch. First copy the whole payload to
 ; the tail of CONN_FLUSH_BUF (advancing CONN_FLUSH_LEN), then flush as many full
 ; windows as the buffer now holds, copying any overflow down to the front so the
 ; backing store stays bounded (the Z80 analogue of the Go copy-down reslice).
-; Host-test-only: the bootable image (no NETBOOT_HOSTTEST) never streams (the
-; q16-gated http_main migration will add the real flush), so the sink code + its
-; buffers are excluded to keep the boot footprint under &10000.
+; Built into both the host harness (NETBOOT_HOSTTEST) and the real bootable
+; (NETBOOT_STREAM): the bootable flushes each full window to the HSAVE store leaf.
 conn_accumulate_sink:
                 ; --- append payload to the buffer tail ---
                 push    hl                     ; save payload length
@@ -385,7 +392,7 @@ conn_flush_loop:
 ; Clobbers: A, BC, DE, HL.
 ; ---------------------------------------------------------------------------
 conn_flush_final:
-                if defined(NETBOOT_HOSTTEST)
+                if defined(NETBOOT_HOSTTEST) | defined(NETBOOT_STREAM)
                 ld      a, (CONN_SINK_ENABLED)
                 or      a
                 ret     z                      ; legacy: CONN_DATA already complete
@@ -398,10 +405,10 @@ conn_flush_final:
                 ld      (CONN_FLUSH_LEN), hl
                 ret
                 else
-                ret                            ; streaming not built (host-test only)
+                ret                            ; streaming not built into this target
                 endif
 
-                if defined(NETBOOT_HOSTTEST)
+                if defined(NETBOOT_HOSTTEST) | defined(NETBOOT_STREAM)
 ; ---------------------------------------------------------------------------
 ; storage_sink_flush — the Brick 3 dispatcher: sets HL = CONN_FLUSH_BUF (the
 ; front of the flush buffer), BC = flush length (passed in HL by the caller),
@@ -435,14 +442,20 @@ storage_sink_flush:
                 jp      (ix)
 ssf_leaf:
                 jp      storage_sink_leaf
+                endif  ; NETBOOT_HOSTTEST | NETBOOT_STREAM (flush dispatcher)
 
+                if defined(NETBOOT_HOSTTEST)
 ; ---------------------------------------------------------------------------
-; storage_sink_leaf — the hash + record body (the renamed pre-Brick-3 core of
-; storage_sink_flush). Takes an arbitrary ptr + len so body_sink_write can call
-; it after the header skip (the body starts at an offset inside the window, not
-; necessarily at CONN_FLUSH_BUF front).
+; storage_sink_leaf — the hash + record body (the host-test recording double).
+; Takes an arbitrary ptr + len so body_sink_write can call it after the header
+; skip (the body starts at an offset inside the window, not necessarily at
+; CONN_FLUSH_BUF front).
 ;
-; This is a TEST DOUBLE for the real B-DOS bounded write (q16/hardware-gated).
+; This is a TEST DOUBLE for the real B-DOS bounded write (q16/hardware-gated):
+; host builds record the streamed bytes here so the oracle tests can inspect
+; them. The real bootable (NETBOOT_STREAM, no NETBOOT_HOSTTEST) supplies its own
+; storage_sink_leaf in http_main.asm — the fw_span + bdos_seam HSAVE-per-record
+; store — so this recording double is host-test-only.
 ;
 ; In:  HL = pointer to bytes to hash + record, BC = length.
 ; Clobbers: A, BC, DE, HL, IX.
@@ -487,7 +500,9 @@ storage_sink_leaf:
                 inc     hl
                 ld      (CONN_SINK_CHUNK_COUNT), hl
                 ret
+                endif  ; NETBOOT_HOSTTEST (recording double)
 
+                if defined(NETBOOT_HOSTTEST) | defined(NETBOOT_STREAM)
 CONN_SINK_FILTER_MODE: defb 0             ; 0 = raw (storage_sink_leaf); 1 = via CONN_SINK_FILTER
 CONN_SINK_FILTER: defw  storage_sink_leaf ; filter fn pointer; composed build sets body_sink_write
 
@@ -535,7 +550,7 @@ conn_vf_mismatch:
                 xor     a                      ; a byte differed: mismatch
                 ld      (CONN_HASH_MATCH), a
                 ret
-                endif  ; NETBOOT_HOSTTEST (streaming sink)
+                endif  ; NETBOOT_HOSTTEST | NETBOOT_STREAM (filter + verify)
 
 ; ---------------------------------------------------------------------------
 ; conn_build_and_send — fill the build_tcp_segment param block from the
@@ -703,36 +718,56 @@ CONN_DATA:        defs 4096                ; accumulated response body (test ins
 ; legacy CONN_DATA path is byte-identical and every existing oracle test stays
 ; green. A host test opts in by writing CONN_SINK_ENABLED=1 + a window into
 ; CONN_FLUSH_WINDOW before any data segment arrives, then reads CONN_SINK_OUT /
-; CONN_SINK_CHUNKS to assert the streamed bytes / chunk boundaries.
+; CONN_SINK_CHUNKS to assert the streamed bytes / chunk boundaries. The bootable
+; (NETBOOT_STREAM) enables the sink at boot and sets the window to the HSAVE
+; record cap; its real store leaf (http_main.asm) writes each window to Trinity.
 ;
-; The real B-DOS bounded write (the q16/hardware-gated flush to Trinity storage)
-; binds in storage_sink_flush — NOT here; CONN_SINK_OUT/CONN_SINK_CHUNKS are a
-; test double for host verification only.
-;
-; Host-test-only (NETBOOT_HOSTTEST): these ~6.6 KB of streaming buffers are
-; excluded from the bootable image (which never streams until the q16-gated
-; http_main migration), keeping its footprint under &10000.
+; Two tiers of state:
+;   * SHARED (NETBOOT_HOSTTEST | NETBOOT_STREAM) — the flush machinery's own
+;     working state + the SHA-256 verify state. Both the host harness and the
+;     real bootable carry these.
+;   * RECORDING DOUBLE (NETBOOT_HOSTTEST only) — CONN_SINK_OUT / CONN_SINK_CHUNKS,
+;     where the host build records the streamed bytes for the oracle tests to
+;     inspect. The bootable does not record (its leaf HSAVEs instead), so these
+;     ~4.5 KB stay out of the boot footprint.
 ; ===========================================================================
-                if defined(NETBOOT_HOSTTEST)
+                if defined(NETBOOT_HOSTTEST) | defined(NETBOOT_STREAM)
+; Shared flush working state.
+                if defined(NETBOOT_STREAM)
+; Bootable: the flush window equals the HSAVE record cap (http_main.asm's
+; FW_RECORD_CAP). The buffer must hold one full window plus one maximum inbound
+; TCP payload (a full Ethernet frame, <=1464 body bytes) before the window
+; drains — so CONN_FLUSH_BUF_LEN >= FW_RECORD_CAP + 1464. With FW_RECORD_CAP =
+; 4096 that is 5560; 6144 gives margin. (If q22 raises the cap on hardware, bump
+; this to keep cap + 1464 <= CONN_FLUSH_BUF_LEN.)
+CONN_FLUSH_BUF_LEN: equ 6144
+                else
+CONN_FLUSH_BUF_LEN: equ 2048                ; host-test: oracle tests use small windows
+                endif
 CONN_SINK_ENABLED: defs 1                  ; 0 = legacy accumulate; !=0 = stream
-CONN_FLUSH_WINDOW: defs 2                   ; flush chunk size (the test sets it)
+CONN_FLUSH_WINDOW: defs 2                   ; flush chunk size (boot/test sets it)
 CONN_FLUSH_LEN:    defs 2                   ; bytes currently buffered toward a flush
-CONN_FLUSH_BUF:    defs 2048                ; >= the max window the test uses
-CONN_SINK_OUT_LEN: defs 2                   ; bytes streamed to the test sink so far
-CONN_SINK_CHUNK_COUNT: defs 2              ; number of recorded flushes
-CONN_SINK_CHUNKS:  defs 512                 ; per-flush length list (<=256 entries, 2 B each)
-CONN_SINK_OUT:     defs 4096                ; concatenation of all flushes (test inspects)
+CONN_FLUSH_BUF:    defs CONN_FLUSH_BUF_LEN  ; >= one window + one max inbound payload
 
 ; Streamed-body SHA-256 verify state (i100, q15 option c). conn_verify_init
 ; resets the running hash; storage_sink_flush feeds each flushed window into it;
 ; conn_verify_final writes the digest into CONN_HASH and sets CONN_HASH_MATCH by
-; comparing it against CONN_PINNED_HASH (the caller fills the pin). All
-; host-test-only (NETBOOT_HOSTTEST), like the rest of the streaming sink, so the
-; bootable image carries no SHA-256 code or state.
+; comparing it against CONN_PINNED_HASH (the caller fills the pin). Shared by
+; both builds — the bootable verifies each fetched firmware file against its
+; pinned hash exactly as the host harness does.
 CONN_HASH:         defs 32                  ; SHA-256 of the streamed body (digest out)
 CONN_PINNED_HASH:  defs 32                  ; expected hash the caller pins
 CONN_HASH_MATCH:   defs 1                   ; 1 = CONN_HASH == CONN_PINNED_HASH, else 0
-                endif  ; NETBOOT_HOSTTEST (streaming sink)
+                endif  ; NETBOOT_HOSTTEST | NETBOOT_STREAM (shared sink state)
+
+                if defined(NETBOOT_HOSTTEST)
+; Recording double (host-test only): the test sink storage_sink_leaf appends the
+; streamed bytes here so the oracle tests can read them back.
+CONN_SINK_OUT_LEN: defs 2                   ; bytes streamed to the test sink so far
+CONN_SINK_CHUNK_COUNT: defs 2              ; number of recorded flushes
+CONN_SINK_CHUNKS:  defs 512                 ; per-flush length list (<=256 entries, 2 B each)
+CONN_SINK_OUT:     defs 4096                ; concatenation of all flushes (test inspects)
+                endif  ; NETBOOT_HOSTTEST (recording double)
 
 ; ===========================================================================
 ; The host-verified packet primitive + the real driver, composed in.
@@ -741,13 +776,14 @@ CONN_HASH_MATCH:   defs 1                   ; 1 = CONN_HASH == CONN_PINNED_HASH,
                 include "encdrv.asm"
 
 ; ===========================================================================
-; The SHA-256 primitive, composed in for the streamed-body verify (i100). Only
-; the host-test build (NETBOOT_HOSTTEST) — which carries the streaming sink that
-; uses it — includes it; the bootable image (no NETBOOT_HOSTTEST) excludes both,
-; so its footprint stays under &10000. sha256.asm's NETBOOT_STANDALONE org is off
-; here (we don't define it), so it lays down after the code above with no org
-; collision; its labels (SHA_*, wv_*, sha_*) don't clash with this file's.
+; The SHA-256 primitive, composed in for the streamed-body verify (i100). Both
+; the host-test build (NETBOOT_HOSTTEST) and the real bootable (NETBOOT_STREAM)
+; carry the streaming sink that uses it, so both include it; a target that builds
+; neither (e.g. the standalone http_get) excludes it. sha256.asm's
+; NETBOOT_STANDALONE org is off here (we don't define it), so it lays down after
+; the code above with no org collision; its labels (SHA_*, wv_*, sha_*) don't
+; clash with this file's.
 ; ===========================================================================
-                if defined(NETBOOT_HOSTTEST)
+                if defined(NETBOOT_HOSTTEST) | defined(NETBOOT_STREAM)
                 include "sha256.asm"
                 endif
