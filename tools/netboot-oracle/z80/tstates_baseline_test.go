@@ -67,7 +67,8 @@ func TestBaselineSHA256(t *testing.T) {
 // regression past that means the unroll silently fell back to the rolled path
 // or grew a new cost. The ceiling tracks the latest landed increment so the
 // gain is locked in: 418,843 (register rewrite, #365) -> 377,371 (8x unroll,
-// #367) -> 346,267 (inline Ch/Maj, i102p). A future improvement lowers it; a
+// #367) -> 346,267 (inline Ch/Maj, i102p) -> 342,747 (alternating sha_tmpa walk
+// in the sigma/Sigma XOR passes, i102q). A future improvement lowers it; a
 // regression trips it.
 func TestSHA256PerBlockCompress(t *testing.T) {
 	measure := func(n int) uint64 {
@@ -87,7 +88,7 @@ func TestSHA256PerBlockCompress(t *testing.T) {
 		return res.TStates
 	}
 	perBlock := measure(128) - measure(64)
-	const ceiling = 346267 // inline Ch/Maj (i102p); lower this when a new increment lands
+	const ceiling = 342747 // alternating sha_tmpa walk (i102q); lower this when a new increment lands
 	t.Logf("i102 sha256 per-block compress = %d T-states (current floor %d)", perBlock, ceiling)
 	if perBlock > ceiling {
 		t.Fatalf("per-block compress %d T regressed past the %d floor", perBlock, ceiling)
