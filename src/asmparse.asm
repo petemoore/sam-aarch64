@@ -30,15 +30,21 @@
 ;        `mov x0, ~0>>1`. The fold runs a variable-count 64-bit shift: logical
 ;        left and arithmetic right, with Go's >=64-count clamp (a<<n -> 0;
 ;        a>>n -> sign extension).
-;   B3a3 (this): the multiply operator `*` (precedence 4) — `mov x0, #2*3`,
-;        `add x0, x1, #(1+2)*4`. The fold runs a 64-bit shift-add multiply
-;        keeping the low 64 bits (port of applyBinary(OpMul): a*b wraps mod
-;        2^64; signed and unsigned agree on the low word). Division `/` (B3a4)
-;        and the non-constant primaries (symbol idents, `.`, local-refs,
-;        `:reloc:`, B3b/B3c) remain later sub-bricks. The `,lsl #12` suffix, mem
-;        operands, special-form insts, directives, labels, comments and
-;        blank-runs are later bricks (B4-B7) — a line that needs one is outside
-;        this domain and sets PARSE_ERR.
+;   B3a3: the multiply operator `*` (precedence 4) — `mov x0, #2*3`. The fold
+;        runs a 64-bit shift-add multiply keeping the low 64 bits (port of
+;        applyBinary(OpMul): a*b wraps mod 2^64; signed and unsigned agree on
+;        the low word).
+;   B3a4 (this): the divide operator `/` (precedence 4) — `mov x0, #100/3`. The
+;        fold runs a signed 64-bit division (port of applyBinary(OpDiv)): a
+;        zero divisor yields 0; otherwise the result truncates toward zero,
+;        computed as an unsigned long division of the absolute values with a
+;        final sign correction (sign(a) xor sign(b)). The two's-complement
+;        overflow case MinInt64/-1 falls out naturally as MinInt64. The
+;        non-constant primaries (symbol idents, `.`, local-refs, `:reloc:`,
+;        B3b/B3c) remain later sub-bricks. The `,lsl #12` suffix, mem operands,
+;        special-form insts, directives, labels, comments and blank-runs are
+;        later bricks (B4-B7) — a line that needs one is outside this domain and
+;        sets PARSE_ERR.
 ;
 ; INST record (emission form — original framing for the host harness; the
 ; OPERAND bytes are byte-faithful to format.OperandWriter):
@@ -75,6 +81,7 @@ EXPR_PUSH_IMM64: equ &04
 EXPR_OP_ADD:     equ &10
 EXPR_OP_SUB:     equ &11
 EXPR_OP_MUL:     equ &12
+EXPR_OP_DIV:     equ &13
 EXPR_OP_AND:     equ &14
 EXPR_OP_OR:      equ &15
 EXPR_OP_XOR:     equ &16
@@ -424,6 +431,8 @@ tok_prec:
                 jr      z, tp_3
                 cp      TOK_STAR
                 jr      z, tp_4
+                cp      TOK_SLASH
+                jr      z, tp_4
                 ld      a, &FF              ; not yet an operator
                 ret
 tp_0:           xor     a                   ; precedence 0 (| ^)
@@ -459,9 +468,13 @@ expr_emit_binop:
                 jr      z, eeb_shr
                 cp      TOK_STAR
                 jr      z, eeb_mul
+                cp      TOK_SLASH
+                jr      z, eeb_div
                 scf
                 ret
 eeb_mul:        ld      a, EXPR_OP_MUL
+                jr      eeb_emit
+eeb_div:        ld      a, EXPR_OP_DIV
                 jr      eeb_emit
 eeb_add:        ld      a, EXPR_OP_ADD
                 jr      eeb_emit
@@ -621,6 +634,8 @@ fold_loop:
                 jp      z, fold_do_sub
                 cp      EXPR_OP_MUL
                 jp      z, fold_do_mul
+                cp      EXPR_OP_DIV
+                jp      z, fold_do_div
                 cp      EXPR_OP_AND
                 jp      z, fold_do_and
                 cp      EXPR_OP_OR
@@ -892,6 +907,175 @@ mul_noadd:
                 ldir
                 call    fold_pop1
                 jp      fold_loop
+
+; fold_do_div — a / b (signed, truncate toward zero; port of applyBinary(OpDiv)).
+; A zero divisor yields 0. Otherwise the magnitudes are divided by an unsigned
+; restoring long division and the quotient is negated iff the operand signs
+; differ. MinInt64/-1 falls out as MinInt64 (|MinInt64| is 2^63 as unsigned,
+; /1 = 2^63, no negate -> the two's-complement MinInt64).
+fold_do_div:
+                call    fold_ab_ptrs        ; HL -> a (dividend, dest), DE -> b
+                jp      c, fold_fail
+                push    hl                  ; save a's slot (result dest)
+                ex      de, hl              ; HL = b
+                ld      de, DIV_DVSR
+                ld      bc, 8
+                ldir                        ; DIV_DVSR = b
+                pop     hl                  ; HL = a's slot
+                push    hl
+                ld      de, DIV_QUOT
+                ld      bc, 8
+                ldir                        ; DIV_QUOT = a (dividend)
+                ld      hl, DIV_DVSR
+                call    is_zero_8
+                jr      nz, div_nonzero
+                pop     hl                  ; b == 0 -> result 0
+                call    fold_zero_a
+                call    fold_pop1
+                jp      fold_loop
+div_nonzero:
+                ld      hl, DIV_QUOT        ; result sign = sign(a) xor sign(b)
+                call    sign_8
+                ld      b, a                ; B = sign(a)
+                ld      hl, DIV_DVSR
+                call    sign_8
+                xor     b
+                ld      (DIV_SIGN), a
+                ld      hl, DIV_QUOT        ; divide the magnitudes
+                call    abs_8
+                ld      hl, DIV_DVSR
+                call    abs_8
+                ld      hl, DIV_REM
+                call    fold_zero_a         ; remainder starts at 0
+                ld      b, 64
+div_loop:
+                push    bc
+                ; shift the 128-bit {DIV_REM:DIV_QUOT} left by 1
+                ld      hl, DIV_QUOT
+                sla     (hl)                ; quot byte0 (bit0 <- 0)
+                ld      b, 7
+dq_shl:
+                inc     hl
+                rl      (hl)                ; quot bytes 1..7; carry-out = quot MSB
+                djnz    dq_shl
+                ld      hl, DIV_REM
+                rl      (hl)                ; rem byte0 <- quot's old MSB
+                ld      b, 7
+dr_shl:
+                inc     hl
+                rl      (hl)                ; rem bytes 1..7
+                djnz    dr_shl
+                ld      a, 0
+                adc     a, 0                ; A = the 65th bit shifted out of rem
+                ld      (DIV_C2), a
+                ; trial subtract DIV_DVSR from DIV_REM in place; capture borrow
+                ld      hl, DIV_REM
+                ld      de, DIV_DVSR
+                or      a
+                ld      b, 8
+ds_loop:
+                ld      a, (de)
+                ld      c, a
+                ld      a, (hl)
+                sbc     a, c
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    ds_loop
+                ld      a, 0
+                adc     a, 0                ; A = borrow (1 = rem < dvsr)
+                ld      c, a
+                ld      a, (DIV_C2)
+                or      a
+                jr      nz, div_commit      ; 65th bit set -> rem >= dvsr
+                ld      a, c
+                or      a
+                jr      nz, div_restore     ; borrow and no 65th bit -> rem < dvsr
+div_commit:
+                ld      hl, DIV_QUOT
+                set     0, (hl)             ; quotient bit for this step
+                jr      div_next
+div_restore:
+                ld      hl, DIV_REM         ; undo the trial subtract
+                ld      de, DIV_DVSR
+                or      a
+                ld      b, 8
+da_loop:
+                ld      a, (de)
+                ld      c, a
+                ld      a, (hl)
+                adc     a, c
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    da_loop
+div_next:
+                pop     bc
+                djnz    div_loop
+                ld      a, (DIV_SIGN)
+                or      a
+                jr      z, div_store
+                ld      hl, DIV_QUOT
+                call    neg_8               ; negate the quotient
+div_store:
+                pop     hl                  ; HL = a's slot (dest)
+                ld      de, DIV_QUOT
+                ex      de, hl              ; HL = DIV_QUOT (src), DE = dest
+                ld      bc, 8
+                ldir
+                call    fold_pop1
+                jp      fold_loop
+
+; is_zero_8 — HL -> 8-byte LE value; Z set iff all bytes zero. HL/BC kept.
+is_zero_8:
+                push    hl
+                push    bc
+                xor     a
+                ld      b, 8
+izz_loop:
+                or      (hl)
+                inc     hl
+                djnz    izz_loop
+                pop     bc
+                pop     hl
+                or      a                   ; Z iff the OR of all bytes is 0
+                ret
+
+; sign_8 — HL -> 8-byte LE value; A = 1 if negative (MSB bit7 set), else 0.
+; HL kept; clobbers DE.
+sign_8:
+                push    hl
+                ld      de, 7
+                add     hl, de              ; HL -> byte7 (MSB)
+                ld      a, (hl)
+                pop     hl
+                add     a, a                ; bit7 -> carry
+                sbc     a, a                ; A = 0x00 / 0xFF
+                and     1
+                ret
+
+; neg_8 — HL -> 8-byte LE value; negate in place (two's complement). HL/BC kept.
+neg_8:
+                push    hl
+                push    bc
+                or      a                   ; clear borrow
+                ld      b, 8
+neg8_loop:
+                ld      a, 0
+                sbc     a, (hl)             ; 0 - byte - borrow
+                ld      (hl), a
+                inc     hl
+                djnz    neg8_loop
+                pop     bc
+                pop     hl
+                ret
+
+; abs_8 — HL -> 8-byte LE value; negate in place iff negative. HL/BC kept.
+abs_8:
+                call    sign_8              ; A = sign (HL preserved)
+                or      a
+                ret     z
+                jp      neg_8
 
 ; shl1_8 — one-bit logical left shift of the 8-byte LE value at HL. HL/BC kept.
 shl1_8:
@@ -1317,6 +1501,11 @@ FOLD_STACK:     defs 128        ; expr_fold: 16 cells of 8-byte LE int64
 MUL_A:          defs 8          ; fold_do_mul: multiplicand, shifted left each step
 MUL_B:          defs 8          ; fold_do_mul: multiplier, shifted right each step
 MUL_R:          defs 8          ; fold_do_mul: running product (low 64 bits)
+DIV_QUOT:       defs 8          ; fold_do_div: |dividend|, becomes the quotient
+DIV_REM:        defs 8          ; fold_do_div: running remainder
+DIV_DVSR:       defs 8          ; fold_do_div: |divisor|
+DIV_C2:         defs 1          ; fold_do_div: 65th remainder bit each step
+DIV_SIGN:       defs 1          ; fold_do_div: result-negative flag (sa xor sb)
 
 ; ===========================================================================
 ; Public I/O buffers
