@@ -1,5 +1,5 @@
 // asmparse_test.go — host-verification of src/asmparse.asm (i48c: the aarch64
-// assembler-source parser; Bricks B2a–B3c).
+// assembler-source parser; Bricks B2a–B4).
 //
 // B2a (mnemonic_lookup): drives the lookup under the flat-memory koron-go/z80
 // harness and asserts the returned ID matches format.MnemonicID for every name
@@ -17,8 +17,10 @@
 // `+ - & | ^ << >> * /` + unary `- ~` + parens + symbol identifiers (interned
 // via a per-document format.SymbolTable) + PC (`.`) + local-refs + reloc ops.
 // The remaining out-of-domain constructs are blank-runs/labels/comments/
-// directives/mem operands, and the special-form mnemonics parseInst intercepts
-// before its generic loop; on the in-domain subset refParse mirrors Parse exactly.
+// directives, and the special-form mnemonics parseInst intercepts before its
+// generic loop; on the in-domain subset refParse mirrors Parse exactly. B4
+// (memory operands) is covered by refParseWithMem / TestParseMemHandCases /
+// TestParseMemFuzz below.
 //
 // Unlike asmlex_test.go (which transcribes the heavyweight frontend lexer), the
 // authority here is the pure-stdlib leaf package sam-aarch64-format, imported
@@ -1190,6 +1192,487 @@ func TestParsePrimaryHandCases(t *testing.T) {
 			t.Fatalf("%q: refParse reported error on a valid case", c.src)
 		}
 		compareRecs(t, fmt.Sprintf("%q (vs refParse)", c.src), got, ref)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// B4 — memory operands (parse_operand_mem / match_extend).
+// ---------------------------------------------------------------------------
+
+// refMatchExtend is a verbatim port of parser.go's matchExtend (parser.go:1398)
+// over format.ExtendKind.Name(). Returns the ExtendKind and true on a match.
+func refMatchExtend(name string) (format.ExtendKind, bool) {
+	for i := 0; i < 8; i++ {
+		if format.ExtendKind(i).Name() == name {
+			return format.ExtendKind(i), true
+		}
+	}
+	return 0, false
+}
+
+// refParseMem is a verbatim transcription of parseMem (parser.go:1278-1388).
+// It consumes from toks[pos] (which must be tLBracket), writes into ow, and
+// returns the new pos and ok. Interns symbols into st (for offset expressions).
+func refParseMem(toks []refTok, pos int, st *format.SymbolTable, ow *format.OperandWriter) (newPos int, ok bool) {
+	pos++ // consume '['
+	if pos >= len(toks) || toks[pos].kind != tIdent {
+		return pos, false
+	}
+	baseKind, base, isReg := refMatchReg(string(toks[pos].span))
+	if !isReg || (baseKind != format.OpRegX && baseKind != format.OpRegXSP) {
+		return pos, false
+	}
+	pos++
+
+	if pos < len(toks) && toks[pos].kind == tRBracket {
+		pos++ // consume ']'
+		// Post-index? [base], #imm or [base], imm
+		if pos < len(toks) && toks[pos].kind == tComma && pos+1 < len(toks) {
+			next := toks[pos+1].kind
+			if next == tHash || next == tInt || next == tMinus ||
+				next == tIdent || next == tLParen {
+				pos++ // consume ','
+				expr, npos, ok2 := refParseExpr(toks, pos, st)
+				if !ok2 {
+					return pos, false
+				}
+				ow.WriteMemBaseOff(format.MemBaseOffPost, base, expr)
+				return npos, true
+			}
+		}
+		ow.WriteMemBase(base)
+		return pos, true
+	}
+
+	if pos >= len(toks) || toks[pos].kind != tComma {
+		return pos, false
+	}
+	pos++ // consume ','
+
+	if pos < len(toks) && toks[pos].kind == tIdent {
+		idxKind, idx, idxOk := refMatchReg(string(toks[pos].span))
+		if idxOk && (idxKind == format.OpRegX || idxKind == format.OpRegW) {
+			idxWidth := byte(0)
+			if idxKind == format.OpRegX {
+				idxWidth = 1
+			}
+			pos++
+			if pos < len(toks) && toks[pos].kind == tComma {
+				pos++ // consume ','
+				if pos >= len(toks) || toks[pos].kind != tIdent {
+					return pos, false
+				}
+				modName := string(toks[pos].span)
+				if modName == "lsl" {
+					pos++ // consume 'lsl'
+					if pos >= len(toks) || toks[pos].kind != tHash {
+						return pos, false
+					}
+					pos++ // consume '#'
+					if pos >= len(toks) || toks[pos].kind != tInt {
+						return pos, false
+					}
+					amt := byte(toks[pos].val)
+					pos++
+					if pos >= len(toks) || toks[pos].kind != tRBracket {
+						return pos, false
+					}
+					pos++ // consume ']'
+					ow.WriteMemBaseIdxShifted(base, idx, idxWidth, amt)
+					return pos, true
+				}
+				ext, extOk := refMatchExtend(modName)
+				if !extOk {
+					return pos, false
+				}
+				pos++ // consume extend keyword
+				amt := byte(0)
+				if pos < len(toks) && toks[pos].kind == tHash {
+					pos++ // consume '#'
+					if pos >= len(toks) || toks[pos].kind != tInt {
+						return pos, false
+					}
+					amt = byte(toks[pos].val)
+					pos++
+				}
+				if pos >= len(toks) || toks[pos].kind != tRBracket {
+					return pos, false
+				}
+				pos++ // consume ']'
+				ow.WriteMemBaseIdxExtended(base, idx, idxWidth, ext, amt)
+				return pos, true
+			}
+			if pos >= len(toks) || toks[pos].kind != tRBracket {
+				return pos, false
+			}
+			pos++ // consume ']'
+			ow.WriteMemBaseIdx(base, idx, idxWidth)
+			return pos, true
+		}
+	}
+
+	// General case: offset expression
+	expr, npos, ok2 := refParseExpr(toks, pos, st)
+	if !ok2 {
+		return pos, false
+	}
+	pos = npos
+	if pos >= len(toks) || toks[pos].kind != tRBracket {
+		return pos, false
+	}
+	pos++ // consume ']'
+	if pos < len(toks) && toks[pos].kind == tBang {
+		pos++ // consume '!'
+		ow.WriteMemBaseOff(format.MemBaseOffPre, base, expr)
+		return pos, true
+	}
+	ow.WriteMemBaseOff(format.MemBaseOff, base, expr)
+	return pos, true
+}
+
+// refParseWithMem mirrors refParse but with the B4 memory-operand case wired in.
+func refParseWithMem(src []byte) (recs []parseRec, ok bool) {
+	toks, lok := refLex(src)
+	if !lok {
+		return nil, false
+	}
+	st := format.NewSymbolTable()
+	pos := 0
+	for {
+		if pos >= len(toks) {
+			return recs, true
+		}
+		switch toks[pos].kind {
+		case tEOF:
+			return recs, true
+		case tEOL:
+			pos++
+		case tIdent:
+			id, found := format.MnemonicID(string(toks[pos].span))
+			if !found {
+				return nil, false
+			}
+			pos++
+			var ow format.OperandWriter
+			count := byte(0)
+			for {
+				if pos >= len(toks) {
+					return nil, false
+				}
+				k := toks[pos].kind
+				if k == tEOL || k == tEOF || k == tLineComment || k == tBlockComment {
+					break
+				}
+				if k == tComma {
+					if count == 0 {
+						return nil, false
+					}
+					pos++
+					continue
+				}
+				switch k {
+				case tLBracket:
+					npos, memOk := refParseMem(toks, pos, st, &ow)
+					if !memOk {
+						return nil, false
+					}
+					count++
+					pos = npos
+				case tIdent:
+					if rk, reg, isReg := refMatchReg(string(toks[pos].span)); isReg {
+						ow.WriteReg(rk, reg)
+						count++
+						pos++
+						break
+					}
+					fallthrough
+				case tHash, tInt, tMinus, tTilde, tLParen,
+					tDot, tLocalRef, tColon:
+					expr, npos, ok2 := refParseExpr(toks, pos, st)
+					if !ok2 {
+						return nil, false
+					}
+					ow.WriteImmExpr(expr)
+					count++
+					pos = npos
+				default:
+					return nil, false
+				}
+			}
+			recs = append(recs, parseRec{mnemonicID: id, count: count, ops: ow.Bytes()})
+		default:
+			return nil, false
+		}
+	}
+}
+
+// immExprBytes builds the folded immediate expression byte slice for value v.
+func immExprBytes(v int64) []byte {
+	var ew format.ExprWriter
+	ew.WriteImm(v)
+	return ew.Bytes()
+}
+
+// TestParseMemHandCases pins explicit hand-authored expected operand bytes for
+// all 7 MEM shapes plus edge cases. The expected bytes are computed directly
+// from the layout spec in operands.go to guard against shared transcription bugs
+// between refParseMem and the Z80.
+func TestParseMemHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+
+	// Hand-compute expected operand bytes per the layout spec in operands.go.
+	// Layout constants: OP_KIND_MEM=0x08; MemBase=0, MemBaseOff=1,
+	// MemBaseOffPre=2, MemBaseOffPost=3, MemBaseIdx=4,
+	// MemBaseIdxShifted=5, MemBaseIdxExtended=6.
+	memBase := func(base byte) []byte {
+		return []byte{0x08, 0, base}
+	}
+	memBaseOff := func(shape, base byte, expr []byte) []byte {
+		b := []byte{0x08, shape, base, byte(len(expr)), byte(len(expr) >> 8)}
+		return append(b, expr...)
+	}
+	memBaseIdx := func(base, idx, w byte) []byte {
+		return []byte{0x08, 4, base, idx, w}
+	}
+	memBaseIdxShifted := func(base, idx, w, amt byte) []byte {
+		return []byte{0x08, 5, base, idx, w, amt}
+	}
+	memBaseIdxExtended := func(base, idx, w, ext, amt byte) []byte {
+		return []byte{0x08, 6, base, idx, w, ext, amt}
+	}
+
+	// register operand bytes
+	regOp := func(k format.OperandKind, n byte) []byte { return []byte{byte(k), n} }
+
+	cases := []struct {
+		desc string
+		src  string
+		want []parseRec
+	}{
+		// MemBase
+		{
+			"ldr x0, [x1]",
+			"ldr x0, [x1]\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: append(regOp(X, 0), memBase(1)...)}},
+		},
+		// MemBase with sp alias (XSP base register, x0 destination)
+		{
+			"ldr x0, [sp]",
+			"ldr x0, [sp]\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: append(regOp(X, 0), memBase(31)...)}},
+		},
+		// MemBase with fp alias (x29)
+		{
+			"ldr x0, [fp]",
+			"ldr x0, [fp]\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: append(regOp(X, 0), memBase(29)...)}},
+		},
+		// MemBaseOff positive (#8 -> PUSH_IMM8 = [0x01, 0x08])
+		{
+			"ldr x0, [x1, #8]",
+			"ldr x0, [x1, #8]\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: append(regOp(X, 0), memBaseOff(1, 1, immExprBytes(8))...)}},
+		},
+		// MemBaseOff negative (#-8)
+		{
+			"ldr x0, [x1, #-8]",
+			"ldr x0, [x1, #-8]\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: append(regOp(X, 0), memBaseOff(1, 1, immExprBytes(-8))...)}},
+		},
+		// MemBaseOffPre
+		{
+			"str x0, [x1, #8]!",
+			"str x0, [x1, #8]!\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "str"), count: 2,
+				ops: append(regOp(X, 0), memBaseOff(2, 1, immExprBytes(8))...)}},
+		},
+		// MemBaseOffPost
+		{
+			"ldr x0, [x1], #8",
+			"ldr x0, [x1], #8\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: append(regOp(X, 0), memBaseOff(3, 1, immExprBytes(8))...)}},
+		},
+		// MemBaseIdx X index (width=1)
+		{
+			"ldr x0, [x1, x2]",
+			"ldr x0, [x1, x2]\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: append(regOp(X, 0), memBaseIdx(1, 2, 1)...)}},
+		},
+		// MemBaseIdx W index (width=0)
+		{
+			"ldr x0, [x1, w2]",
+			"ldr x0, [x1, w2]\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: append(regOp(X, 0), memBaseIdx(1, 2, 0)...)}},
+		},
+		// MemBaseIdxShifted
+		{
+			"ldr x0, [x1, x2, lsl #3]",
+			"ldr x0, [x1, x2, lsl #3]\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: append(regOp(X, 0), memBaseIdxShifted(1, 2, 1, 3)...)}},
+		},
+		// MemBaseIdxExtended uxtw #2 (ext=2=EXT_UXTW)
+		{
+			"ldr x0, [x1, w2, uxtw #2]",
+			"ldr x0, [x1, w2, uxtw #2]\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: append(regOp(X, 0), memBaseIdxExtended(1, 2, 0, 2, 2)...)}},
+		},
+		// MemBaseIdxExtended sxtw no amount (ext=6=EXT_SXTW, amt=0)
+		{
+			"ldr x0, [x1, w2, sxtw]",
+			"ldr x0, [x1, w2, sxtw]\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: append(regOp(X, 0), memBaseIdxExtended(1, 2, 0, 6, 0)...)}},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			got, errFlag := parseZ80(t, mac, []byte(c.src))
+			if errFlag {
+				t.Fatalf("PARSE_ERR set unexpectedly")
+			}
+			compareRecs(t, "Z80 vs hand", got, c.want)
+			ref, refOk := refParseWithMem([]byte(c.src))
+			if !refOk {
+				t.Fatalf("refParseWithMem failed on valid case")
+			}
+			compareRecs(t, "Z80 vs ref", got, ref)
+		})
+	}
+}
+
+// mustMnemID returns the mnemonic ID for name or fatals the test.
+func mustMnemID(t *testing.T, name string) uint16 {
+	t.Helper()
+	id, ok := format.MnemonicID(name)
+	if !ok {
+		t.Fatalf("mustMnemID: %q is not a mnemonic", name)
+	}
+	return id
+}
+
+// TestParseMemSymbol checks a symbolic offset [x1, FOO] produces non-folded
+// expression bytecode, and Z80 and refParseWithMem agree.
+func TestParseMemSymbol(t *testing.T) {
+	mac := loadAsmparse(t)
+	src := "ldr x0, [x1, FOO]\n"
+	got, errFlag := parseZ80(t, mac, []byte(src))
+	if errFlag {
+		t.Fatalf("PARSE_ERR set for symbolic offset")
+	}
+	ref, ok := refParseWithMem([]byte(src))
+	if !ok {
+		t.Fatalf("refParseWithMem failed for symbolic offset")
+	}
+	compareRecs(t, "symbolic offset", got, ref)
+	// Sanity: ops[2] = OP_KIND_MEM, ops[3] = MemBaseOff(1), ops[4] = base x1=1
+	ops := got[0].ops
+	if len(ops) < 5 || ops[2] != 0x08 || ops[3] != 1 || ops[4] != 1 {
+		t.Fatalf("unexpected mem header bytes in symbolic case: %x", ops)
+	}
+}
+
+// TestParseMemSymExpr checks [x1, #FOO+4] — a mixed symbol+constant expression
+// as the offset. Z80 and refParseWithMem must agree.
+func TestParseMemSymExpr(t *testing.T) {
+	mac := loadAsmparse(t)
+	src := "ldr x0, [x1, #FOO+4]\n"
+	got, errFlag := parseZ80(t, mac, []byte(src))
+	if errFlag {
+		t.Fatalf("PARSE_ERR set for sym+const offset")
+	}
+	ref, ok := refParseWithMem([]byte(src))
+	if !ok {
+		t.Fatalf("refParseWithMem failed for sym+const offset")
+	}
+	compareRecs(t, "sym+const offset", got, ref)
+}
+
+// apMemBases are valid base registers for memory operand fuzz.
+var apMemBases = []string{"x0", "x1", "x2", "x5", "x9", "x10", "x19", "x28", "x29", "x30", "sp", "fp"}
+
+// apMemIdxX are valid X-width index registers for memory operands.
+var apMemIdxX = []string{"x0", "x1", "x2", "x5", "x9", "x10", "x19", "x28", "x29", "x30"}
+
+// apMemIdxW are valid W-width index registers for memory operands.
+var apMemIdxW = []string{"w0", "w1", "w2", "w5", "w9", "w10", "w19", "w28", "w29", "w30"}
+
+// apExtendNames are the 8 extend keywords match_extend recognises.
+var apExtendNames = []string{"uxtb", "uxth", "uxtw", "uxtx", "sxtb", "sxth", "sxtw", "sxtx"}
+
+// TestParseMemFuzz compares asmparse against refParseWithMem over random memory
+// operands covering all 7 shapes, random valid registers, random small offsets.
+func TestParseMemFuzz(t *testing.T) {
+	mac := loadAsmparse(t)
+	for _, seed := range []int64{7, 31, 97, 503, 4099} {
+		rng := rand.New(rand.NewSource(seed))
+		var src []byte
+		lines := 10 + rng.Intn(10)
+		for li := 0; li < lines; li++ {
+			base := apMemBases[rng.Intn(len(apMemBases))]
+			var mem string
+			switch rng.Intn(7) {
+			case 0: // MemBase
+				mem = "[" + base + "]"
+			case 1: // MemBaseOff
+				off := rng.Intn(256) - 128
+				mem = fmt.Sprintf("[%s, #%d]", base, off)
+			case 2: // MemBaseOffPre
+				off := rng.Intn(128)
+				mem = fmt.Sprintf("[%s, #%d]!", base, off)
+			case 3: // MemBaseOffPost
+				off := rng.Intn(128)
+				mem = fmt.Sprintf("[%s], #%d", base, off)
+			case 4: // MemBaseIdx
+				if rng.Intn(2) == 0 {
+					mem = "[" + base + ", " + apMemIdxX[rng.Intn(len(apMemIdxX))] + "]"
+				} else {
+					mem = "[" + base + ", " + apMemIdxW[rng.Intn(len(apMemIdxW))] + "]"
+				}
+			case 5: // MemBaseIdxShifted
+				idx := apMemIdxX[rng.Intn(len(apMemIdxX))]
+				amt := rng.Intn(5)
+				mem = fmt.Sprintf("[%s, %s, lsl #%d]", base, idx, amt)
+			case 6: // MemBaseIdxExtended
+				ext := apExtendNames[rng.Intn(len(apExtendNames))]
+				var idx string
+				if ext == "uxtx" || ext == "sxtx" {
+					idx = apMemIdxX[rng.Intn(len(apMemIdxX))]
+				} else {
+					idx = apMemIdxW[rng.Intn(len(apMemIdxW))]
+				}
+				if rng.Intn(2) == 0 {
+					amt := rng.Intn(5)
+					mem = fmt.Sprintf("[%s, %s, %s #%d]", base, idx, ext, amt)
+				} else {
+					mem = fmt.Sprintf("[%s, %s, %s]", base, idx, ext)
+				}
+			}
+			src = append(src, "ldr x0, "...)
+			src = append(src, mem...)
+			src = append(src, '\n')
+		}
+		want, ok := refParseWithMem(src)
+		if !ok {
+			t.Fatalf("seed %d: refParseWithMem reported error on generated B4 source:\n%s", seed, src)
+		}
+		got, errFlag := parseZ80(t, mac, src)
+		if errFlag {
+			t.Fatalf("seed %d: PARSE_ERR set on valid B4 source:\n%s", seed, src)
+		}
+		compareRecs(t, fmt.Sprintf("seed%d", seed), got, want)
+		t.Logf("seed=%d: %d source bytes, %d records matched", seed, len(src), len(got))
 	}
 }
 
