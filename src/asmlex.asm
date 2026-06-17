@@ -5,20 +5,24 @@
 ;   readNumber / readLineComment / readBlockComment).
 ;
 ; i48c is the editor input path — the SAM-side mirror of the host front-end
-; (text -> symbolic overlay). Brick B1 is the TOKENIZER: it splits source bytes
-; into typed tokens, recording each token's KIND, its source-text SPAN, and (for
-; integer literals) the numeric BASE. The full Go lexer additionally computes an
-; int64 value and handles string/char literals, local-label refs (Nf/Nb) and
-; cpp line-directives; those are deferred to Brick B1b. B1's input domain is
-; therefore the token set below, against which it is byte-faithful to Lex.
+; (text -> symbolic overlay). asmlex is the TOKENIZER: it splits source bytes
+; into typed tokens, recording each token's KIND, its source-text SPAN, the
+; integer BASE, and the int64 VALUE. Brick B1 built the token extents (kind +
+; span + base); Brick B1b added the int64 value of numeric literals (port of
+; parseIntInBase) and character literals (port of readCharLit). Still deferred
+; to Brick B1c: string literals, local-label refs (Nf/Nb), and cpp
+; line-directives. asmlex is byte-faithful to Lex on the input domain spanned by
+; the supported tokens.
 ;
-; TOKEN RECORD (LEX_TOKS, 6 bytes each, in emission order):
-;   kind:1 | span_ptr:2 LE | span_len:2 LE | base:1
+; TOKEN RECORD (LEX_TOKS, 14 bytes each, in emission order):
+;   kind:1 | span_ptr:2 LE | span_len:2 LE | base:1 | value:8 LE
 ; span_ptr/span_len point into LEX_SRC. For TOK_IDENT the span is the whole
-; identifier (leading '.' included); for TOK_INT it is the digits AFTER any
-; 0x/0b prefix (matching Go's Tok.Text) and base is 2/10/16; for the two comment
-; kinds it is the comment body (matching Go's Tok.Bytes). Other tokens carry a
-; zero span/base. The trailing TOK_EOF token is emitted and ends the stream.
+; identifier (leading '.' included); for a numeric TOK_INT it is the digits
+; AFTER any 0x/0b prefix (matching Go's Tok.Text), base is 2/10/16, and value is
+; the parsed int64; for a character-literal TOK_INT value is the char code and
+; there is no span; for the two comment kinds the span is the comment body
+; (matching Go's Tok.Bytes). Other tokens carry a zero span/base/value. The
+; trailing TOK_EOF token is emitted and ends the stream.
 ;
 ; PROVENANCE: algorithmic port of lexer.go; the flat token-array layout is
 ; original for the Z80 port. VERIFICATION: tools/netboot-oracle/z80/asmlex_test.go
@@ -38,7 +42,7 @@ TOK_EOF:          equ 0
 TOK_EOL:          equ 1
 TOK_IDENT:        equ 2
 TOK_INT:          equ 3
-TOK_STRING:       equ 4     ; deferred to B1b
+TOK_STRING:       equ 4     ; deferred to B1c
 TOK_COMMA:        equ 5
 TOK_HASH:         equ 6
 TOK_COLON:        equ 7
@@ -60,11 +64,11 @@ TOK_SHL:          equ 22
 TOK_SHR:          equ 23
 TOK_LINECOMMENT:  equ 24
 TOK_BLOCKCOMMENT: equ 25
-TOK_LOCALREF:     equ 26    ; deferred to B1b
+TOK_LOCALREF:     equ 26    ; deferred to B1c
 TOK_EQUALS:       equ 27
 TOK_PERCENT:      equ 28
 
-TOK_REC_SIZE:     equ 6     ; bytes per output token record
+TOK_REC_SIZE:     equ 14    ; bytes per output token record (kind/ptr/len/base/val)
 
 ; ===========================================================================
 ; lex_run — tokenise LEX_SRC (BC = source length) into LEX_TOKS.
@@ -331,7 +335,7 @@ lex_d_gt:
                 ld      a, TOK_SHR
                 jp      lex_put_simple
 lex_d_num:
-                ; Leading digit -> number (local-ref Nf/Nb deferred to B1b).
+                ; Leading digit -> number (local-ref Nf/Nb deferred to B1c).
                 cp      &30
                 jr      c, lex_d_identchk
                 cp      &39+1
@@ -339,7 +343,9 @@ lex_d_num:
 lex_d_identchk:
                 call    lex_is_ident_start
                 jp      c, lex_read_ident
-                ; '"' / '\'' (string/char, B1b) and anything else: error.
+                cp      &27                 ; '\'' char literal
+                jp      z, lex_read_char
+                ; '"' (string) / local-ref / line-directive are B1c; else error.
 lex_op_err:
                 ld      a, 1
                 ld      (LEX_ERR), a
@@ -374,9 +380,9 @@ lex_ident_end:
                 jp      lex_put
 
 ; ---------------------------------------------------------------------------
-; lex_read_number — TOK_INT spanning the digits of a base-2/10/16 literal.
-; Records the prefix-stripped digit span and the base. Value computation is
-; deferred to B1b. (Mirrors readNumber's extent + base detection.)
+; lex_read_number — TOK_INT for a base-2/10/16 literal. Records the
+; prefix-stripped digit span, the base, and the parsed int64 value in LEX_RV.
+; (Mirrors readNumber + parseIntInBase.)
 ; ---------------------------------------------------------------------------
 lex_read_number:
                 ld      a, 10
@@ -418,6 +424,7 @@ lex_num_bin:
 lex_num_setup:
                 ld      hl, (LEX_CUR)
                 ld      (LEX_RP), hl        ; span start (after any prefix)
+                call    lex_val_zero        ; LEX_RV = 0 (running int64 value)
 lex_num_loop:
                 ld      hl, (LEX_CUR)
                 ld      de, (LEX_END)
@@ -426,8 +433,15 @@ lex_num_loop:
                 jr      nc, lex_num_end     ; CUR >= END
                 ld      hl, (LEX_CUR)
                 ld      a, (hl)
-                call    lex_is_digit_for_base
+                call    lex_is_digit_for_base ; CY iff valid; char preserved in C
                 jr      nc, lex_num_end
+                ; value = value*base + digit  (port of parseIntInBase).
+                ld      a, c                ; the digit char
+                call    lex_digit_value     ; A = 0..15
+                ld      c, a                ; C = digit value
+                ld      a, (LEX_RB)
+                ld      b, a                ; B = base
+                call    lex_val_muladd      ; LEX_RV = LEX_RV*B + C
                 call    lex_advance
                 jr      lex_num_loop
 lex_num_end:
@@ -536,7 +550,7 @@ lex_span_len:
                 ret
 
 ; ---------------------------------------------------------------------------
-; lex_put — write the 6-byte record at (LEX_TOKPTR) from LEX_RK/RP/RL/RB.
+; lex_put — write the 14-byte record at (LEX_TOKPTR) from LEX_RK/RP/RL/RB.
 ; lex_put_simple — write kind A with a zero span/base.
 ; ---------------------------------------------------------------------------
 lex_put:
@@ -558,22 +572,28 @@ lex_put:
                 inc     hl
                 ld      a, (LEX_RB)
                 ld      (hl), a
+                inc     hl
+                ; val (8 bytes LE) from LEX_RV
+                ld      de, LEX_RV
+                ld      b, 8
+lex_put_val:
+                ld      a, (de)
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    lex_put_val
                 ld      a, (LEX_RK)         ; return kind in A
                 ret
 lex_put_simple:
                 ld      hl, (LEX_TOKPTR)
                 ld      (hl), a             ; kind
                 push    af
+                ld      b, TOK_REC_SIZE-1   ; zero the remaining record bytes
                 inc     hl
+lex_ps_loop:
                 ld      (hl), 0
                 inc     hl
-                ld      (hl), 0
-                inc     hl
-                ld      (hl), 0
-                inc     hl
-                ld      (hl), 0
-                inc     hl
-                ld      (hl), 0
+                djnz    lex_ps_loop
                 pop     af                  ; return kind in A
                 ret
 
@@ -668,6 +688,212 @@ lidb_yes:
                 scf
                 ret
 
+; ---------------------------------------------------------------------------
+; lex_read_char — TOK_INT from a character literal '<c>' / '\<esc>' (port of
+; readCharLit). The token carries the character's value in LEX_RV (no span).
+; ---------------------------------------------------------------------------
+lex_read_char:
+                call    lex_advance         ; past opening '
+                call    lex_at_end
+                jr      c, lex_char_err     ; unterminated
+                ld      hl, (LEX_CUR)
+                ld      a, (hl)
+                call    lex_advance         ; consume the char
+                cp      &5C                 ; '\'
+                jr      nz, lex_char_have
+                ; escape sequence: decode the next char.
+                call    lex_at_end
+                jr      c, lex_char_err
+                ld      hl, (LEX_CUR)
+                ld      a, (hl)
+                call    lex_advance
+                call    lex_char_escape     ; A = byte; CY set if unknown escape
+                jr      c, lex_char_err
+lex_char_have:
+                push    af                  ; A = character value
+                call    lex_val_zero
+                pop     af
+                ld      (LEX_RV), a         ; value byte 0 (rest already 0)
+                ; require the closing '
+                call    lex_at_end
+                jr      c, lex_char_err
+                ld      hl, (LEX_CUR)
+                ld      a, (hl)
+                cp      &27                 ; '
+                jr      nz, lex_char_err
+                call    lex_advance         ; past closing '
+                ld      hl, 0
+                ld      (LEX_RP), hl        ; no span
+                ld      (LEX_RL), hl
+                xor     a
+                ld      (LEX_RB), a
+                ld      a, TOK_INT
+                ld      (LEX_RK), a
+                jp      lex_put
+lex_char_err:
+                ld      a, 1
+                ld      (LEX_ERR), a
+                ld      a, TOK_EOF
+                jp      lex_put_simple
+
+; ---------------------------------------------------------------------------
+; lex_at_end — carry set iff LEX_CUR >= LEX_END (no more input).
+; ---------------------------------------------------------------------------
+lex_at_end:
+                push    hl
+                push    de
+                ld      hl, (LEX_CUR)
+                ld      de, (LEX_END)
+                or      a
+                sbc     hl, de              ; carry iff CUR < END
+                pop     de
+                pop     hl
+                ccf                         ; carry iff CUR >= END
+                ret
+
+; ---------------------------------------------------------------------------
+; lex_char_escape — A = escape char; returns A = decoded byte (CY clear), or
+; CY set if the escape is unknown. (Port of readCharLit's escape switch.)
+; ---------------------------------------------------------------------------
+lex_char_escape:
+                cp      &6E                 ; 'n'
+                jr      nz, lce_r
+                ld      a, 10
+                or      a
+                ret
+lce_r:
+                cp      &72                 ; 'r'
+                jr      nz, lce_t
+                ld      a, 13
+                or      a
+                ret
+lce_t:
+                cp      &74                 ; 't'
+                jr      nz, lce_bs
+                ld      a, 9
+                or      a
+                ret
+lce_bs:
+                cp      &5C                 ; '\'
+                jr      nz, lce_sq
+                ld      a, &5C
+                or      a
+                ret
+lce_sq:
+                cp      &27                 ; '
+                jr      nz, lce_dq
+                ld      a, &27
+                or      a
+                ret
+lce_dq:
+                cp      &22                 ; '"'
+                jr      nz, lce_zero
+                ld      a, &22
+                or      a
+                ret
+lce_zero:
+                cp      &30                 ; '0'
+                jr      nz, lce_unknown
+                xor     a                   ; NUL, carry clear
+                ret
+lce_unknown:
+                scf
+                ret
+
+; ---------------------------------------------------------------------------
+; lex_digit_value — A = digit char ('0'-'9','a'-'f','A'-'F'); returns A = 0..15.
+; ---------------------------------------------------------------------------
+lex_digit_value:
+                cp      &39+1               ; '9'+1
+                jr      c, ldv_dec
+                cp      &61                 ; 'a'
+                jr      c, ldv_upper
+                sub     &61-10              ; 'a'..'f' -> 10..15
+                ret
+ldv_upper:
+                sub     &41-10              ; 'A'..'F' -> 10..15
+                ret
+ldv_dec:
+                sub     &30                 ; '0'..'9' -> 0..9
+                ret
+
+; ---------------------------------------------------------------------------
+; lex_val_zero — LEX_RV = 0 (8-byte accumulator).
+; ---------------------------------------------------------------------------
+lex_val_zero:
+                ld      hl, LEX_RV
+                ld      b, 8
+                xor     a
+lvz_loop:
+                ld      (hl), a
+                inc     hl
+                djnz    lvz_loop
+                ret
+
+; ---------------------------------------------------------------------------
+; lex_val_muladd — LEX_RV = LEX_RV * B + C (B = base 2/10/16, C = digit value).
+; Multiplies by repeated addition (base <= 16). Preserves nothing.
+; ---------------------------------------------------------------------------
+lex_val_muladd:
+                ; LEX_VTMP = LEX_RV
+                push    bc
+                ld      hl, LEX_RV
+                ld      de, LEX_VTMP
+                ld      bc, 8
+                ldir
+                pop     bc
+                ; LEX_RV = 0
+                push    bc
+                call    lex_val_zero
+                pop     bc
+                ; add LEX_VTMP to LEX_RV, B times.
+                ld      a, b                ; A = base counter
+lvm_mulloop:
+                or      a
+                jr      z, lvm_adddigit
+                push    af
+                call    lex_val_add_vtmp    ; LEX_RV += LEX_VTMP (C preserved)
+                pop     af
+                dec     a
+                jr      lvm_mulloop
+lvm_adddigit:
+                call    lex_val_add_byte    ; LEX_RV += C
+                ret
+
+; ---------------------------------------------------------------------------
+; lex_val_add_vtmp — LEX_RV += LEX_VTMP (8-byte LE add). Preserves C.
+; ---------------------------------------------------------------------------
+lex_val_add_vtmp:
+                ld      hl, LEX_RV
+                ld      de, LEX_VTMP
+                or      a                   ; clear carry
+                ld      b, 8
+lvav_loop:
+                ld      a, (de)
+                adc     a, (hl)
+                ld      (hl), a
+                inc     hl
+                inc     de
+                djnz    lvav_loop
+                ret
+
+; ---------------------------------------------------------------------------
+; lex_val_add_byte — LEX_RV += C (carry propagated through 8 bytes).
+; ---------------------------------------------------------------------------
+lex_val_add_byte:
+                ld      hl, LEX_RV
+                ld      a, c
+                add     a, (hl)
+                ld      (hl), a
+                ret     nc
+                ld      b, 7
+lvab_prop:
+                inc     hl
+                inc     (hl)
+                ret     nz
+                djnz    lvab_prop
+                ret
+
 ; ===========================================================================
 ; Working storage
 ; ===========================================================================
@@ -680,10 +906,12 @@ LEX_RK:         defs 1          ; staging: token kind
 LEX_RP:         defs 2          ; staging: span pointer
 LEX_RL:         defs 2          ; staging: span length
 LEX_RB:         defs 1          ; staging: base (TOK_INT) else 0
+LEX_RV:         defs 8          ; staging: int64 value (TOK_INT) else 0
+LEX_VTMP:       defs 8          ; scratch for the multiply-by-base step
 
 ; ===========================================================================
 ; Public I/O buffers
 ; ===========================================================================
 LEX_ERR:        defs 1          ; non-zero after a lexical error
 LEX_SRC:        defs 2048       ; input source bytes (caller writes; BC = len)
-LEX_TOKS:       defs 2304       ; output token records (6 B each -> 384 tokens)
+LEX_TOKS:       defs 3584       ; output token records (14 B each -> 256 tokens)
