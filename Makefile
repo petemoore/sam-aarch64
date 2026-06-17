@@ -65,7 +65,7 @@ ci-netboot-oracle:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines asmlex-z80 editmodel-z80 ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-z80-routines asmlex-z80 asmparse-z80 editmodel-z80 ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -739,10 +739,21 @@ $(BUILD)/asmlex.bin $(BUILD)/asmlex.map: src/asmlex.asm
 
 asmlex-z80: $(BUILD)/asmlex.bin $(BUILD)/asmlex.map
 
+# asmparse-z80 — aarch64 assembler-source parser, i48c (flat-memory).
+# Same standalone flat-memory harness as asmlex; gated by ci-netboot-z80.
+# Depends on the generated src/mnemonic_names.inc (committed; `make tables`).
+$(BUILD)/asmparse.bin $(BUILD)/asmparse.map: src/asmparse.asm src/mnemonic_names.inc
+	@mkdir -p $(BUILD)
+	pyz80 -D ASMPARSE_STANDALONE=1 --obj=$(BUILD)/asmparse.bin \
+	    --mapfile=$(BUILD)/asmparse.map \
+	    src/asmparse.asm
+
+asmparse-z80: $(BUILD)/asmparse.bin $(BUILD)/asmparse.map
+
 # Every netboot routine binary the harness tests load.
 netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client
 
-ci-netboot-z80: netboot-z80-routines editmodel-z80 asmlex-z80
+ci-netboot-z80: netboot-z80-routines editmodel-z80 asmlex-z80 asmparse-z80
 	cd tools/netboot-oracle/z80 && go test ./...
 	# Guard: the 8x-unrolled SHA-256 round block inlined in sha256.asm still
 	# matches its generator (tools/sha256-unroll-gen) byte-for-byte.
@@ -837,6 +848,7 @@ tables: tables-gen
 	$(BUILD)/tables-gen -sysreg-inc src/sysreg_tables.inc
 	$(BUILD)/tables-gen -constants-inc src/tbn_constants.inc
 	$(BUILD)/tables-gen -mnemonic-ids-inc src/mnemonic_ids.inc
+	$(BUILD)/tables-gen -mnemonic-names-inc src/mnemonic_names.inc
 
 # tables-sync-check — freshness guard: regenerate the committed tables into
 # build/gen/ and diff against the in-tree copies; fail on any drift (a Go-side
@@ -850,8 +862,9 @@ tables-sync-check: tables-gen
 	$(BUILD)/tables-gen -sysreg-inc $(BUILD)/gen/sysreg_tables.inc
 	$(BUILD)/tables-gen -constants-inc $(BUILD)/gen/tbn_constants.inc
 	$(BUILD)/tables-gen -mnemonic-ids-inc $(BUILD)/gen/mnemonic_ids.inc
+	$(BUILD)/tables-gen -mnemonic-names-inc $(BUILD)/gen/mnemonic_names.inc
 	@fail=0; \
-	for f in sysreg_tables.inc tbn_constants.inc mnemonic_ids.inc; do \
+	for f in sysreg_tables.inc tbn_constants.inc mnemonic_ids.inc mnemonic_names.inc; do \
 	    if ! diff -u src/$$f $(BUILD)/gen/$$f; then \
 	        echo ""; \
 	        echo "ERROR: src/$$f is stale — it differs from the tools/tables-gen"; \
