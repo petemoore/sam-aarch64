@@ -762,8 +762,8 @@ func TestParseExprHandCases(t *testing.T) {
 		{"mov x0, ~(0xf0 | 0x0f)\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-256))}},
 		{"mov x0, #(8-3)-2\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(3))}},
 		// the fold re-selects the shortest width for the result
-		{"mov x0, #0x7fff+1\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x8000))}},   // imm16
-		{"mov x0, #0xffff+1\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x10000))}},  // imm32
+		{"mov x0, #0x7fff+1\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x8000))}},  // imm16
+		{"mov x0, #0xffff+1\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x10000))}}, // imm32
 		{"mov x0, #0x7fffffff+1\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x80000000))}},
 		{"mov x0, #0-1\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-1))}},
 		// expression as a non-final operand (commas optional)
@@ -797,7 +797,7 @@ func TestParseShiftHandCases(t *testing.T) {
 	}{
 		{"mov x0, #1<<4\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(16))}},
 		{"mov x0, #256>>2\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(64))}},
-		{"mov x0, #1<<8\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(256))}},     // imm16
+		{"mov x0, #1<<8\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(256))}}, // imm16
 		{"mov x0, #1<<31\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x80000000))}},
 		{"mov x0, #1<<63\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-9223372036854775808))}}, // MinInt64
 		// arithmetic right shift preserves the sign bit
@@ -807,8 +807,8 @@ func TestParseShiftHandCases(t *testing.T) {
 		// the >=64-count clamp
 		{"mov x0, #1<<64\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0))}},
 		{"mov x0, #1<<100\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0))}},
-		{"mov x0, #255>>64\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0))}},      // positive -> 0
-		{"mov x0, ~0>>64\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-1))}},       // negative -> -1
+		{"mov x0, #255>>64\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0))}}, // positive -> 0
+		{"mov x0, ~0>>64\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-1))}},  // negative -> -1
 		{"mov x0, #8>>200\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0))}},
 		// counts >= 256: byte0 alone wraps, so these exercise the high-byte
 		// path of the count check (a byte0-only impl would shift by 0).
@@ -858,14 +858,14 @@ func TestParseMulHandCases(t *testing.T) {
 		// width-growing product (no wrap)
 		{"mov x0, #0x10000*0x10000\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x100000000))}},
 		// products that wrap mod 2^64
-		{"mov x0, #0x100000000*0x100000000\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0))}}, // 2^64 -> 0
-		{"mov x0, #0xffffffffffffffff*2\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-2))}},    // -1 * 2
+		{"mov x0, #0x100000000*0x100000000\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0))}},               // 2^64 -> 0
+		{"mov x0, #0xffffffffffffffff*2\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-2))}},                 // -1 * 2
 		{"mov x0, #0xffffffffffffffff*0xffffffffffffffff\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(1))}}, // (-1)^2
 		// left-associative and precedence (binds tighter than + << &)
 		{"mov x0, #2*3*4\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(24))}},
-		{"mov x0, #2+3*4\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(14))}},   // 2 + (3*4)
-		{"mov x0, #3*4+2\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(14))}},   // (3*4) + 2
-		{"mov x0, #1*2<<3\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(16))}},  // (1*2)<<3
+		{"mov x0, #2+3*4\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(14))}},  // 2 + (3*4)
+		{"mov x0, #3*4+2\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(14))}},  // (3*4) + 2
+		{"mov x0, #1*2<<3\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(16))}}, // (1*2)<<3
 		{"mov x0, #(2+3)*(4+1)\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(25))}},
 	}
 	for _, c := range cases {
@@ -894,7 +894,7 @@ func TestParseDivHandCases(t *testing.T) {
 		src  string
 		want []parseRec
 	}{
-		{"mov x0, #7/2\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(3))}},   // truncates
+		{"mov x0, #7/2\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(3))}}, // truncates
 		{"mov x0, #10/3\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(3))}},
 		{"mov x0, #10/5\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(2))}},
 		{"mov x0, #5/10\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0))}},
@@ -908,7 +908,7 @@ func TestParseDivHandCases(t *testing.T) {
 		{"mov x0, #100/0\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0))}},
 		{"mov x0, #-100/0\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0))}},
 		// large / signed values
-		{"mov x0, #0xffffffffffffffff/1\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-1))}},          // -1/1
+		{"mov x0, #0xffffffffffffffff/1\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-1))}},                 // -1/1
 		{"mov x0, #0xffffffffffffffff/0xffffffffffffffff\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(1))}}, // -1/-1
 		{"mov x0, #0x10000000/0x1000\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x10000))}},
 		// the MinInt64/-1 two's-complement overflow case -> MinInt64
@@ -1944,7 +1944,8 @@ func refParseWithShiftExt(src []byte) (recs []parseRec, ok bool) {
 
 // shiftedRegBytes hand-builds expected bytes for a SHIFTED_REG operand per the
 // layout spec in operands.go:
-//   [OP_KIND_SHIFTED_REG=0x06, width, reg, shiftKind, len_lo, len_hi, expr...]
+//
+//	[OP_KIND_SHIFTED_REG=0x06, width, reg, shiftKind, len_lo, len_hi, expr...]
 func shiftedRegBytes(width, reg byte, sk format.ShiftKind, amtExpr []byte) []byte {
 	b := []byte{0x06, width, reg, byte(sk), byte(len(amtExpr)), byte(len(amtExpr) >> 8)}
 	return append(b, amtExpr...)
@@ -1952,7 +1953,8 @@ func shiftedRegBytes(width, reg byte, sk format.ShiftKind, amtExpr []byte) []byt
 
 // extendedRegBytes hand-builds expected bytes for an EXTENDED_REG operand per
 // the layout spec in operands.go:
-//   [OP_KIND_EXTENDED_REG=0x07, width, reg, extKind, len_lo, len_hi, expr...]
+//
+//	[OP_KIND_EXTENDED_REG=0x07, width, reg, extKind, len_lo, len_hi, expr...]
 func extendedRegBytes(width, reg byte, ek format.ExtendKind, amtExpr []byte) []byte {
 	b := []byte{0x07, width, reg, byte(ek), byte(len(amtExpr)), byte(len(amtExpr) >> 8)}
 	return append(b, amtExpr...)
@@ -2101,8 +2103,8 @@ func TestParseShiftExtHandCases(t *testing.T) {
 					[]byte{byte(X), 0},
 					[]byte{byte(X), 1},
 					[]byte{byte(format.OpRegXSP), 31},
-					immExprWithSym(0),    // lsl -> symbol id 0
-					immExprOperand(3),    // #3 as full IMM_EXPR operand
+					immExprWithSym(0), // lsl -> symbol id 0
+					immExprOperand(3), // #3 as full IMM_EXPR operand
 				)}},
 		},
 		// add x0, x1, x2, foo where foo is not a shift/extend kw -> plain reg x2 + sym foo
@@ -2244,4 +2246,399 @@ func immExprOperand(v int64) []byte {
 	expr := immExprBytes(v)
 	b := []byte{0x05, byte(len(expr)), byte(len(expr) >> 8)}
 	return append(b, expr...)
+}
+
+// ---------------------------------------------------------------------------
+// B4c — condition-code operand (match_cond + parse_operand_reg cond branch,
+// WriteCond).
+// ---------------------------------------------------------------------------
+
+// refMatchCond is a verbatim port of parser.go's matchCond (parser.go:1416),
+// using format.CondCode(i).Name() for values 0..15 plus the GNU as aliases
+// hs(->CondCS=2) and lo(->CondCC=3).
+func refMatchCond(name string) (format.CondCode, bool) {
+	for i := 0; i < 16; i++ {
+		if format.CondCode(i).Name() == name {
+			return format.CondCode(i), true
+		}
+	}
+	switch name {
+	case "hs":
+		return format.CondCS, true
+	case "lo":
+		return format.CondCC, true
+	}
+	return 0, false
+}
+
+// refParseWithCond mirrors refParseWithShiftExt but with the B4c matchCond
+// check wired before matchReg inside the tIdent case, mirroring parseOperand
+// (parser.go:1027).
+func refParseWithCond(src []byte) (recs []parseRec, ok bool) {
+	toks, lok := refLex(src)
+	if !lok {
+		return nil, false
+	}
+	st := format.NewSymbolTable()
+	pos := 0
+	for {
+		if pos >= len(toks) {
+			return recs, true
+		}
+		switch toks[pos].kind {
+		case tEOF:
+			return recs, true
+		case tEOL:
+			pos++
+		case tIdent:
+			id, found := format.MnemonicID(string(toks[pos].span))
+			if !found {
+				return nil, false
+			}
+			pos++
+			var ow format.OperandWriter
+			count := byte(0)
+			for {
+				if pos >= len(toks) {
+					return nil, false
+				}
+				k := toks[pos].kind
+				if k == tEOL || k == tEOF || k == tLineComment || k == tBlockComment {
+					break
+				}
+				if k == tComma {
+					if count == 0 {
+						return nil, false
+					}
+					pos++
+					continue
+				}
+				switch k {
+				case tLBracket:
+					npos, memOk := refParseMem(toks, pos, st, &ow)
+					if !memOk {
+						return nil, false
+					}
+					count++
+					pos = npos
+				case tIdent:
+					// B4c: check for condition-code name before register (Go: parser.go:1027)
+					if c, ok := refMatchCond(string(toks[pos].span)); ok {
+						ow.WriteCond(c)
+						count++
+						pos++
+						break
+					}
+					rk, reg, isReg := refMatchReg(string(toks[pos].span))
+					if isReg {
+						pos++ // consume register
+						// shift/extend lookahead: X or W only
+						if (rk == format.OpRegX || rk == format.OpRegW) &&
+							pos < len(toks) && toks[pos].kind == tComma &&
+							pos+1 < len(toks) && toks[pos+1].kind == tIdent {
+							next := string(toks[pos+1].span)
+							if sk, skOk := refMatchShiftKind(next); skOk {
+								pos += 2 // consume comma + shift keyword
+								if pos >= len(toks) || toks[pos].kind != tHash {
+									return nil, false
+								}
+								pos++ // consume '#'
+								expr, npos, ok2 := refParseExpr(toks, pos, st)
+								if !ok2 {
+									return nil, false
+								}
+								pos = npos
+								width := byte(0)
+								if rk == format.OpRegX {
+									width = 1
+								}
+								ow.WriteShiftedReg(width, reg, sk, expr)
+								count++
+								break
+							}
+							if ek, ekOk := refMatchExtend(next); ekOk {
+								pos += 2 // consume comma + extend keyword
+								var amt []byte
+								if pos < len(toks) && toks[pos].kind == tHash {
+									pos++ // consume '#'
+									a, npos, ok2 := refParseExpr(toks, pos, st)
+									if !ok2 {
+										return nil, false
+									}
+									amt = a
+									pos = npos
+								}
+								width := byte(0)
+								if rk == format.OpRegX {
+									width = 1
+								}
+								ow.WriteExtendedReg(width, reg, ek, amt)
+								count++
+								break
+							}
+						}
+						// plain register
+						ow.WriteReg(rk, reg)
+						count++
+						break
+					}
+					// non-register, non-cond identifier -> symbol expression
+					fallthrough
+				case tHash, tInt, tMinus, tTilde, tLParen,
+					tDot, tLocalRef, tColon:
+					expr, npos, ok2 := refParseExpr(toks, pos, st)
+					if !ok2 {
+						return nil, false
+					}
+					ow.WriteImmExpr(expr)
+					count++
+					pos = npos
+				default:
+					return nil, false
+				}
+			}
+			recs = append(recs, parseRec{mnemonicID: id, count: count, ops: ow.Bytes()})
+		default:
+			return nil, false
+		}
+	}
+}
+
+// condBytes hand-builds expected bytes for a COND operand per the layout in
+// operands.go: [OP_KIND_COND=0x0A, condValue]. Independent of WriteCond as a
+// second authority.
+func condBytes(c format.CondCode) []byte {
+	return []byte{0x0A, byte(c)}
+}
+
+// TestParseCondHandCases pins explicit hand-authored expected operand bytes for
+// condition-code operands (B4c), then cross-checks against refParseWithCond.
+// Every expected operand byte array is computed independently from the format
+// spec as a second authority.
+func TestParseCondHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	W := format.OpRegW
+
+	cases := []struct {
+		desc string
+		src  string
+		want []parseRec
+	}{
+		// csel x0, x1, x2, eq -> X(0), X(1), X(2), COND(EQ=0)
+		{
+			"csel eq (value 0)",
+			"csel x0, x1, x2, eq\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "csel"), count: 4,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					[]byte{byte(X), 2},
+					condBytes(format.CondEQ),
+				)}},
+		},
+		// csinc x0, x1, x2, ne -> COND(NE=1)
+		{
+			"csinc ne (value 1)",
+			"csinc x0, x1, x2, ne\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "csinc"), count: 4,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					[]byte{byte(X), 2},
+					condBytes(format.CondNE),
+				)}},
+		},
+		// csel w3, w4, w5, lt -> W regs, COND(LT=11)
+		{
+			"csel lt (value 11)",
+			"csel w3, w4, w5, lt\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "csel"), count: 4,
+				ops: concat(
+					[]byte{byte(W), 3},
+					[]byte{byte(W), 4},
+					[]byte{byte(W), 5},
+					condBytes(format.CondLT),
+				)}},
+		},
+		// csneg x0, x1, x2, al -> COND(AL=14)
+		{
+			"csneg al (value 14)",
+			"csneg x0, x1, x2, al\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "csneg"), count: 4,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					[]byte{byte(X), 2},
+					condBytes(format.CondAL),
+				)}},
+		},
+		// csinv x0, x1, x2, nv -> COND(NV=15)
+		{
+			"csinv nv (value 15)",
+			"csinv x0, x1, x2, nv\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "csinv"), count: 4,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					[]byte{byte(X), 2},
+					condBytes(format.CondNV),
+				)}},
+		},
+		// alias hs -> CondCS (value 2)
+		{
+			"alias hs -> CondCS (value 2)",
+			"csel x0, x1, x2, hs\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "csel"), count: 4,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					[]byte{byte(X), 2},
+					condBytes(format.CondCS),
+				)}},
+		},
+		// alias lo -> CondCC (value 3)
+		{
+			"alias lo -> CondCC (value 3)",
+			"csel x0, x1, x2, lo\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "csel"), count: 4,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					[]byte{byte(X), 2},
+					condBytes(format.CondCC),
+				)}},
+		},
+		// cs canonical (value 2) — distinct from alias hs
+		{
+			"cs canonical (value 2)",
+			"csel x0, x1, x2, cs\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "csel"), count: 4,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					[]byte{byte(X), 2},
+					condBytes(format.CondCS),
+				)}},
+		},
+		// cc canonical (value 3) — distinct from alias lo
+		{
+			"cc canonical (value 3)",
+			"csel x0, x1, x2, cc\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "csel"), count: 4,
+				ops: concat(
+					[]byte{byte(X), 0},
+					[]byte{byte(X), 1},
+					[]byte{byte(X), 2},
+					condBytes(format.CondCC),
+				)}},
+		},
+		// hi (value 8), ge (value 10), gt (value 12), le (value 13)
+		{
+			"csel hi (value 8)",
+			"csel x0, x1, x2, hi\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "csel"), count: 4,
+				ops: concat([]byte{byte(X), 0}, []byte{byte(X), 1}, []byte{byte(X), 2}, condBytes(format.CondHI))}},
+		},
+		{
+			"csel ge (value 10)",
+			"csel x0, x1, x2, ge\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "csel"), count: 4,
+				ops: concat([]byte{byte(X), 0}, []byte{byte(X), 1}, []byte{byte(X), 2}, condBytes(format.CondGE))}},
+		},
+		{
+			"csel gt (value 12)",
+			"csel x0, x1, x2, gt\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "csel"), count: 4,
+				ops: concat([]byte{byte(X), 0}, []byte{byte(X), 1}, []byte{byte(X), 2}, condBytes(format.CondGT))}},
+		},
+		{
+			"csel le (value 13)",
+			"csel x0, x1, x2, le\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "csel"), count: 4,
+				ops: concat([]byte{byte(X), 0}, []byte{byte(X), 1}, []byte{byte(X), 2}, condBytes(format.CondLE))}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			got, errFlag := parseZ80(t, mac, []byte(c.src))
+			if errFlag {
+				t.Fatalf("PARSE_ERR set unexpectedly")
+			}
+			compareRecs(t, "Z80 vs hand", got, c.want)
+			ref, refOk := refParseWithCond([]byte(c.src))
+			if !refOk {
+				t.Fatalf("refParseWithCond failed on valid case")
+			}
+			compareRecs(t, "Z80 vs ref", got, ref)
+		})
+	}
+}
+
+// TestParseCondError checks that a bare malformed line (no mnemonic) does not
+// silently succeed. A cond name standing alone as the first token is not a
+// mnemonic, so both Z80 and refParseWithCond report error/false.
+func TestParseCondError(t *testing.T) {
+	mac := loadAsmparse(t)
+	// "eq x0" — "eq" is not a mnemonic; the Z80 parser should set PARSE_ERR
+	// because mnemonic_lookup fails on "eq", and refParseWithCond returns false.
+	src := "eq x0\n"
+	_, errFlag := parseZ80(t, mac, []byte(src))
+	if !errFlag {
+		t.Errorf("%q: PARSE_ERR not set (expected error: eq is not a mnemonic)", src)
+	}
+	if _, ok := refParseWithCond([]byte(src)); ok {
+		t.Errorf("%q: refParseWithCond should report error", src)
+	}
+}
+
+// apCondNames are the 16 canonical cond names plus the two GNU as aliases.
+var apCondNames = []string{
+	"eq", "ne", "cs", "cc", "mi", "pl", "vs", "vc",
+	"hi", "ls", "ge", "lt", "gt", "le", "al", "nv",
+	"hs", "lo",
+}
+
+// TestParseCondFuzz compares asmparse against refParseWithCond over random
+// csel/csinc lines with random register and condition-code operands, including
+// aliases.
+func TestParseCondFuzz(t *testing.T) {
+	mac := loadAsmparse(t)
+	xRegs := []string{"x0", "x1", "x2", "x5", "x9", "x10", "x19", "x28"}
+	wRegs := []string{"w0", "w1", "w2", "w5", "w9", "w10", "w19", "w28"}
+	mnems := []string{"csel", "csinc", "csinv", "csneg"}
+
+	for _, seed := range []int64{7, 31, 97, 251, 1009} {
+		rng := rand.New(rand.NewSource(seed))
+		var src []byte
+		lines := 10 + rng.Intn(10)
+		for li := 0; li < lines; li++ {
+			mnem := mnems[rng.Intn(len(mnems))]
+			// csel/csinc/csinv/csneg take: dst, src1, src2, cond
+			// mix X and W regs
+			var dst, src1, src2 string
+			if rng.Intn(2) == 0 {
+				dst = xRegs[rng.Intn(len(xRegs))]
+				src1 = xRegs[rng.Intn(len(xRegs))]
+				src2 = xRegs[rng.Intn(len(xRegs))]
+			} else {
+				dst = wRegs[rng.Intn(len(wRegs))]
+				src1 = wRegs[rng.Intn(len(wRegs))]
+				src2 = wRegs[rng.Intn(len(wRegs))]
+			}
+			cond := apCondNames[rng.Intn(len(apCondNames))]
+			line := fmt.Sprintf("%s %s, %s, %s, %s\n", mnem, dst, src1, src2, cond)
+			src = append(src, line...)
+		}
+		want, ok := refParseWithCond(src)
+		if !ok {
+			t.Fatalf("seed %d: refParseWithCond reported error on generated B4c source:\n%s", seed, src)
+		}
+		got, errFlag := parseZ80(t, mac, src)
+		if errFlag {
+			t.Fatalf("seed %d: PARSE_ERR set on valid B4c source:\n%s", seed, src)
+		}
+		compareRecs(t, fmt.Sprintf("seed%d", seed), got, want)
+		t.Logf("seed=%d: %d source bytes, %d records matched", seed, len(src), len(got))
+	}
 }
