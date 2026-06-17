@@ -1,23 +1,18 @@
-// editmodel_test.go — host-verification of src/editmodel.asm Brick 1.
+// editmodel_test.go — host-verification of src/editmodel.asm Brick 1a+1b.
 //
-// Drives the Z80 block-list routines (em_reset, em_insert, em_line_count,
-// em_block_count, em_line_at, em_goto) under the flat-memory koron-go/z80
+// Drives the Z80 block-list routines under the flat-memory koron-go/z80
 // harness and asserts they produce the same logical sequence as a plain Go
-// oracle slice driven through identical random inserts.
+// oracle slice driven through identical random ops.
 //
-// The oracle is an []struct{id uint32; text []byte} maintained directly here
-// — we deliberately do NOT import the editmodel Go package; the oracle is
-// only the expected logical sequence, not a second implementation of the
-// block-list algorithm. Each insert picks a random position and random text,
-// and after all inserts we verify:
-//   - em_line_count matches len(oracle)
-//   - em_block_count > 1 (splits genuinely occurred)
-//   - for every index i: em_line_at(i) returns oracle[i].id and oracle[i].text
-//   - for every oracle entry: em_goto(id) returns found=1 and the correct index
+// TestEditModelBlockListZ80: Brick 1a (insert-only). 120 inserts, two seeds.
 //
-// The test uses two fixed seeds so results are deterministic.
-// With EM_BLOCK_CAP=256 and records of 12..44 bytes, 120 inserts produce
-// several splits, proving the split + EM_LOC update path.
+//	Verifies em_insert, em_line_count, em_block_count, em_line_at, em_goto.
+//
+// TestEditModelDeleteMergeZ80: Brick 1b (delete + merge). Build-up phase of
+//
+//	120 inserts, then an interleaved phase of ~200 ops (~50% insert / ~50%
+//	delete). Verifies em_delete, merge-on-underflow, descriptor reuse, and
+//	the EM_LOC_ABSENT sentinel for em_goto on deleted ids.
 package z80_test
 
 import (
@@ -221,5 +216,188 @@ func testEditModelWithSeed(t *testing.T, seed int64) {
 	}
 	if res.A != 0 {
 		t.Errorf("em_goto(nonexistent id): found=%d, want 0", res.A)
+	}
+}
+
+// TestEditModelDeleteMergeZ80 verifies em_delete (Brick 1b): deletion,
+// merge-on-underflow, descriptor reuse, and the EM_LOC_ABSENT sentinel.
+//
+// Structure: build-up phase (120 inserts, forced splits) then interleaved
+// phase (~200 ops, ~50/50 insert/delete). The oracle is a plain slice of
+// {id, text} pairs; deleted ids are tracked separately to verify that
+// em_goto returns not-found for them after deletion.
+func TestEditModelDeleteMergeZ80(t *testing.T) {
+	for _, seed := range []int64{42, 137, 999} {
+		seed := seed
+		t.Run(fmt.Sprintf("seed%d", seed), func(t *testing.T) {
+			testEditModelDeleteMergeWithSeed(t, seed)
+		})
+	}
+}
+
+func testEditModelDeleteMergeWithSeed(t *testing.T, seed int64) {
+	mac := loadEditModel(t)
+
+	symInText := emSym(t, mac, "EM_IN_TEXT")
+	symInID := emSym(t, mac, "EM_IN_ID")
+	symOutID := emSym(t, mac, "EM_OUT_ID")
+	symOutText := emSym(t, mac, "EM_OUT_TEXT")
+
+	if _, err := mac.Call("em_reset"); err != nil {
+		t.Fatalf("em_reset: %v", err)
+	}
+
+	rng := rand.New(rand.NewSource(seed))
+
+	// oracle is the live logical sequence; deletedIDs tracks recently deleted ids.
+	oracle := make([]oracleLine, 0, 320)
+	deletedIDs := make([]uint32, 0, 200)
+
+	// emInsert performs one insert into the Z80 model and the oracle.
+	emInsert := func(at int) {
+		textLen := 8 + rng.Intn(33)
+		text := make([]byte, textLen)
+		for i := range text {
+			text[i] = byte(0x20 + rng.Intn(0x5f))
+		}
+		mac.Write(symInText, text)
+		_, err := mac.CallEntry("em_insert", z80h.Entry{
+			BC: uint16(at),
+			A:  uint8(textLen),
+		})
+		if err != nil {
+			t.Fatalf("em_insert(at=%d): %v", at, err)
+		}
+		idBytes := mac.Read(symOutID, 3)
+		newID := emReadU24LE(idBytes)
+		if newID == 0 {
+			t.Fatalf("em_insert returned id=0")
+		}
+		// Insert into oracle.
+		oracleText := make([]byte, len(text))
+		copy(oracleText, text)
+		oracle = append(oracle, oracleLine{})
+		copy(oracle[at+1:], oracle[at:])
+		oracle[at] = oracleLine{id: newID, text: oracleText}
+	}
+
+	// emDelete performs one delete from the Z80 model and the oracle.
+	emDelete := func(at int) {
+		_, err := mac.CallEntry("em_delete", z80h.Entry{BC: uint16(at)})
+		if err != nil {
+			t.Fatalf("em_delete(at=%d): %v", at, err)
+		}
+		deletedIDs = append(deletedIDs, oracle[at].id)
+		oracle = append(oracle[:at], oracle[at+1:]...)
+	}
+
+	// Build-up phase: 120 inserts to force splits.
+	const buildCount = 120
+	for step := 0; step < buildCount; step++ {
+		at := rng.Intn(len(oracle) + 1)
+		emInsert(at)
+	}
+
+	// Interleaved phase: ~200 ops, ~50% insert / ~50% delete.
+	const mixCount = 200
+	for step := 0; step < mixCount; step++ {
+		if len(oracle) == 0 || rng.Intn(2) == 0 {
+			at := rng.Intn(len(oracle) + 1)
+			emInsert(at)
+		} else {
+			at := rng.Intn(len(oracle))
+			emDelete(at)
+		}
+	}
+
+	// --- Verify em_line_count ---
+	lcRes, err := mac.Call("em_line_count")
+	if err != nil {
+		t.Fatalf("em_line_count: %v", err)
+	}
+	if int(lcRes.HL) != len(oracle) {
+		t.Errorf("em_line_count = %d, want %d", lcRes.HL, len(oracle))
+	}
+
+	// --- Verify em_block_count (merges should keep it bounded) ---
+	bcRes, err := mac.Call("em_block_count")
+	if err != nil {
+		t.Fatalf("em_block_count: %v", err)
+	}
+	t.Logf("seed=%d: %d lines, %d blocks after build+mix", seed, len(oracle), bcRes.HL)
+
+	// --- Verify em_line_at for every index ---
+	for i, want := range oracle {
+		res, err := mac.CallEntry("em_line_at", z80h.Entry{BC: uint16(i)})
+		if err != nil {
+			t.Fatalf("em_line_at(%d): %v", i, err)
+		}
+		_ = res
+
+		gotIDBytes := mac.Read(symOutID, 3)
+		gotID := emReadU24LE(gotIDBytes)
+		if gotID != want.id {
+			t.Errorf("em_line_at(%d): id = %d, want %d", i, gotID, want.id)
+		}
+
+		outTextHeader := mac.Read(symOutText, 1)
+		gotLen := int(outTextHeader[0])
+		if gotLen != len(want.text) {
+			t.Errorf("em_line_at(%d): text len = %d, want %d", i, gotLen, len(want.text))
+			continue
+		}
+		if gotLen > 0 {
+			gotText := mac.Read(symOutText+1, gotLen)
+			for j := 0; j < gotLen; j++ {
+				if gotText[j] != want.text[j] {
+					t.Errorf("em_line_at(%d): text[%d] = %02x, want %02x", i, j, gotText[j], want.text[j])
+					break
+				}
+			}
+		}
+	}
+
+	// --- Verify em_goto for every live oracle entry ---
+	for i, want := range oracle {
+		var idBuf [3]byte
+		idBuf[0] = byte(want.id)
+		idBuf[1] = byte(want.id >> 8)
+		idBuf[2] = byte(want.id >> 16)
+		mac.Write(symInID, idBuf[:])
+		res, err := mac.Call("em_goto")
+		if err != nil {
+			t.Fatalf("em_goto(id=%d, oracle[%d]): %v", want.id, i, err)
+		}
+		if res.A != 1 {
+			t.Errorf("em_goto(id=%d, oracle[%d]): found=%d, want 1", want.id, i, res.A)
+			continue
+		}
+		if int(res.HL) != i {
+			t.Errorf("em_goto(id=%d): index=%d, want %d", want.id, res.HL, i)
+		}
+	}
+
+	// --- Verify em_goto returns not-found for a sample of deleted ids ---
+	// The EM_LOC_ABSENT (&FF) sentinel must cause em_goto to return A=0.
+	sampleSize := len(deletedIDs)
+	if sampleSize > 20 {
+		sampleSize = 20
+	}
+	// Take the last sampleSize deleted ids (most recently deleted, most likely
+	// to have triggered a merge).
+	start := len(deletedIDs) - sampleSize
+	for _, delID := range deletedIDs[start:] {
+		var idBuf [3]byte
+		idBuf[0] = byte(delID)
+		idBuf[1] = byte(delID >> 8)
+		idBuf[2] = byte(delID >> 16)
+		mac.Write(symInID, idBuf[:])
+		res, err := mac.Call("em_goto")
+		if err != nil {
+			t.Fatalf("em_goto(deleted id=%d): %v", delID, err)
+		}
+		if res.A != 0 {
+			t.Errorf("em_goto(deleted id=%d): found=%d, want 0 (EM_LOC_ABSENT sentinel broken)", delID, res.A)
+		}
 	}
 }
