@@ -877,5 +877,18 @@ Makefile payload target + the test, gated by the existing `netboot-z80` CI job.
   `TestEditModelUndoRedoZ80` (300-step random walk × 3 seeds vs a matched-cap Go
   reference) + `TestEditModelUndoDropOldestZ80` (deterministic drop-oldest).
   Flat-memory, gated by the `netboot-z80` CI job.
-- **Brick 4 — serialize/load** (the `EMDL` exact form + the real v2 `.tbn` path,
-  which on-SAM wires to the existing assembler/reader). Largely flat-memory-testable.
+- **Brick 4a — EMDL exact serialize/load** (LANDED — PR #392): port of
+  `serialize.go` to `src/editmodel.asm`. `em_serialize` writes the document to
+  `EM_SER_BUF` in the EMDL v1 format (`"EMDL" | ver | linecount | per line
+  {id:3 | textlen:2 | text}`, partition-independent), returning the byte length;
+  `em_load` validates the header (fail-loud, A=0, document untouched on a bad
+  header), resets, refills in stream order via `em_do_insert`, and restores
+  `EM_NEXTID = maxID+1`. Verified by `TestEditModelSerializeZ80` (3 seeds): the
+  Z80 bytes match the EMDL spec, the stream round-trips losslessly (same id/text
+  sequence and byte-stable reserialize), nextID is restored, and a corrupt header
+  fails loud. Flat-memory, gated by the `netboot-z80` CI job.
+- **Brick 4b — real v2 `.tbn` path** (port of i41c `SerializeTBN`/`LoadTBN`):
+  on-SAM this wires to the existing assembler/reader (`frontend`→`Pass1`→
+  `Compact` for save, the `.tbn` reader for load) and requires a complete, valid
+  assembly (fail-loud otherwise, per q24). Couples to the full assembler build,
+  not the standalone `editmodel.bin` harness — a larger integration, deferred.

@@ -1907,6 +1907,267 @@ em_cr_no:
                 ret
 
 ; ===========================================================================
+; em_serialize — write the document to EM_SER_BUF in the EMDL v1 format
+; (port of Serialize in tools/sam-aarch64/editmodel/serialize.go):
+;   "EMDL" | ver:1 | linecount:4 LE | per line { id:3 LE | textlen:2 LE | text }
+; Block boundaries are NOT recorded (the format is partition-independent), so
+; em_serialize(em_load(x)) is byte-stable. Returns the byte length in HL.
+; The record's 1-byte length is written zero-extended to the format's 2-byte
+; field; the flat-memory model caps a line at 255 bytes (the Brick 1 record).
+; ===========================================================================
+em_serialize:
+                ld      hl, EM_SER_BUF
+                ld      (hl), &45           ; 'E'
+                inc     hl
+                ld      (hl), &4D           ; 'M'
+                inc     hl
+                ld      (hl), &44           ; 'D'
+                inc     hl
+                ld      (hl), &4C           ; 'L'
+                inc     hl
+                ld      (hl), 1             ; version
+                inc     hl
+                ld      (EM_SER_PTR), hl    ; output ptr (after version)
+
+                call    em_line_count       ; HL = line count (u16)
+                ld      (EM_SER_CNT), hl
+
+                ld      hl, (EM_SER_PTR)
+                ld      a, (EM_SER_CNT)
+                ld      (hl), a             ; count[0]
+                inc     hl
+                ld      a, (EM_SER_CNT+1)
+                ld      (hl), a             ; count[1]
+                inc     hl
+                ld      (hl), 0             ; count[2]
+                inc     hl
+                ld      (hl), 0             ; count[3]
+                inc     hl
+                ld      (EM_SER_PTR), hl    ; output ptr (after header)
+
+                ld      a, (EM_NBLOCKS)
+                or      a
+                jr      z, em_ser_done
+                xor     a
+                ld      (EM_SER_P), a       ; order position P = 0
+em_ser_block_loop:
+                ld      a, (EM_SER_P)
+                ld      c, a
+                ld      a, (EM_NBLOCKS)
+                cp      c
+                jr      z, em_ser_done      ; P == NBLOCKS: done
+                ; desc = ORDER[P]
+                ld      hl, EM_ORDER
+                ld      d, 0
+                ld      e, c
+                add     hl, de
+                ld      a, (hl)
+                ld      (EM_SER_DESC), a
+                call    em_desc_dataptr_a   ; HL = data base
+                ld      (EM_SER_REC), hl
+                ld      a, (EM_SER_DESC)
+                call    em_desc_linecount_a ; A = block line_count
+                ld      (EM_SER_N), a
+em_ser_rec_loop:
+                ld      a, (EM_SER_N)
+                or      a
+                jr      z, em_ser_block_next
+                ; copy id(3) | textlen(2 LE) | text(len) from record to output
+                ld      hl, (EM_SER_REC)
+                ld      de, (EM_SER_PTR)
+                ld      a, (hl)             ; id[0]
+                ld      (de), a
+                inc     hl
+                inc     de
+                ld      a, (hl)             ; id[1]
+                ld      (de), a
+                inc     hl
+                inc     de
+                ld      a, (hl)             ; id[2]
+                ld      (de), a
+                inc     hl
+                inc     de
+                ld      a, (hl)             ; len (1 byte in the record)
+                inc     hl                  ; HL -> text
+                ld      (de), a             ; textlen[0]
+                inc     de
+                push    af                  ; save len
+                xor     a
+                ld      (de), a             ; textlen[1] = 0
+                inc     de
+                pop     af                  ; A = len
+                or      a
+                jr      z, em_ser_rec_notext
+                ld      c, a
+                ld      b, 0
+                ldir                        ; copy len text bytes HL->DE
+em_ser_rec_notext:
+                ld      (EM_SER_REC), hl
+                ld      (EM_SER_PTR), de
+                ld      a, (EM_SER_N)
+                dec     a
+                ld      (EM_SER_N), a
+                jr      em_ser_rec_loop
+em_ser_block_next:
+                ld      a, (EM_SER_P)
+                inc     a
+                ld      (EM_SER_P), a
+                jr      em_ser_block_loop
+em_ser_done:
+                ld      hl, (EM_SER_PTR)
+                ld      de, EM_SER_BUF
+                or      a
+                sbc     hl, de              ; HL = serialized byte length
+                ret
+
+; ===========================================================================
+; em_load — rebuild the document from an EMDL v1 stream in EM_SER_BUF (port of
+; Load in serialize.go). Returns A=1 on success, A=0 if the magic/version is
+; unrecognised (fail-loud; the document is left untouched on a bad header). On
+; success the document is reset and refilled in stream order, and EM_NEXTID is
+; set to maxID+1. Lines are re-blocked by em_do_insert's split-on-overflow;
+; since the format is partition-independent, the reserialized bytes still match.
+; ===========================================================================
+em_load:
+                ; Validate the header WITHOUT mutating the document.
+                ld      hl, EM_SER_BUF
+                ld      a, (hl)
+                cp      &45                 ; 'E'
+                jp      nz, em_load_fail
+                inc     hl
+                ld      a, (hl)
+                cp      &4D                 ; 'M'
+                jp      nz, em_load_fail
+                inc     hl
+                ld      a, (hl)
+                cp      &44                 ; 'D'
+                jp      nz, em_load_fail
+                inc     hl
+                ld      a, (hl)
+                cp      &4C                 ; 'L'
+                jp      nz, em_load_fail
+                inc     hl
+                ld      a, (hl)
+                cp      1                   ; version
+                jp      nz, em_load_fail
+                inc     hl
+                ld      (EM_LOAD_PTR), hl   ; ptr past version
+
+                call    em_reset            ; empties doc + journal; EM_NEXTID=1
+
+                ld      hl, (EM_LOAD_PTR)
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)
+                inc     hl
+                inc     hl                  ; skip count[2]
+                inc     hl                  ; skip count[3]
+                ld      (EM_LOAD_N), de     ; remaining lines (low 16 bits)
+                ld      (EM_LOAD_PTR), hl
+
+                ld      hl, 0
+                ld      (EM_LOAD_I), hl     ; lines inserted so far (= append index)
+                ld      (EM_LOAD_MAXID), hl
+                xor     a
+                ld      (EM_LOAD_MAXID+2), a
+em_load_line_loop:
+                ld      hl, (EM_LOAD_N)
+                ld      a, h
+                or      l
+                jr      z, em_load_done
+                ; read id(3) | textlen(2) | text
+                ld      hl, (EM_LOAD_PTR)
+                ld      a, (hl)
+                ld      (EM_W_ID), a
+                inc     hl
+                ld      a, (hl)
+                ld      (EM_W_ID+1), a
+                inc     hl
+                ld      a, (hl)
+                ld      (EM_W_ID+2), a
+                inc     hl
+                ld      a, (hl)             ; textlen[0]
+                ld      (EM_W_LEN), a
+                inc     hl
+                inc     hl                  ; skip textlen[1] (0; line <= 255)
+                ; copy text into EM_IN_TEXT
+                ld      a, (EM_W_LEN)
+                or      a
+                jr      z, em_load_notext
+                ld      c, a
+                ld      b, 0
+                ld      de, EM_IN_TEXT
+                ldir                        ; HL(text) -> EM_IN_TEXT; HL past text
+em_load_notext:
+                ld      (EM_LOAD_PTR), hl   ; ptr at next record
+                call    em_load_track_maxid
+                ; insert at end: EM_W_DOCI = lines inserted so far.
+                ld      hl, (EM_LOAD_I)
+                ld      (EM_W_DOCI), hl
+                call    em_do_insert
+                ld      hl, (EM_LOAD_I)
+                inc     hl
+                ld      (EM_LOAD_I), hl
+                ld      hl, (EM_LOAD_N)
+                dec     hl
+                ld      (EM_LOAD_N), hl
+                jr      em_load_line_loop
+em_load_done:
+                ; EM_NEXTID = maxID + 1.
+                ld      a, (EM_LOAD_MAXID)
+                ld      (EM_NEXTID), a
+                ld      a, (EM_LOAD_MAXID+1)
+                ld      (EM_NEXTID+1), a
+                ld      a, (EM_LOAD_MAXID+2)
+                ld      (EM_NEXTID+2), a
+                ld      hl, EM_NEXTID
+                inc     (hl)
+                jr      nz, em_load_nid_done
+                inc     hl
+                inc     (hl)
+                jr      nz, em_load_nid_done
+                inc     hl
+                inc     (hl)
+em_load_nid_done:
+                ld      a, 1
+                ret
+em_load_fail:
+                xor     a
+                ret
+
+; ---------------------------------------------------------------------------
+; em_load_track_maxid — EM_LOAD_MAXID = max(EM_LOAD_MAXID, EM_W_ID) as u24.
+; ---------------------------------------------------------------------------
+em_load_track_maxid:
+                ld      a, (EM_W_ID+2)
+                ld      b, a
+                ld      a, (EM_LOAD_MAXID+2)
+                cp      b
+                jr      c, em_ltm_set       ; MAXID2 < ID2 -> ID is larger
+                jr      nz, em_ltm_no        ; MAXID2 > ID2 -> ID is smaller
+                ld      a, (EM_W_ID+1)
+                ld      b, a
+                ld      a, (EM_LOAD_MAXID+1)
+                cp      b
+                jr      c, em_ltm_set
+                jr      nz, em_ltm_no
+                ld      a, (EM_W_ID)
+                ld      b, a
+                ld      a, (EM_LOAD_MAXID)
+                cp      b
+                jr      c, em_ltm_set
+                jr      em_ltm_no
+em_ltm_set:
+                ld      a, (EM_W_ID)
+                ld      (EM_LOAD_MAXID), a
+                ld      a, (EM_W_ID+1)
+                ld      (EM_LOAD_MAXID+1), a
+                ld      a, (EM_W_ID+2)
+                ld      (EM_LOAD_MAXID+2), a
+em_ltm_no:
+                ret
+
+; ===========================================================================
 ; Working storage (scratch variables used across routines)
 ; ===========================================================================
 EM_W_DOCI:      defs 2          ; document index for current insert
@@ -1986,3 +2247,22 @@ EM_UNDO_COUNT:  defs 1                  ; live undo entries (0..EM_MAX_UNDO)
 EM_REDO_COUNT:  defs 1                  ; live redo entries (0..EM_MAX_UNDO)
 EM_UNDO_BASE:   defs EM_MAX_UNDO*EM_UNDO_SLOT_SIZE  ; undo ring slots
 EM_REDO_BASE:   defs EM_MAX_UNDO*EM_UNDO_SLOT_SIZE  ; redo LIFO slots
+
+; ===========================================================================
+; EMDL serialize/load storage (Brick 4a)
+; ===========================================================================
+EM_SER_PTR:     defs 2          ; running output pointer in em_serialize
+EM_SER_CNT:     defs 2          ; line count captured for the header
+EM_SER_P:       defs 1          ; order position being serialized
+EM_SER_DESC:    defs 1          ; descriptor of the block being serialized
+EM_SER_REC:     defs 2          ; running record pointer within the block
+EM_SER_N:       defs 1          ; records remaining in the block
+EM_LOAD_PTR:    defs 2          ; running input pointer in em_load
+EM_LOAD_N:      defs 2          ; lines remaining to load
+EM_LOAD_I:      defs 2          ; lines inserted so far (append index)
+EM_LOAD_MAXID:  defs 3          ; max id seen (u24) -> EM_NEXTID = max+1
+
+; EMDL buffer. Sized for the flat-memory harness (header 9 + per line 5+len);
+; the serialize test bounds the document to fit. The real SAM editor sizes this
+; to its RAM budget without structural change (like EM_BLOCK_CAP).
+EM_SER_BUF:     defs 3072
