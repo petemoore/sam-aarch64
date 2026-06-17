@@ -29,9 +29,9 @@ Legend: ✅ done · ⏳ in progress · 📋 plan-ready · 🧭 idea
 | **i7** — codegen sysreg/mnemonic/form tables from the Go authority (the **first brick**) | ✅ **phases A–C landed** — A deleted ENCTAB_LEN; B renamed the tool to `tables-gen`, generates `src/sysreg_tables.inc` from `sysregs.go`; C generates `src/tbn_constants.inc` (OP_KIND/REC_KIND/DIR equates, PR #235) + `src/mnemonic_ids.inc` (MNEM_* mnemonic-ID equates, PR #236), both byte-neutral; all guarded by `make tables` / `tables-sync-check`. Only phase D = i74 remains (gated) | `docs/specs/codegen-tables-design.md`; item registry i7, i74 |
 | **i74** — i7 phase D: at/ic/barrier operand-table codegen (spec §6 Q3) | 📋 queued (gated) — i7 A–C all landed; phase D needs the `aarch64dec/sys.go` at/ic/barrier switches refactored into exported data first | `docs/specs/codegen-tables-design.md` §6; i7 |
 | **i75** — B-DOS boot-disk swap (the q10 resolution, incremental) | ✅ done — B-DOS-booted gate suite proven green locally (no Atom Lite attached), shipped/CI default flipped to B-DOS, samdos2 retained via flags | item registry i75; q10; `docs/notes/bdos-trinity-fork-analysis.md` |
-| **i41** — editor edit-model implementation (paged block-list) | 📋 design agreed (Pete 2026-06-08, §7 — 5 decisions locked) | `docs/specs/editor-edit-model-design.md` §7; item registry i41 |
+| **i41** — editor edit-model implementation (paged block-list) | ⏳ **core landed (i41a, PR #383)** — `tools/sam-aarch64/editmodel` Go authority: ½-page blocks, u24 ids, stable-block-ref location table (O(½ block) per split/merge), serialize seam, §5.1 property test green. Decomposed into i41a (done) / i41b undo / i41c i48-IR+v2-`.tbn` / i41d Z80 port | `docs/specs/editor-edit-model-design.md` §7; item registry i41, i41a–i41d |
 | **i48c** — Z80 text→overlay encoder (SAM-side editor input path; absorbs i39c) | 🧭 M9 strand — Go front-end i48b is the authority | `docs/specs/i48-syntactic-encoder-design.md` §2; item registry i48c, i39c |
-| **i78** — source-structure preservation (blank lines + comment paragraphs round-trip exactly) | ⏳ **design landed** — blank-run row kind + multi-line-comment grouping decided; indentation deferred behind the i76 interface sign-off. Build host-first (encoding authority) with a corpus round-trip CI gate; Z80 half rides i48c | `docs/specs/source-structure-preservation-design.md`; item registry i78, i76, i48c |
+| **i78** — source-structure preservation (blank lines + comment paragraphs round-trip exactly) | ✅ **DONE** (closed registry) — blank-run row kind + comment grouping shipped; the `disasm-roundtrip` CI gate asserts per-fixture blank-line + comment-count round-trip (release.s: 1340 PROGBITS blank lines). Indentation deferred behind the i76 interface sign-off; Z80 half rides i48c | `docs/specs/source-structure-preservation-design.md`; item registry i78 (closed), i76, i48c |
 | **i76 rendering rules** — the editor's rendering-rule spec + the default-config decision | ⏳ **rules specified** (`editor-rendering-rules-design.md` §3–§9, the config lab is the authority); **default look recommended** (§10, a tuned `compressed.config`) pending Pete's sign-off → **q13**. Geometry/font stay gated on the i6 P3 memo | `docs/specs/editor-rendering-rules-design.md`; item registry i76; question registry q13 |
 | **i76** — host-side Go TUI editor prototype at SAM-faithful geometry (the functional UX authority; terminal + PNG/SCREEN$ mockup backends; **i4/i5/i6 fold into it** — P1 = the i4 viewer, the mockup backend = i5/q1, the geometry flag + P3 memo = i6) | 🚧 **P1a delivered** — `tools/editor-prototype`: `samscreen` abstraction + tcell terminal + PNG/SCREEN$ mockup backends + i4-parity viewer + full `-geometry` matrix; mockup sheets for all six geometries (`make editor-mockups`). **P1b real-SAM 6×6 font-proof in flight separately.** | `docs/specs/editor-tui-prototype-design.md`; `tools/editor-prototype/`; item registry i76 |
 | **i4** — read-only listing/scroll viewer (precursor to i3) | 🧭 carried forward by **i76 P1** | item registry i4, i76; ROADMAP "Editor vision" |
@@ -96,6 +96,18 @@ swaps. The edit-model records **are** the i48 in-memory symbolic IR; the
 block-list serialises to the `.tbn` on save/assemble (the `.tbn` is never
 mutated in place). M9 builds the core block-list directly (clean serialize seam,
 no throwaway MVP).
+
+**Core landed (i41a, PR #383):** the Go authority `tools/sam-aarch64/editmodel`
+implements the block-list (½-page blocks, u24 never-reused record-ids, a
+record-id→stable-block-pointer location table maintained O(½ block) per
+split/merge with no global reindex — the design's defining bounded-cost
+property) behind a cleanly-separable `EMDL` serialize/load seam, proven by the
+§5.1 property test (5 seeds × 7000 random ops vs a parallel oracle:
+serialize→load→serialize byte-stable + goto-by-id correct + invariants hold).
+The host model proves the *algorithm*; the SAM byte-layout / intra-block gap /
+paging latency are the Z80 port (i41d). Remaining sub-items: i41b (bounded
+ring-journal undo), i41c (i48-IR payload + real v2-`.tbn` serialize), i41d (Z80
+port).
 
 ## i48c — SAM-side text→overlay encoder
 
