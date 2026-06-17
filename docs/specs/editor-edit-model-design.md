@@ -867,6 +867,15 @@ Makefile payload target + the test, gated by the existing `netboot-z80` CI job.
   via `OUT (251)`, claim/return pages on split/merge, block list resident in
   section D. The **only** part that genuinely needs SAM paging hardware →
   **SimCoupé-gated** (per §5.2). Not flat-memory-verifiable.
-- **Brick 3 — bounded ring-journal undo/redo** (port of i41b). Flat-memory-testable.
+- **Brick 3 — bounded ring-journal undo/redo** (LANDED — PR #391): port of i41b
+  to `src/editmodel.asm`. `em_insert`/`em_delete` split into journaling public
+  wrappers over non-journaling `em_do_insert`/`em_do_delete` primitives (the Go
+  `doInsert`/`doDelete` split), so `em_undo`/`em_redo` replay with the original id
+  and do not re-journal. Undo = a ring of `EM_MAX_UNDO` fixed slots with
+  drop-oldest; redo = a LIFO bounded by the same depth, cleared by any fresh edit.
+  New exports `em_undo`/`em_redo`/`em_can_undo`/`em_can_redo`. Verified by
+  `TestEditModelUndoRedoZ80` (300-step random walk × 3 seeds vs a matched-cap Go
+  reference) + `TestEditModelUndoDropOldestZ80` (deterministic drop-oldest).
+  Flat-memory, gated by the `netboot-z80` CI job.
 - **Brick 4 — serialize/load** (the `EMDL` exact form + the real v2 `.tbn` path,
   which on-SAM wires to the existing assembler/reader). Largely flat-memory-testable.
