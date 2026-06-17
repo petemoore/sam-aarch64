@@ -1,19 +1,21 @@
 // asmparse_test.go — host-verification of src/asmparse.asm (i48c: the aarch64
-// assembler-source parser; Bricks B2a + B2b).
+// assembler-source parser; Bricks B2a–B2c).
 //
 // B2a (mnemonic_lookup): drives the lookup under the flat-memory koron-go/z80
 // harness and asserts the returned ID matches format.MnemonicID for every name
 // in MnemonicTable, plus a batch of non-mnemonics (asserting not-found).
 //
-// B2b (parse_run / parse_inst): drives the register-instruction parse and
-// compares the emitted INST records against a faithful Go reference. The
-// operand-byte authority is the real format.OperandWriter (imported directly);
-// the lexing reuses refLex (already authority-validated in asmlex_test.go); only
-// the small control-flow port (matchReg + the generic operand loop) is
-// transcribed — refMatchReg below is verbatim parser.go matchReg. The B2b domain
-// is register-only instruction lines (no blank-runs/labels/comments/directives/
-// #imm/mem operands, and none of the special-form mnemonics parseInst intercepts
-// before its generic loop), so refParse mirrors Parse exactly on that domain.
+// B2b/B2c (parse_run / parse_inst): drives the instruction parse and compares
+// the emitted INST records against a faithful Go reference. The operand-byte
+// authority is the real format.OperandWriter + format.ExprWriter (imported
+// directly); the lexing reuses refLex (already authority-validated in
+// asmlex_test.go); only the small control-flow port (matchReg + the generic
+// operand loop) is transcribed — refMatchReg below is verbatim parser.go
+// matchReg. The B2b/B2c domain is instruction lines with register and
+// single-literal-#imm operands (no blank-runs/labels/comments/directives/multi-
+// term-or-symbol expressions/mem operands, and none of the special-form
+// mnemonics parseInst intercepts before its generic loop), so refParse mirrors
+// Parse exactly on that domain.
 //
 // Unlike asmlex_test.go (which transcribes the heavyweight frontend lexer), the
 // authority here is the pure-stdlib leaf package sam-aarch64-format, imported
@@ -203,16 +205,32 @@ func refParse(src []byte) (recs []parseRec, ok bool) {
 					pos++
 					continue
 				}
-				if k != tIdent {
-					return nil, false // immediate / mem / etc. -> later brick
+				switch k {
+				case tIdent:
+					rk, reg, isReg := refMatchReg(string(toks[pos].span))
+					if !isReg {
+						return nil, false
+					}
+					ow.WriteReg(rk, reg)
+					count++
+					pos++
+				case tHash:
+					// `#` immediate prefix: must be followed by an int literal
+					// (a single-literal immediate; expressions are B3).
+					pos++
+					if pos >= len(toks) || toks[pos].kind != tInt {
+						return nil, false
+					}
+					fallthrough
+				case tInt:
+					var ew format.ExprWriter
+					ew.WriteImm(int64(toks[pos].val))
+					ow.WriteImmExpr(ew.Bytes())
+					count++
+					pos++
+				default:
+					return nil, false // mem operand / symbol expr -> later brick
 				}
-				rk, reg, isReg := refMatchReg(string(toks[pos].span))
-				if !isReg {
-					return nil, false
-				}
-				ow.WriteReg(rk, reg)
-				count++
-				pos++
 			}
 			recs = append(recs, parseRec{mnemonicID: id, count: count, ops: ow.Bytes()})
 		default:
@@ -355,6 +373,93 @@ func TestParseInstHandCases(t *testing.T) {
 	}
 }
 
+// opspec describes one operand for the mixed reg/imm hand-case builder.
+type opspec struct {
+	isImm bool
+	k     format.OperandKind // register kind (isImm == false)
+	r     byte               // register number
+	imm   int64              // immediate value (isImm == true)
+}
+
+func rOp(k format.OperandKind, r byte) opspec { return opspec{k: k, r: r} }
+func iOp(v int64) opspec                      { return opspec{isImm: true, imm: v} }
+
+// mkRec2 builds the expected INST record for a mnemonic with mixed register and
+// immediate operands, using the authority (format.MnemonicID + the real
+// format.OperandWriter / format.ExprWriter — WriteImm picks the shortest width).
+func mkRec2(t *testing.T, mnem string, ops ...opspec) parseRec {
+	t.Helper()
+	id, ok := format.MnemonicID(mnem)
+	if !ok {
+		t.Fatalf("mkRec2: %q is not a mnemonic", mnem)
+	}
+	var ow format.OperandWriter
+	for _, o := range ops {
+		if o.isImm {
+			var ew format.ExprWriter
+			ew.WriteImm(o.imm)
+			ow.WriteImmExpr(ew.Bytes())
+		} else {
+			ow.WriteReg(o.k, o.r)
+		}
+	}
+	return parseRec{mnemonicID: id, count: byte(len(ops)), ops: ow.Bytes()}
+}
+
+// TestParseImmHandCases pins INST records for register/#imm instruction lines,
+// exercising each PUSH_IMMn width boundary (8/16/32/64-bit) and the signed
+// wraparound of large hex literals, then full-checks against refParse.
+func TestParseImmHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	cases := []struct {
+		src  string
+		want []parseRec
+	}{
+		{"add x0, x1, #4\n", []parseRec{mkRec2(t, "add", rOp(X, 0), rOp(X, 1), iOp(4))}},
+		{"mov x0, #0\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0))}},
+		{"sub sp, sp, #16\n", []parseRec{mkRec2(t, "sub", rOp(format.OpRegXSP, 31), rOp(format.OpRegXSP, 31), iOp(16))}},
+		// bare immediate (no '#') is also a valid operand
+		{"mov x0, 255\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(255))}},
+		// width boundaries: 127→imm8, 128→imm16, 32768→imm16, 65536→imm32, 2^31→imm32, 2^32→imm64
+		{"mov x0, #127\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(127))}},
+		{"mov x0, #128\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(128))}},
+		{"mov x0, #32768\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(32768))}},
+		{"mov x0, #0x10000\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x10000))}},
+		{"mov x0, #0x80000000\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x80000000))}},
+		// large hex wraps to a negative int64 -> WriteImm picks the short form
+		{"mov x0, #0xffffffffffffffff\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-1))}},
+		{"mov x0, #0x7fffffffffffffff\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x7fffffffffffffff))}},
+		// char-literal immediate
+		{"mov x0, #'A'\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp('A'))}},
+		// immediate-only operand and a reg after an imm (commas optional)
+		{"add x0 #1 x2\n", []parseRec{mkRec2(t, "add", rOp(X, 0), iOp(1), rOp(X, 2))}},
+	}
+	for _, c := range cases {
+		got, errFlag := parseZ80(t, mac, []byte(c.src))
+		if errFlag {
+			t.Errorf("%q: PARSE_ERR set unexpectedly", c.src)
+			continue
+		}
+		compareRecs(t, fmt.Sprintf("%q", c.src), got, c.want)
+		ref, ok := refParse([]byte(c.src))
+		if !ok {
+			t.Fatalf("%q: refParse reported error on a valid case", c.src)
+		}
+		compareRecs(t, fmt.Sprintf("%q (vs refParse)", c.src), got, ref)
+	}
+}
+
+// apImmPool are immediate operands spanning every PUSH_IMMn width plus the
+// signed wraparound of large hex literals and char literals.
+var apImmPool = []string{
+	"#0", "#1", "#4", "#15", "#127", "#128", "#255", "#256",
+	"#1000", "#32767", "#32768", "#65535", "#0x10000",
+	"#0x7fffffff", "#0x80000000", "#0xdeadbeef", "#0xffffffff",
+	"#0x100000000", "#0x7fffffffffffffff", "#0xffffffffffffffff",
+	"#'A'", "#'0'",
+}
+
 // apRegPool are register operands match_reg must recognise.
 var apRegPool = []string{
 	"x0", "x1", "x2", "x5", "x9", "x10", "x19", "x28", "x29", "x30",
@@ -383,10 +488,15 @@ func TestParseInstFuzz(t *testing.T) {
 		lines := 5 + rng.Intn(12)
 		for li := 0; li < lines; li++ {
 			src = append(src, apMnemPool[rng.Intn(len(apMnemPool))]...)
-			nops := rng.Intn(4) // 0..3 register operands
+			nops := rng.Intn(4) // 0..3 operands
 			for oi := 0; oi < nops; oi++ {
 				src = append(src, ' ')
-				src = append(src, apRegPool[rng.Intn(len(apRegPool))]...)
+				// ~30% immediates, ~70% registers (both valid B2c operands).
+				if rng.Intn(10) < 3 {
+					src = append(src, apImmPool[rng.Intn(len(apImmPool))]...)
+				} else {
+					src = append(src, apRegPool[rng.Intn(len(apRegPool))]...)
+				}
 				// ~70% of separators are commas; the rest bare spaces (both legal).
 				if oi < nops-1 && rng.Intn(10) < 7 {
 					src = append(src, ',')
@@ -418,8 +528,9 @@ func TestParseInstError(t *testing.T) {
 		src  string
 	}{
 		{"unknown mnemonic", "frobnicate x0, x1\n"},
-		{"immediate operand (B2c, not B2b)", "add x0, x1, #4\n"},
-		{"non-register ident operand", "add x0, foo\n"},
+		{"multi-term expression (B3, not B2c)", "add x0, x1, #4+1\n"},
+		{"bare # without an int", "add x0, #\n"},
+		{"symbol / non-register ident operand (B3)", "add x0, foo\n"},
 		{"leading comma", "add , x0\n"},
 		{"line-leading number", "5 x0\n"},
 		{"directive (B6, not B2b)", ".text\n"},

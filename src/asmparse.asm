@@ -11,19 +11,26 @@
 ;   B2a: mnemonic_lookup — turn a lexed mnemonic identifier's bytes back into
 ;        its on-disk mnemonic ID. The runtime-data counterpart of
 ;        mnemonic_ids.inc's assemble-time equates.
-;   B2b (this): parse_run / parse_inst — the generic simple-instruction parse.
+;   B2b: parse_run / parse_inst — the generic simple-instruction parse.
 ;        A line whose first token is an identifier is a mnemonic followed by a
 ;        comma-separated (commas optional, per parser.go) operand list; B2b
 ;        handles register operands (reg/reg/reg, mov reg/reg, ret, br reg, …),
-;        emitting an INST record. The #imm operand is B2c; shifted/extended
-;        regs, mem operands, special-form insts, directives, labels, comments
-;        and blank-runs are later bricks (B2c/B3-B7) — a line that needs one is
-;        outside B2b's domain and sets PARSE_ERR.
+;        emitting an INST record.
+;   B2c (this): the `#imm` operand — `add x0, x1, #4`. A `#`-prefixed or bare
+;        integer literal becomes an OP_KIND_IMM_EXPR operand whose expression
+;        bytecode is a single folded immediate (port of parseOperand's TokHash/
+;        TokInt path → parseExpression constant-fold → ExprWriter.WriteImm).
+;        Multi-term/symbol/PC expressions, the `,lsl #12` suffix, mem operands,
+;        special-form insts, directives, labels, comments and blank-runs are
+;        later bricks (B3-B7) — a line that needs one is outside this domain and
+;        sets PARSE_ERR.
 ;
-; INST record (B2b emission form — original framing for the host harness; the
+; INST record (emission form — original framing for the host harness; the
 ; OPERAND bytes are byte-faithful to format.OperandWriter):
 ;   mnemonic_id:2 LE | operand_count:1 | operands_len:2 LE | operands[]
-; Each register operand is `kind:1, reg:1` (kind = OP_KIND_REG_X/W/XSP/WSP).
+; A register operand is `kind:1, reg:1` (kind = OP_KIND_REG_X/W/XSP/WSP); an
+; immediate operand is `OP_KIND_IMM_EXPR:1, expr_len:2 LE, expr[]` where expr is
+; `PUSH_IMMn:1, value:n LE` (n = 1/2/4/8, the shortest signed fit).
 ;
 ; PROVENANCE: algorithmic port of parser.go + format/operands.go; the name→id
 ; table is generated from the Go authority (tables-gen -mnemonic-names-inc →
@@ -40,6 +47,14 @@
 ; (lex_run, the TOK_* equates, the LEX_SRC/LEX_TOKS buffers).
                 include "tbn_constants.inc"
                 include "asmlex.asm"
+
+; Expression-bytecode push-immediate opcodes (ExprOp in
+; tools/sam-aarch64-format/expr.go; the existing evaluator src/expr_eval.asm
+; dispatches on the same bare values 1..4).
+EXPR_PUSH_IMM8:  equ &01
+EXPR_PUSH_IMM16: equ &02
+EXPR_PUSH_IMM32: equ &03
+EXPR_PUSH_IMM64: equ &04
 
 ; ===========================================================================
 ; parse_run — tokenise LEX_SRC (BC = length) and parse it into INST records.
@@ -124,7 +139,7 @@ pi_loop:
                 jr      z, pi_emit
                 cp      TOK_COMMA
                 jr      z, pi_comma
-                call    parse_operand_reg   ; append one register operand
+                call    parse_operand       ; append one operand (register or #imm)
                 jr      c, pi_err
                 ld      a, (PI_COUNT)
                 inc     a
@@ -147,11 +162,38 @@ pi_err:
                 ret
 
 ; ===========================================================================
+; parse_operand — dispatch one operand at the current token. (Port of
+; parseOperand's switch, parser.go:1023-1090, restricted to the register and
+; #imm shapes.) A register identifier -> parse_operand_reg; a `#`-prefixed or
+; bare integer literal -> parse_operand_imm; anything else (shifted/extended
+; reg, mem operand, symbol/expression immediate) is a later brick -> CY set.
+; ===========================================================================
+parse_operand:
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_HASH
+                jr      z, po_hash
+                cp      TOK_INT
+                jp      z, parse_operand_imm
+                cp      TOK_IDENT
+                jr      z, parse_operand_reg
+                scf                         ; out of domain
+                ret
+po_hash:
+                call    parse_advance_tok   ; consume '#'
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_INT
+                jp      z, parse_operand_imm
+                scf                         ; '#' not followed by an int -> B3
+                ret
+
+; ===========================================================================
 ; parse_operand_reg — parse one register operand at the current token and
 ; append its `kind:1, reg:1` bytes to (PI_OPSPTR). (Port of parseOperand's
 ; register path, parser.go:1032-1073, minus the shift/extend lookahead which
 ; is a later brick.) Exit: CY clear on success (token consumed), CY set on a
-; non-register operand (outside B2b's domain).
+; non-register operand.
 ; ===========================================================================
 parse_operand_reg:
                 ld      hl, (PARSE_TOK)
@@ -179,6 +221,109 @@ parse_operand_reg:
 por_err:
                 scf
                 ret
+
+; ===========================================================================
+; parse_operand_imm — parse one immediate operand: the current token is a
+; TOK_INT (the `#` prefix, if any, is already consumed). Append an
+; OP_KIND_IMM_EXPR operand whose expression bytecode is the single folded
+; immediate `PUSH_IMMn, value[n]` (port of parseOperand's TokInt path ->
+; parseExpression constant-fold -> ExprWriter.WriteImm). Always succeeds (CY
+; clear); the lexer already validated and computed the int64 value.
+; ===========================================================================
+parse_operand_imm:
+                ; copy the token's 8-byte value (record offset 6) to IMM_VAL.
+                ld      hl, (PARSE_TOK)
+                ld      de, 6
+                add     hl, de
+                ld      de, IMM_VAL
+                ld      bc, 8
+                ldir
+                call    expr_imm_width      ; A = PUSH_IMMn opcode, B = n
+                ld      (IMM_OP), a
+                ld      a, b
+                ld      (IMM_N), a
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_IMM_EXPR
+                inc     hl
+                ld      a, (IMM_N)
+                inc     a                   ; expr_len = 1 (opcode) + n
+                ld      (hl), a             ; expr_len low
+                inc     hl
+                ld      (hl), 0             ; expr_len high (expr is <= 9 bytes)
+                inc     hl
+                ld      a, (IMM_OP)
+                ld      (hl), a             ; PUSH_IMMn opcode
+                inc     hl
+                ex      de, hl              ; DE = dest (after the opcode)
+                ld      hl, IMM_VAL         ; source = the low n value bytes
+                ld      a, (IMM_N)
+                ld      c, a
+                ld      b, 0
+                ldir                        ; copy n value bytes; DE -> end
+                ld      (PI_OPSPTR), de
+                call    parse_advance_tok   ; consume the int token
+                or      a                   ; clear carry: success
+                ret
+
+; ===========================================================================
+; expr_imm_width — choose the shortest signed PUSH_IMMn for the 8-byte LE value
+; in IMM_VAL. (Port of ExprWriter.WriteImm's range ladder, expr.go:140-154.)
+; Exit: A = PUSH_IMMn opcode, B = n (1/2/4/8). A value fits n signed bytes iff
+; the bytes above byte n-1 are all the sign extension of byte n-1's MSB.
+; ===========================================================================
+expr_imm_width:
+                ld      a, (IMM_VAL)        ; int8: IMM_VAL[1..7] == signext(byte0)?
+                call    signext_of_a
+                ld      c, a
+                ld      hl, IMM_VAL+1
+                ld      b, 7
+                call    all_equal_c
+                jr      z, eiw_imm8
+                ld      a, (IMM_VAL+1)      ; int16: IMM_VAL[2..7] == signext(byte1)?
+                call    signext_of_a
+                ld      c, a
+                ld      hl, IMM_VAL+2
+                ld      b, 6
+                call    all_equal_c
+                jr      z, eiw_imm16
+                ld      a, (IMM_VAL+3)      ; int32: IMM_VAL[4..7] == signext(byte3)?
+                call    signext_of_a
+                ld      c, a
+                ld      hl, IMM_VAL+4
+                ld      b, 4
+                call    all_equal_c
+                jr      z, eiw_imm32
+                ld      a, EXPR_PUSH_IMM64
+                ld      b, 8
+                ret
+eiw_imm8:
+                ld      a, EXPR_PUSH_IMM8
+                ld      b, 1
+                ret
+eiw_imm16:
+                ld      a, EXPR_PUSH_IMM16
+                ld      b, 2
+                ret
+eiw_imm32:
+                ld      a, EXPR_PUSH_IMM32
+                ld      b, 4
+                ret
+
+; signext_of_a — A = byte; return A = 0x00 (bit7 clear) or 0xFF (bit7 set).
+signext_of_a:
+                add     a, a                ; bit7 -> carry
+                sbc     a, a                ; A = 0x00 or 0xFF
+                ret
+
+; all_equal_c — HL = ptr, B = count (>0), C = expected byte. Returns ZF set iff
+; all `count` bytes equal C. Clobbers A, HL, B.
+all_equal_c:
+                ld      a, (hl)
+                cp      c
+                ret     nz
+                inc     hl
+                djnz    all_equal_c
+                ret                         ; last cp left ZF set (equal)
 
 ; ===========================================================================
 ; match_reg — is the identifier (HL = ptr, A = length) a register name?
@@ -433,6 +578,9 @@ PARSE_RECN:     defs 2          ; INST records emitted so far
 PI_MNEMID:      defs 2          ; parse_inst: current mnemonic ID
 PI_OPSPTR:      defs 2          ; parse_inst: operand-bytes write pointer
 PI_COUNT:       defs 1          ; parse_inst: operand count
+IMM_VAL:        defs 8          ; parse_operand_imm: the immediate's int64 (LE)
+IMM_OP:         defs 1          ; parse_operand_imm: chosen PUSH_IMMn opcode
+IMM_N:          defs 1          ; parse_operand_imm: value byte count (1/2/4/8)
 PARSE_OPSBUF:   defs 256        ; one instruction's operand bytes (staging)
 
 ; ===========================================================================
