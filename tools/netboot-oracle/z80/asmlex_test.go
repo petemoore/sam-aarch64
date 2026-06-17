@@ -1,5 +1,5 @@
 // asmlex_test.go — host-verification of src/asmlex.asm (i48c: the aarch64
-// assembler-source tokenizer; Bricks B1 + B1b).
+// assembler-source tokenizer; Bricks B1–B1d).
 //
 // Drives lex_run under the flat-memory koron-go/z80 harness and compares every
 // emitted token (kind + source-span + integer base + int64/char value) against
@@ -9,13 +9,12 @@
 // lives in a different Go module and pulls in the whole assembler front-end, so
 // — as the editmodel harness test does for editmodel.go — refLex below is a
 // faithful transcription of lexer.go's supported subset (kinds, spans, the
-// 0x/0b base, the int64 value, char-literal values, and local-label refs), and
-// the canonical hand cases assert kind sequences taken straight from
-// frontend/lexer_test.go (authority-anchored). Still deferred to Brick B1d:
-// string literals; cpp line-directives are out of scope (a preprocessor
-// artifact). On that input domain refLex is identical to frontend.Lex, since
-// neither a string ('"') nor a cpp directive can arise — the corpus emits
-// neither.
+// 0x/0b base, the int64 value, char-literal values, local-label refs, and the
+// decoded string-literal body), and the canonical hand cases assert kind
+// sequences taken straight from frontend/lexer_test.go (authority-anchored).
+// cpp line-directives are out of scope (a preprocessor artifact); on that input
+// domain refLex is identical to frontend.Lex, since a cpp directive cannot arise
+// (a line-start '#' lexes as a line comment in both).
 package z80_test
 
 import (
@@ -142,7 +141,22 @@ func refTryLocal(src []byte, pos int) (digit int, dir byte, adv int, ok bool) {
 	return 0, 0, 0, false
 }
 
-// refEscape decodes a char-literal escape (port of readCharLit's switch).
+// refHexNibble maps a hex digit char to 0..15, or -1 if not a hex digit (port
+// of lexer.go's hexNibble).
+func refHexNibble(c byte) int {
+	switch {
+	case c >= '0' && c <= '9':
+		return int(c - '0')
+	case c >= 'a' && c <= 'f':
+		return int(c-'a') + 10
+	case c >= 'A' && c <= 'F':
+		return int(c-'A') + 10
+	}
+	return -1
+}
+
+// refEscape decodes a char-literal escape (port of readCharLit's switch). The
+// same set, plus \xNN, applies inside string literals (see refLex's '"' case).
 func refEscape(e byte) (byte, bool) {
 	switch e {
 	case 'n':
@@ -338,6 +352,51 @@ func refLex(src []byte) (toks []refTok, ok bool) {
 				val = val*uint64(base) + refDigitVal(dc)
 			}
 			emit(refTok{kind: tInt, span: span, base: base, val: val})
+		case c == '"':
+			// String literal (port of readString): decode the body into
+			// `body`, resolving escapes (n/r/t/\/"/'/0 and \xNN). The token's
+			// span is the decoded body, matching Go's Tok.Bytes.
+			pos++ // opening "
+			var body []byte
+			for {
+				if pos >= n {
+					return toks, false // unterminated string literal
+				}
+				ch := src[pos]
+				pos++
+				if ch == '"' {
+					break
+				}
+				if ch == '\\' {
+					if pos >= n {
+						return toks, false // unterminated string escape
+					}
+					esc := src[pos]
+					pos++
+					if esc == 'x' {
+						if pos+1 >= n {
+							return toks, false // truncated \xNN
+						}
+						hi := refHexNibble(src[pos])
+						pos++
+						lo := refHexNibble(src[pos])
+						pos++
+						if hi < 0 || lo < 0 {
+							return toks, false // bad \xNN
+						}
+						body = append(body, byte(hi*16+lo))
+						continue
+					}
+					dec, ok := refEscape(esc)
+					if !ok {
+						return toks, false // unknown escape
+					}
+					body = append(body, dec)
+					continue
+				}
+				body = append(body, ch)
+			}
+			emit(refTok{kind: tString, span: body})
 		case c == '\'':
 			pos++ // opening '
 			if pos >= n {
@@ -485,6 +544,15 @@ func TestAsmLexHandCases(t *testing.T) {
 		// character literals lex as TOK_INT with the char's value
 		{"mov x0, #'A'\n", []int{tIdent, tIdent, tComma, tHash, tInt, tEOL, tEOF}},
 		{"'A' '0' '\\n' '\\t' '\\\\' ' '\n", []int{tInt, tInt, tInt, tInt, tInt, tInt, tEOL, tEOF}},
+		// string literals: span is the DECODED body (escapes resolved), checked
+		// against refLex via compareToks. `.ascii "hi\n"` is the canonical case.
+		{".ascii \"hi\\n\"\n", []int{tIdent, tString, tEOL, tEOF}},
+		// \xNN hex escapes (\x41\x42 -> "AB"), \t, \0, escaped quote inside body
+		{".asciz \"\\x41\\x42\"\n", []int{tIdent, tString, tEOL, tEOF}},
+		{".ascii \"tab\\tend\\0\"\n", []int{tIdent, tString, tEOL, tEOF}},
+		{".ascii \"a\\\"b\"\n", []int{tIdent, tString, tEOL, tEOF}},
+		// empty string + single-char string, adjacent
+		{"\"\" \"a\"\n", []int{tString, tString, tEOL, tEOF}},
 		// memory operand shape + writeback
 		{"ldr x0, [x1, #8]!\n", []int{tIdent, tIdent, tComma, tLBracket, tIdent, tComma, tHash, tInt, tRBracket, tBang, tEOL, tEOF}},
 		// directive + shift operator
@@ -537,6 +605,8 @@ var alPieces = []string{
 	"0x0123456789abcdef", "65535", "0xcafef00d",
 	"1f", "1b", "2f", "9b", "10f", "42b", "99f",
 	"'A'", "'z'", "'0'", "' '", "'\\n'", "'\\t'", "'\\\\'", "'\\''",
+	"\"\"", "\"hi\"", "\"a b\"", "\"\\n\\t\\r\\0\"", "\"\\\\\"", "\"esc\\\"q\"",
+	"\"\\x41\\x7f\\xFF\"", "\".text\"", "\"%type\"",
 	"#", ",", ":", "!", "[", "]", "(", ")", "+", "-", "*", "/", "&", "|", "^", "~",
 	"=", "%", "<<", ">>", ".", "/* blk */",
 }
@@ -573,14 +643,31 @@ func TestAsmLexFuzz(t *testing.T) {
 	}
 }
 
-// TestAsmLexError checks that an unterminated block comment sets LEX_ERR.
+// TestAsmLexError checks that the lexer's error cases set LEX_ERR (and that
+// refLex agrees they are errors). Each case is a real Z80 path with teeth: an
+// unterminated block comment, an unterminated string, a truncated/bad \xNN
+// escape, and an unknown string escape.
 func TestAsmLexError(t *testing.T) {
 	mac := loadAsmlex(t)
-	_, errFlag := lexZ80(t, mac, []byte("add /* unterminated"))
-	if !errFlag {
-		t.Errorf("unterminated block comment: LEX_ERR not set")
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"unterminated block comment", "add /* unterminated"},
+		{"unterminated string", ".ascii \"no close"},
+		{"unterminated string escape", ".ascii \"ends with backslash\\"},
+		{"bad \\xNN (quote eaten as low nibble)", ".ascii \"\\x4\""},
+		{"truncated \\xNN (no digits before close)", ".ascii \"\\x\""},
+		{"bad \\xNN (non-hex digit)", ".ascii \"\\xZZ\""},
+		{"unknown string escape", ".ascii \"\\q\""},
 	}
-	if _, ok := refLex([]byte("add /* unterminated")); ok {
-		t.Errorf("refLex: unterminated block comment should report error")
+	for _, c := range cases {
+		_, errFlag := lexZ80(t, mac, []byte(c.src))
+		if !errFlag {
+			t.Errorf("%s (%q): LEX_ERR not set", c.name, c.src)
+		}
+		if _, ok := refLex([]byte(c.src)); ok {
+			t.Errorf("%s (%q): refLex should report an error", c.name, c.src)
+		}
 	}
 }
