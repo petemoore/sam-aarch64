@@ -34,17 +34,23 @@
 ;        runs a 64-bit shift-add multiply keeping the low 64 bits (port of
 ;        applyBinary(OpMul): a*b wraps mod 2^64; signed and unsigned agree on
 ;        the low word).
-;   B3a4 (this): the divide operator `/` (precedence 4) — `mov x0, #100/3`. The
-;        fold runs a signed 64-bit division (port of applyBinary(OpDiv)): a
-;        zero divisor yields 0; otherwise the result truncates toward zero,
-;        computed as an unsigned long division of the absolute values with a
-;        final sign correction (sign(a) xor sign(b)). The two's-complement
-;        overflow case MinInt64/-1 falls out naturally as MinInt64. The
-;        non-constant primaries (symbol idents, `.`, local-refs, `:reloc:`,
-;        B3b/B3c) remain later sub-bricks. The `,lsl #12` suffix, mem operands,
-;        special-form insts, directives, labels, comments and blank-runs are
-;        later bricks (B4-B7) — a line that needs one is outside this domain and
-;        sets PARSE_ERR.
+;   B3a4: the divide operator `/` (precedence 4). The fold runs a signed 64-bit
+;        division (port of applyBinary(OpDiv)): a zero divisor yields 0;
+;        otherwise the result truncates toward zero, computed as an unsigned
+;        long division of the absolute values with a final sign correction. With
+;        B3a4 the full constant-expression grammar (operators + unary + parens)
+;        is parsed and folded.
+;   B3b (this): the symbol primary — a non-register identifier operand becomes a
+;        symbol reference (`mov x0, foo`, `add x0, x1, label+4`). parseExprPrimary's
+;        TokIdent case interns the name into a document symbol table (sym_intern,
+;        mirroring format.SymbolTable.Intern: name -> first-encounter u16 id) and
+;        emits PUSH_SYM,id. A symbol makes the expression non-constant, so the
+;        fold keeps the raw bytecode (EvalConst stops at PUSH_SYM) — the operand
+;        is the raw expr stream rather than a folded immediate. `.` / local-refs
+;        / `:reloc:` (B3c) remain a later sub-brick. The `,lsl #12` suffix, mem
+;        operands, special-form insts, directives, labels, comments and
+;        blank-runs are later bricks (B4-B7) — a line that needs one is outside
+;        this domain and sets PARSE_ERR.
 ;
 ; INST record (emission form — original framing for the host harness; the
 ; OPERAND bytes are byte-faithful to format.OperandWriter):
@@ -78,6 +84,7 @@ EXPR_PUSH_IMM8:  equ &01
 EXPR_PUSH_IMM16: equ &02
 EXPR_PUSH_IMM32: equ &03
 EXPR_PUSH_IMM64: equ &04
+EXPR_PUSH_SYM:   equ &05
 EXPR_OP_ADD:     equ &10
 EXPR_OP_SUB:     equ &11
 EXPR_OP_MUL:     equ &12
@@ -107,6 +114,7 @@ parse_run:
                 ld      (PARSE_RECN), hl    ; records emitted
                 xor     a
                 ld      (PARSE_ERR), a
+                ld      (SYM_NAMES), a      ; empty document symbol table (sentinel)
                 ld      a, (LEX_ERR)        ; a lexical error stops the parse
                 or      a
                 jr      nz, pr_lexerr
@@ -197,12 +205,11 @@ pi_err:
 
 ; ===========================================================================
 ; parse_operand — dispatch one operand at the current token. (Port of
-; parseOperand's switch, parser.go:1023-1090, restricted to the register and
-; constant-expression shapes.) A register identifier -> parse_operand_reg; an
-; expression-leading token (`#` / int / unary `-` / `~` / `(`) -> the constant
-; expression path parse_operand_expr. The non-register identifier (a symbol),
-; `.`, local-refs and `:reloc:` are later bricks (B3b/B3c); the shift/extend
-; suffix and mem operands are B4 — all set CY (out of domain).
+; parseOperand's switch, parser.go:1023-1090.) An identifier -> parse_operand_reg,
+; which resolves it to a register operand or, if it is not a register, a symbol
+; expression. An expression-leading token (`#` / int / unary `-` / `~` / `(`) ->
+; parse_operand_expr. The `.`, local-refs and `:reloc:` primaries are B3c; the
+; shift/extend suffix and mem operands are B4 — all set CY (out of domain).
 ; ===========================================================================
 parse_operand:
                 ld      hl, (PARSE_TOK)
@@ -223,17 +230,17 @@ parse_operand:
                 ret
 
 ; ===========================================================================
-; parse_operand_reg — parse one register operand at the current token and
-; append its `kind:1, reg:1` bytes to (PI_OPSPTR). (Port of parseOperand's
-; register path, parser.go:1032-1073, minus the shift/extend lookahead which
-; is a later brick.) Exit: CY clear on success (token consumed), CY set on a
-; non-register operand.
+; parse_operand_reg — the TOK_IDENT operand path: a register identifier appends
+; its `kind:1, reg:1` bytes to (PI_OPSPTR); a non-register identifier is a
+; symbol, so it falls through to parse_operand_expr (parseOperand's matchReg-
+; then-parseExpression structure, parser.go:1023-1090, minus the shift/extend
+; lookahead which is B4). Exit: CY clear on success (token consumed).
 ; ===========================================================================
 parse_operand_reg:
                 ld      hl, (PARSE_TOK)
                 ld      a, (hl)
                 cp      TOK_IDENT
-                jr      nz, por_err         ; B2b only handles register idents
+                jr      nz, por_err         ; caller dispatches only TOK_IDENT here
                 inc     hl
                 ld      e, (hl)
                 inc     hl
@@ -242,7 +249,7 @@ parse_operand_reg:
                 ld      a, (hl)             ; A = span_len low (reg names < 256)
                 ex      de, hl              ; HL = span_ptr
                 call    match_reg           ; CY = is-reg, B = kind, C = reg
-                jr      nc, por_err
+                jp      nc, parse_operand_expr ; not a register -> symbol expression
                 ld      hl, (PI_OPSPTR)
                 ld      (hl), b             ; operand kind
                 inc     hl
@@ -349,8 +356,8 @@ pep_err1:
 ; parse_expr_primary — parse one primary at the current token. (Port of
 ; parseExprPrimary, parser.go:1203-1290, B3a subset.) Emits bytecode into
 ; (EXPR_PTR). Exit: CY set on error. Handles `#` (consume + recurse), an
-; integer literal, unary `-`/`~`, and a parenthesised sub-expression. The
-; symbol-ident, `.`, local-ref and `:reloc:` primaries are later bricks.
+; integer literal, a symbol identifier, unary `-`/`~`, and a parenthesised
+; sub-expression. The `.`, local-ref and `:reloc:` primaries are B3c.
 ; ===========================================================================
 parse_expr_primary:
                 ld      hl, (PARSE_TOK)
@@ -359,13 +366,15 @@ parse_expr_primary:
                 jr      z, ppr_hash
                 cp      TOK_INT
                 jr      z, ppr_int
+                cp      TOK_IDENT
+                jr      z, ppr_ident
                 cp      TOK_MINUS
                 jr      z, ppr_neg
                 cp      TOK_TILDE
                 jr      z, ppr_not
                 cp      TOK_LPAREN
                 jr      z, ppr_paren
-                scf                         ; not a B3a primary -> error
+                scf                         ; not a B3a/B3b primary -> error
                 ret
 ppr_hash:
                 call    parse_advance_tok   ; consume '#'
@@ -373,6 +382,28 @@ ppr_hash:
 ppr_int:
                 call    expr_emit_imm_from_tok
                 call    parse_advance_tok   ; consume the int token
+                or      a                   ; clear carry: success
+                ret
+ppr_ident:
+                ; intern the identifier and emit PUSH_SYM, id (port of
+                ; parseExprPrimary's TokIdent: st.Intern + WriteSym).
+                ld      hl, (PARSE_TOK)
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = span_ptr
+                inc     hl
+                ld      c, (hl)             ; C = span_len low (idents < 256)
+                ex      de, hl              ; HL = span_ptr
+                call    sym_intern          ; HL = symbol id (u16)
+                ld      (PPR_SYMID), hl
+                ld      a, EXPR_PUSH_SYM
+                call    expr_emit_byte
+                ld      a, (PPR_SYMID)
+                call    expr_emit_byte      ; id low
+                ld      a, (PPR_SYMID+1)
+                call    expr_emit_byte      ; id high
+                call    parse_advance_tok   ; consume the identifier
                 or      a                   ; clear carry: success
                 ret
 ppr_neg:
@@ -1449,6 +1480,74 @@ ml_notfound:
                 ret
 
 ; ===========================================================================
+; sym_intern — intern a symbol name into the document symbol table, returning
+; its first-encounter id. Port of format.SymbolTable.Intern: the id is the
+; name's 0-based index in first-encounter order. The table is the SYM_NAMES
+; buffer holding `len:1, name[len]` records in id order, terminated by a
+; 0-length sentinel; an unseen name is appended (its id = the record count so
+; far) and a fresh sentinel written after it.
+;
+; Entry: HL = name ptr; C = name length (B ignored — idents < 256 bytes).
+; Exit:  HL = id (u16). Clobbers A/BC/DE.
+; ===========================================================================
+sym_intern:
+                ld      (SI_PTR), hl        ; save candidate pointer
+                ld      a, c
+                ld      (SI_LEN), a         ; save candidate length
+                ld      de, SYM_NAMES
+                ld      hl, 0               ; HL = running index = candidate id
+si_loop:
+                ld      a, (de)             ; record length (0 = sentinel/end)
+                or      a
+                jr      z, si_append        ; reached the end -> not found
+                ld      b, a                ; B = record length
+                ld      a, (SI_LEN)
+                cp      b
+                jr      nz, si_next         ; length mismatch -> skip record
+                push    hl                  ; save index
+                push    de                  ; save record pointer (at length byte)
+                inc     de                  ; DE -> record name bytes
+                ld      hl, (SI_PTR)        ; HL -> candidate bytes
+si_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, si_cmp_fail
+                inc     de
+                inc     hl
+                djnz    si_cmp
+                pop     de                  ; discard saved record pointer
+                pop     hl                  ; HL = index = id
+                ret
+si_cmp_fail:
+                pop     de                  ; restore record pointer (length byte)
+                pop     hl                  ; restore index
+si_next:
+                ld      a, (de)             ; record length
+                inc     de                  ; past the length byte
+                add     a, e
+                ld      e, a
+                jr      nc, si_next_nc
+                inc     d
+si_next_nc:
+                inc     hl                  ; index++
+                jr      si_loop
+si_append:
+                ; DE -> the sentinel (append point); HL = index = the new id.
+                ld      a, (SI_LEN)
+                ld      (de), a             ; write the record length
+                inc     de                  ; DE -> name area
+                push    hl                  ; save id
+                ld      hl, (SI_PTR)        ; HL = candidate name (src)
+                ld      a, (SI_LEN)
+                ld      c, a
+                ld      b, 0                ; BC = name length
+                ldir                        ; copy name; DE -> just past it
+                xor     a
+                ld      (de), a             ; fresh 0-length sentinel
+                pop     hl                  ; HL = id
+                ret
+
+; ===========================================================================
 ; Generated name→id table (do not edit; regen with `make tables`).
 ; ===========================================================================
                 include "mnemonic_names.inc"
@@ -1506,6 +1605,10 @@ DIV_REM:        defs 8          ; fold_do_div: running remainder
 DIV_DVSR:       defs 8          ; fold_do_div: |divisor|
 DIV_C2:         defs 1          ; fold_do_div: 65th remainder bit each step
 DIV_SIGN:       defs 1          ; fold_do_div: result-negative flag (sa xor sb)
+PPR_SYMID:      defs 2          ; parse_expr_primary: interned symbol id (PUSH_SYM)
+SI_PTR:         defs 2          ; sym_intern: saved candidate pointer
+SI_LEN:         defs 1          ; sym_intern: saved candidate length
+SYM_NAMES:      defs 2048       ; document symbol table: `len,name` records + sentinel
 
 ; ===========================================================================
 ; Public I/O buffers
