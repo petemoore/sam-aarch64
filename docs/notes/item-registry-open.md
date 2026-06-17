@@ -90,7 +90,6 @@ them where he reads.
 | **i25** | `(hksp)` HSAVE/HLOAD error handler | OPEN — 🧭 | deferred-backlog row |
 | **i26** | text2bin operand-kind validation (Task 21) | OPEN — 🧭 | deferred-backlog row |
 | **i27** | Cortex-A53 errata workarounds (`--fix-cortex-a53-*`) | OPEN — 🧭 | deferred-backlog row |
-| **i28** | Absolute `.set` high-word edge vs Go | OPEN — 🧭 | deferred-backlog row |
 | **i29** | Harden slot self-test `PASS_PC` dependency | OPEN — 🧭 | deferred-backlog row |
 | **i30** | LDIR-fan-out for cross-page-shared blocks (smaller binary + faster boot) | OPEN — 🧭 deferred/possible | `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-06-07-strand-b-pr4-z80-disassembler-port.md` "Future enhancements" |
 | **i31** | On-SAM preprocessor (`.if` build-constraints + macros) | OPEN — 🧭 beyond-M7 | "Beyond-M7 / future ideas" |

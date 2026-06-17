@@ -67,7 +67,10 @@ for dir in "${FIXTURE_DIRS[@]}"; do
         # dir_hword.s is a pure .hword data fixture with no instructions
         # at all — same category as dir_data.s / dir_string.s, which are
         # already skipped by the non-4-byte-aligned size check.
-        if [ "$name" = "inst_ldr_litpool" ] || [ "$name" = "dir_hword" ]; then
+        # set_neg_highword.s is pure `.quad` data (i28 high-word test); its
+        # 24 bytes ARE 4-byte-aligned so the size check misses it, but it
+        # likewise has no instructions to round-trip.
+        if [ "$name" = "inst_ldr_litpool" ] || [ "$name" = "dir_hword" ] || [ "$name" = "set_neg_highword" ]; then
             echo "    SKIP $dir/$name.s (pure data, no instructions)"
             skipped=$((skipped + 1))
             continue

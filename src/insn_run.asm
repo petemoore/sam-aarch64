@@ -350,11 +350,12 @@ fold_mem_imm12_placed:
 ; mask to 9 bits.
 ;
 ; The range is checked over the low 32 bits of expr_result interpreted as
-; a signed i32.  Bytes 4..7 are NOT consulted: a deferred fold of an
-; absolute symbol (e.g. `.set OFF, -256` then `stur x0, [x1, #OFF]`)
-; carries the value with its high 32 bits reconstructed as 0
-; (eval_push_sym_zero_high), so only the low 32 bits are reliable — and
-; they suffice, matching GNU for every offset that fits i32.
+; a signed i32.  Bytes 4..7 are NOT consulted: this fold needs only the low
+; 32 bits, which suffice and match GNU for every offset that fits i32.  (A
+; deferred fold of an absolute symbol — e.g. `.set OFF, -256` then
+; `stur x0, [x1, #OFF]` — carries the value with its high 32 bits
+; reconstructed by sign-extending bit 31 (eval_push_sym_sign_high), but the
+; imm9 fold reads only the low 32.)
 ;   value in [-256,255]  ⟺  byte1 ∈ {0x00 (0..255), 0xFF (-256..-1)} and
 ;   bytes 2,3 equal byte1 (so the i32 is a clean sign-extension of the
 ;   imm9, rejecting e.g. 0x0000FF00 = 65280).

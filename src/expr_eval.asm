@@ -571,22 +571,33 @@ eval_push_sym:
 ; Reconstruct the high word.  Origin-relative symbols (labels, PC
 ; snapshots, label-derived .set) get ORIGIN_HIGH re-applied so e.g.
 ; `.quad <label>` emits the full 64-bit address; ABSOLUTE symbols (a
-; `.set`/`.equ` constant such as RAM_DISK_SIZE) get high word 0 — applying
-; ORIGIN_HIGH to those broke `mov x9, RAM_DISK_SIZE` (0xfffffff0_10000000
-; vs 0x10000000).  The per-id flag is set in main_dir_equ_pass1 by
-; comparing the evaluated high word against ORIGIN_HIGH.  See
-; assembler.asm SYMTAB_ABS_BITMAP.  Faithful to Go (tools/refenc:
-; Symbols[name] holds the full value, eval adds no origin — pass1.go:154,
-; pass1.go:296; pass2.go:150).
+; `.set`/`.equ` constant such as RAM_DISK_SIZE) get the SIGN-EXTENSION of
+; bit 31 — applying ORIGIN_HIGH to those broke `mov x9, RAM_DISK_SIZE`
+; (0xfffffff0_10000000 vs 0x10000000).  The per-id flag is set in
+; main_dir_equ_pass1 by comparing the evaluated high word against
+; ORIGIN_HIGH.  See assembler.asm SYMTAB_ABS_BITMAP.  Faithful to Go, which
+; carries the full signed int64 (tools/refenc: Symbols[name] holds the full
+; value, eval adds no origin — pass1.go:154, pass1.go:296; pass2.go:150).
                 push    hl                          ; save slot[4] ptr
                 ld      hl, (eval_sym_operand)      ; HL = id
                 call    symbol_is_absolute          ; Z=1 origin-rel, NZ absolute
                 pop     hl                          ; HL = slot[4] ptr
-                jr      nz, eval_push_sym_zero_high
+                jr      nz, eval_push_sym_sign_high
                 call    eval_store_origin_high      ; slot[4..7] := ORIGIN_HIGH
                 jp      eval_loop
-eval_push_sym_zero_high:
-                xor     a                           ; absolute → slot[4..7] := 0
+eval_push_sym_sign_high:
+; Absolute symbol: SYMTAB holds only the low 32 bits, so reconstruct the
+; high word as the sign-extension of bit 31 — the int64 model Go uses, and
+; what main_dir_equ_mark_abs already enforced (it refuses any absolute whose
+; high word is not 0x00000000/0xFFFFFFFF, so bit 31 of the low word IS the
+; sign).  A negative `.set` (e.g. -256) now emits 0xFFFFFFFF here instead of
+; 0, so a 64-bit consumer (.quad, X-register movz) matches GNU/Go (i28).
+; Same idiom as main_dir_equ_mark_abs (add a,a / sbc a,a).
+                dec     hl                          ; HL -> slot[3] (low word MSB)
+                ld      a, (hl)
+                add     a, a                        ; bit 31 -> carry
+                sbc     a, a                        ; A = 0xFF if negative, else 0x00
+                inc     hl                          ; HL -> slot[4]
                 ld      (hl), a
                 inc     hl
                 ld      (hl), a
