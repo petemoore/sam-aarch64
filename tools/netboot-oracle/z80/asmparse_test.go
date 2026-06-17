@@ -5,7 +5,7 @@
 // harness and asserts the returned ID matches format.MnemonicID for every name
 // in MnemonicTable, plus a batch of non-mnemonics (asserting not-found).
 //
-// B2b/B2c/B3a/B3a2 (parse_run / parse_inst): drives the instruction parse and
+// B2b/B2c/B3a..B3a3 (parse_run / parse_inst): drives the instruction parse and
 // compares the emitted INST records against a faithful Go reference. The
 // operand-byte authority is the real format.OperandWriter + format.ExprWriter +
 // format.EvalConst (imported directly); the lexing reuses refLex (already
@@ -13,11 +13,11 @@
 // (matchReg + the generic operand loop + the precedence-climbing expression
 // parser) is transcribed — refMatchReg / refTokPrec / refExprParser below are
 // verbatim parser.go matchReg / tokPrec / parseExprPrec+parseExprPrimary,
-// restricted to the B3a+B3a2 operator domain. That domain is instruction lines
-// with register operands and constant-expression operands over `+ - & | ^ << >>`
-// + unary `- ~` + parens (no `* /`, no symbol/PC/local/reloc primaries, no
-// blank-runs/labels/comments/directives/mem operands, and none of the
-// special-form mnemonics parseInst intercepts before its generic loop), so
+// restricted to the B3a..B3a3 operator domain. That domain is instruction lines
+// with register operands and constant-expression operands over
+// `+ - & | ^ << >> *` + unary `- ~` + parens (no `/`, no symbol/PC/local/reloc
+// primaries, no blank-runs/labels/comments/directives/mem operands, and none of
+// the special-form mnemonics parseInst intercepts before its generic loop), so
 // refParse mirrors Parse exactly on that domain.
 //
 // Unlike asmlex_test.go (which transcribes the heavyweight frontend lexer), the
@@ -166,9 +166,9 @@ func refMatchReg(name string) (format.OperandKind, byte, bool) {
 }
 
 // refTokPrec is a transcription of parser.go's tokPrec restricted to the
-// B3a+B3a2 operator set: `| ^` (0), `&` (1), `<< >>` (2), `+ -` (3). The `* /`
-// (prec 4) operators are a later sub-brick, so here they read as
-// not-an-operator (-1) and terminate an expression — exactly as tok_prec does
+// B3a..B3a3 operator set: `| ^` (0), `&` (1), `<< >>` (2), `+ -` (3), `*` (4).
+// Division `/` (also prec 4) is a later sub-brick, so here it reads as
+// not-an-operator (-1) and terminates an expression — exactly as tok_prec does
 // in src/asmparse.asm.
 func refTokPrec(k int) int {
 	switch k {
@@ -180,6 +180,8 @@ func refTokPrec(k int) int {
 		return 2
 	case tPlus, tMinus:
 		return 3
+	case tStar:
+		return 4
 	}
 	return -1
 }
@@ -230,6 +232,8 @@ func (p *refExprParser) parsePrec(w *format.ExprWriter, minPrec int) bool {
 			w.WriteOp(format.OpShl)
 		case tShr:
 			w.WriteOp(format.OpShr)
+		case tStar:
+			w.WriteOp(format.OpMul)
 		}
 	}
 }
@@ -690,6 +694,51 @@ func TestParseShiftHandCases(t *testing.T) {
 	}
 }
 
+// TestParseMulHandCases pins INST records for the B3a3 multiply operator,
+// exercising small products, signed operands, the mod-2^64 wrap on large
+// products, multiply-by-zero, left-associativity, and multiply's precedence
+// (tighter than every other operator).
+func TestParseMulHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	cases := []struct {
+		src  string
+		want []parseRec
+	}{
+		{"mov x0, #2*3\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(6))}},
+		{"add x0, x1, #(1+2)*4\n", []parseRec{mkRec2(t, "add", rOp(X, 0), rOp(X, 1), iOp(12))}},
+		{"mov x0, #-2*3\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-6))}},
+		{"mov x0, #-2*-3\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(6))}},
+		{"mov x0, #5*0\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0))}},
+		{"mov x0, #0*1234\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0))}},
+		// width-growing product (no wrap)
+		{"mov x0, #0x10000*0x10000\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0x100000000))}},
+		// products that wrap mod 2^64
+		{"mov x0, #0x100000000*0x100000000\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(0))}}, // 2^64 -> 0
+		{"mov x0, #0xffffffffffffffff*2\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(-2))}},    // -1 * 2
+		{"mov x0, #0xffffffffffffffff*0xffffffffffffffff\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(1))}}, // (-1)^2
+		// left-associative and precedence (binds tighter than + << &)
+		{"mov x0, #2*3*4\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(24))}},
+		{"mov x0, #2+3*4\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(14))}},   // 2 + (3*4)
+		{"mov x0, #3*4+2\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(14))}},   // (3*4) + 2
+		{"mov x0, #1*2<<3\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(16))}},  // (1*2)<<3
+		{"mov x0, #(2+3)*(4+1)\n", []parseRec{mkRec2(t, "mov", rOp(X, 0), iOp(25))}},
+	}
+	for _, c := range cases {
+		got, errFlag := parseZ80(t, mac, []byte(c.src))
+		if errFlag {
+			t.Errorf("%q: PARSE_ERR set unexpectedly", c.src)
+			continue
+		}
+		compareRecs(t, fmt.Sprintf("%q", c.src), got, c.want)
+		ref, ok := refParse([]byte(c.src))
+		if !ok {
+			t.Fatalf("%q: refParse reported error on a valid case", c.src)
+		}
+		compareRecs(t, fmt.Sprintf("%q (vs refParse)", c.src), got, ref)
+	}
+}
+
 // apExprLeaves are literal leaves for the expression fuzz, spanning every
 // PUSH_IMMn width plus char literals.
 var apExprLeaves = []string{
@@ -699,11 +748,12 @@ var apExprLeaves = []string{
 	"'A'", "'0'",
 }
 
-// apExprBinOps are the B3a+B3a2 binary operators (deliberately excluding `* /`,
-// a later sub-brick). The shifts `<< >>` here exercise both the small-count
-// bit-loop and the >=64-count clamp, since the literal leaves include values
-// far larger than 63 used as counts.
-var apExprBinOps = []string{"+", "-", "&", "|", "^", "<<", ">>"}
+// apExprBinOps are the B3a..B3a3 binary operators (deliberately excluding `/`,
+// a later sub-brick). The shifts `<< >>` exercise both the small-count bit-loop
+// and the >=64-count clamp (the literal leaves include values far larger than
+// 63 used as counts); `*` exercises the 64-bit shift-add multiply including the
+// mod-2^64 wrap on large products.
+var apExprBinOps = []string{"+", "-", "&", "|", "^", "<<", ">>", "*"}
 
 // randExpr builds a random valid B3a constant expression string of bounded
 // depth (literals combined with the B3a operators, unary `- ~`, and parens).
@@ -840,10 +890,10 @@ func TestParseInstError(t *testing.T) {
 		{"leading comma", "add , x0\n"},
 		{"line-leading number", "5 x0\n"},
 		{"directive (B6, not B2b)", ".text\n"},
-		// The operator domain still excludes `* /` (B3a3): the leftover
+		// The operator domain still excludes `/` (B3a4): the leftover
 		// operator token reads as a stray operand and errors.
-		{"multiply (B3a3, not B3a2)", "add x0, x1, #4*2\n"},
-		{"divide (B3a3, not B3a2)", "mov x0, #6/2\n"},
+		{"divide (B3a4, not B3a3)", "mov x0, #6/2\n"},
+		{"divide of larger expr (B3a4)", "add x0, x1, #8/4\n"},
 		// malformed expressions
 		{"unbalanced paren", "mov x0, #(1+2\n"},
 		{"empty parens", "mov x0, ()\n"},
