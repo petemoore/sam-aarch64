@@ -1,4 +1,4 @@
-; asmparse.asm — aarch64 assembler-source parser, i48c Brick B2 (text→records).
+; asmparse.asm — aarch64 assembler-source parser, i48c Brick B3c (text→records).
 ;
 ; SAM-side Z80 port of the Go authority's parser:
 ;   tools/sam-aarch64/frontend/parser.go  (Parse / parseInst / parseOperand /
@@ -40,17 +40,30 @@
 ;        long division of the absolute values with a final sign correction. With
 ;        B3a4 the full constant-expression grammar (operators + unary + parens)
 ;        is parsed and folded.
-;   B3b (this): the symbol primary — a non-register identifier operand becomes a
+;   B3b: the symbol primary — a non-register identifier operand becomes a
 ;        symbol reference (`mov x0, foo`, `add x0, x1, label+4`). parseExprPrimary's
 ;        TokIdent case interns the name into a document symbol table (sym_intern,
 ;        mirroring format.SymbolTable.Intern: name -> first-encounter u16 id) and
 ;        emits PUSH_SYM,id. A symbol makes the expression non-constant, so the
 ;        fold keeps the raw bytecode (EvalConst stops at PUSH_SYM) — the operand
-;        is the raw expr stream rather than a folded immediate. `.` / local-refs
-;        / `:reloc:` (B3c) remain a later sub-brick. The `,lsl #12` suffix, mem
-;        operands, special-form insts, directives, labels, comments and
-;        blank-runs are later bricks (B4-B7) — a line that needs one is outside
-;        this domain and sets PARSE_ERR.
+;        is the raw expr stream rather than a folded immediate.
+;   B3c (this): the three remaining non-constant expression primaries — closes
+;        the expression parser:
+;        · PC primary: TOK_DOT (`.`) → emit PUSH_PC (0x07).
+;        · local-ref primary: TOK_LOCALREF (e.g. `1f`/`2b`) → emit
+;          PUSH_LOCAL (0x06), digit, dir (dir=0 for 'f', dir=1 for 'b'). The
+;          token layout stores the digit in value[0] (offset 6) and the 'f'/'b'
+;          char in base (offset 5).
+;        · reloc primary: TOK_COLON (`:lo12:foo`) → consume ':', require a
+;          TOK_IDENT name, consume ':', recurse parse_expr_primary for the
+;          operand, then emit the reloc ExprOp (0x30–0x38) from a name table.
+;          An unknown reloc name or malformed `:name:` sets PARSE_ERR.
+;        The parse_operand dispatch is extended to route TOK_DOT, TOK_LOCALREF
+;        and TOK_COLON to parse_operand_expr. With B3c, the full expression
+;        parser (B3a–B3c) is complete. The `,lsl #12` suffix, mem operands,
+;        special-form insts, directives, labels, comments and blank-runs are
+;        later bricks (B4-B7) — a line that needs one is outside this domain
+;        and sets PARSE_ERR.
 ;
 ; INST record (emission form — original framing for the host harness; the
 ; OPERAND bytes are byte-faithful to format.OperandWriter):
@@ -85,6 +98,8 @@ EXPR_PUSH_IMM16: equ &02
 EXPR_PUSH_IMM32: equ &03
 EXPR_PUSH_IMM64: equ &04
 EXPR_PUSH_SYM:   equ &05
+EXPR_PUSH_LOCAL: equ &06
+EXPR_PUSH_PC:    equ &07
 EXPR_OP_ADD:     equ &10
 EXPR_OP_SUB:     equ &11
 EXPR_OP_MUL:     equ &12
@@ -96,6 +111,16 @@ EXPR_OP_SHL:     equ &17
 EXPR_OP_SHR:     equ &18
 EXPR_OP_NEG:     equ &20
 EXPR_OP_NOT:     equ &21
+; reloc operators (port of OpRelLo12..OpRelAbsG3 in expr.go)
+EXPR_REL_LO12:     equ &30
+EXPR_REL_HI12:     equ &31
+EXPR_REL_ABS_G0:   equ &32
+EXPR_REL_ABS_G0NC: equ &33
+EXPR_REL_ABS_G1:   equ &34
+EXPR_REL_ABS_G1NC: equ &35
+EXPR_REL_ABS_G2:   equ &36
+EXPR_REL_ABS_G2NC: equ &37
+EXPR_REL_ABS_G3:   equ &38
 
 ; ===========================================================================
 ; parse_run — tokenise LEX_SRC (BC = length) and parse it into INST records.
@@ -226,7 +251,13 @@ parse_operand:
                 jr      z, parse_operand_expr
                 cp      TOK_LPAREN
                 jr      z, parse_operand_expr
-                scf                         ; out of domain (.,localref,:,[ -> later)
+                cp      TOK_DOT
+                jr      z, parse_operand_expr
+                cp      TOK_LOCALREF
+                jr      z, parse_operand_expr
+                cp      TOK_COLON
+                jr      z, parse_operand_expr
+                scf                         ; out of domain ([ -> B4)
                 ret
 
 ; ===========================================================================
@@ -354,10 +385,11 @@ pep_err1:
 
 ; ===========================================================================
 ; parse_expr_primary — parse one primary at the current token. (Port of
-; parseExprPrimary, parser.go:1203-1290, B3a subset.) Emits bytecode into
-; (EXPR_PTR). Exit: CY set on error. Handles `#` (consume + recurse), an
-; integer literal, a symbol identifier, unary `-`/`~`, and a parenthesised
-; sub-expression. The `.`, local-ref and `:reloc:` primaries are B3c.
+; parseExprPrimary, parser.go:1203-1290.) Emits bytecode into (EXPR_PTR).
+; Exit: CY set on error. Handles `#` (consume + recurse), an integer literal,
+; a symbol identifier, unary `-`/`~`, a parenthesised sub-expression, `.`
+; (PC), a local-ref (`1f`/`2b`), and a `:reloc:` prefix. This covers the
+; complete primary set (B3a–B3c).
 ; ===========================================================================
 parse_expr_primary:
                 ld      hl, (PARSE_TOK)
@@ -374,7 +406,13 @@ parse_expr_primary:
                 jr      z, ppr_not
                 cp      TOK_LPAREN
                 jr      z, ppr_paren
-                scf                         ; not a B3a/B3b primary -> error
+                cp      TOK_DOT
+                jp      z, ppr_pc
+                cp      TOK_LOCALREF
+                jp      z, ppr_localref
+                cp      TOK_COLON
+                jp      z, ppr_reloc
+                scf                         ; not a known primary -> error
                 ret
 ppr_hash:
                 call    parse_advance_tok   ; consume '#'
@@ -435,6 +473,78 @@ ppr_paren:
                 or      a
                 ret
 ppr_err:
+                scf
+                ret
+ppr_pc:
+                ; TOK_DOT → emit PUSH_PC (port of parseExprPrimary's TokDot:
+                ; WritePC). No operand bytes; advance past '.'.
+                ld      a, EXPR_PUSH_PC
+                call    expr_emit_byte
+                call    parse_advance_tok   ; consume '.'
+                or      a                   ; clear carry: success
+                ret
+ppr_localref:
+                ; TOK_LOCALREF → emit PUSH_LOCAL, digit, dir (port of
+                ; parseExprPrimary's TokLocalRef: WriteLocal(digit, dir)).
+                ; Token layout: kind(0) | span_ptr(1-2) | span_len(3-4) |
+                ; base(5)='f'/'b' | value[0](6)=digit. dir=0 for 'f', 1 for 'b'.
+                ld      hl, (PARSE_TOK)
+                ld      de, 6
+                add     hl, de
+                ld      a, (hl)             ; A = digit (value[0])
+                ld      (PPR_LOCDIG), a
+                dec     hl                  ; offset 5 = base = 'f'/'b' char
+                ld      a, (hl)             ; A = direction char
+                ld      b, 0                ; B = dir = 0 (forward default)
+                cp      &62                 ; 'b' = 0x62
+                jr      nz, ppr_lr_emit
+                ld      b, 1                ; B = dir = 1 (backward)
+ppr_lr_emit:
+                ld      a, EXPR_PUSH_LOCAL
+                call    expr_emit_byte
+                ld      a, (PPR_LOCDIG)
+                call    expr_emit_byte      ; digit
+                ld      a, b
+                call    expr_emit_byte      ; dir (0=forward, 1=backward)
+                call    parse_advance_tok   ; consume the TOK_LOCALREF token
+                or      a                   ; clear carry: success
+                ret
+ppr_reloc:
+                ; TOK_COLON → `:name:operand` (port of parseExprPrimary's
+                ; TokColon: consume ':', require TOK_IDENT name, consume ':',
+                ; recurse parseExprPrimary, emit relocOp(name)).
+                call    parse_advance_tok   ; consume ':'
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_IDENT
+                jr      nz, ppr_reloc_err   ; expected name after ':'
+                ; capture the reloc name span
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = span_ptr
+                inc     hl
+                ld      a, (hl)             ; A = span_len low
+                ld      (PPR_RELLEN), a
+                ld      (PPR_RELPTR), de
+                call    parse_advance_tok   ; consume the name token
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_COLON
+                jr      nz, ppr_reloc_err   ; expected ':' after name
+                call    parse_advance_tok   ; consume ':'
+                call    parse_expr_primary  ; recurse for the operand primary
+                ret     c                   ; parse error in operand -> propagate
+                ; look up the reloc name in RELOC_NAMES to get the op byte
+                ld      hl, (PPR_RELPTR)
+                ld      a, (PPR_RELLEN)
+                ld      c, a                ; C = name length
+                call    reloc_op_lookup     ; A = op byte; CY set if unknown
+                jr      c, ppr_reloc_err
+                call    expr_emit_byte      ; emit the reloc op
+                or      a                   ; clear carry: success
+                ret
+ppr_reloc_err:
                 scf
                 ret
 
@@ -1548,6 +1658,94 @@ si_append:
                 ret
 
 ; ===========================================================================
+; reloc_op_lookup — map a relocation name to its ExprOp byte. (Port of
+; parser.go's relocOp switch.) Linear scan of RELOC_NAMES: records are
+; `len:1 | name[len] | op:1`; a 0-length record terminates the table.
+;
+; Entry: HL = name ptr; C = name length.
+; Exit:  A = op byte on success (CY clear); CY set if name not found.
+; Clobbers A/BC/DE/HL.
+; ===========================================================================
+reloc_op_lookup:
+                ld      (ROL_PTR), hl       ; save candidate pointer
+                ld      a, c
+                ld      (ROL_LEN), a        ; save candidate length
+                ld      de, RELOC_NAMES
+rol_loop:
+                ld      a, (de)             ; record length (0 = end)
+                or      a
+                jr      z, rol_notfound
+                ld      b, a                ; B = entry name length
+                ld      a, (ROL_LEN)
+                cp      b
+                jr      nz, rol_skip        ; length mismatch
+                push    de                  ; save entry pointer (at length byte)
+                inc     de                  ; DE -> entry name bytes
+                ld      hl, (ROL_PTR)       ; HL -> candidate bytes
+rol_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, rol_cmp_fail
+                inc     de
+                inc     hl
+                djnz    rol_cmp
+                ; All bytes matched: DE now points at the op byte.
+                ld      a, (de)             ; A = op byte
+                pop     hl                  ; discard saved entry pointer
+                or      a                   ; clear carry: success
+                ret
+rol_cmp_fail:
+                pop     de                  ; restore entry pointer (length byte)
+rol_skip:
+                ; Advance DE past: length byte + name[len] + op byte.
+                ld      a, (de)             ; entry name length
+                inc     de                  ; past the length byte
+                add     a, e
+                ld      e, a
+                jr      nc, rol_skip_nc
+                inc     d
+rol_skip_nc:
+                inc     de                  ; past the op byte
+                jp      rol_loop
+rol_notfound:
+                scf
+                ret
+
+; ===========================================================================
+; RELOC_NAMES — reloc name → ExprOp table (port of relocOp, parser.go:1433).
+; Record: len:1 | name[len] | op:1; a 0-length record terminates.
+; ===========================================================================
+RELOC_NAMES:
+                defb    4
+                defm    "lo12"
+                defb    EXPR_REL_LO12
+                defb    4
+                defm    "hi12"
+                defb    EXPR_REL_HI12
+                defb    6
+                defm    "abs_g0"
+                defb    EXPR_REL_ABS_G0
+                defb    9
+                defm    "abs_g0_nc"
+                defb    EXPR_REL_ABS_G0NC
+                defb    6
+                defm    "abs_g1"
+                defb    EXPR_REL_ABS_G1
+                defb    9
+                defm    "abs_g1_nc"
+                defb    EXPR_REL_ABS_G1NC
+                defb    6
+                defm    "abs_g2"
+                defb    EXPR_REL_ABS_G2
+                defb    9
+                defm    "abs_g2_nc"
+                defb    EXPR_REL_ABS_G2NC
+                defb    6
+                defm    "abs_g3"
+                defb    EXPR_REL_ABS_G3
+                defb    0                   ; sentinel
+
+; ===========================================================================
 ; Generated name→id table (do not edit; regen with `make tables`).
 ; ===========================================================================
                 include "mnemonic_names.inc"
@@ -1606,6 +1804,11 @@ DIV_DVSR:       defs 8          ; fold_do_div: |divisor|
 DIV_C2:         defs 1          ; fold_do_div: 65th remainder bit each step
 DIV_SIGN:       defs 1          ; fold_do_div: result-negative flag (sa xor sb)
 PPR_SYMID:      defs 2          ; parse_expr_primary: interned symbol id (PUSH_SYM)
+PPR_LOCDIG:     defs 1          ; ppr_localref: digit byte from the TOK_LOCALREF value
+PPR_RELPTR:     defs 2          ; ppr_reloc: reloc name span pointer
+PPR_RELLEN:     defs 1          ; ppr_reloc: reloc name span length
+ROL_PTR:        defs 2          ; reloc_op_lookup: saved candidate pointer
+ROL_LEN:        defs 1          ; reloc_op_lookup: saved candidate length
 SI_PTR:         defs 2          ; sym_intern: saved candidate pointer
 SI_LEN:         defs 1          ; sym_intern: saved candidate length
 SYM_NAMES:      defs 2048       ; document symbol table: `len,name` records + sentinel
