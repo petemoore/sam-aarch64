@@ -837,17 +837,25 @@ Go `Document` driven through the identical op-sequence (the proven
 `tcp_conn_test.go` shape). **No new harness scaffolding is required** — only a
 Makefile payload target + the test, gated by the existing `netboot-z80` CI job.
 
-- **Brick 1 (the clean first brick — green-on-main, NOT red-until-done):**
-  flat-memory block-list core — block storage layout, the in-block line offset
-  table, `insert`/`lineAt`(render)/`delete` with intra-block shift, **split on
-  overflow / merge on underflow**, the **record-id→block-ref location table**, and
-  **goto-by-id**. A faithful mechanical port of `editmodel.go`'s `doInsert`/
-  `doDelete`/`splitBlock`/`tryMerge`/`IndexOf`/`LineAt`/`Render` (CLAUDE.md §6).
-  Verified by a koron-go/z80 op-sequence-replay test vs the i41a `Document`.
-  Est. ~400–700 lines Z80 + ~150–250 lines harness Go. Each `src/` routine lands
-  on `main` individually green (the netboot-port precedent), not on a feature
-  branch — Brick 1 is a complete, fully-oracle-verifiable unit, not a
-  half-decoder that must stay red until the rest exists.
+- **Brick 1 — flat-memory block-list core** (split into 1a/1b for reliable
+  landing, both green-on-main, NOT red-until-done):
+  - **Brick 1a (LANDED — PR #387):** `src/editmodel.asm` — the insert + build-up +
+    navigate path: block storage (a fixed descriptor pool, packed `id|len|text`
+    records, a document-order array), `em_insert` with intra-block shift, **split
+    on overflow**, the **record-id→stable-descriptor location table** (`EM_LOC`,
+    re-pointing only moved records on split — the §3 bounded-cost property — with
+    an order-array shift that does NOT touch loc), `em_line_at`, and `em_goto`
+    (goto-by-id via loc → a scan of the resident order array, §2.5). A faithful
+    port of `editmodel.go`'s `doInsert`/`splitBlock`/`IndexOf`/`LineAt`/
+    `blockAndLocalIndex`. Verified by `tools/netboot-oracle/z80/editmodel_test.go`
+    (120 random-position inserts × 2 seeds vs a parallel oracle → 19/21 blocks,
+    every `em_line_at` id+text and every `em_goto` index match, plus a not-found
+    check). Flat-memory, small `EM_BLOCK_CAP=256` (the real SAM ½-page 8 KB is set
+    at Brick 2); the koron-go/z80 harness gained an additive `CallResult.A` field
+    for the found-flag. Gated by the existing `netboot-z80` CI job.
+  - **Brick 1b (remaining):** `em_delete` + block **merge on underflow** (port of
+    `doDelete`/`tryMerge`), with the oracle test extended to interleaved
+    insert/delete. Builds directly on 1a.
 - **Brick 2 — paging integration:** map blocks onto real i2 free-page-pool pages
   via `OUT (251)`, claim/return pages on split/merge, block list resident in
   section D. The **only** part that genuinely needs SAM paging hardware →
