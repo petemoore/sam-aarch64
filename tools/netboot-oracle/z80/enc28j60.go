@@ -145,6 +145,17 @@ type ENC28J60 struct {
 	lastBorder    byte
 	borderWritten bool
 
+	// PHY link-up model (i127). On real silicon the ENC28J60's 10BASE-T link is
+	// down for a while after init (link-pulse detection; the datasheet gives no
+	// duration and the chip has no auto-negotiation), and a transmit issued before
+	// the link is up is SILENTLY lost (TXRTS clears + TXIF sets, but the bytes
+	// never egress). ops counts SPI port accesses as a proxy for elapsed time;
+	// the link is up once ops reaches linkUpAfterOps. Default 0 = up immediately
+	// (the behaviour every pre-i127 test relies on); a test sets it >0 to model
+	// the delay and exercise the wait-for-link path.
+	ops            int
+	linkUpAfterOps int
+
 	// Virtual wire.
 	txFrames [][]byte // frames the driver transmitted (control byte stripped)
 	rxQueue  [][]byte // frames waiting to be delivered to drv_read
@@ -265,6 +276,7 @@ func (e *ENC28J60) setReg16(addrLo byte, v uint16) {
 // IND port register before calling here, so `port` is the true C-register port
 // — &DE for the RBM byte stream, &DC for a busy poll, etc.)
 func (e *ENC28J60) In(port uint8) uint8 {
+	e.ops++
 	switch port {
 	case portTrinityCtl:
 		// Busy flag (bit 3): the emulation is never busy, so the driver's
@@ -296,6 +308,7 @@ func (e *ENC28J60) In(port uint8) uint8 {
 
 // Out handles a Z80 OUT to a Trinity port.
 func (e *ENC28J60) Out(port uint8, value uint8) {
+	e.ops++
 	switch port {
 	case portTrinityCtl:
 		e.ctlSelect(value)
@@ -361,6 +374,41 @@ func (e *ENC28J60) ProgramTrinityNetwork(mac [6]byte, ip [4]byte) {
 	e.eep.write(eepChunkBase, chunk)
 }
 
+// SetLinkUpAfterOps models the PHY link coming up only after `n` SPI port
+// accesses (a proxy for the post-init link-pulse-detection delay): until then,
+// a read of PHSTAT2.LSTAT reports the link DOWN. n=0 (default) keeps the link up
+// from the start (every pre-i127 test relies on that). It resets the op counter.
+//
+// Scope note (i127): this models only the LSTAT *read* — the datasheet-confirmed
+// link-status mechanism a proactive transmitter must poll before its first send.
+// It deliberately does NOT yet gate transmit/receive on link state (the "a frame
+// sent before link-up is silently lost" reproduction): that is held until the
+// fix is confirmed on real hardware, so the emulator never encodes an unconfirmed
+// cause as its contract. Once hardware confirms, the drop-while-down behaviour
+// and its regression test land here.
+func (e *ENC28J60) SetLinkUpAfterOps(n int) { e.linkUpAfterOps = n; e.ops = 0 }
+
+// linkUp reports whether the modelled PHY link is up yet (ops past the threshold).
+func (e *ENC28J60) linkUp() bool { return e.ops >= e.linkUpAfterOps }
+
+// miiReadByte returns the byte an RCR of a MAC/MII register yields, modelling the
+// MII path to the PHY registers for the one register the driver reads: PHSTAT2
+// (PHY addr 0x11). A PHY read goes via MIREGADR (the PHY addr) + MIRDL/MIRDH (the
+// 16-bit result); we map a read of MIRDH (bank 2, 0x19) for PHSTAT2 to LSTAT
+// (bit 10 -> high byte bit 2 = 0x04) reflecting linkUp(); MIRDL (0x18) low byte
+// is 0. All other MAC/MII reads pass through to the stored register.
+func (e *ENC28J60) miiReadByte(addr byte) byte {
+	if e.bank() == 2 && (addr == 0x18 || addr == 0x19) { // MIRDL / MIRDH
+		if e.regs[2][0x14] == 0x11 { // MIREGADR == PHSTAT2
+			if addr == 0x19 && e.linkUp() {
+				return 0x04 // MIRDH bit 2 == PHSTAT2 bit 10 (LSTAT)
+			}
+			return 0x00
+		}
+	}
+	return e.regGet(addr)
+}
+
 // spiClock processes one byte clocked out to the ENC over &DE and latches the
 // MISO byte the microcontroller will return on the next IN (&DE). The driver's
 // idiom is OUT opcode, OUT dummy(s), IN value — so the response to a read lands
@@ -404,11 +452,12 @@ func (e *ENC28J60) spiClock(v uint8) {
 			e.materialiseRX()
 		}
 		if e.isMACMII(addr) {
-			// byteIdx 1 = dummy (garbage), byteIdx 2 = real data.
+			// byteIdx 1 = dummy (garbage), byteIdx 2 = real data. MIRDL/MIRDH
+			// map to the PHY register named by MIREGADR (miiReadByte).
 			if e.spiByteIdx == 1 {
 				e.spiMISO = 0x00 // dummy
 			} else {
-				e.spiMISO = e.regGet(addr)
+				e.spiMISO = e.miiReadByte(addr)
 			}
 		} else {
 			// ETH register: data on the first dummy clock after the opcode.
