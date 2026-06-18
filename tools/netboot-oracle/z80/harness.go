@@ -53,14 +53,29 @@ type IODevice interface {
 
 // mem is a flat 64 KB Z80 address space implementing z80.Memory and z80.IO. Port
 // I/O is delegated to an optional IODevice (nil => inert, reads return 0xFF).
+//
+// By default the whole space is RAM (the packet-builder and leaf-routine tests
+// load code anywhere and write freely). A boot test can mark the top of memory as
+// ROM via romActive+romBase to model the SAM at boot, where &C000-&FFFF is ROM1
+// (read-only) until the program pages RAM in there: writes at/above romBase are
+// then dropped (as on hardware), so an over-size boot image — whose tail would
+// land above &BFFF — is not loaded into RAM and a call into that region runs the
+// ROM contents, reproducing the real-hardware crash instead of silently working.
 type mem struct {
-	ram [0x10000]byte
-	io  IODevice
-	cpu *z80.CPU // back-reference, for the INI/IND port correction in In
+	ram       [0x10000]byte
+	io        IODevice
+	cpu       *z80.CPU // back-reference, for the INI/IND port correction in In
+	romActive bool     // when true, addr >= romBase is read-only ROM (boot model)
+	romBase   uint16   // first ROM address (e.g. 0xC000 for ROM1 at boot)
 }
 
-func (m *mem) Get(addr uint16) uint8        { return m.ram[addr] }
-func (m *mem) Set(addr uint16, value uint8) { m.ram[addr] = value }
+func (m *mem) Get(addr uint16) uint8 { return m.ram[addr] }
+func (m *mem) Set(addr uint16, value uint8) {
+	if m.romActive && addr >= m.romBase {
+		return // ROM at boot: the write is dropped, exactly as on hardware
+	}
+	m.ram[addr] = value
+}
 
 // In returns the byte read from a port. It corrects a Z80 spec-conformance
 // quirk in koron-go/z80 v0.10.2 before delegating: the block-input
@@ -135,6 +150,49 @@ func Load(binPath, mapPath string) (*Machine, error) {
 	}
 	machine := &Machine{m: &mem{}, symbols: map[string]uint16{}}
 	copy(machine.m.ram[loadOrg:], code)
+
+	syms, err := parseMap(mapPath)
+	if err != nil {
+		return nil, err
+	}
+	machine.symbols = syms
+	return machine, nil
+}
+
+// LoadBoot loads a bootable netboot .bin the way the SAM does at boot, modelling
+// the memory map the flat Load ignores: the image is placed from &8000, but
+// &romBase-&FFFF is ROM1 (read-only) at boot, so only the bytes that land below
+// romBase are written into RAM — the tail above is dropped, exactly as on
+// hardware (the boot loader cannot write ROM1). Running a boot wrapper
+// (client_main / smoke_main) under this loader therefore exercises the real boot
+// path AND reproduces the over-size crash (a call into the un-loaded tail runs the
+// zero-filled ROM region and wanders) that the flat all-RAM Load silently hides.
+//
+// romBase is typically 0xC000 (ROM1 at boot). The ROM region is left zero-filled
+// (the cheap first cut: it catches the over-size class and lets the wrapper's
+// own code/data below romBase run; loading real ROM contents so the wrapper's ROM
+// calls — RST 16 print etc. — also run is a later refinement).
+func LoadBoot(binPath, mapPath string, romBase uint16) (*Machine, error) {
+	code, err := os.ReadFile(binPath)
+	if err != nil {
+		return nil, fmt.Errorf("z80: read boot bin: %w", err)
+	}
+	if loadOrg+len(code) > 0x10000 {
+		return nil, fmt.Errorf("z80: boot bin of %d bytes overflows from &%04X", len(code), loadOrg)
+	}
+	machine := &Machine{
+		m:       &mem{romActive: true, romBase: romBase},
+		symbols: map[string]uint16{},
+	}
+	// Copy only the bytes that land in RAM (below romBase); the tail above romBase
+	// hits ROM1 and is never written, as on hardware.
+	for i, b := range code {
+		addr := loadOrg + i
+		if addr >= int(romBase) {
+			break
+		}
+		machine.m.ram[addr] = b
+	}
 
 	syms, err := parseMap(mapPath)
 	if err != nil {
@@ -239,6 +297,8 @@ type CallResult struct {
 	A       uint8  // the A register at RET (routines returning a flag/byte use A)
 	Steps   uint64
 	TStates uint64 // total Z80 cycles executed (cycle-exact; see tstates.go)
+	PC      uint16 // the PC where the run stopped (the spin site if it did not halt)
+	Halted  bool   // true if the run reached a HALT / RET-to-trap; false if it span out
 }
 
 // Call runs the routine named `entry` to its RET with zeroed entry registers.
@@ -261,7 +321,24 @@ func (mac *Machine) CallEntry(entry string, in Entry) (CallResult, error) {
 	if err != nil {
 		return CallResult{}, err
 	}
-	return mac.run(entry, pc, in)
+	return mac.run(entry, pc, in, true)
+}
+
+// RunBoot runs a bootable entry point (client_main / smoke_main / server_main)
+// the way the SAM does at boot — but, unlike CallEntry, it does NOT treat the
+// step cap as a hard error. A boot wrapper either halts (its `di; halt` on a
+// fail/success border) or loops forever (a server/serve loop, or a HANG). So
+// RunBoot returns a CallResult either way: res.Halted distinguishes a clean halt
+// from a spin, and res.PC is the address it stopped/span at — the diagnostic that
+// localises a boot-path hang. (Pair it with a device's TXFrames/LastBorder to see
+// how far the wrapper got.) It still errors on a genuine fault (bad symbol,
+// undecodable instruction).
+func (mac *Machine) RunBoot(entry string, in Entry) (CallResult, error) {
+	pc, err := mac.Sym(entry)
+	if err != nil {
+		return CallResult{}, err
+	}
+	return mac.run(entry, pc, in, false)
 }
 
 // RunFrom runs from a raw entry address (no symbol lookup) to the HALT trap,
@@ -270,14 +347,17 @@ func (mac *Machine) CallEntry(entry string, in Entry) (CallResult, error) {
 // it, and read the measured TStates. The run setup is identical to CallEntry
 // (SP, HALT trap, step cap), so the timing is directly comparable.
 func (mac *Machine) RunFrom(addr uint16, in Entry) (CallResult, error) {
-	return mac.run(fmt.Sprintf("&%04X", addr), addr, in)
+	return mac.run(fmt.Sprintf("&%04X", addr), addr, in, true)
 }
 
 // run is the shared run loop: it sets SP to a safe stack top, pushes the
 // HALT-trap return address, plants the HALT there, points PC at `pc`, and steps
 // until the trap (the routine's RET landing on it) or the step cap, accumulating
-// steps and T-states. `name` only labels error messages.
-func (mac *Machine) run(name string, pc uint16, in Entry) (CallResult, error) {
+// steps and T-states. `name` only labels error messages. When capIsError is true
+// (the leaf-routine callers) a step-cap is a hard error — a runaway routine is a
+// bug; when false (RunBoot) the cap is a normal outcome (a forever-loop / hang)
+// returned as a CallResult with Halted=false.
+func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (CallResult, error) {
 	cpu := &z80.CPU{Memory: mac.m, IO: mac.m}
 	mac.m.cpu = cpu // for the INI/IND port correction in mem.In
 	cpu.PC = pc
@@ -297,8 +377,10 @@ func (mac *Machine) run(name string, pc uint16, in Entry) (CallResult, error) {
 		cap = in.StepCap
 	}
 	var steps, tstates uint64
+	halted := false
 	for {
 		if cpu.PC == haltTrap {
+			halted = true
 			break
 		}
 		// Cost the instruction from the live CPU state BEFORE stepping it, so
@@ -312,11 +394,18 @@ func (mac *Machine) run(name string, pc uint16, in Entry) (CallResult, error) {
 		cpu.Step()
 		steps++
 		if cpu.HALT {
+			halted = true
 			break
 		}
 		if steps >= cap {
-			return CallResult{}, fmt.Errorf("z80: routine %q did not return after %d steps (PC=&%04X)", name, steps, cpu.PC)
+			if capIsError {
+				return CallResult{}, fmt.Errorf("z80: routine %q did not return after %d steps (PC=&%04X)", name, steps, cpu.PC)
+			}
+			break // RunBoot: a spin/forever-loop is a normal outcome
 		}
 	}
-	return CallResult{BC: cpu.BC.U16(), HL: cpu.HL.U16(), A: cpu.AF.Hi, Steps: steps, TStates: tstates}, nil
+	return CallResult{
+		BC: cpu.BC.U16(), HL: cpu.HL.U16(), A: cpu.AF.Hi,
+		Steps: steps, TStates: tstates, PC: cpu.PC, Halted: halted,
+	}, nil
 }

@@ -53,6 +53,8 @@ const (
 	selNullOn     = 0x2F // enullon (auto-null on)
 	selProbeT     = 0x08 // identity probe: reply 'T' on &DD
 	selProbeR     = 0x09 // identity probe: reply 'R' on &DD
+	selEEPEnable  = 0x11 // eeprom_enable: CS-assert the flash EEPROM (eeprom.asm)
+	selEEPDisable = 0x10 // eeprom_disable: CS-deassert it
 )
 
 // ENC28J60 SPI opcode encodings (datasheet Table 4-1: 3-bit op in the top bits,
@@ -132,6 +134,17 @@ type ENC28J60 struct {
 	rbmActive   bool // inside a Read-Buffer-Memory transaction
 	probeReply  byte // pending &DD identity-probe reply ('T'/'R')
 
+	// eep is the second device on the Trinity SPI bus: the flash EEPROM the boot
+	// wrappers read their MAC+IP from (eeprom.go). It shares &DC (select) and &DD
+	// (data) with the identity probe; csAssert/Deassert frame its transactions.
+	eep eeprom
+
+	// lastBorder records the most recent OUT (&FE) value. The boot wrappers paint
+	// a distinctive border on each outcome (red=bad config, blue=ENC init failed,
+	// green=success), so a boot test can read which stage a wrapper reached.
+	lastBorder    byte
+	borderWritten bool
+
 	// Virtual wire.
 	txFrames [][]byte // frames the driver transmitted (control byte stripped)
 	rxQueue  [][]byte // frames waiting to be delivered to drv_read
@@ -173,6 +186,10 @@ func (e *ENC28J60) InjectRX(frame []byte) {
 // is the Ethernet frame the driver placed in the TX buffer (the per-packet
 // control byte at ETXST is stripped; the bytes from ETXST+1..ETXND).
 func (e *ENC28J60) TXFrames() [][]byte { return e.txFrames }
+
+// LastBorder returns the most recent OUT (&FE) value and whether any border write
+// happened — the boot wrappers' outcome signal (red/blue/green).
+func (e *ENC28J60) LastBorder() (byte, bool) { return e.lastBorder, e.borderWritten }
 
 func (e *ENC28J60) softReset() {
 	for b := range e.regs {
@@ -254,7 +271,11 @@ func (e *ENC28J60) In(port uint8) uint8 {
 		// wait_ready loops exit immediately.
 		return 0x00
 	case portTrinityEEP:
-		// Identity-probe reply ('T' after select &08, 'R' after select &09).
+		// Shared port: EEPROM read data while a flash read transaction is in its
+		// data phase, otherwise the identity-probe reply ('T'/'R').
+		if e.eep.inDataPhase() {
+			return e.eep.miso
+		}
 		return e.probeReply
 	case portTrinityENC:
 		// Inside a Read-Buffer-Memory transaction every IN (&DE) reads and
@@ -280,9 +301,15 @@ func (e *ENC28J60) Out(port uint8, value uint8) {
 		e.ctlSelect(value)
 	case portTrinityENC:
 		e.spiClock(value)
-	case portTrinityEEP, portTrinitySD, portBorder:
-		// EEPROM/SD data writes + border colour: no model needed for the
-		// ethernet path.
+	case portTrinityEEP:
+		// Flash EEPROM SPI data clock (the boot wrappers' config read).
+		e.eep.clock(value)
+	case portBorder:
+		// Record the border colour the boot wrappers paint on each outcome.
+		e.lastBorder = value
+		e.borderWritten = true
+	case portTrinitySD:
+		// SD data writes: no model needed here.
 	}
 }
 
@@ -308,7 +335,30 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 		e.probeReply = 'T' // 0x54
 	case selProbeR:
 		e.probeReply = 'R' // 0x52
+	case selEEPEnable:
+		e.eep.csAssert() // eeprom_enable: begin a flash transaction
+	case selEEPDisable:
+		e.eep.csDeassert() // eeprom_disable: end it
 	}
+}
+
+// ProgramTrinityNetwork lays out the EEPROM so the real eeprom.asm config read
+// (find_index for "Trinity Network ", then read_chunk for the matched value)
+// returns mac+ip — exactly what smoke_main/client_main read at boot. The chunk is
+// placed at index entry 0, so find_index matches it as value 1 and read_chunk
+// reads chunk base 0x2000. sam_mac is chunk+0 (6 bytes), sam_ip is chunk+6 (4).
+func (e *ENC28J60) ProgramTrinityNetwork(mac [6]byte, ip [4]byte) {
+	// Index entry 0 (addr 0): part 1, total 1, name "Trinity Network ".
+	entry := make([]byte, eepIndexStride)
+	entry[0] = 1 // part
+	entry[1] = 1 // total
+	copy(entry[2:18], trinityNetworkName)
+	e.eep.write(0, entry)
+	// Chunk for value 1 (addr eepChunkBase): sam_mac(6), sam_ip(4).
+	chunk := make([]byte, 10)
+	copy(chunk[0:6], mac[:])
+	copy(chunk[6:10], ip[:])
+	e.eep.write(eepChunkBase, chunk)
 }
 
 // spiClock processes one byte clocked out to the ENC over &DE and latches the
