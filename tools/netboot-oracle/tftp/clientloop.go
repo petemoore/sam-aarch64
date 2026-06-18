@@ -85,6 +85,48 @@ func (c *ClientLoop) OnDATA(dataFrame []byte) []byte {
 	return c.wrap(act.Reply)
 }
 
+// OnServerReply dispatches a received server frame in the transfer phase. A
+// standards-compliant server answers an *optioned* RRQ with an OACK (RFC 2347)
+// BEFORE any DATA: the client must learn the negotiated blksize + the server's
+// TID from it and ACK block 0 to start the transfer. A server that does not
+// support options instead streams DATA block 1 directly (no OACK) at the 512-byte
+// default. This handles both: OACK -> ACK 0 (adopting the negotiated blksize);
+// DATA -> OnDATA. It is the entry the driver calls in the transfer phase.
+func (c *ClientLoop) OnServerReply(rx []byte) []byte {
+	u, ok := frame.ParseUDP(rx)
+	if !ok || u.DstPort != c.ClientTID {
+		return nil
+	}
+	switch Opcode(u.Payload) {
+	case OpOACK:
+		return c.onOACK(rx, u)
+	case OpDATA:
+		return c.OnDATA(rx)
+	default:
+		return nil
+	}
+}
+
+// onOACK learns the server endpoint (the OACK's source becomes the transfer's
+// server TID — RFC 1350 §4 / RFC 2347), adopts the server's negotiated blksize
+// (absent or unparseable leaves the 512 default in place), and returns the ACK
+// for block 0 that tells the server to begin sending DATA at block 1.
+func (c *ClientLoop) onOACK(oackFrame []byte, u frame.UDP) []byte {
+	if !c.gotServer {
+		copy(c.serverMAC[:], oackFrame[6:12])
+		c.serverIP = u.SrcIP
+		c.serverTID = u.SrcPort
+		c.gotServer = true
+		c.xfer.serverID = u.SrcPort
+	}
+	if opts, err := ParseOACK(u.Payload); err == nil {
+		if bs, ok := OptionUint(opts, "blksize"); ok && bs > 0 {
+			c.xfer.blksize = int(bs)
+		}
+	}
+	return c.wrap(BuildACK(0))
+}
+
 // OnTimeout applies the Sorcerer's-Apprentice-Syndrome fix: retransmit the last
 // ACK frame only (never the RRQ). Before any block is ACKed it returns nil (the
 // caller re-sends the RRQ at that stage, not here).

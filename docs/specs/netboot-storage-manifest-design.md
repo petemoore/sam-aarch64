@@ -117,6 +117,26 @@ fresh one).
 4. **Default storage strategy → s3 highest-free.** Keeps the user's low, memorable record
    slots for their own disks (games, etc.); TFTP storage grows downward from the top.
    Overridable per the §4 strategy field.
+5. **Storage class — disks vs files (explicit-first, validated; Pete, 2026-06-18).** A
+   pushed/fetched object is stored as one of two classes, chosen by an **explicit namespace
+   prefix**, never inferred from the bytes:
+   - **default = generic flat-file archive** — any `tftp put NAME` stores a plain file
+     (spanned across records per §3 if larger than a record's file capacity), fetchable back
+     byte-identically. Never produces a bootable disk.
+   - **explicit `trinity-sam-disks/` prefix** — `tftp put X trinity-sam-disks/X` declares
+     "store as a SAM disk **record**." The server **validates before committing** and
+     **rejects on mismatch** (so corrupt disk-records can't accumulate): size **== 819,200**
+     (a Trinity record is exactly that) **and** a structural signature — the **`BDOS` stamp
+     at byte 232** that HRECORD-select/boot already requires (extensible to other SAM disk
+     formats later via their own signatures). A raw record is simultaneously **bootable**
+     (HRECORD + boot) and **servable-raw** (read sectors 0..1599 = the `.mgt`), so a disk
+     needs **one copy**, not two — no separate "extract to a record" step.
+
+   The filename is the only intent lever a *stock* `tftp`/`curl` client can set (mode is
+   fixed to `octet`; custom RFC-2347 options aren't reachable from stock clients), so the
+   prefix is the explicit declaration and **size is a *validation* of that request, not a
+   guess.** (The size-inference alternative was rejected as too implicit — corrupt-disk-prone
+   and surprising at the edges. Explicit > implicit.)
 
 ## 7. Verification line (CLAUDE.md §5)
 

@@ -64,7 +64,7 @@ func fillClientConfig(t *testing.T, mac *z80h.Machine) *client.Client {
 	put("CLIENT_MAC", cClientMAC[:])
 	put("CLIENT_IP", cClientIP[:])
 	put("CLIENT_TID", be16(cliOwnTID))
-	put("CLIENT_BLKSIZE", []byte{byte(cliBlksize & 0xff), byte(cliBlksize >> 8)}) // LE
+	put("CLIENT_BLKSIZE", []byte{0x00, 0x02}) // 512 LE — the default until an OACK negotiates
 	put("SERVER_IP", cServerIP[:])
 	put("RRQ_FILENAME", append([]byte(cliFilename), 0))
 
@@ -78,7 +78,7 @@ func fillClientConfig(t *testing.T, mac *z80h.Machine) *client.Client {
 
 	return client.New(client.Config{
 		ClientMAC: cClientMAC, ClientIP: cClientIP, ServerIP: cServerIP,
-		ClientTID: cliOwnTID, Filename: cliFilename, Blksize: cliBlksize,
+		ClientTID: cliOwnTID, Filename: cliFilename,
 	})
 }
 
@@ -133,6 +133,14 @@ func cDataFrame(serverTID, block uint16, payload []byte) []byte {
 	})
 }
 
+func cOackFrame(serverTID uint16, opts []tftp.Option) []byte {
+	return frame.BuildUDPFrame(frame.UDP{
+		DstMAC: cClientMAC, SrcMAC: cServerMAC, SrcIP: cServerIP, DstIP: cClientIP,
+		SrcPort: serverTID, DstPort: cliOwnTID,
+		Payload: tftp.BuildOACK(opts),
+	})
+}
+
 func eqClient(t *testing.T, label string, got, want []byte) {
 	t.Helper()
 	if got == nil {
@@ -170,17 +178,25 @@ func TestClientFullFetchSession(t *testing.T) {
 	goRRQ, _ := ref.OnFrame(arpReply)
 	eqClient(t, "RRQ", clientStep(t, mac, enc, "client_run_once", arpReply), goRRQ)
 
-	// 4. DATA block 1 -> ACK 1.
+	// 4. The server OACKs the requested options (blksize 1428) -> ACK block 0;
+	//    the negotiated blksize is adopted (the DATA below streams at 1428).
+	oack := cOackFrame(cliSrvTID, []tftp.Option{
+		{Name: "blksize", Value: "1428"}, {Name: "tsize", Value: "2956"}, {Name: "timeout", Value: "2"},
+	})
+	goAck0, _ := ref.OnFrame(oack)
+	eqClient(t, "ACK 0", clientStep(t, mac, enc, "client_run_once", oack), goAck0)
+
+	// 5. DATA block 1 -> ACK 1.
 	d1 := cDataFrame(cliSrvTID, 1, file[:cliBlksize])
 	goAck1, _ := ref.OnFrame(d1)
 	eqClient(t, "ACK 1", clientStep(t, mac, enc, "client_run_once", d1), goAck1)
 
-	// 5. DATA block 2 -> ACK 2.
+	// 6. DATA block 2 -> ACK 2.
 	d2 := cDataFrame(cliSrvTID, 2, file[cliBlksize:2*cliBlksize])
 	goAck2, _ := ref.OnFrame(d2)
 	eqClient(t, "ACK 2", clientStep(t, mac, enc, "client_run_once", d2), goAck2)
 
-	// 6. DATA block 3 (short final, 100 bytes) -> ACK 3 + done.
+	// 7. DATA block 3 (short final, 100 bytes) -> ACK 3 + done.
 	d3 := cDataFrame(cliSrvTID, 3, file[2*cliBlksize:])
 	goAck3, goDone := ref.OnFrame(d3)
 	eqClient(t, "ACK 3", clientStep(t, mac, enc, "client_run_once", d3), goAck3)
@@ -244,5 +260,44 @@ func TestClientStrayTIDError(t *testing.T) {
 	code, _, err := tftp.ParseError(udpPayload(t, got))
 	if err != nil || code != tftp.ErrUnknownTID {
 		t.Fatalf("stray reply should be ERROR(5), got code %d err %v", code, err)
+	}
+}
+
+// TestClientNoOACKFallbackSession confirms the Z80 client interoperates with a
+// server that ignores options: no OACK, DATA streamed at the 512 default. A full
+// 512-byte block 1 must NOT be treated as short (the bug a 1428 default caused);
+// block 2 (300) is the short final. Matches the Go authority byte-for-byte.
+func TestClientNoOACKFallbackSession(t *testing.T) {
+	file := makeFile(512 + 300)
+	mac := loadClient(t)
+	ref := fillClientConfig(t, mac)
+	enc := z80h.NewENC28J60()
+	initClientDriver(t, mac, enc)
+
+	clientStep(t, mac, enc, "client_first", nil)
+	arpReply := frame.BuildARPReply(cServerMAC, cClientMAC, cServerIP, cClientIP)
+	ref.OnFrame(arpReply)
+	clientStep(t, mac, enc, "client_run_once", arpReply) // -> RRQ
+
+	// block 1 (a full 512-byte block) -> ACK 1, not done.
+	d1 := cDataFrame(cliSrvTID, 1, file[:512])
+	goAck1, _ := ref.OnFrame(d1)
+	eqClient(t, "ACK 1 (512 default)", clientStep(t, mac, enc, "client_run_once", d1), goAck1)
+	if mac.Read(symAddr(t, mac, "XFER_DONE"), 1)[0] != 0 {
+		t.Fatalf("a full 512-byte block must not finish the transfer")
+	}
+	// block 2 (300 bytes, short final) -> ACK 2 + done.
+	d2 := cDataFrame(cliSrvTID, 2, file[512:])
+	goAck2, goDone := ref.OnFrame(d2)
+	eqClient(t, "ACK 2", clientStep(t, mac, enc, "client_run_once", d2), goAck2)
+	if !goDone {
+		t.Fatalf("the Go authority should be done after the 300-byte final block")
+	}
+	if mac.Read(symAddr(t, mac, "XFER_DONE"), 1)[0] != 1 {
+		t.Fatalf("XFER_DONE not set after the short final block")
+	}
+	staged := mac.Read(symAddr(t, mac, "STAGING"), len(file))
+	if !bytes.Equal(staged, file) {
+		t.Fatalf("staged bytes != file")
 	}
 }

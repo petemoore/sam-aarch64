@@ -84,6 +84,7 @@ UDP_PORT_TFTP:    equ 69                 ; the server's RRQ listen port
 OP_DATA:          equ 3
 OP_ACK:           equ 4
 OP_ERROR:         equ 5
+OP_OACK:          equ 6
 ERR_UNKNOWN_TID:  equ 5
 
 PHASE_ARP:        equ 0
@@ -274,11 +275,14 @@ do_recv_data:
                 cp      (hl)
                 jp      nz, cl_none
 
-                ; opcode DATA(3)?
+                ; opcode high byte 0, then dispatch: OACK(6) starts the transfer
+                ; (option negotiation), DATA(3) carries a block.
                 ld      a, (RXBUF + RX_UDP_PAYLOAD)
                 or      a
                 jp      nz, cl_none
                 ld      a, (RXBUF + RX_UDP_PAYLOAD + 1)
+                cp      OP_OACK
+                jp      z, do_recv_oack
                 cp      OP_DATA
                 jp      nz, cl_none
 
@@ -451,6 +455,105 @@ build_ack_frame_and_send:
                 pop     bc
                 jp      wrap_reply
 
+; ===========================================================================
+; PHASE_XFER (OACK) — a standards-compliant server answers the *optioned* RRQ
+; with an OACK (RFC 2347) BEFORE any DATA. Learn the server endpoint, adopt the
+; server's negotiated blksize (absent/garbled -> the 512 default stands), and ACK
+; block 0 to tell the server to start sending DATA. Mirrors clientloop.onOACK.
+; ===========================================================================
+do_recv_oack:
+                ; learn the server endpoint (the OACK's source) if not yet known.
+                ld      a, (GOT_SERVER)
+                or      a
+                jr      nz, oack_have_server
+                ld      hl, RXBUF + RX_ETH_SRCMAC
+                ld      de, SERVER_MAC
+                ld      bc, 6
+                ldir
+                ld      hl, RXBUF + RX_IP_SRC
+                ld      de, SERVER_IP
+                ld      bc, 4
+                ldir
+                ld      hl, RXBUF + RX_UDP_SRCPORT
+                ld      de, SERVER_TID
+                ld      bc, 2
+                ldir
+                ld      a, 1
+                ld      (GOT_SERVER), a
+oack_have_server:
+                ; copy the OACK payload (CL_RX_LEN - 42) into OACK_IN for parsing.
+                ld      hl, (CL_RX_LEN)
+                ld      de, RX_UDP_PAYLOAD
+                or      a
+                sbc     hl, de
+                ld      (OACK_IN_LEN), hl
+                ld      b, h
+                ld      c, l
+                ld      a, b
+                or      c
+                jr      z, oack_ack0           ; empty: keep the 512 default
+                ld      hl, RXBUF + RX_UDP_PAYLOAD
+                ld      de, OACK_IN
+                ldir
+                call    parse_oack
+                ld      a, (OACK_OK)
+                or      a
+                jr      z, oack_ack0           ; not a valid OACK: keep 512
+                ld      hl, oack_blksize_name
+                ld      (FIND_NAME_PTR), hl
+                call    find_option
+                ld      a, (FIND_OK)
+                or      a
+                jr      z, oack_ack0           ; no blksize option: keep 512
+                ld      hl, (FIND_VALUE_PTR)
+                call    atoi_dec               ; (HL) decimal string -> DE
+                ld      a, d
+                or      e
+                jr      z, oack_ack0           ; zero/garbage: keep 512
+                ex      de, hl
+                ld      (CLIENT_BLKSIZE), hl   ; adopt the negotiated blksize
+oack_ack0:
+                ; ACK block 0 -> the server starts sending DATA at block 1.
+                ld      hl, 0
+                ld      (ACK_BLOCK), hl
+                jp      build_ack_frame_and_send
+
+; atoi_dec — parse a NUL/non-digit-terminated decimal string at HL into DE
+; (16-bit, wraps past 65535 — TFTP blksizes are well within range).
+; Clobbers A, BC, DE, HL.
+atoi_dec:
+                ld      bc, 0                  ; BC = accumulator
+atd_loop:
+                ld      a, (hl)
+                sub     '0'
+                jr      c, atd_done            ; below '0'
+                cp      10
+                jr      nc, atd_done           ; above '9'
+                inc     hl
+                push    hl
+                ld      h, b
+                ld      l, c                   ; HL = acc
+                add     hl, hl                 ; acc*2
+                push    hl
+                add     hl, hl                 ; acc*4
+                add     hl, hl                 ; acc*8
+                pop     de                     ; DE = acc*2
+                add     hl, de                 ; acc*10
+                ld      e, a
+                ld      d, 0                   ; DE = digit
+                add     hl, de                 ; acc*10 + digit
+                ld      b, h
+                ld      c, l                   ; acc = HL
+                pop     hl                     ; restore the string cursor
+                jr      atd_loop
+atd_done:
+                ld      d, b
+                ld      e, c                   ; DE = the parsed value
+                ret
+
+oack_blksize_name: defm "blksize"
+                   defb 0
+
 ; tftp_recv_timeout — SAS fix: retransmit the last ACK only (never the RRQ).
 ; Out: BC = bytes transmitted, or 0 if no block has been ACKed yet.
 client_recv_timeout:
@@ -505,8 +608,9 @@ wrap_reply:
 rrq_mode_octet:   defm "octet"
                   defb 0
 
-; The settled ClientOptionSet (research note §5.7), byte-identical to the Go
-; tftp.ClientOptionSet ordering (blksize, tsize, timeout, windowsize).
+; The ClientOptionSet, byte-identical to the Go tftp.ClientOptionSet ordering
+; (blksize, tsize, timeout). windowsize is NOT requested: a lock-step receiver
+; must not ask for RFC 7440 windowed delivery it cannot handle (i118/i120).
 rrq_opt_template:
                   defm "blksize"
                   defb 0
@@ -519,10 +623,6 @@ rrq_opt_template:
                   defm "timeout"
                   defb 0
                   defm "2"
-                  defb 0
-                  defm "windowsize"
-                  defb 0
-                  defm "4"
                   defb 0
 RRQ_OPT_LEN:      equ $ - rrq_opt_template
 
@@ -585,7 +685,9 @@ client_main:
                 ld      de, RRQ_FILENAME
                 ld      bc, cl_filename_end - cl_filename
                 ldir
-                ld      hl, 1428
+                ; the effective blksize starts at the 512 TFTP default; an OACK
+                ; (the RRQ requests blksize 1428) raises it; a no-OACK server keeps 512.
+                ld      hl, 512
                 ld      (CLIENT_BLKSIZE), hl
 
                 ; clear the transfer state.
@@ -689,7 +791,21 @@ TPKT:             defs 64                ; the ACK/ERROR packet buffer
 
 RRQ_FILENAME:     defs 128              ; the NUL-terminated filename to fetch
 RXBUF:            defs 1518
-STAGING:          defs 16384            ; the accumulated file bytes (the test inspects)
+; STAGING holds the accumulated file bytes. Its size differs by build target —
+; the accumulation logic is identical, only the buffer capacity changes:
+;   - The host harness (NETBOOT_HOSTTEST) is a flat 64 KB Z80, so it gets a
+;     generous buffer that comfortably holds the multi-block test file
+;     (netboot_client_test.go stages 2 full 1428-byte blocks + a tail).
+;   - The bootable build must fit section C (<&C000): section D is ROM1 at boot,
+;     so code/data above &BFFF is never loaded into RAM and the program crashes.
+;     A 16384-byte buffer pushed the includes into ROM, so the inline buffer here
+;     is small; real large-file staging needs paged RAM (i119), with the i125
+;     fit-check guarding the section-C bound.
+                if defined(NETBOOT_HOSTTEST)
+STAGING:          defs 16384
+                else
+STAGING:          defs 2048
+                endif
 
 ; ===========================================================================
 ; The host-verified packet builders/parsers + the storage seam, composed into
