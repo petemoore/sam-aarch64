@@ -6,13 +6,14 @@ use (
 	./tools/build-disk
 	./tools/comment-bench
 	./tools/editor-prototype
-	./tools/tables-gen
 	./tools/i62-bdos-experiment/build-i62-disk
 	./tools/netboot-oracle
 	./tools/netboot-oracle/z80
+	./tools/registry
 	./tools/sam-aarch64
 	./tools/sam-aarch64-format
 	./tools/sha256-unroll-gen
+	./tools/tables-gen
 	./tools/z80-test-harness-go
 	./tools/zx0-greedy
 )

@@ -803,7 +803,7 @@ sysreg-sync-check:
 # modules to STATICCHECK_MODULES as they appear.
 .PHONY: staticcheck
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.7.0
-STATICCHECK_MODULES := comment-bench sam-aarch64-format sam-aarch64 aarch64enc aarch64dec tables-gen z80-test-harness-go zx0-greedy editor-prototype netboot-oracle netboot-oracle/z80
+STATICCHECK_MODULES := comment-bench sam-aarch64-format sam-aarch64 aarch64enc aarch64dec tables-gen z80-test-harness-go zx0-greedy editor-prototype netboot-oracle netboot-oracle/z80 registry
 staticcheck:
 	for m in $(STATICCHECK_MODULES); do \
 	    echo "=== staticcheck (U1000) $$m ==="; \
@@ -818,7 +818,13 @@ staticcheck:
 check-doc-links:
 	bash tools/check-doc-links.sh
 
-.PHONY: tables-gen enctab test-encoder ci-encoder
+.PHONY: registry-gen tables-gen enctab test-encoder ci-encoder
+
+# registry-gen — build the registry validate/gen CLI.  Operates on
+# registry/*.yaml sources; generates the four docs/notes/*-registry-*.md views.
+# Phase 1: dormant (fixture-only); no live registry source, no CI gate.
+registry-gen:
+	cd tools/registry && go build -o $(CURDIR)/$(BUILD)/registry .
 
 # tables-gen — generates every Z80 data table whose authority is Go source:
 # the binary enctab.enc form table (make enctab) and the sysreg/pstate/dc/tlbi
