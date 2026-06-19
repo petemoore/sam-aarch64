@@ -28,6 +28,26 @@
 ;     a filename + a source page + a section-C offset + a total byte length
 ;     (UIFA[31]=page, [32..33]=offset, [34]=size>>14, [35..36]=size&0x3FFF).
 ;
+; FREE-RECORD DETECTION — what is actually reachable from a user program. The
+; Trinity SD card has a central RECORD LIST in its boot area (sectors 1..base-1,
+; before record 1; 16-byte entries, 32 per sector). It is tempting to read it to
+; enumerate records, but it is NOT reachable from a user program: no RST-8 hook
+; reads a card-ABSOLUTE sector, and the AT-sector hooks HRSAD (160) / HWSAD (149)
+; are clamped to the *currently HRECORD-selected record* (hd.seek validates
+; track<=79 / sector 1..10 and adds the record base — bdos15a.src.txt:1243-1297),
+; so they can never address the boot-area list. B-DOS reads the list only via its
+; internal find.rec -> seek.base -> hd.lbuf (no hook slot; bdos15a.src.txt:907-919).
+; The reachable identity of a record is therefore taken from the record's OWN
+; first directory sector after selecting it: HRECORD n -> bdos_read_sector(0,1) ->
+; bdos_inspect_record, which reads the "BDOS" stamp (+232) and the disk label
+; (+210) exactly as B-DOS get.label does (bdos15a.src.txt:2834). The faithful
+; free-detection signal is HRECORD's success (stamped = a valid B-DOS record) vs
+; error 81 'Invalid record' (no stamp); surviving error 81 to keep scanning needs
+; the B-DOS-internal nmi.sp error trap (bdos15a.src.txt:4848-4886) — a brittle,
+; version-specific, hardware-uncertain mechanism (see registry i119 + q27). This
+; seam ships the reachable, no-trap primitive (inspect a selected record); the
+; trap-based probe of NON-B-DOS records waits on the q27 policy decision.
+;
 ; THE HONESTY LINE (CLAUDE.md §5): these routines are host-verifiable — they
 ; only build / decode memory. The actual hook DISPATCH (RST 8 / DEFB 129 HGTHD,
 ; / DEFB 130 HLOAD, / DEFB 132 HSAVE, and the HRECORD &9C record select) is NOT
@@ -201,6 +221,48 @@ bdos_fill_save_uifa:
                 ld      (BD_UIFA + BD_OFF_LENGTH), hl  ; UIFA[35..36] LE
                 ret
 
+; ---------------------------------------------------------------------------
+; bdos_inspect_record — classify the currently-selected record from its first
+; directory sector. Reads the two record-identity fields B-DOS get.label reads
+; (bdos15a.src.txt:2834-2859): the 4-byte "BDOS" stamp at +232 and the 10-byte
+; disk label at +210 (bit 7 of byte 0 = write-protect). These are the only
+; per-record identity fields reachable from a user program — the central record
+; list is not (see the header). Host-verifiable: pure memory reads, no RST.
+;
+; Pre: the caller has HRECORD-selected the record and bdos_read_sector'd its
+;      first directory sector (track 0, sector 1) into BD_READ_BUF.
+; Out: BD_REC_IS_BDOS  1 byte    1 if the "BDOS" stamp is present at +232, else 0
+;      BD_REC_NAME    10 bytes   the disk label copied verbatim from +210 (bit 7
+;                                of byte 0 = write-protect, preserved for the caller)
+; Clobbers: A, BC, DE, HL.
+; ---------------------------------------------------------------------------
+bdos_inspect_record:
+                ; stamp check: the 4 bytes at BD_READ_BUF+232 == "BDOS"?
+                ld      hl, BD_READ_BUF + 232
+                ld      de, bdos_id_str
+                ld      b, 4
+bir_stamp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, bir_nostamp
+                inc     hl
+                inc     de
+                djnz    bir_stamp
+                ld      a, 1                   ; all four bytes matched
+                jr      bir_name
+bir_nostamp:
+                xor     a                      ; no stamp
+bir_name:
+                ld      (BD_REC_IS_BDOS), a
+                ; copy the 10-byte disk label from BD_READ_BUF+210 (WP bit intact).
+                ld      hl, BD_READ_BUF + 210
+                ld      de, BD_REC_NAME
+                ld      bc, 10
+                ldir
+                ret
+
+bdos_id_str:    defm "BDOS"
+
 ; ===========================================================================
 ; The real B-DOS hook dispatch — NOT host-verifiable (no ROM / SAMDOS bank in
 ; the harness). Excluded from the host build (NETBOOT_HOSTTEST). Stays
@@ -292,3 +354,6 @@ BD_DIFA:          defs BD_UIFA_LEN       ; the DIFA to decode (harness-filled)
 BD_READ_TRACK:    defs 1                 ; bdos_read_sector: track to read (0-79)
 BD_READ_SECTOR:   defs 1                 ; bdos_read_sector: sector to read (1-10)
 BD_READ_BUF:      defs 512               ; bdos_read_sector: output (512 bytes)
+
+BD_REC_IS_BDOS:   defs 1                 ; bdos_inspect_record: 1 = "BDOS" stamp present
+BD_REC_NAME:      defs 10                ; bdos_inspect_record: the record's disk label (+210)
