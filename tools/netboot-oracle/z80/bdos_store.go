@@ -9,7 +9,8 @@ package z80
 // and how the i82 client's init-path bug reached hardware uncaught.
 //
 // BDOSStore plugs the gap: attached via Machine.AttachBDOS, it registers an RST 8
-// handler (harness.go's rstHandlers) that models the two hooks the write-out uses:
+// handler (harness.go's rstHandlers) that models the hooks the write-out and
+// record-detection paths use:
 //
 //   HRECORD (&9C): bdos_select_record does `ld l,a; ld h,0; xor a; rst 8; defb &9C`
 //     — A=0 = the select sub-function, HL = the record number. The store records
@@ -19,13 +20,18 @@ package z80
 //     `rst 8; defb 132`. The store captures + decodes the 48-byte UIFA at IX (the
 //     filename, source page/offset, and byte length), tagged with the record that
 //     was selected when the save ran.
+//   HRSAD (160 / &A0): bdos_read_sector loads D=track, E=sector, HL=dest buffer,
+//     and `rst 8; defb &A0`. The store fills the destination buffer with the 512
+//     bytes for that (track, sector) from the attached CardModel (or all-zero if no
+//     card is attached). This is the i119 brick-1 emulation foundation: the raw
+//     sector-read primitive the free-record-detection algorithm will drive.
 //
 // THE HONESTY LINE (CLAUDE.md §5): this models the *digital dispatch* (which hook,
-// with which UIFA, against which selected record) so the write-out's logic runs
-// and is asserted host-side. It does NOT persist bytes to a real medium, model
-// B-DOS error returns (e.g. "Invalid record" on an unstamped record), or replace
-// the real RST 8 — that stays gated on real Trinity hardware. Emulation-verified
-// is not hardware-verified.
+// with which UIFA / sector coordinates, against which selected record) so the
+// write-out's and detection logic runs and is asserted host-side. It does NOT
+// persist bytes to a real medium, model B-DOS error returns (e.g. "Invalid record"
+// on an unstamped record), or replace the real RST 8 — that stays gated on real
+// Trinity hardware. Emulation-verified is not hardware-verified.
 
 import (
 	"strings"
@@ -40,6 +46,7 @@ const (
 	bdHookHRECORD = 0x9C // record select (156)
 	bdHookHGTHD   = 129  // get file header (lookup by name) — server-side, not modelled here
 	bdHookHSAVE   = 132  // save whole file
+	bdHookHRSAD   = 160  // read raw 512-byte sector at (D=track, E=sector) into HL
 
 	bdUIFALen = 48 // the UIFA HSAVE reads at IX (bdos_save_hook stages it at &4B00)
 
@@ -49,7 +56,106 @@ const (
 	bdOffLoad   = 32 // HSAVE source offset (LE word)
 	bdOffPages  = 34 // pages-count
 	bdOffLength = 35 // length-mod-16K (LE word); bit 15 of the word is a marker
+
+	// bdSectorSize is the number of bytes in one B-DOS / SAMDOS sector.
+	bdSectorSize = 512
+	// bdSectorsPerTrack is the number of sectors per track in a B-DOS flat store.
+	// Sectors are 1-indexed within a track (1..10); tracks are 0-indexed (0..79).
+	bdSectorsPerTrack = 10
+	// bdBDOSStampOffset is the byte offset of the 4-byte "BDOS" stamp within the
+	// first data sector (linear sector 0) of a B-DOS-formatted record.
+	bdBDOSStampOffset = 232
 )
+
+// CardModel is the harness model of a Trinity SD card: a record list (up to 256
+// entries of 16 bytes each) and per-record sector data (at least sector 0, the
+// first data sector). Used by the HRSAD handler to serve reads.
+//
+// Linear sector index within a record = track*10 + (sector-1), matching the
+// `conv.de` formula in the SAMDOS source (D=track 0-79, E=sector 1-10).
+type CardModel struct {
+	// RecordList holds the 16-byte record-list entries, indexed by record number
+	// minus 1 (entry 0 = record 1). Entries beyond len(RecordList) read as all-zero.
+	RecordList [][16]byte
+	// Sectors holds the 512-byte sectors for each record (outer index = record
+	// number minus 1, inner index = linear sector within the record:
+	// D*10 + (E-1)). Sectors not present read as all-zero.
+	Sectors []map[int][bdSectorSize]byte
+}
+
+// NewCardModel returns an empty card (no records, all sectors zero).
+func NewCardModel() *CardModel { return &CardModel{} }
+
+// SetRecordEntry sets the 16-byte record-list entry for record n (1-indexed).
+// Grows the list as needed.
+func (c *CardModel) SetRecordEntry(n int, entry [16]byte) {
+	idx := n - 1
+	for len(c.RecordList) <= idx {
+		c.RecordList = append(c.RecordList, [16]byte{})
+	}
+	c.RecordList[idx] = entry
+}
+
+// SetSector sets the 512-byte content of a sector in record n (1-indexed), at
+// linear sector index linearSector = track*10 + (sector-1).
+func (c *CardModel) SetSector(n, linearSector int, data [bdSectorSize]byte) {
+	idx := n - 1
+	for len(c.Sectors) <= idx {
+		c.Sectors = append(c.Sectors, nil)
+	}
+	if c.Sectors[idx] == nil {
+		c.Sectors[idx] = map[int][bdSectorSize]byte{}
+	}
+	c.Sectors[idx][linearSector] = data
+}
+
+// RecordEntry returns the 16-byte list entry for record n (1-indexed), or an
+// all-zero entry if n is out of range.
+func (c *CardModel) RecordEntry(n int) [16]byte {
+	idx := n - 1
+	if idx < 0 || idx >= len(c.RecordList) {
+		return [16]byte{}
+	}
+	return c.RecordList[idx]
+}
+
+// Sector returns the 512-byte content of linearSector in record n (1-indexed),
+// or all-zero if not set.
+func (c *CardModel) Sector(n, linearSector int) [bdSectorSize]byte {
+	idx := n - 1
+	if idx < 0 || idx >= len(c.Sectors) || c.Sectors[idx] == nil {
+		return [bdSectorSize]byte{}
+	}
+	return c.Sectors[idx][linearSector]
+}
+
+// SetRecordName sets the 10-byte name field of record n's list entry. The name
+// is space-padded to 10 bytes; longer names are truncated to 10.
+func (c *CardModel) SetRecordName(n int, name string) {
+	const nameLen = 10
+	var entry [16]byte
+	// preserve any existing bytes beyond the name field
+	existing := c.RecordEntry(n)
+	copy(entry[:], existing[:])
+	for i := 0; i < nameLen; i++ {
+		if i < len(name) {
+			entry[i] = name[i]
+		} else {
+			entry[i] = ' '
+		}
+	}
+	c.SetRecordEntry(n, entry)
+}
+
+// SetBDOSStamp writes the 4-byte "BDOS" stamp at offset 232 of record n's first
+// data sector (linear sector 0), marking it as a B-DOS-formatted record.
+func (c *CardModel) SetBDOSStamp(n int) {
+	var sec [bdSectorSize]byte
+	existing := c.Sector(n, 0)
+	copy(sec[:], existing[:])
+	copy(sec[bdBDOSStampOffset:], []byte("BDOS"))
+	c.SetSector(n, 0, sec)
+}
 
 // BDOSSave is one captured HSAVE: the decoded UIFA plus the record selected when
 // it ran. Size mirrors bdos_difa_to_size: pages*16384 + lengthMod16K (the +36
@@ -68,6 +174,7 @@ type BDOSSave struct {
 type BDOSStore struct {
 	selected int        // last HRECORD selection; -1 = none selected yet
 	saves    []BDOSSave // captured HSAVEs, in order
+	card     *CardModel // nil = no card modelled; HRSAD returns all-zero
 }
 
 // NewBDOSStore returns a store with no record selected and no saves recorded.
@@ -79,8 +186,13 @@ func (s *BDOSStore) Selected() int { return s.selected }
 // Saves returns the captured HSAVE operations, in order.
 func (s *BDOSStore) Saves() []BDOSSave { return s.saves }
 
+// AttachCard sets the card model the store uses for HRSAD reads. A nil card
+// means HRSAD returns all-zero (no card present). Call before running Z80 code.
+func (s *BDOSStore) AttachCard(c *CardModel) { s.card = c }
+
 // AttachBDOS registers the store as the machine's RST 8 (B-DOS hook) handler, so
-// the real bdos_select_record / bdos_save_hook bodies run host-side.
+// the real bdos_select_record / bdos_save_hook / bdos_read_sector bodies run
+// host-side.
 func (mac *Machine) AttachBDOS(s *BDOSStore) {
 	mac.setRSTHandler(rst8HookAddr, s.handle)
 }
@@ -108,6 +220,21 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		// Server-side lookup-by-name; the client write-out never issues it, so it
 		// is not modelled (a no-op return). Add a DIFA deposit here if a server
 		// write-out test ever needs it.
+	case bdHookHRSAD:
+		// HRSAD: read 512 bytes at (D=track, E=sector) into the buffer at HL.
+		// Linear sector index = track*10 + (sector-1), matching the SAMDOS conv.de
+		// formula. The selected record determines which record's data to serve.
+		track := int(cpu.DE.Hi)
+		sector := int(cpu.DE.Lo)
+		dest := cpu.HL.U16()
+		linearSec := track*bdSectorsPerTrack + (sector - 1)
+		var data [bdSectorSize]byte
+		if s.card != nil {
+			data = s.card.Sector(s.selected, linearSec)
+		}
+		for i, b := range data {
+			mac.m.ram[dest+uint16(i)] = b
+		}
 	}
 	return retAddr + 1 // skip the 1-byte inline hook code
 }
