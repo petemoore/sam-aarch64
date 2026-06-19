@@ -28,9 +28,12 @@ const generatedBannerQuestions = `<!--
 // pipe characters become \|, and newlines become <br>.
 // Escaping happens in one place (spec §"Generator").
 func escapeCell(s string) string {
+	// Trim first, so a block scalar's trailing newline doesn't become a spurious
+	// trailing <br>; internal newlines (real line breaks) still render as <br>.
+	s = strings.TrimSpace(s)
 	s = strings.ReplaceAll(s, "|", `\|`)
 	s = strings.ReplaceAll(s, "\n", "<br>")
-	return strings.TrimSpace(s)
+	return s
 }
 
 // renderItemStatus renders the status cell value from structured fields.
@@ -119,12 +122,25 @@ func parseInt(s string) (int, error) {
 	return n, nil
 }
 
+// renderItemCell renders the item's display cell: the bold title followed by the
+// description, so the generated table carries the item's actual content (not just
+// the short title) — mirroring how questions render their full body. The old
+// hand-edited registry's "item" column was exactly this: a bold lead-in + detail.
+func renderItemCell(it Item) string {
+	title := escapeCell(it.Title)
+	desc := escapeCell(it.Description)
+	if desc == "" {
+		return "**" + title + "**"
+	}
+	return "**" + title + "** — " + desc
+}
+
 // genItemsOpenClosed writes the open and closed item registry tables to their
 // respective writers. Spec §"Generator" — three views total (two item + one question).
 func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	items := sortedItems(reg.Items)
 
-	header := "| **id** | title | status | refs/links |\n|---|---|---|---|\n"
+	header := "| **id** | item | status | refs/links |\n|---|---|---|---|\n"
 
 	// Open items (OPEN or IN_PROGRESS).
 	fmt.Fprint(openW, generatedBannerItems)
@@ -134,7 +150,7 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 		if isOpen(it.Status) {
 			fmt.Fprintf(openW, "| **%s** | %s | %s | %s |\n",
 				escapeCell(it.ID),
-				escapeCell(it.Title),
+				renderItemCell(it),
 				escapeCell(renderItemStatus(it)),
 				escapeCell(renderItemRefs(it)),
 			)
@@ -149,7 +165,7 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 		if !isOpen(it.Status) {
 			fmt.Fprintf(closedW, "| **%s** | %s | %s | %s |\n",
 				escapeCell(it.ID),
-				escapeCell(it.Title),
+				renderItemCell(it),
 				escapeCell(renderItemStatus(it)),
 				escapeCell(renderItemRefs(it)),
 			)
