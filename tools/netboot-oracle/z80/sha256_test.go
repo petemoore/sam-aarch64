@@ -119,8 +119,8 @@ func shaCases() []struct {
 		{"two-block-56", []byte("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")},
 		{"len-64-exact-block", mkrand(64, 1)},
 		{"len-65", mkrand(65, 2)},
-		{"len-55", mkrand(55, 5)},  // last byte before the 1-block/2-block boundary
-		{"len-56", mkrand(56, 6)},  // first length needing a 2nd padding block
+		{"len-55", mkrand(55, 5)}, // last byte before the 1-block/2-block boundary
+		{"len-56", mkrand(56, 6)}, // first length needing a 2nd padding block
 		{"len-119", mkrand(119, 3)},
 		{"len-120", mkrand(120, 4)},
 	}
@@ -148,13 +148,13 @@ func TestSHA256WholeMessage(t *testing.T) {
 func TestSHA256Chunked(t *testing.T) {
 	mac := loadSHA256Machine(t)
 	chunkPatterns := [][]int{
-		{1},               // one byte at a time
-		{13},              // a size coprime with 64
-		{64},              // exact-block chunks
-		{100},             // larger than a block
-		{1, 13, 64, 100},  // a mix, as the prompt specifies
-		{0, 1, 0, 7, 0},   // interleave zero-length updates
-		{3, 61},           // 3 then 61 = exactly fills the first block
+		{1},              // one byte at a time
+		{13},             // a size coprime with 64
+		{64},             // exact-block chunks
+		{100},            // larger than a block
+		{1, 13, 64, 100}, // a mix, as the prompt specifies
+		{0, 1, 0, 7, 0},  // interleave zero-length updates
+		{3, 61},          // 3 then 61 = exactly fills the first block
 	}
 	for _, tc := range shaCases() {
 		want := sha256.Sum256(tc.input)
