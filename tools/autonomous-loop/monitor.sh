@@ -37,7 +37,7 @@ RESUME_NUDGE="${ALOOP_RESUME:-Autonomous-loop checkpoint: you just finished a wo
 POLL="${ALOOP_POLL:-10}"                    # seconds between polls
 HANG_TIMEOUT="${ALOOP_HANG_TIMEOUT:-1800}"  # seconds with no signal -> nudge an idle session
 CLEAR_SETTLE="${ALOOP_CLEAR_SETTLE:-30}"    # seconds for /clear to fully reset the TUI before re-prompting
-CONTEXT_SETTLE="${ALOOP_CONTEXT_SETTLE:-5}" # seconds for /context to finish rendering before stuffing the resume nudge
+CONTEXT_SETTLE="${ALOOP_CONTEXT_SETTLE:-30}" # seconds for /context to finish rendering before stuffing the resume nudge. Matches CLEAR_SETTLE: /context is a full-TUI redraw and 5s proved too short -- the nudge was stuffed mid-render and dropped, so no next turn fired (Pete, 2026-06-19; bigger /context readouts at higher context fill render even slower). NOTE: a running monitor must be restarted to pick up this default (or relaunch with ALOOP_CONTEXT_SETTLE=30).
 SUBMIT=$'\r'                                # Enter key -- \r confirmed to submit in the Claude Code TUI (live test 2026-06-15)
 SUBMIT_SETTLE="${ALOOP_SUBMIT_SETTLE:-1}"   # seconds to let a stuffed line settle before the confirming Enter
 
