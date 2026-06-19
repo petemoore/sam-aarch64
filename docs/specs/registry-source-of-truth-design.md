@@ -36,16 +36,22 @@ registry becomes the analogue.
 registry/items.yaml      ──gen──▶  docs/notes/item-registry-open.md
                                    docs/notes/item-registry-closed.md
 registry/questions.yaml  ──gen──▶  docs/notes/question-registry-open.md
-                                   docs/notes/question-registry-closed.md
+                                   (no closed view — questions are transient)
 ```
 
 An item's `status` field alone decides which generated view it lands in
-(`OPEN`/`BLOCKED` → open; `DONE`/`WONTFIX` → closed). A closed item therefore
+(`OPEN`/`IN_PROGRESS` → open; `DONE`/`WONTFIX` → closed). A closed item therefore
 *cannot* appear in the open view — the leak class is eliminated by construction.
+**There is no stored `BLOCKED` status:** "blocked" is a *derived* property of the
+dependency graph — an item with a `depends_on` edge to a node that is not yet
+resolved — never a state an agent hand-sets (see "Dependencies"). **Questions are
+transient:** a question lives only until it is answered, at which point its answer
+is curated into the items that depend on it and the question is *deleted*, so the
+question id-space has an open view only (see "Questions — transient by design").
 
-The four `.md` files are **output**: never hand-edited, each carries a "GENERATED
-— do not edit" banner, and CI fails if they drift from a fresh regen of the
-source.
+The three generated `.md` files (two item views + the single open question view)
+are **output**: never hand-edited, each carries a "GENERATED — do not edit" banner,
+and CI fails if they drift from a fresh regen of the source.
 
 ## Source format — YAML, one file per id-space
 
@@ -68,8 +74,9 @@ and shows in the diff.
   title: "..."          # required; <= 120 chars, single line
   description: |        # block scalar; bounded: <= 600 chars, <= 6 lines
     ...
-  status: OPEN          # enum: OPEN | IN_PROGRESS | BLOCKED | DONE | WONTFIX
-  blocker: ""           # required iff status==BLOCKED; names the prereq/person
+  status: OPEN          # enum: OPEN | IN_PROGRESS | DONE | WONTFIX (no BLOCKED — derived)
+  depends_on: []        # [ids] this item is gated on (items or questions). "Blocked"
+                        # is DERIVED from an unsatisfied edge, never a stored status.
   kind: leaf            # leaf (default) | umbrella
   owner: agent          # required; "agent" | "pete" | a name
   prs: []               # [{num, role}]; a DONE leaf has exactly one role:completing
@@ -110,8 +117,9 @@ one-PR rule.
   description: |
     Replace i41a raw-text line payload with the i48 symbolic IR. Genuinely-open
     design, not a mechanical port.
-  status: BLOCKED
-  blocker: "design pass + q24 (serialize an invalid/partial editor doc)"
+  status: OPEN                     # NOT "BLOCKED" — it just has an unsatisfied edge
+  depends_on: [q24]                # q24 = serialize an invalid/partial editor doc;
+                                   # derived-blocked ⇒ excluded from `ready` until q24 resolves
   kind: leaf
   owner: agent
   parent: i41
@@ -120,7 +128,9 @@ one-PR rule.
 
 ## Status enum
 
-`OPEN` · `IN_PROGRESS` · `BLOCKED` · `DONE` · `WONTFIX`.
+`OPEN` · `IN_PROGRESS` · `DONE` · `WONTFIX`. There is **no `BLOCKED` token** —
+blocked-ness is a *derived* property of the dependency graph (see "Dependencies"),
+never a state an agent hand-sets.
 
 - `IN_PROGRESS` is a **first-class status**, not an unstructured 🔨 decoration —
   so "what is being worked right now" is a real, machine-readable query
@@ -129,11 +139,13 @@ one-PR rule.
   **umbrellas** (an umbrella like `i48c` is legitimately IN_PROGRESS for weeks
   while its bricks land); a leaf flips OPEN → IN_PROGRESS when picked up → DONE
   when its PR merges.
-- Payload lives in structured fields, never packed into the token: `BLOCKED` →
-  `blocker:`; `DONE` → the `prs` completing entry; `WONTFIX` → reason in
+- Payload lives in structured fields, never packed into the token: a gate → a
+  `depends_on` edge; `DONE` → the `prs` completing entry; `WONTFIX` → reason in
   `description`.
-- Open vs closed half is **computed**: `{OPEN, IN_PROGRESS, BLOCKED}` → open
-  view; `{DONE, WONTFIX}` → closed view.
+- Open vs closed half is **computed**: `{OPEN, IN_PROGRESS}` → open view;
+  `{DONE, WONTFIX}` → closed view. An item with unsatisfied `depends_on` edges is
+  **still `OPEN`** — "blocked" is not a separate state, it is simply being absent
+  from the `ready` set until its gates resolve.
 
 ## One-PR / umbrella semantics
 
@@ -196,71 +208,107 @@ message:
 6. **One completing PR per leaf; umbrellas carry none** (semantics above).
 7. **Atomic items** — a non-umbrella item with >1 completing PR is flagged
    ("split into sub-items").
-8. **Bounded description/status** — `title` ≤ 120 chars/1 line; `description` ≤
-   600 chars/6 lines; `blocker` ≤ 200 chars. Detail belongs in the PR/git log.
-   **The exact bound is PROVISIONAL** — validated empirically by the i115f
-   experiment (which reshapes today's wall-of-text rows into atomic single-status
-   items and independently audits each for information loss). If some nuance
-   proves genuinely irreducible, the bound is raised or a structured `notes`
-   field added, rather than forcing loss.
-9. **Required-fields-per-status** — `DONE` ⇒ closed + (leaf) one completing PR;
-   `BLOCKED` ⇒ non-empty `blocker`; `OPEN`/`IN_PROGRESS` ⇒ open + empty
-   `blocker`; `WONTFIX` ⇒ closed.
+8. **Bounded description** — `title` ≤ 120 chars/1 line; `description` ≤ 600
+   chars/6 lines. Detail belongs in the PR/git log. **The bound is PROVISIONAL** —
+   validated empirically by the i115f reshape (which turns today's wall-of-text
+   rows into atomic items, independently audited for information loss). The
+   dependency model removes the main pressure on it: "what it's blocked on" is now
+   an *edge*, not status prose, so the cases the earlier draft feared (the
+   `BLOCKED:` reasons, the agent's lean on a Pete-question) become `depends_on`
+   edges to items/questions. If some nuance still proves genuinely irreducible the
+   bound is raised, rather than forcing loss.
+9. **Required-fields-per-status** — `DONE` ⇒ closed + (leaf) exactly one completing
+   PR; `OPEN`/`IN_PROGRESS` ⇒ open; `WONTFIX` ⇒ closed + reason in `description`.
 10. **Refs well-formed** — every id-shaped ref (`^[iq][0-9]`) exists in the union;
     non-id refs (paths, `§`, URLs) pass through (path-existence is left to the
     existing `check-doc-links` gate, single-source).
+11. **Dependencies form a DAG** — every `depends_on` target exists (an item or a
+    question) and the graph has **no cycles**. A dangling edge or a cycle is an error.
+12. **No non-WONTFIX item depends on a WONTFIX node** — a stale gate is a coherency
+    error, forcing the agent to drop the now-moot edge, re-point it, or mark the
+    dependent `WONTFIX` too (`WONTFIX`→`WONTFIX` is allowed). A `depends_on` a
+    `DONE` item is trivially satisfied.
+13. **Question delete-gate** — because a question is *deleted* only after every
+    dependent has been re-curated to drop its edge (see "Questions"), invariant 11's
+    union-existence check doubles as the gate: a question cannot be deleted while any
+    item still `depends_on` it (the edge would dangle and fail validation). This is
+    the structural guarantee that an answer is propagated into the items before the
+    transient question is discarded.
 
-## Priority queue + dependency graph (i115g — later phase)
+## Dependencies
 
-The open items are not just a set — they are a **curated priority queue with a
-dependency DAG**, so an autonomous agent can pull "the next unblocked,
-highest-priority work" deterministically and an interactive session can re-rank
-without breaking dependency safety. This **supersedes** the prose "proposed
-implementation sequence" in `docs/ROADMAP.md` (single source of truth). It is a
-later i115 phase — it builds on the structured source + validator + CLI, so it
-lands after the core migration.
+`depends_on` is a **core** field (not a later add-on): it is how the registry
+expresses that an item is gated, *replacing* the deleted `BLOCKED` status. An item
+may declare `depends_on: [ids]` naming the items and/or questions it is gated on.
+
+- **Cross-space edges.** A target may be an **item** (the node defining what must
+  be *built*) or a **question** (the node defining what must be *decided*).
+  "Blocked on Pete" is just `depends_on: [qN]` for an open question Pete owns.
+- **Derived blocked-ness.** An item is *blocked* iff it has an edge to an
+  unresolved node — never a stored status. An **item** dependency resolves when
+  that item is `DONE`. A **question** dependency resolves by the question being
+  *answered and deleted* (which removes the edge — see "Questions"); while the
+  question exists the edge is unsatisfied.
+- **DAG, no cycles** (invariant 11). The graph is acyclic; the priority order
+  (below) must be a topological extension of it.
+- **Stale gates are errors** (invariant 12). A non-`WONTFIX` item may not depend on
+  a `WONTFIX` node; a `DONE` dependency is trivially satisfied. This forces a
+  curator to drop/re-point a moot edge rather than leave a dead gate.
+- **Split-rewrites-dependents.** When a depended-on `iN` splits, every item with
+  `depends_on: [iN]` is rewritten to depend on `iN`'s new leaves (default: **all**
+  children — the conservative "the whole thing must finish" reading), which a
+  curator narrows to the specific blocking child. The `split` CLI rewrites;
+  curation refines.
+
+Because "what gates what" is now structured, an answered question or a completed
+item mechanically unblocks its dependents — which is what makes the `ready` query
+(below) trustworthy.
+
+## Priority queue + `ready` (i115g — later phase)
+
+On top of the dependency DAG, the open items are a **curated priority queue**, so
+an autonomous agent can pull "the next unblocked, highest-priority work"
+deterministically and an interactive session can re-rank without breaking
+dependency safety. This **supersedes** the prose "proposed implementation
+sequence" in `docs/ROADMAP.md` (single source of truth). The *queue* builds on the
+core schema + validator + CLI, so it lands after the core migration; the
+`depends_on` edges themselves are core (see "Dependencies").
 
 - **Priority order** — a committed ordered list of open **pullable** item ids
   (highest priority first). "Pullable" = a leaf or a childless item; **umbrellas
   are not queue entries** (they are spanned by their leaves). The validator
-  enforces the list is a **permutation of exactly the open pullable items** —
-  each once, nothing missing/extra/closed, no umbrellas.
-- **Splitting in place** — when `iN` splits into `iNa`/`iNb`/`iNc`, the queue slot
-  `iN` held is replaced **in place** by its new leaves (the parent becomes an
-  umbrella and leaves the queue). The `split` CLI does this.
-- **Dependencies** — an item may declare `depends_on: [ids]`. The validator
-  enforces **no cycles** (a DAG) and that the priority order is a **topological
-  extension** (nothing sequenced before something it depends on). A dep on a DONE
-  item is trivially satisfied.
-- **Split-rewrites-dependents** — when a depended-on `iN` is split, every item
-  with `depends_on: [iN]` is rewritten to depend on `iN`'s new leaves (default:
-  **all** children — the conservative "the whole thing must finish" reading),
-  which a curator can then narrow to the specific blocking child. The CLI rewrites;
-  curation refines.
+  enforces the list is a **permutation of exactly the open pullable items** — each
+  once, nothing missing/extra/closed, no umbrellas — *and* a **topological
+  extension** of the dependency DAG (nothing sequenced before a node it depends on).
+- **Splitting in place** — when `iN` splits into leaves, the queue slot `iN` held
+  is replaced **in place** by its new leaves (the parent becomes an umbrella and
+  leaves the queue). The `split` CLI does this.
 - **Ready set** — `registry ready` returns the open pullable items whose
-  dependencies are all satisfied (DONE), in priority order: the answer to "what
-  can be worked next." Drives both the autonomous loop's work-pull and an
-  interactive "what should I pick up?" suggestion that a human session adjusts.
+  dependencies are all resolved, in priority order: the answer to "what can be
+  worked next." Drives both the autonomous loop's work-pull and an interactive
+  "what should I pick up?" suggestion a human session adjusts.
 
 The CLI gains (this phase): `ready` (the unblocked-work query), `prioritize`/`move`
-(re-rank the queue), `dep add|rm` (edit dependency edges). Open sub-decisions
-(settled at i115g design time): order storage (separate `priority.yaml` vs an
-in-`items.yaml` sequence); whether `depends_on` also derives a "blocked-by-open-dep"
-status vs staying purely advisory for ordering; the split-rewrite default
-(all-children vs prompt).
+(re-rank), `dep add|rm` (edit edges). Open sub-decision for i115g design time:
+order storage (separate `priority.yaml` vs an in-`items.yaml` sequence) and the
+split-rewrite default (all-children vs prompt). The earlier open sub-decision
+"whether `depends_on` derives blocked-ness vs is advisory" is **resolved** (Pete,
+2026-06-19): it derives it, and `BLOCKED` is removed as a status.
 
 ## Generator
 
-`registry gen` (and `make registry`) reads the YAML sources and writes the four
-`.md` files:
+`registry gen` (and `make registry`) reads the YAML sources and writes the three
+generated `.md` files (item open/closed + the single open question view):
 
 - **Deterministic** — true-numeric sort, no map iteration, identical across
   machines (so the sync-check diff is reliable).
 - **Escaping in one place** — every cell value gets `|` → `\|`, newline → `<br>`,
   so a 6-line block scalar renders as one legal table row. This is what makes
   today's broken unescaped-pipe rows become valid markdown.
-- **Status cell** rendered from structured fields: `OPEN`, `BLOCKED:<blocker>`,
-  `DONE — PR #435`, `WONTFIX — <reason>`.
+- **Status cell** rendered from structured fields: `OPEN`, `IN_PROGRESS`,
+  `DONE — PR #435`, `WONTFIX — <reason>`. A gated item renders `OPEN` with its
+  `depends_on` edges shown in the refs/links cell — "blocked" is visible as an edge
+  to an unresolved node, not a status token.
 - **Header prose stays hand-authored** — the long governance headers (id
   conventions, controlled vocabulary, atomic-item rule) live in committed
   templates `registry/templates/*.head.md`, concatenated above the generated
@@ -286,15 +334,17 @@ exit-code-clean (0 ok / 1 validation-or-drift / 2 usage). Operates only on
 | subcommand | action |
 |---|---|
 | `validate` | run all invariants; print every error; exit 1 on any |
-| `gen` | regenerate the four `.md` + re-canonicalize the YAML in place |
+| `gen` | regenerate the three `.md` views + re-canonicalize the YAML in place |
 | `next-id [--space items\|questions]` | print the next free id (source ∪ ledger) |
-| `add --id … --title … --desc … --status … --owner … [--parent …] [--ref …]` | append a canonical record |
-| `split --parent iN --child-id iN-bM --title …` | set parent `kind: umbrella`, add a leaf child |
-| `set-status --id iN --status … [--pr N] [--blocker …]` | change status (open↔closed move is automatic on regen) |
+| `add --id … --title … --desc … --status … --owner … [--parent …] [--dep …] [--ref …]` | append a canonical record |
+| `split --parent iN --child-id iN-bM --title …` | set parent `kind: umbrella`, add a leaf child; rewrite dependents onto the new leaves |
+| `set-status --id iN --status … [--pr N]` | change status (open↔closed move is automatic on regen) |
+| `dep add\|rm --id iN --on iM\|qN` | add / remove a `depends_on` edge (validated acyclic, no WONTFIX target) |
+| `answer --id qN` | curate dependents off `qN`, then delete it (fails if any item still depends on it) |
 | `set-pr --id iN --pr N [--role completing\|followup]` | attach a PR ref |
 
 Every mutating subcommand ends by running `validate` then `gen`, leaving the
-working tree consistent (source + four regenerated `.md`). This replaces the
+working tree consistent (source + the three regenerated `.md`). This replaces the
 hand-rolled `awk 'NR==142'` / boundary-marker scripts agents have resorted to.
 
 ## CI sync-check + regen
@@ -310,31 +360,77 @@ hand-rolled `awk 'NR==142'` / boundary-marker scripts agents have resorted to.
 - A round-trip test (`tools/registry/regen_survives_test.go`) asserts `gen` output
   is byte-stable and `import → gen → import` is a fixed point.
 
-## Questions (`qN`)
+## Questions — transient by design
 
-Folded into the same machinery: `registry/questions.yaml` → the two
-question-registry `.md` views, same generator/validator/CLI. The marginal cost is
-one extra source file; the gain is the same decay-proofing and a single
-extractable pattern (cf. i117).
+Questions ride the same machinery (`registry/questions.yaml` → generator /
+validator / CLI), but their **lifecycle differs from items**: a question is a
+*transient* node that exists only while it is open, and it has **one generated
+view** (`question-registry-open.md`) — no closed file.
+
+- **Fields:** `id` (`qN`), a markdown `body` (the question, possibly multi-part),
+  and `owner` (usually `pete`). **No `answer` field and no `answered` status** —
+  answers are not persisted on the question (see "why transient").
+- **A question is "what gates an under-defined item."** An item not yet fully
+  defined declares `depends_on: [qN]`. One question may gate several items — a
+  multi-part question whose parts touch different items is fine; each item depends
+  on the one question.
+- **Answering is a curation step, then a delete.** When Pete answers, an agent
+  *curates every dependent item* — applying the decision however it lands: redefine
+  the item, split it, mark it `WONTFIX`, spawn new items for work the answer
+  created, raise follow-up questions for new unknowns (the dependent re-points at
+  those), and drop the `depends_on: [qN]` edge. When the **last** dependent edge is
+  gone, the question is **deleted**. This is the same triage a human conversation
+  produces — just with explicit edges so nothing is missed.
+- **Why transient (no persisted answer).** The durable record is the *item* (it now
+  accurately reflects what was decided) plus *git history* (the question's life and
+  deletion). A stored answer on a long-lived question invites drift — going stale
+  and conflicting with a later decision. Folding the answer into the items and
+  deleting the carrier means the registry only ever holds *current* decisions.
+- **The delete-gate is the no-information-loss guarantee** (invariant 13): a
+  question cannot be deleted while any item still `depends_on` it, so the answer is
+  *structurally forced* to propagate into the items before the question disappears.
+- **Standalone questions** (nothing depends on them — "should we chase X?", not
+  gating a specific item) resolve the same way: the answer either **spawns a new
+  item** (the work it created) or the question is simply deleted with the rationale
+  in git. "Answer → new item" is the same mechanism as "answer → new question."
 
 ## Migration
 
-A one-shot importer (`registry import`) parses the current four `.md` files with a
+A one-shot importer (`registry import`) parses the current `.md` files with a
 tolerant parser that splits on the *outermost* `|` of a row and treats inner `|`
 as content (surviving the unescaped-pipe rows), and reads **status from the status
 column**, not from which file a row sits in (catching the leaked closed-in-open
-rows). The ~6 wall-of-text rows (`i48c`, `i41`, `i41d`, `i33`, `i111`, `i115`) are
-**reshaped into umbrella+leaves during import**, so the source passes its own
-validator from the first commit; all other rows import verbatim into bounded
-fields (lifting `PR #N` from the status cell into a structured completing entry). A
-`migration_roundtrip_test.go` asserts `import → gen → import` is a fixed point.
+rows). Migration applies the model in this doc:
+
+- **`BLOCKED:<what>` cells become `depends_on` edges.** Each `BLOCKED:Pete` /
+  `BLOCKED:<prereq>` becomes an `OPEN` item with a `depends_on` edge to the
+  question or item naming the gate — minting a `qN` for a Pete-decision gate where
+  one doesn't already exist. No row keeps a `BLOCKED` token.
+- **The existing `question-registry-closed.md` is retired.** Its rows are *already
+  answered*, so their decisions are folded into the relevant items (or already live
+  there) and the file is deleted — git history is the archive. Only open questions
+  carry forward, into the single open view.
+- **Wall-of-text rows are reshaped to atomic items** by the i115f reshape (its own
+  step, independently audited for information loss): umbrellas split into leaves,
+  PR-by-PR history moves to git, rationale moves to the cited design docs. All
+  other rows import verbatim into bounded fields (lifting `PR #N` from the status
+  cell into a structured completing entry).
+
+A `migration_roundtrip_test.go` asserts `import → gen → import` is a fixed point.
 
 ## Rollout discipline
 
-Six serial PRs (a spec/tracking PR-0, then `i115a`–`i115e`). The tool stays
-**dormant** — no live source file, no CI gate — through Phases 1–3, so the live
-hand-edited registry keeps working and `main` stays green. Phase 4 is the single
-atomic cutover (the `.md` files become generated output); Phase 5 rewires the
-docs/automation so agents edit the YAML, not the generated `.md`. The phased plan
-lives in `docs/plans/registry-structured-source.md` until the completing PR
-(`i115e`) deletes it.
+The tool stays **dormant** — no live source file, no CI gate — through the
+tool-building phases, so the live hand-edited registry keeps working and `main`
+stays green; a single atomic cutover turns the `.md` files into generated output,
+and a final phase rewires the docs/automation so agents edit the YAML, not the
+generated `.md`.
+
+**The dependency model in this doc (no `BLOCKED`; `depends_on` edges; transient
+questions) is foundational** — part of the core schema + validator, not the later
+priority-queue phase — because the i115f reshape turns every `BLOCKED` row into an
+edge and must reshape **once** into the final model. **The i115f content reshape
+runs before any other i115 part** (Pete, 2026-06-19; agreed earlier but not
+previously tracked): it is what lets the later phases assume clean, atomic,
+validator-passing rows. The phased plan + the precise sequencing live in
+`docs/plans/registry-structured-source.md` until the completing PR deletes it.
