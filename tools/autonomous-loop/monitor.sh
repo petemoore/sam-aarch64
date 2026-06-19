@@ -37,6 +37,7 @@ RESUME_NUDGE="${ALOOP_RESUME:-Autonomous-loop checkpoint: you just finished a wo
 POLL="${ALOOP_POLL:-10}"                    # seconds between polls
 HANG_TIMEOUT="${ALOOP_HANG_TIMEOUT:-1800}"  # seconds with no signal -> nudge an idle session
 CLEAR_SETTLE="${ALOOP_CLEAR_SETTLE:-30}"    # seconds for /clear to fully reset the TUI before re-prompting
+CONTEXT_SETTLE="${ALOOP_CONTEXT_SETTLE:-5}" # seconds for /context to finish rendering before stuffing the resume nudge
 SUBMIT=$'\r'                                # Enter key -- \r confirmed to submit in the Claude Code TUI (live test 2026-06-15)
 SUBMIT_SETTLE="${ALOOP_SUBMIT_SETTLE:-1}"   # seconds to let a stuffed line settle before the confirming Enter
 
@@ -99,6 +100,14 @@ while true; do
     # The resume nudge below is the real prompt that actually creates the next
     # turn; without it the agent sits idle until the hang-timeout nudge (~1h),
     # which is exactly the stall this fixes. (Pete's 2026-06-15 live-run log.)
+    #
+    # Settle BEFORE stuffing the nudge: /context redraws the whole TUI, and the
+    # nudge keystrokes stuffed into that redraw are dropped/mangled, so the nudge
+    # never becomes a turn and the agent sits idle until the hang-timeout (~1h) --
+    # the stall Pete hit 2026-06-19 (he had to wake the agent by hand). The 1s
+    # SUBMIT_SETTLE inside submit() above is not enough to outlast the render; this
+    # explicit wait is the /context analogue of CLEAR_SETTLE on the wound-down path.
+    sleep "$CONTEXT_SETTLE"
     stuff "$RESUME_NUDGE"
     submit
     rm -f "$TASK_DONE"
