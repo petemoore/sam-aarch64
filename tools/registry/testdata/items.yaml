@@ -1,63 +1,72 @@
-- id: i48c
-  title: "Z80 text→overlay encoder (editor input path)"
+# Registry items fixture — exercises the dependency-DAG model.
+# Spec: docs/specs/registry-source-of-truth-design.md
+
+# i1: umbrella with two leaves; exercises umbrella/leaf semantics.
+- id: i1
+  title: "Umbrella item (groups i1a and i1b)"
   description: |
-    SAM-side mirror of the host front-end; Go i48b is the authority.
-    Large multi-PR port, decomposed into bricks as sub-items.
+    A grouping umbrella. Carries no completing PR of its own;
+    DONE only when all children are DONE/WONTFIX.
   status: IN_PROGRESS
   kind: umbrella
   owner: agent
-  refs: [i48c-b5a]
+  refs: [i1a, i1b]
 
-- id: i48c-b5a
-  title: "B5a — movk/movz/movn special-form parse"
-  description: "#imm16 [, lsl #N]; hw=N/16 folded into bits[17:16]; range-checked."
+# i1a: DONE leaf with completing PR; exercises inv 6 (one completing PR).
+- id: i1a
+  title: "Done leaf with completing PR"
+  description: "Completed sub-task of i1."
   status: DONE
   kind: leaf
   owner: agent
-  parent: i48c
-  prs: [{num: 435, role: completing}]
-  refs: [i48c]
+  parent: i1
+  prs: [{num: 10, role: completing}]
+  refs: [i1]
 
-- id: i115
-  title: "Registry as structured source (umbrella)"
-  description: |
-    Convert the hand-edited iN/qN markdown tables to a validated YAML source
-    with a codegen pipeline. Phased rollout; leaves i115a-i115e.
-  status: OPEN
-  kind: umbrella
-  owner: agent
-  refs: ["docs/specs/registry-source-of-truth-design.md"]
-
-- id: i115a
-  title: "registry tool skeleton (validate + gen-to-buffer)"
-  description: "Dormant Go module: invariant validator + gen-to-Writer. Fixture only; no live registry, no CI gate."
+# i1b: OPEN leaf that depends_on another item; exercises inv 11 (DAG existence).
+- id: i1b
+  title: "Open leaf gated on i1a"
+  description: "Can only proceed once i1a is in place."
   status: OPEN
   kind: leaf
   owner: agent
-  parent: i115
-  refs: [i115, "tools/registry/"]
+  parent: i1
+  depends_on: [i1a]
+  refs: [i1, i1a]
 
-- id: i115b
-  title: "registry generator finalised + header templates"
-  description: "gen.go: escaping, banner, header-template concat. registry-sync-check Makefile target (not yet CI-wired)."
+# i2: OPEN leaf that depends_on a question; exercises inv 11 cross-space + inv 13.
+- id: i2
+  title: "Open leaf gated on a question"
+  description: "Decision in q1 must be resolved before this item can proceed."
   status: OPEN
   kind: leaf
   owner: agent
-  parent: i115
-  refs: [i115]
+  depends_on: [q1]
+  refs: [q1]
 
-- id: i116
-  title: "Blocked example item"
-  description: "Waiting on i115 to complete before migration can begin."
-  status: BLOCKED
-  blocker: "i115 not yet complete"
+# i3: WONTFIX leaf; exercises inv 9 (WONTFIX => reason in description).
+- id: i3
+  title: "WONTFIX leaf — approach superseded"
+  description: "Superseded by i1b; the original approach is not worth pursuing."
+  status: WONTFIX
   kind: leaf
   owner: agent
-  refs: [i115]
+  refs: [i1b]
 
-- id: i200
-  title: "Completed leaf with followup PR"
-  description: "An item that is done with a followup fix PR recorded."
+# i4: WONTFIX leaf that depends_on another WONTFIX; exercises inv 12 (WONTFIX->WONTFIX allowed).
+- id: i4
+  title: "WONTFIX depending on another WONTFIX"
+  description: "Both this and i3 are abandoned; WONTFIX->WONTFIX is coherent."
+  status: WONTFIX
+  kind: leaf
+  owner: agent
+  depends_on: [i3]
+  refs: [i3]
+
+# i5: leaf with a followup PR (DONE + completing + followup); exercises PR role variety.
+- id: i5
+  title: "Completed leaf with a followup fix PR"
+  description: "Done, with a subsequent fix captured."
   status: DONE
   kind: leaf
   owner: agent
@@ -65,11 +74,3 @@
     - {num: 100, role: completing}
     - {num: 105, role: followup}
   refs: []
-
-- id: i201
-  title: "WONTFIX item"
-  description: "Decided not to implement this; approach superseded by i200."
-  status: WONTFIX
-  kind: leaf
-  owner: agent
-  refs: [i200]
