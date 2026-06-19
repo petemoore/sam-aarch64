@@ -65,7 +65,7 @@ ci-netboot-oracle:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-trinload netboot-z80-routines asmlex-z80 asmparse-z80 editmodel-z80 ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-serve-boot netboot-trinload netboot-z80-routines asmlex-z80 asmparse-z80 editmodel-z80 ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -493,21 +493,15 @@ netboot-http-main: $(BUILD)/netboot_http_main.bin $(BUILD)/netboot_http_main.map
 # firmware file through the SHA-256 verify into bounded HSAVE records. Built with
 # -D NETBOOT_STREAM=1 (no NETBOOT_HOSTTEST): the streaming sink + verify + sha256
 # build in, and http_main.asm owns the &8000 org so `jp http_main` is the boot
-# entry. The fit-check asserts the image ends at or before &10000 — pyz80 does NOT
-# error on an org overrun, so without it an over-budget boot image would assemble
-# silently (buildNetbootDisk enforces the same ceiling at disk-build time, but the
-# standalone `make netboot-http-boot` must catch it too).
+# entry. http is a section-D overlay program (it pages RAM into &C000-&FFFF), so
+# its boot budget is the full 32768-byte window to &10000 (netboot-boot-fit-check.sh),
+# not the 16384-byte section-C limit the other bootable images use.
 $(BUILD)/netboot_http_boot.bin $(BUILD)/netboot_http_boot.map: src/netboot/http_main.asm src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/eeprom.asm src/netboot/sha256.asm src/netboot/fw_source.asm src/netboot/body_sink.asm src/netboot/fw_span.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STREAM=1 --obj=$(BUILD)/netboot_http_boot.bin \
 	    --mapfile=$(BUILD)/netboot_http_boot.map \
 	    src/netboot/http_main.asm
-	@end=$$(( 0x8000 + $$(wc -c < $(BUILD)/netboot_http_boot.bin) )); \
-	  if [ $$end -gt 65536 ]; then \
-	    printf 'netboot_http_boot.bin overflows the &10000 boot ceiling: ends at &%04X (%d bytes over)\n' $$end $$(( end - 65536 )) >&2; \
-	    exit 1; \
-	  fi; \
-	  printf 'netboot_http_boot.bin fits: ends at &%04X (%d bytes free under &10000)\n' $$end $$(( 65536 - end ))
+	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_http_boot.bin 32768 netboot_http_boot.bin
 
 netboot-http-boot: $(BUILD)/netboot_http_boot.bin
 
@@ -602,6 +596,7 @@ $(BUILD)/netboot_smoke_boot.bin $(BUILD)/netboot_smoke_boot.map: src/netboot/smo
 	pyz80 --obj=$(BUILD)/netboot_smoke_boot.bin \
 	    --mapfile=$(BUILD)/netboot_smoke_boot.map \
 	    src/netboot/smoke_test.asm
+	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_smoke_boot.bin 16384 netboot_smoke_boot.bin
 
 netboot-smoke-boot: $(BUILD)/netboot_smoke_boot.bin $(BUILD)/netboot_smoke_boot.map
 
@@ -651,6 +646,7 @@ netboot-server: $(BUILD)/netboot_server.bin $(BUILD)/netboot_server.map
 $(BUILD)/netboot_server_boot.bin: src/netboot/netboot_server.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/dhcp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_server_boot.bin src/netboot/netboot_server.asm
+	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_server_boot.bin 16384 netboot_server_boot.bin
 
 netboot-server-boot: $(BUILD)/netboot_server_boot.bin
 
@@ -685,6 +681,7 @@ netboot-serve: $(BUILD)/netboot_serve.bin $(BUILD)/netboot_serve.map
 $(BUILD)/netboot_serve_boot.bin: src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_serve_boot.bin src/netboot/netboot_serve.asm
+	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_serve_boot.bin 16384 netboot_serve_boot.bin
 
 netboot-serve-boot: $(BUILD)/netboot_serve_boot.bin
 
@@ -723,13 +720,7 @@ $(BUILD)/netboot_client_boot.bin $(BUILD)/netboot_client_boot.map: src/netboot/n
 	pyz80 --obj=$(BUILD)/netboot_client_boot.bin \
 	    --mapfile=$(BUILD)/netboot_client_boot.map \
 	    src/netboot/netboot_client.asm
-	@sz=$$(stat -c%s $(BUILD)/netboot_client_boot.bin); \
-	 if [ $$sz -gt 16384 ]; then \
-	   echo "ERROR: netboot_client_boot.bin is $$sz bytes — a bootable netboot program must fit"; \
-	   echo "section C (<=16384, &8000-&BFFF). Section D is ROM1 at boot, so code/data above"; \
-	   echo "&BFFF is NOT loaded into RAM and the program crashes. See i119/i125."; \
-	   exit 1; \
-	 else echo "section-C fit OK: $$sz/16384 bytes (ends &$$(printf '%04X' $$((32768+sz))))"; fi
+	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_client_boot.bin 16384 netboot_client_boot.bin
 
 netboot-client-boot: $(BUILD)/netboot_client_boot.bin $(BUILD)/netboot_client_boot.map
 
@@ -774,7 +765,7 @@ $(BUILD)/asmparse.bin $(BUILD)/asmparse.map: src/asmparse.asm src/mnemonic_names
 asmparse-z80: $(BUILD)/asmparse.bin $(BUILD)/asmparse.map
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-smoke-boot netboot-client-boot netboot-trinload
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-smoke-boot netboot-server-boot netboot-serve-boot netboot-client-boot netboot-trinload
 
 ci-netboot-z80: netboot-z80-routines editmodel-z80 asmlex-z80 asmparse-z80
 	cd tools/netboot-oracle/z80 && go test ./...
