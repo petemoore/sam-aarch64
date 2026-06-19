@@ -2221,6 +2221,432 @@ func TestParseShiftExtFuzz(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// B5a — special-form parse for movk/movz/movn (parse_movk; the parse_inst
+// dispatch intercept). Syntax `<mn> Rd, #imm16 [, lsl #N]` with N in
+// {0,16,32,48}; the slot index hw=N/16 is folded into bits[17:16] of the
+// emitted immediate (parser.go:592-665 parseMovk).
+// ---------------------------------------------------------------------------
+
+// isMovkFamily reports whether id is one of movk/movz/movn (the mnemonics
+// parse_inst intercepts to parse_movk before the generic operand loop).
+func isMovkFamily(id uint16) bool {
+	movk, _ := format.MnemonicID("movk")
+	movz, _ := format.MnemonicID("movz")
+	movn, _ := format.MnemonicID("movn")
+	return id == movk || id == movz || id == movn
+}
+
+// refParseMovk is a transcription of parser.go's parseMovk, building the INST
+// record with the real format authority (OperandWriter / ExprWriter / EvalConst).
+// Entry: pos points at the destination register (mnemonic already consumed).
+// Returns the record, the new token position (left at the trailing EOL token),
+// and ok=false on any parse error.
+func refParseMovk(toks []refTok, pos int, id uint16, st *format.SymbolTable) (rec parseRec, newPos int, ok bool) {
+	// Operand 1: destination register.
+	if pos >= len(toks) || toks[pos].kind != tIdent {
+		return parseRec{}, pos, false
+	}
+	rk, reg, isReg := refMatchReg(string(toks[pos].span))
+	if !isReg {
+		return parseRec{}, pos, false
+	}
+	pos++
+	// Expect ',' after the register.
+	if pos >= len(toks) || toks[pos].kind != tComma {
+		return parseRec{}, pos, false
+	}
+	pos++
+	// Operand 2: immediate expression (folds to a single literal if constant).
+	immExpr, npos, eok := refParseExpr(toks, pos, st)
+	if !eok {
+		return parseRec{}, pos, false
+	}
+	pos = npos
+	immConst, immIsConst := format.EvalConst(immExpr)
+	if immIsConst {
+		if immConst < 0 || immConst > 0xffff {
+			return parseRec{}, pos, false
+		}
+	}
+	// Optional `, lsl #N` -> hw in {0,1,2,3}.
+	hw := int64(0)
+	if pos < len(toks) && toks[pos].kind == tComma {
+		pos++
+		if pos < len(toks) && toks[pos].kind == tIdent && string(toks[pos].span) == "lsl" {
+			pos++
+			if pos >= len(toks) || toks[pos].kind != tHash {
+				return parseRec{}, pos, false
+			}
+			pos++
+			shiftExpr, spos, sok := refParseExpr(toks, pos, st)
+			if !sok {
+				return parseRec{}, pos, false
+			}
+			pos = spos
+			shiftAmt, cok := format.EvalConst(shiftExpr)
+			if !cok {
+				return parseRec{}, pos, false
+			}
+			if shiftAmt < 0 || shiftAmt > 48 || shiftAmt%16 != 0 {
+				return parseRec{}, pos, false
+			}
+			hw = shiftAmt / 16
+		} else {
+			return parseRec{}, pos, false
+		}
+	}
+	var folded format.ExprWriter
+	if immIsConst {
+		folded.WriteImm((hw << 16) | immConst)
+	} else {
+		folded.WriteImm(hw << 16)
+		folded.AppendRaw(immExpr)
+		folded.WriteImm(0xffff)
+		folded.WriteOp(format.OpAnd)
+		folded.WriteOp(format.OpOr)
+	}
+	var ow format.OperandWriter
+	ow.WriteReg(rk, reg)
+	ow.WriteImmExpr(folded.Bytes())
+	return parseRec{mnemonicID: id, count: 2, ops: ow.Bytes()}, pos, true
+}
+
+// refParseWithMovk mirrors refParseWithCond but adds the B5a movk/movz/movn
+// intercept (refParseMovk) ahead of the generic operand loop, matching
+// parse_inst's dispatch.
+func refParseWithMovk(src []byte) (recs []parseRec, ok bool) {
+	toks, lok := refLex(src)
+	if !lok {
+		return nil, false
+	}
+	st := format.NewSymbolTable()
+	pos := 0
+	for {
+		if pos >= len(toks) {
+			return recs, true
+		}
+		switch toks[pos].kind {
+		case tEOF:
+			return recs, true
+		case tEOL:
+			pos++
+		case tIdent:
+			id, found := format.MnemonicID(string(toks[pos].span))
+			if !found {
+				return nil, false
+			}
+			pos++
+			if isMovkFamily(id) {
+				rec, npos, mok := refParseMovk(toks, pos, id, st)
+				if !mok {
+					return nil, false
+				}
+				recs = append(recs, rec)
+				pos = npos
+				continue
+			}
+			var ow format.OperandWriter
+			count := byte(0)
+			for {
+				if pos >= len(toks) {
+					return nil, false
+				}
+				k := toks[pos].kind
+				if k == tEOL || k == tEOF || k == tLineComment || k == tBlockComment {
+					break
+				}
+				if k == tComma {
+					if count == 0 {
+						return nil, false
+					}
+					pos++
+					continue
+				}
+				switch k {
+				case tLBracket:
+					npos, memOk := refParseMem(toks, pos, st, &ow)
+					if !memOk {
+						return nil, false
+					}
+					count++
+					pos = npos
+				case tIdent:
+					if c, ok := refMatchCond(string(toks[pos].span)); ok {
+						ow.WriteCond(c)
+						count++
+						pos++
+						break
+					}
+					rk, reg, isReg := refMatchReg(string(toks[pos].span))
+					if isReg {
+						pos++
+						if (rk == format.OpRegX || rk == format.OpRegW) &&
+							pos < len(toks) && toks[pos].kind == tComma &&
+							pos+1 < len(toks) && toks[pos+1].kind == tIdent {
+							next := string(toks[pos+1].span)
+							if sk, skOk := refMatchShiftKind(next); skOk {
+								pos += 2
+								if pos >= len(toks) || toks[pos].kind != tHash {
+									return nil, false
+								}
+								pos++
+								expr, npos, ok2 := refParseExpr(toks, pos, st)
+								if !ok2 {
+									return nil, false
+								}
+								pos = npos
+								width := byte(0)
+								if rk == format.OpRegX {
+									width = 1
+								}
+								ow.WriteShiftedReg(width, reg, sk, expr)
+								count++
+								break
+							}
+							if ek, ekOk := refMatchExtend(next); ekOk {
+								pos += 2
+								var amt []byte
+								if pos < len(toks) && toks[pos].kind == tHash {
+									pos++
+									a, npos, ok2 := refParseExpr(toks, pos, st)
+									if !ok2 {
+										return nil, false
+									}
+									amt = a
+									pos = npos
+								}
+								width := byte(0)
+								if rk == format.OpRegX {
+									width = 1
+								}
+								ow.WriteExtendedReg(width, reg, ek, amt)
+								count++
+								break
+							}
+						}
+						ow.WriteReg(rk, reg)
+						count++
+						break
+					}
+					fallthrough
+				case tHash, tInt, tMinus, tTilde, tLParen,
+					tDot, tLocalRef, tColon:
+					expr, npos, ok2 := refParseExpr(toks, pos, st)
+					if !ok2 {
+						return nil, false
+					}
+					ow.WriteImmExpr(expr)
+					count++
+					pos = npos
+				default:
+					return nil, false
+				}
+			}
+			recs = append(recs, parseRec{mnemonicID: id, count: count, ops: ow.Bytes()})
+		default:
+			return nil, false
+		}
+	}
+}
+
+// movkSymOp hand-builds the expected OP_KIND_IMM_EXPR operand for a symbolic
+// movk immediate `(hw<<16) | (sym & 0xffff)`, an independent second authority
+// for parseMovk's symbolic path. The IMM_EXPR header layout [0x05, len_lo,
+// len_hi] is hand-written; the expression bytecode comes from the format
+// authority.
+func movkSymOp(hw int64, symID uint16) []byte {
+	var sym format.ExprWriter
+	sym.WriteSym(symID)
+	var e format.ExprWriter
+	e.WriteImm(hw << 16)
+	e.AppendRaw(sym.Bytes())
+	e.WriteImm(0xffff)
+	e.WriteOp(format.OpAnd)
+	e.WriteOp(format.OpOr)
+	expr := e.Bytes()
+	b := []byte{0x05, byte(len(expr)), byte(len(expr) >> 8)}
+	return append(b, expr...)
+}
+
+// TestParseMovkHandCases pins INST records for movk/movz/movn. Constant cases
+// assert the encoded immediate `(hw<<16)|imm` via immExprOperand (an
+// independent layout authority); symbolic cases via movkSymOp. Each is also
+// cross-checked against refParseWithMovk.
+func TestParseMovkHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	W := format.OpRegW
+	reg := func(k format.OperandKind, n byte) []byte { return []byte{byte(k), n} }
+
+	cases := []struct {
+		desc string
+		src  string
+		want []parseRec
+	}{
+		{
+			"movk x0, #5 (hw=0)",
+			"movk x0, #5\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "movk"), count: 2,
+				ops: concat(reg(X, 0), immExprOperand(5))}},
+		},
+		{
+			"movz x1, #0",
+			"movz x1, #0\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "movz"), count: 2,
+				ops: concat(reg(X, 1), immExprOperand(0))}},
+		},
+		{
+			"movn w2, #65535 (max imm16)",
+			"movn w2, #65535\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "movn"), count: 2,
+				ops: concat(reg(W, 2), immExprOperand(0xffff))}},
+		},
+		{
+			"movk x3, #5, lsl #16 (hw=1)",
+			"movk x3, #5, lsl #16\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "movk"), count: 2,
+				ops: concat(reg(X, 3), immExprOperand((1<<16)|5))}},
+		},
+		{
+			"movk x4, #0xab, lsl #32 (hw=2)",
+			"movk x4, #0xab, lsl #32\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "movk"), count: 2,
+				ops: concat(reg(X, 4), immExprOperand((2<<16)|0xab))}},
+		},
+		{
+			"movk x5, #1, lsl #48 (hw=3)",
+			"movk x5, #1, lsl #48\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "movk"), count: 2,
+				ops: concat(reg(X, 5), immExprOperand((3<<16)|1))}},
+		},
+		{
+			"movk x6, #0x1234, lsl #0 (explicit hw=0)",
+			"movk x6, #0x1234, lsl #0\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "movk"), count: 2,
+				ops: concat(reg(X, 6), immExprOperand(0x1234))}},
+		},
+		{
+			"movk x9, #(2+3) (constant-folded imm)",
+			"movk x9, #(2+3)\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "movk"), count: 2,
+				ops: concat(reg(X, 9), immExprOperand(5))}},
+		},
+		{
+			"movk x10, #1, lsl #(8+8) (constant-folded shift)",
+			"movk x10, #1, lsl #(8+8)\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "movk"), count: 2,
+				ops: concat(reg(X, 10), immExprOperand((1<<16)|1))}},
+		},
+		{
+			"movk x7, foo (symbolic, hw=0)",
+			"movk x7, foo\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "movk"), count: 2,
+				ops: concat(reg(X, 7), movkSymOp(0, 0))}},
+		},
+		{
+			"movk x8, foo, lsl #16 (symbolic, hw=1)",
+			"movk x8, foo, lsl #16\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "movk"), count: 2,
+				ops: concat(reg(X, 8), movkSymOp(1, 0))}},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			got, errFlag := parseZ80(t, mac, []byte(c.src))
+			if errFlag {
+				t.Fatalf("PARSE_ERR set unexpectedly")
+			}
+			compareRecs(t, "Z80 vs hand", got, c.want)
+			ref, refOk := refParseWithMovk([]byte(c.src))
+			if !refOk {
+				t.Fatalf("refParseWithMovk failed on valid case")
+			}
+			compareRecs(t, "Z80 vs ref", got, ref)
+		})
+	}
+}
+
+// TestParseMovkError checks that malformed movk/movz/movn lines set PARSE_ERR
+// and that refParseWithMovk agrees (the parser's teeth: out-of-range imm,
+// bad/non-constant shift, wrong keyword, missing comma/#).
+func TestParseMovkError(t *testing.T) {
+	mac := loadAsmparse(t)
+	bad := []string{
+		"movk x0\n",               // missing ',' + immediate
+		"movk x0, #65536\n",       // immediate > 0xffff
+		"movk x0, #-1\n",          // negative immediate
+		"movk x0, #5, lsl #8\n",   // shift not in {0,16,32,48}
+		"movk x0, #5, lsl #64\n",  // shift > 48
+		"movk x0, #5, lsl #-16\n", // negative shift
+		"movk x0, #5, asr #16\n",  // wrong shift keyword (not lsl)
+		"movk x0, #5, lsl 16\n",   // missing '#' after lsl
+		"movk x0, #5, lsl #foo\n", // non-constant shift amount
+		"movz w1, #0x10000\n",     // movz immediate > 0xffff
+	}
+	for _, src := range bad {
+		t.Run(src, func(t *testing.T) {
+			_, errFlag := parseZ80(t, mac, []byte(src))
+			if !errFlag {
+				t.Errorf("%q: PARSE_ERR not set (expected error)", src)
+			}
+			if _, ok := refParseWithMovk([]byte(src)); ok {
+				t.Errorf("%q: refParseWithMovk should report error", src)
+			}
+		})
+	}
+}
+
+// TestParseMovkFuzz compares asmparse against refParseWithMovk over random
+// movk/movz/movn lines: random reg, random imm16, optional lsl slot, plus a
+// fraction of symbolic-immediate lines.
+func TestParseMovkFuzz(t *testing.T) {
+	mac := loadAsmparse(t)
+	xRegs := []string{"x0", "x1", "x2", "x7", "x13", "x19", "x28", "xzr"}
+	wRegs := []string{"w0", "w3", "w8", "w15", "w22", "w30", "wzr"}
+	mnems := []string{"movk", "movz", "movn"}
+	syms := []string{"foo", "bar", "baz", "lbl_one", "table"}
+	shifts := []int{0, 16, 32, 48}
+
+	for _, seed := range []int64{3, 17, 53, 211, 977} {
+		rng := rand.New(rand.NewSource(seed))
+		var src []byte
+		lines := 12 + rng.Intn(12)
+		for li := 0; li < lines; li++ {
+			mnem := mnems[rng.Intn(len(mnems))]
+			var rd string
+			if rng.Intn(2) == 0 {
+				rd = xRegs[rng.Intn(len(xRegs))]
+			} else {
+				rd = wRegs[rng.Intn(len(wRegs))]
+			}
+			var imm string
+			if rng.Intn(4) == 0 {
+				// symbolic immediate
+				imm = syms[rng.Intn(len(syms))]
+			} else {
+				imm = fmt.Sprintf("#%d", rng.Intn(0x10000))
+			}
+			line := fmt.Sprintf("%s %s, %s", mnem, rd, imm)
+			if rng.Intn(2) == 0 {
+				line += fmt.Sprintf(", lsl #%d", shifts[rng.Intn(len(shifts))])
+			}
+			src = append(src, (line + "\n")...)
+		}
+		want, ok := refParseWithMovk(src)
+		if !ok {
+			t.Fatalf("seed %d: refParseWithMovk reported error on generated B5a source:\n%s", seed, src)
+		}
+		got, errFlag := parseZ80(t, mac, src)
+		if errFlag {
+			t.Fatalf("seed %d: PARSE_ERR set on valid B5a source:\n%s", seed, src)
+		}
+		compareRecs(t, fmt.Sprintf("seed%d", seed), got, want)
+		t.Logf("seed=%d: %d source bytes, %d records matched", seed, len(src), len(got))
+	}
+}
+
 // concat concatenates multiple byte slices.
 func concat(slices ...[]byte) []byte {
 	var result []byte
