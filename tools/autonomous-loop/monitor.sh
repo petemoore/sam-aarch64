@@ -37,16 +37,39 @@ RESUME_NUDGE="${ALOOP_RESUME:-Autonomous-loop checkpoint: you just finished a wo
 POLL="${ALOOP_POLL:-10}"                    # seconds between polls
 HANG_TIMEOUT="${ALOOP_HANG_TIMEOUT:-1800}"  # seconds with no signal -> nudge an idle session
 CLEAR_SETTLE="${ALOOP_CLEAR_SETTLE:-30}"    # seconds for /clear to fully reset the TUI before re-prompting
-CONTEXT_SETTLE="${ALOOP_CONTEXT_SETTLE:-30}" # seconds for /context to finish rendering before stuffing the resume nudge. Matches CLEAR_SETTLE: /context is a full-TUI redraw and 5s proved too short -- the nudge was stuffed mid-render and dropped, so no next turn fired (Pete, 2026-06-19; bigger /context readouts at higher context fill render even slower). NOTE: a running monitor must be restarted to pick up this default (or relaunch with ALOOP_CONTEXT_SETTLE=30).
+CONTEXT_SETTLE="${ALOOP_CONTEXT_SETTLE:-5}" # seconds for /context to finish its redraw before stuffing the resume nudge. /context is a full-TUI redraw; a few seconds lets it settle. This is NOT the load-bearing fix for the dropped nudge (that is chunked stuff + verify-and-retry below) -- no fixed sleep reliably wins, because the real cause was the long nudge being stuffed as ONE burst and dropped wholesale, not a render race. See monitor-nudge-delivery.md.
 SUBMIT=$'\r'                                # Enter key -- \r confirmed to submit in the Claude Code TUI (live test 2026-06-15)
 SUBMIT_SETTLE="${ALOOP_SUBMIT_SETTLE:-1}"   # seconds to let a stuffed line settle before the confirming Enter
+CHUNK_SIZE="${ALOOP_CHUNK_SIZE:-64}"        # max chars per `screen -X stuff` burst. A long line stuffed in ONE burst right after a full-TUI redraw (/context) is dropped wholesale by the TUI's paste ingestion -- the i140 root cause (reproduced 0/4 delivered). Chunking into small bursts with a brief inter-chunk pause lets every byte land (reproduced: chunked lands the full line reliably). See monitor-nudge-delivery.md.
+CHUNK_DELAY="${ALOOP_CHUNK_DELAY:-0.1}"     # seconds between stuffed chunks (sleep accepts fractional seconds)
+NUDGE_TRIES="${ALOOP_NUDGE_TRIES:-4}"       # how many times to (re)send the resume nudge until a turn actually starts
+NUDGE_VERIFY_WAIT="${ALOOP_NUDGE_VERIFY_WAIT:-8}" # seconds to poll the screen for a started turn after each nudge attempt
+TURN_MARKER="${ALOOP_TURN_MARKER:-esc to interrupt}" # text the Claude Code TUI shows while a model turn is running; our proof the nudge became a turn
 
 TASK_DONE="$SEMA_DIR/task-done"
 WOUND_DOWN="$SEMA_DIR/wound-down"
 LOCK="$SEMA_DIR/monitor.lock"               # single-instance guard (see preflight)
 
 log()   { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
-stuff() { screen -S "$SESSION" -p "$WINDOW" -X stuff "$1$SUBMIT"; }
+
+# stuff_raw() sends a string to the session in CHUNK_SIZE-byte bursts, pausing
+# CHUNK_DELAY between them. A long string stuffed as ONE `screen -X stuff` burst
+# is dropped wholesale by the Claude Code TUI right after a full-screen redraw
+# (e.g. /context) -- the i140 root cause, reproduced 0/4 delivered with the real
+# 858-char resume nudge. Chunking lets every byte land (reproduced reliably).
+# Short strings (a single chunk) behave exactly as a plain stuff did before.
+stuff_raw() {
+  local s="$1" i
+  for (( i=0; i<${#s}; i+=CHUNK_SIZE )); do
+    screen -S "$SESSION" -p "$WINDOW" -X stuff "${s:i:CHUNK_SIZE}"
+    sleep "$CHUNK_DELAY"
+  done
+}
+# stuff() sends a line and a trailing Enter (chunked). The trailing \r can still
+# be absorbed into a long paste, so a turn is not guaranteed -- callers that need
+# the line to actually submit follow up with submit() (an explicit settled Enter)
+# or, for the load-bearing nudge, nudge_until_turn() (verify-and-retry).
+stuff() { stuff_raw "$1"; screen -S "$SESSION" -p "$WINDOW" -X stuff "$SUBMIT"; }
 # submit() sends a standalone Enter, AFTER a short settle, as its own keystroke.
 # A long line stuffed in one burst can have its trailing \r absorbed into the
 # paste (the TUI is still ingesting the text), so the line sits unsubmitted in
@@ -54,6 +77,61 @@ stuff() { screen -S "$SESSION" -p "$WINDOW" -X stuff "$1$SUBMIT"; }
 # reliably confirms it. (If the line already submitted, this Enter lands on an
 # empty input line, a harmless no-op.) Tune ALOOP_SUBMIT_SETTLE if 1s is tight.
 submit() { sleep "$SUBMIT_SETTLE"; screen -S "$SESSION" -p "$WINDOW" -X stuff "$SUBMIT"; }
+
+# turn_running() returns 0 iff a model turn is currently in flight, detected by
+# the TURN_MARKER text the TUI shows ("esc to interrupt"). This is the proof a
+# stuffed nudge actually became a turn -- not just landed in the input box.
+turn_running() {
+  local hc; hc="$(mktemp)"
+  screen -S "$SESSION" -X hardcopy "$hc" 2>/dev/null
+  local found=1
+  grep -qF "$TURN_MARKER" "$hc" && found=0
+  rm -f "$hc"
+  return $found
+}
+
+# nudge_until_turn() delivers the load-bearing resume nudge and VERIFIES it
+# became a turn, retrying with backoff if not. This is the robust replacement for
+# "stuff once + hope": a blind sleep cannot fix the i140 drop because the cause is
+# burst-size, not a render race. Each attempt: chunk-stuff the nudge, send a
+# settled Enter, then poll the screen up to NUDGE_VERIFY_WAIT seconds for a
+# started turn. If a turn started, done. If the text landed but did not submit, a
+# bare Enter on the next attempt submits it (re-stuffing an already-present line
+# just appends, but the verify loop stops the moment a turn starts, so at most one
+# extra Enter is in play). Returns 0 on success, 1 if all tries are exhausted.
+nudge_until_turn() {
+  local msg="$1" t p
+  for (( t=1; t<=NUDGE_TRIES; t++ )); do
+    if turn_running; then return 0; fi   # already running (e.g. a prior Enter took)
+    if (( t == 1 )); then
+      stuff "$msg"                        # first attempt: full nudge + Enter
+    else
+      # Re-attempt: the nudge text is likely already sitting unsubmitted in the
+      # input (landed but the Enter was absorbed). A standalone settled Enter
+      # submits it without duplicating the text.
+      log "nudge: no turn after attempt $((t-1)); re-sending Enter"
+      screen -S "$SESSION" -p "$WINDOW" -X stuff "$SUBMIT"
+    fi
+    submit                               # belt-and-braces settled Enter
+    for (( p=1; p<=NUDGE_VERIFY_WAIT; p++ )); do
+      sleep 1
+      if turn_running; then
+        log "nudge delivered (attempt $t, ${p}s)"
+        return 0
+      fi
+    done
+  done
+  # Last resort: re-stuff the whole nudge once more in case the input was empty
+  # (the text never landed at all on any attempt).
+  log "nudge: still no turn after $NUDGE_TRIES tries; re-stuffing nudge from scratch"
+  stuff "$msg"; submit
+  for (( p=1; p<=NUDGE_VERIFY_WAIT; p++ )); do
+    sleep 1
+    if turn_running; then log "nudge delivered (final re-stuff, ${p}s)"; return 0; fi
+  done
+  log "WARNING: resume nudge could not be confirmed as a turn -- the hang-timeout will retry"
+  return 1
+}
 
 # --- preflight -------------------------------------------------------------
 [ -n "$SESSION" ] || { echo "ERROR: set ALOOP_SESSION to your screen session (see 'screen -ls')." >&2; exit 1; }
@@ -101,15 +179,14 @@ while true; do
     # turn; without it the agent sits idle until the hang-timeout nudge (~1h),
     # which is exactly the stall this fixes. (Pete's 2026-06-15 live-run log.)
     #
-    # Settle BEFORE stuffing the nudge: /context redraws the whole TUI, and the
-    # nudge keystrokes stuffed into that redraw are dropped/mangled, so the nudge
-    # never becomes a turn and the agent sits idle until the hang-timeout (~1h) --
-    # the stall Pete hit 2026-06-19 (he had to wake the agent by hand). The 1s
-    # SUBMIT_SETTLE inside submit() above is not enough to outlast the render; this
-    # explicit wait is the /context analogue of CLEAR_SETTLE on the wound-down path.
+    # Let /context finish its full-TUI redraw before nudging. The load-bearing
+    # delivery is nudge_until_turn(): it CHUNK-stuffs the nudge (so the long line
+    # is not dropped wholesale after the redraw -- the i140 root cause) and then
+    # VERIFIES a turn actually started, retrying if not. A blind sleep alone can
+    # never fix this -- the cause is burst-size, not a render race (the old code
+    # dropped the real nudge 0/4 even with a 30s settle). See monitor-nudge-delivery.md.
     sleep "$CONTEXT_SETTLE"
-    stuff "$RESUME_NUDGE"
-    submit
+    nudge_until_turn "$RESUME_NUDGE"
     rm -f "$TASK_DONE"
     last_signal=$SECONDS
   elif [ $((SECONDS - last_signal)) -ge "$HANG_TIMEOUT" ]; then
