@@ -112,8 +112,23 @@ func (ve *ValidationError) hasErrors() bool {
 	return len(ve.msgs) > 0
 }
 
-// validate runs all invariants 1-13 on the registry. It returns the
-// ValidationError (non-nil always; call hasErrors() to test).
+// validateOpts controls optional validation behaviour.
+type validateOpts struct {
+	// migrating defers invariant 10 (id-shaped ref existence) to allow refs
+	// to point at ids that have not yet been migrated into the YAML source.
+	// Invariants 11/12/13 (depends_on DAG, WONTFIX target, delete-gate) remain
+	// strict regardless of this flag.
+	migrating bool
+}
+
+// validate runs all invariants 1-13 on the registry using default (strict)
+// options. It returns the ValidationError (non-nil always; call hasErrors() to
+// test).
+func validate(reg *Registry) *ValidationError {
+	return validateWith(reg, validateOpts{})
+}
+
+// validateWith runs all invariants 1-13 on the registry with the given options.
 //
 // Invariant summary (spec §"Invariants (the validator)"):
 //  1. Ids globally unique.
@@ -125,11 +140,11 @@ func (ve *ValidationError) hasErrors() bool {
 //  7. Atomic items: non-umbrella with >1 completing PR -> split.
 //  8. Bounded description (title <= 120 chars/1 line; description <= 600 chars/6 lines).
 //  9. Required-fields-per-status (DONE => closed + leaf has completing PR; etc.).
-//  10. Id-shaped refs exist in the union.
+//  10. Id-shaped refs exist in the union. (Deferred when opts.migrating is true.)
 //  11. Dependencies form a DAG: every depends_on target exists; no cycles.
 //  12. No non-WONTFIX item depends on a WONTFIX node.
 //  13. Question delete-gate: falls out of inv 11's existence check (tested explicitly).
-func validate(reg *Registry) *ValidationError {
+func validateWith(reg *Registry, opts validateOpts) *ValidationError {
 	ve := &ValidationError{}
 
 	// Build id sets for cross-reference checks (invariants 10, 11, 13).
@@ -256,9 +271,12 @@ func validate(reg *Registry) *ValidationError {
 		}
 
 		// Invariant 10: id-shaped refs exist in the union.
-		for _, ref := range it.Refs {
-			if idRefRe.MatchString(ref) && !allIDs[ref] {
-				ve.add(id, fmt.Sprintf("ref %q is id-shaped but not found in the registry", ref))
+		// Deferred under --migrating to allow refs to point at ids not yet in YAML.
+		if !opts.migrating {
+			for _, ref := range it.Refs {
+				if idRefRe.MatchString(ref) && !allIDs[ref] {
+					ve.add(id, fmt.Sprintf("ref %q is id-shaped but not found in the registry", ref))
+				}
 			}
 		}
 
