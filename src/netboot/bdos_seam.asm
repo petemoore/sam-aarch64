@@ -28,25 +28,32 @@
 ;     a filename + a source page + a section-C offset + a total byte length
 ;     (UIFA[31]=page, [32..33]=offset, [34]=size>>14, [35..36]=size&0x3FFF).
 ;
-; FREE-RECORD DETECTION — what is actually reachable from a user program. The
-; Trinity SD card has a central RECORD LIST in its boot area (sectors 1..base-1,
-; before record 1; 16-byte entries, 32 per sector). It is tempting to read it to
-; enumerate records, but it is NOT reachable from a user program: no RST-8 hook
-; reads a card-ABSOLUTE sector, and the AT-sector hooks HRSAD (160) / HWSAD (149)
-; are clamped to the *currently HRECORD-selected record* (hd.seek validates
-; track<=79 / sector 1..10 and adds the record base — bdos15a.src.txt:1243-1297),
-; so they can never address the boot-area list. B-DOS reads the list only via its
-; internal find.rec -> seek.base -> hd.lbuf (no hook slot; bdos15a.src.txt:907-919).
-; The reachable identity of a record is therefore taken from the record's OWN
+; FREE-RECORD DETECTION — read the record list directly. The Trinity SD card has
+; a central RECORD LIST in its boot area (sectors 1..base-1, before record 1;
+; 16-byte entries, 32 per sector). It IS reachable from a user program: the
+; `RECORD` BASIC command lists every record's name (bdos15a.src.txt:886-906), so
+; the Z80 plainly reads it; B-DOS itself reads it via a clean sequential read of
+; the list sectors (find.rec -> sel.base -> seek.base -> hd.lbuf,
+; bdos15a.src.txt:906-919 — no HRECORD, no error 81, no error trap). The narrow
+; true fact is only that there is no DEDICATED RST-8 hook named "list records".
+; The robust design treats the on-card layout as a FROZEN INTERFACE and reads the
+; list sectors ourselves, parsing the 16-byte entries: an entry whose first name
+; byte (bit 7 = write-protect, masked off) is 0 is unnamed/free (the frec3x test,
+; bdos15a.src.txt:946-948); a named entry is in use. This depends only on frozen
+; interfaces (the Trinity port map, the SD protocol, the on-card B-DOS format —
+; identical 1.5a<->1.5t per the i71 fork analysis) and on ZERO B-DOS internal
+; routine addresses (those DO relocate between versions). No nmi.sp trap, no
+; version-specific addresses. See docs/specs/trinity-record-detection-design.md.
+;
+; The list (the card-level view) enumerates records and finds a free one; a
+; record's per-record identity (the selected-record view) is read from its OWN
 ; first directory sector after selecting it: HRECORD n -> bdos_read_sector(0,1) ->
 ; bdos_inspect_record, which reads the "BDOS" stamp (+232) and the disk label
-; (+210) exactly as B-DOS get.label does (bdos15a.src.txt:2834). The faithful
-; free-detection signal is HRECORD's success (stamped = a valid B-DOS record) vs
-; error 81 'Invalid record' (no stamp); surviving error 81 to keep scanning needs
-; the B-DOS-internal nmi.sp error trap (bdos15a.src.txt:4848-4886) — a brittle,
-; version-specific, hardware-uncertain mechanism (see registry i119 + q27). This
-; seam ships the reachable, no-trap primitive (inspect a selected record); the
-; trap-based probe of NON-B-DOS records waits on the q27 policy decision.
+; (+210) exactly as B-DOS get.label does (bdos15a.src.txt:2834-2858). That
+; per-record inspect is what this seam ships; it backs the confirm-before-overwrite
+; gate (the Trinity SD card is a SHARED user resource — never clobber a record we
+; did not create). The card-absolute list-read routine is the next increment
+; (built against the harness card model first — emulation-first).
 ;
 ; THE HONESTY LINE (CLAUDE.md §5): these routines are host-verifiable — they
 ; only build / decode memory. The actual hook DISPATCH (RST 8 / DEFB 129 HGTHD,
@@ -225,9 +232,10 @@ bdos_fill_save_uifa:
 ; bdos_inspect_record — classify the currently-selected record from its first
 ; directory sector. Reads the two record-identity fields B-DOS get.label reads
 ; (bdos15a.src.txt:2834-2859): the 4-byte "BDOS" stamp at +232 and the 10-byte
-; disk label at +210 (bit 7 of byte 0 = write-protect). These are the only
-; per-record identity fields reachable from a user program — the central record
-; list is not (see the header). Host-verifiable: pure memory reads, no RST.
+; disk label at +210 (bit 7 of byte 0 = write-protect). This is the per-record
+; (selected-record) identity view, used to confirm a chosen record before
+; overwrite; the card-level record list (read directly, see the header) is the
+; enumerate/find-free view. Host-verifiable: pure memory reads, no RST.
 ;
 ; Pre: the caller has HRECORD-selected the record and bdos_read_sector'd its
 ;      first directory sector (track 0, sector 1) into BD_READ_BUF.
