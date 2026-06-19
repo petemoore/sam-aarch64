@@ -129,6 +129,23 @@ func (m *mem) Out(port uint8, value uint8) {
 type Machine struct {
 	m       *mem
 	symbols map[string]uint16
+
+	// rstHandlers models SAMDOS/B-DOS RST-vector hooks the flat harness has no
+	// ROM for. Keyed by the RST target address (e.g. &0008 for RST 8): when the
+	// run loop finds PC at a registered target, it pops the return address the RST
+	// pushed and invokes the handler, which reads any inline operand byte(s) and
+	// returns the PC to resume at. Nil until a handler is attached (e.g.
+	// AttachBDOS, bdos_store.go) — every existing test runs with no handler.
+	rstHandlers map[uint16]func(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16
+}
+
+// setRSTHandler registers fn as the handler for the RST whose target is addr
+// (e.g. &0008 for the B-DOS RST 8 hook dispatch). See rstHandlers.
+func (mac *Machine) setRSTHandler(addr uint16, fn func(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16) {
+	if mac.rstHandlers == nil {
+		mac.rstHandlers = map[uint16]func(*z80.CPU, *Machine, uint16) uint16{}
+	}
+	mac.rstHandlers[addr] = fn
 }
 
 // New returns an empty machine: a zeroed 64 KB space with no symbols. Used by
@@ -382,6 +399,23 @@ func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (Call
 		if cpu.PC == haltTrap {
 			halted = true
 			break
+		}
+		// A SAMDOS/B-DOS RST hook: the RST already pushed its return address (the
+		// inline hook-code byte). Pop it, let the handler read the inline operand(s)
+		// + apply the side effect, and resume where it returns — so the flat harness
+		// runs hook-dispatching code (e.g. the client write-out) it has no ROM for.
+		if h, ok := mac.rstHandlers[cpu.PC]; ok {
+			ret := uint16(mac.m.ram[cpu.SP]) | uint16(mac.m.ram[cpu.SP+1])<<8
+			cpu.SP += 2
+			cpu.PC = h(cpu, mac, ret)
+			steps++
+			if steps >= cap {
+				if capIsError {
+					return CallResult{}, fmt.Errorf("z80: routine %q did not return after %d steps (PC=&%04X)", name, steps, cpu.PC)
+				}
+				break
+			}
+			continue
 		}
 		// Cost the instruction from the live CPU state BEFORE stepping it, so
 		// conditional branches and repeating block ops are timed against the
