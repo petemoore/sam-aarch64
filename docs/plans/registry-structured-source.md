@@ -209,9 +209,12 @@ The model revision reorders the work:
    clean atomic rows (umbrellas→leaves, history→git, rationale→cited design docs,
    `BLOCKED`→explicit dependency notation), **independently audited for information
    loss** (implementer ≠ reviewer). This is the semantic cleanup that makes every
-   later phase mechanical. (One open sub-question — whether the reshape lands in the
-   markdown first or directly in validated YAML at migration — is raised as a `qN`
-   with this PR; it does not block building the tool.)
+   later phase mechanical. (**q28 RESOLVED 2026-06-19 → the reshape lands directly
+   in validated YAML at the migration**, via the bounded-batch audited process in
+   "Migration execution process" below. The markdown-first option was rejected: the
+   4-column table can't express the `depends_on`/transient-question model, and it
+   reintroduces the unvalidated hand-editing this whole effort exists to kill. So
+   steps 2 and 4 MERGE — the reshape *is* the migration, done batch-by-batch.)
 3. **Tool rework to the new model** (supersedes the dormant `i115a`/`i115b` as
    built): schema (no `BLOCKED`, `depends_on`, transient questions), validator (the
    new DAG + WONTFIX-coherency + delete-gate invariants), generator (three views,
@@ -228,6 +231,115 @@ The model revision reorders the work:
 A dormant tool (step 3) or a content reshape (step 2) cannot break the live
 generated registry — it doesn't exist until the step-4 cutover — so `main` stays
 green throughout.
+
+## Migration execution process (q28 → bounded-batch audited migration)
+
+Pete's process for the single-PR cutover (2026-06-19), refined in review. **One PR;
+push only at the very end** — both agent roles run the checks **locally** per batch
+so issues surface without a CI round-trip. **Status: AGREED (Pete, 2026-06-19).**
+This is the **FIRST implementation step** — done after the design write-up and once
+`main` is clean/synced, and **before** any SAM-program implementation.
+
+### Dependency-ordered batches — the forward-reference solution (Pete, 2026-06-19)
+The mutators `validate` after every op, and strict validation requires every
+`depends_on` target + id-shaped ref to exist (invariants 10/11) and no
+non-WONTFIX→WONTFIX (12). A naive batch order would fail on any forward reference
+to a not-yet-migrated node. **Solution: migrate in dependency order** — a node is
+migrated only *after* (or alongside, in correct intra-batch order) everything it
+`depends_on`. Then **`depends_on` validation (11/12/13) passes strictly per batch**,
+because every dep target already exists. Migrate "leaves first, up the DAG" (start
+from nodes that depend on nothing, work toward their dependents), keeping
+umbrellas+leaves together.
+
+**The orchestrator runs a dependency PRE-PASS first** (read-only): extract the DAG
+from the old registry's `BLOCKED`/blocked-on prose + refs, topologically sort it,
+and chunk into ~15-20-item batches that respect that order (a deep chain spans
+several *ordered* batches — its bottom migrated first — so there's never a forward
+reference *and* never a giant batch). The pre-pass also surfaces the dependency
+structure (today buried in prose) for a sanity check before anything is touched.
+
+**The one residual — refs, not deps.** The `refs`/"see also" column is cross-links,
+not dependencies, and can be **cyclic** (i119 refs i114, i114 refs i119), so it
+can't be topologically ordered. A ref to a not-yet-migrated item would trip
+invariant 10. So the only per-batch deferral needed is a **`--migrating` flag that
+defers ONLY invariant 10 (ref-existence)** — far smaller than deferring the whole
+cross-node suite. Strict `validate` (incl. refs) runs once at the end. (Small,
+isolated tool addition + a red-fixture test.)
+
+### Commit 1 — rename + seed + empty generated views
+- Rename the four live registries to `*.old` (`item-registry-open.md` →
+  `item-registry-open.md.old`, + `-closed`, `question-registry-open`, `-closed`).
+- Seed `registry/.id-ledger.txt` with **every existing id** from all four `.old`
+  files — ids are **preserved verbatim** on migration (they are locked in merged
+  PRs/branches/commits); only **new split-leaves** mint new hyphenated ids.
+- Create empty `registry/items.yaml` + `questions.yaml`; `make registry` → the three
+  generated `.md` (open/closed items + open questions), initially empty (banner only).
+
+### Commits 2..N — bounded batches (~15-20 items each)
+Each batch, a **migration agent**:
+1. Takes ~15-20 rows still in the `.old` files (the orchestrator assigns the slice;
+   the **shrinking `.old` is the progress tracker**).
+2. Adds each to the new system via the CLI (`registry add` with the **existing id
+   preserved**; title/desc/status/owner/parent/refs/deps), **splitting**
+   wall-of-text / multi-deliverable rows into umbrella+leaves per the atomic-item
+   criteria, **wiring `depends_on` edges** (converting old `BLOCKED:<what>` prose
+   into an edge to the gating item/question), and **relocating** any over-bound
+   description detail to its **named home** (git / PR refs / the cited design doc) —
+   never dropping it.
+3. **Deletes** each migrated row from the `.old` file — same commit, so the diff
+   shows exactly what left `.old` and what entered the new system.
+4. `make registry` (regen) + runs **local** checks: `cd tools/registry && go test
+   ./...`; `registry validate --migrating`; `make check-doc-links`.
+5. Commits the batch.
+
+Then a **review agent** reviews **exactly that commit**: every deleted `.old` row's
+information is preserved (in the new record, or relocated to a named home that
+exists); splitting is correct + consistent; ids preserved; status correct;
+deps/refs match the old blocked-on prose. Iterate — **squashing fixes into the
+batch commit** — until the reviewer passes. Then the next batch.
+
+Special cases:
+- **Closed questions RETIRE — they do not migrate.** The new model has no
+  closed-question view. For each `qN` in `question-registry-closed.md.old`, confirm
+  its decision is already captured in the relevant item (or fold it in) **before**
+  deleting it; the reviewer verifies no decision is lost.
+- **Closed items migrate** as `DONE`/`WONTFIX` records (→ generated `item-registry-closed.md`).
+
+### The tools are unproven on real data — both roles surface tool bugs
+The registry tools have only ever run on a ~10-record synthetic fixture; the
+migration is their first real-data exercise and the **de-facto integration test**.
+A 5-minute grob test already found two generator bugs — the item cell dropped the
+description, and a spurious trailing `<br>` — both fixed (PR #451). So **both agent
+briefings say explicitly: the tools may be at fault.** If `gen` produces wrong/ugly
+output or `validate` fails spuriously, suspect the **TOOL**, not the migration —
+surface it. Fix it in the batch PR if it is small and clear-cut; otherwise feed it
+back to the orchestrator, who fixes the tool and re-runs the batch. The migration is
+a **tool-hardening pass** too. Treat the **first batch as a proving batch** — extra
+scrutiny on the generated output's readability before scaling up.
+
+### Final commits — strict validate + switchover
+- Once the `.old` files are empty, **delete** them.
+- Run **strict** `registry validate` (full DAG + WONTFIX-coherency + dangling-edge,
+  now that every node exists) + `go test` + `make check-doc-links`.
+- Wire the `registry-sync` CI job (validate + regen + drift-diff) into
+  `.github/workflows/ci.yml` + branch-protection required checks.
+- Switch the docs/automation to the new system (CLAUDE.md §3 + doc-lifecycle,
+  ROADMAP handover contract, the SessionStart hook, the autonomous-loop docs) — the
+  generated `.md` must never be hand-edited again.
+- **One final full-PR review** (the whole switchover end-to-end) on top of the
+  per-batch reviews.
+- Push (the **only** push) → full CI incl. the new `registry-sync` job green → merge.
+
+### Local CI both roles must know
+`cd tools/registry && go test ./...`; `make registry` (regen in place); `registry
+validate [--migrating | strict]`; `make check-doc-links`. The SimCoupé matrix is
+irrelevant to a registry/docs change and runs only on the final push.
+
+### Orchestration
+The orchestrator sequences batches, assigns each slice, drives the
+squash-on-feedback loop, and tracks progress via the shrinking `.old`. ~210 rows ÷
+~15-20 ≈ **11-15 batches**; likely **multi-session**; the PR branch persists; push
+only at the end.
 
 ## Flagged / provisional
 
