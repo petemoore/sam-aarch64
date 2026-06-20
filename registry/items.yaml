@@ -2716,7 +2716,7 @@
   description: |
     Hardware implementation of the card-absolute list-sector read modelled in B3 by the harness hook BD_HOOK_LISTREAD. Implements the SPI command ladder (CMD17 single-block read) on Trinity ports &DC-&DF to read list sectors 1..base-1 directly off the SD card. Not required for B3 emulation; the harness models the returned bytes. Needs final confirmation of the exact SPI init/read sequence on real hardware before building (docs/specs/trinity-record-detection-design.md §8, open-verification-item-1 and §3 frozen-interface principle).
   status: OPEN
-  depends_on: [i133, i193]
+  depends_on: [i133, i193, i145c]
   kind: leaf
   owner: agent
   parent: i119
@@ -2781,7 +2781,7 @@
 - id: i145c
   title: Harness SD-SPI/CSD model — model the DC/DF seam + SD command state machine + configurable CSD
   description: |
-    Model the Trinity SD SPI seam in the harness (mirror enc28j60.go): ports &DC select/busy + &DF data + the SD command state machine, covering BOTH the READ path (CMD9/CSD -> a configurable capacity, parameterised from the real value i145a captured) AND the WRITE path (the list-sector/claim write + HWSAD raw-SD writes), per Colin's actual mechanism (i193). Model writes FAITHFULLY at the raw-SD level, NOT a hook-injection shortcut — i121g's BD_HOOK_LISTWRITE is a placeholder; the real list-write has no B-DOS hook, so it's a raw SD write (same lesson as the injected BD_RECORDS gap). Makes the i145b CSD read AND the i195 record-claim/name emulation-verifiable. Depends on i145a (real CSD) + i193 (the read+write protocol).
+    Model the Trinity SD raw-SPI seam in the harness (mirror enc28j60.go): ports &DC select/busy + &DF data + the SD command state machine — the COMPREHENSIVE raw-SD model so EVERY raw-SD operation is faithfully emulated (NOT hook-injected — the BD_RECORDS-class gap): the CSD read (CMD9 -> configurable capacity, from i145a's real value), the card-absolute list-sector READ (CMD17, for free-record detection / i141), the list-sector/claim WRITE (i195), and HWSAD sector writes — all per Colin's actual mechanism (i193). Makes i145b (CSD), i141 (list read), and i195 (list write/name) emulation-verifiable end to end. Depends on i145a (real CSD) + i193 (the protocol).
   status: OPEN
   depends_on: [i145a]
   kind: leaf
@@ -3235,7 +3235,7 @@
   description: |
     The i121 payoff on real hardware, autonomous: 'start trinload -> push the serve program (push-serve.py) -> tftp put each .mgt disk image (validated size==819200, streamed into a free record + claimed) -> tftp put tftp.done -> return to trinload', then read a stored record back (servable-raw) and byte-compare to confirm the store. Unblocked once the production CSD read lands (i145b, so the server finds free records) and the full experiment is emulation-proven (i145d). Agent-actionable: trinload runs on the SAM (192.168.2.75) over the LAN from the Pi; push via tools/trinload-push/push-serve.py + curl tftp://; the 19 build/*.mgt are valid + staged (/tmp/push-all-disks.sh batches them). NO Pete needed for the push+store+readback; booting a pushed record to watch it run is a downstream nicety (autonomous via i135 auto-boot, or a Pete-present spot-check) and NOT a blocker for this item.
   status: OPEN
-  depends_on: [i145, i121d, i195]
+  depends_on: [i145, i121d, i195, i141]
   kind: leaf
   owner: agent
 
