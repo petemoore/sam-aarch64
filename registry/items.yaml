@@ -2150,9 +2150,11 @@
   title: "emulation completeness — PHY link-up model, SD/RST-8 stub, delete NETBOOT_HOSTTEST carve-outs"
   description: |
     Three remaining gaps in the emulation layer: (1) model PHY link-up (PHSTAT2.LSTAT + drop-TX-while-down) so the pre-link ARP drop is reproducible in emulation; (2) SD/RST-8 stub so full client fetch runs harness-end-to-end; (3) fold server/serve/http wrappers into the harness and delete NETBOOT_HOSTTEST carve-outs (→ i126). Together these make the emulator a complete, trusted gate for every netboot path.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 469, role: completing}
   parent: i124
   refs: [tools/netboot-oracle/z80/enc28j60.go, tools/netboot-oracle/z80/harness.go, src/netboot/bdos_seam.asm, i126, i127, i131]
 
