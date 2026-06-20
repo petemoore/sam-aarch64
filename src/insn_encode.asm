@@ -620,13 +620,7 @@ enc_fsid_adr:   ld      a, FSID_ADR
 ;   OPVAL[idx]+1..+7 = width, Rm, shift_kind, imm6 (idx=1 for tst, 2 otherwise).
 enc_shifted:
 ; Wipe the three OPVAL_ARRAY entries we will write.
-                ld      hl, OPVAL_ARRAY
-                ld      b, 30
-                xor     a
-enc_sh_wipe:
-                ld      (hl), a
-                inc     hl
-                djnz    enc_sh_wipe
+                call    enc_wipe_opval30
 
 ; Determine if tst (mnem 46): for tst the ShiftedReg is at OPVAL index 1
 ; (Rn, ShiftedReg); for all others it is at index 2 (Rd, Rn, ShiftedReg).
@@ -637,18 +631,12 @@ enc_sh_wipe:
 ; Non-tst: populate OPVAL_ARRAY[0] = Rd (kind + reg), [1] = Rn.
                 xor     a
                 call    enc_nth_operand             ; HL -> op0 (Rd)
-                ld      a, (hl)                     ; kind
-                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
-                inc     hl
-                ld      a, (hl)                     ; reg
-                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1), a
+                ld      de, OPVAL_ARRAY + 0 * OPVAL_STRIDE
+                call    enc_copy_kindreg            ; OPVAL[0] = kind, reg
                 ld      a, 1
                 call    enc_nth_operand             ; HL -> op1 (Rn)
-                ld      a, (hl)
-                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
-                inc     hl
-                ld      a, (hl)
-                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+                ld      de, OPVAL_ARRAY + 1 * OPVAL_STRIDE
+                call    enc_copy_kindreg            ; OPVAL[1] = kind, reg
 ; Populate OPVAL_ARRAY[2] from stream (explicit) or enc_sr_synth (coerced).
                 ld      a, (enc_sr_coerced)
                 or      a
@@ -663,11 +651,8 @@ enc_sh_is_tst:
 ; tst: only Rn at op0; ShiftedReg at op1.  Rd is xzr, baked by encoder.
                 xor     a
                 call    enc_nth_operand             ; HL -> op0 (Rn)
-                ld      a, (hl)
-                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
-                inc     hl
-                ld      a, (hl)
-                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1), a
+                ld      de, OPVAL_ARRAY + 0 * OPVAL_STRIDE
+                call    enc_copy_kindreg            ; OPVAL[0] = kind, reg
 ; Populate OPVAL_ARRAY[1] from stream (explicit) or enc_sr_synth (coerced).
                 ld      a, (enc_sr_coerced)
                 or      a
@@ -746,29 +731,17 @@ enc_eval_at_hl:
 ;   OPVAL[2]+2 Rm, OPVAL[2]+3 extend, OPVAL[2]+4 imm3.
 enc_extended:
 ; Wipe OPVAL_ARRAY entries 0..2.
-                ld      hl, OPVAL_ARRAY
-                ld      b, 30
-                xor     a
-enc_ext_wipe:
-                ld      (hl), a
-                inc     hl
-                djnz    enc_ext_wipe
+                call    enc_wipe_opval30
 
 ; Populate OPVAL_ARRAY[0] = Rd, [1] = Rn (plain regs from stream).
                 xor     a
                 call    enc_nth_operand             ; HL -> op0 (Rd)
-                ld      a, (hl)
-                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
-                inc     hl
-                ld      a, (hl)
-                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1), a
+                ld      de, OPVAL_ARRAY + 0 * OPVAL_STRIDE
+                call    enc_copy_kindreg            ; OPVAL[0] = kind, reg
                 ld      a, 1
                 call    enc_nth_operand             ; HL -> op1 (Rn)
-                ld      a, (hl)
-                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
-                inc     hl
-                ld      a, (hl)
-                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+                ld      de, OPVAL_ARRAY + 1 * OPVAL_STRIDE
+                call    enc_copy_kindreg            ; OPVAL[1] = kind, reg
 
 ; Populate OPVAL_ARRAY[2] from op2 (ExtendedReg in stream).
                 ld      a, 2
@@ -811,13 +784,8 @@ enc_ext_wipe:
 
 enc_mem:
 ; Wipe OPVAL_ARRAY entries 0..2 (30 bytes) + OPMEM_OFF (8 bytes).
-                ld      hl, OPVAL_ARRAY
-                ld      b, 30
-                xor     a
-enc_mem_wipe:
-                ld      (hl), a
-                inc     hl
-                djnz    enc_mem_wipe
+; enc_wipe_opval30 leaves A = 0, which we reuse to wipe OPMEM_OFF.
+                call    enc_wipe_opval30
                 ld      hl, OPMEM_OFF
                 ld      b, 8
 enc_mem_wipe_off:
@@ -835,11 +803,8 @@ enc_mem_wipe_off:
 ; Non-pair: populate OPVAL[0] = Rt (kind + reg), OPVAL[1] = OpMem.
                 xor     a
                 call    enc_nth_operand             ; HL -> op0 (Rt)
-                ld      a, (hl)
-                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a ; kind
-                inc     hl
-                ld      a, (hl)
-                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1), a ; reg
+                ld      de, OPVAL_ARRAY + 0 * OPVAL_STRIDE
+                call    enc_copy_kindreg            ; OPVAL[0] = kind, reg
                 ld      a, 1
                 call    enc_nth_operand             ; HL -> op1 = [0x08][shape][...]
                 ld      de, OPVAL_ARRAY + 1 * OPVAL_STRIDE
@@ -851,18 +816,12 @@ enc_mem_pair:
 ; Pair: OPVAL[0]=Rt1, OPVAL[1]=Rt2, OPVAL[2]=OpMem.
                 xor     a
                 call    enc_nth_operand             ; HL -> op0 (Rt1)
-                ld      a, (hl)
-                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
-                inc     hl
-                ld      a, (hl)
-                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1), a
+                ld      de, OPVAL_ARRAY + 0 * OPVAL_STRIDE
+                call    enc_copy_kindreg            ; OPVAL[0] = kind, reg
                 ld      a, 1
                 call    enc_nth_operand             ; HL -> op1 (Rt2)
-                ld      a, (hl)
-                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
-                inc     hl
-                ld      a, (hl)
-                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+                ld      de, OPVAL_ARRAY + 1 * OPVAL_STRIDE
+                call    enc_copy_kindreg            ; OPVAL[1] = kind, reg
                 ld      a, 2
                 call    enc_nth_operand             ; HL -> op2 = [0x08][shape][...]
                 ld      de, OPVAL_ARRAY + 2 * OPVAL_STRIDE
@@ -1121,14 +1080,10 @@ enc_bitfield:
                 ld      a, (hl)
                 ld      (enc_rn), a
                 ld      a, 2
-                call    enc_nth_operand
-                call    enc_eval_at                 ; lsb -> expr_result
-                ld      a, (expr_result)
+                call    enc_eval_nth                ; lsb
                 ld      (enc_lsb), a
                 ld      a, 3
-                call    enc_nth_operand
-                call    enc_eval_at                 ; width -> expr_result
-                ld      a, (expr_result)
+                call    enc_eval_nth                ; width
                 ld      (enc_width), a
                 jr      enc_bf_compute
 enc_bf_bfc:
@@ -1136,14 +1091,10 @@ enc_bf_bfc:
                 ld      a, 31
                 ld      (enc_rn), a
                 ld      a, 1
-                call    enc_nth_operand
-                call    enc_eval_at
-                ld      a, (expr_result)
+                call    enc_eval_nth
                 ld      (enc_lsb), a
                 ld      a, 2
-                call    enc_nth_operand
-                call    enc_eval_at
-                ld      a, (expr_result)
+                call    enc_eval_nth
                 ld      (enc_width), a
 enc_bf_compute:
                 ld      a, (enc_mnem)
@@ -1208,9 +1159,7 @@ enc_ror:
                 ld      (enc_rn), a
                 ld      (enc_immr), a               ; immr := Rn (Rn<<16)
                 ld      a, 2
-                call    enc_nth_operand             ; HL -> op2 (shift)
-                call    enc_eval_at
-                ld      a, (expr_result)
+                call    enc_eval_nth                ; HL -> op2 (shift)
                 and     &3f
                 ld      (enc_imms), a               ; imms := shift
                 ld      de, enc_base_extr64
@@ -1620,13 +1569,7 @@ enc_barrier_crm:
 ; field math lives in the existing encoders; this is the stream->OPVAL
 ; staging the .tbn path's parser does on the other side.
 enc_sysname:
-                ld      hl, OPVAL_ARRAY             ; wipe the entries we touch
-                ld      b, 30
-                xor     a
-enc_sn_wipe:
-                ld      (hl), a
-                inc     hl
-                djnz    enc_sn_wipe
+                call    enc_wipe_opval30           ; wipe the entries we touch
                 ld      a, (enc_op_count)
                 ld      (main_op_count), a
                 or      a
@@ -1730,6 +1673,44 @@ enc_nth_loop:
                 call    enc_skip_operand
                 pop     bc
                 djnz    enc_nth_loop
+                ret
+
+; -- enc_wipe_opval30 — zero the three OPVAL_ARRAY entries (30 bytes) ---
+; Every compound-operand encoder clears OPVAL[0..2] before populating
+; the fields it uses; this collapses the repeated 10-byte wipe loop.
+; Exit: HL = OPVAL_ARRAY+30, A = 0 (so a caller can chain a further
+; A-seeded fill, e.g. enc_mem's OPMEM_OFF wipe).  Clobbers B, HL, A.
+enc_wipe_opval30:
+                ld      hl, OPVAL_ARRAY
+                ld      b, 30
+                xor     a
+enc_wipe_opval30_loop:
+                ld      (hl), a
+                inc     hl
+                djnz    enc_wipe_opval30_loop
+                ret
+
+; -- enc_copy_kindreg — copy a [kind][reg] operand pair into an OPVAL ---
+; slot.  HL -> operand (kind byte first), DE -> OPVAL slot +0.  Writes
+; OPVAL+0 = kind, OPVAL+1 = reg.  Exit: HL and DE both advanced by 1
+; (pointing at the reg byte / OPVAL+1).  Clobbers A, HL, DE.
+enc_copy_kindreg:
+                ld      a, (hl)
+                ld      (de), a
+                inc     hl
+                inc     de
+                ld      a, (hl)
+                ld      (de), a
+                ret
+
+; -- enc_eval_nth — fetch the Nth operand and evaluate its IMM_EXPR -----
+; Input:  A = operand index.
+; Output: A = low byte of the evaluated value; expr_result holds the
+;         full 8-byte LE result.  Clobbers A, BC, HL.
+enc_eval_nth:
+                call    enc_nth_operand             ; HL -> opN
+                call    enc_eval_at                 ; expr_result := value
+                ld      a, (expr_result)
                 ret
 
 ; -- enc_eval_at — HL -> IMM_EXPR operand; evaluate into expr_result ----

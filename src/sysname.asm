@@ -370,11 +370,21 @@ sysname_lmpr_restore:
                 out     (250), a
                 ret
 
-
-sysname_lookup_sysreg:
+; sysname_lookup_prep — the prologue shared by all four sysname_lookup_*
+; entries: stage the operand name into the section-B comm buffer with
+; LMPR at the runtime default, ready for the page-13 matcher.
+; Input:  A = operand index (consumed by sysname_setup).
+; Output: sysname_ptr / sysname_len set; comm buffer staged; LMPR =
+;         LMPR_DEFAULT_RUNTIME with the caller's LMPR saved for restore.
+sysname_lookup_prep:
                 call    sysname_setup       ; sysname_ptr / sysname_len set
                 call    sysname_lmpr_default_in
                 call    sysname_stage_to_comm
+                ret
+
+
+sysname_lookup_sysreg:
+                call    sysname_lookup_prep
                 call    paged_call
                 defw    SYSREG_SYSREG_ENTRY
                 defb    SYSREG_DATA_PAGE
@@ -403,9 +413,7 @@ sysname_lookup_sysreg_miss:
 ; Output: B = op1, C = op2.
 ; -----------------------------------------------------------------------
 sysname_lookup_pstate:
-                call    sysname_setup
-                call    sysname_lmpr_default_in
-                call    sysname_stage_to_comm
+                call    sysname_lookup_prep
                 call    paged_call
                 defw    SYSREG_PSTATE_ENTRY
                 defb    SYSREG_DATA_PAGE
@@ -431,9 +439,7 @@ sysname_lookup_pstate_miss:
 ; Input:  A = operand index.
 ; -----------------------------------------------------------------------
 sysname_lookup_dc:
-                call    sysname_setup
-                call    sysname_lmpr_default_in
-                call    sysname_stage_to_comm
+                call    sysname_lookup_prep
                 call    paged_call
                 defw    SYSREG_DC_ENTRY
                 defb    SYSREG_DATA_PAGE
@@ -466,9 +472,7 @@ sysname_lookup_dc_miss:
 ; Input:  A = operand index.
 ; -----------------------------------------------------------------------
 sysname_lookup_tlbi:
-                call    sysname_setup
-                call    sysname_lmpr_default_in
-                call    sysname_stage_to_comm
+                call    sysname_lookup_prep
                 call    paged_call
                 defw    SYSREG_TLBI_ENTRY
                 defb    SYSREG_DATA_PAGE
