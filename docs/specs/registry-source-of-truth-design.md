@@ -362,6 +362,7 @@ exit-code-clean (0 ok / 1 validation-or-drift / 2 usage). Operates only on
 | `prioritize --id iN --to-top` | move iN to rank 1 in priority.yaml, then validate+gen |
 | `move --id iN --before iM` | place iN immediately before iM, then validate+gen |
 | `move --id iN --after iM` | place iN immediately after iM, then validate+gen |
+| `view --id iN\|qN [--format text\|json]` | print one record + computed dependents and priority rank |
 | `next-id [--space items\|questions]` | print the next free id (source ∪ ledger) |
 | `add --id … --title … --desc … --status … --owner … [--parent …] [--dep …] [--ref …]` | append a canonical record |
 | `split --parent iN --child-id iN-bM --title …` | set parent `kind: umbrella`, add a leaf child; rewrite dependents onto the new leaves |
@@ -373,6 +374,17 @@ exit-code-clean (0 ok / 1 validation-or-drift / 2 usage). Operates only on
 Every mutating subcommand ends by running `validate` then `gen`, leaving the
 working tree consistent (source + the four regenerated `.md`). This replaces the
 hand-rolled `awk 'NR==142'` / boundary-marker scripts agents have resorted to.
+
+**Concurrency.** Each mutating subcommand takes an exclusive advisory lock
+(`registry/.lock`, flock) around its whole load→mutate→write, and the source
+writers replace files atomically (write a temp sibling, fsync, rename). Two
+simultaneous mutators therefore serialize rather than racing to a last-writer-
+wins data loss, and a concurrent reader always sees a complete file. A mutator
+waits up to ~10 s for the lock, then errors instead of hanging (a crashed holder
+releases the flock on exit, so no deadlock). Read-only queries do not lock; `gen`
+writes only the regenerable `.md` views, so it is not locked either. This makes
+"Pete adds an item while an agent works" safe; multiple checkouts working in
+parallel additionally need git-level merge handling, which is out of scope here.
 
 ## CI sync-check + regen
 

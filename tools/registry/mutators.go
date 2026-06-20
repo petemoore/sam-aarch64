@@ -300,7 +300,7 @@ func genToOutDirOrStdout(reg *Registry, paths mutatorPaths) {
 			os.Exit(1)
 		}
 		outPath := paths.outDir + "/" + w.filename
-		if err := os.WriteFile(outPath, data, 0o644); err != nil {
+		if err := atomicWriteFile(outPath, data, 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "registry gen: write %s: %v\n", outPath, err)
 			os.Exit(1)
 		}
@@ -314,7 +314,7 @@ func genToOutDirOrStdout(reg *Registry, paths mutatorPaths) {
 			os.Exit(1)
 		}
 		outPath := paths.outDir + "/backlog.md"
-		if err := os.WriteFile(outPath, data, 0o644); err != nil {
+		if err := atomicWriteFile(outPath, data, 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "registry gen: write %s: %v\n", outPath, err)
 			os.Exit(1)
 		}

@@ -3,8 +3,44 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
+
+// atomicWriteFile writes data to path atomically: it writes a temp file in the
+// same directory, fsyncs it, then renames it over path (rename is atomic within
+// a filesystem on POSIX). A crash or a concurrent reader therefore never sees a
+// half-written registry file — readers see either the old or the new content,
+// never a truncated one. Paired with the registry lock (lock.go), this makes a
+// mutation safe against another process reading or writing concurrently.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("atomic write %s: create temp: %w", path, err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once renamed; cleans up on any error path
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("atomic write %s: %w", path, err)
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return fmt.Errorf("atomic write %s: chmod: %w", path, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("atomic write %s: sync: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("atomic write %s: close: %w", path, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("atomic write %s: rename: %w", path, err)
+	}
+	return nil
+}
 
 // writeItems serializes items to path in canonical YAML order.
 // The output uses fixed key order and two-space indent as the canonical serializer
@@ -20,7 +56,7 @@ func writeItems(path string, items []Item) error {
 		sb.WriteString("\n")
 		writeItemRecord(&sb, it)
 	}
-	return os.WriteFile(path, []byte(sb.String()), 0o644)
+	return atomicWriteFile(path, []byte(sb.String()), 0o644)
 }
 
 // writeQuestions serializes questions to path in canonical YAML order.
@@ -33,7 +69,7 @@ func writeQuestions(path string, questions []Question) error {
 		sb.WriteString("\n")
 		writeQuestionRecord(&sb, q)
 	}
-	return os.WriteFile(path, []byte(sb.String()), 0o644)
+	return atomicWriteFile(path, []byte(sb.String()), 0o644)
 }
 
 // writeItemRecord writes a single item record in canonical YAML form to sb.
