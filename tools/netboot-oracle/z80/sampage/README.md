@@ -10,8 +10,9 @@ It is a faithful port of the assembler harness's inline pager
 extracted so the netboot harness (`..`) gains real paging from **one** memory
 model rather than a flat model with a paged one bolted beside it (CLAUDE.md §7).
 
-This is the **down-payment on i190** (fold the two Go SAM Coupé emulators onto one
-memory core): i190 promotes this package to the shared core both harnesses import.
+This is the **down-payment on i190** — ONE shared SAM-emulation core both harnesses
+import (not a merge of the harnesses, which may stay distinct). i190 makes the
+assembler harness import this core too, so the paging model is implemented once.
 
 What/how/why deep doc: the package doc comment in `sampage.go` (memory-map table,
 the flat-equivalent default config). Caller: the parent `z80` harness's `mem`.
