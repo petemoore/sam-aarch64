@@ -1356,7 +1356,7 @@
   title: "SAMBOOT: document the SAM boot chain from the captured ROM/EEPROM + public source"
   description: |
     Diff rom.bin vs stock SAM ROM 3.0, confirm the EEPROM bootblock matches the public reproduction, and document the chip->bootblock->B-DOS handoff + where the injection hook attaches.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i87a-b1, i135a, i87a-b2]
   kind: leaf
   owner: agent
