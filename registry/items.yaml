@@ -2808,7 +2808,7 @@
   title: "SAMBOOT BIOS: editable default-boot-record config in Trinity EEPROM (boot record N, or none) + editor"
   description: |
     A boot config in a Trinity EEPROM chunk (like the 'Trinity Network' chunk): a default-boot-record setting (boot record N at startup, or none -- any disk). The injection prototype reads it; a config editor sets it. The SAM 'BIOS'.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i135a]
   kind: leaf
   owner: agent
