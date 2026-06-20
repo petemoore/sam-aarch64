@@ -1322,7 +1322,7 @@
   title: "SAMBOOT: run the one-shot dumper on the SAM to capture rom.bin + eeprom.bin"
   description: |
     Push the one-shot dumper onto the SAM via trinload and tftp-get rom.bin + eeprom.bin to the Pi/Mac. Agent-drivable: the capture is network-driven (trinload listener left running on the SAM; SAM reachable at 192.168.2.75) and read-only, so an agent runs it without a human in the loop — this is the same agent-driven loop samboot.md §1 describes. Captures the artifacts that unblock the offline analysis; the EEPROM capture is the mandatory pre-flash backup.
-  status: OPEN
+  status: DONE
   depends_on: [i173]
   kind: umbrella
   owner: agent
@@ -1344,10 +1344,12 @@
   title: Recapture rom1.bin (patched ROM high 16 KB) after the dumper redesign
   description: |
     rom1.bin was NOT captured 2026-06-21: the i173 dumper's dumper_read_rom1 scratch-page path crashed the SAM (page-0 clobber, see i188). Once the dumper is redesigned + emulation-verified (i188), re-run the capture to get rom1.bin so rom.bin = rom0.bin + rom1.bin is complete (unblocks i87b diff + i135c).
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i188]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 528, role: completing}
   parent: i87a
 
 - id: i87b
