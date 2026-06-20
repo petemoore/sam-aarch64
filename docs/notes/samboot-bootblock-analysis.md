@@ -742,7 +742,7 @@ cold-init milestones and resolves the ordering decisively.
 > the authority; the init-ordering finding above (init runs before the fetch) still
 > holds but is tangential — the bootblock never touches the `&5C26` STREAMS band.
 
-## 8. RESOLVED: the EEPROM capture is chunk-ordered — the boot is coherent (PR-pending)
+## 8. RESOLVED: the EEPROM capture is chunk-ordered — the boot is coherent (PR #588)
 
 The `&6`/`§7` "contradiction" dissolves once the **capture's address layout** is
 read correctly. The dumper (`src/netboot/netboot_dumper.asm`) reads the EEPROM **by
