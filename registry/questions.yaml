@@ -31,3 +31,8 @@
   body: |
     Pursue an on-SAM preprocessor (i31: .if build-constraints + macro expansion) now, and at what scope? Host-side preprocessing already covers this in the current pipeline (asmparse/text2bin), so moving it on-SAM is a new, beyond-M7 feature with genuine scope choices (which .if constraint syntax; macro definition/expansion semantics; integration point vs the existing host preprocess; Go-authority side). Not a port of existing Go authority — needs Pete's go/no-go + scope before a multi-session implementation. Gates i31.
   owner: pete
+
+- id: q40
+  body: |
+    BD_RECORDS width: replicate Colin's 16-bit cap, or widen to 32-bit for >51GB cards? FINDING (i145e POC, 2026-06-22): Colin's B-DOS 1.5t computes the record count as a full 32-bit divide but stores BD_RECORDS in a 16-bit DVAR (&80C4) — at &A486 only 'push hl' keeps the low 16 bits, so any card whose record count exceeds 65535 WRAPS. Pete's 64GB SDHC -> true 80117 records but stored 14581. The block-count decode is fully 32-bit/correct; only the records STORE caps. AGENT RECOMMENDATION (non-blocking): i145b ports Colin faithfully (16-bit) by default — 65535 x 800KB ~= 51GB is ample for storing a handful of .mgt disk images, and it matches hardware exactly. Widening to 32-bit (a few extra DVAR bytes + wider compare in bdos_find_free_record) is a small, optional future enhancement only needed to use >51GB of a >51GB card. This question only gates the OPTIONAL widening, not i145b's faithful port. Decide if/when we want >51GB addressability.
+  owner: pete

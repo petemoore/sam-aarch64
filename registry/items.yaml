@@ -2758,11 +2758,11 @@
   parent: i119
 
 - id: i145a
-  title: "CSD-read hardware probe — trinload-pushable: read the real SD CSD over SPI + serve it back"
+  title: "CSD-read probe (emulation): author the trinload-pushable probe + prove init->CMD9->decode->serve vs the model"
   description: |
-    Trinload-pushable Z80 probe (mirror netboot_dumper) that reads the SD CSD over the Trinity SPI and serves the raw 16 CSD bytes back. PORT THE SD INTERFACE FROM COLIN'S DISASSEMBLY (i193 = the authority) — the &38 microcontroller init, the CMD ladder, and the &DC/&DF busy-poll/&3F-auto-null timing as B-DOS 1.5t actually does it; a generic SD-SPI + CSD-decode reference (chat archive) cross-checks. Reuse encdrv/eeprom SPI primitives. Decode CSD v1.0 vs v2.0 so ANY card size is inferred, never hardcoded (host-side decode ok). Run on real hardware (trinload running, SAM 192.168.2.75) to capture the true CSD + confirm timing. Prefer a non-disruptive bare CMD9 if the card is already B-DOS-initialised. Plan: docs/plans/i145-sd-csd-read.md.
-  status: IN_PROGRESS
-  depends_on: [i193]
+    Author the trinload-pushable CSD probe (mirror netboot_dumper: read a region -> serve over TFTP), PORTING the SD interface from Colin's code per i193 (the &38 microcontroller init, the CMD ladder, CMD9 CSD read, the &DC/&DF busy-poll + &3F auto-null timing) — reuse the encdrv/eeprom SPI primitives. Decode CSD v1.0/v2.0 so ANY card size is inferred, never hardcoded (host-side decode ok). PROVE it end-to-end in EMULATION against the i145c model (which i145f has validated by running Colin's real driver against it) BEFORE any hardware run — the emulation-first gate (Pete 2026-06-22: a trinload crash on real HW is unrecoverable). The actual real-CSD capture on hardware is the separate i145g. Depends i193 (port authority) + i145c (model) + i145f (model validated).
+  status: OPEN
+  depends_on: [i193, i145c, i145f]
   kind: leaf
   owner: agent
   parent: i145
@@ -2770,9 +2770,9 @@
 - id: i145b
   title: "Production SD CSD read -> BD_RECORDS, wired into serve_main + client_main startup"
   description: |
-    Fold the i145a SD-init/CSD-read/capacity-decode into a routine called at serve_main (+ client_main) startup that sets BD_RECORDS = sectors/1600 from the card, replacing the injected value, so a real push finds a free record. Reuses i145a's proven SD code + real-CSD findings.
+    Fold the proven SD-init/CMD9/CSD-read/decode (from i145a) into a routine called at serve_main + client_main startup that sets BD_RECORDS from the card, REPLACING the injected value (the shortcut that hid the i145 gap). Prefer a NON-DISRUPTIVE bare CMD9 (the card is already B-DOS-initialised at boot) over a full re-init. Faithfully PORTS Colin's 16-bit BD_RECORDS behaviour by default (matches hardware; the 16-bit cap holds 65535 records x 800KB ~= 51GB, ample for the disk-image-storage use case); widening to 32-bit for >51GB cards is the optional enhancement tracked in the BD_RECORDS-width question. Emulation-verified against the i145c model (BD_RECORDS computed, not injected). Depends i145a (proven SD-read code) + i145c (model).
   status: OPEN
-  depends_on: [i145a]
+  depends_on: [i145a, i145c]
   kind: leaf
   owner: agent
   parent: i145
@@ -2780,9 +2780,9 @@
 - id: i145c
   title: Harness SD-SPI/CSD model — model the DC/DF seam + SD command state machine + configurable CSD
   description: |
-    Model the Trinity SD raw-SPI seam in the harness (mirror enc28j60.go): ports &DC select/busy + &DF data + the SD command state machine — the COMPREHENSIVE raw-SD model so EVERY raw-SD operation is faithfully emulated (NOT hook-injected — the BD_RECORDS-class gap): the CSD read (CMD9 -> configurable capacity, from i145a's real value), the card-absolute list-sector READ (CMD17, for free-record detection / i141), the list-sector/claim WRITE (i195), and HWSAD sector writes — all per Colin's actual mechanism (i193). Makes i145b (CSD), i141 (list read), and i195 (list write/name) emulation-verifiable end to end. Depends on i145a (real CSD) + i193 (the protocol).
-  status: IN_PROGRESS
-  depends_on: [i145a]
+    Model the Trinity &DC/&DF SD-SPI seam + the SD command state machine + a CONFIGURABLE CSD (v1.0/v2.0) in the netboot harness (mirror enc28j60.go/eeprom.go), FAITHFUL to i193 (the documented protocol is the spec — built from the doc, NOT derived from a hardware capture). Built FIRST in the emulation-first ladder: it is validated by running Colin's real B-DOS 1.5t driver against it (i145f / and the POC i145e) BEFORE any new code runs in it, and it ends the inject-BD_RECORDS shortcut that hid the i145 gap. The real CSD bytes captured on hardware (i145g) later re-parameterise it faithfully. Depends i193.
+  status: OPEN
+  depends_on: [i193]
   kind: leaf
   owner: agent
   parent: i145
@@ -2792,7 +2792,47 @@
   description: |
     The experiment that was never faithfully emulated: trinload load -> push serve program -> serve_main reads EEPROM + the modelled CSD -> BD_RECORDS computed (NOT injected) -> push a .mgt -> validate size==819200 -> stream to highest free record -> claim. Asserts the real-hardware path end to end. The test whose absence let the BD_RECORDS=0 hardware failure slip through.
   status: OPEN
-  depends_on: [i145b, i145c]
+  depends_on: [i145b, i145c, i145f]
+  kind: leaf
+  owner: agent
+  parent: i145
+
+- id: i145e
+  title: "POC: run Colin's real 1.5t CSD-decode + records-math against a hand-filled CSD buffer (no SPI)"
+  description: |
+    POC-1 (DONE this session). Load Colin's B-DOS 1.5t fork binary (bdos15t-beta6.bin) into the netboot harness at the section-B aliases (the DOS page runs paged into &4000-&7FFF, so real &Axxx code = &6xxx) and run his REAL, hardware-proven CSD-decode (&A736 -> &6736) + records-math (&A45A -> &645A) against a HAND-FILLED 16-byte CSD buffer at &780F (no SPI). Asserts Colin's 32-bit block-count + BD_RECORDS match an independent Go reimpl of the i193 section-6 formula across v1/v2 cards incl. Pete's 64GB SDHC. Proves (a) the harness can execute Colin's code = the run/paging recipe for i145f, and (b) his capacity math. FINDING: Colin's BD_RECORDS is a 16-bit DVAR (&80C4) that WRAPS for cards >51GB (64GB -> 14581 not 80117 records) — the BD_RECORDS-width question. Test: tools/netboot-oracle/z80/csd_decode_colin_test.go (skips if the proprietary binary is absent via $BDOS15T_BIN). First rung of the emulation-first confidence ladder Pete defined 2026-06-22: validate the emulation with code we KNOW runs on hardware before running new code in it.
+  status: IN_PROGRESS
+  depends_on: [i193]
+  kind: leaf
+  owner: agent
+  parent: i145
+
+- id: i145f
+  title: "Validate the SD-SPI model by running Colin's full 1.5t SD-init ladder (&A623 -> CMD9) against it"
+  description: |
+    POC-2 / model-validation gate. Run Colin's FULL SD-init ladder (DI; CALL &A623: the &38 microcontroller wake + CMD0/8/55+41/58/59/9/16 + the &FE-token 16-byte CSD read at &A711) against the i145c SD-SPI model — the model serves a synthetic CSD over the modelled &DC/&DF SPI, with NO hand-filled buffer, so the CSD must arrive via modelled SPI and decode to the correct BD_RECORDS. This is the confidence gate: it proves the SD-SPI emulation is FAITHFUL by running Colin's hardware-proven driver end-to-end BEFORE any new probe/serve code runs in the model (emulation-first ladder, Pete 2026-06-22; a trinload crash on real HW is unrecoverable, so the model must be trustworthy first). Builds on i145e's run/paging recipe + i145c's model.
+  status: OPEN
+  depends_on: [i145c, i145e]
+  kind: leaf
+  owner: agent
+  parent: i145
+
+- id: i145g
+  title: "CSD probe HARDWARE run: push the emulation-proven probe to the real SAM, capture the real CSD"
+  description: |
+    Hardware half of the CSD probe (split from i145a per emulation-first). Push the EMULATION-PROVEN probe (i145a) to the real SAM (trinload @ 192.168.2.75), run it, and tftp get csd.bin to capture the REAL CSD bytes + confirm SPI timing/token-retry behaviour. Runs ONLY AFTER i145a passes in emulation against the i145f-validated model — the safety gate Pete set 2026-06-22 (a trinload crash on hardware cannot be recovered remotely). The captured real CSD then re-parameterises the i145c model faithfully. owner:agent (hardware reachable, trinload left running) but irreversible-risk, so gated behind emulation.
+  status: OPEN
+  depends_on: [i145a, i145f]
+  kind: leaf
+  owner: agent
+  parent: i145
+
+- id: i145h
+  title: "Extended validation: run Colin's write-record / select-record / read-back flow against the model"
+  description: |
+    Extended emulation validation (Pete's suggestion 2026-06-22): run Colin's write-record / select-record / read-back flow against the model — the fuller 'write a disk to storage, select that record, [boot it]' test, the strongest faithfulness check since it exercises CMD17/CMD24 single-block read+write + record selection (&A0A2) through Colin's REAL code. Needs the i145c model extended with CMD17/CMD24 + enough B-DOS scaffolding to drive HRECORD/HSAVE/HRSAD. Aspirational/larger than i145f, not on the critical CSD path, but the highest-confidence validation of the whole storage seam. Depends i145c (extended) + i145f.
+  status: OPEN
+  depends_on: [i145c, i145f]
   kind: leaf
   owner: agent
   parent: i145
@@ -3236,7 +3276,7 @@
   description: |
     The i121 payoff on real hardware, autonomous: 'start trinload -> push the serve program (push-serve.py) -> tftp put each .mgt disk image (validated size==819200, streamed into a free record + claimed) -> tftp put tftp.done -> return to trinload', then read a stored record back (servable-raw) and byte-compare to confirm the store. Unblocked once the production CSD read lands (i145b, so the server finds free records) and the full experiment is emulation-proven (i145d). Agent-actionable: trinload runs on the SAM (192.168.2.75) over the LAN from the Pi; push via tools/trinload-push/push-serve.py + curl tftp://; the 19 build/*.mgt are valid + staged (/tmp/push-all-disks.sh batches them). NO Pete needed for the push+store+readback; booting a pushed record to watch it run is a downstream nicety (autonomous via i135 auto-boot, or a Pete-present spot-check) and NOT a blocker for this item.
   status: OPEN
-  depends_on: [i145, i121d, i195, i141]
+  depends_on: [i145a, i145b, i145c, i145d, i145e, i121d, i195, i141]
   kind: leaf
   owner: agent
 
