@@ -3492,7 +3492,7 @@
   title: "i201b: memory compound-form encoder (encodeMemInst, 6 MemShape variants)"
   description: |
     Second sub-brick of i201. Port encodeMemInst (pass2.go:762-902): all MemShape variants - MemBase [xn], MemBaseOff/Pre/Post (scaled imm12 / signed imm9), pair imm7 (ldp/stp), stur/ldur unscaled, MemBaseIdx/Shifted/Extended (register offset with extend/shift). Wire into encode_inst's pre-form-table dispatch (pass2.go:232-234). REUSES encode_mem_word (src/slots/mem.asm) + fold_mem_imm12/fold_mem_imm9/fold_pair_imm7 (insn_run.asm) + eval_expr_const. New work = parse the OpMem operand wire format (shape byte + shape-dependent payload) and route each shape. Faithful port (CLAUDE.md s6). Depends on i199, i201a. Extends the boot self-test + Go authority fixtures. SimCoupe-gated.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i199, i201a]
   kind: leaf
   owner: agent
