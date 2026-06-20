@@ -25,11 +25,15 @@
 ; VERIFICATION. The EEPROM-read + serve path is host-verifiable under the i80
 ; emulation: dumper_test.go programs known EEPROM chunks, drives a bare RRQ for
 ; eep0.bin through serve_serve_once, and asserts the streamed DATA reconstructs
-; the programmed 16 KB byte-for-byte. The ROM-paging read is HARDWARE-FIRST: the
-; flat harness has no patched-ROM contents and does not act on LMPR/HMPR, so it is
-; guarded out of the host-test build and every paging assumption ships with a
-; `VERIFY ON HARDWARE` comment (i87a captures, i87b diffs). Emulation-verified is
-; not hardware-verified (CLAUDE.md §5).
+; the programmed 16 KB byte-for-byte. The ROM-paging read (dumper_read_rom0/rom1)
+; is now ALSO emulation-exercised: since i181 the netboot harness has a real SAM
+; pager (LMPR/HMPR + ROM write-protect), so dumper_rompaging_test.go loads the
+; trinload build and runs both paths — rom0 copies ROM0 to STAGE and RETs clean;
+; rom1 REPRODUCES the i87a crash (scratch page P-1=0 clobbers low memory; LMPR not
+; restored). What stays HARDWARE-GATED is only the real patched-ROM CONTENTS (the
+; captured bytes — i87a captures, i87b diffs; i190a loads the real ROM in place of
+; the synthetic fixtures). The i188 redesign fixes the rom1 path and flips the
+; characterization. Emulation-verified is not hardware-verified (CLAUDE.md §5).
 
                 org     &8000
 
