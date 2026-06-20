@@ -2783,9 +2783,11 @@
   title: "CSD->BD_RECORDS decode + emulation proof (gated module + test); ship pending the boot-budget page-out"
   description: |
     DONE this session. The production SD CSD read + the CSD->blocks->BD_RECORDS decode (src/netboot/sd_csd.asm: full SD-init ladder + CMD9 + the v1/v2 capacity decode + the 32-bit/16-bit records math), proven in EMULATION against the i145c model (csd_to_bd_records_test.go): BD_RECORDS is COMPUTED from the modelled CSD (NOT injected), matching the i145e-validated Go reference incl. Pete's 64GB -> 14581 (the q40 16-bit wrap). Card-init: the full ladder (netboot is a minimal env; the card cannot be assumed B-DOS-initialised). Wired into serve_main + client_main BUT gated behind -D NETBOOT_CSD_BDRECORDS=1 because it overflows the &C000 boot window by ~460-490 bytes (the ~630-byte module vs ~150 bytes free) — default boot builds are byte-for-byte UNCHANGED (no regression). The decode is correct + proven; SHIPPING it on hardware is i145b-b2. This is what ends the inject-BD_RECORDS shortcut at the logic level.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 539, role: completing}
   parent: i145b
 
 - id: i145b-b2
