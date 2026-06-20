@@ -739,9 +739,11 @@
   title: "Label-def + local-def parse (foo: / 1: statement-leading)"
   description: |
     Port parseLine's label/local-def cases (parser.go:108-119): a TOK_IDENT followed by TOK_COLON interns the name (sym_intern) and emits a LABEL_DEF (REC_KIND 0x02, payload=symbol id u16 LE); a TOK_INT in [1,99] followed by TOK_COLON emits a LOCAL_DEF (REC_KIND 0x03, payload=digit u8). These in-memory IR records (compacted to header tables at serialize-time) are the last statement-leading record kind missing from the Z80 parser. Flat-memory-autonomous (koron-go/z80 harness vs host refParse); prerequisite for i48c-b8's fixture-corpus round-trip (nearly every fixture defines labels).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 555, role: completing}
   parent: i48c
 
 - id: i48c-b5a
