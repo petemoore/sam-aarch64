@@ -2290,7 +2290,7 @@
   title: "Emulator keyboard-input support: stub LASTK/FLAGS/KSTATE sysvars to feed keypresses without interrupts"
   description: |
     The Go/koron-z80 harness never fires interrupts or models the keyboard, so a program awaiting a keypress (the i119 record-selection UX) can't run in emulation. Cheap approach (Pete's pointer): stub the keyboard sysvars the interrupt populates — LASTK (0x5C08) / FLAGS bit 5 (new-key) / KSTATE — inject keys directly, bypassing 50 Hz interrupt + key-matrix decode. Precedent: BASIC ROM-emulation spike (blob c0f62fa) intercepts LASTK/FLAGS to feed a key queue; samfile's etunes uses a port-level stub. Full interrupt emulation is the heavier fallback. Foundation for editor-era input (i48c/i41).
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   refs: [tools/netboot-oracle/z80/, tools/z80-test-harness-go/, i119, i126, i48c, i41]
