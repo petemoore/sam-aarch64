@@ -3547,8 +3547,8 @@
   title: "i203d: mov-imm autoselect + ldr-lit-direct + tbz/tbnz special-form encoders"
   description: |
     Fourth/final sub-brick of i203. Port tryEncodeMovImm (mov #imm -> movz/movn/orr-imm autoselect, pass2.go:476-540), encodeLdrLitDirect (ldr Xt,label -> PC-relative imm19, pass2.go:546-569), encodeTbzTbnz (tbz=22/tbnz=23 -> test-bit-and-branch, b5/b40 + imm14, pass2.go:584-629). These intercept before the form table (pass2.go:301-332). Faithful port (CLAUDE.md s6). Reuses encode_inst dispatch + eval_expr_const + insn_fold (imm14 branch via FSID_BRANCH14). Extends the boot self-test + Go authority fixtures. Depends on i199, i203a.
-  status: IN_PROGRESS
-  depends_on: [i199, i203a]
+  status: OPEN
+  depends_on: [i199, i203a, i205]
   kind: leaf
   owner: agent
   parent: i203
@@ -3559,5 +3559,13 @@
     Fourth/final brick of i48c-b8e (see umbrella). Port the overlay/literal wiring that REUSES the b8e dispatcher. overlayClassify (overlay.go:82-163) mirrors encodeInst but returns {relocated-slot,expr,isLitpool,litWidth,rt} instead of a base word - classifyMem (overlay.go:177-220), classifyMovImm (overlay.go:230-254); special/compound symbolic forms with no overlay support return error. literalWord (compact.go:354-370) probes encodeInst at pcProbeA=0 and pcProbeB=0x40000: either errors -> keep symbolic; wA!=wB -> PC-dependent (keep symbolic); wA==wB -> bare 4-byte literal. ~100-150 LOC, decision trees over brick1/2/3 dispatcher. Depends on bricks 1-3. Faithful port (CLAUDE.md s6); Go authority overlay.go overlayClassify + compact.go literalWord. Completes b8e: text->.tbn can encode symbolic INST records on the SAM. SCOPE NOTE (from PR #561 review): the form-table path also has a bare Imm16 SlotKind (0x08, used only by udf/mnemonic 89) that brick-1 (i199) does NOT encode — encode_inst cleanly fail-tags it (ENC_TAG_BADSLOT) rather than mis-encoding. encode_imm_n caps at 7-bit width, so Imm16 needs its own 16-bit placement encoder. Ensure full SlotKind coverage (incl. plain Imm16) before closing b8e.
   status: OPEN
   depends_on: [i199, i203, i201]
+  kind: leaf
+  owner: agent
+
+- id: i205
+  title: "encode_inst boot self-test: relieve the inline section-C budget (&C000 cliff)"
+  description: |
+    The test-variant assembler.bin boots all encode_inst self-tests inline in section C (test_encode_inst.asm). With i199+i203a/b/c the suite reached 360 B headroom to the &C000 stack-page cliff; adding i203d's mov-imm/ldr-lit/tbz encoders + vectors overflows by 378 B (prod fits fine: 4964 B headroom, so the encoders themselves are not the problem — only the test-variant inline self-test). Relieve the budget so the encode_inst suite can keep growing: e.g. move budget-consuming NON-ENCTAB inline self-tests off-axis (the encode_inst test itself must stay inline because it needs ENCTAB mapped in section A, which conflicts with the off-axis section-A trampoline), or give the encode_inst self-test a paged home that coexists with the ENCTAB window. Blocks i203d (the final i203 special-form leaf) and likely i204. Engineering task; the ENCTAB/section-A conflict is the design crux.
+  status: OPEN
   kind: leaf
   owner: agent
