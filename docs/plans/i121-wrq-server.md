@@ -5,10 +5,11 @@ Mac, the SAM writes it to a free Trinity record, then boot+test — ending the
 SD-card shuffle. A standard TFTP server handles both RRQ (serve-out, the shipped
 i83/i95/i96 server) and WRQ (accept-in, this item).
 
-**Status:** planned, not started. **Gated on q30** (the remote-push safety model —
-see below) for the *write* brick (C3); the handshake (C1) + receive (C2) bricks are
-not gated and can proceed first. The implementing agent should `registry split`
-i121 into the bricks below as it starts execution.
+**Status:** in progress. i121a (handshake) is **DONE** (#490); the bricks are split in the
+registry (i121a–i121e). q30 (the remote-push safety model) is **RESOLVED** (2026-06-20):
+write-to-free-only + an auto-pick disk config (prompts if absent), so the write brick is no
+longer gated. i121b/c/e/d are the remaining work, host-verified in the Go harness before
+any hardware test.
 
 ## The pieces already in place (reuse, don't reinvent)
 - **Serve-out server** (`src/netboot/netboot_serve.asm`, Go authority
@@ -36,7 +37,7 @@ i121 into the bricks below as it starts execution.
   `saves[0].Record/Name/Size`; decline ⇒ **zero** HSAVEs). HSAVE captured via
   `BDOSStore` (`bdos_store.go:280`); `CardModel.SetRecordEntry` + `WriteU16LE(BD_RECORDS,…)`.
 
-## q30 — the remote-push safety model (Pete decides; gates C3)
+## q30 — the remote-push safety model — RESOLVED 2026-06-20 (write-to-free-only + auto-pick config)
 i119 makes an interactive show-name + y/n confirm **mandatory** before any HSAVE
 (`memory/trinity_storage_shared_resource`). A remote `tftp put` has **no operator at
 the SAM keyboard** — `pick_read_yesno` would spin forever. Recommended (port, not
@@ -64,6 +65,33 @@ write-to-free-only sufficient, or must remote pushes be operator-armed/confirmed
   `TestClientE2EConfirm` (assert HSAVE in the free record + the right bytes; all-full
   ⇒ `ERROR(3)` + zero HSAVEs).
 - **i121d (C4) — combined RRQ+WRQ bootable program + disk/Makefile/CI wiring.**
+- **i121e (C5) — graceful termination / return-to-trinload.** Without it the serve loop
+  monopolizes the SAM and nothing can run after a push batch. Mechanism in the section below.
+  Host test: inject a normal RRQ/WRQ then the sentinel WRQ; assert the serve loop RETs (StopPC
+  at the loop-exit / trinload return), mirroring `trinload_test.go` + the dumper Esc pattern.
+
+## The escape hatch — returning control to trinload (i121e, Pete 2026-06-21)
+
+trinload bootstraps our program by pushing its `start` as the return address and `jp`-ing in
+(`trinload.asm:230-231,238`), so a plain **`RET` returns to trinload** — proven in emulation
+(`trinload_test.go:75-118`) and already used by the ROM dumper's Esc-to-exit
+(`netboot_dumper.asm:318-329`). The serve program lacks an exit: `sv_serve_loop`
+(`netboot_serve.asm:935-937`) is an infinite `call serve_serve_once; jr sv_serve_loop`. i121e
+adds two exits, both RET-to-trinload:
+
+- **Sentinel push (unattended):** a `tftp put` of the reserved name **`tftp.done`** (empty file)
+  is detected in `handle_wrq` (`netboot_serve.asm:367`) after the client endpoint is learned and
+  *before* the ACK-0/OACK branch; on match it sends no reply and sets `XFER_STOP_REQUESTED`.
+  `sv_serve_loop` polls the flag after each frame and `ret nz`. Reserved name ⇒ never stored
+  (manifest design, decision 6).
+- **Keyboard Esc (attended):** the same non-blocking poll the dumper uses
+  (`netboot_dumper.asm:319-326`: `ld a,&f7; in a,(&f9); bit 5,a; ret z`) in `sv_serve_loop`, for
+  manual recovery if a session must be ended by hand.
+
+The serve loop does no paging of its own (unlike the dumper, which needed the i188 LMPR
+save/restore), so the exit is a clean RET with no page/register restoration. Emulation-first is
+the safety net: a hardware crash is unrecoverable and equally strands the machine, so every
+brick is green in the Go harness before it touches hardware.
 
 ## What stays hardware-gated
 The `rst 8` HSAVE persist + the CSD-derived `BD_RECORDS` (i145) — same as i119.

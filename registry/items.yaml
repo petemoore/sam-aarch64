@@ -2314,7 +2314,7 @@
   title: "WRQ receive-to-staging (DATA->ACK loop)"
   description: |
     Wire tftp_recv_data (i82, tftp_client_loop.asm) into the WRQ transfer: DATA -> ACK each -> accumulate into STAGING -> short-block end. Resolve the SERVER_*/CLIENT_* var-name collision between tftp_client_loop.asm and netboot_serve.asm. Go authority: serverloop.go receive path. Host test: inject WRQ+DATA1..N, assert an ACK per block + STAGING holds the file.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i121a]
   kind: leaf
   owner: agent
@@ -2336,6 +2336,15 @@
     Fold WRQ into the RRQ serve-out program (netboot_serve.asm) so one bootable program handles both; wire into the disk image, Makefile, and CI. The real Mac->SAM 'tftp put' over the wire is the hardware final gate.
   status: OPEN
   depends_on: [i121c]
+  kind: leaf
+  owner: agent
+  parent: i121
+
+- id: i121e
+  title: WRQ graceful termination — return control to trinload (sentinel + Esc escape)
+  description: |
+    Escape hatch so the accept-in server hands control back to trinload (the only code-exec path until the auto-boot BIOS exists). A reserved sentinel filename pushed via 'tftp put' (e.g. tftp.done, empty) sets a stop flag -> sv_serve_loop breaks -> RET to trinload's pushed return addr; plus a non-blocking keyboard Esc poll (mirrors netboot_dumper.asm Esc-to-exit) for attended manual recovery. Needed so the next program can run after a batch of disk-image pushes. Emulation-gated (a hardware crash is unrecoverable). Home: netboot_serve.asm (i96).
+  status: OPEN
   kind: leaf
   owner: agent
   parent: i121
