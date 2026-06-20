@@ -370,6 +370,22 @@ func LoadPaged(binPath, mapPath string, lmpr, hmpr uint8) (*Machine, error) {
 // restored LMPR or clobbered a page). It is the harness's one memory model.
 func (mac *Machine) Pager() *sampage.Mem { return mac.m.pager }
 
+// LoadROMImage copies a real 32 KB SAM system-ROM image into the pager's ROM
+// (ROM0 = low 16 KB at logical &0000 when section A maps ROM; ROM1 = high 16 KB
+// at logical &C000 when section D maps ROM). This is the i190a entry for the
+// REAL captured patched system ROM (~/sam-archive/samboot-capture/rom.bin): with
+// it loaded, a boot trace fetches the patched ROM's actual reset/report-50 code
+// (the Trinity boot fetch at &0F7F → &F5DD) instead of a synthetic fixture. The
+// image must be exactly sampage.ROMSize (32768) bytes — a short or long image is
+// a capture-handling bug, not something to silently pad.
+func (mac *Machine) LoadROMImage(image []byte) error {
+	if len(image) != sampage.ROMSize {
+		return fmt.Errorf("z80: ROM image is %d bytes, want %d (ROM0+ROM1)", len(image), sampage.ROMSize)
+	}
+	copy(mac.m.pager.ROM[:], image)
+	return nil
+}
+
 // parseMap reads a pyz80 mapfile: lines of the form "ADDR=NAME" with ADDR in
 // uppercase hex. Lines without an '=' are ignored.
 func parseMap(path string) (map[string]uint16, error) {
@@ -498,6 +514,14 @@ type Entry struct {
 	// pushed program RETs back into trinload. Zero disables it.
 	StopPC     uint16
 	StopPCSkip int
+	// Trace, when non-nil, is called with the CPU's PC immediately before each
+	// instruction is stepped — the observation hook the i190a boot-trace uses to
+	// follow the real patched-ROM → EEPROM-fetch → JP &4000 control flow through
+	// the captured ROM/EEPROM and record which artifact actually executes (the
+	// samboot-bootblock-analysis.md §7.4 contradiction i197c must resolve). It is
+	// called for the RST-hook fast path too (with the RST target PC). Keep it
+	// cheap: it runs once per instruction.
+	Trace func(pc uint16)
 }
 
 // CallResult is what a routine returns to the harness.
@@ -562,6 +586,19 @@ func (mac *Machine) RunFrom(addr uint16, in Entry) (CallResult, error) {
 	return mac.run(fmt.Sprintf("&%04X", addr), addr, in, true)
 }
 
+// RunBootFrom is the raw-address counterpart of RunBoot: it runs from `addr`
+// (no symbol lookup) but, like RunBoot, treats the step cap as a normal outcome
+// (res.Halted=false, res.PC = the spin/wander site) rather than a hard error. It
+// is the i190a boot-trace primitive — start the real patched ROM at reset (PC 0)
+// or at the Trinity report-50 fetch (&0F7F) and follow it through the captured
+// EEPROM into whatever runs at &4000, where the boot may halt, RET to the trap,
+// or wander; all three are observations, not test failures (the failure mode is
+// only a genuine fault — undecodable instruction). Pair with Entry.Trace to
+// record the PC trail.
+func (mac *Machine) RunBootFrom(addr uint16, in Entry) (CallResult, error) {
+	return mac.run(fmt.Sprintf("&%04X", addr), addr, in, false)
+}
+
 // run is the shared run loop: it sets SP to a safe stack top, pushes the
 // HALT-trap return address, plants the HALT there, points PC at `pc`, and steps
 // until the trap (the routine's RET landing on it) or the step cap, accumulating
@@ -593,6 +630,9 @@ func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (Call
 	stopVisits := 0
 	reachedStop := false
 	for {
+		if in.Trace != nil {
+			in.Trace(cpu.PC)
+		}
 		if in.StopPC != 0 && cpu.PC == in.StopPC {
 			stopVisits++
 			if stopVisits > in.StopPCSkip {
