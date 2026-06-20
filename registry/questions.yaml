@@ -25,8 +25,3 @@
   body: |
     i32 (multiple source files + staged/partial loading) — what is the intended SHAPE? This is a 'beyond-M7 future idea' with no settled approach, and several design forks need your call before autonomous implementation: (a) how do multiple files combine — textual concatenation in a fixed order, an .include-driven single translation unit (we already have .include), or separate compilation + a link step over multiple object/.tbn units? (b) 'staged/partial loading' — is this about assembling a project too big to hold all source in RAM at once (stream files through the i2 pool), or about incremental re-assembly of only changed files? (c) does this supersede or overlap i33 (Trinity-backed staged/overlaid assembly) — should they merge? Recommend scoping once the IDE/pool (i2) lands, since staged loading depends on the pool's spill story (i215). No agent design until the shape is chosen.
   owner: pete
-
-- id: q47
-  body: |
-    i208 (#602, docs/specs/emulation-library-merge-review.md) recommends a PARTIAL merge: promote the duplicated LMPR/HMPR pager + boot-ROM overlay into one shared importable package that BOTH Go harnesses use (the sampage seed), and refactor the assembler harness's resolveRead/resolveWritePage to delegate; keep the two harnesses as distinct domain tools (devices stay where used). 4 decisions for Pete: (1) approve the partial-merge scope; (2) confirm the shared-module location; (3) confirm moving the boot-ROM overlay into the shared module; (4) on completion, delete the feedback_mirror_emulator_fixes memory. i190 (the actual merge) depends on this.
-  owner: pete
