@@ -139,6 +139,9 @@ type parseRec struct {
 
 	// BLANK_RUN field.
 	runLen uint32
+
+	// DIRECTIVE field (count/ops above carry operandCount/operands).
+	directiveID byte
 }
 
 // effKind maps a parseRec's kind to its effective record kind, treating the
@@ -560,6 +563,17 @@ func parseZ80(t *testing.T, mac *z80h.Machine, src []byte) (recs []parseRec, err
 				uint32(payload[2])<<16 | uint32(payload[3])<<24
 			recs = append(recs, parseRec{kind: format.KindBlankRun, runLen: runLen})
 			addr += uint16(3 + plen)
+		case format.KindDirective:
+			hdr := mac.Read(addr+1, 2)
+			plen := int(uint16(hdr[0]) | uint16(hdr[1])<<8) // payload length
+			payload := mac.Read(addr+3, plen)               // [dir_id:1][op_count:1][operands...]
+			var ops []byte
+			if plen > 2 {
+				ops = payload[2:]
+			}
+			recs = append(recs, parseRec{kind: format.KindDirective,
+				directiveID: payload[0], count: payload[1], ops: ops})
+			addr += uint16(3 + plen)
 		default: // KindInst
 			hdr := mac.Read(addr+1, 5)
 			mnem := uint16(hdr[0]) | uint16(hdr[1])<<8
@@ -585,6 +599,8 @@ func dumpRecs(recs []parseRec) string {
 			s += fmt.Sprintf("[COMMENT p=%d body=%q] ", r.placement, string(r.body))
 		case format.KindBlankRun:
 			s += fmt.Sprintf("[BLANK_RUN n=%d] ", r.runLen)
+		case format.KindDirective:
+			s += fmt.Sprintf("[DIR %s c=%d ops=%x] ", format.DirectiveName(r.directiveID), r.count, r.ops)
 		default:
 			s += fmt.Sprintf("[%s c=%d ops=%x] ", format.MnemonicName(r.mnemonicID), r.count, r.ops)
 		}
@@ -618,6 +634,19 @@ func compareRecs(t *testing.T, label string, got, want []parseRec) {
 			if got[i].runLen != want[i].runLen {
 				t.Errorf("%s: rec[%d] BLANK_RUN runLen = %d, want %d", label, i,
 					got[i].runLen, want[i].runLen)
+			}
+		case format.KindDirective:
+			if got[i].directiveID != want[i].directiveID {
+				t.Errorf("%s: rec[%d] DIRECTIVE id = %s, want %s", label, i,
+					format.DirectiveName(got[i].directiveID), format.DirectiveName(want[i].directiveID))
+			}
+			if got[i].count != want[i].count {
+				t.Errorf("%s: rec[%d] (%s) operand count = %d, want %d", label, i,
+					format.DirectiveName(want[i].directiveID), got[i].count, want[i].count)
+			}
+			if !bytes.Equal(got[i].ops, want[i].ops) {
+				t.Errorf("%s: rec[%d] (%s) ops = %x, want %x", label, i,
+					format.DirectiveName(want[i].directiveID), got[i].ops, want[i].ops)
 			}
 		default:
 			if got[i].mnemonicID != want[i].mnemonicID {
@@ -3993,6 +4022,136 @@ func TestParseLdrLitPoolError(t *testing.T) {
 	for _, src := range []string{
 		"ldr x0, =\n", // `=` with no expression
 		"ldr w1, =\n", // same, W destination
+	} {
+		t.Run(src, func(t *testing.T) {
+			_, errFlag := parseZ80(t, mac, []byte(src))
+			if !errFlag {
+				t.Fatalf("expected PARSE_ERR for %q", src)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// B6 — directives (parse_directive + parse_org_rhs + parse_directive_section +
+// parse_directive_rest). A directive line emits one DIRECTIVE record carrying
+// the directive id (DirectiveTable index) + operand bytes. Mirrors parseDirective
+// / parseOrgRHS / parseDirectiveSection / parseDirectiveRestOfLineAsSysName
+// (parser.go:154-315). Expected operand bytes are built from the format authority.
+// ---------------------------------------------------------------------------
+
+// stringOperand builds an OP_KIND_STRING operand via the format authority.
+func stringOperand(s string) []byte {
+	var ow format.OperandWriter
+	ow.WriteString([]byte(s))
+	return ow.Bytes()
+}
+
+// symExprOperand builds an OP_KIND_IMM_EXPR operand whose expression is a single
+// symbol reference (the form a bare identifier directive operand takes, e.g. the
+// name in `.set foo, …` or `.global foo`).
+func symExprOperand(id uint16) []byte {
+	var ew format.ExprWriter
+	ew.WriteSym(id)
+	var ow format.OperandWriter
+	ow.WriteImmExpr(ew.Bytes())
+	return ow.Bytes()
+}
+
+// mkDirective builds the expected DIRECTIVE record for a directive name, using
+// format.DirectiveID as the id authority.
+func mkDirective(t *testing.T, name string, count byte, ops []byte) parseRec {
+	t.Helper()
+	id, ok := format.DirectiveID(name)
+	if !ok {
+		t.Fatalf("mkDirective: %q is not a directive", name)
+	}
+	return parseRec{kind: format.KindDirective, directiveID: id, count: count, ops: ops}
+}
+
+func TestParseDirectiveHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	reg := func(k format.OperandKind, n byte) []byte { return []byte{byte(k), n} }
+
+	cases := []struct {
+		desc string
+		src  string
+		want []parseRec
+	}{
+		// --- generic operand loop ---
+		{".word 42", ".word 42\n",
+			[]parseRec{mkDirective(t, ".word", 1, immExprOperand(42))}},
+		{".balign 8", ".balign 8\n",
+			[]parseRec{mkDirective(t, ".balign", 1, immExprOperand(8))}},
+		{".skip 16", ".skip 16\n",
+			[]parseRec{mkDirective(t, ".skip", 1, immExprOperand(16))}},
+		{".quad 1, 2, 3 (commas)", ".quad 1, 2, 3\n",
+			[]parseRec{mkDirective(t, ".quad", 3,
+				concat(immExprOperand(1), immExprOperand(2), immExprOperand(3)))}},
+		{".byte 1 2 3 (optional commas)", ".byte 1 2 3\n",
+			[]parseRec{mkDirective(t, ".byte", 3,
+				concat(immExprOperand(1), immExprOperand(2), immExprOperand(3)))}},
+		{".set foo, 5 (symbol + const)", ".set foo, 5\n",
+			[]parseRec{mkDirective(t, ".set", 2,
+				concat(symExprOperand(0), immExprOperand(5)))}},
+		{".global foo", ".global foo\n",
+			[]parseRec{mkDirective(t, ".global", 1, symExprOperand(0))}},
+		{".inst x0 (register operand)", ".inst x0\n",
+			[]parseRec{mkDirective(t, ".inst", 1, reg(X, 0))}},
+		{".ltorg (no operands)", ".ltorg\n",
+			[]parseRec{mkDirective(t, ".ltorg", 0, nil)}},
+		{".asciz string", ".asciz \"hi\"\n",
+			[]parseRec{mkDirective(t, ".asciz", 1, stringOperand("hi"))}},
+		// --- `. = expr` -> .org ---
+		{". = 0x8000 (folded constant)", ". = 0x8000\n",
+			[]parseRec{mkDirective(t, ".org", 1, immExprOperand(0x8000))}},
+		{". = . + 16 (PC-relative)", ". = . + 16\n",
+			[]parseRec{mkDirective(t, ".org", 1, exprOperand(func(w *format.ExprWriter) {
+				w.WritePC()
+				w.WriteImm(16)
+				w.WriteOp(format.OpAdd)
+			}))}},
+		{".org 0x1000", ".org 0x1000\n",
+			[]parseRec{mkDirective(t, ".org", 1, immExprOperand(0x1000))}},
+		// --- .section ---
+		{".section NAME only", ".section .text\n",
+			[]parseRec{mkDirective(t, ".section", 1, sysnameOperand(".text"))}},
+		{".section NAME, flags", ".section .rodata, \"a\"\n",
+			[]parseRec{mkDirective(t, ".section", 2,
+				concat(sysnameOperand(".rodata"), stringOperand("a")))}},
+		{".section NAME, flags, %type", ".section .text, \"ax\", %progbits\n",
+			[]parseRec{mkDirective(t, ".section", 3,
+				concat(sysnameOperand(".text"), stringOperand("ax"), sysnameOperand("%progbits")))}},
+		// --- .arch / .cpu (rest-of-line as one sysname; '-' rejoined) ---
+		{".arch armv8-a", ".arch armv8-a\n",
+			[]parseRec{mkDirective(t, ".arch", 1, sysnameOperand("armv8-a"))}},
+		{".cpu cortex-a53", ".cpu cortex-a53\n",
+			[]parseRec{mkDirective(t, ".cpu", 1, sysnameOperand("cortex-a53"))}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			got, errFlag := parseZ80(t, mac, []byte(c.src))
+			if errFlag {
+				t.Fatalf("PARSE_ERR set unexpectedly")
+			}
+			compareRecs(t, "Z80 vs hand", got, c.want)
+		})
+	}
+}
+
+// TestParseDirectiveError checks malformed directive lines set PARSE_ERR.
+func TestParseDirectiveError(t *testing.T) {
+	mac := loadAsmparse(t)
+	for _, src := range []string{
+		".bogus\n",                          // unknown directive name
+		".section\n",                        // missing section name
+		".section .text, foo\n",             // flags operand not a quoted string
+		".section .text, \"a\", progbits\n", // %type missing the '%'
+		".word , 5\n",                       // leading comma
+		". 0x8000\n",                        // bare '.' without '=' at statement start
+		". = \n",                            // `. = ` with no expression
 	} {
 		t.Run(src, func(t *testing.T) {
 			_, errFlag := parseZ80(t, mac, []byte(src))

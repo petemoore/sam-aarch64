@@ -811,7 +811,7 @@
   title: Directives parser
   description: |
     Parse assembler directives (.set, .balign, .org, .skip, .ltorg, .inst, .section, etc.) into their respective overlay record types via src/asmparse.asm.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i48c

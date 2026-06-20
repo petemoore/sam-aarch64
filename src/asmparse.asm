@@ -190,7 +190,7 @@ parse_run:
                 ld      (SYM_NAMES), a      ; empty document symbol table (sentinel)
                 ld      a, (LEX_ERR)        ; a lexical error stops the parse
                 or      a
-                jr      nz, pr_lexerr
+                jp      nz, pr_lexerr
 ; --- parseLine: count the leading run of blank lines (genuine TOK_EOL only) ---
 pr_loop:
                 ld      hl, 0
@@ -234,6 +234,8 @@ pr_line:
                 jr      z, pr_comment
                 cp      TOK_IDENT
                 jr      z, pr_inst
+                cp      TOK_DOT
+                jr      z, pr_dot           ; B6: `. = expr` location-counter set
                 jr      pr_domainerr        ; line-leading non-ident: out of domain
 pr_line_eol:
                 call    parse_advance_tok   ; consume the line-terminating TOK_EOL
@@ -243,11 +245,45 @@ pr_comment:
                 call    parse_advance_tok   ; consume the comment token
                 jr      pr_line
 pr_inst:
+                ; parseInstOrDirective: a leading-'.' identifier is a directive
+                ; (the lexer collapses `.set` etc. into one TOK_IDENT whose first
+                ; span byte is '.'); anything else is a mnemonic. (parser.go:147.)
+                ld      hl, (PARSE_TOK)
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = span ptr
+                ld      a, (de)             ; first character of the identifier
+                cp      &2E             ; '.'
+                jr      z, pr_directive
                 call    parse_inst
                 jr      c, pr_done          ; error -> stop
                 ld      a, 1
                 ld      (PR_EMITTED), a     ; emittedStatement = true
                 jr      pr_line             ; back to the inner loop (trailing comment / EOL)
+pr_directive:
+                call    parse_directive     ; B6: `.set`/`.word`/`.org`/`.section`/…
+                jr      c, pr_done
+                ld      a, 1
+                ld      (PR_EMITTED), a
+                jr      pr_line
+pr_dot:
+                ; GNU as `. = expr` ≡ `.org expr`. Peek the token after '.': it
+                ; must be '=' for this form; a bare '.' at statement start is an
+                ; error. (parser.go:127-140.)
+                ld      hl, (PARSE_TOK)
+                ld      de, TOK_REC_SIZE
+                add     hl, de              ; HL -> token after '.'
+                ld      a, (hl)
+                cp      TOK_EQUALS
+                jr      nz, pr_domainerr
+                call    parse_advance_tok   ; consume '.'
+                call    parse_advance_tok   ; consume '='
+                call    parse_org_rhs
+                jr      c, pr_done
+                ld      a, 1
+                ld      (PR_EMITTED), a
+                jr      pr_line
 pr_domainerr:
 pr_lexerr:
                 ld      a, 1
@@ -1116,6 +1152,491 @@ pl_have_width:
                 ld      a, 2
                 ld      (PI_COUNT), a
                 jp      pi_emit
+
+; ===========================================================================
+; parse_directive — B6 parse for an assembler directive line. (Port of
+; parseDirective, parser.go:154-191.) Entry: PARSE_TOK -> the directive's
+; TOK_IDENT (a leading-'.' identifier such as `.set`/`.word`/`.org`), not yet
+; consumed. Looks up the directive id (directive_lookup over DIRECTIVE_NAMES),
+; then dispatches:
+;   .section          -> parse_directive_section (NAME[, "flags"[, %type]])
+;   .arch / .cpu       -> parse_directive_rest    (rest-of-line as one sysname)
+;   everything else    -> a generic operand loop (expressions / registers /
+;                         strings, commas optional) terminated by EOL/EOF/comment
+; Each emits one DIRECTIVE record. Exit: CY clear on success, CY set on error
+; (PARSE_ERR set). An unknown directive name is an error.
+; ===========================================================================
+parse_directive:
+                ; Look up the directive id from the current token's span.
+                ld      hl, (PARSE_TOK)
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = span ptr
+                inc     hl
+                ld      c, (hl)             ; C = span len low (directive names < 256)
+                ex      de, hl              ; HL = span ptr
+                call    directive_lookup    ; A = found, L = id
+                or      a
+                jp      z, pd_err           ; unknown directive
+                ld      a, l
+                ld      (PD_DIRID), a       ; save directive id
+                call    parse_advance_tok   ; consume the directive token
+                ld      a, (PD_DIRID)
+                cp      DIR_SECTION
+                jp      z, parse_directive_section
+                cp      DIR_ARCH
+                jp      z, parse_directive_rest
+                cp      DIR_CPU
+                jp      z, parse_directive_rest
+                ; --- generic operand loop ---
+                ld      hl, PARSE_OPSBUF
+                ld      (PI_OPSPTR), hl
+                xor     a
+                ld      (PI_COUNT), a
+pd_loop:
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_EOL
+                jr      z, pd_emit
+                cp      TOK_EOF
+                jr      z, pd_emit
+                cp      TOK_LINECOMMENT
+                jr      z, pd_emit
+                cp      TOK_BLOCKCOMMENT
+                jr      z, pd_emit
+                cp      TOK_COMMA
+                jr      z, pd_comma
+                cp      TOK_STRING
+                jr      z, pd_string
+                call    parse_operand       ; expression / register operand
+                jp      c, pd_err
+                jr      pd_count
+pd_string:
+                call    emit_string_operand
+                call    parse_advance_tok
+pd_count:
+                ld      a, (PI_COUNT)
+                inc     a
+                ld      (PI_COUNT), a
+                jr      pd_loop
+pd_comma:
+                ld      a, (PI_COUNT)
+                or      a
+                jp      z, pd_err           ; leading comma
+                call    parse_advance_tok   ; commas are optional separators
+                jr      pd_loop
+pd_emit:
+                call    parse_emit_directive
+                or      a                   ; clear carry: success
+                ret
+pd_err:
+                ld      a, 1
+                ld      (PARSE_ERR), a
+                scf
+                ret
+
+; ===========================================================================
+; parse_org_rhs — emit a `.org expr` DIRECTIVE for the GNU as `. = expr` form.
+; (Port of parseOrgRHS, parser.go:197-214.) The leading '.' and '=' are already
+; consumed by the caller (pr_dot). The expression runs to EOL/EOF/comment and is
+; emitted as a single OP_KIND_IMM_EXPR operand. Exit: CY clear on success, CY set
+; on error.
+; ===========================================================================
+parse_org_rhs:
+                ld      hl, PARSE_OPSBUF
+                ld      (PI_OPSPTR), hl
+                ld      a, DIR_ORG
+                ld      (PD_DIRID), a
+                ld      hl, EXPR_BUF
+                ld      (EXPR_PTR), hl
+                xor     a                   ; minPrec = 0
+                call    parse_expr_prec
+                jp      c, pd_err
+                call    expr_fold
+                call    emit_imm_expr_operand
+                ; The expression must be followed by a statement terminator.
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_EOL
+                jr      z, pog_ok
+                cp      TOK_EOF
+                jr      z, pog_ok
+                cp      TOK_LINECOMMENT
+                jr      z, pog_ok
+                cp      TOK_BLOCKCOMMENT
+                jr      z, pog_ok
+                jp      pd_err
+pog_ok:
+                ld      a, 1
+                ld      (PI_COUNT), a
+                call    parse_emit_directive
+                or      a
+                ret
+
+; ===========================================================================
+; parse_directive_section — B6 parse for `.section NAME[, "flags"[, %type]]`.
+; (Port of parseDirectiveSection, parser.go:234-283.) Operands:
+;   op0: OP_KIND_SYS_NAME(NAME)      — bareword section name (required)
+;   op1: OP_KIND_STRING(flags)       — ELF flags string (optional)
+;   op2: OP_KIND_SYS_NAME("%type")   — '%'-prefixed ELF type keyword (optional)
+; refenc treats .section as a flat-layout no-op; the operands are preserved only
+; so bin2text round-trips the source. Entry: directive token consumed,
+; PD_DIRID = DIR_SECTION. Exit: CY clear on success, CY set on error.
+; ===========================================================================
+parse_directive_section:
+                ld      hl, PARSE_OPSBUF
+                ld      (PI_OPSPTR), hl
+                ; op0: section NAME (bareword identifier, required).
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_IDENT
+                jp      nz, pd_err
+                call    emit_sysname_operand
+                call    parse_advance_tok
+                ld      a, 1
+                ld      (PI_COUNT), a
+                ; optional ', "flags"'
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_COMMA
+                jr      nz, psec_end
+                call    parse_advance_tok
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_STRING
+                jp      nz, pd_err
+                call    emit_string_operand
+                call    parse_advance_tok
+                ld      a, 2
+                ld      (PI_COUNT), a
+                ; optional ', %type'
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_COMMA
+                jr      nz, psec_end
+                call    parse_advance_tok
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_PERCENT
+                jp      nz, pd_err
+                call    parse_advance_tok
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_IDENT
+                jp      nz, pd_err
+                call    emit_sysname_pct_operand    ; "%" + type keyword
+                call    parse_advance_tok
+                ld      a, 3
+                ld      (PI_COUNT), a
+psec_end:
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_EOL
+                jr      z, psec_emit
+                cp      TOK_EOF
+                jr      z, psec_emit
+                cp      TOK_LINECOMMENT
+                jr      z, psec_emit
+                cp      TOK_BLOCKCOMMENT
+                jr      z, psec_emit
+                jp      pd_err
+psec_emit:
+                call    parse_emit_directive
+                or      a
+                ret
+
+; ===========================================================================
+; parse_directive_rest — B6 parse for `.arch`/`.cpu`: consume the rest of the
+; logical line as a single OP_KIND_SYS_NAME operand whose text is the
+; concatenation of the operand tokens' source spellings (whitespace dropped, so
+; `armv8-a` survives the '-' that would otherwise be a binary operator). (Port of
+; parseDirectiveRestOfLineAsSysName, parser.go:297-315.) With no operand tokens
+; the directive is emitted with zero operands. Entry: directive token consumed,
+; PD_DIRID = DIR_ARCH/DIR_CPU. Exit: CY clear (always succeeds).
+; ===========================================================================
+parse_directive_rest:
+                ld      hl, PARSE_OPSBUF
+                ld      (PI_OPSPTR), hl
+                ; Build the concatenated spelling into SPELL_BUF.
+                ld      hl, SPELL_BUF
+                ld      (SPELL_PTR), hl
+prest_loop:
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_EOL
+                jr      z, prest_done
+                cp      TOK_EOF
+                jr      z, prest_done
+                cp      TOK_LINECOMMENT
+                jr      z, prest_done
+                cp      TOK_BLOCKCOMMENT
+                jr      z, prest_done
+                call    tok_spelling_append ; append this token's spelling
+                call    parse_advance_tok
+                jr      prest_loop
+prest_done:
+                ; If any text was collected, emit one OP_KIND_SYS_NAME operand.
+                ld      hl, (SPELL_PTR)
+                ld      de, SPELL_BUF
+                or      a
+                sbc     hl, de              ; HL = collected length
+                ld      a, h
+                or      l
+                jr      z, prest_zero       ; no operand tokens -> zero operands
+                ld      b, h
+                ld      c, l                ; BC = name length
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_SYS_NAME
+                inc     hl
+                ld      (hl), c             ; name_len low
+                inc     hl
+                ld      (hl), b             ; name_len high
+                inc     hl
+                ex      de, hl              ; DE = operand dest
+                ld      hl, SPELL_BUF       ; HL = collected text
+                ldir
+                ld      (PI_OPSPTR), de
+                ld      a, 1
+                ld      (PI_COUNT), a
+                jr      prest_emit
+prest_zero:
+                xor     a
+                ld      (PI_COUNT), a
+prest_emit:
+                call    parse_emit_directive
+                or      a
+                ret
+
+; ===========================================================================
+; tok_spelling_append — append the source spelling of the token at (PARSE_TOK)
+; to the buffer at (SPELL_PTR), advancing (SPELL_PTR). (Port of tokSpelling,
+; parser.go:321-374.) TOK_IDENT and TOK_INT copy their source span; every other
+; punctuation/operator token contributes a fixed literal from TOK_SPELL. Tokens
+; with no spelling contribute nothing. Clobbers A/BC/DE/HL.
+; ===========================================================================
+tok_spelling_append:
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_IDENT
+                jr      z, tsa_span
+                cp      TOK_INT
+                jr      z, tsa_span
+                ; Punctuation/operator: look up its fixed spelling in TOK_SPELL,
+                ; indexed by (kind - TOK_COMMA). Kinds below TOK_COMMA, or any
+                ; out-of-range kind, contribute nothing.
+                sub     TOK_COMMA
+                ret     c                   ; kind < TOK_COMMA: no spelling
+                cp      TOK_SPELL_COUNT
+                ret     nc                  ; kind > last tabled: no spelling
+                ; entry = TOK_SPELL + kind_index*2 -> [len:1][char:1] (len 1 or 2)
+                add     a, a                ; *2 (2 bytes per entry)
+                ld      e, a
+                ld      d, 0
+                ld      hl, TOK_SPELL
+                add     hl, de              ; HL -> entry
+                ld      b, (hl)             ; B = spelling length (0, 1 or 2)
+                inc     hl                  ; HL -> spelling char
+                ld      a, b
+                or      a
+                ret     z                   ; no spelling for this token kind
+                ; For a 2-char entry ('<<'/'>>') the single stored char repeats.
+                ld      a, (hl)             ; A = the spelling char
+                ld      hl, (SPELL_PTR)
+tsa_punc_copy:
+                ld      (hl), a
+                inc     hl
+                djnz    tsa_punc_copy
+                ld      (SPELL_PTR), hl
+                ret
+tsa_span:
+                ; Copy the token's source span (ptr at offset 1, len at offset 3).
+                ld      hl, (PARSE_TOK)
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = span ptr
+                inc     hl
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)             ; BC = span len
+                ld      a, b
+                or      c
+                ret     z                   ; empty span -> nothing
+                ld      hl, (SPELL_PTR)
+                ex      de, hl              ; HL = span src, DE = dest
+                ldir
+                ld      (SPELL_PTR), de
+                ret
+
+; ===========================================================================
+; directive_lookup — map a directive name's bytes to its id (index into
+; DIRECTIVE_NAMES). Same linear-search shape as mnemonic_lookup; the table is
+; small (~22 entries) and one directive is looked up per directive line.
+; Entry: HL = candidate name bytes; C = name length (B ignored).
+; Exit:  A = 1 and L = id (the table index) if matched; A = 0 if not found.
+;        BC/DE/HL clobbered.
+; ===========================================================================
+directive_lookup:
+                ld      (DL_PTR), hl        ; save candidate pointer
+                ld      a, c
+                ld      (DL_LEN), a         ; save candidate length
+                ld      de, DIRECTIVE_NAMES
+                ld      hl, 0               ; L = running index = candidate id (H stays 0)
+dl_loop:
+                ld      a, (de)             ; entry length (0 = sentinel)
+                or      a
+                jr      z, dl_notfound
+                ld      b, a                ; B = entry length
+                ld      a, (DL_LEN)
+                cp      b
+                jr      nz, dl_next         ; length mismatch -> skip entry
+                push    hl                  ; save index
+                push    de                  ; save entry pointer (at length byte)
+                inc     de                  ; DE -> entry name bytes
+                ld      hl, (DL_PTR)        ; HL -> candidate bytes
+dl_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, dl_cmp_fail
+                inc     de
+                inc     hl
+                djnz    dl_cmp
+                pop     de                  ; discard saved entry pointer
+                pop     hl                  ; HL = index (id in L)
+                ld      a, 1
+                ret
+dl_cmp_fail:
+                pop     de                  ; restore entry pointer (length byte)
+                pop     hl                  ; restore index
+dl_next:
+                ld      a, (de)             ; entry length
+                inc     de                  ; past the length byte
+                add     a, e
+                ld      e, a
+                jr      nc, dl_next_nc
+                inc     d
+dl_next_nc:
+                inc     l                   ; index++
+                jr      dl_loop
+dl_notfound:
+                xor     a
+                ret
+
+; ===========================================================================
+; emit_string_operand — append an OP_KIND_STRING operand at (PI_OPSPTR) from the
+; current token's (PARSE_TOK) TOK_STRING span (decoded body in LEX_STRPOOL):
+; [&09, len:2 LE, body[]]. (Port of OperandWriter.WriteString, operands.go:200.)
+; Advances (PI_OPSPTR); does NOT consume the token. Clobbers AF/BC/DE/HL.
+; ===========================================================================
+emit_string_operand:
+                ld      hl, (PARSE_TOK)
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = span ptr (into LEX_STRPOOL)
+                inc     hl
+                ld      c, (hl)             ; body_len low
+                inc     hl
+                ld      b, (hl)             ; body_len high
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_STRING
+                inc     hl
+                ld      (hl), c             ; body_len low
+                inc     hl
+                ld      (hl), b             ; body_len high
+                inc     hl
+                ex      de, hl              ; HL = body src, DE = operand dest
+                ld      a, b
+                or      c
+                jr      z, estr_done        ; empty string body
+                ldir
+estr_done:
+                ld      (PI_OPSPTR), de
+                ret
+
+; ===========================================================================
+; emit_sysname_pct_operand — append an OP_KIND_SYS_NAME operand at (PI_OPSPTR)
+; whose name is '%' followed by the current TOK_IDENT span: [&0B, len+1:2 LE,
+; '%', name[]]. (Port of `WriteSysName("%" + text)`, parser.go:270.) Advances
+; (PI_OPSPTR); does NOT consume the token. Clobbers AF/BC/DE/HL.
+; ===========================================================================
+emit_sysname_pct_operand:
+                ld      hl, (PARSE_TOK)
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = span ptr
+                inc     hl
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)             ; BC = name len
+                ; total length = name_len + 1 (the leading '%')
+                inc     bc
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_SYS_NAME
+                inc     hl
+                ld      (hl), c             ; len low
+                inc     hl
+                ld      (hl), b             ; len high
+                inc     hl
+                ld      (hl), &25           ; leading '%'
+                inc     hl
+                ex      de, hl              ; HL = name src, DE = operand dest
+                dec     bc                  ; BC back to name_len for the copy
+                ld      a, b
+                or      c
+                jr      z, espc_done        ; (defensive) empty name
+                ldir
+espc_done:
+                ld      (PI_OPSPTR), de
+                ret
+
+; ===========================================================================
+; parse_emit_directive — write one DIRECTIVE record from PD_DIRID + PI_COUNT +
+; the operand bytes in PARSE_OPSBUF, advancing PARSE_RECPTR and PARSE_RECN.
+; (Port of emitDirective, parser.go:60-67; framing from RecordWriter.WriteDirective,
+; writer.go:83.) Framing: [REC_KIND_DIRECTIVE | len:2 LE | dir_id:1 | op_count:1 |
+; operands[]], len = 2 + operands_len.
+; ===========================================================================
+parse_emit_directive:
+                ld      hl, (PI_OPSPTR)
+                ld      de, PARSE_OPSBUF
+                or      a
+                sbc     hl, de              ; HL = operand byte length
+                ld      b, h
+                ld      c, l                ; BC = operand byte length
+                ; payload length = 2 + operand length
+                inc     bc
+                inc     bc
+                ld      hl, (PARSE_RECPTR)
+                ld      (hl), REC_KIND_DIRECTIVE
+                inc     hl
+                ld      (hl), c             ; len low
+                inc     hl
+                ld      (hl), b             ; len high
+                inc     hl
+                ld      a, (PD_DIRID)
+                ld      (hl), a             ; directive id
+                inc     hl
+                ld      a, (PI_COUNT)
+                ld      (hl), a             ; operand count
+                inc     hl
+                ; copy operand bytes (length = payload - 2)
+                dec     bc
+                dec     bc
+                ex      de, hl              ; DE = record write ptr (after header)
+                ld      hl, PARSE_OPSBUF
+                ld      a, b
+                or      c
+                jr      z, ped_nocopy
+                ldir
+ped_nocopy:
+                ld      (PARSE_RECPTR), de
+                ld      hl, (PARSE_RECN)
+                inc     hl
+                ld      (PARSE_RECN), hl
+                ret
 
 ; ===========================================================================
 ; expr_buf_single_imm — if EXPR_BUF..(EXPR_PTR) holds exactly one PUSH_IMMn (the
@@ -3787,6 +4308,100 @@ REGSPECIALS:
                 defb    0                   ; sentinel
 
 ; ===========================================================================
+; DIRECTIVE_NAMES — directive name→id table (id = the entry's 0-based index).
+; A faithful copy of format.DirectiveTable (directives.go:4-31, append-only). The
+; id IS the index, so the order here is load-bearing; directive_lookup walks it
+; linearly. Record: len:1 | name (with the leading '.') | …; 0-length ends it.
+; ===========================================================================
+DIRECTIVE_NAMES:
+                defb 5
+                defm ".text"        ; 0
+                defb 5
+                defm ".data"        ; 1
+                defb 5
+                defm ".byte"        ; 2
+                defb 6
+                defm ".short"       ; 3
+                defb 5
+                defm ".word"        ; 4
+                defb 5
+                defm ".quad"        ; 5
+                defb 6
+                defm ".ascii"       ; 6
+                defb 6
+                defm ".asciz"       ; 7
+                defb 4
+                defm ".equ"         ; 8
+                defb 4
+                defm ".set"         ; 9
+                defb 7
+                defm ".global"      ; 10
+                defb 7
+                defm ".balign"      ; 11
+                defb 4
+                defm ".org"         ; 12  (DIR_ORG)
+                defb 5
+                defm ".skip"        ; 13
+                defb 6
+                defm ".space"       ; 14
+                defb 5
+                defm ".inst"        ; 15
+                defb 6
+                defm ".align"       ; 16
+                defb 6
+                defm ".ltorg"       ; 17
+                defb 8
+                defm ".section"     ; 18  (DIR_SECTION)
+                defb 5
+                defm ".arch"        ; 19  (DIR_ARCH)
+                defb 4
+                defm ".cpu"         ; 20  (DIR_CPU)
+                defb 6
+                defm ".hword"       ; 21
+                defb 0              ; sentinel
+
+DIR_ORG:        equ 12
+DIR_SECTION:    equ 18
+DIR_ARCH:       equ 19
+DIR_CPU:        equ 20
+
+; ===========================================================================
+; TOK_SPELL — fixed source spellings for punctuation/operator tokens, indexed by
+; (token_kind - TOK_COMMA). (Port of tokSpelling's punctuation cases, parser.go:
+; 321-374.) Each entry is [len:1 | char:1]; a 2-char operator ('<<'/'>>') stores
+; len=2 and its single repeated char. len=0 = no spelling (the token kind
+; contributes nothing). TOK_IDENT/TOK_INT are handled by span-copy, not here.
+; ===========================================================================
+; (Char codes are written as hex ASCII — pyz80 does not accept 'x' char
+; literals; the trailing comment names the character.)
+TOK_SPELL:
+                defb 1, &2C     ; TOK_COMMA       (5)   ','
+                defb 1, &23     ; TOK_HASH        (6)   '#'
+                defb 1, &3A     ; TOK_COLON       (7)   ':'
+                defb 1, &21     ; TOK_BANG        (8)   '!'
+                defb 1, &2E     ; TOK_DOT         (9)   '.'
+                defb 1, &5B     ; TOK_LBRACKET    (10)  '['
+                defb 1, &5D     ; TOK_RBRACKET    (11)  ']'
+                defb 1, &28     ; TOK_LPAREN      (12)  '('
+                defb 1, &29     ; TOK_RPAREN      (13)  ')'
+                defb 1, &2B     ; TOK_PLUS        (14)  '+'
+                defb 1, &2D     ; TOK_MINUS       (15)  '-'
+                defb 1, &2A     ; TOK_STAR        (16)  '*'
+                defb 1, &2F     ; TOK_SLASH       (17)  '/'
+                defb 1, &26     ; TOK_AMP         (18)  '&'
+                defb 1, &7C     ; TOK_PIPE        (19)  '|'
+                defb 1, &5E     ; TOK_CARET       (20)  '^'
+                defb 1, &7E     ; TOK_TILDE       (21)  '~'
+                defb 2, &3C     ; TOK_SHL         (22)  "<<"
+                defb 2, &3E     ; TOK_SHR         (23)  ">>"
+                defb 0, 0       ; TOK_LINECOMMENT (24)  no spelling
+                defb 0, 0       ; TOK_BLOCKCOMMENT(25)  no spelling
+                defb 0, 0       ; TOK_LOCALREF    (26)  no spelling
+                defb 1, &3D     ; TOK_EQUALS      (27)  '='
+                defb 1, &25     ; TOK_PERCENT     (28)  '%'
+TOK_SPELL_COUNT: equ (TOK_PERCENT - TOK_COMMA + 1)
+
+; ===========================================================================
 ; Working storage
 ; ===========================================================================
 ML_PTR:         defs 2          ; mnemonic_lookup: saved candidate pointer
@@ -3820,6 +4435,11 @@ BARRIER_SPANPTR: defs 2         ; barrier_lookup: saved token span pointer
 BARRIER_SPANLEN: defs 1         ; barrier_lookup: saved token span length
 DCTLBI_XTOPT:   defs 1          ; parse_dc_tlbi: 1 if the Xt operand is optional (tlbi), 0 if mandatory (dc)
 LITPOOL_WIDTH:  defs 1          ; parse_ldr: pool-entry width (4 for W dest, 8 for X dest)
+PD_DIRID:       defs 1          ; parse_directive: current directive id (index into DIRECTIVE_NAMES)
+DL_PTR:         defs 2          ; directive_lookup: saved candidate pointer
+DL_LEN:         defs 1          ; directive_lookup: saved candidate length
+SPELL_PTR:      defs 2          ; parse_directive_rest: SPELL_BUF write pointer
+SPELL_BUF:      defs 256        ; parse_directive_rest: concatenated rest-of-line spelling
 PARSE_OPSBUF:   defs 256        ; one instruction's operand bytes (staging)
 EXPR_BUF:       defs 256        ; one operand's expression bytecode (build buffer)
 EXPR_PTR:       defs 2          ; expression-bytecode write pointer (into EXPR_BUF)
