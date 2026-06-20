@@ -31,8 +31,3 @@
   body: |
     Pursue an on-SAM preprocessor (i31: .if build-constraints + macro expansion) now, and at what scope? Host-side preprocessing already covers this in the current pipeline (asmparse/text2bin), so moving it on-SAM is a new, beyond-M7 feature with genuine scope choices (which .if constraint syntax; macro definition/expansion semantics; integration point vs the existing host preprocess; Go-authority side). Not a port of existing Go authority — needs Pete's go/no-go + scope before a multi-session implementation. Gates i31.
   owner: pete
-
-- id: q39
-  body: |
-    Unify the two Go Z80 harnesses into ONE emulation layer (CLAUDE.md §7 'one layer used by every test')? Today: tools/z80-test-harness-go (assembler: faithful LMPR/HMPR paging + ROM write-protect + DOS hooks, no Ethernet) and tools/netboot-oracle/z80 (netboot: ENC28J60 + EEPROM + trinload round-trip, flat memory, separate nested go.mod to keep the pure-Go oracle job from pulling koron-go/z80). The split let the dumper's &C000 ROM-paging bug reach hardware (i87a). i181 ports the pager into the netboot harness as the immediate fix; the broader question is whether to MERGE the two into a single harness (one CPU+memory+IO core; Ethernet/EEPROM/DOS as attachable devices) so no program ever runs in a half-model again — vs keeping two and just sharing the pager package. Trade-off: unification removes the recurring gap class but is a real refactor and re-entangles the nested-module boundary that keeps the pure-Go netboot-oracle job light. Agent recommends: share the pager as a common package now (i181), evaluate full unification after.
-  owner: pete
