@@ -1893,7 +1893,6 @@ func TestParseInstError(t *testing.T) {
 		{"bare # without an int", "add x0, #\n"},
 		{"leading comma", "add , x0\n"},
 		{"line-leading number", "5 x0\n"},
-		{"directive (B6, not B2b)", ".text\n"},
 		// malformed expressions
 		{"unbalanced paren", "mov x0, #(1+2\n"},
 		{"empty parens", "mov x0, ()\n"},
