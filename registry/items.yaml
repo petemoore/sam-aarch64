@@ -1861,9 +1861,49 @@
   description: |
     A manifest on the booted record maps TFTP names/paths -> B-DOS records, decoupling the served namespace from B-DOS 10-char flat filename limits. Entries carry {locator(s), span count, size, optional SHA-256}. Storage-allocation strategy in manifest header (first-free / highest-free / fixed-list; never silently steal a record). Multi-project use with shared-files-by-reference. Sub-choices settled: encoding=text, locator key=number+name, span naming=hash-derived, default=highest-free. Storage-class: trinity-sam-disks/ prefix = validated raw-record disk. Design at §6.5.
   status: OPEN
-  kind: leaf
+  kind: umbrella
   owner: agent
   refs: ["docs/specs/netboot-storage-manifest-design.md §6.5", i93, i95, i99, i70, i100, i101, i119, i122]
+
+- id: i114a
+  title: "Serve manifest (Go authority): text format + parser + manifest-backed name→record resolve"
+  description: |
+    design §1-3: a human-editable line-based text manifest, read once from the boot record, mapping full Pi-facing TFTP names/paths -> internal B-DOS record locator(s) + span count + total size + optional SHA-256, with local vs remote entry kinds. Go authority: define the format, write the parser, back the tftp.Store/Resolve path so exact-match resolve returns record-list+size into the existing bdos.SpanPlan path. Host-verifiable, no hardware gate; Z80 port is a follow-on.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i114
+  refs: [docs/specs/netboot-storage-manifest-design.md, tools/netboot-oracle/tftp/server.go]
+
+- id: i114b
+  title: "Netboot storage-allocation strategy: header policy (first-free / fixed-list / highest-free)"
+  description: |
+    design §4: storage-allocation policy in the manifest header (front section), user-chosen, default highest-free. s1 first-free (pack already-claimed records then lowest free), s2 fixed-list (overflow WARNS, never steals an unlisted record), s3 highest-free (keep low slots for the user's own disks). Invariants: overflow is an explicit warning, never a silent record-steal; the header records whether the manifest's own disk is in the pool; resume reuses already-claimed space. Go authority over a modelled store; host-verifiable.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i114
+  refs: ["docs/specs/netboot-storage-manifest-design.md §4"]
+
+- id: i114c
+  title: "Netboot storage classes: flat-file vs trinity-sam-disks bootable raw-record (validate + HWSAD write seam)"
+  description: |
+    design §6.5 decision 5: store a fetched object as one of two classes by explicit namespace prefix (never inferred). default = flat-file archive (spanned per §3, never bootable). trinity-sam-disks/ prefix = SAM disk record: validate-before-commit (size==819200 AND BDOS stamp@byte232), reject on mismatch; a raw record is both bootable (HRECORD+boot) and servable-raw. Raw-record write seam: HWSAD (hook 149) per-sector write of the 1600-sector image, modelled in BDOSStore symmetric to HRSAD; SD write dispatch hardware-gated like HSAVE. Validation+dispatch host-verifiable. Unblocks i122.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i114
+  refs: ["docs/specs/netboot-storage-manifest-design.md §6.5", "docs/specs/samdos-file-io.md", "reference/bdos/bdos15a.src.txt", "tools/netboot-oracle/z80/bdos_store.go", i122]
+
+- id: i114d
+  title: "Content-addressed span-record naming + reference-sharing dedup"
+  description: |
+    design §6.3 decision 3: internal span-record naming is hash-derived (content-addressed) — a blob's records are keyed by its content SHA-256, so two projects fetching the identical file land on the same records and the §5 shared-files-by-reference dedup falls out for free (no separate dedup logic). Names are internal, never user-visible; the 7-char-prefix truncation is dropped. Go authority plus the content-hash record lookup that the i122 sha256-dedup-before-fetch uses. Host-verifiable.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i114
+  refs: ["docs/specs/netboot-storage-manifest-design.md §6.3", "tools/netboot-oracle/z80/sha256.asm", i122]
 
 - id: i115
   title: Registry as structured source — YAML-backed iN/qN registry with CLI validator + CI sync-check
@@ -2116,6 +2156,7 @@
   description: |
     SAM acts like a netbooting Pi: on boot, TFTP-fetches a named disk image, writes to a scratch/boot record, and boots into it (no control return). Design notes: (a) use reusable scratch record (no cleanup post-boot); (b) sha256-dedup before fetch — if content hash already in storage, skip fetch and boot existing copy (idempotent). Reuses i114/q26 content-addressed record naming. Builds on i82 receive loop + i119 write-out + a boot-a-record primitive (Trinity RECORD-then-BOOT model).
   status: OPEN
+  depends_on: [i114c, i114d]
   kind: leaf
   owner: agent
   refs: [src/netboot/netboot_client.asm, docs/notes/netboot-trinity-testing.md, i82, i114, i119]
