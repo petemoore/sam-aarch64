@@ -368,15 +368,27 @@ rrq_oack:
                 jp      srv_send_tbuf
 
 ; ===========================================================================
-; WRQ handler (i121a — handshake only). Port of serve.go::Responder.startWrite.
+; WRQ handler. Port of serve.go::Responder.startWrite.
 ;
 ; A WRQ arrives on UDP dst 69 (same port as RRQ). The server learns the client
 ; endpoint (MAC/IP/TID) and replies:
 ;   - bare WRQ (no options): ACK-0 (`00 04 00 00`)    — tftp.BuildACK(0)
 ;   - optioned WRQ:          OACK echoing blksize      — same build_oack path
 ;
-; DATA reception is deferred to i121b. This routine only produces the handshake
-; reply frame; no receive state is set up here.
+; A push is a "disk-record push" (i121f): the bootable build claims a FREE Trinity
+; record before the handshake and streams the pushed .mgt image straight into it
+; (raw 512-byte sectors), reusing the i122 store machinery. If no record is free,
+; the server replies ERROR(3, "no free record") and does NOT arm the receiver —
+; never touching a named record (the shared-resource invariant,
+; memory/trinity_storage_shared_resource). v1 treats EVERY WRQ as a disk-record
+; push and lets validation be the safety gate (manifest design §6.5); the future
+; i121c flat-file path uses the "trinity-sam-disks/" filename prefix as the
+; discriminator, so the prefix is stripped here but not required.
+;
+; The disk-record claim + the sink streaming live behind NETBOOT_HOSTTEST==0
+; (they need the bdos_seam.asm RST 8 hooks + raw_record_sink.asm, present only in
+; the bootable build). The HOSTTEST build (the i121a/i121b wire tests) leaves
+; WRQ_SINK_MODE clear and accumulates into the flat WRQ_STAGING, unchanged.
 ; ===========================================================================
 handle_wrq:
                 ; learn the client endpoint (same pattern as handle_rrq).
@@ -393,6 +405,25 @@ handle_wrq:
                 ld      bc, 2
                 ldir
 
+                ; --- disk-record push setup (bootable build): claim a free record,
+                ; arm the streaming sink. No free record -> ERROR(3), no handshake. ---
+                xor     a
+                ld      (WRQ_SINK_MODE), a     ; default: flat accumulate (HOSTTEST path)
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                call    wrq_claim_record       ; CY set = a free record was claimed
+                jr      c, wrq_handshake       ; claimed: continue to the handshake
+                ; no free record: ERROR(3, "no free record"), do not arm.
+                xor     a
+                ld      (ERR_CODE), a
+                ld      a, 3
+                ld      (ERR_CODE+1), a        ; big-endian code = 0x0003
+                ld      hl, err_nofree_msg
+                ld      (ERR_MSG_PTR), hl
+                call    build_error            ; packet at TBUF, BC = length
+                jp      srv_send_tbuf
+                endif
+
+wrq_handshake:
                 ; bare WRQ? (no options: PARSE_OPT_COUNT == 0)
                 ld      bc, (PARSE_OPT_COUNT)
                 ld      a, b
@@ -433,6 +464,36 @@ wrq_arm_receiver:
                 ld      a, 1
                 ld      (WRQ_RECV_ACTIVE), a
                 ret
+
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+; wrq_claim_record — claim a FREE Trinity record to stream the push into. Find the
+; first free record (bdos_find_free_record; free ⇔ the record-list name byte is 0,
+; so a named record is never touched), HRECORD-select it, reset the streaming sink,
+; and enter sink mode. BD_RECORDS (the card record count) is the CSD-derived value
+; (hardware-gated i145; the emulation E2E injects it) — 0 records ⇒ none free.
+;
+; Out: CY set + WRQ_SINK_MODE=1 + the record selected + the sink reset, if a free
+;      record was claimed; CY clear (WRQ_SINK_MODE stays 0) if no record is free.
+; Mirrors client_fetch_boot's select + raw_record_sink_reset + sink-mode arm.
+wrq_claim_record:
+                call    bdos_find_free_record  ; -> BD_FREE_RECORD (1-based, 0 = none free)
+                ld      a, (BD_FREE_RECORD)
+                ld      b, a
+                ld      a, (BD_FREE_RECORD+1)
+                or      b
+                jr      z, wrq_no_free         ; BD_FREE_RECORD == 0: nothing free
+                ld      a, (BD_FREE_RECORD)    ; low byte = the record number (>=1)
+                ld      (WRQ_RECORD), a
+                call    bdos_select_record     ; HRECORD-select it (HWSADs target it)
+                call    raw_record_sink_reset  ; RRS_FILL/LINEAR/TOTAL = 0
+                ld      a, 1
+                ld      (WRQ_SINK_MODE), a     ; handle_data streams into the record
+                scf
+                ret
+wrq_no_free:
+                or      a                      ; clear carry: no free record
+                ret
+                endif
 
 ; ===========================================================================
 ; 4. TFTP ACK — on our transfer TID: FirstData (ack 0, OACK path) or the next
@@ -585,7 +646,20 @@ wd_next_block:
                 sbc     hl, de                 ; HL = data length
                 ld      (WRQ_DATA_LEN), hl
 
-                ; accumulate the payload into STAGING at the running offset.
+                ; route the payload: the flat WRQ_STAGING accumulate (sink mode 0 —
+                ; the i121b host-verified path, kept for the future i121c flat file)
+                ; or the i121f raw-record streaming sink (sink mode 1 — re-block into
+                ; 512-byte sectors + HWSAD each into the claimed record, so a full
+                ; 819200-byte disk image never sits whole in RAM). WRQ_SINK_MODE
+                ; selects; only the bootable build has the sink. Mirrors
+                ; netboot_client.asm cl_sink_payload.
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                ld      a, (WRQ_SINK_MODE)
+                or      a
+                jr      nz, wd_sink_payload
+                endif
+
+                ; --- mode 0: accumulate the payload into WRQ_STAGING at the offset ---
                 ld      hl, (WRQ_STAGE_OFFSET)
                 ld      de, WRQ_STAGING
                 add     hl, de                 ; HL = dest
@@ -602,9 +676,25 @@ wd_no_copy:
                 ld      de, (WRQ_DATA_LEN)
                 add     hl, de
                 ld      (WRQ_STAGE_OFFSET), hl
+                jr      wd_after_payload
 
-                ; WRQ_ACKED = block (DE still holds it; re-read from the frame to
-                ; assemble the LE value cleanly).
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+wd_sink_payload:
+                ; --- mode 1: stream the payload into the claimed record. The sink
+                ; re-blocks into sectors + HWSADs each full one and tracks the 32-bit
+                ; image size in RRS_TOTAL (the size authority wd_finalize validates;
+                ; WRQ_STAGE_OFFSET is left alone — its 16 bits would overflow a full
+                ; record). ---
+                ld      hl, RXBUF + RX_UDP_PAYLOAD + 4
+                ld      bc, (WRQ_DATA_LEN)
+                ld      a, b
+                or      c
+                jr      z, wd_after_payload    ; zero-length block: nothing to sink
+                call    raw_record_sink_leaf
+                endif
+wd_after_payload:
+
+                ; WRQ_ACKED = block (re-read from the frame to assemble the LE value).
                 ld      a, (RXBUF + RX_UDP_PAYLOAD + 2)
                 ld      d, a                   ; high byte
                 ld      a, (RXBUF + RX_UDP_PAYLOAD + 3)
@@ -619,6 +709,13 @@ wd_no_copy:
                 jr      nc, wd_send_ack_de     ; datalen >= blksize: not the last
                 ld      a, 1
                 ld      (WRQ_DONE), a
+                ; final block: in sink mode, flush + validate the streamed record
+                ; before the final reply (ACK on success, ERROR(3) on a bad image).
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                ld      a, (WRQ_SINK_MODE)
+                or      a
+                jp      nz, wd_finalize
+                endif
 wd_send_ack_de:
                 ; the blksize compare overwrote DE; reload the block to ACK
                 ; (the just-accepted block, == WRQ_ACKED).
@@ -636,6 +733,71 @@ wd_send_ack:
                 ld      (hl), e                ; block low
                 ld      bc, 4                  ; ACK is 4 bytes
                 jp      srv_send_tbuf          ; wrap to the client + transmit
+
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+; wd_finalize — the disk-record push commit (i121f): the short final block has
+; arrived and the whole image is streamed into the claimed record. Flush the sink's
+; final partial sector, validate the result as a Trinity disk record (size == 819200
+; from RRS_TOTAL AND the "BDOS" stamp@232 read back via HRSAD), then reply: the
+; final ACK on a valid image (TFTP success), or ERROR(3, "invalid disk record")
+; instead of the ACK on a bad one — so a stock `tftp put` client surfaces the
+; rejection on its last block. This is the §6.5 "validate before committing, reject
+; on mismatch" intent in TFTP-push form. Mirrors netboot_client.asm client_finalize
+; (the store+validate half; the boot half is i122c, not this push path).
+wd_finalize:
+                call    raw_record_sink_finish ; flush any final partial sector
+
+                ; size = RRS_TOTAL -> BD_REC_SIZE (32-bit LE).
+                ld      hl, (RRS_TOTAL)
+                ld      (BD_REC_SIZE), hl
+                ld      hl, (RRS_TOTAL + 2)
+                ld      (BD_REC_SIZE + 2), hl
+
+                ; read sector 0 (track 0, sector 1) back via HRSAD so the validator
+                ; can check the "BDOS" stamp@232 of the just-written record.
+                xor     a
+                ld      (BD_READ_TRACK), a
+                inc     a
+                ld      (BD_READ_SECTOR), a    ; sector 1 (1-based)
+                call    bdos_read_sector       ; -> BD_READ_BUF (512 bytes)
+
+                call    bdos_validate_disk_record  ; -> BD_REC_VALID (1 = valid)
+                ld      a, (BD_REC_VALID)
+                or      a
+                jr      z, wd_invalid
+
+                ; RECORD-CLAIM GAP (i121f, flagged not faked): the record's DATA
+                ; sectors are now written (HWSAD), but its central record-LIST name
+                ; entry is NOT — bdos_find_free_record keys "free" off that list
+                ; name (byte 0 == 0), so an unnamed-but-written record still reads as
+                ; free and the NEXT push could reuse it. Marking it used needs a
+                ; card-absolute list-sector WRITE (B-DOS new.rec's `LDIR rcd.name`
+                ; into the entry — the RENAME path; design §4.3) keyed by the WRQ
+                ; filename (stripping a leading "trinity-sam-disks/" prefix, 10-char
+                ; B-DOS cap). No such routine exists yet (no LISTWRITE hook / no
+                ; card-absolute write primitive in bdos_seam.asm or the harness), and
+                ; the SD-port write is hardware-gated (ports &DC-&DF, same gate as the
+                ; list READ). Per CLAUDE.md §correctness, it is left UNWRITTEN here
+                ; rather than invented: the record works for "push then HRECORD n +
+                ; boot" (its data sectors are correct), and claiming it is a tracked
+                ; follow-up. The validate-before-ACK above is the §6.5 safety gate.
+
+                ; valid: ACK the final block (TFTP success). DE was clobbered by the
+                ; validate path; reload the just-accepted block (== WRQ_ACKED).
+                ld      de, (WRQ_ACKED)
+                jp      wd_send_ack
+
+wd_invalid:
+                ; invalid image: ERROR(3, "invalid disk record") in place of the ACK.
+                xor     a
+                ld      (ERR_CODE), a
+                ld      a, 3
+                ld      (ERR_CODE+1), a        ; big-endian code = 0x0003
+                ld      hl, err_badimage_msg
+                ld      (ERR_MSG_PTR), hl
+                call    build_error            ; packet at TBUF, BC = length
+                jp      srv_send_tbuf
+                endif
 
 ; srv_send_tbuf — wrap the TFTP packet at TBUF (length BC) as a UDP frame (server
 ; IP + server TID -> client IP + client TID) and transmit it.
@@ -1005,6 +1167,12 @@ str_blksize:      defm "blksize"
                   defb 0
 str_tsize:        defm "tsize"
                   defb 0
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+err_nofree_msg:   defm "no free record"
+                  defb 0
+err_badimage_msg: defm "invalid disk record"
+                  defb 0
+                endif
 
 ; ===========================================================================
 ; Real-hardware bootable entry (excluded from the host harness build, which has
@@ -1182,9 +1350,18 @@ WRQ_STAGE_OFFSET: defs 2                 ; bytes accumulated into WRQ_STAGING
 WRQ_DATA_LEN:     defs 2                 ; the last DATA block's payload length
 WRQ_DONE:         defs 1                 ; 1 = a short final block ended the xfer
 
-; The pushed file accumulates here. It sits in section D (&C000), flat RAM under
-; the host harness; the bootable build (i121d) pages RAM in before using it, the
-; same reuse the dumper makes of this window (STAGE equ &C000).
+; Disk-record push state (i121f). WRQ_SINK_MODE picks the per-block payload route:
+;   0 = flat accumulate into WRQ_STAGING (the HOSTTEST wire path, future i121c),
+;   1 = stream into a claimed Trinity record via raw_record_sink (the bootable
+;       push path). handle_wrq sets it (1 on a successful free-record claim);
+;       handle_data reads it. It lives in both builds (the default-clear at the
+;       top of handle_wrq runs in the HOSTTEST build too), so it is unconditional.
+WRQ_SINK_MODE:    defs 1                 ; 0 = flat WRQ_STAGING, 1 = raw-record sink
+WRQ_RECORD:       defs 1                 ; the claimed record number streamed into (bootable)
+
+; The pushed file accumulates here (sink mode 0). It sits in section D (&C000),
+; flat RAM under the host harness; the bootable build (i121d) pages RAM in before
+; using it, the same reuse the dumper makes of this window (STAGE equ &C000).
 WRQ_STAGING:      equ &C000
 
 RX_LEN:           defs 2
@@ -1212,6 +1389,15 @@ SRC_TABLE:        defs 256
                 ; a double definition. The standalone serve build keeps it: the
                 ; bootable image reads the SAM's MAC/IP from flash, the host test
                 ; build has no EEPROM and excludes it. (`*` = logical AND.)
+                ;
+                ; The disk-record push store machinery (i121f) — the B-DOS seam
+                ; (free-record find / record select / raw-sector write+read /
+                ; validate, with the RST 8 hook dispatch) + the streaming sink — is
+                ; included for the same builds: only the bootable serve image streams
+                ; a push into a record. The HOSTTEST wire-test build and the dumper
+                ; (RRQ-only) leave these out, matching the sink-code guards above.
                 if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
                 include "eeprom.asm"
+                include "bdos_seam.asm"        ; i121f: free-record find + record select + HWSAD/HRSAD + validate
+                include "raw_record_sink.asm"  ; i121f: streaming disk-image -> raw record (HWSAD per sector)
                 endif

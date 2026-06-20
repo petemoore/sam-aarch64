@@ -40,6 +40,7 @@ package serve
 import (
 	"strconv"
 
+	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/bdos"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/smoke"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/tftp"
@@ -51,6 +52,16 @@ type Config struct {
 	ServerMAC [6]byte
 	ServerIP  [4]byte
 	ServerTID uint16 // the SAM's ephemeral source port for TFTP transfers
+
+	// DiskRecordPush selects the i121f WRQ "disk-record push" behaviour: a WRQ is
+	// streamed into a claimed Trinity record (the body re-blocked into 512-byte
+	// sectors via bdos.RawSink), validated as a Trinity disk record on the final
+	// block (size == RecordSize AND the BDOS stamp@232), and answered with the
+	// final ACK on success or ERROR(3) on a bad image. With it false the WRQ path
+	// is the i121a/i121b flat receive-to-staging (no record claim, always ACK) —
+	// the Z80 HOSTTEST wire build mirrors this. The Z80 picks the same behaviour
+	// from WRQ_SINK_MODE (set by a successful free-record claim in handle_wrq).
+	DiskRecordPush bool
 }
 
 // Responder is the serve-files demo server. It owns the ARP + TFTP sub-responders
@@ -77,6 +88,13 @@ type Responder struct {
 	// the lock-step DATA/ACK loop that accumulates the pushed file into staging.
 	// nil when no WRQ transfer is in progress.
 	wrqRecv *wrqReceiver
+
+	// freeRecordAvailable models the i121f free-record claim (the Z80
+	// bdos_find_free_record result): when DiskRecordPush is set and this is false,
+	// a WRQ is rejected with ERROR(3, "no free record") and no receiver is armed
+	// (the shared-resource invariant — never touch a named record). Default true;
+	// a test sets it false via SetFreeRecordAvailable to drive the all-full case.
+	freeRecordAvailable bool
 }
 
 // wrqEndpoint is the client-side identity learned from a WRQ frame (i121a).
@@ -95,7 +113,16 @@ type wrqReceiver struct {
 	blksize int    // negotiated block size (512 bare WRQ, else the accepted blksize)
 	acked   uint16 // the highest block number ACKed so far
 	done    bool   // a short (< blksize) block has ended the transfer
-	data    []byte // accumulated staged bytes
+	data    []byte // accumulated staged bytes (flat receive-to-staging path)
+
+	// Disk-record push state (i121f), used only when DiskRecordPush is set. The
+	// pushed body is streamed into sink (re-blocked into 512-byte sectors, the Z80
+	// raw_record_sink authority); on the short final block the result is validated
+	// (bdos.ValidateDiskRecord over sink.total + sector-0 of the written bytes) and
+	// valid records the outcome the WRQPushOutcome accessor returns.
+	push  bool
+	sink  *bdos.RawSink
+	valid bool // set on the final block: the streamed image validated
 }
 
 // New builds a serve-files demo server over a flat store. src(name) yields the
@@ -103,12 +130,32 @@ type wrqReceiver struct {
 // binary; in the harness a ByteSource).
 func New(cfg Config, store tftp.Store, src func(name string) tftp.Source) *Responder {
 	return &Responder{
-		cfg:   cfg,
-		store: store,
-		src:   src,
-		arp:   smoke.NewResponder(cfg.ServerMAC, cfg.ServerIP),
-		tftp:  tftp.NewServerLoop(store, cfg.ServerMAC, cfg.ServerIP, cfg.ServerTID),
+		cfg:                 cfg,
+		store:               store,
+		src:                 src,
+		arp:                 smoke.NewResponder(cfg.ServerMAC, cfg.ServerIP),
+		tftp:                tftp.NewServerLoop(store, cfg.ServerMAC, cfg.ServerIP, cfg.ServerTID),
+		freeRecordAvailable: true,
 	}
+}
+
+// SetFreeRecordAvailable models the i121f free-record claim (the Z80
+// bdos_find_free_record result) for the disk-record push path: false makes the
+// next WRQ reject with ERROR(3, "no free record") and arm nothing. Only meaningful
+// when Config.DiskRecordPush is set. Default (from New) is true.
+func (r *Responder) SetFreeRecordAvailable(v bool) { r.freeRecordAvailable = v }
+
+// WRQPushOutcome returns the result of the active/last disk-record push: the
+// 512-byte sector writes the body re-blocked into (via bdos.RawSink), the total
+// streamed byte count, whether the transfer completed (a short final block), and
+// whether the streamed image validated as a Trinity disk record. The Z80 test
+// compares its captured SectorWrites() + BD_REC_VALID against these.
+func (r *Responder) WRQPushOutcome() (writes []bdos.RawSectorWrite, total int, done, valid bool) {
+	if r.wrqRecv == nil || !r.wrqRecv.push {
+		return nil, 0, false, false
+	}
+	rc := r.wrqRecv
+	return rc.sink.Writes(), rc.sink.Total(), rc.done, rc.valid
 }
 
 // OnFrame routes one received Ethernet frame and returns the reply frame to
@@ -193,11 +240,19 @@ func (r *Responder) recvData(u frame.UDP) []byte {
 	rcv := r.wrqRecv
 	switch {
 	case block == rcv.acked+1:
-		// The next expected block: stage it, ACK it, end on a short block.
-		rcv.data = append(rcv.data, data...)
+		// The next expected block: route the payload (the flat staging accumulate,
+		// or the disk-record streaming sink), ACK it, end on a short block.
+		if rcv.push {
+			rcv.sink.Write(data)
+		} else {
+			rcv.data = append(rcv.data, data...)
+		}
 		rcv.acked = block
 		if len(data) < rcv.blksize {
 			rcv.done = true
+			if rcv.push {
+				return r.finalizePush(rcv, block)
+			}
 		}
 		return r.wrapToWRQClient(tftp.BuildACK(block))
 	case block <= rcv.acked:
@@ -207,6 +262,29 @@ func (r *Responder) recvData(u frame.UDP) []byte {
 		// A future block we haven't reached: ignore (no gap-filling).
 		return nil
 	}
+}
+
+// finalizePush commits a disk-record push on its short final block: flush the
+// sink's final partial sector, validate the streamed image as a Trinity disk
+// record (size == RecordSize from sink.Total() AND the BDOS stamp@232 of the
+// written sector 0), and reply with the final ACK on a valid image or
+// ERROR(3, "invalid disk record") on a bad one. Port of netboot_serve.asm
+// wd_finalize; the validation is bdos.ValidateDiskRecord (the same authority the
+// Z80 bdos_validate_disk_record ports).
+func (r *Responder) finalizePush(rcv *wrqReceiver, block uint16) []byte {
+	rcv.sink.Finish()
+
+	var sector0 []byte
+	if w := rcv.sink.Writes(); len(w) > 0 {
+		sector0 = w[0].Data[:]
+	} else {
+		sector0 = make([]byte, bdos.SectorSize) // no sectors written: a zero first sector
+	}
+	rcv.valid = bdos.ValidateDiskRecord(rcv.sink.Total(), sector0) == nil
+	if rcv.valid {
+		return r.wrapToWRQClient(tftp.BuildACK(block))
+	}
+	return r.wrapToWRQClient(tftp.BuildError(3, "invalid disk record"))
 }
 
 // WRQStaged returns the bytes accumulated by the active/last WRQ receive (the
@@ -233,10 +311,21 @@ func (r *Responder) startWrite(u frame.UDP, req *tftp.Request) []byte {
 	copy(r.wrqClient.ip[:], u.SrcIP[:])
 	r.wrqClient.tid = u.SrcPort
 
+	// Disk-record push (i121f): claim a free Trinity record before the handshake.
+	// No free record -> ERROR(3, "no free record"), arm nothing (never touch a
+	// named record — the shared-resource invariant). v1 treats every WRQ as a
+	// disk-record push; the future i121c flat-file path uses the
+	// "trinity-sam-disks/" filename prefix (bdos.Classify) as the discriminator.
+	// Port of netboot_serve.asm wrq_claim_record.
+	if r.cfg.DiskRecordPush && !r.freeRecordAvailable {
+		r.wrqRecv = nil
+		return r.wrapToWRQClient(tftp.BuildError(3, "no free record"))
+	}
+
 	// Bare WRQ (no options) -> ACK-0 (`00 04 00 00`), RFC 1350. Arm the receiver
 	// at the 512-byte default; the client's DATA block 1 follows the ACK-0.
 	if len(req.Options) == 0 {
-		r.wrqRecv = &wrqReceiver{blksize: 512}
+		r.wrqRecv = r.newWRQReceiver(512)
 		return r.wrapToWRQClient(tftp.BuildACK(0))
 	}
 
@@ -252,13 +341,26 @@ func (r *Responder) startWrite(u frame.UDP, req *tftp.Request) []byte {
 	}
 	// Arm the receiver at the negotiated blksize; the client's DATA block 1
 	// follows its ACK of the OACK.
-	r.wrqRecv = &wrqReceiver{blksize: int(blksize)}
+	r.wrqRecv = r.newWRQReceiver(int(blksize))
 	var oackOpts []tftp.Option
 	oackOpts = append(oackOpts, tftp.Option{Name: "blksize", Value: strconv.FormatUint(blksize, 10)})
 	if ts, ok := req.Option("tsize"); ok {
 		oackOpts = append(oackOpts, tftp.Option{Name: "tsize", Value: ts})
 	}
 	return r.wrapToWRQClient(tftp.BuildOACK(oackOpts))
+}
+
+// newWRQReceiver arms a WRQ receiver at blksize. In disk-record push mode it also
+// attaches a bdos.RawSink (the body is re-blocked into the record's sectors, the
+// Z80 raw_record_sink authority); otherwise it is the flat receive-to-staging of
+// i121a/i121b.
+func (r *Responder) newWRQReceiver(blksize int) *wrqReceiver {
+	rc := &wrqReceiver{blksize: blksize}
+	if r.cfg.DiskRecordPush {
+		rc.push = true
+		rc.sink = bdos.NewRawSink()
+	}
+	return rc
 }
 
 // wrapToWRQClient wraps a TFTP payload as a UDP datagram back to the WRQ client
