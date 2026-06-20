@@ -2976,9 +2976,11 @@
   title: "Harness: add SAM paging + ROM write-protect to the netboot Go emulator (port the assembler emulator's pager)"
   description: |
     THE RECURRING-&C000 FIX, minimal form (Pete, 2026-06-21). Root of the i87a rom1 crash: the dumper needs BOTH paging and Ethernet but runs in the netboot emulator (tools/netboot-oracle/z80), which models ENC28J60 + EEPROM + trinload round-trip (i132) + a fixed ROM1-RO boot overlay (i124) but does NOT act on LMPR/HMPR (records, doesn't remap) — and the dumper's ROM-paging path is ifdef'd out (NETBOOT_HOSTTEST). The ASSEMBLER emulator (tools/z80-test-harness-go/harness.go) ALREADY has a faithful pager — resolveRead/resolveWritePage do full LMPR/HMPR mapping and SILENTLY DROP ROM writes (ROM0/ROM1 read-only, the &C000 wall). FIX (the immediate, SAMBOOT-critical step — the full two-into-one unification is POSTPONED to i190 per Pete): bring that proven pager (~40 lines) into the netboot emulator so LMPR/HMPR remap real pages and ROM writes drop; load ROM0/ROM1 fixtures + model trinload residency in its pages; un-ifdef the dumper ROM path; reproduce the i87a rom1 page-0-clobbers-trinload crash in emulation (red), then verify the i188 redesign green. Prefer extracting the pager into a SHARED package (a down-payment on i190) over a copy. Unblocks i188.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 523, role: completing}
 
 - id: i182
   title: Bootable fetch-and-boot disk + real-Trinity run of client_fetch_boot
