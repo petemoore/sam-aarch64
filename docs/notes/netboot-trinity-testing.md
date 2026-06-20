@@ -415,37 +415,41 @@ over TFTP as 16 KB regions the host pulls and concatenates. It reads ROM/EEPROM
 **read-only** — it never writes the card. The capture is **agent-driven**
 (network-only, read-only). Charter: `docs/specs/samboot.md` §6 step 2.
 
-> **2026-06-21 run result (i87a).** The **EEPROM backup is complete**: `eeprom.bin`
-> (131072 B, verified real — the "Trinity Network " chunk and the SAM's actual MAC
-> `02:54:52:49:4e:bc` are present) plus `rom0.bin` (low 16 KB) were captured and
-> stashed in `~/sam-archive/samboot-capture/` (tracked as **i87a-b1**, done).
-> **`rom1.bin` was NOT captured**: the dumper's `dumper_read_rom1` scratch-page
-> path crashed the SAM and killed trinload. Root cause — it picks scratch page
-> `P-1 = page 0` (P=1, the trinload push page), `ldir`s 16 KB of ROM1 into it, and
-> never restores LMPR, which both clobbers low memory and remaps section B
-> (`&6000`, where trinload's `org &6000` code lives) off trinload. The dumper is
-> being redesigned as a single dump-and-return program with a genuinely-free
-> scratch page + restored paging + a clean `RET` to trinload (**i188**,
-> emulation-verified via **i181** first); `rom1.bin` is recaptured afterwards
-> (**i87a-b2**). Until then `rom.bin = rom0.bin + rom1.bin` is incomplete. **Do
-> not request `rom1.bin` from the current dumper — it kills trinload.**
+> **CAPTURE COMPLETE (i87a).** `eeprom.bin` (131072 B, verified real — the "Trinity
+> Network " chunk + the SAM's actual MAC `02:54:52:49:4e:bc`), `rom0.bin` (low 16 KB,
+> **i87a-b1**) and now **`rom1.bin`** (high 16 KB, **i87a-b2**, 2026-06-21) are all
+> captured and stashed in `~/sam-archive/samboot-capture/` — `rom.bin = rom0.bin +
+> rom1.bin` (32768 B) is the full patched system ROM.
+>
+> The original i173 dumper crashed the SAM capturing rom1 (its `dumper_read_rom1`
+> used scratch page `P-1 = page 0` + a `ldir`-clobbered register, killing trinload).
+> The **i188** redesign reads ROM1 into STAGE's own free page (P+1), preserving the
+> registers + entry LMPR — reproduced + fixed in emulation via the **i181** paged
+> harness, then **hardware-confirmed** by this recapture: rom1 served cleanly
+> (genuine Z80 ROM — most-common byte `0xCD`=CALL), and the SAM kept serving
+> afterwards (eep0 re-pulled identical), proving no clobber. rom1 is now safe to
+> pull from the current (`netboot_dumper_trinload.bin`) dumper.
 
-Steps 1–5 below describe the dumper as-built; heed the run-result note above — fetch
-only `rom0.bin` + `eep0..eep7` from the current dumper, never `rom1.bin`.
+Push the dumper with `tools/trinload-push/trinload-push.py` (the py3 pusher), then
+pull the regions over TFTP. The full procedure:
 
 1. **Build the pushable dumper:**
    ```sh
    make netboot-dumper-trinload      # -> build/netboot_dumper_trinload.bin (org &8000)
    ```
-2. **Push it over trinload** the same way the other netboot programs are pushed
-   (trinload is already RUNNING on the SAM — rec 3≡128, SAM `192.168.2.75`;
-   `~/git/trinload/test/trinload.py`). The dumper runs, reads its MAC/IP from the
+2. **Push it over trinload** (trinload must be RUNNING on the SAM — `192.168.2.75`):
+   ```sh
+   tools/trinload-push/trinload-push.py 192.168.2.75 build/netboot_dumper_trinload.bin 1 0x8000
+   ```
+   (py3; the upstream `~/git/trinload/test/trinload.py` is py2-only — see
+   `tools/trinload-push/README.md`.) The dumper runs, reads its MAC/IP from the
    `"Trinity Network "` EEPROM chunk, inits the ENC28J60, and loops serving. Press
    **Esc** on the SAM to `RET` cleanly back to trinload (so it can be re-pushed).
-3. **Pull the regions** from the host (the SAM serves plain TFTP on port 69):
+3. **Pull the regions** from the host (the SAM serves plain TFTP on port 69; use a
+   tftp client or `curl tftp://…` — the Pi has `curl` but not `tftp`):
    ```sh
    for f in rom0.bin rom1.bin eep0.bin eep1.bin eep2.bin eep3.bin \
-            eep4.bin eep5.bin eep6.bin eep7.bin; do tftp 192.168.2.75 -c get $f; done
+            eep4.bin eep5.bin eep6.bin eep7.bin; do curl -s -o $f tftp://192.168.2.75/$f; done
    ```
 4. **Concatenate + check sizes:**
    ```sh

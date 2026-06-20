@@ -1344,7 +1344,7 @@
   title: Recapture rom1.bin (patched ROM high 16 KB) after the dumper redesign
   description: |
     rom1.bin was NOT captured 2026-06-21: the i173 dumper's dumper_read_rom1 scratch-page path crashed the SAM (page-0 clobber, see i188). Once the dumper is redesigned + emulation-verified (i188), re-run the capture to get rom1.bin so rom.bin = rom0.bin + rom1.bin is complete (unblocks i87b diff + i135c).
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i188]
   kind: leaf
   owner: agent
