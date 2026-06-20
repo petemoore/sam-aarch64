@@ -28,382 +28,308 @@
 ; entry point RETs.
 ; -----------------------------------------------------------------------
 
+; The fixtures are driven from a table (enc_fix_table) rather than unrolled
+; per case: every case is the same {seed PASS_PC, encode_inst, compare DEHL
+; to the expected word} shape, differing only in pc / fixture ptr / opcount /
+; mnemonic id / expected word.  Each 11-byte row is:
+;   +0 pc_lo16 (LE)    PASS_PC low 16 bits; high 16 are always 0 here
+;   +2 fixture ptr     -> operand byte stream
+;   +4 opcount
+;   +5 mnemonic id (LE)
+;   +7 expected word (4 LE bytes)
+; On mismatch the row pointer is recorded in LAST_FAIL_PC (as the existing
+; inline-literal asserts do) and we jp fail.
+ENC_FIX_ROW_LEN: equ    11
+
 run_encode_inst_self_tests:
                 call    enctab_map_in
                 call    form_lookup_init
 
-; -- nop  =>  0xD503201F  (mnem 0, 0 operands) -------------------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_nop
-                ld      a, 0
-                ld      de, 0
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &1f, &20, &03, &d5
+                ld      hl, enc_fix_table
+enc_fix_loop:
+                ld      (enc_fix_row), hl
+; End-of-table sentinel: a row whose fixture ptr (bytes +2,+3) is 0.
+                inc     hl
+                inc     hl
+                ld      a, (hl)
+                inc     hl
+                or      (hl)
+                jr      z, enc_fix_done
 
-; -- ret x30  =>  0xD65F03C0  (mnem 12, [Xreg]) ------------------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_ret
-                ld      a, 1
-                ld      de, 12
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &c0, &03, &5f, &d6
+; Seed PASS_PC = pc_lo16 (high 16 bits := 0).
+                ld      hl, (enc_fix_row)
+                ld      a, (hl)
+                ld      (PASS_PC + 0), a
+                inc     hl
+                ld      a, (hl)
+                ld      (PASS_PC + 1), a
+                xor     a
+                ld      (PASS_PC + 2), a
+                ld      (PASS_PC + 3), a
 
-; -- add x0, x1, #5  =>  0x91001420  (mnem 1, [XSP,XSP,Imm12]) ---------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_add
-                ld      a, 3
-                ld      de, 1
+; Load encode_inst args: HL = fixture ptr, A = opcount, DE = mnemonic id.
+                ld      hl, (enc_fix_row)
+                inc     hl
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)                 ; DE = fixture ptr
+                inc     hl
+                ld      a, (hl)                 ; A  = opcount
+                inc     hl
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)                 ; BC = mnemonic id
+                push    de
+                pop     hl                      ; HL = fixture ptr
+                push    bc
+                pop     de                      ; DE = mnemonic id
                 call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &14, &00, &91
 
-; -- sub x2, x3, #0x1000  =>  0xD1400462  (imm12 lsl #12 case) ---------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_sub
-                ld      a, 3
-                ld      de, 2
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &62, &04, &40, &d1
+; Compare DEHL (encoded word) against the row's expected bytes (+7..+10).
+                push    de
+                push    hl
+                ld      hl, (enc_fix_row)
+                ld      de, 7
+                add     hl, de
+                pop     de                      ; DE = encoded low word (was HL)
+                ld      a, (hl)
+                cp      e
+                jr      nz, enc_fix_fail
+                inc     hl
+                ld      a, (hl)
+                cp      d
+                jr      nz, enc_fix_fail
+                inc     hl
+                pop     de                      ; DE = encoded high word
+                ld      a, (hl)
+                cp      e
+                jr      nz, enc_fix_fail
+                inc     hl
+                ld      a, (hl)
+                cp      d
+                jr      nz, enc_fix_fail
 
-; -- movz x0, #0x1234  =>  0xD2824680  (mnem 81, [Xreg,Imm16Shifted]) --
-                call    enc_seed_pc0
-                ld      hl, enc_fix_movz
-                ld      a, 2
-                ld      de, 81
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &80, &46, &82, &d2
+; Advance to the next row.
+                ld      hl, (enc_fix_row)
+                ld      de, ENC_FIX_ROW_LEN
+                add     hl, de
+                jr      enc_fix_loop
 
-; -- orr x0, x1, #0xff  =>  0xB2401C20  (mnem 15, [Xreg,Xreg,Logical]) -
-                call    enc_seed_pc0
-                ld      hl, enc_fix_orr
-                ld      a, 3
-                ld      de, 15
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &1c, &40, &b2
-
-; -- i205 logical-imm replication-size coverage (every element size) ----
-; -- orr x0, x1, #0x0000000100000001  =>  0xB2000020  (size 32) --------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_orr_s32
-                ld      a, 3
-                ld      de, 15
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &00, &00, &b2
-; -- orr x0, x1, #0x0001000100010001  =>  0xB2008020  (size 16) --------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_orr_s16
-                ld      a, 3
-                ld      de, 15
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &80, &00, &b2
-; -- orr x0, x1, #0x0101010101010101  =>  0xB200C020  (size 8) ---------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_orr_s8
-                ld      a, 3
-                ld      de, 15
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &c0, &00, &b2
-; -- orr x0, x1, #0x1111111111111111  =>  0xB200E020  (size 4) ---------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_orr_s4
-                ld      a, 3
-                ld      de, 15
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &e0, &00, &b2
-; -- orr x0, x1, #0x5555555555555555  =>  0xB200F020  (size 2) ---------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_orr_s2
-                ld      a, 3
-                ld      de, 15
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &f0, &00, &b2
-
-; -- csel x0, x1, x2, eq  =>  0x9A820020  (mnem 24, [X,X,X,Cond]) ------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_csel
-                ld      a, 4
-                ld      de, 24
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &00, &82, &9a
-
-; -- cbz x0, pc+8 @0x1000  =>  0xB4000040  (mnem 20, [Xreg,Branch19]) --
-                call    enc_seed_pc_1000
-                ld      hl, enc_fix_cbz
-                ld      a, 2
-                ld      de, 20
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &40, &00, &00, &b4
-
-; -- b pc+16 @0x1000  =>  0x14000004  (mnem 9, [Branch26]) ------------
-                call    enc_seed_pc_1000
-                ld      hl, enc_fix_b
-                ld      a, 1
-                ld      de, 9
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &04, &00, &00, &14
-
-; -- adrp x0, 0x3000 @0x1000  =>  0xD0000000  (mnem 13, [Xreg,AdrpImm]) -
-                call    enc_seed_pc_1000
-                ld      hl, enc_fix_adrp
-                ld      a, 2
-                ld      de, 13
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &00, &00, &00, &d0
-
-; -- adr x0, pc+4 @0x1000  =>  0x10000020  (mnem 48, [Xreg,AdrImm]) ----
-                call    enc_seed_pc_1000
-                ld      hl, enc_fix_adr
-                ld      a, 2
-                ld      de, 48
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &00, &00, &10
-
-; -- i203a special forms: shift / bitfield / ror -----------------------
-; -- lsl x0, x1, #4  =>  0xD37CEC20  (mnem 17, UBFM alias) -------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_lsl_x
-                ld      a, 3
-                ld      de, 17
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &ec, &7c, &d3
-
-; -- lsl w0, w1, #4  =>  0x531C6C20  (32-bit UBFM alias) --------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_lsl_w
-                ld      a, 3
-                ld      de, 17
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &6c, &1c, &53
-
-; -- lsr x0, x1, #4  =>  0xD344FC20  (mnem 18, UBFM alias) -------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_lsr_x
-                ld      a, 3
-                ld      de, 18
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &fc, &44, &d3
-
-; -- lsl x0, x1, x2  =>  0x9AC22020  (LSLV reg form) ------------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_lslv
-                ld      a, 3
-                ld      de, 17
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &20, &c2, &9a
-
-; -- lsr x0, x1, x2  =>  0x9AC22420  (LSRV reg form) ------------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_lsrv
-                ld      a, 3
-                ld      de, 18
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &24, &c2, &9a
-
-; -- bfi x0, x1, #8, #4  =>  0xB3780C20  (BFM alias) ------------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_bfi
-                ld      a, 4
-                ld      de, 49
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &0c, &78, &b3
-
-; -- bfxil x0, x1, #8, #4  =>  0xB3482C20  (BFM alias) ----------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_bfxil
-                ld      a, 4
-                ld      de, 50
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &2c, &48, &b3
-
-; -- ubfx w0, w1, #8, #4  =>  0x53082C20  (32-bit UBFM alias) ---------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_ubfx
-                ld      a, 4
-                ld      de, 51
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &2c, &08, &53
-
-; -- bfc x0, #8, #4  =>  0xB3780FE0  (BFM alias, Rn=XZR) --------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_bfc
-                ld      a, 3
-                ld      de, 83
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &e0, &0f, &78, &b3
-
-; -- sbfx x0, x1, #8, #4  =>  0x93482C20  (SBFM alias) ----------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_sbfx
-                ld      a, 4
-                ld      de, 84
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &2c, &48, &93
-
-; -- ror x0, x1, #4  =>  0x93C11020  (EXTR alias) --------------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_ror_x
-                ld      a, 3
-                ld      de, 70
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &10, &c1, &93
-
-; -- ror w0, w1, #4  =>  0x13811020  (32-bit EXTR alias) -------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_ror_w
-                ld      a, 3
-                ld      de, 70
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &10, &81, &13
-
-; -- i203b special forms: bic-imm / csetm / barrier --------------------
-; -- bic x0, x1, #0xff  =>  0x9278DC20  (AND ~imm logical) ------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_bic_x
-                ld      a, 3
-                ld      de, 47
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &dc, &78, &92
-
-; -- bic w0, w1, #0xff  =>  0x12185C20  (32-bit AND ~imm) ------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_bic_w
-                ld      a, 3
-                ld      de, 47
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &5c, &18, &12
-
-; -- csetm x0, eq  =>  0xDA9F13E0  (CSINV inverted cond) -------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_csetm_x
-                ld      a, 2
-                ld      de, 52
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &e0, &13, &9f, &da
-
-; -- csetm w3, ne  =>  0x5A9F03E3  (32-bit CSINV) -------------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_csetm_w
-                ld      a, 2
-                ld      de, 52
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &e3, &03, &9f, &5a
-
-; -- isb #15  =>  0xD5033FDF  (barrier CRm in bits 11:8) ------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_isb
-                ld      a, 1
-                ld      de, 66
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &df, &3f, &03, &d5
-
-; -- dsb #11  =>  0xD5033B9F ----------------------------------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_dsb
-                ld      a, 1
-                ld      de, 67
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &9f, &3b, &03, &d5
-
-; -- dmb #11  =>  0xD5033BBF ----------------------------------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_dmb
-                ld      a, 1
-                ld      de, 68
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &bf, &3b, &03, &d5
-
-; -- i203c special forms: mrs / msr / dc / tlbi (paged sysreg tables) ---
-; -- mrs x0, midr_el1  =>  0xD5380000 -------------------------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_mrs
-                ld      a, 2
-                ld      de, 76
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &00, &00, &38, &d5
-
-; -- msr daifset, #2  =>  0xD50342DF  (PSTATE-immediate form) -------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_msr
-                ld      a, 2
-                ld      de, 77
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &df, &42, &03, &d5
-
-; -- dc cvac, x0  =>  0xD50B7A20 -----------------------------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_dc
-                ld      a, 2
-                ld      de, 78
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &20, &7a, &0b, &d5
-
-; -- tlbi vmalle1  =>  0xD508871F  (no-Xt branch) ------------------
-                call    enc_seed_pc0
-                ld      hl, enc_fix_tlbi
-                ld      a, 1
-                ld      de, 79
-                call    encode_inst
-                call    assert_eq32_de_hl_imm
-                defb    &1f, &87, &08, &d5
-
+enc_fix_done:
                 call    enctab_map_out
                 ret
 
-; -- PASS_PC seeders ----------------------------------------------------
-enc_seed_pc0:
-                xor     a
-                ld      (PASS_PC + 0), a
-                ld      (PASS_PC + 1), a
-                ld      (PASS_PC + 2), a
-                ld      (PASS_PC + 3), a
-                ret
+enc_fix_fail:
+                ld      hl, (enc_fix_row)
+                ld      (LAST_FAIL_PC), hl
+                jp      fail
 
-enc_seed_pc_1000:                                   ; PASS_PC = 0x00001000
-                xor     a
-                ld      (PASS_PC + 0), a
-                ld      a, &10
-                ld      (PASS_PC + 1), a
-                xor     a
-                ld      (PASS_PC + 2), a
-                ld      (PASS_PC + 3), a
-                ret
+; row layout: pc_lo16, fixture, opcount, mnem(LE), expected(4 LE bytes)
+enc_fix_table:
+                defw    &0000
+                defw    enc_fix_nop
+                defb    0
+                defw    0
+                defb    &1f, &20, &03, &d5
+                defw    &0000
+                defw    enc_fix_ret
+                defb    1
+                defw    12
+                defb    &c0, &03, &5f, &d6
+                defw    &0000
+                defw    enc_fix_add
+                defb    3
+                defw    1
+                defb    &20, &14, &00, &91
+                defw    &0000
+                defw    enc_fix_sub
+                defb    3
+                defw    2
+                defb    &62, &04, &40, &d1
+                defw    &0000
+                defw    enc_fix_movz
+                defb    2
+                defw    81
+                defb    &80, &46, &82, &d2
+                defw    &0000
+                defw    enc_fix_orr
+                defb    3
+                defw    15
+                defb    &20, &1c, &40, &b2
+                defw    &0000
+                defw    enc_fix_orr_s32
+                defb    3
+                defw    15
+                defb    &20, &00, &00, &b2
+                defw    &0000
+                defw    enc_fix_orr_s16
+                defb    3
+                defw    15
+                defb    &20, &80, &00, &b2
+                defw    &0000
+                defw    enc_fix_orr_s8
+                defb    3
+                defw    15
+                defb    &20, &c0, &00, &b2
+                defw    &0000
+                defw    enc_fix_orr_s4
+                defb    3
+                defw    15
+                defb    &20, &e0, &00, &b2
+                defw    &0000
+                defw    enc_fix_orr_s2
+                defb    3
+                defw    15
+                defb    &20, &f0, &00, &b2
+                defw    &0000
+                defw    enc_fix_csel
+                defb    4
+                defw    24
+                defb    &20, &00, &82, &9a
+                defw    &1000
+                defw    enc_fix_cbz
+                defb    2
+                defw    20
+                defb    &40, &00, &00, &b4
+                defw    &1000
+                defw    enc_fix_b
+                defb    1
+                defw    9
+                defb    &04, &00, &00, &14
+                defw    &1000
+                defw    enc_fix_adrp
+                defb    2
+                defw    13
+                defb    &00, &00, &00, &d0
+                defw    &1000
+                defw    enc_fix_adr
+                defb    2
+                defw    48
+                defb    &20, &00, &00, &10
+                defw    &0000
+                defw    enc_fix_lsl_x
+                defb    3
+                defw    17
+                defb    &20, &ec, &7c, &d3
+                defw    &0000
+                defw    enc_fix_lsl_w
+                defb    3
+                defw    17
+                defb    &20, &6c, &1c, &53
+                defw    &0000
+                defw    enc_fix_lsr_x
+                defb    3
+                defw    18
+                defb    &20, &fc, &44, &d3
+                defw    &0000
+                defw    enc_fix_lslv
+                defb    3
+                defw    17
+                defb    &20, &20, &c2, &9a
+                defw    &0000
+                defw    enc_fix_lsrv
+                defb    3
+                defw    18
+                defb    &20, &24, &c2, &9a
+                defw    &0000
+                defw    enc_fix_bfi
+                defb    4
+                defw    49
+                defb    &20, &0c, &78, &b3
+                defw    &0000
+                defw    enc_fix_bfxil
+                defb    4
+                defw    50
+                defb    &20, &2c, &48, &b3
+                defw    &0000
+                defw    enc_fix_ubfx
+                defb    4
+                defw    51
+                defb    &20, &2c, &08, &53
+                defw    &0000
+                defw    enc_fix_bfc
+                defb    3
+                defw    83
+                defb    &e0, &0f, &78, &b3
+                defw    &0000
+                defw    enc_fix_sbfx
+                defb    4
+                defw    84
+                defb    &20, &2c, &48, &93
+                defw    &0000
+                defw    enc_fix_ror_x
+                defb    3
+                defw    70
+                defb    &20, &10, &c1, &93
+                defw    &0000
+                defw    enc_fix_ror_w
+                defb    3
+                defw    70
+                defb    &20, &10, &81, &13
+                defw    &0000
+                defw    enc_fix_bic_x
+                defb    3
+                defw    47
+                defb    &20, &dc, &78, &92
+                defw    &0000
+                defw    enc_fix_bic_w
+                defb    3
+                defw    47
+                defb    &20, &5c, &18, &12
+                defw    &0000
+                defw    enc_fix_csetm_x
+                defb    2
+                defw    52
+                defb    &e0, &13, &9f, &da
+                defw    &0000
+                defw    enc_fix_csetm_w
+                defb    2
+                defw    52
+                defb    &e3, &03, &9f, &5a
+                defw    &0000
+                defw    enc_fix_isb
+                defb    1
+                defw    66
+                defb    &df, &3f, &03, &d5
+                defw    &0000
+                defw    enc_fix_dsb
+                defb    1
+                defw    67
+                defb    &9f, &3b, &03, &d5
+                defw    &0000
+                defw    enc_fix_dmb
+                defb    1
+                defw    68
+                defb    &bf, &3b, &03, &d5
+                defw    &0000
+                defw    enc_fix_mrs
+                defb    2
+                defw    76
+                defb    &00, &00, &38, &d5
+                defw    &0000
+                defw    enc_fix_msr
+                defb    2
+                defw    77
+                defb    &df, &42, &03, &d5
+                defw    &0000
+                defw    enc_fix_dc
+                defb    2
+                defw    78
+                defb    &20, &7a, &0b, &d5
+                defw    &0000
+                defw    enc_fix_tlbi
+                defb    1
+                defw    79
+                defb    &1f, &87, &08, &d5
+; sentinel: fixture ptr 0 terminates the table
+                defw    &0000
+                defw    0
+                defb    0
+                defw    0
+                defb    0, 0, 0, 0
+
+enc_fix_row:    defw    0
 
 ; -- Fixture operand streams (exact Go OperandWriter bytes) -------------
 enc_fix_nop:                                         ; (no operands)
