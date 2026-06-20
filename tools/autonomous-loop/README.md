@@ -27,8 +27,13 @@ the limit, so nothing is summarised away. The session stays interactive and
    on wind-down, write the ROADMAP handover → `touch ~/.claude/autonomous-loop/wound-down`).
 4. Monitor stuffs `/clear` + the startup prompt → clean reset. Repeat.
 
-The agent never blocks on Pete: questions go in the `qN` registry and it keeps
+The agent never blocks on Pete: questions go in `registry/questions.yaml` (via
+`build/registry add --space questions …` then `make registry`) and it keeps
 working; it only addresses Pete directly when the whole non-Pete backlog drains.
+Work is pulled from `build/registry ready` (returns the top unblocked open item
+from the priority queue in `registry/priority.yaml`; generated view:
+`docs/notes/backlog.md`). The YAML is the source of truth — never hand-edit
+the generated `docs/notes/*-registry-*.md` files.
 
 ## Run
 

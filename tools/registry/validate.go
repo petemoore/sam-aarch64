@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // itemIDRe matches the item id grammar:
@@ -135,11 +136,12 @@ func validate(reg *Registry) *ValidationError {
 //  2. Well-formed ids.
 //  3. Canonical typed sort.
 //  4. Status in the enum with required payload per status.
-//  5. PR entries have num > 0 and a valid role.
-//  6. One completing PR per DONE leaf; umbrellas carry none.
-//  7. Atomic items: non-umbrella with >1 completing PR -> split.
+//  5. PR entries have num > 0; role is optional — empty is fine, but if present
+//     must be "completing" or "followup".
+//  6. Umbrella carries no prs. DONE-umbrella coherence: all children DONE/WONTFIX.
+//     (PR-less DONE leaf is valid; any number of PRs on a DONE leaf is valid.)
 //  8. Bounded description (title <= 120 chars/1 line; description <= 600 chars/6 lines).
-//  9. Required-fields-per-status (DONE => closed + leaf has completing PR; etc.).
+//  9. Required-fields-per-status (WONTFIX => reason in description).
 //  10. Id-shaped refs exist in the union. (Deferred when opts.migrating is true.)
 //  11. Dependencies form a DAG: every depends_on target exists; no cycles.
 //  12. No non-WONTFIX item depends on a WONTFIX node.
@@ -213,55 +215,44 @@ func validateWith(reg *Registry, opts validateOpts) *ValidationError {
 			ve.add(id, fmt.Sprintf("unknown status %q (must be OPEN|IN_PROGRESS|DONE|WONTFIX)", it.Status))
 		}
 
-		// Invariant 5: prs entries have num and role.
+		// Invariant 5: prs entries have num > 0; role is optional but, if present,
+		// must be a known value.
 		for j, pr := range it.PRs {
 			if pr.Num <= 0 {
 				ve.add(id, fmt.Sprintf("prs[%d]: num must be a positive integer", j))
 			}
 			switch pr.Role {
-			case RoleCompleting, RoleFollowup:
-				// valid
-			case "":
-				ve.add(id, fmt.Sprintf("prs[%d]: missing role (must be completing|followup)", j))
+			case RoleCompleting, RoleFollowup, "":
+				// valid — empty role is allowed
 			default:
-				ve.add(id, fmt.Sprintf("prs[%d]: unknown role %q (must be completing|followup)", j, pr.Role))
+				ve.add(id, fmt.Sprintf("prs[%d]: unknown role %q (must be completing|followup or empty)", j, pr.Role))
 			}
 		}
 
-		// Invariants 6 & 7: umbrella/leaf PR semantics.
+		// Invariant 6: umbrella carries no prs (PR budget lives on leaves).
 		if it.isUmbrella() {
 			if len(it.PRs) > 0 {
 				ve.add(id, "umbrella must carry no prs (completing PRs live on its leaf children)")
 			}
-		} else {
-			// Leaf: count completing PRs.
-			completing := 0
-			for _, pr := range it.PRs {
-				if pr.Role == RoleCompleting {
-					completing++
-				}
-			}
-			if it.Status == StatusDone && completing != 1 {
-				ve.add(id, fmt.Sprintf("DONE leaf must have exactly 1 completing PR (found %d)", completing))
-			}
-			if completing > 1 {
-				// Invariant 7: atomic items.
-				ve.add(id, fmt.Sprintf("non-umbrella item has %d completing PRs — split into sub-items", completing))
-			}
 		}
 
-		// Invariant 8: bounded fields.
-		if len(it.Title) > 120 {
-			ve.add(id, fmt.Sprintf("title exceeds 120 chars (%d)", len(it.Title)))
+		// Invariant 8: bounded fields. Lengths are counted in runes (the spec's
+		// "chars"), so multibyte content (em dashes, accents) is not penalised.
+		// The trailing newline a YAML block scalar appends on round-trip is
+		// trimmed first, so the bound measures content, not the serialization
+		// artifact (an in-memory 600-char desc stays valid after reload).
+		if n := utf8.RuneCountInString(it.Title); n > 120 {
+			ve.add(id, fmt.Sprintf("title exceeds 120 chars (%d)", n))
 		}
 		if strings.ContainsRune(it.Title, '\n') {
 			ve.add(id, "title must be single-line")
 		}
-		if len(it.Description) > 600 {
-			ve.add(id, fmt.Sprintf("description exceeds 600 chars (%d)", len(it.Description)))
+		desc := strings.TrimRight(it.Description, "\n")
+		if n := utf8.RuneCountInString(desc); n > 600 {
+			ve.add(id, fmt.Sprintf("description exceeds 600 chars (%d)", n))
 		}
-		if strings.Count(it.Description, "\n") >= 6 {
-			ve.add(id, fmt.Sprintf("description exceeds 6 lines (%d newlines)", strings.Count(it.Description, "\n")))
+		if n := strings.Count(desc, "\n"); n >= 6 {
+			ve.add(id, fmt.Sprintf("description exceeds 6 lines (%d newlines)", n))
 		}
 
 		// Invariant 9: required fields per status.
@@ -362,12 +353,13 @@ func validateWith(reg *Registry, opts validateOpts) *ValidationError {
 			firstQ = false
 		}
 
-		// Invariant 8: question body bounded.
-		if len(q.Body) > 600 {
-			ve.add(id, fmt.Sprintf("body exceeds 600 chars (%d)", len(q.Body)))
+		// Invariant 8: question body bounded (trailing newline trimmed — see items).
+		body := strings.TrimRight(q.Body, "\n")
+		if n := utf8.RuneCountInString(body); n > 600 {
+			ve.add(id, fmt.Sprintf("body exceeds 600 chars (%d)", n))
 		}
-		if strings.Count(q.Body, "\n") >= 6 {
-			ve.add(id, fmt.Sprintf("body exceeds 6 lines (%d newlines)", strings.Count(q.Body, "\n")))
+		if n := strings.Count(body, "\n"); n >= 6 {
+			ve.add(id, fmt.Sprintf("body exceeds 6 lines (%d newlines)", n))
 		}
 	}
 
@@ -450,4 +442,109 @@ func sortStrings(ss []string) {
 		}
 		ss[j+1] = key
 	}
+}
+
+// pullableItems returns the set of item ids that are "pullable" — OPEN or
+// IN_PROGRESS with kind != umbrella. These are the ids that must appear in
+// priority.yaml exactly once.
+func pullableItems(items []Item) map[string]bool {
+	out := map[string]bool{}
+	for _, it := range items {
+		if (it.Status == StatusOpen || it.Status == StatusInProgress) && !it.isUmbrella() {
+			out[it.ID] = true
+		}
+	}
+	return out
+}
+
+// validatePriority checks the priority list against the registry. When the
+// priority list is empty it is treated as absent and no errors are reported.
+// The invariants enforced:
+//
+//  1. No duplicate ids in the list.
+//  2. Every id in the list is a pullable item (not unknown, not closed, not umbrella).
+//  3. Every pullable item appears exactly once (no missing ids).
+//  4. The list is a topological extension of the dependency DAG: for every
+//     pullable item X with a depends_on edge to pullable item Y, X appears after Y.
+func validatePriority(reg *Registry, priority []string) *ValidationError {
+	ve := &ValidationError{}
+	if len(priority) == 0 {
+		return ve
+	}
+
+	pullable := pullableItems(reg.Items)
+
+	// Build status and kind maps for meaningful error messages.
+	itemStatus := map[string]Status{}
+	itemKind := map[string]string{}
+	for _, it := range reg.Items {
+		itemStatus[it.ID] = it.Status
+		itemKind[it.ID] = it.Kind
+	}
+
+	// Check 1 + 2: no duplicates; every listed id is a pullable item.
+	seen := map[string]int{} // id -> first position (0-based)
+	for pos, id := range priority {
+		if prev, dup := seen[id]; dup {
+			ve.add("priority", fmt.Sprintf("duplicate id %q (first at rank %d, again at rank %d)",
+				id, prev+1, pos+1))
+			continue
+		}
+		seen[id] = pos
+
+		if !pullable[id] {
+			// Distinguish the error: unknown id vs closed status vs umbrella.
+			if st, exists := itemStatus[id]; exists {
+				if !isOpen(st) {
+					ve.add("priority", fmt.Sprintf("id %q ranked but status is %s (only OPEN/IN_PROGRESS non-umbrella items belong in the queue)",
+						id, st))
+				} else if itemKind[id] == "umbrella" {
+					ve.add("priority", fmt.Sprintf("id %q ranked but is an umbrella (umbrellas are not queue entries — only their leaf children are)",
+						id))
+				} else {
+					ve.add("priority", fmt.Sprintf("id %q ranked but is not a pullable item", id))
+				}
+			} else {
+				ve.add("priority", fmt.Sprintf("id %q ranked but not found in the registry (unknown id)", id))
+			}
+		}
+	}
+
+	// Check 3: every pullable item appears exactly once (no missing ids).
+	for id := range pullable {
+		if _, inList := seen[id]; !inList {
+			ve.add("priority", fmt.Sprintf("pullable item %q is missing from the priority queue", id))
+		}
+	}
+
+	// Check 4: topological extension — X must appear after all its pullable deps.
+	// Build a position map for fast lookup.
+	pos := map[string]int{}
+	for i, id := range priority {
+		pos[id] = i
+	}
+	for _, it := range reg.Items {
+		if !pullable[it.ID] {
+			continue
+		}
+		xPos, xInList := pos[it.ID]
+		if !xInList {
+			continue // already reported as missing above
+		}
+		for _, dep := range it.DependsOn {
+			if !pullable[dep] {
+				continue // dep is done/closed/umbrella/question — no ordering constraint
+			}
+			yPos, yInList := pos[dep]
+			if !yInList {
+				continue // already reported as missing
+			}
+			if xPos < yPos {
+				ve.add("priority", fmt.Sprintf("%q ranked before its dependency %q (rank %d < %d)",
+					it.ID, dep, xPos+1, yPos+1))
+			}
+		}
+	}
+
+	return ve
 }

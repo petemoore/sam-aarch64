@@ -36,43 +36,81 @@ func escapeCell(s string) string {
 	return s
 }
 
-// renderItemStatus renders the status cell value from structured fields.
-// Spec §"Generator": OPEN / IN_PROGRESS / DONE — PR #N / WONTFIX — <reason>.
+// repoPullURL is the base URL for pull requests in this repository.
+const repoPullURL = "https://github.com/petemoore/sam-aarch64/pull/"
+
+// renderItemStatus renders the status cell — just the status token.
+// PR information is rendered separately in the PR column.
 // No BLOCKED rendering — blocked-ness is derived from depends_on edges, not stored.
 func renderItemStatus(it Item) string {
-	switch it.Status {
-	case StatusDone:
-		for _, pr := range it.PRs {
-			if pr.Role == RoleCompleting {
-				return fmt.Sprintf("DONE — PR #%d", pr.Num)
-			}
-		}
-		return "DONE"
-	case StatusWontfix:
-		// Reason lives in description; render a short excerpt as suffix.
-		reason := strings.TrimSpace(it.Description)
-		if idx := strings.IndexRune(reason, '\n'); idx >= 0 {
-			reason = reason[:idx]
-		}
-		if len(reason) > 80 {
-			reason = reason[:80] + "…"
-		}
-		return fmt.Sprintf("WONTFIX — %s", reason)
-	default:
-		return string(it.Status)
-	}
+	return string(it.Status)
 }
 
-// renderItemRefs renders the refs list plus any depends_on edges.
-// Gated items show their depends_on edges in the refs/links cell
-// (spec §"Generator": "A gated item renders OPEN with its depends_on edges
-// shown in the refs/links cell").
-func renderItemRefs(it Item) string {
-	parts := make([]string, 0, len(it.Refs)+len(it.DependsOn))
-	for _, dep := range it.DependsOn {
-		parts = append(parts, fmt.Sprintf("gated-on:%s", dep))
+// renderItemPRs renders the PR column as comma-separated clickable markdown links,
+// e.g. "[#124](https://github.com/petemoore/sam-aarch64/pull/124)".
+// Returns an empty string when the item carries no PRs.
+// The returned string is already safe markdown — do NOT run escapeCell over it.
+func renderItemPRs(it Item) string {
+	if len(it.PRs) == 0 {
+		return ""
 	}
-	parts = append(parts, it.Refs...)
+	parts := make([]string, 0, len(it.PRs))
+	for _, pr := range it.PRs {
+		parts = append(parts, fmt.Sprintf("[#%d](%s%d)", pr.Num, repoPullURL, pr.Num))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// renderItemDependents renders the reverse-dependency column: ids of all items
+// whose depends_on includes this item's id, in canonical sort order.
+// Returns an empty string when no items depend on this item.
+func renderItemDependents(it Item, reverseEdges map[string][]string) string {
+	dependents := reverseEdges[it.ID]
+	if len(dependents) == 0 {
+		return ""
+	}
+	// Return a copy in sorted order (reverseEdges is pre-sorted at build time).
+	return strings.Join(dependents, ", ")
+}
+
+// buildReverseEdges returns a map from item id to the sorted list of ids of all
+// items that declare depends_on including that id.
+func buildReverseEdges(items []Item) map[string][]string {
+	rev := map[string][]string{}
+	for _, it := range items {
+		for _, dep := range it.DependsOn {
+			rev[dep] = append(rev[dep], it.ID)
+		}
+	}
+	// Sort each list for deterministic output.
+	for k := range rev {
+		sortStrings(rev[k])
+	}
+	return rev
+}
+
+// renderItemDeps renders the depends_on edges — the gating item/question ids
+// that make up the dependency DAG. It is its own first-class column so the DAG
+// is readable from the generated view, not buried among cross-links. Empty when
+// the item is not gated on anything.
+func renderItemDeps(it Item) string {
+	return strings.Join(it.DependsOn, ", ")
+}
+
+// renderItemRefs renders the cross-links / pointers (file paths, §sections, URLs,
+// related ids). It EXCLUDES any ref id that is also a depends_on target — those
+// belong to the deps column, so an id is never shown twice.
+func renderItemRefs(it Item) string {
+	dep := make(map[string]bool, len(it.DependsOn))
+	for _, d := range it.DependsOn {
+		dep[d] = true
+	}
+	parts := make([]string, 0, len(it.Refs))
+	for _, r := range it.Refs {
+		if !dep[r] {
+			parts = append(parts, r)
+		}
+	}
 	return strings.Join(parts, ", ")
 }
 
@@ -137,10 +175,12 @@ func renderItemCell(it Item) string {
 
 // genItemsOpenClosed writes the open and closed item registry tables to their
 // respective writers. Spec §"Generator" — three views total (two item + one question).
+// Column order: id | item | status | PR | deps | dependents | refs/links
 func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	items := sortedItems(reg.Items)
+	reverseEdges := buildReverseEdges(items)
 
-	header := "| **id** | item | status | refs/links |\n|---|---|---|---|\n"
+	header := "| **id** | item | status | PR | deps | dependents | refs/links |\n|---|---|---|---|---|---|---|\n"
 
 	// Open items (OPEN or IN_PROGRESS).
 	fmt.Fprint(openW, generatedBannerItems)
@@ -148,10 +188,13 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	fmt.Fprint(openW, header)
 	for _, it := range items {
 		if isOpen(it.Status) {
-			fmt.Fprintf(openW, "| **%s** | %s | %s | %s |\n",
+			fmt.Fprintf(openW, "| **%s** | %s | %s | %s | %s | %s | %s |\n",
 				escapeCell(it.ID),
 				renderItemCell(it),
 				escapeCell(renderItemStatus(it)),
+				renderItemPRs(it),
+				escapeCell(renderItemDeps(it)),
+				escapeCell(renderItemDependents(it, reverseEdges)),
 				escapeCell(renderItemRefs(it)),
 			)
 		}
@@ -163,10 +206,13 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	fmt.Fprint(closedW, header)
 	for _, it := range items {
 		if !isOpen(it.Status) {
-			fmt.Fprintf(closedW, "| **%s** | %s | %s | %s |\n",
+			fmt.Fprintf(closedW, "| **%s** | %s | %s | %s | %s | %s | %s |\n",
 				escapeCell(it.ID),
 				renderItemCell(it),
 				escapeCell(renderItemStatus(it)),
+				renderItemPRs(it),
+				escapeCell(renderItemDeps(it)),
+				escapeCell(renderItemDependents(it, reverseEdges)),
 				escapeCell(renderItemRefs(it)),
 			)
 		}
@@ -190,6 +236,50 @@ func genQuestionsOpen(reg *Registry, openW io.Writer) error {
 			escapeCell(q.ID),
 			escapeCell(q.Body),
 			escapeCell(q.Owner),
+		)
+	}
+	return nil
+}
+
+// generatedBannerBacklog is the DO-NOT-EDIT banner for backlog.md.
+const generatedBannerBacklog = `<!--
+  GENERATED by ` + "`registry gen`" + ` (tools/registry) — DO NOT EDIT BY HAND.
+  Source of truth: registry/priority.yaml + registry/items.yaml
+  Regenerate:      make registry
+  Validated in CI by the ` + "`registry-sync`" + ` job. Hand edits FAIL CI.
+-->
+`
+
+// genBacklog writes the priority-ordered backlog view to w. The table lists all
+// pullable items in priority order with a 1-based rank column. When priority is
+// empty the table is written with zero data rows (header only).
+func genBacklog(reg *Registry, priority []string, w io.Writer) error {
+	// Build a map from item id to item for fast lookup.
+	byID := map[string]Item{}
+	for _, it := range reg.Items {
+		byID[it.ID] = it
+	}
+
+	reverseEdges := buildReverseEdges(reg.Items)
+
+	header := "| rank | **id** | item | status | deps | dependents |\n|---|---|---|---|---|---|\n"
+
+	fmt.Fprint(w, generatedBannerBacklog)
+	fmt.Fprint(w, "\n")
+	fmt.Fprint(w, header)
+	for rank, id := range priority {
+		it, ok := byID[id]
+		if !ok {
+			// Omit unknown ids from the view (validate would have caught them).
+			continue
+		}
+		fmt.Fprintf(w, "| %d | **%s** | %s | %s | %s | %s |\n",
+			rank+1,
+			escapeCell(it.ID),
+			renderItemCell(it),
+			escapeCell(renderItemStatus(it)),
+			escapeCell(renderItemDeps(it)),
+			escapeCell(renderItemDependents(it, reverseEdges)),
 		)
 	}
 	return nil

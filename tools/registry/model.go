@@ -50,10 +50,12 @@ type Question struct {
 	Owner string `yaml:"owner"` // usually "pete"
 }
 
-// Registry holds the parsed contents of both YAML source files.
+// Registry holds the parsed contents of the YAML source files plus the
+// optional priority queue.
 type Registry struct {
 	Items     []Item
 	Questions []Question
+	Priority  []string // ordered list of pullable item ids; nil/empty when absent
 }
 
 // isUmbrella reports whether the item is an umbrella grouping.

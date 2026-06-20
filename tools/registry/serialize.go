@@ -85,11 +85,17 @@ func writeQuestionRecord(sb *strings.Builder, q Question) {
 }
 
 // yamlQuoteString returns a YAML-safe double-quoted string if necessary,
-// or the bare value if it contains no special characters.
+// or the bare value if it can stand as a plain scalar.
 func yamlQuoteString(s string) string {
-	// Characters that require quoting in YAML flow scalars.
+	// Characters that require quoting anywhere in a plain scalar.
 	needsQuote := strings.ContainsAny(s, "\":#{}[]|>&*!,?")
-	if needsQuote || s == "" || s[0] == '\'' {
+	// Indicator characters that cannot START a YAML plain scalar (they would be
+	// parsed as a directive/anchor/alias/tag/quote/flow marker). A title like
+	// "%nobits/BSS …" or "@foo" is invalid unquoted, so quote on a leading one.
+	if s != "" && strings.ContainsRune("%@`'\"|>&*!?#,[]{}", rune(s[0])) {
+		needsQuote = true
+	}
+	if needsQuote || s == "" {
 		escaped := strings.ReplaceAll(s, `\`, `\\`)
 		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
 		return `"` + escaped + `"`

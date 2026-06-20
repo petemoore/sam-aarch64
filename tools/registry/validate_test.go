@@ -159,15 +159,29 @@ func TestValidate_Inv4_UnknownStatus(t *testing.T) {
 	assertError(t, reg, "i1", "unknown status")
 }
 
-// Invariant 5: pr with missing role.
-func TestValidate_Inv5_PRMissingRole(t *testing.T) {
+// Invariant 5: pr with empty role is now valid (role is optional).
+func TestValidate_Inv5_PREmptyRoleAllowed(t *testing.T) {
 	reg := &Registry{
 		Items: []Item{
-			{ID: "i1", Title: "pr no role", Status: StatusDone, Kind: "leaf", Owner: "agent",
+			{ID: "i1", Title: "pr empty role", Status: StatusDone, Kind: "leaf", Owner: "agent",
 				PRs: []PRRef{{Num: 5, Role: ""}}},
 		},
 	}
-	assertError(t, reg, "i1", "missing role")
+	ve := validate(reg)
+	if ve.hasErrors() {
+		t.Fatalf("expected no errors for PR with empty role; got:\n%s", strings.Join(ve.msgs, "\n"))
+	}
+}
+
+// Invariant 5: pr with unknown (non-empty) role is still an error.
+func TestValidate_Inv5_PRUnknownRole(t *testing.T) {
+	reg := &Registry{
+		Items: []Item{
+			{ID: "i1", Title: "pr bad role", Status: StatusOpen, Kind: "leaf", Owner: "agent",
+				PRs: []PRRef{{Num: 5, Role: "draft"}}},
+		},
+	}
+	assertError(t, reg, "i1", "unknown role")
 }
 
 // Invariant 5: pr with zero num.
@@ -192,14 +206,35 @@ func TestValidate_Inv6_UmbrellaWithPR(t *testing.T) {
 	assertError(t, reg, "i1", "umbrella must carry no prs")
 }
 
-// Invariant 6: DONE leaf without a completing PR.
-func TestValidate_Inv6_DoneLeafNoCompletingPR(t *testing.T) {
+// PR-less DONE leaf is valid (operational work like i129/i130 needs no completing PR).
+func TestValidate_DoneLeafNoPRIsValid(t *testing.T) {
 	reg := &Registry{
 		Items: []Item{
 			{ID: "i1", Title: "done no pr", Status: StatusDone, Kind: "leaf", Owner: "agent"},
 		},
 	}
-	assertError(t, reg, "i1", "DONE leaf must have exactly 1 completing PR (found 0)")
+	ve := validate(reg)
+	if ve.hasErrors() {
+		t.Fatalf("expected no errors for DONE leaf with no PRs; got:\n%s", strings.Join(ve.msgs, "\n"))
+	}
+}
+
+// DONE leaf with multiple PRs is valid — the split signal is multiple deliverables,
+// not multiple PRs.
+func TestValidate_DoneLeafMultiplePRsIsValid(t *testing.T) {
+	reg := &Registry{
+		Items: []Item{
+			{ID: "i1", Title: "done two prs", Status: StatusDone, Kind: "leaf", Owner: "agent",
+				PRs: []PRRef{
+					{Num: 1, Role: RoleCompleting},
+					{Num: 2, Role: RoleCompleting},
+				}},
+		},
+	}
+	ve := validate(reg)
+	if ve.hasErrors() {
+		t.Fatalf("expected no errors for DONE leaf with 2 completing PRs; got:\n%s", strings.Join(ve.msgs, "\n"))
+	}
 }
 
 // Invariant 6: umbrella DONE with non-DONE child.
@@ -211,20 +246,6 @@ func TestValidate_Inv6_UmbrellaDoneWithOpenChild(t *testing.T) {
 		},
 	}
 	assertError(t, reg, "i1", "umbrella marked DONE but child i1a is OPEN")
-}
-
-// Invariant 7: non-umbrella with >1 completing PR.
-func TestValidate_Inv7_MultipleCompletingPRs(t *testing.T) {
-	reg := &Registry{
-		Items: []Item{
-			{ID: "i1", Title: "two completing PRs", Status: StatusDone, Kind: "leaf", Owner: "agent",
-				PRs: []PRRef{
-					{Num: 1, Role: RoleCompleting},
-					{Num: 2, Role: RoleCompleting},
-				}},
-		},
-	}
-	assertError(t, reg, "i1", "split into sub-items")
 }
 
 // Invariant 8: title too long.

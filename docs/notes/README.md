@@ -2,13 +2,14 @@
 
 Three kinds of file live here:
 
-- **Tracking registries** — [`item-registry-open.md`](item-registry-open.md) (`iN`
-  work items) and [`question-registry-open.md`](question-registry-open.md) (`qN`
-  open questions for Pete), each with a `*-closed.md` sibling holding resolved
-  rows ([items](item-registry-closed.md), [questions](question-registry-closed.md)).
-  Read the **open** files for outstanding work; resolving a row moves it open→closed
-  in the same PR. Milestone-neutral, never archived; the registry discipline +
-  controlled status vocabulary are documented in each open file's header.
+- **Tracking registries** — these files are **generated** from `registry/items.yaml`
+  and `registry/questions.yaml`; never hand-edit them (the `registry-sync` CI job
+  fails on drift). The source of truth is the YAML; use `build/registry …` then
+  `make registry` to mutate it. Views: [`item-registry-open.md`](item-registry-open.md)
+  + [`item-registry-closed.md`](item-registry-closed.md) (`iN` work items);
+  [`question-registry-open.md`](question-registry-open.md) (`qN` open questions for
+  Pete — questions are transient; no closed-questions view); [`backlog.md`](backlog.md)
+  (priority-ordered open pullable items, from `registry/priority.yaml`).
 - **The active milestone status doc** — [`m9-status.md`](m9-status.md),
   the per-strand source of truth for the milestone in flight. Deleted at
   milestone close after the registry walk (see `docs/ROADMAP.md`).

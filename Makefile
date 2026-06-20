@@ -822,24 +822,24 @@ check-doc-links:
 
 # registry-gen — build the registry validate/gen CLI.  Operates on
 # registry/*.yaml sources; generates the four docs/notes/*-registry-*.md views.
-# Dormant until registry/ is created by the i115d migration.
 registry-gen:
 	cd tools/registry && go build -o $(CURDIR)/$(BUILD)/registry .
 
-# registry — regenerate the three docs/notes/*-registry-*.md views in place
-# from registry/items.yaml and registry/questions.yaml.
-# Requires registry/ to exist (created during the i115d migration).
-# This target is expected to fail today — registry/ does not exist yet.
+# registry — regenerate the four docs/notes/*.md views in place from
+# registry/items.yaml, registry/questions.yaml, and registry/priority.yaml.
+# The four views are: item-registry-open, item-registry-closed,
+# question-registry-open, and backlog (priority queue).
 .PHONY: registry
 registry: registry-gen
 	REGISTRY_ITEMS=registry/items.yaml \
 	REGISTRY_QUESTIONS=registry/questions.yaml \
+	REGISTRY_PRIORITY=registry/priority.yaml \
 	REGISTRY_DIR=registry \
 	REGISTRY_TEMPLATES=tools/registry/templates \
 	REGISTRY_OUTDIR=docs/notes \
 	$(BUILD)/registry gen registry/items.yaml registry/questions.yaml
 
-# registry-sync-check — freshness guard: regenerate the three registry views
+# registry-sync-check — freshness guard: regenerate the four registry views
 # into build/gen/registry/ and diff against the committed docs/notes/ copies;
 # fail on drift (a YAML edit that forgot `make registry`, or a hand edit to a
 # generated file).  Mirrors tables-sync-check.
@@ -848,12 +848,13 @@ registry-sync-check: registry-gen
 	@mkdir -p $(BUILD)/gen/registry
 	REGISTRY_ITEMS=registry/items.yaml \
 	REGISTRY_QUESTIONS=registry/questions.yaml \
+	REGISTRY_PRIORITY=registry/priority.yaml \
 	REGISTRY_DIR=registry \
 	REGISTRY_TEMPLATES=tools/registry/templates \
 	REGISTRY_OUTDIR=$(BUILD)/gen/registry \
 	$(BUILD)/registry gen registry/items.yaml registry/questions.yaml
 	@fail=0; \
-	for f in item-registry-open.md item-registry-closed.md question-registry-open.md; do \
+	for f in item-registry-open.md item-registry-closed.md question-registry-open.md backlog.md; do \
 	    if ! diff -u docs/notes/$$f $(BUILD)/gen/registry/$$f; then \
 	        echo ""; \
 	        echo "ERROR: docs/notes/$$f is stale — it differs from the registry/"; \
