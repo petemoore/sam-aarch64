@@ -3632,7 +3632,7 @@
 - id: i213
   title: "Trinity EEPROM capability signature + version (interfacing code auto-detects our patch, never assumes it)"
   description: |
-    Pete (2026-06-22, q40): when WE customise the Trinity EEPROM (restore the stripes, add boot-a-record-on-startup, add large-disk support, etc.), write a MAGIC SIGNATURE + VERSION NUMBER into the EEPROM. Any code interfacing with the Trinity must NOT assume our patched code is present (not everyone patches their EEPROM, or may not have yet) — it reads the signature+version, auto-detects available capabilities, and degrades gracefully to stock behaviour when absent. Foundational versioning for ALL our EEPROM customisations. Design: signature bytes + version layout at an EEPROM offset free/safe on stock cards and stable across versions; a read helper returning 'stock' vs 'patched vN + capability flags'. Ties into the i135 EEPROM-patch strand (signature written as part of i135c's flash). owner:agent for the design + detect/read code; the EEPROM write rides i135c (Pete's flash).
+    Trinity EEPROM version stamp: when we customise the Trinity EEPROM (i135c — stripes restore, boot-a-record-on-startup, etc.), write a small magic signature + version byte at a stable EEPROM offset, so code can cheaply detect WHICH version of our patch is present and degrade gracefully when it is absent (stock card). Kept (Pete, 2026-06-23): cheap to add and genuinely useful ONCE we ship features that depend on the patch + a second patch version that must be distinguished. SCOPE NARROWED from the original q40 framing: just the version stamp + a read helper — NOT the heavyweight per-capability auto-detect machinery that was tied to the now-WONTFIX 32-bit BD_RECORDS widening (i214). The write rides i135c (Pete's flash); the stamp-format design + read helper are owner:agent. Low priority until the first patched feature lands.
   status: OPEN
   kind: leaf
   owner: agent
@@ -3640,9 +3640,8 @@
 - id: i214
   title: "Widen BD_RECORDS to 32-bit, gated behind the Trinity EEPROM large-disk capability flag (>51GB cards)"
   description: |
-    Pete (2026-06-22, q40): do the 32-bit BD_RECORDS widening as part of patching the EEPROM, exposed via the capability signature (i213) so it auto-detects — code reading BD_RECORDS checks the capability and uses 32-bit only when our patched EEPROM advertises large-disk support, else falls back to Colin's faithful 16-bit (cards >~51GB wrap on stock B-DOS 1.5t: 16-bit DVAR at &80C4, only low 16 bits kept at &A486; block-count decode is fully 32-bit/correct, only the records STORE caps). i145b ports faithfully (16-bit) by default regardless; this is the OPTIONAL >51GB enhancement, meaningful only with our patched EEPROM present. Depends on i213.
-  status: OPEN
-  depends_on: [i213]
+    WONTFIX (Pete, 2026-06-23): overkill. 32-bit BD_RECORDS only matters past ~51GB of disk images (65535 records x 800KB); the published SAM catalogue is <1GB, so faithful 16-bit (Colin's B-DOS design, ported as-is by i145b) is wildly sufficient — we will never approach the cap. Revisit only if a concrete >51GB need appears.
+  status: WONTFIX
   kind: leaf
   owner: agent
 
