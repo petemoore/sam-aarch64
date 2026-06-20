@@ -201,6 +201,29 @@ func TestComputeGates_Ready(t *testing.T) {
 	}
 }
 
+// TestComputeGates_PeteOwnedNotReady asserts that an owner:pete item whose deps
+// are all satisfied does NOT read "ready" (it is excluded from `registry ready`)
+// but is shown as held by Pete — the i87a regression: a Pete-owned, dependency-
+// satisfied item that sat at the top of the backlog mislabelled "ready".
+func TestComputeGates_PeteOwnedNotReady(t *testing.T) {
+	reg := &Registry{
+		Items: []Item{
+			{ID: "i1", Title: "done dep", Status: StatusDone, Kind: "leaf", Owner: "agent",
+				PRs: []PRRef{{Num: 1, Role: RoleCompleting}}},
+			{ID: "i2", Title: "pete-owned, deps satisfied", Status: StatusOpen, Kind: "leaf",
+				Owner: "pete", DependsOn: []string{"i1"}},
+			{ID: "i3", Title: "pete-owned, no deps", Status: StatusOpen, Kind: "leaf", Owner: "pete"},
+		},
+	}
+	gates := computeGates(reg)
+	if gates["i2"] != "👤 pete" {
+		t.Errorf("i2 (pete, deps satisfied) gate: got %q, want %q", gates["i2"], "👤 pete")
+	}
+	if gates["i3"] != "👤 pete" {
+		t.Errorf("i3 (pete, no deps) gate: got %q, want %q", gates["i3"], "👤 pete")
+	}
+}
+
 // TestComputeGates_BlockedOnOpenWork asserts that an item blocked only on other
 // OPEN work (no open question at the root) shows the ⏳ <id> gate.
 func TestComputeGates_BlockedOnOpenWork(t *testing.T) {
