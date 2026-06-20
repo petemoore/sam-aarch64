@@ -3652,3 +3652,11 @@
   depends_on: [i2]
   kind: leaf
   owner: agent
+
+- id: i216
+  title: Audit + normalize SAMDOS vs B-DOS terminology across living docs and code comments
+  description: |
+    Follow-on to i75/q10 (DONE: B-DOS AL 1.5a is the shipped default DOS; editor/assembler disks ship B-DOS). i75 reoriented the main living docs but was point-in-time; ~66 files still mention SAMDOS (many legitimately). This standing audit sweeps living docs + src comments and normalizes: (a) SAMDOS used as a generic stand-in for the loaded DOS (the hook/DOSFLG/DOSER mechanisms are DOS-agnostic) -> DOS-neutral ('the loaded DOS'); (b) SAMDOS meaning the SHIPPED DOS -> B-DOS; (c) PRESERVE legitimate SAMDOS references — the canonical-DOS source citations, genuinely SAMDOS-internal mechanisms (e.g. the (hksp) NMI snapshot, i185), and the verbatim upstream/ROM material. EXCLUDE reference/ + sam-archive/ (verbatim upstream) and docs/sam/ (canonical ROM disassembly + tech manual — SAMDOS is correct there). Single-source: the DOS-target decision lives canonically in i75/ARCHITECTURE.md; docs point to it, never restate. Known straggler captured 2026-06-22: docs/specs/ide-memory-model-design.md:47 ('SAMDOS occupies one page'). Raised by Pete (2026-06-22) while reviewing the q36 doc.
+  status: OPEN
+  kind: leaf
+  owner: agent
