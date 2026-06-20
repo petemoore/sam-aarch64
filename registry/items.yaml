@@ -2667,7 +2667,10 @@
 - id: i169
   title: "Adopt the 'needs Pete present' model (q32): ready --pete-present/--pete-away; decisions become questions"
   description: |
-    q32 (Pete 2026-06-20). Three kinds: agent item = work done alone (owner unmarked=agent); question = a decision Pete gives (transient); needs-Pete-present = work needing Pete's physical presence (press a key, hardware bench, Pi rig) = owner:pete. Mechanism: 'ready' takes --pete-away (default: excludes owner:pete) or --pete-present (includes + prioritizes owner:pete). Work: convert decision owner:pete items (i6,i50,i56,i66,i100c) to questions; add the ready flag; backlog gate marker for owner:pete; note policy in CLAUDE.md+ROADMAP.
+    q32 / needs-Pete model (Pete 2026-06-20). THREE kinds of work: (1) agent item = work the agent does alone (owner unmarked = agent); (2) question = a decision/input Pete gives (transient, deleted when answered); (3) needs-Pete-present = work gated on Pete's physical presence/action (press a key, hardware bench, Pi rig) = owner:pete.
+    Mechanism: 'build/registry ready' takes --pete-away (DEFAULT: excludes owner:pete) or --pete-present (includes AND prioritizes owner:pete, so when Pete is around the agent does presence-gated work first — don't waste his presence).
+    PRESENCE FILE = the single point of truth for whether Pete is around, surviving session handover / /clear / context-limit restart (the gap this closes). EITHER Pete OR an agent may create/delete it: Pete touches/rm's it; an agent creates it when Pete starts interacting and deletes it when Pete says he's stepping away (e.g. from his phone, where he can't touch files) — the agent TELLS Pete each time it creates/deletes on his behalf. The agent reads it at startup to default the --pete flag; monitor.sh can highlight presence from it.
+    Work: add the ready --pete-away/--pete-present flag defaulting from the presence file; convert the decision-shaped owner:pete items (i6, i50, i56, i66, i100c) to questions; backlog gate marker for owner:pete; document the model + presence file in CLAUDE.md + ROADMAP. Then i172 audits i133's dependents to reclassify presence-gated ones.
   status: OPEN
   kind: leaf
   owner: agent
