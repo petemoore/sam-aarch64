@@ -12,6 +12,7 @@ use (
 	./tools/registry
 	./tools/sam-aarch64
 	./tools/sam-aarch64-format
+	./tools/sampage
 	./tools/sha256-unroll-gen
 	./tools/tables-gen
 	./tools/z80-test-harness-go

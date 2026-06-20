@@ -4,16 +4,13 @@
 // mapping; ROM is read-only, so a write into a section currently mapped to ROM
 // is silently dropped — exactly as on hardware (the &C000 ROM wall).
 //
-// This is the faithful pager ported from the assembler emulator
-// (tools/z80-test-harness-go/harness.go resolveRead/resolveWritePage), extracted
-// into a reusable package so the netboot emulator gains real paging + ROM
-// write-protect from ONE memory model rather than a flat model with a paged one
-// bolted beside it (CLAUDE.md §7: one emulation layer, used by every test — the
-// split is precisely what let the i87a dumper ROM-paging bug reach hardware).
-// It is the down-payment on i190 — ONE shared SAM-emulation core both harnesses
-// import (NOT a merge of the harnesses, which may stay distinct): i190 makes the
-// assembler harness's inline pager a thin wrapper over this package too, so the
-// paging/memory model is implemented once.
+// Both Go Z80 harnesses import this package as their one memory model (i190):
+//   - tools/netboot-oracle/z80: the netboot harness (CLAUDE.md §7: one emulation
+//     layer, used by every test — the split between a flat model and a paged one
+//     is what let the i87a dumper ROM-paging bug reach hardware).
+//   - tools/z80-test-harness-go: the assembler harness (i190b: the inline pager
+//     is replaced by this package so a paging fix reaches both harnesses
+//     automatically and cannot silently diverge).
 //
 // Memory map (SAM Coupé Tech Manual v3.0 §6.10; docs/notes/sam-paging.md):
 //

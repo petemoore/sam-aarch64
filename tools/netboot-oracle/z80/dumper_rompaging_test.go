@@ -37,7 +37,7 @@ import (
 	"testing"
 
 	z80h "github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80"
-	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80/sampage"
+	"github.com/petemoore/sam-aarch64/tools/sampage"
 )
 
 const (
