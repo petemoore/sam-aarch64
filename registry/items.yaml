@@ -3535,10 +3535,12 @@
   title: "i203c: system-register special-form encoders (mrs/msr/dc/tlbi)"
   description: |
     Third sub-brick of i203. Wire the system-register encoders into encode_inst's special-form dispatch: mrs=76 (encodeMrs, pass2.go:1601), msr=77 (encodeMsr reg/PSTATE, pass2.go:1628), dc=78 (encodeDc, pass2.go:1673), tlbi=79 (encodeTlbi, pass2.go:1699). NOTE: the Z80 ALREADY has encode_mrs_word/encode_msr_word in src/sysname.asm (used by the .tbn path) + the paged sysreg name tables (sysreg_data.bin, load_page13_payload) — this brick is largely REUSE/wiring + dc/tlbi if not yet present, not new encoders. Verify the existing helpers match the Go authority; reuse them. Faithful port (CLAUDE.md s6). Depends on i199, i203a. Extends the boot self-test + Go authority fixtures (needs the paged sysreg tables mapped). SimCoupe-gated.
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i199, i203a]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 565, role: completing}
   parent: i203
 
 - id: i203d
