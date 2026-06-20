@@ -572,41 +572,73 @@ address `&002000` into `&4000`**, then `JP &4000`. The address is sent big-endia
 3-byte `00 20 00` (`OUT (C),H/L/E`), and `&F5DD` hard-codes the destination
 `LD HL,&4000`.
 
-### 7.4 Unresolved — the static picture does not close; emulation is required
+### 7.4 The static picture — what closes, and the one ordering question left
 
-Two facts from the capture **contradict** a clean single-stage boot and cannot be
-settled by disassembly alone:
+Resolving which artifact executes at `&4000` needs the boot **traced in a faithful
+emulator** (the patched ROM + SAM paging + Trinity SPI EEPROM serving these real
+bytes) — that is **i190a**, and §7.5 carries its result. Two facts from the
+capture set up that trace; the second of them was originally misread, and is
+corrected here.
 
 1. **The ROM loads chunk 1 (`&2000`), not the bootblock (`&0000`).** §6.1/§7.3
    both show the patched ROM reads device `&002000` → `&4000` → `JP &4000`. But
    `&2000` is the B-DOS *routine library*, whose first byte is `EX (SP),HL` and
-   which immediately `CALL`s `&5C26` and jumps to `&4657`/`&5258`/`&603A` — all
-   *outside* the 1 KB that was loaded and uninitialised at cold boot. It is **not
-   a valid cold-entry**. The coherent, self-contained bootblock is at `&0000`,
-   which the documented ROM path never reads.
-2. **B-DOS calls into an unloaded section B.** Chunk 2 (B-DOS at `&8000`) calls
-   `&4657`, `&4677`, `&5C6A` — a support library that must occupy section B
-   (`&4000–&7FFF`) at runtime — yet the bootblock loads only section C
-   (`&8000+`), and the ROM loads only 1 KB at `&4000`. B-DOS itself does heavy
-   EEPROM I/O (10×`OUT (&DC)`, 34×`IN (&DC)` in the chunk region), so there is a
-   **runtime load/paging stage** that populates section B and that the static
-   trace does not capture.
+   which immediately `CALL`s `&5C26` and jumps to `&4657`/`&5258`/`&603A`. The
+   coherent, self-contained bootblock is at `&0000`, which the documented ROM path
+   never reads. So the question the trace must settle is **which artifact really
+   runs at `&4000`** — chunk 1 (the routine library) or the `&0000` bootblock.
 
-Both point to the same gap: the boot is **multi-stage / paging-dependent** in a
-way only a *running* model reveals. Resolving which artifact actually executes at
-`&4000` — and therefore whether the injection belongs in the `&0000` bootblock or
-on the ROM-loaded path — needs the boot **traced in a faithful emulator** that
-models the patched ROM, the SAM paging, and the Trinity SPI EEPROM serving these
-real bytes. That is exactly **i190a** (load the real ROM+EEPROM into the shared
-emulation core). A secondary possibility the trace would also settle is whether
-`rom.bin` and `eeprom.bin` were captured from the same machine state (a re-capture
-is the hardware-side cross-check).
+2. **The `&5C26`/`&5C6A` (and `&46xx`) targets are documented sysvars and library
+   code — not evidence of a hidden runtime loader.** The chunk-1 prologue's
+   `CALL &5C26` and B-DOS's references to `&5C6A` were originally read here as a
+   call into an *unloaded section-B support library* plus a *hidden multi-stage
+   load* that populates section B at runtime. **That reading was wrong about
+   `&5C26`/`&5C6A`.** Both are **documented SAM ROM system variables** in the
+   `&5xxx` band (physical page 1 — `sam-paging.md §7`), which a normal ROM/DOS boot
+   initialises:
+
+   - **`&5C6A` = `FLAGS2`** — annotated disasm line 1117 (`5C6A= FLAGS2 EQU
+     5C6AH`). It sits below the `&5C9F` boundary the disasm marks "NOT CLEARED BY
+     NEW:" (line 1136), so FLAGS2 is in the band the cold-boot **NEW** path
+     manages, and is read/set/cleared at runtime by the stock channel/keyboard/
+     screen handlers (caps-lock toggle `KYCL`, line 1849; "screen is clear" `CLS2`,
+     line 2175; the keyboard interrupt `KINT4`, line 19794).
+   - **`&5C26` is inside the `STREAMS` table** — `STREAMS EQU 5C10H ;…USES
+     5C0C-5C35 FOR STREAMS -5 TO 15` (line 1088), so `&5C26` is a stream-table
+     entry in the `&5C0C-&5C35` block. The cold-boot init **writes that whole block
+     by name**: in the main-init routine `MNINIT` (`&EBAE`, the reset cold-start —
+     `XOR A; LD I,A; IM 1`, then RAM probe → memory-table → channels → streams),
+     the `NEW2` step does `LD HL,STREAMS-4 (&5C0C); LD DE,STRMTAB; LD B,9
+     ;INITIALISE 9 STREAMS` (lines 24616-24618) then `LD B,24 ;12 MORE STREAM PTRS
+     TO ZAP` (lines 24628-24632) — 9×2 + 24 = 42 bytes spanning `&5C0C-&5C35`
+     exactly, so `&5C26` is populated by this loop. (Source data `STRMTAB`, line
+     752; the 6 BASIC channels are likewise init'd just above at `CHANS`/`CHANTAB`,
+     lines 24551-24554.)
+
+   So `&5C26` and `&5C6A` are **normal init state**, not section-B code, and
+   chunk-1 referencing them is **exactly what a B-DOS routine library does when
+   called with a live, initialised system**. There is no "unloaded support library
+   at `&5Cxx`" and no "hidden multi-stage loader" implied by these targets — we
+   have the ROM source and can see precisely how they are populated. (The `&46xx`
+   targets — `&4657`/`&4677` — are section-B *code* addresses; whether section B is
+   resident when chunk 1 runs is the live ordering question, §7.5, distinct from
+   the sysvar misread corrected here.)
+
+The chunk-1 prologue itself reads as a **library/routine entry, not a cold-boot
+entry**: `EX (SP),HL; PUSH DE; CALL &5C26` manipulates a *live* caller's stack and
+calls into the initialised stream area — an idiom that only makes sense when an
+initialised system is already running, never as the first instruction off a cold
+reset. That is consistent with chunk 1 being a routine library the resident system
+calls, reinforcing that the real question is the **boot ordering** (does normal ROM
+init run, populating these sysvars, *before* chunk 1 executes?), not a missing
+loader.
 
 **Consequence for the endeavour.** The static RE (§7.1–§7.3) is done and corrects
-the record, but the **exact injection site cannot be finalised, and no EEPROM
-flash (i135c) should proceed**, until the boot is traced in emulation. Tracked:
-i197 split into the completed static-RE leaf and an emulation-validation leaf
-gated on i190a; i135c remains blocked on the i197 umbrella.
+the record (including the sysvar misread above), but the **exact injection site
+cannot be finalised, and no EEPROM flash (i135c) should proceed**, until the boot
+ordering is confirmed in emulation (§7.5). Tracked: i197 split into the completed
+static-RE leaf and an emulation-validation leaf gated on i190a; i135c remains
+blocked on the i197 umbrella.
 
 ### 7.5 The boot traced in emulation (i190a) — §7.4 point 1 resolved, point 2 pinned
 
@@ -627,17 +659,28 @@ trace settles §7.4:
   **dormant on this card's boot path**. The SAMBOOT injection therefore belongs on
   the **ROM-loaded chunk-1 path that executes at `&4000`**, not the `&0000` block.
 
-- **Point 2 — the section-B gap is real and now concrete.** Execution at `&4000`
-  immediately runs chunk-1's prologue `EX (SP),HL; PUSH DE; CALL &5C26`, and
-  `&5C26` is **uninitialised (zero) RAM** — this single-stage path never loads
-  section B (`&4000-&7FFF`), so the `CALL` lands in a zero sled. That is the direct
-  evidence of the missing **runtime multi-stage / paging load** the static trace
-  could only hypothesise: either a stage we have not yet captured populates section
-  B before chunk 1 runs, **or** `rom.bin` and `eeprom.bin` were captured from
-  different machine states. Distinguishing the two is the remaining i197c step
-  (a re-capture of the running card is the hardware cross-check). The emulator now
-  makes this observable and re-runnable; the test pins `&5C26 == 0x00` so any change
-  to that assumption (a future stage populating section B) trips the guard.
+- **Point 2 — `&5C26` is zero because the from-reset trace hadn't run NEW yet, not
+  because a stage failed to load.** Execution at `&4000` immediately runs chunk-1's
+  prologue `EX (SP),HL; PUSH DE; CALL &5C26`, and in this trace `&5C26` reads
+  **zero**. The original reading took that as evidence of a *failed runtime
+  multi-stage load* that should have populated a "section-B support library" at
+  `&5Cxx`. **That was the §7.4 misread:** `&5C26` is not section-B code — it is a
+  `STREAMS`-table sysvar (`&5C0C-&5C35`, line 1088) populated by the **NEW** cold-boot
+  init loop (`MNINIT`/`NEW2`, lines 24616-24632), and `&5C6A` is `FLAGS2` (line
+  1117). They read zero here because the boot path this test follows — the patched-ROM
+  netboot fetch, entered **from reset (PC=0)** — reaches chunk 1 at `&4000`
+  **before** the normal channel/stream/sysvar init has populated that band. It is
+  an **init-ordering** observation, not a missing loader: with a live, initialised
+  system those sysvars are non-zero (we have the ROM code that sets them), and
+  chunk-1's library-entry prologue (§7.4) expects exactly that live system. The
+  remaining i197c step is therefore to **verify the boot ordering in this emulator**
+  — does the real boot run the normal ROM init (populating `STREAMS`/`FLAGS2`)
+  before handing off to chunk 1? — rather than to hunt a hidden loader on hardware.
+  A re-capture of the running card drops to **optional belt-and-braces** (it would
+  only cross-check that `rom.bin`/`eeprom.bin` came from one machine state). The
+  emulator makes this observable and re-runnable; the test pins `&5C26 == 0x00` for
+  *this from-reset path*, so any change to the boot ordering (init running before
+  chunk 1) trips the guard and is caught.
 
 ---
 
