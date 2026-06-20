@@ -2781,7 +2781,7 @@
   title: Harness SD-SPI/CSD model — model the DC/DF seam + SD command state machine + configurable CSD
   description: |
     Model the Trinity &DC/&DF SD-SPI seam + the SD command state machine + a CONFIGURABLE CSD (v1.0/v2.0) in the netboot harness (mirror enc28j60.go/eeprom.go), FAITHFUL to i193 (the documented protocol is the spec — built from the doc, NOT derived from a hardware capture). Built FIRST in the emulation-first ladder: it is validated by running Colin's real B-DOS 1.5t driver against it (i145f / and the POC i145e) BEFORE any new code runs in it, and it ends the inject-BD_RECORDS shortcut that hid the i145 gap. The real CSD bytes captured on hardware (i145g) later re-parameterise it faithfully. Depends i193.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i193]
   kind: leaf
   owner: agent
@@ -2813,7 +2813,7 @@
   title: "Validate the SD-SPI model by running Colin's full 1.5t SD-init ladder (&A623 -> CMD9) against it"
   description: |
     POC-2 / model-validation gate. Run Colin's FULL SD-init ladder (DI; CALL &A623: the &38 microcontroller wake + CMD0/8/55+41/58/59/9/16 + the &FE-token 16-byte CSD read at &A711) against the i145c SD-SPI model — the model serves a synthetic CSD over the modelled &DC/&DF SPI, with NO hand-filled buffer, so the CSD must arrive via modelled SPI and decode to the correct BD_RECORDS. This is the confidence gate: it proves the SD-SPI emulation is FAITHFUL by running Colin's hardware-proven driver end-to-end BEFORE any new probe/serve code runs in the model (emulation-first ladder, Pete 2026-06-22; a trinload crash on real HW is unrecoverable, so the model must be trustworthy first). Builds on i145e's run/paging recipe + i145c's model.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i145c, i145e]
   kind: leaf
   owner: agent
