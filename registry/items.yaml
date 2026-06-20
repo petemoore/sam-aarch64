@@ -3333,7 +3333,7 @@
   title: Shared emulation core loads the extracted real ROM patch + EEPROM code/config for authentic Trinity emulation
   description: |
     Load the real captured ROM patch + Trinity EEPROM code/config (~/sam-archive/samboot-capture/rom.bin + eeprom.bin, from the DONE i87a capture) into the harness SAM emulation so the real boot can be traced authentically — the gating prerequisite for i197c (and thus SAMBOOT's i197/i135c). Pete un-postponed this (2026-06-22, q41): it is NOT blocked on the library merge (i190) — do it on the EXISTING harness emulator now; if the merge later happens it moves into the shared core. Depends only on i87a-b2 (DONE), so agent-actionable. No NEW hardware needed — the ROM/EEPROM were already captured (i87a).
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i87a-b2]
   kind: leaf
   owner: agent
