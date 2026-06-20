@@ -2358,6 +2358,15 @@
   owner: agent
   parent: i121
 
+- id: i121g
+  title: WRQ record-claim — write the Trinity record-list name entry so a pushed record is marked used (enables BATCH pushes)
+  description: |
+    BLOCKER for Pete's batch use case (push many .mgt images). i121f streams a pushed image into a FREE record but does NOT write the central record-list name entry, and bdos_find_free_record keys 'free' off the list name byte==0 -> a pushed-but-unnamed record still reads as free, so a SECOND push overwrites the FIRST (every push collides on the lowest free record). Each VALID push must CLAIM its record by writing a record-list name entry (mirror B-DOS new.rec/RENAME: LDIR a 10-char name from the WRQ filename into the 16-byte entry + write the list sector) AFTER validation passes (the clean commit point). Host-modelable logic (build entry + place name); the card-absolute list-sector WRITE dispatch is hardware-gated (ports &DC-&DF, same gate as the list read) -> add a BDOSStore list-write capture to host-verify. Without it only a SINGLE push-then-boot works. Discovered during i121f (2026-06-21).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i121
+
 - id: i122
   title: "SAM fetch-and-boot (PXE-style): TFTP-client-fetch a disk image and boot it directly"
   description: |
