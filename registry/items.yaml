@@ -857,7 +857,7 @@
   title: "Z80 Pass1-over-IR: PC assignment + label/local position capture + symbol resolution"
   description: |
     Port assemble.Pass1 (tools/sam-aarch64/assemble/pass1.go) to walk the encoder's in-memory IR record stream (INST/DIRECTIVE/LABEL_DEF/LOCAL_DEF/COMMENT/BLANK_RUN as emitted by parse_run) and compute: each record's output PC (INST=4 bytes; .word/.quad/.byte/.skip/.balign/.org/.ltorg PC effects; literal-pool placement), the absolute offset of every LABEL_DEF (name_id->PC) and LOCAL_DEF (digit->PC) for the header tables, and .set/.equ symbol values. Output: a label/local position table + origin VMA, the input headerRows + the assembler both consume. Flat-memory-autonomous; harness-test a new entry that feeds an IR record buffer and compares the resolved positions vs host Pass1.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i48c-b8
