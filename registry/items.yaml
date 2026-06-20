@@ -2314,3 +2314,13 @@
   prs:
     - {num: 444, role: completing}
   refs: [tools/autonomous-loop/monitor.sh, tools/autonomous-loop/monitor-nudge-delivery.md, tools/autonomous-loop/README.md, i139, i97]
+
+- id: i141
+  title: "B3h — raw SD CMD17 card-absolute list-sector read on ports &DC-&DF (hardware gate for B3)"
+  description: |
+    Hardware implementation of the card-absolute list-sector read modelled in B3 by the harness hook BD_HOOK_LISTREAD. Implements the SPI command ladder (CMD17 single-block read) on Trinity ports &DC-&DF to read list sectors 1..base-1 directly off the SD card. Not required for B3 emulation; the harness models the returned bytes. Needs final confirmation of the exact SPI init/read sequence on real hardware before building (docs/specs/trinity-record-detection-design.md §8, open-verification-item-1 and §3 frozen-interface principle).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i119
+  refs: [docs/specs/trinity-record-detection-design.md]
