@@ -418,10 +418,10 @@ rows). Migration applies the model in this doc:
   `BLOCKED:<prereq>` becomes an `OPEN` item with a `depends_on` edge to the
   question or item naming the gate — minting a `qN` for a Pete-decision gate where
   one doesn't already exist. No row keeps a `BLOCKED` token.
-- **The existing `question-registry-closed.md` is retired.** Its rows are *already
-  answered*, so their decisions are folded into the relevant items (or already live
-  there) and the file is deleted — git history is the archive. Only open questions
-  carry forward, into the single open view.
+- **There is no `question-registry-closed.md`.** The new model has no closed-questions
+  view — questions are transient; answered questions are deleted after their decisions
+  are folded into the relevant items. Git history is the archive. Only open questions
+  appear in the single open view.
 - **Wall-of-text rows are reshaped to atomic items** by the i115f reshape (its own
   step, independently audited for information loss): umbrellas split into leaves,
   PR-by-PR history moves to git, rationale moves to the cited design docs. All
@@ -444,5 +444,5 @@ priority-queue phase — because the i115f reshape turns every `BLOCKED` row int
 edge and must reshape **once** into the final model. **The i115f content reshape
 runs before any other i115 part** (Pete, 2026-06-19; agreed earlier but not
 previously tracked): it is what lets the later phases assume clean, atomic,
-validator-passing rows. The phased plan + the precise sequencing live in
-`docs/plans/registry-structured-source.md` until the completing PR deletes it.
+validator-passing rows. The phased plan and precise sequencing were in `docs/plans/registry-structured-source.md`,
+deleted at completion by PR #455.

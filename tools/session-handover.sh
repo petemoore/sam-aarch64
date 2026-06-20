@@ -56,6 +56,47 @@ if [ -n "$(find docs/superpowers -type f 2>/dev/null)" ]; then
   echo
 fi
 
+# Registry guard: warn if the registry YAML is invalid or if the generated .md
+# views are stale vs the YAML source.  Always non-fatal (exits 0 regardless).
+registry_bin="$(git rev-parse --show-toplevel 2>/dev/null)/build/registry"
+if [ -x "$registry_bin" ]; then
+  reg_validate_out="$(REGISTRY_ITEMS=registry/items.yaml \
+    REGISTRY_QUESTIONS=registry/questions.yaml \
+    REGISTRY_DIR=registry \
+    REGISTRY_TEMPLATES=tools/registry/templates \
+    REGISTRY_OUTDIR=docs/notes \
+    REGISTRY_PRIORITY=registry/priority.yaml \
+    "$registry_bin" validate registry/items.yaml registry/questions.yaml 2>&1)"
+  if [ $? -ne 0 ]; then
+    echo "⚠️  Registry YAML is invalid (registry validate failed):"
+    printf '%s\n' "$reg_validate_out" | sed 's/^/      /'
+    echo "    Fix with: build/registry … then make registry"
+    echo
+  else
+    # Check for stale generated .md files
+    tmpdir="$(mktemp -d)"
+    stale_out="$(REGISTRY_ITEMS=registry/items.yaml \
+      REGISTRY_QUESTIONS=registry/questions.yaml \
+      REGISTRY_DIR=registry \
+      REGISTRY_TEMPLATES=tools/registry/templates \
+      REGISTRY_OUTDIR="$tmpdir" \
+      REGISTRY_PRIORITY=registry/priority.yaml \
+      "$registry_bin" gen registry/items.yaml registry/questions.yaml 2>&1)"
+    stale=0
+    for f in item-registry-open.md item-registry-closed.md question-registry-open.md backlog.md; do
+      if ! diff -q "docs/notes/$f" "$tmpdir/$f" >/dev/null 2>&1; then
+        stale=1
+      fi
+    done
+    rm -rf "$tmpdir"
+    if [ "$stale" -eq 1 ]; then
+      echo "⚠️  Registry .md views are STALE — docs/notes/*.md differs from registry/*.yaml."
+      echo "    Run: make registry  (then commit the result)."
+      echo
+    fi
+  fi
+fi
+
 # Doc lifecycle guard (a): dated filenames under docs/ violate the evergreen
 # policy (spec decision 6, CLAUDE.md "Doc lifecycle rules"). The cleanup's own
 # plan + spec are expected violations until PR 5 deletes them.
