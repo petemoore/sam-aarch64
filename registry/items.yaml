@@ -246,9 +246,29 @@
   title: "Go-harness fidelity follow-ups: make harness-sweep, USAGE.md, memory watchpoint"
   description: |
     Harness-sweep (one-shot build-all-deps + go test -count=1 ./...) and USAGE.md (full-suite run, stale-payload/test-cache gotchas, boot-self-test authoring patterns) DONE in PR #341. Remaining: memory watchpoint inspection feature — deferred until a debugging session needs it (agent-owned; add ad hoc per the README Evolving the harness).
-  status: OPEN
+  status: DONE
+  kind: umbrella
+  owner: agent
+
+- id: i21a
+  title: "Go-harness: harness-sweep target + USAGE.md"
+  description: |
+    One-shot build-all-deps + go test -count=1 ./... sweep target, and USAGE.md (full-suite run, stale-payload/test-cache gotchas, boot-self-test authoring patterns).
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 341, role: completing}
+  parent: i21
+
+- id: i21b
+  title: Go-harness memory watchpoint
+  description: |
+    Memory watchpoint inspection feature for the Z80 harness. Not a proactively-planned deliverable: per the harness README 'Evolving the harness', memory watchpoints are an ad-hoc improvement to PR without ceremony WHEN a debugging session needs one. Reopen if/when a concrete debugging need arises.
+  status: WONTFIX
+  kind: leaf
+  owner: agent
+  parent: i21
 
 - id: i22
   title: Per-fail-site diagnostic strings
