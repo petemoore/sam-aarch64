@@ -1360,6 +1360,8 @@
   depends_on: [i87a-b1, i135a, i87a-b2]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 543, role: completing}
   parent: i87
   refs: [docs/specs/samboot.md]
 
