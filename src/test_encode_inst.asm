@@ -341,6 +341,79 @@ run_encode_inst_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &1f, &87, &08, &d5
 
+; -- i203d special forms: mov-imm autoselect / ldr-lit / tbz/tbnz ------
+; -- mov x0, #0x12340000  =>  0xD2A24680  (movz lsl#16) -------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_mov_movz
+                ld      a, 2
+                ld      de, 3
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &80, &46, &a2, &d2
+
+; -- mov x0, #-1  =>  0x92800000  (movn #0) ------------------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_mov_movn
+                ld      a, 2
+                ld      de, 3
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &00, &00, &80, &92
+
+; -- mov w1, #0xfffffffe  =>  0x12800021  (32-bit movn #1) ---------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_mov_movnw
+                ld      a, 2
+                ld      de, 3
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &21, &00, &80, &12
+
+; -- mov x2, #0x5555555555555555  =>  0xB200F3E2  (orr-imm) --------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_mov_orr
+                ld      a, 2
+                ld      de, 3
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &e2, &f3, &00, &b2
+
+; -- ldr x0, pc+8 @0x1000  =>  0x58000040  (literal imm19) --------
+                call    enc_seed_pc_1000
+                ld      hl, enc_fix_ldr_x
+                ld      a, 2
+                ld      de, 5
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &40, &00, &00, &58
+
+; -- ldr w1, pc+16 @0x1000  =>  0x18000081  (32-bit literal) ------
+                call    enc_seed_pc_1000
+                ld      hl, enc_fix_ldr_w
+                ld      a, 2
+                ld      de, 5
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &81, &00, &00, &18
+
+; -- tbz x0, #5, pc+16 @0x1000  =>  0x36280080 -------------------
+                call    enc_seed_pc_1000
+                ld      hl, enc_fix_tbz
+                ld      a, 3
+                ld      de, 22
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &80, &00, &28, &36
+
+; -- tbnz w1, #3, pc+8 @0x1000  =>  0x37180041 ------------------
+                call    enc_seed_pc_1000
+                ld      hl, enc_fix_tbnz
+                ld      a, 3
+                ld      de, 23
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &41, &00, &18, &37
+
                 call    enctab_map_out
                 ret
 
@@ -402,3 +475,12 @@ enc_fix_mrs:    defb    &01, &00, &0b, &08, &00, &6d, &69, &64, &72, &5f, &65, &
 enc_fix_msr:    defb    &0b, &07, &00, &64, &61, &69, &66, &73, &65, &74, &05, &02, &00, &01, &02
 enc_fix_dc:     defb    &0b, &04, &00, &63, &76, &61, &63, &01, &00
 enc_fix_tlbi:   defb    &0b, &07, &00, &76, &6d, &61, &6c, &6c, &65, &31
+; i203d mov-imm / ldr-lit / tbz (exact Go OperandWriter bytes)
+enc_fix_mov_movz:  defb &01, &00, &05, &05, &00, &03, &00, &00, &34, &12
+enc_fix_mov_movn:  defb &01, &00, &05, &02, &00, &01, &ff
+enc_fix_mov_movnw: defb &02, &01, &05, &02, &00, &01, &fe
+enc_fix_mov_orr:   defb &01, &02, &05, &09, &00, &04, &55, &55, &55, &55, &55, &55, &55, &55
+enc_fix_ldr_x:     defb &01, &00, &05, &03, &00, &02, &08, &10
+enc_fix_ldr_w:     defb &02, &01, &05, &03, &00, &02, &10, &10
+enc_fix_tbz:       defb &01, &00, &05, &02, &00, &01, &05, &05, &03, &00, &02, &10, &10
+enc_fix_tbnz:      defb &02, &01, &05, &02, &00, &01, &03, &05, &03, &00, &02, &08, &10

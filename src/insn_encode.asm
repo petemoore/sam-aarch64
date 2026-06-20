@@ -118,7 +118,7 @@ enc_after_kinds:
 ; the generic form-table path below.
                 ld      a, (enc_mnem + 1)
                 or      a
-                jr      nz, enc_after_special       ; id >= 256: never special
+                jp      nz, enc_after_special       ; id >= 256: never special
                 ld      a, (enc_mnem)
                 cp      17
                 jp      z, enc_lslsr
@@ -150,6 +150,14 @@ enc_after_kinds:
                 jp      z, enc_sysname
                 cp      79
                 jp      z, enc_sysname
+                cp      22
+                jp      z, enc_tbz
+                cp      23
+                jp      z, enc_tbz
+                cp      3
+                jr      z, enc_special_imm1         ; mov: needs imm op[1]
+                cp      5
+                jr      z, enc_special_imm1         ; ldr Xt,label: imm op[1]
                 cp      70
                 jr      z, enc_special_imm2         ; ror: needs imm op[2]
                 cp      47
@@ -167,6 +175,20 @@ enc_special_imm2:
                 cp      70
                 jp      z, enc_ror
                 jp      enc_bicimm
+enc_special_imm1:
+; mov(3)/ldr(5): only intercept when op[1] is an immediate (mov reg->orr
+; and ldr [mem]/=litpool go through their own paths / the form table).
+                ld      b, a                        ; B = mnem (3 or 5)
+                ld      a, (enc_op_count)
+                cp      2
+                jr      c, enc_after_special
+                ld      a, (OPVAL_KINDS + 1)
+                cp      OPK_IMM_EXPR
+                jr      nz, enc_after_special
+                ld      a, b
+                cp      3
+                jp      z, enc_movimm
+                jp      enc_ldrlit
 enc_after_special:
 
 ; -- Form lookup: find first form for the mnemonic, then match kinds ----
@@ -648,7 +670,10 @@ enc_bicimm_base:
                 ld      l, a                        ; HL = (Rn << 5) | Rd
                 ld      de, 0                        ; byte2/byte3 untouched
                 call    or_dehl_into_base
-; word = insn_base
+                jp      enc_emit_base
+
+; -- enc_emit_base — load the 4-byte insn_base into DEHL (L=byte0..D=3) --
+enc_emit_base:
                 ld      a, (insn_base + 0)
                 ld      l, a
                 ld      a, (insn_base + 1)
@@ -657,6 +682,263 @@ enc_bicimm_base:
                 ld      e, a
                 ld      a, (insn_base + 3)
                 ld      d, a
+                ret
+
+; -- enc_ldrlit — ldr Xt/Wt, label: PC-relative imm19 (FSID_BRANCH19) ----
+; Port of pass2.go::encodeLdrLitDirect.  base 0x58000000 (X) / 0x18000000
+; (W), imm19 = (label-PC)/4 placed at bits 5..23 by the shared branch fold.
+enc_ldrlit:
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (Rt)
+                call    enc_rd_width                ; enc_regmask, enc_rd
+; insn_base = base | Rt  (byte0 = Rt, byte3 = 0x58 / 0x18).
+                ld      a, (enc_rd)
+                and     &1f
+                ld      (insn_base + 0), a
+                xor     a
+                ld      (insn_base + 1), a
+                ld      (insn_base + 2), a
+                ld      a, (enc_regmask)
+                cp      63
+                ld      a, &58
+                jr      z, enc_ldrlit_b
+                ld      a, &18
+enc_ldrlit_b:
+                ld      (insn_base + 3), a
+                ld      a, 1
+                call    enc_nth_operand             ; HL -> op1 (label)
+                call    enc_eval_at                 ; target -> expr_result
+                ld      a, FSID_BRANCH19
+                call    insn_fold                   ; DEHL = imm19 bits @5
+                call    or_dehl_into_base
+                jp      enc_emit_base
+
+; -- enc_tbz — tbz(22)/tbnz(23) Rt,#bit,label: imm14 (FSID_BRANCH14) -----
+; Port of pass2.go::encodeTbzTbnz.  word = (b5<<31)|(0b011011<<25)|
+; (op<<24)|(b40<<19)|imm14<<5|Rt; imm14 = (label-PC)/4 via the branch fold.
+enc_tbz:
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (Rt)
+                call    enc_rd_width                ; enc_rd = Rt
+                ld      a, 1
+                call    enc_nth_operand             ; HL -> op1 (bit)
+                call    enc_eval_at                 ; bit -> expr_result
+                ld      a, (expr_result)            ; bit number 0..63
+                ld      c, a
+; byte0 = Rt; byte1 = 0; byte2 = (b40 << 3); byte3 = (b5<<7)|0x36|op.
+                ld      a, (enc_rd)
+                and     &1f
+                ld      (insn_base + 0), a
+                xor     a
+                ld      (insn_base + 1), a
+                ld      a, c
+                and     &1f                         ; b40 = bit & 0x1f
+                add     a, a
+                add     a, a
+                add     a, a                        ; b40 << 3
+                ld      (insn_base + 2), a
+; b5 = (bit >> 5) & 1  -> byte3 bit7.
+                ld      a, c
+                and     &20                         ; bit 5 set?
+                jr      z, enc_tbz_b5z
+                ld      a, &80
+enc_tbz_b5z:
+                ld      b, a                        ; B = b5<<7
+                ld      a, (enc_mnem)
+                cp      23                          ; tbnz -> op=1 (bit24 -> byte3 bit0)
+                ld      a, &36
+                jr      nz, enc_tbz_op0
+                or      &01
+enc_tbz_op0:
+                or      b                           ; | b5<<7
+                ld      (insn_base + 3), a
+                ld      a, 2
+                call    enc_nth_operand             ; HL -> op2 (label)
+                call    enc_eval_at                 ; target -> expr_result
+                ld      a, FSID_BRANCH14
+                call    insn_fold                   ; DEHL = imm14 bits @5
+                call    or_dehl_into_base
+                jp      enc_emit_base
+
+; -- enc_movimm — mov Rd,#imm autoselect (movz / movn / orr-imm) --------
+; Port of pass2.go::tryEncodeMovImm.  Try movz (one 16-bit chunk), then
+; movn (~value one chunk), then orr-imm (logical-immediate).  Faithful
+; to GNU's single-instruction selection.
+enc_movimm:
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (Rd)
+                call    enc_rd_width                ; enc_regmask, enc_rd
+                ld      a, 1
+                call    enc_nth_operand             ; HL -> op1 (imm)
+                call    enc_eval_at                 ; imm -> expr_result
+                ld      a, (enc_regmask)
+                cp      63
+                jr      z, enc_mov_movz
+                xor     a                           ; W: mask to low 32 bits
+                ld      (expr_result + 4), a
+                ld      (expr_result + 5), a
+                ld      (expr_result + 6), a
+                ld      (expr_result + 7), a
+enc_mov_movz:
+                ld      hl, expr_result
+                call    enc_mov_scan
+                jr      nc, enc_mov_trymovn
+                ld      a, (enc_regmask)
+                cp      63
+                ld      a, &d2                      ; movz X
+                jr      z, enc_mov_emit
+                ld      a, &52                      ; movz W
+                jr      enc_mov_emit
+enc_mov_trymovn:
+                ld      hl, expr_result             ; nu = ~value into enc_nu
+                ld      de, enc_nu
+                ld      b, 8
+enc_mov_not:
+                ld      a, (hl)
+                cpl
+                ld      (de), a
+                inc     hl
+                inc     de
+                djnz    enc_mov_not
+                ld      a, (enc_regmask)
+                cp      63
+                jr      z, enc_mov_scn
+                xor     a
+                ld      (enc_nu + 4), a
+                ld      (enc_nu + 5), a
+                ld      (enc_nu + 6), a
+                ld      (enc_nu + 7), a
+enc_mov_scn:
+                ld      hl, enc_nu
+                call    enc_mov_scan
+                jr      nc, enc_mov_orr
+                ld      a, (enc_regmask)
+                cp      63
+                ld      a, &92                      ; movn X
+                jr      z, enc_mov_emit
+                ld      a, &12                      ; movn W
+enc_mov_emit:
+; A = byte3 base; build word = base | (hw<<21) | (chunk<<5) | Rd.
+                ld      (insn_base + 3), a
+                ld      a, (enc_mov_chunk + 0)      ; byte0 = Rd | (Clo&7)<<5
+                and     &07
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a
+                ld      b, a
+                ld      a, (enc_rd)
+                and     &1f
+                or      b
+                ld      (insn_base + 0), a
+                ld      a, (enc_mov_chunk + 0)      ; byte1 = (Clo>>3)|((Chi&7)<<5)
+                srl     a
+                srl     a
+                srl     a
+                ld      b, a
+                ld      a, (enc_mov_chunk + 1)
+                and     &07
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a
+                or      b
+                ld      (insn_base + 1), a
+                ld      a, (enc_mov_chunk + 1)      ; byte2 = 0x80|(hw<<5)|(Chi>>3)
+                srl     a
+                srl     a
+                srl     a
+                ld      b, a
+                ld      a, (enc_mov_hw)
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a
+                or      b
+                or      &80
+                ld      (insn_base + 2), a
+                jp      enc_emit_base
+enc_mov_orr:
+; orr Rd, ZR, #imm — base 0xb20003e0 (X) / 0x320003e0 (W); fold logical
+; imm (expr_result holds the original value) then OR Rd in.
+                ld      a, (enc_regmask)
+                cp      63
+                ld      a, &b2
+                jr      z, enc_mov_orr_b
+                ld      a, &32
+enc_mov_orr_b:
+                ld      (insn_base + 3), a
+                xor     a
+                ld      (insn_base + 1), a
+                ld      (insn_base + 2), a
+                ld      a, &e0                      ; Rn = XZR (bits 5..9)
+                ld      (insn_base + 0), a
+                ld      a, FSID_LOGICAL
+                call    insn_fold
+                call    or_dehl_into_base
+                ld      a, (enc_rd)
+                and     &1f
+                ld      hl, insn_base + 0
+                or      (hl)
+                ld      (hl), a
+                jp      enc_emit_base
+
+; -- enc_mov_scan — HL=8-byte LE value; find a single nonzero 16-bit -----
+; chunk.  enc_regmask picks 4 (X) or 2 (W) chunk slots.  On success: carry
+; set, enc_mov_hw = chunk index, enc_mov_chunk = the 2 chunk bytes.  On
+; failure (>=2 nonzero chunk slots): carry clear.
+enc_mov_scan:
+                push    hl
+                ld      a, (enc_regmask)
+                cp      63
+                ld      b, 4
+                jr      z, enc_ms_n
+                ld      b, 2
+enc_ms_n:
+                ld      c, 0                        ; nonzero-slot count
+                ld      d, &ff                      ; candidate hw (none yet)
+                ld      e, 0                        ; current index
+enc_ms_loop:
+                ld      a, (hl)
+                inc     hl
+                or      (hl)
+                inc     hl
+                jr      z, enc_ms_next
+                inc     c
+                ld      d, e
+enc_ms_next:
+                inc     e
+                djnz    enc_ms_loop
+                pop     hl                          ; HL = value base
+                ld      a, c
+                cp      2
+                jr      nc, enc_ms_fail
+; hw = d, except d==0xff (all-zero value) -> hw 0.
+                ld      a, d
+                inc     a                           ; 0xff -> 0 (sets Z)
+                jr      nz, enc_ms_usehw
+                xor     a                           ; hw = 0
+                jr      enc_ms_store
+enc_ms_usehw:
+                ld      a, d
+enc_ms_store:
+                ld      (enc_mov_hw), a
+                add     a, a                        ; 2*hw
+                ld      e, a
+                ld      d, 0
+                add     hl, de                      ; HL -> chunk bytes
+                ld      a, (hl)
+                ld      (enc_mov_chunk + 0), a
+                inc     hl
+                ld      a, (hl)
+                ld      (enc_mov_chunk + 1), a
+                scf
+                ret
+enc_ms_fail:
+                or      a
                 ret
 
 ; -- enc_csetm — csetm Rd,cond: csinv Rd,xzr,xzr,!cond ------------------
@@ -956,5 +1238,8 @@ enc_lsb:        defb    0
 enc_width:      defb    0
 enc_op2ptr:     defw    0
 enc_sn_next_ptr: defw   0
+enc_mov_hw:     defb    0
+enc_mov_chunk:  defb    0, 0
+enc_nu:         defb    0, 0, 0, 0, 0, 0, 0, 0
 enc_base:       defb    0, 0, 0, 0
 enc_word:       defb    0, 0, 0, 0
