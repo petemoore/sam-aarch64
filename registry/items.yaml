@@ -2953,6 +2953,8 @@
   title: "Correct SAMDOS file-I/O error references: app vector is DOSER (&5BC0), not (hksp)"
   description: |
     i25/i183 and the reference docs (docs/specs/samdos-file-io.md, docs/notes/sam-stub-audit.md) framed graceful file-I/O error handling around installing an (hksp) handler. That is wrong: the SAMDOS hook dispatcher zeros (hksp) on EVERY hook entry before the hook body runs (samdos/src/b.s:450-451), so an app-set (hksp) is never seen by derr (d.s:430-437) -- (hksp) is SAMDOS-internal (NMI snapshot only, d.s:606/745). The app-facing error vector is DOSER (&5BC0), a BASIC sysvar (always mapped, no paging dance) that ROM PTDOS dispatches via JP (DOSER) after every DOS hook (rom DOSC, docs/sam/sam-coupe_rom-v3.0_annotated-disassembly.txt:12977-12980,13003); COMET uses exactly this (comet.asm:1265-1382). samdos-file-io.md:174 already notes &5BC0 is COMET's error vector -- internally inconsistent with its (hksp) caveat. Scope of THIS item: fix the reference docs. Implementation (DOSER handler + harness DOSER model) is i25.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 509, role: completing}
