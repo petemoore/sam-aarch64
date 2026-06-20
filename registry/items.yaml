@@ -17,9 +17,18 @@
   description: |
     On-SAM IDE memory model — DECIDED (q36, Pete 2026-06-22). A SINGLE dynamic page pool (a resident page_owner[] allocator in section D, boot-sized from PRAMTP) shared by the editor AND the assembler: any subsystem alloc_page/free_page; a requester that can't get a page raises its own out-of-memory error. Supersedes the assembler's hardcoded off-axis pages 4-15 and FOLDS the i23 96KB-IN / i24 32KB-OUT ceilings into the pool. 256KB is FIRST-CLASS (~144KB doc ceiling; ~9 free pages); 512KB ~25 free pages. Pool exhaustion = refuse-with-message (the honest ceiling) — page persistence/SPILL is a DOWNSTREAM feature (depends on i2, never blocks it). Lazy edit/assemble spill: DOC blocks serialize to disk only when FREE can't satisfy an alloc, and only as many as needed (§4.5) — a 512KB machine touches disk zero times. IDE owns allocation for its session (rebuild BASIC ALLOCT only on exit). Spec: docs/specs/ide-memory-model-design.md. Implements the pool i41 §5.2 already assumes; lifts i23/i24 for free.
   status: OPEN
-  kind: leaf
+  kind: umbrella
   owner: agent
   refs: [docs/specs/ide-memory-model-design.md, i41, i23, i24]
+
+- id: i2a
+  title: "Page allocator core: page_owner[] + alloc_page/free_page (Go authority + Z80 port, host-verified)"
+  description: |
+    First brick of i2. The resident page allocator mechanism (spec §4.1): a page_owner[] byte-per-page ownership table (RESERVED/FREE/owner-tag), alloc_page(owner)->page|FAIL (first-FREE policy), free_page(page,expected_owner) with tag assertion, plus pp_init/pp_reserve/pp_owner_of/pp_free_count. Go authority tools/sam-aarch64/pagepool + Z80 port src/pagepool.asm, host-verified vs an oracle via the koron-go/z80 harness (mirrors the i41d Brick-1 pattern). Does NOT yet wire IN/OUT/DOC buffers to the pool (§4.4) nor read sysvars for boot-sizing (§4.2) nor add the boot self-test on the paged path — those are later i2 bricks. Spec: docs/specs/ide-memory-model-design.md.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  parent: i2
 
 - id: i3
   title: Editor groundwork (Phase 2) — full vision
@@ -35,7 +44,7 @@
   description: |
     SAM-side read-only viewer ported from the host prototype. The i76 P1 host viewer is the functional authority this SAM implementation will port. Carried forward by i76 Phase-1.
   status: OPEN
-  depends_on: [i2]
+  depends_on: [i2a]
   kind: leaf
   owner: agent
   refs: [i76, "docs/specs/editor-tui-prototype-design.md §5"]
@@ -286,7 +295,7 @@
   description: |
     The current IN-file ceiling is 96 KB (6 pages, 7–12, hardcoded src/assembler.asm line 49). Lift this ceiling to support larger source files via additional paged HLOAD slots. Deferred-backlog item.
   status: OPEN
-  depends_on: [i2]
+  depends_on: [i2a]
   kind: leaf
   owner: agent
 
@@ -295,7 +304,7 @@
   description: |
     The output length field is 16-bit and the output buffer ceiling is 32768 bytes (src/encoder.asm). Lift the OUT_LEN field and ceiling to support assemblies larger than 32 KB. Deferred-backlog item.
   status: OPEN
-  depends_on: [i2]
+  depends_on: [i2a]
   kind: leaf
   owner: agent
 
@@ -394,7 +403,7 @@
   description: |
     Beyond-M7 / future idea. Support for assembling from multiple source files with staged or partial loading, enabling larger projects than currently fit in a single-file workflow.
   status: OPEN
-  depends_on: [i2]
+  depends_on: [i2a]
   kind: leaf
   owner: agent
 
@@ -403,7 +412,7 @@
   description: |
     Use the proven Trinity B-DOS storage seam (src/netboot/bdos_seam.asm; spanning records in src/netboot/fw_span.asm) for staged/overlaid assembly, lifting the i23 96 KB IN / i24 32 KB OUT ceilings. Storage-access half proven by netboot work. Assembler still uses plain HSAVE/HLOAD for single-file IN→OUT; this item extends that to mass-storage-backed staging. Rescoped 2026-06-17: netboot proved records are accessible + writable; remaining deliverable is the assembler-scale integration.
   status: OPEN
-  depends_on: [i2]
+  depends_on: [i2a]
   kind: leaf
   owner: agent
   refs: [memory/trinity_hardware.md, src/netboot/bdos_seam.asm, i23, i24]
@@ -566,7 +575,7 @@
   description: |
     Faithful Z80 port of the i41a Go authority (tools/sam-aarch64/editmodel), per CLAUDE.md §6. Scoped in design §8.1. Bricks 1+3+4a COMPLETE: insert/split/loc/goto (PR #387), delete/merge/free-list (PR #389), bounded ring-journal undo/redo (PR #391), EMDL serialize/load (PR #392), src/editmodel.asm, host-verified vs oracle. REMAINING: Brick 2 (paging onto i2 pool via OUT (251) — SimCoupé-gated), Brick 4b (real v2 .tbn path — couples to assembler build, deferred).
   status: OPEN
-  depends_on: [i2]
+  depends_on: [i2a]
   kind: leaf
   owner: agent
   parent: i41
@@ -577,7 +586,7 @@
   description: |
     Replace i41a's raw-text line payload with the i48 in-memory symbolic IR (parsed format.Record): a document-global symbol table + name-id/record-id side-tables (§3), a hybrid committed-parsed / active-raw / invalid-error record type (§7.3), per-line text→IR entry. q24 resolved (2026-06-20): the editor validates ONE LINE AT A TIME — no whole-document import to serialize invalidly; the design point is how an in-progress/invalid LINE is held + round-tripped (whole-file import = i165). Open design (symbol-table lifecycle, hybrid sum type, per-line parse) — needs a design pass (§8/§5.2/§6/§7.3).
   status: OPEN
-  depends_on: [i2]
+  depends_on: [i2a]
   kind: leaf
   owner: agent
   parent: i41
@@ -3672,7 +3681,7 @@
   description: |
     Downstream of i2 (Pete, 2026-06-22, q36): the i2 baseline refuses-with-message when the page pool is exhausted. This OPTIONAL feature makes alloc_page lazy-SPILL a cold DOC block to a persistence backend instead of refusing (design §4.5/§5/§7): serialize the block to disk, free its page, satisfy the alloc; reload on demand. Backend is PLUGGABLE — Trinity storage if the machine has it, else a physical floppy/tape — so a space-limited user on ANY machine gains document headroom beyond the ~144KB/256KB ceiling. HARD CONSTRAINT: the assembler must run fully on a floppy/tape-only machine with NO Trinity, so the spill backend is optional and must degrade to refuse-with-message when absent. Depends on i2 (the pool allocator + the page_owner[] discipline) but NEVER blocks it.
   status: OPEN
-  depends_on: [i2]
+  depends_on: [i2a]
   kind: leaf
   owner: agent
 
