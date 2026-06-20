@@ -501,7 +501,7 @@
   description: |
     Optional second-order optimisation: pack the INSN_RUN overlay operand fields (reg=5b, kind-tag, shift-kind=2b, cond=4b, width=1b, mem-shape=3b) into sub-byte bitfields instead of one byte per field, per docs/specs/compact-tbn-nextgen-design.md §3.1 (which rates it "REFINE / accept narrowly" — real ~-4 KB but the least leverage per unit of Z80 complexity, a polish layered on the structural wins, not a headline). A SEPARATE concern from the comment/blank-run parsing brick (i48c-b7); the earlier "absorbed into i48c-b7" framing conflated two unrelated subsystems and pointed at a stale design ref (i48-syntactic-encoder-design.md has no §3.1). De-coupled 2026-06-21: gated on i48c-b8 (do the format-packing polish once the overlay encoder is functionally complete, so it isn't re-churned). Migrated to M9 at M8 close (2026-06-12).
   status: OPEN
-  depends_on: [i48c-b8]
+  depends_on: [i48c-b8a, i48c-b8b, i48c-b8c, i48c-b8d, i48c-b8e]
   kind: leaf
   owner: agent
   parent: i48c
@@ -865,9 +865,9 @@
   parent: i48c-b8
 
 - id: i48c-b8b
-  title: "Z80 Compact: IR records -> compact overlay records + sidecar + globals"
+  title: "Compact non-encoder core: LIT_DATA + sidecar + globals + PC walk (flat harness)"
   description: |
-    Port assemble.Compact (tools/sam-aarch64/assemble/compact.go) to rewrite the encoder's IR record stream into the compact v2 record stream: each INST -> a KindInsnRun element (fully-literal PC-invariant instruction as a bare 4-byte word; symbol/PC-bearing instruction as base word with relocated field zeroed + {slot,expr} overlay patch, via the pcProbeA/pcProbeB literal guard); same-directive constant data coalesces to KindLitData (<=1016 byte cap); COMMENT/BLANK_RUN records relocate to tagged editor-region sidecar rows anchored to output PC; .global directives -> a name_id list. Consumes b8a's PC/position info. Harness-test the compacted record bytes vs host Compact over fixtures. NOTE (b8a PR #557): b8a's flat harness re-ported pass1.go's directive PC sizing (pass1_dir_*) rather than reuse main_loop.asm compute_directive_size (which drags in the paged assembler). When wiring the integrated path, reconcile which directive sizer the real build uses so the two don't drift.
+    Port the non-encoder body of assemble.Compact (compact.go:46-188, excluding literalWord/encodeInstOverlay): drop LABEL_DEF/LOCAL_DEF (already in b8a Pass1); COMMENT/BLANK_RUN -> editor-region sidecar rows anchored to RecordPC; .global -> name_id list (globalNameIDs); same-directive constant data -> KindLitData runs split at the 1016-byte cap; emit INST elements as a skeleton (base/patches filled by the encoder adapter i48c-b8e). Flat-memory harness like b8a (reuse pass1_ir_test.go scaffold: serializeIR + Pass1 oracle + record read-back), verified vs host assemble.Compact's non-encoder outputs (sidecar/globals/LIT_DATA/PC) over fixtures. No ENCTAB/paging -> no memory collision. Go authority: compact.go. The encoder-dependent half (literal-probe + overlay-patch emission, needs paged ENCTAB) is the sibling i48c-b8e.
   status: IN_PROGRESS
   depends_on: [i48c-b8a]
   kind: leaf
@@ -879,7 +879,7 @@
   description: |
     Port headerRows (compact.go:196) + format.WriteFile (tools/sam-aarch64-format/writer.go) to emit the full compact v2 .tbn: 12-byte header (magic SA64 + version 2 + flags + editor_region_offset u32), header label table ([count u16][name_id u16][delta uvarint] rows) and local table ([count u16][digit u8][delta uvarint] rows) built from b8a positions, the front-coded name table, the b8b compacted records, then the editor region (sidecar comment/blank rows + globals). Deltas are uvarint-encoded running offsets. Harness-test the serialized bytes vs host CompactTBNBytes/WriteFile over fixtures.
   status: OPEN
-  depends_on: [i48c-b8b]
+  depends_on: [i48c-b8e]
   kind: leaf
   owner: agent
   parent: i48c-b8
@@ -890,6 +890,16 @@
     The lands-last wiring: drive the full SAM pipeline text -> lex(asmlex) -> parse(asmparse) -> Pass1-over-IR(b8a) -> Compact(b8b) -> serialize(b8c) over the fixture corpus and assert the produced compact v2 .tbn bytes byte-match the host CompactTBNBytes output (the m9 i48c done-criterion: text->overlay byte-match host for the corpus). Optionally feed the produced .tbn through the existing assembler reader+pass1/pass2 to OUT bytes and compare to the host-assembled output, closing text->bytes end-to-end. Wire a corpus-driven harness test (and, if it fits the boot budget, a SimCoupe self-test). ARCHITECTURE CONSTRAINT (found in b8a, PR #557): the parser tables (asmparse SYM_NAMES/PARSE_RECS) and the assembler pass-1 tables (assembler.asm OPVAL_ARRAY/PASS_PC@&C159/LITPOOL@&D200/LOCAL_LABEL_TABLE@&E280) BOTH claim the &C100-&EFFF scratch region, so the full text->.tbn chain cannot run in one flat binary with today's layout. b8a side-stepped this by producing the IR host-side; b8d (and the real SAM editor) must resolve the memory layout (relocate/page one stage's tables) so parse_run + pass1 + compact + serialize coexist. This is the integrated-build memory-model question (relates to q36).
   status: OPEN
   depends_on: [i48c-b8c]
+  kind: leaf
+  owner: agent
+  parent: i48c-b8
+
+- id: i48c-b8e
+  title: "Compact encoder adapter: literal-probe + overlay-patch emission (paged, needs ENCTAB)"
+  description: |
+    Port the encoder-dependent half of assemble.Compact: literalWord (encode at pcProbeA=0 and pcProbeB=0x40000; equal -> bare 4-byte literal word) and encodeInstOverlay (overlayClassify -> {slot,expr}; encodeInst at pc -> base word; ZeroSlot the relocated field; assertOverlay re-fold check). Fills in the INST-element base/patches the non-encoder core (i48c-b8b) leaves as a skeleton, completing KindInsnRun mode-0/mode-1 packing. NEEDS the instruction encoder dispatch (encodeInst, pass2.go:214-373) + form-table validation, whose form lookup requires the paged ENCTAB -> CANNOT be a flat harness; runs in the paged-assembler context (a new compact-IR stage between pass1 and pass2, reaching ENCTAB via enctab_map_in like main_assemble). The Z80 slot folders (src/slots/*.asm, src/insn_run.asm fold_*) are already ported + proven in pass2 -> reuse; the new work is the encodeInst dispatch + overlayClassify port. Go authority: compact.go literalWord/encodeInstOverlay, pass2.go encodeInst, overlay.go overlayClassify.
+  status: OPEN
+  depends_on: [i48c-b8b]
   kind: leaf
   owner: agent
   parent: i48c-b8
