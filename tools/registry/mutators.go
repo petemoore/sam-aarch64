@@ -21,14 +21,54 @@ type mutatorPaths struct {
 	migrating     bool   // defer invariant 10 (id-shaped ref existence)
 }
 
+// reconcilePriority rebuilds reg.Priority to equal exactly the pullable set
+// while preserving Pete's curated ordering of items that are still pullable.
+// The algorithm:
+//  1. Keep every id in the current priority that is still pullable, in order.
+//  2. Append every pullable id NOT already listed, in canonical id sort order
+//     (deterministic: new items land at the end where Pete can re-rank them).
+//
+// The result satisfies validatePriority's strict-permutation invariant:
+// exactly the pullable set, each id once, no closed/umbrella ids.
+//
+// reconcilePriority is a no-op when paths.priorityYAML is "" (dormant mode)
+// — callers must guard on that condition.
+func reconcilePriority(reg *Registry) {
+	pullable := pullableItems(reg.Items)
+
+	// Collect existing ranked ids that are still pullable (preserve order).
+	kept := make([]string, 0, len(reg.Priority))
+	inKept := map[string]bool{}
+	for _, id := range reg.Priority {
+		if pullable[id] {
+			kept = append(kept, id)
+			inKept[id] = true
+		}
+	}
+
+	// Append any pullable id not already in the kept list, in canonical order.
+	for _, it := range sortedItems(reg.Items) {
+		if pullable[it.ID] && !inKept[it.ID] {
+			kept = append(kept, it.ID)
+		}
+	}
+
+	reg.Priority = kept
+}
+
 // applyAndCommit is the canonical end-of-mutator pipeline:
 //
 //  1. sort the in-memory registry into canonical order (so validate's sort
 //     check passes even when a mutator appended a record at the end);
-//  2. validate the registry — if it fails print errors and exit 1, leaving
+//  2. when a priority file is active, reconcile the priority queue so that
+//     it equals exactly the pullable set (drop closed/umbrella ids, append
+//     new pullable ids) — this keeps the queue consistent without requiring
+//     hand-edits after add/set-status/split;
+//  3. validate the registry — if it fails print errors and exit 1, leaving
 //     the source files unchanged;
-//  3. write canonical YAML to the source files;
-//  4. re-load from disk and run gen (to stdout or to paths.outDir),
+//  4. write canonical YAML (items, questions, and when active: priority)
+//     to the source files;
+//  5. re-load from disk and run gen (to stdout or to paths.outDir),
 //     so the caller can confirm the regenerated output is consistent.
 //
 // Because mutators modify reg in memory first and only write here (after
@@ -38,6 +78,12 @@ func applyAndCommit(reg *Registry, paths mutatorPaths) {
 	// does not trip the canonical-order invariant.
 	reg.Items = sortedItems(reg.Items)
 	reg.Questions = sortedQuestions(reg.Questions)
+
+	// Auto-maintain the priority queue when a priority file is active.
+	// This eliminates the hand-edit burden after add/set-status/split.
+	if paths.priorityYAML != "" {
+		reconcilePriority(reg)
+	}
 
 	ve := validateWith(reg, validateOpts{migrating: paths.migrating})
 	// Include priority validation when a priority list is loaded.
@@ -58,6 +104,15 @@ func applyAndCommit(reg *Registry, paths mutatorPaths) {
 	if err := writeQuestions(paths.questionsYAML, reg.Questions); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+	// Persist the reconciled priority queue alongside items and questions.
+	// Only written when a priority file is active; guards against clobbering
+	// a non-existent file in dormant/stdout modes.
+	if paths.priorityYAML != "" {
+		if err := writePriority(paths.priorityYAML, reg.Priority); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	}
 	// Re-load from disk and regenerate the three views.
 	// Re-loading ensures the canonical serializer's output round-trips cleanly.
