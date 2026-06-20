@@ -892,57 +892,33 @@ walk_strings_loop:
 ; the directive size (recomputed via compute_directive_size to keep the
 ; pass-1 / pass-2 sizing in lockstep).
 ; -----------------------------------------------------------------------
+; main_dir_{byte,short,word,quad}_emit — emit .byte/.2byte/.4byte/.8byte
+; operand lists.  These differ only in how many low bytes of each evaluated
+; immediate are emitted (1/2/4/8), so they share one body parameterized by
+; that width (main_dir_emit_nbytes).
 main_dir_byte_emit:
-                call    main_eval_each_imm_init
-main_dir_byte_loop:
-                ld      a, (main_op_count_remaining)
-                or      a
-                jp      z, dir_emit_done
-                call    main_eval_next_imm
-                ld      a, (expr_result + 0)
-                call    emit_byte
-                jp      main_dir_byte_loop
-
+                ld      a, 1
+                jr      main_dir_n_emit
 main_dir_short_emit:
-                call    main_eval_each_imm_init
-main_dir_short_loop:
-                ld      a, (main_op_count_remaining)
-                or      a
-                jp      z, dir_emit_done
-                call    main_eval_next_imm
-                ld      a, (expr_result + 0)
-                call    emit_byte
-                ld      a, (expr_result + 1)
-                call    emit_byte
-                jp      main_dir_short_loop
-
+                ld      a, 2
+                jr      main_dir_n_emit
 main_dir_word_emit:
-                call    main_eval_each_imm_init
-main_dir_word_loop:
-                ld      a, (main_op_count_remaining)
-                or      a
-                jp      z, dir_emit_done
-                call    main_eval_next_imm
-                ld      a, (expr_result + 0)
-                call    emit_byte
-                ld      a, (expr_result + 1)
-                call    emit_byte
-                ld      a, (expr_result + 2)
-                call    emit_byte
-                ld      a, (expr_result + 3)
-                call    emit_byte
-                jp      main_dir_word_loop
-
+                ld      a, 4
+                jr      main_dir_n_emit
 main_dir_quad_emit:
+                ld      a, 8
+main_dir_n_emit:
+                ld      (main_dir_emit_nbytes), a
                 call    main_eval_each_imm_init
-main_dir_quad_loop:
+main_dir_n_loop:
                 ld      a, (main_op_count_remaining)
                 or      a
                 jp      z, dir_emit_done
                 call    main_eval_next_imm
-                ld      b, 8
+                ld      a, (main_dir_emit_nbytes)
+                ld      b, a
                 ld      hl, expr_result
-main_dir_quad_inner:
+main_dir_n_inner:
                 ld      a, (hl)
                 push    bc
                 push    hl
@@ -950,8 +926,8 @@ main_dir_quad_inner:
                 pop     hl
                 pop     bc
                 inc     hl
-                djnz    main_dir_quad_inner
-                jp      main_dir_quad_loop
+                djnz    main_dir_n_inner
+                jp      main_dir_n_loop
 
 
 ; .ascii / .asciz — operands are STRING records.  Each STRING:
@@ -1728,6 +1704,7 @@ main_op_count_remaining:        defb    0
 main_opval_src:                 defw    0
 main_opval_dest:                defw    0
 main_dir_id:                    defb    0
+main_dir_emit_nbytes:           defb    0
 main_kinds_n:                   defb    0
 in_file_len:                    defw    0
 in_file_pages:                  defb    0
