@@ -175,7 +175,9 @@ func (c *CardModel) Sector(n, linearSector int) [bdSectorSize]byte {
 	return c.Sectors[idx][linearSector]
 }
 
-// SetRecordName sets the 10-byte name field of record n's list entry. The name
+// SetRecordName sets the first 10 bytes of record n's 16-byte list-entry name
+// (a test helper preserving bytes 10..15; the full entry name is 16 bytes,
+// space-padded — docs/specs/trinity-record-detection-design.md §4.3). The name
 // is space-padded to 10 bytes; longer names are truncated to 10.
 func (c *CardModel) SetRecordName(n int, name string) {
 	const nameLen = 10
@@ -205,8 +207,9 @@ func (c *CardModel) SetBDOSStamp(n int) {
 
 // SetRecordLabel writes the 10-byte disk label (volume name) at offset 210 of
 // record n's first data sector — the per-record name bdos_inspect_record reads
-// (the user-reachable name; the central RecordList is not reachable, see the type
-// doc). The name is space-padded to 10 bytes and truncated to 10 if longer. Bit 7
+// (the selected-record disk-label view, distinct from the card-level RecordList
+// entry — see the type doc and trinity-record-detection-design.md §4.5). The name
+// is space-padded to 10 bytes and truncated to 10 if longer. Bit 7
 // of the first byte is the write-protect flag on real hardware; callers that need
 // it set should OR it into the first character themselves.
 func (c *CardModel) SetRecordLabel(n int, name string) {
