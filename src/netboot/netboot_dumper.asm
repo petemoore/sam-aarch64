@@ -69,10 +69,9 @@ LMPR_ROM1:        equ &40                       ; bit6: 1=ROM1 at section D, 0=R
 ; ===========================================================================
 ; dumper_refresh_region — the serve-loop hook (called from rrq_hit). The
 ; resolved filename is at (PARSE_FILENAME); resolve_src has just set SRC_PTR +
-; XFER_SIZE from SRC_TABLE (both default to STAGE / REGION_BYTES). Fill STAGE
-; with the requested region's bytes; for rom1.bin override SRC_PTR to a
-; section-A scratch buffer. By block-1 time the buffer holds the region and the
-; serve loop streams it normally.
+; XFER_SIZE from SRC_TABLE (both default to STAGE / REGION_BYTES). Every region —
+; EEPROM, rom0 and rom1 alike — fills STAGE and serves via the default SRC_PTR; by
+; block-1 time STAGE holds the region and the serve loop streams it normally.
 ; ===========================================================================
 dumper_refresh_region:
                 ld      hl, (PARSE_FILENAME)
@@ -92,8 +91,8 @@ dumper_refresh_region:
                 ; HL points just past "rom"; the next char is '0' or '1'.
                 ld      a, (hl)
                 cp      "1"
-                jp      z, dumper_read_rom1    ; rom1.bin: ROM1, section D (overrides SRC_PTR)
-                jp      dumper_read_rom0       ; rom0.bin: ROM0, section A
+                jp      z, dumper_read_rom1    ; rom1.bin: ROM1 high 16 KB -> STAGE
+                jp      dumper_read_rom0       ; rom0.bin: ROM0 low 16 KB -> STAGE
 
 dr_eep:
                 ; HL points just past "eep"; the next char is the region digit N.
