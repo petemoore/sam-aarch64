@@ -69,9 +69,14 @@ type Responder struct {
 	// (of block 1) advances normally.
 	justFirst bool
 
-	// wrqClient holds the WRQ client endpoint (i121a — handshake only). It is
-	// populated on a WRQ and used when wrapping the ACK-0 / OACK reply.
+	// wrqClient holds the WRQ client endpoint, populated on a WRQ and used when
+	// wrapping the ACK-0 / OACK (i121a) and the per-block ACKs (i121b).
 	wrqClient wrqEndpoint
+
+	// wrqRecv is the active receive-to-staging state for an accepted WRQ (i121b):
+	// the lock-step DATA/ACK loop that accumulates the pushed file into staging.
+	// nil when no WRQ transfer is in progress.
+	wrqRecv *wrqReceiver
 }
 
 // wrqEndpoint is the client-side identity learned from a WRQ frame (i121a).
@@ -79,6 +84,18 @@ type wrqEndpoint struct {
 	mac [6]byte
 	ip  [4]byte
 	tid uint16
+}
+
+// wrqReceiver is the receive-to-staging state for an accepted WRQ (i121b). It
+// mirrors tftp.ClientXfer's receive side (block-check, accumulate, ACK,
+// short-final-block end) but on the server's WRQ side: the peer is the WRQ
+// client, and the per-block ACKs go back to it. The first DATA the server
+// expects is block 1 (after the ACK-0 / OACK handshake), so acked starts at 0.
+type wrqReceiver struct {
+	blksize int    // negotiated block size (512 bare WRQ, else the accepted blksize)
+	acked   uint16 // the highest block number ACKed so far
+	done    bool   // a short (< blksize) block has ended the transfer
+	data    []byte // accumulated staged bytes
 }
 
 // New builds a serve-files demo server over a flat store. src(name) yields the
@@ -142,9 +159,13 @@ func (r *Responder) OnFrame(rx []byte) []byte {
 		return r.tftp.StartTransfer(rx, false)
 	}
 
-	// 3. TFTP ACK during a transfer (UDP dst = our transfer TID). On the OACK
-	//    path the ACK of block 0 -> FirstData (block 1); otherwise advance.
+	// 3. A frame on our transfer TID (UDP dst = our transfer TID). During a WRQ
+	//    receive it is the client's DATA (accumulate + ACK); during an RRQ serve
+	//    it is the client's ACK (advance / FirstData).
 	if u.DstPort == r.cfg.ServerTID {
+		if r.wrqRecv != nil && tftp.Opcode(u.Payload) == tftp.OpDATA {
+			return r.recvData(u)
+		}
 		if r.justFirst {
 			r.justFirst = false
 			return r.tftp.FirstData()
@@ -153,6 +174,49 @@ func (r *Responder) OnFrame(rx []byte) []byte {
 	}
 
 	return nil
+}
+
+// recvData processes one received DATA frame of an accepted WRQ transfer: it
+// validates the source TID is the WRQ client, runs the block-check / accumulate
+// / short-final-block logic (mirroring tftp.ClientXfer.OnData), and returns the
+// per-block ACK wrapped back to the client. A future/out-of-window block draws
+// no reply (nil). On the short final block the receiver is left in place with
+// done set (the staged bytes are available); the i121c write brick consumes it.
+func (r *Responder) recvData(u frame.UDP) []byte {
+	if u.SrcPort != r.wrqClient.tid {
+		return nil // a stray sender on our transfer TID: ignore
+	}
+	block, data, err := tftp.ParseDATA(u.Payload)
+	if err != nil {
+		return nil
+	}
+	rcv := r.wrqRecv
+	switch {
+	case block == rcv.acked+1:
+		// The next expected block: stage it, ACK it, end on a short block.
+		rcv.data = append(rcv.data, data...)
+		rcv.acked = block
+		if len(data) < rcv.blksize {
+			rcv.done = true
+		}
+		return r.wrapToWRQClient(tftp.BuildACK(block))
+	case block <= rcv.acked:
+		// A duplicate (the client retransmitted): re-ACK it, don't re-stage.
+		return r.wrapToWRQClient(tftp.BuildACK(block))
+	default:
+		// A future block we haven't reached: ignore (no gap-filling).
+		return nil
+	}
+}
+
+// WRQStaged returns the bytes accumulated by the active/last WRQ receive (the
+// reference the host test compares the Z80 STAGING buffer against), and whether
+// the transfer has completed (a short final block arrived).
+func (r *Responder) WRQStaged() (data []byte, done bool) {
+	if r.wrqRecv == nil {
+		return nil, false
+	}
+	return r.wrqRecv.data, r.wrqRecv.done
 }
 
 // startWrite handles a WRQ (i121a handshake only). It learns the client endpoint
@@ -169,8 +233,10 @@ func (r *Responder) startWrite(u frame.UDP, req *tftp.Request) []byte {
 	copy(r.wrqClient.ip[:], u.SrcIP[:])
 	r.wrqClient.tid = u.SrcPort
 
-	// Bare WRQ (no options) -> ACK-0 (`00 04 00 00`), RFC 1350.
+	// Bare WRQ (no options) -> ACK-0 (`00 04 00 00`), RFC 1350. Arm the receiver
+	// at the 512-byte default; the client's DATA block 1 follows the ACK-0.
 	if len(req.Options) == 0 {
+		r.wrqRecv = &wrqReceiver{blksize: 512}
 		return r.wrapToWRQClient(tftp.BuildACK(0))
 	}
 
@@ -184,6 +250,9 @@ func (r *Responder) startWrite(u frame.UDP, req *tftp.Request) []byte {
 			blksize = tftp.AcceptedBlksize(n)
 		}
 	}
+	// Arm the receiver at the negotiated blksize; the client's DATA block 1
+	// follows its ACK of the OACK.
+	r.wrqRecv = &wrqReceiver{blksize: int(blksize)}
 	var oackOpts []tftp.Option
 	oackOpts = append(oackOpts, tftp.Option{Name: "blksize", Value: strconv.FormatUint(blksize, 10)})
 	if ts, ok := req.Option("tsize"); ok {

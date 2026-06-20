@@ -152,13 +152,27 @@ serve_serve_once:
                 jp      z, handle_rrq
 
 ns_check_tid:
-                ; === 4. UDP dst == our transfer TID -> TFTP ACK ========
+                ; === 4. UDP dst == our transfer TID ====================
                 ld      a, (CONFIG_SERVERTID)             ; high
                 cp      h
                 jp      nz, ns_none
                 ld      a, (CONFIG_SERVERTID + 1)         ; low
                 cp      l
                 jp      nz, ns_none
+
+                ; A frame on our transfer TID. During a WRQ receive a DATA(3)
+                ; frame is the pushed file's next block (accumulate + ACK); an
+                ; ACK(4) advances an RRQ serve. Mirror serve.go OnFrame: route a
+                ; DATA to recvData when a WRQ receive is armed.
+                ld      a, (WRQ_RECV_ACTIVE)
+                or      a
+                jp      z, handle_ack          ; no WRQ receive: the RRQ ACK path
+                ld      a, (RXBUF + RX_UDP_PAYLOAD)
+                or      a
+                jp      nz, handle_ack         ; opcode high != 0
+                ld      a, (RXBUF + RX_UDP_PAYLOAD + 1)
+                cp      OP_DATA
+                jp      z, handle_data
                 jp      handle_ack
 
 ns_none:
@@ -385,7 +399,10 @@ handle_wrq:
                 or      c
                 jr      nz, wrq_oack
 
-                ; --- bare WRQ: reply ACK-0 (00 04 00 00) ------------------
+                ; --- bare WRQ: arm the receiver at blksize 512, reply ACK-0 ---
+                ld      hl, 512
+                ld      (WRQ_BLKSIZE), hl
+                call    wrq_arm_receiver       ; WRQ_RECV_ACTIVE=1, ACKED/OFFSET=0
                 call    build_ack0             ; packet at TBUF, BC = 4
                 jp      srv_send_tbuf
 
@@ -395,10 +412,27 @@ wrq_oack:
                 ; formats "blksize\0<n>\0" (and optionally "tsize\0<ts>\0") into
                 ; OACK_OPTS. Port of serve.go::Responder.startWrite optioned path.
                 call    negotiate_blksize      ; -> XFER_BLKSIZE
+                ld      hl, (XFER_BLKSIZE)     ; arm the receiver at the negotiated
+                ld      (WRQ_BLKSIZE), hl      ; block size
+                call    wrq_arm_receiver
                 call    build_oack_opts_wrq    ; -> OACK_OPTS, HL = byte count
                 ld      (OACK_OPTS_LEN), hl
                 call    build_oack             ; packet at TBUF, BC = length
                 jp      srv_send_tbuf
+
+; wrq_arm_receiver — arm the WRQ receive-to-staging loop: mark it active and reset
+; the per-transfer state (ACKED = 0 so the first expected block is 1, the staging
+; offset back to the start, the short-block flag clear). WRQ_BLKSIZE must already
+; be set by the caller. Mirrors serve.go::startWrite arming r.wrqRecv.
+wrq_arm_receiver:
+                ld      hl, 0
+                ld      (WRQ_ACKED), hl
+                ld      (WRQ_STAGE_OFFSET), hl
+                xor     a
+                ld      (WRQ_DONE), a
+                ld      a, 1
+                ld      (WRQ_RECV_ACTIVE), a
+                ret
 
 ; ===========================================================================
 ; 4. TFTP ACK — on our transfer TID: FirstData (ack 0, OACK path) or the next
@@ -501,6 +535,107 @@ snd_have_chunk:
                 ld      (XFER_OFFSET), hl
 
                 jp      srv_send_tbuf
+
+; ===========================================================================
+; WRQ DATA — accumulate one received DATA block into STAGING and ACK it. Reached
+; from ns_check_tid when a WRQ receive is armed and the frame on our transfer TID
+; carries opcode DATA(3). Port of serve.go::Responder.recvData, which mirrors the
+; i82 receive side (tftp.ClientXfer.OnData / tftp_client_loop.asm::tftp_recv_data):
+; the block-check (acked+1 store, <= acked re-ACK, future ignore), the ldir into
+; STAGING, the STAGE_OFFSET advance, and the short-final-block end. The peer of a
+; WRQ is the client (learned by handle_wrq), so the ACK wraps back to it.
+; Out: BC = bytes transmitted (the ACK frame), or 0 if nothing was sent.
+; ===========================================================================
+handle_data:
+                ; UDP source port == the WRQ client TID? (ignore a stray sender)
+                ld      a, (RXBUF + RX_UDP_SRCPORT)
+                ld      hl, CLIENT_TID
+                cp      (hl)
+                jp      nz, ns_none
+                ld      a, (RXBUF + RX_UDP_SRCPORT + 1)
+                inc     hl
+                cp      (hl)
+                jp      nz, ns_none
+
+                ; block number (big-endian) -> DE
+                ld      a, (RXBUF + RX_UDP_PAYLOAD + 2)
+                ld      d, a
+                ld      a, (RXBUF + RX_UDP_PAYLOAD + 3)
+                ld      e, a                   ; DE = block
+
+                ; expected = WRQ_ACKED + 1.
+                ld      hl, (WRQ_ACKED)
+                inc     hl                     ; HL = acked + 1
+                or      a
+                sbc     hl, de                 ; (acked+1) - block
+                jr      z, wd_next_block       ; block == acked+1: the next block
+                ; block <= acked => duplicate (re-ACK); block > acked+1 => future.
+                ld      hl, (WRQ_ACKED)
+                or      a
+                sbc     hl, de                 ; acked - block
+                jp      c, ns_none             ; acked < block (future, not +1): ignore
+                ; duplicate: re-ACK the received block (DE) without storing.
+                jp      wd_send_ack            ; ACK block = DE (the received block)
+
+wd_next_block:
+                ; payload length = frame length - (42 + 4 TFTP header)
+                ld      hl, (RX_LEN)
+                ld      de, RX_UDP_PAYLOAD + 4
+                or      a
+                sbc     hl, de                 ; HL = data length
+                ld      (WRQ_DATA_LEN), hl
+
+                ; accumulate the payload into STAGING at the running offset.
+                ld      hl, (WRQ_STAGE_OFFSET)
+                ld      de, WRQ_STAGING
+                add     hl, de                 ; HL = dest
+                ex      de, hl                 ; DE = dest
+                ld      hl, RXBUF + RX_UDP_PAYLOAD + 4   ; src = payload data
+                ld      bc, (WRQ_DATA_LEN)
+                ld      a, b
+                or      c
+                jr      z, wd_no_copy          ; zero-length block: nothing to copy
+                ldir
+wd_no_copy:
+                ; WRQ_STAGE_OFFSET += data length
+                ld      hl, (WRQ_STAGE_OFFSET)
+                ld      de, (WRQ_DATA_LEN)
+                add     hl, de
+                ld      (WRQ_STAGE_OFFSET), hl
+
+                ; WRQ_ACKED = block (DE still holds it; re-read from the frame to
+                ; assemble the LE value cleanly).
+                ld      a, (RXBUF + RX_UDP_PAYLOAD + 2)
+                ld      d, a                   ; high byte
+                ld      a, (RXBUF + RX_UDP_PAYLOAD + 3)
+                ld      e, a                   ; low byte
+                ld      (WRQ_ACKED), de        ; ACKED = the just-accepted block
+
+                ; done if data length < WRQ_BLKSIZE.
+                ld      hl, (WRQ_DATA_LEN)
+                ld      de, (WRQ_BLKSIZE)
+                or      a
+                sbc     hl, de                 ; datalen - blksize
+                jr      nc, wd_send_ack_de     ; datalen >= blksize: not the last
+                ld      a, 1
+                ld      (WRQ_DONE), a
+wd_send_ack_de:
+                ; the blksize compare overwrote DE; reload the block to ACK
+                ; (the just-accepted block, == WRQ_ACKED).
+                ld      de, (WRQ_ACKED)
+
+wd_send_ack:
+                ; build ACK(DE) at TBUF: opcode 4 (big-endian), block (big-endian).
+                ld      hl, TBUF
+                ld      (hl), 0                ; opcode high
+                inc     hl
+                ld      (hl), OP_ACK           ; opcode low = 4
+                inc     hl
+                ld      (hl), d                ; block high (DE is the block value)
+                inc     hl
+                ld      (hl), e                ; block low
+                ld      bc, 4                  ; ACK is 4 bytes
+                jp      srv_send_tbuf          ; wrap to the client + transmit
 
 ; srv_send_tbuf — wrap the TFTP packet at TBUF (length BC) as a UDP frame (server
 ; IP + server TID -> client IP + client TID) and transmit it.
@@ -1032,10 +1167,25 @@ XFER_ACTIVE:      defs 1                 ; 1 = a transfer is armed
 XFER_LAST_SHORT:  defs 1                 ; 1 = the last DATA was a short block
 XFER_JUST_OACKED: defs 1                 ; 1 = the next ACK (block 0) -> FirstData
 
-; WRQ state (i121a — handshake only). WRQ_TSIZE_PTR is a pointer into RRQ_IN:
-; non-zero if the client sent a "tsize" option in the WRQ (the value is echoed
-; back in the OACK); 0 if no tsize was sent (OACK includes only blksize).
+; WRQ state. WRQ_TSIZE_PTR is a pointer into RRQ_IN: non-zero if the client sent
+; a "tsize" option in the WRQ (the value is echoed back in the OACK); 0 if no
+; tsize was sent (OACK includes only blksize).
 WRQ_TSIZE_PTR:    defs 2
+
+; WRQ receive-to-staging state (i121b). Mirrors serve.go::wrqReceiver. A WRQ
+; receive is armed by handle_wrq (after the ACK-0 / OACK handshake) and consumed
+; one DATA block at a time by handle_data.
+WRQ_RECV_ACTIVE:  defs 1                 ; 1 = a WRQ receive is in progress
+WRQ_BLKSIZE:      defs 2                 ; negotiated block size (LE)
+WRQ_ACKED:        defs 2                 ; highest block accumulated/ACKed (LE)
+WRQ_STAGE_OFFSET: defs 2                 ; bytes accumulated into WRQ_STAGING
+WRQ_DATA_LEN:     defs 2                 ; the last DATA block's payload length
+WRQ_DONE:         defs 1                 ; 1 = a short final block ended the xfer
+
+; The pushed file accumulates here. It sits in section D (&C000), flat RAM under
+; the host harness; the bootable build (i121d) pages RAM in before using it, the
+; same reuse the dumper makes of this window (STAGE equ &C000).
+WRQ_STAGING:      equ &C000
 
 RX_LEN:           defs 2
 TFTP_PKT_LEN:     defs 2
