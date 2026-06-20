@@ -223,12 +223,15 @@
   refs: ["scope row \"Directory naming\""]
 
 - id: i19
-  title: Subagent worktree-isolation leak — harden
+  title: Subagent worktree-isolation leak — verified mitigated
   description: |
-    Harden subagent worktree isolation to prevent one subagent's filesystem changes from leaking into another's checkout. Scope row — specifics TBD.
-  status: OPEN
+    Investigated 2026-06-21 (this row was a "specifics TBD" scope concern). The core risk — one subagent's worktree filesystem changes leaking into another checkout — is already PREVENTED by three existing mechanisms, so no new hardening was required: (1) `.claude/worktrees/` is gitignored (commit 84d0224), so harness-native worktree files cannot pollute the main checkout's `git status` or be accidentally committed; (2) the Agent tool's `isolation: "worktree"` gives each mutating subagent its own git worktree, and CLAUDE.md discipline rules 3/5 forbid two writers in one checkout; (3) the rule-5 `git clean -fdx`-vs-nested-worktree hazard is latent only — no tool/Makefile/CI/`tools/` step runs `git clean -fdx`/`-ffdx` in the main checkout, and plain `git clean` skips worktree `.git` boundaries without `-ff`. The one observed residual is harmless: fully-orphaned `.claude/worktrees/agent-*` directories accumulate when the harness auto-clean doesn't fire (a stale Jun-12 leftover was found and removed); these are gitignored cruft (no `.git`, no admin entry, no checkout-leak) clearable any time via `git worktree prune` + `rm -rf .claude/worktrees/agent-*`. Closing as verified-mitigated; orphaned-worktree-dir auto-pruning is a possible future convenience but not warranted now (harmless, gitignored).
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 504, role: completing}
+  refs: [.gitignore, tools/autonomous-loop/README.md]
 
 - id: i20
   title: Linker-layout coupling (spectrum4.ld hardcoded in flatten)
