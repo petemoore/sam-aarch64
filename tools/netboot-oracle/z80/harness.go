@@ -51,6 +51,24 @@ type IODevice interface {
 	Out(port uint8, value uint8)
 }
 
+// SAM keyboard sysvars intercepted by the key-injection stub (i138).
+//
+// LASTK (0x5C08): last key pressed. SAM Tech Man p.88, confirmed against ROM
+// disasm docs/sam/sam-coupe_rom-v3.0_annotated-disassembly.txt line 1083. The
+// Tech Man OCR misprints FLAGS as 503BH at line 4102 — 0x5C3B is authoritative
+// (every ROM `LD HL,FLAGS` assembles to 21 3B 5C).
+//
+// FLAGS (0x5C3B): status flags. Bit 5 (0x20) = key-available. ROM disasm line
+// 1090 for the address; KYIP2 lines 1786-1791 for the bit-5 semantics. The SAM
+// ROM interrupt sets SET 5,(FLAGS) and LD (LASTK),A (ROM disasm lines 19679-19688).
+//
+// Precedent: the c0f62fa BASIC-emulation spike uses the same FLAGS/LASTK intercept
+// (tools/basic-emulator-spike/main.go, Hardware.Get/Set, ~lines 147-176).
+const (
+	sysLASTK = 0x5C08 // last key pressed (SAM Tech Man p.88; ROM disasm :1083)
+	sysFLAGS = 0x5C3B // status flags; bit 5 (0x20) = key-available (ROM disasm :1090, KYIP2 :1786-1791)
+)
+
 // mem is a flat 64 KB Z80 address space implementing z80.Memory and z80.IO. Port
 // I/O is delegated to an optional IODevice (nil => inert, reads return 0xFF).
 //
@@ -61,20 +79,49 @@ type IODevice interface {
 // then dropped (as on hardware), so an over-size boot image — whose tail would
 // land above &BFFF — is not loaded into RAM and a call into that region runs the
 // ROM contents, reproducing the real-hardware crash instead of silently working.
+//
+// keyQueue holds injected keypresses (InjectKeys). When non-empty, reads of
+// sysFLAGS return FLAGS|0x20 (key-available) and reads of sysLASTK return the
+// head of the queue. A write to sysFLAGS that clears bit 5 (the Z80 KYIP2
+// poll's `RES 5,(FLAGS)` consume step) advances the queue by one.
 type mem struct {
 	ram       [0x10000]byte
 	io        IODevice
 	cpu       *z80.CPU // back-reference, for the INI/IND port correction in In
 	romActive bool     // when true, addr >= romBase is read-only ROM (boot model)
 	romBase   uint16   // first ROM address (e.g. 0xC000 for ROM1 at boot)
+	keyQueue  []byte   // injected keypresses (i138 keyboard-sysvar stub)
 }
 
-func (m *mem) Get(addr uint16) uint8 { return m.ram[addr] }
+func (m *mem) Get(addr uint16) uint8 {
+	// Keyboard-sysvar intercept (i138): when keys are queued, present FLAGS
+	// bit 5 (key-available) set and LASTK = head of queue.  The inlined KYIP2
+	// poll (key_read_test.asm) reads FLAGS, checks bit 5, reads LASTK, then
+	// RES 5,(FLAGS) — the write is caught in Set() to advance the queue.
+	// When the queue is empty we fall through to the plain RAM read, so FLAGS
+	// bit 5 is whatever the program last stored (no fabricated key).
+	if len(m.keyQueue) > 0 {
+		switch addr {
+		case sysFLAGS:
+			return m.ram[addr] | 0x20
+		case sysLASTK:
+			return m.keyQueue[0]
+		}
+	}
+	return m.ram[addr]
+}
+
 func (m *mem) Set(addr uint16, value uint8) {
 	if m.romActive && addr >= m.romBase {
 		return // ROM at boot: the write is dropped, exactly as on hardware
 	}
 	m.ram[addr] = value
+	// "Key consumed": the inlined KYIP2 poll does RES 5,(HL) on FLAGS after
+	// reading LASTK. A write to FLAGS with bit 5 clear while a key is queued
+	// means the head key was just consumed — advance the queue.
+	if addr == sysFLAGS && len(m.keyQueue) > 0 && value&0x20 == 0 {
+		m.keyQueue = m.keyQueue[1:]
+	}
 }
 
 // In returns the byte read from a port. It corrects a Z80 spec-conformance
@@ -292,6 +339,23 @@ func (mac *Machine) Read(addr uint16, n int) []byte {
 // it. Pass nil to detach.
 func (mac *Machine) AttachIO(dev IODevice) {
 	mac.m.io = dev
+}
+
+// InjectKeys appends keys to the keyboard queue (i138 keyboard-sysvar stub).
+// Each byte is delivered to the Z80 via the LASTK/FLAGS sysvar intercept: while
+// the queue is non-empty, reads of FLAGS (0x5C3B) return FLAGS|0x20
+// (key-available) and reads of LASTK (0x5C08) return the head of the queue; a
+// write to FLAGS that clears bit 5 (the inlined KYIP2 consume step) pops the
+// head. Mirrors the c0f62fa BASIC-emulation spike key-queue design.
+func (mac *Machine) InjectKeys(keys []byte) {
+	mac.m.keyQueue = append(mac.m.keyQueue, keys...)
+}
+
+// PendingKeys returns the number of injected keys still waiting to be consumed.
+// Zero means all injected keys have been read and consumed by the Z80 program
+// (each RES 5,(FLAGS) pops one). Used in tests to assert the queue drains.
+func (mac *Machine) PendingKeys() int {
+	return len(mac.m.keyQueue)
 }
 
 // Entry holds the register values a routine reads on entry. The ENC28J60 driver
