@@ -55,10 +55,12 @@
 - id: i6
   title: "SAM screen-mode decision (MODE 3 vs 4, or user preference)"
   description: |
-    Decide the default screen mode for the editor. To be settled empirically via i76 (geometry flag + font sheets + P3 memo). Design in editor-tui-prototype-design.md §3/§5 and ROADMAP Editor vision.
-  status: OPEN
+    Decide the default screen mode for the editor. DECIDED (Pete 2026-06-21): MODE 3 (64×24, mode3-8x8). Settled directly rather than via the empirical i76 sheets; recorded in editor-tui-prototype-design.md §8 (R2). The 85-col MODE 3 6-px variant stays available behind the §3 geometry flag (a font tweak, not a mode change). Design in editor-tui-prototype-design.md §3/§5/§8 and ROADMAP Editor vision.
+  status: DONE
   kind: leaf
   owner: pete
+  prs:
+    - {num: 515, role: completing}
   refs: [i76, "docs/specs/editor-tui-prototype-design.md §3", "docs/specs/editor-tui-prototype-design.md §5", docs/ROADMAP.md]
 
 - id: i7
@@ -911,7 +913,7 @@
     Not worth doing unless a second project surfaces. SpectrumFourLayout extraction via -layout flag or linker-script parser is a Pete-gated call; deferred. From ROADMAP deferred checklist (retired in i52 PR 3).
   status: OPEN
   kind: leaf
-  owner: pete
+  owner: agent
 
 - id: i57
   title: "Comment-compression experiment (host-side, Go): benchmark Z80-feasible schemes"
@@ -1015,7 +1017,7 @@
     Persist SAM pages to Trinity B-DOS records as a general storage technique. Deferred by Pete's decision (2026-06-10, q9 resolved): 'no value implementing right now'; revisit only if a concrete need appears. Conditional on i66's reactivation being Pete's call.
   status: OPEN
   kind: leaf
-  owner: pete
+  owner: agent
   refs: [docs/notes/bdos-version-landscape.md]
 
 - id: i67
@@ -1311,17 +1313,17 @@
     Pete's SAM runs a modified system ROM giving Trinity-interface access at power-on (no B-DOS floppy needed). When his SAM is next online he dumps the ROM to disk; we then diff it against the stock SAM ROM to document exactly how Trinity-at-boot is patched in, so the boot mechanism is reproducible/understood. Not a blocker — trinload can net-load the client/server in the interim, and trinity.mgt + reference/bdos cover the interface. Hardware-gated: artifact production needs Pete's hardware.
   status: OPEN
   kind: umbrella
-  owner: pete
+  owner: agent
   refs: ["docs/specs/phase3-delivery-design.md §3", i84]
 
 - id: i87a
   title: "SAMBOOT: run the one-shot dumper on the SAM to capture rom.bin + eeprom.bin (hardware)"
   description: |
-    Push the one-shot dumper onto the SAM via trinload and tftp-get rom.bin + eeprom.bin to the Pi/Mac. Hardware (Pete). Captures the artifacts that unblock the offline analysis; the EEPROM capture is the mandatory pre-flash backup.
+    Push the one-shot dumper onto the SAM via trinload and tftp-get rom.bin + eeprom.bin to the Pi/Mac. Agent-drivable: the capture is network-driven (trinload listener left running on the SAM; SAM reachable at 192.168.2.75) and read-only, so an agent runs it without a human in the loop — this is the same agent-driven loop samboot.md §1 describes. Captures the artifacts that unblock the offline analysis; the EEPROM capture is the mandatory pre-flash backup.
   status: OPEN
   depends_on: [i173]
   kind: leaf
-  owner: pete
+  owner: agent
   parent: i87
   refs: [docs/specs/samboot.md]
 
@@ -1386,7 +1388,7 @@
     Confirm Pi 3 boot ROM's DHCP behaviour (may differ from Pi 4 PXE option-43 dance) and its TFTP file set (bootcode.bin/start.elf/fixup.dat). Pete runs on real hardware (hub + Wireshark, trinload technique) when convenient — not a blocker (Pi 3 file set already known from his tftproot); agent provides setup steps at the time.
   status: OPEN
   kind: leaf
-  owner: pete
+  owner: agent
   refs: ["docs/notes/pi-netboot-capture-analysis.md §4", i83, i86, i84]
 
 - id: i90
@@ -2150,7 +2152,7 @@
     Preliminary 2026-06-18 scan: metaswarm, ccswarm, ruflo, claude-plan-orchestrator, autonomous-dev, closedloop-ai, barkain, Composio AO + Claude Code Agent Teams; plus awesome-agent-orchestrators, awesome-cli-coding-agents. Most emphasise PARALLELISM. i117's model differs: single serial orchestrator + deterministic non-LLM monitor (i97) + prime-directive culture + blameless retro + iN/qN registry backbone. Deliverable: feature-by-feature comparison to confirm differentiation and whether gap justifies building i117. Research-first; cite each tool. Pete's call; do not auto-pick-up.
   status: OPEN
   kind: leaf
-  owner: pete
+  owner: agent
   parent: i117
   refs: [i117]
 
@@ -2962,7 +2964,7 @@
   status: OPEN
   depends_on: [i122c]
   kind: leaf
-  owner: pete
+  owner: agent
 
 - id: i183
   title: "Harness: model the SAMDOS file-not-found / HSAVE error longjmp (currently a silent no-op)"
@@ -2992,3 +2994,13 @@
   owner: agent
   prs:
     - {num: 509, role: completing}
+
+- id: i186
+  title: Show owner in all generated registry .md views + gate-column owner-awareness
+  description: |
+    Add an 'owner' column to all four generated registry markdown views (item-registry-open.md, item-registry-closed.md, question-registry-open.md, backlog.md) so owner:pete vs owner:agent is visible at a glance. Also fix computeGates (tools/registry/gen.go) so the backlog 'gate' column reflects owner: an owner:pete item with satisfied deps should not read 'ready' (it is excluded from 'build/registry ready'); show it as pete-held instead. Motivation: i87a sat at the top of backlog labelled 'ready' all night but was owner:pete (hidden from the agent queue); the missing owner column + owner-blind gate made it look pullable when it was not.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 516, role: completing}

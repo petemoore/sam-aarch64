@@ -180,7 +180,7 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	items := sortedItems(reg.Items)
 	reverseEdges := buildReverseEdges(items)
 
-	header := "| **id** | item | status | PR | deps | dependents | refs/links |\n|---|---|---|---|---|---|---|\n"
+	header := "| **id** | item | status | owner | PR | deps | dependents | refs/links |\n|---|---|---|---|---|---|---|---|\n"
 
 	// Open items (OPEN or IN_PROGRESS).
 	fmt.Fprint(openW, generatedBannerItems)
@@ -188,10 +188,11 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	fmt.Fprint(openW, header)
 	for _, it := range items {
 		if isOpen(it.Status) {
-			fmt.Fprintf(openW, "| **%s** | %s | %s | %s | %s | %s | %s |\n",
+			fmt.Fprintf(openW, "| **%s** | %s | %s | %s | %s | %s | %s | %s |\n",
 				escapeCell(it.ID),
 				renderItemCell(it),
 				escapeCell(renderItemStatus(it)),
+				escapeCell(it.Owner),
 				renderItemPRs(it),
 				escapeCell(renderItemDeps(it)),
 				escapeCell(renderItemDependents(it, reverseEdges)),
@@ -206,10 +207,11 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	fmt.Fprint(closedW, header)
 	for _, it := range items {
 		if !isOpen(it.Status) {
-			fmt.Fprintf(closedW, "| **%s** | %s | %s | %s | %s | %s | %s |\n",
+			fmt.Fprintf(closedW, "| **%s** | %s | %s | %s | %s | %s | %s | %s |\n",
 				escapeCell(it.ID),
 				renderItemCell(it),
 				escapeCell(renderItemStatus(it)),
+				escapeCell(it.Owner),
 				renderItemPRs(it),
 				escapeCell(renderItemDeps(it)),
 				escapeCell(renderItemDependents(it, reverseEdges)),
@@ -253,7 +255,10 @@ const generatedBannerBacklog = `<!--
 // computeGates returns, per item id, the backlog "gate" cell — who is holding
 // the item, computed from status + the dependency DAG:
 //
-//	ready           all deps satisfied + not started → an agent can pull it now
+//	ready           all deps satisfied + not started + owner:agent → pullable now
+//	👤 pete         all deps satisfied but owner:pete → held by Pete, NOT agent-
+//	                pullable (`registry ready` excludes owner:pete); the owner
+//	                column shows the same, but the gate must not read "ready"
 //	🛠 in-progress  status IN_PROGRESS → already being worked (a live thread)
 //	🔒 q31[, q24]   transitively rooted in an open question → BLOCKED ON PETE;
 //	                the listed qN(s) are exactly the answers that unblock it
@@ -324,7 +329,14 @@ func computeGates(reg *Registry) map[string]string {
 			}
 		}
 		if len(unsat) == 0 {
-			gates[it.ID] = "ready"
+			// All deps satisfied. An owner:pete item is still NOT agent-pullable
+			// (`registry ready` excludes owner:pete), so it must not read "ready"
+			// — show who holds it instead. Mirrors the ready filter exactly.
+			if it.Owner == "pete" {
+				gates[it.ID] = "👤 pete"
+			} else {
+				gates[it.ID] = "ready"
+			}
 			continue
 		}
 		if qs := rootQuestions[it.ID]; len(qs) > 0 {
@@ -356,7 +368,7 @@ func genBacklog(reg *Registry, priority []string, w io.Writer) error {
 	reverseEdges := buildReverseEdges(reg.Items)
 	gates := computeGates(reg)
 
-	header := "| **id** | item | status | gate | deps | dependents |\n|---|---|---|---|---|---|\n"
+	header := "| **id** | item | status | owner | gate | deps | dependents |\n|---|---|---|---|---|---|---|\n"
 
 	fmt.Fprint(w, generatedBannerBacklog)
 	fmt.Fprint(w, "\n")
@@ -367,10 +379,11 @@ func genBacklog(reg *Registry, priority []string, w io.Writer) error {
 			// Omit unknown ids from the view (validate would have caught them).
 			continue
 		}
-		fmt.Fprintf(w, "| **%s** | %s | %s | %s | %s | %s |\n",
+		fmt.Fprintf(w, "| **%s** | %s | %s | %s | %s | %s | %s |\n",
 			escapeCell(it.ID),
 			renderItemCell(it),
 			escapeCell(renderItemStatus(it)),
+			escapeCell(it.Owner),
 			escapeCell(gates[it.ID]),
 			escapeCell(renderItemDeps(it)),
 			escapeCell(renderItemDependents(it, reverseEdges)),
