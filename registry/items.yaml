@@ -2372,3 +2372,11 @@
   kind: leaf
   owner: agent
   parent: i119
+
+- id: i146
+  title: "Priority-backlog robustness: a non-pullable ready tip = missing-edge bug (HW gates + prompt + CLI ordering-repair)"
+  description: |
+    Found 2026-06-20: the ready tip i141 (+ i118b/i93b/i133/i135) is hardware-blocked but has NO depends_on edge, so it falsely surfaces as pullable — a missing-edge bug (no-BLOCKED model). Fix: (1) model the hardware gate (gate node or owner:pete) so they leave ready; (2) prompt — a non-pullable tip means the agent ADDS the missing edge (check/create the gating item) first, never judgment-picks; (3) CLI auto-fixes backlog membership (#462) but not ordering — add a topological-repair pass; (4) fix the ROADMAP judgment-pick bullet. Absorbs q29.
+  status: OPEN
+  kind: leaf
+  owner: agent
