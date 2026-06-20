@@ -3464,6 +3464,7 @@
   description: |
     OPEN, follow-on to i197c-b1 (which verified init ordering). The verification surfaced the real residual: the patched ROM HARD-CODES fetching EEPROM device &2000 (a B-DOS routine LIBRARY — a table of small CALL/RET subroutines, disassembled from the capture: EX (SP),HL; PUSH DE; CALL &5C26; ... RET, repeated) into &4000 and JP &4000, but that path NEVER loads B-DOS (chunks 2..13 -> &8000), which only the coherent &0000 boot SEQUENCER does (IN A,(250) save-LMPR; page; chunk-load loop). So the captured cold boot runs a library without a resident B-DOS and wanders (CALL &5C26 lands in the NEW2-zeroed STREAMS band). The capture is a CONSISTENT single-machine runtime snapshot (CAPTURE-NOTES.txt: rom+eeprom from one trinload session, serving identically before/after), so this is REAL, not a cross-state artifact. To finalize WHERE the boot-a-record hook attaches: continue the i190a trace with B-DOS made RESIDENT (load chunks 2..13 -> &8000, run the &805F init, re-enter chunk 1 against a live B-DOS) AND/OR take a fresh re-capture (elevated from 'optional belt-and-braces' in §7.5 to recommended-before-flash). No EEPROM flash (i135c) until settled. Refs: samboot-bootblock-analysis.md §7.6.
   status: OPEN
+  depends_on: [q45]
   kind: leaf
   owner: agent
   parent: i197c

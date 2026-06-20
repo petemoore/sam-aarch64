@@ -75,7 +75,7 @@ const (
 	addrEEPROMReader = 0xF5DD // ROM1: the SPI read routine (opcode 3 + 3-byte addr)
 	addrJP4000       = 0x0FAF // ROM0: JP &4000 — run what was fetched
 	addrRunTarget    = 0x4000 // where the fetched chunk runs
-	addrChunk1Call   = 0x5C26 // chunk-1's first CALL target — a STREAMS-table sysvar NEW2 zeros
+	addrChunk1Call   = 0x5C26 // chunk-1's first CALL target = STREAMS stream-8 word (displacement to its channel; 0 => stream closed); NEW2 zeros it
 
 	// Normal cold-init milestones (annotated ROM disasm) that must run BEFORE the
 	// &4000 handoff if chunk 1 is a library entry on a live system. MNINIT is the
@@ -101,6 +101,12 @@ const (
 	eepBootblock = 0x0000 // the coherent &0000 bootblock (DB FA = IN A,(&FA))
 	eepChunk1    = 0x2000 // chunk 1 — the B-DOS routine library the ROM actually loads
 	eepChunk1End = 0x2400 // chunk 1 + 1 KB
+	eepChunk2    = 0x2400 // chunk 2 — first B-DOS image chunk (loads to &8000)
+
+	// Bootblock internals (disassembled from EEPROM &0000, ORG &4000) — the §7.7
+	// comparative experiment traces these to show a coherent load+handoff.
+	addrReadChunk = 0x40BD // the bootblock's read_chunk helper, CALL'd 12x (chunks 2..13)
+	addrExecDOS   = 0x409E // CALL &805F — the B-DOS entry, reached only after the load loop
 
 	realBootStepCap = 5_000_000 // generous; the real boot reaches the trap well within this
 )
@@ -345,8 +351,11 @@ func TestRealBootInitRunsBeforeChunk1(t *testing.T) {
 	// Under the boot LMPR (&5F) section B maps to physical page 0, so &5C26/&5C6A
 	// live at page-0 offsets &1C26/&1C6A — the bytes chunk 1 reads when it runs.
 	// Sentinel them so a written-zero is distinguishable from an untouched default.
+	// &5C26 is a 16-bit field (stream 8's channel displacement), so sentinel BOTH
+	// bytes &5C26/&5C27 — NEW2's CLSTL loop zeros the whole &5C1E-&5C35 span.
 	const sentinel = 0xAA
 	mac.Pager().RAM[0][offStreamVar] = sentinel
+	mac.Pager().RAM[0][offStreamVar+1] = sentinel
 	mac.Pager().RAM[0][offFLAGS2] = sentinel
 
 	seen := map[uint16]bool{}
@@ -384,14 +393,104 @@ func TestRealBootInitRunsBeforeChunk1(t *testing.T) {
 		t.Errorf("the streams-init (&%04X) did not run before &4000 — init ordering is NOT init-then-chunk1", addrStreamsInit)
 	}
 
-	// 2. NEW2 overwrote the &5C26 sentinel with zero — so &5C26 == 0 is a WRITTEN
-	//    zero (init ran), the proof that corrects the "uninitialised / missing
-	//    loader" reading. (&5C6A = FLAGS2 is in the same NEW-managed band.)
-	if got := mac.Pager().RAM[0][offStreamVar]; got == sentinel {
-		t.Errorf("&5C26 (page0 &%04X) still holds the 0x%02X sentinel — NEW2 did NOT write it; init did not populate the STREAMS band", offStreamVar, sentinel)
-	} else if got != 0x00 {
-		t.Logf("note: &5C26 = 0x%02X (written by init, non-zero) — chunk 1 would see a live value here", got)
+	// 2. NEW2 overwrote BOTH bytes of the stream-8 word with zero — so the full
+	//    &5C26/&5C27 == &0000 (stream 8 closed) is a WRITTEN zero (init ran), the
+	//    proof that corrects the "uninitialised / missing loader" reading. (&5C6A =
+	//    FLAGS2 is in the same NEW-managed band.)
+	lo, hi := mac.Pager().RAM[0][offStreamVar], mac.Pager().RAM[0][offStreamVar+1]
+	if lo == sentinel || hi == sentinel {
+		t.Errorf("stream-8 word &5C26/&5C27 still holds the 0x%02X sentinel (lo=0x%02X hi=0x%02X) — NEW2 did NOT write it; init did not populate the STREAMS band", sentinel, lo, hi)
+	} else if lo != 0x00 || hi != 0x00 {
+		t.Logf("note: stream-8 word &5C26/&5C27 = 0x%02X%02X (written by init, non-zero) — stream 8 would be open here", hi, lo)
 	} else {
-		t.Logf("&5C26 sentinel 0x%02X -> 0x00: NEW2 wrote the zero (the zeroed STREAMS entry), confirming init ran before &4000", sentinel)
+		t.Logf("stream-8 word &5C26/&5C27 sentinel -> &0000: NEW2 wrote the whole 16-bit field zero (stream 8 closed), confirming init ran before &4000")
+	}
+}
+
+// TestRealChunk1IsNotABootLoader is the control for the §7.7 comparative experiment.
+// The REAL captured chunk-1 (device &2000 — what the patched ROM fetches to &4000 and
+// runs) performs ZERO chunk loads and never reaches the B-DOS entry &805F: it is a
+// routine library, not a boot loader. Contrast TestHypothesisBootblockAt2000.
+func TestRealChunk1IsNotABootLoader(t *testing.T) {
+	rom, eeprom := loadRealCaptures(t)
+	mac, _ := newRealBootMachine(t, rom, eeprom)
+
+	chunkLoads, reachedExecDOS := 0, false
+	if _, err := mac.RunBootFrom(0x0000, z80h.Entry{
+		StepCap: realBootStepCap,
+		Trace: func(pc uint16) {
+			if pc == addrReadChunk {
+				chunkLoads++
+			}
+			if pc == addrExecDOS {
+				reachedExecDOS = true
+			}
+		},
+	}); err != nil {
+		t.Fatalf("real boot run faulted: %v", err)
+	}
+	t.Logf("REAL chunk-1: read_chunk calls=%d, reached CALL &805F=%v", chunkLoads, reachedExecDOS)
+	if chunkLoads != 0 {
+		t.Errorf("real chunk-1 ran %d read_chunk loads, want 0 — it is a library, not a loader (did the capture's &2000 change?)", chunkLoads)
+	}
+	if reachedExecDOS {
+		t.Errorf("real chunk-1 reached the B-DOS entry &805F — unexpected for a library; re-check §7.7")
+	}
+}
+
+// TestHypothesisBootblockAt2000BootsCoherently is the §7.7 comparative experiment that
+// ISOLATES the boot-entry gap. It does NOT run the real boot: it SUBSTITUTES the coherent
+// &0000 bootblock into chunk-1's slot (&2000) of a working EEPROM copy, then boots from
+// reset. The patched ROM then fetches that bootblock (it is fetch-compatible) and runs it
+// COHERENTLY — 12 read_chunk calls load the REAL B-DOS chunks 2..13 (untouched at &2400+)
+// into &8000, and it reaches CALL &805F (B-DOS init; the run then stops because &805F
+// touches unmodeled SD/screen hardware). So the bootblock CONTENT boots from the &2000
+// fetch point while the real &2000 library (the control above) does not — isolating the
+// gap to the captured &2000 CONTENT, not the ROM fetch nor the bootblock design. Why the
+// persistent &2000 holds a library when the card boots is the Colin/hardware question
+// §7.7 escalates (q-registry).
+func TestHypothesisBootblockAt2000BootsCoherently(t *testing.T) {
+	rom, eeprom := loadRealCaptures(t)
+
+	// Working copy: overlay the &0000 bootblock (&0000..&015F) onto chunk-1's slot at
+	// device &2000. Chunks 2..13 (&2400+) stay the real B-DOS image.
+	const bootblockLen = 0x160
+	work := make([]byte, len(eeprom))
+	copy(work, eeprom)
+	copy(work[eepChunk1:eepChunk1+bootblockLen], eeprom[eepBootblock:eepBootblock+bootblockLen])
+
+	mac, _ := newRealBootMachine(t, rom, work)
+
+	var reachedExecDOS bool
+	chunkLoads := 0
+	// &805F is in section C; under the bootblock's HMPR=&1D it touches unmodeled HW, so
+	// the run may fault there — that is expected and not a failure of this experiment.
+	_, _ = mac.RunBootFrom(0x0000, z80h.Entry{
+		StepCap: realBootStepCap,
+		Trace: func(pc uint16) {
+			if pc == addrReadChunk {
+				chunkLoads++
+			}
+			if pc == addrExecDOS {
+				reachedExecDOS = true
+			}
+		},
+	})
+	t.Logf("bootblock-at-&2000: read_chunk calls=%d (want 12 for chunks 2..13), reached CALL &805F=%v", chunkLoads, reachedExecDOS)
+
+	if chunkLoads != 12 {
+		t.Errorf("bootblock loaded %d chunks, want 12 (chunks 2..13) — the coherent load loop did not run", chunkLoads)
+	}
+	if !reachedExecDOS {
+		t.Errorf("bootblock did not reach the B-DOS entry &805F — it did not load + hand off coherently")
+	}
+
+	// The first loaded chunk (chunk 2, device &2400) must land at &8000 under the
+	// bootblock's HMPR (=&1D, section C = page 29) — proving a real B-DOS load, not a wander.
+	mac.Pager().HMPR = 0x1D
+	got := mac.Read(0x8000, 8)
+	want := work[eepChunk2 : eepChunk2+8]
+	if !bytes.Equal(got, want) {
+		t.Errorf("&8000 after load = % X, want chunk-2 source % X — B-DOS image did not land in section C", got, want)
 	}
 }

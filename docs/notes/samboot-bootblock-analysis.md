@@ -698,9 +698,17 @@ ordering decisively — with a sentinel experiment that removes the last ambigui
   (under the boot LMPR `&5F`, section B = physical page 0, so `&5C26` lives at page-0
   offset `&1C26`) *before* the boot, then checks it after. It comes back **`0x00`** —
   so NEW2's `CLSTL` loop (the "12 more stream ptrs to zap", lines 24628-24632)
-  **actively wrote** the zero. `&5C26` is one of the `&5C0C-&5C35` STREAMS entries
-  NEW2 zeros; its zero is the *initialised* value, **not** evidence that "init had
-  not run yet" or that a section-B stage "failed to load." The §7.5 phrasing
+  **actively wrote** the zero. `&5C26` is specifically the **stream-8 word** in the
+  `&5C0C-&5C35` STREAMS table (streams −5…15, 2 bytes each: stream 8 =
+  `&5C0C + (8−(−5))·2 = &5C26`). Per the sysvar definition, each word is the
+  *displacement from the start of the channels area* (`CHANS`, `&5C4F`) to that
+  stream's assigned channel, and **a zero word means the stream is closed** — so the
+  channel of stream N is `fetch16(&5C4F) + fetch16(&5C26)`. NEW2 fills the table in two
+  loops: `STRIL` writes streams −5…3 with their fixed `STRMTAB` displacements (open),
+  then `CLSTL` (the "12 more stream ptrs to zap", 24 bytes) **zeros both bytes of
+  streams 4…15 — marking all twelve closed**, stream 8 among them. So stream 8's zero
+  is the *initialised* "closed" value, **not** evidence that "init had not run yet" or
+  that a section-B stage "failed to load." The §7.5 phrasing
   ("reaches chunk 1 … **before** the normal … init has populated that band") is
   superseded by this: init **had** run; `&5C26` is a deliberately-zeroed stream
   pointer. (The whole boot runs under LMPR `&5F`, so NEW2 and chunk 1 see the *same*
@@ -737,6 +745,55 @@ re-enter chunk 1 against a live B-DOS) and/or a fresh re-capture — so the re-c
 "optional belt-and-braces" in §7.5, is better read as **recommended before any
 i135c flash**: the current captures do not boot coherently to the point an injection
 would attach. No EEPROM flash (i135c) until that is settled.
+
+### 7.7 Comparative experiment — the boot-entry gap is in the `&2000` CONTENT (i197c-b3)
+
+§7.6 left the boot-entry contradiction open: the patched ROM hard-codes fetching
+EEPROM `&2000` (chunk 1 — a B-DOS routine library) and `JP &4000`s into it, but the
+only coherent boot sequencer is at `&0000`, which the ROM never reads. A comparative
+emulation experiment now **isolates** where the gap is — in the captured `&2000`
+*content*, not in the ROM fetch or the bootblock design.
+
+Two tests in `samboot_real_boot_test.go` make the contrast hard:
+
+- **`TestRealChunk1IsNotABootLoader` (control).** Booting the unmodified capture from
+  reset, the real chunk-1 at `&2000` performs **0** `read_chunk` loads and never
+  reaches the B-DOS entry `&805F` — it is a library, loads nothing, and wanders.
+
+- **`TestHypothesisBootblockAt2000BootsCoherently`.** Substitute the coherent `&0000`
+  bootblock into chunk-1's slot (`&2000`) of a working EEPROM copy — chunks 2..13
+  (`&2400+`, the real B-DOS image) untouched — then boot from reset. The patched ROM
+  fetches that bootblock (it is **fetch-compatible**: same `&2000`→`&4000` path) and
+  runs it **coherently**: **12** `read_chunk` loads pull chunks 2..13 into `&8000`
+  (the loaded bytes byte-match the chunk-2 source), and it reaches `CALL &805F`. The
+  run then stops at `&805F` because B-DOS init touches the unmodeled SD/screen
+  hardware — expected, and not the experiment's concern.
+
+So the bootblock **content** boots from the exact fetch point the real ROM uses,
+while the captured `&2000` library does not. The gap is therefore **not** the ROM
+fetch address, **not** the SAM paging, and **not** the bootblock's design — it is that
+the **persistent EEPROM `&2000` holds a B-DOS library where a fetch-compatible
+bootblock is needed**, while a coherent bootblock sits unused at `&0000`.
+
+**Why this needs Colin / hardware, not more emulation.** The emulator is faithful here
+— the Trinity identity probe really does reply `'T'` to the `&08` select (the
+documented mechanism the patched ROM uses to *decide* to boot from EEPROM; modelled
+per `encdrv.asm`/`eeprom.asm`), so a real Trinity card takes the same `&2000`-fetch
+path the trace takes. Yet Pete's card boots. Emulation can run only what the capture
+holds; it cannot say why the persistent `&2000` content is a library on a card that
+boots. Candidate resolutions, all off-emulator: (a) the on-card boot reaches B-DOS by
+a path these captures don't reflect (e.g. the `&2000` slot was repurposed by later
+Trinity use after the card was provisioned, and the live card boots from a different
+chunk/copy); (b) Colin's actual boot-chunk layout differs from the chunk-numbering
+model used here; (c) a controlled re-provision-then-capture would show the boot chunk
+in place. This is escalated to Pete (ask-Colin route) in the question registry.
+
+**Bottom line for the injection site.** *Conditional on the bootblock being the boot
+chunk* (which the experiment shows is fetch-compatible and boots), the injection
+attaches at the §7.1/§7.2 site — after `CALL &805F`, before the `restore:` exit — and
+flashing it means writing the patched bootblock to chunk 1 (`&2000`). But that
+condition is exactly what the Colin/hardware question must confirm first. **No EEPROM
+flash (i135c) until the `&2000`-content question is answered.**
 
 ---
 

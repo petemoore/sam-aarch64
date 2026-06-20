@@ -15,3 +15,8 @@
   body: |
     AWAITING the assessment report i210 (Pete, 2026-06-22). Pete: linker-script parsing 'would be awesome' if not a large rewrite/perf cost. i210 (agent) reports the touch points + cost estimate; once it lands, Pete returns HERE for the go/no-go on i56 (extract SpectrumFourLayout / a -layout flag or linker-script parser). i20 depends on i56.
   owner: pete
+
+- id: q45
+  body: |
+    SAMBOOT boot-entry contradiction (ask Colin / re-provision): the captured patched ROM HARD-CODES fetching EEPROM device &2000 (chunk 1) into &4000 and JP &4000 to boot, and the Trinity identity probe FAITHFULLY returns 'T' so this fetch path is taken on real hardware too — but the captured chunk-1 (&2000) is a B-DOS routine LIBRARY (CALL/RET subroutines), not a boot sequencer, so faithful from-reset emulation wanders and never loads B-DOS. The coherent boot SEQUENCER sits unused at EEPROM &0000; a comparative test (TestHypothesisBootblockAt2000BootsCoherently) proves it boots COHERENTLY when placed at &2000 (12 read_chunk loads -> B-DOS at &8000, reaches CALL &805F), so the gap is the &2000 CONTENT, not the ROM fetch/paging/bootblock design. Yet Pete's card boots. WHY does the persistent &2000 hold a library on a card that boots? Candidates: (a) the &2000 slot was repurposed by later Trinity runtime use after provisioning, and the live card boots a different chunk/copy; (b) Colin's real boot-chunk layout differs from the chunk-numbering model used here; (c) a controlled re-provision-then-capture would show the boot chunk in place. Pete knows Colin (Quazar/Trinity) — ask-Colin is the route, or a re-provision+capture. Gates i197c-b3 (finalize the injection site) -> i135c (EEPROM flash). Refs: samboot-bootblock-analysis.md §7.6/§7.7.
+  owner: pete
