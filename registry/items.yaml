@@ -2267,10 +2267,12 @@
   title: "Raw-record streaming write: i99 streaming sink -> HWSAD into one 819200-byte record"
   description: |
     i122 brick 2: wire the i99 streaming sink to flush a fetched disk image into one raw Trinity record via i114c's HWSAD seam (bdos_write_record). The 819200-byte image far exceeds one STAGING buffer, so it must stream sector-by-sector as it arrives rather than buffer-then-save. Builds on i99 (bounded flush window) + i114c (HWSAD write seam). Host-verifiable via the BDOSStore SectorWrites capture; real SD write dispatch hardware-gated like HSAVE. Unblocks i122c.
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i114c, i99]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 497, role: completing}
   parent: i122
   refs: [src/netboot/bdos_seam.asm, src/netboot/body_sink.asm, tools/netboot-oracle/z80/bdos_store.go, i122]
 
