@@ -431,6 +431,15 @@ Supporting / baseline diffs (not the mechanism):
 
 ### 6.2 The EEPROM bootblock does NOT match the public reproduction (§5 Q1 = NO)
 
+> **Correction (i197, §7 below).** The §6.2 search looked at the EEPROM region
+> the public model calls "chunk 1" (byte `&002000`) and concluded the boot.asm
+> bootblock was *absent from the capture*. That conclusion is **wrong about the
+> location, right about the build**: the boot.asm-equivalent bootblock IS in the
+> capture — at EEPROM offset **`&000000`** (a pre-chunk region), not at `&2000`
+> (which holds a B-DOS routine library). §7 re-derives it. The standing finding
+> (Pete's card carries Colin's *own* build, not the LongSteve reproduction) holds;
+> only "the signature occurs nowhere in the capture" is superseded.
+
 The capture is sound — the known anchors are present: the **"Trinity Network "**
 config string at file `&1E342` (123714) and the **SAM MAC** `02 54 52 49 4e bc` at
 `&03400` (13312), both matching `CAPTURE-NOTES.txt`. Colin's own sign-on strings
@@ -455,6 +464,149 @@ location is a property of the LongSteve build, not necessarily Colin's; tracked 
 follow-up (registry). This does not change the *plan* (patch the writable EEPROM
 bootblock to read a config + boot a record), only the *exact bytes/site*, which i135
 must derive against the real build.
+
+---
+
+## 7. Reverse-engineering Colin's real bootblock from the capture (i197)
+
+Done offline, read-only, against `~/sam-archive/samboot-capture/` (Colin's
+proprietary, non-redistributable images — cited by file offset, never copied into
+the repo). Disassembly: `z80dis` driven by two local scratch helpers (`~/zdis.py`
+for the ROM, `~/eedis.py` for the EEPROM; both uncommitted). The patched ROM is
+read at the file→logical map of §6 (ROM0 `0x0000–0x3FFF`→`&0000`; ROM1
+`0x4000–0x7FFF`→`&C000`). The EEPROM is a 128 KB device; file offset == device
+byte address (`CAPTURE-NOTES.txt` anchors confirmed: SAM MAC at `&03400`,
+"Trinity Network " at `&1E342`).
+
+### 7.1 The real bootblock is at EEPROM offset `&000000` (not `&2000`)
+
+A byte-signature scan for the boot.asm `start:` opener (`IN A,(250)` →
+`LD (nn),A` → `OR 64` → `OUT (250),A`, i.e. `DB FA 32 .. 40 F6 40 D3 FA`) finds
+**exactly one** match in the whole 128 KB image, at **`&000000`**. The
+execute-DOS `CALL` and the exit `JP &102F` likewise each occur exactly once,
+inside that block. So Colin's bootblock is unique and lives at offset 0 — a
+region *before* the numbered chunks (§7.3) — and **is** the boot.asm-equivalent
+that §6.2 reported missing.
+
+It runs at `ORG &4000` (every internal reference is `&40xx`). Decoded
+(EEPROM `&000000–&00015D`, 350 bytes):
+
+```
+&4000  IN A,(250) / LD (&40A2),A      ; save LMPR into the restore: immediate
+&4005  OR 64 / OUT (250),A            ; page a RAM page over ROM at &C000
+&4009  IN A,(251) / LD (&40A6),A      ; save HMPR into the restore2: immediate
+&400E  LD A,29 / OUT (251),A          ; HMPR = 29
+&4012  DI
+       ; load the twelve B-DOS chunks 2..13 into &8000..&AC00:
+&4013  LD A,2  / LD (&40BC),A / LD HL,&8000 / CALL &40BD   ; read_chunk
+        … chunks 3..12 …
+&408C  LD A,13 / LD (&40BC),A / LD HL,&AC00 / CALL &40BD
+&4097  XOR A / LD BC,&00F8 / OUT (C),A   ; OUT (&F8),0  (the per-byte auto-null poke)
+&409D  EI
+&409E  CALL &805F                     ; *** execute the DOS ***
+&40A1  LD A,0 / OUT (250),A           ; restore:  (the 0 is overwritten at boot)
+&40A5  LD A,0 / OUT (251),A           ; restore2: (likewise)
+&40A9  CALL &06B5                     ; ROM call — re-init the screen/display
+&40AC  LD A,&FF / LD (&5600),A / LD (&5C44),A
+&40B4  LD A,&10 / LD (&5BBE),A        ; line-colour / sysvar fix-ups
+&40B9  JP &102F                       ; ERRHAND2 — exit to BASIC
+&40BC  (db chunk#) / read_chunk: …    ; helpers: get_chunk &412C, eeprom_enable
+        &4103, wait_ready &411A, eeprom_disable &410A, etc. (end &40BD..&4150)
+```
+
+This is structurally boot.asm, with **build-specific differences** that pin it as
+Colin's own, not the LongSteve reproduction:
+
+- **execute-DOS entry is `&805F`**, not LongSteve's `&804C` (§1 step 4).
+- **No inline `stripes:` routine and no `wait_for_key`.** Colin redraws the screen
+  via a stock-ROM call (`CALL &06B5`) plus three sysvar pokes (`&5600`/`&5C44`
+  line-colour, `&5BBE`), then exits — so the §2 "stripes" code the LongSteve fork
+  *added* is simply not how Colin's build redraws. (This re-scopes i112.)
+- **No `; TODO … auto* file` comment and no hook stub.** The boot-a-record hook
+  (§3) is *unimplemented* here exactly as in the public build, but there is no
+  marked site — see §7.2.
+- The restore is self-modifying (the `LD A,0` immediates at `&40A2`/`&40A6` are
+  overwritten by the saved LMPR/HMPR at entry) — same idiom as boot.asm `restore:`.
+
+### 7.2 The injection-hook site and free space
+
+The boot-a-record hook attaches at the **same logical point** boot.asm marks with
+its TODO: **after `CALL &805F` (`&409E`) and before the `restore:` exit
+(`&40A1`)** — i.e. once B-DOS is resident, decide whether to select+boot a record
+or fall through to the BASIC exit. The primitives (EEPROM read for a config value,
+`HRECORD` + `RST 8`/`ALHK` to boot a record) are unchanged from §3.
+
+There is **ample free space in-chunk** for the patch: the bootblock code ends at
+`&00015D`, and `&00015E–&000408` (≈683 bytes) is all-zero, immediately following.
+The injection can live there with a `CALL`/branch spliced in at `&40A1`. No
+second chunk is needed.
+
+### 7.3 The real EEPROM layout is a flat image, not the public 64-byte-header FS
+
+This answers "the public-doc 64-byte-header model did not parse cleanly." Offset 0
+is **code (the bootblock), not a 120×64-byte header index**. The chunk addressing
+comes straight from the bootblock's own `get_chunk` (`&412C`):
+
+```
+get_chunk(N):  HL = 28 + 4*N            ; (LD HL,28; LD DE,4; B=N; ADD HL,DE × N)
+read_chunk:    EEPROM byte addr = (HL)<<8  → device address (28+4N)*256
+```
+
+so **chunk N is at EEPROM `(28+4N)·256 = &2000 + (N−1)·&400`** (verified: chunk 2
+disassembles as coherent B-DOS at its load address `&8000`, calling the section-B
+library and the bootblock's own `&40C4`):
+
+| EEPROM offset | Region |
+|---|---|
+| `&000000–&00015D` | bootblock (this §7), loaded at `&4000` |
+| `&00015E–&000408` | free (zero) — injection space |
+| `&001C00` | `get_chunk(0)` — B-DOS code (directory/listing routines) |
+| `&002000` | **chunk 1** — a B-DOS routine library (the block §6.2 mis-read as "the bootblock") |
+| `&002400–&0053FF` | **chunks 2–13** — the 12 KB B-DOS image → `&8000–&AFFF` |
+| `&03400` | SAM MAC (anchor) |
+| `&1E342` | "Trinity Network " config (anchor) |
+
+The patched-ROM fetch (§6.1) is re-confirmed exactly: `&0F7F` sets `LMPR=&5F`,
+enables the EEPROM, and `CALL &F5DD` reads **`&0400` (1024) bytes from device
+address `&002000` into `&4000`**, then `JP &4000`. The address is sent big-endian
+3-byte `00 20 00` (`OUT (C),H/L/E`), and `&F5DD` hard-codes the destination
+`LD HL,&4000`.
+
+### 7.4 Unresolved — the static picture does not close; emulation is required
+
+Two facts from the capture **contradict** a clean single-stage boot and cannot be
+settled by disassembly alone:
+
+1. **The ROM loads chunk 1 (`&2000`), not the bootblock (`&0000`).** §6.1/§7.3
+   both show the patched ROM reads device `&002000` → `&4000` → `JP &4000`. But
+   `&2000` is the B-DOS *routine library*, whose first byte is `EX (SP),HL` and
+   which immediately `CALL`s `&5C26` and jumps to `&4657`/`&5258`/`&603A` — all
+   *outside* the 1 KB that was loaded and uninitialised at cold boot. It is **not
+   a valid cold-entry**. The coherent, self-contained bootblock is at `&0000`,
+   which the documented ROM path never reads.
+2. **B-DOS calls into an unloaded section B.** Chunk 2 (B-DOS at `&8000`) calls
+   `&4657`, `&4677`, `&5C6A` — a support library that must occupy section B
+   (`&4000–&7FFF`) at runtime — yet the bootblock loads only section C
+   (`&8000+`), and the ROM loads only 1 KB at `&4000`. B-DOS itself does heavy
+   EEPROM I/O (10×`OUT (&DC)`, 34×`IN (&DC)` in the chunk region), so there is a
+   **runtime load/paging stage** that populates section B and that the static
+   trace does not capture.
+
+Both point to the same gap: the boot is **multi-stage / paging-dependent** in a
+way only a *running* model reveals. Resolving which artifact actually executes at
+`&4000` — and therefore whether the injection belongs in the `&0000` bootblock or
+on the ROM-loaded path — needs the boot **traced in a faithful emulator** that
+models the patched ROM, the SAM paging, and the Trinity SPI EEPROM serving these
+real bytes. That is exactly **i190a** (load the real ROM+EEPROM into the shared
+emulation core). A secondary possibility the trace would also settle is whether
+`rom.bin` and `eeprom.bin` were captured from the same machine state (a re-capture
+is the hardware-side cross-check).
+
+**Consequence for the endeavour.** The static RE (§7.1–§7.3) is done and corrects
+the record, but the **exact injection site cannot be finalised, and no EEPROM
+flash (i135c) should proceed**, until the boot is traced in emulation. Tracked:
+i197 split into the completed static-RE leaf and an emulation-validation leaf
+gated on i190a; i135c remains blocked on the i197 umbrella.
 
 ---
 
