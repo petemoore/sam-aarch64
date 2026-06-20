@@ -314,6 +314,47 @@ enc_fix_table:
                 defb    1
                 defw    79
                 defb    &1f, &87, &08, &d5
+; i203d special forms: mov-imm autoselect / ldr-lit / tbz/tbnz
+                defw    &0000
+                defw    enc_fix_mov_movz                ; mov x0,#0x12340000 -> movz lsl#16
+                defb    2
+                defw    3
+                defb    &80, &46, &a2, &d2
+                defw    &0000
+                defw    enc_fix_mov_movn                ; mov x0,#-1 -> movn #0
+                defb    2
+                defw    3
+                defb    &00, &00, &80, &92
+                defw    &0000
+                defw    enc_fix_mov_movnw               ; mov w1,#0xfffffffe -> movn #1 (W)
+                defb    2
+                defw    3
+                defb    &21, &00, &80, &12
+                defw    &0000
+                defw    enc_fix_mov_orr                 ; mov x2,#0x5555... -> orr-imm
+                defb    2
+                defw    3
+                defb    &e2, &f3, &00, &b2
+                defw    &1000
+                defw    enc_fix_ldr_x                   ; ldr x0,pc+8 @0x1000 -> imm19
+                defb    2
+                defw    5
+                defb    &40, &00, &00, &58
+                defw    &1000
+                defw    enc_fix_ldr_w                   ; ldr w1,pc+16 @0x1000 -> imm19 (W)
+                defb    2
+                defw    5
+                defb    &81, &00, &00, &18
+                defw    &1000
+                defw    enc_fix_tbz                     ; tbz x0,#5,pc+16 @0x1000 -> imm14
+                defb    3
+                defw    22
+                defb    &80, &00, &28, &36
+                defw    &1000
+                defw    enc_fix_tbnz                    ; tbnz w1,#3,pc+8 @0x1000 -> imm14
+                defb    3
+                defw    23
+                defb    &41, &00, &18, &37
 ; sentinel: fixture ptr 0 terminates the table
                 defw    &0000
                 defw    0
@@ -368,3 +409,12 @@ enc_fix_mrs:    defb    &01, &00, &0b, &08, &00, &6d, &69, &64, &72, &5f, &65, &
 enc_fix_msr:    defb    &0b, &07, &00, &64, &61, &69, &66, &73, &65, &74, &05, &02, &00, &01, &02
 enc_fix_dc:     defb    &0b, &04, &00, &63, &76, &61, &63, &01, &00
 enc_fix_tlbi:   defb    &0b, &07, &00, &76, &6d, &61, &6c, &6c, &65, &31
+; i203d mov-imm / ldr-lit / tbz (exact Go OperandWriter bytes)
+enc_fix_mov_movz:  defb &01, &00, &05, &05, &00, &03, &00, &00, &34, &12
+enc_fix_mov_movn:  defb &01, &00, &05, &02, &00, &01, &ff
+enc_fix_mov_movnw: defb &02, &01, &05, &02, &00, &01, &fe
+enc_fix_mov_orr:   defb &01, &02, &05, &09, &00, &04, &55, &55, &55, &55, &55, &55, &55, &55
+enc_fix_ldr_x:     defb &01, &00, &05, &03, &00, &02, &08, &10
+enc_fix_ldr_w:     defb &02, &01, &05, &03, &00, &02, &10, &10
+enc_fix_tbz:       defb &01, &00, &05, &02, &00, &01, &05, &05, &03, &00, &02, &10, &10
+enc_fix_tbnz:      defb &02, &01, &05, &02, &00, &01, &03, &05, &03, &00, &02, &08, &10

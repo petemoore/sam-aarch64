@@ -220,6 +220,41 @@ func TestEncoderSkeletonFixtures(t *testing.T) {
 		{"tlbi_vmalle1", "tlbi", 0, func(w *format.OperandWriter) {
 			w.WriteSysName("vmalle1")
 		}, 1},
+		// --- i203d special forms: mov-imm autoselect / ldr-lit / tbz/tbnz ---
+		{"mov_x0_movz", "mov", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteImmExpr(immExpr(0x12340000))
+		}, 2},
+		{"mov_x0_movn", "mov", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteImmExpr(immExpr(-1))
+		}, 2},
+		{"mov_w1_movn", "mov", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegW, 1)
+			w.WriteImmExpr(immExpr(-2)) // 0xfffffffe (W) -> movn #1
+		}, 2},
+		{"mov_x2_orr", "mov", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 2)
+			w.WriteImmExpr(immExpr(0x5555555555555555))
+		}, 2},
+		{"ldr_x0_lit", "ldr", 0x1000, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteImmExpr(immExpr(0x1008))
+		}, 2},
+		{"ldr_w1_lit", "ldr", 0x1000, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegW, 1)
+			w.WriteImmExpr(immExpr(0x1010))
+		}, 2},
+		{"tbz_x0_5", "tbz", 0x1000, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteImmExpr(immExpr(5))
+			w.WriteImmExpr(immExpr(0x1010))
+		}, 3},
+		{"tbnz_w1_3", "tbnz", 0x1000, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegW, 1)
+			w.WriteImmExpr(immExpr(3))
+			w.WriteImmExpr(immExpr(0x1008))
+		}, 3},
 	}
 
 	for _, fx := range fixtures {
