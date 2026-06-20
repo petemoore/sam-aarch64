@@ -25,9 +25,12 @@
   title: "Page allocator core: page_owner[] + alloc_page/free_page (Go authority + Z80 port, host-verified)"
   description: |
     First brick of i2. The resident page allocator mechanism (spec §4.1): a page_owner[] byte-per-page ownership table (RESERVED/FREE/owner-tag), alloc_page(owner)->page|FAIL (first-FREE policy), free_page(page,expected_owner) with tag assertion, plus pp_init/pp_reserve/pp_owner_of/pp_free_count. Go authority tools/sam-aarch64/pagepool + Z80 port src/pagepool.asm, host-verified vs an oracle via the koron-go/z80 harness (mirrors the i41d Brick-1 pattern). Does NOT yet wire IN/OUT/DOC buffers to the pool (§4.4) nor read sysvars for boot-sizing (§4.2) nor add the boot self-test on the paged path — those are later i2 bricks. Spec: docs/specs/ide-memory-model-design.md.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 591, role: completing}
+    - {num: 591, role: completing}
   parent: i2
 
 - id: i3
