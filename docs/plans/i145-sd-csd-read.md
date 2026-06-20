@@ -80,3 +80,31 @@ so i145 is un-gated from i133 — i133's autonomous version stays separate). Pus
 `curl -s -o csd.bin tftp://192.168.2.75/csd.bin`. The fresh-trinload discovery only answers after a
 reload if it was left in a stuck state (the `STALE` ARP entry is usable — a permanent ARP entry
 needs root, unavailable to the agent).
+
+## UPDATE 2026-06-21 — Trinity SD architecture CONFIRMED; standard SD reference in hand
+
+The one architectural unknown (transparent relay vs a microcontroller abstraction) is **resolved**
+from `docs/notes/trinity-capabilities.md` §3/§4 + the i71 B-DOS-1.5t fork analysis (its Open-Q3 is
+ANSWERED), so the port is now well-scoped:
+
+- **`&DF` is a transparent SPI byte relay** (like the ENC on `&DE`) — the **standard SD SPI command
+  ladder ports directly**; no command abstraction in the way.
+- **Trinity wrapper:** select SD via `&DC` (`&31` select / `&30` deselect / `&3F` select-with-auto-null
+  / `&04` idle); run the microcontroller's **`&38` SD-init once** first (returns 1=MMC / 2=SD); then
+  the Z80 drives the standard ladder (CMD0 → CMD8 → CMD55+ACMD41 → CMD58 → CMD9) over `&DF`,
+  **busy-polling `&DC` bit 3 before every byte** (the one-byte-lag dummy-write, or `&3F` auto-null +
+  `INI` for the 16-byte CSD bulk read). **This is exactly what B-DOS 1.5t does** (i71) — mirror
+  `encdrv.asm`'s `wait_ready` / enable-disable / `INI` shapes.
+- **A correct standard SD-SPI init + CSD-decode reference is in hand** (Pete supplied it this session;
+  it lives in the chat archive). The port = that reference wrapped in the Trinity layer above. Its
+  CSD decode matches the research (v1: `C_SIZE`/`C_SIZE_MULT`/`READ_BL_LEN`; v2: 22-bit `C_SIZE` →
+  `(C_SIZE+1)×1024` sectors). The intricate part is the **SPI timing** (the lag / auto-null), not the
+  SD commands.
+- **B-DOS-disruption caveat (important for i145b):** a full `CMD0` re-init resets the card to idle.
+  B-DOS initialised the card at boot, and the serve program's record writes go through B-DOS HWSAD
+  hooks — so the **production read should prefer a non-disruptive bare `CMD9`** (the card is already
+  initialised) over a full re-init. The probe (i145a) confirms whether bare-`CMD9` works; a full init
+  in the probe is acceptable (one-off; power-cycle after if it disturbs B-DOS).
+- **Filter note:** writing the Z80 port *from this reference* is integrating provided code — expected
+  to be on the safe side of the content filter (it was the from-scratch *generation* via a subagent
+  that was blocked). Best done in a fresh-context session given the SPI-timing care required.
