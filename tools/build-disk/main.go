@@ -143,6 +143,7 @@ func main() {
 	testMemPath := flag.String("test-mem", "", "path to off-axis test_mem.bin (BUILD_TESTS only; plan-PR 3)")
 	pagedCallPath := flag.String("paged-call", "", "path to the paged_call self-test page-14 payload (BUILD_TESTS only; plan-PR 1)")
 	clusterPath := flag.String("cluster", "", "path to the off-axis page-12 M5+misc encoder self-test cluster (build/test_cluster.bin; BUILD_TESTS only; M6 budget-relief)")
+	encFixPath := flag.String("enc-fix", "", "path to the off-axis page-11 encode_inst fixture data payload (build/enc_fix_payload.bin; BUILD_TESTS only; i69)")
 	sysregDataPath := flag.String("sysreg-data", "", "path to the page-13 sysreg lookup data (build/sysreg_data.bin; PRODUCTION + test; PR-2)")
 	disasmPath := flag.String("disasm", "", "path to the page-15 disassembler binary (build/disasm.bin; PRODUCTION + test; strand-B PR-3)")
 	zx0Path := flag.String("zx0", "", "path to the page-13 zx0 compressor+decoder payload (build/zx0.bin; PRODUCTION + test; i68)")
@@ -150,7 +151,7 @@ func main() {
 	netbootName := flag.String("netboot-name", "netboot", "directory-entry name for the -netboot CODE file (the AUTO BASIC LOADs this name)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
-			"usage: %s [-dos <path>] [-dos-name <name>] [-dos-load <addr>] [-test-mem <path>] [-paged-call <path>] [-cluster <path>] [-sysreg-data <path>] [-disasm <path>] [-zx0 <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n   or: %s -netboot <code.bin> [-netboot-name <name>] [-dos ...] <output.mgt>\n",
+			"usage: %s [-dos <path>] [-dos-name <name>] [-dos-load <addr>] [-test-mem <path>] [-paged-call <path>] [-cluster <path>] [-enc-fix <path>] [-sysreg-data <path>] [-disasm <path>] [-zx0 <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n   or: %s -netboot <code.bin> [-netboot-name <name>] [-dos ...] <output.mgt>\n",
 			os.Args[0], os.Args[0])
 		flag.PrintDefaults()
 	}
@@ -359,6 +360,27 @@ func main() {
 		const ClusterLoadAddress uint32 = 0x8000
 		if err := disk.AddCodeFile("cluster", clusterData, ClusterLoadAddress, 0); err != nil {
 			log.Fatalf("AddCodeFile(cluster): %v", err)
+		}
+	}
+
+	// Slot 5c (optional): off-axis encode_inst fixture data payload (enc_fix).
+	// Loaded at boot by src/loader.asm::load_enc_fix_payload via
+	// HGTHD+trampoline into physical page 11 (section A at &0000 when
+	// LMPR = LMPR_ENC_FIX = &2B).  At the start of run_encode_inst_self_tests
+	// the driver bulk-copies the payload into section-D RAM at
+	// ENC_FIX_TABLE_RAM (&E100) via LDIR.  Holds enc_fix_table rows +
+	// operand streams (~528 B), assembled from src/test_encode_inst_payload.asm
+	// with org &E100 so row fixture ptrs are section-D absolute addresses.
+	// BUILD_TESTS variant only (i69 lever 3).  Recorded load address
+	// is documentary (the trampoline supplies HL = &8000 and target page = 11).
+	if *encFixPath != "" {
+		encFixData, err := os.ReadFile(*encFixPath)
+		if err != nil {
+			log.Fatalf("read enc-fix payload: %v", err)
+		}
+		const EncFixLoadAddress uint32 = 0x8000
+		if err := disk.AddCodeFile("enc_fix", encFixData, EncFixLoadAddress, 0); err != nil {
+			log.Fatalf("AddCodeFile(enc_fix): %v", err)
 		}
 	}
 
