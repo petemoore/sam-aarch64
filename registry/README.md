@@ -19,6 +19,10 @@ for `registry/items.yaml`. It **never** falls back to the bundled
 registry (with no `REGISTRY_ITEMS` set) and it errors (exit 1) rather than risk
 an accidental testdata read/write. Set `REGISTRY_ITEMS` to point elsewhere.
 
+Inspect a single record with `registry view --id iN|qN` (add `--format json` for
+scripting) — it prints the record plus its computed dependents (reverse edges)
+and priority rank, which the raw YAML does not carry.
+
 Edit work-tracking via the `tools/registry` CLI (`add` / `split` / `set-status`
 / `set-pr` / `dep` / `answer` / `prioritize` / `move`), then `make registry` to
 regenerate the views; commit the YAML and regenerated `.md` together. Full

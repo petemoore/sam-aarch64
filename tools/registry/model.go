@@ -21,33 +21,35 @@ const (
 )
 
 // PRRef is a structured PR attachment: number + role.
+// json tags mirror the yaml tags so `registry view --format json` emits the same
+// field names (the yaml serializer ignores json tags and vice versa).
 type PRRef struct {
-	Num  int    `yaml:"num"`
-	Role PRRole `yaml:"role"`
+	Num  int    `yaml:"num" json:"num"`
+	Role PRRole `yaml:"role" json:"role"`
 }
 
 // Item is one row from registry/items.yaml.
 // Spec §"Schema (per item record)".
 type Item struct {
-	ID          string   `yaml:"id"`
-	Title       string   `yaml:"title"`
-	Description string   `yaml:"description"`
-	Status      Status   `yaml:"status"`
-	DependsOn   []string `yaml:"depends_on"` // ids of items or questions this item is gated on
-	Kind        string   `yaml:"kind"`       // "leaf" (default) | "umbrella"
-	Owner       string   `yaml:"owner"`
-	PRs         []PRRef  `yaml:"prs"`
-	Parent      string   `yaml:"parent"`
-	Refs        []string `yaml:"refs"`
+	ID          string   `yaml:"id" json:"id"`
+	Title       string   `yaml:"title" json:"title"`
+	Description string   `yaml:"description" json:"description"`
+	Status      Status   `yaml:"status" json:"status"`
+	DependsOn   []string `yaml:"depends_on" json:"depends_on"` // ids of items or questions this item is gated on
+	Kind        string   `yaml:"kind" json:"kind"`             // "leaf" (default) | "umbrella"
+	Owner       string   `yaml:"owner" json:"owner"`
+	PRs         []PRRef  `yaml:"prs" json:"prs"`
+	Parent      string   `yaml:"parent" json:"parent"`
+	Refs        []string `yaml:"refs" json:"refs"`
 }
 
 // Question is one row from registry/questions.yaml.
 // Questions are transient (spec §"Questions — transient by design"):
 // a question exists only while open; it has no answer field and no status enum.
 type Question struct {
-	ID    string `yaml:"id"`
-	Body  string `yaml:"body"`  // markdown question body (possibly multi-part)
-	Owner string `yaml:"owner"` // usually "pete"
+	ID    string `yaml:"id" json:"id"`
+	Body  string `yaml:"body" json:"body"`   // markdown question body (possibly multi-part)
+	Owner string `yaml:"owner" json:"owner"` // usually "pete"
 }
 
 // Registry holds the parsed contents of the YAML source files plus the

@@ -9,6 +9,7 @@
 //	Read-only query subcommands:
 //
 //	registry ready                                    (unblocked pullable items, in priority order)
+//	registry view       --id iN|qN [--format text|json]  (one record + computed dependents/rank)
 //	registry dependents --id iN                       (ids that depend_on iN)
 //	registry dag                                      (all dependency edges, one per line)
 //
@@ -84,6 +85,8 @@ func main() {
 		runGen(args[1:], paths)
 	case "ready":
 		runReady(args[1:], paths)
+	case "view":
+		runView(args[1:], paths)
 	case "dependents":
 		runDependents(args[1:], paths)
 	case "dag":
@@ -118,6 +121,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] validate <items.yaml> [questions.yaml]")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] gen      <items.yaml> <questions.yaml>")
 	fmt.Fprintln(os.Stderr, "  registry ready")
+	fmt.Fprintln(os.Stderr, "  registry view       --id iN|qN [--format text|json]")
 	fmt.Fprintln(os.Stderr, "  registry dependents --id iN")
 	fmt.Fprintln(os.Stderr, "  registry dag")
 	fmt.Fprintln(os.Stderr, "  registry prioritize --id iN --to-top")
