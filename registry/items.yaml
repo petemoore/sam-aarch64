@@ -2169,9 +2169,11 @@
   title: "Boot-a-record primitive: HRECORD-select + ALHK (hook 136) auto-load/run the record's AUTO file"
   description: |
     i122 brick 1: the boot-a-record primitive. bdos_boot_record HRECORD-selects a record then fires ALHK (hook 136, &88) to auto-load + run that record's AUTO file — the B-DOS BOOT "DOS resident" branch (KEYBOARD_BOOT_WORKAROUND.md §2: RST 8 / DEFB ALHK) / HAUTO (bdos15a.src.txt:463). ALHK modelled in BDOSStore symmetric to the existing hooks (Boots() accessor); host-verified via the real RST 8 dispatch (TestBDOSBootRecord). ALHK never returns on hardware (boots into the AUTO file); SD-boot dispatch hardware-gated like HSAVE (CLAUDE.md §5). Unblocks i122c.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 480, role: completing}
   parent: i122
   refs: [src/netboot/bdos_seam.asm, tools/netboot-oracle/z80/bdos_store.go, "reference/bdos/bdos15a.src.txt:463", i122]
 
