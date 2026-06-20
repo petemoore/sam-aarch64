@@ -379,7 +379,7 @@
   title: "Cortex-A53 errata workarounds (--fix-cortex-a53-*)"
   description: |
     Cortex-A53 errata workarounds (--fix-cortex-a53-835769 / -843419). Pete (2026-06-22, q37): INCORPORATE — these are hard-to-debug latent bugs (835769: mul-accumulate then a 64-bit ldr/str spanning a page boundary; 843419: adrp at certain page offsets then a load); we've been lucky not to trip them. Ship as an EXPLICIT enable/disable feature in the SAM program (off by default for later silicon like Pi 4/400; on for Cortex-A53 / Pi 3). Greenfield (no Go authority): design + Go-first authority + Z80 port + binutils cross-check; scope = BOTH errata (assembler-side 835769 + linker-side 843419, placed at the right pipeline stage since we produce a linked release.bin). CAVEAT from Pete: if it turns out to be a massive amount of code OR a significant assemble-time performance hit, flag it and we reconsider — otherwise keep it as a toggle option. Fresh-session-sized.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
