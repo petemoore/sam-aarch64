@@ -60,9 +60,15 @@
   title: Codegen sysreg/mnemonic/form tables from Go authority
   description: |
     Phases A+B+C done: A deleted ENCTAB_LEN; B renamed enctab-gen->tables-gen, added -sysreg-inc emitter + CI job sysreg-sync, src/sysreg_tables.inc generated from sysregs.go; C1 added -constants-inc + src/tbn_constants.inc (OP_KIND_*/REC_KIND_*/DIR_* equates); C2 added -mnemonic-ids-inc + src/mnemonic_ids.inc (MNEM_<NAME> equates, all bare-numeric cp dispatchers now named). PRs #184 (spec), #189 (A), #198 (B), #218 (C1/C2). Three sync tests guard all .inc files. Phase D = i74 (gated on aarch64dec/sys.go code->data refactor) is the only remaining work.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 184, role: completing}
+    - {num: 189, role: completing}
+    - {num: 234, role: completing}
+    - {num: 235, role: completing}
+    - {num: 236, role: completing}
   refs: [docs/specs/codegen-tables-design.md, i74]
 
 - id: i8
@@ -1819,10 +1825,30 @@
   title: "Scrape, QA, and integrate the recovered Trinity documentation"
   description: |
     Pete recovered the full Trinity docs as 51 photographs (closes i61 gap: Quazar manual NOT found). Off-repo workspace ~/sam-archive/trinity-docs/ (third-party copyrighted; preservation-only). Three immutable layers: photos/ -> text/ (raw OCR via ocr_docs.py, Tesseract + rotation auto-detect) -> docs/notes/trinity-capabilities.md (verified facts only). Pipeline: OCR -> QA agent (prose errors + data-point inventory; wrong digits must be photo-verified) -> discovery agent (what's new vs current knowledge) -> photo-verify flagged data -> fold only photo-confirmed facts into trinity-capabilities.md.
-  status: IN_PROGRESS
-  kind: leaf
+  status: OPEN
+  kind: umbrella
   owner: agent
   refs: [~/sam-archive/trinity-docs/README.md, docs/notes/trinity-capabilities.md, i61, i80, i87]
+
+- id: i113a
+  title: "capture, OCR scrape, QA + discovery pipeline"
+  description: |
+    51 photographs captured. OCR pipeline (ocr_docs.py, Tesseract + rotation auto-detect) run; text/ layer produced at 88–93% confidence. QA agent ran two-prong error-hunt (prose scan + data-point inventory). Discovery agent diffed against known facts and surfaced new findings. All three pipeline artifacts live in the off-repo ~/sam-archive/trinity-docs/ workspace (copyrighted; preservation-only). No repo PR — work is off-repo by policy.
+  status: DONE
+  kind: leaf
+  owner: agent
+  parent: i113
+  refs: [~/sam-archive/trinity-docs/README.md, ~/sam-archive/trinity-docs/QA_REPORT.md, ~/sam-archive/trinity-docs/DISCOVERY_REPORT.md]
+
+- id: i113b
+  title: photo-verify flagged data + fold verified facts into trinity-capabilities.md
+  description: |
+    QA report flags specific data points (port addresses, EEPROM offsets, hex values, diagrams) that require photo confirmation before committing to the repo. Deliverable: run vision-verify on flagged items, then fold only confirmed facts into docs/notes/trinity-capabilities.md via the established off-repo pipeline.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i113
+  refs: [~/sam-archive/trinity-docs/VERIFY_CHECKLIST.md, docs/notes/trinity-capabilities.md]
 
 - id: i114
   title: Netboot serve manifest + record-allocation strategy
@@ -1944,10 +1970,32 @@
   title: i82 TFTP client — OACK handling / standard-TFTP-server interop
   description: |
     The i82 client requests RRQ options (blksize/tsize/timeout/windowsize) but has no OACK (opcode 6) handling. A standards-compliant server (e.g. macOS tftpd) answers an optioned RRQ with OACK before DATA; the client ignores it, never ACKs block 0, and hangs. Fix: on OACK -> learn server endpoint + adopt negotiated blksize (512 default if absent) + send ACK block 0; on direct DATA -> 512 default (today's hard-coded 1428 truncates); drop windowsize from request. Mirrored in Go authority + host tests. PR #422 landed the Go/Z80/host side; hardware test pending.
-  status: IN_PROGRESS
-  kind: leaf
+  status: OPEN
+  kind: umbrella
   owner: agent
   refs: [tools/netboot-oracle/tftp/tftp.go, tools/netboot-oracle/tftp/clientloop.go, tools/netboot-oracle/client/client.go, src/netboot/netboot_client.asm, src/netboot/tftp_client_front.asm, i82, i119, i120]
+
+- id: i118a
+  title: "OACK handling code — Go/Z80/host-side compliance (PR #422)"
+  description: |
+    RFC 2347 OACK compliance: on OACK learn server endpoint + adopt negotiated blksize (512 default if absent) + send ACK block 0; on direct DATA use 512 default; drop windowsize from RRQ. Mirrored in Go authority (tftp.go, clientloop.go) + host tests. Z80 side: netboot_client.asm, tftp_client_front.asm. All host tests green.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 422, role: completing}
+  parent: i118
+  refs: [tools/netboot-oracle/tftp/tftp.go, tools/netboot-oracle/tftp/clientloop.go, src/netboot/netboot_client.asm, src/netboot/tftp_client_front.asm]
+
+- id: i118b
+  title: hardware verification — OACK path on real Trinity hardware
+  description: |
+    Confirm the OACK path works on real Trinity hardware: netboot client connects to a standards-compliant TFTP server (e.g. macOS tftpd), receives OACK, ACKs block 0, and receives the file. Gated on Trinity hardware access + a standards-compliant server in the test environment.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i118
+  refs: [i119, i82]
 
 - id: i119
   title: i82 TFTP client — persistence write-out on real hardware
@@ -2051,10 +2099,32 @@
   title: Emulate full Trinity boot path so netboot boot wrappers run end-to-end in the harness
   description: |
     Close the emulate-before-hardware gap. PR #423 landed: EEPROM modeled + ROM1-read-only-at-&C000; smoke_main + client_main run end-to-end. i82 hang localized: client_main logic sound (reaches client_first, emits ARP); fault = proactive ARP TX before PHY link-up + no ARP retransmit (→ i127). Remaining: model PHY link-up (LSTAT + drop-TX-while-down) to reproduce the drop in emulation; SD/RST-8 stub for full client fetch; fold server/serve/http wrappers + delete NETBOOT_HOSTTEST carve-outs (→ i126).
-  status: IN_PROGRESS
-  kind: leaf
+  status: OPEN
+  kind: umbrella
   owner: agent
   refs: [tools/netboot-oracle/z80/eeprom.go, tools/netboot-oracle/z80/harness.go, tools/netboot-oracle/z80/enc28j60.go, tools/netboot-oracle/z80/netboot_boot_test.go, src/netboot/eeprom.asm, src/netboot/bdos_seam.asm, i119, i125, i126, i127, i93]
+
+- id: i124a
+  title: "boot-path emulation — EEPROM + ROM1 model; smoke_main + client_main end-to-end (PR #423)"
+  description: |
+    EEPROM modeled (eeprom.go), ROM1 mapped read-only at &C000 at boot, paging model in harness.go. smoke_main and client_main both run end-to-end in the harness: client_main logic confirmed sound (reaches client_first, emits ARP). Localized i82 hang to proactive ARP TX before PHY link-up (→ i127, hardware-fixed; → i131, emulation regression).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 423, role: completing}
+  parent: i124
+  refs: [tools/netboot-oracle/z80/eeprom.go, tools/netboot-oracle/z80/harness.go, tools/netboot-oracle/z80/netboot_boot_test.go]
+
+- id: i124b
+  title: "emulation completeness — PHY link-up model, SD/RST-8 stub, delete NETBOOT_HOSTTEST carve-outs"
+  description: |
+    Three remaining gaps in the emulation layer: (1) model PHY link-up (PHSTAT2.LSTAT + drop-TX-while-down) so the pre-link ARP drop is reproducible in emulation; (2) SD/RST-8 stub so full client fetch runs harness-end-to-end; (3) fold server/serve/http wrappers into the harness and delete NETBOOT_HOSTTEST carve-outs (→ i126). Together these make the emulator a complete, trusted gate for every netboot path.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i124
+  refs: [tools/netboot-oracle/z80/enc28j60.go, tools/netboot-oracle/z80/harness.go, src/netboot/bdos_seam.asm, i126, i127, i131]
 
 - id: i125
   title: Section-C fit gate for every bootable netboot program (build + CI)
