@@ -2067,7 +2067,7 @@
   title: "B4 — record-selection UX: list / manual-pick / auto-pick-free + show-name + overwrite-confirm"
   description: |
     B4: the user-facing record picker — enumerate records (using B3's list-read), show names, let the user manually pick or auto-select first free, then display the chosen record's name (or 'free/unnamed') and require confirmation before any write. Needs the i138 keyboard-sysvar stub to exercise the keypress flow in emulation.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i138]
   kind: leaf
   owner: agent
