@@ -2590,3 +2590,19 @@
   owner: agent
   prs:
     - {num: 482, role: completing}
+
+- id: i156
+  title: Run the registry Go unit tests in CI (add a ci-registry gate)
+  description: |
+    CI has no go-test job for tools/registry: the registry-sync job validates the LIVE registry (id grammar inv.2 + parent inv.14) during gen, but the registry Go UNIT tests (subid_test, parent_invariant_test, gate_test, live_registry_conformance_test, mutators/priority/validate tests) never run in CI — they pass only locally, so #481 merged green without executing them. Add a ci-registry Makefile target + CI job (mirror ci-netboot-oracle) running 'go test ./...' on tools/registry so the test logic is gated. Closes the i153 audit gap (Pete checklist 8/12).
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+
+- id: i157
+  title: Document that one PR may complete multiple IN_PROGRESS items
+  description: |
+    i154 made parallel IN_PROGRESS a feature, but the docs don't say a single PR may COMPLETE several items at once (CLAUDE.md 'Multi-PR work' still reads 'each leaf with exactly one completing PR', implying one-item-per-PR). Clarify in CLAUDE.md + ROADMAP rule 1: each item still has exactly ONE completing PR, but a PR MAY complete multiple items (as #481 completed i153+i154); when mid-flight work is interrupted, track every thread and either finish or split at wind-down. Closes the i153 audit gap (Pete checklist 16).
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
