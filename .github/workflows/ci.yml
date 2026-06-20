@@ -203,6 +203,28 @@ jobs:
       - name: Run generated-table freshness guard
         run: make tables-sync-check
 
+  # registry-sync — the iN/qN work-item registry is generated from the YAML
+  # source (registry/items.yaml + questions.yaml + priority.yaml). This guard
+  # validates the source against every invariant and regenerates the committed
+  # docs/notes/*-registry-*.md + backlog.md, failing on any drift — so a
+  # hand-edit of a generated .md, or a stale regeneration, is rejected here.
+  registry-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: Build the registry CLI
+        run: make registry-gen
+      - name: Validate the registry source (all invariants)
+        run: |
+          REGISTRY_ITEMS=registry/items.yaml REGISTRY_QUESTIONS=registry/questions.yaml \
+          REGISTRY_DIR=registry REGISTRY_PRIORITY=registry/priority.yaml \
+          build/registry validate registry/items.yaml registry/questions.yaml
+      - name: Registry generated-views freshness guard
+        run: make registry-sync-check
+
   # staticcheck — dead-code (unused / U1000) gate across the core host
   # toolchain modules. Pure Go, no container; the checker is built with
   # go1.26.1 (the modules' toolchain) via GOTOOLCHAIN inside the recipe.
