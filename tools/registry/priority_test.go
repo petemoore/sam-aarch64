@@ -431,6 +431,36 @@ func TestReady_UnblockedItems(t *testing.T) {
 	}
 }
 
+// TestReadyList_PeteFilter asserts the owner:pete filter (i169a): a ready
+// owner:pete item is EXCLUDED by default (so the autonomous agent's tip is always
+// agent-actionable) and INCLUDED-FIRST under --pete-present (don't waste Pete's
+// presence).
+func TestReadyList_PeteFilter(t *testing.T) {
+	items := []Item{
+		{ID: "i10", Title: "Agent work", Status: StatusOpen, Kind: "leaf", Owner: "agent"},
+		{ID: "i20", Title: "Hardware capture", Status: StatusOpen, Kind: "leaf", Owner: "pete"},
+		{ID: "i30", Title: "More agent work", Status: StatusOpen, Kind: "leaf", Owner: "agent"},
+	}
+	byID := map[string]Item{}
+	for _, it := range items {
+		byID[it.ID] = it
+	}
+	order := []string{"i20", "i10", "i30"} // pete item ranked first
+	always := func(Item) bool { return true }
+
+	// Default (pete-away): owner:pete (i20) excluded; agent items in order.
+	away := readyList(order, byID, always, false)
+	if strings.Join(away, ",") != "i10,i30" {
+		t.Fatalf("pete-away ready = %v, want [i10 i30] (owner:pete i20 excluded)", away)
+	}
+
+	// --pete-present: owner:pete (i20) emitted FIRST, then agent items.
+	present := readyList(order, byID, always, true)
+	if strings.Join(present, ",") != "i20,i10,i30" {
+		t.Fatalf("pete-present ready = %v, want [i20 i10 i30] (owner:pete first)", present)
+	}
+}
+
 // TestReady_OpenDepExcludes asserts that an item gated on another open pullable
 // item is excluded from the ready set.
 func TestReady_OpenDepExcludes(t *testing.T) {

@@ -22,7 +22,16 @@ import (
 //     their `depends_on` edges are already edges to their children; an umbrella dep
 //     is satisfied when the umbrella is DONE.
 func runReady(args []string, paths mutatorPaths) {
-	_ = args // ready takes no flags
+	fs := flag.NewFlagSet("ready", flag.ExitOnError)
+	petePresent := fs.Bool("pete-present", false, "include owner:pete (needs-Pete-present) items and emit them first")
+	peteAway := fs.Bool("pete-away", false, "exclude owner:pete items (the default)")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	// Default is pete-away (exclude owner:pete) so the autonomous agent's tip is
+	// always agent-actionable; --pete-present includes + prioritizes them. An
+	// explicit --pete-away wins if both are passed (the safe choice).
+	includePete := *petePresent && !*peteAway
 	reg, err := loadReg(paths)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -68,44 +77,52 @@ func runReady(args []string, paths mutatorPaths) {
 		return true
 	}
 
-	// If we have a priority list, print ready items in priority order.
+	// Iterate in priority order when a priority list exists, else canonical sort.
+	var order []string
 	if len(reg.Priority) > 0 {
-		// Build a fast lookup from id to item.
-		byID := map[string]Item{}
-		for _, it := range reg.Items {
-			byID[it.ID] = it
+		order = reg.Priority
+	} else {
+		for _, it := range sortedItems(reg.Items) {
+			order = append(order, it.ID)
 		}
-		for _, id := range reg.Priority {
-			it, ok := byID[id]
-			if !ok {
-				continue
-			}
-			if !pullable[id] {
-				continue
-			}
-			if it.Status == StatusInProgress {
-				continue // already being worked — `ready` returns NEW pullable work (see `in-progress`)
-			}
-			if allDepsSatisfied(it) {
-				fmt.Println(id)
-			}
-		}
-		return
+	}
+	byID := map[string]Item{}
+	for _, it := range reg.Items {
+		byID[it.ID] = it
 	}
 
-	// No priority list: print ready items in canonical sort order.
-	sorted := sortedItems(reg.Items)
-	for _, it := range sorted {
-		if !pullable[it.ID] {
+	// A ready item is pullable, not IN_PROGRESS (already being worked — see
+	// `in-progress`), and has every depends_on edge satisfied.
+	isReady := func(it Item) bool {
+		return pullable[it.ID] && it.Status != StatusInProgress && allDepsSatisfied(it)
+	}
+	for _, id := range readyList(order, byID, isReady, includePete) {
+		fmt.Println(id)
+	}
+}
+
+// readyList computes the ready output for runReady: the ids in `order` that pass
+// `isReady`, partitioned by owner. owner:pete (needs-Pete-present) items are
+// excluded unless includePete, in which case they are emitted FIRST (don't waste
+// Pete's presence), then the agent-actionable items.
+func readyList(order []string, byID map[string]Item, isReady func(Item) bool, includePete bool) []string {
+	var peteReady, agentReady []string
+	for _, id := range order {
+		it, ok := byID[id]
+		if !ok || !isReady(it) {
 			continue
 		}
-		if it.Status == StatusInProgress {
-			continue // already being worked — see `in-progress`
-		}
-		if allDepsSatisfied(it) {
-			fmt.Println(it.ID)
+		if it.Owner == "pete" {
+			peteReady = append(peteReady, id)
+		} else {
+			agentReady = append(agentReady, id)
 		}
 	}
+	var out []string
+	if includePete {
+		out = append(out, peteReady...)
+	}
+	return append(out, agentReady...)
 }
 
 // runInProgress implements `in-progress`: prints the ids of all items currently
