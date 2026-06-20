@@ -2399,9 +2399,11 @@
   title: "registry CLI: a 'view' sub-command to print an item/question by id (replace ad-hoc YAML greps)"
   description: |
     No read command exists to inspect a single record, so agents resort to inline python/grep over registry/items.yaml (e.g. to read i133). Add 'registry view --id iN' (and qN) printing the record human-readably: id, title, status, owner, depends_on, dependents, parent, prs, refs, description — from the live registry. Optional --format yaml|json for scripting. Read-only; pairs with ready/dependents/dag.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 473, role: completing}
 
 - id: i149
   title: "registry CLI: concurrency-safe mutation (file lock + atomic write) for concurrent/parallel use"

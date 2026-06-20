@@ -310,9 +310,11 @@ The implementation lives in `registry/priority.yaml` (ordered id list),
   "what should I pick up?" suggestion a human session adjusts. A dep is satisfied
   when: the target is DONE/WONTFIX, or the target question is absent (deleted =
   answered), or the target does not exist in the registry.
-- **Other query commands** — `registry dag` prints every dependency edge (`X -> Y`
-  one per line, deterministically sorted); `registry dependents --id iN` prints the
-  ids of all items that `depends_on` iN.
+- **Other query commands** — `registry view --id iN|qN [--format text|json]` prints
+  a single record plus its computed dependents (reverse edges) and priority rank
+  (the read counterpart to the YAML — no more ad-hoc greps); `registry dag` prints
+  every dependency edge (`X -> Y` one per line, deterministically sorted);
+  `registry dependents --id iN` prints the ids of all items that `depends_on` iN.
 
 ## Generator
 
