@@ -176,30 +176,32 @@ dr_chunk_value:   defb 0
 dr_stage_ptr:     defw 0
 
 ; ===========================================================================
-; ROM region reads (HARDWARE-FIRST — guarded out of the host-test build).
+; ROM region reads (the PAGING is emulation-verified since i181/i188; the real
+; ROM *contents* stay hardware-gated).
 ;
-; The flat harness has no patched-ROM contents and does not act on LMPR/HMPR, so
-; there is nothing to assert these `ldir`s against — the captured bytes ARE the
-; point (verified on hardware via i87a, diffed in i87b). Every paging assumption
-; below ships with a `VERIFY ON HARDWARE` comment (A1-A5 in docs/plans/
-; i173-dumper.md §C).
+; Since i181 the netboot harness has a faithful SAM pager, so these `ldir`s run
+; under emulation (dumper_rompaging_test.go) with synthetic ROM fixtures: rom0
+; copies ROM0->STAGE and the paging save/restore is asserted; rom1 was the i87a
+; hardware crash and is now fixed + asserted here. What remains hardware-gated is
+; only the patched ROM's real bytes (i87a captures them, i87b diffs them; i190a
+; loads them in place of the fixtures). Guarded out of the host-test build only
+; because that build stubs the ROM path; the trinload build runs it.
 ; ===========================================================================
                 if defined(NETBOOT_HOSTTEST)==0
 
 ; dumper_read_rom0 — copy ROM0 (&0000-&3FFF, section A) into STAGE (&C000-&FFFF,
-; section D). Stack lives in section C (&8000-&BFFF, page P) and is untouched by
-; the paging below, so it stays valid throughout.
+; section D). ROM0 (section A) and STAGE (section D) are different sections, so a
+; single ldir reads one and writes the other with no scratch needed. The entry
+; LMPR is saved in memory and restored before the RET, so section B (trinload)
+; and the stack are never disturbed. Asserted by TestDumperReadROM0CopiesToStage.
 dumper_read_rom0:
                 in      a, (LMPR_PORT)
                 ld      (dr_save_lmpr), a
                 di
-                ; VERIFY ON HARDWARE (A1): clearing LMPR bit5 maps ROM0 at section A
-                ;   (&0000-&3FFF) and clearing bit6 maps RAM (HMPR+1) at section D so
-                ;   STAGE stays writable RAM. We read patched ROM low 16 KB here.
+                ; Clear bit5 -> ROM0 at section A (&0000-&3FFF); clear bit6 -> RAM
+                ; (HMPR+1) at section D, so STAGE stays writable. Reads ROM0 low 16 KB.
                 and     ~(LMPR_ROM0 | LMPR_ROM1) & &ff   ; bit5=0 ROM0 on, bit6=0 ROM1 off
                 out     (LMPR_PORT), a
-                ; VERIFY ON HARDWARE (A2): an `ldir` from &0000 reads the ROM bytes
-                ;   now mapped at section A (ROM is readable, just not writable).
                 ld      hl, &0000
                 ld      de, STAGE
                 ld      bc, REGION_BYTES
@@ -210,48 +212,37 @@ dumper_read_rom0:
                 ; STAGE now holds ROM0; SRC_PTR/XFER_SIZE default to STAGE/16384.
                 ret
 
-; dumper_read_rom1 — ROM1 lives at section D (&C000-&FFFF), colliding with STAGE.
-; Stage it to a section-A scratch page instead and override SRC_PTR to point
-; there for the transfer; leave that page mapped at section A while serving.
+; dumper_read_rom1 — ROM1 (&C000-&FFFF) maps at section D, the SAME logical window
+; as STAGE, so ROM1 and STAGE cannot both sit at &C000 at once. Read ROM1 into
+; STAGE's OWN physical page (P+1) via section A, then leave it in STAGE: with ROM1
+; off, section D = HMPR+1 = page P+1, so STAGE now holds ROM1 and serves via the
+; default SRC_PTR — no override, identical to every other region.
 ;
-; Scratch page: P-1 at section A. trinload pushed us to page P at section C
-; (&8000-&BFFF) via HMPR=P, so section A is LMPR's page; we set LMPR low5 to a
-; scratch page (here P-1, derived from HMPR) with bit5=1 (RAM) and bit6=1 (ROM1
-; at section D), copy ROM1 down to &0000, and stream from &0000.
+; STAGE's page (P+1) is the scratch precisely because it is provably free: it is
+; the dumper's own high buffer, the page the EEPROM + rom0 captures stage into
+; successfully on real hardware. (The i87a crash used P-1, which was page 0 — the
+; SAM's low memory — clobbering it AND, because the copy clobbered C, leaving LMPR
+; at &00 with section B remapped off trinload. This redesign touches only sections
+; A and D, under DI, and restores the entry LMPR from memory — never a register
+; the ldir trashes — before the RET, so page 0, the stack, and trinload's section B
+; are all untouched. i188; asserted by TestDumperReadROM1StagesToStage.)
 dumper_read_rom1:
+                in      a, (LMPR_PORT)
+                ld      (dr_save_lmpr), a       ; entry LMPR (ROM1 off; section D = STAGE)
+                in      a, (HMPR_PORT)          ; A = P (section-C page = HMPR low5)
+                inc     a                       ; A = P+1 (STAGE's physical page)
+                and     &1f                     ; low5 = STAGE page; clear bit5/6/7
+                or      LMPR_ROM0 | LMPR_ROM1   ; bit5=1 RAM at section A, bit6=1 ROM1 at section D
                 di
-                ; Build the scratch-page LMPR value once: low5 = P-1 (a free RAM
-                ; page at section A), bit5=1 (RAM, not ROM0), top bits (WPRAM) clear.
-                ; VERIFY ON HARDWARE (A3): P-1 is a free RAM page distinct from P and
-                ;   from trinload's section-B page; if trinload's layout makes P-1
-                ;   unsafe, pick another scratch page here. The dump lives at section A
-                ;   while we serve, so the dumper's own code (section C) is untouched.
-                in      a, (HMPR_PORT)          ; A = P (HMPR low5 = section-C page)
-                dec     a                       ; A = P-1
-                and     &1f                     ; low5 = scratch page; bit5/6/7 = 0
-                or      LMPR_ROM0               ; bit5=1: RAM at section A
-                ld      c, a                    ; C = the post-ldir LMPR (ROM1 off)
-                or      LMPR_ROM1               ; bit6=1: ROM1 at section D for the copy
-                out     (LMPR_PORT), a
-                ; VERIFY ON HARDWARE (A4): ROM1 is byte-addressable at &C000-&FFFF
-                ;   and an `ldir` from &C000 reads its patched high 16 KB.
-                ld      hl, &C000
-                ld      de, &0000               ; section-A scratch buffer
+                out     (LMPR_PORT), a          ; section A = STAGE page, section D = ROM1
+                ld      hl, &C000               ; ROM1 source (section D)
+                ld      de, &0000               ; STAGE page, mapped at section A (dest)
                 ld      bc, REGION_BYTES
                 ldir
-                ; Turn ROM1 off but keep the scratch RAM page at section A so the dump
-                ; at &0000-&3FFF stays readable while we serve. (HMPR — section C/D —
-                ; is unchanged; with ROM1 off section D is RAM page P+1, but the rom1
-                ; dump lives at section A, so section D is not used for this region.)
-                ld      a, c
-                out     (LMPR_PORT), a          ; scratch page at A, bit5=1, bit6=0
+                ld      a, (dr_save_lmpr)
+                out     (LMPR_PORT), a          ; restore entry LMPR: section D = STAGE = the dump; section B = trinload
                 ei
-                ; VERIFY ON HARDWARE (A5): the ENC28J60 I/O (ports &DC-&DE) is
-                ;   independent of the ROM/RAM mapping, so the serve loop transmits
-                ;   normally with the scratch page mapped at section A.
-                ; Override the serve source: stream the dump from &0000.
-                ld      hl, &0000
-                ld      (SRC_PTR), hl
+                ; STAGE now holds ROM1; SRC_PTR/XFER_SIZE default to STAGE/16384.
                 ret
 
 dr_save_lmpr:     defb 0

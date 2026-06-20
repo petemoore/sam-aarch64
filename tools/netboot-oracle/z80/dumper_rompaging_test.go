@@ -13,17 +13,17 @@
 //     ROM0 is readable through section A, STAGE (section D) is writable RAM, the
 //     ldir copies it, and LMPR is saved/restored so the routine RETs cleanly.
 //
-//   - TestDumperReadROM1ClobbersScratchPage0 REPRODUCES the i87a crash in
-//     emulation (the whole point of i181): with the push page P=1 — the value
-//     trinload used for the capture (TestTrinloadPushRunReturn pushes to page 1) —
-//     dumper_read_rom1 picks scratch page P-1 = page 0, ldirs 16 KB of ROM1 into
-//     it (clobbering low memory) and never restores LMPR (remapping section B
-//     away from the trinload that pushed it). This is a CHARACTERIZATION test: it
-//     asserts the bug is PRESENT, locking the defect the harness can now see.
-//     i188 redesigns the dumper (a genuinely-free scratch page, restored paging,
-//     a clean RET to trinload) and FLIPS these assertions to the correct
-//     behaviour. Per CLAUDE.md §5 the test stays green on main by asserting what
-//     the code does today; the fix is the separate i188 change.
+//   - TestDumperReadROM1StagesToStage verifies the i188 fix of the i87a crash.
+//     The crash: with push page P=1, the old dumper picked scratch page P-1 = 0,
+//     ldir'd ROM1 into the SAM's low memory, and (its copy clobbering C) left LMPR
+//     at &00 — section B remapped off the trinload that pushed it. The fix reads
+//     ROM1 into STAGE's OWN page (P+1, provably free — the EEPROM/rom0 captures
+//     stage there successfully) via section A, restores the entry LMPR from memory
+//     before the RET, and serves via the default SRC_PTR. The test asserts the
+//     correct behaviour: page 0 untouched, LMPR restored to the entry value, ROM1
+//     correctly staged in STAGE, and a clean RET — i.e. the i87a defect cannot
+//     recur. (This is the green descendant of i181's characterization test, flipped
+//     once i188 landed the fix it had locked.)
 //
 // Emulation-verified is not hardware-verified (CLAUDE.md §5): these prove the
 // paging logic; the captured ROM bytes themselves are still hardware-gated
@@ -110,70 +110,91 @@ func TestDumperReadROM0CopiesToStage(t *testing.T) {
 	}
 }
 
-// TestDumperReadROM1ClobbersScratchPage0 reproduces the i87a rom1 crash in
-// emulation. See the file header: this CHARACTERIZES the present bug (scratch
-// page P-1 = page 0, LMPR not restored); i188 flips it.
-func TestDumperReadROM1ClobbersScratchPage0(t *testing.T) {
-	// Entry LMPR 0x22: section A = page 2, section B = page 3. Section B is the
-	// &6000 window the trinload that pushed us lives in, so "trinload's page" is
-	// page 3 here; we will show the bug leaves section B mapped elsewhere.
-	const entryLMPR = 0x22
+// TestDumperReadROM1StagesToStage verifies the i188 fix: rom1 stages ROM1 into
+// STAGE via STAGE's own (free) page, leaves page 0 + the entry LMPR + section B
+// untouched, and RETs cleanly — the i87a crash cannot recur. See the file header.
+func TestDumperReadROM1StagesToStage(t *testing.T) {
+	// Entry LMPR 0x24: section A = page 4, section B = page 5 (= "trinload"'s
+	// window, which must survive), HMPR=1 -> section C = dumper code (page 1),
+	// section D = STAGE (page 2 = P+1). The fix's scratch is page 2 (STAGE's own
+	// page), distinct from page 0 (low memory) and page 5 (trinload).
+	const (
+		entryLMPR = 0x24
+		stagePage = dumperPushPage + 1 // P+1 = 2
+	)
 	mac := loadDumperPaged(t, entryLMPR)
 
 	rom1 := distinctFill(1)
 	copy(mac.Pager().ROM[sampage.PageSize:2*sampage.PageSize], rom1) // ROM1 = high 16 KB
 
-	// Seed page 0 — the page the buggy scratch choice (P-1 = 0) will land on —
-	// with a stand-in for the SAM's live low memory / trinload state, so its
-	// destruction is observable.
+	// Seed page 0 (the SAM's low memory — what the i87a bug destroyed) so we can
+	// assert the fix never touches it.
 	page0Sentinel := distinctFill(99)
 	copy(mac.Pager().RAM[0][:], page0Sentinel)
 
-	// Stop exactly at the routine's final RET (the byte before dr_save_lmpr),
-	// before it pops a return address off a stack whose section B the routine
-	// just remapped — so we inspect the damage cleanly, without the wandering RET
-	// executing further and corrupting the post-state.
-	retAddr := symAddr(t, mac, "dr_save_lmpr") - 1
-	if op := mac.Read(retAddr, 1)[0]; op != 0xC9 {
-		t.Fatalf("expected RET (0xC9) at &%04X (dr_save_lmpr-1), got 0x%02x", retAddr, op)
-	}
-	res, err := mac.RunBoot("dumper_read_rom1", z80h.Entry{StopPC: retAddr})
+	res, err := mac.CallEntry("dumper_read_rom1", z80h.Entry{})
 	if err != nil {
-		t.Fatalf("run dumper_read_rom1: %v", err)
+		t.Fatalf("call dumper_read_rom1: %v", err)
 	}
-	if !res.ReachedStop {
-		t.Fatalf("did not reach the rom1 RET (PC=&%04X, steps=%d)", res.PC, res.Steps)
-	}
-
-	// BUG 1 — scratch page collision: the routine ldir'd ROM1 into page 0, the
-	// SAM's low memory, destroying what was there. A correct dumper (i188) picks
-	// a genuinely-free scratch page, leaving page 0 untouched.
-	page0 := mac.Pager().RAM[0][:sampage.PageSize]
-	if bytes.Equal(page0, page0Sentinel) {
-		t.Errorf("page 0 was NOT clobbered — the i87a scratch-page bug did not reproduce (P-1=0 collision expected)")
-	}
-	if !bytes.Equal(page0, rom1) {
-		t.Errorf("page 0 was overwritten but not with ROM1 — unexpected scratch behaviour")
+	if !res.Halted {
+		t.Fatalf("dumper_read_rom1 did not RET cleanly (PC=&%04X) — paging not restored", res.PC)
 	}
 
-	// BUG 2 — LMPR not restored, and left at &00 (a COMPOUND defect): the routine
-	// never restores the entry LMPR, AND the value it does leave is wrong. It
-	// stashes the intended post-copy LMPR (&20) in C (`ld c,a`), then does
-	// `ld bc,REGION_BYTES; ldir` — the ldir counts BC down to 0, clobbering C — so
-	// the final `ld a,c; out (&FA),a` writes &00, not &20. Result: section A=ROM0
-	// (bit5=0) and section B=page 1, the trinload-at-&6000 window remapped away
-	// from trinload entirely. i188 (free scratch page, registers not clobbered by
-	// the copy, entry LMPR restored) flips this to LMPR == entryLMPR.
-	if got := mac.Pager().LMPR; got == entryLMPR {
-		t.Errorf("LMPR was restored to the entry value &%02X — the i87a no-restore bug did not reproduce", entryLMPR)
-	} else if got != 0x00 {
-		t.Errorf("LMPR = &%02X after rom1, want &00 (the ldir-clobbered-C scratch restore)", got)
+	// ROM1 staged into STAGE (page P+1), served via the default SRC_PTR.
+	if got := mac.Pager().RAM[stagePage][:sampage.PageSize]; !bytes.Equal(got, rom1) {
+		for i := range rom1 {
+			if got[i] != rom1[i] {
+				t.Fatalf("STAGE byte %d = 0x%02x, want 0x%02x (ROM1 not staged correctly)", i, got[i], rom1[i])
+			}
+		}
 	}
-	entrySecB := int(entryLMPR&0x1F+1) & 0x1F
-	bugSecB := int(mac.Pager().LMPR&0x1F+1) & 0x1F
-	if bugSecB == entrySecB {
-		t.Errorf("section B still maps page %d — the trinload-window remap did not reproduce", entrySecB)
+
+	// Page 0 (low memory) UNTOUCHED — the i87a scratch-page collision is gone.
+	if got := mac.Pager().RAM[0][:sampage.PageSize]; !bytes.Equal(got, page0Sentinel) {
+		t.Errorf("page 0 was modified — the i87a low-memory clobber recurred (scratch must be STAGE's page %d, not page 0)", stagePage)
 	}
-	t.Logf("i87a crash reproduced: page 0 clobbered with ROM1; LMPR &%02X->&%02X (section B page %d->%d, away from trinload)",
-		entryLMPR, mac.Pager().LMPR, entrySecB, bugSecB)
+
+	// Entry LMPR restored — section B still maps trinload's page, so the dumper's
+	// RET to trinload lands cleanly (the i87a no-restore / ldir-clobbered-C defect
+	// is gone).
+	if got := mac.Pager().LMPR; got != entryLMPR {
+		t.Errorf("LMPR = &%02X after rom1, want the entry value &%02X (paging not restored)", got, entryLMPR)
+	}
+}
+
+// TestDumperServeROM1RoundTrip is the end-to-end emulation proof: drive a real
+// bare-RRQ TFTP transfer of rom1.bin through serve_serve_once with the
+// dumper_refresh_region hook armed (which invokes the fixed dumper_read_rom1),
+// and assert the streamed DATA reconstructs the programmed ROM1 fixture
+// byte-for-byte. This exercises the FULL path that crashed on hardware — the
+// ROM-paging read + the hook dispatch + the serve loop streaming STAGE — in the
+// emulator, the verification the i87a capture lacked (CLAUDE.md §7). It reuses
+// the EEPROM round-trip machinery (streamRegion etc.); the only difference is the
+// trinload build (ROM path compiled in) loaded paged, and ROM1 as the source.
+func TestDumperServeROM1RoundTrip(t *testing.T) {
+	mac := loadDumperPaged(t, 0x24)
+	rom1 := distinctFill(1)
+	copy(mac.Pager().ROM[sampage.PageSize:2*sampage.PageSize], rom1) // ROM1 = high 16 KB
+
+	fillDumperConfig(t, mac) // CONFIG_* + STORE/SRC_TABLE (rom1.bin -> STAGE)
+	enc := z80h.NewENC28J60()
+	initDumperDriver(t, mac, enc)
+
+	got, blocks := streamRegion(t, mac, enc, "rom1.bin")
+	if !bytes.Equal(got, rom1) {
+		for i := range rom1 {
+			if got[i] != rom1[i] {
+				t.Fatalf("rom1.bin byte %d = 0x%02x, want 0x%02x (ROM1 not served correctly)", i, got[i], rom1[i])
+			}
+		}
+	}
+	// 16 KB at 512-byte blocks = 32 full + 1 zero-length terminator.
+	if want := stageBytes/512 + 1; blocks != want {
+		t.Errorf("rom1.bin transfer took %d DATA blocks, want %d", blocks, want)
+	}
+	// And page 0 (low memory) must still be pristine after a full serve.
+	var zero [sampage.PageSize]byte
+	if !bytes.Equal(mac.Pager().RAM[0][:], zero[:]) {
+		t.Errorf("page 0 was modified during the rom1 serve — the i87a clobber recurred")
+	}
 }
