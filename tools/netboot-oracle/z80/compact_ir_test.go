@@ -360,11 +360,9 @@ func checkCompactFixture(t *testing.T, name string, src []byte) {
 	if err != nil {
 		t.Fatalf("%s: host Pass1: %v", name, err)
 	}
-	// The flat harness tracks only the low 32 bits of PC and does not separate
-	// OriginVMA, so a fixture with a non-zero origin is out of non-encoder scope.
-	if p1.OriginVMA != 0 {
-		t.Skipf("%s: non-zero OriginVMA (0x%x) out of compact-ir fixture scope", name, p1.OriginVMA)
-	}
+	// A non-zero OriginVMA IS in scope: the Z80 compact-core captures OriginVMA's
+	// low word (ORIGIN_LOW, set by the seeding `.org`) and computes the sidecar
+	// anchor as RecordPC - OriginVMA, exactly as host Compact (compact.go:109/129).
 	wantRecs, wantSidecar, wantGlobals, err := assemble.Compact(f, p1)
 	if err != nil {
 		t.Fatalf("%s: host Compact: %v", name, err)
@@ -521,6 +519,18 @@ func TestCompactIRCoreFixtures(t *testing.T) {
 		// The 1016-byte LitData split: 255 .word operands = 1020 bytes → two
 		// records (1016 + 4) on whole-element (4-byte) boundaries.
 		"data_split": wordsFixture(255),
+		// Non-zero origin: a leading `.org 0x1000` seeds OriginVMA, so each
+		// record's RecordPC is its VMA and the sidecar anchor is RecordPC -
+		// OriginVMA (= the byte offset from origin). The trailing comment anchors
+		// at offset 4 (one instruction past origin), proving the subtraction.
+		"org_small": ".org 0x1000\n  mov x0, x1\n// at offset 4\n  ret\n",
+		// Kernel-VMA origin (the spectrum4 link origin's shape): OriginVMA's low
+		// word is 0, so RecordPC.low - OriginVMA.low still yields the offset (the
+		// high words cancel). The comment again anchors at offset 4.
+		"org_high": ".org 0xfffffff000000000\n  mov x0, x1\n// kernel-vma offset 4\n  ret\n",
+		// `. =` alias for `.org`, with a comment BEFORE the origin-setting line —
+		// its RecordPC (0) is below OriginVMA, so the anchor clamps to 0.
+		"org_dot_eq": "// before origin\n. = 0x8000\n  mov x0, x1\n  ret\n",
 	}
 	names := make([]string, 0, len(hand))
 	for n := range hand {

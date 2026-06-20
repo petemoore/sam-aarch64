@@ -34,12 +34,12 @@
 ; the shared PASS1_IR_BUF/PASS1_IR_LEN input + COMPACT_REC_PC capture array.
 ;
 ; compact_ir_walk runs pass1_ir_walk FIRST (with RecordPC capture enabled) to
-; populate the symbol/litpool tables and COMPACT_REC_PC[], then walks the IR a
-; second time emitting the compact-core outputs. OriginVMA's low 32 bits are not
-; tracked separately — the corpus fixtures are origin 0, so the anchor is
-; RecordPC[i] (the captured PASS_PC) directly; a leading `.org` that sets a
-; non-zero OriginVMA is out of the b8b non-encoder fixture scope (the host test
-; skips it).
+; populate the symbol/litpool tables, COMPACT_REC_PC[], and ORIGIN_LOW (the
+; OriginVMA low word, set by the seeding `.org`), then walks the IR a second time
+; emitting the compact-core outputs. The sidecar anchor is RecordPC - OriginVMA
+; (compact.go:109/129), computed by compact_store_anchor as COMPACT_REC_PC[i] -
+; ORIGIN_LOW with a clamp to 0 — so a leading `.org` that sets a non-zero
+; OriginVMA (incl. the spectrum4 kernel VMA) is handled faithfully, not skipped.
 ;
 ; Outputs are read back by tools/netboot-oracle/z80/compact_ir_test.go and
 ; byte-compared against assemble.Compact's sidecar / globals / records.
@@ -107,6 +107,8 @@ compact_data_n:         equ     &FFA6          ; u16
 compact_sidecar_ptr:    equ     &FFA8          ; u16
 compact_globals_ptr:    equ     &FFAA          ; u16
 compact_recs_ptr:       equ     &FFAC          ; u16
+; (ORIGIN_LOW occupies &FFB0-&FFB3, equ'd in the included test_pass1_ir.asm.)
+compact_anchor_buf:     equ     &FFB4          ; 4 bytes — anchor subtraction scratch
 
 
 ; -----------------------------------------------------------------------
@@ -315,22 +317,50 @@ compact_blank:
 
 ; -----------------------------------------------------------------------
 ; compact_store_anchor — write the current record's anchor (4-byte LE) at (HL),
-; advancing HL past it. anchor = COMPACT_REC_PC[rec_index] (the corpus is origin
-; 0, so RecordPC - OriginVMA == RecordPC; clamp is a no-op for >= 0 offsets).
-; Input:  HL = dest. Output: HL += 4. Clobbers: A, BC, DE.
+; advancing HL past it. anchor = RecordPC - OriginVMA, clamped >= 0 — exactly the
+; host Compact computation (compact.go:109-112 / 129-132): the 4-byte
+; COMPACT_REC_PC[rec_index] (the captured PASS_PC low word) minus ORIGIN_LOW (the
+; OriginVMA low word). The high words cancel (both sides share the same origin
+; high word), so the low-word subtraction is the full offset-from-origin. A
+; borrow (RecordPC's low word < OriginVMA's low word — a record before the
+; origin-setting `.org`) clamps the anchor to 0, like the host `if anchor < 0`.
+; Input:  HL = dest. Output: HL += 4. Clobbers: A, BC, DE, IX.
 ; -----------------------------------------------------------------------
 compact_store_anchor:
-                push    hl
+                push    hl                              ; save dest
+; IX = &COMPACT_REC_PC[rec_index] (RecordPC low word, the minuend).
                 ld      hl, (compact_rec_index)
                 add     hl, hl
                 add     hl, hl                          ; *4
                 ld      de, COMPACT_REC_PC
-                add     hl, de                          ; HL = &COMPACT_REC_PC[i]
-                ex      de, hl                          ; DE = src
-                pop     hl                              ; HL = dest
+                add     hl, de
+                push    hl
+                pop     ix
+; anchor_buf := COMPACT_REC_PC[i] - ORIGIN_LOW (4-byte LE, CF = final borrow).
+                ld      hl, ORIGIN_LOW                  ; subtrahend
+                ld      de, compact_anchor_buf          ; result
+                or      a                               ; clear CF
+                ld      b, 4
+compact_anchor_sub:
+                ld      a, (ix+0)
+                sbc     a, (hl)
+                ld      (de), a
+                inc     ix
+                inc     hl
+                inc     de
+                djnz    compact_anchor_sub
+; CF set ⇒ RecordPC < OriginVMA ⇒ clamp anchor to 0.
+                jr      nc, compact_anchor_store
+                xor     a
+                ld      (compact_anchor_buf + 0), a
+                ld      (compact_anchor_buf + 1), a
+                ld      (compact_anchor_buf + 2), a
+                ld      (compact_anchor_buf + 3), a
+compact_anchor_store:
+                pop     de                              ; DE = dest
+                ld      hl, compact_anchor_buf
                 ld      bc, 4
-                ex      de, hl                          ; HL = src, DE = dest
-                ldir
+                ldir                                    ; copy anchor → dest
                 ex      de, hl                          ; HL = dest after anchor
                 ret
 

@@ -79,6 +79,16 @@ LITPOOL_EXPR_BUF_END: equ &E100
 ; flag stays 0); the symbol exists so the link resolves.
 COMPACT_REC_PC: equ     &F000          ; 128 * 4 = 512 B → &F200
 
+; ORIGIN_LOW — the low 32 bits of OriginVMA (u32 LE), the partner of ORIGIN_HIGH.
+; The compact-core sidecar anchor is RecordPC - OriginVMA (compact.go:109/129);
+; RecordPC's low word is captured per record in COMPACT_REC_PC, so the subtraction
+; needs OriginVMA's low word too. Set only by the OriginVMA-seeding `.org` path
+; (the host's pass1.go:291-294 gate), 0 otherwise. Lives in the &F000-page tail
+; (&FFB0, after the compact harness's scratch cells which end at &FFAE) so it is
+; free in both this standalone harness and the b8b compact harness; b8a never
+; reads it (the anchor subtraction is b8b-only), the symbol just resolves the link.
+ORIGIN_LOW:     equ     &FFB0          ; 4 bytes — low word of OriginVMA (u32 LE)
+
 PASS_PASS1:     equ     1
 PASS_PASS2:     equ     2
 
@@ -113,6 +123,15 @@ pass1_ir_walk:
                 call    local_label_table_init
                 call    litpool_init
                 call    pass_pc_reset
+
+; ORIGIN_LOW := 0. pass_pc_reset clears PASS_PC + ORIGIN_HIGH; ORIGIN_LOW is the
+; harness-only low-word partner (only the OriginVMA-seeding `.org` sets it), so
+; zero it here so a fixture with no leading `.org` anchors at RecordPC directly.
+                xor     a
+                ld      (ORIGIN_LOW + 0), a
+                ld      (ORIGIN_LOW + 1), a
+                ld      (ORIGIN_LOW + 2), a
+                ld      (ORIGIN_LOW + 3), a
 
 ; HL = cursor into the IR buffer; DE = bytes remaining.
                 ld      hl, PASS1_IR_BUF
@@ -486,17 +505,87 @@ p1ir_dir_ltorg:
                 jp      p1ir_advance
 
 
-; ---- .org — set PASS_PC := target (pass1.go:270-300). The OriginVMA case
-; (first .org before any output, target != 0) is faithfully ported: at PASS_PC
-; == 0 with no pool entries and ORIGIN_HIGH still 0, the target seeds both
-; PASS_PC and ORIGIN_HIGH. Otherwise the target must be >= current PASS_PC
-; (backward .org is an error) and PASS_PC := target.
+; ---- .org — set PASS_PC := target (pass1.go:270-300). The OriginVMA-seeding
+; case (host pass1.go:291-294) is faithfully ported: when PASS_PC == 0, no pool
+; entries are allocated, the origin (ORIGIN_LOW:ORIGIN_HIGH) is still 0, and the
+; target != 0, the target SEEDS the origin — set ORIGIN_LOW:ORIGIN_HIGH and
+; PASS_PC to the target and (like the host) SKIP the backward check. Otherwise
+; the backward check applies (target_low32 >= PASS_PC) and PASS_PC := target,
+; ORIGIN_HIGH := target_high32 (origin unchanged on a non-seeding `.org`).
 ;
-; PASS_PC tracks the low 32 bits; the .org backward / set logic mirrors
-; main_dir_org_pass1 + main_dir_org_set_pc.
+; ORIGIN_LOW is the low word the compact-core anchor (RecordPC - OriginVMA)
+; subtracts; ORIGIN_HIGH is re-applied by the origin-relative push handlers.
+; PASS_PC tracks only the low 32 bits. Mirrors main_dir_org_pass1 +
+; main_dir_org_set_pc plus the seeding gate.
 p1ir_dir_org:
                 call    main_eval_first_imm         ; expr_result = target (8-byte LE)
 
+; ---- Seeding gate: PASS_PC == 0 ----------------------------------------
+                ld      a, (PASS_PC + 0)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (PASS_PC + 1)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (PASS_PC + 2)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (PASS_PC + 3)
+                or      a
+                jr      nz, p1ir_org_not_seed
+; ---- origin (ORIGIN_LOW:ORIGIN_HIGH) still 0 ---------------------------
+                ld      a, (ORIGIN_LOW + 0)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (ORIGIN_LOW + 1)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (ORIGIN_LOW + 2)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (ORIGIN_LOW + 3)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (ORIGIN_HIGH + 0)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (ORIGIN_HIGH + 1)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (ORIGIN_HIGH + 2)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (ORIGIN_HIGH + 3)
+                or      a
+                jr      nz, p1ir_org_not_seed
+; ---- no pool entries allocated yet (host len(PoolEntries) == 0) --------
+                ld      a, (LITPOOL_COUNT)
+                or      a
+                jr      nz, p1ir_org_not_seed
+; ---- target != 0 (full 64 bits) ---------------------------------------
+                ld      hl, expr_result
+                ld      b, 8
+                xor     a
+p1ir_org_seed_nz:
+                or      (hl)
+                inc     hl
+                djnz    p1ir_org_seed_nz
+                or      a
+                jr      z, p1ir_org_not_seed        ; target == 0 → ordinary advance
+
+; Seed: ORIGIN_LOW := target_low32, ORIGIN_HIGH := target_high32,
+; PASS_PC := target_low32. Backward check is skipped (host returns immediately).
+                ld      hl, expr_result + 0
+                ld      de, ORIGIN_LOW
+                ld      bc, 4
+                ldir
+                ld      hl, expr_result + 4
+                ld      de, ORIGIN_HIGH
+                ld      bc, 4
+                ldir
+                jp      p1ir_org_set_pc
+
+p1ir_org_not_seed:
 ; Backward check: CF = (target_low32 < PASS_PC).
                 ld      a, (expr_result + 0)
                 ld      hl, PASS_PC
@@ -512,7 +601,15 @@ p1ir_dir_org:
                 sbc     a, (hl)
                 jp      c, p1ir_org_backward
 
-; PASS_PC := expr_result[0..3]; ORIGIN_HIGH := expr_result[4..7].
+; ORIGIN_HIGH := target_high32 (a non-seeding `.org` advances PC; the origin's
+; high word still tracks the current VMA's high word for origin-relative pushes).
+                ld      hl, expr_result + 4
+                ld      de, ORIGIN_HIGH
+                ld      bc, 4
+                ldir
+
+p1ir_org_set_pc:
+; PASS_PC := expr_result[0..3].
                 ld      a, (expr_result + 0)
                 ld      (PASS_PC + 0), a
                 ld      a, (expr_result + 1)
@@ -521,10 +618,6 @@ p1ir_dir_org:
                 ld      (PASS_PC + 2), a
                 ld      a, (expr_result + 3)
                 ld      (PASS_PC + 3), a
-                ld      hl, expr_result + 4
-                ld      de, ORIGIN_HIGH
-                ld      bc, 4
-                ldir
                 ld      bc, (p1ir_dir_size)
                 jp      p1ir_advance
 
