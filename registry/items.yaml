@@ -254,9 +254,11 @@
   title: Per-fail-site diagnostic strings
   description: |
     Add per-fail-site diagnostic strings to test failures so failures are more easily identified without a disassembler. Deferred-backlog item.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 506, role: completing}
 
 - id: i23
   title: "Paged-IN HLOAD-ceiling lift (current ceiling: 96 KB = 6 pages 7..12, src/assembler.asm:49)"
