@@ -104,7 +104,7 @@ pp_init_res_loop:
 ;
 ; Entry: A = page (0..PP_MAX_PAGES-1).
 ; Return: A = 0 on success, A = PP_FAIL if the page is out of range.
-; Clobbers: HL (and A holds the result).
+; Clobbers: D, E, HL (and A holds the result).
 ; ===========================================================================
 pp_reserve:
                 cp      PP_MAX_PAGES
