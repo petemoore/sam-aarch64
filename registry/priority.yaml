@@ -5,6 +5,9 @@
 #               registry move --id iN --after iM
 - i150
 - i121
+- i122b
+- i122c
+- i122d
 - i133
 - i93b
 - i95b
@@ -88,6 +91,3 @@
 - i114a
 - i114b
 - i152
-- i122b
-- i122c
-- i122d
