@@ -75,6 +75,8 @@ SK_ADR:         equ     &26
 ; is self-contained regardless of include order.
 OPK_REG_LO:     equ     &01     ; REG_X
 OPK_REG_HI:     equ     &04     ; REG_WSP (reg kinds are the &01..&04 run)
+OPK_REG_X:      equ     &01     ; REG_X  (is64 marker)
+OPK_REG_W:      equ     &02     ; REG_W  (32-bit marker)
 OPK_IMM_EXPR:   equ     &05
 OPK_COND:       equ     &0a
 
@@ -105,6 +107,39 @@ enc_kinds_loop:
                 pop     bc
                 djnz    enc_kinds_loop
 enc_after_kinds:
+
+; -- Special-form intercepts (mirror Go pass2.go:337-353 switch) --------
+; lsl/lsr (17/18) and bitfield (49/50/51/83/84) bypass the form table
+; unconditionally; ror (70) only when its 3rd operand is an immediate
+; (the reg form -> RORV goes through the form table).  All other
+; mnemonics fall through to the generic form-table path below.
+                ld      a, (enc_mnem + 1)
+                or      a
+                jr      nz, enc_after_special       ; id >= 256: never special
+                ld      a, (enc_mnem)
+                cp      17
+                jp      z, enc_lslsr
+                cp      18
+                jp      z, enc_lslsr
+                cp      49
+                jp      z, enc_bitfield
+                cp      50
+                jp      z, enc_bitfield
+                cp      51
+                jp      z, enc_bitfield
+                cp      83
+                jp      z, enc_bitfield
+                cp      84
+                jp      z, enc_bitfield
+                cp      70
+                jr      nz, enc_after_special
+                ld      a, (enc_op_count)           ; ror imm form needs op[2]
+                cp      3
+                jr      c, enc_after_special
+                ld      a, (OPVAL_KINDS + 2)
+                cp      OPK_IMM_EXPR
+                jp      z, enc_ror
+enc_after_special:
 
 ; -- Form lookup: find first form for the mnemonic, then match kinds ----
                 ld      de, (enc_mnem)
@@ -239,9 +274,9 @@ enc_skip_operand:
                 cp      OPK_COND
                 jr      z, enc_skip_one
                 cp      OPK_IMM_EXPR
-                jr      nc, enc_fail_unsupported_operand
+                jp      nc, enc_fail_unsupported_operand
                 or      a
-                jr      z, enc_fail_unsupported_operand
+                jp      z, enc_fail_unsupported_operand
 enc_skip_one:
                 inc     hl
                 ret
@@ -295,12 +330,359 @@ enc_fsid_adrp:  ld      a, FSID_ADRP
 enc_fsid_adr:   ld      a, FSID_ADR
                 ret
 
+; =======================================================================
+; Special-form encoders (i203a / i48c-b8e-2 first sub-brick).
+;
+; Port of pass2.go::encodeLSLSR / encodeBitfieldInst / encodeRorImm.
+; These bypass the form table: each computes immr/imms (or a register
+; field) by pure arithmetic over the evaluated immediates, then places
+; the fields into a fixed base word.  All three share enc_build_word,
+; which lays out the common UBFM/BFM/SBFM/EXTR field positions:
+;
+;   word = base | (immr << 16) | (imms << 10) | (Rn << 5) | Rd
+;
+; (LSLV/LSRV reuse the same shape with immr=Rm, imms=0; ror reuses it
+;  with immr=Rn, imms=shift — Rn<<16 and immr occupy the same bits.)
+;
+; Each handler is reached via the dispatch above with the same register
+; contract as encode_inst: returns the 32-bit word in DEHL (L=byte0,
+; H=byte1, E=byte2, D=byte3), or jp-fails with a tag.
+; =======================================================================
+
+; -- enc_lslsr — lsl(17)/lsr(18): reg-shift -> LSLV/LSRV, imm -> UBFM ----
+enc_lslsr:
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (Rd)
+                call    enc_rd_width                ; sets enc_regmask, enc_rd
+                ld      a, 1
+                call    enc_nth_operand             ; HL -> op1 (Rn)
+                inc     hl
+                ld      a, (hl)
+                ld      (enc_rn), a
+                ld      a, 2
+                call    enc_nth_operand             ; HL -> op2 (imm or reg)
+                ld      (enc_op2ptr), hl
+                ld      a, (hl)                     ; op2 kind
+                cp      OPK_REG_X
+                jr      z, enc_lslsr_reg
+                cp      OPK_REG_W
+                jr      z, enc_lslsr_reg
+
+; imm form: compute immr/imms, base = UBFM.
+                ld      hl, (enc_op2ptr)
+                call    enc_eval_at                 ; shift -> expr_result
+                ld      a, (expr_result)
+                ld      (enc_shift), a
+                ld      a, (enc_mnem)
+                cp      17
+                jr      z, enc_lsl_imm
+; lsr: immr = shift & regmask ; imms = (regsize-1) & 0x3f
+                ld      a, (enc_shift)
+                ld      hl, enc_regmask
+                and     (hl)
+                ld      (enc_immr), a
+                ld      a, (enc_regmask)
+                and     &3f
+                ld      (enc_imms), a
+                jr      enc_lslsr_ubfm
+enc_lsl_imm:
+; lsl: immr = (-shift) & regmask ; imms = (regsize-1-shift) & 0x3f
+                xor     a
+                ld      hl, enc_shift
+                sub     (hl)                        ; A = -shift
+                ld      hl, enc_regmask
+                and     (hl)
+                ld      (enc_immr), a
+                ld      a, (enc_regmask)
+                ld      hl, enc_shift
+                sub     (hl)                        ; regmask - shift
+                and     &3f
+                ld      (enc_imms), a
+enc_lslsr_ubfm:
+                ld      hl, enc_base_ubfm64
+                ld      a, (enc_regmask)
+                cp      63
+                jr      z, enc_lslsr_imm_emit
+                ld      hl, enc_base_ubfm32
+enc_lslsr_imm_emit:
+                call    enc_copy_base
+                jp      enc_build_word
+
+enc_lslsr_reg:
+; reg-shift: immr = Rm, imms = 0, base = LSLV/LSRV by mnem+width.
+                inc     hl
+                ld      a, (hl)
+                ld      (enc_immr), a               ; immr := Rm
+                xor     a
+                ld      (enc_imms), a
+                ld      a, (enc_mnem)
+                cp      17
+                jr      z, enc_lslv
+; lsrv
+                ld      hl, enc_base_lsrv64
+                ld      a, (enc_regmask)
+                cp      63
+                jr      z, enc_lslsr_reg_emit
+                ld      hl, enc_base_lsrv32
+                jr      enc_lslsr_reg_emit
+enc_lslv:
+                ld      hl, enc_base_lslv64
+                ld      a, (enc_regmask)
+                cp      63
+                jr      z, enc_lslsr_reg_emit
+                ld      hl, enc_base_lslv32
+enc_lslsr_reg_emit:
+                call    enc_copy_base
+                jp      enc_build_word
+
+; -- enc_bitfield — bfi/bfxil/ubfx/bfc/sbfx (BFM/UBFM/SBFM aliases) ------
+enc_bitfield:
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (Rd)
+                call    enc_rd_width                ; enc_regmask, enc_rd
+                ld      a, (enc_mnem)
+                cp      83
+                jr      z, enc_bf_bfc
+; bfi/bfxil/ubfx/sbfx: Rn=op1, lsb=op2, width=op3
+                ld      a, 1
+                call    enc_nth_operand
+                inc     hl
+                ld      a, (hl)
+                ld      (enc_rn), a
+                ld      a, 2
+                call    enc_nth_operand
+                call    enc_eval_at                 ; lsb -> expr_result
+                ld      a, (expr_result)
+                ld      (enc_lsb), a
+                ld      a, 3
+                call    enc_nth_operand
+                call    enc_eval_at                 ; width -> expr_result
+                ld      a, (expr_result)
+                ld      (enc_width), a
+                jr      enc_bf_compute
+enc_bf_bfc:
+; bfc: Rn implicitly XZR (31), lsb=op1, width=op2
+                ld      a, 31
+                ld      (enc_rn), a
+                ld      a, 1
+                call    enc_nth_operand
+                call    enc_eval_at
+                ld      a, (expr_result)
+                ld      (enc_lsb), a
+                ld      a, 2
+                call    enc_nth_operand
+                call    enc_eval_at
+                ld      a, (expr_result)
+                ld      (enc_width), a
+enc_bf_compute:
+                ld      a, (enc_mnem)
+                cp      49
+                jr      z, enc_bf_fA                ; bfi
+                cp      83
+                jr      z, enc_bf_fA                ; bfc
+; formula B (bfxil/ubfx/sbfx): immr = lsb & 0x3f ; imms = (lsb+width-1) & 0x3f
+                ld      a, (enc_lsb)
+                and     &3f
+                ld      (enc_immr), a
+                ld      a, (enc_lsb)
+                ld      hl, enc_width
+                add     a, (hl)
+                dec     a
+                and     &3f
+                ld      (enc_imms), a
+                jr      enc_bf_base
+enc_bf_fA:
+; formula A (bfi/bfc): immr = (-lsb) & regmask ; imms = (width-1) & 0x3f
+                xor     a
+                ld      hl, enc_lsb
+                sub     (hl)
+                ld      hl, enc_regmask
+                and     (hl)
+                ld      (enc_immr), a
+                ld      a, (enc_width)
+                dec     a
+                and     &3f
+                ld      (enc_imms), a
+enc_bf_base:
+; base: UBFM for ubfx(51), SBFM for sbfx(84), else BFM.
+                ld      a, (enc_mnem)
+                cp      51
+                jr      z, enc_bf_ubfm
+                cp      84
+                jr      z, enc_bf_sbfm
+                ld      hl, enc_base_bfm64
+                ld      a, (enc_regmask)
+                cp      63
+                jr      z, enc_bf_emit
+                ld      hl, enc_base_bfm32
+                jr      enc_bf_emit
+enc_bf_ubfm:
+                ld      hl, enc_base_ubfm64
+                ld      a, (enc_regmask)
+                cp      63
+                jr      z, enc_bf_emit
+                ld      hl, enc_base_ubfm32
+                jr      enc_bf_emit
+enc_bf_sbfm:
+                ld      hl, enc_base_sbfm64
+                ld      a, (enc_regmask)
+                cp      63
+                jr      z, enc_bf_emit
+                ld      hl, enc_base_sbfm32
+enc_bf_emit:
+                call    enc_copy_base
+                jp      enc_build_word
+
+; -- enc_ror — ror imm: EXTR Rd,Rn,Rn,#shift alias ----------------------
+enc_ror:
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (Rd)
+                call    enc_rd_width
+                ld      a, 1
+                call    enc_nth_operand             ; HL -> op1 (Rn)
+                inc     hl
+                ld      a, (hl)
+                ld      (enc_rn), a
+                ld      (enc_immr), a               ; immr := Rn (Rn<<16)
+                ld      a, 2
+                call    enc_nth_operand             ; HL -> op2 (shift)
+                call    enc_eval_at
+                ld      a, (expr_result)
+                and     &3f
+                ld      (enc_imms), a               ; imms := shift
+                ld      hl, enc_base_extr64
+                ld      a, (enc_regmask)
+                cp      63
+                jr      z, enc_ror_emit
+                ld      hl, enc_base_extr32
+enc_ror_emit:
+                call    enc_copy_base
+                jp      enc_build_word
+
+; -- enc_rd_width — HL -> Rd operand; set enc_regmask (63/31) + enc_rd ---
+; is64 iff Rd kind != OpRegW.  Preserves nothing; returns with HL past Rd.
+enc_rd_width:
+                ld      a, (hl)                     ; Rd kind
+                cp      OPK_REG_W
+                ld      a, 63
+                jr      nz, enc_rd_width_store
+                ld      a, 31
+enc_rd_width_store:
+                ld      (enc_regmask), a
+                inc     hl
+                ld      a, (hl)                     ; Rd reg
+                ld      (enc_rd), a
+                ret
+
+; -- enc_nth_operand — A = operand index; returns HL -> that operand ----
+enc_nth_operand:
+                ld      hl, (enc_op_ptr)
+                or      a
+                ret     z
+                ld      b, a
+enc_nth_loop:
+                push    bc                          ; enc_skip_operand clobbers BC
+                call    enc_skip_operand
+                pop     bc
+                djnz    enc_nth_loop
+                ret
+
+; -- enc_eval_at — HL -> IMM_EXPR operand; evaluate into expr_result ----
+; Operand layout: [kind=&05][len u16 LE][expr bytes].  Tail-calls
+; eval_expr_const (returns to enc_eval_at's caller).
+enc_eval_at:
+                inc     hl                          ; -> len_lo
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)                     ; BC = expr length
+                inc     hl                          ; HL -> expr bytes
+                jp      eval_expr_const
+
+; -- enc_copy_base — copy 4 base bytes (HL) into enc_base ---------------
+enc_copy_base:
+                ld      de, enc_base
+                ld      bc, 4
+                ldir
+                ret
+
+; -- enc_build_word — assemble DEHL from enc_base + rd/rn/immr/imms ------
+;   byte0 = base0 | (Rd & 0x1f) | ((Rn & 7) << 5)
+;   byte1 = base1 | ((Rn >> 3) & 3) | ((imms & 0x3f) << 2)
+;   byte2 = base2 | (immr & 0x3f)
+;   byte3 = base3
+enc_build_word:
+                ld      a, (enc_rn)
+                and     &07
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a
+                add     a, a                        ; (Rn & 7) << 5
+                ld      c, a
+                ld      a, (enc_rd)
+                and     &1f
+                or      c
+                ld      hl, enc_base + 0
+                or      (hl)
+                ld      (enc_word + 0), a           ; byte0
+
+                ld      a, (enc_imms)
+                and     &3f
+                add     a, a
+                add     a, a                        ; (imms & 0x3f) << 2
+                ld      c, a
+                ld      a, (enc_rn)
+                rrca
+                rrca
+                rrca
+                and     &03                         ; (Rn >> 3) & 3
+                or      c
+                ld      hl, enc_base + 1
+                or      (hl)
+                ld      (enc_word + 1), a           ; byte1
+
+                ld      a, (enc_immr)
+                and     &3f
+                ld      hl, enc_base + 2
+                or      (hl)
+                ld      (enc_word + 2), a           ; byte2
+
+                ld      a, (enc_base + 3)
+                ld      (enc_word + 3), a           ; byte3
+
+                ld      a, (enc_word + 0)
+                ld      l, a
+                ld      a, (enc_word + 1)
+                ld      h, a
+                ld      a, (enc_word + 2)
+                ld      e, a
+                ld      a, (enc_word + 3)
+                ld      d, a
+                ret
+
 enc_fail_noform:
                 ld      a, ENC_TAG_NOFORM
                 jp      fail_with_tag
 enc_fail_unsupported_operand:
                 ld      a, ENC_TAG_BADOPERAND
                 jp      fail_with_tag
+
+; -- Special-form base words (LE: byte0, byte1, byte2, byte3) -----------
+; UBFM/BFM/SBFM aliases (lsl/lsr/bitfield), EXTR (ror), LSLV/LSRV (reg
+; shift).  Values from pass2.go::encodeLSLSR/encodeBitfieldInst/
+; encodeRorImm — the encoding authority (CLAUDE.md §6).
+enc_base_ubfm64: defb   &00, &00, &40, &d3          ; 0xd3400000
+enc_base_ubfm32: defb   &00, &00, &00, &53          ; 0x53000000
+enc_base_bfm64:  defb   &00, &00, &40, &b3          ; 0xb3400000
+enc_base_bfm32:  defb   &00, &00, &00, &33          ; 0x33000000
+enc_base_sbfm64: defb   &00, &00, &40, &93          ; 0x93400000
+enc_base_sbfm32: defb   &00, &00, &00, &13          ; 0x13000000
+enc_base_extr64: defb   &00, &00, &c0, &93          ; 0x93c00000
+enc_base_extr32: defb   &00, &00, &80, &13          ; 0x13800000
+enc_base_lslv64: defb   &00, &20, &c0, &9a          ; 0x9ac02000
+enc_base_lslv32: defb   &00, &20, &c0, &1a          ; 0x1ac02000
+enc_base_lsrv64: defb   &00, &24, &c0, &9a          ; 0x9ac02400
+enc_base_lsrv32: defb   &00, &24, &c0, &1a          ; 0x1ac02400
 
 ; -- Scratch (section-C RAM) -------------------------------------------
 enc_mnem:       defw    0
@@ -310,3 +692,14 @@ enc_form_ptr:   defw    0
 enc_slot_ptr:   defw    0
 enc_cur:        defw    0
 enc_remaining:  defb    0
+enc_regmask:    defb    0       ; 63 (is64) or 31 (32-bit) = regsize-1
+enc_rd:         defb    0
+enc_rn:         defb    0
+enc_immr:       defb    0
+enc_imms:       defb    0
+enc_shift:      defb    0
+enc_lsb:        defb    0
+enc_width:      defb    0
+enc_op2ptr:     defw    0
+enc_base:       defb    0, 0, 0, 0
+enc_word:       defb    0, 0, 0, 0

@@ -82,6 +82,71 @@ func TestEncoderSkeletonFixtures(t *testing.T) {
 			w.WriteReg(format.OpRegX, 0)
 			w.WriteImmExpr(immExpr(0x1004))
 		}, 2},
+		// --- i203a special forms: shift / bitfield / ror ---
+		{"lsl_x0_x1_4", "lsl", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteImmExpr(immExpr(4))
+		}, 3},
+		{"lsl_w0_w1_4", "lsl", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegW, 0)
+			w.WriteReg(format.OpRegW, 1)
+			w.WriteImmExpr(immExpr(4))
+		}, 3},
+		{"lsr_x0_x1_4", "lsr", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteImmExpr(immExpr(4))
+		}, 3},
+		{"lsl_x0_x1_x2", "lsl", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteReg(format.OpRegX, 2)
+		}, 3},
+		{"lsr_x0_x1_x2", "lsr", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteReg(format.OpRegX, 2)
+		}, 3},
+		{"bfi_x0_x1_8_4", "bfi", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteImmExpr(immExpr(8))
+			w.WriteImmExpr(immExpr(4))
+		}, 4},
+		{"bfxil_x0_x1_8_4", "bfxil", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteImmExpr(immExpr(8))
+			w.WriteImmExpr(immExpr(4))
+		}, 4},
+		{"ubfx_w0_w1_8_4", "ubfx", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegW, 0)
+			w.WriteReg(format.OpRegW, 1)
+			w.WriteImmExpr(immExpr(8))
+			w.WriteImmExpr(immExpr(4))
+		}, 4},
+		{"bfc_x0_8_4", "bfc", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteImmExpr(immExpr(8))
+			w.WriteImmExpr(immExpr(4))
+		}, 3},
+		{"sbfx_x0_x1_8_4", "sbfx", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteImmExpr(immExpr(8))
+			w.WriteImmExpr(immExpr(4))
+		}, 4},
+		{"ror_x0_x1_4", "ror", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteImmExpr(immExpr(4))
+		}, 3},
+		{"ror_w0_w1_4", "ror", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegW, 0)
+			w.WriteReg(format.OpRegW, 1)
+			w.WriteImmExpr(immExpr(4))
+		}, 3},
 	}
 
 	for _, fx := range fixtures {
