@@ -1340,6 +1340,7 @@
   title: B-DOS RST 8 hook dispatch on real Trinity — hardware-gated (HGTHD/HLOAD/HSAVE/HRECORD)
   description: ""
   status: OPEN
+  depends_on: [i133]
   kind: leaf
   owner: agent
   parent: i93
@@ -2015,6 +2016,7 @@
   description: |
     Confirm the OACK path works on real Trinity hardware: netboot client connects to a standards-compliant TFTP server (e.g. macOS tftpd), receives OACK, ACKs block 0, and receives the file. Gated on Trinity hardware access + a standards-compliant server in the test environment.
   status: OPEN
+  depends_on: [i133]
   kind: leaf
   owner: agent
   parent: i118
@@ -2269,6 +2271,7 @@
   description: |
     Pete has a Tapo smart plug for programmatic power-cycling. If a record auto-boots on power-on (no manual BOOT), agent runs fully unsupervised: power-cycle → SAM boots chosen record → runs → results over net (i133) → repeat. Investigate: EEPROM/config default-boot-record setting, Trinity AutoBOOT ROM (Colin's patch loads B-DOS from 128K EEPROM at reset), or patch forked B-DOS for early boot-a-record hook. Research: ~/sam-archive/bdos/analysis, Trinity AutoBOOT ROM, EEPROM layout, ~/sam-archive/trinity-docs. Pairs with i133 for full unsupervised loop.
   status: OPEN
+  depends_on: [i133]
   kind: leaf
   owner: agent
   refs: [~/sam-archive/bdos/analysis, i87, i133]
@@ -2332,6 +2335,7 @@
   description: |
     Hardware implementation of the card-absolute list-sector read modelled in B3 by the harness hook BD_HOOK_LISTREAD. Implements the SPI command ladder (CMD17 single-block read) on Trinity ports &DC-&DF to read list sectors 1..base-1 directly off the SD card. Not required for B3 emulation; the harness models the returned bytes. Needs final confirmation of the exact SPI init/read sequence on real hardware before building (docs/specs/trinity-record-detection-design.md §8, open-verification-item-1 and §3 frozen-interface principle).
   status: OPEN
+  depends_on: [i133]
   kind: leaf
   owner: agent
   parent: i119
@@ -2377,6 +2381,14 @@
   title: "Priority-backlog robustness: a non-pullable ready tip = missing-edge bug (HW gates + prompt + CLI ordering-repair)"
   description: |
     Found 2026-06-20: the ready tip i141 (+ i118b/i93b/i133/i135) is hardware-blocked but has NO depends_on edge, so it falsely surfaces as pullable — a missing-edge bug (no-BLOCKED model). Fix: (1) model the hardware gate (gate node or owner:pete) so they leave ready; (2) prompt — a non-pullable tip means the agent ADDS the missing edge (check/create the gating item) first, never judgment-picks; (3) CLI auto-fixes backlog membership (#462) but not ordering — add a topological-repair pass; (4) fix the ROADMAP judgment-pick bullet. Absorbs q29.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+
+- id: i147
+  title: "Turn-end safety valve: make stop-after-merge structural, not discretionary"
+  description: |
+    The autonomous-loop context protection (touch task-done -> end turn -> monitor /clears for a fresh context) relies on the agent CHOOSING to stop after each merged PR — the easiest step to skip mid-flow. 2026-06-20: a session never stopped, accumulating ~10 merged PRs into one polluted context (judgment-picking + missing-edge blindness followed). Make end-turn-after-merge STRUCTURAL: e.g. the monitor detects 'new merge to main + no task-done while a turn is still running' and intervenes, and/or a gh-pr-merge wrapper auto-touches task-done. Design + own PR.
   status: OPEN
   kind: leaf
   owner: agent

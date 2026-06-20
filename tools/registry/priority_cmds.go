@@ -280,7 +280,18 @@ func runMove(args []string, paths mutatorPaths) {
 // applyPriorityChange validates the new priority order, writes priority.yaml,
 // validates the full registry (items + priority), and runs gen.
 func applyPriorityChange(reg *Registry, newOrder []string, paths mutatorPaths) {
-	// Validate the new order against the registry before writing.
+	// Repair ordering to a valid topological extension before validating, so an
+	// explicit prioritize/move that would place an item ahead of its dependency
+	// is auto-corrected to the nearest valid order rather than rejected. If the
+	// repair had to move anything, say so — the user's literal request could not
+	// be honoured because a dependency must precede its dependents.
+	repaired := topoRepairPriority(reg.Items, newOrder)
+	if !equalStringSlice(repaired, newOrder) {
+		fmt.Fprintln(os.Stderr, "registry: note — adjusted the requested order to satisfy dependency constraints (a dependency must precede its dependents).")
+		newOrder = repaired
+	}
+
+	// Validate the (repaired) order against the registry before writing.
 	pve := validatePriority(reg, newOrder)
 	if pve.hasErrors() {
 		for _, msg := range pve.msgs {

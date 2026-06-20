@@ -4,13 +4,13 @@
 #               registry move --id iN --before iM
 #               registry move --id iN --after iM
 - i146
-- i141
 - i121
 - i122
-- i118b
+- i133
 - i93b
 - i95b
-- i133
+- i118b
+- i141
 - i135
 - i2
 - i4
@@ -86,3 +86,4 @@
 - i143
 - i144
 - i145
+- i147

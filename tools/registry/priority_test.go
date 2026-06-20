@@ -540,3 +540,94 @@ func TestLoadPriority_AbsentFileIsEmpty(t *testing.T) {
 		t.Errorf("expected empty slice for absent file, got %v", ids)
 	}
 }
+
+// repairItems builds a slice of pullable leaf items with the given depends_on
+// edges. deps maps an id to its depends_on targets.
+func repairItems(ids []string, deps map[string][]string) []Item {
+	items := make([]Item, 0, len(ids))
+	for _, id := range ids {
+		items = append(items, Item{
+			ID: id, Title: id, Status: StatusOpen, Kind: "leaf", Owner: "agent",
+			DependsOn: deps[id],
+		})
+	}
+	return items
+}
+
+// TestTopoRepair_ValidIsUnchanged: a already-topologically-valid order is
+// returned byte-identical (the repair is idempotent / stable on valid input).
+func TestTopoRepair_ValidIsUnchanged(t *testing.T) {
+	items := repairItems(
+		[]string{"i20", "i10", "i30"},
+		map[string][]string{"i10": {"i20"}}, // i10 after i20 — already satisfied
+	)
+	order := []string{"i20", "i10", "i30"}
+	got := topoRepairPriority(items, order)
+	if !equalStringSlice(got, order) {
+		t.Fatalf("valid order should be unchanged; want %v, got %v", order, got)
+	}
+}
+
+// TestTopoRepair_FixesViolation: a dependent ranked ahead of its dependency is
+// repaired by sliding the dependency just ahead, with minimal perturbation.
+func TestTopoRepair_FixesViolation(t *testing.T) {
+	items := repairItems(
+		[]string{"i10", "i20"},
+		map[string][]string{"i10": {"i20"}}, // i10 depends on i20
+	)
+	got := topoRepairPriority(items, []string{"i10", "i20"})
+	want := []string{"i20", "i10"}
+	if !equalStringSlice(got, want) {
+		t.Fatalf("want repaired %v, got %v", want, got)
+	}
+	// And the repaired order must validate.
+	reg := &Registry{Items: items}
+	if pve := validatePriority(reg, got); pve.hasErrors() {
+		t.Fatalf("repaired order still fails validation:\n%s", strings.Join(pve.msgs, "\n"))
+	}
+}
+
+// TestTopoRepair_MinimalPerturbation: when a low-ranked gate (i90) blocks a
+// high-ranked item, only the gate moves up — unrelated items keep their ranks.
+func TestTopoRepair_MinimalPerturbation(t *testing.T) {
+	// Queue: i10 i20 i30 i90 ; i10 depends on i90 (a late-ranked gate).
+	items := repairItems(
+		[]string{"i10", "i20", "i30", "i90"},
+		map[string][]string{"i10": {"i90"}},
+	)
+	got := topoRepairPriority(items, []string{"i10", "i20", "i30", "i90"})
+	// i90 must precede i10; everything else keeps relative order as much as
+	// possible. Stable Kahn yields: i90, i10, i20, i30.
+	want := []string{"i90", "i10", "i20", "i30"}
+	if !equalStringSlice(got, want) {
+		t.Fatalf("want %v, got %v", want, got)
+	}
+	reg := &Registry{Items: items}
+	if pve := validatePriority(reg, got); pve.hasErrors() {
+		t.Fatalf("repaired order fails validation:\n%s", strings.Join(pve.msgs, "\n"))
+	}
+}
+
+// TestTopoRepair_ReconcileMakesDepAddValid is the end-to-end behaviour i146 turns
+// on: adding a depends_on edge whose dependent sits ahead of its new dependency
+// no longer fails validation — reconcilePriority's repair slides the order so
+// applyAndCommit's validate passes.
+func TestTopoRepair_ReconcileMakesDepAddValid(t *testing.T) {
+	items := repairItems(
+		[]string{"i10", "i20", "i30"},
+		map[string][]string{"i10": {"i30"}}, // i10 (rank 1) now depends on i30 (rank 3)
+	)
+	reg := &Registry{Items: items, Priority: []string{"i10", "i20", "i30"}}
+	reconcilePriority(reg)
+	// i30 must precede i10 after reconciliation.
+	pos := map[string]int{}
+	for i, id := range reg.Priority {
+		pos[id] = i
+	}
+	if pos["i30"] >= pos["i10"] {
+		t.Fatalf("expected i30 before i10 after repair; got order %v", reg.Priority)
+	}
+	if pve := validatePriority(reg, reg.Priority); pve.hasErrors() {
+		t.Fatalf("post-reconcile order fails validation:\n%s", strings.Join(pve.msgs, "\n"))
+	}
+}

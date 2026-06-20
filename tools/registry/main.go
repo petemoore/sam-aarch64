@@ -141,42 +141,82 @@ func usage() {
 //	REGISTRY_DIR        override .id-ledger.txt directory
 //	REGISTRY_TEMPLATES  override templates directory
 //	REGISTRY_OUTDIR     set to enable in-place .md generation
+// defaultMutatorPaths resolves where the registry CLI reads and writes when run
+// without explicit REGISTRY_* env vars. Resolution order, per path:
+//
+//  1. an explicit REGISTRY_* env var (always wins);
+//  2. the LIVE repo registry/, discovered by walking up from the current working
+//     directory for a registry/items.yaml — so a bare `build/registry …` run from
+//     the repo root operates on the real registry;
+//  3. the bundled testdata fixtures, but only with a LOUD stderr warning.
+//
+// Step 2 is the fix for the footgun where a bare invocation silently read (and
+// `add`/`set-status` would have written) the test fixtures instead of the real
+// registry — the very thing the docs tell agents to run. When the live registry
+// is found, the generated docs/notes views are also regenerated in place (unless
+// REGISTRY_OUTDIR overrides) so a mutation never leaves the .md views stale.
 func defaultMutatorPaths() mutatorPaths {
-	dir := toolDir()
+	td := toolDir()
+
+	// Discover the live repo registry/ by walking up from cwd.
+	repoReg := ""
+	if cwd, err := os.Getwd(); err == nil {
+		repoReg = findRepoRegistryDir(cwd)
+	}
+
+	// Base dir that unset item/question/priority paths derive from, plus the
+	// matching templates dir.
+	var baseDir, tmplDir string
+	if repoReg != "" {
+		repoRoot := filepath.Dir(repoReg)
+		baseDir = repoReg
+		tmplDir = filepath.Join(repoRoot, "tools", "registry", "templates")
+	} else {
+		baseDir = filepath.Join(td, "testdata")
+		tmplDir = filepath.Join(td, "templates")
+	}
 
 	itemsYAML := os.Getenv("REGISTRY_ITEMS")
 	if itemsYAML == "" {
-		itemsYAML = filepath.Join(dir, "testdata", "items.yaml")
+		if repoReg == "" {
+			fmt.Fprintln(os.Stderr, "registry: WARNING — no live registry/items.yaml found by walking up from the current directory; falling back to the bundled testdata fixtures. Run from the repo root, or set REGISTRY_ITEMS, to operate on the real registry.")
+		}
+		itemsYAML = filepath.Join(baseDir, "items.yaml")
 	}
 
 	questionsYAML := os.Getenv("REGISTRY_QUESTIONS")
 	if questionsYAML == "" {
-		questionsYAML = filepath.Join(dir, "testdata", "questions.yaml")
+		questionsYAML = filepath.Join(baseDir, "questions.yaml")
 	}
 
-	// priorityYAML lives in the registry/ dir (alongside items/questions), but in
-	// dormant/testdata mode it is in testdata/ so the test fixtures are isolated.
-	registryDir := os.Getenv("REGISTRY_DIR")
-	if registryDir == "" {
-		registryDir = dir // .id-ledger.txt lives alongside the tool sources
-	}
-
+	// priorityYAML is a sibling of items.yaml — honours an explicit
+	// REGISTRY_ITEMS override and works for both the live and testdata bases.
 	priorityYAML := os.Getenv("REGISTRY_PRIORITY")
 	if priorityYAML == "" {
-		// Infer from REGISTRY_ITEMS path: sibling to items.yaml.
-		if os.Getenv("REGISTRY_ITEMS") != "" {
-			priorityYAML = filepath.Join(filepath.Dir(os.Getenv("REGISTRY_ITEMS")), "priority.yaml")
+		priorityYAML = filepath.Join(filepath.Dir(itemsYAML), "priority.yaml")
+	}
+
+	// .id-ledger.txt lives alongside the YAML sources.
+	registryDir := os.Getenv("REGISTRY_DIR")
+	if registryDir == "" {
+		if repoReg != "" {
+			registryDir = repoReg
 		} else {
-			priorityYAML = filepath.Join(dir, "testdata", "priority.yaml")
+			registryDir = td
 		}
 	}
 
 	templatesDir := os.Getenv("REGISTRY_TEMPLATES")
 	if templatesDir == "" {
-		templatesDir = filepath.Join(dir, "templates")
+		templatesDir = tmplDir
 	}
 
-	outDir := os.Getenv("REGISTRY_OUTDIR") // empty = stdout mode
+	// outDir empty = stdout mode. Mutators print the regenerated views to stdout;
+	// `make registry` (REGISTRY_OUTDIR=docs/notes) writes the .md views in place,
+	// and the registry-sync-check CI gate catches any forgotten regen. We do NOT
+	// auto-write docs/notes here: `gen`/`validate` take positional file args, so a
+	// discovered outDir would let `gen testdata/items.yaml` clobber the real views.
+	outDir := os.Getenv("REGISTRY_OUTDIR")
 
 	return mutatorPaths{
 		itemsYAML:     itemsYAML,
@@ -186,6 +226,31 @@ func defaultMutatorPaths() mutatorPaths {
 		templatesDir:  templatesDir,
 		outDir:        outDir,
 	}
+}
+
+// findRepoRegistryDir walks up from startDir looking for a directory that
+// contains registry/items.yaml, and returns the path to that registry/ dir
+// (or "" if none is found before the filesystem root). This is how a bare CLI
+// invocation locates the live repo registry regardless of the subdirectory it
+// is run from.
+func findRepoRegistryDir(startDir string) string {
+	dir := startDir
+	for {
+		if fileExists(filepath.Join(dir, "registry", "items.yaml")) {
+			return filepath.Join(dir, "registry")
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "" // reached the filesystem root
+		}
+		dir = parent
+	}
+}
+
+// fileExists reports whether path names an existing (non-directory) file.
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 // toolDir returns the directory containing the registry tool source.
@@ -222,9 +287,12 @@ func runValidate(args []string, migrating bool, paths mutatorPaths) {
 		}
 	}
 
-	// Load priority from the configured path (tolerate absent file).
-	if paths.priorityYAML != "" {
-		reg.Priority, err = loadPriority(paths.priorityYAML)
+	// Load priority as the sibling of the positional items file (tolerate absent
+	// file) so `validate path/items.yaml` checks path/priority.yaml — keeping the
+	// command self-consistent regardless of which registry the cwd-walk found.
+	priorityPath := priorityForPositional(args[0])
+	if priorityPath != "" {
+		reg.Priority, err = loadPriority(priorityPath)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -242,6 +310,19 @@ func runValidate(args []string, migrating bool, paths mutatorPaths) {
 		os.Exit(1)
 	}
 	fmt.Println("registry: validate OK")
+}
+
+// priorityForPositional resolves the priority.yaml path for a validate/gen
+// invocation given its positional items arg. An explicit REGISTRY_PRIORITY env
+// var wins; otherwise priority is the sibling of the positional items file, so
+// the command validates a self-consistent (items, questions, priority) triple
+// from the same directory rather than mixing in whatever registry the cwd-walk
+// discovered.
+func priorityForPositional(itemsArg string) string {
+	if p := os.Getenv("REGISTRY_PRIORITY"); p != "" {
+		return p
+	}
+	return filepath.Join(filepath.Dir(itemsArg), "priority.yaml")
 }
 
 func runGen(args []string, paths mutatorPaths) {
@@ -262,8 +343,11 @@ func runGen(args []string, paths mutatorPaths) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if paths.priorityYAML != "" {
-		reg.Priority, err = loadPriority(paths.priorityYAML)
+	// Priority is the sibling of the positional items file (REGISTRY_PRIORITY env
+	// overrides) — self-consistent with the items/questions just loaded.
+	priorityPath := priorityForPositional(args[0])
+	if priorityPath != "" {
+		reg.Priority, err = loadPriority(priorityPath)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)

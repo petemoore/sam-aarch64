@@ -26,11 +26,6 @@
     **Should we investigate CIIP — a pre-existing Z80 TCP/IP stack — as prior art for the SAM netboot stack (i83 TFTP, i70 HTTP, i86 DHCP)?** Surfaced by i113 discovery (2026-06-17): CIIP is CPC-originated (author OCR-damaged — photo-verify IMG_20260617_163218) reportedly providing TFTP/HTTP/DNS servers + clients; Simon Owen ported it to pyz80. Phase-3 is building exactly those servers; CIIP could be prior art. Task: locate code, assess license/portability, weigh 'adapt CIIP' vs 'continue i82/i83/i86 path'. UNVERIFIED — OCR-derived; do not treat capabilities as established until photo-confirmed.
   owner: pete
 
-- id: q29
-  body: |
-    How should the registry model HARDWARE-GATED work so the autonomous backlog (build/registry ready) surfaces only agent-actionable emulation-first items? Today 'ready' returns hardware-gated tips an emulation-only agent cannot pull (i141 raw-SD SPI, i118b/i93b real-Trinity, i133/i135 unsupervised-hardware). The ROADMAP tags (auto)/(HW) but the registry does not. Options: (a) a 'Pete-hardware-available' gate node HW items depend_on so 'ready' skips them; (b) a gated field + 'ready --auto' filter; (c) agent skips HW items by judgment.
-  owner: pete
-
 - id: q30
   body: |
     Remote-push (i121 WRQ) safety model: i119 makes an interactive show-name + y/n confirm MANDATORY before any HSAVE, but an unattended 'tftp put' has no operator at the SAM keyboard (the confirm spins forever). Is 'write-to-FREE-record-only' sufficient safety (auto-pick a free record; TFTP ERROR(3) if none free; never overwrite a named record - satisfies the shared-resource invariant without a keyboard), or must remote pushes be operator-armed (boot-time 'pushes allowed' pre-confirm)? Gates i121c (the write brick). Plan: docs/plans/i121-wrq-server.md.
