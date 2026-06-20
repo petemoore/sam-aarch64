@@ -22,33 +22,26 @@
 //     (LMPR=&5F, EEPROM-enable, read 1024 B from device &002000 into &4000) →
 //     JP &4000 — under a PC trace.
 //
-// WHAT IT RESOLVES (samboot-bootblock-analysis.md §7.4/§7.5/§7.6). The static RE
-// found facts that contradict a clean single-stage boot and could not be settled
-// by disassembly: (1) the ROM loads device &002000 (chunk 1 — a B-DOS routine
-// library, first byte EX (SP),HL — NOT a valid cold entry) to &4000 and JP &4000,
-// while the coherent self-contained boot sequencer sits at device &0000 which the
-// ROM path never reads; (2) chunk 1 immediately CALLs &5C26, read at the time as a
-// call into an "unloaded section-B support library" left zero by a "missing
-// multi-stage load." The trace settles (1) — the real boot does jump to the chunk-1
-// routine library at &4000, not the &0000 sequencer — and CORRECTS (2): &5C26 is a
-// documented STREAMS-table sysvar (&5C0C-&5C35) that the normal cold-init NEW2 loop
-// DELIBERATELY ZEROS. TestRealBootInitRunsBeforeChunk1 proves the from-reset boot
-// runs that whole init (MNINIT &EBAE -> NEW2 &EC8F -> the streams-zap &ECB6/&ECC8)
-// BEFORE handing to &4000, so &5C26 == 0 is the WRITTEN-zero NEW2 left, not
-// unreached RAM and not a missing loader. The residual is therefore NOT "section B
-// wasn't loaded" but "chunk 1 is a B-DOS library that needs B-DOS RESIDENT, and the
-// ROM's single &2000-fetch path never loads B-DOS (chunks 2..13, which only the
-// &0000 sequencer loads)" — the boot-entry contradiction §7.6 leaves open for the
-// injection-site follow-on.
+// WHAT IT RESOLVES (samboot-bootblock-analysis.md §8). The capture's eeprom.bin is
+// a CHUNK-ORDERED, ROTATED image: the dumper (netboot_dumper.asm) reads the EEPROM
+// by chunk number (chunks 1..128), and chunk 1 lives at device address &2000 (the
+// Trinity map: 64-byte index headers at device 0..&1FFF, chunk DATA from &2000). So
+// file offset 0 = device &2000, and file offset F = device (F+&2000) mod &20000 (the
+// 128 KB device wraps, so the dump's tail carries the index region). CAPTURE-NOTES
+// and an earlier analysis pass wrongly assumed file==device, so the emulator served
+// the WRONG chunk for device &2000 (a B-DOS helper library at file &2000 = device
+// &4000 instead of the bootblock at file 0 = device &2000) and the boot wandered.
+// deviceLinearEEPROM (below) un-rotates the capture, and the real boot then runs
+// coherently: ROM fetches device &2000 = chunk 1 = the BOOTBLOCK, which loads B-DOS
+// chunks 2..13 into &8000 (12 read_chunk loads) and reaches CALL &805F — the EEPROM
+// auto-load Pete's card performs. (The EEPROM index even names chunk 1 "Boot Block".)
 //
 // THE HONESTY LINE (CLAUDE.md §5, §7). This runs the REAL patched ROM and REAL
 // EEPROM through the faithful pager + EEPROM SPI model — emulation-first, no flat
-// shortcut, no HOSTTEST carve-out. The capture is a consistent single-machine
-// runtime snapshot (CAPTURE-NOTES.txt: rom + eeprom dumped in one trinload session),
-// so it is NOT cross-state; what it does NOT model is the SAM display/ASIC and a
-// resident, initialised B-DOS — so chunk 1's library CALLs run against an
-// initialised-but-B-DOS-absent system, which is exactly why the &4000 path wanders
-// instead of completing. Emulation-verified is not hardware-verified.
+// shortcut, no HOSTTEST carve-out. The capture bytes are faithful; only the address
+// mapping was wrong and is now corrected. What it does NOT model is the SAM
+// display/ASIC and the SD card B-DOS init touches, so the run halts inside B-DOS
+// init after the coherent hand-off. Emulation-verified is not hardware-verified.
 package z80_test
 
 import (
@@ -75,32 +68,16 @@ const (
 	addrEEPROMReader = 0xF5DD // ROM1: the SPI read routine (opcode 3 + 3-byte addr)
 	addrJP4000       = 0x0FAF // ROM0: JP &4000 — run what was fetched
 	addrRunTarget    = 0x4000 // where the fetched chunk runs
-	addrChunk1Call   = 0x5C26 // chunk-1's first CALL target — a STREAMS-table sysvar NEW2 zeros
 
-	// Normal cold-init milestones (annotated ROM disasm) that must run BEFORE the
-	// &4000 handoff if chunk 1 is a library entry on a live system. MNINIT is the
-	// reset cold-start; NEW2 -> the streams-zap loop populates &5C0C-&5C35 (which
-	// contains &5C26) — &ECB6 starts it, &ECC8 is the CLSTL zap covering &5C26.
-	addrMNINIT      = 0xEBAE
-	addrNEW2        = 0xEC8F
-	addrStreamsInit = 0xECB6
-	addrStreamsZap  = 0xECC8
-
-	// In-page offsets of the sysvars within section B's physical page. Under the
-	// boot LMPR (&5F) section B = physical page 0, so &5C26/&5C6A live at these
-	// offsets in page 0 — the page chunk 1 reads when it runs at &4000.
-	offStreamVar = 0x1C26 // &5C26 in-page offset
-	offFLAGS2    = 0x1C6A // &5C6A in-page offset
+	// Bootblock internals (disassembled from chunk 1, ORG &4000) — the coherent boot
+	// sequencer the device-linear EEPROM serves at &4000.
+	addrReadChunk = 0x40BD // the bootblock's read_chunk helper, CALL'd 12x (B-DOS chunks 2..13)
+	addrExecDOS   = 0x409E // CALL &805F — the B-DOS entry, reached after the load loop
 
 	// Boot-time paging: ROM0 at section A (LMPR bit5=0), ROM1 at section D (bit6=1),
 	// page 0 — the reset map the patched ROM begins executing under.
 	bootLMPR = 0x40
 	bootHMPR = 0x00
-
-	// EEPROM device addresses (eeprom.bin file offsets) the analysis pins.
-	eepBootblock = 0x0000 // the coherent &0000 bootblock (DB FA = IN A,(&FA))
-	eepChunk1    = 0x2000 // chunk 1 — the B-DOS routine library the ROM actually loads
-	eepChunk1End = 0x2400 // chunk 1 + 1 KB
 
 	realBootStepCap = 5_000_000 // generous; the real boot reaches the trap well within this
 )
@@ -154,9 +131,31 @@ func loadRealCaptures(t *testing.T) (rom, eeprom []byte) {
 	return rom, eeprom
 }
 
+// deviceLinearEEPROM un-rotates the CAPTURED eeprom.bin into a true device-linear
+// image. The netboot dumper (netboot_dumper.asm) reads the EEPROM by CHUNK NUMBER
+// (chunks 1..128 via eeprom.asm read_chunk), and chunk 1 lives at device address
+// &2000 — the Trinity EEPROM map has 64-byte index headers at device 0..&1FFF and
+// chunk DATA from &2000 (chunk N at &2000+(N-1)*&400). So the captured file is
+// ROTATED: file offset F holds device byte (F + &2000) mod &20000 (the 128 KB
+// device wraps, so the last chunks of the dump carry the device's header region).
+// The Trinity SPI model addresses the device LINEARLY, so the capture MUST be
+// un-rotated before loading, else every device read is served the wrong chunk —
+// the fidelity bug that made the real-boot trace fetch a B-DOS helper library at
+// &4000 instead of the bootblock and wander. device[D] = captured[(D-&2000) mod N].
+func deviceLinearEEPROM(captured []byte) []byte {
+	const dataBase = 0x2000
+	n := len(captured)
+	out := make([]byte, n)
+	for d := 0; d < n; d++ {
+		out[d] = captured[((d-dataBase)%n+n)%n]
+	}
+	return out
+}
+
 // newRealBootMachine builds the emulator with the real ROM in the pager and the
-// real EEPROM in the Trinity SPI model, at reset paging. This is the i190a core:
-// the single shared SAM-emulation core booting the real artifacts.
+// real EEPROM (un-rotated to device-linear) in the Trinity SPI model, at reset
+// paging. This is the i190a core: the single shared SAM-emulation core booting the
+// real artifacts.
 func newRealBootMachine(t *testing.T, rom, eeprom []byte) (*z80h.Machine, *z80h.ENC28J60) {
 	t.Helper()
 	mac := z80h.New()
@@ -166,7 +165,7 @@ func newRealBootMachine(t *testing.T, rom, eeprom []byte) (*z80h.Machine, *z80h.
 	mac.Pager().LMPR = bootLMPR
 	mac.Pager().HMPR = bootHMPR
 	enc := z80h.NewENC28J60()
-	enc.LoadEEPROMImage(eeprom)
+	enc.LoadEEPROMImage(deviceLinearEEPROM(eeprom))
 	mac.AttachIO(enc)
 	return mac, enc
 }
@@ -234,24 +233,25 @@ func TestRealBootReachesEEPROMFetch(t *testing.T) {
 	}
 }
 
-// TestRealBootRunsChunk1NotBootblock is the §7.4 resolution: the real ROM loads
-// EEPROM device &002000 (chunk 1, the B-DOS routine library) into &4000 and runs
-// THAT — not the coherent &0000 bootblock. The static analysis could not tell
-// which artifact executes at &4000; the running model does.
-func TestRealBootRunsChunk1NotBootblock(t *testing.T) {
+// TestRealBootLoadsBootblockAtChunk1 is the §8 resolution: with the EEPROM capture
+// un-rotated to device-linear (deviceLinearEEPROM), the real ROM fetches device
+// &2000 — chunk 1, the BOOTBLOCK — into &4000 and runs it. (Without the un-rotation
+// the model served the captured file's offset &2000, a B-DOS helper library, so the
+// boot wandered — the EEPROM-addressing fidelity bug §8 documents.)
+func TestRealBootLoadsBootblockAtChunk1(t *testing.T) {
 	rom, eeprom := loadRealCaptures(t)
 	mac, _ := newRealBootMachine(t, rom, eeprom)
 
 	var reached4000 bool
-	var firstAfter4000 []uint16
+	var first3 []uint16
 	if _, err := mac.RunBootFrom(0x0000, z80h.Entry{
 		StepCap: realBootStepCap,
 		Trace: func(pc uint16) {
 			if pc == addrRunTarget {
 				reached4000 = true
 			}
-			if reached4000 && len(firstAfter4000) < 8 {
-				firstAfter4000 = append(firstAfter4000, pc)
+			if reached4000 && len(first3) < 3 {
+				first3 = append(first3, pc)
 			}
 		},
 	}); err != nil {
@@ -261,137 +261,67 @@ func TestRealBootRunsChunk1NotBootblock(t *testing.T) {
 		t.Fatal("boot never reached &4000 — the EEPROM fetch + JP did not run")
 	}
 
-	// 1. The bytes fetched into &4000 must be EEPROM device &002000..&0023FF
-	//    (chunk 1), byte-for-byte — proving the ROM read chunk 1, not the bootblock.
-	got := mac.Read(addrRunTarget, 0x400)
-	wantChunk1 := eeprom[eepChunk1:eepChunk1End]
-	if !bytes.Equal(got, wantChunk1) {
-		diff := 0
-		for i := range got {
-			if got[i] != wantChunk1[i] {
-				diff++
-			}
-		}
-		t.Fatalf("&4000..&43FF differs from EEPROM chunk 1 (&2000..&23FF) in %d/1024 bytes — the fetch did not land chunk 1", diff)
+	// The bytes fetched into &4000 are the bootblock (device &2000 = chunk 1), which
+	// starts IN A,(&FA) = 0xDB 0xFA — NOT the helper library (0xE3 EX (SP),HL) the
+	// un-rotated capture holds at file offset &2000. With the dumper's chunk-ordering,
+	// device &2000 = captured file offset 0, so the bootblock is captured[0:].
+	got := mac.Read(addrRunTarget, 4)
+	if got[0] != 0xDB || got[1] != 0xFA {
+		t.Errorf("&4000 = % X, want DB FA ... (IN A,(&FA) = the bootblock = device &2000 = chunk 1)", got)
+	}
+	if !bytes.Equal(got, eeprom[0:4]) {
+		t.Errorf("&4000 = % X, want captured file offset 0 = % X (device &2000 = chunk 1 = bootblock)", got, eeprom[0:4])
 	}
 
-	// 2. And it is NOT the &0000 bootblock: chunk 1 starts EX (SP),HL (0xE3); the
-	//    bootblock starts IN A,(&FA) (0xDB 0xFA). The distinction is the whole point.
-	if got[0] != 0xE3 {
-		t.Errorf("&4000 first byte = 0x%02X, want 0xE3 (EX (SP),HL = chunk-1 routine library)", got[0])
-	}
-	if bb := eeprom[eepBootblock]; bb != 0xDB {
-		t.Errorf("sanity: EEPROM &0000 first byte = 0x%02X, want 0xDB (IN A,(&FA) = the &0000 bootblock) — capture changed?", bb)
-	}
-	if got[0] == eeprom[eepBootblock] {
-		t.Errorf("&4000 holds the &0000 bootblock, not chunk 1 — contradicts the §7.3 ROM fetch (device &002000)")
-	}
-
-	// 3. The execution at &4000 immediately runs chunk-1's prologue
-	//    (EX (SP),HL; PUSH DE; CALL &5C26) — the first three PCs after &4000 are
-	//    &4000, &4001, &4002 (a CALL whose target, &5C26, is in section B).
-	if len(firstAfter4000) < 4 ||
-		firstAfter4000[0] != 0x4000 || firstAfter4000[1] != 0x4001 || firstAfter4000[2] != 0x4002 {
-		t.Fatalf("execution from &4000 = %X, want it to start &4000,&4001,&4002 (EX (SP),HL; PUSH DE; CALL)", firstAfter4000)
-	}
-	if firstAfter4000[3] != addrChunk1Call {
-		t.Errorf("the chunk-1 prologue CALL went to &%04X, want &%04X (the section-B routine library)", firstAfter4000[3], addrChunk1Call)
+	// Execution begins the bootblock's save-paging prologue: IN A,(&FA) at &4000,
+	// LD (nn),A at &4002, OR 64 at &4005 — not a CALL into the &5Cxx sysvar band.
+	if len(first3) < 3 || first3[0] != 0x4000 || first3[1] != 0x4002 || first3[2] != 0x4005 {
+		t.Errorf("execution from &4000 = %X, want &4000,&4002,&4005 (the bootblock save-LMPR prologue)", first3)
 	}
 }
 
-// TestRealBootChunk1CallsZeroedStreamVar pins the CORRECTED §7.5/§7.6 reading of the
-// chunk-1 prologue's CALL &5C26. The earlier framing read &5C26 == 0 as a "missing
-// runtime multi-stage load that never populated a section-B support library." That
-// was wrong about WHY it is zero: &5C26 is a documented STREAMS-table sysvar
-// (&5C0C-&5C35) that the cold-init NEW2 loop deliberately zeros (the "12 more stream
-// ptrs to zap"). The companion TestRealBootInitRunsBeforeChunk1 proves NEW2 runs
-// before &4000 and WRITES this zero. So &5C26 == 0 is the initialised value, not
-// unreached RAM — and chunk 1 CALLing it is a B-DOS library routine expecting a
-// resident B-DOS (which the ROM's single &2000-fetch path never loads), not a
-// hidden loader. This test keeps the byte assertion as a regression guard and
-// documents the corrected interpretation.
-func TestRealBootChunk1CallsZeroedStreamVar(t *testing.T) {
+// TestRealBootLoadsBDOSCoherently is the payoff: with the device-linear EEPROM the
+// bootblock at &4000 runs the documented EEPROM auto-load — twelve read_chunk loads
+// pull B-DOS chunks 2..13 into &8000 and it reaches CALL &805F (the B-DOS entry).
+// The run then halts inside B-DOS init, which touches the unmodeled SD/screen
+// hardware — expected; the point is that the boot is COHERENT (loads + hands off),
+// the EEPROM auto-load Pete's card performs, not a wander into zeroed RAM.
+func TestRealBootLoadsBDOSCoherently(t *testing.T) {
 	rom, eeprom := loadRealCaptures(t)
 	mac, _ := newRealBootMachine(t, rom, eeprom)
 
-	if _, err := mac.RunBootFrom(0x0000, z80h.Entry{StepCap: realBootStepCap}); err != nil {
-		t.Fatalf("real boot run faulted: %v", err)
-	}
-
-	// &5C26 (the chunk-1 CALL target) is a STREAMS-table sysvar NEW2 zeros during the
-	// cold-init that runs before &4000. So it reads 0x00 — the WRITTEN-zero NEW2 left,
-	// proven by TestRealBootInitRunsBeforeChunk1's sentinel. (If a resident B-DOS later
-	// installed a hook vector here, this would be non-zero — but that needs B-DOS
-	// loaded, which the ROM's chunk-1 path never does: the §7.6 injection-site gap.)
-	target := mac.Read(addrChunk1Call, 1)[0]
-	t.Logf("chunk-1 CALL target &%04X = 0x%02X (NEW2-zeroed STREAMS sysvar; B-DOS not resident on this path)", addrChunk1Call, target)
-	if target != 0x00 {
-		t.Errorf("§7.6 assumption changed: &%04X = 0x%02X, expected 0x00 (the NEW2-zeroed STREAMS entry). If the boot now installs a vector here, update §7.6 + i197c.", addrChunk1Call, target)
-	}
-}
-
-// TestRealBootInitRunsBeforeChunk1 is the i197c deliverable: it proves the from-reset
-// boot runs the FULL normal ROM cold-init (MNINIT -> NEW2 -> the streams-zap loop)
-// BEFORE handing off to the chunk-1 routine library at &4000 — resolving the
-// init-ordering question §7.4/§7.5 left open, and CORRECTING the "&5C26 is zero
-// because init had not run yet / a stage failed to load" reading. The decisive trick
-// is a sentinel: planting 0xAA at &5C26's and &5C6A's physical-page-0 offsets before
-// the boot, so a post-run 0x00 means NEW2 actively WROTE the zero (init ran), not
-// that the byte was never touched (init skipped). It is.
-func TestRealBootInitRunsBeforeChunk1(t *testing.T) {
-	rom, eeprom := loadRealCaptures(t)
-	mac, _ := newRealBootMachine(t, rom, eeprom)
-
-	// Under the boot LMPR (&5F) section B maps to physical page 0, so &5C26/&5C6A
-	// live at page-0 offsets &1C26/&1C6A — the bytes chunk 1 reads when it runs.
-	// Sentinel them so a written-zero is distinguishable from an untouched default.
-	const sentinel = 0xAA
-	mac.Pager().RAM[0][offStreamVar] = sentinel
-	mac.Pager().RAM[0][offFLAGS2] = sentinel
-
-	seen := map[uint16]bool{}
-	var order []uint16
-	var streamsInitBefore4000, reached4000 bool
-	if _, err := mac.RunBootFrom(0x0000, z80h.Entry{
+	chunkLoads := 0
+	var reachedExecDOS bool
+	res, _ := mac.RunBootFrom(0x0000, z80h.Entry{
 		StepCap: realBootStepCap,
 		Trace: func(pc uint16) {
-			switch pc {
-			case addrMNINIT, addrNEW2, addrStreamsInit, addrStreamsZap, addrRunTarget:
-				if !seen[pc] {
-					seen[pc] = true
-					order = append(order, pc)
-				}
+			if pc == addrReadChunk {
+				chunkLoads++
 			}
-			if pc == addrStreamsInit && !reached4000 {
-				streamsInitBefore4000 = true
-			}
-			if pc == addrRunTarget {
-				reached4000 = true
+			if pc == addrExecDOS {
+				reachedExecDOS = true
 			}
 		},
-	}); err != nil {
-		t.Fatalf("real boot run faulted: %v", err)
-	}
-	t.Logf("cold-init milestone order (first visit): %X", order)
+	})
+	t.Logf("real boot: read_chunk calls=%d, reached CALL &805F=%v, finalPC=&%04X halted=%v",
+		chunkLoads, reachedExecDOS, res.PC, res.Halted)
 
-	// 1. The whole cold-init chain ran, and the streams-zap ran BEFORE &4000.
-	for _, m := range []uint16{addrMNINIT, addrNEW2, addrStreamsInit, addrStreamsZap} {
-		if !seen[m] {
-			t.Errorf("cold-init milestone &%04X was never reached — the from-reset boot did not run normal ROM init", m)
-		}
+	if chunkLoads != 12 {
+		t.Errorf("bootblock ran %d read_chunk loads, want 12 (B-DOS chunks 2..13) — EEPROM auto-load not coherent", chunkLoads)
 	}
-	if !streamsInitBefore4000 {
-		t.Errorf("the streams-init (&%04X) did not run before &4000 — init ordering is NOT init-then-chunk1", addrStreamsInit)
+	if !reachedExecDOS {
+		t.Errorf("boot did not reach CALL &805F — the bootblock did not hand off to a loaded B-DOS")
 	}
-
-	// 2. NEW2 overwrote the &5C26 sentinel with zero — so &5C26 == 0 is a WRITTEN
-	//    zero (init ran), the proof that corrects the "uninitialised / missing
-	//    loader" reading. (&5C6A = FLAGS2 is in the same NEW-managed band.)
-	if got := mac.Pager().RAM[0][offStreamVar]; got == sentinel {
-		t.Errorf("&5C26 (page0 &%04X) still holds the 0x%02X sentinel — NEW2 did NOT write it; init did not populate the STREAMS band", offStreamVar, sentinel)
-	} else if got != 0x00 {
-		t.Logf("note: &5C26 = 0x%02X (written by init, non-zero) — chunk 1 would see a live value here", got)
-	} else {
-		t.Logf("&5C26 sentinel 0x%02X -> 0x00: NEW2 wrote the zero (the zeroed STREAMS entry), confirming init ran before &4000", sentinel)
+	// The run continues INTO B-DOS init (finalPC well above &8000) rather than halting
+	// at the &4000 prologue — the hand-off is real, not a wander. (We do not byte-check
+	// &8000 post-run: B-DOS init overwrites it; the 12 loads + &805F entry are the proof.)
+	if res.PC < 0x8000 {
+		t.Errorf("finalPC=&%04X is below &8000 — the boot did not run into the loaded B-DOS", res.PC)
 	}
 }
+
+// (The earlier TestRealBootChunk1CallsZeroedStreamVar / TestRealBootInitRunsBeforeChunk1
+// tests were removed: they studied a B-DOS helper library that the EEPROM-addressing
+// bug made the boot wander into. With the device-linear fix the boot runs the
+// bootblock and never touches the &5C26 STREAMS band, so those tests no longer
+// describe the real boot. See §8 of samboot-bootblock-analysis.md.)

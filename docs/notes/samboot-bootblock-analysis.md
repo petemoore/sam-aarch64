@@ -374,6 +374,12 @@ list is the original brief, kept for traceability.
 
 ## 6. Captured-artifact findings (i87b)
 
+> **Read §8 first.** The EEPROM device-address attributions throughout §6.2 and §7
+> are off by the capture's **chunk-ordering rotation** (file offset 0 = device
+> `&2000`, not `&0000`). The disassembly is correct; the *addresses* are mislabelled.
+> §8 corrects the mapping and shows the boot is fully coherent — the "contradiction"
+> §6.2/§7.4–§7.6 chase is an emulator-addressing artifact, now fixed.
+
 Done offline against the captured artifacts (`~/sam-archive/samboot-capture/`,
 Colin's proprietary non-redistributable images — cited by file offset, never copied
 into the repo) versus the stock SAM ROM 3.0 that ships with SimCoupé
@@ -681,10 +687,14 @@ trace settles §7.4:
 
 ### 7.6 The init ordering, verified in the i190a emulator (i197c)
 
-The §7.5 "remaining step" is now done. An instrumented from-reset run
-(`tools/netboot-oracle/z80/samboot_real_boot_test.go`,
-`TestRealBootInitRunsBeforeChunk1`) traces the cold-init milestones and resolves the
-ordering decisively — with a sentinel experiment that removes the last ambiguity.
+> **Tangential after §8.** This section's finding — that normal ROM cold-init runs
+> before the EEPROM fetch — is *true* and stays useful, but it studied a B-DOS helper
+> library the addressing bug made the boot wander into; the real boot runs the
+> bootblock, which never touches the `&5C26` STREAMS band. The regression tests this
+> section described were removed in the §8 fix. Kept for the ordering fact only.
+
+The §7.5 "remaining step" is now done. An instrumented from-reset run traces the
+cold-init milestones and resolves the ordering decisively.
 
 - **Init runs BEFORE chunk 1 — confirmed.** The from-reset boot visits, in order,
   `MNINIT &EBAE → NEW2 &EC8F → the streams-zap loop &ECB6 → &ECC8`, and only then
@@ -721,22 +731,74 @@ ordering decisively — with a sentinel experiment that removes the last ambigui
   the `&0000` sequencer does. That is why the trace wanders: chunk 1's `CALL &5C26`
   expects a resident, fully-initialised B-DOS that this path never brings up.
 
-**What this resolves, and what it leaves open for the injection site.** Resolved:
-the init-ordering question that gated i197c (init runs first; `&5C26 == 0` is
-initialised state; chunk 1 is a library entry, not a cold entry; no hidden
-multi-stage loader is implied). The capture is a **consistent single-machine runtime
-snapshot** (CAPTURE-NOTES.txt: `rom.bin` + `eeprom.bin` dumped in one trinload
-session, the card serving identically before and after), so the incoherence is **not
-a cross-state artifact** — it is real: the captured patched ROM fetches a B-DOS
-*library* (chunk 1) as its boot entry and never loads B-DOS. **Still open (the
-injection-site follow-on):** the boot-entry contradiction itself — the ROM hard-codes
-fetching `&2000` (a library) yet the only coherent sequencer is `&0000`. Finalizing
-*where* the boot-a-record hook attaches needs the trace continued **with B-DOS made
-resident** in the emulation (load chunks 2..13 → `&8000`, run the `&805F` init, then
-re-enter chunk 1 against a live B-DOS) and/or a fresh re-capture — so the re-capture,
-"optional belt-and-braces" in §7.5, is better read as **recommended before any
-i135c flash**: the current captures do not boot coherently to the point an injection
-would attach. No EEPROM flash (i135c) until that is settled.
+> **SUPERSEDED by §8.** The "boot-entry contradiction" this paragraph described —
+> the ROM fetching a *library* at `&2000` while the coherent sequencer sits at
+> `&0000`, the trace "wandering," the recommendation to re-capture or ask Colin —
+> was **an emulator bug, not a real contradiction**. The capture is a *chunk-ordered*
+> image (file offset 0 = device `&2000`), so the device-address labels in §6.2/§7.1–
+> §7.6 are off by the rotation: what these sections call "the `&0000` bootblock" *is*
+> chunk 1 at device `&2000`, and "chunk 1 / the `&2000` library" is really device
+> `&4000` (chunk 9). With the addressing corrected the boot is fully coherent. §8 is
+> the authority; the init-ordering finding above (init runs before the fetch) still
+> holds but is tangential — the bootblock never touches the `&5C26` STREAMS band.
+
+## 8. RESOLVED: the EEPROM capture is chunk-ordered — the boot is coherent (PR-pending)
+
+The `&6`/`§7` "contradiction" dissolves once the **capture's address layout** is
+read correctly. The dumper (`src/netboot/netboot_dumper.asm`) reads the EEPROM **by
+chunk number** (`eeprom.asm read_chunk`, chunk values 1..128), and per the Trinity
+EEPROM memory map (manual "Talking to the Interface" + `eeprom.asm get_chunk`) **chunk
+1's data lives at device address `&2000`** (64-byte index headers fill device
+`&0000–&1FFF`; chunk N at `&2000 + (N−1)·&400`). So `eeprom.bin` is **rotated**:
+
+```
+device address D  =  (file offset F + &2000) mod &20000
+file offset 0     =  device &2000  =  chunk 1   (the BOOTBLOCK, "DB FA" = IN A,(&FA))
+file offset &2000 =  device &4000  =  chunk 9   (a B-DOS helper library, "E3" = EX (SP),HL)
+```
+
+(The 25LC1024 is 128 KB; the dumper reads 128 chunks but only 120 exist, so values
+121..128 over-read and **wrap** device `&20000→&0000`, landing the index-header
+region at the file's tail, `&1E000+`. The EEPROM **index confirms the mapping**:
+index entry 0 is named **`"Boot Block"`** and entry 13 **`"Trinity Network "`**.)
+
+`CAPTURE-NOTES.txt` and the earlier analysis asserted *"file offset == device byte
+address,"* which is **false** — so the emulator's flat EEPROM model served the wrong
+chunk for every device read. For `device &2000` it returned file `&2000` (chunk 9,
+the helper library) instead of file 0 (chunk 1, the bootblock); the ROM then `JP
+&4000`'d into a library that immediately `CALL`s the `&5C26` STREAMS slot and the run
+slid through zeroed RAM. **That wander was the bug, not the boot.**
+
+**The fix** (`deviceLinearEEPROM`, `samboot_real_boot_test.go`) un-rotates the capture
+to a true device-linear image before loading it into the Trinity SPI model. The real
+boot then runs **coherently**, exactly as Pete's card does (B-DOS auto-loads from the
+EEPROM at power-on):
+
+1. patched ROM: Trinity probe (`&ED1B`, identity `'T'`) → report `&50` → `&0F7F`
+   fetch (`LMPR=&5F`, read 1024 B from device `&2000` into `&4000`) → `JP &4000`;
+2. `&4000` now holds **chunk 1 = the bootblock** (`IN A,(&FA); OR 64; …`), which runs
+   its load loop — **twelve `read_chunk` loads** pull B-DOS chunks 2..13 into `&8000`;
+3. `CALL &805F` hands off to B-DOS, which runs into its init (the trace halts inside
+   B-DOS at `&AB18`, where init touches the unmodeled SD/screen — expected).
+
+Tests: `TestRealBootLoadsBootblockAtChunk1` (the fetch lands the bootblock) and
+`TestRealBootLoadsBDOSCoherently` (12 chunk-loads + `CALL &805F`).
+
+**Consequences.**
+- §6.2's "the boot.asm bootblock is *absent* from the capture" and §7.1's "bootblock
+  at EEPROM offset `&0000`" both describe **chunk 1 at device `&2000`** (file 0) — it
+  was always present and is exactly what the ROM fetches. There is **no** dormant
+  `&0000` sequencer, **no** boot-entry contradiction, **no** missing loader, and the
+  hardware re-capture / ask-Colin follow-on (§7.4–§7.6) is **not needed**.
+- **The injection site is settled** (this is what `i197c-b3` asked): the boot-a-record
+  hook attaches in **the bootblock (chunk 1, device `&2000`)** at the §7.1/§7.2
+  location — after `CALL &805F`, before the `restore:` exit. Flashing it writes the
+  patched bootblock back to chunk 1. The §7.1/§7.2 disassembly of the bootblock body
+  stands; only its device-address label (`&0000`→`&2000`/chunk 1) changes.
+- The dumper itself is **not** buggy (it faithfully reads chunk-ordered, and waits for
+  the BUSY flag correctly); the defect was the *consumer's* address assumption. A
+  follow-up may teach the dumper to emit a device-linear image, but the existing
+  capture is complete and correct once un-rotated.
 
 ---
 
