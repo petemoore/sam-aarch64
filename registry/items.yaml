@@ -2333,7 +2333,7 @@
 - id: i121d
   title: Combined RRQ+WRQ bootable program + disk/Makefile/CI wiring
   description: |
-    Fold WRQ into the RRQ serve-out program (netboot_serve.asm) so one bootable program handles both; wire into the disk image, Makefile, and CI. The real Mac->SAM 'tftp put' over the wire is the hardware final gate.
+    Packaging vessel 1 (trinload): the self-contained WRQ-server code block + a host PUSH LAUNCHER (a trinpush wrapper) that reads a config / sets the record-placement strategy in the i121h config block (default highest-free), then pushes the block via trinpush-push.py for trinload to load+run. Combined RRQ+WRQ program; the .mgt vessel is the sibling i121j. Make target produces the pushable block; the launcher exposes --strategy (highest|lowest|explicit:N). Host-verifiable; the real wire push stays hardware-gated.
   status: OPEN
   depends_on: [i121c]
   kind: leaf
@@ -2362,6 +2362,33 @@
   title: WRQ record-claim — write the Trinity record-list name entry so a pushed record is marked used (enables BATCH pushes)
   description: |
     BLOCKER for Pete's batch use case (push many .mgt images). i121f streams a pushed image into a FREE record but does NOT write the central record-list name entry, and bdos_find_free_record keys 'free' off the list name byte==0 -> a pushed-but-unnamed record still reads as free, so a SECOND push overwrites the FIRST (every push collides on the lowest free record). Each VALID push must CLAIM its record by writing a record-list name entry (mirror B-DOS new.rec/RENAME: LDIR a 10-char name from the WRQ filename into the 16-byte entry + write the list sector) AFTER validation passes (the clean commit point). Host-modelable logic (build entry + place name); the card-absolute list-sector WRITE dispatch is hardware-gated (ports &DC-&DF, same gate as the list read) -> add a BDOSStore list-write capture to host-verify. Without it only a SINGLE push-then-boot works. Discovered during i121f (2026-06-21).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i121
+
+- id: i121h
+  title: "Config-block strategy: vessel-agnostic free-record placement (highest/lowest/explicit) read at launch"
+  description: |
+    Pete's design (2026-06-21): the WRQ server program is a vessel-agnostic library+entry that reads its record-placement STRATEGY from a small config block in memory, NOT hardcoded. The packaging vessel (trinload code-block or .mgt disk) populates that block; the program is identical either way. Config block (trailing, fixed label): magic/version + strategy byte (0=highest-free DEFAULT per s3 manifest-decision-4, 1=lowest-free, 2=explicit) + explicit-record word (0xFFFF=undefined -> future SAM prompt). bdos_find_free_record becomes strategy-aware (scan N..1 / 1..N / use named record). Resolves the i121f lowest-free vs documented s3 highest-free discrepancy by making it config-driven, default highest-free. Read once at launch (no routine disk re-read). Host-verifiable.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i121
+
+- id: i121i
+  title: .mgt bootable server-disk vessel + BASIC loader that appends the same config block
+  description: |
+    The OTHER shipping vessel (sibling of i121d's trinload vessel): a bootable .mgt that a BASIC loader boots, loading the WRQ server code + appending the i121h config block at the same memory location, so the runtime image matches the trinload vessel exactly. The disk carries the config file the loader reads (absence -> the future i121k SAM prompt). Same program source as the trinload vessel; only the packaging differs. Sibling deliverable to i121d.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i121
+
+- id: i121j
+  title: SAM-side interactive strategy prompt when config is undefined (deferred)
+  description: |
+    DEFERRED (Pete 2026-06-21: more complex to model, not needed now). Complementary to the host-launcher config: if the in-memory config block's strategy is undefined (the host launcher / disk config left it unset, e.g. user chose 'ask on the SAM'), the program prompts the user on the SAM keyboard for the placement strategy at launch. For now the host launcher always sets a concrete strategy (default highest-free), so this path is unused. Requires modelling a SAM keyboard prompt in emulation.
   status: OPEN
   kind: leaf
   owner: agent
