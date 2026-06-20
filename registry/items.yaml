@@ -2761,7 +2761,7 @@
   title: "CSD-read probe (emulation): author the trinload-pushable probe + prove init->CMD9->decode->serve vs the model"
   description: |
     Author the trinload-pushable CSD probe (mirror netboot_dumper: read a region -> serve over TFTP), PORTING the SD interface from Colin's code per i193 (the &38 microcontroller init, the CMD ladder, CMD9 CSD read, the &DC/&DF busy-poll + &3F auto-null timing) — reuse the encdrv/eeprom SPI primitives. Decode CSD v1.0/v2.0 so ANY card size is inferred, never hardcoded (host-side decode ok). PROVE it end-to-end in EMULATION against the i145c model (which i145f has validated by running Colin's real driver against it) BEFORE any hardware run — the emulation-first gate (Pete 2026-06-22: a trinload crash on real HW is unrecoverable). The actual real-CSD capture on hardware is the separate i145g. Depends i193 (port authority) + i145c (model) + i145f (model validated).
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i193, i145c, i145f]
   kind: leaf
   owner: agent
