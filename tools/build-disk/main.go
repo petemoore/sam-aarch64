@@ -490,6 +490,10 @@ func main() {
 		pagedCallSize, _ := os.Stat(*pagedCallPath)
 		fmt.Printf("p14:        %d bytes\n", pagedCallSize.Size())
 	}
+	if *encFixPath != "" {
+		encFixSize, _ := os.Stat(*encFixPath)
+		fmt.Printf("enc_fix:    %d bytes\n", encFixSize.Size())
+	}
 	if *sysregDataPath != "" {
 		sysregDataSize, _ := os.Stat(*sysregDataPath)
 		fmt.Printf("sd13:       %d bytes\n", sysregDataSize.Size())

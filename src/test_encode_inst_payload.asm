@@ -19,10 +19,11 @@
 ; dereferences the fixture pointer as a section-D address) works
 ; with no changes.
 ;
-; This file contains ONLY data — no executable code.  It is compiled
-; with --importfile=assembler.sym so OPK_* and any future shared
-; constants are available, but in practice all values here are literal
-; bytes.
+; This file contains ONLY data — no executable code — and is
+; self-contained (every value is a literal byte).  It is assembled
+; standalone with --exportfile=enc_fix_payload.sym, which exports
+; ENC_FIX_PAYLOAD_LEN for the assembler build to import (the LDIR
+; byte count).
 ;
 ; The content below is the verbatim fixture table and operand streams
 ; from src/test_encode_inst.asm, relocated here with org &E100 so
