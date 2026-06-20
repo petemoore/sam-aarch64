@@ -1124,6 +1124,15 @@
   owner: agent
   refs: [tools/font-proof/simcoupe-local-capture.patch, i80]
 
+- id: i81a
+  title: "PNG-endian one-line upstream SimCoupé PR: the __aarch64__ little-endian-guard fix in Base/SimCoupe.h"
+  description: |
+    hunk 2 of tools/font-proof/simcoupe-local-capture.patch; confirmed NOT in upstream HEAD; ready to offer standalone; community submission is Pete's call.
+  status: OPEN
+  kind: leaf
+  owner: pete
+  refs: [tools/font-proof/simcoupe-local-capture.patch, i81, i80]
+
 - id: i81b
   title: "Comment on upstream SimCoupé issue #28 offering our CI pass/fail idiom"
   description: |
@@ -1135,6 +1144,15 @@
     - {num: 370, role: completing}
   parent: i81
   refs: [i81, tools/run-simcoupe.sh, src/print.asm]
+
+- id: i81c
+  title: Optionally offer the SDL dummy-driver headless renderer fallback upstream
+  description: |
+    Lower priority than i81a; community submission is Pete's call.
+  status: OPEN
+  kind: leaf
+  owner: pete
+  refs: [i81, tools/font-proof/simcoupe-local-capture.patch]
 
 - id: i82
   title: "SAM TFTP client (RFC-conformant): RRQ/OACK/DATA/ACK client with ARP + RFC 1350/2347/2348/2349/7440 support"
@@ -1228,6 +1246,15 @@
     - {num: 360, role: completing}
   parent: i88
   refs: [src/netboot/tls_reasm.asm, tools/netboot-oracle/tls/reassembler.go, tools/netboot-oracle/z80/tls_reasm_test.go, i88]
+
+- id: i89
+  title: Capture a Pi 3 netboot exchange (Phase-3) — extend i83/i86 oracle to the older Pi family
+  description: |
+    Confirm Pi 3 boot ROM's DHCP behaviour (may differ from Pi 4 PXE option-43 dance) and its TFTP file set (bootcode.bin/start.elf/fixup.dat). Pete runs on real hardware (hub + Wireshark, trinload technique) when convenient — not a blocker (Pi 3 file set already known from his tftproot); agent provides setup steps at the time.
+  status: OPEN
+  kind: leaf
+  owner: pete
+  refs: ["docs/notes/pi-netboot-capture-analysis.md §4", i83, i86, i84]
 
 - id: i90
   title: "%nobits/BSS section bodies dropped by -flatten — source-structure loss"
@@ -1373,6 +1400,16 @@
   owner: pete
   parent: i100
   refs: [docs/specs/phase3-delivery-design.md, i100]
+
+- id: i101
+  title: "End-to-end deliverable: fetch RPi firmware → assemble spectrum4 release on SAM → TFTP-serve a full Pi 400 netboot"
+  description: |
+    Single bootable SAM disk: (1) fetch firmware from cdn.githubraw.com (SHA-256-verified, i100 downloader) → Trinity storage; (2) assemble release.bin/kernel8.img on SAM from release.tbn (M6 byte-match); (3) DHCP/TFTP netboot serve so Pi 400 netboots. New work = sequential overlay orchestration (fetch-once→assemble-once→serve-daily via Trinity B-DOS). NOT SimCoupé-testable (no Trinity ENC/SD in emulator); real E2E is Pete's hardware gate. Architecture: docs/specs/phase3-delivery-design.md §13. q23 decision (orchestration UX) shapes sub-decomposition.
+  status: OPEN
+  depends_on: [q23]
+  kind: leaf
+  owner: agent
+  refs: [q23, "docs/specs/phase3-delivery-design.md §13", i100, i70, i83, i86, i99, i80]
 
 - id: i102
   title: Aggressive T-state optimization of the netboot crypto / TLS-1.3 cipher-suite Z80
@@ -1813,6 +1850,25 @@
   owner: agent
   refs: [tools/z80-test-harness-go/, i104, i21]
 
+- id: i117
+  title: Extract sam-aarch64 learnings into a reusable open-source autonomous Claude project framework
+  description: |
+    Starter framework/template so a new project inherits: autonomous-loop monitor (i97), split iN/qN registries + controlled-status discipline (i115 validator), §3 pre-merge review gate, per-session retro (i104), prime-directive verification ethos, brick + Go-authority-oracle loop, delegate-to-subagents context discipline, and doc-lifecycle + single-source-of-truth rules. Must be self-contained (portable out of Pete's ~/.claude/CLAUDE.md). Delivery options: template repo / init scaffold or Claude Code plugin. Scope + sequencing + packaging are Pete's call; do not auto-pick-up.
+  status: OPEN
+  kind: leaf
+  owner: pete
+  refs: [i97, i104, i115]
+
+- id: i117a
+  title: "Prior-art survey: existing Claude Code autonomous-orchestration plugins/frameworks vs i117"
+  description: |
+    Preliminary 2026-06-18 scan: metaswarm, ccswarm, ruflo, claude-plan-orchestrator, autonomous-dev, closedloop-ai, barkain, Composio AO + Claude Code Agent Teams; plus awesome-agent-orchestrators, awesome-cli-coding-agents. Most emphasise PARALLELISM. i117's model differs: single serial orchestrator + deterministic non-LLM monitor (i97) + prime-directive culture + blameless retro + iN/qN registry backbone. Deliverable: feature-by-feature comparison to confirm differentiation and whether gap justifies building i117. Research-first; cite each tool. Pete's call; do not auto-pick-up.
+  status: OPEN
+  kind: leaf
+  owner: pete
+  parent: i117
+  refs: [i117]
+
 - id: i118
   title: i82 TFTP client — OACK handling / standard-TFTP-server interop
   description: |
@@ -1902,6 +1958,33 @@
   owner: agent
   refs: [src/netboot/, tools/netboot-oracle/tftp/, i82, i83, i95, i114, i119, i70]
 
+- id: i122
+  title: "SAM fetch-and-boot (PXE-style): TFTP-client-fetch a disk image and boot it directly"
+  description: |
+    SAM acts like a netbooting Pi: on boot, TFTP-fetches a named disk image, writes to a scratch/boot record, and boots into it (no control return). Design notes: (a) use reusable scratch record (no cleanup post-boot); (b) sha256-dedup before fetch — if content hash already in storage, skip fetch and boot existing copy (idempotent). Reuses i114/q26 content-addressed record naming. Builds on i82 receive loop + i119 write-out + a boot-a-record primitive (Trinity RECORD-then-BOOT model).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [src/netboot/netboot_client.asm, docs/notes/netboot-trinity-testing.md, i82, i114, i119]
+
+- id: i123
+  title: Investigate migrating the build from make to tup
+  description: |
+    tup tracks the full dependency graph and rebuilds exactly what is stale (and removes orphaned outputs), structurally preventing the dirty-build/stale-artifact class — same class i116 patches test-by-test; tup would make stale-.bin reads impossible by construction. Pete's ~/git/spectrum4 uses tup ('amazing'). Scope: evaluate tup against current Makefile (pyz80 .asm→.bin, Go builds, disk-image assembly, CI jobs), then if it wins, plan the migration.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [Makefile, i116, i104]
+
+- id: i124
+  title: Emulate full Trinity boot path so netboot boot wrappers run end-to-end in the harness
+  description: |
+    Close the emulate-before-hardware gap. PR #423 landed: EEPROM modeled + ROM1-read-only-at-&C000; smoke_main + client_main run end-to-end. i82 hang localized: client_main logic sound (reaches client_first, emits ARP); fault = proactive ARP TX before PHY link-up + no ARP retransmit (→ i127). Remaining: model PHY link-up (LSTAT + drop-TX-while-down) to reproduce the drop in emulation; SD/RST-8 stub for full client fetch; fold server/serve/http wrappers + delete NETBOOT_HOSTTEST carve-outs (→ i126).
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  refs: [tools/netboot-oracle/z80/eeprom.go, tools/netboot-oracle/z80/harness.go, tools/netboot-oracle/z80/enc28j60.go, tools/netboot-oracle/z80/netboot_boot_test.go, src/netboot/eeprom.asm, src/netboot/bdos_seam.asm, i119, i125, i126, i127, i93]
+
 - id: i125
   title: Section-C fit gate for every bootable netboot program (build + CI)
   description: |
@@ -1912,6 +1995,15 @@
   prs:
     - {num: 433, role: completing}
   refs: [tools/netboot-boot-fit-check.sh, Makefile, "docs/specs/phase3-delivery-design.md §13.1", i119, i124]
+
+- id: i126
+  title: One faithful SAM emulation layer used by every test — fix fragmented/inadequate emulation
+  description: |
+    Root cause of i82 hardware-debug detour: three partial emulators — flat 64 KB netboot harness (no paging/ROM/EEPROM), full assembler harness (LMPR/HMPR but no ROM1-at-&C000-at-boot), SimCoupé (faithful SAM, no Trinity). Deliverable: consolidate to one layer that (a) models ROM1 read-only at &C000 at boot, (b) carries Trinity seams (ENC28J60 + EEPROM + SD/B-DOS), (c) used by every test, (d) runs netboot boot wrappers end-to-end so NETBOOT_HOSTTEST carve-outs are deleted. Reuses harness.go paging. Subsumes i124 netboot slice.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [tools/z80-test-harness-go/harness.go, tools/netboot-oracle/z80/, src/netboot/, i124, i125, i116]
 
 - id: i127
   title: "netboot client: transmit the ARP only once the ENC PHY link is up"
@@ -1935,6 +2027,28 @@
     - {num: 432, role: completing}
   refs: [src/netboot/http_main.asm, src/netboot/enc_link.asm, tools/netboot-oracle/z80/http_main_boot_test.go, i127, i70, i82]
 
+- id: i129
+  title: trinload stage-one bootstrap disk + bring-up flow (de-risk disk-shipping)
+  description: |
+    Bootable trinload.mgt (Simon Owen's trinload, ~/git/trinload, BSD-ish; encdrv.asm/eeprom.asm vendored from it). .mgt built + written to Trinity records 128 and 3; push→run→return HARDWARE-CONFIRMED 2026-06-19. Vendor-in-repo Q settled by i132. Two uses: (a) load+run netboot tools over wire for dev iteration; (b) fallback transport if our client/server stalls. Done via hardware bring-up — no work PR; #426 is the tracking proxy. NB: trinload runs code in RAM; persisting disk images still needs i119 write-out.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 426, role: completing}
+  refs: [~/git/trinload/trinload.asm, tools/build-disk/, i82, i119, i121, i130]
+
+- id: i130
+  title: Name every unnamed-but-occupied Trinity record so none gets accidentally wiped
+  description: |
+    Card (Atom Lite, 65535 records) holds Pete's collection — most occupied records are UNNAMED in samdisk list (present in samdisk dir), so a list-gap looks free when it isn't. Completed 2026-06-19: 805 records named via Python L<rec> bulk label write; method validated on rec 128 first, then bulk over 1-850, 0 data failures, all verified. Cosmetic: ~424 show a trailing leftover char (samdisk copy writes only 10-byte label; harmless). Completed as a direct Python bulk-rename on Pete's machine; PR #426 (tracking-consolidation) is the closest registry-update proxy.
+  status: DONE
+  kind: leaf
+  owner: pete
+  prs:
+    - {num: 426, role: completing}
+  refs: [~/git/samdisk, i129]
+
 - id: i131
   title: Feed hardware-confirmed PHY-link-up behaviour back into the emulator (i127 rule-7 loop)
   description: |
@@ -1957,6 +2071,15 @@
     - {num: 431, role: completing}
   refs: [tools/netboot-oracle/z80/trinload_test.go, src/netboot/trinload.asm, i124, i126, i129, i133]
 
+- id: i133
+  title: Self-service autonomous hardware testing via trinload
+  description: |
+    With trinload on SAM (recs 3/128) and control returning between programs (i132 confirms mechanism), run unattended experiments: push a program via trinload3.py, it runs + RETs, push the next. Feedback: (a) sniff the wire (tcpdump); (b) network result channel — test program writes results over the net so agent debugs real-hardware unattended. Needs RET-not-halt program variants (re-inits ENC at start, RETs at end, emits results over net) + i132 pre-flight. A crash needs Pete reboot until i135 (auto-boot + Tapo) closes the gap.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [~/git/trinload/test/trinload.py, src/netboot/, i132, i135, i127]
+
 - id: i134
   title: "Harness SD/B-DOS write-out model: RST-8/HRECORD/HSAVE in emulation (prerequisite for emulation-testing i119)"
   description: |
@@ -1967,6 +2090,15 @@
   prs:
     - {num: 429, role: completing}
   refs: [tools/netboot-oracle/z80/bdos_store.go, tools/netboot-oracle/z80/bdos_store_test.go, tools/netboot-oracle/z80/harness.go, tools/netboot-oracle/z80/README.md, src/netboot/bdos_seam.asm, i119, i124, i126]
+
+- id: i135
+  title: Auto-boot a Trinity record on power-up — unsupervised end-to-end hardware automation
+  description: |
+    Pete has a Tapo smart plug for programmatic power-cycling. If a record auto-boots on power-on (no manual BOOT), agent runs fully unsupervised: power-cycle → SAM boots chosen record → runs → results over net (i133) → repeat. Investigate: EEPROM/config default-boot-record setting, Trinity AutoBOOT ROM (Colin's patch loads B-DOS from 128K EEPROM at reset), or patch forked B-DOS for early boot-a-record hook. Research: ~/sam-archive/bdos/analysis, Trinity AutoBOOT ROM, EEPROM layout, ~/sam-archive/trinity-docs. Pairs with i133 for full unsupervised loop.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [~/sam-archive/bdos/analysis, i87, i133]
 
 - id: i136
   title: "Autonomous-loop monitor: resume nudge lost to /context TUI redraw"
@@ -1979,6 +2111,15 @@
     - {num: 428, role: completing}
   refs: [tools/autonomous-loop/monitor.sh, tools/autonomous-loop/README.md]
 
+- id: i137
+  title: build-disk netboot ceiling check doesn't distinguish section class (i125 follow-up)
+  description: |
+    tools/build-disk/main.go rejects netboot image only if it loads past &10000 (≤32768 bytes). A section-C bootable (smoke/serve/server/client) must fit &8000-&BFFF (≤16384); above that it loads into ROM1 at boot and crashes. Mostly masked: the per-program make fit-check (i125, 16384 for section-C) fires first, so an over-section-C binary never reaches build-disk normally. Gap only reachable by calling build-disk -netboot directly on an over-section-C image. Fix needs a -netboot-section-c flag threaded through disk targets. Low priority (masked by i125 gate).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [tools/build-disk/main.go, tools/netboot-boot-fit-check.sh, i125, i119]
+
 - id: i138
   title: "Emulator keyboard-input support: stub LASTK/FLAGS/KSTATE sysvars to feed keypresses without interrupts"
   description: |
@@ -1987,3 +2128,25 @@
   kind: leaf
   owner: agent
   refs: [tools/netboot-oracle/z80/, tools/z80-test-harness-go/, i119, i126, i48c, i41]
+
+- id: i139
+  title: "Autonomous-loop monitor: CONTEXT_SETTLE 5s too short → task-done resume nudge dropped"
+  description: |
+    After touch task-done, monitor stuffs /context then (after CONTEXT_SETTLE) stuffs RESUME_NUDGE. /context is a full-TUI redraw; with settle at 5s the nudge landed mid-render and was dropped, leaving agent idle until ~1h hang-timeout. Fix: bumped CONTEXT_SETTLE default 5→30 (matches proven CLEAR_SETTLE). PR #439 landed this fix. Superseded by i140: the longer sleep did not fully resolve the issue — root cause was burst-size, not a render race. A running monitor must be restarted to apply the CONTEXT_SETTLE change.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 439, role: completing}
+  refs: [tools/autonomous-loop/monitor.sh, tools/autonomous-loop/README.md, i136, i140]
+
+- id: i140
+  title: monitor.sh task-done nudge not delivered — second message after /context is dropped
+  description: |
+    Root cause (reproduced in isolated test screen session): a long string stuffed as one screen -X stuff burst right after /context full-TUI redraw is dropped wholesale (0/4 delivered) — not a render race. Fixed: stuff now chunks every payload into small bursts; task-done branch uses nudge_until_turn (verify-and-retry, polls screen for 'esc to interrupt' turn marker). Verified end-to-end in isolated session ('nudge delivered (attempt 1, 1s)', agent took a real turn, twice). PR #444. Supersedes i139's CONTEXT_SETTLE approach.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 444, role: completing}
+  refs: [tools/autonomous-loop/monitor.sh, tools/autonomous-loop/monitor-nudge-delivery.md, tools/autonomous-loop/README.md, i139, i97]
