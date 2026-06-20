@@ -17,6 +17,8 @@ var mutatingCommands = map[string]bool{
 	"add":        true,
 	"split":      true,
 	"set-status": true,
+	"set-title":  true,
+	"set-desc":   true,
 	"set-pr":     true,
 	"dep":        true,
 	"answer":     true,

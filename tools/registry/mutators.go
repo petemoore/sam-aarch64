@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 )
@@ -472,6 +473,9 @@ func runAdd(args []string, paths mutatorPaths) {
 			it.Refs = []string{}
 		}
 		reg.Items = append(reg.Items, it)
+		for _, on := range it.DependsOn {
+			warnDoneLeafDep(os.Stderr, reg, on) // i87b trap (each new dependency)
+		}
 	}
 
 	// Record in the ledger before validate+gen so the id is persisted even if
@@ -535,6 +539,16 @@ func runSplit(args []string, paths mutatorPaths) {
 		fmt.Fprintf(os.Stderr, "registry split: --parent %q not found\n", *parentID)
 		os.Exit(1)
 	}
+	// Splitting a DONE item is unusual: it becomes an umbrella with derived status,
+	// so a new OPEN child reverts the once-complete parent to OPEN. Warn (Pete,
+	// 2026-06-21) — usually the parent should not have been DONE, or the new work
+	// belongs in a fresh top-level item rather than under a completed deliverable.
+	if reg.Items[parentIdx].Status == StatusDone {
+		fmt.Fprintf(os.Stderr,
+			"registry: WARNING — splitting %s, which is DONE. It becomes an umbrella with derived status; "+
+				"a new OPEN child will revert it to OPEN. If %s is genuinely complete, add a fresh top-level item instead.\n",
+			*parentID, *parentID)
+	}
 	reg.Items[parentIdx].Kind = "umbrella"
 	// Umbrellas carry no completing PRs (spec §"One-PR / umbrella semantics").
 	reg.Items[parentIdx].PRs = nil
@@ -581,6 +595,9 @@ func runSplit(args []string, paths mutatorPaths) {
 		child.Refs = []string{}
 	}
 	reg.Items = append(reg.Items, child)
+	for _, on := range child.DependsOn {
+		warnDoneLeafDep(os.Stderr, reg, on) // i87b trap (each child dependency)
+	}
 
 	// Record the new child id in the ledger.
 	if err := appendToLedger(ledgerPath(paths.registryDir), childID); err != nil {
@@ -659,6 +676,74 @@ func runSetStatus(args []string, paths mutatorPaths) {
 	fmt.Printf("registry: %s status → %s\n", *id, *status)
 }
 
+// runSetTitle implements `set-title --id iN --title "…"` (items only). The title
+// length limit (≤120 chars, single line) is enforced by applyAndCommit's validate,
+// so an over-long/multi-line title fails cleanly leaving source unchanged. Exists
+// so titles never need a hand-edit of items.yaml (the hand-edit being a route that
+// bypasses the CLI's validation + guards).
+func runSetTitle(args []string, paths mutatorPaths) {
+	fs := flag.NewFlagSet("set-title", flag.ExitOnError)
+	id := fs.String("id", "", "item id to update")
+	title := fs.String("title", "", "new title (≤120 chars, single line)")
+	fs.Parse(args) //nolint:errcheck // ExitOnError handles
+	if *id == "" || *title == "" {
+		fmt.Fprintln(os.Stderr, "registry set-title: --id and --title are required")
+		os.Exit(2)
+	}
+	reg, err := loadReg(paths)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	for i := range reg.Items {
+		if reg.Items[i].ID == *id {
+			reg.Items[i].Title = *title
+			applyAndCommit(reg, paths)
+			fmt.Printf("registry: %s title updated\n", *id)
+			return
+		}
+	}
+	fmt.Fprintf(os.Stderr, "registry set-title: item %q not found\n", *id)
+	os.Exit(1)
+}
+
+// runSetDesc implements `set-desc --id iN|qN --desc "…"` — updates an item's
+// Description or a question's Body. The ≤2000-char limit is enforced by validate.
+// Exists so descriptions never need a hand-edit of items.yaml/questions.yaml.
+func runSetDesc(args []string, paths mutatorPaths) {
+	fs := flag.NewFlagSet("set-desc", flag.ExitOnError)
+	id := fs.String("id", "", "item or question id to update")
+	desc := fs.String("desc", "", "new description (item) / body (question)")
+	fs.Parse(args) //nolint:errcheck // ExitOnError handles
+	if *id == "" || *desc == "" {
+		fmt.Fprintln(os.Stderr, "registry set-desc: --id and --desc are required")
+		os.Exit(2)
+	}
+	reg, err := loadReg(paths)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	for i := range reg.Items {
+		if reg.Items[i].ID == *id {
+			reg.Items[i].Description = *desc
+			applyAndCommit(reg, paths)
+			fmt.Printf("registry: %s description updated\n", *id)
+			return
+		}
+	}
+	for i := range reg.Questions {
+		if reg.Questions[i].ID == *id {
+			reg.Questions[i].Body = *desc
+			applyAndCommit(reg, paths)
+			fmt.Printf("registry: %s body updated\n", *id)
+			return
+		}
+	}
+	fmt.Fprintf(os.Stderr, "registry set-desc: id %q not found\n", *id)
+	os.Exit(1)
+}
+
 // runSetPR implements `set-pr --id iN --pr N [--role completing|followup]`.
 // Attaches a PR reference to an item.
 func runSetPR(args []string, paths mutatorPaths) {
@@ -694,6 +779,40 @@ func runSetPR(args []string, paths mutatorPaths) {
 	reg.Items[idx].PRs = append(reg.Items[idx].PRs, PRRef{Num: *prNum, Role: PRRole(*role)})
 	applyAndCommit(reg, paths)
 	fmt.Printf("registry: attached PR #%d (role:%s) to %s\n", *prNum, *role, *id)
+}
+
+// warnDoneLeafDep prints a non-blocking warning when `target` is a DONE leaf of
+// an umbrella that still has OPEN/IN_PROGRESS siblings — the i87b trap. Depending
+// on the finished part of a multi-part deliverable reads as "satisfied", so the
+// dependent surfaces as ready while the unfinished sibling is silently missing.
+// (CLAUDE.md "Depend on the umbrella for the whole … never a single done leaf".)
+func warnDoneLeafDep(w io.Writer, reg *Registry, target string) bool {
+	var t *Item
+	for i := range reg.Items {
+		if reg.Items[i].ID == target {
+			t = &reg.Items[i]
+			break
+		}
+	}
+	if t == nil || t.Parent == "" || t.Status != StatusDone {
+		return false
+	}
+	var openSibs []string
+	for i := range reg.Items {
+		s := &reg.Items[i]
+		if s.Parent == t.Parent && s.ID != target && (s.Status == StatusOpen || s.Status == StatusInProgress) {
+			openSibs = append(openSibs, s.ID)
+		}
+	}
+	if len(openSibs) == 0 {
+		return false
+	}
+	fmt.Fprintf(w,
+		"registry: WARNING — %s is a DONE leaf of umbrella %s, which still has OPEN sibling(s) %v.\n"+
+			"  If you need the WHOLE of %s's deliverable, depend on the umbrella %s (or the open sibling(s)) instead —\n"+
+			"  a done leaf reads as satisfied, so depending on it can make this item surface as ready while %v is unfinished (the i87b trap).\n",
+		target, t.Parent, openSibs, t.Parent, t.Parent, openSibs)
+	return true
 }
 
 // runDep implements `dep add|rm --id iN --on iM|qN`.
@@ -771,6 +890,7 @@ func runDep(args []string, paths mutatorPaths) {
 			}
 		}
 		reg.Items[idx].DependsOn = append(reg.Items[idx].DependsOn, *on)
+		warnDoneLeafDep(os.Stderr, reg, *on) // i87b trap: warn if depending on a done leaf with open siblings
 		// applyAndCommit runs validate which includes the full cycle check (inv 11).
 
 	case "rm":
