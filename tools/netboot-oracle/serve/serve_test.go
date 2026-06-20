@@ -339,8 +339,8 @@ func TestDiskRecordPushClaimsAdvance(t *testing.T) {
 	if claims[0].Name != "firstdisk" {
 		t.Errorf("claim[0] name = %q, want %q (suffix dropped, prefix stripped)", claims[0].Name, "firstdisk")
 	}
-	if claims[1].Name != "seconddisk" {
-		t.Errorf("claim[1] name = %q, want %q (10-char cap)", claims[1].Name, "seconddisk")
+	if claims[1].Name != "seconddiskimage" {
+		t.Errorf("claim[1] name = %q, want %q (16-char record-name field)", claims[1].Name, "seconddiskimage")
 	}
 
 	// The card is now exhausted (both free records claimed): the next WRQ is rejected.

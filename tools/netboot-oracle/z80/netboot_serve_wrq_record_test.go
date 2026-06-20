@@ -582,7 +582,7 @@ func TestServeWRQRecordPushClaimsDifferentRecords(t *testing.T) {
 		t.Errorf("push 1 claimed record %d, want 3 (the first free slot)", lw[0].ChangedRecord)
 	}
 	if lw[0].Name != "firstdisk" {
-		t.Errorf("push 1 claim name = %q, want %q (filename-derived, 10-char cap)", lw[0].Name, "firstdisk")
+		t.Errorf("push 1 claim name = %q, want %q (filename-derived, 16-char record-name field)", lw[0].Name, "firstdisk")
 	}
 	// The CardModel now reads record 3 as NAMED — the whole point.
 	if entry := card.RecordEntry(3); entry[0]&0x7F == 0 {
@@ -595,8 +595,8 @@ func TestServeWRQRecordPushClaimsDifferentRecords(t *testing.T) {
 		img2[i] = byte(i*9 + 2)
 	}
 	copy(img2[bdos.BDOSStampOffset:bdos.BDOSStampOffset+4], []byte("BDOS"))
-	// A filename whose stem exceeds 10 chars, to exercise the B-DOS name-field cap:
-	// "seconddiskimage" → capped to "seconddisk".
+	// A filename whose stem is 15 chars — within the full 16-char record-name field
+	// (i195), so it is kept whole: "seconddiskimage" (the .mgt suffix dropped).
 	final2 := runFullPush(t, mac, enc, goRef, "seconddiskimage.mgt", img2)
 	if blk, err := tftp.ParseACK(udpPayload(t, final2)); err != nil || blk != 1600 {
 		t.Fatalf("push 2 final reply = ACK %d (err %v), want ACK 1600 (valid image)", blk, err)
@@ -615,8 +615,8 @@ func TestServeWRQRecordPushClaimsDifferentRecords(t *testing.T) {
 	if lw[1].ChangedRecord == lw[0].ChangedRecord {
 		t.Fatalf("both pushes claimed the same record %d — the claim did NOT mark the first record used", lw[0].ChangedRecord)
 	}
-	if lw[1].Name != "seconddisk" { // "seconddiskimage" capped at 10 chars
-		t.Errorf("push 2 claim name = %q, want %q (10-char cap)", lw[1].Name, "seconddisk")
+	if lw[1].Name != "seconddiskimage" { // 15 chars, within the 16-char record-name field
+		t.Errorf("push 2 claim name = %q, want %q (16-char record-name field)", lw[1].Name, "seconddiskimage")
 	}
 
 	// The two images landed in DIFFERENT records: every sector of push 1 targets
@@ -646,8 +646,8 @@ func TestServeWRQRecordPushClaimsDifferentRecords(t *testing.T) {
 	if claims[0].Record != 3 || claims[1].Record != 4 {
 		t.Errorf("Go authority claimed records %d, %d; want 3, 4", claims[0].Record, claims[1].Record)
 	}
-	if claims[0].Name != "firstdisk" || claims[1].Name != "seconddisk" {
-		t.Errorf("Go authority claim names %q, %q; want %q, %q", claims[0].Name, claims[1].Name, "firstdisk", "seconddisk")
+	if claims[0].Name != "firstdisk" || claims[1].Name != "seconddiskimage" {
+		t.Errorf("Go authority claim names %q, %q; want %q, %q", claims[0].Name, claims[1].Name, "firstdisk", "seconddiskimage")
 	}
 }
 

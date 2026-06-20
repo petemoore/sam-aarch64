@@ -447,24 +447,67 @@ func (r *Responder) finalizePush(rcv *wrqReceiver, block uint16) []byte {
 		// bdos_claim_record (which writes the list entry); the claim is recorded ONLY
 		// on the valid path (an invalid push leaves the record free for reuse).
 		claimed := r.nextRecordForStrategy()
-		r.claims = append(r.claims, Claim{Record: claimed, Name: claimRecordName(rcv.filename)})
+		r.claims = append(r.claims, Claim{Record: claimed, Name: ClaimRecordName(rcv.filename)})
 		r.removeFreeRecord(claimed)
 		return r.wrapToWRQClient(tftp.BuildACK(block))
 	}
 	return r.wrapToWRQClient(tftp.BuildError(3, "invalid disk record"))
 }
 
-// claimRecordName derives the central-list name written for a claimed record from
-// the WRQ filename: strip a leading "trinity-sam-disks/" prefix (the disk-record
-// namespace, bdos.Classify), drop any dotted suffix, and cap at 10 chars (the
-// B-DOS name field). The Go authority for the Z80 bdos_build_claim_entry.
-func claimRecordName(filename string) string {
+// recordNameLen is the full central-list record-name field width: the whole
+// 16-byte list entry IS the record name (trinity-record-detection-design.md §4.3),
+// so pushed disk images stay legible via the `RECORD` command. (Distinct from
+// bdos.NameLen = 10, the narrower B-DOS file-name field.)
+const recordNameLen = 16
+
+// recordNameDefault is the safe fallback when sanitisation leaves no characters,
+// so a claimed entry is never accidentally free (firstByte&0x7F == 0) or illegal.
+const recordNameDefault = "pushed"
+
+// ClaimRecordName derives the central-list name written for a claimed record from
+// the WRQ filename. The Go authority for the Z80 bdos_build_claim_entry; both must
+// agree byte-for-byte. THE WRQ FILENAME IS ATTACKER-CONTROLLABLE and the entry is
+// written into a shared user resource (the Trinity SD card's record list), so the
+// derivation is HARDENED:
+//
+//  1. Strip a leading "trinity-sam-disks/" prefix (the disk-record namespace).
+//  2. Take the FINAL path segment (the leaf after the last '/'), collapsing any
+//     directory traversal — "../../../etc/passwd" -> "passwd" — and ensuring '/'
+//     is never stored.
+//  3. Drop a dotted suffix ("disk.mgt" -> "disk").
+//  4. Sanitise every byte to the legal printable record-name charset 0x20..0x7E;
+//     anything outside it (high-bit, control 0x00..0x1F, DEL 0x7F) becomes '_'.
+//     B-DOS prints names AND 127 per byte and renders masked bytes <0x21 as a
+//     space-replacement (bdos15a.src.txt:4098-4115); 0x20..0x7E renders cleanly
+//     and is bit-7-clear, so the first char can never set the write-protect bit.
+//  5. Truncate to recordNameLen (16) — a hard bound; no input can overrun the slot.
+//  6. If sanitisation produced nothing, substitute recordNameDefault so the entry
+//     is a valid NAMED entry, never free or illegal.
+func ClaimRecordName(filename string) string {
 	_, name := bdos.Classify(filename)
+	// Final path segment: collapse any directory part (and stray '/').
+	if i := strings.LastIndexByte(name, '/'); i >= 0 {
+		name = name[i+1:]
+	}
+	// Drop a dotted suffix.
 	if i := strings.IndexByte(name, '.'); i >= 0 {
 		name = name[:i]
 	}
-	if len(name) > bdos.NameLen {
-		name = name[:bdos.NameLen]
+	// Sanitise every byte to the legal printable charset 0x20..0x7E.
+	b := []byte(name)
+	for i, c := range b {
+		if c < 0x20 || c > 0x7E {
+			b[i] = '_'
+		}
+	}
+	name = string(b)
+	// Truncate to the 16-char record-name field.
+	if len(name) > recordNameLen {
+		name = name[:recordNameLen]
+	}
+	// Empty-name guard: never write a free/illegal entry.
+	if name == "" {
+		name = recordNameDefault
 	}
 	return name
 }

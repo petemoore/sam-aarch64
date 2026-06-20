@@ -264,6 +264,55 @@ the **selected-record** view; the list (§4.3) is the **card-level** view. Both
 are part of the design — the list enumerates and finds a free record; the
 per-record stamp/label confirms the chosen record before the write.
 
+### 4.6 Naming a pushed record from its WRQ filename (the hardened sanitisation, i195)
+
+When the netboot server accepts a disk-image push over TFTP WRQ
+(`netboot_serve.asm` `wd_finalize` → `bdos_claim_record` → `bdos_build_claim_entry`;
+Go authority `serve.ClaimRecordName`), it derives the record's central-list name
+(the full **16-byte** field of §4.3, so the ~19 pushed images are legible via the
+`RECORD` command) from the **WRQ filename**. **That filename is
+attacker-controllable** — it arrives over the network — and the name is written into
+the shared on-card record list alongside other users' disks, so the derivation is
+**hardened**. The Z80 routine and the Go authority implement the identical rule,
+in this order:
+
+1. **Strip a leading `trinity-sam-disks/` prefix** (the disk-record namespace,
+   `bdos.Classify`).
+2. **Take the final path segment** — the leaf after the last `/`. Any directory
+   part or traversal payload collapses to its leaf (`../../../etc/passwd` →
+   `passwd`), and `/` can never appear in the stored name.
+3. **Drop a dotted suffix** — copy until the first `.` (`disk.mgt` → `disk`).
+4. **Sanitise every byte to the legal printable charset `0x20..0x7E`** (space
+   through `~`). Any byte outside it — a high-bit byte (`>= 0x80`), a control byte
+   (`0x00..0x1F`), or DEL (`0x7F`) — is **replaced with `_` (`0x5F`)**, not dropped,
+   so the name length is preserved and no illegal byte ever reaches the card. The
+   charset is grounded in B-DOS's own print path: `L18652` (`bdos15a.src.txt:4098-4115`)
+   masks `AND 127` per byte and renders any masked byte `< 0x21` as a configured
+   space-replacement character; `0x7F` (DEL) would render as garbage. Keeping only
+   `0x20..0x7E` guarantees every stored byte renders cleanly via `RECORD` **and** is
+   bit-7-clear, so the first character can never set the write-protect bit (§4.3).
+5. **Truncate to 16** — the width of the record-name field and of `BD_CLAIM_ENTRY`.
+   A hard bound: no input of any length can overrun the entry or the on-card slot.
+6. **Empty-name default.** If steps 1–4 leave no characters (empty filename, or one
+   that is all separators/dots), substitute the default name **`pushed`**, so the
+   entry is always a valid **named** entry — never accidentally free
+   (`firstByte AND 0x7F == 0`, §4.4) or write-protected.
+
+The claim itself is a read-modify-write that touches **only the claimed record's
+own 16-byte slot** (§4.3 / §7): the containing list sector is read, exactly those 16
+bytes overwritten, and the sector written back, leaving every other entry
+byte-for-byte intact (the shared-resource invariant). The i195 host tests
+(`bdos_claim_name_test.go`) drive the real Z80 `bdos_build_claim_entry` /
+`bdos_claim_record` for a battery of adversarial filenames (200-char garbage,
+traversal payloads, embedded control/high-bit/DEL bytes, all-illegal, empty) and
+assert the built entry is always safe + legible, matches the Go authority, and that
+no adversarial input writes a single byte outside the claimed slot. **Honesty line:**
+those tests reach the list sector via the harness hooks `BD_HOOK_LISTREAD/LISTWRITE`
+(161/162), which model the on-card RMW result; the raw card-absolute SPI list-sector
+path (CMD17/CMD24 on `&DC`–`&DF`) is the hardware-gated open item of §8 — there is
+no card-absolute list-sector Z80 SPI driver yet, so this is emulation-verified, not
+hardware-verified.
+
 ---
 
 ## 5. Free-record detection algorithm
