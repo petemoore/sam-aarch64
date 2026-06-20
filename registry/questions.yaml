@@ -40,3 +40,8 @@
   body: |
     Backlog hygiene (i151 audit): owner:pete DECISION items still appear in 'ready' because the model removes items only via depends_on edges, not owner. Affected: i6 (screen-mode), i50 (Go-CLI shape), i56 (layout extraction), i66 (page-persistence), i100c (picker UX), i117/i117a (reusable-framework idea); plus i89 (Pi-3 capture — needs your Pi rig, not SAM/i133). How should these leave the agent's ready? (a) make 'ready' exclude owner:pete items; (b) model each as a qN; (c) per-item gating. Also confirm i87 gates ROM-dependent items, and whether you want a Pi-rig gate item for i89.
   owner: pete
+
+- id: q33
+  body: |
+    Version-control the ~/bin agent tools (claude-chat-export, claude-diary helpers, etc.)? They are currently unversioned — the i155 fix to claude-chat-export, and the tools themselves, exist only on the Pi's SD card with no backup/history. Options: a dotfiles repo, a tools/ dir in a repo, or leave as-is. Pete's call (his personal tooling + scope).
+  owner: pete

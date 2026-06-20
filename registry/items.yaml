@@ -2580,3 +2580,13 @@
   owner: agent
   prs:
     - {num: 481, role: completing}
+
+- id: i155
+  title: Fix claude-chat-export dropping user messages mid-session
+  description: |
+    ~/bin/claude-chat-export omits Pete's messages after a point in the per-session markdown export (2026-06-20 session: messages from 'you know what else is cool' onward are missing, though present in the .jsonl). Investigate the exporter's turn/role parsing (likely a message-shape or multi-part content-block handling bug, or a turn-boundary heuristic that stops early) and fix so every user turn is exported. Tool: ~/bin/claude-chat-export (renders .jsonl session logs to the Jekyll chat archive).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 482, role: completing}
