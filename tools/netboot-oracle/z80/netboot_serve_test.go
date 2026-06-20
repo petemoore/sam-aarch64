@@ -165,6 +165,16 @@ func demoRRQ(name string, opts []tftp.Option) []byte {
 	})
 }
 
+// demoWRQ builds the client's WRQ frame for name with the given options (i121a).
+func demoWRQ(name string, opts []tftp.Option) []byte {
+	return frame.BuildUDPFrame(frame.UDP{
+		DstMAC: demoServerMAC, SrcMAC: demoClientMAC,
+		SrcIP: demoClientIP, DstIP: demoServerIP,
+		SrcPort: demoClientTID, DstPort: 69,
+		Payload: tftp.BuildWRQ(name, "octet", opts),
+	})
+}
+
 // demoAck builds the client's ACK frame (client TID -> server TID).
 func demoAck(block uint16) []byte {
 	return frame.BuildUDPFrame(frame.UDP{
@@ -276,5 +286,71 @@ func TestServeDemoArpOtherIPIgnored(t *testing.T) {
 	other := frame.BuildARPRequest(demoClientMAC, demoClientIP, demoClientIP)
 	if r := serveDemo(t, mac, enc, other); r != nil {
 		t.Errorf("answered an ARP request for a different IP: %x", r)
+	}
+}
+
+// TestServeDemoWRQBareACK0 is the i121a host check (bare WRQ path): a bare WRQ
+// (no options, `tftp put` default) from the client is answered with ACK-0
+// (`00 04 00 00`) byte-for-byte matching the Go authority serve.Responder.OnFrame.
+// The Z80 serve_serve_once dispatch learns the client endpoint and calls
+// build_ack0; the reply wraps via build_udp_frame back to the client TID.
+func TestServeDemoWRQBareACK0(t *testing.T) {
+	mac := loadServeDemo(t)
+	ref := fillServeConfig(t, mac, []demoFile{{"hello.txt", makeFile(10), demoSrcOrgA}})
+	enc := z80h.NewENC28J60()
+	initServeDriver(t, mac, enc)
+
+	wrq := demoWRQ("upload.bin", nil)
+	got := serveDemo(t, mac, enc, wrq)
+	eqFrame(t, "bare WRQ -> ACK-0", got, ref.OnFrame(wrq))
+
+	// Confirm opcode and block number of the received frame.
+	u, ok := frame.ParseUDP(got)
+	if !ok {
+		t.Fatalf("bare WRQ reply is not a UDP frame: %x", got)
+	}
+	if tftp.Opcode(u.Payload) != tftp.OpACK {
+		t.Fatalf("bare WRQ reply opcode = %d, want ACK(%d)", tftp.Opcode(u.Payload), tftp.OpACK)
+	}
+	blk, err := tftp.ParseACK(u.Payload)
+	if err != nil || blk != 0 {
+		t.Fatalf("bare WRQ reply block = %d (err %v), want 0", blk, err)
+	}
+}
+
+// TestServeDemoWRQOptionedOACK is the i121a host check (optioned WRQ path): a
+// WRQ carrying blksize + tsize options is answered with an OACK that echoes the
+// accepted blksize and the client's tsize, byte-for-byte matching the Go authority.
+// The Z80 handle_wrq calls negotiate_blksize + build_oack_opts_wrq + build_oack.
+func TestServeDemoWRQOptionedOACK(t *testing.T) {
+	mac := loadServeDemo(t)
+	ref := fillServeConfig(t, mac, []demoFile{{"hello.txt", makeFile(10), demoSrcOrgA}})
+	enc := z80h.NewENC28J60()
+	initServeDriver(t, mac, enc)
+
+	wrq := demoWRQ("upload.bin", []tftp.Option{
+		{Name: "blksize", Value: "512"},
+		{Name: "tsize", Value: "4096"},
+	})
+	got := serveDemo(t, mac, enc, wrq)
+	eqFrame(t, "optioned WRQ -> OACK", got, ref.OnFrame(wrq))
+
+	// Also confirm the OACK carries the right option values.
+	u, ok := frame.ParseUDP(got)
+	if !ok {
+		t.Fatalf("optioned WRQ reply is not a UDP frame: %x", got)
+	}
+	if tftp.Opcode(u.Payload) != tftp.OpOACK {
+		t.Fatalf("optioned WRQ reply opcode = %d, want OACK(%d)", tftp.Opcode(u.Payload), tftp.OpOACK)
+	}
+	opts, err := tftp.ParseOACK(u.Payload)
+	if err != nil {
+		t.Fatalf("parse OACK: %v", err)
+	}
+	if v, _ := tftp.OptionUint(opts, "blksize"); v != 512 {
+		t.Fatalf("OACK blksize = %d, want 512", v)
+	}
+	if v, _ := tftp.OptionUint(opts, "tsize"); v != 4096 {
+		t.Fatalf("OACK tsize = %d, want 4096", v)
 	}
 }

@@ -184,3 +184,80 @@ func TestNonUDPIgnored(t *testing.T) {
 		t.Fatalf("non-UDP frame produced a reply: %x", r)
 	}
 }
+
+// wrqFrame builds a client WRQ frame for name with the given options (i121a).
+func wrqFrame(name string, opts []tftp.Option) []byte {
+	return frame.BuildUDPFrame(frame.UDP{
+		DstMAC: srvMAC, SrcMAC: cliMAC, SrcIP: cliIP, DstIP: srvIP,
+		SrcPort: cliTID, DstPort: 69,
+		Payload: tftp.BuildWRQ(name, "octet", opts),
+	})
+}
+
+// TestBareWRQSendsACK0 confirms that a bare WRQ (no options) is answered with
+// ACK block 0 (`00 04 00 00`) wrapped as a UDP frame back to the client TID.
+// This is the i121a handshake: the server learns the client endpoint and
+// signals readiness to receive (DATA reception is i121b, not here).
+func TestBareWRQSendsACK0(t *testing.T) {
+	s := newServer(map[string][]byte{"hello.txt": makeFile(10)})
+	req := wrqFrame("upload.bin", nil)
+	reply := s.OnFrame(req)
+	if reply == nil {
+		t.Fatalf("bare WRQ: no reply from server")
+	}
+	u, ok := frame.ParseUDP(reply)
+	if !ok {
+		t.Fatalf("bare WRQ reply is not a UDP frame: %x", reply)
+	}
+	if tftp.Opcode(u.Payload) != tftp.OpACK {
+		t.Fatalf("bare WRQ reply opcode = %d, want ACK(%d)", tftp.Opcode(u.Payload), tftp.OpACK)
+	}
+	blk, err := tftp.ParseACK(u.Payload)
+	if err != nil || blk != 0 {
+		t.Fatalf("bare WRQ reply ACK block = %d (err %v), want 0", blk, err)
+	}
+	if u.DstPort != cliTID {
+		t.Fatalf("bare WRQ reply dst port = %d, want client TID %d", u.DstPort, cliTID)
+	}
+	if u.SrcPort != srvTID {
+		t.Fatalf("bare WRQ reply src port = %d, want server TID %d", u.SrcPort, srvTID)
+	}
+}
+
+// TestOptionedWRQSendsOACK confirms that an optioned WRQ (blksize + tsize) is
+// answered with an OACK echoing the accepted blksize and the client's tsize.
+// This is the i121a OACK handshake path (RFC 2347). DATA reception is i121b.
+func TestOptionedWRQSendsOACK(t *testing.T) {
+	s := newServer(map[string][]byte{"hello.txt": makeFile(10)})
+	req := wrqFrame("upload.bin", []tftp.Option{
+		{Name: "blksize", Value: "512"},
+		{Name: "tsize", Value: "4096"},
+	})
+	reply := s.OnFrame(req)
+	if reply == nil {
+		t.Fatalf("optioned WRQ: no reply from server")
+	}
+	u, ok := frame.ParseUDP(reply)
+	if !ok {
+		t.Fatalf("optioned WRQ reply is not a UDP frame: %x", reply)
+	}
+	if tftp.Opcode(u.Payload) != tftp.OpOACK {
+		t.Fatalf("optioned WRQ reply opcode = %d, want OACK(%d)", tftp.Opcode(u.Payload), tftp.OpOACK)
+	}
+	opts, err := tftp.ParseOACK(u.Payload)
+	if err != nil {
+		t.Fatalf("parse OACK: %v", err)
+	}
+	if v, _ := tftp.OptionUint(opts, "blksize"); v != 512 {
+		t.Fatalf("OACK blksize = %d, want 512", v)
+	}
+	if v, _ := tftp.OptionUint(opts, "tsize"); v != 4096 {
+		t.Fatalf("OACK tsize = %d, want 4096", v)
+	}
+	if u.DstPort != cliTID {
+		t.Fatalf("optioned WRQ reply dst port = %d, want client TID %d", u.DstPort, cliTID)
+	}
+	if u.SrcPort != srvTID {
+		t.Fatalf("optioned WRQ reply src port = %d, want server TID %d", u.SrcPort, srvTID)
+	}
+}
