@@ -3581,6 +3581,8 @@
   title: "Commoning pass #2 — bank test-variant headroom before i201a compound-form encoders"
   description: |
     Follow-on to i205 (DONE, +386 B). The test-variant assembler.bin has only 87 B headroom to the &C000 cliff after i203d un-park, so i201a (compound-form encoders + fixtures) will overflow. Bank more headroom via coverage-first commoning of the un-commoned families flagged in build/coverage-report.txt: ml_div* (signed-divide helper), main_dir_org_* / directive handlers, and the sysname_parse_* generic-sysreg fallback paths. Keep the coverage-first rule (add a fixture so each family is green before/after commoning). Prod binary must stay byte-identical; test variant must regain headroom. Authority: existing Z80 sources + Go encoders where duplicated logic mirrors a Go fold/encoder.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 575, role: completing}
