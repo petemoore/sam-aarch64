@@ -2715,7 +2715,7 @@
   description: |
     Hardware implementation of the card-absolute list-sector read modelled in B3 by the harness hook BD_HOOK_LISTREAD. Implements the SPI command ladder (CMD17 single-block read) on Trinity ports &DC-&DF to read list sectors 1..base-1 directly off the SD card. Not required for B3 emulation; the harness models the returned bytes. Needs final confirmation of the exact SPI init/read sequence on real hardware before building (docs/specs/trinity-record-detection-design.md §8, open-verification-item-1 and §3 frozen-interface principle).
   status: OPEN
-  depends_on: [i193, i145c]
+  depends_on: [i193, i145c, i145h]
   kind: leaf
   owner: agent
   parent: i119
@@ -2796,7 +2796,7 @@
   description: |
     The experiment that was never faithfully emulated: trinload load -> push serve program -> serve_main reads EEPROM + the modelled CSD -> BD_RECORDS computed (NOT injected) -> push a .mgt -> validate size==819200 -> stream to highest free record -> claim. Asserts the real-hardware path end to end. The test whose absence let the BD_RECORDS=0 hardware failure slip through.
   status: OPEN
-  depends_on: [i145b, i145c, i145f]
+  depends_on: [i145b, i145c, i145f, i145h]
   kind: leaf
   owner: agent
   parent: i145
@@ -2839,7 +2839,7 @@
   title: "Extended validation: run Colin's write-record / select-record / read-back flow against the model"
   description: |
     Extended emulation validation (Pete's suggestion 2026-06-22): run Colin's write-record / select-record / read-back flow against the model — the fuller 'write a disk to storage, select that record, [boot it]' test, the strongest faithfulness check since it exercises CMD17/CMD24 single-block read+write + record selection (&A0A2) through Colin's REAL code. Needs the i145c model extended with CMD17/CMD24 + enough B-DOS scaffolding to drive HRECORD/HSAVE/HRSAD. Aspirational/larger than i145f, not on the critical CSD path, but the highest-confidence validation of the whole storage seam. Depends i145c (extended) + i145f.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i145c, i145f]
   kind: leaf
   owner: agent
@@ -3293,6 +3293,6 @@
   description: |
     Pete (2026-06-21 night): push to trinity-sam-disks/NAME -> name the claimed Trinity RECORD from NAME (full record-name field, ~16 chars; i121g caps at 10 = the B-DOS file-name field) so the 19 images are legible via RECORD/dir. The claim is a record-LIST WRITE = a raw SD write with NO real B-DOS hook, so depends on i193 (the SD write interface) AND i145c (the harness modelling that write FAITHFULLY at raw-SD level, not hook-injected). SAFETY/ROBUSTNESS (Pete): the WRQ filename is ATTACKER-CONTROLLABLE, so the name derivation must be BOUNDED + SANITISED and must not be exploitable to corrupt a record: (1) confirm the legal SAM record-name charset + field length from the B-DOS source / docs/specs/trinity-record-detection-design.md; (2) derive the name from the post-prefix path (e.g. the final path segment), drop/replace illegal chars and extra separators/dots; (3) TRUNCATE to the field length so there is NO buffer overrun and NO illegal byte written, for ANY input (a 200-char name, trinity-sam-disks/abc/def.123, control bytes). Document the sanitisation rule in the spec. TESTED IN EMULATION vs i145c (incl. adversarial inputs asserting a safe + legible name + an intact, uncorrupted record); auto-hardware-tested when i194 pushes the 19 images. owner:agent, no Pete/question gate.
   status: OPEN
-  depends_on: [i193, i145c]
+  depends_on: [i193, i145c, i145h]
   kind: leaf
   owner: agent
