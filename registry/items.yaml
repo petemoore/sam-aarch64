@@ -1130,9 +1130,11 @@
     FINDING (2026-06-22, i69 investigation): Lever 1 (evict-to-cluster) is now EXHAUSTED for the remaining inline suites — they are inline PRECISELY because they are paging-coupled. test_emit_paged/test_reader_paged/test_sysreg_paged each do enctab_map_in / LMPR swaps that would page OUT the off-axis cluster's own executing code (cluster runs with LMPR mapping page 12 into section A; dispatch at assembler.asm:388, BEFORE load_enctab); test_sysname needs the section-B paged_call body (sysreg encoders); test_trampoline/test_paged_call are bootstrap-timed. So a naive cluster move hangs the boot.
     
     VIABLE LEVER for the encode_inst pressure = lever 3: move enc_fix_table (528 B + all future i201/i204 fixture growth) + the fixture operand streams OFF-AXIS to a spare HLOAD'd page (test_cluster.bin pattern), read row-by-row by the INLINE driver (run_encode_inst_self_tests, must stay inline — encode_inst reads ENCTAB in section A) via an LMPR-bracketed copy: map fixture page into section A, copy row+stream into an inline scratch buffer (driver is in section C, stays mapped), remap ENCTAB, then call encode_inst on the scratch copy. ~30 B driver overhead, +~498 B now and SCALES with the strand. Files: new payload build target + loader fn + assembler.asm boot call + Makefile/build-disk filename + driver restructure + move the enc_fix_table data out of test_encode_inst.asm. Verify via TestBootSelfTestsPass (catches boot hang) + SimCoupe. i201a/i201b/i201c/i204 fixtures all depend on this relief.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 577, role: completing}
   refs: [i68, src/README.md]
 
 - id: i70
