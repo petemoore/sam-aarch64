@@ -42,8 +42,9 @@ SDC_INIT:         equ &38                       ; microcontroller "SD init" wake
 SDC_DATATOK:      equ &FE                       ; start-of-data token preceding the CSD
 SDC_IDLE:         equ &FF                       ; SPI-idle MISO
 
-; The 16-byte CSD read target — RAM inside the section-C image (writable under the
-; boot loader; &C000 is ROM at boot, so it is NOT reused).
+; The 16-byte CSD read target. This module ships as a section-D overlay (i145b-b2),
+; so CSD_STAGE lives wherever the module lands in the boot image (section C or D);
+; both are RAM at boot, so the read/decode write here freely.
 CSD_STAGE:        defs 16
 
 ; ===========================================================================

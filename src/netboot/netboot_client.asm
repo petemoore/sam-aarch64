@@ -761,14 +761,13 @@ client_main:
                 ; The record picker below needs the card's total record count;
                 ; csd_set_bd_records computes it from the inserted SD card's CSD
                 ; (replacing the inject-only shortcut that left it 0 on real
-                ; hardware -> no free record -> safe decline). Budget-gated: the
-                ; ~600-byte SD-read+decode overflows the client boot window, so it
-                ; is only pulled in under -D NETBOOT_CSD_BDRECORDS=1 (the i145b
-                ; finding). The module is verified by csd_to_bd_records_test.go;
-                ; shipping it in the boot image needs the budget resolved.
-                if defined(NETBOOT_CSD_BDRECORDS)
+                ; hardware -> no free record -> safe decline). Shipped as a
+                ; section-D overlay (i145b-b2): the ~600-byte SD-read+decode pushes
+                ; the boot image past &C000 into section D, which is RAM at boot
+                ; (LOAD CODE 32768 deposits the >&BFFF bytes; ROM1 off at run) — the
+                ; image stays inside the 32768-byte &8000-&FFFF window. Verified by
+                ; csd_to_bd_records_test.go and the serve_main boot integration test.
                 call    csd_set_bd_records
-                endif
                 ; --- broadcast the ARP request, then receive until done --
                 call    client_first
 cl_fetch_loop:
@@ -782,11 +781,9 @@ cl_fetch_loop:
                 ; chosen record's name (or "free / unnamed") and requires the user
                 ; to confirm BEFORE any write. No confirm => no write (i119e).
                 ; BD_RECORDS (card record count) is computed from the SD CSD
-                ; capacity read at client_main startup (csd_set_bd_records, i145b)
-                ; WHEN the budget-gated CSD read is compiled in (-D
-                ; NETBOOT_CSD_BDRECORDS=1). In the default boot image it stays 0
-                ; (the read does not fit the boot window) => no free record =>
-                ; safe decline (no write).
+                ; capacity read at client_main startup (csd_set_bd_records, i145b).
+                ; On any SD read failure it stays 0 => no free record => safe
+                ; decline (no write).
                 xor     a
                 ld      (BD_PICK_MODE), a          ; mode 0 = auto-pick-free
                 call    bdos_pick_record
@@ -973,11 +970,12 @@ RXBUF:            defs 1518
 ;   - The host harness (NETBOOT_HOSTTEST) is a flat 64 KB Z80, so it gets a
 ;     generous buffer that comfortably holds the multi-block test file
 ;     (netboot_client_test.go stages 2 full 1428-byte blocks + a tail).
-;   - The bootable build must fit section C (<&C000): section D is ROM1 at boot,
-;     so code/data above &BFFF is never loaded into RAM and the program crashes.
-;     A 16384-byte buffer pushed the includes into ROM, so the inline buffer here
-;     is small; real large-file staging needs paged RAM (i119), with the i125
-;     fit-check guarding the section-C bound.
+;   - The bootable build keeps this buffer small (2 KB). Section D (&C000-&FFFF)
+;     is RAM at boot (LOAD CODE 32768 deposits there; ROM1 off at run — proven by
+;     the section-D loadability probe, see docs/notes/sam-paging.md), and the image
+;     does spill into it for the i145b CSD overlay; but a full 16 KB staging buffer
+;     would still bloat the boot image needlessly. Real large-file staging belongs
+;     in paged RAM (i119); the boot fit-check guards the &10000 ceiling.
                 if defined(NETBOOT_HOSTTEST)
 STAGING:          defs 16384
                 else
@@ -1001,11 +999,9 @@ STAGING:          defs 2048
                 include "bdos_picker.asm"      ; i119d: record-selection UX (B4)
                 include "eeprom.asm"
                 include "raw_record_sink.asm"  ; i122b: streaming disk-image -> raw record (HWSAD)
-                ; i145b CSD-read -> BD_RECORDS. Budget-gated (see the call site in
-                ; client_main): ~600 bytes that overflow the client boot window, so
-                ; it is only assembled under -D NETBOOT_CSD_BDRECORDS=1. The module
-                ; is verified standalone by csd_to_bd_records_test.go regardless.
-                if defined(NETBOOT_CSD_BDRECORDS)
+                ; i145b CSD-read -> BD_RECORDS (i145b-b2): shipped as a section-D
+                ; overlay (see the call site in client_main). The ~600-byte module
+                ; places the boot image's tail above &BFFF into section D (RAM at
+                ; boot). Verified standalone by csd_to_bd_records_test.go.
                 include "sd_csd.asm"
-                endif
                 endif

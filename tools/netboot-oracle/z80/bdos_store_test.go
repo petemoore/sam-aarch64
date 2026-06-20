@@ -99,7 +99,9 @@ func TestBDOSStoreCapturesRecordAndUIFA(t *testing.T) {
 // BD_RECORDS is set to 5.  Returns mac, enc, store, and the file bytes served.
 func bootClientE2ESetup(t *testing.T) (*z80h.Machine, *z80h.ENC28J60, *z80h.BDOSStore, []byte) {
 	t.Helper()
-	mac, err := z80h.LoadBoot(cliBootBin, cliBootMap, romBaseBoot)
+	// Flat Load: client_boot's i145b CSD overlay lives in section-D RAM (see the
+	// romBaseBoot note in netboot_boot_test.go); LoadBoot would drop it.
+	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
 		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}

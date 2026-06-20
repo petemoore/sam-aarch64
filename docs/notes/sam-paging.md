@@ -536,7 +536,44 @@ page count alone.)
 
 ---
 
-## 6. Sysvars relevant to paging
+## 6. Section D is RAM at boot — bootable programs may run to `&FFFF`
+
+A SAM boot disk's AUTO BASIC runs a `CODE 32768` program with
+`CLEAR &7FFF : LOAD "name" CODE 32768 : CALL 32768` (the assembler and every
+netboot program boot this way; see `tools/build-disk/main.go`). A natural worry is
+that a program larger than 16 KB — whose bytes span section C (`&8000-&BFFF`) into
+section D (`&C000-&FFFF`) — loses its `>&BFFF` bytes, because section D *can* hold
+ROM1.
+
+It does not. **Section D is RAM at boot, and `LOAD CODE 32768` deposits the
+`>&BFFF` bytes straight into it:**
+
+- The boot LMPR is `&1F` — bit 6 (ROM1) **clear**, so section D maps RAM page
+  HMPR+1, not ROM1 (§2; the assembler captures this at `src/assembler.asm` as
+  `LMPR_DEFAULT_RUNTIME`).
+- SAMDOS/B-DOS `LOAD ... CODE addr` writes the file into consecutive logical
+  addresses; with ROM1 off, the writes that cross `&C000` land in section-D RAM,
+  and the running program (same paging) reads/executes them directly. No
+  self-paging is required.
+
+This is proven empirically and faithfully in SimCoupé by the **section-D
+loadability probe** (`src/secd_probe.asm`, `make secd-loadability`): a `>16 KB`
+disk bakes sentinels at `&C000`, `&C1F0`, `&C500`, and the running code reads all
+three back correctly. So a bootable program may use the whole `&8000-&FFFF`
+(32768-byte) window as RAM — the **section-D overlay** pattern (`http_main`; the
+i145b serve/client SD CSD read). The only hard ceiling is `&10000` (build-disk
+enforces it); the `tools/netboot-boot-fit-check.sh` per-image budget is `32768`
+for section-D-overlay images and a self-imposed `16384` for ones that stay in
+section C.
+
+> Earlier code/comments asserted the opposite ("section D is ROM1 at boot, so
+> code/data above `&BFFF` is never written to RAM"; the i119/i125 framing). That
+> was an untested conservative assumption; the probe disproves it. The real i119
+> over-size hazard is only running past `&FFFF`.
+
+---
+
+## 7. Sysvars relevant to paging
 
 All sysvar addresses below are taken from
 `docs/sam/sam-coupe_rom-v3.0_annotated-disassembly.txt` and Tech Manual.

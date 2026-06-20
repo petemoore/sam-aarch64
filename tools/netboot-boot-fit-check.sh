@@ -4,17 +4,24 @@
 #
 # Fail the build if a bootable netboot image exceeds its load-window budget.
 #
-# A bootable netboot program is LOADed to &8000 at boot, and &C000-&FFFF
-# (section D) is ROM1 at boot time — a section-C program's code/data above &BFFF
-# is never written to RAM, so the program crashes on its first call into the
-# un-loaded region (the i119 bug that wasted a hardware session; the i125 gate).
-# pyz80 does NOT error on an org overrun, so without this check an over-budget
-# image assembles silently and only fails on hardware.
+# A bootable netboot program is LOADed to &8000 by `LOAD CODE 32768` and run by
+# `CALL 32768`. The hard ceiling is &10000 (the top of the Z80 address space): an
+# image whose tail runs past &FFFF cannot load (build-disk enforces that). Below
+# that ceiling the whole &8000-&FFFF window is RAM at boot: section D (&C000-&FFFF)
+# is RAM, not ROM1 (boot LMPR = &1F has bit 6 clear), and LOAD CODE deposits the
+# >&BFFF bytes straight into section-D RAM, which the running program reads/executes
+# directly with no paging. This is proven in SimCoupe by the section-D loadability
+# probe (`make secd-loadability`; see docs/notes/sam-paging.md). pyz80 does NOT
+# error on an org overrun, so this check still guards the real ceiling and any
+# self-imposed tighter budget; without it an over-&FFFF image assembles silently
+# and only fails on hardware (the i119 over-size class; the i125 gate).
 #
 # MAX_BYTES is the program's load-window budget in bytes from &8000:
-#   * 16384 — a section-C program (&8000-&BFFF); the default for a bootable image.
-#   * 32768 — a section-D overlay program that pages RAM into &C000-&FFFF before
-#             using it and so may run to &FFFF (e.g. the http fetcher).
+#   * 32768 — the full &8000-&FFFF window (the real hardware limit); used by images
+#             that need section D (the http fetcher; serve/client, which carry the
+#             i145b SD CSD-read overlay).
+#   * 16384 — a self-imposed section-C-only limit (&8000-&BFFF) for small images
+#             (smoke/server) that have no reason to spill into section D.
 #
 # The single home for this check: every bootable `*_boot.bin` Makefile rule calls
 # it, so the budget logic lives in one place rather than copied per target.

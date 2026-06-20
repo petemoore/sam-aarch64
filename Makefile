@@ -501,9 +501,9 @@ netboot-http-main: $(BUILD)/netboot_http_main.bin $(BUILD)/netboot_http_main.map
 # firmware file through the SHA-256 verify into bounded HSAVE records. Built with
 # -D NETBOOT_STREAM=1 (no NETBOOT_HOSTTEST): the streaming sink + verify + sha256
 # build in, and http_main.asm owns the &8000 org so `jp http_main` is the boot
-# entry. http is a section-D overlay program (it pages RAM into &C000-&FFFF), so
-# its boot budget is the full 32768-byte window to &10000 (netboot-boot-fit-check.sh),
-# not the 16384-byte section-C limit the other bootable images use.
+# entry. http is a section-D overlay program (its code runs above &C000, in
+# section-D RAM), so its boot budget is the full 32768-byte window to &10000
+# (netboot-boot-fit-check.sh), not the 16384-byte section-C limit small images use.
 $(BUILD)/netboot_http_boot.bin $(BUILD)/netboot_http_boot.map: src/netboot/http_main.asm src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/eeprom.asm src/netboot/sha256.asm src/netboot/fw_source.asm src/netboot/body_sink.asm src/netboot/fw_span.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STREAM=1 --obj=$(BUILD)/netboot_http_boot.bin \
@@ -641,6 +641,34 @@ netboot-smoke-disk: $(BUILD)/netboot_smoke_boot.bin $(BUILD)/build-disk
 	$(BUILD)/build-disk -netboot $(BUILD)/netboot_smoke_boot.bin -netboot-name smoke \
 	    $(BUILD)/netboot_smoke.mgt
 
+# secd-loadability — the section-D loadability probe (src/secd_probe.asm). Builds a
+# >16 KB bootable disk that bakes sentinels into section D (&C000+) and, at run time,
+# reads them back; it prints "OK" iff `LOAD CODE 32768` deposited the >&BFFF bytes
+# into section-D RAM and the run sees them. This is the empirical proof that section
+# D is RAM at boot (not ROM1), which the i145b SD CSD read relies on (section-D
+# overlay). Self-contained SimCoupe run (isolated HOME so Pete's ~/.simcoupe config
+# is untouched; offscreen video). Asserts "^OK$" or fails.
+$(BUILD)/secd_probe.bin: src/secd_probe.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/secd_probe.bin src/secd_probe.asm
+
+.PHONY: secd-loadability
+secd-loadability: $(BUILD)/secd_probe.bin $(BUILD)/build-disk
+	$(BUILD)/build-disk -netboot $(BUILD)/secd_probe.bin -netboot-name probe \
+	    $(BUILD)/secd_probe.mgt
+	@simhome=$$(mktemp -d) ; mkdir -p "$$simhome/.simcoupe" ; \
+	    HOME="$$simhome" SDL_VIDEODRIVER=$${SDL_VIDEODRIVER:-offscreen} \
+	    SDL_AUDIODRIVER=$${SDL_AUDIODRIVER:-dummy} \
+	    tools/run-simcoupe.sh $(BUILD)/secd_probe.mgt $(BUILD)/secd_probe.status.log ; \
+	    rm -rf "$$simhome" ; \
+	    status=$$(tr -d '\r\n ' < $(BUILD)/secd_probe.status.log || true) ; \
+	    if [ "$$status" != "OK" ]; then \
+	        echo "FAIL: section-D loadability probe status '$$status' (expected OK)" >&2 ; \
+	        sed 's/^/    /' $(BUILD)/secd_probe.status.log >&2 || true ; \
+	        exit 1 ; \
+	    fi ; \
+	    echo "secd-loadability OK — section D is RAM at boot (>&BFFF bytes loaded + readable)"
+
 # netboot-server (i95) — the integrated netboot server: one main-loop dispatcher
 # (netboot_serve_once) that routes a received frame to ARP / DHCP / TFTP-RRQ /
 # TFTP-ACK, composing the host-verified builders/parsers + the real driver.  Two
@@ -700,13 +728,17 @@ $(BUILD)/netboot_serve.bin $(BUILD)/netboot_serve.map: src/netboot/netboot_serve
 netboot-serve: $(BUILD)/netboot_serve.bin $(BUILD)/netboot_serve.map
 
 # The bootable serve-files binary: the full program including the EEPROM config
-# read + provision_demo + the serve_main forever-loop, for real Trinity.
-$(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map: src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+# read + provision_demo + the serve_main forever-loop, for real Trinity. It carries
+# the i145b-b2 SD CSD read (sd_csd.asm), whose ~600 bytes push the image's tail past
+# &C000 into section D — RAM at boot (the section-D loadability probe proves LOAD CODE
+# deposits >&BFFF into RAM and ROM1 is off at run), so its boot budget is the full
+# 32768-byte &8000-&FFFF window, not the 16384-byte section-C limit.
+$(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map: src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm src/netboot/sd_csd.asm src/netboot/bdos_seam.asm src/netboot/raw_record_sink.asm
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_serve_boot.bin \
 	    --mapfile=$(BUILD)/netboot_serve_boot.map \
 	    src/netboot/netboot_serve.asm
-	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_serve_boot.bin 16384 netboot_serve_boot.bin
+	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_serve_boot.bin 32768 netboot_serve_boot.bin
 
 netboot-serve-boot: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map
 
@@ -857,13 +889,15 @@ $(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map: src/netboot/netboot_cli
 netboot-client: $(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map
 
 # The bootable client binary: the full program including the EEPROM config read +
-# the client_main fetch-then-HSAVE flow, for real Trinity.
-$(BUILD)/netboot_client_boot.bin $(BUILD)/netboot_client_boot.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/bdos_picker.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/key_read_test.asm src/netboot/eeprom.asm src/netboot/raw_record_sink.asm
+# the client_main fetch-then-HSAVE flow, for real Trinity. Like the serve image it
+# carries the i145b-b2 SD CSD read (sd_csd.asm) as a section-D overlay, so its boot
+# budget is the full 32768-byte &8000-&FFFF window (see the serve rule above).
+$(BUILD)/netboot_client_boot.bin $(BUILD)/netboot_client_boot.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/bdos_picker.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/key_read_test.asm src/netboot/eeprom.asm src/netboot/raw_record_sink.asm src/netboot/sd_csd.asm
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_client_boot.bin \
 	    --mapfile=$(BUILD)/netboot_client_boot.map \
 	    src/netboot/netboot_client.asm
-	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_client_boot.bin 16384 netboot_client_boot.bin
+	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_client_boot.bin 32768 netboot_client_boot.bin
 
 netboot-client-boot: $(BUILD)/netboot_client_boot.bin $(BUILD)/netboot_client_boot.map
 

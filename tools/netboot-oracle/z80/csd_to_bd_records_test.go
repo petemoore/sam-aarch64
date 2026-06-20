@@ -16,10 +16,10 @@
 // COMPUTED from the modelled card, including the q40 16-bit wrap on Pete's 64 GB
 // card. No WriteU16LE inject anywhere: the value is produced by the Z80 decode.
 //
-// The fixture is built (Makefile netboot-sd-csd) but is NOT a boot image — the SD
-// read driver + CSD decode + records math do not fit the serve/client boot budget
-// (&C000), an i145b finding reported on the branch. The decode is verified here in
-// isolation; whether/how it ships in the boot images is the budget question.
+// The fixture (Makefile netboot-sd-csd) is the isolated unit test of the decode.
+// It now ALSO ships in the serve/client boot images as a section-D overlay (i145b-b2;
+// the ~600-byte module's tail runs above &C000, which is RAM at boot), exercised
+// through the real serve_main by TestServeBootComputesBDRecordsFromCSD.
 package z80_test
 
 import (
