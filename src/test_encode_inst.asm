@@ -304,6 +304,43 @@ run_encode_inst_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &bf, &3b, &03, &d5
 
+; -- i203c special forms: mrs / msr / dc / tlbi (paged sysreg tables) ---
+; -- mrs x0, midr_el1  =>  0xD5380000 -------------------------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_mrs
+                ld      a, 2
+                ld      de, 76
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &00, &00, &38, &d5
+
+; -- msr daifset, #2  =>  0xD50342DF  (PSTATE-immediate form) -------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_msr
+                ld      a, 2
+                ld      de, 77
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &df, &42, &03, &d5
+
+; -- dc cvac, x0  =>  0xD50B7A20 -----------------------------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_dc
+                ld      a, 2
+                ld      de, 78
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &7a, &0b, &d5
+
+; -- tlbi vmalle1  =>  0xD508871F  (no-Xt branch) ------------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_tlbi
+                ld      a, 1
+                ld      de, 79
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &1f, &87, &08, &d5
+
                 call    enctab_map_out
                 ret
 
@@ -359,3 +396,9 @@ enc_fix_csetm_w: defb   &02, &03, &0a, &01
 enc_fix_isb:    defb    &05, &02, &00, &01, &0f
 enc_fix_dsb:    defb    &05, &02, &00, &01, &0b
 enc_fix_dmb:    defb    &05, &02, &00, &01, &0b
+; i203c sysreg forms (exact Go OperandWriter bytes; ASCII names inline:
+; "midr_el1" / "daifset" / "cvac" / "vmalle1")
+enc_fix_mrs:    defb    &01, &00, &0b, &08, &00, &6d, &69, &64, &72, &5f, &65, &6c, &31
+enc_fix_msr:    defb    &0b, &07, &00, &64, &61, &69, &66, &73, &65, &74, &05, &02, &00, &01, &02
+enc_fix_dc:     defb    &0b, &04, &00, &63, &76, &61, &63, &01, &00
+enc_fix_tlbi:   defb    &0b, &07, &00, &76, &6d, &61, &6c, &6c, &65, &31
