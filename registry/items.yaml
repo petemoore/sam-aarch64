@@ -3420,8 +3420,8 @@
 - id: i197
   title: "SAMBOOT: RE the captured on-card bootblock + re-derive the real injection hook (public boot.asm differs)"
   description: |
-    i87b found the captured on-card EEPROM chunk-1 bootblock (the blob the patched ROM reads from EEPROM addr &002000 into &4000 and runs) does NOT byte-match the public LongSteve/z80 boot.asm reproduction — it is Colin's actual production build (the boot.asm start:/banner/TODO signatures are absent). The i135d injection prototype (DONE, PR #494) was built against the PUBLIC boot.asm TODO hook, so it does not directly apply to Pete's card. Reverse-engineer Colin's actual bootblock from ~/sam-archive/samboot-capture/eeprom.bin (chunk 1 @ &002000, ORG &4000; disassemble with z80dis), confirm the real EEPROM chunk layout (the public-doc 64-byte-header model also did not parse cleanly), locate the real boot-a-record injection site + free space, and re-validate the injection (stripes + BIOS config + boot-record) against the real build in emulation before any flash. Offline, read-only; never commit Colin's proprietary artifacts. owner:agent.
-  status: OPEN
+    Umbrella (children i197a DONE #545, i197c DONE) — RE the captured on-card bootblock + re-derive the real injection hook. RESOLVED. i197a statically RE'd Colin's bootblock + the flat chunk layout (get_chunk: chunk N at &2000+(N-1)*&400); i197c (#586/#588) traced it in emulation and finalized the injection site. KEY CORRECTION (#588, samboot-bootblock-analysis.md §8): the captured eeprom.bin is CHUNK-ORDERED (file offset 0 = device &2000 = chunk 1 = the bootblock; the EEPROM index names entry 0 'Boot Block'), so the 'bootblock at &0000' phrasing in i197a/§7 is a file-offset label for device &2000 = chunk 1 — there is no separate &0000 sequencer. With the addressing corrected the real boot is coherent (ROM fetches chunk 1 = bootblock -> loads B-DOS chunks 2..13 -> CALL &805F). INJECTION HOOK re-derived: in the bootblock (chunk 1, device &2000) between CALL &805F and the restore/exit (§7.1/§7.2). i135c (the flash) is now unblocked but stays owner:pete (hardware).
+  status: DONE
   depends_on: [i87b]
   kind: umbrella
   owner: agent
@@ -3441,8 +3441,8 @@
 - id: i197c
   title: "SAMBOOT: emulation-trace the real boot to resolve static contradictions and finalize the injection site"
   description: |
-    OPEN, gated on i190a. REFRAMED 2026-06-23 after a sysvar reclassification (samboot-bootblock-analysis.md §7.4/§7.5, PR following this). The static RE's "two contradictions" were partly a misread: two of the chunk-1 prologue's targets — &5C26 and &5C6A — are NOT an unloaded section-B support library, they are documented SAM ROM system variables. &5C6A=FLAGS2 (annotated disasm line 1117); &5C26 is a STREAMS-table entry in the &5C0C-&5C35 block (line 1088), which the cold-boot NEW init writes by name (MNINIT/NEW2, lines 24616-24632). Both live in the &5xxx sysvar band (physical page 1) that normal ROM/DOS boot initialises. The i190a from-reset trace found them ZERO not because a load stage failed, but because the patched-ROM netboot fetch reaches chunk 1 at &4000 BEFORE the normal channel/stream/sysvar init has populated them. So there is NO hidden multi-stage loader implied by these targets, and chunk-1's EX (SP),HL; PUSH DE; CALL &5C26 prologue is a library/routine entry expecting a live initialised system, not a cold entry. REMAINING WORK (still real, do NOT mark DONE): verify the init-ordering hypothesis in the i190a emulator — does the real boot run the normal ROM init (populating STREAMS/FLAGS2) before handing off to chunk 1, and is chunk 1 thus a library entry rather than a cold entry? Determine accordingly whether the injection belongs on the ROM-loaded chunk-1 path (executing at &4000) or the &0000 bootblock. The hardware re-capture DROPS from blocking to OPTIONAL belt-and-braces (it would only cross-check that rom.bin/eeprom.bin came from one machine state). This may be close to resolvable in emulation alone. No EEPROM flash (i135c) until the injection site is confirmed.
-  status: OPEN
+    Umbrella (children i197c-b1, i197c-b3, both DONE). Goal: emulation-trace the real boot to resolve the static contradictions and finalize the SAMBOOT injection site. RESOLVED: i197c-b1 (#586) verified the cold-init ordering; i197c-b3 (#588) finalized the injection site and showed the apparent 'boot-entry contradiction' was a fidelity bug in the emulator's EEPROM addressing (the capture is chunk-ordered: file 0 = device &2000 = chunk 1 = the bootblock). With deviceLinearEEPROM the real boot runs coherently (ROM fetches chunk 1 = bootblock -> loads B-DOS chunks 2..13 -> CALL &805F). Injection site = the bootblock (chunk 1, device &2000), post-&805F hook. No hardware re-capture / ask-Colin needed. Authority: samboot-bootblock-analysis.md §8.
+  status: DONE
   depends_on: [i190a]
   kind: umbrella
   owner: agent
@@ -3460,12 +3460,14 @@
   parent: i197c
 
 - id: i197c-b3
-  title: "SAMBOOT: finalize the injection site — resolve the chunk-1-library vs &0000-sequencer boot-entry contradiction"
+  title: "SAMBOOT: finalize the injection site (the boot-entry 'contradiction' was an EEPROM-addressing bug)"
   description: |
-    OPEN, follow-on to i197c-b1 (which verified init ordering). The verification surfaced the real residual: the patched ROM HARD-CODES fetching EEPROM device &2000 (a B-DOS routine LIBRARY — a table of small CALL/RET subroutines, disassembled from the capture: EX (SP),HL; PUSH DE; CALL &5C26; ... RET, repeated) into &4000 and JP &4000, but that path NEVER loads B-DOS (chunks 2..13 -> &8000), which only the coherent &0000 boot SEQUENCER does (IN A,(250) save-LMPR; page; chunk-load loop). So the captured cold boot runs a library without a resident B-DOS and wanders (CALL &5C26 lands in the NEW2-zeroed STREAMS band). The capture is a CONSISTENT single-machine runtime snapshot (CAPTURE-NOTES.txt: rom+eeprom from one trinload session, serving identically before/after), so this is REAL, not a cross-state artifact. To finalize WHERE the boot-a-record hook attaches: continue the i190a trace with B-DOS made RESIDENT (load chunks 2..13 -> &8000, run the &805F init, re-enter chunk 1 against a live B-DOS) AND/OR take a fresh re-capture (elevated from 'optional belt-and-braces' in §7.5 to recommended-before-flash). No EEPROM flash (i135c) until settled. Refs: samboot-bootblock-analysis.md §7.6.
-  status: OPEN
+    DONE (#588). The 'boot-entry contradiction' (ROM fetches a library at &2000; coherent sequencer at &0000; ask Colin/re-capture) was NOT real — it was a fidelity bug in the emulator's EEPROM addressing. The captured eeprom.bin is CHUNK-ORDERED: the dumper reads by chunk number (chunks 1..128) and chunk 1's data is at device &2000, so file offset 0 = device &2000 and file F = device (F+&2000) mod &20000 (the 128KB device wraps; the EEPROM index even names entry 0 'Boot Block', entry 13 'Trinity Network '). CAPTURE-NOTES + the earlier analysis assumed file==device, so the model served the wrong chunk for device &2000 (a B-DOS helper library at file &2000 = device &4000 = chunk 9) and the boot wandered. deviceLinearEEPROM un-rotates the capture; the real boot then runs COHERENTLY: ROM fetches device &2000 = chunk 1 = the BOOTBLOCK, which loads B-DOS chunks 2..13 into &8000 (12 read_chunk loads) and reaches CALL &805F (B-DOS init; halts at &AB18 on unmodeled SD/screen) — the EEPROM auto-load Pete's card performs. INJECTION SITE SETTLED: the bootblock (chunk 1, device &2000) at the post-&805F hook (samboot-bootblock-analysis.md §7.1/§7.2/§8). Tests: TestRealBootLoadsBootblockAtChunk1 + TestRealBootLoadsBDOSCoherently. No Colin/re-capture needed. Refs: §8.
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 588, role: completing}
   parent: i197c
 
 - id: i198
