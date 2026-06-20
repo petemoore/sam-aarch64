@@ -2362,7 +2362,7 @@
 - id: i133
   title: Self-service autonomous hardware testing via trinload
   description: |
-    With trinload on SAM (recs 3/128) and control returning between programs (i132 confirms mechanism), run unattended experiments: push a program via trinload3.py, it runs + RETs, push the next. Feedback: (a) sniff the wire (tcpdump); (b) network result channel — test program writes results over the net so agent debugs real-hardware unattended. Needs RET-not-halt program variants (re-inits ENC at start, RETs at end, emits results over net) + i132 pre-flight. A crash needs Pete reboot until i135 (auto-boot + Tapo) closes the gap.
+    With trinload on SAM (recs 3/128) + control returning between programs (i132), run unattended experiments: push a program via trinload3.py, it runs+RETs, push the next; feedback via tcpdump + a net result channel (test program emits results over the net). PRIORITIZED to top (Pete 2026-06-20): the crux is whether we can BOOTSTRAP our own code from EEPROM / Trinity storage WITHOUT a human typing BOOT or picking a record — if a power-cycled SAM auto-starts a service that listens for + boots a pushed image, hardware testing becomes fully autonomous (no Pete needed). The sooner we build it, the sooner we know. Auto-boot+power-resilience = i135; i172 then audits dependents.
   status: OPEN
   kind: leaf
   owner: agent
