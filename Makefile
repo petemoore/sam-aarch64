@@ -643,12 +643,14 @@ netboot-server: $(BUILD)/netboot_server.bin $(BUILD)/netboot_server.map
 
 # The bootable integrated-server binary: the full program including the EEPROM
 # config read + the fixed-pool netboot_main forever-loop, for real Trinity.
-$(BUILD)/netboot_server_boot.bin: src/netboot/netboot_server.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/dhcp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+$(BUILD)/netboot_server_boot.bin $(BUILD)/netboot_server_boot.map: src/netboot/netboot_server.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/dhcp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_server_boot.bin src/netboot/netboot_server.asm
+	pyz80 --obj=$(BUILD)/netboot_server_boot.bin \
+	    --mapfile=$(BUILD)/netboot_server_boot.map \
+	    src/netboot/netboot_server.asm
 	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_server_boot.bin 16384 netboot_server_boot.bin
 
-netboot-server-boot: $(BUILD)/netboot_server_boot.bin
+netboot-server-boot: $(BUILD)/netboot_server_boot.bin $(BUILD)/netboot_server_boot.map
 
 # A bootable SAM disk image that auto-runs the integrated netboot server on
 # power-on.  Boot it on a SAM + Trinity, then point a Pi at the SAM and watch it
@@ -678,12 +680,14 @@ netboot-serve: $(BUILD)/netboot_serve.bin $(BUILD)/netboot_serve.map
 
 # The bootable serve-files binary: the full program including the EEPROM config
 # read + provision_demo + the serve_main forever-loop, for real Trinity.
-$(BUILD)/netboot_serve_boot.bin: src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+$(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map: src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_serve_boot.bin src/netboot/netboot_serve.asm
+	pyz80 --obj=$(BUILD)/netboot_serve_boot.bin \
+	    --mapfile=$(BUILD)/netboot_serve_boot.map \
+	    src/netboot/netboot_serve.asm
 	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_serve_boot.bin 16384 netboot_serve_boot.bin
 
-netboot-serve-boot: $(BUILD)/netboot_serve_boot.bin
+netboot-serve-boot: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map
 
 # A bootable SAM disk image that auto-runs the serve-files TFTP demo on power-on.
 # Boot it on a SAM + Trinity, then from any LAN machine `tftp <sam-ip>` + `get
