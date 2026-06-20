@@ -300,6 +300,10 @@ parse_inst:
                 jp      z, parse_barrier_req ; B5c: dmb (mandatory barrier arg)
                 cp      MNEM_ISB
                 jp      z, parse_barrier_opt ; B5c: isb (optional arg, default sy)
+                cp      MNEM_MRS
+                jp      z, parse_mrs        ; B5d: mrs Xt, <sysreg>
+                cp      MNEM_MSR
+                jp      z, parse_msr        ; B5d: msr <sysreg|pstate>, Xt|#imm
 pi_loop:
                 ld      hl, (PARSE_TOK)
                 ld      a, (hl)
@@ -882,6 +886,94 @@ barrier_tbl:
                 defm    "oshld"
                 defb    &01
                 defb    0
+
+; ===========================================================================
+; parse_mrs / parse_msr — B5d special-form parse for mrs/msr. (Port of parseMrs/
+; parseMsr, parser.go:842-926.) The system-register / PSTATE-field name is a
+; bareword identifier emitted as an OP_KIND_SYS_NAME operand carrying the name
+; verbatim ([&0B, len:2 LE, name[]]); the assembler's encoder (sysreg_data.asm —
+; the single home of the sysreg/PSTATE tables) resolves and validates the name in
+; a later pass, so the parser does not duplicate those tables. Shapes:
+;   mrs Xt, <sysreg>            -> [reg Xt][sysname]
+;   msr <sysreg>, Xt            -> [sysname][reg Xt]
+;   msr <pstatefield>, #imm     -> [sysname][imm-expr]
+; The msr second operand is parsed by the generic parse_operand, which emits a
+; register or an imm-expr exactly as the Go dispatches on the operand kind. Entry
+; (from parse_inst dispatch): PI_MNEMID=mrs/msr, PI_OPSPTR=PARSE_OPSBUF,
+; PI_COUNT=0, mnemonic consumed. Exit: one INST record (CY clear); else pi_err.
+; ===========================================================================
+parse_mrs:
+                ; Operand 1: destination register (Xt).
+                call    parse_operand
+                jp      c, pi_err
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_COMMA
+                jp      nz, pi_err
+                call    parse_advance_tok
+                ; Operand 2: system-register name (bareword identifier).
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_IDENT
+                jp      nz, pi_err
+                call    emit_sysname_operand
+                call    parse_advance_tok
+                ld      a, 2
+                ld      (PI_COUNT), a
+                jp      pi_emit
+
+parse_msr:
+                ; Operand 1: sysreg / PSTATE-field name (bareword identifier).
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_IDENT
+                jp      nz, pi_err
+                call    emit_sysname_operand
+                call    parse_advance_tok
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_COMMA
+                jp      nz, pi_err
+                call    parse_advance_tok
+                ; Operand 2: register (Xt) or immediate expression — parse_operand
+                ; emits the right kind, mirroring the Go's operand-kind dispatch.
+                call    parse_operand
+                jp      c, pi_err
+                ld      a, 2
+                ld      (PI_COUNT), a
+                jp      pi_emit
+
+; ===========================================================================
+; emit_sysname_operand — append an OP_KIND_SYS_NAME operand at (PI_OPSPTR) from the
+; current token's (PARSE_TOK) identifier span: [&0B, name_len:2 LE, name[]].
+; (Port of OperandWriter.WriteSysName, operands.go:219.) Advances (PI_OPSPTR); does
+; NOT consume the token (the caller does). Clobbers AF/BC/DE/HL.
+; ===========================================================================
+emit_sysname_operand:
+                ld      hl, (PARSE_TOK)
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = span ptr
+                inc     hl
+                ld      c, (hl)             ; name_len low
+                inc     hl
+                ld      b, (hl)             ; name_len high
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_SYS_NAME
+                inc     hl
+                ld      (hl), c             ; name_len low
+                inc     hl
+                ld      (hl), b             ; name_len high
+                inc     hl
+                ex      de, hl              ; HL = name src, DE = operand dest
+                ld      a, b
+                or      c
+                jr      z, eso_done         ; (defensive) zero-length name
+                ldir                        ; copy name bytes; DE -> end
+eso_done:
+                ld      (PI_OPSPTR), de
+                ret
 
 ; ===========================================================================
 ; expr_buf_single_imm — if EXPR_BUF..(EXPR_PTR) holds exactly one PUSH_IMMn (the

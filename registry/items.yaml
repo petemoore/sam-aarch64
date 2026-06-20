@@ -775,9 +775,11 @@
   title: mrs/msr — sysreg/PSTATE name→OpSysName
   description: |
     Parse mrs/msr instructions: map sysreg and PSTATE register name strings to the OpSysName encoding (name lookup table).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 549, role: completing}
   parent: i48c
   refs: [src/asmparse.asm, tools/sam-aarch64/frontend/parser.go]
 
