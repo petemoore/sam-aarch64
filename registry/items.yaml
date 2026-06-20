@@ -868,7 +868,7 @@
   title: "Z80 Compact: IR records -> compact overlay records + sidecar + globals"
   description: |
     Port assemble.Compact (tools/sam-aarch64/assemble/compact.go) to rewrite the encoder's IR record stream into the compact v2 record stream: each INST -> a KindInsnRun element (fully-literal PC-invariant instruction as a bare 4-byte word; symbol/PC-bearing instruction as base word with relocated field zeroed + {slot,expr} overlay patch, via the pcProbeA/pcProbeB literal guard); same-directive constant data coalesces to KindLitData (<=1016 byte cap); COMMENT/BLANK_RUN records relocate to tagged editor-region sidecar rows anchored to output PC; .global directives -> a name_id list. Consumes b8a's PC/position info. Harness-test the compacted record bytes vs host Compact over fixtures. NOTE (b8a PR #557): b8a's flat harness re-ported pass1.go's directive PC sizing (pass1_dir_*) rather than reuse main_loop.asm compute_directive_size (which drags in the paged assembler). When wiring the integrated path, reconcile which directive sizer the real build uses so the two don't drift.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i48c-b8a]
   kind: leaf
   owner: agent
