@@ -327,9 +327,10 @@ This section is descriptive design input for i135d, not the design itself.
 
 ## 5. Open questions / unknowns for the hardware steps
 
-These can only be confirmed once `rom.bin` / `eeprom.bin` are captured from Pete's
-actual SAM (charter §6 steps 2–4: the dumper i173, the hardware capture i87a, the
-desk analysis i87b). Listed crisply so i87b / i135d know what to verify:
+These were the questions for the captured `rom.bin` / `eeprom.bin` (charter §6 steps
+2–4: the dumper i173, the hardware capture i87a, the desk analysis i87b). **§6 below
+answers them from the actual capture** — most notably Q1 and Q3. Read §6 first; this
+list is the original brief, kept for traceability.
 
 1. **Does Pete's EEPROM bootblock (chunk 1) byte-match the `LongSteve/z80`
    `boot.asm` reproduction?** The public source is a *modified* version (it added
@@ -368,6 +369,91 @@ desk analysis i87b). Listed crisply so i87b / i135d know what to verify:
    partially restored) can issue HRECORD + ALHK and have B-DOS run the record's
    auto-run file is the runtime crux — emulation-prototype first (i135d), then
    hardware (i135c).
+
+---
+
+## 6. Captured-artifact findings (i87b)
+
+Done offline against the captured artifacts (`~/sam-archive/samboot-capture/`,
+Colin's proprietary non-redistributable images — cited by file offset, never copied
+into the repo) versus the stock SAM ROM 3.0 that ships with SimCoupé
+(`~/simcoupe-stock/Resource/samcoupe.rom`). Disassembly: `z80dis` (the patched
+bytes) cross-referenced against the annotated stock disasm
+(`docs/sam/sam-coupe_rom-v3.0_annotated-disassembly.txt`). File-offset → logical
+address: ROM0 `file 0x0000–0x3FFF` → logical `&0000–&3FFF`; ROM1
+`file 0x4000–0x7FFF` → logical `&C000–&FFFF`.
+
+### 6.1 The patched system ROM chip (layer 1) — the bootblock fetch, recovered
+
+`rom.bin` (32 KB) differs from stock 3.0 in **141 bytes across 7 regions**. Three are
+the substantive Trinity patch; the rest are a version byte and small data-table
+edits. This is exactly **the "ROM-side fetch that loads and jumps to the bootblock"
+that §1 step 1 said lived in the chip and not in the public source** — now recovered:
+
+1. **`&ED1B` — replaces the stock `RAINBOW SCREEN` boot-stripes routine** (annotated
+   disasm `&ED1B ;RAINBOW SCREEN`, right after the `&ED10` boot init `LD SP,ISPVAL`).
+   The patch instead **probes for Trinity and reads a key**: `OUT (&DC),&08` (the
+   identity-select, `selProbeT`) → `IN A,(&DD)` → the reply byte, stored at `&4000`;
+   then `IN A,(&FE) / AND 1` (a key-row read) and, if a key is held, `XOR A /
+   LD (&4000),A` — **clearing the flag**. So `&4000` carries the Trinity-present
+   marker, *unless a key is held at reset, which forces a stock start* — the
+   **keypress bypass lives in the ROM** (answers §5 Q3's bypass sub-question).
+   Because this displaces the ROM's own stripe draw, the stripes must be redrawn
+   later — which is exactly what the bootblock-side stripes code does (§2).
+
+2. **`&0F7F` — replaces the stock "MGT MESSAGE GIVEN IF REPORT 50H" handler**
+   (annotated `&0F7B ERRHAND1: CP 50H` → `&0F7F ;MGT MESSAGE GIVEN IF "REPORT" 50H`).
+   The power-on path raises report `&50`; stock prints the MGT sign-on, the patch
+   **hijacks it**: if `(&4000) != 'T'` (`&54`) → `JP &102F` (the stock exit-to-BASIC,
+   the same target the bootblock's `JP 4143` uses). If `'T'`: set the line-colour
+   table, `OUT (&DC),&11` (EEPROM enable), read **1 KB from EEPROM byte-address
+   `&002000` (= chunk 1) into `&4000`** via the read routine (§6.1.3), then
+   **`JP &4000`** — run the bootblock.
+
+3. **`&F5DD..&F60D` — overwrites the tail of the stock "MILES GORDON TECHNOLOGY PLC"
+   copyright string** with the **EEPROM chunk-read routine** + `&F607` `wait_ready`
+   (`IN A,(&DC) / AND 8 / JR NZ` — poll bit 3 busy). The read clocks the `&03` READ
+   opcode + 3-byte address through port `&DD` then `INI`-loops the bytes to `&4000`
+   — the **same EEPROM SPI mechanism as `src/netboot/eeprom.asm`** (port `&DD` data,
+   `&DC` enable/disable/busy, opcode 3), carved into spare string space. (This is
+   why the patched ROM no longer carries the full "MILES GORDON…" string.)
+
+Supporting / baseline diffs (not the mechanism):
+
+- **`&000F` (1 byte)** — annotated `&000F ;ROM VERSION NUMBER`. Patched reads `&1E`
+  (30) where SimCoupé's stock reads `&1F` (31): the two are **slightly different 3.0
+  sub-revisions**, so a small part of the 141-byte diff is baseline, not Colin's
+  patch. (Honesty: the diff is vs SimCoupé's 3.0 image; Colin built on a `&1E`-30
+  base.)
+- **`&D901`, `&FBFF..&FC0F`, `&FC44..&FC45`** — small data-table / pointer edits in
+  ROM data tables (e.g. `&FC44` a word `&F5DD`→`&F611`); minor, supporting.
+
+### 6.2 The EEPROM bootblock does NOT match the public reproduction (§5 Q1 = NO)
+
+The capture is sound — the known anchors are present: the **"Trinity Network "**
+config string at file `&1E342` (123714) and the **SAM MAC** `02 54 52 49 4e bc` at
+`&03400` (13312), both matching `CAPTURE-NOTES.txt`. Colin's own sign-on strings
+(`"Trinity"`, `"Piggot"`, `"BDOS"`) are present near the chunk-1/2 region.
+
+But **what the ROM actually loads and runs — EEPROM byte-address `&002000` (chunk 1)
+→ `&4000` — is not the public `LongSteve/z80` `boot.asm`.** The boot.asm `start:`
+signature (`IN A,(250)` to save LMPR) does **not** occur anywhere in the chunk
+region; the MGT banner text, the `CALL 32876` (`&804C`) "execute DOS", the `JP &4000`
+and the `; TODO … auto* file` hook comment are all **absent**. The bytes at `&4000`
+are coherent Z80 (a routine library calling `&5Cxx`/`&0103`), not boot.asm's
+save-paging → load-chunks-2..13 → `CALL &804C` → stripes → exit shape.
+
+**Conclusion:** Pete's card carries **Colin's actual production bootblock/B-DOS
+build, which differs from the third-party LongSteve reproduction** §1–§4 were
+grounded in. The reset → chip → EEPROM-fetch → `JP &4000` handoff (layer 1) is
+confirmed and documented (§6.1); the public source remains a faithful *model* of the
+bootblock's role and the EEPROM SPI mechanics, **but the on-card bootblock's exact
+code — and therefore the precise injection-hook site (§3) — must be reverse-
+engineered from the capture before the i135 injection work.** The §3 hook-at-the-TODO
+location is a property of the LongSteve build, not necessarily Colin's; tracked as a
+follow-up (registry). This does not change the *plan* (patch the writable EEPROM
+bootblock to read a config + boot a record), only the *exact bytes/site*, which i135
+must derive against the real build.
 
 ---
 

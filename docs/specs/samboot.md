@@ -71,15 +71,26 @@ distinct *patches of distinct systems*:
    system-ROM chip that is swapped into the SAM in place of the stock ROM. Its
    only job vs stock is: at reset, fetch and run the bootblock from the Trinity
    EEPROM (instead of waiting for the keyboard). *This is a hardware chip; we do
-   not rewrite it.* Colin has said it is a very small patch.
+   not rewrite it.* Colin has said it is a very small patch — **confirmed (i87b):
+   the captured `rom.bin` differs from stock 3.0 in 141 bytes / 7 regions, three of
+   them the substantive patch** — a Trinity probe + keypress bypass (replacing the
+   stock `RAINBOW SCREEN` routine), the chunk-1 EEPROM read + `JP &4000` fetch
+   (replacing the "MGT message / REPORT 50H" handler), and the EEPROM read routine
+   itself (carved into the MGT copyright string). Full recovery + offsets:
+   [`samboot-bootblock-analysis.md` §6.1](../notes/samboot-bootblock-analysis.md).
 2. **Trinity EEPROM *bootblock*.** ~1 KB of Z80 code held in **EEPROM chunk 1**,
    loaded and run by the patched ROM. It pages the Trinity EEPROM in (ports
    `&DC`/`&DD`), copies the B-DOS image out of the EEPROM into RAM at `&8000`, and
-   launches it. A public reproduction of this code exists:
+   launches it. A public reproduction of this *role* exists:
    [`LongSteve/z80` `boot.asm`](https://github.com/LongSteve/z80/blob/main/boot.asm)
-   (derived from Colin's SAM Revival issue 23 source) — and it already includes
-   the MGT-stripes redraw *and* an unfinished "auto-load arbitrary file" TODO,
-   which is exactly our boot-a-record injection hook.
+   (derived from Colin's SAM Revival issue 23 source), including the MGT-stripes
+   redraw *and* an unfinished "auto-load arbitrary file" TODO — our boot-a-record
+   injection hook. **CAVEAT (i87b): the captured on-card chunk 1 does NOT byte-match
+   that public reproduction** — it is Colin's actual production build (the boot.asm
+   `start:`/banner/`TODO` signatures are absent), so the public source is a faithful
+   *model* of the bootblock's role but **the exact injection-hook site must be
+   reverse-engineered from the capture** before the injection work
+   ([`samboot-bootblock-analysis.md` §6.2](../notes/samboot-bootblock-analysis.md)).
 3. **Colin's forked *B-DOS* 1.5t.** His Trinity-supporting DOS, held in **EEPROM
    chunks 2–13**, loaded by the bootblock. A *separate patch of a separate
    system* from the ROM chip — its hook table is byte-identical to stock B-DOS
@@ -200,7 +211,11 @@ physically present (`owner: pete`), the rest are agent work.
 4. **Document the boot chain** *(agent)* — diff `rom.bin` vs the stock SAM ROM
    3.0, confirm the EEPROM bootblock matches the public reproduction, and write up
    exactly how the chip → bootblock → B-DOS handoff works + where the hook
-   attaches. *(i87b)*
+   attaches. *(i87b — **DONE**: the chip-side fetch is fully recovered from the
+   capture; the on-card bootblock does **not** match the public reproduction (it is
+   Colin's actual build), so the exact hook site needs RE from the capture — see
+   [`samboot-bootblock-analysis.md` §6](../notes/samboot-bootblock-analysis.md) and
+   the RE follow-up item).*
 5. **Design + emulation-prototype the injection** *(agent, emulation-first)* —
    model the EEPROM chunks in the harness and prototype the patched bootblock:
    always redraw the stripes, read the BIOS config, boot the configured record (or
