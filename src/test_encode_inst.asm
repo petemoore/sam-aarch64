@@ -48,16 +48,7 @@ run_encode_inst_self_tests:
                 ld      hl, enc_fix_table
 enc_fix_loop:
                 ld      (enc_fix_row), hl
-; End-of-table sentinel: a row whose fixture ptr (bytes +2,+3) is 0.
-                inc     hl
-                inc     hl
-                ld      a, (hl)
-                inc     hl
-                or      (hl)
-                jr      z, enc_fix_done
-
-; Seed PASS_PC = pc_lo16 (high 16 bits := 0).
-                ld      hl, (enc_fix_row)
+; Seed PASS_PC = pc_lo16 (row+0/+1; high 16 bits := 0).  HL walks forward.
                 ld      a, (hl)
                 ld      (PASS_PC + 0), a
                 inc     hl
@@ -66,14 +57,15 @@ enc_fix_loop:
                 xor     a
                 ld      (PASS_PC + 2), a
                 ld      (PASS_PC + 3), a
-
-; Load encode_inst args: HL = fixture ptr, A = opcount, DE = mnemonic id.
-                ld      hl, (enc_fix_row)
-                inc     hl
+; row+2/+3 = fixture ptr.  A zero fixture ptr is the end-of-table sentinel.
                 inc     hl
                 ld      e, (hl)
                 inc     hl
                 ld      d, (hl)                 ; DE = fixture ptr
+                ld      a, e
+                or      d
+                jr      z, enc_fix_done
+; Load remaining encode_inst args: A = opcount, BC = mnemonic id.
                 inc     hl
                 ld      a, (hl)                 ; A  = opcount
                 inc     hl
