@@ -1333,9 +1333,11 @@
   title: Capture eeprom.bin (full 128 KB pre-flash backup) + rom0.bin from the real SAM
   description: |
     DONE 2026-06-21: pushed the i173 dumper over trinload (SAM 192.168.2.75), TFTP-pulled eep0..eep7 -> eeprom.bin (131072 B, verified real: Trinity Network chunk + SAM MAC 02:54:52:49:4e:bc present) and rom0.bin (16384 B, low ROM). Stashed in ~/sam-archive/samboot-capture/. eeprom.bin is the mandatory pre-flash backup for i135c.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 520, role: completing}
   parent: i87a
 
 - id: i87a-b2
