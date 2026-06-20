@@ -26,6 +26,10 @@ tools/i62-bdos-experiment/build-i62-disk/build-i62-disk
 tools/font-proof/font-proof
 tools/registry/registry
 
+# Transient advisory lock the registry CLI flocks to serialize concurrent
+# mutations (tools/registry/lock.go); runtime-only, never committed.
+registry/.lock
+
 # sam-aarch64's default .tbn output beside a vendored source (release.s is
 # tracked; its compiled .tbn is a derived artifact — the canonical gate scripts
 # write .tbn to build/, never here).

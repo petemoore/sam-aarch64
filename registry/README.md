@@ -23,6 +23,14 @@ Inspect a single record with `registry view --id iN|qN` (add `--format json` for
 scripting) — it prints the record plus its computed dependents (reverse edges)
 and priority rank, which the raw YAML does not carry.
 
+Mutating commands are **concurrency-safe**: each takes an exclusive advisory lock
+(`registry/.lock`, flock) around its load→mutate→write and writes files
+atomically (temp + rename), so two simultaneous invocations serialize instead of
+clobbering each other and a reader never sees a half-written file. A mutator
+waits up to ~10 s for the lock, then errors rather than hanging. Read-only
+queries (`ready`/`view`/`dependents`/`dag`) do not lock. (Cross-checkout parallel
+sessions additionally need git merge handling — out of scope here.)
+
 Edit work-tracking via the `tools/registry` CLI (`add` / `split` / `set-status`
 / `set-pr` / `dep` / `answer` / `prioritize` / `move`), then `make registry` to
 regenerate the views; commit the YAML and regenerated `.md` together. Full

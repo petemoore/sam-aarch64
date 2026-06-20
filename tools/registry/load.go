@@ -69,5 +69,5 @@ func writePriority(path string, ids []string) error {
 		sb.WriteString(id)
 		sb.WriteString("\n")
 	}
-	return os.WriteFile(path, []byte(sb.String()), 0o644)
+	return atomicWriteFile(path, []byte(sb.String()), 0o644)
 }

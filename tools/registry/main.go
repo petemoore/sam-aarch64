@@ -78,6 +78,20 @@ func main() {
 	cmd := args[0]
 	paths := defaultMutatorPaths()
 	paths.migrating = migrating
+
+	// Serialize mutating commands behind an exclusive advisory lock so two
+	// concurrent invocations (e.g. Pete adds an item while an agent runs `dep
+	// add`) cannot interleave their load→mutate→write and clobber each other.
+	// Read-only commands (validate/gen/ready/view/dependents/dag/next-id) do not
+	// take the lock. Skipped when registryDir is unresolved — the command's
+	// loadReg then fails with the "no data source" error instead.
+	if mutatingCommands[cmd] && paths.registryDir != "" {
+		if err := lockRegistry(paths.registryDir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+
 	switch cmd {
 	case "validate":
 		runValidate(args[1:], migrating, paths)
