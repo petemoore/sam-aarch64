@@ -3101,9 +3101,11 @@
 - id: i191c
   title: registry workflow as an on-demand skill + CLAUDE.md registry-section de-bloat
   description: ""
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 527, role: completing}
   parent: i191
 
 - id: i192
