@@ -406,13 +406,32 @@ hardware-verified (CLAUDE.md §5).
 
 ---
 
-## SAMBOOT ROM+EEPROM capture (i87a) — Pete runs the i173 dumper
+## SAMBOOT ROM+EEPROM capture (i87a) — agent runs the i173 dumper
 
 Capture the patched system ROM + the Trinity EEPROM off the real SAM, so the boot
 chain can be analysed (i87b) and the EEPROM backed up before any flash (i135c).
 The dumper is **pushed over trinload** (not booted from disk) and serves the dumps
 over TFTP as 16 KB regions the host pulls and concatenates. It reads ROM/EEPROM
-**read-only** — it never writes the card. Charter: `docs/specs/samboot.md` §6 step 2.
+**read-only** — it never writes the card. The capture is **agent-driven**
+(network-only, read-only). Charter: `docs/specs/samboot.md` §6 step 2.
+
+> **2026-06-21 run result (i87a).** The **EEPROM backup is complete**: `eeprom.bin`
+> (131072 B, verified real — the "Trinity Network " chunk and the SAM's actual MAC
+> `02:54:52:49:4e:bc` are present) plus `rom0.bin` (low 16 KB) were captured and
+> stashed in `~/sam-archive/samboot-capture/` (tracked as **i87a-b1**, done).
+> **`rom1.bin` was NOT captured**: the dumper's `dumper_read_rom1` scratch-page
+> path crashed the SAM and killed trinload. Root cause — it picks scratch page
+> `P-1 = page 0` (P=1, the trinload push page), `ldir`s 16 KB of ROM1 into it, and
+> never restores LMPR, which both clobbers low memory and remaps section B
+> (`&6000`, where trinload's `org &6000` code lives) off trinload. The dumper is
+> being redesigned as a single dump-and-return program with a genuinely-free
+> scratch page + restored paging + a clean `RET` to trinload (**i188**,
+> emulation-verified via **i181** first); `rom1.bin` is recaptured afterwards
+> (**i87a-b2**). Until then `rom.bin = rom0.bin + rom1.bin` is incomplete. **Do
+> not request `rom1.bin` from the current dumper — it kills trinload.**
+
+Steps 1–5 below describe the dumper as-built; heed the run-result note above — fetch
+only `rom0.bin` + `eep0..eep7` from the current dumper, never `rom1.bin`.
 
 1. **Build the pushable dumper:**
    ```sh
@@ -437,13 +456,15 @@ over TFTP as 16 KB regions the host pulls and concatenates. It reads ROM/EEPROM
 5. **Stash the artifacts** under `~/sam-archive/` (non-redistributable, like the
    existing B-DOS analysis — Colin's proprietary work; never commit them).
 
-**Read-this caveat.** The **EEPROM** read path is emulation-verified (`dumper_test.go`),
-so `eeprom.bin` should be reliable — it is the **mandatory backup before i135c**.
-The **ROM-paging** read is **hardware-first** (the flat harness has no real paging):
-if `rom.bin` looks wrong (all-zeros / garbage / wrong size), the paging assumptions
-flagged `VERIFY ON HARDWARE` (A1–A5 in `src/netboot/netboot_dumper.asm`) need
-revisiting — that is expected uncertainty, not a silent failure. (i181 tracks adding
-a harness paging model to emulation-verify the ROM-paging *sequence*.)
+**Read-this caveat.** The **EEPROM** read path is emulation-verified (`dumper_test.go`)
+and now **hardware-confirmed** — `eeprom.bin` is captured and is the **mandatory
+backup before i135c**. The **ROM-paging** read was **hardware-first** (the flat
+harness has no real paging), and the 2026-06-21 run proved one of those
+`VERIFY ON HARDWARE` assumptions wrong: `rom0.bin` reads cleanly, but `rom1.bin`
+(assumption A3 — "P-1 is a free RAM page") crashes the SAM (see the run-result note
+above). This is exactly the gap **i181** closes (a harness LMPR/HMPR paging model +
+trinload residency, to reproduce the crash and verify the fix in emulation) before
+the **i188** redesign re-enables a safe ROM capture.
 
 ---
 

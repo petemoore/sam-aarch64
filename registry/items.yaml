@@ -1324,17 +1324,36 @@
     Push the one-shot dumper onto the SAM via trinload and tftp-get rom.bin + eeprom.bin to the Pi/Mac. Agent-drivable: the capture is network-driven (trinload listener left running on the SAM; SAM reachable at 192.168.2.75) and read-only, so an agent runs it without a human in the loop — this is the same agent-driven loop samboot.md §1 describes. Captures the artifacts that unblock the offline analysis; the EEPROM capture is the mandatory pre-flash backup.
   status: IN_PROGRESS
   depends_on: [i173]
-  kind: leaf
+  kind: umbrella
   owner: agent
   parent: i87
   refs: [docs/specs/samboot.md]
+
+- id: i87a-b1
+  title: Capture eeprom.bin (full 128 KB pre-flash backup) + rom0.bin from the real SAM
+  description: |
+    DONE 2026-06-21: pushed the i173 dumper over trinload (SAM 192.168.2.75), TFTP-pulled eep0..eep7 -> eeprom.bin (131072 B, verified real: Trinity Network chunk + SAM MAC 02:54:52:49:4e:bc present) and rom0.bin (16384 B, low ROM). Stashed in ~/sam-archive/samboot-capture/. eeprom.bin is the mandatory pre-flash backup for i135c.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  parent: i87a
+
+- id: i87a-b2
+  title: Recapture rom1.bin (patched ROM high 16 KB) after the dumper redesign
+  description: |
+    rom1.bin was NOT captured 2026-06-21: the i173 dumper's dumper_read_rom1 scratch-page path crashed the SAM (page-0 clobber, see i188). Once the dumper is redesigned + emulation-verified (i188), re-run the capture to get rom1.bin so rom.bin = rom0.bin + rom1.bin is complete (unblocks i87b diff + i135c).
+  status: OPEN
+  depends_on: [i188]
+  kind: leaf
+  owner: agent
+  parent: i87a
 
 - id: i87b
   title: "SAMBOOT: document the SAM boot chain from the captured ROM/EEPROM + public source"
   description: |
     Diff rom.bin vs stock SAM ROM 3.0, confirm the EEPROM bootblock matches the public reproduction, and document the chip->bootblock->B-DOS handoff + where the injection hook attaches.
   status: OPEN
-  depends_on: [i87a, i135a]
+  depends_on: [i87a-b1, i135a]
   kind: leaf
   owner: agent
   parent: i87
@@ -2551,7 +2570,7 @@
   description: |
     Flash the prototyped patched EEPROM to Pete's Trinity via write_chunk, keeping the captured EEPROM as the restore backup; power-cycle and confirm unattended auto-boot of the configured record. Hardware (Pete).
   status: OPEN
-  depends_on: [i135d, i87a, i87b]
+  depends_on: [i135d, i87a-b1, i87b]
   kind: leaf
   owner: pete
   parent: i135
@@ -3006,3 +3025,22 @@
   owner: agent
   prs:
     - {num: 516, role: completing}
+
+- id: i188
+  title: "SAMBOOT dumper: redesign as single dump-and-return (fix rom1 page-0 scratch clobber + clean trinload return)"
+  description: |
+    The i173 dumper crashed real hardware capturing rom1.bin (i87a, 2026-06-21): dumper_read_rom1 picks scratch page P-1 = page 0 (P=1, the trinload push page), ldirs 16 KB of ROM1 into it, and never restores LMPR — clobbering low memory AND remapping section B (&6000) away from trinload (org &6000), killing trinload. Redesign per Pete: one program that reads ALL regions (ROM0/ROM1/EEPROM) with a genuinely-free scratch page + restored paging, streams them in one session, then RETs cleanly to trinload (fixes serve-forever/no-clean-return that blocks the autonomous push->run->return->re-push loop). Emulation-verify the full path (paging + trinload round-trip) before hardware via i181. EEPROM read + rom0 already hw-confirmed (i87a backup).
+  status: OPEN
+  depends_on: [i181]
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/samboot.md, docs/notes/netboot-trinity-testing.md]
+
+- id: i189
+  title: "SAM software catalogue: index every key binary, disassembly, investigation + how they relate"
+  description: |
+    Pete (2026-06-21): we now have many pieces of SAM software — some disassembled, some commented, some not — and no single overview, which has caused real confusion (e.g. SAMDOS vs B-DOS, where B-DOS replaces SAMDOS). Build a generic SAM software catalogue (a living reference doc) that for each piece records: what it is, where its binary lives, where its disassembly lives + whether commented, related investigations/reports, and how the pieces relate. Pieces include: the SAM system ROMs (untarnished, incl. startup stripes); Colin's forked ROM (fetches boot code from EEPROM -> how the forked-B-DOS bootblock is stored on EEPROM) — extracted 2026-06-21 (rom0.bin in ~/sam-archive/samboot-capture/, rom1 pending i87a-b2); the Trinity EEPROM contents + the Trinity disk's network-config program (defines the EEPROM layout) — eeprom.bin extracted 2026-06-21; trinload; SAMDOS; B-DOS; our own netboot programs + harness. Reference it from ARCHITECTURE.md. Record extraction artifacts so they are never lost.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/samboot.md, docs/ARCHITECTURE.md]

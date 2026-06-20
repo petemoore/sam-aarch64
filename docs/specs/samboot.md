@@ -192,8 +192,11 @@ physically present (`owner: pete`), the rest are agent work.
    `eeprom.bin`. Pushed onto the SAM via trinload (already proven). This is the
    first thing to build; it captures the artifacts that unblock all the offline
    analysis, and the EEPROM capture is the **mandatory backup** before any flash.
-3. **Run the dumper on hardware** *(pete)* — capture `rom.bin` + `eeprom.bin` from
-   the real SAM. *(i87a)*
+3. **Run the dumper on hardware** *(agent — network-driven, read-only)* — capture
+   `rom.bin` + `eeprom.bin` from the real SAM. *(i87a)* **Status (2026-06-21):**
+   `eeprom.bin` (full 128 KB pre-flash backup) + `rom0.bin` captured (**i87a-b1**);
+   `rom1.bin` crashed the dumper (page-0 scratch clobber) → dumper redesign **i188**
+   (emulation-verified via **i181**), then recapture `rom1.bin` (**i87a-b2**).
 4. **Document the boot chain** *(agent)* — diff `rom.bin` vs the stock SAM ROM
    3.0, confirm the EEPROM bootblock matches the public reproduction, and write up
    exactly how the chip → bootblock → B-DOS handoff works + where the hook
