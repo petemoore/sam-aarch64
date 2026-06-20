@@ -3701,9 +3701,11 @@
   title: "Review both Go SAM-emulation libraries: shared vs duplicated logic, merge recommendation"
   description: |
     Pete (2026-06-22, answering q41): the driving principle is do NOT reimplement the same SAM-Coupe emulation logic in two places — put shared logic in shared packages. Suspicion: we built two Go emulation libraries (tools/z80-test-harness-go and the netboot-oracle/z80 emulator, plus koron-z80) that overlap, where some accuracy features exist on one side only. ACTION: an agent reviews BOTH emulation cores (paging/pager, ROM-vs-RAM model, Trinity/SD/ENC seams, instruction coverage, what each tests that the other can't), and reports: which logic is duplicated, which features are one-sided, and whether ONE merged core would benefit both (more accuracy across more concerns) or whether they provide fundamentally different services where merging would just slow things. Output = a feedback/recommendation doc for Pete to decide the merge. This is the gating first step for i190 (the actual merge). See feedback_mirror_emulator_fixes (the i190-pending interim rule).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 602, role: completing}
 
 - id: i209
   title: "Assess on-SAM macro/preprocessor support (i31): scope, integration point, perf + size impact estimate"
