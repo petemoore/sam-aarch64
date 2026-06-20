@@ -17,7 +17,6 @@ package z80_test
 
 import (
 	"encoding/binary"
-	"fmt"
 	"os"
 	"sort"
 	"testing"
@@ -39,7 +38,6 @@ const (
 // contract the integrated assembler relies on; a drift here vs. the .asm is a
 // silent corruption, so the .asm header documents the identical map.
 const (
-	addrSYMTAB          = 0xC160
 	addrLITPOOLTable    = 0xD200
 	addrLITPOOLCount    = 0xD3C0
 	addrLocalLabelTable = 0xE280
@@ -234,7 +232,7 @@ func nameToID(f *format.File) map[string]uint16 {
 // checkFixture is the per-source assertion: Translate -> host Pass1 (expected)
 // and serializeIR -> Z80 pass1_ir_walk (got), compared on Symbols, LocalDefs,
 // and PoolEntries.
-func checkFixture(t *testing.T, mac *z80h.Machine, name string, src []byte) {
+func checkFixture(t *testing.T, name string, src []byte) {
 	t.Helper()
 	f, err := frontend.Translate(src, name)
 	if err != nil {
@@ -246,7 +244,7 @@ func checkFixture(t *testing.T, mac *z80h.Machine, name string, src []byte) {
 	}
 
 	ir := serializeIR(t, f)
-	// Reload a fresh machine per fixture so the tables start empty.
+	// A fresh machine per fixture so the tables start empty.
 	freshMac := loadPass1IR(t)
 	runPass1IR(t, freshMac, ir)
 
@@ -332,9 +330,6 @@ func bytesEqual(a, b []byte) bool {
 // fixtures (and a couple of hand sources exercising labels/locals/.equ/litpool)
 // and asserts the Z80 tables match host assemble.Pass1.
 func TestPass1IRCoreFixtures(t *testing.T) {
-	mac := loadPass1IR(t)
-	_ = mac // each fixture reloads a fresh machine; this proves the build exists
-
 	// Hand sources covering the four record kinds with PC effects.
 	hand := map[string]string{
 		"labels": "start:\n  mov x0, x1\n  add x1, x2, x3\nloop:\n  b loop\n",
@@ -359,7 +354,7 @@ func TestPass1IRCoreFixtures(t *testing.T) {
 	sort.Strings(names)
 	for _, n := range names {
 		t.Run("hand/"+n, func(t *testing.T) {
-			checkFixture(t, mac, n, []byte(hand[n]))
+			checkFixture(t, n, []byte(hand[n]))
 		})
 	}
 
@@ -385,10 +380,8 @@ func TestPass1IRCoreFixtures(t *testing.T) {
 				if _, err := frontend.Translate(src, e.Name()); err != nil {
 					t.Skipf("%s: Translate error (out of pass1-ir fixture scope): %v", e.Name(), err)
 				}
-				checkFixture(t, mac, e.Name(), src)
+				checkFixture(t, e.Name(), src)
 			})
 		}
 	}
 }
-
-var _ = fmt.Sprintf
