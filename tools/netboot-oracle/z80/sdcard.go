@@ -53,6 +53,42 @@ const (
 	sdIdleMISO = 0xFF // SPI-idle MISO (card not driving): a flushed/idle read returns &FF
 	sdDataTok  = 0xFE // start-of-data token preceding a data block (CSD read, sector read)
 	sdCmdFrame = 6    // an SD-SPI command frame is 6 bytes: opcode|0x40, 4 arg bytes, CRC
+	sdSectorSz = 512  // a data block is one 512-byte sector
+	// sdWriteAccept is the data-response token a CMD24 write returns once the 512
+	// data bytes are clocked in: the driver reads it as `in a,(&df); and &1e; sub 4`
+	// (hd.svb-t tail &A89B-&A8A1), so any value whose `& &1E == &04` is "accepted"
+	// (&04 = data accepted, &05 = its idle-bit-set sibling — both map to &04). We
+	// return &05, matching the doc's "accepted == &04/&05".
+	sdWriteAccept = 0x05
+	// sdWriteBusy / sdWriteDone are the busy-poll bytes after the data-response: the
+	// tail busy-waits `in a,(&df); inc a; jr z` (&A8AB-&A8AE) — it loops while the
+	// card drives a non-&FF (busy) MISO and breaks when MISO releases to &FF (done).
+	sdWriteBusy = 0x00
+	sdWriteDone = 0xFF
+	// sdWriteBusyReads is how many busy (&00) bytes the model returns before
+	// releasing to &FF — a couple, to exercise the driver's busy loop without
+	// approaching its 65536 cap.
+	sdWriteBusyReads = 2
+)
+
+// CMD17/CMD24 opcodes (SD-SPI: command number | 0x40), block-addressed (SDHC) or
+// byte-addressed (SDv1) per the seek path's <<9 (trinity-sd-z80-interface.md §7).
+const (
+	cmdReadSingle  = 0x51 // CMD17 READ_SINGLE_BLOCK
+	cmdWriteSingle = 0x58 // CMD24 WRITE_SINGLE_BLOCK
+)
+
+// sdPhase tracks the post-command data phase of a CMD17 read or CMD24 write. The
+// init-ladder commands (CMD0..CMD16) leave the model in phaseIdle and use only the
+// resp-stream/read-lag machinery; only the sector commands enter a data phase.
+type sdPhase int
+
+const (
+	phaseIdle       sdPhase = iota // no data phase: R1/response stream only (init ladder, CMD9)
+	phaseWriteToken                // CMD24: awaiting the &FE start-of-data token from the driver
+	phaseWriteData                 // CMD24: capturing the 512 data bytes the driver clocks out
+	phaseWriteCRC                  // CMD24: swallowing the 2 trailing CRC bytes after the data
+	phaseWriteResp                 // CMD24: returning the data-response token, then the busy poll
 )
 
 // SDCard models the SD-SPI command state machine on ports &DC (select) / &DF
@@ -92,6 +128,30 @@ type SDCard struct {
 	// OUT &DF (the microcontroller's one-byte read-lag, mirroring eeprom.miso /
 	// enc28j60.spiMISO). In auto-null mode a bare IN advances the stream itself.
 	miso byte
+
+	// --- CMD17/CMD24 sector data path (i145h) ---
+
+	// store is the sector backing store: a 512-byte sector keyed by its block index
+	// (CMD17/CMD24 address, after the seek's byte-vs-block <<9 has been applied — so
+	// for an SDHC card the key is the sector number, for an SDv1 card it is the byte
+	// address, exactly as the driver pokes it into the &A836/&A843 immediates). A
+	// CMD24 write captures into store[addr]; a CMD17 read streams store[addr] back.
+	store map[uint32][]byte
+
+	// addr is the 32-bit address parsed from the most recent CMD17/CMD24 frame
+	// (big-endian: arg bytes [1..4]); it keys store for the data phase that follows.
+	addr uint32
+
+	// phase is the current sector data-phase state (phaseIdle outside a CMD17/24
+	// data phase). writeBuf accumulates the CMD24 payload; writeIdx counts captured
+	// data bytes; crcLeft counts the trailing CRC bytes still to swallow; busyLeft
+	// counts the busy (&00) reads still to emit before the write-done (&FF) release.
+	phase    sdPhase
+	writeBuf []byte
+	writeIdx int
+	crcLeft  int
+	busyLeft int
+	respStep int // walks the CMD24 post-data 3-read handshake (gap, data-response, busy)
 }
 
 // SetCSD installs the 16 CSD register bytes the card reports via CMD9 and arms
@@ -101,6 +161,30 @@ func (s *SDCard) SetCSD(csd [16]byte) {
 	// CSD_STRUCTURE == 01 (byte0 bits 7:6) => v2.0 high-capacity card.
 	s.isV2 = (csd[0] & 0xC0) == 0x40
 	s.configured = true
+}
+
+// SeedSector pre-loads a 512-byte sector into the backing store at block address
+// addr, so a subsequent CMD17 read of that address streams it back. A short slice
+// is zero-padded; a long one is truncated. Used by the read-path test to plant a
+// known pattern the driver then reads. (The card need not be configured to seed —
+// SetCSD arms the SPI machinery; seeding is independent backing-store setup.)
+func (s *SDCard) SeedSector(addr uint32, data []byte) {
+	if s.store == nil {
+		s.store = make(map[uint32][]byte)
+	}
+	sec := make([]byte, sdSectorSz)
+	copy(sec, data)
+	s.store[addr] = sec
+}
+
+// CapturedSector returns the 512 bytes the backing store holds at block address
+// addr (a CMD24 write target, or a SeedSector), and whether a sector exists there.
+func (s *SDCard) CapturedSector(addr uint32) ([]byte, bool) {
+	if s.store == nil {
+		return nil, false
+	}
+	sec, ok := s.store[addr]
+	return sec, ok
 }
 
 // CSDForV2 builds a 16-byte CSD v2.0 register (SDHC/SDXC) for the given 22-bit
@@ -166,12 +250,26 @@ func (s *SDCard) sdSelect(v uint8) bool {
 		s.resp = nil
 		s.respPos = 0
 		s.miso = sdIdleMISO
+		s.phase = phaseIdle
 		return true
 	case selSDDeselct:
 		s.selected = false
 		return true
 	}
 	return false
+}
+
+// ctlStatus is the &DC microcontroller-status byte the model reports. Bit 3
+// (busy) is always clear (the model never stalls). When a card is configured it
+// also reports bit 1 (card present) and bit 2 (write-protect, SENSE-INVERTED: the
+// driver reads it as `CPL / AND 4`, so a writable card must read the bit SET —
+// doc §1, hd.svb-t WP gate &A91B). With no card configured it returns 0x00, the
+// bare not-busy value the pre-existing no-card tests rely on.
+func (s *SDCard) ctlStatus() uint8 {
+	if !s.configured {
+		return 0x00
+	}
+	return 0x06 // bit1 present + bit2 write-enabled (sense-inverted), bit3 busy clear
 }
 
 // sdReset clears all per-transaction state (selNullOff / &04 all-deselect bracket,
@@ -184,11 +282,22 @@ func (s *SDCard) sdReset() {
 	s.resp = nil
 	s.respPos = 0
 	s.miso = sdIdleMISO
+	s.phase = phaseIdle
 }
 
 func (s *SDCard) resetCmd() {
 	s.inCmd = false
 	s.cmdLen = 0
+}
+
+// frameAddr extracts the 32-bit address argument from the current command frame
+// (bytes 1..4, big-endian — the order &A81F clocks out: HIGH word H,L then LOW
+// word H,L). For an SDHC card this is the block (sector) number; for an SDv1 card
+// the seek path has already <<9-shifted it to a byte address (§7). Either way it
+// is the verbatim key into the backing store, matching how the driver addresses.
+func (s *SDCard) frameAddr() uint32 {
+	return uint32(s.cmdBuf[1])<<24 | uint32(s.cmdBuf[2])<<16 |
+		uint32(s.cmdBuf[3])<<8 | uint32(s.cmdBuf[4])
 }
 
 // out processes one byte clocked to the SD card over &DF (a manual-mode sd.out).
@@ -197,6 +306,14 @@ func (s *SDCard) resetCmd() {
 // one-byte read-lag: a dummy &FF write clocks out the next response byte).
 func (s *SDCard) out(v uint8) {
 	if !s.configured || !s.selected {
+		return
+	}
+	// A CMD24 write data phase claims every OUT byte (token, 512 data, 2 CRC) — a
+	// data byte may have its top two bits == 01, so it must be handled BEFORE the
+	// command-start detection below, or a payload byte would be mistaken for a new
+	// command frame. (CMD17 reads have no OUT data phase — they are bare INs.)
+	if s.phase != phaseIdle {
+		s.outDataPhase(v)
 		return
 	}
 	// While collecting a command frame, every byte is part of it.
@@ -225,6 +342,48 @@ func (s *SDCard) out(v uint8) {
 	s.miso = s.nextResp()
 }
 
+// outDataPhase consumes one OUT byte during a CMD24 write data phase. The driver
+// (hd.svb-t &A933-&A953 + tail &A86B-) sends: a leading dummy &FF, the &FE
+// start-of-data token, the 512 payload bytes (OUTI loop), then 2 dummy CRC bytes.
+// We swallow the dummy, latch on the token, capture the 512 payload into the
+// backing store at the addressed sector, swallow the CRC, then arm the
+// data-response + busy poll that the following INs read.
+func (s *SDCard) outDataPhase(v uint8) {
+	switch s.phase {
+	case phaseWriteToken:
+		// Awaiting the &FE token. The leading dummy &FF (&A933) is ignored; the &FE
+		// (&A93D) opens the data block. (Any non-&FE byte before the token is a
+		// flush/dummy and is skipped — faithful to the driver only ever sending &FF.)
+		if v == sdDataTok {
+			s.writeBuf = make([]byte, sdSectorSz)
+			s.writeIdx = 0
+			s.phase = phaseWriteData
+		}
+	case phaseWriteData:
+		s.writeBuf[s.writeIdx] = v
+		s.writeIdx++
+		if s.writeIdx == sdSectorSz {
+			// All 512 captured: commit to the backing store at the addressed block.
+			if s.store == nil {
+				s.store = make(map[uint32][]byte)
+			}
+			sec := make([]byte, sdSectorSz)
+			copy(sec, s.writeBuf)
+			s.store[s.addr] = sec
+			s.crcLeft = 2 // 2 trailing dummy CRC bytes (&A881/&A88B dec a; out)
+			s.phase = phaseWriteCRC
+		}
+	case phaseWriteCRC:
+		s.crcLeft--
+		if s.crcLeft == 0 {
+			// CRC done: the next INs walk the gap/data-response/busy handshake.
+			s.busyLeft = sdWriteBusyReads
+			s.respStep = 0
+			s.phase = phaseWriteResp
+		}
+	}
+}
+
 // in returns the byte for an IN &DF. In manual mode it returns the latched
 // read-lag byte (set by the most recent out). In auto-null mode the
 // microcontroller supplies the dummy, so a bare IN both advances and returns the
@@ -234,10 +393,43 @@ func (s *SDCard) in() uint8 {
 	if !s.configured || !s.selected {
 		return sdIdleMISO
 	}
+	if s.phase == phaseWriteResp {
+		return s.inWriteResp()
+	}
 	if s.autoNull {
 		return s.nextResp()
 	}
 	return s.miso
+}
+
+// inWriteResp returns the CMD24 post-data handshake the driver polls. The tail
+// (&A893-&A8AE) does it in three reads: a throwaway IN (&A893, the 1-byte gap
+// after the CRC — its result is discarded), THEN the data-response token (&A89B,
+// read as `and &1e; sub 4`, accepted == &04), THEN the busy poll (&A8AB onward,
+// `inc a; jr z` — loops while the card drives non-&FF, breaks on the &FF release).
+// So: read 1 = idle gap byte; read 2 = the &05 data-response; reads 3.. = busy
+// (&00) then write-done (&FF). Returning the response on read 1 instead would make
+// the driver's SECOND read (the actual check) see busy and fail to "accepted".
+func (s *SDCard) inWriteResp() uint8 {
+	// respStep walks the three-read handshake: 0 = the throwaway gap byte (&A893);
+	// 1 = the data-response token (&A89B, the one the driver checks); 2.. = the busy
+	// poll (&A8AB), busy (&00) for busyLeft reads then write-done (&FF).
+	switch {
+	case s.respStep == 0:
+		s.respStep++
+		return sdIdleMISO // gap byte before the data-response (discarded by the driver)
+	case s.respStep == 1:
+		s.respStep++
+		return sdWriteAccept // the data-response token the driver checks (and &1e == 4)
+	case s.busyLeft > 0:
+		s.busyLeft--
+		return sdWriteBusy
+	default:
+		// Done: release MISO high (breaks the `inc a; jr z` busy loop). Leave the
+		// phase set so any extra polls also read &FF; the deselect tail &A8D7 then
+		// resets us via &30/&04.
+		return sdWriteDone
+	}
 }
 
 // nextResp pops the next byte from the response stream, or the idle &FF when the
@@ -305,6 +497,34 @@ func (s *SDCard) completeCommand() {
 		s.resp = resp
 	case 0x50: // CMD16 SET_BLOCKLEN 512 -> R1 = 0x00
 		s.resp = []byte{0x00}
+	case cmdReadSingle: // CMD17 READ_SINGLE_BLOCK -> R1=0x00, then &FE token + 512 + 2 CRC
+		// dis hd.ldb-t &A999: send CMD17 (&51) via &A81F (which consumes R1 in the
+		// sender's poll, so R1=0x00 here lets `jp nz` pass), then poll &DF for the
+		// &FE token, then INI 510 + 2-byte tail under auto-null. So the stream after
+		// the sender's R1 is &FE + the 512 sector bytes + 2 CRC, streamed by nextResp
+		// exactly as CMD9's CSD read is. An un-seeded sector reads back as zeros.
+		s.addr = s.frameAddr()
+		sec, ok := s.store[s.addr]
+		if !ok {
+			sec = make([]byte, sdSectorSz)
+		}
+		resp := make([]byte, 0, 1+1+sdSectorSz+2)
+		resp = append(resp, 0x00)      // R1 ready (consumed by the &A81F sender poll)
+		resp = append(resp, sdDataTok) // &FE start-of-data token
+		resp = append(resp, sec...)    // 512 sector bytes
+		resp = append(resp, 0x00, 0x00)
+		s.resp = resp
+	case cmdWriteSingle: // CMD24 WRITE_SINGLE_BLOCK -> R1=0x00, then the OUT data phase
+		// dis hd.svb-t &A918: send CMD24 (&58) via &A81F (R1 consumed in its poll),
+		// then the driver clocks out a dummy, the &FE token, 512 data bytes (OUTI),
+		// 2 CRC, and reads the data-response + busy. We arm R1=0x00 for the sender's
+		// poll and enter the write data phase so the following OUTs are captured.
+		s.addr = s.frameAddr()
+		s.resp = []byte{0x00} // R1 ready (consumed by the &A81F sender poll)
+		s.phase = phaseWriteToken
+		s.respStep = 0
+		s.busyLeft = 0
+		s.crcLeft = 0
 	default:
 		// Any other command: return a benign ready R1 so an unmodelled probe does
 		// not wedge a poll. (The init ladder sends only the opcodes above.)

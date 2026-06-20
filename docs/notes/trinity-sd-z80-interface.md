@@ -12,7 +12,7 @@
 
 The Trinity port map and the general SPI lag/auto-null mechanics live in `trinity-capabilities.md` §2–§3 — not repeated here. The two ports this interface uses:
 
-- **`&DC`** — microcontroller select + status. `OUT` writes a select byte (§2 table); `IN` returns status: **bit 3 = busy**, **bit 1 = card present**, **bit 2 = write-protect** (sense inverted — the fork reads it as `CPL / AND 4`, `dis:5996`).
+- **`&DC`** — microcontroller select + status. `OUT` writes a select byte (§2 table); `IN` returns status: **bit 3 = busy**, **bit 1 = card present**, **bit 2 = write-protect** (sense inverted — the fork reads it as `CPL / AND 4`, `dis:5996`). **Concretely (for a model/probe): a *writable* card must read `&DC` bit 2 SET** — `hd.svb-t` at &A91B does `IN(&DC) / CPL / AND 4`, so bit-2-set → `CPL` clears it → no WP abort, whereas a model returning `&DC`=`0` reads as write-protected and **every CMD24 write aborts** to the ROM WP-fail path (`&444B`). (i145h finding, verified against the disassembly.)
 - **`&DF`** — SD-card transparent SPI byte relay (the SD analogue of the ENC's `&DE`). The standard SD-SPI command ladder ports directly onto it.
 
 (The Trinity-presence identity probe — commands `&08`/`&09` to `&DC`, replies `'T'`,`'R'` read from **`&DD`**, the EEPROM data port — is documented in `trinity-capabilities.md` §2 / `bdos-trinity-fork-analysis.md`; it is not part of the SD data path.)
@@ -94,7 +94,7 @@ a85e:  wait ; in a,(&df)           ; poll R1 until bit7 clear (top bit = 0), ≤
 The 32-bit sector/byte address is **not passed in a register** — it is *poked into the `LD HL,nn` immediates* at `&A836` (high) and `&A843` (low) by the seek path (§7, self-modifying code). After the argument+CRC are clocked out under `&31`, the sender flips to **`&3F` auto-null** so the entire data phase that follows needs no per-byte dummy. The data phase is then:
 
 - **Read (CMD17)** — wait for the `&FE` data token, then `INI`×510 + the 2-byte tail, each gated on `wait` (`hd.ldb-t` at &A999, `dis:6055`).
-- **Write (CMD24)** — WP check (§8), `&FE` token out, `OUTI`×510 + 2-byte tail, 2 dummy CRC bytes, read the data-response token (`AND &1E`, accepted == `&04`/5), then busy-wait ≤65536 reads for write completion (`hd.svb-t` at &A918, `dis:5995`; tail at &A86B `dis:5889`).
+- **Write (CMD24)** — WP check (§8), `&FE` token out, `OUTI`×510 + 2-byte tail, 2 dummy CRC bytes, then the post-CRC tail (`&A893`): a **throwaway `IN (&DF)`** (the gap byte, *discarded*) + a `&DC` busy-poll, **then** the data-response read (`&A89B`: `AND &1E / SUB 4`, accepted == `&04`; `&05` masks to `&04`), **then** the busy-wait — a `&DC` busy-poll then `IN (&DF) / INC A / JR Z` (`&A8AB`) looping until `&DF` returns `&FF` (write complete), ≤65536 reads. The throwaway read before the data-response is easy to miss: a model that answers the data-response on the *first* post-CRC `&DF` read fails (the driver's real check is the *second* read). (`hd.svb-t` at &A918, `dis:5995`; tail at &A86B `dis:5889`. i145h finding.)
 
 **Deselect (&A8D7, `dis:5946`)**: flush `&FF`, `OUT (&DC),&30` twice (around a dummy write), `OUT (&DC),&04` (auto-null off / all-deselect), `EI`, `RET`.
 
