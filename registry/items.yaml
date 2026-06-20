@@ -1322,7 +1322,7 @@
   title: "SAMBOOT: run the one-shot dumper on the SAM to capture rom.bin + eeprom.bin"
   description: |
     Push the one-shot dumper onto the SAM via trinload and tftp-get rom.bin + eeprom.bin to the Pi/Mac. Agent-drivable: the capture is network-driven (trinload listener left running on the SAM; SAM reachable at 192.168.2.75) and read-only, so an agent runs it without a human in the loop — this is the same agent-driven loop samboot.md §1 describes. Captures the artifacts that unblock the offline analysis; the EEPROM capture is the mandatory pre-flash backup.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i173]
   kind: leaf
   owner: agent
