@@ -3475,7 +3475,7 @@
   description: |
     First sub-brick of i201 (i48c-b8e compound forms). Wire the shifted-register and extended-register compound-operand encoders into encode_inst's pre-form-table dispatch (pass2.go:235-240): encodeShiftedRegInst (pass2.go:1060-1122) + encodeExtendedRegInst (ADD/SUB only, pass2.go:1188-1225), plus the shifted-reg 3-register coercion (lsl #0, pass2.go:252-271) and 2-register tst coercion (pass2.go:273-290). REUSES the proven Z80 full-instruction encoders encode_shifted_reg_word + encode_extended_reg_word (src/slots/shifted_reg.asm / extended_reg.asm, already tested by test_shifted_reg/test_extended_reg) + encode_extend_op + eval_expr_const for the shift/amount expr. New work = parse the OpShiftedReg/OpExtendedReg operand wire format from the stream and set up the encoder inputs + the coercion synthesis. Faithful port (CLAUDE.md s6). Extends the test_encode_inst boot self-test + the Go authority fixtures. Depends on i199 (encode_inst skeleton + harness). SimCoupe-gated.
   status: OPEN
-  depends_on: [i199]
+  depends_on: [i199, i206]
   kind: leaf
   owner: agent
   parent: i201
@@ -3576,3 +3576,11 @@
   owner: agent
   prs:
     - {num: 572, role: completing}
+
+- id: i206
+  title: "Commoning pass #2 — bank test-variant headroom before i201a compound-form encoders"
+  description: |
+    Follow-on to i205 (DONE, +386 B). The test-variant assembler.bin has only 87 B headroom to the &C000 cliff after i203d un-park, so i201a (compound-form encoders + fixtures) will overflow. Bank more headroom via coverage-first commoning of the un-commoned families flagged in build/coverage-report.txt: ml_div* (signed-divide helper), main_dir_org_* / directive handlers, and the sysname_parse_* generic-sysreg fallback paths. Keep the coverage-first rule (add a fixture so each family is green before/after commoning). Prod binary must stay byte-identical; test variant must regain headroom. Authority: existing Z80 sources + Go encoders where duplicated logic mirrors a Go fold/encoder.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
