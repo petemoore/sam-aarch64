@@ -2431,6 +2431,8 @@
   title: Audit the whole registry for hardware/Pete-gated items missing a depends_on gate edge
   description: |
     i146 added the i133 gate edge to the KNOWN hardware cluster (i141/i118b/i93b/i135). Systematically audit every open item for real-world blockers (hardware access, Pete-only setup) not yet expressed as a depends_on edge — the missing-edge class that makes a non-actionable item falsely surface as the ready tip. Candidates to check: i70/i93/i95/i101/i112/i87/i89/i113b/i127 and any others. For each truly-gated item add the edge to i133 (or the correct gate) so 'ready' surfaces only agent-actionable work. Generalises the i146 fix to prevent recurrence.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 475, role: completing}
