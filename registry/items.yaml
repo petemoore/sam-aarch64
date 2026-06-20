@@ -868,10 +868,12 @@
   title: "Compact non-encoder core: LIT_DATA + sidecar + globals + PC walk (flat harness)"
   description: |
     Port the non-encoder body of assemble.Compact (compact.go:46-188, excluding literalWord/encodeInstOverlay): drop LABEL_DEF/LOCAL_DEF (already in b8a Pass1); COMMENT/BLANK_RUN -> editor-region sidecar rows anchored to RecordPC; .global -> name_id list (globalNameIDs); same-directive constant data -> KindLitData runs split at the 1016-byte cap; emit INST elements as a skeleton (base/patches filled by the encoder adapter i48c-b8e). Flat-memory harness like b8a (reuse pass1_ir_test.go scaffold: serializeIR + Pass1 oracle + record read-back), verified vs host assemble.Compact's non-encoder outputs (sidecar/globals/LIT_DATA/PC) over fixtures. No ENCTAB/paging -> no memory collision. Go authority: compact.go. The encoder-dependent half (literal-probe + overlay-patch emission, needs paged ENCTAB) is the sibling i48c-b8e.
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i48c-b8a]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 559, role: completing}
   parent: i48c-b8
 
 - id: i48c-b8c
