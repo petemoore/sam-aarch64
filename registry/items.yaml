@@ -3721,7 +3721,7 @@
   title: "Assess linker-script parsing / SpectrumFourLayout extraction (i56/i20): touch points + cost estimate"
   description: |
     Pete (2026-06-22, q42): parsing the linker script 'would be awesome' — same caveat as macros: if it means rewriting a lot of code or a significant performance cost, flag it; otherwise good to do. ACTION (this item): an agent produces a REPORT, not an implementation — survey ALL the touch points where the hardcoded spectrum4 layout (the off-axis page assignments, section addresses, the build-disk/loader assumptions) would need to read from a parsed linker script / a -layout flag instead; identify what SpectrumFourLayout would abstract; and ESTIMATE the implementation cost + any assemble-time perf impact. q42 depends on this report; once it lands, Pete returns to q42 for the go/no-go. Does NOT implement i56 — only scopes it. (i20 also depends on i56.)
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
