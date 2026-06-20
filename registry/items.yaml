@@ -2781,7 +2781,7 @@
   title: Harness SD-SPI/CSD model — model the DC/DF seam + SD command state machine + configurable CSD
   description: |
     Model the Trinity SD raw-SPI seam in the harness (mirror enc28j60.go): ports &DC select/busy + &DF data + the SD command state machine — the COMPREHENSIVE raw-SD model so EVERY raw-SD operation is faithfully emulated (NOT hook-injected — the BD_RECORDS-class gap): the CSD read (CMD9 -> configurable capacity, from i145a's real value), the card-absolute list-sector READ (CMD17, for free-record detection / i141), the list-sector/claim WRITE (i195), and HWSAD sector writes — all per Colin's actual mechanism (i193). Makes i145b (CSD), i141 (list read), and i195 (list write/name) emulation-verifiable end to end. Depends on i145a (real CSD) + i193 (the protocol).
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i145a]
   kind: leaf
   owner: agent
