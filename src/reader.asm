@@ -29,11 +29,14 @@
 ;
 ; The reader's storage now lives in main_loop.asm as a 24-bit (page,
 ; offset) cursor pair: IN_POS_PAGE / IN_POS_OFFSET (current), and
-; IN_END_PAGE / IN_END_OFFSET (one past last byte).  IN is resident in
-; physical pages 7..12 (HLOAD'd once by load_in_file at startup); each
-; reader_next_kind brackets a brief LMPR=&27-derived window mapping the
-; current IN page into section A, stages the record into STAGING_BUF
-; (section D), and restores LMPR_ENCTAB before returning.
+; IN_END_PAGE / IN_END_OFFSET (one past last byte).  IN is resident in a
+; CONTIGUOUS run of physical pages allocated from the i2 page pool by
+; load_in_file at startup (pp_alloc_run; base in IN_BASE_LMPR — page 7 on a
+; 256 KB SAM, up to the 16..31 run on 512 KB — i23).  Each reader_next_kind
+; brackets a brief IN_BASE_LMPR-derived window mapping the current IN page into
+; section A, stages the record into STAGING_BUF (section D), and restores
+; LMPR_ENCTAB before returning.  Because the run is contiguous, crossing a page
+; boundary is still a plain LMPR increment.
 ;
 ; This means callers see a stable section-D pointer instead of a section-C
 ; one — the only observable change in the reader's external ABI.
@@ -105,8 +108,9 @@ reader_init:
 ;    terminator (IN_END) to this boundary so walk_records stops there,
 ;    then jump straight to the header tables (no name table at the front).
 ;    HL is at section-A offset 8 (< &4000), so the bytes read with plain
-;    INC HL — no page-cross handling.  A loadable .tbn is < 96 KB, so the
-;    offset is < &18000: byte 3 is zero and the page index (0..5) fits.
+;    INC HL — no page-cross handling.  A loadable .tbn is < 256 KB (the
+;    largest contiguous pool run, i23), so the offset is < &40000: byte 3 is
+;    zero and the page index (0..15) fits.
                 ld      a, (hl)                     ; b0 = offset bits 0..7
                 inc     hl
                 ld      e, a
@@ -117,7 +121,7 @@ reader_init:
                 ld      c, a
 
 ;   page_index = (b2 << 2) | (b1 >> 6);  offset = ((b1 & &3F) << 8) | b0.
-;   IN_END = (LMPR_IN_BASE + page_index, offset) — one past the last
+;   IN_END = (IN_BASE_LMPR + page_index, offset) — one past the last
 ;   assembler-facing byte.  Overwrites load_in_file's true-file-end IN_END
 ;   (only reader_at_end reads IN_END; the editor region past the boundary
 ;   is never walked).  reader_init runs once per pass — the recompute is
@@ -127,11 +131,13 @@ reader_init:
                 rlca
                 and     3                           ; A = b1 >> 6
                 ld      b, a
-                ld      a, c                        ; b2 (0 or 1 for ≤96 KB)
+                ld      a, c                        ; b2 (0..3 for ≤256 KB)
                 rlca
                 rlca                                ; A = b2 << 2
-                add     a, b                        ; A = page_index (0..5)
-                add     a, LMPR_IN_BASE             ; A = end LMPR (RAM0 already in base)
+                add     a, b                        ; A = page_index (0..15)
+                ld      b, a                        ; B = page_index
+                ld      a, (IN_BASE_LMPR)           ; run base LMPR (RAM0 | page)
+                add     a, b                        ; A = end LMPR (base + page_index)
                 ld      (IN_END_PAGE), a
                 ld      a, d                        ; b1
                 and     &3F

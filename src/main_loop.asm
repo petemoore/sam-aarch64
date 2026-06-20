@@ -107,7 +107,7 @@ main_assemble:
 
 
 ; -----------------------------------------------------------------------
-; reset_reader_to_in_buf — IN_POS := (LMPR_IN_BASE, 0), then reader_init.
+; reset_reader_to_in_buf — IN_POS := (IN_BASE_LMPR, 0), then reader_init.
 ;
 ; reader_init validates the magic, skips the name table, and leaves the
 ; cursor at the first record.  It does not write outside the cursor
@@ -120,8 +120,8 @@ main_assemble:
 ; Clobbers: A, BC, DE, HL.
 ; -----------------------------------------------------------------------
 reset_reader_to_in_buf:
-                ld      a, LMPR_IN_BASE
-                ld      (IN_POS_PAGE), a
+                ld      a, (IN_BASE_LMPR)           ; run's first page (set by
+                ld      (IN_POS_PAGE), a            ;   load_in_file's pp_alloc_run)
                 ld      hl, 0
                 ld      (IN_POS_OFFSET), hl
                 jp      reader_init                 ; tail-call
@@ -1494,7 +1494,24 @@ main_eval_next_imm:
 ; reader.asm::reader_init lines ~110-140.
 ; -----------------------------------------------------------------------
 load_in_file:
-; -- Phase 1: head read — 512 bytes into page 7 --------------------------
+; -- Phase 0: allocate a 1-page landing zone for the head read -----------
+; We need a physical page to HLOAD the head into before we know the prefix
+; size (the size lives at file offset 8, inside the head).  Alloc one IN page
+; from the pool; IN_BASE_LMPR holds its full LMPR value (RAM0 | page).  After
+; decoding the prefix size we free this page and alloc the full contiguous run
+; (Phase 1.5).  i23 / docs/plans/i23-in-pool-contiguous.md.
+                ld      a, PP_IN
+                ld      b, 1
+                call    pp_alloc_run        ; A = head page, or PP_FAIL
+                cp      PP_FAIL
+                jr      nz, load_in_head_alloc_ok
+                ld      a, &04
+                jp      fail_with_tag       ; tag 04: page pool exhausted (no IN page)
+load_in_head_alloc_ok:
+                or      &20                 ; A = page | RAM0 = full LMPR value
+                ld      (IN_BASE_LMPR), a
+
+; -- Phase 1: head read — 512 bytes into the head page -------------------
                 ld      hl, name_IN
                 call    fill_uifa
                 rst     8
@@ -1513,7 +1530,9 @@ load_in_file:
 ; file is < 512 bytes (small fixtures).  Request C=0, DE=512 unless the
 ; whole file fits in fewer bytes, in which case use the whole-file size.
 ; (A file is < 512 bytes only when pages == 0 and length-mod-16K < 512.)
-                ld      b, IN_BASE_PAGE
+                ld      a, (IN_BASE_LMPR)
+                and     &1F
+                ld      b, a                ; B = head page (run base)
                 ld      c, 0                ; 0 full pages
                 ld      de, 512             ; 512 bytes
                 ld      a, (in_file_pages)
@@ -1541,7 +1560,7 @@ load_in_head_call:
 ; stack lives in section D (independent of LMPR change).
                 in      a, (250)            ; save current LMPR
                 ld      (in_lmpr_save), a
-                ld      a, LMPR_IN_BASE     ; map IN page 7 into section A
+                ld      a, (IN_BASE_LMPR)   ; map the head page into section A
                 out     (250), a
                 ld      a, (&0008)          ; b0 = editor_region_offset bits 0..7
                 ld      e, a
@@ -1584,15 +1603,33 @@ load_in_head_call:
 load_in_prefix_normed:
                 ld      (in_file_len), hl   ; prefix length-mod-16K
 
-; -- Phase 2: prefix load -------------------------------------------------
-; Bounds check: the assembler-facing prefix must fit in the 6-page (96 KB)
-; IN buffer.  The full file may exceed 6 pages; only the prefix counts here.
+; -- Phase 1.5: free the head page, alloc the full contiguous run --------
+; run_size = in_file_pages + 1.  HLOAD writes C (= in_file_pages) full pages +
+; in_file_len remainder bytes, touching C+1 physical pages (after the
+; pages/remainder normalisation above, in_file_len is in (0, 16384] for any
+; real file, so the remainder always occupies one more page).  pp_alloc_run
+; finds the lowest contiguous run of that many FREE pool pages; failure (no run
+; large enough) is the honest out-of-memory, replacing the old fixed 96 KB
+; (cp 7) bound.  On a 256 KB SAM the only run is 7..12 (96 KB); on 512 KB the
+; 16..31 run lifts IN to 256 KB.
+                ld      a, (IN_BASE_LMPR)
+                and     &1F
+                ld      b, PP_IN            ; expected owner for the assert
+                call    pp_free_page        ; release the head page
                 ld      a, (in_file_pages)
-                cp      7                   ; allow up to 6 pages (= 96 KB ceiling)
-                jr      c, load_in_prefix_pages_ok
+                inc     a                   ; A = run_size = in_file_pages + 1
+                ld      b, a                ; B = run_size
+                ld      a, PP_IN            ; A = owner tag
+                call    pp_alloc_run        ; A = run base page, or PP_FAIL
+                cp      PP_FAIL
+                jr      nz, load_in_run_alloc_ok
                 ld      a, &03
-                jp      fail_with_tag       ; tag 03: prefix pages > 6
-load_in_prefix_pages_ok:
+                jp      fail_with_tag       ; tag 03: IN run too big for the pool
+load_in_run_alloc_ok:
+                or      &20                 ; A = base | RAM0 = full LMPR value
+                ld      (IN_BASE_LMPR), a
+
+; -- Phase 2: prefix load -------------------------------------------------
 ; Re-issue fill_uifa + HGTHD: HLOAD consumed the sector-chain state
 ; HGTHD armed for the head read, so HGTHD must be re-issued before the
 ; prefix HLOAD.
@@ -1608,7 +1645,9 @@ load_in_prefix_pages_ok:
 ;   DE = prefix length-mod-16K
 ;   IX = UIFA (already set by fill_uifa)
                 ld      hl, &8000
-                ld      b, IN_BASE_PAGE
+                ld      a, (IN_BASE_LMPR)
+                and     &1F
+                ld      b, a                ; B = run base page
                 ld      a, (in_file_pages)
                 ld      c, a
                 ld      de, (in_file_len)
@@ -1619,15 +1658,17 @@ load_in_prefix_pages_ok:
                 call    TRAMPOLINE_DST
 
 ; Compute (IN_END_PAGE, IN_END_OFFSET) from the prefix geometry.
-; The `or &20` sets the RAM0 bit so IN_END_PAGE stores a full LMPR value,
-; matching the IN_POS_PAGE convention.  reader_init later overwrites IN_END
-; with the boundary it derives from the loaded header — the same boundary,
-; though at a page-aligned offset the two representations differ (page N
-; offset 0 here vs page N-1 offset &4000 after the SAMDOS pages/remainder
-; normalisation above); nothing reads IN_END before reader_init runs.
+; IN_BASE_LMPR already carries the RAM0 bit, so adding the page count yields a
+; full LMPR value matching the IN_POS_PAGE convention.  reader_init later
+; overwrites IN_END with the boundary it derives from the loaded header — the
+; same boundary, though at a page-aligned offset the two representations differ
+; (page N offset 0 here vs page N-1 offset &4000 after the SAMDOS
+; pages/remainder normalisation above); nothing reads IN_END before reader_init
+; runs.
                 ld      a, (in_file_pages)
-                add     a, IN_BASE_PAGE
-                or      &20
+                ld      b, a
+                ld      a, (IN_BASE_LMPR)
+                add     a, b                ; A = base LMPR + page count
                 ld      (IN_END_PAGE), a
                 ld      hl, (in_file_len)
                 ld      (IN_END_OFFSET), hl
@@ -1744,6 +1785,13 @@ main_dir_equ_pending_id:        defw    0
 ;
 ; IN_END_PAGE / IN_END_OFFSET together point one past the last valid
 ; byte; they're set by load_in_file_paged from the .tbn's DIFA bytes.
+; IN_BASE_LMPR — full LMPR value (RAM0 | page) of the first page of the IN
+; buffer's contiguous run, allocated from the i2 page pool by load_in_file
+; (pp_alloc_run).  Replaces the old fixed LMPR_IN_BASE constant: reset_reader
+; and reader_init's IN_END calc read it so the reader walks the run wherever
+; the pool placed it (i23 / docs/plans/i23-in-pool-contiguous.md).  Pages within
+; the run are contiguous, so the per-page advance stays a plain LMPR increment.
+IN_BASE_LMPR:           defb    0
 IN_POS_PAGE:            defb    0           ; current LMPR low5+RAM0 for IN
 IN_POS_OFFSET:          defw    0           ; current offset in that page
                                             ;   (&0000..&3FFF)

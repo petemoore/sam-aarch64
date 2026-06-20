@@ -5,20 +5,22 @@
 ; docs/specs/paged-in-design.md.
 ;
 ; Preconditions: load_enctab has completed (so LMPR_DEFAULT_RUNTIME is
-; live).  Self-tests run BEFORE main_assemble — so IN_BUF (now pages
-; 7..10) has NOT been HLOAD'd yet.  We populate it ourselves with a
-; tiny synthetic blob via a brief LMPR-bracket-and-write loop.
+; live).  Self-tests run BEFORE main_assemble — so the IN pool pages have
+; NOT been HLOAD'd yet.  We populate one ourselves with a tiny synthetic
+; blob via a brief LMPR-bracket-and-write loop.
 ;
 ; Coverage:
 ;   1. page-cross helper (in_normalise_hl): set IN_POS_PAGE =
 ;      LMPR_IN_BASE, HL = &7FFE.  Call in_normalise_hl.  Assert
 ;      H < &40 (= &3FFE) and LMPR low 5 bits incremented by 1.
-;   2. synthetic record read: stamp a 21-byte ".tbn" blob into page 7
-;      via an LMPR=&27 bracket.  Blob = "SA64", version=2, flags=0,
+;   2. synthetic record read at a NON-default base: stamp a 21-byte ".tbn"
+;      blob into page 8 (a deliberately non-7 base) via an LMPR=&28 bracket,
+;      seed IN_BASE_LMPR = page 8.  Blob = "SA64", version=2, flags=0,
 ;      editor_region_offset=21, label_count=0, local_count=0, then one
 ;      record [kind=&77][len=&02 &00][&AB &CD].  Call
 ;      reset_reader_to_in_buf (which tail-calls reader_init); reader_init
-;      derives IN_END = (page=&27, offset=21) from the section index.
+;      derives IN_END = (page=&28, offset=21) from the section index — proving
+;      the reader walks from IN_BASE_LMPR, not a hardcoded page 7.
 ;      Then reader_at_end → not at end, then reader_next_kind.  Assert
 ;      A=&77, BC=2, (STAGING_BUF)=&AB, (STAGING_BUF+1)=&CD, then
 ;      reader_at_end → at end (Z=1).
@@ -75,14 +77,18 @@ run_reader_paged_self_tests:
 ; cleaner).
                 call    enctab_map_in
 
-; ----- (2) synthetic record fetch ---------------------------------------
+; ----- (2) synthetic record fetch at a NON-default base -----------------
 ;
-; Stamp a 19-byte blob into physical page 7 (= LMPR_IN_BASE) at offset
-; 0.  We do this from the test code itself, using a brief LMPR bracket
-; so the source bytes (in section C) and the dest (section A under
-; LMPR_IN_BASE) are both reachable.  The bytes-to-stamp live in
-; section C, which is HMPR-controlled, so section A under LMPR=&27
-; doesn't displace them.  The blob is:
+; Stamp a 21-byte blob into physical page 8 — a DELIBERATELY non-7 base.
+; load_in_file allocates the IN run from the pool and sets IN_BASE_LMPR to
+; wherever it landed (page 7 on a 256 KB SAM, up to the 16..31 run on 512 KB);
+; the reader must walk from IN_BASE_LMPR, not a hardcoded page 7.  The base-7
+; release-paged regression cannot catch a stale "hardcoded 7" because there the
+; base IS 7 — so this self-test pins a non-7 base (page 8, which exists on a
+; 256 KB machine) to prove reset_reader/reader_init honour IN_BASE_LMPR (i23).
+; We stamp from the test code via a brief LMPR bracket so the source bytes (in
+; section C) and the dest (section A under the page-8 LMPR) are both
+; reachable.  The blob is:
 ;
 ;   offset 0..3   : "SA64"
 ;   offset 4..5   : version u16 LE = 0x0002
@@ -97,16 +103,19 @@ run_reader_paged_self_tests:
 ; Total = 21 bytes; reader_init derives IN_END_OFFSET = 21 from the
 ; section index (the editor region after the record is empty).
 ;
-; Note: writes go to section A under LMPR_IN_BASE, so the page-7
+; Note: writes go to section A under the page-8 LMPR, so the page-8
 ; physical bytes are clobbered (no other test relies on those bytes
-; pre-main_assemble — main_assemble's load_in_file overwrites them
-; anyway).
+; pre-main_assemble — main_assemble's load_in_file overwrites whatever IN
+; pages it allocates anyway).
+READER_TEST_BASE:       equ     &20 + 8     ; LMPR for page 8 (RAM0 | 8) — a non-7
+                                            ;   base with no boot payload (page 11 is
+                                            ;   ENC_FIX_PAGE; 4=ENCTAB,5/6=OUT,13-15=payloads)
 
                 in      a, (250)
                 ld      (reader_paged_lmpr_save), a
 
-                ld      a, LMPR_IN_BASE
-                out     (250), a            ; section A = page 7 (IN[0])
+                ld      a, READER_TEST_BASE
+                out     (250), a            ; section A = page 8 (IN[0])
 
                 ld      hl, reader_paged_synthetic_tbn
                 ld      de, 0               ; section-A dest = IN[0] offset 0
@@ -116,16 +125,24 @@ run_reader_paged_self_tests:
                 ld      a, (reader_paged_lmpr_save)
                 out     (250), a            ; restore LMPR_ENCTAB
 
-; Pre-set IN_END to a deliberately-wrong value so the test proves
-; reader_init DERIVES IN_END from the section index (editor_region_offset
-; = 21) rather than relying on a caller-supplied bound.
+; Pre-set IN_END to a deliberately-wrong value (page 7, the OLD hardcoded base)
+; so the test proves reader_init DERIVES IN_END from the section index
+; (editor_region_offset = 21) over the page-8 base, rather than relying on a
+; caller-supplied bound or a stale page-7 assumption.
                 ld      a, LMPR_IN_BASE
                 ld      (IN_END_PAGE), a
                 ld      hl, 0
                 ld      (IN_END_OFFSET), hl
 
+; This self-test stamps its synthetic blob into page 8 directly (it does not
+; run load_in_file, which is what normally allocates the IN run and sets
+; IN_BASE_LMPR).  So seed IN_BASE_LMPR = page 8 by hand, the way load_in_file
+; would for a run that landed there, before the reader reads it.
+                ld      a, READER_TEST_BASE
+                ld      (IN_BASE_LMPR), a
+
 ; Reset reader to start; this tail-calls reader_init which validates the
-; magic, reads the section index → IN_END = (LMPR_IN_BASE, 21), parses the
+; magic, reads the section index → IN_END = (READER_TEST_BASE, 21), parses the
 ; empty header tables, and restores LMPR_ENCTAB.
                 call    reset_reader_to_in_buf
 

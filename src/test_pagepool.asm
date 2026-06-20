@@ -4,7 +4,8 @@
 ; budget, like the other suites in src/test_offaxis_cluster.asm). Included by
 ; that cluster and invoked from cluster_dispatch. Reaches the pool routines
 ; (pp_alloc_page / pp_free_page / pp_owner_of / pp_free_count), the constants
-; (PP_SCRATCH / PP_RESERVED / PP_FAIL / PP_NPAGES / POOL_FIRST_FREE /
+; (PP_SCRATCH / PP_RESERVED / PP_FAIL / PP_NPAGES / POOL_RESV_A_BASE /
+; POOL_RESV_A_N / POOL_RESV_B_BASE / POOL_RESV_B_N /
 ; PP_TABLE_BASE / PP_MAX_PAGES) and fail_with_tag through the cluster's
 ; --importfile=build/assembler.sym, so each resolves to its main-binary address.
 ;
@@ -26,8 +27,8 @@ POOL_TEST_N0:   equ PP_TABLE_BASE + 1 + PP_MAX_PAGES
 ; run_pool_self_tests — the spec §6 boot self-test on the live, boot-sized
 ; pool: claim every FREE page, confirm the count, confirm the reserved pages
 ; never moved, free them all, and confirm the FREE count is restored exactly.
-; Machine-size independent (the free count N0 may be 0 on a 256 KB machine, in
-; which case every step is a trivially-satisfied no-op). Leaves the pool exactly
+; Machine-size independent (the free count N0 is 6 on a 256 KB machine — the IN
+; pages 7..12 — and larger on bigger machines). Leaves the pool exactly
 ; as pool_boot_init left it. On any mismatch: jp fail_with_tag (&F0..&F3).
 ; Clobbers: A, B, C, D, E, HL.
 ; ===========================================================================
@@ -52,19 +53,33 @@ pool_test_claim:
                 ld      a, &F0
                 jp      fail_with_tag
 pool_test_count_ok:
-                ; Reserved pages 0..POOL_FIRST_FREE-1 must still be RESERVED.
-                ld      b, POOL_FIRST_FREE
-                ld      c, 0
-pool_test_resv:
+                ; Reserved ranges A (0..6) and B (13..15) must still be RESERVED
+                ; (IN's pages 7..12 are now FREE — handed to the pool — so they
+                ; were claimed as SCRATCH above, not reserved). i23.
+                ld      b, POOL_RESV_A_N
+                ld      c, POOL_RESV_A_BASE
+pool_test_resv_a:
                 ld      a, c
                 call    pp_owner_of             ; A = owner byte
                 cp      PP_RESERVED
-                jr      z, pool_test_resv_ok
+                jr      z, pool_test_resv_a_ok
                 ld      a, &F1
                 jp      fail_with_tag
-pool_test_resv_ok:
+pool_test_resv_a_ok:
                 inc     c
-                djnz    pool_test_resv
+                djnz    pool_test_resv_a
+                ld      b, POOL_RESV_B_N
+                ld      c, POOL_RESV_B_BASE
+pool_test_resv_b:
+                ld      a, c
+                call    pp_owner_of
+                cp      PP_RESERVED
+                jr      z, pool_test_resv_b_ok
+                ld      a, &F1
+                jp      fail_with_tag
+pool_test_resv_b_ok:
+                inc     c
+                djnz    pool_test_resv_b
 
                 ; Free every page we claimed: scan all present pages and free
                 ; the SCRATCH-tagged ones (the only SCRATCH pages are ours).
