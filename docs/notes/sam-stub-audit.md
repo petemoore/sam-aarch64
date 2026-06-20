@@ -41,8 +41,8 @@ via RST 8** because none of those routines call `gtixd` at entry to
 re-point `IX` at `dchan`. The only way to use SAMDOS 2 streaming writes
 is to either (a) switch to `HSAVE` (hook 132) which writes the whole
 file in one go and goes through `gtixd` first, or (b) work around by
-publishing a custom `(hksp)` error handler and accept that streaming is
-unusable.
+publishing a custom `DOSER` (`&5BC0`) error handler and accept that
+streaming is unusable.
 
 ---
 
@@ -163,19 +163,28 @@ derr:  call bcr
 derr1: ... ld sp, (entsp); ret  ; restore caller SP and pop into BASIC error path
 ```
 
-The dispatcher zeros `(hksp)` on each entry (`b.s:450-451`), so by
-default every error longjmps to BASIC's error handler. `(hksp)` is
-declared at `b.s:160`. The application can install its own error
-handler by setting `(hksp)` *between* hook calls (the dispatcher's
-zero happens *before* the hook routine runs, but `(hksp)` set by the
-hook routine itself, e.g. by writing to an absolute address, won't
-help — the dispatcher already cleared it). For the M0 stub, no
-custom handler → all errors → BASIC error → `EXIT=124 timeout`.
+The dispatcher zeros `(hksp)` on **every** hook entry (`b.s:450-451`),
+*before* the hook body runs. So an application **cannot** use `(hksp)`
+to catch its own hook errors: whatever the app writes there is wiped by
+`b.s:451` before the body can fail, and `derr` always reads 0 for an
+app-initiated error → falls through to `derr1` → BASIC error handler.
+`(hksp)` is purely SAMDOS-internal — it is set *only* by the NMI
+snapshot-save path (`d.s:606`, torn down at `d.s:744-745`) as an internal
+retry vehicle; `derr`'s non-zero branch (`d.s:436`) services that path,
+not application callers. (`(hksp)` is declared at `b.s:160`, lives in the
+SAMDOS bank, and would need a paging dance to write even if it were
+usable — but the zeroing makes it moot.)
 
-`(hksp)` is in SAMDOS bank, and `b.s:160` says it lives at offset 60
-from gnd+&100. The application can't write to `&410A`-area from its
-own address space without paging SAMDOS in. **Custom `(hksp)` is
-infeasible for the M0 stub without a paging dance.**
+**The app-facing error vector is `DOSER` (`&5BC0`), not `(hksp)`.** It is a
+BASIC system variable (`VAR2+&1C0` — `rom:1050`), always mapped in section B,
+so the application writes it with no paging dance. ROM PTDOS's post-hook
+return `DOSC` does `LD HL,(DOSER); INC H; DEC H; JR NZ,DHLJ` → `JP (HL)`
+(`rom:12977-12980, 13003`) after **every** DOS hook (success *or* error),
+with `A` = the error number (0 on success). COMET installs a `DOSER` handler
+around its loads (`comet.asm:1265-1382` `prepare`/`dier`/`sproom`). For the
+M0 stub, no `DOSER` handler → all errors → BASIC error → `EXIT=124 timeout`;
+installing one is tracked as registry items i25 (handler) / i185 (this
+correction).
 
 ---
 
@@ -607,12 +616,15 @@ SAMDOS-related variables for the magic-port test.
    This path is also broken. **No clean external streaming path exists
    in SAMDOS 2.**
 
-3. **Could the M0 stub install a custom `(hksp)` handler to catch
-   longjmps and convert errors into clean exits?** `(hksp)` lives at
-   `gnd+&62 = &4062` in section B (when SAMDOS is paged in). The
-   stub would need to page SAMDOS in itself, write `(hksp)`, page out,
-   then call hooks. The `LD (HL), value` sequence is straightforward;
-   the paging dance is messy. **Possible but out of scope for M0.**
+3. **Could the stub install a handler to catch longjmps and convert
+   errors into clean exits?** Yes — via `DOSER` (`&5BC0`), the BASIC
+   sysvar that ROM PTDOS dispatches after every hook (see "Error
+   handling — the longjmp gotcha" above). It is always mapped (no
+   paging dance) and is exactly what COMET uses. **NOT `(hksp)`** —
+   that is zeroed on every hook entry (`b.s:451`) and is SAMDOS-internal,
+   so an app handler there is never reached. Tracked as registry items
+   i25 (handler) / i185 (this correction). Out of scope for M0; revisited
+   for the assembler.
 
 4. **Why does the existing `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/archive/sam-file-io.md` claim the
    streaming API works?** That doc was written as a Task 6 spike based
