@@ -443,3 +443,108 @@ func sortStrings(ss []string) {
 		ss[j+1] = key
 	}
 }
+
+// pullableItems returns the set of item ids that are "pullable" — OPEN or
+// IN_PROGRESS with kind != umbrella. These are the ids that must appear in
+// priority.yaml exactly once.
+func pullableItems(items []Item) map[string]bool {
+	out := map[string]bool{}
+	for _, it := range items {
+		if (it.Status == StatusOpen || it.Status == StatusInProgress) && !it.isUmbrella() {
+			out[it.ID] = true
+		}
+	}
+	return out
+}
+
+// validatePriority checks the priority list against the registry. When the
+// priority list is empty it is treated as absent and no errors are reported.
+// The invariants enforced:
+//
+//  1. No duplicate ids in the list.
+//  2. Every id in the list is a pullable item (not unknown, not closed, not umbrella).
+//  3. Every pullable item appears exactly once (no missing ids).
+//  4. The list is a topological extension of the dependency DAG: for every
+//     pullable item X with a depends_on edge to pullable item Y, X appears after Y.
+func validatePriority(reg *Registry, priority []string) *ValidationError {
+	ve := &ValidationError{}
+	if len(priority) == 0 {
+		return ve
+	}
+
+	pullable := pullableItems(reg.Items)
+
+	// Build status and kind maps for meaningful error messages.
+	itemStatus := map[string]Status{}
+	itemKind := map[string]string{}
+	for _, it := range reg.Items {
+		itemStatus[it.ID] = it.Status
+		itemKind[it.ID] = it.Kind
+	}
+
+	// Check 1 + 2: no duplicates; every listed id is a pullable item.
+	seen := map[string]int{} // id -> first position (0-based)
+	for pos, id := range priority {
+		if prev, dup := seen[id]; dup {
+			ve.add("priority", fmt.Sprintf("duplicate id %q (first at rank %d, again at rank %d)",
+				id, prev+1, pos+1))
+			continue
+		}
+		seen[id] = pos
+
+		if !pullable[id] {
+			// Distinguish the error: unknown id vs closed status vs umbrella.
+			if st, exists := itemStatus[id]; exists {
+				if !isOpen(st) {
+					ve.add("priority", fmt.Sprintf("id %q ranked but status is %s (only OPEN/IN_PROGRESS non-umbrella items belong in the queue)",
+						id, st))
+				} else if itemKind[id] == "umbrella" {
+					ve.add("priority", fmt.Sprintf("id %q ranked but is an umbrella (umbrellas are not queue entries — only their leaf children are)",
+						id))
+				} else {
+					ve.add("priority", fmt.Sprintf("id %q ranked but is not a pullable item", id))
+				}
+			} else {
+				ve.add("priority", fmt.Sprintf("id %q ranked but not found in the registry (unknown id)", id))
+			}
+		}
+	}
+
+	// Check 3: every pullable item appears exactly once (no missing ids).
+	for id := range pullable {
+		if _, inList := seen[id]; !inList {
+			ve.add("priority", fmt.Sprintf("pullable item %q is missing from the priority queue", id))
+		}
+	}
+
+	// Check 4: topological extension — X must appear after all its pullable deps.
+	// Build a position map for fast lookup.
+	pos := map[string]int{}
+	for i, id := range priority {
+		pos[id] = i
+	}
+	for _, it := range reg.Items {
+		if !pullable[it.ID] {
+			continue
+		}
+		xPos, xInList := pos[it.ID]
+		if !xInList {
+			continue // already reported as missing above
+		}
+		for _, dep := range it.DependsOn {
+			if !pullable[dep] {
+				continue // dep is done/closed/umbrella/question — no ordering constraint
+			}
+			yPos, yInList := pos[dep]
+			if !yInList {
+				continue // already reported as missing
+			}
+			if xPos < yPos {
+				ve.add("priority", fmt.Sprintf("%q ranked before its dependency %q (rank %d < %d)",
+					it.ID, dep, xPos+1, yPos+1))
+			}
+		}
+	}
+
+	return ve
+}

@@ -14,6 +14,7 @@ import (
 type mutatorPaths struct {
 	itemsYAML     string
 	questionsYAML string
+	priorityYAML  string // registry/priority.yaml (absent = no priority order)
 	registryDir   string // directory containing .id-ledger.txt
 	templatesDir  string // directory containing *.head.md header templates
 	outDir        string // write generated .md files here; empty → stdout mode
@@ -39,6 +40,11 @@ func applyAndCommit(reg *Registry, paths mutatorPaths) {
 	reg.Questions = sortedQuestions(reg.Questions)
 
 	ve := validateWith(reg, validateOpts{migrating: paths.migrating})
+	// Include priority validation when a priority list is loaded.
+	if len(reg.Priority) > 0 {
+		pve := validatePriority(reg, reg.Priority)
+		ve.msgs = append(ve.msgs, pve.msgs...)
+	}
 	if ve.hasErrors() {
 		for _, msg := range ve.msgs {
 			fmt.Fprintln(os.Stderr, msg)
@@ -63,7 +69,7 @@ func applyAndCommit(reg *Registry, paths mutatorPaths) {
 	genToOutDirOrStdout(reg2, paths)
 }
 
-// loadReg loads both YAML files into a Registry.
+// loadReg loads items, questions, and priority into a Registry.
 func loadReg(paths mutatorPaths) (*Registry, error) {
 	items, err := loadItems(paths.itemsYAML)
 	if err != nil {
@@ -73,12 +79,21 @@ func loadReg(paths mutatorPaths) (*Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Registry{Items: items, Questions: questions}, nil
+	var priority []string
+	if paths.priorityYAML != "" {
+		priority, err = loadPriority(paths.priorityYAML)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &Registry{Items: items, Questions: questions, Priority: priority}, nil
 }
 
 // genToOutDirOrStdout runs the gen pipeline. When paths.outDir is set, it
-// writes the three .md files into that directory (in-place mode). When outDir
-// is empty, it prints the three views to stdout (dormant/stdout mode).
+// writes the four .md files into that directory (in-place mode). When outDir
+// is empty, it prints the four views to stdout (dormant/stdout mode).
+// The four views are: item-open, item-closed, question-open, backlog.
+// backlog.md is only written when reg.Priority is non-empty.
 func genToOutDirOrStdout(reg *Registry, paths mutatorPaths) {
 	var itemsOpen, itemsClosed, qOpen bytes.Buffer
 	if err := genItemsOpenClosed(reg, &itemsOpen, &itemsClosed); err != nil {
@@ -90,6 +105,15 @@ func genToOutDirOrStdout(reg *Registry, paths mutatorPaths) {
 		os.Exit(1)
 	}
 
+	var backlog bytes.Buffer
+	hasBacklog := len(reg.Priority) > 0
+	if hasBacklog {
+		if err := genBacklog(reg, reg.Priority, &backlog); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+
 	if paths.outDir == "" {
 		fmt.Print("=== item-registry-open ===\n")
 		os.Stdout.Write(itemsOpen.Bytes())
@@ -97,6 +121,10 @@ func genToOutDirOrStdout(reg *Registry, paths mutatorPaths) {
 		os.Stdout.Write(itemsClosed.Bytes())
 		fmt.Print("\n=== question-registry-open ===\n")
 		os.Stdout.Write(qOpen.Bytes())
+		if hasBacklog {
+			fmt.Print("\n=== backlog ===\n")
+			os.Stdout.Write(backlog.Bytes())
+		}
 		return
 	}
 
@@ -118,6 +146,20 @@ func genToOutDirOrStdout(reg *Registry, paths mutatorPaths) {
 			os.Exit(1)
 		}
 		outPath := paths.outDir + "/" + w.filename
+		if err := os.WriteFile(outPath, data, 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "registry gen: write %s: %v\n", outPath, err)
+			os.Exit(1)
+		}
+	}
+
+	// Backlog is only written when a priority list exists.
+	if hasBacklog {
+		data, err := assembleGenFile(paths.templatesDir, "backlog.head.md", backlog.Bytes())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		outPath := paths.outDir + "/backlog.md"
 		if err := os.WriteFile(outPath, data, 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "registry gen: write %s: %v\n", outPath, err)
 			os.Exit(1)
