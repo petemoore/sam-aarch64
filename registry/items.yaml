@@ -2761,7 +2761,7 @@
   title: "CSD-read hardware probe — trinload-pushable: read the real SD CSD over SPI + serve it back"
   description: |
     Trinload-pushable Z80 probe (mirror netboot_dumper) that reads the SD CSD over the Trinity SPI and serves the raw 16 CSD bytes back. PORT THE SD INTERFACE FROM COLIN'S DISASSEMBLY (i193 = the authority) — the &38 microcontroller init, the CMD ladder, and the &DC/&DF busy-poll/&3F-auto-null timing as B-DOS 1.5t actually does it; a generic SD-SPI + CSD-decode reference (chat archive) cross-checks. Reuse encdrv/eeprom SPI primitives. Decode CSD v1.0 vs v2.0 so ANY card size is inferred, never hardcoded (host-side decode ok). Run on real hardware (trinload running, SAM 192.168.2.75) to capture the true CSD + confirm timing. Prefer a non-disruptive bare CMD9 if the card is already B-DOS-initialised. Plan: docs/plans/i145-sd-csd-read.md.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i193]
   kind: leaf
   owner: agent
