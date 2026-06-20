@@ -525,6 +525,13 @@ if defined(BUILD_TESTS)
                 ; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-reader-paged-self-test-investigation.md
                 ; (PR-6 resolution section at the foot).
                 call    run_reader_paged_self_tests
+
+; -- encode_inst self-test: the standalone instruction encoder (i199 /
+; i48c-b8e brick 1).  Runs here (after load_enctab) because encode_inst
+; reads the form table from ENCTAB; it opens its own enctab_map_in /
+; form_lookup_init / enctab_map_out bracket internally.  Must precede
+; main_assemble so any failure is reported before the assemble loop.
+                call    run_encode_inst_self_tests
 endif
 
 ; -- Run the assemble: pass 1 (table build) + pass 2 (emit) -----------
@@ -672,6 +679,14 @@ if defined(BUILD_TESTS)
                 include "test_reader_paged.asm"
                 include "test_paged_call.asm"
                 include "test_sysreg_paged.asm"
+                ; encode_inst (the standalone instruction encoder) + its
+                ; self-test (i199 / i48c-b8e brick 1).  Guarded under
+                ; BUILD_TESTS for now: nothing in the production assemble
+                ; path calls encode_inst yet (Compact wires it in a later
+                ; b8e brick), so keeping it out of the production binary
+                ; preserves the &C000 code budget until it has a caller.
+                include "insn_encode.asm"
+                include "test_encode_inst.asm"
 endif
 
 ; -- paged_call body source ---------------------------------------------

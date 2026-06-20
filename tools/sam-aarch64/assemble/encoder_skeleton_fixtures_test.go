@@ -1,0 +1,116 @@
+package assemble
+
+import (
+	"fmt"
+	"testing"
+
+	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
+)
+
+// encoder_skeleton_fixtures_test.go — the authority for the Z80
+// standalone-encoder skeleton self-test (item i199 / i48c-b8e-1).
+//
+// Each fixture mirrors exactly one vector baked into
+// src/test_encode_inst.asm::run_encode_inst_self_tests. The Z80 side
+// calls encode_inst on the same {mnemonic_id, operand bytes, pc} and
+// asserts the same expected word. This test is the drift guard: if the
+// Go encoder (the authority, CLAUDE.md §6) changes an encoding, this
+// test fails and the asm vector must be re-baked from the new value
+// logged here.
+//
+// All fixtures use CONSTANT operand expressions (no PUSH_SYM /
+// PUSH_LOCAL) so the Z80 self-test needs no populated symbol table —
+// only PASS_PC, which encode_inst reads for the PC-relative slots.
+
+func immExpr(v int64) []byte {
+	var ew format.ExprWriter
+	ew.WriteImm(v)
+	return ew.Bytes()
+}
+
+type encFixture struct {
+	name     string
+	mnemonic string
+	pc       int64
+	build    func(w *format.OperandWriter)
+	opCount  byte
+}
+
+func TestEncoderSkeletonFixtures(t *testing.T) {
+	fixtures := []encFixture{
+		{"nop", "nop", 0, func(w *format.OperandWriter) {}, 0},
+		{"ret_x30", "ret", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 30)
+		}, 1},
+		{"add_x0_x1_5", "add", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegXSP, 0)
+			w.WriteReg(format.OpRegXSP, 1)
+			w.WriteImmExpr(immExpr(5))
+		}, 3},
+		{"sub_x2_x3_4096", "sub", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegXSP, 2)
+			w.WriteReg(format.OpRegXSP, 3)
+			w.WriteImmExpr(immExpr(0x1000))
+		}, 3},
+		{"movz_x0_0x1234", "movz", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteImmExpr(immExpr(0x1234))
+		}, 2},
+		{"orr_x0_x1_0xff", "orr", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteImmExpr(immExpr(0xff))
+		}, 3},
+		{"csel_x0_x1_x2_eq", "csel", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteReg(format.OpRegX, 2)
+			w.WriteCond(format.CondEQ)
+		}, 4},
+		{"cbz_x0_pc8", "cbz", 0x1000, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteImmExpr(immExpr(0x1008))
+		}, 2},
+		{"b_pc16", "b", 0x1000, func(w *format.OperandWriter) {
+			w.WriteImmExpr(immExpr(0x1010))
+		}, 1},
+		{"adrp_x0_0x3000", "adrp", 0x1000, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteImmExpr(immExpr(0x3000))
+		}, 2},
+		{"adr_x0_pc4", "adr", 0x1000, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteImmExpr(immExpr(0x1004))
+		}, 2},
+	}
+
+	for _, fx := range fixtures {
+		t.Run(fx.name, func(t *testing.T) {
+			mid, ok := format.MnemonicID(fx.mnemonic)
+			if !ok {
+				t.Fatalf("unknown mnemonic %q", fx.mnemonic)
+			}
+			var ow format.OperandWriter
+			fx.build(&ow)
+			ops := ow.Bytes()
+			rec := instRec(mid, fx.opCount, ops)
+			f := fileFromRecords(nil, []format.Record{rec})
+			p1, err := Pass1(f)
+			if err != nil {
+				t.Fatalf("Pass1: %v", err)
+			}
+			w, err := encodeInst(rec, fx.pc, p1, f)
+			if err != nil {
+				t.Fatalf("encodeInst: %v", err)
+			}
+			le := []byte{byte(w), byte(w >> 8), byte(w >> 16), byte(w >> 24)}
+			// Log everything the asm vector needs.
+			hexops := ""
+			for _, b := range ops {
+				hexops += fmt.Sprintf("%02x ", b)
+			}
+			t.Logf("FIXTURE %-18s mnem_id=%-3d pc=0x%05x opcount=%d word=0x%08x  LE=%02x %02x %02x %02x  ops=[ %s]",
+				fx.name, mid, fx.pc, fx.opCount, w, le[0], le[1], le[2], le[3], hexops)
+		})
+	}
+}
