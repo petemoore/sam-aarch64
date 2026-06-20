@@ -133,6 +133,15 @@ path: text typed on the SAM → overlay records → `.tbn`. It absorbs **i39c**
 (overlay slot bitfield-packing polish). The proof point is text→overlay on the
 SAM byte-matching the host over the fixture corpus.
 
+**Parser front-end COMPLETE** (`src/asmparse.asm`): instructions, all operand
+kinds, every B5 special form, comments/blank-runs, directives, and **label/local
+defs (i48c-b5, PR #555)**. **B8 — the capstone — was found (2026-06-22) to need
+a Z80 port of the host compact-serializer** (`assemble.Pass1`→`assemble.Compact`
+→`headerRows`/`format.WriteFile`), because the SAM assembler reads label/local
+definitions from the `.tbn` header tables, not the parser's inline IR records.
+B8 is decomposed into **b8a** (Pass1-over-IR), **b8b** (Compact), **b8c**
+(serialize), **b8d** (corpus round-trip) — chained deps, Go authority per brick.
+
 ## Open questions for Pete (M9)
 
 Open questions live in the milestone-neutral **`docs/notes/question-registry-open.md`**
