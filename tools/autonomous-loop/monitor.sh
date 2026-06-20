@@ -45,12 +45,34 @@ CHUNK_DELAY="${ALOOP_CHUNK_DELAY:-0.1}"     # seconds between stuffed chunks (sl
 NUDGE_TRIES="${ALOOP_NUDGE_TRIES:-4}"       # how many times to (re)send the resume nudge until a turn actually starts
 NUDGE_VERIFY_WAIT="${ALOOP_NUDGE_VERIFY_WAIT:-8}" # seconds to poll the screen for a started turn after each nudge attempt
 TURN_MARKER="${ALOOP_TURN_MARKER:-esc to interrupt}" # text the Claude Code TUI shows while a model turn is running; our proof the nudge became a turn
+# Idle-gating (i179). The agent touches task-done then ENDS its turn, but ending
+# is NOT instant -- it may keep emitting (e.g. a wind-down summary). Delivering
+# /context + the nudge while that prior turn is still running makes turn_running
+# ambiguous: nudge_until_turn's old "if turn_running: return 0" treated the still-
+# running PRIOR turn as nudge-success and never sent the nudge -> the agent
+# stalled (Pete, 2026-06-20). wait_for_idle() gates delivery on SUSTAINED idle
+# first; IDLE_CONFIRM consecutive idle reads (not one) avoid mistaking a brief gap
+# between an agent's tool calls for end-of-turn. This is distinct from (and
+# additive to) the i140 long-burst paste-drop fix.
+IDLE_POLL="${ALOOP_IDLE_POLL:-2}"           # seconds between idle checks
+IDLE_CONFIRM="${ALOOP_IDLE_CONFIRM:-3}"     # consecutive idle reads required to declare the prior turn ended
+IDLE_MAX="${ALOOP_IDLE_MAX:-300}"           # cap on waiting for idle before proceeding anyway
+LOGFILE="${ALOOP_LOG:-$SEMA_DIR/monitor.log}" # persistent trace: every stuff/submit/turn-check/branch. `tail -f` it to watch the loop live.
 
 TASK_DONE="$SEMA_DIR/task-done"
 WOUND_DOWN="$SEMA_DIR/wound-down"
 LOCK="$SEMA_DIR/monitor.lock"               # single-instance guard (see preflight)
 
-log()   { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+# log() timestamps to stdout AND appends to $LOGFILE so the trace survives the
+# session -- the live stall that motivated i179 left no inspectable record. Watch
+# with `tail -f "$LOGFILE"`. (Pete asked for exactly this visibility, 2026-06-20.)
+log() {
+  local line; line="$(date '+%Y-%m-%d %H:%M:%S')  $*"
+  printf '%s\n' "$line"
+  printf '%s\n' "$line" >>"$LOGFILE" 2>/dev/null || true
+}
+# preview() renders a stuffed payload for the trace: newlines as literal \n, capped.
+preview() { local s="${1//$'\n'/\\n}"; printf '%s' "${s:0:70}"; }
 
 # stuff_raw() sends a string to the session in CHUNK_SIZE-byte bursts, pausing
 # CHUNK_DELAY between them. A long string stuffed as ONE `screen -X stuff` burst
@@ -60,6 +82,7 @@ log()   { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
 # Short strings (a single chunk) behave exactly as a plain stuff did before.
 stuff_raw() {
   local s="$1" i
+  log "→ stuff ${#s}B in $(( (${#s}+CHUNK_SIZE-1)/CHUNK_SIZE )) chunk(s): \"$(preview "$s")\""
   for (( i=0; i<${#s}; i+=CHUNK_SIZE )); do
     screen -S "$SESSION" -p "$WINDOW" -X stuff "${s:i:CHUNK_SIZE}"
     sleep "$CHUNK_DELAY"
@@ -69,14 +92,14 @@ stuff_raw() {
 # be absorbed into a long paste, so a turn is not guaranteed -- callers that need
 # the line to actually submit follow up with submit() (an explicit settled Enter)
 # or, for the load-bearing nudge, nudge_until_turn() (verify-and-retry).
-stuff() { stuff_raw "$1"; screen -S "$SESSION" -p "$WINDOW" -X stuff "$SUBMIT"; }
+stuff() { stuff_raw "$1"; log "→ Enter (trailing, in-burst)"; screen -S "$SESSION" -p "$WINDOW" -X stuff "$SUBMIT"; }
 # submit() sends a standalone Enter, AFTER a short settle, as its own keystroke.
 # A long line stuffed in one burst can have its trailing \r absorbed into the
 # paste (the TUI is still ingesting the text), so the line sits unsubmitted in
 # the input -- the failure Pete hit 2026-06-15. Sending a separate, settled Enter
 # reliably confirms it. (If the line already submitted, this Enter lands on an
 # empty input line, a harmless no-op.) Tune ALOOP_SUBMIT_SETTLE if 1s is tight.
-submit() { sleep "$SUBMIT_SETTLE"; screen -S "$SESSION" -p "$WINDOW" -X stuff "$SUBMIT"; }
+submit() { sleep "$SUBMIT_SETTLE"; log "→ submit (settled Enter)"; screen -S "$SESSION" -p "$WINDOW" -X stuff "$SUBMIT"; }
 
 # turn_running() returns 0 iff a model turn is currently in flight, detected by
 # the TURN_MARKER text the TUI shows ("esc to interrupt"). This is the proof a
@@ -90,6 +113,34 @@ turn_running() {
   return $found
 }
 
+# wait_for_idle() blocks until NO turn has been running for IDLE_CONFIRM
+# consecutive checks (sustained idle), or IDLE_MAX seconds elapse. This is the
+# i179 fix: the agent touches task-done then ENDS its turn, but ending is not
+# instant -- it may keep emitting (a summary), and 'esc to interrupt' can briefly
+# clear between an agent's tool calls -- so we require SUSTAINED idle, not one
+# reading. Gating delivery on real idle makes every later turn_running transition
+# unambiguously OUR doing (the nudge), not the tail of the prior turn. Arg is a
+# label for the trace. Always returns 0 (proceeds even on timeout, logging it).
+wait_for_idle() {
+  local what="${1:-session}" waited=0 idle=0
+  log "wait_for_idle($what): need ${IDLE_CONFIRM}×idle @ ${IDLE_POLL}s (max ${IDLE_MAX}s)"
+  while (( waited < IDLE_MAX )); do
+    if turn_running; then
+      (( idle > 0 )) && log "wait_for_idle($what): turn re-detected at ${waited}s, resetting"
+      idle=0
+    else
+      idle=$(( idle + 1 ))
+    fi
+    if (( idle >= IDLE_CONFIRM )); then
+      log "wait_for_idle($what): idle confirmed after ${waited}s"
+      return 0
+    fi
+    sleep "$IDLE_POLL"; waited=$(( waited + IDLE_POLL ))
+  done
+  log "wait_for_idle($what): WARNING -- turn still detected after ${IDLE_MAX}s; proceeding anyway"
+  return 0
+}
+
 # nudge_until_turn() delivers the load-bearing resume nudge and VERIFIES it
 # became a turn, retrying with backoff if not. This is the robust replacement for
 # "stuff once + hope": a blind sleep cannot fix the i140 drop because the cause is
@@ -101,8 +152,15 @@ turn_running() {
 # extra Enter is in play). Returns 0 on success, 1 if all tries are exhausted.
 nudge_until_turn() {
   local msg="$1" t p
+  # Callers MUST gate with wait_for_idle first (i179): at entry no turn is running,
+  # so the only turn that can appear after we send is the nudge's. The first
+  # attempt therefore ALWAYS sends -- never short-circuit on turn_running before
+  # sending (the old bug: a still-running prior turn was read as nudge-success and
+  # the nudge was never sent). The turn_running short-circuit is for RE-attempts
+  # only, where a prior Enter may already have submitted the text.
+  log "nudge_until_turn: delivering resume nudge (${#msg}B), up to $NUDGE_TRIES tries"
   for (( t=1; t<=NUDGE_TRIES; t++ )); do
-    if turn_running; then return 0; fi   # already running (e.g. a prior Enter took)
+    if (( t > 1 )) && turn_running; then log "nudge: a prior Enter already started the turn"; return 0; fi
     if (( t == 1 )); then
       stuff "$msg"                        # first attempt: full nudge + Enter
     else
@@ -159,6 +217,8 @@ log "semaphores under: $SEMA_DIR"
 last_signal=$SECONDS
 while true; do
   if [ -e "$WOUND_DOWN" ]; then
+    log "WOUND_DOWN detected"
+    wait_for_idle "pre-clear"   # same race as TASK_DONE: never /clear over a still-running turn
     log "WOUND_DOWN -> flush input, /clear, settle ${CLEAR_SETTLE}s, restart"
     # Submit any half-typed line first so /clear starts on a clean input line
     # and can't get merged into a partial human message. (Pete, 2026-06-15.)
@@ -171,6 +231,12 @@ while true; do
     rm -f "$WOUND_DOWN" "$TASK_DONE"
     last_signal=$SECONDS
   elif [ -e "$TASK_DONE" ]; then
+    log "TASK_DONE detected"
+    # i179: the agent touches task-done then ENDS its turn, but ending is not
+    # instant (it may keep emitting, e.g. a summary). Deliver only once that prior
+    # turn has genuinely ended -- otherwise turn_running is ambiguous and the nudge
+    # is skipped/falsely-confirmed, and the agent stalls (Pete, 2026-06-20).
+    wait_for_idle "pre-context"
     log "TASK_DONE -> /context + resume nudge (agent decides: continue or wind down)"
     stuff "/context"
     submit
