@@ -1238,9 +1238,31 @@
   description: |
     Pete's SAM runs a modified system ROM giving Trinity-interface access at power-on (no B-DOS floppy needed). When his SAM is next online he dumps the ROM to disk; we then diff it against the stock SAM ROM to document exactly how Trinity-at-boot is patched in, so the boot mechanism is reproducible/understood. Not a blocker — trinload can net-load the client/server in the interim, and trinity.mgt + reference/bdos cover the interface. Hardware-gated: artifact production needs Pete's hardware.
   status: OPEN
-  kind: leaf
+  kind: umbrella
   owner: pete
   refs: ["docs/specs/phase3-delivery-design.md §3", i84]
+
+- id: i87a
+  title: "SAMBOOT: run the one-shot dumper on the SAM to capture rom.bin + eeprom.bin (hardware)"
+  description: |
+    Push the one-shot dumper onto the SAM via trinload and tftp-get rom.bin + eeprom.bin to the Pi/Mac. Hardware (Pete). Captures the artifacts that unblock the offline analysis; the EEPROM capture is the mandatory pre-flash backup.
+  status: OPEN
+  depends_on: [i173]
+  kind: leaf
+  owner: pete
+  parent: i87
+  refs: [docs/specs/samboot.md]
+
+- id: i87b
+  title: "SAMBOOT: document the SAM boot chain from the captured ROM/EEPROM + public source"
+  description: |
+    Diff rom.bin vs stock SAM ROM 3.0, confirm the EEPROM bootblock matches the public reproduction, and document the chip->bootblock->B-DOS handoff + where the injection hook attaches.
+  status: OPEN
+  depends_on: [i87a, i135a]
+  kind: leaf
+  owner: agent
+  parent: i87
+  refs: [docs/specs/samboot.md]
 
 - id: i88
   title: On-SAM HTTPS/TLS-1.3 client to fetch Pi firmware directly from GitHub
@@ -1844,7 +1866,7 @@
   description: |
     Colin's custom ROM boots straight from Trinity (no B-DOS floppy) but overwrites the normal power-on opening screen. Restore by appending code to end of B-DOS (Trinity flash) that redraws the opening screen. The screen is not a clean re-callable subroutine — it is the inline RAINBOW SCREEN block at ROM &ED1B: set MODE 3, init PALTAB, build LINICOLS rainbow table, print MGT banner. Restoration = reproduce that draw in appended Z80, not call a routine. Touches non-redistributable B-DOS 1.5t Trinity fork; modifying Colin's B-DOS may warrant his input (Pete's call).
   status: OPEN
-  depends_on: [i87]
+  depends_on: [i135a]
   kind: leaf
   owner: agent
   refs: [docs/sam/sam-coupe_rom-v3.0_annotated-disassembly.txt, i87, ~/sam-archive/bdos/analysis/]
@@ -2364,6 +2386,7 @@
   description: |
     With trinload on SAM (recs 3/128) + control returning between programs (i132), run unattended experiments: push a program via trinload3.py, it runs+RETs, push the next; feedback via tcpdump + a net result channel. PRIORITIZED to top (Pete 2026-06-20): the crux is whether we can BOOTSTRAP our own code from EEPROM / Trinity storage WITHOUT a human typing BOOT or picking a record — if a power-cycled SAM auto-starts a service that boots a pushed image, hardware testing goes fully autonomous (no Pete). The sooner we build it, the sooner we know. Auto-boot = i135; i172 audits dependents.
   status: OPEN
+  depends_on: [i135, i121, i122]
   kind: leaf
   owner: agent
   refs: [~/git/trinload/test/trinload.py, src/netboot/, i132, i135, i127]
@@ -2384,10 +2407,41 @@
   description: |
     Pete has a Tapo smart plug for programmatic power-cycling. If a record auto-boots on power-on (no manual BOOT), agent runs fully unsupervised: power-cycle → SAM boots chosen record → runs → results over net (i133) → repeat. Investigate: EEPROM/config default-boot-record setting, Trinity AutoBOOT ROM (Colin's patch loads B-DOS from 128K EEPROM at reset), or patch forked B-DOS for early boot-a-record hook. Research: ~/sam-archive/bdos/analysis, Trinity AutoBOOT ROM, EEPROM layout, ~/sam-archive/trinity-docs. Pairs with i133 for full unsupervised loop.
   status: OPEN
-  depends_on: [i133]
-  kind: leaf
+  kind: umbrella
   owner: agent
   refs: [~/sam-archive/bdos/analysis, i87, i133]
+
+- id: i135a
+  title: "SAMBOOT: understand the Trinity EEPROM bootblock from public source + locate the boot-a-record injection hook"
+  description: |
+    Read LongSteve/z80 boot.asm (Colin's SAM Revival 23 bootblock, public) + the forked-B-DOS EEPROM chunk map; document reset->bootblock->B-DOS load, the unfinished auto-load-file TODO as the boot-a-record hook, and the MGT-stripes redraw. No hardware.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i135
+  refs: [docs/specs/samboot.md, "https://github.com/LongSteve/z80/blob/main/boot.asm"]
+
+- id: i135c
+  title: "SAMBOOT: flash the patched EEPROM with backup/restore and confirm unattended auto-boot (answers the crux)"
+  description: |
+    Flash the prototyped patched EEPROM to Pete's Trinity via write_chunk, keeping the captured EEPROM as the restore backup; power-cycle and confirm unattended auto-boot of the configured record. Hardware (Pete).
+  status: OPEN
+  depends_on: [i135d]
+  kind: leaf
+  owner: pete
+  parent: i135
+  refs: [docs/specs/samboot.md]
+
+- id: i135d
+  title: "SAMBOOT: emulation-prototype the EEPROM bootblock injection (stripes + BIOS + boot-record); folds i112"
+  description: |
+    Patch the EEPROM bootblock in the koron-z80 harness (emulation-first): always redraw the MGT stripes, read the SAMBOOT BIOS config, auto-boot the configured Trinity record or fall through to BASIC. Folds i112 (opening-screen restore).
+  status: OPEN
+  depends_on: [i135a, i176]
+  kind: leaf
+  owner: agent
+  parent: i135
+  refs: [docs/specs/samboot.md]
 
 - id: i136
   title: "Autonomous-loop monitor: resume nudge lost to /context TUI redraw"
@@ -2681,5 +2735,52 @@
     i133-dependents audit (Pete 2026-06-20): i133 (automate SAM testing via trinload) gates i118b, i135, i141, i143, i145, i152, i70, i88c, i93b — but many likely only need Pete PHYSICALLY PRESENT (a key-press / hardware action), not the full automation. Per the needs-Pete model (i169): go through each; for those that only need Pete present, mark owner:pete (needs-pete) + drop the i133 dep. Alternatively push i133 near the top so when it lands we verify it truly unblocks them. Depends on i169.
   status: OPEN
   depends_on: [i169]
+  kind: leaf
+  owner: agent
+
+- id: i173
+  title: "SAMBOOT: build the one-shot ROM+EEPROM dumper (serves captured bytes via the proven TFTP server)"
+  description: |
+    Small Z80 program: read the patched system ROM (32 KB via SAM ROM paging) + the Trinity EEPROM chunks, and serve them via the proven TFTP server so the host pulls rom.bin/eeprom.bin. Pushed via trinload; reuses the host-verified serve loop + Colin's eeprom.asm. Emulation-verify EEPROM-read + serve; ROM-page read is hardware-first.
+  status: OPEN
+  depends_on: [i135a]
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/samboot.md]
+
+- id: i175
+  title: "SAMBOOT charter: controlling overview doc + registry restructure under i133/i135"
+  description: |
+    Stand up the SAMBOOT controlling overview (docs/specs/samboot.md) + restructure the registry under it: de-conflate the ROM-chip/EEPROM-bootblock/forked-B-DOS naming, split i87, flip i135<-i133, the i135a-c chain, the dumper + BIOS items, fold i112.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/samboot.md]
+
+- id: i176
+  title: "SAMBOOT BIOS: editable default-boot-record config in Trinity EEPROM (boot record N, or none) + editor"
+  description: |
+    A boot config in a Trinity EEPROM chunk (like the 'Trinity Network' chunk): a default-boot-record setting (boot record N at startup, or none -- any disk). The injection prototype reads it; a config editor sets it. The SAM 'BIOS'.
+  status: OPEN
+  depends_on: [i135a]
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/samboot.md]
+
+- id: i177
+  title: "Publish trinboot: open-source EEPROM boot-config patcher (Python-over-trinload + bootable .mgt) for Trinity users"
+  description: |
+    Release the SAMBOOT EEPROM boot-config + stripes-restore patch as a standalone open-source tool for any Trinity owner: a Python program sent over trinload that patches the EEPROM, or a bootable .mgt. Gives Trinity users the configurable default-boot-record + opening-stripes feature for free. NOT a requirement for SAMBOOT -- depends on it (publication only).
+  status: OPEN
+  depends_on: [i135, i176]
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/samboot.md]
+
+- id: i178
+  title: "Registry: raise the item-title length limit from 120 to ~160 chars (validate.go + mutators help + test)"
+  description: |
+    The 120-char title cap forced abbreviating SAMBOOT item titles. Bump the limit in tools/registry/validate.go (the check + message + the §147 comment), the mutators.go add-flag help text, and update validate_test.go's title-length assertion. Keep titles single-line. Pete invited this (2026-06-20).
+  status: OPEN
   kind: leaf
   owner: agent
