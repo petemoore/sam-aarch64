@@ -11,6 +11,7 @@
 //	OnFrame(rxFrame) -> reply, or nil to stay silent:
 //	  ARP request for our IP            -> an ARP reply        (smoke.Responder)
 //	  UDP dst 69 (TFTP RRQ)             -> serve the file by name (tftp.ServerLoop)
+//	  UDP dst 69 (TFTP WRQ) (i121a)     -> learn client endpoint, reply ACK-0 or OACK
 //	  UDP dst = our transfer TID (ACK)  -> the next DATA       (tftp.ServerLoop)
 //	  anything else                     -> nil (keep serving)
 //
@@ -19,6 +20,11 @@
 // server: an RRQ with **no options** is answered per RFC 2347 with DATA block 1
 // directly (no OACK), which is what a classic `tftp get` sends; an RRQ that does
 // request options (e.g. `curl`'s tsize) is answered with an OACK as before.
+//
+// WRQ handling (i121a — handshake only): a bare WRQ (no options) is answered with
+// ACK-0 (`00 04 00 00`); an optioned WRQ is answered with an OACK echoing the
+// accepted blksize and the client's tsize. DATA reception (i121b) is not included
+// here; this is the handshake brick only.
 //
 // This mirrors how the Z80 demo loop dispatches one drv_read frame: it is the
 // byte-for-byte porting spec for netboot_serve.asm.
@@ -32,6 +38,8 @@
 package serve
 
 import (
+	"strconv"
+
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/smoke"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/tftp"
@@ -60,6 +68,17 @@ type Responder struct {
 	// bare-RRQ path, where DATA block 1 has already been sent and the next ACK
 	// (of block 1) advances normally.
 	justFirst bool
+
+	// wrqClient holds the WRQ client endpoint (i121a — handshake only). It is
+	// populated on a WRQ and used when wrapping the ACK-0 / OACK reply.
+	wrqClient wrqEndpoint
+}
+
+// wrqEndpoint is the client-side identity learned from a WRQ frame (i121a).
+type wrqEndpoint struct {
+	mac [6]byte
+	ip  [4]byte
+	tid uint16
 }
 
 // New builds a serve-files demo server over a flat store. src(name) yields the
@@ -90,14 +109,25 @@ func (r *Responder) OnFrame(rx []byte) []byte {
 		return nil
 	}
 
-	// 2. TFTP RRQ (UDP dst 69). On a hit install the transfer source, then either
-	//    OACK (options requested) or DATA block 1 directly (a bare RRQ, RFC 2347).
+	// 2. TFTP request on port 69 (RRQ or WRQ). Parse opcode first to dispatch.
 	if u.DstPort == 69 {
 		r.justFirst = false
 		req, err := tftp.ParseRequest(u.Payload)
+		if err != nil {
+			return nil
+		}
+
+		// WRQ (i121a): learn the client endpoint and reply ACK-0 (bare WRQ)
+		// or OACK (optioned WRQ). DATA reception is a later brick (i121b).
+		if req.Opcode == tftp.OpWRQ {
+			return r.startWrite(u, req)
+		}
+
+		// RRQ: on a hit install the transfer source, then either OACK (options
+		// requested) or DATA block 1 directly (a bare RRQ, RFC 2347).
 		hit := false
 		hasOpts := false
-		if err == nil && req.Opcode == tftp.OpRRQ {
+		if req.Opcode == tftp.OpRRQ {
 			if action, _ := tftp.Resolve(r.store, req.Filename); action == tftp.ActionOACK {
 				r.tftp.SetSource(r.src(req.Filename))
 				hit = true
@@ -123,4 +153,55 @@ func (r *Responder) OnFrame(rx []byte) []byte {
 	}
 
 	return nil
+}
+
+// startWrite handles a WRQ (i121a handshake only). It learns the client endpoint
+// from the received frame, then replies ACK-0 for a bare WRQ, or an OACK
+// echoing the accepted blksize (and tsize the client declared) for an optioned
+// WRQ (RFC 2347). DATA reception is deferred to i121b.
+//
+// Port of netboot_serve.asm handle_wrq (Z80 side).
+func (r *Responder) startWrite(u frame.UDP, req *tftp.Request) []byte {
+	// Learn the client endpoint from the request frame. HL/IP/TID learned here
+	// are used only for the handshake reply; the wire-receive loop (i121b) will
+	// use them to validate DATA source ports.
+	copy(r.wrqClient.mac[:], u.SrcMAC[:])
+	copy(r.wrqClient.ip[:], u.SrcIP[:])
+	r.wrqClient.tid = u.SrcPort
+
+	// Bare WRQ (no options) -> ACK-0 (`00 04 00 00`), RFC 1350.
+	if len(req.Options) == 0 {
+		return r.wrapToWRQClient(tftp.BuildACK(0))
+	}
+
+	// Optioned WRQ -> OACK echoing the accepted blksize; mirror blksize clamping
+	// from AcceptedBlksize (same logic as the RRQ OACK path). If the client also
+	// sent tsize, echo it back unchanged (the server learns the incoming size from
+	// the client's declaration — it doesn't add its own).
+	blksize := uint64(512)
+	if v, ok := req.Option("blksize"); ok {
+		if n, err := strconv.ParseUint(v, 10, 64); err == nil {
+			blksize = tftp.AcceptedBlksize(n)
+		}
+	}
+	var oackOpts []tftp.Option
+	oackOpts = append(oackOpts, tftp.Option{Name: "blksize", Value: strconv.FormatUint(blksize, 10)})
+	if ts, ok := req.Option("tsize"); ok {
+		oackOpts = append(oackOpts, tftp.Option{Name: "tsize", Value: ts})
+	}
+	return r.wrapToWRQClient(tftp.BuildOACK(oackOpts))
+}
+
+// wrapToWRQClient wraps a TFTP payload as a UDP datagram back to the WRQ client
+// (from the SAM's IP + transfer TID to the client's IP + TID).
+func (r *Responder) wrapToWRQClient(payload []byte) []byte {
+	return frame.BuildUDPFrame(frame.UDP{
+		DstMAC:  r.wrqClient.mac,
+		SrcMAC:  r.cfg.ServerMAC,
+		SrcIP:   r.cfg.ServerIP,
+		DstIP:   r.wrqClient.ip,
+		SrcPort: r.cfg.ServerTID,
+		DstPort: r.wrqClient.tid,
+		Payload: payload,
+	})
 }

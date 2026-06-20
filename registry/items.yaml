@@ -2194,9 +2194,50 @@
   description: |
     PRIMARY netboot use case: boot SAM, 'tftp put' a disk image from the Mac, SAM writes it to a free Trinity record, boot+test. Combines with the i83/i95 serve-out server into one program (RRQ+WRQ). q30 resolved (2026-06-20): auto-pick is a DISK CONFIG — at launch the program reads it; if absent it PROMPTS (auto-pick a free record? y/n); test/shipped disks ship that config allowing any free record, so unattended push works with a pre-configured disk + never overwrites a named record. Reuses i82 receive loop + i119 write-out; adds WRQ parse + OACK/ACK-0 + free-slot alloc (i114).
   status: OPEN
-  kind: leaf
+  kind: umbrella
   owner: agent
   refs: [src/netboot/, tools/netboot-oracle/tftp/, i82, i83, i95, i114, i119, i70]
+
+- id: i121a
+  title: WRQ parse + handshake (ACK-0 / OACK)
+  description: |
+    Opcode dispatch at netboot_serve.asm WRQ branch -> handle_wrq learns client endpoint; bare WRQ -> build_ack0 (new 4-byte 00 04 00 00 builder in tftp_build.asm); optioned WRQ -> OACK (reuse build_oack, echo blksize/tsize). Go authority: serverloop.go StartWrite + serve.go OnFrame WRQ branch. Host test: inject WRQ -> assert ACK-0/OACK byte-for-byte vs Go authority. Not gated; clean first deliverable.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 490, role: completing}
+  parent: i121
+
+- id: i121b
+  title: "WRQ receive-to-staging (DATA->ACK loop)"
+  description: |
+    Wire tftp_recv_data (i82, tftp_client_loop.asm) into the WRQ transfer: DATA -> ACK each -> accumulate into STAGING -> short-block end. Resolve the SERVER_*/CLIENT_* var-name collision between tftp_client_loop.asm and netboot_serve.asm. Go authority: serverloop.go receive path. Host test: inject WRQ+DATA1..N, assert an ACK per block + STAGING holds the file.
+  status: OPEN
+  depends_on: [i121a]
+  kind: leaf
+  owner: agent
+  parent: i121
+
+- id: i121c
+  title: WRQ auto-slot + write-out (write-to-free-only)
+  description: |
+    Final block -> bdos_find_free_record (i119); none free -> reply TFTP ERROR(3,'no free record'); else select + bdos_fill_save_uifa (name from WRQ filename) + bdos_save_hook. q30 RESOLVED (write-to-free-only via disk-config auto-pick; prompt if config absent) so ungated. E2E mirrors TestClientE2EConfirm: assert HSAVE in the free record + right bytes; all-full -> ERROR(3) + zero HSAVEs. rst-8 HSAVE persist stays hardware-gated.
+  status: OPEN
+  depends_on: [i121b]
+  kind: leaf
+  owner: agent
+  parent: i121
+
+- id: i121d
+  title: Combined RRQ+WRQ bootable program + disk/Makefile/CI wiring
+  description: |
+    Fold WRQ into the RRQ serve-out program (netboot_serve.asm) so one bootable program handles both; wire into the disk image, Makefile, and CI. The real Mac->SAM 'tftp put' over the wire is the hardware final gate.
+  status: OPEN
+  depends_on: [i121c]
+  kind: leaf
+  owner: agent
+  parent: i121
 
 - id: i122
   title: "SAM fetch-and-boot (PXE-style): TFTP-client-fetch a disk image and boot it directly"
@@ -2386,7 +2427,7 @@
   description: |
     With trinload on SAM (recs 3/128) + control returning between programs (i132), run unattended experiments: push a program via trinload3.py, it runs+RETs, push the next; feedback via tcpdump + a net result channel. PRIORITIZED to top (Pete 2026-06-20): the crux is whether we can BOOTSTRAP our own code from EEPROM / Trinity storage WITHOUT a human typing BOOT or picking a record — if a power-cycled SAM auto-starts a service that boots a pushed image, hardware testing goes fully autonomous (no Pete). The sooner we build it, the sooner we know. Auto-boot = i135; i172 audits dependents.
   status: OPEN
-  depends_on: [i135, i121, i122]
+  depends_on: [i135, i121a, i122]
   kind: leaf
   owner: agent
   refs: [~/git/trinload/test/trinload.py, src/netboot/, i132, i135, i127]

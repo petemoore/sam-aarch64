@@ -23,6 +23,7 @@
                 org     &8000
                 endif
 
+OP_ACK:           equ 4
 OP_DATA:          equ 3
 OP_ERROR:         equ 5
 OP_OACK:          equ 6
@@ -57,6 +58,27 @@ oack_done:
                 add     hl, bc
                 ld      b, h
                 ld      c, l
+                ret
+
+; ---------------------------------------------------------------------------
+; build_ack0 — ACK block 0: the four-byte sequence `00 04 00 00`.
+;
+; Sent by the server in reply to a bare WRQ (no options) to signal readiness
+; to receive DATA block 1. Port of tftp.BuildACK(0) (tools/netboot-oracle/
+; tftp/tftp.go::BuildACK).
+;
+; Out: packet at TBUF; BC = 4 (the fixed ACK length).
+; ---------------------------------------------------------------------------
+build_ack0:
+                ld      hl, TBUF
+                ld      (hl), 0                ; opcode high = 0
+                inc     hl
+                ld      (hl), OP_ACK           ; opcode low  = 4
+                inc     hl
+                ld      (hl), 0                ; block high  = 0
+                inc     hl
+                ld      (hl), 0                ; block low   = 0
+                ld      bc, 4
                 ret
 
 ; ---------------------------------------------------------------------------

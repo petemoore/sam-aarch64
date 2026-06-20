@@ -276,7 +276,13 @@ handle_rrq:
                 or      a
                 jp      z, ns_none             ; not a valid RRQ/WRQ
 
-                ; resolve the filename
+                ; WRQ (opcode 2)? learn the client endpoint and reply.
+                ; Port of serve.go::Responder.startWrite (i121a).
+                ld      a, (PARSE_OPCODE+1)    ; low byte of big-endian opcode
+                cp      OP_WRQ
+                jp      z, handle_wrq
+
+                ; resolve the filename (RRQ path)
                 ld      hl, (PARSE_FILENAME)
                 ld      (RESOLVE_NAME_PTR), hl
                 call    resolve
@@ -328,6 +334,53 @@ rrq_oack:
                 ld      (XFER_JUST_OACKED), a  ; the ACK of block 0 -> FirstData
                 call    negotiate_blksize      ; -> XFER_BLKSIZE
                 call    build_oack_opts
+                ld      (OACK_OPTS_LEN), hl
+                call    build_oack             ; packet at TBUF, BC = length
+                jp      srv_send_tbuf
+
+; ===========================================================================
+; WRQ handler (i121a — handshake only). Port of serve.go::Responder.startWrite.
+;
+; A WRQ arrives on UDP dst 69 (same port as RRQ). The server learns the client
+; endpoint (MAC/IP/TID) and replies:
+;   - bare WRQ (no options): ACK-0 (`00 04 00 00`)    — tftp.BuildACK(0)
+;   - optioned WRQ:          OACK echoing blksize      — same build_oack path
+;
+; DATA reception is deferred to i121b. This routine only produces the handshake
+; reply frame; no receive state is set up here.
+; ===========================================================================
+handle_wrq:
+                ; learn the client endpoint (same pattern as handle_rrq).
+                ld      hl, RXBUF + RX_ETH_SRCMAC
+                ld      de, CLIENT_MAC
+                ld      bc, 6
+                ldir
+                ld      hl, RXBUF + RX_IP_SRC
+                ld      de, CLIENT_IP
+                ld      bc, 4
+                ldir
+                ld      hl, RXBUF + RX_UDP_SRCPORT
+                ld      de, CLIENT_TID
+                ld      bc, 2
+                ldir
+
+                ; bare WRQ? (no options: PARSE_OPT_COUNT == 0)
+                ld      bc, (PARSE_OPT_COUNT)
+                ld      a, b
+                or      c
+                jr      nz, wrq_oack
+
+                ; --- bare WRQ: reply ACK-0 (00 04 00 00) ------------------
+                call    build_ack0             ; packet at TBUF, BC = 4
+                jp      srv_send_tbuf
+
+wrq_oack:
+                ; --- optioned WRQ: OACK echoing blksize (and tsize if present).
+                ; Reuse negotiate_blksize -> XFER_BLKSIZE, then build_oack_opts
+                ; formats "blksize\0<n>\0" (and optionally "tsize\0<ts>\0") into
+                ; OACK_OPTS. Port of serve.go::Responder.startWrite optioned path.
+                call    negotiate_blksize      ; -> XFER_BLKSIZE
+                call    build_oack_opts_wrq    ; -> OACK_OPTS, HL = byte count
                 ld      (OACK_OPTS_LEN), hl
                 call    build_oack             ; packet at TBUF, BC = length
                 jp      srv_send_tbuf
@@ -645,6 +698,83 @@ pd_done:
                 ex      de, hl
                 ret
 
+; build_oack_opts_wrq — format "blksize\0<bs>\0" (+ "tsize\0<ts>\0" if the
+; client sent tsize) into OACK_OPTS for a WRQ OACK. Port of
+; serve.go::Responder.startWrite optioned path.
+;
+; The blksize is taken from XFER_BLKSIZE (already set by negotiate_blksize).
+; tsize is read from the client's options (PARSE_OPTS / PARSE_OPT_COUNT): if
+; the client included "tsize", its value string is echoed verbatim.
+;
+; Out: HL = the byte count written.
+build_oack_opts_wrq:
+                ; Phase 1: find a "tsize" value pointer in the client's options.
+                ; Store the result in WRQ_TSIZE_PTR (0 = not found).
+                xor     a
+                ld      (WRQ_TSIZE_PTR), a
+                ld      (WRQ_TSIZE_PTR+1), a   ; default: tsize not found
+
+                ld      bc, (PARSE_OPT_COUNT)
+                ld      a, b
+                or      c
+                jr      z, boww_write          ; no options at all
+
+                ld      hl, (PARSE_OPTS)
+boww_scan:
+                push    bc
+                push    hl                     ; save: name pointer
+                ld      de, str_tsize
+                call    streq_cstr             ; CY set + HL past NUL if "tsize" matched
+                jr      c, boww_found_tsize
+                ; not a match: advance past name NUL (already done by streq_cstr
+                ; not advancing on mismatch — reload from saved copy and skip both)
+                pop     hl
+                call    skip_cstr              ; skip name
+                call    skip_cstr              ; skip value
+                pop     bc
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, boww_scan
+                jr      boww_write             ; exhausted; tsize not found
+
+boww_found_tsize:
+                ; HL = pointer to the tsize value string (NUL-terminated in RRQ_IN)
+                pop     de                     ; discard saved name ptr
+                pop     bc                     ; discard saved count
+                ld      (WRQ_TSIZE_PTR), hl    ; save value pointer
+
+boww_write:
+                ; Phase 2: write "blksize\0<value>\0" to OACK_OPTS.
+                ld      de, OACK_OPTS
+                ld      hl, str_blksize
+                call    copy_cstr_incl_nul
+                ld      hl, (XFER_BLKSIZE)
+                call    write_dec_u16
+                xor     a
+                ld      (de), a
+                inc     de
+
+                ; Phase 3: if tsize was found, write "tsize\0<client-value>\0".
+                ld      hl, (WRQ_TSIZE_PTR)
+                ld      a, h
+                or      l
+                jr      z, boww_done           ; tsize not found
+
+                push    hl                     ; save client tsize value ptr
+                ld      hl, str_tsize
+                call    copy_cstr_incl_nul
+                pop     hl                     ; HL = client tsize value ptr
+                call    copy_cstr_incl_nul     ; writes value + NUL
+
+boww_done:
+                ; HL = length: DE (end) - OACK_OPTS (start).
+                ld      hl, OACK_OPTS
+                ex      de, hl                 ; HL = end cursor, DE = OACK_OPTS start
+                or      a
+                sbc     hl, de                 ; HL = length written
+                ret
+
 ; build_oack_opts — format "blksize\0<bs>\0tsize\0<size>\0" into OACK_OPTS.
 ; Out: HL = the byte count written.
 build_oack_opts:
@@ -884,6 +1014,11 @@ XFER_NEXT_BLK:    defs 2                 ; next block number (LE)
 XFER_ACTIVE:      defs 1                 ; 1 = a transfer is armed
 XFER_LAST_SHORT:  defs 1                 ; 1 = the last DATA was a short block
 XFER_JUST_OACKED: defs 1                 ; 1 = the next ACK (block 0) -> FirstData
+
+; WRQ state (i121a — handshake only). WRQ_TSIZE_PTR is a pointer into RRQ_IN:
+; non-zero if the client sent a "tsize" option in the WRQ (the value is echoed
+; back in the OACK); 0 if no tsize was sent (OACK includes only blksize).
+WRQ_TSIZE_PTR:    defs 2
 
 RX_LEN:           defs 2
 TFTP_PKT_LEN:     defs 2

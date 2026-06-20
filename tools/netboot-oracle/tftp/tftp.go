@@ -108,6 +108,25 @@ func BuildRRQ(filename, mode string, opts []Option) []byte {
 	return b.Bytes()
 }
 
+// BuildWRQ builds a write request: opcode 2, filename NUL, mode NUL, then each
+// option name NUL value NUL. The wire format is identical to BuildRRQ with
+// opcode 2 (WRQ) in place of opcode 1 (RRQ).
+func BuildWRQ(filename, mode string, opts []Option) []byte {
+	var b bytes.Buffer
+	b.Write([]byte{0, OpWRQ})
+	b.WriteString(filename)
+	b.WriteByte(0)
+	b.WriteString(mode)
+	b.WriteByte(0)
+	for _, o := range opts {
+		b.WriteString(o.Name)
+		b.WriteByte(0)
+		b.WriteString(o.Value)
+		b.WriteByte(0)
+	}
+	return b.Bytes()
+}
+
 // ParseRequest decodes an RRQ/WRQ payload (the i83 server's RRQ parser, plan §3
 // step 1).
 func ParseRequest(payload []byte) (*Request, error) {
