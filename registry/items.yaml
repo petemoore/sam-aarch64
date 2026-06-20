@@ -1125,8 +1125,12 @@
 - id: i69
   title: "Test-memory architecture: relieve section-C test-variant squeeze using test-coexistence principle"
   description: |
-    Relieve section-C test-variant squeeze (principle: tests need not coexist in memory). Levers in order: (1) evict suites off-axis (PR #52 pattern); (2) serial test bay (page-13 time-multiplex generalised); (3) chunked payloads across more pages/disk; (4) multiple boots. Lever 1 partially applied (PR #180): test_symbols + test_local_labels evicted; test variant code_end &BFAA→&BCA3 (86B→861B headroom). Remaining levers ready for next pressure event.
-  status: IN_PROGRESS
+    Relieve section-C test-variant squeeze (principle: tests need not coexist in memory). Levers in order: (1) evict suites off-axis (PR #52 pattern); (2) serial test bay (page-13 time-multiplex generalised); (3) chunked payloads across more pages/disk; (4) multiple boots. Lever 1 partially applied (PR #180): test_symbols + test_local_labels evicted; test variant code_end &BFAA->&BCA3.
+    
+    FINDING (2026-06-22, i69 investigation): Lever 1 (evict-to-cluster) is now EXHAUSTED for the remaining inline suites — they are inline PRECISELY because they are paging-coupled. test_emit_paged/test_reader_paged/test_sysreg_paged each do enctab_map_in / LMPR swaps that would page OUT the off-axis cluster's own executing code (cluster runs with LMPR mapping page 12 into section A; dispatch at assembler.asm:388, BEFORE load_enctab); test_sysname needs the section-B paged_call body (sysreg encoders); test_trampoline/test_paged_call are bootstrap-timed. So a naive cluster move hangs the boot.
+    
+    VIABLE LEVER for the encode_inst pressure = lever 3: move enc_fix_table (528 B + all future i201/i204 fixture growth) + the fixture operand streams OFF-AXIS to a spare HLOAD'd page (test_cluster.bin pattern), read row-by-row by the INLINE driver (run_encode_inst_self_tests, must stay inline — encode_inst reads ENCTAB in section A) via an LMPR-bracketed copy: map fixture page into section A, copy row+stream into an inline scratch buffer (driver is in section C, stays mapped), remap ENCTAB, then call encode_inst on the scratch copy. ~30 B driver overhead, +~498 B now and SCALES with the strand. Files: new payload build target + loader fn + assembler.asm boot call + Makefile/build-disk filename + driver restructure + move the enc_fix_table data out of test_encode_inst.asm. Verify via TestBootSelfTestsPass (catches boot hang) + SimCoupe. i201a/i201b/i201c/i204 fixtures all depend on this relief.
+  status: OPEN
   kind: leaf
   owner: agent
   refs: [i68, src/README.md]
