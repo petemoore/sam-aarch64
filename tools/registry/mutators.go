@@ -219,6 +219,12 @@ func applyAndCommit(reg *Registry, paths mutatorPaths) {
 
 // loadReg loads items, questions, and priority into a Registry.
 func loadReg(paths mutatorPaths) (*Registry, error) {
+	// No data source resolved — refuse rather than read an empty/guessed path.
+	// The CLI never falls back to the bundled test fixtures (an accidental
+	// testdata read/write could be catastrophic).
+	if paths.itemsYAML == "" {
+		return nil, fmt.Errorf("registry: no data source — run from the repo root so registry/items.yaml is found by walking up, or set REGISTRY_ITEMS explicitly; the CLI never falls back to the bundled test fixtures")
+	}
 	items, err := loadItems(paths.itemsYAML)
 	if err != nil {
 		return nil, err

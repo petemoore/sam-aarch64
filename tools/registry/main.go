@@ -142,73 +142,62 @@ func usage() {
 //	REGISTRY_TEMPLATES  override templates directory
 //	REGISTRY_OUTDIR     set to enable in-place .md generation
 // defaultMutatorPaths resolves where the registry CLI reads and writes when run
-// without explicit REGISTRY_* env vars. Resolution order, per path:
-//
-//  1. an explicit REGISTRY_* env var (always wins);
-//  2. the LIVE repo registry/, discovered by walking up from the current working
-//     directory for a registry/items.yaml — so a bare `build/registry …` run from
-//     the repo root operates on the real registry;
-//  3. the bundled testdata fixtures, but only with a LOUD stderr warning.
-//
-// Step 2 is the fix for the footgun where a bare invocation silently read (and
-// `add`/`set-status` would have written) the test fixtures instead of the real
-// registry — the very thing the docs tell agents to run. When the live registry
-// is found, the generated docs/notes views are also regenerated in place (unless
-// REGISTRY_OUTDIR overrides) so a mutation never leaves the .md views stale.
+// without explicit REGISTRY_* env vars. The data paths are resolved, in order:
+// an explicit REGISTRY_* env var (always wins), else the LIVE repo registry/
+// discovered by walking up from the current working directory for a
+// registry/items.yaml. The data source is NEVER guessed to be the bundled test
+// fixtures — an accidental testdata fallback could be catastrophic (stale reads,
+// or writes to the fixtures). When no source is resolvable the item path is left
+// empty and loadReg fails with a clear "no data source" message; the
+// positional-arg commands (`validate`/`gen`) supply their own paths and are
+// unaffected. (A fuller "always explicit" design — config file / required flag,
+// dropping the cwd-walk — is tracked as i150.)
 func defaultMutatorPaths() mutatorPaths {
-	td := toolDir()
-
 	// Discover the live repo registry/ by walking up from cwd.
 	repoReg := ""
 	if cwd, err := os.Getwd(); err == nil {
 		repoReg = findRepoRegistryDir(cwd)
 	}
 
-	// Base dir that unset item/question/priority paths derive from, plus the
-	// matching templates dir.
-	var baseDir, tmplDir string
-	if repoReg != "" {
-		repoRoot := filepath.Dir(repoReg)
-		baseDir = repoReg
-		tmplDir = filepath.Join(repoRoot, "tools", "registry", "templates")
-	} else {
-		baseDir = filepath.Join(td, "testdata")
-		tmplDir = filepath.Join(td, "templates")
-	}
-
+	// Resolve the items path and the base dir its siblings derive from: explicit
+	// REGISTRY_ITEMS wins; else the discovered live registry; else leave empty
+	// (loadReg surfaces the error) — never the test fixtures.
 	itemsYAML := os.Getenv("REGISTRY_ITEMS")
-	if itemsYAML == "" {
-		if repoReg == "" {
-			fmt.Fprintln(os.Stderr, "registry: WARNING — no live registry/items.yaml found by walking up from the current directory; falling back to the bundled testdata fixtures. Run from the repo root, or set REGISTRY_ITEMS, to operate on the real registry.")
-		}
-		itemsYAML = filepath.Join(baseDir, "items.yaml")
+	baseDir := ""
+	switch {
+	case itemsYAML != "":
+		baseDir = filepath.Dir(itemsYAML)
+	case repoReg != "":
+		baseDir = repoReg
+		itemsYAML = filepath.Join(repoReg, "items.yaml")
 	}
 
 	questionsYAML := os.Getenv("REGISTRY_QUESTIONS")
-	if questionsYAML == "" {
+	if questionsYAML == "" && baseDir != "" {
 		questionsYAML = filepath.Join(baseDir, "questions.yaml")
 	}
 
-	// priorityYAML is a sibling of items.yaml — honours an explicit
-	// REGISTRY_ITEMS override and works for both the live and testdata bases.
+	// priorityYAML is a sibling of items.yaml.
 	priorityYAML := os.Getenv("REGISTRY_PRIORITY")
-	if priorityYAML == "" {
-		priorityYAML = filepath.Join(filepath.Dir(itemsYAML), "priority.yaml")
+	if priorityYAML == "" && baseDir != "" {
+		priorityYAML = filepath.Join(baseDir, "priority.yaml")
 	}
 
 	// .id-ledger.txt lives alongside the YAML sources.
 	registryDir := os.Getenv("REGISTRY_DIR")
 	if registryDir == "" {
-		if repoReg != "" {
-			registryDir = repoReg
-		} else {
-			registryDir = td
-		}
+		registryDir = baseDir
 	}
 
+	// Templates are read-only header prose (not data), so a default here is
+	// harmless: prefer the repo's templates dir, else the tool's source dir.
 	templatesDir := os.Getenv("REGISTRY_TEMPLATES")
 	if templatesDir == "" {
-		templatesDir = tmplDir
+		if repoReg != "" {
+			templatesDir = filepath.Join(filepath.Dir(repoReg), "tools", "registry", "templates")
+		} else {
+			templatesDir = filepath.Join(toolDir(), "templates")
+		}
 	}
 
 	// outDir empty = stdout mode. Mutators print the regenerated views to stdout;
