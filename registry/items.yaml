@@ -361,9 +361,11 @@
   title: Harden slot self-test PASS_PC dependency
   description: |
     Deferred-backlog item. Hardens the slot self-test PASS_PC dependency to make it more robust.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 512, role: completing}
 
 - id: i30
   title: LDIR-fan-out for cross-page-shared blocks (smaller binary + faster boot)
