@@ -2080,9 +2080,11 @@
   title: B5 — wire into client_main (replace record-0=floppy bug) + full emulation E2E; HSAVE write-out hardware-gated
   description: |
     B5: integrate B3 list-read + B4 record picker into client_main, replacing the record-0=floppy selection bug with the correct HRECORD record-n>=1 -> HSAVE flow. Run a full E2E test in emulation (harness CardModel + BDOS write-out model + i138 key injection). Also resolve the filename >10-char UIFA-name truncation (i119 gap 4). The HSAVE write-out to real hardware and the raw-SD list read stay hardware-gated.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 466, role: completing}
   parent: i119
   refs: [src/netboot/netboot_client.asm, src/netboot/bdos_seam.asm, docs/specs/samdos-file-io.md, i119, i99]
 
@@ -2346,6 +2348,24 @@
     picker_render in src/netboot/bdos_picker.asm is a stub ret (all decision/show-name/confirm logic is host-verified in i119d). This item wires the actual SAM MODE-2 screen blit so the picker display is visible on real hardware. Depends on i119d being merged.
   status: OPEN
   depends_on: [i119d]
+  kind: leaf
+  owner: agent
+  parent: i119
+
+- id: i144
+  title: "Harness HSAVE write-back model: persist captured bytes into CardModel sectors"
+  description: |
+    BDOSStore.handle captures the HSAVE UIFA (record+name+page+addr+size) but does NOT copy the Size bytes from the source page into CardModel.Sectors[record]. Add a write-back so a follow-up HRSAD can read the saved file back — enabling the i119e E2E to assert record CONTENTS (not just that the right record was selected + CONFIRMED). Not needed for the safety gate; useful for round-trip verification.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i119
+
+- id: i145
+  title: "SD CSD capacity read -> BD_RECORDS (hardware-gated)"
+  description: |
+    client_main's auto-pick needs BD_RECORDS (card record count = tot.sct/1600). tot.sct comes from the SD CSD capacity read over SPI (ports &DC-&DF), which is hardware-gated (no emulator). Until this lands, BD_RECORDS=0 on real hardware => picker finds no free record => safe decline (no write). The emulation E2E injects BD_RECORDS directly. Implement the CSD read so the bootable client can actually claim a record on hardware.
+  status: OPEN
   kind: leaf
   owner: agent
   parent: i119
