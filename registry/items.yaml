@@ -1126,7 +1126,7 @@
   title: "Test-memory architecture: relieve section-C test-variant squeeze using test-coexistence principle"
   description: |
     Relieve section-C test-variant squeeze (principle: tests need not coexist in memory). Levers in order: (1) evict suites off-axis (PR #52 pattern); (2) serial test bay (page-13 time-multiplex generalised); (3) chunked payloads across more pages/disk; (4) multiple boots. Lever 1 partially applied (PR #180): test_symbols + test_local_labels evicted; test variant code_end &BFAA→&BCA3 (86B→861B headroom). Remaining levers ready for next pressure event.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   refs: [i68, src/README.md]
@@ -3475,7 +3475,7 @@
   description: |
     First sub-brick of i201 (i48c-b8e compound forms). Wire the shifted-register and extended-register compound-operand encoders into encode_inst's pre-form-table dispatch (pass2.go:235-240): encodeShiftedRegInst (pass2.go:1060-1122) + encodeExtendedRegInst (ADD/SUB only, pass2.go:1188-1225), plus the shifted-reg 3-register coercion (lsl #0, pass2.go:252-271) and 2-register tst coercion (pass2.go:273-290). REUSES the proven Z80 full-instruction encoders encode_shifted_reg_word + encode_extended_reg_word (src/slots/shifted_reg.asm / extended_reg.asm, already tested by test_shifted_reg/test_extended_reg) + encode_extend_op + eval_expr_const for the shift/amount expr. New work = parse the OpShiftedReg/OpExtendedReg operand wire format from the stream and set up the encoder inputs + the coercion synthesis. Faithful port (CLAUDE.md s6). Extends the test_encode_inst boot self-test + the Go authority fixtures. Depends on i199 (encode_inst skeleton + harness). SimCoupe-gated.
   status: OPEN
-  depends_on: [i199, i206]
+  depends_on: [i199, i206, i69]
   kind: leaf
   owner: agent
   parent: i201
