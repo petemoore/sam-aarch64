@@ -3511,10 +3511,12 @@
   title: "i203a: shift/bitfield/ror special-form encoders (lsl/lsr/bfi/bfxil/ubfx/bfc/sbfx/ror)"
   description: |
     First sub-brick of i203 (i48c-b8e special forms). Port the self-contained bit-math special-form encoders that intercept before the form table (pass2.go:337-353 dispatch): encodeLSLSR (lsl=17/lsr=18 -> UBFM aliases with computed immr/imms; reg-shift form -> LSLV/LSRV, pass2.go:1253-1320), encodeBitfieldInst (bfi=49/bfxil=50/ubfx=51/bfc=83/sbfx=84 -> BFM/UBFM/SBFM with immr/imms from lsb+width; bfc has implicit XZR Rn, pass2.go:1334-1438), encodeRorImm (ror=70 -> EXTR Rd,Rn,Rn,#imm alias, pass2.go:1517-1561). Pure arithmetic over evaluated immediates (reuse eval_expr_const) + direct field placement; NO paged tables, NO form-table lookup. Faithful port (CLAUDE.md s6). Adds a special-form dispatch in encode_inst (checked before the form-table path, mirroring Go's switch rec.MnemonicID) + handlers. Extends the test_encode_inst boot self-test + the Go authority fixtures with shift/bitfield/ror cases. Depends on i199 (encode_inst skeleton + harness). SimCoupe-gated.
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i199]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 563, role: completing}
   parent: i203
 
 - id: i203b
