@@ -215,6 +215,79 @@ func nextItemID(reg *Registry, ledger map[string]bool) string {
 	return fmt.Sprintf("i%d", maxN+1)
 }
 
+// mintedIDs returns the set of every id that exists in the registry or has ever
+// been minted (the append-only ledger) — the ids an allocator must avoid so a
+// since-deleted id is never re-used (spec invariant 1).
+func mintedIDs(reg *Registry, ledger map[string]bool) map[string]bool {
+	taken := map[string]bool{}
+	for id := range ledger {
+		taken[id] = true
+	}
+	for _, it := range reg.Items {
+		taken[it.ID] = true
+	}
+	for _, q := range reg.Questions {
+		taken[q.ID] = true
+	}
+	return taken
+}
+
+// idDecompRe decomposes an item id into its grammar components:
+// base (iN), optional letter, optional brick (-bM), optional brick-letter.
+// Mirrors itemIDRe (which validates the same shape).
+var idDecompRe = regexp.MustCompile(`^(i[0-9]+)([a-z])?(-b[0-9]+)?([a-z])?$`)
+
+// nextSubID returns the next free sub-id under parentID, determined entirely by
+// the parent's id shape (the caller never invents an id — spec: ids are
+// tool-determined, never hand-picked). The splitting scheme, one level per call,
+// staying within itemIDRe:
+//
+//	iN        → iNa, iNb, … iNz   (append a letter; max 26)
+//	iNx       → iNx-b1, iNx-b2, … (append a numbered brick; unbounded)
+//	iN[x]-bM  → iN[x]-bMa, …-bMz  (append a letter to the brick; max 26)
+//	iN[x]-bMy → (error: maximum nesting depth — the grammar allows no further level)
+//
+// The letter levels are capped at 26 (a–z); when they are exhausted nextSubID
+// returns a loud error rather than silently overflowing or mangling the id — a
+// 26-child group is itself a "too big, restructure" signal (the numbered brick
+// level is the unbounded escape hatch). taken is the set from mintedIDs.
+func nextSubID(parentID string, taken map[string]bool) (string, error) {
+	m := idDecompRe.FindStringSubmatch(parentID)
+	if m == nil {
+		return "", fmt.Errorf("parent id %q does not match the item id grammar", parentID)
+	}
+	letter, brick, brickLetter := m[2], m[3], m[4]
+
+	var prefix string
+	var numeric bool
+	switch {
+	case letter == "" && brick == "": // iN → iN{a..z}
+		prefix, numeric = parentID, false
+	case letter != "" && brick == "": // iNx → iNx-b{1..}
+		prefix, numeric = parentID+"-b", true
+	case brick != "" && brickLetter == "": // iN[x]-bM → +{a..z}
+		prefix, numeric = parentID, false
+	default: // iN[x]-bMy — already at the deepest grammar level
+		return "", fmt.Errorf("cannot auto-allocate a sub-id under %q: maximum nesting depth reached (the id grammar allows no further level) — restructure instead", parentID)
+	}
+
+	if numeric {
+		for n := 1; ; n++ {
+			cand := fmt.Sprintf("%s%d", prefix, n)
+			if !taken[cand] {
+				return cand, nil
+			}
+		}
+	}
+	for c := byte('a'); c <= 'z'; c++ {
+		cand := fmt.Sprintf("%s%c", prefix, c)
+		if !taken[cand] {
+			return cand, nil
+		}
+	}
+	return "", fmt.Errorf("cannot auto-allocate a sub-id under %q: all 26 letter slots (a–z) are used — this group is full; restructure into smaller groups (the -bN brick level is unbounded if a large flat group is genuinely needed)", parentID)
+}
+
 // nextQuestionID returns the next free question id (q<N>).
 func nextQuestionID(reg *Registry, ledger map[string]bool) string {
 	maxN := 0

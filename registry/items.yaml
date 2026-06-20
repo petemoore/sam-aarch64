@@ -2536,3 +2536,19 @@
   kind: leaf
   owner: agent
   refs: [src/netboot/bdos_seam.asm, reference/bdos/bdos15a.src.txt, i119, i114c]
+
+- id: i153
+  title: "Registry CLI/model hardening: atomic tool-determined ids + blocked-on-Pete backlog marking + parent/orphan invariants"
+  description: |
+    Pete-requested registry tooling (2026-06-20). (1) backlog.md: drop rank column; add 'gate' column (ready / blocked-on-Pete qN / blocked-on-work iN). (2) Atomic tool-determined ids: 'add' auto-allocates iN (+--space items|questions); 'split' auto child-id (iN->iNa, iNx->iNx-b1)+full fields; drop next-id + custom --id. (3) Invariants+tests: parent exists+umbrella, sub-id needs parent, no cycles, id-regexp conformance, exhaustion forbid>26 (loud; -bN unbounded). (4) Orphans: i12/i107 umbrellas, i39c->i48c, i117->umbrella.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+
+- id: i154
+  title: "Codify 'track-on-request' discipline: create the iN/qN the moment work is requested, before starting"
+  description: |
+    Strengthen handover-contract rule 1 (today 'capture in the same change' = PR-time) to REQUEST-time. The moment a piece of work is well-defined AND signed off, the agent: (a) creates the item LOCALLY (committed on the working branch — NO separate PR/merge dance just to capture; it rides the work's PR or the wind-down sweep), (b) marks it IN_PROGRESS, and (c) explicitly confirms to Pete: "you asked for X, we agreed the design, I've logged it as iNNNN, added it to the registry, marked it IN_PROGRESS, and am now working on it." So intent survives power-failure / context-loss mid-work. Goes in the high-level agent instructions (CLAUDE.md + ROADMAP handover contract), not just memory or one session. Earned 2026-06-20: an agent began the i153 tooling work without first creating its item (Pete caught it).
+  status: OPEN
+  kind: leaf
+  owner: agent
