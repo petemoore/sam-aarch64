@@ -255,6 +255,106 @@ func TestEncoderSkeletonFixtures(t *testing.T) {
 			w.WriteImmExpr(immExpr(3))
 			w.WriteImmExpr(immExpr(0x1008))
 		}, 3},
+		// --- i201a compound-operand forms: shifted-reg + extended-reg ---
+		// Shifted-reg explicit (OpShiftedReg operand present): add x0,x1,x2,lsl#3
+		{"add_x0_x1_x2_lsl3", "add", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteShiftedReg(1, 2, format.ShiftLSL, immExpr(3))
+		}, 3},
+		// Shifted-reg with LSR: sub x3,x4,x5,lsr#7
+		{"sub_x3_x4_x5_lsr7", "sub", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 3)
+			w.WriteReg(format.OpRegX, 4)
+			w.WriteShiftedReg(1, 5, format.ShiftLSR, immExpr(7))
+		}, 3},
+		// Shifted-reg with ASR (W form): and w6,w7,w8,asr#2
+		{"and_w6_w7_w8_asr2", "and", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegW, 6)
+			w.WriteReg(format.OpRegW, 7)
+			w.WriteShiftedReg(0, 8, format.ShiftASR, immExpr(2))
+		}, 3},
+		// Shifted-reg with ROR: orr x9,x10,x11,ror#15
+		{"orr_x9_x10_x11_ror15", "orr", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 9)
+			w.WriteReg(format.OpRegX, 10)
+			w.WriteShiftedReg(1, 11, format.ShiftROR, immExpr(15))
+		}, 3},
+		// Shifted-reg: eor x12,x13,x14,lsl#0
+		{"eor_x12_x13_x14_lsl0", "eor", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 12)
+			w.WriteReg(format.OpRegX, 13)
+			w.WriteShiftedReg(1, 14, format.ShiftLSL, immExpr(0))
+		}, 3},
+		// Shifted-reg: bic x0,x1,x2,lsl#0 (N=1)
+		{"bic_x0_x1_x2_lsl0", "bic", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteShiftedReg(1, 2, format.ShiftLSL, immExpr(0))
+		}, 3},
+		// Shifted-reg: subs x3,x4,x5,lsl#0
+		{"subs_x3_x4_x5_lsl0", "subs", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 3)
+			w.WriteReg(format.OpRegX, 4)
+			w.WriteShiftedReg(1, 5, format.ShiftLSL, immExpr(0))
+		}, 3},
+		// Shifted-reg: ands w0,w1,w2,lsl#0
+		{"ands_w0_w1_w2_lsl0", "ands", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegW, 0)
+			w.WriteReg(format.OpRegW, 1)
+			w.WriteShiftedReg(0, 2, format.ShiftLSL, immExpr(0))
+		}, 3},
+		// 3-reg coercion (no explicit shift): add x0,x1,x2 -> LSL#0
+		{"add_x0_x1_x2_coerce", "add", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteReg(format.OpRegX, 2)
+		}, 3},
+		// 3-reg coercion (W): sub w3,w4,w5 -> LSL#0
+		{"sub_w3_w4_w5_coerce", "sub", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegW, 3)
+			w.WriteReg(format.OpRegW, 4)
+			w.WriteReg(format.OpRegW, 5)
+		}, 3},
+		// 2-reg tst coercion: tst x0,x1 -> shifted-reg LSL#0, Rd=xzr
+		{"tst_x0_x1_coerce", "tst", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+		}, 2},
+		// 2-reg tst coercion (W): tst w2,w3
+		{"tst_w2_w3_coerce", "tst", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegW, 2)
+			w.WriteReg(format.OpRegW, 3)
+		}, 2},
+		// tst with explicit shifted-reg: tst x0,x1,lsl#3
+		{"tst_x0_x1_lsl3", "tst", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteShiftedReg(1, 1, format.ShiftLSL, immExpr(3))
+		}, 2},
+		// Extended-reg: add x0,x1,w2,uxtw#2
+		{"add_x0_x1_w2_uxtw2", "add", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteExtendedReg(0, 2, format.ExtUXTW, immExpr(2))
+		}, 3},
+		// Extended-reg: add x3,x4,x5,sxtx#1
+		{"add_x3_x4_x5_sxtx1", "add", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 3)
+			w.WriteReg(format.OpRegX, 4)
+			w.WriteExtendedReg(1, 5, format.ExtSXTX, immExpr(1))
+		}, 3},
+		// Extended-reg: sub x6,x7,w8,uxtb#0
+		{"sub_x6_x7_w8_uxtb0", "sub", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 6)
+			w.WriteReg(format.OpRegX, 7)
+			w.WriteExtendedReg(0, 8, format.ExtUXTB, immExpr(0))
+		}, 3},
+		// Extended-reg: sub x9,x10,x11,sxth#3
+		{"sub_x9_x10_x11_sxth3", "sub", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 9)
+			w.WriteReg(format.OpRegX, 10)
+			w.WriteExtendedReg(1, 11, format.ExtSXTH, immExpr(3))
+		}, 3},
 	}
 
 	for _, fx := range fixtures {

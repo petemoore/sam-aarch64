@@ -78,6 +78,8 @@ OPK_REG_HI:     equ     &04     ; REG_WSP (reg kinds are the &01..&04 run)
 OPK_REG_X:      equ     &01     ; REG_X  (is64 marker)
 OPK_REG_W:      equ     &02     ; REG_W  (32-bit marker)
 OPK_IMM_EXPR:   equ     &05
+OPK_SHIFTED_REG: equ    &06     ; OpShiftedReg (shifted-register operand)
+OPK_EXT_REG:    equ     &07     ; OpExtendedReg (extended-register operand)
 OPK_COND:       equ     &0a
 OPK_SYS_NAME:   equ     &0b     ; OpSysName (mrs/msr/dc/tlbi name operand)
 
@@ -191,7 +193,143 @@ enc_special_imm1:
                 jp      enc_ldrlit
 enc_after_special:
 
+; -- Shifted/extended-reg coercions (mirror pass2.go:252-290) -----------
+; Before the form table and before the explicit-compound-kind scan, two
+; plain-register invocations are coerced into the shifted-reg path:
+;
+;   3-reg coercion: `add Xd, Xn, Xm` (no explicit shift) -> LSL#0
+;     Applies when opcount==3, the mnemonic is in the shifted-reg set
+;     (ids 1,2,14,15,16,45,46,47,80,98 = add/sub/and/orr/eor/subs/tst/bic/ands/adds),
+;     AND all three operands are plain GPRs.
+;   2-reg tst coercion: `tst Xn, Xm` -> tst Xn, Xm, lsl#0
+;     Applies when opcount==2, mnemonic==46, and both are plain GPRs.
+;
+; For the 3-reg case, a synthesized OpShiftedReg entry is written into
+; enc_sr_synth (10 bytes, OPVAL_STRIDE) with width from op0, Rm from op2,
+; shift=LSL(0), imm6=0.  enc_shifted then reads OPVAL_ARRAY directly
+; after we populate it; but we do the population inside enc_shifted so
+; both paths (explicit ShiftedReg and coerced) go through one populator.
+; For the coerced path, we stash the synthetic ShiftedReg parameters in
+; enc_sr_synth and set enc_sr_idx to signal the coerced case.
+;
+; Only intercept when high byte of mnem_id is zero (all these ids < 256).
+
+enc_check_coerce:
+                ld      a, (enc_mnem + 1)
+                or      a
+                jp      nz, enc_compound_scan   ; id >= 256: not in coerce set
+; 3-reg coercion: opcount==3 + isShiftedRegMnemonic + all 3 plain GPRs?
+                ld      a, (enc_op_count)
+                cp      3
+                jr      nz, enc_try_tst_coerce
+; Check mnemonic is in the shifted-reg set.
+                ld      a, (enc_mnem)
+                call    enc_is_shifted_mnem
+                jr      nz, enc_try_tst_coerce
+; Check all 3 operands are plain GPRs (&01..&04).
+                ld      a, (OPVAL_KINDS + 0)
+                call    enc_is_plain_gpr
+                jr      nz, enc_try_tst_coerce
+                ld      a, (OPVAL_KINDS + 1)
+                call    enc_is_plain_gpr
+                jr      nz, enc_try_tst_coerce
+                ld      a, (OPVAL_KINDS + 2)
+                call    enc_is_plain_gpr
+                jr      nz, enc_try_tst_coerce
+; Coerce: synthesize a ShiftedReg operand for op2 with width from op0,
+; Rm from op2 (plain reg byte), shift_kind=LSL(0), imm6=0.
+; enc_sr_synth layout: [filler, width, Rm, shift_kind, imm6, 0, 0, 0]
+; filler at +0 maps to OPVAL[idx]+0 (ignored by encoder; encoder reads
+; OPVAL[idx]+1 as width).  Mirror pass2.go:252-269.
+                xor     a
+                ld      (enc_sr_synth + 0), a   ; filler at +0
+                ld      a, (OPVAL_KINDS + 0)    ; op0 kind for width
+                cp      OPK_REG_X
+                ld      a, 1                    ; width=1 for X (64-bit)
+                jr      z, enc_3reg_width
+                xor     a                       ; width=0 for W/XSP/WSP
+enc_3reg_width:
+                ld      (enc_sr_synth + 1), a   ; width at +1
+                ld      a, 2
+                call    enc_nth_operand         ; HL -> op2
+                inc     hl
+                ld      a, (hl)                 ; op2 reg = Rm
+                ld      (enc_sr_synth + 2), a   ; Rm at +2
+                xor     a
+                ld      (enc_sr_synth + 3), a   ; shift_kind = LSL = 0 at +3
+                ld      (enc_sr_synth + 4), a   ; imm6 = 0 at +4
+                ld      (enc_sr_synth + 5), a
+                ld      (enc_sr_synth + 6), a
+                ld      (enc_sr_synth + 7), a
+                ld      a, 1
+                ld      (enc_sr_coerced), a     ; flag: coerced (not from stream)
+                jp      enc_shifted
+
+enc_try_tst_coerce:
+; 2-reg tst coercion: opcount==2, mnem==46 (tst), both plain GPRs.
+                ld      a, (enc_op_count)
+                cp      2
+                jr      nz, enc_compound_scan
+                ld      a, (enc_mnem)
+                cp      46
+                jr      nz, enc_compound_scan
+                ld      a, (OPVAL_KINDS + 0)
+                call    enc_is_plain_gpr
+                jr      nz, enc_compound_scan
+                ld      a, (OPVAL_KINDS + 1)
+                call    enc_is_plain_gpr
+                jr      nz, enc_compound_scan
+; Coerce: synthesize ShiftedReg for op1 with width from op0, Rm from op1.
+; enc_sr_synth layout: [filler, width, Rm, shift_kind, imm6, 0, 0, 0].
+; Mirror pass2.go:272-289.
+                xor     a
+                ld      (enc_sr_synth + 0), a   ; filler at +0
+                ld      a, (OPVAL_KINDS + 0)    ; op0 kind for width
+                cp      OPK_REG_X
+                ld      a, 1
+                jr      z, enc_tst_width
+                xor     a
+enc_tst_width:
+                ld      (enc_sr_synth + 1), a   ; width at +1
+                ld      a, 1
+                call    enc_nth_operand         ; HL -> op1
+                inc     hl
+                ld      a, (hl)                 ; op1 reg = Rm
+                ld      (enc_sr_synth + 2), a   ; Rm at +2
+                xor     a
+                ld      (enc_sr_synth + 3), a   ; shift_kind = LSL = 0 at +3
+                ld      (enc_sr_synth + 4), a   ; imm6 = 0 at +4
+                ld      (enc_sr_synth + 5), a
+                ld      (enc_sr_synth + 6), a
+                ld      (enc_sr_synth + 7), a
+                ld      a, 1
+                ld      (enc_sr_coerced), a     ; flag: coerced
+                jp      enc_shifted
+
+; -- Compound kind scan (mirror pass2.go:231-244) -----------------------
+; Scan the already-built OPVAL_KINDS for OpShiftedReg (0x06) or
+; OpExtendedReg (0x07).  Dispatch to enc_shifted / enc_extended.
+enc_compound_scan:
+                xor     a
+                ld      (enc_sr_coerced), a     ; not coerced
+                ld      b, a
+                ld      a, (enc_op_count)
+                or      a
+                jr      z, enc_form_table       ; 0 operands: straight to form table
+                ld      b, a
+                ld      hl, OPVAL_KINDS
+enc_cscan_loop:
+                ld      a, (hl)
+                cp      OPK_SHIFTED_REG
+                jp      z, enc_shifted
+                cp      OPK_EXT_REG
+                jp      z, enc_extended
+                inc     hl
+                djnz    enc_cscan_loop
+                jr      enc_form_table
+
 ; -- Form lookup: find first form for the mnemonic, then match kinds ----
+enc_form_table:
                 ld      de, (enc_mnem)
                 call    form_lookup_find_first      ; HL=form, BC=count, Z
                 jp      nz, enc_fail_noform
@@ -311,9 +449,10 @@ enc_eval_cur_expr:
 
 ; -----------------------------------------------------------------------
 ; enc_skip_operand — advance HL past the operand it points at.
-; Handles the brick-1 operand kinds: register (&01..&04, 1 payload byte),
-; cond (&0a, 1 payload byte), imm_expr (&05, u16 len + bytes).  Any other
-; kind is out of scope for the form-table path -> fail.
+; Handles register (&01..&04, 1 payload byte), cond (&0a, 1 payload
+; byte), imm_expr (&05, u16 len + bytes), sys_name (&0b, u16 len +
+; bytes), OpShiftedReg (&06, 3 fixed bytes + u16 len + bytes),
+; OpExtendedReg (&07, same layout as ShiftedReg).  Any other kind fails.
 ; Input/Output: HL.  Clobbers: A, BC.
 ; -----------------------------------------------------------------------
 enc_skip_operand:
@@ -325,6 +464,14 @@ enc_skip_operand:
                 jr      z, enc_skip_one
                 cp      OPK_SYS_NAME                ; len-prefixed, like imm
                 jr      z, enc_skip_imm
+; OpShiftedReg (&06) and OpExtendedReg (&07): wire format is
+; [kind][width][Rm][shiftKind/extend][amtExpr_len:u16 LE][amtExpr bytes].
+; Skip 3 fixed payload bytes, then skip the len-prefixed amtExpr.
+; Mirror Go OperandWriter.WriteShiftedReg/WriteExtendedReg (operands.go:155-167).
+                cp      OPK_SHIFTED_REG
+                jr      z, enc_skip_compound
+                cp      OPK_EXT_REG
+                jr      z, enc_skip_compound
                 cp      OPK_IMM_EXPR
                 jp      nc, enc_fail_unsupported_operand
                 or      a
@@ -339,6 +486,12 @@ enc_skip_imm:
                 inc     hl
                 add     hl, bc
                 ret
+enc_skip_compound:
+; Skip 3 fixed bytes (width, Rm, shiftKind/extend), then skip u16-prefixed amtExpr.
+                inc     hl                          ; skip width
+                inc     hl                          ; skip Rm
+                inc     hl                          ; skip shiftKind/extend
+                jr      enc_skip_imm                ; skip u16-len + expr bytes
 
 ; -----------------------------------------------------------------------
 ; enc_slotkind_to_fsid — map an expr-bearing SlotKind to its FoldSlot id
@@ -381,6 +534,251 @@ enc_fsid_adrp:  ld      a, FSID_ADRP
                 ret
 enc_fsid_adr:   ld      a, FSID_ADR
                 ret
+
+; =======================================================================
+; Compound-operand encoders (i201a / i48c-b8e brick 3).
+;
+; Port of pass2.go::encodeShiftedRegInst (lines 1060-1122) and
+; encodeExtendedRegInst (lines 1188-1225).  These bypass the form table
+; and are dispatched from enc_shifted / enc_extended above, reached
+; from either the explicit-kind scan (a ShiftedReg/ExtendedReg operand
+; is present in the stream) or the coerce path (3-reg or 2-reg tst with
+; all plain GPRs).
+;
+; Each handler populates OPVAL_ARRAY from the operand stream (or from
+; enc_sr_synth for the coerced cases), then tail-calls the proven
+; reusable encoders encode_shifted_reg_word / encode_extended_reg_word.
+; Those return DE:HL (= the encoded 32-bit word), which is the output
+; contract for encode_inst.
+; =======================================================================
+
+; -- enc_shifted — shifted-register encoder (both explicit + coerced) ---
+; Input: enc_sr_coerced != 0 means the ShiftedReg operand was synthesized
+; into enc_sr_synth [width,Rm,shift_kind,imm6,0,0,0] by the coerce path.
+;
+; Port of pass2.go::encodeShiftedRegInst (lines 1060-1122).
+; Populates OPVAL_ARRAY from the operand stream then tail-calls
+; encode_shifted_reg_word (src/slots/shifted_reg.asm), which reads:
+;   OPVAL[0]+1 = Rd, OPVAL[1]+1 = Rn (for non-tst);
+;   for tst: OPVAL[0]+1 = Rn, Rd baked to xzr by the encoder.
+;   OPVAL[idx]+1..+7 = width, Rm, shift_kind, imm6 (idx=1 for tst, 2 otherwise).
+enc_shifted:
+; Wipe the three OPVAL_ARRAY entries we will write.
+                ld      hl, OPVAL_ARRAY
+                ld      b, 30
+                xor     a
+enc_sh_wipe:
+                ld      (hl), a
+                inc     hl
+                djnz    enc_sh_wipe
+
+; Determine if tst (mnem 46): for tst the ShiftedReg is at OPVAL index 1
+; (Rn, ShiftedReg); for all others it is at index 2 (Rd, Rn, ShiftedReg).
+                ld      a, (enc_mnem)
+                cp      46
+                jr      z, enc_sh_is_tst
+
+; Non-tst: populate OPVAL_ARRAY[0] = Rd (kind + reg), [1] = Rn.
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (Rd)
+                ld      a, (hl)                     ; kind
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                inc     hl
+                ld      a, (hl)                     ; reg
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1), a
+                ld      a, 1
+                call    enc_nth_operand             ; HL -> op1 (Rn)
+                ld      a, (hl)
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
+                inc     hl
+                ld      a, (hl)
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+; Populate OPVAL_ARRAY[2] from stream (explicit) or enc_sr_synth (coerced).
+                ld      a, (enc_sr_coerced)
+                or      a
+                jr      nz, enc_sh_from_synth_2     ; coerced: use enc_sr_synth
+; Explicit: op2 is the ShiftedReg operand in the stream.
+                ld      a, 2
+                call    enc_nth_operand             ; HL -> op2 = [0x06][width][Rm][shift][lenlo][lenhi][...]
+                ld      de, OPVAL_ARRAY + 2 * OPVAL_STRIDE
+                jr      enc_sh_fill_slot            ; fill OPVAL[2] from stream at HL
+
+enc_sh_is_tst:
+; tst: only Rn at op0; ShiftedReg at op1.  Rd is xzr, baked by encoder.
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (Rn)
+                ld      a, (hl)
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                inc     hl
+                ld      a, (hl)
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1), a
+; Populate OPVAL_ARRAY[1] from stream (explicit) or enc_sr_synth (coerced).
+                ld      a, (enc_sr_coerced)
+                or      a
+                jr      nz, enc_sh_from_synth_1     ; coerced: use enc_sr_synth
+; Explicit: op1 is the ShiftedReg operand in the stream.
+                ld      a, 1
+                call    enc_nth_operand             ; HL -> op1 = [0x06][width][Rm][shift][lenlo][lenhi][...]
+                ld      de, OPVAL_ARRAY + 1 * OPVAL_STRIDE
+; Fall through to enc_sh_fill_slot.
+
+; enc_sh_fill_slot — HL -> ShiftedReg stream operand (kind byte first),
+; DE -> OPVAL_ARRAY[slot]+0.  Reads wire format and writes OPVAL fields.
+;
+; encode_shifted_reg_word (shifted_reg.asm) starts reading at
+; OPVAL_ARRAY + idx*OPVAL_STRIDE + 1, so the layout is:
+;   OPVAL[slot]+1 = width, +2 = Rm, +3 = shift_kind, +4 = imm6.
+; (+0 is ignored by the encoder; we leave it 0 from the wipe above.)
+enc_sh_fill_slot:
+                inc     hl                          ; skip kind byte (0x06)
+                inc     de                          ; advance to OPVAL[slot]+1
+                ld      a, (hl)                     ; width
+                ld      (de), a                     ; OPVAL+1 = width
+                inc     hl
+                inc     de
+                ld      a, (hl)                     ; Rm
+                ld      (de), a                     ; OPVAL+2 = Rm
+                inc     hl
+                inc     de
+                ld      a, (hl)                     ; shift_kind
+                ld      (de), a                     ; OPVAL+3 = shift_kind
+                inc     hl
+                inc     de
+; Evaluate amtExpr -> imm6.  HL -> [lenlo][lenhi][expr...].
+                push    de                          ; save &OPVAL+4
+                call    enc_eval_at_hl              ; result -> expr_result
+                pop     de
+                ld      a, (expr_result)
+                ld      (de), a                     ; OPVAL+4 = imm6
+                jr      enc_sh_call
+
+enc_sh_from_synth_2:
+; Coerced 3-reg: copy enc_sr_synth [filler,width,Rm,shift_kind,imm6,0,0,0]
+; into OPVAL[2].  8 bytes; the encoder reads from OPVAL[2]+1 onward.
+                ld      hl, enc_sr_synth
+                ld      de, OPVAL_ARRAY + 2 * OPVAL_STRIDE
+                ld      bc, 8
+                ldir
+                jr      enc_sh_call
+
+enc_sh_from_synth_1:
+; Coerced 2-reg tst: copy enc_sr_synth into OPVAL[1].
+                ld      hl, enc_sr_synth
+                ld      de, OPVAL_ARRAY + 1 * OPVAL_STRIDE
+                ld      bc, 8
+                ldir
+
+enc_sh_call:
+                ld      a, (enc_mnem)
+                jp      encode_shifted_reg_word     ; tail-call; returns DE:HL
+
+; enc_eval_at_hl — HL -> [lenlo][lenhi][expr...]; eval into expr_result.
+; Clobbers A, BC, HL.  Tail-calls eval_expr_const.
+enc_eval_at_hl:
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)                     ; BC = expr length
+                inc     hl                          ; HL -> expr bytes
+                jp      eval_expr_const
+
+; -- enc_extended — extended-register encoder ---------------------------
+; Port of pass2.go::encodeExtendedRegInst (lines 1188-1225).
+; Operands: Rd at idx 0, Rn at idx 1, ExtendedReg at idx 2.
+; Wire format for ExtendedReg: [0x07][width][Rm][extend][lenlo][lenhi][amt...].
+; encode_extended_reg_word reads:
+;   OPVAL[0]+0 kind (for sf), OPVAL[0]+1 Rd, OPVAL[1]+1 Rn,
+;   OPVAL[2]+2 Rm, OPVAL[2]+3 extend, OPVAL[2]+4 imm3.
+enc_extended:
+; Wipe OPVAL_ARRAY entries 0..2.
+                ld      hl, OPVAL_ARRAY
+                ld      b, 30
+                xor     a
+enc_ext_wipe:
+                ld      (hl), a
+                inc     hl
+                djnz    enc_ext_wipe
+
+; Populate OPVAL_ARRAY[0] = Rd, [1] = Rn (plain regs from stream).
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (Rd)
+                ld      a, (hl)
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                inc     hl
+                ld      a, (hl)
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1), a
+                ld      a, 1
+                call    enc_nth_operand             ; HL -> op1 (Rn)
+                ld      a, (hl)
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
+                inc     hl
+                ld      a, (hl)
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+
+; Populate OPVAL_ARRAY[2] from op2 (ExtendedReg in stream).
+                ld      a, 2
+                call    enc_nth_operand             ; HL -> op2 = [0x07][width][Rm][extend][lenlo][lenhi][...]
+                inc     hl                          ; skip kind byte (0x07)
+                inc     hl                          ; skip width (sf comes from OPVAL[0]+0 = Rd kind)
+                ld      a, (hl)                     ; Rm
+                ld      (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 2), a
+                inc     hl
+                ld      a, (hl)                     ; extend
+                ld      (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 3), a
+                inc     hl
+; Evaluate amtExpr -> imm3 (low byte).
+                call    enc_eval_at_hl              ; HL -> [lenlo][lenhi][expr...]
+                ld      a, (expr_result)
+                ld      (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 4), a
+
+                ld      a, (enc_mnem)
+                jp      encode_extended_reg_word    ; tail-call; returns DE:HL
+
+; -- enc_is_shifted_mnem — A = mnemonic id low byte; Z if in set --------
+; Shifted-reg mnemonic ids: 1,2,14,15,16,45,46,47,80,98.
+; Mirror pass2.go::isShiftedRegMnemonic (lines 1127-1133).
+; Output: Z set if in set, NZ otherwise.
+enc_is_shifted_mnem:
+                cp      1
+                ret     z
+                cp      2
+                ret     z
+                cp      14
+                ret     z
+                cp      15
+                ret     z
+                cp      16
+                ret     z
+                cp      45
+                ret     z
+                cp      46
+                ret     z
+                cp      47
+                ret     z
+                cp      80
+                ret     z
+                cp      98
+                ret     z
+                or      1                           ; NZ (A unchanged modulo flags)
+                ret
+
+; -- enc_is_plain_gpr — A = operand kind; Z if plain GPR (&01..&04) -----
+; Mirror pass2.go::isPlainGPR (line 1138-1143).
+enc_is_plain_gpr:
+                cp      OPK_REG_LO
+                ret     c                           ; < 0x01: NZ, carry
+                cp      OPK_REG_HI + 1
+                jr      c, enc_is_gpr_yes           ; 0x01..0x04: Z flag
+                or      1                           ; >= 0x05: NZ
+                ret
+enc_is_gpr_yes:
+                cp      a                           ; set Z
+                ret
+
+; Scratch for compound-operand path.
+; enc_sr_synth layout: [filler, width, Rm, shift_kind, imm6, 0, 0, 0]
+; Position 0 is a filler (maps to OPVAL[idx]+0 which the encoder skips).
+enc_sr_synth:   defb    0, 0, 0, 0, 0, 0, 0, 0  ; 8 bytes
+enc_sr_coerced: defb    0                        ; 0 = explicit, 1 = synthesized
 
 ; =======================================================================
 ; Special-form encoders (i203a / i48c-b8e-2 first sub-brick).
