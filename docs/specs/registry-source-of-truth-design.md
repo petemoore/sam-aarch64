@@ -284,6 +284,19 @@ The implementation lives in `registry/priority.yaml` (ordered id list),
   no umbrellas — *and* a **topological extension** of the dependency DAG (nothing
   sequenced before a node it depends on). Re-rank with `registry prioritize --id iN
   --to-top` or `registry move --id iN --before|--after iM`.
+- **Auto-maintenance (the queue always stays correct)** — every mutating command
+  reconciles the queue before validating, so neither invariant above needs a
+  manual fix-up. (1) **Membership:** newly-pullable ids are appended, closed /
+  umbrella ids are dropped, preserving the curated order of survivors. (2)
+  **Ordering:** a **topological-repair pass** (an input-order-preserving DFS) then
+  re-sequences the list into the nearest valid topological extension — a
+  dependency is pulled *forward* to just before its earliest dependent, so a
+  high-priority item blocked by a low-ranked gate pulls the gate up rather than
+  being demoted below it. This is idempotent on an already-valid order. The effect:
+  `registry dep add` (and `prioritize`/`move`) can introduce an edge that would put
+  a dependent ahead of its new dependency and the queue self-corrects instead of
+  the command failing validation. An explicit `prioritize`/`move` whose literal
+  request violates a dependency is auto-corrected with a one-line stderr note.
 - **Splitting in place** — when `iN` splits into leaves, the queue slot `iN` held
   is replaced **in place** by its new leaves (the parent becomes an umbrella and
   leaves the queue). The `split` CLI does this.

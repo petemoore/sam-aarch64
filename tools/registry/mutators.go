@@ -53,7 +53,100 @@ func reconcilePriority(reg *Registry) {
 		}
 	}
 
-	reg.Priority = kept
+	// Repair ordering so the queue is a valid topological extension of the
+	// dependency DAG. Membership reconciliation above preserves Pete's ranking
+	// but can leave a dependent ahead of a newly-added dependency (e.g. after
+	// `dep add`); this slides each dependency just ahead of its dependents with
+	// minimal perturbation, so validatePriority passes instead of the mutation
+	// being rejected. (i146 ordering-repair — "the queue always stays correct".)
+	reg.Priority = topoRepairPriority(reg.Items, kept)
+}
+
+// topoRepairPriority returns a permutation of `order` that is a valid topological
+// extension of the pullable dependency DAG: every id appears after all of its
+// depends_on targets that are also in `order`. It is a STABLE repair — when
+// `order` is already valid it is returned unchanged, and when it is not the
+// result preserves Pete's curated ranking as closely as possible.
+//
+// Algorithm: a depth-first topological sort that visits roots in the ORIGINAL
+// priority order and emits each item only after its (in-queue) dependencies. The
+// effect is that every item keeps its rank except that a dependency is pulled
+// FORWARD to just before its earliest dependent — the curation-preserving choice
+// (a high-priority item blocked by a low-ranked gate pulls the gate up, rather
+// than the item being demoted below it). On an already-valid input it reproduces
+// the input exactly. This is what lets `dep add` (and prioritize/move) keep the
+// queue topologically valid automatically instead of failing validation.
+//
+// Edges to ids not in `order` (closed/umbrella deps, questions) impose no
+// ordering constraint and are ignored — matching validatePriority's check 4.
+//
+// A cycle (which validate rejects separately) cannot livelock this: the on-stack
+// guard breaks the recursion and the node is still emitted as the stack unwinds,
+// so no id is ever dropped.
+func topoRepairPriority(items []Item, order []string) []string {
+	inQueue := make(map[string]bool, len(order))
+	for _, id := range order {
+		inQueue[id] = true
+	}
+	// deps[id] = id's depends_on targets that are also in the queue (in declared
+	// order). Edges out of the queue carry no ordering constraint here.
+	deps := make(map[string][]string, len(order))
+	for _, it := range items {
+		if !inQueue[it.ID] {
+			continue
+		}
+		var ds []string
+		for _, dep := range it.DependsOn {
+			if inQueue[dep] {
+				ds = append(ds, dep)
+			}
+		}
+		deps[it.ID] = ds
+	}
+
+	const (
+		unseen  = 0
+		onStack = 1
+		emitted = 2
+	)
+	state := make(map[string]int, len(order))
+	out := make([]string, 0, len(order))
+
+	var visit func(id string)
+	visit = func(id string) {
+		switch state[id] {
+		case emitted:
+			return
+		case onStack:
+			return // cycle — stop recursing; emitted as this frame unwinds
+		}
+		state[id] = onStack
+		for _, dep := range deps[id] {
+			visit(dep)
+		}
+		state[id] = emitted
+		out = append(out, id)
+	}
+
+	// Visiting roots in the original order is what preserves the curated ranking:
+	// items keep their rank except where a dependency is pulled forward.
+	for _, id := range order {
+		visit(id)
+	}
+	return out
+}
+
+// equalStringSlice reports whether two string slices are element-wise equal.
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // applyAndCommit is the canonical end-of-mutator pipeline:
@@ -126,6 +219,12 @@ func applyAndCommit(reg *Registry, paths mutatorPaths) {
 
 // loadReg loads items, questions, and priority into a Registry.
 func loadReg(paths mutatorPaths) (*Registry, error) {
+	// No data source resolved — refuse rather than read an empty/guessed path.
+	// The CLI never falls back to the bundled test fixtures (an accidental
+	// testdata read/write could be catastrophic).
+	if paths.itemsYAML == "" {
+		return nil, fmt.Errorf("registry: no data source — run from the repo root so registry/items.yaml is found by walking up, or set REGISTRY_ITEMS explicitly; the CLI never falls back to the bundled test fixtures")
+	}
 	items, err := loadItems(paths.itemsYAML)
 	if err != nil {
 		return nil, err

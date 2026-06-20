@@ -35,6 +35,18 @@ from the priority queue in `registry/priority.yaml`; generated view:
 `docs/notes/backlog.md`). The YAML is the source of truth — never hand-edit
 the generated `docs/notes/*-registry-*.md` files.
 
+**Pull the tip; never judgment-pick.** The `ready` tip is authoritative — do not
+skip it for a lower item, and do not grep the markdown views to improvise an
+ordering. If the tip turns out to be blocked by something *not yet tracked* as a
+`depends_on` edge, that is a **missing-edge bug** (the model has no `BLOCKED`
+status — all blocking is an edge). Fix it in place: ensure the blocker is a
+tracked item (create it with `build/registry add …` if absent — `--owner pete`
+if it is hardware/Pete-gated), then `build/registry dep add --id <tip> --on
+<blocker>`. The CLI auto-repairs the priority order (topological repair), so
+re-running `build/registry ready` now surfaces a genuinely workable tip. Repeat
+until you get one. Run the CLI from the repo root so it operates on the live
+registry, not the bundled test fixtures.
+
 ## Run
 
 ```sh

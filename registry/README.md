@@ -7,9 +7,17 @@ here. The markdown views under `docs/notes/` (`item-registry-open.md`,
 
 - `items.yaml` / `questions.yaml` — the canonical item/question records.
 - `priority.yaml` — the ordered backlog (open pullable items, highest first);
-  `registry ready` returns the unblocked tip.
+  `registry ready` returns the unblocked tip. Every mutation auto-repairs this
+  order so each item always sorts after its dependencies (topological repair) —
+  you never hand-fix the ordering after `dep add`.
 - `.id-ledger.txt` — append-only high-water list of every id ever minted
   (ids are never reused, even after deletion).
+
+Run the CLI **from the repo root**: it locates this live registry by walking up
+for `registry/items.yaml`. It **never** falls back to the bundled
+`tools/registry/testdata` fixtures — run somewhere it can't find the live
+registry (with no `REGISTRY_ITEMS` set) and it errors (exit 1) rather than risk
+an accidental testdata read/write. Set `REGISTRY_ITEMS` to point elsewhere.
 
 Edit work-tracking via the `tools/registry` CLI (`add` / `split` / `set-status`
 / `set-pr` / `dep` / `answer` / `prioritize` / `move`), then `make registry` to

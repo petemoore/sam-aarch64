@@ -1340,6 +1340,7 @@
   title: B-DOS RST 8 hook dispatch on real Trinity — hardware-gated (HGTHD/HLOAD/HSAVE/HRECORD)
   description: ""
   status: OPEN
+  depends_on: [i133]
   kind: leaf
   owner: agent
   parent: i93
@@ -2015,6 +2016,7 @@
   description: |
     Confirm the OACK path works on real Trinity hardware: netboot client connects to a standards-compliant TFTP server (e.g. macOS tftpd), receives OACK, ACKs block 0, and receives the file. Gated on Trinity hardware access + a standards-compliant server in the test environment.
   status: OPEN
+  depends_on: [i133]
   kind: leaf
   owner: agent
   parent: i118
@@ -2269,6 +2271,7 @@
   description: |
     Pete has a Tapo smart plug for programmatic power-cycling. If a record auto-boots on power-on (no manual BOOT), agent runs fully unsupervised: power-cycle → SAM boots chosen record → runs → results over net (i133) → repeat. Investigate: EEPROM/config default-boot-record setting, Trinity AutoBOOT ROM (Colin's patch loads B-DOS from 128K EEPROM at reset), or patch forked B-DOS for early boot-a-record hook. Research: ~/sam-archive/bdos/analysis, Trinity AutoBOOT ROM, EEPROM layout, ~/sam-archive/trinity-docs. Pairs with i133 for full unsupervised loop.
   status: OPEN
+  depends_on: [i133]
   kind: leaf
   owner: agent
   refs: [~/sam-archive/bdos/analysis, i87, i133]
@@ -2332,6 +2335,7 @@
   description: |
     Hardware implementation of the card-absolute list-sector read modelled in B3 by the harness hook BD_HOOK_LISTREAD. Implements the SPI command ladder (CMD17 single-block read) on Trinity ports &DC-&DF to read list sectors 1..base-1 directly off the SD card. Not required for B3 emulation; the harness models the returned bytes. Needs final confirmation of the exact SPI init/read sequence on real hardware before building (docs/specs/trinity-record-detection-design.md §8, open-verification-item-1 and §3 frozen-interface principle).
   status: OPEN
+  depends_on: [i133]
   kind: leaf
   owner: agent
   parent: i119
@@ -2377,6 +2381,48 @@
   title: "Priority-backlog robustness: a non-pullable ready tip = missing-edge bug (HW gates + prompt + CLI ordering-repair)"
   description: |
     Found 2026-06-20: the ready tip i141 (+ i118b/i93b/i133/i135) is hardware-blocked but has NO depends_on edge, so it falsely surfaces as pullable — a missing-edge bug (no-BLOCKED model). Fix: (1) model the hardware gate (gate node or owner:pete) so they leave ready; (2) prompt — a non-pullable tip means the agent ADDS the missing edge (check/create the gating item) first, never judgment-picks; (3) CLI auto-fixes backlog membership (#462) but not ordering — add a topological-repair pass; (4) fix the ROADMAP judgment-pick bullet. Absorbs q29.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 472, role: completing}
+
+- id: i147
+  title: "Turn-end safety valve: make stop-after-merge structural, not discretionary"
+  description: |
+    The autonomous-loop context protection (touch task-done -> end turn -> monitor /clears for a fresh context) relies on the agent CHOOSING to stop after each merged PR — the easiest step to skip mid-flow. 2026-06-20: a session never stopped, accumulating ~10 merged PRs into one polluted context (judgment-picking + missing-edge blindness followed). Make end-turn-after-merge STRUCTURAL: e.g. the monitor detects 'new merge to main + no task-done while a turn is still running' and intervenes, and/or a gh-pr-merge wrapper auto-touches task-done. Design + own PR.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i148
+  title: "registry CLI: a 'view' sub-command to print an item/question by id (replace ad-hoc YAML greps)"
+  description: |
+    No read command exists to inspect a single record, so agents resort to inline python/grep over registry/items.yaml (e.g. to read i133). Add 'registry view --id iN' (and qN) printing the record human-readably: id, title, status, owner, depends_on, dependents, parent, prs, refs, description — from the live registry. Optional --format yaml|json for scripting. Read-only; pairs with ready/dependents/dag.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i149
+  title: "registry CLI: concurrency-safe mutation (file lock + atomic write) for concurrent/parallel use"
+  description: |
+    The CLI read-modify-writes the YAML with NO locking, so two concurrent mutations (Pete adds an item while an agent runs dep add) race -> last-writer-wins -> a change is silently lost; the .id-ledger append is likewise unguarded. Add an advisory file lock around load->mutate->write, atomic writes (temp+rename), and define contention behaviour. Enables Pete to add items while an agent works; prerequisite for parallel agent sessions (which also need git merge-conflict handling/recovery on the YAML — split if larger).
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i150
+  title: "registry CLI: require an explicit data source — never guess, never fall back to test fixtures"
+  description: |
+    The data source must always be explicit (env var, config file, or --flag), never guessed and never silently the bundled test fixtures — an accidental testdata fallback could be catastrophic (stale reads / writes to fixtures). PR #472 makes the no-source case a hard error (no testdata fallback). This item is the fuller design: pick the canonical explicit mechanism (repo-root config? a build/registry wrapper setting env? a required --registry flag?), decide whether the cwd-walk discovery stays or is replaced, and make CI/local test runs pass their source explicitly.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i151
+  title: Audit the whole registry for hardware/Pete-gated items missing a depends_on gate edge
+  description: |
+    i146 added the i133 gate edge to the KNOWN hardware cluster (i141/i118b/i93b/i135). Systematically audit every open item for real-world blockers (hardware access, Pete-only setup) not yet expressed as a depends_on edge — the missing-edge class that makes a non-actionable item falsely surface as the ready tip. Candidates to check: i70/i93/i95/i101/i112/i87/i89/i113b/i127 and any others. For each truly-gated item add the edge to i133 (or the correct gate) so 'ready' surfaces only agent-actionable work. Generalises the i146 fix to prevent recurrence.
   status: OPEN
   kind: leaf
   owner: agent
