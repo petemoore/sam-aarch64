@@ -121,28 +121,15 @@ encode_msr_pstate:
                 ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2)
                 cp      16
                 jp      nc, fail
-; Reject any non-zero high bytes (imm must fit in u8 and be < 16).
-                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 3)
+; Reject any non-zero high bytes +3..+9 (imm must fit in u8 and be < 16).
+                ld      hl, OPVAL_ARRAY + 1 * OPVAL_STRIDE + 3
+                ld      b, 7
+encode_msr_pstate_hi:
+                ld      a, (hl)
                 or      a
                 jp      nz, fail
-                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 4)
-                or      a
-                jp      nz, fail
-                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 5)
-                or      a
-                jp      nz, fail
-                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 6)
-                or      a
-                jp      nz, fail
-                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 7)
-                or      a
-                jp      nz, fail
-                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 8)
-                or      a
-                jp      nz, fail
-                ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 9)
-                or      a
-                jp      nz, fail
+                inc     hl
+                djnz    encode_msr_pstate_hi
 
                 ld      a, (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 2)
                 ld      e, a                ; E = imm (CRm)

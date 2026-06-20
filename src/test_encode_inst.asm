@@ -143,7 +143,67 @@ enc_fix_loop:
 
 enc_fix_done:
                 call    enctab_map_out
+; The OpLitPool dispatch case can't ride the table-driven loop above (it
+; needs a pass-1-registered pool slot, not just a seeded PASS_PC), so it
+; runs as a dedicated case here.  It exercises the i201c wiring:
+; encode_inst -> enc_compound_scan -> enc_litpool -> litpool_encode_ldr_word.
+                jp      run_encode_litpool_dispatch_test    ; tail-call; RETs
+
+; -----------------------------------------------------------------------
+; run_encode_litpool_dispatch_test — verify encode_inst dispatches
+; `ldr X0, =expr` (an OpLitPool operand) through enc_litpool to the same
+; word litpool_encode_ldr_word produces directly.
+;
+; Setup mirrors test_litpool.asm concern (6): register one X-form slot
+; for the instruction at PC=0, flush at PC=24 so the slot's entry_pc=24.
+; Then encode at PC=0:
+;   off = 24 - 0 = 24, imm19 = 6, Rt = 0, X-form base 0x58000000
+;   word = 0x58000000 | (6 << 5) | 0 = 0x580000c0   (DEHL bytes c0 00 00 58)
+; Authority: pass2.go::encodeLdrLitPoolInst (pass2.go:639-672).
+; -----------------------------------------------------------------------
+run_encode_litpool_dispatch_test:
+                call    litpool_init
+                ld      a, PASS_PASS1
+                ld      (PASS_MODE), a
+; PASS_PC := 0 (all 4 bytes) for the instruction-pc register call.
+                ld      hl, PASS_PC
+                ld      b, 4
+                xor     a
+enc_litpool_zero_pc:
+                ld      (hl), a
+                inc     hl
+                djnz    enc_litpool_zero_pc
+; Register a width-8 (X-form) pool entry for the instruction at PASS_PC=0.
+                ld      a, 8
+                ld      hl, enc_litpool_disp_expr
+                ld      bc, 2
+                call    litpool_register
+; Flush at PASS_PC=24 (already 8-aligned) -> slot 0 entry_pc = 24; flush
+; leaves PASS_PC = 32, so only its low byte differs from 0.
+                ld      a, 24
+                ld      (PASS_PC + 0), a
+                call    litpool_flush
+; Encode `ldr X0, =expr` back at PASS_PC = 0 (high 3 bytes still 0).
+                xor     a
+                ld      (PASS_PC + 0), a
+                ld      hl, enc_litpool_disp_stream
+                ld      de, 5                       ; mnemonic id 5 = ldr
+                ld      a, 2                        ; opcount
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &c0, &00, &00, &58
                 ret
+
+; 2-byte expr (PUSH_IMM8 0xaa); the value is unused in pass 1 / by the
+; PC-relative encoder — only the slot's entry_pc matters.
+enc_litpool_disp_expr:
+                defb    &01, &aa
+; Operand stream for `ldr X0, =expr`:
+;   op0: RegX (&01), reg 0
+;   op1: OpLitPool (&0C), width 8, expr_len 2 (LE), expr bytes
+enc_litpool_disp_stream:
+                defb    &01, &00
+                defb    OP_KIND_LIT_POOL, &08, &02, &00, &01, &aa
 
 enc_fix_fail:
                 ld      hl, (enc_fix_row)
