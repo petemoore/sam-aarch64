@@ -425,8 +425,9 @@ Supporting / baseline diffs (not the mechanism):
   sub-revisions**, so a small part of the 141-byte diff is baseline, not Colin's
   patch. (Honesty: the diff is vs SimCoupé's 3.0 image; Colin built on a `&1E`-30
   base.)
-- **`&D901`, `&FBFF..&FC0F`, `&FC44..&FC45`** — small data-table / pointer edits in
-  ROM data tables (e.g. `&FC44` a word `&F5DD`→`&F611`); minor, supporting.
+- **`&D902`, `&FBFF..&FC0F`, `&FC44..&FC45`** — small data-table / pointer edits in
+  ROM data tables (`&D902` an operand byte `&FE`→`&FC`; `&FC44` a word
+  `&F5DD`→`&F611`); minor, supporting.
 
 ### 6.2 The EEPROM bootblock does NOT match the public reproduction (§5 Q1 = NO)
 
