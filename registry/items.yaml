@@ -2161,9 +2161,54 @@
     SAM acts like a netbooting Pi: on boot, TFTP-fetches a named disk image, writes to a scratch/boot record, and boots into it (no control return). Design notes: (a) use reusable scratch record (no cleanup post-boot); (b) sha256-dedup before fetch — if content hash already in storage, skip fetch and boot existing copy (idempotent). Reuses i114/q26 content-addressed record naming. Builds on i82 receive loop + i119 write-out + a boot-a-record primitive (Trinity RECORD-then-BOOT model).
   status: OPEN
   depends_on: [i114c, i114d]
-  kind: leaf
+  kind: umbrella
   owner: agent
   refs: [src/netboot/netboot_client.asm, docs/notes/netboot-trinity-testing.md, i82, i114, i119]
+
+- id: i122a
+  title: "Boot-a-record primitive: HRECORD-select + ALHK (hook 136) auto-load/run the record's AUTO file"
+  description: |
+    i122 brick 1: the boot-a-record primitive. bdos_boot_record HRECORD-selects a record then fires ALHK (hook 136, &88) to auto-load + run that record's AUTO file — the B-DOS BOOT "DOS resident" branch (KEYBOARD_BOOT_WORKAROUND.md §2: RST 8 / DEFB ALHK) / HAUTO (bdos15a.src.txt:463). ALHK modelled in BDOSStore symmetric to the existing hooks (Boots() accessor); host-verified via the real RST 8 dispatch (TestBDOSBootRecord). ALHK never returns on hardware (boots into the AUTO file); SD-boot dispatch hardware-gated like HSAVE (CLAUDE.md §5). Unblocks i122c.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 480, role: completing}
+  parent: i122
+  refs: [src/netboot/bdos_seam.asm, tools/netboot-oracle/z80/bdos_store.go, "reference/bdos/bdos15a.src.txt:463", i122]
+
+- id: i122b
+  title: "Raw-record streaming write: i99 streaming sink -> HWSAD into one 819200-byte record"
+  description: |
+    i122 brick 2: wire the i99 streaming sink to flush a fetched disk image into one raw Trinity record via i114c's HWSAD seam (bdos_write_record). The 819200-byte image far exceeds one STAGING buffer, so it must stream sector-by-sector as it arrives rather than buffer-then-save. Builds on i99 (bounded flush window) + i114c (HWSAD write seam). Host-verifiable via the BDOSStore SectorWrites capture; real SD write dispatch hardware-gated like HSAVE. Unblocks i122c.
+  status: OPEN
+  depends_on: [i114c, i99]
+  kind: leaf
+  owner: agent
+  parent: i122
+  refs: [src/netboot/bdos_seam.asm, src/netboot/body_sink.asm, tools/netboot-oracle/z80/bdos_store.go, i122]
+
+- id: i122c
+  title: "Fetch->validate->raw-write->boot orchestration entry + harness E2E"
+  description: |
+    i122 brick 3: the integration entry that ties the bricks together — TFTP-fetch a named disk image (i82 receive loop), validate it as a raw Trinity disk record (i114c bdos_validate_disk_record: size==819200 AND BDOS stamp@232, reject on mismatch), stream-write it into a record (i122b), then ALHK-boot it (i122a). Plus a harness E2E test driving the whole path. No control return on success. Real SD write + boot dispatch hardware-gated; orchestration + validation host-verifiable.
+  status: OPEN
+  depends_on: [i122a, i122b]
+  kind: leaf
+  owner: agent
+  parent: i122
+  refs: [src/netboot/netboot_client.asm, docs/notes/netboot-trinity-testing.md, i122]
+
+- id: i122d
+  title: "sha256-dedup-before-fetch: skip fetch + boot existing copy if content hash already on card"
+  description: |
+    i122 brick 4: idempotent fetch. Before fetching, compute the image's content SHA-256, derive its record name via i114d (content-addressed lookup), and check the on-card record list (i119 list-read path) — if a record with that content already exists, skip the fetch and boot the existing copy (i122a). Closes the i122 design note (b). Builds on i114d naming + the i119 list-read. Host-verifiable; real boot hardware-gated.
+  status: OPEN
+  depends_on: [i114d, i122c]
+  kind: leaf
+  owner: agent
+  parent: i122
+  refs: [tools/netboot-oracle/z80/sha256.asm, src/netboot/fw_span.asm, i122]
 
 - id: i123
   title: Investigate migrating the build from make to tup

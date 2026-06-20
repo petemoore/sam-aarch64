@@ -44,6 +44,7 @@ const (
 	rst8HookAddr = 0x0008 // the RST 8 vector the SAMDOS/B-DOS hooks dispatch through
 
 	bdHookHRECORD  = 0x9C // record select (156)
+	bdHookALHK     = 136  // auto-load hook (0x88): load+run the selected drive/record's AUTO file (bdos15a.src.txt:463 HAUTO; KEYBOARD_BOOT_WORKAROUND.md §2 BOOT D8DCH)
 	bdHookHGTHD    = 129  // get file header (lookup by name) — server-side, not modelled here
 	bdHookHSAVE    = 132  // save whole file
 	bdHookHWSAD    = 149  // write raw 512-byte sector at (D=track, E=sector) from HL (bdos15a.src.txt:528-531)
@@ -253,6 +254,7 @@ type BDOSStore struct {
 	selected     int           // last HRECORD selection; -1 = none selected yet
 	saves        []BDOSSave    // captured HSAVEs, in order
 	sectorWrites []SectorWrite // captured HWSAD writes, in order
+	boots        []int         // records ALHK-booted, in order (the i122a boot-a-record primitive)
 	card         *CardModel    // nil = no card modelled; HRSAD returns all-zero
 }
 
@@ -269,6 +271,12 @@ func (s *BDOSStore) Saves() []BDOSSave { return s.saves }
 // Each entry carries the record that was selected when the write ran, the
 // linear sector index (track*10 + (sector-1)), and the 512 bytes written.
 func (s *BDOSStore) SectorWrites() []SectorWrite { return s.sectorWrites }
+
+// Boots returns the records ALHK-booted, in order — each is the record that was
+// HRECORD-selected when the auto-load hook fired. On real hardware ALHK never
+// returns (it loads + runs the record's AUTO file); the harness models the boot
+// as a captured event so fetch-and-boot tests can assert which record booted.
+func (s *BDOSStore) Boots() []int { return s.boots }
 
 // AttachCard sets the card model the store uses for HRSAD reads. A nil card
 // means HRSAD returns all-zero (no card present). Call before running Z80 code.
@@ -292,6 +300,15 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		if cpu.AF.Hi == 0 {
 			s.selected = int(cpu.HL.U16())
 		}
+	case bdHookALHK:
+		// ALHK (auto-load hook): load + run the AUTO file on the currently-
+		// selected drive/record (bdos15a.src.txt:463 HAUTO). On real hardware
+		// this never returns — it boots into the loaded image (the BOOT routine's
+		// "DOS resident" branch, KEYBOARD_BOOT_WORKAROUND.md §2: RST 8 / DB ALHK).
+		// The harness captures the boot as an event against the selected record
+		// and returns (retAddr+1) so the test's CallEntry resumes normally; this
+		// models the digital dispatch, not a real boot. The honesty line holds.
+		s.boots = append(s.boots, s.selected)
 	case bdHookHSAVE:
 		// HSAVE reads the 48-byte UIFA at IX (bdos_save_hook set IX=&4B00).
 		ix := cpu.IX

@@ -345,6 +345,7 @@ bvdr_fail:
 BD_UIFA_ADDR:     equ &4B00              ; the SAMDOS UIFA buffer (real address)
 BD_DIFA_ADDR:     equ &4B50              ; SAMDOS deposits the DIFA here
 BD_HOOK_HRECORD:  equ &9C                ; B-DOS record select (156)
+BD_HOOK_ALHK:     equ 136                ; auto-load hook (&88): load+run the record's AUTO file
 BD_HOOK_HGTHD:    equ 129                ; get file header (find by name)
 BD_HOOK_HSAVE:    equ 132                ; save whole file
 BD_HOOK_HRSAD:    equ 160                ; read raw 512-byte sector (HRSAD)
@@ -673,6 +674,31 @@ bwr_divdone:
                 dec     bc                      ; one fewer sector to write
                 jr      bwr_loop
 
+; ---------------------------------------------------------------------------
+; bdos_boot_record — the i122a boot-a-record primitive: HRECORD-select a record,
+; then fire ALHK (hook 136) to load + run that record's AUTO file. This is the
+; B-DOS BOOT routine's "DOS resident" branch (KEYBOARD_BOOT_WORKAROUND.md §2:
+; RST 8 / DEFB ALHK at D8DCH) and B-DOS HAUTO (bdos15a.src.txt:463), which loads
+; the AUTO file from the currently-selected drive/record and runs it.
+;
+; In:  BD_BOOT_RECORD  1 byte  the record number to select and boot (0 = floppy).
+;
+; ALHK does NOT return on real hardware — it boots into the loaded AUTO file, so
+; control never reaches the `ret` below. The harness models the boot as a
+; captured event (bdos_store.go bdHookALHK case) and returns retAddr+1, so the
+; `ret` resumes for the host test; the ret is harness-only / defensive.
+;
+; Hardware-gated like the other RST 8 hooks: the real auto-load + boot routes
+; through the B-DOS loader and the Trinity SD driver and stays unverified until
+; exercised on real Trinity hardware (CLAUDE.md §5). Emulation-verified is not
+; hardware-verified.
+bdos_boot_record:
+                ld      a, (BD_BOOT_RECORD)
+                call    bdos_select_record      ; HRECORD: select the record (A = record)
+                rst     8
+                defb    BD_HOOK_ALHK            ; auto-load + run the record's AUTO file
+                ret                             ; harness-only: ALHK never returns on hardware
+
                 endif
 
 ; ===========================================================================
@@ -712,3 +738,6 @@ BD_WRITE_BUF:     defs 512              ; bdos_write_sector: source data (512 by
 
 BD_WRITE_START:   defs 2                 ; bdos_write_record: starting linear sector (0-based)
 BD_WRITE_COUNT:   defs 2                 ; bdos_write_record: number of sectors to write
+
+; --- i122a boot-a-record primitive --------------------------------------------
+BD_BOOT_RECORD:   defs 1                 ; bdos_boot_record: record to select + ALHK-boot
