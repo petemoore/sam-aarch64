@@ -191,12 +191,14 @@
   refs: [src/insn_run.asm, src/slots/shifted_reg.asm, tools/sam-aarch64/assemble/pass2.go, "CLAUDE.md §6"]
 
 - id: i16
-  title: Replace cls test instruction with a real spectrum4 one
+  title: "Drop synthetic cls test instruction (resolved by PR #26)"
   description: |
-    The cls instruction used in the test fixture is synthetic/placeholder; replace it with a real spectrum4 instruction. Tracked in the ROADMAP deferred checklist. (Note: id was tentatively i13 in conversation but locked as i16 to match shipped PR #107.)
-  status: OPEN
+    RESOLVED by PR #26 (merged 2026-05-27, commit 20ef1aa), which already closed the same ROADMAP deferred-checklist item this row tracks. The synthetic/placeholder cls was DROPPED ENTIRELY — from the inst_alu_single fixture and from MnemonicTable + manual_forms.go + data.go + every pass2 dispatch site — rather than replaced with a real instruction (Pete's call: "until we have a .tbn in the wild, no need to restrict ourselves"; cls was unused). That supersedes this row's original "replace it with a real spectrum4 one" framing while fully meeting its intent: zero cls instructions remain in any fixture or table (verified 2026-06-21). This row was created later (the i13->i16 renumbering era) to track work that PR #26 had already completed; closing it as stale-but-done.
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 26, role: completing}
   refs: [docs/ROADMAP.md]
 
 - id: i17
