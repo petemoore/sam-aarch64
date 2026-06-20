@@ -2102,6 +2102,7 @@
   description: |
     Pete's PRIMARY netboot use case: boot SAM, 'tftp put' a disk image from the Mac, the SAM writes it to the next free Trinity record, then boot+test immediately. A standard TFTP server handles both RRQ (serve-out) and WRQ (accept-in), so this combines with the existing i83/i95 serve-out server into one program. Reuses the i82 receive loop (DATA accumulate + ACK) + i119 storage write-out; adds WRQ parsing + server-side OACK/ACK-0 (the i83/i95 server already builds OACKs for serve-out) + auto-slot allocation (i114 manifest / highest-free strategy).
   status: OPEN
+  depends_on: [q30]
   kind: leaf
   owner: agent
   refs: [src/netboot/, tools/netboot-oracle/tftp/, i82, i83, i95, i114, i119, i70]
