@@ -112,6 +112,15 @@
     - {num: 110, role: completing}
   refs: [docs/notes/a64-isa-footprint-research.md]
 
+- id: i12
+  title: SimCoupé + test-harness tooling improvements
+  description: |
+    Umbrella for SimCoupé emulator + editor-test-harness tooling improvements (version bumps, paste support, automated-editor input injection). Created 2026-06-20 (i153) so the i12a/b/c sub-items have their required umbrella parent — the children predate the parent-integrity rule.
+  status: OPEN
+  kind: umbrella
+  owner: agent
+  refs: [tools/Dockerfile.dev]
+
 - id: i12a
   title: "SimCoupé v1.2.16 bump (pin SHA to upstream, drop vendored -exitonhalt patch)"
   description: ""
@@ -120,6 +129,7 @@
   owner: agent
   prs:
     - {num: 112, role: completing}
+  parent: i12
   refs: [tools/Dockerfile.dev]
 
 - id: i12b
@@ -129,6 +139,7 @@
   status: OPEN
   kind: leaf
   owner: agent
+  parent: i12
   refs: [tools/run-simcoupe.sh]
 
 - id: i12c
@@ -140,6 +151,7 @@
   owner: agent
   prs:
     - {num: 112, role: completing}
+  parent: i12
   refs: [~/.claude/.../memory/project_simcoupe_sdl_paste_branch.md]
 
 - id: i13
@@ -420,6 +432,7 @@
   status: OPEN
   kind: leaf
   owner: agent
+  parent: i48c
   refs: ["docs/specs/i48-syntactic-encoder-design.md §3.1", docs/notes/m9-status.md, i48c, i48c-b7]
 
 - id: i40
@@ -1755,6 +1768,15 @@
   owner: agent
   refs: [i88, i70, "docs/specs/tls13-handshake.md §Prior art"]
 
+- id: i107
+  title: Registry status-cell discipline (process rule + retroactive sweep)
+  description: |
+    Umbrella for the status-cell discipline work: the go-forward process rule (i107a) and the retroactive sweep splitting over-long rows into sub-items (i107b). Created 2026-06-20 (i153) so i107a/b have their required umbrella parent — the children predate the parent-integrity rule.
+  status: DONE
+  kind: umbrella
+  owner: agent
+  refs: [CLAUDE.md, i105]
+
 - id: i107a
   title: Status-discipline process rule (go-forward codification)
   description: |
@@ -1764,6 +1786,7 @@
   owner: pete
   prs:
     - {num: 347, role: completing}
+  parent: i107
   refs: [docs/notes/item-registry-open.md, CLAUDE.md, i105, i107b]
 
 - id: i107b
@@ -1775,6 +1798,7 @@
   owner: agent
   prs:
     - {num: 351, role: completing}
+  parent: i107
   refs: [i107a, i108]
 
 - id: i108
@@ -2022,7 +2046,7 @@
   description: |
     Starter framework/template so a new project inherits: autonomous-loop monitor (i97), split iN/qN registries + controlled-status discipline (i115 validator), §3 pre-merge review gate, per-session retro (i104), prime-directive verification ethos, brick + Go-authority-oracle loop, delegate-to-subagents context discipline, and doc-lifecycle + single-source-of-truth rules. Must be self-contained (portable out of Pete's ~/.claude/CLAUDE.md). Delivery options: template repo / init scaffold or Claude Code plugin. Scope + sequencing + packaging are Pete's call; do not auto-pick-up.
   status: OPEN
-  kind: leaf
+  kind: umbrella
   owner: pete
   refs: [i97, i104, i115]
 
@@ -2536,3 +2560,23 @@
   kind: leaf
   owner: agent
   refs: [src/netboot/bdos_seam.asm, reference/bdos/bdos15a.src.txt, i119, i114c]
+
+- id: i153
+  title: "Registry CLI/model hardening: atomic tool-determined ids + blocked-on-Pete backlog marking + parent/orphan invariants"
+  description: |
+    Pete-requested registry tooling (2026-06-20). (1) backlog.md: drop rank col; add 'gate' col (ready / in-progress / blocked-on-Pete qN / blocked-on-work iN). (2) Atomic tool-determined ids: 'add' auto iN (+--space); 'split' auto child-id (iN->iNa, iNx->iNx-b1)+full fields; drop next-id+custom --id. (3) Multi IN_PROGRESS allowed; 'ready' EXCLUDES IN_PROGRESS; new 'in-progress' list cmd. (4) Invariants+tests: parent exists+umbrella, sub-id needs parent, no cycles, regexp conformance, exhaustion forbid>26. (5) Orphans: i12/i107 umbrellas, i39c->i48c, i117->umbrella.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 481, role: completing}
+
+- id: i154
+  title: Codify 'track-on-request' discipline + parallel-IN_PROGRESS session ledger
+  description: |
+    Strengthen handover rule 1 from PR-time to REQUEST-time + embrace parallel IN_PROGRESS. When work is well-defined AND signed off, the agent creates the item LOCALLY (committed; no PR dance to capture), marks it IN_PROGRESS, and confirms to Pete ("logged as iNNNN, IN_PROGRESS, working"). Many asks/session => many IN_PROGRESS — a feature: registry = session completeness ledger. Wind-down: query IN_PROGRESS; each ends DONE or splits into done/not-done (untouched -> OPEN), so real partial state is captured + no ask lost in chat noise. Lands in CLAUDE.md + ROADMAP. Earned 2026-06-20.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 481, role: completing}

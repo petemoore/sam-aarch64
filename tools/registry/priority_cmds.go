@@ -83,6 +83,9 @@ func runReady(args []string, paths mutatorPaths) {
 			if !pullable[id] {
 				continue
 			}
+			if it.Status == StatusInProgress {
+				continue // already being worked — `ready` returns NEW pullable work (see `in-progress`)
+			}
 			if allDepsSatisfied(it) {
 				fmt.Println(id)
 			}
@@ -96,7 +99,45 @@ func runReady(args []string, paths mutatorPaths) {
 		if !pullable[it.ID] {
 			continue
 		}
+		if it.Status == StatusInProgress {
+			continue // already being worked — see `in-progress`
+		}
 		if allDepsSatisfied(it) {
+			fmt.Println(it.ID)
+		}
+	}
+}
+
+// runInProgress implements `in-progress`: prints the ids of all items currently
+// marked IN_PROGRESS, in priority order (canonical sort order when no priority
+// list exists). This is the session completeness ledger — at wind-down the agent
+// lists it and ensures every entry ends DONE or is split into done/not-done
+// parts, so no signed-off ask is lost in the chat scroll (i154).
+func runInProgress(args []string, paths mutatorPaths) {
+	_ = args // in-progress takes no flags
+	reg, err := loadReg(paths)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	if len(reg.Priority) > 0 {
+		byID := map[string]Item{}
+		for _, it := range reg.Items {
+			byID[it.ID] = it
+		}
+		// Priority covers pullable items; an IN_PROGRESS umbrella can't exist
+		// (umbrellas carry derived status), so priority order suffices.
+		for _, id := range reg.Priority {
+			if it, ok := byID[id]; ok && it.Status == StatusInProgress {
+				fmt.Println(id)
+			}
+		}
+		return
+	}
+
+	for _, it := range sortedItems(reg.Items) {
+		if it.Status == StatusInProgress {
 			fmt.Println(it.ID)
 		}
 	}

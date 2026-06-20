@@ -16,6 +16,10 @@ import (
 //	i<N><letter>-b<M><letter>  brick part           e.g. i48c-b5a
 var itemIDRe = regexp.MustCompile(`^i[0-9]+[a-z]?(-b[0-9]+[a-z]?)?$`)
 
+// topLevelItemIDRe matches a bare top-level item id (i<N>, no sub-suffix). An id
+// matching itemIDRe but NOT this is "sub-shaped" — it must declare a parent.
+var topLevelItemIDRe = regexp.MustCompile(`^i[0-9]+$`)
+
 // questionIDRe matches the question id grammar: q<N> or q<N><letter>.
 var questionIDRe = regexp.MustCompile(`^q[0-9]+[a-z]?$`)
 
@@ -304,6 +308,53 @@ func validateWith(reg *Registry, opts validateOpts) *ValidationError {
 			if childStatus != StatusDone && childStatus != StatusWontfix {
 				ve.add(it.ID, fmt.Sprintf("umbrella marked DONE but child %s is %s", childID, childStatus))
 			}
+		}
+	}
+
+	// Invariant 14 (parent integrity): a declared parent must exist and be an
+	// umbrella; a sub-shaped id (a letter and/or -bN suffix) must declare a
+	// parent; the parent chain must be acyclic. The CLI's split path always
+	// produces conforming structure; this catches HAND-EDITS that bypass it —
+	// a floating sub-id (e.g. i44a with no parent), a parent: pointing at a leaf
+	// or a missing id, or a parent loop.
+	kindByID := map[string]string{}
+	for _, it := range reg.Items {
+		kindByID[it.ID] = it.Kind
+	}
+	for _, it := range reg.Items {
+		// 14a: parent (if set) exists and is an umbrella.
+		if it.Parent != "" {
+			if _, ok := itemStatus[it.Parent]; !ok {
+				ve.add(it.ID, fmt.Sprintf("parent %q does not exist in the registry", it.Parent))
+			} else if kindByID[it.Parent] != "umbrella" {
+				ve.add(it.ID, fmt.Sprintf("parent %q is not an umbrella (an item with children must be kind:umbrella)", it.Parent))
+			}
+		}
+		// 14b: a sub-shaped id must declare a parent (catches floating sub-ids).
+		if itemIDRe.MatchString(it.ID) && !topLevelItemIDRe.MatchString(it.ID) && it.Parent == "" {
+			ve.add(it.ID, "sub-shaped id (letter/-bN suffix) must declare a parent: field (every non-top-level id is a child of an umbrella)")
+		}
+	}
+	// 14c: parent chain acyclic.
+	parentOf := map[string]string{}
+	for _, it := range reg.Items {
+		if it.Parent != "" {
+			parentOf[it.ID] = it.Parent
+		}
+	}
+	for _, it := range reg.Items {
+		seen := map[string]bool{it.ID: true}
+		for cur := it.ID; ; {
+			p, ok := parentOf[cur]
+			if !ok {
+				break
+			}
+			if seen[p] {
+				ve.add(it.ID, fmt.Sprintf("parent cycle detected via %q", p))
+				break
+			}
+			seen[p] = true
+			cur = p
 		}
 	}
 
