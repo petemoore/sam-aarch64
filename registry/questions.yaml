@@ -41,3 +41,8 @@
   body: |
     Resume the postponed i190 shared-emulation-core strand now, to unblock SAMBOOT? Pete postponed i190 (one shared koron-z80 SAM-emulation core) + i190a (load the real patched ROM + Trinity EEPROM into that core for authentic emulation) on 2026-06-21, and i190's framing is explicitly 'post-SAMBOOT'. But i197c (this session) found the captured-bootblock RE cannot be finalised statically — resolving the &0000-bootblock-vs-&2000-ROM-load contradiction (samboot-bootblock-analysis.md §7.4) needs the real boot traced in a faithful emulator, which IS i190a. So i190a is now the gating prerequisite for SAMBOOT's i197c -> i135c (the EEPROM-flash crux). DECISION: (a) bring i190a forward now (agent builds it; it serves SAMBOOT and is reusable), or (b) keep i190/i190a postponed and park SAMBOOT's hook-finalisation (i197c/i135c) until Pete resumes the strand. i190a depends only on DONE work (i87a-b2), so it is agent-actionable the moment Pete says go.
   owner: pete
+
+- id: q42
+  body: |
+    Extract SpectrumFourLayout (a -layout flag or linker-script parser) now? i56 is explicitly deferred — 'not worth doing unless a second project surfaces' — and flagged a Pete-gated call (from the retired ROADMAP deferred checklist, i52 PR 3). It is agent-doable once you say go, but the DECISION (is there now a second project / is the abstraction worth building speculatively?) is yours. i20 depends on i56, so both wait on this. Answer to either: (a) go — a second project has surfaced / build it speculatively (un-gate i56, agent implements), or (b) keep deferred (i56 stays parked behind this gate).
+  owner: pete

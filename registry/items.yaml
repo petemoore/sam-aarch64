@@ -751,9 +751,11 @@
   title: "movl pseudo (movz+movk expansion / :abs_g0_nc:+:abs_g1:)"
   description: |
     Implement the movl pseudo-instruction: expands to movz+movk pair; handles :abs_g0_nc: and :abs_g1: reloc operands.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 547, role: completing}
   parent: i48c
   refs: [src/asmparse.asm, tools/sam-aarch64/frontend/parser.go]
 
@@ -824,6 +826,7 @@
   description: |
     Wire the completed text→overlay encoder into the full assembler path and verify end-to-end fixture round-trips. Assembler-coupled (like i41d Brick 4b); depends on B1–B7 being complete. Lands last in the i48c sequence.
   status: OPEN
+  depends_on: [i48c-b5b, i48c-b5c, i48c-b5d, i48c-b5e, i48c-b5f, i48c-b6]
   kind: leaf
   owner: agent
   parent: i48c
@@ -914,6 +917,7 @@
   description: |
     Not worth doing unless a second project surfaces. SpectrumFourLayout extraction via -layout flag or linker-script parser is a Pete-gated call; deferred. From ROADMAP deferred checklist (retired in i52 PR 3).
   status: OPEN
+  depends_on: [q42]
   kind: leaf
   owner: agent
 

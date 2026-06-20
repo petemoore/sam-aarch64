@@ -292,6 +292,8 @@ parse_inst:
                 jp      z, parse_movk
                 cp      MNEM_MOVN
                 jp      z, parse_movk
+                cp      MNEM_MOVL
+                jp      z, parse_movl       ; B5b: movl pseudo (movz+movk expansion)
 pi_loop:
                 ld      hl, (PARSE_TOK)
                 ld      a, (hl)
@@ -542,6 +544,192 @@ movk_tok_is_lsl:
 mtil_no:
                 scf
                 ret
+
+; ===========================================================================
+; parse_movl — B5b special-form parse for the spectrum4 `movl Rd, #imm32`
+; pseudo-instruction. (Port of parseMovl, parser.go:741-836.) It expands to one
+; or two real instructions:
+;   constant case (imm folds to a literal): lo16 = imm&0xffff, hi16 = (imm>>16)&0xffff
+;     - lo16==0 && hi16!=0 : a single MOVZ Rd,#((1<<16)|hi16)
+;     - otherwise          : MOVZ Rd,#lo16  [+ MOVK Rd,#((1<<16)|hi16) if hi16!=0]
+;   symbolic case:
+;       mov  Rd, :abs_g0_nc:expr   (MOVZ low16, no-carry)
+;       movk Rd, (1<<16)|:abs_g1:expr   (bits 31:16, lsl #16)
+; The first emitted record carries mnemonic id MNEM_MOV (the encoder treats a
+; 2-operand `mov Rd,#imm` as MOVZ); the second carries MNEM_MOVK. hw is folded
+; into bits[17:16] of the emitted immediate (same convention as parse_movk). The
+; saved immExpr / its length reuse the parse_movk scratch (MOVK_IMMEXPR/_IMMLEN) —
+; movk and movl never parse concurrently. Entry (from parse_inst dispatch):
+; PI_MNEMID=movl, PI_OPSPTR=PARSE_OPSBUF, PI_COUNT=0, mnemonic consumed. Exit: 1 or
+; 2 INST records emitted (CY clear); on error jumps pi_err.
+; ===========================================================================
+parse_movl:
+                ; Operand 1: destination register -> PARSE_OPSBUF[0..1] = [kind,reg].
+                call    parse_operand
+                jp      c, pi_err
+                ld      hl, PARSE_OPSBUF
+                ld      a, (hl)
+                ld      (MOVL_RDKIND), a
+                inc     hl
+                ld      a, (hl)
+                ld      (MOVL_RDREG), a
+                ; Expect ',' after the register.
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_COMMA
+                jp      nz, pi_err
+                call    parse_advance_tok
+                ; Operand 2: value expression -> EXPR_BUF, folded.
+                ld      hl, EXPR_BUF
+                ld      (EXPR_PTR), hl
+                xor     a                   ; minPrec = 0
+                call    parse_expr_prec
+                jp      c, pi_err
+                call    expr_fold
+                ; Save the folded immExpr bytecode (the symbolic rebuild reuses it).
+                ld      hl, (EXPR_PTR)
+                ld      de, EXPR_BUF
+                or      a
+                sbc     hl, de
+                ld      (MOVK_IMMLEN), hl
+                ld      b, h
+                ld      c, l
+                ld      hl, EXPR_BUF
+                ld      de, MOVK_IMMEXPR
+                ld      a, b
+                or      c
+                jr      z, pml_saved
+                ldir
+pml_saved:
+                ; Constant or symbolic?
+                call    expr_buf_single_imm
+                jp      c, pml_symbolic
+                ; --- Constant case: split the folded literal into lo16/hi16. -----
+                ; Faithful to the Go: no 32-bit range check; bits above 32 dropped.
+                ld      a, (IMM_VAL)
+                ld      (MOVL_LO16), a
+                ld      a, (IMM_VAL+1)
+                ld      (MOVL_LO16+1), a
+                ld      a, (IMM_VAL+2)
+                ld      (MOVL_HI16), a
+                ld      a, (IMM_VAL+3)
+                ld      (MOVL_HI16+1), a
+                ; hi16 == 0 ?
+                ld      a, (MOVL_HI16)
+                ld      hl, MOVL_HI16+1
+                or      (hl)
+                jr      z, pml_const_lo_only   ; hi16==0 -> single MOVZ #lo16
+                ; hi16 != 0. lo16 == 0 ?
+                ld      a, (MOVL_LO16)
+                ld      hl, MOVL_LO16+1
+                or      (hl)
+                jr      nz, pml_const_both     ; lo16!=0 && hi16!=0
+                ; lo16==0 && hi16!=0 -> single MOVZ Rd,#((1<<16)|hi16).
+                ld      a, 1                   ; hw = 1
+                ld      hl, MOVL_HI16
+                ld      e, MNEM_MOV
+                call    pml_emit_const
+                jp      pml_done
+pml_const_lo_only:
+                ; MOVZ Rd, #lo16 (hw=0), only.
+                xor     a                      ; hw = 0
+                ld      hl, MOVL_LO16
+                ld      e, MNEM_MOV
+                call    pml_emit_const
+                jp      pml_done
+pml_const_both:
+                ; MOVZ Rd, #lo16 (hw=0).
+                xor     a
+                ld      hl, MOVL_LO16
+                ld      e, MNEM_MOV
+                call    pml_emit_const
+                ; MOVK Rd, #((1<<16)|hi16) (hw=1).
+                ld      a, 1
+                ld      hl, MOVL_HI16
+                ld      e, MNEM_MOVK
+                call    pml_emit_const
+                jp      pml_done
+pml_symbolic:
+                ; inst1: MOV(Z) Rd, [immExpr ; OpRelAbsG0NC].
+                call    pml_begin_ops
+                ld      hl, EXPR_BUF
+                ld      (EXPR_PTR), hl
+                ld      hl, MOVK_IMMEXPR
+                ld      bc, (MOVK_IMMLEN)
+                call    expr_append_raw
+                ld      a, EXPR_REL_ABS_G0NC
+                call    expr_emit_byte
+                call    emit_imm_expr_operand
+                ld      hl, MNEM_MOV
+                call    pml_emit_inst
+                ; inst2: MOVK Rd, (1<<16) | (:abs_g1:immExpr).
+                call    pml_begin_ops
+                ld      hl, EXPR_BUF
+                ld      (EXPR_PTR), hl
+                call    movk_set_immval_zero
+                ld      a, 1
+                ld      (IMM_VAL+2), a         ; value = 1<<16 (hw=1 marker)
+                call    expr_emit_imm_from_immval
+                ld      hl, MOVK_IMMEXPR
+                ld      bc, (MOVK_IMMLEN)
+                call    expr_append_raw
+                ld      a, EXPR_REL_ABS_G1
+                call    expr_emit_byte
+                ld      a, EXPR_OP_OR
+                call    expr_emit_byte
+                call    emit_imm_expr_operand
+                ld      hl, MNEM_MOVK
+                call    pml_emit_inst
+pml_done:
+                or      a                       ; CY clear: success
+                ret
+
+; pml_emit_const — emit one constant MOV(Z)/MOVK inst: Rd, value=(hw<<16)|imm16.
+; In: A = hw (0/1); HL -> 2-byte LE imm16; E = mnemonic id (MNEM_MOV / MNEM_MOVK).
+pml_emit_const:
+                ld      (MOVL_HW), a
+                ld      (MOVL_TMPPTR), hl
+                ld      a, e
+                ld      (MOVL_TMPMNEM), a
+                call    pml_begin_ops          ; reset PI_OPSPTR + write Rd operand
+                ld      hl, EXPR_BUF
+                ld      (EXPR_PTR), hl
+                call    movk_set_immval_zero
+                ld      hl, (MOVL_TMPPTR)
+                ld      a, (hl)
+                ld      (IMM_VAL), a            ; byte0 = imm16 low
+                inc     hl
+                ld      a, (hl)
+                ld      (IMM_VAL+1), a          ; byte1 = imm16 high
+                ld      a, (MOVL_HW)
+                ld      (IMM_VAL+2), a          ; byte2 = hw  (value = (hw<<16)|imm16)
+                call    expr_emit_imm_from_immval
+                call    emit_imm_expr_operand
+                ld      a, (MOVL_TMPMNEM)
+                ld      l, a
+                ld      h, 0
+                jp      pml_emit_inst           ; tail (returns to caller)
+
+; pml_begin_ops — reset PI_OPSPTR to PARSE_OPSBUF and write the saved Rd register
+; operand [kind,reg], leaving PI_OPSPTR after it. Clobbers A/HL.
+pml_begin_ops:
+                ld      hl, PARSE_OPSBUF
+                ld      a, (MOVL_RDKIND)
+                ld      (hl), a
+                inc     hl
+                ld      a, (MOVL_RDREG)
+                ld      (hl), a
+                inc     hl
+                ld      (PI_OPSPTR), hl
+                ret
+
+; pml_emit_inst — set PI_MNEMID=HL, PI_COUNT=2, emit one INST record. Tail-jumps
+; parse_emit_inst (returns to caller). Clobbers regs.
+pml_emit_inst:
+                ld      (PI_MNEMID), hl
+                ld      a, 2
+                ld      (PI_COUNT), a
+                jp      parse_emit_inst
 
 ; ===========================================================================
 ; expr_buf_single_imm — if EXPR_BUF..(EXPR_PTR) holds exactly one PUSH_IMMn (the
@@ -3196,7 +3384,14 @@ MOVK_ISCONST:   defs 1          ; parse_movk: 1 if the immediate folded to a con
 MOVK_IMM:       defs 8          ; parse_movk: saved constant immediate (LE int64)
 MOVK_HW:        defs 1          ; parse_movk: lsl-slot index hw (0/1/2/3)
 MOVK_IMMLEN:    defs 2          ; parse_movk: saved immExpr bytecode length
-MOVK_IMMEXPR:   defs 256        ; parse_movk: saved immExpr bytecode (symbolic rebuild)
+MOVK_IMMEXPR:   defs 256        ; parse_movk/movl: saved immExpr bytecode (symbolic rebuild)
+MOVL_RDKIND:    defs 1          ; parse_movl: destination register kind (re-emitted per expanded inst)
+MOVL_RDREG:     defs 1          ; parse_movl: destination register index
+MOVL_LO16:      defs 2          ; parse_movl: imm&0xffff (LE)
+MOVL_HI16:      defs 2          ; parse_movl: (imm>>16)&0xffff (LE)
+MOVL_HW:        defs 1          ; parse_movl: hw slot for the inst being emitted (0/1)
+MOVL_TMPPTR:    defs 2          ; parse_movl: imm16 source ptr saved across pml_begin_ops
+MOVL_TMPMNEM:   defs 1          ; parse_movl: mnemonic id saved across the operand build
 PARSE_OPSBUF:   defs 256        ; one instruction's operand bytes (staging)
 EXPR_BUF:       defs 256        ; one operand's expression bytecode (build buffer)
 EXPR_PTR:       defs 2          ; expression-bytecode write pointer (into EXPR_BUF)
