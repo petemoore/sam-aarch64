@@ -133,6 +133,39 @@ sdc_set_crc:
 ; DI, bracketed &04..&04.
 ; ===========================================================================
 csd_read_into_stage:
+                call    sdc_init_ladder        ; wake + CMD0/8/41/58/59; card selected
+                ; CMD9 SEND_CSD: poll for the &FE token, read 16 CSD + 2 CRC
+                ld      a, &49
+                call    sdc_cmd0arg
+                ld      b, 0
+csdr_tok_poll:
+                call    sdc_in
+                cp      SDC_DATATOK
+                jr      z, csdr_tok_found
+                djnz    csdr_tok_poll
+                scf                             ; no token -> read failure
+                jp      sdc_deselect
+csdr_tok_found:
+                ld      hl, CSD_STAGE
+                ld      b, 16
+csdr_read_loop:
+                call    sdc_in
+                ld      (hl), a
+                inc     hl
+                djnz    csdr_read_loop
+                call    sdc_in                  ; 2 CRC bytes (discard)
+                call    sdc_in
+                or      a                       ; CY clear: success
+                jp      sdc_deselect
+
+; ===========================================================================
+; sdc_init_ladder — DI, wake the microcontroller (&38 + &FF settle poll), then run
+; the standalone init ladder CMD0/8/55+ACMD41/58/59. Leaves the card SELECTED and
+; ready for a data command (CMD9 SEND_CSD or CMD17 READ_SINGLE_BLOCK). The caller
+; issues its data command, then sdc_deselect undoes the select + EI. Every loop is
+; bounded so a missing/odd card cannot wedge the boot. Clobbers AF/BC/DE/HL.
+; ===========================================================================
+sdc_init_ladder:
                 di
                 ld      a, SDC_NULLOFF
                 out     (SDC_PORT), a
@@ -144,12 +177,12 @@ csd_read_into_stage:
                 ld      a, SDC_SEL
                 out     (SDC_PORT), a
                 ld      b, 0
-csdr_wake_poll:
+sdil_wake_poll:
                 call    sdc_in
                 inc     a                       ; &FF -> 0 (Z) when settled
-                jr      z, csdr_wake_done
-                djnz    csdr_wake_poll
-csdr_wake_done:
+                jr      z, sdil_wake_done
+                djnz    sdil_wake_poll
+sdil_wake_done:
                 ; CMD0 GO_IDLE_STATE (CRC &95)
                 ld      a, &95
                 call    sdc_set_crc
@@ -163,17 +196,17 @@ csdr_wake_done:
                 ld      a, &48
                 call    sdc_cmd
                 bit     2, a                    ; illegal-command (v1)?
-                jr      nz, csdr_after_cmd8
+                jr      nz, sdil_after_cmd8
                 call    sdc_in                  ; consume the 4 R7 bytes
                 call    sdc_in
                 call    sdc_in
                 call    sdc_in
-csdr_after_cmd8:
+sdil_after_cmd8:
                 ; CMD55 + ACMD41 (HCS) until R1 == 0
                 ld      a, &FF
                 call    sdc_set_crc
                 ld      b, 0
-csdr_acmd41_loop:
+sdil_acmd41_loop:
                 push    bc
                 ld      a, &77                  ; CMD55 APP_CMD
                 call    sdc_cmd0arg
@@ -183,9 +216,9 @@ csdr_acmd41_loop:
                 call    sdc_cmd
                 pop     bc
                 or      a
-                jr      z, csdr_acmd41_done
-                djnz    csdr_acmd41_loop
-csdr_acmd41_done:
+                jr      z, sdil_acmd41_done
+                djnz    sdil_acmd41_loop
+sdil_acmd41_done:
                 ; CMD58 READ_OCR (4 OCR bytes) — keeps the stream in phase
                 ld      a, &7A
                 call    sdc_cmd0arg
@@ -196,29 +229,13 @@ csdr_acmd41_done:
                 ; CMD59 CRC_ON_OFF
                 ld      a, &7B
                 call    sdc_cmd0arg
-                ; CMD9 SEND_CSD: poll for the &FE token, read 16 CSD + 2 CRC
-                ld      a, &49
-                call    sdc_cmd0arg
-                ld      b, 0
-csdr_tok_poll:
-                call    sdc_in
-                cp      SDC_DATATOK
-                jr      z, csdr_tok_found
-                djnz    csdr_tok_poll
-                scf                             ; no token -> read failure
-                jr      csdr_deselect
-csdr_tok_found:
-                ld      hl, CSD_STAGE
-                ld      b, 16
-csdr_read_loop:
-                call    sdc_in
-                ld      (hl), a
-                inc     hl
-                djnz    csdr_read_loop
-                call    sdc_in                  ; 2 CRC bytes (discard)
-                call    sdc_in
-                or      a                       ; CY clear: success
-csdr_deselect:
+                ret
+
+; ===========================================================================
+; sdc_deselect — deselect the card and EI, preserving the success/failure CY the
+; caller set (push/pop AF brackets the port writes). Tail of every card read.
+; ===========================================================================
+sdc_deselect:
                 push    af                      ; preserve success/failure CY
                 ld      a, SDC_DESEL
                 out     (SDC_PORT), a
@@ -227,6 +244,105 @@ csdr_deselect:
                 ei
                 pop     af
                 ret
+
+; ===========================================================================
+; bd_list_read_hw — the REAL card-absolute list-sector read (i141): the hardware
+; implementation of bdos_read_list_sector's BD_HOOK_LISTREAD model. Reads one
+; 512-byte list sector off the SD card via a raw CMD17 single-block read on the
+; Trinity SPI ports, into BD_LIST_BUF.
+;
+; In:  BD_LIST_SECTOR  1 byte  1-based list-sector number N (card-absolute LBA N:
+;                              sector 0 is the boot block, sectors 1..base-1 hold
+;                              the record list — trinity-record-detection-design.md
+;                              §4.1). The seam only ever passes a 1-byte value.
+; Out: BD_LIST_BUF   512 bytes  the list sector. CY set on read failure (no data
+;                              token); the caller treats a failed read as "no free
+;                              record" the same way a 0 BD_RECORDS does.
+; Clobbers: AF, BC, DE, HL.
+;
+; ADDRESSING. CMD17 carries a 32-bit address: for an SDHC/v2 card (block-addressed)
+; it is the LBA N; for an SDv1 card (byte-addressed) it is N<<9 (the §7 seek <<9).
+; The card class is read from CSD_STAGE[0] (bit7:6 == 01 ⇒ v2), populated by the
+; csd_set_bd_records startup read that also produced BD_RECORDS — so a list read
+; only runs once the CSD has been read.
+;
+; EMULATION. Host-verified under the i145c/i145h SD model (sdcard.go), whose CMD17
+; path streams store[addr] back for the address this frame carries. The standalone
+; init ladder + SPI primitives are the same csd_read_into_stage proves against
+; Colin's real ladder (i145f). Emulation-verified is not hardware-verified
+; (CLAUDE.md §5): the real-Trinity SPI run is the final gate (i141's hardware half).
+; ===========================================================================
+bd_list_read_hw:
+                ; Build the 32-bit LBA (LE) from the 1-byte list-sector number.
+                ld      a, (BD_LIST_SECTOR)
+                ld      (bd_list_lba), a
+                xor     a
+                ld      (bd_list_lba + 1), a
+                ld      (bd_list_lba + 2), a
+                ld      (bd_list_lba + 3), a
+                ; SDv1 (byte-addressed) cards need LBA<<9; SDHC/v2 use the LBA verbatim.
+                ld      a, (CSD_STAGE)
+                and     &C0
+                cp      &40
+                jr      z, bllr_have_lba        ; v2/SDHC: block address, no shift
+                ld      b, 9                    ; v1: bd_list_lba <<= 9
+bllr_shl:
+                ld      hl, bd_list_lba
+                or      a
+                rl      (hl)
+                inc     hl
+                rl      (hl)
+                inc     hl
+                rl      (hl)
+                inc     hl
+                rl      (hl)
+                djnz    bllr_shl
+bllr_have_lba:
+                call    sdc_init_ladder        ; wake + CMD0/8/41/58/59; card selected
+                ; CMD17 READ_SINGLE_BLOCK, arg = bd_list_lba (sent MSB-first by sdc_cmd:
+                ; B=addr[31:24], C=addr[23:16], D=addr[15:8], E=addr[7:0]).
+                ld      a, &FF                  ; CRC don't-care (CRC was turned off by CMD59)
+                call    sdc_set_crc
+                ld      a, (bd_list_lba + 3)
+                ld      b, a
+                ld      a, (bd_list_lba + 2)
+                ld      c, a
+                ld      a, (bd_list_lba + 1)
+                ld      d, a
+                ld      a, (bd_list_lba)
+                ld      e, a
+                ld      a, &51                  ; CMD17
+                call    sdc_cmd
+                ; poll for the &FE start-of-data token (bounded)
+                ld      b, 0
+bllr_tok_poll:
+                call    sdc_in
+                cp      SDC_DATATOK
+                jr      z, bllr_tok_found
+                djnz    bllr_tok_poll
+                scf                             ; no token -> read failure
+                jp      sdc_deselect
+bllr_tok_found:
+                ; read the 512-byte data block (two 256-byte passes) into BD_LIST_BUF
+                ld      hl, BD_LIST_BUF
+                ld      b, 0                    ; 256
+bllr_rd1:
+                call    sdc_in
+                ld      (hl), a
+                inc     hl
+                djnz    bllr_rd1
+                ld      b, 0                    ; + 256 = 512
+bllr_rd2:
+                call    sdc_in
+                ld      (hl), a
+                inc     hl
+                djnz    bllr_rd2
+                call    sdc_in                  ; 2 CRC bytes (discard)
+                call    sdc_in
+                or      a                       ; CY clear: success
+                jp      sdc_deselect
+
+bd_list_lba:      defs 4                        ; 32-bit LE CMD17 block/byte address
 
 ; ===========================================================================
 ; csd_decode_blocks — decode CSD_STAGE into the 32-bit (LE) csd_blocks.

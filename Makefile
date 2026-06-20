@@ -73,7 +73,7 @@ ci-registry:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-serve-boot netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-samboot-inject netboot-trinload netboot-z80-routines asmlex-z80 asmparse-z80 editmodel-z80 ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-serve-boot netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-samboot-inject netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 editmodel-z80 ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -591,6 +591,20 @@ $(BUILD)/netboot_sd_csd.bin $(BUILD)/netboot_sd_csd.map: src/netboot/sd_csd_stan
 
 netboot-sd-csd: $(BUILD)/netboot_sd_csd.bin $(BUILD)/netboot_sd_csd.map
 
+# sd-listread (i141) — the same standalone fixture built with NETBOOT_REAL_LISTREAD,
+# so bdos_read_list_sector routes to the REAL CMD17 single-block read (bd_list_read_hw,
+# sd_csd.asm) instead of the BD_HOOK_LISTREAD harness hook. sd_listread_test.go Loads
+# it, attaches the i145c/i145h SD model, SeedSectors the record-list sectors, and
+# asserts the detection routines read them back through the raw CMD17 SPI path.
+$(BUILD)/netboot_sd_listread.bin $(BUILD)/netboot_sd_listread.map: src/netboot/sd_listread_standalone.asm src/netboot/sd_csd.asm src/netboot/encdrv.asm src/netboot/bdos_seam.asm
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_REAL_LISTREAD=1 \
+	    --obj=$(BUILD)/netboot_sd_listread.bin \
+	    --mapfile=$(BUILD)/netboot_sd_listread.map \
+	    src/netboot/sd_listread_standalone.asm
+
+netboot-sd-listread: $(BUILD)/netboot_sd_listread.bin $(BUILD)/netboot_sd_listread.map
+
 # smoke-test (i94) — the Trinity bring-up smoke test: drv_read a frame, answer an
 # ARP request for the SAM's IP with build_arp_reply, drv_write the reply.  Two
 # builds from one source:
@@ -942,7 +956,7 @@ $(BUILD)/asmparse.bin $(BUILD)/asmparse.map: src/asmparse.asm src/mnemonic_names
 asmparse-z80: $(BUILD)/asmparse.bin $(BUILD)/asmparse.map
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-samboot-inject netboot-smoke-boot netboot-server-boot netboot-serve-boot netboot-client-boot netboot-trinload
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-samboot-inject netboot-smoke-boot netboot-server-boot netboot-serve-boot netboot-client-boot netboot-trinload netboot-sd-listread
 
 ci-netboot-z80: netboot-z80-routines editmodel-z80 asmlex-z80 asmparse-z80
 	cd tools/netboot-oracle/z80 && go test ./...

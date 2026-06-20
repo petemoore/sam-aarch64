@@ -422,17 +422,26 @@ bdos_read_sector:
 ; Out: BD_LIST_BUF   512 bytes  the list sector (32 × 16-byte entries)
 ; Clobbers: A, DE, HL.
 ;
-; This routine issues the harness hook BD_HOOK_LISTREAD, which models the result
-; a raw SD CMD17 single-block read at the card-absolute LBA returns. The hardware
-; implementation (the SPI command ladder on ports &DC–&DF) is hardware-gated;
-; docs/specs/trinity-record-detection-design.md §8 open-verification-item-1.
+; Two builds select the read path:
+;   * default (harness B3 logic tests): issue the harness hook BD_HOOK_LISTREAD,
+;     which the SD CardModel serves from its RecordList — the detection geometry +
+;     free-test are exercised without modelling the SPI transaction.
+;   * NETBOOT_REAL_LISTREAD (i141, the boot images' real path): call bd_list_read_hw
+;     (sd_csd.asm), the raw SD CMD17 single-block read on ports &DC–&DF. CY-on-failure
+;     is treated as "no free record", the same safe decline as a 0 BD_RECORDS.
+; The real path is host-verified against the i145c/i145h SD model; the real-Trinity
+; SPI run is the final gate (CLAUDE.md §5; trinity-record-detection-design.md §8).
 bdos_read_list_sector:
+                if defined(NETBOOT_REAL_LISTREAD)
+                jp      bd_list_read_hw        ; real CMD17 SPI read (tail-call, returns to caller)
+                else
                 ld      a, (BD_LIST_SECTOR)
                 ld      e, a                   ; E = list-sector number (1-based)
                 ld      hl, BD_LIST_BUF
                 rst     8
                 defb    BD_HOOK_LISTREAD
                 ret
+                endif
 
 ; ---------------------------------------------------------------------------
 ; bdos_record_entry — fetch the 16-byte list entry for one record into
