@@ -1110,9 +1110,11 @@
   title: Trinity network-interface emulation — ENC28J60 Ethernet SPI emulation for host-side Z80 netboot iteration
   description: |
     Emulate Quazar Trinity ENC28J60 Ethernet (SPI via port &DE) so the SAM network stack can be iterated host-side. Go-first: enc28j60.go emulates Trinity microcontroller + ENC28J60 SPI (4 banks, 8KB RX/TX buffer, MAC/MII read-dummy). Real Z80 driver (src/netboot/encdrv.asm, trinload verbatim) runs against it; CI via netboot-z80 job. Landed: init/write/read/DHCP loopback verified (PR landed). Remaining: wire-I/O state machines (DHCP/TFTP transfer-loop) + end-to-end Pi boot on real Trinity (hardware-gated, CLAUDE.md §5).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 228, role: completing}
   refs: [docs/notes/trinity-capabilities.md, docs/specs/phase3-delivery-design.md, src/netboot/encdrv.asm, tools/netboot-oracle/z80/enc28j60.go, i58, i82, i83, i86, i92]
 
 - id: i81
@@ -1169,9 +1171,11 @@
   title: SAM TFTP server (Phase-3 PXE shipper) — serve spectrum4 kernel and Pi firmware over TFTP
   description: |
     Phase-3 headline goal: SAM+Trinity netboots a Pi by serving boot files by name from one flat Trinity store. Design confirmed (Pete 2026-06-14): Model A (DHCP+TFTP server, model-general, any aarch64 Pi). Transfer loop landed + host-verified end-to-end (PR #230 — tftp_server_loop.asm vs Go ServerLoop, over i80 emulation; name→record seam is i93 bdos_seam). Pairs with i70 (firmware self-provisioning). Remaining: DHCP server (i86, mandatory for Pi-3+multi-client) + real B-DOS RST 8 HGTHD/HLOAD hook dispatch on Trinity (hardware-gated, Pete's test).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 230, role: completing}
   refs: [docs/plans/phase3-netboot-implementation-plan.md, docs/specs/phase3-delivery-design.md, docs/notes/pi-netboot-capture-analysis.md, src/netboot/tftp_server_loop.asm, tools/netboot-oracle/tftp/serverloop.go, i70, i80, i82, i84, i86, i89, i93]
 
 - id: i84
@@ -1200,9 +1204,11 @@
   title: Minimal SAM DHCP/bootp responder — netboot server's DHCP half
   description: |
     Answer Pi boot ROM DHCP DISCOVER/REQUEST with OFFER/ACK: address from small pool, subnet, next-server (siaddr=SAM), PXEClient echo (opt 60), fixed 32-byte option-43 'Raspberry Pi Boot' blob, client UUID echo (opt 97); no opt-67. Confirmed from real capture (pi-netboot-capture-analysis.md). Responder loop LANDED + host-verified end-to-end: dhcp_loop.asm DORA (DISCOVER→OFFER, REQUEST→ACK, stable per-MAC lease) byte-for-byte vs Go authority dhcp/responder.go, over i80 emulated Trinity; wired to ci-netboot-z80. Remaining: end-to-end Pi boot on real Trinity (hardware-gated, CLAUDE.md §5).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 229, role: completing}
   refs: [docs/plans/phase3-netboot-implementation-plan.md, docs/specs/phase3-delivery-design.md, src/netboot/dhcp_loop.asm, tools/netboot-oracle/dhcp/responder.go, i80, i83, i84]
 
 - id: i87
@@ -1290,19 +1296,44 @@
   title: "Phase-3 netboot Z80 port of protocol logic (src/netboot/*.asm)"
   description: |
     SAM-side Z80 implementation of DHCP/TFTP packet builders/parsers, ported from i91 Go authority (tools/netboot-oracle/) and host-verified byte-for-byte via koron-go/z80 harness (ci-netboot-z80 job). Landed (all host-verified): build_udp_frame (#221), build_dhcp_reply (#222), build_oack/build_data/build_error, parse_request/resolve, build_rrq/parse_oack/find_option, build_arp_request. All packet build/parse logic ported. Remaining: wire-I/O state machines (ENC28J60 send/receive, DHCP/TFTP/transfer loops) — NOT host-verifiable; gated on i80/real-Trinity.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 221, role: completing}
+    - {num: 222, role: completing}
+    - {num: 223, role: completing}
+    - {num: 224, role: completing}
+    - {num: 225, role: completing}
+    - {num: 226, role: completing}
   refs: [src/netboot/, tools/netboot-oracle/z80/, docs/plans/phase3-netboot-implementation-plan.md, docs/notes/pi-netboot-capture-analysis.md, i82, i83, i86, i91]
 
 - id: i93
   title: Phase-3 netboot B-DOS storage seam (bdos_seam.asm) — name-to-record glue
   description: |
     Name→record glue shared by i83 server and i82 client. Three routines from Go authority bdos/bdos.go, host-verified: bdos_name_to_uifa (name→48-byte UIFA), bdos_difa_to_size (DIFA→32-bit size for OACK tsize), bdos_fill_save_uifa (name+page+offset+size→HSAVE UIFA). Field conventions from src/io.asm/loader.asm/main_loop.asm + samdos-file-io.md. Seam arithmetic LANDED + host-verified. Remaining: RST 8 hook dispatch (HGTHD/HLOAD/HSAVE/HRECORD) stays unverified until real Trinity (hardware-gated, CLAUDE.md §5).
-  status: IN_PROGRESS
-  kind: leaf
+  status: OPEN
+  kind: umbrella
   owner: agent
   refs: [src/netboot/bdos_seam.asm, tools/netboot-oracle/bdos/, docs/specs/samdos-file-io.md, docs/notes/bdos-version-landscape.md, i82, i83, i62, i71]
+
+- id: i93a
+  title: "B-DOS seam arithmetic: bdos_name_to_uifa / bdos_difa_to_size / bdos_fill_save_uifa — host-verified"
+  description: ""
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 233, role: completing}
+  parent: i93
+
+- id: i93b
+  title: B-DOS RST 8 hook dispatch on real Trinity — hardware-gated (HGTHD/HLOAD/HSAVE/HRECORD)
+  description: ""
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i93
 
 - id: i94
   title: Phase-3 netboot bring-up smoke test (ARP responder)
@@ -1319,10 +1350,30 @@
   title: Phase-3 netboot integrated server — single dispatch loop (ARP+DHCP+TFTP)
   description: |
     Headline Phase-3 program: SAM+Trinity netboots a Pi by answering ARP+DHCP+TFTP in one loop, serving boot files by name from the flat store. Go authority + Z80 netboot_serve_once LANDED + host-verified: full DISCOVER→OFFER→REQUEST→ACK→ARP→RRQ→OACK→DATA session vs Go byte-for-byte. Bootable disk shipped. Hardware first-light (2026-06-18): ARP+TFTP sub-responders real-Trinity-verified (i96). Remaining: DHCP server + B-DOS store provisioning (i93) + Pi-boot gated on real Trinity.
-  status: IN_PROGRESS
-  kind: leaf
+  status: OPEN
+  kind: umbrella
   owner: agent
   refs: [tools/netboot-oracle/server/server.go, src/netboot/netboot_server.asm, docs/plans/phase3-netboot-implementation-plan.md, docs/notes/pi-netboot-capture-analysis.md, docs/notes/netboot-trinity-testing.md, i80, i83, i86, i93, i94]
+
+- id: i95a
+  title: "Integrated server dispatch loop (ARP+DHCP+TFTP) — Go authority + Z80 host-verified, bootable disk shipped"
+  description: ""
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 239, role: completing}
+    - {num: 241, role: completing}
+  parent: i95
+
+- id: i95b
+  title: "End-to-end Pi boot on real Trinity — hardware-gated: DHCP + B-DOS provisioning + real Pi boot"
+  description: ""
+  status: OPEN
+  depends_on: [i93b]
+  kind: leaf
+  owner: agent
+  parent: i95
 
 - id: i96
   title: "Phase-3 serve-files TFTP demo (ARP + TFTP, no DHCP)"
