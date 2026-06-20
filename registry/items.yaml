@@ -1889,9 +1889,11 @@
   title: "Netboot storage classes: flat-file vs trinity-sam-disks bootable raw-record (validate + HWSAD write seam)"
   description: |
     design §6.5 decision 5: store a fetched object as one of two classes by explicit namespace prefix (never inferred). default = flat-file archive (spanned per §3, never bootable). trinity-sam-disks/ prefix = SAM disk record: validate-before-commit (size==819200 AND BDOS stamp@byte232), reject on mismatch; a raw record is both bootable (HRECORD+boot) and servable-raw. Raw-record write seam: HWSAD (hook 149) per-sector write of the 1600-sector image, modelled in BDOSStore symmetric to HRSAD; SD write dispatch hardware-gated like HSAVE. Validation+dispatch host-verifiable. Unblocks i122.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 477, role: completing}
   parent: i114
   refs: ["docs/specs/netboot-storage-manifest-design.md §6.5", docs/specs/samdos-file-io.md, reference/bdos/bdos15a.src.txt, tools/netboot-oracle/z80/bdos_store.go, i122]
 
