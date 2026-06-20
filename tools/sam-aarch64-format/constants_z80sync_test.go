@@ -16,9 +16,9 @@ package format
 // emitted wrong bytes. The invariants:
 //
 //	OP_KIND_*   every Go OperandKind MUST have a matching equate at its value.
-//	REC_KIND_*  the Z80 carries a 6-of-9 SUBSET (it omits LABEL_DEF/LOCAL_DEF/
-//	            BLANK_RUN); every equate present MUST match the Go value, and the
-//	            three omitted kinds MUST be absent.
+//	REC_KIND_*  the Z80 carries a 7-of-9 SUBSET (it omits LABEL_DEF/LOCAL_DEF);
+//	            every equate present MUST match the Go value, and the two omitted
+//	            kinds MUST be absent.
 //	DIR_*       every DirectiveTable entry MUST have a matching equate at its ID,
 //	            and there MUST be no extra DIR_* equates.
 
