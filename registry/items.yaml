@@ -3711,9 +3711,11 @@
   title: "Assess on-SAM macro/preprocessor support (i31): scope, integration point, perf + size impact estimate"
   description: |
     Pete (2026-06-22, q38) actively uses macros developing on the Mac; losing them when development moves on-SAM would be a real problem, so on-SAM macros 'would be a huge win' — PROVIDED it doesn't blow up assemble-time performance or program size or force a redesign. ACTION (this item): an agent produces a REPORT, not an implementation: what .if build-constraint syntax + macro definition/expansion semantics are needed (survey what Pete's Mac-side sources actually use); where it integrates vs the existing host asmparse/text2bin preprocessing; the Go-authority-first plan; and crucially an ESTIMATE of the assemble-time performance cost + program-size cost + whether it 'slips in' or needs a redesign. q38 depends on this report; once it lands, Pete returns to q38 to give the go/no-go + scope. Does NOT implement i31 — only scopes it.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 603, role: completing}
 
 - id: i210
   title: "Assess linker-script parsing / SpectrumFourLayout extraction (i56/i20): touch points + cost estimate"
