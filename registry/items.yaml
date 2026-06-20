@@ -970,6 +970,7 @@
   description: |
     SAM IP stack fetches Pi firmware (several MB) from cdn.githubraw.com over HTTP (q11 resolved: on-SAM HTTP via uIP, host-tool-free; q12 resolved: Model A only). Full host-verifiable HTTP-fetch path complete + host-verified across Bricks 1–6 (#245/#247/#254/#256/#257/#259 netboot_http.asm). Remaining: hardware-gated (EEPROM read + section-C paging + HSAVE RST-8 dispatch on real Trinity; emulation-verified != hardware-verified, CLAUDE.md §5). i82 TFTP client bridges provisioning meanwhile; HTTPS stretch is i88.
   status: OPEN
+  depends_on: [i133]
   kind: leaf
   owner: agent
   refs: [docs/specs/phase3-delivery-design.md, docs/notes/trinity-capabilities.md, docs/notes/bdos-version-landscape.md, src/netboot/netboot_http.asm, docs/notes/netboot-trinity-testing.md, i61, i66, i84, i88]
@@ -1267,6 +1268,7 @@
   description: |
     Wire tls_reasm_feed into tcp_conn CONN_SINK_FILTER; finalise paging layout; build a bootable disk; exercise over real RST 8 on Trinity hardware. Prerequisite: TC_RX must grow from 1056 to 16645 B (TLS max) before a real Certificate record fits. Hardware-gated (CLAUDE.md §5).
   status: OPEN
+  depends_on: [i133]
   kind: leaf
   owner: agent
   parent: i88
@@ -2354,7 +2356,7 @@
   description: |
     picker_render in src/netboot/bdos_picker.asm is a stub ret (all decision/show-name/confirm logic is host-verified in i119d). This item wires the actual SAM MODE-2 screen blit so the picker display is visible on real hardware. Depends on i119d being merged.
   status: OPEN
-  depends_on: [i119d]
+  depends_on: [i119d, i133]
   kind: leaf
   owner: agent
   parent: i119
@@ -2373,6 +2375,7 @@
   description: |
     client_main's auto-pick needs BD_RECORDS (card record count = tot.sct/1600). tot.sct comes from the SD CSD capacity read over SPI (ports &DC-&DF), which is hardware-gated (no emulator). Until this lands, BD_RECORDS=0 on real hardware => picker finds no free record => safe decline (no write). The emulation E2E injects BD_RECORDS directly. Implement the CSD read so the bootable client can actually claim a record on hardware.
   status: OPEN
+  depends_on: [i133]
   kind: leaf
   owner: agent
   parent: i119
@@ -2420,6 +2423,7 @@
   description: |
     The data source must always be explicit (env var, config file, or --flag), never guessed and never silently the bundled test fixtures — an accidental testdata fallback could be catastrophic (stale reads / writes to fixtures). PR #472 makes the no-source case a hard error (no testdata fallback). This item is the fuller design: pick the canonical explicit mechanism (repo-root config? a build/registry wrapper setting env? a required --registry flag?), decide whether the cwd-walk discovery stays or is replaced, and make CI/local test runs pass their source explicitly.
   status: OPEN
+  depends_on: [q31]
   kind: leaf
   owner: agent
 
@@ -2427,6 +2431,6 @@
   title: Audit the whole registry for hardware/Pete-gated items missing a depends_on gate edge
   description: |
     i146 added the i133 gate edge to the KNOWN hardware cluster (i141/i118b/i93b/i135). Systematically audit every open item for real-world blockers (hardware access, Pete-only setup) not yet expressed as a depends_on edge — the missing-edge class that makes a non-actionable item falsely surface as the ready tip. Candidates to check: i70/i93/i95/i101/i112/i87/i89/i113b/i127 and any others. For each truly-gated item add the edge to i133 (or the correct gate) so 'ready' surfaces only agent-actionable work. Generalises the i146 fix to prevent recurrence.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
