@@ -86,6 +86,48 @@ run_encode_inst_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &20, &1c, &40, &b2
 
+; -- i205 logical-imm replication-size coverage (every element size) ----
+; -- orr x0, x1, #0x0000000100000001  =>  0xB2000020  (size 32) --------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_orr_s32
+                ld      a, 3
+                ld      de, 15
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &00, &00, &b2
+; -- orr x0, x1, #0x0001000100010001  =>  0xB2008020  (size 16) --------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_orr_s16
+                ld      a, 3
+                ld      de, 15
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &80, &00, &b2
+; -- orr x0, x1, #0x0101010101010101  =>  0xB200C020  (size 8) ---------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_orr_s8
+                ld      a, 3
+                ld      de, 15
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &c0, &00, &b2
+; -- orr x0, x1, #0x1111111111111111  =>  0xB200E020  (size 4) ---------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_orr_s4
+                ld      a, 3
+                ld      de, 15
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &e0, &00, &b2
+; -- orr x0, x1, #0x5555555555555555  =>  0xB200F020  (size 2) ---------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_orr_s2
+                ld      a, 3
+                ld      de, 15
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &f0, &00, &b2
+
 ; -- csel x0, x1, x2, eq  =>  0x9A820020  (mnem 24, [X,X,X,Cond]) ------
                 call    enc_seed_pc0
                 ld      hl, enc_fix_csel
@@ -370,6 +412,12 @@ enc_fix_add:    defb    &03, &00, &03, &01, &05, &02, &00, &01, &05
 enc_fix_sub:    defb    &03, &02, &03, &03, &05, &03, &00, &02, &00, &10
 enc_fix_movz:   defb    &01, &00, &05, &03, &00, &02, &34, &12
 enc_fix_orr:    defb    &01, &00, &01, &01, &05, &03, &00, &02, &ff, &00
+; i205 logical-imm replication-size coverage (exact Go OperandWriter bytes)
+enc_fix_orr_s32: defb   &01, &00, &01, &01, &05, &09, &00, &04, &01, &00, &00, &00, &01, &00, &00, &00
+enc_fix_orr_s16: defb   &01, &00, &01, &01, &05, &09, &00, &04, &01, &00, &01, &00, &01, &00, &01, &00
+enc_fix_orr_s8:  defb   &01, &00, &01, &01, &05, &09, &00, &04, &01, &01, &01, &01, &01, &01, &01, &01
+enc_fix_orr_s4:  defb   &01, &00, &01, &01, &05, &09, &00, &04, &11, &11, &11, &11, &11, &11, &11, &11
+enc_fix_orr_s2:  defb   &01, &00, &01, &01, &05, &09, &00, &04, &55, &55, &55, &55, &55, &55, &55, &55
 enc_fix_csel:   defb    &01, &00, &01, &01, &01, &02, &0a, &00
 enc_fix_cbz:    defb    &01, &00, &05, &03, &00, &02, &08, &10
 enc_fix_b:      defb    &05, &03, &00, &02, &10, &10
