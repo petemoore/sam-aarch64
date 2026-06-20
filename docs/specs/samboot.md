@@ -148,7 +148,8 @@ physically present (`owner: pete`), the rest are agent work.
 1. **Understand the bootblock from public source** *(agent, no hardware)* — read
    `LongSteve/z80` `boot.asm` + the forked-B-DOS chunk map; document the load
    sequence and pin down the auto-load-file (boot-a-record) injection hook + the
-   stripes redraw. *(i135a)*
+   stripes redraw. *(i135a — written up in
+   [`docs/notes/samboot-bootblock-analysis.md`](../notes/samboot-bootblock-analysis.md))*
 2. **Build the one-shot dumper** *(agent)* — a small program that reads the
    patched system ROM (32 KB, via SAM ROM paging) and the EEPROM chunks, and
    **serves them via the proven TFTP server** so the host pulls `rom.bin` +
@@ -227,4 +228,5 @@ Browse `build/registry view --id iNN`; this is a map, not a status mirror.
 - Z80 file-by-file map + authority model: `src/netboot/README.md`
 - The trinload push vehicle + EEPROM library: `src/netboot/trinload.asm`, `src/netboot/eeprom.asm`
 - Public bootblock reproduction: [`LongSteve/z80` `boot.asm`](https://github.com/LongSteve/z80/blob/main/boot.asm)
+- Bootblock boot-chain analysis (the §6 step 1 write-up): `docs/notes/samboot-bootblock-analysis.md`
 - Deep boot-chain evidence (external, non-redistributable): `~/sam-archive/trinity-docs/KEYBOARD_BOOT_WORKAROUND.md`, `~/sam-archive/trinity-docs/DISCOVERY_REPORT.md`, `~/sam-archive/bdos/analysis/`
