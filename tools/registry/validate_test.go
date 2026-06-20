@@ -262,10 +262,10 @@ func TestValidate_Inv8_TitleTooLong(t *testing.T) {
 func TestValidate_Inv8_DescTooLong(t *testing.T) {
 	reg := &Registry{
 		Items: []Item{
-			{ID: "i1", Title: "ok", Description: strings.Repeat("x", 601), Status: StatusOpen, Kind: "leaf", Owner: "agent"},
+			{ID: "i1", Title: "ok", Description: strings.Repeat("x", 2001), Status: StatusOpen, Kind: "leaf", Owner: "agent"},
 		},
 	}
-	assertError(t, reg, "i1", "description exceeds 600 chars")
+	assertError(t, reg, "i1", "description exceeds 2000 chars")
 }
 
 // Invariant 8: description too many lines.
@@ -275,14 +275,14 @@ func TestValidate_Inv8_DescTooManyLines(t *testing.T) {
 			{
 				ID:          "i1",
 				Title:       "ok",
-				Description: "line1\nline2\nline3\nline4\nline5\nline6\nline7",
+				Description: strings.Repeat("L\n", 31),
 				Status:      StatusOpen,
 				Kind:        "leaf",
 				Owner:       "agent",
 			},
 		},
 	}
-	assertError(t, reg, "i1", "description exceeds 6 lines")
+	assertError(t, reg, "i1", "description exceeds 30 lines")
 }
 
 // Invariant 9: WONTFIX without a reason in description (spec §"Status enum":
