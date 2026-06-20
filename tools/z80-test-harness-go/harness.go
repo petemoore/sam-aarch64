@@ -47,6 +47,30 @@
 //	130 HLOAD — no-op: data already pre-deposited in the target pages.
 //	132 HSAVE — capture: read OUT bytes from UIFA[31..36] + pages 5-6.
 //
+// # SAMDOS file-I/O error longjmp (i183)
+//
+// A file-I/O hook that fails on real SAMDOS does not return: it calls derr
+// (samdos/src/d.s:430), which longjmps via the (hksp) handler vector —
+// `ld sp,(hksp); ret` into an installed handler, or (when (hksp)=0, the value
+// the dispatcher leaves on entry) prints the error and pops into BASIC's error
+// path (a crash for the assembler's di/halt loop).  The harness models this so
+// i25's (hksp) handler can be verified in emulation:
+//
+//   - An unserved HGTHD file (e.g. "sd13" with -sysreg-data omitted), or an
+//     injected HGTHD/HSAVE failure (Config.FailHGTHD / Config.FailHSAVE), is
+//     treated as file-not-found rather than a silent no-op.
+//   - On failure the harness reads the emulated (hksp) vector at
+//     Config.HkspAddr (when non-zero, honouring current paging).  A non-zero
+//     vector longjmps into the installed handler (SP := (hksp); the RST-8
+//     stub's trailing RET then pops the handler entry from [(hksp)] — exactly
+//     derr's `ld sp,(hksp); ret`).  A zero vector takes the default path,
+//     surfaced as a clean halt whose ExitReason names the failing file — at
+//     the true point of failure, not a cryptic downstream &0038 garbage trap.
+//
+// The exact (hksp)/SAMDOS-bank-paging fidelity is the design dimension shared
+// with i25 (the assembler-side handler); HkspAddr is configurable precisely so
+// i25 can point it at whatever address its eventual install mechanism uses.
+//
 // Port &FA = LMPR (section A+B page selector)
 // Port &FB = HMPR (section C+D page selector; bits 5-7 = CLUT, preserved)
 // Port &E8 = printer data; &E9 = printer strobe
@@ -129,12 +153,12 @@ type Result struct {
 
 	// UnservedFiles lists SAMDOS file names the assembler asked for via
 	// HGTHD that the harness could neither serve (no registered NamedFile)
-	// nor account for as a known pre-deposited file (enctab.enc / IN).
-	// An unserved file means the corresponding HLOAD was a silent no-op
-	// and that physical page is still zero/garbage — the classic cause of
-	// a downstream "jumped into garbage → &0038" trap (e.g. forgetting
-	// -sysreg-data, so page 13's sysreg matcher is empty).  Populated in
-	// dispatch order, deduplicated.
+	// nor account for as a known pre-deposited file (enctab.enc / IN) — plus
+	// any names with an injected HGTHD failure (Config.FailHGTHD).  Each is a
+	// file-not-found that triggers the modelled (hksp) longjmp: with no
+	// handler installed it halts the run with a cause-naming ExitReason (e.g.
+	// forgetting -sysreg-data, so page 13's sysreg matcher would be empty).
+	// Populated in dispatch order, deduplicated.
 	UnservedFiles []string
 }
 
@@ -204,10 +228,21 @@ type Hardware struct {
 
 	// unservedFiles records, in dispatch order, the names HGTHD asked for
 	// that the harness could neither serve from the registry nor account
-	// for as a known pre-deposited legacy file (enctab.enc / IN).  These
-	// are the silent-HLOAD-no-op cases that strand a page empty.
+	// for as a known pre-deposited legacy file (enctab.enc / IN).  Each is a
+	// file-not-found that triggers the modelled (hksp) longjmp (triggerFileIOError).
 	unservedFiles []string
 	unservedSeen  map[string]bool
+
+	// File-I/O error-longjmp model (i183).  hkspAddr is the logical address
+	// of the emulated (hksp) handler vector (0 = none installed → default
+	// halt).  failHGTHD / failHSAVE force injected file-I/O failures.  When a
+	// hook fails, triggerFileIOError either longjmps into the installed
+	// handler or records pendingFault to halt the run with a naming message.
+	hkspAddr           uint16
+	failHGTHD          map[string]bool
+	failHSAVE          bool
+	strictFileNotFound bool
+	pendingFault       string
 
 	// Optional windowed PC trace.  When traceHi>traceLo, every step whose
 	// PC lies in [traceLo,traceHi) is appended (in order, unbounded) to
@@ -536,6 +571,37 @@ type Config struct {
 	// moment TrigPC is reached.  Surfaces in TrigResult.Dump.
 	TrigDumpAddrs []uint16
 	TrigDumpLen   int
+
+	// File-I/O error-longjmp model (i183) — see the package doc.
+	//
+	// HkspAddr is the logical address of the emulated SAMDOS (hksp)
+	// error-handler vector.  When zero (the default), no handler is installed
+	// and every file-I/O error takes the default-halt path — matching the
+	// real dispatcher, which zeros (hksp) on each hook entry, and the current
+	// assembler, which installs no handler.  When non-zero, a file-I/O error
+	// reads the 2-byte LE value at this address (honouring current paging); a
+	// non-zero value models derr's `ld sp,(hksp); ret` longjmp into the
+	// installed handler.
+	HkspAddr uint16
+
+	// FailHGTHD forces HGTHD to report file-not-found for these SAMDOS names
+	// even when the file is registered/served — lets a test exercise the
+	// error path (and i25's handler) without physically omitting a payload.
+	FailHGTHD map[string]bool
+
+	// FailHSAVE forces the HSAVE hook to report an I/O error (disk full /
+	// name conflict), triggering the same derr longjmp as a read failure.
+	FailHSAVE bool
+
+	// StrictFileNotFound makes an unknown/unserved HGTHD file (one the harness
+	// was never given) a faithful file-not-found error — the (hksp) longjmp,
+	// or a cause-naming halt with no handler — instead of the legacy silent
+	// no-op.  Default false: the legacy behaviour is preserved, because many
+	// decode-focused tests deliberately boot the prod assembler with a minimal
+	// file set (its unconditional d15/sd13/zx013 loads are harmless no-ops for
+	// fixtures that need neither the disassembler nor the sysreg tables).  An
+	// injected FailHGTHD/FailHSAVE failure always errors regardless of this flag.
+	StrictFileNotFound bool
 }
 
 // TrigResult holds the state captured when Config.TrigPC was first reached.
@@ -555,6 +621,10 @@ func RunConfig(cfg Config) (Result, []RegSnapshot, TrigResult) {
 	hw.trigPC = cfg.TrigPC
 	hw.trigDumpAddrs = cfg.TrigDumpAddrs
 	hw.trigDumpLen = cfg.TrigDumpLen
+	hw.hkspAddr = cfg.HkspAddr
+	hw.failHGTHD = cfg.FailHGTHD
+	hw.failHSAVE = cfg.FailHSAVE
+	hw.strictFileNotFound = cfg.StrictFileNotFound
 	res := runOn(hw, cfg.AssemblerBin, cfg.EnctabData, cfg.InData, cfg.Files, cfg.Timeout)
 	return res, hw.windowTrace, TrigResult{
 		Hit:        hw.trigHit,
@@ -675,7 +745,8 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 			// behaviour byte-identical for callers using the old Run().
 			copyPage := uifaPage
 			copyOffset := uifaCopyAddr & 0x3FFF
-			if f, ok := hw.files[name]; ok {
+			injectedFail := hw.failHGTHD[name]
+			if f, ok := hw.files[name]; ok && !injectedFail {
 				hw.currentFile = f
 				flen := len(f.Content)
 				pages := uint8(flen / pageSize)
@@ -688,35 +759,47 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 				lenWithFlag := lenMod | 0x8000
 				hw.ram[copyPage][copyOffset+35] = uint8(lenWithFlag)
 				hw.ram[copyPage][copyOffset+36] = uint8(lenWithFlag >> 8)
-			} else if strings.HasPrefix(name, "IN") {
+			} else if strings.HasPrefix(name, "IN") && !injectedFail {
 				hw.currentFile = nil
 				hw.ram[copyPage][copyOffset+34] = inFilePages
 				lenWithFlag := inFileLenMod16K | 0x8000
 				hw.ram[copyPage][copyOffset+35] = uint8(lenWithFlag)
 				hw.ram[copyPage][copyOffset+36] = uint8(lenWithFlag >> 8)
+			} else if name == "enctab.enc" && !injectedFail {
+				// Defensive dead path: enctab.enc is auto-registered whenever
+				// enctabData is non-empty (the only real configuration), so it
+				// is served above.  Reaching here means the caller passed empty
+				// enctab data; keep the legacy no-op rather than longjmp.
+				hw.currentFile = nil
 			} else {
-				// Unknown file.  A file the harness was never given
-				// (e.g. "sd13" / sysreg_data when -sysreg-data is
-				// omitted).  Here the
-				//      subsequent HLOAD is a SILENT no-op, leaving the
-				//      target page zero/garbage — which on real SAM would
-				//      be a SAMDOS "file not found" longjmp to a FAIL
-				//      banner, but in the stub manifests downstream as a
-				//      cryptic "jumped into garbage → &0038" trap (the
-				//      page-13 sysreg matcher runs into a NOP slide and
-				//      falls off section C into the empty section D).
-				//      Record it so the trap message can name the real
-				//      cause.
-				if name != "enctab.enc" {
-					if hw.unservedSeen == nil {
-						hw.unservedSeen = make(map[string]bool)
-					}
-					if !hw.unservedSeen[name] {
-						hw.unservedSeen[name] = true
-						hw.unservedFiles = append(hw.unservedFiles, name)
-					}
+				// FILE NOT FOUND — an unknown file the harness was never given
+				// (e.g. "sd13" / sysreg_data with -sysreg-data omitted), or an
+				// injected failure (Config.FailHGTHD).  On real SAMDOS gtfle
+				// fails and the hook calls derr, which longjmps via (hksp).
+				//
+				// Always record the name for diagnostics.  The faithful longjmp
+				// fires when the failure is injected, or when the caller opts
+				// into StrictFileNotFound.  Otherwise preserve the legacy silent
+				// no-op (the page stays zero/garbage), so the many decode-focused
+				// tests that boot the prod assembler with a minimal file set keep
+				// working — their unconditional d15/sd13/zx013 loads are harmless
+				// for fixtures that exercise neither the disassembler nor the
+				// sysreg tables.
+				if hw.unservedSeen == nil {
+					hw.unservedSeen = make(map[string]bool)
+				}
+				if !hw.unservedSeen[name] {
+					hw.unservedSeen[name] = true
+					hw.unservedFiles = append(hw.unservedFiles, name)
 				}
 				hw.currentFile = nil
+				if injectedFail || hw.strictFileNotFound {
+					verb := "HGTHD file-not-found"
+					if injectedFail {
+						verb = "HGTHD injected failure"
+					}
+					hw.triggerFileIOError(fmt.Sprintf("%s: %q", verb, name), true)
+				}
 			}
 
 		case hookHLOAD:
@@ -776,6 +859,16 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 			}
 
 		case hookHSAVE:
+			// Injected HSAVE failure (Config.FailHSAVE): model the real
+			// disk-full / name-conflict error, which longjmps via derr →
+			// (hksp) exactly like a failed read (samdos-file-io.md
+			// "Critical caveat").  Take the longjmp/default-halt before any
+			// OUT capture so the failure surfaces as such.
+			if hw.failHSAVE {
+				hw.triggerFileIOError("HSAVE injected failure (disk full / name conflict)", false)
+				break
+			}
+
 			// HSAVE: capture OUT bytes from the paged OUT buffer.
 			// The assembler has populated UIFA[31..36]:
 			//   UIFA[31]: start page (= 5)
@@ -869,6 +962,14 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 		}
 		cpu.Step()
 		steps++
+		if hw.pendingFault != "" {
+			// A file-I/O hook took the default error path (no (hksp) handler
+			// installed).  Stop here — before the synthetic RST-8 stub's
+			// trailing RET would resume the assembler — so the failure
+			// surfaces at its true cause rather than as a downstream trap.
+			exitReason = hw.pendingFault
+			break
+		}
 		if cpu.HALT {
 			exitReason = fmt.Sprintf("HALT at PC=%04X", cpu.PC)
 			break
@@ -901,6 +1002,43 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 	}
 }
 
+// triggerFileIOError models SAMDOS's derr longjmp (samdos/src/d.s:430) for a
+// failed file-I/O hook.  It reads the emulated (hksp) handler vector and
+// either longjmps into the installed handler or records a default-halt fault:
+//
+//   - hkspAddr != 0 and the 2-byte LE value there != 0: an installed handler.
+//     Set SP := (hksp); the synthetic RST-8 stub's trailing RET then pops the
+//     handler entry from [(hksp)] into PC — reproducing `ld sp,(hksp); ret`.
+//   - otherwise (no handler — the dispatcher zeros (hksp) on entry and the
+//     current assembler installs none): derr1's default path, which on real
+//     hardware prints the error and pops into BASIC's error handler (a crash
+//     for the assembler's di/halt loop).  Surface it as a clean halt whose
+//     ExitReason names the cause.
+//
+// reason is the cause text for the default-halt message; includeHint adds the
+// unserved-file remedy (relevant for file-not-found, not for an HSAVE failure).
+func (h *Hardware) triggerFileIOError(reason string, includeHint bool) {
+	var hksp uint16
+	if h.hkspAddr != 0 {
+		lo := uint16(h.Get(h.hkspAddr))
+		hi := uint16(h.Get(h.hkspAddr + 1))
+		hksp = lo | hi<<8
+	}
+	if hksp != 0 {
+		// Installed handler — longjmp.  The stub's RET (executed after this
+		// hook returns) pops [(hksp)] into PC.
+		h.cpu.SP = hksp
+		return
+	}
+	msg := "SAMDOS file-I/O error longjmp ((hksp)=0, default error path): " + reason
+	if includeHint {
+		if hint := h.unservedFileHint(); hint != "" {
+			msg += "; " + hint
+		}
+	}
+	h.pendingFault = msg
+}
+
 // unservedFileHint returns a human-readable diagnostic naming any SAMDOS
 // files HGTHD requested that the harness could not serve, with the common
 // remedy.  Empty string when every requested file was served.
@@ -922,6 +1060,6 @@ func (h *Hardware) unservedFileHint() string {
 		}
 	}
 	return fmt.Sprintf("HGTHD requested file(s) the harness could not serve: %v%s; "+
-		"the matching HLOAD was a no-op, so that physical page is empty",
+		"these are file-not-found errors that longjmp via (hksp)",
 		h.unservedFiles, remedy)
 }
