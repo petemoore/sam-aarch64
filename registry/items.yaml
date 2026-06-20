@@ -56,9 +56,11 @@
   title: "Viewport/scroll state machine: centre-locked cursor + line/page nav (Z80 port of viewer.View, host-verified)"
   description: |
     First brick of i4. Ports the read-only viewer's scroll/cursor STATE MACHINE (the host authority tools/editor-prototype/viewer/view.go) to Z80: a resident cursor (16-bit source-line index) + line-up/line-down/page-up/page-down/top/bottom/set-cursor commands (unsigned add/sub with clamp-to-[0,lineCount-1] and floor-at-0), plus the centre-locked-cursor window computation winTop=max(0,cursor-rows/2), cursor screen-row=min(cursor,rows/2), and visible-line count. src/viewport.asm, host-verified vs an inline oracle mirroring viewer.View (non-wrapped/truncate mode) via the koron-go/z80 harness, same pattern as i2a/i41d. Does NOT render to the SAM screen, load a font, wrap long lines, or draw the status line — those are the i4 rendering brick (fonts + MODE 3 + the SimCoupe font-proof screenshot, design editor-tui-prototype-design.md §5 P1). Authority: tools/editor-prototype/viewer/view.go.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 592, role: completing}
   parent: i4
 
 - id: i5
