@@ -79,9 +79,9 @@ func loadDumperPaged(t *testing.T, lmpr uint8) *z80h.Machine {
 	return mac
 }
 
-// TestDumperReadROM0CopiesToStage proves the rom0 ROM-paging read — unrunnable
-// under the old flat harness — now works: ROM0 reads through section A, STAGE
-// (section D RAM) takes the copy, and the saved/restored LMPR lets it RET clean.
+// TestDumperReadROM0CopiesToStage proves the rom0 ROM-paging read works under the
+// pager: ROM0 reads through section A, STAGE (section D RAM) takes the copy, and
+// the saved/restored LMPR lets it RET clean.
 func TestDumperReadROM0CopiesToStage(t *testing.T) {
 	// Entry LMPR 0x24: section A = page 4, section B = page 5 (the stack). HMPR=1
 	// puts the dumper code at section C = page 1 and STAGE (section D) at page 2,
