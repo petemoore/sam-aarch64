@@ -268,10 +268,11 @@ func runColinDecode(t *testing.T, mac *z80h.Machine, csd [16]byte, cardType uint
 	return blocks, res
 }
 
-// runColinRecords runs Colin's REAL records math (&A3D2, entered at &A3CF) on the
-// given 32-bit block count, and returns the base (&80C2) and BD_RECORDS (&80C4)
-// it computes. The block count is pushed on the stack so `pop hl; pop de; exx`
-// (at &A3CF) loads it, and the run stops at &A4AA (the first size-print call,
+// runColinRecords runs Colin's REAL records math (the self-contained base/records
+// core at &A45A) on the given 32-bit block count, and returns the base (&80C2) and
+// BD_RECORDS (&80C4) it computes. The block count is passed in MAIN DE:HL (DE high,
+// HL low) — &A45A's `push de; push hl; exx` moves it into the alt registers the
+// divides use — and the run stops at &A4AA (the first size-print call,
 // just past the BD_RECORDS store at &A4A7). The number-printer at &992A is
 // neutered to a RET (it descends into ROM print, which this section-B-only model
 // has no ROM for; it is pure UI and does not affect the arithmetic).
