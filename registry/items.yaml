@@ -3052,5 +3052,15 @@
   description: |
     q39 DECISION (Pete, 2026-06-21): 'absolutely merge into one codebase and do not maintain two separate go sam coupe emulators' — but 'happy to postpone the rewrite until after samboot stuff.' So this is the agreed end-state, sequenced AFTER the SAMBOOT strand. Today two Go SAM emulators each hold half the model: the assembler emulator (tools/z80-test-harness-go) has faithful LMPR/HMPR paging + ROM write-protect + DOS hooks but no Ethernet/EEPROM; the netboot emulator (tools/netboot-oracle/z80) has ENC28J60 + EEPROM + trinload round-trip but flat memory (a separate nested go.mod, to keep the pure-Go oracle job from pulling koron-go/z80). That split let the dumper's &C000 ROM-paging bug reach hardware (i87a). Merge them into ONE SAM Coupe Z80 emulator core — single CPU + memory/paging + IO model — with ENC28J60 / EEPROM / DOS-hooks / trinload as attachable devices, used by EVERY Z80 test (CLAUDE.md section 7 'one layer used by every test'), so no program runs in a half-model again. The pure-Go protocol oracle (frame/tftp/dhcp build-parse) stays its own package. i181 ports the pager as a shared package now (a down-payment); this item finishes the merge. Acceptance: one emulator package; both existing test suites pass on it; the netboot nested module folds in or imports the shared core.
   status: OPEN
+  kind: umbrella
+  owner: agent
+
+- id: i190a
+  title: Unified emulator loads the extracted real ROM patch + EEPROM code/config for authentic Trinity emulation
+  description: |
+    Pete (2026-06-21): SAMBOOT feeds the emulator — once we've captured the patched ROM (i87a/i87a-b2) and the Trinity EEPROM (i87a-b1, done), the unified emulator (i190) should load THOSE real artifacts so it emulates the real SAM+Trinity authentically: the actual patched system ROM (ROM0+ROM1) at boot, the real EEPROM contents (the 'Trinity Network ' config + Colin's bootblock) behind the modelled EEPROM SPI device, and Colin's real eeprom.asm read protocol. This turns the test emulator into a faithful model of Pete's actual machine. CONSTRAINT: rom.bin/eeprom.bin are Colin's proprietary, non-redistributable artifacts (kept in ~/sam-archive, never committed) — the emulator LOADS them as local/gitignored fixtures (path via env/flag), with a synthetic fallback for CI where the real bytes are absent (mirroring how i181/dumper_test program known fixtures). Depends on the full ROM extraction (i87a-b2); the EEPROM half is available now.
+  status: OPEN
+  depends_on: [i87a-b2]
   kind: leaf
   owner: agent
+  parent: i190
