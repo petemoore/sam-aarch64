@@ -2055,9 +2055,11 @@
   title: "B3 — card-absolute list-read: read list sectors 1..base-1, parse 16-byte entries, free ⇔ masked first-name-byte==0"
   description: |
     B3: implement the card-absolute list-read routine. Read list sectors 1..base-1 sequentially, parse each 16-byte entry per the frozen on-card layout (free ⇔ masked first-name byte == 0, per docs/specs/trinity-record-detection-design.md §3 and bdos15a.src.txt:946-948). Build against the harness CardModel first (emulation-first); no HRECORD, no error 81, no B-DOS internal addresses.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 461, role: completing}
   parent: i119
   refs: [docs/specs/trinity-record-detection-design.md, i119]
 
