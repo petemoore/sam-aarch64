@@ -369,6 +369,57 @@ enc_fix_table:
                 defb    3
                 defw    2
                 defb    &49, &ad, &2b, &cb
+; i201b memory-operand fixtures (OpMem)
+                defw    &0000
+                defw    enc_fix_mem_base            ; ldr x0,[x1]  MemBase
+                defb    2
+                defw    5
+                defb    &20, &00, &40, &f9
+                defw    &0000
+                defw    enc_fix_mem_off8            ; ldr x2,[x3,#8]  MemBaseOff scaled
+                defb    2
+                defw    5
+                defb    &62, &04, &40, &f9
+                defw    &0000
+                defw    enc_fix_mem_pre0            ; str x4,[x5,#0]!  MemBaseOffPre
+                defb    2
+                defw    6
+                defb    &a4, &0c, &00, &f8
+                defw    &0000
+                defw    enc_fix_mem_post8           ; str x6,[x7],#8  MemBaseOffPost
+                defb    2
+                defw    6
+                defb    &e6, &84, &00, &f8
+                defw    &0000
+                defw    enc_fix_mem_idx             ; ldr x8,[x9,x10]  MemBaseIdx
+                defb    2
+                defw    5
+                defb    &28, &69, &6a, &f8
+                defw    &0000
+                defw    enc_fix_mem_lsl3            ; str x11,[x12,x13,lsl#3]  MemBaseIdxShifted
+                defb    2
+                defw    6
+                defb    &8b, &79, &2d, &f8
+                defw    &0000
+                defw    enc_fix_mem_uxtw            ; ldr x14,[x15,w16,uxtw]  MemBaseIdxExtended
+                defb    2
+                defw    5
+                defb    &ee, &49, &70, &f8
+                defw    &0000
+                defw    enc_fix_mem_stur_m8         ; stur x17,[x18,#-8]  unscaled
+                defb    2
+                defw    74
+                defb    &51, &82, &1f, &f8
+                defw    &0000
+                defw    enc_fix_mem_ldp_off16       ; ldp x19,x20,[x21,#16]  pair MemBaseOff
+                defb    3
+                defw    7
+                defb    &b3, &52, &41, &a9
+                defw    &0000
+                defw    enc_fix_mem_str_w           ; str w22,[x23,#4]  W-register
+                defb    2
+                defw    6
+                defb    &f6, &06, &00, &b9
 ; sentinel: fixture ptr 0 terminates the table
                 defw    &0000
                 defw    0
@@ -466,6 +517,28 @@ enc_fix_er_add_sxtx1:   defb    &01, &03, &01, &04, &07, &01, &05, &07, &02, &00
 enc_fix_er_sub_uxtb0:   defb    &01, &06, &01, &07, &07, &00, &08, &00, &02, &00, &01, &00
 ; sub x9,x10,x11,sxth#3: ExtendedReg(X,Rm=11,SXTH,amt=3)
 enc_fix_er_sub_sxth3:   defb    &01, &09, &01, &0a, &07, &01, &0b, &05, &02, &00, &01, &03
+
+; i201b memory-operand fixture operand streams (exact Go OperandWriter bytes)
+; ldr x0,[x1]: Rt=x0, MemBase(base=1)
+enc_fix_mem_base:       defb    &01, &00, &08, &00, &01
+; ldr x2,[x3,#8]: Rt=x2, MemBaseOff(base=3, off=8)
+enc_fix_mem_off8:       defb    &01, &02, &08, &01, &03, &02, &00, &01, &08
+; str x4,[x5,#0]!: Rt=x4, MemBaseOffPre(base=5, off=0)
+enc_fix_mem_pre0:       defb    &01, &04, &08, &02, &05, &02, &00, &01, &00
+; str x6,[x7],#8: Rt=x6, MemBaseOffPost(base=7, off=8)
+enc_fix_mem_post8:      defb    &01, &06, &08, &03, &07, &02, &00, &01, &08
+; ldr x8,[x9,x10]: Rt=x8, MemBaseIdx(base=9,idx=10,idxW=1)
+enc_fix_mem_idx:        defb    &01, &08, &08, &04, &09, &0a, &01
+; str x11,[x12,x13,lsl#3]: Rt=x11, MemBaseIdxShifted(base=12,idx=13,idxW=1,shiftAmt=3)
+enc_fix_mem_lsl3:       defb    &01, &0b, &08, &05, &0c, &0d, &01, &03
+; ldr x14,[x15,w16,uxtw]: Rt=x14, MemBaseIdxExtended(base=15,idx=16,idxW=0,extend=2,shiftAmt=0)
+enc_fix_mem_uxtw:       defb    &01, &0e, &08, &06, &0f, &10, &00, &02, &00
+; stur x17,[x18,#-8]: Rt=x17, MemBaseOff(base=18, off=-8)
+enc_fix_mem_stur_m8:    defb    &01, &11, &08, &01, &12, &02, &00, &01, &f8
+; ldp x19,x20,[x21,#16]: Rt1=x19, Rt2=x20, MemBaseOff(base=21, off=16)
+enc_fix_mem_ldp_off16:  defb    &01, &13, &01, &14, &08, &01, &15, &02, &00, &01, &10
+; str w22,[x23,#4]: Rt=w22, MemBaseOff(base=23, off=4)
+enc_fix_mem_str_w:      defb    &02, &16, &08, &01, &17, &02, &00, &01, &04
 
 ; Total payload size: the LDIR in run_encode_inst_self_tests uses this
 ; count as BC.  Computed by the assembler so no manual update is needed

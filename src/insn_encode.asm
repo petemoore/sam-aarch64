@@ -80,6 +80,7 @@ OPK_REG_W:      equ     &02     ; REG_W  (32-bit marker)
 OPK_IMM_EXPR:   equ     &05
 OPK_SHIFTED_REG: equ    &06     ; OpShiftedReg (shifted-register operand)
 OPK_EXT_REG:    equ     &07     ; OpExtendedReg (extended-register operand)
+OPK_MEM:        equ     &08     ; OpMem (memory-address operand)
 OPK_COND:       equ     &0a
 OPK_SYS_NAME:   equ     &0b     ; OpSysName (mrs/msr/dc/tlbi name operand)
 
@@ -324,6 +325,8 @@ enc_cscan_loop:
                 jp      z, enc_shifted
                 cp      OPK_EXT_REG
                 jp      z, enc_extended
+                cp      OPK_MEM
+                jp      z, enc_mem
                 inc     hl
                 djnz    enc_cscan_loop
                 jr      enc_form_table
@@ -472,6 +475,8 @@ enc_skip_operand:
                 jr      z, enc_skip_compound
                 cp      OPK_EXT_REG
                 jr      z, enc_skip_compound
+                cp      OPK_MEM
+                jr      z, enc_skip_mem
                 cp      OPK_IMM_EXPR
                 jp      nc, enc_fail_unsupported_operand
                 or      a
@@ -492,6 +497,57 @@ enc_skip_compound:
                 inc     hl                          ; skip Rm
                 inc     hl                          ; skip shiftKind/extend
                 jr      enc_skip_imm                ; skip u16-len + expr bytes
+
+; enc_skip_mem — HL is past the 0x08 kind byte, pointing at the shape byte.
+; Advance HL past the complete OpMem operand payload.
+; Port of tools/sam-aarch64-format/operands.go OperandReader.Next case OpMem.
+; Shapes: 0=base(1B), 1/2/3=base+u16len+expr, 4=base+idx+idxW(3B),
+;         5=base+idx+idxW+shiftAmt(4B), 6=base+idx+idxW+extend+shiftAmt(5B).
+enc_skip_mem:
+                ld      a, (hl)                     ; shape
+                inc     hl                          ; -> base
+                or      a
+                jr      z, enc_smem_base            ; shape 0: just base
+                cp      1
+                jr      z, enc_smem_off
+                cp      2
+                jr      z, enc_smem_off
+                cp      3
+                jr      z, enc_smem_off
+                cp      4
+                jr      z, enc_smem_idx
+                cp      5
+                jr      z, enc_smem_shifted
+                cp      6
+                jr      z, enc_smem_extended
+                jp      enc_fail_unsupported_operand
+enc_smem_base:
+                inc     hl                          ; skip base
+                ret
+enc_smem_off:
+                inc     hl                          ; skip base
+                jr      enc_skip_imm                ; skip u16-len + expr bytes
+enc_smem_idx:
+; Shape 4: base, idx, idxWidth — 3 bytes
+                inc     hl                          ; skip base
+                inc     hl                          ; skip idx
+                inc     hl                          ; skip idxWidth
+                ret
+enc_smem_shifted:
+; Shape 5: base, idx, idxWidth, shiftAmt — 4 bytes
+                inc     hl
+                inc     hl
+                inc     hl
+                inc     hl
+                ret
+enc_smem_extended:
+; Shape 6: base, idx, idxWidth, extend, shiftAmt — 5 bytes
+                inc     hl
+                inc     hl
+                inc     hl
+                inc     hl
+                inc     hl
+                ret
 
 ; -----------------------------------------------------------------------
 ; enc_slotkind_to_fsid — map an expr-bearing SlotKind to its FoldSlot id
@@ -732,6 +788,179 @@ enc_ext_wipe:
 
                 ld      a, (enc_mnem)
                 jp      encode_extended_reg_word    ; tail-call; returns DE:HL
+
+; =======================================================================
+; enc_mem — memory-operand encoder (i201b).
+;
+; Port of pass2.go::encodeMemInst (lines 762-902) dispatch path.
+; Reached from enc_compound_scan when an OpMem (0x08) kind is found.
+; Populates OPVAL_ARRAY from the operand stream, evaluates the offset
+; expression into OPMEM_OFF, then tail-calls the proven encode_mem_word
+; or encode_pair_word (src/slots/mem.asm).
+;
+; Non-pair mnemonics (ldr/str/ldrb/strb/ldrh/strh/stur/ldur/ldrsb/ldrsh/ldrsw):
+;   operand layout: Rt(op0), OpMem(op1)
+;   OPVAL[0] = Rt, OPVAL[1] = OpMem
+; Pair mnemonics (ldp=7, stp=8):
+;   operand layout: Rt1(op0), Rt2(op1), OpMem(op2)
+;   OPVAL[0] = Rt1, OPVAL[1] = Rt2, OPVAL[2] = OpMem
+;
+; OPMEM_OFF (8-byte LE signed) is zeroed for shape 0 (MemBase) and filled
+; by enc_mfov_off for shapes 1/2/3 (MemBaseOff/Pre/Post).
+; =======================================================================
+
+enc_mem:
+; Wipe OPVAL_ARRAY entries 0..2 (30 bytes) + OPMEM_OFF (8 bytes).
+                ld      hl, OPVAL_ARRAY
+                ld      b, 30
+                xor     a
+enc_mem_wipe:
+                ld      (hl), a
+                inc     hl
+                djnz    enc_mem_wipe
+                ld      hl, OPMEM_OFF
+                ld      b, 8
+enc_mem_wipe_off:
+                ld      (hl), a
+                inc     hl
+                djnz    enc_mem_wipe_off
+
+; Check for pair mnemonic (ldp=7, stp=8).
+                ld      a, (enc_mnem)
+                cp      7
+                jr      z, enc_mem_pair
+                cp      8
+                jr      z, enc_mem_pair
+
+; Non-pair: populate OPVAL[0] = Rt (kind + reg), OPVAL[1] = OpMem.
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (Rt)
+                ld      a, (hl)
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a ; kind
+                inc     hl
+                ld      a, (hl)
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1), a ; reg
+                ld      a, 1
+                call    enc_nth_operand             ; HL -> op1 = [0x08][shape][...]
+                ld      de, OPVAL_ARRAY + 1 * OPVAL_STRIDE
+                call    enc_mem_fill_opval
+                ld      a, (enc_mnem)
+                jp      encode_mem_word             ; tail-call; returns DE:HL
+
+enc_mem_pair:
+; Pair: OPVAL[0]=Rt1, OPVAL[1]=Rt2, OPVAL[2]=OpMem.
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (Rt1)
+                ld      a, (hl)
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 0), a
+                inc     hl
+                ld      a, (hl)
+                ld      (OPVAL_ARRAY + 0 * OPVAL_STRIDE + 1), a
+                ld      a, 1
+                call    enc_nth_operand             ; HL -> op1 (Rt2)
+                ld      a, (hl)
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 0), a
+                inc     hl
+                ld      a, (hl)
+                ld      (OPVAL_ARRAY + 1 * OPVAL_STRIDE + 1), a
+                ld      a, 2
+                call    enc_nth_operand             ; HL -> op2 = [0x08][shape][...]
+                ld      de, OPVAL_ARRAY + 2 * OPVAL_STRIDE
+                call    enc_mem_fill_opval
+                ld      a, (enc_mnem)
+                jp      encode_pair_word            ; tail-call; returns DE:HL
+
+; -- enc_mem_fill_opval — HL -> OpMem stream [0x08][shape][...]; DE -> OPVAL[n]+0
+; Writes kind/shape/base/idx/idxWidth/extend/shiftAmt into OPVAL[n] and
+; evaluates the offset expression (shapes 1/2/3) into OPMEM_OFF.
+; Port of tools/sam-aarch64-format/operands.go OperandReader.Next case OpMem.
+; Clobbers A, BC, HL, DE.
+enc_mem_fill_opval:
+                ld      a, (hl)
+                ld      (de), a                     ; OPVAL+0 = kind (0x08)
+                inc     hl                          ; -> shape
+                inc     de                          ; OPVAL+1
+                ld      a, (hl)
+                ld      (de), a                     ; OPVAL+1 = shape
+                ld      c, a                        ; C = shape (save for dispatch)
+                inc     hl                          ; -> base (Rn)
+                inc     de                          ; OPVAL+2
+                ld      a, (hl)
+                ld      (de), a                     ; OPVAL+2 = base
+                inc     hl                          ; -> first remaining field
+                inc     de                          ; OPVAL+3
+; Dispatch on shape.
+                ld      a, c
+                or      a
+                ret     z                           ; shape 0 (MemBase): done
+                cp      1
+                jr      z, enc_mfov_off
+                cp      2
+                jr      z, enc_mfov_off
+                cp      3
+                jr      z, enc_mfov_off
+                cp      4
+                jr      z, enc_mfov_idx
+                cp      5
+                jr      z, enc_mfov_shifted
+                cp      6
+                jr      z, enc_mfov_extended
+                jp      enc_fail_unsupported_operand
+
+enc_mfov_off:
+; Shapes 1/2/3 (MemBaseOff/Pre/Post): stream has [len_lo][len_hi][expr...].
+; Evaluate expr into expr_result, then copy 8 bytes to OPMEM_OFF.
+                call    enc_eval_at_hl              ; HL -> [lenlo][lenhi][expr...]; result -> expr_result
+                ld      hl, expr_result
+                ld      de, OPMEM_OFF
+                ld      bc, 8
+                ldir
+                ret
+
+enc_mfov_idx:
+; Shape 4 (MemBaseIdx): stream has [idx][idxWidth]. Write to OPVAL+3, OPVAL+4.
+                ld      a, (hl)
+                ld      (de), a                     ; OPVAL+3 = idx (Rm)
+                inc     hl
+                inc     de                          ; OPVAL+4
+                ld      a, (hl)
+                ld      (de), a                     ; OPVAL+4 = idxWidth
+                ret
+
+enc_mfov_shifted:
+; Shape 5 (MemBaseIdxShifted): stream has [idx][idxWidth][shiftAmt].
+; OPVAL+3=idx, OPVAL+4=idxWidth, OPVAL+6=shiftAmt (OPVAL+5=extend unused).
+                ld      a, (hl)
+                ld      (de), a                     ; OPVAL+3 = idx
+                inc     hl
+                inc     de                          ; OPVAL+4
+                ld      a, (hl)
+                ld      (de), a                     ; OPVAL+4 = idxWidth
+                inc     hl
+                inc     de                          ; OPVAL+5 (extend — unused for shape 5)
+                inc     de                          ; OPVAL+6
+                ld      a, (hl)
+                ld      (de), a                     ; OPVAL+6 = shiftAmt
+                ret
+
+enc_mfov_extended:
+; Shape 6 (MemBaseIdxExtended): stream has [idx][idxWidth][extend][shiftAmt].
+; OPVAL+3=idx, OPVAL+4=idxWidth, OPVAL+5=extend, OPVAL+6=shiftAmt.
+                ld      a, (hl)
+                ld      (de), a                     ; OPVAL+3 = idx
+                inc     hl
+                inc     de                          ; OPVAL+4
+                ld      a, (hl)
+                ld      (de), a                     ; OPVAL+4 = idxWidth
+                inc     hl
+                inc     de                          ; OPVAL+5
+                ld      a, (hl)
+                ld      (de), a                     ; OPVAL+5 = extend
+                inc     hl
+                inc     de                          ; OPVAL+6
+                ld      a, (hl)
+                ld      (de), a                     ; OPVAL+6 = shiftAmt
+                ret
 
 ; -- enc_is_shifted_mnem — A = mnemonic id low byte; Z if in set --------
 ; Shifted-reg mnemonic ids: 1,2,14,15,16,45,46,47,80,98.
