@@ -120,9 +120,9 @@ func TestBootSelfTestsPass(t *testing.T) {
 	// failure path is `ld a,c; jp fail_with_tag`, so a broken disasm
 	// self-test shows up here with its tag.
 	if strings.HasPrefix(res.PrinterCapture, "FAIL") {
-		tag := strings.TrimSpace(strings.TrimPrefix(res.PrinterCapture, "FAIL"))
-		t.Fatalf("a boot self-test FAILED (fail tag %q): printer=%q exit=%q regs=%s",
-			tag, res.PrinterCapture, res.ExitReason, res.FaultRegs)
+		symPath := filepath.Join(root, "build", "assembler.sym")
+		t.Fatalf("a boot self-test FAILED [%s]: printer=%q exit=%q regs=%s",
+			describeFailBanner(res.PrinterCapture, symPath), res.PrinterCapture, res.ExitReason, res.FaultRegs)
 	}
 
 	if !res.Passed {

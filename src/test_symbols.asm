@@ -183,7 +183,7 @@ set_value_buf_imm:
 ;
 ; Mirrors assert_eq32_de_hl_imm (test_slots.asm) but reads the
 ; "actual" bytes from symbol_value_buf instead of DEHL.  On mismatch:
-; jp fail.
+; jp fail_at_bc (records the call site, then fails).
 ;
 ; Clobbers: A, BC, HL.
 ; -----------------------------------------------------------------------
@@ -193,25 +193,25 @@ assert_value_buf_eq_imm:
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
                 inc     hl
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
                 inc     hl
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
                 inc     hl
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
 
                 push    bc
@@ -220,7 +220,7 @@ assert_value_buf_eq_imm:
 
 ; -----------------------------------------------------------------------
 ; assert_cf_set / assert_cf_clear — assert the carry-flag state on
-; entry.  Failure path: jp fail.
+; entry.  Failure path: jp fail_at_ret (records the caller site, then fails).
 ;
 ; These take NO inline literal, so callers just do `call assert_cf_*`
 ; with no defb suffix.  Used to validate symbol_lookup's CF semantics.
@@ -228,9 +228,9 @@ assert_value_buf_eq_imm:
 ; Clobbers: A.
 ; -----------------------------------------------------------------------
 assert_cf_set:
-                jp      nc, fail
+                jp      nc, fail_at_ret
                 ret
 
 assert_cf_clear:
-                jp      c, fail
+                jp      c, fail_at_ret
                 ret

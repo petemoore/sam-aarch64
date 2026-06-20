@@ -260,7 +260,7 @@ t_expr_rel_g3_end:
 ;     defb b0, b1, b2, b3, b4, b5, b6, b7
 ;
 ; Mirrors assert_value_buf_eq_imm (test_symbols.asm) but reads from
-; expr_result and checks 8 bytes instead of 4.  On mismatch: jp fail.
+; expr_result and checks 8 bytes instead of 4.  On mismatch: jp fail_at_bc.
 ;
 ; Uses an unrolled 8-byte compare (rather than a djnz loop) because the
 ; loop counter would otherwise clash with BC's role as the inline-
@@ -274,49 +274,49 @@ assert_expr_result_eq_imm:
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
                 inc     hl
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
                 inc     hl
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
                 inc     hl
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
                 inc     hl
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
                 inc     hl
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
                 inc     hl
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
                 inc     hl
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc                          ; BC = past the 8-byte literal
 
                 push    bc
