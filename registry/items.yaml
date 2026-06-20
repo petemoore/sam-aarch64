@@ -1865,7 +1865,7 @@
   title: Restore the SAM opening screen that Colin's Trinity boot-ROM patch tramples
   description: |
     Colin's custom ROM boots straight from Trinity (no B-DOS floppy) but overwrites the normal power-on opening screen. Restore by appending code to end of B-DOS (Trinity flash) that redraws the opening screen. The screen is not a clean re-callable subroutine — it is the inline RAINBOW SCREEN block at ROM &ED1B: set MODE 3, init PALTAB, build LINICOLS rainbow table, print MGT banner. Restoration = reproduce that draw in appended Z80, not call a routine. Touches non-redistributable B-DOS 1.5t Trinity fork; modifying Colin's B-DOS may warrant his input (Pete's call).
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i135a]
   kind: leaf
   owner: agent
@@ -2479,7 +2479,7 @@
   title: "SAMBOOT: emulation-prototype the EEPROM bootblock injection (stripes + BIOS + boot-record); folds i112"
   description: |
     Patch the EEPROM bootblock in the koron-z80 harness (emulation-first): always redraw the MGT stripes, read the SAMBOOT BIOS config, auto-boot the configured Trinity record or fall through to BASIC. Folds i112 (opening-screen restore).
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i135a, i176]
   kind: leaf
   owner: agent
