@@ -2409,9 +2409,11 @@
   title: "registry CLI: concurrency-safe mutation (file lock + atomic write) for concurrent/parallel use"
   description: |
     The CLI read-modify-writes the YAML with NO locking, so two concurrent mutations (Pete adds an item while an agent runs dep add) race -> last-writer-wins -> a change is silently lost; the .id-ledger append is likewise unguarded. Add an advisory file lock around load->mutate->write, atomic writes (temp+rename), and define contention behaviour. Enables Pete to add items while an agent works; prerequisite for parallel agent sessions (which also need git merge-conflict handling/recovery on the YAML — split if larger).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 474, role: completing}
 
 - id: i150
   title: "registry CLI: require an explicit data source — never guess, never fall back to test fixtures"
