@@ -2801,10 +2801,12 @@
   title: "POC: run Colin's real 1.5t CSD-decode + records-math against a hand-filled CSD buffer (no SPI)"
   description: |
     POC-1 (DONE this session). Load Colin's B-DOS 1.5t fork binary (bdos15t-beta6.bin) into the netboot harness at the section-B aliases (the DOS page runs paged into &4000-&7FFF, so real &Axxx code = &6xxx) and run his REAL, hardware-proven CSD-decode (&A736 -> &6736) + records-math (&A45A -> &645A) against a HAND-FILLED 16-byte CSD buffer at &780F (no SPI). Asserts Colin's 32-bit block-count + BD_RECORDS match an independent Go reimpl of the i193 section-6 formula across v1/v2 cards incl. Pete's 64GB SDHC. Proves (a) the harness can execute Colin's code = the run/paging recipe for i145f, and (b) his capacity math. FINDING: Colin's BD_RECORDS is a 16-bit DVAR (&80C4) that WRAPS for cards >51GB (64GB -> 14581 not 80117 records) — the BD_RECORDS-width question. Test: tools/netboot-oracle/z80/csd_decode_colin_test.go (skips if the proprietary binary is absent via $BDOS15T_BIN). First rung of the emulation-first confidence ladder Pete defined 2026-06-22: validate the emulation with code we KNOW runs on hardware before running new code in it.
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i193]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 534, role: completing}
   parent: i145
 
 - id: i145f
