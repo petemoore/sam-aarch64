@@ -2780,9 +2780,11 @@
   title: "ready --pete-away (default, excludes owner:pete) / --pete-present (includes + prioritizes)"
   description: |
     The core needs-Pete mechanism: 'build/registry ready' excludes owner:pete (needs-Pete-present) items by DEFAULT so the autonomous agent's tip is always agent-actionable; --pete-present includes them AND emits them first (don't waste Pete's presence). Fixes the autonomous-loop trap where an owner:pete item (e.g. i87a) is the ready tip. The presence-file auto-defaulting, decision-item->question conversions, backlog gate marker, and docs remain the i169 remainder.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 495, role: completing}
   parent: i169
 
 - id: i172
