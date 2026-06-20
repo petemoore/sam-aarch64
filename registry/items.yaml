@@ -361,7 +361,7 @@
   title: Harden slot self-test PASS_PC dependency
   description: |
     Deferred-backlog item. Hardens the slot self-test PASS_PC dependency to make it more robust.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
