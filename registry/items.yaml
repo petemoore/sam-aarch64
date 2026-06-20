@@ -3034,10 +3034,12 @@
   title: "SAMBOOT dumper: fix rom1 page-0 scratch clobber + restore paging for a clean trinload return"
   description: |
     The i173 dumper crashed real hardware capturing rom1.bin (i87a, 2026-06-21): dumper_read_rom1 picks scratch page P-1 = page 0 (P=1, the trinload push page), ldirs 16 KB of ROM1 into it, and never restores LMPR — clobbering low memory AND remapping section B (&6000) away from trinload (org &6000), killing trinload. COMPOUND defect, confirmed in emulation by i181's characterization test (dumper_rompaging_test.go): the routine ALSO clobbers its own register C — it stashes the intended post-copy LMPR (&20) in C, then `ld bc,REGION_BYTES; ldir` counts BC to 0, so the final `ld a,c; out (&FA),a` writes &00 (section A=ROM0, section B=page1), making the mis-paging total. Redesign per Pete: one program that reads ALL regions (ROM0/ROM1/EEPROM) with a genuinely-free scratch page + restored paging + registers not clobbered by the copy, streams them in one session, then RETs cleanly to trinload (fixes serve-forever/no-clean-return that blocks the autonomous push->run->return->re-push loop). When fixed, flip i181's rom1 characterization (page 0 untouched, LMPR==entry). Emulation-verify the full path (paging + trinload round-trip) before hardware via i181. EEPROM read + rom0 already hw-confirmed (i87a backup). SCOPE (this item): the rom1 read fix (genuinely-free scratch = STAGE's own page P+1, registers not clobbered, entry LMPR restored) + the clean Esc-driven trinload return it enables — this is all i87a-b2 (rom1 recapture) needs. The headless auto-RET-after-all-regions-served (the 'serve-forever' fix, only needed for the fully-unattended push->run->return loop, NOT the recapture) is split to i192; the eeprom/rom0 captures already returned via Esc, so it does not block i87a-b2.
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i181]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 524, role: completing}
   refs: [docs/specs/samboot.md, docs/notes/netboot-trinity-testing.md]
 
 - id: i189
