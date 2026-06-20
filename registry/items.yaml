@@ -431,7 +431,7 @@
   title: Editor edit-buffer data structure — insertion performance for large source
   description: |
     Architectural decision: the editor holds source in a separate insertion-friendly in-memory document model (paged block-list: block = page, intra-block gap buffer, record-id side-tables; worst-case edit ~30–80 ms at 400 KB) and serializes to .tbn on save/assemble. Unifies the editor document model with i48's IR (edit-model records = in-memory symbolic IR). Design agreed (opus, 2026-06-08), 5 key decisions in docs/specs/editor-edit-model-design.md §7. Decomposed into i41a–i41e.
-  status: IN_PROGRESS
+  status: OPEN
   kind: umbrella
   owner: agent
   refs: ["docs/specs/editor-edit-model-design.md §7", docs/notes/m9-status.md, i41a, i41b, i41c, i41d, i41e]
@@ -556,7 +556,7 @@
   title: Single serialized format + pass-free syntactic encoder (the design)
   description: |
     Design for single serialized format + pass-free syntactic encoder. Decision A: the compact overlay is the only serialized .tbn; the symbolic kinds (KindInst/LabelDef/LocalDef/LitInsts) become an in-memory IR, never written. Decision B: text->overlay is a pure syntactic transform; value-dependent bits computed in the fold at assemble time; forego GNU silent rewrites; narrow assemble-time mov->movz/orr/movn fallback. Host side COMPLETE (i48a #144, i48b, i48d). i48c (Z80 text->overlay encoder) is the M9 carry-forward.
-  status: IN_PROGRESS
+  status: OPEN
   kind: umbrella
   owner: agent
   refs: [docs/specs/i48-syntactic-encoder-design.md, "https://github.com/petemoore/sam-aarch64/blob/d874a69/docs/notes/m8-status.md", i48c]
@@ -589,7 +589,7 @@
   title: Z80 text→overlay encoder (editor input path)
   description: |
     SAM-side mirror of the host front-end (tools/sam-aarch64/frontend: lexer→parser→records). Go i48b is the authority. Absorbs i39c (overlay slot bitfield-packing polish). Large multi-PR port decomposed into bricks B1–B8 (scoped 2026-06-17). B1–B7 are flat-memory-autonomous (koron-go/z80 harness, netboot-z80 CI). B8 is assembler-coupled, lands last. Host Preprocess (.include/.macro/.if) is out of scope (host-only bulk-import concern).
-  status: IN_PROGRESS
+  status: OPEN
   kind: umbrella
   owner: agent
   refs: [src/asmlex.asm, src/asmparse.asm, tools/netboot-oracle/z80/asmlex_test.go, tools/netboot-oracle/z80/asmparse_test.go, tools/sam-aarch64/frontend/lexer.go, tools/sam-aarch64/frontend/parser.go, "docs/specs/i48-syntactic-encoder-design.md §2", "docs/specs/i48-syntactic-encoder-design.md §7", docs/notes/m9-status.md, i39c, i109]
@@ -1119,7 +1119,7 @@
   title: Upstream SimCoupé issue triage — review open issues and assist where we can
   description: |
     Umbrella for SimCoupé upstream community contributions. Triage complete (2026-06-13): produced contributions i81a (PNG-endian fix PR — BLOCKED:Pete), i81b (issue #28 comment — DONE PR #370), i81c (SDL headless fallback — BLOCKED:Pete). i81a and i81c remain open; i81b is done.
-  status: IN_PROGRESS
+  status: OPEN
   kind: umbrella
   owner: agent
   refs: [tools/font-proof/simcoupe-local-capture.patch, i80]
@@ -1217,8 +1217,8 @@
 - id: i88
   title: On-SAM HTTPS/TLS-1.3 client to fetch Pi firmware directly from GitHub
   description: |
-    Phase-3 stretch, LOWEST priority (Pete: only when nothing else is left). TLS-crypto-only: github.com-only, pinned public key, no CA store (content is SHA-256-pinned so cert verification is skipped). 6a host-verifiable state machine DONE (i88a); 6b record-reassembly layer DONE (i88b: tls_reasm.asm). Remaining 6b is hardware-gated integration: wire tls_reasm_feed into tcp_conn CONN_SINK_FILTER, paging layout, bootable disk, real RST 8 on Trinity. Prerequisite: TC_RX must grow 1056->16645 B (TLS max) before a real Certificate record fits.
-  status: IN_PROGRESS
+    Phase-3 stretch, LOWEST priority (Pete: only when nothing else is left). TLS-crypto-only: github.com-only, pinned public key, no CA store (content is SHA-256-pinned so cert verification is skipped). Decomposed into i88a (6a host-verifiable state machine), i88b (6b record-reassembler), and i88c (6b hardware-gated integration).
+  status: OPEN
   kind: umbrella
   owner: agent
   refs: [docs/specs/phase3-delivery-design.md, src/netboot/tls_client.asm, tools/netboot-oracle/tls/, docs/specs/tls13-handshake.md, i70, i84, i100]
@@ -1246,6 +1246,16 @@
     - {num: 360, role: completing}
   parent: i88
   refs: [src/netboot/tls_reasm.asm, tools/netboot-oracle/tls/reassembler.go, tools/netboot-oracle/z80/tls_reasm_test.go, i88]
+
+- id: i88c
+  title: "i88 6b — hardware-gated integration: wire tls_reasm into tcp_conn, paging layout, bootable disk, real RST 8 on Trinity"
+  description: |
+    Wire tls_reasm_feed into tcp_conn CONN_SINK_FILTER; finalise paging layout; build a bootable disk; exercise over real RST 8 on Trinity hardware. Prerequisite: TC_RX must grow from 1056 to 16645 B (TLS max) before a real Certificate record fits. Hardware-gated (CLAUDE.md §5).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i88
+  refs: [src/netboot/tls_reasm.asm, src/netboot/tls_client.asm, src/netboot/tcp_conn.asm, i88, i88b]
 
 - id: i89
   title: Capture a Pi 3 netboot exchange (Phase-3) — extend i83/i86 oracle to the older Pi family
@@ -1362,7 +1372,7 @@
   title: Firmware-download provisioning UX — user-selectable revision and file subset
   description: |
     On-SAM multi-file firmware downloader with user-selectable revision pin and file subset. Host-verified slice complete as i100a; bootable migration + real HSAVE store leaf complete as i100b (closed). Remaining: i100c picker UX (Pete-gated interface design).
-  status: IN_PROGRESS
+  status: OPEN
   kind: umbrella
   owner: agent
   refs: [src/netboot/fw_source.asm, src/netboot/http_main.asm, docs/specs/phase3-delivery-design.md, i100a, i100b, i100c]
@@ -1415,7 +1425,7 @@
   title: Aggressive T-state optimization of the netboot crypto / TLS-1.3 cipher-suite Z80
   description: |
     Drive down T-states and code size of host-verified crypto leaves (sha256, hmac_sha256, hkdf, chacha20, poly1305, x25519, aead) using full Z80 opcode set including undocumented instructions; bit-exact reproducibility preserved (byte-for-byte host tests are the guardrail). Craft/fun exercise, no deadline. Landed as sub-items i102a–i102l + i102n–i102r (all DONE, closed registry): x25519 cumulative -50.4% (1.604G→0.796G), SHA-256 -56.8% (729K→315K T/block, fastest verified Z80 SHA-256). Remaining: i102m (sha256 throughput umbrella — sub-items mostly done, one small lever left).
-  status: IN_PROGRESS
+  status: OPEN
   kind: umbrella
   owner: agent
   refs: [i88, src/netboot/, tools/netboot-oracle/z80/]
@@ -1567,8 +1577,8 @@
 - id: i102m
   title: i102 sha256 throughput rewrite for the firmware-verify path
   description: |
-    Increments i102n-i102r landed (closed registry): sha256 729,795->315,355 T/block (-56.8%) — fastest verified Z80 SHA-256. i102r (register-accumulator round, -8.0%, PR #377) was the last sizeable architectural lever. Recalibration: the ~112k reference floor is not grounded — first-principles analysis caps practically-capturable further gains at single-digit %. Remaining: the message-schedule extend loop still does 3 term adds memory-to-memory (add4_body); applying BCDE += accumulate there is ~2% more — one clean lever left. Low priority (world-best already, no deadline).
-  status: IN_PROGRESS
+    Increments i102n-i102r landed (closed registry): sha256 729,795->315,355 T/block (-56.8%) — fastest verified Z80 SHA-256. Decomposed into i102n–i102r (all DONE) + i102s (message-schedule extend loop lever, OPEN). Low priority (world-best already, no deadline).
+  status: OPEN
   kind: umbrella
   owner: agent
   parent: i102
@@ -1633,6 +1643,16 @@
     - {num: 377, role: completing}
   parent: i102m
   refs: [src/netboot/sha256.asm, tools/sha256-unroll-gen/, tools/netboot-oracle/z80/tstates_baseline_test.go, i102m, i102q]
+
+- id: i102s
+  title: i102 sha256 message-schedule extend loop — BCDE accumulate in add4_body (~2% gain)
+  description: |
+    The message-schedule extend loop still does 3 term adds memory-to-memory (add4_body). Applying the BCDE register-accumulate pattern used in the round path to add4_body eliminates the write-back round-trips, netting an estimated ~2% further reduction. One clean lever remaining after i102r. Low priority (world-best already, no deadline).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i102m
+  refs: [src/netboot/sha256.asm, i102m, i102r]
 
 - id: i103
   title: Autonomous-loop monitor — activity-gated quiescence
@@ -1766,7 +1786,7 @@
   title: Registry as structured source — YAML-backed iN/qN registry with CLI validator + CI sync-check
   description: |
     Registry as structured source — generate the iN/qN markdown views from validated YAML (registry/*.yaml) gated by a CLI validator + a registry-sync CI job, so a malformed edit is rejected at the iteration that introduces it (decay-proof, git-native tracking at scale). Model revised 2026-06-19: enum OPEN/IN_PROGRESS/DONE/WONTFIX (no BLOCKED — derived from depends_on edges), transient questions, dependency DAG core.
-  status: IN_PROGRESS
+  status: OPEN
   kind: umbrella
   owner: agent
   refs: [docs/specs/registry-source-of-truth-design.md, docs/plans/registry-structured-source.md, i114, i117]
@@ -1882,7 +1902,7 @@
   title: i82 TFTP client — persistence write-out on real hardware
   description: |
     Wire the i82 client's B-DOS persistence write-out; deferred by Pete (first test = receive only; persistence later). Gaps: (1) record-0-selection bug — client_main selects record 0 = floppy; (2) HRECORD-stamp question — whether a build-disk .mgt record is HRECORD-selectable; (3) large-file staging via the i99 fw_span port; (4) filename >10-char UIFA truncation. Free-record detection reads the on-card list directly per docs/specs/trinity-record-detection-design.md (Trinity SD is SHARED — show-name + confirm-before-overwrite mandatory). HSAVE write-out + raw-SD list read stay hardware-gated.
-  status: IN_PROGRESS
+  status: OPEN
   kind: umbrella
   owner: agent
   refs: [src/netboot/netboot_client.asm, src/netboot/bdos_seam.asm, docs/specs/trinity-record-detection-design.md, docs/specs/samdos-file-io.md, i82, i93, i99, i114, i134]
