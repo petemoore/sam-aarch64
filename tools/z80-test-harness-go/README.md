@@ -76,14 +76,18 @@ sysreg operands happen to survive without it, which is why this was easy to
 miss.)  Build it with `make sysreg-data`.  See
 `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-go-harness-paged-trap-rootcause.md`.
 
-For the faithful alternative (i183), `Config.StrictFileNotFound` makes an
-unserved file a real SAMDOS file-not-found error — the `(hksp)` longjmp, or a
-clean cause-naming halt with no handler — at the point of failure instead of
-the downstream `&0038` trap.  `Config.FailHGTHD` / `Config.FailHSAVE` inject
-file-I/O failures, and `Config.HkspAddr` points at the emulated `(hksp)`
-handler vector.  This is the emulation-first prerequisite for i25 (the
-assembler-side `(hksp)` handler); see `harness.go` "SAMDOS file-I/O error
-longjmp" and `samdos_error_longjmp_test.go`.
+For the faithful alternative, `Config.StrictFileNotFound` makes an unserved
+file a real SAMDOS file-not-found error — modelled via ROM PTDOS's post-hook
+`DOSER` (`&5BC0`) dispatch (`JP (DOSER)` after every hook with `A` = the error
+number, 0 on success), reaching an installed handler or, with none, halting
+cleanly with a cause-naming message at the point of failure instead of the
+downstream `&0038` trap.  `Config.FailHGTHD` / `Config.FailHSAVE` inject
+file-I/O failures, and `Config.DoserAddr` points at the emulated `DOSER`
+handler vector (defaults to `&5BC0`).  This is the emulation-first prerequisite
+for i25 (the assembler-side `DOSER` error handler); see `harness.go` "SAMDOS
+file-I/O error dispatch via DOSER" and `samdos_error_longjmp_test.go`.
+(The earlier `(hksp)` model was the wrong vector — i185 found `(hksp)` is not
+app-usable.)
 
 BUILD_TESTS variant (runs the boot-time self-test suites, including
 `run_reader_paged_self_tests`).  Pass the off-axis test_mem binary and the
@@ -113,9 +117,11 @@ trigger-PC backtrace via `TrigPC`) — see `test_variant_test.go` and
 4. Runs the Z80 CPU via koron-go/z80 until HALT or timeout.
 5. Intercepts SAMDOS hooks via port &FD: HGTHD (129) populates &4B50 with IN file
    geometry; HLOAD (130) is a no-op (data already in pages); HSAVE (132) captures
-   OUT bytes from UIFA[31..36] + physical pages 5-6.  A failed file-I/O hook
-   (unserved-and-strict, or injected) models SAMDOS's `derr → (hksp)` longjmp
-   (i183) — see the section above.
+   OUT bytes from UIFA[31..36] + physical pages 5-6.  After every file-I/O hook
+   (success or error) the harness models ROM PTDOS's `JP (DOSER)` post-hook
+   dispatch (`&5BC0`, `A` = the error number); a failed hook
+   (unserved-and-strict, or injected) reaches an installed `DOSER` handler or
+   halts cleanly when none — see the section above.
 6. Captures printer bytes from ports &E8/&E9.
 7. Returns `(passed, printerCapture, outBytes, last200PC, exitReason)`.
 
