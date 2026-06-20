@@ -429,12 +429,9 @@ enc_lsl_imm:
                 and     &3f
                 ld      (enc_imms), a
 enc_lslsr_ubfm:
-                ld      hl, enc_base_ubfm64
-                ld      a, (enc_regmask)
-                cp      63
-                jr      z, enc_lslsr_imm_emit
-                ld      hl, enc_base_ubfm32
-enc_lslsr_imm_emit:
+                ld      de, enc_base_ubfm64
+                ld      bc, enc_base_ubfm32
+                call    enc_pick_base_hl
                 call    enc_copy_base
                 jp      enc_build_word
 
@@ -449,19 +446,14 @@ enc_lslsr_reg:
                 cp      17
                 jr      z, enc_lslv
 ; lsrv
-                ld      hl, enc_base_lsrv64
-                ld      a, (enc_regmask)
-                cp      63
-                jr      z, enc_lslsr_reg_emit
-                ld      hl, enc_base_lsrv32
+                ld      de, enc_base_lsrv64
+                ld      bc, enc_base_lsrv32
                 jr      enc_lslsr_reg_emit
 enc_lslv:
-                ld      hl, enc_base_lslv64
-                ld      a, (enc_regmask)
-                cp      63
-                jr      z, enc_lslsr_reg_emit
-                ld      hl, enc_base_lslv32
+                ld      de, enc_base_lslv64
+                ld      bc, enc_base_lslv32
 enc_lslsr_reg_emit:
+                call    enc_pick_base_hl
                 call    enc_copy_base
                 jp      enc_build_word
 
@@ -540,26 +532,18 @@ enc_bf_base:
                 jr      z, enc_bf_ubfm
                 cp      84
                 jr      z, enc_bf_sbfm
-                ld      hl, enc_base_bfm64
-                ld      a, (enc_regmask)
-                cp      63
-                jr      z, enc_bf_emit
-                ld      hl, enc_base_bfm32
+                ld      de, enc_base_bfm64
+                ld      bc, enc_base_bfm32
                 jr      enc_bf_emit
 enc_bf_ubfm:
-                ld      hl, enc_base_ubfm64
-                ld      a, (enc_regmask)
-                cp      63
-                jr      z, enc_bf_emit
-                ld      hl, enc_base_ubfm32
+                ld      de, enc_base_ubfm64
+                ld      bc, enc_base_ubfm32
                 jr      enc_bf_emit
 enc_bf_sbfm:
-                ld      hl, enc_base_sbfm64
-                ld      a, (enc_regmask)
-                cp      63
-                jr      z, enc_bf_emit
-                ld      hl, enc_base_sbfm32
+                ld      de, enc_base_sbfm64
+                ld      bc, enc_base_sbfm32
 enc_bf_emit:
+                call    enc_pick_base_hl
                 call    enc_copy_base
                 jp      enc_build_word
 
@@ -580,12 +564,9 @@ enc_ror:
                 ld      a, (expr_result)
                 and     &3f
                 ld      (enc_imms), a               ; imms := shift
-                ld      hl, enc_base_extr64
-                ld      a, (enc_regmask)
-                cp      63
-                jr      z, enc_ror_emit
-                ld      hl, enc_base_extr32
-enc_ror_emit:
+                ld      de, enc_base_extr64
+                ld      bc, enc_base_extr32
+                call    enc_pick_base_hl
                 call    enc_copy_base
                 jp      enc_build_word
 
@@ -851,6 +832,22 @@ enc_eval_at:
                 ld      b, (hl)                     ; BC = expr length
                 inc     hl                          ; HL -> expr bytes
                 jp      eval_expr_const
+
+; -- enc_pick_base_hl — width-select a base-word pointer --------------
+; HL := (enc_regmask == 63) ? DE (64-bit base) : BC (32-bit base).
+; The shift/bitfield encoders all pick their base word this way; this
+; collapses the repeated `cp 63 / jr z / ld hl,…` pairs into one call.
+; Clobbers A.
+enc_pick_base_hl:
+                ld      a, (enc_regmask)
+                cp      63
+                jr      nz, enc_pick_base_hl_32
+                ex      de, hl                      ; HL = base64
+                ret
+enc_pick_base_hl_32:
+                ld      h, b
+                ld      l, c                        ; HL = base32
+                ret
 
 ; -- enc_copy_base — copy 4 base bytes (HL) into enc_base ---------------
 enc_copy_base:
