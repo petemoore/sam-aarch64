@@ -2610,3 +2610,43 @@
   owner: agent
   prs:
     - {num: 483, role: completing}
+
+- id: i158
+  title: Padlock/gate marker in item-registry-open.md (mirror backlog.md gate column)
+  description: |
+    Add the gate marker (ready / in-progress / 🔒 qN blocked-on-Pete / ⏳ iN blocked-on-work) to item-registry-open.md, mirroring the backlog.md gate column (computeGates), so the open-items view also shows at a glance what's actionable vs blocked-on-Pete. Pete request 2026-06-20.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i159
+  title: Hyperlink item refs to in-file anchors in the registry .md tables
+  description: |
+    In item-registry-open/closed.md + backlog.md, render id references (deps, dependents, parent, id-shaped refs) as in-file anchor links (e.g. [i122](#i122)) so a reader can jump to the referenced row within the same doc. Needs per-row anchors (GFM heading/HTML anchors in a table cell) + ref→anchor rewriting in gen.go. Pete request 2026-06-20.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i160
+  title: Tree-view preview at the bottom of the registry .md docs
+  description: |
+    Append a visual tree view (umbrellas → children → bricks) to item-registry-open.md / item-registry-closed.md / backlog.md, below the full table, so the hierarchy is visible at a glance. Derive from the parent edges in gen.go. Pete request 2026-06-20 (the corrupted '#3').
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i161
+  title: "Research CIIP (Z80 TCP/IP stack): locate source, assess license + portability"
+  description: |
+    From q25 (Pete: yes, investigate). Find CIIP — a pre-existing Z80 TCP/IP stack (TFTP/HTTP/DNS servers+clients; Simon Owen reportedly ported it to pyz80). Search ~/sam-archive + Pete's disks + online (GitHub etc.); do NOT scan Pete's photos (he checked — no source location, and it burns tokens). Assess license/portability and weigh 'adapt CIIP' vs continue i82/i83/i86. Report findings.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i162
+  title: Version-control ~/bin agent tools in a private ~/git/claude-tools repo
+  description: |
+    From q33 (Pete: yes, private). Create ~/git/claude-tools, move the ~/bin agent tools in (claude-chat-export incl. the i155 fix, claude-diary helpers, claude-chat-export SessionEnd hook target, etc.), scrub anything private/secret, push to github.com/petemoore/claude-tools as a PRIVATE repo (Pete can make public later). Gives the tools backup + history.
+  status: OPEN
+  kind: leaf
+  owner: agent
