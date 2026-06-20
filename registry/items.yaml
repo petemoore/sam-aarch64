@@ -2295,6 +2295,7 @@
   owner: agent
   prs:
     - {num: 463, role: completing}
+    - {num: 463, role: completing}
   refs: [tools/netboot-oracle/z80/, tools/z80-test-harness-go/, i119, i126, i48c, i41]
 
 - id: i139
@@ -2328,3 +2329,11 @@
   owner: agent
   parent: i119
   refs: [docs/specs/trinity-record-detection-design.md]
+
+- id: i142
+  title: make registry should rebuild build/registry before mutations — stale-binary footgun
+  description: |
+    The build/registry binary is a built artifact; running 'build/registry set-status/add' with a STALE binary (not rebuilt after a tool change) misbehaves silently — it caused the i138 DONE-but-in-priority inconsistency (a pre-#462 binary skipped the reconcilePriority step, stranding i138 in the queue). Fix: make 'registry-gen' a prerequisite of 'make registry' and the mutation paths (or have the CLI self-rebuild / a wrapper), so an agent cannot operate the registry with a stale binary.
+  status: OPEN
+  kind: leaf
+  owner: agent
