@@ -2349,6 +2349,15 @@
   owner: agent
   parent: i121
 
+- id: i121f
+  title: WRQ disk-record push path — stream a pushed .mgt into a free bootable Trinity record (PRIMARY use case)
+  description: |
+    Pete's PRIMARY use case (2026-06-21): tftp put a .mgt disk image (819200 B) under the trinity-sam-disks/ namespace -> the SAM streams it into a free raw Trinity record (bootable + servable-raw, manifest design sec 6.5), validating size==819200 + BDOS stamp@232. Cannot stage whole (819200 B doesn't fit RAM), so the WRQ receive dispatch (i121b) feeds the i122b raw_record_sink (bdos_write_record / HWSAD) sector-by-sector; free record via i119 bdos_find_free_record; ERROR(3) if none free or validation fails. Reuses the i122 store side + i121a handshake; refactors handle_data to feed a pluggable sink. Distinct from i121c (the DEFAULT flat-file HSAVE archive path, secondary). Host-verifiable via BDOSStore SectorWrites; real SD write hardware-gated.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i121
+
 - id: i122
   title: "SAM fetch-and-boot (PXE-style): TFTP-client-fetch a disk image and boot it directly"
   description: |
