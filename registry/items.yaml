@@ -3381,7 +3381,7 @@
   title: "SAM software catalogue: index every key binary, disassembly, investigation + how they relate"
   description: |
     Pete (2026-06-21): we now have many pieces of SAM software — some disassembled, some commented, some not — and no single overview, which has caused real confusion (e.g. SAMDOS vs B-DOS, where B-DOS replaces SAMDOS). Build a generic SAM software catalogue (a living reference doc) that for each piece records: what it is, where its binary lives, where its disassembly lives + whether commented, related investigations/reports, and how the pieces relate. Pieces include: the SAM system ROMs (untarnished, incl. startup stripes); Colin's forked ROM (fetches boot code from EEPROM -> how the forked-B-DOS bootblock is stored on EEPROM) — extracted 2026-06-21 (rom0.bin in ~/sam-archive/samboot-capture/, rom1 pending i87a-b2); the Trinity EEPROM contents + the Trinity disk's network-config program (defines the EEPROM layout) — eeprom.bin extracted 2026-06-21; trinload; SAMDOS; B-DOS; our own netboot programs + harness. Reference it from ARCHITECTURE.md. Record extraction artifacts so they are never lost.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   refs: [docs/specs/samboot.md, docs/ARCHITECTURE.md]
