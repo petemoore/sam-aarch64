@@ -3453,9 +3453,11 @@
   title: "i48c-b8e-1: encodeInst skeleton + operandsToValues + form-table path (SAM standalone encoder, brick 1)"
   description: |
     First brick of the i48c-b8e encoder port (see i48c-b8e umbrella). Port the core encodeInst dispatch SKELETON (pass2.go:214-373) + operandsToValues (pass2.go:375-423) + the generic form-table path (ValidateOperandKinds -> operandsToValues -> enc.Encode). The FOUNDATION all other b8e bricks plug into: read the operand stream into a kinds/operands list; for instructions whose operands are all plain GPR/ImmExpr/Cond and whose mnemonic is NOT a compound/special form, look up the form via form_lookup (form_lookup.asm, reads paged ENCTAB), convert operands to slot values (operandsToValues: plain regs -> {reg}; ImmExpr -> eval_expr_const then PC-relative adjust for BranchImm26/19/14, AdrpImm 33-bit-wrap, AdrImm; Cond -> {cond}), and encode via the proven slot encoders (src/slots/*.asm) + insn_fold (insn_run.asm). Testable on add/sub-imm12, movz/movk imm16, logical-imm and/orr/eor, b/bl/b.cond/cbz branch-imm, adrp/adr, csel/csinc, ret/nop. Faithful port (CLAUDE.md s6), Go authority pass2.go encodeInst+operandsToValues. HARNESS: a BUILD_TESTS boot self-test inside the full paged assembler build (ENCTAB mapped by main_assemble; precedent assembler.asm:357-468 + test_mem_offaxis.asm off-axis). The Go harness synthesises fixtures, the self-test encodes, the Go side compares vs host encodeInst. SimCoupe-gated. This brick also builds the reusable self-test harness scaffold that bricks 2/3 extend.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 561, role: completing}
 
 - id: i201
   title: "i48c-b8e-3: compound-form encoders (memory, shifted-reg, extended-reg, litpool + 3-reg/tst coercions)"
