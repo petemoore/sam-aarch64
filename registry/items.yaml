@@ -2294,7 +2294,7 @@
   description: |
     i122 brick 4: idempotent fetch. Before fetching, compute the image's content SHA-256, derive its record name via i114d (content-addressed lookup), and check the on-card record list (i119 list-read path) — if a record with that content already exists, skip the fetch and boot the existing copy (i122a). Closes the i122 design note (b). Builds on i114d naming + the i119 list-read. Host-verifiable; real boot hardware-gated.
   status: OPEN
-  depends_on: [i114d, i122c]
+  depends_on: [i114d, i122c, q35]
   kind: leaf
   owner: agent
   parent: i122
