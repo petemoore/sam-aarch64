@@ -2839,10 +2839,12 @@
   title: "Extended validation: run Colin's write-record / select-record / read-back flow against the model"
   description: |
     Extended emulation validation (Pete's suggestion 2026-06-22): run Colin's write-record / select-record / read-back flow against the model — the fuller 'write a disk to storage, select that record, [boot it]' test, the strongest faithfulness check since it exercises CMD17/CMD24 single-block read+write + record selection (&A0A2) through Colin's REAL code. Needs the i145c model extended with CMD17/CMD24 + enough B-DOS scaffolding to drive HRECORD/HSAVE/HRSAD. Aspirational/larger than i145f, not on the critical CSD path, but the highest-confidence validation of the whole storage seam. Depends i145c (extended) + i145f.
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i145c, i145f]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 537, role: completing}
   parent: i145
 
 - id: i146
