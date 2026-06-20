@@ -2786,3 +2786,15 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i179
+  title: "monitor.sh: fix the prior-turn nudge-delivery race + add persistent delivery tracing (i97 follow-up)"
+  description: |
+    The task-done resume nudge is dropped when the monitor's TASK_DONE handler fires while the agent's PRIOR turn is still running (the agent touches task-done then keeps emitting, e.g. a summary). nudge_until_turn's 'if turn_running: return 0' then treats the still-running prior turn as nudge-success and never sends the nudge -> stall. Fix: wait_for_idle (sustained-idle confirm) before delivering /context + nudge; always send the nudge on attempt 1. Plus: persistent monitor.log tracing (every stuff/submit/turn_running/branch) so future delivery issues are visible, not guessed. Distinct from the i140 long-burst-drop fix (additive).
+  status: DONE
+  depends_on: [i97]
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 487, role: completing}
+  refs: [tools/autonomous-loop/monitor.sh, tools/autonomous-loop/monitor-nudge-delivery.md]

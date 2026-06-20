@@ -1,7 +1,15 @@
-# Robust resume-nudge delivery (i140)
+# Robust resume-nudge delivery (i140 + i179)
 
 How `monitor.sh` reliably delivers the task-done resume nudge into the Claude
 Code TUI, and why the obvious "sleep longer" fix does not work.
+
+There are **two distinct, additive** failure modes, fixed separately:
+- **i140 — the long-burst paste drop** (below): a long nudge stuffed as one burst
+  right after `/context` is swallowed wholesale. Fixed by chunked stuffing.
+- **i179 — the prior-turn race** ([jump](#i179--the-prior-turn-race)): the monitor
+  delivered while the agent's *previous* turn was still running, so the nudge was
+  skipped. Fixed by gating delivery on sustained idle. This is the one that
+  recurred after i140 (Pete, 2026-06-20).
 
 ## Symptom
 
@@ -62,9 +70,63 @@ produced `nudge delivered (attempt 1, 1s)` both times, and the agent took a real
 turn each time (read the readout, began grepping the OPEN registries per the
 nudge). The live loop session was never touched.
 
+## i179 — the prior-turn race
+
+### Symptom (recurred after i140)
+
+`/context` arrives and renders, but the resume nudge never becomes a turn — the
+agent sits idle until the hang-timeout. Exactly the i140 symptom, *after* the
+i140 fix shipped (Pete, 2026-06-20).
+
+### Root cause (read from the code + the live sequence, not guessed)
+
+The agent's protocol is "`touch task-done` **then end your turn**" — but ending a
+turn is not instant: the agent typically keeps emitting (e.g. a wind-down
+summary) *after* the `touch`. The monitor polls every `POLL`s, so it routinely
+enters the `TASK_DONE` handler **while the agent's previous turn is still
+running**. The old `nudge_until_turn()` began each attempt with:
+
+```sh
+if turn_running; then return 0; fi   # "a turn is running, so the nudge landed"
+```
+
+On the first attempt this is wrong: **no nudge has been sent yet.** The turn it
+detects is the agent's *still-finishing prior turn*, not a nudge-induced one — so
+the function returns "success" having **never stuffed the nudge**. `/context`
+(stuffed unconditionally just before) had queued and rendered, so the human sees
+the readout; the nudge was silently skipped. The monitor cannot, by screen-scrape
+alone, tell "the prior turn is still going" from "my nudge started a turn" *if it
+delivers while a turn is already running.*
+
+### Fix (gate on sustained idle + always send + trace)
+
+1. **`wait_for_idle()` gates delivery.** Before stuffing `/context` + the nudge
+   (and before `/clear` on wind-down), the monitor waits until `turn_running` has
+   been false for `IDLE_CONFIRM` consecutive checks (sustained idle — a single
+   reading can be a gap between an agent's tool calls). Now the prior turn is
+   guaranteed finished before delivery, so every later `turn_running` transition
+   is unambiguously the nudge's.
+2. **The first nudge attempt always sends.** The `turn_running` short-circuit is
+   restricted to *re-*attempts (`t > 1`), where a prior Enter may already have
+   submitted the text. Attempt 1 never returns before stuffing the nudge.
+3. **Persistent tracing.** `log()` now also appends to `$LOGFILE`
+   (`$SEMA_DIR/monitor.log`), and every `stuff`/`submit`/`wait_for_idle`/branch is
+   traced (the live stall left no inspectable record — Pete asked for visibility).
+   Watch the loop with `tail -f ~/.claude/autonomous-loop/monitor.log`.
+
+### Verified
+
+On isolated throwaway `screen` sessions (never the live loop): `turn_running`
+detects busy/idle correctly both ways; `wait_for_idle` **blocks for the full
+duration a marker is present and releases only after it clears** (the exact race);
+and the trace lands in `$LOGFILE`. 7/7 + the race test green.
+
 ## Knobs (env overrides)
 
-`ALOOP_CHUNK_SIZE` (64), `ALOOP_CHUNK_DELAY` (0.1), `ALOOP_NUDGE_TRIES` (4),
+i140: `ALOOP_CHUNK_SIZE` (64), `ALOOP_CHUNK_DELAY` (0.1), `ALOOP_NUDGE_TRIES` (4),
 `ALOOP_NUDGE_VERIFY_WAIT` (8), `ALOOP_TURN_MARKER` (`esc to interrupt`).
 `ALOOP_CONTEXT_SETTLE` stays as a small settle for the redraw but is no longer
 load-bearing.
+
+i179: `ALOOP_IDLE_POLL` (2), `ALOOP_IDLE_CONFIRM` (3), `ALOOP_IDLE_MAX` (300),
+`ALOOP_LOG` (`$SEMA_DIR/monitor.log`).

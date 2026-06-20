@@ -57,8 +57,15 @@ Run it in a **second** screen window; claude runs in window 0 (the `cl` window).
 Tunable via env: `ALOOP_WINDOW`, `ALOOP_PROMPT`, `ALOOP_POLL`,
 `ALOOP_HANG_TIMEOUT`, `ALOOP_CLEAR_SETTLE`, `ALOOP_CONTEXT_SETTLE`,
 `ALOOP_SUBMIT_SETTLE`, `ALOOP_CHUNK_SIZE`, `ALOOP_CHUNK_DELAY`,
-`ALOOP_NUDGE_TRIES`, `ALOOP_NUDGE_VERIFY_WAIT`, `ALOOP_TURN_MARKER`
+`ALOOP_NUDGE_TRIES`, `ALOOP_NUDGE_VERIFY_WAIT`, `ALOOP_TURN_MARKER`,
+`ALOOP_IDLE_POLL`, `ALOOP_IDLE_CONFIRM`, `ALOOP_IDLE_MAX`, `ALOOP_LOG`
 (see `monitor-nudge-delivery.md`).
+
+**Watch it live:** the monitor traces every action — each stuffed payload, each
+submit, every idle-wait and branch decision — to `$ALOOP_LOG` (default
+`~/.claude/autonomous-loop/monitor.log`). `tail -f` it to see exactly what the
+monitor sent and decided (added in i179, after a dropped nudge left no
+inspectable record of what happened).
 
 **Run exactly one monitor per session.** A single-instance lock
 (`$SEMA_DIR/monitor.lock`) makes a second monitor refuse to start; if you
@@ -98,6 +105,18 @@ fixed — treat as **improving, not yet proven** (question-registry **q14**):
    payload into small bursts, and the task-done branch uses `nudge_until_turn`,
    which **verifies a turn actually started** (polls the screen for the
    `esc to interrupt` marker) and **retries** if not. Mechanism + reproduction:
+   `monitor-nudge-delivery.md`.
+5. **The resume nudge was skipped when the monitor raced the agent's prior turn
+   (i179).** The agent touches `task-done` then keeps emitting (e.g. a wind-down
+   summary) *before* its turn ends; the monitor entered the task-done branch while
+   that turn was still running, and `nudge_until_turn`'s opening
+   `if turn_running: return 0` mistook the **still-finishing prior turn** for a
+   nudge-induced one — returning "success" without ever sending the nudge.
+   `/context` (stuffed first) still rendered, so it looked like #4, but the nudge
+   was never attempted. Fix: `wait_for_idle()` gates delivery on **sustained idle**
+   (the prior turn must be provably done first) and the first nudge attempt always
+   sends. Distinct from and additive to #4; persistent `$ALOOP_LOG` tracing was
+   added so the next such issue is visible, not guessed. Details:
    `monitor-nudge-delivery.md`.
 
 **Agent-side mitigation (load-bearing):** a control signal (`/clear`, `/context`)
