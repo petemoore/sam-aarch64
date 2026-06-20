@@ -3412,6 +3412,15 @@
     - {num: 582, role: completing}
   parent: i190
 
+- id: i190b
+  title: Assembler harness delegates to shared sampage pager
+  description: |
+    q47 APPROVED (Pete, 2026-06-23): i208 partial-merge recommendation (docs/specs/emulation-library-merge-review.md). (1) promote tools/netboot-oracle/z80/sampage to a neutral standalone Go module both harnesses import; (2) move the boot-ROM overlay (romActive/romBase + LoadROMImage) into it; (3) refactor the assembler harness pager (tools/z80-test-harness-go/harness.go resolveRead/resolveWritePage/resolveReadPage/In/Out ~385-516) to delegate to sampage. ACCEPTANCE: SAM CPU+memory+paging+ROM model in ONE place both import; BOTH test suites pass; harnesses stay separate. Retires feedback_mirror_emulator_fixes for the memory model. Pure Go, Pi-verifiable.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  parent: i190
+
 - id: i191
   title: "Meta: root-cause recurring backlog-incoherence (untracked deps on unfinished work) + assess instruction/doc bloat"
   description: |
