@@ -2785,7 +2785,7 @@
   title: "SAMBOOT: build the one-shot ROM+EEPROM dumper (serves captured bytes via the proven TFTP server)"
   description: |
     Small Z80 program: read the patched system ROM (32 KB via SAM ROM paging) + the Trinity EEPROM chunks, and serve them via the proven TFTP server so the host pulls rom.bin/eeprom.bin. Pushed via trinload; reuses the host-verified serve loop + Colin's eeprom.asm. Emulation-verify EEPROM-read + serve; ROM-page read is hardware-first.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i135a]
   kind: leaf
   owner: agent
