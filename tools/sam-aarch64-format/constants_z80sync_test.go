@@ -131,10 +131,12 @@ func TestTbnConstantsZ80Sync(t *testing.T) {
 		}
 	}
 
-	// REC_KIND_* — the 6-of-9 subset the Z80 dispatches on.
+	// REC_KIND_* — the 7-of-9 subset the Z80 dispatches on (BLANK_RUN added by
+	// the i48c-b7 parser brick).
 	recPresent := map[RecordKind]string{
 		KindInst: "INST", KindDirective: "DIRECTIVE", KindComment: "COMMENT",
 		KindLitInsts: "LIT_INSTS", KindLitData: "LIT_DATA", KindInsnRun: "INSN_RUN",
+		KindBlankRun: "BLANK_RUN",
 	}
 	for k, suffix := range recPresent {
 		name := "REC_KIND_" + suffix
@@ -147,10 +149,10 @@ func TestTbnConstantsZ80Sync(t *testing.T) {
 			t.Errorf("%s = %d; Go RecordKind = %d", name, got, int(k))
 		}
 	}
-	for _, suffix := range []string{"LABEL_DEF", "LOCAL_DEF", "BLANK_RUN"} {
+	for _, suffix := range []string{"LABEL_DEF", "LOCAL_DEF"} {
 		name := "REC_KIND_" + suffix
 		if _, ok := eq[name]; ok {
-			t.Errorf("%s: present, but the Z80 deliberately omits this kind (6-of-9 subset)", name)
+			t.Errorf("%s: present, but the Z80 deliberately omits this kind (7-of-9 subset)", name)
 		}
 	}
 
