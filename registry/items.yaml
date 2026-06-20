@@ -3735,6 +3735,8 @@
   title: "Commoning pass #3 — restore test-variant section-C headroom (i23 consumed it to 13 B)"
   description: |
     i23 (#595) consumed the BUILD_TESTS test-variant section-C headroom down to 13 B (was ~299 B pre-i23 per the m9 handover; i206 was commoning pass #2). Both the OUT-ceiling lift (i24) and the encoder strand (i201c/i204) add inline section-C code and cannot fit until headroom is reclaimed. Reclaim by factoring shared logic (the i201a/b/c OPVAL-populator family; the i206 prod-code commoning families ml_div*/main_dir_org_*/sysname per build/coverage-report.txt) and/or relocating a still-inline self-test off-axis (test_reader_paged.asm is a candidate — it is currently inline at assembler.asm:557). Mirror i206 (commoning #2, DONE). Verify via the test-variant budget gate (code_end < &C000) + the harness boot self-tests.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 597, role: completing}
