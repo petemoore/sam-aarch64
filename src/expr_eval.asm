@@ -214,6 +214,23 @@ eval_done:
 
 
 ; -----------------------------------------------------------------------
+; Helper: hl_skip_8byte_slots — advance HL past B eight-byte slots, i.e.
+; HL := HL + B*8.  Shared by the slot-pointer helpers below, which all
+; index expr_stack by a slot count.  Input: HL=base, B=count (0 ok).
+; Clobbers DE, B.
+; -----------------------------------------------------------------------
+hl_skip_8byte_slots:
+                inc     b
+                dec     b
+                ret     z
+hl_skip_8byte_loop:
+                ld      de, 8
+                add     hl, de
+                djnz    hl_skip_8byte_loop
+                ret
+
+
+; -----------------------------------------------------------------------
 ; Helper: eval_alloc_top — allocate a new top-of-stack slot.
 ;
 ; On entry: nothing.
@@ -230,14 +247,7 @@ eval_alloc_top:
                 ld      (expr_sp), a
 ; HL = expr_stack + B*8.
                 ld      hl, expr_stack
-                inc     b
-                dec     b
-                ret     z
-eval_alloc_top_shift:
-                ld      de, 8
-                add     hl, de
-                djnz    eval_alloc_top_shift
-                ret
+                jp      hl_skip_8byte_slots
 
 
 ; -----------------------------------------------------------------------
@@ -251,14 +261,7 @@ eval_top_ptr:
                 dec     a
                 ld      b, a
                 ld      hl, expr_stack
-                inc     b
-                dec     b
-                ret     z
-eval_top_ptr_shift:
-                ld      de, 8
-                add     hl, de
-                djnz    eval_top_ptr_shift
-                ret
+                jp      hl_skip_8byte_slots
 
 
 ; -----------------------------------------------------------------------
@@ -275,14 +278,7 @@ eval_top2_ptrs:
                 dec     a                   ; A = lhs index
                 ld      b, a
                 ld      hl, expr_stack
-                inc     b
-                dec     b
-                jr      z, eval_top2_lhs_ready
-eval_top2_lhs_shift:
-                ld      de, 8
-                add     hl, de
-                djnz    eval_top2_lhs_shift
-eval_top2_lhs_ready:
+                call    hl_skip_8byte_slots ; HL = lhs slot
                 ld      d, h
                 ld      e, l                ; DE = lhs (temporarily)
                 push    de
@@ -381,47 +377,38 @@ eval_push_imm64:
 ; bit 7 of TOP[n-1].
 ; -----------------------------------------------------------------------
 
-eval_sign_extend1:
-                call    eval_top_ptr        ; HL = TOP
+; eval_sign_fill — replicate the sign of (HL) across the next B bytes.
+; A := 0xFF if bit 7 of (HL) is set else 0x00, then fill HL[1..B] with A.
+; Shared tail of the sign-extend helpers.  Input: HL=sign byte, B=count.
+; Clobbers A, B, HL.
+eval_sign_fill:
                 ld      a, (hl)
                 add     a, a
                 sbc     a, a                ; A = 0xFF if bit7 set, else 0x00
-                ld      b, 7
-                inc     hl                  ; HL → TOP[1]
-eval_se1_loop:
+                inc     hl                  ; HL → first byte to fill
+eval_sign_fill_loop:
                 ld      (hl), a
                 inc     hl
-                djnz    eval_se1_loop
+                djnz    eval_sign_fill_loop
                 ret
+
+eval_sign_extend1:
+                call    eval_top_ptr        ; HL = TOP[0] (sign byte)
+                ld      b, 7
+                jp      eval_sign_fill
 
 eval_sign_extend2:
                 call    eval_top_ptr
-                inc     hl                  ; HL → TOP[1]
-                ld      a, (hl)
-                add     a, a
-                sbc     a, a
+                inc     hl                  ; HL → TOP[1] (sign byte)
                 ld      b, 6
-                inc     hl                  ; HL → TOP[2]
-eval_se2_loop:
-                ld      (hl), a
-                inc     hl
-                djnz    eval_se2_loop
-                ret
+                jp      eval_sign_fill
 
 eval_sign_extend4:
                 call    eval_top_ptr
                 ld      bc, 3
-                add     hl, bc              ; HL → TOP[3]
-                ld      a, (hl)
-                add     a, a
-                sbc     a, a
+                add     hl, bc              ; HL → TOP[3] (sign byte)
                 ld      b, 4
-                inc     hl                  ; HL → TOP[4]
-eval_se4_loop:
-                ld      (hl), a
-                inc     hl
-                djnz    eval_se4_loop
-                ret
+                jp      eval_sign_fill
 
 
 ; -----------------------------------------------------------------------
@@ -752,6 +739,18 @@ eval_store_origin_high_loop:
 ; the low 24 bits of the source.
 ; -----------------------------------------------------------------------
 
+; eval_zero_n_bytes — fill B bytes at (HL) with zero, advancing HL.
+; Shared by the REL_* evaluators below, which all zero the high bytes of
+; the masked top slot.  Input: HL=dest, B=count (>=1).  Clobbers A, B, HL.
+eval_zero_n_bytes:
+                xor     a
+eval_zero_n_loop:
+                ld      (hl), a
+                inc     hl
+                djnz    eval_zero_n_loop
+                ret
+
+
 ; eval_rel_lo12 — top = top & 0xFFF.  Keep low 12 bits, zero rest.
 eval_rel_lo12:
                 call    eval_top_ptr                ; HL = top slot
@@ -761,11 +760,7 @@ eval_rel_lo12:
                 ld      (hl), a
                 inc     hl                          ; HL → slot[2]
                 ld      b, 6
-                xor     a
-eval_rel_lo12_zero:
-                ld      (hl), a
-                inc     hl
-                djnz    eval_rel_lo12_zero
+                call    eval_zero_n_bytes
                 jp      eval_loop
 
 
@@ -811,11 +806,7 @@ eval_rel_hi12:
                 ld      (hl), a                     ; slot[1] = result byte 1
                 inc     hl                          ; HL → slot[2]
                 ld      b, 6
-                xor     a
-eval_rel_hi12_zero:
-                ld      (hl), a
-                inc     hl
-                djnz    eval_rel_hi12_zero
+                call    eval_zero_n_bytes
                 jp      eval_loop
 
 
@@ -825,11 +816,7 @@ eval_rel_abs_g0:
                 ld      bc, 2
                 add     hl, bc                      ; HL → slot[2]
                 ld      b, 6
-                xor     a
-eval_rel_abs_g0_zero:
-                ld      (hl), a
-                inc     hl
-                djnz    eval_rel_abs_g0_zero
+                call    eval_zero_n_bytes
                 jp      eval_loop
 
 
@@ -850,11 +837,7 @@ eval_rel_abs_g1:
                 inc     de                          ; DE → dst[2]
                 ex      de, hl                      ; HL = dst[2]
                 ld      b, 6
-                xor     a
-eval_rel_abs_g1_zero:
-                ld      (hl), a
-                inc     hl
-                djnz    eval_rel_abs_g1_zero
+                call    eval_zero_n_bytes
                 jp      eval_loop
 
 
@@ -875,11 +858,7 @@ eval_rel_abs_g2:
                 inc     de                          ; DE → dst[2]
                 ex      de, hl                      ; HL = dst[2]
                 ld      b, 6
-                xor     a
-eval_rel_abs_g2_zero:
-                ld      (hl), a
-                inc     hl
-                djnz    eval_rel_abs_g2_zero
+                call    eval_zero_n_bytes
                 jp      eval_loop
 
 
@@ -900,11 +879,7 @@ eval_rel_abs_g3:
                 inc     de                          ; DE → dst[2]
                 ex      de, hl                      ; HL = dst[2]
                 ld      b, 6
-                xor     a
-eval_rel_abs_g3_zero:
-                ld      (hl), a
-                inc     hl
-                djnz    eval_rel_abs_g3_zero
+                call    eval_zero_n_bytes
                 jp      eval_loop
 
 
