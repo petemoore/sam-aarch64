@@ -3235,6 +3235,15 @@
   description: |
     The i121 payoff on real hardware, autonomous: 'start trinload -> push the serve program (push-serve.py) -> tftp put each .mgt disk image (validated size==819200, streamed into a free record + claimed) -> tftp put tftp.done -> return to trinload', then read a stored record back (servable-raw) and byte-compare to confirm the store. Unblocked once the production CSD read lands (i145b, so the server finds free records) and the full experiment is emulation-proven (i145d). Agent-actionable: trinload runs on the SAM (192.168.2.75) over the LAN from the Pi; push via tools/trinload-push/push-serve.py + curl tftp://; the 19 build/*.mgt are valid + staged (/tmp/push-all-disks.sh batches them). NO Pete needed for the push+store+readback; booting a pushed record to watch it run is a downstream nicety (autonomous via i135 auto-boot, or a Pete-present spot-check) and NOT a blocker for this item.
   status: OPEN
-  depends_on: [i145, i121d]
+  depends_on: [i145, i121d, i195]
+  kind: leaf
+  owner: agent
+
+- id: i195
+  title: "Name a pushed record from its post-prefix WRQ name (full record-name field), so the 19 images are legible"
+  description: |
+    Pete (2026-06-21 night): when a disk is pushed to <prefix>/NAME (the agreed prefix is trinity-sam-disks/ per manifest design §6.5), the claimed Trinity RECORD should be named NAME so 'RECORD'/dir later shows which image each record holds. i121g (merged, #529) ALREADY names the claimed record from the post-prefix WRQ filename, but caps it at 10 chars (it reused bdos_name_to_uifa, the 10-char B-DOS FILE-name field). This item: (1) confirm the actual Trinity record-LIST name-field length from docs/specs/trinity-record-detection-design.md / the B-DOS source (Pete expects ~16; a record name may differ from a 10-char file name); (2) extend bdos_build_claim_entry to use the full field (e.g. 16 chars) from the post-prefix push name, space-padded; (3) host-test it (BDOSStore ListWrites captures the name) + assert the 16-char name lands. Emulation-implementable now (the list-write is harness-modelled); hardware-verified during i194's real push. owner:agent, agent-actionable, no Pete/question gate.
+  status: OPEN
+  depends_on: [i193]
   kind: leaf
   owner: agent
