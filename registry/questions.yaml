@@ -15,3 +15,8 @@
   body: |
     AWAITING the assessment report i210 (Pete, 2026-06-22). Pete: linker-script parsing 'would be awesome' if not a large rewrite/perf cost. i210 (agent) reports the touch points + cost estimate; once it lands, Pete returns HERE for the go/no-go on i56 (extract SpectrumFourLayout / a -layout flag or linker-script parser). i20 depends on i56.
   owner: pete
+
+- id: q45
+  body: |
+    i24 OUT-ceiling lift — emit_byte hot-path design fork. HSAVE/HLOAD are contiguous-only (samdos c.s:575/318-374), so lifting OUT past 32KB forces the WHOLE OUT buffer into ONE contiguous pool run sized from the pass-1 total. That collides with the 'free low-zone' optimization: today page 5 = LMPR_ENCTAB+1, so the first 16KB of OUT writes land in section B with NO LMPR bracket (paged-out-design.md); a large pool run can't start at page 5 (it would run into IN at 7+), so it loses that free path. OPTIONS: (A) UNIFORM — whole OUT is a pool run, every emit_byte brackets LMPR like today's high-zone (simplest; loses free-low-zone for the common <=16KB case; per-byte bracket = a few T-states/byte, negligible on a one-shot assemble). (B) TWO-MODE — keep the static page5/6 32KB scheme (free-low) for outputs <=32KB and a pool run only for >32KB (preserves common-case perf but doubles the emit_byte path + needs section-C budget we lack). Agent recommends (A). Pete cares about T-states (the OUT path) — hence the ask. NOTE: i24 is ALSO budget-blocked (i23 left 13 B test-variant headroom); see the commoning-pass item.
+  owner: pete
