@@ -55,7 +55,7 @@ In **auto-null (`&3F`) mode** the dummy `&FF` is supplied by the microcontroller
 Called as `DI / CALL &A623 / EI` from the Trinity-detect path once the card-present bit is set (`dis:4888`). The sequence:
 
 1. **`OUT (&DC),&04`** — all-deselect, auto-null off (&A626).
-2. **Microcontroller wake, up to 10 retries** (&A62C–&A64D): `&31` select → **`&38`** (microcontroller SD-init; B = its 1=MMC/2=SD reply) → `&31` reselect → poll `sd.in` until the response `!= &FF` (i.e. the card answers).
+2. **Microcontroller wake** (&A62C–&A64D): `&31` select → **`&38`** (microcontroller SD-init; B = its 1=MMC/2=SD reply) → `&31` reselect → poll `sd.in` until it returns **`&FF`**. The wake loop at &A643 is `call sd.in / inc a / jr z` (breaks when `sd.in` returns `&FF` — the card settling to SPI-idle MISO-high), looping B (the `&38` reply) times. **This is the OPPOSITE sense to the textbook CMD0-response poll** (which waits for the response to *drop* from `&FF`): a port/probe that waits here for `!= &FF` hangs. (Verified against the disassembly while running Colin's real ladder through the i145c model, i145f.)
 3. Then the **standard SPI-mode command ladder**, Z80-driven, each command sent via `sd.cmd` (§5):
 
 | Cmd | Addr / cite | Sent as (opcode, CRC, arg) | Purpose |
@@ -102,7 +102,7 @@ The 32-bit sector/byte address is **not passed in a register** — it is *poked 
 
 **Mechanism: bare CMD9 → 16 CSD bytes → version-aware decode → 32-bit block count → records.** No capacity is taken from the `&38` init reply (MMC/SD only) or from OCR alone (CMD58 yields only the CCS addressing-mode bit).
 
-**CSD parse (&A736, `dis:5692`).** The 16 CSD bytes sit at buffer `&780F` (= `&B80F`, the workspace 1.5a used for the ATA IDENTIFY block). Decode is `CSD_STRUCTURE`-aware (top 2 bits of CSD byte 0, read at &A736 as `(&780F) AND &C0`; `&C0` is rejected as reserved):
+**CSD parse (&A736, `dis:5692`).** The 16 CSD bytes sit at buffer `&780F` (= `&B80F`, the workspace 1.5a used for the ATA IDENTIFY block). The `(&780F) AND &C0; cp &C0; jp nc` at &A736 is only a **reserved-value reject** (CSD_STRUCTURE == `11` → error), **not** the v1/v2 selector. The actual **v2-vs-v1 branch is `cp 3` at &A743** on the **card-type flag the init ladder accumulated from CMD8 + CMD58** (kept in the alternate `A'`), **not** on CSD byte 0: `A' == 3` (CMD8 accepted + OCR CCS set) → the v2 layout, else → the v1 layout. For real cards the two agree (an SDHC card answers CMD8 *and* has CSD_STRUCTURE `01`), but a faithful **emulation model / probe must keep them consistent**: a v1 card must reject CMD8 (R1 `&05`, illegal-command) and report a CCS-clear OCR, or the decode takes the wrong layout branch (the i145c/i145f finding). The two layouts:
 
 - **v2.0 (SDHC/SDXC, CSD_STRUCTURE == `01`)** — branch at &A746 (`dis:5700`): `C_SIZE` is the 22-bit field in CSD bytes 7..9 (`&7816/7/8`), and `blocks = (C_SIZE + 1) << 10`, i.e. `(C_SIZE+1) × 1024` 512-byte blocks (`dis:5703-5732`).
 - **v1.0 (SDSC, CSD_STRUCTURE == `00`)** — branch at &A779 (`dis:5733`): `blocks = (C_SIZE + 1) × 2^(C_SIZE_MULT+2) × 2^READ_BL_LEN / 512`, assembled from `C_SIZE` (CSD bytes 6..8, masked), `C_SIZE_MULT` (CSD bytes 9..10), `READ_BL_LEN` (CSD byte 5 low nibble). The fork computes `2^(C_SIZE_MULT+2)` as a shift count `B` (&A797 `dis:5750` builds `B = C_SIZE_MULT + 2 + ...`) and a second `READ_BL_LEN` shift via the shift helper **&A7BB** (`dis:5770`: `B` iterations of `ADD HL,HL` across a 32-bit `HL:DE` with `RL C`), then a final `>>9` (`/512`, the `SRL D / RR E / RR H / RR L` at &A7B0 `dis:5765`).
@@ -185,7 +185,7 @@ The standard SD init + CSD-decode logic, and the per-brick task breakdown (i145a
 
 The i145 plan assumed a textbook SD-SPI ladder. The fork mostly matches it, with these wrinkles worth carrying into the port:
 
-1. **A microcontroller pre-step (`&38`) precedes the standard ladder** — the Z80 does not drive CS/clock directly to wake the card; it issues the `&38` "SD init" command (returning MMC=1/SD=2) up to 10 times until the card answers `!= &FF`, *then* runs CMD0…CMD9. The textbook ladder has no equivalent.
+1. **A microcontroller pre-step (`&38`) precedes the standard ladder** — the Z80 does not drive CS/clock directly to wake the card; it issues the `&38` "SD init" command (returning MMC=1/SD=2), then polls `sd.in` B times until it returns **`&FF`** (the wake loop &A643 `inc a / jr z` — the *opposite* sense to a CMD0-response poll), *then* runs CMD0…CMD9. The textbook ladder has no equivalent.
 2. **CMD1 MMC fallback is present** (&A6CB) — the ladder is not SD-only; it degrades to CMD1 for MMC, ≤5000 tries.
 3. **CMD59 (CRC off) is sent** (&A705) before CMD9, which many minimal ladders skip.
 4. **The address is self-modifying code, not a register argument** — the 32-bit sector/byte address is poked into the `LD HL,nn` immediates in `sd.cmd-with-address` (&A836/&A843). A register-passing port is fine, but the fork's shape is poke-then-call.
