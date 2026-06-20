@@ -3530,7 +3530,7 @@
   title: "i48c-b8e-3: compound-form encoders (memory, shifted-reg, extended-reg, litpool + 3-reg/tst coercions)"
   description: |
     Third brick of i48c-b8e (see umbrella). Port the compound-operand encoders dispatched before the form table (pass2.go:227-290): encodeMemInst (6 MemShape variants - scaled imm12, signed imm9 pre/post, pair imm7, stur/ldur unscaled, reg-offset extend/shift; pass2.go:762-902), encodeShiftedRegInst (pass2.go:1060-1122), encodeExtendedRegInst (ADD/SUB only, pass2.go:1188-1225), encodeLdrLitPoolInst (ldr Xt,=expr, pass2.go:639-672), plus the shifted-reg 3-register coercion (lsl #0, pass2.go:252-271) and 2-register tst coercion (pass2.go:273-290) which feed encodeShiftedRegInst. ~350-450 LOC. Faithful port (CLAUDE.md s6). Depends on brick1 (reuses self-test harness + slot encoders). Extends the boot self-test with compound-form fixtures, SimCoupe-gated.
-  status: OPEN
+  status: DONE
   depends_on: [i199]
   kind: umbrella
   owner: agent
@@ -3563,10 +3563,12 @@
   title: "i201c: litpool compound-form encoder (ldr Xt,=expr)"
   description: |
     Third/final sub-brick of i201. Port encodeLdrLitPoolInst (ldr Xt,=expr literal-pool slot, pass2.go:639-672) + wire into encode_inst's pre-form-table dispatch (pass2.go:241-243). REUSES fold_litpool19 (insn_run.asm FSID_LITPOOL19) + the litpool table machinery (litpool.asm). New work = parse the OpLitPool operand (width + expr) and route to the litpool fold. Faithful port (CLAUDE.md s6). Depends on i199, i201a. Extends the boot self-test + Go authority fixtures (needs litpool table init). SimCoupe-gated.
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i199, i201a, i218]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 598, role: completing}
   parent: i201
 
 - id: i203
