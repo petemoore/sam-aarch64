@@ -3781,3 +3781,11 @@
   owner: agent
   prs:
     - {num: 597, role: completing}
+
+- id: i219
+  title: Acquire a stock (untarnished) SAM Coupé system ROM binary + disassembly
+  description: |
+    Gap surfaced by i189 (the SAM software catalogue, docs/specs/sam-software-catalogue.md): the project has NO stock/untarnished SAM Coupe system ROM — no binary, no disassembly, no deep doc; it exists only conceptually (the ZX Spectrum ROM disasms under ~/git are a DIFFERENT machine, not a substitute). We have Colin's FORKED ROM captured (rom0/rom1/rom.bin) but not the stock one. Having the stock ROM would let us diff fork-vs-stock to isolate exactly what Colin changed for the EEPROM boot path, and ground the startup-stripes / boot behaviour. owner:pete — acquisition is Pete's call (Colin Piggot / Simon Owen are contacts, or a SimCoupe ROM image). Agent can disassemble/annotate once a binary is in hand.
+  status: OPEN
+  kind: leaf
+  owner: pete
