@@ -1876,13 +1876,13 @@
   description: |
     Go tools/registry with validate + gen-to-buffer + round-trip test over a hand-written fixture. Dormant — no live source, no CI gate, cannot affect the live registry. Skeleton shipped (#437) on old schema; reworked to dependency-DAG model (no BLOCKED, depends_on, transient questions, invariants 11-13, 3 views).
   status: DONE
+  kind: leaf
+  owner: agent
   prs:
     - {num: 437, role: completing}
     - {num: 446, role: completing}
     - {num: 447, role: completing}
     - {num: 455, role: completing}
-  kind: leaf
-  owner: agent
   parent: i115
   refs: [tools/tables-gen, i115]
 
@@ -1891,12 +1891,12 @@
   description: |
     Emit the three registry .md views deterministically, pipe-escaped, with the GENERATED banner. The earlier parity-with-today's-.md proof is dropped — a no-information-loss round-trip replaces it. Generator built (PR #443, held) on the OLD schema + dropped parity test; reworked to the revised model (3 views, new status rendering, no BLOCKED). Delivered in #446/#451/#455.
   status: DONE
+  kind: leaf
+  owner: agent
   prs:
     - {num: 446, role: completing}
     - {num: 451, role: completing}
     - {num: 455, role: completing}
-  kind: leaf
-  owner: agent
   parent: i115
   refs: [i115]
 
@@ -1905,11 +1905,11 @@
   description: |
     add / split / set-status / set-pr / dep / answer / next-id + the .id-ledger.txt no-reuse guard; the headless replacement for hand-editing giant table cells. CLI mutators landed in #447.
   status: DONE
+  kind: leaf
+  owner: agent
   prs:
     - {num: 447, role: completing}
     - {num: 455, role: completing}
-  kind: leaf
-  owner: agent
   parent: i115
   refs: [i115]
 
@@ -1918,10 +1918,10 @@
   description: |
     Single atomic switchover: bounded-batch markdown→YAML migration (delete-as-you-go from .old registries, per-batch independent info-loss review), reshape wall-of-text rows into umbrella+leaves, generate the .md in place, wire the required registry-sync CI job. This work — the i115 family itself is the current batch.
   status: DONE
-  prs:
-    - {num: 455, role: completing}
   kind: leaf
   owner: agent
+  prs:
+    - {num: 455, role: completing}
   parent: i115
   refs: [i115]
 
@@ -1930,10 +1930,10 @@
   description: |
     Point CLAUDE.md (§3 + doc-lifecycle), ROADMAP (handover contract), the SessionStart hook, and the autonomous-loop docs at the YAML source; add the agent-guidance block. The completing PR deletes the plan.
   status: DONE
-  prs:
-    - {num: 455, role: completing}
   kind: leaf
   owner: agent
+  prs:
+    - {num: 455, role: completing}
   parent: i115
   refs: [i115]
 
@@ -1942,10 +1942,10 @@
   description: |
     For each wall-of-text status/description cell: decompose into atomic single-status items OR relocate narrative history to PR/git/design-doc; independently audit for information loss (implementer ≠ reviewer). Under the 2026-06-19 model revision the reshape also converts BLOCKED→depends_on edges and retires the closed-questions view. q28 RESOLVED: it IS the bounded-batch migration (merged with i115d).
   status: DONE
-  prs:
-    - {num: 455, role: completing}
   kind: leaf
   owner: agent
+  prs:
+    - {num: 455, role: completing}
   parent: i115
   refs: [i115, i115d]
 
@@ -1954,10 +1954,10 @@
   description: |
     Open pullable items (leaves/childless; umbrellas excluded) become a committed priority order that agents pull from and sessions re-rank; plus depends_on edges as a cycle-free DAG whose topological extension the order must respect. A ready query returns open items with all deps satisfied, in priority order. Supersedes ROADMAP prose 'proposed sequence'. Later phase — builds on the DAG core in i115.
   status: DONE
-  prs:
-    - {num: 455, role: completing}
   kind: leaf
   owner: agent
+  prs:
+    - {num: 455, role: completing}
   parent: i115
   refs: [docs/specs/registry-source-of-truth-design.md, i115]
 
@@ -2055,7 +2055,7 @@
   title: "B3 — card-absolute list-read: read list sectors 1..base-1, parse 16-byte entries, free ⇔ masked first-name-byte==0"
   description: |
     B3: implement the card-absolute list-read routine. Read list sectors 1..base-1 sequentially, parse each 16-byte entry per the frozen on-card layout (free ⇔ masked first-name byte == 0, per docs/specs/trinity-record-detection-design.md §3 and bdos15a.src.txt:946-948). Build against the harness CardModel first (emulation-first); no HRECORD, no error 81, no B-DOS internal addresses.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i119
