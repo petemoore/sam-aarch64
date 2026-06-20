@@ -472,7 +472,14 @@ func loadServeRecordPushFree(t *testing.T, records int, free []int) (*z80h.Machi
 	}
 	mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), uint16(records))
 
-	cfg := serve.Config{ServerMAC: demoServerMAC, ServerIP: demoServerIP, ServerTID: demoServerTID, DiskRecordPush: true}
+	// The i121g claim tests assert a LOWEST-first record advance (3 then 4, the
+	// finder's original behaviour). Patch the serve config block to the lowest-free
+	// strategy (the default is now highest-free, i121h) so those expectations hold;
+	// the placement-strategy tests (TestServeWRQRecordPushStrategy) re-patch the byte
+	// for the highest/explicit variants.
+	mac.Write(symAddr(t, mac, "SERVE_CFG_STRATEGY"), []byte{uint8(serve.StrategyLowestFree)})
+
+	cfg := serve.Config{ServerMAC: demoServerMAC, ServerIP: demoServerIP, ServerTID: demoServerTID, DiskRecordPush: true, Strategy: serve.StrategyLowestFree}
 	goRef := serve.New(cfg, tftp.MapStore{}, func(string) tftp.Source { return tftp.ByteSource(nil) })
 	goRef.SetFreeRecords(free)
 	return mac, enc, store, card, goRef
@@ -692,5 +699,141 @@ func TestServeWRQRecordPushClaimOnlyOnValid(t *testing.T) {
 	claims := goRef.Claims()
 	if len(claims) != 1 || claims[0].Record != 5 {
 		t.Fatalf("Go authority Claims() = %+v, want one claim of record 5", claims)
+	}
+}
+
+// patchStrategy writes the placement strategy (and, for the explicit strategy, the
+// record word) into the serve config block by symbol — exactly how the i121d host
+// launcher will patch it before launch. It also points the Go authority's Config at
+// the same strategy via a fresh Responder, returned for the authority-vs-Z80 cross-
+// check. The card seeding (which records read free) is already done by the caller.
+func patchStrategy(t *testing.T, mac *z80h.Machine, strategy uint8, explicit int) {
+	t.Helper()
+	mac.Write(symAddr(t, mac, "SERVE_CFG_STRATEGY"), []byte{strategy})
+	if strategy == uint8(serve.StrategyExplicit) {
+		mac.WriteU16LE(symAddr(t, mac, "SERVE_CFG_RECORD"), uint16(explicit))
+	}
+}
+
+// goRefWithStrategy builds the Go authority Responder matching a strategy + free
+// set, for the authority-vs-Z80 record-placement cross-check.
+func goRefWithStrategy(strategy serve.PlacementStrategy, explicit int, free []int) *serve.Responder {
+	cfg := serve.Config{
+		ServerMAC: demoServerMAC, ServerIP: demoServerIP, ServerTID: demoServerTID,
+		DiskRecordPush: true, Strategy: strategy, ExplicitRecord: explicit,
+	}
+	g := serve.New(cfg, tftp.MapStore{}, func(string) tftp.Source { return tftp.ByteSource(nil) })
+	g.SetFreeRecords(free)
+	return g
+}
+
+// TestServeWRQRecordPushStrategy is the i121h placement-strategy gate: with several
+// records free, the record a valid push lands in is chosen by the config block's
+// strategy byte (patched by symbol, as the i121d host launcher will). It asserts the
+// chosen record via the claim list-write (which record was marked used) AND the
+// per-sector writes (every sector targets that record), cross-checked against the Go
+// authority. Each sub-test drives the FULL push through the real dispatch +
+// wd_finalize on its own machine.
+func TestServeWRQRecordPushStrategy(t *testing.T) {
+	const records = 8
+	free := []int{3, 4} // two free slots make the high/low choice observable
+
+	// assertSinglePush drives one valid push and asserts it claimed `wantRecord` and
+	// streamed every sector into it. goRef is driven in lockstep for the cross-check.
+	assertSinglePush := func(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, store *z80h.BDOSStore, goRef *serve.Responder, wantRecord int) {
+		t.Helper()
+		img := recordValidImage()
+		final := runFullPush(t, mac, enc, goRef, "disk.mgt", img)
+		if blk, err := tftp.ParseACK(udpPayload(t, final)); err != nil || blk != 1600 {
+			t.Fatalf("final reply = ACK %d (err %v), want ACK 1600 (valid image)", blk, err)
+		}
+		lw := store.ListWrites()
+		if len(lw) != 1 {
+			t.Fatalf("ListWrites() = %d, want 1 (one claim)", len(lw))
+		}
+		if lw[0].ChangedRecord != wantRecord {
+			t.Errorf("claimed record %d, want %d (the strategy's pick)", lw[0].ChangedRecord, wantRecord)
+		}
+		writes := store.SectorWrites()
+		if len(writes) != 1600 {
+			t.Fatalf("SectorWrites() = %d, want 1600 (one full-record push)", len(writes))
+		}
+		for i, w := range writes {
+			if w.Record != wantRecord {
+				t.Fatalf("sector[%d] record = %d, want %d", i, w.Record, wantRecord)
+			}
+		}
+		// Authority cross-check: the Go authority claimed the same record.
+		claims := goRef.Claims()
+		if len(claims) != 1 || claims[0].Record != wantRecord {
+			t.Fatalf("Go authority Claims() = %+v, want one claim of record %d", claims, wantRecord)
+		}
+	}
+
+	t.Run("default (un-patched config) bakes highest-free", func(t *testing.T) {
+		// A freshly-loaded boot binary, with NO config patch, bakes strategy 0
+		// (highest-free) — the i121h default per manifest design §4 decision 4. (The
+		// shared loadServeRecordPushFree helper patches lowest-free for the i121g claim
+		// tests, so this baked-default check loads via the plain single-free loader,
+		// which never touches the config block.)
+		mac, _, _, _ := loadServeRecordPush(t, records, 4)
+		if s := mac.Read(symAddr(t, mac, "SERVE_CFG_STRATEGY"), 1)[0]; s != uint8(serve.StrategyHighestFree) {
+			t.Fatalf("baked SERVE_CFG_STRATEGY = %d, want %d (highest-free default)", s, serve.StrategyHighestFree)
+		}
+		if m := mac.Read(symAddr(t, mac, "SERVE_CONFIG"), 1)[0]; m != 0x5A {
+			t.Errorf("baked SERVE_CONFIG magic = %#x, want 0x5A", m)
+		}
+	})
+
+	t.Run("highest-free (strategy 0) → record 4", func(t *testing.T) {
+		mac, enc, store, _, _ := loadServeRecordPushFree(t, records, free)
+		patchStrategy(t, mac, uint8(serve.StrategyHighestFree), 0)
+		goRef := goRefWithStrategy(serve.StrategyHighestFree, 0, free)
+		assertSinglePush(t, mac, enc, store, goRef, 4)
+	})
+
+	t.Run("lowest-free (strategy 1) → record 3", func(t *testing.T) {
+		mac, enc, store, _, _ := loadServeRecordPushFree(t, records, free)
+		patchStrategy(t, mac, uint8(serve.StrategyLowestFree), 0)
+		goRef := goRefWithStrategy(serve.StrategyLowestFree, 0, free)
+		assertSinglePush(t, mac, enc, store, goRef, 3)
+	})
+
+	t.Run("explicit (strategy 2) free record 4 → record 4", func(t *testing.T) {
+		mac, enc, store, _, _ := loadServeRecordPushFree(t, records, free)
+		patchStrategy(t, mac, uint8(serve.StrategyExplicit), 4)
+		goRef := goRefWithStrategy(serve.StrategyExplicit, 4, free)
+		assertSinglePush(t, mac, enc, store, goRef, 4)
+	})
+}
+
+// TestServeWRQRecordPushStrategyExplicitTaken proves the explicit strategy rejects a
+// push aimed at an ALREADY-NAMED record: the named record is never touched (the
+// shared-resource invariant), the WRQ is answered ERROR(3) at the handshake, and
+// nothing is armed or written — matching the Go authority.
+func TestServeWRQRecordPushStrategyExplicitTaken(t *testing.T) {
+	const records = 8
+	free := []int{3, 4} // record 7 is NOT free (named)
+	mac, enc, store, _, _ := loadServeRecordPushFree(t, records, free)
+	patchStrategy(t, mac, uint8(serve.StrategyExplicit), 7) // explicit a named record
+	goRef := goRefWithStrategy(serve.StrategyExplicit, 7, free)
+
+	wrq := demoWRQ("disk.mgt", nil)
+	got := serveDemo(t, mac, enc, wrq)
+	eqFrame(t, "explicit-taken WRQ → ERROR(3)", got, goRef.OnFrame(wrq))
+
+	pay := udpPayload(t, got)
+	if tftp.Opcode(pay) != tftp.OpERROR {
+		t.Fatalf("explicit-taken reply opcode = %d, want ERROR(%d) — got %x", tftp.Opcode(pay), tftp.OpERROR, pay)
+	}
+	if code, _, err := tftp.ParseError(pay); err != nil || code != tftp.ErrDiskFull {
+		t.Fatalf("explicit-taken reply = ERROR code %d (err %v), want %d", code, err, tftp.ErrDiskFull)
+	}
+	// The receiver was NOT armed, and nothing was written (the named record untouched).
+	if active := mac.Read(symAddr(t, mac, "WRQ_RECV_ACTIVE"), 1)[0]; active != 0 {
+		t.Errorf("WRQ_RECV_ACTIVE = %d, want 0 (no receiver armed when the explicit record is taken)", active)
+	}
+	if w := store.SectorWrites(); len(w) != 0 {
+		t.Fatalf("SectorWrites() = %d, want 0 (the named explicit record is never touched)", len(w))
 	}
 }

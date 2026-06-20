@@ -304,22 +304,27 @@ func validRecordImage() []byte {
 }
 
 // newPushServer builds a disk-record-push server with the given free-record
-// sequence (the records bdos_find_free_record would return, in order).
-func newPushServer(free []int) *Responder {
+// sequence (the records the free-record scan would return) under strategy. The
+// lowest-free strategy returns the sequence head-first; pass it where the test
+// asserts a lowest-first advance.
+func newPushServer(free []int, strategy PlacementStrategy) *Responder {
 	cfg := cfgDemo
 	cfg.DiskRecordPush = true
+	cfg.Strategy = strategy
 	s := New(cfg, tftp.MapStore{}, func(string) tftp.Source { return tftp.ByteSource(nil) })
 	s.SetFreeRecords(free)
 	return s
 }
 
-// TestDiskRecordPushClaimsAdvance pins the i121g claim model in the Go authority:
-// two successive valid pushes claim DIFFERENT records (the first claim advances the
-// free-record sequence) with the right filename-derived names, and a third push to
-// an exhausted card is rejected with ERROR(3, "no free record"). This is the
-// authority the Z80 bdos_claim_record is compared against.
+// TestDiskRecordPushClaimsAdvance pins the i121g claim model in the Go authority
+// under the lowest-free strategy: two successive valid pushes claim DIFFERENT
+// records (the first claim advances the free-record sequence) with the right
+// filename-derived names, and a third push to an exhausted card is rejected with
+// ERROR(3, "no free record"). This is the authority the Z80 bdos_claim_record is
+// compared against. (The placement-strategy variants are pinned by
+// TestDiskRecordPushStrategy.)
 func TestDiskRecordPushClaimsAdvance(t *testing.T) {
-	s := newPushServer([]int{3, 4})
+	s := newPushServer([]int{3, 4}, StrategyLowestFree)
 
 	pushImage(s, "trinity-sam-disks/firstdisk.mgt", validRecordImage())
 	pushImage(s, "seconddiskimage.mgt", validRecordImage())
@@ -354,7 +359,7 @@ func TestDiskRecordPushClaimsAdvance(t *testing.T) {
 // free-record sequence does not advance), so a following valid push reuses the same
 // record. Mirrors the Z80 claim-only-on-valid behaviour.
 func TestDiskRecordPushClaimOnlyOnValid(t *testing.T) {
-	s := newPushServer([]int{5})
+	s := newPushServer([]int{5}, StrategyLowestFree)
 
 	// Invalid: one sector short of RecordSize → rejected, no claim.
 	pushImage(s, "broken.mgt", validRecordImage()[:bdos.RecordSize-bdos.SectorSize])
@@ -371,4 +376,65 @@ func TestDiskRecordPushClaimOnlyOnValid(t *testing.T) {
 	if claims[0].Name != "good" {
 		t.Errorf("claim name = %q, want %q", claims[0].Name, "good")
 	}
+}
+
+// TestDiskRecordPushStrategy pins the i121h placement-strategy authority in the Go
+// reference (the model the Z80 bdos_find_record_for_strategy mirrors): highest-free
+// (the default) grows storage DOWN from the top; lowest-free grows up from the
+// bottom; explicit places at a named record only when it is free. Two free records
+// {3,4} make the high/low choice observable; each push claims and advances.
+func TestDiskRecordPushStrategy(t *testing.T) {
+	t.Run("highest-free (default) claims top-down 4 then 3", func(t *testing.T) {
+		s := newPushServer([]int{3, 4}, StrategyHighestFree)
+		pushImage(s, "first.mgt", validRecordImage())
+		pushImage(s, "second.mgt", validRecordImage())
+		claims := s.Claims()
+		if len(claims) != 2 || claims[0].Record != 4 || claims[1].Record != 3 {
+			t.Fatalf("highest-free claims = %+v, want records 4 then 3", claims)
+		}
+	})
+
+	t.Run("lowest-free claims bottom-up 3 then 4", func(t *testing.T) {
+		s := newPushServer([]int{3, 4}, StrategyLowestFree)
+		pushImage(s, "first.mgt", validRecordImage())
+		pushImage(s, "second.mgt", validRecordImage())
+		claims := s.Claims()
+		if len(claims) != 2 || claims[0].Record != 3 || claims[1].Record != 4 {
+			t.Fatalf("lowest-free claims = %+v, want records 3 then 4", claims)
+		}
+	})
+
+	t.Run("explicit free record places there", func(t *testing.T) {
+		cfg := cfgDemo
+		cfg.DiskRecordPush = true
+		cfg.Strategy = StrategyExplicit
+		cfg.ExplicitRecord = 4 // 4 is free; 3 is too, but explicit picks 4
+		s := New(cfg, tftp.MapStore{}, func(string) tftp.Source { return tftp.ByteSource(nil) })
+		s.SetFreeRecords([]int{3, 4})
+		pushImage(s, "pinned.mgt", validRecordImage())
+		claims := s.Claims()
+		if len(claims) != 1 || claims[0].Record != 4 {
+			t.Fatalf("explicit claims = %+v, want one claim of record 4", claims)
+		}
+	})
+
+	t.Run("explicit named record rejects with ERROR(3)", func(t *testing.T) {
+		cfg := cfgDemo
+		cfg.DiskRecordPush = true
+		cfg.Strategy = StrategyExplicit
+		cfg.ExplicitRecord = 7 // 7 is NOT in the free set: already named
+		s := New(cfg, tftp.MapStore{}, func(string) tftp.Source { return tftp.ByteSource(nil) })
+		s.SetFreeRecords([]int{3, 4})
+		reply := s.OnFrame(wrqFrame("pinned.mgt", nil))
+		u, ok := frame.ParseUDP(reply)
+		if !ok {
+			t.Fatalf("explicit-taken reply is not a UDP frame: %x", reply)
+		}
+		if tftp.Opcode(u.Payload) != tftp.OpERROR {
+			t.Fatalf("explicit-taken reply opcode = %d, want ERROR(%d)", tftp.Opcode(u.Payload), tftp.OpERROR)
+		}
+		if c := s.Claims(); len(c) != 0 {
+			t.Fatalf("explicit-taken recorded %d claims, want 0", len(c))
+		}
+	})
 }

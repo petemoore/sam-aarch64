@@ -484,17 +484,21 @@ wrq_arm_receiver:
                 ret
 
                 if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
-; wrq_claim_record — claim a FREE Trinity record to stream the push into. Find the
-; first free record (bdos_find_free_record; free ⇔ the record-list name byte is 0,
-; so a named record is never touched), HRECORD-select it, reset the streaming sink,
-; and enter sink mode. BD_RECORDS (the card record count) is the CSD-derived value
-; (hardware-gated i145; the emulation E2E injects it) — 0 records ⇒ none free.
+; wrq_claim_record — claim a FREE Trinity record to stream the push into. Pick the
+; record per the configured placement STRATEGY (bdos_find_record_for_strategy reads
+; SERVE_CFG_STRATEGY: highest-free by default — manifest design §4 s3 / decision 4;
+; lowest-free or an explicit record when patched), HRECORD-select it, reset the
+; streaming sink, and enter sink mode. The pick never touches a named record (free ⇔
+; the record-list name byte is 0). BD_RECORDS (the card record count) is the
+; CSD-derived value (hardware-gated i145; the emulation E2E injects it) — 0 records ⇒
+; none free.
 ;
-; Out: CY set + WRQ_SINK_MODE=1 + the record selected + the sink reset, if a free
-;      record was claimed; CY clear (WRQ_SINK_MODE stays 0) if no record is free.
+; Out: CY set + WRQ_SINK_MODE=1 + the record selected + the sink reset, if a record
+;      was placed; CY clear (WRQ_SINK_MODE stays 0) if none is available (no free
+;      record, or the explicit record is already named).
 ; Mirrors client_fetch_boot's select + raw_record_sink_reset + sink-mode arm.
 wrq_claim_record:
-                call    bdos_find_free_record  ; -> BD_FREE_RECORD (1-based, 0 = none free)
+                call    bdos_find_record_for_strategy  ; -> BD_FREE_RECORD (1-based, 0 = none)
                 ld      a, (BD_FREE_RECORD)
                 ld      b, a
                 ld      a, (BD_FREE_RECORD+1)
@@ -510,6 +514,72 @@ wrq_claim_record:
                 ret
 wrq_no_free:
                 or      a                      ; clear carry: no free record
+                ret
+
+; bdos_find_record_for_strategy — pick the record a WRQ disk-record push lands in,
+; per the placement STRATEGY in the serve config block (SERVE_CFG_STRATEGY, below).
+; This is the strategy-aware entry the serve WRQ path uses; bdos_find_free_record
+; keeps its lowest-first semantics for the i119/i122 client paths that depend on it.
+; It lives here (not in bdos_seam.asm) because it reads the serve config block; the
+; seam supplies only the strategy-agnostic finders it dispatches to.
+;
+; Reads SERVE_CFG_STRATEGY straight from RAM at find-time — cheap, and the config is
+; set at launch and not re-read from disk (Pete, i121h). Dispatch:
+;   0 (SERVE_STRAT_HIGHEST, the default) -> bdos_find_highest_free_record
+;       (scan BD_RECORDS..1, the highest free record; manifest design §4 s3 /
+;        decision 4: TFTP storage grows down from the top).
+;   1 (SERVE_STRAT_LOWEST)               -> bdos_find_free_record
+;       (scan 1..BD_RECORDS, the lowest free record — the existing behaviour).
+;   2 (SERVE_STRAT_EXPLICIT)             -> the record at SERVE_CFG_RECORD if it is
+;       free; else BD_FREE_RECORD = 0 (-> the caller's no-record ERROR(3) path).
+;   any other value                      -> treated as the default (highest-free).
+;
+; In:  BD_RECORDS  2 bytes  total record count (>= 1)
+;      the serve config block (SERVE_CFG_STRATEGY / SERVE_CFG_RECORD)
+; Out: BD_FREE_RECORD  2 bytes  the 1-based record to place into, or 0 if none is
+;                               available (no free record, or the explicit record is
+;                               already named).
+; Clobbers: A, BC, DE, HL.
+;
+; Mirrors the Go authority serve.Responder.nextRecordForStrategy (serve.go).
+bdos_find_record_for_strategy:
+                ld      a, (SERVE_CFG_STRATEGY)
+                cp      SERVE_STRAT_LOWEST
+                jp      z, bdos_find_free_record        ; 1: lowest-free (existing)
+                cp      SERVE_STRAT_EXPLICIT
+                jr      z, bfrs_explicit                ; 2: a named explicit record
+                ; 0 or any unrecognised value: the baked default (highest-free).
+                jp      bdos_find_highest_free_record
+
+bfrs_explicit:
+                ; The explicit record is SERVE_CFG_RECORD. Default BD_FREE_RECORD = 0
+                ; (none) so every reject path below just returns.
+                xor     a
+                ld      (BD_FREE_RECORD), a
+                ld      (BD_FREE_RECORD + 1), a
+
+                ld      hl, (SERVE_CFG_RECORD)
+                ; undefined (&FFFF, the i121j prompt placeholder)? -> none.
+                ld      a, h
+                and     l
+                inc     a
+                jr      z, bfrs_done                    ; HL == &FFFF: undefined
+                ; zero record number is not valid (records are 1-based) -> none.
+                ld      a, h
+                or      l
+                jr      z, bfrs_done
+
+                ; read the explicit record's list entry and apply the free test.
+                ld      (BD_ENTRY_REC), hl
+                call    bdos_record_entry
+                ld      a, (BD_ENTRY_BUF)
+                and     &7F                             ; strip write-protect bit
+                jr      nz, bfrs_done                   ; named ⇒ not available -> 0
+
+                ; free: place at the explicit record.
+                ld      hl, (SERVE_CFG_RECORD)
+                ld      (BD_FREE_RECORD), hl
+bfrs_done:
                 ret
                 endif
 
@@ -1449,4 +1519,45 @@ SRC_TABLE:        defs 256
                 include "eeprom.asm"
                 include "bdos_seam.asm"        ; i121f: free-record find + record select + HWSAD/HRSAD + validate
                 include "raw_record_sink.asm"  ; i121f: streaming disk-image -> raw record (HWSAD per sector)
+
+; ===========================================================================
+; SERVE_CONFIG — the placement-strategy config block (i121h). A small, fixed,
+; host-patchable region at the END of the bootable binary, so the packaging vessel
+; (the i121d host launcher patching a trinload code block, or a `.mgt` disk) can set
+; the WRQ disk-record PLACEMENT strategy by file offset before the program runs.
+; This program is a vessel-agnostic library: whoever loads it populates this block;
+; an un-patched binary uses the baked default (highest-free, manifest design §4 s3 /
+; decision 4 — keeps the user's low, memorable record slots for their own disks; TFTP
+; storage grows down from the top).
+;
+; The block is READ at find-time straight from RAM (cheap) by
+; bdos_find_record_for_strategy; it is not re-read from disk. Pete: the config is read
+; at launch and not re-read routinely.
+;
+; BYTE LAYOUT (the i121d host launcher patches by file offset from the SERVE_CONFIG
+; symbol — the block's anchor at +0; keep STABLE):
+;   +0  SERVE_CONFIG        1 byte   magic/version = SERVE_CFG_MAGIC_VAL (&5A); a
+;                                    launcher sanity-checks it found the block. This
+;                                    label is the patch anchor (file offset
+;                                    SERVE_CONFIG - &8000, the binary's load org).
+;   +1  SERVE_CFG_STRATEGY  1 byte   placement strategy:
+;                                      0 = highest-free  (SERVE_STRAT_HIGHEST — the
+;                                          DEFAULT, baked here per §4 decision 4)
+;                                      1 = lowest-free   (SERVE_STRAT_LOWEST)
+;                                      2 = explicit      (SERVE_STRAT_EXPLICIT — use
+;                                          the record at +2..3)
+;   +2  SERVE_CFG_RECORD    2 bytes  explicit record number (LE); used only when
+;                                    strategy == 2. &FFFF = undefined (reserved for the
+;                                    future i121j SAM-prompt path; not implemented here).
+; Total: 4 bytes.
+; ===========================================================================
+SERVE_CFG_MAGIC_VAL:  equ &5A           ; the magic/version byte value
+SERVE_STRAT_HIGHEST:  equ 0             ; place at the highest free record (default)
+SERVE_STRAT_LOWEST:   equ 1             ; place at the lowest free record
+SERVE_STRAT_EXPLICIT: equ 2             ; place at SERVE_CFG_RECORD if free
+SERVE_CFG_RECORD_NONE: equ &FFFF        ; explicit record undefined (i121j prompt path)
+
+SERVE_CONFIG:         defb SERVE_CFG_MAGIC_VAL      ; +0 magic/version (patch anchor)
+SERVE_CFG_STRATEGY:   defb SERVE_STRAT_HIGHEST      ; +1 baked default: highest-free (§4 s3)
+SERVE_CFG_RECORD:     defw SERVE_CFG_RECORD_NONE    ; +2 explicit record (LE); &FFFF = none
                 endif

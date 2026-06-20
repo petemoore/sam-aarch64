@@ -595,6 +595,58 @@ bffr_done:
                 ret
 
 ; ---------------------------------------------------------------------------
+; bdos_find_highest_free_record — scan the central record list DOWNWARD for the
+; HIGHEST free (unnamed) record. The placement-strategy sibling of
+; bdos_find_free_record (which returns the LOWEST): same free test (free ⇔
+; (entry[0] AND 0x7F) == 0; the frec3x test, bdos15a.src.txt:946-948), opposite
+; scan direction, so TFTP storage grows DOWN from the top record and the user's low,
+; memorable record slots stay free for their own disks (manifest design §4 s3 /
+; decision 4). The READ-only free detection never touches a named record.
+;
+; In:  BD_RECORDS  2 bytes  total record count (>= 1)
+; Out: BD_FREE_RECORD  2 bytes  1-based number of the highest free record, or 0 if
+;                               all records are named/in-use.
+; Clobbers: A, BC, DE, HL.
+;
+; Algorithm: iterate n = BD_RECORDS down to 1; for each n read its entry via
+; bdos_record_entry and apply the free test; the first free record found (the
+; highest) is stored and the routine returns. None free ⇒ BD_FREE_RECORD = 0.
+bdos_find_highest_free_record:
+                ; BD_FREE_RECORD = 0 (no free record found yet)
+                xor     a
+                ld      (BD_FREE_RECORD), a
+                ld      (BD_FREE_RECORD + 1), a
+
+                ; HL = BD_RECORDS (start at the top). If 0, nothing to scan.
+                ld      hl, (BD_RECORDS)
+                ld      a, h
+                or      l
+                ret     z                      ; 0 records: BD_FREE_RECORD stays 0
+bfhr_loop:
+                ; fetch the entry for record n (HL).
+                ld      (BD_ENTRY_REC), hl
+                push    hl                     ; save n
+                call    bdos_record_entry
+                pop     hl                     ; restore n
+
+                ; free test: (BD_ENTRY_BUF[0] AND 0x7F) == 0?
+                ld      a, (BD_ENTRY_BUF)
+                and     &7F                    ; strip write-protect bit
+                jr      nz, bfhr_next          ; non-zero ⇒ named ⇒ go lower
+
+                ; highest free record found — store n and return.
+                ld      (BD_FREE_RECORD), hl
+                ret
+
+bfhr_next:
+                ; n--; stop after n == 1 has been tested (HL reaching 0 = done).
+                dec     hl
+                ld      a, h
+                or      l
+                jr      nz, bfhr_loop          ; n >= 1 still: keep scanning down
+                ret                            ; scanned 1..BD_RECORDS, none free
+
+; ---------------------------------------------------------------------------
 ; bdos_write_list_sector — write one 512-byte list sector back to the card (card-
 ; absolute, not record-clamped) — the WRITE sibling of bdos_read_list_sector.
 ;
