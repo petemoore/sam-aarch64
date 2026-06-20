@@ -2752,9 +2752,11 @@
   title: "SAMBOOT charter: controlling overview doc + registry restructure under i133/i135"
   description: |
     Stand up the SAMBOOT controlling overview (docs/specs/samboot.md) + restructure the registry under it: de-conflate the ROM-chip/EEPROM-bootblock/forked-B-DOS naming, split i87, flip i135<-i133, the i135a-c chain, the dumper + BIOS items, fold i112.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 486, role: completing}
   refs: [docs/specs/samboot.md]
 
 - id: i176
