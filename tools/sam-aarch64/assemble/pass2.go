@@ -8,10 +8,34 @@ import (
 	format "github.com/petemoore/sam-aarch64/tools/sam-aarch64-format"
 )
 
+// CodeWord describes one emitted 4-byte instruction word in the linked
+// image: the encoded little-endian word, its output byte offset, its VMA
+// (PC), and the index of the record that produced it. Data bytes (literal
+// pool, .word/.quad, .org/.balign padding) produce no CodeWord — exactly
+// the "skip $d data spans" boundary the Cortex-A53 errata scans rely on.
+// Two CodeWords are adjacent in the instruction stream iff their PCs are
+// 4 apart; any intervening data leaves a PC gap.
+type CodeWord struct {
+	Off    int    // byte offset into the returned image
+	PC     int64  // VMA of this instruction
+	Word   uint32 // decoded little-endian instruction word
+	RecIdx int    // index into f.Records that emitted this word
+}
+
 // Pass2 emits the binary output by walking records again with the
 // symbol table available from Pass1.
 func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
+	out, _, err := Pass2WithMap(f, p1)
+	return out, err
+}
+
+// Pass2WithMap is Pass2 plus a per-instruction-word code map (see CodeWord).
+// The map lists only true instruction words, in emission order, so the
+// Cortex-A53 errata scanners (errata.go) can slide a window over the
+// instruction stream while treating data as a span boundary.
+func Pass2WithMap(f *format.File, p1 *Pass1Result) ([]byte, []CodeWord, error) {
 	var out []byte
+	var cmap []CodeWord
 	// PC tracks the *VMA*: starts at OriginVMA (zero unless a leading
 	// `.org N` shifted the origin). Output byte 0 always corresponds to
 	// pc == OriginVMA, mirroring `objcopy -O binary` semantics.
@@ -75,13 +99,14 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 		return nil
 	}
 
-	for _, rec := range f.Records {
+	for ri, rec := range f.Records {
 		switch rec.Kind {
 		case format.KindInst:
 			word, err := encodeInst(rec, pc, p1, f)
 			if err != nil {
-				return nil, fmt.Errorf("pc=0x%x: %w", pc, err)
+				return nil, nil, fmt.Errorf("pc=0x%x: %w", pc, err)
 			}
+			cmap = append(cmap, CodeWord{Off: len(out), PC: pc, Word: word, RecIdx: ri})
 			var buf [4]byte
 			binary.LittleEndian.PutUint32(buf[:], word)
 			out = append(out, buf[:]...)
@@ -89,6 +114,10 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 		case format.KindLitInsts:
 			// Pre-assembled literal run: copy the stored little-endian
 			// words straight to OUT — no encoding work.
+			for k := 0; k < int(rec.LitCount); k++ {
+				w := binary.LittleEndian.Uint32(rec.LitWords[4*k:])
+				cmap = append(cmap, CodeWord{Off: len(out) + 4*k, PC: pc + int64(4*k), Word: w, RecIdx: ri})
+			}
 			out = append(out, rec.LitWords...)
 			pc += 4 * int64(rec.LitCount)
 		case format.KindLitData:
@@ -108,22 +137,23 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 					if slot == enc.FoldLitpool19 {
 						idx, ok := p1.LdrPoolIdx[pc]
 						if !ok {
-							return nil, fmt.Errorf("pc=0x%x: INSN_RUN litpool patch with no pool index", uint64(pc))
+							return nil, nil, fmt.Errorf("pc=0x%x: INSN_RUN litpool patch with no pool index", uint64(pc))
 						}
 						value = p1.PoolEntries[idx].PC
 					} else {
 						v, err := EvalUsage(patch.Expr, makeCtx(pc, p1, f), usage)
 						if err != nil {
-							return nil, fmt.Errorf("pc=0x%x: INSN_RUN patch eval: %w", uint64(pc), err)
+							return nil, nil, fmt.Errorf("pc=0x%x: INSN_RUN patch eval: %w", uint64(pc), err)
 						}
 						value = v
 					}
 					bits, err := enc.Fold(slot, value, pc, el.BaseWord)
 					if err != nil {
-						return nil, fmt.Errorf("pc=0x%x: INSN_RUN fold(slot %d): %w", uint64(pc), patch.Slot, err)
+						return nil, nil, fmt.Errorf("pc=0x%x: INSN_RUN fold(slot %d): %w", uint64(pc), patch.Slot, err)
 					}
 					word |= bits
 				}
+				cmap = append(cmap, CodeWord{Off: len(out), PC: pc, Word: word, RecIdx: ri})
 				var buf [4]byte
 				binary.LittleEndian.PutUint32(buf[:], word)
 				out = append(out, buf[:]...)
@@ -133,7 +163,7 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 			name := format.DirectiveName(rec.DirectiveID)
 			if name == ".ltorg" {
 				if err := emitFlush(pc); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				continue
 			}
@@ -148,7 +178,7 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 				ctx := makeCtx(pc, p1, f)
 				target, err := EvalUsage(o.Expr, ctx, usage)
 				if err != nil {
-					return nil, fmt.Errorf(".org: %w", err)
+					return nil, nil, fmt.Errorf(".org: %w", err)
 				}
 				if len(out) == 0 && pc == originVMA && originVMA == 0 && target != 0 {
 					// Leading origin set — match pass1's decision.
@@ -157,7 +187,7 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 					continue
 				}
 				if uint64(target) < uint64(pc) {
-					return nil, fmt.Errorf(".org: target 0x%x < current pc 0x%x (backward .org not allowed)", uint64(target), uint64(pc))
+					return nil, nil, fmt.Errorf(".org: target 0x%x < current pc 0x%x (backward .org not allowed)", uint64(target), uint64(pc))
 				}
 				pad := int64(uint64(target) - uint64(pc))
 				if pad > 0 {
@@ -168,7 +198,7 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 			}
 			bytes, err := encodeDirective(rec, pc, p1, f)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			out = append(out, bytes...)
 			pc += int64(len(bytes))
@@ -176,9 +206,9 @@ func Pass2(f *format.File, p1 *Pass1Result) ([]byte, error) {
 	}
 	// Implicit pool flush at end of input.
 	if err := emitFlush(pc); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return out, nil
+	return out, cmap, nil
 }
 
 func makeCtx(pc int64, p1 *Pass1Result, f *format.File) enc.EvalContext {
