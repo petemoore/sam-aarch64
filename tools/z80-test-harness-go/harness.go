@@ -1060,6 +1060,7 @@ func (h *Hardware) unservedFileHint() string {
 		}
 	}
 	return fmt.Sprintf("HGTHD requested file(s) the harness could not serve: %v%s; "+
-		"these are file-not-found errors that longjmp via (hksp)",
+		"each is a silent HLOAD no-op (leaving the page empty) unless "+
+		"StrictFileNotFound is set, where it longjmps via (hksp)",
 		h.unservedFiles, remedy)
 }
