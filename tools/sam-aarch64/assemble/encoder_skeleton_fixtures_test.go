@@ -147,6 +147,34 @@ func TestEncoderSkeletonFixtures(t *testing.T) {
 			w.WriteReg(format.OpRegW, 1)
 			w.WriteImmExpr(immExpr(4))
 		}, 3},
+		// --- i203b special forms: bic-imm / csetm / barrier ---
+		{"bic_x0_x1_0xff", "bic", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteImmExpr(immExpr(0xff))
+		}, 3},
+		{"bic_w0_w1_0xff", "bic", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegW, 0)
+			w.WriteReg(format.OpRegW, 1)
+			w.WriteImmExpr(immExpr(0xff))
+		}, 3},
+		{"csetm_x0_eq", "csetm", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteCond(format.CondEQ)
+		}, 2},
+		{"csetm_w3_ne", "csetm", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegW, 3)
+			w.WriteCond(format.CondNE)
+		}, 2},
+		{"isb_15", "isb", 0, func(w *format.OperandWriter) {
+			w.WriteImmExpr(immExpr(15))
+		}, 1},
+		{"dsb_11", "dsb", 0, func(w *format.OperandWriter) {
+			w.WriteImmExpr(immExpr(11))
+		}, 1},
+		{"dmb_11", "dmb", 0, func(w *format.OperandWriter) {
+			w.WriteImmExpr(immExpr(11))
+		}, 1},
 	}
 
 	for _, fx := range fixtures {

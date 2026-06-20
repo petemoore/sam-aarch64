@@ -109,10 +109,11 @@ enc_kinds_loop:
 enc_after_kinds:
 
 ; -- Special-form intercepts (mirror Go pass2.go:337-353 switch) --------
-; lsl/lsr (17/18) and bitfield (49/50/51/83/84) bypass the form table
-; unconditionally; ror (70) only when its 3rd operand is an immediate
-; (the reg form -> RORV goes through the form table).  All other
-; mnemonics fall through to the generic form-table path below.
+; lsl/lsr (17/18), bitfield (49/50/51/83/84), csetm (52) and the
+; barriers isb/dsb/dmb (66/67/68) bypass the form table unconditionally;
+; ror (70) and bic (47) only when their 3rd operand is an immediate (the
+; reg forms -> RORV / BIC-shifted-reg go through the form table).  All
+; other mnemonics fall through to the generic form-table path below.
                 ld      a, (enc_mnem + 1)
                 or      a
                 jr      nz, enc_after_special       ; id >= 256: never special
@@ -131,14 +132,31 @@ enc_after_kinds:
                 jp      z, enc_bitfield
                 cp      84
                 jp      z, enc_bitfield
+                cp      52
+                jp      z, enc_csetm
+                cp      66
+                jp      z, enc_barrier
+                cp      67
+                jp      z, enc_barrier
+                cp      68
+                jp      z, enc_barrier
                 cp      70
+                jr      z, enc_special_imm2         ; ror: needs imm op[2]
+                cp      47
                 jr      nz, enc_after_special
-                ld      a, (enc_op_count)           ; ror imm form needs op[2]
+enc_special_imm2:
+; ror(70)/bic(47): only intercept when op[2] is an immediate.
+                ld      b, a                        ; B = mnem (47 or 70)
+                ld      a, (enc_op_count)
                 cp      3
                 jr      c, enc_after_special
                 ld      a, (OPVAL_KINDS + 2)
                 cp      OPK_IMM_EXPR
+                jr      nz, enc_after_special
+                ld      a, b
+                cp      70
                 jp      z, enc_ror
+                jp      enc_bicimm
 enc_after_special:
 
 ; -- Form lookup: find first form for the mnemonic, then match kinds ----
@@ -558,6 +576,135 @@ enc_ror:
 enc_ror_emit:
                 call    enc_copy_base
                 jp      enc_build_word
+
+; -- enc_bicimm — bic Rd,Rn,#imm: AND Rd,Rn,#~imm (logical-imm) ----------
+; Port of pass2.go::encodeBicImm.  Evaluate imm, one's-complement all 8
+; bytes (Go: negImm = ^imm), seed insn_base with the AND base word (its
+; sf bit drives fold_logical's 32/64-bit choice), fold the logical
+; immediate via the proven encoder, then OR in Rn<<5 | Rd.
+enc_bicimm:
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (Rd)
+                call    enc_rd_width                ; enc_regmask, enc_rd
+                ld      a, 1
+                call    enc_nth_operand             ; HL -> op1 (Rn)
+                inc     hl
+                ld      a, (hl)
+                ld      (enc_rn), a
+                ld      a, 2
+                call    enc_nth_operand             ; HL -> op2 (imm)
+                call    enc_eval_at                 ; imm -> expr_result
+; ~imm: one's-complement the 8-byte LE result in place.
+                ld      hl, expr_result
+                ld      b, 8
+enc_bicimm_not:
+                ld      a, (hl)
+                cpl
+                ld      (hl), a
+                inc     hl
+                djnz    enc_bicimm_not
+; insn_base := AND base (sf from byte3): 64=0x92000000, 32=0x12000000.
+                ld      a, (enc_regmask)
+                cp      63
+                ld      a, &92
+                jr      z, enc_bicimm_base
+                ld      a, &12
+enc_bicimm_base:
+                ld      hl, insn_base
+                ld      (hl), 0
+                inc     hl
+                ld      (hl), 0
+                inc     hl
+                ld      (hl), 0
+                inc     hl
+                ld      (hl), a                     ; byte3 = 0x92 / 0x12
+; fold the logical immediate (reads insn_base+3 for sf, expr_result).
+                ld      a, FSID_LOGICAL
+                call    insn_fold                   ; DEHL = N:immr:imms bits
+                call    or_dehl_into_base
+; OR in the register field: (Rn << 5) | Rd  (bits 0..9).
+                ld      a, (enc_rn)
+                ld      l, a
+                ld      h, 0
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl                      ; Rn << 5
+                ld      a, (enc_rd)
+                or      l
+                ld      l, a                        ; HL = (Rn << 5) | Rd
+                ld      de, 0                        ; byte2/byte3 untouched
+                call    or_dehl_into_base
+; word = insn_base
+                ld      a, (insn_base + 0)
+                ld      l, a
+                ld      a, (insn_base + 1)
+                ld      h, a
+                ld      a, (insn_base + 2)
+                ld      e, a
+                ld      a, (insn_base + 3)
+                ld      d, a
+                ret
+
+; -- enc_csetm — csetm Rd,cond: csinv Rd,xzr,xzr,!cond ------------------
+; Port of pass2.go::encodeCsetm.  word = base | (~cond << 12) | Rd, with
+; Rn=Rm=xzr baked into the base (0x..9f03e0).
+enc_csetm:
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (Rd)
+                call    enc_rd_width                ; enc_regmask, enc_rd
+                ld      a, 1
+                call    enc_nth_operand             ; HL -> op1 (cond)
+                inc     hl
+                ld      a, (hl)                     ; cond code
+                xor     &01                         ; invert: cond ^ 1
+                rrca
+                rrca
+                rrca
+                rrca                                ; (~cond) << 4 within byte1
+                ld      c, a                        ; C = byte1 cond bits
+; byte0 = base0(0xe0) | Rd
+                ld      a, (enc_rd)
+                and     &1f
+                or      &e0
+                ld      l, a
+; byte1 = 0x03 | (~cond << 4)
+                ld      a, c
+                or      &03
+                ld      h, a
+; byte2/byte3 by width: 64=0xda9f.., 32=0x5a9f..
+                ld      e, &9f
+                ld      a, (enc_regmask)
+                cp      63
+                ld      d, &da
+                ret     z
+                ld      d, &5a
+                ret
+
+; -- enc_barrier — isb/dsb/dmb: base | (CRm << 8) -----------------------
+; Port of pass2.go::encodeBarrierInst.  Single immediate operand = CRm
+; (bits 11:8).  Bases: isb 0xd50330df, dsb 0xd503309f, dmb 0xd50330bf.
+enc_barrier:
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (CRm imm)
+                call    enc_eval_at                 ; CRm -> expr_result
+                ld      a, (enc_mnem)
+                cp      66
+                ld      l, &df                      ; isb byte0
+                jr      z, enc_barrier_crm
+                cp      67
+                ld      l, &9f                      ; dsb byte0
+                jr      z, enc_barrier_crm
+                ld      l, &bf                      ; dmb byte0
+enc_barrier_crm:
+                ld      a, (expr_result)
+                and     &0f
+                or      &30                         ; byte1 = 0x30 | CRm
+                ld      h, a
+                ld      e, &03
+                ld      d, &d5
+                ret
 
 ; -- enc_rd_width — HL -> Rd operand; set enc_regmask (63/31) + enc_rd ---
 ; is64 iff Rd kind != OpRegW.  Preserves nothing; returns with HL past Rd.
