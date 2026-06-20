@@ -46,12 +46,32 @@ From `docs/notes/sam-paging.md` (§§1–6) and `docs/notes/memory-layout.md`:
   LMPR/HMPR bracket.
 - At boot BASIC owns pages 0–3; SAMDOS occupies one page (`DOSFLG`, `&5BC2`);
   the screen occupies two pages — `sam-paging.md:456-485, 569-598`.
-- **Free-page budget after reserving ROM-shadow/BASIC(4) + DOS(1) + screen(2):**
-  ~**9 pages (~144 KB)** on a 256 KB machine (16 − 7), ~**25 pages (~400 KB)** on
-  a 512 KB machine (32 − 7). This pool is exactly what "claim all free RAM"
-  refers to. (The resident IDE code is *not* a separate reservation — it loads
-  into section C over a page already inside the BASIC 0–3 set it overwrites, so
-  it does not reduce the free count further.)
+- **The "4 BASIC pages" are not 4 reservations.** The IDE owns the machine for
+  its session (§7.3), so it `NEW`s BASIC at startup (Pete, 2026-06-22) and
+  reclaims the freed BASIC *program + variable* pages into the pool. What stays
+  reserved is only what the ROM/DOS routines need: the **system page** holding
+  the SAM system variables (all at `&5xxx` → physical **page 1**; the full table
+  is `sam-paging.md §7`), the **system stack**, and the **ROM/DOS workspace**;
+  plus the **`DOSFLG` page**, the **two screen pages**, and the **resident-code
+  page** (section C loads over a page already in the 0–3 set). The exact reclaim
+  falls out of the boot survey (`LASTPAGE`/`RAMTOP` + the sysvar extent), not a
+  blind reservation of 4.
+- **The two screen pages hold a 24 KB screen, leaving an 8 KB tail usable.**
+  Modes 3/4 use 24 KB and wrap an even page into the next odd one
+  (`sam-paging.md:165-167`, `tech-man_v3-0.txt:947-955`), so the top **8 KB of
+  the odd screen page is free RAM**. The system variables are in page 1, *not*
+  the screen pages, so they are never at risk here — but the boot survey still
+  **validates** the tail (read `VMPR` → the screen pages; confirm the tail isn't
+  `DOSFLG`'s page and isn't `ALLOCT`-marked) before tagging it a fixed
+  **screen-tail scratch** region (usable for draw-time/screen-coupled state —
+  render scratch, the draw trampoline, part of `page_owner[]` — but never handed
+  out as a generic pool page). General principle: reclaim sub-page gaps where
+  pages splice, boot-validated.
+- **Free-page budget** (before the BASIC-program reclaim, the conservative
+  floor): ~**9 pages (~144 KB)** on a 256 KB machine, ~**25 pages (~400 KB)** on
+  a 512 KB machine — `NEW`ing BASIC adds a page or two on top, and the 8 KB
+  screen-tail a little more. This pool is exactly what "claim all free RAM"
+  refers to.
 
 The IDE's resident code lives in section C (`&8000–&BFFF`) under the same
 `code_end < &C000` cliff the assembler already enforces
@@ -100,10 +120,20 @@ record.
 At IDE start, before any document or assembly:
 
 1. Read `PRAMTP` → highest physical page → total page count.
-2. Mark `RESERVED`: pages 0–3 (BASIC), `DOSFLG`'s page, the two screen pages
-   (`sam-paging.md` §§5–6), and the page(s) holding resident IDE code.
-3. Mark every remaining page `FREE`.
-4. Surface the free count as the **document budget** shown to the user
+2. **`NEW` BASIC** (§7.3) so its program/variable pages collapse and become
+   reclaimable.
+3. Mark `RESERVED` only what the ROM/DOS still need: the **system page** (the
+   `&5xxx` sysvars + stack + ROM/DOS workspace, page 1), the **`DOSFLG` page**,
+   the **two screen pages** (from `VMPR`), and the **resident-code page** — *not*
+   a blind pages-0–3 block. Use `LASTPAGE`/`RAMTOP` + the sysvar extent to keep
+   only the genuinely system-critical low page.
+4. **Validate + tag the screen-tail:** compute the top 8 KB of the odd screen
+   page (`VMPR`); if it is not `DOSFLG`'s page and not `ALLOCT`-marked, tag it a
+   fixed `SCRATCH` region (usable, never a generic pool page). If validation
+   fails, leave it reserved — never assume.
+5. Mark every remaining page `FREE` (this includes the BASIC program pages freed
+   by step 2).
+6. Surface the free count as the **document budget** shown to the user
    (e.g. "≈144 KB free" / "≈384 KB free").
 
 This is the boot-survey i41 §5.2 refers to ("sizes the pool via
@@ -208,6 +238,13 @@ blocks it.
 - **Bracket discipline** — every pool page is reached through an LMPR/HMPR
   bracket; the existing `reader.asm`/`emit_byte` patterns generalise, but the
   N-page OUT/IN lists add bracket sites to audit.
+- **Screen-tail / sysvar safety** — the 8 KB screen-tail reclaim (§2, §4.2.4)
+  must be **boot-validated**, never assumed. The SAM system variables all live
+  at `&5xxx` → physical page 1 (`sam-paging.md §7`), *not* in the screen pages,
+  so they are not at risk in the tail — but the exact screen page (`VMPR`) and
+  DOS page vary, so the survey confirms the tail is neither `DOSFLG`'s page nor
+  `ALLOCT`-marked before use, and leaves it reserved on any doubt. Trampling a
+  ROM-used byte is the RAM equivalent of clobbering a shared SD record.
 
 ## 7. Decision (q36, resolved 2026-06-22)
 
@@ -229,9 +266,17 @@ Sub-decisions:
    floppy/tape; the assembler must run fully without Trinity). It is added later
    so a space-limited user on any machine gains headroom, but it never blocks
    i2.
-3. **`ALLOCT` coexistence** — **the IDE owns allocation for its session**,
-   rebuilding BASIC's `ALLOCT` view only on exit. This is what "whatever asks
-   for a page gets it" requires.
+3. **`ALLOCT` coexistence / BASIC** — **the IDE owns allocation for its
+   session** and **`NEW`s BASIC at startup** to reclaim its program/variable
+   pages (§2, §4.2). There is no reason to preserve a user's BASIC program: on an
+   autoboot disk the boot stub just `CALL`s the IDE, and a hand-loaded user can
+   `NEW` after exit anyway. The IDE keeps only the system-critical low page
+   (`&5xxx` sysvars + stack + ROM/DOS workspace), the `DOSFLG` page, the screen
+   pages, and its code page reserved. On exit it leaves BASIC in that clean `NEW`
+   state with consistent `ALLOCT`/`LASTPAGE`/`RAMTOP` — simpler than restoring a
+   program. The 8 KB screen-tail (§2) is a bonus fixed scratch region, always
+   boot-validated so the ROM's system variables (which live in page 1, never the
+   screen pages) are never trampled.
 
 This is the model i41 §5.2 already assumes, and it delivers the i23/i24 ceiling
 lifts for free.
