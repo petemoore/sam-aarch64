@@ -6,17 +6,6 @@
     **Editor default rendering config** (i76 / editor-rendering-rules-design.md §10) — which look does the on-SAM editor ship as its default (user-overridable)? Rules §3–§9 specified (config lab is authority); 64 cols fits only 76% of comments uncompressed. Choosing baseline-clean vs compressed-dense vs chromeless is a taste call against real PNGs / SimCoupé SCREEN$. Agent recommends tuned compressed.config: adaptive mnemonic col, &-immediates, stripped registers, label-truncate 16, sameline comments, wrap:3, max-width 40. Non-blocking — any answer is a one-line resolution + default config file.
   owner: pete
 
-- id: q35
-  body: |
-    i122 brick 4 wants 'before fetching, if the content hash is already stored, skip the fetch and boot the existing copy.' Two tensions block a faithful build:
-    
-    (1) HASH SOURCE: the client fetches by FILENAME over TFTP and has no content hash until it has fetched the bytes; to SKIP a fetch you need the hash FIRST. So it must come from a boot-config field or a name->hash manifest lookup. Which?
-    
-    (2) STORAGE MODEL: i122c (PR #498) writes the image to a FIXED reused scratch record (i122 note a), NOT content-addressed. i114d's <hash6><NNN> naming is for SPANNED FLAT-FILES, not raw disk records, so a prior fetch-and-boot leaves nothing dedup-findable by hash. Options: (A) store disk images content-addressed (supersedes scratch) -> records ACCUMULATE, needing free-record alloc + the mandatory shared-resource show-name+confirm gate; (B) keep scratch, dedup only against images PROVISIONED via the content-addressed path (i70/i100+manifest) -> boot a provisioned copy directly, else scratch-fetch; (C) a minimal last-fetched-hash cache that only short-circuits an immediate re-boot of the same image.
-    
-    RECOMMEND (B): dedup checks if the requested image is already on-card under its content-addressed name (prior provisioning, via the i119 list-read scan + i114d naming), boot it without re-fetch; else fetch into scratch (preserves note a). Hash from a name->hash manifest entry (i114). Needs Pete: touches the shared-storage policy he has corrected repeatedly (trinity_storage_shared_resource) and decides whether i122c's scratch model stands. Until answered, any i122d choice is a guess that may contradict storage policy.
-  owner: pete
-
 - id: q38
   body: |
     AWAITING the assessment report i209 (Pete, 2026-06-22). Pete actively uses macros on the Mac; on-SAM macros 'would be a huge win' provided no big perf/size cost or redesign. i209 (agent) produces a scope + perf/size-impact report; once it lands, Pete returns HERE to give the go/no-go + scope for i31 (the on-SAM .if + macro implementation). Original: pursue an on-SAM preprocessor now, at what scope? Host-side asmparse/text2bin already covers this; moving on-SAM is a new beyond-M7 feature with real scope choices (.if syntax; macro semantics; integration vs host preprocess; Go-authority side). Gates i31.

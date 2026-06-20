@@ -2540,9 +2540,9 @@
 - id: i122d
   title: "sha256-dedup-before-fetch: skip fetch + boot existing copy if content hash already on card"
   description: |
-    i122 brick 4: idempotent fetch. Before fetching, compute the image's content SHA-256, derive its record name via i114d (content-addressed lookup), and check the on-card record list (i119 list-read path) — if a record with that content already exists, skip the fetch and boot the existing copy (i122a). Closes the i122 design note (b). Builds on i114d naming + the i119 list-read. Host-verifiable; real boot hardware-gated.
-  status: OPEN
-  depends_on: [i114d, i122c, q35]
+    WONTFIX (Pete, 2026-06-23, q35): content-hash dedup of stored disk images is dropped as YAGNI. Rationale: the only benefit was SD-card SPACE — but a ~32GB card holds ~40,000 disk images at 819200 B each, while the entire published SAM catalogue is ~1,000 disks (<1GB). Space will never be the constraint, so the dedup machinery (content-addressed naming, name->hash manifest, streaming chunk-compare, copy-on-write on divergence, dedup-reference bookkeeping against the shared-storage confirm gate) is pure complexity for zero real benefit. The simple, safe model stands: fetch/receive -> find a free record (i119 detection) -> mandatory show-name + confirm-before-overwrite (trinity_storage_shared_resource) -> store. If re-fetch TIME ever becomes a real annoyance, a trivial 'already have this name, boot local' check could be added later without any content-addressed machinery — track then, not now.
+  status: WONTFIX
+  depends_on: [i114d, i122c]
   kind: leaf
   owner: agent
   parent: i122
