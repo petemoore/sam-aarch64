@@ -3563,7 +3563,7 @@
   title: "i201c: litpool compound-form encoder (ldr Xt,=expr)"
   description: |
     Third/final sub-brick of i201. Port encodeLdrLitPoolInst (ldr Xt,=expr literal-pool slot, pass2.go:639-672) + wire into encode_inst's pre-form-table dispatch (pass2.go:241-243). REUSES fold_litpool19 (insn_run.asm FSID_LITPOOL19) + the litpool table machinery (litpool.asm). New work = parse the OpLitPool operand (width + expr) and route to the litpool fold. Faithful port (CLAUDE.md s6). Depends on i199, i201a. Extends the boot self-test + Go authority fixtures (needs litpool table init). SimCoupe-gated.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i199, i201a, i218]
   kind: leaf
   owner: agent
