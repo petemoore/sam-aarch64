@@ -376,6 +376,8 @@
   status: WONTFIX
   kind: leaf
   owner: agent
+  prs:
+    - {num: 513, role: completing}
   refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-06-07-strand-b-pr4-z80-disassembler-port.md"]
 
 - id: i31
