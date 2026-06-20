@@ -378,10 +378,39 @@
 - id: i27
   title: "Cortex-A53 errata workarounds (--fix-cortex-a53-*)"
   description: |
-    Cortex-A53 errata workarounds (--fix-cortex-a53-835769 / -843419). Pete (2026-06-22, q37): INCORPORATE — these are hard-to-debug latent bugs (835769: mul-accumulate then a 64-bit ldr/str spanning a page boundary; 843419: adrp at certain page offsets then a load); we've been lucky not to trip them. Ship as an EXPLICIT enable/disable feature in the SAM program (off by default for later silicon like Pi 4/400; on for Cortex-A53 / Pi 3). Greenfield (no Go authority): design + Go-first authority + Z80 port + binutils cross-check; scope = BOTH errata (assembler-side 835769 + linker-side 843419, placed at the right pipeline stage since we produce a linked release.bin). CAVEAT from Pete: if it turns out to be a massive amount of code OR a significant assemble-time performance hit, flag it and we reconsider — otherwise keep it as a toggle option. Fresh-session-sized.
+    Cortex-A53 errata workarounds (--fix-cortex-a53-835769 / -843419) as an EXPLICIT enable/disable feature, off by default for later silicon (Pi 4/400), on for Cortex-A53 / Pi 3 (Pete, q37). These are hard-to-debug latent bugs. Umbrella over the Go authority (i27a) + Z80 ports (i27b 835769, i27c 843419 + toggle). CORRECTION (i27a research vs Pete's q37 note): 835769 has NO page-boundary condition — it is a DATA-DEPENDENCY erratum (a memory op immediately followed by a 64-bit multiply-accumulate); the page-offset (0xff8/0xffc) condition belongs to 843419. Also note: in binutils 2.44 BOTH fixes are link-time (gas does not implement 835769; GCC's flag is compiler-side) — but for our single assemble+link tool 835769 is best done as NOP insertion in the instruction stream and 843419 as an in-place ADRP->ADR rewrite after final layout. CAVEAT (Pete): if it balloons in code size or assemble-time perf, flag and reconsider — assessment so far: tractable, NOT massive (linear scans + a re-layout only when 835769 hazards exist; off by default). Greenfield: Go-first authority then faithful Z80 port + binutils cross-check.
+  status: OPEN
+  kind: umbrella
+  owner: agent
+
+- id: i27a
+  title: "i27a: Go authority — Cortex-A53 835769 + 843419 errata detection/fix + --fix-cortex-a53-* flags + binutils cross-check"
+  description: |
+    Greenfield Go authority for BOTH errata as toggleable assemble/link-time fixes, off by default (Pete q37: on for A53/Pi3, off for later silicon). Faithful to binutils 2.44 bfd/elfnn-aarch64.c (research report in this PR). 835769 (NO page condition — that was Pete's conflation with 843419; it is a data-dep erratum): detect a memory op immediately followed by a 64-bit multiply-accumulate (mask aarch64_mlxl_p: (insn&0xff000000)==0x9b000000, op31 in {0,1,5}, Ra!=0x1f) with no RAW carve-out (aarch64_erratum_sequence); fix = insert NOP (0xd503201f) between them. Because we are the assembler (not a linker post-processing opaque objects), insert the NOP into the instruction stream and re-run layout so PC-relative refs recompute (binutils uses a branch-to-stub veneer ONLY because it cannot move placed code); NOP insertion cannot create new 835769 hazards so it converges in one re-pass. 843419 (intrinsically link/locate-time — needs final VA): detect ADRP at final page-offset 0xff8/0xffc (mask (insn&0x9f000000)==0x90000000) + the sequence predicate (mem-op, optional 1 non-branch insn, then LDST_UIMM (insn&0x3b000000)==0x39000000 whose Rn==ADRP Rd); fix = rewrite ADRP->ADR in place (no address shift) — for our ~21KB image the +/-1MB ADR range ALWAYS fits so stubs/veneers are never needed. Add --fix-cortex-a53-835769 and --fix-cortex-a53-843419 CLI flags (tools/sam-aarch64), thread post-Pass2 / post-layout. errata.go with the binutils predicates ported verbatim (cite file:line). Cross-check vs binutils-2.44 ld where a GNU toolchain is on PATH (principled skip otherwise). Authority: bfd elfnn-aarch64.c _bfd_aarch64_erratum_835769_scan/_843419_scan + helpers.
   status: IN_PROGRESS
   kind: leaf
   owner: agent
+  parent: i27
+
+- id: i27b
+  title: "i27b: Z80 port — Cortex-A53 835769 NOP insertion"
+  description: |
+    Faithful Z80 port (CLAUDE.md s6) of the i27a 835769 fix into the SAM-side assembler (src/). Detect a memory op immediately followed by a 64-bit multiply-accumulate (Ra!=XZR) and insert a NOP between them, off by default behind the SAM toggle. Mirror the Go authority's mask predicates + erratum_sequence RAW carve-out. NOP insertion shifts addresses, so it must be done in a way that PC-relative refs stay correct — detect in the record/IR stream (pass1) so the inserted NOP word is accounted for in PC assignment across both passes (the Go authority establishes the exact decision). SimCoupe-gated; add a boot self-test fixture. Go authority: errata.go (i27a).
+  status: OPEN
+  depends_on: [i27a]
+  kind: leaf
+  owner: agent
+  parent: i27
+
+- id: i27c
+  title: "i27c: Z80 port — Cortex-A53 843419 ADRP->ADR rewrite + SAM enable/disable toggle"
+  description: |
+    Faithful Z80 port (CLAUDE.md s6) of the i27a 843419 fix + the SAM-side enable/disable toggle UX (q37: explicit feature, off by default). Post-layout scan over the OUT buffer: for each ADRP at a final page-offset 0xff8/0xffc matching the sequence predicate (mem-op, optional 1 non-branch insn, then unsigned-imm ld/st whose base == ADRP Rd), rewrite ADRP->ADR in place (no address shift — the +/-1MB ADR range always fits our image). Mirror the Go authority masks. Wire the SAM toggle (directive or build option) covering BOTH 835769 (i27b) and 843419. SimCoupe-gated; boot self-test fixture. Go authority: errata.go (i27a).
+  status: OPEN
+  depends_on: [i27a]
+  kind: leaf
+  owner: agent
+  parent: i27
 
 - id: i28
   title: "Absolute .set/.equ high-word edge: negative absolute emitted wrong high word (0x00000000 vs 0xFFFFFFFF)"
