@@ -84,8 +84,20 @@ func TestRawSinkReblocking(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
-			got := feed(c.chunks, c.finish).Writes()
+			sink := feed(c.chunks, c.finish)
+			got := sink.Writes()
 			want := ref(c.chunks, c.finish)
+
+			// Total() counts every body byte fed (the image size), independent of
+			// the sector re-blocking and of Finish's zero-padding.
+			wantTotal := 0
+			for _, ch := range c.chunks {
+				wantTotal += len(ch)
+			}
+			if sink.Total() != wantTotal {
+				t.Errorf("Total() = %d, want %d (sum of chunk lengths)", sink.Total(), wantTotal)
+			}
+
 			if len(got) != len(want) {
 				t.Fatalf("emitted %d sectors, want %d", len(got), len(want))
 			}

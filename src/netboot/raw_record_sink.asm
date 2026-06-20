@@ -45,16 +45,19 @@ RRS_LINEAR:  defs 2          ; next linear sector index to write (0-based)
 RRS_SRC:     defs 2          ; current source pointer (carried across the copy loop)
 RRS_REM:     defs 2          ; bytes of the current chunk still to consume
 RRS_N:       defs 2          ; bytes to copy this iteration = min(avail, remaining)
+RRS_TOTAL:   defs 4          ; running count of every byte streamed (32-bit LE = image size)
 
 ; ===========================================================================
-; raw_record_sink_reset — start a fresh record: RRS_FILL = 0, RRS_LINEAR = 0.
-; Call once after HRECORD-selecting the target record, before the first chunk.
-; Clobbers HL.
+; raw_record_sink_reset — start a fresh record: RRS_FILL = 0, RRS_LINEAR = 0,
+; RRS_TOTAL = 0. Call once after HRECORD-selecting the target record, before the
+; first chunk. Clobbers HL.
 ; ===========================================================================
 raw_record_sink_reset:
                 ld      hl, 0
                 ld      (RRS_FILL), hl
                 ld      (RRS_LINEAR), hl
+                ld      (RRS_TOTAL), hl
+                ld      (RRS_TOTAL + 2), hl
                 ret
 
 ; ===========================================================================
@@ -69,6 +72,15 @@ raw_record_sink_reset:
 raw_record_sink_leaf:
                 ld      (RRS_SRC), hl           ; stash chunk ptr + length so LDIR
                 ld      (RRS_REM), bc           ; (which consumes BC) can run in the loop
+
+                ; RRS_TOTAL += BC (32-bit image-size counter += this chunk length).
+                ld      hl, (RRS_TOTAL)
+                add     hl, bc
+                ld      (RRS_TOTAL), hl
+                jr      nc, rrs_loop            ; no carry into the high word
+                ld      hl, (RRS_TOTAL + 2)
+                inc     hl
+                ld      (RRS_TOTAL + 2), hl
 
 rrs_loop:
                 ; done when no chunk bytes remain.

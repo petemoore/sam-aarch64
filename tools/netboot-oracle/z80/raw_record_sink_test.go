@@ -101,6 +101,13 @@ func feedZ80Sink(t *testing.T, chunks [][]byte, finish bool, record int) (*z80h.
 	return mac, store.SectorWrites()
 }
 
+// rrsTotal reads the 32-bit LE RRS_TOTAL (the streamed image-size counter).
+func rrsTotal(t *testing.T, mac *z80h.Machine) int {
+	t.Helper()
+	b := mac.Read(symAddr(t, mac, "RRS_TOTAL"), 4)
+	return int(uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24)
+}
+
 // goSink runs the Go authority over the same chunk stream.
 func goSink(chunks [][]byte, finish bool) []bdos.RawSectorWrite {
 	s := bdos.NewRawSink()
@@ -139,10 +146,19 @@ func TestRawRecordSinkMatchesGo(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
-			_, got := feedZ80Sink(t, c.chunks, c.finish, record)
+			mac, got := feedZ80Sink(t, c.chunks, c.finish, record)
 			want := goSink(c.chunks, c.finish)
 			if len(got) != len(want) {
 				t.Fatalf("Z80 emitted %d sectors, Go authority %d", len(got), len(want))
+			}
+
+			// RRS_TOTAL (32-bit image-size counter) == the bytes streamed.
+			wantTotal := 0
+			for _, ch := range c.chunks {
+				wantTotal += len(ch)
+			}
+			if gotTotal := rrsTotal(t, mac); gotTotal != wantTotal {
+				t.Errorf("RRS_TOTAL = %d, want %d", gotTotal, wantTotal)
 			}
 			for i := range want {
 				if got[i].Record != record {

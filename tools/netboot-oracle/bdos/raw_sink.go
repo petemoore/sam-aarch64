@@ -51,6 +51,7 @@ type RawSectorWrite struct {
 type RawSink struct {
 	buf    []byte // pending bytes of the sector being filled (len 0..SectorSize-1 between Writes)
 	linear int    // next linear sector index to emit
+	total  int    // running count of every body byte fed to Write (the image size)
 	writes []RawSectorWrite
 }
 
@@ -62,6 +63,7 @@ func NewRawSink() *RawSink { return &RawSink{} }
 // sector-aligned; bytes that do not complete a sector remain buffered for the
 // next Write or for Finish.
 func (s *RawSink) Write(p []byte) {
+	s.total += len(p)
 	for len(p) > 0 {
 		avail := SectorSize - len(s.buf)
 		n := avail
@@ -106,3 +108,9 @@ func (s *RawSink) Writes() []RawSectorWrite { return s.writes }
 // (0 between completed sectors). Exposed so a test can assert the Z80 sink's
 // RRS_FILL state matches.
 func (s *RawSink) Pending() int { return len(s.buf) }
+
+// Total returns the running count of every body byte fed to Write — the image
+// size, unaffected by Finish's zero-padding. The fetch-and-boot orchestration
+// (i122c) validates this against the exact RecordSize (819,200) before booting,
+// so the Z80 RRS_TOTAL mirrors it (32-bit, since a record far exceeds 16 bits).
+func (s *RawSink) Total() int { return s.total }
