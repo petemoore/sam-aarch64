@@ -405,6 +405,24 @@ handle_wrq:
                 ld      bc, 2
                 ldir
 
+                ; --- reserved control name `tftp.done`: end the session, hand control
+                ; back to trinload (manifest design decision 6; i121e). Checked FIRST,
+                ; before any free-record find / claim / arm, so the control name is
+                ; never stored. On match: set XFER_STOP_REQUESTED (sv_serve_loop polls
+                ; it and RETs to trinload's pushed return addr) and send a courtesy
+                ; ACK-0 so a stock `tftp put tftp.done` sees the handshake accepted.
+                ; The empty push's subsequent 0-byte DATA may time out on the client
+                ; after we exit — acceptable; the point is the RET back to trinload.
+                ld      hl, (PARSE_FILENAME)
+                ld      de, sv_done_name
+                call    streq_cstr             ; CY set if the filename == "tftp.done"
+                jr      nc, wrq_not_done
+                ld      a, 1
+                ld      (XFER_STOP_REQUESTED), a
+                call    build_ack0             ; courtesy ACK-0 (packet at TBUF, BC = 4)
+                jp      srv_send_tbuf          ; reply, then return; no claim, no arm
+wrq_not_done:
+
                 ; --- disk-record push setup (bootable build): claim a free record,
                 ; arm the streaming sink. No free record -> ERROR(3), no handshake. ---
                 xor     a
@@ -1162,6 +1180,8 @@ dh_no_sub:
 ; --- constants -------------------------------------------------------------
 err_notfound_msg: defm "File not found"
                   defb 0
+sv_done_name:     defm "tftp.done"           ; reserved control name (i121e); never stored
+                  defb 0
 str_blksize:      defm "blksize"
                   defb 0
 str_tsize:        defm "tsize"
@@ -1223,6 +1243,7 @@ serve_main:
                 xor     a
                 ld      (XFER_ACTIVE), a
                 ld      (XFER_JUST_OACKED), a
+                ld      (XFER_STOP_REQUESTED), a   ; no stop pending at boot (i121e)
 
                 ; --- provision the baked-in demo files ------------------
                 call    provision_demo
@@ -1235,7 +1256,30 @@ serve_main:
                 jp      z, sv_fail_init
 
 sv_serve_loop:
+                ; Attended Esc-to-exit (mirrors netboot_dumper.asm dm_serve_loop;
+                ; trinload.asm read_loop): poll the keyboard, and on Esc RET to
+                ; trinload's pushed `start` return address. serve_main is `jp`'d to and
+                ; this loop falls through with no extra stack frame, so the stack top
+                ; here is exactly trinload's return address — a plain RET reaches it.
+                ; The serve loop never repages its own section, so the RET is clean
+                ; (no LMPR/HMPR restore, unlike the dumper's i188 ROM read). Under the
+                ; host harness, with no keyboard device on port &f9, the IN reads &FF
+                ; so bit 5 is set and the poll falls through "not pressed" — the host
+                ; tests are unaffected (a test models the key to assert this exit).
+                ld      a, &f7
+                in      a, (&f9)
+                bit     5, a                   ; Esc pressed?
+                ret     z                      ; -> trinload's start
+
                 call    serve_serve_once
+
+                ; Unattended `tftp.done` exit (i121e): handle_wrq set XFER_STOP_REQUESTED
+                ; on the reserved control name. RET to trinload's start, same clean
+                ; unwind as the Esc exit.
+                ld      a, (XFER_STOP_REQUESTED)
+                or      a
+                ret     nz                     ; -> trinload's start
+
                 jr      sv_serve_loop
 
 sv_fail_cfg:
@@ -1333,6 +1377,12 @@ XFER_NEXT_BLK:    defs 2                 ; next block number (LE)
 XFER_ACTIVE:      defs 1                 ; 1 = a transfer is armed
 XFER_LAST_SHORT:  defs 1                 ; 1 = the last DATA was a short block
 XFER_JUST_OACKED: defs 1                 ; 1 = the next ACK (block 0) -> FirstData
+
+; Server-lifecycle stop flag (i121e). Set by a `tftp put tftp.done` (the reserved
+; control name) or — on hardware — by an attended keyboard Esc; sv_serve_loop polls
+; it after each frame and RETs to trinload's pushed return address, the only exit
+; until an auto-boot BIOS exists (manifest design decision 6).
+XFER_STOP_REQUESTED: defs 1              ; 1 = end the session, return control to trinload
 
 ; WRQ state. WRQ_TSIZE_PTR is a pointer into RRQ_IN: non-zero if the client sent
 ; a "tsize" option in the WRQ (the value is echoed back in the OACK); 0 if no

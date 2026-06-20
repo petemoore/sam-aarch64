@@ -75,6 +75,16 @@ const (
 	sysFLAGS = 0x5C3B // status flags; bit 5 (0x20) = key-available (ROM disasm :1090, KYIP2 :1786-1791)
 )
 
+// portKeyMatrix is the SAM keyboard-matrix status port. A keyboard read selects a
+// row by writing the row mask to the high byte of the port address (`ld a,<row>;
+// in a,(&f9)`) and reads the row's key bits back, active-low (a pressed key reads
+// 0). The trinload/dumper Esc poll selects row &F7 and tests bit 5 (Esc), RETing
+// when it reads 0. The harness models only the status byte returned on &f9 reads
+// (keyMatrix, default 0xFF = no key pressed); the row select is ignored, which is
+// faithful for the single-key Esc poll the netboot loops use. SAM Tech Man §"the
+// keyboard"; trinload.asm read_loop :89-92.
+const portKeyMatrix = 0xF9
+
 // mem is a SAM Coupé paged Z80 address space implementing z80.Memory and z80.IO.
 // All RAM/ROM access goes through one model — the sampage pager (LMPR/HMPR page
 // mapping + ROM write-protect) — so there is no flat memory model living beside
@@ -108,6 +118,7 @@ type mem struct {
 	romActive bool     // when true, addr >= romBase is read-only ROM (boot model)
 	romBase   uint16   // first ROM address (e.g. 0xC000 for ROM1 at boot)
 	keyQueue  []byte   // injected keypresses (i138 keyboard-sysvar stub)
+	keyMatrix uint8    // byte returned on port &f9 reads (active-low keyboard matrix)
 }
 
 // peek/poke are the single funnel for every RAM/ROM access: they route through
@@ -169,6 +180,13 @@ func (m *mem) In(port uint8) uint8 {
 	// device byte.
 	if m.cpu != nil && m.isBlockInputPort(port) {
 		port = m.cpu.BC.Lo
+	}
+	// Keyboard-matrix status port (&f9): the trinload/dumper/serve Esc poll reads
+	// it (`ld a,<row>; in a,(&f9); bit 5,a`). Return the modelled matrix byte
+	// (default 0xFF = no key pressed, active-low), so the Esc poll falls through
+	// "not pressed" by default and a test sets keyMatrix to assert the Esc exit.
+	if port == portKeyMatrix {
+		return m.keyMatrix
 	}
 	// The paging registers (&FA/&FB) are authoritative from the pager — the
 	// dumper does `in a,(HMPR)` (a DB-form IN, never a block input) to read its
@@ -241,7 +259,7 @@ func (mac *Machine) setRSTHandler(addr uint16, fn func(cpu *z80.CPU, mac *Machin
 // the cycle-counting anchors to stage hand-assembled opcode bytes and RunFrom
 // them.
 func New() *Machine {
-	return &Machine{m: &mem{pager: sampage.New()}, symbols: map[string]uint16{}}
+	return &Machine{m: &mem{pager: sampage.New(), keyMatrix: 0xFF}, symbols: map[string]uint16{}}
 }
 
 // LoadAt is Load with an explicit load origin (org). trinload assembles to
@@ -256,7 +274,7 @@ func LoadAt(binPath, mapPath string, org uint16) (*Machine, error) {
 	if int(org)+len(code) > 0x10000 {
 		return nil, fmt.Errorf("z80: bin of %d bytes overflows from &%04X", len(code), org)
 	}
-	machine := &Machine{m: &mem{pager: sampage.New()}, symbols: map[string]uint16{}}
+	machine := &Machine{m: &mem{pager: sampage.New(), keyMatrix: 0xFF}, symbols: map[string]uint16{}}
 	for i, b := range code {
 		machine.m.poke(org+uint16(i), b)
 	}
@@ -296,7 +314,7 @@ func LoadBoot(binPath, mapPath string, romBase uint16) (*Machine, error) {
 		return nil, fmt.Errorf("z80: boot bin of %d bytes overflows from &%04X", len(code), loadOrg)
 	}
 	machine := &Machine{
-		m:       &mem{pager: sampage.New(), romActive: true, romBase: romBase},
+		m:       &mem{pager: sampage.New(), romActive: true, romBase: romBase, keyMatrix: 0xFF},
 		symbols: map[string]uint16{},
 	}
 	// Copy only the bytes that land in RAM (below romBase); the tail above romBase
@@ -344,7 +362,7 @@ func LoadPaged(binPath, mapPath string, lmpr, hmpr uint8) (*Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Machine{m: &mem{pager: pager}, symbols: syms}, nil
+	return &Machine{m: &mem{pager: pager, keyMatrix: 0xFF}, symbols: syms}, nil
 }
 
 // Pager exposes the SAM paging model so a test can seed RAM pages, load ROM
@@ -431,6 +449,22 @@ func (mac *Machine) AttachIO(dev IODevice) {
 func (mac *Machine) InjectKeys(keys []byte) {
 	mac.m.keyQueue = append(mac.m.keyQueue, keys...)
 }
+
+// PressEsc models the operator holding Esc at the SAM keyboard: it clears bit 5
+// of the keyboard-matrix status byte (active-low), so the next `in a,(&f9); bit
+// 5,a` poll reads 0 (pressed). The trinload/dumper/serve Esc-to-exit poll then
+// RETs to trinload. Pass false to release (matrix back to 0xFF = no key pressed).
+func (mac *Machine) PressEsc(pressed bool) {
+	if pressed {
+		mac.m.keyMatrix &^= 0x20 // clear bit 5 (Esc), active-low
+	} else {
+		mac.m.keyMatrix |= 0x20
+	}
+}
+
+// SetKeyMatrix sets the raw byte returned on port &f9 reads (active-low keyboard
+// matrix; 0xFF = no key pressed). PressEsc is the convenience for the Esc bit.
+func (mac *Machine) SetKeyMatrix(b uint8) { mac.m.keyMatrix = b }
 
 // PendingKeys returns the number of injected keys still waiting to be consumed.
 // Zero means all injected keys have been read and consumed by the Z80 program
