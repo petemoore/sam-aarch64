@@ -835,6 +835,7 @@ STAGING:          defs 2048
                 include "bdos_seam.asm"
                 include "encdrv.asm"
                 include "enc_link.asm"         ; drv_wait_link (PHY link-up, i127)
+                include "key_read_test.asm"    ; i138: keyboard sysvar poll (KYIP2 inlined)
                 if defined(NETBOOT_HOSTTEST)==0
                 include "eeprom.asm"
                 endif
