@@ -1893,17 +1893,17 @@
   kind: leaf
   owner: agent
   parent: i114
-  refs: ["docs/specs/netboot-storage-manifest-design.md §6.5", "docs/specs/samdos-file-io.md", "reference/bdos/bdos15a.src.txt", "tools/netboot-oracle/z80/bdos_store.go", i122]
+  refs: ["docs/specs/netboot-storage-manifest-design.md §6.5", docs/specs/samdos-file-io.md, reference/bdos/bdos15a.src.txt, tools/netboot-oracle/z80/bdos_store.go, i122]
 
 - id: i114d
-  title: "Content-addressed span-record naming + reference-sharing dedup"
+  title: Content-addressed span-record naming + reference-sharing dedup
   description: |
     design §6.3 decision 3: internal span-record naming is hash-derived (content-addressed) — a blob's records are keyed by its content SHA-256, so two projects fetching the identical file land on the same records and the §5 shared-files-by-reference dedup falls out for free (no separate dedup logic). Names are internal, never user-visible; the 7-char-prefix truncation is dropped. Go authority plus the content-hash record lookup that the i122 sha256-dedup-before-fetch uses. Host-verifiable.
   status: OPEN
   kind: leaf
   owner: agent
   parent: i114
-  refs: ["docs/specs/netboot-storage-manifest-design.md §6.3", "tools/netboot-oracle/z80/sha256.asm", i122]
+  refs: ["docs/specs/netboot-storage-manifest-design.md §6.3", tools/netboot-oracle/z80/sha256.asm, i122]
 
 - id: i115
   title: Registry as structured source — YAML-backed iN/qN registry with CLI validator + CI sync-check
@@ -2477,3 +2477,13 @@
   owner: agent
   prs:
     - {num: 475, role: completing}
+
+- id: i152
+  title: Verify the A=drive-register contract for HRSAD/HWSAD raw-sector hooks on real Trinity
+  description: |
+    bdos_read_sector (HRSAD, i119) and bdos_write_sector (HWSAD, i114c) both leave A = the sector value at the rst 8, but the B-DOS hook code reads A as the drive number (bdos15a.src.txt rwsad/xsad: LD A,(hk.a)). After HRECORD-select a Trinity record presents as drive 2. The koron-go harness models the selected record via HRECORD and ignores A, so it cannot catch a wrong-drive bug. Confirm on real Trinity whether these hooks need A explicitly set (e.g. A=2 or A=record) or whether HRECORD makes the record the active context regardless of A; fix both routines symmetrically if needed.
+  status: OPEN
+  depends_on: [i133]
+  kind: leaf
+  owner: agent
+  refs: [src/netboot/bdos_seam.asm, reference/bdos/bdos15a.src.txt, i119, i114c]
