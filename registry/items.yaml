@@ -3523,7 +3523,7 @@
   title: "i203b: bic-imm/csetm/barrier special-form encoders"
   description: |
     Second sub-brick of i203. Port encodeBicImm (bic=47 immediate -> negate the immediate then LogicalImm, pass2.go:1440-1480), encodeCsetm (csetm=52 -> csinv with inverted condition, pass2.go:1482-1515), encodeBarrierInst (isb=66/dsb=67/dmb=68 -> CRm operand into bits 11:8, pass2.go:1563-1599). Faithful port (CLAUDE.md s6). Reuses encode_inst dispatch (i203a) + eval_expr_const + the logical-imm encoder. Extends the boot self-test + Go authority fixtures. Depends on i199, i203a.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i199, i203a]
   kind: leaf
   owner: agent
