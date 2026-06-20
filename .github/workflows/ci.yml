@@ -154,6 +154,20 @@ jobs:
       - name: Netboot oracle (DHCP/TFTP golden vectors)
         run: make ci-netboot-oracle
 
+  # registry-tests — the registry CLI's Go unit tests (id allocation / nextSubID,
+  # parent invariants, gate column, in-progress, and the live-registry conformance
+  # test). The registry-sync job validates the LIVE data during gen; this gates the
+  # tool's LOGIC so a CLI regression can't merge green (i156).
+  registry-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.1'
+      - name: Registry CLI unit tests
+        run: make ci-registry
+
   # netboot-z80 — the SAM-side Z80 port of the netboot logic (src/netboot/*.asm),
   # assembled with pyz80 and run under the flat-memory koron-go/z80 harness
   # (tools/netboot-oracle/z80).  Two host-verifiable layers: (1) the packet
