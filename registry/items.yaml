@@ -3294,7 +3294,9 @@
   title: "Name a pushed record from its post-prefix WRQ name (full record-name field), so the 19 images are legible"
   description: |
     Pete (2026-06-21 night): push to trinity-sam-disks/NAME -> name the claimed Trinity RECORD from NAME (full record-name field, ~16 chars; i121g caps at 10 = the B-DOS file-name field) so the 19 images are legible via RECORD/dir. The claim is a record-LIST WRITE = a raw SD write with NO real B-DOS hook, so depends on i193 (the SD write interface) AND i145c (the harness modelling that write FAITHFULLY at raw-SD level, not hook-injected). SAFETY/ROBUSTNESS (Pete): the WRQ filename is ATTACKER-CONTROLLABLE, so the name derivation must be BOUNDED + SANITISED and must not be exploitable to corrupt a record: (1) confirm the legal SAM record-name charset + field length from the B-DOS source / docs/specs/trinity-record-detection-design.md; (2) derive the name from the post-prefix path (e.g. the final path segment), drop/replace illegal chars and extra separators/dots; (3) TRUNCATE to the field length so there is NO buffer overrun and NO illegal byte written, for ANY input (a 200-char name, trinity-sam-disks/abc/def.123, control bytes). Document the sanitisation rule in the spec. TESTED IN EMULATION vs i145c (incl. adversarial inputs asserting a safe + legible name + an intact, uncorrupted record); auto-hardware-tested when i194 pushes the 19 images. owner:agent, no Pete/question gate.
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i193, i145c, i145h]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 538, role: completing}
