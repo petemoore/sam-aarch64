@@ -59,6 +59,14 @@ ci-disasm-roundtrip: test-disasm
 ci-netboot-oracle:
 	cd tools/netboot-oracle && go test ./...
 
+# ci-registry — run the registry CLI's Go unit tests (id-allocation / nextSubID,
+# parent invariants, gate column, in-progress, and the live-registry conformance
+# test). The registry-sync job validates the LIVE data during gen; this gates the
+# tool's LOGIC so a regression can't merge green.
+.PHONY: ci-registry
+ci-registry:
+	cd tools/registry && go test ./...
+
 # netboot Z80 routines — the SAM-side port (src/netboot/*.asm) of the netboot
 # protocol logic, assembled with pyz80 to a standalone &8000 binary + symbol
 # map.  Host-verifiable: ci-netboot-z80 runs each routine under the flat-memory
