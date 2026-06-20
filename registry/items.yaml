@@ -499,13 +499,13 @@
 - id: i39c
   title: Phase 3 — bitfield-packing polish on the overlay slot bytes
   description: |
-    Bitfield-packing polish on the overlay slot bytes (design §3.1). Migrated to M9 at M8 close (2026-06-12). Folds into / absorbed into the i48c overlay-encoder work, specifically i48c-b7 (comments/blank-runs + overlay slot bitfield-packing brick).
+    Optional second-order optimisation: pack the INSN_RUN overlay operand fields (reg=5b, kind-tag, shift-kind=2b, cond=4b, width=1b, mem-shape=3b) into sub-byte bitfields instead of one byte per field, per docs/specs/compact-tbn-nextgen-design.md §3.1 (which rates it "REFINE / accept narrowly" — real ~-4 KB but the least leverage per unit of Z80 complexity, a polish layered on the structural wins, not a headline). A SEPARATE concern from the comment/blank-run parsing brick (i48c-b7); the earlier "absorbed into i48c-b7" framing conflated two unrelated subsystems and pointed at a stale design ref (i48-syntactic-encoder-design.md has no §3.1). De-coupled 2026-06-21: gated on i48c-b8 (do the format-packing polish once the overlay encoder is functionally complete, so it isn't re-churned). Migrated to M9 at M8 close (2026-06-12).
   status: OPEN
-  depends_on: [i48c-b7]
+  depends_on: [i48c-b8]
   kind: leaf
   owner: agent
   parent: i48c
-  refs: ["docs/specs/i48-syntactic-encoder-design.md §3.1", docs/notes/m9-status.md, i48c, i48c-b7]
+  refs: ["docs/specs/compact-tbn-nextgen-design.md §3.1", docs/notes/m9-status.md, i48c]
 
 - id: i40
   title: Assembler-side editor-region eviction
@@ -808,14 +808,14 @@
   refs: [src/asmparse.asm, tools/sam-aarch64/frontend/parser.go]
 
 - id: i48c-b7
-  title: Comments/blank-runs + i39c overlay slot bitfield-packing
+  title: Parse comment and blank-run record types
   description: |
-    Parse comment and blank-run record types. Absorbs i39c: implement the overlay slot bitfield-packing polish (design §3.1) as part of the parser completion.
-  status: OPEN
+    Parse COMMENT (0x05) and BLANK_RUN (0x06) record types in src/asmparse.asm, a faithful port of the Go authority (tools/sam-aarch64/frontend/parser.go: emitComment / emitBlankRun / parseLine). Comment placement (line-start vs after-statement) and blank-line-run coalescing mirror the Go exactly; byte-for-byte verified against the Go reference by the netboot-oracle harness (tools/netboot-oracle/z80/asmparse_test.go). The brick also makes the PARSE_RECS stream self-describing (each record now leads with its REC_KIND byte) so a mixed INST/COMMENT/BLANK_RUN stream is unambiguous (mnemonic ids 5/6 otherwise collide with kinds 0x05/0x06). The i39c overlay-slot bitfield-packing polish is a SEPARATE concern (different subsystem, optional second-order optimisation) split back out to the i39c item — it was never part of this parser brick's actual delivery.
+  status: DONE
   kind: leaf
   owner: agent
   parent: i48c
-  refs: [src/asmparse.asm, "docs/specs/i48-syntactic-encoder-design.md §3.1", i39c]
+  refs: [src/asmparse.asm, tools/netboot-oracle/z80/asmparse_test.go, tools/sam-aarch64/frontend/parser.go]
 
 - id: i48c-b8
   title: "Integration/fixture round-trip (assembler-coupled, lands last)"
