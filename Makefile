@@ -73,7 +73,7 @@ ci-registry:
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-serve-boot netboot-dumper netboot-dumper-trinload netboot-samboot-config netboot-trinload netboot-z80-routines asmlex-z80 asmparse-z80 editmodel-z80 ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-serve-boot netboot-dumper netboot-dumper-trinload netboot-samboot-config netboot-samboot-inject netboot-trinload netboot-z80-routines asmlex-z80 asmparse-z80 editmodel-z80 ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -763,6 +763,28 @@ $(BUILD)/samboot_config.bin $(BUILD)/samboot_config.map: src/netboot/samboot_con
 
 netboot-samboot-config: $(BUILD)/samboot_config.bin $(BUILD)/samboot_config.map
 
+# netboot-samboot-inject (i135d, also completes i112) — the patched-bootblock
+# decision+dispatch glue: redraw the MGT stripes unconditionally (i112 fold),
+# read the SAMBOOT BIOS config (i176 samboot_read_config), then auto-boot the
+# configured record (i122a bdos_boot_record) or fall through to a normal boot.
+# Pure control flow over two already-ported, harness-tested primitives — no new
+# Go authority. Built WITHOUT NETBOOT_HOSTTEST (like netboot_client_boot) so the
+# real RST 8 ALHK dispatch inside bdos_boot_record is present and the harness's
+# AttachBDOS can capture the boot; the stripes PIXELS are hardware-gated (the
+# bdos_picker.asm picker_render precedent). samboot_inject_test.go programs the
+# config into the emulated EEPROM and asserts the boot decision + the
+# unconditional stripes redraw (the call probe) across 5 cases. The on-hardware
+# reset->ROM->bootblock chain, the stripes pixels, and the ALHK auto-load are the
+# i135c hardware path, out of scope. Charter: docs/specs/samboot.md §4/§6.
+$(BUILD)/samboot_inject.bin $(BUILD)/samboot_inject.map: src/netboot/samboot_inject.asm src/netboot/samboot_config.asm src/netboot/bdos_seam.asm src/netboot/eeprom.asm
+	@mkdir -p $(BUILD)
+	pyz80 \
+	    --obj=$(BUILD)/samboot_inject.bin \
+	    --mapfile=$(BUILD)/samboot_inject.map \
+	    src/netboot/samboot_inject.asm
+
+netboot-samboot-inject: $(BUILD)/samboot_inject.bin $(BUILD)/samboot_inject.map
+
 # netboot-client (i82) — the TFTP client boot disk: fetch a file (a .mgt image)
 # from a TFTP server and write it to Trinity storage via the B-DOS hooks.  Two
 # builds from one source:
@@ -835,7 +857,7 @@ $(BUILD)/asmparse.bin $(BUILD)/asmparse.map: src/asmparse.asm src/mnemonic_names
 asmparse-z80: $(BUILD)/asmparse.bin $(BUILD)/asmparse.map
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-samboot-config netboot-smoke-boot netboot-server-boot netboot-serve-boot netboot-client-boot netboot-trinload
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-samboot-config netboot-samboot-inject netboot-smoke-boot netboot-server-boot netboot-serve-boot netboot-client-boot netboot-trinload
 
 ci-netboot-z80: netboot-z80-routines editmodel-z80 asmlex-z80 asmparse-z80
 	cd tools/netboot-oracle/z80 && go test ./...
