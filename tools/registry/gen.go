@@ -36,31 +36,57 @@ func escapeCell(s string) string {
 	return s
 }
 
-// renderItemStatus renders the status cell value from structured fields.
-// Spec §"Generator": OPEN / IN_PROGRESS / DONE — PR #N / WONTFIX — <reason>.
+// repoPullURL is the base URL for pull requests in this repository.
+const repoPullURL = "https://github.com/petemoore/sam-aarch64/pull/"
+
+// renderItemStatus renders the status cell — just the status token.
+// PR information is rendered separately in the PR column.
 // No BLOCKED rendering — blocked-ness is derived from depends_on edges, not stored.
 func renderItemStatus(it Item) string {
-	switch it.Status {
-	case StatusDone:
-		for _, pr := range it.PRs {
-			if pr.Role == RoleCompleting {
-				return fmt.Sprintf("DONE — PR #%d", pr.Num)
-			}
-		}
-		return "DONE"
-	case StatusWontfix:
-		// Reason lives in description; render a short excerpt as suffix.
-		reason := strings.TrimSpace(it.Description)
-		if idx := strings.IndexRune(reason, '\n'); idx >= 0 {
-			reason = reason[:idx]
-		}
-		if len(reason) > 80 {
-			reason = reason[:80] + "…"
-		}
-		return fmt.Sprintf("WONTFIX — %s", reason)
-	default:
-		return string(it.Status)
+	return string(it.Status)
+}
+
+// renderItemPRs renders the PR column as comma-separated clickable markdown links,
+// e.g. "[#124](https://github.com/petemoore/sam-aarch64/pull/124)".
+// Returns an empty string when the item carries no PRs.
+// The returned string is already safe markdown — do NOT run escapeCell over it.
+func renderItemPRs(it Item) string {
+	if len(it.PRs) == 0 {
+		return ""
 	}
+	parts := make([]string, 0, len(it.PRs))
+	for _, pr := range it.PRs {
+		parts = append(parts, fmt.Sprintf("[#%d](%s%d)", pr.Num, repoPullURL, pr.Num))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// renderItemDependents renders the reverse-dependency column: ids of all items
+// whose depends_on includes this item's id, in canonical sort order.
+// Returns an empty string when no items depend on this item.
+func renderItemDependents(it Item, reverseEdges map[string][]string) string {
+	dependents := reverseEdges[it.ID]
+	if len(dependents) == 0 {
+		return ""
+	}
+	// Return a copy in sorted order (reverseEdges is pre-sorted at build time).
+	return strings.Join(dependents, ", ")
+}
+
+// buildReverseEdges returns a map from item id to the sorted list of ids of all
+// items that declare depends_on including that id.
+func buildReverseEdges(items []Item) map[string][]string {
+	rev := map[string][]string{}
+	for _, it := range items {
+		for _, dep := range it.DependsOn {
+			rev[dep] = append(rev[dep], it.ID)
+		}
+	}
+	// Sort each list for deterministic output.
+	for k := range rev {
+		sortStrings(rev[k])
+	}
+	return rev
 }
 
 // renderItemDeps renders the depends_on edges — the gating item/question ids
@@ -149,10 +175,12 @@ func renderItemCell(it Item) string {
 
 // genItemsOpenClosed writes the open and closed item registry tables to their
 // respective writers. Spec §"Generator" — three views total (two item + one question).
+// Column order: id | item | status | PR | deps | dependents | refs/links
 func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	items := sortedItems(reg.Items)
+	reverseEdges := buildReverseEdges(items)
 
-	header := "| **id** | item | status | deps | refs/links |\n|---|---|---|---|---|\n"
+	header := "| **id** | item | status | PR | deps | dependents | refs/links |\n|---|---|---|---|---|---|---|\n"
 
 	// Open items (OPEN or IN_PROGRESS).
 	fmt.Fprint(openW, generatedBannerItems)
@@ -160,11 +188,13 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	fmt.Fprint(openW, header)
 	for _, it := range items {
 		if isOpen(it.Status) {
-			fmt.Fprintf(openW, "| **%s** | %s | %s | %s | %s |\n",
+			fmt.Fprintf(openW, "| **%s** | %s | %s | %s | %s | %s | %s |\n",
 				escapeCell(it.ID),
 				renderItemCell(it),
 				escapeCell(renderItemStatus(it)),
+				renderItemPRs(it),
 				escapeCell(renderItemDeps(it)),
+				escapeCell(renderItemDependents(it, reverseEdges)),
 				escapeCell(renderItemRefs(it)),
 			)
 		}
@@ -176,11 +206,13 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	fmt.Fprint(closedW, header)
 	for _, it := range items {
 		if !isOpen(it.Status) {
-			fmt.Fprintf(closedW, "| **%s** | %s | %s | %s | %s |\n",
+			fmt.Fprintf(closedW, "| **%s** | %s | %s | %s | %s | %s | %s |\n",
 				escapeCell(it.ID),
 				renderItemCell(it),
 				escapeCell(renderItemStatus(it)),
+				renderItemPRs(it),
 				escapeCell(renderItemDeps(it)),
+				escapeCell(renderItemDependents(it, reverseEdges)),
 				escapeCell(renderItemRefs(it)),
 			)
 		}

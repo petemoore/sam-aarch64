@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -166,6 +167,77 @@ func TestGenItemCellRendersDescription(t *testing.T) {
 	if contains(out, "newline.<br> |") {
 		t.Errorf("spurious trailing <br> at the cell end (block-scalar trailing newline):\n%s", out)
 	}
+}
+
+// TestGenPRColumnRendersLinks verifies that an item with PRs renders clickable
+// markdown links ("[#N](url)") in the PR column, and that the status column
+// contains only the status token (not a "DONE — PR #N" compound string).
+func TestGenPRColumnRendersLinks(t *testing.T) {
+	reg := loadTestFixture(t)
+
+	var open, closed bytes.Buffer
+	if err := genItemsOpenClosed(reg, &open, &closed); err != nil {
+		t.Fatalf("gen: %v", err)
+	}
+	combined := open.String() + closed.String()
+
+	// i1a has prs: [{num: 10, role: completing}] — must render a link in the PR column.
+	wantLink := "[#10](" + repoPullURL + "10)"
+	if !contains(combined, wantLink) {
+		t.Errorf("PR column: expected clickable link %q not found in output", wantLink)
+	}
+
+	// The status column must NOT contain "DONE — PR" (the old merged form).
+	if contains(combined, "DONE — PR") {
+		t.Errorf("status column must not contain 'DONE — PR'; PR info belongs in the PR column")
+	}
+
+	// i5 has two PRs — both must appear as links.
+	want100 := "[#100](" + repoPullURL + "100)"
+	want105 := "[#105](" + repoPullURL + "105)"
+	if !contains(combined, want100) {
+		t.Errorf("PR column: expected link %q for i5 PR 100 not found", want100)
+	}
+	if !contains(combined, want105) {
+		t.Errorf("PR column: expected link %q for i5 PR 105 not found", want105)
+	}
+}
+
+// TestGenDependentsColumn verifies that a depended-on item shows its dependents
+// in the dependents column, and that a dependent item's id appears there.
+func TestGenDependentsColumn(t *testing.T) {
+	reg := loadTestFixture(t)
+
+	var open, closed bytes.Buffer
+	if err := genItemsOpenClosed(reg, &open, &closed); err != nil {
+		t.Fatalf("gen: %v", err)
+	}
+	combined := open.String() + closed.String()
+
+	// i1b has depends_on: [i1a], so i1a's row must show "i1b" in the dependents column.
+	// The row for i1a starts with "| **i1a** |". We check that "i1b" appears in the
+	// generated output (since both items appear in the same table, we verify presence).
+	if !contains(combined, "i1b") {
+		t.Fatalf("i1b does not appear in generated output at all — fixture issue")
+	}
+	// Verify i1a row contains i1b as a dependent by parsing the row.
+	for _, line := range splitLines(combined) {
+		if contains(line, "**i1a**") {
+			// The 7-column row: | id | item | status | PR | deps | dependents | refs |
+			// dependents column (index 5 = 6th pipe-separated field, 0-indexed from start).
+			fields := strings.Split(line, "|")
+			// fields[0] = "" (before first |), fields[1]=id, ..., fields[6]=dependents
+			if len(fields) < 7 {
+				t.Fatalf("i1a row has fewer than 7 fields: %q", line)
+			}
+			dependentsCell := strings.TrimSpace(fields[6])
+			if !contains(dependentsCell, "i1b") {
+				t.Errorf("i1a dependents cell %q does not contain i1b", dependentsCell)
+			}
+			return
+		}
+	}
+	t.Fatal("i1a row not found in generated output")
 }
 
 // TestBinaryGenMatchesValidFixture builds the registry binary (if present) and

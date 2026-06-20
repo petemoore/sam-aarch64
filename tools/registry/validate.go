@@ -136,11 +136,12 @@ func validate(reg *Registry) *ValidationError {
 //  2. Well-formed ids.
 //  3. Canonical typed sort.
 //  4. Status in the enum with required payload per status.
-//  5. PR entries have num > 0 and a valid role.
-//  6. One completing PR per DONE leaf; umbrellas carry none.
-//  7. Atomic items: non-umbrella with >1 completing PR -> split.
+//  5. PR entries have num > 0; role is optional — empty is fine, but if present
+//     must be "completing" or "followup".
+//  6. Umbrella carries no prs. DONE-umbrella coherence: all children DONE/WONTFIX.
+//     (PR-less DONE leaf is valid; any number of PRs on a DONE leaf is valid.)
 //  8. Bounded description (title <= 120 chars/1 line; description <= 600 chars/6 lines).
-//  9. Required-fields-per-status (DONE => closed + leaf has completing PR; etc.).
+//  9. Required-fields-per-status (WONTFIX => reason in description).
 //  10. Id-shaped refs exist in the union. (Deferred when opts.migrating is true.)
 //  11. Dependencies form a DAG: every depends_on target exists; no cycles.
 //  12. No non-WONTFIX item depends on a WONTFIX node.
@@ -214,40 +215,24 @@ func validateWith(reg *Registry, opts validateOpts) *ValidationError {
 			ve.add(id, fmt.Sprintf("unknown status %q (must be OPEN|IN_PROGRESS|DONE|WONTFIX)", it.Status))
 		}
 
-		// Invariant 5: prs entries have num and role.
+		// Invariant 5: prs entries have num > 0; role is optional but, if present,
+		// must be a known value.
 		for j, pr := range it.PRs {
 			if pr.Num <= 0 {
 				ve.add(id, fmt.Sprintf("prs[%d]: num must be a positive integer", j))
 			}
 			switch pr.Role {
-			case RoleCompleting, RoleFollowup:
-				// valid
-			case "":
-				ve.add(id, fmt.Sprintf("prs[%d]: missing role (must be completing|followup)", j))
+			case RoleCompleting, RoleFollowup, "":
+				// valid — empty role is allowed
 			default:
-				ve.add(id, fmt.Sprintf("prs[%d]: unknown role %q (must be completing|followup)", j, pr.Role))
+				ve.add(id, fmt.Sprintf("prs[%d]: unknown role %q (must be completing|followup or empty)", j, pr.Role))
 			}
 		}
 
-		// Invariants 6 & 7: umbrella/leaf PR semantics.
+		// Invariant 6: umbrella carries no prs (PR budget lives on leaves).
 		if it.isUmbrella() {
 			if len(it.PRs) > 0 {
 				ve.add(id, "umbrella must carry no prs (completing PRs live on its leaf children)")
-			}
-		} else {
-			// Leaf: count completing PRs.
-			completing := 0
-			for _, pr := range it.PRs {
-				if pr.Role == RoleCompleting {
-					completing++
-				}
-			}
-			if it.Status == StatusDone && completing != 1 {
-				ve.add(id, fmt.Sprintf("DONE leaf must have exactly 1 completing PR (found %d)", completing))
-			}
-			if completing > 1 {
-				// Invariant 7: atomic items.
-				ve.add(id, fmt.Sprintf("non-umbrella item has %d completing PRs — split into sub-items", completing))
 			}
 		}
 
