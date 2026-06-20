@@ -2067,10 +2067,12 @@
   title: "B4 — record-selection UX: list / manual-pick / auto-pick-free + show-name + overwrite-confirm"
   description: |
     B4: the user-facing record picker — enumerate records (using B3's list-read), show names, let the user manually pick or auto-select first free, then display the chosen record's name (or 'free/unnamed') and require confirmation before any write. Needs the i138 keyboard-sysvar stub to exercise the keypress flow in emulation.
-  status: OPEN
+  status: DONE
   depends_on: [i138]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 465, role: completing}
   parent: i119
   refs: [docs/specs/trinity-record-detection-design.md, i119, i138]
 
@@ -2337,3 +2339,13 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i143
+  title: "bdos_picker: hardware MODE-2 blit for picker_render (follow-up from i119d)"
+  description: |
+    picker_render in src/netboot/bdos_picker.asm is a stub ret (all decision/show-name/confirm logic is host-verified in i119d). This item wires the actual SAM MODE-2 screen blit so the picker display is visible on real hardware. Depends on i119d being merged.
+  status: OPEN
+  depends_on: [i119d]
+  kind: leaf
+  owner: agent
+  parent: i119
