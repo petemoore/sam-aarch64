@@ -39,6 +39,7 @@ package serve
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/bdos"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
@@ -95,6 +96,28 @@ type Responder struct {
 	// (the shared-resource invariant — never touch a named record). Default true;
 	// a test sets it false via SetFreeRecordAvailable to drive the all-full case.
 	freeRecordAvailable bool
+
+	// freeRecords models the sequence of records bdos_find_free_record would
+	// return across successive pushes (i121g). Each successful push CLAIMS the head
+	// (writes its record-list name entry), so the next push sees the next free
+	// record advance. Empty ⇒ no free record (the all-full case). When nil and
+	// freeRecordAvailable is true, a default single free record is assumed (the
+	// pre-i121g behaviour for tests that don't exercise multiple pushes).
+	freeRecords []int
+
+	// claims records the records claimed by completed valid pushes, in order, with
+	// the name written into each (i121g). Mirrors the Z80 bdos_claim_record list
+	// writes (BDOSStore.ListWrites). The two-push test asserts the claimed records
+	// differ.
+	claims []Claim
+}
+
+// Claim is one completed disk-record claim: the record marked used and the name
+// written into its central record-list entry. Mirrors the Z80 ListWrite the
+// harness captures from bdos_claim_record (z80/bdos_store.go).
+type Claim struct {
+	Record int    // the 1-based record claimed
+	Name   string // the record name written (filename-derived, ≤10 chars)
 }
 
 // wrqEndpoint is the client-side identity learned from a WRQ frame (i121a).
@@ -120,9 +143,10 @@ type wrqReceiver struct {
 	// raw_record_sink authority); on the short final block the result is validated
 	// (bdos.ValidateDiskRecord over sink.total + sector-0 of the written bytes) and
 	// valid records the outcome the WRQPushOutcome accessor returns.
-	push  bool
-	sink  *bdos.RawSink
-	valid bool // set on the final block: the streamed image validated
+	push     bool
+	sink     *bdos.RawSink
+	valid    bool   // set on the final block: the streamed image validated
+	filename string // the WRQ filename (the claim name is derived from it, i121g)
 }
 
 // New builds a serve-files demo server over a flat store. src(name) yields the
@@ -144,6 +168,39 @@ func New(cfg Config, store tftp.Store, src func(name string) tftp.Source) *Respo
 // next WRQ reject with ERROR(3, "no free record") and arm nothing. Only meaningful
 // when Config.DiskRecordPush is set. Default (from New) is true.
 func (r *Responder) SetFreeRecordAvailable(v bool) { r.freeRecordAvailable = v }
+
+// SetFreeRecords seeds the sequence of records bdos_find_free_record returns
+// across successive pushes (i121g): each valid push claims the head, so the next
+// push advances to the next entry. An empty/nil slice ⇒ no free record (the
+// all-full ERROR(3) case). Setting a non-empty slice also marks records as
+// available. Only meaningful when Config.DiskRecordPush is set.
+func (r *Responder) SetFreeRecords(records []int) {
+	r.freeRecords = append([]int(nil), records...)
+	r.freeRecordAvailable = len(records) > 0
+}
+
+// Claims returns the records claimed by completed valid pushes, in order, each
+// with the name written into its record-list entry (i121g). The two-push test
+// asserts successive claims target different records.
+func (r *Responder) Claims() []Claim { return r.claims }
+
+// nextFreeRecord returns the record the next push would claim (the head of the
+// free-record sequence), or 0 when none is free. When freeRecords is nil but
+// freeRecordAvailable is true, it falls back to a single default free record (the
+// pre-i121g single-push behaviour).
+func (r *Responder) nextFreeRecord() int {
+	if len(r.freeRecords) > 0 {
+		return r.freeRecords[0]
+	}
+	if r.freeRecords == nil && r.freeRecordAvailable {
+		return defaultFreeRecord
+	}
+	return 0
+}
+
+// defaultFreeRecord is the record a single-push test claims when it seeds only
+// freeRecordAvailable (not an explicit freeRecords sequence).
+const defaultFreeRecord = 1
 
 // WRQPushOutcome returns the result of the active/last disk-record push: the
 // 512-byte sector writes the body re-blocked into (via bdos.RawSink), the total
@@ -282,9 +339,34 @@ func (r *Responder) finalizePush(rcv *wrqReceiver, block uint16) []byte {
 	}
 	rcv.valid = bdos.ValidateDiskRecord(rcv.sink.Total(), sector0) == nil
 	if rcv.valid {
+		// CLAIM the record (i121g): mark the just-written free record used by
+		// recording its record-list name entry, and advance the free-record
+		// sequence so the next push lands on the next free record. Mirrors the Z80
+		// bdos_claim_record (which writes the list entry); the claim is recorded
+		// ONLY on the valid path (an invalid push leaves the record free for reuse).
+		claimed := r.nextFreeRecord()
+		r.claims = append(r.claims, Claim{Record: claimed, Name: claimRecordName(rcv.filename)})
+		if len(r.freeRecords) > 0 {
+			r.freeRecords = r.freeRecords[1:]
+		}
 		return r.wrapToWRQClient(tftp.BuildACK(block))
 	}
 	return r.wrapToWRQClient(tftp.BuildError(3, "invalid disk record"))
+}
+
+// claimRecordName derives the central-list name written for a claimed record from
+// the WRQ filename: strip a leading "trinity-sam-disks/" prefix (the disk-record
+// namespace, bdos.Classify), drop any dotted suffix, and cap at 10 chars (the
+// B-DOS name field). The Go authority for the Z80 bdos_build_claim_entry.
+func claimRecordName(filename string) string {
+	_, name := bdos.Classify(filename)
+	if i := strings.IndexByte(name, '.'); i >= 0 {
+		name = name[:i]
+	}
+	if len(name) > bdos.NameLen {
+		name = name[:bdos.NameLen]
+	}
+	return name
 }
 
 // WRQStaged returns the bytes accumulated by the active/last WRQ receive (the
@@ -317,7 +399,7 @@ func (r *Responder) startWrite(u frame.UDP, req *tftp.Request) []byte {
 	// disk-record push; the future i121c flat-file path uses the
 	// "trinity-sam-disks/" filename prefix (bdos.Classify) as the discriminator.
 	// Port of netboot_serve.asm wrq_claim_record.
-	if r.cfg.DiskRecordPush && !r.freeRecordAvailable {
+	if r.cfg.DiskRecordPush && r.nextFreeRecord() == 0 {
 		r.wrqRecv = nil
 		return r.wrapToWRQClient(tftp.BuildError(3, "no free record"))
 	}
@@ -325,7 +407,7 @@ func (r *Responder) startWrite(u frame.UDP, req *tftp.Request) []byte {
 	// Bare WRQ (no options) -> ACK-0 (`00 04 00 00`), RFC 1350. Arm the receiver
 	// at the 512-byte default; the client's DATA block 1 follows the ACK-0.
 	if len(req.Options) == 0 {
-		r.wrqRecv = r.newWRQReceiver(512)
+		r.wrqRecv = r.newWRQReceiver(512, req.Filename)
 		return r.wrapToWRQClient(tftp.BuildACK(0))
 	}
 
@@ -341,7 +423,7 @@ func (r *Responder) startWrite(u frame.UDP, req *tftp.Request) []byte {
 	}
 	// Arm the receiver at the negotiated blksize; the client's DATA block 1
 	// follows its ACK of the OACK.
-	r.wrqRecv = r.newWRQReceiver(int(blksize))
+	r.wrqRecv = r.newWRQReceiver(int(blksize), req.Filename)
 	var oackOpts []tftp.Option
 	oackOpts = append(oackOpts, tftp.Option{Name: "blksize", Value: strconv.FormatUint(blksize, 10)})
 	if ts, ok := req.Option("tsize"); ok {
@@ -354,8 +436,8 @@ func (r *Responder) startWrite(u frame.UDP, req *tftp.Request) []byte {
 // attaches a bdos.RawSink (the body is re-blocked into the record's sectors, the
 // Z80 raw_record_sink authority); otherwise it is the flat receive-to-staging of
 // i121a/i121b.
-func (r *Responder) newWRQReceiver(blksize int) *wrqReceiver {
-	rc := &wrqReceiver{blksize: blksize}
+func (r *Responder) newWRQReceiver(blksize int, filename string) *wrqReceiver {
+	rc := &wrqReceiver{blksize: blksize, filename: filename}
 	if r.cfg.DiskRecordPush {
 		rc.push = true
 		rc.sink = bdos.NewRawSink()

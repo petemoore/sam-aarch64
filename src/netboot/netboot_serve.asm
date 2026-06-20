@@ -766,24 +766,23 @@ wd_finalize:
                 or      a
                 jr      z, wd_invalid
 
-                ; RECORD-CLAIM GAP (i121f, flagged not faked): the record's DATA
-                ; sectors are now written (HWSAD), but its central record-LIST name
-                ; entry is NOT — bdos_find_free_record keys "free" off that list
-                ; name (byte 0 == 0), so an unnamed-but-written record still reads as
-                ; free and the NEXT push could reuse it. Marking it used needs a
-                ; card-absolute list-sector WRITE (B-DOS new.rec's `LDIR rcd.name`
-                ; into the entry — the RENAME path; design §4.3) keyed by the WRQ
-                ; filename (stripping a leading "trinity-sam-disks/" prefix, 10-char
-                ; B-DOS cap). No such routine exists yet (no LISTWRITE hook / no
-                ; card-absolute write primitive in bdos_seam.asm or the harness), and
-                ; the SD-port write is hardware-gated (ports &DC-&DF, same gate as the
-                ; list READ). Per CLAUDE.md §correctness, it is left UNWRITTEN here
-                ; rather than invented: the record works for "push then HRECORD n +
-                ; boot" (its data sectors are correct), and claiming it is a tracked
-                ; follow-up. The validate-before-ACK above is the §6.5 safety gate.
+                ; CLAIM the record (i121g): the data sectors are written, but the
+                ; central record-LIST name entry is not yet — bdos_find_free_record
+                ; keys "free" off that list name (byte 0 == 0), so without this an
+                ; unnamed-but-written record reads as free and the NEXT push overwrites
+                ; it. Write the list entry now (the B-DOS new.rec / RENAME path; design
+                ; §4.3) so the next push lands on the next free record. The name comes
+                ; from the WRQ filename (a leading "trinity-sam-disks/" prefix stripped,
+                ; dotted suffix dropped, 10-char B-DOS cap). bdos_claim_record touches
+                ; ONLY this record's own entry (the free slot the claim picked) — never
+                ; a named record (the shared-resource invariant). Claim ONLY on the
+                ; valid path: an invalid push (below) leaves the record free for reuse.
+                ld      hl, (PARSE_FILENAME)
+                ld      (BD_CLAIM_NAME_PTR), hl
+                call    bdos_claim_record
 
                 ; valid: ACK the final block (TFTP success). DE was clobbered by the
-                ; validate path; reload the just-accepted block (== WRQ_ACKED).
+                ; validate + claim paths; reload the just-accepted block (== WRQ_ACKED).
                 ld      de, (WRQ_ACKED)
                 jp      wd_send_ack
 

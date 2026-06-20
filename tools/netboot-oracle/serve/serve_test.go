@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/bdos"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/tftp"
 )
@@ -259,5 +260,115 @@ func TestOptionedWRQSendsOACK(t *testing.T) {
 	}
 	if u.SrcPort != srvTID {
 		t.Fatalf("optioned WRQ reply src port = %d, want server TID %d", u.SrcPort, srvTID)
+	}
+}
+
+// wrqDataFrame builds a client DATA frame for a WRQ upload (client TID -> server
+// transfer TID), the frame the WRQ receive loop consumes.
+func wrqDataFrame(block uint16, data []byte) []byte {
+	return frame.BuildUDPFrame(frame.UDP{
+		DstMAC: srvMAC, SrcMAC: cliMAC, SrcIP: cliIP, DstIP: srvIP,
+		SrcPort: cliTID, DstPort: srvTID,
+		Payload: tftp.BuildDATA(block, data),
+	})
+}
+
+// pushImage drives a whole disk-record push through the Go authority's OnFrame:
+// the bare-WRQ handshake for name, then every 512-byte DATA block of img (ending
+// on a short final block, with an explicit empty final block when img is an exact
+// multiple of the block size). Used to exercise the i121g claim model end-to-end
+// in pure Go.
+func pushImage(s *Responder, name string, img []byte) {
+	const blksize = 512
+	s.OnFrame(wrqFrame(name, nil))
+	block := uint16(1)
+	for off := 0; off < len(img); off += blksize {
+		end := off + blksize
+		if end > len(img) {
+			end = len(img)
+		}
+		s.OnFrame(wrqDataFrame(block, img[off:end]))
+		block++
+	}
+	if len(img)%blksize == 0 {
+		s.OnFrame(wrqDataFrame(block, nil))
+	}
+}
+
+// validRecordImage builds a RecordSize image with the BDOS stamp at +232 so it
+// passes ValidateDiskRecord.
+func validRecordImage() []byte {
+	img := make([]byte, bdos.RecordSize)
+	copy(img[bdos.BDOSStampOffset:bdos.BDOSStampOffset+4], []byte("BDOS"))
+	return img
+}
+
+// newPushServer builds a disk-record-push server with the given free-record
+// sequence (the records bdos_find_free_record would return, in order).
+func newPushServer(free []int) *Responder {
+	cfg := cfgDemo
+	cfg.DiskRecordPush = true
+	s := New(cfg, tftp.MapStore{}, func(string) tftp.Source { return tftp.ByteSource(nil) })
+	s.SetFreeRecords(free)
+	return s
+}
+
+// TestDiskRecordPushClaimsAdvance pins the i121g claim model in the Go authority:
+// two successive valid pushes claim DIFFERENT records (the first claim advances the
+// free-record sequence) with the right filename-derived names, and a third push to
+// an exhausted card is rejected with ERROR(3, "no free record"). This is the
+// authority the Z80 bdos_claim_record is compared against.
+func TestDiskRecordPushClaimsAdvance(t *testing.T) {
+	s := newPushServer([]int{3, 4})
+
+	pushImage(s, "trinity-sam-disks/firstdisk.mgt", validRecordImage())
+	pushImage(s, "seconddiskimage.mgt", validRecordImage())
+
+	claims := s.Claims()
+	if len(claims) != 2 {
+		t.Fatalf("Claims() = %d, want 2", len(claims))
+	}
+	if claims[0].Record != 3 || claims[1].Record != 4 {
+		t.Errorf("claimed records %d, %d; want 3, 4 (the claim advanced)", claims[0].Record, claims[1].Record)
+	}
+	if claims[0].Name != "firstdisk" {
+		t.Errorf("claim[0] name = %q, want %q (suffix dropped, prefix stripped)", claims[0].Name, "firstdisk")
+	}
+	if claims[1].Name != "seconddisk" {
+		t.Errorf("claim[1] name = %q, want %q (10-char cap)", claims[1].Name, "seconddisk")
+	}
+
+	// The card is now exhausted (both free records claimed): the next WRQ is rejected.
+	reply := s.OnFrame(wrqFrame("third.mgt", nil))
+	u, ok := frame.ParseUDP(reply)
+	if !ok {
+		t.Fatalf("third-push reply is not a UDP frame: %x", reply)
+	}
+	if tftp.Opcode(u.Payload) != tftp.OpERROR {
+		t.Fatalf("third-push reply opcode = %d, want ERROR(%d)", tftp.Opcode(u.Payload), tftp.OpERROR)
+	}
+}
+
+// TestDiskRecordPushClaimOnlyOnValid pins the validation gate in the Go authority:
+// an invalid push (wrong size) does NOT claim its record (no Claims entry, the
+// free-record sequence does not advance), so a following valid push reuses the same
+// record. Mirrors the Z80 claim-only-on-valid behaviour.
+func TestDiskRecordPushClaimOnlyOnValid(t *testing.T) {
+	s := newPushServer([]int{5})
+
+	// Invalid: one sector short of RecordSize → rejected, no claim.
+	pushImage(s, "broken.mgt", validRecordImage()[:bdos.RecordSize-bdos.SectorSize])
+	if c := s.Claims(); len(c) != 0 {
+		t.Fatalf("invalid push recorded %d claims, want 0", len(c))
+	}
+
+	// Valid: reuses record 5 (never claimed by the bad push) and now claims it.
+	pushImage(s, "good.mgt", validRecordImage())
+	claims := s.Claims()
+	if len(claims) != 1 || claims[0].Record != 5 {
+		t.Fatalf("Claims() = %+v, want one claim of record 5 (reused)", claims)
+	}
+	if claims[0].Name != "good" {
+		t.Errorf("claim name = %q, want %q", claims[0].Name, "good")
 	}
 }

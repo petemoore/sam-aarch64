@@ -436,3 +436,261 @@ func TestServeWRQRecordPushWireRingWrap(t *testing.T) {
 	// matters here.
 	assertErrorDiskFull(t, final)
 }
+
+// loadServeRecordPushFree loads the serve BOOT binary like loadServeRecordPush, but
+// seeds the card so EXACTLY the records in `free` (1-based) read as unnamed/free and
+// all others (1..records) read as named. The Go authority is seeded with the same
+// free-record sequence via SetFreeRecords so its claim model advances in lockstep
+// with the Z80 (each valid push claims the head). This backs the i121g claim tests:
+// after a push claims a record (writes its list entry), the CardModel update makes
+// bdos_find_free_record return the NEXT free record on the following push.
+func loadServeRecordPushFree(t *testing.T, records int, free []int) (*z80h.Machine, *z80h.ENC28J60, *z80h.BDOSStore, *z80h.CardModel, *serve.Responder) {
+	t.Helper()
+	mac, err := z80h.Load(serveBootBin, serveBootMap)
+	if err != nil {
+		t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
+	}
+	fillServeConfig(t, mac, []demoFile{{"hello.txt", makeFile(10), demoSrcOrgA}})
+
+	enc := z80h.NewENC28J60()
+	initServeDriver(t, mac, enc)
+
+	store := z80h.NewBDOSStore()
+	card := z80h.NewCardModel()
+	store.AttachCard(card)
+	mac.AttachBDOS(store)
+
+	freeSet := map[int]bool{}
+	for _, n := range free {
+		freeSet[n] = true
+	}
+	for n := 1; n <= records; n++ {
+		if freeSet[n] {
+			continue // leave free (all-zero list entry)
+		}
+		card.SetRecordName(n, "INUSE")
+	}
+	mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), uint16(records))
+
+	cfg := serve.Config{ServerMAC: demoServerMAC, ServerIP: demoServerIP, ServerTID: demoServerTID, DiskRecordPush: true}
+	goRef := serve.New(cfg, tftp.MapStore{}, func(string) tftp.Source { return tftp.ByteSource(nil) })
+	goRef.SetFreeRecords(free)
+	return mac, enc, store, card, goRef
+}
+
+// runFullPush drives one complete disk-record push on a SHARED machine (so a claim
+// from an earlier push is visible to a later one via the CardModel): the WRQ
+// handshake for `name` through the real dispatch (which runs wrq_claim_record →
+// bdos_find_free_record against the current card state), the whole image streamed
+// through the sink, and wd_finalize, returning the Z80 final reply frame. It ALSO
+// drives the Go authority (`goRef`) through the same WRQ + DATA frames via OnFrame
+// (pure Go, no bit-banged ENC, so feeding all 1600 blocks is cheap), so the
+// authority's claim model advances in lockstep — the authority-vs-Z80 comparison.
+// Reusing the machine across calls is what lets the two-push test observe the free
+// record advance after the first claim.
+func runFullPush(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, goRef *serve.Responder, name string, img []byte) []byte {
+	t.Helper()
+
+	// Drive the Go authority through the wire frames (WRQ handshake + every 512-byte
+	// DATA block, ending on a short final block); this is what populates goRef.Claims.
+	const blksize = 512
+	goRef.OnFrame(demoWRQ(name, nil))
+	block := uint16(1)
+	for off := 0; off < len(img); off += blksize {
+		end := off + blksize
+		if end > len(img) {
+			end = len(img)
+		}
+		goRef.OnFrame(demoData(block, img[off:end]))
+		block++
+	}
+	// If the image is an exact multiple of blksize, a real client sends a final empty
+	// DATA block to signal end-of-transfer; mirror it so the authority finalizes.
+	if len(img)%blksize == 0 {
+		goRef.OnFrame(demoData(block, nil))
+	}
+
+	// Drive the Z80 side: WRQ handshake through the real dispatch, the image streamed
+	// through the sink at full scale, then wd_finalize.
+	if got := serveDemo(t, mac, enc, demoWRQ(name, nil)); got == nil {
+		t.Fatal("WRQ handshake sent nothing")
+	}
+	for off := 0; off < len(img); {
+		end := off + rrsSliceMax
+		if end > len(img) {
+			end = len(img)
+		}
+		slice := img[off:end]
+		mac.Write(rrsScratch, slice)
+		if _, err := mac.CallEntry("raw_record_sink_leaf", z80h.Entry{HL: rrsScratch, BC: uint16(len(slice))}); err != nil {
+			t.Fatalf("raw_record_sink_leaf @%d: %v", off, err)
+		}
+		off = end
+	}
+	mac.WriteU16LE(symAddr(t, mac, "WRQ_ACKED"), 1600)
+
+	before := len(enc.TXFrames())
+	if _, err := mac.Call("wd_finalize"); err != nil {
+		t.Fatalf("wd_finalize: %v", err)
+	}
+	tx := enc.TXFrames()
+	if len(tx) != before+1 {
+		t.Fatalf("wd_finalize transmitted %d frames, want 1", len(tx)-before)
+	}
+	return tx[len(tx)-1]
+}
+
+// TestServeWRQRecordPushClaimsDifferentRecords is the DECISIVE i121g batch test:
+// pushing two valid disk images in succession lands them on DIFFERENT records,
+// because the first push CLAIMS its record (writes the record-list name entry) so
+// bdos_find_free_record advances to the next free record for the second push. This
+// is Pete's primary use case — pushing many disk images, each claiming its own slot
+// — and without the claim the second push would overwrite the first. The claim
+// list-write is asserted to target the right record with the right filename-derived
+// name, and the per-push sector writes confirm the two images landed in different
+// records.
+func TestServeWRQRecordPushClaimsDifferentRecords(t *testing.T) {
+	const records = 8
+	free := []int{3, 4} // records 3 then 4 are the two free slots, in order
+	mac, enc, store, card, goRef := loadServeRecordPushFree(t, records, free)
+
+	// First push: a distinct valid image with a filename whose 10-char B-DOS name is
+	// "firstdisk" (the dotted .mgt suffix dropped, "trinity-sam-disks/" prefix stripped).
+	img1 := recordValidImage()
+	for i := range img1 {
+		img1[i] = byte(i*5 + 1)
+	}
+	copy(img1[bdos.BDOSStampOffset:bdos.BDOSStampOffset+4], []byte("BDOS"))
+	final1 := runFullPush(t, mac, enc, goRef, "trinity-sam-disks/firstdisk.mgt", img1)
+	if blk, err := tftp.ParseACK(udpPayload(t, final1)); err != nil || blk != 1600 {
+		t.Fatalf("push 1 final reply = ACK %d (err %v), want ACK 1600 (valid image)", blk, err)
+	}
+
+	// The first push claimed record 3 (the head of `free`) — assert the list-write.
+	lw := store.ListWrites()
+	if len(lw) != 1 {
+		t.Fatalf("after push 1: ListWrites() = %d, want 1 (one claim)", len(lw))
+	}
+	if lw[0].ChangedRecord != 3 {
+		t.Errorf("push 1 claimed record %d, want 3 (the first free slot)", lw[0].ChangedRecord)
+	}
+	if lw[0].Name != "firstdisk" {
+		t.Errorf("push 1 claim name = %q, want %q (filename-derived, 10-char cap)", lw[0].Name, "firstdisk")
+	}
+	// The CardModel now reads record 3 as NAMED — the whole point.
+	if entry := card.RecordEntry(3); entry[0]&0x7F == 0 {
+		t.Errorf("record 3 still reads FREE after the claim (entry[0]=%#x)", entry[0])
+	}
+
+	// Second push: a different valid image, different filename.
+	img2 := recordValidImage()
+	for i := range img2 {
+		img2[i] = byte(i*9 + 2)
+	}
+	copy(img2[bdos.BDOSStampOffset:bdos.BDOSStampOffset+4], []byte("BDOS"))
+	// A filename whose stem exceeds 10 chars, to exercise the B-DOS name-field cap:
+	// "seconddiskimage" → capped to "seconddisk".
+	final2 := runFullPush(t, mac, enc, goRef, "seconddiskimage.mgt", img2)
+	if blk, err := tftp.ParseACK(udpPayload(t, final2)); err != nil || blk != 1600 {
+		t.Fatalf("push 2 final reply = ACK %d (err %v), want ACK 1600 (valid image)", blk, err)
+	}
+
+	// The DECISIVE observation: the second push advanced to record 4 (NOT 3) — the
+	// first record was claimed and is no longer free, so the second push did not
+	// overwrite it.
+	lw = store.ListWrites()
+	if len(lw) != 2 {
+		t.Fatalf("after push 2: ListWrites() = %d, want 2 (two claims)", len(lw))
+	}
+	if lw[1].ChangedRecord != 4 {
+		t.Errorf("push 2 claimed record %d, want 4 (the SECOND free slot — the claim advanced)", lw[1].ChangedRecord)
+	}
+	if lw[1].ChangedRecord == lw[0].ChangedRecord {
+		t.Fatalf("both pushes claimed the same record %d — the claim did NOT mark the first record used", lw[0].ChangedRecord)
+	}
+	if lw[1].Name != "seconddisk" { // "seconddiskimage" capped at 10 chars
+		t.Errorf("push 2 claim name = %q, want %q (10-char cap)", lw[1].Name, "seconddisk")
+	}
+
+	// The two images landed in DIFFERENT records: every sector of push 1 targets
+	// record 3, every sector of push 2 targets record 4.
+	writes := store.SectorWrites()
+	const sectorsPerImage = 1600
+	if len(writes) != 2*sectorsPerImage {
+		t.Fatalf("SectorWrites() = %d, want %d (two full-record pushes)", len(writes), 2*sectorsPerImage)
+	}
+	for i := 0; i < sectorsPerImage; i++ {
+		if writes[i].Record != 3 {
+			t.Fatalf("push-1 sector[%d] record = %d, want 3", i, writes[i].Record)
+		}
+	}
+	for i := sectorsPerImage; i < 2*sectorsPerImage; i++ {
+		if writes[i].Record != 4 {
+			t.Fatalf("push-2 sector[%d] record = %d, want 4 (a DIFFERENT record — no overwrite)", i, writes[i].Record)
+		}
+	}
+
+	// Authority cross-check: the Go authority claimed the same two records, in order,
+	// with the same names — the claim model advanced in lockstep.
+	claims := goRef.Claims()
+	if len(claims) != 2 {
+		t.Fatalf("Go authority Claims() = %d, want 2", len(claims))
+	}
+	if claims[0].Record != 3 || claims[1].Record != 4 {
+		t.Errorf("Go authority claimed records %d, %d; want 3, 4", claims[0].Record, claims[1].Record)
+	}
+	if claims[0].Name != "firstdisk" || claims[1].Name != "seconddisk" {
+		t.Errorf("Go authority claim names %q, %q; want %q, %q", claims[0].Name, claims[1].Name, "firstdisk", "seconddisk")
+	}
+}
+
+// TestServeWRQRecordPushClaimOnlyOnValid proves the claim is gated on validation: an
+// INVALID push (wrong size) does NOT claim its record — no list-write — so the
+// record stays free, and a FOLLOWING valid push REUSES that same record (it was
+// never marked used). This is the correctness half of the safety model: a rejected
+// image must leave the slot free for the next good push, never half-claim it.
+func TestServeWRQRecordPushClaimOnlyOnValid(t *testing.T) {
+	const records = 8
+	free := []int{5} // a single free slot; both pushes target it
+	mac, enc, store, card, goRef := loadServeRecordPushFree(t, records, free)
+
+	// Push 1: an INVALID image (one sector short → wrong size). It streams into the
+	// claimed record 5, fails validation, and must NOT claim (no list-write).
+	bad := recordValidImage()[:bdos.RecordSize-bdos.SectorSize]
+	final1 := runFullPush(t, mac, enc, goRef, "broken.mgt", bad)
+	assertErrorDiskFull(t, final1)
+	if v := mac.Read(symAddr(t, mac, "BD_REC_VALID"), 1)[0]; v != 0 {
+		t.Errorf("BD_REC_VALID = %d after the bad push, want 0", v)
+	}
+	if lw := store.ListWrites(); len(lw) != 0 {
+		t.Fatalf("an invalid push wrote %d list entries, want 0 (no claim on reject)", len(lw))
+	}
+	// Record 5 still reads FREE — the rejected push left it unclaimed.
+	if entry := card.RecordEntry(5); entry[0]&0x7F != 0 {
+		t.Errorf("record 5 reads NAMED after a rejected push (entry[0]=%#x); it must stay free", entry[0])
+	}
+
+	// Push 2: a VALID image. bdos_find_free_record still returns record 5 (it was
+	// never claimed), so the good image REUSES that slot — and now claims it.
+	good := recordValidImage()
+	final2 := runFullPush(t, mac, enc, goRef, "good.mgt", good)
+	if blk, err := tftp.ParseACK(udpPayload(t, final2)); err != nil || blk != 1600 {
+		t.Fatalf("push 2 final reply = ACK %d (err %v), want ACK 1600", blk, err)
+	}
+	lw := store.ListWrites()
+	if len(lw) != 1 {
+		t.Fatalf("after the valid reuse: ListWrites() = %d, want 1 (only the valid push claims)", len(lw))
+	}
+	if lw[0].ChangedRecord != 5 {
+		t.Errorf("the valid push claimed record %d, want 5 (reused the slot the bad push left free)", lw[0].ChangedRecord)
+	}
+	if lw[0].Name != "good" {
+		t.Errorf("claim name = %q, want %q", lw[0].Name, "good")
+	}
+
+	// Authority cross-check: the Go authority claimed exactly once, record 5.
+	claims := goRef.Claims()
+	if len(claims) != 1 || claims[0].Record != 5 {
+		t.Fatalf("Go authority Claims() = %+v, want one claim of record 5", claims)
+	}
+}
