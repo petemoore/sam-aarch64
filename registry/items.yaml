@@ -3081,17 +3081,21 @@
 - id: i191a
   title: "registry CLI guards: warn on dep to a done-leaf-with-open-siblings + warn on splitting a DONE item"
   description: ""
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 526, role: completing}
   parent: i191
 
 - id: i191b
   title: "registry CLI: set-desc + set-title commands (no hand-edit of items.yaml)"
   description: ""
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 526, role: completing}
   parent: i191
 
 - id: i191c
