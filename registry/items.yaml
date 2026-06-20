@@ -303,6 +303,7 @@
   description: |
     Add a proper error handler for HSAVE/HLOAD failures invoked via (hksp); currently errors are not surfaced to the user. Deferred-backlog item.
   status: OPEN
+  depends_on: [i183]
   kind: leaf
   owner: agent
 
@@ -2928,3 +2929,11 @@
   depends_on: [i122c]
   kind: leaf
   owner: pete
+
+- id: i183
+  title: "Harness: model the SAMDOS file-not-found / HSAVE error longjmp (currently a silent no-op)"
+  description: |
+    Emulation-first prerequisite for i25. The Go harness (tools/z80-test-harness-go/harness.go HGTHD/HLOAD/HSAVE cases) models an unregistered HGTHD file as a SILENT NO-OP (currentFile=nil), so a real SAMDOS file-not-found error manifests downstream as a cryptic 'jumped into garbage' trap rather than the actual derr -> (hksp) longjmp. To verify i25's (hksp) error handler in emulation, the harness must faithfully model the SAMDOS file-I/O error longjmp: read the emulated (hksp) vector, jump to an installed handler (or take the default halt when (hksp)=0), and expose injectable HGTHD/HSAVE failures. Design dimension to settle with i25: how faithfully to model (hksp)/SAMDOS-bank paging vs surface a clear error signal. Refs: docs/specs/samdos-file-io.md (derr/(hksp) at &410A; longjmp-on-error), src/main_loop.asm save_out_file/load_in_file, src/loader.asm.
+  status: OPEN
+  kind: leaf
+  owner: agent
