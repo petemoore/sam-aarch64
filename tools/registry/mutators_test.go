@@ -27,6 +27,50 @@ func setupMutatorFixture(t *testing.T) mutatorPaths {
 	}
 }
 
+// setupMutatorFixtureWithPriority is like setupMutatorFixture but also writes a
+// priority.yaml with the given initial ids. It returns a mutatorPaths with
+// priorityYAML set so that applyAndCommit will auto-maintain the queue.
+func setupMutatorFixtureWithPriority(t *testing.T, initialIDs []string) mutatorPaths {
+	t.Helper()
+	paths := setupMutatorFixture(t)
+	priorityPath := filepath.Join(filepath.Dir(paths.itemsYAML), "priority.yaml")
+	if err := writePriority(priorityPath, initialIDs); err != nil {
+		t.Fatalf("setupMutatorFixtureWithPriority: writePriority: %v", err)
+	}
+	paths.priorityYAML = priorityPath
+	return paths
+}
+
+// loadPriorityFromPaths reads priority.yaml from disk and returns the ids.
+func loadPriorityFromPaths(t *testing.T, paths mutatorPaths) []string {
+	t.Helper()
+	ids, err := loadPriority(paths.priorityYAML)
+	if err != nil {
+		t.Fatalf("loadPriorityFromPaths: %v", err)
+	}
+	return ids
+}
+
+// assertPriorityValid checks that priority.yaml on disk satisfies validatePriority.
+func assertPriorityValid(t *testing.T, paths mutatorPaths) {
+	t.Helper()
+	reg := loadRegFromPaths(t, paths)
+	pve := validatePriority(reg, reg.Priority)
+	if pve.hasErrors() {
+		t.Fatalf("validatePriority after mutation failed:\n%s", strings.Join(pve.msgs, "\n"))
+	}
+}
+
+// containsStr reports whether ss contains s.
+func containsStr(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 func copyFile(t *testing.T, src, dst string) {
 	t.Helper()
 	data, err := os.ReadFile(src)
@@ -686,4 +730,184 @@ func TestAdd_KindUmbrella(t *testing.T) {
 		}
 	}
 	t.Error("i6 not found after add")
+}
+
+// --- priority auto-maintenance ---
+//
+// The following tests verify that applyAndCommit auto-reconciles priority.yaml
+// when a priority file is active (paths.priorityYAML != ""), eliminating the
+// hand-edit burden that existed before this fix.
+
+// TestPriorityAutoMaintain_SetStatusDone verifies that flipping a pullable item
+// to DONE removes it from priority.yaml and leaves the queue valid.
+// Testdata: i1b and i2 are both pullable (OPEN leaves); queue starts as [i1b, i2].
+// After set-status i1b DONE: i1b is no longer pullable and must be gone.
+func TestPriorityAutoMaintain_SetStatusDone(t *testing.T) {
+	// Testdata pullable set: {i1b, i2}.
+	paths := setupMutatorFixtureWithPriority(t, []string{"i1b", "i2"})
+
+	runSetStatus([]string{"--id", "i1b", "--status", "DONE", "--pr", "777"}, paths)
+
+	ids := loadPriorityFromPaths(t, paths)
+
+	// i1b must be gone.
+	if containsStr(ids, "i1b") {
+		t.Errorf("priority still contains i1b after set-status DONE; got %v", ids)
+	}
+	// i2 must still be present.
+	if !containsStr(ids, "i2") {
+		t.Errorf("priority is missing i2 after set-status on i1b; got %v", ids)
+	}
+	// The queue must pass validatePriority (strict permutation).
+	assertPriorityValid(t, paths)
+}
+
+// TestPriorityAutoMaintain_Reopen verifies that flipping a non-queued item back
+// to OPEN adds it to priority.yaml (at the end) and leaves the queue valid.
+// We first close i1b (removing it from the queue), then reopen it and confirm
+// it re-appears.
+func TestPriorityAutoMaintain_Reopen(t *testing.T) {
+	paths := setupMutatorFixtureWithPriority(t, []string{"i1b", "i2"})
+
+	// Close i1b — removes it from the queue.
+	runSetStatus([]string{"--id", "i1b", "--status", "DONE", "--pr", "778"}, paths)
+
+	// Reopen i1b — must be re-added to the queue.
+	runSetStatus([]string{"--id", "i1b", "--status", "OPEN"}, paths)
+
+	ids := loadPriorityFromPaths(t, paths)
+
+	if !containsStr(ids, "i1b") {
+		t.Errorf("priority missing i1b after reopen; got %v", ids)
+	}
+	if !containsStr(ids, "i2") {
+		t.Errorf("priority missing i2 after reopen of i1b; got %v", ids)
+	}
+	assertPriorityValid(t, paths)
+}
+
+// TestPriorityAutoMaintain_Add verifies that adding a new OPEN leaf item
+// appends it to priority.yaml automatically, so no hand-edit is needed.
+// (This was the i141 pain point: the add command didn't touch priority.yaml.)
+func TestPriorityAutoMaintain_Add(t *testing.T) {
+	// Testdata pullable set: {i1b, i2}. Start queue with the full pullable set.
+	paths := setupMutatorFixtureWithPriority(t, []string{"i1b", "i2"})
+
+	runAdd([]string{
+		"--id", "i6",
+		"--title", "New item that should auto-join the queue",
+		"--desc", "Added via add; priority.yaml must update without hand-edit.",
+		"--status", "OPEN",
+		"--owner", "agent",
+	}, paths)
+
+	ids := loadPriorityFromPaths(t, paths)
+
+	if !containsStr(ids, "i6") {
+		t.Errorf("priority missing new item i6 after add; got %v", ids)
+	}
+	// Existing items must still be present.
+	if !containsStr(ids, "i1b") {
+		t.Errorf("priority missing i1b after add of i6; got %v", ids)
+	}
+	if !containsStr(ids, "i2") {
+		t.Errorf("priority missing i2 after add of i6; got %v", ids)
+	}
+	assertPriorityValid(t, paths)
+}
+
+// TestPriorityAutoMaintain_Split verifies that after split:
+// - the parent (now an umbrella) is removed from the queue;
+// - the new child leaf is appended to the queue.
+// Testdata: i1b and i2 are pullable. We will split i1b → umbrella with child i1c.
+// After split: i1b is no longer pullable (now an umbrella); i1c must be in the queue.
+//
+// Note: i1b depends_on i1a. After promotion to umbrella, i1b itself loses leaf
+// status (becomes umbrella), so it is no longer in the pullable set. i1c (the
+// new child) is OPEN leaf → pullable and must join the queue.
+func TestPriorityAutoMaintain_Split(t *testing.T) {
+	// Testdata pullable set: {i1b, i2}. Start with the full pullable set.
+	paths := setupMutatorFixtureWithPriority(t, []string{"i1b", "i2"})
+
+	runSplit([]string{
+		"--parent", "i1b",
+		"--child-id", "i1c",
+		"--title", "Sub-task of what was i1b",
+	}, paths)
+
+	ids := loadPriorityFromPaths(t, paths)
+
+	// i1b is now an umbrella — must be gone from queue.
+	if containsStr(ids, "i1b") {
+		t.Errorf("priority still contains i1b (now umbrella) after split; got %v", ids)
+	}
+	// i1c is the new child leaf — must be present.
+	if !containsStr(ids, "i1c") {
+		t.Errorf("priority missing new child i1c after split; got %v", ids)
+	}
+	// i2 must still be present.
+	if !containsStr(ids, "i2") {
+		t.Errorf("priority missing i2 after split of i1b; got %v", ids)
+	}
+	assertPriorityValid(t, paths)
+}
+
+// TestPriorityAutoMaintain_OrderPreservation verifies that reconcile preserves
+// the relative order of surviving ids while dropping the non-pullable ones.
+// Setup: three pullable items [i6, i1b, i2] in that curated order. Close i1b.
+// Expect: [i6, i2] — i6 before i2, as originally ranked.
+func TestPriorityAutoMaintain_OrderPreservation(t *testing.T) {
+	// Add i6 first so it exists in the registry.
+	paths := setupMutatorFixtureWithPriority(t, []string{})
+
+	runAdd([]string{
+		"--id", "i6",
+		"--title", "Order-preservation test item",
+		"--desc", "Used to check that reconcile preserves curated order.",
+		"--status", "OPEN",
+		"--owner", "agent",
+	}, paths)
+
+	// Now set the priority to a curated order: i6, i1b, i2.
+	// Write it directly then reload (simulate the user having ranked it with move).
+	if err := writePriority(paths.priorityYAML, []string{"i6", "i1b", "i2"}); err != nil {
+		t.Fatalf("writePriority: %v", err)
+	}
+	// Reload so reg.Priority matches what's on disk.
+	reg := loadRegFromPaths(t, paths)
+	// Sanity: all three must be pullable at this point.
+	if pve := validatePriority(reg, reg.Priority); pve.hasErrors() {
+		t.Fatalf("initial priority invalid: %s", strings.Join(pve.msgs, "\n"))
+	}
+
+	// Close i1b — must be dropped from the queue. i6 and i2 must survive in order.
+	runSetStatus([]string{"--id", "i1b", "--status", "DONE", "--pr", "779"}, paths)
+
+	ids := loadPriorityFromPaths(t, paths)
+
+	if containsStr(ids, "i1b") {
+		t.Errorf("priority still contains closed i1b; got %v", ids)
+	}
+
+	// Find positions of i6 and i2.
+	posI6, posI2 := -1, -1
+	for i, id := range ids {
+		switch id {
+		case "i6":
+			posI6 = i
+		case "i2":
+			posI2 = i
+		}
+	}
+	if posI6 == -1 {
+		t.Errorf("i6 missing from priority after close of i1b; got %v", ids)
+	}
+	if posI2 == -1 {
+		t.Errorf("i2 missing from priority after close of i1b; got %v", ids)
+	}
+	if posI6 != -1 && posI2 != -1 && posI6 > posI2 {
+		t.Errorf("curated order violated: i6 (pos %d) should be before i2 (pos %d); got %v",
+			posI6, posI2, ids)
+	}
+	assertPriorityValid(t, paths)
 }
