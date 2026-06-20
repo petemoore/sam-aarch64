@@ -322,7 +322,24 @@ func newHardware() *Hardware {
 		hmpr: hmprDefault,
 	}
 	h.installFakeROM()
+	h.seedSysvars()
 	return h
+}
+
+// seedSysvars writes the ROM-initialised SAM system variables the assembler
+// reads at boot. On real hardware (and SimCoupé) the ROM sets these before
+// BASIC's CALL 32768; the harness loads the assembler binary directly without
+// running the ROM, so it must model the same RAM state.
+//
+//   - PRAMTP (&5CB4): highest physical page present. This is a 512 KB / 32-page
+//     machine (numPages), so PRAMTP = numPages-1 = 0x1F. The i2b pool boot
+//     survey reads it to size the page pool.
+func (h *Hardware) seedSysvars() {
+	const pramtp = 0x5CB4
+	// &5CB4 is in section B (&4000-&7FFF), which maps physical page
+	// (LMPR&0x1F + 1) under the boot LMPR.
+	page := (lmprDefault&0x1F + 1) & 0x1F
+	h.ram[page][pramtp-0x4000] = numPages - 1
 }
 
 // installFakeROM writes the RST-8 intercept stub at &0008 in the fake ROM.

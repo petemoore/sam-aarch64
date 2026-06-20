@@ -223,9 +223,18 @@ pp_free_count_done:
                 ret
 
 ; ===========================================================================
-; Resident state (section D on the SAM; standalone harness places it after the
-; code). Never swapped — page_owner[] is the IDE's authority for the whole
-; session.
+; Resident state. Never swapped — page_owner[] is the IDE's authority for the
+; whole session.
+;
+; Production build (the assembler includes this file): the caller defines
+; PP_TABLE_BASE, a fixed section-D address, so the table is resident and never
+; lands in the section-C code stream. Standalone harness build (PP_STANDALONE,
+; no PP_TABLE_BASE): the table simply follows the code.
 ; ===========================================================================
-PP_NPAGES:      defs 1                  ; physical pages present (PRAMTP+1)
-PP_OWNER:       defs PP_MAX_PAGES       ; one ownership byte per physical page
+                if defined(PP_TABLE_BASE)
+PP_NPAGES:      equ PP_TABLE_BASE       ; physical pages present (PRAMTP+1)
+PP_OWNER:       equ PP_TABLE_BASE + 1   ; one ownership byte per physical page
+                else
+PP_NPAGES:      defs 1
+PP_OWNER:       defs PP_MAX_PAGES
+                endif

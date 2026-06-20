@@ -33,6 +33,16 @@
     - {num: 591, role: completing}
   parent: i2
 
+- id: i2b
+  title: "Wire the page pool into the production assembler boot path: boot-time sizing + resident pool + paged boot self-test"
+  description: |
+    Second i2 brick (after i2a's standalone allocator). Makes the pp_* allocator LIVE in the production assembler: at boot, read PRAMTP to size the pool (pp_init marks [0,count) FREE, [count,32) absent), then RESERVE pages 0..15 — the base 256KB the current system occupies (0..3 BASIC/system/screen/DOS, 4 ENCTAB, 5..6 OUT, 7..12 IN, 13..14 payloads, 15 disasm), leaving expansion RAM (16..PRAMTP on a >256KB machine) as the FREE pool. The page_owner[] table is resident in section D (PP_TABLE_BASE). A boot self-test on the PAGED boot path (claim-all/free-all round-trip; reserved pages never move; spec §6) runs OFF-AXIS in the page-12 cluster (test_pagepool.asm) to stay out of the tight section-C test-variant budget; exercised by the harness TestBootSelfTestsPass + the SimCoupe matrix. The harness seeds PRAMTP=0x1F (emulation-first: model the ROM-set sysvar). ADDITIVE: does NOT migrate any buffer to the pool (the static pages 0..15 stay in use), so the self-test never writes pool-page contents — marking an expansion-RAM page FREE is safe here. The precise DOSFLG/VMPR survey (reserving the real DOS/screen pages, incl. any DOS in expansion RAM) and the NEW-BASIC reclaim are the CONSUMER bricks' responsibility (i23/i24 + the IDE shell), required before anything WRITES to a pool page. Spec: docs/specs/ide-memory-model-design.md §4.2/§6.
+  status: IN_PROGRESS
+  depends_on: [i2a]
+  kind: leaf
+  owner: agent
+  parent: i2
+
 - id: i3
   title: Editor groundwork (Phase 2) — full vision
   description: |
@@ -309,7 +319,7 @@
   description: |
     The current IN-file ceiling is 96 KB (6 pages, 7–12, hardcoded src/assembler.asm line 49). Lift this ceiling to support larger source files via additional paged HLOAD slots. Deferred-backlog item.
   status: OPEN
-  depends_on: [i2a]
+  depends_on: [i2a, i2b]
   kind: leaf
   owner: agent
 
@@ -318,7 +328,7 @@
   description: |
     The output length field is 16-bit and the output buffer ceiling is 32768 bytes (src/encoder.asm). Lift the OUT_LEN field and ceiling to support assemblies larger than 32 KB. Deferred-backlog item.
   status: OPEN
-  depends_on: [i2a]
+  depends_on: [i2a, i2b]
   kind: leaf
   owner: agent
 
