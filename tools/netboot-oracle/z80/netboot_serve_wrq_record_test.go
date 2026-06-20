@@ -354,3 +354,85 @@ func assertErrorDiskFull(t *testing.T, frame []byte) {
 		t.Fatalf("final reply = ERROR code %d (err %v), want %d", code, err, tftp.ErrDiskFull)
 	}
 }
+
+// TestServeWRQRecordPushWireRingWrap is the emulation-first gate for the push
+// path PAST the ENC RX-ring wrap boundary (the gap TestServeWRQRecordPushWireRouting
+// left open: its 3-block image is ~1.2 KB, smaller than the 6.5 KB RX ring, so it
+// never wraps). A real disk-image `tftp put` wraps the ring dozens of times; this
+// drives enough full 512-byte DATA blocks through the REAL serve_serve_once + the
+// emulated ENC to wrap the ring SEVERAL times, asserting every block ACKs and the
+// streamed sectors match the image byte-for-byte. It is what proves the wire
+// receive path is faithful across wraps — without it, the path Pete runs on
+// hardware would be un-emulated past the wrap, and a wrap-mishandling bug would
+// strand his SAM (no recovery).
+//
+// Wrap arithmetic: a 512-byte DATA block is 558 bytes on the wire and ~568 bytes
+// in the RX ring (558 + 4-byte CRC + 6-byte ENC packet header); the RX ring is
+// 6.5 KB (rx_start..rx_end = 0x0000..0x19FF), so ~11.7 frames fill one wrap. The
+// blockCount below is sized to wrap the ring well past 3 times. The image is kept
+// sub-record (so the run stays ~ms, not the ~40 s a full 1600-block 819,200-byte
+// record costs over the bit-banged SPI) and ends on a short final block, so the
+// validate-gates-reply decision is the already-proven invalid->ERROR(3) path; the
+// point here is ring-wrap fidelity, not the validation reply.
+func TestServeWRQRecordPushWireRingWrap(t *testing.T) {
+	const records, freeRecord = 8, 4
+	mac, enc, store, goRef := loadServeRecordPush(t, records, freeRecord)
+
+	// 60 full 512-byte blocks (~5.1 ring wraps) + a short 200-byte tail block to
+	// end the transfer. 60 blocks >> the ~35 needed for 3 wraps, with margin.
+	const blksize = 512
+	const blockCount = 60
+	img := make([]byte, blockCount*blksize+200)
+	for i := range img {
+		img[i] = byte(i*37 + 11) // position-dependent: a wrap-misread shows as a mismatch
+	}
+
+	// 1. Bare WRQ -> ACK-0 handshake.
+	wrq := demoWRQ("ringwrap.mgt", nil)
+	eqFrame(t, "WRQ -> ACK-0", serveDemo(t, mac, enc, wrq), goRef.OnFrame(wrq))
+
+	// 2. Every DATA block -> an ACK per block, byte-for-byte vs the Go authority.
+	//    The ENC RX-ring write position advances cumulatively across all 61 calls,
+	//    so frame ~12 onward is being deposited into a wrapped ring region.
+	var final []byte
+	block := uint16(1)
+	for off := 0; off < len(img); off += blksize {
+		end := off + blksize
+		if end > len(img) {
+			end = len(img)
+		}
+		dataFrame := demoData(block, img[off:end])
+		got := serveDemo(t, mac, enc, dataFrame)
+		eqFrame(t, "DATA -> reply", got, goRef.OnFrame(dataFrame))
+		final = got
+		block++
+	}
+
+	// The body streamed into the claimed record, sector by sector, intact across
+	// every wrap. A wrap-misread anywhere would corrupt one of these sectors.
+	z80Writes := store.SectorWrites()
+	assertRecordSectors(t, z80Writes, img, freeRecord)
+
+	// Authority cross-check: the Go RawSink (driven by the same DATA stream) emitted
+	// the identical sectors and total — the wire path matches the reference.
+	goWrites, goTotal, goDone, _ := goRef.WRQPushOutcome()
+	if !goDone {
+		t.Fatal("Go authority did not mark the disk-record push complete")
+	}
+	if len(z80Writes) != len(goWrites) {
+		t.Fatalf("Z80 emitted %d sectors, Go authority %d", len(z80Writes), len(goWrites))
+	}
+	for i := range goWrites {
+		if z80Writes[i].LinearSec != goWrites[i].LinearSec || !bytes.Equal(z80Writes[i].Data[:], goWrites[i].Data[:]) {
+			t.Fatalf("sector[%d] != Go authority (a ring-wrap misread)", i)
+		}
+	}
+	if goTotal != len(img) {
+		t.Errorf("Go authority streamed %d bytes, want %d", goTotal, len(img))
+	}
+
+	// The sub-record image is rejected at validation -> final reply ERROR(3),
+	// matching the Go authority above; the wrap fidelity is the assertion that
+	// matters here.
+	assertErrorDiskFull(t, final)
+}
