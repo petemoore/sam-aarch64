@@ -6,16 +6,19 @@ import (
 )
 
 // TestNameToUIFA pins the UIFA name-block layout HGTHD/HSAVE read: type 19,
-// the filename space-padded into the 10-byte name field, a spaced 4-byte ext,
-// and 0xFF filler in bytes 15..47 (the fill_uifa convention).
+// the on-card SAM name space-padded into the 10-byte name field, a spaced 4-byte
+// ext, and 0xFF filler in bytes 15..47 (the fill_uifa convention).
+//
+// The on-card name policy: drop any dotted suffix, then truncate to 10 chars
+// (i119e, Change 2; mirrors the Z80 bdos_name_to_uifa fix).
 func TestNameToUIFA(t *testing.T) {
 	u := NameToUIFA("config.txt")
 	if u[OffType] != TypeCode {
 		t.Errorf("type = %d, want %d (CODE)", u[OffType], TypeCode)
 	}
-	// "config.txt" is exactly 10 chars -> fills the name field, no padding.
-	if got := string(u[OffName : OffName+NameLen]); got != "config.txt" {
-		t.Errorf("name field = %q, want %q", got, "config.txt")
+	// "config.txt": dotted suffix ".txt" dropped -> "config" (6 chars, padded to 10).
+	if got := string(u[OffName : OffName+NameLen]); got != "config    " {
+		t.Errorf("name field = %q, want %q (dotted suffix dropped)", got, "config    ")
 	}
 	if got := string(u[OffExt : OffExt+ExtLen]); got != "    " {
 		t.Errorf("ext field = %q, want 4 spaces", got)
@@ -26,16 +29,22 @@ func TestNameToUIFA(t *testing.T) {
 		}
 	}
 
-	// A short name is space-padded in the name field.
+	// A short dot-free name is space-padded in the name field.
 	s := NameToUIFA("kernel8")
 	if got := string(s[OffName : OffName+NameLen]); got != "kernel8   " {
 		t.Errorf("short name field = %q, want %q", got, "kernel8   ")
 	}
 
-	// A name longer than 10 chars is truncated to the field width.
+	// A dot-free name longer than 10 chars is truncated to the field width.
 	l := NameToUIFA("verylongfilename")
 	if got := string(l[OffName : OffName+NameLen]); got != "verylongfi" {
 		t.Errorf("long name field = %q, want truncated %q", got, "verylongfi")
+	}
+
+	// "recovery.mgt" -> "recovery" (the real client_main cl_filename policy).
+	r := NameToUIFA("recovery.mgt")
+	if got := string(r[OffName : OffName+NameLen]); got != "recovery  " {
+		t.Errorf("recovery.mgt name field = %q, want %q", got, "recovery  ")
 	}
 }
 

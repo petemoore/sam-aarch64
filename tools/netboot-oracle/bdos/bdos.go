@@ -61,13 +61,23 @@ const PageSize = 16384
 const DifaLenMarker = 0x80
 
 // NameToUIFA builds the 48-byte UIFA name block HGTHD / HSAVE read for a CODE
-// file: type at +0, the filename space-padded into the 10-byte name field, the
-// 4-byte ext field spaced, and bytes 15..47 filled with 0xFF (the fill_uifa
-// convention, src/io.asm). The filename is truncated to 10 chars (the on-disk
-// field width) — longer names are not representable, matching the SAM directory.
+// file: type at +0, the on-card SAM name space-padded into the 10-byte name
+// field, the 4-byte ext field spaced, and bytes 15..47 filled with 0xFF (the
+// fill_uifa convention, src/io.asm).
+//
+// The on-card SAM name is derived from the fetched filename by dropping any
+// dotted suffix (the first '.' and everything after it) and then truncating to
+// 10 chars: "recovery.mgt" -> "recovery", "verylongfilename" -> "verylongfi".
 //
 // This is the Go authority for the Z80 `bdos_name_to_uifa`.
 func NameToUIFA(name string) [UIFALen]byte {
+	// Drop the dotted suffix (extension separator and everything after it).
+	for i, c := range name {
+		if c == '.' {
+			name = name[:i]
+			break
+		}
+	}
 	var u [UIFALen]byte
 	u[OffType] = TypeCode
 	// Name field: copy up to 10 chars, space-pad the rest.
