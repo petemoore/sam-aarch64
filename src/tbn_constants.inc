@@ -6,8 +6,8 @@
 ;
 ; Projected from the Go authority:
 ;   OP_KIND_*   — tools/sam-aarch64-format/operands.go (OperandKind)
-;   REC_KIND_*  — tools/sam-aarch64-format/kinds.go (RecordKind; a 7-of-9
-;                 subset — the Z80 dispatches only on these)
+;   REC_KIND_*  — tools/sam-aarch64-format/kinds.go (RecordKind; all nine,
+;                 incl. the parser-only LABEL_DEF/LOCAL_DEF IR kinds)
 ;   DIR_*       — tools/sam-aarch64-format/directives.go (DirectiveTable)
 ;   MEM_SHAPE_* — tools/sam-aarch64-format/operands.go (MemShape)
 ;   EXT_*       — tools/sam-aarch64-format/operands.go (ExtendKind)
@@ -35,10 +35,12 @@ OP_KIND_LIT_POOL:       equ     &0C
 
 ; -----------------------------------------------------------------------
 ; RecordKind constants (tools/sam-aarch64-format/kinds.go).
-; The Z80 carries a SUBSET of the Go RecordKind set — only the kinds it
-; dispatches on (it omits LABEL_DEF, LOCAL_DEF).
+; LABEL_DEF/LOCAL_DEF are emitted by the text→overlay parser (i48c-b5)
+; as in-memory IR records; the rest tag the on-disk record stream.
 ; -----------------------------------------------------------------------
 REC_KIND_INST:          equ     &01
+REC_KIND_LABEL_DEF:     equ     &02
+REC_KIND_LOCAL_DEF:     equ     &03
 REC_KIND_DIRECTIVE:     equ     &04
 REC_KIND_COMMENT:       equ     &05
 REC_KIND_BLANK_RUN:     equ     &06

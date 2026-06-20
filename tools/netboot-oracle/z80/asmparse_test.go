@@ -142,6 +142,10 @@ type parseRec struct {
 
 	// DIRECTIVE field (count/ops above carry operandCount/operands).
 	directiveID byte
+
+	// LABEL_DEF / LOCAL_DEF fields.
+	symID uint16 // interned name id (LABEL_DEF)
+	digit byte   // local-label digit 1..99 (LOCAL_DEF)
 }
 
 // effKind maps a parseRec's kind to its effective record kind, treating the
@@ -163,6 +167,18 @@ func mkComment(placement byte, body string) parseRec {
 // mirroring emitBlankRun (parser.go).
 func mkBlankRun(n uint32) parseRec {
 	return parseRec{kind: format.KindBlankRun, runLen: n}
+}
+
+// mkLabelDef builds an expected LABEL_DEF record carrying an interned name id,
+// mirroring emitLabelDef (parser.go).
+func mkLabelDef(symID uint16) parseRec {
+	return parseRec{kind: format.KindLabelDef, symID: symID}
+}
+
+// mkLocalDef builds an expected LOCAL_DEF record carrying a digit, mirroring
+// emitLocalDef (parser.go).
+func mkLocalDef(digit byte) parseRec {
+	return parseRec{kind: format.KindLocalDef, digit: digit}
 }
 
 // refMatchReg is a verbatim port of parser.go's matchReg (the register-name
@@ -422,7 +438,26 @@ func refParse(src []byte) (recs []parseRec, ok bool) {
 			return recs, true
 		case tEOL:
 			pos++
+		case tInt:
+			// `1:` local-label def (parser.go:103-114): an integer in [1,99]
+			// followed by ':'. Any other leading number is an error.
+			if pos+1 < len(toks) && toks[pos+1].kind == tColon &&
+				toks[pos].val >= 1 && toks[pos].val <= 99 {
+				recs = append(recs, parseRec{kind: format.KindLocalDef, digit: byte(toks[pos].val)})
+				pos += 2
+				continue
+			}
+			return nil, false
 		case tIdent:
+			// `foo:` label def (parser.go:115-119): an identifier followed by
+			// ':' interns its name and emits a LABEL_DEF. Checked before the
+			// mnemonic lookup, matching parseLine.
+			if pos+1 < len(toks) && toks[pos+1].kind == tColon {
+				id := st.Intern(string(toks[pos].span))
+				recs = append(recs, parseRec{kind: format.KindLabelDef, symID: id})
+				pos += 2
+				continue
+			}
 			id, found := format.MnemonicID(string(toks[pos].span))
 			if !found {
 				return nil, false // directive / label / unknown -> out of domain
@@ -548,6 +583,19 @@ func parseZ80(t *testing.T, mac *z80h.Machine, src []byte) (recs []parseRec, err
 		// format-package framing [kind:1][len:2 LE][payload] (reader.go).
 		kind := format.RecordKind(mac.Read(addr, 1)[0])
 		switch kind {
+		case format.KindLabelDef:
+			hdr := mac.Read(addr+1, 2)
+			plen := int(uint16(hdr[0]) | uint16(hdr[1])<<8) // payload length (== 2)
+			payload := mac.Read(addr+3, plen)               // sym_id:2 LE
+			symID := uint16(payload[0]) | uint16(payload[1])<<8
+			recs = append(recs, parseRec{kind: format.KindLabelDef, symID: symID})
+			addr += uint16(3 + plen)
+		case format.KindLocalDef:
+			hdr := mac.Read(addr+1, 2)
+			plen := int(uint16(hdr[0]) | uint16(hdr[1])<<8) // payload length (== 1)
+			payload := mac.Read(addr+3, plen)               // digit:1
+			recs = append(recs, parseRec{kind: format.KindLocalDef, digit: payload[0]})
+			addr += uint16(3 + plen)
 		case format.KindComment:
 			hdr := mac.Read(addr+1, 2)
 			plen := int(uint16(hdr[0]) | uint16(hdr[1])<<8) // payload length
@@ -595,6 +643,10 @@ func dumpRecs(recs []parseRec) string {
 	s := ""
 	for _, r := range recs {
 		switch effKind(r) {
+		case format.KindLabelDef:
+			s += fmt.Sprintf("[LABEL_DEF id=%d] ", r.symID)
+		case format.KindLocalDef:
+			s += fmt.Sprintf("[LOCAL_DEF d=%d] ", r.digit)
 		case format.KindComment:
 			s += fmt.Sprintf("[COMMENT p=%d body=%q] ", r.placement, string(r.body))
 		case format.KindBlankRun:
@@ -621,6 +673,16 @@ func compareRecs(t *testing.T, label string, got, want []parseRec) {
 			continue
 		}
 		switch wk {
+		case format.KindLabelDef:
+			if got[i].symID != want[i].symID {
+				t.Errorf("%s: rec[%d] LABEL_DEF id = %d, want %d", label, i,
+					got[i].symID, want[i].symID)
+			}
+		case format.KindLocalDef:
+			if got[i].digit != want[i].digit {
+				t.Errorf("%s: rec[%d] LOCAL_DEF digit = %d, want %d", label, i,
+					got[i].digit, want[i].digit)
+			}
 		case format.KindComment:
 			if got[i].placement != want[i].placement {
 				t.Errorf("%s: rec[%d] COMMENT placement = %d, want %d", label, i,
@@ -3221,7 +3283,26 @@ func refParseLineStmt(toks []refTok, pos int, st *format.SymbolTable) (recs []pa
 			}
 			recs = append(recs, parseRec{kind: format.KindComment, placement: placement, body: toks[pos].span})
 			pos++
+		case tInt:
+			// `1:` local-label def (parser.go:103-114): integer in [1,99] + ':'.
+			if pos+1 < len(toks) && toks[pos+1].kind == tColon &&
+				toks[pos].val >= 1 && toks[pos].val <= 99 {
+				recs = append(recs, parseRec{kind: format.KindLocalDef, digit: byte(toks[pos].val)})
+				pos += 2
+				emittedStatement = true
+				continue
+			}
+			return nil, pos, false
 		case tIdent:
+			// `foo:` label def (parser.go:115-119): identifier + ':'. Checked
+			// before the mnemonic lookup, matching parseLine.
+			if pos+1 < len(toks) && toks[pos+1].kind == tColon {
+				id := st.Intern(string(toks[pos].span))
+				recs = append(recs, parseRec{kind: format.KindLabelDef, symID: id})
+				pos += 2
+				emittedStatement = true
+				continue
+			}
 			id, found := format.MnemonicID(string(toks[pos].span))
 			if !found {
 				return nil, pos, false // directive / label / unknown -> out of domain
@@ -3475,6 +3556,156 @@ func TestParseCommentBlankHandCases(t *testing.T) {
 			}
 			compareRecs(t, "Z80 vs ref", got, ref)
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// B5 — LABEL_DEF and LOCAL_DEF records (parse_run's parseLine port:
+// parse_emit_label_def / parse_emit_local_def). A statement-leading identifier
+// followed by ':' interns its name and emits a LABEL_DEF; a statement-leading
+// integer in [1,99] followed by ':' emits a LOCAL_DEF. Both are checked before
+// the mnemonic/directive dispatch, matching parseLine (parser.go:103-119).
+// ---------------------------------------------------------------------------
+
+func TestParseLabelLocalDefHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	cases := []struct {
+		desc string
+		src  string
+		want []parseRec
+	}{
+		// --- bare label / local defs (the name table assigns ids first-come) ---
+		{"label alone", "foo:\n", []parseRec{mkLabelDef(0)}},
+		{"label then instruction", "foo:\nret\n", []parseRec{
+			mkLabelDef(0), mkRec(t, "ret"),
+		}},
+		{"label then inst same line", "foo: ret\n", []parseRec{
+			mkLabelDef(0), mkRec(t, "ret"),
+		}},
+		{"two labels then inst", "a:\nb:\nret\n", []parseRec{
+			mkLabelDef(0), mkLabelDef(1), mkRec(t, "ret"),
+		}},
+		// the same name reuses its id (first-encounter interning).
+		{"repeated label reuses id", "foo:\nfoo:\n", []parseRec{
+			mkLabelDef(0), mkLabelDef(0),
+		}},
+		// emittedStatement is set after a label: a trailing comment is placement 1.
+		{"label then trailing comment", "foo: // here\n", []parseRec{
+			mkLabelDef(0), mkComment(1, " here"),
+		}},
+		// --- local-label defs ---
+		{"local def alone", "1:\n", []parseRec{mkLocalDef(1)}},
+		{"local def then inst same line", "1: nop\n", []parseRec{
+			mkLocalDef(1), mkRec(t, "nop"),
+		}},
+		{"local def 99 (max)", "99:\n", []parseRec{mkLocalDef(99)}},
+		{"local def then instruction", "2:\nadd x0, x1, x2\n", []parseRec{
+			mkLocalDef(2), mkRec(t, "add", reg{X, 0}, reg{X, 1}, reg{X, 2}),
+		}},
+		// --- mixed: blank run, label, local def, instruction ---
+		{"blank then label then local then inst", "\nfoo:\n1:\nret\n", []parseRec{
+			mkBlankRun(1), mkLabelDef(0), mkLocalDef(1), mkRec(t, "ret"),
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			got, errFlag := parseZ80(t, mac, []byte(c.src))
+			if errFlag {
+				t.Fatalf("PARSE_ERR set unexpectedly for %q", c.src)
+			}
+			compareRecs(t, "Z80 vs hand", got, c.want)
+			ref, refOk := refParseFull([]byte(c.src))
+			if !refOk {
+				t.Fatalf("refParseFull reported error on a valid case %q", c.src)
+			}
+			compareRecs(t, "Z80 vs ref", got, ref)
+		})
+	}
+}
+
+// TestParseLabelLocalDefError checks the constructs parseLine rejects: a bare
+// number at statement start, and a local-label digit outside [1,99]. Each must
+// set PARSE_ERR (and refParseFull must agree it is out of domain).
+func TestParseLabelLocalDefError(t *testing.T) {
+	mac := loadAsmparse(t)
+	for _, src := range []string{
+		"5\n",     // bare number, no ':' -> "unexpected number at start of statement"
+		"0:\n",    // digit 0 is not a valid local label
+		"100:\n",  // digit >= 100 is out of [1,99]
+		"256:\n",  // > 0xFF: trips the upper-value-byte check too
+		"1000:\n", // multi-byte value
+	} {
+		t.Run(src, func(t *testing.T) {
+			_, errFlag := parseZ80(t, mac, []byte(src))
+			if !errFlag {
+				t.Errorf("PARSE_ERR not set for %q (expected out-of-domain)", src)
+			}
+			if _, ok := refParseFull([]byte(src)); ok {
+				t.Errorf("refParseFull accepted %q; expected out-of-domain", src)
+			}
+		})
+	}
+}
+
+// apLabelNames is a small pool of label identifiers (deliberately repeated some
+// of the time so the fuzz exercises first-encounter id reuse across a document).
+var apLabelNames = []string{"foo", "bar", "loop", "done", "L0", "end", "foo", "loop"}
+
+// TestParseLabelLocalDefFuzz compares asmparse against refParseFull over random
+// source mixing blank lines, comments, instructions, label defs and local-label
+// defs — exercising the statement-leading label/local dispatch, symbol-interning
+// id assignment across many labels, and the emittedStatement / placement
+// interaction when a label is followed by an instruction or trailing comment.
+func TestParseLabelLocalDefFuzz(t *testing.T) {
+	mac := loadAsmparse(t)
+	for _, seed := range []int64{3, 11, 47, 131, 6151} {
+		rng := rand.New(rand.NewSource(seed))
+		var src []byte
+		lines := 14 + rng.Intn(14)
+		for li := 0; li < lines; li++ {
+			switch rng.Intn(6) {
+			case 0: // a run of blank lines
+				for b, n := 0, 1+rng.Intn(3); b < n; b++ {
+					src = append(src, '\n')
+				}
+			case 1: // a comment-only line
+				src = append(src, randLineStartComment(rng)...)
+				src = append(src, '\n')
+			case 2: // a label def (optionally with an instruction on the same line)
+				src = append(src, apLabelNames[rng.Intn(len(apLabelNames))]...)
+				src = append(src, ':')
+				if rng.Intn(2) == 0 {
+					src = append(src, ' ')
+					src = append(src, randInstLine(rng)...)
+				}
+				src = append(src, '\n')
+			case 3: // a local-label def (digit in [1,99])
+				src = append(src, []byte(fmt.Sprintf("%d:", 1+rng.Intn(99)))...)
+				if rng.Intn(2) == 0 {
+					src = append(src, ' ')
+					src = append(src, randInstLine(rng)...)
+				}
+				src = append(src, '\n')
+			default: // a plain instruction line (optionally trailing comment)
+				src = append(src, randInstLine(rng)...)
+				if rng.Intn(2) == 0 {
+					src = append(src, ' ')
+					src = append(src, randTrailingComment(rng)...)
+				}
+				src = append(src, '\n')
+			}
+		}
+		want, ok := refParseFull(src)
+		if !ok {
+			t.Fatalf("seed %d: refParseFull reported error on generated B5 source:\n%s", seed, src)
+		}
+		got, errFlag := parseZ80(t, mac, src)
+		if errFlag {
+			t.Fatalf("seed %d: PARSE_ERR set on valid B5 source:\n%s", seed, src)
+		}
+		compareRecs(t, fmt.Sprintf("seed%d", seed), got, want)
+		t.Logf("seed=%d: %d source bytes, %d records matched", seed, len(src), len(got))
 	}
 }
 

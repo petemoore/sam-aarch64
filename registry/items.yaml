@@ -735,6 +735,15 @@
   parent: i48c
   refs: [src/asmparse.asm, tools/netboot-oracle/z80/asmparse_test.go, tools/sam-aarch64/frontend/parser.go]
 
+- id: i48c-b5
+  title: "Label-def + local-def parse (foo: / 1: statement-leading)"
+  description: |
+    Port parseLine's label/local-def cases (parser.go:108-119): a TOK_IDENT followed by TOK_COLON interns the name (sym_intern) and emits a LABEL_DEF (REC_KIND 0x02, payload=symbol id u16 LE); a TOK_INT in [1,99] followed by TOK_COLON emits a LOCAL_DEF (REC_KIND 0x03, payload=digit u8). These in-memory IR records (compacted to header tables at serialize-time) are the last statement-leading record kind missing from the Z80 parser. Flat-memory-autonomous (koron-go/z80 harness vs host refParse); prerequisite for i48c-b8's fixture-corpus round-trip (nearly every fixture defines labels).
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  parent: i48c
+
 - id: i48c-b5a
   title: "movk/movz/movn special-form (#imm16 [, lsl #N], hw=N/16 folded into bits[17:16], range-checked)"
   description: |
@@ -836,7 +845,7 @@
   description: |
     Wire the completed text→overlay encoder into the full assembler path and verify end-to-end fixture round-trips. Assembler-coupled (like i41d Brick 4b); depends on B1–B7 being complete. Lands last in the i48c sequence.
   status: OPEN
-  depends_on: [i48c-b5b, i48c-b5c, i48c-b5d, i48c-b5e, i48c-b5f, i48c-b6]
+  depends_on: [i48c-b5b, i48c-b5c, i48c-b5d, i48c-b5e, i48c-b5f, i48c-b6, i48c-b5]
   kind: leaf
   owner: agent
   parent: i48c
