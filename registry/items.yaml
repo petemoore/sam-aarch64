@@ -1901,9 +1901,11 @@
   title: Content-addressed span-record naming + reference-sharing dedup
   description: |
     design §6.3 decision 3: internal span-record naming is hash-derived (content-addressed) — a blob's records are keyed by its content SHA-256, so two projects fetching the identical file land on the same records and the §5 shared-files-by-reference dedup falls out for free (no separate dedup logic). Names are internal, never user-visible; the 7-char-prefix truncation is dropped. Go authority plus the content-hash record lookup that the i122 sha256-dedup-before-fetch uses. Host-verifiable.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 478, role: completing}
   parent: i114
   refs: ["docs/specs/netboot-storage-manifest-design.md §6.3", tools/netboot-oracle/z80/sha256.asm, i122]
 

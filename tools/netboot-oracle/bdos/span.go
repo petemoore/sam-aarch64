@@ -8,7 +8,7 @@ import "fmt"
 // append hooks HOFLE/HSBYT are broken for external RST 8 callers, sam-stub-
 // audit.md) — and reassembled in order at serve time. This file is the Go
 // authority for that split + the record naming; the Z80 src/netboot/fw_span.asm
-// will mirror the per-record length + naming, and the real RST 8 HSAVE/HLOAD per
+// mirrors the per-record length + naming, and the real RST 8 HSAVE/HLOAD per
 // record stays the hardware gate (CLAUDE.md §5). Emulation-verified ≠ hardware-
 // verified.
 //
@@ -20,25 +20,20 @@ import "fmt"
 // when the real persist is built, so it is a PARAMETER here (recordCap) — the
 // split arithmetic is correct for any cap, with no speculative constant baked in.
 //
-// Naming. A non-spanned object (size ≤ cap, a single record) keeps its plain
-// logical name, so the kernel and small files are stored and served by their
-// natural TFTP name through the existing flat store (bdos.NameToUIFA), unchanged.
-// A spanned object's records are named <prefix><NNN>: the logical name truncated
-// to (NameLen-SpanIndexDigits)=7 chars plus a 3-digit zero-padded decimal index
-// (000, 001, …), a ≤10-char B-DOS name. The server derives the record count from
-// the object's known size — N = ceil(size/cap), the manifest carries the size —
-// so no on-disk index/metadata record is needed: it reads <prefix>000 …
-// <prefix>(N-1) in order and streams them as one TFTP object. (A spanned object
-// NOT in the manifest would need count discovery by probing names — a noted
-// future extension; the firmware blobs that actually span are all manifest
-// entries.)
-//
-// Constraint: spanned objects must have unique 7-char name prefixes — the six RPi
-// firmware files do ("start.e" vs "start4." etc.). Three index digits bound a
-// spanned object to 1000 records (1000·cap bytes — ample for any firmware blob).
+// Naming (i114d). Record names are content-addressed: the first 3 bytes of the
+// blob's SHA-256 digest encoded as 6 lowercase hex chars, plus a 3-digit
+// zero-padded decimal record index (000, 001, …). A single-record blob uses
+// <hash6>000 — there is no "plain name" special case for record-stored blobs.
+// The 6-hex prefix is a fast index, not the identity source: the manifest (i114a)
+// carries the full 32-byte hash, so a name-match is only a candidate; full-hash
+// verification before any content-match conclusion is the caller's responsibility
+// (i122). Local boot-disk files that never enter the span store keep their
+// natural B-DOS name through the existing flat-store NameToUIFA path, unchanged.
+// Three index digits bound a spanned object to 1000 records — ample for any
+// firmware blob. The naming is internal and never user-visible.
 
 // SpanIndexDigits is the width of the zero-padded record-index suffix on a
-// spanned object's record names.
+// content-addressed record name.
 const SpanIndexDigits = 3
 
 // SpanRecord is one stored record of a (possibly spanned) object: the B-DOS name
@@ -50,16 +45,12 @@ type SpanRecord struct {
 	Length int
 }
 
-// SpanRecordName returns the storage record name for record index of a spanned
-// logical object: its name truncated to NameLen-SpanIndexDigits chars plus the
-// zero-padded index. (A single-record object keeps its plain name — see SpanPlan;
-// this suffixed form is used only when an object spans more than one record.)
-func SpanRecordName(name string, index int) string {
-	prefix := name
-	if maxPrefix := NameLen - SpanIndexDigits; len(prefix) > maxPrefix {
-		prefix = prefix[:maxPrefix]
-	}
-	return fmt.Sprintf("%s%0*d", prefix, SpanIndexDigits, index)
+// SpanRecordName returns the content-addressed B-DOS record name for record index
+// of a blob identified by blobHash: the first 3 bytes of the hash as 6 lowercase
+// hex chars, followed by the 3-digit zero-padded decimal index. The result is
+// always 9 chars, within the 10-char B-DOS NameLen field.
+func SpanRecordName(blobHash [32]byte, index int) string {
+	return fmt.Sprintf("%02x%02x%02x%0*d", blobHash[0], blobHash[1], blobHash[2], SpanIndexDigits, index)
 }
 
 // SpanCount returns the number of records a size-byte object occupies at the
@@ -75,23 +66,22 @@ func SpanCount(size, recordCap int) int {
 	return (size + recordCap - 1) / recordCap
 }
 
-// SpanPlan returns the ordered records a logical object (name, size) is stored as
-// at the given per-record cap. A non-spanned object (size ≤ cap) is a single
-// record under the plain name; a spanned object is N = ceil(size/cap) records
-// named <prefix>NNN, each holding up to cap bytes of the object in order. This is
-// both the persist write plan (HSAVE each record) and the serve read order (HLOAD
-// each in order, concatenated into one TFTP stream); the Z80 fw_span.asm mirrors
-// the per-record length + naming. recordCap ≤ 0 returns nil.
+// SpanPlan returns the ordered records a blob (identified by blobHash, of size
+// bytes) is stored as at the given per-record cap. Every record carries a
+// content-addressed name (SpanRecordName(blobHash, i)), including the
+// single-record case (size ≤ cap), which is <hash6>000. The split arithmetic
+// (offsets/lengths) is unchanged: N = ceil(size/cap) records, each holding up
+// to cap bytes in order. This is both the persist write plan (HSAVE each record)
+// and the serve read order (HLOAD each in order, concatenated into one TFTP
+// stream); the Z80 fw_span.asm mirrors the per-record length + naming.
+// recordCap ≤ 0 returns nil.
 //
 // Invariants (asserted by the tests): the records' lengths sum to size, their
 // offsets run contiguously from 0, every length is ≤ cap, and len(records) ==
 // SpanCount(size, cap).
-func SpanPlan(name string, size, recordCap int) []SpanRecord {
+func SpanPlan(blobHash [32]byte, size, recordCap int) []SpanRecord {
 	if recordCap <= 0 {
 		return nil
-	}
-	if size <= recordCap {
-		return []SpanRecord{{Name: name, Offset: 0, Length: size}}
 	}
 	n := SpanCount(size, recordCap)
 	recs := make([]SpanRecord, n)
@@ -101,7 +91,20 @@ func SpanPlan(name string, size, recordCap int) []SpanRecord {
 		if rem := size - off; rem < recordCap {
 			length = rem
 		}
-		recs[i] = SpanRecord{Name: SpanRecordName(name, i), Offset: off, Length: length}
+		recs[i] = SpanRecord{Name: SpanRecordName(blobHash, i), Offset: off, Length: length}
 	}
 	return recs
+}
+
+// StoredRecordNames returns the ordered B-DOS record names a blob occupies given
+// its content hash and the number of records it spans. This is the lookup
+// sequence the i122 dedup-before-fetch uses to check whether the blob is already
+// present on-card (check <hash6>000, <hash6>001, … <hash6>(n-1) in order).
+// spanCount must equal SpanCount(blobSize, recordCap) for the blob in question.
+func StoredRecordNames(blobHash [32]byte, spanCount int) []string {
+	names := make([]string, spanCount)
+	for i := 0; i < spanCount; i++ {
+		names[i] = SpanRecordName(blobHash, i)
+	}
+	return names
 }

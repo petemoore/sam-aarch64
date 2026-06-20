@@ -1,9 +1,17 @@
 package bdos
 
 import (
-	"fmt"
 	"testing"
 )
+
+// hash constructs a [32]byte with the first 3 bytes set to b0,b1,b2 and the
+// rest zeroed. Used in tests where only the hash prefix (the naming input)
+// matters.
+func hash3(b0, b1, b2 byte) [32]byte {
+	var h [32]byte
+	h[0], h[1], h[2] = b0, b1, b2
+	return h
+}
 
 func TestSpanCount(t *testing.T) {
 	const cap = 1000
@@ -31,55 +39,71 @@ func TestSpanCount(t *testing.T) {
 
 func TestSpanRecordName(t *testing.T) {
 	cases := []struct {
-		name  string
-		index int
-		want  string
+		b0, b1, b2 byte
+		index      int
+		want       string
 	}{
-		{"abc", 5, "abc005"},            // short name, full prefix
-		{"abcdefg", 0, "abcdefg000"},    // name exactly 7 chars (the prefix width)
-		{"start.elf", 12, "start.e012"}, // 9 chars → truncated to 7
-		{"start4.elf", 3, "start4.003"}, // 10 chars → truncated to 7
-		{"start.elf", 0, "start.e000"},
+		{0xAB, 0xCD, 0xEF, 0, "abcdef000"},   // worked example: index 0
+		{0xAB, 0xCD, 0xEF, 1, "abcdef001"},   // index 1
+		{0xAB, 0xCD, 0xEF, 2, "abcdef002"},   // index 2
+		{0xAB, 0xCD, 0xEF, 999, "abcdef999"}, // max index
+		{0x00, 0x00, 0x00, 0, "000000000"},   // all-zero prefix
+		{0xFF, 0xFF, 0xFF, 0, "ffffff000"},   // all-FF prefix
+		{0x01, 0x23, 0x45, 42, "012345042"},  // mixed nibbles
 	}
 	for _, c := range cases {
-		got := SpanRecordName(c.name, c.index)
+		h := hash3(c.b0, c.b1, c.b2)
+		got := SpanRecordName(h, c.index)
 		if got != c.want {
-			t.Errorf("SpanRecordName(%q, %d) = %q, want %q", c.name, c.index, got, c.want)
+			t.Errorf("SpanRecordName([%02x%02x%02x...], %d) = %q, want %q", c.b0, c.b1, c.b2, c.index, got, c.want)
 		}
 		if len(got) > NameLen {
-			t.Errorf("SpanRecordName(%q, %d) = %q exceeds the %d-char B-DOS name field", c.name, c.index, got, NameLen)
+			t.Errorf("SpanRecordName([%02x%02x%02x...], %d) = %q exceeds the %d-char B-DOS name field", c.b0, c.b1, c.b2, c.index, got, NameLen)
+		}
+		// All valid names are exactly 9 chars (6 hex + 3 decimal).
+		if len(got) != 9 {
+			t.Errorf("SpanRecordName([%02x%02x%02x...], %d) = %q has length %d, want 9", c.b0, c.b1, c.b2, c.index, got, len(got))
 		}
 	}
-	// The two spanning RPi firmware files must get distinct prefixes (the
-	// documented unique-7-char-prefix constraint).
-	if a, b := SpanRecordName("start.elf", 0), SpanRecordName("start4.elf", 0); a == b {
-		t.Errorf("start.elf and start4.elf collide: both → %q", a)
+
+	// Identical hashes produce identical name prefixes (dedup property).
+	h1 := hash3(0x12, 0x34, 0x56)
+	if a, b := SpanRecordName(h1, 0), SpanRecordName(h1, 0); a != b {
+		t.Errorf("identical hash produced different names: %q vs %q", a, b)
+	}
+
+	// Different hashes produce different name prefixes.
+	h2 := hash3(0x78, 0x9A, 0xBC)
+	if a, b := SpanRecordName(h1, 0), SpanRecordName(h2, 0); a == b {
+		t.Errorf("different hashes collide: both → %q", a)
 	}
 }
 
 func TestSpanPlanNonSpanned(t *testing.T) {
-	// size ≤ cap → a single record under the plain name (no suffix), so the
-	// kernel and small files keep their natural TFTP name.
-	recs := SpanPlan("kernel8.img", 21752, 100000)
+	// size ≤ cap → a single record; content-addressed as <hash6>000.
+	h := hash3(0xAB, 0xCD, 0xEF)
+	recs := SpanPlan(h, 21752, 100000)
 	if len(recs) != 1 {
 		t.Fatalf("non-spanned plan has %d records, want 1", len(recs))
 	}
-	want := SpanRecord{Name: "kernel8.img", Offset: 0, Length: 21752}
+	want := SpanRecord{Name: "abcdef000", Offset: 0, Length: 21752}
 	if recs[0] != want {
 		t.Errorf("non-spanned record = %+v, want %+v", recs[0], want)
 	}
-	// Exactly cap is still a single plain record (the boundary).
-	if recs := SpanPlan("x", 1000, 1000); len(recs) != 1 || recs[0].Name != "x" {
-		t.Errorf("size==cap plan = %+v, want one plain record", recs)
+	// Exactly cap is still a single record.
+	h2 := hash3(0x01, 0x02, 0x03)
+	if recs := SpanPlan(h2, 1000, 1000); len(recs) != 1 || recs[0].Name != "010203000" {
+		t.Errorf("size==cap plan = %+v, want one hash-named record", recs)
 	}
 }
 
 func TestSpanPlanSpanned(t *testing.T) {
-	recs := SpanPlan("start.elf", 2979296, 1000000)
+	h := hash3(0xAB, 0xCD, 0xEF)
+	recs := SpanPlan(h, 2979296, 1000000)
 	want := []SpanRecord{
-		{"start.e000", 0, 1000000},
-		{"start.e001", 1000000, 1000000},
-		{"start.e002", 2000000, 979296},
+		{"abcdef000", 0, 1000000},
+		{"abcdef001", 1000000, 1000000},
+		{"abcdef002", 2000000, 979296},
 	}
 	if len(recs) != len(want) {
 		t.Fatalf("spanned plan has %d records, want %d", len(recs), len(want))
@@ -91,7 +115,8 @@ func TestSpanPlanSpanned(t *testing.T) {
 	}
 
 	// Exact multiple: two full records, no partial tail.
-	exact := SpanPlan("x", 2000000, 1000000)
+	h2 := hash3(0x00, 0x11, 0x22)
+	exact := SpanPlan(h2, 2000000, 1000000)
 	if len(exact) != 2 || exact[0].Length != 1000000 || exact[1].Length != 1000000 {
 		t.Errorf("exact-multiple plan = %+v, want two full records", exact)
 	}
@@ -102,8 +127,9 @@ func TestSpanPlanSpanned(t *testing.T) {
 // the count matches SpanCount. These are the properties the serve-time reassembly
 // relies on (read the records in order → exactly the original bytes).
 func TestSpanPlanInvariants(t *testing.T) {
+	h := hash3(0x12, 0x34, 0x56)
 	check := func(size, recordCap int) {
-		recs := SpanPlan("firmware.x", size, recordCap)
+		recs := SpanPlan(h, size, recordCap)
 		if got, want := len(recs), SpanCount(size, recordCap); got != want {
 			t.Errorf("SpanPlan(%d,%d): %d records, SpanCount says %d", size, recordCap, got, want)
 			return
@@ -139,21 +165,50 @@ func TestSpanPlanInvariants(t *testing.T) {
 	}
 }
 
-// TestSpanPlanNamesMatchSpanCount: a spanned object's record names are exactly
-// SpanRecordName(name, 0..N-1), the names the server reconstructs from the size.
+// TestSpanPlanNamesMatchSpanCount: every record name equals SpanRecordName(hash, i),
+// and StoredRecordNames returns the same sequence.
 func TestSpanPlanNamesMatchSpanCount(t *testing.T) {
-	const name, size, recordCap = "start4.elf", 2255072, 500000
-	recs := SpanPlan(name, size, recordCap)
+	h := hash3(0x01, 0x23, 0x45)
+	const size, recordCap = 2255072, 500000
+	recs := SpanPlan(h, size, recordCap)
 	n := SpanCount(size, recordCap)
 	if len(recs) != n {
 		t.Fatalf("plan has %d records, SpanCount says %d", len(recs), n)
 	}
 	for i := 0; i < n; i++ {
-		if want := SpanRecordName(name, i); recs[i].Name != want {
+		if want := SpanRecordName(h, i); recs[i].Name != want {
 			t.Errorf("record %d name = %q, want %q", i, recs[i].Name, want)
 		}
 	}
-	if recs[0].Name != fmt.Sprintf("start4.%03d", 0) {
-		t.Errorf("first spanned record name = %q, unexpected", recs[0].Name)
+	// StoredRecordNames returns the same names in the same order.
+	stored := StoredRecordNames(h, n)
+	if len(stored) != n {
+		t.Fatalf("StoredRecordNames returned %d names, want %d", len(stored), n)
+	}
+	for i := 0; i < n; i++ {
+		if stored[i] != recs[i].Name {
+			t.Errorf("StoredRecordNames[%d] = %q, SpanPlan[%d].Name = %q", i, stored[i], i, recs[i].Name)
+		}
+	}
+}
+
+// TestStoredRecordNamesDedup: two blobs with the same hash produce identical
+// record names (dedup falls out), while different hashes produce different names.
+func TestStoredRecordNamesDedup(t *testing.T) {
+	h1 := hash3(0xAB, 0xCD, 0xEF)
+	h2 := hash3(0xAB, 0xCD, 0xEF) // same bytes
+	h3 := hash3(0x11, 0x22, 0x33) // different
+
+	n1 := StoredRecordNames(h1, 3)
+	n2 := StoredRecordNames(h2, 3)
+	n3 := StoredRecordNames(h3, 3)
+
+	for i := range n1 {
+		if n1[i] != n2[i] {
+			t.Errorf("identical hashes produced different name at index %d: %q vs %q", i, n1[i], n2[i])
+		}
+		if n1[i] == n3[i] {
+			t.Errorf("different hashes produced same name at index %d: %q", i, n1[i])
+		}
 	}
 }
