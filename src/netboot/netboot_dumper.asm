@@ -237,8 +237,8 @@ dumper_read_rom1:
                 ldir
                 ; Turn ROM1 off but keep the scratch RAM page at section A so the dump
                 ; at &0000-&3FFF stays readable while we serve. (HMPR — section C/D —
-                ; was never changed; with ROM1 off section D is RAM page P+1 again,
-                ; which we no longer use for rom1.)
+                ; is unchanged; with ROM1 off section D is RAM page P+1, but the rom1
+                ; dump lives at section A, so section D is not used for this region.)
                 ld      a, c
                 out     (LMPR_PORT), a          ; scratch page at A, bit5=1, bit6=0
                 ei
