@@ -2415,7 +2415,7 @@
   title: "SAMBOOT: understand the Trinity EEPROM bootblock from public source + locate the boot-a-record injection hook"
   description: |
     Read LongSteve/z80 boot.asm (Colin's SAM Revival 23 bootblock, public) + the forked-B-DOS EEPROM chunk map; document reset->bootblock->B-DOS load, the unfinished auto-load-file TODO as the boot-a-record hook, and the MGT-stripes redraw. No hardware.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i135
