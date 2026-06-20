@@ -18,8 +18,8 @@
 //	registry move       --id iN --before iM
 //	registry move       --id iN --after  iM
 //
-//	Mutating subcommands (operate on testdata/ and registry/.id-ledger.txt;
-//	tool is dormant — does NOT touch docs/notes/*.md):
+//	Mutating subcommands (rewrite the live registry/*.yaml + registry/.id-ledger.txt;
+//	run `make registry`, or set REGISTRY_OUTDIR, to regenerate docs/notes/*.md):
 //
 //	registry [--migrating] next-id [--space items|questions]
 //	registry [--migrating] add     --id … --title … --desc … --status … --owner … [--parent …] [--dep …]… [--ref …]…
@@ -33,13 +33,16 @@
 // and defers only invariant 10 (id-shaped ref existence). Invariants 11/12/13
 // (depends_on DAG, no-WONTFIX-target, delete-gate) remain strict.
 //
-// Environment variables (all optional; override the testdata defaults):
+// Environment variables (all optional). When unset, the data paths default to
+// the live repo registry/ found by walking up from the current directory; the
+// CLI never falls back to the bundled test fixtures (run from the repo root, or
+// set REGISTRY_ITEMS, or it errors):
 //
-//	REGISTRY_ITEMS      path to items.yaml         (default: <toolDir>/testdata/items.yaml)
-//	REGISTRY_QUESTIONS  path to questions.yaml      (default: <toolDir>/testdata/questions.yaml)
-//	REGISTRY_PRIORITY   path to priority.yaml       (default: <registryDir>/priority.yaml or testdata/priority.yaml)
-//	REGISTRY_DIR        directory for .id-ledger.txt (default: <toolDir>)
-//	REGISTRY_TEMPLATES  directory of *.head.md templates (default: <toolDir>/templates)
+//	REGISTRY_ITEMS      path to items.yaml          (default: <live registry/>/items.yaml)
+//	REGISTRY_QUESTIONS  path to questions.yaml       (default: sibling of items.yaml)
+//	REGISTRY_PRIORITY   path to priority.yaml        (default: sibling of items.yaml)
+//	REGISTRY_DIR        directory for .id-ledger.txt (default: the live registry/ dir)
+//	REGISTRY_TEMPLATES  directory of *.head.md templates (default: tools/registry/templates)
 //	REGISTRY_OUTDIR     directory to write generated .md files; empty → stdout mode
 //
 // Exit codes: 0 = ok, 1 = validation or operation error, 2 = usage error.
@@ -129,18 +132,6 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] answer   --id qN")
 }
 
-// defaultMutatorPaths returns paths for all mutating subcommands, reading
-// overrides from environment variables. When env vars are unset the tool
-// operates on testdata/ (dormant mode — never touches docs/notes/*.md).
-//
-// Environment variables:
-//
-//	REGISTRY_ITEMS      override items.yaml path
-//	REGISTRY_QUESTIONS  override questions.yaml path
-//	REGISTRY_PRIORITY   override priority.yaml path
-//	REGISTRY_DIR        override .id-ledger.txt directory
-//	REGISTRY_TEMPLATES  override templates directory
-//	REGISTRY_OUTDIR     set to enable in-place .md generation
 // defaultMutatorPaths resolves where the registry CLI reads and writes when run
 // without explicit REGISTRY_* env vars. The data paths are resolved, in order:
 // an explicit REGISTRY_* env var (always wins), else the LIVE repo registry/

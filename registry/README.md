@@ -14,9 +14,10 @@ here. The markdown views under `docs/notes/` (`item-registry-open.md`,
   (ids are never reused, even after deletion).
 
 Run the CLI **from the repo root**: it locates this live registry by walking up
-for `registry/items.yaml`. Run from elsewhere it warns loudly on stderr and
-falls back to the bundled `tools/registry/testdata` fixtures (never silently) —
-set `REGISTRY_ITEMS` to override.
+for `registry/items.yaml`. It **never** falls back to the bundled
+`tools/registry/testdata` fixtures — run somewhere it can't find the live
+registry (with no `REGISTRY_ITEMS` set) and it errors (exit 1) rather than risk
+an accidental testdata read/write. Set `REGISTRY_ITEMS` to point elsewhere.
 
 Edit work-tracking via the `tools/registry` CLI (`add` / `split` / `set-status`
 / `set-pr` / `dep` / `answer` / `prioritize` / `move`), then `make registry` to
