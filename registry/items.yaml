@@ -59,6 +59,8 @@
   status: DONE
   kind: leaf
   owner: pete
+  prs:
+    - {num: 515, role: completing}
   refs: [i76, "docs/specs/editor-tui-prototype-design.md §3", "docs/specs/editor-tui-prototype-design.md §5", docs/ROADMAP.md]
 
 - id: i7
