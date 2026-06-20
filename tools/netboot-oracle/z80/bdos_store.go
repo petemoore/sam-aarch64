@@ -43,10 +43,11 @@ import (
 const (
 	rst8HookAddr = 0x0008 // the RST 8 vector the SAMDOS/B-DOS hooks dispatch through
 
-	bdHookHRECORD = 0x9C // record select (156)
-	bdHookHGTHD   = 129  // get file header (lookup by name) — server-side, not modelled here
-	bdHookHSAVE   = 132  // save whole file
-	bdHookHRSAD   = 160  // read raw 512-byte sector at (D=track, E=sector) into HL
+	bdHookHRECORD  = 0x9C // record select (156)
+	bdHookHGTHD    = 129  // get file header (lookup by name) — server-side, not modelled here
+	bdHookHSAVE    = 132  // save whole file
+	bdHookHRSAD    = 160  // read raw 512-byte sector at (D=track, E=sector) into HL
+	bdHookListRead = 161  // card-absolute list-sector read: E=listSector (1-based), HL=dest (512 bytes)
 
 	bdUIFALen = 48 // the UIFA HSAVE reads at IX (bdos_save_hook stages it at &4B00)
 
@@ -68,8 +69,9 @@ const (
 	// bdRecordLabelOffset is the byte offset of the 10-byte disk label (volume
 	// name) within a record's first data sector. B-DOS get.label reads the record's
 	// name here (bdos15a.src.txt:2852, "LD BC,210 ;point to disk name"); bit 7 of
-	// the first byte is the write-protect flag. This is the per-record name
-	// reachable from a user program (the central record LIST is not — see below).
+	// the first byte is the write-protect flag. This is the per-record (selected-
+	// record) view; the card-level record list (list sectors 1..base-1, 16-byte
+	// entries) is a separate, reachable view (see CardModel doc).
 	bdRecordLabelOffset = 210
 	// bdRecordLabelLen is the length of the disk-label name field (new.lab copies
 	// 10 bytes: bdos15a.src.txt:2780-2782 "LD C,10 / LDIR").
@@ -78,26 +80,30 @@ const (
 
 // CardModel is the harness model of a Trinity SD card: a central record list (in
 // the boot area) and per-record sector data (at least sector 0, the first data
-// sector). Used by the HRSAD handler to serve reads.
+// sector). Used by the HRSAD and bdHookListRead handlers to serve reads.
 //
 // Linear sector index within a record = track*10 + (sector-1), matching the
 // `conv.de` formula in the SAMDOS source (D=track 0-79, E=sector 1-10).
 //
-// REACHABILITY (the i119 detection finding): the central RecordList exists on the
-// medium but is NOT reachable from a user program — no RST-8 hook reads a
-// card-absolute sector, and HRSAD/HWSAD are clamped to the selected record's own
-// 800 KB (hd.seek adds the record base; bdos15a.src.txt:1243-1297). B-DOS reads
-// the list only via internal find.rec/seek.base/hd.lbuf (no hook slot). So a
-// record's reachable identity comes from its OWN first sector after selecting it:
-// the "BDOS" stamp at +232 (SetBDOSStamp) and the disk label at +210
-// (SetRecordLabel) — what bdos_inspect_record reads. RecordList is retained
-// because it models the real medium (and a future hardware-only path could use
-// it), but the host-verifiable detection path goes through the per-record sector,
-// not the list.
+// REACHABILITY (corrected 2026-06-19 — Pete): the central RecordList IS reachable
+// from a user program. The `RECORD` BASIC command lists every record's name by
+// reading the list sectors off the card (bdos15a.src.txt:886-906, list.record;
+// docs/specs/trinity-record-detection-design.md §2). The narrower true fact is
+// only that there is no dedicated RST-8 hook named "list records". The harness
+// models card-absolute list-sector reads via bdHookListRead (ListSector method):
+// Z80 code loads E=listSector, HL=dest and issues RST 8 / DEFB BD_HOOK_LISTREAD,
+// which models the result of a raw SD CMD17 single-block read at the card-absolute
+// LBA — the hardware path (SPI ladder, ports &DC–&DF) is hardware-gated and not
+// emulated at the SPI level (docs/specs/trinity-record-detection-design.md §8,
+// open-verification-item-1). Per-record identity (the "BDOS" stamp at +232 and the
+// disk label at +210) is still read via HRSAD after HRECORD-selecting the record —
+// that remains the selected-record view, bdos_inspect_record.
 type CardModel struct {
 	// RecordList holds the 16-byte record-list entries, indexed by record number
 	// minus 1 (entry 0 = record 1). Entries beyond len(RecordList) read as all-zero.
-	// NOT user-reachable via any hook (see the type doc) — models the medium only.
+	// Each entry is the full 16-byte record name (space-padded, bit 7 of byte 0 =
+	// write-protect; free ⇔ (byte0 & 0x7F) == 0 — bdos15a.src.txt:946-948 frec3x).
+	// Served to Z80 code via ListSector / bdHookListRead.
 	RecordList [][16]byte
 	// Sectors holds the 512-byte sectors for each record (outer index = record
 	// number minus 1, inner index = linear sector within the record:
@@ -141,6 +147,24 @@ func (c *CardModel) RecordEntry(n int) [16]byte {
 	return c.RecordList[idx]
 }
 
+// ListSector builds the 512-byte list sector for listSec (1-based). Each list
+// sector holds 32 record-list entries of 16 bytes each (32*16 = 512). Entry e
+// (0-indexed) within listSec maps to record number (listSec-1)*32 + e + 1. This
+// models a card-absolute read of the list area (sectors 1..base-1 of the card,
+// directly before record-1 data), the result a raw SD CMD17 at the corresponding
+// LBA returns — docs/specs/trinity-record-detection-design.md §4.3.
+func (c *CardModel) ListSector(listSec int) [bdSectorSize]byte {
+	const entriesPerSector = 32
+	const entrySize = 16
+	var out [bdSectorSize]byte
+	for e := 0; e < entriesPerSector; e++ {
+		record := (listSec-1)*entriesPerSector + e + 1
+		entry := c.RecordEntry(record)
+		copy(out[e*entrySize:(e+1)*entrySize], entry[:])
+	}
+	return out
+}
+
 // Sector returns the 512-byte content of linearSector in record n (1-indexed),
 // or all-zero if not set.
 func (c *CardModel) Sector(n, linearSector int) [bdSectorSize]byte {
@@ -151,7 +175,9 @@ func (c *CardModel) Sector(n, linearSector int) [bdSectorSize]byte {
 	return c.Sectors[idx][linearSector]
 }
 
-// SetRecordName sets the 10-byte name field of record n's list entry. The name
+// SetRecordName sets the first 10 bytes of record n's 16-byte list-entry name
+// (a test helper preserving bytes 10..15; the full entry name is 16 bytes,
+// space-padded — docs/specs/trinity-record-detection-design.md §4.3). The name
 // is space-padded to 10 bytes; longer names are truncated to 10.
 func (c *CardModel) SetRecordName(n int, name string) {
 	const nameLen = 10
@@ -181,8 +207,9 @@ func (c *CardModel) SetBDOSStamp(n int) {
 
 // SetRecordLabel writes the 10-byte disk label (volume name) at offset 210 of
 // record n's first data sector — the per-record name bdos_inspect_record reads
-// (the user-reachable name; the central RecordList is not reachable, see the type
-// doc). The name is space-padded to 10 bytes and truncated to 10 if longer. Bit 7
+// (the selected-record disk-label view, distinct from the card-level RecordList
+// entry — see the type doc and trinity-record-detection-design.md §4.5). The name
+// is space-padded to 10 bytes and truncated to 10 if longer. Bit 7
 // of the first byte is the write-protect flag on real hardware; callers that need
 // it set should OR it into the first character themselves.
 func (c *CardModel) SetRecordLabel(n int, name string) {
@@ -273,6 +300,22 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		var data [bdSectorSize]byte
 		if s.card != nil {
 			data = s.card.Sector(s.selected, linearSec)
+		}
+		for i, b := range data {
+			mac.m.ram[dest+uint16(i)] = b
+		}
+	case bdHookListRead:
+		// Card-absolute list-sector read: E = 1-based list-sector number, HL = dest.
+		// Writes 512 bytes (32 × 16-byte record-list entries) to memory at HL.
+		// This models the result of a raw SD CMD17 single-block read at the
+		// card-absolute LBA of the list sector — NOT record-clamped, unlike HRSAD.
+		// The hardware SPI ladder (ports &DC–&DF) is hardware-gated and not emulated
+		// at the SPI level (docs/specs/trinity-record-detection-design.md §8).
+		listSec := int(cpu.DE.Lo)
+		dest := cpu.HL.U16()
+		var data [bdSectorSize]byte
+		if s.card != nil {
+			data = s.card.ListSector(listSec)
 		}
 		for i, b := range data {
 			mac.m.ram[dest+uint16(i)] = b

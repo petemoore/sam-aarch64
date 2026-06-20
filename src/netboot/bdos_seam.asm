@@ -286,6 +286,7 @@ BD_HOOK_HRECORD:  equ &9C                ; B-DOS record select (156)
 BD_HOOK_HGTHD:    equ 129                ; get file header (find by name)
 BD_HOOK_HSAVE:    equ 132                ; save whole file
 BD_HOOK_HRSAD:    equ 160                ; read raw 512-byte sector (HRSAD)
+BD_HOOK_LISTREAD: equ 161                ; card-absolute list-sector read: E=listSec, HL=dest
 
 ; bdos_select_record — HRECORD: select the mass-storage record (0 = floppy).
 ; In: A = record number. On real B-DOS, all subsequent HGTHD/HSAVE/HLOAD use it.
@@ -345,6 +346,170 @@ bdos_read_sector:
                 defb    BD_HOOK_HRSAD
                 ret
 
+; ---------------------------------------------------------------------------
+; bdos_read_list_sector — read one 512-byte list sector from the card (card-
+; absolute, not record-clamped).
+;
+; In:  BD_LIST_SECTOR  1 byte   1-based list-sector number (sectors 1..base-1
+;                               of the card hold the 16-byte record-list entries;
+;                               docs/specs/trinity-record-detection-design.md §4.1)
+; Out: BD_LIST_BUF   512 bytes  the list sector (32 × 16-byte entries)
+; Clobbers: A, DE, HL.
+;
+; This routine issues the harness hook BD_HOOK_LISTREAD, which models the result
+; a raw SD CMD17 single-block read at the card-absolute LBA returns. The hardware
+; implementation (the SPI command ladder on ports &DC–&DF) is hardware-gated;
+; docs/specs/trinity-record-detection-design.md §8 open-verification-item-1.
+bdos_read_list_sector:
+                ld      a, (BD_LIST_SECTOR)
+                ld      e, a                   ; E = list-sector number (1-based)
+                ld      hl, BD_LIST_BUF
+                rst     8
+                defb    BD_HOOK_LISTREAD
+                ret
+
+; ---------------------------------------------------------------------------
+; bdos_record_entry — fetch the 16-byte list entry for one record into
+; BD_ENTRY_BUF. Reads the containing list sector and copies the entry's 16
+; bytes.
+;
+; In:  BD_ENTRY_REC  2 bytes  1-based record number n (>= 1)
+; Out: BD_ENTRY_BUF 16 bytes  the record's list entry
+;                             (byte 0 bit 7 = write-protect; bits 0-6 = first
+;                             name char; 0 ⇒ free; docs/specs/trinity-record-
+;                             detection-design.md §4.3 / §4.4)
+; Clobbers: A, BC, DE, HL.
+;
+; Geometry (docs/specs/trinity-record-detection-design.md §4.3, §5):
+;   recordIndex = n - 1
+;   listSector  = (recordIndex >> 5) + 1    (/ 32 then + 1)
+;   byteOffset  = (recordIndex AND 31) << 4 (mod 32 then × 16, 9-bit result)
+;
+; (n-1) fits in 16 bits; for any practical card size (a 1 GB card has ~1300
+; records so n-1 <= 1299 < 2^11) the >> 5 result fits in 8 bits. The 16-bit
+; shift is computed as: A = ((H & 7) << 3) | (L >> 5), which is correct for
+; any 16-bit value where the result of >> 5 fits in 8 bits (n-1 < 8192 for
+; all foreseeable card sizes).
+;
+; byteOffset = (n-1 mod 32) * 16 fits in 9 bits (max 31*16 = 496 = 0x1F0),
+; so it is held in BC as a 16-bit value: B = high byte (0 or 1), C = low byte.
+; For m = (n-1) AND 31 (0..31): B = m >> 4 (0 or 1), C = (m AND 15) << 4.
+bdos_record_entry:
+                ld      hl, (BD_ENTRY_REC)     ; HL = n (1-based)
+                dec     hl                     ; HL = n-1 (0-based record index)
+
+                ; byteOffset (16-bit BC) = ((n-1) AND 31) * 16
+                ; — docs/specs/trinity-record-detection-design.md §4.3
+                ; m = (n-1) AND 31 = low 5 bits, all in L.
+                ; B = m >> 4 (0 or 1); C = (m AND 15) << 4.
+                ld      a, l
+                and     &1F                    ; A = m = (n-1) mod 32 (0..31)
+                rrca
+                rrca
+                rrca
+                rrca                           ; A = m >> 4 (= 0 if m<16, 1 if m>=16, wraps into bit 7)
+                and     &01                    ; B = high byte of byteOffset (0 or 1)
+                ld      b, a
+                ld      a, l
+                and     &0F                    ; A = m AND 15 (low nibble of m)
+                rlca
+                rlca
+                rlca
+                rlca                           ; C = (m AND 15) << 4 = low byte of byteOffset
+                ld      c, a                   ; BC = 16-bit byteOffset
+
+                ; listSector = (n-1) / 32 + 1
+                ; compute (n-1) >> 5 = ((H AND 7) << 3) OR (L >> 5)
+                ld      a, h
+                and     &07                    ; keep bits 10-8 of n-1 (H <= 5 for <=1300 records)
+                rlca
+                rlca
+                rlca                           ; shift to positions 5-3
+                ld      e, a                   ; save high contribution
+                ld      a, l
+                rrca
+                rrca
+                rrca
+                rrca
+                rrca                           ; L >> 5 via 5 right-rotates
+                and     &07                    ; keep low 3 bits (bits 7-5 of L → bits 2-0)
+                or      e                      ; A = (n-1) >> 5
+                inc     a                      ; listSector = (n-1)/32 + 1
+                ld      (BD_LIST_SECTOR), a
+                push    bc                     ; save byteOffset across the call
+                call    bdos_read_list_sector
+                pop     bc                     ; restore byteOffset
+
+                ; copy 16 bytes from BD_LIST_BUF + byteOffset to BD_ENTRY_BUF
+                ld      hl, BD_LIST_BUF
+                add     hl, bc                 ; HL = BD_LIST_BUF + byteOffset (BC = 16-bit offset)
+                ld      de, BD_ENTRY_BUF
+                ld      bc, 16
+                ldir
+                ret
+
+; ---------------------------------------------------------------------------
+; bdos_find_free_record — scan the central record list for the first free
+; (unnamed) record. Free ⇔ (entry[0] AND 0x7F) == 0 (the frec3x test;
+; bdos15a.src.txt:946-948; docs/specs/trinity-record-detection-design.md §4.4).
+;
+; In:  BD_RECORDS  2 bytes  total record count (>= 1)
+; Out: BD_FREE_RECORD  2 bytes  1-based number of the first free record, or 0
+;                               if all records are named/in-use.
+; Clobbers: A, BC, DE, HL.
+;
+; Algorithm (docs/specs/trinity-record-detection-design.md §5): iterate n = 1
+; to BD_RECORDS; for each n, read its entry via bdos_record_entry and apply
+; the free test. The first free record's number is stored and the routine
+; returns. If no free record is found, BD_FREE_RECORD is set to 0.
+;
+; NOTE: this re-reads the list sector for EVERY record. For practical card sizes
+; (~1300 records on 1 GB), the list fits in ~41 sectors so this sweeps at most
+; ~41 sector reads. Correctness first; caching is a later optimisation.
+bdos_find_free_record:
+                ; initialise BD_FREE_RECORD = 0 (no free record found yet)
+                xor     a
+                ld      (BD_FREE_RECORD), a
+                ld      (BD_FREE_RECORD + 1), a
+
+                ; loop: n = 1 to BD_RECORDS
+                ld      hl, 1                  ; HL = current record n (start at 1)
+bffr_loop:
+                ; if n > BD_RECORDS, no free record found — exit
+                push    hl                     ; save n
+                ld      de, (BD_RECORDS)
+                ; compare HL <= DE: check if n > records
+                ; subtract: DE - HL; borrow ⇒ n > records
+                ld      a, e
+                sub     l
+                ld      a, d
+                sbc     a, h
+                pop     hl                     ; restore n
+                jr      c, bffr_done           ; n > records: done (BD_FREE_RECORD stays 0)
+
+                ; fetch the entry for record n
+                ld      (BD_ENTRY_REC), hl
+                push    hl                     ; save n
+                call    bdos_record_entry
+                pop     hl                     ; restore n
+
+                ; free test: (BD_ENTRY_BUF[0] AND 0x7F) == 0?
+                ; docs/specs/trinity-record-detection-design.md §4.4 (frec3x)
+                ld      a, (BD_ENTRY_BUF)
+                and     &7F                    ; strip write-protect bit
+                jr      nz, bffr_next          ; non-zero ⇒ named ⇒ skip
+
+                ; free record found — store n in BD_FREE_RECORD and return
+                ld      (BD_FREE_RECORD), hl
+                ret
+
+bffr_next:
+                inc     hl                     ; n++
+                jr      bffr_loop
+
+bffr_done:
+                ret
+
                 endif
 
 ; ===========================================================================
@@ -365,3 +530,11 @@ BD_READ_BUF:      defs 512               ; bdos_read_sector: output (512 bytes)
 
 BD_REC_IS_BDOS:   defs 1                 ; bdos_inspect_record: 1 = "BDOS" stamp present
 BD_REC_NAME:      defs 10                ; bdos_inspect_record: the record's disk label (+210)
+
+; --- free-record detection (B3) -----------------------------------------------
+BD_LIST_SECTOR:   defs 1                 ; bdos_read_list_sector: 1-based list-sector number
+BD_LIST_BUF:      defs 512              ; bdos_read_list_sector: the 512-byte list-sector data
+BD_RECORDS:       defs 2                 ; bdos_find_free_record: total record count (LE word)
+BD_FREE_RECORD:   defs 2                 ; bdos_find_free_record: first free record (1-based), or 0
+BD_ENTRY_REC:     defs 2                 ; bdos_record_entry: input record number (1-based, LE)
+BD_ENTRY_BUF:     defs 16               ; bdos_record_entry: the 16-byte list entry
