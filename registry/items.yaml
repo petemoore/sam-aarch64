@@ -2202,9 +2202,11 @@
   title: WRQ parse + handshake (ACK-0 / OACK)
   description: |
     Opcode dispatch at netboot_serve.asm WRQ branch -> handle_wrq learns client endpoint; bare WRQ -> build_ack0 (new 4-byte 00 04 00 00 builder in tftp_build.asm); optioned WRQ -> OACK (reuse build_oack, echo blksize/tsize). Go authority: serverloop.go StartWrite + serve.go OnFrame WRQ branch. Host test: inject WRQ -> assert ACK-0/OACK byte-for-byte vs Go authority. Not gated; clean first deliverable.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 490, role: completing}
   parent: i121
 
 - id: i121b
