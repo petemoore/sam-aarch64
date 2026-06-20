@@ -508,6 +508,49 @@ func pullableItems(items []Item) map[string]bool {
 	return out
 }
 
+// childrenByParent maps each parent id to the ids of its direct children.
+func childrenByParent(items []Item) map[string][]string {
+	out := map[string][]string{}
+	for _, it := range items {
+		if it.Parent != "" {
+			out[it.Parent] = append(out[it.Parent], it.ID)
+		}
+	}
+	return out
+}
+
+// expandDepTarget resolves a depends_on target to the set of pullable ids that
+// must precede a dependent for ordering purposes:
+//   - a pullable target resolves to itself;
+//   - an umbrella target resolves to the union of its descendants' pullable
+//     leaves (recursively) — an umbrella is "done" only once all its children
+//     are, so depending on it means depending on every open pullable leaf
+//     beneath it;
+//   - a closed leaf / question / unknown id resolves to nothing (no ordering
+//     constraint).
+//
+// Without this, an edge to an umbrella (never itself pullable, so never a queue
+// entry) imposed no constraint, and a dependent could be ranked ahead of its
+// real prerequisites while validation stayed green. The `seen` set guards
+// against a malformed parent cycle.
+func expandDepTarget(itemKind map[string]string, children map[string][]string, pullable map[string]bool, dep string, seen map[string]bool) []string {
+	if pullable[dep] {
+		return []string{dep}
+	}
+	if itemKind[dep] != "umbrella" {
+		return nil
+	}
+	if seen[dep] {
+		return nil
+	}
+	seen[dep] = true
+	var out []string
+	for _, child := range children[dep] {
+		out = append(out, expandDepTarget(itemKind, children, pullable, child, seen)...)
+	}
+	return out
+}
+
 // validatePriority checks the priority list against the registry. When the
 // priority list is empty it is treated as absent and no errors are reported.
 // The invariants enforced:
@@ -569,11 +612,14 @@ func validatePriority(reg *Registry, priority []string) *ValidationError {
 	}
 
 	// Check 4: topological extension — X must appear after all its pullable deps.
-	// Build a position map for fast lookup.
+	// A dependency on an umbrella expands to the umbrella's pullable leaf
+	// descendants (an umbrella is never itself a queue entry), so an edge to an
+	// umbrella still constrains ordering against its real prerequisite leaves.
 	pos := map[string]int{}
 	for i, id := range priority {
 		pos[id] = i
 	}
+	children := childrenByParent(reg.Items)
 	for _, it := range reg.Items {
 		if !pullable[it.ID] {
 			continue
@@ -583,16 +629,20 @@ func validatePriority(reg *Registry, priority []string) *ValidationError {
 			continue // already reported as missing above
 		}
 		for _, dep := range it.DependsOn {
-			if !pullable[dep] {
-				continue // dep is done/closed/umbrella/question — no ordering constraint
-			}
-			yPos, yInList := pos[dep]
-			if !yInList {
-				continue // already reported as missing
-			}
-			if xPos < yPos {
-				ve.add("priority", fmt.Sprintf("%q ranked before its dependency %q (rank %d < %d)",
-					it.ID, dep, xPos+1, yPos+1))
+			for _, target := range expandDepTarget(itemKind, children, pullable, dep, map[string]bool{}) {
+				yPos, yInList := pos[target]
+				if !yInList {
+					continue // already reported as missing
+				}
+				if xPos < yPos {
+					if target == dep {
+						ve.add("priority", fmt.Sprintf("%q ranked before its dependency %q (rank %d < %d)",
+							it.ID, target, xPos+1, yPos+1))
+					} else {
+						ve.add("priority", fmt.Sprintf("%q ranked before %q (rank %d < %d), a pullable child of its umbrella dependency %q",
+							it.ID, target, xPos+1, yPos+1, dep))
+					}
+				}
 			}
 		}
 	}

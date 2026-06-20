@@ -239,6 +239,110 @@ func TestPriority_TopoViolation(t *testing.T) {
 	}
 }
 
+// umbrellaDepReg builds a registry where pullable leaf i10 depends on the
+// umbrella i30, whose only open pullable leaf is i30b (i30a is DONE). Depending
+// on the umbrella means i10 must rank after its pullable leaf i30b. The umbrella
+// itself is never a queue entry, so this is the case the old check missed.
+func umbrellaDepReg() *Registry {
+	return &Registry{
+		Items: []Item{
+			{
+				ID:        "i10",
+				Title:     "Depends on umbrella i30",
+				Status:    StatusOpen,
+				Kind:      "leaf",
+				Owner:     "agent",
+				DependsOn: []string{"i30"},
+			},
+			{
+				ID:     "i30",
+				Title:  "Umbrella prerequisite",
+				Status: StatusOpen,
+				Kind:   "umbrella",
+				Owner:  "agent",
+			},
+			{
+				ID:     "i30a",
+				Title:  "Done leaf child",
+				Status: StatusDone,
+				Kind:   "leaf",
+				Owner:  "agent",
+				Parent: "i30",
+				PRs:    []PRRef{{Num: 1, Role: RoleCompleting}},
+			},
+			{
+				ID:     "i30b",
+				Title:  "Open leaf child (the real prerequisite)",
+				Status: StatusOpen,
+				Kind:   "leaf",
+				Owner:  "agent",
+				Parent: "i30",
+			},
+		},
+	}
+}
+
+// TestPriority_TopoViolation_UmbrellaDep asserts that a dependency on an umbrella
+// is expanded to its pullable leaves: ranking i10 before i30b (a leaf of i10's
+// umbrella dependency i30) is a topology violation. This is the umbrella-dep
+// hole that let i133 sit ahead of i135c/i135d while validate stayed green.
+func TestPriority_TopoViolation_UmbrellaDep(t *testing.T) {
+	reg := umbrellaDepReg()
+	// i10 ranked before i30b — violates the (expanded) umbrella dependency.
+	pve := validatePriority(reg, []string{"i10", "i30b"})
+	if !pve.hasErrors() {
+		t.Fatal("expected topo-violation error (i10 before i30b via umbrella i30); got none")
+	}
+	found := false
+	for _, msg := range pve.msgs {
+		if strings.Contains(msg, "i10") && strings.Contains(msg, "i30b") && strings.Contains(msg, "i30") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected topo error naming i10, i30b, and umbrella i30; got:\n%s",
+			strings.Join(pve.msgs, "\n"))
+	}
+}
+
+// TestPriority_UmbrellaDep_ValidAfterReorder asserts that ranking the umbrella's
+// pullable leaf i30b before its dependent i10 satisfies the constraint.
+func TestPriority_UmbrellaDep_ValidAfterReorder(t *testing.T) {
+	reg := umbrellaDepReg()
+	pve := validatePriority(reg, []string{"i30b", "i10"})
+	if pve.hasErrors() {
+		t.Fatalf("expected no errors for valid umbrella-dep order (i30b before i10); got:\n%s",
+			strings.Join(pve.msgs, "\n"))
+	}
+}
+
+// TestTopoRepair_UmbrellaDep asserts the repair pass pulls the umbrella's
+// pullable leaf forward ahead of its dependent — the auto-correction that fixes
+// a priority.yaml carrying a leaf->umbrella ordering inversion.
+func TestTopoRepair_UmbrellaDep(t *testing.T) {
+	reg := umbrellaDepReg()
+	repaired := topoRepairPriority(reg.Items, []string{"i10", "i30b"})
+	posI10, posI30b := -1, -1
+	for i, id := range repaired {
+		switch id {
+		case "i10":
+			posI10 = i
+		case "i30b":
+			posI30b = i
+		}
+	}
+	if posI30b == -1 || posI10 == -1 {
+		t.Fatalf("repair dropped an id: %v", repaired)
+	}
+	if posI30b > posI10 {
+		t.Fatalf("expected i30b pulled before i10 after repair; got %v", repaired)
+	}
+	// The repaired order must itself validate.
+	if pve := validatePriority(reg, repaired); pve.hasErrors() {
+		t.Fatalf("repaired order still fails validation:\n%s", strings.Join(pve.msgs, "\n"))
+	}
+}
+
 // TestPriority_TopoValidAfterReorder asserts that placing i20 before i10
 // satisfies the topo constraint.
 func TestPriority_TopoValidAfterReorder(t *testing.T) {

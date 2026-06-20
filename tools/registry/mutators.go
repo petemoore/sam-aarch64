@@ -77,8 +77,10 @@ func reconcilePriority(reg *Registry) {
 // the input exactly. This is what lets `dep add` (and prioritize/move) keep the
 // queue topologically valid automatically instead of failing validation.
 //
-// Edges to ids not in `order` (closed/umbrella deps, questions) impose no
-// ordering constraint and are ignored — matching validatePriority's check 4.
+// An edge to an umbrella expands to the umbrella's in-queue pullable leaves
+// (matching validatePriority's check 4), so a dependency on an umbrella still
+// pulls its real prerequisite leaves forward. Edges to other out-of-queue ids
+// (closed deps, questions) impose no ordering constraint and are ignored.
 //
 // A cycle (which validate rejects separately) cannot livelock this: the on-stack
 // guard breaks the recursion and the node is still emitted as the stack unwinds,
@@ -88,8 +90,14 @@ func topoRepairPriority(items []Item, order []string) []string {
 	for _, id := range order {
 		inQueue[id] = true
 	}
-	// deps[id] = id's depends_on targets that are also in the queue (in declared
-	// order). Edges out of the queue carry no ordering constraint here.
+	itemKind := make(map[string]string, len(items))
+	for _, it := range items {
+		itemKind[it.ID] = it.Kind
+	}
+	children := childrenByParent(items)
+	// deps[id] = id's depends_on targets that are in the queue (in declared
+	// order), with an umbrella target expanded to its in-queue pullable leaves.
+	// Edges out of the queue carry no ordering constraint here.
 	deps := make(map[string][]string, len(order))
 	for _, it := range items {
 		if !inQueue[it.ID] {
@@ -97,8 +105,10 @@ func topoRepairPriority(items []Item, order []string) []string {
 		}
 		var ds []string
 		for _, dep := range it.DependsOn {
-			if inQueue[dep] {
-				ds = append(ds, dep)
+			for _, target := range expandDepTarget(itemKind, children, inQueue, dep, map[string]bool{}) {
+				if inQueue[target] {
+					ds = append(ds, target)
+				}
 			}
 		}
 		deps[it.ID] = ds
