@@ -8,7 +8,8 @@
 //
 //	Read-only query subcommands:
 //
-//	registry ready                                    (unblocked pullable items, in priority order)
+//	registry ready                                    (unblocked, not-yet-started pullable items, in priority order)
+//	registry in-progress                              (items currently IN_PROGRESS — the session completeness ledger)
 //	registry view       --id iN|qN [--format text|json]  (one record + computed dependents/rank)
 //	registry dependents --id iN                       (ids that depend_on iN)
 //	registry dag                                      (all dependency edges, one per line)
@@ -20,11 +21,12 @@
 //	registry move       --id iN --after  iM
 //
 //	Mutating subcommands (rewrite the live registry/*.yaml + registry/.id-ledger.txt;
-//	run `make registry`, or set REGISTRY_OUTDIR, to regenerate docs/notes/*.md):
+//	run `make registry`, or set REGISTRY_OUTDIR, to regenerate docs/notes/*.md).
+//	Item/question ids are ALWAYS tool-determined — there is no next-id and no
+//	caller-supplied --id:
 //
-//	registry [--migrating] next-id [--space items|questions]
-//	registry [--migrating] add     --id … --title … --desc … --status … --owner … [--parent …] [--dep …]… [--ref …]…
-//	registry [--migrating] split   --parent iN --child-id iN-bM --title …
+//	registry [--migrating] add     [--space items|questions] --owner … (items: --title --status [--desc] [--kind] [--pr N [--role …]] [--dep …]… [--ref …]…) (questions: --desc)
+//	registry [--migrating] split   --parent iN --title … [--desc …] [--status …] [--owner …] [--kind …] [--pr N [--role …]] [--dep …]… [--ref …]…   (child id determined from the parent)
 //	registry [--migrating] set-status --id iN --status … [--pr N]
 //	registry [--migrating] set-pr  --id iN --pr N [--role completing|followup]
 //	registry [--migrating] dep     add|rm --id iN --on iM|qN
