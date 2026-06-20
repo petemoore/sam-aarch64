@@ -525,7 +525,7 @@ atoi_dec:
                 ld      bc, 0                  ; BC = accumulator
 atd_loop:
                 ld      a, (hl)
-                sub     '0'
+                sub     "0"                    ; '0' = 0x30; strip digit bias
                 jr      c, atd_done            ; below '0'
                 cp      10
                 jr      nc, atd_done           ; above '9'
@@ -837,5 +837,6 @@ STAGING:          defs 2048
                 include "enc_link.asm"         ; drv_wait_link (PHY link-up, i127)
                 include "key_read_test.asm"    ; i138: keyboard sysvar poll (KYIP2 inlined)
                 if defined(NETBOOT_HOSTTEST)==0
+                include "bdos_picker.asm"      ; i119d: record-selection UX (B4)
                 include "eeprom.asm"
                 endif
