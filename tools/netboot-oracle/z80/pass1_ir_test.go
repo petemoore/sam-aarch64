@@ -44,7 +44,7 @@ const (
 )
 
 // pass1IRBufSize matches the PASS1_IR_BUF reservation in src/test_pass1_ir.asm.
-const pass1IRBufSize = 11264
+const pass1IRBufSize = 10752
 
 func loadPass1IR(t *testing.T) *z80h.Machine {
 	t.Helper()

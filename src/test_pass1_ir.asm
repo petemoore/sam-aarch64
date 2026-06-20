@@ -40,7 +40,15 @@
 ; Provenance: tools/sam-aarch64/assemble/pass1.go (Pass1 / directiveSizeAtPC /
 ; litPoolOperand / resolveEquDirective). Verified host-side in pass1_ir_test.go.
 
+; The org + leaf includes belong to the standalone pass1-ir harness. When this
+; file is `include`d by another harness (test_compact_ir.asm, i48c-b8b) the
+; includer owns the org and the leaf includes, so they are gated out here to
+; avoid a double-org / double-definition (mirrors asmparse.asm's
+; ASMPARSE_STANDALONE guard). PASS1_IR_STANDALONE is set by the pass1-ir-z80
+; Makefile target.
+                if defined(PASS1_IR_STANDALONE)
                 org     &8000
+                endif
 
                 include "tbn_constants.inc"
 
@@ -63,6 +71,13 @@ STAGING_BUF:    equ     &D500          ; 1 KB record staging area
 STAGING_BUF_END: equ    &D900
 LITPOOL_EXPR_BUF: equ   &D900          ; 2 KB cross-pass expr pool
 LITPOOL_EXPR_BUF_END: equ &E100
+
+; COMPACT_REC_PC — per-record RecordPC array for the optional i48c-b8b capture
+; (4-byte LE PASS_PC per record, 128-record cap). Sits in the &F000-page tail
+; above SYMTAB_OVERFLOW (&E800-&F000); free in both this standalone harness and
+; the b8b compact harness that includes this file. b8a never reads it (capture
+; flag stays 0); the symbol exists so the link resolves.
+COMPACT_REC_PC: equ     &F000          ; 128 * 4 = 512 B → &F200
 
 PASS_PASS1:     equ     1
 PASS_PASS2:     equ     2
@@ -105,11 +120,26 @@ pass1_ir_walk:
                 ld      hl, (PASS1_IR_LEN)
                 ld      (p1ir_remaining), hl
 
+; Record-index counter for the optional RecordPC capture (i48c-b8b). Reset to 0
+; here; incremented per record only when p1ir_capture_recpc != 0 (b8b sets it).
+                xor     a
+                ld      (p1ir_rec_index), a
+                ld      (p1ir_rec_index + 1), a
+
 p1ir_loop:
                 ld      hl, (p1ir_remaining)
                 ld      a, h
                 or      l
                 jr      z, p1ir_done                ; remaining == 0 → flush + return
+
+; Optional RecordPC capture (i48c-b8b): host Compact anchors COMMENT/BLANK_RUN
+; to p1.RecordPC[i] = the PC at the START of record i (pass1.go:173). When the
+; b8b compact walk needs those anchors it sets p1ir_capture_recpc; the pass1
+; walk then stores PASS_PC (4-byte LE) into COMPACT_REC_PC[rec_index] before
+; processing each record, exactly as Pass1 appends res.RecordPC at the loop top.
+                ld      a, (p1ir_capture_recpc)
+                or      a
+                call    nz, p1ir_store_recpc
 
                 ld      hl, (p1ir_cursor)
                 ld      a, (hl)                     ; record kind tag
@@ -131,6 +161,30 @@ p1ir_loop:
 p1ir_done:
 ; Implicit flush at end of input (pass1.go:311 flushPool(pc)).
                 call    litpool_flush
+                ret
+
+
+; -----------------------------------------------------------------------
+; p1ir_store_recpc — store PASS_PC (4-byte LE) into COMPACT_REC_PC at the slot
+; for the current record index, then increment the index. Faithful to
+; pass1.go:173 (res.RecordPC = append(res.RecordPC, pc)) so the b8b compact walk
+; reads RecordPC[i] = PC at the start of record i.
+;
+; Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+p1ir_store_recpc:
+                ld      hl, (p1ir_rec_index)
+                add     hl, hl                      ; *2
+                add     hl, hl                      ; *4 (4 bytes per slot)
+                ld      de, COMPACT_REC_PC
+                add     hl, de                      ; HL = &COMPACT_REC_PC[index]
+                ex      de, hl                      ; DE = dest slot
+                ld      hl, PASS_PC
+                ld      bc, 4
+                ldir
+                ld      hl, (p1ir_rec_index)
+                inc     hl
+                ld      (p1ir_rec_index), hl
                 ret
 
 
@@ -1010,6 +1064,11 @@ p1ir_scan_width:                defb    0
 p1ir_scan_expr_ptr:             defw    0
 p1ir_scan_expr_len:             defw    0
 
+; i48c-b8b RecordPC capture state. p1ir_capture_recpc gates the capture (0 in the
+; b8a standalone harness; the b8b compact walk sets it to 1 before pass1_ir_walk).
+p1ir_capture_recpc:             defb    0
+p1ir_rec_index:                 defw    0
+
 ; Directive staging — the names main_loop.asm's helpers / sizer use; the eval
 ; helpers above and pass1_dir_size read these.
 main_dir_id:                    defb    0
@@ -1020,9 +1079,12 @@ main_dir_payload_after_header:  defw    0
 p1ds_acc:                       defw    0
 
 PASS1_IR_LEN:                   defw    0
-; IR record buffer. Sized to fill the &8000 page up to just below the &C100
-; pass-1 scratch region (the tables the reused leaves use start at &C100), so a
-; comment-heavy fixture whose serialised IR overflows this is skipped host-side
-; rather than corrupting the tables.
-PASS1_IR_BUF:                   defs    11264       ; 11 KB IR record buffer
+; IR record buffer. Sized so that, in the b8b compact harness (which `include`s
+; this file and appends the compact-core code after this buffer), the buffer end
+; plus the compact code stays below the &C160 SYMTAB the reused leaves populate —
+; otherwise pass1 writing symbols would overwrite the compact code (the i48c-b8b
+; SYMTAB-vs-code collision). A comment-heavy fixture whose serialised IR overflows
+; this is skipped host-side (mirrored as pass1IRBufSize in the Go harness) rather
+; than corrupting the tables. The corpus + hand fixtures fit comfortably.
+PASS1_IR_BUF:                   defs    10752       ; IR record buffer (see above)
 
