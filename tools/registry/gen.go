@@ -63,16 +63,28 @@ func renderItemStatus(it Item) string {
 	}
 }
 
-// renderItemRefs renders the refs list plus any depends_on edges.
-// Gated items show their depends_on edges in the refs/links cell
-// (spec §"Generator": "A gated item renders OPEN with its depends_on edges
-// shown in the refs/links cell").
+// renderItemDeps renders the depends_on edges — the gating item/question ids
+// that make up the dependency DAG. It is its own first-class column so the DAG
+// is readable from the generated view, not buried among cross-links. Empty when
+// the item is not gated on anything.
+func renderItemDeps(it Item) string {
+	return strings.Join(it.DependsOn, ", ")
+}
+
+// renderItemRefs renders the cross-links / pointers (file paths, §sections, URLs,
+// related ids). It EXCLUDES any ref id that is also a depends_on target — those
+// belong to the deps column, so an id is never shown twice.
 func renderItemRefs(it Item) string {
-	parts := make([]string, 0, len(it.Refs)+len(it.DependsOn))
-	for _, dep := range it.DependsOn {
-		parts = append(parts, fmt.Sprintf("gated-on:%s", dep))
+	dep := make(map[string]bool, len(it.DependsOn))
+	for _, d := range it.DependsOn {
+		dep[d] = true
 	}
-	parts = append(parts, it.Refs...)
+	parts := make([]string, 0, len(it.Refs))
+	for _, r := range it.Refs {
+		if !dep[r] {
+			parts = append(parts, r)
+		}
+	}
 	return strings.Join(parts, ", ")
 }
 
@@ -140,7 +152,7 @@ func renderItemCell(it Item) string {
 func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	items := sortedItems(reg.Items)
 
-	header := "| **id** | item | status | refs/links |\n|---|---|---|---|\n"
+	header := "| **id** | item | status | deps | refs/links |\n|---|---|---|---|---|\n"
 
 	// Open items (OPEN or IN_PROGRESS).
 	fmt.Fprint(openW, generatedBannerItems)
@@ -148,10 +160,11 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	fmt.Fprint(openW, header)
 	for _, it := range items {
 		if isOpen(it.Status) {
-			fmt.Fprintf(openW, "| **%s** | %s | %s | %s |\n",
+			fmt.Fprintf(openW, "| **%s** | %s | %s | %s | %s |\n",
 				escapeCell(it.ID),
 				renderItemCell(it),
 				escapeCell(renderItemStatus(it)),
+				escapeCell(renderItemDeps(it)),
 				escapeCell(renderItemRefs(it)),
 			)
 		}
@@ -163,10 +176,11 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	fmt.Fprint(closedW, header)
 	for _, it := range items {
 		if !isOpen(it.Status) {
-			fmt.Fprintf(closedW, "| **%s** | %s | %s | %s |\n",
+			fmt.Fprintf(closedW, "| **%s** | %s | %s | %s | %s |\n",
 				escapeCell(it.ID),
 				renderItemCell(it),
 				escapeCell(renderItemStatus(it)),
+				escapeCell(renderItemDeps(it)),
 				escapeCell(renderItemRefs(it)),
 			)
 		}

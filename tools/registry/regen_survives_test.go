@@ -97,8 +97,9 @@ func TestLoadGenLoadFixedPoint(t *testing.T) {
 }
 
 // TestDependsOnRoundTrip verifies that depends_on edges survive load->gen->load:
-// items with depends_on in the testdata fixture have those edges after load,
-// and the gated-on: prefix appears in the generated refs/links column.
+// items with depends_on in the testdata fixture have those edges after load, and
+// each gating id appears in the generated `deps` column (its own first-class
+// column, not folded into refs/links).
 func TestDependsOnRoundTrip(t *testing.T) {
 	reg := loadTestFixture(t)
 
@@ -114,23 +115,24 @@ func TestDependsOnRoundTrip(t *testing.T) {
 		t.Fatal("testdata has no item with depends_on — fixture needs updating")
 	}
 
-	// Generate and check that the gated-on: prefix appears in the open table.
+	// The deps column must carry every gating id.
+	depsCell := renderItemDeps(*gatedItem)
+	for _, dep := range gatedItem.DependsOn {
+		if !contains(depsCell, dep) {
+			t.Errorf("depends_on %s missing from %s deps cell %q", dep, gatedItem.ID, depsCell)
+		}
+	}
+
+	// And the generated table must contain the gating ids (in the deps column).
 	var open, closed bytes.Buffer
 	if err := genItemsOpenClosed(reg, &open, &closed); err != nil {
 		t.Fatalf("gen: %v", err)
 	}
-
 	combined := open.String() + closed.String()
-	found := false
 	for _, dep := range gatedItem.DependsOn {
-		needle := "gated-on:" + dep
-		if contains(combined, needle) {
-			found = true
-			break
+		if !contains(combined, dep) {
+			t.Errorf("depends_on %s of %s not visible in generated output", dep, gatedItem.ID)
 		}
-	}
-	if !found {
-		t.Errorf("depends_on edges of %s not visible as gated-on: in generated output", gatedItem.ID)
 	}
 }
 
