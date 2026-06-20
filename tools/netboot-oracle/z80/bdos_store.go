@@ -46,6 +46,7 @@ const (
 	bdHookHRECORD  = 0x9C // record select (156)
 	bdHookHGTHD    = 129  // get file header (lookup by name) — server-side, not modelled here
 	bdHookHSAVE    = 132  // save whole file
+	bdHookHWSAD    = 149  // write raw 512-byte sector at (D=track, E=sector) from HL (bdos15a.src.txt:528-531)
 	bdHookHRSAD    = 160  // read raw 512-byte sector at (D=track, E=sector) into HL
 	bdHookListRead = 161  // card-absolute list-sector read: E=listSector (1-based), HL=dest (512 bytes)
 
@@ -238,12 +239,21 @@ type BDOSSave struct {
 	Size   uint32          // pages*16384 + (lengthMod16K & 0x3FFF)
 }
 
+// SectorWrite is one captured HWSAD write: the 512 bytes written to a specific
+// (record, linearSec) coordinate.
+type SectorWrite struct {
+	Record    int                // HRECORD-selected record at write time; -1 if none
+	LinearSec int                // linear sector index (track*10 + (sector-1))
+	Data      [bdSectorSize]byte // the 512 bytes written
+}
+
 // BDOSStore models the B-DOS record store for the netboot write-out. Construct
 // with NewBDOSStore and attach with Machine.AttachBDOS.
 type BDOSStore struct {
-	selected int        // last HRECORD selection; -1 = none selected yet
-	saves    []BDOSSave // captured HSAVEs, in order
-	card     *CardModel // nil = no card modelled; HRSAD returns all-zero
+	selected     int           // last HRECORD selection; -1 = none selected yet
+	saves        []BDOSSave    // captured HSAVEs, in order
+	sectorWrites []SectorWrite // captured HWSAD writes, in order
+	card         *CardModel    // nil = no card modelled; HRSAD returns all-zero
 }
 
 // NewBDOSStore returns a store with no record selected and no saves recorded.
@@ -254,6 +264,11 @@ func (s *BDOSStore) Selected() int { return s.selected }
 
 // Saves returns the captured HSAVE operations, in order.
 func (s *BDOSStore) Saves() []BDOSSave { return s.saves }
+
+// SectorWrites returns the captured HWSAD sector-write operations, in order.
+// Each entry carries the record that was selected when the write ran, the
+// linear sector index (track*10 + (sector-1)), and the 512 bytes written.
+func (s *BDOSStore) SectorWrites() []SectorWrite { return s.sectorWrites }
 
 // AttachCard sets the card model the store uses for HRSAD reads. A nil card
 // means HRSAD returns all-zero (no card present). Call before running Z80 code.
@@ -289,6 +304,25 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		// Server-side lookup-by-name; the client write-out never issues it, so it
 		// is not modelled (a no-op return). Add a DIFA deposit here if a server
 		// write-out test ever needs it.
+	case bdHookHWSAD:
+		// HWSAD: write 512 bytes from the buffer at HL to (D=track, E=sector).
+		// Register contract mirrors HRSAD (bdos15a.src.txt:528-537, shared rwsad
+		// entry): D=track, E=sector, HL=source memory address. Linear sector index
+		// = track*10 + (sector-1), matching the SAMDOS conv.de formula.
+		track := int(cpu.DE.Hi)
+		sector := int(cpu.DE.Lo)
+		src := cpu.HL.U16()
+		linearSec := track*bdSectorsPerTrack + (sector - 1)
+		var data [bdSectorSize]byte
+		for i := range data {
+			data[i] = mac.m.ram[src+uint16(i)]
+		}
+		sw := SectorWrite{Record: s.selected, LinearSec: linearSec, Data: data}
+		s.sectorWrites = append(s.sectorWrites, sw)
+		// Also write into the CardModel so a subsequent HRSAD reads the data back.
+		if s.card != nil {
+			s.card.SetSector(s.selected, linearSec, data)
+		}
 	case bdHookHRSAD:
 		// HRSAD: read 512 bytes at (D=track, E=sector) into the buffer at HL.
 		// Linear sector index = track*10 + (sector-1), matching the SAMDOS conv.de

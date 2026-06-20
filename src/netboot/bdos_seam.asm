@@ -276,6 +276,63 @@ bir_name:
 
 bdos_id_str:    defm "BDOS"
 
+; ---------------------------------------------------------------------------
+; bdos_validate_disk_record — validate a staged image as a raw Trinity SAM
+; disk record (i114c storage-class DiskRecord).
+;
+; Both conditions must hold (design §6.5, decision 5):
+;   1. BD_REC_SIZE == 819200 (80 tracks × 10 sectors × 2 sides × 512 bytes)
+;   2. BD_READ_BUF+232 == "BDOS" (the stamp bdos_inspect_record also checks)
+;
+; Pre: the caller has loaded the image's first sector into BD_READ_BUF (e.g.
+;      via bdos_read_sector(track=0,sector=1)) and stored the total image byte
+;      length (32-bit LE) in BD_REC_SIZE.
+; Out: BD_REC_VALID  1 byte   1 if both conditions hold, else 0
+; Clobbers: A, BC, DE, HL.
+;
+; This is the Z80 port of the Go authority bdos.ValidateDiskRecord
+; (tools/netboot-oracle/bdos/storage.go). Host-verifiable: pure memory reads,
+; no RST 8.
+;
+; 819200 = 0x000C8000 (80 tracks × 10 sectors × 2 sides × 512 = 819200).
+; Split as 32-bit LE: low word = 0x8000, high word = 0x000C.
+; ---------------------------------------------------------------------------
+bdos_validate_disk_record:
+                ; --- size check: BD_REC_SIZE == 819200 (0x000C8000) ---
+                ; Compare low 16 bits first (LE layout in BD_REC_SIZE).
+                ld      hl, (BD_REC_SIZE)
+                ld      de, &8000                ; low word of 819200
+                or      a                        ; clear carry
+                sbc     hl, de
+                jr      nz, bvdr_fail            ; low word mismatch
+                ld      hl, (BD_REC_SIZE + 2)
+                ld      de, &000C                ; high word of 819200
+                or      a
+                sbc     hl, de
+                jr      nz, bvdr_fail            ; high word mismatch
+
+                ; --- stamp check: BD_READ_BUF+232 == "BDOS" ---
+                ; Same 4-byte compare pattern as bdos_inspect_record (bir_stamp).
+                ld      hl, BD_READ_BUF + 232
+                ld      de, bdos_id_str
+                ld      b, 4
+bvdr_stamp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, bvdr_fail
+                inc     hl
+                inc     de
+                djnz    bvdr_stamp
+
+                ld      a, 1                     ; both checks passed
+                ld      (BD_REC_VALID), a
+                ret
+
+bvdr_fail:
+                xor     a
+                ld      (BD_REC_VALID), a
+                ret
+
 ; ===========================================================================
 ; The real B-DOS hook dispatch — NOT host-verifiable (no ROM / SAMDOS bank in
 ; the harness). Excluded from the host build (NETBOOT_HOSTTEST). Stays
@@ -291,6 +348,7 @@ BD_HOOK_HRECORD:  equ &9C                ; B-DOS record select (156)
 BD_HOOK_HGTHD:    equ 129                ; get file header (find by name)
 BD_HOOK_HSAVE:    equ 132                ; save whole file
 BD_HOOK_HRSAD:    equ 160                ; read raw 512-byte sector (HRSAD)
+BD_HOOK_HWSAD:    equ 149                ; write raw 512-byte sector (HWSAD)
 BD_HOOK_LISTREAD: equ 161                ; card-absolute list-sector read: E=listSec, HL=dest
 
 ; bdos_select_record — HRECORD: select the mass-storage record (0 = floppy).
@@ -515,6 +573,106 @@ bffr_next:
 bffr_done:
                 ret
 
+; ---------------------------------------------------------------------------
+; bdos_write_sector — write 512 bytes from BD_WRITE_BUF to the selected record
+; at (track, sector) using HWSAD (hook 149, bdos15a.src.txt:528-531).
+;
+; HWSAD register contract (bdos15a.src.txt:535-537, shared rwsad entry point):
+;   A  = drive number (same as HRSAD; bdos_seam uses 0 = selected record)
+;   D  = track  (0-79)
+;   E  = sector (1-10)
+;   HL = source memory address (the 512 bytes to write)
+; The RST 8 / DEFB BD_HOOK_HWSAD entry point is HWSAD (bdos15a.src.txt:530),
+; which LD HL,wr.buff then falls into rwsad; the caller's HL is the real source
+; (hk.hl), loaded at rwsad+2. This is the write sibling of HRSAD (hook 160).
+;
+; In:  BD_WRITE_TRACK   1 byte   track (0-79)
+;      BD_WRITE_SECTOR  1 byte   sector (1-10)
+;      BD_WRITE_BUF   512 bytes  the sector data to write
+; Clobbers: A, DE, HL.
+;
+; Hardware-gated (bdos15a.src.txt:557-602): the hook routes through the B-DOS
+; sector cache and the Trinity SD driver. The harness intercepts RST 8 and
+; writes BD_WRITE_BUF into the CardModel (bdos_store.go bdHookHWSAD case).
+bdos_write_sector:
+                ld      a, (BD_WRITE_TRACK)
+                ld      d, a
+                ld      a, (BD_WRITE_SECTOR)
+                ld      e, a
+                ld      hl, BD_WRITE_BUF
+                rst     8
+                defb    BD_HOOK_HWSAD
+                ret
+
+; ---------------------------------------------------------------------------
+; bdos_write_record — write N contiguous 512-byte sectors from BD_WRITE_BUF
+; into the currently-HRECORD-selected record, starting at the linear sector
+; BD_WRITE_START and continuing for BD_WRITE_COUNT sectors.
+;
+; In:  BD_WRITE_BUF    512 bytes  the source data for each sector in turn
+;      BD_WRITE_START  2 bytes    starting linear sector (0-based: track*10+(sector-1))
+;      BD_WRITE_COUNT  2 bytes    number of sectors to write
+;
+; The linear sector is decoded the same way the harness bdHookHWSAD handler
+; and bdHookHRSAD handler do (bdos_store.go: linearSec = track*bdSectorsPerTrack
+; + (sector-1), with bdSectorsPerTrack = 10):
+;   track  = linearSec / 10    (integer divide)
+;   sector = linearSec mod 10 + 1    (1-based)
+;
+; Clobbers: A, BC, DE, HL.
+;
+; The caller is responsible for pointing BD_WRITE_BUF at successive 512-byte
+; source windows. This routine advances BD_WRITE_TRACK / BD_WRITE_SECTOR after
+; each sector, carrying across track boundaries.
+bdos_write_record:
+                ld      hl, (BD_WRITE_START)    ; HL = current linear sector
+                ld      bc, (BD_WRITE_COUNT)    ; BC = sectors remaining
+
+bwr_loop:
+                ; exit when BC == 0
+                ld      a, b
+                or      c
+                ret     z
+
+                ; decode linear sector HL into track/sector:
+                ;   track = HL / 10, sector = (HL mod 10) + 1
+                ; divide HL by 10: use 16-bit div-by-10 via repeated subtract.
+                ; For record-sized writes (1600 sectors max), a simple div loop
+                ; is fast enough (correctness first).
+                push    bc                      ; save sector count
+                push    hl                      ; save linear sector
+
+                ; compute track = HL / 10
+                ld      de, 10
+                ld      bc, 0
+bwr_div:
+                or      a                       ; clear carry
+                sbc     hl, de                  ; HL -= 10
+                jr      c, bwr_divdone
+                inc     bc                      ; BC = quotient (track)
+                jr      bwr_div
+bwr_divdone:
+                add     hl, de                  ; restore remainder (HL = mod)
+                ; HL = remainder (0..9), BC = quotient (track)
+                ld      a, c                    ; A = track (BC < 256 for any record)
+                ld      (BD_WRITE_TRACK), a
+                ld      a, l                    ; A = remainder = sector - 1
+                inc     a                       ; sector (1-based)
+                ld      (BD_WRITE_SECTOR), a
+
+                pop     hl                      ; restore linear sector
+                pop     bc                      ; restore sector count
+
+                push    hl
+                push    bc
+                call    bdos_write_sector
+                pop     bc
+                pop     hl
+
+                inc     hl                      ; advance to next linear sector
+                dec     bc                      ; one fewer sector to write
+                jr      bwr_loop
+
                 endif
 
 ; ===========================================================================
@@ -543,3 +701,14 @@ BD_RECORDS:       defs 2                 ; bdos_find_free_record: total record c
 BD_FREE_RECORD:   defs 2                 ; bdos_find_free_record: first free record (1-based), or 0
 BD_ENTRY_REC:     defs 2                 ; bdos_record_entry: input record number (1-based, LE)
 BD_ENTRY_BUF:     defs 16               ; bdos_record_entry: the 16-byte list entry
+
+; --- i114c storage-class validation and raw-record write (B1-B3) ---------------
+BD_REC_SIZE:      defs 4                 ; bdos_validate_disk_record: total image byte length (32-bit LE)
+BD_REC_VALID:     defs 1                 ; bdos_validate_disk_record: 1 = valid DiskRecord, else 0
+
+BD_WRITE_TRACK:   defs 1                 ; bdos_write_sector: track to write (0-79)
+BD_WRITE_SECTOR:  defs 1                 ; bdos_write_sector: sector to write (1-10)
+BD_WRITE_BUF:     defs 512              ; bdos_write_sector: source data (512 bytes)
+
+BD_WRITE_START:   defs 2                 ; bdos_write_record: starting linear sector (0-based)
+BD_WRITE_COUNT:   defs 2                 ; bdos_write_record: number of sectors to write
