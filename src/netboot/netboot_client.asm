@@ -726,9 +726,22 @@ cl_fetch_loop:
                 or      a
                 jr      z, cl_fetch_loop
 
-                ; --- write the staged image to Trinity storage (B-DOS) ---
-                ; select the mass-storage record (0 = the Trinity flat store).
+                ; --- pick a Trinity record (show-name + confirm), then write ---
+                ; The Trinity SD is a SHARED user resource: the picker shows the
+                ; chosen record's name (or "free / unnamed") and requires the user
+                ; to confirm BEFORE any write. No confirm => no write (i119e).
+                ; BD_RECORDS (card record count) comes from the SD CSD capacity
+                ; read, which is hardware-gated (no emulator for ports &DC-&DF,
+                ; design §8); on real hardware set BD_RECORDS from the CSD before
+                ; here, the emulation E2E injects it. Until the CSD brick lands,
+                ; BD_RECORDS=0 => no free record => safe decline (no write).
                 xor     a
+                ld      (BD_PICK_MODE), a          ; mode 0 = auto-pick-free
+                call    bdos_pick_record
+                ld      a, (BD_PICK_CONFIRMED)
+                or      a
+                jp      z, cl_write_declined        ; not confirmed => abort the write
+                ld      a, (BD_PICK_RECORD)         ; low byte = record n (>=1)
                 call    bdos_select_record
                 ; build the HSAVE UIFA: name, source page/offset = STAGING, size.
                 ld      hl, RRQ_FILENAME
@@ -746,6 +759,12 @@ cl_fetch_loop:
 
                 ; success: green border, halt (the image is on Trinity storage).
                 ld      a, 4
+                out     (&fe), a
+                di
+                halt
+
+cl_write_declined:
+                ld      a, 5                        ; cyan border: write declined, no record claimed
                 out     (&fe), a
                 di
                 halt

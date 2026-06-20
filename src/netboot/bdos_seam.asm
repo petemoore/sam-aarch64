@@ -103,25 +103,30 @@ BD_SPACE:         equ &20                ; ' ' (the name/ext padding byte)
 ; In:  BD_NAME_PTR  2 bytes  pointer to the NUL-terminated filename
 ; Out: the 48-byte UIFA name block at BD_UIFA (type + name + ext + 0xFF filler);
 ;      ready for HGTHD / HSAVE (which read IX -> BD_UIFA on real hardware).
+;
+; The on-card SAM name is the fetched filename with any dotted suffix dropped,
+; truncated to 10 chars (recovery.mgt -> recovery).
 ; ---------------------------------------------------------------------------
 bdos_name_to_uifa:
                 ; type = CODE
                 ld      a, BD_TYPE_CODE
                 ld      (BD_UIFA + BD_OFF_TYPE), a
 
-                ; name field: copy up to 10 chars, then space-pad the rest.
+                ; name field: copy up to 10 chars, stopping at NUL or '.', then pad.
                 ld      hl, (BD_NAME_PTR)      ; source filename
                 ld      de, BD_UIFA + BD_OFF_NAME
                 ld      b, BD_NAME_LEN
 bnu_name:
                 ld      a, (hl)
                 or      a
-                jr      z, bnu_pad             ; hit the NUL: pad the remainder
+                jr      z, bnu_pad             ; NUL: pad the remainder
+                cp      "."                    ; extension separator
+                jr      z, bnu_pad             ; drop the dotted suffix; pad the rest
                 ld      (de), a
                 inc     hl
                 inc     de
                 djnz    bnu_name
-                jr      bnu_ext                ; exactly 10 (or more) chars: no pad
+                jr      bnu_ext                ; 10 chars consumed without NUL/'.': stop
 bnu_pad:
                 ld      a, BD_SPACE
 bnu_pad_loop:
