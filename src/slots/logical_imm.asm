@@ -203,162 +203,143 @@ encode_logical_imm_size_done:
                 ld      (encode_logical_imm_size), a
 
 ; -- Extract element (low `size` bits of u) -----------------------------
+; Element = u with all bits above `size` cleared.  This is parameterized
+; by size rather than unrolled per case:
+;   nbytes  = max(size/8, 1)   bytes of u kept whole (32->4 16->2 8/4/2->1)
+;   byte0  &= (size<8) ? (1<<size)-1 : 0xFF   mask the partial low byte
+;   bytes [nbytes..7] := 0     clear the rest
                 ld      hl, encode_logical_imm_u
                 ld      de, encode_logical_imm_element
                 ld      bc, 8
                 ldir
                 ld      a, (encode_logical_imm_size)
                 cp      64
-                jr      z, encode_logical_imm_elem_done
-                cp      32
-                jr      nz, encode_logical_imm_elem_not32
-                xor     a
-                ld      (encode_logical_imm_element+4), a
-                ld      (encode_logical_imm_element+5), a
-                ld      (encode_logical_imm_element+6), a
-                ld      (encode_logical_imm_element+7), a
-                jr      encode_logical_imm_elem_done
-encode_logical_imm_elem_not32:
-                cp      16
-                jr      nz, encode_logical_imm_elem_not16
-                xor     a
-                ld      hl, encode_logical_imm_element+2
-                ld      b, 6
-encode_logical_imm_elem16_clear:
-                ld      (hl), a
-                inc     hl
-                djnz    encode_logical_imm_elem16_clear
-                jr      encode_logical_imm_elem_done
-encode_logical_imm_elem_not16:
+                jr      z, encode_logical_imm_elem_done    ; size 64: keep all 8
+
+; B := nbytes (bytes to keep), and mask the partial low byte for size 2/4.
                 cp      8
-                jr      nz, encode_logical_imm_elem_not8
-                xor     a
-                ld      hl, encode_logical_imm_element+1
-                ld      b, 7
-encode_logical_imm_elem8_clear:
-                ld      (hl), a
-                inc     hl
-                djnz    encode_logical_imm_elem8_clear
-                jr      encode_logical_imm_elem_done
-encode_logical_imm_elem_not8:
-                cp      4
-                jr      nz, encode_logical_imm_elem_not4
+                jr      c, encode_logical_imm_elem_sub8    ; size 2 or 4
+
+; size 8/16/32: nbytes = size/8, low byte already whole.
+                rrca
+                rrca
+                rrca                                       ; A = size/8
+                ld      b, a
+                jr      encode_logical_imm_elem_clear
+
+encode_logical_imm_elem_sub8:
+; size 2 or 4: nbytes = 1, mask byte0 to (1<<size)-1.
+; Build (1<<size)-1: start at 1, double `size` times, subtract 1.
+                ld      c, a                               ; C = size (2 or 4)
+                ld      a, 1
+encode_logical_imm_elem_sub8_shift:
+                add     a, a
+                dec     c
+                jr      nz, encode_logical_imm_elem_sub8_shift
+                dec     a                                  ; A = (1<<size)-1
+                ld      b, a
                 ld      a, (encode_logical_imm_element)
-                and     &0f
+                and     b
                 ld      (encode_logical_imm_element), a
+                ld      b, 1                               ; nbytes = 1
+
+encode_logical_imm_elem_clear:
+; Clear bytes [nbytes..7].  B = nbytes (1..4); clear (8 - nbytes) bytes.
+                ld      a, 8
+                sub     b
+                ret     z                                  ; nothing to clear (unreachable, size<64)
+                ld      c, a                               ; C = count to clear
+                ld      hl, encode_logical_imm_element
+                ld      e, b
+                ld      d, 0
+                add     hl, de                             ; HL = element + nbytes
                 xor     a
-                ld      hl, encode_logical_imm_element+1
-                ld      b, 7
-encode_logical_imm_elem4_clear:
+encode_logical_imm_elem_clear_loop:
                 ld      (hl), a
                 inc     hl
-                djnz    encode_logical_imm_elem4_clear
-                jr      encode_logical_imm_elem_done
-encode_logical_imm_elem_not4:
-                ld      a, (encode_logical_imm_element)
-                and     &03
-                ld      (encode_logical_imm_element), a
-                xor     a
-                ld      hl, encode_logical_imm_element+1
-                ld      b, 7
-encode_logical_imm_elem2_clear:
-                ld      (hl), a
-                inc     hl
-                djnz    encode_logical_imm_elem2_clear
+                dec     c
+                jr      nz, encode_logical_imm_elem_clear_loop
 encode_logical_imm_elem_done:
 
 ; -- Step 4: replication recheck (size < 64) ----------------------------
+; Tile the size-clamped element periodically across all 8 bytes of
+; u_check, then compare against u_orig (defence-in-depth, mirrored from
+; the Go side).  This is parameterized by the element period rather than
+; unrolled per size:
+;   size 8/16/32: tile element[0..nbytes-1] with period nbytes = size/8.
+;   size 4/2:     intra-byte tile — compute the repeated byte, then tile
+;                 a 1-byte source (period 1).
+; The element buffer itself is never modified (popcount/rotation below
+; still read it); sub-byte sizes build the tiled byte in a scratch byte.
                 ld      a, (encode_logical_imm_size)
                 cp      64
                 jp      z, encode_logical_imm_replicate_ok
 
-                cp      32
-                jr      nz, encode_logical_imm_repl_not32
-                ld      hl, encode_logical_imm_element
-                ld      de, encode_logical_imm_u_check
-                ld      bc, 4
-                ldir
-                ld      hl, encode_logical_imm_element
-                ld      de, encode_logical_imm_u_check+4
-                ld      bc, 4
-                ldir
-                jp      encode_logical_imm_replicate_check
-encode_logical_imm_repl_not32:
-                cp      16
-                jr      nz, encode_logical_imm_repl_not16
-                ld      hl, encode_logical_imm_element
-                ld      de, encode_logical_imm_u_check
-                ld      bc, 2
-                ldir
-                ld      hl, encode_logical_imm_element
-                ld      de, encode_logical_imm_u_check+2
-                ld      bc, 2
-                ldir
-                ld      hl, encode_logical_imm_element
-                ld      de, encode_logical_imm_u_check+4
-                ld      bc, 2
-                ldir
-                ld      hl, encode_logical_imm_element
-                ld      de, encode_logical_imm_u_check+6
-                ld      bc, 2
-                ldir
-                jp      encode_logical_imm_replicate_check
-encode_logical_imm_repl_not16:
                 cp      8
-                jr      nz, encode_logical_imm_repl_not8
-                ld      a, (encode_logical_imm_element)
-                ld      (encode_logical_imm_u_check+0), a
-                ld      (encode_logical_imm_u_check+1), a
-                ld      (encode_logical_imm_u_check+2), a
-                ld      (encode_logical_imm_u_check+3), a
-                ld      (encode_logical_imm_u_check+4), a
-                ld      (encode_logical_imm_u_check+5), a
-                ld      (encode_logical_imm_u_check+6), a
-                ld      (encode_logical_imm_u_check+7), a
-                jp      encode_logical_imm_replicate_check
-encode_logical_imm_repl_not8:
+                jr      c, encode_logical_imm_repl_subbyte
+
+; size 8/16/32: nbytes = size/8; tile element with that period.
+                rrca
+                rrca
+                rrca                            ; A = nbytes (1/2/4)
+                ld      c, a                    ; C = period
+                ld      de, encode_logical_imm_element
+                jr      encode_logical_imm_repl_tile
+
+encode_logical_imm_repl_subbyte:
                 cp      4
-                jr      nz, encode_logical_imm_repl_not4
-; tile 4-bit element to 8 bytes: byte = (e<<4)|e.
+                jr      nz, encode_logical_imm_repl_sub2
+; size 4: byte = (e<<4)|e.
                 ld      a, (encode_logical_imm_element)
                 and     &0f
-                ld      c, a
+                ld      b, a
                 rlca
                 rlca
                 rlca
                 rlca
-                or      c
-                ld      (encode_logical_imm_u_check+0), a
-                ld      (encode_logical_imm_u_check+1), a
-                ld      (encode_logical_imm_u_check+2), a
-                ld      (encode_logical_imm_u_check+3), a
-                ld      (encode_logical_imm_u_check+4), a
-                ld      (encode_logical_imm_u_check+5), a
-                ld      (encode_logical_imm_u_check+6), a
-                ld      (encode_logical_imm_u_check+7), a
-                jp      encode_logical_imm_replicate_check
-encode_logical_imm_repl_not4:
-; size==2: byte = e | (e<<2) | (e<<4) | (e<<6)
+                or      b
+                jr      encode_logical_imm_repl_sub_store
+encode_logical_imm_repl_sub2:
+; size 2: byte = e | (e<<2) | (e<<4) | (e<<6).
                 ld      a, (encode_logical_imm_element)
                 and     &03
-                ld      d, a               ; D = e
-                sla     a
-                sla     a                  ; A = e<<2
-                or      d                  ; A = e | (e<<2) (4 bits)
-                ld      d, a
+                ld      b, a
                 sla     a
                 sla     a
+                or      b                       ; e | (e<<2)
+                ld      b, a
                 sla     a
-                sla     a                  ; A = (e | (e<<2)) << 4
-                or      d                  ; A = e | (e<<2) | (e<<4) | (e<<6)
-                ld      (encode_logical_imm_u_check+0), a
-                ld      (encode_logical_imm_u_check+1), a
-                ld      (encode_logical_imm_u_check+2), a
-                ld      (encode_logical_imm_u_check+3), a
-                ld      (encode_logical_imm_u_check+4), a
-                ld      (encode_logical_imm_u_check+5), a
-                ld      (encode_logical_imm_u_check+6), a
-                ld      (encode_logical_imm_u_check+7), a
+                sla     a
+                sla     a
+                sla     a
+                or      b                       ; e | (e<<2) | (e<<4) | (e<<6)
+encode_logical_imm_repl_sub_store:
+                ld      (encode_logical_imm_tile_byte), a
+                ld      c, 1                    ; period 1
+                ld      de, encode_logical_imm_tile_byte
+
+encode_logical_imm_repl_tile:
+; Fill u_check[0..7] from the C-byte source at DE, repeating it.
+; C ∈ {1,2,4} divides 8.  DE walks the source and resets to the start
+; (saved in repl_src) each time a period of C bytes is emitted.
+;   HL = dest, A = total bytes remaining, B = bytes left in this period.
+                ld      (encode_logical_imm_repl_src), de
+                ld      hl, encode_logical_imm_u_check
+                ld      a, 8                    ; total bytes to fill
+encode_logical_imm_repl_tile_period:
+                ld      b, c                    ; B = period length
+encode_logical_imm_repl_tile_run:
+                ex      af, af'                 ; stash total count
+                ld      a, (de)
+                ld      (hl), a
+                ex      af, af'                 ; restore total count
+                inc     hl
+                inc     de
+                dec     a                       ; total remaining
+                jr      z, encode_logical_imm_replicate_check
+                djnz    encode_logical_imm_repl_tile_run
+                ld      de, (encode_logical_imm_repl_src)   ; restart source
+                jr      encode_logical_imm_repl_tile_period
 
 encode_logical_imm_replicate_check:
                 ld      hl, encode_logical_imm_u_check
@@ -663,6 +644,10 @@ encode_logical_imm_immr:
                 defb    0
 encode_logical_imm_imms:
                 defb    0
+encode_logical_imm_tile_byte:
+                defb    0
+encode_logical_imm_repl_src:
+                defw    0
 
 encode_logical_imm_u:
                 defb    0, 0, 0, 0, 0, 0, 0, 0
