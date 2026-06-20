@@ -377,48 +377,19 @@ func indexBytes(s, sep []byte) int {
 	return -1
 }
 
-// runNextID implements `next-id [--space items|questions]`.
-// Prints the next free id, consulting both the live source ids and the
-// append-only .id-ledger.txt so that a previously-deleted id is never re-minted
-// (spec invariant 1).
-func runNextID(args []string, paths mutatorPaths) {
-	fs := flag.NewFlagSet("next-id", flag.ExitOnError)
-	space := fs.String("space", "items", "id-space: items | questions")
-	fs.Parse(args) //nolint:errcheck // ExitOnError handles
-
-	reg, err := loadReg(paths)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	ledger, err := loadLedger(ledgerPath(paths.registryDir))
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-
-	switch *space {
-	case "items":
-		fmt.Println(nextItemID(reg, ledger))
-	case "questions":
-		fmt.Println(nextQuestionID(reg, ledger))
-	default:
-		fmt.Fprintf(os.Stderr, "registry next-id: unknown space %q (must be items|questions)\n", *space)
-		os.Exit(2)
-	}
-}
-
-// runAdd implements `add --id … --title … --desc … --status … --owner … [--kind …] [--pr N [--role …]] [--parent …] [--dep …]… [--ref …]…`.
-// Appends a canonical record (item or question by id shape), re-canonicalizes,
-// validates, and runs gen.
+// runAdd implements `add [--space items|questions] --owner … (items: --title --status [--desc] [--kind] [--pr N [--role …]] [--dep …]… [--ref …]…) (questions: --desc)`.
+// The id is ALWAYS tool-determined (next free top-level iN / qN) — never supplied
+// by the caller (spec: ids are tool-determined, never hand-picked, so there is no
+// next-id→add race and no wrong/duplicate id). SUB-items (children of an umbrella)
+// are created with `split`, which determines the child id from the parent. There
+// is therefore no `--id` and no `--parent` on add.
 func runAdd(args []string, paths mutatorPaths) {
 	fs := flag.NewFlagSet("add", flag.ExitOnError)
-	id := fs.String("id", "", "id of the new record (item: iN[…]; question: qN[letter])")
+	space := fs.String("space", "items", "id-space: items | questions")
 	title := fs.String("title", "", "title (≤120 chars, single line; items only)")
 	desc := fs.String("desc", "", "description (items) or body (questions)")
 	status := fs.String("status", "", "status: OPEN|IN_PROGRESS|DONE|WONTFIX (items only)")
 	owner := fs.String("owner", "", "owner: agent|pete|name")
-	parent := fs.String("parent", "", "umbrella parent id (items only, optional)")
 	kind := fs.String("kind", "leaf", "item kind: leaf|umbrella (items only)")
 	prNum := fs.Int("pr", 0, "completing PR number to attach (items only; required for a DONE leaf)")
 	prRole := fs.String("role", "completing", "role for --pr: completing|followup")
@@ -427,8 +398,8 @@ func runAdd(args []string, paths mutatorPaths) {
 	fs.Var(&refs, "ref", "ref entry (repeatable; items only)")
 	fs.Parse(args) //nolint:errcheck // ExitOnError handles
 
-	if *id == "" {
-		fmt.Fprintln(os.Stderr, "registry add: --id is required")
+	if *space != "items" && *space != "questions" {
+		fmt.Fprintf(os.Stderr, "registry add: unknown --space %q (must be items|questions)\n", *space)
 		os.Exit(2)
 	}
 	if *owner == "" {
@@ -441,21 +412,27 @@ func runAdd(args []string, paths mutatorPaths) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	ledger, err := loadLedger(ledgerPath(paths.registryDir))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 
-	if questionIDRe.MatchString(*id) {
-		// Question record.
+	var newID string
+	if *space == "questions" {
+		// Question record — id auto-allocated (next free qN).
 		if *desc == "" {
 			fmt.Fprintln(os.Stderr, "registry add: --desc (question body) is required")
 			os.Exit(2)
 		}
-		q := Question{
-			ID:    *id,
+		newID = nextQuestionID(reg, ledger)
+		reg.Questions = append(reg.Questions, Question{
+			ID:    newID,
 			Body:  *desc,
 			Owner: *owner,
-		}
-		reg.Questions = append(reg.Questions, q)
-	} else if itemIDRe.MatchString(*id) {
-		// Item record.
+		})
+	} else {
+		// Top-level item record — id auto-allocated (next free iN).
 		if *title == "" {
 			fmt.Fprintln(os.Stderr, "registry add: --title is required for item records")
 			os.Exit(2)
@@ -464,15 +441,15 @@ func runAdd(args []string, paths mutatorPaths) {
 			fmt.Fprintln(os.Stderr, "registry add: --status is required for item records")
 			os.Exit(2)
 		}
+		newID = nextItemID(reg, ledger)
 		it := Item{
-			ID:          *id,
+			ID:          newID,
 			Title:       *title,
 			Description: *desc,
 			Status:      Status(*status),
 			DependsOn:   []string(deps),
 			Kind:        *kind,
 			Owner:       *owner,
-			Parent:      *parent,
 			Refs:        []string(refs),
 		}
 		if *prNum > 0 {
@@ -485,39 +462,52 @@ func runAdd(args []string, paths mutatorPaths) {
 			it.Refs = []string{}
 		}
 		reg.Items = append(reg.Items, it)
-	} else {
-		fmt.Fprintf(os.Stderr, "registry add: --id %q does not match item (i…) or question (q…) grammar\n", *id)
-		os.Exit(2)
 	}
 
 	// Record in the ledger before validate+gen so the id is persisted even if
 	// we exit non-zero on validation (the id was minted; it must never be reused).
-	if err := appendToLedger(ledgerPath(paths.registryDir), *id); err != nil {
+	if err := appendToLedger(ledgerPath(paths.registryDir), newID); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
 	applyAndCommit(reg, paths)
-	fmt.Printf("registry: added %s\n", *id)
+	fmt.Printf("registry: added %s\n", newID)
 }
 
-// runSplit implements `split --parent iN --child-id iN-bM --title …`.
-// Sets the parent kind:umbrella, adds a leaf child, and rewrites dependents:
-// any item with depends_on:[parentID] has parentID replaced by all children
-// (conservative reading — spec §"Dependencies": "Split-rewrites-dependents").
+// runSplit implements `split --parent iN --title … [--desc …] [--status …] [--owner …] [--kind …] [--pr N [--role …]] [--dep …]… [--ref …]…`.
+// Promotes the parent to kind:umbrella, adds a leaf child whose id is
+// TOOL-DETERMINED from the parent (nextSubID — the caller never supplies it),
+// and rewrites dependents: any item with depends_on:[parentID] has parentID
+// replaced by all children (conservative reading — spec §"Dependencies":
+// "Split-rewrites-dependents"). This is the only way to create a sub-item; it
+// subsumes "add another child to an existing umbrella" (call it again).
 func runSplit(args []string, paths mutatorPaths) {
 	fs := flag.NewFlagSet("split", flag.ExitOnError)
-	parentID := fs.String("parent", "", "existing item to promote to umbrella")
-	childID := fs.String("child-id", "", "new child item id")
+	parentID := fs.String("parent", "", "existing item to promote to umbrella (its id determines the child id)")
 	childTitle := fs.String("title", "", "title for the new child item")
+	desc := fs.String("desc", "", "description for the new child item")
+	status := fs.String("status", "OPEN", "child status: OPEN|IN_PROGRESS|DONE|WONTFIX")
+	owner := fs.String("owner", "", "child owner (default: the parent's owner)")
+	kind := fs.String("kind", "leaf", "child kind: leaf|umbrella")
+	prNum := fs.Int("pr", 0, "completing PR number to attach to the child")
+	prRole := fs.String("role", "completing", "role for --pr: completing|followup")
+	var deps, refs multiFlag
+	fs.Var(&deps, "dep", "depends_on edge for the child (repeatable)")
+	fs.Var(&refs, "ref", "ref entry for the child (repeatable)")
 	fs.Parse(args) //nolint:errcheck // ExitOnError handles
 
-	if *parentID == "" || *childID == "" || *childTitle == "" {
-		fmt.Fprintln(os.Stderr, "registry split: --parent, --child-id, and --title are all required")
+	if *parentID == "" || *childTitle == "" {
+		fmt.Fprintln(os.Stderr, "registry split: --parent and --title are required")
 		os.Exit(2)
 	}
 
 	reg, err := loadReg(paths)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	ledger, err := loadLedger(ledgerPath(paths.registryDir))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -539,6 +529,13 @@ func runSplit(args []string, paths mutatorPaths) {
 	// Umbrellas carry no completing PRs (spec §"One-PR / umbrella semantics").
 	reg.Items[parentIdx].PRs = nil
 
+	// Determine the child id from the parent's id shape (never caller-supplied).
+	childID, err := nextSubID(*parentID, mintedIDs(reg, ledger))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "registry split: %v\n", err)
+		os.Exit(1)
+	}
+
 	// Collect existing children of this parent (already-existing leaves before this split).
 	existingChildren := []string{}
 	for _, it := range reg.Items {
@@ -547,30 +544,47 @@ func runSplit(args []string, paths mutatorPaths) {
 		}
 	}
 
-	// Add the new child leaf.
+	childOwner := *owner
+	if childOwner == "" {
+		childOwner = reg.Items[parentIdx].Owner
+	}
+
+	// Add the new child.
 	child := Item{
-		ID:     *childID,
-		Title:  *childTitle,
-		Status: StatusOpen,
-		Kind:   "leaf",
-		Owner:  reg.Items[parentIdx].Owner,
-		Parent: *parentID,
+		ID:          childID,
+		Title:       *childTitle,
+		Description: *desc,
+		Status:      Status(*status),
+		DependsOn:   []string(deps),
+		Kind:        *kind,
+		Owner:       childOwner,
+		Parent:      *parentID,
+		Refs:        []string(refs),
+	}
+	if *prNum > 0 {
+		child.PRs = append(child.PRs, PRRef{Num: *prNum, Role: PRRole(*prRole)})
+	}
+	if child.DependsOn == nil {
+		child.DependsOn = []string{}
+	}
+	if child.Refs == nil {
+		child.Refs = []string{}
 	}
 	reg.Items = append(reg.Items, child)
 
 	// Record the new child id in the ledger.
-	if err := appendToLedger(ledgerPath(paths.registryDir), *childID); err != nil {
+	if err := appendToLedger(ledgerPath(paths.registryDir), childID); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 
 	// All children of this parent after the split (existing + new).
-	allChildren := append(existingChildren, *childID)
+	allChildren := append(existingChildren, childID)
 
 	// Rewrite dependents: any item with depends_on containing parentID gets
 	// parentID replaced by all allChildren (conservative reading).
 	for i := range reg.Items {
-		if reg.Items[i].ID == *parentID || reg.Items[i].ID == *childID {
+		if reg.Items[i].ID == *parentID || reg.Items[i].ID == childID {
 			continue
 		}
 		newDeps := []string{}
@@ -590,7 +604,7 @@ func runSplit(args []string, paths mutatorPaths) {
 
 	applyAndCommit(reg, paths)
 	fmt.Printf("registry: split %s → umbrella; added child %s; rewrote dependents onto %v\n",
-		*parentID, *childID, allChildren)
+		*parentID, childID, allChildren)
 }
 
 // runSetStatus implements `set-status --id iN --status … [--pr N]`.

@@ -92,6 +92,47 @@ func loadRegFromPaths(t *testing.T, paths mutatorPaths) *Registry {
 	return reg
 }
 
+// expectedNextItemID returns the id that runAdd would auto-allocate for an item
+// against the current on-disk fixture (registry + ledger), so a test can assert
+// on the new id without hardcoding it.
+func expectedNextItemID(t *testing.T, paths mutatorPaths) string {
+	t.Helper()
+	reg := loadRegFromPaths(t, paths)
+	ledger, err := loadLedger(ledgerPath(paths.registryDir))
+	if err != nil {
+		t.Fatalf("loadLedger: %v", err)
+	}
+	return nextItemID(reg, ledger)
+}
+
+// expectedNextQuestionID returns the id that runAdd --space questions would
+// auto-allocate against the current on-disk fixture.
+func expectedNextQuestionID(t *testing.T, paths mutatorPaths) string {
+	t.Helper()
+	reg := loadRegFromPaths(t, paths)
+	ledger, err := loadLedger(ledgerPath(paths.registryDir))
+	if err != nil {
+		t.Fatalf("loadLedger: %v", err)
+	}
+	return nextQuestionID(reg, ledger)
+}
+
+// expectedNextSubID returns the child id that runSplit would auto-determine for
+// the given parent against the current on-disk fixture (registry + ledger).
+func expectedNextSubID(t *testing.T, paths mutatorPaths, parentID string) string {
+	t.Helper()
+	reg := loadRegFromPaths(t, paths)
+	ledger, err := loadLedger(ledgerPath(paths.registryDir))
+	if err != nil {
+		t.Fatalf("loadLedger: %v", err)
+	}
+	id, err := nextSubID(parentID, mintedIDs(reg, ledger))
+	if err != nil {
+		t.Fatalf("nextSubID(%q): %v", parentID, err)
+	}
+	return id
+}
+
 // assertValidFromPaths checks that the YAML on disk is valid.
 func assertValidFromPaths(t *testing.T, paths mutatorPaths) {
 	t.Helper()
@@ -102,9 +143,13 @@ func assertValidFromPaths(t *testing.T, paths mutatorPaths) {
 	}
 }
 
-// --- next-id ---
+// --- id allocators (nextItemID / nextQuestionID) ---
+//
+// These are the functions add/split use to auto-allocate ids. They are still
+// part of the public surface (add no longer takes --id; it calls these), so they
+// remain unit-tested here even though `next-id` is no longer a CLI command.
 
-// TestNextID_Items asserts next-id returns the next free item id not present in
+// TestNextID_Items asserts nextItemID returns the next free item id not present in
 // the source or the ledger.
 func TestNextID_Items(t *testing.T) {
 	paths := setupMutatorFixture(t)
@@ -149,15 +194,18 @@ func TestNextID_Questions(t *testing.T) {
 
 // --- add ---
 
-// TestAdd_Item checks that add appends a valid item, the source validates, and
-// gen would still produce consistent output.
+// TestAdd_Item checks that add appends a valid item with an auto-allocated id
+// (the testdata fixture has top-level i1..i5 so the next id is i6), the source
+// validates, and gen would still produce consistent output. The id is no longer
+// caller-supplied (--id was removed).
 func TestAdd_Item(t *testing.T) {
 	paths := setupMutatorFixture(t)
 
-	// Capture stdout during applyAndCommit (gen prints there).
-	// We invoke runAdd indirectly via the mutatorPaths interface.
+	// Expected auto-allocated id: nextItemID over the fixture (top-level max is
+	// i5) → i6.
+	wantID := expectedNextItemID(t, paths)
+
 	runAdd([]string{
-		"--id", "i6",
 		"--title", "New test item",
 		"--desc", "A freshly added item for test coverage.",
 		"--status", "OPEN",
@@ -167,28 +215,31 @@ func TestAdd_Item(t *testing.T) {
 	// Validate that the source on disk is still valid.
 	assertValidFromPaths(t, paths)
 
-	// Confirm i6 is present in the written items.yaml.
+	// Confirm the auto-allocated id is present in the written items.yaml.
 	reg := loadRegFromPaths(t, paths)
 	found := false
 	for _, it := range reg.Items {
-		if it.ID == "i6" {
+		if it.ID == wantID {
 			found = true
 			if it.Title != "New test item" {
-				t.Errorf("i6.Title: got %q, want %q", it.Title, "New test item")
+				t.Errorf("%s.Title: got %q, want %q", wantID, it.Title, "New test item")
 			}
 		}
 	}
 	if !found {
-		t.Error("i6 not found in items after add")
+		t.Errorf("%s not found in items after add", wantID)
 	}
 }
 
-// TestAdd_Question checks that add appends a question record.
+// TestAdd_Question checks that add --space questions appends a question record
+// with an auto-allocated q-id (the fixture has q1 so the next id is q2).
 func TestAdd_Question(t *testing.T) {
 	paths := setupMutatorFixture(t)
 
+	wantID := expectedNextQuestionID(t, paths)
+
 	runAdd([]string{
-		"--id", "q2",
+		"--space", "questions",
 		"--desc", "Should we use approach A or B?",
 		"--owner", "pete",
 	}, paths)
@@ -198,15 +249,15 @@ func TestAdd_Question(t *testing.T) {
 	reg := loadRegFromPaths(t, paths)
 	found := false
 	for _, q := range reg.Questions {
-		if q.ID == "q2" {
+		if q.ID == wantID {
 			found = true
 			if q.Owner != "pete" {
-				t.Errorf("q2.Owner: got %q, want %q", q.Owner, "pete")
+				t.Errorf("%s.Owner: got %q, want %q", wantID, q.Owner, "pete")
 			}
 		}
 	}
 	if !found {
-		t.Error("q2 not found in questions after add")
+		t.Errorf("%s not found in questions after add", wantID)
 	}
 }
 
@@ -214,8 +265,9 @@ func TestAdd_Question(t *testing.T) {
 func TestAdd_LedgerUpdated(t *testing.T) {
 	paths := setupMutatorFixture(t)
 
+	wantID := expectedNextItemID(t, paths)
+
 	runAdd([]string{
-		"--id", "i6",
 		"--title", "Ledger test",
 		"--desc", "Checking ledger write.",
 		"--status", "OPEN",
@@ -226,8 +278,8 @@ func TestAdd_LedgerUpdated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadLedger: %v", err)
 	}
-	if !ledger["i6"] {
-		t.Error("i6 not found in ledger after add")
+	if !ledger[wantID] {
+		t.Errorf("%s not found in ledger after add", wantID)
 	}
 }
 
@@ -243,9 +295,10 @@ func TestAdd_LedgerUpdated(t *testing.T) {
 func TestSplit_SetsUmbrellaAddsChildRewiresDependents(t *testing.T) {
 	paths := setupMutatorFixture(t)
 
-	// Add i6 that depends on i2 (the item we will split).
+	// Add a dependent that depends on i2 (the item we will split). Its id is
+	// auto-allocated (i6 in the fixture).
+	depID := expectedNextItemID(t, paths)
 	runAdd([]string{
-		"--id", "i6",
 		"--title", "Item depending on i2",
 		"--desc", "Will be rewritten when i2 splits.",
 		"--status", "OPEN",
@@ -253,11 +306,14 @@ func TestSplit_SetsUmbrellaAddsChildRewiresDependents(t *testing.T) {
 		"--dep", "i2",
 	}, paths)
 
-	// Split i2 into an umbrella with child i2a.
+	// The child id is auto-determined from the parent: i2 has no children yet, so
+	// nextSubID("i2") → i2a.
+	childID := expectedNextSubID(t, paths, "i2")
+
+	// Split i2 into an umbrella with the auto-determined child.
 	// i2 is OPEN (no completing PR), so promoting it to umbrella is valid.
 	runSplit([]string{
 		"--parent", "i2",
-		"--child-id", "i2a",
 		"--title", "First sub-item of i2",
 	}, paths)
 
@@ -279,49 +335,49 @@ func TestSplit_SetsUmbrellaAddsChildRewiresDependents(t *testing.T) {
 		t.Errorf("i2.Kind after split: got %q, want %q", i2.Kind, "umbrella")
 	}
 
-	// i2a should exist as a leaf child of i2.
+	// The child should exist as a leaf child of i2.
 	var child *Item
 	for i := range reg.Items {
-		if reg.Items[i].ID == "i2a" {
+		if reg.Items[i].ID == childID {
 			child = &reg.Items[i]
 		}
 	}
 	if child == nil {
-		t.Fatal("i2a not found after split")
+		t.Fatalf("%s not found after split", childID)
 	}
 	if child.Parent != "i2" {
-		t.Errorf("i2a.Parent: got %q, want %q", child.Parent, "i2")
+		t.Errorf("%s.Parent: got %q, want %q", childID, child.Parent, "i2")
 	}
 	if child.Kind != "leaf" {
-		t.Errorf("i2a.Kind: got %q, want %q", child.Kind, "leaf")
+		t.Errorf("%s.Kind: got %q, want %q", childID, child.Kind, "leaf")
 	}
 
-	// i6 previously had depends_on:[i2]; after split it should contain i2a
-	// (the only new child of i2), not i2 itself.
-	var i6 *Item
+	// The dependent previously had depends_on:[i2]; after split it should contain
+	// the new child, not i2 itself.
+	var dep *Item
 	for i := range reg.Items {
-		if reg.Items[i].ID == "i6" {
-			i6 = &reg.Items[i]
+		if reg.Items[i].ID == depID {
+			dep = &reg.Items[i]
 		}
 	}
-	if i6 == nil {
-		t.Fatal("i6 not found after split")
+	if dep == nil {
+		t.Fatalf("%s not found after split", depID)
 	}
 	foundChild := false
 	foundParent := false
-	for _, dep := range i6.DependsOn {
-		if dep == "i2a" {
+	for _, d := range dep.DependsOn {
+		if d == childID {
 			foundChild = true
 		}
-		if dep == "i2" {
+		if d == "i2" {
 			foundParent = true
 		}
 	}
 	if !foundChild {
-		t.Errorf("i6.DependsOn after split: expected i2a; got %v", i6.DependsOn)
+		t.Errorf("%s.DependsOn after split: expected %s; got %v", depID, childID, dep.DependsOn)
 	}
 	if foundParent {
-		t.Errorf("i6.DependsOn after split: still contains i2 (should be replaced by children); got %v", i6.DependsOn)
+		t.Errorf("%s.DependsOn after split: still contains i2 (should be replaced by children); got %v", depID, dep.DependsOn)
 	}
 }
 
@@ -440,38 +496,38 @@ func TestSetPR_Followup(t *testing.T) {
 func TestDepAdd_ValidEdge(t *testing.T) {
 	paths := setupMutatorFixture(t)
 
-	// i10 does not exist in testdata; add a new item without deps, then add one.
+	// Add a new item without deps (id auto-allocated), then add an edge to it.
+	newID := expectedNextItemID(t, paths)
 	runAdd([]string{
-		"--id", "i6",
 		"--title", "Item for dep-add test",
 		"--desc", "Test item.",
 		"--status", "OPEN",
 		"--owner", "agent",
 	}, paths)
 
-	// Add a dep edge from i6 → i5 (i5 is DONE, so the edge is satisfied and valid).
-	runDep([]string{"add", "--id", "i6", "--on", "i5"}, paths)
+	// Add a dep edge from the new item → i5 (i5 is DONE, so the edge is satisfied and valid).
+	runDep([]string{"add", "--id", newID, "--on", "i5"}, paths)
 
 	assertValidFromPaths(t, paths)
 
 	reg := loadRegFromPaths(t, paths)
-	var i6 *Item
+	var newIt *Item
 	for i := range reg.Items {
-		if reg.Items[i].ID == "i6" {
-			i6 = &reg.Items[i]
+		if reg.Items[i].ID == newID {
+			newIt = &reg.Items[i]
 		}
 	}
-	if i6 == nil {
-		t.Fatal("i6 not found")
+	if newIt == nil {
+		t.Fatalf("%s not found", newID)
 	}
 	found := false
-	for _, dep := range i6.DependsOn {
+	for _, dep := range newIt.DependsOn {
 		if dep == "i5" {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("i6.DependsOn: expected i5; got %v", i6.DependsOn)
+		t.Errorf("%s.DependsOn: expected i5; got %v", newID, newIt.DependsOn)
 	}
 }
 
@@ -566,10 +622,9 @@ func TestAnswer_DeletesQuestion(t *testing.T) {
 	// i2 in testdata has: depends_on:[q1], refs:[q1].
 	// Curation: remove the depends_on edge (the delete-gate check) and also
 	// remove the ref so invariant 10 passes after q1 is gone.
-	// We add a fresh item i6 that has no dependency on q1 to ensure the
-	// registry still has a valid record after removal.
+	// We add a fresh item (id auto-allocated) that has no dependency on q1 to
+	// ensure the registry still has a valid record after removal.
 	runAdd([]string{
-		"--id", "i6",
 		"--title", "Replacement for q1-gated work",
 		"--desc", "Added once the q1 decision is known.",
 		"--status", "OPEN",
@@ -678,8 +733,9 @@ func TestAnswer_FailsWhenDependentExists_ViaValidation(t *testing.T) {
 func TestAdd_DonePR_OneCommand(t *testing.T) {
 	paths := setupMutatorFixture(t)
 
+	wantID := expectedNextItemID(t, paths)
+
 	runAdd([]string{
-		"--id", "i6",
 		"--title", "Done in one command",
 		"--desc", "A completed leaf migrated with its PR.",
 		"--status", "DONE",
@@ -691,17 +747,17 @@ func TestAdd_DonePR_OneCommand(t *testing.T) {
 
 	reg := loadRegFromPaths(t, paths)
 	for _, it := range reg.Items {
-		if it.ID == "i6" {
+		if it.ID == wantID {
 			if it.Status != StatusDone {
-				t.Errorf("i6.Status: got %q, want DONE", it.Status)
+				t.Errorf("%s.Status: got %q, want DONE", wantID, it.Status)
 			}
 			if len(it.PRs) != 1 || it.PRs[0].Num != 73 || it.PRs[0].Role != RoleCompleting {
-				t.Errorf("i6.PRs: got %+v, want one completing PR #73", it.PRs)
+				t.Errorf("%s.PRs: got %+v, want one completing PR #73", wantID, it.PRs)
 			}
 			return
 		}
 	}
-	t.Error("i6 not found after add")
+	t.Errorf("%s not found after add", wantID)
 }
 
 // TestAdd_KindUmbrella confirms `add --kind umbrella` creates an umbrella record
@@ -709,8 +765,9 @@ func TestAdd_DonePR_OneCommand(t *testing.T) {
 func TestAdd_KindUmbrella(t *testing.T) {
 	paths := setupMutatorFixture(t)
 
+	wantID := expectedNextItemID(t, paths)
+
 	runAdd([]string{
-		"--id", "i6",
 		"--title", "Umbrella item",
 		"--desc", "Groups its leaf children.",
 		"--status", "OPEN",
@@ -722,14 +779,14 @@ func TestAdd_KindUmbrella(t *testing.T) {
 
 	reg := loadRegFromPaths(t, paths)
 	for _, it := range reg.Items {
-		if it.ID == "i6" {
+		if it.ID == wantID {
 			if !it.isUmbrella() {
-				t.Errorf("i6.Kind: got %q, want umbrella", it.Kind)
+				t.Errorf("%s.Kind: got %q, want umbrella", wantID, it.Kind)
 			}
 			return
 		}
 	}
-	t.Error("i6 not found after add")
+	t.Errorf("%s not found after add", wantID)
 }
 
 // --- priority auto-maintenance ---
@@ -793,8 +850,8 @@ func TestPriorityAutoMaintain_Add(t *testing.T) {
 	// Testdata pullable set: {i1b, i2}. Start queue with the full pullable set.
 	paths := setupMutatorFixtureWithPriority(t, []string{"i1b", "i2"})
 
+	newID := expectedNextItemID(t, paths)
 	runAdd([]string{
-		"--id", "i6",
 		"--title", "New item that should auto-join the queue",
 		"--desc", "Added via add; priority.yaml must update without hand-edit.",
 		"--status", "OPEN",
@@ -803,8 +860,8 @@ func TestPriorityAutoMaintain_Add(t *testing.T) {
 
 	ids := loadPriorityFromPaths(t, paths)
 
-	if !containsStr(ids, "i6") {
-		t.Errorf("priority missing new item i6 after add; got %v", ids)
+	if !containsStr(ids, newID) {
+		t.Errorf("priority missing new item %s after add; got %v", newID, ids)
 	}
 	// Existing items must still be present.
 	if !containsStr(ids, "i1b") {
@@ -819,19 +876,24 @@ func TestPriorityAutoMaintain_Add(t *testing.T) {
 // TestPriorityAutoMaintain_Split verifies that after split:
 // - the parent (now an umbrella) is removed from the queue;
 // - the new child leaf is appended to the queue.
-// Testdata: i1b and i2 are pullable. We will split i1b → umbrella with child i1c.
-// After split: i1b is no longer pullable (now an umbrella); i1c must be in the queue.
+// Testdata: i1b and i2 are pullable. We split i1b → umbrella with an
+// auto-determined child. i1b is a letter-child (iNx), so nextSubID yields a
+// numbered brick (i1b-b1). After split: i1b is no longer pullable (now an
+// umbrella); the new child must be in the queue.
 //
 // Note: i1b depends_on i1a. After promotion to umbrella, i1b itself loses leaf
-// status (becomes umbrella), so it is no longer in the pullable set. i1c (the
-// new child) is OPEN leaf → pullable and must join the queue.
+// status (becomes umbrella), so it is no longer in the pullable set. The new
+// child is an OPEN leaf → pullable and must join the queue.
 func TestPriorityAutoMaintain_Split(t *testing.T) {
 	// Testdata pullable set: {i1b, i2}. Start with the full pullable set.
 	paths := setupMutatorFixtureWithPriority(t, []string{"i1b", "i2"})
 
+	// Child id is auto-determined from the parent: i1b is a letter-child, so
+	// nextSubID("i1b") → i1b-b1.
+	childID := expectedNextSubID(t, paths, "i1b")
+
 	runSplit([]string{
 		"--parent", "i1b",
-		"--child-id", "i1c",
 		"--title", "Sub-task of what was i1b",
 	}, paths)
 
@@ -841,9 +903,9 @@ func TestPriorityAutoMaintain_Split(t *testing.T) {
 	if containsStr(ids, "i1b") {
 		t.Errorf("priority still contains i1b (now umbrella) after split; got %v", ids)
 	}
-	// i1c is the new child leaf — must be present.
-	if !containsStr(ids, "i1c") {
-		t.Errorf("priority missing new child i1c after split; got %v", ids)
+	// The new child leaf must be present.
+	if !containsStr(ids, childID) {
+		t.Errorf("priority missing new child %s after split; got %v", childID, ids)
 	}
 	// i2 must still be present.
 	if !containsStr(ids, "i2") {
@@ -854,23 +916,23 @@ func TestPriorityAutoMaintain_Split(t *testing.T) {
 
 // TestPriorityAutoMaintain_OrderPreservation verifies that reconcile preserves
 // the relative order of surviving ids while dropping the non-pullable ones.
-// Setup: three pullable items [i6, i1b, i2] in that curated order. Close i1b.
-// Expect: [i6, i2] — i6 before i2, as originally ranked.
+// Setup: three pullable items [<new>, i1b, i2] in that curated order. Close i1b.
+// Expect: [<new>, i2] — the new item before i2, as originally ranked.
 func TestPriorityAutoMaintain_OrderPreservation(t *testing.T) {
-	// Add i6 first so it exists in the registry.
+	// Add a fresh item first so it exists in the registry (id auto-allocated).
 	paths := setupMutatorFixtureWithPriority(t, []string{})
 
+	newID := expectedNextItemID(t, paths)
 	runAdd([]string{
-		"--id", "i6",
 		"--title", "Order-preservation test item",
 		"--desc", "Used to check that reconcile preserves curated order.",
 		"--status", "OPEN",
 		"--owner", "agent",
 	}, paths)
 
-	// Now set the priority to a curated order: i6, i1b, i2.
+	// Now set the priority to a curated order: <new>, i1b, i2.
 	// Write it directly then reload (simulate the user having ranked it with move).
-	if err := writePriority(paths.priorityYAML, []string{"i6", "i1b", "i2"}); err != nil {
+	if err := writePriority(paths.priorityYAML, []string{newID, "i1b", "i2"}); err != nil {
 		t.Fatalf("writePriority: %v", err)
 	}
 	// Reload so reg.Priority matches what's on disk.
@@ -880,7 +942,7 @@ func TestPriorityAutoMaintain_OrderPreservation(t *testing.T) {
 		t.Fatalf("initial priority invalid: %s", strings.Join(pve.msgs, "\n"))
 	}
 
-	// Close i1b — must be dropped from the queue. i6 and i2 must survive in order.
+	// Close i1b — must be dropped from the queue. <new> and i2 must survive in order.
 	runSetStatus([]string{"--id", "i1b", "--status", "DONE", "--pr", "779"}, paths)
 
 	ids := loadPriorityFromPaths(t, paths)
@@ -889,25 +951,25 @@ func TestPriorityAutoMaintain_OrderPreservation(t *testing.T) {
 		t.Errorf("priority still contains closed i1b; got %v", ids)
 	}
 
-	// Find positions of i6 and i2.
-	posI6, posI2 := -1, -1
+	// Find positions of the new item and i2.
+	posNew, posI2 := -1, -1
 	for i, id := range ids {
 		switch id {
-		case "i6":
-			posI6 = i
+		case newID:
+			posNew = i
 		case "i2":
 			posI2 = i
 		}
 	}
-	if posI6 == -1 {
-		t.Errorf("i6 missing from priority after close of i1b; got %v", ids)
+	if posNew == -1 {
+		t.Errorf("%s missing from priority after close of i1b; got %v", newID, ids)
 	}
 	if posI2 == -1 {
 		t.Errorf("i2 missing from priority after close of i1b; got %v", ids)
 	}
-	if posI6 != -1 && posI2 != -1 && posI6 > posI2 {
-		t.Errorf("curated order violated: i6 (pos %d) should be before i2 (pos %d); got %v",
-			posI6, posI2, ids)
+	if posNew != -1 && posI2 != -1 && posNew > posI2 {
+		t.Errorf("curated order violated: %s (pos %d) should be before i2 (pos %d); got %v",
+			newID, posNew, posI2, ids)
 	}
 	assertPriorityValid(t, paths)
 }

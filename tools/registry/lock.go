@@ -9,8 +9,8 @@ import (
 )
 
 // mutatingCommands are the subcommands that rewrite registry SOURCE files and so
-// must run under the registry lock. Read-only queries (validate/gen/ready/view/
-// dependents/dag/next-id) are absent. `gen` writes only the derived docs/notes
+// must run under the registry lock. Read-only queries (validate/gen/ready/
+// in-progress/view/dependents/dag) are absent. `gen` writes only the derived docs/notes
 // views (regenerable, drift caught by registry-sync-check), not source, so it is
 // deliberately not locked.
 var mutatingCommands = map[string]bool{

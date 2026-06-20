@@ -99,6 +99,8 @@ func main() {
 		runGen(args[1:], paths)
 	case "ready":
 		runReady(args[1:], paths)
+	case "in-progress":
+		runInProgress(args[1:], paths)
 	case "view":
 		runView(args[1:], paths)
 	case "dependents":
@@ -109,8 +111,6 @@ func main() {
 		runPrioritize(args[1:], paths)
 	case "move":
 		runMove(args[1:], paths)
-	case "next-id":
-		runNextID(args[1:], paths)
 	case "add":
 		runAdd(args[1:], paths)
 	case "split":
@@ -134,16 +134,16 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] validate <items.yaml> [questions.yaml]")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] gen      <items.yaml> <questions.yaml>")
-	fmt.Fprintln(os.Stderr, "  registry ready")
+	fmt.Fprintln(os.Stderr, "  registry ready                  (unblocked, not-yet-started pullable items, in priority order)")
+	fmt.Fprintln(os.Stderr, "  registry in-progress            (items currently IN_PROGRESS — the session completeness ledger)")
 	fmt.Fprintln(os.Stderr, "  registry view       --id iN|qN [--format text|json]")
 	fmt.Fprintln(os.Stderr, "  registry dependents --id iN")
 	fmt.Fprintln(os.Stderr, "  registry dag")
 	fmt.Fprintln(os.Stderr, "  registry prioritize --id iN --to-top")
 	fmt.Fprintln(os.Stderr, "  registry move       --id iN --before iM")
 	fmt.Fprintln(os.Stderr, "  registry move       --id iN --after  iM")
-	fmt.Fprintln(os.Stderr, "  registry [--migrating] next-id  [--space items|questions]")
-	fmt.Fprintln(os.Stderr, "  registry [--migrating] add      --id … --title … --desc … --status … --owner … [--parent …] [--dep …]… [--ref …]…")
-	fmt.Fprintln(os.Stderr, "  registry [--migrating] split    --parent iN --child-id iN-bM --title …")
+	fmt.Fprintln(os.Stderr, "  registry [--migrating] add      [--space items|questions] --owner … (items: --title --status [--desc] [--kind] [--pr N] [--dep …]… [--ref …]…) (questions: --desc)   (id is auto-allocated)")
+	fmt.Fprintln(os.Stderr, "  registry [--migrating] split    --parent iN --title … [--desc …] [--status …] [--owner …] [--kind …] [--pr N] [--dep …]… [--ref …]…   (child id auto-determined)")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] set-status --id iN --status … [--pr N]")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] set-pr   --id iN --pr N [--role completing|followup]")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] dep      add|rm --id iN --on iM|qN")

@@ -250,9 +250,102 @@ const generatedBannerBacklog = `<!--
 -->
 `
 
+// computeGates returns, per item id, the backlog "gate" cell — who is holding
+// the item, computed from status + the dependency DAG:
+//
+//	ready           all deps satisfied + not started → an agent can pull it now
+//	🛠 in-progress  status IN_PROGRESS → already being worked (a live thread)
+//	🔒 q31[, q24]   transitively rooted in an open question → BLOCKED ON PETE;
+//	                the listed qN(s) are exactly the answers that unblock it
+//	⏳ i122b        blocked only on other open WORK (no question at the root) →
+//	                unblocks itself as the queue drains
+//
+// "ready" and the 🔒 state are mutually exclusive: a ready item has all direct
+// deps satisfied (DONE/WONTFIX), and a DONE item cannot depend on an open
+// question, so a ready item never transitively reaches one.
+func computeGates(reg *Registry) map[string]string {
+	itemStatus := map[string]Status{}
+	for _, it := range reg.Items {
+		itemStatus[it.ID] = it.Status
+	}
+	questionIDs := map[string]bool{}
+	for _, q := range reg.Questions {
+		questionIDs[q.ID] = true
+	}
+
+	// depSatisfied mirrors runReady: an open question is unsatisfied; a DONE or
+	// WONTFIX item is satisfied; a missing target is treated as satisfied (stale
+	// edge); any other (open/in-progress) item is unsatisfied.
+	depSatisfied := func(dep string) bool {
+		if questionIDs[dep] {
+			return false
+		}
+		st, ok := itemStatus[dep]
+		if !ok {
+			return true
+		}
+		return st == StatusDone || st == StatusWontfix
+	}
+
+	// rootQuestions[item] = the set of open questions this item is transitively
+	// rooted in (reverse reachability over depends_on, starting from each open
+	// question and walking to its dependents).
+	rev := buildReverseEdges(reg.Items)
+	rootQuestions := map[string]map[string]bool{}
+	for _, q := range reg.Questions {
+		var queue []string
+		queue = append(queue, rev[q.ID]...)
+		visited := map[string]bool{}
+		for len(queue) > 0 {
+			x := queue[0]
+			queue = queue[1:]
+			if visited[x] {
+				continue
+			}
+			visited[x] = true
+			if rootQuestions[x] == nil {
+				rootQuestions[x] = map[string]bool{}
+			}
+			rootQuestions[x][q.ID] = true
+			queue = append(queue, rev[x]...)
+		}
+	}
+
+	gates := map[string]string{}
+	for _, it := range reg.Items {
+		if it.Status == StatusInProgress {
+			gates[it.ID] = "🛠 in-progress"
+			continue
+		}
+		var unsat []string
+		for _, dep := range it.DependsOn {
+			if !depSatisfied(dep) {
+				unsat = append(unsat, dep)
+			}
+		}
+		if len(unsat) == 0 {
+			gates[it.ID] = "ready"
+			continue
+		}
+		if qs := rootQuestions[it.ID]; len(qs) > 0 {
+			keys := make([]string, 0, len(qs))
+			for q := range qs {
+				keys = append(keys, q)
+			}
+			sortStrings(keys)
+			gates[it.ID] = "🔒 " + strings.Join(keys, ", ")
+			continue
+		}
+		gates[it.ID] = "⏳ " + strings.Join(unsat, ", ")
+	}
+	return gates
+}
+
 // genBacklog writes the priority-ordered backlog view to w. The table lists all
-// pullable items in priority order with a 1-based rank column. When priority is
-// empty the table is written with zero data rows (header only).
+// pullable items in priority order. The "gate" column shows who is holding each
+// item (see computeGates). There is no rank column — the row order IS the
+// priority, and a stable id key keeps diffs small when items move. When priority
+// is empty the table is written with zero data rows (header only).
 func genBacklog(reg *Registry, priority []string, w io.Writer) error {
 	// Build a map from item id to item for fast lookup.
 	byID := map[string]Item{}
@@ -261,23 +354,24 @@ func genBacklog(reg *Registry, priority []string, w io.Writer) error {
 	}
 
 	reverseEdges := buildReverseEdges(reg.Items)
+	gates := computeGates(reg)
 
-	header := "| rank | **id** | item | status | deps | dependents |\n|---|---|---|---|---|---|\n"
+	header := "| **id** | item | status | gate | deps | dependents |\n|---|---|---|---|---|---|\n"
 
 	fmt.Fprint(w, generatedBannerBacklog)
 	fmt.Fprint(w, "\n")
 	fmt.Fprint(w, header)
-	for rank, id := range priority {
+	for _, id := range priority {
 		it, ok := byID[id]
 		if !ok {
 			// Omit unknown ids from the view (validate would have caught them).
 			continue
 		}
-		fmt.Fprintf(w, "| %d | **%s** | %s | %s | %s | %s |\n",
-			rank+1,
+		fmt.Fprintf(w, "| **%s** | %s | %s | %s | %s | %s |\n",
 			escapeCell(it.ID),
 			renderItemCell(it),
 			escapeCell(renderItemStatus(it)),
+			escapeCell(gates[it.ID]),
 			escapeCell(renderItemDeps(it)),
 			escapeCell(renderItemDependents(it, reverseEdges)),
 		)
