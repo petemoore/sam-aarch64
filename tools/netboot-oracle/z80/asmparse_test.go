@@ -3665,3 +3665,70 @@ func TestParseMovlError(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// B5c — barriers dsb/dmb/isb (parse_barrier). The barrier-arg keyword maps to a
+// CRm value emitted as a single imm-expr operand, mirroring parseBarrier
+// (parser.go:704-732). dsb/dmb require the arg; isb defaults to sy (CRm=0xf).
+// ---------------------------------------------------------------------------
+
+// TestParseBarrierHandCases pins the INST record for dsb/dmb/isb: one operand =
+// immExprOperand(CRm). Covers all twelve barrier keywords and the isb no-arg
+// default. (barrierCRm, parser.go:670-698.)
+func TestParseBarrierHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+
+	rec := func(mn string, crm int64) []parseRec {
+		return []parseRec{{mnemonicID: mustMnemID(t, mn), count: 1, ops: immExprOperand(crm)}}
+	}
+
+	cases := []struct {
+		desc string
+		src  string
+		want []parseRec
+	}{
+		{"dsb sy", "dsb sy\n", rec("dsb", 0xf)},
+		{"dsb st", "dsb st\n", rec("dsb", 0xe)},
+		{"dsb ld", "dsb ld\n", rec("dsb", 0xd)},
+		{"dmb ish", "dmb ish\n", rec("dmb", 0xb)},
+		{"dmb ishst", "dmb ishst\n", rec("dmb", 0xa)},
+		{"dmb ishld", "dmb ishld\n", rec("dmb", 0x9)},
+		{"dsb nsh", "dsb nsh\n", rec("dsb", 0x7)},
+		{"dmb nshst", "dmb nshst\n", rec("dmb", 0x6)},
+		{"dsb nshld", "dsb nshld\n", rec("dsb", 0x5)},
+		{"dmb osh", "dmb osh\n", rec("dmb", 0x3)},
+		{"dsb oshst", "dsb oshst\n", rec("dsb", 0x2)},
+		{"dmb oshld", "dmb oshld\n", rec("dmb", 0x1)},
+		{"isb sy", "isb sy\n", rec("isb", 0xf)},
+		{"isb (no arg -> sy default)", "isb\n", rec("isb", 0xf)},
+	}
+
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			got, errFlag := parseZ80(t, mac, []byte(c.src))
+			if errFlag {
+				t.Fatalf("PARSE_ERR set unexpectedly")
+			}
+			compareRecs(t, "Z80 vs hand", got, c.want)
+		})
+	}
+}
+
+// TestParseBarrierError checks dsb/dmb with a missing or unknown barrier-arg set
+// PARSE_ERR (the arg is mandatory for dsb/dmb; an unknown keyword is rejected).
+func TestParseBarrierError(t *testing.T) {
+	mac := loadAsmparse(t)
+	for _, src := range []string{
+		"dsb\n",        // mandatory arg missing
+		"dmb\n",        // mandatory arg missing
+		"dsb foo\n",    // unknown barrier keyword
+		"dmb wibble\n", // unknown barrier keyword
+	} {
+		t.Run(src, func(t *testing.T) {
+			_, errFlag := parseZ80(t, mac, []byte(src))
+			if !errFlag {
+				t.Fatalf("expected PARSE_ERR for %q", src)
+			}
+		})
+	}
+}
