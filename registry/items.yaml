@@ -799,7 +799,7 @@
   title: ldr = literal-pool pseudo (OpLitPool)
   description: |
     Parse ldr= pseudo-instruction: captures the pool-value expression into an OpLitPool operand for later literal-pool placement and PC-relative load emission.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i48c

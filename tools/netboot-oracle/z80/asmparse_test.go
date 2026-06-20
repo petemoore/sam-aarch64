@@ -3748,6 +3748,17 @@ func sysnameOperand(name string) []byte {
 	return ow.Bytes()
 }
 
+// litpoolOperand builds the OP_KIND_LIT_POOL operand bytes for `ldr <reg>, =expr`
+// via the format authority: width is 4 (W dest) or 8 (X dest), and build writes
+// the pool-value expression bytecode. (Mirrors OperandWriter.WriteLitPool.)
+func litpoolOperand(width byte, build func(*format.ExprWriter)) []byte {
+	var ew format.ExprWriter
+	build(&ew)
+	var ow format.OperandWriter
+	ow.WriteLitPool(width, ew.Bytes())
+	return ow.Bytes()
+}
+
 func TestParseMrsMsrHandCases(t *testing.T) {
 	mac := loadAsmparse(t)
 	X := format.OpRegX
@@ -3885,6 +3896,103 @@ func TestParseDcTlbiError(t *testing.T) {
 		"tlbi\n",       // missing op name
 		"dc cvac,\n",   // comma but no register
 		"tlbi vae1,\n", // comma but no register
+	} {
+		t.Run(src, func(t *testing.T) {
+			_, errFlag := parseZ80(t, mac, []byte(src))
+			if !errFlag {
+				t.Fatalf("expected PARSE_ERR for %q", src)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// B5f — ldr <Xn|Wn>, =expr literal-pool pseudo (parse_ldr). Emits [reg] +
+// OP_KIND_LIT_POOL{width, expr}; width is 8 for an X destination, 4 for W.
+// The pool-value expression is constant-folded exactly like an immediate
+// operand. Mirrors tryParseLdrLitPool (parser.go:975-1021).
+// ---------------------------------------------------------------------------
+
+func TestParseLdrLitPoolHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	W := format.OpRegW
+	reg := func(k format.OperandKind, n byte) []byte { return []byte{byte(k), n} }
+
+	cases := []struct {
+		desc string
+		src  string
+		want []parseRec
+	}{
+		{
+			"ldr x0, =0 (X dest, width 8)",
+			"ldr x0, =0\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: concat(reg(X, 0), litpoolOperand(8, func(w *format.ExprWriter) { w.WriteImm(0) }))}},
+		},
+		{
+			"ldr x1, =0x12345678 (X dest, hex constant)",
+			"ldr x1, =0x12345678\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: concat(reg(X, 1), litpoolOperand(8, func(w *format.ExprWriter) { w.WriteImm(0x12345678) }))}},
+		},
+		{
+			"ldr w2, =42 (W dest, width 4)",
+			"ldr w2, =42\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: concat(reg(W, 2), litpoolOperand(4, func(w *format.ExprWriter) { w.WriteImm(42) }))}},
+		},
+		{
+			"ldr x3, =1+2*3 (folded constant expression)",
+			"ldr x3, =1+2*3\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: concat(reg(X, 3), litpoolOperand(8, func(w *format.ExprWriter) { w.WriteImm(7) }))}},
+		},
+		{
+			"ldr x4, =msg (symbol pool value)",
+			"ldr x4, =msg\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+				ops: concat(reg(X, 4), litpoolOperand(8, func(w *format.ExprWriter) { w.WriteSym(0) }))}},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			got, errFlag := parseZ80(t, mac, []byte(c.src))
+			if errFlag {
+				t.Fatalf("PARSE_ERR set unexpectedly")
+			}
+			compareRecs(t, "Z80 vs hand", got, c.want)
+		})
+	}
+}
+
+// TestParseLdrNonLitPool checks that `ldr` forms that are NOT the `=expr`
+// literal-pool pseudo fall through to the generic operand parser: a plain
+// register-register form and a register operand are parsed normally (no
+// OP_KIND_LIT_POOL operand), mirroring tryParseLdrLitPool's (false, nil) path.
+func TestParseLdrNonLitPool(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	reg := func(k format.OperandKind, n byte) []byte { return []byte{byte(k), n} }
+
+	// `ldr x0, x1` — no `=`, so generic parse emits two plain registers.
+	got, errFlag := parseZ80(t, mac, []byte("ldr x0, x1\n"))
+	if errFlag {
+		t.Fatalf("PARSE_ERR set unexpectedly for non-litpool ldr")
+	}
+	want := []parseRec{{mnemonicID: mustMnemID(t, "ldr"), count: 2,
+		ops: concat(reg(X, 0), reg(X, 1))}}
+	compareRecs(t, "non-litpool ldr", got, want)
+}
+
+// TestParseLdrLitPoolError checks malformed `ldr <reg>, =` lines (missing pool
+// expression) set PARSE_ERR after the shape commits.
+func TestParseLdrLitPoolError(t *testing.T) {
+	mac := loadAsmparse(t)
+	for _, src := range []string{
+		"ldr x0, =\n", // `=` with no expression
+		"ldr w1, =\n", // same, W destination
 	} {
 		t.Run(src, func(t *testing.T) {
 			_, errFlag := parseZ80(t, mac, []byte(src))
