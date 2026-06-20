@@ -113,7 +113,7 @@
   refs: [docs/notes/a64-isa-footprint-research.md]
 
 - id: i12
-  title: "SimCoupé + test-harness tooling improvements"
+  title: SimCoupé + test-harness tooling improvements
   description: |
     Umbrella for SimCoupé emulator + editor-test-harness tooling improvements (version bumps, paste support, automated-editor input injection). Created 2026-06-20 (i153) so the i12a/b/c sub-items have their required umbrella parent — the children predate the parent-integrity rule.
   status: OPEN
@@ -1769,7 +1769,7 @@
   refs: [i88, i70, "docs/specs/tls13-handshake.md §Prior art"]
 
 - id: i107
-  title: "Registry status-cell discipline (process rule + retroactive sweep)"
+  title: Registry status-cell discipline (process rule + retroactive sweep)
   description: |
     Umbrella for the status-cell discipline work: the go-forward process rule (i107a) and the retroactive sweep splitting over-long rows into sub-items (i107b). Created 2026-06-20 (i153) so i107a/b have their required umbrella parent — the children predate the parent-integrity rule.
   status: DONE
@@ -2565,14 +2565,18 @@
   title: "Registry CLI/model hardening: atomic tool-determined ids + blocked-on-Pete backlog marking + parent/orphan invariants"
   description: |
     Pete-requested registry tooling (2026-06-20). (1) backlog.md: drop rank col; add 'gate' col (ready / in-progress / blocked-on-Pete qN / blocked-on-work iN). (2) Atomic tool-determined ids: 'add' auto iN (+--space); 'split' auto child-id (iN->iNa, iNx->iNx-b1)+full fields; drop next-id+custom --id. (3) Multi IN_PROGRESS allowed; 'ready' EXCLUDES IN_PROGRESS; new 'in-progress' list cmd. (4) Invariants+tests: parent exists+umbrella, sub-id needs parent, no cycles, regexp conformance, exhaustion forbid>26. (5) Orphans: i12/i107 umbrellas, i39c->i48c, i117->umbrella.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 481, role: completing}
 
 - id: i154
-  title: "Codify 'track-on-request' discipline + parallel-IN_PROGRESS session ledger"
+  title: Codify 'track-on-request' discipline + parallel-IN_PROGRESS session ledger
   description: |
     Strengthen handover rule 1 from PR-time to REQUEST-time + embrace parallel IN_PROGRESS. When work is well-defined AND signed off, the agent creates the item LOCALLY (committed; no PR dance to capture), marks it IN_PROGRESS, and confirms to Pete ("logged as iNNNN, IN_PROGRESS, working"). Many asks/session => many IN_PROGRESS — a feature: registry = session completeness ledger. Wind-down: query IN_PROGRESS; each ends DONE or splits into done/not-done (untouched -> OPEN), so real partial state is captured + no ask lost in chat noise. Lands in CLAUDE.md + ROADMAP. Earned 2026-06-20.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 481, role: completing}
