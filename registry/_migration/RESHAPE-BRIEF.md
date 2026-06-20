@@ -41,6 +41,29 @@ the registry shows at a glance exactly what is done and what is outstanding.*
    implementation sequence" in `docs/ROADMAP.md` (single source of truth). Seed the
    order from that ROADMAP sequence + the DAG; Pete curates the ranking.
 
+## Non-negotiables (Pete, 2026-06-20)
+
+- **The generated `.md` are COMMITTED and CI regenerates them: any resulting diff is
+  a CI FAILURE; no diff = pass.** So the `.md` are provably consistent with the YAML,
+  show up in git diffs, need no manual regen to inspect. This `registry-sync` gate
+  (regen + `git diff --exit-code` + strict `validate`) is CORE, not deferred.
+- **Never merge distinct fields in the views.** id, item, status, PR, deps,
+  dependents, refs are each their OWN column. refs ≠ deps ≠ dependents; status ≠ PR.
+- **The priority list is a strict permutation** — every open pullable item exactly
+  once (none missing/duplicated; no umbrellas/closed) — enforced by `validate` + CI.
+- **Land it ALL autonomously** (reshape + switchover + agent-instruction rewiring +
+  merge) — no waiting for Pete, no glance-gate. Only `registry-sync`-as-a-*required*
+  branch-protection check may need repo-admin → flag that one toggle; do everything
+  else incl. the merge.
+- **The FINAL-HANDOVER agent MUST open the generated `.md` and READ them end-to-end**
+  (every row), confirm the registry *looks reasonable* (not garbage), and verify the
+  whole works (`go test`, strict `validate`, `make check-doc-links`, `registry-sync`
+  clean). Do NOT assume the files are fine because the tool ran — Pete's explicit
+  requirement: nobody wakes up to garbage because no one looked.
+- **Priority seed:** `i119` (push Trinity disk images over the network; finally test
+  on real hardware the http/https firmware-download images that are emulation-only
+  today) is the #1 priority the moment the registry lands — seed it at the tip.
+
 ## The work — drive to completion (branch stays alive throughout)
 
 - **Phase 1 — tool.** validator: PRs are a list (num>0), no required completing PR,
