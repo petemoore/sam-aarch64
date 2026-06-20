@@ -119,12 +119,47 @@ func TestMnemonicLookupNonMnemonics(t *testing.T) {
 // B2b — register-instruction parse (parse_run / parse_inst).
 // ---------------------------------------------------------------------------
 
-// parseRec is one decoded INST record: mnemonic ID, operand count, and the raw
-// operand byte stream (format.OperandWriter form).
+// parseRec is one decoded record from parse_run's self-describing record
+// stream. The record stream now carries three kinds (each tagged by a leading
+// REC_KIND_* byte): INST (mnemonic ID + operand bytes, the B2b..B5 work),
+// COMMENT (placement + body, B7), and BLANK_RUN (a run length, B7). The fields
+// populated depend on kind; the zero-value kind is treated as INST so the
+// pre-B7 INST builders (mkRec / mkRec2 / literal constructions) need no change.
 type parseRec struct {
+	kind format.RecordKind // 0 (== KindInst) for INST builders; explicit otherwise
+
+	// INST fields.
 	mnemonicID uint16
 	count      byte
 	ops        []byte
+
+	// COMMENT fields.
+	placement byte
+	body      []byte
+
+	// BLANK_RUN field.
+	runLen uint32
+}
+
+// effKind maps a parseRec's kind to its effective record kind, treating the
+// zero value as KindInst (so INST builders can leave kind unset).
+func effKind(r parseRec) format.RecordKind {
+	if r.kind == 0 {
+		return format.KindInst
+	}
+	return r.kind
+}
+
+// mkComment builds an expected COMMENT record (placement + raw body bytes),
+// mirroring emitComment (parser.go) and the reader.go payload layout.
+func mkComment(placement byte, body string) parseRec {
+	return parseRec{kind: format.KindComment, placement: placement, body: []byte(body)}
+}
+
+// mkBlankRun builds an expected BLANK_RUN record of the given run length,
+// mirroring emitBlankRun (parser.go).
+func mkBlankRun(n uint32) parseRec {
+	return parseRec{kind: format.KindBlankRun, runLen: n}
 }
 
 // refMatchReg is a verbatim port of parser.go's matchReg (the register-name
@@ -503,16 +538,40 @@ func parseZ80(t *testing.T, mac *z80h.Machine, src []byte) (recs []parseRec, err
 	count := int(res.BC)
 	addr := symRecs
 	for i := 0; i < count; i++ {
-		hdr := mac.Read(addr, 5)
-		mnem := uint16(hdr[0]) | uint16(hdr[1])<<8
-		opc := hdr[2]
-		opslen := int(uint16(hdr[3]) | uint16(hdr[4])<<8)
-		var ops []byte
-		if opslen > 0 {
-			ops = mac.Read(addr+5, opslen)
+		// Every record is tagged by a leading REC_KIND_* byte (see
+		// parse_emit_inst / parse_emit_comment / parse_emit_blank_run). The
+		// reader dispatches on it: INST keeps its richer header (mnem id +
+		// operand count + operand bytes); COMMENT and BLANK_RUN use the
+		// format-package framing [kind:1][len:2 LE][payload] (reader.go).
+		kind := format.RecordKind(mac.Read(addr, 1)[0])
+		switch kind {
+		case format.KindComment:
+			hdr := mac.Read(addr+1, 2)
+			plen := int(uint16(hdr[0]) | uint16(hdr[1])<<8) // payload length
+			payload := mac.Read(addr+3, plen)               // [placement:1][body...]
+			rec := parseRec{kind: format.KindComment, placement: payload[0], body: payload[1:]}
+			recs = append(recs, rec)
+			addr += uint16(3 + plen)
+		case format.KindBlankRun:
+			hdr := mac.Read(addr+1, 2)
+			plen := int(uint16(hdr[0]) | uint16(hdr[1])<<8) // payload length (== 4)
+			payload := mac.Read(addr+3, plen)               // runLen:4 LE
+			runLen := uint32(payload[0]) | uint32(payload[1])<<8 |
+				uint32(payload[2])<<16 | uint32(payload[3])<<24
+			recs = append(recs, parseRec{kind: format.KindBlankRun, runLen: runLen})
+			addr += uint16(3 + plen)
+		default: // KindInst
+			hdr := mac.Read(addr+1, 5)
+			mnem := uint16(hdr[0]) | uint16(hdr[1])<<8
+			opc := hdr[2]
+			opslen := int(uint16(hdr[3]) | uint16(hdr[4])<<8)
+			var ops []byte
+			if opslen > 0 {
+				ops = mac.Read(addr+6, opslen)
+			}
+			recs = append(recs, parseRec{kind: format.KindInst, mnemonicID: mnem, count: opc, ops: ops})
+			addr += uint16(6 + opslen)
 		}
-		recs = append(recs, parseRec{mnemonicID: mnem, count: opc, ops: ops})
-		addr += uint16(5 + opslen)
 	}
 	errFlag = mac.Read(symErr, 1)[0] != 0
 	return recs, errFlag
@@ -521,7 +580,14 @@ func parseZ80(t *testing.T, mac *z80h.Machine, src []byte) (recs []parseRec, err
 func dumpRecs(recs []parseRec) string {
 	s := ""
 	for _, r := range recs {
-		s += fmt.Sprintf("[%s c=%d ops=%x] ", format.MnemonicName(r.mnemonicID), r.count, r.ops)
+		switch effKind(r) {
+		case format.KindComment:
+			s += fmt.Sprintf("[COMMENT p=%d body=%q] ", r.placement, string(r.body))
+		case format.KindBlankRun:
+			s += fmt.Sprintf("[BLANK_RUN n=%d] ", r.runLen)
+		default:
+			s += fmt.Sprintf("[%s c=%d ops=%x] ", format.MnemonicName(r.mnemonicID), r.count, r.ops)
+		}
 	}
 	return s
 }
@@ -533,17 +599,39 @@ func compareRecs(t *testing.T, label string, got, want []parseRec) {
 			label, len(got), len(want), dumpRecs(got), dumpRecs(want))
 	}
 	for i := range want {
-		if got[i].mnemonicID != want[i].mnemonicID {
-			t.Errorf("%s: rec[%d] mnemonic = %s, want %s", label, i,
-				format.MnemonicName(got[i].mnemonicID), format.MnemonicName(want[i].mnemonicID))
+		gk, wk := effKind(got[i]), effKind(want[i])
+		if gk != wk {
+			t.Errorf("%s: rec[%d] kind = %s, want %s", label, i, gk.Name(), wk.Name())
+			continue
 		}
-		if got[i].count != want[i].count {
-			t.Errorf("%s: rec[%d] (%s) operand count = %d, want %d", label, i,
-				format.MnemonicName(want[i].mnemonicID), got[i].count, want[i].count)
-		}
-		if !bytes.Equal(got[i].ops, want[i].ops) {
-			t.Errorf("%s: rec[%d] (%s) ops = %x, want %x", label, i,
-				format.MnemonicName(want[i].mnemonicID), got[i].ops, want[i].ops)
+		switch wk {
+		case format.KindComment:
+			if got[i].placement != want[i].placement {
+				t.Errorf("%s: rec[%d] COMMENT placement = %d, want %d", label, i,
+					got[i].placement, want[i].placement)
+			}
+			if !bytes.Equal(got[i].body, want[i].body) {
+				t.Errorf("%s: rec[%d] COMMENT body = %q, want %q", label, i,
+					string(got[i].body), string(want[i].body))
+			}
+		case format.KindBlankRun:
+			if got[i].runLen != want[i].runLen {
+				t.Errorf("%s: rec[%d] BLANK_RUN runLen = %d, want %d", label, i,
+					got[i].runLen, want[i].runLen)
+			}
+		default:
+			if got[i].mnemonicID != want[i].mnemonicID {
+				t.Errorf("%s: rec[%d] mnemonic = %s, want %s", label, i,
+					format.MnemonicName(got[i].mnemonicID), format.MnemonicName(want[i].mnemonicID))
+			}
+			if got[i].count != want[i].count {
+				t.Errorf("%s: rec[%d] (%s) operand count = %d, want %d", label, i,
+					format.MnemonicName(want[i].mnemonicID), got[i].count, want[i].count)
+			}
+			if !bytes.Equal(got[i].ops, want[i].ops) {
+				t.Errorf("%s: rec[%d] (%s) ops = %x, want %x", label, i,
+					format.MnemonicName(want[i].mnemonicID), got[i].ops, want[i].ops)
+			}
 		}
 	}
 }
@@ -3067,4 +3155,393 @@ func TestParseCondFuzz(t *testing.T) {
 		compareRecs(t, fmt.Sprintf("seed%d", seed), got, want)
 		t.Logf("seed=%d: %d source bytes, %d records matched", seed, len(src), len(got))
 	}
+}
+
+// ---------------------------------------------------------------------------
+// B7 — COMMENT and BLANK_RUN records (parse_run's parseLine port:
+// parse_emit_comment / parse_emit_blank_run). A faithful transcription of
+// parser.go's Parse + parseLine (parser.go:17-145): each logical line counts
+// its leading run of genuine blank lines (one BLANK_RUN record), then parses
+// the statement line, emitting a COMMENT record for each comment token with
+// placement 0 (line-leading) or 1 (after a statement on the same line). The
+// statement grammar reuses the full operand loop (mem / shift / extend / cond
+// / movk), so mixed blank/comment/instruction sequences are oracle-checked.
+// ---------------------------------------------------------------------------
+
+// refParseLineStmt parses the statement body of one line, mirroring the inner
+// part of parseLine after the blank-run count: comments emit COMMENT records
+// (placement tracked via emittedStatement), instructions emit INST records via
+// the full operand grammar (incl. the movk/movz/movn intercept). It consumes
+// up to and including the terminating tEOL (or up to tEOF). Returns the records
+// produced, the new position, and ok=false on any out-of-domain construct.
+func refParseLineStmt(toks []refTok, pos int, st *format.SymbolTable) (recs []parseRec, newPos int, ok bool) {
+	emittedStatement := false
+	for {
+		if pos >= len(toks) {
+			return recs, pos, true
+		}
+		switch toks[pos].kind {
+		case tEOL:
+			pos++ // consume the statement terminator (not a blank line)
+			return recs, pos, true
+		case tEOF:
+			return recs, pos, true
+		case tLineComment, tBlockComment:
+			placement := byte(0)
+			if emittedStatement {
+				placement = 1
+			}
+			recs = append(recs, parseRec{kind: format.KindComment, placement: placement, body: toks[pos].span})
+			pos++
+		case tIdent:
+			id, found := format.MnemonicID(string(toks[pos].span))
+			if !found {
+				return nil, pos, false // directive / label / unknown -> out of domain
+			}
+			pos++
+			if isMovkFamily(id) {
+				rec, npos, mok := refParseMovk(toks, pos, id, st)
+				if !mok {
+					return nil, pos, false
+				}
+				recs = append(recs, rec)
+				pos = npos
+				emittedStatement = true
+				continue
+			}
+			var ow format.OperandWriter
+			count := byte(0)
+			for {
+				if pos >= len(toks) {
+					return nil, pos, false
+				}
+				k := toks[pos].kind
+				if k == tEOL || k == tEOF || k == tLineComment || k == tBlockComment {
+					break
+				}
+				if k == tComma {
+					if count == 0 {
+						return nil, pos, false
+					}
+					pos++
+					continue
+				}
+				switch k {
+				case tLBracket:
+					npos, memOk := refParseMem(toks, pos, st, &ow)
+					if !memOk {
+						return nil, pos, false
+					}
+					count++
+					pos = npos
+				case tIdent:
+					if c, cok := refMatchCond(string(toks[pos].span)); cok {
+						ow.WriteCond(c)
+						count++
+						pos++
+						break
+					}
+					rk, reg, isReg := refMatchReg(string(toks[pos].span))
+					if isReg {
+						pos++
+						if (rk == format.OpRegX || rk == format.OpRegW) &&
+							pos < len(toks) && toks[pos].kind == tComma &&
+							pos+1 < len(toks) && toks[pos+1].kind == tIdent {
+							next := string(toks[pos+1].span)
+							if sk, skOk := refMatchShiftKind(next); skOk {
+								pos += 2
+								if pos >= len(toks) || toks[pos].kind != tHash {
+									return nil, pos, false
+								}
+								pos++
+								expr, npos, ok2 := refParseExpr(toks, pos, st)
+								if !ok2 {
+									return nil, pos, false
+								}
+								pos = npos
+								width := byte(0)
+								if rk == format.OpRegX {
+									width = 1
+								}
+								ow.WriteShiftedReg(width, reg, sk, expr)
+								count++
+								break
+							}
+							if ek, ekOk := refMatchExtend(next); ekOk {
+								pos += 2
+								var amt []byte
+								if pos < len(toks) && toks[pos].kind == tHash {
+									pos++
+									a, npos, ok2 := refParseExpr(toks, pos, st)
+									if !ok2 {
+										return nil, pos, false
+									}
+									amt = a
+									pos = npos
+								}
+								width := byte(0)
+								if rk == format.OpRegX {
+									width = 1
+								}
+								ow.WriteExtendedReg(width, reg, ek, amt)
+								count++
+								break
+							}
+						}
+						ow.WriteReg(rk, reg)
+						count++
+						break
+					}
+					fallthrough
+				case tHash, tInt, tMinus, tTilde, tLParen,
+					tDot, tLocalRef, tColon:
+					expr, npos, ok2 := refParseExpr(toks, pos, st)
+					if !ok2 {
+						return nil, pos, false
+					}
+					ow.WriteImmExpr(expr)
+					count++
+					pos = npos
+				default:
+					return nil, pos, false
+				}
+			}
+			recs = append(recs, parseRec{kind: format.KindInst, mnemonicID: id, count: count, ops: ow.Bytes()})
+			emittedStatement = true
+		default:
+			return nil, pos, false
+		}
+	}
+}
+
+// refParseFull is the complete faithful transcription of parser.go's Parse +
+// parseLine: blank-run counting (BLANK_RUN), comment records with placement,
+// and the full statement grammar. It is the B7 oracle.
+func refParseFull(src []byte) (recs []parseRec, ok bool) {
+	toks, lok := refLex(src)
+	if !lok {
+		return nil, false
+	}
+	st := format.NewSymbolTable()
+	pos := 0
+	for {
+		// Count the leading run of genuine blank lines (lone tEOL tokens).
+		blanks := 0
+		for pos < len(toks) && toks[pos].kind == tEOL {
+			pos++
+			blanks++
+		}
+		if blanks > 0 {
+			recs = append(recs, parseRec{kind: format.KindBlankRun, runLen: uint32(blanks)})
+		}
+		if pos >= len(toks) || toks[pos].kind == tEOF {
+			return recs, true
+		}
+		lineRecs, npos, lok := refParseLineStmt(toks, pos, st)
+		if !lok {
+			return nil, false
+		}
+		recs = append(recs, lineRecs...)
+		pos = npos
+	}
+}
+
+// TestParseCommentBlankHandCases pins explicit COMMENT and BLANK_RUN records
+// for representative comment / blank-line source, then cross-checks against the
+// faithful refParseFull oracle. Covers: empty `//`, `//` with text, `#` line
+// comments, `/* block */` comments, placement 0 (line start) vs 1 (after a
+// statement), blank runs of length 1/2/5/10, and mixed sequences.
+func TestParseCommentBlankHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	cases := []struct {
+		desc string
+		src  string
+		want []parseRec
+	}{
+		// --- COMMENT placement ---
+		// empty `//` -> a COMMENT with a zero-length body (NOT a blank line).
+		{"empty // comment", "//\n", []parseRec{mkComment(0, "")}},
+		// `//` with text: the lexer carries the body after the opener (incl. the
+		// leading space, matching Go's span).
+		{"// with text", "// hello\n", []parseRec{mkComment(0, " hello")}},
+		// `#` line comment: same record kind, body after the '#'.
+		{"# line comment", "# note here\n", []parseRec{mkComment(0, " note here")}},
+		// `/* block */` comment: body is the text between the delimiters.
+		{"/* block */ comment", "/* mid */\n", []parseRec{mkComment(0, " mid ")}},
+		// line-start comment then a statement on the NEXT line.
+		{"comment then instruction", "// lead\nmov x0, x1\n", []parseRec{
+			mkComment(0, " lead"),
+			mkRec(t, "mov", reg{X, 0}, reg{X, 1}),
+		}},
+		// comment AFTER a statement on the same line -> placement 1.
+		{"trailing comment placement 1", "mov x0, x1 // tail\n", []parseRec{
+			mkRec(t, "mov", reg{X, 0}, reg{X, 1}),
+			mkComment(1, " tail"),
+		}},
+		// trailing block comment after a statement -> placement 1.
+		{"trailing block comment placement 1", "ret /* done */\n", []parseRec{
+			mkRec(t, "ret"),
+			mkComment(1, " done "),
+		}},
+		// two comments after a statement: both placement 1.
+		{"two trailing comments", "mov x0, x1 /* a */ // b\n", []parseRec{
+			mkRec(t, "mov", reg{X, 0}, reg{X, 1}),
+			mkComment(1, " a "),
+			mkComment(1, " b"),
+		}},
+		// --- BLANK_RUN lengths (exercise the uint32 LE payload) ---
+		{"blank run 1", "mov x0, x1\n\nret\n", []parseRec{
+			mkRec(t, "mov", reg{X, 0}, reg{X, 1}),
+			mkBlankRun(1),
+			mkRec(t, "ret"),
+		}},
+		{"blank run 2", "mov x0, x1\n\n\nret\n", []parseRec{
+			mkRec(t, "mov", reg{X, 0}, reg{X, 1}),
+			mkBlankRun(2),
+			mkRec(t, "ret"),
+		}},
+		{"blank run 5 (leading)", "\n\n\n\n\nret\n", []parseRec{
+			mkBlankRun(5),
+			mkRec(t, "ret"),
+		}},
+		{"blank run 10 (leading)", "\n\n\n\n\n\n\n\n\n\nret\n", []parseRec{
+			mkBlankRun(10),
+			mkRec(t, "ret"),
+		}},
+		// a terminating EOL of a statement is NOT a blank: no BLANK_RUN here.
+		{"no blank between adjacent statements", "mov x0, x1\nret\n", []parseRec{
+			mkRec(t, "mov", reg{X, 0}, reg{X, 1}),
+			mkRec(t, "ret"),
+		}},
+		// --- mixed sequences (blank, comment, blank, instruction) ---
+		{"mixed blank/comment/blank/instruction", "\n// c\n\nmov x0, x1\n", []parseRec{
+			mkBlankRun(1),
+			mkComment(0, " c"),
+			mkBlankRun(1),
+			mkRec(t, "mov", reg{X, 0}, reg{X, 1}),
+		}},
+		{"comment-only lines then blank then instr", "# a\n// b\n\nret\n", []parseRec{
+			mkComment(0, " a"),
+			mkComment(0, " b"),
+			mkBlankRun(1),
+			mkRec(t, "ret"),
+		}},
+		// blank run THEN a line that is statement + trailing comment.
+		{"blanks then stmt+trailing comment", "\n\nadd x0, x1, x2 // sum\n", []parseRec{
+			mkBlankRun(2),
+			mkRec(t, "add", reg{X, 0}, reg{X, 1}, reg{X, 2}),
+			mkComment(1, " sum"),
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			got, errFlag := parseZ80(t, mac, []byte(c.src))
+			if errFlag {
+				t.Fatalf("PARSE_ERR set unexpectedly for %q", c.src)
+			}
+			compareRecs(t, "Z80 vs hand", got, c.want)
+			ref, refOk := refParseFull([]byte(c.src))
+			if !refOk {
+				t.Fatalf("refParseFull reported error on a valid case %q", c.src)
+			}
+			compareRecs(t, "Z80 vs ref", got, ref)
+		})
+	}
+}
+
+// TestParseCommentBlankFuzz compares asmparse against refParseFull over random
+// source mixing blank lines, line/block comments (with and without bodies),
+// and register/immediate instructions — exercising blank-run coalescing, the
+// blank-vs-terminator distinction, and comment placement.
+func TestParseCommentBlankFuzz(t *testing.T) {
+	mac := loadAsmparse(t)
+	for _, seed := range []int64{5, 19, 61, 197, 7919} {
+		rng := rand.New(rand.NewSource(seed))
+		var src []byte
+		lines := 12 + rng.Intn(12)
+		for li := 0; li < lines; li++ {
+			switch rng.Intn(4) {
+			case 0: // a run of blank lines
+				n := 1 + rng.Intn(4)
+				for b := 0; b < n; b++ {
+					src = append(src, '\n')
+				}
+			case 1: // a comment-only line (any of //, #, /* */)
+				src = append(src, randLineStartComment(rng)...)
+				src = append(src, '\n')
+			case 2: // an instruction with an optional trailing comment
+				src = append(src, randInstLine(rng)...)
+				if rng.Intn(2) == 0 {
+					// A trailing (mid-line) comment must be // or /* */: the
+					// lexer treats '#' as a line comment only at line start
+					// (mid-line '#' is an immediate prefix), so a '#'-form here
+					// would lex as operands, not a comment.
+					src = append(src, ' ')
+					src = append(src, randTrailingComment(rng)...)
+				}
+				src = append(src, '\n')
+			case 3: // a plain instruction line
+				src = append(src, randInstLine(rng)...)
+				src = append(src, '\n')
+			}
+		}
+		want, ok := refParseFull(src)
+		if !ok {
+			t.Fatalf("seed %d: refParseFull reported error on generated B7 source:\n%s", seed, src)
+		}
+		got, errFlag := parseZ80(t, mac, src)
+		if errFlag {
+			t.Fatalf("seed %d: PARSE_ERR set on valid B7 source:\n%s", seed, src)
+		}
+		compareRecs(t, fmt.Sprintf("seed%d", seed), got, want)
+		t.Logf("seed=%d: %d source bytes, %d records matched", seed, len(src), len(got))
+	}
+}
+
+// apCommentBodies are random comment bodies (empty included), free of "*/" so
+// they are safe inside a block comment.
+var apCommentBodies = []string{"", " x", " hello world", "note", " a, b", " 1+2"}
+
+// randLineStartComment builds a random line-start comment token: a `//` or `#`
+// line comment (with an empty or non-empty body) or a `/* ... */` block comment.
+func randLineStartComment(rng *rand.Rand) string {
+	body := apCommentBodies[rng.Intn(len(apCommentBodies))]
+	switch rng.Intn(3) {
+	case 0:
+		return "//" + body
+	case 1:
+		return "#" + body
+	default:
+		return "/*" + body + "*/"
+	}
+}
+
+// randTrailingComment builds a random mid-line (trailing) comment token: only
+// `//` or `/* ... */` — '#' is not a comment mid-line.
+func randTrailingComment(rng *rand.Rand) string {
+	body := apCommentBodies[rng.Intn(len(apCommentBodies))]
+	if rng.Intn(2) == 0 {
+		return "//" + body
+	}
+	return "/*" + body + "*/"
+}
+
+// randInstLine builds a random simple instruction line (mnemonic + 0..3
+// register/immediate operands) drawn from the existing fuzz pools.
+func randInstLine(rng *rand.Rand) string {
+	line := apMnemPool[rng.Intn(len(apMnemPool))]
+	nops := rng.Intn(4)
+	for oi := 0; oi < nops; oi++ {
+		line += " "
+		if rng.Intn(10) < 3 {
+			line += apImmPool[rng.Intn(len(apImmPool))]
+		} else {
+			line += apRegPool[rng.Intn(len(apRegPool))]
+		}
+		if oi < nops-1 && rng.Intn(10) < 7 {
+			line += ","
+		}
+	}
+	return line
 }
