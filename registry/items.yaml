@@ -814,6 +814,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 517, role: completing}
   parent: i48c
   refs: [src/asmparse.asm, tools/netboot-oracle/z80/asmparse_test.go, tools/sam-aarch64/frontend/parser.go]
 
