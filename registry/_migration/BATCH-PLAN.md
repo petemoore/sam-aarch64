@@ -2,28 +2,53 @@
 
 Generated 2026-06-19 as a read-only pre-pass for the i115f/i115d migration.
 
-## PROGRESS (update as batches land)
+## PROGRESS — CONTENT MIGRATION COMPLETE (only the cutover remains)
 
-- **Batches 1–7 DONE = ALL 101 closed items migrated.** Each independently reviewed; all PASS.
-- **Batch 8 DONE** (open items i2–i27; i3 set kind:umbrella).
-- **i48c SPLIT DONE** — umbrella + 13 brick leaves (b1–b4, b5a DONE; b5b–b8 OPEN).
-- **Batch 9 remainder DONE** (i29–i65 open items + the i41 umbrella IN_PROGRESS).
-- **All 5 OPEN questions migrated** (q13/q22/q23/q24/q25) + **i41 family completed**
-  (i41d OPEN; i41e OPEN depends_on q24). Open questions went early so later dependent
-  items can carry `--dep qN` and pass strict invariant-11.
-- **STATE: 147 item records + 5 questions migrated; ~59 open-item rows remain** in
-  `item-registry-open.md.old`. Every batch reviewed; all PASS.
-- **REMAINING:** the ~59 open items (rest of batches 10–14 below) — several are
-  UMBRELLAS whose children are already migrated (i100, i102, i102m → `--kind umbrella`,
-  status DERIVED from children) — plus i7/i87/i111/i112/i119, the netboot cluster
-  (i118/i120–i140), the BLOCKED:Pete items (i81a/i81c/i89/i117/i117a → owner:pete),
-  i101 (--dep q23). Then **retire the 23 closed questions** (fold each decision into
-  its item; do NOT migrate the closed question). Then the **CUTOVER**: strict
-  `validate`, generate `.md` in place (`make registry` w/ `REGISTRY_OUTDIR=docs/notes`),
-  retire `question-registry-closed.md` + rewire its refs, wire the `registry-sync` CI
-  job + branch-protection check, i115e doc rewiring (CLAUDE.md/ROADMAP/SessionStart
-  hook/autonomous-loop), dedupe the id-ledger, delete `_migration/` + the plan, §3
-  review, single push → green → merge.
+- **ALL items migrated: 211 item records + 5 questions in `registry/*.yaml`.** Both
+  `item-registry-{open,closed}.md.old` have ZERO data rows. Every batch was
+  independently info-loss-reviewed (implementer ≠ reviewer); all PASS.
+- **STRICT `registry validate` PASSES** (no `--migrating`): all refs resolve, the
+  `depends_on` DAG is acyclic, no dangling edges, every invariant holds.
+- **All 23 CLOSED questions audited — every decision is captured** in an item desc /
+  design doc / CLAUDE.md (audit verdict: ALL CAPTURED). They retire safely (the new
+  model has no closed-question view); `question-registry-closed.md.old` is the only
+  place they live and gets deleted at cutover.
+- **Generated output VERIFIED-GOOD**: `gen` to a preview dir produced clean
+  `item-registry-{open,closed}.md` + `question-registry-open.md` — the corrupted
+  wall-of-text rows (i48c, i119, i115) are now clean single-line table rows, status
+  cells render `OPEN`/`IN_PROGRESS`/`DONE — PR #N`, `gated-on:iN` edges show, folded
+  decisions are in place.
+- **Tool hardened on-branch** (each a real-data fix): `add --kind/--pr/--role`; rune-
+  (not byte-) length counting; trailing-newline trimmed before the 600 bound; YAML
+  indicator-char title quoting (`%`/`@`/…). Run `make registry-gen` after checkout.
+
+### THE CUTOVER — the only remaining work (a clean, focused next-session task)
+The migration content is done + valid + audited. The cutover is the irreversible
+switchover (changes how the whole project tracks work → a natural point for Pete to
+glance at the generated registry first). Steps:
+1. `make registry` (with `REGISTRY_OUTDIR=docs/notes` `REGISTRY_TEMPLATES=tools/registry/templates`)
+   → generate the 3 `.md` IN PLACE, replacing the live
+   `item-registry-{open,closed}.md` + `question-registry-open.md`.
+2. **Delete `docs/notes/question-registry-closed.md`** (retired) and **rewire every
+   reference to it** — `grep -rl question-registry-closed` over `CLAUDE.md`,
+   `docs/`, `tools/` and update each (the closed-q decisions live in items now).
+3. **i115e doc rewiring** — point CLAUDE.md (§3 item 6 + doc-lifecycle + the
+   open→closed move rule), `docs/ROADMAP.md` (handover-contract rules 1–2 + "How to
+   extend"), `tools/session-handover.sh`, and `tools/autonomous-loop/README.md` at the
+   YAML source: the `.md` are GENERATED, never hand-edited; track work via the
+   `registry` CLI (`add`/`split`/`set-status`/`dep`/`answer`) + `make registry`. Add
+   the agent-guidance block from `docs/plans/registry-structured-source.md` Phase 5.
+4. Wire the **`registry-sync` CI job** in `.github/workflows/ci.yml` (pure-Go, mirrors
+   `sysreg-sync`, runs `make registry-sync-check`). **Adding it to branch-protection
+   required-checks needs repo-admin — flag for Pete** (don't assume you can).
+5. **Dedupe `registry/.id-ledger.txt`** (the per-`add` appends left duplicates; the
+   set semantics are unaffected, but tidy it).
+6. **Delete `registry/_migration/`** (the scratch worklist + briefings + this plan
+   copy) and **`docs/plans/registry-structured-source.md`** (the completing PR deletes
+   the plan). Update the i115 family statuses (i115a–i115d, i115f → DONE — PR #455;
+   i115 umbrella stays IN_PROGRESS until i115e/i115g; i115e is THIS cutover).
+7. `make check-doc-links` green; `cd tools/registry && go test ./...` green; the §3
+   pre-merge review; un-draft PR #455; single push → full CI green → merge.
 
 ### Notes for the next session
 - The 5 open questions are DONE — ignore them in the batch-12 list below. An item the
