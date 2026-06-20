@@ -68,12 +68,16 @@ func TestFWSpanChunkLen(t *testing.T) {
 		{2255072, 500000},
 		{7274, 4096},
 	}
+	// A fixed hash; only lengths are checked here (the hash does not affect lengths).
+	var h [32]byte
+	h[0], h[1], h[2] = 0xAB, 0xCD, 0xEF
+
 	mac := loadFWSpan(t)
 	for _, tc := range cases {
 		// The Go authority's positive-length records (a 0-length record is a
 		// caller-policy degenerate the streaming loop does not emit).
 		var want []int
-		for _, r := range bdos.SpanPlan("firmware.x", tc.size, tc.cap) {
+		for _, r := range bdos.SpanPlan(h, tc.size, tc.cap) {
 			if r.Length > 0 {
 				want = append(want, r.Length)
 			}
@@ -110,37 +114,45 @@ func TestFWSpanChunkLen(t *testing.T) {
 	}
 }
 
-// TestFWSpanRecordName: fw_span_record_name(name, index) builds the same
-// <prefix><NNN> record name as bdos.SpanRecordName, across short/exact/long names
-// and the indices a real spanned firmware blob reaches.
+// TestFWSpanRecordName: fw_span_record_name(hashPtr, index) builds the same
+// content-addressed <hash6><NNN> record name as bdos.SpanRecordName, across a
+// variety of hash prefixes and the full range of record indices.
 func TestFWSpanRecordName(t *testing.T) {
-	names := []string{"abc", "abcdefg", "start.elf", "start4.elf", "fixup.dat", "kernel8.img"}
+	// Representative 32-byte hashes covering varied nibble patterns.
+	hashes := [][32]byte{
+		func() [32]byte { var h [32]byte; h[0], h[1], h[2] = 0xAB, 0xCD, 0xEF; return h }(),
+		func() [32]byte { var h [32]byte; h[0], h[1], h[2] = 0x00, 0x00, 0x00; return h }(),
+		func() [32]byte { var h [32]byte; h[0], h[1], h[2] = 0xFF, 0xFF, 0xFF; return h }(),
+		func() [32]byte { var h [32]byte; h[0], h[1], h[2] = 0x01, 0x23, 0x45; return h }(),
+		func() [32]byte { var h [32]byte; h[0], h[1], h[2] = 0xDE, 0xAD, 0xBE; return h }(),
+		func() [32]byte { var h [32]byte; h[0], h[1], h[2] = 0x0A, 0x0B, 0x0C; return h }(),
+	}
 	indices := []int{0, 1, 2, 9, 10, 45, 99, 100, 137, 999}
 
 	mac := loadFWSpan(t)
-	inAddr, err := mac.Sym("FW_SPAN_IN")
+	hashAddr, err := mac.Sym("FW_SPAN_HASH")
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
-	for _, name := range names {
+	for _, h := range hashes {
+		// Write the full 32-byte hash into FW_SPAN_HASH.
+		mac.Write(hashAddr, h[:])
 		for _, idx := range indices {
-			// Write the logical name (NUL-terminated) into the input buffer.
-			mac.Write(inAddr, append([]byte(name), 0))
-			if _, err := mac.CallEntry("fw_span_record_name", z80h.Entry{HL: inAddr, BC: uint16(idx)}); err != nil {
-				t.Fatalf("fw_span_record_name(%q,%d): %v", name, idx, err)
+			if _, err := mac.CallEntry("fw_span_record_name", z80h.Entry{HL: hashAddr, BC: uint16(idx)}); err != nil {
+				t.Fatalf("fw_span_record_name(hash=[%02x%02x%02x...], %d): %v", h[0], h[1], h[2], idx, err)
 			}
 			raw := mac.Read(mustSym(t, mac, "FW_SPAN_NAME"), 16)
 			n := bytes.IndexByte(raw, 0)
 			if n < 0 {
-				t.Fatalf("fw_span_record_name(%q,%d): result not NUL-terminated", name, idx)
+				t.Fatalf("fw_span_record_name(hash=[%02x%02x%02x...], %d): result not NUL-terminated", h[0], h[1], h[2], idx)
 			}
 			got := string(raw[:n])
-			want := bdos.SpanRecordName(name, idx)
+			want := bdos.SpanRecordName(h, idx)
 			if got != want {
-				t.Errorf("fw_span_record_name(%q,%d) = %q, want %q", name, idx, got, want)
+				t.Errorf("fw_span_record_name([%02x%02x%02x...], %d) = %q, want %q", h[0], h[1], h[2], idx, got, want)
 			}
 			if len(got) > bdos.NameLen {
-				t.Errorf("fw_span_record_name(%q,%d) = %q exceeds the %d-char B-DOS name field", name, idx, got, bdos.NameLen)
+				t.Errorf("fw_span_record_name([%02x%02x%02x...], %d) = %q exceeds the %d-char B-DOS name field", h[0], h[1], h[2], idx, got, bdos.NameLen)
 			}
 		}
 	}

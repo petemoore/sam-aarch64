@@ -16,11 +16,11 @@
 ;     record count falls out of the loop (= ceil(size/cap)), so no 32-bit divide
 ;     is needed. Mirrors bdos.SpanPlan's per-record length min(cap, size - i*cap).
 ;   fw_span_record_name:
-;     build the storage record name <prefix><NNN> for a record index — the logical
-;     name truncated to 7 chars (NameLen-3) + a 3-digit zero-padded decimal index,
-;     a <=10-char B-DOS name. Mirrors bdos.SpanRecordName. (The plain-name-for-a-
-;     single-record policy lives in the caller, as in Go SpanPlan; this builds the
-;     suffixed form a spanned object's records use.)
+;     build the content-addressed storage record name <hash6><NNN> into
+;     FW_SPAN_NAME — the first 3 bytes of the blob's SHA-256 digest emitted as 6
+;     lowercase hex chars, followed by the 3-digit zero-padded decimal record
+;     index. The result is always 9 chars, within the 10-char B-DOS NameLen field.
+;     Mirrors bdos.SpanRecordName(blobHash [32]byte, index int).
 ;
 ; The index is bounded to 0..999 (the 3-digit suffix / the documented 1000-record
 ; limit — ample: even a 3 MB blob at a small RAM-bounded cap stays well under).
@@ -43,12 +43,8 @@
 FW_SPAN_REMAINING: defs 4       ; in : bytes of the object still to write (32-bit LE)
 FW_SPAN_CAP:       defs 4       ; in : per-record capacity (32-bit LE)
 FW_SPAN_LEN:       defs 4       ; out: min(cap, remaining) (32-bit LE)
-FW_SPAN_IN:        defs 16      ; in : the logical name (NUL-terminated) for naming
-FW_SPAN_NAME:      defs 16      ; out: built record name (NUL-terminated, <=10+NUL)
-
-; Truncate the logical name to this many chars before appending the 3-digit index
-; (NameLen 10 - SpanIndexDigits 3 = 7), so the record name fits the B-DOS field.
-FW_SPAN_PREFIX:    equ 7
+FW_SPAN_HASH:      defs 32     ; in : 32-byte SHA-256 digest of the blob (big-endian)
+FW_SPAN_NAME:      defs 16      ; out: built record name (NUL-terminated, 9+NUL chars)
 
 ; ===========================================================================
 ; fw_span_chunk_len — FW_SPAN_LEN = min(FW_SPAN_CAP, FW_SPAN_REMAINING), 32-bit.
@@ -82,25 +78,41 @@ fsc_loop:
                 ret                             ; CF = final borrow = remaining < cap
 
 ; ===========================================================================
-; fw_span_record_name — build <prefix><NNN> into FW_SPAN_NAME, NUL-terminated.
-; In:  HL = logical name pointer (NUL-terminated), BC = record index (0..999).
-; Out: FW_SPAN_NAME = the record name.  Clobbers A, BC, DE, HL.
-; Mirrors bdos.SpanRecordName.
+; fw_span_record_name — build <hash6><NNN> into FW_SPAN_NAME, NUL-terminated.
+; In:  HL = pointer to 32-byte blob SHA-256 digest (big-endian); BC = record
+;      index (0..999).
+; Out: FW_SPAN_NAME = the 9-char content-addressed record name (6 lowercase hex
+;      chars from hash[0..2] followed by 3 decimal index digits), NUL-terminated.
+; Clobbers A, BC, DE, HL.
+; Mirrors bdos.SpanRecordName(blobHash [32]byte, index int) string.
 ; ===========================================================================
 fw_span_record_name:
                 push    bc                      ; save the index
                 ld      de, FW_SPAN_NAME        ; dest
-                ld      b, FW_SPAN_PREFIX       ; copy up to 7 name chars
-fsrn_prefix:
-                ld      a, (hl)
-                or      a
-                jr      z, fsrn_digits          ; name shorter than the prefix: stop
-                ld      (de), a
+
+                ; Emit hash[0], hash[1], hash[2] as 6 lowercase hex nibbles.
+                ld      b, 3                    ; 3 bytes to convert
+fsrn_hex_loop:
+                ld      a, (hl)                 ; load next hash byte
                 inc     hl
+                push    af                      ; stash full byte
+                rrca
+                rrca
+                rrca
+                rrca                            ; A = high nibble (bits 7..4 -> bits 3..0)
+                and     &0F
+                call    fsrn_nibble_to_hex
+                ld      (de), a
                 inc     de
-                djnz    fsrn_prefix
-fsrn_digits:
+                pop     af                      ; restore full byte
+                and     &0F                     ; A = low nibble
+                call    fsrn_nibble_to_hex
+                ld      (de), a
+                inc     de
+                djnz    fsrn_hex_loop
+
                 pop     bc                      ; BC = index
+
                 ; hundreds digit = how many times 100 fits in BC.
                 ld      a, "0"
 fsrn_h:
@@ -134,4 +146,16 @@ fsrn_t_done:
                 inc     de
                 xor     a
                 ld      (de), a                 ; NUL-terminate
+                ret
+
+; fsrn_nibble_to_hex — convert the low nibble of A (0..15) to a lowercase hex
+; char ('0'..'9', 'a'..'f'). In: A = nibble (bits 7..4 must be 0). Out: A = char.
+; Clobbers A only.
+fsrn_nibble_to_hex:
+                cp      10
+                jr      c, fsrn_n_digit         ; 0..9 -> '0'..'9'
+                add     a, "a" - 10             ; 10..15 -> 'a'..'f'
+                ret
+fsrn_n_digit:
+                add     a, "0"
                 ret
