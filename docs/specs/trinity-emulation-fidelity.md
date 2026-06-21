@@ -21,10 +21,30 @@ Authority cites: `manual:N` = item N of `manual-behaviours.md` (→ `combined.tx
 `bdos:N` = item N of `bdos-sd-behaviours.md` (→ `bdos15t-beta6.annotated.dis`).
 Emulator cites are `file:line` under `tools/netboot-oracle/z80/`.
 
-Status counts across the 114 inventoried rows: **PRESENT 68 · PARTIAL 19 ·
-ABSENT 19 · N/A 8** (a handful of Gotchas-group rows restate headline items —
-e.g. #109/#113/#114 cross-reference #6/#22/#31 — so the distinct-behaviour count
-is slightly lower).
+Status counts (initial inventory): **PRESENT 68 · PARTIAL 19 · ABSENT 19 · N/A 8**.
+
+**After i235 (this PR):** every load-bearing gap is closed. The four
+shared-controller behaviours (a–d: MUX select, ONE global auto-null, real BUSY,
+ONE shared read-back latch) plus ENCINT, the `&38` 0/1/2 return, configurable
+write-protect, the ENC packet filter, the `&23` CS pulse, the deselect-tail
+observable, `&02`/`&03` PUSH/POP, the LED-twinkle accept-band, the `&1F` EEPROM
+auto-null, and the full 27-byte network record are all PRESENT. The only rows
+NOT flipped to PRESENT are deliberate:
+
+- **#35 / #101 / #102-timing — the `&28`-reset 50µs settle** stays a documented
+  PARTIAL: its exact duration is Genuinely-unspecified and the driver's blind
+  DJNZ covers it (BUSY *is* now modelled — #102 — but the specific 50µs settle
+  number is not a separate state).
+- **#103 / #104 / #105 — LED *colour* state** (power-on orange→blue, the
+  orange-CS/blue-data status LEDs, the ENC green/yellow link/traffic LEDs) stay
+  ABSENT-by-choice: purely cosmetic, no read-back, no driver-correctness gain.
+  The twinkle *write* band IS handled (#31) so a `&C0..&FF` write cannot
+  mis-route through the select switch.
+- **#61 R5 transmit-stuck errata** stays N/A (modelling the bug would only test
+  a workaround we have not ported).
+
+A handful of Gotchas-group rows restate headline items (#109/#113/#114
+cross-reference #6/#22/#31), so the distinct-behaviour count is slightly lower.
 
 ---
 
@@ -35,11 +55,11 @@ is slightly lower).
 | 1 | Ports `&DC..&DF` (4 ports): `&DC` control/status, `&DD` EEPROM, `&DE` ENC, `&DF` SD | manual:1,2,3 | PRESENT | enc28j60.go:38-44 | `portTrinityCtl/EEP/ENC/SD` constants |
 | 2 | OUT `&DC` = command/select to PIC; return read back via `&DD/&DE/&DF` | manual:5; trinload:§DC | PRESENT | enc28j60.go:366-390 (`Out`), 393-427 (`ctlSelect`) | dispatch present |
 | 3 | OUT `&DD`/`&DE`/`&DF` = byte to EEPROM/ENC/SD peripheral | manual:6 | PRESENT | enc28j60.go:371-388 | routed to `eep.clock`/`spiClock`/`sd.out` |
-| 4 | PIC is the central SPI gateway between SAM and 3 peripherals | manual:27 | PARTIAL | enc28j60.go:128-200 | Modelled as **3 independent devices**, not one shared PIC; `&DC` select state is split (ENC `encSelected`, EEP `selected`, SD `selected`) instead of one MUX. **This is the load-bearing gap.** |
+| 4 | PIC is the central SPI gateway between SAM and 3 peripherals | manual:27 | PRESENT | enc28j60.go (`selectPeripheral`/`selPeriph`) | One shared-controller MUX: `selPeriph` (periphNone/EEP/ENC/SD); selecting one deselects the others (gap d). The per-device engines are SPI back-ends the controller multiplexes. |
 | 5 | PIC runs its own embedded program (offload/control) | manual:28 | N/A-Z80 | — | Firmware internals not modelled; only its observable port contract matters |
-| 6 | **`IN &DD/&DE/&DF` all alias ONE PIC port — return the last byte clocked in from ANY peripheral, not per-peripheral** | manual:4,8,34,125 | **ABSENT** | enc28j60.go:337-361 | Emulator returns a **per-device latch**: `&DD`→`eep.miso`/`probeReply`, `&DE`→`spiMISO`/RBM, `&DF`→`sd.in()`. Two OUTs then two INs would (wrongly) return two different devices' data — the manual's aliasing trap is not reproduced. |
-| 7 | A0–A4 address bits tell the PIC which peripheral an OUT targets | manual:7 | PARTIAL | enc28j60.go:371-388 | Implicit in the port-number switch; not modelled as address-bit decode (harmless given fixed `&DD/&DE/&DF`) |
-| 8 | Per-OUT peripheral sequence: PIC marks busy → clocks SPI → places return byte → marks not-busy | manual:26 | PARTIAL | enc28j60.go:330-336 (busy always clear) | Return-byte latch modelled; busy transition is **not** (bit 3 hardwired clear, see #14) |
+| 6 | **`IN &DD/&DE/&DF` all alias ONE PIC port — return the last byte clocked in from ANY peripheral, not per-peripheral** | manual:4,8,34,125 | PRESENT | enc28j60.go (`readDataPort`/`lastClockedIn`) | One shared `lastClockedIn` latch (gap c) every IN &DD/&DE/&DF returns, written by whichever peripheral last clocked a byte. The two-OUT-two-IN aliasing trap now reproduces (TestTrinitySharedReadLatch). |
+| 7 | A0–A4 address bits tell the PIC which peripheral an OUT targets | manual:7 | PARTIAL | enc28j60.go (`clockData` MUX) | The MUX now decides the target peripheral; the literal A0–A4 bit decode beyond the three fixed ports is OCR-garbled (Genuinely-unspecified) so not modelled. |
+| 8 | Per-OUT peripheral sequence: PIC marks busy → clocks SPI → places return byte → marks not-busy | manual:26 | PRESENT | enc28j60.go (`Out`→`raiseBusy`; `In`→`clearBusy`) | Each OUT raises BUSY (one SPI-byte T-state window), clocks the byte to the selected back-end, latches the return byte; a status read clears BUSY (gap b). |
 | 9 | SPI full-duplex: one byte out clocks one byte in simultaneously | manual:29; bdos:3 | PRESENT | eeprom.go:145-178; sdcard.go:309-358 | dummy-clock-to-read modelled per device |
 | 10 | **One-byte SPI read-lag**: byte readable immediately after a command is stale; need a dummy clock then read | manual:31,33,127; trinload:2c; bdos:3,4 | PRESENT | enc28j60.go:558-575 (`spiMISO`); eeprom.go:91-92,170-178; sdcard.go:127-130,402-418 | Each device latches MISO on the clocking OUT; the next IN returns it |
 | 11 | IN returns only the *stored* value (no device re-access on IN) | manual:32 | PRESENT | enc28j60.go:354; sdcard.go:417 | manual-mode IN returns the latch |
@@ -51,11 +71,11 @@ is slightly lower).
 |---|-----------|----------------|-----------------|---------------|-------|
 | 13 | `IN &DC` returns status; the ONLY port not via the PIC, readable any time | manual:9,10 | PRESENT | enc28j60.go:330-336; sdcard.go:270-275 | `ctlStatus()` always returns a value, never stalls |
 | 14 | Layout `%1100BWFE`; bits 7,6=1 fixed, bits 5,4=0 fixed (top nibble `0xC0`) | manual:11-15 | PRESENT | sdcard.go:270-275 | base `0xC0` |
-| 15 | **Bit 3 = BUSY** (1=busy); while set, touch nothing but `IN &DC` | manual:16,20,21,22,124; bdos:23,47 | **PARTIAL** | sdcard.go:271-274 ("busy clear") | BUSY is **hardwired clear** — model never stalls, so `wait_ready`/`wait` always exit. Real PIC raises it per SPI byte. Drivers tolerate always-clear (they only spin *while* set), but the bit is not modelled as a real state and so cannot gate OUTs (see #17). |
-| 16 | Bit 2 = WRITE (SD write-enable/WP); 1=write enabled | manual:17,102; bdos:42,43,46 | PARTIAL | sdcard.go:274 (returns `0xC6`) | Returns bit 2 SET (writable) when a card is configured. Sense matches the driver's `CPL/AND 4` WP gate. **Not configurable** — cannot model a write-protected card (would need bit 2 clear). |
-| 17 | **OUT while BUSY is silently ignored**; BUSY gates all writes to `&DD/&DE/&DF` and the next OUT `&DC` | manual:22,124; bdos:47 | **ABSENT** | — | No code drops an OUT while busy (BUSY is always clear). The gating semantics are not modelled at all. |
-| 18 | Bit 1 = FLASH (card present); 1=present | manual:18,103; bdos:44,46 | PRESENT | sdcard.go:270-275 | bit 1 set iff a CSD is configured |
-| 19 | Bit 0 = ENCINT (ENC interrupt; 1=interrupt pending) | manual:19,99,100; trinload(poll path) | ABSENT | sdcard.go:269 ("ENCINT not modelled") | EIR is tracked inside the ENC (enc28j60.go:735) but never surfaced on `&DC` bit 0; the polling interrupt path (the supported v1.1 path, jumper removed) is not wired to the status byte |
+| 15 | **Bit 3 = BUSY** (1=busy); while set, touch nothing but `IN &DC` | manual:16,20,21,22,124; bdos:23,47 | PRESENT | enc28j60.go (`raiseBusy`/`isBusy`/`busyByteTStates`) | BUSY is a real one-SPI-byte state raised on every OUT to &DC/&DD/&DE/&DF, timed off the harness T-state cursor (gap b). A status read clears it (the canonical wait_ready); an OUT while busy is dropped (see #17). |
+| 16 | Bit 2 = WRITE (SD write-enable/WP); 1=write enabled | manual:17,102; bdos:42,43,46 | PRESENT | sdcard.go (`ctlStatus`/`writeProtect`/`SetWriteProtect`) | Bit 2 SET (writable) by default; `SetWriteProtect(true)` clears it to model a WP card and exercise the driver's `CPL/AND 4` abort path (gap 7). |
+| 17 | **OUT while BUSY is silently ignored**; BUSY gates all writes to `&DD/&DE/&DF` and the next OUT `&DC` | manual:22,124; bdos:47 | PRESENT | enc28j60.go (`Out`: `if e.isBusy() { return }`) | An OUT issued while the one-SPI-byte BUSY window is open is dropped (gap b); two back-to-back OUTs with no intervening status read lose the second — the missing-busy-poll failure (TestTrinityBusyGate). |
+| 18 | Bit 1 = FLASH (card present); 1=present | manual:18,103; bdos:44,46 | PRESENT | sdcard.go (`ctlStatus`) | bit 1 set iff a CSD is configured |
+| 19 | Bit 0 = ENCINT (ENC interrupt; 1=interrupt pending) | manual:19,99,100; trinload(poll path) | PRESENT | enc28j60.go (`ctlStatus`/`encINTPending`) | The ENC's EIR/PKTIF interrupt state is surfaced on `&DC` bit 0 (gap 5), wiring the supported v1.1 polling path (TestTrinityENCINT). |
 | 20 | Busy-poll routine `IN &DC / AND 8 / JR NZ` after every OUT | manual:23,25,133; trinload:2a; bdos:2,47 | PRESENT (vacuously) | sdcard.go:271-274 | poll always exits immediately (busy clear) |
 | 21 | BASIC need not poll BUSY (slow enough); machine code MUST | manual:24,133 | N/A-Z80 | — | host/driver-side timing note, no emulator obligation |
 
@@ -63,22 +83,22 @@ is slightly lower).
 
 | # | Behaviour | Authority cite | Emulator status | Emulator cite | Notes |
 |---|-----------|----------------|-----------------|---------------|-------|
-| 22 | `&02` PUSH stored read-byte (save pending IN byte for ISR) | manual:37,39 | ABSENT | — | not modelled; no stored-byte stack |
-| 23 | `&03` POP stored read-byte (restore) | manual:38,39 | ABSENT | — | not modelled |
-| 24 | `&1F` EEPROM auto-null ON | manual:40,44 | ABSENT | — | EEPROM model has no auto-null mode (driver `read_chunk` uses manual dummy clocks, so untested) |
-| 25 | `&2F` Ethernet auto-null ON | manual:41,44; trinload:§DC.5,2h | PRESENT | enc28j60.go:412-414 (`autoNull=true`) | set; but see #26 note — it is a per-ENC flag, not the global PIC mode |
-| 26 | `&3F` Flash/SD auto-null ON | manual:42,44; bdos:25,48 | PRESENT | sdcard.go:238-242 (`autoNull=true`) | SD reads auto-advance under `&3F` |
-| 27 | `&04` switch auto-nulling OFF (global, clears whichever ON mode) | manual:43,44; trinload:§DC.6; bdos:8,49 | PARTIAL | enc28j60.go:414-418 | `&04` clears **only the ENC** `autoNull` + resets SD; it does NOT clear the EEPROM auto-null (none exists) and the two auto-null flags (`ENC.autoNull`, `SD.autoNull`) are independent, not one global PIC mode |
-| 28 | **Auto-null is ONE global PIC mode** targeting the single selected peripheral, set by the ON command, cleared only by `&04` | manual:44 | **ABSENT** (as a unified mode) | enc28j60.go:412-415; sdcard.go:111,238-242 | Two separate per-device booleans; `&2F` and `&3F` should be mutually exclusive selections of the *same* mode. |
+| 22 | `&02` PUSH stored read-byte (save pending IN byte for ISR) | manual:37,39 | PRESENT | enc28j60.go (`selPushByte`/`savedReadByte`) | `&02` saves the live read-back latch (gap 11, TestTrinityPushPopReadByte) |
+| 23 | `&03` POP stored read-byte (restore) | manual:38,39 | PRESENT | enc28j60.go (`selPopByte`/`savedReadByte`) | `&03` restores the saved read-back byte (gap 11) |
+| 24 | `&1F` EEPROM auto-null ON | manual:40,44 | PRESENT | enc28j60.go (`selEEPNullOn`); eeprom.go (`autoClock`) | `&1F` sets the single global mode targeting the EEPROM; a bare IN &DD auto-advances the READ stream (gap a). The driver uses manual clocks, so this is fidelity completeness. |
+| 25 | `&2F` Ethernet auto-null ON | manual:41,44; trinload:§DC.5,2h | PRESENT | enc28j60.go (`selNullOn` → `autoNullMode`/`autoNullTarget=periphENC`) | Sets the ONE global mode targeting the ENC (gap a). |
+| 26 | `&3F` Flash/SD auto-null ON | manual:42,44; bdos:25,48 | PRESENT | enc28j60.go (`selSDAutoNul` → target=periphSD); sdcard.go (`autoClock`) | Sets the ONE global mode targeting the SD; SD reads auto-advance under `&3F` (gap a). |
+| 27 | `&04` switch auto-nulling OFF (global, clears whichever ON mode) | manual:43,44; trinload:§DC.6; bdos:8,49 | PRESENT | enc28j60.go (`selNullOff`) | `&04` clears the ONE global `autoNullMode`+target regardless of peripheral (gap a); the MUX is changed only by an explicit select/deselect (see #28 note). |
+| 28 | **Auto-null is ONE global PIC mode** targeting the single selected peripheral, set by the ON command, cleared only by `&04` | manual:44 | PRESENT | enc28j60.go (`autoNullMode`/`autoNullTarget`/`autoNullFor`) | One global mode + target; `&1F/&2F/&3F` are mutually exclusive selections of the same mode, cleared only by `&04` (gap a, TestGlobalAutoNullMode). |
 | 29 | `&08..&0F` IDENT read → `"TRINv1.1"` (8 chars) | manual:46-56; trinload:§DC.9-10,§3 | PARTIAL | enc28j60.go:62-66,419-421 | Modelled, but the string constant is **`"TRI v1.1"`** (4th char SPACE) not `"TRINv1.1"`. The driver only gates on `&08`→'T', `&09`→'R' (both correct), so `chk_trinity` passes; the 4th char disagrees with the manual (manual:49 OCR-garbled the glyph; trinity_fidelity_test.go:20 asserts the SPACE form). **Unresolved conflict — see Genuinely-unspecified.** |
 | 30 | `chk_trinity` uses fixed DJNZ delays (not BUSY) — identity bytes available immediately after the select write | trinload:§3 | PRESENT | enc28j60.go:419-421 | `probeReply` latched on the `&DC` select, ready for the next `IN &DD` |
-| 31 | `%11fedcba` LED Twinkle (6 LED segments; cosmetic) | manual:57-64,116,117,134 | ABSENT | — | not modelled; no LED state. Cosmetic — no driver depends on a read-back, but a fidelity model should accept+ignore `&C0..&FF` writes |
-| 32 | `&10` EEPROM CS disable / `&11` EEPROM CS enable | manual:65,66; trinload:§4a | PRESENT | enc28j60.go:422-425 (`csAssert`/`csDeassert`) | |
-| 33 | `&20` ENC CS disable / `&21` ENC CS enable | manual:67,68; trinload:§DC.1-2,2b | PRESENT | enc28j60.go:401-407 | |
-| 34 | `&23` ENC pulse CS (disable+enable in one) | manual:69,71,130; trinload:§DC.3 | PARTIAL | enc28j60.go:407 (treated as plain disable) | `selENCPulse` falls into the disable case; it does not re-assert. Dead in the drivers (trinload:§DC.3), so untested, but not faithful to "pulse = end-of-command" |
-| 35 | `&28` ENC reset; wait 50µs after | manual:70,92,112,132; trinload:1a; bdos(—) | PARTIAL | enc28j60.go:409-411 (`softReset`) | Reset modelled as instantaneous `softReset()`; the **50µs settle** is not modelled (no time concept). Driver uses blind DJNZ delay so functionally fine; timing fidelity absent |
+| 31 | `%11fedcba` LED Twinkle (6 LED segments; cosmetic) | manual:57-64,116,117,134 | PRESENT | enc28j60.go (`&C0..&FF` band → `lastLED`/`LastLED`) | The LED-twinkle band is accepted and recorded (no SPI effect) so a `&C0..&FF` write does not mis-route through the select switch (gap 12). |
+| 32 | `&10` EEPROM CS disable / `&11` EEPROM CS enable | manual:65,66; trinload:§4a | PRESENT | enc28j60.go (`selEEPDisable`/`selEEPEnable` → MUX) | |
+| 33 | `&20` ENC CS disable / `&21` ENC CS enable | manual:67,68; trinload:§DC.1-2,2b | PRESENT | enc28j60.go (`selENCDisable`/`selENCEnable` → MUX) | |
+| 34 | `&23` ENC pulse CS (disable+enable in one) | manual:69,71,130; trinload:§DC.3 | PRESENT | enc28j60.go (`selENCPulse`) | `&23` now de-asserts then re-asserts CS (resets the SPI byte counter — datasheet end-of-command), not a plain disable (gap 9). |
+| 35 | `&28` ENC reset; wait 50µs after | manual:70,92,112,132; trinload:1a; bdos(—) | PARTIAL | enc28j60.go (`selENCReset` → `softReset`) | Reset is instantaneous `softReset()`; the **50µs settle** is not modelled (the driver's blind DJNZ covers it; an exact µs figure is Genuinely-unspecified). CS state is preserved across the reset now (faithful). |
 | 36 | `&30` SD CS disable / `&31` SD CS enable (manual mode) | manual:72,73; bdos:49 | PRESENT | sdcard.go:229-237,255-258 | |
-| 37 | `&38` SD init: detect MMC/SD, return **0/1/2** (0=absent/fail, 1=MMC, 2=SD); LED blue→orange/off | manual:74,75,76,77,104 | **PARTIAL** | sdcard.go:243-254 | `&38` only sets `woken=true` and makes the next read `&FF` (matching Colin's `&A643` wake poll, which breaks on `&FF` — bdos:10). The documented **0/1/2 return code is NOT produced**; card-type detection in the emulated path happens via CMD8/ACMD41/CMD58 instead. A BASIC-level or alt-driver consumer reading the `&38` return would get the wrong value. |
+| 37 | `&38` SD init: detect MMC/SD, return **0/1/2** (0=absent/fail, 1=MMC, 2=SD); LED blue→orange/off | manual:74,75,76,77,104 | PRESENT | sdcard.go (`selSDInit`/`initType`) | `&38` places the documented return code (2=SD for a configured card) on the read latch FIRST, then the `&FF` settle Colin's `&A643` poll breaks on — so a 0/1/2 consumer reads the code while Colin's ladder still settles (gap 6, TestTrinitySDInitReturnCode). The LED colour change is cosmetic (#103-104). |
 | 38 | CS controls /chipselect only (not power); disable when idle (good practice) | manual:78,79,80,131 | PRESENT | (CS assert/deassert per device) | select state is CS, not power |
 
 ## 4. EEPROM (Microchip 25LC1024, 128 KB)
@@ -93,12 +113,12 @@ is slightly lower).
 | 44 | Post-write busy delay (driver uses blind `write_delay`, not RDSR WIP) | trinload:§5b | PRESENT (by omission) | eeprom.go:50-53 (no WIP state) | faithful: driver never polls WIP, model needs none |
 | 45 | Index region: 120 × 64-byte headers @0..7679; unused 512B @7680..8191; chunk data @8192..131071 | manual:83,84,85 | PRESENT | eeprom.go:56-59; enc28j60.go:434-467,510-513 | `eepIndexStride=64`, `eepChunkBase=0x2000`; chunk N at (28+4N)<<8 |
 | 46 | 64-byte header: part(1), total(1), name(16), desc(46); part=0 ⇒ empty | manual:85; trinload:§4d,4e | PRESENT | enc28j60.go:436-440,461-465 | Program* helpers lay this out |
-| 47 | "Trinity Network " chunk (16 chars) holds MAC@0,IP@6,Gateway@10,Subnet@14,DNS@18,2ndDNS@22,DHCP@26 | manual:86,87; trinload:§4c,7a | PARTIAL | eeprom.go:79-82; enc28j60.go:434-446 | name + MAC(6) + IP(4) modelled (what the boot wrappers read); gateway/subnet/DNS/DHCP fields are not laid out (unused by the emulated drivers) |
+| 47 | "Trinity Network " chunk (16 chars) holds MAC@0,IP@6,Gateway@10,Subnet@14,DNS@18,2ndDNS@22,DHCP@26 | manual:86,87; trinload:§4c,7a | PRESENT | enc28j60.go (`ProgramTrinityNetworkFull`) | `ProgramTrinityNetworkFull` lays out the complete 27-byte settings record; `ProgramTrinityNetwork` (MAC+IP only) is retained for the boot wrappers, which read only those fields (gap 13). |
 | 48 | `find_index` (match part/total/name → chunk number) | trinload:§4e | PRESENT | enc28j60.go:434-446 (`ProgramTrinityNetwork` lays it so `find_index` matches) | runs the real `find_index` against the model |
 | 49 | `read_chunk` (read 1 KB chunk by value) | trinload:§4c | PRESENT | eeprom.go:170-172; enc28j60.go:441-446 | |
 | 50 | `read_index`, `count_empty`/`find_empty` slot scans | trinload:§4d,4f | PRESENT | eeprom.go:145-178 | generic READ machinery serves all of these |
 | 51 | `delete_index` (zero first bytes of a slot) | trinload:§5e | PRESENT | eeprom.go:173-197 (WRITE path) | a write of zeros via the modelled WRITE |
-| 52 | EEPROM auto-null mode (`&1F`) for fast reads | manual:40,44 | ABSENT | — | driver doesn't use it for EEPROM; see #24 |
+| 52 | EEPROM auto-null mode (`&1F`) for fast reads | manual:40,44 | PRESENT | enc28j60.go (`selEEPNullOn`); eeprom.go (`autoClock`) | The global auto-null mode targets the EEPROM under `&1F`; a bare IN &DD auto-advances the READ stream (gap a, see #24) |
 | 53 | No separate per-EEPROM 'T'/'R' identity probe — IDENT is the PIC-level string | manual:89 | PRESENT | enc28j60.go:337-343 | `&DD` returns `probeReply` (the PIC IDENT) when not in an EEPROM data phase |
 
 ## 5. ENC28J60 (Ethernet controller, port `&DE`)
@@ -108,12 +128,12 @@ is slightly lower).
 | 54 | SPI opcode decode: RCR(000)/WCR(010 bit6)/BFS(100 bit7)/BFC(101 bits5+7)/RBM(`&3A`)/WBM(`&7A`)/SRC(`&FF`) | manual:91; trinload:§6 | PRESENT | enc28j60.go:70-79,583-631 | full opcode set decoded |
 | 55 | 4 banks × 32 regs; final 5 (0x1B-0x1F) common across banks | manual:93; trinload:§2g | PRESENT | enc28j60.go:131,275-292 | common-window aliasing modelled |
 | 56 | 8 KB buffer, user-defined circular RX region, rest TX | manual:93,94; trinload:1,2h | PRESENT | enc28j60.go:118-122,656-690,751-818 | `bufSize=0x2000`, RX `0..0x19FF`, ring wrap |
-| 57 | Power-on state: no MAC, no RX buffer, filter ignores everything ("sees but does not receive") | manual:95 | PARTIAL | enc28j60.go:254-271 (`softReset`) | regs zeroed on reset (no MAC, no RX alloc) — correct. But the **packet filter is not modelled**: the emulator injects frames directly into the RX FIFO regardless of MAC/filter config (enc28j60.go:34-35 self-documents this), so the "ignore everything until configured" behaviour is bypassed |
-| 58 | Writing 0 to packet-filter reg = sniffer mode (receive all) | manual:96 | ABSENT | — | no filter model at all (frames always delivered) |
+| 57 | Power-on state: no MAC, no RX buffer, filter ignores everything ("sees but does not receive") | manual:95 | PRESENT | enc28j60.go (`rxFilterPass`/`materialiseRX`/ERXFCON POR) | softReset installs the ERXFCON POR default (UCEN+BCEN); materialiseRX drops frames failing the filter — a frame to a non-matching MAC is "seen but not received" (gap 8, TestRXFilterPacketFilter). |
+| 58 | Writing 0 to packet-filter reg = sniffer mode (receive all) | manual:96 | PRESENT | enc28j60.go (`rxFilterPass`: `f==0` → accept all) | ERXFCON==0 is sniffer mode: every frame passes (gap 8). |
 | 59 | **M-prefixed (MAC/MII) registers need DOUBLE-READ** (extra lag over normal SPI lag) | manual:97,128; trinload:§2d,6 | PRESENT | enc28j60.go:294-310,600-607 | `isMACMII` → dummy on byteIdx 1, real data on byteIdx 2 |
 | 60 | ETH (non-M) registers return data after ONE dummy clock | trinload:§2c,6 | PRESENT | enc28j60.go:608-611 | |
 | 61 | ENC documented transmit-stuck silicon bug needs a SW work-around | manual:98,129 | ABSENT (N/A) | enc28j60.go:33-35 (self-documented as not modelled) | R5 errata not modelled; emulator never wedges TX. Marking N/A — modelling the bug would only test the workaround, no driver-correctness gain |
-| 62 | /CS pulse ends an ENC command (datasheet §4 requirement) | manual:69,71,130 | PARTIAL | enc28j60.go:407 | see #34 — pulse collapses to disable |
+| 62 | /CS pulse ends an ENC command (datasheet §4 requirement) | manual:69,71,130 | PRESENT | enc28j60.go (`selENCPulse`) | see #34 — `&23` de-asserts+re-asserts, ending the command (resets the byte counter). |
 | 63 | MAADR registers not in MAC-byte order (driver feeds 4,5,2,3,0,1) | trinload:§1b | PRESENT | enc28j60.go (regs store verbatim; driver's mapping just writes/reads them) | model stores whatever the driver writes; ordering is the driver's concern |
 | 64 | `drv_init` full register init sequence (MACON1/3, MAIPG, MAMXFL, PHCON, ECON1.RXEN…) | trinload:§1 | PRESENT | enc28j60.go:583-631 (WCR/BFS/BFC handlers) | the real `drv_init` runs against the model |
 | 65 | RBM bulk read auto-advances ERDPT with ring wrap at ERXND→ERXST | trinload:§2h; manual:30 | PRESENT | enc28j60.go:656-675 (`rbmNext`) | AUTOINC + wrap |
@@ -150,9 +170,9 @@ is slightly lower).
 | 91 | Self-modifying 32-bit LBA poked into `&A836/&A843`, sent big-endian | bdos:24,50 | N/A-Z80 | — | Z80 self-modification — the model reads the resulting command frame (sdcard.go:300-303), never the immediates |
 | 92 | CMD17 READ_SINGLE: R1=0, `&FE` token, 510+2 bytes via INI | bdos:27-30 | PRESENT | sdcard.go:515-531 | `&FE` + 512 sector + 2 CRC |
 | 93 | CMD24 WRITE_SINGLE: WP gate, `&FE` token, 510 OUTI + 2 tail, data-response (`&1E`→`&04` accepted), busy-wait | bdos:33-37 | PRESENT | sdcard.go:532-547,360-448 | full write data phase + handshake modelled |
-| 94 | Write-protect gate: `IN &DC / CPL / AND 4` (sense-inverted) on every write | bdos:33,42,43 | PARTIAL | sdcard.go:274 (bit2 set = writable) | gate honoured for a writable card; cannot model a WP card (bit 2 not configurable, see #16) |
+| 94 | Write-protect gate: `IN &DC / CPL / AND 4` (sense-inverted) on every write | bdos:33,42,43 | PRESENT | sdcard.go (`writeProtect`/`SetWriteProtect`/`ctlStatus`) | `SetWriteProtect(true)` clears &DC bit 2 so the gate flags WP and aborts the write (gap 7, see #16, TestTrinityWriteProtect). |
 | 95 | Trailing CRC discard after read (2 bytes) | bdos:31 | PRESENT | sdcard.go:530 (CRC bytes in stream) | |
-| 96 | **Deselect-tail (proven close): `&30` → dummy `&DF` → `&30` → `&04`** | bdos:40,41 | PARTIAL | sdcard.go:255-258 (`&30`→deselect), 279-288 (`&04`→reset) | Each byte handled in isolation; the **ordered tail sequence is not asserted/required** — the model accepts the bytes in any order and a missing dummy clock or second `&30` is not detected. Faithful execution of the real tail works; the load-bearing ordering is not a modelled contract |
+| 96 | **Deselect-tail (proven close): `&30` → dummy `&DF` → `&30` → `&04`** | bdos:40,41 | PRESENT | enc28j60.go (`trackSDClose`/`LastSDCloseProper`) | The controller observes the ordered close sequence; `LastSDCloseProper` reports whether the proven order ran (gap 10, TestDeselectTailObservable). Observable, not a hard gate (a shorter `&30`→`&04` read-close still works), so the working probe is unaffected. |
 | 97 | Hot-swap / `RESTORE DEVICE` re-init | manual:107; bdos:52 | N/A-Z80 | — | host/B-DOS re-entry; the model's `sdReset` supports re-init but the RESTORE path is driver-side |
 | 98 | B-DOS 800K RECORD abstraction, SamDisk format | manual:108,109 | N/A-Z80 | — | host filesystem layer above the SPI contract |
 | 99 | Block size 510-on-wire-loops / 512-to-card (`512 MOD 6 = 2` trick) | bdos:56 | PRESENT | sdcard.go:55,377-390 (`sdSectorSz=512`) | card sees 512; the 510+2 split is the driver's |
@@ -163,7 +183,7 @@ is slightly lower).
 | # | Behaviour | Authority cite | Emulator status | Emulator cite | Notes |
 |---|-----------|----------------|-----------------|---------------|-------|
 | 101 | 50µs settle after ENC reset | manual:70,112,132 | ABSENT | — | no µs timing; driver's blind DJNZ covers it (see #35) |
-| 102 | BUSY momentarily set after each OUT (no T-state figure) | manual:111 | ABSENT | — | BUSY never set (see #15) |
+| 102 | BUSY momentarily set after each OUT (no T-state figure) | manual:111 | PRESENT | enc28j60.go (`raiseBusy`/`busyByteTStates`) | BUSY raised for a nominal one-SPI-byte T-state window after each OUT (gap b, see #15); the exact figure is Genuinely-unspecified so a nominal value is used. |
 | 103 | Power-up LED sequence orange→blue→off | manual:113 | ABSENT | — | no LED/power-on model |
 | 104 | Three orange/blue status LEDs (EEPROM/ENC/SD); orange=CS active, blue flash=data | manual:116,117 | ABSENT | — | no LED model |
 | 105 | Two ENC-driven LEDs Green(A)=cable, Yellow(B)=traffic | manual:118,119,120,121 | ABSENT | — | PHLCON written by driver (enc28j60.go ENC regs) but LED outputs not surfaced |
@@ -175,20 +195,41 @@ is slightly lower).
 
 | # | Behaviour | Authority cite | Emulator status | Emulator cite | Notes |
 |---|-----------|----------------|-----------------|---------------|-------|
-| 109 | Read-back is global, not per-port (two OUTs then two INs loses the first) | manual:125,8,34 | ABSENT | enc28j60.go:337-361 | the aliasing trap — duplicate of #6, the headline gap |
+| 109 | Read-back is global, not per-port (two OUTs then two INs loses the first) | manual:125,8,34 | PRESENT | enc28j60.go (`lastClockedIn`) | the aliasing trap — see #6 (now reproduced) |
 | 110 | Always read back when expected (interleave) | manual:126 | PRESENT | (per-device read-lag) | correct for interleaved use |
 | 111 | SPI dummy-byte lag trap | manual:127 | PRESENT | (see #10) | |
 | 112 | trinload `X` handoff: ENC just-reset (last `&DC`=`&28`), EEPROM disabled, auto-null off, INTs enabled, HMPR=push page, stack→`start` | trinload:§8 | PARTIAL | enc28j60.go:380-383 (HMPR recorded, not relocated) | The model records the handoff writes; full paging/stack inheritance is **hardware-gated** (flat harness, no relocation). ENC-reset/EEPROM-disabled state is reproduced |
-| 113 | `&02`/`&03` PUSH/POP read-byte stack for ISR safety | manual:37,38,39 | ABSENT | — | duplicate of #22/#23 |
-| 114 | LED Twinkle reverts on next peripheral use | manual:64,134 | ABSENT | — | no LED model (see #31) |
+| 113 | `&02`/`&03` PUSH/POP read-byte stack for ISR safety | manual:37,38,39 | PRESENT | enc28j60.go (`selPushByte`/`selPopByte`) | see #22/#23 (now modelled) |
+| 114 | LED Twinkle reverts on next peripheral use | manual:64,134 | PRESENT | enc28j60.go (`&C0..&FF` accept-and-ignore) | the LED band is accepted+ignored (no read-back to revert); see #31 |
 
 ---
 
-## GAP LIST (prioritised)
+## GAP LIST (prioritised) — ALL CLOSED in i235
+
+**STATUS (i235):** every item below is DONE. The shared-controller four (a–d),
+ENCINT (5), `&38` 0/1/2 (6), write-protect (7), packet filter (8), `&23` pulse +
+`&28` (9, settle-timing excepted), deselect-tail observable (10), PUSH/POP (11),
+LED-twinkle accept-band (12), and the EEPROM network record (13) are all
+implemented and asserted by `trinity_fidelity_test.go` +
+`trinity_filter_internal_test.go`, with every pre-existing test still green.
+
+**PROBE-HANG MILESTONE:** after the shared-controller refactor (a–d), the
+full-probe_main end-to-end test (`TestCSDProbeMainEndToEnd`) **still PASSES** —
+the faithful one-PIC model does NOT reproduce the real-hardware hang. probe_main
+completes the whole path (config read → CSD read → drv_init → serves the ARP +
+the 16-byte CSD) with `csd_read_into_stage` and `csd_deselect` each running twice
+and no spin inside the interleaved SD↔ENC I/O. So the load-bearing hypothesis
+("the independent-device model hides the probe-hang; a faithful shared PIC
+reproduces it") is **not confirmed by emulation**: the cause of the hardware hang
+lies OUTSIDE what the (now faithful) digital port contract models — a candidate
+is real PIC timing / the 50µs ENC settle / analogue link-up the emulator
+deliberately does not assert (Genuinely-unspecified). Per the i235 brief, no
+probe fix was applied (there was no reproduction to fix); the proven Colin
+deselect-tail remains the grounded fix to try on hardware if the hang recurs.
 
 Ordered by importance for hardware parity. The shared-controller items (a–d)
-are first — they are load-bearing: the emulator models three independent
-devices where hardware is one shared PIC, and that mismatch is what hides
+are first — they are load-bearing: the emulator modelled three independent
+devices where hardware is one shared PIC, and that mismatch was suspected to hide
 mis-sequencing bugs (the i145g probe-hang class).
 
 1. **(a) Auto-null is not ONE global PIC mode (#28, #24, #27).** *Implement:* a
