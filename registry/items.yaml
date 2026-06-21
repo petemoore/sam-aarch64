@@ -4363,6 +4363,6 @@
   title: "SAMBOOT faithful opening-screen inject: reproduce the stock-ROM flow (stripes+banner+wait-any-key+teardown), both paths"
   description: |
     THE DELIVERABLE (now fully unblocked + spec'd). Contract: docs/specs/samboot-opening-screen.md — zero degrees of freedom, every step cited to a stock ROM v3.0 address; superset model (Colin removed the opening screen, we add it back byte-faithfully). PR #682's inject is NOT faithful: no-auto-boot RETs with no keypress wait (screen flashes); auto-boot doesn't cancel stripes. REWORK: no-auto-boot = stripes(&ED1B) + CLSLOWER(&06B5 channel-K/lower-screen) + banner(&0F7F via POMSG) + WTFK READKEY(&1CB1) ANY-key + fall into Colin's verbatim teardown; auto-boot = same opening screen + reproduce Colin's full teardown (CLSLOWER + disarm LINICOLS + NSPPC=&FF + TVDATA=&10) + jp bdos_boot_record (no wait). Q1/Q2 RESOLVED by the i258 RAM-diff + the with/without-pokes ultimate test (Pete 2026-06-25): Q1 LEAVE OUT the MAINER3 editor flags (stock has them, Colin doesn't, identical sync state); Q2 KEEP the NSPPC/TVDATA pokes (without them Colin leaves &00/&16 — wrong; necessary because our inject loads B-DOS like Colin). Also update mgt_screen_demo to the faithful flow (READKEY any-key + CLSLOWER) for the i230 hardware re-test. depends i257 (harness fix, DONE) + i258 (experiment, DONE) — both satisfied, so this is READY agent work.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
