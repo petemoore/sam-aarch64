@@ -263,6 +263,31 @@ public source. That a completed hook actually auto-boots with no keypress is the
 hardware crux (charter §6 step 6, i135c) — proven on paper here, to be proven on
 hardware after the emulation prototype (i135d).
 
+### Settled design (q50 RESOLVED, Pete 2026-06-25 — implemented as i229)
+
+The sketch above (from the *public* `LongSteve/z80 boot.asm`) shows a separate
+`CALL stripes` before the TODO, and proposed folding an unconditional stripes
+redraw into the patch. The **captured** bootblock that is actually flashed differs:
+at file `&9E` (logical `&409E`) it is `CALL &805F` (the real B-DOS init) immediately
+followed by `restore:` at `&40A1` — there is no separate `CALL stripes` at that
+offset. q50 therefore settled a leaner splice than the §3 sketch:
+
+- **Splice the `CALL &805F`, not the stripes.** Change only the 3 bytes at `&409E`
+  (`CD 5F 80` → `CALL inject`); `inject` (in the free space at `&415E`) does the
+  real B-DOS init itself, reads the BIOS config, and either boots a record or `RET`s
+  to `&40A1` = `restore:`. Colin's `restore:`/screen tail stays **byte-identical**.
+- **No stripes fold.** On the no-auto-boot path `inject` RETs into Colin's own
+  verbatim tail, so our code never trampled the screen — the i135d `samboot_stripes`
+  redraw fold is **obsolete and dropped**. The stripe pixels are an i230 hardware
+  concern, not part of the splice.
+
+This design is implemented in `src/netboot/samboot_bootblock.asm` (the inject) +
+`tools/netboot-oracle/samboot/splice.go` (the chunk-1 splice tool) and
+emulation-verified by `tools/netboot-oracle/z80/samboot_bootblock_test.go` (the
+decision logic + the spliced reset chain). See the i229 registry row and
+`docs/plans/i229-combined-bootblock.md` for the full settled design. i230 (RAM
+test, Pete present) and i135c (flash) are the hardware tail.
+
 ---
 
 ## 4. Where the SAMBOOT BIOS config chunk attaches

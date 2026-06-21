@@ -35,8 +35,15 @@
 ;               ORG  32768
 ;               DUMP 32768
 
-; BASIC jump table
-
+; BASIC jump table.
+;
+; The combined-bootblock build (SAMBOOT_BOOTBLOCK, src/netboot/samboot_bootblock.asm)
+; reuses only the read-only closure of this file and must fit the bootblock's 674
+; free bytes, so it gates out the BASIC entry table (it has no BASIC caller) and
+; the write/delete/find-empty/read-index paths (auto-boot reads only). Every guard
+; below changes ZERO bytes for the existing includers (none define
+; SAMBOOT_BOOTBLOCK): the gated-out spans are kept under `defined(...)==0`.
+               if defined(SAMBOOT_BOOTBLOCK)==0
                JP   count_empty          ; 32768
                JP   find_empty           ; 32771
                JP   find_index           ; 32774
@@ -45,9 +52,22 @@
                JP   read_chunk           ; 32783
                JP   write_index          ; 32786
                JP   write_chunk          ; 32789
+               endif
 
-; Input and return value
-
+; Input and return value + the index/chunk scratch. In the bootblock build these
+; relocate to a RAM scratch home (SAMBOOT_SCRATCH, defined by the includer) so the
+; 1 KB chunk buffer + the index/name storage stay OUT of the flashed image. The EQU
+; layout mirrors the verbatim DEFB/DEFS sizes byte-for-byte; index_store (below)
+; continues that layout at SAMBOOT_SCRATCH+1089. RAM scratch is emulation-valid (flat
+; RAM in the harness); the hardware-safe address is confirmed at i230 (Pete present).
+               if defined(SAMBOOT_BOOTBLOCK)
+value:         equ SAMBOOT_SCRATCH+0      ; 1 byte
+part:          equ SAMBOOT_SCRATCH+1      ; 1 byte
+total:         equ SAMBOOT_SCRATCH+2      ; 1 byte
+name:          equ SAMBOOT_SCRATCH+3      ; 16 bytes
+description:   equ SAMBOOT_SCRATCH+19     ; 46 bytes
+chunk:         equ SAMBOOT_SCRATCH+65     ; 1024 bytes (ends SAMBOOT_SCRATCH+1089)
+               else
 value:         DEFB 0                    ; 32792
 
 ; 64 byte index header
@@ -60,8 +80,10 @@ description:   DEFS 46
 ; 1024 byte data chunk
 
 chunk:         DEFS 1024                 ; 32857
+               endif
 
 
+               if defined(SAMBOOT_BOOTBLOCK)==0
 ; --------------------------------------------------------------
 ;
 ; count_empty - count the number of free chunks in the EEPROM
@@ -149,6 +171,7 @@ find_loop:
                LD   (value),A
                RET
 
+               endif                     ; count_empty / find_empty (unused by the bootblock)
 
 
 
@@ -234,8 +257,13 @@ check_return:
                POP  BC
                JP   index_back
 
+               if defined(SAMBOOT_BOOTBLOCK)
+index_store:   equ SAMBOOT_SCRATCH+1089   ; 18 bytes, continuing the relocated layout
+               else
 index_store:   DEFS 18
+               endif
 
+               if defined(SAMBOOT_BOOTBLOCK)==0
 ; --------------------------------------------------------------
 ;
 ; delete_index - delete a chunk entry from the index table
@@ -304,6 +332,8 @@ read_iloop:
 
                JP   exit
 
+               endif                     ; delete_index / read_index (unused by the bootblock)
+
 ; --------------------------------------------------------------
 ;
 ; read_chunk - read the 1K data chunk for the chunk number in
@@ -341,6 +371,7 @@ read_cloop:
                JP   exit
 
 
+               if defined(SAMBOOT_BOOTBLOCK)==0
 ; --------------------------------------------------------------
 ;
 ; write_index - write an index extry for chunk number in 'value'
@@ -429,6 +460,8 @@ write_cloop1:
                EX   DE,HL
                RET
 
+               endif                     ; write_index / write_chunk / write_256 (unused by the bootblock)
+
 
 ; --------------------------------------------------------------
 ;
@@ -456,6 +489,7 @@ exit:
 ;               JR   NZ,wait_ready
 ;               RET
 
+               if defined(SAMBOOT_BOOTBLOCK)==0
 get_index:
                LD   HL,-64
                LD   DE,64
@@ -464,6 +498,7 @@ get_loop:
                ADD  HL,DE
                DJNZ get_loop
                RET
+               endif                     ; get_index (used only by the gated index/write paths)
 
 get_chunk:
                LD   HL,28
@@ -474,6 +509,7 @@ chunk_loop:
                DJNZ chunk_loop
                RET
 
+               if defined(SAMBOOT_BOOTBLOCK)==0
 write_delay:
                PUSH BC
                LD   BC,16
@@ -491,6 +527,7 @@ write_enable:
                CALL wait_ready
                CALL eeprom_disable
                RET
+               endif                     ; write_delay / write_enable (unused by the bootblock)
 
 write_disable:
                CALL eeprom_enable

@@ -98,6 +98,13 @@ BD_TYPE_CODE:     equ 19
 BD_DIFA_MARKER:   equ &7F                ; mask to clear the +36 bit-7 marker
 BD_SPACE:         equ &20                ; ' ' (the name/ext padding byte)
 
+; The combined-bootblock build (samboot_bootblock.asm) reuses ONLY the
+; bdos_boot_record / bdos_select_record auto-boot primitive (+ BD_BOOT_RECORD) and
+; must fit the bootblock's 674 free bytes, so it gates out every other routine and
+; the large 512-byte sector/list/write buffers here. Each guard changes ZERO bytes
+; for the existing includers (none define SAMBOOT_BOOTBLOCK): the gated-out spans
+; are kept under `defined(SAMBOOT_BOOTBLOCK)==0`.
+                if defined(SAMBOOT_BOOTBLOCK)==0
 ; ---------------------------------------------------------------------------
 ; bdos_name_to_uifa — build the UIFA name block for a CODE file.
 ;
@@ -334,6 +341,8 @@ bvdr_fail:
                 ld      (BD_REC_VALID), a
                 ret
 
+                endif                          ; SAMBOOT_BOOTBLOCK: host-verifiable routines unused by the bootblock
+
 ; ===========================================================================
 ; The real B-DOS hook dispatch — NOT host-verifiable (no ROM / SAMDOS bank in
 ; the harness). Excluded from the host build (NETBOOT_HOSTTEST). Stays
@@ -364,6 +373,7 @@ bdos_select_record:
                 defb    BD_HOOK_HRECORD
                 ret
 
+                if defined(SAMBOOT_BOOTBLOCK)==0
 ; bdos_lookup_hook — copy the built UIFA to the real &4B00, issue HGTHD, then
 ; copy the deposited DIFA from &4B50 back to BD_DIFA for bdos_difa_to_size.
 ; longjmps on "file not found" (no graceful return — registry i25).
@@ -1027,6 +1037,8 @@ bwr_divdone:
                 dec     bc                      ; one fewer sector to write
                 jr      bwr_loop
 
+                endif                          ; SAMBOOT_BOOTBLOCK: hook/list/write routines unused by the bootblock
+
 ; ---------------------------------------------------------------------------
 ; bdos_boot_record — the i122a boot-a-record primitive: HRECORD-select a record,
 ; then fire ALHK (hook 136) to load + run that record's AUTO file. This is the
@@ -1056,7 +1068,16 @@ bdos_boot_record:
 
 ; ===========================================================================
 ; Data region — the UIFA / DIFA buffers and the routine parameters.
+;
+; The bootblock build needs only BD_BOOT_RECORD (the one byte bdos_boot_record
+; reads); the large 512-byte sector/list/write buffers belong to the gated-out
+; routines, so they would otherwise bloat the flashed image well past the 674 free
+; bytes. Under SAMBOOT_BOOTBLOCK the whole region relocates to RAM scratch
+; (continuing the eeprom.asm scratch layout) so ZERO data bytes are flashed.
 ; ===========================================================================
+                if defined(SAMBOOT_BOOTBLOCK)
+BD_BOOT_RECORD:   equ SAMBOOT_SCRATCH+1107   ; 1 byte, after the eeprom.asm scratch block
+                else
 BD_NAME_PTR:      defs 2                 ; pointer to the NUL-terminated filename
 BD_SAVE_PAGE:     defs 1
 BD_SAVE_ADDR:     defs 2
@@ -1098,3 +1119,4 @@ BD_WRITE_COUNT:   defs 2                 ; bdos_write_record: number of sectors 
 
 ; --- i122a boot-a-record primitive --------------------------------------------
 BD_BOOT_RECORD:   defs 1                 ; bdos_boot_record: record to select + ALHK-boot
+                endif                          ; SAMBOOT_BOOTBLOCK data relocation
