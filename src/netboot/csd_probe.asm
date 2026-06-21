@@ -423,15 +423,22 @@ probe_main:
                 ; --- provision the csd.bin STORE + SRC_TABLE --------------
                 call    probe_provision
 
-                ; --- read the CSD once at startup (also re-read per RRQ) ---
-                call    csd_read_into_stage
-
-                ; --- init the ENC28J60 with the SAM's real MAC ------------
+                ; --- init the ENC28J60 FIRST, before any SD work ----------
+                ; drv_init's chk_trinity identity probe uses fixed DJNZ delays, NOT a
+                ; BUSY-poll, so it must run against a quiescent PIC. The heavy &38 SD
+                ; init leaves the shared microcontroller settling; doing the CSD read
+                ; first made chk_trinity's &08 select land while the PIC was still busy
+                ; — the select is ignored (manual:180), the identity read is stale, and
+                ; drv_init returns BC=0 -> blue pm_fail_init (HARDWARE-FOUND 2026-06-24,
+                ; i242). trinload inits the ENC with no prior SD transaction — mirror it.
                 ld      hl, CONFIG_SERVERMAC
                 call    drv_init
                 ld      a, b
                 or      c
                 jp      z, pm_fail_init
+
+                ; --- read the CSD once at startup (also re-read per RRQ) ---
+                call    csd_read_into_stage
 
 pm_serve_loop:
                 ; Esc-to-exit (trinload.asm): poll the keyboard; on Esc, RET to
@@ -446,14 +453,22 @@ pm_serve_loop:
 
 pm_fail_cfg:
                 ld      a, 2                   ; red border: no/bad network settings
-                out     (&fe), a
-                di
-                halt
+                jr      pm_fail_show
 pm_fail_init:
                 ld      a, 1                   ; blue border: ENC28J60 init failed
+pm_fail_show:
+                ; Show the diagnostic border, hold so the operator can read it, then
+                ; hand control back to trinload via tr_terminate (di;halt under test,
+                ; RET to trinload on hardware — the i228 unmapped-port probe). NEVER a
+                ; raw di;halt: that strands the SAM and costs a power-cycle on every
+                ; failed experiment (Pete, 2026-06-24).
                 out     (&fe), a
-                di
-                halt
+pm_fail_wait:
+                ld      a, &f7                 ; poll Esc (trinload's key idiom)
+                in      a, (&f9)
+                bit     5, a
+                jr      nz, pm_fail_wait       ; hold the border until Esc, then return
+                jp      tr_terminate
 
 ; probe_provision — copy the csd.bin STORE + SRC_TABLE templates into the live
 ; tables resolve + resolve_src walk.
@@ -469,6 +484,11 @@ probe_provision:
                 ret
 
 pm_chunk_name:    defm "Trinity Network "     ; the flash chunk holding MAC+IP
+
+                ; tr_terminate (i228): the hardware-only error paths end via it, not a
+                ; raw di;halt. Included only in the trinload build (probe_main's home);
+                ; build_udp_frame (its only external dep) is already pulled in above.
+                include "test_report.asm"
 
                 endif  ; !NETBOOT_HOSTTEST
 
