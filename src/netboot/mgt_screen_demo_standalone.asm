@@ -43,7 +43,34 @@ mgt_rbowl:
                 jr      c, mgt_rbowl
                 ld      (hl), &ff              ; terminate the line-colour list
 
+                ; --- the MGT copyright banner ---
+                ; The authoritative ROM text (UMVAL message 0, &F5DD,
+                ; docs/sam/...annotated-disassembly.txt:26500): the exact bytes the
+                ; stock ROM prints, including &7F (the © glyph). Printed char by
+                ; char via RST &10 (the SAM ROM print-a-char restart), which writes
+                ; to the screen. On hardware the ROM renders it; in emulation the
+                ; harness intercepts RST &10 and records the characters (so we prove
+                ; it wrote the right text and did not crash — no ROM, no carve-out).
+                ; The é accent (BGFLG foreign mode) and the dynamic "nnnK" from
+                ; PRAMTP are faithfulness refinements; "512K" is correct for the
+                ; target SAM.
+                ld      hl, mgt_banner_text
+mgt_banner_loop:
+                ld      a, (hl)
+                or      a
+                jr      z, mgt_banner_done
+                rst     &10                    ; print the character in A
+                inc     hl
+                jr      mgt_banner_loop
+mgt_banner_done:
+
                 jp      tr_terminate           ; di;halt in emulation, RET to trinload on hardware
+
+mgt_banner_text:
+                defm    "   MILES GORDON TECHNOLOGY plc      "
+                defb    &7F                    ; © copyright glyph
+                defm    " 1990 SAM Coupe 512K"
+                defb    0                      ; end of string
 
                 ; tr_terminate + its module set (test_report is not called here;
                 ; only tr_terminate is, but it lives in test_report.asm).

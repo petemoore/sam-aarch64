@@ -8,6 +8,7 @@
 package z80_test
 
 import (
+	"bytes"
 	"testing"
 
 	z80h "github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80"
@@ -27,13 +28,16 @@ func TestMGTScreenDemoStripes(t *testing.T) {
 		t.Skipf("mgt_screen_demo not built (%s); run `make netboot-mgt-screen-demo`: %v", mgtDemoBin, err)
 	}
 
-	// Seed PALTAB+1 with a recognizable palette so we can prove the stripes
-	// copied the right colours (on hardware the ROM cold-init populates it).
-	palette := make([]byte, 16)
-	for i := range palette {
-		palette[i] = byte(0x70 + i) // distinct, non-zero
-	}
-	mac.Write(paltab+1, palette)
+	// Do NOT seed PALTAB — that would be a synthetic, unfaithful state (i232: a
+	// real boot's ROM cold-init populates it). Read whatever PALTAB actually holds
+	// and assert the stripes copied IT: this verifies the loop's addressing /
+	// stepping / copy logic without inventing machine state. The real palette (and
+	// the rendered pixels) are confirmed on hardware / under SimCoupé.
+	palette := mac.Read(paltab+1, 16)
+
+	// Intercept RST &10 so the banner's ROM print loop runs without a ROM and we
+	// can prove it wrote the right characters to the screen.
+	rec := mac.AttachPrintRecorder()
 
 	res, err := mac.Call("mgt_demo_main")
 	if err != nil {
@@ -62,6 +66,14 @@ func TestMGTScreenDemoStripes(t *testing.T) {
 	}
 	if got[16*4] != 0xFF {
 		t.Errorf("LINICOLS terminator = &%02X, want &FF", got[16*4])
+	}
+
+	// The banner printed the authoritative MGT copyright text to the screen (via
+	// RST &10) — it ran and emitted the right characters, no crash, no ROM.
+	wantBanner := append([]byte("   MILES GORDON TECHNOLOGY plc      "), 0x7F)
+	wantBanner = append(wantBanner, []byte(" 1990 SAM Coupe 512K")...)
+	if got := rec.Chars(); !bytes.Equal(got, wantBanner) {
+		t.Errorf("banner printed %q, want %q", got, wantBanner)
 	}
 
 	// The demo ends via tr_terminate, which in emulation takes the di;halt branch.
