@@ -115,8 +115,13 @@ currently-CI-excluded test to CI, **guard private-resource tests with
 - B-DOS 1.5a = **public domain**, already committed (`reference/bdos/al-bdos15a.bin`).
 - Stock ROM v3.0 (`rom_official_v30.bin`) = Andy Wright's, permission-published via
   `simonowen/samrom` — fetchable, but NOT what the capture tests load.
-- **Colin's forked ROM (`rom.bin`) + EEPROM (`eeprom.bin`) + B-DOS 1.5t = proprietary,
-  non-redistributable** — cannot be in CI even as secrets (public-repo publication
-  risk). These are exactly the `SKIP_PRIVATE_TESTS` files.
-- GitHub secrets work for own-branch CI but not fork PRs; irrelevant here because the
-  files are non-redistributable regardless.
+- **Colin's forked ROM (`rom.bin`) + EEPROM (`eeprom.bin`) + B-DOS 1.5t** — these are
+  the `SKIP_PRIVATE_TESTS` files. **Their "proprietary / non-redistributable" status is
+  a PRECAUTIONARY assumption (Pete, playing safe), NOT confirmed fact** — they may well
+  be freely redistributable; nobody has checked with Colin. CAPTURE-NOTES.txt's
+  "non-redistributable" line is the same caution, not a determination.
+- Because of that caution they're kept out of the repo and gated; but Pete is **fine
+  storing them as encrypted GitHub secrets** (i254) so our CI can run their tests
+  (secrets aren't exposed to fork PRs). **If their status is ever confirmed
+  redistributable, they could simply be committed/fetched and skip the secrets
+  entirely** — a worthwhile simplification to check.
