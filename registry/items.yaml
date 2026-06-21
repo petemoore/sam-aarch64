@@ -4578,9 +4578,11 @@
   title: Delete the superseded in-repo SAMBOOT splice/inject apparatus (samboot_bootblock/config + splice diagnostics) now the forked bootloader supersedes it
   description: |
     q55 (2026-06-26) abandoned the in-repo splice-into-captured-bootblock approach (i259/i260/i261 WONTFIX) for the private forked bootloader (trinity-autoboot). The in-repo apparatus it leaves behind — src/netboot/samboot_bootblock.asm, samboot_config.asm, the splice-inject diagnostics (samboot_inject_fullboot_test.go and the splicedDeviceEEPROM/loadInjectBlob helpers) and related Makefile/CI wiring — is now superseded dead code (emulation-only, harmless, but hygiene debt per CLAUDE.md doc-lifecycle). Audit what is genuinely unused (some helpers like deviceLinearEEPROM / loadRealCaptures are shared with the still-valid real-boot tests — keep those), then delete the splice-only parts in a focused PR. Preserve the RE findings (the register-clobbering proof, &805F->&40A1) in git history / the trinity-autoboot DESIGN.md before deleting.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 710, role: completing}
 
 - id: i266
   title: Install TAPO smart-plug for autonomous SAM power-cycling (enables agent-run hardware sessions)
