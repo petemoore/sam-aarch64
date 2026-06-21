@@ -954,6 +954,20 @@ $(BUILD)/editmodel.bin $(BUILD)/editmodel.map: src/editmodel.asm
 
 editmodel-z80: $(BUILD)/editmodel.bin $(BUILD)/editmodel.map
 
+# editmodel-paged-z80 — the same edit-model assembled with its PAGED backend
+# (Brick 2): blocks live in real i2 page-pool pages reached via OUT (251)/HMPR
+# section-C paging, instead of a flat arena. It orgs in LMPR low memory and
+# includes pagepool.asm resident. Driven by editmodel_paged_test.go under the
+# one sampage harness (where OUT (251) pages section C for real); gated by
+# ci-netboot-z80 alongside the flat editmodel build.
+$(BUILD)/editmodel-paged.bin $(BUILD)/editmodel-paged.map: src/editmodel.asm src/pagepool.asm
+	@mkdir -p $(BUILD)
+	pyz80 -D EM_PAGED=1 --obj=$(BUILD)/editmodel-paged.bin \
+	    --mapfile=$(BUILD)/editmodel-paged.map \
+	    src/editmodel.asm
+
+editmodel-paged-z80: $(BUILD)/editmodel-paged.bin $(BUILD)/editmodel-paged.map
+
 # pagepool-z80 — the on-SAM IDE page allocator core, i2a (flat-memory; no SAM
 # paging yet — the page_owner[] table is just a byte array here). Same standalone
 # koron-go/z80 harness as editmodel; gated by ci-netboot-z80.
@@ -1031,7 +1045,7 @@ compact-ir-z80: $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map
 # Every netboot routine binary the harness tests load.
 netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-samboot-inject netboot-smoke-boot netboot-server-boot netboot-serve-boot netboot-client-boot netboot-trinload netboot-sd-listread
 
-ci-netboot-z80: netboot-z80-routines editmodel-z80 pagepool-z80 viewport-z80 asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80
+ci-netboot-z80: netboot-z80-routines editmodel-z80 editmodel-paged-z80 pagepool-z80 viewport-z80 asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80
 	cd tools/sampage && go test ./...
 	cd tools/netboot-oracle/z80 && go test ./...
 	# Guard: the 8x-unrolled SHA-256 round block inlined in sha256.asm still

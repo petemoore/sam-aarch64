@@ -33,20 +33,49 @@
 ; koron-go/z80, replays random inserts+deletes, and asserts LineAt and
 ; goto-by-id match the Go oracle on every step.
 
-                ; org only when assembled standalone (host harness uses
-                ; -D EM_STANDALONE=1); an including file supplies its own org.
+                ; org only when assembled standalone (the host harness uses
+                ; -D EM_STANDALONE=1 for the flat backend and -D EM_PAGED=1 for
+                ; the paged backend); an including file supplies its own org.
+                ; The paged backend orgs in LMPR-mapped low memory (sections A+B,
+                ; &0000-&7FFF) because OUT (251) moves sections C AND D — the
+                ; resident structures must not live there (design §8.1 point 1).
+                if defined(EM_PAGED)
+                org     &0000
+                else
                 if defined(EM_STANDALONE)
                 org     &8000
+                endif
                 endif
 
 ; ---------------------------------------------------------------------------
 ; Constants
 ; ---------------------------------------------------------------------------
 
-; EM_BLOCK_CAP: data capacity per block. 256 for flat-memory testing so
-; splits occur with a modest insert count. The real SAM value (Brick 2,
-; paging integration) is 8192 (½-page); set there without structural change.
+; EM_BLOCK_CAP: data capacity per block.
+;  - flat backend (EM_STANDALONE): 256, so splits fire with a modest insert
+;    count in the small flat arena.
+;  - paged backend (EM_PAGED): 512 — small enough that splits still fire with a
+;    modest op count, large enough that peak live-block count stays well under
+;    the physical-page budget (one 16 KB pool page per block, ~30 free).
+; The production editor sets the §8.1 8 KB ½-page cap without structural change:
+; block capacity is independent of the paging mechanism and of the
+; cap-independent logical results the oracle checks (line order, goto, count).
+                if defined(EM_PAGED)
+EM_BLOCK_CAP:   equ 512
+                else
 EM_BLOCK_CAP:   equ 256
+                endif
+
+                if defined(EM_PAGED)
+; EM_SECTION_C: the section-C window base. em_desc_dataptr_a pages a block's pool
+; page into section C via OUT (251) and returns this address; all block-data
+; access goes through that single choke point. Section C is &8000-&BFFF; blocks
+; use only the low EM_BLOCK_CAP bytes of the 16 KB page.
+EM_SECTION_C:   equ &8000
+; PORT_HMPR: the High Memory Page Register (sections C+D). OUT (PORT_HMPR), page
+; maps physical `page` into section C (and page+1 into the unused section D).
+PORT_HMPR:      equ 251
+                endif
 
 ; EM_MAX_BLOCKS: descriptor pool size. 80 is ample for the Brick 1 test.
 EM_MAX_BLOCKS:  equ 80
@@ -79,6 +108,12 @@ EM_OP_DELETE:    equ 1              ; op byte of a delete entry (insert = 0)
 ; EM_FREE_COUNT=0.
 ; ===========================================================================
 em_reset:
+                if defined(EM_PAGED)
+                ; Return every live block's pool page before discarding the
+                ; document, so reset (and em_load, which resets first) never
+                ; leaks pages. No-op when the document is already empty.
+                call    em_free_all_pages
+                endif
                 xor     a
                 ld      (EM_NBLOCKS), a
                 ld      (EM_NEXT_DESC), a
@@ -582,12 +617,30 @@ em_alloc_highwater:
                 inc     (hl)
 
 em_alloc_init_desc:
-                ; A = descriptor index (on stack). Compute data_ptr and write the
-                ; descriptor entry: {data_ptr_lo, data_ptr_hi, line_count=0}.
+                ; Stack top = descriptor index (pushed AF) from the allocator.
+                if defined(EM_PAGED)
+                ; Paged backend: claim a pool page for the block and write the
+                ; descriptor {page, unused, line_count=0}. The page byte at +0 is
+                ; what em_desc_dataptr_a later maps into section C.
+                ld      a, PP_DOC
+                call    pp_alloc_page       ; A = page (clobbers B,C,D,E,HL)
+                pop     bc                  ; B = descriptor index (hi byte of AF)
+                ld      c, a                ; C = page number
+                ld      a, b                ; A = descriptor index
+                call    em_desc_ptr_a       ; HL -> descriptor[index]; A,BC preserved
+                ld      (hl), c             ; descriptor+0 = page
+                inc     hl
+                ld      (hl), 0             ; descriptor+1 = unused
+                inc     hl
+                ld      (hl), 0             ; descriptor+2 = line_count = 0
+                ld      a, b                ; A = allocated descriptor index
+                ret
+                else
+                ; Flat backend: data_ptr = EM_DATA + index * EM_BLOCK_CAP. With
+                ; EM_BLOCK_CAP=256 the multiply only affects the high byte.
                 pop     af
                 push    af                  ; save index again
 
-                ; data_ptr = EM_DATA + index * 256.
                 ; Low byte = EM_DATA_LO (constant); high byte = EM_DATA_HI + index.
                 ld      hl, EM_DATA
                 ld      b, h                ; B = EM_DATA_HI
@@ -608,6 +661,7 @@ em_alloc_init_desc:
 
                 pop     af                  ; A = allocated index
                 ret
+                endif
 
 ; ---------------------------------------------------------------------------
 ; em_free_desc — push descriptor index A onto the free-list for later reuse.
@@ -616,6 +670,17 @@ em_alloc_init_desc:
 ; The free-list is a stack with EM_FREE_COUNT as the top index.
 ; ---------------------------------------------------------------------------
 em_free_desc:
+                if defined(EM_PAGED)
+                ; Paged backend: return the block's pool page to FREE before
+                ; recycling the descriptor index. The page byte is at +0; it
+                ; survives until the index is re-allocated (which overwrites it).
+                push    af                  ; save descriptor index
+                call    em_desc_ptr_a       ; HL -> descriptor[index]
+                ld      a, (hl)             ; A = page
+                ld      b, PP_DOC
+                call    pp_free_page        ; assert tag + free (clobbers D,E,HL)
+                pop     af                  ; A = descriptor index
+                endif
                 push    hl
                 push    de
                 ld      hl, EM_FREE_COUNT
@@ -644,15 +709,31 @@ em_desc_ptr_a:
                 ret
 
 ; ---------------------------------------------------------------------------
-; em_desc_dataptr_a — HL = EM_DESC[A].data_ptr (the data base address).
+; em_desc_dataptr_a — HL = the block-data base address for descriptor A.
+;
+; This is the single choke point through which all block data is reached, so
+; every single-block op (line_at / goto / intra-block insert+delete / serialize)
+; pages its block in immediately before access and stays correct unchanged.
+;  - flat backend: HL = EM_DESC[A].data_ptr (the flat arena pointer).
+;  - paged backend: OUT (251) maps the block's pool page into section C and
+;    HL = EM_SECTION_C (&8000). Two arbitrary blocks cannot be mapped at once
+;    (section D = section-C page + 1), so cross-block copies route through
+;    EM_SCRATCH — see em_do_split / em_do_merge_next / em_do_merge_prev.
 ; ---------------------------------------------------------------------------
 em_desc_dataptr_a:
                 call    em_desc_ptr_a
+                if defined(EM_PAGED)
+                ld      a, (hl)             ; A = page number (descriptor+0)
+                out     (PORT_HMPR), a      ; map the page into section C
+                ld      hl, EM_SECTION_C    ; HL = block-data base (&8000)
+                ret
+                else
                 ld      e, (hl)
                 inc     hl
                 ld      d, (hl)
                 ex      de, hl
                 ret
+                endif
 
 ; ---------------------------------------------------------------------------
 ; em_desc_linecount_a — A = EM_DESC[A].line_count.
@@ -957,15 +1038,29 @@ em_sp_right_done:
                 sbc     hl, de              ; HL = byte size of second half
                 ld      (EM_W_SRSIZE), hl
 
-                ; Allocate new descriptor D2.
+                ; Copy the second half into the resident scratch buffer while the
+                ; source block is still mapped. The paged backend cannot map the
+                ; source and destination pages at once (design §8.1 point 2), so
+                ; the move routes through scratch in both backends. EM_W_SMID_PTR
+                ; is still valid here: nothing has re-paged since the mid-walk.
+                ld      hl, (EM_W_SMID_PTR) ; HL = second-half source
+                ld      de, EM_SCRATCH      ; DE = resident scratch
+                ld      bc, (EM_W_SRSIZE)
+                ld      a, b
+                or      c
+                jr      z, em_sp_to_scratch_done
+                ldir
+em_sp_to_scratch_done:
+
+                ; Allocate new descriptor D2 (claims its pool page in paged mode).
                 call    em_alloc_desc       ; A = D2 index
                 ld      (EM_W_SDESC2), a
 
-                ; Copy second-half records into D2's data region.
+                ; Copy the scratch buffer into D2's (now-mapped) data region.
                 ld      a, (EM_W_SDESC2)
-                call    em_desc_dataptr_a   ; HL = D2 data base
+                call    em_desc_dataptr_a   ; HL = D2 data base (pages D2 into C)
                 ex      de, hl              ; DE = D2 data base
-                ld      hl, (EM_W_SMID_PTR) ; HL = second half source
+                ld      hl, EM_SCRATCH      ; HL = scratch source
                 ld      bc, (EM_W_SRSIZE)
                 ld      a, b
                 or      c
@@ -1358,28 +1453,31 @@ em_merge_try_prev:
 ; ---------------------------------------------------------------------------
 em_do_merge_next:
                 ; Copy next's packed records to the end of D's data region.
-                ; Compute D's end pointer BEFORE calling em_used_bytes_a, which
-                ; clobbers EM_W_DATA_BASE, EM_W_NLINES, EM_W_END_PTR, and DE.
-                ; Save D's end in EM_W_MTMP so it survives the em_used_bytes_a call.
+                ; Copy next's records into the resident scratch buffer, then
+                ; append them at D's end. The paged backend cannot map next and D
+                ; at once (design §8.1 point 2), so the move routes through scratch
+                ; in both backends. EM_W_MTMP holds the byte count across the steps.
+                ; --- 1. byte count = used(next) ---
+                ld      a, (EM_W_MNEXT)
+                call    em_used_bytes_a     ; HL = used(next)
+                ld      (EM_W_MTMP), hl     ; save byte count
+                ld      a, h
+                or      l
+                jr      z, em_mn_copy_done  ; used(next) == 0: nothing to move
+                ; --- 2. next's data -> scratch (next mapped here) ---
+                ld      bc, (EM_W_MTMP)     ; BC = byte count
+                ld      a, (EM_W_MNEXT)
+                call    em_desc_dataptr_a   ; HL = next's data base (maps next)
+                ld      de, EM_SCRATCH
+                ldir                        ; next -> scratch
+                ; --- 3. D's end -> DE (maps D) ---
                 ld      a, (EM_W_MDESC)
-                call    em_used_bytes_a     ; HL = used(D); also clobbers EM_W_END_PTR to D's end
-                ; EM_W_END_PTR now = D's data_base + used(D) = D's end.
-                ld      de, (EM_W_END_PTR)  ; DE = destination (D's end = append point)
-                ld      (EM_W_MTMP), de     ; save D's end; em_used_bytes_a(next) will clobber EM_W_END_PTR
-
-                ; Get byte count = used(next), and source = next's data base.
-                ld      a, (EM_W_MNEXT)
-                call    em_used_bytes_a     ; HL = used(next); EM_W_END_PTR now = next's end, DE clobbered
-                ld      b, h
-                ld      c, l                ; BC = byte count
-                ld      de, (EM_W_MTMP)     ; DE = D's end (destination, restored from EM_W_MTMP)
-                ld      a, b
-                or      c
-                jr      z, em_mn_copy_done
-                ld      a, (EM_W_MNEXT)
-                call    em_desc_dataptr_a   ; HL = next's data base (source)
-                ld      de, (EM_W_MTMP)     ; restore DE = D's end; em_desc_dataptr_a's EX DE,HL clobbered it
-                ldir                        ; copy next's records into D
+                call    em_used_bytes_a     ; EM_W_END_PTR = D's end (maps D)
+                ld      de, (EM_W_END_PTR)  ; DE = append point (D's end)
+                ; --- 4. scratch -> D's end ---
+                ld      bc, (EM_W_MTMP)     ; BC = byte count
+                ld      hl, EM_SCRATCH
+                ldir                        ; scratch -> D
 
 em_mn_copy_done:
                 ; Add next's line_count to D's line_count.
@@ -1394,16 +1492,14 @@ em_mn_copy_done:
                 add     a, c
                 ld      (hl), a
 
-                ; Re-point EM_LOC for next's records to D. Only next's records move.
-                ; Get line_count first: em_desc_linecount_a clobbers HL, so call it
-                ; before em_desc_dataptr_a (which sets HL to the data base we need).
+                ; Re-point EM_LOC for next's (now moved) records to D. Walk the
+                ; scratch copy of next's records so no block needs re-paging.
                 ld      a, (EM_W_MNEXT)
                 call    em_desc_linecount_a ; A = next's line_count
                 ld      b, a
                 ld      a, (EM_W_MDESC)
                 ld      c, a                ; C = D (new home for moved records)
-                ld      a, (EM_W_MNEXT)
-                call    em_desc_dataptr_a   ; HL = next's data base (em_desc_linecount_a clobbered HL)
+                ld      hl, EM_SCRATCH      ; walk the moved records in scratch
 em_mn_reloc:
                 ld      a, b
                 or      a
@@ -1465,28 +1561,31 @@ em_mn_shifted:
 ; On entry: EM_W_MDESC = D, EM_W_MPREV = prev descriptor, EM_W_MPOS = pos of D.
 ; ---------------------------------------------------------------------------
 em_do_merge_prev:
-                ; Copy D's packed records to the end of prev's data region.
-                ; Compute prev's end BEFORE calling em_used_bytes_a, which clobbers
-                ; EM_W_DATA_BASE, EM_W_NLINES, EM_W_END_PTR, and the DE register.
-                ; Save prev's end in EM_W_MTMP so it survives the call.
+                ; Copy D's records into the resident scratch buffer, then append
+                ; them at prev's end. The paged backend cannot map D and prev at
+                ; once (design §8.1 point 2), so the move routes through scratch in
+                ; both backends. EM_W_MTMP holds the byte count across the steps.
+                ; --- 1. byte count = used(D) ---
+                ld      a, (EM_W_MDESC)
+                call    em_used_bytes_a     ; HL = used(D)
+                ld      (EM_W_MTMP), hl     ; save byte count
+                ld      a, h
+                or      l
+                jr      z, em_mp_copy_done  ; used(D) == 0: nothing to move
+                ; --- 2. D's data -> scratch (D mapped here) ---
+                ld      bc, (EM_W_MTMP)     ; BC = byte count
+                ld      a, (EM_W_MDESC)
+                call    em_desc_dataptr_a   ; HL = D's data base (maps D)
+                ld      de, EM_SCRATCH
+                ldir                        ; D -> scratch
+                ; --- 3. prev's end -> DE (maps prev) ---
                 ld      a, (EM_W_MPREV)
-                call    em_used_bytes_a     ; HL = used(prev); EM_W_END_PTR = prev's end, DE clobbered
-                ld      de, (EM_W_END_PTR)  ; DE = prev's end (destination)
-                ld      (EM_W_MTMP), de     ; save; em_used_bytes_a(D) will clobber EM_W_END_PTR
-
-                ; Get byte count = used(D), and source = D's data base.
-                ld      a, (EM_W_MDESC)
-                call    em_used_bytes_a     ; HL = used(D); EM_W_END_PTR now = D's end, DE clobbered
-                ld      b, h
-                ld      c, l                ; BC = byte count
-                ld      de, (EM_W_MTMP)     ; DE = prev's end (destination, restored from EM_W_MTMP)
-                ld      a, b
-                or      c
-                jr      z, em_mp_copy_done
-                ld      a, (EM_W_MDESC)
-                call    em_desc_dataptr_a   ; HL = D's data base (source)
-                ld      de, (EM_W_MTMP)     ; restore DE = prev's end; em_desc_dataptr_a's EX DE,HL clobbered it
-                ldir                        ; copy D's records into prev
+                call    em_used_bytes_a     ; EM_W_END_PTR = prev's end (maps prev)
+                ld      de, (EM_W_END_PTR)  ; DE = append point (prev's end)
+                ; --- 4. scratch -> prev's end ---
+                ld      bc, (EM_W_MTMP)     ; BC = byte count
+                ld      hl, EM_SCRATCH
+                ldir                        ; scratch -> prev
 
 em_mp_copy_done:
                 ; Add D's line_count to prev's line_count.
@@ -1501,16 +1600,14 @@ em_mp_copy_done:
                 add     a, c
                 ld      (hl), a
 
-                ; Re-point EM_LOC for D's records to prev. Only D's records move.
-                ; Get line_count first: em_desc_linecount_a clobbers HL, so call it
-                ; before em_desc_dataptr_a (which sets HL to the data base we need).
+                ; Re-point EM_LOC for D's (now moved) records to prev. Walk the
+                ; scratch copy of D's records so no block needs re-paging.
                 ld      a, (EM_W_MDESC)
                 call    em_desc_linecount_a ; A = D's line_count
                 ld      b, a
                 ld      a, (EM_W_MPREV)
                 ld      c, a                ; C = prev (new home for moved records)
-                ld      a, (EM_W_MDESC)
-                call    em_desc_dataptr_a   ; HL = D's data base (em_desc_linecount_a clobbered HL)
+                ld      hl, EM_SCRATCH      ; walk the moved records in scratch
 em_mp_reloc:
                 ld      a, b
                 or      a
@@ -2167,6 +2264,46 @@ em_ltm_set:
 em_ltm_no:
                 ret
 
+                if defined(EM_PAGED)
+; ===========================================================================
+; Paged backend: page-pool integration (Brick 2)
+; ===========================================================================
+
+; ---------------------------------------------------------------------------
+; em_free_all_pages — return every live block's pool page to FREE.
+;
+; Walks EM_ORDER[0..EM_NBLOCKS-1]; for each descriptor frees its page byte
+; (descriptor+0) with tag PP_DOC. Called by em_reset before it discards the
+; document, so a reset (or em_load, which resets first) never leaks pages.
+; No-op when EM_NBLOCKS == 0.
+; ---------------------------------------------------------------------------
+em_free_all_pages:
+                ld      a, (EM_NBLOCKS)
+                or      a
+                ret     z
+                ld      b, a                ; B = blocks remaining
+                ld      ix, EM_ORDER
+em_fap_loop:
+                ld      a, (ix+0)           ; A = descriptor index
+                push    bc                  ; save loop counter (pp_free_page clobbers B)
+                push    ix
+                call    em_desc_ptr_a       ; HL -> descriptor[index]
+                ld      a, (hl)             ; A = page
+                ld      b, PP_DOC
+                call    pp_free_page        ; assert tag + free (clobbers D,E,HL)
+                pop     ix
+                pop     bc
+                inc     ix
+                djnz    em_fap_loop
+                ret
+
+                ; The page allocator the paged backend allocates/frees/maps blocks
+                ; through (pp_alloc_page / pp_free_page + the page_owner[] table).
+                ; Included resident (no PP_STANDALONE org, no PP_TABLE_BASE) so its
+                ; routines and table follow this code in low memory.
+                include "pagepool.asm"
+                endif
+
 ; ===========================================================================
 ; Working storage (scratch variables used across routines)
 ; ===========================================================================
@@ -2224,10 +2361,21 @@ EM_ORDER:       defs EM_MAX_BLOCKS
 ; loc: EM_LOC[id] = descriptor index holding id. Valid indices: 1..EM_MAX_IDS-1.
 EM_LOC:         defs EM_MAX_IDS
 
-; Data regions: descriptor d's data starts at EM_DATA + d*EM_BLOCK_CAP (=256).
-; With EM_BLOCK_CAP=256, each block's region is 256-byte aligned, which
-; simplifies the data_ptr computation in em_alloc_desc.
+                if defined(EM_PAGED)==0
+; Flat backend only: descriptor d's data starts at EM_DATA + d*EM_BLOCK_CAP
+; (=256). With EM_BLOCK_CAP=256, each block's region is 256-byte aligned, which
+; simplifies the data_ptr computation in em_alloc_desc. The paged backend has no
+; arena — each block lives in its own pool page, reached via section C.
 EM_DATA:        defs EM_MAX_BLOCKS*EM_BLOCK_CAP
+                endif
+
+; EM_SCRATCH: resident cross-block copy buffer. Split and both merges copy a
+; source block's records here, page in the destination block, then copy them out
+; — the paged backend cannot map two arbitrary pool pages at once (design §8.1
+; point 2). Sized to one block (the largest single-copy is < EM_BLOCK_CAP bytes).
+; Present in both backends (the flat backend just routes through it harmlessly),
+; so the split/merge logic needs no per-backend branch.
+EM_SCRATCH:     defs EM_BLOCK_CAP
 
 ; ===========================================================================
 ; I/O buffers
