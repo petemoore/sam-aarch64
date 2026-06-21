@@ -281,9 +281,9 @@ type Hardware struct {
 	cpu *z80.CPU
 
 	// Optional read-coverage recorder (item i111).  When non-nil, every
-	// resolveRead marks the physical (page, offset) it actually touched —
+	// Get marks the physical (page, offset) it actually touched —
 	// capturing both opcode fetches and data loads, since koron's CPU routes
-	// both through Get -> resolveRead.  nil for normal runs (zero overhead).
+	// both through Get.  nil for normal runs (zero overhead).
 	cov *coverage
 }
 
