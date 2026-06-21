@@ -4048,9 +4048,9 @@
 - id: i230
   title: RAM-test the patched bootblock on real hardware (inject + stripes + ALHK auto-boot) before any EEPROM flash
   description: |
-    Stage 2 of the i135c no-brick plan. HARDWARE — GATED ON PETE BEING PRESENT (no set-owner cmd, so this is the gate: the agent must NOT run this when Pete is away; it needs Pete at the SAM to reload trinload + watch the screen). Push the combined patched-bootblock (or the boot-screen demo) to RAM via trinload and confirm on the real SAM: the rainbow stripes + copyright banner RENDER (the i229 recipe makes them work — the bare-data demo showed flat yellow), the config-fetch + record-boot / no-boot decision works, and it returns cleanly to trinload (clean RET, never di;halt). The stripes MUST work here BEFORE i135c patches the EEPROM (the i135c->i230 dep enforces it). Nothing here touches the boot EEPROM. Depends i229.
+    HARDWARE PARTIAL RESULT (2026-06-25): the rainbow STRIPES were confirmed RENDERING on Pete's real SAM via a trinload RAM push of mgt_screen_demo (the i229 interrupt-rendering recipe works — the earlier bare-data demo showed flat yellow; clean Esc->trinload return confirmed). Banner position (trinload moved the cursor; the bootblock's CLSLOWER fixes it) + whether the border shows stripes (HDMI-interface uncertain) are deferred to the real-bootblock stage. The FULL i230 test (the faithful inject's stripes+banner+wait+teardown + config-fetch/record-boot decision) re-runs once i259 lands.   Stage 2 of the i135c no-brick plan. HARDWARE — GATED ON PETE BEING PRESENT (no set-owner cmd, so this is the gate: the agent must NOT run this when Pete is away; it needs Pete at the SAM to reload trinload + watch the screen). Push the combined patched-bootblock (or the boot-screen demo) to RAM via trinload and confirm on the real SAM: the rainbow stripes + copyright banner RENDER (the i229 recipe makes them work — the bare-data demo showed flat yellow), the config-fetch + record-boot / no-boot decision works, and it returns cleanly to trinload (clean RET, never di;halt). The stripes MUST work here BEFORE i135c patches the EEPROM (the i135c->i230 dep enforces it). Nothing here touches the boot EEPROM. Depends i229. 
   status: OPEN
-  depends_on: [i229]
+  depends_on: [i229, i259]
   kind: leaf
   owner: agent
 
@@ -4358,3 +4358,11 @@
   prs:
     - {num: 684, role: completing}
   refs: [tools/netboot-oracle/cmd/samboot-statediff/main.go, docs/specs/samboot-opening-screen.md, i197]
+
+- id: i259
+  title: "SAMBOOT faithful opening-screen inject: reproduce the stock-ROM flow (stripes+banner+wait-any-key+teardown), both paths"
+  description: |
+    THE DELIVERABLE (now fully unblocked + spec'd). Contract: docs/specs/samboot-opening-screen.md — zero degrees of freedom, every step cited to a stock ROM v3.0 address; superset model (Colin removed the opening screen, we add it back byte-faithfully). PR #682's inject is NOT faithful: no-auto-boot RETs with no keypress wait (screen flashes); auto-boot doesn't cancel stripes. REWORK: no-auto-boot = stripes(&ED1B) + CLSLOWER(&06B5 channel-K/lower-screen) + banner(&0F7F via POMSG) + WTFK READKEY(&1CB1) ANY-key + fall into Colin's verbatim teardown; auto-boot = same opening screen + reproduce Colin's full teardown (CLSLOWER + disarm LINICOLS + NSPPC=&FF + TVDATA=&10) + jp bdos_boot_record (no wait). Q1/Q2 RESOLVED by the i258 RAM-diff + the with/without-pokes ultimate test (Pete 2026-06-25): Q1 LEAVE OUT the MAINER3 editor flags (stock has them, Colin doesn't, identical sync state); Q2 KEEP the NSPPC/TVDATA pokes (without them Colin leaves &00/&16 — wrong; necessary because our inject loads B-DOS like Colin). Also update mgt_screen_demo to the faithful flow (READKEY any-key + CLSLOWER) for the i230 hardware re-test. depends i257 (harness fix, DONE) + i258 (experiment, DONE) — both satisfied, so this is READY agent work.
+  status: OPEN
+  kind: leaf
+  owner: agent
