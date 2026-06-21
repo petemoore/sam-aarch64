@@ -14,12 +14,18 @@
 #      The nudge is load-bearing: `/context` is a *local* Claude Code command --
 #      it renders the readout but does NOT invoke the model, so it cannot, by
 #      itself, wake the agent for another turn. A real text line is what creates
-#      the turn; the agent then reads the (already-rendered) readout and either
-#      continues to the next item (>=50% free) or winds down (writes its ROADMAP
-#      handover) and `touch $WOUND_DOWN`. The nudge is NOT the startup prompt --
-#      the live agent still holds full context and must not re-ground from scratch.
+#      the turn; the agent then reads the (already-rendered) readout and takes ONE
+#      of three exits (the nudge spells them out): continue to the next item
+#      (>=50% free, workable tip), CONTEXT/BUDGET wind-down (`touch $WOUND_DOWN`),
+#      or BACKLOG-DRAINED hold (`touch $QUIESCENT`). The nudge is NOT the startup
+#      prompt -- the live agent still holds full context and must not re-ground.
 #   3. monitor sees WOUND_DOWN -> stuffs `/clear` + the startup prompt: a
 #      genuine clean reset, re-grounded from ROADMAP (never lossy compaction)
+#   4. monitor sees QUIESCENT -> HOLDS: stops nudging (no /clear, no restart)
+#      until the session transcript grows (Pete writes back / any new turn),
+#      then auto-expires the hold and resumes normal polling. This stops the
+#      drained-loop waste: without it, a true drain winds down -> /clear+restart
+#      -> re-confirms the drain -> restarts again, forever (item i103).
 #
 set -uo pipefail
 
@@ -33,7 +39,7 @@ STARTUP_PROMPT="${ALOOP_PROMPT:-Continue per docs/ROADMAP.md. AUTONOMOUS-LOOP RU
 # keeps its full session context, so it needs only a real text line (any prompt)
 # to take a turn -- re-grounding from ROADMAP here would be wasteful and is only
 # for the post-/clear path. Override via env.
-RESUME_NUDGE="${ALOOP_RESUME:-Autonomous-loop checkpoint: you just finished a work item; the /context readout above is yours. Decide ONCE, mechanically -- do not re-litigate (re-deciding burns the context this protects). If /context shows under 50% free: write your ROADMAP Current-State handover, then run 'touch ~/.claude/autonomous-loop/wound-down'. Otherwise pull the next item from 'build/registry ready' (run from the repo root) -- the priority-queue tip is authoritative; do NOT judgment-pick a lower item or grep the markdown views to improvise. If the tip turns out to be blocked by something not yet tracked as a depends_on edge, that is a missing-edge bug: add the edge ('build/registry dep add --id <tip> --on <blocker>', creating the blocker item first if it does not exist) -- the queue auto-reshuffles -- then pull 'ready' again, repeating until you get a genuinely workable tip. Wind down EVEN above 50% free if the only ready work is fresh-session/large-multi-session, Pete/hardware-gated, or bigger than your remaining budget; otherwise work the tip now -- you still hold full session context, so do not re-read ROADMAP from scratch. Note: 'build/registry ready' auto-includes owner:pete items when the presence marker (~/.claude/autonomous-loop/pete-present) exists -- no flag needed.}"
+RESUME_NUDGE="${ALOOP_RESUME:-Autonomous-loop checkpoint: you just finished a work item; the /context readout above is yours. Decide ONCE, mechanically -- do not re-litigate (re-deciding burns the context this protects). Pull the next item from 'build/registry ready' (run from the repo root) -- the priority-queue tip is authoritative; do NOT judgment-pick a lower item or grep the markdown views to improvise. If the tip turns out to be blocked by something not yet tracked as a depends_on edge, that is a missing-edge bug: add the edge ('build/registry dep add --id <tip> --on <blocker>', creating the blocker item first if it does not exist) -- the queue auto-reshuffles -- then pull 'ready' again, repeating until you get a genuinely workable tip. Then choose ONE exit by REASON. (1) WORK THE TIP NOW if you have a genuinely workable non-Pete tip AND /context shows at least 50% free -- you still hold full session context, so do not re-read ROADMAP from scratch. (2) CONTEXT/BUDGET WIND-DOWN if a workable non-Pete tip exists but /context shows under 50% free, or the tip is bigger than your remaining budget: write your ROADMAP Current-State handover, then 'touch ~/.claude/autonomous-loop/wound-down' -- the monitor /clears and restarts you FRESH to keep working (a large/multi-session item is still workable: take this exit to get a fresh-context session for it -- it is NOT a drain). (3) BACKLOG-DRAINED HOLD if ZERO workable non-Pete items remain -- every ready item is Pete/hardware-gated or deferred/speculative-pending-a-decision-you-cannot-make, and any genuine missing-edge is now tracked: write your handover, then 'touch ~/.claude/autonomous-loop/quiescent' -- the monitor HOLDS (stops nudging) until the transcript grows (Pete writes back), so it will not wastefully restart you just to re-confirm the drain. If both (3) and low context apply, prefer quiescent. Note: 'build/registry ready' auto-includes owner:pete items when the presence marker (~/.claude/autonomous-loop/pete-present) exists -- no flag needed.}"
 POLL="${ALOOP_POLL:-10}"                    # seconds between polls
 HANG_TIMEOUT="${ALOOP_HANG_TIMEOUT:-1800}"  # seconds with no signal -> nudge an idle session
 CLEAR_SETTLE="${ALOOP_CLEAR_SETTLE:-30}"    # seconds for /clear to fully reset the TUI before re-prompting
@@ -61,7 +67,14 @@ LOGFILE="${ALOOP_LOG:-$SEMA_DIR/monitor.log}" # persistent trace: every stuff/su
 
 TASK_DONE="$SEMA_DIR/task-done"
 WOUND_DOWN="$SEMA_DIR/wound-down"
+QUIESCENT="$SEMA_DIR/quiescent"             # backlog-drained hold (i103): agent touches it when ZERO workable non-Pete items remain; monitor stops nudging until the transcript grows (Pete writes back)
 LOCK="$SEMA_DIR/monitor.lock"               # single-instance guard (see preflight)
+# PROJECTS_DIR holds the Claude Code session transcripts (one .jsonl per
+# session, appended to live). The quiescence watcher (i103) measures the active
+# transcript's size to detect "the transcript grew" = a new turn = a sign of
+# life (Pete wrote back), which auto-expires the hold. Override the whole path
+# with ALOOP_TRANSCRIPT to pin one file.
+PROJECTS_DIR="${ALOOP_PROJECTS_DIR:-$HOME/.claude/projects}"
 
 # log() timestamps to stdout AND appends to $LOGFILE so the trace survives the
 # session -- the live stall that motivated i179 left no inspectable record. Watch
@@ -73,6 +86,28 @@ log() {
 }
 # preview() renders a stuffed payload for the trace: newlines as literal \n, capped.
 preview() { local s="${1//$'\n'/\\n}"; printf '%s' "${s:0:70}"; }
+
+# transcript_size() echoes the byte size of the live session transcript -- the
+# Claude Code .jsonl the session appends to on every turn. The quiescence
+# watcher (i103) uses it to detect "the transcript grew" (Pete wrote back / any
+# new turn ran), which auto-expires the backlog-drained hold so the loop is
+# never permanently deaf. Honours ALOOP_TRANSCRIPT if set; otherwise picks the
+# most-recently-modified *.jsonl under PROJECTS_DIR (the active session is the
+# one being written). Echoes 0 when none can be found -- the caller treats a
+# 0 baseline as "cannot watch" and declines to hold (deaf-loop insurance).
+transcript_size() {
+  local f=""
+  if [ -n "${ALOOP_TRANSCRIPT:-}" ] && [ -f "$ALOOP_TRANSCRIPT" ]; then
+    f="$ALOOP_TRANSCRIPT"
+  else
+    f="$(find "$PROJECTS_DIR" -maxdepth 2 -name '*.jsonl' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)"
+  fi
+  if [ -n "$f" ] && [ -f "$f" ]; then
+    wc -c <"$f" 2>/dev/null | tr -d ' '
+  else
+    echo 0
+  fi
+}
 
 # stuff_raw() sends a string to the session in CHUNK_SIZE-byte bursts, pausing
 # CHUNK_DELAY between them. A long string stuffed as ONE `screen -X stuff` burst
@@ -209,14 +244,53 @@ fi
 echo $$ > "$LOCK"
 trap 'rm -f "$LOCK"' EXIT
 
-rm -f "$TASK_DONE" "$WOUND_DOWN"            # start from a clean slate
+rm -f "$TASK_DONE" "$WOUND_DOWN" "$QUIESCENT" # start from a clean slate
 log "monitor up: session='$SESSION' window=$WINDOW poll=${POLL}s hang=${HANG_TIMEOUT}s (pid $$)"
 log "semaphores under: $SEMA_DIR"
 
 # --- loop ------------------------------------------------------------------
 last_signal=$SECONDS
+quiescent_mark=""                           # transcript size when quiescence began; empty = not holding (i103)
 while true; do
-  if [ -e "$WOUND_DOWN" ]; then
+  # If $QUIESCENT vanished by any path (auto-expire below, or an external rm),
+  # forget the stale baseline so a future hold re-marks from scratch.
+  [ -e "$QUIESCENT" ] || quiescent_mark=""
+  if [ -e "$QUIESCENT" ]; then
+    # Backlog-drained hold (i103). The agent confirmed ZERO workable non-Pete
+    # items remain and touched $QUIESCENT (instead of $WOUND_DOWN), so a /clear
+    # + restart would only re-confirm the drain -- a wasteful loop. Hold here,
+    # suppressing the hang-timeout nudge, until the transcript grows (Pete writes
+    # back / any new turn), then auto-expire.
+    if [ -z "$quiescent_mark" ]; then
+      # First sight: let the wind-down turn that wrote $QUIESCENT fully settle so
+      # its own writes are already in the transcript, THEN snapshot the size as
+      # the baseline. Marking it now (not from the file's mtime, and only after
+      # idle) is what stops the wind-down turn's own growth from counting as
+      # "new activity" and spuriously re-waking (the i103 design note).
+      wait_for_idle "pre-quiescent"
+      quiescent_mark="$(transcript_size)"
+      if [ "$quiescent_mark" = "0" ]; then
+        # No transcript to watch -> we cannot detect a wake, and holding would
+        # risk a permanently-deaf loop. Decline to hold: drop the semaphore and
+        # fall back to normal behaviour (the hang-timeout still backstops).
+        log "QUIESCENT: WARNING -- no session transcript found to watch; NOT holding (deaf-loop insurance). Removing $QUIESCENT."
+        rm -f "$QUIESCENT"
+        quiescent_mark=""
+        last_signal=$SECONDS
+      else
+        log "QUIESCENT: backlog drained; holding (transcript mark=${quiescent_mark}B). Nudging suppressed until the transcript grows (Pete writes back)."
+      fi
+    else
+      now_size="$(transcript_size)"
+      if [ "$now_size" -gt "$quiescent_mark" ] 2>/dev/null; then
+        log "QUIESCENT: transcript grew ${quiescent_mark}B -> ${now_size}B (sign of life) -> exiting hold, resuming normal polling"
+        rm -f "$QUIESCENT"
+        quiescent_mark=""
+        last_signal=$SECONDS    # the live turn (Pete's message) handles itself; don't nudge over it
+      fi
+      # else: still drained and idle -- do nothing (this is the whole point).
+    fi
+  elif [ -e "$WOUND_DOWN" ]; then
     log "WOUND_DOWN detected"
     wait_for_idle "pre-clear"   # same race as TASK_DONE: never /clear over a still-running turn
     log "WOUND_DOWN -> flush input, /clear, settle ${CLEAR_SETTLE}s, restart"
