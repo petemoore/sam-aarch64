@@ -4143,9 +4143,11 @@
   title: "CSD probe drv_init fails on hardware: reorder drv_init before SD read (chk_trinity vs post-&38 PIC settle)"
   description: |
     HARDWARE-FOUND (2026-06-24): on real Trinity the probe halts at pm_fail_init (blue border) because drv_init's chk_trinity (fixed DJNZ delays, no BUSY poll) issues its &08 identity select while the shared PIC is still settling from the heavy &38 SD-init done just before — the OUT is dropped (manual:180), the identity read is stale, chk_trinity fails. Fix: reorder drv_init BEFORE csd_read_into_stage (matches trinload's proven order; startup CSD pre-read is not load-bearing, re-read per-RRQ). Emulation-first: model a post-&38 PIC settle window in the emulator (drop ENC-select OUT during it) + a test that reproduces the failure with old order and passes with the reorder, per CLAUDE.md rule 7. Also adopt Colin's full deselect tail (&30/dummy-&DF/&30/&04). Authority: review vs trinity-emulation-fidelity.md, encdrv.asm chk_trinity, combined.txt:180,321, Colin bdos15t SD driver.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 656, role: completing}
 
 - id: i243
   title: Route all trinload-pushed di;halt sites through tr_terminate (i228) + document the technique
@@ -4162,6 +4164,9 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 656, role: completing}
+    - {num: 656, role: completing}
   parent: i243
 
 - id: i243b
