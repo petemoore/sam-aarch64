@@ -10,9 +10,10 @@
 // write-protect from ONE memory model rather than a flat model with a paged one
 // bolted beside it (CLAUDE.md §7: one emulation layer, used by every test — the
 // split is precisely what let the i87a dumper ROM-paging bug reach hardware).
-// It is the down-payment on i190 (fold the two Go SAM Coupé emulators onto one
-// memory core): i190 promotes this package to the shared core both harnesses
-// import, and the assembler harness's inline pager becomes a thin wrapper over it.
+// It is the down-payment on i190 — ONE shared SAM-emulation core both harnesses
+// import (NOT a merge of the harnesses, which may stay distinct): i190 makes the
+// assembler harness's inline pager a thin wrapper over this package too, so the
+// paging/memory model is implemented once.
 //
 // Memory map (SAM Coupé Tech Manual v3.0 §6.10; docs/notes/sam-paging.md):
 //
