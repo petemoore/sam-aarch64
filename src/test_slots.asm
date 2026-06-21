@@ -24,15 +24,12 @@
 ; -----------------------------------------------------------------------
 run_slot_self_tests:
 
-; -- Seed PASS_PC = 0 ---------------------------------------------------
-; M4 made encode_branch_imm and encode_adrp_imm subtract PASS_PC from
-; the input value (caller now passes an absolute target address, not a
-; raw byteOffset).  At cold boot PASS_PC (&C159 .. &C15C) contains
-; whatever the SAM RAM/SAMDOS load left there, which is non-zero.  The
-; pre-M4 branch / adrp test vectors below are still written in "raw
-; byteOffset" style, so we zero PASS_PC here to recover the old
-; semantics for this suite.  PC-aware tests live in test_pc_rel.asm.
-                call    pass_pc_reset
+; The reg / imm / shift / extend tests that follow are PASS_PC-independent
+; — only encode_branch_imm and encode_adrp_imm consume PASS_PC.  The
+; PASS_PC = 0 precondition for those is therefore seeded locally,
+; immediately before the branch / adrp block below (search "Seed
+; PASS_PC = 0"), so the seed sits adjacent to its sole consumers and
+; cannot be silently broken by PASS_PC-touching code inserted above it.
 
 ; -- encode_reg(Xreg{BP=0,BW=5}, 5)  =>  0x00000005 --------------------
                 ld      hl, slot_xreg_bp0_bw5
@@ -175,6 +172,20 @@ run_slot_self_tests:
                 call    encode_extend_op
                 call    assert_eq32_de_hl_imm
                 defb    &00, &c8, &00, &00  ; 0x0000C800 LE
+
+; -- Seed PASS_PC = 0 for the PC-relative block -------------------------
+; M4 made encode_branch_imm and encode_adrp_imm subtract PASS_PC from
+; the input value (the caller passes an absolute target address, not a
+; raw byteOffset).  At cold boot PASS_PC (&C159 .. &C15C) holds whatever
+; the SAM RAM/SAMDOS load left there — non-zero in general.  The branch /
+; adrp vectors below are written in "raw byteOffset" style, valid only
+; when PASS_PC == 0, so zero it here.  Seeding immediately before the
+; block (rather than once at the suite top) keeps the dependency local:
+; the precondition is established right where it is consumed, and a
+; PASS_PC-mutating test added among the encoder tests above cannot
+; corrupt these vectors.  PC-aware tests (non-zero PC) live in
+; test_pc_rel.asm.
+                call    pass_pc_reset
 
 ; -- encode_branch_imm(BranchImm26{BP=0,BW=26}, 0) => 0x00000000 -------
 ; Mirrors slots_branch_test.go::TestEncodeBranchImm26 (first sub-case).
