@@ -2713,9 +2713,27 @@
   description: |
     tup tracks the full dependency graph and rebuilds exactly what is stale (and removes orphaned outputs), structurally preventing the dirty-build/stale-artifact class — same class i116 patches test-by-test; tup would make stale-.bin reads impossible by construction. Pete's ~/git/spectrum4 uses tup ('amazing'). Scope: evaluate tup against current Makefile (pyz80 .asm→.bin, Go builds, disk-image assembly, CI jobs), then if it wins, plan the migration.
   status: OPEN
-  kind: leaf
+  kind: umbrella
   owner: agent
   refs: [Makefile, i116, i104]
+
+- id: i123a
+  title: "Evaluate make->tup migration (recommendation + costs)"
+  description: |
+    DONE: docs/notes/build-system-tup-evaluation.md. tup auto-tracks pyz80 source includes and HARD-ERRORS on undeclared generated-file reads — structurally eliminating the off-axis-cluster stale-symbol footgun (the assembler.sym import edge becomes a build error, not a silent stale binary; orphaned .bins self-delete). spectrum4 proves the pattern incl. FUSE-in-Docker CI. Costs: privileged FUSE in CI (--cap-add SYS_ADMIN --device /dev/fuse), no CI wall-time win (full build per checkout), a real 167-target rewrite. Recommendation: migrate, but it is Pete's go/no-go (build-system swap) -> i123b.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  parent: i123
+
+- id: i123b
+  title: "Perform the make->tup build migration (Pete-greenlit)"
+  description: |
+    Contingent on Pete's go-ahead per the i123a evaluation. Port the 167-target Makefile to per-dir Tupfiles + Tuprules.tup, reusing spectrum4's template. Order: (1) symbol-import cluster (enc_fix_payload->assembler->test_mem/test_cluster) first — it is the footgun; (2) netboot standalone binaries (parallel); (3) disk-pack + table-codegen edges. Keep SimCoupe/release-gate in ci.yml; byte-compare tup outputs vs make until parity; add the FUSE-privileged tup-under-docker CI launcher. owner:pete = the go/no-go decision is his; implementation is agent work once greenlit.
+  status: OPEN
+  kind: leaf
+  owner: pete
+  parent: i123
 
 - id: i124
   title: Emulate full Trinity boot path so netboot boot wrappers run end-to-end in the harness
