@@ -4038,10 +4038,12 @@
     q50 RESOLVED (Pete, 2026-06-25): (1) SPLICE: change CALL &805F @&409E (CD 5F 80) to CALL inject in the free &415E..&43FF; inject = call &805F (DOS init) -> call samboot_read_config -> ret nc (no-auto-boot falls through to the verbatim restore: at &40A1) -> else ld a,l / ld (BD_BOOT_RECORD),a / jp bdos_boot_record. Only 3 bytes change; restore:+screen tail untouched. (2) CONFIG READ: BY-NAME via find_index for the "SAMBOOT Config  " chunk per samboot.md §4 — NOT by-number; the 1KB scratch-buffer RAM home is an emulation-verified implementation detail, not a Pete call. (3) VERIFY SCOPE: LIMITED — assert chunk-1 LOADS + runs coherently to &805F (12 chunk loads) + the decision logic via samboot_inject_test.go; the post-&805F in-chain decision + stripe PIXELS go to the i230 hardware test (Pete attends for the stripes-across-border confirmation). Do NOT teach the emulator past B-DOS init (i232). i229 = AGENT work; i230 = Pete-present.
     
     Stage 1 of the i135c no-brick plan; gated on i239 (DONE). Build the patched bootblock with a WORKING boot screen + emulation-verify. Full recipe: docs/plans/i229-combined-bootblock.md. KEY: stripes are rendered LIVE by the ROM line-interrupt ISRs, not the &ED1B data write — set IM1+EI + arm STATPORT, clear paper+border to CLUT index 0, build LINICOLS (verbatim &ED1B port in samboot_stripes), set print pos via CLSLOWER &06B5, print banner (UTMSG &3DB0 + &0F7F tail), EI, wait-for-key, teardown LINICOLS[0]=&FF, RET CLEANLY (never di;halt — clean RET restarts trinload). The committed mgt_screen_demo (the &ED1B DATA write only) showed FLAT YELLOW on hardware for omitting interrupt setup — the gap this closes. Also assemble the full chunk-1 image (Colin's bootblock from local eeprom.bin + the inject via a splice tool, NOT committed bytes) + reset-chain-verify (samboot_real_boot_test.go). Fresh context; do not rush boot code (prime directive).
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i239]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 682, role: completing}
 
 - id: i230
   title: RAM-test the patched bootblock on real hardware (inject + stripes + ALHK auto-boot) before any EEPROM flash
