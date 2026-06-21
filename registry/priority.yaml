@@ -3,6 +3,8 @@
 # Re-rank with: registry prioritize --id iN --to-top
 #               registry move --id iN --before iM
 #               registry move --id iN --after iM
+- i229
+- i230
 - i135c
 - i133
 - i177

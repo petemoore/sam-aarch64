@@ -2800,7 +2800,7 @@
   description: |
     Flash the prototyped patched EEPROM to Pete's Trinity via write_chunk, keeping the captured EEPROM as the restore backup; power-cycle and confirm unattended auto-boot of the configured record. Hardware (Pete).
   status: OPEN
-  depends_on: [i135d, i87a-b1, i87b, i197c, i221, i226]
+  depends_on: [i135d, i87a-b1, i87b, i197c, i221, i226, i230]
   kind: leaf
   owner: pete
   parent: i135
@@ -3879,3 +3879,20 @@
   owner: agent
   prs:
     - {num: 621, role: completing}
+
+- id: i229
+  title: "Build + emulation-verify the combined patched-bootblock image (Colin original + samboot_inject spliced, <=1KB chunk-1)"
+  description: |
+    Stage 1 of the i135c no-brick plan (Pete, 2026-06-23). There is no Makefile target yet that produces a flashable patched bootblock: samboot_inject.bin is only the injected segment, not the full chunk-1 image. Build one: take Colin's original bootblock (350 B at EEPROM device &2000 = eeprom.bin offset 0, ORG &4000), splice in the samboot_inject decision+dispatch (redraw stripes / read SAMBOOT Config chunk / auto-boot record via ALHK or fall through to the restore: exit) at the analysis hook (after CALL &805F, before restore:), using the ~683 B of free space in chunk 1 (&00015E-&000408). Result is a <=1024-byte chunk-1 image. Emulation-verify via the reset->ROM->bootblock chain (samboot_real_boot_test.go / the rom.bin + eeprom.bin model) that it boots a configured record and falls through when unconfigured. Prereq for the RAM test (Stage 2) and the flash (i135c).
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+
+- id: i230
+  title: RAM-test the patched bootblock on real hardware (inject + stripes + ALHK auto-boot) before any EEPROM flash
+  description: |
+    Stage 2 of the i135c no-brick plan. Push the combined patched-bootblock image (Stage 1) to RAM via trinload and run it on the real SAM to de-risk the NOVEL parts before touching the boot EEPROM: the inject control flow, the SAMBOOT Config read, the stripes pixel redraw (renders for real), and crucially the ALHK auto-boot FROM bootblock context (firing a record-boot right after CALL &805F — only ever run in emulation). Config present -> it boots the chosen record; absent -> falls to BASIC. Prereqs (none touch the boot EEPROM): provision the 'SAMBOOT Config  ' chunk to a FREE chunk via the proven safe-write path, and a spare bootable record as the auto-boot target. What it canNOT test: the reset->ROM->&4000 handoff + reset paging state (only the flash + power-cycle proves that). If this passes, only the ROM's documented reset-handoff remains untested before the flash.
+  status: OPEN
+  depends_on: [i229]
+  kind: leaf
+  owner: agent
