@@ -535,3 +535,57 @@ func findRepoRootRegistry(t *testing.T) string {
 		dir = parent
 	}
 }
+
+// TestGenInFileAnchorsAndLinks verifies the i159 in-file anchoring + ref-linking:
+// every row's id cell carries an `<a id="iNN"></a>` anchor, a dep/dependent/ref id
+// whose row is in the SAME view is rewritten to `[iNN](#iNN)`, and an id whose row
+// is NOT in this view (a closed dep seen from the open view, or a question) is left
+// as plain text so no link dangles.
+func TestGenInFileAnchorsAndLinks(t *testing.T) {
+	reg := &Registry{
+		Items: []Item{
+			{ID: "i40", Title: "Open, gated on an open peer + a closed item + a question",
+				Status: StatusOpen, Owner: "agent",
+				DependsOn: []string{"i41", "i42", "q9"}},
+			{ID: "i41", Title: "Open peer", Status: StatusOpen, Owner: "agent"},
+			{ID: "i42", Title: "Closed item", Status: StatusDone, Owner: "agent"},
+		},
+		Questions: []Question{{ID: "q9", Body: "?", Owner: "pete"}},
+	}
+	var open, closed bytes.Buffer
+	if err := genItemsOpenClosed(reg, &open, &closed); err != nil {
+		t.Fatalf("genItemsOpenClosed: %v", err)
+	}
+	openOut, closedOut := open.String(), closed.String()
+
+	// Anchors present on every rendered row (open + closed views).
+	for _, want := range []string{`<a id="i40"></a>`, `<a id="i41"></a>`} {
+		if !strings.Contains(openOut, want) {
+			t.Errorf("open view missing anchor %q:\n%s", want, openOut)
+		}
+	}
+	if !strings.Contains(closedOut, `<a id="i42"></a>`) {
+		t.Errorf("closed view missing anchor for i42:\n%s", closedOut)
+	}
+
+	// Same-view dep is linked; i41 is open, so i40's deps cell links it.
+	if !strings.Contains(openOut, "[i41](#i41)") {
+		t.Errorf("open view should link the same-view dep i41 as [i41](#i41):\n%s", openOut)
+	}
+	// i41's dependents cell links back to i40 (also open).
+	if !strings.Contains(openOut, "[i40](#i40)") {
+		t.Errorf("open view should link the dependent i40 as [i40](#i40):\n%s", openOut)
+	}
+	// Cross-view ids must NOT be linked (would dangle): i42 is closed, q9 is a
+	// question — neither has a row in the open view.
+	if strings.Contains(openOut, "[i42](#i42)") {
+		t.Errorf("open view must NOT link the cross-view (closed) dep i42:\n%s", openOut)
+	}
+	if strings.Contains(openOut, "[q9](#q9)") {
+		t.Errorf("open view must NOT link the question dep q9:\n%s", openOut)
+	}
+	// ...but they still appear as plain text (the dep is shown, just unlinked).
+	if !strings.Contains(openOut, "i42") || !strings.Contains(openOut, "q9") {
+		t.Errorf("open view should still show i42 and q9 as plain deps:\n%s", openOut)
+	}
+}

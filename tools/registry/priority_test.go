@@ -616,18 +616,21 @@ func TestGenBacklog_ProducesOrderedTable(t *testing.T) {
 		t.Errorf("backlog output must NOT contain a rank column; output:\n%s", out)
 	}
 
-	// i1b row exists (the leading cell is the id, not a rank).
-	if !strings.Contains(out, "| **i1b** |") {
+	// i1b row exists (the leading cell is the id — an in-file anchor + bold id,
+	// not a rank).
+	rowI1b := "| " + renderIDCell("i1b") + " |"
+	rowI2 := "| " + renderIDCell("i2") + " |"
+	if !strings.Contains(out, rowI1b) {
 		t.Errorf("expected row for i1b; output:\n%s", out)
 	}
 	// i2 row exists.
-	if !strings.Contains(out, "| **i2** |") {
+	if !strings.Contains(out, rowI2) {
 		t.Errorf("expected row for i2; output:\n%s", out)
 	}
 
 	// Row order matches priority order: i1b before i2.
-	posI1b := strings.Index(out, "| **i1b** |")
-	posI2 := strings.Index(out, "| **i2** |")
+	posI1b := strings.Index(out, rowI1b)
+	posI2 := strings.Index(out, rowI2)
 	if posI1b == -1 || posI2 == -1 || posI1b > posI2 {
 		t.Errorf("expected i1b row before i2 row (priority order); output:\n%s", out)
 	}
@@ -688,15 +691,17 @@ func TestGenToOutDir_BacklogWritten(t *testing.T) {
 	if strings.Contains(content, "| rank |") {
 		t.Errorf("backlog.md must NOT contain a rank column:\n%s", content)
 	}
-	if !strings.Contains(content, "| **i1b** |") {
+	rowI1b := "| " + renderIDCell("i1b") + " |"
+	rowI2 := "| " + renderIDCell("i2") + " |"
+	if !strings.Contains(content, rowI1b) {
 		t.Errorf("backlog.md missing row for i1b:\n%s", content)
 	}
-	if !strings.Contains(content, "| **i2** |") {
+	if !strings.Contains(content, rowI2) {
 		t.Errorf("backlog.md missing row for i2:\n%s", content)
 	}
 	// Row order matches priority order: i1b before i2.
-	posI1b := strings.Index(content, "| **i1b** |")
-	posI2 := strings.Index(content, "| **i2** |")
+	posI1b := strings.Index(content, rowI1b)
+	posI2 := strings.Index(content, rowI2)
 	if posI1b == -1 || posI2 == -1 || posI1b > posI2 {
 		t.Errorf("backlog.md rows not in priority order (i1b before i2):\n%s", content)
 	}

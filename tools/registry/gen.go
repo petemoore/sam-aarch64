@@ -114,6 +114,47 @@ func renderItemRefs(it Item) string {
 	return strings.Join(parts, ", ")
 }
 
+// renderIDCell renders the leading id cell with an in-file anchor target (i159):
+// an empty `<a id="iNN"></a>` before the bold id, so a `[iNN](#iNN)` link
+// elsewhere in the SAME doc jumps to this row. GitHub prefixes both the anchor id
+// and same-page fragment links with `user-content-`, keeping them consistent; the
+// anchor is invisible, so the cell still displays just the bold id. The id matches
+// itemIDRe/questionIDRe (safe as an HTML attribute / fragment).
+func renderIDCell(id string) string {
+	return `<a id="` + id + `"></a>**` + id + "**"
+}
+
+// linkifyIDList rewrites a ", "-joined cell (deps / dependents / refs) so every
+// token that is the id of a row IN THIS SAME VIEW becomes an in-file anchor link
+// `[id](#id)` (i159). Gating on presentInView keeps the links in-file: a token is
+// linked only when its row exists in this doc, so cross-doc ids (a closed dep seen
+// from the open view, a qN seen from an item view) and non-id ref tokens (file
+// paths, URLs, §sections — never equal to a present id) pass through unchanged, so
+// no link ever dangles. Operates on the already-escaped cell text; the link syntax
+// it emits contains no characters escapeCell would touch.
+func linkifyIDList(s string, presentInView map[string]bool) string {
+	if s == "" {
+		return s
+	}
+	parts := strings.Split(s, ", ")
+	for i, p := range parts {
+		if presentInView[p] {
+			parts[i] = "[" + p + "](#" + p + ")"
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// presentIDs returns the set of ids that have a data row in a view, for
+// linkifyIDList's in-file gating.
+func presentIDs(ids []string) map[string]bool {
+	m := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		m[id] = true
+	}
+	return m
+}
+
 // sortedItems returns items in canonical typed sort order.
 func sortedItems(items []Item) []Item {
 	out := make([]Item, len(items))
@@ -186,6 +227,20 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	reverseEdges := buildReverseEdges(items)
 	gates := computeGates(reg)
 
+	// In-file anchor targets (i159): the open view links only to ids whose row is
+	// in the open view, the closed view only to closed ids — so a linkified ref
+	// never points at a row that lives in the other file.
+	var openIDs, closedIDs []string
+	for _, it := range items {
+		if isOpen(it.Status) {
+			openIDs = append(openIDs, it.ID)
+		} else {
+			closedIDs = append(closedIDs, it.ID)
+		}
+	}
+	openPresent := presentIDs(openIDs)
+	closedPresent := presentIDs(closedIDs)
+
 	openHeader := "| **id** | item | status | owner | gate | PR | deps | dependents | refs/links |\n|---|---|---|---|---|---|---|---|---|\n"
 	closedHeader := "| **id** | item | status | owner | PR | deps | dependents | refs/links |\n|---|---|---|---|---|---|---|---|\n"
 
@@ -195,16 +250,16 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	fmt.Fprint(openW, openHeader)
 	for _, it := range items {
 		if isOpen(it.Status) {
-			fmt.Fprintf(openW, "| **%s** | %s | %s | %s | %s | %s | %s | %s | %s |\n",
-				escapeCell(it.ID),
+			fmt.Fprintf(openW, "| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
+				renderIDCell(it.ID),
 				renderItemCell(it),
 				escapeCell(renderItemStatus(it)),
 				escapeCell(it.Owner),
 				escapeCell(gates[it.ID]),
 				renderItemPRs(it),
-				escapeCell(renderItemDeps(it)),
-				escapeCell(renderItemDependents(it, reverseEdges)),
-				escapeCell(renderItemRefs(it)),
+				linkifyIDList(escapeCell(renderItemDeps(it)), openPresent),
+				linkifyIDList(escapeCell(renderItemDependents(it, reverseEdges)), openPresent),
+				linkifyIDList(escapeCell(renderItemRefs(it)), openPresent),
 			)
 		}
 	}
@@ -215,15 +270,15 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	fmt.Fprint(closedW, closedHeader)
 	for _, it := range items {
 		if !isOpen(it.Status) {
-			fmt.Fprintf(closedW, "| **%s** | %s | %s | %s | %s | %s | %s | %s |\n",
-				escapeCell(it.ID),
+			fmt.Fprintf(closedW, "| %s | %s | %s | %s | %s | %s | %s | %s |\n",
+				renderIDCell(it.ID),
 				renderItemCell(it),
 				escapeCell(renderItemStatus(it)),
 				escapeCell(it.Owner),
 				renderItemPRs(it),
-				escapeCell(renderItemDeps(it)),
-				escapeCell(renderItemDependents(it, reverseEdges)),
-				escapeCell(renderItemRefs(it)),
+				linkifyIDList(escapeCell(renderItemDeps(it)), closedPresent),
+				linkifyIDList(escapeCell(renderItemDependents(it, reverseEdges)), closedPresent),
+				linkifyIDList(escapeCell(renderItemRefs(it)), closedPresent),
 			)
 		}
 	}
@@ -376,6 +431,17 @@ func genBacklog(reg *Registry, priority []string, w io.Writer) error {
 	reverseEdges := buildReverseEdges(reg.Items)
 	gates := computeGates(reg)
 
+	// In-file anchor targets (i159): only ids that actually render a row in this
+	// backlog view (priority ids present in the registry) are linked, so a
+	// linkified ref never dangles.
+	var backlogIDs []string
+	for _, id := range priority {
+		if _, ok := byID[id]; ok {
+			backlogIDs = append(backlogIDs, id)
+		}
+	}
+	backlogPresent := presentIDs(backlogIDs)
+
 	header := "| **id** | item | status | owner | gate | deps | dependents |\n|---|---|---|---|---|---|---|\n"
 
 	fmt.Fprint(w, generatedBannerBacklog)
@@ -387,14 +453,14 @@ func genBacklog(reg *Registry, priority []string, w io.Writer) error {
 			// Omit unknown ids from the view (validate would have caught them).
 			continue
 		}
-		fmt.Fprintf(w, "| **%s** | %s | %s | %s | %s | %s | %s |\n",
-			escapeCell(it.ID),
+		fmt.Fprintf(w, "| %s | %s | %s | %s | %s | %s | %s |\n",
+			renderIDCell(it.ID),
 			renderItemCell(it),
 			escapeCell(renderItemStatus(it)),
 			escapeCell(it.Owner),
 			escapeCell(gates[it.ID]),
-			escapeCell(renderItemDeps(it)),
-			escapeCell(renderItemDependents(it, reverseEdges)),
+			linkifyIDList(escapeCell(renderItemDeps(it)), backlogPresent),
+			linkifyIDList(escapeCell(renderItemDependents(it, reverseEdges)), backlogPresent),
 		)
 	}
 	return nil
