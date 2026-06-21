@@ -4336,3 +4336,13 @@
   owner: agent
   prs:
     - {num: 681, role: completing}
+
+- id: i257
+  title: harness HALT is terminal only when interrupts disabled (boot Colin's fork to BASIC)
+  description: |
+    Two Go Z80 harnesses (tools/netboot-oracle/z80/harness.go and tools/z80-test-harness-go/harness.go) break their run loop on every cpu.HALT with no interrupt-enable check. That is wrong: a HALT is terminal only when interrupts are disabled (di;halt, the boot-end convention); an EI;HALT (IFF1==true) is waiting for the 50 Hz frame interrupt and must resume, as real hardware does. Add an IFF1 guard so EI;HALT resumes (clear cpu.HALT, advance PC past the koron oopHALT rewind). With the fix, Colin's fork boots coherently through B-DOS init's frame-timed delay loops (e.g. &AB17) to the ROM editor idle loop (BASIC) in the netboot Go core; the real-boot test now asserts that stronger claim.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 683, role: completing}
