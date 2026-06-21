@@ -82,8 +82,10 @@ const (
 )
 
 // Tok is a single lexical token. Beyond Kind and Pos, the value fields are
-// populated per kind: Text for TokIdent / TokInt, Int for TokInt's value,
-// Bytes for TokString / comment bodies, and Digit+LocalDir for TokLocalRef.
+// populated per kind: Int carries a TokInt's value, Text the identifier or
+// numeric-literal spelling (a char literal sets Int with no Text), Bytes the
+// TokString / comment body, and Digit+LocalDir a TokLocalRef's digit and
+// direction.
 type Tok struct {
 	Kind     TokKind
 	Pos      Position
