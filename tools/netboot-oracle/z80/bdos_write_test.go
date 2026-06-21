@@ -139,7 +139,7 @@ func le32(n int) [4]byte {
 func TestBDOSWriteSector(t *testing.T) {
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
-		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
 	store := z80h.NewBDOSStore()
 	card := z80h.NewCardModel()
@@ -203,7 +203,7 @@ func TestBDOSWriteSector(t *testing.T) {
 func TestBDOSWriteRecord(t *testing.T) {
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
-		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
 	store := z80h.NewBDOSStore()
 	card := z80h.NewCardModel()
@@ -290,7 +290,7 @@ func makeSectorPayload(fill byte) []byte {
 func TestBDOSSaveWriteBackRoundTrips(t *testing.T) {
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
-		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
 	store := z80h.NewBDOSStore()
 	card := z80h.NewCardModel()

@@ -29,7 +29,7 @@ const (
 func loadHKDF(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(hkdfBinPath); err != nil {
-		t.Skipf("hkdf binary not built (%s); run `make netboot-hkdf`", hkdfBinPath)
+		t.Fatalf("hkdf binary not built (%s); run `make netboot-hkdf`", hkdfBinPath)
 	}
 	mac, err := z80h.Load(hkdfBinPath, hkdfMapPath)
 	if err != nil {

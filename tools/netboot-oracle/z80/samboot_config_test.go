@@ -35,7 +35,7 @@ const (
 func loadSambootCfg(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(sambootCfgBinPath); err != nil {
-		t.Skipf("samboot_config binary not built (%s); run `make netboot-samboot-config`", sambootCfgBinPath)
+		t.Fatalf("samboot_config binary not built (%s); run `make netboot-samboot-config`", sambootCfgBinPath)
 	}
 	mac, err := z80h.Load(sambootCfgBinPath, sambootCfgMapPath)
 	if err != nil {

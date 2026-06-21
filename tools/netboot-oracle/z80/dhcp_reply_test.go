@@ -20,7 +20,7 @@ const (
 func loadDHCPMachine(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(dhcpBinPath); err != nil {
-		t.Skipf("netboot DHCP routine binary not built (%s); run `make netboot-dhcp-reply`", dhcpBinPath)
+		t.Fatalf("netboot DHCP routine binary not built (%s); run `make netboot-dhcp-reply`", dhcpBinPath)
 	}
 	mac, err := z80h.Load(dhcpBinPath, dhcpMapPath)
 	if err != nil {

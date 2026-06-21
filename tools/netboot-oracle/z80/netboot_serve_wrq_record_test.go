@@ -91,7 +91,7 @@ func loadServeRecordPush(t *testing.T, records, freeRecord int) (*z80h.Machine, 
 	t.Helper()
 	mac, err := z80h.Load(serveBootBin, serveBootMap)
 	if err != nil {
-		t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
+		t.Fatalf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
 	}
 	// CONFIG + driver init reuse the host-test demo helpers; they write by symbol,
 	// which the boot map exports too. No served files are needed for a WRQ push
@@ -502,7 +502,7 @@ func loadServeRecordPushFree(t *testing.T, records int, free []int) (*z80h.Machi
 	t.Helper()
 	mac, err := z80h.Load(serveBootBin, serveBootMap)
 	if err != nil {
-		t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
+		t.Fatalf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
 	}
 	// Use 0xD000 (above the binary tail ~&C2EB) to avoid overwriting sdc_init_ladder.
 	fillServeConfig(t, mac, []demoFile{{"hello.txt", makeFile(10), 0xD000}})
@@ -951,7 +951,7 @@ func TestServeWRQRecordPushStrategyExplicitTaken(t *testing.T) {
 func TestServeE2EComputedBDRecordsRecordPush(t *testing.T) {
 	mac, err := z80h.Load(serveBootBin, serveBootMap)
 	if err != nil {
-		t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
+		t.Fatalf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
 	}
 
 	// Model a Trinity: ENC + the EEPROM identity serve_main reads (the DEMO identity,

@@ -20,7 +20,7 @@ const (
 func loadParseMachine(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(tftpParseBinPath); err != nil {
-		t.Skipf("netboot TFTP parse binary not built (%s); run `make netboot-tftp-parse`", tftpParseBinPath)
+		t.Fatalf("netboot TFTP parse binary not built (%s); run `make netboot-tftp-parse`", tftpParseBinPath)
 	}
 	mac, err := z80h.Load(tftpParseBinPath, tftpParseMapPath)
 	if err != nil {

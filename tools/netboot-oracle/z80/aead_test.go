@@ -25,7 +25,7 @@ const (
 func loadAEAD(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(aeadBinPath); err != nil {
-		t.Skipf("aead binary not built (%s); run `make netboot-aead`", aeadBinPath)
+		t.Fatalf("aead binary not built (%s); run `make netboot-aead`", aeadBinPath)
 	}
 	mac, err := z80h.Load(aeadBinPath, aeadMapPath)
 	if err != nil {

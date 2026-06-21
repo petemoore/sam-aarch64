@@ -105,16 +105,30 @@ func realCapturePath(name string) string {
 	return p
 }
 
-// loadRealCaptures reads the captured ROM + EEPROM, skipping the test cleanly if
-// either is absent (a missing proprietary capture is never a failure — i190a's
-// gate is "passes, or skips when the captures are absent").
+// requirePrivateCapture returns the path to a proprietary capture (Colin Piggot's
+// forked ROM / EEPROM / B-DOS 1.5t — non-redistributable, never in the repo or CI).
+// It FAILS HARD if the file is absent, UNLESS SKIP_PRIVATE_TESTS=true is explicitly
+// set in the environment (CI sets it, because these artifacts cannot be published).
+// No silent skip: the ONLY way these tests skip is that explicit, intentional env
+// var (i253 — Pete 2026-06-25, "a missing precondition must FAIL, not skip").
+func requirePrivateCapture(t *testing.T, name string) string {
+	t.Helper()
+	if os.Getenv("SKIP_PRIVATE_TESTS") == "true" {
+		t.Skipf("SKIP_PRIVATE_TESTS=true: proprietary capture %q unavailable (Colin's non-redistributable artifact)", name)
+	}
+	p := realCapturePath(name)
+	if p == "" {
+		t.Fatalf("proprietary capture %q absent under ~/sam-archive/samboot-capture/ (or $SAMBOOT_CAPTURE_DIR) and SKIP_PRIVATE_TESTS is not set — place the file or set SKIP_PRIVATE_TESTS=true", name)
+	}
+	return p
+}
+
+// loadRealCaptures reads the captured ROM + EEPROM. A missing proprietary capture
+// is a HARD FAILURE unless SKIP_PRIVATE_TESTS=true (see requirePrivateCapture).
 func loadRealCaptures(t *testing.T) (rom, eeprom []byte) {
 	t.Helper()
-	romPath := realCapturePath("rom.bin")
-	eepPath := realCapturePath("eeprom.bin")
-	if romPath == "" || eepPath == "" {
-		t.Skip("captured ROM/EEPROM not present (set $SAMBOOT_CAPTURE_DIR or place rom.bin+eeprom.bin under ~/sam-archive/samboot-capture/) — Colin's proprietary captures, not in the repo")
-	}
+	romPath := requirePrivateCapture(t, "rom.bin")
+	eepPath := requirePrivateCapture(t, "eeprom.bin")
 	var err error
 	if rom, err = os.ReadFile(romPath); err != nil {
 		t.Fatalf("read rom.bin: %v", err)

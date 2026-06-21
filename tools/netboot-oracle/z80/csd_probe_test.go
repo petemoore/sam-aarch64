@@ -45,7 +45,7 @@ const (
 func loadCSDProbe(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(csdProbeBinPath); err != nil {
-		t.Skipf("csd_probe binary not built (%s); run `make netboot-csd-probe`", csdProbeBinPath)
+		t.Fatalf("csd_probe binary not built (%s); run `make netboot-csd-probe`", csdProbeBinPath)
 	}
 	mac, err := z80h.Load(csdProbeBinPath, csdProbeMapPath)
 	if err != nil {

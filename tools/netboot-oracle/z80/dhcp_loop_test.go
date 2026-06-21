@@ -52,7 +52,7 @@ var dhcpLoopConfig = struct {
 func loadDHCPLoop(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(dhcpLoopBinPath); err != nil {
-		t.Skipf("dhcp_loop binary not built (%s); run `make netboot-dhcp-loop`", dhcpLoopBinPath)
+		t.Fatalf("dhcp_loop binary not built (%s); run `make netboot-dhcp-loop`", dhcpLoopBinPath)
 	}
 	mac, err := z80h.Load(dhcpLoopBinPath, dhcpLoopMapPath)
 	if err != nil {

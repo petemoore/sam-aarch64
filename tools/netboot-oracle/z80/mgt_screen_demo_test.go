@@ -32,7 +32,7 @@ const (
 func TestMGTScreenDemoStripes(t *testing.T) {
 	mac, err := z80h.Load(mgtDemoBin, mgtDemoMap)
 	if err != nil {
-		t.Skipf("mgt_screen_demo not built (%s); run `make netboot-mgt-screen-demo`: %v", mgtDemoBin, err)
+		t.Fatalf("mgt_screen_demo not built (%s); run `make netboot-mgt-screen-demo`: %v", mgtDemoBin, err)
 	}
 
 	// Do NOT seed PALTAB — that would be a synthetic, unfaithful state (i232: a

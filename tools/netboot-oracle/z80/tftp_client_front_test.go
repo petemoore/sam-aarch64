@@ -34,7 +34,7 @@ const (
 func loadTFTPFront(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(tftpFrontBinPath); err != nil {
-		t.Skipf("tftp_client_front binary not built (%s); run `make netboot-tftp-client-front`", tftpFrontBinPath)
+		t.Fatalf("tftp_client_front binary not built (%s); run `make netboot-tftp-client-front`", tftpFrontBinPath)
 	}
 	mac, err := z80h.Load(tftpFrontBinPath, tftpFrontMapPath)
 	if err != nil {

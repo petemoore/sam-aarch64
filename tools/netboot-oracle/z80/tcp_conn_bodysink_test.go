@@ -38,7 +38,7 @@ func loadHTTPMainForStream(t *testing.T) *z80h.Machine {
 	t.Helper()
 	mac, err := z80h.Load(httpMainBinPath, httpMainMapPath)
 	if err != nil {
-		t.Skipf("http_main binary not built (%s): %v; run `make netboot-http-main`", httpMainBinPath, err)
+		t.Fatalf("http_main binary not built (%s): %v; run `make netboot-http-main`", httpMainBinPath, err)
 	}
 	return mac
 }

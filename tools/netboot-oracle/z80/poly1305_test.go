@@ -27,7 +27,7 @@ const (
 func loadPoly(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(polyBinPath); err != nil {
-		t.Skipf("poly1305 binary not built (%s); run `make netboot-poly1305`", polyBinPath)
+		t.Fatalf("poly1305 binary not built (%s); run `make netboot-poly1305`", polyBinPath)
 	}
 	mac, err := z80h.Load(polyBinPath, polyMapPath)
 	if err != nil {

@@ -30,7 +30,7 @@ func loadViewport(t *testing.T) *z80h.Machine {
 	t.Helper()
 	mac, err := z80h.Load(vpBinPath, vpMapPath)
 	if err != nil {
-		t.Skipf("viewport binary not built (%s); run `make viewport-z80`: %v", vpBinPath, err)
+		t.Fatalf("viewport binary not built (%s); run `make viewport-z80`: %v", vpBinPath, err)
 	}
 	return mac
 }

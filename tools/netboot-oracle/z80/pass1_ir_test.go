@@ -49,7 +49,7 @@ const pass1IRBufSize = 10752
 func loadPass1IR(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(p1Bin); err != nil {
-		t.Skipf("pass1-ir binary not built (%s); run `make pass1-ir-z80`", p1Bin)
+		t.Fatalf("pass1-ir binary not built (%s); run `make pass1-ir-z80`", p1Bin)
 	}
 	mac, err := z80h.Load(p1Bin, p1Map)
 	if err != nil {

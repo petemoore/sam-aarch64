@@ -19,7 +19,7 @@ const (
 func loadTFTPMachine(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(tftpBinPath); err != nil {
-		t.Skipf("netboot TFTP builders binary not built (%s); run `make netboot-tftp-build`", tftpBinPath)
+		t.Fatalf("netboot TFTP builders binary not built (%s); run `make netboot-tftp-build`", tftpBinPath)
 	}
 	mac, err := z80h.Load(tftpBinPath, tftpMapPath)
 	if err != nil {

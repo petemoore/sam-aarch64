@@ -48,7 +48,7 @@ func loadListReadFixture(t *testing.T) (*z80h.Machine, *z80h.SDCard) {
 func loadListReadFixtureCSD(t *testing.T, csd [16]byte) (*z80h.Machine, *z80h.SDCard) {
 	t.Helper()
 	if _, err := os.Stat(sdListReadBin); err != nil {
-		t.Skipf("sd_listread fixture not built (%s); run `make netboot-sd-listread`", sdListReadBin)
+		t.Fatalf("sd_listread fixture not built (%s); run `make netboot-sd-listread`", sdListReadBin)
 	}
 	mac, err := z80h.Load(sdListReadBin, sdListReadMap)
 	if err != nil {

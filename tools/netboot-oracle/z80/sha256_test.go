@@ -33,7 +33,7 @@ const (
 func loadSHA256Machine(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(sha256BinPath); err != nil {
-		t.Skipf("sha256 routine binary not built (%s); run `make netboot-sha256`", sha256BinPath)
+		t.Fatalf("sha256 routine binary not built (%s); run `make netboot-sha256`", sha256BinPath)
 	}
 	mac, err := z80h.Load(sha256BinPath, sha256MapPath)
 	if err != nil {

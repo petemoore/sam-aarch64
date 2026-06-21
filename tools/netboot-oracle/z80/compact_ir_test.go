@@ -163,7 +163,7 @@ func z80RecsBytes(t *testing.T, stream []byte) int {
 func loadCompactIR(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(cBin); err != nil {
-		t.Skipf("compact-ir binary not built (%s); run `make compact-ir-z80`", cBin)
+		t.Fatalf("compact-ir binary not built (%s); run `make compact-ir-z80`", cBin)
 	}
 	mac, err := z80h.Load(cBin, cMap)
 	if err != nil {

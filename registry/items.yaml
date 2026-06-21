@@ -4291,3 +4291,11 @@
   owner: agent
   prs:
     - {num: 668, role: completing}
+
+- id: i253
+  title: "No silently-skipping tests: a missing precondition must FAIL, not skip (Pete 2026-06-25)"
+  description: |
+    Pete's directive (2026-06-25): no test may silently t.Skip on a missing precondition — if a precondition is needed, its absence must cause a test FAILURE. Surfaced by the i251 finding that build/netboot_sd_csd.bin was never built in CI, so the WHOLE csd_to_bd_records suite (incl. the i250/i251 gates) silently skipped in CI undetected. Survey: 156 t.Skip* sites. Categories: (A) ~120+ 'binary/fixture not built; run make X' -> must fail hard (the fixture is always buildable; absence = a CI-wiring bug, exactly the sd_csd case) + ensure CI builds every needed fixture; (B) private-capture tests (Colin's proprietary rom.bin/eeprom.bin, 'captures absent') -> cannot run in CI, need an explicit opt-in mechanism (build tag / separate suite) so they're not in the default go test run at all; (C) 'out-of-harness-scope'/cap-exceeded skips -> explicit named exclusions or fail-hard; (D) opt-in sweeps (SWEEP=1) -> explicit make target/build tag; (E) toolchain-absent (GNU) skips -> CLAUDE.md §3 currently allows these as 'principled' — reconcile. Also update repo CLAUDE.md testing policy + add a memory entry.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent

@@ -41,7 +41,7 @@ import (
 func TestKeyReadLoop(t *testing.T) {
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
-		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
 
 	// Inject "15\r": two printable keys followed by a CR terminator.
@@ -76,7 +76,7 @@ func TestKeyReadLoop(t *testing.T) {
 func TestKeyReadLoopPartialConsume(t *testing.T) {
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
-		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
 
 	// Inject "AB\rXY": the loop reads "AB", then \r (terminator, not stored).
@@ -113,7 +113,7 @@ func TestKeyReadLoopPartialConsume(t *testing.T) {
 func TestKeyPollOnceNoKey(t *testing.T) {
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
-		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
 
 	// No keys injected.

@@ -65,7 +65,7 @@ func pickMachineSetup(t *testing.T) *z80h.Machine {
 	t.Helper()
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
-		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
 	card := z80h.NewCardModel()
 	card.SetRecordEntry(1, makeEntry("LOADER"))

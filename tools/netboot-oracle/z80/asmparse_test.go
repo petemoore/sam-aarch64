@@ -47,7 +47,7 @@ const (
 func loadAsmparse(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(apBinPath); err != nil {
-		t.Skipf("asmparse binary not built (%s); run `make asmparse-z80`", apBinPath)
+		t.Fatalf("asmparse binary not built (%s); run `make asmparse-z80`", apBinPath)
 	}
 	mac, err := z80h.Load(apBinPath, apMapPath)
 	if err != nil {

@@ -27,7 +27,7 @@ const (
 func loadTT(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(ttBinPath); err != nil {
-		t.Skipf("tls_transcript binary not built (%s); run `make netboot-tls-transcript`", ttBinPath)
+		t.Fatalf("tls_transcript binary not built (%s); run `make netboot-tls-transcript`", ttBinPath)
 	}
 	mac, err := z80h.Load(ttBinPath, ttMapPath)
 	if err != nil {

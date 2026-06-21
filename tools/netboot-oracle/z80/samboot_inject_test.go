@@ -57,7 +57,7 @@ type injectResult struct {
 func runInject(t *testing.T, programChunk []byte) injectResult {
 	t.Helper()
 	if _, err := os.Stat(sambootInjectBinPath); err != nil {
-		t.Skipf("samboot_inject binary not built (%s); run `make netboot-samboot-inject`", sambootInjectBinPath)
+		t.Fatalf("samboot_inject binary not built (%s); run `make netboot-samboot-inject`", sambootInjectBinPath)
 	}
 	mac, err := z80h.Load(sambootInjectBinPath, sambootInjectMapPath)
 	if err != nil {

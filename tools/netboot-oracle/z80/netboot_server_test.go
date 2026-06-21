@@ -67,7 +67,7 @@ var nbConfig = struct {
 func loadServer(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(srvBinPath); err != nil {
-		t.Skipf("netboot_server binary not built (%s); run `make netboot-server`", srvBinPath)
+		t.Fatalf("netboot_server binary not built (%s); run `make netboot-server`", srvBinPath)
 	}
 	mac, err := z80h.Load(srvBinPath, srvMapPath)
 	if err != nil {

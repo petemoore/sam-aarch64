@@ -39,7 +39,7 @@ const (
 func loadTLSClient(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(clientBinPath); err != nil {
-		t.Skipf("tls_client binary not built (%s); run `make netboot-tls-client`", clientBinPath)
+		t.Fatalf("tls_client binary not built (%s); run `make netboot-tls-client`", clientBinPath)
 	}
 	mac, err := z80h.Load(clientBinPath, clientMapPath)
 	if err != nil {

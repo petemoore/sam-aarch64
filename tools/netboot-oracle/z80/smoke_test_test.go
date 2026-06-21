@@ -35,7 +35,7 @@ const (
 func loadSmoke(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(smokeBinPath); err != nil {
-		t.Skipf("smoke_test binary not built (%s); run `make netboot-smoke-test`", smokeBinPath)
+		t.Fatalf("smoke_test binary not built (%s); run `make netboot-smoke-test`", smokeBinPath)
 	}
 	mac, err := z80h.Load(smokeBinPath, smokeMapPath)
 	if err != nil {

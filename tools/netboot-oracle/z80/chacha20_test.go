@@ -23,7 +23,7 @@ const (
 func loadChaCha(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(ccBinPath); err != nil {
-		t.Skipf("chacha20 binary not built (%s); run `make netboot-chacha20`", ccBinPath)
+		t.Fatalf("chacha20 binary not built (%s); run `make netboot-chacha20`", ccBinPath)
 	}
 	mac, err := z80h.Load(ccBinPath, ccMapPath)
 	if err != nil {

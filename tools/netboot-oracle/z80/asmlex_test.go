@@ -69,7 +69,7 @@ const (
 func loadAsmlex(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(alBinPath); err != nil {
-		t.Skipf("asmlex binary not built (%s); run `make asmlex-z80`", alBinPath)
+		t.Fatalf("asmlex binary not built (%s); run `make asmlex-z80`", alBinPath)
 	}
 	mac, err := z80h.Load(alBinPath, alMapPath)
 	if err != nil {

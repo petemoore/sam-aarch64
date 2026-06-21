@@ -70,7 +70,7 @@ func distinctFill(seed int) []byte {
 func loadDumperPaged(t *testing.T, lmpr uint8) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(dumperTLBin); err != nil {
-		t.Skipf("real dumper not built (%s); run `make netboot-dumper-trinload`", dumperTLBin)
+		t.Fatalf("real dumper not built (%s); run `make netboot-dumper-trinload`", dumperTLBin)
 	}
 	mac, err := z80h.LoadPaged(dumperTLBin, dumperTLMap, lmpr, dumperPushPage)
 	if err != nil {

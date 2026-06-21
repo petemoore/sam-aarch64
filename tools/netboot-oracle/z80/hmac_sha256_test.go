@@ -29,7 +29,7 @@ const (
 func loadHMAC(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(hmacBinPath); err != nil {
-		t.Skipf("hmac_sha256 binary not built (%s); run `make netboot-hmac-sha256`", hmacBinPath)
+		t.Fatalf("hmac_sha256 binary not built (%s); run `make netboot-hmac-sha256`", hmacBinPath)
 	}
 	mac, err := z80h.Load(hmacBinPath, hmacMapPath)
 	if err != nil {

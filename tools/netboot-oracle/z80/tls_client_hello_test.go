@@ -35,7 +35,7 @@ const (
 func loadCH(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(chBinPath); err != nil {
-		t.Skipf("tls_client_hello binary not built (%s); run `make netboot-tls-client-hello`", chBinPath)
+		t.Fatalf("tls_client_hello binary not built (%s); run `make netboot-tls-client-hello`", chBinPath)
 	}
 	mac, err := z80h.Load(chBinPath, chMapPath)
 	if err != nil {

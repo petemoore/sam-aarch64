@@ -31,7 +31,7 @@ const (
 func loadMachine(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(binPath); err != nil {
-		t.Skipf("netboot routine binary not built (%s); run `make netboot-build-udp-frame`", binPath)
+		t.Fatalf("netboot routine binary not built (%s); run `make netboot-build-udp-frame`", binPath)
 	}
 	mac, err := z80h.Load(binPath, mapPath)
 	if err != nil {

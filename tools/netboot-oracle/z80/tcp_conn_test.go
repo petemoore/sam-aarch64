@@ -54,7 +54,7 @@ var tcpConnCfg = struct {
 func loadTCPConn(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(tcpConnBinPath); err != nil {
-		t.Skipf("tcp_conn binary not built (%s); run `make netboot-tcp-conn`", tcpConnBinPath)
+		t.Fatalf("tcp_conn binary not built (%s); run `make netboot-tcp-conn`", tcpConnBinPath)
 	}
 	mac, err := z80h.Load(tcpConnBinPath, tcpConnMapPath)
 	if err != nil {

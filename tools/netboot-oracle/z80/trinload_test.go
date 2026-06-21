@@ -79,7 +79,7 @@ func installTrinloadROMStubs(mac *z80h.Machine) {
 func TestTrinloadPushRunReturn(t *testing.T) {
 	mac, err := z80h.LoadAt(trinloadBin, trinloadMap, trinloadOrg)
 	if err != nil {
-		t.Skipf("trinload not built (%v); run `make netboot-trinload`", err)
+		t.Fatalf("trinload not built (%v); run `make netboot-trinload`", err)
 	}
 	installTrinloadROMStubs(mac)
 
@@ -164,7 +164,7 @@ func TestTrinloadPushRunReturn(t *testing.T) {
 func TestTrinloadDataWriteToOffset(t *testing.T) {
 	mac, err := z80h.LoadAt(trinloadBin, trinloadMap, trinloadOrg)
 	if err != nil {
-		t.Skipf("trinload not built (%v); run `make netboot-trinload`", err)
+		t.Fatalf("trinload not built (%v); run `make netboot-trinload`", err)
 	}
 	installTrinloadROMStubs(mac)
 

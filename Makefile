@@ -64,7 +64,7 @@ ci-netboot-oracle:
 # test). The registry-sync job validates the LIVE data during gen; this gates the
 # tool's LOGIC so a regression can't merge green.
 .PHONY: ci-registry
-ci-registry:
+ci-registry: registry-gen
 	cd tools/registry && go test ./...
 
 # netboot Z80 routines — the SAM-side port (src/netboot/*.asm) of the netboot
@@ -1101,7 +1101,7 @@ ci-netboot-z80: netboot-z80-routines editmodel-z80 editmodel-paged-z80 pagepool-
 	# matches its generator (tools/sha256-unroll-gen) byte-for-byte.
 	cd tools/sha256-unroll-gen && go test ./...
 
-test-format: sam-aarch64
+test-format: sam-aarch64 release-unstripped-tbn
 	cd tools/sam-aarch64-format && go test ./...
 	cd tools/sam-aarch64 && go test ./...
 	./tests/format/run-gnu-as-check.sh
@@ -1265,7 +1265,7 @@ tables-sync-check: tables-gen
 	if [ $$fail -ne 0 ]; then exit 1; fi
 	@echo "tables-sync-check: generated tables are up to date with tools/tables-gen."
 
-test-encoder: sam-aarch64 tables-gen
+test-encoder: sam-aarch64 tables-gen release-unstripped-tbn
 	cd tools/sam-aarch64-format && go test ./...
 	cd tools/aarch64enc && go test ./...
 	cd tools/tables-gen && go test ./...

@@ -40,7 +40,7 @@ const (
 func loadTFTPSrv(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(tftpSrvBinPath); err != nil {
-		t.Skipf("tftp_server_loop binary not built (%s); run `make netboot-tftp-server-loop`", tftpSrvBinPath)
+		t.Fatalf("tftp_server_loop binary not built (%s); run `make netboot-tftp-server-loop`", tftpSrvBinPath)
 	}
 	mac, err := z80h.Load(tftpSrvBinPath, tftpSrvMapPath)
 	if err != nil {

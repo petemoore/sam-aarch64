@@ -30,7 +30,7 @@ const (
 func loadBDOS(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(bdosBinPath); err != nil {
-		t.Skipf("bdos_seam binary not built (%s); run `make netboot-bdos-seam`", bdosBinPath)
+		t.Fatalf("bdos_seam binary not built (%s); run `make netboot-bdos-seam`", bdosBinPath)
 	}
 	mac, err := z80h.Load(bdosBinPath, bdosMapPath)
 	if err != nil {
