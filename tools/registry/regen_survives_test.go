@@ -223,14 +223,13 @@ func TestGenDependentsColumn(t *testing.T) {
 	// Verify i1a row contains i1b as a dependent by parsing the row.
 	for _, line := range splitLines(combined) {
 		if contains(line, "**i1a**") {
-			// The 7-column row: | id | item | status | PR | deps | dependents | refs |
-			// dependents column (index 5 = 6th pipe-separated field, 0-indexed from start).
+			// The 8-column row: | id | item | status | owner | PR | deps | dependents | refs |
+			// fields[0]="" (before first |), fields[1]=id, ..., fields[7]=dependents.
 			fields := strings.Split(line, "|")
-			// fields[0] = "" (before first |), fields[1]=id, ..., fields[6]=dependents
-			if len(fields) < 7 {
-				t.Fatalf("i1a row has fewer than 7 fields: %q", line)
+			if len(fields) < 8 {
+				t.Fatalf("i1a row has fewer than 8 fields: %q", line)
 			}
-			dependentsCell := strings.TrimSpace(fields[6])
+			dependentsCell := strings.TrimSpace(fields[7])
 			if !contains(dependentsCell, "i1b") {
 				t.Errorf("i1a dependents cell %q does not contain i1b", dependentsCell)
 			}

@@ -2994,3 +2994,13 @@
   owner: agent
   prs:
     - {num: 509, role: completing}
+
+- id: i186
+  title: Show owner in all generated registry .md views + gate-column owner-awareness
+  description: |
+    Add an 'owner' column to all four generated registry markdown views (item-registry-open.md, item-registry-closed.md, question-registry-open.md, backlog.md) so owner:pete vs owner:agent is visible at a glance. Also fix computeGates (tools/registry/gen.go) so the backlog 'gate' column reflects owner: an owner:pete item with satisfied deps should not read 'ready' (it is excluded from 'build/registry ready'); show it as pete-held instead. Motivation: i87a sat at the top of backlog labelled 'ready' all night but was owner:pete (hidden from the agent queue); the missing owner column + owner-blind gate made it look pullable when it was not.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 516, role: completing}

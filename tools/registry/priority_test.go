@@ -542,7 +542,7 @@ func TestGenBacklog_ProducesOrderedTable(t *testing.T) {
 		t.Error("backlog output missing GENERATED banner")
 	}
 	// Table header — id, item, status, gate, deps, dependents (NO rank column).
-	if !strings.Contains(out, "| **id** | item | status | gate | deps | dependents |") {
+	if !strings.Contains(out, "| **id** | item | status | owner | gate | deps | dependents |") {
 		t.Errorf("backlog output missing expected header (no rank column); output:\n%s", out)
 	}
 	if strings.Contains(out, "| rank |") {
@@ -615,7 +615,7 @@ func TestGenToOutDir_BacklogWritten(t *testing.T) {
 	if !strings.Contains(content, "# Backlog") {
 		t.Error("backlog.md missing template H1")
 	}
-	if !strings.Contains(content, "| **id** | item | status | gate | deps | dependents |") {
+	if !strings.Contains(content, "| **id** | item | status | owner | gate | deps | dependents |") {
 		t.Errorf("backlog.md missing expected header (no rank column):\n%s", content)
 	}
 	if strings.Contains(content, "| rank |") {
