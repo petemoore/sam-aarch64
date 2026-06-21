@@ -3314,7 +3314,7 @@
   title: Determine the B-DOS save-buffer limit from first principles (read source; not hardware-only)
   description: |
     q22 reframed (Pete 2026-06-20: 'only knowable on hardware' is a hand-wave — it's deterministic and we have the source). From first principles, read the B-DOS source (reference/bdos/) to find the max writable address / available save-buffer size deterministically, and replace the GUESSED FW_RECORD_CAP=4096 (src/netboot/http_main.asm, HTTP-streaming-sink path) with a source-derived value. Establish whether a hardware bench is truly required or (likely) the limit is computable from source.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
 

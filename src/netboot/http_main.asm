@@ -406,14 +406,32 @@ PROV_STATUS:     defb PROV_CONTINUE     ; last prov_onframe status (Continue/Fil
 
                 include "fw_span.asm"          ; fw_span_record_name (<prefix><NNN>)
 
-; The per-record HSAVE capacity (q22 — PROVISIONAL; confirm on Trinity). It is
-; the RAM budget for one HSAVE source; the record-split arithmetic is correct for
-; any cap, so the value is decoupled (a one-line change). It must be large enough
-; that the largest firmware file fits the 1000-record (3-digit index) bound:
-; start.elf is ~2.98 MB, so cap >= 2983; 4096 leaves headroom (727 records) and,
-; with CONN_FLUSH_BUF = one window + one max inbound payload, keeps the bootable
-; inside the &10000 budget.
-FW_RECORD_CAP:    equ 4096
+; The per-record HSAVE capacity. It is the RAM budget for one HSAVE source; the
+; record-split arithmetic is correct for any cap, so the value is decoupled (a
+; one-line change). Two DETERMINISTIC, source-derived bounds gate it (i167 — no
+; hardware bench is required; q22's "only knowable on hardware" was a hand-wave):
+;
+;   1. The B-DOS per-HSAVE ceiling = 65535 bytes. A single HSAVE's length is the
+;      16-bit field bdos_fill_save_uifa encodes (bdos_seam.asm: pages = size>>14
+;      at +34, lengthMod16K = size&0x3FFF at +35..36), mirroring AL B-DOS 1.5a
+;      HSAVE's own setup (~/sam-archive/bdos/analysis/bdos15a.src.txt:343-352:
+;      page.cnt = (len-page) AND 31, len.offs = RES 7,H). The Go authority
+;      enforces it: tools/netboot-oracle/bdos/bdos.go:126 `if size > 0xFFFF`.
+;      (The B-DOS "save buffer" is NOT a fixed RAM buffer — HSVBK streams the
+;      source 510 bytes at a time straight to disk sectors, bdos15a.src.txt:2120
+;      `LD BC,510` — so there is no smaller buffer ceiling; the only cap is this
+;      16-bit length field.)
+;   2. The bootable's section-D footprint. CONN_FLUSH_BUF must hold one window
+;      plus one max inbound TCP payload (<=1464 B), so CONN_FLUSH_BUF_LEN must be
+;      cap + 1464, and the whole bootable must fit the 32768-byte &8000..&10000
+;      window (netboot-boot-fit-check.sh). This is the BINDING bound here: the
+;      66999-byte buffer a 65535 cap would need cannot fit a 32 KB overlay.
+;
+; 6144 is the largest cap that keeps the bootable comfortably inside the budget
+; (with CONN_FLUSH_BUF_LEN = 8192 it ends ~&FB2E, ~1.2 KB clear of &10000) while
+; still fitting the largest firmware in the 1000-record (3-digit index) bound:
+; start.elf ~2.98 MB needs cap >= 2983, so 6144 leaves headroom (486 records).
+FW_RECORD_CAP:    equ 6144
 
 ; --- the bootable firmware-fetch driver --------------------------------------
 ; http_main — read the SAM's MAC + IP from the Trinity EEPROM, fill the connection
