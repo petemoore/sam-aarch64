@@ -199,13 +199,30 @@ IDENTICAL:**
 | `TVDATA` (Q2) | `&5BBE` | `&10` | `&10` |
 | `NSPPC` (Q2) | `&5C44` | `&FF` | `&FF` |
 
-So the stock ROM's normal boot **already** reaches `NSPPC=&FF` / `TVDATA=&10` — the
-exact values Colin's "extra" teardown pokes set — and the Q1 flags converge too.
-→ **Q1: don't reproduce the `MAINER3` flags** (they don't persist to matter).
-→ **Q2: reproduce Colin's full teardown incl. the pokes on the auto-boot path**
-(they're the *normal* post-boot state, not Colin cruft). (55 other sysvar-band bytes
-differ — keyboard-repeat/stream buffers + `ERRNR &5C3A`=`&50`-vs-`&00` from stock's
-report-50 entry — none Q1/Q2-relevant.)
+So the stock ROM's normal boot already reaches `NSPPC=&FF` / `TVDATA=&10`, and the
+Q1 flags converge too. (55 other sysvar-band bytes differ — keyboard-repeat/stream
+buffers + `ERRNR &5C3A`=`&50`-vs-`&00` from stock's report-50 entry — none
+Q1/Q2-relevant. The big `&C000`/`&8000` region diffs are paging/B-DOS-residency:
+stock `LMPR=&1F` maps ROM1, Colin `LMPR=&5F` maps RAM.)
+
+**THE ULTIMATE TEST (Pete, 2026-06-25) — the definitive arbiter.** Rather than infer
+from stock-vs-Colin, test directly: does *leaving each element out* give the same
+value as leaving it in? If yes, leave it out; if no, keep it.
+
+- **Q1 — LEAVE OUT the `MAINER3` flags.** Stock *runs* `MAINER3` (sets the flags),
+  Colin *skips* it, and **both reach identical `FLAGS=&00`/`TVFLAG=&01`** — so adding
+  the flags changes nothing (the editor overwrites them). Leave out.
+- **Q2 — KEEP the `NSPPC`/`TVDATA` pokes.** Booting Colin **with** the pokes vs with
+  them NOPped out (same paging, so the diff isolates exactly the pokes;
+  `cmd/samboot-statediff` does this): **without the pokes Colin leaves `NSPPC=&00` /
+  `TVDATA=&16` — the WRONG values**; with them, `&FF`/`&10`. So the pokes are
+  *necessary*, not redundant. WHY: the stock ROM reaches `&FF`/`&10` via its normal
+  cold-init; Colin's B-DOS-loading path does **not**, so Colin pokes them to fix it —
+  and **our inject is on Colin's path (we also load B-DOS), so we need them too.**
+
+So the auto-boot teardown reproduces Colin's full teardown (CLSLOWER + disarm
+LINICOLS + `NSPPC=&FF` + `TVDATA=&10`), then `jp bdos_boot_record`; the inject does
+NOT add the `MAINER3` flags. Both proven by "does leaving it out change the value."
 
 **Enabler (DONE-ish):** the experiment requires booting Colin's fork *through* B-DOS
 init to BASIC in emulation. The Go netboot core already models Trinity/SD/paging and
