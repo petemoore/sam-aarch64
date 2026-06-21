@@ -3388,6 +3388,8 @@
   depends_on: [i169a, i267]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 694, role: completing}
 
 - id: i173
   title: "SAMBOOT: build the one-shot ROM+EEPROM dumper (serves captured bytes via the proven TFTP server)"
