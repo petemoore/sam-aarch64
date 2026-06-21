@@ -3228,9 +3228,11 @@
   title: "Presence semaphore: ready auto-includes owner:pete when a pete-present marker file exists"
   description: |
     The i169 'presence-file auto-defaulting' remainder (i169a shipped only the manual --pete-present/--pete-away flags; tools/registry/priority_cmds.go:26 reads NO file/env). GAP (Pete, 2026-06-23): presence is ephemeral + in-conversation only — a fresh or autonomously-resumed session has no way to know Pete is at the SAM, so it defaults pete-away and silently skips owner:pete items even when he is present. DESIGN: a persistent semaphore file ~/.claude/autonomous-loop/pete-present (exists => Pete present; he touches it when at the SAM, rm when he leaves; persists across sessions). build/registry ready AUTO-READS it: if the marker exists, default includePete=true (explicit --pete-away still overrides for a one-off; --pete-present still forces on). Make the marker path overridable via an env var (e.g. ALOOP_PRESENCE_FILE) defaulting to ~/.claude/autonomous-loop/pete-present, so tests can point elsewhere and the CLI stays testable/pure-ish. Add a unit test (marker present => owner:pete first; absent => excluded; --pete-away overrides marker). Add ONE line to the monitor RESUME_NUDGE (tools/autonomous-loop/monitor.sh) noting the marker so resumed agents know. Update tools/autonomous-loop/README.md + the registry-cli skill. Net: Pete flips one file and this session, the next, and the autonomous loop all surface his hardware items automatically. Agent-actionable, no hardware. Go authority = the existing priority_cmds.go ready logic.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 612, role: completing}
   parent: i169
 
 - id: i172
