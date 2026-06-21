@@ -26,3 +26,8 @@
   body: |
     i27 Cortex-A53 errata workarounds (--fix-cortex-a53-835769 / -843419) — worth the greenfield cost now? These are LINKER flags spectrum4's Tuprules.tup passes, BUT M6 byte-matches release.bin WITHOUT them — so they are currently NO-OPS for spectrum4's instruction sequences (835769: integer multiply-accumulate followed by a 64-bit ldr/str spanning a page boundary; 843419: adrp at specific page offsets followed by a load). No Go authority exists, so i27 is greenfield (design + Go-first authority + Z80 port + binutils cross-check) — a fresh-session-sized feature. DECISION NEEDED: implement now (future-proofing + correctness on real Cortex-A53/Pi-3 silicon should spectrum4 later add a triggering sequence), or defer/WONTFIX-until-a-real-triggering-sequence-appears (it changes nothing for the current byte-match target)? If implement: scope = both errata? assembler-side 835769 (gas -mfix-...) + linker-side 843419 (ld) — and where in the sam-aarch64 pipeline (it produces a linked release.bin, so linker-stage workarounds belong somewhere)?
   owner: pete
+
+- id: q38
+  body: |
+    Pursue an on-SAM preprocessor (i31: .if build-constraints + macro expansion) now, and at what scope? Host-side preprocessing already covers this in the current pipeline (asmparse/text2bin), so moving it on-SAM is a new, beyond-M7 feature with genuine scope choices (which .if constraint syntax; macro definition/expansion semantics; integration point vs the existing host preprocess; Go-authority side). Not a port of existing Go authority — needs Pete's go/no-go + scope before a multi-session implementation. Gates i31.
+  owner: pete
