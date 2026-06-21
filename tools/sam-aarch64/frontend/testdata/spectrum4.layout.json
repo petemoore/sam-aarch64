@@ -1,0 +1,42 @@
+[
+  {
+    "name": ".text",
+    "start_align": 16,
+    "trailing_align": 0
+  },
+  {
+    "name": ".data",
+    "start_align": 16,
+    "trailing_align": 0
+  },
+  {
+    "name": "bss_roms",
+    "start_align": 4096,
+    "trailing_align": 16
+  },
+  {
+    "name": "bss_kernel",
+    "start_align": 16,
+    "trailing_align": 0
+  },
+  {
+    "name": "bss_userheap",
+    "start_align": 16,
+    "trailing_align": 0
+  },
+  {
+    "name": "bss_coherent",
+    "start_align": 2097152,
+    "trailing_align": 0
+  },
+  {
+    "name": "text_tests",
+    "start_align": 4096,
+    "trailing_align": 16
+  },
+  {
+    "name": "bss_tests",
+    "start_align": 16,
+    "trailing_align": 0
+  }
+]
