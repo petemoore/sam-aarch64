@@ -4366,3 +4366,29 @@
   status: IN_PROGRESS
   kind: leaf
   owner: agent
+
+- id: i260
+  title: "SAMBOOT no-boot-path RAM-diff regression: faithful inject vs Colin fork leave identical RAM"
+  description: |
+    Pete (2026-06-25): use the i258 RAM-diff technique to PROVE the faithful opening-screen inject (stripes+banner+WTFK+teardown) on the NO-AUTO-BOOT path leaves the same sysvars + all other RAM as Colin's unspliced fork once the features are torn down. Boot the SPLICED EEPROM to the editor sync PC (&0514) simulating a keypress past WTFK, snapshot 64KB, diff vs snapshotColin. Automated Test with assertions; any genuine residue (e.g. LINICOLS stripe table) surfaced as an explicit reviewed expected-diff list, not hidden. Reuses cmd/samboot-statediff machinery. depends i259.
+  status: OPEN
+  depends_on: [i259]
+  kind: leaf
+  owner: agent
+
+- id: i261
+  title: "SAMBOOT auto-boot SD-record automation: prove the inject hooks + boots a record from the SD card in emulation"
+  description: |
+    Pete (2026-06-25): an automated emulation test that the AUTO-BOOT path actually hooks and boots a real record from the SD card model, end-to-end (config read -> bdos_boot_record -> HRECORD select + ALHK -> load+run the record's AUTO image from the harness CardModel/SD model), not just an ALHK-event capture. Extend the harness SD/card model as needed (emulation-first: a gap is a defect to fix). depends i259.
+  status: OPEN
+  depends_on: [i259]
+  kind: leaf
+  owner: agent
+
+- id: i262
+  title: "Pre-flash provenance audit: EEPROM read+write and Trinity record-boot hardware-proven, and the inject reuses that EXACT code"
+  description: |
+    Pete (2026-06-25), pre-i135c-flash safety gate. Before patching the EEPROM, be 100% sure: (1) EEPROM READ is hardware-tested; (2) EEPROM WRITE is hardware-tested (standalone trinload, free-space only, NOT replacing the bootloader); (3) booting a disk image from a Trinity SD record is hardware-tested. Each must cite the completed iN item + where the working code lives. CRITICAL: confirm the faithful inject (samboot_config.asm/eeprom.asm reader: find_index/check_index/read_chunk/get_chunk/eeprom_enable; bdos_seam.asm bdos_boot_record/bdos_select_record) reuses EXACTLY that proven code, reinventing none of the mechanics. Gate for i135c. Test everything in emulation before hardware.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent

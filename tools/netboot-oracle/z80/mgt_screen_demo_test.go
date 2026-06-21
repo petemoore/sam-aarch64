@@ -1,17 +1,19 @@
 // mgt_screen_demo_test.go — emulation verification of the MGT opening-screen RAM
 // demo (src/netboot/mgt_screen_demo_standalone.asm, i229).
 //
-// The demo reproduces the SAM boot screen with NO ROM-routine calls (CLAUDE.md §7
-// / i231: nothing hidden behind a build flag or needing a booted sysvar state): it
-// baselines the border, builds the LINICOLS rainbow (verbatim &ED1B port), prints
-// the MGT banner via RST &10, EI's to arm the line-interrupt stripes, holds until a
-// key, disarms the rainbow, and RETs to trinload. So it runs verbatim in the flat
-// harness. The Go harness has no display, so this asserts the demo built the exact
-// LINICOLS table, printed the exact banner text, and returned cleanly — the
-// rendered pixels are confirmed on Pete's real SAM (i230). PALTAB is NOT seeded: a
-// real boot's ROM cold-init populates it (i232), so the test asserts the stripes
-// copied WHATEVER PALTAB held (the loop's addressing/stepping/copy logic), not
-// invented colours.
+// The demo reproduces the SAM boot screen on the faithful inject's flow (i259): it
+// baselines the border, builds the LINICOLS rainbow (verbatim &ED1B port), selects
+// the lower screen via CLSLOWER (&06B5), prints the MGT banner via RST &10, EI's to
+// arm the line-interrupt stripes, holds until ANY key via the verbatim stock WTFK
+// (READKEY &1CB1), disarms the rainbow, and RETs to trinload. CLSLOWER and READKEY
+// are real ROM routines the screenless core cannot run, so the harness models them:
+// StubReturn for CLSLOWER's hardware-only screen-clear, ModelReadkey + an injected
+// key for the any-key wait. The Go harness has no display, so this asserts the demo
+// built the exact LINICOLS table, printed the exact banner text, and returned
+// cleanly — the rendered pixels/position are confirmed on Pete's real SAM (i230).
+// PALTAB is NOT seeded: a real boot's ROM cold-init populates it (i232), so the test
+// asserts the stripes copied WHATEVER PALTAB held (the loop's addressing/stepping/
+// copy logic), not invented colours.
 package z80_test
 
 import (
@@ -44,8 +46,14 @@ func TestMGTScreenDemoStripes(t *testing.T) {
 	// real print channel.
 	rec := mac.AttachPrintRecorder()
 
-	// Press Esc so the hold-until-key loop (`in a,(&f9); bit 5`) falls through.
-	mac.PressEsc(true)
+	// CLSLOWER (&06B5) selects the lower screen — a hardware-only screen effect the
+	// flat core cannot run; stub it to a RET (the banner recorder is channel-agnostic).
+	mac.StubReturn(0x06B5)
+
+	// Model READKEY (&1CB1) and queue a key so the verbatim WTFK loop
+	// (`call &1CB1 / jr z`) falls through on the first poll.
+	mac.ModelReadkey()
+	mac.InjectKeys([]byte{' '})
 
 	// Snapshot LINICOLS the first time the demo reaches the hold loop (mgt_wtfk):
 	// the rainbow is fully built there, before the teardown disarms entry 0. The

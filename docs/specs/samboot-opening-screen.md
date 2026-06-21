@@ -141,15 +141,24 @@ inject_wtfk:
         ret
 inject_autoboot:
         ; AUTO-BOOT (our addition; Pete 2026-06-25): show the FULL opening screen
-        ; (stripes + banner, both — done above), then reproduce the teardown's
-        ; stripe-cancel and boot the record. NO wait (unattended). The stripe-cancel
-        ; mirrors "the stripes vanish as the user leaves the opening screen".
-        call    &06B5                  ; CLSLOWER (= teardown &0FA7)
-        ld      a, &ff
-        ld      (&5600), a             ; disarm LINICOLS (= teardown &0FAA)
+        ; (stripes + banner, both — done above), then reproduce Colin's FULL teardown
+        ; (stripe/banner cancel + his NSPPC/TVDATA pokes — Q2 RESOLVED below) and boot
+        ; the record. NO wait (unattended).
+        ;
+        ; Stash the record number FIRST: CLSLOWER (&06B5) clobbers HL (it does
+        ; LD HL,LWBOT ... LD (SPOSNL),HL — ROM v3.0 disasm), so reading L after it
+        ; would be a bug. bdos_boot_record reads BD_BOOT_RECORD, not HL, so the
+        ; stash-first order is correct and clobber-safe.
         ld      a, l
-        ld      (BD_BOOT_RECORD), a
-        jp      bdos_boot_record        ; i122a: HRECORD select + ALHK, no return
+        ld      (BD_BOOT_RECORD), a    ; stash BEFORE CLSLOWER clobbers HL
+        call    &06B5                  ; CLSLOWER (= stock teardown &0FA7)
+        ld      a, &ff
+        ld      (&5600), a             ; disarm LINICOLS (= stock teardown &0FAA)
+        ld      a, &ff
+        ld      (&5C44), a             ; NSPPC = &FF  (Colin's teardown poke; Q2)
+        ld      a, &10
+        ld      (&5BBE), a             ; TVDATA = &10 (Colin's teardown poke; Q2)
+        jp      bdos_boot_record       ; i122a: HRECORD select + ALHK, no return
 ```
 
 ### The auto-boot path — the one degree of freedom (Pete decided) + OPEN QUESTION Q2

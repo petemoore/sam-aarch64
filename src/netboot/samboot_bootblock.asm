@@ -19,13 +19,16 @@
 ; confirm item (the screenless Go core builds the LINICOLS table — emulation-
 ; verified — but does not render them).
 ;
-;   inject:           <stripes + banner>   ; restore the MGT opening screen (i112)
+;   inject:           <stripes>            ; build LINICOLS (i112), before &805F
 ;                     call &805F            ; the real B-DOS init (returns on hardware)
+;                     <CLSLOWER + banner>   ; restore the MGT opening screen (i112)
 ;   inject_decision:  call samboot_read_config   ; i176: CY+HL=record, or NC=no auto-boot
-;                     ret  nc                ; no auto-boot -> RET to &40A1 = restore: (verbatim)
-;                     ld   a, l
-;                     ld   (BD_BOOT_RECORD), a
-;                     jp   bdos_boot_record  ; i122a: HRECORD select + ALHK boot, no return
+;                     jr   c, inject_autoboot
+;   inject_wtfk:      call &1CB1 / jr z     ; NO AUTO-BOOT: stock WTFK wait-for-any-key
+;                     ret                   ; -> &40A1 = restore: (Colin's verbatim teardown)
+;   inject_autoboot:  ld (BD_BOOT_RECORD),l ; AUTO-BOOT: stash record, then Colin's full teardown
+;                     call &06B5 / LINICOLS=&FF / NSPPC=&FF / TVDATA=&10
+;                     jp   bdos_boot_record ; i122a: HRECORD select + ALHK boot, no return
 ;
 ; CONFIG READ BY-NAME (q50 decision 2): samboot_read_config (i176) finds the
 ; "SAMBOOT Config  " chunk by name via find_index — not a fixed chunk number — so
@@ -181,9 +184,54 @@ sbb_rbowl:      ld      (hl), b
 
 inject_decision:                            ; host decision test enters HERE (skips screen + &805F)
                 call    samboot_read_config ; i176: A=1/HL=record (CY set) or A=0 (CY clr)
-                ret     nc                  ; A=0: no auto-boot -> RET to &40A1 = restore:
+                jr      c, inject_autoboot  ; CY set -> auto-boot the configured record
+
+                ; --- NO AUTO-BOOT: verbatim stock-ROM &0FA2 WTFK — wait for ANY key.
+                ; The stock opening screen ended by waiting for a keypress (READKEY
+                ; &1CB1; Z = no key ready) before tearing down to BASIC. We reproduce
+                ; that exactly, then RET — which, on hardware, returns into Colin's
+                ; verbatim bootblock tail at &40A1 (restore:): CLSLOWER + disarm
+                ; LINICOLS + NSPPC/TVDATA pokes + JP &102F = the stock teardown
+                ; (&0FA7-&0FAA) plus Colin's two pokes. So the no-auto-boot path
+                ; inherits the full teardown for free.
+                ;
+                ; READKEY (&1CB1) is a real ROM keyboard routine (it RST-30s into the
+                ; paged TWOKSC) the screenless Go core cannot run, so the host decision
+                ; test stops at inject_wtfk — proving fall-through to the wait with no
+                ; boot captured; the keypress + teardown are hardware-confirmed (i230).
+inject_wtfk:
+                call    &1cb1               ; READKEY — returns Z when no key is ready
+                jr      z, inject_wtfk      ; loop until ANY key is pressed (NZ,CY)
+                ret                         ; -> &40A1 = Colin's verbatim teardown tail
+
+inject_autoboot:
+                ; AUTO-BOOT (the one degree of freedom Pete decided, 2026-06-25): the
+                ; full opening screen (stripes + banner) has already shown above; now
+                ; reproduce Colin's full teardown, then boot the record with NO wait
+                ; (unattended). The teardown is the stock stripe/banner cancel
+                ; (CLSLOWER + disarm LINICOLS, stock &0FA7-&0FAA) PLUS Colin's two
+                ; teardown pokes NSPPC=&FF / TVDATA=&10.
+                ;
+                ; Q2 RESOLVED (i258 RAM-diff + the leave-in/out ultimate test): the
+                ; pokes are NECESSARY on our path — without them Colin's B-DOS-loading
+                ; path leaves NSPPC=&00 / TVDATA=&16 (the wrong values). The stock cold
+                ; init reaches &FF/&10 on its own, but our inject loads B-DOS like Colin
+                ; (so it does not), which is exactly why Colin pokes them and so must we.
+                ;
+                ; The record number is stashed into BD_BOOT_RECORD BEFORE the teardown
+                ; because CLSLOWER (&06B5) clobbers HL (it does LD HL,LWBOT ... LD
+                ; (SPOSNL),HL — verified in the ROM v3.0 disassembly), so reading L
+                ; after it would be a bug. bdos_boot_record reads BD_BOOT_RECORD, not
+                ; HL, so the stash-first order is both correct and clobber-safe.
                 ld      a, l                ; BD_BOOT_RECORD is 1 byte (record <= 255)
-                ld      (BD_BOOT_RECORD), a
+                ld      (BD_BOOT_RECORD), a ; stash BEFORE CLSLOWER clobbers HL
+                call    &06b5               ; CLSLOWER (stock teardown &0FA7)
+                ld      a, &ff
+                ld      (&5600), a          ; disarm LINICOLS rainbow (stock teardown &0FAA)
+                ld      a, &ff
+                ld      (&5c44), a          ; NSPPC = &FF (Colin's teardown poke)
+                ld      a, &10
+                ld      (&5bbe), a          ; TVDATA = &10 (Colin's teardown poke)
                 jp      bdos_boot_record    ; i122a: HRECORD select + ALHK boot, no return
 
 ; sbb_banner — our embedded copy of the stock UMVAL msg-0 banner text, in the ROM's
