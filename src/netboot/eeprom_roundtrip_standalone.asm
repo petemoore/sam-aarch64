@@ -116,12 +116,15 @@ eep_report:
                 ld      b, 4                    ; detail length
                 ld      hl, eep_detail
                 call    test_report
-                ; Return to trinload (which pushed its listener as our return
-                ; address) rather than halting the SAM, so trinload stays alive
-                ; for the next pushed test — the autonomous-test loop (i133). The
-                ; border stays painted; drv_init already re-inited the ENC, which
-                ; is what a returning trinload program must do.
-                ret
+                ; Stop with di;halt — the launch-method-independent terminator
+                ; (it halts cleanly however an emulator launches the binary,
+                ; whereas a RET depends on the launcher having pushed a good
+                ; return address). On hardware this freezes the SAM after the
+                ; report is on the wire + the border is painted; the autonomous
+                ; loop re-establishes trinload by power-cycle/reload (i133/i135)
+                ; rather than relying on in-place return.
+                di
+                halt
 
 ; ---------------------------------------------------------------------------
 ; eep_fill_pattern — chunk[i] = (i_lo XOR i_hi XOR &A5) for i = 0..1023.
