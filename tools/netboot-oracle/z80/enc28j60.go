@@ -30,9 +30,14 @@ package z80
 // hardware verification — real Trinity hardware stays the final integration gate
 // (trinity-capabilities.md; CLAUDE.md §5: emulation-verified != hardware-
 // verified). What this models is the digital register/buffer behaviour the
-// driver drives; it does not model analogue PHY/link, real TX timing, the R5
-// errata silicon bug, or the receive-engine MAC filtering — it injects frames
-// directly into the RX FIFO the way working silicon would after a good receive.
+// driver drives, through ONE shared microcontroller (the i235 hardware-parity
+// refactor): a peripheral-select MUX, ONE global auto-null mode, a real one-SPI-
+// byte BUSY flag, and ONE shared read-back latch the three data ports alias — plus
+// the ENC receive filter (ERXFCON), ENCINT on &DC bit 0, the &38 0/1/2 init code,
+// configurable write-protect, the &23 CS pulse, and the &02/&03 PUSH/POP slot. It
+// does not model analogue PHY/link, the exact &28 50µs settle, the R5 errata
+// silicon bug, or LED colour — those are Genuinely-unspecified or cosmetic
+// (docs/specs/trinity-emulation-fidelity.md).
 
 // Trinity port numbers (trinity-capabilities.md §2).
 const (
@@ -57,7 +62,43 @@ const (
 	selIdentTop   = 0x0F // &0F = 8th IDENT char
 	selEEPEnable  = 0x11 // eeprom_enable: CS-assert the flash EEPROM (eeprom.asm)
 	selEEPDisable = 0x10 // eeprom_disable: CS-deassert it
+	selEEPNullOn  = 0x1F // EEPROM auto-null on (manual:40; %00011111 — EEPROM select-with-autonull)
+	selPushByte   = 0x02 // PUSH stored read-byte (manual:37; ISR save of the pending IN byte)
+	selPopByte    = 0x03 // POP stored read-byte (manual:38; restore)
 )
+
+// peripheral identifies which of the three SPI devices the shared microcontroller
+// has currently MUX-selected (manual:27; gap d). Selecting one deselects the
+// others — hardware is one PIC on one SPI bus with a single active chip-select,
+// not three independent CS lines.
+type peripheral int
+
+const (
+	periphNone peripheral = iota // nothing selected (post-&04 / power-on)
+	periphEEP                    // EEPROM (&11 / &1F)
+	periphENC                    // ENC28J60 (&21 / &2F)
+	periphSD                     // SD/flash (&31 / &3F)
+)
+
+// statusBusy is &DC bit 3 (BUSY): the PIC raises it for one SPI byte after each
+// OUT to &DC/&DD/&DE/&DF, and it clears on the next IN (&DC) status read
+// (manual:16,20,21,22,111,124; gap b). While set, a further OUT is silently
+// dropped (manual:22) — so a driver that omits the busy-poll between two OUTs
+// loses the second, reproducing the real failure instead of silently passing.
+const statusBusy = 0x08
+
+// busyByteTStates is the nominal one-SPI-byte BUSY duration in Z80 T-states (gap b).
+// The manual gives no figure ("momentarily busy", manual:111), so this is a nominal
+// value, not a fabricated precise timing (the "genuinely unspecified" fence). It is
+// chosen larger than a single OUT (C),r (12 T) so two BACK-TO-BACK OUTs with no
+// intervening poll drop the second (the missing-busy-poll failure), yet small
+// enough that the canonical poll (IN &DC, which also clears BUSY explicitly) and
+// any real inter-OUT code gap let it clear.
+const busyByteTStates = 16
+
+// statusENCINT is &DC bit 0 (ENCINT): mirrors the ENC's pending-interrupt state
+// (manual:19,99,100; gap 5). The supported v1.1 polling path reads it here.
+const statusENCINT = 0x01
 
 // trinityIdent is the 8-byte firmware IDENT string the microcontroller returns over
 // &DD for select commands &08..&0F (manual "Trinity - Ident"). The 4th char is a
@@ -98,11 +139,21 @@ const (
 	regERXSTL   = 0x08
 	regERXNDL   = 0x0A
 	regERXRDPTL = 0x0C
+	regERXFCON  = 0x18 // bank 1 — receive filter control (gap 8)
 	regEPKTCNT  = 0x19 // bank 1
 	// Common registers (mirror in every bank at 0x1B-0x1F).
 	regEIR   = 0x1C
 	regECON2 = 0x1E
 	regECON1 = 0x1F
+)
+
+// ERXFCON receive-filter bits (datasheet §8.1, Table 8-1; gap 8). The driver does
+// not write ERXFCON, so it stays at the POR default the model installs on reset.
+const (
+	erxfcUCEN = 0x80                         // unicast: accept frames whose dest MAC == MAADR
+	erxfcBCEN = 0x01                         // broadcast: accept FF:FF:FF:FF:FF:FF
+	erxfcMCEN = 0x02                         // multicast: accept frames with the group bit set
+	erxfcPOR  = erxfcUCEN | erxfcBCEN | 0x20 /*CRCEN*/ // 0xA1 datasheet power-on default
 )
 
 // ECON1 / ECON2 / EIR bit positions used by the driver.
@@ -131,16 +182,69 @@ type ENC28J60 struct {
 	regs [4][32]byte
 	buf  [bufSize]byte
 
-	// SPI transaction state. The microcontroller latches the MISO byte clocked
-	// out by the most recent OUT (&DE); the next IN (&DE) returns it (the
-	// one-byte read-lag, trinity-capabilities.md §3).
-	encSelected bool
-	autoNull    bool
-	spiByteIdx  int  // bytes clocked since the current selection began
-	spiCmd      byte // first byte of the transaction (the opcode)
-	spiMISO     byte // latched MISO the next IN (&DE) returns (register reads)
-	rbmActive   bool // inside a Read-Buffer-Memory transaction
-	probeReply  byte // pending &DD identity-probe reply ('T'/'R')
+	// --- shared microcontroller (PIC) state (gaps a-d) ---------------------------
+	//
+	// Real Trinity is ONE PIC on ONE SPI bus, not three independent devices. These
+	// fields model the shared controller; the per-device engines (eep/sd and the ENC
+	// register/buffer model below) are the SPI back-ends it multiplexes onto.
+	//
+	//   selPeriph    — which peripheral is MUX-selected (gap d): selecting one
+	//                  deselects the others.
+	//   autoNullMode — ONE global auto-null flag (gap a), with autoNullTarget the
+	//                  peripheral it auto-clocks; set by &1F/&2F/&3F, cleared only
+	//                  by &04. Mutually exclusive across peripherals.
+	//   busy         — &DC bit 3 (gap b): set on every OUT to &DC/&DD/&DE/&DF,
+	//                  cleared on the next IN (&DC). An OUT while busy is dropped.
+	//   lastClockedIn — ONE shared read-back latch (gap c): every IN &DD/&DE/&DF
+	//                  returns this byte, written by whichever peripheral last
+	//                  clocked one. Reproduces the manual's two-OUT-two-IN aliasing
+	//                  trap (manual:4,8,34,125).
+	//   savedReadByte/savedReadValid — the &02/&03 PUSH/POP one-deep ISR slot
+	//                  (manual:37,38).
+	selPeriph        peripheral
+	autoNullMode     bool
+	autoNullTarget   peripheral
+	lastClockedIn    byte
+	lastClockedValid bool // a peripheral has clocked at least one byte since reset
+	savedReadByte    byte
+	savedReadValid   bool
+
+	// BUSY timing (gap b). tNow is the running Z80 T-state cursor handed in by the
+	// harness (SetTState) just before each In/Out. An OUT to &DC/&DD/&DE/&DF raises
+	// BUSY for one SPI-byte time: busyUntilT = tNow + busyByteTStates. BUSY reads set
+	// while tNow < busyUntilT; an OUT issued while still busy is dropped (manual:22).
+	// An IN (&DC) status poll also releases it early (the canonical wait_ready clears
+	// it). With no T-state cursor (Call paths, tNow stays 0) BUSY is purely
+	// read-cleared, so those paths are unaffected.
+	tNow       uint64
+	busyUntilT uint64
+
+	// SPI transaction state for the ENC SPI back-end. The microcontroller latches
+	// the MISO byte clocked out by the most recent OUT (&DE); the next IN (&DE)
+	// returns it via lastClockedIn (the one-byte read-lag, trinity-capabilities.md §3).
+	spiByteIdx int  // bytes clocked since the current selection began
+	spiCmd     byte // first byte of the transaction (the opcode)
+	spiMISO    byte // ENC SPI MISO the most recent OUT (&DE) clocked out (register reads)
+	rbmActive  bool // inside a Read-Buffer-Memory transaction
+	probeReply byte // pending &DD identity-probe reply ('T'/'R')
+
+	// LED state (gap 12, manual:57-64,113-121). The PIC's %11fedcba LED-twinkle band
+	// (&C0..&FF) is cosmetic — no driver reads it back — so the model accepts and
+	// records the last LED command for a fidelity trace rather than ignoring the
+	// write outright (which would mis-route a &C0..&FF byte through the select switch).
+	lastLED    byte
+	ledWritten bool
+
+	// SD deselect-tail observation (gap 10, bdos:40). The proven SD transaction close
+	// is the ordered &DC/&DF sequence &30 -> (dummy &DF write) -> &30 -> &04. The
+	// controller tracks the close as it happens; lastSDCloseProper records whether
+	// the most recent SD deselect followed that exact order, sdCloseStep walks it.
+	// This is an OBSERVABLE for a fidelity test (LastSDCloseProper), not an enforced
+	// gate — enforcing a hard failure would break the probe's shorter (&30 -> &04)
+	// tail, which is hardware-proven to work for a read-only transaction.
+	sdCloseStep        int
+	lastSDCloseProper  bool
+	sdCloseObservedAny bool
 
 	// eep is the second device on the Trinity SPI bus: the flash EEPROM the boot
 	// wrappers read their MAC+IP from (eeprom.go). It shares &DC (select) and &DD
@@ -265,9 +369,204 @@ func (e *ENC28J60) softReset() {
 	// settle poll (wr_phy_wait) exits immediately — the emulated PHY write is
 	// instantaneous.
 	e.regs[0][regECON2] = econ2AUTOINC
-	e.encSelected = false
+	// ERXFCON power-on default (datasheet §8.1: UCEN+CRCEN+BCEN = 0xA1; gap 8). The
+	// driver does not write ERXFCON, so the receive filter stays at this default:
+	// unicast-to-our-MAC + broadcast. materialiseRX honours it.
+	e.regs[1][regERXFCON] = erxfcPOR
 	e.spiByteIdx = 0
+	e.rbmActive = false
 	e.rxWritePos = rxStartHW
+}
+
+// rxFilterPass reports whether a received frame passes the ENC's ERXFCON receive
+// filter (gap 8, datasheet §8.1; manual:57,95,96). ERXFCON==0 is sniffer/
+// promiscuous mode (accept all, manual:96). Otherwise a frame is accepted if it is
+// broadcast (BCEN), multicast (MCEN, group bit set), or unicast to our MAADR
+// (UCEN). The MAADR bytes are stored by the driver in the order [4,5,2,3,0,1]
+// (trinload:§1b), so our MAC = regs[3]{0x04,0x05,0x02,0x03,0x00,0x01}.
+func (e *ENC28J60) rxFilterPass(frame []byte) bool {
+	f := e.regs[1][regERXFCON]
+	if f == 0 {
+		return true // sniffer mode: receive everything
+	}
+	if len(frame) < 6 {
+		return false
+	}
+	dst := frame[:6]
+	isBroadcast := dst[0] == 0xFF && dst[1] == 0xFF && dst[2] == 0xFF &&
+		dst[3] == 0xFF && dst[4] == 0xFF && dst[5] == 0xFF
+	if f&erxfcBCEN != 0 && isBroadcast {
+		return true
+	}
+	if f&erxfcMCEN != 0 && dst[0]&0x01 != 0 && !isBroadcast {
+		return true // group (multicast) bit set
+	}
+	if f&erxfcUCEN != 0 {
+		our := [6]byte{
+			e.regs[3][0x04], e.regs[3][0x05], e.regs[3][0x02],
+			e.regs[3][0x03], e.regs[3][0x00], e.regs[3][0x01],
+		}
+		if dst[0] == our[0] && dst[1] == our[1] && dst[2] == our[2] &&
+			dst[3] == our[3] && dst[4] == our[4] && dst[5] == our[5] {
+			return true
+		}
+	}
+	return false
+}
+
+// --- shared microcontroller (PIC) helpers (gaps a-d) -------------------------
+
+// selectPeripheral is the MUX (gap d): selecting one peripheral deselects the
+// others. It records the active peripheral and drives the per-device CS so the
+// SPI back-ends frame their transactions correctly.
+func (e *ENC28J60) selectPeripheral(p peripheral) {
+	if e.selPeriph == p {
+		return
+	}
+	// Deselect whatever was active (CS-deassert the old back-end).
+	switch e.selPeriph {
+	case periphEEP:
+		e.eep.csDeassert()
+	case periphENC:
+		// ENC CS-deassert ends the current SPI command (resets the byte counter).
+		e.spiByteIdx = 0
+		e.rbmActive = false
+	case periphSD:
+		e.sd.deselect()
+	}
+	e.selPeriph = p
+}
+
+// encSelected reports whether the ENC is the MUX-selected peripheral.
+func (e *ENC28J60) encSelected() bool { return e.selPeriph == periphENC }
+
+// autoNullFor reports whether the global auto-null mode is on and targets p
+// (gap a). Only the selected peripheral can be the auto-null target.
+func (e *ENC28J60) autoNullFor(p peripheral) bool {
+	return e.autoNullMode && e.autoNullTarget == p
+}
+
+// SetTState receives the running Z80 T-state cursor just before each In/Out (the
+// harness's tStateClocked hook). It drives the time-based BUSY model (gap b). The
+// harness restarts the cursor at 0 for each run (Call/RunBoot); a cursor that jumps
+// BACKWARDS means a fresh run began, so any in-flight BUSY window is stale — clear
+// it (the PIC has long since finished the prior run's last byte).
+func (e *ENC28J60) SetTState(t uint64) {
+	if t < e.tNow {
+		e.busyUntilT = 0
+	}
+	e.tNow = t
+}
+
+// raiseBusy marks the PIC busy for one SPI-byte time after an OUT to
+// &DC/&DD/&DE/&DF (gap b): busyUntilT = now + busyByteTStates.
+func (e *ENC28J60) raiseBusy() { e.busyUntilT = e.tNow + busyByteTStates }
+
+// isBusy reports whether the one-SPI-byte BUSY window is still open at the current
+// T-state cursor (gap b). On Call paths with no T-state cursor (tNow stays 0) BUSY
+// is released by clearBusy on the first IN, so isBusy reflects only the explicit
+// flag there.
+func (e *ENC28J60) isBusy() bool { return e.tNow < e.busyUntilT }
+
+// clearBusy releases BUSY (the canonical wait_ready poll: IN &DC clears it, and any
+// IN lets a byte-time elapse).
+func (e *ENC28J60) clearBusy() { e.busyUntilT = 0 }
+
+// clockedIn records the byte a peripheral just clocked through the controller —
+// the ONE shared read-back latch every IN &DD/&DE/&DF returns (gap c).
+func (e *ENC28J60) clockedIn(b byte) {
+	e.lastClockedIn = b
+	e.lastClockedValid = true
+}
+
+// spiMISOByte returns the ENC SPI MISO byte the most recent OUT (&DE) clocked out
+// (a control-register read's data lands here on the dummy clock after the opcode).
+func (e *ENC28J60) spiMISOByte() byte { return e.spiMISO }
+
+// LastLED returns the most recent LED-twinkle command (%11fedcba, &C0..&FF) and
+// whether any was issued. The LED band is cosmetic (no driver reads it back), so
+// this is for a fidelity trace only (gap 12, manual:57-64).
+func (e *ENC28J60) LastLED() (byte, bool) { return e.lastLED, e.ledWritten }
+
+// LastSDCloseProper reports whether an SD deselect-tail close has been observed and
+// whether the most recent one followed the proven ordered sequence (gap 10,
+// bdos:40): &30 -> dummy &DF write -> &30 -> &04. It is an OBSERVABLE for a fidelity
+// test, not an enforced gate (a shorter &30 -> &04 close still works for a read).
+func (e *ENC28J60) LastSDCloseProper() (proper, observed bool) {
+	return e.lastSDCloseProper, e.sdCloseObservedAny
+}
+
+// trackSDClose walks the proven SD deselect-tail state machine (gap 10): the
+// &DC-write order &30, then (onData=true) a dummy &DF write, then &30, then &04.
+// onDC marks a &DC select write; onData=false (from clockData) marks a &DF write.
+// A correct full sequence sets lastSDCloseProper; any out-of-order step resets it.
+func (e *ENC28J60) trackSDClose(v uint8, onDC bool) {
+	if onDC {
+		switch {
+		case v == selSDDeselct && e.sdCloseStep == 0: // first &30
+			e.sdCloseStep = 1
+		case v == selSDDeselct && e.sdCloseStep == 2: // second &30 (after the dummy)
+			e.sdCloseStep = 3
+		case v == selNullOff && e.sdCloseStep == 3: // closing &04
+			e.lastSDCloseProper = true
+			e.sdCloseObservedAny = true
+			e.sdCloseStep = 0
+		case v == selNullOff && e.sdCloseStep != 3:
+			// A bare &04 close (no preceding &30/dummy/&30): observed but not proper.
+			if e.sdCloseStep != 0 {
+				e.lastSDCloseProper = false
+				e.sdCloseObservedAny = true
+			}
+			e.sdCloseStep = 0
+		default:
+			// Any other &DC write mid-close aborts the tracked tail.
+			if v != selSDDeselct && v != selNullOff {
+				e.sdCloseStep = 0
+			}
+		}
+		return
+	}
+	// A &DF data write: only valid as step 1->2 (the single dummy clock between the
+	// two &30 deselects).
+	if e.sdCloseStep == 1 {
+		e.sdCloseStep = 2
+	}
+}
+
+// ctlStatus is the &DC Trinity Status Register byte (%1100BWFE): fixed top nibble
+// 0xC0, then bit3 BUSY (gap b), bit2 WRITE, bit1 FLASH (card present), bit0 ENCINT
+// (gap 5). The SD model supplies the card-present + write-protect bits; the ENC
+// supplies ENCINT (its EIR interrupt-pending state surfaced on the status byte).
+func (e *ENC28J60) ctlStatus() uint8 {
+	s := e.sd.ctlStatus()
+	if e.isBusy() {
+		s |= statusBusy
+	} else {
+		s &^= statusBusy
+	}
+	if e.encINTPending() {
+		s |= statusENCINT
+	}
+	return s
+}
+
+// encINTPending reports whether the ENC has an interrupt pending the v1.1 polling
+// path reads on &DC bit 0 (gap 5, manual:19,99,100). The ENC's EIR (common reg
+// 0x1C) holds the interrupt flags; an interrupt is pending when any unmasked EIR
+// flag is set. The driver polls this rather than using the (unfitted v1.1) NMI/INT
+// jumper. We surface PKTIF (a frame waiting in the RX FIFO) and the EIR bits the
+// model already tracks (TXIF/TXERIF), gated by EIE.INTIE + the per-source enables —
+// but since the driver's supported path simply tests "any pending", we report the
+// raw EIR-nonzero OR a queued/materialised RX packet.
+func (e *ENC28J60) encINTPending() bool {
+	// EIR flags the model sets (TXIF on transmit-complete, etc.).
+	if e.regs[0][regEIR] != 0 {
+		return true
+	}
+	// A received packet waiting to be read (EPKTCNT>0) drives PKTIF on real silicon;
+	// surface it so the polling path sees RX interrupts. A queued-but-not-yet-
+	// materialised frame also counts (it will raise EPKTCNT on the next read).
+	return e.regs[1][regEPKTCNT] > 0 || len(e.rxQueue) > 0
 }
 
 // --- register access helpers (honour the common-register window) -------------
@@ -328,38 +627,56 @@ func (e *ENC28J60) In(port uint8) uint8 {
 	e.ops++
 	switch port {
 	case portTrinityCtl:
-		// Trinity Status Register (%1100BWFE): fixed top nibble 0xC0, then bit3 BUSY
-		// (always clear — the emulation never stalls, so wait_ready loops exit), bit2
-		// WRITE, bit1 FLASH (card present), bit0 ENCINT. The SD model supplies the
-		// card-present + write bits (its `IN(&DC); CPL; AND 4` WP gate, &A91B); with no
-		// card it returns the bare 0xC0. (ctlStatus, sdcard.go.)
-		return e.sd.ctlStatus()
-	case portTrinityEEP:
-		// Shared port: EEPROM read data while a flash read transaction is in its
-		// data phase, otherwise the identity-probe reply ('T'/'R').
-		if e.eep.inDataPhase() {
-			return e.eep.miso
-		}
-		return e.probeReply
-	case portTrinityENC:
-		// Inside a Read-Buffer-Memory transaction every IN (&DE) reads and
-		// auto-advances the next buffer byte: the driver clocks RBM data with
-		// INI (a bare IN under the microcontroller's auto-null), so the buffer
-		// byte arrives on the IN itself.
-		if e.encSelected && e.rbmActive {
-			return e.rbmNext()
-		}
-		// Otherwise the one-byte read-lag: the MISO byte latched by the most
-		// recent OUT (&DE) (a control-register read's dummy clock).
-		return e.spiMISO
-	case portTrinitySD:
-		// SD card SPI read. Inert (returns the idle &FF stub) until a CSD is
-		// configured via AttachSD; otherwise drives the real command/response
-		// state machine (one-byte read-lag in manual mode, auto-advance in &3F
-		// auto-null mode).
-		return e.sd.in()
+		// Trinity Status Register (%1100BWFE): fixed top nibble 0xC0, then bit3 BUSY,
+		// bit2 WRITE, bit1 FLASH (card present), bit0 ENCINT. Sample BUSY for THIS read
+		// (so a status poll sees it set the first time, like the real one-SPI-byte
+		// flag), then clear it: any IN lets a byte-time elapse, releasing BUSY (gap b).
+		s := e.ctlStatus()
+		e.clearBusy()
+		return s
+	case portTrinityEEP, portTrinityENC, portTrinitySD:
+		// All three data ports alias ONE shared read-back latch (gap c, manual:4,8,34,
+		// 125): IN &DD/&DE/&DF returns the last byte clocked through the controller by
+		// whichever peripheral was selected. In auto-null mode a bare IN on the
+		// selected peripheral also clocks the NEXT byte (the PIC injects the dummy),
+		// so the latch advances; in manual mode it returns the byte the prior OUT
+		// latched (the one-byte read-lag). Any IN also clears BUSY (a byte-time
+		// elapses), so only two BACK-TO-BACK OUTs with no intervening read drop the
+		// second (manual:22) — the missing-busy-poll failure the model reproduces.
+		v := e.readDataPort()
+		e.clearBusy()
+		return v
 	}
 	return 0xFF
+}
+
+// readDataPort serves an IN from any of the three aliased data ports (&DD/&DE/&DF).
+// It returns the single shared read-back latch (gap c). When the selected
+// peripheral is in auto-null mode, the bare IN first clocks the next byte through
+// that peripheral (the PIC-supplied dummy), advancing the latch.
+func (e *ENC28J60) readDataPort() uint8 {
+	switch e.selPeriph {
+	case periphENC:
+		if e.rbmActive {
+			// RBM bulk read: each IN &DE clocks-and-returns the next buffer byte,
+			// auto-advancing ERDPT (datasheet AUTOINC). The driver streams this with
+			// INI under &2F auto-null, then turns auto-null off (&04) and reads the
+			// final byte with one bare INI — both are RBM reads, so both advance.
+			e.clockedIn(e.rbmNext())
+		}
+	case periphSD:
+		if e.autoNullFor(periphSD) {
+			e.clockedIn(e.sd.autoClock())
+		}
+	case periphEEP:
+		if e.autoNullFor(periphEEP) {
+			e.clockedIn(e.eep.autoClock())
+		}
+	}
+	if !e.lastClockedValid {
+		return sdIdleMISO // nothing clocked yet: SPI-idle MISO-high
+	}
+	return e.lastClockedIn
 }
 
 // Out handles a Z80 OUT to a Trinity port.
@@ -367,12 +684,26 @@ func (e *ENC28J60) Out(port uint8, value uint8) {
 	e.ops++
 	switch port {
 	case portTrinityCtl:
+		// A command/select OUT marks the PIC busy for one SPI byte (gap b). If it is
+		// still busy from a prior OUT (no intervening status read / byte-time), this
+		// OUT is silently dropped (manual:22) — reproducing a missing busy-poll.
+		if e.isBusy() {
+			return
+		}
 		e.ctlSelect(value)
-	case portTrinityENC:
-		e.spiClock(value)
-	case portTrinityEEP:
-		// Flash EEPROM SPI data clock (the boot wrappers' config read).
-		e.eep.clock(value)
+		e.raiseBusy()
+	case portTrinityEEP, portTrinityENC, portTrinitySD:
+		// A data OUT clocks one SPI byte to whichever peripheral is MUX-selected (gap
+		// d). Dropped while busy (gap b). The selected back-end produces the MISO byte
+		// the next IN returns via the shared latch (gap c).
+		if e.isBusy() {
+			return
+		}
+		if port == portTrinitySD {
+			e.trackSDClose(value, false) // the dummy &DF write in the SD close (gap 10)
+		}
+		e.clockData(value)
+		e.raiseBusy()
 	case portBorder:
 		// Record the border colour the boot wrappers paint on each outcome.
 		e.lastBorder = value
@@ -381,48 +712,135 @@ func (e *ENC28J60) Out(port uint8, value uint8) {
 		// HMPR (page select); flat harness records it but doesn't relocate — page fidelity is hardware-gated
 		e.lastHMPR = value
 		e.hmprWritten = true
-	case portTrinitySD:
-		// SD card SPI write (a manual-mode sd.out, &FF flush, or command byte).
-		// Inert until a CSD is configured; then accumulates the command frame and
-		// advances the response stream / read-lag latch.
-		e.sd.out(value)
 	}
 }
 
-// ctlSelect handles an OUT to the microcontroller select port (&DC).
-func (e *ENC28J60) ctlSelect(v uint8) {
-	// SD-card selects (&31/&30/&38/&3F) are claimed by the SD model first (only
-	// when a card is configured); they must not disturb the ENC SPI state. The
-	// shared &04 (all-deselect bracket) also resets the SD card below.
-	if e.sd.sdSelect(v) {
-		return
+// clockData routes one data-port OUT byte to the MUX-selected peripheral's SPI
+// back-end and latches the MISO it clocks out into the shared read-back latch
+// (gap c/d). An OUT to a data port while nothing is selected is ignored (the PIC
+// has no peripheral to relay to).
+func (e *ENC28J60) clockData(value uint8) {
+	switch e.selPeriph {
+	case periphENC:
+		e.spiClock(value)
+		e.clockedIn(e.spiMISOByte())
+	case periphEEP:
+		e.eep.clock(value)
+		e.clockedIn(e.eep.miso)
+	case periphSD:
+		e.sd.out(value)
+		e.clockedIn(e.sd.miso)
 	}
-	switch v {
-	case selENCEnable:
-		// Asserting CS begins a fresh SPI transaction.
-		e.encSelected = true
+}
+
+// ctlSelect handles an OUT to the microcontroller select port (&DC). It drives the
+// one shared PIC: the peripheral-select MUX (gap d), the one global auto-null mode
+// (gap a), the IDENT/probe reply, the &02/&03 PUSH/POP read-byte slot, the ENC
+// CS-pulse / reset, and the LED-twinkle accept-and-ignore band.
+func (e *ENC28J60) ctlSelect(v uint8) {
+	e.trackSDClose(v, true) // observe the SD deselect-tail ordering (gap 10)
+	switch {
+	case v == selNullOff: // &04 — auto-null OFF (the neutral bracket)
+		// The manual phrases &04 as "auto-null off / all peripherals deselected", but
+		// both hardware-proven drivers issue &04 while a peripheral stays addressable:
+		// the ENC driver reads ONE more buffer byte after enulloff=&04 (encdrv.asm
+		// rd_buf_mem tail), and the SD deselect tail issues an explicit &30 BEFORE the
+		// &04 close (bdos:40). So &04 clears the auto-null MODE; the chip-select MUX is
+		// changed only by an explicit select/deselect (&10/&20/&30 or a new select).
+		// The SD per-transaction state is reset here only when SD was the auto-null
+		// target's bracket (the init ladder's opening &04) — handled via sdReset, which
+		// is a no-op for an idle card.
+		e.autoNullMode = false
+		e.autoNullTarget = periphNone
+		if e.selPeriph != periphSD {
+			e.sd.sdReset()
+		}
+		return
+	case v == selPushByte: // &02 — PUSH the pending read-byte (ISR save; manual:37)
+		e.savedReadByte = e.lastClockedIn
+		e.savedReadValid = e.lastClockedValid
+		return
+	case v == selPopByte: // &03 — POP the saved read-byte (manual:38)
+		if e.savedReadValid {
+			e.lastClockedIn = e.savedReadByte
+			e.lastClockedValid = true
+		}
+		return
+	case v >= selIdentBase && v <= selIdentTop: // &08..&0F — IDENT string read
+		// Latch the Nth char of the IDENT string into the shared read-back latch; the
+		// driver's chk_trinity reads it on the next IN &DD (gap c routes it there).
+		e.probeReply = trinityIdent[v-selIdentBase]
+		e.clockedIn(e.probeReply)
+		return
+	case v == selEEPEnable: // &11 — EEPROM CS-assert (MUX-select EEPROM)
+		e.selectPeripheral(periphEEP)
+		e.eep.csAssert()
+		return
+	case v == selEEPDisable: // &10 — EEPROM CS-deassert
+		if e.selPeriph == periphEEP {
+			e.selectPeripheral(periphNone)
+		} else {
+			e.eep.csDeassert()
+		}
+		return
+	case v == selEEPNullOn: // &1F — EEPROM auto-null on (MUX-select EEPROM, set the global mode)
+		e.selectPeripheral(periphEEP)
+		e.eep.csAssert()
+		e.autoNullMode = true
+		e.autoNullTarget = periphEEP
+		return
+	case v == selENCEnable: // &21 — ENC CS-assert (MUX-select ENC, fresh transaction)
+		e.selectPeripheral(periphENC)
 		e.spiByteIdx = 0
 		e.spiMISO = 0
 		e.rbmActive = false
-	case selENCDisable, selENCPulse:
-		e.encSelected = false
-	case selENCReset:
-		// Microcontroller-level ENC reset == ENC28J60 soft reset (SRC).
+		return
+	case v == selENCDisable: // &20 — ENC CS-deassert
+		if e.selPeriph == periphENC {
+			e.selectPeripheral(periphNone)
+		}
+		return
+	case v == selENCPulse: // &23 — ENC CS PULSE: de-assert then re-assert (gap 9, manual:69,71,130)
+		// A real /CS pulse ends the current ENC command (resets the byte counter) and
+		// immediately re-asserts CS ready for the next — the datasheet end-of-command.
+		e.spiByteIdx = 0
+		e.rbmActive = false
+		e.spiMISO = 0
+		e.selectPeripheral(periphENC)
+		return
+	case v == selENCReset: // &28 — ENC reset (SRC); 50µs settle is a blind DJNZ on the Z80 side
 		e.softReset()
-	case selNullOn:
-		e.autoNull = true
-	case selNullOff:
-		e.autoNull = false
-		// &04 is the SD init ladder's all-deselect bracket too (dis &A626/&A8EE):
-		// drop SD CS and clear its per-transaction state.
-		e.sd.sdReset()
-	case selProbeT, selProbeR, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, selIdentTop:
-		// IDENT string read (&08..&0F): latch the Nth char of "TRI v1.1" for IN &DD.
-		e.probeReply = trinityIdent[v-selIdentBase]
-	case selEEPEnable:
-		e.eep.csAssert() // eeprom_enable: begin a flash transaction
-	case selEEPDisable:
-		e.eep.csDeassert() // eeprom_disable: end it
+		// CS state is unaffected by an internal reset; keep ENC selected if it was.
+		return
+	case v == selNullOn: // &2F — ENC auto-null on (the global mode, ENC target)
+		e.selectPeripheral(periphENC)
+		e.autoNullMode = true
+		e.autoNullTarget = periphENC
+		return
+	case e.sd.sdSelect(v): // &31/&30/&38/&3F — SD selects (only when a card is configured)
+		switch v {
+		case selSDManual:
+			e.selectPeripheral(periphSD)
+			e.autoNullMode = false
+			e.autoNullTarget = periphNone
+		case selSDAutoNul:
+			e.selectPeripheral(periphSD)
+			e.autoNullMode = true
+			e.autoNullTarget = periphSD
+		case selSDInit:
+			e.selectPeripheral(periphSD)
+		case selSDDeselct:
+			if e.selPeriph == periphSD {
+				e.selPeriph = periphNone // CS high; do not re-deselect (sdSelect already cleared)
+			}
+		}
+		return
+	case v >= 0xC0: // %11fedcba — LED Twinkle band: accept and ignore (gap 12, manual:57-64)
+		// Cosmetic LED segment writes; no read-back depends on them. Record the last
+		// LED command so a fidelity trace can see it, but produce no SPI effect.
+		e.lastLED = v
+		e.ledWritten = true
+		return
 	}
 }
 
@@ -442,6 +860,32 @@ func (e *ENC28J60) ProgramTrinityNetwork(mac [6]byte, ip [4]byte) {
 	chunk := make([]byte, 10)
 	copy(chunk[0:6], mac[:])
 	copy(chunk[6:10], ip[:])
+	e.eep.write(eepChunkBase, chunk)
+}
+
+// ProgramTrinityNetworkFull lays out the COMPLETE 27-byte "Trinity Network "
+// settings record (gap 13, manual:87): MAC@0, IP@6, Gateway@10, Subnet@14, DNS@18,
+// Secondary-DNS@22, Use-DHCP@26 (0=no/1=yes). The boot wrappers read only MAC+IP
+// (trinload:§4c), so this is for fidelity completeness — a consumer that reads the
+// full settings record (a future config tool) sees the real layout. The index
+// entry is laid out exactly as ProgramTrinityNetwork's so find_index still matches.
+func (e *ENC28J60) ProgramTrinityNetworkFull(mac [6]byte, ip, gateway, subnet, dns, dns2 [4]byte, useDHCP bool) {
+	entry := make([]byte, eepIndexStride)
+	entry[0] = 1
+	entry[1] = 1
+	copy(entry[2:18], trinityNetworkName)
+	e.eep.write(0, entry)
+
+	chunk := make([]byte, 27)
+	copy(chunk[0:6], mac[:])
+	copy(chunk[6:10], ip[:])
+	copy(chunk[10:14], gateway[:])
+	copy(chunk[14:18], subnet[:])
+	copy(chunk[18:22], dns[:])
+	copy(chunk[22:26], dns2[:])
+	if useDHCP {
+		chunk[26] = 1
+	}
 	e.eep.write(eepChunkBase, chunk)
 }
 
@@ -560,7 +1004,7 @@ func (e *ENC28J60) miiReadByte(addr byte) byte {
 // idiom is OUT opcode, OUT dummy(s), IN value — so the response to a read lands
 // on the dummy clock(s) after the opcode.
 func (e *ENC28J60) spiClock(v uint8) {
-	if !e.encSelected {
+	if !e.encSelected() {
 		return
 	}
 	if e.spiByteIdx == 0 {
@@ -749,6 +1193,13 @@ func (e *ENC28J60) doTransmit() {
 // so the frame lands where the driver's read_ptr (== the previous packet's
 // next-pointer) will point. This is what makes multi-packet receive correct.
 func (e *ENC28J60) materialiseRX() {
+	// Apply the ERXFCON receive filter (gap 8): a frame whose dest MAC fails the
+	// configured filter is dropped by the receive engine before it ever reaches the
+	// FIFO (manual:95 "sees but does not receive"). Skip filtered frames; deliver the
+	// first that passes. ERXFCON==0 (sniffer) passes everything (manual:96).
+	for len(e.rxQueue) > 0 && !e.rxFilterPass(e.rxQueue[0]) {
+		e.rxQueue = e.rxQueue[1:]
+	}
 	if len(e.rxQueue) == 0 {
 		return
 	}

@@ -107,9 +107,19 @@ type SDCard struct {
 	// driver mis-decodes the capacity.
 	isV2 bool
 
+	// writeProtect, when set, makes &DC bit 2 read CLEAR so the driver's
+	// sense-inverted WP gate (`IN &DC; CPL; AND 4`, hd.svb-t &A91B) flags the card
+	// write-protected and aborts the write (gap 7, manual:17,102; bdos:42,43,46). A
+	// writable card (the default) reads bit 2 SET. SetWriteProtect toggles it.
+	writeProtect bool
+
 	selected bool // SD CS asserted (between &DC &31/&3F and &30/&04)
-	autoNull bool // &3F auto-null mode: the microcontroller supplies the per-byte dummy
 	woken    bool // the &38 microcontroller-wake step has run for this transaction
+	// initType is the &38 SD-init return code the documented BASIC/alt-driver path
+	// reads (gap 6, manual:74-77): 0 = absent/fail, 1 = MMC, 2 = SD. Colin's ladder
+	// ignores it (it polls for the &FF settle instead), so it is exposed via the
+	// shared read-back latch only after a &38 wake.
+	initType byte
 
 	// Command accumulation. cmdBuf collects the 6-byte command frame; cmdLen counts
 	// bytes collected. inCmd is true while collecting (a command-start byte —
@@ -161,7 +171,16 @@ func (s *SDCard) SetCSD(csd [16]byte) {
 	// CSD_STRUCTURE == 01 (byte0 bits 7:6) => v2.0 high-capacity card.
 	s.isV2 = (csd[0] & 0xC0) == 0x40
 	s.configured = true
+	// &38 SD-init return code (gap 6, manual:74-77): 2 = SD, 1 = MMC. A configured
+	// card is an SD (v1 or v2); MMC cards (which fail CMD8 AND use CMD1) are not the
+	// shape SetCSD installs, so a configured card reports 2.
+	s.initType = 2
 }
+
+// SetWriteProtect marks the card write-protected (or writable). When protected,
+// &DC bit 2 reads CLEAR so the driver's sense-inverted WP gate (`IN &DC; CPL; AND
+// 4`) aborts a CMD24 write (gap 7, manual:17,102; bdos:42,43,46). Default writable.
+func (s *SDCard) SetWriteProtect(on bool) { s.writeProtect = on }
 
 // SeedSector pre-loads a 512-byte sector into the backing store at block address
 // addr, so a subsequent CMD17 read of that address streams it back. A short slice
@@ -218,9 +237,10 @@ func CSDForV1(readBlLen, cSize, cSizeMult uint32) [16]byte {
 }
 
 // sdSelect handles an OUT to the &DC select port that targets the SD card. It
-// returns true if v was an SD-specific select (so ENC28J60.ctlSelect leaves the
-// ENC state alone). selNullOff (&04) is shared and handled by ctlSelect; we also
-// treat it as an SD deselect+reset there.
+// returns true if v was an SD-specific select. The MUX + global auto-null mode are
+// owned by the shared controller (ENC28J60.ctlSelect); this only manages the SD's
+// per-transaction state (CS, command framing, the &38 wake). selNullOff (&04) is
+// the shared all-deselect bracket, handled by ctlSelect, which calls sdReset.
 func (s *SDCard) sdSelect(v uint8) bool {
 	if !s.configured {
 		return false
@@ -232,22 +252,22 @@ func (s *SDCard) sdSelect(v uint8) bool {
 		// poll re-selects &31 between &38 and the first command; each select
 		// cleanly restarts command framing.)
 		s.selected = true
-		s.autoNull = false
 		s.resetCmd()
 		return true
 	case selSDAutoNul:
 		s.selected = true
-		s.autoNull = true
 		s.resetCmd()
 		return true
 	case selSDInit:
-		// Microcontroller "SD init" wake: the &A643 poll then reads sd.in until it
-		// returns &FF (the card settling to SPI-idle MISO-high). Arm that by making
-		// the post-wake reads return &FF (the default idle). Mark woken so the very
-		// next manual read is idle &FF, breaking Colin's `inc a; jr z` poll.
+		// Microcontroller "SD init" wake (gap 6). Colin's &A643 poll reads sd.in until
+		// it returns &FF (the card settling to SPI-idle MISO-high), breaking his
+		// `inc a; jr z`. The documented 0/1/2 return code (manual:74-77) is delivered
+		// FIRST (one byte), then the &FF settle follows — so a 0/1/2 consumer reads
+		// the code while Colin's poll skips it (initType != &FF) and breaks on the &FF.
+		s.selected = true
 		s.woken = true
 		s.resetCmd()
-		s.resp = nil
+		s.resp = []byte{s.initType}
 		s.respPos = 0
 		s.miso = sdIdleMISO
 		s.phase = phaseIdle
@@ -259,32 +279,51 @@ func (s *SDCard) sdSelect(v uint8) bool {
 	return false
 }
 
-// ctlStatus is the &DC Trinity Status Register byte the model reports. Per the
-// manual ("Trinity Status Register"), IN &DC returns %1100BWFE: bits 7,6 are FIXED
-// 1, bits 5,4 FIXED 0, then bit3 BUSY / bit2 WRITE / bit1 FLASH (card inserted) /
-// bit0 ENCINT. So the base is 0xC0, never 0x00. Bit 3 (busy) is always clear (the
-// model never stalls). When a card is configured it also reports bit 1 (card
-// present) and bit 2 (write status, SENSE-INVERTED: the driver reads it as
-// `CPL / AND 4`, so a writable card must read the bit SET — hd.svb-t WP gate &A91B).
-// ENCINT (bit 0) is not modelled here.
+// deselect drops SD CS (the controller MUX-selecting another peripheral). The
+// configured CSD and backing store survive; only the in-flight transaction ends.
+func (s *SDCard) deselect() { s.selected = false }
+
+// ctlStatus is the &DC Trinity Status Register byte the SD contributes (the shared
+// controller adds BUSY and ENCINT). Per the manual ("Trinity Status Register"), IN
+// &DC returns %1100BWFE: bits 7,6 FIXED 1, bits 5,4 FIXED 0, then bit3 BUSY / bit2
+// WRITE / bit1 FLASH (card inserted) / bit0 ENCINT. The base is 0xC0. When a card
+// is configured it adds bit 1 (present) and bit 2 (write status, SENSE-INVERTED:
+// the driver reads it as `CPL / AND 4`, so a WRITABLE card reads bit 2 SET and a
+// WRITE-PROTECTED card reads it CLEAR — hd.svb-t WP gate &A91B; gap 7).
 func (s *SDCard) ctlStatus() uint8 {
 	if !s.configured {
-		return 0xC0 // no card: fixed top nibble only (FLASH=0, busy clear)
+		return 0xC0 // no card: fixed top nibble only (FLASH=0)
 	}
-	return 0xC6 // 0xC0 | bit1 present | bit2 write-enabled (sense-inverted), busy clear
+	st := uint8(0xC0 | 0x02) // present
+	if !s.writeProtect {
+		st |= 0x04 // writable (sense-inverted: bit 2 SET == writable)
+	}
+	return st
 }
 
 // sdReset clears all per-transaction state (selNullOff / &04 all-deselect bracket,
 // handled by ctlSelect). The configured CSD survives a bus reset.
 func (s *SDCard) sdReset() {
 	s.selected = false
-	s.autoNull = false
 	s.woken = false
 	s.resetCmd()
 	s.resp = nil
 	s.respPos = 0
 	s.miso = sdIdleMISO
 	s.phase = phaseIdle
+}
+
+// autoClock serves a bare IN &DF under &3F auto-null mode: the microcontroller
+// supplies the per-byte dummy clock, so the read both advances and returns the next
+// byte. It mirrors the manual-mode out(dummy)+in pair but in one step.
+func (s *SDCard) autoClock() uint8 {
+	if !s.configured || !s.selected {
+		return sdIdleMISO
+	}
+	if s.phase == phaseWriteResp {
+		return s.inWriteResp()
+	}
+	return s.nextResp()
 }
 
 func (s *SDCard) resetCmd() {
@@ -328,7 +367,16 @@ func (s *SDCard) out(v uint8) {
 			s.miso = s.nextResp()
 			return
 		}
+		if s.phase == phaseWriteResp {
+			// The post-data handshake is read manually (dummy OUT &FF + IN): latch the
+			// next handshake byte (gap/data-response/busy) for the following IN &DF.
+			s.miso = s.inWriteResp()
+			return
+		}
 		s.outDataPhase(v)
+		// Capturing the write data block: the host ignores MISO here (it is mid-OUTI),
+		// but keep the latch at idle-high so a stray read is benign.
+		s.miso = sdIdleMISO
 		return
 	}
 	// While collecting a command frame, every byte is part of it.
@@ -397,24 +445,6 @@ func (s *SDCard) outDataPhase(v uint8) {
 			s.phase = phaseWriteResp
 		}
 	}
-}
-
-// in returns the byte for an IN &DF. In manual mode it returns the latched
-// read-lag byte (set by the most recent out). In auto-null mode the
-// microcontroller supplies the dummy, so a bare IN both advances and returns the
-// next response byte. When inert/deselected it returns the idle &FF stub —
-// preserving the pre-existing portTrinitySD behaviour for tests with no card.
-func (s *SDCard) in() uint8 {
-	if !s.configured || !s.selected {
-		return sdIdleMISO
-	}
-	if s.phase == phaseWriteResp {
-		return s.inWriteResp()
-	}
-	if s.autoNull {
-		return s.nextResp()
-	}
-	return s.miso
 }
 
 // inWriteResp returns the CMD24 post-data handshake the driver polls. The tail
