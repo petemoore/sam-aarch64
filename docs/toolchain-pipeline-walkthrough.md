@@ -221,7 +221,7 @@ example the interesting question is what it does with `.text`, `.section`, and
 - **Pass 2 (emit).** `main_handle_directive_pass2` routes `.text`
   (`main_loop.asm:513`), `.data` (`:515`) and `.section` (`:523-524`) to
   `walk_records` — a **pure no-op**, zero bytes emitted. `.space`/`.skip` go to
-  `main_dir_skip_emit` (`:529-531`) which **does** emit the reserved bytes.
+  `main_dir_skip_emit` (`:529-532`) which **does** emit the reserved bytes.
 
 So on the SAM, exactly as on the host binary build, `.section bss_kernel` is a
 zero-byte no-op and `.space 8` emits 8 bytes. The directive IDs are the shared
@@ -304,6 +304,7 @@ And the flattened `.tbn` renders as:
 ```asm
 // demo.s — minimal walkthrough example
 	.org 0x1000
+start:
 	mov	x0, #0x1 // set x0 = 1
 	ret
 	.ltorg
@@ -342,7 +343,8 @@ If you never flatten, it rides along as a harmless zero-byte no-op (§2, §4).
 ### 7.1 The CI round-trip is **binary-level** (`tools/run-disasm-roundtrip.sh`)
 
 The `disasm-roundtrip` CI gate proves `encode → decode → encode` is identity. For
-each fixture it runs (real commands, `run-disasm-roundtrip.sh:83`, `:107`, `:129`):
+each fixture it runs (real commands, `run-disasm-roundtrip.sh:83` encode, `:97`
+decode, `:129` re-encode):
 
 ```sh
 build/sam-aarch64 -o v1.bin        demo.s        # encode: source → bytes
