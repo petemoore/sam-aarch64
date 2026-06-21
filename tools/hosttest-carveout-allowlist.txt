@@ -1,8 +1,11 @@
 # hosttest-carveout-allowlist.txt — the ratchet ledger for the i231
 # emulation-first guard (tools/check-hosttest-carveouts.sh).
 #
-# A "carve-out" is an opening assembler directive of the shape
+# A "carve-out" is an opening assembler directive whose condition is true
+# exactly when NETBOOT_HOSTTEST is UNDEFINED — canonically
 #     if defined(NETBOOT_HOSTTEST)==0          (alone or ANDed with other gates)
+# but the guard also catches every equivalent spelling pyz80 accepts (`IF`,
+# `!=1`, `<1`, `<=0`, swapped operands, spaces inside `defined ( … )`).
 # It excludes its block from the HOST/emulation build, so that code ships to
 # real hardware UN-emulated — the exact CLAUDE.md §7 / feedback_emulation_first
 # anti-pattern (the i82 client_main brick, the samboot_stripes stub). Agents

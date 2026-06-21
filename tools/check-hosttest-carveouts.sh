@@ -29,15 +29,43 @@ if [ ! -f "$allowlist" ]; then
   exit 1
 fi
 
-# The anti-pattern: an opening `if` whose condition contains defined(NETBOOT_HOSTTEST)==0.
-# Allow arbitrary surrounding whitespace and ANDed gates (e.g. *(defined(DUMPER)==0)).
-pattern='^[[:space:]]*if([[:space:]]|\().*defined\(NETBOOT_HOSTTEST\)[[:space:]]*==[[:space:]]*0'
+# The anti-pattern is an opening `if` whose condition is true exactly when
+# NETBOOT_HOSTTEST is UNDEFINED — so the block is excluded from the host build.
+# pyz80's `defined()` yields 0 or 1, the directive token is case-insensitive,
+# and whitespace inside the expression is free, so there are many equivalent
+# spellings (`==0`, `!=1`, `<1`, swapped operands, `IF`, `defined ( H )`). To
+# catch them all robustly rather than play whack-a-mole, each candidate line is
+# NORMALIZED — lowercased with all whitespace stripped — and matched against the
+# finite set of canonical "true-when-undefined" forms below. The sanctioned
+# shapes the guard must NOT flag — bare `defined(NETBOOT_HOSTTEST)` (a host-test
+# recording double) and `defined(NETBOOT_HOSTTEST) | defined(NETBOOT_STREAM)`
+# (both builds) — carry no negating comparison, so they never match.
+neg_forms=(
+  'defined(netboot_hosttest)==0'
+  'defined(netboot_hosttest)!=1'
+  'defined(netboot_hosttest)<1'
+  'defined(netboot_hosttest)<=0'
+  '0==defined(netboot_hosttest)'
+  '1!=defined(netboot_hosttest)'
+  '1>defined(netboot_hosttest)'
+  '0>=defined(netboot_hosttest)'
+)
 
-# Live per-file counts, keyed by path.
+# Live per-file counts, keyed by path. Scan opening `if` directives (the line
+# starts with optional whitespace then `if` followed by a space or `(`,
+# case-insensitive) that mention NETBOOT_HOSTTEST, normalize each, and count a
+# carve-out when it contains any negating canonical form.
 declare -A live
-while IFS= read -r path; do
-  [ -n "$path" ] && live["$path"]=$(( ${live["$path"]:-0} + 1 ))
-done < <(grep -rnE "$pattern" src/ 2>/dev/null | sed -E 's/:[0-9]+:.*//')
+while IFS=: read -r path _lineno content; do
+  [ -n "$path" ] || continue
+  norm=$(printf '%s' "$content" | tr 'A-Z' 'a-z' | tr -d '[:space:]')
+  for f in "${neg_forms[@]}"; do
+    if [[ "$norm" == *"$f"* ]]; then
+      live["$path"]=$(( ${live["$path"]:-0} + 1 ))
+      break
+    fi
+  done
+done < <(grep -rinE '^[[:space:]]*if[[:space:](]' src/ 2>/dev/null | grep -i 'netboot_hosttest')
 
 # Ledger per-file counts (skip blanks and #-comments).
 declare -A allowed
