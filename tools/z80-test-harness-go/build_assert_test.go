@@ -90,21 +90,6 @@ func buildArtifacts(root string, targets ...string) error {
 	return nil
 }
 
-// mustBuild rebuilds the given make targets and fails the test if the build
-// does not exit 0. Use it in a test that reads a build/*.bin artifact to
-// guarantee the artifact is fresh w.r.t. its sources before reading it — a
-// per-test belt-and-suspenders complement to the TestMain pre-build, with a
-// clearer, test-local failure message.
-func mustBuild(t *testing.T, root string, targets ...string) {
-	t.Helper()
-	if os.Getenv("HARNESS_SKIP_BUILD") == "1" {
-		return
-	}
-	if err := buildArtifacts(root, targets...); err != nil {
-		t.Fatalf("artifact build failed — refusing to test against a possibly-stale build/: %v", err)
-	}
-}
-
 // TestMain is the structural stale-artifact guard. It rebuilds the full
 // harness artifact set before any test runs and aborts the suite if the build
 // fails, so no test in this package can ever read a stale build/*.bin.
