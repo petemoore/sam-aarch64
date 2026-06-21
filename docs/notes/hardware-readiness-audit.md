@@ -32,9 +32,9 @@ program performs no SD transaction, so the SD-path fixes do not apply.
 | Program (entry) | #1 flush | #2 init-before-SD | #3 enc re-arm | #4 clean exit | #5 bounded wait | #6 4-step deselect |
 |---|---|---|---|---|---|---|
 | **csd_probe** (`probe_main`) | HAS | HAS | HAS (`csd_probe.asm:484`) | HAS | HAS | HAS |
-| **serve_main** (`netboot_serve.asm`) | HAS | **MISSING** (`csd_set_bd_records` ~:1336 before `drv_init` ~:1339) | **MISSING** (no re-arm before `serve_serve_once`) | **MISSING** (bare `di; halt`, `sv_fail_cfg`/`sv_fail_init`) | HAS (`sd_csd.asm` → bounded `sdc_wait_ready`, i246) | HAS (`sd_csd.asm` → 4-step `sdc_deselect`, i247) |
-| **client_main** (`netboot_client.asm`) | HAS | HAS | **MISSING** (no re-arm after SD write) | **MISSING** (bare `di; halt`) | HAS (`sd_csd.asm` → bounded `sdc_wait_ready`, i246) | HAS (`sd_csd.asm` → 4-step `sdc_deselect`, i247) |
-| **dumper** | N/A | N/A | N/A | **MISSING** (#4) | N/A | N/A |
+| **serve_main** (`netboot_serve.asm`) | HAS | HAS (`drv_init` :1481 before `csd_set_bd_records` :1500, i242/i244) | HAS (`enc_rx_reestablish` :538, i245) | HAS (`sv_fail_*` → `tr_terminate` :1601, i243b) | HAS (`sd_csd.asm` → bounded `sdc_wait_ready`, i246) | HAS (`sd_csd.asm` → 4-step `sdc_deselect`, i247) |
+| **client_main** (`netboot_client.asm`) | HAS | HAS | HAS (`enc_rx_reestablish` after SD write, i245) | N/A (disk-booted: terminal green-border `halt` is its by-design end state, not a trinload-recovery path) | HAS (`sd_csd.asm` → bounded `sdc_wait_ready`, i246) | HAS (`sd_csd.asm` → 4-step `sdc_deselect`, i247) |
+| **dumper** | N/A | N/A | N/A | HAS (`tr_terminate`, i243b) | N/A | N/A |
 | **http** | N/A | N/A | N/A | **MISSING** (#4) | N/A | N/A |
 | **server** | N/A | N/A | N/A | **MISSING** (#4) | N/A | N/A |
 | **smoke** | N/A | N/A | N/A | **MISSING** (#4) | N/A | N/A |
@@ -62,12 +62,12 @@ How each program reaches the SAM determines which fixes are load-bearing.
 Highest risk first (a program reaching hardware with this gap can hang or
 silently fail):
 
-1. **serve_main #2** — SD transaction (`csd_set_bd_records`) runs *before* `drv_init`. Tracked: **i242 / i244** (reorder running).
-2. **serve_main #3** — no `enc_rx_reestablish` before `serve_serve_once`; serving dies after the first SD read. Tracked: **i242 / i245** (model) + new program-fix item.
-3. **client_main #3** — no ENC re-arm after the SD write. **Was untracked → new item.**
+1. **serve_main #2** — SD transaction (`csd_set_bd_records`) ran *before* `drv_init`. **DONE** (i242 / i244): the reorder landed; `drv_init` (:1481) now precedes `csd_set_bd_records` (:1500).
+2. **serve_main #3** — no `enc_rx_reestablish` before `serve_serve_once`; serving died after the first SD read. **DONE** (i242 / i245 model + i249 emulation catch): `enc_rx_reestablish` is now called (:538) before serving resumes.
+3. **client_main #3** — no ENC re-arm after the SD write. **DONE** (i245): `enc_rx_reestablish` present in `netboot_client.asm`.
 4. **serve_main #5 / client_main #5** — unbounded `wait_ready`; a stuck Trinity hangs forever. **DONE** (i246): the shared `sd_csd.asm` now uses the bounded `sdc_wait_ready` (sticky `sdc_timed_out`), so one edit fixed both; the default emulation now catches a regression (i250).
 5. **serve_main #6 / client_main #6** — 2-step `sdc_deselect`; real card mishandles SPI tail. **DONE** (i247): the shared `sd_csd.asm` now emits Colin's proven 4-step deselect tail; the default emulation catches a regression (i251).
-6. **serve_main #4 / client_main #4 / dumper / http / server / smoke #4** — bare `di; halt` instead of `tr_terminate`. Tracked: **i243b**.
+6. **#4 clean exit** — bare `di; halt` instead of `tr_terminate`. **DONE for the SD-path + key trinload-pushed programs** (i243b): serve_main (`sv_fail_*` → `tr_terminate`) and dumper (`tr_terminate` ×3). client_main keeps a terminal green-border `halt` **by design** (it is disk-booted, so #4 is N/A — nothing pushed it to recover to). **Re-verify before deploying:** `netboot_server.asm` still shows a bare `halt` ×2 (residual, or a `*_HOSTTEST`-only main); `netboot_http`/`netboot_smoke` exit paths unconfirmed this pass — neither is on today's deploy path.
 
 ## HARDWARE-READY verdict
 
@@ -75,6 +75,9 @@ Safe to deploy to real SAM+Trinity today (no SD path, or all applicable fixes
 present):
 
 - **csd_probe** — the reference / gold standard (HAS all six).
+- **serve_main** — **now HAS all six** (i242/i244/i245/i243b landed; verified in source 2026-06-26). The i194 disk-push deploy target.
+- **client_main** — HAS all applicable fixes (#4 is N/A: disk-booted, terminal `halt` by design).
+- **dumper** — no SD path; #4 (`tr_terminate`) present.
 - **eeprom_roundtrip**
 - **eeprom_flash_chunk1** — same EEPROM-write + network-report + `tr_terminate` paths as `eeprom_roundtrip` (i226-hardware-proven), no SD path; writes the trinity-autoboot bootloader into chunk 1 (the bootblock). Flashed + read-back-verified PASS on real hardware 2026-06-26 (i135c).
 - **port_probe**
@@ -84,9 +87,7 @@ present):
 
 Must NOT reach hardware until the cited gaps close:
 
-- **serve_main** — missing #2, #3, #4.
-- **client_main** — missing #3, #4.
-- **dumper**, **http**, **server**, **smoke** — missing #4 (clean exit) only; otherwise no SD risk, but still gated on i243b.
+- **server**, **http**, **smoke** — #4 (clean exit) unconfirmed: `server` still shows a bare `halt`; `http`/`smoke` exit paths not re-verified this pass. No SD risk, but confirm a `tr_terminate` exit (or a `*_HOSTTEST`-only main) before pushing. None is on the current deploy path.
 
 ## Emulation gaps (the load-bearing concern)
 
