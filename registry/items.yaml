@@ -3327,6 +3327,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 692, role: completing}
 
 - id: i167
   title: Determine the B-DOS save-buffer limit from first principles (read source; not hardware-only)
