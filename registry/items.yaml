@@ -4299,3 +4299,12 @@
   status: IN_PROGRESS
   kind: leaf
   owner: agent
+
+- id: i254
+  title: "Run ALL tests in CI: private binaries as repo secrets (SKIP_PRIVATE_TESTS default-true, our CI overrides) + add currently-excluded packages"
+  description: |
+    Pete (2026-06-25), follow-on to i253. GOAL: CI runs EVERY test; nothing is silently excluded. Mechanism: (1) Make SKIP_PRIVATE_TESTS=true the DEFAULT in CI (so forks, which get no secrets, skip the proprietary-capture tests explicitly). (2) In OUR repo's CI, materialize the proprietary binaries from encrypted GitHub repository secrets (Colin's forked ROM rom.bin, eeprom.bin, B-DOS 1.5t bdos15t-beta6.bin -> the capture paths under $SAMBOOT_CAPTURE_DIR / $BDOS15T_BIN) and override SKIP_PRIVATE_TESTS to false/unset, so our CI runs those tests too. GitHub withholds secrets from fork-PR workflows, so a fork never gets the binaries and its CI skips those tests via the default SKIP_PRIVATE_TESTS=true — exactly Pete's intent. (3) ADD the currently-CI-EXCLUDED test packages to CI: z80-test-harness-go, zx0-greedy, editor-prototype have NO CI test runner today; add runners, guarded by SKIP_PRIVATE_TESTS where they need private resources, building their fixtures as make prereqs. TENSION TO RESOLVE (Pete's call): z80-test-harness-go was DELIBERATELY not a CI gate (memory feedback_go_harness_is_dev_tool_not_ci_gate — it can crash/mislead, SimCoupe is the gate); adding it to CI reverses that, so consider a non-blocking/separate job or confirm the reversal. PETE-GATED: Pete must create the GitHub secrets (only he can) and weigh storing Colin's NON-REDISTRIBUTABLE binaries as encrypted secrets in a PUBLIC repo (encrypted, not exposed to forks/logs, but still uploaded to GitHub — Pete knows Colin personally and decides). depends_on i253 (the SKIP_PRIVATE_TESTS gating mechanism must exist first).
+  status: OPEN
+  depends_on: [i253]
+  kind: leaf
+  owner: agent

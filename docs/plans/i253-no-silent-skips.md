@@ -88,6 +88,29 @@ verification of every touched module + the §3 pre-merge review, then ONE PR
 completing i253. **Do not merge partially** — Pete asked for the full sweep on one
 branch.
 
+## Forward goal — run ALL tests in CI (tracked as i254, depends on i253)
+
+Pete (2026-06-25): eventually CI should run **every** test, with nothing silently
+excluded. The end state (captured in **i254**):
+- `SKIP_PRIVATE_TESTS=true` is the **default** in CI (forks get no secrets → they
+  skip the proprietary tests explicitly). i253 already sets this for the netboot-z80
+  job; i254 generalises it.
+- **Our** repo's CI materialises the proprietary binaries from **encrypted GitHub
+  repository secrets** (rom.bin / eeprom.bin / B-DOS 1.5t) into the capture paths and
+  overrides `SKIP_PRIVATE_TESTS` to false, so our CI runs those tests too. GitHub
+  withholds secrets from fork-PR workflows, so forks never get the binaries.
+- **Add the currently-CI-excluded packages to CI** (`z80-test-harness-go`,
+  `zx0-greedy`, `editor-prototype` — they have no CI runner today), guarded by
+  `SKIP_PRIVATE_TESTS` where needed. **Tension (Pete's call):** `z80-test-harness-go`
+  was deliberately *not* a CI gate (it can crash/mislead; SimCoupé is the gate) — so
+  adding it may want a non-blocking/separate job, or an explicit reversal.
+- **Pete-gated:** only Pete can create the secrets, and he weighs storing Colin's
+  non-redistributable binaries as encrypted secrets in a public repo.
+
+So in i253, when converting the dev-harness packages (section A) and adding any
+currently-CI-excluded test to CI, **guard private-resource tests with
+`SKIP_PRIVATE_TESTS`** (don't drop them) — that keeps i254 a pure wiring/secrets job.
+
 ## Licensing reference (for the private-capture gating)
 - B-DOS 1.5a = **public domain**, already committed (`reference/bdos/al-bdos15a.bin`).
 - Stock ROM v3.0 (`rom_official_v30.bin`) = Andy Wright's, permission-published via
