@@ -244,6 +244,27 @@ type ENC28J60 struct {
 	// untouched, so the SD read/write tests (which run drv_init first) are unaffected.
 	sdInitSettling bool
 
+	// rxDisarmed models hardware fix #3 (docs/notes/hardware-readiness-audit.md): an
+	// SD transaction on the shared one-PIC Trinity controller disturbs the ENC28J60's
+	// persistent RX state (RXEN, ring pointers, MAC/PHY — netboot_serve.asm:494-502),
+	// which drv_read never restores. So a program that serves over the network AFTER an
+	// SD read without re-arming the ENC (enc_rx_reestablish) receives once then dies —
+	// the "serve-dies-after-SD" class. Set whenever the SD card is MUX-selected for a
+	// transaction; cleared only by the &28 ENC reset (selENCReset), which is the first
+	// thing enc_rx_reestablish/drv_init do — so a program that re-arms is automatically
+	// fine and one that omits it stays disarmed. While set, materialiseRX refuses to
+	// deliver frames (EPKTCNT stays 0 -> drv_read returns BC=0), making a missing
+	// enc_rx_reestablish a build-time failure (CLAUDE.md rule 7) instead of a hardware
+	// surprise (the i126 comprehensive-emulation north star).
+	//
+	// Fidelity boundary (i249): the authority (the audit + the driver comments) asserts
+	// THAT an SD transaction disturbs RXEN/ring/MAC/PHY so serving dies until re-armed,
+	// but NOT the precise register-level mechanism (no source says RXEN is cleared vs the
+	// ring corrupted vs the filter scrambled). So this models the documented OBSERVABLE
+	// (no RX until re-armed) at the receive path, the same observable-level approach as
+	// sdInitSettling — not a fabricated register corruption. See trinity-emulation-fidelity.md.
+	rxDisarmed bool
+
 	// SPI transaction state for the ENC SPI back-end. The microcontroller latches
 	// the MISO byte clocked out by the most recent OUT (&DE); the next IN (&DE)
 	// returns it via lastClockedIn (the one-byte read-lag, trinity-capabilities.md §3).
@@ -849,6 +870,7 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 	case v == selENCReset: // &28 — ENC reset (SRC); 50µs settle is a blind DJNZ on the Z80 side
 		e.softReset()
 		e.sdInitSettling = false // the ENC reset quiesces the PIC's post-SD-init settle (i242)
+		e.rxDisarmed = false     // the ENC reset re-arms RX after an SD transaction (i249); enc_rx_reestablish does this first
 		// CS state is unaffected by an internal reset; keep ENC selected if it was.
 		return
 	case v == selNullOn: // &2F — ENC auto-null on (the global mode, ENC target)
@@ -862,10 +884,12 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 			e.selectPeripheral(periphSD)
 			e.autoNullMode = false
 			e.autoNullTarget = periphNone
+			e.rxDisarmed = true // SD transaction disturbs the ENC RX path (i249)
 		case selSDAutoNul:
 			e.selectPeripheral(periphSD)
 			e.autoNullMode = true
 			e.autoNullTarget = periphSD
+			e.rxDisarmed = true // SD transaction disturbs the ENC RX path (i249)
 		case selSDInit:
 			e.selectPeripheral(periphSD)
 			// Always-on (i244): the heavy &38 SD-init leaves the PIC settling, so a
@@ -873,6 +897,7 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 			// Every test now models this, making an SD-before-ENC drv_init ordering
 			// bug a build-time catch (see sdInitSettling).
 			e.sdInitSettling = true
+			e.rxDisarmed = true // SD transaction disturbs the ENC RX path (i249)
 		case selSDDeselct:
 			if e.selPeriph == periphSD {
 				e.selPeriph = periphNone // CS high; do not re-deselect (sdSelect already cleared)
@@ -1237,6 +1262,13 @@ func (e *ENC28J60) doTransmit() {
 // so the frame lands where the driver's read_ptr (== the previous packet's
 // next-pointer) will point. This is what makes multi-packet receive correct.
 func (e *ENC28J60) materialiseRX() {
+	// RX is disarmed after an SD transaction until the ENC is re-armed (i249, fix #3):
+	// deliver nothing while disarmed, so EPKTCNT stays 0 and drv_read returns BC=0. A
+	// program that calls enc_rx_reestablish (or drv_init) after its SD read clears this
+	// via the &28 ENC reset; one that omits it serves once then dies — now in emulation.
+	if e.rxDisarmed {
+		return
+	}
 	// Apply the ERXFCON receive filter (gap 8): a frame whose dest MAC fails the
 	// configured filter is dropped by the receive engine before it ever reaches the
 	// FIFO (manual:95 "sees but does not receive"). Skip filtered frames; deliver the

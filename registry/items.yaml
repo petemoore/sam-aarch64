@@ -4245,7 +4245,7 @@
   title: "Trinity emulator: model the SD-transaction -> ENC-RX disturbance so a missing enc_rx_reestablish FAILS in emulation (the serve-dies-after-SD class)"
   description: |
     EMULATION GAP (docs/notes/hardware-readiness-audit.md). On real hardware an SD transaction disturbs the ENC RX path, so a program that omits enc_rx_reestablish (fix #3) serves once then dies. The emulator does NOT model this disturbance, so a missing re-arm passes in emulation and ships a hardware failure. Make the Trinity/SD model perturb the ENC RX state across an SD transaction such that serving without a subsequent enc_rx_reestablish FAILS a host test — turning the serve-dies-after-SD class into a build-time failure. Ties to the i126 comprehensive-emulation north star (one faithful layer, every cross-subsystem surprise fails in emulation not first on silicon). Pete 2026-06-25: emulation<->hardware gaps are top priority. Gates the fix-#3 program work (i248).
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   refs: [docs/notes/hardware-readiness-audit.md, i126]
