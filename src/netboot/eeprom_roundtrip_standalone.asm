@@ -116,8 +116,12 @@ eep_report:
                 ld      b, 4                    ; detail length
                 ld      hl, eep_detail
                 call    test_report
-                di
-                halt
+                ; Return to trinload (which pushed its listener as our return
+                ; address) rather than halting the SAM, so trinload stays alive
+                ; for the next pushed test — the autonomous-test loop (i133). The
+                ; border stays painted; drv_init already re-inited the ENC, which
+                ; is what a returning trinload program must do.
+                ret
 
 ; ---------------------------------------------------------------------------
 ; eep_fill_pattern — chunk[i] = (i_lo XOR i_hi XOR &A5) for i = 0..1023.
