@@ -2550,9 +2550,11 @@
   title: Z80 client windowed TFTP receive — standalone harness-verified loop (tftp_client_loop.asm) vs the Go authority
   description: |
     Port tftp.ClientXfer.onDataWindowed (RFC 7440) into the standalone client receive loop src/netboot/tftp_client_loop.asm: WINDOWSIZE/WINCOUNT state, accumulate in-sequence blocks, ACK only the last of each window, re-ACK the last good block on a gap to trigger sender rewind; lock-step (windowsize<=1) path byte-identical. Host-verified in tools/netboot-oracle/z80 (TestTFTPClientWindowedFull/Gap/ShortFinal) byte-for-byte vs the Go authority (added ClientLoop.SetWindowsize). tftp_client_loop.asm is a harness-only translation unit, so this changes no live binary. The bootable client integration + re-adding windowsize to ClientOptionSet + SimCoupe end-to-end is i120b-b3 (needs the windowed server i120b-b2 to actually exercise windowing on the wire).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 707, role: completing}
   parent: i120b
 
 - id: i120b-b2
