@@ -3560,6 +3560,8 @@
   depends_on: [i141]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 609, role: completing}
 
 - id: i199
   title: "i48c-b8e-1: encodeInst skeleton + operandsToValues + form-table path (SAM standalone encoder, brick 1)"
