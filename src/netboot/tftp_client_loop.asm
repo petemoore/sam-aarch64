@@ -112,11 +112,11 @@ cl_have_server:
                 ld      a, (RXBUF + RX_UDP_SRCPORT)
                 ld      hl, SERVER_TID
                 cp      (hl)
-                jr      nz, cl_stray
+                jp      nz, cl_stray
                 ld      a, (RXBUF + RX_UDP_SRCPORT + 1)
                 inc     hl
                 cp      (hl)
-                jr      nz, cl_stray
+                jp      nz, cl_stray
 cl_tid_ok:
                 ; block number (big-endian) -> DE
                 ld      a, (RXBUF + RX_UDP_PAYLOAD + 2)
@@ -124,6 +124,16 @@ cl_tid_ok:
                 ld      a, (RXBUF + RX_UDP_PAYLOAD + 3)
                 ld      e, a                   ; DE = block
 
+                ; windowed receive (RFC 7440) when WINDOWSIZE > 1; else lock-step.
+                ; Only A is used here, so DE (block) is preserved either way.
+                ld      a, (WINDOWSIZE+1)
+                or      a
+                jp      nz, cl_windowed        ; high byte set: > 255, windowed
+                ld      a, (WINDOWSIZE)
+                cp      2
+                jp      nc, cl_windowed        ; low byte >= 2: windowed
+
+                ; --- lock-step path (windowsize <= 1, unchanged) ---
                 ; compare block with ACKED (the highest block ACKed so far).
                 ; expected = ACKED + 1.
                 ld      hl, (ACKED)
@@ -142,6 +152,55 @@ cl_tid_ok:
                 jp      cl_send_ack
 
 cl_next_block:
+                call    cl_accept_block        ; accumulate + acked=block + done
+                jp      cl_send_ack            ; lock-step: ACK the accepted block
+
+; ---------------------------------------------------------------------------
+; cl_windowed — RFC 7440 windowed receive (mirrors ClientXfer.onDataWindowed).
+; In: DE = received block. Accumulate an in-sequence block (acked+1) and ACK
+; only at the window boundary or the short final block; any gap or duplicate
+; re-ACKs the last in-sequence block (ACKED) to make the sender rewind, and
+; resets the window counter. Mid-window blocks accumulate silently (no ACK).
+; ---------------------------------------------------------------------------
+cl_windowed:
+                ld      hl, (ACKED)
+                inc     hl                     ; HL = acked + 1
+                or      a
+                sbc     hl, de                 ; (acked+1) - block
+                jr      z, cl_w_inseq          ; block == acked+1: the next block
+                ; gap or duplicate: reset the window, re-ACK the last good block.
+                ld      hl, 0
+                ld      (WINCOUNT), hl
+                ld      hl, (ACKED)
+                ld      (ACK_BLOCK), hl
+                jp      cl_send_ack
+cl_w_inseq:
+                call    cl_accept_block        ; accumulate + acked=block + done
+                ld      hl, (WINCOUNT)
+                inc     hl
+                ld      (WINCOUNT), hl         ; winCount++
+                ld      a, (XFER_DONE)
+                or      a
+                jr      nz, cl_w_ack           ; short final block: ACK now
+                ld      hl, (WINCOUNT)
+                ld      de, (WINDOWSIZE)
+                or      a
+                sbc     hl, de                 ; winCount - windowsize
+                jp      c, cl_none             ; winCount < windowsize: mid-window, no ACK
+cl_w_ack:
+                ld      hl, 0
+                ld      (WINCOUNT), hl         ; reset the window
+                ld      hl, (ACKED)
+                ld      (ACK_BLOCK), hl        ; ACK the last in-sequence block
+                jp      cl_send_ack
+
+; ---------------------------------------------------------------------------
+; cl_accept_block — accept an in-sequence DATA block: append its payload to
+; STAGING, advance STAGE_OFFSET, set ACKED/ACK_BLOCK = block, and set XFER_DONE
+; when the payload is shorter than the block size (the short final block).
+; Shared by the lock-step (cl_next_block) and windowed (cl_w_inseq) paths.
+; ---------------------------------------------------------------------------
+cl_accept_block:
                 ; payload length = frame length - (42 + 4 TFTP header)
                 ld      hl, (CL_RX_LEN)
                 ld      de, RX_UDP_PAYLOAD + 4
@@ -184,9 +243,10 @@ cl_no_copy:
                 ld      de, (CLIENT_BLKSIZE)
                 or      a
                 sbc     hl, de                 ; datalen - blksize
-                jr      nc, cl_send_ack        ; datalen >= blksize: not the last
+                ret     nc                     ; datalen >= blksize: not the last
                 ld      a, 1
                 ld      (XFER_DONE), a
+                ret
 cl_send_ack:
                 ; build ACK(ACK_BLOCK) — the accepted block, or the duplicate's
                 ; received block on the re-ACK path.
@@ -351,6 +411,8 @@ CLIENT_MAC:       defs 6
 CLIENT_IP:        defs 4
 CLIENT_TID:       defs 2                 ; our source port (BE)
 CLIENT_BLKSIZE:   defs 2                 ; negotiated block size
+WINDOWSIZE:       defs 2                 ; RFC 7440 window (from OACK); <=1 = lock-step
+WINCOUNT:         defs 2                 ; in-sequence blocks taken since the last ACK
 
 SERVER_MAC:       defs 6                 ; learned from the first DATA
 SERVER_IP:        defs 4

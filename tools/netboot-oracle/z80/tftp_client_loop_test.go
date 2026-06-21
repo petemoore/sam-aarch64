@@ -210,6 +210,131 @@ func TestTFTPClientSAS(t *testing.T) {
 	}
 }
 
+// setWindowsize configures the Z80 loop's WINDOWSIZE symbol and the Go ref's
+// window identically (the OACK normally sets both; here the harness sets them
+// directly, mirroring how CLIENT_BLKSIZE is written).
+func setWindowsize(t *testing.T, mac *z80h.Machine, ref *tftp.ClientLoop, ws int) {
+	t.Helper()
+	mac.Write(symAddr(t, mac, "WINDOWSIZE"), []byte{byte(ws & 0xff), byte(ws >> 8)})
+	ref.SetWindowsize(ws)
+}
+
+// TestTFTPClientWindowedFull drives a windowsize-4 transfer of four full blocks
+// and asserts the Z80 loop ACKs ONLY the last block of the window (blocks 1-3
+// produce no reply, block 4 produces ACK(4)) — byte-for-byte the Go authority's
+// windowed receive (ClientXfer.onDataWindowed).
+func TestTFTPClientWindowedFull(t *testing.T) {
+	mac := loadTFTPCli(t)
+	const blksize = 512
+	ref := fillTFTPCli(t, mac, blksize)
+	enc := z80h.NewENC28J60()
+	initTFTPCliDriver(t, mac, enc)
+	setWindowsize(t, mac, ref, 4)
+
+	du, _ := frame.ParseUDP(golden.TFTPData)
+	srv := du.SrcPort
+	for blk := uint16(1); blk <= 4; blk++ {
+		f := dataFrameFromServer(srv, blk, make([]byte, blksize))
+		got := txAfter(t, mac, enc, "tftp_recv_data", f)
+		want := ref.OnDATA(f)
+		if !bytes.Equal(got, want) {
+			t.Errorf("block %d: reply != Go authority\n  z80 %x\n  go  %x", blk, got, want)
+		}
+		if blk < 4 && got != nil {
+			t.Errorf("block %d: mid-window reply %x, want none (ACK only the window's last block)", blk, got)
+		}
+		if blk == 4 {
+			if got == nil {
+				t.Fatalf("block 4: no ACK at the window boundary")
+			}
+			if a, _ := tftp.ParseACK(udpPayload(t, got)); a != 4 {
+				t.Errorf("window-boundary ACK block = %d, want 4", a)
+			}
+		}
+	}
+}
+
+// TestTFTPClientWindowedGap exercises the RFC 7440 rewind: mid-window, a block
+// is lost so the next arrives ahead of acked+1. The client must re-ACK its last
+// in-sequence block (to make the sender rewind) and reset the window, then
+// resume — every reply byte-for-byte the Go authority.
+func TestTFTPClientWindowedGap(t *testing.T) {
+	mac := loadTFTPCli(t)
+	const blksize = 512
+	ref := fillTFTPCli(t, mac, blksize)
+	enc := z80h.NewENC28J60()
+	initTFTPCliDriver(t, mac, enc)
+	setWindowsize(t, mac, ref, 4)
+
+	du, _ := frame.ParseUDP(golden.TFTPData)
+	srv := du.SrcPort
+	// Accept 1,2,3 silently, then block 5 (gap: 4 was lost) -> re-ACK 3,
+	// then resume 4,5,6,7 (the window's last -> ACK 7).
+	seq := []uint16{1, 2, 3, 5, 4, 5, 6, 7}
+	for _, blk := range seq {
+		f := dataFrameFromServer(srv, blk, make([]byte, blksize))
+		got := txAfter(t, mac, enc, "tftp_recv_data", f)
+		want := ref.OnDATA(f)
+		if !bytes.Equal(got, want) {
+			t.Errorf("block %d: reply != Go authority\n  z80 %x\n  go  %x", blk, got, want)
+		}
+	}
+	// The gap re-ACK must have named block 3 (the last in-sequence), not 5.
+	gapFrame := dataFrameFromServer(srv, 9, make([]byte, blksize)) // a fresh gap (expected 8)
+	got := txAfter(t, mac, enc, "tftp_recv_data", gapFrame)
+	want := ref.OnDATA(gapFrame)
+	if !bytes.Equal(got, want) {
+		t.Errorf("gap re-ACK reply != Go authority\n  z80 %x\n  go  %x", got, want)
+	}
+	if a, _ := tftp.ParseACK(udpPayload(t, got)); a != 7 {
+		t.Errorf("gap re-ACK block = %d, want 7 (last in-sequence, not the gap block)", a)
+	}
+}
+
+// TestTFTPClientWindowedShortFinal asserts a short final block mid-window ends
+// the transfer immediately with an ACK (not silent), matching the Go authority,
+// and accumulates all the file bytes.
+func TestTFTPClientWindowedShortFinal(t *testing.T) {
+	mac := loadTFTPCli(t)
+	const blksize = 512
+	ref := fillTFTPCli(t, mac, blksize)
+	enc := z80h.NewENC28J60()
+	initTFTPCliDriver(t, mac, enc)
+	setWindowsize(t, mac, ref, 4)
+
+	du, _ := frame.ParseUDP(golden.TFTPData)
+	srv := du.SrcPort
+	// Blocks 1,2 full (silent), block 3 short -> done + ACK(3) even though the
+	// window (4) is not full.
+	f1 := dataFrameFromServer(srv, 1, make([]byte, blksize))
+	if got := txAfter(t, mac, enc, "tftp_recv_data", f1); !bytes.Equal(got, ref.OnDATA(f1)) {
+		t.Errorf("block 1 reply mismatch")
+	}
+	f2 := dataFrameFromServer(srv, 2, make([]byte, blksize))
+	if got := txAfter(t, mac, enc, "tftp_recv_data", f2); !bytes.Equal(got, ref.OnDATA(f2)) {
+		t.Errorf("block 2 reply mismatch")
+	}
+	tail := []byte("short final mid-window")
+	f3 := dataFrameFromServer(srv, 3, tail)
+	got := txAfter(t, mac, enc, "tftp_recv_data", f3)
+	want := ref.OnDATA(f3)
+	if !bytes.Equal(got, want) {
+		t.Errorf("short-final reply != Go authority\n  z80 %x\n  go  %x", got, want)
+	}
+	if got == nil {
+		t.Fatal("short final block produced no ACK (must ACK even mid-window)")
+	}
+	if a, _ := tftp.ParseACK(udpPayload(t, got)); a != 3 {
+		t.Errorf("short-final ACK block = %d, want 3", a)
+	}
+	// STAGING holds 2*blksize + tail.
+	want3 := 2*blksize + len(tail)
+	stage := mac.Read(symAddr(t, mac, "STAGING"), want3)
+	if !bytes.Equal(stage[2*blksize:], tail) {
+		t.Errorf("STAGING tail bytes != short-final payload")
+	}
+}
+
 // dataFrameFromServer builds a server->client DATA frame (from the given server
 // TID) carrying the block + payload.
 func dataFrameFromServer(serverTID, block uint16, payload []byte) []byte {
