@@ -2973,9 +2973,9 @@
     - {num: 491, role: completing}
 
 - id: i181
-  title: "Harness: model SAM LMPR/HMPR paging + stock-ROM fixture to emulation-verify ROM-paging sequences"
+  title: "Harness: add SAM paging + ROM write-protect to the netboot Go emulator (port the assembler emulator's pager)"
   description: |
-    Per CLAUDE.md §7 (emulation-first): the koron-z80 harness records HMPR/LMPR writes but does not act on them (enc28j60.go:345-348; harness.go is flat), so the i173 dumper's ROM-page-read SEQUENCE (port values, ROM0/ROM1 select, ROM1-off-to-protect-STAGE, no stack self-eviction) cannot be emulation-tested. Model paging: a 512KB physical RAM array, 16KB pages mapped per LMPR/HMPR, ROM0/ROM1 from a loaded stock SAM ROM 3.0 fixture. Then a test can assert the dumper's paging sequence yields the stock ROM bytes (catching port/self-eviction bugs in emulation). Returns STOCK not PATCHED bytes, so it validates the SEQUENCE not the capture (the capture is inherently hardware, i87a). Follow-up surfaced by the i173 design; NOT a blocker for i173 (whose ROM read is charter-classified hardware-first).
+    THE RECURRING-&C000 FIX, minimal form (Pete, 2026-06-21). Root of the i87a rom1 crash: the dumper needs BOTH paging and Ethernet but runs in the netboot emulator (tools/netboot-oracle/z80), which models ENC28J60 + EEPROM + trinload round-trip (i132) + a fixed ROM1-RO boot overlay (i124) but does NOT act on LMPR/HMPR (records, doesn't remap) — and the dumper's ROM-paging path is ifdef'd out (NETBOOT_HOSTTEST). The ASSEMBLER emulator (tools/z80-test-harness-go/harness.go) ALREADY has a faithful pager — resolveRead/resolveWritePage do full LMPR/HMPR mapping and SILENTLY DROP ROM writes (ROM0/ROM1 read-only, the &C000 wall). FIX (the immediate, SAMBOOT-critical step — the full two-into-one unification is POSTPONED to i190 per Pete): bring that proven pager (~40 lines) into the netboot emulator so LMPR/HMPR remap real pages and ROM writes drop; load ROM0/ROM1 fixtures + model trinload residency in its pages; un-ifdef the dumper ROM path; reproduce the i87a rom1 page-0-clobbers-trinload crash in emulation (red), then verify the i188 redesign green. Prefer extracting the pager into a SHARED package (a down-payment on i190) over a copy. Unblocks i188.
   status: OPEN
   kind: leaf
   owner: agent
@@ -3046,3 +3046,21 @@
   kind: leaf
   owner: agent
   refs: [docs/specs/samboot.md, docs/ARCHITECTURE.md]
+
+- id: i190
+  title: Unify the two Go SAM Coupé Z80 emulators into one core (q39 decision; POSTPONED until after SAMBOOT)
+  description: |
+    q39 DECISION (Pete, 2026-06-21): 'absolutely merge into one codebase and do not maintain two separate go sam coupe emulators' — but 'happy to postpone the rewrite until after samboot stuff.' So this is the agreed end-state, sequenced AFTER the SAMBOOT strand. Today two Go SAM emulators each hold half the model: the assembler emulator (tools/z80-test-harness-go) has faithful LMPR/HMPR paging + ROM write-protect + DOS hooks but no Ethernet/EEPROM; the netboot emulator (tools/netboot-oracle/z80) has ENC28J60 + EEPROM + trinload round-trip but flat memory (a separate nested go.mod, to keep the pure-Go oracle job from pulling koron-go/z80). That split let the dumper's &C000 ROM-paging bug reach hardware (i87a). Merge them into ONE SAM Coupe Z80 emulator core — single CPU + memory/paging + IO model — with ENC28J60 / EEPROM / DOS-hooks / trinload as attachable devices, used by EVERY Z80 test (CLAUDE.md section 7 'one layer used by every test'), so no program runs in a half-model again. The pure-Go protocol oracle (frame/tftp/dhcp build-parse) stays its own package. i181 ports the pager as a shared package now (a down-payment); this item finishes the merge. Acceptance: one emulator package; both existing test suites pass on it; the netboot nested module folds in or imports the shared core.
+  status: OPEN
+  kind: umbrella
+  owner: agent
+
+- id: i190a
+  title: Unified emulator loads the extracted real ROM patch + EEPROM code/config for authentic Trinity emulation
+  description: |
+    Pete (2026-06-21): SAMBOOT feeds the emulator — once we've captured the patched ROM (i87a/i87a-b2) and the Trinity EEPROM (i87a-b1, done), the unified emulator (i190) should load THOSE real artifacts so it emulates the real SAM+Trinity authentically: the actual patched system ROM (ROM0+ROM1) at boot, the real EEPROM contents (the 'Trinity Network ' config + Colin's bootblock) behind the modelled EEPROM SPI device, and Colin's real eeprom.asm read protocol. This turns the test emulator into a faithful model of Pete's actual machine. CONSTRAINT: rom.bin/eeprom.bin are Colin's proprietary, non-redistributable artifacts (kept in ~/sam-archive, never committed) — the emulator LOADS them as local/gitignored fixtures (path via env/flag), with a synthetic fallback for CI where the real bytes are absent (mirroring how i181/dumper_test program known fixtures). Depends on the full ROM extraction (i87a-b2); the EEPROM half is available now.
+  status: OPEN
+  depends_on: [i87a-b2]
+  kind: leaf
+  owner: agent
+  parent: i190
