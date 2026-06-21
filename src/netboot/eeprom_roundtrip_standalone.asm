@@ -41,6 +41,13 @@ eeprom_roundtrip_main:
                 ; Bring up the ENC driver so test_report can transmit.
                 ld      hl, TR_SRC_MAC          ; HL -> our MAC (defined in test_report.asm)
                 call    drv_init
+                ; drv_init does not wait for the 10BASE-T link. The report is a
+                ; PROACTIVE transmit (not a reply), and on real hardware the link
+                ; is down for ~seconds after init while the round-trip finishes in
+                ; ms — so a report sent now would be silently dropped (i127). Wait
+                ; for link-up before the first transmit, exactly as netboot_client
+                ; does.
+                call    drv_wait_link
 
                 ; 1. read scratch chunk into `chunk`, snapshot it into EEP_BACKUP.
                 ld      a, EEP_SCRATCH
@@ -190,6 +197,7 @@ evb_bad:
 ; ---------------------------------------------------------------------------
                 include "build_udp_frame.asm"   ; build_udp_frame + PARAMS/PACKET
                 include "encdrv.asm"             ; drv_init/drv_write + wait_ready
+                include "enc_link.asm"           ; drv_wait_link (PHY link-up, i127)
                 include "eeprom.asm"             ; read_chunk/write_chunk + value/chunk
                 include "test_report.asm"        ; test_report + TR_SRC_MAC/TR_*
 

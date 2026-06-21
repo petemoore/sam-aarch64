@@ -611,11 +611,14 @@ netboot-sd-listread: $(BUILD)/netboot_sd_listread.bin $(BUILD)/netboot_sd_listre
 # the border colour, so the SAME binary runs identically in the ENC28J60
 # emulator and on real hardware. Driven by eeprom_roundtrip_test.go; gated by
 # ci-netboot-z80.
-$(BUILD)/eeprom_roundtrip.bin $(BUILD)/eeprom_roundtrip.map: src/netboot/eeprom_roundtrip_standalone.asm src/netboot/build_udp_frame.asm src/netboot/encdrv.asm src/netboot/eeprom.asm src/netboot/test_report.asm
+$(BUILD)/eeprom_roundtrip.bin $(BUILD)/eeprom_roundtrip.map: src/netboot/eeprom_roundtrip_standalone.asm src/netboot/build_udp_frame.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/eeprom.asm src/netboot/test_report.asm
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/eeprom_roundtrip.bin \
 	    --mapfile=$(BUILD)/eeprom_roundtrip.map \
 	    src/netboot/eeprom_roundtrip_standalone.asm
+	@# org &8000, must fit section C so trinload can push it (push with
+	@# tools/trinload-push/trinload-push.py <sam-ip> build/eeprom_roundtrip.bin 1 0x8000).
+	@tools/netboot-boot-fit-check.sh $(BUILD)/eeprom_roundtrip.bin 16384 eeprom_roundtrip.bin
 
 netboot-eeprom-roundtrip: $(BUILD)/eeprom_roundtrip.bin $(BUILD)/eeprom_roundtrip.map
 

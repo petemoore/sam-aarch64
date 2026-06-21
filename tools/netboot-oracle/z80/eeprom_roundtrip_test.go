@@ -142,6 +142,51 @@ func TestEEPROMRoundTripPass(t *testing.T) {
 	}
 }
 
+// TestEEPROMRoundTripWaitsForLink models the real-hardware condition that the
+// payload's drv_wait_link exists for: the ENC28J60 10BASE-T link is down for a
+// while after drv_init (i127), and a proactive transmit issued before it comes
+// up is silently dropped. It pins the link DOWN until well past the point the
+// report would naturally transmit, then asserts the SATR frame still reaches the
+// wire — proving drv_wait_link holds the report transmit until link-up. Without
+// drv_wait_link the report would fire during the link-down window and be dropped
+// (no SATR frame), so this guards the fix.
+func TestEEPROMRoundTripWaitsForLink(t *testing.T) {
+	// Baseline: with the link up immediately, learn the op count at which the
+	// report naturally transmits.
+	mac0, enc0 := loadEEPROMRoundtrip(t)
+	if _, err := mac0.Call("eeprom_roundtrip_main"); err != nil {
+		t.Fatalf("baseline run: %v", err)
+	}
+	natTX := enc0.FirstTXOps()
+	if natTX <= 0 {
+		t.Fatalf("baseline run transmitted no frame (FirstTXOps=%d)", natTX)
+	}
+
+	// Now hold the link down until past that point, straddling the natural TX.
+	mac, enc := loadEEPROMRoundtrip(t)
+	linkUp := natTX + 5000
+	enc.SetLinkUpAfterOps(linkUp)
+
+	res, err := mac.Call("eeprom_roundtrip_main")
+	if err != nil {
+		t.Fatalf("run with link-down window: %v", err)
+	}
+	if !res.Halted {
+		t.Fatalf("payload did not halt (PC=&%04X)", res.PC)
+	}
+
+	rep, ok := parseSATR(enc.TXFrames())
+	if !ok {
+		t.Fatalf("no SATR frame: the proactive report was dropped during the link-down window (drv_wait_link missing or ineffective)")
+	}
+	if rep.status != 0 {
+		t.Errorf("report status = %d, want 0 (PASS)", rep.status)
+	}
+	if tx := enc.FirstTXOps(); tx < linkUp {
+		t.Errorf("first TX at op %d, before link-up at %d — drv_wait_link did not hold the transmit", tx, linkUp)
+	}
+}
+
 func TestEEPROMRoundTripWriteFaultReportsFail(t *testing.T) {
 	mac, enc := loadEEPROMRoundtrip(t)
 	enc.SetEEPROMWriteFault(true) // simulate a dead write path
