@@ -10,8 +10,8 @@ not a dated snapshot.
 ## The six known hardware fixes
 
 Real Trinity hardware exposes six failure classes that the flat host harness did
-not (the emulation↔hardware gap; see `docs/notes/comprehensive-emulation` north
-star, registry **i126**). Each fix is a discrete code change:
+not (the emulation↔hardware gap; the comprehensive-emulation north star lives in
+registry **i126** + memory `feedback_comprehensive_emulation`). Each fix is a discrete code change:
 
 | # | Fix | What it prevents |
 |---|-----|------------------|
