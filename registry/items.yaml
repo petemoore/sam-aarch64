@@ -2357,6 +2357,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 640, role: completing}
   refs: [tools/z80-test-harness-go/, i104, i21]
 
 - id: i117
