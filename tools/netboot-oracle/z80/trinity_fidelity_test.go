@@ -58,37 +58,60 @@ func TestTrinityStatusRegister(t *testing.T) {
 }
 
 // TestTrinityBusyGate covers the &DC bit 3 BUSY model (gap b, manual:16,22): an OUT
-// to a Trinity port raises BUSY for one SPI-byte time; a status read clears it; an
-// OUT issued while still busy (no intervening read) is silently dropped. The model
-// uses the harness T-state cursor on a real run, but with no cursor (direct
-// Out/In calls, tNow stays 0) two BACK-TO-BACK OUTs both see tNow=0: the first
-// raises BUSY (busyUntilT = busyByteTStates > 0), the second is dropped.
+// to a Trinity port raises BUSY for one SPI-byte time; a status read (the canonical
+// wait_ready poll) clears it; an OUT issued while still busy — with NO intervening
+// status read — is silently DROPPED. With no harness T-state cursor (direct
+// Out/In calls, tNow stays 0) two back-to-back OUTs both see tNow=0, so the second
+// lands inside the busy window from the first and is dropped.
+//
+// The test proves the gate has TEETH by its CONSEQUENCE, not just by reading the
+// status bit: a CMD0 frame with one busy-dropped byte stays incomplete (only 5 of 6
+// bytes land), so the card never computes R1 and a subsequent read returns idle
+// 0xFF; the SAME frame sent fully busy-polled completes and returns R1 = 0x01.
 func TestTrinityBusyGate(t *testing.T) {
-	enc := z80h.NewENC28J60()
 	var csd [16]byte
 	csd[0] = 0x40
-	enc.AttachSD(csd)
 
-	// Select SD (&31), then issue TWO command-frame opening bytes back-to-back with
-	// no status read between. The second must be dropped (BUSY still set).
-	enc.Out(0xDC, 0x31) // raises BUSY
-	// A status read here clears BUSY (the canonical wait_ready), so this OUT lands.
-	enc.In(0xDC)
-	enc.Out(0xDF, 0x40|0) // CMD0 opener — raises BUSY
-	// NO status read: this next data OUT is issued while BUSY -> dropped.
-	enc.Out(0xDF, 0x00) // would be arg byte 1, but is DROPPED
-	// Drain with a poll then continue the (now-corrupt) frame; the point is only
-	// that the dropped OUT did not advance the command frame.
-	if !busyWasSet(enc) {
-		t.Skip("busy gate requires the t-state-less direct-call path; covered by driver tests")
+	// (1) A CMD0 frame (0x40,0,0,0,0,0x95) with its 2nd byte issued WHILE BUSY — no
+	// status read between byte 0 and byte 1 — so byte 1 is dropped: 5 bytes land, the
+	// frame never completes.
+	dropped := z80h.NewENC28J60()
+	dropped.AttachSD(csd)
+	dropped.Out(0xDC, 0x31) // select SD (raises BUSY)
+	dropped.In(0xDC)        // poll clears BUSY -> the opener lands
+	dropped.Out(0xDF, 0x40) // CMD0 opener (raises BUSY)
+	dropped.Out(0xDF, 0x00) // 2nd byte issued WHILE BUSY -> DROPPED (no poll between)
+	for _, b := range []byte{0x00, 0x00, 0x00, 0x95} {
+		dropped.In(0xDC) // poll (clears BUSY) before each remaining byte
+		dropped.Out(0xDF, b)
 	}
-}
+	// Read R1: the frame got only 5 bytes, so completeCommand never fired and the
+	// card stays idle -> 0xFF.
+	dropped.In(0xDC)
+	dropped.Out(0xDF, 0xFF) // dummy clock
+	dropped.In(0xDC)
+	if r1 := dropped.In(0xDF); r1 != 0xFF {
+		t.Errorf("busy-dropped CMD0: R1 = 0x%02X, want 0xFF (the dropped byte left the frame "+
+			"incomplete, so no R1 was computed — proves the busy gate dropped the OUT)", r1)
+	}
 
-// busyWasSet reports whether a freshly-OUT'd command leaves BUSY set on the very
-// next status read (the one-SPI-byte window), via the exported IN &DC.
-func busyWasSet(enc *z80h.ENC28J60) bool {
-	enc.Out(0xDC, 0x31) // raise BUSY
-	return enc.In(0xDC)&0x08 != 0
+	// (2) The SAME CMD0, fully busy-polled (a status read before every OUT) — every
+	// byte lands, the frame completes, R1 = 0x01 (idle).
+	polled := z80h.NewENC28J60()
+	polled.AttachSD(csd)
+	polled.Out(0xDC, 0x31)
+	polled.In(0xDC)
+	for _, b := range []byte{0x40, 0x00, 0x00, 0x00, 0x00, 0x95} {
+		polled.In(0xDC) // canonical wait_ready before each OUT
+		polled.Out(0xDF, b)
+	}
+	polled.In(0xDC)
+	polled.Out(0xDF, 0xFF)
+	polled.In(0xDC)
+	if r1 := polled.In(0xDF); r1 != 0x01 {
+		t.Errorf("fully-polled CMD0: R1 = 0x%02X, want 0x01 (the frame completed — the gate "+
+			"does NOT drop a correctly-polled OUT)", r1)
+	}
 }
 
 // TestTrinitySharedReadLatch covers gap c (manual:4,8,34,125): IN &DD/&DE/&DF all
@@ -183,30 +206,60 @@ func TestTrinityPushPopReadByte(t *testing.T) {
 }
 
 // TestTrinityMUXDeselect covers gap d (manual:27): selecting one peripheral
-// deselects the others. After selecting the EEPROM (&11) then the SD (&31), an
-// EEPROM read no longer streams data — the EEPROM CS was dropped by the SD select.
+// deselects the others (one PIC, one active chip-select — not three independent CS
+// lines). It proves the mutual exclusion by CONSEQUENCE: an EEPROM read that
+// streams its data while the EEPROM is selected stops streaming the moment the SD
+// is selected — the EEPROM CS was dropped, so a further data clock returns the SD's
+// idle byte, NOT the next EEPROM byte.
 func TestTrinityMUXDeselect(t *testing.T) {
-	enc := z80h.NewENC28J60()
-	var mac [6]byte
+	mac := [6]byte{0xA1, 0xB2, 0xC3, 0xD4, 0xE5, 0xF6}
 	var ip [4]byte
-	enc.ProgramTrinityNetwork(mac, ip)
 	var csd [16]byte
 	csd[0] = 0x40
-	enc.AttachSD(csd)
 
-	// Begin an EEPROM read (opcode + address), then MUX-select the SD mid-stream.
-	enc.Out(0xDC, 0x11) // select EEPROM
-	enc.In(0xDC)
-	enc.Out(0xDD, 0x03) // READ opcode
-	enc.In(0xDC)
-	enc.Out(0xDC, 0x31) // select SD -> EEPROM deselected (MUX)
-	enc.In(0xDC)
-	// An EEPROM data read now would be wrong; assert the EEPROM is no longer the
-	// selected peripheral by confirming an SD command frame is accepted instead.
-	// (A direct EEPROM-deselected assertion is internal; the MUX effect is that the
-	// SD is now the target — exercised by the driver tests. Here we just confirm the
-	// SD select took without error.)
-	enc.Out(0xDF, 0x40) // CMD0 opener to the SD (now selected)
-	enc.In(0xDC)
-	// No panic / no cross-talk is the observable at this layer.
+	// startEEPRead selects the EEPROM and clocks the READ opcode + 3-byte address 0
+	// (the "Trinity Network " index entry: byte 0 = part = 1), leaving the model in
+	// the EEPROM data phase so the next dummy-clock+IN yields entry byte 0.
+	startEEPRead := func(enc *z80h.ENC28J60) {
+		enc.Out(0xDC, 0x11) // select EEPROM
+		enc.In(0xDC)
+		for _, b := range []byte{0x03, 0x00, 0x00, 0x00} { // READ opcode + addr 0
+			enc.Out(0xDD, b)
+			enc.In(0xDC)
+		}
+	}
+	// readEEPByte clocks one EEPROM data byte (dummy &DD OUT, poll, IN &DD).
+	readEEPByte := func(enc *z80h.ENC28J60) byte {
+		enc.Out(0xDD, 0x00)
+		enc.In(0xDC)
+		return enc.In(0xDD)
+	}
+
+	// (1) Control: while the EEPROM stays selected, the read streams its bytes.
+	control := z80h.NewENC28J60()
+	control.ProgramTrinityNetwork(mac, ip)
+	control.AttachSD(csd)
+	startEEPRead(control)
+	if b0 := readEEPByte(control); b0 != 0x01 {
+		t.Fatalf("control EEPROM read byte 0 = 0x%02X, want 0x01 (part=1) — setup wrong", b0)
+	}
+
+	// (2) MUX switch: select the EEPROM, start the same read, then select the SD.
+	// The EEPROM is now deselected; a data clock no longer returns the EEPROM stream
+	// — it returns the SD's idle byte (0xFF), proving the EEPROM CS was dropped.
+	switched := z80h.NewENC28J60()
+	switched.ProgramTrinityNetwork(mac, ip)
+	switched.AttachSD(csd)
+	startEEPRead(switched)
+	switched.Out(0xDC, 0x31) // select SD -> EEPROM deselected by the MUX
+	switched.In(0xDC)
+	switched.Out(0xDF, 0xFF) // a clock now targets the SD, not the EEPROM
+	switched.In(0xDC)
+	if got := switched.In(0xDF); got == 0x01 {
+		t.Errorf("after MUX-selecting the SD, a read still returned the EEPROM stream byte " +
+			"0x01 — the EEPROM was NOT deselected (the MUX mutual-exclusion failed)")
+	} else if got != 0xFF {
+		t.Errorf("after MUX-selecting the SD, IN &DF = 0x%02X, want 0xFF (the SD's idle byte; "+
+			"the EEPROM stream must NOT continue)", got)
+	}
 }
