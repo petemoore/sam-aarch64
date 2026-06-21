@@ -246,9 +246,29 @@
   title: "Go-harness fidelity follow-ups: make harness-sweep, USAGE.md, memory watchpoint"
   description: |
     Harness-sweep (one-shot build-all-deps + go test -count=1 ./...) and USAGE.md (full-suite run, stale-payload/test-cache gotchas, boot-self-test authoring patterns) DONE in PR #341. Remaining: memory watchpoint inspection feature — deferred until a debugging session needs it (agent-owned; add ad hoc per the README Evolving the harness).
-  status: OPEN
+  status: DONE
+  kind: umbrella
+  owner: agent
+
+- id: i21a
+  title: "Go-harness: harness-sweep target + USAGE.md"
+  description: |
+    One-shot build-all-deps + go test -count=1 ./... sweep target, and USAGE.md (full-suite run, stale-payload/test-cache gotchas, boot-self-test authoring patterns).
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 341, role: completing}
+  parent: i21
+
+- id: i21b
+  title: Go-harness memory watchpoint
+  description: |
+    Memory watchpoint inspection feature for the Z80 harness. Not a proactively-planned deliverable: per the harness README 'Evolving the harness', memory watchpoints are an ad-hoc improvement to PR without ceremony WHEN a debugging session needs one. Reopen if/when a concrete debugging need arises.
+  status: WONTFIX
+  kind: leaf
+  owner: agent
+  parent: i21
 
 - id: i22
   title: Per-fail-site diagnostic strings
@@ -283,6 +303,7 @@
   description: |
     Add a proper error handler for HSAVE/HLOAD failures invoked via (hksp); currently errors are not surfaced to the user. Deferred-backlog item.
   status: OPEN
+  depends_on: [i183]
   kind: leaf
   owner: agent
 
@@ -2908,3 +2929,11 @@
   depends_on: [i122c]
   kind: leaf
   owner: pete
+
+- id: i183
+  title: "Harness: model the SAMDOS file-not-found / HSAVE error longjmp (currently a silent no-op)"
+  description: |
+    Emulation-first prerequisite for i25. The Go harness (tools/z80-test-harness-go/harness.go HGTHD/HLOAD/HSAVE cases) models an unregistered HGTHD file as a SILENT NO-OP (currentFile=nil), so a real SAMDOS file-not-found error manifests downstream as a cryptic 'jumped into garbage' trap rather than the actual derr -> (hksp) longjmp. To verify i25's (hksp) error handler in emulation, the harness must faithfully model the SAMDOS file-I/O error longjmp: read the emulated (hksp) vector, jump to an installed handler (or take the default halt when (hksp)=0), and expose injectable HGTHD/HSAVE failures. Design dimension to settle with i25: how faithfully to model (hksp)/SAMDOS-bank paging vs surface a clear error signal. Refs: docs/specs/samdos-file-io.md (derr/(hksp) at &410A; longjmp-on-error), src/main_loop.asm save_out_file/load_in_file, src/loader.asm.
+  status: OPEN
+  kind: leaf
+  owner: agent
