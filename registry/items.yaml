@@ -3989,9 +3989,11 @@
   title: "Spill manager: Go correctness authority (pluggable SpillBackend + lazy-spill alloc + reload-on-demand + degrade-to-refuse), host-verified"
   description: |
     First brick of i215 (mirrors the i2a allocator-core pattern). Go authority tools/sam-aarch64/pagepool spill manager modeling design §4.5/§5: a pluggable SpillBackend interface (Store/Load/Discard a serialized DOC block by id); a spill-aware allocator that, on FREE-pool exhaustion, evicts the COLDEST resident DOC block via the backend, frees its page, and satisfies the alloc; reload-on-demand when a spilled block is touched (may cascade another spill); and degrade-to-REFUSE when no backend is configured (the i2 baseline). Host-verified with table tests + an in-memory fake backend proving: zero spills when the pool is large; lazy spill exactly-as-needed under pressure; reload round-trips block content; refuse-with-message with no backend. Does NOT port to Z80 (i215b) nor add a concrete Trinity/floppy backend + boot wiring (i215c). Spec: docs/specs/ide-memory-model-design.md §4.5/§5/§7.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 702, role: completing}
   parent: i215
 
 - id: i215b
