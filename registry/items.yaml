@@ -3936,7 +3936,7 @@
 - id: i235
   title: "SAMBOOT fork analysis: is EEPROM B-DOS bit-identical to stock; if not diff it (added AND removed) same way"
   description: |
-    Stock B-DOS in sam-archive/bdos (1.4e..1.7q + AL 1.5a; Colin cites B-DOS 1.5t beta). Diff the EEPROM B-DOS chunks 2-13 byte-for-byte vs the matching stock version; if not identical, derive exactly what was added AND removed, proven. Only the DIFFERENCES need understanding.
+    PROGRESS 2026-06-24: base CONFIRMED = B-DOS 1.5a (Edwin Blink); patch = Trinity Patch 1.5t beta 6 (Colin Piggot/Chris Pile), per embedded strings. Stock 1.5a extracted via samfile (~/git/samfile: Bdos15a.dsk -> file B-DOS15a, 10191 B @ &8009; AL-BDOS variants too). EEPROM B-DOS = 12288 B @ &8000 (chunks 2-13 = eeprom.bin[&400:&3400]), ~2KB larger. Characterized: only ~20-23% of stock 16B windows appear in the EEPROM with scattered small deltas -> the Trinity patch is woven THROUGHOUT (relocates routines, shifts absolute addresses) + adds ~2KB, not a localized patch. REMAINING (large): the full FUNCTIONAL diff = disassemble both + align by routine/semantics to enumerate added AND removed. Details in ~/sam-archive/samboot-capture/colin-rom-fork-boot-analysis.md (private).
   status: OPEN
   kind: leaf
   owner: agent
