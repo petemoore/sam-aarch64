@@ -322,6 +322,33 @@ endif
 ; touch section B, so installing the trampoline early is safe.
                 call    enctab_trampoline_setup
 
+; -- Install the DOSER (&5BC0) file-I/O error handler (i25b).  Must run
+; BEFORE the first file-I/O hook (load_page15_payload, below): once armed,
+; the ROM's PTDOS epilogue dispatches a file-I/O error (file-not-found,
+; disk error, ...) to doser_handler_body, which converts it into the
+; existing diagnosed FAIL instead of a silent no-op / default halt.  &5BC0
+; is in section B (the SAMDOS sysvar page, mapped at boot by BASIC's CALL
+; 32768), so this write lands before any enctab_map_in swaps a section.
+; PRODUCTION only: the handler is a runtime error-diagnosis feature for the
+; shipped assembler (assembler-prod.bin); the BUILD_TESTS self-test variant
+; serves a complete disk and never triggers a file-I/O error, so it does not
+; need it — and it sits at the &C000 budget cliff with no room to spare.
+                if defined(BUILD_TESTS)==0
+                ; Copy the handler body into section B (LMPR-stable, so it
+                ; stays mapped under any HMPR — see DOSER_HANDLER_DST in
+                ; src/trampoline.asm for why section C won't do), capture the
+                ; boot HMPR for the error path's section-C restore, then arm
+                ; (&5BC0) to point at the section-B copy.
+                ld      hl, doser_handler_body
+                ld      de, DOSER_HANDLER_DST
+                ld      bc, doser_handler_body_end - doser_handler_body
+                ldir
+                in      a, (251)                ; A = boot/default HMPR
+                ld      (DOSER_DEFAULT_HMPR), a
+                ld      hl, DOSER_HANDLER_DST
+                ld      (&5BC0), hl
+                endif
+
 ; -- i2b/i23: size the IDE page pool from PRAMTP and reserve the statically-used
 ; pages (0..6 and 13..15). The IN pages 7..12 are left FREE — load_in_file is
 ; the pool's first consumer: it allocates a contiguous IN run from the pool
@@ -647,6 +674,46 @@ fail:           ld      a, 2
                 call    print_status_char
                 di
                 halt
+
+; -----------------------------------------------------------------------
+; doser_handler_body — the SAM-side DOSER (&5BC0) file-I/O error handler
+; (i25b).  The ROM's PTDOS epilogue does the equivalent of `jp (DOSER)`
+; after every file-I/O hook (HGTHD/HLOAD/HSAVE) with A = the SAMDOS error
+; number (0 = success).  Success resumes the caller (so a normal load/save
+; flows on unchanged); a real error converts to the existing diagnosed FAIL,
+; passing the SAMDOS error number straight through as the fail tag (the
+; banner reads FAIL<errno>, e.g. FAIL6b for error 107 = file-not-found).
+;
+; These bytes are LDIR-copied into section B at DOSER_HANDLER_DST at boot
+; (see the install above) — they MUST live in section B because the ROM
+; dispatches DOSER with the caller's HMPR still live, which during a
+; trampoline'd HLOAD pages section C onto the payload (see DOSER_HANDLER_DST
+; in src/trampoline.asm).  The body has no internal relative branches, so it
+; is position-independent: `ret z` / `out` / `jp fail_with_tag` /
+; `ld a,(DOSER_DEFAULT_HMPR)` all reference absolute targets that resolve
+; the same wherever the copy runs.
+;
+; Port of COMET's `dier` idiom (reference/comet-decoded/comet.asm:1342) —
+; alt D (minimal): no per-error-number messages and no recovery-stack unwind
+; (alt A, future), and no vector disarm (fail halts, so there is never a
+; return to re-arm).  The error path's HMPR restore is the analogue of
+; dier's `OUT (250),A` LMPR restore (comet.asm:1361): re-map the assembler's
+; code into section C before jumping to the section-C fail handler.  `and a`
+; and the push/pop af bracket leave A = the error number for fail_with_tag.
+; PRODUCTION only (gated): keeps the BUILD_TESTS self-test variant, which
+; sits at the &C000 budget cliff, byte-for-byte unchanged.
+; -----------------------------------------------------------------------
+                if defined(BUILD_TESTS)==0
+doser_handler_body:
+                and     a
+                ret     z                   ; A==0: success → resume the caller
+                push    af                  ; preserve A = SAMDOS error number
+                ld      a, (DOSER_DEFAULT_HMPR)
+                out     (251), a            ; restore code HMPR → section C = assembler
+                pop     af
+                jp      fail_with_tag       ; A = SAMDOS error number → diagnosed FAIL
+doser_handler_body_end:
+                endif
 
 ; print_hex_byte — write A as two ASCII hex digits to printer channel 1.
 ; Clobbers: A, F (preserves BC, DE, HL via print_status_char).

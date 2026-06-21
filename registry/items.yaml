@@ -362,7 +362,7 @@
   title: "SAM-side DOSER (&5BC0) file-I/O error handler (port COMET)"
   description: |
     Implement the assembler-side DOSER (&5BC0) error handler: set (&5BC0) to a handler before file ops; the handler does AND A; RET Z on success, else converts the SAMDOS file-I/O error into the existing diagnosed FAIL (jp fail with a load/save tag, reusing src/assembler.asm fail/fail_with_tag + src/print.asm). Port COMET's prepare/dier/sproom idiom (comet.asm:1265-1382). Verify in the i25a harness DOSER model + SimCoupe. Scope: alt D (minimal, chosen); alt A (per-error-number messages + stack recovery) future. Refs: src/loader.asm + src/main_loop.asm hook call sites.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i25a]
   kind: leaf
   owner: agent
