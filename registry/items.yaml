@@ -1281,10 +1281,12 @@
   title: "i74b: tables-gen at/ic/barrier emitter + generated Z80 disasm.asm tables"
   description: |
     Add a tables-gen emitter (e.g. -atic-inc) that projects the i74a format.ATOps()/ICOps()/BarrierOptions() authority into a committed Z80 include (src/disasm_sysopts.inc or similar), then replace the hand-maintained disasm_sys_at_tbl/disasm_sys_ic_tbl/disasm_sys_baropt_tbl tables in src/disasm.asm (~lines 7127-7228) with an include of the generated file. Wire into make tables / make tables-sync-check (sysreg-sync CI job) and extend the sync test to cover the new tables. Gate: byte-identical build/disasm.bin before/after (one-time cmp) + TestDisasmOracle 100% + release-gate. Faithful port (CLAUDE.md s6); follows the i7 phase-B/C codegen pattern. Depends on i74a.
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i74a]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 632, role: completing}
   parent: i74
 
 - id: i75
