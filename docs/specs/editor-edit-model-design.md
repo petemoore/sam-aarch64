@@ -864,9 +864,32 @@ Makefile payload target + the test, gated by the existing `netboot-z80` CI job.
     matches, deleted ids report not-found, block count stays bounded = merges
     fire). **Brick 1 (the flat-memory block-list core) is now complete.**
 - **Brick 2 — paging integration:** map blocks onto real i2 free-page-pool pages
-  via `OUT (251)`, claim/return pages on split/merge, block list resident in
-  section D. The **only** part that genuinely needs SAM paging hardware →
-  **SimCoupé-gated** (per §5.2). Not flat-memory-verifiable.
+  via `OUT (251)`, claim/return pages on split/merge. Each block gets one
+  pool-claimed 16 KB physical page (`pp_alloc_page(PP_DOC)`); the descriptor
+  stores the *page number* (not a flat pointer), and `em_desc_dataptr_a` pages it
+  into section C before access. `EM_BLOCK_CAP` rises from the 256 testing value to
+  the 8 KB Go-authority cap (`blockCapacityBytes`). Split claims a page, merge/
+  close returns it (`pp_free_page`, tag `PP_DOC`).
+
+  **Host-verifiable (correcting the earlier "SimCoupé-only" note).** The koron-go
+  Z80 harness runs on the **one** `sampage` memory model — `OUT (251)`/HMPR pages
+  section C/D for real (`tools/netboot-oracle/z80/harness.go`,
+  `tools/sampage/sampage.go`; CLAUDE.md §7). So the paged path is exercised in the
+  fast harness (seed the page pool, drive paged insert/split/merge vs the Go
+  oracle), exactly like Bricks 1/3/4a; SimCoupé remains the pre-merge gate, not the
+  only verifier.
+
+  **Two design points the flat Go authority does NOT settle (this paging is
+  net-new SAM-side, so it is design, not a mechanical port — CLAUDE.md §6):**
+  (1) **Resident-structure home.** Section D = `(HMPR&0x1F)+1` *moves with every
+  `OUT (251)`* (`sampage.go:20`), so the resident block-list (`EM_DESC`/`EM_ORDER`/
+  `EM_LOC`/undo ring/scratch) must live in **LMPR-mapped low memory**, not section
+  C or D — the "resident in section D" phrasing above is imprecise. (2) **Cross-
+  block copy.** Section D is forced to C's page +1, so two *arbitrary* pool pages
+  cannot be mapped simultaneously; a split/merge copy between blocks must route
+  through a **resident scratch buffer** (page A into C → copy its tail to the
+  resident buffer → page B into C → copy buffer → B), not a second live window.
+  See item i41d for the port.
 - **Brick 3 — bounded ring-journal undo/redo** (LANDED — PR #391): port of i41b
   to `src/editmodel.asm`. `em_insert`/`em_delete` split into journaling public
   wrappers over non-journaling `em_do_insert`/`em_do_delete` primitives (the Go
