@@ -2889,7 +2889,7 @@
   title: Auto-boot a Trinity record on power-up — unsupervised end-to-end hardware automation
   description: |
     Pete has a Tapo smart plug for programmatic power-cycling. If a record auto-boots on power-on (no manual BOOT), agent runs fully unsupervised: power-cycle → SAM boots chosen record → runs → results over net (i133) → repeat. Investigate: EEPROM/config default-boot-record setting, Trinity AutoBOOT ROM (Colin's patch loads B-DOS from 128K EEPROM at reset), or patch forked B-DOS for early boot-a-record hook. Research: ~/sam-archive/bdos/analysis, Trinity AutoBOOT ROM, EEPROM layout, ~/sam-archive/trinity-docs. Pairs with i133 for full unsupervised loop.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   refs: [~/sam-archive/bdos/analysis, i87, i133]
@@ -2910,8 +2910,8 @@
   title: "SAMBOOT: flash the patched EEPROM with backup/restore and confirm unattended auto-boot (answers the crux)"
   description: |
     Flash the prototyped patched EEPROM to Pete's Trinity via write_chunk, keeping the captured EEPROM as the restore backup; power-cycle and confirm unattended auto-boot of the configured record. Hardware (Pete).
-  status: OPEN
-  depends_on: [i135d, i87a-b1, i87b, i197c, i221, i226, i230]
+  status: DONE
+  depends_on: [i135d, i87a-b1, i87b, i197c, i221, i226]
   kind: leaf
   owner: pete
   parent: i135
@@ -4048,9 +4048,9 @@
 - id: i230
   title: RAM-test the patched bootblock on real hardware (inject + stripes + ALHK auto-boot) before any EEPROM flash
   description: |
-    HARDWARE PARTIAL RESULT (2026-06-25): the rainbow STRIPES were confirmed RENDERING on Pete's real SAM via a trinload RAM push of mgt_screen_demo (the i229 interrupt-rendering recipe works — the earlier bare-data demo showed flat yellow; clean Esc->trinload return confirmed). Banner position (trinload moved the cursor; the bootblock's CLSLOWER fixes it) + whether the border shows stripes (HDMI-interface uncertain) are deferred to the real-bootblock stage. The FULL i230 test (the faithful inject's stripes+banner+wait+teardown + config-fetch/record-boot decision) re-runs once i259 lands.   Stage 2 of the i135c no-brick plan. HARDWARE — GATED ON PETE BEING PRESENT (no set-owner cmd, so this is the gate: the agent must NOT run this when Pete is away; it needs Pete at the SAM to reload trinload + watch the screen). Push the combined patched-bootblock (or the boot-screen demo) to RAM via trinload and confirm on the real SAM: the rainbow stripes + copyright banner RENDER (the i229 recipe makes them work — the bare-data demo showed flat yellow), the config-fetch + record-boot / no-boot decision works, and it returns cleanly to trinload (clean RET, never di;halt). The stripes MUST work here BEFORE i135c patches the EEPROM (the i135c->i230 dep enforces it). Nothing here touches the boot EEPROM. Depends i229. 
-  status: OPEN
-  depends_on: [i229, i259]
+    WONTFIX — superseded by the i135c direct flash (2026-06-26). This was the RAM-test-the-patched-bootblock-before-flash gate for the in-repo splice approach. The pivot to the private forked bootloader (q55) + the emulation-verified flasher (eeprom_flash_chunk1, write-and-readback-verify) + Pete's recovery-in-hand let i135c flash chunk 1 directly; it auto-booted trinload on power-cycle, so the bootblock is confirmed working on real hardware. PRESERVED FINDING (2026-06-25): the rainbow stripes were confirmed RENDERING on Pete's real SAM via a trinload RAM push of mgt_screen_demo (the i229 interrupt-rendering recipe; bare-data showed flat yellow). NOTE: the hardcoded-record-3 auto-boot path deliberately skips the opening screen, so stripes-on-auto-boot rendering is NOT yet hardware-confirmed — folded into the selector-firmware item.
+  status: WONTFIX
+  depends_on: [i229]
   kind: leaf
   owner: agent
 
@@ -4362,26 +4362,24 @@
 - id: i259
   title: "SAMBOOT faithful opening-screen inject: reproduce the stock-ROM flow (stripes+banner+wait-any-key+teardown), both paths"
   description: |
-    THE DELIVERABLE (now fully unblocked + spec'd). Contract: docs/specs/samboot-opening-screen.md — zero degrees of freedom, every step cited to a stock ROM v3.0 address; superset model (Colin removed the opening screen, we add it back byte-faithfully). PR #682's inject is NOT faithful: no-auto-boot RETs with no keypress wait (screen flashes); auto-boot doesn't cancel stripes. REWORK: no-auto-boot = stripes(&ED1B) + CLSLOWER(&06B5 channel-K/lower-screen) + banner(&0F7F via POMSG) + WTFK READKEY(&1CB1) ANY-key + fall into Colin's verbatim teardown; auto-boot = same opening screen + reproduce Colin's full teardown (CLSLOWER + disarm LINICOLS + NSPPC=&FF + TVDATA=&10) + jp bdos_boot_record (no wait). Q1/Q2 RESOLVED by the i258 RAM-diff + the with/without-pokes ultimate test (Pete 2026-06-25): Q1 LEAVE OUT the MAINER3 editor flags (stock has them, Colin doesn't, identical sync state); Q2 KEEP the NSPPC/TVDATA pokes (without them Colin leaves &00/&16 — wrong; necessary because our inject loads B-DOS like Colin). Also update mgt_screen_demo to the faithful flow (READKEY any-key + CLSLOWER) for the i230 hardware re-test. depends i257 (harness fix, DONE) + i258 (experiment, DONE) — both satisfied, so this is READY agent work.
-  status: IN_PROGRESS
+    WONTFIX — superseded by q55 (2026-06-26): the splice-into-captured-bootblock approach is abandoned. Replaced by a LOCAL sibling-directory bootloader fork (start from LongSteve's published version, add auto-boot), built locally and NOT in CI. The faithful opening screen (stripes+banner) + auto-boot now live in our own bootloader source, where they integrate cleanly (no splice, no register-preservation gymnastics — insert before the &4097 register setup). Today's RE is preserved on this branch's diagnostics + q55: &805F returns to &40A1 (i258 stands); the inject failed only because it clobbered AF/BC/DE/HL before the handoff. Hardware flash of the new bootloader = i135c; hardware test = i230 (both re-scoped to the fork).
+  status: WONTFIX
   kind: leaf
   owner: agent
 
 - id: i260
   title: "SAMBOOT no-boot-path RAM-diff regression: faithful inject vs Colin fork leave identical RAM"
   description: |
-    Pete (2026-06-25): use the i258 RAM-diff technique to PROVE the faithful opening-screen inject (stripes+banner+WTFK+teardown) on the NO-AUTO-BOOT path leaves the same sysvars + all other RAM as Colin's unspliced fork once the features are torn down. Boot the SPLICED EEPROM to the editor sync PC (&0514) simulating a keypress past WTFK, snapshot 64KB, diff vs snapshotColin. Automated Test with assertions; any genuine residue (e.g. LINICOLS stripe table) surfaced as an explicit reviewed expected-diff list, not hidden. Reuses cmd/samboot-statediff machinery. depends i259.
-  status: OPEN
-  depends_on: [i259]
+    WONTFIX — superseded by q55 (2026-06-26). This was a RAM-diff regression for the SPLICE inject (abandoned). The equivalent verification (forked bootloader boots clean to BASIC, leaves RAM as Colin's) moves to the LOCAL sibling-dir bootloader project's own tests. The technique + proof live in this branch's diagnostics (TestRegisterPreservedWrapper / TestColinTailReachability).
+  status: WONTFIX
   kind: leaf
   owner: agent
 
 - id: i261
   title: "SAMBOOT auto-boot SD-record automation: prove the inject hooks + boots a record from the SD card in emulation"
   description: |
-    Pete (2026-06-25): an automated emulation test that the AUTO-BOOT path actually hooks and boots a real record from the SD card model, end-to-end (config read -> bdos_boot_record -> HRECORD select + ALHK -> load+run the record's AUTO image from the harness CardModel/SD model), not just an ALHK-event capture. Extend the harness SD/card model as needed (emulation-first: a gap is a defect to fix). depends i259.
-  status: OPEN
-  depends_on: [i259]
+    WONTFIX — superseded by q55 (2026-06-26). Auto-boot SD-record automation for the SPLICE inject (abandoned). Auto-boot now lives in the LOCAL forked bootloader; its record-boot test moves to the sibling-dir project.
+  status: WONTFIX
   kind: leaf
   owner: agent
 
@@ -4389,6 +4387,30 @@
   title: "Pre-flash provenance audit: EEPROM read+write and Trinity record-boot hardware-proven, and the inject reuses that EXACT code"
   description: |
     Pete (2026-06-25), pre-i135c-flash safety gate. Before patching the EEPROM, be 100% sure: (1) EEPROM READ is hardware-tested; (2) EEPROM WRITE is hardware-tested (standalone trinload, free-space only, NOT replacing the bootloader); (3) booting a disk image from a Trinity SD record is hardware-tested. Each must cite the completed iN item + where the working code lives. CRITICAL: confirm the faithful inject (samboot_config.asm/eeprom.asm reader: find_index/check_index/read_chunk/get_chunk/eeprom_enable; bdos_seam.asm bdos_boot_record/bdos_select_record) reuses EXACTLY that proven code, reinventing none of the mechanics. Gate for i135c. Test everything in emulation before hardware.
-  status: IN_PROGRESS
+  status: DONE
+  kind: leaf
+  owner: agent
+
+- id: i263
+  title: Trim MEMORY.md index back under the 24.4KB load limit
+  description: |
+    MEMORY.md (the auto-loaded memory index at ~/.claude/projects/<slug>/memory/MEMORY.md) is ~28KB, over the 24.4KB limit — the session-start loader now truncates it, so only part loads (warning emitted 2026-06-26; an agent also flagged it to Pete). Index entries have grown into multi-line paragraphs. FIX: shorten each index line to a one-line <=200-char hook (title + pointer), moving any detail into the per-topic memory file it points to (never into MEMORY.md). Audit for stale/duplicate/low-value entries (e.g. multiple superseded project-status snapshots) and prune or consolidate. Goal: index well under 24.4KB so it loads whole. NOT a repo change — edits live under ~/.claude (memory files), no PR/CI.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i264
+  title: "SAMBOOT selector firmware: hold-key-at-boot launches a record picker (choose boot record by number/name) instead of hardcoded record 3"
+  description: |
+    Today's forked bootloader (trinity-autoboot, flashed via i135c) auto-boots a HARDCODED record (3 = trinload). Make it configurable: at power-on, if a chosen key is held (e.g. F9 or ESC — pick one, note the alt), the bootloader launches a small RECORD-PICKER program that lists the available Trinity SD records and lets the user select one by NUMBER or NAME; the choice is persisted to the 'SAMBOOT Config' EEPROM chunk (the bootloader's read_config path already exists and is dormant behind the hardcode) so subsequent power-ons auto-boot the selected record. If the key is NOT held, boot the configured record (or fall to the opening screen + wait-key when none). Build in the PRIVATE sibling repo trinity-autoboot (q55: local, not in CI); reuse the by-name EEPROM chunk reader + record-list reader (trinity_storage_shared_resource: read the on-card record list directly, show name + confirm). Develop + verify in the netboot-oracle emulation (key-held vs not, picker lists records, selection persists to config chunk, boot dispatches the chosen record). HARDWARE flash (re-flash via eeprom_flash_chunk1) + on-SAM test GATED ON PETE PRESENT (TAPO smart-plug incoming will let the agent power-cycle for autonomous test). This + i194 (write disks to storage) are the two gaps between today's fixed-record auto-boot and full autonomous SAM control.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i265
+  title: Delete the superseded in-repo SAMBOOT splice/inject apparatus (samboot_bootblock/config + splice diagnostics) now the forked bootloader supersedes it
+  description: |
+    q55 (2026-06-26) abandoned the in-repo splice-into-captured-bootblock approach (i259/i260/i261 WONTFIX) for the private forked bootloader (trinity-autoboot). The in-repo apparatus it leaves behind — src/netboot/samboot_bootblock.asm, samboot_config.asm, the splice-inject diagnostics (samboot_inject_fullboot_test.go and the splicedDeviceEEPROM/loadInjectBlob helpers) and related Makefile/CI wiring — is now superseded dead code (emulation-only, harmless, but hygiene debt per CLAUDE.md doc-lifecycle). Audit what is genuinely unused (some helpers like deviceLinearEEPROM / loadRealCaptures are shared with the still-valid real-boot tests — keep those), then delete the splice-only parts in a focused PR. Preserve the RE findings (the register-clobbering proof, &805F->&40A1) in git history / the trinity-autoboot DESIGN.md before deleting.
+  status: OPEN
   kind: leaf
   owner: agent

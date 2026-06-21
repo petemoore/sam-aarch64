@@ -39,6 +39,7 @@ program performs no SD transaction, so the SD-path fixes do not apply.
 | **server** | N/A | N/A | N/A | **MISSING** (#4) | N/A | N/A |
 | **smoke** | N/A | N/A | N/A | **MISSING** (#4) | N/A | N/A |
 | **eeprom_roundtrip** | N/A | N/A | N/A | HAS | N/A | N/A |
+| **eeprom_flash_chunk1** | N/A | N/A | N/A | HAS | N/A | N/A |
 | **port_probe** | N/A | N/A | N/A | HAS | N/A | N/A |
 | **mgt_screen_demo** | N/A | N/A | N/A | HAS | N/A | N/A |
 
@@ -75,6 +76,7 @@ present):
 
 - **csd_probe** — the reference / gold standard (HAS all six).
 - **eeprom_roundtrip**
+- **eeprom_flash_chunk1** — same EEPROM-write + network-report + `tr_terminate` paths as `eeprom_roundtrip` (i226-hardware-proven), no SD path; writes the trinity-autoboot bootloader into chunk 1 (the bootblock). Flashed + read-back-verified PASS on real hardware 2026-06-26 (i135c).
 - **port_probe**
 - **mgt_screen_demo**
 
