@@ -209,6 +209,47 @@ func serveConfigAddr(mapText string) (uint32, error) {
 	return 0, fmt.Errorf("symbol %s not found in mapfile (wrong binary / not a serve build?)", symbol)
 }
 
+// variantRequiredFlags lists the build-disk flags that MUST carry a payload for
+// each assembler-disk variant, because the boot loader (src/loader.asm) HLOADs
+// them at startup. A disk missing any of these builds fine but silently HANGS
+// SimCoupé (the i69/i207 failure mode). Keep this in lockstep with the boot
+// loader's HGTHD calls and the disk builders (tools/run-roundtrip.sh,
+// tools/run-release-gate.sh, the Makefile `disk` target).
+//
+//   - prod boot HLOADs sysreg-data (sd13), disasm (d15), zx0 (zx013).
+//   - test boot (BUILD_TESTS) HLOADs those plus the off-axis self-test payloads
+//     test-mem, paged-call (p14), cluster, enc-fix.
+var variantRequiredFlags = map[string][]string{
+	"prod": {"-sysreg-data", "-disasm", "-zx0"},
+	"test": {"-sysreg-data", "-disasm", "-zx0", "-test-mem", "-paged-call", "-cluster", "-enc-fix"},
+}
+
+// checkVariantPayloads enforces the i207 boot-payload completeness guard. paths
+// maps each guardable flag to its supplied value (empty = not supplied). variant
+// "none" skips the check (minimal boot-test disks); "test"/"prod" require their
+// payload set; anything else is an error.
+func checkVariantPayloads(variant string, paths map[string]string) error {
+	if variant == "none" {
+		return nil
+	}
+	required, ok := variantRequiredFlags[variant]
+	if !ok {
+		return fmt.Errorf("unknown -variant %q (want test | prod | none)", variant)
+	}
+	var missing []string
+	for _, flag := range required {
+		if paths[flag] == "" {
+			missing = append(missing, flag)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("-variant %s requires the boot payload flag(s) %v: the boot loader HLOADs them at startup, "+
+			"so a disk missing any builds fine but silently HANGS SimCoupé (i69/i207). Supply them, or use -variant none "+
+			"for a minimal boot-test disk", variant, missing)
+	}
+	return nil
+}
+
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("build-disk: ")
@@ -228,6 +269,7 @@ func main() {
 	netbootConfigMap := flag.String("netboot-config-map", "", "i121i: pyz80 mapfile of the -netboot serve binary; when set, ships a SERVE_CONFIG CODE file the AUTO BASIC overlays at the SERVE_CONFIG address (config-aware .mgt serve vessel)")
 	netbootStrategy := flag.String("netboot-strategy", "highest", "i121i: WRQ record placement baked into the disk config file: highest | lowest | explicit:N (requires -netboot-config-map)")
 	netbootConfigName := flag.String("netboot-config-name", "cfg", "i121i: directory-entry name for the SERVE_CONFIG CODE file (the AUTO BASIC LOADs this name)")
+	variant := flag.String("variant", "none", "i207: assembler-disk boot-payload completeness guard — 'test' or 'prod' require every payload the boot loader HLOADs to be present (a missing one silently HANGS SimCoupé); 'none' (default) skips the check (minimal boot-test disks)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
 			"usage: %s [-dos <path>] [-dos-name <name>] [-dos-load <addr>] [-test-mem <path>] [-paged-call <path>] [-cluster <path>] [-enc-fix <path>] [-sysreg-data <path>] [-disasm <path>] [-zx0 <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n   or: %s -netboot <code.bin> [-netboot-name <name>] [-dos ...] <output.mgt>\n",
@@ -293,6 +335,25 @@ func main() {
 	default:
 		flag.Usage()
 		os.Exit(2)
+	}
+
+	// i207: boot-payload completeness guard. The boot loader HLOADs a fixed set
+	// of off-axis payloads at startup; a disk missing any of them does NOT fail
+	// the build today, and the Go harness pre-loads pages so it stays green — but
+	// SimCoupé (which only has what is on the disk) HANGS (rc=124). This is the
+	// i69 failure mode (run-roundtrip.sh once omitted -enc-fix). The guard makes
+	// build-disk refuse to build an incomplete boot disk, catching it at build
+	// time (and in CI, where the disk builders pass -variant).
+	if err := checkVariantPayloads(*variant, map[string]string{
+		"-sysreg-data": *sysregDataPath,
+		"-disasm":      *disasmPath,
+		"-zx0":         *zx0Path,
+		"-test-mem":    *testMemPath,
+		"-paged-call":  *pagedCallPath,
+		"-cluster":     *clusterPath,
+		"-enc-fix":     *encFixPath,
+	}); err != nil {
+		log.Fatal(err)
 	}
 
 	dosBin, err := os.ReadFile(*dosPath)

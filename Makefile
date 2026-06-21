@@ -1594,6 +1594,7 @@ build-disk: $(BUILD)/build-disk
 # (disasm-test.bin, zx0-test.bin).
 disk: assembler test-mem-offaxis cluster-offaxis enc-fix-payload paged-call-payload sysreg-data disasm-test-payload zx0-test-payload enctab $(BUILD)/build-disk
 	$(BUILD)/build-disk \
+	    -variant test \
 	    -test-mem $(BUILD)/test_mem.bin \
 	    -cluster $(BUILD)/test_cluster.bin \
 	    -enc-fix $(BUILD)/enc_fix_payload.bin \

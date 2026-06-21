@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/petemoore/samfile/v3"
@@ -32,6 +33,53 @@ func testDosPath(t *testing.T) string {
 	}
 	t.Fatalf("could not locate %s walking up from the test directory", DefaultDosPath)
 	return ""
+}
+
+// TestCheckVariantPayloads is the i207 boot-payload completeness guard: a disk
+// declared 'test' or 'prod' must carry every payload the boot loader HLOADs, so
+// a missing one fails the build instead of silently hanging SimCoupé.
+func TestCheckVariantPayloads(t *testing.T) {
+	full := map[string]string{
+		"-sysreg-data": "sd13.bin", "-disasm": "d15.bin", "-zx0": "zx0.bin",
+		"-test-mem": "tm.bin", "-paged-call": "p14.bin", "-cluster": "cl.bin", "-enc-fix": "ef.bin",
+	}
+	// none: never errors, even with nothing supplied.
+	if err := checkVariantPayloads("none", map[string]string{}); err != nil {
+		t.Errorf("none variant should skip the check, got %v", err)
+	}
+	// unknown variant: error.
+	if err := checkVariantPayloads("bogus", full); err == nil {
+		t.Error("unknown variant should error")
+	}
+	// prod/test with the full set: pass.
+	for _, v := range []string{"prod", "test"} {
+		if err := checkVariantPayloads(v, full); err != nil {
+			t.Errorf("%s with full payloads should pass, got %v", v, err)
+		}
+	}
+	// prod missing -disasm: error naming the flag (the i69 class).
+	noDisasm := map[string]string{"-sysreg-data": "sd13.bin", "-zx0": "zx0.bin"}
+	if err := checkVariantPayloads("prod", noDisasm); err == nil {
+		t.Error("prod missing -disasm should error")
+	} else if !strings.Contains(err.Error(), "-disasm") {
+		t.Errorf("error should name the missing -disasm flag, got %v", err)
+	}
+	// test missing -enc-fix (the actual i69 omission): error.
+	noEncFix := map[string]string{
+		"-sysreg-data": "sd13.bin", "-disasm": "d15.bin", "-zx0": "zx0.bin",
+		"-test-mem": "tm.bin", "-paged-call": "p14.bin", "-cluster": "cl.bin",
+	}
+	if err := checkVariantPayloads("test", noEncFix); err == nil {
+		t.Error("test missing -enc-fix should error (the i69 omission)")
+	} else if !strings.Contains(err.Error(), "-enc-fix") {
+		t.Errorf("error should name the missing -enc-fix flag, got %v", err)
+	}
+	// prod does NOT require the test-only payloads.
+	if err := checkVariantPayloads("prod", map[string]string{
+		"-sysreg-data": "sd13.bin", "-disasm": "d15.bin", "-zx0": "zx0.bin",
+	}); err != nil {
+		t.Errorf("prod should not require test-only payloads, got %v", err)
+	}
 }
 
 func TestParseServeStrategy(t *testing.T) {

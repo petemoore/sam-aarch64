@@ -89,6 +89,7 @@ echo "=== [4/5] Z80 toolchain: SAM assembler on SimCoupé → OUT (from the COMP
 # decode path under SimCoupé (the symbolic Z80 path is covered by the
 # core..paged fixture jobs + the harness).
 "$ROOT/build/build-disk" \
+    -variant prod \
     -sysreg-data "$ROOT/build/sysreg_data.bin" \
     -disasm "$ROOT/build/disasm.bin" \
     -zx0 "$ROOT/build/zx0.bin" \
