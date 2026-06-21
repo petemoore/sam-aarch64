@@ -2517,9 +2517,11 @@
   title: Windowed TFTP (RFC 7440) in the Go oracle — the host authority for the later Z80 port
   description: |
     Go-authority-first slice of i120. Implement windowsize negotiation + windowed send/receive in tools/netboot-oracle/tftp (server sends a window of DATA before expecting an ACK; receiver ACKs only the last in-sequence block of each window and rewinds on gap/out-of-window) and host-verify with go tests. This is the reference the Z80 port mirrors. Does NOT touch the Z80 client/server or re-add windowsize to the live ClientOptionSet.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 644, role: completing}
   parent: i120
 
 - id: i120b
