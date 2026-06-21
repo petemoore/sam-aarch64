@@ -2491,7 +2491,7 @@
   title: Combined RRQ+WRQ bootable program + disk/Makefile/CI wiring
   description: |
     Packaging vessel 1 (trinload): the self-contained WRQ-server code block + a host PUSH LAUNCHER (a trinpush wrapper) that reads a config / sets the record-placement strategy in the i121h config block (default highest-free), then pushes the block via trinpush-push.py for trinload to load+run. Combined RRQ+WRQ program; the .mgt vessel is the sibling i121j. Make target produces the pushable block; the launcher exposes --strategy (highest|lowest|explicit:N). Host-verifiable; the real wire push stays hardware-gated.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i121
