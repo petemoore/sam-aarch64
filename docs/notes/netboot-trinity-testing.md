@@ -299,6 +299,47 @@ the harness cannot: the real ENC28J60 silicon timing, the EEPROM config read, an
 real stock TFTP/curl client interoperating with the SAM. Emulation-verified is not
 hardware-verified (CLAUDE.md §5).
 
+### Network debug step-markers (i271) — localize a hang off the wire
+
+For diagnosing a hardware hang (the i270 WRQ-write bottleneck), build the serve with
+the **network debug step-markers** compiled in:
+
+```
+make netboot-serve-boot-debug   # -> build/netboot_serve_boot_debug.bin
+```
+
+This is a **drop-in replacement** for `netboot_serve_boot.bin` (push it the same way
+— it is the same boot image, byte-identical apart from the markers; the production
+build is unaffected). At each WRQ / SD-write step it **broadcasts a 6-byte "SDBG" UDP
+packet** to `255.255.255.255:9001` carrying the step code, so an agent reads how far
+the SAM got *without a screen*, and a hang localizes to the **last marker seen**.
+
+Watch the markers on any LAN machine:
+
+```
+sudo tcpdump -l -n -i eth0 'udp port 9001'   # each marker is a 48-byte broadcast
+```
+
+The payload is `'S','D','B','G'` + version(1) + **marker code(1)**. The codes
+(`src/netboot/dbg_marker.asm`):
+
+| code | step |
+|------|------|
+| `0x10` | `handle_wrq` entered |
+| `0x11` | free record claimed + ENC re-armed |
+| `0x12` | no free record → ERROR(3) |
+| `0x13` | about to send the OACK / ACK-0 handshake |
+| `0x20` | a DATA block accepted, about to sink/stage |
+| `0x30` | final block: entering `wd_finalize` |
+| `0x31` | record validated + claimed → final ACK |
+| `0x32` | invalid image → ERROR(3) |
+| `0x40` | `tftp.done` control → returning to trinload |
+
+So for the i270 symptom (WRQ received, zero reply): seeing `0x10` but not `0x13`
+means the hang is in the claim/SD-list-read phase; `0x10`+`0x13` then silence on the
+DATA stream points at the SD write. The marker emission is host-verified in
+`netboot_serve_dbg_test.go`; using it to localize a real hang stays a hardware run.
+
 ---
 
 ## Increment 3 — the TFTP client (i82): fetch a .mgt and save it to Trinity
