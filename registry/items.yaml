@@ -4030,10 +4030,12 @@
   title: "Spill manager: Z80 port of the lazy-spill hook in the page allocator"
   description: |
     Z80 port of the i215a spill-aware allocator: hook src/pagepool.asm alloc to evict the coldest DOC block via the backend dispatch on FREE-pool exhaustion, free its page, retry; reload-on-demand path; degrade-to-refuse when no backend. Host-verified vs the i215a Go authority through the koron-go/z80 harness (mirrors i2a's pagepool_test.go). Depends on i215a.
-  status: IN_PROGRESS
+  status: DONE
   depends_on: [i215a]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 711, role: completing}
   parent: i215
 
 - id: i215c
