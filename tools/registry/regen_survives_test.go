@@ -137,6 +137,50 @@ func TestDependsOnRoundTrip(t *testing.T) {
 	}
 }
 
+// TestOpenViewHasGateColumn is the i158 guard: the OPEN items view carries the
+// "gate" column (the same computeGates marker the backlog uses) between owner and
+// PR, and the CLOSED view does not. It asserts each gate flavour reaches the open
+// table and that a closed item's row stays the gate-less 8-column shape.
+func TestOpenViewHasGateColumn(t *testing.T) {
+	reg := &Registry{
+		Items: []Item{
+			{ID: "i1", Title: "ready agent", Status: StatusOpen, Kind: "leaf", Owner: "agent"},
+			{ID: "i2", Title: "held by pete", Status: StatusOpen, Kind: "leaf", Owner: "pete"},
+			{ID: "i3", Title: "being worked", Status: StatusInProgress, Kind: "leaf", Owner: "agent"},
+			{ID: "i4", Title: "blocked on open work", Status: StatusOpen, Kind: "leaf", Owner: "agent", DependsOn: []string{"i1"}},
+			{ID: "i9", Title: "done leaf", Status: StatusDone, Kind: "leaf", Owner: "agent"},
+		},
+	}
+	var open, closed bytes.Buffer
+	if err := genItemsOpenClosed(reg, &open, &closed); err != nil {
+		t.Fatalf("gen: %v", err)
+	}
+	openOut, closedOut := open.String(), closed.String()
+
+	if !contains(openOut, "| **id** | item | status | owner | gate | PR | deps | dependents | refs/links |") {
+		t.Errorf("open header missing the gate column:\n%s", openOut)
+	}
+	if contains(closedOut, "| gate |") {
+		t.Errorf("closed view must NOT carry a gate column:\n%s", closedOut)
+	}
+	for _, want := range []string{"ready", "👤 pete", "🛠 in-progress", "⏳ i1"} {
+		if !contains(openOut, want) {
+			t.Errorf("open view missing gate marker %q:\n%s", want, openOut)
+		}
+	}
+
+	// The closed item's row stays the 8-column (gate-less) shape: dependents is fields[7].
+	for _, line := range splitLines(closedOut) {
+		if contains(line, "**i9**") {
+			if fields := strings.Split(line, "|"); len(fields) != 10 { // "" + 8 cells + ""
+				t.Errorf("closed i9 row should have 8 columns (10 split fields), got %d: %q", len(fields), line)
+			}
+			return
+		}
+	}
+	t.Fatal("closed i9 row not found")
+}
+
 // TestGenItemCellRendersDescription is the real-content guard: the generator must
 // render the item's DESCRIPTION (not just the short title) in the item cell, with
 // correct escaping — a bold title lead-in, literal pipes escaped, internal newlines

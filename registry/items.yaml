@@ -3270,7 +3270,7 @@
   title: Padlock/gate marker in item-registry-open.md (mirror backlog.md gate column)
   description: |
     Add the gate marker (ready / in-progress / 🔒 qN blocked-on-Pete / ⏳ iN blocked-on-work) to item-registry-open.md, mirroring the backlog.md gate column (computeGates), so the open-items view also shows at a glance what's actionable vs blocked-on-Pete. Pete request 2026-06-20.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
