@@ -3904,3 +3904,12 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i232
+  title: "All Go-harness tests boot the SAM from address 0 (real ROM cold-init) for faithful machine state, not Call-with-seeded-state"
+  description: |
+    Pete (2026-06-23), foundational fidelity principle (part of i126): booting from address 0 with the real ROM IS what a SAM does — running a routine in isolation with hand-seeded registers/sysvars (e.g. a hand-seeded PALTAB) is not emulating the machine, it is testing a fragment in a made-up state. The Go library boots from reset in milliseconds (samboot_real_boot_test.go already does it: load rom.bin, run from PC=0, the ROM cold-init MNINIT->NEW2->streams populates PALTAB/STREAMS/FLAGS/etc.), so every harness test should boot from 0 first and then exercise the code in the REAL post-boot state. Deliverable: a reusable 'boot the SAM from reset, then run X' harness helper, adopted as the default across the koron-go tests (the netboot leaf tests currently Load+Call without booting). Big refactor; FUTURE — must not block the current bootblock RAM-test work. Captured per Pete's instruction to record + move on.
+  status: OPEN
+  depends_on: [i126]
+  kind: leaf
+  owner: agent
