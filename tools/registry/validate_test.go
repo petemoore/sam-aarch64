@@ -248,7 +248,8 @@ func TestValidate_Inv6_UmbrellaDoneWithOpenChild(t *testing.T) {
 	assertError(t, reg, "i1", "umbrella marked DONE but child i1a is OPEN")
 }
 
-// Invariant 8: title too long.
+// Invariant 8: title too long. The cap is 200 chars: exactly 200 is valid,
+// 201 is rejected.
 func TestValidate_Inv8_TitleTooLong(t *testing.T) {
 	reg := &Registry{
 		Items: []Item{
@@ -256,6 +257,18 @@ func TestValidate_Inv8_TitleTooLong(t *testing.T) {
 		},
 	}
 	assertError(t, reg, "i1", "title exceeds 200 chars")
+}
+
+// Invariant 8: a title at exactly the 200-char cap is accepted.
+func TestValidate_Inv8_TitleAtLimitOK(t *testing.T) {
+	reg := &Registry{
+		Items: []Item{
+			{ID: "i1", Title: strings.Repeat("x", 200), Status: StatusOpen, Kind: "leaf", Owner: "agent"},
+		},
+	}
+	if ve := validate(reg); ve.hasErrors() {
+		t.Fatalf("200-char title should validate, got: %v", ve)
+	}
 }
 
 // Invariant 8: description too long.

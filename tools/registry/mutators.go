@@ -453,7 +453,7 @@ func indexBytes(s, sep []byte) int {
 func runAdd(args []string, paths mutatorPaths) {
 	fs := flag.NewFlagSet("add", flag.ExitOnError)
 	space := fs.String("space", "items", "id-space: items | questions")
-	title := fs.String("title", "", "title (≤120 chars, single line; items only)")
+	title := fs.String("title", "", "title (≤200 chars, single line; items only)")
 	desc := fs.String("desc", "", "description (items) or body (questions)")
 	status := fs.String("status", "", "status: OPEN|IN_PROGRESS|DONE|WONTFIX (items only)")
 	owner := fs.String("owner", "", "owner: agent|pete|name")
@@ -733,14 +733,14 @@ func runSetStatus(args []string, paths mutatorPaths) {
 }
 
 // runSetTitle implements `set-title --id iN --title "…"` (items only). The title
-// length limit (≤120 chars, single line) is enforced by applyAndCommit's validate,
+// length limit (≤200 chars, single line) is enforced by applyAndCommit's validate,
 // so an over-long/multi-line title fails cleanly leaving source unchanged. Exists
 // so titles never need a hand-edit of items.yaml (the hand-edit being a route that
 // bypasses the CLI's validation + guards).
 func runSetTitle(args []string, paths mutatorPaths) {
 	fs := flag.NewFlagSet("set-title", flag.ExitOnError)
 	id := fs.String("id", "", "item id to update")
-	title := fs.String("title", "", "new title (≤120 chars, single line)")
+	title := fs.String("title", "", "new title (≤200 chars, single line)")
 	fs.Parse(args) //nolint:errcheck // ExitOnError handles
 	if *id == "" || *title == "" {
 		fmt.Fprintln(os.Stderr, "registry set-title: --id and --title are required")
