@@ -87,6 +87,14 @@ sdc_in:
 ; Out: A=R1; CY set on timeout. Card left selected.
 sdc_cmd_crc:      defb &FF
 sdc_cmd:
+                push    af                     ; save opcode
+                ld      a, &FF
+                call    sdc_out                ; LEADING FLUSH — the post-select Ncc sync byte every
+                pop     af                     ; command needs (trinity-sd-z80-interface.md §5 a82b;
+                                               ; Colin sd.cmd &A7FA). Without it a real card never frames
+                                               ; the command. The koron-go model can't see this (it frames
+                                               ; by bit-pattern, not clock count); the i145g hardware CSD
+                                               ; read came back all-zeros until this flush was added.
                 push    bc
                 push    de
                 call    sdc_out                ; opcode

@@ -67,11 +67,13 @@ SD_AUTONUL:       equ &3F                       ; SD select with auto-null (unus
 
 SD_DATATOK:       equ &FE                       ; start-of-data token preceding the CSD block
 SD_IDLE:          equ &FF                       ; SPI-idle MISO (card not driving)
-SD_BUSY_LIMIT:    equ &2000                     ; per-byte busy-wait poll budget (~8192). A working
-                                                ; card clears BUSY in ~1 poll so this is never reached;
-                                                ; it only bounds a STUCK Trinity so the SAM can't hang
-                                                ; (the 2026-06-24 3-restart hang). ~68ms worst case at
-                                                ; the first stuck byte, then the sticky flag fast-unwinds.
+SD_BUSY_LIMIT:    equ &FFFF                     ; busy-wait poll budget (~65535, ~0.5s). Large enough to
+                                                ; wait out the long &38 SD-init select (Colin's wait is
+                                                ; unbounded); still bounded so a stuck card/controller can
+                                                ; never hang the SAM (the 2026-06-24 3-restart hang). A
+                                                ; working card clears BUSY in ~1 poll, so this is only the
+                                                ; stuck-hardware ceiling; once tripped the sticky flag
+                                                ; fast-unwinds the rest of the already-bounded ladder.
 
 ; ===========================================================================
 ; dumper_refresh_region — the serve-loop hook (called from rrq_hit). The resolved
@@ -82,11 +84,22 @@ SD_BUSY_LIMIT:    equ &2000                     ; per-byte busy-wait poll budget
 ; ===========================================================================
 dumper_refresh_region:
                 ld      hl, (PARSE_FILENAME)
+                ld      de, rgn_quit_prefix
+                call    dr_streq3              ; "qui"? — a remote-recoverable exit hatch:
+                jr      nc, drr_check_csd      ;   an RRQ for "quit.bin" sets the flag so the
+                ld      a, 1                   ;   serve loop RETs to trinload (no keyboard/reset
+                ld      (pm_quit_flag), a      ;   needed to recover the SAM between iterations).
+                ret
+drr_check_csd:
+                ld      hl, (PARSE_FILENAME)
                 ld      de, rgn_csd_prefix
                 call    dr_streq3              ; CY set if (HL) begins "csd"
                 ret     nc                     ; unknown name: leave STAGE as-is
 
                 jp      csd_read_into_stage    ; read the 16-byte CSD into STAGE
+
+rgn_quit_prefix:  defm "qui"
+pm_quit_flag:     defb 0                       ; set by an RRQ for "quit*"; polled by pm_serve_loop
 
 ; dr_streq3 — does the NUL-terminated string at HL begin with the 3-char prefix at
 ; DE? Out: CY set if it matches, CY clear otherwise. (Same shape as dumper's.)
@@ -133,6 +146,17 @@ sd_in:
                 in      a, (SD_DATA)
                 ret
 
+; sd_select — issue a microcontroller SELECT/command byte on &DC, busy-polling
+; FIRST. Colin's hardware-proven driver (bdos15t &A8D7) calls wait_ready before
+; EVERY &DC OUT, including the wake selects and the deselect tail — the bare-OUT
+; form (sd_csd.asm) is a deviation. In: A = select byte. Uses sd_wait_ready.
+sd_select:
+                push    af
+                call    sd_wait_ready
+                pop     af
+                out     (SD_PORT), a
+                ret
+
 ; sd_wait_ready — bounded replacement for the vendored (unbounded) wait_ready, used
 ; ONLY on the SD byte path (sd_out/sd_in). The vendored encdrv.asm wait_ready is
 ; left untouched (its ENC-init uses are proven). Waits for the Trinity busy bit
@@ -175,6 +199,14 @@ sd_timed_out:   defb    0                      ; set once an SD busy-wait exhaus
 sd_cmd_crc:       defb &FF                      ; CRC byte for the pending command
 
 sd_cmd:
+                push    af                     ; save opcode
+                ld      a, &FF
+                call    sd_out                 ; LEADING FLUSH — the post-select Ncc sync byte that
+                pop     af                     ; precedes EVERY command (trinity-sd-z80-interface.md
+                                               ; §5 a82b "one flush byte"; Colin sd.cmd &A7FA). Without
+                                               ; it a real card never frames the command -> no &FE
+                                               ; token -> all-zeros CSD. The model can't see this (it
+                                               ; frames by bit-pattern, not clock count) so it was dropped.
                 push    bc
                 push    de
                 call    sd_out                 ; opcode (A) — command-frame start byte (b7:6 == 01)
@@ -229,21 +261,17 @@ csd_read_into_stage:
 
                 ; --- &04 all-deselect bracket (auto-null off) -------------
                 ld      a, SD_NULLOFF
-                out     (SD_PORT), a
+                call    sd_select               ; busy-poll then OUT &DC (Colin's discipline)
 
                 ; --- microcontroller wake (&38) + the &FF settle poll -----
-                ; &31 select, &38 SD-init (B = the MMC/SD reply count), &31 reselect,
-                ; then poll sd_in until it returns &FF (the card settling to SPI-idle
-                ; MISO-high). This is the OPPOSITE sense to a CMD0-response poll
-                ; (trinity-sd-z80-interface.md §4 step 2 correction): waiting for
-                ; != &FF here HANGS. We bound the poll so a model/card that never
-                ; reaches &FF cannot wedge the probe.
+                ; &31 select, &38 SD-init, &31 reselect, each busy-polled FIRST (the
+                ; &31 reselect must wait out the long &38), then poll sd_in until &FF.
                 ld      a, SD_SEL
-                out     (SD_PORT), a
+                call    sd_select
                 ld      a, SD_INIT
-                out     (SD_PORT), a            ; microcontroller SD-init wake
+                call    sd_select               ; microcontroller SD-init wake (long op)
                 ld      a, SD_SEL
-                out     (SD_PORT), a            ; reselect manual
+                call    sd_select               ; reselect — waits out the long &38
                 ld      b, 0                    ; up to 256 settle reads
 csd_wake_poll:
                 call    sd_in
@@ -347,11 +375,17 @@ csd_read_loop:
                 call    sd_cmd
 
 csd_deselect:
-                ; --- deselect tail: &30 then &04 (auto-null off / all-deselect) ---
+                ; --- deselect tail: Colin's proven 4-step close (bdos15t &A8D7) ---
+                ; &30 / dummy &DF flush / &30 / &04, each &DC select busy-polled FIRST
+                ; (Colin calls wait_ready before every select), the flush byte via sd_out.
                 ld      a, SD_DESEL
-                out     (SD_PORT), a
+                call    sd_select               ; &30 deselect (busy-polled)
+                ld      a, SD_IDLE
+                call    sd_out                  ; dummy &FF flush on &DF
+                ld      a, SD_DESEL
+                call    sd_select               ; &30 again
                 ld      a, SD_NULLOFF
-                out     (SD_PORT), a
+                call    sd_select               ; &04 all-deselect / auto-null off
                 ei
 
                 ; If a per-byte busy-wait gave up, the CSD bytes are invalid — stamp an
@@ -440,7 +474,21 @@ probe_main:
                 ; --- read the CSD once at startup (also re-read per RRQ) ---
                 call    csd_read_into_stage
 
+                ; --- re-arm the ENC RX path the SD transaction disturbed -------
+                ; The SD ladder leaves the ENC's persistent RX state (RXEN, ring
+                ; pointers, MAC/PHY) disturbed; drv_read never restores it, so serving
+                ; is dead until we re-run drv_init's RX-arming (minus chk_trinity, which
+                ; fails right after the &38 SD-init — i242).
+                di
+                ld      hl, CONFIG_SERVERMAC
+                call    enc_rx_reestablish
+                ei
+
 pm_serve_loop:
+                ; Remote-recoverable exit: an RRQ for "quit.bin" set pm_quit_flag.
+                ld      a, (pm_quit_flag)
+                or      a
+                ret     nz                     ; -> trinload's start (no keyboard needed)
                 ; Esc-to-exit (trinload.asm): poll the keyboard; on Esc, RET to
                 ; trinload's start (it pushed start as our return addr).
                 ld      a, &f7
