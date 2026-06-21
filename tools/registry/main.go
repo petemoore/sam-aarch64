@@ -29,6 +29,7 @@
 //	registry [--migrating] split   --parent iN --title … [--desc …] [--status …] [--owner …] [--kind …] [--pr N [--role …]] [--dep …]… [--ref …]…   (child id determined from the parent)
 //	registry [--migrating] set-status --id iN --status … [--pr N]
 //	registry [--migrating] set-title  --id iN --title "…"        (items only)
+//	registry [--migrating] set-owner  --id iN --owner agent|pete  (items only)
 //	registry [--migrating] set-desc   --id iN|qN --desc "…"      (item description / question body)
 //	registry [--migrating] set-pr  --id iN --pr N [--role completing|followup]
 //	registry [--migrating] dep     add|rm --id iN --on iM|qN
