@@ -2197,7 +2197,7 @@
   title: "Scrape, QA, and integrate the recovered Trinity documentation"
   description: |
     Pete recovered the full Trinity docs as 51 photographs (closes i61 gap: Quazar manual NOT found). Off-repo workspace ~/sam-archive/trinity-docs/ (third-party copyrighted; preservation-only). Three immutable layers: photos/ -> text/ (raw OCR via ocr_docs.py, Tesseract + rotation auto-detect) -> docs/notes/trinity-capabilities.md (verified facts only). Pipeline: OCR -> QA agent (prose errors + data-point inventory; wrong digits must be photo-verified) -> discovery agent (what's new vs current knowledge) -> photo-verify flagged data -> fold only photo-confirmed facts into trinity-capabilities.md.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   refs: [~/sam-archive/trinity-docs/README.md, docs/notes/trinity-capabilities.md, i61, i80, i87]
@@ -2216,7 +2216,7 @@
   title: photo-verify flagged data + fold verified facts into trinity-capabilities.md
   description: |
     QA report flags specific data points (port addresses, EEPROM offsets, hex values, diagrams) that require photo confirmation before committing to the repo. Deliverable: run vision-verify on flagged items, then fold only confirmed facts into docs/notes/trinity-capabilities.md via the established off-repo pipeline.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
   parent: i113
@@ -3298,7 +3298,7 @@
   title: "Research CIIP (Z80 TCP/IP stack): locate source, assess license + portability"
   description: |
     From q25 (Pete: yes, investigate). Find CIIP — a pre-existing Z80 TCP/IP stack (TFTP/HTTP/DNS servers+clients; Simon Owen reportedly ported it to pyz80). Search ~/sam-archive + Pete's disks + online (GitHub etc.); do NOT scan Pete's photos (he checked — no source location, and it burns tokens). Assess license/portability and weigh 'adapt CIIP' vs continue i82/i83/i86. Report findings.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
 
@@ -3314,7 +3314,7 @@
   title: Determine the B-DOS save-buffer limit from first principles (read source; not hardware-only)
   description: |
     q22 reframed (Pete 2026-06-20: 'only knowable on hardware' is a hand-wave — it's deterministic and we have the source). From first principles, read the B-DOS source (reference/bdos/) to find the max writable address / available save-buffer size deterministically, and replace the GUESSED FW_RECORD_CAP=4096 (src/netboot/http_main.asm, HTTP-streaming-sink path) with a source-derived value. Establish whether a hardware bench is truly required or (likely) the limit is computable from source.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
 
@@ -3418,7 +3418,7 @@
   title: "Registry: raise the item-title length limit from 120 to ~160 chars (validate.go + mutators help + test)"
   description: |
     The 120-char title cap forced abbreviating SAMBOOT item titles. Bump the limit in tools/registry/validate.go (the check + message + the §147 comment), the mutators.go add-flag help text, and update validate_test.go's title-length assertion. Keep titles single-line. Pete invited this (2026-06-20).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
 
@@ -3600,7 +3600,7 @@
   title: "SAMBOOT dumper: headless auto-RET after all regions served (single dump-and-return, no Esc)"
   description: |
     Split from i188 (2026-06-21). i188 fixed the rom1 crash + the clean Esc-driven trinload return; the dumper still serves forever until Esc. For the FULLY UNATTENDED push->run->return->re-push loop (i133-era), the dumper must auto-RET to trinload once the host has pulled all regions (rom0/rom1/eep0..7), with no human Esc. Implement: track per-region transfer completion (the final short-block ACK in serve_serve_once) and RET from dm_serve_loop once all 10 regions have been served once (Esc stays as the fallback). Emulation-verify via the i181 paged harness + the trinload push/return round-trip. NOT a blocker for i87a-b2 (rom1 recapture) — that uses the Esc return, already proven by the eeprom/rom0 captures.
-  status: OPEN
+  status: DONE
   depends_on: [i188]
   kind: leaf
   owner: agent
@@ -4155,7 +4155,7 @@
   title: Route all trinload-pushed di;halt sites through tr_terminate (i228) + document the technique
   description: |
     Pete (2026-06-24): trinload-pushed programs must end via tr_terminate (di;halt under test / ret to trinload on hardware via the &007F unmapped-port probe, i228, src/netboot/test_report.asm) — NOT raw di;halt, which strands the SAM on every failed experiment. csd_probe pm_fail_cfg/pm_fail_init bypass it. Audit + convert the trinload-pushed netboot di;halt sites (csd_probe, http_main, netboot_client/server/serve, dumper, smoke_test); LEAVE the SimCoupe -exitonhalt halts in src/assembler.asm and src/secd_probe.asm (different, correct mechanism). Document the technique canonically (netboot-trinity-testing.md + pointer to tr_terminate header) so it stops being re-derived/lost.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
 
@@ -4175,7 +4175,7 @@
   title: "Audit + convert the OTHER trinload-pushed netboot di;halt sites to tr_terminate (http_main, client/server/serve, dumper, smoke)"
   description: |
     Per-file audit: distinguish trinload-pushed programs (-> tr_terminate, RET to trinload) from disk-booted ones (different exit). Leave SimCoupe -exitonhalt halts in src/assembler.asm + src/secd_probe.asm. Convert the pushed ones so failed experiments don't strand the SAM (Pete, 2026-06-24).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
   parent: i243

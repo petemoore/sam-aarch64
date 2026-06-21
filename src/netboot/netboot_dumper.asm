@@ -60,6 +60,16 @@ REGION_CHUNKS:    equ 16                        ; 16 KB / 1 KB EEPROM chunk
 CHUNK_BYTES:      equ 1024
 STAGE:            equ &C000                    ; the reused 16 KB staging buffer (section D)
 
+; Region-completion tracking (i192 headless auto-RET). One served-flag per region,
+; indexed: 0 = rom0, 1 = rom1, 2..9 = eep0..eep7 — DUMP_REGION_COUNT entries total,
+; matching dump_store_tmpl below. dumper_refresh_region sets a region's flag the
+; first time that region is staged; dm_serve_loop RETs to trinload once every flag
+; is set (a single dump-and-return: no keypress needed for a headless remote run).
+DUMP_REGION_COUNT: equ 10                       ; rom0,rom1 + eep0..eep7 (10 regions)
+DUMP_RGN_ROM0:     equ 0                        ; flag index for rom0.bin
+DUMP_RGN_ROM1:     equ 1                        ; flag index for rom1.bin
+DUMP_RGN_EEP_BASE: equ 2                        ; flag index for eep0.bin (eepN -> base+N)
+
 ; LMPR (port &FA) bits used by the ROM read (docs/notes/sam-paging.md:99-122).
 LMPR_PORT:        equ &FA
 HMPR_PORT:        equ &FB
@@ -91,13 +101,24 @@ dumper_refresh_region:
                 ; HL points just past "rom"; the next char is '0' or '1'.
                 ld      a, (hl)
                 cp      "1"
-                jp      z, dumper_read_rom1    ; rom1.bin: ROM1 high 16 KB -> STAGE
-                jp      dumper_read_rom0       ; rom0.bin: ROM0 low 16 KB -> STAGE
+                jr      z, dr_rom1
+                ; rom0.bin: ROM0 low 16 KB -> STAGE.
+                ld      a, DUMP_RGN_ROM0
+                call    dumper_mark_served
+                jp      dumper_read_rom0
+dr_rom1:        ; rom1.bin: ROM1 high 16 KB -> STAGE.
+                ld      a, DUMP_RGN_ROM1
+                call    dumper_mark_served
+                jp      dumper_read_rom1
 
 dr_eep:
                 ; HL points just past "eep"; the next char is the region digit N.
                 ld      a, (hl)
                 sub     "0"                    ; A = region index N (0..7)
+                push    af
+                add     a, DUMP_RGN_EEP_BASE   ; flag index = base + N
+                call    dumper_mark_served
+                pop     af
                 jp      dumper_read_eeprom_region
 
 ; dr_streq3 — does the NUL-terminated string at HL begin with the 3-char prefix
@@ -120,6 +141,43 @@ dr_s3_no:
 
 rgn_eep_prefix:   defm "eep"
 rgn_rom_prefix:   defm "rom"
+
+; dumper_mark_served — record that the region with flag index A (0..DUMP_REGION_COUNT-1)
+; has now been served at least once. Sets dump_served_flags[A] = 1. Indices out of
+; range are ignored (defensive; the callers only pass 0..9). Preserves nothing of
+; interest; clobbers A/HL. Included in EVERY build so dumper_test.go exercises it.
+dumper_mark_served:
+                cp      DUMP_REGION_COUNT
+                ret     nc                     ; index >= count: ignore (defensive)
+                ld      hl, dump_served_flags
+                add     a, l
+                ld      l, a
+                ld      a, h
+                adc     a, 0
+                ld      h, a                   ; HL = &dump_served_flags + index
+                ld      (hl), 1
+                ret
+
+; dumper_all_served — Carry set iff every region's served flag is 1 (the whole dump
+; has been served once). Scans the DUMP_REGION_COUNT-byte flag table. Out: CY set =
+; all served, CY clear = at least one region still outstanding. Carry is the result
+; flag (not Z) so the empty-table-byte test below can't confuse the caller. Clobbers
+; A/B/HL.
+dumper_all_served:
+                ld      hl, dump_served_flags
+                ld      b, DUMP_REGION_COUNT
+das_loop:       ld      a, (hl)
+                or      a
+                jr      z, das_incomplete      ; an unset flag: NOT all served yet
+                inc     hl
+                djnz    das_loop
+                scf                            ; every flag set: all served
+                ret
+das_incomplete:
+                or      a                      ; CY clear: still outstanding
+                ret
+
+dump_served_flags: defs DUMP_REGION_COUNT      ; per-region served flags (0 = not yet)
 
 ; ===========================================================================
 ; EEPROM region read (EMULATION-VERIFIABLE — reuses eeprom.asm read_chunk).
@@ -319,25 +377,46 @@ dm_serve_loop:
                 ; Esc-to-exit (trinload.asm:89-92): poll the keyboard; on Esc,
                 ; RET to trinload's `start` (it pushed start as our return addr)
                 ; so the dumper can be re-pushed for another capture. trinload set
-                ; up section B (&6000); we never repage it, so RET lands cleanly.
+                ; up section B (&6000); we never repage it, so RET lands cleanly. The
+                ; Esc poll is the manual abort; the auto-RET below is the headless one.
                 ld      a, &f7
                 in      a, (&f9)
                 bit     5, a                   ; Esc pressed?
                 ret     z                      ; -> trinload's start
 
                 call    serve_serve_once
+
+                ; Headless auto-RET (i192): once EVERY region has been served at least
+                ; once (dumper_refresh_region marked each as it staged it), the single
+                ; dump-and-return is complete — RET to trinload with no keypress, so a
+                ; remote operator who `tftp get`s all the regions gets the SAM back
+                ; cleanly. No paging/quiesce needed: the dumper only touches the &DC
+                ; controller via wait_ready-bracketed ENC + EEPROM access (never the
+                ; heavy &38 SD-init), leaving it in the same clean state the hardware-
+                ; proven Esc/tftp.done RET already relies on. Same clean unwind as Esc.
+                call    dumper_all_served
+                ret     c                      ; all regions served -> trinload's start
+
                 jr      dm_serve_loop
 
 dm_fail_cfg:
                 ld      a, 2                   ; red border: no/bad network settings
-                out     (&fe), a
-                di
-                halt
+                jr      dm_fail_show
 dm_fail_init:
                 ld      a, 1                   ; blue border: ENC28J60 init failed
+dm_fail_show:
+                ; Show the diagnostic border, hold so the operator can read it, then
+                ; hand control back to trinload via tr_terminate (di;halt under test,
+                ; RET to trinload on hardware — the i228 unmapped-port probe). The
+                ; dumper is trinload-pushed (netboot-dumper-trinload); a raw di;halt
+                ; strands the SAM, costing a power-cycle on every failed push (i243b).
                 out     (&fe), a
-                di
-                halt
+dm_fail_wait:
+                ld      a, &f7                 ; poll Esc (trinload's key idiom)
+                in      a, (&f9)
+                bit     5, a
+                jr      nz, dm_fail_wait       ; hold the border until Esc, then return
+                jp      tr_terminate
 
 ; dumper_provision — copy the region STORE + SRC_TABLE templates into the live
 ; tables resolve + resolve_src walk. The dumper does NOT fill STAGE here: each
@@ -354,6 +433,12 @@ dumper_provision:
                 ret
 
 dm_chunk_name:    defm "Trinity Network "     ; the flash chunk holding MAC+IP
+
+                ; tr_terminate (i228): dm_fail_cfg/dm_fail_init end via it, not a
+                ; raw di;halt, so a failed dumper push leaves the SAM usable (i243b).
+                ; Included only in the trinload build (dumper_main's home); its only
+                ; external dep, build_udp_frame, is pulled in by netboot_serve.asm.
+                include "test_report.asm"
 
                 endif  ; !NETBOOT_HOSTTEST
 

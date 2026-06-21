@@ -198,3 +198,112 @@ func TestDumperServeROM1RoundTrip(t *testing.T) {
 		t.Errorf("page 0 was modified during the rom1 serve — the i87a clobber recurred")
 	}
 }
+
+// dumperAllRegions is the dumper's full region set, in dump_store_tmpl order: rom0,
+// rom1, then eep0..eep7 — DUMP_REGION_COUNT (10) regions. Serving each once is what
+// completes the headless dump.
+var dumperAllRegions = []string{
+	"rom0.bin", "rom1.bin",
+	"eep0.bin", "eep1.bin", "eep2.bin", "eep3.bin",
+	"eep4.bin", "eep5.bin", "eep6.bin", "eep7.bin",
+}
+
+// stageDumperRegionSources programs every region's backing store so a full serve of
+// each region succeeds: ROM0/ROM1 fixtures (read by the paging ldir) and the 8
+// EEPROM regions' 16 chunks each (read by dumper_read_eeprom_region). The bytes are
+// distinct per region so a mis-served region would be caught by streamRegion's own
+// round-trip checks elsewhere; here we only need the reads to succeed and mark.
+func stageDumperRegionSources(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60) {
+	t.Helper()
+	copy(mac.Pager().ROM[0:sampage.PageSize], distinctFill(0))                   // ROM0 -> rom0.bin
+	copy(mac.Pager().ROM[sampage.PageSize:2*sampage.PageSize], distinctFill(1))  // ROM1 -> rom1.bin
+	for region := 0; region < 8; region++ {                                      // eep0..eep7
+		programRegionChunks(enc, region, distinctRegionBytes())
+	}
+}
+
+// TestDumperHeadlessAutoRETAfterAllRegions is the i192 headline check: after EVERY
+// region has been served once over the wire, dm_serve_loop RETs to trinload with NO
+// Esc keypress — the headless single dump-and-return. It loads the REAL trinload
+// build (the one with dm_serve_loop + dumper_main compiled in) paged as trinload
+// pushes it, serves all 10 regions through the real serve_serve_once dispatcher
+// (each marking its served flag in dumper_refresh_region), then runs dm_serve_loop
+// and asserts a clean RET (res.Halted = the loop reached trinload's pushed return
+// trap) with the keyboard matrix at its default 0xFF (no key held). This is the
+// emulation proof that a remote operator gets the SAM back with no keypress.
+func TestDumperHeadlessAutoRETAfterAllRegions(t *testing.T) {
+	mac := loadDumperPaged(t, 0x24)
+	fillDumperConfig(t, mac)
+	enc := z80h.NewENC28J60()
+	initDumperDriver(t, mac, enc)
+	stageDumperRegionSources(t, mac, enc)
+
+	// Before any serve, the loop must NOT auto-RET: dumper_all_served is false, so
+	// with no Esc held the loop spins on the empty wire (CallEntry surfaces a
+	// non-returning routine as an error). This proves the auto-RET is gated on
+	// completion, not fabricated.
+	if _, err := mac.CallEntry("dm_serve_loop", z80h.Entry{StepCap: 200_000}); err == nil {
+		t.Fatal("dm_serve_loop RETd before any region was served — the auto-RET is not gated on completion")
+	}
+
+	// Serve every region once over the wire. Each full transfer drives
+	// dumper_refresh_region at rrq_hit, which marks that region's served flag.
+	for _, name := range dumperAllRegions {
+		got, blocks := streamRegion(t, mac, enc, name)
+		if len(got) != stageBytes {
+			t.Fatalf("%s: streamed %d bytes, want %d", name, len(got), stageBytes)
+		}
+		if want := stageBytes/512 + 1; blocks != want {
+			t.Errorf("%s: transfer took %d DATA blocks, want %d", name, blocks, want)
+		}
+	}
+
+	// dumper_all_served must now report complete: CY set (A != 0 after `scf`+ret in
+	// the all-served path). CallEntry returns the flags via res — assert via the
+	// flag bytes directly for an unambiguous check.
+	flags := mac.Read(symAddr(t, mac, "dump_served_flags"), 10)
+	for i, f := range flags {
+		if f != 1 {
+			t.Fatalf("dump_served_flags[%d] = %d after serving all regions, want 1 — region %q not marked",
+				i, f, dumperAllRegions[i])
+		}
+	}
+
+	// The headless exit: with the keyboard at default 0xFF (NO Esc), dm_serve_loop
+	// must RET to trinload because every region is served. res.Halted = the loop
+	// reached the pushed HALT trap (trinload's return address) — a clean RET.
+	if mac.PendingKeys() != 0 {
+		t.Fatalf("unexpected pending keys (%d) — the auto-RET must need no keypress", mac.PendingKeys())
+	}
+	res, err := mac.CallEntry("dm_serve_loop", z80h.Entry{StepCap: 200_000})
+	if err != nil {
+		t.Fatalf("call dm_serve_loop after all regions served: %v", err)
+	}
+	if !res.Halted {
+		t.Fatalf("dm_serve_loop did NOT RET after all regions served (PC=&%04X, steps=%d) — headless auto-RET broken",
+			res.PC, res.Steps)
+	}
+}
+
+// TestDumperEscStillExitsBeforeComplete proves the manual abort is preserved: with
+// regions still outstanding (the auto-RET path NOT taken), holding Esc at the
+// keyboard still RETs to trinload at the top of dm_serve_loop — the operator can
+// always bail out early. This guards that adding the auto-RET did not remove the
+// Esc exit.
+func TestDumperEscStillExitsBeforeComplete(t *testing.T) {
+	mac := loadDumperPaged(t, 0x24)
+	fillDumperConfig(t, mac)
+	enc := z80h.NewENC28J60()
+	initDumperDriver(t, mac, enc)
+	stageDumperRegionSources(t, mac, enc)
+
+	// No region served yet -> dumper_all_served is false; the ONLY exit is Esc.
+	mac.PressEsc(true)
+	res, err := mac.CallEntry("dm_serve_loop", z80h.Entry{StepCap: 200_000})
+	if err != nil {
+		t.Fatalf("call dm_serve_loop with Esc held: %v", err)
+	}
+	if !res.Halted {
+		t.Fatalf("dm_serve_loop did not RET with Esc held (PC=&%04X) — the manual abort regressed", res.PC)
+	}
+}
