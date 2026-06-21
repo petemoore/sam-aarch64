@@ -3992,3 +3992,11 @@
   depends_on: [q54]
   kind: leaf
   owner: agent
+
+- id: i235
+  title: "Trinity emulator hardware-parity: exhaustively encode EVERY documented hardware behaviour into the Go Trinity model (microcontroller/SD/ENC/EEPROM/SPI), no skips"
+  description: |
+    Pete (research-first/comprehensive-emulation, i126 north star): the i145g probe hang exposed that the Go Trinity emulator (sdcard.go/enc28j60.go/eeprom model) is far from hardware parity — it models the SD and ENC as INDEPENDENT devices though real Trinity is ONE shared PIC microcontroller on one SPI bus (shared &DC busy/select, &DD/&DE/&DF aliased read-back), the &DC busy bit is hardwired clear, &38 is opaque, full probe_main was never even run (NETBOOT_HOSTTEST==0 carve-out = i231). GOAL is NOT just to fix the hang: exhaustively mine EVERY authority (OCR'd Trinity manual ~/sam-archive/trinity-docs/text, Colin B-DOS 1.5t annotated disasm, simonowen trinload/encdrv/eeprom, trinity-capabilities.md, trinity-sd-z80-interface.md, ROM/capture analyses) for EVERY behavioural detail — every port/bit/mode/command/timing/sequence/edge/error path — and encode ALL of it into the model, no guessing, no skipping, ruthless. Then run the WHOLE suite (no regressions). The hang (and future ones) will then manifest naturally. Deliverable: a committed Trinity fidelity inventory (behaviour -> citation -> model status) + a faithful unified-microcontroller model + the missing full-probe_main e2e test. Was: narrow i145g-hang reproduction.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
