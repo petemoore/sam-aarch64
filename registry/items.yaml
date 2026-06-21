@@ -4420,6 +4420,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 687, role: completing}
   parent: i264
 
 - id: i264b
