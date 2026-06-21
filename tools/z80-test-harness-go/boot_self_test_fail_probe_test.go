@@ -35,7 +35,7 @@ func TestBootSelfTestsFailProbe(t *testing.T) {
 
 	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, encFixPath, p14Path, zx0Path} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s", p)
+			t.Fatalf("prerequisite missing: %s", p)
 		}
 	}
 
@@ -111,7 +111,7 @@ func TestBootSelfTestsZX0FailProbe(t *testing.T) {
 
 	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, encFixPath, p14Path, zx0Path} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s", p)
+			t.Fatalf("prerequisite missing: %s", p)
 		}
 	}
 

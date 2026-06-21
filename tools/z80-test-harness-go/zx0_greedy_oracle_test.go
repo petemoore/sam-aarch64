@@ -53,7 +53,7 @@ func TestZX0GreedyOracle(t *testing.T) {
 
 	blocksDir := filepath.Join(root, "build", "zx0-blocks")
 	if _, err := os.Stat(blocksDir); os.IsNotExist(err) {
-		t.Skipf("no ZX0 test blocks at %s — run 'make zx0-blocks' first", blocksDir)
+		t.Fatalf("no ZX0 test blocks at %s — run 'make zx0-blocks' first", blocksDir)
 	}
 
 	// (H,D) parameter grid — covers all Z80-feasible points.

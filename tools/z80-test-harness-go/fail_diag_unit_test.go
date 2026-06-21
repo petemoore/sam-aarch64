@@ -68,7 +68,7 @@ func TestDescribeFailBannerWithRealSymbols(t *testing.T) {
 	root := repoRoot(t)
 	symPath := filepath.Join(root, "build", "assembler.sym")
 	if _, err := os.Stat(symPath); err != nil {
-		t.Skipf("prerequisite missing: %s (run `make assembler`)", symPath)
+		t.Fatalf("prerequisite missing: %s (run `make assembler`)", symPath)
 	}
 
 	syms, err := loadSAMSymbols(symPath)

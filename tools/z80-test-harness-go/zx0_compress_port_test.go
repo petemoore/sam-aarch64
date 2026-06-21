@@ -163,7 +163,7 @@ func TestZX0CompressPort(t *testing.T) {
 	// Load zx0_compress.bin from build/.
 	compressorBin, err := os.ReadFile(filepath.Join(root, "build", "zx0_compress.bin"))
 	if err != nil {
-		t.Skipf("build/zx0_compress.bin not found — run 'make zx0-compress-payload' first: %v", err)
+		t.Fatalf("build/zx0_compress.bin not found — run 'make zx0-compress-payload' first: %v", err)
 	}
 	t.Logf("zx0_compress.bin: %d bytes", len(compressorBin))
 
@@ -173,7 +173,7 @@ func TestZX0CompressPort(t *testing.T) {
 
 	blocksDir := filepath.Join(root, "build", "zx0-blocks")
 	if _, err := os.Stat(blocksDir); os.IsNotExist(err) {
-		t.Skipf("no ZX0 test blocks at %s — run 'make zx0-blocks' first", blocksDir)
+		t.Fatalf("no ZX0 test blocks at %s — run 'make zx0-blocks' first", blocksDir)
 	}
 
 	goParams := zx0greedy.Params{HashSize: 512, ChainDepth: 16}
@@ -364,12 +364,12 @@ func TestZX0CompressStackDepth(t *testing.T) {
 
 	compressorBin, err := os.ReadFile(filepath.Join(root, "build", "zx0_compress.bin"))
 	if err != nil {
-		t.Skipf("build/zx0_compress.bin not found — run 'make zx0-compress-payload' first: %v", err)
+		t.Fatalf("build/zx0_compress.bin not found — run 'make zx0-compress-payload' first: %v", err)
 	}
 	blocksDir := filepath.Join(root, "build", "zx0-blocks")
 	matches, err := filepath.Glob(filepath.Join(blocksDir, "block_*.raw"))
 	if err != nil || len(matches) == 0 {
-		t.Skipf("no ZX0 test blocks at %s — run 'make zx0-blocks' first", blocksDir)
+		t.Fatalf("no ZX0 test blocks at %s — run 'make zx0-blocks' first", blocksDir)
 	}
 	sort.Strings(matches)
 

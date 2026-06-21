@@ -37,7 +37,7 @@ func TestCorpusSweep(t *testing.T) {
 
 	sam := filepath.Join(build, "sam-aarch64")
 	if _, e := os.Stat(sam); e != nil {
-		t.Skipf("build/sam-aarch64 not built (run `make sam-aarch64`): %v", e)
+		t.Fatalf("build/sam-aarch64 not built (run `make sam-aarch64`): %v", e)
 	}
 	enctab, err := os.ReadFile(filepath.Join(build, "enctab.enc"))
 	if err != nil {

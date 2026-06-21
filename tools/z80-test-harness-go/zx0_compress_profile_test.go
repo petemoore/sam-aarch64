@@ -81,15 +81,15 @@ func TestZX0CompressProfile(t *testing.T) {
 
 	corpus, err := os.ReadFile(filepath.Join(root, "build", "zx0-corpus.raw"))
 	if err != nil {
-		t.Skipf("build/zx0-corpus.raw not found — run 'make zx0-corpus' first: %v", err)
+		t.Fatalf("build/zx0-corpus.raw not found — run 'make zx0-corpus' first: %v", err)
 	}
 	compressorBin, err := os.ReadFile(filepath.Join(root, "build", "zx0_compress.bin"))
 	if err != nil {
-		t.Skipf("build/zx0_compress.bin not found — run 'make zx0-compress-payload' first: %v", err)
+		t.Fatalf("build/zx0_compress.bin not found — run 'make zx0-compress-payload' first: %v", err)
 	}
 	syms, err := readPyz80Map(filepath.Join(root, "build", "zx0_compress.map"))
 	if err != nil {
-		t.Skipf("build/zx0_compress.map not found — run 'make zx0-compress-payload' first: %v", err)
+		t.Fatalf("build/zx0_compress.map not found — run 'make zx0-compress-payload' first: %v", err)
 	}
 
 	src := corpus[:4096]

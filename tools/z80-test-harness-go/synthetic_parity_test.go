@@ -123,7 +123,7 @@ func loadProdDisasm(t *testing.T) []byte {
 	t.Helper()
 	b, err := os.ReadFile("../../build/disasm.bin")
 	if err != nil {
-		t.Skipf("build/disasm.bin not built (run `make build/disasm.bin`): %v", err)
+		t.Fatalf("build/disasm.bin not built (run `make build/disasm.bin`): %v", err)
 	}
 	return b
 }
@@ -241,15 +241,15 @@ func TestSyntheticParity_ExtendedSysName(t *testing.T) {
 	root := repoRoot(t)
 	enc, err := os.ReadFile(filepath.Join(root, "build", "enctab.enc"))
 	if err != nil {
-		t.Skipf("build/enctab.enc not built: %v", err)
+		t.Fatalf("build/enctab.enc not built: %v", err)
 	}
 	asm, err := os.ReadFile(filepath.Join(root, "build", "assembler-prod.bin"))
 	if err != nil {
-		t.Skipf("build/assembler-prod.bin not built: %v", err)
+		t.Fatalf("build/assembler-prod.bin not built: %v", err)
 	}
 	sd13, err := os.ReadFile(filepath.Join(root, "build", "sysreg_data.bin"))
 	if err != nil {
-		t.Skipf("build/sysreg_data.bin not built (the page-13 sysname tables): %v", err)
+		t.Fatalf("build/sysreg_data.bin not built (the page-13 sysname tables): %v", err)
 	}
 	// The prod assembler always HLOADs sd13 (page 13) and d15 (page 15) at
 	// boot; serve both so the HGTHD requests resolve.
@@ -257,7 +257,7 @@ func TestSyntheticParity_ExtendedSysName(t *testing.T) {
 
 	sam := filepath.Join(root, "build", "sam-aarch64")
 	if _, e := os.Stat(sam); e != nil {
-		t.Skipf("build/sam-aarch64 not built: %v", e)
+		t.Fatalf("build/sam-aarch64 not built: %v", e)
 	}
 	tmp := t.TempDir()
 	srcPath := filepath.Join(tmp, "sysn.s")

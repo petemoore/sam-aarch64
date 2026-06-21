@@ -50,7 +50,7 @@ func TestCoverageReport(t *testing.T) {
 
 	for _, p := range []string{asmPath, symPath, encPath, sd13Path, d15Path, tmPath, clusterPath, encFixPath, p14Path, zx0Path, samPath} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make assembler enctab sysreg-data disasm-test-payload zx0-test-payload test-mem-offaxis cluster-offaxis enc-fix-payload paged-call-payload sam-aarch64`", p)
+			t.Fatalf("prerequisite missing: %s\n  run `make assembler enctab sysreg-data disasm-test-payload zx0-test-payload test-mem-offaxis cluster-offaxis enc-fix-payload paged-call-payload sam-aarch64`", p)
 		}
 	}
 
