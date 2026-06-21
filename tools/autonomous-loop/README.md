@@ -73,17 +73,18 @@ before: an explicit flag always overrides the marker (`--pete-away` wins over th
 marker; `--pete-present` wins when there is no marker).
 
 The same `pete-present` marker also **gates the monitor itself (i240)**: while it
-exists, the monitor **suppresses every nudge/restart** (the
-`/context`+resume, the `/clear`+restart, and the hang-timeout nudge) — Pete is
-driving the session interactively and the loop must not interrupt him. On each
-presence transition the monitor stuffs a one-shot line into the session: an
-**arrival** line when the marker appears (`ALOOP_PETE_ARRIVAL`) and a
-**departure** line when it is removed (`ALOOP_PETE_DEPARTURE`), so the in-session
-agent knows the mode changed. Semaphores are **not consumed** while suppressed, so
-a `task-done`/`wound-down` left pending during a present period is processed
-normally the moment Pete leaves — no work signal is lost. So `touch
-~/.claude/autonomous-loop/pete-present` both surfaces Pete's items in `ready` and
-silences the loop; `rm` it to hand control back to autonomous mode.
+exists, the monitor **suppresses only the time-based hang-timeout nudge** (the "if
+you are idle, resume" line that fires on a timer regardless of what Pete is doing —
+the one that garbles his typing). The **file-driven transitions stay live even while
+Pete is present**, because they are agent-initiated, not unsolicited interrupts:
+`task-done` (→ `/context` + checkpoint), `wound-down` (→ `/clear` + restart), and
+`quiescent` (the backlog-drained hold) all still run — so Pete can trigger a
+wind-down **without** first marking himself away. On each presence transition the
+monitor stuffs a one-shot line into the session: an **arrival** line when the marker
+appears (`ALOOP_PETE_ARRIVAL`) and a **departure** line when it is removed
+(`ALOOP_PETE_DEPARTURE`). So `touch ~/.claude/autonomous-loop/pete-present` both
+surfaces Pete's items in `ready` and silences the periodic nudges; `rm` it to hand
+control fully back to autonomous mode.
 
 ## Run
 

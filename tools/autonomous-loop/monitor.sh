@@ -68,7 +68,7 @@ LOGFILE="${ALOOP_LOG:-$SEMA_DIR/monitor.log}" # persistent trace: every stuff/su
 TASK_DONE="$SEMA_DIR/task-done"
 WOUND_DOWN="$SEMA_DIR/wound-down"
 QUIESCENT="$SEMA_DIR/quiescent"             # backlog-drained hold (i103): agent touches it when ZERO workable non-Pete items remain; monitor stops nudging until the transcript grows (Pete writes back)
-PETE_PRESENT="$SEMA_DIR/pete-present"       # presence semaphore (i240): while it exists Pete is driving interactively -- suppress ALL nudges/restarts; announce arrival/departure on the transition edges
+PETE_PRESENT="$SEMA_DIR/pete-present"       # presence semaphore (i240): while it exists Pete is driving interactively -- suppress ONLY the time-based hang nudge (file-driven task-done/wound-down/quiescent stay live); announce arrival/departure on the transition edges
 LOCK="$SEMA_DIR/monitor.lock"               # single-instance guard (see preflight)
 
 # i240 announcement lines, stuffed once on the presence transition edges.
@@ -262,27 +262,26 @@ pete_was=""; [ -e "$PETE_PRESENT" ] && pete_was="1"
 log "i240: pete-present at startup: ${pete_was:-no}"
 while true; do
   # i240 -- Pete-presence gate. While the pete-present semaphore exists, Pete is
-  # driving the session interactively, so suppress ALL autonomous-loop nudges and
-  # restarts (the whole QUIESCENT/WOUND_DOWN/TASK_DONE/HANG machinery below). On
-  # each presence transition edge, stuff a one-shot arrival/departure line so the
-  # in-session agent knows the mode changed. Semaphores are NOT consumed while
-  # suppressed -- a task-done/wound-down left pending is processed normally once
-  # Pete leaves, so no work signal is lost.
+  # driving the session interactively. Suppress ONLY the time-based HANG-timeout
+  # nudge (the "if you are idle, resume" line that fires on a timer regardless of
+  # what Pete is doing -- THAT is what garbles his typing; gated in the HANG branch
+  # below). The FILE-DRIVEN transitions stay live even while Pete is present, because
+  # they are agent-initiated, not unsolicited interrupts: TASK_DONE (the agent wrote
+  # task-done -> /context + checkpoint), WOUND_DOWN (the agent wrote wound-down ->
+  # /clear + restart), QUIESCENT (the agent declared the backlog drained). So Pete can
+  # still trigger a wind-down without first marking himself away (Pete, 2026-06-25).
+  # On each presence transition edge, stuff a one-shot arrival/departure line.
   pete_now=""; [ -e "$PETE_PRESENT" ] && pete_now="1"
   if [ "$pete_now" != "$pete_was" ]; then
     if [ -n "$pete_now" ]; then
-      log "i240: pete-present appeared -> announce arrival; nudges suppressed"
+      log "i240: pete-present appeared -> announce arrival; hang-nudge suppressed (file-driven transitions stay live)"
       stuff "$PETE_ARRIVAL_MSG"; submit
     else
-      log "i240: pete-present removed -> announce departure; autonomous nudges resume"
+      log "i240: pete-present removed -> announce departure; hang-nudge resumes"
       stuff "$PETE_DEPARTURE_MSG"; submit
       last_signal=$SECONDS   # fresh hang-timeout baseline so departure doesn't instantly hang-nudge
     fi
     pete_was="$pete_now"
-  fi
-  if [ -n "$pete_now" ]; then
-    sleep "$POLL"
-    continue
   fi
   # If $QUIESCENT vanished by any path (auto-expire below, or an external rm),
   # forget the stale baseline so a future hold re-marks from scratch.
@@ -361,7 +360,10 @@ while true; do
     nudge_until_turn "$RESUME_NUDGE"
     rm -f "$TASK_DONE"
     last_signal=$SECONDS
-  elif [ $((SECONDS - last_signal)) -ge "$HANG_TIMEOUT" ]; then
+  elif [ -z "$pete_now" ] && [ $((SECONDS - last_signal)) -ge "$HANG_TIMEOUT" ]; then
+    # i240: the time-based hang nudge fires ONLY when Pete is away. While he is
+    # present this is suppressed (it is the unsolicited interrupt that garbles his
+    # typing); the file-driven TASK_DONE/WOUND_DOWN/QUIESCENT branches above still run.
     log "no signal for ${HANG_TIMEOUT}s -> nudge (in case the session went idle)"
     stuff "If you are idle and waiting on nothing, resume autonomously per docs/ROADMAP.md and the autonomous-loop protocol (tools/autonomous-loop/README.md). If you are mid-task, ignore this."
     submit

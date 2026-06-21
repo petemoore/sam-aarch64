@@ -4295,3 +4295,11 @@
   owner: agent
   prs:
     - {num: 668, role: completing}
+
+- id: i255
+  title: "monitor.sh (i240 refinement): suppress ONLY the time-based hang nudge while Pete present; keep file-driven task-done/wound-down/quiescent live"
+  description: |
+    Refinement of i240 (Pete, 2026-06-25). The first i240 cut suppressed ALL monitor activity (task-done /context+nudge, wound-down /clear+restart, quiescent hold, AND the hang nudge) while the pete-present marker exists. Pete: only the TIME-BASED hang-timeout nudge ('if you are idle, resume...') interferes with his typing -- it fires on a timer regardless of what he is doing. The FILE-DRIVEN transitions are agent-initiated (the agent deliberately wrote task-done/wound-down), not unsolicited interrupts, so they should still execute while Pete is present -- letting Pete trigger a wind-down WITHOUT first marking himself away. Fix: removed the blanket suppress-and-continue; gate ONLY the HANG_TIMEOUT branch on [ -z pete_now ]; keep the arrival/departure edge announcements. Verified 8/8 against the real monitor.sh driving a throwaway screen session (hang suppressed while present; task-done + wound-down both processed while present; announcements intact).
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
