@@ -25,14 +25,22 @@ Args: `<sam-ip> <bin> [page=1] [exec-addr=0x8000]`.
 
 Pushes the serve program (`build/netboot_serve_boot.bin` — its boot binary doubles as
 the pushable block) after setting the WRQ disk-record **placement strategy** in the
-`SERVE_CONFIG` block (i121h). Once running, `tftp put <image>` from any LAN machine
-lands a disk image in a free Trinity record per the strategy — unattended, never
-overwriting a named record (write-to-free-only).
+`SERVE_CONFIG` block (i121h). Once running, a `put` of a `trinity-sam-disks/`-prefixed
+name from any LAN machine lands a disk image in a free Trinity record per the strategy
+— unattended, never overwriting a named record (write-to-free-only).
+
+The remote name's **prefix selects the storage class** (i121c, storage-manifest design
+§6.5): a name **with** the `trinity-sam-disks/` prefix is stored as a validated
+(819,200-byte) bootable **disk record**; any **other** name is the default **flat-file**
+class (HSAVE'd as a plain file, no size validation). So a bootable disk image must be
+pushed under the prefixed remote name:
 
 ```sh
 make netboot-serve-trinload       # builds the pushable serve block + mapfile
 tools/trinload-push/trinpush-serve.py 192.168.2.75 --strategy highest
-# then push a disk image in:  tftp 192.168.2.75 -m octet -c put mydisk.mgt
+# then push a disk image in as a bootable disk record (note the prefixed REMOTE name):
+#   tftp 192.168.2.75 -m octet -c put mydisk.mgt trinity-sam-disks/mydisk.mgt
+# a non-prefixed name (e.g. `put notes.dat`) is stored as a plain flat file instead.
 ```
 
 `--strategy` is `highest` (default — keep the user's low record slots free; TFTP

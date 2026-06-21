@@ -140,6 +140,12 @@ type Responder struct {
 	// writes (BDOSStore.ListWrites). The two-push test asserts the claimed records
 	// differ.
 	claims []Claim
+
+	// flatStores records the flat-file archive stores completed by FlatFile-class
+	// WRQ pushes (i121c): the default storage class, HSAVE'd into a free record via
+	// the i119 bdos_save_hook seam rather than streamed+validated as an 819,200-byte
+	// disk record. Mirrors the Z80 BDOSStore.Saves the harness captures.
+	flatStores []FlatStore
 }
 
 // Claim is one completed disk-record claim: the record marked used and the name
@@ -148,6 +154,16 @@ type Responder struct {
 type Claim struct {
 	Record int    // the 1-based record claimed
 	Name   string // the record name written (filename-derived, ≤10 chars)
+}
+
+// FlatStore is one completed flat-file archive store (i121c): the storage name
+// (the WRQ filename after bdos.Classify strips any class prefix) and the bytes
+// HSAVE'd into the claimed record. Mirrors the Z80 BDOSStore.BDOSSave the harness
+// captures from bdos_save_hook (name + the saved file bytes).
+type FlatStore struct {
+	Record int    // the 1-based record HSAVE'd into
+	Name   string // the storage name (Classify internal name)
+	Data   []byte // the stored file bytes
 }
 
 // wrqEndpoint is the client-side identity learned from a WRQ frame (i121a).
@@ -177,6 +193,14 @@ type wrqReceiver struct {
 	sink     *bdos.RawSink
 	valid    bool   // set on the final block: the streamed image validated
 	filename string // the WRQ filename (the claim name is derived from it, i121g)
+
+	// Flat-file archive push state (i121c), set when the WRQ filename has no
+	// "trinity-sam-disks/" prefix (bdos.Classify -> FlatFile, the default class).
+	// The body accumulates into data (the flat receive-to-staging buffer) and on the
+	// short final block is HSAVE'd into the claimed record (finalizeFlat) instead of
+	// validated as an 819,200-byte disk record. flat and push are mutually exclusive.
+	flat     bool
+	flatName string // the storage name (Classify internal name, prefix stripped)
 }
 
 // New builds a serve-files demo server over a flat store. src(name) yields the
@@ -213,6 +237,11 @@ func (r *Responder) SetFreeRecords(records []int) {
 // with the name written into its record-list entry (i121g). The two-push test
 // asserts successive claims target different records.
 func (r *Responder) Claims() []Claim { return r.claims }
+
+// FlatStores returns the flat-file archive stores completed by FlatFile-class WRQ
+// pushes (i121c), in order — each the record claimed, the storage name, and the
+// HSAVE'd bytes. The Z80 test asserts these against BDOSStore.Saves.
+func (r *Responder) FlatStores() []FlatStore { return r.flatStores }
 
 // nextFreeRecord returns the record the next push would claim (the LOWEST free
 // record — the head of the free-record sequence), or 0 when none is free. When
@@ -411,6 +440,9 @@ func (r *Responder) recvData(u frame.UDP) []byte {
 			if rcv.push {
 				return r.finalizePush(rcv, block)
 			}
+			if rcv.flat {
+				return r.finalizeFlat(rcv, block)
+			}
 		}
 		return r.wrapToWRQClient(tftp.BuildACK(block))
 	case block <= rcv.acked:
@@ -452,6 +484,29 @@ func (r *Responder) finalizePush(rcv *wrqReceiver, block uint16) []byte {
 		return r.wrapToWRQClient(tftp.BuildACK(block))
 	}
 	return r.wrapToWRQClient(tftp.BuildError(3, "invalid disk record"))
+}
+
+// finalizeFlat commits a FlatFile-class push (i121c) on its short final block: the
+// staged body is HSAVE'd into the claimed record as a plain file (no 819,200-byte
+// disk-record validation — a flat file is any size), the record is claimed so the
+// next push lands elsewhere, and the final ACK is returned. Port of netboot_serve.asm
+// wd_finalize_flat (which calls bdos_fill_save_uifa + bdos_save_hook + bdos_claim_record),
+// itself the server mirror of netboot_client.asm client_main's flat-file write-out.
+// A flat file is never rejected on content: the explicit "trinity-sam-disks/" prefix is
+// the only thing that opts a push into the validated disk-record class (design §6.5).
+func (r *Responder) finalizeFlat(rcv *wrqReceiver, block uint16) []byte {
+	claimed := r.nextRecordForStrategy()
+	r.flatStores = append(r.flatStores, FlatStore{
+		Record: claimed,
+		Name:   rcv.flatName,
+		Data:   append([]byte(nil), rcv.data...),
+	})
+	// Claim the record's central-list name entry so the next push lands on the next
+	// free record (the i121g claim, shared with the disk-record path). The name is
+	// derived from the WRQ filename, hardened identically (ClaimRecordName).
+	r.claims = append(r.claims, Claim{Record: claimed, Name: ClaimRecordName(rcv.filename)})
+	r.removeFreeRecord(claimed)
+	return r.wrapToWRQClient(tftp.BuildACK(block))
 }
 
 // recordNameLen is the full central-list record-name field width: the whole
@@ -536,12 +591,12 @@ func (r *Responder) startWrite(u frame.UDP, req *tftp.Request) []byte {
 	copy(r.wrqClient.ip[:], u.SrcIP[:])
 	r.wrqClient.tid = u.SrcPort
 
-	// Disk-record push (i121f): claim a record per the placement strategy before the
-	// handshake. None available (no free record, or the explicit record is already
-	// named) -> ERROR(3, "no free record"), arm nothing (never touch a named record
-	// — the shared-resource invariant). v1 treats every WRQ as a disk-record push;
-	// the future i121c flat-file path uses the "trinity-sam-disks/" filename prefix
-	// (bdos.Classify) as the discriminator. Port of netboot_serve.asm
+	// Both storage classes (DiskRecord push, i121f; FlatFile HSAVE, i121c) claim a
+	// free record per the placement strategy before the handshake. None available (no
+	// free record, or the explicit record is already named) -> ERROR(3, "no free
+	// record"), arm nothing (never touch a named record — the shared-resource
+	// invariant). The class is picked from the filename in newWRQReceiver
+	// (bdos.Classify, the "trinity-sam-disks/" prefix). Port of netboot_serve.asm
 	// wrq_claim_record (which calls bdos_find_record_for_strategy).
 	if r.cfg.DiskRecordPush && r.nextRecordForStrategy() == 0 {
 		r.wrqRecv = nil
@@ -576,15 +631,27 @@ func (r *Responder) startWrite(u frame.UDP, req *tftp.Request) []byte {
 	return r.wrapToWRQClient(tftp.BuildOACK(oackOpts))
 }
 
-// newWRQReceiver arms a WRQ receiver at blksize. In disk-record push mode it also
-// attaches a bdos.RawSink (the body is re-blocked into the record's sectors, the
-// Z80 raw_record_sink authority); otherwise it is the flat receive-to-staging of
-// i121a/i121b.
+// newWRQReceiver arms a WRQ receiver at blksize. When the server writes pushes to
+// records (DiskRecordPush), the WRQ filename's storage class (bdos.Classify, the
+// "trinity-sam-disks/" prefix discriminator) picks the path:
+//   - DiskRecord ("trinity-sam-disks/X") -> a bdos.RawSink (body re-blocked into the
+//     record's sectors, the Z80 raw_record_sink authority), validated on the final
+//     block as an 819,200-byte disk record (finalizePush).
+//   - FlatFile (any other name, the default class) -> flat receive-to-staging into
+//     data, HSAVE'd into the claimed record on the final block (finalizeFlat, i121c).
+// When DiskRecordPush is off this is the pure i121a/i121b flat receive-to-staging
+// (no claim, no store) — the wire test path.
 func (r *Responder) newWRQReceiver(blksize int, filename string) *wrqReceiver {
 	rc := &wrqReceiver{blksize: blksize, filename: filename}
 	if r.cfg.DiskRecordPush {
-		rc.push = true
-		rc.sink = bdos.NewRawSink()
+		class, internal := bdos.Classify(filename)
+		if class == bdos.DiskRecord {
+			rc.push = true
+			rc.sink = bdos.NewRawSink()
+		} else {
+			rc.flat = true
+			rc.flatName = internal
+		}
 	}
 	return rc
 }

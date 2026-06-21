@@ -375,20 +375,24 @@ rrq_oack:
 ;   - bare WRQ (no options): ACK-0 (`00 04 00 00`)    — tftp.BuildACK(0)
 ;   - optioned WRQ:          OACK echoing blksize      — same build_oack path
 ;
-; A push is a "disk-record push" (i121f): the bootable build claims a FREE Trinity
-; record before the handshake and streams the pushed .mgt image straight into it
-; (raw 512-byte sectors), reusing the i122 store machinery. If no record is free,
-; the server replies ERROR(3, "no free record") and does NOT arm the receiver —
-; never touching a named record (the shared-resource invariant,
-; memory/trinity_storage_shared_resource). v1 treats EVERY WRQ as a disk-record
-; push and lets validation be the safety gate (manifest design §6.5); the future
-; i121c flat-file path uses the "trinity-sam-disks/" filename prefix as the
-; discriminator, so the prefix is stripped here but not required.
+; The WRQ filename's "trinity-sam-disks/" prefix picks the storage class (manifest
+; design §6.5; bdos_strip_disk_prefix is the bdos.Classify port):
+;   - prefixed -> DiskRecord (i121f): claim a FREE Trinity record before the handshake
+;     and stream the pushed .mgt straight into it (raw 512-byte sectors, the i122 store
+;     machinery), validated on the final block as an exactly-819200-byte "BDOS"-stamped
+;     disk image (wd_finalize).
+;   - NOT prefixed -> FlatFile (i121c, the DEFAULT): flat-accumulate into WRQ_STAGING
+;     and HSAVE the whole file into the claimed record on the final block
+;     (wd_finalize_flat) — no size validation; a flat file is any size up to the
+;     staging window.
+; Both classes claim a free record; if none is free the server replies ERROR(3, "no
+; free record") and does NOT arm the receiver — never touching a named record (the
+; shared-resource invariant, memory/trinity_storage_shared_resource).
 ;
-; The disk-record claim + the sink streaming live behind NETBOOT_HOSTTEST==0
-; (they need the bdos_seam.asm RST 8 hooks + raw_record_sink.asm, present only in
-; the bootable build). The HOSTTEST build (the i121a/i121b wire tests) leaves
-; WRQ_SINK_MODE clear and accumulates into the flat WRQ_STAGING, unchanged.
+; The claim + both finalizes live behind NETBOOT_HOSTTEST==0 (they need the
+; bdos_seam.asm RST 8 hooks + raw_record_sink.asm, present only in the bootable
+; build). The HOSTTEST build (the i121a/i121b wire tests) leaves WRQ_SINK_MODE clear
+; and just accumulates into WRQ_STAGING, ACKing the final block (no store), unchanged.
 ; ===========================================================================
 handle_wrq:
                 ; learn the client endpoint (same pattern as handle_rrq).
@@ -423,13 +427,25 @@ handle_wrq:
                 jp      srv_send_tbuf          ; reply, then return; no claim, no arm
 wrq_not_done:
 
-                ; --- disk-record push setup (bootable build): claim a free record,
-                ; arm the streaming sink. No free record -> ERROR(3), no handshake. ---
+                ; --- storage-class + free-record setup (bootable build): classify the
+                ; WRQ filename, claim a free record (both classes need one), then arm
+                ; the per-class payload sink. No free record -> ERROR(3), no handshake. ---
                 xor     a
                 ld      (WRQ_SINK_MODE), a     ; default: flat accumulate (HOSTTEST path)
                 if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                ; classify: a "trinity-sam-disks/" prefix opts into the validated
+                ; disk-record class; any other name is the DEFAULT flat-file archive
+                ; (design §6.5; bdos_strip_disk_prefix is the bdos.Classify port).
+                ld      a, 1
+                ld      (WRQ_FLAT_MODE), a     ; assume flat-file (the default class)
+                ld      hl, (PARSE_FILENAME)
+                call    bdos_strip_disk_prefix ; CY set if the prefix is present
+                jr      nc, wrq_class_done     ; no prefix -> flat-file (WRQ_FLAT_MODE=1)
+                xor     a
+                ld      (WRQ_FLAT_MODE), a     ; prefixed -> disk-record push
+wrq_class_done:
                 call    wrq_claim_record       ; CY set = a free record was claimed
-                jr      c, wrq_claimed         ; claimed: re-arm the ENC, then handshake
+                jr      c, wrq_claimed         ; claimed: arm the sink, re-arm ENC, handshake
                 ; no free record: ERROR(3, "no free record"), do not arm. The finder's
                 ; CMD17 list reads disturbed the ENC; re-arm before the ERROR reply TX.
                 call    serve_rearm_enc
@@ -442,6 +458,22 @@ wrq_not_done:
                 call    build_error            ; packet at TBUF, BC = length
                 jp      srv_send_tbuf
 wrq_claimed:
+                ; arm the per-block payload sink for the classified storage class:
+                ;   flat-file  -> WRQ_SINK_MODE=0, flat-accumulate into WRQ_STAGING
+                ;                 (HSAVE'd whole by wd_finalize_flat on the final block).
+                ;   disk-record -> reset the raw sink + WRQ_SINK_MODE=1, stream each
+                ;                 block into the record's sectors (wd_finalize validates).
+                ld      a, (WRQ_FLAT_MODE)
+                or      a
+                jr      nz, wrq_arm_flat
+                call    raw_record_sink_reset  ; RRS_FILL/LINEAR/TOTAL = 0
+                ld      a, 1
+                ld      (WRQ_SINK_MODE), a     ; handle_data streams into the record
+                jr      wrq_armed
+wrq_arm_flat:
+                xor     a
+                ld      (WRQ_SINK_MODE), a     ; handle_data flat-accumulates into WRQ_STAGING
+wrq_armed:
                 ; The claim's free-record finder did CMD17 SD list reads (and selected
                 ; the record), each disturbing the shared one-PIC Trinity controller's
                 ; ENC RX state. Re-arm before the handshake reply's ENC TX (i244).
@@ -507,19 +539,19 @@ serve_rearm_enc:
                 ei
                 ret
 
-; wrq_claim_record — claim a FREE Trinity record to stream the push into. Pick the
-; record per the configured placement STRATEGY (bdos_find_record_for_strategy reads
+; wrq_claim_record — claim a FREE Trinity record for the push. Pick the record per
+; the configured placement STRATEGY (bdos_find_record_for_strategy reads
 ; SERVE_CFG_STRATEGY: highest-free by default — manifest design §4 s3 / decision 4;
-; lowest-free or an explicit record when patched), HRECORD-select it, reset the
-; streaming sink, and enter sink mode. The pick never touches a named record (free ⇔
-; the record-list name byte is 0). BD_RECORDS (the card record count) is the
-; CSD-derived value (hardware-gated i145; the emulation E2E injects it) — 0 records ⇒
-; none free.
+; lowest-free or an explicit record when patched) and HRECORD-select it. The pick
+; never touches a named record (free ⇔ the record-list name byte is 0). BD_RECORDS
+; (the card record count) is the CSD-derived value (hardware-gated i145; the
+; emulation E2E injects it) — 0 records ⇒ none free. The per-class sink arm (raw sink
+; for DiskRecord, flat accumulate for FlatFile) is the CALLER's job (handle_wrq), so
+; both storage classes share this find+select.
 ;
-; Out: CY set + WRQ_SINK_MODE=1 + the record selected + the sink reset, if a record
-;      was placed; CY clear (WRQ_SINK_MODE stays 0) if none is available (no free
-;      record, or the explicit record is already named).
-; Mirrors client_fetch_boot's select + raw_record_sink_reset + sink-mode arm.
+; Out: CY set + WRQ_RECORD set + the record selected, if a record was placed; CY
+;      clear if none is available (no free record, or the explicit record is named).
+; Mirrors client_fetch_boot's select.
 wrq_claim_record:
                 call    bdos_find_record_for_strategy  ; -> BD_FREE_RECORD (1-based, 0 = none)
                 ld      a, (BD_FREE_RECORD)
@@ -530,9 +562,6 @@ wrq_claim_record:
                 ld      a, (BD_FREE_RECORD)    ; low byte = the record number (>=1)
                 ld      (WRQ_RECORD), a
                 call    bdos_select_record     ; HRECORD-select it (HWSADs target it)
-                call    raw_record_sink_reset  ; RRS_FILL/LINEAR/TOTAL = 0
-                ld      a, 1
-                ld      (WRQ_SINK_MODE), a     ; handle_data streams into the record
                 scf
                 ret
 wrq_no_free:
@@ -758,7 +787,7 @@ wd_next_block:
                 ld      (WRQ_DATA_LEN), hl
 
                 ; route the payload: the flat WRQ_STAGING accumulate (sink mode 0 —
-                ; the i121b host-verified path, kept for the future i121c flat file)
+                ; the i121b host path, now also the i121c FlatFile HSAVE staging)
                 ; or the i121f raw-record streaming sink (sink mode 1 — re-block into
                 ; 512-byte sectors + HWSAD each into the claimed record, so a full
                 ; 819200-byte disk image never sits whole in RAM). WRQ_SINK_MODE
@@ -768,6 +797,37 @@ wd_next_block:
                 ld      a, (WRQ_SINK_MODE)
                 or      a
                 jr      nz, wd_sink_payload
+
+                ; mode 0 in the bootable build is the FlatFile path (disk-record is
+                ; mode 1, handled above). Bound the flat staging buffer: if this block
+                ; would push WRQ_STAGE_OFFSET past WRQ_STAGING_CAP, reply ERROR(3,
+                ; "flat file too large") and disarm — never overflow WRQ_STAGING into
+                ; the stack (no silent truncation, i253). The HSAVE-of-RAM design caps a
+                ; flat file at the free section-D window (~14 KB); a bigger archive needs
+                ; the deferred record-spanning store (manifest §3), not this v1 path.
+                ld      hl, (WRQ_STAGE_OFFSET)
+                ld      de, (WRQ_DATA_LEN)
+                add     hl, de                 ; HL = staging offset after this block
+                ld      de, WRQ_STAGING_CAP
+                or      a
+                sbc     hl, de                 ; (offset+len) - cap
+                jr      c, wd_flat_fits        ; under cap: accept
+                jr      z, wd_flat_fits        ; exactly cap: accept
+                ; over cap: disarm the receiver, ERROR(3) in place of the ACK. The
+                ; ENC was disturbed by no SD op here, but re-arm for symmetry with the
+                ; other reply paths (cheap, and keeps the serve loop's RX armed).
+                xor     a
+                ld      (WRQ_RECV_ACTIVE), a
+                call    serve_rearm_enc
+                xor     a
+                ld      (ERR_CODE), a
+                ld      a, 3
+                ld      (ERR_CODE+1), a        ; big-endian code = 0x0003
+                ld      hl, err_toobig_msg
+                ld      (ERR_MSG_PTR), hl
+                call    build_error            ; packet at TBUF, BC = length
+                jp      srv_send_tbuf
+wd_flat_fits:
                 endif
 
                 ; --- mode 0: accumulate the payload into WRQ_STAGING at the offset ---
@@ -820,12 +880,20 @@ wd_after_payload:
                 jr      nc, wd_send_ack_de     ; datalen >= blksize: not the last
                 ld      a, 1
                 ld      (WRQ_DONE), a
-                ; final block: in sink mode, flush + validate the streamed record
-                ; before the final reply (ACK on success, ERROR(3) on a bad image).
+                ; final block — commit per storage class (bootable build):
+                ;   disk-record (WRQ_SINK_MODE=1) -> wd_finalize: flush + validate the
+                ;     streamed record, ACK on a valid image / ERROR(3) on a bad one.
+                ;   flat-file   (WRQ_FLAT_MODE=1)  -> wd_finalize_flat: HSAVE the staged
+                ;     bytes into the claimed record, then ACK (i121c).
+                ; HOSTTEST has neither finalize (no bdos hooks): the i121b flat receive
+                ; just ACKs the short final block, unchanged.
                 if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
                 ld      a, (WRQ_SINK_MODE)
                 or      a
                 jp      nz, wd_finalize
+                ld      a, (WRQ_FLAT_MODE)
+                or      a
+                jp      nz, wd_finalize_flat
                 endif
 wd_send_ack_de:
                 ; the blksize compare overwrote DE; reload the block to ACK
@@ -924,6 +992,45 @@ wd_invalid:
                 ld      (ERR_MSG_PTR), hl
                 call    build_error            ; packet at TBUF, BC = length
                 jp      srv_send_tbuf
+
+; wd_finalize_flat — the flat-file archive commit (i121c): the short final block has
+; arrived and the whole pushed file is flat-accumulated in WRQ_STAGING. HSAVE it into
+; the claimed record as a plain file (the DEFAULT storage class — NO 819200-byte
+; disk-record validation; a flat file is any size), claim the record's list-name entry
+; so the next push lands elsewhere, then ACK the final block (TFTP success). The server
+; mirror of netboot_client.asm client_main's flat-file write-out (the i119 bdos_save_hook
+; seam) + the disk-record path's bdos_claim_record; the Go authority is serve.go
+; finalizeFlat. A flat file is never content-rejected: the explicit "trinity-sam-disks/"
+; prefix is the only opt-in to the validated disk-record class (design §6.5).
+wd_finalize_flat:
+                ; build the HSAVE UIFA over the staging window: name, source page/offset
+                ; = WRQ_STAGING, size = bytes accumulated. The save reads physical page
+                ; (WRQ_STAGING>>14) at offset (WRQ_STAGING&&3FFF) — the same page/offset
+                ; encoding client_main uses for its STAGING buffer.
+                ld      hl, (PARSE_FILENAME)
+                ld      (BD_NAME_PTR), hl      ; bdos_name_to_uifa strips prefix + dotted suffix
+                ld      a, WRQ_STAGING >> 14
+                ld      (BD_SAVE_PAGE), a
+                ld      hl, WRQ_STAGING & &3FFF | &8000
+                ld      (BD_SAVE_ADDR), hl
+                ld      hl, (WRQ_STAGE_OFFSET) ; total bytes accumulated
+                ld      (BD_SAVE_SIZE), hl
+                call    bdos_fill_save_uifa
+                call    bdos_save_hook         ; HSAVE (real B-DOS only)
+
+                ; CLAIM the record's central record-LIST name entry so the next push
+                ; lands on the next free record (shared with the disk-record path, i121g;
+                ; bdos_find_free_record keys "free" off this list name). The name comes
+                ; from the WRQ filename, hardened identically (bdos_build_claim_entry).
+                ld      hl, (PARSE_FILENAME)
+                ld      (BD_CLAIM_NAME_PTR), hl
+                call    bdos_claim_record
+
+                ; ACK the final block (TFTP success). DE was clobbered by the HSAVE +
+                ; claim; reload the just-accepted block (== WRQ_ACKED). wd_send_ack
+                ; re-arms the ENC the HSAVE/claim SD transactions disturbed before the TX.
+                ld      de, (WRQ_ACKED)
+                jp      wd_send_ack
                 endif
 
 ; srv_send_tbuf — wrap the TFTP packet at TBUF (length BC) as a UDP frame (server
@@ -1301,6 +1408,8 @@ err_nofree_msg:   defm "no free record"
                   defb 0
 err_badimage_msg: defm "invalid disk record"
                   defb 0
+err_toobig_msg:   defm "flat file too large"
+                  defb 0
                 endif
 
 ; ===========================================================================
@@ -1609,18 +1718,40 @@ WRQ_DATA_LEN:     defs 2                 ; the last DATA block's payload length
 WRQ_DONE:         defs 1                 ; 1 = a short final block ended the xfer
 
 ; Disk-record push state (i121f). WRQ_SINK_MODE picks the per-block payload route:
-;   0 = flat accumulate into WRQ_STAGING (the HOSTTEST wire path, future i121c),
-;   1 = stream into a claimed Trinity record via raw_record_sink (the bootable
-;       push path). handle_wrq sets it (1 on a successful free-record claim);
-;       handle_data reads it. It lives in both builds (the default-clear at the
+;   0 = flat accumulate into WRQ_STAGING (the HOSTTEST wire path + the i121c FlatFile
+;       HSAVE staging),
+;   1 = stream into a claimed Trinity record via raw_record_sink (the i121f DiskRecord
+;       push path). handle_wrq sets it per the classified storage class (1 for a
+;       prefixed DiskRecord push, 0 for a FlatFile push); handle_data reads it. It
+;       lives in both builds (the default-clear at the
 ;       top of handle_wrq runs in the HOSTTEST build too), so it is unconditional.
 WRQ_SINK_MODE:    defs 1                 ; 0 = flat WRQ_STAGING, 1 = raw-record sink
 WRQ_RECORD:       defs 1                 ; the claimed record number streamed into (bootable)
 
-; The pushed file accumulates here (sink mode 0). It sits in section D (&C000),
-; flat RAM under the host harness; the bootable build (i121d) pages RAM in before
-; using it, the same reuse the dumper makes of this window (STAGE equ &C000).
-WRQ_STAGING:      equ &C000
+; WRQ storage class (i121c). handle_wrq classifies the WRQ filename via the
+; "trinity-sam-disks/" prefix (bdos_strip_disk_prefix, the bdos.Classify port):
+;   0 = DiskRecord  — prefixed push: stream into the record + validate as an
+;       819200-byte disk image (the i121f path, WRQ_SINK_MODE=1).
+;   1 = FlatFile    — the DEFAULT class (no prefix): flat-accumulate into
+;       WRQ_STAGING and HSAVE into the claimed record on the final block
+;       (wd_finalize_flat, WRQ_SINK_MODE=0). Mirrors serve.go wrqReceiver.flat.
+; Bootable-only (the classify + both finalizes live behind NETBOOT_HOSTTEST==0).
+WRQ_FLAT_MODE:    defs 1                 ; 1 = flat-file (HSAVE), 0 = disk-record push
+
+; The pushed file flat-accumulates here (sink mode 0) for the FlatFile class (i121c).
+; It sits at &C800 — AFTER the serve binary (which ends ~&C4E8: the &Cxxx tail holds
+; the trinload-return code tr_terminate at &C0A3, the TR_* exit state, and the
+; once-at-boot CSD-read overlay, all BELOW &C800 and untouched) and BELOW the stack
+; (emulation SP &6FFE; on hardware the inherited stack is low, the same assumption the
+; netboot_client.asm STAGING buffer relies on). This mirrors client_main's flat-file
+; staging: a dedicated RAM buffer the HSAVE reads via physical page (WRQ_STAGING>>14)
+; at offset (WRQ_STAGING&&3FFF) — no HMPR paging. WRQ_STAGING_CAP bounds it to the
+; free window up to &FF00 (a 256-byte stack guard below &10000); wd_next_block rejects
+; an over-cap push with ERROR(3) rather than overflow (no silent truncation, i253).
+; ROM1 is off at serve runtime, so &C800-&FFFF is RAM. (The HOSTTEST i121b receive
+; test reads the WRQ_STAGING symbol, so the address move is transparent to it.)
+WRQ_STAGING:      equ &C800
+WRQ_STAGING_CAP:  equ &FF00 - WRQ_STAGING    ; max bytes a flat push may stage (&3700 = 14080)
 
 RX_LEN:           defs 2
 TFTP_PKT_LEN:     defs 2

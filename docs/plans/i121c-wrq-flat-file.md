@@ -12,6 +12,23 @@ Z80 (`netboot_serve.asm`) treat *every* WRQ as a disk-record push, so a flat fil
 exactly 819,200 bytes) is **rejected** with `ERROR(3, "invalid disk record")`. After
 this item a non-prefixed push is accepted and HSAVE'd.
 
+## The prefix becomes significant (the §6.5 default flip)
+i121c isn't only additive — it realizes §6.5's classification: the **default flips to
+flat-file**, and the disk-record push now **requires** the `trinity-sam-disks/` prefix
+(the asm comments already anticipate exactly this: "the future i121c flat-file path uses
+the prefix as the discriminator"). Consequences, all in this one cohesive change:
+- The disk-record *storage* path (validate → claim → sectors) is **byte-identical** —
+  only the routing-by-class changes — so the SD-write path stays as hardware-validated;
+  the emulation gate (`TestServeDiskPushTrinloadDeployable`) re-runs it via a prefixed
+  name.
+- **Existing disk-record tests** (Go `serve_test.go` + Z80
+  `netboot_serve_wrq_record_test.go`) push non-prefixed names and relied on the v1
+  "every WRQ = disk-record" placeholder → they move to `trinity-sam-disks/…` names.
+- **Deploy tooling** (`tools/trinload-push/trinpush.py`) prepends `trinity-sam-disks/`
+  for disk-image pushes, so Pete's `trinpush <image>` workflow keeps producing disk
+  records without typing the prefix; a stock `tftp put X` correctly defaults to flat.
+  The hardware push uses the prefix from now on (the tool supplies it).
+
 **Scope (single-record).** The registry row scopes i121c to a single-record HSAVE,
 mirroring i119's `TestClientE2EConfirm`. The file is bounded by the `WRQ_STAGING`
 window (`&C000`, the section-D 16 KB RAM staging window the dumper/i121d already page
