@@ -4214,6 +4214,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 717, role: completing}
   parent: i231b
 
 - id: i231b-b4
