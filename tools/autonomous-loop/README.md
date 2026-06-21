@@ -72,6 +72,20 @@ without any per-session setup. `--pete-present` and `--pete-away` still work as
 before: an explicit flag always overrides the marker (`--pete-away` wins over the
 marker; `--pete-present` wins when there is no marker).
 
+The same `pete-present` marker also **gates the monitor itself (i240)**: while it
+exists, the monitor **suppresses only the time-based hang-timeout nudge** (the "if
+you are idle, resume" line that fires on a timer regardless of what Pete is doing —
+the one that garbles his typing). The **file-driven transitions stay live even while
+Pete is present**, because they are agent-initiated, not unsolicited interrupts:
+`task-done` (→ `/context` + checkpoint), `wound-down` (→ `/clear` + restart), and
+`quiescent` (the backlog-drained hold) all still run — so Pete can trigger a
+wind-down **without** first marking himself away. On each presence transition the
+monitor stuffs a one-shot line into the session: an **arrival** line when the marker
+appears (`ALOOP_PETE_ARRIVAL`) and a **departure** line when it is removed
+(`ALOOP_PETE_DEPARTURE`). So `touch ~/.claude/autonomous-loop/pete-present` both
+surfaces Pete's items in `ready` and silences the periodic nudges; `rm` it to hand
+control fully back to autonomous mode.
+
 ## Run
 
 ```sh
@@ -83,7 +97,8 @@ Tunable via env: `ALOOP_WINDOW`, `ALOOP_PROMPT`, `ALOOP_POLL`,
 `ALOOP_HANG_TIMEOUT`, `ALOOP_CLEAR_SETTLE`, `ALOOP_CONTEXT_SETTLE`,
 `ALOOP_SUBMIT_SETTLE`, `ALOOP_CHUNK_SIZE`, `ALOOP_CHUNK_DELAY`,
 `ALOOP_NUDGE_TRIES`, `ALOOP_NUDGE_VERIFY_WAIT`, `ALOOP_TURN_MARKER`,
-`ALOOP_IDLE_POLL`, `ALOOP_IDLE_CONFIRM`, `ALOOP_IDLE_MAX`, `ALOOP_LOG`
+`ALOOP_IDLE_POLL`, `ALOOP_IDLE_CONFIRM`, `ALOOP_IDLE_MAX`, `ALOOP_LOG`,
+`ALOOP_PETE_ARRIVAL`, `ALOOP_PETE_DEPARTURE` (the i240 presence-edge lines)
 (see `monitor-nudge-delivery.md`), and — for the i103 quiescent hold —
 `ALOOP_PROJECTS_DIR` / `ALOOP_TRANSCRIPT` (where the watcher reads transcript
 growth; defaults to the newest `*.jsonl` under `~/.claude/projects`).

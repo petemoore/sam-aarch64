@@ -3,6 +3,15 @@ name: ci
 on:
   push:
     branches: [main]
+    # Doc-only pushes to main skip CI entirely: prose docs + any markdown carry
+    # no build/test risk, and the project lands them DIRECTLY on main (no PR) —
+    # so there is nothing for the gate to protect. Only the `push` trigger is
+    # filtered; `pull_request` below is deliberately NOT filtered, so every PR
+    # still runs all required checks (filtering them on PRs would leave the
+    # required contexts permanently "expected" and block the merge).
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   pull_request:
 
 # build-image builds the dev image from tools/Dockerfile.dev and pushes it
