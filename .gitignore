@@ -46,6 +46,10 @@ tests/release/release.s.tbn
 !.claude/
 .claude/*
 !.claude/settings.json
+# Project skills are version-controlled (shared with every agent in the repo);
+# re-include the skills tree (the dir, then its contents — the un-ignore dance).
+!.claude/skills/
+!.claude/skills/**
 .claude/worktrees/
 
 # i62 experiment artifacts: Atom Lite hard-disk images are generated

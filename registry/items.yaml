@@ -3074,7 +3074,7 @@
   title: "Meta: root-cause recurring backlog-incoherence (untracked deps on unfinished work) + assess instruction/doc bloat"
   description: |
     RECURRING FAILURE (Pete, 2026-06-21, i87b incident): an item reached the ready-queue TIP while depending on unfinished work not tracked as a depends_on edge. i87a (capture rom.bin+eeprom.bin) was correctly split into i87a-b1 (eeprom+rom0, DONE) + i87a-b2 (rom1, OPEN), but i87b (study the captured data) depended on the DONE leaf i87a-b1, not the OPEN leaf i87a-b2 -> i87b surfaced at rank 1 though rom.bin (needs rom1) did not exist. CONFIRMED ROOT CAUSE: `registry split` ALREADY auto-rewrites a parent's dependents to its children (mutators.go:491), so the split was sound. The real bug: i87b was CREATED depending on the DONE leaf i87a-b1 (not the umbrella i87a, which the split-rewrite protects) — a done leaf reads as 'satisfied', so its open sibling was silently missing. A SEMANTIC wrong-target error at dependency-CREATION time; NOT a split bug, NOT a hand-edit-vs-CLI bug (the same wrong target via the CLI surfaces too). FIX MENU (escalating): (a) DONE here — CLAUDE.md rule 'depend on the umbrella for the whole, never a single done leaf' + the i87b example (the docs fix Pete asked for); (b) a CLI guard in dep-add/add that WARNS when the target is a DONE leaf of an umbrella with OPEN siblings (the mechanical at-source catch); (c) a registry SKILL so agents reach for the validated CLI (where the guard fires) AND to de-bloat CLAUDE.md by moving the registry workflow into an on-demand skill; (d) a CI registry-coherence lint (warning-level). b/c/d + the broader consolidation are Pete's design call. TODO: audit the open registry for OTHER tips depending on a done-leaf-with-open-siblings.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
 
@@ -3101,9 +3101,11 @@
 - id: i191c
   title: registry workflow as an on-demand skill + CLAUDE.md registry-section de-bloat
   description: ""
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 527, role: completing}
   parent: i191
 
 - id: i192
