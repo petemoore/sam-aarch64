@@ -3972,6 +3972,8 @@
   status: DONE
   kind: leaf
   owner: pete
+  prs:
+    - {num: 674, role: completing}
 
 - id: i220
   title: "Comprehensive Go doc comments: package docs + every exported func/method/type"
