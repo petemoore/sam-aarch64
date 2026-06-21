@@ -3172,7 +3172,7 @@
   title: "Turn-end safety valve: make stop-after-merge structural, not discretionary"
   description: |
     The autonomous-loop context protection (touch task-done -> end turn -> monitor /clears for a fresh context) relies on the agent CHOOSING to stop after each merged PR — the easiest step to skip mid-flow. 2026-06-20: a session never stopped, accumulating ~10 merged PRs into one polluted context (judgment-picking + missing-edge blindness followed). Make end-turn-after-merge STRUCTURAL: e.g. the monitor detects 'new merge to main + no task-done while a turn is still running' and intervenes, and/or a gh-pr-merge wrapper auto-touches task-done. Design + own PR.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
