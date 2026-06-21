@@ -1,220 +1,290 @@
 # i229 — combined patched-bootblock image (Stage 1 of the i135c no-brick plan)
 
 Ephemeral plan. Deleted by the PR that completes i229. Stage 1 of the staged
-i135c plan (Pete, 2026-06-23): **build + emulation-verify the combined patched
-bootblock**, so it can be RAM-tested (i230) and then flashed (i135c) — never
-rushing boot code.
+i135c plan: **build + emulation-verify the combined patched bootblock**, so it can
+be RAM-tested (i230, Pete-present) and then flashed (i135c) — never rushing boot
+code (prime directive).
 
-## Load-bearing constraints (found during planning)
+**q50 is RESOLVED (Pete, 2026-06-25) and deleted** — i229 is UNBLOCKED. The
+resolution is recorded verbatim in the i229 registry row; the three decisions it
+settled are folded into this plan below. (Earlier drafts of this file said "i229
+now depends on q50 / must not be built until answered" — that prose is stale and
+has been removed.)
 
-1. **Colin's bootblock is proprietary and must NOT enter the repo.**
-   `docs/notes/samboot-bootblock-analysis.md` §7 cites it by *file offset* into
-   `~/sam-archive/samboot-capture/eeprom.bin`, never copying bytes in. So the
-   flashable image (Colin's ~350 B + our inject) **cannot be a committed binary**.
-   Stage 1 is a **splice tool** (host Go or a script) that, at build/flash time,
-   reads chunk 1 from the *local* `eeprom.bin`, patches our inject in, and writes
-   the combined ≤1024-byte image to a local (git-ignored) path. The repo holds
-   only our inject source + the tool.
+## The q50 decisions (the design, settled)
 
-2. **`samboot_stripes` is an unimplemented stub.** `src/netboot/samboot_inject.asm`
-   lines 80-87: the real MODE-2 palette+banner redraw is an empty
-   `if defined(NETBOOT_HOSTTEST)==0` block (only the call-probe counter runs). So
-   **do NOT replace Colin's original screen-redraw with the inject's stripes** —
-   that would blank the screen on the fall-through (no-auto-boot) path. Keep
-   Colin's redraw; insert only the config-decision.
+1. **SPLICE (3 bytes change).** At bootblock file offset `&9E` (logical `&409E`)
+   the original `CALL &805F` is bytes `CD 5F 80`. Change it to `CALL inject`
+   where `inject` lives in the free space at file `&15E..&3FF` (logical
+   `&415E..&43FF`). The injected routine:
+   ```
+   inject: call  &805F                 ; the real B-DOS init (returns on hardware)
+           call  samboot_read_config    ; i176: CY+HL=record (auto-boot) or NC (none)
+           ret   nc                     ; no auto-boot -> RET to &40A1 = restore: (verbatim)
+           ld    a, l
+           ld    (BD_BOOT_RECORD), a
+           jp    bdos_boot_record        ; i122a: HRECORD select + ALHK boot, no return
+   ```
+   Only the 3 bytes at `&409E` change; `restore:` (`&40A1`) and the screen-redraw
+   tail (`&40A9..&40BB`, `CALL &06B5` + pokes + `JP &102F`) stay byte-identical.
+   On the no-auto-boot path `inject` RETs to `&40A1` (the address after the
+   `CALL inject` at `&409E`), so Colin's own screen redraw + BASIC exit run exactly
+   as before — **our code never tramples the screen**, so no `samboot_stripes`
+   redraw is needed (this supersedes the i135d prototype's i112 stripes fold; the
+   stripe PIXELS are an i230 hardware concern).
 
-## The splice (low-risk)
+2. **CONFIG READ: BY-NAME via `find_index`** for the `"SAMBOOT Config  "` chunk
+   (16 bytes, two trailing spaces) per `samboot.md §4` — NOT by a fixed chunk
+   number. This is exactly what `samboot_read_config` (src/netboot/samboot_config.asm,
+   i176) already does. The 1 KB scratch-buffer RAM home is an emulation-verified
+   implementation detail (this plan's choice), not a Pete call.
 
-Colin's bootblock (loaded at `&4000`): save paging → load B-DOS (chunks 2-13 →
-`&8000`) → `CALL &805F` (B-DOS init) → screen redraw → `restore:` (restore paging,
-`JP` BASIC). Hook site (analysis §7.2): after `CALL &805F` and before `restore:`,
-with ~683 B free at EEPROM `&00015E-&000408` (→ `&415E` when loaded at `&4000`).
+3. **VERIFY SCOPE: LIMITED.** Assert (a) the **spliced** chunk-1 LOADS + runs
+   coherently to `&805F` (the 12 `read_chunk` B-DOS loads, then `CALL inject` ->
+   `inject` -> `call &805F`), and (b) the decision logic (config -> dispatch) via a
+   host decision test. The post-`&805F` in-chain decision (the config read + the
+   ALHK record boot) and the stripe PIXELS go to the **i230 hardware test**. Do
+   **NOT** teach the emulator past B-DOS init (i232) — `&805F` does not return in
+   the Go core, by design.
 
-Insert, at the hook, a **config-decision** that runs AFTER Colin's redraw and
-BEFORE `restore:`:
+## Confirmed byte-level map (verified against the local capture, 2026-06-25)
+
+`chunk 1` = `~/sam-archive/samboot-capture/eeprom.bin` file offset `0`, runs at
+`ORG &4000`. Verified directly from the bytes:
+
+| file off | logical | bytes | meaning |
+|---|---|---|---|
+| `&9E` | `&409E` | `CD 5F 80` | `CALL &805F` — **the 3 bytes the splice patches** |
+| `&A1` | `&40A1` | `3E 00 D3 FA 3E 00 D3 FB` | `restore:` (`LD A,0/OUT (250)/LD A,0/OUT (251)`) |
+| `&A9` | `&40A9` | `CD B5 06 ...` | screen tail `CALL &06B5` + pokes + `JP &102F` |
+| `&15D` | `&415D` | `C9` | last bootblock byte (`RET`) |
+| `&15E..&3FF` | `&415E..&43FF` | all `00` | **674 free bytes — the injection space** |
+
+Resident bootblock helpers (by-NUMBER, NOT reused — see below): `read_chunk &40BD`,
+`get_chunk &412C`, `eeprom_enable &4103`, `eeprom_disable &410A`, `wait_ready &411A`.
+**There is NO `find_index` in the bootblock** — BY-NAME (q50 decision 2) requires
+bringing our own `find_index`, so the inject is self-contained (below) and does NOT
+couple to Colin's proprietary resident addresses.
+
+## Byte budget — it fits (the make-or-break finding)
+
+Free space = **674 bytes**. The minimal read-only closure the inject needs:
+
+| piece | ~bytes |
+|---|---|
+| `inject` glue (call &805F / read / ret nc / ld / jp) | ~14 |
+| `samboot_read_config` glue + `samboot_cfg_name` (16) | ~74 |
+| `wait_ready` (from samboot_config.asm) | ~31 |
+| `find_index` + `index_loop` + `index_back` | ~81 |
+| `check_index` + `check_loop` + `check_return` + `index_store`(18) code | ~29 |
+| `read_chunk` + `read_cloop` | ~58 |
+| `eeprom_enable` + `eeprom_disable` + `exit` + `write_disable` | ~36 |
+| `get_chunk` + `chunk_loop` | ~12 |
+| `bdos_boot_record` + `bdos_select_record` (2 RST-8 shims) | ~25 |
+| **total code** | **~360** |
+
+~360 < 674 (≈310 B margin). The **full** `eeprom.asm` + `bdos_seam.asm` is ~818 B
+(over) because of the write/delete/find-empty/read-index paths and the
+HSAVE-write/claim path — auto-boot needs NONE of them. So the bootblock build must
+**conditionally exclude** the unneeded routines (the gating pattern bdos_seam.asm
+already uses) and **relocate** the 1 KB `chunk` buffer + the index/name storage out
+of the flashed image into a RAM scratch home.
+
+`find_index` reads each 64-byte index header inline (it does NOT call `read_index`),
+and `read_chunk` ends in `exit` which calls `write_disable` — so the kept set is
+exactly: `find_index, check_index (+index_store), read_chunk, eeprom_enable,
+eeprom_disable, exit, write_disable, get_chunk`. Everything else is gated out.
+
+## Implementation
+
+### File 1 — `src/netboot/eeprom.asm` (gate + relocate, behind `SAMBOOT_BOOTBLOCK`)
+
+This file is vendored from trinload but already lightly adapted (its `wait_ready`
+is commented out). Add `SAMBOOT_BOOTBLOCK`-conditional guards that change **zero
+bytes** for every existing includer (none of them define the flag) and only take
+effect for the bootblock build:
+
+1. **Relocate storage.** Wrap the storage block (`value`/`part`/`total`/`name`/
+   `description`/`chunk`, lines 51-62) and `index_store` (line 237):
+   ```
+   if defined(SAMBOOT_BOOTBLOCK)
+   value       equ SAMBOOT_SCRATCH+0
+   part        equ SAMBOOT_SCRATCH+1
+   total       equ SAMBOOT_SCRATCH+2
+   name        equ SAMBOOT_SCRATCH+3
+   description equ SAMBOOT_SCRATCH+19
+   chunk       equ SAMBOOT_SCRATCH+65        ; 1 KB, ends SAMBOOT_SCRATCH+1089
+   index_store equ SAMBOOT_SCRATCH+1089      ; 18 bytes
+   else
+   value:       DEFB 0
+   ... (verbatim original) ...
+   index_store: DEFS 18
+   endif
+   ```
+   (`SAMBOOT_SCRATCH` is defined by the includer — see File 2.) The EQU layout
+   mirrors the verbatim DEFS sizes exactly.
+2. **Gate the BASIC JP jump table** (lines 40-47) and the **unused routines**
+   (`count_empty`, `find_empty`, `delete_index`, `read_index`, `write_index`,
+   `write_chunk`+`write_256`, `write_enable`, `write_delay`) behind
+   `if defined(SAMBOOT_BOOTBLOCK)==0 ... endif`. Keep `find_index`, `check_index`,
+   `read_chunk`, `eeprom_enable`, `eeprom_disable`, `exit`, `write_disable`,
+   `get_chunk` unconditionally (their bytes are unchanged).
+   - NOTE: `exit` (line 448) tail-calls `write_disable` — keep `write_disable`.
+     `find_index`/`read_chunk` use `eeprom_enable/disable` + `wait_ready` (the
+     latter supplied by samboot_config.asm). `read_chunk` uses `get_chunk`.
+3. Run `go test ./tools/netboot-oracle/...` after this edit to confirm the
+   existing includers (smoke/server/serve/client/dumper) still build & pass
+   byte-for-byte — the guards must be invisible to them.
+
+### File 2 — `src/netboot/samboot_bootblock.asm` (NEW — the real splice inject)
+
+Replaces the i135d prototype `samboot_inject.asm` (which folded the now-obsolete
+`samboot_stripes`). Structure:
+```
+                org     SAMBOOT_INJECT_ORG          ; &415E (the free space)
+SAMBOOT_SCRATCH:        equ &E000                   ; 1 KB+ RAM scratch home for the
+                                                    ; config read. EMULATION-VALID (flat
+                                                    ; RAM in the harness); the HARDWARE-SAFE
+                                                    ; address is confirmed at i230 (Pete
+                                                    ; present, post-B-DOS-init free RAM).
+SAMBOOT_BOOTBLOCK:      equ 1                        ; -> eeprom.asm gates+relocates
+
+inject:         call    &805F                       ; real B-DOS init (no return in the Go core)
+inject_decision:                                    ; host decision test enters HERE (skips &805F)
+                call    samboot_read_config
+                ret     nc
+                ld      a, l
+                ld      (BD_BOOT_RECORD), a
+                jp      bdos_boot_record
+
+                include "samboot_config.asm"        ; samboot_read_config + wait_ready + (gated) eeprom.asm
+                ; bdos_boot_record + bdos_select_record only — NOT the write/claim path.
+                ; Pull them in WITHOUT NETBOOT_WANT_CLAIM (excludes the WRQ write path,
+                ; bdos_seam.asm:663-928) and WITHOUT NETBOOT_HOSTTEST (keeps the RST-8
+                ; dispatch so bdos_boot_record + BD_BOOT_RECORD are defined). If the
+                ; ungated bdos_seam.asm still pulls in unused routines (bdos_find_free_record,
+                ; bdos_inspect_record, ...) that push the image over 674 B, add a
+                ; `SAMBOOT_BOOTBLOCK`-gate around those too (same pattern), keeping only
+                ; bdos_boot_record + bdos_select_record + BD_BOOT_RECORD.
+                include "bdos_seam.asm"
+```
+- samboot_config.asm currently does `org &8000` at its top — for this build that
+  org must NOT fire (the inject supplies `org &415E`). Gate samboot_config.asm's
+  `org &8000` behind `if defined(SAMBOOT_BOOTBLOCK)==0` (one-line guard), mirroring
+  bdos_seam.asm's `NETBOOT_STANDALONE` org guard.
+- After assembling, **check the end address ≤ `&43FF`** (assert in the Makefile
+  step, see File 4) — the inject MUST fit the 674 free bytes.
+
+### File 3 — `tools/samboot-splice/main.go` (NEW — the splice tool)
+
+A host Go tool. Reproducibly produces the combined ≤1024-byte chunk-1 image; the
+proprietary capture bytes are NEVER committed (output goes to a git-ignored path).
+```
+flags: -eeprom <path>   default ~/sam-archive/samboot-capture/eeprom.bin
+       -inject <path>   default build/samboot_bootblock.bin
+       -out <path>      default build/samboot_bootblock_chunk1.bin (git-ignored)
+logic:
+  1. read eeprom[0:1024]  -> chunk1 (the original bootblock; offset 0 = device &2000)
+  2. read inject bytes    -> must be <= 674 (else error: "inject too big for free space")
+  3. assert chunk1[0x9E:0xA1] == {0xCD,0x5F,0x80} (the CALL &805F splice site; else
+     error — the capture/layout changed, do not guess)
+  4. injectLogical = 0x415E; lo,hi = injectLogical&0xFF, injectLogical>>8
+     patch chunk1[0x9E:0xA1] = {0xCD, lo, hi}   (CALL inject)
+  5. copy inject bytes into chunk1[0x15E : 0x15E+len(inject)]
+  6. assert len(chunk1)==1024; write chunk1 to -out
+```
+Add a unit test `tools/samboot-splice/main_test.go` that runs the splice against a
+SYNTHETIC 1 KB chunk-1 (CD 5F 80 at 0x9E, zeros at 0x15E+) + a synthetic inject
+blob, and asserts the 3 patched bytes + the spliced region + the untouched
+`restore:`/screen tail — so the tool is tested WITHOUT the proprietary capture.
+
+### File 4 — `Makefile` wiring
+
+- Replace the `netboot-samboot-inject` target's source with `samboot_bootblock.asm`
+  (org `&415E`; `SAMBOOT_BOOTBLOCK`/`SAMBOOT_SCRATCH`/`SAMBOOT_INJECT_ORG` are set
+  inside the asm via equ, so no `-D` flag is needed; pass nothing that defines
+  NETBOOT_HOSTTEST/NETBOOT_WANT_CLAIM). Emit `build/samboot_bootblock.bin` + `.map`.
+  Add a post-assemble shell assert that the highest address in the `.map` is
+  `<= &43FF` (fail the build otherwise).
+- Add `samboot-splice: build/samboot_bootblock.bin` -> `go run ./tools/samboot-splice`
+  producing `build/samboot_bootblock_chunk1.bin`. (Skips gracefully — exit 0 with a
+  log — if the proprietary `eeprom.bin` is absent, like the other capture-gated
+  convenience targets; the reset-chain TEST is where the no-silent-skip rule
+  applies, not this build helper.)
+- Add `build/samboot_bootblock_chunk1.bin` (and any `build/*chunk1*`) to
+  `.gitignore` — it contains proprietary capture bytes.
+
+### File 5 — `tools/netboot-oracle/z80/samboot_bootblock_test.go` (NEW — both verifications)
+
+Two test groups, both honest to the q50 LIMITED scope:
+
+**(A) Decision logic** (port samboot_inject_test.go, minus the stripes probe; enter
+at the `inject_decision` symbol so &805F is skipped). Build = `samboot_bootblock.bin`.
+Reuse `runInject`-style: AttachIO(ENC28J60) + AttachBDOS(store), optionally
+`ProgramNamedChunk(slot, samboot.ChunkName, cfg)`, `CallEntry("inject_decision")`,
+assert `store.Selected()`/`store.Boots()` for: auto-boot rec 7, second record 0x12,
+mode=none (no boot), absent chunk (no boot), bad version (no boot). This exercises
+the gated+relocated eeprom.asm reader (scratch at &E000 is writable in the flat
+harness), closing the "did the gating break the reader" gap.
+
+**(B) Spliced reset chain** (the i229 headline; mirror samboot_real_boot_test.go's
+`TestRealBootLoadsBDOSCoherently`, but with the SPLICED chunk-1). Use
+`requirePrivateCapture` (FAILS if absent unless `SKIP_PRIVATE_TESTS=true` — the i253
+rule; NO silent skip). Steps:
+  1. load rom.bin + eeprom.bin; build the device-linear EEPROM
+     (`deviceLinearEEPROM`); **replace device `&2000..&23FF` (= file offset 0,
+     chunk 1) with the spliced image** (run the splice in-Go from
+     `build/samboot_bootblock.bin` + the captured `eeprom[0:1024]`, OR shell out to
+     the splice tool and read its output — prefer in-Go to keep the test
+     self-contained).
+  2. boot from reset (`RunBootFrom(0x0000, StepCap)`), trace PCs.
+  3. assert: `read_chunk &40BD` hit **12** times (B-DOS chunks 2..13 still load —
+     the splice didn't break the loader); the splice site `&409E` (now `CALL inject`)
+     is reached; `&415E` (`inject`) is reached; and `&805F` is reached **via the
+     inject** (i.e. `inject`'s `call &805F`, not the original direct call). The run
+     then halts inside B-DOS init (finalPC ≥ &8000) — expected; do NOT assert past
+     it (q50 decision 3 / i232).
+  4. a control assertion that `&409E` now disassembles to `CD <lo> <hi>` pointing at
+     `&415E` (read the spliced chunk-1 bytes), proving the patch is the 3-byte
+     `CALL inject` and `restore:`/screen tail at `&40A1`/`&40A9` are byte-identical
+     to the original capture.
+
+### Cleanup / hygiene (for the §3 review)
+
+- DELETE `src/netboot/samboot_inject.asm` + `samboot_inject_test.go` (superseded by
+  `samboot_bootblock.asm` + `samboot_bootblock_test.go`; the q50 design drops the
+  `samboot_stripes` fold). Update any Makefile/CI references.
+- DELETE this plan file in the completing PR.
+- Update `docs/notes/samboot-bootblock-analysis.md` if its §3 TODO-hook prose now
+  conflicts with the settled q50 splice (point it at this design / the registry row).
+
+## Verification (run before opening the PR)
 
 ```
-    call  samboot_read_config   ; i176: CY+HL=record (auto-boot) or NC (no)
-    jr    nc, <fall through to restore:>
-    ld    a, l
-    ld    (BD_BOOT_RECORD), a
-    jp    bdos_boot_record       ; i122a: HRECORD + ALHK, no return on hardware
+make netboot-samboot-inject              # assembles samboot_bootblock.bin, asserts <= &43FF
+make samboot-splice                      # produces the git-ignored combined chunk-1
+go test ./tools/netboot-oracle/...       # decision logic (A) + spliced reset chain (B)
+go test ./tools/samboot-splice/...       # splice tool unit test (synthetic, no capture)
+make ci-netboot-z80                      # the netboot Z80 CI aggregate
+make registry-sync-check                 # registry views in sync
 ```
-
-placed in the free space (`&415E+`), with a `CALL`/`JP` spliced at the hook.
-**Reuse Colin's resident EEPROM routines** (`read_chunk`/`find_index` already in
-the bootblock at the §7.1 addresses) where the config read needs them, to save
-space — confirm the calling contract matches `samboot_config.asm`'s expectations,
-else include the minimal reader. Budget the spliced code against the 683 free
-bytes (the decision itself is tiny; `samboot_read_config` + the config-chunk read
-is the bulk — verify it fits or trim).
-
-**Exact byte-level splice is determined with the local capture disassembly
-in-hand** (z80dis on `eeprom.bin` chunk 1, per §7.1) — the addresses of the
-redraw, `restore:`, and the resident `read_chunk` are read from the actual bytes,
-not from memory.
-
-## Agreed scope + workflow (Pete, 2026-06-23)
-
-The RAM test (i230) exercises the patched bootblock's **new, in-memory parts**
-bundled into ONE Go-emulation test that **boots from address 0 with the real
-`rom.bin`** (the `samboot_real_boot` harness — so `PALTAB` is real, NOT seeded):
-1. **draw the screen** — the rainbow stripes (verbatim ROM `&ED1B` port, already
-   landed) building `LINICOLS` from the real `PALTAB`, + the MGT banner (RST 16);
-   the Go harness has no screen render, so assert it *wrote* `LINICOLS`/screen RAM
-   and did not crash (Pete: "even if we can't see the screen, it should write to
-   the screen and not crash in emulation");
-2. **fetch the SAMBOOT config** from the modelled Trinity EEPROM (`samboot_read_config`);
-3. **boot the configured record** (RST 8 ALHK, captured via `AttachBDOS`);
-4. a **second case where no record is configured** → it falls through to the
-   BASIC exit (no ALHK).
-
-SimCoupé is NOT used here (it doesn't model the Trinity read/boot); bundling the
-screen into the Go test keeps the new parts together.
-
-**Workflow (the i228 lesson):** build → Go-emulation test (above) → **trinload RAM
-test on Pete's real SAM** (push the bundled payload; confirm screen + config-boot
-+ no-boot) → **only then merge the PR** → then, as a separate step, the real
-EEPROM flash (i135c). Do the hardware test BEFORE the PR lands, so a hardware
-failure is fixed in the same PR rather than a follow-up.
-
-## Boot-screen reproduction recipe (from the ROM, 2026-06-23 research)
-
-The rainbow stripes are rendered LIVE by the ROM line-interrupt ISRs, not by the
-`&ED1B` data write. Reproducing the MGT boot screen (in the bootblock AND a
-viewable trinload demo) requires, in order — all ROM addresses cited in the
-research / `docs/sam/...annotated-disassembly.txt`:
-
-1. **Interrupt state live:** `IM 1`, `I=0`, `(ANYIV &5B70)=&0049` (all already set
-   post-boot — do NOT clobber). The fragment's omission was step (e).
-2. **CLUT/border baseline = index 0:** clear paper to CLUT index 0; set border to
-   CLUT index 0 (`SETBORD &F13A` in the ROM1-reachable demo; inline `OUT (&FE),A`
-   with bits 0-2,5=0 + bit3 in the bootblock where ROM1 is paged out). `LINEINT`
-   writes ONLY CLUT reg 0 (`&F8`) per line; border = a CLUT-index lookup, so both
-   track CLUT-0. Do NOT write `&FE` per scan line.
-3. **Build LINICOLS:** the existing verbatim `&ED1B` port (`samboot_stripes`) —
-   `PALTAB+1`→`LINICOLS`, 4-byte entries, step scan +11 to 166, `&FF` terminator.
-4. **Print position:** `CALL CLSLOWER &06B5` (ROM0, always callable) — selects
-   channel K + sets `SPOSNL` to the lower window. THIS fixes the top-left banner.
-5. **Print the banner:** faithfully via `XOR A / CALL UTMSG &3DB0` + the é/space/
-   size/"K" tail (`&0F7F` 3892-3915), reusing the ROM text at `&F5DD` — preferred
-   over our private string.
-6. **Arm + render:** `EI` (so FRAMINT arms STATPORT from LINICOLS[0] + LINEINT
-   paints). THE missing step. Auto-boot path skips any wait; the no-boot/demo path
-   does `WTFK`: `CALL READKEY &1CB1 / JR Z` (or a timed wait, per Pete).
-7. **Teardown on keypress (mirror the ROM):** `LD A,&FF / LD (LINICOLS),A`
-   (disarms the line-int next frame → stripes vanish) + `CALL CLSLOWER`.
-8. **Return cleanly — NEVER `di;halt`:** demo → `EI` + paging-as-trinload-expects
-   + `RET` (trinload's `try_exec` pushed `start`, so RET restarts trinload). The
-   prior hang was the `di;halt` path / wrong paging, NOT the screen writes
-   (trinload re-inits on restart). Bootblock → restore LMPR/HMPR + `JP ERRHAND2
-   &102F` (the stock `restore:` exit).
-
-Open hardware-confirm items (research §7): that the trinload-pushed demo sees a
-live IM1+EI chain after `EI`; that the demo's screen mode leaves paper+border
-pointing at CLUT-0; the bootblock section-D paging avoids ROM1 in all chosen
-calls. ROM1 routines (FRAMINT/LINEINT/SETBORD/the data) are ISR/data, never
-called directly — so the bootblock (ROM1 paged out) only needs ROM0 calls
-(CLSLOWER/UTMSG/READKEY/RST 08/10) + inline border `OUT`.
-
-## Verification (emulation-first, the reset chain)
-
-Extend `tools/netboot-oracle/z80/samboot_real_boot_test.go` (i190a — boots the
-real `rom.bin` + `eeprom.bin` through the reset→ROM→`&4000` chain via
-`deviceLinearEEPROM` + `LoadEEPROMImage`):
-- Build a test EEPROM image = the real capture, **with chunk 1 replaced by the
-  combined patched bootblock**, **plus a provisioned `"SAMBOOT Config  "` chunk**
-  (a free chunk) and a **bootable test record**.
-- Assert: config mode=1 → the reset boot reaches `bdos_boot_record`/ALHK for the
-  configured record (the boot is captured via `AttachBDOS`, as
-  `samboot_inject_test.go` does); config absent/mode=0 → it falls through to the
-  BASIC exit (no ALHK).
-- This proves the spliced decision runs correctly **in the real reset chain**, not
-  just as an isolated `samboot_inject` call (which `samboot_inject_test.go`
-  already covers).
-
-What stays hardware-only (for i230 RAM test + i135c flash): the stripes pixels,
-the real ALHK record load, and the physical reset-handoff timing.
+SimCoupé is NOT used here (it does not model the Trinity EEPROM read/boot); the Go
+core is the faithful emulation for this path (CLAUDE.md §7 — the netboot-oracle Z80
+core IS the everything-emulator for Trinity).
 
 ## Acceptance (i229)
 
-- A splice tool produces a ≤1024-byte combined chunk-1 image from the local
-  `eeprom.bin` + our inject, reproducibly (no proprietary bytes committed).
-- The reset-chain test boots the configured record and falls through when
-  unconfigured, green under `make ci-netboot-z80`.
-- Then i230 (RAM-test on hardware) and only after that i135c (flash).
+- The splice tool produces a reproducible ≤1024-byte combined chunk-1 from the
+  local `eeprom.bin` + our inject, with **no proprietary bytes committed**.
+- The inject image fits the 674 free bytes (`.map` end ≤ `&43FF`, asserted in the build).
+- The spliced reset-chain test boots coherently to `&805F` via `inject` (12 chunk
+  loads), and the decision-logic test passes all 5 cases — both green under
+  `make ci-netboot-z80`.
+- Then i230 (hardware RAM test, Pete present) and only after that i135c (flash).
 
-## Research findings (2026-06-24) — execution-ready, but BLOCKED on q50
+## What stays hardware-only (i230 RAM test + i135c flash)
 
-A research pass this session disassembled the local `eeprom.bin` chunk-1
-bootblock and mapped the Go reset-chain harness. It surfaced three design forks
-on this brick-adjacent code that Pete reserved for his presence — **captured as
-q50; i229 now depends on q50 and must not be built until it is answered.**
-
-### Confirmed byte-level map (chunk 1 = file offset 0, ORG &4000)
-
-- `&409E` (file `&9E`): `CALL &805F` = bytes `CD 5F 80` — the B-DOS hand-off.
-- `&40A1` (file `&A1`): `restore:` `LD A,0 / OUT (&FA),A / LD A,0 / OUT (&FB),A`
-  (8 bytes, `&A1..&A8`). The `0` immediates at `&40A2`/`&40A6` are **self-modify
-  targets** (the saved LMPR/HMPR written by the prologue at `&4002`/`&400B`).
-- `&40A9..&40BB` (file `&A9..&BB`): screen-redraw tail `CALL &06B5` + pokes
-  `&5600`/`&5C44`/`&5BBE` + `JP &102F` (ERRHAND2 → BASIC). Must be preserved.
-- Bootblock code ends at `&415D` (`RET`); `&415E..&43FF` = **674 zero bytes** of
-  injection space (verified all-zero).
-- Resident EEPROM helpers: `read_chunk &40BD` (BY-NUMBER, reads 1024 B into HL),
-  `get_chunk &412C`, `eeprom_enable &4103`, `eeprom_disable &410A`,
-  `wait_ready &411A`. **There is NO `find_index` (by-name) in the bootblock.**
-
-### Proposed splice (elegant — minimal, preserves everything) — q50(1)
-
-Change the `CALL &805F` at `&409E` to `CALL inject` (inject in free space):
-```
-inject: call &805F              ; the real DOS init (returns on hardware)
-        call samboot_read_config
-        ret  nc                 ; no auto-boot → returns to &40A1 (restore:, verbatim)
-        ld   a, l
-        ld   (BD_BOOT_RECORD), a
-        jp   bdos_boot_record   ; i122a ALHK, no return
-```
-Only 3 bytes change at `&409E`; `restore:` + the screen tail stay byte-identical.
-
-### The two unresolved forks — q50(2)+(3)
-
-2. **Config read BY-NAME vs BY-NUMBER.** `samboot_read_config` reads by name via
-   `find_index` + a **1024-byte `chunk` scratch buffer** — that buffer does NOT
-   fit the 674 free bytes and needs a RAM home post-B-DOS-load. Either bring
-   `find_index` + a 1 KB buffer (robust, but where in RAM?), or read by a fixed
-   chunk NUMBER reusing Colin's `read_chunk &40BD` (smaller, fixes the chunk #).
-3. **Verification scope — the emulator does not run past `CALL &805F`.**
-   `TestRealBootLoadsBDOSCoherently` boots from reset, reaches `&805F`, and runs
-   *into* B-DOS init (finalPC > `&8000`, halting where init touches unmodeled
-   SD/screen, analysis §8). **`&805F` never returns in the current Go emulator**,
-   so the splice point `&40A1` (after `&805F`) is unreachable in emulation — the
-   reset-chain test cannot execute the spliced decision as the "## Verification"
-   section above assumes. Achievable emulation: assert the patched chunk-1
-   **loads + runs coherently to `&805F`** (12 chunk loads, like the existing
-   test) + the decision LOGIC via the symbol-driven `samboot_inject_test.go`; the
-   in-chain post-`&805F` decision + the stripe PIXELS go to the **i230 hardware
-   RAM test**. q50 asks whether that is the accepted scope (consistent with i232
-   "don't block bootblock work on boot-from-0 emulation") or whether the emulator
-   should first be taught to complete B-DOS init (an i126 slice).
-
-### Harness wiring (mapped, for when q50 is answered)
-
-- Build a `build/samboot_bootblock_patched.bin` via a new pyz80 Makefile target
-  (ORG `&4000`); add it to the `netboot-z80-routines` prereq so CI builds it.
-- Reset-chain test: `mac.LoadROMImage(rom)`; `enc.LoadEEPROMImage(deviceLinearEEPROM(eeprom))`;
-  `enc.ProgramChunk(1, patchedBootblock)` (surgical in-place chunk-1 replace);
-  `enc.ProgramNamedChunk(slot, samboot.ChunkName, samboot.Boot(rec).Encode())`;
-  `mac.AttachBDOS(store)`; `mac.RunBootFrom(0x0000, …)`; assert via `store.Boots()`.
-- The splice tool (host Go) reads `eeprom.bin[0:1024]`, patches the 3 bytes at
-  `&9E` + appends the assembled inject at `&15E`, writes a ≤1024-B git-ignored
-  image. No proprietary bytes committed.
-
-## Note on execution
-
-This is the project's highest-stakes code (a bad flash bricks the boot EEPROM)
-with subtle boot-ordering + proprietary-byte handling. It is to be built with
-**fresh, focused attention and the local capture in-hand** — not rushed. This
-plan captures the approach so that execution is precise. **Do not build until
-q50 is answered** (the splice/config-read/verification-scope forks).
+The stripe PIXELS, the real ALHK record load, the physical reset-handoff timing,
+the post-`&805F` in-chain config read, AND the hardware-safety of the
+`SAMBOOT_SCRATCH` RAM address. Emulation-verified is not hardware-verified
+(CLAUDE.md §5/§7).
