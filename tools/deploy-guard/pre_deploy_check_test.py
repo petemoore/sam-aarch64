@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""Unit tests for the SAM deploy guard's execution-only detection.
+
+The guard lives in ``pre-deploy-check.sh`` (python3 despite the .sh name, so
+that Claude Code's Bash PreToolUse hook can exec it). Because the filename is
+not an importable module name, we load it via importlib.
+
+Run:  python3 -m unittest    (from this directory)
+  or: python3 pre_deploy_check_test.py
+"""
+
+import importlib.util
+import io
+import json
+import os
+import unittest
+from contextlib import redirect_stdout
+from importlib.machinery import SourceFileLoader
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_GUARD_PATH = os.path.join(_HERE, "pre-deploy-check.sh")
+
+# The guard is a python3 file with a .sh extension (so the Bash hook can exec
+# it). spec_from_file_location can't infer a loader from .sh, so pass one
+# explicitly that reads it as Python source.
+_loader = SourceFileLoader("deploy_guard", _GUARD_PATH)
+_spec = importlib.util.spec_from_loader("deploy_guard", _loader)
+guard = importlib.util.module_from_spec(_spec)
+_loader.exec_module(guard)
+
+
+def run_main(command):
+    """Drive a command through main() via JSON-on-stdin, return parsed stdout.
+
+    Returns None when main() emits no decision (allowed / not-a-deploy), or the
+    parsed hook-output dict when it denies.
+    """
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
+    out = io.StringIO()
+    old_stdin = guard.sys.stdin
+    guard.sys.stdin = io.StringIO(payload)
+    try:
+        with redirect_stdout(out):
+            rc = guard.main()
+    finally:
+        guard.sys.stdin = old_stdin
+    assert rc == 0, "guard must always exit 0"
+    text = out.getvalue().strip()
+    return json.loads(text) if text else None
+
+
+class MustNotFire(unittest.TestCase):
+    """Read-only commands that merely MENTION deploy tokens — never a deploy."""
+
+    cases = [
+        "cd ~/git/sam-aarch64 && echo x && git ls-tree -r --name-only main | grep trinload",
+        "git grep -n 'trinload-push' main -- tools/",
+        "cat > ~/retro.md <<EOF\n... trinload-push ...\nEOF",
+        "ping 192.168.2.75",
+        "grep 192.168.2.75 file",
+        "git ls-tree -r --name-only main | grep trinpush",
+        # extra read-only mentions that previously false-fired
+        "echo 0x8000 page 1",
+        "git show HEAD -- tools/trinload-push/trinload-push.py",
+        "rg 'tftp' tools/",
+    ]
+
+    def test_must_not_fire(self):
+        for cmd in self.cases:
+            with self.subTest(cmd=cmd):
+                self.assertIsNone(guard.is_deploy(cmd), f"falsely flagged: {cmd!r}")
+                self.assertIsNone(run_main(cmd), f"main() denied: {cmd!r}")
+
+
+class MustFire(unittest.TestCase):
+    """Statements that actually EXECUTE a push to the SAM."""
+
+    cases = [
+        "python3 tools/trinload-push/trinload-push.py 192.168.2.75 foo.bin 1 0x8000",
+        "cd ~/git/sam && python tools/trinload-push/trinpush-serve.py --strategy highest",
+        "./trinpush.py 192.168.2.75 x",
+        "tftp 192.168.2.75",
+        "curl -T foo.bin tftp://192.168.2.75/x",
+        "nc 192.168.2.75 60848 < payload",
+        # a few more execution shapes
+        "atftp --put --local-file foo.bin 192.168.2.75",
+        "/abs/path/to/trinload-push.py 192.168.2.75 foo.bin",
+        "echo hi && python3 tools/trinload-push/trinload-push.py 192.168.2.75 foo.bin",
+        "wget --post-file=foo tftp://192.168.2.75/x",  # tftp:// URL -> fires on case 2
+    ]
+
+    def test_must_fire(self):
+        for cmd in self.cases:
+            with self.subTest(cmd=cmd):
+                self.assertIsNotNone(guard.is_deploy(cmd), f"missed deploy: {cmd!r}")
+                decision = run_main(cmd)
+                self.assertIsNotNone(decision, f"main() allowed deploy: {cmd!r}")
+                self.assertEqual(
+                    decision["hookSpecificOutput"]["permissionDecision"], "deny"
+                )
+
+
+class MustAllowBypass(unittest.TestCase):
+    """DEPLOY_CHECKED=1 makes a real deploy pass main() even though is_deploy fires."""
+
+    cmd = (
+        "DEPLOY_CHECKED=1 python3 tools/trinload-push/trinload-push.py "
+        "192.168.2.75 foo.bin"
+    )
+
+    def test_bypass(self):
+        # is_deploy still recognises it as a deploy (the env prefix is stripped)...
+        self.assertIsNotNone(guard.is_deploy(self.cmd))
+        self.assertTrue(guard.already_confirmed(self.cmd))
+        # ...but main() lets it through (no decision emitted).
+        self.assertIsNone(run_main(self.cmd))
+
+
+class NonBashUntouched(unittest.TestCase):
+    def test_non_bash_tool_ignored(self):
+        payload = json.dumps(
+            {"tool_name": "Write", "tool_input": {"command": "tftp 192.168.2.75"}}
+        )
+        out = io.StringIO()
+        old = guard.sys.stdin
+        guard.sys.stdin = io.StringIO(payload)
+        try:
+            with redirect_stdout(out):
+                rc = guard.main()
+        finally:
+            guard.sys.stdin = old
+        self.assertEqual(rc, 0)
+        self.assertEqual(out.getvalue().strip(), "")
+
+
+if __name__ == "__main__":
+    unittest.main()
