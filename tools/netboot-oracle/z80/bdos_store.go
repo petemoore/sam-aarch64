@@ -182,6 +182,12 @@ func (c *CardModel) Sector(n, linearSector int) [bdSectorSize]byte {
 // sector 0 (512 bytes each, the final sector zero-padded) — the model of an HSAVE
 // depositing a saved file into a record, readable back via HRSAD from the same
 // (record, linearSec) coordinates (i144). A zero-length body writes nothing.
+//
+// Fidelity scope: this models content *recoverability* (the bytes saved are the
+// bytes read back), not B-DOS's exact on-card directory/header layout — the file
+// body occupies the record's data sectors from sector 0, which is what HRSAD reads.
+// That is the right level for the round-trip content assertions i119e needs; a test
+// that depends on the precise on-card sector map would need a deeper model.
 func (c *CardModel) WriteFileBody(n int, body []byte) {
 	for sec := 0; sec*bdSectorSize < len(body); sec++ {
 		var data [bdSectorSize]byte
