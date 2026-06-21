@@ -77,14 +77,48 @@ samboot_inject:
 samboot_stripes:
                 ld      hl, SAMBOOT_STRIPES_CALLS
                 inc     (hl)                    ; probe: count this call (host test reads it)
-                if defined(NETBOOT_HOSTTEST)==0
-                ; Real-hardware stripes (analysis §2): clearscn, then step the
-                ; PALTAB (&55D8) rainbow into LINICOLS (&5600) by &0B per line up
-                ; to &A6, and print the MGT banner via RST 16. Drawn for real at
-                ; i135c against the captured bootblock; unverifiable in the flat
-                ; harness (no screen RAM model), so gated here and asserted only
-                ; by the call-probe above.
-                endif
+                ; The MGT rainbow opening stripes, ported VERBATIM from the stock
+                ; SAM ROM v3.0 RAINBOW SCREEN routine at &ED1B
+                ; (docs/sam/sam-coupe_rom-v3.0_annotated-disassembly.txt:24665) —
+                ; the exact code Colin's ROM patch displaced at &ED1B to make room
+                ; for the Trinity probe (samboot-bootblock-analysis.md §6.1). This
+                ; is the AUTHORITATIVE source (the original ROM), not the
+                ; third-party LongSteve boot.asm reproduction (which uses RST 16 +
+                ; its own text + an added wait loop — confirmed to differ).
+                ;
+                ; It walks PALTAB (&55D9) into the line-colour table LINICOLS
+                ; (&5600) as 4-byte entries {scan_lo, 0, colour, colour}, stepping
+                ; the scan line by &0B until &A6, then an &FF terminator. PURE RAM
+                ; writes: it runs in emulation with no screen model (CLAUDE.md §7 —
+                ; nothing hardware-bound is hidden behind a build flag), the harness
+                ; reads LINICOLS back and asserts the table, and SimCoupé renders
+                ; the actual pixels in the CI gate. The MGT banner text (a separate
+                ; ROM report-&50 path, overwritten by Colin's patch) is drawn by
+                ; the bootblock integration (i229), not here.
+                ld      de, PALTAB+1            ; &55D9 — palette table, skip entry 0
+                ld      hl, LINICOLS           ; &5600 — line-colour table, L=0
+                ld      b, l                   ; B = 0 (scan-line counter)
+                ld      c, l                   ; C = 0
+sbs_rbowl:
+                ld      (hl), b                ; LINICOLS[i].scan_lo = scan number
+                inc     hl
+                ld      (hl), c                ; LINICOLS[i].scan_hi = 0
+                inc     hl
+                ld      a, (de)                ; next PALTAB colour
+                inc     de
+                ld      (hl), a                ; main colour
+                inc     hl
+                ld      (hl), a                ; alt colour = main
+                inc     hl
+                ld      a, b
+                add     a, &0b                 ; step the scan number by 11
+                ld      b, a
+                cp      &a6                    ; until &A6 (166)
+                jr      c, sbs_rbowl
+                ld      (hl), &ff              ; terminate the line-colour list
                 ret
+
+PALTAB:          equ &55D8                      ; ROM palette table (stripes read from +1)
+LINICOLS:        equ &5600                      ; line-colour table (stripes write here)
 
 SAMBOOT_STRIPES_CALLS:  defs 1                  ; host-test probe: stripes call count
