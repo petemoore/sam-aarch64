@@ -4,8 +4,31 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 )
+
+// presenceMarkerExists reports whether the Pete-present marker file exists.
+// The marker path is read from ALOOP_PRESENCE_FILE; if that env var is unset,
+// it defaults to ~/.claude/autonomous-loop/pete-present. If os.UserHomeDir
+// fails, the function returns false (no crash — treat as no marker).
+//
+// Precedence for includePete (highest to lowest):
+//  1. --pete-away explicitly passed → exclude (force off; the safe override).
+//  2. --pete-present explicitly passed → include (force on).
+//  3. Marker file present → include; absent → exclude (ambient persistent default).
+func presenceMarkerExists() bool {
+	path := os.Getenv("ALOOP_PRESENCE_FILE")
+	if path == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return false
+		}
+		path = filepath.Join(home, ".claude", "autonomous-loop", "pete-present")
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
 
 // runReady implements `ready`: prints pullable items whose all depends_on targets
 // are satisfied (DONE, or non-pullable/umbrella, or answered/absent question),
@@ -28,10 +51,15 @@ func runReady(args []string, paths mutatorPaths) {
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
-	// Default is pete-away (exclude owner:pete) so the autonomous agent's tip is
-	// always agent-actionable; --pete-present includes + prioritizes them. An
-	// explicit --pete-away wins if both are passed (the safe choice).
-	includePete := *petePresent && !*peteAway
+	// includePete precedence (highest to lowest):
+	//   1. --pete-away explicitly passed → exclude (force off; the safe override).
+	//   2. --pete-present explicitly passed → include (force on).
+	//   3. Presence marker file present → include; absent → exclude (persistent
+	//      ambient default across sessions). Marker path: ALOOP_PRESENCE_FILE env
+	//      var, or ~/.claude/autonomous-loop/pete-present when unset.
+	// When no marker and no flags: owner:pete is excluded — the current default,
+	// unchanged (important for CI, which runs without the marker).
+	includePete := !*peteAway && (*petePresent || presenceMarkerExists())
 	reg, err := loadReg(paths)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

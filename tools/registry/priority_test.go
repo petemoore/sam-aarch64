@@ -431,6 +431,73 @@ func TestReady_UnblockedItems(t *testing.T) {
 	}
 }
 
+// TestPresenceMarker_AutoDefault asserts the i169b presence-marker behaviour:
+//   - marker absent, no flags  → owner:pete EXCLUDED (default unchanged, safe for CI).
+//   - marker present, no flags → owner:pete INCLUDED and emitted FIRST.
+//   - marker present + --pete-away flag → EXCLUDED (flag overrides marker).
+//   - marker absent + --pete-present flag → INCLUDED (flag still works when no marker).
+//
+// Tests are hermetic: ALOOP_PRESENCE_FILE is pointed at a t.TempDir() path so
+// the real ~/.claude path is never touched.
+func TestPresenceMarker_AutoDefault(t *testing.T) {
+	dir := t.TempDir()
+	markerPath := filepath.Join(dir, "pete-present")
+
+	items := []Item{
+		{ID: "i10", Title: "Agent work", Status: StatusOpen, Kind: "leaf", Owner: "agent"},
+		{ID: "i20", Title: "Hardware capture", Status: StatusOpen, Kind: "leaf", Owner: "pete"},
+		{ID: "i30", Title: "More agent work", Status: StatusOpen, Kind: "leaf", Owner: "agent"},
+	}
+	byID := map[string]Item{}
+	for _, it := range items {
+		byID[it.ID] = it
+	}
+	order := []string{"i20", "i10", "i30"} // pete item ranked first
+	always := func(Item) bool { return true }
+
+	// Case 1: marker absent, no flags → owner:pete excluded (unchanged default).
+	t.Setenv("ALOOP_PRESENCE_FILE", markerPath)
+	// markerPath does not exist yet.
+	got := readyList(order, byID, always, !presenceMarkerExists() || false)
+	// Without marker: presenceMarkerExists() == false → includePete = false
+	withoutMarker := readyList(order, byID, always, presenceMarkerExists())
+	if strings.Join(withoutMarker, ",") != "i10,i30" {
+		t.Fatalf("no-marker ready = %v, want [i10 i30] (owner:pete i20 excluded)", withoutMarker)
+	}
+	_ = got // silence unused warning from above exploration
+
+	// Case 2: marker present, no flags → owner:pete included and emitted first.
+	if err := os.WriteFile(markerPath, nil, 0o644); err != nil {
+		t.Fatalf("create marker: %v", err)
+	}
+	withMarker := readyList(order, byID, always, presenceMarkerExists())
+	if strings.Join(withMarker, ",") != "i20,i10,i30" {
+		t.Fatalf("with-marker ready = %v, want [i20 i10 i30] (owner:pete first)", withMarker)
+	}
+
+	// Case 3: marker present + --pete-away → excluded (flag wins over marker).
+	// includePete = !peteAway && (petePresent || markerExists) = !true && ... = false
+	peteAway := true
+	petePresent := false
+	includePete3 := !peteAway && (petePresent || presenceMarkerExists())
+	markerPresent3 := readyList(order, byID, always, includePete3)
+	if strings.Join(markerPresent3, ",") != "i10,i30" {
+		t.Fatalf("marker+pete-away ready = %v, want [i10 i30] (pete-away overrides marker)", markerPresent3)
+	}
+
+	// Case 4: marker absent + --pete-present → included (flag works without marker).
+	if err := os.Remove(markerPath); err != nil {
+		t.Fatalf("remove marker: %v", err)
+	}
+	peteAway = false
+	petePresent = true
+	includePete4 := !peteAway && (petePresent || presenceMarkerExists())
+	noMarkerFlag := readyList(order, byID, always, includePete4)
+	if strings.Join(noMarkerFlag, ",") != "i20,i10,i30" {
+		t.Fatalf("no-marker+pete-present ready = %v, want [i20 i10 i30] (flag works without marker)", noMarkerFlag)
+	}
+}
+
 // TestReadyList_PeteFilter asserts the owner:pete filter (i169a): a ready
 // owner:pete item is EXCLUDED by default (so the autonomous agent's tip is always
 // agent-actionable) and INCLUDED-FIRST under --pete-present (don't waste Pete's
