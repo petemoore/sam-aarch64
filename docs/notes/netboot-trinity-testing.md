@@ -234,8 +234,17 @@ The baked-in files are `hello.txt` and `readme.txt` (a couple of lines each).
 
 ```sh
 make netboot-serve-disk
-# -> build/netboot_serve.mgt   (B-DOS boot + AUTO + the demo server at &8000)
+# -> build/netboot_serve.mgt   (B-DOS boot + AUTO + the combined RRQ+WRQ server at &8000)
 ```
+
+The disk is the i121i **.mgt packaging vessel** — sibling of the i121d trinload
+code block. Its AUTO BASIC loads the serve binary at `&8000`, then overlays a tiny
+`SERVE_CONFIG` CODE file (`cfg`) at the `SERVE_CONFIG` address, so the disk carries
+its WRQ record-placement **strategy** explicitly (the runtime image then matches a
+host-patched trinload push exactly). The default is highest-free; build a disk with
+a different strategy via `make netboot-serve-disk NETBOOT_STRATEGY=lowest` (or
+`NETBOOT_STRATEGY=explicit:N`). The strategy governs which **free** Trinity record a
+`tftp put` writes to — a named record is never overwritten (write-to-free-only, q30).
 
 **Run it:**
 

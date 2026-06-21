@@ -75,6 +75,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/petemoore/samfile/v3"
 	"github.com/petemoore/samfile/v3/sambasic"
@@ -131,7 +133,81 @@ const (
 	// mistake. samfile.AddCodeFile still does the authoritative free-sector
 	// check.
 	DosMaxSize = 16384
+
+	// SERVE_CONFIG block encoding (i121h) — keep in lockstep with
+	// src/netboot/netboot_serve.asm (SERVE_CFG_*) and
+	// tools/trinload-push/trinpush.py. The block is the trailing 4 bytes of the
+	// serve binary; the i121i .mgt vessel ships a CODE file holding these bytes
+	// that the AUTO BASIC loads at the SERVE_CONFIG address, overlaying the
+	// binary's baked default so the runtime image matches the trinload vessel.
+	ServeCfgMagic      = 0x5A // SERVE_CFG_MAGIC_VAL — the patch-anchor magic byte
+	ServeStratHighest  = 0    // place at the highest free record (the default)
+	ServeStratLowest   = 1    // place at the lowest free record
+	ServeStratExplicit = 2    // place at the explicit record (ServeCfgRecordNone => undefined)
+	ServeCfgRecordNone = 0xFFFF
+	ServeConfigSize    = 4 // magic(1) + strategy(1) + record(2 LE)
 )
+
+// serveConfigBlock returns the 4 config bytes for the given strategy code and
+// explicit record: magic, strategy, record-lo, record-hi (LE). Mirrors
+// trinpush.py patch_config, but writes the full block (magic included) because
+// the .mgt vessel OVERLAYS the bytes via a CODE-file load rather than patching
+// in place — the loaded bytes must be self-complete, including the magic.
+func serveConfigBlock(strategy, record int) []byte {
+	if strategy != ServeStratExplicit {
+		record = 0
+	}
+	return []byte{
+		ServeCfgMagic,
+		byte(strategy),
+		byte(record & 0xFF),
+		byte((record >> 8) & 0xFF),
+	}
+}
+
+// parseServeStrategy parses a -netboot-strategy value into (code, record),
+// mirroring trinpush.py parse_strategy: "highest" | "lowest" | "explicit:N".
+func parseServeStrategy(spec string) (int, int, error) {
+	spec = strings.ToLower(strings.TrimSpace(spec))
+	switch spec {
+	case "highest", "":
+		return ServeStratHighest, 0, nil
+	case "lowest":
+		return ServeStratLowest, 0, nil
+	}
+	if rest, ok := strings.CutPrefix(spec, "explicit:"); ok {
+		rec, err := strconv.ParseInt(strings.TrimSpace(rest), 0, 32)
+		if err != nil {
+			return 0, 0, fmt.Errorf("bad explicit record %q: %w", rest, err)
+		}
+		if rec < 1 || rec > 0xFFFF {
+			return 0, 0, fmt.Errorf("explicit record %d out of range 1..65535", rec)
+		}
+		return ServeStratExplicit, int(rec), nil
+	}
+	return 0, 0, fmt.Errorf("bad -netboot-strategy %q: want highest | lowest | explicit:N", spec)
+}
+
+// serveConfigAddr returns the load address of the SERVE_CONFIG symbol from a
+// pyz80 mapfile ("ADDR=SYMBOL" per line). Mirrors trinpush.py parse_map +
+// config_offset, but returns the absolute address (the .mgt loads the config
+// CODE file by address, not by file offset).
+func serveConfigAddr(mapText string) (uint32, error) {
+	const symbol = "SERVE_CONFIG"
+	for _, line := range strings.Split(mapText, "\n") {
+		line = strings.TrimSpace(line)
+		addr, name, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(name) != symbol {
+			continue
+		}
+		v, err := strconv.ParseUint(strings.TrimSpace(addr), 16, 32)
+		if err != nil {
+			return 0, fmt.Errorf("mapfile %s line %q: bad address: %w", symbol, line, err)
+		}
+		return uint32(v), nil
+	}
+	return 0, fmt.Errorf("symbol %s not found in mapfile (wrong binary / not a serve build?)", symbol)
+}
 
 func main() {
 	log.SetFlags(0)
@@ -149,6 +225,9 @@ func main() {
 	zx0Path := flag.String("zx0", "", "path to the page-13 zx0 compressor+decoder payload (build/zx0.bin; PRODUCTION + test; i68)")
 	netbootPath := flag.String("netboot", "", "path to a standalone netboot CODE binary (org &8000); builds a minimal bootable disk (DOS + AUTO that LOADs+CALLs it) and ignores the assembler positional args")
 	netbootName := flag.String("netboot-name", "netboot", "directory-entry name for the -netboot CODE file (the AUTO BASIC LOADs this name)")
+	netbootConfigMap := flag.String("netboot-config-map", "", "i121i: pyz80 mapfile of the -netboot serve binary; when set, ships a SERVE_CONFIG CODE file the AUTO BASIC overlays at the SERVE_CONFIG address (config-aware .mgt serve vessel)")
+	netbootStrategy := flag.String("netboot-strategy", "highest", "i121i: WRQ record placement baked into the disk config file: highest | lowest | explicit:N (requires -netboot-config-map)")
+	netbootConfigName := flag.String("netboot-config-name", "cfg", "i121i: directory-entry name for the SERVE_CONFIG CODE file (the AUTO BASIC LOADs this name)")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr,
 			"usage: %s [-dos <path>] [-dos-name <name>] [-dos-load <addr>] [-test-mem <path>] [-paged-call <path>] [-cluster <path>] [-enc-fix <path>] [-sysreg-data <path>] [-disasm <path>] [-zx0 <path>] <assembler.bin> <enctab.enc> [<in.tbn>] <output.mgt>\n   or: %s -netboot <code.bin> [-netboot-name <name>] [-dos ...] <output.mgt>\n",
@@ -169,7 +248,32 @@ func main() {
 			flag.Usage()
 			os.Exit(2)
 		}
-		if err := buildNetbootDisk(*dosPath, *dosName, uint32(*dosLoad), *netbootPath, *netbootName, args[0]); err != nil {
+		// i121i: the config-aware serve vessel — ship a SERVE_CONFIG CODE file the
+		// AUTO BASIC overlays at the SERVE_CONFIG address, so the disk's runtime
+		// image carries the chosen placement strategy exactly like the trinload
+		// vessel's host-patched block.
+		var cfg *netbootConfig
+		if *netbootConfigMap != "" {
+			mapText, err := os.ReadFile(*netbootConfigMap)
+			if err != nil {
+				log.Fatalf("read netboot config map: %v", err)
+			}
+			addr, err := serveConfigAddr(string(mapText))
+			if err != nil {
+				log.Fatal(err)
+			}
+			strat, rec, err := parseServeStrategy(*netbootStrategy)
+			if err != nil {
+				log.Fatal(err)
+			}
+			cfg = &netbootConfig{
+				name:     *netbootConfigName,
+				addr:     addr,
+				data:     serveConfigBlock(strat, rec),
+				strategy: *netbootStrategy,
+			}
+		}
+		if err := buildNetbootDisk(*dosPath, *dosName, uint32(*dosLoad), *netbootPath, *netbootName, args[0], cfg); err != nil {
 			log.Fatal(err)
 		}
 		return
@@ -516,7 +620,18 @@ func main() {
 // the payload is one arbitrary CODE file instead of the assembler + enctab +
 // test cluster. Used by the Phase-3 netboot programs (the i94 bring-up smoke
 // test, later the server/client) so Pete can boot one on real Trinity hardware.
-func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeName, outputPath string) error {
+// netbootConfig describes the optional SERVE_CONFIG CODE file the i121i
+// config-aware .mgt serve vessel ships: a small CODE file (data) the AUTO BASIC
+// LOADs (name) at the SERVE_CONFIG address (addr), overlaying the serve binary's
+// baked default. strategy is the human-readable spec for the build log.
+type netbootConfig struct {
+	name     string
+	addr     uint32
+	data     []byte
+	strategy string
+}
+
+func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeName, outputPath string, cfg *netbootConfig) error {
 	dosBin, err := os.ReadFile(dosPath)
 	if err != nil {
 		return fmt.Errorf("read dos: %w", err)
@@ -544,6 +659,23 @@ func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeNam
 			codePath, len(codeBin), LoadAddress, end, end-0x10000)
 	}
 
+	// i121i: the config CODE file overlays SERVE_CONFIG inside the serve binary's
+	// loaded range, so the runtime image matches the trinload vessel's host-patched
+	// block. Validate it lands wholly within [&8000, end-of-code) and that the byte
+	// it overlays in the binary is the SERVE_CONFIG magic — the same wrong-binary
+	// guard trinpush makes, here protecting the address from drifting off the block.
+	if cfg != nil {
+		codeEnd := LoadAddress + uint32(len(codeBin))
+		if cfg.addr < LoadAddress || cfg.addr+uint32(len(cfg.data)) > codeEnd {
+			return fmt.Errorf("SERVE_CONFIG at &%04X (%d bytes) is outside the serve code &%04X..&%04X — wrong mapfile?",
+				cfg.addr, len(cfg.data), LoadAddress, codeEnd)
+		}
+		if got := codeBin[cfg.addr-LoadAddress]; got != ServeCfgMagic {
+			return fmt.Errorf("byte at SERVE_CONFIG &%04X is &%02X, want the magic &%02X — wrong binary or mapfile",
+				cfg.addr, got, ServeCfgMagic)
+		}
+	}
+
 	disk := samfile.NewDiskImage()
 
 	// Slot 0: the boot DOS (ROM BOOT reads T4S1 raw).
@@ -554,26 +686,36 @@ func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeNam
 		return fmt.Errorf("SetStartAddressPageUnusedBits(%s): %w", dosName, err)
 	}
 
-	// Slot 1: AUTO BASIC — CLEAR &7FFF : LOAD "<name>" CODE 32768 : CALL 32768.
-	auto := &sambasic.File{
-		StartLine: 10,
-		Lines: []sambasic.Line{
-			{Number: 10, Tokens: []sambasic.Token{
-				sambasic.CLEAR,
-				sambasic.Number(uint16(LoadAddress - 1)),
-			}},
-			{Number: 20, Tokens: []sambasic.Token{
-				sambasic.LOAD,
-				sambasic.String(`"` + codeName + `"`),
-				sambasic.CODE,
-				sambasic.Number(uint16(LoadAddress)),
-			}},
-			{Number: 30, Tokens: []sambasic.Token{
-				sambasic.CALL,
-				sambasic.Number(uint16(LoadAddress)),
-			}},
-		},
+	// Slot 1: AUTO BASIC — CLEAR &7FFF : LOAD "<name>" CODE 32768 [: LOAD
+	// "<cfg>" CODE <SERVE_CONFIG>] : CALL 32768. The optional config LOAD (line
+	// 25, i121i) runs AFTER the serve LOAD so it overlays the binary's baked
+	// default config block, leaving the runtime image identical to the trinload
+	// vessel's host-patched block.
+	autoLines := []sambasic.Line{
+		{Number: 10, Tokens: []sambasic.Token{
+			sambasic.CLEAR,
+			sambasic.Number(uint16(LoadAddress - 1)),
+		}},
+		{Number: 20, Tokens: []sambasic.Token{
+			sambasic.LOAD,
+			sambasic.String(`"` + codeName + `"`),
+			sambasic.CODE,
+			sambasic.Number(uint16(LoadAddress)),
+		}},
 	}
+	if cfg != nil {
+		autoLines = append(autoLines, sambasic.Line{Number: 25, Tokens: []sambasic.Token{
+			sambasic.LOAD,
+			sambasic.String(`"` + cfg.name + `"`),
+			sambasic.CODE,
+			sambasic.Number(uint16(cfg.addr)),
+		}})
+	}
+	autoLines = append(autoLines, sambasic.Line{Number: 30, Tokens: []sambasic.Token{
+		sambasic.CALL,
+		sambasic.Number(uint16(LoadAddress)),
+	}})
+	auto := &sambasic.File{StartLine: 10, Lines: autoLines}
 	if err := disk.AddBasicFile("auto", auto); err != nil {
 		return fmt.Errorf("AddBasicFile(auto): %w", err)
 	}
@@ -583,13 +725,29 @@ func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeNam
 		return fmt.Errorf("AddCodeFile(%s): %w", codeName, err)
 	}
 
+	// Slot 3 (i121i, optional): the SERVE_CONFIG CODE file, stored with its own
+	// load address so a bare LOAD "<cfg>" CODE also deposits it correctly.
+	if cfg != nil {
+		if err := disk.AddCodeFile(cfg.name, cfg.data, cfg.addr, 0); err != nil {
+			return fmt.Errorf("AddCodeFile(%s): %w", cfg.name, err)
+		}
+	}
+
 	if err := disk.Save(outputPath); err != nil {
 		return fmt.Errorf("save %s: %w", outputPath, err)
 	}
 
 	fmt.Printf("%-12s%d bytes  T4S1-T5S10\n", dosName+":", len(dosBin))
-	fmt.Printf("auto:       %d bytes   (LOAD \"%s\" CODE 32768 : CALL 32768)\n", len(auto.Bytes()), codeName)
+	if cfg != nil {
+		fmt.Printf("auto:       %d bytes   (LOAD \"%s\" CODE 32768 : LOAD \"%s\" CODE %d : CALL 32768)\n",
+			len(auto.Bytes()), codeName, cfg.name, cfg.addr)
+	} else {
+		fmt.Printf("auto:       %d bytes   (LOAD \"%s\" CODE 32768 : CALL 32768)\n", len(auto.Bytes()), codeName)
+	}
 	fmt.Printf("%-12s%d bytes\n", codeName+":", len(codeBin))
+	if cfg != nil {
+		fmt.Printf("%-12s%d bytes  @ &%04X  (SERVE_CONFIG, strategy=%s)\n", cfg.name+":", len(cfg.data), cfg.addr, cfg.strategy)
+	}
 	fmt.Printf("Built %s (bootable netboot disk)\n", outputPath)
 	return nil
 }
