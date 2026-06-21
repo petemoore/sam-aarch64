@@ -4043,7 +4043,7 @@
   description: |
     Concrete SpillBackend implementations behind the i215a interface: Trinity SD-record store when present, else physical floppy/tape; selected at boot by capability detection. The assembler must run fully on a floppy/tape-only machine with NO Trinity (HARD constraint), so the backend is optional and degrades to refuse-with-message when absent. SimCoupe/boot integration. Depends on i215b.
   status: OPEN
-  depends_on: [i215b]
+  depends_on: [i215b, q60]
   kind: leaf
   owner: agent
   parent: i215
@@ -4203,9 +4203,27 @@
     The cleanup half of i231, enforced by the i231a ratchet guard. For each of the 34 sanctioned carve-out sites: determine what it gates + why the flat harness can't run it (ROM/RST 8/screen), then (A) remove the gate (runs safely in emulation as-is), (B) make the harness model what it needs, or (C) run that payload under SimCoupe (the ROM/screen CI gate); then ratchet the allowlist entry down. Large + subtle; split per file/cluster as taken on. Depends on i231a (the guard + allowlist exist first).
   status: OPEN
   depends_on: [i231a]
-  kind: leaf
+  kind: umbrella
   owner: agent
   parent: i231
+
+- id: i231b-b3
+  title: Eliminate 3 (A)-class single-site carve-outs (http/picker/trinity-stamp)
+  description: |
+    The trivially-removable carve-outs eliminated by the i231b first pass: (1) netboot_http.asm eeprom.asm include — eeprom is the emulation-verified flash reader (harness models its reads, trinity_identity_stamp_test.go), so it is included in every build; (2) bdos_picker.asm picker_render — the gated block was EMPTY (comments only), the routine is a stub ret identical in every build; (3) trinity_identity_stamp.asm &8000 jp shim — dead code in the host build (harness calls trinity_read_stamp by symbol), harmless to include. All host-verified by the existing netboot-oracle z80 tests; carve-out ledger ratcheted 34->31.
+  status: DONE
+  kind: leaf
+  owner: agent
+  parent: i231b
+
+- id: i231b-b4
+  title: Eliminate the remaining 31 carve-outs (bdos_seam RST8 dispatch + multi-site files)
+  description: |
+    The harder carve-outs awaiting elimination after the i231b first pass (ledger now 31 sites / 9 files): bdos_seam.asm (1, the RST8/B-DOS-hook dispatch HGTHD/HSAVE/HRSAD/HRECORD — needs harness modeling or SimCoupe, class B), netboot_serve.asm (11), netboot_client.asm (5), netboot_dumper.asm (3), netboot_server.asm (3), smoke_test.asm (3), csd_probe.asm (2), http_main.asm (2). (samboot_config.asm's 1 is owned by i269.) Each needs per-site analysis: remove-if-overgated, model-in-harness, or run under SimCoupe; split further per file/cluster as taken on.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i231b
 
 - id: i232
   title: "All Go-harness tests boot the SAM from address 0 (real ROM cold-init) for faithful machine state, not Call-with-seeded-state"
