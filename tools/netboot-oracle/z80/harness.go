@@ -1,8 +1,13 @@
-// Package z80 is a tiny flat-memory Z80 harness for verifying the SAM-side
-// netboot routines (src/netboot/*.asm) against the netboot-oracle golden
-// vectors. It loads a pyz80-assembled .bin into a 64 KB address space, runs a
-// named routine under koron-go/z80 until it returns, and exposes the memory so
-// a test can byte-compare the emitted packet against the captured ground truth.
+// Package z80 is a Z80 harness for verifying the SAM-side netboot routines
+// (src/netboot/*.asm) against the netboot-oracle golden vectors. It loads a
+// pyz80-assembled .bin into a SAM Coupé paged address space (the sampage pager:
+// LMPR/HMPR page mapping + ROM write-protect — ONE memory model, no flat model
+// beside it; CLAUDE.md §7), runs a named routine under koron-go/z80 until it
+// returns, and exposes the memory so a test can byte-compare the emitted packet
+// against the captured ground truth. The default config is flat-equivalent
+// (contiguous RAM across &0000-&FFFF), so leaf/packet tests that never page see
+// a plain 64 KB space; the paths that DO page (trinload's HMPR push, the SAMBOOT
+// dumper's ROM reads) get faithful relocation + ROM write-protect.
 //
 // This is the host-verifiable half of the Z80 netboot port: a routine like
 // build_udp_frame is pure arithmetic + memory writes, so running it and
@@ -27,6 +32,7 @@ import (
 	"strings"
 
 	"github.com/koron-go/z80"
+	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80/sampage"
 )
 
 // loadOrg is the org address every netboot routine .bin assembles to (&8000,
@@ -69,28 +75,50 @@ const (
 	sysFLAGS = 0x5C3B // status flags; bit 5 (0x20) = key-available (ROM disasm :1090, KYIP2 :1786-1791)
 )
 
-// mem is a flat 64 KB Z80 address space implementing z80.Memory and z80.IO. Port
-// I/O is delegated to an optional IODevice (nil => inert, reads return 0xFF).
+// mem is a SAM Coupé paged Z80 address space implementing z80.Memory and z80.IO.
+// All RAM/ROM access goes through one model — the sampage pager (LMPR/HMPR page
+// mapping + ROM write-protect) — so there is no flat memory model living beside
+// the paged one (CLAUDE.md §7; the split is what let the i87a dumper ROM-paging
+// bug reach hardware). Port I/O for the paging registers (&FA/&FB) is handled by
+// the pager; everything else is delegated to an optional IODevice (nil => inert,
+// reads return 0xFF).
 //
-// By default the whole space is RAM (the packet-builder and leaf-routine tests
-// load code anywhere and write freely). A boot test can mark the top of memory as
-// ROM via romActive+romBase to model the SAM at boot, where &C000-&FFFF is ROM1
-// (read-only) until the program pages RAM in there: writes at/above romBase are
-// then dropped (as on hardware), so an over-size boot image — whose tail would
-// land above &BFFF — is not loaded into RAM and a call into that region runs the
-// ROM contents, reproducing the real-hardware crash instead of silently working.
+// By default the pager is in its flat-equivalent config (sampage.New): logical
+// &0000-&FFFF maps to four contiguous RAM pages, so leaf-routine and packet
+// tests that load code anywhere and write freely behave exactly as a flat 64 KB
+// space — they never touch the paging ports, so they never observe the paging.
+//
+// A boot test can additionally mark the top of memory as read-only via
+// romActive+romBase to model the SAM at boot, where &C000-&FFFF is ROM1 until
+// the program pages RAM in there: writes at/above romBase are then dropped (as
+// on hardware), so an over-size boot image — whose tail would land above &BFFF —
+// is not loaded into RAM and a call into that region runs zeros, reproducing the
+// real-hardware crash instead of silently working. (The dumper crash repro uses
+// the pager's own LMPR-driven ROM1 mapping instead; romActive is the simpler
+// fixed overlay the boot wrappers were built against.)
 //
 // keyQueue holds injected keypresses (InjectKeys). When non-empty, reads of
 // sysFLAGS return FLAGS|0x20 (key-available) and reads of sysLASTK return the
 // head of the queue. A write to sysFLAGS that clears bit 5 (the Z80 KYIP2
 // poll's `RES 5,(FLAGS)` consume step) advances the queue by one.
 type mem struct {
-	ram       [0x10000]byte
+	pager     *sampage.Mem // the one memory model: LMPR/HMPR paging + ROM write-protect
 	io        IODevice
 	cpu       *z80.CPU // back-reference, for the INI/IND port correction in In
 	romActive bool     // when true, addr >= romBase is read-only ROM (boot model)
 	romBase   uint16   // first ROM address (e.g. 0xC000 for ROM1 at boot)
 	keyQueue  []byte   // injected keypresses (i138 keyboard-sysvar stub)
+}
+
+// peek/poke are the single funnel for every RAM/ROM access: they route through
+// the pager so direct memory reads/writes honour the live LMPR/HMPR mapping.
+func (m *mem) peek(addr uint16) uint8 { return m.pager.Get(addr) }
+
+func (m *mem) poke(addr uint16, value uint8) {
+	if m.romActive && addr >= m.romBase {
+		return // boot ROM overlay: the write is dropped, exactly as on hardware
+	}
+	m.pager.Set(addr, value)
 }
 
 func (m *mem) Get(addr uint16) uint8 {
@@ -103,19 +131,16 @@ func (m *mem) Get(addr uint16) uint8 {
 	if len(m.keyQueue) > 0 {
 		switch addr {
 		case sysFLAGS:
-			return m.ram[addr] | 0x20
+			return m.peek(addr) | 0x20
 		case sysLASTK:
 			return m.keyQueue[0]
 		}
 	}
-	return m.ram[addr]
+	return m.peek(addr)
 }
 
 func (m *mem) Set(addr uint16, value uint8) {
-	if m.romActive && addr >= m.romBase {
-		return // ROM at boot: the write is dropped, exactly as on hardware
-	}
-	m.ram[addr] = value
+	m.poke(addr, value)
 	// "Key consumed": the inlined KYIP2 poll does RES 5,(HL) on FLAGS after
 	// reading LASTK. A write to FLAGS with bit 5 clear while a key is queued
 	// means the head key was just consumed — advance the queue.
@@ -136,11 +161,23 @@ func (m *mem) Set(addr uint16, value uint8) {
 // just executed and substitute the true port (C = cpu.BC.Lo). This corrects the
 // emulator at our own boundary for every device, with no ambiguity.
 func (m *mem) In(port uint8) uint8 {
-	if m.io == nil {
-		return 0xff
-	}
+	// Apply the INI/IND block-input port correction FIRST: koron-go passes the B
+	// loop-counter as the port on those, so the raw `port` here can be any value
+	// (including &FA/&FB) mid-loop. Only after correcting to the true port (C) is
+	// it safe to test for a paging register — otherwise a packet-read INI whose
+	// counter passes through &FA/&FB would wrongly read LMPR/HMPR instead of the
+	// device byte.
 	if m.cpu != nil && m.isBlockInputPort(port) {
 		port = m.cpu.BC.Lo
+	}
+	// The paging registers (&FA/&FB) are authoritative from the pager — the
+	// dumper does `in a,(HMPR)` (a DB-form IN, never a block input) to read its
+	// push page P.
+	if v, ok := m.pager.PortIn(port); ok {
+		return v
+	}
+	if m.io == nil {
+		return 0xff
 	}
 	return m.io.In(port)
 }
@@ -154,10 +191,10 @@ func (m *mem) isBlockInputPort(port uint8) bool {
 	if pc < 2 {
 		return false
 	}
-	if m.ram[pc-2] != 0xED {
+	if m.peek(pc-2) != 0xED {
 		return false
 	}
-	switch m.ram[pc-1] {
+	switch m.peek(pc - 1) {
 	case 0xA2, 0xB2, 0xAA, 0xBA: // INI, INIR, IND, INDR
 		// Only correct when B (the koron-go port) actually differs from C; if
 		// the driver were genuinely reading port C and B==C this is a no-op.
@@ -167,6 +204,11 @@ func (m *mem) isBlockInputPort(port uint8) bool {
 }
 
 func (m *mem) Out(port uint8, value uint8) {
+	// Apply the paging registers (&FA/&FB) to the pager so LMPR/HMPR writes
+	// actually remap pages. We still forward to the device too: the ENC28J60
+	// model records HMPR writes (LastHMPR) for the trinload test, and the pager
+	// ignores every non-paging port, so a single funnel serves both.
+	m.pager.PortOut(port, value)
 	if m.io != nil {
 		m.io.Out(port, value)
 	}
@@ -199,7 +241,7 @@ func (mac *Machine) setRSTHandler(addr uint16, fn func(cpu *z80.CPU, mac *Machin
 // the cycle-counting anchors to stage hand-assembled opcode bytes and RunFrom
 // them.
 func New() *Machine {
-	return &Machine{m: &mem{}, symbols: map[string]uint16{}}
+	return &Machine{m: &mem{pager: sampage.New()}, symbols: map[string]uint16{}}
 }
 
 // LoadAt is Load with an explicit load origin (org). trinload assembles to
@@ -214,8 +256,10 @@ func LoadAt(binPath, mapPath string, org uint16) (*Machine, error) {
 	if int(org)+len(code) > 0x10000 {
 		return nil, fmt.Errorf("z80: bin of %d bytes overflows from &%04X", len(code), org)
 	}
-	machine := &Machine{m: &mem{}, symbols: map[string]uint16{}}
-	copy(machine.m.ram[org:], code)
+	machine := &Machine{m: &mem{pager: sampage.New()}, symbols: map[string]uint16{}}
+	for i, b := range code {
+		machine.m.poke(org+uint16(i), b)
+	}
 	syms, err := parseMap(mapPath)
 	if err != nil {
 		return nil, err
@@ -252,17 +296,17 @@ func LoadBoot(binPath, mapPath string, romBase uint16) (*Machine, error) {
 		return nil, fmt.Errorf("z80: boot bin of %d bytes overflows from &%04X", len(code), loadOrg)
 	}
 	machine := &Machine{
-		m:       &mem{romActive: true, romBase: romBase},
+		m:       &mem{pager: sampage.New(), romActive: true, romBase: romBase},
 		symbols: map[string]uint16{},
 	}
 	// Copy only the bytes that land in RAM (below romBase); the tail above romBase
-	// hits ROM1 and is never written, as on hardware.
+	// hits ROM1 and is never written, as on hardware (poke drops it via romActive).
 	for i, b := range code {
 		addr := loadOrg + i
 		if addr >= int(romBase) {
 			break
 		}
-		machine.m.ram[addr] = b
+		machine.m.poke(uint16(addr), b)
 	}
 
 	syms, err := parseMap(mapPath)
@@ -272,6 +316,41 @@ func LoadBoot(binPath, mapPath string, romBase uint16) (*Machine, error) {
 	machine.symbols = syms
 	return machine, nil
 }
+
+// LoadPaged loads an &8000-org'd .bin into the single physical RAM page selected
+// by hmpr (its low 5 bits) and parses its map, with LMPR/HMPR set to the given
+// values. It is the paged counterpart of Load for code that must run under a
+// specific paging state — the trinload-pushed dumper, which lives at section C
+// with HMPR = the push page P (trinload's X packet does `out (HMPR),P; jp &8000`).
+//
+// Because section C (&8000-&BFFF) is exactly one 16 KB page, an &8000-org'd image
+// is placed at offset 0 of that page (logical &8000+i maps to section-C offset i),
+// so the whole image must fit in one page; New/Load are the flat-config loaders
+// for everything else. The caller seeds ROM fixtures, scratch pages, and other
+// pages via Pager() before running.
+func LoadPaged(binPath, mapPath string, lmpr, hmpr uint8) (*Machine, error) {
+	code, err := os.ReadFile(binPath)
+	if err != nil {
+		return nil, fmt.Errorf("z80: read paged bin: %w", err)
+	}
+	if len(code) > sampage.PageSize {
+		return nil, fmt.Errorf("z80: paged bin of %d bytes exceeds one 16 KB section-C page", len(code))
+	}
+	pager := sampage.New()
+	pager.LMPR = lmpr
+	pager.HMPR = hmpr
+	copy(pager.RAM[int(hmpr&0x1F)][:], code) // &8000-org'd => section-C page, offset 0
+	syms, err := parseMap(mapPath)
+	if err != nil {
+		return nil, err
+	}
+	return &Machine{m: &mem{pager: pager}, symbols: syms}, nil
+}
+
+// Pager exposes the SAM paging model so a test can seed RAM pages, load ROM
+// fixtures, and inspect the post-run paging state (e.g. assert a routine
+// restored LMPR or clobbered a page). It is the harness's one memory model.
+func (mac *Machine) Pager() *sampage.Mem { return mac.m.pager }
 
 // parseMap reads a pyz80 mapfile: lines of the form "ADDR=NAME" with ADDR in
 // uppercase hex. Lines without an '=' are ignored.
@@ -316,21 +395,23 @@ func (mac *Machine) Sym(name string) (uint16, error) {
 // block before calling it).
 func (mac *Machine) Write(addr uint16, data []byte) {
 	for i, b := range data {
-		mac.m.ram[addr+uint16(i)] = b
+		mac.m.poke(addr+uint16(i), b)
 	}
 }
 
 // WriteU16LE writes a 16-bit value little-endian (the Z80 native order) — used
 // for pointer/length parameter fields the routine reads with `ld hl,(addr)`.
 func (mac *Machine) WriteU16LE(addr, value uint16) {
-	mac.m.ram[addr] = byte(value)
-	mac.m.ram[addr+1] = byte(value >> 8)
+	mac.m.poke(addr, byte(value))
+	mac.m.poke(addr+1, byte(value>>8))
 }
 
 // Read returns n bytes of memory starting at addr.
 func (mac *Machine) Read(addr uint16, n int) []byte {
 	out := make([]byte, n)
-	copy(out, mac.m.ram[addr:int(addr)+n])
+	for i := range out {
+		out[i] = mac.m.peek(addr + uint16(i))
+	}
 	return out
 }
 
@@ -464,9 +545,9 @@ func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (Call
 	// Stack just below the trap; push the trap as the return address so the
 	// routine's RET returns to it.
 	cpu.SP = 0x6FFE
-	mac.m.ram[0x6FFE] = byte(haltTrap & 0xff)
-	mac.m.ram[0x6FFF] = byte(haltTrap >> 8)
-	mac.m.ram[haltTrap] = 0x76 // HALT opcode
+	mac.m.poke(0x6FFE, byte(haltTrap&0xff))
+	mac.m.poke(0x6FFF, byte(haltTrap>>8))
+	mac.m.poke(haltTrap, 0x76) // HALT opcode
 
 	cap := uint64(maxSteps)
 	if in.StepCap != 0 {
@@ -493,7 +574,7 @@ func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (Call
 		// + apply the side effect, and resume where it returns — so the flat harness
 		// runs hook-dispatching code (e.g. the client write-out) it has no ROM for.
 		if h, ok := mac.rstHandlers[cpu.PC]; ok {
-			ret := uint16(mac.m.ram[cpu.SP]) | uint16(mac.m.ram[cpu.SP+1])<<8
+			ret := uint16(mac.m.peek(cpu.SP)) | uint16(mac.m.peek(cpu.SP+1))<<8
 			cpu.SP += 2
 			cpu.PC = h(cpu, mac, ret)
 			steps++

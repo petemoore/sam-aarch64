@@ -13,11 +13,12 @@
 // eeprom_region) fills STAGE correctly and the serve loop streams it intact over
 // a full multi-block transfer.
 //
-// NOT exercised here (HARDWARE-FIRST, guarded out of the host-test build): the
-// ROM-paging read (rom0.bin/rom1.bin). The flat harness has no patched-ROM
-// contents and does not act on LMPR/HMPR, so there is nothing to assert the ROM
-// ldir against — those bytes are captured + diffed on real hardware (i87a/i87b).
-// Emulation-verified is not hardware-verified (CLAUDE.md §5).
+// NOT exercised here (this file uses the host-test build, which stubs out the
+// ROM-paging read): rom0.bin/rom1.bin. Those now run in dumper_rompaging_test.go
+// against the trinload build under the i181 paged harness (the harness DOES act
+// on LMPR/HMPR since i181) — rom0 copies to STAGE, rom1 reproduces the i87a
+// crash. Only the real patched-ROM CONTENTS stay hardware-gated (i87a/i87b;
+// i190a loads them). Emulation-verified is not hardware-verified (CLAUDE.md §5).
 package z80_test
 
 import (

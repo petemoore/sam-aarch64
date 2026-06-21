@@ -2976,9 +2976,11 @@
   title: "Harness: add SAM paging + ROM write-protect to the netboot Go emulator (port the assembler emulator's pager)"
   description: |
     THE RECURRING-&C000 FIX, minimal form (Pete, 2026-06-21). Root of the i87a rom1 crash: the dumper needs BOTH paging and Ethernet but runs in the netboot emulator (tools/netboot-oracle/z80), which models ENC28J60 + EEPROM + trinload round-trip (i132) + a fixed ROM1-RO boot overlay (i124) but does NOT act on LMPR/HMPR (records, doesn't remap) — and the dumper's ROM-paging path is ifdef'd out (NETBOOT_HOSTTEST). The ASSEMBLER emulator (tools/z80-test-harness-go/harness.go) ALREADY has a faithful pager — resolveRead/resolveWritePage do full LMPR/HMPR mapping and SILENTLY DROP ROM writes (ROM0/ROM1 read-only, the &C000 wall). FIX (the immediate, SAMBOOT-critical step — the full two-into-one unification is POSTPONED to i190 per Pete): bring that proven pager (~40 lines) into the netboot emulator so LMPR/HMPR remap real pages and ROM writes drop; load ROM0/ROM1 fixtures + model trinload residency in its pages; un-ifdef the dumper ROM path; reproduce the i87a rom1 page-0-clobbers-trinload crash in emulation (red), then verify the i188 redesign green. Prefer extracting the pager into a SHARED package (a down-payment on i190) over a copy. Unblocks i188.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 523, role: completing}
 
 - id: i182
   title: Bootable fetch-and-boot disk + real-Trinity run of client_fetch_boot
@@ -3031,7 +3033,7 @@
 - id: i188
   title: "SAMBOOT dumper: redesign as single dump-and-return (fix rom1 page-0 scratch clobber + clean trinload return)"
   description: |
-    The i173 dumper crashed real hardware capturing rom1.bin (i87a, 2026-06-21): dumper_read_rom1 picks scratch page P-1 = page 0 (P=1, the trinload push page), ldirs 16 KB of ROM1 into it, and never restores LMPR — clobbering low memory AND remapping section B (&6000) away from trinload (org &6000), killing trinload. Redesign per Pete: one program that reads ALL regions (ROM0/ROM1/EEPROM) with a genuinely-free scratch page + restored paging, streams them in one session, then RETs cleanly to trinload (fixes serve-forever/no-clean-return that blocks the autonomous push->run->return->re-push loop). Emulation-verify the full path (paging + trinload round-trip) before hardware via i181. EEPROM read + rom0 already hw-confirmed (i87a backup).
+    The i173 dumper crashed real hardware capturing rom1.bin (i87a, 2026-06-21): dumper_read_rom1 picks scratch page P-1 = page 0 (P=1, the trinload push page), ldirs 16 KB of ROM1 into it, and never restores LMPR — clobbering low memory AND remapping section B (&6000) away from trinload (org &6000), killing trinload. COMPOUND defect, confirmed in emulation by i181's characterization test (dumper_rompaging_test.go): the routine ALSO clobbers its own register C — it stashes the intended post-copy LMPR (&20) in C, then `ld bc,REGION_BYTES; ldir` counts BC to 0, so the final `ld a,c; out (&FA),a` writes &00 (section A=ROM0, section B=page1), making the mis-paging total. Redesign per Pete: one program that reads ALL regions (ROM0/ROM1/EEPROM) with a genuinely-free scratch page + restored paging + registers not clobbered by the copy, streams them in one session, then RETs cleanly to trinload (fixes serve-forever/no-clean-return that blocks the autonomous push->run->return->re-push loop). When fixed, flip i181's rom1 characterization (page 0 untouched, LMPR==entry). Emulation-verify the full path (paging + trinload round-trip) before hardware via i181. EEPROM read + rom0 already hw-confirmed (i87a backup).
   status: OPEN
   depends_on: [i181]
   kind: leaf

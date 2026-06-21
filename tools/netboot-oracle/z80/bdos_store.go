@@ -293,7 +293,7 @@ func (mac *Machine) AttachBDOS(s *BDOSStore) {
 // byte (the `defb` after the `rst 8`); it returns retAddr+1 so the caller's `ret`
 // resumes past it.
 func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
-	hook := mac.m.ram[retAddr]
+	hook := mac.m.peek(retAddr)
 	switch hook {
 	case bdHookHRECORD:
 		// A=0 = select; HL = the record number (bdos_select_record set both).
@@ -314,7 +314,7 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		ix := cpu.IX
 		var u [bdUIFALen]byte
 		for i := 0; i < bdUIFALen; i++ {
-			u[i] = mac.m.ram[ix+uint16(i)]
+			u[i] = mac.m.peek(ix + uint16(i))
 		}
 		s.saves = append(s.saves, decodeBDOSSave(s.selected, u))
 	case bdHookHGTHD:
@@ -332,7 +332,7 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		linearSec := track*bdSectorsPerTrack + (sector - 1)
 		var data [bdSectorSize]byte
 		for i := range data {
-			data[i] = mac.m.ram[src+uint16(i)]
+			data[i] = mac.m.peek(src + uint16(i))
 		}
 		sw := SectorWrite{Record: s.selected, LinearSec: linearSec, Data: data}
 		s.sectorWrites = append(s.sectorWrites, sw)
@@ -353,7 +353,7 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 			data = s.card.Sector(s.selected, linearSec)
 		}
 		for i, b := range data {
-			mac.m.ram[dest+uint16(i)] = b
+			mac.m.poke(dest+uint16(i), b)
 		}
 	case bdHookListRead:
 		// Card-absolute list-sector read: E = 1-based list-sector number, HL = dest.
@@ -369,7 +369,7 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 			data = s.card.ListSector(listSec)
 		}
 		for i, b := range data {
-			mac.m.ram[dest+uint16(i)] = b
+			mac.m.poke(dest+uint16(i), b)
 		}
 	}
 	return retAddr + 1 // skip the 1-byte inline hook code
