@@ -25,7 +25,7 @@ func TestRegenProducesCanonicalDataGo(t *testing.T) {
 	repoRoot := findRepoRoot(t)
 	bin := filepath.Join(repoRoot, "build", "tables-gen")
 	if _, err := os.Stat(bin); err != nil {
-		t.Skipf("tables-gen binary not found at %s; run `make tables-gen` first", bin)
+		t.Fatalf("tables-gen binary not found at %s; run `make tables-gen` first (the encoder CI job builds it as a test-encoder prerequisite)", bin)
 	}
 
 	tmp := t.TempDir()

@@ -439,7 +439,7 @@ func TestSetStatus_OpenClosedMoveReflectedInGen(t *testing.T) {
 		}
 	}
 	if !isOpen(origStatus) {
-		t.Skip("testdata i1b is not OPEN; fixture may have changed")
+		t.Fatalf("testdata fixture invariant broken: i1b is not OPEN (status=%v) — the test fixture drifted", origStatus)
 	}
 
 	runSetStatus([]string{"--id", "i1b", "--status", "DONE", "--pr", "888"}, paths)

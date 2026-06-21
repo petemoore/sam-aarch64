@@ -16,12 +16,14 @@ import (
 //
 // This replaces the former string-matched goldens under tests/format/golden/: a
 // re-assemble-and-byte-check makes a frozen-wrong golden impossible (the
-// dir_skip_symbolic 80-vs-96 incident). It skips cleanly if the GNU toolchain
-// is not on PATH.
+// dir_skip_symbolic 80-vs-96 incident). It fails hard if the GNU toolchain is
+// not on PATH — the CI jobs that run it (format/encoder) install
+// binutils-aarch64-linux-gnu, so a missing toolchain is a misconfiguration to
+// surface, not a condition to skip past (i253, no-silent-skips).
 func TestGoldenCorpus(t *testing.T) {
 	as := toolName("AARCH64_AS", "aarch64-none-elf-as")
 	if _, err := exec.LookPath(as); err != nil {
-		t.Skipf("missing %s — install the aarch64 GNU toolchain or set AARCH64_AS", as)
+		t.Fatalf("missing %s — install the aarch64 GNU toolchain (binutils-aarch64-linux-gnu, as CI does) or set AARCH64_AS", as)
 	}
 	ld := toolName("AARCH64_LD", deriveTool(as, "ld"))
 	objcopy := toolName("AARCH64_OBJCOPY", deriveTool(as, "objcopy"))

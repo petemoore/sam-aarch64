@@ -56,8 +56,13 @@ ci-disasm-roundtrip: test-disasm
 # fixtures).  Validates the protocol logic in isolation — NOT the Z80
 # execution or the ENC28J60 hardware (those are gated on i80/real-Trinity).
 .PHONY: ci-netboot-oracle
+# SKIP_PRIVATE_TESTS gates the one test that needs the multi-MB Pi firmware
+# blobs (http/manifest_test.go's local-file hash cross-check) — those live in
+# Pete's spectrum4 checkout, are NOT committed, and are absent in CI. The
+# always-on byte-for-byte gate is z80/fw_source_test.go; every other fixture
+# here is committed and its test fails hard if missing (i253, no-silent-skips).
 ci-netboot-oracle:
-	cd tools/netboot-oracle && go test ./...
+	cd tools/netboot-oracle && SKIP_PRIVATE_TESTS=true go test ./...
 
 # ci-registry — run the registry CLI's Go unit tests (id-allocation / nextSubID,
 # parent invariants, gate column, in-progress, and the live-registry conformance

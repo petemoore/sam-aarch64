@@ -245,7 +245,12 @@ func TestTLSClientHandshakeReplay(t *testing.T) {
 			}
 		}
 		if idx < 0 {
-			t.Skip("no encrypted flight record in the capture")
+			// cap comes from a full TLS 1.3 handshake against an in-process
+			// crypto/tls.Server, which always sends its EncryptedExtensions /
+			// Certificate / CertificateVerify / Finished under the handshake key
+			// as 0x17 application_data records — so an inbound 0x17 is always
+			// present. Its absence means the capture fixture changed.
+			t.Fatal("capture is missing its encrypted flight record (no inbound 0x17) — fixture changed")
 		}
 
 		mac := initFirstClient(t, cap)

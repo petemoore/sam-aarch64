@@ -128,7 +128,15 @@ func TestManifestHashesMatchLocalFiles(t *testing.T) {
 	for _, f := range RPiFirmware.Files {
 		data, err := os.ReadFile(dir + f.Name)
 		if err != nil {
-			t.Skipf("firmware files not present (%s); skipping local-file hash cross-check", f.Name)
+			// The Pi firmware blobs are multi-MB external files (Pete's spectrum4
+			// checkout), NOT committed to this repo — analogous to the proprietary
+			// captures. Absence is the normal CI state, but it must be an EXPLICIT
+			// skip gated on SKIP_PRIVATE_TESTS, never a silent one (i253). The
+			// always-on byte-for-byte gate is z80/fw_source_test.go.
+			if os.Getenv("SKIP_PRIVATE_TESTS") == "true" {
+				t.Skipf("SKIP_PRIVATE_TESTS: firmware blobs absent — %s", f.Name)
+			}
+			t.Fatalf("firmware blobs not present (%s) — fetch them (Pete's spectrum4 checkout) or set SKIP_PRIVATE_TESTS=true", f.Name)
 		}
 		if got := sha256.Sum256(data); got != f.SHA256 {
 			t.Errorf("%s: pinned SHA-256 %x != actual %x", f.Name, f.SHA256, got)

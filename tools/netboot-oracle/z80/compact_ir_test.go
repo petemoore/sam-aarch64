@@ -63,6 +63,41 @@ const (
 	compactRecsCap      = 1344
 )
 
+// compactKnownOversize is the reviewed exclude-list of corpus fixtures that
+// exceed one of the compact-core caps above. Those caps mirror the SAM's real
+// on-chip buffer reservations, so an oversize fixture genuinely cannot be
+// processed on hardware — a true limit, NOT a compact bug or a test gap. Each
+// entry is name -> the reason (which cap, with the observed size). A NEW corpus
+// fixture that exceeds any cap but is absent here is a t.Fatalf (it must be
+// reviewed and added, never silently skipped); a stale entry (never hit) is a
+// t.Errorf at end of the corpus sweep. See i253 (no-silent-skips).
+var compactKnownOversize = map[string]string{
+	"in_long_source.s":        "sidecar ~16539 B exceeds the 768-byte COMPACT_SIDECAR cap (comment-heavy paged fixture)",
+	"inst_adrp_highorigin.s":  "sidecar ~1643 B exceeds the 768-byte COMPACT_SIDECAR cap (comment-heavy paged fixture)",
+	"inst_bic_imm.s":          "sidecar ~973 B exceeds the 768-byte COMPACT_SIDECAR cap (comment-heavy paged fixture)",
+	"inst_expr_muldiv.s":      "sidecar ~1923 B exceeds the 768-byte COMPACT_SIDECAR cap (comment-heavy paged fixture)",
+	"inst_ldr_literal.s":      "sidecar ~860 B exceeds the 768-byte COMPACT_SIDECAR cap (comment-heavy paged fixture)",
+	"inst_logical_noncanon.s": "sidecar ~1343 B exceeds the 768-byte COMPACT_SIDECAR cap (comment-heavy paged fixture)",
+	"inst_long_emit.s":        "sidecar ~1110 B exceeds the 768-byte COMPACT_SIDECAR cap (comment-heavy paged fixture)",
+	"inst_mov_setconst.s":     "sidecar ~1599 B exceeds the 768-byte COMPACT_SIDECAR cap (comment-heavy paged fixture)",
+	"inst_quad_addr.s":        "sidecar ~1380 B exceeds the 768-byte COMPACT_SIDECAR cap (comment-heavy paged fixture)",
+}
+
+// compactKnownTranslateOOS is the reviewed exclude-list of corpus fixtures that
+// frontend.Translate cannot handle in isolation — a fixture-scope issue, not a
+// compact gap. Empty today: every corpus fixture Translates standalone. A NEW
+// fixture that errors but is absent here is a t.Fatalf; a stale entry is a
+// t.Errorf.
+var compactKnownTranslateOOS = map[string]string{}
+
+// compactOversizeSeen / compactTranslateOOSSeen record which exclude-list
+// entries the corpus sweep actually hit, so a stale (never-encountered) entry
+// can be flagged after the sweep.
+var (
+	compactOversizeSeen     = map[string]bool{}
+	compactTranslateOOSSeen = map[string]bool{}
+)
+
 // z80SidecarBytes is the on-wire size of the Z80 COMPACT_SIDECAR buffer for these
 // rows (row = [kind u8][anchor u32]; comment tail = [placement u8][len u16][body];
 // blank tail = [run_len u32]).
@@ -185,7 +220,10 @@ func runCompactIR(t *testing.T, mac *z80h.Machine, ir []byte) {
 		t.Fatal(err)
 	}
 	if len(ir) > pass1IRBufSize {
-		t.Skipf("IR %d bytes exceeds the %d-byte PASS1_IR_BUF (out of harness scope)", len(ir), pass1IRBufSize)
+		// checkCompactFixture screens every compact-core cap (and any oversize
+		// fixture is a reviewed compactKnownOversize entry) before reaching here,
+		// so an IR larger than PASS1_IR_BUF at this point is a caller bug.
+		t.Fatalf("runCompactIR reached with oversize IR (%d > %d) — checkCompactFixture should have screened it", len(ir), pass1IRBufSize)
 	}
 	mac.Write(bufAddr, ir)
 	mac.WriteU16LE(lenAddr, uint16(len(ir)))
@@ -347,6 +385,22 @@ func countInsnElements(t *testing.T, payload []byte) int {
 	return n
 }
 
+// compactOversize is the single decision point for a fixture that exceeds one
+// of the compact-core caps. A REVIEWED entry in compactKnownOversize is recorded
+// as seen and the caller returns (it just doesn't run — a documented hardware
+// limit, never a silent t.Skip). An unknown oversize fixture is a t.Fatalf: it
+// must be reviewed and added to the list. Returns true iff the caller should
+// return (i.e. the fixture is a known oversize).
+func compactOversize(t *testing.T, name, what string, got, capBytes int, capName string) bool {
+	t.Helper()
+	if _, known := compactKnownOversize[name]; known {
+		compactOversizeSeen[name] = true
+		return true
+	}
+	t.Fatalf("%s: %s %d exceeds the %d-byte %s cap and is NOT in compactKnownOversize — review and add it (with the cap+size) or shrink the fixture", name, what, got, capBytes, capName)
+	return false // unreachable; t.Fatalf stops the goroutine
+}
+
 // checkCompactFixture is the per-source assertion: Translate → host Pass1 →
 // host Compact (expected), and serializeIR → Z80 compact_ir_walk (got),
 // compared on sidecar rows, globals, and the non-encoder record-stream view.
@@ -367,20 +421,35 @@ func checkCompactFixture(t *testing.T, name string, src []byte) {
 	if err != nil {
 		t.Fatalf("%s: host Compact: %v", name, err)
 	}
-	if len(f.Records) > compactRecPCRecords {
-		t.Skipf("%s: %d records exceeds the %d-record COMPACT_REC_PC cap (out of harness scope)", name, len(f.Records), compactRecPCRecords)
+	// Cap screens: every cap mirrors a real on-SAM buffer reservation, so a
+	// fixture that exceeds one genuinely cannot be processed on hardware. Such a
+	// fixture must be a REVIEWED entry in compactKnownOversize (then we just don't
+	// run it); a NEW oversize fixture absent from the list fails hard so it gets
+	// reviewed (no silent skip — i253). compactOversize centralises that rule.
+	if n := len(f.Records); n > compactRecPCRecords {
+		if compactOversize(t, name, "records", n, compactRecPCRecords, "COMPACT_REC_PC") {
+			return
+		}
 	}
 	if n := z80SidecarBytes(wantSidecar); n > compactSidecarCap {
-		t.Skipf("%s: sidecar %d bytes exceeds the %d-byte COMPACT_SIDECAR cap (comment-heavy fixture, out of harness scope)", name, n, compactSidecarCap)
+		if compactOversize(t, name, "sidecar bytes", n, compactSidecarCap, "COMPACT_SIDECAR") {
+			return
+		}
 	}
 	if n := len(wantGlobals) * 2; n > compactGlobalsCap {
-		t.Skipf("%s: globals %d bytes exceeds the %d-byte COMPACT_GLOBALS cap (out of harness scope)", name, n, compactGlobalsCap)
+		if compactOversize(t, name, "globals bytes", n, compactGlobalsCap, "COMPACT_GLOBALS") {
+			return
+		}
 	}
 	if n := z80DataRunBytes(t, wantRecs); n > compactDataRunCap {
-		t.Skipf("%s: data run %d bytes exceeds the %d-byte COMPACT_DATA_RUN cap (out of harness scope)", name, n, compactDataRunCap)
+		if compactOversize(t, name, "data run bytes", n, compactDataRunCap, "COMPACT_DATA_RUN") {
+			return
+		}
 	}
 	if n := z80RecsBytes(t, wantRecs); n > compactRecsCap {
-		t.Skipf("%s: record stream %d bytes exceeds the %d-byte COMPACT_RECS cap (out of harness scope)", name, n, compactRecsCap)
+		if compactOversize(t, name, "record stream bytes", n, compactRecsCap, "COMPACT_RECS") {
+			return
+		}
 	}
 
 	ir := serializeIR(t, f)
@@ -560,10 +629,28 @@ func TestCompactIRCoreFixtures(t *testing.T) {
 			}
 			t.Run(dir+"/"+e.Name(), func(t *testing.T) {
 				if _, err := frontend.Translate(src, e.Name()); err != nil {
-					t.Skipf("%s: Translate error (out of compact-ir fixture scope): %v", e.Name(), err)
+					if _, known := compactKnownTranslateOOS[e.Name()]; known {
+						compactTranslateOOSSeen[e.Name()] = true
+						return
+					}
+					t.Fatalf("%s: Translate error and NOT in compactKnownTranslateOOS — review and add it or fix Translate: %v", e.Name(), err)
 				}
 				checkCompactFixture(t, e.Name(), src)
 			})
+		}
+	}
+
+	// Stale-entry guard: every exclude-list entry must have been encountered by
+	// the corpus sweep, else the list has drifted (the fixture was renamed,
+	// removed, or shrank below the cap) and should be pruned.
+	for name := range compactKnownOversize {
+		if !compactOversizeSeen[name] {
+			t.Errorf("compactKnownOversize entry %q was never encountered — stale, prune it", name)
+		}
+	}
+	for name := range compactKnownTranslateOOS {
+		if !compactTranslateOOSSeen[name] {
+			t.Errorf("compactKnownTranslateOOS entry %q was never encountered — stale, prune it", name)
 		}
 	}
 }
