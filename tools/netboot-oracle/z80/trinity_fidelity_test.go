@@ -78,6 +78,8 @@ func TestTrinityBusyGate(t *testing.T) {
 	dropped := z80h.NewENC28J60()
 	dropped.AttachSD(csd)
 	dropped.Out(0xDC, 0x31) // select SD (raises BUSY)
+	dropped.In(0xDC)        // poll clears BUSY
+	dropped.Out(0xDF, 0xFF) // leading flush — the required Ncc sync before a command (i245)
 	dropped.In(0xDC)        // poll clears BUSY -> the opener lands
 	dropped.Out(0xDF, 0x40) // CMD0 opener (raises BUSY)
 	dropped.Out(0xDF, 0x00) // 2nd byte issued WHILE BUSY -> DROPPED (no poll between)
@@ -101,6 +103,8 @@ func TestTrinityBusyGate(t *testing.T) {
 	polled.AttachSD(csd)
 	polled.Out(0xDC, 0x31)
 	polled.In(0xDC)
+	polled.In(0xDC)        // poll
+	polled.Out(0xDF, 0xFF) // leading flush — the required Ncc sync before a command (i245)
 	for _, b := range []byte{0x40, 0x00, 0x00, 0x00, 0x00, 0x95} {
 		polled.In(0xDC) // canonical wait_ready before each OUT
 		polled.Out(0xDF, b)
