@@ -139,6 +139,12 @@ type ENC28J60 struct {
 	// (data) with the identity probe; csAssert/Deassert frame its transactions.
 	eep eeprom
 
+	// sd is the third device on the Trinity SPI bus: the SD card (sdcard.go),
+	// sharing &DC (select) with the SD &31/&30/&38/&3F select bytes and &DF (data).
+	// It is INERT until a CSD is configured (AttachSD), so tests with no card see
+	// the pre-existing &DF=0xFF idle stub unchanged.
+	sd SDCard
+
 	// lastBorder records the most recent OUT (&FE) value. The boot wrappers paint
 	// a distinctive border on each outcome (red=bad config, blue=ENC init failed,
 	// green=success), so a boot test can read which stage a wrapper reached.
@@ -197,6 +203,20 @@ func NewENC28J60(rxFrames ...[]byte) *ENC28J60 {
 	}
 	return e
 }
+
+// AttachSD configures the emulated SD card with the given 16 CSD register bytes
+// and arms the SD-SPI model: from this point the &DC SD selects (&31/&30/&38/&3F)
+// and the &DF data port drive a real command/response state machine (sdcard.go),
+// so Colin's B-DOS init ladder can run CMD0..CMD9 against it. Without this call
+// the card stays inert and &DF returns the idle &FF stub (every pre-existing test
+// is unaffected). Returns the *SDCard for any further configuration.
+func (e *ENC28J60) AttachSD(csd [16]byte) *SDCard {
+	e.sd.SetCSD(csd)
+	return &e.sd
+}
+
+// SD returns the embedded SD card model (for tests that want to read its state).
+func (e *ENC28J60) SD() *SDCard { return &e.sd }
 
 // InjectRX queues an Ethernet frame (no FCS) for the driver to receive. It is
 // delivered to the RX FIFO and EPKTCNT incremented the next time the driver is
@@ -322,7 +342,11 @@ func (e *ENC28J60) In(port uint8) uint8 {
 		// recent OUT (&DE) (a control-register read's dummy clock).
 		return e.spiMISO
 	case portTrinitySD:
-		return 0xFF // SD stub: idle MISO
+		// SD card SPI read. Inert (returns the idle &FF stub) until a CSD is
+		// configured via AttachSD; otherwise drives the real command/response
+		// state machine (one-byte read-lag in manual mode, auto-advance in &3F
+		// auto-null mode).
+		return e.sd.in()
 	}
 	return 0xFF
 }
@@ -347,12 +371,21 @@ func (e *ENC28J60) Out(port uint8, value uint8) {
 		e.lastHMPR = value
 		e.hmprWritten = true
 	case portTrinitySD:
-		// SD data writes: no model needed here.
+		// SD card SPI write (a manual-mode sd.out, &FF flush, or command byte).
+		// Inert until a CSD is configured; then accumulates the command frame and
+		// advances the response stream / read-lag latch.
+		e.sd.out(value)
 	}
 }
 
 // ctlSelect handles an OUT to the microcontroller select port (&DC).
 func (e *ENC28J60) ctlSelect(v uint8) {
+	// SD-card selects (&31/&30/&38/&3F) are claimed by the SD model first (only
+	// when a card is configured); they must not disturb the ENC SPI state. The
+	// shared &04 (all-deselect bracket) also resets the SD card below.
+	if e.sd.sdSelect(v) {
+		return
+	}
 	switch v {
 	case selENCEnable:
 		// Asserting CS begins a fresh SPI transaction.
@@ -369,6 +402,9 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 		e.autoNull = true
 	case selNullOff:
 		e.autoNull = false
+		// &04 is the SD init ladder's all-deselect bracket too (dis &A626/&A8EE):
+		// drop SD CS and clear its per-transaction state.
+		e.sd.sdReset()
 	case selProbeT:
 		e.probeReply = 'T' // 0x54
 	case selProbeR:
