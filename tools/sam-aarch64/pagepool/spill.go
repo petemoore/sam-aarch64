@@ -106,9 +106,10 @@ func (m *Manager) tick() uint64 {
 // block to evict). This is the lazy hinge of design §4.5: it performs disk I/O
 // ONLY when FREE is empty, and exactly one eviction per shortfall.
 //
-// protect, when >= 0 as a BlockID's worth, names a block that must not be
-// chosen as the victim (the block currently being reloaded); pass noProtect to
-// protect nothing.
+// When protecting is true, protect names a block that must not be chosen as the
+// victim (the block currently being reloaded); the boolean — not a sentinel id —
+// is the gate, so block id 0 is still protectable. Callers that protect nothing
+// pass (noProtect, false).
 func (m *Manager) ensureFreePage(protect BlockID, protecting bool) error {
 	if m.pool.FreeCount() > 0 {
 		return nil // FREE non-empty: hand out a page, no disk I/O (the common path)
