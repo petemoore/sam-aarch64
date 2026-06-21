@@ -649,7 +649,7 @@
   description: |
     Replace i41a's raw-text line payload with the i48 in-memory symbolic IR (parsed format.Record): a document-global symbol table + name-id/record-id side-tables (§3), a hybrid committed-parsed / active-raw / invalid-error record type (§7.3), per-line text→IR entry. q24 resolved (2026-06-20): the editor validates ONE LINE AT A TIME — no whole-document import to serialize invalidly; the design point is how an in-progress/invalid LINE is held + round-tripped (whole-file import = i165). Open design (symbol-table lifecycle, hybrid sum type, per-line parse) — needs a design pass (§8/§5.2/§6/§7.3).
   status: OPEN
-  depends_on: [i2a]
+  depends_on: [i2a, q51]
   kind: leaf
   owner: agent
   parent: i41
@@ -658,8 +658,9 @@
 - id: i42
   title: CRC / signature in the .tbn file header (integrity check)
   description: |
-    Deferred since M1. The v1 header has magic/version/flags but no integrity field. Add a CRC or signature field to the .tbn header for integrity checking. Referenced in the M1 status 'Known gaps' list.
+    STALE FRAMING (this row predates the v2 format): it says 'the v1 header has magic/version/flags but no integrity field' — but the .tbn format was redesigned to v2 ('Format B', shipped via i39/M8 2026-06-12, designed WITH Pete). Re-scope to v2. Intent stands: add a CRC/checksum/signature integrity field so a corrupted .tbn (bad disk sector, truncated transfer) is detected rather than silently mis-assembled. This is a FORMAT EVOLUTION of Pete's carefully-designed v2 format and touches the byte-match CI gates (release-gate, disasm-roundtrip) + the SAM-side reader (verify-on-load costs T-states). Genuine design choices -> q52 (Pete's format call): which integrity primitive, where in the v2 header, version strategy/back-compat, what bytes are covered, and whether the SAM-side verify cost is worth it. Gated on q52.
   status: OPEN
+  depends_on: [q52]
   kind: leaf
   owner: agent
   refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m1-status.md"]
@@ -669,6 +670,7 @@
   description: |
     Phase-2 editor sub-feature. Register simulator with user-chosen seeds: step instructions, inject/randomise source regs, show dest regs/flags/memory, and replay-on-edit. Described in docs/ROADMAP.md 'Editor vision'.
   status: OPEN
+  depends_on: [i41]
   kind: leaf
   owner: agent
   parent: i3
@@ -679,6 +681,7 @@
   description: |
     Phase-2 editor sub-feature. Inline instruction-explanation panel showing prose semantics, flags set, regs read/written, and bit-field layout. Described in docs/ROADMAP.md 'Editor vision'.
   status: OPEN
+  depends_on: [i41]
   kind: leaf
   owner: agent
   parent: i3
@@ -689,6 +692,7 @@
   description: |
     Phase-2 editor sub-feature. Suggests result-equivalent but simpler instruction rewrites when a more concise encoding exists. Described in docs/ROADMAP.md 'Editor vision'.
   status: OPEN
+  depends_on: [i41]
   kind: leaf
   owner: agent
   parent: i3
@@ -699,6 +703,7 @@
   description: |
     Phase-2 editor sub-feature. System-register documentation panel surfaced from the cursor line, embedding an ARM MRA subset with editorial overlay. Described in docs/ROADMAP.md 'Editor vision'.
   status: OPEN
+  depends_on: [i41]
   kind: leaf
   owner: agent
   parent: i3
@@ -709,6 +714,7 @@
   description: |
     Phase-2 editor sub-features. 'Why is this instruction here?' inverse-flow navigation plus retro UI affordances including chiptune audio, period fonts, and animations. Described in docs/ROADMAP.md 'Editor vision'.
   status: OPEN
+  depends_on: [i41]
   kind: leaf
   owner: agent
   parent: i3
@@ -1158,6 +1164,7 @@
   description: |
     On-SAM counterpart to the host -strip-comments/-thin-comments flags. Saves a .tbn with the editor region stripped/thinned so a 256 KB SAM can assemble sources authored on a 512 KB machine. q9 resolved (Pete 2026-06-10): the tool targets both 256 and 512 KB SAMs; the full unstripped release .tbn is allowed to exceed 256 KB, but a 256 KB user must still be able to assemble via this stripped disk handoff. Host equivalent already exists.
   status: OPEN
+  depends_on: [i41]
   kind: leaf
   owner: agent
   refs: [i59]
@@ -1245,6 +1252,7 @@
   description: |
     Low-severity hardening items split from i17 (PR #185). Landed: L1 emit_byte off-by-one (PR #338), L6 .align>=16 silent no-op (PR #339), L7 pass-1 backward-.org check missing (PR #340), L9 retired symbolic-encoder path removed (PR #371, q20 sweep), and L3/L4/L5/L10/L11 hardening guards (this PR): L3 symbol_abs_bit_ptr id<512 bound (symbols.asm), L4 reader STAGING_BUF exactly-full off-by-one — a 1024-byte record now fits (reader.asm), L5 zero-length LIT_DATA/INSN_RUN BC-underflow guard (main_loop.asm), L10 litpool u8 segment-counter wrap guard (litpool.asm), L11 load_in_file editor-offset b2>=&40 decode-wrap guard (main_loop.asm). Each guard only affects its documented edge case; release byte-match + boot self-tests unchanged. Open: L12 .set/.equ redefinition divergence — Go silently overwrites, Z80 hard-fails on duplicate; a real behaviour change with a two-pass tie-break question -> deferred to q49 (owner pete). Follow-up i109 (vestigial soft-reject hook).
   status: OPEN
+  depends_on: [q49]
   kind: leaf
   owner: agent
   refs: ["PR #185", i17]
