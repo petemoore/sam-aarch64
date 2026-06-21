@@ -22,7 +22,7 @@ Outputs:
   - `src/tbn_constants.inc` — the `OP_KIND_*` / `REC_KIND_*` / `DIR_*`
     assembly-time equates that interpret a `.tbn` record stream, projected
     from `operands.go` / `kinds.go` / `directives.go` (i7 phase C1). The
-    `REC_KIND_*` block is the 6-of-9 subset the Z80 dispatches on.
+    `REC_KIND_*` block is the 7-of-9 subset the Z80 dispatches on.
   - `src/mnemonic_ids.inc` — the `MNEM_<NAME>` mnemonic-ID equates the Z80
     intercepts dispatch on (`src/intercepts.asm`), projected from
     `mnemonics.go` `MnemonicTable` (i7 phase C2). Conditional-branch names

@@ -16,9 +16,9 @@ package format
 // emitted wrong bytes. The invariants:
 //
 //	OP_KIND_*   every Go OperandKind MUST have a matching equate at its value.
-//	REC_KIND_*  the Z80 carries a 6-of-9 SUBSET (it omits LABEL_DEF/LOCAL_DEF/
-//	            BLANK_RUN); every equate present MUST match the Go value, and the
-//	            three omitted kinds MUST be absent.
+//	REC_KIND_*  the Z80 carries a 7-of-9 SUBSET (it omits LABEL_DEF/LOCAL_DEF);
+//	            every equate present MUST match the Go value, and the two omitted
+//	            kinds MUST be absent.
 //	DIR_*       every DirectiveTable entry MUST have a matching equate at its ID,
 //	            and there MUST be no extra DIR_* equates.
 
@@ -131,10 +131,12 @@ func TestTbnConstantsZ80Sync(t *testing.T) {
 		}
 	}
 
-	// REC_KIND_* — the 6-of-9 subset the Z80 dispatches on.
+	// REC_KIND_* — the 7-of-9 subset the Z80 dispatches on (BLANK_RUN added by
+	// the i48c-b7 parser brick).
 	recPresent := map[RecordKind]string{
 		KindInst: "INST", KindDirective: "DIRECTIVE", KindComment: "COMMENT",
 		KindLitInsts: "LIT_INSTS", KindLitData: "LIT_DATA", KindInsnRun: "INSN_RUN",
+		KindBlankRun: "BLANK_RUN",
 	}
 	for k, suffix := range recPresent {
 		name := "REC_KIND_" + suffix
@@ -147,10 +149,10 @@ func TestTbnConstantsZ80Sync(t *testing.T) {
 			t.Errorf("%s = %d; Go RecordKind = %d", name, got, int(k))
 		}
 	}
-	for _, suffix := range []string{"LABEL_DEF", "LOCAL_DEF", "BLANK_RUN"} {
+	for _, suffix := range []string{"LABEL_DEF", "LOCAL_DEF"} {
 		name := "REC_KIND_" + suffix
 		if _, ok := eq[name]; ok {
-			t.Errorf("%s: present, but the Z80 deliberately omits this kind (6-of-9 subset)", name)
+			t.Errorf("%s: present, but the Z80 deliberately omits this kind (7-of-9 subset)", name)
 		}
 	}
 

@@ -60,7 +60,7 @@ func RenderConstantsInc(w io.Writer) error {
 	fmt.Fprintln(w, "; -----------------------------------------------------------------------")
 	fmt.Fprintln(w, "; RecordKind constants (tools/sam-aarch64-format/kinds.go).")
 	fmt.Fprintln(w, "; The Z80 carries a SUBSET of the Go RecordKind set — only the kinds it")
-	fmt.Fprintln(w, "; dispatches on (it omits LABEL_DEF, LOCAL_DEF, BLANK_RUN).")
+	fmt.Fprintln(w, "; dispatches on (it omits LABEL_DEF, LOCAL_DEF).")
 	fmt.Fprintln(w, "; -----------------------------------------------------------------------")
 	for _, rk := range recKinds {
 		if got := byte(rk.kind); got != rk.value {
@@ -149,7 +149,7 @@ var opKinds = []opKindEntry{
 }
 
 // recKindEntry binds a Go RecordKind to its Z80 equate suffix and value. The
-// Z80 carries only the six kinds it dispatches on — see RenderConstantsInc.
+// Z80 carries only the kinds it dispatches on — see RenderConstantsInc.
 type recKindEntry struct {
 	kind   format.RecordKind
 	value  byte
@@ -160,6 +160,7 @@ var recKinds = []recKindEntry{
 	{format.KindInst, 0x01, "INST"},
 	{format.KindDirective, 0x04, "DIRECTIVE"},
 	{format.KindComment, 0x05, "COMMENT"},
+	{format.KindBlankRun, 0x06, "BLANK_RUN"},
 	{format.KindLitInsts, 0x07, "LIT_INSTS"},
 	{format.KindLitData, 0x08, "LIT_DATA"},
 	{format.KindInsnRun, 0x09, "INSN_RUN"},
@@ -265,7 +266,7 @@ func writeConstantsHeader(w io.Writer) {
 	fmt.Fprintln(w, ";")
 	fmt.Fprintln(w, "; Projected from the Go authority:")
 	fmt.Fprintln(w, ";   OP_KIND_*   — tools/sam-aarch64-format/operands.go (OperandKind)")
-	fmt.Fprintln(w, ";   REC_KIND_*  — tools/sam-aarch64-format/kinds.go (RecordKind; a 6-of-9")
+	fmt.Fprintln(w, ";   REC_KIND_*  — tools/sam-aarch64-format/kinds.go (RecordKind; a 7-of-9")
 	fmt.Fprintln(w, ";                 subset — the Z80 dispatches only on these)")
 	fmt.Fprintln(w, ";   DIR_*       — tools/sam-aarch64-format/directives.go (DirectiveTable)")
 	fmt.Fprintln(w, ";   MEM_SHAPE_* — tools/sam-aarch64-format/operands.go (MemShape)")

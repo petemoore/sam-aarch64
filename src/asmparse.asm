@@ -1,4 +1,5 @@
-; asmparse.asm — aarch64 assembler-source parser, i48c Brick B5a (text→records).
+; asmparse.asm — aarch64 assembler-source parser, i48c Bricks B2a-B5a + B7
+; (text→records).
 ;
 ; SAM-side Z80 port of the Go authority's parser:
 ;   tools/sam-aarch64/frontend/parser.go  (Parse / parseInst / parseOperand /
@@ -75,27 +76,42 @@
 ;        literal `(hw<<16)|imm`; a symbolic immediate emits the expression
 ;        `(hw<<16) | (immExpr & 0xffff)`. parse_inst dispatches to parse_movk on
 ;        the movk/movz/movn mnemonic ids before the generic operand loop.
-;        The remaining special forms (movl / ldr= / barriers / mrs-msr / dc-tlbi,
-;        B5b-B5f), directives, labels, comments and blank-runs are later bricks
-;        (B5b-B7) — a line that needs one is outside this domain and sets
-;        PARSE_ERR.
+;   B7 (this): the line-level non-statement records — COMMENT and BLANK_RUN
+;        (port of parseLine's blank-run count + comment handling, parser.go:
+;        72-145, plus emitComment/emitBlankRun, parser.go:48-57). parse_run's
+;        outer loop now mirrors parseLine: per logical line it first counts the
+;        leading run of genuine blank lines (a BLANK_RUN record), then parses the
+;        statement line, emitting a COMMENT record for each `//`/`#`/`/* */`
+;        comment token with placement 0 (line-leading) or 1 (after a statement
+;        on the same line). The lexer already carries each comment's body as the
+;        token span. The remaining special forms (movl / ldr= / barriers /
+;        mrs-msr / dc-tlbi, B5b-B5f), directives and labels are later bricks — a
+;        line that needs one is outside this domain and sets PARSE_ERR.
 ;
-; INST record (emission form — original framing for the host harness; the
-; OPERAND bytes are byte-faithful to format.OperandWriter):
-;   mnemonic_id:2 LE | operand_count:1 | operands_len:2 LE | operands[]
-; A register operand is `kind:1, reg:1` (kind = OP_KIND_REG_X/W/XSP/WSP); an
-; immediate operand is `OP_KIND_IMM_EXPR:1, expr_len:2 LE, expr[]` where expr is
-; `PUSH_IMMn:1, value:n LE` (n = 1/2/4/8, the shortest signed fit).
+; RECORD STREAM (emission form — original framing for the host harness; the
+; OPERAND bytes are byte-faithful to format.OperandWriter). The stream is
+; self-describing: every record begins with a REC_KIND_* tag byte so a reader
+; can walk a mix of record kinds. The three kinds emitted:
+;   INST:      REC_KIND_INST | mnemonic_id:2 LE | operand_count:1 |
+;              operands_len:2 LE | operands[]
+;   COMMENT:   REC_KIND_COMMENT | len:2 LE | placement:1 | body[]   (len = 1+body)
+;   BLANK_RUN: REC_KIND_BLANK_RUN | len:2 LE | run_len:4 LE          (len = 4)
+; COMMENT / BLANK_RUN use the format-package [kind:1][len:2][payload] framing
+; (tools/sam-aarch64-format/reader.go); INST keeps its richer header after the
+; tag. A register operand is `kind:1, reg:1` (kind = OP_KIND_REG_X/W/XSP/WSP);
+; an immediate operand is `OP_KIND_IMM_EXPR:1, expr_len:2 LE, expr[]` where expr
+; is `PUSH_IMMn:1, value:n LE` (n = 1/2/4/8, the shortest signed fit).
 ;
-; PROVENANCE: algorithmic port of parser.go (parseInst / parseOperand /
-; parseExprPrec / parseExprPrimary / tokPrec) + format/operands.go + format/
-; expr.go (ExprWriter / EvalConst); the name→id table is generated from the Go
-; authority (tables-gen -mnemonic-names-inc → src/mnemonic_names.inc).
+; PROVENANCE: algorithmic port of parser.go (Parse / parseLine / parseInst /
+; parseOperand / parseExprPrec / parseExprPrimary / tokPrec / emitComment /
+; emitBlankRun) + format/operands.go + format/expr.go (ExprWriter / EvalConst);
+; the name→id table is generated from the Go authority (tables-gen
+; -mnemonic-names-inc → src/mnemonic_names.inc).
 ; VERIFICATION: tools/netboot-oracle/z80/asmparse_test.go drives mnemonic_lookup
 ; + parse_run under koron-go/z80 and compares against the authority
-; (format.MnemonicID for the table; a faithful refParse built on the real
-; format.OperandWriter / format.ExprWriter / format.EvalConst for the INST
-; records), with mutation-tested teeth.
+; (format.MnemonicID for the table; faithful refParse / refParseFull built on
+; the real format.OperandWriter / format.ExprWriter / format.EvalConst for the
+; INST / COMMENT / BLANK_RUN records), with mutation-tested teeth.
 
                 if defined(ASMPARSE_STANDALONE)
                 org     &8000
@@ -149,11 +165,17 @@ EXPR_REL_ABS_G2NC: equ &37
 EXPR_REL_ABS_G3:   equ &38
 
 ; ===========================================================================
-; parse_run — tokenise LEX_SRC (BC = length) and parse it into INST records.
+; parse_run — tokenise LEX_SRC (BC = length) and parse it into records.
 ;
 ; Entry: BC = source byte length; source already written to LEX_SRC.
-; Exit:  BC = number of INST records emitted (at PARSE_RECS). PARSE_ERR is
-;        non-zero if the lexer erred or a line fell outside B2b's domain.
+; Exit:  BC = number of records emitted (at PARSE_RECS). PARSE_ERR is non-zero
+;        if the lexer erred or a line fell outside the parser's domain.
+;
+; The outer loop is a faithful port of parser.go's parseLine (parser.go:72-144),
+; iterated once per logical source line by Parse (parser.go:19-23): each pass
+; counts the leading run of blank lines (a BLANK_RUN record), then parses the
+; statement line — instructions plus the COMMENT records the line carries, with
+; placement set by whether a statement has been emitted yet on the line (B7).
 ; ===========================================================================
 parse_run:
                 call    lex_run             ; tokenize into LEX_TOKS
@@ -169,23 +191,63 @@ parse_run:
                 ld      a, (LEX_ERR)        ; a lexical error stops the parse
                 or      a
                 jr      nz, pr_lexerr
+; --- parseLine: count the leading run of blank lines (genuine TOK_EOL only) ---
 pr_loop:
+                ld      hl, 0
+                ld      (PR_BLANKS), hl     ; blanks = 0 (u16 run length)
+pr_blank_loop:
                 ld      hl, (PARSE_TOK)
-                ld      a, (hl)             ; current token kind
+                ld      a, (hl)
+                cp      TOK_EOL
+                jr      nz, pr_blank_done   ; non-blank token ends the blank run
+                call    parse_advance_tok   ; consume the blank TOK_EOL
+                ld      hl, (PR_BLANKS)
+                inc     hl
+                ld      (PR_BLANKS), hl     ; blanks++
+                jr      pr_blank_loop
+pr_blank_done:
+                ld      hl, (PR_BLANKS)
+                ld      a, h
+                or      l
+                jr      z, pr_no_blanks     ; blanks == 0: emit nothing
+                call    parse_emit_blank_run    ; one BLANK_RUN(blanks) record
+pr_no_blanks:
+                ; If the blank run ran into EOF the document is done.
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
                 cp      TOK_EOF
                 jr      z, pr_done
+                ; emittedStatement = false for this statement line.
+                xor     a
+                ld      (PR_EMITTED), a
+; --- the per-line inner loop (parseLine's `for { ... }`) ---
+pr_line:
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)             ; current token kind
                 cp      TOK_EOL
-                jr      z, pr_skip          ; B2b has no blank-runs/labels/comments
+                jr      z, pr_line_eol      ; statement terminator (NOT a blank)
+                cp      TOK_EOF
+                jr      z, pr_done
+                cp      TOK_LINECOMMENT
+                jr      z, pr_comment
+                cp      TOK_BLOCKCOMMENT
+                jr      z, pr_comment
                 cp      TOK_IDENT
                 jr      z, pr_inst
                 jr      pr_domainerr        ; line-leading non-ident: out of domain
-pr_skip:
-                call    parse_advance_tok
-                jr      pr_loop
+pr_line_eol:
+                call    parse_advance_tok   ; consume the line-terminating TOK_EOL
+                jr      pr_loop             ; next line: re-count blanks
+pr_comment:
+                call    parse_emit_comment  ; emit COMMENT(placement, body)
+                call    parse_advance_tok   ; consume the comment token
+                jr      pr_line
 pr_inst:
                 call    parse_inst
                 jr      c, pr_done          ; error -> stop
-                jr      pr_loop
+                ld      a, 1
+                ld      (PR_EMITTED), a     ; emittedStatement = true
+                jr      pr_line             ; back to the inner loop (trailing comment / EOL)
 pr_domainerr:
 pr_lexerr:
                 ld      a, 1
@@ -2725,6 +2787,12 @@ pom_we_nocopy:
 ; ===========================================================================
 ; parse_emit_inst — write one INST record from PI_MNEMID / PI_COUNT / the
 ; operand bytes in PARSE_OPSBUF, advancing PARSE_RECPTR and PARSE_RECN.
+;
+; Record framing (the record stream is self-describing so a reader can walk a
+; mix of INST / COMMENT / BLANK_RUN records — see parse_emit_comment and
+; parse_emit_blank_run): a leading REC_KIND_* byte tags the record, then the
+; kind-specific header + payload. INST = [REC_KIND_INST | mnem_id:2 LE |
+; operand_count:1 | operands_len:2 LE | operands[]].
 ; ===========================================================================
 parse_emit_inst:
                 ld      hl, (PI_OPSPTR)
@@ -2734,6 +2802,8 @@ parse_emit_inst:
                 ld      b, h
                 ld      c, l                ; BC = operand byte length
                 ld      hl, (PARSE_RECPTR)
+                ld      (hl), REC_KIND_INST ; record-kind tag
+                inc     hl
                 ld      a, (PI_MNEMID)
                 ld      (hl), a
                 inc     hl
@@ -2755,6 +2825,94 @@ parse_emit_inst:
                 ldir                        ; copy BC bytes -> DE advances to end
 pei_nocopy:
                 ld      (PARSE_RECPTR), de  ; DE = end of record
+                ld      hl, (PARSE_RECN)
+                inc     hl
+                ld      (PARSE_RECN), hl
+                ret
+
+; ===========================================================================
+; parse_emit_comment — write one COMMENT record for the comment token at
+; (PARSE_TOK), advancing PARSE_RECPTR and PARSE_RECN. (Port of emitComment,
+; parser.go:49-51; payload layout from reader.go.) The token (a
+; TOK_LINECOMMENT or TOK_BLOCKCOMMENT) carries the comment body as its source
+; span (span_ptr at token offset 1, span_len at offset 3); the lexer already
+; stripped the `//` / `#` / `/* */` delimiters, so the span IS the body.
+;
+; Record framing: [REC_KIND_COMMENT | len:2 LE | placement:1 | body[]], where
+; len = 1 + body_len (placement byte + body bytes). placement is PR_EMITTED:
+; 0 when no statement has been emitted on this line yet (line-leading comment),
+; 1 when the comment follows a statement on the same line.
+; ===========================================================================
+parse_emit_comment:
+                ; Read the comment token's span: span_ptr (offset 1, LE) and
+                ; span_len (offset 3, LE). Comment bodies fit in a u16.
+                ld      hl, (PARSE_TOK)
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = body source pointer
+                inc     hl
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)             ; BC = body length (u16)
+                push    de                  ; save body src ptr
+                push    bc                  ; save body length
+                ; Write the record header: [REC_KIND_COMMENT | len:2 | placement].
+                ; len = body_len + 1 (the placement byte).
+                ld      hl, (PARSE_RECPTR)
+                ld      (hl), REC_KIND_COMMENT
+                inc     hl
+                inc     bc                  ; len = body_len + 1
+                ld      (hl), c             ; len low
+                inc     hl
+                ld      (hl), b             ; len high
+                inc     hl
+                ld      a, (PR_EMITTED)     ; placement (0 line-start / 1 after stmt)
+                ld      (hl), a
+                inc     hl                  ; HL -> body destination
+                ; Copy the body bytes (BC restored to body_len).
+                ex      de, hl              ; DE = body destination
+                pop     bc                  ; BC = body length
+                pop     hl                  ; HL = body source ptr
+                ld      a, b
+                or      c
+                jr      z, pec_nocopy       ; empty body (e.g. `//` with no text)
+                ldir                        ; copy body; DE -> end of record
+pec_nocopy:
+                ld      (PARSE_RECPTR), de  ; DE = end of record
+                ld      hl, (PARSE_RECN)
+                inc     hl
+                ld      (PARSE_RECN), hl
+                ret
+
+; ===========================================================================
+; parse_emit_blank_run — write one BLANK_RUN record recording PR_BLANKS
+; consecutive blank source lines, advancing PARSE_RECPTR and PARSE_RECN.
+; (Port of emitBlankRun, parser.go:55-57; payload layout from reader.go.)
+;
+; Record framing: [REC_KIND_BLANK_RUN | len:2 LE | runLen:4 LE], len = 4.
+; runLen is the u16 PR_BLANKS zero-extended to the format's uint32 (the run is
+; always >= 1; the caller only emits when PR_BLANKS != 0).
+; ===========================================================================
+parse_emit_blank_run:
+                ld      hl, (PARSE_RECPTR)
+                ld      (hl), REC_KIND_BLANK_RUN
+                inc     hl
+                ld      (hl), 4             ; len low  (payload = 4-byte runLen)
+                inc     hl
+                ld      (hl), 0             ; len high
+                inc     hl
+                ; runLen:4 LE — PR_BLANKS (u16) in the low two bytes, zero above.
+                ld      de, (PR_BLANKS)
+                ld      (hl), e
+                inc     hl
+                ld      (hl), d
+                inc     hl
+                ld      (hl), 0
+                inc     hl
+                ld      (hl), 0
+                inc     hl
+                ld      (PARSE_RECPTR), hl
                 ld      hl, (PARSE_RECN)
                 inc     hl
                 ld      (PARSE_RECN), hl
@@ -3026,8 +3184,10 @@ ML_LEN:         defs 1          ; mnemonic_lookup: saved candidate length
 MR_PTR:         defs 2          ; match_reg: saved candidate pointer
 MR_LEN:         defs 1          ; match_reg: saved candidate length
 PARSE_TOK:      defs 2          ; current token-record pointer (into LEX_TOKS)
-PARSE_RECPTR:   defs 2          ; current INST-record write pointer
-PARSE_RECN:     defs 2          ; INST records emitted so far
+PARSE_RECPTR:   defs 2          ; current record write pointer
+PARSE_RECN:     defs 2          ; records emitted so far
+PR_BLANKS:      defs 2          ; parseLine: count of leading blank lines (u16)
+PR_EMITTED:     defs 1          ; parseLine: emittedStatement flag (comment placement)
 PI_MNEMID:      defs 2          ; parse_inst: current mnemonic ID
 PI_OPSPTR:      defs 2          ; parse_inst: operand-bytes write pointer
 PI_COUNT:       defs 1          ; parse_inst: operand count
