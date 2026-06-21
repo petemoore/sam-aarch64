@@ -271,6 +271,8 @@ jobs:
         run: make check-doc-links
       - name: no-silent-skips gate (i253)
         run: make check-no-silent-skips
+      - name: emulation-first carve-out ratchet (i231)
+        run: make check-hosttest-carveouts
 
   # core — sweeps the fixture corpus end-to-end on the dev container:
   #   sam-aarch64 → build-disk → SimCoupé (Xvfb 24bit) → samfile extract
