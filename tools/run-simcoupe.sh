@@ -89,25 +89,37 @@ SIMCOUPE_TIMEOUT="${SIMCOUPE_TIMEOUT:-30}"
 # keyboard_test.go).  They are the same mechanism; -keyin is SimCoupé's
 # built-in interface to it.
 #
-# Start-trigger constraint (load-bearing — see SimCoupé Base/SAMIO.cpp
-# AutoLoad/TestStartupScreen + Base/Keyin.cpp):
-#   1. Typing only *begins* when AutoLoad() finds the ROM boot-prompt
-#      wait-key loop (WTFK hook) on the Z80 stack — i.e. the SAM is sitting
-#      at the startup screen waiting for a key.  -keyin is designed to type
-#      AT THAT PROMPT, as a person would.
-#   2. *** An autobooting disk (a SAM-side AUTO* file, as build-disk's
-#      -netboot disks use) runs straight past WTFK, so the trigger never
-#      fires and NO keys are ever injected. *** (Verified the hard way: a
-#      proof using an autoboot -netboot disk timed out — keys never arrived.)
-#   3. Once typing has begun, keys stream one-per-frame on each interrupt
-#      exit while CanType() holds: Section A = ROM0 and Section B = page 0
-#      (where LASTK/FLAGS live).  Default boot paging satisfies this.
-# So feeding keys to a standalone program requires a NON-autoboot disk plus
-# a SIMCOUPE_KEYIN that first types the launch command (LOAD/CALL) and then
-# the test keys.  That end-to-end fixture is tracked as open work (i12b) —
-# it needs a local Docker SimCoupé to develop (CI alone is too slow an inner
-# loop for the boot-handoff timing).  The Z80-level injection itself is
-# already proven by the Go harness (i138, keyboard_test.go).
+# DETERMINATION (i12b — the single home for this finding): SimCoupé's -keyin
+# is a *boot-prompt autotyper*, NOT a general key feed for a running program.
+# It cannot reliably deliver keys to a post-boot SAM program that polls
+# FLAGS/LASTK (the editor-input use case).  This was established locally
+# (SDL_VIDEODRIVER=offscreen, isolated HOME):
+#   - A diagnostic stub booted via SIMCOUPE_KEYIN='BOOT\nABCABC\n', confirmed
+#     CanType() satisfied at the stub (read LMPR=&1F → Section A=ROM0, Section
+#     B=page 0; HMPR=&01), then polled FLAGS in a tight loop for several
+#     seconds.  Bit 5 NEVER set and ZERO keys (ABCABC) arrived.
+# Root cause, from the SimCoupé source (Base/SAMIO.cpp, Base/Keyin.cpp):
+#   1. The whole -keyin string is loaded ONCE, at the ROM startup screen, when
+#      Rst48Hook() hits READKEY and AutoLoad() finds the WTFK wait-key loop on
+#      the Z80 stack (TestStartupScreen).  There is NO re-arm: a program that
+#      starts after boot never re-triggers typing.
+#   2. Keys stream one-per-frame from EiHook() at the IMEXIT ROM hook — so the
+#      target must run with interrupts ENABLED (a DI poll loop never receives a
+#      key), and CanType() must hold (Section A=ROM0, Section B=page 0).
+#   3. Rst8Hook()'s `default: Keyin::Stop()` clears the pending string on any
+#      RST-8 code outside a small whitelist (&00/&1d/&35/&13/&50).  DOS/BASIC
+#      issue RST-8 calls during the boot→program handoff, so the remaining keys
+#      are dropped before the program can poll them.
+# The reliable, deterministic, CI-gated vehicle for automated editor INPUT
+# tests is therefore the Go harness InjectKeys (i138, keyboard_test.go) — the
+# same LASTK/FLAGS mechanism, driven directly rather than through the boot
+# autotyper.  SimCoupé remains the boot/render gate via the existing fixture
+# jobs (core/symbols/operands/…), which exercise the full paged boot path.
+#
+# SIMCOUPE_KEYIN remains wired (opt-in, default-off) for the niche where it
+# does work: typing AT the startup/BASIC prompt before any program runs (e.g.
+# the default 'BOOT\n' autotype an existing fixture relies on).  It is NOT a
+# supported way to feed keys to a running CODE program.
 #
 # Default-off: existing fixtures do not set SIMCOUPE_KEYIN, so this path is
 # never taken for them.
@@ -135,21 +147,28 @@ fi
 simcoupe_rc=$?
 set -e
 
-# Locate the printer-capture file.  In the common case it's
-# $outpath/simc0000.txt; defensively glob for any simc*.txt in case
-# -nextfile didn't take or SimCoupé's persisted config bumped it.
-printer_file=""
-for candidate in "$outpath"/simc*.txt; do
-    if [ -f "$candidate" ]; then
-        printer_file="$candidate"
-        break
-    fi
-done
+# Assemble the printer-capture into the status file.  SimCoupé auto-flushes
+# the parallel-printer file after an inactivity gap (a poll loop that emits a
+# marker, pauses to wait for input, then emits another marker) and writes the
+# later output to a fresh auto-incrementing file: simc0000.txt, simc0001.txt,
+# simc0002.txt …  (Base/Util.cpp::UniqueOutputPath).  Capturing only the FIRST
+# file silently drops everything emitted after the first gap — which is exactly
+# the output an input-polling stub produces.  So concatenate ALL simc*.txt in
+# numeric order into the status file.
+#
+# `ls -v` sorts the glob in version/numeric order so simc0009 precedes
+# simc0010; the glob is quoted-safe because we cd into $outpath first.
+printer_files=()
+if [ -d "$outpath" ]; then
+    while IFS= read -r f; do
+        printer_files+=("$outpath/$f")
+    done < <(cd "$outpath" && ls -v simc*.txt 2>/dev/null)
+fi
 
 # Always write the status file (empty if no printer output captured).
 # Caller decides what to do with the contents.
-if [ -n "$printer_file" ]; then
-    cp "$printer_file" "$status_out"
+if [ "${#printer_files[@]}" -gt 0 ]; then
+    cat "${printer_files[@]}" > "$status_out"
 else
     : > "$status_out"
 fi

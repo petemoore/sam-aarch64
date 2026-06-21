@@ -20,11 +20,7 @@
   depends_on: [q36]
   kind: leaf
   owner: agent
-  refs:
-    - docs/specs/ide-memory-model-design.md
-    - i41
-    - i23
-    - i24
+  refs: [docs/specs/ide-memory-model-design.md, i41, i23, i24]
 
 - id: i3
   title: Editor groundwork (Phase 2) — full vision
@@ -144,12 +140,14 @@
 - id: i12b
   title: Editor-testing input injection (SimCoupé -keyin end-to-end proof)
   description: |
-    DETERMINED (PR #501): "-keyin vs FLAGS/LASTK" is a false dichotomy — SimCoupé's built-in -keyin "STRING" flag IS internal LASTK(&5C08)/FLAGS(&5C3B bit5) injection, the same mechanism the Go harness InjectKeys proves at the Z80 level (i138, keyboard_test.go). PR #501 wired -keyin into tools/run-simcoupe.sh (opt-in SIMCOUPE_KEYIN) and documented the trigger semantics there. REMAINING (this item, OPEN): the SimCoupé end-to-end proof fixture. Blocker finding (CI-verified): -keyin only starts typing at the ROM WTFK boot-prompt; an autobooting build-disk -netboot disk runs past WTFK so keys never arrive (timeout). The proof needs a NON-autoboot disk + a SIMCOUPE_KEYIN that types the launch command then the test keys — boot-handoff timing that needs a local Docker SimCoupé to develop (CI is too slow an inner loop). The reusable building block is the existing ROM-faithful poll routine src/netboot/key_read_test.asm (key_read_loop, the i138 routine); the remaining work is a standalone boot wrapper around it on a non-autoboot disk.
-  status: OPEN
+    DETERMINED (PR #502, Outcome B): SimCoupé's -keyin is a boot-prompt autotyper, NOT a general key feed for a running program; it cannot reliably deliver keystrokes to a post-boot SAM CODE program that polls FLAGS(&5C3B)/LASTK(&5C08) (the editor-input use case). Verified locally (SDL_VIDEODRIVER=offscreen, isolated HOME): a diagnostic stub booted with SIMCOUPE_KEYIN='BOOT\nABCABC\n', confirmed CanType() satisfied at the stub (read LMPR=&1F → Section A=ROM0, B=page0), and polled FLAGS for several seconds — bit5 never set and zero keys arrived. Root cause (SimCoupé Base/SAMIO.cpp + Base/Keyin.cpp): (1) the string loads ONCE at the WTFK startup screen with no re-arm; (2) keys stream only from the IMEXIT hook so the target needs interrupts ON; (3) Rst8Hook()'s `default: Keyin::Stop()` drops the pending string on any RST-8 code outside &00/&1d/&35/&13/&50, which DOS/BASIC trip during the boot→program handoff. The reliable, deterministic, CI-gated vehicle for editor INPUT tests is the Go harness InjectKeys (i138, keyboard_test.go) — the same LASTK/FLAGS mechanism driven directly; SimCoupé stays the boot/render gate via the existing fixture jobs. The full determination + reproduction lives in the -keyin comment block of tools/run-simcoupe.sh (single home). PR #502 also fixed a real run-simcoupe.sh bug: SimCoupé splits the parallel-printer capture across simc0000.txt, simc0001.txt… after inactivity gaps, and the wrapper globbed only the first file (silently dropping gapped output); it now concatenates all simc*.txt in numeric order. No flaky -keyin CI job was added.
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 502, role: completing}
   parent: i12
-  refs: [tools/run-simcoupe.sh, src/netboot/key_read_test.asm, "i138"]
+  refs: [tools/run-simcoupe.sh, src/netboot/key_read_test.asm, i138]
 
 - id: i12c
   title: Rebase/upstream macOS+Linux paste support
