@@ -1355,7 +1355,7 @@ sv_serve_loop:
                 ld      a, &f7
                 in      a, (&f9)
                 bit     5, a                   ; Esc pressed?
-                ret     z                      ; -> trinload's start
+                jp      z, sv_exit_to_trinload ; -> quiesce, then RET to trinload's start
 
                 call    serve_serve_once
 
@@ -1364,9 +1364,63 @@ sv_serve_loop:
                 ; unwind as the Esc exit.
                 ld      a, (XFER_STOP_REQUESTED)
                 or      a
-                ret     nz                     ; -> trinload's start
+                jp      nz, sv_exit_to_trinload ; -> quiesce, then RET to trinload's start
 
                 jr      sv_serve_loop
+
+; sv_exit_to_trinload — the single clean-exit point for BOTH serve exits (Esc and the
+; `tftp.done` control name). Quiesces the shared Trinity microcontroller / SD-SPI bus
+; before RETing to trinload's pushed `start` return address, so trinload's `start`
+; (which re-runs chk_trinity: OUT &DC,8/9 + IN &DD, with only fixed DJNZ delays, no
+; busy-poll) resumes against an IDLE controller rather than one mid-transaction.
+;
+; A disk-record push leaves the &DC microcontroller having just driven a burst of
+; CMD24 sector writes + list-sector CMD17 reads; without a deselect + settle the next
+; owner's first &DC select can land while the PIC is still busy and be silently
+; dropped (manual:22) — the same shared-microcontroller-busy hazard that produced the
+; i242 chk_trinity-after-&38 stale read. The quiesce is: OUT (&DC),&04 (all-deselect,
+; auto-null off — the transaction-close bracket the SD ladder uses), a BOUNDED wait
+; for &DC bit 3 (BUSY) to clear, then a short fixed settle delay.
+;
+; DESIGNED, NOT HARDWARE-VERIFIED (CLAUDE.md §5). The Go harness models &DC bit-3 BUSY
+; (raised one SPI-byte-time per OUT, cleared on the next IN &DC), so the deselect +
+; busy-poll + RET path EXECUTES in emulation (a test asserts the RET still reaches
+; trinload after the quiesce) — but whether a real PIC resumes chk_trinity cleanly
+; after this sequence is gated on Pete's Trinity. The wait is bounded so a stuck
+; controller can NEVER hang the SAM on the way out (the prime directive: an exit path
+; must always reach trinload; a 2026-06-24-style unbounded SD busy-wait hang here
+; would strand the machine at the worst moment — right as it tries to hand back).
+sv_exit_to_trinload:
+                di                              ; no interrupt window mid-quiesce
+                ld      a, SDC_NULLOFF          ; &04: all-deselect / auto-null off
+                out     (SDC_PORT), a           ;   close any open &DC transaction
+                ld      bc, SV_QUIESCE_LIMIT     ; bounded busy-poll budget
+sv_q_busy:
+                in      a, (SDC_PORT)           ; reading &DC also clears BUSY in HW/model
+                and     %00001000               ; &DC bit 3 = BUSY
+                jr      z, sv_q_settled          ; clear -> controller idle
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, sv_q_busy            ; budget left -> keep polling
+                ; budget exhausted: give up waiting (a stuck PIC must not trap us here)
+sv_q_settled:
+                ; short fixed settle delay so the PIC is fully idle before trinload's
+                ; fixed-delay chk_trinity probes it (no BUSY-poll on that side).
+                ld      bc, SV_SETTLE_LOOPS
+sv_q_settle:
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, sv_q_settle
+                ei
+                ret                             ; -> trinload's pushed `start`
+
+SV_QUIESCE_LIMIT: equ &FFFF                     ; ~65535 busy-polls (~0.5s ceiling); a working
+                                                ; controller clears BUSY in ~1 poll, so this is
+                                                ; only the stuck-hardware bound, never the norm.
+SV_SETTLE_LOOPS:  equ &0200                     ; ~512-iter fixed settle (~a few hundred us) so
+                                                ; the PIC is idle before chk_trinity's fixed delays.
 
 sv_fail_cfg:
                 ld      a, 2                   ; red border: no/bad network settings

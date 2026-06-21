@@ -807,16 +807,23 @@ netboot-serve-disk: $(BUILD)/netboot_serve_boot.bin $(BUILD)/build-disk
 	$(BUILD)/build-disk -netboot $(BUILD)/netboot_serve_boot.bin -netboot-name serve \
 	    $(BUILD)/netboot_serve.mgt
 
-# netboot-serve-trinload (i121d) — the pushable serve block. Unlike the dumper (which
-# has no boot build), the serve program's BOOT binary is already org &8000 with entry
-# &8000 (`jp serve_main`) and self-contained, so it IS the trinload-pushable block —
-# no separate build. The host launcher tools/trinload-push/trinpush-serve.py sets the
-# WRQ placement strategy in its SERVE_CONFIG block (--strategy) and pushes it via the
-# ?/@/X protocol; `tftp put` then lands a disk image in a free record. The wire push
+# netboot-serve-trinload (i121d) — the pushable serve block, ALSO the i194 "disk-record
+# push" deployable. Unlike the dumper (which has no boot build), the serve program's
+# BOOT binary is already org &8000 with entry &8000 (`jp serve_main`) and self-
+# contained, so it IS the trinload-pushable block — no separate build. The host
+# launcher tools/trinload-push/trinpush-serve.py sets the WRQ placement strategy in its
+# SERVE_CONFIG block (--strategy) and pushes it via the ?/@/X protocol; a subsequent
+# `tftp put <image.mgt>` lands an 819,200-byte disk image in a FREE Trinity record
+# (raw_record_sink + the size==819200 / "BDOS"-stamp validation gate), then the serve
+# loop RETs to trinload via sv_exit_to_trinload — which quiesces the shared &DC
+# microcontroller (deselect + bounded BUSY-poll + settle) so trinload's fixed-delay
+# chk_trinity resumes cleanly (i194 clean-exit; designed, hardware-unverified). No free
+# record -> ERROR(3,"no free record"), a named record is never touched. The wire push
 # is hardware-gated (a real SAM running trinload); the config-patch logic is host-
-# tested by netboot-trinpush-test.
+# tested by netboot-trinpush-test, and the WRQ push + quiesce path is emulation-tested
+# in Go (netboot_serve_wrq_record_test.go).
 netboot-serve-trinload: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map
-	@echo "pushable serve block: $(BUILD)/netboot_serve_boot.bin (push with tools/trinload-push/trinpush-serve.py <sam-ip> --strategy …)"
+	@echo "pushable serve / disk-record-push block: $(BUILD)/netboot_serve_boot.bin (push with tools/trinload-push/trinpush-serve.py <sam-ip> --strategy …; then tftp put <image.mgt>)"
 
 # netboot-trinpush-test (i121d) — host-test the serve push launcher's config patcher
 # (mapfile parse, offset math, magic check, patched bytes) against the REAL built
