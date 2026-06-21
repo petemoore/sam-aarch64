@@ -54,9 +54,11 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	z80h "github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80"
 )
@@ -110,6 +112,17 @@ func run() error {
 	}
 
 	report(stockSnap, colinSnap)
+
+	// Pete's ultimate Q2 test: Colin with vs without his teardown pokes.
+	colinNoPokes, err := snapshotColinNoPokes(dir)
+	if err != nil {
+		return fmt.Errorf("Colin-no-pokes snapshot: %w", err)
+	}
+	reportPokeTest(colinSnap, colinNoPokes)
+
+	if err := saveAndFullDiff(stockSnap, colinSnap); err != nil {
+		return fmt.Errorf("save snapshots / full diff: %w", err)
+	}
 	return nil
 }
 
@@ -119,6 +132,8 @@ type snapshot struct {
 	reachedPC uint16
 	reached   bool
 	steps     uint64
+	lmpr      byte // LMPR (&FA) at the snapshot — explains the &C000/&8000 region diffs
+	hmpr      byte // HMPR (&FB) at the snapshot
 	mem       [65536]byte
 }
 
@@ -147,6 +162,102 @@ func snapshotColin(dir string) (*snapshot, error) {
 	mac.AttachIO(enc)
 
 	return runToSyncPC(mac, "colin", false)
+}
+
+// snapshotColinNoPokes is Pete's "ultimate" Q2 test (2026-06-25): boot Colin's fork
+// with his two teardown pokes NOPped out, so we can compare WITH-pokes vs WITHOUT-
+// pokes directly. In the bootblock teardown (chunk 1, run at &40A9), `LD (&5C44),A`
+// = NSPPC=&FF and `LD (&5BBE),A` = TVDATA=&10. chunk-1 file offset F maps to device
+// &2000+F, so the two stores sit at device &20B1 (NSPPC) and &20B6 (TVDATA) in the
+// device-linear image. We replace ONLY the two store opcodes with NOPs (same length,
+// no address shift; the LD-A immediates remain, harmless) and assert the bytes are
+// exactly the expected pokes before NOPping — never guess at the site.
+func snapshotColinNoPokes(dir string) (*snapshot, error) {
+	rom, err := requireCapture(dir, "rom.bin")
+	if err != nil {
+		return nil, err
+	}
+	if rom == nil {
+		return &snapshot{label: "colin-nopokes", reached: false}, errSkipped
+	}
+	eep, err := requireCapture(dir, "eeprom.bin")
+	if err != nil {
+		return nil, err
+	}
+	dev := deviceLinearEEPROM(eep)
+	for _, p := range []struct {
+		off  int
+		want []byte
+		name string
+	}{
+		{0x20B1, []byte{0x32, 0x44, 0x5C}, "NSPPC (LD (&5C44),A)"},
+		{0x20B6, []byte{0x32, 0xBE, 0x5B}, "TVDATA (LD (&5BBE),A)"},
+	} {
+		if got := dev[p.off : p.off+len(p.want)]; !bytes.Equal(got, p.want) {
+			return nil, fmt.Errorf("colin-nopokes: device &%04X = % X, want % X (%s poke site moved — refusing to NOP the wrong bytes)",
+				p.off, got, p.want, p.name)
+		}
+		for i := range p.want {
+			dev[p.off+i] = 0x00 // NOP
+		}
+	}
+	mac := z80h.New()
+	if err := mac.LoadROMImage(rom); err != nil {
+		return nil, err
+	}
+	mac.Pager().LMPR = bootLMPR
+	mac.Pager().HMPR = bootHMPR
+	enc := z80h.NewENC28J60()
+	enc.LoadEEPROMImage(dev)
+	mac.AttachIO(enc)
+	return runToSyncPC(mac, "colin-nopokes", false)
+}
+
+// reportPokeTest runs Pete's ultimate Q2 test: Colin WITH his teardown pokes vs the
+// same boot with them NOPped out. Both share identical paging (same fork), so a
+// full-64KB diff isolates EXACTLY the pokes' effect. Byte-identical ⇒ the pokes are
+// redundant (the value is reached anyway) ⇒ the inject can leave them out.
+func reportPokeTest(colin, noPokes *snapshot) {
+	fmt.Println("--- Q2 ULTIMATE TEST: Colin WITH vs WITHOUT his NSPPC/TVDATA pokes ---")
+	if !noPokes.reached {
+		fmt.Println("  (colin-nopokes did not reach the sync PC — inconclusive)")
+		fmt.Println()
+		return
+	}
+	fmt.Printf("  sync PC: with=%s  without=%s  (same=%v)\n",
+		hex4(colin.reachedPC), hex4(noPokes.reachedPC), colin.reachedPC == noPokes.reachedPC)
+	for _, n := range []struct {
+		name string
+		addr uint16
+	}{{"NSPPC", addrNSPPC}, {"TVDATA", addrTVDATA}} {
+		w, wo := colin.mem[n.addr], noPokes.mem[n.addr]
+		mark := "SAME"
+		if w != wo {
+			mark = "DIFFERS"
+		}
+		fmt.Printf("    %-7s %s : pokes-in=&%02X  pokes-out=&%02X   %s\n", n.name, hex4(n.addr), w, wo, mark)
+	}
+	total := 0
+	var first []uint16
+	for a := 0; a < 65536; a++ {
+		if colin.mem[a] != noPokes.mem[a] {
+			total++
+			if len(first) < 24 {
+				first = append(first, uint16(a))
+			}
+		}
+	}
+	if total == 0 {
+		fmt.Println("  RESULT: BYTE-IDENTICAL across all 64 KB with vs without the pokes.")
+		fmt.Println("          → the pokes are REDUNDANT; the inject can LEAVE THEM OUT.")
+	} else {
+		fmt.Printf("  RESULT: %d byte(s) differ (with vs without). First: ", total)
+		for _, a := range first {
+			fmt.Printf("%s ", hex4(a))
+		}
+		fmt.Println("\n          → the pokes change the end state; the inject must KEEP them.")
+	}
+	fmt.Println()
 }
 
 // snapshotStock boots the stock v3.0 ROM (no EEPROM device), dismisses its boot
@@ -237,12 +348,90 @@ func runToSyncPC(mac *z80h.Machine, label string, needWTFK bool) (*snapshot, err
 	snap.reached = true
 	snap.reachedPC = res.PC
 	snap.steps = res.Steps
+	snap.lmpr = mac.Pager().LMPR
+	snap.hmpr = mac.Pager().HMPR
 	// Snapshot all 64 KB of LOGICAL memory at the sync PC (post-paging, read via
 	// the harness memory interface at the live paging state — consistent for both).
 	for a := 0; a < 65536; a += 256 {
 		copy(snap.mem[a:], mac.Read(uint16(a), 256))
 	}
 	return snap, nil
+}
+
+// saveAndFullDiff persists both raw 64 KB snapshots (so they can be inspected /
+// diffed with any tool) and writes the COMPLETE byte-by-byte diff of all 64 KB —
+// not just the sysvar band — to a file, so nothing is summarised away. The big
+// &8000..&FFFF differences are largely paging / B-DOS-residency, which the captured
+// LMPR/HMPR make explicit. Outputs land in the git-ignored build/ dir.
+func saveAndFullDiff(stock, colin *snapshot) error {
+	outDir := filepath.Join("..", "..", "build")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", outDir, err)
+	}
+	stockPath := filepath.Join(outDir, "samboot-statediff-stock.bin")
+	colinPath := filepath.Join(outDir, "samboot-statediff-colin.bin")
+	if err := os.WriteFile(stockPath, stock.mem[:], 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(colinPath, colin.mem[:], 0o644); err != nil {
+		return err
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "SAMBOOT full RAM diff (all 64 KB) — stock v3.0 vs Colin fork, at sync PC %s\n", hex4(editorKeyConsume))
+	fmt.Fprintf(&b, "paging at snapshot: stock LMPR=&%02X HMPR=&%02X | colin LMPR=&%02X HMPR=&%02X\n",
+		stock.lmpr, stock.hmpr, colin.lmpr, colin.hmpr)
+	fmt.Fprintf(&b, "(&8000..&FFFF differences are largely paging / B-DOS-residency — see LMPR/HMPR)\n\n")
+	total := 0
+	regionTotals := map[string]int{}
+	regionOf := func(a int) string {
+		switch {
+		case a <= 0x3FFF:
+			return "0000-3FFF low/ROM-shadow"
+		case a <= 0x57FF:
+			return "4000-57FF screen/workspace"
+		case a <= 0x5CFF:
+			return "5800-5CFF sysvars"
+		case a <= 0x7FFF:
+			return "5D00-7FFF BASIC/editor work"
+		case a <= 0xBFFF:
+			return "8000-BFFF (Colin B-DOS resident)"
+		default:
+			return "C000-FFFF (ROM1/top RAM)"
+		}
+	}
+	for a := 0; a < 65536; a++ {
+		if stock.mem[a] != colin.mem[a] {
+			fmt.Fprintf(&b, "%s : stock=&%02X  colin=&%02X%s\n", hex4(uint16(a)), stock.mem[a], colin.mem[a], sysvarName(uint16(a)))
+			total++
+			regionTotals[regionOf(a)]++
+		}
+	}
+	fmt.Fprintf(&b, "\nTOTAL differing bytes: %d / 65536\n", total)
+	diffPath := filepath.Join(outDir, "samboot-statediff-full.txt")
+	if err := os.WriteFile(diffPath, []byte(b.String()), 0o644); err != nil {
+		return err
+	}
+
+	absOf := func(p string) string {
+		if a, e := filepath.Abs(p); e == nil {
+			return a
+		}
+		return p
+	}
+	fmt.Println("--- Full snapshots + COMPLETE diff written --------------------")
+	fmt.Printf("  paging at sync PC:  stock LMPR=&%02X HMPR=&%02X | colin LMPR=&%02X HMPR=&%02X\n",
+		stock.lmpr, stock.hmpr, colin.lmpr, colin.hmpr)
+	fmt.Printf("  stock snapshot (64 KB): %s\n", absOf(stockPath))
+	fmt.Printf("  colin snapshot (64 KB): %s\n", absOf(colinPath))
+	fmt.Printf("  full byte-by-byte diff: %s  (%d differing bytes total)\n", absOf(diffPath), total)
+	fmt.Println("  per-region differing-byte totals:")
+	for _, r := range []string{"0000-3FFF low/ROM-shadow", "4000-57FF screen/workspace", "5800-5CFF sysvars",
+		"5D00-7FFF BASIC/editor work", "8000-BFFF (Colin B-DOS resident)", "C000-FFFF (ROM1/top RAM)"} {
+		fmt.Printf("    %-34s %d\n", r, regionTotals[r])
+	}
+	fmt.Println("  inspect directly:  cmp -l <stock.bin> <colin.bin>  (or any hex differ)")
+	return nil
 }
 
 // report emits the diff: named Q1/Q2 bytes, the full sysvar-band diff, and a
