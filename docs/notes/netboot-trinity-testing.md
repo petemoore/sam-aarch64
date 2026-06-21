@@ -406,6 +406,47 @@ hardware-verified (CLAUDE.md §5).
 
 ---
 
+## SAMBOOT ROM+EEPROM capture (i87a) — Pete runs the i173 dumper
+
+Capture the patched system ROM + the Trinity EEPROM off the real SAM, so the boot
+chain can be analysed (i87b) and the EEPROM backed up before any flash (i135c).
+The dumper is **pushed over trinload** (not booted from disk) and serves the dumps
+over TFTP as 16 KB regions the host pulls and concatenates. It reads ROM/EEPROM
+**read-only** — it never writes the card. Charter: `docs/specs/samboot.md` §6 step 2.
+
+1. **Build the pushable dumper:**
+   ```sh
+   make netboot-dumper-trinload      # -> build/netboot_dumper_trinload.bin (org &8000)
+   ```
+2. **Push it over trinload** the same way the other netboot programs are pushed
+   (trinload is already RUNNING on the SAM — rec 3≡128, SAM `192.168.2.75`;
+   `~/git/trinload/test/trinload.py`). The dumper runs, reads its MAC/IP from the
+   `"Trinity Network "` EEPROM chunk, inits the ENC28J60, and loops serving. Press
+   **Esc** on the SAM to `RET` cleanly back to trinload (so it can be re-pushed).
+3. **Pull the regions** from the host (the SAM serves plain TFTP on port 69):
+   ```sh
+   for f in rom0.bin rom1.bin eep0.bin eep1.bin eep2.bin eep3.bin \
+            eep4.bin eep5.bin eep6.bin eep7.bin; do tftp 192.168.2.75 -c get $f; done
+   ```
+4. **Concatenate + check sizes:**
+   ```sh
+   cat rom0.bin rom1.bin > rom.bin                       # expect 32768 bytes
+   cat eep0.bin eep1.bin eep2.bin eep3.bin \
+       eep4.bin eep5.bin eep6.bin eep7.bin > eeprom.bin  # expect 131072 bytes
+   ```
+5. **Stash the artifacts** under `~/sam-archive/` (non-redistributable, like the
+   existing B-DOS analysis — Colin's proprietary work; never commit them).
+
+**Read-this caveat.** The **EEPROM** read path is emulation-verified (`dumper_test.go`),
+so `eeprom.bin` should be reliable — it is the **mandatory backup before i135c**.
+The **ROM-paging** read is **hardware-first** (the flat harness has no real paging):
+if `rom.bin` looks wrong (all-zeros / garbage / wrong size), the paging assumptions
+flagged `VERIFY ON HARDWARE` (A1–A5 in `src/netboot/netboot_dumper.asm`) need
+revisiting — that is expected uncertainty, not a silent failure. (i181 tracks adding
+a harness paging model to emulation-verify the ROM-paging *sequence*.)
+
+---
+
 ## Later increments (placeholders — filled in as they land)
 
 - **HTTPS provisioning (i88, stretch).** Fetch the Pi firmware blobs over TLS (e.g.
