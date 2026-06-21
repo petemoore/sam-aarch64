@@ -4058,7 +4058,7 @@
   title: "Comprehensive Go doc comments: package docs + every exported func/method/type"
   description: |
     Pete (2026-06-23): write accurate Go doc comments across ALL Go modules under tools/ so that, at a glance in godoc, the whole system's behaviour is visible. Cover package-level docs for every package + doc comments for every exported function/method/type (and key unexported ones where behaviour is non-obvious). SECONDARY BENEFIT Pete values: thorough godocs surface 'hacks' — a function whose honest doc has to describe a workaround (a test adapted to pass rather than the cause fixed) becomes visible, supporting the emulation-fidelity / no-silent-workarounds discipline. LOW PRIORITY (end of backlog; not urgent). Mechanical + large; a good incremental / autonomous-loop filler. Per-module: run go doc / a godoc server to review the result reads cleanly. Comments present-tense, describe what the code does now (no history) per the repo comment style.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
 
@@ -4066,9 +4066,11 @@
   title: "Go doc comments: tools/sam-aarch64 (assembler/editor authority — assemble, editmodel, frontend, render, pagepool, root)"
   description: |
     First module cluster of i220. Add accurate present-tense package-level docs + doc comments for every exported func/method/type (and key unexported ones) across the tools/sam-aarch64 module: the root package, assemble, editmodel, frontend, render (pagepool already documented by i2a/i215a — audit only). Comments describe what the code does now, no history (repo comment style). Verify each package reads cleanly via 'go doc -all'. Remaining tools/ modules get their own i220 children as picked up.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 704, role: completing}
   parent: i220
 
 - id: i221
