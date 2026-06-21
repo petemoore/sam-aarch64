@@ -18,7 +18,7 @@ An on-board **microcontroller** acts as a central hub: it gates access to each o
 
 The Trinity also supports a **Trinity Boot ROM** chip option that replaces the standard SAM ROM page, allowing automatic B-DOS load from EEPROM at power-on. [Source: https://www.worldofsam.org/products/trinity-boot-rom.]
 
-No RTC (real-time clock) or extra RAM is documented anywhere in the sources consulted. **UNCERTAIN: whether the Trinity board carries any auxiliary SRAM beyond the ENC28J60's 8 KB frame buffer.**
+No RTC (real-time clock) or extra RAM is documented anywhere in the sources consulted. The manual's labelled **component tour** (scan `IMG_20260617_162538.jpg`) enumerates every board part — microcontroller, EEPROM, ENC28J60, status LEDs, RJ45 socket, Ethernet-interrupt jumper, MMC/SD flashcard slot + LED, general control logic, voltage regulator, standoffs — and lists **no RTC and no auxiliary SRAM**. So the board carries no auxiliary SRAM beyond the ENC28J60's 8 KB frame buffer as far as the manual shows. (Photos checked; not shown to the contrary — a tiny unlabelled part can't be ruled out from a parts list alone, but nothing in the docs suggests one.)
 
 ---
 
@@ -73,15 +73,49 @@ is never `&00`; the idle no-card value is **`&C0`**. The low nibble is dynamic:
 The identity probe is a full **8-byte IDENT string**, not just two bytes: `OUT &DC` with
 each of `&08`..`&0F` then `IN &DD` returns the Nth character. The string is
 **`"TRI v1.1"`** (`T`,`R`,`I`,*space*,`v`,`1`,`.`,`1` — "Trinity v1.1", the firmware
-version). The 4th char is a **space**, verified from the source scan (OCR rendered it
-as empty `()`). `chk_trinity` only reads the first two (`'T'`,`'R'`) as a presence gate.
-[Source: Trinity manual "Trinity – Ident", scan `IMG_20260617_162601.jpg`; verified 2026-06-23.]
+version). The 4th char is a **space**, **settled by the high-resolution manual scan**: the
+IDENT table prints the 4th glyph as an empty pair of parentheses `()` — i.e. a literal
+SPACE, the same as the OCR — and no literal `"TRINv1.1"` form appears anywhere in the
+photographed manual. `chk_trinity` only reads the first two (`'T'`,`'R'`) as a presence
+gate. [Source: Trinity manual "Trinity – Ident", scan `IMG_20260617_162601.jpg`;
+re-verified at high resolution 2026-06-24. This resolves the `"TRI v1.1"` vs `"TRINv1.1"`
+question that `docs/specs/trinity-emulation-fidelity.md` lists as "genuinely unspecified":
+the manual settles it as a SPACE — the emulator's `"TRI v1.1"` constant is correct.]
 
 The host emulator (`tools/netboot-oracle/z80/enc28j60.go`, `sdcard.go`) models both the
 `&C0`-based status register and the full IDENT string (`TestTrinityStatusRegister`,
 `TestTrinityIdentString`). **EEPROM addressing gotcha:** the i87a capture `eeprom.bin`
 is *chunk-ordered* (file offset 0 = device `&2000` = chunk 1), so any tool loading it
 must un-rotate to device-linear first — see `samboot-bootblock-analysis.md` §8.
+
+### `&DC` command bytes — independently confirmed by the manual
+
+The control-byte table above (recovered from `encdrv.asm`/`eeprom.asm` and B-DOS 1.5t)
+is **independently confirmed by the manual's "Controlling the Peripherals" section**
+[scan `IMG_20260617_162608.jpg`], which spells out each chip-select group:
+
+- **EEPROM** (`%0001xxxx`): `&10` disable, `&11` enable.
+- **Ethernet** (`%0010xxxx`): `&20` disable, `&21` enable, **`&28` reset — wait 50 µs after this for the ENC28J60 to fully reset its registers**.
+- **Flashcard / SD** (`%0011xxxx`): `&30` disable, `&31` enable, **`&38` initialise — return value `0` = card not present / could not initialise, `1` = MMC detected+initialised, `2` = SD detected+initialised**.
+
+The manual also documents the **push/pop read-byte** and **auto-null** commands [scan
+`IMG_20260617_162617.jpg`]: `&02` push, `&03` pop; auto-null on per peripheral —
+`&1F` (EEPROM), `&2F` (Ethernet), `&3F` (Flash) — and `&04` auto-null off; and that
+**`IN &DD`/`&DE`/`&DF` all return the same last byte** clocked in from any peripheral.
+
+### EEPROM layout — manual-confirmed
+
+The 128 KB EEPROM is split into **120 chunks of 1 KB each**, preceded by a master index
+of **120 × 64-byte headers = 7680 bytes at address 0**; bytes `7680..8192` are unused;
+chunk data runs `8192..131071`, with chunk *N* at `8192 + (N-1)×1024` (chunk 1 = 8192,
+chunk 120 = **130048**). Each 64-byte index header is: offset 0 = part number (1 B),
+offset 1 = total parts (1 B), offset 2 = application name (16 B), offset 18 = description
+(46 B). The network settings live in the chunk named **"Trinity Network "** with field
+order MAC (6 B @ 0), IP (4 B @ 6), Gateway (4 B @ 10), Subnet/Mask (4 B @ 14), DNS 1
+(4 B @ 18), DNS 2 (4 B @ 22), DHCP flag (1 B @ 26). [Source: Trinity manual "Using the
+EEPROM", scans `IMG_20260617_162653.jpg` (memory map + config screen) /
+`IMG_20260617_162702.jpg` (chunk addresses + header layout) / `IMG_20260617_162711.jpg`
+(`name: DEFS 16`, `description: DEFS 46`, `chunk: DEFS 1024`).]
 
 ---
 
@@ -146,7 +180,7 @@ The `trinload`/`encdrv.asm` library directly addresses the Phase-3 need:
 - **Fixed IP/MAC configuration**: trinload reads MAC and IP from EEPROM chunk "Trinity Network ". That same mechanism handles Phase-3 configuration.
 
 **What Phase-3 cannot rely on without additional work:**
-- Auto-MDIX: not documented for the Trinity. A crossover cable or a switch that handles it is needed. [UNCERTAIN: whether the ENC28J60 PHY circuit on the Trinity board supports MDI/MDI-X switching — the ENC28J60 does not natively; the Pi end may handle Auto-MDIX.]
+- Auto-MDIX: **the Trinity has no Auto-MDIX** — the manual instructs using a patch cable to a router/switch/hub, or a **crossover cable to connect directly to a PC** [Source: Trinity manual / Coupé Correspondence Q&A, scan `IMG_20260617_163239.jpg`: "a patch cable to connect it to your home network router, switch or hub, or a crossover cable to connect it to the likes of a PC"]. Needing a crossover for a direct PC link is exactly the symptom of a fixed-MDI 10BASE-T port (the ENC28J60 does not do MDI/MDI-X switching natively). So for Phase-3, a crossover cable or an auto-MDIX-capable switch is required; the Pi end may handle Auto-MDIX. (The photos confirm the *operational* requirement; they do not show a board-level MDI-switching circuit, and none is expected given the ENC28J60.)
 - Flow control / full-duplex: ENC28J60 is 10BASE-T only, half-duplex as configured. [Source: ENC28J60 datasheet; `encdrv.asm` `PHCON1` writes `&0000` = half-duplex.]
 
 ---
@@ -191,8 +225,11 @@ The idea: use the Trinity SD card as overflow storage for comment data that does
 | Auto-null mode works for SD port `&DF` | **VERIFIED** (B-DOS 1.5t bulk SD read+write loops run under `&3F` with no per-byte dummy writes — i71 analysis) |
 | Port `&DC` select byte value for SD | **VERIFIED** (`&30`/`&31`/`&38`/`&3F` — confirmed by B-DOS 1.5t itself, i71 analysis; earlier recovered from period Trinity utility software) |
 | Microcontroller identity probe + card-present / WP status bits | **VERIFIED** (probe `&08`/`&09`→`&DC`, replies `'T','R'` from `&DD`; `IN(&DC)` bit 1 = card present, bit 2 = WP inverted — i71 analysis) |
-| Trinity PHY supports Auto-MDIX | **UNKNOWN** (ENC28J60 does not natively; board-level unclear) |
-| No RTC or extra RAM on board | **LIKELY** (not mentioned anywhere; name = "Trinity" = 3 things) |
+| Trinity has Auto-MDIX | **VERIFIED NOT** (manual: crossover cable needed for a direct PC link — fixed-MDI 10BASE-T; scan `IMG_20260617_163239.jpg`) |
+| EEPROM full 128 K usable (chunk 120 @ byte 130048, above 64 K) | **VERIFIED** (manual EEPROM memory map, scans `IMG_20260617_162653.jpg` + `IMG_20260617_162702.jpg`) |
+| EEPROM = 120 chunks × 1 KB, 64-byte index header each, master index 7680 B @ 0, chunk data from 8192 | **VERIFIED** (manual "Using the EEPROM", scans `IMG_20260617_162653.jpg` / `IMG_20260617_162702.jpg`) |
+| Flashcard init (`&38`) return: 0 = absent, 1 = MMC, 2 = SD; ENC reset (`&28`) needs 50 µs settle | **VERIFIED** (manual "Controlling the Peripherals", scan `IMG_20260617_162608.jpg`) |
+| No RTC or extra RAM on board | **LIKELY** (manual component tour `IMG_20260617_162538.jpg` lists no RTC/SRAM; name = "Trinity" = 3 things) |
 
 ---
 
@@ -201,8 +238,8 @@ The idea: use the Trinity SD card as overflow storage for comment data that does
 1. ~~Port `&DC` SD-select byte value~~ — **RESOLVED** (`&31` select / `&30` deselect / `&38` init / `&3F` auto-null; recovered from period Trinity utility software, private archive).
 2. ~~Auto-null for `&DF`~~ — **RESOLVED (LIKELY)**: `&3F` is the SD select-with-auto-null value (same evidence).
 3. ~~**SD initialisation sequence timing**: real cards can hold `CMD17` response for 1–10 ms. Does the Trinity's microcontroller buffer this, or does the Z80 poll a status register?~~ — **ANSWERED (i71, `bdos-trinity-fork-analysis.md`)**: the Z80 polls everything (R1 response, data token, write-busy completion — each a bounded retry loop), with the microcontroller's `&38` SD-init command run once before the Z80-driven SPI init ladder. The microcontroller's only per-byte role is the busy flag on `&DC` bit 3.
-4. **Auto-MDIX**: does the Trinity's ENC28J60 circuit include MDI/MDI-X switching, or does Phase-3 need a crossover cable?
-5. **EEPROM address space above 64 K**: the 128 K EEPROM needs a 17-bit address, but the `eeprom.asm` driver only emits a 2-byte address after the opcode. Is the upper half reached via a bank-select mechanism in the microcontroller, or inaccessible? Affects how much EEPROM is truly usable.
+4. ~~**Auto-MDIX**: does the Trinity's ENC28J60 circuit include MDI/MDI-X switching, or does Phase-3 need a crossover cable?~~ — **ANSWERED (manual, `IMG_20260617_162653.jpg`-era doc, scan `IMG_20260617_163239.jpg`)**: no Auto-MDIX — the manual directs a **crossover cable for a direct PC link** (patch cable to a router/switch/hub). Phase-3 needs a crossover cable or an auto-MDIX switch (or the Pi end handling it).
+5. **EEPROM address space above 64 K** — **the full 128 K is usable** (manual-confirmed): the manual's EEPROM memory map (Figure 1) lays out Index `0..7680`, Unused `7680..8192`, Chunk Data `8192..131071`, with chunk *N* at `8192 + (N-1)×1024` — **chunk 120 sits at byte address `130048`** (`&1FC00`, above 64 K), proving the upper half is reachable. [Source: Trinity manual "Using the EEPROM", scans `IMG_20260617_162653.jpg` (memory map) + `IMG_20260617_162702.jpg` (chunk-120 = `130048`); a magazine reprint OCR'd this as `430048`, but the cleaner manual scan and the arithmetic (`8192 + 119×1024 = 130048`) both give `130048`.] **Still open (not settled by the manual):** *how* the raw 17-bit byte address is conveyed at the SPI level. The manual documents only the BASIC chunk API (`read_chunk`/`write_chunk` by chunk number); the `eeprom.asm` driver emits a 2-byte address after the opcode, so the firmware/chunk layer abstracts the high bit — the raw addressing mechanism is not shown in the photographed pages.
 6. **SD write source recovery**: the SAM Revival 21 cover disk carries the SD driver article source AND the B-DOS 1.5t source+executable (samcoupe.com/samrevival.htm); available in private reference materials. NOTE: the B-DOS hook route (see `bdos-version-landscape.md`) makes a raw SPI driver unnecessary — the B-DOS 1.5t analysis (i71, `bdos-trinity-fork-analysis.md`) confirms the fork's own SD write path is reached through the unchanged hook surface, so HSAVE/HOFLE+HSBYT via HRECORD covers writes without a separate driver.
 
 ---

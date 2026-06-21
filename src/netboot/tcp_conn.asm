@@ -738,9 +738,11 @@ CONN_DATA:        defs 4096                ; accumulated response body (test ins
 ; FW_RECORD_CAP). The buffer must hold one full window plus one maximum inbound
 ; TCP payload (a full Ethernet frame, <=1464 body bytes) before the window
 ; drains — so CONN_FLUSH_BUF_LEN >= FW_RECORD_CAP + 1464. With FW_RECORD_CAP =
-; 4096 that is 5560; 6144 gives margin. (If q22 raises the cap on hardware, bump
-; this to keep cap + 1464 <= CONN_FLUSH_BUF_LEN.)
-CONN_FLUSH_BUF_LEN: equ 6144
+; 6144 that is 7608; 8192 gives margin and the bootable still fits the 32 KB
+; &8000..&10000 budget (netboot-boot-fit-check.sh). The cap's two deterministic
+; bounds (the 65535-byte B-DOS HSAVE ceiling and this footprint) are derived in
+; http_main.asm's FW_RECORD_CAP comment (i167).
+CONN_FLUSH_BUF_LEN: equ 8192
                 else
 CONN_FLUSH_BUF_LEN: equ 2048                ; host-test: oracle tests use small windows
                 endif

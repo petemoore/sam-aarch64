@@ -429,8 +429,10 @@ wrq_not_done:
                 ld      (WRQ_SINK_MODE), a     ; default: flat accumulate (HOSTTEST path)
                 if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
                 call    wrq_claim_record       ; CY set = a free record was claimed
-                jr      c, wrq_handshake       ; claimed: continue to the handshake
-                ; no free record: ERROR(3, "no free record"), do not arm.
+                jr      c, wrq_claimed         ; claimed: re-arm the ENC, then handshake
+                ; no free record: ERROR(3, "no free record"), do not arm. The finder's
+                ; CMD17 list reads disturbed the ENC; re-arm before the ERROR reply TX.
+                call    serve_rearm_enc
                 xor     a
                 ld      (ERR_CODE), a
                 ld      a, 3
@@ -439,6 +441,11 @@ wrq_not_done:
                 ld      (ERR_MSG_PTR), hl
                 call    build_error            ; packet at TBUF, BC = length
                 jp      srv_send_tbuf
+wrq_claimed:
+                ; The claim's free-record finder did CMD17 SD list reads (and selected
+                ; the record), each disturbing the shared one-PIC Trinity controller's
+                ; ENC RX state. Re-arm before the handshake reply's ENC TX (i244).
+                call    serve_rearm_enc
                 endif
 
 wrq_handshake:
@@ -484,6 +491,22 @@ wrq_arm_receiver:
                 ret
 
                 if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+; serve_rearm_enc — re-arm the ENC28J60 RX path after an SD transaction on the
+; shared one-PIC Trinity controller (i244). The WRQ disk-record push drives SD I/O
+; (the free-record finder's CMD17 list reads, the per-block HWSAD sink writes, the
+; finalize HRSAD read + CMD17/CMD24 claim); each disturbs the ENC's persistent RX
+; state (RXEN, ring pointers, MAC/PHY), and drv_read restores only per-call
+; select/bank — never that once-only arming. enc_rx_reestablish (encdrv.asm) is
+; drv_init's RX-arm body MINUS chk_trinity (which would fail right after the &38
+; SD-init — i242), so it restores serving without re-probing the settling PIC.
+; Bracketed di/ei like probe_main's startup re-arm. Clobbers AF/BC/DE/HL.
+serve_rearm_enc:
+                di
+                ld      hl, CONFIG_SERVERMAC
+                call    enc_rx_reestablish
+                ei
+                ret
+
 ; wrq_claim_record — claim a FREE Trinity record to stream the push into. Pick the
 ; record per the configured placement STRATEGY (bdos_find_record_for_strategy reads
 ; SERVE_CFG_STRATEGY: highest-free by default — manifest design §4 s3 / decision 4;
@@ -810,6 +833,20 @@ wd_send_ack_de:
                 ld      de, (WRQ_ACKED)
 
 wd_send_ack:
+                ; Re-arm the ENC before the ACK TX (i244). In the bootable push path
+                ; each accepted DATA block was streamed into the record via HWSAD (an SD
+                ; transaction on the shared one-PIC Trinity controller), and the final
+                ; block additionally ran wd_finalize's HRSAD read + CMD17/CMD24 claim —
+                ; every one disturbs the ENC's persistent RX state, which drv_read never
+                ; restores. enc_rx_reestablish re-arms it so the next serve-loop drv_read
+                ; + this ACK's drv_write work. (DE holds the block to ACK; preserved
+                ; across the re-arm.) Bootable-only: the HOSTTEST flat-accumulate path
+                ; does no SD op, so it keeps its proven behaviour unchanged.
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                push    de
+                call    serve_rearm_enc
+                pop     de
+                endif
                 ; build ACK(DE) at TBUF: opcode 4 (big-endian), block (big-endian).
                 ld      hl, TBUF
                 ld      (hl), 0                ; opcode high
@@ -876,6 +913,9 @@ wd_finalize:
 
 wd_invalid:
                 ; invalid image: ERROR(3, "invalid disk record") in place of the ACK.
+                ; wd_finalize's HRSAD read (+ no claim on the reject path) disturbed the
+                ; ENC; re-arm before the ERROR reply's TX (i244), same as wd_send_ack.
+                call    serve_rearm_enc
                 xor     a
                 ld      (ERR_CODE), a
                 ld      a, 3
@@ -1318,6 +1358,22 @@ serve_main:
                 ; --- provision the baked-in demo files ------------------
                 call    provision_demo
 
+                ; --- init the ENC28J60 FIRST, before any SD work (i244) --
+                ; drv_init's chk_trinity identity probe uses fixed DJNZ delays, NOT a
+                ; BUSY-poll, so it must run against a quiescent PIC. The heavy &38 SD
+                ; init (csd_set_bd_records below) leaves the shared microcontroller
+                ; settling; doing the CSD read first made chk_trinity's &08 select land
+                ; while the PIC was still busy — the select is ignored, the identity
+                ; read is stale, and drv_init returns BC=0 -> blue sv_fail_init. This is
+                ; the same i242 bug the CSD probe hit (probe_main); it crashed Pete's
+                ; SAM on a Test B disk-push (2026-06-24). trinload inits the ENC with no
+                ; prior SD transaction — mirror it: ENC up first, SD read after.
+                ld      hl, CONFIG_SERVERMAC
+                call    drv_init
+                ld      a, b
+                or      c
+                jp      z, sv_fail_init
+
                 ; --- read the SD CSD -> BD_RECORDS (i145b) ---------------
                 ; The WRQ record-push picker needs the card's total record count;
                 ; csd_set_bd_records computes it from the inserted SD card's CSD
@@ -1334,12 +1390,16 @@ serve_main:
                 ; &8000-&FFFF (32768-byte) window the boot fit-check enforces.
                 call    csd_set_bd_records
 
-                ; --- init the ENC28J60 with the SAM's real MAC ----------
+                ; --- re-arm the ENC RX path the SD transaction disturbed (i244) --
+                ; The SD ladder leaves the ENC's persistent RX state (RXEN, ring
+                ; pointers, MAC/PHY) disturbed; drv_read never restores it, so serving
+                ; is dead until we re-run drv_init's RX-arming (enc_rx_reestablish:
+                ; ereset + ring/MAC/PHY re-arm + RX enable, MINUS chk_trinity, which
+                ; would fail right after the &38 SD-init — i242). Mirrors probe_main.
+                di
                 ld      hl, CONFIG_SERVERMAC
-                call    drv_init
-                ld      a, b
-                or      c
-                jp      z, sv_fail_init
+                call    enc_rx_reestablish
+                ei
 
 sv_serve_loop:
                 ; Attended Esc-to-exit (mirrors netboot_dumper.asm dm_serve_loop;
@@ -1355,7 +1415,7 @@ sv_serve_loop:
                 ld      a, &f7
                 in      a, (&f9)
                 bit     5, a                   ; Esc pressed?
-                ret     z                      ; -> trinload's start
+                jp      z, sv_exit_to_trinload ; -> quiesce, then RET to trinload's start
 
                 call    serve_serve_once
 
@@ -1364,20 +1424,83 @@ sv_serve_loop:
                 ; unwind as the Esc exit.
                 ld      a, (XFER_STOP_REQUESTED)
                 or      a
-                ret     nz                     ; -> trinload's start
+                jp      nz, sv_exit_to_trinload ; -> quiesce, then RET to trinload's start
 
                 jr      sv_serve_loop
 
+; sv_exit_to_trinload — the single clean-exit point for BOTH serve exits (Esc and the
+; `tftp.done` control name). Quiesces the shared Trinity microcontroller / SD-SPI bus
+; before RETing to trinload's pushed `start` return address, so trinload's `start`
+; (which re-runs chk_trinity: OUT &DC,8/9 + IN &DD, with only fixed DJNZ delays, no
+; busy-poll) resumes against an IDLE controller rather than one mid-transaction.
+;
+; A disk-record push leaves the &DC microcontroller having just driven a burst of
+; CMD24 sector writes + list-sector CMD17 reads; without a deselect + settle the next
+; owner's first &DC select can land while the PIC is still busy and be silently
+; dropped (manual:22) — the same shared-microcontroller-busy hazard that produced the
+; i242 chk_trinity-after-&38 stale read. The quiesce is: OUT (&DC),&04 (all-deselect,
+; auto-null off — the transaction-close bracket the SD ladder uses), a BOUNDED wait
+; for &DC bit 3 (BUSY) to clear, then a short fixed settle delay.
+;
+; DESIGNED, NOT HARDWARE-VERIFIED (CLAUDE.md §5). The Go harness models &DC bit-3 BUSY
+; (raised one SPI-byte-time per OUT, cleared on the next IN &DC), so the deselect +
+; busy-poll + RET path EXECUTES in emulation (a test asserts the RET still reaches
+; trinload after the quiesce) — but whether a real PIC resumes chk_trinity cleanly
+; after this sequence is gated on Pete's Trinity. The wait is bounded so a stuck
+; controller can NEVER hang the SAM on the way out (the prime directive: an exit path
+; must always reach trinload; a 2026-06-24-style unbounded SD busy-wait hang here
+; would strand the machine at the worst moment — right as it tries to hand back).
+sv_exit_to_trinload:
+                di                              ; no interrupt window mid-quiesce
+                ld      a, SDC_NULLOFF          ; &04: all-deselect / auto-null off
+                out     (SDC_PORT), a           ;   close any open &DC transaction
+                ld      bc, SV_QUIESCE_LIMIT     ; bounded busy-poll budget
+sv_q_busy:
+                in      a, (SDC_PORT)           ; reading &DC also clears BUSY in HW/model
+                and     %00001000               ; &DC bit 3 = BUSY
+                jr      z, sv_q_settled          ; clear -> controller idle
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, sv_q_busy            ; budget left -> keep polling
+                ; budget exhausted: give up waiting (a stuck PIC must not trap us here)
+sv_q_settled:
+                ; short fixed settle delay so the PIC is fully idle before trinload's
+                ; fixed-delay chk_trinity probes it (no BUSY-poll on that side).
+                ld      bc, SV_SETTLE_LOOPS
+sv_q_settle:
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, sv_q_settle
+                ei
+                ret                             ; -> trinload's pushed `start`
+
+SV_QUIESCE_LIMIT: equ &FFFF                     ; ~65535 busy-polls (~0.5s ceiling); a working
+                                                ; controller clears BUSY in ~1 poll, so this is
+                                                ; only the stuck-hardware bound, never the norm.
+SV_SETTLE_LOOPS:  equ &0200                     ; ~512-iter fixed settle (~a few hundred us) so
+                                                ; the PIC is idle before chk_trinity's fixed delays.
+
 sv_fail_cfg:
                 ld      a, 2                   ; red border: no/bad network settings
-                out     (&fe), a
-                di
-                halt
+                jr      sv_fail_show
 sv_fail_init:
                 ld      a, 1                   ; blue border: ENC28J60 init failed
+sv_fail_show:
+                ; Show the diagnostic border, hold so the operator can read it, then
+                ; hand control back to trinload via tr_terminate (di;halt under test,
+                ; RET to trinload on hardware — the i228 unmapped-port probe). The
+                ; serve binary is trinload-pushable (netboot-serve-trinload pushes
+                ; netboot_serve_boot.bin), and a raw di;halt strands the SAM, costing
+                ; a power-cycle on every failed push (Pete, 2026-06-24; i243b).
                 out     (&fe), a
-                di
-                halt
+sv_fail_wait:
+                ld      a, &f7                 ; poll Esc (trinload's key idiom)
+                in      a, (&f9)
+                bit     5, a
+                jr      nz, sv_fail_wait       ; hold the border until Esc, then return
+                jp      tr_terminate
 
 ; provision_demo — copy the assembled demo STORE + SRC_TABLE templates into the
 ; live STORE/SRC_TABLE the resolve + resolve_src walk. The templates are built at
@@ -1540,6 +1663,12 @@ SRC_TABLE:        defs 256
 NETBOOT_WANT_CLAIM: equ 1
                 include "bdos_seam.asm"        ; i121f: free-record find + record select + HWSAD/HRSAD + validate
                 include "raw_record_sink.asm"  ; i121f: streaming disk-image -> raw record (HWSAD per sector)
+                ; tr_terminate (i228): serve_main's bring-up error paths end via it,
+                ; not a raw di;halt, so a failed trinload push leaves the SAM usable
+                ; (i243b). build_udp_frame (its only external dep) is included above.
+                ; The dumper/csd_probe builds (DUMPER=1) include test_report.asm
+                ; themselves, so this serve-only include can't double-define.
+                include "test_report.asm"
                 ; i145b CSD-read -> BD_RECORDS (i145b-b2): shipped as a section-D
                 ; overlay. The ~600-byte module places the boot image's tail above
                 ; &BFFF into section D, which is RAM at boot (see the csd_set_bd_records
