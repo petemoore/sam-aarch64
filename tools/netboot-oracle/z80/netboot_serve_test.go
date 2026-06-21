@@ -185,6 +185,22 @@ func demoAck(block uint16) []byte {
 	})
 }
 
+// demoData builds the client's DATA frame for a WRQ upload (client TID -> server
+// TID), the frames the WRQ receive loop accumulates into STAGING (i121b).
+func demoData(block uint16, data []byte) []byte {
+	return frame.BuildUDPFrame(frame.UDP{
+		DstMAC: demoServerMAC, SrcMAC: demoClientMAC,
+		SrcIP: demoClientIP, DstIP: demoServerIP,
+		SrcPort: demoClientTID, DstPort: demoServerTID,
+		Payload: tftp.BuildDATA(block, data),
+	})
+}
+
+// wrqStagingAddr is where the Z80 serve unit accumulates a WRQ upload
+// (WRQ_STAGING equ &C000, section D — flat RAM under the host harness). It is an
+// assembler equate, so it is read by literal address rather than via the map.
+const wrqStagingAddr = 0xC000
+
 func eqFrame(t *testing.T, label string, got, want []byte) {
 	t.Helper()
 	if got == nil {
@@ -352,5 +368,89 @@ func TestServeDemoWRQOptionedOACK(t *testing.T) {
 	}
 	if v, _ := tftp.OptionUint(opts, "tsize"); v != 4096 {
 		t.Fatalf("OACK tsize = %d, want 4096", v)
+	}
+}
+
+// TestServeDemoWRQReceiveToStaging is the i121b host check: after the WRQ
+// handshake (i121a) the server receives the pushed file's DATA blocks 1..N,
+// ACKing each one back to the client and accumulating the bytes into STAGING,
+// ending on the short final block. Both the bare-WRQ (blksize 512) and the
+// optioned-WRQ (negotiated blksize) handshakes are exercised. Every ACK on the
+// virtual wire is asserted byte-for-byte against the Go authority
+// serve.Responder.OnFrame, and the Z80 STAGING buffer is asserted to hold the
+// uploaded bytes exactly (compared against the authority's accumulated bytes).
+func TestServeDemoWRQReceiveToStaging(t *testing.T) {
+	cases := []struct {
+		name    string
+		opts    []tftp.Option
+		blksize int
+	}{
+		{"bare", nil, 512},
+		{"optioned", []tftp.Option{{Name: "blksize", Value: "1024"}, {Name: "tsize", Value: "2098"}}, 1024},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mac := loadServeDemo(t)
+			ref := fillServeConfig(t, mac, []demoFile{{"hello.txt", makeFile(10), demoSrcOrgA}})
+			enc := z80h.NewENC28J60()
+			initServeDriver(t, mac, enc)
+
+			// The uploaded file: two full blocks + a short final tail, so the
+			// transfer spans three DATA blocks and ends on a short one.
+			file := makeFile(2*tc.blksize + 50)
+
+			// 1. WRQ -> handshake reply (ACK-0 for a bare WRQ, OACK for optioned).
+			wrq := demoWRQ("upload.bin", tc.opts)
+			eqFrame(t, "WRQ handshake", serveDemo(t, mac, enc, wrq), ref.OnFrame(wrq))
+
+			// 2. DATA blocks 1..N -> an ACK per block, accumulating into STAGING.
+			block := uint16(1)
+			for off := 0; off < len(file); off += tc.blksize {
+				end := off + tc.blksize
+				if end > len(file) {
+					end = len(file)
+				}
+				dataFrame := demoData(block, file[off:end])
+				gotACK := serveDemo(t, mac, enc, dataFrame)
+				eqFrame(t, "DATA -> ACK", gotACK, ref.OnFrame(dataFrame))
+
+				// Confirm the reply is an ACK of this block.
+				u, ok := frame.ParseUDP(gotACK)
+				if !ok {
+					t.Fatalf("block %d ACK is not a UDP frame: %x", block, gotACK)
+				}
+				if tftp.Opcode(u.Payload) != tftp.OpACK {
+					t.Fatalf("block %d reply opcode = %d, want ACK", block, tftp.Opcode(u.Payload))
+				}
+				if blk, err := tftp.ParseACK(u.Payload); err != nil || blk != block {
+					t.Fatalf("block %d reply ACKs block %d (err %v)", block, blk, err)
+				}
+
+				// After block 1, replay it: a duplicate is re-ACKed (RFC 1350
+				// server recovery) without re-staging — the staged length must
+				// not grow. This mirrors tftp.ClientXfer.OnData's duplicate path.
+				if block == 1 {
+					dup := demoData(1, file[:tc.blksize])
+					eqFrame(t, "duplicate DATA 1 -> re-ACK", serveDemo(t, mac, enc, dup), ref.OnFrame(dup))
+				}
+				block++
+			}
+
+			// 3. The authority reports the transfer complete and the staged bytes.
+			staged, done := ref.WRQStaged()
+			if !done {
+				t.Fatalf("Go authority did not mark the WRQ transfer complete")
+			}
+			if !bytes.Equal(staged, file) {
+				t.Fatalf("Go authority staged %d bytes, want %d", len(staged), len(file))
+			}
+
+			// 4. The Z80 STAGING buffer holds the uploaded file byte-for-byte.
+			z80Staged := mac.Read(wrqStagingAddr, len(file))
+			if !bytes.Equal(z80Staged, file) {
+				t.Errorf("Z80 STAGING != uploaded file\n  z80 %x...\n  want %x...",
+					z80Staged[:min(16, len(z80Staged))], file[:min(16, len(file))])
+			}
+		})
 	}
 }

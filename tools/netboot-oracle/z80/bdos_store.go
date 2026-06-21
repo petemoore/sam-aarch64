@@ -43,13 +43,14 @@ import (
 const (
 	rst8HookAddr = 0x0008 // the RST 8 vector the SAMDOS/B-DOS hooks dispatch through
 
-	bdHookHRECORD  = 0x9C // record select (156)
-	bdHookALHK     = 136  // auto-load hook (0x88): load+run the selected drive/record's AUTO file (bdos15a.src.txt:463 HAUTO; KEYBOARD_BOOT_WORKAROUND.md §2 BOOT D8DCH)
-	bdHookHGTHD    = 129  // get file header (lookup by name) — server-side, not modelled here
-	bdHookHSAVE    = 132  // save whole file
-	bdHookHWSAD    = 149  // write raw 512-byte sector at (D=track, E=sector) from HL (bdos15a.src.txt:528-531)
-	bdHookHRSAD    = 160  // read raw 512-byte sector at (D=track, E=sector) into HL
-	bdHookListRead = 161  // card-absolute list-sector read: E=listSector (1-based), HL=dest (512 bytes)
+	bdHookHRECORD   = 0x9C // record select (156)
+	bdHookALHK      = 136  // auto-load hook (0x88): load+run the selected drive/record's AUTO file (bdos15a.src.txt:463 HAUTO; KEYBOARD_BOOT_WORKAROUND.md §2 BOOT D8DCH)
+	bdHookHGTHD     = 129  // get file header (lookup by name) — server-side, not modelled here
+	bdHookHSAVE     = 132  // save whole file
+	bdHookHWSAD     = 149  // write raw 512-byte sector at (D=track, E=sector) from HL (bdos15a.src.txt:528-531)
+	bdHookHRSAD     = 160  // read raw 512-byte sector at (D=track, E=sector) into HL
+	bdHookListRead  = 161  // card-absolute list-sector read: E=listSector (1-based), HL=dest (512 bytes)
+	bdHookListWrite = 162  // card-absolute list-sector write: E=listSector (1-based), HL=source (512 bytes)
 
 	bdUIFALen = 48 // the UIFA HSAVE reads at IX (bdos_save_hook stages it at &4B00)
 
@@ -248,12 +249,26 @@ type SectorWrite struct {
 	Data      [bdSectorSize]byte // the 512 bytes written
 }
 
+// ListWrite is one captured BD_HOOK_LISTWRITE: a card-absolute record-list sector
+// written back (the bdos_claim_record read-modify-write that marks a pushed record
+// used). It carries the 1-based list sector, and — decoded from the modified
+// sector against the CardModel's prior state — the single record whose 16-byte
+// name entry the write changed and the new name. Exactly one entry changes per
+// claim (the safety invariant); ChangedRecord is that record (0 if none changed).
+type ListWrite struct {
+	ListSector    int      // the 1-based list sector written
+	ChangedRecord int      // the 1-based record whose entry the write changed (0 = none)
+	Name          string   // the new record name (trailing spaces trimmed)
+	Entry         [16]byte // the raw 16-byte entry written for ChangedRecord
+}
+
 // BDOSStore models the B-DOS record store for the netboot write-out. Construct
 // with NewBDOSStore and attach with Machine.AttachBDOS.
 type BDOSStore struct {
 	selected     int           // last HRECORD selection; -1 = none selected yet
 	saves        []BDOSSave    // captured HSAVEs, in order
 	sectorWrites []SectorWrite // captured HWSAD writes, in order
+	listWrites   []ListWrite   // captured BD_HOOK_LISTWRITE record-list writes, in order
 	boots        []int         // records ALHK-booted, in order (the i122a boot-a-record primitive)
 	card         *CardModel    // nil = no card modelled; HRSAD returns all-zero
 }
@@ -271,6 +286,11 @@ func (s *BDOSStore) Saves() []BDOSSave { return s.saves }
 // Each entry carries the record that was selected when the write ran, the
 // linear sector index (track*10 + (sector-1)), and the 512 bytes written.
 func (s *BDOSStore) SectorWrites() []SectorWrite { return s.sectorWrites }
+
+// ListWrites returns the captured record-list sector writes (bdos_claim_record),
+// in order. Each carries the list sector, the single record whose entry changed,
+// and the new name — so a claim test asserts which record was marked used.
+func (s *BDOSStore) ListWrites() []ListWrite { return s.listWrites }
 
 // Boots returns the records ALHK-booted, in order — each is the record that was
 // HRECORD-selected when the auto-load hook fired. On real hardware ALHK never
@@ -371,8 +391,70 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		for i, b := range data {
 			mac.m.poke(dest+uint16(i), b)
 		}
+	case bdHookListWrite:
+		// Card-absolute list-sector WRITE: E = 1-based list sector, HL = the 512
+		// bytes (32 × 16-byte record-list entries) to write back. This models the
+		// result of a raw SD single-block WRITE at the card-absolute LBA of the list
+		// sector — the SPI ladder (ports &DC–&DF) is hardware-gated and not emulated
+		// (docs/specs/trinity-record-detection-design.md §8). bdos_claim_record does
+		// a read-modify-write: it loads the sector, overwrites ONLY the claimed
+		// record's 16-byte entry, and writes the whole sector back.
+		listSec := int(cpu.DE.Lo)
+		src := cpu.HL.U16()
+		var written [bdSectorSize]byte
+		for i := range written {
+			written[i] = mac.m.peek(src + uint16(i))
+		}
+		s.applyListWrite(listSec, written)
 	}
 	return retAddr + 1 // skip the 1-byte inline hook code
+}
+
+// applyListWrite reconciles a written list sector against the CardModel: it finds
+// the single 16-byte record entry that changed (the read-modify-write touches
+// exactly one — the safety invariant bdos_claim_record guarantees), commits the
+// new entry to the CardModel so a subsequent bdos_find_free_record reads that
+// record as NAMED (the two-push test depends on this), and records the change as
+// a ListWrite. listSec is 1-based; entry e (0..31) within it is record
+// (listSec-1)*32 + e + 1, mirroring CardModel.ListSector.
+func (s *BDOSStore) applyListWrite(listSec int, written [bdSectorSize]byte) {
+	const entriesPerSector = 32
+	const entrySize = 16
+	lw := ListWrite{ListSector: listSec}
+	if s.card == nil {
+		s.listWrites = append(s.listWrites, lw)
+		return
+	}
+	prior := s.card.ListSector(listSec)
+	for e := 0; e < entriesPerSector; e++ {
+		var newEntry [entrySize]byte
+		copy(newEntry[:], written[e*entrySize:(e+1)*entrySize])
+		var oldEntry [entrySize]byte
+		copy(oldEntry[:], prior[e*entrySize:(e+1)*entrySize])
+		if newEntry == oldEntry {
+			continue
+		}
+		record := (listSec-1)*entriesPerSector + e + 1
+		s.card.SetRecordEntry(record, newEntry)
+		lw.ChangedRecord = record
+		lw.Entry = newEntry
+		lw.Name = strings.TrimRight(maskName(newEntry[:]), " ")
+		// Exactly one entry changes per claim; stop at the first difference. (A
+		// well-behaved claim writes the sector back otherwise byte-for-byte.)
+		break
+	}
+	s.listWrites = append(s.listWrites, lw)
+}
+
+// maskName renders a record-list name field for display, stripping bit 7 (the
+// write-protect / high bit) off each byte the way B-DOS prints it (AND 127 per
+// byte; bdos15a.src.txt:4107-4114).
+func maskName(b []byte) string {
+	out := make([]byte, len(b))
+	for i, c := range b {
+		out[i] = c & 0x7F
+	}
+	return string(out)
 }
 
 // decodeBDOSSave decodes a captured UIFA the way bdos_difa_to_size / save_out_file

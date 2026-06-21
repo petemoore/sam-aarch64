@@ -138,6 +138,20 @@ fresh one).
    guess.** (The size-inference alternative was rejected as too implicit — corrupt-disk-prone
    and surprising at the edges. Explicit > implicit.)
 
+6. **Reserved control namespace — server lifecycle (i121, Pete 2026-06-21).** A small set of
+   reserved filenames are **control signals, not stored objects.** The accept-in (WRQ) server
+   treats a `tftp put` of the reserved name **`tftp.done`** (an empty file suffices) as "finish
+   and hand control back to trinload" rather than a file to store: it sets a stop flag and the
+   serve loop RETs to trinload — the **only** way to run our code on the SAM until the auto-boot
+   BIOS exists, so a server with no exit strands the machine. This lets an operator push a *batch*
+   of disk images and then cleanly end the session so the next program can run; pushing one file
+   then `tftp.done` is the one-at-a-time case. The name is reserved (never stored), so it cannot
+   collide with a real archived object — the same "filename is the only intent lever a stock
+   client has" mechanism as the `trinity-sam-disks/` prefix in decision 5. An attended keyboard
+   **Esc** on the SAM is an equivalent manual exit (mirrors `netboot_dumper.asm`). Emulation-gated
+   like everything else: a hardware crash is unrecoverable and would strand the session with no
+   way back to trinload, so every brick is green in the Go harness before it touches hardware.
+
 ## 7. Verification line (CLAUDE.md §5)
 
 Host-verifiable now: the manifest parse + the exact-match resolve + the `SpanPlan`

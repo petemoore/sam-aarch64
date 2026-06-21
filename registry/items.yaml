@@ -2314,10 +2314,12 @@
   title: "WRQ receive-to-staging (DATA->ACK loop)"
   description: |
     Wire tftp_recv_data (i82, tftp_client_loop.asm) into the WRQ transfer: DATA -> ACK each -> accumulate into STAGING -> short-block end. Resolve the SERVER_*/CLIENT_* var-name collision between tftp_client_loop.asm and netboot_serve.asm. Go authority: serverloop.go receive path. Host test: inject WRQ+DATA1..N, assert an ACK per block + STAGING holds the file.
-  status: OPEN
+  status: DONE
   depends_on: [i121a]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 529, role: completing}
   parent: i121
 
 - id: i121c
@@ -2333,9 +2335,71 @@
 - id: i121d
   title: Combined RRQ+WRQ bootable program + disk/Makefile/CI wiring
   description: |
-    Fold WRQ into the RRQ serve-out program (netboot_serve.asm) so one bootable program handles both; wire into the disk image, Makefile, and CI. The real Mac->SAM 'tftp put' over the wire is the hardware final gate.
+    Packaging vessel 1 (trinload): the self-contained WRQ-server code block + a host PUSH LAUNCHER (a trinpush wrapper) that reads a config / sets the record-placement strategy in the i121h config block (default highest-free), then pushes the block via trinpush-push.py for trinload to load+run. Combined RRQ+WRQ program; the .mgt vessel is the sibling i121j. Make target produces the pushable block; the launcher exposes --strategy (highest|lowest|explicit:N). Host-verifiable; the real wire push stays hardware-gated.
   status: OPEN
   depends_on: [i121c]
+  kind: leaf
+  owner: agent
+  parent: i121
+
+- id: i121e
+  title: WRQ graceful termination — return control to trinload (sentinel + Esc escape)
+  description: |
+    Escape hatch so the accept-in server hands control back to trinload (the only code-exec path until the auto-boot BIOS exists). A reserved sentinel filename pushed via 'tftp put' (e.g. tftp.done, empty) sets a stop flag -> sv_serve_loop breaks -> RET to trinload's pushed return addr; plus a non-blocking keyboard Esc poll (mirrors netboot_dumper.asm Esc-to-exit) for attended manual recovery. Needed so the next program can run after a batch of disk-image pushes. Emulation-gated (a hardware crash is unrecoverable). Home: netboot_serve.asm (i96).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 529, role: completing}
+  parent: i121
+
+- id: i121f
+  title: WRQ disk-record push path — stream a pushed .mgt into a free bootable Trinity record (PRIMARY use case)
+  description: |
+    Pete's PRIMARY use case (2026-06-21): tftp put a .mgt disk image (819200 B) under the trinity-sam-disks/ namespace -> the SAM streams it into a free raw Trinity record (bootable + servable-raw, manifest design sec 6.5), validating size==819200 + BDOS stamp@232. Cannot stage whole (819200 B doesn't fit RAM), so the WRQ receive dispatch (i121b) feeds the i122b raw_record_sink (bdos_write_record / HWSAD) sector-by-sector; free record via i119 bdos_find_free_record; ERROR(3) if none free or validation fails. Reuses the i122 store side + i121a handshake; refactors handle_data to feed a pluggable sink. Distinct from i121c (the DEFAULT flat-file HSAVE archive path, secondary). Host-verifiable via BDOSStore SectorWrites; real SD write hardware-gated.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 529, role: completing}
+  parent: i121
+
+- id: i121g
+  title: WRQ record-claim — write the Trinity record-list name entry so a pushed record is marked used (enables BATCH pushes)
+  description: |
+    BLOCKER for Pete's batch use case (push many .mgt images). i121f streams a pushed image into a FREE record but does NOT write the central record-list name entry, and bdos_find_free_record keys 'free' off the list name byte==0 -> a pushed-but-unnamed record still reads as free, so a SECOND push overwrites the FIRST (every push collides on the lowest free record). Each VALID push must CLAIM its record by writing a record-list name entry (mirror B-DOS new.rec/RENAME: LDIR a 10-char name from the WRQ filename into the 16-byte entry + write the list sector) AFTER validation passes (the clean commit point). Host-modelable logic (build entry + place name); the card-absolute list-sector WRITE dispatch is hardware-gated (ports &DC-&DF, same gate as the list read) -> add a BDOSStore list-write capture to host-verify. Without it only a SINGLE push-then-boot works. Discovered during i121f (2026-06-21).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 529, role: completing}
+  parent: i121
+
+- id: i121h
+  title: "Config-block strategy: vessel-agnostic free-record placement (highest/lowest/explicit) read at launch"
+  description: |
+    Pete's design (2026-06-21): the WRQ server program is a vessel-agnostic library+entry that reads its record-placement STRATEGY from a small config block in memory, NOT hardcoded. The packaging vessel (trinload code-block or .mgt disk) populates that block; the program is identical either way. Config block (trailing, fixed label): magic/version + strategy byte (0=highest-free DEFAULT per s3 manifest-decision-4, 1=lowest-free, 2=explicit) + explicit-record word (0xFFFF=undefined -> future SAM prompt). bdos_find_free_record becomes strategy-aware (scan N..1 / 1..N / use named record). Resolves the i121f lowest-free vs documented s3 highest-free discrepancy by making it config-driven, default highest-free. Read once at launch (no routine disk re-read). Host-verifiable.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 529, role: completing}
+  parent: i121
+
+- id: i121i
+  title: .mgt bootable server-disk vessel + BASIC loader that appends the same config block
+  description: |
+    The OTHER shipping vessel (sibling of i121d's trinload vessel): a bootable .mgt that a BASIC loader boots, loading the WRQ server code + appending the i121h config block at the same memory location, so the runtime image matches the trinload vessel exactly. The disk carries the config file the loader reads (absence -> the future i121k SAM prompt). Same program source as the trinload vessel; only the packaging differs. Sibling deliverable to i121d.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i121
+
+- id: i121j
+  title: SAM-side interactive strategy prompt when config is undefined (deferred)
+  description: |
+    DEFERRED (Pete 2026-06-21: more complex to model, not needed now). Complementary to the host-launcher config: if the in-memory config block's strategy is undefined (the host launcher / disk config left it unset, e.g. user chose 'ask on the SAM'), the program prompts the user on the SAM keyboard for the placement strategy at launch. For now the host launcher always sets a concrete strategy (default highest-free), so this path is unused. Requires modelling a SAM keyboard prompt in emulation.
+  status: OPEN
   kind: leaf
   owner: agent
   parent: i121

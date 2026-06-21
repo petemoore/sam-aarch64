@@ -152,13 +152,27 @@ serve_serve_once:
                 jp      z, handle_rrq
 
 ns_check_tid:
-                ; === 4. UDP dst == our transfer TID -> TFTP ACK ========
+                ; === 4. UDP dst == our transfer TID ====================
                 ld      a, (CONFIG_SERVERTID)             ; high
                 cp      h
                 jp      nz, ns_none
                 ld      a, (CONFIG_SERVERTID + 1)         ; low
                 cp      l
                 jp      nz, ns_none
+
+                ; A frame on our transfer TID. During a WRQ receive a DATA(3)
+                ; frame is the pushed file's next block (accumulate + ACK); an
+                ; ACK(4) advances an RRQ serve. Mirror serve.go OnFrame: route a
+                ; DATA to recvData when a WRQ receive is armed.
+                ld      a, (WRQ_RECV_ACTIVE)
+                or      a
+                jp      z, handle_ack          ; no WRQ receive: the RRQ ACK path
+                ld      a, (RXBUF + RX_UDP_PAYLOAD)
+                or      a
+                jp      nz, handle_ack         ; opcode high != 0
+                ld      a, (RXBUF + RX_UDP_PAYLOAD + 1)
+                cp      OP_DATA
+                jp      z, handle_data
                 jp      handle_ack
 
 ns_none:
@@ -354,15 +368,27 @@ rrq_oack:
                 jp      srv_send_tbuf
 
 ; ===========================================================================
-; WRQ handler (i121a — handshake only). Port of serve.go::Responder.startWrite.
+; WRQ handler. Port of serve.go::Responder.startWrite.
 ;
 ; A WRQ arrives on UDP dst 69 (same port as RRQ). The server learns the client
 ; endpoint (MAC/IP/TID) and replies:
 ;   - bare WRQ (no options): ACK-0 (`00 04 00 00`)    — tftp.BuildACK(0)
 ;   - optioned WRQ:          OACK echoing blksize      — same build_oack path
 ;
-; DATA reception is deferred to i121b. This routine only produces the handshake
-; reply frame; no receive state is set up here.
+; A push is a "disk-record push" (i121f): the bootable build claims a FREE Trinity
+; record before the handshake and streams the pushed .mgt image straight into it
+; (raw 512-byte sectors), reusing the i122 store machinery. If no record is free,
+; the server replies ERROR(3, "no free record") and does NOT arm the receiver —
+; never touching a named record (the shared-resource invariant,
+; memory/trinity_storage_shared_resource). v1 treats EVERY WRQ as a disk-record
+; push and lets validation be the safety gate (manifest design §6.5); the future
+; i121c flat-file path uses the "trinity-sam-disks/" filename prefix as the
+; discriminator, so the prefix is stripped here but not required.
+;
+; The disk-record claim + the sink streaming live behind NETBOOT_HOSTTEST==0
+; (they need the bdos_seam.asm RST 8 hooks + raw_record_sink.asm, present only in
+; the bootable build). The HOSTTEST build (the i121a/i121b wire tests) leaves
+; WRQ_SINK_MODE clear and accumulates into the flat WRQ_STAGING, unchanged.
 ; ===========================================================================
 handle_wrq:
                 ; learn the client endpoint (same pattern as handle_rrq).
@@ -379,13 +405,53 @@ handle_wrq:
                 ld      bc, 2
                 ldir
 
+                ; --- reserved control name `tftp.done`: end the session, hand control
+                ; back to trinload (manifest design decision 6; i121e). Checked FIRST,
+                ; before any free-record find / claim / arm, so the control name is
+                ; never stored. On match: set XFER_STOP_REQUESTED (sv_serve_loop polls
+                ; it and RETs to trinload's pushed return addr) and send a courtesy
+                ; ACK-0 so a stock `tftp put tftp.done` sees the handshake accepted.
+                ; The empty push's subsequent 0-byte DATA may time out on the client
+                ; after we exit — acceptable; the point is the RET back to trinload.
+                ld      hl, (PARSE_FILENAME)
+                ld      de, sv_done_name
+                call    streq_cstr             ; CY set if the filename == "tftp.done"
+                jr      nc, wrq_not_done
+                ld      a, 1
+                ld      (XFER_STOP_REQUESTED), a
+                call    build_ack0             ; courtesy ACK-0 (packet at TBUF, BC = 4)
+                jp      srv_send_tbuf          ; reply, then return; no claim, no arm
+wrq_not_done:
+
+                ; --- disk-record push setup (bootable build): claim a free record,
+                ; arm the streaming sink. No free record -> ERROR(3), no handshake. ---
+                xor     a
+                ld      (WRQ_SINK_MODE), a     ; default: flat accumulate (HOSTTEST path)
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                call    wrq_claim_record       ; CY set = a free record was claimed
+                jr      c, wrq_handshake       ; claimed: continue to the handshake
+                ; no free record: ERROR(3, "no free record"), do not arm.
+                xor     a
+                ld      (ERR_CODE), a
+                ld      a, 3
+                ld      (ERR_CODE+1), a        ; big-endian code = 0x0003
+                ld      hl, err_nofree_msg
+                ld      (ERR_MSG_PTR), hl
+                call    build_error            ; packet at TBUF, BC = length
+                jp      srv_send_tbuf
+                endif
+
+wrq_handshake:
                 ; bare WRQ? (no options: PARSE_OPT_COUNT == 0)
                 ld      bc, (PARSE_OPT_COUNT)
                 ld      a, b
                 or      c
                 jr      nz, wrq_oack
 
-                ; --- bare WRQ: reply ACK-0 (00 04 00 00) ------------------
+                ; --- bare WRQ: arm the receiver at blksize 512, reply ACK-0 ---
+                ld      hl, 512
+                ld      (WRQ_BLKSIZE), hl
+                call    wrq_arm_receiver       ; WRQ_RECV_ACTIVE=1, ACKED/OFFSET=0
                 call    build_ack0             ; packet at TBUF, BC = 4
                 jp      srv_send_tbuf
 
@@ -395,10 +461,127 @@ wrq_oack:
                 ; formats "blksize\0<n>\0" (and optionally "tsize\0<ts>\0") into
                 ; OACK_OPTS. Port of serve.go::Responder.startWrite optioned path.
                 call    negotiate_blksize      ; -> XFER_BLKSIZE
+                ld      hl, (XFER_BLKSIZE)     ; arm the receiver at the negotiated
+                ld      (WRQ_BLKSIZE), hl      ; block size
+                call    wrq_arm_receiver
                 call    build_oack_opts_wrq    ; -> OACK_OPTS, HL = byte count
                 ld      (OACK_OPTS_LEN), hl
                 call    build_oack             ; packet at TBUF, BC = length
                 jp      srv_send_tbuf
+
+; wrq_arm_receiver — arm the WRQ receive-to-staging loop: mark it active and reset
+; the per-transfer state (ACKED = 0 so the first expected block is 1, the staging
+; offset back to the start, the short-block flag clear). WRQ_BLKSIZE must already
+; be set by the caller. Mirrors serve.go::startWrite arming r.wrqRecv.
+wrq_arm_receiver:
+                ld      hl, 0
+                ld      (WRQ_ACKED), hl
+                ld      (WRQ_STAGE_OFFSET), hl
+                xor     a
+                ld      (WRQ_DONE), a
+                ld      a, 1
+                ld      (WRQ_RECV_ACTIVE), a
+                ret
+
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+; wrq_claim_record — claim a FREE Trinity record to stream the push into. Pick the
+; record per the configured placement STRATEGY (bdos_find_record_for_strategy reads
+; SERVE_CFG_STRATEGY: highest-free by default — manifest design §4 s3 / decision 4;
+; lowest-free or an explicit record when patched), HRECORD-select it, reset the
+; streaming sink, and enter sink mode. The pick never touches a named record (free ⇔
+; the record-list name byte is 0). BD_RECORDS (the card record count) is the
+; CSD-derived value (hardware-gated i145; the emulation E2E injects it) — 0 records ⇒
+; none free.
+;
+; Out: CY set + WRQ_SINK_MODE=1 + the record selected + the sink reset, if a record
+;      was placed; CY clear (WRQ_SINK_MODE stays 0) if none is available (no free
+;      record, or the explicit record is already named).
+; Mirrors client_fetch_boot's select + raw_record_sink_reset + sink-mode arm.
+wrq_claim_record:
+                call    bdos_find_record_for_strategy  ; -> BD_FREE_RECORD (1-based, 0 = none)
+                ld      a, (BD_FREE_RECORD)
+                ld      b, a
+                ld      a, (BD_FREE_RECORD+1)
+                or      b
+                jr      z, wrq_no_free         ; BD_FREE_RECORD == 0: nothing free
+                ld      a, (BD_FREE_RECORD)    ; low byte = the record number (>=1)
+                ld      (WRQ_RECORD), a
+                call    bdos_select_record     ; HRECORD-select it (HWSADs target it)
+                call    raw_record_sink_reset  ; RRS_FILL/LINEAR/TOTAL = 0
+                ld      a, 1
+                ld      (WRQ_SINK_MODE), a     ; handle_data streams into the record
+                scf
+                ret
+wrq_no_free:
+                or      a                      ; clear carry: no free record
+                ret
+
+; bdos_find_record_for_strategy — pick the record a WRQ disk-record push lands in,
+; per the placement STRATEGY in the serve config block (SERVE_CFG_STRATEGY, below).
+; This is the strategy-aware entry the serve WRQ path uses; bdos_find_free_record
+; keeps its lowest-first semantics for the i119/i122 client paths that depend on it.
+; It lives here (not in bdos_seam.asm) because it reads the serve config block; the
+; seam supplies only the strategy-agnostic finders it dispatches to.
+;
+; Reads SERVE_CFG_STRATEGY straight from RAM at find-time — cheap, and the config is
+; set at launch and not re-read from disk (Pete, i121h). Dispatch:
+;   0 (SERVE_STRAT_HIGHEST, the default) -> bdos_find_highest_free_record
+;       (scan BD_RECORDS..1, the highest free record; manifest design §4 s3 /
+;        decision 4: TFTP storage grows down from the top).
+;   1 (SERVE_STRAT_LOWEST)               -> bdos_find_free_record
+;       (scan 1..BD_RECORDS, the lowest free record — the existing behaviour).
+;   2 (SERVE_STRAT_EXPLICIT)             -> the record at SERVE_CFG_RECORD if it is
+;       free; else BD_FREE_RECORD = 0 (-> the caller's no-record ERROR(3) path).
+;   any other value                      -> treated as the default (highest-free).
+;
+; In:  BD_RECORDS  2 bytes  total record count (>= 1)
+;      the serve config block (SERVE_CFG_STRATEGY / SERVE_CFG_RECORD)
+; Out: BD_FREE_RECORD  2 bytes  the 1-based record to place into, or 0 if none is
+;                               available (no free record, or the explicit record is
+;                               already named).
+; Clobbers: A, BC, DE, HL.
+;
+; Mirrors the Go authority serve.Responder.nextRecordForStrategy (serve.go).
+bdos_find_record_for_strategy:
+                ld      a, (SERVE_CFG_STRATEGY)
+                cp      SERVE_STRAT_LOWEST
+                jp      z, bdos_find_free_record        ; 1: lowest-free (existing)
+                cp      SERVE_STRAT_EXPLICIT
+                jr      z, bfrs_explicit                ; 2: a named explicit record
+                ; 0 or any unrecognised value: the baked default (highest-free).
+                jp      bdos_find_highest_free_record
+
+bfrs_explicit:
+                ; The explicit record is SERVE_CFG_RECORD. Default BD_FREE_RECORD = 0
+                ; (none) so every reject path below just returns.
+                xor     a
+                ld      (BD_FREE_RECORD), a
+                ld      (BD_FREE_RECORD + 1), a
+
+                ld      hl, (SERVE_CFG_RECORD)
+                ; undefined (&FFFF, the i121j prompt placeholder)? -> none.
+                ld      a, h
+                and     l
+                inc     a
+                jr      z, bfrs_done                    ; HL == &FFFF: undefined
+                ; zero record number is not valid (records are 1-based) -> none.
+                ld      a, h
+                or      l
+                jr      z, bfrs_done
+
+                ; read the explicit record's list entry and apply the free test.
+                ld      (BD_ENTRY_REC), hl
+                call    bdos_record_entry
+                ld      a, (BD_ENTRY_BUF)
+                and     &7F                             ; strip write-protect bit
+                jr      nz, bfrs_done                   ; named ⇒ not available -> 0
+
+                ; free: place at the explicit record.
+                ld      hl, (SERVE_CFG_RECORD)
+                ld      (BD_FREE_RECORD), hl
+bfrs_done:
+                ret
+                endif
 
 ; ===========================================================================
 ; 4. TFTP ACK — on our transfer TID: FirstData (ack 0, OACK path) or the next
@@ -501,6 +684,207 @@ snd_have_chunk:
                 ld      (XFER_OFFSET), hl
 
                 jp      srv_send_tbuf
+
+; ===========================================================================
+; WRQ DATA — accumulate one received DATA block into STAGING and ACK it. Reached
+; from ns_check_tid when a WRQ receive is armed and the frame on our transfer TID
+; carries opcode DATA(3). Port of serve.go::Responder.recvData, which mirrors the
+; i82 receive side (tftp.ClientXfer.OnData / tftp_client_loop.asm::tftp_recv_data):
+; the block-check (acked+1 store, <= acked re-ACK, future ignore), the ldir into
+; STAGING, the STAGE_OFFSET advance, and the short-final-block end. The peer of a
+; WRQ is the client (learned by handle_wrq), so the ACK wraps back to it.
+; Out: BC = bytes transmitted (the ACK frame), or 0 if nothing was sent.
+; ===========================================================================
+handle_data:
+                ; UDP source port == the WRQ client TID? (ignore a stray sender)
+                ld      a, (RXBUF + RX_UDP_SRCPORT)
+                ld      hl, CLIENT_TID
+                cp      (hl)
+                jp      nz, ns_none
+                ld      a, (RXBUF + RX_UDP_SRCPORT + 1)
+                inc     hl
+                cp      (hl)
+                jp      nz, ns_none
+
+                ; block number (big-endian) -> DE
+                ld      a, (RXBUF + RX_UDP_PAYLOAD + 2)
+                ld      d, a
+                ld      a, (RXBUF + RX_UDP_PAYLOAD + 3)
+                ld      e, a                   ; DE = block
+
+                ; expected = WRQ_ACKED + 1.
+                ld      hl, (WRQ_ACKED)
+                inc     hl                     ; HL = acked + 1
+                or      a
+                sbc     hl, de                 ; (acked+1) - block
+                jr      z, wd_next_block       ; block == acked+1: the next block
+                ; block <= acked => duplicate (re-ACK); block > acked+1 => future.
+                ld      hl, (WRQ_ACKED)
+                or      a
+                sbc     hl, de                 ; acked - block
+                jp      c, ns_none             ; acked < block (future, not +1): ignore
+                ; duplicate: re-ACK the received block (DE) without storing.
+                jp      wd_send_ack            ; ACK block = DE (the received block)
+
+wd_next_block:
+                ; payload length = frame length - (42 + 4 TFTP header)
+                ld      hl, (RX_LEN)
+                ld      de, RX_UDP_PAYLOAD + 4
+                or      a
+                sbc     hl, de                 ; HL = data length
+                ld      (WRQ_DATA_LEN), hl
+
+                ; route the payload: the flat WRQ_STAGING accumulate (sink mode 0 —
+                ; the i121b host-verified path, kept for the future i121c flat file)
+                ; or the i121f raw-record streaming sink (sink mode 1 — re-block into
+                ; 512-byte sectors + HWSAD each into the claimed record, so a full
+                ; 819200-byte disk image never sits whole in RAM). WRQ_SINK_MODE
+                ; selects; only the bootable build has the sink. Mirrors
+                ; netboot_client.asm cl_sink_payload.
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                ld      a, (WRQ_SINK_MODE)
+                or      a
+                jr      nz, wd_sink_payload
+                endif
+
+                ; --- mode 0: accumulate the payload into WRQ_STAGING at the offset ---
+                ld      hl, (WRQ_STAGE_OFFSET)
+                ld      de, WRQ_STAGING
+                add     hl, de                 ; HL = dest
+                ex      de, hl                 ; DE = dest
+                ld      hl, RXBUF + RX_UDP_PAYLOAD + 4   ; src = payload data
+                ld      bc, (WRQ_DATA_LEN)
+                ld      a, b
+                or      c
+                jr      z, wd_no_copy          ; zero-length block: nothing to copy
+                ldir
+wd_no_copy:
+                ; WRQ_STAGE_OFFSET += data length
+                ld      hl, (WRQ_STAGE_OFFSET)
+                ld      de, (WRQ_DATA_LEN)
+                add     hl, de
+                ld      (WRQ_STAGE_OFFSET), hl
+                jr      wd_after_payload
+
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+wd_sink_payload:
+                ; --- mode 1: stream the payload into the claimed record. The sink
+                ; re-blocks into sectors + HWSADs each full one and tracks the 32-bit
+                ; image size in RRS_TOTAL (the size authority wd_finalize validates;
+                ; WRQ_STAGE_OFFSET is left alone — its 16 bits would overflow a full
+                ; record). ---
+                ld      hl, RXBUF + RX_UDP_PAYLOAD + 4
+                ld      bc, (WRQ_DATA_LEN)
+                ld      a, b
+                or      c
+                jr      z, wd_after_payload    ; zero-length block: nothing to sink
+                call    raw_record_sink_leaf
+                endif
+wd_after_payload:
+
+                ; WRQ_ACKED = block (re-read from the frame to assemble the LE value).
+                ld      a, (RXBUF + RX_UDP_PAYLOAD + 2)
+                ld      d, a                   ; high byte
+                ld      a, (RXBUF + RX_UDP_PAYLOAD + 3)
+                ld      e, a                   ; low byte
+                ld      (WRQ_ACKED), de        ; ACKED = the just-accepted block
+
+                ; done if data length < WRQ_BLKSIZE.
+                ld      hl, (WRQ_DATA_LEN)
+                ld      de, (WRQ_BLKSIZE)
+                or      a
+                sbc     hl, de                 ; datalen - blksize
+                jr      nc, wd_send_ack_de     ; datalen >= blksize: not the last
+                ld      a, 1
+                ld      (WRQ_DONE), a
+                ; final block: in sink mode, flush + validate the streamed record
+                ; before the final reply (ACK on success, ERROR(3) on a bad image).
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+                ld      a, (WRQ_SINK_MODE)
+                or      a
+                jp      nz, wd_finalize
+                endif
+wd_send_ack_de:
+                ; the blksize compare overwrote DE; reload the block to ACK
+                ; (the just-accepted block, == WRQ_ACKED).
+                ld      de, (WRQ_ACKED)
+
+wd_send_ack:
+                ; build ACK(DE) at TBUF: opcode 4 (big-endian), block (big-endian).
+                ld      hl, TBUF
+                ld      (hl), 0                ; opcode high
+                inc     hl
+                ld      (hl), OP_ACK           ; opcode low = 4
+                inc     hl
+                ld      (hl), d                ; block high (DE is the block value)
+                inc     hl
+                ld      (hl), e                ; block low
+                ld      bc, 4                  ; ACK is 4 bytes
+                jp      srv_send_tbuf          ; wrap to the client + transmit
+
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+; wd_finalize — the disk-record push commit (i121f): the short final block has
+; arrived and the whole image is streamed into the claimed record. Flush the sink's
+; final partial sector, validate the result as a Trinity disk record (size == 819200
+; from RRS_TOTAL AND the "BDOS" stamp@232 read back via HRSAD), then reply: the
+; final ACK on a valid image (TFTP success), or ERROR(3, "invalid disk record")
+; instead of the ACK on a bad one — so a stock `tftp put` client surfaces the
+; rejection on its last block. This is the §6.5 "validate before committing, reject
+; on mismatch" intent in TFTP-push form. Mirrors netboot_client.asm client_finalize
+; (the store+validate half; the boot half is i122c, not this push path).
+wd_finalize:
+                call    raw_record_sink_finish ; flush any final partial sector
+
+                ; size = RRS_TOTAL -> BD_REC_SIZE (32-bit LE).
+                ld      hl, (RRS_TOTAL)
+                ld      (BD_REC_SIZE), hl
+                ld      hl, (RRS_TOTAL + 2)
+                ld      (BD_REC_SIZE + 2), hl
+
+                ; read sector 0 (track 0, sector 1) back via HRSAD so the validator
+                ; can check the "BDOS" stamp@232 of the just-written record.
+                xor     a
+                ld      (BD_READ_TRACK), a
+                inc     a
+                ld      (BD_READ_SECTOR), a    ; sector 1 (1-based)
+                call    bdos_read_sector       ; -> BD_READ_BUF (512 bytes)
+
+                call    bdos_validate_disk_record  ; -> BD_REC_VALID (1 = valid)
+                ld      a, (BD_REC_VALID)
+                or      a
+                jr      z, wd_invalid
+
+                ; CLAIM the record (i121g): the data sectors are written, but the
+                ; central record-LIST name entry is not yet — bdos_find_free_record
+                ; keys "free" off that list name (byte 0 == 0), so without this an
+                ; unnamed-but-written record reads as free and the NEXT push overwrites
+                ; it. Write the list entry now (the B-DOS new.rec / RENAME path; design
+                ; §4.3) so the next push lands on the next free record. The name comes
+                ; from the WRQ filename (a leading "trinity-sam-disks/" prefix stripped,
+                ; dotted suffix dropped, 10-char B-DOS cap). bdos_claim_record touches
+                ; ONLY this record's own entry (the free slot the claim picked) — never
+                ; a named record (the shared-resource invariant). Claim ONLY on the
+                ; valid path: an invalid push (below) leaves the record free for reuse.
+                ld      hl, (PARSE_FILENAME)
+                ld      (BD_CLAIM_NAME_PTR), hl
+                call    bdos_claim_record
+
+                ; valid: ACK the final block (TFTP success). DE was clobbered by the
+                ; validate + claim paths; reload the just-accepted block (== WRQ_ACKED).
+                ld      de, (WRQ_ACKED)
+                jp      wd_send_ack
+
+wd_invalid:
+                ; invalid image: ERROR(3, "invalid disk record") in place of the ACK.
+                xor     a
+                ld      (ERR_CODE), a
+                ld      a, 3
+                ld      (ERR_CODE+1), a        ; big-endian code = 0x0003
+                ld      hl, err_badimage_msg
+                ld      (ERR_MSG_PTR), hl
+                call    build_error            ; packet at TBUF, BC = length
+                jp      srv_send_tbuf
+                endif
 
 ; srv_send_tbuf — wrap the TFTP packet at TBUF (length BC) as a UDP frame (server
 ; IP + server TID -> client IP + client TID) and transmit it.
@@ -866,10 +1250,18 @@ dh_no_sub:
 ; --- constants -------------------------------------------------------------
 err_notfound_msg: defm "File not found"
                   defb 0
+sv_done_name:     defm "tftp.done"           ; reserved control name (i121e); never stored
+                  defb 0
 str_blksize:      defm "blksize"
                   defb 0
 str_tsize:        defm "tsize"
                   defb 0
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
+err_nofree_msg:   defm "no free record"
+                  defb 0
+err_badimage_msg: defm "invalid disk record"
+                  defb 0
+                endif
 
 ; ===========================================================================
 ; Real-hardware bootable entry (excluded from the host harness build, which has
@@ -921,6 +1313,7 @@ serve_main:
                 xor     a
                 ld      (XFER_ACTIVE), a
                 ld      (XFER_JUST_OACKED), a
+                ld      (XFER_STOP_REQUESTED), a   ; no stop pending at boot (i121e)
 
                 ; --- provision the baked-in demo files ------------------
                 call    provision_demo
@@ -933,7 +1326,30 @@ serve_main:
                 jp      z, sv_fail_init
 
 sv_serve_loop:
+                ; Attended Esc-to-exit (mirrors netboot_dumper.asm dm_serve_loop;
+                ; trinload.asm read_loop): poll the keyboard, and on Esc RET to
+                ; trinload's pushed `start` return address. serve_main is `jp`'d to and
+                ; this loop falls through with no extra stack frame, so the stack top
+                ; here is exactly trinload's return address — a plain RET reaches it.
+                ; The serve loop never repages its own section, so the RET is clean
+                ; (no LMPR/HMPR restore, unlike the dumper's i188 ROM read). Under the
+                ; host harness, with no keyboard device on port &f9, the IN reads &FF
+                ; so bit 5 is set and the poll falls through "not pressed" — the host
+                ; tests are unaffected (a test models the key to assert this exit).
+                ld      a, &f7
+                in      a, (&f9)
+                bit     5, a                   ; Esc pressed?
+                ret     z                      ; -> trinload's start
+
                 call    serve_serve_once
+
+                ; Unattended `tftp.done` exit (i121e): handle_wrq set XFER_STOP_REQUESTED
+                ; on the reserved control name. RET to trinload's start, same clean
+                ; unwind as the Esc exit.
+                ld      a, (XFER_STOP_REQUESTED)
+                or      a
+                ret     nz                     ; -> trinload's start
+
                 jr      sv_serve_loop
 
 sv_fail_cfg:
@@ -1032,10 +1448,40 @@ XFER_ACTIVE:      defs 1                 ; 1 = a transfer is armed
 XFER_LAST_SHORT:  defs 1                 ; 1 = the last DATA was a short block
 XFER_JUST_OACKED: defs 1                 ; 1 = the next ACK (block 0) -> FirstData
 
-; WRQ state (i121a — handshake only). WRQ_TSIZE_PTR is a pointer into RRQ_IN:
-; non-zero if the client sent a "tsize" option in the WRQ (the value is echoed
-; back in the OACK); 0 if no tsize was sent (OACK includes only blksize).
+; Server-lifecycle stop flag (i121e). Set by a `tftp put tftp.done` (the reserved
+; control name) or — on hardware — by an attended keyboard Esc; sv_serve_loop polls
+; it after each frame and RETs to trinload's pushed return address, the only exit
+; until an auto-boot BIOS exists (manifest design decision 6).
+XFER_STOP_REQUESTED: defs 1              ; 1 = end the session, return control to trinload
+
+; WRQ state. WRQ_TSIZE_PTR is a pointer into RRQ_IN: non-zero if the client sent
+; a "tsize" option in the WRQ (the value is echoed back in the OACK); 0 if no
+; tsize was sent (OACK includes only blksize).
 WRQ_TSIZE_PTR:    defs 2
+
+; WRQ receive-to-staging state (i121b). Mirrors serve.go::wrqReceiver. A WRQ
+; receive is armed by handle_wrq (after the ACK-0 / OACK handshake) and consumed
+; one DATA block at a time by handle_data.
+WRQ_RECV_ACTIVE:  defs 1                 ; 1 = a WRQ receive is in progress
+WRQ_BLKSIZE:      defs 2                 ; negotiated block size (LE)
+WRQ_ACKED:        defs 2                 ; highest block accumulated/ACKed (LE)
+WRQ_STAGE_OFFSET: defs 2                 ; bytes accumulated into WRQ_STAGING
+WRQ_DATA_LEN:     defs 2                 ; the last DATA block's payload length
+WRQ_DONE:         defs 1                 ; 1 = a short final block ended the xfer
+
+; Disk-record push state (i121f). WRQ_SINK_MODE picks the per-block payload route:
+;   0 = flat accumulate into WRQ_STAGING (the HOSTTEST wire path, future i121c),
+;   1 = stream into a claimed Trinity record via raw_record_sink (the bootable
+;       push path). handle_wrq sets it (1 on a successful free-record claim);
+;       handle_data reads it. It lives in both builds (the default-clear at the
+;       top of handle_wrq runs in the HOSTTEST build too), so it is unconditional.
+WRQ_SINK_MODE:    defs 1                 ; 0 = flat WRQ_STAGING, 1 = raw-record sink
+WRQ_RECORD:       defs 1                 ; the claimed record number streamed into (bootable)
+
+; The pushed file accumulates here (sink mode 0). It sits in section D (&C000),
+; flat RAM under the host harness; the bootable build (i121d) pages RAM in before
+; using it, the same reuse the dumper makes of this window (STAGE equ &C000).
+WRQ_STAGING:      equ &C000
 
 RX_LEN:           defs 2
 TFTP_PKT_LEN:     defs 2
@@ -1062,6 +1508,56 @@ SRC_TABLE:        defs 256
                 ; a double definition. The standalone serve build keeps it: the
                 ; bootable image reads the SAM's MAC/IP from flash, the host test
                 ; build has no EEPROM and excludes it. (`*` = logical AND.)
+                ;
+                ; The disk-record push store machinery (i121f) — the B-DOS seam
+                ; (free-record find / record select / raw-sector write+read /
+                ; validate, with the RST 8 hook dispatch) + the streaming sink — is
+                ; included for the same builds: only the bootable serve image streams
+                ; a push into a record. The HOSTTEST wire-test build and the dumper
+                ; (RRQ-only) leave these out, matching the sink-code guards above.
                 if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
                 include "eeprom.asm"
+                include "bdos_seam.asm"        ; i121f: free-record find + record select + HWSAD/HRSAD + validate
+                include "raw_record_sink.asm"  ; i121f: streaming disk-image -> raw record (HWSAD per sector)
+
+; ===========================================================================
+; SERVE_CONFIG — the placement-strategy config block (i121h). A small, fixed,
+; host-patchable region at the END of the bootable binary, so the packaging vessel
+; (the i121d host launcher patching a trinload code block, or a `.mgt` disk) can set
+; the WRQ disk-record PLACEMENT strategy by file offset before the program runs.
+; This program is a vessel-agnostic library: whoever loads it populates this block;
+; an un-patched binary uses the baked default (highest-free, manifest design §4 s3 /
+; decision 4 — keeps the user's low, memorable record slots for their own disks; TFTP
+; storage grows down from the top).
+;
+; The block is READ at find-time straight from RAM (cheap) by
+; bdos_find_record_for_strategy; it is not re-read from disk. Pete: the config is read
+; at launch and not re-read routinely.
+;
+; BYTE LAYOUT (the i121d host launcher patches by file offset from the SERVE_CONFIG
+; symbol — the block's anchor at +0; keep STABLE):
+;   +0  SERVE_CONFIG        1 byte   magic/version = SERVE_CFG_MAGIC_VAL (&5A); a
+;                                    launcher sanity-checks it found the block. This
+;                                    label is the patch anchor (file offset
+;                                    SERVE_CONFIG - &8000, the binary's load org).
+;   +1  SERVE_CFG_STRATEGY  1 byte   placement strategy:
+;                                      0 = highest-free  (SERVE_STRAT_HIGHEST — the
+;                                          DEFAULT, baked here per §4 decision 4)
+;                                      1 = lowest-free   (SERVE_STRAT_LOWEST)
+;                                      2 = explicit      (SERVE_STRAT_EXPLICIT — use
+;                                          the record at +2..3)
+;   +2  SERVE_CFG_RECORD    2 bytes  explicit record number (LE); used only when
+;                                    strategy == 2. &FFFF = undefined (reserved for the
+;                                    future i121j SAM-prompt path; not implemented here).
+; Total: 4 bytes.
+; ===========================================================================
+SERVE_CFG_MAGIC_VAL:  equ &5A           ; the magic/version byte value
+SERVE_STRAT_HIGHEST:  equ 0             ; place at the highest free record (default)
+SERVE_STRAT_LOWEST:   equ 1             ; place at the lowest free record
+SERVE_STRAT_EXPLICIT: equ 2             ; place at SERVE_CFG_RECORD if free
+SERVE_CFG_RECORD_NONE: equ &FFFF        ; explicit record undefined (i121j prompt path)
+
+SERVE_CONFIG:         defb SERVE_CFG_MAGIC_VAL      ; +0 magic/version (patch anchor)
+SERVE_CFG_STRATEGY:   defb SERVE_STRAT_HIGHEST      ; +1 baked default: highest-free (§4 s3)
+SERVE_CFG_RECORD:     defw SERVE_CFG_RECORD_NONE    ; +2 explicit record (LE); &FFFF = none
                 endif

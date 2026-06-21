@@ -696,10 +696,23 @@ func (e *ENC28J60) materialiseRX() {
 		next = rxStartHW + (next - rxEndHW - 1)
 	}
 
-	pos := start & 0x1FFF
+	// The receive engine writes into the RX FIFO, a circular buffer delimited by
+	// ERXST..ERXND (here rxStartHW..rxEndHW), NOT the full 8 KB SRAM: the byte
+	// after ERXND wraps back to ERXST (datasheet §7.2.2; the same boundary the
+	// driver's read side honours in rbmNext). Wrapping at 0x1FFF (the SRAM end)
+	// instead would let a frame straddling ERXND spill into the TX region and
+	// desync the reader, which wraps at ERXND — so wrap here at ERXND too.
+	pos := start
+	if pos < rxStartHW || pos > rxEndHW {
+		pos = rxStartHW
+	}
 	put := func(b byte) {
 		e.buf[pos] = b
-		pos = (pos + 1) & 0x1FFF
+		if pos == rxEndHW {
+			pos = rxStartHW
+		} else {
+			pos++
+		}
 	}
 	// 2-byte next-packet pointer (LE).
 	put(byte(next))

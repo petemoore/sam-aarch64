@@ -351,6 +351,7 @@ BD_HOOK_HSAVE:    equ 132                ; save whole file
 BD_HOOK_HRSAD:    equ 160                ; read raw 512-byte sector (HRSAD)
 BD_HOOK_HWSAD:    equ 149                ; write raw 512-byte sector (HWSAD)
 BD_HOOK_LISTREAD: equ 161                ; card-absolute list-sector read: E=listSec, HL=dest
+BD_HOOK_LISTWRITE: equ 162               ; card-absolute list-sector write: E=listSec, HL=source
 
 ; bdos_select_record — HRECORD: select the mass-storage record (0 = floppy).
 ; In: A = record number. On real B-DOS, all subsequent HGTHD/HSAVE/HLOAD use it.
@@ -459,11 +460,40 @@ bdos_read_list_sector:
 ; so it is held in BC as a 16-bit value: B = high byte (0 or 1), C = low byte.
 ; For m = (n-1) AND 31 (0..31): B = m >> 4 (0 or 1), C = (m AND 15) << 4.
 bdos_record_entry:
+                call    bdos_record_geometry   ; -> BD_LIST_SECTOR set, BC = byteOffset
+                push    bc                     ; save byteOffset across the call
+                call    bdos_read_list_sector
+                pop     bc                     ; restore byteOffset
+
+                ; copy 16 bytes from BD_LIST_BUF + byteOffset to BD_ENTRY_BUF
+                ld      hl, BD_LIST_BUF
+                add     hl, bc                 ; HL = BD_LIST_BUF + byteOffset (BC = 16-bit offset)
+                ld      de, BD_ENTRY_BUF
+                ld      bc, 16
+                ldir
+                ret
+
+; ---------------------------------------------------------------------------
+; bdos_record_geometry — map a 1-based record number to its position in the
+; central record list: which list sector holds it, and the byte offset of its
+; 16-byte entry within that sector. The READ (bdos_record_entry) and the WRITE
+; (bdos_claim_record) share this one tested computation so they target the same
+; entry for a given record.
+;
+; In:  BD_ENTRY_REC  2 bytes  1-based record number n (>= 1)
+; Out: BD_LIST_SECTOR  1 byte   the 1-based list sector holding record n's entry
+;      BC              16-bit   byteOffset of the entry within that list sector
+; Clobbers: A, DE, HL.
+;
+; Geometry (docs/specs/trinity-record-detection-design.md §4.3, §5):
+;   recordIndex = n - 1
+;   listSector  = (recordIndex >> 5) + 1    (/ 32 then + 1)
+;   byteOffset  = (recordIndex AND 31) << 4 (mod 32 then × 16, 9-bit result)
+bdos_record_geometry:
                 ld      hl, (BD_ENTRY_REC)     ; HL = n (1-based)
                 dec     hl                     ; HL = n-1 (0-based record index)
 
                 ; byteOffset (16-bit BC) = ((n-1) AND 31) * 16
-                ; — docs/specs/trinity-record-detection-design.md §4.3
                 ; m = (n-1) AND 31 = low 5 bits, all in L.
                 ; B = m >> 4 (0 or 1); C = (m AND 15) << 4.
                 ld      a, l
@@ -500,16 +530,6 @@ bdos_record_entry:
                 or      e                      ; A = (n-1) >> 5
                 inc     a                      ; listSector = (n-1)/32 + 1
                 ld      (BD_LIST_SECTOR), a
-                push    bc                     ; save byteOffset across the call
-                call    bdos_read_list_sector
-                pop     bc                     ; restore byteOffset
-
-                ; copy 16 bytes from BD_LIST_BUF + byteOffset to BD_ENTRY_BUF
-                ld      hl, BD_LIST_BUF
-                add     hl, bc                 ; HL = BD_LIST_BUF + byteOffset (BC = 16-bit offset)
-                ld      de, BD_ENTRY_BUF
-                ld      bc, 16
-                ldir
                 ret
 
 ; ---------------------------------------------------------------------------
@@ -573,6 +593,206 @@ bffr_next:
 
 bffr_done:
                 ret
+
+; ---------------------------------------------------------------------------
+; bdos_find_highest_free_record — scan the central record list DOWNWARD for the
+; HIGHEST free (unnamed) record. The placement-strategy sibling of
+; bdos_find_free_record (which returns the LOWEST): same free test (free ⇔
+; (entry[0] AND 0x7F) == 0; the frec3x test, bdos15a.src.txt:946-948), opposite
+; scan direction, so TFTP storage grows DOWN from the top record and the user's low,
+; memorable record slots stay free for their own disks (manifest design §4 s3 /
+; decision 4). The READ-only free detection never touches a named record.
+;
+; In:  BD_RECORDS  2 bytes  total record count (>= 1)
+; Out: BD_FREE_RECORD  2 bytes  1-based number of the highest free record, or 0 if
+;                               all records are named/in-use.
+; Clobbers: A, BC, DE, HL.
+;
+; Algorithm: iterate n = BD_RECORDS down to 1; for each n read its entry via
+; bdos_record_entry and apply the free test; the first free record found (the
+; highest) is stored and the routine returns. None free ⇒ BD_FREE_RECORD = 0.
+bdos_find_highest_free_record:
+                ; BD_FREE_RECORD = 0 (no free record found yet)
+                xor     a
+                ld      (BD_FREE_RECORD), a
+                ld      (BD_FREE_RECORD + 1), a
+
+                ; HL = BD_RECORDS (start at the top). If 0, nothing to scan.
+                ld      hl, (BD_RECORDS)
+                ld      a, h
+                or      l
+                ret     z                      ; 0 records: BD_FREE_RECORD stays 0
+bfhr_loop:
+                ; fetch the entry for record n (HL).
+                ld      (BD_ENTRY_REC), hl
+                push    hl                     ; save n
+                call    bdos_record_entry
+                pop     hl                     ; restore n
+
+                ; free test: (BD_ENTRY_BUF[0] AND 0x7F) == 0?
+                ld      a, (BD_ENTRY_BUF)
+                and     &7F                    ; strip write-protect bit
+                jr      nz, bfhr_next          ; non-zero ⇒ named ⇒ go lower
+
+                ; highest free record found — store n and return.
+                ld      (BD_FREE_RECORD), hl
+                ret
+
+bfhr_next:
+                ; n--; stop after n == 1 has been tested (HL reaching 0 = done).
+                dec     hl
+                ld      a, h
+                or      l
+                jr      nz, bfhr_loop          ; n >= 1 still: keep scanning down
+                ret                            ; scanned 1..BD_RECORDS, none free
+
+; ---------------------------------------------------------------------------
+; bdos_write_list_sector — write one 512-byte list sector back to the card (card-
+; absolute, not record-clamped) — the WRITE sibling of bdos_read_list_sector.
+;
+; In:  BD_LIST_SECTOR  1 byte    1-based list-sector number
+;      BD_LIST_BUF   512 bytes   the list sector to write (a read-modified copy)
+; Clobbers: A, DE, HL.
+;
+; Issues the harness hook BD_HOOK_LISTWRITE, which models a raw SD single-block
+; WRITE at the card-absolute LBA of the list sector. The hardware implementation
+; (the SPI command ladder on ports &DC–&DF) is hardware-gated, the SAME gate as
+; the list READ; docs/specs/trinity-record-detection-design.md §8.
+bdos_write_list_sector:
+                ld      a, (BD_LIST_SECTOR)
+                ld      e, a                   ; E = list-sector number (1-based)
+                ld      hl, BD_LIST_BUF
+                rst     8
+                defb    BD_HOOK_LISTWRITE
+                ret
+
+; ---------------------------------------------------------------------------
+; bdos_claim_record — mark a pushed Trinity record as USED by writing its central
+; record-LIST name entry, so bdos_find_free_record no longer reports it free and
+; the NEXT push lands on the next free record. This is the WRITE counterpart of
+; the free-record detection (the READ side: bdos_find_free_record /
+; bdos_record_entry), and the B-DOS new.rec / RENAME path is its reference: locate
+; the record's 16-byte entry within its list sector and LDIR the name into it
+; (bdos15a.src.txt:2801-2820; docs/specs/trinity-record-detection-design.md §4.3).
+;
+; In:  BD_FREE_RECORD   2 bytes  the 1-based record this push claimed (the slot
+;                                bdos_find_free_record returned; >= 1).
+;      BD_CLAIM_NAME_PTR 2 bytes pointer to the NUL-terminated WRQ filename.
+; Out: the record's list entry written with the filename-derived name; the card
+;      now reads that record as NAMED.
+; Clobbers: A, BC, DE, HL.
+;
+; SAFETY (the whole point — the Trinity SD card is a SHARED user resource): this
+; writes ONLY the 16-byte entry of BD_FREE_RECORD, the free slot the claim picked.
+; It reads the entry's containing list sector, overwrites EXACTLY those 16 bytes
+; in the loaded sector (the read-modify-write keeps every other entry byte-for-byte
+; intact), then writes that one sector back. A named record is never reached: the
+; only entry touched is the one at this record's own (listSector, byteOffset).
+;
+; The name field: the on-card list name is the filename with a leading
+; "trinity-sam-disks/" prefix stripped (the disk-record namespace prefix, bdos
+; Classify), any dotted suffix dropped, and capped at 10 chars in the B-DOS name
+; field (the bdos_name_to_uifa convention); the 16-byte entry is space-padded.
+; Mirrors the Go authority serve.claimRecordName + CardModel.SetRecordName.
+bdos_claim_record:
+                ; 1. Build the 16-byte list entry name into BD_CLAIM_ENTRY.
+                call    bdos_build_claim_entry
+
+                ; 2. Geometry: which list sector holds this record's entry, and the
+                ;    byte offset of the entry within it. BD_FREE_RECORD is the record.
+                ld      hl, (BD_FREE_RECORD)
+                ld      (BD_ENTRY_REC), hl
+                call    bdos_record_geometry   ; -> BD_LIST_SECTOR set, BC = byteOffset
+
+                ; 3. Read-modify-write: load the containing list sector, overwrite
+                ;    ONLY this record's 16 bytes, write the sector back. Every other
+                ;    entry in the sector is preserved byte-for-byte (the safety
+                ;    invariant — never touch a record we did not claim).
+                push    bc                     ; save byteOffset across the read
+                call    bdos_read_list_sector  ; -> BD_LIST_BUF (512 bytes)
+                pop     bc                     ; restore byteOffset
+
+                ld      hl, BD_CLAIM_ENTRY     ; source: the built 16-byte name
+                ld      de, BD_LIST_BUF
+                ex      de, hl                 ; HL = BD_LIST_BUF, DE = BD_CLAIM_ENTRY
+                add     hl, bc                 ; HL = BD_LIST_BUF + byteOffset
+                ex      de, hl                 ; DE = dest entry slot, HL = BD_CLAIM_ENTRY
+                ld      bc, 16
+                ldir                           ; place the entry; rest of sector intact
+
+                call    bdos_write_list_sector ; write the modified sector back
+                ret
+
+; ---------------------------------------------------------------------------
+; bdos_build_claim_entry — build the 16-byte central-list name entry for a record
+; from BD_CLAIM_NAME_PTR: strip a leading "trinity-sam-disks/" prefix, drop any
+; dotted suffix, copy up to 10 chars into the B-DOS name field, and space-pad the
+; full 16-byte entry. Host-verifiable (pure memory build, no RST). Mirrors the Go
+; authority serve.claimRecordName (and the bdos_name_to_uifa name convention).
+;
+; In:  BD_CLAIM_NAME_PTR  2 bytes  pointer to the NUL-terminated filename
+; Out: BD_CLAIM_ENTRY    16 bytes  the space-padded list-entry name
+; Clobbers: A, B, DE, HL.
+bdos_build_claim_entry:
+                ; space-fill the whole 16-byte entry first; the name overwrites
+                ; the leading bytes, leaving the tail as padding.
+                ld      hl, BD_CLAIM_ENTRY
+                ld      b, 16
+                ld      a, BD_SPACE
+bbce_fill:
+                ld      (hl), a
+                inc     hl
+                djnz    bbce_fill
+
+                ; HL = filename; strip a leading "trinity-sam-disks/" prefix.
+                ld      hl, (BD_CLAIM_NAME_PTR)
+                call    bdos_strip_disk_prefix ; HL -> past the prefix if present
+
+                ; copy up to 10 chars into the B-DOS name field, stopping at NUL or
+                ; '.' (drop the dotted suffix). The entry is already space-padded.
+                ld      de, BD_CLAIM_ENTRY
+                ld      b, BD_NAME_LEN         ; cap at 10 chars (the B-DOS name field)
+bbce_name:
+                ld      a, (hl)
+                or      a
+                jr      z, bbce_done           ; NUL: stop (padding already in place)
+                cp      "."
+                jr      z, bbce_done           ; dotted suffix: stop
+                ld      (de), a
+                inc     hl
+                inc     de
+                djnz    bbce_name
+bbce_done:
+                ret
+
+; ---------------------------------------------------------------------------
+; bdos_strip_disk_prefix — if the string at HL begins with "trinity-sam-disks/",
+; advance HL past it; otherwise leave HL unchanged. Mirrors the Go authority
+; bdos.Classify (the disk-record namespace prefix). Host-verifiable.
+;
+; In:  HL  pointer to the candidate string
+; Out: HL  advanced past the prefix if it matched, else unchanged
+; Clobbers: A, B, DE.
+bdos_strip_disk_prefix:
+                push    hl                     ; remember the start (restore on mismatch)
+                ld      de, bdos_disk_prefix
+                ld      b, BD_DISK_PREFIX_LEN
+bsdp_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, bsdp_nomatch       ; a byte differs: not the prefix
+                inc     hl
+                inc     de
+                djnz    bsdp_cmp
+                ; full prefix matched — HL is past it; discard the saved start.
+                pop     de                     ; drop the start; keep HL advanced
+                ret
+bsdp_nomatch:
+                pop     hl                     ; restore HL to the start (no prefix)
+                ret
+
+bdos_disk_prefix: defm "trinity-sam-disks/"
+BD_DISK_PREFIX_LEN: equ 18                 ; len("trinity-sam-disks/")
 
 ; ---------------------------------------------------------------------------
 ; bdos_write_sector — write 512 bytes from BD_WRITE_BUF to the selected record
@@ -727,6 +947,10 @@ BD_RECORDS:       defs 2                 ; bdos_find_free_record: total record c
 BD_FREE_RECORD:   defs 2                 ; bdos_find_free_record: first free record (1-based), or 0
 BD_ENTRY_REC:     defs 2                 ; bdos_record_entry: input record number (1-based, LE)
 BD_ENTRY_BUF:     defs 16               ; bdos_record_entry: the 16-byte list entry
+
+; --- claim a pushed record (write its record-list name entry) -----------------
+BD_CLAIM_NAME_PTR: defs 2                ; bdos_claim_record: pointer to the WRQ filename
+BD_CLAIM_ENTRY:   defs 16               ; bdos_build_claim_entry: the 16-byte name entry to write
 
 ; --- i114c storage-class validation and raw-record write (B1-B3) ---------------
 BD_REC_SIZE:      defs 4                 ; bdos_validate_disk_record: total image byte length (32-bit LE)
