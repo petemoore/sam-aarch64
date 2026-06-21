@@ -371,9 +371,13 @@
   title: LDIR-fan-out for cross-page-shared blocks (smaller binary + faster boot)
   description: |
     Deferred/possible future enhancement. Using LDIR fan-out for blocks shared across pages could reduce binary size and speed up boot. Noted in the strand-B PR4 disassembler plan under 'Future enhancements'.
-  status: OPEN
+    
+    WONTFIX (audit, PR completing this item). The prescribed audit found the only data block embedded in >1 production page is sysreg_tables.inc (~833 B), in page 13 (sysreg_data.asm) and page 15 (sysreg_names.inc via disasm.asm); the other multi-included .inc files (zx0_comm, tbn_constants, disasm_comm) are equate-only (0 data bytes). The note's source-de-dup half is already done (sysreg_tables.inc is the shared source). LDIR fan-out delivers none of its hypothesised wins here: no RAM saved (bytes occupy both pages at runtime — and the project's binding constraint is the &C000 RAM budget, not disk); no boot-load saved (pages 13 and 15 are HLOAD'd for their own matcher/disassembler code regardless of the tables, so the "N loads -> 1" benefit does not apply); only ~833 B off an unconstrained 800 KB disk image, against boot-time indirection + a new silent-failure surface spanning two separately-built payloads. Over-optimisation for current table sizes, exactly as predicted in the note. Reopen with a fresh item if the tables grow by an order of magnitude or the disk image becomes constrained.
+  status: WONTFIX
   kind: leaf
   owner: agent
+  prs:
+    - {num: 513, role: completing}
   refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-06-07-strand-b-pr4-z80-disassembler-port.md"]
 
 - id: i31
