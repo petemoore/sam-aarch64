@@ -807,7 +807,7 @@ netboot-client: $(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map
 
 # The bootable client binary: the full program including the EEPROM config read +
 # the client_main fetch-then-HSAVE flow, for real Trinity.
-$(BUILD)/netboot_client_boot.bin $(BUILD)/netboot_client_boot.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/bdos_picker.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/key_read_test.asm src/netboot/eeprom.asm
+$(BUILD)/netboot_client_boot.bin $(BUILD)/netboot_client_boot.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/bdos_picker.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/key_read_test.asm src/netboot/eeprom.asm src/netboot/raw_record_sink.asm
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_client_boot.bin \
 	    --mapfile=$(BUILD)/netboot_client_boot.map \

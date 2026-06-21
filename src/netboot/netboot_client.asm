@@ -858,4 +858,5 @@ STAGING:          defs 2048
                 if defined(NETBOOT_HOSTTEST)==0
                 include "bdos_picker.asm"      ; i119d: record-selection UX (B4)
                 include "eeprom.asm"
+                include "raw_record_sink.asm"  ; i122b: streaming disk-image -> raw record (HWSAD)
                 endif
