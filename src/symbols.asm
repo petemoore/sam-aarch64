@@ -307,6 +307,17 @@ symbol_insert_populate_entry:
 ;   Clobbers: A, BC, DE, HL.
 ; -----------------------------------------------------------------------
 symbol_abs_bit_ptr:
+; Bound: SYMTAB_ABS_BITMAP is 64 bytes = 512 bits, covering ids 0..511.
+; An id >= 512 would index SYMTAB_ABS_BITMAP + (id>>3) past the bitmap
+; (>= byte 64) and silently read/write adjacent scratch.  ids 0..511 have
+; the high byte H in {0, 1}; H >= 2 means id >= 512.  Fail cleanly rather
+; than corrupt memory (i73 L3).  This is unreachable with any real build
+; (peak release id is 474), so it uses the bare untagged fail to save the
+; tag bytes — the test-variant code budget is at its &C000 cliff.
+                ld      a, h
+                cp      &02
+                jp      nc, fail
+symbol_abs_bit_ptr_in_range:
                 ld      a, l
                 and     7                   ; A = id & 7
                 ld      b, a

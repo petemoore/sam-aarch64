@@ -678,14 +678,25 @@ litpool_flush_no_x:
 ; Advance segment counters.  FLUSH always advances (both passes).  ALLOC
 ; only advances in pass 1 — pass 2 doesn't allocate, so leaving ALLOC
 ; at its pass-1 final value is harmless.
+;
+; The counters are u8: a file with > 255 `.ltorg` flushes would `inc`
+; them past &FF, wrapping to 0.  A wrapped counter aliases segment 0,
+; silently mismatching dedup/flush across the wrap boundary (slots from
+; segment 0 and 256 collide) — wrong bytes, not a clean error.  Each
+; `inc a` past &FF wraps to 0; the `jp z, fail` rejects that overflow
+; (i73 L10).  Unreachable with any real input — the release has a handful
+; of pools, far below 255 — so it uses the bare untagged fail to spare
+; the test-variant code budget, which is at its &C000 cliff.
                 ld      a, (LITPOOL_SEGMENT_FLUSH)
                 inc     a
+                jp      z, fail                              ; &FF -> 0 wrap
                 ld      (LITPOOL_SEGMENT_FLUSH), a
                 ld      a, (PASS_MODE)
                 cp      PASS_PASS1
                 ret     nz
                 ld      a, (LITPOOL_SEGMENT_ALLOC)
                 inc     a
+                jp      z, fail                              ; &FF -> 0 wrap
                 ld      (LITPOOL_SEGMENT_ALLOC), a
                 ret
 
