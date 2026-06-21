@@ -90,7 +90,7 @@ cross-reference #6/#22/#31), so the distinct-behaviour count is slightly lower.
 | 26 | `&3F` Flash/SD auto-null ON | manual:42,44; bdos:25,48 | PRESENT | enc28j60.go (`selSDAutoNul` → target=periphSD); sdcard.go (`autoClock`) | Sets the ONE global mode targeting the SD; SD reads auto-advance under `&3F` (gap a). |
 | 27 | `&04` switch auto-nulling OFF (global, clears whichever ON mode) | manual:43,44; trinload:§DC.6; bdos:8,49 | PRESENT | enc28j60.go (`selNullOff`) | `&04` clears the ONE global `autoNullMode`+target regardless of peripheral (gap a); the MUX is changed only by an explicit select/deselect (see #28 note). |
 | 28 | **Auto-null is ONE global PIC mode** targeting the single selected peripheral, set by the ON command, cleared only by `&04` | manual:44 | PRESENT | enc28j60.go (`autoNullMode`/`autoNullTarget`/`autoNullFor`) | One global mode + target; `&1F/&2F/&3F` are mutually exclusive selections of the same mode, cleared only by `&04` (gap a, TestGlobalAutoNullMode). |
-| 29 | `&08..&0F` IDENT read → `"TRINv1.1"` (8 chars) | manual:46-56; trinload:§DC.9-10,§3 | PARTIAL | enc28j60.go:62-66,419-421 | Modelled, but the string constant is **`"TRI v1.1"`** (4th char SPACE) not `"TRINv1.1"`. The driver only gates on `&08`→'T', `&09`→'R' (both correct), so `chk_trinity` passes; the 4th char disagrees with the manual (manual:49 OCR-garbled the glyph; trinity_fidelity_test.go:20 asserts the SPACE form). **Unresolved conflict — see Genuinely-unspecified.** |
+| 29 | `&08..&0F` IDENT read → 8-char string | manual:46-56; trinload:§DC.9-10,§3 | PRESENT | enc28j60.go:62-66,419-421 | Modelled. The string is **`"TRI v1.1"`** (4th char SPACE) — **settled by the high-res manual scan** (`IMG_20260617_162601.jpg`: the IDENT table prints the 4th glyph as `()` = SPACE; no `"TRINv1.1"` appears anywhere in the manual). The emulator constant (trinity_fidelity_test.go:20 asserts the SPACE form) is correct. The driver only gates on `&08`→'T', `&09`→'R'. No conflict (was previously flagged as unspecified). |
 | 30 | `chk_trinity` uses fixed DJNZ delays (not BUSY) — identity bytes available immediately after the select write | trinload:§3 | PRESENT | enc28j60.go:419-421 | `probeReply` latched on the `&DC` select, ready for the next `IN &DD` |
 | 31 | `%11fedcba` LED Twinkle (6 LED segments; cosmetic) | manual:57-64,116,117,134 | PRESENT | enc28j60.go (`&C0..&FF` band → `lastLED`/`LastLED`) | The LED-twinkle band is accepted and recorded (no SPI effect) so a `&C0..&FF` write does not mis-route through the select switch (gap 12). |
 | 32 | `&10` EEPROM CS disable / `&11` EEPROM CS enable | manual:65,66; trinload:§4a | PRESENT | enc28j60.go (`selEEPDisable`/`selEEPEnable` → MUX) | |
@@ -187,7 +187,7 @@ cross-reference #6/#22/#31), so the distinct-behaviour count is slightly lower.
 | 103 | Power-up LED sequence orange→blue→off | manual:113 | ABSENT | — | no LED/power-on model |
 | 104 | Three orange/blue status LEDs (EEPROM/ENC/SD); orange=CS active, blue flash=data | manual:116,117 | ABSENT | — | no LED model |
 | 105 | Two ENC-driven LEDs Green(A)=cable, Yellow(B)=traffic | manual:118,119,120,121 | ABSENT | — | PHLCON written by driver (enc28j60.go ENC regs) but LED outputs not surfaced |
-| 106 | IDENT string identifies firmware/version; used as presence + version check | manual:54,55,56 | PARTIAL | enc28j60.go:62-66 | string present but `"TRI v1.1"` vs manual's `"TRINv1.1"` (see #29) |
+| 106 | IDENT string identifies firmware/version; used as presence + version check | manual:54,55,56 | PRESENT | enc28j60.go:62-66 | string is `"TRI v1.1"`, settled by the high-res manual scan (see #29) |
 | 107 | PING round-trip ~7-8ms (informational) | manual:115 | N/A | — | software-level, not a port behaviour |
 | 108 | MAC `02 54 52 49 4E BC` (locally-administered) | manual:5(header),135 | N/A | — | per-board datum, supplied by `ProgramTrinityNetwork`, not a fixed emulator constant |
 
@@ -304,13 +304,16 @@ Lower-priority / cosmetic (model for completeness, no driver-correctness gain):
 
 No available source settles these; encoding a value would be a guess.
 
-- **IDENT 4th character (#29, #106).** The manual's glyph is OCR-garbled (`()`,
-  manual:49) — it reads as `"TRINv1.1"` by context (manual:54) but the source
-  scan the emulator constant was taken from (IMG_20260617_162601) shows a SPACE,
-  giving `"TRI v1.1"` (enc28j60.go:66, asserted trinity_fidelity_test.go:20). The
-  drivers gate only on `&08`→'T'/`&09`→'R', so the conflict is invisible to
-  every code path. **Do not "fix" the constant to `"TRINv1.1"` without a clean
-  re-scan of the hardware/source** — the two authorities genuinely disagree.
+- **IDENT 4th character (#29, #106) — SETTLED 2026-06-24: it is a SPACE, `"TRI v1.1"`.**
+  The clean re-scan this entry called for was done: the high-resolution manual IDENT
+  table (`IMG_20260617_162601.jpg`) prints the 4th glyph as an empty pair of
+  parentheses `()` — a literal SPACE, matching the OCR — and **no literal `"TRINv1.1"`
+  form appears anywhere in the photographed manual** (the "by context" reading was an
+  assumption, not a manual quote). So the manual (the primary hardware contract) and the
+  source scan **agree**: the string is `"TRI v1.1"`, and the emulator constant
+  (enc28j60.go:66, asserted trinity_fidelity_test.go:20) is correct. The drivers gate
+  only on `&08`→'T'/`&09`→'R', so this never affected any code path. No remaining
+  disagreement; do not "fix" the constant to `"TRINv1.1"`.
 
 - **PIC firmware internal `&38` init timing / SPI sequence (manual:208).** The
   manual deliberately abstracts what the PIC does internally during `&38`

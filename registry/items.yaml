@@ -2197,7 +2197,7 @@
   title: "Scrape, QA, and integrate the recovered Trinity documentation"
   description: |
     Pete recovered the full Trinity docs as 51 photographs (closes i61 gap: Quazar manual NOT found). Off-repo workspace ~/sam-archive/trinity-docs/ (third-party copyrighted; preservation-only). Three immutable layers: photos/ -> text/ (raw OCR via ocr_docs.py, Tesseract + rotation auto-detect) -> docs/notes/trinity-capabilities.md (verified facts only). Pipeline: OCR -> QA agent (prose errors + data-point inventory; wrong digits must be photo-verified) -> discovery agent (what's new vs current knowledge) -> photo-verify flagged data -> fold only photo-confirmed facts into trinity-capabilities.md.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   refs: [~/sam-archive/trinity-docs/README.md, docs/notes/trinity-capabilities.md, i61, i80, i87]
@@ -2216,7 +2216,7 @@
   title: photo-verify flagged data + fold verified facts into trinity-capabilities.md
   description: |
     QA report flags specific data points (port addresses, EEPROM offsets, hex values, diagrams) that require photo confirmation before committing to the repo. Deliverable: run vision-verify on flagged items, then fold only confirmed facts into docs/notes/trinity-capabilities.md via the established off-repo pipeline.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
   parent: i113
