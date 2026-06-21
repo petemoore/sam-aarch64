@@ -1261,7 +1261,7 @@
   title: i7 phase D — at/ic/barrier operand-table codegen from the Go authority
   description: |
     Codegen the at/ic/barrier operand tables from the Go authority (spec §6 Q3). Deferred by sequencing only (Pete 2026-06-12: tracked so it automatically gets done); queue after i7 phases A–C land. Gated on the aarch64dec/sys.go code→data refactor (i7 phase D prerequisite).
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   refs: [docs/specs/codegen-tables-design.md, i7]
@@ -1286,6 +1286,7 @@
   kind: leaf
   owner: agent
   prs:
+    - {num: 632, role: completing}
     - {num: 632, role: completing}
   parent: i74
 
