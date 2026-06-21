@@ -1612,9 +1612,11 @@
   title: Extend the netboot oracle to the Pi 3 family from the known file set + authoritative DHCP findings
   description: |
     Done without hardware (i89 said a fresh capture is not a blocker). Adds TestServerServesBothPiFamilies (proves one flat store serves the Pi 3 set bootcode.bin/start.elf/fixup.dat and the Pi 4 set alike, sizes from the http.RPiFirmware manifest), and folds the Pi 3 boot-ROM DHCP/TFTP differences (option-43 still required; bootcode.bin requested first; Pi 3B option-66-after-43; serial-subdir-then-root) into docs/notes/pi-netboot-capture-analysis.md section 4, sourced from official RPi docs + dnsmasq recipes. Server is model-agnostic so no logic change needed.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 643, role: completing}
   parent: i89
 
 - id: i89b
