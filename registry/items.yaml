@@ -2869,7 +2869,7 @@
   description: |
     With trinload on SAM (recs 3/128) + control returning between programs (i132), run unattended experiments: push a program via trinload3.py, it runs+RETs, push the next; feedback via tcpdump + a net result channel. PRIORITIZED to top (Pete 2026-06-20): the crux is whether we can BOOTSTRAP our own code from EEPROM / Trinity storage WITHOUT a human typing BOOT or picking a record — if a power-cycled SAM auto-starts a service that boots a pushed image, hardware testing goes fully autonomous (no Pete). The sooner we build it, the sooner we know. Auto-boot = i135; i172 audits dependents.
   status: OPEN
-  depends_on: [i135, i121a, i122]
+  depends_on: [i135, i121a, i122, i266]
   kind: leaf
   owner: agent
   refs: [~/git/trinload/test/trinload.py, src/netboot/, i132, i135, i127]
@@ -3634,7 +3634,7 @@
   description: |
     The i121 payoff on real hardware, autonomous: 'start trinload -> push the serve program (push-serve.py) -> tftp put each .mgt disk image (validated size==819200, streamed into a free record + claimed) -> tftp put tftp.done -> return to trinload', then read a stored record back (servable-raw) and byte-compare to confirm the store. Unblocked once the production CSD read lands (i145b, so the server finds free records) and the full experiment is emulation-proven (i145d). Agent-actionable: trinload runs on the SAM (192.168.2.75) over the LAN from the Pi; push via tools/trinload-push/push-serve.py + curl tftp://; the 19 build/*.mgt are valid + staged (/tmp/push-all-disks.sh batches them). NO Pete needed for the push+store+readback; booting a pushed record to watch it run is a downstream nicety (autonomous via i135 auto-boot, or a Pete-present spot-check) and NOT a blocker for this item.
   status: OPEN
-  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198]
+  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198, i266]
   kind: leaf
   owner: agent
 
@@ -4409,7 +4409,7 @@
   title: "SAMBOOT selector firmware: hold-key-at-boot launches a record picker (choose boot record by number/name) instead of hardcoded record 3"
   description: |
     Today's forked bootloader (trinity-autoboot, flashed via i135c) auto-boots a HARDCODED record (3 = trinload). Make it configurable: at power-on, if a chosen key is held (e.g. F9 or ESC — pick one, note the alt), the bootloader launches a small RECORD-PICKER program that lists the available Trinity SD records and lets the user select one by NUMBER or NAME; the choice is persisted to the 'SAMBOOT Config' EEPROM chunk (the bootloader's read_config path already exists and is dormant behind the hardcode) so subsequent power-ons auto-boot the selected record. If the key is NOT held, boot the configured record (or fall to the opening screen + wait-key when none). Build in the PRIVATE sibling repo trinity-autoboot (q55: local, not in CI); reuse the by-name EEPROM chunk reader + record-list reader (trinity_storage_shared_resource: read the on-card record list directly, show name + confirm). Develop + verify in the netboot-oracle emulation (key-held vs not, picker lists records, selection persists to config chunk, boot dispatches the chosen record). HARDWARE flash (re-flash via eeprom_flash_chunk1) + on-SAM test GATED ON PETE PRESENT (TAPO smart-plug incoming will let the agent power-cycle for autonomous test). This + i194 (write disks to storage) are the two gaps between today's fixed-record auto-boot and full autonomous SAM control.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
@@ -4420,3 +4420,11 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i266
+  title: Install TAPO smart-plug for autonomous SAM power-cycling (enables agent-run hardware sessions)
+  description: |
+    Pete (2026-06-26) is installing a TAPO smart-plug in the next few days so the agent can power-cycle the SAM remotely and recover to trinload during hardware tests. This is the enabler for AUTONOMOUS real-hardware sessions (push/flash/test without Pete physically present): until it lands, every real-hardware task that needs a power-cycle or recovery is gated on Pete being present. Gates the hardware halves of i194 (stream .mgt -> Trinity records) and i264 (selector-firmware flash/test), and any future agent-run hardware work. owner:pete = Pete installs it; once done, set DONE and the gated hardware tasks unblock.
+  status: OPEN
+  kind: leaf
+  owner: pete
