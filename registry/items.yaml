@@ -1270,9 +1270,11 @@
   title: "i74a: Go code->data refactor of aarch64dec/sys.go at/ic/barrier switches"
   description: |
     Move the at/ic/barrier option name<->encoding data out of the aarch64dec/sys.go switches (barrierOption/atName/icName) into exported data tables + accessors in tools/sam-aarch64-format/sysregs.go, mirroring the existing DCOps/TLBIOps + DCName/TLBIName pattern. sys.go's barrierOption becomes a thin wrapper over format.BarrierOptionName; atName/icName are deleted and sysInstrName calls format.ATName/format.ICName. Behaviour-identical (sys_test.go + TestDisasmOracle stay green; release-gate byte-identical). Exposes BarrierOptions()/ATOps()/ICOps() generator accessors so i74b can codegen the Z80 .inc. Prerequisite for i74b (the codegen + Z80 disasm.asm table replacement). Go authority for the data: ARM ARM C5.3 (at C5.3.1, ic C5.3.10, barriers); current encodings verified against objdump in sys.go.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 631, role: completing}
   parent: i74
 
 - id: i74b
