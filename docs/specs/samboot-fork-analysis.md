@@ -247,14 +247,27 @@ bootblock and to B-DOS if B-DOS turns out not to be bit-identical to stock.
 1. **Get a byte-exact stock baseline — a REAL binary, not a reconstruction.** Lesson
    learned 2026-06-24: reconstructing "stock" from the annotated disassembly is only
    byte-exact in CODE regions (the disassembly truncates `DB`/`DM` hex), so it
-   undercounts data-region diffs and is wrong there. The REAL stock ROM is SimCoupé's
-   `/home/pmoore/git/simcoupe/Resource/samcoupe.rom` (stock v3.1, ROM-version byte
-   `&000F=&1F`); Colin forked v3.0 (`&000F=&1E`). The exact v3.0 baseline is
-   `~/sam-archive/samboot-capture/rom_stock_v30.bin` = samcoupe.rom with `&000F`
-   reverted to `&1E`; it differs from `rom.bin` only in Colin's 6 functional patches
-   (140 bytes). (This bears on i219 — we have a stock ROM.) For B-DOS: get stock
-   B-DOS of the right version (in `~/sam-archive/bdos/`) and diff the EEPROM copy
-   byte-for-byte — the same "use a real binary, prove every byte" rule applies.
+   undercounts data-region diffs and is wrong there. **The genuine official v3.0 ROM**
+   is `ROM30` from Dr Andy Wright's original images (published with his permission in
+   [simonowen/samrom](https://github.com/simonowen/samrom) `roms/ROM30`), saved here as
+   `~/sam-archive/samboot-capture/rom_official_v30.bin` (md5 `1bc4fa10a9bb05a036e854fa60d151d9`,
+   ROM-version byte `&000F=&1E`). **Colin forked this genuine v3.0** (his `rom.bin` is
+   also `&000F=&1E`), and his fork differs from it in exactly **140 bytes across the 6
+   functional patch regions** — nothing else.
+
+   A note on provenance, since it caused confusion: SimCoupé bundles its own dump
+   (`/home/pmoore/git/simcoupe/Resource/samcoupe.rom`, `&000F=&1F`). That dump is **not
+   a separate "v3.1" release** — diffed against the genuine official v3.0 it differs in
+   only **4 bytes**: the version stamp (`&000F` `1E`→`1F`) and three banner bytes at
+   `&F5F8-FA` (a cosmetic `"plc"`→`"PLC"` capitalisation). It is v3.0 with a vanity
+   version bump; there is no functional v3.0→v3.1 upgrade and no public "SAM ROM 3.1".
+   The earlier `rom_stock_v30.bin` (= that dump with `&000F` reverted to `&1E`) is
+   therefore valid as a baseline too — it agrees with the genuine v3.0 everywhere
+   except those three banner bytes, which fall inside Colin's overwritten
+   banner→reader region anyway, so the Colin diff is **140 bytes either way**. (This
+   resolves i219 — we now have the genuine stock ROM, independently sourced.) For
+   B-DOS: get stock B-DOS of the right version (in `~/sam-archive/bdos/`) and diff the
+   EEPROM copy byte-for-byte — the same "use a real binary, prove every byte" rule applies.
 2. **Boot both from address 0 in the emulator** (real cold-init) and diff the
    execution traces to find every fork point.
 3. **Set-based PC diff** to name exactly what code each side runs that the other
