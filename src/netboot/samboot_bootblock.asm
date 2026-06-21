@@ -81,9 +81,10 @@ SAMBOOT_INJECT_ORG:    equ &415E           ; the bootblock free space (file &15E
 ; and never reach &805F. So the banner sits AFTER CALL &805F: in emulation &805F does
 ; not return (q50 decision 3 / i232), so the banner is unreached there — hardware-only
 ; by position, the same honesty line as the post-&805F config read. On hardware &805F
-; returns and the banner draws. The banner prints our OWN embedded copy of the msg-0
-; text (sbb_banner), so it renders correctly even though Colin's reader overwrote the
-; ROM's UMVAL text at &F5DD — the earlier "text may render garbled" risk is RESOLVED.
+; returns and the banner draws. The banner reuses the ROM's own message printer POMSG
+; (&3DB4) pointed at our OWN embedded msg list (sbb_banner), so it renders correctly
+; even though Colin's reader overwrote the ROM's UMVAL text at &F5DD — the earlier
+; "text may render garbled" risk is RESOLVED.
 ; The remaining i230 hardware-confirm items are just: (a) the stripe + banner PIXELS
 ; actually render, and (b) banner visibility/timing on the no-auto-boot path (it draws
 ; after &805F, then restore:'s CLSLOWER clears it before BASIC — so it is brief; Pete
@@ -125,42 +126,38 @@ sbb_rbowl:      ld      (hl), b
 
                 call    &805F               ; real B-DOS init (no return in the Go core)
 
-                ; --- MGT banner. We print our OWN embedded copy of the stock UMVAL
-                ; msg-0 text (sbb_banner below) instead of CALL UTMSG (&3DB0), because
-                ; Colin's EEPROM reader OVERWROTE the ROM's copy of that text at &F5DD
-                ; and relocated the UMVAL table pointer — so on the patched ROM `CALL
-                ; UTMSG` for msg 0 would print code/garbage. VERIFIED: stock
-                ; rom_stock_v30.bin holds the text at file &75DD ("   MILES GORDON
-                ; TECHNOLOGY PLC" + 7 spaces + &7F + " 1990  SAM Cou" + 'p'|&80); the
-                ; patched rom.bin has Colin's reader bytes (ED 79 CD 07 F6 ...) there.
-                ; sbb_banner is byte-exact to the stock text (the &F0='p'|&80 stock
-                ; terminator becomes plain 'p' + a 0 terminator for our RST-10 loop).
+                ; --- MGT banner. We reuse the ROM's OWN message printer POMSG (&3DB4)
+                ; pointed at our OWN embedded message list (sbb_banner), instead of
+                ; CALL UTMSG (&3DB0). UTMSG is `LD DE,(UMSGS)` then falls into POMSG;
+                ; we cannot use UTMSG itself because it reads (UMSGS), which points at
+                ; the ROM's message table — and Colin's EEPROM reader OVERWROTE the
+                ; ROM's copy of the msg-0 text at &F5DD and relocated the table pointer.
+                ; POMSG takes A = message number + DE = list address, so we pass DE =
+                ; sbb_banner and print msg 0 from it. POMSG is the very printer that drew
+                ; this banner originally — more faithful (and smaller) than a hand loop.
+                ;
+                ; VERIFIED (NOT guessed): in the stock disassembly UTMSG (&3DB0) =
+                ; `LD DE,(UMSGS)` and POMSG (&3DB4) = `RST 30 / DW POMSPX-8000H` ("PRINT
+                ; MSG A FROM LIST AT DE"; jump table &0115). POMSG (&3DB4 = F7 1B 5D) and
+                ; POMSPX (&DD1B) are BYTE-IDENTICAL patched-vs-stock (rom.bin == rom_stock
+                ; _v30.bin at those offsets) — safe to call on Colin's ROM. The msg-0 text
+                ; itself is gone from the patched ROM (Colin's reader bytes ED 79 CD 07 F6
+                ; ... sit at &F5DD), which is exactly why we supply our own list.
+                ;
                 ; The é/RAM-size/"K" tail is the verbatim stock &0F7F sequence;
-                ; CLSLOWER/RST10/RST30/PRNUMB1 are intact on Colin's ROM
-                ; (colin-rom-fork-diff.md). CALL &06B5 (CLSLOWER) is prepended because
-                ; the stock body was entered via REPORT-50, which had set the lower-
-                ; window print position; we set it ourselves.
+                ; CLSLOWER/RST30/PRNUMB1 are intact on Colin's ROM (colin-rom-fork-diff.md).
+                ; CALL &06B5 (CLSLOWER) is prepended because the stock body was entered via
+                ; REPORT-50, which had set the lower-window print position; we set it ourselves.
                 ;
-                ; HARDWARE-ONLY BY POSITION: &805F above does not return in the Go core,
-                ; so this whole block is unreached in emulation (same honesty line as
-                ; the post-&805F config read); hardware draws it, i230 confirms pixels.
-                ;
-                ; RST 10 register contract (verified, NOT guessed): the ROM RST-10 entry
-                ; RST102 (&019E) brackets the channel dispatch with PUSH/POP of HL, DE,
-                ; BC and IX, so it preserves them all (the stock SOP print loop at &0244
-                ; relies on DE+BC surviving RST 10). The push/pop hl guard below is thus
-                ; belt-and-braces against a non-standard channel; DE/BC need no guard.
+                ; HARDWARE-ONLY BY POSITION: &805F above does not return in the Go core, so
+                ; this whole block is unreached in emulation (same honesty line as the post-
+                ; &805F config read); POMSG uses RST 30 to page ROM1, fine on hardware, not
+                ; emulation-run. Hardware draws it, i230 confirms pixels.
                 call    &06b5                   ; CLSLOWER — set lower-window print pos
-                ld      hl, sbb_banner
-sbb_bloop:      ld      a, (hl)
-                or      a
-                jr      z, sbb_bdone
-                push    hl                      ; preserve HL across RST 10 (belt-and-braces)
-                rst     &10                     ; print the char in A
-                pop     hl
-                inc     hl
-                jr      sbb_bloop
-sbb_bdone:      ld      hl, &5a34               ; BGFLG (foreign set on for é)
+                xor     a                       ; message number 0
+                ld      de, sbb_banner          ; OUR message list (the ROM's table copy is destroyed)
+                call    &3db4                   ; POMSG — print msg A from list at DE (the ROM's own printer)
+                ld      hl, &5a34               ; BGFLG (foreign set on for é)
                 ld      a, &82                  ; é
                 ld      (hl), a
                 rst     &10
@@ -189,16 +186,17 @@ inject_decision:                            ; host decision test enters HERE (sk
                 ld      (BD_BOOT_RECORD), a
                 jp      bdos_boot_record    ; i122a: HRECORD select + ALHK boot, no return
 
-; sbb_banner — our embedded copy of the stock UMVAL msg-0 banner text, byte-exact to
-; stock rom_stock_v30.bin @ file &75DD (3 leading spaces, "MILES GORDON TECHNOLOGY
-; PLC", 7 trailing spaces, &7F = © glyph (SAM charset code 127), " 1990  SAM Coup").
-; The stock ROM terminates the message with 'p'|&80 (&F0); our RST-10 print loop uses
-; a plain 'p' followed by a 0 terminator, which is equivalent for our loop. Printed by
-; the banner block above because Colin's reader overwrote the ROM's own copy.
+; sbb_banner — our embedded copy of the stock UMVAL msg-0 banner text, in the ROM's
+; message-list format (POMSPX prints each char masking bit 7, and a char with bit 7
+; SET ends the message). Byte-exact to stock rom_stock_v30.bin @ file &75DD..&7611
+; (3 leading spaces, "MILES GORDON TECHNOLOGY PLC", 7 trailing spaces, &7F = © glyph
+; (SAM charset code 127), " 1990  SAM Cou", then 'p'|&80 = &F0 — the bit-7 terminator
+; that prints "p" and ends the message). Printed by the POMSG call above with DE =
+; sbb_banner, because Colin's reader overwrote the ROM's own copy of this text.
 sbb_banner:     defm    "   MILES GORDON TECHNOLOGY PLC       "
                 defb    &7f                     ; © (SAM copyright glyph, code 127)
-                defm    " 1990  SAM Coup"
-                defb    0                       ; print-loop terminator
+                defm    " 1990  SAM Cou"
+                defb    &f0                     ; 'p' (&70) | &80 — bit-7 message terminator (prints "p", ends msg)
 
 ; samboot_read_config + wait_ready + the gated+relocated eeprom.asm reader.
                 include "samboot_config.asm"
