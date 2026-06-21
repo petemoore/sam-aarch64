@@ -2235,7 +2235,7 @@
   title: "Serve manifest (Go authority): text format + parser + manifest-backed name→record resolve"
   description: |
     design §1-3: a human-editable line-based text manifest, read once from the boot record, mapping full Pi-facing TFTP names/paths -> internal B-DOS record locator(s) + span count + total size + optional SHA-256, with local vs remote entry kinds. Go authority: define the format, write the parser, back the tftp.Store/Resolve path so exact-match resolve returns record-list+size into the existing bdos.SpanPlan path. Host-verifiable, no hardware gate; Z80 port is a follow-on.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i114
