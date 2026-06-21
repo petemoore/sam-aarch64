@@ -2044,9 +2044,11 @@
   title: Autonomous-loop monitor — activity-gated quiescence
   description: |
     When non-Pete backlog is drained, the monitor keeps waking an idle session. Fix: agent writes a quiescence semaphore on confirming a drain; monitor stops nudging while the file exists AND session transcript has not grown past the recorded mark. The instant the transcript grows (Pete writes back or any new turn) the monitor deletes the file and resumes. Auto-expires on first sign of life — no manual restart, no permanently-deaf loop. Record the transcript mark when monitor first sees the file (not file mtime) to avoid spurious re-wake. Builds on i97.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 633, role: completing}
   refs: [i97, tools/autonomous-loop/monitor.sh]
 
 - id: i104
