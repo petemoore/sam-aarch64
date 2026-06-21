@@ -3884,7 +3884,8 @@
   title: "Build + emulation-verify the combined patched-bootblock image (Colin original + samboot_inject spliced, <=1KB chunk-1)"
   description: |
     TOP PRIORITY next session, gated on Pete being present (culminates in a hardware stripes test, i230, that needs Pete at the SAM). Stage 1 of the i135c no-brick plan. Build the patched bootblock with a WORKING boot screen and emulation-verify it. The full implementation recipe (from the 2026-06-23 ROM research) is in docs/plans/i229-combined-bootblock.md: the rainbow stripes are rendered LIVE by the ROM line-interrupt ISRs (FRAMINT/LINEINT), not by the &ED1B data write — so the routine must establish IM1+EI + arm STATPORT, clear paper+border to CLUT index 0 (LINEINT drives CLUT reg 0 per scan line; border is a CLUT-index lookup so both track it), build LINICOLS (the verbatim &ED1B port already in samboot_stripes), set the print position via CLSLOWER &06B5 (channel K — fixes the top-left banner), print the banner (UTMSG &3DB0 + the &0F7F é/size tail), then EI, wait-for-key, teardown (LINICOLS[0]=&FF), and RETURN CLEANLY (never di;halt — trinload's try_exec pushed its own start, so a clean RET restarts trinload; the prior yellow-screen run hung because the di;halt path / wrong paging executed). STATE 2026-06-23: a stripes+banner DEMO (mgt_screen_demo, the &ED1B DATA write only) is committed + emulation-verified but it showed FLAT YELLOW on hardware precisely because it omits the interrupt setup — that is the gap this item closes. Also assemble the full chunk-1 image (Colin's proprietary bootblock from the local eeprom.bin + the inject, via a splice tool, NOT committed bytes) and reset-chain-verify (samboot_real_boot_test.go boots the real rom.bin from address 0). Build with fresh context; do not rush boot code (prime directive).
-  status: IN_PROGRESS
+  status: OPEN
+  depends_on: [i236]
   kind: leaf
   owner: agent
 
@@ -3913,3 +3914,40 @@
   depends_on: [i126]
   kind: leaf
   owner: agent
+
+- id: i233
+  title: "SAMBOOT fork analysis: prove the purpose of the 3 non-boot ROM diffs (&FC44 UMVAL reloc, &D902 disk constant FE->FC, &FBFF command table)"
+  description: |
+    Per docs/specs/samboot-fork-analysis.md (Pete's verbatim directive): each was changed for a reason; derive it, do not guess. Trap-proven all 3 are read at cold boot. Identify the loop &D902 feeds (3 vs 4 reads), decode the &FBFF command-table data change, verify the relocated UMVAL table at &F611 renders valid messages. Nothing claimed without proof.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/samboot-fork-analysis.md]
+
+- id: i234
+  title: "SAMBOOT fork analysis: full disassembly + behaviour of the EEPROM bootblock (chunk 1, device &2000=file 0, ORG &4000) — added AND removed vs public bootblock"
+  description: |
+    Disassemble every instruction of Colin's EEPROM bootblock from the local eeprom.bin and trace it in emulation (samboot_real_boot harness already boots it). Understand both sides of the fork vs the public LongSteve/SR23 bootblock: what was added AND removed. Proprietary -> findings go to the private ~/sam-archive write-ups.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/samboot-fork-analysis.md]
+
+- id: i235
+  title: "SAMBOOT fork analysis: is EEPROM B-DOS bit-identical to stock; if not diff it (added AND removed) same way"
+  description: |
+    Stock B-DOS in sam-archive/bdos (1.4e..1.7q + AL 1.5a; Colin cites B-DOS 1.5t beta). Diff the EEPROM B-DOS chunks 2-13 byte-for-byte vs the matching stock version; if not identical, derive exactly what was added AND removed, proven. Only the DIFFERENCES need understanding.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/samboot-fork-analysis.md]
+
+- id: i236
+  title: "SAMBOOT fork analysis: complete end-to-end story + adversarial review — gate before any EEPROM flash code"
+  description: |
+    Synthesise the proven ROM+EEPROM+B-DOS fork into one end-to-end story (stock boot + stock B-DOS load WITH THESE DIFFERENCES), every difference proven, no inference; then adversarial review challenges each conclusion vs the bytes. DONE = green light to design EEPROM patch code (never flash unattended).
+  status: OPEN
+  depends_on: [i233, i234, i235]
+  kind: leaf
+  owner: agent
+  refs: [docs/specs/samboot-fork-analysis.md]
