@@ -4158,9 +4158,11 @@
   title: "CI ratchet guard against NETBOOT_HOSTTEST==0 carve-out reintroduction (allowlist baseline 34, ratchets to zero) + CLAUDE.md/memory wording"
   description: |
     The SYSTEMIC anti-reintroduction mechanism of i231 (the 'stop the bleeding' brick — agents keep adding new carve-outs). A make/CI guard (tools/check-hosttest-carveouts.sh + make check-hosttest-carveouts, wired into the staticcheck job like check-no-silent-skips) that counts opening 'if ...defined(NETBOOT_HOSTTEST)==0' directives per src file and exact-matches them against tools/hosttest-carveout-allowlist.txt (baseline: 34 sites / 12 files, audit 2026-06-23). A NEW carve-out (un-listed file, or a listed file exceeding its count) FAILS the build; eliminating one requires ratcheting the allowlist DOWN (a stale/over-count entry also FAILS), so the list can only shrink to zero. Plus crystal-clear CLAUDE.md §7 wording + memory so future agents never add one. Does NOT eliminate the existing 34 (that is i231b). Distinguishes the anti-pattern (==0, excluded from host build) from the sanctioned test-double (NETBOOT_HOSTTEST) and dual-build (| NETBOOT_STREAM) shapes.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 706, role: completing}
   parent: i231
 
 - id: i231b
