@@ -3493,9 +3493,11 @@
   title: "Bootable fetch-and-boot disk: netboot-fetch-boot-disk make target + autorun entry (client_fetch_boot) + emulation boot test"
   description: |
     Build the agent-completable vessel for i182's hardware run. A NETBOOT_FETCH_BOOT build flag switches netboot_client.asm's &8000 boot entry from 'jp client_main' to 'jp client_fetch_boot' (the i122c PXE-style fetch->stream-into-scratch-record->validate->ALHK-boot entry). New Makefile targets netboot-fetch-boot-boot (the bootable binary, same includes as netboot_client_boot) + netboot-fetch-boot-disk (the .mgt, mirroring netboot-client-disk); wire into build-disk + CI as needed. Emulation boot-path test: RunBoot the fetch-boot binary, assert the entry dispatches to client_fetch_boot and the fetch->stream->validate->boot path runs in the model (reuse the i122c client_fetch_boot harness setup). Decide autorun entry = client_fetch_boot (the port-not-design call). The full-scale real SD write + real ALHK-boot stays hardware-gated (i182b).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 696, role: completing}
   parent: i182
 
 - id: i182b
