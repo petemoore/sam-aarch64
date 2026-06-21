@@ -2219,6 +2219,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 659, role: completing}
   parent: i113
   refs: [~/sam-archive/trinity-docs/VERIFY_CHECKLIST.md, docs/notes/trinity-capabilities.md]
 
@@ -3301,6 +3303,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 662, role: completing}
 
 - id: i162
   title: Version-control ~/bin agent tools in a private ~/git/claude-tools repo
@@ -3317,6 +3321,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 660, role: completing}
 
 - id: i168
   title: "Future: import a full source file into the editor (fail-with-line-number on bad line)"
@@ -3421,6 +3427,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 661, role: completing}
 
 - id: i179
   title: "monitor.sh: fix the prior-turn nudge-delivery race + add persistent delivery tracing (i97 follow-up)"
@@ -3604,6 +3612,8 @@
   depends_on: [i188]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 663, role: completing}
 
 - id: i193
   title: Document the Trinity SD-card Z80 storage interface from Colin's disassembled B-DOS 1.5t fork
@@ -4178,6 +4188,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 664, role: completing}
   parent: i243
 
 - id: i244
@@ -4187,6 +4199,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 666, role: completing}
 
 - id: i245
   title: "Trinity SD model: enforce the one-byte read lag so a missing command flush (Ncc sync) FAILS in emulation (the i145g all-zeros bug class)"
