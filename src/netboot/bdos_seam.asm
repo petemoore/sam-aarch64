@@ -58,7 +58,7 @@
 ; THE HONESTY LINE (CLAUDE.md §5): these routines are host-verifiable — they
 ; only build / decode memory. The actual hook DISPATCH (RST 8 / DEFB 129 HGTHD,
 ; / DEFB 130 HLOAD, / DEFB 132 HSAVE, and the HRECORD &9C record select) is NOT
-; host-verifiable: the flat-memory koron-go/z80 harness has no ROM, no SAMDOS
+; host-verifiable: the flat-memory koron-go/z80 harness has no ROM, no DOS
 ; bank, and no RST 8 dispatch, so the hook bodies cannot run host-side. Those
 ; calls live in bdos_hooks (below) behind `ifndef NETBOOT_HOSTTEST`, excluded
 ; from the host build, and stay UNVERIFIED until exercised on real Trinity

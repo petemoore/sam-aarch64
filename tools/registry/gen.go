@@ -175,24 +175,32 @@ func renderItemCell(it Item) string {
 
 // genItemsOpenClosed writes the open and closed item registry tables to their
 // respective writers. Spec §"Generator" — three views total (two item + one question).
-// Column order: id | item | status | PR | deps | dependents | refs/links
+// The OPEN view carries a "gate" column (mirroring backlog.md's computeGates, i158)
+// so the open-items table shows at a glance what is actionable vs blocked-on-Pete
+// vs blocked-on-work — the same marker the backlog uses. The CLOSED view omits it:
+// every closed item is DONE/WONTFIX, so a deps-derived gate would be meaningless.
+// Open column order:   id | item | status | owner | gate | PR | deps | dependents | refs/links
+// Closed column order: id | item | status | owner | PR | deps | dependents | refs/links
 func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 	items := sortedItems(reg.Items)
 	reverseEdges := buildReverseEdges(items)
+	gates := computeGates(reg)
 
-	header := "| **id** | item | status | owner | PR | deps | dependents | refs/links |\n|---|---|---|---|---|---|---|---|\n"
+	openHeader := "| **id** | item | status | owner | gate | PR | deps | dependents | refs/links |\n|---|---|---|---|---|---|---|---|---|\n"
+	closedHeader := "| **id** | item | status | owner | PR | deps | dependents | refs/links |\n|---|---|---|---|---|---|---|---|\n"
 
-	// Open items (OPEN or IN_PROGRESS).
+	// Open items (OPEN or IN_PROGRESS) — with the gate column.
 	fmt.Fprint(openW, generatedBannerItems)
 	fmt.Fprint(openW, "\n")
-	fmt.Fprint(openW, header)
+	fmt.Fprint(openW, openHeader)
 	for _, it := range items {
 		if isOpen(it.Status) {
-			fmt.Fprintf(openW, "| **%s** | %s | %s | %s | %s | %s | %s | %s |\n",
+			fmt.Fprintf(openW, "| **%s** | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 				escapeCell(it.ID),
 				renderItemCell(it),
 				escapeCell(renderItemStatus(it)),
 				escapeCell(it.Owner),
+				escapeCell(gates[it.ID]),
 				renderItemPRs(it),
 				escapeCell(renderItemDeps(it)),
 				escapeCell(renderItemDependents(it, reverseEdges)),
@@ -201,10 +209,10 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 		}
 	}
 
-	// Closed items (DONE or WONTFIX).
+	// Closed items (DONE or WONTFIX) — no gate column.
 	fmt.Fprint(closedW, generatedBannerItems)
 	fmt.Fprint(closedW, "\n")
-	fmt.Fprint(closedW, header)
+	fmt.Fprint(closedW, closedHeader)
 	for _, it := range items {
 		if !isOpen(it.Status) {
 			fmt.Fprintf(closedW, "| **%s** | %s | %s | %s | %s | %s | %s | %s |\n",

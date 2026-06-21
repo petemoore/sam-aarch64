@@ -44,7 +44,7 @@ From `docs/notes/sam-paging.md` (§§1–6) and `docs/notes/memory-layout.md`:
   (HMPR, HMPR+1) — `sam-paging.md:86-91`. The CPU sees four 16 KB windows; the
   pool hands out **physical pages**, mapped into a window on demand via an
   LMPR/HMPR bracket.
-- At boot BASIC owns pages 0–3; SAMDOS occupies one page (`DOSFLG`, `&5BC2`);
+- At boot BASIC owns pages 0–3; the loaded DOS occupies one page (`DOSFLG`, `&5BC2`);
   the screen occupies two pages — `sam-paging.md:456-485, 569-598`.
 - **The "4 BASIC pages" are not 4 reservations.** The IDE owns the machine for
   its session (§7.3), so it `NEW`s BASIC at startup (Pete, 2026-06-22) and

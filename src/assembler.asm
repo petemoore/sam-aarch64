@@ -269,7 +269,7 @@ PP_TABLE_BASE:  equ     &C9A4
 start:
                 di                     ; disable interrupts (batch program)
 
-; Set up the stack before any call.  SAMDOS's EI in the RST 8 hook
+; Set up the stack before any call.  The DOS's EI in the RST 8 hook
 ; re-enables interrupts, so DI must be repeated after hook calls.
                 ld      sp, &C100
 
@@ -413,16 +413,18 @@ if defined(BUILD_TESTS)
                 ld      a, LMPR_TEST_CLUSTER
                 out     (250), a
                 call    &0000                       ; off-axis cluster_dispatch
-                ld      a, (LMPR_DEFAULT_RUNTIME)
-                out     (250), a
 
 ; -- run_mem_self_tests lives off-axis on page 13 (plan-PR 3).
-; LMPR-swap-call-restore sequence: 9 bytes vs 3 for a plain `call`,
-; net section-C saving ~770 B over the moved test_mem.asm body.
-; HMPR is unchanged, so the off-axis code's calls to encode_mem_word,
-; assert_eq32_de_hl_imm, and fail all resolve to their section-C
-; addresses and execute correctly.  Stack (section D, HMPR) likewise
-; unaffected.  Interrupts already DI at this point (set at start:).
+; LMPR-swap-call-restore sequence: HMPR is unchanged, so the off-axis
+; code's calls to encode_mem_word, assert_eq32_de_hl_imm, and fail all
+; resolve to their section-C addresses and execute correctly.  Stack
+; (section D, HMPR) likewise unaffected.  Interrupts already DI at this
+; point (set at start:).
+;
+; This block sets LMPR directly to LMPR_TEST_MEM rather than first
+; restoring LMPR_DEFAULT_RUNTIME: the cluster call above leaves LMPR at
+; LMPR_TEST_CLUSTER and nothing between the two off-axis calls reads
+; LMPR, so a restore here would only be overwritten by the next OUT.
                 ld      a, LMPR_TEST_MEM
                 out     (250), a
                 call    &0000                       ; off-axis run_mem_self_tests
@@ -464,12 +466,7 @@ if defined(BUILD_TESTS)
                 call    paged_call
                 defw    DISASM_SELF_TEST_ENTRY
                 defb    DISASM_PAGE
-                ld      a, b
-                or      c
-                jr      z, disasm_paged_test_ok
-                ld      a, c
-                jp      fail_with_tag
-disasm_paged_test_ok:
+                call    check_paged_test_result
 
 ; -- ZX0 self-test: invoke run_zx0_self_test on page 13 via paged_call
 ; (i68; docs/specs/comment-storage-design.md §7.1).  The driver (in
@@ -490,12 +487,7 @@ disasm_paged_test_ok:
                 call    paged_call
                 defw    ZX0_SELF_TEST_ENTRY
                 defb    ZX0_PAGE
-                ld      a, b
-                or      c
-                jr      z, zx0_paged_test_ok
-                ld      a, c
-                jp      fail_with_tag
-zx0_paged_test_ok:
+                call    check_paged_test_result
 endif
 
 ; -- Load the sysreg lookup data into page 13 (PRODUCTION path, and a
@@ -566,7 +558,7 @@ endif
 
 ; -- Run the assemble: pass 1 (table build) + pass 2 (emit) -----------
 ; main_assemble owns the two-pass dance AND the ENCTAB-window
-; bracketing: it loads IN (LMPR=DEFAULT for SAMDOS hooks), then
+; bracketing: it loads IN (LMPR=DEFAULT for DOS hooks), then
 ; map_in's ENCTAB into section A, calls form_lookup_init, runs the
 ; passes, then map_out's before returning.  Callers see LMPR back at
 ; LMPR_DEFAULT.  See main_loop.asm.
@@ -582,12 +574,28 @@ endif
                 call    print_status_string
 
 ; -- Clean exit ---------------------------------------------------------
-; The DI at start: is undone by SAMDOS's EI inside the RST 8 hook window
+; The DI at start: is undone by the DOS's EI inside the RST 8 hook window
 ; (ROM PTDOS does EI before dispatching — see docs/notes/headless-simcoupe.md
 ; "Why the stub ends in DI; HALT").
 ; Re-issue DI so HALT with IFF1=0 triggers SimCoupé's -exitonhalt.
                 di
                 halt
+
+if defined(BUILD_TESTS)
+; check_paged_test_result — shared tail for the paged self-tests (disasm
+; on page 15, zx0 on page 13).  Each returns BC=0 on success; a non-zero
+; BC carries the fail tag in C.  Return on success; otherwise jp
+; fail_with_tag with the tag in A.  Factored from the two identical
+; 9-byte result checks to spare the test-variant code budget.  Placed
+; after the `halt` above so control never falls into it (it is reached
+; only by `call`).
+check_paged_test_result:
+                ld      a, b
+                or      c
+                ret     z
+                ld      a, c
+                jp      fail_with_tag
+endif
 
 
 ; -----------------------------------------------------------------------

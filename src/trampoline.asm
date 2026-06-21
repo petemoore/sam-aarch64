@@ -135,7 +135,7 @@
 ;    byte against samdos/src/b.s::samhk — HSAVE is samhk[4] = code
 ;    132 (`samdos/src/b.s:501 defw hsave ;132`).  HSAVE reads the
 ;    source address from UIFA byte 32 and the length from UIFA byte
-;    35/36; the trampoline's job is to set HMPR so the SAMDOS reads
+;    35/36; the trampoline's job is to set HMPR so the DOS reads
 ;    through section C land in the right physical page.
 ;
 ; 2. **Runtime read/write via section A.**  Parse-eval-encode-emit
@@ -723,7 +723,7 @@ enctab_map_in:
 ; entry) works as it did under BASIC's original LMPR.  Interrupts
 ; remain DISABLED — the caller is responsible for re-enabling them if
 ; needed (the M3 assembler runs with interrupts disabled throughout;
-; SAMDOS hooks internally EI/DI around their own dispatch).
+; DOS hooks internally EI/DI around their own dispatch).
 ;
 ; The restore value comes from LMPR_DEFAULT_RUNTIME, populated by
 ; assembler.asm's `start:` from `IN A, (250)` at the very first
@@ -732,7 +732,7 @@ enctab_map_in:
 ; = 31 → section B = page 0 = BASIC sys page).  Restoring &00 instead
 ; would silently shift section B to page 1 (different memory) and the
 ; next RST 8's UIFA-via-section-B reads would target wrong addresses
-; (or, more visibly, the SAMDOS hook would hang on the SAMDOS-side
+; (or, more visibly, the DOS hook would hang on the DOS-side
 ; stack switch because PTDOS's `IN B,(250)` and later `OUT (250),B`
 ; restore-pair would round-trip the WRONG initial value).
 ;

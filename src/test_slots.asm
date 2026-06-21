@@ -177,7 +177,7 @@ run_slot_self_tests:
 ; M4 made encode_branch_imm and encode_adrp_imm subtract PASS_PC from
 ; the input value (the caller passes an absolute target address, not a
 ; raw byteOffset).  At cold boot PASS_PC (&C159 .. &C15C) holds whatever
-; the SAM RAM/SAMDOS load left there — non-zero in general.  The branch /
+; the SAM RAM / loaded DOS left there — non-zero in general.  The branch /
 ; adrp vectors below are written in "raw byteOffset" style, valid only
 ; when PASS_PC == 0, so zero it here.  Seeding immediately before the
 ; block (rather than once at the suite top) keeps the dependency local:

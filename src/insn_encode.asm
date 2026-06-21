@@ -61,6 +61,7 @@ SK_WREGSP:      equ     &04
 SK_IMM5:        equ     &05
 SK_IMM6:        equ     &06
 SK_COND:        equ     &07
+SK_IMM16:       equ     &08
 SK_IMM12SH:     equ     &10
 SK_IMM16SH:     equ     &11
 SK_BR26:        equ     &20
@@ -239,32 +240,10 @@ enc_check_coerce:
                 call    enc_is_plain_gpr
                 jr      nz, enc_try_tst_coerce
 ; Coerce: synthesize a ShiftedReg operand for op2 with width from op0,
-; Rm from op2 (plain reg byte), shift_kind=LSL(0), imm6=0.
-; enc_sr_synth layout: [filler, width, Rm, shift_kind, imm6, 0, 0, 0]
-; filler at +0 maps to OPVAL[idx]+0 (ignored by encoder; encoder reads
-; OPVAL[idx]+1 as width).  Mirror pass2.go:252-269.
-                xor     a
-                ld      (enc_sr_synth + 0), a   ; filler at +0
-                ld      a, (OPVAL_KINDS + 0)    ; op0 kind for width
-                cp      OPK_REG_X
-                ld      a, 1                    ; width=1 for X (64-bit)
-                jr      z, enc_3reg_width
-                xor     a                       ; width=0 for W/XSP/WSP
-enc_3reg_width:
-                ld      (enc_sr_synth + 1), a   ; width at +1
+; Rm from op2 (plain reg byte), shift_kind=LSL(0), imm6=0.  Mirror
+; pass2.go:252-269.  enc_synth_sr does the common population (Rm index = A).
                 ld      a, 2
-                call    enc_nth_operand         ; HL -> op2
-                inc     hl
-                ld      a, (hl)                 ; op2 reg = Rm
-                ld      (enc_sr_synth + 2), a   ; Rm at +2
-                xor     a
-                ld      (enc_sr_synth + 3), a   ; shift_kind = LSL = 0 at +3
-                ld      (enc_sr_synth + 4), a   ; imm6 = 0 at +4
-                ld      (enc_sr_synth + 5), a
-                ld      (enc_sr_synth + 6), a
-                ld      (enc_sr_synth + 7), a
-                ld      a, 1
-                ld      (enc_sr_coerced), a     ; flag: coerced (not from stream)
+                call    enc_synth_sr
                 jp      enc_shifted
 
 enc_try_tst_coerce:
@@ -282,31 +261,41 @@ enc_try_tst_coerce:
                 call    enc_is_plain_gpr
                 jr      nz, enc_compound_scan
 ; Coerce: synthesize ShiftedReg for op1 with width from op0, Rm from op1.
-; enc_sr_synth layout: [filler, width, Rm, shift_kind, imm6, 0, 0, 0].
 ; Mirror pass2.go:272-289.
+                ld      a, 1
+                call    enc_synth_sr
+                jp      enc_shifted
+
+; -- enc_synth_sr — populate enc_sr_synth for a coerced ShiftedReg -------
+; A = index of the operand supplying Rm (2 for the 3-reg case, 1 for tst).
+; Width comes from op0's kind (X -> 1, else 0).  shift_kind=LSL(0), imm6=0.
+; enc_sr_synth layout: [filler, width, Rm, shift_kind, imm6, 0, 0, 0]; the
+; encoder reads OPVAL[idx]+1 as width (filler at +0 is ignored).  Sets the
+; enc_sr_coerced flag.  Clobbers A, BC, HL.
+enc_synth_sr:
+                ld      b, a                    ; B = Rm operand index
                 xor     a
                 ld      (enc_sr_synth + 0), a   ; filler at +0
-                ld      a, (OPVAL_KINDS + 0)    ; op0 kind for width
-                cp      OPK_REG_X
-                ld      a, 1
-                jr      z, enc_tst_width
-                xor     a
-enc_tst_width:
-                ld      (enc_sr_synth + 1), a   ; width at +1
-                ld      a, 1
-                call    enc_nth_operand         ; HL -> op1
-                inc     hl
-                ld      a, (hl)                 ; op1 reg = Rm
-                ld      (enc_sr_synth + 2), a   ; Rm at +2
-                xor     a
                 ld      (enc_sr_synth + 3), a   ; shift_kind = LSL = 0 at +3
                 ld      (enc_sr_synth + 4), a   ; imm6 = 0 at +4
                 ld      (enc_sr_synth + 5), a
                 ld      (enc_sr_synth + 6), a
                 ld      (enc_sr_synth + 7), a
+                ld      a, (OPVAL_KINDS + 0)    ; op0 kind for width
+                cp      OPK_REG_X
+                ld      a, 1                    ; width=1 for X (64-bit)
+                jr      z, enc_synth_sr_width
+                xor     a                       ; width=0 for W/XSP/WSP
+enc_synth_sr_width:
+                ld      (enc_sr_synth + 1), a   ; width at +1
+                ld      a, b                    ; A = Rm operand index
+                call    enc_nth_operand         ; HL -> Rm operand
+                inc     hl
+                ld      a, (hl)                 ; Rm reg byte
+                ld      (enc_sr_synth + 2), a   ; Rm at +2
                 ld      a, 1
-                ld      (enc_sr_coerced), a     ; flag: coerced
-                jp      enc_shifted
+                ld      (enc_sr_coerced), a     ; flag: coerced (not from stream)
+                ret
 
 ; -- Compound kind scan (mirror pass2.go:231-244) -----------------------
 ; Scan the already-built OPVAL_KINDS for OpShiftedReg (0x06) or
@@ -375,7 +364,9 @@ enc_slot_loop:
                 jr      z, enc_do_cond              ; &07 CondCode
                 cp      SK_COND
                 jr      c, enc_do_imm_n             ; &05 Imm5 / &06 Imm6
-                jp      enc_do_fold                 ; >=&08: expr-fold slots
+                cp      SK_IMM16
+                jr      z, enc_do_imm16             ; &08 Imm16 (udf imm16)
+                jp      enc_do_fold                 ; >=&10: expr-fold slots
 
 ; -- Register slot: value = operand's register byte (operand[1]) --------
 enc_do_reg:
@@ -401,6 +392,13 @@ enc_do_imm_n:
                 ld      a, (expr_result)
                 ld      hl, (enc_slot_ptr)
                 call    encode_imm_n
+                jr      enc_field_done
+
+; -- Imm16 slot: value = low 16 bits of the evaluated expr (udf) --------
+enc_do_imm16:
+                call    enc_eval_cur_expr           ; -> expr_result
+                ld      hl, (enc_slot_ptr)
+                call    encode_imm16
                 jr      enc_field_done
 
 ; -- Expr-bearing relocatable slot: eval, map kind->FSID, fold ----------

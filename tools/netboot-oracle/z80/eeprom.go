@@ -196,10 +196,18 @@ func (p *eeprom) programByte(v byte) {
 	p.addr = (p.addr &^ (eepPageSize - 1)) | ((p.addr + 1) & (eepPageSize - 1))
 }
 
-// inDataPhase reports whether an IN &DD should return EEPROM data (vs the ENC's
-// identity-probe reply). True once at least one data-phase clock has latched a
-// byte.
-func (p *eeprom) inDataPhase() bool { return p.selected && p.byteIdx > 4 }
+// autoClock serves a bare IN &DD under &1F EEPROM auto-null mode (manual:40; gap a):
+// the microcontroller supplies the dummy clock, so the read both advances and
+// returns the next READ-stream byte. Outside a read data phase it returns the last
+// latched MISO (the driver only ever uses auto-null after a READ opcode+address).
+func (p *eeprom) autoClock() byte {
+	if p.selected && p.opcode == eepCmdRead && p.byteIdx >= 4 {
+		p.miso = p.readAt(p.addr)
+		p.addr++
+		p.byteIdx++
+	}
+	return p.miso
+}
 
 // readAt returns the store byte at addr, or 0 past the end (an unprogrammed cell).
 func (p *eeprom) readAt(addr int) byte {

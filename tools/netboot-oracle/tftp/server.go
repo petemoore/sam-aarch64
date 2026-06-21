@@ -80,3 +80,29 @@ func AcceptedBlksize(requested uint64) uint64 {
 	}
 	return requested
 }
+
+const (
+	// WindowsizeDefault is the lock-step window (RFC 1350 behaviour, one ACK per
+	// DATA) used when no RFC 7440 windowsize is negotiated.
+	WindowsizeDefault = 1
+	// WindowsizeMax is the largest window the server grants. RFC 7440 permits up
+	// to 65535; the SAM clamps low — most of the round-trip saving is in the first
+	// few (window 4 already cuts the round-trips on a large file ~4x), while a
+	// large window only grows the cost of resending after a single lost block over
+	// the slow SPI link.
+	WindowsizeMax = 16
+)
+
+// AcceptedWindowsize clamps a requested RFC 7440 windowsize to what the server
+// grants: absent/0/1 stays lock-step; anything above WindowsizeMax clamps down.
+// A granted value > 1 means the server sends that many DATA blocks before it
+// waits for an ACK, and the receiver ACKs only the last block of each window.
+func AcceptedWindowsize(requested uint64) uint64 {
+	if requested < WindowsizeDefault {
+		return WindowsizeDefault
+	}
+	if requested > WindowsizeMax {
+		return WindowsizeMax
+	}
+	return requested
+}

@@ -392,6 +392,16 @@ walk_records:
 ; Output: jp walk_records.
 ; -----------------------------------------------------------------------
 main_handle_lit_insts:
+; A well-formed LIT_DATA / INSN_RUN record always carries at least the
+; 1-byte tag/mode byte, so payload_len >= 1.  Guard the malformed
+; zero-length case: an unguarded `dec bc` from BC == 0 underflows to
+; &FFFF, then the pass-2 memcpy / PASS_PC advance would run for 65535
+; bytes, smashing OUT and label accounting.  Reject it cleanly (i73 L5).
+; Unreachable with any real .tbn, so the bare untagged fail keeps the
+; test-variant code budget under its &C000 cliff.
+                ld      a, b
+                or      c
+                jp      z, fail
 ; nbytes = payload_len - 1 (the leading 1-byte tag), so BC-1 is the
 ; output-byte count directly — no need to read the tag.
                 dec     bc                  ; BC = nbytes
@@ -1573,6 +1583,19 @@ load_in_head_call:
 
 ; Decode: page_index = (b2<<2)|(b1>>6); remainder = ((b1 & &3F)<<8)|b0.
 ; Mirrors reader.asm::reader_init's identical decode (~lines 119-140).
+;
+; The b2<<2 step is `rlca rlca` — a rotate, not a shift.  For a real .tbn
+; b2 (offset bits 16..23) is at most 5 (a ≤96 KB prefix), so bits 6..7 of
+; b2 are clear and the rotate is a clean shift.  A malformed/oversized
+; offset with b2 >= &40 would rotate bits 6..7 down into bits 0..1,
+; manufacturing a small page_index that slips past the downstream
+; pp_alloc_run size check (tag 03) with the WRONG geometry — wrong load,
+; not a clean error.  Reject b2 >= &40 up front (i73 L11).  Unreachable
+; with any real ≤96 KB-prefix .tbn (b2 <= 5), so the bare untagged fail
+; keeps the test-variant code budget under its &C000 cliff.
+                ld      a, c                ; b2
+                cp      &40
+                jp      nc, fail
                 ld      a, d                ; b1
                 rlca
                 rlca

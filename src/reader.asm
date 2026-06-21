@@ -542,11 +542,20 @@ reader_next_kind:
 ; Bounds check: payload length must fit in STAGING_BUF.
 ; STAGING_BUF size = STAGING_BUF_END - STAGING_BUF = &400 (1024 B).
 ; Overflow → silent corruption of LITPOOL_EXPR_BUF; fail cleanly instead.
-                ld      a, b
-                cp      (STAGING_BUF_END - STAGING_BUF) >> 8
-                jr      c, reader_payload_size_ok
-                ld      a, &01
-                jp      fail_with_tag       ; tag 01: STAGING_BUF overflow
+; A payload of exactly 1024 bytes fills the buffer to STAGING_BUF_END and
+; is legal (the copy loop ends one-past-last there); only len > 1024
+; overflows, so the rejection boundary is 1025 — the old high-byte-only
+; `cp size>>8 / jr c` wrongly rejected the exactly-full 1024-byte payload
+; (i73 L4).  HL is live (it is the copy loop's source pointer), so save
+; it across the 16-bit compare: fail iff size - len borrows (len > size).
+; The bare untagged fail (vs the old tag 01) keeps the test-variant code
+; budget under its &C000 cliff; no current input reaches it.
+                push    hl
+                ld      hl, STAGING_BUF_END - STAGING_BUF    ; HL = size = &400
+                or      a                   ; clear carry
+                sbc     hl, bc              ; CY=1 iff len > size
+                pop     hl
+                jp      c, fail             ; len > STAGING_BUF size
 reader_payload_size_ok:
 ; Note: the 3-byte header above does NOT call in_normalise_hl between
 ; INC HL steps.  If the header straddled &3FFF..&4001, the high bytes

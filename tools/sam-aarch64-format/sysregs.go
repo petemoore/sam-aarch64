@@ -45,23 +45,23 @@ var namedSysRegs = map[string]SysReg{
 	"spsel":     {Op0: 3, Op1: 0, CRn: 4, CRm: 2, Op2: 0},
 
 	// EL1 control & status.
-	"sctlr_el1":  {Op0: 3, Op1: 0, CRn: 1, CRm: 0, Op2: 0},
-	"actlr_el1":  {Op0: 3, Op1: 0, CRn: 1, CRm: 0, Op2: 1},
-	"cpacr_el1":  {Op0: 3, Op1: 0, CRn: 1, CRm: 0, Op2: 2},
-	"ttbr0_el1":  {Op0: 3, Op1: 0, CRn: 2, CRm: 0, Op2: 0},
-	"ttbr1_el1":  {Op0: 3, Op1: 0, CRn: 2, CRm: 0, Op2: 1},
-	"tcr_el1":    {Op0: 3, Op1: 0, CRn: 2, CRm: 0, Op2: 2},
-	"esr_el1":    {Op0: 3, Op1: 0, CRn: 5, CRm: 2, Op2: 0},
-	"far_el1":    {Op0: 3, Op1: 0, CRn: 6, CRm: 0, Op2: 0},
-	"mair_el1":   {Op0: 3, Op1: 0, CRn: 10, CRm: 2, Op2: 0},
-	"amair_el1":  {Op0: 3, Op1: 0, CRn: 10, CRm: 3, Op2: 0},
-	"vbar_el1":   {Op0: 3, Op1: 0, CRn: 12, CRm: 0, Op2: 0},
+	"sctlr_el1":      {Op0: 3, Op1: 0, CRn: 1, CRm: 0, Op2: 0},
+	"actlr_el1":      {Op0: 3, Op1: 0, CRn: 1, CRm: 0, Op2: 1},
+	"cpacr_el1":      {Op0: 3, Op1: 0, CRn: 1, CRm: 0, Op2: 2},
+	"ttbr0_el1":      {Op0: 3, Op1: 0, CRn: 2, CRm: 0, Op2: 0},
+	"ttbr1_el1":      {Op0: 3, Op1: 0, CRn: 2, CRm: 0, Op2: 1},
+	"tcr_el1":        {Op0: 3, Op1: 0, CRn: 2, CRm: 0, Op2: 2},
+	"esr_el1":        {Op0: 3, Op1: 0, CRn: 5, CRm: 2, Op2: 0},
+	"far_el1":        {Op0: 3, Op1: 0, CRn: 6, CRm: 0, Op2: 0},
+	"mair_el1":       {Op0: 3, Op1: 0, CRn: 10, CRm: 2, Op2: 0},
+	"amair_el1":      {Op0: 3, Op1: 0, CRn: 10, CRm: 3, Op2: 0},
+	"vbar_el1":       {Op0: 3, Op1: 0, CRn: 12, CRm: 0, Op2: 0},
 	"contextidr_el1": {Op0: 3, Op1: 0, CRn: 13, CRm: 0, Op2: 1},
-	"tpidr_el0":  {Op0: 3, Op1: 3, CRn: 13, CRm: 0, Op2: 2},
-	"tpidr_el1":  {Op0: 3, Op1: 0, CRn: 13, CRm: 0, Op2: 4},
-	"elr_el1":    {Op0: 3, Op1: 0, CRn: 4, CRm: 0, Op2: 1},
-	"spsr_el1":   {Op0: 3, Op1: 0, CRn: 4, CRm: 0, Op2: 0},
-	"sp_el0":     {Op0: 3, Op1: 0, CRn: 4, CRm: 1, Op2: 0},
+	"tpidr_el0":      {Op0: 3, Op1: 3, CRn: 13, CRm: 0, Op2: 2},
+	"tpidr_el1":      {Op0: 3, Op1: 0, CRn: 13, CRm: 0, Op2: 4},
+	"elr_el1":        {Op0: 3, Op1: 0, CRn: 4, CRm: 0, Op2: 1},
+	"spsr_el1":       {Op0: 3, Op1: 0, CRn: 4, CRm: 0, Op2: 0},
+	"sp_el0":         {Op0: 3, Op1: 0, CRn: 4, CRm: 1, Op2: 0},
 
 	// EL1 identification.
 	"midr_el1":   {Op0: 3, Op1: 0, CRn: 0, CRm: 0, Op2: 0}, // D17.2.100
@@ -319,28 +319,28 @@ type TLBIOp struct {
 // encoding. References: ARM ARM C5.3.16 "TLBI" system instruction.
 var tlbiOps = map[string]TLBIOp{
 	// EL1, no Xt.
-	"vmalle1is": {Op1: 0, CRn: 8, CRm: 3, Op2: 0},
-	"vmalle1":   {Op1: 0, CRn: 8, CRm: 7, Op2: 0},
-	"alle1is":   {Op1: 4, CRn: 8, CRm: 3, Op2: 4},
-	"alle1":     {Op1: 4, CRn: 8, CRm: 7, Op2: 4},
-	"alle2is":   {Op1: 4, CRn: 8, CRm: 3, Op2: 0},
-	"alle2":     {Op1: 4, CRn: 8, CRm: 7, Op2: 0},
-	"alle3is":   {Op1: 6, CRn: 8, CRm: 3, Op2: 0},
-	"alle3":     {Op1: 6, CRn: 8, CRm: 7, Op2: 0},
+	"vmalle1is":    {Op1: 0, CRn: 8, CRm: 3, Op2: 0},
+	"vmalle1":      {Op1: 0, CRn: 8, CRm: 7, Op2: 0},
+	"alle1is":      {Op1: 4, CRn: 8, CRm: 3, Op2: 4},
+	"alle1":        {Op1: 4, CRn: 8, CRm: 7, Op2: 4},
+	"alle2is":      {Op1: 4, CRn: 8, CRm: 3, Op2: 0},
+	"alle2":        {Op1: 4, CRn: 8, CRm: 7, Op2: 0},
+	"alle3is":      {Op1: 6, CRn: 8, CRm: 3, Op2: 0},
+	"alle3":        {Op1: 6, CRn: 8, CRm: 7, Op2: 0},
 	"vmalls12e1is": {Op1: 4, CRn: 8, CRm: 3, Op2: 6},
 	"vmalls12e1":   {Op1: 4, CRn: 8, CRm: 7, Op2: 6},
 
 	// EL1, with Xt.
-	"vae1is":  {Op1: 0, CRn: 8, CRm: 3, Op2: 1, NeedsXt: true},
+	"vae1is":   {Op1: 0, CRn: 8, CRm: 3, Op2: 1, NeedsXt: true},
 	"aside1is": {Op1: 0, CRn: 8, CRm: 3, Op2: 2, NeedsXt: true},
-	"vaae1is": {Op1: 0, CRn: 8, CRm: 3, Op2: 3, NeedsXt: true},
-	"vale1is": {Op1: 0, CRn: 8, CRm: 3, Op2: 5, NeedsXt: true},
+	"vaae1is":  {Op1: 0, CRn: 8, CRm: 3, Op2: 3, NeedsXt: true},
+	"vale1is":  {Op1: 0, CRn: 8, CRm: 3, Op2: 5, NeedsXt: true},
 	"vaale1is": {Op1: 0, CRn: 8, CRm: 3, Op2: 7, NeedsXt: true},
-	"vae1":   {Op1: 0, CRn: 8, CRm: 7, Op2: 1, NeedsXt: true},
-	"aside1": {Op1: 0, CRn: 8, CRm: 7, Op2: 2, NeedsXt: true},
-	"vaae1":  {Op1: 0, CRn: 8, CRm: 7, Op2: 3, NeedsXt: true},
-	"vale1":  {Op1: 0, CRn: 8, CRm: 7, Op2: 5, NeedsXt: true},
-	"vaale1": {Op1: 0, CRn: 8, CRm: 7, Op2: 7, NeedsXt: true},
+	"vae1":     {Op1: 0, CRn: 8, CRm: 7, Op2: 1, NeedsXt: true},
+	"aside1":   {Op1: 0, CRn: 8, CRm: 7, Op2: 2, NeedsXt: true},
+	"vaae1":    {Op1: 0, CRn: 8, CRm: 7, Op2: 3, NeedsXt: true},
+	"vale1":    {Op1: 0, CRn: 8, CRm: 7, Op2: 5, NeedsXt: true},
+	"vaale1":   {Op1: 0, CRn: 8, CRm: 7, Op2: 7, NeedsXt: true},
 
 	// EL2 / EL3, with Xt.
 	"ipas2e1is":  {Op1: 4, CRn: 8, CRm: 0, Op2: 1, NeedsXt: true},
@@ -399,6 +399,174 @@ func DCOps() map[string]DCOp {
 func TLBIOps() map[string]TLBIOp {
 	out := make(map[string]TLBIOp, len(tlbiOps))
 	for k, v := range tlbiOps {
+		out[k] = v
+	}
+	return out
+}
+
+// AT / IC / barrier System-group operand tables.
+//
+// These mirror the dc/tlbi authority above: the disassembler
+// (tools/aarch64dec/sys.go) reverses them to name an operand, and the
+// table generator (tools/tables-gen) projects them into the Z80
+// src/disasm.asm option tables. Holding them here makes this package the
+// single source of truth for every System-group operand name↔encoding,
+// so the Go decoder and the Z80 decoder cannot drift.
+
+// ATOp identifies an AT (address-translate) operation by its (op1, CRm,
+// op2) encoding. CRn is fixed at 7 for the AT space. Reference: ARM ARM
+// C5.3.1 "AT".
+type ATOp struct {
+	Op1 byte
+	CRm byte
+	Op2 byte
+	// NeedsXt is true when the op takes an Xt register operand.
+	// (Every AT op does; kept for symmetry with IC/DC/TLBI.)
+	NeedsXt bool
+}
+
+// atOps maps the canonical AT op name to its encoding.
+var atOps = map[string]ATOp{
+	"s1e1r":  {Op1: 0, CRm: 8, Op2: 0, NeedsXt: true},
+	"s1e1w":  {Op1: 0, CRm: 8, Op2: 1, NeedsXt: true},
+	"s1e0r":  {Op1: 0, CRm: 8, Op2: 2, NeedsXt: true},
+	"s1e0w":  {Op1: 0, CRm: 8, Op2: 3, NeedsXt: true},
+	"s1e2r":  {Op1: 4, CRm: 8, Op2: 0, NeedsXt: true},
+	"s1e2w":  {Op1: 4, CRm: 8, Op2: 1, NeedsXt: true},
+	"s12e1r": {Op1: 4, CRm: 8, Op2: 4, NeedsXt: true},
+	"s12e1w": {Op1: 4, CRm: 8, Op2: 5, NeedsXt: true},
+	"s12e0r": {Op1: 4, CRm: 8, Op2: 6, NeedsXt: true},
+	"s12e0w": {Op1: 4, CRm: 8, Op2: 7, NeedsXt: true},
+	"s1e3r":  {Op1: 6, CRm: 8, Op2: 0, NeedsXt: true},
+	"s1e3w":  {Op1: 6, CRm: 8, Op2: 1, NeedsXt: true},
+}
+
+// ICOp identifies an IC (instruction-cache) operation by its (op1, CRm,
+// op2) encoding. CRn is fixed at 7 for the IC space. Reference: ARM ARM
+// C5.3.10 "IC".
+type ICOp struct {
+	Op1 byte
+	CRm byte
+	Op2 byte
+	// NeedsXt is true when the op takes an Xt register operand:
+	// ialluis/iallu take none, ivau takes one.
+	NeedsXt bool
+}
+
+// icOps maps the canonical IC op name to its encoding.
+var icOps = map[string]ICOp{
+	"ialluis": {Op1: 0, CRm: 1, Op2: 0, NeedsXt: false},
+	"iallu":   {Op1: 0, CRm: 5, Op2: 0, NeedsXt: false},
+	"ivau":    {Op1: 3, CRm: 5, Op2: 1, NeedsXt: true},
+}
+
+// atIcKey indexes the AT/IC reverse tables by their (op1, CRm, op2)
+// encoding (CRn is fixed at 7 and so omitted).
+type atIcKey struct{ Op1, CRm, Op2 byte }
+
+var (
+	atNames map[atIcKey]string
+	icNames map[atIcKey]string
+)
+
+// ATName returns the AT op name for an (op1, CRm, op2) tuple, with a
+// NeedsXt flag; ok=false if unrecognised. Reverse of the atOps table.
+func ATName(op1, crm, op2 byte) (name string, needsXt, ok bool) {
+	if atNames == nil {
+		atNames = make(map[atIcKey]string, len(atOps))
+		for n, op := range atOps {
+			atNames[atIcKey{op.Op1, op.CRm, op.Op2}] = n
+		}
+	}
+	n, found := atNames[atIcKey{op1, crm, op2}]
+	if !found {
+		return "", false, false
+	}
+	return n, atOps[n].NeedsXt, true
+}
+
+// ICName returns the IC op name for an (op1, CRm, op2) tuple, with a
+// NeedsXt flag; ok=false if unrecognised. Reverse of the icOps table.
+func ICName(op1, crm, op2 byte) (name string, needsXt, ok bool) {
+	if icNames == nil {
+		icNames = make(map[atIcKey]string, len(icOps))
+		for n, op := range icOps {
+			icNames[atIcKey{op.Op1, op.CRm, op.Op2}] = n
+		}
+	}
+	n, found := icNames[atIcKey{op1, crm, op2}]
+	if !found {
+		return "", false, false
+	}
+	return n, icOps[n].NeedsXt, true
+}
+
+// BarrierOption names a DMB/DSB barrier-limit selected by the 4-bit CRm
+// field. Most names are shared by dmb and dsb; CRm 0 (ssbb) and 4
+// (pssbb) are dsb-only — dmb prints the numeric form there. Reference:
+// the option enumeration verified against objdump in aarch64dec/sys.go.
+type BarrierOption struct {
+	Name string
+	// DsbOnly is true for options dsb names but dmb does not (ssbb,
+	// pssbb).
+	DsbOnly bool
+}
+
+// barrierOptions maps the 4-bit CRm field to its barrier-limit keyword.
+// CRm values absent from the map have no keyword (the disassembler
+// prints #0xNN).
+var barrierOptions = map[byte]BarrierOption{
+	0:  {Name: "ssbb", DsbOnly: true},
+	1:  {Name: "oshld"},
+	2:  {Name: "oshst"},
+	3:  {Name: "osh"},
+	4:  {Name: "pssbb", DsbOnly: true},
+	5:  {Name: "nshld"},
+	6:  {Name: "nshst"},
+	7:  {Name: "nsh"},
+	9:  {Name: "ishld"},
+	10: {Name: "ishst"},
+	11: {Name: "ish"},
+	13: {Name: "ld"},
+	14: {Name: "st"},
+	15: {Name: "sy"},
+}
+
+// BarrierOptionName returns the barrier-limit keyword for a 4-bit CRm
+// field. ok=false when CRm names no option (the caller prints #0xNN), or
+// when the option is dsb-only and isDsb is false. Forward lookup over
+// the barrierOptions table.
+func BarrierOptionName(crm byte, isDsb bool) (name string, ok bool) {
+	opt, found := barrierOptions[crm]
+	if !found || (opt.DsbOnly && !isDsb) {
+		return "", false
+	}
+	return opt.Name, true
+}
+
+// ATOps returns a copy of the AT-op-name → ATOp map for the generator.
+func ATOps() map[string]ATOp {
+	out := make(map[string]ATOp, len(atOps))
+	for k, v := range atOps {
+		out[k] = v
+	}
+	return out
+}
+
+// ICOps returns a copy of the IC-op-name → ICOp map for the generator.
+func ICOps() map[string]ICOp {
+	out := make(map[string]ICOp, len(icOps))
+	for k, v := range icOps {
+		out[k] = v
+	}
+	return out
+}
+
+// BarrierOptions returns a copy of the CRm → BarrierOption map for the
+// generator.
+func BarrierOptions() map[byte]BarrierOption {
+	out := make(map[byte]BarrierOption, len(barrierOptions))
+	for k, v := range barrierOptions {
 		out[k] = v
 	}
 	return out
