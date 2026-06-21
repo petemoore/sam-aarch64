@@ -153,6 +153,26 @@ func (m *mem) poke(addr uint16, value uint8) {
 	m.pager.Set(addr, value)
 }
 
+// readPhysical reads n bytes from physical RAM starting at the given page (0-31)
+// and in-page offset, walking forward across consecutive pages (the SAM's linear
+// physical address space: page p offset 16383 is followed by page p+1 offset 0).
+// It bypasses LMPR/HMPR paging — the bytes come from the named physical page
+// regardless of the live mapping, as HSAVE's UIFA names the source page directly.
+// The read is clamped to the end of RAM (32×16 KB); any bytes past it read as zero.
+func (m *mem) readPhysical(page byte, offset uint16, n int) []byte {
+	out := make([]byte, n)
+	base := int(page)*sampage.PageSize + int(offset)
+	for i := 0; i < n; i++ {
+		pa := base + i
+		pg := pa / sampage.PageSize
+		if pg >= sampage.NumPages {
+			break // past the end of RAM; remaining bytes stay zero
+		}
+		out[i] = m.pager.RAM[pg][pa%sampage.PageSize]
+	}
+	return out
+}
+
 func (m *mem) Get(addr uint16) uint8 {
 	// Keyboard-sysvar intercept (i138): when keys are queued, present FLAGS
 	// bit 5 (key-available) set and LASTK = head of queue.  The inlined KYIP2
