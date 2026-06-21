@@ -119,6 +119,42 @@ only chooses *which record boots*.
 A config editor (host-side and/or on-SAM) lets the default boot record be set —
 the "BIOS setup" equivalent.
 
+### The concrete config format (i176)
+
+> **This is the single home for the BIOS config byte layout + chunk name.** The
+> Z80 reader (`src/netboot/samboot_config.asm`), the host editor
+> (`tools/netboot-oracle/cmd/samboot-config`), and the injection prototype (i135d)
+> all reference *this* — they do not restate it.
+
+**Chunk name.** `"SAMBOOT Config  "` — a named chunk found by name via
+`eeprom.asm` `find_index` (like `"Trinity Network "`), *not* a fixed chunk number
+(the real-card layout is unknown; a named chunk is found wherever it lives). The
+name is space-padded to **exactly 16 bytes**: `SAMBOOT Config` (14) + **two**
+trailing spaces (a single trailing space is only 15 bytes).
+
+**Payload** (byte offsets into the chunk's 1 KB data; the rest is reserved `0`):
+
+| Offset | Bytes | Field | Meaning |
+|---|---|---|---|
+| 0 | 1 | version | format version, currently `0x01` |
+| 1 | 1 | mode | `0x00` = none (no auto-boot, wait for user); `0x01` = auto-boot record N |
+| 2–3 | 2 | record | record number, 16-bit **little-endian** (meaningful only when mode = 1) |
+| 4… | — | reserved | all `0` |
+
+**Reader semantics.** The result is **"no auto-boot"** (fall through to a normal
+boot) if the `"SAMBOOT Config  "` chunk is absent (`find_index` miss), OR the
+version is unrecognised, OR mode ≠ 1. Only **version 1 with mode 1** yields
+"auto-boot record N". The Z80 reader `samboot_read_config` returns this as
+`A = 0/1` (no-auto-boot / auto-boot) with the record number in `HL` when `A = 1`
+(and CY mirroring A); i135d calls it at the §3 hook site.
+
+**Scope of i176.** The format + the Z80 reader + the host encode/decode editor,
+all emulation-tested (the host editor encodes a config into the chunk bytes; the
+harness programs those bytes into the emulated EEPROM under the chunk name and the
+real reader decodes them back). The actual **flash of the chunk to a real EEPROM**
+(via the Trinity `write_chunk` routine) is the inherently-hardware destructive
+path — it happens at i135c, and is **out of scope** for i176.
+
 ## 5. What is already built (the transport)
 
 Most of the network transport the loop needs already exists and is host-verified;

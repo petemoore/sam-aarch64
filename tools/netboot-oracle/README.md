@@ -42,6 +42,12 @@ an end-to-end Pi boot, which stay gated on i80 / real Trinity.
   order at serve time — the i99/q16 authority the Z80 `fw_span.asm` mirrors).
   Models the field maths only — the RST 8 hook dispatch is NOT host-verifiable
   (no ROM in the harness) and stays gated on real Trinity.
+- `samboot` — the SAMBOOT BIOS config (i176): the host authority for the
+  editable default-boot-record setting (`Config.Encode`/`Decode`) the patched
+  bootblock reads from the `"SAMBOOT Config  "` Trinity EEPROM chunk to decide
+  whether to auto-boot a record at power-on. `cmd/samboot-config` is the host
+  "BIOS setup" editor; the Z80 reader is `src/netboot/samboot_config.asm`
+  (`z80/samboot_config_test.go` round-trips them). Format: `docs/specs/samboot.md` §4.
 - `pcap` — dependency-free libpcap/pcapng reader. `golden` — masked vectors.
 - `z80/` — a nested Go module: a flat-memory koron-go/z80 harness that runs the
   SAM-side Z80 port (`src/netboot/*.asm`) and byte-compares its output against

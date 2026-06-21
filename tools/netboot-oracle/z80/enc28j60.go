@@ -399,6 +399,28 @@ func (e *ENC28J60) ProgramTrinityNetwork(mac [6]byte, ip [4]byte) {
 	e.eep.write(eepChunkBase, chunk)
 }
 
+// ProgramNamedChunk lays out a NAMED EEPROM chunk so the real eeprom.asm
+// find_index (for `name`, part=1 total=1) returns its chunk number and a
+// subsequent read_chunk reads `data` — the general form of
+// ProgramTrinityNetwork, used by samboot_config_test.go to place the
+// "SAMBOOT Config  " BIOS config chunk. value is the 1-based chunk number to give
+// it: the index entry lands at slot value-1 (addr (value-1)*64), so find_index
+// matches it as `value`, and read_chunk reads chunk base eepChunkBase +
+// (value-1)*1024 (== ProgramChunk(value, data)). name should be 16 bytes (it is
+// copied into the 16-byte name field; longer is truncated, shorter is space-
+// padding the caller must include). data may be shorter than 1024 (the rest stays
+// zero, modelling unprogrammed cells).
+func (e *ENC28J60) ProgramNamedChunk(value int, name string, data []byte) {
+	// Index entry at slot value-1: part 1, total 1, then the 16-byte name.
+	entry := make([]byte, eepIndexStride)
+	entry[0] = 1 // part
+	entry[1] = 1 // total
+	copy(entry[2:18], name)
+	e.eep.write((value-1)*eepIndexStride, entry)
+	// Chunk data at this value's flat base.
+	e.ProgramChunk(value, data)
+}
+
 // ProgramChunk lays a 1 KB data chunk at the flat EEPROM address eeprom.asm's
 // read_chunk reads for chunk number n (the value passed in `value`). get_chunk
 // maps n to flat address (28 + n*4)<<8, so chunk n lives n*1024 bytes above
