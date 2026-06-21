@@ -282,7 +282,7 @@ func Flatten(records []format.Record, names []string, opts FlattenOptions) ([]fo
 	//    release.img.
 	for i := 2; i < len(sections); i++ {
 		s := sections[i]
-		labels, err := sectionLabels(s.records, s.layout.Name, names, globalSymbols)
+		labels, err := sectionLabels(s.records, names, globalSymbols)
 		if err != nil {
 			return nil, fmt.Errorf("flatten: labels in %s: %w", s.layout.Name, err)
 		}
@@ -394,7 +394,7 @@ type labelOffset struct {
 // constants in the input (collected by the global pre-pass) — entries
 // from this section may shadow them, but in practice spectrum4 does
 // not redefine constants per-section.
-func sectionLabels(records []format.Record, sectionName string, names []string, globalSymbols map[string]int64) ([]labelOffset, error) {
+func sectionLabels(records []format.Record, names []string, globalSymbols map[string]int64) ([]labelOffset, error) {
 	var labels []labelOffset
 	// Start from a copy of globalSymbols so that this section's own
 	// `.equ`s can shadow without mutating the caller's map.
