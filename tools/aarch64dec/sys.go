@@ -89,48 +89,13 @@ func decodeBarrier(word uint32) (string, string, bool) {
 	return "", "", false
 }
 
-// barrierOption maps the 4-bit CRm option for dsb/dmb to its keyword.
-// The shared table (verified by enumerating objdump over all 16 CRm):
-//
-//	1 oshld  2 oshst  3 osh   5 nshld  6 nshst  7 nsh
-//	9 ishld 10 ishst 11 ish  13 ld   14 st    15 sy
-//
-// dsb additionally names CRm 0 → ssbb and CRm 4 → pssbb; dmb prints
-// `#0x00` / `#0x04` there.  Any CRm with no name prints `#0xNN`.
+// barrierOption maps the 4-bit CRm option for dsb/dmb to its keyword,
+// deferring to the format package's option table (the single source of
+// truth shared with the Z80 disassembler).  A CRm with no keyword — or a
+// dsb-only option (ssbb/pssbb) seen on dmb — prints `#0xNN`.
 func barrierOption(crm uint32, isDsb bool) string {
-	switch crm {
-	case 1:
-		return "oshld"
-	case 2:
-		return "oshst"
-	case 3:
-		return "osh"
-	case 5:
-		return "nshld"
-	case 6:
-		return "nshst"
-	case 7:
-		return "nsh"
-	case 9:
-		return "ishld"
-	case 10:
-		return "ishst"
-	case 11:
-		return "ish"
-	case 13:
-		return "ld"
-	case 14:
-		return "st"
-	case 15:
-		return "sy"
-	case 0:
-		if isDsb {
-			return "ssbb"
-		}
-	case 4:
-		if isDsb {
-			return "pssbb"
-		}
+	if name, ok := format.BarrierOptionName(byte(crm), isDsb); ok {
+		return name
 	}
 	return fmt.Sprintf("#%#02x", crm)
 }
@@ -231,10 +196,11 @@ func pstateName(op1, op2 uint32) (string, bool) {
 // sysInstrName resolves a SYS-instruction (op1,CRn,CRm,op2) tuple to its
 // mnemonic + op name + whether it carries an Xt operand.  CRn selects
 // the family: CRn 8 → tlbi, CRn 7 → dc / at / ic (CRm disambiguates).
-// dc/tlbi names come from the format package's reverse tables (single
-// source of truth with the encoder); at / ic use the canonical ARM
-// encodings inline (the encoder doesn't emit them and they don't occur
-// in release.img, but decoding them keeps parity with objdump).
+// All four families (dc/tlbi/at/ic) name their op from the format
+// package's reverse tables — the single source of truth shared with the
+// encoder and projected into the Z80 disassembler's option tables.  (The
+// encoder doesn't emit at/ic and they don't occur in release.img, but
+// decoding them keeps parity with objdump.)
 func sysInstrName(op1, crn, crm, op2 byte) (mnem, name string, needsXt, ok bool) {
 	switch crn {
 	case 8: // TLBI
@@ -245,58 +211,12 @@ func sysInstrName(op1, crn, crm, op2 byte) (mnem, name string, needsXt, ok bool)
 		if n, xt, found := format.DCName(op1, crn, crm, op2); found {
 			return "dc", n, xt, true
 		}
-		if n, xt, found := atName(op1, crm, op2); found {
+		if n, xt, found := format.ATName(op1, crm, op2); found {
 			return "at", n, xt, true
 		}
-		if n, xt, found := icName(op1, crm, op2); found {
+		if n, xt, found := format.ICName(op1, crm, op2); found {
 			return "ic", n, xt, true
 		}
 	}
 	return "", "", false, false
-}
-
-// atName resolves an AT (address-translate) op (CRn=7, CRm 8/9).
-// ARM ARM C5.3.1.  All AT ops take an Xt operand.
-func atName(op1, crm, op2 byte) (string, bool, bool) {
-	switch {
-	case crm == 8 && op1 == 0 && op2 == 0:
-		return "s1e1r", true, true
-	case crm == 8 && op1 == 0 && op2 == 1:
-		return "s1e1w", true, true
-	case crm == 8 && op1 == 0 && op2 == 2:
-		return "s1e0r", true, true
-	case crm == 8 && op1 == 0 && op2 == 3:
-		return "s1e0w", true, true
-	case crm == 8 && op1 == 4 && op2 == 0:
-		return "s1e2r", true, true
-	case crm == 8 && op1 == 4 && op2 == 1:
-		return "s1e2w", true, true
-	case crm == 8 && op1 == 4 && op2 == 4:
-		return "s12e1r", true, true
-	case crm == 8 && op1 == 4 && op2 == 5:
-		return "s12e1w", true, true
-	case crm == 8 && op1 == 4 && op2 == 6:
-		return "s12e0r", true, true
-	case crm == 8 && op1 == 4 && op2 == 7:
-		return "s12e0w", true, true
-	case crm == 8 && op1 == 6 && op2 == 0:
-		return "s1e3r", true, true
-	case crm == 8 && op1 == 6 && op2 == 1:
-		return "s1e3w", true, true
-	}
-	return "", false, false
-}
-
-// icName resolves an IC (instruction-cache) op (CRn=7, CRm 1/5).
-// ARM ARM C5.3.10.  ialluis / iallu take no Xt; ivau takes Xt.
-func icName(op1, crm, op2 byte) (string, bool, bool) {
-	switch {
-	case crm == 1 && op1 == 0 && op2 == 0:
-		return "ialluis", false, true
-	case crm == 5 && op1 == 0 && op2 == 0:
-		return "iallu", false, true
-	case crm == 5 && op1 == 3 && op2 == 1:
-		return "ivau", true, true
-	}
-	return "", false, false
 }
