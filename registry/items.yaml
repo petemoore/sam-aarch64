@@ -3869,3 +3869,11 @@
   depends_on: [i225]
   kind: leaf
   owner: pete
+
+- id: i228
+  title: "Runtime emulation-vs-hardware detection via IN-probe of an unmapped port (di;halt in emulation, RET to trinload on hardware)"
+  description: |
+    Pete's design (2026-06-23): a test binary must di;halt in emulation (launch-independent clean stop) but RET to trinload on real hardware so trinload survives for the next pushed test (autonomous loop, no power-cycle). Runtime probe: IN a port unmapped on the SAM (stable floating-bus value on hardware); the emulator IO model returns a distinct marker on that port. Terminator: marker -> di;halt else RET, folded into test_report.asm. STEP A (dogfoods i225): a port-characterization probe reports candidate low ports' hardware values over the network; pick port+marker. STEP B: emulator marker + terminator + tests. Probe ports avoid read-side-effect peripherals (Pete blesses the list first).
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
