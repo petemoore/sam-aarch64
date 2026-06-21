@@ -404,8 +404,13 @@ gracefully than trailing comments — a real argument the prototype will test.
   is the upside *if* the 6-px font survives the readability sheets — which is
   precisely what P1 produces. MODE 3's 4 colours suffice for an editor
   (text/comment/status/error); trading colours for columns is the right
-  default for a text tool, and i6 stays open until the sheets + lived use
-  decide it.
+  default for a text tool.
+  **DECIDED (i6 — Pete 2026-06-21): MODE 3 (64×24, `mode3-8x8`) is the
+  editor's screen mode.** Settled directly rather than awaiting the empirical
+  sheets; the 64-column geometry the prototype already defaults to is now the
+  committed choice. The 85-column MODE 3 6-px upside remains available behind
+  the §3 geometry flag if the readability sheets later favour it — a font
+  tweak, not a mode change.
 - **R3 — mockup output as plain PNG by default**, scanline-CRT variant behind
   a flag, plus the SCREEN$-on-`.mgt` route for ground truth in SimCoupé (the
   only fully honest readability test).
