@@ -30,8 +30,9 @@
 ; configured CSD and asserts BD_RECORDS is COMPUTED (not injected) and matches the
 ; Go reference. Emulation-verified is not hardware-verified (CLAUDE.md §5).
 ;
-; Included by netboot_serve.asm / netboot_client.asm. Depends on wait_ready
-; (encdrv.asm) and BD_RECORDS (bdos_seam.asm) — the including file pulls those in.
+; Included by netboot_serve.asm / netboot_client.asm. The SD byte path uses this
+; module's own bounded sdc_wait_ready (not the vendored encdrv.asm wait_ready);
+; depends on BD_RECORDS (bdos_seam.asm), which the including file pulls in.
 
 SDC_PORT:         equ &DC                       ; microcontroller select + status
 SDC_DATA:         equ &DF                       ; SD transparent SPI byte relay
