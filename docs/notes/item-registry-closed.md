@@ -362,3 +362,193 @@ first-class columns. The generated `.md` files are the source-of-truth views of
 | <a id="i261"></a>**i261** | **SAMBOOT auto-boot SD-record automation: prove the inject hooks + boots a record from the SD card in emulation** — WONTFIX — superseded by q55 (2026-06-26). Auto-boot SD-record automation for the SPLICE inject (abandoned). Auto-boot now lives in the LOCAL forked bootloader; its record-boot test moves to the sibling-dir project. | WONTFIX | agent |  |  |  |  |
 | <a id="i262"></a>**i262** | **Pre-flash provenance audit: EEPROM read+write and Trinity record-boot hardware-proven, and the inject reuses that EXACT code** — Pete (2026-06-25), pre-i135c-flash safety gate. Before patching the EEPROM, be 100% sure: (1) EEPROM READ is hardware-tested; (2) EEPROM WRITE is hardware-tested (standalone trinload, free-space only, NOT replacing the bootloader); (3) booting a disk image from a Trinity SD record is hardware-tested. Each must cite the completed iN item + where the working code lives. CRITICAL: confirm the faithful inject (samboot_config.asm/eeprom.asm reader: find_index/check_index/read_chunk/get_chunk/eeprom_enable; bdos_seam.asm bdos_boot_record/bdos_select_record) reuses EXACTLY that proven code, reinventing none of the mechanics. Gate for i135c. Test everything in emulation before hardware. | DONE | agent |  |  |  |  |
 | <a id="i264a"></a>**i264a** | **Config-driven boot + hold-ESC manual-control escape + record-3 fallback (Increment 1, emulation-verified)** — DONE (emulation-verified, 2026-06-26). Replaced the BOOT_RECORD=3 hardcode in the forked bootloader's decision with: hold ESC at power-on (ROM BRKTST scan, row &F7 / STATPORT &F9 bit 5, valid at bootblock DI time) -> manual control (opening screen -> BASIC); else -> config-driven auto-boot via the read_config path, falling back to BOOT_RECORD (3) when no SAMBOOT Config chunk exists (preserves today's auto-boot trinload). One jump at decision &415E; Colin's verbatim region untouched (make verify byte-identical). Verified in trinity_autoboot_verify_test.go (-tags trinityboot): ESC-held->no-boot opening screen; no-config->fallback 3; config->auto-boots that record. Built in ~/git/trinity-autoboot (commit 7c24a12, private). Hardware re-flash of the updated bootloader rides the i266/Pete-present gate. | DONE | agent | [#687](https://github.com/petemoore/sam-aarch64/pull/687) |  |  |  |
+
+## Tree view — umbrella hierarchy
+
+- [i2](#i2) — `DONE` — On-SAM IDE memory model (edit buffer + IN/OUT paging; claim all free RAM, grow on demand)
+  - [i2a](#i2a) — `DONE` — Page allocator core: page_owner[] + alloc_page/free_page (Go authority + Z80 port, host-verified)
+  - [i2b](#i2b) — `DONE` — Wire the page pool into the production assembler boot path: boot-time sizing + resident pool + paged boot self-test
+- [i4](#i4) — `DONE` — Basic read-only listing/scroll viewer (centre-locked cursor; up/down only)
+  - [i4a](#i4a) — `DONE` — Viewport/scroll state machine: centre-locked cursor + line/page nav (Z80 port of viewer.View, host-verified)
+- [i12](#i12) — `DONE` — SimCoupé + test-harness tooling improvements
+  - [i12a](#i12a) — `DONE` — SimCoupé v1.2.16 bump (pin SHA to upstream, drop vendored -exitonhalt patch)
+  - [i12b](#i12b) — `DONE` — Editor-testing input injection (SimCoupé -keyin end-to-end proof)
+  - [i12c](#i12c) — `DONE` — Rebase/upstream macOS+Linux paste support
+- [i21](#i21) — `DONE` — Go-harness fidelity follow-ups: make harness-sweep, USAGE.md, memory watchpoint
+  - [i21a](#i21a) — `DONE` — Go-harness: harness-sweep target + USAGE.md
+  - [i21b](#i21b) — `WONTFIX` — Go-harness memory watchpoint
+- i25 — `OPEN` — File-I/O error handler via DOSER (&5BC0)
+  - [i25a](#i25a) — `DONE` — Harness: model DOSER (&5BC0) post-hook dispatch (correct i183's (hksp) vector)
+- i27 — `OPEN` — Cortex-A53 errata workarounds (--fix-cortex-a53-*)
+  - [i27a](#i27a) — `DONE` — i27a: Go authority — Cortex-A53 835769 + 843419 errata detection/fix + --fix-cortex-a53-* flags + binutils cross-check
+- [i39](#i39) — `DONE` — Next-gen maximally-efficient compact .tbn encoding (the design)
+  - [i39a](#i39a) — `DONE` — M8 Phase 1 — instruction overlay + header label/offset table; the v2 format flip
+  - [i39b](#i39b) — `DONE` — M8 Phase 2 — name-table front-coding + editor-region split for compact .tbn v2
+- i41 — `OPEN` — Editor edit-buffer data structure — insertion performance for large source
+  - [i41a](#i41a) — `DONE` — Editor edit-model — core paged block-list + cleanly-separable serialize/load seam
+  - [i41b](#i41b) — `DONE` — Editor edit-model — bounded ring-journal undo/redo
+  - [i41c](#i41c) — `DONE` — Editor edit-model — real v2 .tbn serialize seam
+  - [i41d](#i41d) — `DONE` — Editor edit-model — Z80 port of the paged block-list (on-SAM)
+- i48 — `OPEN` — Single serialized format + pass-free syntactic encoder (the design)
+  - [i48a](#i48a) — `DONE` — Host front-end unification — factor encoder/assembler/renderer as shared Go libs
+  - [i48b](#i48b) — `DONE` — Syntactic encoder + fold-time value-work
+  - i48c — `OPEN` — Z80 text→overlay encoder (editor input path)
+    - [i48c-b1](#i48c-b1) — `DONE` — Lexer core — tokenizer kind/span/base + literal types + local-label refs + string literals
+    - [i48c-b2](#i48c-b2) — `DONE` — Simple-inst parse → INST record (mnemonic table + reg/reg/reg + reg/reg/#imm)
+    - [i48c-b3](#i48c-b3) — `DONE` — Expression parser — precedence→expr bytecode (full arithmetic grammar + symbol-intern + PC/reloc primaries)
+    - [i48c-b4](#i48c-b4) — `DONE` — Operand suffixes — memory operands (7 [...] shapes), register shift/extend suffix, condition-code operand
+    - [i48c-b5](#i48c-b5) — `DONE` — Label-def + local-def parse (foo: / 1: statement-leading)
+    - [i48c-b5a](#i48c-b5a) — `DONE` — movk/movz/movn special-form (#imm16 [, lsl #N], hw=N/16 folded into bits[17:16], range-checked)
+    - [i48c-b5b](#i48c-b5b) — `DONE` — movl pseudo (movz+movk expansion / :abs_g0_nc:+:abs_g1:)
+    - [i48c-b5c](#i48c-b5c) — `DONE` — Barriers dsb/dmb/isb (barrier-arg keyword→CRm)
+    - [i48c-b5d](#i48c-b5d) — `DONE` — mrs/msr — sysreg/PSTATE name→OpSysName
+    - [i48c-b5e](#i48c-b5e) — `DONE` — dc/tlbi — op-name + optional Xt
+    - [i48c-b5f](#i48c-b5f) — `DONE` — ldr = literal-pool pseudo (OpLitPool)
+    - [i48c-b6](#i48c-b6) — `DONE` — Directives parser
+    - [i48c-b7](#i48c-b7) — `DONE` — Parse comment and blank-run record types
+    - i48c-b8 — `OPEN` — Integration/fixture round-trip (assembler-coupled, lands last)
+      - [i48c-b8a](#i48c-b8a) — `DONE` — Z80 Pass1-over-IR: PC assignment + label/local position capture + symbol resolution
+      - [i48c-b8b](#i48c-b8b) — `DONE` — Compact non-encoder core: LIT_DATA + sidecar + globals + PC walk (flat harness)
+  - [i48d](#i48d) — `DONE` — Doc unification — bring tbn-binary-format-reference.md to v2 overlay-only format
+- [i74](#i74) — `DONE` — i7 phase D — at/ic/barrier operand-table codegen from the Go authority
+  - [i74a](#i74a) — `DONE` — i74a: Go code->data refactor of aarch64dec/sys.go at/ic/barrier switches
+  - [i74b](#i74b) — `DONE` — i74b: tables-gen at/ic/barrier emitter + generated Z80 disasm.asm tables
+- [i76](#i76) — `DONE` — Host-side Go TUI editor prototype at SAM-faithful geometry — the functional UX authority for the Phase-2 editor
+  - [i76a](#i76a) — `DONE` — P1a: samscreen abstraction, tcell backend, PNG/SCREEN$ mockup, i4-parity viewer, -geometry matrix
+  - [i76b](#i76b) — `DONE` — P1b font-proof: five-pixel-font vendored; make font-proof screenshots 85×32 (6×6) vs 64×24 (ROM 8×8)
+  - [i76c](#i76c) — `DONE` — P2 config-lab: tools/editor-prototype -config rendering lab over the real release .tbn at locked MODE 3 64×24
+  - [i76d](#i76d) — `DONE` — Rendering-rules spec landed; default-config recommendation tracked as q13
+- i81 — `OPEN` — Upstream SimCoupé issue triage — review open issues and assist where we can
+  - [i81b](#i81b) — `DONE` — Comment on upstream SimCoupé issue #28 offering our CI pass/fail idiom
+- [i87](#i87) — `DONE` — Dump + reverse-engineer Pete's patched SAM ROM (Phase-3)
+  - [i87a](#i87a) — `DONE` — SAMBOOT: run the one-shot dumper on the SAM to capture rom.bin + eeprom.bin
+    - [i87a-b1](#i87a-b1) — `DONE` — Capture eeprom.bin (full 128 KB pre-flash backup) + rom0.bin from the real SAM
+    - [i87a-b2](#i87a-b2) — `DONE` — Recapture rom1.bin (patched ROM high 16 KB) after the dumper redesign
+  - [i87b](#i87b) — `DONE` — SAMBOOT: document the SAM boot chain from the captured ROM/EEPROM + public source
+- i88 — `OPEN` — On-SAM HTTPS/TLS-1.3 client to fetch Pi firmware directly from GitHub
+  - [i88a](#i88a) — `DONE` — i88 6a — host-verifiable TLS-1.3 client: all crypto primitives + handshake bricks 1–5 + brick-6a state machine
+  - [i88b](#i88b) — `DONE` — i88 6b — TLS-record reassembler: host-verifiable wire framing layer
+- i89 — `OPEN` — Capture a Pi 3 netboot exchange (Phase-3) — extend i83/i86 oracle to the older Pi family
+  - [i89a](#i89a) — `DONE` — Extend the netboot oracle to the Pi 3 family from the known file set + authoritative DHCP findings
+- i93 — `OPEN` — Phase-3 netboot B-DOS storage seam (bdos_seam.asm) — name-to-record glue
+  - [i93a](#i93a) — `DONE` — B-DOS seam arithmetic: bdos_name_to_uifa / bdos_difa_to_size / bdos_fill_save_uifa — host-verified
+- i95 — `OPEN` — Phase-3 netboot integrated server — single dispatch loop (ARP+DHCP+TFTP)
+  - [i95a](#i95a) — `DONE` — Integrated server dispatch loop (ARP+DHCP+TFTP) — Go authority + Z80 host-verified, bootable disk shipped
+- i100 — `OPEN` — Firmware-download provisioning UX — user-selectable revision and file subset
+  - [i100a](#i100a) — `DONE` — i100 http_main host slice — Go authority http.Provisioner + Z80 Bricks 1-6
+  - [i100b](#i100b) — `DONE` — i100 Brick 7 — bootable migration + real B-DOS HSAVE-per-record store leaf
+- [i102](#i102) — `DONE` — Aggressive T-state optimization of the netboot crypto / TLS-1.3 cipher-suite Z80
+  - [i102a](#i102a) — `DONE` — i102 measurement infra — cycle-exact T-state counter in koron-go/z80 harness
+  - [i102b](#i102b) — `DONE` — i102 SHA-256 speedups — short-distance rotations and redundant push/pop removal
+  - [i102c](#i102c) — `DONE` — i102 quarter-square 8x8 multiply — replaced shift-add loop with QSQ identity
+  - [i102d](#i102d) — `DONE` — i102 chacha20 redundant push/pop removal — cc_add/cc_xor callers already reload HL/DE
+  - [i102e](#i102e) — `DONE` — i102 x25519 structural opts — fe_sqr, fe_mul121665, IX/IY pointer hold
+  - [i102f](#i102f) — `DONE` — i102 x25519 Karatsuba field multiply — one level of Karatsuba over 32x32->64 schoolbook
+  - [i102g](#i102g) — `DONE` — i102 mul8 micro-opts — drop internal push de/pop hl and dead ld d,0 before calls
+  - [i102h](#i102h) — `DONE` — i102 chacha20 register-based rotates — cc_rotl16/cc_rotl8 use registers, not cc_tmp4
+  - [i102i](#i102i) — `DONE` — i102 x25519 schoolbook carry in a register — ride carry in C through push bc/pop bc
+  - [i102j](#i102j) — `DONE` — i102 mul8 page-aligned table index — high-byte-only address formation for qsq_table
+  - [i102k](#i102k) — `DONE` — i102 reduction/constant-multiply carry in a register — fe_mul38_high and fe_121665_inner
+  - [i102l](#i102l) — `DONE` — i102 mul8 inlined at the two hottest x25519 sites — kmul16_inner and fe_sqr_inner
+  - [i102m](#i102m) — `DONE` — i102 sha256 throughput rewrite for the firmware-verify path
+    - [i102n](#i102n) — `DONE` — i102 sha256 register-oriented rewrite — increment 1 (729,795->418,843 T/block, -42.6%)
+    - [i102o](#i102o) — `DONE` — i102 sha256 8x circular-renaming unroll — increment 2 (418,843->377,371 T/block, -9.9%)
+    - [i102p](#i102p) — `DONE` — i102 sha256 inline Ch/Maj — increment 3 (377,371->346,267 T/block, -8.2%)
+    - [i102q](#i102q) — `DONE` — i102 sha256 increment 4 — alternating sha_tmpa forward/backward walk (-1.0%)
+    - [i102r](#i102r) — `DONE` — i102 sha256 increment 5 — register-accumulator round (342,747->315,355 T/block, -8.0%)
+    - [i102s](#i102s) — `DONE` — i102 sha256 message-schedule extend loop — BCDE accumulate in add4_body (~2% gain)
+- [i107](#i107) — `DONE` — Registry status-cell discipline (process rule + retroactive sweep)
+  - [i107a](#i107a) — `DONE` — Status-discipline process rule (go-forward codification)
+  - [i107b](#i107b) — `DONE` — Retroactive status-cell sweep — split over-long rows into sub-items
+- [i113](#i113) — `DONE` — Scrape, QA, and integrate the recovered Trinity documentation
+  - [i113a](#i113a) — `DONE` — capture, OCR scrape, QA + discovery pipeline
+  - [i113b](#i113b) — `DONE` — photo-verify flagged data + fold verified facts into trinity-capabilities.md
+- [i114](#i114) — `DONE` — Netboot serve manifest + record-allocation strategy
+  - [i114a](#i114a) — `DONE` — Serve manifest (Go authority): text format + parser + manifest-backed name→record resolve
+  - [i114b](#i114b) — `DONE` — Netboot storage-allocation strategy: header policy (first-free / fixed-list / highest-free)
+  - [i114c](#i114c) — `DONE` — Netboot storage classes: flat-file vs trinity-sam-disks bootable raw-record (validate + HWSAD write seam)
+  - [i114d](#i114d) — `DONE` — Content-addressed span-record naming + reference-sharing dedup
+- [i115](#i115) — `DONE` — Registry as structured source — YAML-backed iN/qN registry with CLI validator + CI sync-check
+  - [i115a](#i115a) — `DONE` — Registry structured-source Phase 1 — tool skeleton
+  - [i115b](#i115b) — `DONE` — Registry structured-source Phase 2 — generator + banner + header templates
+  - [i115c](#i115c) — `DONE` — Registry structured-source Phase 3 — CLI mutators
+  - [i115d](#i115d) — `DONE` — Registry structured-source Phase 4 — migration + cutover
+  - [i115e](#i115e) — `DONE` — Registry structured-source Phase 5 — doc/automation rewiring
+  - [i115f](#i115f) — `DONE` — Registry structured-source — audited content reshape
+  - [i115g](#i115g) — `DONE` — Registry structured-source — priority queue + ready/prioritize on top of the dependency DAG
+- i118 — `OPEN` — i82 TFTP client — OACK handling / standard-TFTP-server interop
+  - [i118a](#i118a) — `DONE` — OACK handling code — Go/Z80/host-side compliance (PR #422)
+- i119 — `OPEN` — i82 TFTP client — persistence write-out on real hardware
+  - [i119a](#i119a) — `DONE` — B1 — record-layer model + Z80 raw-sector read (harness CardModel)
+  - [i119b](#i119b) — `DONE` — B2 — per-record inspect primitive bdos_inspect_record (stamp@232 + disk-label@210)
+  - [i119c](#i119c) — `DONE` — B3 — card-absolute list-read: read list sectors 1..base-1, parse 16-byte entries, free ⇔ masked first-name-byte==0
+  - [i119d](#i119d) — `DONE` — B4 — record-selection UX: list / manual-pick / auto-pick-free + show-name + overwrite-confirm
+  - [i119e](#i119e) — `DONE` — B5 — wire into client_main (replace record-0=floppy bug) + full emulation E2E; HSAVE write-out hardware-gated
+  - [i141](#i141) — `DONE` — B3h — raw SD CMD17 card-absolute list-sector read on ports &DC-&DF (hardware gate for B3)
+  - [i144](#i144) — `DONE` — Harness HSAVE write-back model: persist captured bytes into CardModel sectors
+  - [i145](#i145) — `DONE` — SD CSD capacity read -> BD_RECORDS (hardware-gated)
+    - [i145a](#i145a) — `DONE` — CSD-read probe (emulation): author the trinload-pushable probe + prove init->CMD9->decode->serve vs the model
+    - [i145b](#i145b) — `DONE` — Production SD CSD read -> BD_RECORDS, wired into serve_main + client_main startup
+      - [i145b-b1](#i145b-b1) — `DONE` — CSD->BD_RECORDS decode + emulation proof (gated module + test); ship pending the boot-budget page-out
+      - [i145b-b2](#i145b-b2) — `DONE` — Ship the CSD read in the boot image: page it out of the &C000 window (ENCTAB-style) so BD_RECORDS computes at boot
+    - [i145c](#i145c) — `DONE` — Harness SD-SPI/CSD model — model the DC/DF seam + SD command state machine + configurable CSD
+    - [i145d](#i145d) — `DONE` — Full E2E emulation test — trinload -> push server -> push .mgt -> store, BD_RECORDS from modelled CSD (not injected)
+    - [i145e](#i145e) — `DONE` — POC: run Colin's real 1.5t CSD-decode + records-math against a hand-filled CSD buffer (no SPI)
+    - [i145f](#i145f) — `DONE` — Validate the SD-SPI model by running Colin's full 1.5t SD-init ladder (&A623 -> CMD9) against it
+    - [i145g](#i145g) — `DONE` — CSD probe HARDWARE run: push the emulation-proven probe to the real SAM, capture the real CSD
+    - [i145h](#i145h) — `DONE` — Extended validation: run Colin's write-record / select-record / read-back flow against the model
+- i120 — `OPEN` — Windowed TFTP (RFC 7440) for the netboot client/server — throughput optimization
+  - [i120a](#i120a) — `DONE` — Windowed TFTP (RFC 7440) in the Go oracle — the host authority for the later Z80 port
+- i121 — `OPEN` — SAM TFTP server — WRQ (write / accept-in) support: push disk images to the SAM, auto-slotted
+  - [i121a](#i121a) — `DONE` — WRQ parse + handshake (ACK-0 / OACK)
+  - [i121b](#i121b) — `DONE` — WRQ receive-to-staging (DATA->ACK loop)
+  - [i121d](#i121d) — `DONE` — Combined RRQ+WRQ bootable program + disk/Makefile/CI wiring
+  - [i121e](#i121e) — `DONE` — WRQ graceful termination — return control to trinload (sentinel + Esc escape)
+  - [i121f](#i121f) — `DONE` — WRQ disk-record push path — stream a pushed .mgt into a free bootable Trinity record (PRIMARY use case)
+  - [i121g](#i121g) — `DONE` — WRQ record-claim — write the Trinity record-list name entry so a pushed record is marked used (enables BATCH pushes)
+  - [i121h](#i121h) — `DONE` — Config-block strategy: vessel-agnostic free-record placement (highest/lowest/explicit) read at launch
+- [i122](#i122) — `DONE` — SAM fetch-and-boot (PXE-style): TFTP-client-fetch a disk image and boot it directly
+  - [i122a](#i122a) — `DONE` — Boot-a-record primitive: HRECORD-select + ALHK (hook 136) auto-load/run the record's AUTO file
+  - [i122b](#i122b) — `DONE` — Raw-record streaming write: i99 streaming sink -> HWSAD into one 819200-byte record
+  - [i122c](#i122c) — `DONE` — Fetch->validate->raw-write->boot orchestration entry + harness E2E
+  - [i122d](#i122d) — `WONTFIX` — sha256-dedup-before-fetch: skip fetch + boot existing copy if content hash already on card
+- i123 — `OPEN` — Investigate migrating the build from make to tup
+  - [i123a](#i123a) — `DONE` — Evaluate make->tup migration (recommendation + costs)
+- [i124](#i124) — `DONE` — Emulate full Trinity boot path so netboot boot wrappers run end-to-end in the harness
+  - [i124a](#i124a) — `DONE` — boot-path emulation — EEPROM + ROM1 model; smoke_main + client_main end-to-end (PR #423)
+  - [i124b](#i124b) — `DONE` — emulation completeness — PHY link-up model, SD/RST-8 stub, delete NETBOOT_HOSTTEST carve-outs
+- [i135](#i135) — `DONE` — Auto-boot a Trinity record on power-up — unsupervised end-to-end hardware automation
+  - [i135a](#i135a) — `DONE` — SAMBOOT: understand the Trinity EEPROM bootblock from public source + locate the boot-a-record injection hook
+  - [i135c](#i135c) — `DONE` — SAMBOOT: flash the patched EEPROM with backup/restore and confirm unattended auto-boot (answers the crux)
+  - [i135d](#i135d) — `DONE` — SAMBOOT: emulation-prototype the EEPROM bootblock injection (stripes + BIOS + boot-record); folds i112
+- [i169](#i169) — `DONE` — Adopt the 'needs Pete present' model (q32): ready --pete-present/--pete-away; decisions become questions
+  - [i169a](#i169a) — `DONE` — ready --pete-away (default, excludes owner:pete) / --pete-present (includes + prioritizes)
+  - [i169b](#i169b) — `DONE` — Presence semaphore: ready auto-includes owner:pete when a pete-present marker file exists
+- [i190](#i190) — `DONE` — One shared koron-z80 SAM-emulation core used by both Go harnesses (no duplicated impl; post-SAMBOOT)
+  - [i190a](#i190a) — `DONE` — Shared emulation core loads the extracted real ROM patch + EEPROM code/config for authentic Trinity emulation
+  - [i190b](#i190b) — `DONE` — Assembler harness delegates to shared sampage pager
+- [i191](#i191) — `DONE` — Meta: root-cause recurring backlog-incoherence (untracked deps on unfinished work) + assess instruction/doc bloat
+  - [i191a](#i191a) — `DONE` — registry CLI guards: warn on dep to a done-leaf-with-open-siblings + warn on splitting a DONE item
+  - [i191b](#i191b) — `DONE` — registry CLI: set-desc + set-title commands (no hand-edit of items.yaml)
+  - [i191c](#i191c) — `DONE` — registry workflow as an on-demand skill + CLAUDE.md registry-section de-bloat
+- [i197](#i197) — `DONE` — SAMBOOT: RE the captured on-card bootblock + re-derive the real injection hook (public boot.asm differs)
+  - [i197a](#i197a) — `DONE` — SAMBOOT: static RE of the captured on-card bootblock (real bootblock at EEPROM &0000; flat layout; candidate hook site)
+  - [i197c](#i197c) — `DONE` — SAMBOOT: emulation-trace the real boot to resolve static contradictions and finalize the injection site
+    - [i197c-b1](#i197c-b1) — `DONE` — SAMBOOT: verify in the i190a emulator that normal ROM cold-init runs before the chunk-1 handoff
+    - [i197c-b3](#i197c-b3) — `DONE` — SAMBOOT: finalize the injection site (the boot-entry 'contradiction' was an EEPROM-addressing bug)
+- [i201](#i201) — `DONE` — i48c-b8e-3: compound-form encoders (memory, shifted-reg, extended-reg, litpool + 3-reg/tst coercions)
+  - [i201a](#i201a) — `DONE` — i201a: shifted-reg + extended-reg + 3-reg/tst coercions (compound-form encoders)
+  - [i201b](#i201b) — `DONE` — i201b: memory compound-form encoder (encodeMemInst, 6 MemShape variants)
+  - [i201c](#i201c) — `DONE` — i201c: litpool compound-form encoder (ldr Xt,=expr)
+- [i203](#i203) — `DONE` — i48c-b8e-2: special-form encoders (shift/bitfield/bic-imm/csetm/barrier/ror/sysreg/mov-imm/ldr-lit/tbz)
+  - [i203a](#i203a) — `DONE` — i203a: shift/bitfield/ror special-form encoders (lsl/lsr/bfi/bfxil/ubfx/bfc/sbfx/ror)
+  - [i203b](#i203b) — `DONE` — i203b: bic-imm/csetm/barrier special-form encoders
+  - [i203c](#i203c) — `DONE` — i203c: system-register special-form encoders (mrs/msr/dc/tlbi)
+  - [i203d](#i203d) — `DONE` — i203d: mov-imm autoselect + ldr-lit-direct + tbz/tbnz special-form encoders
+- i204 — `OPEN` — i48c-b8e-4: overlayClassify + literalWord (overlay mirror + PC-invariance probe)
+  - [i204a](#i204a) — `DONE` — i48c-b8e-4a: close the Imm16 SlotKind (0x08) gap for udf
+- [i243](#i243) — `DONE` — Route all trinload-pushed di;halt sites through tr_terminate (i228) + document the technique
+  - [i243a](#i243a) — `DONE` — CSD probe error paths -> tr_terminate (not raw di;halt) + document the technique canonically
+  - [i243b](#i243b) — `DONE` — Audit + convert the OTHER trinload-pushed netboot di;halt sites to tr_terminate (http_main, client/server/serve, dumper, smoke)
+- i264 — `OPEN` — SAMBOOT selector firmware: hold-key-at-boot launches a record picker (choose boot record by number/name) instead of hardcoded record 3
+  - [i264a](#i264a) — `DONE` — Config-driven boot + hold-ESC manual-control escape + record-3 fallback (Increment 1, emulation-verified)

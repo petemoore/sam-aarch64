@@ -589,3 +589,54 @@ func TestGenInFileAnchorsAndLinks(t *testing.T) {
 		t.Errorf("open view should still show i42 and q9 as plain deps:\n%s", openOut)
 	}
 }
+
+// TestGenTreeView verifies the i160 umbrella tree: umbrella subtrees render
+// (standalone leaves do not), in-view nodes link to their anchor while a
+// structural ancestor in the other view stays plain, and an empty view says so.
+func TestGenTreeView(t *testing.T) {
+	items := []Item{
+		{ID: "i50", Title: "Umbrella", Status: StatusOpen, Kind: "umbrella", Owner: "agent"},
+		{ID: "i50a", Title: "Open child", Status: StatusOpen, Owner: "agent", Parent: "i50"},
+		{ID: "i50b", Title: "Done child", Status: StatusDone, Owner: "agent", Parent: "i50"},
+		{ID: "i51", Title: "Standalone leaf", Status: StatusOpen, Owner: "agent"},
+	}
+
+	// Open view: i50 (umbrella) + i50a + i51 are open; i50b is closed.
+	var open bytes.Buffer
+	genTreeView(items, presentIDs([]string{"i50", "i50a", "i51"}), &open)
+	openOut := open.String()
+	if !strings.Contains(openOut, "## Tree view") {
+		t.Errorf("tree header missing:\n%s", openOut)
+	}
+	if !strings.Contains(openOut, "[i50](#i50)") || !strings.Contains(openOut, "[i50a](#i50a)") {
+		t.Errorf("open tree should link the in-view umbrella + child:\n%s", openOut)
+	}
+	if strings.Contains(openOut, "i50b") {
+		t.Errorf("open tree must NOT show the done child i50b (not in view, no descendants):\n%s", openOut)
+	}
+	if strings.Contains(openOut, "i51") {
+		t.Errorf("open tree must NOT show the standalone leaf i51 (not part of a hierarchy):\n%s", openOut)
+	}
+
+	// Closed view: only i50b. Its umbrella i50 is open (no row here) but must
+	// still anchor the subtree as a PLAIN (unlinked) structural node.
+	var closed bytes.Buffer
+	genTreeView(items, presentIDs([]string{"i50b"}), &closed)
+	closedOut := closed.String()
+	if !strings.Contains(closedOut, "- i50 — ") {
+		t.Errorf("closed tree should show the umbrella i50 as a plain structural node:\n%s", closedOut)
+	}
+	if strings.Contains(closedOut, "[i50](#i50)") {
+		t.Errorf("closed tree must NOT link i50 (it has no row in the closed view):\n%s", closedOut)
+	}
+	if !strings.Contains(closedOut, "[i50b](#i50b)") {
+		t.Errorf("closed tree should link the in-view done child i50b:\n%s", closedOut)
+	}
+
+	// A view with no umbrella subtree says so.
+	var empty bytes.Buffer
+	genTreeView(items, presentIDs([]string{"i51"}), &empty)
+	if !strings.Contains(empty.String(), "_No umbrella hierarchies in this view._") {
+		t.Errorf("empty tree should emit the no-hierarchies note:\n%s", empty.String())
+	}
+}

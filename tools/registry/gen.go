@@ -214,6 +214,77 @@ func renderItemCell(it Item) string {
 	return "**" + title + "** — " + desc
 }
 
+// genTreeView appends a visual tree of the umbrella hierarchies (umbrella →
+// children → bricks) to w, below the table (i160). Only umbrella subtrees are
+// shown — standalone leaf items are not part of any hierarchy and already appear
+// in the table. A node is shown in a given view when it is in that view OR has a
+// descendant in it, so a child whose umbrella lives in the OTHER view still nests
+// under that umbrella (rendered as a structural node). Node ids that have a row in
+// THIS view (present) link to their in-file anchor (reusing i159's anchors); a
+// structural ancestor with no row here is rendered as plain text. Deterministic:
+// children and roots are walked in canonical id-sort order.
+func genTreeView(items []Item, present map[string]bool, w io.Writer) {
+	sorted := sortedItems(items)
+	byID := make(map[string]Item, len(sorted))
+	children := map[string][]string{}
+	for _, it := range sorted {
+		byID[it.ID] = it
+	}
+	for _, it := range sorted {
+		if it.Parent != "" {
+			children[it.Parent] = append(children[it.Parent], it.ID)
+		}
+	}
+
+	// visible(id): the node is in this view, or some descendant is — so an
+	// umbrella with at least one in-view child still anchors the subtree.
+	memo := map[string]bool{}
+	var visible func(id string) bool
+	visible = func(id string) bool {
+		if v, ok := memo[id]; ok {
+			return v
+		}
+		v := present[id]
+		for _, c := range children[id] {
+			if visible(c) {
+				v = true
+			}
+		}
+		memo[id] = v
+		return v
+	}
+
+	fmt.Fprint(w, "\n## Tree view — umbrella hierarchy\n\n")
+
+	var render func(id string, depth int)
+	render = func(id string, depth int) {
+		if !visible(id) {
+			return
+		}
+		it := byID[id]
+		label := id
+		if present[id] {
+			label = "[" + id + "](#" + id + ")"
+		}
+		fmt.Fprintf(w, "%s- %s — `%s` — %s\n",
+			strings.Repeat("  ", depth), label, renderItemStatus(it), escapeCell(it.Title))
+		for _, c := range children[id] {
+			render(c, depth+1)
+		}
+	}
+
+	any := false
+	for _, it := range sorted {
+		if it.Parent == "" && it.isUmbrella() && visible(it.ID) {
+			any = true
+			render(it.ID, 0)
+		}
+	}
+	if !any {
+		fmt.Fprint(w, "_No umbrella hierarchies in this view._\n")
+	}
+}
+
 // genItemsOpenClosed writes the open and closed item registry tables to their
 // respective writers. Spec §"Generator" — three views total (two item + one question).
 // The OPEN view carries a "gate" column (mirroring backlog.md's computeGates, i158)
@@ -263,6 +334,7 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 			)
 		}
 	}
+	genTreeView(items, openPresent, openW)
 
 	// Closed items (DONE or WONTFIX) — no gate column.
 	fmt.Fprint(closedW, generatedBannerItems)
@@ -282,6 +354,7 @@ func genItemsOpenClosed(reg *Registry, openW, closedW io.Writer) error {
 			)
 		}
 	}
+	genTreeView(items, closedPresent, closedW)
 	return nil
 }
 
@@ -463,5 +536,6 @@ func genBacklog(reg *Registry, priority []string, w io.Writer) error {
 			linkifyIDList(escapeCell(renderItemDependents(it, reverseEdges)), backlogPresent),
 		)
 	}
+	genTreeView(reg.Items, backlogPresent, w)
 	return nil
 }
