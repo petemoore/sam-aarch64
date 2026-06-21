@@ -3953,6 +3953,8 @@
   title: "registry CLI: umbrella derived-status does not cascade to DONE when the last child completes"
   description: |
     Observed 2026-06-24 (i74): setting the final child leaf (i74b) to DONE left the umbrella i74 stuck at OPEN — its derived status did not recompute to DONE (all children DONE/WONTFIX => umbrella DONE per CLAUDE.md), so it lingered in item-registry-open.md until manually 'set-status --id i74 --status DONE'. set-status on a child should re-derive the parent umbrella's status (DONE when all children DONE/WONTFIX, OPEN if any child open), same as 'split' rewrites edges. Until fixed, agents must manually close an umbrella after its last child lands. Low priority (mechanical correctness; manual workaround exists). Code: build/registry (tools/registry).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 634, role: completing}
