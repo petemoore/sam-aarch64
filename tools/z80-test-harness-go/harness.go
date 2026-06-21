@@ -47,29 +47,39 @@
 //	130 HLOAD — no-op: data already pre-deposited in the target pages.
 //	132 HSAVE — capture: read OUT bytes from UIFA[31..36] + pages 5-6.
 //
-// # SAMDOS file-I/O error longjmp (i183)
+// # SAMDOS file-I/O error dispatch via DOSER (&5BC0) (i25 prerequisite)
 //
-// A file-I/O hook that fails on real SAMDOS does not return: it calls derr
-// (samdos/src/d.s:430), which longjmps via the (hksp) handler vector —
-// `ld sp,(hksp); ret` into an installed handler, or (when (hksp)=0, the value
-// the dispatcher leaves on entry) prints the error and pops into BASIC's error
-// path (a crash for the assembler's di/halt loop).  The harness models this so
-// i25's (hksp) handler can be verified in emulation:
+// After EVERY DOS hook (success or error) ROM PTDOS dispatches the BASIC
+// sysvar DOSER (&5BC0): `ld hl,(DOSER); inc h; dec h; jr z,..; jp (hl)` with
+// register A = the SAMDOS error number (0 on success).  An application installs
+// its error handler by writing the handler's address into DOSER; the handler
+// inspects A and resumes (its `and a; ret z` returns on success) or handles the
+// error.  The harness models this so i25's DOSER handler can be verified in
+// emulation:
 //
-//   - An unserved HGTHD file (e.g. "sd13" with -sysreg-data omitted), or an
-//     injected HGTHD/HSAVE failure (Config.FailHGTHD / Config.FailHSAVE), is
-//     treated as file-not-found rather than a silent no-op.
-//   - On failure the harness reads the emulated (hksp) vector at
-//     Config.HkspAddr (when non-zero, honouring current paging).  A non-zero
-//     vector longjmps into the installed handler (SP := (hksp); the RST-8
-//     stub's trailing RET then pops the handler entry from [(hksp)] — exactly
-//     derr's `ld sp,(hksp); ret`).  A zero vector takes the default path,
-//     surfaced as a clean halt whose ExitReason names the failing file — at
-//     the true point of failure, not a cryptic downstream &0038 garbage trap.
+//   - On every file-I/O hook (HGTHD/HLOAD/HSAVE — success AND error) the
+//     harness reads the emulated DOSER vector at Config.DoserAddr (defaulting
+//     to &5BC0, honouring current paging) and models `JP (DOSER)` with A set to
+//     the SAMDOS error number: 0 on success, a non-zero code (e.g. 107
+//     file-not-found, 105 disk-full) on failure.
+//   - A non-zero DOSER value is an installed handler; the harness reaches it by
+//     hijacking the synthetic RST-8 stub's trailing RET — on success it pushes
+//     the handler address above the caller's resume slot (so the handler's own
+//     `ret` resumes the caller), on error it overwrites the resume slot with
+//     the handler address (the handler takes over with A = the error number).
+//   - A zero DOSER (no handler) makes a success an ordinary hook return and an
+//     error take the default path — on hardware BASIC's error handler, a crash
+//     for the assembler's di/halt loop — surfaced here as a clean halt whose
+//     ExitReason names the failing file, at the true point of failure rather
+//     than a cryptic downstream &0038 garbage trap.
 //
-// The exact (hksp)/SAMDOS-bank-paging fidelity is the design dimension shared
-// with i25 (the assembler-side handler); HkspAddr is configurable precisely so
-// i25 can point it at whatever address its eventual install mechanism uses.
+// DoserAddr is configurable so i25 can point it at whatever address its install
+// mechanism uses; it defaults to the real SAM address &5BC0.
+//
+// Note: this replaces an earlier model keyed on the SAMDOS (hksp) vector.  i185
+// established that (hksp) is NOT usable by an application — the SAMDOS
+// dispatcher zeros it on every hook entry, and it is SAMDOS-internal (NMI-only)
+// — so DOSER is the correct, app-facing error vector.
 //
 // Port &FA = LMPR (section A+B page selector)
 // Port &FB = HMPR (section C+D page selector; bits 5-7 = CLUT, preserved)
@@ -137,6 +147,13 @@ const (
 	hookLBYT  = 159
 )
 
+// SAMDOS file-I/O error numbers (samdos/src/d.s errtbl; codes start at 81).
+// Surfaced in register A by the modelled DOSER post-hook dispatch.
+const (
+	samErrDiskFull     = 105 // "Not enough space on disk"
+	samErrFileNotFound = 107 // "File not found"
+)
+
 // Result holds all outputs from a single harness run.
 type Result struct {
 	Passed         bool
@@ -155,7 +172,7 @@ type Result struct {
 	// HGTHD that the harness could neither serve (no registered NamedFile)
 	// nor account for as a known pre-deposited file (enctab.enc / IN) — plus
 	// any names with an injected HGTHD failure (Config.FailHGTHD).  Each is a
-	// file-not-found that triggers the modelled (hksp) longjmp: with no
+	// file-not-found that triggers the modelled DOSER (&5BC0) dispatch: with no
 	// handler installed it halts the run with a cause-naming ExitReason (e.g.
 	// forgetting -sysreg-data, so page 13's sysreg matcher would be empty).
 	// Populated in dispatch order, deduplicated.
@@ -229,16 +246,18 @@ type Hardware struct {
 	// unservedFiles records, in dispatch order, the names HGTHD asked for
 	// that the harness could neither serve from the registry nor account
 	// for as a known pre-deposited legacy file (enctab.enc / IN).  Each is a
-	// file-not-found that triggers the modelled (hksp) longjmp (triggerFileIOError).
+	// file-not-found that triggers the modelled DOSER dispatch (doserDispatch).
 	unservedFiles []string
 	unservedSeen  map[string]bool
 
-	// File-I/O error-longjmp model (i183).  hkspAddr is the logical address
-	// of the emulated (hksp) handler vector (0 = none installed → default
-	// halt).  failHGTHD / failHSAVE force injected file-I/O failures.  When a
-	// hook fails, triggerFileIOError either longjmps into the installed
-	// handler or records pendingFault to halt the run with a naming message.
-	hkspAddr           uint16
+	// File-I/O error model via DOSER (&5BC0).  doserAddr is the logical address
+	// of the emulated DOSER error-handler vector (defaults to &5BC0; a non-zero
+	// 2-byte LE value there is an installed handler).  failHGTHD / failHSAVE
+	// force injected file-I/O failures.  After every file-I/O hook, doserDispatch
+	// models `JP (DOSER)` with A = the SAMDOS error number (0 on success): it
+	// either enters the installed handler via the RST-8 stub's trailing RET or,
+	// on an error with no handler, records pendingFault to halt with a message.
+	doserAddr          uint16
 	failHGTHD          map[string]bool
 	failHSAVE          bool
 	strictFileNotFound bool
@@ -572,17 +591,17 @@ type Config struct {
 	TrigDumpAddrs []uint16
 	TrigDumpLen   int
 
-	// File-I/O error-longjmp model (i183) — see the package doc.
+	// File-I/O error model via DOSER (&5BC0) — see the package doc.
 	//
-	// HkspAddr is the logical address of the emulated SAMDOS (hksp)
-	// error-handler vector.  When zero (the default), no handler is installed
-	// and every file-I/O error takes the default-halt path — matching the
-	// real dispatcher, which zeros (hksp) on each hook entry, and the current
-	// assembler, which installs no handler.  When non-zero, a file-I/O error
-	// reads the 2-byte LE value at this address (honouring current paging); a
-	// non-zero value models derr's `ld sp,(hksp); ret` longjmp into the
-	// installed handler.
-	HkspAddr uint16
+	// DoserAddr is the logical address of the emulated SAMDOS DOSER
+	// error-handler vector; defaults to &5BC0 (the real SAM address) when left
+	// 0.  On every file-I/O hook the harness reads the 2-byte LE value there
+	// (honouring current paging); a non-zero value is an installed handler that
+	// ROM PTDOS would `JP (DOSER)` into with A = the SAMDOS error number (0 on
+	// success).  A zero value (no handler) makes a success an ordinary hook
+	// return and an error take the default-halt path — matching the current
+	// assembler, which installs no handler, and the &5BC0 RAM, which is zero.
+	DoserAddr uint16
 
 	// FailHGTHD forces HGTHD to report file-not-found for these SAMDOS names
 	// even when the file is registered/served — lets a test exercise the
@@ -590,12 +609,12 @@ type Config struct {
 	FailHGTHD map[string]bool
 
 	// FailHSAVE forces the HSAVE hook to report an I/O error (disk full /
-	// name conflict), triggering the same derr longjmp as a read failure.
+	// name conflict), triggering the same DOSER error dispatch as a read failure.
 	FailHSAVE bool
 
 	// StrictFileNotFound makes an unknown/unserved HGTHD file (one the harness
-	// was never given) a faithful file-not-found error — the (hksp) longjmp,
-	// or a cause-naming halt with no handler — instead of the legacy silent
+	// was never given) a faithful file-not-found error — the DOSER (&5BC0)
+	// error dispatch, or a cause-naming halt with no handler — instead of the legacy silent
 	// no-op.  Default false: the legacy behaviour is preserved, because many
 	// decode-focused tests deliberately boot the prod assembler with a minimal
 	// file set (its unconditional d15/sd13/zx013 loads are harmless no-ops for
@@ -621,7 +640,10 @@ func RunConfig(cfg Config) (Result, []RegSnapshot, TrigResult) {
 	hw.trigPC = cfg.TrigPC
 	hw.trigDumpAddrs = cfg.TrigDumpAddrs
 	hw.trigDumpLen = cfg.TrigDumpLen
-	hw.hkspAddr = cfg.HkspAddr
+	hw.doserAddr = cfg.DoserAddr
+	if hw.doserAddr == 0 {
+		hw.doserAddr = 0x5BC0
+	}
 	hw.failHGTHD = cfg.FailHGTHD
 	hw.failHSAVE = cfg.FailHSAVE
 	hw.strictFileNotFound = cfg.StrictFileNotFound
@@ -759,32 +781,37 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 				lenWithFlag := lenMod | 0x8000
 				hw.ram[copyPage][copyOffset+35] = uint8(lenWithFlag)
 				hw.ram[copyPage][copyOffset+36] = uint8(lenWithFlag >> 8)
+				hw.doserDispatch(0, "", false) // success: DOSER fires with A=0
 			} else if strings.HasPrefix(name, "IN") && !injectedFail {
 				hw.currentFile = nil
 				hw.ram[copyPage][copyOffset+34] = inFilePages
 				lenWithFlag := inFileLenMod16K | 0x8000
 				hw.ram[copyPage][copyOffset+35] = uint8(lenWithFlag)
 				hw.ram[copyPage][copyOffset+36] = uint8(lenWithFlag >> 8)
+				hw.doserDispatch(0, "", false) // success: DOSER fires with A=0
 			} else if name == "enctab.enc" && !injectedFail {
 				// Defensive dead path: enctab.enc is auto-registered whenever
 				// enctabData is non-empty (the only real configuration), so it
 				// is served above.  Reaching here means the caller passed empty
-				// enctab data; keep the legacy no-op rather than longjmp.
+				// enctab data; keep the legacy no-op (but still a successful
+				// hook → DOSER fires with A=0).
 				hw.currentFile = nil
+				hw.doserDispatch(0, "", false)
 			} else {
 				// FILE NOT FOUND — an unknown file the harness was never given
 				// (e.g. "sd13" / sysreg_data with -sysreg-data omitted), or an
 				// injected failure (Config.FailHGTHD).  On real SAMDOS gtfle
-				// fails and the hook calls derr, which longjmps via (hksp).
+				// fails; ROM PTDOS then dispatches DOSER with A = file-not-found.
 				//
-				// Always record the name for diagnostics.  The faithful longjmp
-				// fires when the failure is injected, or when the caller opts
-				// into StrictFileNotFound.  Otherwise preserve the legacy silent
-				// no-op (the page stays zero/garbage), so the many decode-focused
-				// tests that boot the prod assembler with a minimal file set keep
-				// working — their unconditional d15/sd13/zx013 loads are harmless
-				// for fixtures that exercise neither the disassembler nor the
-				// sysreg tables.
+				// Always record the name for diagnostics.  The faithful DOSER
+				// error dispatch fires when the failure is injected, or when the
+				// caller opts into StrictFileNotFound.  Otherwise preserve the
+				// legacy silent no-op (the page stays zero/garbage), so the many
+				// decode-focused tests that boot the prod assembler with a
+				// minimal file set keep working — their unconditional
+				// d15/sd13/zx013 loads are harmless for fixtures that exercise
+				// neither the disassembler nor the sysreg tables.  The legacy
+				// no-op calls neither doserDispatch path.
 				if hw.unservedSeen == nil {
 					hw.unservedSeen = make(map[string]bool)
 				}
@@ -798,7 +825,7 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 					if injectedFail {
 						verb = "HGTHD injected failure"
 					}
-					hw.triggerFileIOError(fmt.Sprintf("%s: %q", verb, name), true)
+					hw.doserDispatch(samErrFileNotFound, fmt.Sprintf("%s: %q", verb, name), true)
 				}
 			}
 
@@ -857,15 +884,17 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 				}
 				hw.currentFile = nil
 			}
+			// HLOAD is a successful DOS hook → DOSER fires with A=0.
+			hw.doserDispatch(0, "", false)
 
 		case hookHSAVE:
 			// Injected HSAVE failure (Config.FailHSAVE): model the real
-			// disk-full / name-conflict error, which longjmps via derr →
-			// (hksp) exactly like a failed read (samdos-file-io.md
-			// "Critical caveat").  Take the longjmp/default-halt before any
-			// OUT capture so the failure surfaces as such.
+			// disk-full / name-conflict error, which on real SAMDOS makes ROM
+			// PTDOS dispatch DOSER with A = disk-full, exactly like a failed
+			// read (samdos-file-io.md "Critical caveat").  Dispatch the error
+			// before any OUT capture so the failure surfaces as such.
 			if hw.failHSAVE {
-				hw.triggerFileIOError("HSAVE injected failure (disk full / name conflict)", false)
+				hw.doserDispatch(samErrDiskFull, "HSAVE injected failure (disk full / name conflict)", false)
 				break
 			}
 
@@ -886,6 +915,9 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 			// Total length = pagesCount*16384 + remainder.
 			totalLen := pagesCount*pageSize + remainder
 			capturedOut = hw.readPageBytes(startPage, 0, totalLen)
+
+			// HSAVE succeeded → DOSER fires with A=0.
+			hw.doserDispatch(0, "", false)
 
 		case hookHGFLE:
 			// HGFLE: open file for reading. Not called by prod assembler
@@ -963,7 +995,7 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 		cpu.Step()
 		steps++
 		if hw.pendingFault != "" {
-			// A file-I/O hook took the default error path (no (hksp) handler
+			// A file-I/O hook took the default error path (no DOSER handler
 			// installed).  Stop here — before the synthetic RST-8 stub's
 			// trailing RET would resume the assembler — so the failure
 			// surfaces at its true cause rather than as a downstream trap.
@@ -1002,41 +1034,54 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 	}
 }
 
-// triggerFileIOError models SAMDOS's derr longjmp (samdos/src/d.s:430) for a
-// failed file-I/O hook.  It reads the emulated (hksp) handler vector and
-// either longjmps into the installed handler or records a default-halt fault:
+// doserDispatch models ROM PTDOS's post-hook DOSER (&5BC0) dispatch
+// (rom DOSC, docs/sam/...rom...:12977-12980, 13003): after EVERY DOS hook the
+// ROM does `ld hl,(DOSER); inc h; dec h; jr nz; jp (hl)` with A = the SAMDOS
+// error number (0 on success).  errCode is 0 for a successful hook, a non-zero
+// SAMDOS error number for a failure.
 //
-//   - hkspAddr != 0 and the 2-byte LE value there != 0: an installed handler.
-//     Set SP := (hksp); the synthetic RST-8 stub's trailing RET then pops the
-//     handler entry from [(hksp)] into PC — reproducing `ld sp,(hksp); ret`.
-//   - otherwise (no handler — the dispatcher zeros (hksp) on entry and the
-//     current assembler installs none): derr1's default path, which on real
-//     hardware prints the error and pops into BASIC's error handler (a crash
-//     for the assembler's di/halt loop).  Surface it as a clean halt whose
-//     ExitReason names the cause.
+// The installed handler is reached by hijacking the synthetic RST-8 stub's
+// trailing RET (executed on the next Step after this callback):
+//   - success (errCode==0): push the handler address so the stub RET enters
+//     the handler, leaving the caller's resume address beneath it — the
+//     handler's own `ret` (after its `and a; ret z`) then resumes the caller,
+//     exactly as on hardware.
+//   - error (errCode!=0): overwrite the stub's return slot with the handler
+//     address so the stub RET enters the handler with A = the error number.
 //
-// reason is the cause text for the default-halt message; includeHint adds the
-// unserved-file remedy (relevant for file-not-found, not for an HSAVE failure).
-func (h *Hardware) triggerFileIOError(reason string, includeHint bool) {
-	var hksp uint16
-	if h.hkspAddr != 0 {
-		lo := uint16(h.Get(h.hkspAddr))
-		hi := uint16(h.Get(h.hkspAddr + 1))
-		hksp = lo | hi<<8
+// With no handler installed ((DOSER)==0): a success is an ordinary hook
+// return; an error takes the default path (on hardware: BASIC error handler,
+// a crash for the assembler's di/halt loop), modelled here as a clean halt
+// whose ExitReason names the cause (pendingFault).
+//
+// reason is the cause text for the default-halt message; includeHint appends
+// the unserved-file remedy (relevant for file-not-found, not an HSAVE error).
+func (h *Hardware) doserDispatch(errCode uint8, reason string, includeHint bool) {
+	var doser uint16
+	if h.doserAddr != 0 {
+		doser = uint16(h.Get(h.doserAddr)) | uint16(h.Get(h.doserAddr+1))<<8
 	}
-	if hksp != 0 {
-		// Installed handler — longjmp.  The stub's RET (executed after this
-		// hook returns) pops [(hksp)] into PC.
-		h.cpu.SP = hksp
+	if doser == 0 {
+		if errCode == 0 {
+			return // success, no handler — ordinary hook return
+		}
+		msg := "SAMDOS file-I/O error (no DOSER handler → BASIC error path): " + reason
+		if includeHint {
+			if hint := h.unservedFileHint(); hint != "" {
+				msg += "; " + hint
+			}
+		}
+		h.pendingFault = msg
 		return
 	}
-	msg := "SAMDOS file-I/O error longjmp ((hksp)=0, default error path): " + reason
-	if includeHint {
-		if hint := h.unservedFileHint(); hint != "" {
-			msg += "; " + hint
-		}
+	// A handler is installed — model `JP (DOSER)` with A = errCode.
+	c := h.cpu
+	c.AF.Hi = errCode
+	if errCode == 0 {
+		c.SP -= 2 // success: insert handler above the caller's resume addr
 	}
-	h.pendingFault = msg
+	h.Set(c.SP, uint8(doser))
+	h.Set(c.SP+1, uint8(doser>>8))
 }
 
 // unservedFileHint returns a human-readable diagnostic naming any SAMDOS
@@ -1061,6 +1106,6 @@ func (h *Hardware) unservedFileHint() string {
 	}
 	return fmt.Sprintf("HGTHD requested file(s) the harness could not serve: %v%s; "+
 		"each is a silent HLOAD no-op (leaving the page empty) unless "+
-		"StrictFileNotFound is set, where it longjmps via (hksp)",
+		"StrictFileNotFound is set, where it dispatches via DOSER (&5BC0)",
 		h.unservedFiles, remedy)
 }

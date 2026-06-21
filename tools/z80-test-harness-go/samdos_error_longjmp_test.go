@@ -1,14 +1,14 @@
-// samdos_error_longjmp_test.go — coverage for the i183 SAMDOS file-I/O error
-// model: the (hksp) longjmp, the no-handler default halt, and injectable
-// HGTHD/HSAVE failures.  This is the emulation-first prerequisite for i25 (the
-// assembler-side (hksp) error handler) — it lets that handler be verified in
-// the harness instead of only on hardware.
+// samdos_error_longjmp_test.go — coverage for the SAMDOS file-I/O error model:
+// the DOSER (&5BC0) post-hook dispatch (success AND error), the no-handler
+// default halt, and injectable HGTHD/HSAVE failures.  This is the
+// emulation-first prerequisite for i25 (the assembler-side DOSER error handler)
+// — it lets that handler be verified in the harness instead of only on hardware.
 //
 // Most tests run a tiny self-contained Z80 program (no build artifacts), so
-// they exercise the longjmp mechanics directly; one artifact-gated test boots
-// the real prod assembler with sd13 omitted to show the "forgot -sysreg-data"
-// mistake surfacing as a clean, cause-naming halt rather than a downstream
-// &0038 garbage trap.
+// they exercise the DOSER dispatch mechanics directly; one artifact-gated test
+// boots the real prod assembler with sd13 omitted to show the "forgot
+// -sysreg-data" mistake surfacing as a clean, cause-naming halt rather than a
+// downstream &0038 garbage trap.
 package main
 
 import (
@@ -19,58 +19,119 @@ import (
 	"time"
 )
 
-// Fixed addresses used by buildHkspProgram's installed-handler scaffolding.
+// Fixed addresses used by buildDoserProgram's scaffolding.
 const (
-	hkspProgHandlerAddr = 0x8050 // handler entry (section C, page 2)
-	hkspProgNameAddr    = 0x8080 // 10-byte UIFA name lives here
-	hkspProgSlotAddr    = 0xFE00 // [slot] = handler entry — the longjmp's stack word
-	hkspProgVecAddr     = 0xFE10 // (hksp) vector; its 2-byte value points at the slot
+	doserProgHandlerAddr = 0x8050 // DOSER handler entry (section C, page 2)
+	doserProgNameAddr    = 0x8080 // 10-byte UIFA name lives here
+	doserVecAddr         = 0x5BC0 // the real SAM DOSER sysvar address
 )
 
-// buildHkspProgram assembles a tiny Z80 program (loaded at &8000) that:
-//   - copies the SAMDOS UIFA name "MISSING   " into &4B01..&4B0A (so HGTHD
-//     reads a deterministic name),
-//   - optionally installs an (hksp) error handler: (hksp) at hkspProgVecAddr
-//     holds hkspProgSlotAddr, and [hkspProgSlotAddr] holds hkspProgHandlerAddr,
-//     so derr's modelled `ld sp,(hksp); ret` lands at the handler,
-//   - issues RST 8 / DEFB hookCode to drive the hook.
+// buildDoserProgram assembles a tiny Z80 program (loaded at &8000) that:
+//   - sets SP = &C100,
+//   - copies the SAMDOS UIFA name (space-padded to 10 chars) into &4B01..&4B0A
+//     so HGTHD reads a deterministic name,
+//   - optionally installs a DOSER handler: writes the handler address straight
+//     into DOSER (&5BC0).  DOSER is a direct code vector (no indirection slot,
+//     unlike the old (hksp) model),
+//   - issues RST 8 / DEFB hookCode to drive the hook,
+//   - if afterPrint != 0, prints afterPrint then HALTs — proving the hook
+//     returned and the caller resumed (the success-dispatch resume path).
 //
-// The handler emits 'E' on the printer channel then HALTs, so a run whose
-// printer capture is "E" proves control reached the handler via the longjmp.
-// Without the handler the program falls through to a trailing HALT.
-func buildHkspProgram(installHandler bool, hookCode byte) []byte {
-	p := make([]byte, hkspProgNameAddr-0x8000+10)
+// The DOSER handler at doserProgHandlerAddr implements the alt-D convention:
+//
+//	AND A ; RET Z          ; success (A==0) → return to the caller's resume addr
+//	LD A,'E' ; print ; HALT ; error (A!=0) → print 'E' and halt
+//
+// So a run whose printer capture is "E" proves the handler ran on an error;
+// "K" (when afterPrint=='K') proves the success dispatch ran the handler AND
+// correctly resumed the caller.
+func buildDoserProgram(installHandler bool, hookCode byte, name string, afterPrint byte) []byte {
+	p := make([]byte, doserProgNameAddr-0x8000+10)
 	pc := 0
 	emit := func(bs ...byte) { copy(p[pc:], bs); pc += len(bs) }
 	lo := func(a int) byte { return byte(a & 0xFF) }
 	hi := func(a int) byte { return byte(a >> 8) }
 
-	emit(0x31, 0x00, 0xC1)                                 // LD SP, &C100
-	emit(0x21, lo(hkspProgNameAddr), hi(hkspProgNameAddr)) // LD HL, name
-	emit(0x11, 0x01, 0x4B)                                 // LD DE, &4B01
-	emit(0x01, 0x0A, 0x00)                                 // LD BC, 10
-	emit(0xED, 0xB0)                                       // LDIR (name → UIFA[1..10])
+	emit(0x31, 0x00, 0xC1)                                   // LD SP, &C100
+	emit(0x21, lo(doserProgNameAddr), hi(doserProgNameAddr)) // LD HL, name
+	emit(0x11, 0x01, 0x4B)                                   // LD DE, &4B01
+	emit(0x01, 0x0A, 0x00)                                   // LD BC, 10
+	emit(0xED, 0xB0)                                         // LDIR (name → UIFA[1..10])
 	if installHandler {
-		emit(0x21, lo(hkspProgHandlerAddr), hi(hkspProgHandlerAddr)) // LD HL, handler
-		emit(0x22, lo(hkspProgSlotAddr), hi(hkspProgSlotAddr))       // LD (slot), HL
-		emit(0x21, lo(hkspProgSlotAddr), hi(hkspProgSlotAddr))       // LD HL, slot
-		emit(0x22, lo(hkspProgVecAddr), hi(hkspProgVecAddr))         // LD ((hksp)), HL
+		emit(0x21, lo(doserProgHandlerAddr), hi(doserProgHandlerAddr)) // LD HL, handler
+		emit(0x22, lo(doserVecAddr), hi(doserVecAddr))                 // LD (DOSER), HL
 	}
-	emit(0xCF, hookCode, 0x76) // RST 8 ; DEFB hookCode ; HALT (no-op fallback)
-	if pc > hkspProgHandlerAddr-0x8000 {
-		panic("hksp program preamble overran the handler region")
+	emit(0xCF, hookCode) // RST 8 ; DEFB hookCode
+	if afterPrint != 0 {
+		emit(0x3E, afterPrint, 0xD3, 0xE8, 0x3E, 0x01, 0xD3, 0xE9) // LD A,x;OUT(&E8);LD A,1;OUT(&E9)
 	}
-	// Handler: LD A,'E'; OUT (&E8),A; LD A,1; OUT (&E9),A; HALT.
-	copy(p[hkspProgHandlerAddr-0x8000:], []byte{0x3E, 'E', 0xD3, 0xE8, 0x3E, 0x01, 0xD3, 0xE9, 0x76})
-	copy(p[hkspProgNameAddr-0x8000:], []byte("MISSING   "))
+	emit(0x76) // HALT (caller-resume fallthrough)
+	if pc > doserProgHandlerAddr-0x8000 {
+		panic("doser program preamble overran the handler region")
+	}
+	// DOSER handler: AND A; RET Z (success → resume); else LD A,'E'; print; HALT.
+	copy(p[doserProgHandlerAddr-0x8000:], []byte{
+		0xA7,      // AND A
+		0xC8,      // RET Z (success: A==0 → return to caller's resume addr)
+		0x3E, 'E', // LD A,'E'
+		0xD3, 0xE8, // OUT (&E8),A
+		0x3E, 0x01, // LD A,1
+		0xD3, 0xE9, // OUT (&E9),A
+		0x76, // HALT
+	})
+
+	padded := name
+	for len(padded) < 10 {
+		padded += " "
+	}
+	copy(p[doserProgNameAddr-0x8000:], []byte(padded[:10]))
 	return p
 }
 
-// TestSAMDOSFileNotFoundDefaultHalt: an unknown HGTHD file with no handler
-// installed ((hksp)=0) takes derr1's default path — a clean halt naming the
-// file at the true point of failure, never a downstream &0038 garbage trap.
-func TestSAMDOSFileNotFoundDefaultHalt(t *testing.T) {
-	prog := buildHkspProgram(false, hookHGTHD)
+// TestSAMDOSDoserErrorDispatch: with a DOSER handler installed, a file-not-found
+// (StrictFileNotFound) makes ROM PTDOS dispatch DOSER with A = file-not-found.
+// The handler's `and a` finds A!=0, so it prints 'E' — proving the error
+// dispatch reached the handler.
+func TestSAMDOSDoserErrorDispatch(t *testing.T) {
+	prog := buildDoserProgram(true, hookHGTHD, "MISSING", 0)
+	res, _, _ := RunConfig(Config{
+		AssemblerBin:       prog,
+		DoserAddr:          doserVecAddr,
+		StrictFileNotFound: true, // unknown file → faithful file-not-found
+		Timeout:            2 * time.Second,
+	})
+	t.Logf("Exit: %s  Printer: %q", res.ExitReason, res.PrinterCapture)
+	if res.PrinterCapture != "E" {
+		t.Fatalf("DOSER error dispatch did not reach the handler: printer=%q exit=%q", res.PrinterCapture, res.ExitReason)
+	}
+	if len(res.UnservedFiles) != 1 || res.UnservedFiles[0] != "MISSING" {
+		t.Errorf("UnservedFiles = %v; want [MISSING]", res.UnservedFiles)
+	}
+}
+
+// TestSAMDOSDoserSuccessDispatchResumes: a *served* HGTHD succeeds → DOSER fires
+// with A=0 → the handler's `and a; ret z` returns → the caller resumes and
+// prints 'K'.  This is the key test that the success-path stack manipulation is
+// correct: the handler ran AND control flowed back to the caller.
+func TestSAMDOSDoserSuccessDispatchResumes(t *testing.T) {
+	prog := buildDoserProgram(true, hookHGTHD, "FOUND", 'K')
+	res, _, _ := RunConfig(Config{
+		AssemblerBin: prog,
+		DoserAddr:    doserVecAddr,
+		Files:        []NamedFile{{Name: "FOUND", Content: []byte{1, 2, 3}, TargetPage: 9}},
+		Timeout:      2 * time.Second,
+	})
+	t.Logf("Exit: %s  Printer: %q", res.ExitReason, res.PrinterCapture)
+	if res.PrinterCapture != "K" {
+		t.Fatalf("success DOSER dispatch did not run the handler AND resume the caller: printer=%q exit=%q", res.PrinterCapture, res.ExitReason)
+	}
+}
+
+// TestSAMDOSDoserDefaultHalt: an unknown HGTHD file with no handler installed
+// ((DOSER)=0) takes the default path — a clean halt naming the file at the true
+// point of failure, never a downstream &0038 garbage trap.
+func TestSAMDOSDoserDefaultHalt(t *testing.T) {
+	prog := buildDoserProgram(false, hookHGTHD, "MISSING", 0)
 	res, _, _ := RunConfig(Config{
 		AssemblerBin:       prog,
 		StrictFileNotFound: true, // unknown file → faithful file-not-found
@@ -84,74 +145,54 @@ func TestSAMDOSFileNotFoundDefaultHalt(t *testing.T) {
 		t.Errorf("ExitReason should name the file-I/O error and the missing file, got %q", res.ExitReason)
 	}
 	if strings.Contains(res.ExitReason, "TRAP") {
-		t.Errorf("file-not-found surfaced as a downstream trap, not a clean longjmp halt: %q", res.ExitReason)
-	}
-	if len(res.UnservedFiles) != 1 || res.UnservedFiles[0] != "MISSING" {
-		t.Errorf("UnservedFiles = %v; want [MISSING]", res.UnservedFiles)
+		t.Errorf("file-not-found surfaced as a downstream trap, not a clean default halt: %q", res.ExitReason)
 	}
 	if res.PrinterCapture != "" {
 		t.Errorf("no handler installed, so nothing should print; got %q", res.PrinterCapture)
 	}
 }
 
-// TestSAMDOSFileNotFoundLongjmp: with an (hksp) handler installed, a
-// file-not-found longjmps into it (derr's `ld sp,(hksp); ret`).  The handler
-// prints 'E', proving control reached it via the modelled longjmp.
-func TestSAMDOSFileNotFoundLongjmp(t *testing.T) {
-	prog := buildHkspProgram(true, hookHGTHD)
-	res, _, _ := RunConfig(Config{
-		AssemblerBin:       prog,
-		HkspAddr:           hkspProgVecAddr,
-		StrictFileNotFound: true,
-		Timeout:            2 * time.Second,
-	})
-	t.Logf("Exit: %s  Printer: %q", res.ExitReason, res.PrinterCapture)
-	if res.PrinterCapture != "E" {
-		t.Fatalf("(hksp) longjmp did not reach the handler: printer=%q exit=%q", res.PrinterCapture, res.ExitReason)
-	}
-}
-
 // TestSAMDOSInjectedHGTHDFailure: Config.FailHGTHD forces a *served* file to
 // report file-not-found, exercising the error path (and i25's handler) without
-// physically omitting a payload.  The installed handler runs.
+// physically omitting a payload.  The installed handler prints 'E'.
 func TestSAMDOSInjectedHGTHDFailure(t *testing.T) {
-	prog := buildHkspProgram(true, hookHGTHD)
+	prog := buildDoserProgram(true, hookHGTHD, "FOUND", 0)
 	res, _, _ := RunConfig(Config{
 		AssemblerBin: prog,
-		HkspAddr:     hkspProgVecAddr,
-		// "MISSING" IS served, but FailHGTHD forces a not-found error —
+		DoserAddr:    doserVecAddr,
+		// "FOUND" IS served, but FailHGTHD forces a not-found error —
 		// and it fires without StrictFileNotFound (injection always errors).
-		Files:     []NamedFile{{Name: "MISSING", Content: []byte{1, 2, 3}, TargetPage: 9}},
-		FailHGTHD: map[string]bool{"MISSING": true},
+		Files:     []NamedFile{{Name: "FOUND", Content: []byte{1, 2, 3}, TargetPage: 9}},
+		FailHGTHD: map[string]bool{"FOUND": true},
 		Timeout:   2 * time.Second,
 	})
 	t.Logf("Exit: %s  Printer: %q", res.ExitReason, res.PrinterCapture)
 	if res.PrinterCapture != "E" {
-		t.Fatalf("injected HGTHD failure did not longjmp to the handler: printer=%q exit=%q", res.PrinterCapture, res.ExitReason)
+		t.Fatalf("injected HGTHD failure did not dispatch to the handler: printer=%q exit=%q", res.PrinterCapture, res.ExitReason)
 	}
 }
 
 // TestSAMDOSInjectedHSAVEFailure: Config.FailHSAVE turns a save into a
-// disk-full / name-conflict error that longjmps via (hksp), exactly like a
-// failed read (samdos-file-io.md "Critical caveat").
+// disk-full / name-conflict error that dispatches DOSER, exactly like a failed
+// read (samdos-file-io.md "Critical caveat").
 func TestSAMDOSInjectedHSAVEFailure(t *testing.T) {
-	prog := buildHkspProgram(true, hookHSAVE)
+	prog := buildDoserProgram(true, hookHSAVE, "OUT", 0)
 	res, _, _ := RunConfig(Config{
 		AssemblerBin: prog,
-		HkspAddr:     hkspProgVecAddr,
+		DoserAddr:    doserVecAddr,
 		FailHSAVE:    true,
 		Timeout:      2 * time.Second,
 	})
 	t.Logf("Exit: %s  Printer: %q", res.ExitReason, res.PrinterCapture)
 	if res.PrinterCapture != "E" {
-		t.Fatalf("injected HSAVE failure did not longjmp to the handler: printer=%q exit=%q", res.PrinterCapture, res.ExitReason)
+		t.Fatalf("injected HSAVE failure did not dispatch to the handler: printer=%q exit=%q", res.PrinterCapture, res.ExitReason)
 	}
 }
 
 // TestSAMDOSHSAVEFailureDefaultHalt: an HSAVE failure with no handler halts
 // cleanly with a cause-naming message and captures no OUT.
 func TestSAMDOSHSAVEFailureDefaultHalt(t *testing.T) {
-	prog := buildHkspProgram(false, hookHSAVE)
+	prog := buildDoserProgram(false, hookHSAVE, "OUT", 0)
 	res, _, _ := RunConfig(Config{
 		AssemblerBin: prog,
 		FailHSAVE:    true,
@@ -173,24 +214,25 @@ func TestSAMDOSHSAVEFailureDefaultHalt(t *testing.T) {
 }
 
 // TestSAMDOSLegacySilentNoOpPreserved: the default (no StrictFileNotFound, no
-// injected failure) keeps the legacy silent no-op an unknown HGTHD file — the
-// behaviour the decode-focused prod-boot tests rely on.  The file is still
-// recorded in UnservedFiles for diagnostics, but the run is not halted.
+// injected failure, no handler) keeps the legacy silent no-op for an unknown
+// HGTHD file — the behaviour the decode-focused prod-boot tests rely on.  The
+// file is still recorded in UnservedFiles for diagnostics, but the run is not
+// halted: the caller resumes and prints 'K'.
 func TestSAMDOSLegacySilentNoOpPreserved(t *testing.T) {
-	prog := buildHkspProgram(false, hookHGTHD)
+	prog := buildDoserProgram(false, hookHGTHD, "MISSING", 'K')
 	res, _, _ := RunConfig(Config{
 		AssemblerBin: prog,
 		Timeout:      2 * time.Second,
 	})
-	t.Logf("Exit: %s", res.ExitReason)
+	t.Logf("Exit: %s  Printer: %q", res.ExitReason, res.PrinterCapture)
 	if !strings.Contains(res.ExitReason, "HALT") {
 		t.Errorf("expected the program to run through to its own HALT (silent no-op), got exit=%q", res.ExitReason)
 	}
 	if len(res.UnservedFiles) != 1 || res.UnservedFiles[0] != "MISSING" {
 		t.Errorf("UnservedFiles = %v; want [MISSING] (diagnostic still recorded)", res.UnservedFiles)
 	}
-	if res.PrinterCapture != "" {
-		t.Errorf("silent no-op should print nothing; got %q", res.PrinterCapture)
+	if res.PrinterCapture != "K" {
+		t.Errorf("silent no-op should resume the caller and print 'K'; got %q", res.PrinterCapture)
 	}
 }
 
@@ -198,7 +240,9 @@ func TestSAMDOSLegacySilentNoOpPreserved(t *testing.T) {
 // sd13 deliberately omitted — the "forgot -sysreg-data" mistake.  Under
 // StrictFileNotFound the boot fails at the sd13 HGTHD with a clean,
 // cause-naming halt (with the -sysreg-data remedy) instead of a downstream
-// &0038 garbage trap.  Artifact-gated: skips if the prod build is absent.
+// &0038 garbage trap.  No DOSER handler is installed, so this exercises the
+// default-halt path on a real prod boot.  Artifact-gated: skips if the prod
+// build is absent.
 func TestSAMDOSBootMissingSysregDataDiagnostic(t *testing.T) {
 	root := repoRoot(t)
 	asmPath := filepath.Join(root, "build", "assembler-prod.bin")
@@ -236,7 +280,7 @@ func TestSAMDOSBootMissingSysregDataDiagnostic(t *testing.T) {
 		t.Errorf("ExitReason should carry the -sysreg-data remedy, got %q", res.ExitReason)
 	}
 	if strings.Contains(res.ExitReason, "TRAP") {
-		t.Errorf("missing sd13 surfaced as a downstream trap, not the clean longjmp halt: %q", res.ExitReason)
+		t.Errorf("missing sd13 surfaced as a downstream trap, not the clean default halt: %q", res.ExitReason)
 	}
 	found := false
 	for _, n := range res.UnservedFiles {
