@@ -40,6 +40,7 @@ SDC_NULLOFF:      equ &04                       ; all-deselect, auto-null off
 SDC_SEL:          equ &31                       ; SD select, manual mode
 SDC_DESEL:        equ &30                       ; SD deselect
 SDC_INIT:         equ &38                       ; microcontroller "SD init" wake
+SDC_AUTONUL:      equ &3F                       ; SD select, auto-null mode: µC supplies dummy bytes for response/data phase
 SDC_DATATOK:      equ &FE                       ; start-of-data token preceding the CSD
 SDC_IDLE:         equ &FF                       ; SPI-idle MISO
 SDC_BUSY_LIMIT:   equ &FFFF                     ; busy-wait poll budget (~65535, ~0.5s) before sdc_wait_ready gives up
@@ -411,9 +412,7 @@ bllr_rd2:
 ; bd_list_write_hw — the REAL card-absolute list-sector write (i198): the
 ; hardware implementation of bdos_write_list_sector's BD_HOOK_LISTWRITE model.
 ; Writes one 512-byte list sector to the SD card via a raw CMD24 single-block
-; write on the Trinity SPI ports, from BD_LIST_BUF. Mirrors bd_list_read_hw
-; (CMD17, above) exactly: same init ladder, same LBA computation, same
-; select/deselect bracket. Only the data phase differs (OUT instead of IN).
+; write on the Trinity SPI ports, from BD_LIST_BUF.
 ;
 ; In:  BD_LIST_SECTOR  1 byte  1-based list-sector number N (same addressing
 ;                              as the CMD17 read — card-absolute LBA N for
@@ -424,26 +423,49 @@ bllr_rd2:
 ;       a wrong write on real hardware is caught by the i194 verification step)
 ; Clobbers: AF, BC, DE, HL.
 ;
-; PROTOCOL (matched to sdcard.go's CMD24 state machine — the authority for the
-; exact handshake, verified by the SD model round-trip test):
-;   1. sdc_cmd(&58, bd_list_lba) → R1 ready (consumed by sdc_cmd's poll).
-;   2. OUT dummy &FF (the leading gap before the start-of-data token).
-;   3. OUT &FE start-of-data token (opens the write data phase).
-;   4. OUT 512 bytes from BD_LIST_BUF (two 256-byte loops, mirroring the read).
-;   5. OUT 2 dummy CRC bytes (CRC is off; the card ignores them).
-;   6. IN  gap byte (discarded — the one-read gap before the data-response).
-;   7. IN  data-response token: mask (&1E), subtract 4; zero = accepted.
-;   8. IN busy poll: loop while card drives &00 (busy), break on &FF (done);
-;      `inc a; jr z` is the standard bounded poll, mirroring sdil_wake_poll.
-;   Steps 6-8 mirror hd.svb-t &A893-&A8AE (Colin's real write tail) that
-;   sdcard.go's inWriteResp models.
+; PROTOCOL — ported from Colin Piggot's hardware-proven B-DOS 1.5t SD driver
+; (hd.svb-t &A918 + write tail &A86B; bdos15t-beta6.annotated.dis). The READ
+; path already follows Colin exactly (why reads work); this write port closes
+; the equivalent gap.
 ;
-; EMULATION. Host-verified under the i145c/i145h SD model (sdcard.go), whose
-; CMD24 path captures the 512 bytes into store[addr] and returns the accept
-; token + busy poll. The claim read-modify-write round-trip is proven by
-; sd_listwrite_test.go (the TestClaimRMWRealCMD17CMD24 family). Emulation-
-; verified is not hardware-verified (CLAUDE.md §5): the real-Trinity SPI write
-; is the final gate (i194's hardware step).
+;   1. sdc_cmd(&58, bd_list_lba) → R1 ready (consumed by sdc_cmd's poll).
+;   2. OUT (&DC),SDC_AUTONUL (&3F): switch to AUTO-NULL mode. The µC now
+;      supplies the SPI dummy bytes for the entire data phase, so the write
+;      loops use OUTI (not sdc_out per byte). Mirror of Colin's &A85A-&A85C.
+;   3. Busy-poll (&DC bit 3), then OUT (&DF),&FF (gap before the &FE token).
+;      Colin bdos15t &A92C-&A933.
+;   4. Busy-poll, then OUT (&DF),&FE start-of-data token. Colin &A937-&A93D.
+;   5. 512x OUTI with per-byte busy-poll — each OUTI sends one data byte from
+;      BD_LIST_BUF under the µC's auto-null clock. Colin &A93F-&A953 (510 in
+;      hd.svb-t) plus &A86B-&A879 (the final 2 of the '512 mod 6 = 2' tail).
+;      We send all 512 in two 256-byte loops to keep the code simple.
+;   6. 2 dummy CRC bytes: busy-poll + OUT (&DF),&FF each. CRC is off; the card
+;      ignores the values. Colin &A87B-&A88B.
+;   7. Gap byte: busy-poll + IN A,(&DF) — result discarded. Colin &A88D-&A893.
+;   8. Data-response token: busy-poll + IN A,(&DF), then AND &1E / SUB 4;
+;      zero = accepted. Colin &A895-&A8A1.
+;   9. Busy-wait up to 65536 reads: LD BC,0 / [busy-poll + IN (&DF) / INC A /
+;      JR Z done / DEC BC / LD A,B / OR C / JR NZ loop]. Colin &A8A3-&A8B3.
+;      256 iterations was far too short for real flash; 65536 matches Colin.
+;
+; NOTE ON AUTO-NULL: under SDC_AUTONUL (&3F) the µC injects the dummy SPI
+; clock, so OUTI (which presents the data byte on &DF then INC HL / DEC B) is
+; the correct primitive for the payload loop — sdc_out (which calls
+; sdc_wait_ready + OUT (&DF),A) is the manual-mode equivalent. Both send one
+; byte; the difference is who provides the clock. The read path (CMD17) in
+; bd_list_read_hw also enters auto-null mode via Colin's sd.cmd-with-address
+; (&A81F → &A85A) before its INI loop; our read path is mediated by the
+; sdcard.go model which handles both modes. On real Trinity hardware only
+; auto-null mode works for the bulk data phase.
+;
+; EMULATION. Because sdcard.go's CMD24 outDataPhase captures the bytes from
+; our OUTI stream (the model does not distinguish auto-null vs manual OUTs in
+; the data phase — it sees the same byte sequence either way), the harness
+; tests (TestClaimRMWRealCMD17CMD24, TestClaimRecordPreservesNeighbours) may
+; now FAIL: the Go model was written to match our OLD manual-mode protocol, not
+; Colin's auto-null protocol. That is expected and correct — do NOT revert this
+; port to fix those tests. Updating sdcard.go is i270b, done only after
+; hardware verification. Emulation-verified is not hardware-verified (CLAUDE.md §5).
 ; ===========================================================================
 bd_list_write_hw:
                 ; Build the 32-bit LBA from BD_LIST_SECTOR (same computation as the read).
@@ -484,53 +506,105 @@ blwr_have_lba:
                 ld      a, (bd_list_lba)
                 ld      e, a
                 ld      a, &58                  ; CMD24
-                call    sdc_cmd                 ; R1 consumed; on entry CY set = fail
-                jr      c, blwr_done            ; command failed: bail (sdc_deselect not yet called)
-                ; Protocol step 2: dummy &FF (the gap before the &FE token).
+                call    sdc_cmd                 ; R1 consumed; CY set on timeout
+                jr      c, blwr_cmd_fail        ; command failed: bail (sdc_deselect not yet called)
+                ; Protocol step 2: switch to auto-null mode — µC supplies the SPI
+                ; dummy bytes so the bulk loops below are OUTI not sdc_out. Mirror
+                ; of Colin's OUT (&DC),&3F at bdos15t &A85A-&A85C.
+                ld      a, SDC_AUTONUL
+                call    sdc_select              ; busy-polled select of &3F (sdc_select = sdc_wait_ready + OUT (&DC),A)
+                ; Protocol step 3: gap &FF before the &FE token. Colin bdos15t &A92C-&A933.
+                ld      c, SDC_DATA             ; C = &DF (held through the data phase)
+blwr_gap_poll:
+                in      a, (SDC_PORT)
+                and     %00001000              ; busy?
+                jr      nz, blwr_gap_poll
                 ld      a, SDC_IDLE
-                call    sdc_out
-                ; Protocol step 3: &FE start-of-data token.
-                ld      a, SDC_DATATOK
-                call    sdc_out
-                ; Protocol step 4: send the 512-byte data block from BD_LIST_BUF
-                ;   (two 256-byte passes, mirroring the read's two-pass INI).
+                out     (SDC_DATA), a
+                ; Protocol step 4: &FE start-of-data token. Colin &A937-&A93D.
+blwr_tok_poll:
+                in      a, (SDC_PORT)
+                and     %00001000
+                jr      nz, blwr_tok_poll
+                ld      b, SDC_DATATOK
+                out     (c), b                  ; OUT (&DF),&FE via BC (Colin uses OUT (C),B)
+                ; Protocol step 5: send the 512-byte data block from BD_LIST_BUF via OUTI.
+                ; Each OUTI is preceded by a busy-poll: busy-poll → OUTI → repeat.
+                ; Colin's hd.svb-t &A93F-&A953 sends 510 bytes this way (the first 254+256
+                ; minus the last 2); the write tail &A86B-&A879 sends the final 2 bytes the
+                ; same way. We send all 512 in two 256-byte passes for simplicity.
                 ld      hl, BD_LIST_BUF
-                ld      b, 0                    ; 256 bytes first pass
+                ld      b, 0                    ; 256 bytes first pass (B=0 → 256 iterations)
 blwr_wd1:
-                ld      a, (hl)
-                call    sdc_out
-                inc     hl
-                djnz    blwr_wd1
+blwr_wd1_poll:
+                in      a, (SDC_PORT)
+                and     %00001000
+                jr      nz, blwr_wd1_poll
+                outi                            ; OUT (&DF),(HL++); DEC B; sets Z if B==0
+                jr      nz, blwr_wd1
                 ld      b, 0                    ; + 256 = 512
 blwr_wd2:
-                ld      a, (hl)
-                call    sdc_out
-                inc     hl
-                djnz    blwr_wd2
-                ; Protocol step 5: 2 dummy CRC bytes (CRC is off; values ignored).
-                ld      a, SDC_IDLE
-                call    sdc_out
-                call    sdc_out
-                ; Protocol step 6: gap byte before the data-response (discarded).
-                call    sdc_in
-                ; Protocol step 7: data-response token. Mask &1E; subtract 4; zero = accepted.
-                call    sdc_in
+blwr_wd2_poll:
+                in      a, (SDC_PORT)
+                and     %00001000
+                jr      nz, blwr_wd2_poll
+                outi
+                jr      nz, blwr_wd2
+                ; Protocol step 6: 2 dummy CRC bytes (CRC off; values ignored).
+                ; Busy-poll + OUT (&DF),A (A = &FF after the poll clears the AND &08
+                ; to 0, then DEC A = &FF). Colin bdos15t &A87B-&A88B.
+blwr_crc1_poll:
+                in      a, (SDC_PORT)
+                and     %00001000
+                jr      nz, blwr_crc1_poll
+                dec     a                       ; 0 - 1 = &FF; Colin's DEC A after AND &08 poll
+                out     (SDC_DATA), a
+blwr_crc2_poll:
+                in      a, (SDC_PORT)
+                and     %00001000
+                jr      nz, blwr_crc2_poll
+                dec     a
+                out     (SDC_DATA), a
+                ; Protocol step 7: gap byte before the data-response (discarded).
+                ; Busy-poll + IN A,(&DF). Colin bdos15t &A88D-&A893.
+blwr_gap2_poll:
+                in      a, (SDC_PORT)
+                and     %00001000
+                jr      nz, blwr_gap2_poll
+                in      a, (SDC_DATA)           ; gap byte — discard
+                ; Protocol step 8: data-response token. Busy-poll + IN A,(&DF).
+                ; AND &1E / SUB 4; zero = accepted. Colin bdos15t &A895-&A8A1.
+blwr_resp_poll:
+                in      a, (SDC_PORT)
+                and     %00001000
+                jr      nz, blwr_resp_poll
+                in      a, (SDC_DATA)
                 and     &1E
                 sub     4
                 jr      nz, blwr_reject         ; not accepted: deselect with CY set
-                ; Protocol step 8: busy poll. Card drives &00 while writing, releases &FF when done.
-                ; `inc a; jr z` loops on the &00 -> 1 path and exits on the &FF -> 0 path.
-                ; Bounded at 256 iterations (B=0): matches the sdil_wake_poll idiom.
-                ld      b, 0
+                ; Protocol step 9: busy-wait for write completion. Card drives &00 (busy)
+                ; while programming flash, releases &FF (MISO high) when done.
+                ; Colin's write tail &A8A3-&A8B3: LD B,A / LD C,A / busy-poll / IN A,(&DF) /
+                ; INC A / JR Z done / DEC BC / LD A,B / OR C / JR NZ poll.
+                ; BC=0 → up to 65536 reads (real flash needs ~hundreds of ms).
+                ; Our old B=0 (256-iteration) bound was 256x too short.
+                ld      bc, 0                   ; bdos15t &A8A3-&A8A4: LD B,A; LD C,A (both 0 after SUB 4 == 0)
 blwr_busy:
-                call    sdc_in
+blwr_busy_poll:
+                in      a, (SDC_PORT)
+                and     %00001000
+                jr      nz, blwr_busy_poll
+                in      a, (SDC_DATA)           ; Colin bdos15t &A8AB-&A8AD
                 inc     a
-                jr      z, blwr_ok              ; &FF -> 0: write done, card released MISO
-                djnz    blwr_busy
-                ; Timed out waiting for ready — treat as failure.
+                jr      z, blwr_ok              ; &FF -> 0: card released MISO, write done
+                dec     bc                      ; Colin &A8B0
+                ld      a, b
+                or      c
+                jr      nz, blwr_busy           ; Colin &A8B3
+                ; Timed out after 65536 reads — treat as failure (same as Colin's JP &8565 error path).
 blwr_reject:
                 scf
-blwr_done:
+blwr_cmd_fail:
                 jp      sdc_deselect
 blwr_ok:
                 or      a                       ; CY clear: success
