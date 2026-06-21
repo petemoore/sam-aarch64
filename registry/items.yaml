@@ -2785,10 +2785,12 @@
   title: "SAMBOOT: build the one-shot ROM+EEPROM dumper (serves captured bytes via the proven TFTP server)"
   description: |
     Small Z80 program: read the patched system ROM (32 KB via SAM ROM paging) + the Trinity EEPROM chunks, and serve them via the proven TFTP server so the host pulls rom.bin/eeprom.bin. Pushed via trinload; reuses the host-verified serve loop + Colin's eeprom.asm. Emulation-verify EEPROM-read + serve; ROM-page read is hardware-first.
-  status: OPEN
+  status: DONE
   depends_on: [i135a]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 492, role: completing}
   refs: [docs/specs/samboot.md]
 
 - id: i175
@@ -2851,3 +2853,11 @@
   owner: agent
   prs:
     - {num: 491, role: completing}
+
+- id: i181
+  title: "Harness: model SAM LMPR/HMPR paging + stock-ROM fixture to emulation-verify ROM-paging sequences"
+  description: |
+    Per CLAUDE.md §7 (emulation-first): the koron-z80 harness records HMPR/LMPR writes but does not act on them (enc28j60.go:345-348; harness.go is flat), so the i173 dumper's ROM-page-read SEQUENCE (port values, ROM0/ROM1 select, ROM1-off-to-protect-STAGE, no stack self-eviction) cannot be emulation-tested. Model paging: a 512KB physical RAM array, 16KB pages mapped per LMPR/HMPR, ROM0/ROM1 from a loaded stock SAM ROM 3.0 fixture. Then a test can assert the dumper's paging sequence yields the stock ROM bytes (catching port/self-eviction bugs in emulation). Returns STOCK not PATCHED bytes, so it validates the SEQUENCE not the capture (the capture is inherently hardware, i87a). Follow-up surfaced by the i173 design; NOT a blocker for i173 (whose ROM read is charter-classified hardware-first).
+  status: OPEN
+  kind: leaf
+  owner: agent

@@ -47,6 +47,11 @@
 ; silicon and an end-to-end run on real hardware — gated on real Trinity
 ; (CLAUDE.md §5). Emulation-verified is not hardware-verified.
 
+                ; When the dumper (netboot_dumper.asm) includes this file it owns
+                ; the org + the boot entry + its own main; this file then supplies
+                ; only the shared serve state machine (serve_serve_once + helpers +
+                ; CONFIG/STORE/SRC_TABLE). DUMPER also arms the rrq_hit refresh hook.
+                if defined(DUMPER)==0
                 org     &8000
 
                 ; The boot entry (CALL 32768) must be the first instruction at
@@ -55,6 +60,7 @@
                 ; 32768, so this jp is bootable-only.
                 if defined(NETBOOT_HOSTTEST)==0
                 jp      serve_main
+                endif
                 endif
 
 ; ===========================================================================
@@ -306,6 +312,15 @@ rrq_hit:
                 ; install the source for the resolved name + its size.
                 call    resolve_src            ; sets SRC_PTR + XFER_SIZE; CY=hit
                 ; (resolve always matched in STORE, so SRC_TABLE has it too.)
+
+                ; The dumper hook: stage the resolved region's bytes into the
+                ; buffer SRC_PTR/XFER_SIZE point at (and, for rom1.bin, override
+                ; SRC_PTR to a section-A scratch page) before the stream begins.
+                ; Inert in the standalone serve build (the call is omitted), so the
+                ; existing serve program + its tests are unaffected.
+                if defined(DUMPER)
+                call    dumper_refresh_region
+                endif
 
                 ; arm the transfer
                 ld      hl, 1
@@ -858,9 +873,11 @@ str_tsize:        defm "tsize"
 
 ; ===========================================================================
 ; Real-hardware bootable entry (excluded from the host harness build, which has
-; no EEPROM / real silicon). CALL 32768 lands here on boot.
+; no EEPROM / real silicon, and from the dumper build, which supplies its own
+; boot main + provision). CALL 32768 lands here on boot.
 ; ===========================================================================
-                if defined(NETBOOT_HOSTTEST)==0
+                ; `*` is logical AND for 0/1 conditions (pyz80's if has no `&&`/`and`).
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
 
 ; serve_main — read the SAM's MAC + IP from the Trinity EEPROM "Trinity Network "
 ; chunk, fill CONFIG, set a fixed transfer TID, provision the baked-in demo files
@@ -1040,6 +1057,11 @@ SRC_TABLE:        defs 256
                 include "tftp_build.asm"
                 include "tftp_parse.asm"
                 include "encdrv.asm"
-                if defined(NETBOOT_HOSTTEST)==0
+                ; The dumper includes eeprom.asm itself (it reads the EEPROM in
+                ; every build), so suppress this conditional include there to avoid
+                ; a double definition. The standalone serve build keeps it: the
+                ; bootable image reads the SAM's MAC/IP from flash, the host test
+                ; build has no EEPROM and excludes it. (`*` = logical AND.)
+                if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
                 include "eeprom.asm"
                 endif

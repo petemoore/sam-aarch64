@@ -399,6 +399,19 @@ func (e *ENC28J60) ProgramTrinityNetwork(mac [6]byte, ip [4]byte) {
 	e.eep.write(eepChunkBase, chunk)
 }
 
+// ProgramChunk lays a 1 KB data chunk at the flat EEPROM address eeprom.asm's
+// read_chunk reads for chunk number n (the value passed in `value`). get_chunk
+// maps n to flat address (28 + n*4)<<8, so chunk n lives n*1024 bytes above
+// value 1's base (eepChunkBase = 0x2000); chunks are contiguous in value order.
+// This is the EEPROM-region counterpart to ProgramTrinityNetwork: dumper_test.go
+// uses it to preload the 16 chunks of a region (value n*16+1 .. n*16+16 for
+// region n) so a read of that region streams back exactly these bytes. data may
+// be shorter than 1024 (the rest stays zero, modelling unprogrammed cells).
+func (e *ENC28J60) ProgramChunk(n int, data []byte) {
+	addr := (28 + n*4) << 8 // == eepChunkBase + (n-1)*chunkBytes
+	e.eep.write(addr, data)
+}
+
 // SetLinkUpAfterOps models the PHY link coming up only after `n` SPI port
 // accesses (a proxy for the post-init link-pulse-detection delay): until then,
 // a read of PHSTAT2.LSTAT reports the link DOWN and a transmit issued is silently
