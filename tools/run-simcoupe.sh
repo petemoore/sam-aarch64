@@ -82,15 +82,56 @@ trap "rm -rf '$outpath'" EXIT
 # fixtures; large inputs (e.g. the 88 KB release-stripped.tbn, whose
 # two-pass assembly far exceeds 30 s) override via SIMCOUPE_TIMEOUT.
 SIMCOUPE_TIMEOUT="${SIMCOUPE_TIMEOUT:-30}"
+
+# -keyin "STRING" injects keystrokes into the SAM by internally poking
+# LASTK (&5C08) and FLAGS (&5C3B bit 5 = key-available) — the same two
+# sysvars the Go harness InjectKeys/PendingKeys stub writes (i138,
+# keyboard_test.go).  They are the same mechanism; -keyin is SimCoupé's
+# built-in interface to it.
+#
+# Start-trigger constraint (load-bearing — see SimCoupé Base/SAMIO.cpp
+# AutoLoad/TestStartupScreen + Base/Keyin.cpp):
+#   1. Typing only *begins* when AutoLoad() finds the ROM boot-prompt
+#      wait-key loop (WTFK hook) on the Z80 stack — i.e. the SAM is sitting
+#      at the startup screen waiting for a key.  -keyin is designed to type
+#      AT THAT PROMPT, as a person would.
+#   2. *** An autobooting disk (a SAM-side AUTO* file, as build-disk's
+#      -netboot disks use) runs straight past WTFK, so the trigger never
+#      fires and NO keys are ever injected. *** (Verified the hard way: a
+#      proof using an autoboot -netboot disk timed out — keys never arrived.)
+#   3. Once typing has begun, keys stream one-per-frame on each interrupt
+#      exit while CanType() holds: Section A = ROM0 and Section B = page 0
+#      (where LASTK/FLAGS live).  Default boot paging satisfies this.
+# So feeding keys to a standalone program requires a NON-autoboot disk plus
+# a SIMCOUPE_KEYIN that first types the launch command (LOAD/CALL) and then
+# the test keys.  That end-to-end fixture is tracked as open work (i12b) —
+# it needs a local Docker SimCoupé to develop (CI alone is too slow an inner
+# loop for the boot-handoff timing).  The Z80-level injection itself is
+# already proven by the Go harness (i138, keyboard_test.go).
+#
+# Default-off: existing fixtures do not set SIMCOUPE_KEYIN, so this path is
+# never taken for them.
 set +e
-timeout "${SIMCOUPE_TIMEOUT}s" "$SIMCOUPE" \
-    -exitonhalt 1 \
-    -fullscreen 0 \
-    -firstrun 0 \
-    -parallel1 1 \
-    -outpath "$outpath" \
-    -nextfile 0 \
-    "$disk"
+if [ -n "${SIMCOUPE_KEYIN:-}" ]; then
+    timeout "${SIMCOUPE_TIMEOUT}s" "$SIMCOUPE" \
+        -exitonhalt 1 \
+        -fullscreen 0 \
+        -firstrun 0 \
+        -parallel1 1 \
+        -outpath "$outpath" \
+        -nextfile 0 \
+        -keyin "$SIMCOUPE_KEYIN" \
+        "$disk"
+else
+    timeout "${SIMCOUPE_TIMEOUT}s" "$SIMCOUPE" \
+        -exitonhalt 1 \
+        -fullscreen 0 \
+        -firstrun 0 \
+        -parallel1 1 \
+        -outpath "$outpath" \
+        -nextfile 0 \
+        "$disk"
+fi
 simcoupe_rc=$?
 set -e
 
