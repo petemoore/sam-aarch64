@@ -54,6 +54,30 @@ in-hand** (z80dis on `eeprom.bin` chunk 1, per §7.1) — the addresses of the
 redraw, `restore:`, and the resident `read_chunk` are read from the actual bytes,
 not from memory.
 
+## Agreed scope + workflow (Pete, 2026-06-23)
+
+The RAM test (i230) exercises the patched bootblock's **new, in-memory parts**
+bundled into ONE Go-emulation test that **boots from address 0 with the real
+`rom.bin`** (the `samboot_real_boot` harness — so `PALTAB` is real, NOT seeded):
+1. **draw the screen** — the rainbow stripes (verbatim ROM `&ED1B` port, already
+   landed) building `LINICOLS` from the real `PALTAB`, + the MGT banner (RST 16);
+   the Go harness has no screen render, so assert it *wrote* `LINICOLS`/screen RAM
+   and did not crash (Pete: "even if we can't see the screen, it should write to
+   the screen and not crash in emulation");
+2. **fetch the SAMBOOT config** from the modelled Trinity EEPROM (`samboot_read_config`);
+3. **boot the configured record** (RST 8 ALHK, captured via `AttachBDOS`);
+4. a **second case where no record is configured** → it falls through to the
+   BASIC exit (no ALHK).
+
+SimCoupé is NOT used here (it doesn't model the Trinity read/boot); bundling the
+screen into the Go test keeps the new parts together.
+
+**Workflow (the i228 lesson):** build → Go-emulation test (above) → **trinload RAM
+test on Pete's real SAM** (push the bundled payload; confirm screen + config-boot
++ no-boot) → **only then merge the PR** → then, as a separate step, the real
+EEPROM flash (i135c). Do the hardware test BEFORE the PR lands, so a hardware
+failure is fixed in the same PR rather than a follow-up.
+
 ## Verification (emulation-first, the reset chain)
 
 Extend `tools/netboot-oracle/z80/samboot_real_boot_test.go` (i190a — boots the
