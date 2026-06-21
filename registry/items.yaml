@@ -3556,7 +3556,7 @@
   title: Real CMD24 list-sector WRITE + flip serve/client boot images to the real read+write list path
   description: |
     Sibling/integration of i141 (which implemented the real CMD17 list READ, bd_list_read_hw, emulation-proven). For the real-hardware disk push (i194) to find AND claim free records on real Trinity, the boot images must use the real card-absolute list path end-to-end: (1) implement bd_list_write_hw — the raw SD CMD24 single-block WRITE of a list sector on ports &DC-&DF (the i145h model already covers CMD24, sdcard.go), mirroring bd_list_read_hw; (2) gate bdos_claim_record's list write behind the same NETBOOT_REAL_LISTREAD-style flag; (3) flip the serve/client boot images to define the real-list flag so bdos_read_list_sector/the claim write use the real SPI path instead of the BD_HOOK_LISTREAD/LISTWRITE harness scaffold; (4) update/extend the B3 boot-image tests (bdos_claim_name_test, bdos_picker_test) to seed the SD model (SeedSector) rather than the hook, so the claim read-modify-write round-trip is proven through real CMD17+CMD24. Read-only emulation precedent: i141. Hardware verification happens as part of i194's real push. owner:agent.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i141]
   kind: leaf
   owner: agent
