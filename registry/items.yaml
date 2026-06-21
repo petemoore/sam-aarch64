@@ -3486,8 +3486,27 @@
     i122c delivered the host-verified PXE-style fetch-and-boot orchestration entry (client_fetch_boot: EEPROM identity -> TFTP-fetch a .mgt straight into a scratch record via the raw_record_sink -> validate -> ALHK-boot). To exercise it on real hardware, build a bootable SAM disk whose autorun invokes client_fetch_boot (a netboot-fetch-boot-disk make target mirroring netboot-client-disk), decide the autorun entry vs client_main, and run it on real SAM+Trinity: serve a stamped 819200-byte .mgt, confirm it streams into the scratch record (1600 HWSAD sectors), validates, and ALHK-boots it. Hardware-gated (the whole point is the real SD write + real boot, unverifiable in emulation); entangled with the auto-boot/control-return autonomy (i132/i135). The full-size valid stream is also not driven through the bit-banged ENC in the host harness, so the real wire run is the first full-scale fetch-and-boot.
   status: OPEN
   depends_on: [i122c]
+  kind: umbrella
+  owner: agent
+
+- id: i182a
+  title: "Bootable fetch-and-boot disk: netboot-fetch-boot-disk make target + autorun entry (client_fetch_boot) + emulation boot test"
+  description: |
+    Build the agent-completable vessel for i182's hardware run. A NETBOOT_FETCH_BOOT build flag switches netboot_client.asm's &8000 boot entry from 'jp client_main' to 'jp client_fetch_boot' (the i122c PXE-style fetch->stream-into-scratch-record->validate->ALHK-boot entry). New Makefile targets netboot-fetch-boot-boot (the bootable binary, same includes as netboot_client_boot) + netboot-fetch-boot-disk (the .mgt, mirroring netboot-client-disk); wire into build-disk + CI as needed. Emulation boot-path test: RunBoot the fetch-boot binary, assert the entry dispatches to client_fetch_boot and the fetch->stream->validate->boot path runs in the model (reuse the i122c client_fetch_boot harness setup). Decide autorun entry = client_fetch_boot (the port-not-design call). The full-scale real SD write + real ALHK-boot stays hardware-gated (i182b).
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
+  parent: i182
+
+- id: i182b
+  title: Real-Trinity run of client_fetch_boot via the fetch-and-boot disk
+  description: |
+    Hardware-gated completion of i182 (unverifiable in emulation). Boot the i182a fetch-and-boot disk on real SAM+Trinity, serve a stamped 819200-byte .mgt, confirm it streams into the scratch record (1600 HWSAD sectors), validates, and ALHK-boots it. Entangled with auto-boot/control-return autonomy (i132/i135). The full-size valid stream is the first full-scale fetch-and-boot (not driven through the bit-banged ENC in the host harness). Needs i182a's disk.
+  status: OPEN
+  depends_on: [i182a]
+  kind: leaf
+  owner: pete
+  parent: i182
 
 - id: i183
   title: "Harness: model the SAMDOS file-not-found / HSAVE error longjmp (currently a silent no-op)"
