@@ -101,7 +101,7 @@ func TestFoldGuardsFire(t *testing.T) {
 
 	for _, c := range cases {
 		tbn := buildMalformedTbn(t, c.value, c.baseWord, c.slot)
-		res := RunWithFiles(asm, enc, tbn, nil, 10*time.Second)
+		res := runProdComplete(t, asm, enc, tbn, 10*time.Second)
 		if c.wantTag == "" {
 			if !res.Passed {
 				t.Errorf("%s: expected PASS, got printer=%q exit=%s", c.name, res.PrinterCapture, res.ExitReason)

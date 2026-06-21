@@ -96,9 +96,10 @@ func TestInstNopRet(t *testing.T) {
 	t.Logf("enctab.enc:         %d bytes", len(enctabData))
 	t.Logf("inst_nop_ret.compact.tbn: %d bytes", len(inData))
 
-	// Run the harness with a 10-second timeout.
+	// Run the harness with a 10-second timeout, serving the COMPLETE prod-boot
+	// disk with StrictFileNotFound (i184) so a missing boot payload fails loudly.
 	start := time.Now()
-	result := Run(assemblerBin, enctabData, inData, 10*time.Second)
+	result := runProdComplete(t, assemblerBin, enctabData, inData, 10*time.Second)
 	elapsed := time.Since(start)
 
 	t.Logf("Exit reason:    %s", result.ExitReason)
