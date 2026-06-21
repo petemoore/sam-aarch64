@@ -22,7 +22,7 @@ registry **i126** + memory `feedback_comprehensive_emulation`). Each fix is a di
 | 5 | Bounded SD busy-wait | The shared `wait_ready` (`encdrv.asm:427`) loops `JR wait_ready` forever; a stuck Trinity hangs the program with no timeout. |
 | 6 | Colin's 4-step deselect tail | The 2-step `sdc_deselect` leaves SPI state the card mishandles on real hardware. |
 
-Tracking: #1 = **i145g** (DONE + propagated). #2 = **i242 / i244**. #3 = **i242 / i245** (re-arm modelling) + the new program-fix item below. #4 = **i243b**. #5 = **i241** (stuck-BUSY emulation, opt-in). #6 = Colin's 4-step deselect.
+Tracking: #1 = **i145g** (DONE + propagated). #2 = **i242 / i244**. #3 = **i242 / i245** (re-arm modelling) + **i249** (emulation catch, DONE). #4 = **i243b**. #5 = **i246** (program: bounded `sdc_wait_ready` in shared `sd_csd.asm`, DONE) + **i250** (emulation: stuck-BUSY in the DEFAULT SD test path, DONE; i241 first added the opt-in csd_probe form). #6 = Colin's 4-step deselect.
 
 ## Program × fix matrix
 
@@ -32,8 +32,8 @@ program performs no SD transaction, so the SD-path fixes do not apply.
 | Program (entry) | #1 flush | #2 init-before-SD | #3 enc re-arm | #4 clean exit | #5 bounded wait | #6 4-step deselect |
 |---|---|---|---|---|---|---|
 | **csd_probe** (`probe_main`) | HAS | HAS | HAS (`csd_probe.asm:484`) | HAS | HAS | HAS |
-| **serve_main** (`netboot_serve.asm`) | HAS | **MISSING** (`csd_set_bd_records` ~:1336 before `drv_init` ~:1339) | **MISSING** (no re-arm before `serve_serve_once`) | **MISSING** (bare `di; halt`, `sv_fail_cfg`/`sv_fail_init`) | **MISSING** (`sd_csd.asm` → unbounded `wait_ready`) | **MISSING** (2-step `sdc_deselect` `sd_csd.asm:246`) |
-| **client_main** (`netboot_client.asm`) | HAS | HAS | **MISSING** (no re-arm after SD write) | **MISSING** (bare `di; halt`) | **MISSING** (`sd_csd.asm` → unbounded `wait_ready`) | **MISSING** (2-step `sdc_deselect` `sd_csd.asm:246`) |
+| **serve_main** (`netboot_serve.asm`) | HAS | **MISSING** (`csd_set_bd_records` ~:1336 before `drv_init` ~:1339) | **MISSING** (no re-arm before `serve_serve_once`) | **MISSING** (bare `di; halt`, `sv_fail_cfg`/`sv_fail_init`) | HAS (`sd_csd.asm` → bounded `sdc_wait_ready`, i246) | **MISSING** (2-step `sdc_deselect` `sd_csd.asm:246`) |
+| **client_main** (`netboot_client.asm`) | HAS | HAS | **MISSING** (no re-arm after SD write) | **MISSING** (bare `di; halt`) | HAS (`sd_csd.asm` → bounded `sdc_wait_ready`, i246) | **MISSING** (2-step `sdc_deselect` `sd_csd.asm:246`) |
 | **dumper** | N/A | N/A | N/A | **MISSING** (#4) | N/A | N/A |
 | **http** | N/A | N/A | N/A | **MISSING** (#4) | N/A | N/A |
 | **server** | N/A | N/A | N/A | **MISSING** (#4) | N/A | N/A |
@@ -64,7 +64,7 @@ silently fail):
 1. **serve_main #2** — SD transaction (`csd_set_bd_records`) runs *before* `drv_init`. Tracked: **i242 / i244** (reorder running).
 2. **serve_main #3** — no `enc_rx_reestablish` before `serve_serve_once`; serving dies after the first SD read. Tracked: **i242 / i245** (model) + new program-fix item.
 3. **client_main #3** — no ENC re-arm after the SD write. **Was untracked → new item.**
-4. **serve_main #5 / client_main #5** — unbounded `wait_ready`; a stuck Trinity hangs forever. **Was untracked → new shared-module item.**
+4. **serve_main #5 / client_main #5** — unbounded `wait_ready`; a stuck Trinity hangs forever. **DONE** (i246): the shared `sd_csd.asm` now uses the bounded `sdc_wait_ready` (sticky `sdc_timed_out`), so one edit fixed both; the default emulation now catches a regression (i250).
 5. **serve_main #6 / client_main #6** — 2-step `sdc_deselect`; real card mishandles SPI tail. **Was untracked → new shared-module item.**
 6. **serve_main #4 / client_main #4 / dumper / http / server / smoke #4** — bare `di; halt` instead of `tr_terminate`. Tracked: **i243b**.
 
@@ -82,20 +82,20 @@ present):
 
 Must NOT reach hardware until the cited gaps close:
 
-- **serve_main** — missing #2, #3, #4, #5, #6.
-- **client_main** — missing #3, #4, #5, #6.
+- **serve_main** — missing #2, #3, #4, #6.
+- **client_main** — missing #3, #4, #6.
 - **dumper**, **http**, **server**, **smoke** — missing #4 (clean exit) only; otherwise no SD risk, but still gated on i243b.
 
 ## Emulation gaps (the load-bearing concern)
 
-The deepest finding: **the emulator does not currently fail when fixes #3, #5,
-or #6 are absent** — so an agent can "prove" a program in emulation and still
-ship a hardware hang. Per Pete's directive these are the top of the priority
-queue (they gate *all* trustworthy hardware work). Tracked as top-priority
-emulation-gap items, tied to the **i126** comprehensive-emulation north star:
+The deepest finding was: **the emulator did not fail when fixes #3, #5, or #6
+were absent** — so an agent could "prove" a program in emulation and still ship a
+hardware hang. Per Pete's directive these were the top of the priority queue (they
+gate *all* trustworthy hardware work). Tied to the **i126** comprehensive-emulation
+north star; #3 and #5 are now closed, #6 remains:
 
-- **#3 not caught** — the emulator does not model the SD transaction disturbing the ENC RX path, so a missing `enc_rx_reestablish` passes (the serve-dies-after-SD class).
-- **#5 not caught** — the modelled SD BUSY clears in ~1 poll, so an unbounded `wait_ready` never hangs; only the **opt-in** stuck-BUSY mode (i241) exercises it.
+- **#3 caught (i249, DONE)** — the model perturbs the ENC RX path across an SD transaction (`rxDisarmed`), so a missing `enc_rx_reestablish` now fails a host test (the serve-dies-after-SD class).
+- **#5 caught (i250, DONE)** — a stuck-BUSY condition is now part of the DEFAULT SD test path (`TestCSDToBDRecordsBoundedOnStuckBusy`), so an unbounded `wait_ready` fails by hanging to the step cap; no opt-in needed (i241 first added the opt-in csd_probe form).
 - **#6 not caught** — the model accepts the 2-step deselect; the 4-step tail requirement is unmodelled.
 
 (Fix #1's emulation gap — the missing-flush / one-byte-read-lag class — is
