@@ -490,6 +490,15 @@ func (e *ENC28J60) EEPROMImage() []byte {
 	return append([]byte(nil), e.eep.store...)
 }
 
+// SetEEPROMWriteFault forces the flash EEPROM to silently drop every programmed
+// byte (a simulated dead write path), or restores normal programming. It is the
+// negative control for a write-then-read-back-and-verify test: with the fault on,
+// the read-back must differ from what was written, so the test reports FAIL —
+// proving the test can fail rather than always pass. See eeprom.writeFault.
+func (e *ENC28J60) SetEEPROMWriteFault(on bool) {
+	e.eep.writeFault = on
+}
+
 // ProgramChunk lays a 1 KB data chunk at the flat EEPROM address eeprom.asm's
 // read_chunk reads for chunk number n (the value passed in `value`). get_chunk
 // maps n to flat address (28 + n*4)<<8, so chunk n lives n*1024 bytes above

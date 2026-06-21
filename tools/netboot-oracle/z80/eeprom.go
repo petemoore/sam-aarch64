@@ -93,6 +93,13 @@ type eeprom struct {
 	opcode   byte   // the current transaction's command byte (latched at byteIdx 0)
 	wel      bool   // write-enable latch: a WRITE is ignored unless WREN (0x06) set it
 	wrote    bool   // a byte was programmed this transaction (clears the WEL on CS-deassert)
+
+	// writeFault, when set, makes programByte drop every data byte even with the
+	// WEL armed — a simulated dead write path (bad SPI, stuck CS, failed program
+	// cycle). It is the negative control for write-then-verify tests: such a test
+	// must report FAIL when writes silently do not stick, proving it can actually
+	// fail rather than always pass. Off by default (the faithful chip programs).
+	writeFault bool
 }
 
 // ensure grows the backing store to at least n bytes (zero-filled).
@@ -179,7 +186,7 @@ func (p *eeprom) clock(v byte) {
 // boundary overwrites the start of the same page. The 17-bit device address wraps
 // modulo the device size (the command's top 7 address bits are don't-care).
 func (p *eeprom) programByte(v byte) {
-	if !p.wel {
+	if !p.wel || p.writeFault {
 		return
 	}
 	a := p.addr & (eepDeviceSize - 1)
