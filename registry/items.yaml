@@ -3922,9 +3922,11 @@
   title: "Harness fidelity: load boot payloads from the build-disk image, not via separate hardcoded page-loads"
   description: |
     The Go test harness (tools/z80-test-harness-go) pre-loads off-axis boot payloads (test_cluster, test_mem, paged_call, enc_fix, ...) directly into physical pages in its test setup, bypassing the real disk->HLOAD path SimCoupe exercises. Consequence: a payload missing from the SimCoupe fixture disk still passes the harness (it pre-loads the page), so harness-green != SimCoupe-green. This gap let i69 (PR #577) pass the harness while all four test-variant SimCoupe jobs hung (rc=124) because tools/run-roundtrip.sh did not put the enc_fix payload on the fixture disk. Per CLAUDE.md s7 (one emulation layer capturing every integration point): make the harness derive its loaded payloads from the SAME build-disk image SimCoupe boots (parse the .mgt directory / mirror build-disk's file list), OR at minimum assert the build-disk manifest contains every payload the boot loader HLOADs, so a missing-from-disk payload fails the harness too. Owner agent.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 700, role: completing}
 
 - id: i208
   title: "Review both Go SAM-emulation libraries: shared vs duplicated logic, merge recommendation"
