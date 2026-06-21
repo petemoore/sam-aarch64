@@ -273,10 +273,12 @@
   title: Linker-layout coupling (spectrum4.ld hardcoded in flatten)
   description: |
     The flatten step has spectrum4.ld hardcoded; decouple the linker layout so other projects can use the toolchain without baking spectrum4-specific layout assumptions. Scope row.
-  status: OPEN
+  status: DONE
   depends_on: [i56]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 615, role: completing}
 
 - id: i21
   title: "Go-harness fidelity follow-ups: make harness-sweep, USAGE.md, memory watchpoint"
@@ -1056,9 +1058,11 @@
   title: SpectrumFourLayout extraction behind a -layout flag (host flatten path)
   description: |
     q42 RESOLVED (Pete, 2026-06-23, decision a): do the cheap -layout / SpectrumFourLayout struct extraction, NOT a linker-script parser (the i210 report docs/specs/linker-script-layout-assessment.md found a .ld parser is more code for less coverage and cannot describe the SAM page-map). Extract the hardcoded SpectrumFourLayout (tools/sam-aarch64/frontend/flatten.go:54-66) behind a -layout flag / config so the host flatten path is not spectrum4-locked (~100-200 LOC, no perf cost, release-gate-guarded byte-match). NOTE (i210 finding): this is a HOST flatten-path concern only — the SAM-side assemble path is already layout-free (single .org-driven; .section/.text/.data are zero-byte directives that round-trip but do not affect placement), so a from-scratch on-SAM project is NOT forced into spectrum4's layout. i20 (the flatten hardcoding) folds into this.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 615, role: completing}
 
 - id: i57
   title: "Comment-compression experiment (host-side, Go): benchmark Z80-feasible schemes"
