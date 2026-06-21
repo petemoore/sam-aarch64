@@ -51,8 +51,7 @@ pp_loop:
                 ld      b, PP_NPORTS*2          ; detail length
                 ld      hl, pp_detail
                 call    test_report
-                di
-                halt
+                jp      tr_terminate            ; di;halt in emulation, RET to trinload on hardware (i228)
 
 ; ---------------------------------------------------------------------------
 ; Candidate ports to characterize (Pete-blessed, side-effect-free reads, all

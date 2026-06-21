@@ -119,7 +119,21 @@ type mem struct {
 	romBase   uint16   // first ROM address (e.g. 0xC000 for ROM1 at boot)
 	keyQueue  []byte   // injected keypresses (i138 keyboard-sysvar stub)
 	keyMatrix uint8    // byte returned on port &f9 reads (active-low keyboard matrix)
+
+	// detectHardware drives the runtime emulation-vs-hardware probe (i228): a
+	// test binary INs emuDetectPort (&7F, an unmapped SAM port) to tell where it
+	// runs — on real hardware the floating bus reads 0xFF (confirmed: all probed
+	// ports read 0xFF), so the emulator returns a DISTINCT marker (0x00) instead.
+	// Default false => the port reads the marker (this IS the emulator). A test
+	// sets it true to make the port read 0xFF, exercising the hardware (RET-to-
+	// trinload) branch of the terminator. See test_report.asm tr_terminate.
+	detectHardware bool
 }
+
+const (
+	emuDetectPort   uint8 = 0x7F // unmapped SAM port the i228 probe reads
+	emuDetectMarker uint8 = 0x00 // value the emulator returns there (hardware: 0xFF)
+)
 
 // peek/poke are the single funnel for every RAM/ROM access: they route through
 // the pager so direct memory reads/writes honour the live LMPR/HMPR mapping.
@@ -180,6 +194,16 @@ func (m *mem) In(port uint8) uint8 {
 	// device byte.
 	if m.cpu != nil && m.isBlockInputPort(port) {
 		port = m.cpu.BC.Lo
+	}
+	// Emulation-detect port (&7F, i228): a test binary INs it to tell emulation
+	// from real hardware. Real hardware floats the bus high (0xFF); the emulator
+	// returns a distinct marker (0x00) so the terminator can branch. detectHardware
+	// flips it to 0xFF so a test can exercise the hardware (RET) branch.
+	if port == emuDetectPort {
+		if m.detectHardware {
+			return 0xFF
+		}
+		return emuDetectMarker
 	}
 	// Keyboard-matrix status port (&f9): the trinload/dumper/serve Esc poll reads
 	// it (`ld a,<row>; in a,(&f9); bit 5,a`). Return the modelled matrix byte
@@ -454,6 +478,14 @@ func (mac *Machine) Read(addr uint16, n int) []byte {
 // it. Pass nil to detach.
 func (mac *Machine) AttachIO(dev IODevice) {
 	mac.m.io = dev
+}
+
+// SetEmuDetectHardware makes the emulation-detect port (&7F, i228) read 0xFF —
+// the value real hardware floats — instead of the emulator marker (0x00), so a
+// test can exercise the hardware (RET-to-trinload) branch of tr_terminate. Off
+// by default (the port reads the marker, since this is the emulator).
+func (mac *Machine) SetEmuDetectHardware(b bool) {
+	mac.m.detectHardware = b
 }
 
 // InjectKeys appends keys to the keyboard queue (i138 keyboard-sysvar stub).
