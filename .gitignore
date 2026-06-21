@@ -62,3 +62,7 @@ tests/release/release.s.tbn
 # bootloader is a private artifact kept out of the repo and CI (q55); the data
 # file is regenerated locally from the sibling repo via `make gen-bootloader-data`.
 src/netboot/bootloader_chunk1_data.asm
+
+# Go workspace checksum file — regenerated locally by go build; not tracked
+# (go.work itself IS tracked; go.work.sum is the local-build companion).
+go.work.sum
