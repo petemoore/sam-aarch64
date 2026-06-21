@@ -39,9 +39,11 @@
 // THE HONESTY LINE (CLAUDE.md §5, §7). This runs the REAL patched ROM and REAL
 // EEPROM through the faithful pager + EEPROM SPI model — emulation-first, no flat
 // shortcut, no HOSTTEST carve-out. The capture bytes are faithful; only the address
-// mapping was wrong and is now corrected. What it does NOT model is the SAM
-// display/ASIC and the SD card B-DOS init touches, so the run halts inside B-DOS
-// init after the coherent hand-off. Emulation-verified is not hardware-verified.
+// mapping was wrong and is now corrected. With the harness modelling EI;HALT as the
+// frame interrupt resuming it (i258 — a HALT is terminal only when interrupts are
+// disabled), the run no longer stops at B-DOS init's first frame-timed delay loop:
+// it boots coherently all the way THROUGH B-DOS init to the ROM editor idle loop —
+// Colin's full fork reaches BASIC. Emulation-verified is not hardware-verified.
 package z80_test
 
 import (
@@ -74,12 +76,19 @@ const (
 	addrReadChunk = 0x40BD // the bootblock's read_chunk helper, CALL'd 12x (B-DOS chunks 2..13)
 	addrExecDOS   = 0x409E // CALL &805F — the B-DOS entry, reached after the load loop
 
+	// The ROM editor's keyboard-wait idle loop, reached once B-DOS init completes
+	// and hands back to BASIC/the editor. With i258's faithful EI;HALT semantics the
+	// boot runs all the way here (a tight spin in the &01C7..&01CB cluster) instead of
+	// stopping at B-DOS init's first frame-timed HALT. Used as a deterministic StopPC
+	// so the test asserts "reached BASIC" rather than running to the step cap.
+	addrEditorIdle = 0x01CB
+
 	// Boot-time paging: ROM0 at section A (LMPR bit5=0), ROM1 at section D (bit6=1),
 	// page 0 — the reset map the patched ROM begins executing under.
 	bootLMPR = 0x40
 	bootHMPR = 0x00
 
-	realBootStepCap = 5_000_000 // generous; the real boot reaches the trap well within this
+	realBootStepCap = 5_000_000 // generous; the real boot reaches the EEPROM-fetch milestones well within this
 )
 
 // realCapturePath resolves a captured artifact from $SAMBOOT_CAPTURE_DIR or the
@@ -294,20 +303,33 @@ func TestRealBootLoadsBootblockAtChunk1(t *testing.T) {
 	}
 }
 
-// TestRealBootLoadsBDOSCoherently is the payoff: with the device-linear EEPROM the
+// TestRealBootBootsToBASIC is the payoff: Colin's fork boots COHERENTLY all the way
+// through B-DOS init to BASIC in the Go core. With the device-linear EEPROM the
 // bootblock at &4000 runs the documented EEPROM auto-load — twelve read_chunk loads
-// pull B-DOS chunks 2..13 into &8000 and it reaches CALL &805F (the B-DOS entry).
-// The run then halts inside B-DOS init, which touches the unmodeled SD/screen
-// hardware — expected; the point is that the boot is COHERENT (loads + hands off),
-// the EEPROM auto-load Pete's card performs, not a wander into zeroed RAM.
-func TestRealBootLoadsBDOSCoherently(t *testing.T) {
+// pull B-DOS chunks 2..13 into &8000 and it reaches CALL &805F (the B-DOS entry) —
+// and then, with i258's faithful HALT semantics (a HALT only terminates the run when
+// interrupts are disabled; an EI;HALT is waiting for the 50 Hz frame interrupt and
+// resumes, exactly as real hardware), B-DOS init's frame-timed delay loops (e.g.
+// &AB17: LD B,A / HALT / IN (&FE) / DJNZ) spin out instead of stopping the run. The
+// boot completes init and hands back to the ROM editor, whose keyboard-wait idle loop
+// (the &01C7..&01CB cluster) the boot then spins on — BASIC reached.
+//
+// Before i258 this test asserted the boot HALTED inside B-DOS init (finalPC>=&8000,
+// halted=true); that was an artifact of the harness treating every HALT as terminal.
+// With the fix those flip: the boot reaches the editor, so the test now asserts that
+// stronger, truer claim via a deterministic StopPC at the idle loop.
+func TestRealBootBootsToBASIC(t *testing.T) {
 	rom, eeprom := loadRealCaptures(t)
 	mac, _ := newRealBootMachine(t, rom, eeprom)
 
 	chunkLoads := 0
 	var reachedExecDOS bool
-	res, _ := mac.RunBootFrom(0x0000, z80h.Entry{
+	res, err := mac.RunBootFrom(0x0000, z80h.Entry{
 		StepCap: realBootStepCap,
+		// Stop deterministically once the ROM editor idle loop is firmly spinning
+		// (17th visit) — "reached BASIC" — rather than running to the step cap.
+		StopPC:     addrEditorIdle,
+		StopPCSkip: 16,
 		Trace: func(pc uint16) {
 			if pc == addrReadChunk {
 				chunkLoads++
@@ -317,20 +339,33 @@ func TestRealBootLoadsBDOSCoherently(t *testing.T) {
 			}
 		},
 	})
-	t.Logf("real boot: read_chunk calls=%d, reached CALL &805F=%v, finalPC=&%04X halted=%v",
-		chunkLoads, reachedExecDOS, res.PC, res.Halted)
+	if err != nil {
+		t.Fatalf("real boot run faulted: %v", err)
+	}
+	t.Logf("real boot: read_chunk calls=%d, reached CALL &805F=%v, finalPC=&%04X reachedStop=%v steps=%d",
+		chunkLoads, reachedExecDOS, res.PC, res.ReachedStop, res.Steps)
 
+	// The coherent EEPROM auto-load proofs that held before i258 still hold.
 	if chunkLoads != 12 {
 		t.Errorf("bootblock ran %d read_chunk loads, want 12 (B-DOS chunks 2..13) — EEPROM auto-load not coherent", chunkLoads)
 	}
 	if !reachedExecDOS {
 		t.Errorf("boot did not reach CALL &805F — the bootblock did not hand off to a loaded B-DOS")
 	}
-	// The run continues INTO B-DOS init (finalPC well above &8000) rather than halting
-	// at the &4000 prologue — the hand-off is real, not a wander. (We do not byte-check
-	// &8000 post-run: B-DOS init overwrites it; the 12 loads + &805F entry are the proof.)
-	if res.PC < 0x8000 {
-		t.Errorf("finalPC=&%04X is below &8000 — the boot did not run into the loaded B-DOS", res.PC)
+
+	// The NEW, stronger claim: the boot runs THROUGH B-DOS init (resuming its
+	// frame-timed EI;HALT delay loops) and reaches the ROM editor idle loop — BASIC.
+	// reachedStop proves we stopped at the deterministic StopPC, not at the step cap
+	// or a wander; finalPC is the editor idle PC in the &0100..&05FF band.
+	if !res.ReachedStop {
+		t.Fatalf("boot did not reach the ROM editor idle loop &%04X within %d steps (finalPC=&%04X) — B-DOS init did not complete to BASIC",
+			addrEditorIdle, res.Steps, res.PC)
+	}
+	if res.PC != addrEditorIdle {
+		t.Errorf("finalPC=&%04X, want the editor idle PC &%04X (reached BASIC)", res.PC, addrEditorIdle)
+	}
+	if res.PC < 0x0100 || res.PC > 0x05FF {
+		t.Errorf("finalPC=&%04X is outside the ROM editor band &0100..&05FF — not the editor idle loop", res.PC)
 	}
 }
 
