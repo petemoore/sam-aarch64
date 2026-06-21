@@ -670,17 +670,26 @@ bfhr_next:
 ;      BD_LIST_BUF   512 bytes   the list sector to write (a read-modified copy)
 ; Clobbers: A, DE, HL.
 ;
-; Issues the harness hook BD_HOOK_LISTWRITE, which models a raw SD single-block
-; WRITE at the card-absolute LBA of the list sector. The hardware implementation
-; (the SPI command ladder on ports &DC–&DF) is hardware-gated, the SAME gate as
-; the list READ; docs/specs/trinity-record-detection-design.md §8.
+; Two builds select the write path (same flag as the READ — they flip together):
+;   * default (harness B3 logic tests): issue the harness hook BD_HOOK_LISTWRITE,
+;     which the BDOSStore captures — the claim geometry + RMW safety are
+;     exercised without modelling the SPI transaction.
+;   * NETBOOT_REAL_LISTREAD (i198, the boot images' real path): call bd_list_write_hw
+;     (sd_csd.asm), the raw SD CMD24 single-block write on ports &DC–&DF. The
+;     CMD24 write path is host-verified by sd_listwrite_test.go (the real RMW
+;     round-trip through CMD17+CMD24 on the SD model); the real-Trinity SPI write
+;     is the final gate (CLAUDE.md §5; docs/specs/trinity-record-detection-design.md §8).
 bdos_write_list_sector:
+                if defined(NETBOOT_REAL_LISTREAD)
+                jp      bd_list_write_hw       ; real CMD24 SPI write (tail-call, returns to caller)
+                else
                 ld      a, (BD_LIST_SECTOR)
                 ld      e, a                   ; E = list-sector number (1-based)
                 ld      hl, BD_LIST_BUF
                 rst     8
                 defb    BD_HOOK_LISTWRITE
                 ret
+                endif
 
 ; ---------------------------------------------------------------------------
 ; bdos_claim_record — mark a pushed Trinity record as USED by writing its central

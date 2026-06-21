@@ -9,10 +9,17 @@
 // These tests load the serve BOOT binary (netboot_serve_boot.bin — the only build
 // carrying the bdos_seam.asm RST 8 hooks + raw_record_sink.asm, behind
 // NETBOOT_HOSTTEST==0) and drive the REAL serve_serve_once dispatcher + the real
-// HWSAD/HRSAD dispatch under AttachBDOS, so BDOSStore.SectorWrites() captures the
+// HWSAD dispatch under AttachBDOS, so BDOSStore.SectorWrites() captures the
 // writes. The frame replies + sector writes + BD_REC_VALID are asserted against
 // the serve.Responder Go authority (Config.DiskRecordPush), which routes the body
 // through the same bdos.RawSink + bdos.ValidateDiskRecord.
+//
+// List-sector reads and writes use real SPI CMD17/CMD24 (NETBOOT_REAL_LISTREAD=1):
+// the SD model (sdcard.go) has list sectors seeded at card-absolute LBAs so CMD17
+// reads return the expected record-list sectors, and CMD24 writes are captured via
+// SDCard.CapturedSector. The HWSAD (record data write) hook still goes through
+// BDOSStore.SectorWrites, and the HRECORD hook (bdos_select_record) still uses
+// BDOSStore.Selected — only list-sector I/O moved to real SPI.
 //
 // Two tiers, mirroring netboot_fetch_boot_test.go's split (the vendored ENC SPI is
 // bit-banged, so a full 819,200-byte image over the wire is impractically many
@@ -37,6 +44,7 @@ package z80_test
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/bdos"
@@ -45,13 +53,41 @@ import (
 	z80h "github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80"
 )
 
+// sdSlotEntry returns the 16-byte list entry for record n (1-based) from the
+// SD model's captured sector at LBA listSec. Returns nil if no CMD24 write was
+// captured for that LBA.
+func sdSlotEntry(sd *z80h.SDCard, listSec, n int) []byte {
+	sec, ok := sd.CapturedSector(uint32(listSec))
+	if !ok {
+		return nil
+	}
+	off := (n - 1) * 16
+	return sec[off : off+16]
+}
+
+// sdSlotName returns the trimmed B-DOS record name for record n from the SD
+// model's captured LBA listSec. Free records (slot[0]&0x7F == 0) return "".
+// The full 16-byte entry is used (B-DOS record names occupy the whole 16-byte
+// slot, with bit 7 masked and trailing spaces trimmed — matching applyListWrite).
+func sdSlotName(sd *z80h.SDCard, listSec, n int) string {
+	entry := sdSlotEntry(sd, listSec, n)
+	if entry == nil || entry[0]&0x7F == 0 {
+		return ""
+	}
+	name := make([]byte, 16)
+	for i := range name {
+		name[i] = entry[i] & 0x7F
+	}
+	return strings.TrimRight(string(name), " ")
+}
+
 // loadServeRecordPush loads the serve BOOT binary, attaches a BDOS store + card,
-// fills CONFIG + inits the driver, models the card record list, and returns the
-// machine, the ENC, the store, the card, and the matching Go authority with
-// DiskRecordPush enabled. freeRecord is the record bdos_find_free_record will
-// return (set up as the only free slot among `records`); pass freeRecord == 0 to
-// drive the no-free-record case (every record named).
-func loadServeRecordPush(t *testing.T, records, freeRecord int) (*z80h.Machine, *z80h.ENC28J60, *z80h.BDOSStore, *serve.Responder) {
+// fills CONFIG + inits the driver, models the card record list, seeds the SD model,
+// and returns the machine, the ENC, the store, the SD card, and the matching Go
+// authority with DiskRecordPush enabled. freeRecord is the record
+// bdos_find_free_record will return (set up as the only free slot among `records`);
+// pass freeRecord == 0 to drive the no-free-record case (every record named).
+func loadServeRecordPush(t *testing.T, records, freeRecord int) (*z80h.Machine, *z80h.ENC28J60, *z80h.BDOSStore, *z80h.SDCard, *serve.Responder) {
 	t.Helper()
 	mac, err := z80h.Load(serveBootBin, serveBootMap)
 	if err != nil {
@@ -61,9 +97,12 @@ func loadServeRecordPush(t *testing.T, records, freeRecord int) (*z80h.Machine, 
 	// which the boot map exports too. No served files are needed for a WRQ push
 	// (resolve is RRQ-only); fillServeConfig fills the SAM's identity into CONFIG_*
 	// so serve_serve_once wraps replies to the right endpoint.
-	fillServeConfig(t, mac, []demoFile{{"hello.txt", makeFile(10), demoSrcOrgA}})
+	// Use 0xD000 (above the binary tail ~&C2EB) to avoid overwriting sdc_init_ladder.
+	fillServeConfig(t, mac, []demoFile{{"hello.txt", makeFile(10), 0xD000}})
 
 	enc := z80h.NewENC28J60()
+	// Attach SD before initServeDriver so serve_main's CSD read path is ready.
+	sd := enc.AttachSD(csdV2(1))
 	initServeDriver(t, mac, enc)
 
 	store := z80h.NewBDOSStore()
@@ -79,12 +118,23 @@ func loadServeRecordPush(t *testing.T, records, freeRecord int) (*z80h.Machine, 
 		}
 		card.SetRecordName(n, "INUSE")
 	}
+
+	// Seed SD list sectors from the card model. records <= 8 in all callers,
+	// so only list sector 1 (LBA 1) is needed (records 1..32 → sector 1).
+	maxListSec := (records + 31) / 32
+	for ls := 1; ls <= maxListSec; ls++ {
+		sec := card.ListSector(ls)
+		sd.SeedSector(uint32(ls), sec[:])
+	}
+	if _, err := mac.Call("csd_set_bd_records"); err != nil {
+		t.Fatalf("csd_set_bd_records: %v", err)
+	}
 	mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), uint16(records))
 
 	cfg := serve.Config{ServerMAC: demoServerMAC, ServerIP: demoServerIP, ServerTID: demoServerTID, DiskRecordPush: true}
 	goRef := serve.New(cfg, tftp.MapStore{}, func(string) tftp.Source { return tftp.ByteSource(nil) })
 	goRef.SetFreeRecordAvailable(freeRecord != 0)
-	return mac, enc, store, goRef
+	return mac, enc, store, sd, goRef
 }
 
 // recordValidImage builds a RecordSize (819,200-byte) image with the BDOS stamp at
@@ -132,7 +182,7 @@ func assertRecordSectors(t *testing.T, writes []z80h.SectorWrite, img []byte, re
 // reply is asserted byte-for-byte against the Go authority.
 func TestServeWRQRecordPushWireRouting(t *testing.T) {
 	const records, freeRecord = 8, 4
-	mac, enc, store, goRef := loadServeRecordPush(t, records, freeRecord)
+	mac, enc, store, _, goRef := loadServeRecordPush(t, records, freeRecord)
 
 	// A small image: two full 512-byte blocks + a short final tail → three DATA
 	// blocks, ending on a short one (and far under the ENC RX ring's frame budget).
@@ -217,7 +267,7 @@ func TestServeWRQRecordPushWireRouting(t *testing.T) {
 // touched — the shared-resource invariant). The reply matches the Go authority.
 func TestServeWRQRecordPushNoFreeRecord(t *testing.T) {
 	const records, freeRecord = 4, 0 // 0 = no free slot; all 4 named
-	mac, enc, store, goRef := loadServeRecordPush(t, records, freeRecord)
+	mac, enc, store, _, goRef := loadServeRecordPush(t, records, freeRecord)
 
 	wrq := demoWRQ("upload.mgt", nil)
 	got := serveDemo(t, mac, enc, wrq)
@@ -253,7 +303,7 @@ func TestServeWRQRecordPushNoFreeRecord(t *testing.T) {
 // fbStreamAndFinalize (stream via the sink, then call the finalize entry).
 func streamFullRecordAndFinalize(t *testing.T, img []byte, record int) (*z80h.Machine, *z80h.BDOSStore, []byte) {
 	t.Helper()
-	mac, enc, store, _ := loadServeRecordPush(t, 8, record)
+	mac, enc, store, _, _ := loadServeRecordPush(t, 8, record)
 
 	// Arm a push exactly the way handle_wrq does on a bare WRQ + a successful claim:
 	// drive the WRQ handshake through the real dispatch (on the already-inited ENC)
@@ -376,7 +426,7 @@ func assertErrorDiskFull(t *testing.T, frame []byte) {
 // point here is ring-wrap fidelity, not the validation reply.
 func TestServeWRQRecordPushWireRingWrap(t *testing.T) {
 	const records, freeRecord = 8, 4
-	mac, enc, store, goRef := loadServeRecordPush(t, records, freeRecord)
+	mac, enc, store, _, goRef := loadServeRecordPush(t, records, freeRecord)
 
 	// 60 full 512-byte blocks (~5.1 ring wraps) + a short 200-byte tail block to
 	// end the transfer. 60 blocks >> the ~35 needed for 3 wraps, with margin.
@@ -442,17 +492,20 @@ func TestServeWRQRecordPushWireRingWrap(t *testing.T) {
 // all others (1..records) read as named. The Go authority is seeded with the same
 // free-record sequence via SetFreeRecords so its claim model advances in lockstep
 // with the Z80 (each valid push claims the head). This backs the i121g claim tests:
-// after a push claims a record (writes its list entry), the CardModel update makes
-// bdos_find_free_record return the NEXT free record on the following push.
-func loadServeRecordPushFree(t *testing.T, records int, free []int) (*z80h.Machine, *z80h.ENC28J60, *z80h.BDOSStore, *z80h.CardModel, *serve.Responder) {
+// after a push claims a record (writes its list entry via CMD24), the SD model
+// update makes bdos_find_free_record return the NEXT free record on the following push.
+func loadServeRecordPushFree(t *testing.T, records int, free []int) (*z80h.Machine, *z80h.ENC28J60, *z80h.BDOSStore, *z80h.SDCard, *z80h.CardModel, *serve.Responder) {
 	t.Helper()
 	mac, err := z80h.Load(serveBootBin, serveBootMap)
 	if err != nil {
 		t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
 	}
-	fillServeConfig(t, mac, []demoFile{{"hello.txt", makeFile(10), demoSrcOrgA}})
+	// Use 0xD000 (above the binary tail ~&C2EB) to avoid overwriting sdc_init_ladder.
+	fillServeConfig(t, mac, []demoFile{{"hello.txt", makeFile(10), 0xD000}})
 
 	enc := z80h.NewENC28J60()
+	// Attach SD before initServeDriver so serve_main's CSD read path is ready.
+	sd := enc.AttachSD(csdV2(1))
 	initServeDriver(t, mac, enc)
 
 	store := z80h.NewBDOSStore()
@@ -470,6 +523,16 @@ func loadServeRecordPushFree(t *testing.T, records int, free []int) (*z80h.Machi
 		}
 		card.SetRecordName(n, "INUSE")
 	}
+
+	// Seed SD list sectors from the card model.
+	maxListSec := (records + 31) / 32
+	for ls := 1; ls <= maxListSec; ls++ {
+		sec := card.ListSector(ls)
+		sd.SeedSector(uint32(ls), sec[:])
+	}
+	if _, err := mac.Call("csd_set_bd_records"); err != nil {
+		t.Fatalf("csd_set_bd_records: %v", err)
+	}
 	mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), uint16(records))
 
 	// The i121g claim tests assert a LOWEST-first record advance (3 then 4, the
@@ -482,13 +545,13 @@ func loadServeRecordPushFree(t *testing.T, records int, free []int) (*z80h.Machi
 	cfg := serve.Config{ServerMAC: demoServerMAC, ServerIP: demoServerIP, ServerTID: demoServerTID, DiskRecordPush: true, Strategy: serve.StrategyLowestFree}
 	goRef := serve.New(cfg, tftp.MapStore{}, func(string) tftp.Source { return tftp.ByteSource(nil) })
 	goRef.SetFreeRecords(free)
-	return mac, enc, store, card, goRef
+	return mac, enc, store, sd, card, goRef
 }
 
 // runFullPush drives one complete disk-record push on a SHARED machine (so a claim
-// from an earlier push is visible to a later one via the CardModel): the WRQ
+// from an earlier push is visible to a later one via the SD model): the WRQ
 // handshake for `name` through the real dispatch (which runs wrq_claim_record →
-// bdos_find_free_record against the current card state), the whole image streamed
+// bdos_find_free_record against the current SD state), the whole image streamed
 // through the sink, and wd_finalize, returning the Z80 final reply frame. It ALSO
 // drives the Go authority (`goRef`) through the same WRQ + DATA frames via OnFrame
 // (pure Go, no bit-banged ENC, so feeding all 1600 blocks is cheap), so the
@@ -549,17 +612,17 @@ func runFullPush(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, goRef *ser
 
 // TestServeWRQRecordPushClaimsDifferentRecords is the DECISIVE i121g batch test:
 // pushing two valid disk images in succession lands them on DIFFERENT records,
-// because the first push CLAIMS its record (writes the record-list name entry) so
-// bdos_find_free_record advances to the next free record for the second push. This
-// is Pete's primary use case — pushing many disk images, each claiming its own slot
-// — and without the claim the second push would overwrite the first. The claim
-// list-write is asserted to target the right record with the right filename-derived
-// name, and the per-push sector writes confirm the two images landed in different
-// records.
+// because the first push CLAIMS its record (writes the record-list name entry via
+// CMD24) so bdos_find_free_record advances to the next free record for the second
+// push. This is Pete's primary use case — pushing many disk images, each claiming
+// its own slot — and without the claim the second push would overwrite the first.
+// The claim list-write is asserted via the SD model's captured CMD24 sector (which
+// record was marked used, which filename-derived name), and the per-push sector
+// writes confirm the two images landed in different records.
 func TestServeWRQRecordPushClaimsDifferentRecords(t *testing.T) {
 	const records = 8
 	free := []int{3, 4} // records 3 then 4 are the two free slots, in order
-	mac, enc, store, card, goRef := loadServeRecordPushFree(t, records, free)
+	mac, enc, store, sd, _, goRef := loadServeRecordPushFree(t, records, free)
 
 	// First push: a distinct valid image with a filename whose 10-char B-DOS name is
 	// "firstdisk" (the dotted .mgt suffix dropped, "trinity-sam-disks/" prefix stripped).
@@ -573,20 +636,24 @@ func TestServeWRQRecordPushClaimsDifferentRecords(t *testing.T) {
 		t.Fatalf("push 1 final reply = ACK %d (err %v), want ACK 1600 (valid image)", blk, err)
 	}
 
-	// The first push claimed record 3 (the head of `free`) — assert the list-write.
-	lw := store.ListWrites()
-	if len(lw) != 1 {
-		t.Fatalf("after push 1: ListWrites() = %d, want 1 (one claim)", len(lw))
+	// The first push claimed record 3 (the head of `free`) — assert the CMD24 write
+	// to list sector 1 (LBA 1, which holds records 1..32).
+	claimedRec1 := 3
+	listSec1 := 1
+	entry1 := sdSlotEntry(sd, listSec1, claimedRec1)
+	if entry1 == nil {
+		t.Fatalf("after push 1: no CMD24 write to list sector LBA %d (claim not written)", listSec1)
 	}
-	if lw[0].ChangedRecord != 3 {
-		t.Errorf("push 1 claimed record %d, want 3 (the first free slot)", lw[0].ChangedRecord)
+	if entry1[0]&0x7F == 0 {
+		t.Errorf("push 1 claimed record %d reads FREE (entry[0]=%#x), want NAMED", claimedRec1, entry1[0])
 	}
-	if lw[0].Name != "firstdisk" {
-		t.Errorf("push 1 claim name = %q, want %q (filename-derived, 16-char record-name field)", lw[0].Name, "firstdisk")
+	name1 := sdSlotName(sd, listSec1, claimedRec1)
+	if name1 != "firstdisk" {
+		t.Errorf("push 1 claim name = %q, want %q (filename-derived, 16-char record-name field)", name1, "firstdisk")
 	}
-	// The CardModel now reads record 3 as NAMED — the whole point.
-	if entry := card.RecordEntry(3); entry[0]&0x7F == 0 {
-		t.Errorf("record 3 still reads FREE after the claim (entry[0]=%#x)", entry[0])
+	// The SD model now reads record 3 as NAMED — the whole point.
+	if entry1[0]&0x7F == 0 {
+		t.Errorf("record 3 still reads FREE after the claim (entry[0]=%#x)", entry1[0])
 	}
 
 	// Second push: a different valid image, different filename.
@@ -605,18 +672,17 @@ func TestServeWRQRecordPushClaimsDifferentRecords(t *testing.T) {
 	// The DECISIVE observation: the second push advanced to record 4 (NOT 3) — the
 	// first record was claimed and is no longer free, so the second push did not
 	// overwrite it.
-	lw = store.ListWrites()
-	if len(lw) != 2 {
-		t.Fatalf("after push 2: ListWrites() = %d, want 2 (two claims)", len(lw))
+	claimedRec2 := 4
+	entry2 := sdSlotEntry(sd, listSec1, claimedRec2)
+	if entry2 == nil {
+		t.Fatalf("after push 2: no CMD24 write to list sector LBA %d for record %d", listSec1, claimedRec2)
 	}
-	if lw[1].ChangedRecord != 4 {
-		t.Errorf("push 2 claimed record %d, want 4 (the SECOND free slot — the claim advanced)", lw[1].ChangedRecord)
+	if claimedRec2 == claimedRec1 {
+		t.Fatalf("both pushes claimed the same record %d — the claim did NOT mark the first record used", claimedRec1)
 	}
-	if lw[1].ChangedRecord == lw[0].ChangedRecord {
-		t.Fatalf("both pushes claimed the same record %d — the claim did NOT mark the first record used", lw[0].ChangedRecord)
-	}
-	if lw[1].Name != "seconddiskimage" { // 15 chars, within the 16-char record-name field
-		t.Errorf("push 2 claim name = %q, want %q (16-char record-name field)", lw[1].Name, "seconddiskimage")
+	name2 := sdSlotName(sd, listSec1, claimedRec2)
+	if name2 != "seconddiskimage" { // 15 chars, within the 16-char record-name field
+		t.Errorf("push 2 claim name = %q, want %q (16-char record-name field)", name2, "seconddiskimage")
 	}
 
 	// The two images landed in DIFFERENT records: every sector of push 1 targets
@@ -652,29 +718,27 @@ func TestServeWRQRecordPushClaimsDifferentRecords(t *testing.T) {
 }
 
 // TestServeWRQRecordPushClaimOnlyOnValid proves the claim is gated on validation: an
-// INVALID push (wrong size) does NOT claim its record — no list-write — so the
+// INVALID push (wrong size) does NOT claim its record — no CMD24 list-write — so the
 // record stays free, and a FOLLOWING valid push REUSES that same record (it was
 // never marked used). This is the correctness half of the safety model: a rejected
 // image must leave the slot free for the next good push, never half-claim it.
 func TestServeWRQRecordPushClaimOnlyOnValid(t *testing.T) {
 	const records = 8
 	free := []int{5} // a single free slot; both pushes target it
-	mac, enc, store, card, goRef := loadServeRecordPushFree(t, records, free)
+	mac, enc, store, sd, _, goRef := loadServeRecordPushFree(t, records, free)
 
 	// Push 1: an INVALID image (one sector short → wrong size). It streams into the
-	// claimed record 5, fails validation, and must NOT claim (no list-write).
+	// claimed record 5, fails validation, and must NOT claim (no CMD24 list-write).
 	bad := recordValidImage()[:bdos.RecordSize-bdos.SectorSize]
 	final1 := runFullPush(t, mac, enc, goRef, "broken.mgt", bad)
 	assertErrorDiskFull(t, final1)
 	if v := mac.Read(symAddr(t, mac, "BD_REC_VALID"), 1)[0]; v != 0 {
 		t.Errorf("BD_REC_VALID = %d after the bad push, want 0", v)
 	}
-	if lw := store.ListWrites(); len(lw) != 0 {
-		t.Fatalf("an invalid push wrote %d list entries, want 0 (no claim on reject)", len(lw))
-	}
-	// Record 5 still reads FREE — the rejected push left it unclaimed.
-	if entry := card.RecordEntry(5); entry[0]&0x7F != 0 {
-		t.Errorf("record 5 reads NAMED after a rejected push (entry[0]=%#x); it must stay free", entry[0])
+	// Record 5 still reads FREE in the SD model — no CMD24 list-write for a reject.
+	listSec1 := 1
+	if entry := sdSlotEntry(sd, listSec1, 5); entry != nil && entry[0]&0x7F != 0 {
+		t.Errorf("an invalid push wrote a claim entry for record 5 (entry[0]=%#x); it must stay free", entry[0])
 	}
 
 	// Push 2: a VALID image. bdos_find_free_record still returns record 5 (it was
@@ -684,15 +748,33 @@ func TestServeWRQRecordPushClaimOnlyOnValid(t *testing.T) {
 	if blk, err := tftp.ParseACK(udpPayload(t, final2)); err != nil || blk != 1600 {
 		t.Fatalf("push 2 final reply = ACK %d (err %v), want ACK 1600", blk, err)
 	}
-	lw := store.ListWrites()
-	if len(lw) != 1 {
-		t.Fatalf("after the valid reuse: ListWrites() = %d, want 1 (only the valid push claims)", len(lw))
+	// After the valid push, the SD model must show record 5 as NAMED.
+	entry5 := sdSlotEntry(sd, listSec1, 5)
+	if entry5 == nil {
+		t.Fatalf("after the valid reuse: no CMD24 write to list sector LBA %d (only the valid push claims)", listSec1)
 	}
-	if lw[0].ChangedRecord != 5 {
-		t.Errorf("the valid push claimed record %d, want 5 (reused the slot the bad push left free)", lw[0].ChangedRecord)
+	if entry5[0]&0x7F == 0 {
+		t.Errorf("after the valid push record 5 still reads FREE (entry[0]=%#x)", entry5[0])
 	}
-	if lw[0].Name != "good" {
-		t.Errorf("claim name = %q, want %q", lw[0].Name, "good")
+	name5 := sdSlotName(sd, listSec1, 5)
+	if name5 != "good" {
+		t.Errorf("claim name = %q, want %q", name5, "good")
+	}
+
+	// The two images landed in the same record (5) because the bad push left it free.
+	writes := store.SectorWrites()
+	if len(writes) == 0 {
+		t.Fatalf("no sector writes captured")
+	}
+	// Find where the valid push's sectors start (after the bad push's sectors).
+	badSecs := (len(bad) + bdos.SectorSize - 1) / bdos.SectorSize
+	if len(writes) < badSecs {
+		t.Fatalf("SectorWrites() = %d, expected at least %d (bad push sectors)", len(writes), badSecs)
+	}
+	for i := badSecs; i < len(writes); i++ {
+		if writes[i].Record != 5 {
+			t.Fatalf("valid-push sector[%d] record = %d, want 5 (reused the slot the bad push left free)", i, writes[i].Record)
+		}
 	}
 
 	// Authority cross-check: the Go authority claimed exactly once, record 5.
@@ -730,29 +812,31 @@ func goRefWithStrategy(strategy serve.PlacementStrategy, explicit int, free []in
 // TestServeWRQRecordPushStrategy is the i121h placement-strategy gate: with several
 // records free, the record a valid push lands in is chosen by the config block's
 // strategy byte (patched by symbol, as the i121d host launcher will). It asserts the
-// chosen record via the claim list-write (which record was marked used) AND the
-// per-sector writes (every sector targets that record), cross-checked against the Go
-// authority. Each sub-test drives the FULL push through the real dispatch +
-// wd_finalize on its own machine.
+// chosen record via the SD model's captured CMD24 list-write AND the per-sector
+// writes (every sector targets that record), cross-checked against the Go authority.
+// Each sub-test drives the FULL push through the real dispatch + wd_finalize on its
+// own machine.
 func TestServeWRQRecordPushStrategy(t *testing.T) {
 	const records = 8
 	free := []int{3, 4} // two free slots make the high/low choice observable
 
 	// assertSinglePush drives one valid push and asserts it claimed `wantRecord` and
 	// streamed every sector into it. goRef is driven in lockstep for the cross-check.
-	assertSinglePush := func(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, store *z80h.BDOSStore, goRef *serve.Responder, wantRecord int) {
+	assertSinglePush := func(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, store *z80h.BDOSStore, sd *z80h.SDCard, goRef *serve.Responder, wantRecord int) {
 		t.Helper()
 		img := recordValidImage()
 		final := runFullPush(t, mac, enc, goRef, "disk.mgt", img)
 		if blk, err := tftp.ParseACK(udpPayload(t, final)); err != nil || blk != 1600 {
 			t.Fatalf("final reply = ACK %d (err %v), want ACK 1600 (valid image)", blk, err)
 		}
-		lw := store.ListWrites()
-		if len(lw) != 1 {
-			t.Fatalf("ListWrites() = %d, want 1 (one claim)", len(lw))
+		// Check the CMD24 claim: list sector 1 (LBA 1) holds the entry for record wantRecord.
+		listSec1 := 1
+		claimEntry := sdSlotEntry(sd, listSec1, wantRecord)
+		if claimEntry == nil {
+			t.Fatalf("no CMD24 write to list sector LBA %d for record %d", listSec1, wantRecord)
 		}
-		if lw[0].ChangedRecord != wantRecord {
-			t.Errorf("claimed record %d, want %d (the strategy's pick)", lw[0].ChangedRecord, wantRecord)
+		if claimEntry[0]&0x7F == 0 {
+			t.Errorf("claimed record %d reads FREE (entry[0]=%#x), want NAMED", wantRecord, claimEntry[0])
 		}
 		writes := store.SectorWrites()
 		if len(writes) != 1600 {
@@ -776,7 +860,7 @@ func TestServeWRQRecordPushStrategy(t *testing.T) {
 		// shared loadServeRecordPushFree helper patches lowest-free for the i121g claim
 		// tests, so this baked-default check loads via the plain single-free loader,
 		// which never touches the config block.)
-		mac, _, _, _ := loadServeRecordPush(t, records, 4)
+		mac, _, _, _, _ := loadServeRecordPush(t, records, 4)
 		if s := mac.Read(symAddr(t, mac, "SERVE_CFG_STRATEGY"), 1)[0]; s != uint8(serve.StrategyHighestFree) {
 			t.Fatalf("baked SERVE_CFG_STRATEGY = %d, want %d (highest-free default)", s, serve.StrategyHighestFree)
 		}
@@ -786,24 +870,24 @@ func TestServeWRQRecordPushStrategy(t *testing.T) {
 	})
 
 	t.Run("highest-free (strategy 0) → record 4", func(t *testing.T) {
-		mac, enc, store, _, _ := loadServeRecordPushFree(t, records, free)
+		mac, enc, store, sd, _, _ := loadServeRecordPushFree(t, records, free)
 		patchStrategy(t, mac, uint8(serve.StrategyHighestFree), 0)
 		goRef := goRefWithStrategy(serve.StrategyHighestFree, 0, free)
-		assertSinglePush(t, mac, enc, store, goRef, 4)
+		assertSinglePush(t, mac, enc, store, sd, goRef, 4)
 	})
 
 	t.Run("lowest-free (strategy 1) → record 3", func(t *testing.T) {
-		mac, enc, store, _, _ := loadServeRecordPushFree(t, records, free)
+		mac, enc, store, sd, _, _ := loadServeRecordPushFree(t, records, free)
 		patchStrategy(t, mac, uint8(serve.StrategyLowestFree), 0)
 		goRef := goRefWithStrategy(serve.StrategyLowestFree, 0, free)
-		assertSinglePush(t, mac, enc, store, goRef, 3)
+		assertSinglePush(t, mac, enc, store, sd, goRef, 3)
 	})
 
 	t.Run("explicit (strategy 2) free record 4 → record 4", func(t *testing.T) {
-		mac, enc, store, _, _ := loadServeRecordPushFree(t, records, free)
+		mac, enc, store, sd, _, _ := loadServeRecordPushFree(t, records, free)
 		patchStrategy(t, mac, uint8(serve.StrategyExplicit), 4)
 		goRef := goRefWithStrategy(serve.StrategyExplicit, 4, free)
-		assertSinglePush(t, mac, enc, store, goRef, 4)
+		assertSinglePush(t, mac, enc, store, sd, goRef, 4)
 	})
 }
 
@@ -814,7 +898,7 @@ func TestServeWRQRecordPushStrategy(t *testing.T) {
 func TestServeWRQRecordPushStrategyExplicitTaken(t *testing.T) {
 	const records = 8
 	free := []int{3, 4} // record 7 is NOT free (named)
-	mac, enc, store, _, _ := loadServeRecordPushFree(t, records, free)
+	mac, enc, store, _, _, _ := loadServeRecordPushFree(t, records, free)
 	patchStrategy(t, mac, uint8(serve.StrategyExplicit), 7) // explicit a named record
 	goRef := goRefWithStrategy(serve.StrategyExplicit, 7, free)
 
@@ -868,7 +952,7 @@ func TestServeE2EComputedBDRecordsRecordPush(t *testing.T) {
 	enc := z80h.NewENC28J60()
 	enc.ProgramTrinityNetwork(demoServerMAC, demoServerIP)
 	const cSize = 0x0F // CSD v2.0; ~16384 blocks -> a handful of records
-	enc.AttachSD(csdV2(cSize))
+	sd := enc.AttachSD(csdV2(cSize))
 	mac.AttachIO(enc)
 
 	store := z80h.NewBDOSStore()
@@ -887,6 +971,14 @@ func TestServeE2EComputedBDRecordsRecordPush(t *testing.T) {
 	wantRecord := nrec
 	for r := 1; r < nrec; r++ {
 		card.SetRecordName(r, "INUSE")
+	}
+
+	// Seed SD list sectors from the card model so CMD17 list reads serve the
+	// correct record-list data.
+	maxListSec := (nrec + 31) / 32
+	for ls := 1; ls <= maxListSec; ls++ {
+		sec := card.ListSector(ls)
+		sd.SeedSector(uint32(ls), sec[:])
 	}
 
 	// Zero BD_RECORDS so a non-zero result can ONLY come from serve_main computing it.
@@ -947,7 +1039,7 @@ func TestServeE2EComputedBDRecordsRecordPush(t *testing.T) {
 	final := tx[len(tx)-1]
 
 	// (3) Valid 819,200-byte image -> BD_REC_VALID, 1600 sectors into wantRecord, a
-	// final ACK, and the record CLAIMED (its list-name entry written).
+	// final ACK, and the record CLAIMED (its list-name entry written via CMD24).
 	if v := mac.Read(symAddr(t, mac, "BD_REC_VALID"), 1)[0]; v != 1 {
 		t.Errorf("BD_REC_VALID = %d, want 1 (a valid 819200-byte BDOS image)", v)
 	}
@@ -959,8 +1051,11 @@ func TestServeE2EComputedBDRecordsRecordPush(t *testing.T) {
 	if blk, err := tftp.ParseACK(pay); err != nil || blk != 1600 {
 		t.Fatalf("final ACK block = %d (err %v), want 1600", blk, err)
 	}
-	if len(store.ListWrites()) == 0 {
-		t.Error("no record-list write captured — wd_finalize did not claim the record")
+	// Confirm the claim was written via CMD24 (list sector for wantRecord).
+	listSec := (wantRecord-1)/32 + 1
+	claimEntry := sdSlotEntry(sd, listSec, wantRecord)
+	if claimEntry == nil || claimEntry[0]&0x7F == 0 {
+		t.Error("no CMD24 claim write captured — wd_finalize did not claim the record")
 	}
 	t.Logf("i145d E2E OK: BD_RECORDS=%d COMPUTED from CSD; valid push found+claimed+stored record %d (1600 sectors)",
 		got, wantRecord)

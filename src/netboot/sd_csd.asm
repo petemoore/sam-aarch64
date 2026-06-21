@@ -342,7 +342,136 @@ bllr_rd2:
                 or      a                       ; CY clear: success
                 jp      sdc_deselect
 
-bd_list_lba:      defs 4                        ; 32-bit LE CMD17 block/byte address
+; ===========================================================================
+; bd_list_write_hw — the REAL card-absolute list-sector write (i198): the
+; hardware implementation of bdos_write_list_sector's BD_HOOK_LISTWRITE model.
+; Writes one 512-byte list sector to the SD card via a raw CMD24 single-block
+; write on the Trinity SPI ports, from BD_LIST_BUF. Mirrors bd_list_read_hw
+; (CMD17, above) exactly: same init ladder, same LBA computation, same
+; select/deselect bracket. Only the data phase differs (OUT instead of IN).
+;
+; In:  BD_LIST_SECTOR  1 byte  1-based list-sector number N (same addressing
+;                              as the CMD17 read — card-absolute LBA N for
+;                              SDHC, N<<9 for SDv1).
+;      BD_LIST_BUF   512 bytes  the list sector to write back (a modified copy
+;                              from bdos_claim_record's read-modify-write).
+; Out: (none — success or failure both return to caller; failure is silent:
+;       a wrong write on real hardware is caught by the i194 verification step)
+; Clobbers: AF, BC, DE, HL.
+;
+; PROTOCOL (matched to sdcard.go's CMD24 state machine — the authority for the
+; exact handshake, verified by the SD model round-trip test):
+;   1. sdc_cmd(&58, bd_list_lba) → R1 ready (consumed by sdc_cmd's poll).
+;   2. OUT dummy &FF (the leading gap before the start-of-data token).
+;   3. OUT &FE start-of-data token (opens the write data phase).
+;   4. OUT 512 bytes from BD_LIST_BUF (two 256-byte loops, mirroring the read).
+;   5. OUT 2 dummy CRC bytes (CRC is off; the card ignores them).
+;   6. IN  gap byte (discarded — the one-read gap before the data-response).
+;   7. IN  data-response token: mask (&1E), subtract 4; zero = accepted.
+;   8. IN busy poll: loop while card drives &00 (busy), break on &FF (done);
+;      `inc a; jr z` is the standard bounded poll, mirroring sdil_wake_poll.
+;   Steps 6-8 mirror hd.svb-t &A893-&A8AE (Colin's real write tail) that
+;   sdcard.go's inWriteResp models.
+;
+; EMULATION. Host-verified under the i145c/i145h SD model (sdcard.go), whose
+; CMD24 path captures the 512 bytes into store[addr] and returns the accept
+; token + busy poll. The claim read-modify-write round-trip is proven by
+; sd_listwrite_test.go (the TestClaimRMWRealCMD17CMD24 family). Emulation-
+; verified is not hardware-verified (CLAUDE.md §5): the real-Trinity SPI write
+; is the final gate (i194's hardware step).
+; ===========================================================================
+bd_list_write_hw:
+                ; Build the 32-bit LBA from BD_LIST_SECTOR (same computation as the read).
+                ld      a, (BD_LIST_SECTOR)
+                ld      (bd_list_lba), a
+                xor     a
+                ld      (bd_list_lba + 1), a
+                ld      (bd_list_lba + 2), a
+                ld      (bd_list_lba + 3), a
+                ; SDv1 (byte-addressed) cards need LBA<<9; SDHC/v2 use the LBA verbatim.
+                ld      a, (CSD_STAGE)
+                and     &C0
+                cp      &40
+                jr      z, blwr_have_lba        ; v2/SDHC: block address, no shift
+                ld      b, 9                    ; v1: bd_list_lba <<= 9
+blwr_shl:
+                ld      hl, bd_list_lba
+                or      a
+                rl      (hl)
+                inc     hl
+                rl      (hl)
+                inc     hl
+                rl      (hl)
+                inc     hl
+                rl      (hl)
+                djnz    blwr_shl
+blwr_have_lba:
+                call    sdc_init_ladder        ; wake + CMD0/8/41/58/59; card selected
+                ; CMD24 WRITE_SINGLE_BLOCK, arg = bd_list_lba (sent MSB-first by sdc_cmd).
+                ld      a, &FF                  ; CRC don't-care (CRC off)
+                call    sdc_set_crc
+                ld      a, (bd_list_lba + 3)
+                ld      b, a
+                ld      a, (bd_list_lba + 2)
+                ld      c, a
+                ld      a, (bd_list_lba + 1)
+                ld      d, a
+                ld      a, (bd_list_lba)
+                ld      e, a
+                ld      a, &58                  ; CMD24
+                call    sdc_cmd                 ; R1 consumed; on entry CY set = fail
+                jr      c, blwr_done            ; command failed: bail (sdc_deselect not yet called)
+                ; Protocol step 2: dummy &FF (the gap before the &FE token).
+                ld      a, SDC_IDLE
+                call    sdc_out
+                ; Protocol step 3: &FE start-of-data token.
+                ld      a, SDC_DATATOK
+                call    sdc_out
+                ; Protocol step 4: send the 512-byte data block from BD_LIST_BUF
+                ;   (two 256-byte passes, mirroring the read's two-pass INI).
+                ld      hl, BD_LIST_BUF
+                ld      b, 0                    ; 256 bytes first pass
+blwr_wd1:
+                ld      a, (hl)
+                call    sdc_out
+                inc     hl
+                djnz    blwr_wd1
+                ld      b, 0                    ; + 256 = 512
+blwr_wd2:
+                ld      a, (hl)
+                call    sdc_out
+                inc     hl
+                djnz    blwr_wd2
+                ; Protocol step 5: 2 dummy CRC bytes (CRC is off; values ignored).
+                ld      a, SDC_IDLE
+                call    sdc_out
+                call    sdc_out
+                ; Protocol step 6: gap byte before the data-response (discarded).
+                call    sdc_in
+                ; Protocol step 7: data-response token. Mask &1E; subtract 4; zero = accepted.
+                call    sdc_in
+                and     &1E
+                sub     4
+                jr      nz, blwr_reject         ; not accepted: deselect with CY set
+                ; Protocol step 8: busy poll. Card drives &00 while writing, releases &FF when done.
+                ; `inc a; jr z` loops on the &00 -> 1 path and exits on the &FF -> 0 path.
+                ; Bounded at 256 iterations (B=0): matches the sdil_wake_poll idiom.
+                ld      b, 0
+blwr_busy:
+                call    sdc_in
+                inc     a
+                jr      z, blwr_ok              ; &FF -> 0: write done, card released MISO
+                djnz    blwr_busy
+                ; Timed out waiting for ready — treat as failure.
+blwr_reject:
+                scf
+blwr_done:
+                jp      sdc_deselect
+blwr_ok:
+                or      a                       ; CY clear: success
+                jp      sdc_deselect
+
+bd_list_lba:      defs 4                        ; 32-bit LE CMD17/CMD24 block/byte address
 
 ; ===========================================================================
 ; csd_decode_blocks — decode CSD_STAGE into the 32-bit (LE) csd_blocks.

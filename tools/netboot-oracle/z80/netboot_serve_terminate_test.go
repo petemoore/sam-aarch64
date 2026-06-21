@@ -58,7 +58,7 @@ func assertLoopRETs(t *testing.T, mac *z80h.Machine, why string) {
 // machine, RETs (the flag check after serve_serve_once unwinds to trinload).
 func TestServeStopSentinelExit(t *testing.T) {
 	const records, freeRecord = 8, 4 // a record IS free — proving the sentinel skips the claim anyway
-	mac, enc, store, _ := loadServeRecordPush(t, records, freeRecord)
+	mac, enc, store, _, _ := loadServeRecordPush(t, records, freeRecord)
 
 	// 1. The reserved-name WRQ → a courtesy ACK-0, the stop flag set, nothing armed.
 	got := serveDemo(t, mac, enc, demoWRQ("tftp.done", nil))
@@ -101,7 +101,7 @@ func TestServeStopSentinelExit(t *testing.T) {
 // same Esc-to-trinload poll the dumper (TestDumper... pattern) and trinload use.
 func TestServeEscExit(t *testing.T) {
 	const records, freeRecord = 8, 4
-	mac, _, _, _ := loadServeRecordPush(t, records, freeRecord)
+	mac, _, _, _, _ := loadServeRecordPush(t, records, freeRecord)
 
 	// No stop flag set (the sentinel path is untouched); the ONLY exit here is Esc.
 	if v := mac.Read(symAddr(t, mac, "XFER_STOP_REQUESTED"), 1)[0]; v != 0 {
@@ -123,7 +123,7 @@ func TestServeEscExit(t *testing.T) {
 // inverse of the clean RET the two exit tests assert.
 func TestServeEscNotPressedSpins(t *testing.T) {
 	const records, freeRecord = 8, 4
-	mac, _, _, _ := loadServeRecordPush(t, records, freeRecord)
+	mac, _, _, _, _ := loadServeRecordPush(t, records, freeRecord)
 
 	// No Esc, no stop flag: the loop must spin (never RET). CallEntry surfaces that as
 	// a "did not return" error; a nil error (a clean RET) would mean an exit fired
@@ -139,7 +139,7 @@ func TestServeEscNotPressedSpins(t *testing.T) {
 // receiver is armed (WRQ_RECV_ACTIVE == 1), with the stop flag left clear.
 func TestServeNormalWRQStillArms(t *testing.T) {
 	const records, freeRecord = 8, 4
-	mac, enc, _, goRef := loadServeRecordPush(t, records, freeRecord)
+	mac, enc, _, _, goRef := loadServeRecordPush(t, records, freeRecord)
 
 	wrq := demoWRQ("upload.mgt", nil)
 	eqFrame(t, "normal WRQ → ACK-0", serveDemo(t, mac, enc, wrq), goRef.OnFrame(wrq))

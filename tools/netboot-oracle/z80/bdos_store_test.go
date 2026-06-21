@@ -117,8 +117,20 @@ func bootClientE2ESetup(t *testing.T) (*z80h.Machine, *z80h.ENC28J60, *z80h.BDOS
 	card.SetRecordEntry(5, makeEntry("SHADEBOBS"))
 	store.AttachCard(card)
 
+	// Attach the SD model and seed list sector 1 from the card (all 5 records
+	// are within records 1..32, so only one list sector is needed).
+	// csdV2(7) → (7+1)*1024 = 8192 blocks → 8192/1600 = 5 records, matching
+	// the BD_RECORDS = 5 layout: client_main calls csd_set_bd_records internally
+	// which overwrites the injected value, so the CSD itself must encode 5 records.
+	sd := enc.AttachSD(csdV2(7))
+	sec1 := card.ListSector(1)
+	sd.SeedSector(1, sec1[:])
+
 	mac.AttachIO(enc)
 	mac.AttachBDOS(store)
+	if _, err := mac.Call("csd_set_bd_records"); err != nil {
+		t.Fatalf("csd_set_bd_records: %v", err)
+	}
 	mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), 5)
 
 	// Pre-queue the frames client_main consumes: ARP reply -> DATA block 1 (short

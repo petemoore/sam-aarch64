@@ -49,32 +49,40 @@ import (
 	z80h "github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80"
 )
 
-// pickMachineSetup loads the boot binary, attaches a BDOS store with card,
-// sets BD_RECORDS, and returns mac + symAddr helper.
+// pickMachineSetup loads the boot binary, attaches an ENC28J60 + SD card with
+// the record list seeded, sets BD_RECORDS, and returns the machine.
 //
 // Card layout:
-//   1: "LOADER"     (named)
-//   2: "KERNEL"     (named)
-//   3: free         (first free — auto-pick target)
-//   4: "BOOT"       (named; by-name target)
-//   5: "SHADEBOBS"  (named; by-number target)
 //
-// BD_RECORDS is set to 5.
+//	1: "LOADER"     (named)
+//	2: "KERNEL"     (named)
+//	3: free         (first free — auto-pick target)
+//	4: "BOOT"       (named; by-name target)
+//	5: "SHADEBOBS"  (named; by-number target)
+//
+// BD_RECORDS is set to 5. All 5 records are in list sector 1.
 func pickMachineSetup(t *testing.T) *z80h.Machine {
 	t.Helper()
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
 		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
-	store := z80h.NewBDOSStore()
 	card := z80h.NewCardModel()
 	card.SetRecordEntry(1, makeEntry("LOADER"))
 	card.SetRecordEntry(2, makeEntry("KERNEL"))
 	// record 3: left free (all-zero)
 	card.SetRecordEntry(4, makeEntry("BOOT"))
 	card.SetRecordEntry(5, makeEntry("SHADEBOBS"))
-	store.AttachCard(card)
-	mac.AttachBDOS(store)
+
+	// Attach ENC + SD; seed list sector 1 (all 5 records are within records 1..32).
+	enc := z80h.NewENC28J60()
+	sd := enc.AttachSD(csdV2(1))
+	mac.AttachIO(enc)
+	sec1 := card.ListSector(1)
+	sd.SeedSector(1, sec1[:])
+	if _, err := mac.Call("csd_set_bd_records"); err != nil {
+		t.Fatalf("csd_set_bd_records: %v", err)
+	}
 	mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), 5)
 	return mac
 }

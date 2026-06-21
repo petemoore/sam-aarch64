@@ -314,7 +314,20 @@ func (s *SDCard) out(v uint8) {
 	// data byte may have its top two bits == 01, so it must be handled BEFORE the
 	// command-start detection below, or a payload byte would be mistaken for a new
 	// command frame. (CMD17 reads have no OUT data phase — they are bare INs.)
+	//
+	// Special case: if the response stream has unread bytes (e.g. CMD24's R1
+	// response), a dummy-OUT in a non-idle phase is still serving the response
+	// rather than the write data phase — let nextResp advance it first. This models
+	// the manual-mode driver (bd_list_write_hw): sdc_cmd polls R1 via a dummy OUT +
+	// IN immediately after CMD24's completeCommand sets phaseWriteToken, so those
+	// dummy OUTs must serve R1 (not go to outDataPhase) or the poll loops forever.
+	// Only after R1 is exhausted do subsequent OUTs enter the data phase.
 	if s.phase != phaseIdle {
+		if s.respPos < len(s.resp) {
+			// Response bytes still pending (the CMD24 R1 poll): advance the stream.
+			s.miso = s.nextResp()
+			return
+		}
 		s.outDataPhase(v)
 		return
 	}

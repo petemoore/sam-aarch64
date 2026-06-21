@@ -45,6 +45,12 @@ import (
 // filename string is written before bdos_build_claim_entry reads it.
 const claimNameScratch = 0xC000
 
+// claimNameScratchReal is a scratch address used by the real-SPI path tests
+// (TestClaimRecordPreservesNeighbours, TestClaimRMWRealCMD17CMD24). The serve
+// boot binary ends at &C2EB; 0xD000 is safely above it, so writing a name
+// there does not corrupt sdc_init_ladder (which lives at ~&C000 in the image).
+const claimNameScratchReal = 0xD000
+
 // buildClaimEntry writes name (NUL-terminated) into scratch RAM, points
 // BD_CLAIM_NAME_PTR at it, runs the REAL bdos_build_claim_entry, and returns the
 // 16 bytes it deposited into BD_CLAIM_ENTRY.
@@ -138,8 +144,18 @@ func TestClaimEntrySanitisesAdversarialNames(t *testing.T) {
 // record with an adversarial name must write ONLY that record's own 16-byte slot —
 // every other entry in the containing list sector preserved byte-for-byte — and
 // never overrun. It drives the REAL bdos_claim_record read-modify-write and asserts
-// against the FULL 512 bytes the Z80 wrote back (ListWrite.RawSector), so the
-// proof is unmediated by the harness's single-entry reconciliation.
+// against the FULL 512 bytes the Z80 wrote back via the real CMD24 SPI path (i198),
+// captured from the SD model's backing store — so the proof is unmediated by any
+// harness hook.
+//
+// THE REAL-SPI PATH (i198): the serve boot binary is built with NETBOOT_REAL_LISTREAD,
+// so bdos_read_list_sector tail-calls the real CMD17 bd_list_read_hw and
+// bdos_write_list_sector tail-calls the real CMD24 bd_list_write_hw. This test
+// therefore attaches an ENC28J60 + SD model instead of a BDOSStore hook, seeds the
+// list sector at the correct card-absolute LBA, and reads back the written sector
+// from the SD model's CapturedSector. The honesty line (CLAUDE.md §5): the CMD17+
+// CMD24 round-trip is emulation-verified against sdcard.go's state machine, not
+// hardware-verified (the real-Trinity SPI write is i194's hardware step).
 func TestClaimRecordPreservesNeighbours(t *testing.T) {
 	// Adversarial names spanning the full threat surface; the claimed record gets
 	// each in turn, with named neighbours all around it in the same list sector.
@@ -165,53 +181,57 @@ func TestClaimRecordPreservesNeighbours(t *testing.T) {
 			if err != nil {
 				t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
 			}
-			store := z80h.NewBDOSStore()
-			card := z80h.NewCardModel()
 
-			// Name every record EXCEPT claimRecord with a distinctive, recognisable
-			// 16-byte entry, so any stray byte written outside the claimed slot is
-			// caught. claimRecord is left all-zero (free).
+			// Attach the SD model. csd_set_bd_records populates CSD_STAGE (needed by
+			// bd_list_read_hw / bd_list_write_hw for the v1/v2 addressing decision) and
+			// BD_RECORDS (needed by bdos_find_free_record).
+			const cSize = 0x001D59 // ~3.7 GB SDHC; refRecords ~3770 records
+			enc := z80h.NewENC28J60()
+			sd := enc.AttachSD(csdV2(cSize))
+			mac.AttachIO(enc)
+			if _, err := mac.Call("csd_set_bd_records"); err != nil {
+				t.Fatalf("csd_set_bd_records: %v", err)
+			}
+
+			// Build the list sector with named neighbours and a free (all-zero) slot at
+			// claimRecord, then seed it at the card-absolute LBA. List sector 1 lives at
+			// LBA 1 for SDHC (block-addressed) — the same LBA bd_list_read_hw computes.
+			var priorSector [512]byte
 			for n := 1; n <= totalRecords; n++ {
 				if n == claimRecord {
-					continue
+					continue // leave free (all-zero)
 				}
-				card.SetRecordEntry(n, neighbourEntry(n))
+				e := neighbourEntry(n)
+				off := (n - 1) * 16
+				copy(priorSector[off:off+16], e[:])
 			}
-			store.AttachCard(card)
-			mac.AttachBDOS(store)
+			sd.SeedSector(1, priorSector[:]) // LBA 1 = list sector 1 on SDHC
 
-			// Capture the list sector exactly as it is BEFORE the claim — the byte-for-byte
-			// baseline every non-claimed entry must still equal afterwards.
-			priorSector := card.ListSector(1)
+			// BD_RECORDS must cover claimRecord so bdos_find_free_record scans far enough.
+			mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), uint16(totalRecords))
 
 			// Drive the real claim: set the record to claim + the adversarial name ptr.
+			// claimNameScratchReal (0xD000) is safely above the binary tail (~&C2EB),
+			// so the write does not corrupt sdc_init_ladder which lives at ~&C000.
 			mac.WriteU16LE(symAddr(t, mac, "BD_FREE_RECORD"), uint16(claimRecord))
 			buf := append([]byte(name), 0)
-			mac.Write(claimNameScratch, buf)
-			mac.WriteU16LE(symAddr(t, mac, "BD_CLAIM_NAME_PTR"), claimNameScratch)
+			mac.Write(claimNameScratchReal, buf)
+			mac.WriteU16LE(symAddr(t, mac, "BD_CLAIM_NAME_PTR"), claimNameScratchReal)
 			if _, err := mac.Call("bdos_claim_record"); err != nil {
 				t.Fatalf("bdos_claim_record(%q): %v", name, err)
 			}
 
-			// Exactly one list-sector write, to list sector 1.
-			lws := store.ListWrites()
-			if len(lws) != 1 {
-				t.Fatalf("ListWrites() = %d, want 1 (one claim)", len(lws))
+			// THE SAFETY INVARIANT — proven against the 512 bytes the CMD24 write captured
+			// in the SD model's backing store. CapturedSector returns the sector the CMD24
+			// committed at LBA 1. An absent sector means the write never issued — fatal.
+			got, ok := sd.CapturedSector(1)
+			if !ok {
+				t.Fatalf("CMD24 write never captured sector at LBA 1 — bd_list_write_hw did not run")
 			}
-			lw := lws[0]
-			if lw.ListSector != 1 {
-				t.Fatalf("claim wrote list sector %d, want 1", lw.ListSector)
-			}
-			if lw.ChangedRecord != claimRecord {
-				t.Fatalf("claim changed record %d, want %d", lw.ChangedRecord, claimRecord)
-			}
-
-			// THE SAFETY INVARIANT, proven against the full 512 bytes the Z80 wrote:
-			// only the claimed record's own 16-byte slot may differ from the prior
-			// sector; every other byte is preserved verbatim.
+			// Only the claimed record's own 16-byte slot may differ from the prior sector;
+			// every other byte must be preserved verbatim (the RMW safety invariant).
 			const entrySize = 16
 			slotStart := (claimRecord - 1) % 32 * entrySize // entry index 9 -> offset 144
-			got := lw.RawSector
 			for i := 0; i < len(got); i++ {
 				inClaimedSlot := i >= slotStart && i < slotStart+entrySize
 				if inClaimedSlot {
@@ -227,11 +247,6 @@ func TestClaimRecordPreservesNeighbours(t *testing.T) {
 			slot := got[slotStart : slotStart+entrySize]
 			assertSafeLegibleName(t, name, slot)
 
-			// And the CardModel now reads the claimed record as NAMED (not free).
-			if e := card.RecordEntry(claimRecord); e[0]&0x7F == 0 {
-				t.Errorf("%q: record %d still reads FREE after the claim (entry[0]=%#02x)", name, claimRecord, e[0])
-			}
-
 			// Parity: the written slot equals the Go authority's name, space-padded.
 			want := padTo16(serve.ClaimRecordName(name))
 			if !bytes.Equal(slot, want) {
@@ -239,6 +254,83 @@ func TestClaimRecordPreservesNeighbours(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestClaimRMWRealCMD17CMD24 is the explicit round-trip proof: a single
+// bdos_claim_record call issues a real CMD17 read then a real CMD24 write through
+// the SD model (sdcard.go), and the sector captured at LBA 1 reflects the claimed
+// record's name — end-to-end, with no BDOSStore hook in the path.
+//
+// This is the i198 gate: the serve boot image uses NETBOOT_REAL_LISTREAD so every
+// list read/write goes through the raw SPI driver (bd_list_read_hw / bd_list_write_hw).
+// A passing test proves the CMD17+CMD24 protocol matches sdcard.go's state machine.
+func TestClaimRMWRealCMD17CMD24(t *testing.T) {
+	mac, err := z80h.Load(serveBootBin, serveBootMap)
+	if err != nil {
+		t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
+	}
+
+	// Attach an SDHC card and prime CSD_STAGE + BD_RECORDS.
+	const cSize = 0x001D59
+	enc := z80h.NewENC28J60()
+	sd := enc.AttachSD(csdV2(cSize))
+	mac.AttachIO(enc)
+	if _, err := mac.Call("csd_set_bd_records"); err != nil {
+		t.Fatalf("csd_set_bd_records: %v", err)
+	}
+
+	// Seed list sector 1 (LBA 1 on SDHC) with: records 1..9 named, record 10 free,
+	// records 11..32 named — so claimRecord 10 is the first free slot.
+	const totalRecords = 32
+	const claimRecord = 10
+	var initSector [512]byte
+	for n := 1; n <= totalRecords; n++ {
+		if n == claimRecord {
+			continue // leave free
+		}
+		e := neighbourEntry(n)
+		off := (n - 1) * 16
+		copy(initSector[off:off+16], e[:])
+	}
+	sd.SeedSector(1, initSector[:])
+	mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), uint16(totalRecords))
+
+	// Claim record 10 with a known name. Use claimNameScratchReal (0xD000),
+	// safely above the binary tail (~&C2EB), to avoid corrupting sdc_init_ladder.
+	const claimName = "recovery.mgt"
+	mac.WriteU16LE(symAddr(t, mac, "BD_FREE_RECORD"), uint16(claimRecord))
+	mac.Write(claimNameScratchReal, append([]byte(claimName), 0))
+	mac.WriteU16LE(symAddr(t, mac, "BD_CLAIM_NAME_PTR"), claimNameScratchReal)
+	if _, err := mac.Call("bdos_claim_record"); err != nil {
+		t.Fatalf("bdos_claim_record: %v", err)
+	}
+
+	// The CMD24 must have fired: CapturedSector(1) holds the modified sector.
+	got, ok := sd.CapturedSector(1)
+	if !ok {
+		t.Fatalf("CMD24 write not captured — bd_list_write_hw did not run")
+	}
+
+	// The claimed slot (entry 9, offset 144) must carry the derived record name.
+	const entrySize = 16
+	slotStart := (claimRecord - 1) % 32 * entrySize
+	slot := got[slotStart : slotStart+entrySize]
+	want := padTo16(serve.ClaimRecordName(claimName))
+	if !bytes.Equal(slot, want) {
+		t.Errorf("claimed slot %q != Go authority %q", slot, want)
+	}
+	t.Logf("CMD17+CMD24 RMW round-trip: record %d claimed as %q (slot at offset %d)", claimRecord, slot, slotStart)
+
+	// All other 512 bytes preserved byte-for-byte.
+	for i := 0; i < len(got); i++ {
+		if i >= slotStart && i < slotStart+entrySize {
+			continue
+		}
+		if got[i] != initSector[i] {
+			t.Fatalf("byte %d outside claimed slot changed: %#02x -> %#02x", i, initSector[i], got[i])
+		}
+	}
+	t.Log("CMD24 write preserved all 496 bytes outside the claimed 16-byte slot")
 }
 
 // neighbourEntry builds a recognisable, fully-legal 16-byte entry for record n: a
