@@ -503,6 +503,7 @@ type Entry struct {
 // CallResult is what a routine returns to the harness.
 type CallResult struct {
 	BC          uint16 // the BC register at RET (routines return a length in BC)
+	DE          uint16 // the DE register at RET (32-bit-result routines return a word here)
 	HL          uint16 // the HL register at RET (byte-level leaves return a value in HL)
 	A           uint8  // the A register at RET (routines returning a flag/byte use A)
 	Steps       uint64
@@ -642,7 +643,7 @@ func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (Call
 		}
 	}
 	return CallResult{
-		BC: cpu.BC.U16(), HL: cpu.HL.U16(), A: cpu.AF.Hi,
+		BC: cpu.BC.U16(), DE: cpu.DE.U16(), HL: cpu.HL.U16(), A: cpu.AF.Hi,
 		Steps: steps, TStates: tstates, PC: cpu.PC, Halted: halted,
 		ReachedStop: reachedStop,
 	}, nil
