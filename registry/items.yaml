@@ -3945,7 +3945,7 @@
 - id: i236
   title: "SAMBOOT fork analysis: complete end-to-end story + adversarial review — gate before any EEPROM flash code"
   description: |
-    Synthesise the proven ROM+EEPROM+B-DOS fork into one end-to-end story (stock boot + stock B-DOS load WITH THESE DIFFERENCES), every difference proven, no inference; then adversarial review challenges each conclusion vs the bytes. DONE = green light to design EEPROM patch code (never flash unattended).
+    SYNTHESIS DRAFTED 2026-06-24: the complete end-to-end story is written (~/sam-archive/samboot-capture/colin-fork-complete-story.md): Colin's SAM boot = stock v3.0 + stock B-DOS 1.5a WITH 3 changes (ROM: 6 patches/140B replacing rainbow/banner with Trinity probe+fetch; EEPROM bootblock: loads B-DOS, returns to BASIC the exact stock way, no stripes; B-DOS: =1.5t beta 6, Atom->SD device-layer swap, hooks intact). ROM side adversarially reviewed; B-DOS side = byte-identical 1.5t beta 6 (i71 already diffed it twice). UMVAL &F611 relocation proven correct. RESIDUAL: Pete sign-off + a final whole-story review agent; minor non-actionable F-key token decode; hardware runtime confirm (gated on Pete). THEN design the EEPROM patch (never flash unattended).
   status: OPEN
   depends_on: [i233, i234, i235]
   kind: leaf
