@@ -3324,7 +3324,7 @@
   title: Version-control ~/bin agent tools in a private ~/git/claude-tools repo
   description: |
     From q33 (Pete: yes, private). Create ~/git/claude-tools, move the ~/bin agent tools in (claude-chat-export incl. the i155 fix, claude-diary helpers, claude-chat-export SessionEnd hook target, etc.), scrub anything private/secret, push to github.com/petemoore/claude-tools as a PRIVATE repo (Pete can make public later). Gives the tools backup + history.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
 
