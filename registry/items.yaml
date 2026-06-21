@@ -401,7 +401,7 @@
   description: |
     Faithful Z80 port (CLAUDE.md s6) of the i27a 835769 fix into the SAM-side assembler (src/). Detect a memory op immediately followed by a 64-bit multiply-accumulate (Ra!=XZR) and insert a NOP between them, off by default behind the SAM toggle. Mirror the Go authority's mask predicates + erratum_sequence RAW carve-out. NOP insertion shifts addresses, so it must be done in a way that PC-relative refs stay correct — detect in the record/IR stream (pass1) so the inserted NOP word is accounted for in PC assignment across both passes (the Go authority establishes the exact decision). SimCoupe-gated; add a boot self-test fixture. Go authority: errata.go (i27a).
   status: OPEN
-  depends_on: [i27a]
+  depends_on: [i27a, i234]
   kind: leaf
   owner: agent
   parent: i27
@@ -411,7 +411,7 @@
   description: |
     Faithful Z80 port (CLAUDE.md s6) of the i27a 843419 fix + the SAM-side enable/disable toggle UX (q37: explicit feature, off by default). Post-layout scan over the OUT buffer: for each ADRP at a final page-offset 0xff8/0xffc matching the sequence predicate (mem-op, optional 1 non-branch insn, then unsigned-imm ld/st whose base == ADRP Rd), rewrite ADRP->ADR in place (no address shift — the +/-1MB ADR range always fits our image). Mirror the Go authority masks. Wire the SAM toggle (directive or build option) covering BOTH 835769 (i27b) and 843419. SimCoupe-gated; boot self-test fixture. Go authority: errata.go (i27a).
   status: OPEN
-  depends_on: [i27a]
+  depends_on: [i27a, i234]
   kind: leaf
   owner: agent
   parent: i27
