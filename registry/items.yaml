@@ -2940,6 +2940,8 @@
   status: WONTFIX
   kind: leaf
   owner: agent
+  prs:
+    - {num: 646, role: completing}
   refs: [tools/build-disk/main.go, tools/netboot-boot-fit-check.sh, i125, i119]
 
 - id: i138
