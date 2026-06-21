@@ -64,12 +64,12 @@ machinery routes to `MAINER3`, which sets up the **lower** screen for the report
 
 The two flags (`TVFLAG` bit 5 = "clear lower screen on keystroke", `FLAGS` bit 7 =
 "not running") are BASIC **error-recovery editor** state, *not* part of the visible
-opening screen. **OPEN QUESTION Q1 — decided by the RAM-diff experiment, NOT by
-reasoning (Pete, 2026-06-25).** Whether to reproduce them turns on a fact we will
-*measure*, not argue: does Colin's boot path (his ROM + EEPROM + B-DOS load) leave
-the sysvar state the stock ROM's `MAINER3` path would have, or does it dirty/clean
-it differently? See "## Open questions — the RAM-diff experiment" below. Do NOT
-finalize this in the inject until the experiment answers it.
+opening screen. **Q1 RESOLVED by the RAM-diff experiment (2026-06-25): do NOT
+reproduce them.** Measured, not argued: at the editor-idle sync point, the stock
+ROM (which *ran* `MAINER3`) and Colin's fork (which *skipped* it) reach **identical**
+`TVFLAG=&01` / `FLAGS=&00`. So the `MAINER3` flag-setting does not persist to matter
+by the editor idle — reproducing it in our inject changes nothing. The inject omits
+it. See "## Open questions — the RAM-diff experiment" below for the data.
 
 ### 3. Print the banner — `&0F7F` report-50 handler
 ```
@@ -167,26 +167,45 @@ Colin's bootblock teardown (`&40A9`) does the stock teardown PLUS two pokes the
     interpreter's pending-jump state.
   - `LD (&5BBE),&10` — `&5BBE` = **`TVDATA`** (temporary colour/attribute) = `&10`.
 
-These are **Colin's additions**, almost certainly cleanup he needed *because* his
-path loads B-DOS (the stock ROM didn't). **The nuance:** "follow the stock ROM" is
-the default, but for these pokes it is NOT clear-cut — **our inject is in Colin's
-situation, not the stock ROM's: we also load B-DOS.** So Colin's `NSPPC`/`TVDATA`
-cleanup may be *necessary for us too*. On the no-auto-boot path we already inherit
-it (we RET into Colin's verbatim tail). For the auto-boot path, whether to
-reproduce it (and whether an auto CODE-block boot, not just BASIC, needs it) is
-decided by the experiment below — NOT reasoned. Do NOT finalize until then.
+These are **Colin's additions**. **Q2 RESOLVED by the RAM-diff experiment
+(2026-06-25): reproduce Colin's full teardown — including `NSPPC=&FF` + `TVDATA=&10`
+— on the auto-boot path** (then `jp bdos_boot_record` instead of Colin's `JP &102F`).
+This *reverses* the earlier guess that they were Colin-specific BASIC-prep we could
+skip: the experiment shows **both** the stock ROM and Colin's fork reach `NSPPC=&FF`
+*and* `TVDATA=&10` at the post-boot editor idle — so these are the **normal**
+post-boot values, not Colin cruft. The faithful inject therefore reproduces Colin's
+exact teardown on the auto-boot path; the no-auto-boot path already inherits it (it
+RETs into Colin's verbatim tail). **One honest caveat:** the experiment exercised
+the BASIC/editor path, not an actual record-boot, so "reproduce" is the faithful +
+safe choice (mirror Colin exactly), not a proof that the booted record strictly
+requires the pokes.
 
-## Open questions — the RAM-diff experiment (decides Q1 + Q2)
+## The RAM-diff experiment (RESOLVED Q1 + Q2)
 
-**Pete's experiment (2026-06-25), the arbiter for Q1 and Q2 — measure, don't reason.**
-Boot the stock SAM ROM v3.0 and Colin's full fork (his ROM + his EEPROM bootblock +
-B-DOS) each to the **same** sync point — the editor's `LASTK` (`&5C08`) read after
-an injected key 'x' — snapshot full RAM at that PC in both, and **diff**. The diff
-reveals whether Colin's boot leaves sysvar/RAM state the stock ROM didn't (e.g.
-`NSPPC`, `TVDATA`, `TVFLAG`, `FLAGS`), giving evidence — not reasoning — for whether
-our inject must reproduce the `MAINER3` flags (Q1) and the `NSPPC`/`TVDATA` pokes
-(Q2). Pete's instinct is to follow the stock ROM, but Colin may have changed the
-exit for a real reason (B-DOS side effects); the diff settles it.
+**Pete's experiment (2026-06-25), the arbiter — measure, don't reason.** Boot the
+stock SAM ROM v3.0 and Colin's full fork (his ROM + his EEPROM bootblock + B-DOS)
+each to the **same** sync point — the ROM editor's keyboard-wait read at `&0514`
+after an injected key 'x' — snapshot full RAM in both, and **diff**. Tool:
+`tools/netboot-oracle/cmd/samboot-statediff` (uses the captures; the real 50 Hz
+frame-int handler runs, so `LASTK`/`FLAGS`/`FRAMES` are genuinely populated).
+
+**RESULT — both runs reach the same sync PC `&0514`; the four Q1/Q2 sysvars are
+IDENTICAL:**
+
+| sysvar | addr | stock v3.0 | Colin fork |
+|---|---|---|---|
+| `FLAGS` (Q1 bit 7) | `&5C3B` | `&00` | `&00` |
+| `TVFLAG` (Q1 bit 5) | `&5C3C` | `&01` | `&01` |
+| `TVDATA` (Q2) | `&5BBE` | `&10` | `&10` |
+| `NSPPC` (Q2) | `&5C44` | `&FF` | `&FF` |
+
+So the stock ROM's normal boot **already** reaches `NSPPC=&FF` / `TVDATA=&10` — the
+exact values Colin's "extra" teardown pokes set — and the Q1 flags converge too.
+→ **Q1: don't reproduce the `MAINER3` flags** (they don't persist to matter).
+→ **Q2: reproduce Colin's full teardown incl. the pokes on the auto-boot path**
+(they're the *normal* post-boot state, not Colin cruft). (55 other sysvar-band bytes
+differ — keyboard-repeat/stream buffers + `ERRNR &5C3A`=`&50`-vs-`&00` from stock's
+report-50 entry — none Q1/Q2-relevant.)
 
 **Enabler (DONE-ish):** the experiment requires booting Colin's fork *through* B-DOS
 init to BASIC in emulation. The Go netboot core already models Trinity/SD/paging and
