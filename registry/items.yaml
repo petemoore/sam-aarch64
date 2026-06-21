@@ -2721,9 +2721,11 @@
   title: "Evaluate make->tup migration (recommendation + costs)"
   description: |
     DONE: docs/notes/build-system-tup-evaluation.md. tup auto-tracks pyz80 source includes and HARD-ERRORS on undeclared generated-file reads — structurally eliminating the off-axis-cluster stale-symbol footgun (the assembler.sym import edge becomes a build error, not a silent stale binary; orphaned .bins self-delete). spectrum4 proves the pattern incl. FUSE-in-Docker CI. Costs: privileged FUSE in CI (--cap-add SYS_ADMIN --device /dev/fuse), no CI wall-time win (full build per checkout), a real 167-target rewrite. Recommendation: migrate, but it is Pete's go/no-go (build-system swap) -> i123b.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 645, role: completing}
   parent: i123
 
 - id: i123b
