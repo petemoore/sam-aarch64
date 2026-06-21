@@ -4632,24 +4632,28 @@
   owner: agent
 
 - id: i270a
-  title: "Port bd_list_write_hw from Colin's bdos15t (&A81F/&A86B): auto-null select framing + long (65536) busy-wait + data-response handling"
-  description: ""
+  title: Diff bd_list_write_hw against Colin's FORK PATCHES (1.5t Trinity SD-write additions) and verify on real SAM hardware
+  description: |
+    Diff our CMD24 write bd_list_write_hw (src/netboot/sd_csd.asm) EXACTLY against Colin's FORK ADDITIONS — his 1.5t Trinity SD-driver PATCHES, NOT the whole B-DOS: ~/sam-archive/bdos/analysis/region-diffs.txt (the 1.5a->1.5t diff), ANALYSIS.md, draft-bdos-trinity-fork-analysis.md, and bdos15t-beta6.annotated.dis (the SD region: sd.out &A7C5, sd.cmd-with-address &A81F, write tail &A86B, deselect &A8D7). Port faithfully: the Trinity SD is MICROCONTROLLER-mediated — OUT(&DC),&3F auto-null select (uC supplies dummies in data phases), write busy-wait up to 65536 reads, the real data-response framing — vs our per-byte OUT / no auto-null / 256-iter poll. Cite Colin's source like the read path does. VERIFY ON REAL SAM HARDWARE (192.168.2.75): WRQ completes, SAM emits its OACK, a pushed disk stores to a free record + reads back byte-identical. Hardware-prove this BEFORE feeding the emulator (i270b). Gates i194.
   status: OPEN
   kind: leaf
   owner: agent
   parent: i270
 
 - id: i270b
-  title: "Feed the corrected write back to the Go SD authority (sdcard.go / netboot-oracle model): model the Trinity uC auto-null + write timing"
-  description: ""
+  title: Update the Go emulator(s)' SD-card-WRITE model to the real uC-mediated behaviour (netboot-oracle sdcard.go + audit for any other Go SD emulator)
+  description: |
+    AFTER i270a works on real hardware, update the Go EMULATOR model of SD-card WRITES to faithfully reproduce the real Trinity uC-mediated behaviour learned on hardware (auto-null select, the real busy-wait + data-response framing). Today sdcard.go models a RAW SD card and was wrongly treated as the authority (i273); it must now be DERIVED FROM the hardware-proven behaviour. AUDIT ALL Go emulators that model SD — the netboot-oracle sdcard.go, AND check for any other Go SD/Trinity emulator (the comprehensive-emulation i126 surface) — and update each so they model the WRITE path correctly. Depends on i270a (hardware-proven first, per Pete: get it working on real SAM before feeding back to Go). Feeds i270c.
   status: OPEN
+  depends_on: [i270a]
   kind: leaf
   owner: agent
   parent: i270
 
 - id: i270c
-  title: Add a harness regression that FAILS on the old wrong CMD24 write (the i249/i250/i251 emulation-catch pattern)
-  description: ""
+  title: "Emulator regression gate for SD writes: the OLD (wrong) write FAILS and the NEW (correct) write PASSES in the Go emulator(s)"
+  description: |
+    Add a harness regression so the SD-card-write fidelity issue we hit on real hardware today is CAUGHT in emulation forever (the i249/i250/i251 pattern). Bidirectional gate, in EVERY Go emulator that models SD writes: the OLD wrong write (per-byte OUT / no auto-null / 256-iter poll) must FAIL the test, and the NEW correct write (Colin-derived, i270a) must PASS. So 'run it in the emulator first' becomes genuinely safe for SD writes — emulator-green will mean hardware-correct, not just emulator-self-consistent. Depends on i270b (needs the corrected model to assert against).
   status: OPEN
   depends_on: [i270b]
   kind: leaf
@@ -4683,7 +4687,7 @@
 - id: i274
   title: "Retrospective: analyse the recurring hardware-fidelity failure pattern across all incidents and propose source-level prevention (rules/hooks/skills/prompts)"
   description: |
-    An agent reviews ALL the recurring hardware-fidelity + workflow 'things that went wrong', finds the common PATTERN, and advises how to STOP THE ROT AT SOURCE (CLAUDE.md rules, PreToolUse/other hooks, skills, command gates, prompt/handover updates, registry policy) to remove the class for future iterations. THE CATALOG (each grounded in an incident; most already have items): (1) Go-model-treated-as-authority for Trinity HW -> i273 + instances i270 (CMD24 write), i145g (CSD flush), i249/250/251 (serve #3/5/6 caught late). (2) registry CLI silent failure -> i275. (3) registry desc-limit hit -> i276. (4) trinpush not runnable without looking up 'python3 ...' -> i277. (5) asking 'is trinload up?' instead of probing (ARP) directly. (6) not logging failure over the network -> i271 net-debug channel. (7) updating border colour / RST &10 screen state the agent CAN'T see -> i271 (report over network). (8) not trying the Trinity/hardware path first. (9) trinload 'not responding even though running' / wedged-after-a-bad-program / possible degrade-after-hours -> i278. OUTPUT: a PRIORITISED recommendation set, each -> a follow-up item or a rule/hook/skill change. Read-only analysis; no code change in this item. Encompasses i273 (authority-inversion) + the emulation-first discipline.
+    An agent reviews ALL recurring hardware-fidelity + workflow 'things that went wrong', finds the PATTERN, and advises how to STOP THE ROT AT SOURCE (CLAUDE.md rules, hooks, skills, command gates, prompt/handover updates, registry policy) to remove the class. CATALOG (each grounded in an incident; most have items): (1) Go-model-treated-as-authority for Trinity HW -> i273 + i270 (CMD24 write), i145g (CSD flush), i249/250/251 (serve fixes caught late). (2) registry CLI silent failure -> i275. (3) registry desc-limit hit -> i276. (4) trinpush not runnable without 'python3 ...' -> i277. (5) asking 'is trinload up?' instead of probing (ARP). (6) not logging failure over the network -> i271. (7) agent-invisible status (border colour / RST &10 screen) -> i271. (8) not trying the Trinity/hardware path first. (9) trinload wedged-after-a-bad-program / degrade-after-hours -> i278. (10) agents CONFUSED BY THE REGISTRY TOOL (esp. the opaque priority model) reverse-engineer its SOURCE -> i279 (+ i275). OUTPUT: a PRIORITISED recommendation set, each -> a follow-up item or rule/hook/skill change. Read-only analysis; no code change here. Encompasses i273 + the emulation-first discipline.
   status: OPEN
   kind: leaf
   owner: agent
@@ -4716,6 +4720,14 @@
   title: "trinload reliability: audit (in emulation) which pushed programs leave trinload/the SAM wedged, and check for a natural timeout that degrades it after hours"
   description: |
     Observed 2026-06-26: (1) a wedged serve program (the i270 WRQ hang) left trinload non-responsive to a re-push — discovery got no '!' reply — because the stuck program holds the CPU so trinload is not listening; recovery needed a manual reset. (2) Separately, trinload can appear 'not responding even though running'. INVESTIGATE: (a) EMULATION AUDIT — which trinload-pushed programs can leave trinload/the SAM in a bad state (no clean return to trinload's listen loop) so a later push fails? Cross-check the clean-exit (#4 tr_terminate) coverage in hardware-readiness-audit.md; model the wedge in the harness. (b) NATURAL TIMEOUT — does trinload stop serving / degrade after long uptime (hours)? Determine empirically + from src/netboot/trinload.asm (any watchdog/timeout/counter). Outcome: either a fix (programs always return cleanly; trinload has no degrade) or a documented recovery requirement (i266/TAPO power-cycle). Relates to i266.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i279
+  title: "registry: make priority/ordering SELF-EXPLANATORY so agents don't reverse-engineer the source (prioritize --to-top has no visible effect on 'ready', unexplained)"
+  description: |
+    REPEATING PATTERN (Pete, 2026-06-26): agents get confused by build/registry's priority model and READ ITS SOURCE to understand it. Observed: 'prioritize --id iN --to-top' sets the item first in registry/priority.yaml but 'ready' STILL shows it ~13th (owner:pete-present items + a different agent ordering appear first) with NO explanation -> 'what went wrong?' -> source-spelunking. Also 'prioritize <umbrella> --to-top' prints 'not found in priority queue' yet exits 0 (i275). DESIRED UX (Pete): after an ADD or a PRIORITIZE, the tool REPORTS THE RESULTING POSITION + REASONS, e.g. 'iNNN inserted at ready-position X of N because: owner:pete items (i266,i272) shown first (pete-present); K items hidden as dependency-blocked; it is the top actionable agent item'. So the agent TRUSTS the result and never re-investigates. Implement: (a) make 'prioritize --to-top' genuinely top of 'ready' among actionable non-pete items, AND/OR (b) emit that position+reasons line from add/prioritize/ready. Document the priority model in ONE paragraph in CLI help + the registry-cli skill so it never needs source-reading. Instance of the 'agents reverse-engineer the registry tool' pattern (i274).
   status: OPEN
   kind: leaf
   owner: agent
