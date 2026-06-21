@@ -3962,9 +3962,11 @@
   title: "Trinity EEPROM capability signature + version (interfacing code auto-detects our patch, never assumes it)"
   description: |
     Trinity EEPROM/firmware version + identity stamp: when we customise the Trinity EEPROM (i135c — stripes restore, boot-a-record-on-startup), write a small magic signature + version byte at a stable offset, plus a read helper. JUSTIFICATION (Pete, 2026-06-23, refined): NOT for SD-capability negotiation (record access through the EEPROM B-DOS is transparent, so no capability check is needed). The real need: the B-DOS actually in control is NOT guaranteed to be the one we flashed — B-DOS can be loaded from FLOPPY (the traditional DOS-load path), which is the normal case for anyone WITHOUT our customised ROM chip (not universal). So our software can't assume the EEPROM's patched firmware is present; the stamp lets it DETECT which firmware/patch is actually running and handle a mismatch gracefully. SCOPE: just the stamp + read helper (not the heavyweight per-capability auto-detect tied to the WONTFIX i214). The write rides i135c; the stamp-format + read helper are owner:agent. Relatedly this is WHY i214 (fix BD_RECORDS in the EEPROM) was dropped — a floppy-loaded B-DOS bypasses any EEPROM fix, so our direct-SD record code (i141/i145, frozen-interface, version-independent) is the right layer, and it is already faithful-16-bit which is ample.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 701, role: completing}
 
 - id: i214
   title: "Widen BD_RECORDS to 32-bit, gated behind the Trinity EEPROM large-disk capability flag (>51GB cards)"
