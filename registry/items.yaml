@@ -3600,7 +3600,7 @@
   title: "SAMBOOT dumper: headless auto-RET after all regions served (single dump-and-return, no Esc)"
   description: |
     Split from i188 (2026-06-21). i188 fixed the rom1 crash + the clean Esc-driven trinload return; the dumper still serves forever until Esc. For the FULLY UNATTENDED push->run->return->re-push loop (i133-era), the dumper must auto-RET to trinload once the host has pulled all regions (rom0/rom1/eep0..7), with no human Esc. Implement: track per-region transfer completion (the final short-block ACK in serve_serve_once) and RET from dm_serve_loop once all 10 regions have been served once (Esc stays as the fallback). Emulation-verify via the i181 paged harness + the trinload push/return round-trip. NOT a blocker for i87a-b2 (rom1 recapture) — that uses the Esc return, already proven by the eeprom/rom0 captures.
-  status: OPEN
+  status: DONE
   depends_on: [i188]
   kind: leaf
   owner: agent
