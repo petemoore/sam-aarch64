@@ -1633,6 +1633,7 @@
   description: |
     When source is flattened (-flatten, the release path), the entire body of every %nobits/BSS section (bss_kernel/bss_roms/…) is discarded: contributes zero bytes, so blank lines/comments inside BSS don't round-trip (release.s: 132 of 1472 blank lines, all in NOBITS sections). Pre-existing flatten property, not an i78 bug — i78 blank/comment preservation is exact for PROGBITS. Only matters once the SAM editor edits a flattened source with BSS content. Captured only — decide whether to preserve NOBITS editor content if/when the flattened-edit path needs it.
   status: OPEN
+  depends_on: [i3]
   kind: leaf
   owner: agent
   refs: [docs/specs/source-structure-preservation-design.md, tools/sam-aarch64/frontend/flatten.go, i78]
@@ -1824,6 +1825,7 @@
   description: |
     The integrated SAM IDE on ONE bootable disk — editor + assembler/disassembler + TFTP server — an interactive USER-DRIVEN program (q23 resolved 2026-06-20: NOT a boot→fetch→assemble→serve auto-sequence). User loads it, starts/edits a project, assembles release.bin/kernel8.img from release.tbn (M6 byte-match), and TFTP-serves so a Pi 400 netboots — features exercised on demand. The three org-&8000 layers coexist via paging (implementation detail), not sequential overlays. NOT SimCoupé-testable (no Trinity ENC/SD); real E2E is Pete's hardware gate. Arch: docs/specs/phase3-delivery-design.md §13.
   status: OPEN
+  depends_on: [i3]
   kind: leaf
   owner: agent
   refs: ["docs/specs/phase3-delivery-design.md §13", i100, i70, i83, i86, i99, i80]
@@ -2152,6 +2154,7 @@
   description: |
     PR #371 (q20/i73-L9 sweep) deleted encode_logical_imm_try, the only caller that ever armed encode_logical_imm_soft; with no armer, encode_logical_imm_reject always jp fails. The soft branch + encode_logical_imm_soft/encode_logical_imm_rejected flags are vestigial. Collapsing back to a plain jp fail + dropping the two equates is behaviourally identical (flag never set) -> release.bin byte-identical. LOW priority (touches v2-production code). The hook may be re-armed by the future i48c editor encoder — decide when i48c's encoder is designed.
   status: OPEN
+  depends_on: [i48c]
   kind: leaf
   owner: agent
   refs: [src/slots/logical_imm.asm, i73, i48c]
@@ -2506,9 +2509,28 @@
   description: |
     i118 drops windowsize from the client RRQ to stay a correct lock-step (one ACK per block) client. That costs round-trips on large transfers (an 800 KB .mgt at blksize 1428 ~574 lock-step round-trips over the SAM's slow ~20-80 KB/s SPI stack). Windowed delivery (window 4 -> ~4x fewer round-trips) is the throughput win. Requires the receiver to ACK only the last block of each window (+ handle lost-block/out-of-window rewind) on both client (i82) and server (i83/i95); re-add windowsize to ClientOptionSet only once windowed logic exists on both sides + is host-verified.
   status: OPEN
-  kind: leaf
+  kind: umbrella
   owner: agent
   refs: [tools/netboot-oracle/tftp/, src/netboot/netboot_client.asm, docs/notes/tftp-protocol-research.md, i118, i82, i83, i95]
+
+- id: i120a
+  title: Windowed TFTP (RFC 7440) in the Go oracle — the host authority for the later Z80 port
+  description: |
+    Go-authority-first slice of i120. Implement windowsize negotiation + windowed send/receive in tools/netboot-oracle/tftp (server sends a window of DATA before expecting an ACK; receiver ACKs only the last in-sequence block of each window and rewinds on gap/out-of-window) and host-verify with go tests. This is the reference the Z80 port mirrors. Does NOT touch the Z80 client/server or re-add windowsize to the live ClientOptionSet.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  parent: i120
+
+- id: i120b
+  title: Port windowed TFTP to the Z80 client (i82) + server (i83/i95) and re-add windowsize to ClientOptionSet
+  description: |
+    Z80 port of the windowed-TFTP logic whose Go authority is i120a. Add windowed ACK (ACK only last block of each window) + lost-block/out-of-window rewind to the SAM client and server, SimCoupe-verify, then re-add windowsize to ClientOptionSet (i118 had dropped it for lock-step correctness). Gated on i120a.
+  status: OPEN
+  depends_on: [i120a]
+  kind: leaf
+  owner: agent
+  parent: i120
 
 - id: i121
   title: "SAM TFTP server — WRQ (write / accept-in) support: push disk images to the SAM, auto-slotted"

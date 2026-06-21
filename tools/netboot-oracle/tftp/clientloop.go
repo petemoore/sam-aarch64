@@ -123,6 +123,11 @@ func (c *ClientLoop) onOACK(oackFrame []byte, u frame.UDP) []byte {
 		if bs, ok := OptionUint(opts, "blksize"); ok && bs > 0 {
 			c.xfer.blksize = int(bs)
 		}
+		// RFC 7440: adopt the server-granted window so the receive loop ACKs only
+		// the last block of each window (absent leaves the lock-step default).
+		if ws, ok := OptionUint(opts, "windowsize"); ok && ws > 0 {
+			c.xfer.SetWindowsize(int(ws))
+		}
 	}
 	return c.wrap(BuildACK(0))
 }
