@@ -2914,6 +2914,8 @@
   depends_on: [i135d, i87a-b1, i87b, i197c, i221, i226]
   kind: leaf
   owner: pete
+  prs:
+    - {num: 686, role: completing}
   parent: i135
   refs: [docs/specs/samboot.md]
 
@@ -4053,6 +4055,8 @@
   depends_on: [i229]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 686, role: completing}
 
 - id: i231
   title: Systemically eliminate NETBOOT_HOSTTEST==0 emulation carve-outs + CI guard against reintroduction (emulation-first enforcement)
@@ -4366,6 +4370,8 @@
   status: WONTFIX
   kind: leaf
   owner: agent
+  prs:
+    - {num: 686, role: completing}
 
 - id: i260
   title: "SAMBOOT no-boot-path RAM-diff regression: faithful inject vs Colin fork leave identical RAM"
