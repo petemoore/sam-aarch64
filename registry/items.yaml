@@ -1365,6 +1365,7 @@
   description: |
     Agent-driven, section-by-section, human-reviewed (Pete 2026-06-12): (a) comments rewritten aggressively succinct but still readable; (b) pathological constant expressions replaced with named equates (e.g. the longest instruction in the corpus: `movk w0, (65536 | (((BORDER_COLOUR >> 16) & 65535) & 65535)), lsl #16`). Coordinate with upstream spectrum4 (content originates there; release.s re-flattens). Ties to editor-tui spec D1 (all comments <256B → u16 record length can revert to u8). Parked (editor era).
   status: OPEN
+  depends_on: [i3]
   kind: leaf
   owner: agent
   refs: [docs/specs/editor-tui-prototype-design.md, i76]
@@ -1603,9 +1604,27 @@
   description: |
     Confirm Pi 3 boot ROM's DHCP behaviour (may differ from Pi 4 PXE option-43 dance) and its TFTP file set (bootcode.bin/start.elf/fixup.dat). The oracle extension proceeds from the already-known Pi 3 file set (from the tftproot), so a fresh capture is not a blocker; an optional real-hardware confirmation (hub + Wireshark / trinload technique) can be run when convenient.
   status: OPEN
-  kind: leaf
+  kind: umbrella
   owner: agent
   refs: ["docs/notes/pi-netboot-capture-analysis.md §4", i83, i86, i84]
+
+- id: i89a
+  title: Extend the netboot oracle to the Pi 3 family from the known file set + authoritative DHCP findings
+  description: |
+    Done without hardware (i89 said a fresh capture is not a blocker). Adds TestServerServesBothPiFamilies (proves one flat store serves the Pi 3 set bootcode.bin/start.elf/fixup.dat and the Pi 4 set alike, sizes from the http.RPiFirmware manifest), and folds the Pi 3 boot-ROM DHCP/TFTP differences (option-43 still required; bootcode.bin requested first; Pi 3B option-66-after-43; serial-subdir-then-root) into docs/notes/pi-netboot-capture-analysis.md section 4, sourced from official RPi docs + dnsmasq recipes. Server is model-agnostic so no logic change needed.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  parent: i89
+
+- id: i89b
+  title: Capture a real Pi 3 netboot exchange + generate Pi 3 golden wire vectors
+  description: |
+    Hardware-gated confirmation tail of i89. On Pete's Pi 3 + SAM with the hub+Wireshark rig, capture the DHCP DISCOVER/OFFER/ACK + first TFTP probe sequence and generate masked Pi 3 golden vectors (as the Pi 4 vectors were). Decisive open detail: whether the Pi 3 boot ROM is byte-strict about the option-43 'Raspberry Pi Boot' menu string (trailing spaces). Findings to confirm are in pi-netboot-capture-analysis.md section 4.
+  status: OPEN
+  kind: leaf
+  owner: pete
+  parent: i89
 
 - id: i90
   title: "%nobits/BSS section bodies dropped by -flatten — source-structure loss"
