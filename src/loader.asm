@@ -1,7 +1,7 @@
 ; loader.asm — enctab.enc reader and header validator.
 ;
 ; Loads the entire encoder-table file from disk into ENCTAB's dedicated
-; physical RAM page (page 4) via SAMDOS HGTHD (hook 129) + HLOAD
+; physical RAM page (page 4) via the DOS HGTHD (hook 129) + HLOAD
 ; (hook 130), then validates the magic "ENC1" and version=1 in RAM.
 ;
 ; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §2.3.
@@ -128,7 +128,7 @@ load_enctab:
 ; is currently running from (page 2).  See `src/trampoline.asm` and
 ; `docs/specs/samdos-file-io.md` for the full pattern.
 ;
-; Read length-mod-16K from the SAMDOS-deposited DIFA header at &4B50+35,
+; Read length-mod-16K from the DOS-deposited DIFA header at &4B50+35,
 ; clearing the `set 7, d` marker left by HGTHD (same pattern as
 ; load_payload_generic at src/loader.asm:248-255).  The length comes from
 ; the on-disk truth written by build-disk, so no assembly-time constant
@@ -190,7 +190,7 @@ load_enctab:
                 jp      nz, load_enctab_fail
 
 ; -- Header validated.  Restore section A to ROM before returning so
-; the caller can safely call SAMDOS hooks (load_in_file does so).
+; the caller can safely call DOS hooks (load_in_file does so).
 ; The caller will re-issue enctab_map_in before walking the form
 ; table.
                 call    enctab_map_out
@@ -254,7 +254,7 @@ load_payload_generic_at:
                 call    fill_uifa
                 rst     8
                 defb    HOOK_HGTHD     ; longjmps on "file not found"
-; Read length-mod-16K from SAMDOS-deposited DIFA header at &4B50+35,
+; Read length-mod-16K from DOS-deposited DIFA header at &4B50+35,
 ; clearing the `set 7, d` marker left by HGTHD.
                 ld      hl, (&4B50 + 35)
                 ld      a, h

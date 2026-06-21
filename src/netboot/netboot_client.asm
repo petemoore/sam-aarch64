@@ -26,7 +26,7 @@
 ;
 ; On completion the bootable client_main writes the staged bytes to Trinity storage
 ; via the B-DOS seam: bdos_fill_save_uifa + bdos_save_hook (HSAVE). The HSAVE hook
-; dispatch is behind NETBOOT_HOSTTEST (NOT host-verifiable — no ROM/SAMDOS/RST 8 in
+; dispatch is behind NETBOOT_HOSTTEST (NOT host-verifiable — no ROM/DOS/RST 8 in
 ; the harness); the field arithmetic (bdos_fill_save_uifa) IS host-verified (i93).
 ;
 ; PROVENANCE: the phase machine is client.go::Client; the ARP-for-server + RRQ-send

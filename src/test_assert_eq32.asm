@@ -41,7 +41,7 @@
 ; so the in-memory little-endian byte order is L, H, E, D.
 ;
 ; Rationale: inline-literal style reads cleanly at the call site and is
-; consistent with the pyz80 convention used for SAMDOS hooks (`rst 8`
+; consistent with the pyz80 convention used for DOS hooks (`rst 8`
 ; followed by `defb <hook>`).  See src/sam_io.inc lines 87-101.
 ;
 ; Clobbers: A, BC.  Preserves DE and HL so the caller's "actual" result

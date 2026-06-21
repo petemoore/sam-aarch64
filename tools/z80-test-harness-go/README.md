@@ -63,7 +63,7 @@ go build -o /tmp/z80-harness .
 ```
 
 **Always pass `-sysreg-data` for the prod assembler.**  The prod assembler
-*unconditionally* HLOADs the sysreg lookup data (SAMDOS file `"sd13"`) into
+*unconditionally* HLOADs the sysreg lookup data (DOS file `"sd13"`) into
 physical page 13 at boot (`src/loader.asm::load_page13_payload`, called
 unconditionally from `src/assembler.asm`).  Any source that uses a
 sysreg / `dc` / `tlbi` / pstate operand then runs the page-13 matcher via
@@ -77,14 +77,14 @@ miss.)  Build it with `make sysreg-data`.  See
 `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-29-go-harness-paged-trap-rootcause.md`.
 
 For the faithful alternative, `Config.StrictFileNotFound` makes an unserved
-file a real SAMDOS file-not-found error — modelled via ROM PTDOS's post-hook
+file a real DOS file-not-found error — modelled via ROM PTDOS's post-hook
 `DOSER` (`&5BC0`) dispatch (`JP (DOSER)` after every hook with `A` = the error
 number, 0 on success), reaching an installed handler or, with none, halting
 cleanly with a cause-naming message at the point of failure instead of the
 downstream `&0038` trap.  `Config.FailHGTHD` / `Config.FailHSAVE` inject
 file-I/O failures, and `Config.DoserAddr` points at the emulated `DOSER`
 handler vector (defaults to `&5BC0`).  This is the emulation-first prerequisite
-for i25 (the assembler-side `DOSER` error handler); see `harness.go` "SAMDOS
+for i25 (the assembler-side `DOSER` error handler); see `harness.go` "DOS
 file-I/O error dispatch via DOSER" and `samdos_error_longjmp_test.go`.
 (The earlier `(hksp)` model was the wrong vector — i185 found `(hksp)` is not
 app-usable.)
@@ -115,7 +115,7 @@ trigger-PC backtrace via `TrigPC`) — see `test_variant_test.go` and
 2. Pre-deposits `enctab.enc` into physical page 4 and the `.tbn` into pages 7-12.
 3. Installs a 7-byte RST-8 intercept stub at &0008 in the fake ROM.
 4. Runs the Z80 CPU via koron-go/z80 until HALT or timeout.
-5. Intercepts SAMDOS hooks via port &FD: HGTHD (129) populates &4B50 with IN file
+5. Intercepts DOS hooks via port &FD: HGTHD (129) populates &4B50 with IN file
    geometry; HLOAD (130) is a no-op (data already in pages); HSAVE (132) captures
    OUT bytes from UIFA[31..36] + physical pages 5-6.  After every file-I/O hook
    (success or error) the harness models ROM PTDOS's `JP (DOSER)` post-hook
