@@ -280,12 +280,32 @@ sdil_acmd41_done:
 ; sdc_deselect — deselect the card and EI, preserving the success/failure CY the
 ; caller set (push/pop AF brackets the port writes). Tail of every card read.
 ; ===========================================================================
+; sdc_select — issue a &DC microcontroller select byte, busy-polling FIRST (bounded,
+; sdc_wait_ready). Colin's proven driver waits before every &DC OUT; the deselect
+; tail (below) uses this. In: A = select byte. Clobbers AF.
+sdc_select:
+                push    af
+                call    sdc_wait_ready
+                pop     af
+                out     (SDC_PORT), a
+                ret
+
 sdc_deselect:
+                ; Colin's proven 4-step close (fix #6, bdos15t &A8D7;
+                ; trinity-sd-z80-interface.md:99): &30 / dummy &FF flush on &DF / &30 /
+                ; &04, each &DC select busy-polled first, the flush via sdc_out. The
+                ; 2-step (&30 -> &04) close leaves SPI state a real card mishandles on
+                ; silicon; the emulator gates on the proper order (i251). Mirrors the
+                ; gold-standard csd_probe.asm csd_deselect.
                 push    af                      ; preserve success/failure CY
-                ld      a, SDC_DESEL
-                out     (SDC_PORT), a
-                ld      a, SDC_NULLOFF
-                out     (SDC_PORT), a
+                ld      a, SDC_DESEL            ; &30 deselect (busy-polled)
+                call    sdc_select
+                ld      a, SDC_IDLE            ; &FF dummy flush on &DF
+                call    sdc_out
+                ld      a, SDC_DESEL           ; &30 again
+                call    sdc_select
+                ld      a, SDC_NULLOFF         ; &04 all-deselect / auto-null off
+                call    sdc_select
                 ei
                 pop     af
                 ret

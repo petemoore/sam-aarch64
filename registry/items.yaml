@@ -4231,7 +4231,7 @@
   title: "sd_csd.asm: port Colin's 4-step deselect tail (replace 2-step sdc_deselect) on the serve_main/client_main SD write path (fix #6)"
   description: |
     Hardware fix #6 (docs/notes/hardware-readiness-audit.md). sdc_deselect (src/netboot/sd_csd.asm:246) does a 2-step deselect (SDC_DESEL then SDC_NULLOFF); real Trinity hardware needs Colin's 4-step deselect tail to leave SPI state the card handles correctly. Port the 4-step tail. Because sd_csd.asm is SHARED, ONE edit fixes both serve_main and client_main. Reference the gold-standard csd_probe (probe_main). Was untracked before the 2026-06-25 hardware-readiness audit.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   refs: [docs/notes/hardware-readiness-audit.md, src/netboot/sd_csd.asm]
@@ -4273,7 +4273,7 @@
   title: "Trinity emulator: model the deselect-tail requirement so the 2-step (vs Colin's 4-step) deselect FAILS in emulation"
   description: |
     EMULATION GAP (docs/notes/hardware-readiness-audit.md). The SD model accepts the 2-step sdc_deselect (sd_csd.asm:246); real Trinity hardware needs Colin's 4-step deselect tail. Because the emulator accepts the short tail, a program with the wrong deselect (missing fix #6) passes in emulation and mishandles SPI on silicon. Model the deselect-tail requirement so a 2-step (vs 4-step) deselect FAILS a host test — making the wrong-deselect class a build-time failure. Ties to the i126 comprehensive-emulation north star. Pete 2026-06-25: emulation<->hardware gaps are top priority. Gates the fix-#6 program work (i247).
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   refs: [docs/notes/hardware-readiness-audit.md, i126]
