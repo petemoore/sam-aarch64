@@ -342,6 +342,7 @@
   description: |
     Implement or wire errata workarounds for the Cortex-A53 (--fix-cortex-a53-* flags). Deferred-backlog item.
   status: OPEN
+  depends_on: [q37]
   kind: leaf
   owner: agent
 
