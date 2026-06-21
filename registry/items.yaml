@@ -3419,7 +3419,7 @@
   description: |
     Release the SAMBOOT EEPROM boot-config + stripes-restore patch as a standalone open-source tool for any Trinity owner: a Python program sent over trinload that patches the EEPROM, or a bootable .mgt. Gives Trinity users the configurable default-boot-record + opening-stripes feature for free. NOT a requirement for SAMBOOT -- depends on it (publication only).
   status: OPEN
-  depends_on: [i135, i176]
+  depends_on: [i135, i176, q56]
   kind: leaf
   owner: agent
   refs: [docs/specs/samboot.md]
