@@ -199,7 +199,14 @@ func (m *mem) In(port uint8) uint8 {
 	// from real hardware. Real hardware floats the bus high (0xFF); the emulator
 	// returns a distinct marker (0x00) so the terminator can branch. detectHardware
 	// flips it to 0xFF so a test can exercise the hardware (RET) branch.
-	if port == emuDetectPort {
+	//
+	// The marker is tied to the full address &007F — i.e. read via IN A,(C) with
+	// B=0 (BC.Hi==0). On real hardware the floating-bus value is address-dependent
+	// (the probe characterized &007F == &FF), so a read with a non-zero high byte
+	// is a DIFFERENT, uncharacterized port; modelling that here means a regression
+	// to the DB-form IN A,(&7F) (which puts A on the high address lines) no longer
+	// silently gets the marker — the gap that froze the SAM on the first run.
+	if port == emuDetectPort && (m.cpu == nil || m.cpu.BC.Hi == 0) {
 		if m.detectHardware {
 			return 0xFF
 		}

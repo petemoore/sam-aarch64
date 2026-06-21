@@ -132,6 +132,17 @@ func TestEEPROMRoundTripPass(t *testing.T) {
 		t.Errorf("border = %d (written=%v), want 4 (green = pass)", b, written)
 	}
 
+	// The full payload must reach tr_terminate's EMULATION branch (di;halt) here,
+	// reading the detect port as &007F. This exercises the real end-to-end path
+	// (not a direct tr_terminate call): the first hardware run froze because the
+	// payload read the port with A on the high address lines, taking the wrong
+	// branch — a regression that leaves B non-zero at the IN would show as HW here.
+	if modeAddr, err := mac.Sym("TR_TERM_MODE"); err == nil {
+		if got := mac.Read(modeAddr, 1)[0]; got != trModeEmu {
+			t.Errorf("TR_TERM_MODE = &%02X after the full run, want &%02X (EMU) — terminator detected the wrong environment", got, trModeEmu)
+		}
+	}
+
 	// The scratch chunk must be restored to its original marker bytes.
 	img := enc.EEPROMImage()
 	for i := emRTScratchDev; i < emRTScratchEnd; i++ {
