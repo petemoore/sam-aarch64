@@ -9,29 +9,16 @@ that class of accident hard to repeat.
 
 ## How it fires
 
-`pre-deploy-check.sh` (python3, stdlib-only — no `jq`) is registered in
-`.claude/settings.json` under `hooks.PreToolUse` with a `Bash` matcher. On each
-Bash call it reads the hook JSON on stdin and inspects `tool_input.command`:
+`pre-deploy-check.sh` (python3, stdlib-only) is registered in
+`.claude/settings.json` under `hooks.PreToolUse` with a `Bash` matcher. It reads
+the hook JSON on stdin and inspects `tool_input.command`:
 
 - **Not a SAM deploy** → exits 0 silently (normal permission flow).
 - **A SAM deploy** → `deny`, with the full checklist in `permissionDecisionReason`.
-- **A SAM deploy prefixed `DEPLOY_CHECKED=1`** → allowed through.
+- **A SAM deploy prefixed `DEPLOY_CHECKED=1`** → allowed through (the escape hatch:
+  confirm every checklist item against the program, then re-run prefixed).
 
-The escape hatch: confirm every checklist item against the specific program, then
-re-run the exact same command prefixed with `DEPLOY_CHECKED=1`. The guard always
-exits 0 (falls through to "no decision" on any error), so it can never block
-ordinary Bash.
-
-## Detected patterns (case-insensitive)
-
-`trinload-push`, `trinpush-serve`, `trinpush`; the SAM IP `192.168.2.75`; the
-discovery port (`0xEDB0`/`EDB0`/`60848`); a TFTP transfer (`tftp://`,
-`tftp`/`atftp`); a push to `0x8000`/`&8000` or `page 1`. A read-only inspection
-of these tokens (`grep`/`cat`/`git log`…) does not fire unless it chains a real
-deploy after `&&`/`;`/`|`.
-
-## Adding a pattern
-
-Edit `DEPLOY_PATTERNS` in `pre-deploy-check.sh` (a `(regex, label)` pair). Err
-toward catching deploys — a false positive just means confirm-and-proceed; a
-missed deploy can crash the SAM. Test per the matrix in that file's docstring.
+The guard always exits 0 (falls through to "no decision" on any error), so it can
+never block ordinary Bash. The detected-pattern list and the test matrix live in
+the script's docstring + `DEPLOY_PATTERNS` — edit there to add a pattern (err
+toward catching: a false positive is just confirm-and-proceed).
