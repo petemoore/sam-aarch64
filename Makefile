@@ -1042,6 +1042,28 @@ netboot-client-disk: $(BUILD)/netboot_client_boot.bin $(BUILD)/build-disk
 	$(BUILD)/build-disk -netboot $(BUILD)/netboot_client_boot.bin -netboot-name client \
 	    $(BUILD)/netboot_client.mgt
 
+# The bootable fetch-and-boot binary (i182a): netboot_client.asm with NETBOOT_FETCH_BOOT
+# so the &8000 boot entry runs client_fetch_boot (the i122c PXE-style fetch -> stream
+# into a scratch Trinity record -> validate -> ALHK-boot) instead of client_main. Same
+# source + includes as netboot_client_boot (incl. the i145b-b2 SD CSD overlay), so the
+# boot budget is the full 32768-byte &8000-&FFFF window.
+$(BUILD)/netboot_fetch_boot.bin $(BUILD)/netboot_fetch_boot.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/bdos_picker.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/key_read_test.asm src/netboot/eeprom.asm src/netboot/raw_record_sink.asm src/netboot/sd_csd.asm
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_FETCH_BOOT=1 \
+	    --obj=$(BUILD)/netboot_fetch_boot.bin \
+	    --mapfile=$(BUILD)/netboot_fetch_boot.map \
+	    src/netboot/netboot_client.asm
+	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_fetch_boot.bin 32768 netboot_fetch_boot.bin
+
+netboot-fetch-boot-boot: $(BUILD)/netboot_fetch_boot.bin $(BUILD)/netboot_fetch_boot.map
+
+# A bootable SAM disk image that auto-runs the PXE-style fetch-and-boot on power-on:
+# it fetches the configured .mgt straight into a scratch Trinity record, validates it,
+# and ALHK-boots it (the i182 hardware run; mirrors netboot-client-disk).
+netboot-fetch-boot-disk: $(BUILD)/netboot_fetch_boot.bin $(BUILD)/build-disk
+	$(BUILD)/build-disk -netboot $(BUILD)/netboot_fetch_boot.bin -netboot-name fetchboot \
+	    $(BUILD)/netboot_fetch_boot.mgt
+
 # editmodel-z80 — editor edit-model block-list, Brick 1 (flat-memory, no SAM
 # paging). The koron-go/z80 harness under tools/netboot-oracle/z80/ is a
 # general flat-memory Z80 test driver (not netboot-specific); the editmodel
@@ -1143,7 +1165,7 @@ $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map: src/test_compact_ir.a
 compact-ir-z80: $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-samboot-inject netboot-smoke-boot netboot-server-boot netboot-serve-boot netboot-client-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-samboot-inject netboot-smoke-boot netboot-server-boot netboot-serve-boot netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
 
 ci-netboot-z80: netboot-z80-routines editmodel-z80 editmodel-paged-z80 pagepool-z80 viewport-z80 asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80
 	cd tools/sampage && go test ./...

@@ -284,3 +284,86 @@ func TestClientFetchBootWrapperEndToEnd(t *testing.T) {
 		t.Fatalf("Boots() = %v, want [] (a rejected image must NOT boot)", boots)
 	}
 }
+
+// TestFetchBootDiskBootEntry is the i182a check: the bootable fetch-and-boot disk
+// (netboot_fetch_boot.bin, built with NETBOOT_FETCH_BOOT) dispatches its &8000 autorun
+// entry to client_fetch_boot — NOT client_main — and the whole PXE-style
+// fetch->stream-into-scratch-record->validate path runs FROM that entry. This is the
+// emulation-first proof that the disk the i182 hardware run boots reaches the right
+// wrapper (the autorun entry, not just the routine-by-symbol coverage of
+// TestClientFetchBootWrapperEndToEnd). The real full-scale SD write + ALHK-boot stay
+// hardware-gated (i182b).
+func TestFetchBootDiskBootEntry(t *testing.T) {
+	mac, err := z80h.Load(fetchBootBin, fetchBootMap)
+	if err != nil {
+		t.Fatalf("fetch-boot binary not built (%v); run `make netboot-fetch-boot-boot`", err)
+	}
+
+	// Structural: the &8000 boot entry is `jp client_fetch_boot`, the NETBOOT_FETCH_BOOT
+	// entry switch — not the default `jp client_main`.
+	entry := mac.Read(0x8000, 3)
+	if entry[0] != 0xC3 {
+		t.Fatalf("boot entry @&8000 = %#x, want C3 (jp)", entry[0])
+	}
+	target := uint16(entry[1]) | uint16(entry[2])<<8
+	fbAddr := symAddr(t, mac, "client_fetch_boot")
+	cmAddr := symAddr(t, mac, "client_main")
+	if target != fbAddr {
+		t.Fatalf("boot entry jumps to &%04X, want client_fetch_boot &%04X (client_main is &%04X — wrong entry?)",
+			target, fbAddr, cmAddr)
+	}
+
+	// Behavioural: boot FROM the &8000 autorun entry and assert the fetch-and-boot path
+	// runs (mirrors TestClientFetchBootWrapperEndToEnd, but through the real entry).
+	enc := z80h.NewENC28J60()
+	enc.ProgramTrinityNetwork(fbSamMAC, fbSamIP)
+	mac.AttachIO(enc)
+	store := z80h.NewBDOSStore()
+	card := z80h.NewCardModel()
+	store.AttachCard(card)
+	mac.AttachBDOS(store)
+
+	const record = 2
+	mac.Write(symAddr(t, mac, "cl_boot_record"), []byte{record})
+	img := fbValidImage()[:fbBlksize*3+10] // 3 full blocks + a short final → completes fast
+	fbQueueTransfer(enc, img)
+
+	res, err := mac.RunBootFrom(0x8000, z80h.Entry{StepCap: 5_000_000})
+	if err != nil {
+		t.Fatalf("RunBootFrom &8000: %v", err)
+	}
+	t.Logf("fetch-boot disk entry: halted=%v PC=&%04X steps=%d", res.Halted, res.PC, res.Steps)
+
+	// The transfer completed from the autorun entry.
+	if got := mac.Read(symAddr(t, mac, "XFER_DONE"), 1)[0]; got != 1 {
+		t.Fatalf("XFER_DONE = %d, want 1 (the fetch did not complete from the &8000 entry)", got)
+	}
+
+	// The body STREAMED into the scratch record (the i122b sink, the fetch-boot path) —
+	// every sector targets the scratch record, consecutive from 0.
+	wantSectors := (len(img) + bdos.SectorSize - 1) / bdos.SectorSize
+	writes := store.SectorWrites()
+	if len(writes) != wantSectors {
+		t.Fatalf("SectorWrites() = %d, want %d (body must stream into the record)", len(writes), wantSectors)
+	}
+	for i, w := range writes {
+		if w.Record != record {
+			t.Fatalf("sector[%d] -> record %d, want scratch record %d", i, w.Record, record)
+		}
+		if w.LinearSec != i {
+			t.Fatalf("sector[%d] linear = %d, want %d (consecutive from 0)", i, w.LinearSec, i)
+		}
+	}
+
+	// The fetch-boot path streams raw sectors + ALHK-boots; it does NOT HSAVE a file
+	// like client_main. Zero HSAVEs distinguishes this entry from the client_main one.
+	if n := len(store.Saves()); n != 0 {
+		t.Fatalf("fetch-boot entry recorded %d HSAVEs, want 0 (it streams raw, not client_main's HSAVE write-out)", n)
+	}
+
+	// A sub-record image (3 blocks) is not a valid 819,200-byte record → rejected, NOT
+	// booted (the corrupt-disk-record guard, reached through the autorun entry).
+	if boots := store.Boots(); len(boots) != 0 {
+		t.Fatalf("Boots() = %v, want [] (a sub-record image must NOT boot)", boots)
+	}
+}
