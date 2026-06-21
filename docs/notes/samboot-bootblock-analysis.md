@@ -23,6 +23,17 @@ internals are owned by [`bdos-trinity-fork-analysis.md`](bdos-trinity-fork-analy
 third party). The non-redistributable local artifacts under `~/sam-archive` are
 cited by path and described, never copied verbatim into this committed doc.
 
+**Capture integrity.** The captured artifacts (`eeprom.bin` — the mandatory
+pre-flash restore anchor for i135c — `rom*.bin`, the `eep*.bin` splits, and the
+stock-ROM baselines) live in `~/sam-archive/samboot-capture/` (on the Pi, with a
+verified copy on `Petes-MacBook-Pro`); they are **never** committed. Their sha256
+checksums **are** committed, in
+[`samboot-capture-sha256sums.txt`](samboot-capture-sha256sums.txt), so corruption
+of any copy is detectable from version control. Verify a copy against it with
+`shasum -a 256 -c samboot-capture-sha256sums.txt` (or `sha256sum -c`) from inside
+the capture directory. Hashes only — they reveal nothing reconstructable about the
+proprietary bytes.
+
 ---
 
 ## 1. The reset → bootblock → B-DOS load sequence
