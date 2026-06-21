@@ -424,6 +424,42 @@ func TestSetStatus_OpenToDone(t *testing.T) {
 	}
 }
 
+// TestSetOwner flips an item's owner agent→pete→agent and confirms the change
+// round-trips through validate + regeneration. This is the lever i172 / the
+// needs-Pete model use to move a presence-gated item out of (and back into) the
+// agent `ready` queue.
+func TestSetOwner(t *testing.T) {
+	paths := setupMutatorFixture(t)
+
+	get := func(id string) *Item {
+		reg := loadRegFromPaths(t, paths)
+		for i := range reg.Items {
+			if reg.Items[i].ID == id {
+				return &reg.Items[i]
+			}
+		}
+		t.Fatalf("%s not found", id)
+		return nil
+	}
+
+	if got := get("i1b").Owner; got != "agent" {
+		t.Fatalf("precondition: i1b owner got %q, want agent", got)
+	}
+
+	runSetOwner([]string{"--id", "i1b", "--owner", "pete"}, paths)
+	assertValidFromPaths(t, paths)
+	if got := get("i1b").Owner; got != "pete" {
+		t.Errorf("after set-owner pete: i1b owner got %q, want pete", got)
+	}
+
+	// Flip back — the lever works both directions.
+	runSetOwner([]string{"--id", "i1b", "--owner", "agent"}, paths)
+	assertValidFromPaths(t, paths)
+	if got := get("i1b").Owner; got != "agent" {
+		t.Errorf("after set-owner agent: i1b owner got %q, want agent", got)
+	}
+}
+
 // TestSetStatus_OpenClosedMoveReflectedInGen confirms that the open↔closed
 // split is automatic: a status change from OPEN to DONE moves the row to the
 // closed-view output.
