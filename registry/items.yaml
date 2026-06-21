@@ -3843,6 +3843,8 @@
   title: "Doc: worked byte-level walkthrough of toolchain pipeline (representations + round-trips)"
   description: |
     Long-lived reference tracing a minimal aarch64 .s through every representation (.s ASCII -> .tbn bytes -> binary -> disasm) with REAL captured bytes, commands/options, and Z80 routine citations; shows flatten (linker step consuming .section/.text/.data), comment stripping, the CI binary round-trip + SAM-side round-trip, and what info is lost where (host vs SAM parity). Requested by Pete 2026-06-23 after the i56 -layout discussion.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 616, role: completing}
