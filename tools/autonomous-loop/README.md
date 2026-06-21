@@ -16,7 +16,7 @@ the limit, so nothing is summarised away. The session stays interactive and
 
 ## Protocol (the startup prompt tells the agent to follow this)
 
-1. Finish one work item (a merged PR) → `touch ~/.claude/autonomous-loop/task-done` → end the turn.
+1. Finish one work item (a merged PR) → `touch ~/.claude/autonomous-loop/task-done` → end the turn. (This step is now also enforced **structurally** — see "Structural stop-after-merge" below — so a forgotten `touch` no longer lets the session run on.)
 2. Monitor stuffs `/context` **then a short resume nudge**. The nudge is required:
    `/context` is a *local* command — it renders the readout but does not invoke
    the model, so it can't wake the agent on its own; the nudge (a real text line,
@@ -86,6 +86,40 @@ appears (`ALOOP_PETE_ARRIVAL`) and a **departure** line when it is removed
 surfaces Pete's items in `ready` and silences the periodic nudges; `rm` it to hand
 control fully back to autonomous mode.
 
+## Structural stop-after-merge (i147)
+
+The context protection depends on the agent **choosing** to `touch task-done`
+after each merged PR — the easiest step to skip mid-flow. On 2026-06-20 a session
+never stopped and accumulated ~10 merged PRs into one polluted context (and the
+judgment-picking / missing-edge blindness that follows a bloated context). i147
+makes the checkpoint **structural** so a forgotten `touch` cannot do that again.
+
+The monitor watches the main branch for newly-landed **PR merge commits** and, if
+one appears with no checkpoint already pending, **synthesizes `task-done` itself**
+— the agent then gets the normal `/context` checkpoint even though it forgot to
+stop. Mechanics:
+
+- **Read-only + deterministic.** A throttled `git fetch` of the watched ref
+  (`origin/main`, default every `ALOOP_MERGE_CHECK_INTERVAL`=120 s) + `rev-parse`.
+  The fetch only updates `refs/remotes/origin/main`; it never touches the working
+  tree, HEAD, or local branches, so it is safe alongside the agent's own git work
+  in the same checkout. No LLM — same philosophy as the rest of the monitor.
+- **Only real PR merges count.** Detection is `git rev-list --merges <seen>..<ref>`
+  — a 2-parent merge commit. Single-parent **direct doc-only pushes** (which this
+  project lands straight on `main`) are correctly ignored, so a roadmap edit never
+  forces a checkpoint. (`new_merges_since()`, unit-tested by
+  `test-merge-detection.sh`.)
+- **No double-fire.** When a checkpoint is taken (the agent's own `task-done`, a
+  wind-down, or a merge-watch synthesis) the watch baseline is refreshed to the
+  current tip, so the merge that prompted it cannot synthesize a *second*
+  `task-done` on the next check.
+- **Autonomous-only.** Synthesis is gated on Pete being **away** (no
+  `pete-present` marker) — when he is present he is steering, so the monitor does
+  not force a checkpoint off a merge he may have driven.
+
+Disable with `ALOOP_MERGE_WATCH=0`. The agent should still `touch task-done`
+itself; the watch is the safety net, not a licence to skip the handshake.
+
 ## Run
 
 ```sh
@@ -99,7 +133,9 @@ Tunable via env: `ALOOP_WINDOW`, `ALOOP_PROMPT`, `ALOOP_POLL`,
 `ALOOP_NUDGE_TRIES`, `ALOOP_NUDGE_VERIFY_WAIT`, `ALOOP_TURN_MARKER`,
 `ALOOP_IDLE_POLL`, `ALOOP_IDLE_CONFIRM`, `ALOOP_IDLE_MAX`, `ALOOP_LOG`,
 `ALOOP_PETE_ARRIVAL`, `ALOOP_PETE_DEPARTURE` (the i240 presence-edge lines)
-(see `monitor-nudge-delivery.md`), and — for the i103 quiescent hold —
+(see `monitor-nudge-delivery.md`); for the i147 structural stop-after-merge —
+`ALOOP_MERGE_WATCH` (1/0), `ALOOP_REPO`, `ALOOP_MERGE_REMOTE`,
+`ALOOP_MERGE_BRANCH`, `ALOOP_MERGE_REF`, `ALOOP_MERGE_CHECK_INTERVAL`; and — for the i103 quiescent hold —
 `ALOOP_PROJECTS_DIR` / `ALOOP_TRANSCRIPT` (where the watcher reads transcript
 growth; defaults to the newest `*.jsonl` under `~/.claude/projects`).
 

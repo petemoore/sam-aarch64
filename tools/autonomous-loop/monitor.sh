@@ -81,6 +81,25 @@ PETE_DEPARTURE_MSG="${ALOOP_PETE_DEPARTURE:-Pete has left (his presence flag was
 # with ALOOP_TRANSCRIPT to pin one file.
 PROJECTS_DIR="${ALOOP_PROJECTS_DIR:-$HOME/.claude/projects}"
 
+# --- i147: structural stop-after-merge -------------------------------------
+# The context protection (touch task-done -> /context checkpoint -> fresh turn)
+# relies on the agent CHOOSING to stop after each merged PR -- the easiest step to
+# skip mid-flow (2026-06-20 a session never stopped and accumulated ~10 merged PRs
+# into one polluted context). This makes the checkpoint STRUCTURAL: the monitor
+# watches the main branch for newly-landed PR merge commits and, if one appears
+# with no checkpoint pending, synthesizes task-done itself -- so the agent gets
+# the /context checkpoint even when it forgot to stop. The watch is read-only (a
+# throttled `git fetch` of the watched ref + rev-parse); it never touches the
+# working tree, HEAD, or local branches, so it is safe alongside the agent's own
+# git work in the same checkout. Only 2-parent merge commits count -- single-parent
+# direct doc-only pushes (which this project lands straight on main) are ignored.
+MERGE_WATCH="${ALOOP_MERGE_WATCH:-1}"          # 1 = enforce stop-after-merge; 0 = off
+REPO="${ALOOP_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." 2>/dev/null && pwd)}"
+MERGE_REMOTE="${ALOOP_MERGE_REMOTE:-origin}"
+MERGE_BRANCH="${ALOOP_MERGE_BRANCH:-main}"
+MERGE_REF="${ALOOP_MERGE_REF:-$MERGE_REMOTE/$MERGE_BRANCH}"   # the ref new_merges_since reads
+MERGE_CHECK_INTERVAL="${ALOOP_MERGE_CHECK_INTERVAL:-120}"    # seconds between merge-watch fetches
+
 # log() timestamps to stdout AND appends to $LOGFILE so the trace survives the
 # session -- the live stall that motivated i179 left no inspectable record. Watch
 # with `tail -f "$LOGFILE"`. (Pete asked for exactly this visibility, 2026-06-20.)
@@ -112,6 +131,29 @@ transcript_size() {
   else
     echo 0
   fi
+}
+
+# new_merges_since() echoes the MERGE-commit SHAs (2+ parents) that landed on
+# $ref after $since -- i.e. PRs merged since we last looked. Single-parent commits
+# (direct doc-only pushes, which this project lands straight on main) are NOT merge
+# commits and are correctly ignored, so only a real PR landing triggers the
+# structural checkpoint (i147). Empty output = no new PR merge. Pure and
+# side-effect-free (it does no fetch), so it is unit-testable against a local ref
+# -- see test-merge-detection.sh.
+new_merges_since() {
+  local repo="$1" since="$2" ref="$3"
+  git -C "$repo" rev-list --merges "${since}..${ref}" 2>/dev/null
+}
+
+# fetch_main_sha() quietly updates the watched remote ref and echoes its current
+# SHA (empty on failure, e.g. offline -- the caller then makes no decision). The
+# fetch only updates refs/remotes/<remote>/<branch>; it never touches the working
+# tree, HEAD, or local branches, so it is safe to run while the agent works in the
+# same checkout. Plain `git` (not the `g` faketime wrapper) -- fetch/rev-parse
+# create no commits, so timestamps are irrelevant here.
+fetch_main_sha() {
+  git -C "$REPO" fetch -q "$MERGE_REMOTE" "$MERGE_BRANCH" 2>/dev/null
+  git -C "$REPO" rev-parse "$MERGE_REF" 2>/dev/null
 }
 
 # stuff_raw() sends a string to the session in CHUNK_SIZE-byte bursts, pausing
@@ -231,6 +273,11 @@ nudge_until_turn() {
   return 1
 }
 
+# When this file is SOURCED (e.g. by test-merge-detection.sh) expose the functions
+# above without running the monitor; executing it directly falls through to the
+# preflight + loop below. `(return 0 …)` succeeds only in a sourced context.
+(return 0 2>/dev/null) && return 0
+
 # --- preflight -------------------------------------------------------------
 [ -n "$SESSION" ] || { echo "ERROR: set ALOOP_SESSION to your screen session (see 'screen -ls')." >&2; exit 1; }
 command -v screen >/dev/null || { echo "ERROR: 'screen' not found." >&2; exit 1; }
@@ -260,6 +307,16 @@ quiescent_mark=""                           # transcript size when quiescence be
 # (re)started while Pete is already present does NOT spuriously announce arrival.
 pete_was=""; [ -e "$PETE_PRESENT" ] && pete_was="1"
 log "i240: pete-present at startup: ${pete_was:-no}"
+# i147: seed the structural-merge-checkpoint watch from the CURRENT main tip so a
+# merge that already landed before the monitor started does NOT trigger a spurious
+# checkpoint.
+last_main_sha=""; last_merge_check=$SECONDS
+if [ "$MERGE_WATCH" = "1" ]; then
+  last_main_sha="$(fetch_main_sha)"
+  log "i147: merge-watch on; REPO=$REPO ref=$MERGE_REF seed=${last_main_sha:-<none>} interval=${MERGE_CHECK_INTERVAL}s"
+else
+  log "i147: merge-watch off (ALOOP_MERGE_WATCH=0)"
+fi
 while true; do
   # i240 -- Pete-presence gate. While the pete-present semaphore exists, Pete is
   # driving the session interactively. Suppress ONLY the time-based HANG-timeout
@@ -282,6 +339,31 @@ while true; do
       last_signal=$SECONDS   # fresh hang-timeout baseline so departure doesn't instantly hang-nudge
     fi
     pete_was="$pete_now"
+  fi
+  # i147 -- structural stop-after-merge. Throttled, read-only watch of the main
+  # branch: when a PR merge commit lands with no checkpoint already pending (and
+  # Pete is away -- when he is present he is steering, so we don't force a
+  # checkpoint), synthesize task-done so the agent gets the /context checkpoint
+  # even if it forgot to stop. The TASK_DONE branch below then waits for the
+  # current turn to end before delivering, so the agent finishes whatever it is
+  # mid-flow on; the merge is marked accounted for there (and here), so a single
+  # merge cannot double-fire. Direct doc-only pushes (single-parent) never trigger.
+  if [ "$MERGE_WATCH" = "1" ] && (( SECONDS - last_merge_check >= MERGE_CHECK_INTERVAL )); then
+    last_merge_check=$SECONDS
+    cur_main_sha="$(fetch_main_sha)"
+    if [ -n "$cur_main_sha" ]; then
+      if [ -z "$last_main_sha" ]; then
+        last_main_sha="$cur_main_sha"                     # first successful read: just seed, never fire
+      elif [ "$cur_main_sha" != "$last_main_sha" ]; then
+        merges="$(new_merges_since "$REPO" "$last_main_sha" "$MERGE_REF")"
+        last_main_sha="$cur_main_sha"
+        if [ -n "$merges" ] && [ -z "$pete_now" ] \
+           && [ ! -e "$TASK_DONE" ] && [ ! -e "$WOUND_DOWN" ] && [ ! -e "$QUIESCENT" ]; then
+          log "i147: PR merge landed on $MERGE_REF with no checkpoint pending -> synthesizing task-done (structural stop-after-merge): $(printf '%s' "$merges" | tr '\n' ' ')"
+          touch "$TASK_DONE"
+        fi
+      fi
+    fi
   fi
   # If $QUIESCENT vanished by any path (auto-expire below, or an external rm),
   # forget the stale baseline so a future hold re-marks from scratch.
@@ -334,6 +416,9 @@ while true; do
     stuff "$STARTUP_PROMPT"
     submit
     rm -f "$WOUND_DOWN" "$TASK_DONE"
+    # i147: a wind-down clears the slate -- refresh the merge-watch baseline so any
+    # merge that landed before the restart can't trigger a checkpoint afterwards.
+    if [ "$MERGE_WATCH" = "1" ]; then merge_synced="$(fetch_main_sha)"; [ -n "$merge_synced" ] && last_main_sha="$merge_synced"; fi
     last_signal=$SECONDS
   elif [ -e "$TASK_DONE" ]; then
     log "TASK_DONE detected"
@@ -359,6 +444,10 @@ while true; do
     sleep "$CONTEXT_SETTLE"
     nudge_until_turn "$RESUME_NUDGE"
     rm -f "$TASK_DONE"
+    # i147: this checkpoint accounts for whatever merge prompted it (the agent's own
+    # task-done, or a merge-watch synthesis) -- refresh the watch baseline so the
+    # same merge can't synthesize a SECOND task-done on the next merge-check.
+    if [ "$MERGE_WATCH" = "1" ]; then merge_synced="$(fetch_main_sha)"; [ -n "$merge_synced" ] && last_main_sha="$merge_synced"; fi
     last_signal=$SECONDS
   elif [ -z "$pete_now" ] && [ $((SECONDS - last_signal)) -ge "$HANG_TIMEOUT" ]; then
     # i240: the time-based hang nudge fires ONLY when Pete is away. While he is
