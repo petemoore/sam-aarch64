@@ -3818,7 +3818,7 @@
 - id: i219
   title: Acquire a stock (untarnished) SAM Coupé system ROM binary + disassembly
   description: |
-    Gap surfaced by i189 (the SAM software catalogue, docs/specs/sam-software-catalogue.md): the project has NO stock/untarnished SAM Coupe system ROM — no binary, no disassembly, no deep doc; it exists only conceptually (the ZX Spectrum ROM disasms under ~/git are a DIFFERENT machine, not a substitute). We have Colin's FORKED ROM captured (rom0/rom1/rom.bin) but not the stock one. Having the stock ROM would let us diff fork-vs-stock to isolate exactly what Colin changed for the EEPROM boot path, and ground the startup-stripes / boot behaviour. owner:pete — acquisition is Pete's call (Colin Piggot / Simon Owen are contacts, or a SimCoupe ROM image). Agent can disassemble/annotate once a binary is in hand.
+    Gap surfaced by i189: the project had no stock SAM ROM. RESOLVED in practice 2026-06-24: SimCoupe ships the stock ROM at /home/pmoore/git/simcoupe/Resource/samcoupe.rom (stock v3.1, version byte &000F=&1F). Colin forked v3.0 (&000F=&1E); v3.0 and v3.1 are byte-identical except that version byte, so rom_stock_v30.bin (samcoupe with &000F=&1E) is the exact stock-v3.0 baseline -> fork diff = Colin's 6 functional patches (140 B). Pete may still want a verified-provenance binary, but the fork analysis no longer needs one. See docs/specs/samboot-fork-analysis.md.
   status: OPEN
   kind: leaf
   owner: pete

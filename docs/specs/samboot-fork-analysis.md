@@ -244,10 +244,17 @@ do not sample it.
 This is the approach already proven for the ROM; apply it identically to the EEPROM
 bootblock and to B-DOS if B-DOS turns out not to be bit-identical to stock.
 
-1. **Reconstruct a byte-exact stock baseline.** For the ROM: stock = Colin's
-   `rom.bin` with the differing bytes reverted (so it differs only in the patches).
-   For B-DOS: obtain stock B-DOS of the right version and diff the EEPROM copy
-   against it byte-for-byte.
+1. **Get a byte-exact stock baseline — a REAL binary, not a reconstruction.** Lesson
+   learned 2026-06-24: reconstructing "stock" from the annotated disassembly is only
+   byte-exact in CODE regions (the disassembly truncates `DB`/`DM` hex), so it
+   undercounts data-region diffs and is wrong there. The REAL stock ROM is SimCoupé's
+   `/home/pmoore/git/simcoupe/Resource/samcoupe.rom` (stock v3.1, ROM-version byte
+   `&000F=&1F`); Colin forked v3.0 (`&000F=&1E`). The exact v3.0 baseline is
+   `~/sam-archive/samboot-capture/rom_stock_v30.bin` = samcoupe.rom with `&000F`
+   reverted to `&1E`; it differs from `rom.bin` only in Colin's 6 functional patches
+   (140 bytes). (This bears on i219 — we have a stock ROM.) For B-DOS: get stock
+   B-DOS of the right version (in `~/sam-archive/bdos/`) and diff the EEPROM copy
+   byte-for-byte — the same "use a real binary, prove every byte" rule applies.
 2. **Boot both from address 0 in the emulator** (real cold-init) and diff the
    execution traces to find every fork point.
 3. **Set-based PC diff** to name exactly what code each side runs that the other

@@ -21,7 +21,7 @@ import (
 // and trace the exact instructions stock runs to get back to BASIC. This is the
 // authoritative return-to-BASIC sequence the EEPROM bootblock must mirror.
 func TestStockTeardownReturnsToBASIC(t *testing.T) {
-	stockPath := realCapturePath("rom_stock_reconstructed.bin")
+	stockPath := realCapturePath("rom_stock_v30.bin")
 	eepPath := realCapturePath("eeprom.bin")
 	if stockPath == "" || eepPath == "" {
 		t.Skip("captures absent")
@@ -79,13 +79,69 @@ func TestStockTeardownReturnsToBASIC(t *testing.T) {
 	}
 }
 
+// TestStockSetsNSPPCandTVDATA proves whether the STOCK boot writes NSPPC (&5C44)
+// and TVDATA (&5BBE) — the two sysvars Colin's EEPROM bootblock sets before
+// JP ERRHAND2 — and to what values. If stock sets them identically, the bootblock
+// is replicating stock init (so our patch copies stock); if not, Colin added them.
+// We trace the stock boot with the key-wait NOP'd out so it runs all the way to
+// BASIC, recording every write to those two addresses.
+func TestStockSetsNSPPCandTVDATA(t *testing.T) {
+	stockPath := realCapturePath("rom_stock_v30.bin")
+	eepPath := realCapturePath("eeprom.bin")
+	if stockPath == "" || eepPath == "" {
+		t.Skip("captures absent")
+	}
+	stock, _ := os.ReadFile(stockPath)
+	eeprom, _ := os.ReadFile(eepPath)
+	patched := append([]byte(nil), stock...)
+	patched[0x0FA5], patched[0x0FA6] = 0x00, 0x00 // NOP out JR Z,WTFK -> runs to BASIC
+
+	mac := z80h.New()
+	mac.LoadROMImage(patched)
+	mac.Pager().LMPR = bootLMPR
+	mac.Pager().HMPR = bootHMPR
+	enc := z80h.NewENC28J60()
+	enc.LoadEEPROMImage(deviceLinearEEPROM(eeprom))
+	mac.AttachIO(enc)
+
+	type wr struct {
+		val  uint8
+		seen bool
+	}
+	last := map[uint16]wr{0x5C44: {}, 0x5BBE: {}}
+	n := map[uint16]int{}
+	mac.SetAccessTrace(func(addr uint16, write bool, val uint8) {
+		if !write {
+			return
+		}
+		if _, ok := last[addr]; ok {
+			last[addr] = wr{val: val, seen: true}
+			n[addr]++
+		}
+	})
+	mac.RunBootFrom(0x0000, z80h.Entry{StepCap: 3_000_000})
+	for _, a := range []uint16{0x5C44, 0x5BBE} {
+		name := "NSPPC"
+		if a == 0x5BBE {
+			name = "TVDATA"
+		}
+		w := last[a]
+		if !w.seen {
+			t.Logf("STOCK boot: &%04X %s never written during cold boot+teardown", a, name)
+		} else {
+			t.Logf("STOCK boot: &%04X %s written %d times; LAST value = &%02X", a, name, n[a], w.val)
+		}
+	}
+	t.Log("(Colin's bootblock sets NSPPC=&FF and TVDATA=&10 before JP ERRHAND2)")
+}
+
 // TestNonBootDiffReachability proves whether the three NON-rainbow diff regions
 // are read during cold boot, distinguishing "boot-relevant" from "later-behaviour"
 // changes. &FC44 is the UMVAL message-table pointer (read at init -> UMSGS);
 // &D902 is a disk index-hole constant; &FBFF is the BASIC command table.
 func TestNonBootDiffReachability(t *testing.T) {
 	forkPath := realCapturePath("rom.bin")
-	stockPath := realCapturePath("rom_stock_reconstructed.bin")
+	stockPath := realCapturePath("rom_stock_v30.bin")
 	eepPath := realCapturePath("eeprom.bin")
 	if forkPath == "" || stockPath == "" || eepPath == "" {
 		t.Skip("captures absent")

@@ -4,7 +4,7 @@
 // where the two boots fork. Grounds the "what does the fork change" story in a
 // running model rather than inference. Skips when the private captures are absent.
 //
-// Stock image: ~/sam-archive/samboot-capture/rom_stock_reconstructed.bin
+// Stock image: ~/sam-archive/samboot-capture/rom_stock_v30.bin
 //
 //	= fork rom.bin with the 97 differing bytes reverted to stock values, so it is
 //	byte-exact stock except for Colin's edits (built by the analysis scripts).
@@ -19,11 +19,11 @@ import (
 
 func loadForkAnalysisROMs(t *testing.T) (stock, fork, eeprom []byte) {
 	t.Helper()
-	stockPath := realCapturePath("rom_stock_reconstructed.bin")
+	stockPath := realCapturePath("rom_stock_v30.bin")
 	forkPath := realCapturePath("rom.bin")
 	eepPath := realCapturePath("eeprom.bin")
 	if stockPath == "" || forkPath == "" || eepPath == "" {
-		t.Skip("fork-analysis captures absent (need rom_stock_reconstructed.bin + rom.bin + eeprom.bin under ~/sam-archive/samboot-capture)")
+		t.Skip("fork-analysis captures absent (need rom_stock_v30.bin + rom.bin + eeprom.bin under ~/sam-archive/samboot-capture)")
 	}
 	var err error
 	if stock, err = os.ReadFile(stockPath); err != nil {
