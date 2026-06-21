@@ -4141,9 +4141,11 @@
   title: "monitor.sh: gate nudges on Pete-presence semaphore + announce arrival/departure in-session"
   description: |
     When Pete is present (the ~/.claude/autonomous-loop/pete-present semaphore exists), monitor.sh should NOT deliver autonomous-loop nudges/interruptions. Additionally: when the monitor DETECTS the semaphore was just created, stuff a friendly arrival line into the session (e.g. 'Hi Claude, I am back, Pete here.'); when it detects the file was just deleted, stuff a departure line (e.g. 'Pete has left - he deleted his presence flag, please continue working autonomously.'). Pete request 2026-06-24. Parked/future; do not work yet.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 676, role: completing}
 
 - id: i241
   title: "CSD probe: bound the SD-path per-byte busy-wait so a stuck Trinity can't hang the SAM (hang-safety for i145g)"
