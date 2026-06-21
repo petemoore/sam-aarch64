@@ -26,7 +26,7 @@ registry move --id iN --before iM
 registry move --id iN --after  iM
 ```
 
-This view supersedes the prose "proposed sequence" in `docs/ROADMAP.md`.
+This view is the **single source of work ordering** — the ROADMAP `Current State` block is state/context only, never a work queue.
 Source of truth: `registry/priority.yaml`. Spec: `docs/specs/registry-source-of-truth-design.md §"Priority queue + ready"`.
 
 <!-- The table below is generated — do not edit it by hand. -->
