@@ -2716,7 +2716,7 @@
   description: |
     Hardware implementation of the card-absolute list-sector read modelled in B3 by the harness hook BD_HOOK_LISTREAD. Implements the SPI command ladder (CMD17 single-block read) on Trinity ports &DC-&DF to read list sectors 1..base-1 directly off the SD card. Not required for B3 emulation; the harness models the returned bytes. Needs final confirmation of the exact SPI init/read sequence on real hardware before building (docs/specs/trinity-record-detection-design.md §8, open-verification-item-1 and §3 frozen-interface principle).
   status: OPEN
-  depends_on: [i133]
+  depends_on: [i133, i193]
   kind: leaf
   owner: agent
   parent: i119
@@ -2754,10 +2754,49 @@
   description: |
     client_main's auto-pick needs BD_RECORDS (card record count = tot.sct/1600). tot.sct comes from the SD CSD capacity read over SPI (ports &DC-&DF), which is hardware-gated (no emulator). Until this lands, BD_RECORDS=0 on real hardware => picker finds no free record => safe decline (no write). The emulation E2E injects BD_RECORDS directly. Implement the CSD read so the bootable client can actually claim a record on hardware.
   status: OPEN
-  depends_on: [i133]
-  kind: leaf
+  kind: umbrella
   owner: agent
   parent: i119
+
+- id: i145a
+  title: "CSD-read hardware probe — trinload-pushable: read the real SD CSD over SPI + serve it back"
+  description: |
+    Trinload-pushable Z80 probe (mirror netboot_dumper) that reads the SD CSD over the Trinity SPI and serves the raw 16 CSD bytes back. PORT THE SD INTERFACE FROM COLIN'S DISASSEMBLY (i193 = the authority) — the &38 microcontroller init, the CMD ladder, and the &DC/&DF busy-poll/&3F-auto-null timing as B-DOS 1.5t actually does it; a generic SD-SPI + CSD-decode reference (chat archive) cross-checks. Reuse encdrv/eeprom SPI primitives. Decode CSD v1.0 vs v2.0 so ANY card size is inferred, never hardcoded (host-side decode ok). Run on real hardware (trinload running, SAM 192.168.2.75) to capture the true CSD + confirm timing. Prefer a non-disruptive bare CMD9 if the card is already B-DOS-initialised. Plan: docs/plans/i145-sd-csd-read.md.
+  status: OPEN
+  depends_on: [i193]
+  kind: leaf
+  owner: agent
+  parent: i145
+
+- id: i145b
+  title: "Production SD CSD read -> BD_RECORDS, wired into serve_main + client_main startup"
+  description: |
+    Fold the i145a SD-init/CSD-read/capacity-decode into a routine called at serve_main (+ client_main) startup that sets BD_RECORDS = sectors/1600 from the card, replacing the injected value, so a real push finds a free record. Reuses i145a's proven SD code + real-CSD findings.
+  status: OPEN
+  depends_on: [i145a]
+  kind: leaf
+  owner: agent
+  parent: i145
+
+- id: i145c
+  title: Harness SD-SPI/CSD model — model the DC/DF seam + SD command state machine + configurable CSD
+  description: |
+    Model the Trinity SD SPI seam in the harness CardModel (mirror enc28j60.go): ports &DC select/busy + &DF data + the SD command state machine returning a CONFIGURABLE 16-byte CSD (capacity parameterised from the real value i145a captured, NOT hardcoded). Model the &DC/&DF behaviour per the i193 SD-interface doc so it matches real B-DOS 1.5t. Makes the i145b CSD read emulation-verifiable and ends the inject-BD_RECORDS shortcut that hid this gap. Depends on i145a (real CSD) + i193 (the protocol).
+  status: OPEN
+  depends_on: [i145a]
+  kind: leaf
+  owner: agent
+  parent: i145
+
+- id: i145d
+  title: "Full E2E emulation test — trinload -> push server -> push .mgt -> store, BD_RECORDS from modelled CSD (not injected)"
+  description: |
+    The experiment that was never faithfully emulated: trinload load -> push serve program -> serve_main reads EEPROM + the modelled CSD -> BD_RECORDS computed (NOT injected) -> push a .mgt -> validate size==819200 -> stream to highest free record -> claim. Asserts the real-hardware path end to end. The test whose absence let the BD_RECORDS=0 hardware failure slip through.
+  status: OPEN
+  depends_on: [i145b, i145c]
+  kind: leaf
+  owner: agent
+  parent: i145
 
 - id: i146
   title: "Priority-backlog robustness: a non-pullable ready tip = missing-edge bug (HW gates + prompt + CLI ordering-repair)"
@@ -3180,5 +3219,22 @@
     Split from i188 (2026-06-21). i188 fixed the rom1 crash + the clean Esc-driven trinload return; the dumper still serves forever until Esc. For the FULLY UNATTENDED push->run->return->re-push loop (i133-era), the dumper must auto-RET to trinload once the host has pulled all regions (rom0/rom1/eep0..7), with no human Esc. Implement: track per-region transfer completion (the final short-block ACK in serve_serve_once) and RET from dm_serve_loop once all 10 regions have been served once (Esc stays as the fallback). Emulation-verify via the i181 paged harness + the trinload push/return round-trip. NOT a blocker for i87a-b2 (rom1 recapture) — that uses the Esc return, already proven by the eeprom/rom0 captures.
   status: OPEN
   depends_on: [i188]
+  kind: leaf
+  owner: agent
+
+- id: i193
+  title: Document the Trinity SD-card Z80 storage interface from Colin's disassembled B-DOS 1.5t fork
+  description: |
+    Read Colin's annotated B-DOS 1.5t fork disassembly (~/sam-archive/bdos/analysis/bdos15t-beta6.annotated.dis, from i71) to extract + document the Trinity SD-card Z80 storage interface: the SPI command ladder (the &38 microcontroller SD-init, CMD0/8/55+41/58 init, CMD17 sector read, CMD24 write, and the CMD9/CSD read if present), the &DC-select / &DF-data protocol, the busy-poll (&DC bit3) + auto-null (&3F) timing, and how list-sector + record reads/writes map onto it. The AUTHORITY for i141 (raw list-sector read) and i145 (CSD capacity read) — port from Colin's proven code, not a reconstructed generic reference (a correct generic SD-SPI reference is in the chat archive as a cross-check). Offline analysis: agent-actionable, no hardware, filter-safe (reads existing disassembly). Output: a living doc (docs/notes/trinity-sd-z80-interface.md) the ports cite.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i194
+  title: "Real-hardware disk push: stream all build/*.mgt to the SAM via the trinload serve vessel, into free Trinity records"
+  description: |
+    The i121 payoff on real hardware, autonomous: 'start trinload -> push the serve program (push-serve.py) -> tftp put each .mgt disk image (validated size==819200, streamed into a free record + claimed) -> tftp put tftp.done -> return to trinload', then read a stored record back (servable-raw) and byte-compare to confirm the store. Unblocked once the production CSD read lands (i145b, so the server finds free records) and the full experiment is emulation-proven (i145d). Agent-actionable: trinload runs on the SAM (192.168.2.75) over the LAN from the Pi; push via tools/trinload-push/push-serve.py + curl tftp://; the 19 build/*.mgt are valid + staged (/tmp/push-all-disks.sh batches them). NO Pete needed for the push+store+readback; booting a pushed record to watch it run is a downstream nicety (autonomous via i135 auto-boot, or a Pete-present spot-check) and NOT a blocker for this item.
+  status: OPEN
+  depends_on: [i145, i121d]
   kind: leaf
   owner: agent
