@@ -181,6 +181,34 @@ func runCSDProbeRead(t *testing.T, mac *z80h.Machine) []byte {
 	return mac.Read(csdProbeStage, csdProbeBytes)
 }
 
+// TestCSDProbeBoundedOnStuckBusy proves the SD-path busy-wait is now bounded (i241).
+// It models a wedged Trinity controller whose BUSY bit (&DC bit 3) NEVER clears —
+// the real-hardware failure that hung Pete's SAM (the 2026-06-24 3-restart hang),
+// where the vendored unbounded wait_ready spun forever on every SPI byte. With the
+// bounded sd_wait_ready, csd_read_into_stage must TERMINATE (return rather than hit
+// the maxSteps runaway cap) and leave the unmistakable "SD BUSY TIMEOUT!" marker in
+// STAGE instead of garbage masquerading as a CSD. (Only the SD path is bounded; the
+// vendored ENC driver's own wait_ready is unchanged, so this test exercises the SD
+// read in isolation and does not run drv_init under StuckBusy.)
+func TestCSDProbeBoundedOnStuckBusy(t *testing.T) {
+	csd := z80h.CSDForV2(0x01E8FF) // a real CSD is configured, but it can never be read
+	mac := loadCSDProbe(t)
+	fillCSDProbeConfig(t, mac)
+	enc := z80h.NewENC28J60()
+	enc.AttachSD(csd)
+	mac.AttachIO(enc)
+
+	enc.StuckBusy = true // the controller's BUSY bit never clears
+
+	// runCSDProbeRead fatals if the call errors — and a still-unbounded busy-wait
+	// would spin past maxSteps and error here. Terminating IS the bounded-ness proof.
+	got := runCSDProbeRead(t, mac)
+
+	if want := "SD BUSY TIMEOUT!"; string(got) != want {
+		t.Errorf("stuck-BUSY STAGE = %q (% 02x), want the timeout marker %q", got, got, want)
+	}
+}
+
 // TestCSDProbeV2ReadsConfiguredCSD is the headline i145a check: against a v2/SDHC
 // (64GB) card, the probe's SD-read path drives the model's full command ladder +
 // CMD9 and leaves the configured CSD in STAGE byte-for-byte, and the serve path

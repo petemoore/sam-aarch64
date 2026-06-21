@@ -219,6 +219,11 @@ type ENC28J60 struct {
 	tNow       uint64
 	busyUntilT uint64
 
+	// StuckBusy, when true, models a wedged controller whose BUSY bit never clears
+	// (the real-hardware hang mode). Off by default; a test sets it to prove the
+	// SD-path busy-wait is bounded. See isBusy.
+	StuckBusy bool
+
 	// SPI transaction state for the ENC SPI back-end. The microcontroller latches
 	// the MISO byte clocked out by the most recent OUT (&DE); the next IN (&DE)
 	// returns it via lastClockedIn (the one-byte read-lag, trinity-capabilities.md §3).
@@ -466,7 +471,12 @@ func (e *ENC28J60) raiseBusy() { e.busyUntilT = e.tNow + busyByteTStates }
 // T-state cursor (gap b). On Call paths with no T-state cursor (tNow stays 0) BUSY
 // is released by clearBusy on the first IN, so isBusy reflects only the explicit
 // flag there.
-func (e *ENC28J60) isBusy() bool { return e.tNow < e.busyUntilT }
+//
+// StuckBusy models a wedged Trinity controller whose BUSY bit (&DC bit 3) NEVER
+// clears — the real-hardware failure mode that hung the SAM (a per-byte busy-poll
+// with no timeout spins forever). It lets a test prove the SD-path busy-wait is
+// now bounded: against a stuck controller the probe must terminate, not spin.
+func (e *ENC28J60) isBusy() bool { return e.StuckBusy || e.tNow < e.busyUntilT }
 
 // clearBusy releases BUSY (the canonical wait_ready poll: IN &DC clears it, and any
 // IN lets a byte-time elapse).

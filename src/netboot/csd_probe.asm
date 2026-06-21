@@ -67,6 +67,11 @@ SD_AUTONUL:       equ &3F                       ; SD select with auto-null (unus
 
 SD_DATATOK:       equ &FE                       ; start-of-data token preceding the CSD block
 SD_IDLE:          equ &FF                       ; SPI-idle MISO (card not driving)
+SD_BUSY_LIMIT:    equ &2000                     ; per-byte busy-wait poll budget (~8192). A working
+                                                ; card clears BUSY in ~1 poll so this is never reached;
+                                                ; it only bounds a STUCK Trinity so the SAM can't hang
+                                                ; (the 2026-06-24 3-restart hang). ~68ms worst case at
+                                                ; the first stuck byte, then the sticky flag fast-unwinds.
 
 ; ===========================================================================
 ; dumper_refresh_region — the serve-loop hook (called from rrq_hit). The resolved
@@ -113,7 +118,7 @@ rgn_csd_prefix:   defm "csd"
 ; In: A = byte. Clobbers nothing of interest (A preserved on exit not guaranteed).
 sd_out:
                 push    af
-                call    wait_ready             ; encdrv.asm: IN(&DC); AND 8; loop while busy
+                call    sd_wait_ready          ; bounded busy-poll (hang-safe; see below)
                 pop     af
                 out     (SD_DATA), a
                 ret
@@ -124,9 +129,37 @@ sd_out:
 sd_in:
                 ld      a, SD_IDLE
                 call    sd_out                 ; wait + OUT (&DF),&FF
-                call    wait_ready
+                call    sd_wait_ready          ; bounded busy-poll (hang-safe)
                 in      a, (SD_DATA)
                 ret
+
+; sd_wait_ready — bounded replacement for the vendored (unbounded) wait_ready, used
+; ONLY on the SD byte path (sd_out/sd_in). The vendored encdrv.asm wait_ready is
+; left untouched (its ENC-init uses are proven). Waits for the Trinity busy bit
+; (&DC bit 3) to clear, but gives up after SD_BUSY_LIMIT polls and sets sd_timed_out
+; (sticky) — so a stuck card/controller can NEVER hang the SAM (it was the cause of
+; the 2026-06-24 3-restart hang). Once tripped, returns immediately so the rest of
+; the already-bounded ladder unwinds fast. Preserves BC/DE/HL; clobbers AF (sd_out
+; brackets its data byte with push/pop af, and sd_in reloads A from SD_DATA after).
+sd_wait_ready:
+                ld      a, (sd_timed_out)
+                or      a
+                ret     nz                     ; already gave up — don't wait again
+                push    bc
+                ld      bc, SD_BUSY_LIMIT
+swr_loop:       in      a, (SD_PORT)
+                and     %00001000              ; busy?
+                jr      z, swr_ready           ; clear -> proceed
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, swr_loop
+                ld      a, 1
+                ld      (sd_timed_out), a      ; budget exhausted -> sticky abort
+swr_ready:      pop     bc
+                ret
+
+sd_timed_out:   defb    0                      ; set once an SD busy-wait exhausts its budget
 
 ; ===========================================================================
 ; sd_cmd — send a 6-byte SPI command frame (opcode|0x40, 4 arg bytes, CRC) under
@@ -191,6 +224,8 @@ sd_cmd0arg:
 ; ===========================================================================
 csd_read_into_stage:
                 di
+                xor     a
+                ld      (sd_timed_out), a       ; fresh attempt — clear the sticky busy-timeout flag
 
                 ; --- &04 all-deselect bracket (auto-null off) -------------
                 ld      a, SD_NULLOFF
@@ -319,8 +354,23 @@ csd_deselect:
                 out     (SD_PORT), a
                 ei
 
+                ; If a per-byte busy-wait gave up, the CSD bytes are invalid — stamp an
+                ; unmistakable marker into STAGE so the served csd.bin reads "SD BUSY
+                ; TIMEOUT!" rather than masquerading as a real CSD. This is the on-wire
+                ; signal that the Trinity BUSY bit never cleared (real-silicon timing
+                ; evidence) vs a clean 16-byte CSD on success.
+                ld      a, (sd_timed_out)
+                or      a
+                jr      z, csd_rds_done
+                ld      hl, csd_timeout_msg
+                ld      de, STAGE
+                ld      bc, CSD_BYTES
+                ldir
+csd_rds_done:
                 ; SRC_PTR/XFER_SIZE default to STAGE/CSD_BYTES; nothing to override.
                 ret
+
+csd_timeout_msg: defm   "SD BUSY TIMEOUT!"      ; exactly 16 bytes (CSD_BYTES)
 
 ; ===========================================================================
 ; Bootable / trinload entry (excluded from the host harness build). probe_main
