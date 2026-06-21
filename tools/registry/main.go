@@ -136,7 +136,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] validate <items.yaml> [questions.yaml]")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] gen      <items.yaml> <questions.yaml>")
-	fmt.Fprintln(os.Stderr, "  registry ready                  (unblocked, not-yet-started pullable items, in priority order)")
+	fmt.Fprintln(os.Stderr, "  registry ready [--pete-present] (unblocked pullable items in priority order; excludes owner:pete by default — --pete-present includes + prioritizes them)")
 	fmt.Fprintln(os.Stderr, "  registry in-progress            (items currently IN_PROGRESS — the session completeness ledger)")
 	fmt.Fprintln(os.Stderr, "  registry view       --id iN|qN [--format text|json]")
 	fmt.Fprintln(os.Stderr, "  registry dependents --id iN")

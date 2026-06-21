@@ -47,6 +47,11 @@ re-running `build/registry ready` now surfaces a genuinely workable tip. Repeat
 until you get one. Run the CLI from the repo root so it operates on the live
 registry, not the bundled test fixtures.
 
+`ready` **excludes `owner:pete` (needs-Pete-present) items by default**, so the
+tip is always agent-actionable — you never have to skip a hardware/Pete item. When
+Pete is around, `build/registry ready --pete-present` includes them and lists them
+first (don't waste his presence).
+
 ## Run
 
 ```sh

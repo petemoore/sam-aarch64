@@ -309,7 +309,11 @@ The implementation lives in `registry/priority.yaml` (ordered id list),
   worked next." Drives both the autonomous loop's work-pull and an interactive
   "what should I pick up?" suggestion a human session adjusts. A dep is satisfied
   when: the target is DONE/WONTFIX, or the target question is absent (deleted =
-  answered), or the target does not exist in the registry.
+  answered), or the target does not exist in the registry. **`owner:pete`
+  (needs-Pete-present) items are excluded by default** so the autonomous tip is
+  always agent-actionable; `--pete-present` includes them and emits them first
+  (the needs-Pete model, i169). *(The presence-file auto-defaulting of this flag
+  is the i169 remainder.)*
 - **Other query commands** — `registry view --id iN|qN [--format text|json]` prints
   a single record plus its computed dependents (reverse edges) and priority rank
   (the read counterpart to the YAML — no more ad-hoc greps); `registry dag` prints
