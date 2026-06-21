@@ -2800,7 +2800,7 @@
   description: |
     Flash the prototyped patched EEPROM to Pete's Trinity via write_chunk, keeping the captured EEPROM as the restore backup; power-cycle and confirm unattended auto-boot of the configured record. Hardware (Pete).
   status: OPEN
-  depends_on: [i135d, i87a-b1, i87b, i197c, i221]
+  depends_on: [i135d, i87a-b1, i87b, i197c, i221, i226]
   kind: leaf
   owner: pete
   parent: i135
@@ -3850,3 +3850,20 @@
   owner: agent
   prs:
     - {num: 616, role: completing}
+
+- id: i225
+  title: "Non-destructive EEPROM write round-trip test payload (free-chunk read/write/verify/restore), emulation-verified"
+  description: |
+    De-risk i135c: the first real EEPROM write must NOT be the boot code. Build a standalone on-SAM test that exercises the write path (write_chunk -> write_enable/write_256/wait_ready + read_chunk, src/netboot/eeprom.asm:389-430) on a CONFIRMED-UNUSED free chunk: chunk 1=bootblock, 2-13=B-DOS, network config + chunk index live in the &1E000+ tail, so chunks ~14..116 are unallocated. Sequence: read_chunk(K) capture+confirm vs ~/sam-archive/samboot-capture/eeprom.bin, write_chunk(K) a known pattern, read_chunk(K) verify byte-for-byte, write_chunk(K) restore originals, read_chunk(K) confirm. Report pass/fail over the existing wire/serve path. Pin the exact scratch chunk by inspecting the capture for a uniform-fill region. Emulation-verify under sampage/eeprom.go (builds on i221's write model + TestEEPROMBackupRestoreFlow). Hands Pete a runnable artifact for the hardware run.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+
+- id: i226
+  title: Run the EEPROM write round-trip on real Trinity hardware — prove the write path before any boot-code flash
+  description: |
+    Hardware (Pete). Run the round-trip test payload on the real SAM+Trinity: read a free chunk, write a test pattern, read back + verify, restore, confirm. Proves the on-SAM EEPROM WRITE path (never run on real silicon — only reads via i87a) works end-to-end without touching boot/B-DOS/config. Keep the full eeprom.bin capture as the ultimate restore backup. Only after this passes does i135c (flash the patched boot chunk) proceed.
+  status: OPEN
+  depends_on: [i225]
+  kind: leaf
+  owner: pete
