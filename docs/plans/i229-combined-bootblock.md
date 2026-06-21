@@ -144,9 +144,77 @@ the real ALHK record load, and the physical reset-handoff timing.
   unconfigured, green under `make ci-netboot-z80`.
 - Then i230 (RAM-test on hardware) and only after that i135c (flash).
 
+## Research findings (2026-06-24) — execution-ready, but BLOCKED on q50
+
+A research pass this session disassembled the local `eeprom.bin` chunk-1
+bootblock and mapped the Go reset-chain harness. It surfaced three design forks
+on this brick-adjacent code that Pete reserved for his presence — **captured as
+q50; i229 now depends on q50 and must not be built until it is answered.**
+
+### Confirmed byte-level map (chunk 1 = file offset 0, ORG &4000)
+
+- `&409E` (file `&9E`): `CALL &805F` = bytes `CD 5F 80` — the B-DOS hand-off.
+- `&40A1` (file `&A1`): `restore:` `LD A,0 / OUT (&FA),A / LD A,0 / OUT (&FB),A`
+  (8 bytes, `&A1..&A8`). The `0` immediates at `&40A2`/`&40A6` are **self-modify
+  targets** (the saved LMPR/HMPR written by the prologue at `&4002`/`&400B`).
+- `&40A9..&40BB` (file `&A9..&BB`): screen-redraw tail `CALL &06B5` + pokes
+  `&5600`/`&5C44`/`&5BBE` + `JP &102F` (ERRHAND2 → BASIC). Must be preserved.
+- Bootblock code ends at `&415D` (`RET`); `&415E..&43FF` = **674 zero bytes** of
+  injection space (verified all-zero).
+- Resident EEPROM helpers: `read_chunk &40BD` (BY-NUMBER, reads 1024 B into HL),
+  `get_chunk &412C`, `eeprom_enable &4103`, `eeprom_disable &410A`,
+  `wait_ready &411A`. **There is NO `find_index` (by-name) in the bootblock.**
+
+### Proposed splice (elegant — minimal, preserves everything) — q50(1)
+
+Change the `CALL &805F` at `&409E` to `CALL inject` (inject in free space):
+```
+inject: call &805F              ; the real DOS init (returns on hardware)
+        call samboot_read_config
+        ret  nc                 ; no auto-boot → returns to &40A1 (restore:, verbatim)
+        ld   a, l
+        ld   (BD_BOOT_RECORD), a
+        jp   bdos_boot_record   ; i122a ALHK, no return
+```
+Only 3 bytes change at `&409E`; `restore:` + the screen tail stay byte-identical.
+
+### The two unresolved forks — q50(2)+(3)
+
+2. **Config read BY-NAME vs BY-NUMBER.** `samboot_read_config` reads by name via
+   `find_index` + a **1024-byte `chunk` scratch buffer** — that buffer does NOT
+   fit the 674 free bytes and needs a RAM home post-B-DOS-load. Either bring
+   `find_index` + a 1 KB buffer (robust, but where in RAM?), or read by a fixed
+   chunk NUMBER reusing Colin's `read_chunk &40BD` (smaller, fixes the chunk #).
+3. **Verification scope — the emulator does not run past `CALL &805F`.**
+   `TestRealBootLoadsBDOSCoherently` boots from reset, reaches `&805F`, and runs
+   *into* B-DOS init (finalPC > `&8000`, halting where init touches unmodeled
+   SD/screen, analysis §8). **`&805F` never returns in the current Go emulator**,
+   so the splice point `&40A1` (after `&805F`) is unreachable in emulation — the
+   reset-chain test cannot execute the spliced decision as the "## Verification"
+   section above assumes. Achievable emulation: assert the patched chunk-1
+   **loads + runs coherently to `&805F`** (12 chunk loads, like the existing
+   test) + the decision LOGIC via the symbol-driven `samboot_inject_test.go`; the
+   in-chain post-`&805F` decision + the stripe PIXELS go to the **i230 hardware
+   RAM test**. q50 asks whether that is the accepted scope (consistent with i232
+   "don't block bootblock work on boot-from-0 emulation") or whether the emulator
+   should first be taught to complete B-DOS init (an i126 slice).
+
+### Harness wiring (mapped, for when q50 is answered)
+
+- Build a `build/samboot_bootblock_patched.bin` via a new pyz80 Makefile target
+  (ORG `&4000`); add it to the `netboot-z80-routines` prereq so CI builds it.
+- Reset-chain test: `mac.LoadROMImage(rom)`; `enc.LoadEEPROMImage(deviceLinearEEPROM(eeprom))`;
+  `enc.ProgramChunk(1, patchedBootblock)` (surgical in-place chunk-1 replace);
+  `enc.ProgramNamedChunk(slot, samboot.ChunkName, samboot.Boot(rec).Encode())`;
+  `mac.AttachBDOS(store)`; `mac.RunBootFrom(0x0000, …)`; assert via `store.Boots()`.
+- The splice tool (host Go) reads `eeprom.bin[0:1024]`, patches the 3 bytes at
+  `&9E` + appends the assembled inject at `&15E`, writes a ≤1024-B git-ignored
+  image. No proprietary bytes committed.
+
 ## Note on execution
 
 This is the project's highest-stakes code (a bad flash bricks the boot EEPROM)
 with subtle boot-ordering + proprietary-byte handling. It is to be built with
 **fresh, focused attention and the local capture in-hand** — not rushed. This
-plan captures the approach so that execution is precise.
+plan captures the approach so that execution is precise. **Do not build until
+q50 is answered** (the splice/config-read/verification-scope forks).
