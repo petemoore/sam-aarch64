@@ -1,3 +1,11 @@
+// Package assemble is the back end of the host assembler: it turns the
+// in-memory symbolic record IR (*format.File) into machine code. Pass1 walks
+// the records to assign each instruction/directive a PC and build the symbol
+// table; Pass2 walks them again with symbols resolved to emit the binary,
+// optionally applying the Cortex-A53 errata workarounds (errata.go). It also
+// serializes the compact overlay .tbn (compact.go) that the SAM loads, and
+// keeps a peak-usage census (usage.go) for sizing the Z80-side tables. This is
+// the Go authority the Z80 port mirrors.
 package assemble
 
 import (

@@ -9,6 +9,7 @@ type Position struct {
 	Col  int
 }
 
+// String formats the position as "file:line:col".
 func (p Position) String() string {
 	return fmt.Sprintf("%s:%d:%d", p.File, p.Line, p.Col)
 }
@@ -19,6 +20,7 @@ type LexError struct {
 	Msg string
 }
 
+// Error formats the lex/parse error as "file:line:col: message".
 func (e *LexError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Pos.String(), e.Msg)
 }
