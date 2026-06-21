@@ -61,6 +61,7 @@ SK_WREGSP:      equ     &04
 SK_IMM5:        equ     &05
 SK_IMM6:        equ     &06
 SK_COND:        equ     &07
+SK_IMM16:       equ     &08
 SK_IMM12SH:     equ     &10
 SK_IMM16SH:     equ     &11
 SK_BR26:        equ     &20
@@ -363,7 +364,9 @@ enc_slot_loop:
                 jr      z, enc_do_cond              ; &07 CondCode
                 cp      SK_COND
                 jr      c, enc_do_imm_n             ; &05 Imm5 / &06 Imm6
-                jp      enc_do_fold                 ; >=&08: expr-fold slots
+                cp      SK_IMM16
+                jr      z, enc_do_imm16             ; &08 Imm16 (udf imm16)
+                jp      enc_do_fold                 ; >=&10: expr-fold slots
 
 ; -- Register slot: value = operand's register byte (operand[1]) --------
 enc_do_reg:
@@ -389,6 +392,13 @@ enc_do_imm_n:
                 ld      a, (expr_result)
                 ld      hl, (enc_slot_ptr)
                 call    encode_imm_n
+                jr      enc_field_done
+
+; -- Imm16 slot: value = low 16 bits of the evaluated expr (udf) --------
+enc_do_imm16:
+                call    enc_eval_cur_expr           ; -> expr_result
+                ld      hl, (enc_slot_ptr)
+                call    encode_imm16
                 jr      enc_field_done
 
 ; -- Expr-bearing relocatable slot: eval, map kind->FSID, fold ----------

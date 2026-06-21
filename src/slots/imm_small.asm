@@ -91,6 +91,38 @@ encode_cond:
 ; (RST 8 dispatch), so the established "don't hold B across RST 8"
 ; caveat (see src/sam_io.inc) does not apply here.
 ; -----------------------------------------------------------------------
+; -----------------------------------------------------------------------
+; encode_imm16 — pack an unsigned 16-bit immediate at bit_position 0,
+; reading the value from the 8-byte LE expr_result.
+;
+; Z80 port of tools/aarch64enc/encode.go::encodeSlot case Imm16 ->
+; encodeImmN (slots_trivial.go:18-24) for the Imm16 SlotKind (0x08).  Its
+; only form-table user is udf (mnemonic 89): BitPosition=0, BitWidth=16
+; (manual_forms.go:782).  encode_imm_n above caps at width 7 (8-bit A
+; mask), so Imm16 needs this 16-bit-wide sibling.
+;
+; Faithful range check (encodeImmN: v < 0 || v >= 1<<16 -> error): the
+; high 48 bits of the value must be zero (else the constant exceeds imm16
+; and we fail loudly via check_expr_hi48_zero — bytes 2..7 == 0 — rather
+; than silently truncate).  The result is simply value placed at bit 0,
+; so DEHL = {D=0, E=0, H=byte1, L=byte0}.
+;
+; Input:  HL = slot record ptr (unused beyond the kind, kept for the
+;         uniform encoder signature); expr_result holds the immediate.
+; Output: DEHL = imm16 at bit 0 (L=byte0, H=byte1, E=0, D=0).
+; Error:  value >= 1<<16 -> jp fail (via check_expr_hi48_zero).
+; Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+encode_imm16:
+                call    check_expr_hi48_zero        ; bytes 2..7 must be 0
+                ld      a, (expr_result + 0)
+                ld      l, a
+                ld      a, (expr_result + 1)
+                ld      h, a
+                ld      d, 0
+                ld      e, 0
+                ret
+
 encode_imm_n:
 ; -- Save the value before we start clobbering registers ----------------
                 push    af             ; preserve value (A) on the stack
