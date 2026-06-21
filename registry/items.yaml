@@ -4622,3 +4622,12 @@
   depends_on: [i265]
   kind: leaf
   owner: agent
+
+- id: i270
+  title: "Hardware finding: serve TFTP WRQ (write) handshake hangs on silicon while RRQ (read) works — root-cause the never-tested SD-write/HSAVE path"
+  description: |
+    HARDWARE FINDING (2026-06-26, real SAM 192.168.2.75): the serve program's TFTP WRQ (write) handshake hangs on silicon while RRQ (read) works. After pushing build/netboot_serve_boot.bin via trinpush-serve.py --strategy highest, a curl GET of a nonexistent name returned a proper TFTP not-found error in 11ms (RRQ/serve-read PROVEN on hardware), but a curl PUT (both an 800KB trinity-sam-disks/-prefixed disk record AND a tiny 512B flat file) hangs to timeout. SAM stays ARP-REACHABLE throughout, so ENC RX/TX + serve loop are alive; failure is WRQ-specific = the never-silicon-verified RST-8 HSAVE / SD-write path. The graceful tftp.done exit (i121e) is itself a WRQ put so it also hangs -> a stuck serve needs a manual reset/power-cycle (the i266/TAPO case). DEBUG APPROACH (Pete): the serve border-colour signal is invisible (trinload overwrites the border), so instrument with RST &10 screen writes to dump WRQ-path state to the SAM screen (PRIOR ART: the SD-read test that dumped first 16 bytes as hex). Pete reads the screen back. Faster first probe: sudo tcpdump -i eth0 -n udp port 69 during a PUT to see whether the SAM emits an OACK at all. WRQ handler: src/netboot/netboot_serve.asm ~:299-510 (learn-endpoint -> CMD17 list find-free -> enc re-arm -> build_oack_opts_wrq OACK). Suspects: OACK not sent/wrong endpoint/malformed (curl retransmits forever); find-free list-read differs from the working servable-raw read; curl tsize/blksize options unnegotiated. Gates i194.
+  status: OPEN
+  depends_on: [i194]
+  kind: leaf
+  owner: agent
