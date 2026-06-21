@@ -252,10 +252,10 @@ func TestValidate_Inv6_UmbrellaDoneWithOpenChild(t *testing.T) {
 func TestValidate_Inv8_TitleTooLong(t *testing.T) {
 	reg := &Registry{
 		Items: []Item{
-			{ID: "i1", Title: strings.Repeat("x", 121), Status: StatusOpen, Kind: "leaf", Owner: "agent"},
+			{ID: "i1", Title: strings.Repeat("x", 201), Status: StatusOpen, Kind: "leaf", Owner: "agent"},
 		},
 	}
-	assertError(t, reg, "i1", "title exceeds 120 chars")
+	assertError(t, reg, "i1", "title exceeds 200 chars")
 }
 
 // Invariant 8: description too long.
