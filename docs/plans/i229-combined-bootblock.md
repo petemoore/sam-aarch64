@@ -78,6 +78,45 @@ test on Pete's real SAM** (push the bundled payload; confirm screen + config-boo
 EEPROM flash (i135c). Do the hardware test BEFORE the PR lands, so a hardware
 failure is fixed in the same PR rather than a follow-up.
 
+## Boot-screen reproduction recipe (from the ROM, 2026-06-23 research)
+
+The rainbow stripes are rendered LIVE by the ROM line-interrupt ISRs, not by the
+`&ED1B` data write. Reproducing the MGT boot screen (in the bootblock AND a
+viewable trinload demo) requires, in order — all ROM addresses cited in the
+research / `docs/sam/...annotated-disassembly.txt`:
+
+1. **Interrupt state live:** `IM 1`, `I=0`, `(ANYIV &5B70)=&0049` (all already set
+   post-boot — do NOT clobber). The fragment's omission was step (e).
+2. **CLUT/border baseline = index 0:** clear paper to CLUT index 0; set border to
+   CLUT index 0 (`SETBORD &F13A` in the ROM1-reachable demo; inline `OUT (&FE),A`
+   with bits 0-2,5=0 + bit3 in the bootblock where ROM1 is paged out). `LINEINT`
+   writes ONLY CLUT reg 0 (`&F8`) per line; border = a CLUT-index lookup, so both
+   track CLUT-0. Do NOT write `&FE` per scan line.
+3. **Build LINICOLS:** the existing verbatim `&ED1B` port (`samboot_stripes`) —
+   `PALTAB+1`→`LINICOLS`, 4-byte entries, step scan +11 to 166, `&FF` terminator.
+4. **Print position:** `CALL CLSLOWER &06B5` (ROM0, always callable) — selects
+   channel K + sets `SPOSNL` to the lower window. THIS fixes the top-left banner.
+5. **Print the banner:** faithfully via `XOR A / CALL UTMSG &3DB0` + the é/space/
+   size/"K" tail (`&0F7F` 3892-3915), reusing the ROM text at `&F5DD` — preferred
+   over our private string.
+6. **Arm + render:** `EI` (so FRAMINT arms STATPORT from LINICOLS[0] + LINEINT
+   paints). THE missing step. Auto-boot path skips any wait; the no-boot/demo path
+   does `WTFK`: `CALL READKEY &1CB1 / JR Z` (or a timed wait, per Pete).
+7. **Teardown on keypress (mirror the ROM):** `LD A,&FF / LD (LINICOLS),A`
+   (disarms the line-int next frame → stripes vanish) + `CALL CLSLOWER`.
+8. **Return cleanly — NEVER `di;halt`:** demo → `EI` + paging-as-trinload-expects
+   + `RET` (trinload's `try_exec` pushed `start`, so RET restarts trinload). The
+   prior hang was the `di;halt` path / wrong paging, NOT the screen writes
+   (trinload re-inits on restart). Bootblock → restore LMPR/HMPR + `JP ERRHAND2
+   &102F` (the stock `restore:` exit).
+
+Open hardware-confirm items (research §7): that the trinload-pushed demo sees a
+live IM1+EI chain after `EI`; that the demo's screen mode leaves paper+border
+pointing at CLUT-0; the bootblock section-D paging avoids ROM1 in all chosen
+calls. ROM1 routines (FRAMINT/LINEINT/SETBORD/the data) are ISR/data, never
+called directly — so the bootblock (ROM1 paged out) only needs ROM0 calls
+(CLSLOWER/UTMSG/READKEY/RST 08/10) + inline border `OUT`.
+
 ## Verification (emulation-first, the reset chain)
 
 Extend `tools/netboot-oracle/z80/samboot_real_boot_test.go` (i190a — boots the
