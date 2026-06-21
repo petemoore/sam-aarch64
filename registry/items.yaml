@@ -2247,7 +2247,7 @@
   title: "Netboot storage-allocation strategy: header policy (first-free / fixed-list / highest-free)"
   description: |
     design §4: storage-allocation policy in the manifest header (front section), user-chosen, default highest-free. s1 first-free (pack already-claimed records then lowest free), s2 fixed-list (overflow WARNS, never steals an unlisted record), s3 highest-free (keep low slots for the user's own disks). Invariants: overflow is an explicit warning, never a silent record-steal; the header records whether the manifest's own disk is in the pool; resume reuses already-claimed space. Go authority over a modelled store; host-verifiable.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i114
