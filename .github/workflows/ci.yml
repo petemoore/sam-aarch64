@@ -269,6 +269,8 @@ jobs:
         run: make staticcheck
       - name: doc link checker
         run: make check-doc-links
+      - name: no-silent-skips gate (i253)
+        run: make check-no-silent-skips
 
   # core — sweeps the fixture corpus end-to-end on the dev container:
   #   sam-aarch64 → build-disk → SimCoupé (Xvfb 24bit) → samfile extract

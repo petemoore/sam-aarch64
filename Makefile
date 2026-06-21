@@ -1151,6 +1151,10 @@ staticcheck:
 check-doc-links:
 	bash tools/check-doc-links.sh
 
+.PHONY: check-no-silent-skips
+check-no-silent-skips:
+	bash tools/check-no-silent-skips.sh
+
 .PHONY: registry registry-sync-check registry-gen tables-gen enctab test-encoder ci-encoder
 
 # registry-gen — build the registry validate/gen CLI.  Operates on
