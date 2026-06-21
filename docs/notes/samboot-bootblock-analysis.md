@@ -391,7 +391,14 @@ address: ROM0 `file 0x0000–0x3FFF` → logical `&0000–&3FFF`; ROM1
 
 ### 6.1 The patched system ROM chip (layer 1) — the bootblock fetch, recovered
 
-`rom.bin` (32 KB) differs from stock 3.0 in **141 bytes across 7 regions**. Three are
+`rom.bin` (32 KB) differs from stock 3.0 in **141 bytes across 7 regions** *when
+measured against SimCoupé's `&1F` dump* (the baseline available when this section
+was written). The **canonical figure is 140 bytes across 6 functional regions**,
+measured against the genuine stock v3.0 baseline `rom_stock_v30.bin` (i219); against
+that `&1E` baseline the version byte below is no longer a diff and the `plc`→`PLC`
+banner bytes fall inside the overwritten reader region. See
+`~/sam-archive/samboot-capture/README.md` and `colin-rom-fork-boot-analysis.md` for
+the baseline-corrected count; the disassembly below is unaffected. Three regions are
 the substantive Trinity patch; the rest are a version byte and small data-table
 edits. This is exactly **the "ROM-side fetch that loads and jumps to the bootblock"
 that §1 step 1 said lived in the chip and not in the public source** — now recovered:
@@ -428,9 +435,9 @@ Supporting / baseline diffs (not the mechanism):
 
 - **`&000F` (1 byte)** — annotated `&000F ;ROM VERSION NUMBER`. Patched reads `&1E`
   (30) where SimCoupé's stock reads `&1F` (31): the two are **slightly different 3.0
-  sub-revisions**, so a small part of the 141-byte diff is baseline, not Colin's
-  patch. (Honesty: the diff is vs SimCoupé's 3.0 image; Colin built on a `&1E`-30
-  base.)
+  sub-revisions**, so this byte is baseline noise, not Colin's patch. (Colin built on
+  a `&1E`-30 base; against the genuine `&1E` stock baseline `rom_stock_v30.bin` this
+  byte is *not* a diff at all — which is why the corrected count is 140, not 141.)
 - **`&D902`, `&FBFF..&FC0F`, `&FC44..&FC45`** — small data-table / pointer edits in
   ROM data tables (`&D902` an operand byte `&FE`→`&FC`; `&FC44` a word
   `&F5DD`→`&F611`); minor, supporting.

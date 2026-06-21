@@ -71,8 +71,9 @@ distinct *patches of distinct systems*:
    system-ROM chip that is swapped into the SAM in place of the stock ROM. Its
    only job vs stock is: at reset, fetch and run the bootblock from the Trinity
    EEPROM (instead of waiting for the keyboard). *This is a hardware chip; we do
-   not rewrite it.* Colin has said it is a very small patch — **confirmed (i87b):
-   the captured `rom.bin` differs from stock 3.0 in 141 bytes / 7 regions, three of
+   not rewrite it.* Colin has said it is a very small patch — **confirmed (i87b,
+   i219): the captured `rom.bin` differs from the genuine stock v3.0
+   (`rom_stock_v30.bin`) in 140 bytes / 6 functional regions, three of
    them the substantive patch** — a Trinity probe + keypress bypass (replacing the
    stock `RAINBOW SCREEN` routine), the chunk-1 EEPROM read + `JP &4000` fetch
    (replacing the "MGT message / REPORT 50H" handler), and the EEPROM read routine
