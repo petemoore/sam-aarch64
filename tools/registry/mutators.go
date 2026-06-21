@@ -183,6 +183,12 @@ func applyAndCommit(reg *Registry, paths mutatorPaths) {
 	reg.Items = sortedItems(reg.Items)
 	reg.Questions = sortedQuestions(reg.Questions)
 
+	// Recompute umbrella statuses from their children BEFORE priority
+	// reconciliation (which keys off open/closed) and validation. Doing it here,
+	// at the single mutation chokepoint, keeps every umbrella's derived status
+	// correct after ANY mutation (item i233).
+	deriveUmbrellaStatuses(reg)
+
 	// Auto-maintain the priority queue when a priority file is active.
 	// This eliminates the hand-edit burden after add/set-status/split.
 	if paths.priorityYAML != "" {
@@ -226,6 +232,55 @@ func applyAndCommit(reg *Registry, paths mutatorPaths) {
 		os.Exit(1)
 	}
 	genToOutDirOrStdout(reg2, paths)
+}
+
+// deriveUmbrellaStatuses recomputes every umbrella's status from its children,
+// enforcing the spec invariant (CLAUDE.md "Tracking work"): an umbrella is DONE
+// when all its children are DONE/WONTFIX, OPEN if any child is still open, and
+// never IN_PROGRESS. This is the single chokepoint that keeps umbrella status
+// correct after ANY mutation — without it, completing the last child left the
+// umbrella stale-OPEN (item i233: closing i74's last leaf left i74 OPEN until a
+// manual set-status). An umbrella with no children keeps its stored status
+// (nothing to derive from). It runs to a fixpoint so a nested umbrella whose own
+// children are umbrellas settles regardless of item order.
+func deriveUmbrellaStatuses(reg *Registry) {
+	children := map[string][]int{}
+	for i := range reg.Items {
+		if p := reg.Items[i].Parent; p != "" {
+			children[p] = append(children[p], i)
+		}
+	}
+	// Fixpoint: re-derive until no umbrella status changes. Bounded by the item
+	// count (each pass can only close one more level of nesting).
+	for pass := 0; pass <= len(reg.Items); pass++ {
+		changed := false
+		for i := range reg.Items {
+			it := &reg.Items[i]
+			kids, ok := children[it.ID]
+			if !it.isUmbrella() || !ok || len(kids) == 0 {
+				continue
+			}
+			allClosed := true
+			for _, ci := range kids {
+				switch reg.Items[ci].Status {
+				case StatusDone, StatusWontfix:
+				default:
+					allClosed = false
+				}
+			}
+			want := StatusOpen
+			if allClosed {
+				want = StatusDone
+			}
+			if it.Status != want {
+				it.Status = want
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
 }
 
 // loadReg loads items, questions, and priority into a Registry.
@@ -338,7 +393,8 @@ func genToOutDirOrStdout(reg *Registry, paths mutatorPaths) {
 // generated markdown table (everything after the banner in genContent).
 //
 // The genContent produced by genItemsOpenClosed / genQuestionsOpen is:
-//   banner + "\n" + table
+//
+//	banner + "\n" + table
 //
 // We splice the template between the banner-trailing-newline and the table.
 func assembleGenFile(templatesDir, tmplName string, genContent []byte) ([]byte, error) {
@@ -358,8 +414,8 @@ func assembleGenFile(templatesDir, tmplName string, genContent []byte) ([]byte, 
 	}
 
 	// banner is everything up to and including the first "\n" after the block.
-	banner := genContent[:idx+1]  // up to (but not including) the second \n
-	table := genContent[idx+1:]   // starts at the blank line then the table
+	banner := genContent[:idx+1] // up to (but not including) the second \n
+	table := genContent[idx+1:]  // starts at the blank line then the table
 
 	// Output: banner + "\n" + template + table
 	// (The template files already end with a trailing newline, so no extra needed.)
