@@ -78,7 +78,7 @@ ci-registry: registry-gen
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-serve-boot netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-trinity-identity netboot-samboot-inject netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80 editmodel-z80 pagepool-z80 viewport-z80 ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-serve-boot netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80 editmodel-z80 pagepool-z80 viewport-z80 ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -990,44 +990,6 @@ $(BUILD)/trinity_identity_stamp.bin $(BUILD)/trinity_identity_stamp.map: src/net
 
 netboot-trinity-identity: $(BUILD)/trinity_identity_stamp.bin $(BUILD)/trinity_identity_stamp.map
 
-# netboot-samboot-inject (i229) — the combined patched-bootblock injection: the
-# real splice the SAMBOOT flash adds to Colin's Trinity bootblock. `inject` (in the
-# bootblock free space &415E..&43FF) runs the real B-DOS init (CALL &805F), reads
-# the SAMBOOT BIOS config (i176 samboot_read_config), then auto-boots the configured
-# record (i122a bdos_boot_record) or RETs to &40A1 = restore: (Colin's verbatim
-# screen tail). Org &415E; SAMBOOT_BOOTBLOCK/SAMBOOT_SCRATCH/SAMBOOT_INJECT_ORG are
-# set inside the asm via equ, so no -D flag is needed; built WITHOUT NETBOOT_HOSTTEST
-# (the RST 8 ALHK dispatch is present so AttachBDOS can capture the boot) and WITHOUT
-# NETBOOT_WANT_CLAIM (the WRQ write/claim path is excluded). The SAMBOOT_BOOTBLOCK
-# gate trims eeprom.asm + bdos_seam.asm to the read-only auto-boot closure so the
-# image fits the 674 free bytes; the post-assemble check asserts the .map end <=
-# &43FF. samboot_bootblock_test.go (A) asserts the decision logic (5 cases) and (B)
-# the SPLICED chunk-1 boots coherently to &805F on the real capture. The stripe
-# pixels, the real ALHK record boot, and the scratch-RAM hardware-safety are the
-# i230 hardware path. Charter: docs/specs/samboot.md §4/§6; plan: docs/plans/i229-combined-bootblock.md.
-$(BUILD)/samboot_bootblock.bin $(BUILD)/samboot_bootblock.map: src/netboot/samboot_bootblock.asm src/netboot/samboot_config.asm src/netboot/bdos_seam.asm src/netboot/eeprom.asm
-	@mkdir -p $(BUILD)
-	pyz80 \
-	    --obj=$(BUILD)/samboot_bootblock.bin \
-	    --mapfile=$(BUILD)/samboot_bootblock.map \
-	    src/netboot/samboot_bootblock.asm
-	@tools/samboot-bootblock-fit-check.sh $(BUILD)/samboot_bootblock.map
-
-netboot-samboot-inject: $(BUILD)/samboot_bootblock.bin $(BUILD)/samboot_bootblock.map
-
-# samboot-splice (i229) — produce the combined ≤1024-byte chunk-1 image by splicing
-# `inject` into a COPY of the captured bootblock (chunk 1 of the local eeprom.bin):
-# patch the 3 bytes at file &9E (CALL &805F -> CALL inject) and copy the inject blob
-# into the free space at file &15E. The proprietary capture bytes are NEVER committed
-# — the output build/samboot_bootblock_chunk1.bin is git-ignored. Skips gracefully
-# (exit 0 with a log) if the capture is absent, like the other capture-gated build
-# helpers; the no-silent-skip rule applies to the reset-chain TEST, not this helper.
-.PHONY: samboot-splice
-samboot-splice: $(BUILD)/samboot_bootblock.bin
-	cd tools/netboot-oracle && go run ./cmd/samboot-splice \
-	    -inject $(CURDIR)/$(BUILD)/samboot_bootblock.bin \
-	    -out $(CURDIR)/$(BUILD)/samboot_bootblock_chunk1.bin
-
 # netboot-client (i82) — the TFTP client boot disk: fetch a file (a .mgt image)
 # from a TFTP server and write it to Trinity storage via the B-DOS hooks.  Two
 # builds from one source:
@@ -1192,7 +1154,7 @@ $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map: src/test_compact_ir.a
 compact-ir-z80: $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-trinity-identity netboot-samboot-inject netboot-smoke-boot netboot-server-boot netboot-serve-boot netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-trinity-identity netboot-smoke-boot netboot-server-boot netboot-serve-boot netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
 
 ci-netboot-z80: netboot-z80-routines editmodel-z80 editmodel-paged-z80 pagepool-z80 viewport-z80 asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80
 	cd tools/sampage && go test ./...
