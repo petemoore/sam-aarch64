@@ -59,7 +59,7 @@ func gnuAssembleWords(t *testing.T, lines []string) []uint32 {
 	if _, e := exec.LookPath(as); e != nil {
 		as, ld, objcopy = "aarch64-linux-gnu-as", "aarch64-linux-gnu-ld", "aarch64-linux-gnu-objcopy"
 		if _, e2 := exec.LookPath(as); e2 != nil {
-			t.Skip("no GNU aarch64 assembler (aarch64-none-elf-as / aarch64-linux-gnu-as) on PATH")
+			t.Fatal("no GNU aarch64 assembler (aarch64-none-elf-as / aarch64-linux-gnu-as) on PATH — install binutils-aarch64-linux-gnu (CI does)")
 		}
 	}
 
@@ -301,7 +301,7 @@ func gnuRawBytes(t *testing.T, lines []string) []byte {
 	if _, e := exec.LookPath(as); e != nil {
 		as, ld, objcopy = "aarch64-linux-gnu-as", "aarch64-linux-gnu-ld", "aarch64-linux-gnu-objcopy"
 		if _, e2 := exec.LookPath(as); e2 != nil {
-			t.Skip("no GNU aarch64 assembler on PATH")
+			t.Fatal("no GNU aarch64 assembler on PATH — install binutils-aarch64-linux-gnu (CI does)")
 		}
 	}
 	tmp := t.TempDir()
