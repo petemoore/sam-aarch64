@@ -2491,7 +2491,7 @@
   title: Combined RRQ+WRQ bootable program + disk/Makefile/CI wiring
   description: |
     Packaging vessel 1 (trinload): the self-contained WRQ-server code block + a host PUSH LAUNCHER (a trinpush wrapper) that reads a config / sets the record-placement strategy in the i121h config block (default highest-free), then pushes the block via trinpush-push.py for trinload to load+run. Combined RRQ+WRQ program; the .mgt vessel is the sibling i121j. Make target produces the pushable block; the launcher exposes --strategy (highest|lowest|explicit:N). Host-verifiable; the real wire push stays hardware-gated.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i121
@@ -3803,3 +3803,11 @@
   status: OPEN
   kind: leaf
   owner: pete
+
+- id: i220
+  title: "Comprehensive Go doc comments: package docs + every exported func/method/type"
+  description: |
+    Pete (2026-06-23): write accurate Go doc comments across ALL Go modules under tools/ so that, at a glance in godoc, the whole system's behaviour is visible. Cover package-level docs for every package + doc comments for every exported function/method/type (and key unexported ones where behaviour is non-obvious). SECONDARY BENEFIT Pete values: thorough godocs surface 'hacks' — a function whose honest doc has to describe a workaround (a test adapted to pass rather than the cause fixed) becomes visible, supporting the emulation-fidelity / no-silent-workarounds discipline. LOW PRIORITY (end of backlog; not urgent). Mechanical + large; a good incremental / autonomous-loop filler. Per-module: run go doc / a godoc server to review the result reads cleanly. Comments present-tense, describe what the code does now (no history) per the repo comment style.
+  status: OPEN
+  kind: leaf
+  owner: agent
