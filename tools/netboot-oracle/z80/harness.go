@@ -112,13 +112,20 @@ const portKeyMatrix = 0xF9
 // head of the queue. A write to sysFLAGS that clears bit 5 (the Z80 KYIP2
 // poll's `RES 5,(FLAGS)` consume step) advances the queue by one.
 type mem struct {
-	pager     *sampage.Mem // the one memory model: LMPR/HMPR paging + ROM write-protect
-	io        IODevice
-	cpu       *z80.CPU // back-reference, for the INI/IND port correction in In
-	romActive bool     // netboot-local fixed-overlay: when true, addr >= romBase is read-only (boot model), layered over the shared pager
-	romBase   uint16   // first ROM address (e.g. 0xC000 for ROM1 at boot)
-	keyQueue  []byte   // injected keypresses (i138 keyboard-sysvar stub)
-	keyMatrix uint8    // byte returned on port &f9 reads (active-low keyboard matrix)
+	pager *sampage.Mem // the one memory model: LMPR/HMPR paging + ROM write-protect
+	io    IODevice
+	cpu   *z80.CPU // back-reference, for the INI/IND port correction in In
+	// tstateCursor is the running Z80 T-state total as of the START of the
+	// instruction currently executing. The run loop updates it before each
+	// cpu.Step(); an IODevice that implements tStateClocked reads it (via the
+	// hand-off in In/Out) to model time-based hardware state such as the Trinity
+	// PIC's one-SPI-byte BUSY flag (enc28j60.go gap b). 0 for Call paths that do
+	// not maintain it (the device falls back to read-cleared BUSY there).
+	tstateCursor uint64
+	romActive    bool   // netboot-local fixed-overlay: when true, addr >= romBase is read-only (boot model), layered over the shared pager
+	romBase      uint16 // first ROM address (e.g. 0xC000 for ROM1 at boot)
+	keyQueue     []byte // injected keypresses (i138 keyboard-sysvar stub)
+	keyMatrix    uint8  // byte returned on port &f9 reads (active-low keyboard matrix)
 
 	// detectHardware drives the runtime emulation-vs-hardware probe (i228): a
 	// test binary INs emuDetectPort (&7F, an unmapped SAM port) to tell where it
@@ -157,6 +164,26 @@ func (m *mem) poke(addr uint16, value uint8) {
 		return // boot ROM overlay: the write is dropped, exactly as on hardware
 	}
 	m.pager.Set(addr, value)
+}
+
+// readPhysical reads n bytes from physical RAM starting at the given page (0-31)
+// and in-page offset, walking forward across consecutive pages (the SAM's linear
+// physical address space: page p offset 16383 is followed by page p+1 offset 0).
+// It bypasses LMPR/HMPR paging — the bytes come from the named physical page
+// regardless of the live mapping, as HSAVE's UIFA names the source page directly.
+// The read is clamped to the end of RAM (32×16 KB); any bytes past it read as zero.
+func (m *mem) readPhysical(page byte, offset uint16, n int) []byte {
+	out := make([]byte, n)
+	base := int(page)*sampage.PageSize + int(offset)
+	for i := 0; i < n; i++ {
+		pa := base + i
+		pg := pa / sampage.PageSize
+		if pg >= sampage.NumPages {
+			break // past the end of RAM; remaining bytes stay zero
+		}
+		out[i] = m.pager.RAM[pg][pa%sampage.PageSize]
+	}
+	return out
 }
 
 func (m *mem) Get(addr uint16) uint8 {
@@ -248,7 +275,18 @@ func (m *mem) In(port uint8) uint8 {
 	if m.io == nil {
 		return 0xff
 	}
+	if c, ok := m.io.(tStateClocked); ok {
+		c.SetTState(m.tstateCursor)
+	}
 	return m.io.In(port)
+}
+
+// tStateClocked is an optional IODevice capability: a device that models
+// time-based hardware state (e.g. the Trinity PIC's one-SPI-byte BUSY flag) reads
+// the running T-state cursor handed in just before each In/Out so it can decide
+// whether enough time has elapsed. Devices that do not need timing simply omit it.
+type tStateClocked interface {
+	SetTState(t uint64)
 }
 
 // isBlockInputPort reports whether the IN currently being serviced is an
@@ -279,6 +317,9 @@ func (m *mem) Out(port uint8, value uint8) {
 	// ignores every non-paging port, so a single funnel serves both.
 	m.pager.PortOut(port, value)
 	if m.io != nil {
+		if c, ok := m.io.(tStateClocked); ok {
+			c.SetTState(m.tstateCursor)
+		}
 		m.io.Out(port, value)
 	}
 }
@@ -288,7 +329,7 @@ type Machine struct {
 	m       *mem
 	symbols map[string]uint16
 
-	// rstHandlers models SAMDOS/B-DOS RST-vector hooks the flat harness has no
+	// rstHandlers models DOS RST-vector hooks the flat harness has no
 	// ROM for. Keyed by the RST target address (e.g. &0008 for RST 8): when the
 	// run loop finds PC at a registered target, it pops the return address the RST
 	// pushed and invokes the handler, which reads any inline operand byte(s) and
@@ -703,7 +744,7 @@ func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (Call
 			halted = true
 			break
 		}
-		// A SAMDOS/B-DOS RST hook: the RST already pushed its return address (the
+		// A DOS RST hook: the RST already pushed its return address (the
 		// inline hook-code byte). Pop it, let the handler read the inline operand(s)
 		// + apply the side effect, and resume where it returns — so the flat harness
 		// runs hook-dispatching code (e.g. the client write-out) it has no ROM for.
@@ -727,6 +768,7 @@ func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (Call
 		if err != nil {
 			return CallResult{}, fmt.Errorf("z80: routine %q: %w", name, err)
 		}
+		mac.m.tstateCursor = tstates // T-state total at the start of this instruction
 		tstates += uint64(t)
 		cpu.Step()
 		steps++

@@ -23,7 +23,7 @@ package bdos
 // port, and raw_record_sink_test.go feeds both the identical chunk sequence and
 // asserts the emitted sector writes match.
 
-// SectorSize is the byte length of one B-DOS / SAMDOS sector — the granularity of
+// SectorSize is the byte length of one DOS sector — the granularity of
 // the HWSAD raw-sector write. Identical to bdSectorSize in z80/bdos_store.go.
 const SectorSize = 512
 

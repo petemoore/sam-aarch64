@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	var mraDir, outEnc, outGo, outSysregInc, outConstantsInc, outMnemonicIDsInc, outMnemonicNamesInc string
+	var mraDir, outEnc, outGo, outSysregInc, outConstantsInc, outMnemonicIDsInc, outMnemonicNamesInc, outSysoptsInc string
 	flag.StringVar(&mraDir, "mra", "reference/arm-mra", "MRA snapshot dir")
 	flag.StringVar(&outEnc, "out", "", "binary .enc output (optional)")
 	flag.StringVar(&outGo, "gopkg", "", "regenerate the MRA-derived Go source at this path.  Only emits MRA-derived forms; hand-curated forms live in tools/aarch64enc/manual_forms.go and are not touched by this tool.")
@@ -24,6 +24,7 @@ func main() {
 	flag.StringVar(&outConstantsInc, "constants-inc", "", "regenerate the Z80 OP_KIND_*/REC_KIND_*/DIR_* equates (src/tbn_constants.inc) from tools/sam-aarch64-format/{operands,kinds,directives}.go.")
 	flag.StringVar(&outMnemonicIDsInc, "mnemonic-ids-inc", "", "regenerate the Z80 MNEM_<NAME> equates (src/mnemonic_ids.inc) from tools/sam-aarch64-format/mnemonics.go.")
 	flag.StringVar(&outMnemonicNamesInc, "mnemonic-names-inc", "", "regenerate the Z80 name→id lookup table (src/mnemonic_names.inc) from tools/sam-aarch64-format/mnemonics.go.")
+	flag.StringVar(&outSysoptsInc, "sysopts-inc", "", "regenerate the Z80 AT/IC/barrier-option tables (src/disasm_sysopts.inc) from tools/sam-aarch64-format/sysregs.go.")
 	flag.Parse()
 
 	// The sysreg .inc is projected straight from the Go format package; it
@@ -82,6 +83,20 @@ func main() {
 		}
 		out.Close()
 		fmt.Printf("Wrote %s (name→id lookup table from mnemonics.go).\n", outMnemonicNamesInc)
+	}
+
+	// The sysopts .inc is likewise a straight Go-package projection.
+	if outSysoptsInc != "" {
+		out, err := os.Create(outSysoptsInc)
+		if err != nil {
+			fail(err)
+		}
+		if err := emit.RenderSysoptsInc(out); err != nil {
+			out.Close()
+			fail(err)
+		}
+		out.Close()
+		fmt.Printf("Wrote %s (AT/IC/barrier-option tables from sysregs.go).\n", outSysoptsInc)
 	}
 
 	// The MRA walk only feeds the -out / -gopkg emitters. When only the

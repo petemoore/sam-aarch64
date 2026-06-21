@@ -31,7 +31,7 @@
 // Verification: host-verifiable end-to-end over the i80 emulation (the wire side —
 // the ARP request, the RRQ, the ACK cadence, the accumulated bytes — is asserted
 // byte-for-byte against this authority). NOT host-verifiable: the B-DOS RST-8 HSAVE
-// that writes the received bytes to Trinity storage (no ROM/SAMDOS in the harness),
+// that writes the received bytes to Trinity storage (no ROM/DOS in the harness),
 // the real ENC28J60 silicon, and an end-to-end fetch on real hardware — gated on
 // real Trinity (CLAUDE.md §5). Emulation-verified is not hardware-verified.
 package client

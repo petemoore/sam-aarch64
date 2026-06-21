@@ -156,11 +156,46 @@ is the invariant; the specific filenames are not.**
    choice, §7 / i70): the Pi-4 set + the Pi-3 set + `config.txt`/`cmdline.txt` +
    the kernel. Distinct names mean no collisions.
 
-## 4. Open follow-ups
+## 4. Pi 3 family — boot-ROM differences (i89)
 
-- **i89** — capture a **Pi 3** netboot to confirm its DHCP/TFTP behaviour (Pi 3
-  netboot differs from Pi 4 — it may not present the full PXE option-43 dance) and
-  to empirically validate the model-agnostic serve-by-name claim across families.
+The captures above are all Pi 4/400. No Pi 3 capture exists yet, so the facts
+below are derived from the official Raspberry Pi network-boot documentation and
+the long-standing `dnsmasq` Pi-3-netboot recipes (Sources) — not from a wire
+capture. The wire-level confirmation (a real Pi 3 capture + Pi 3 golden vectors)
+is the optional hardware tail, tracked as **i89b**. What is already settled:
+
+- **DHCP — option-43 is still required.** The Pi 3 boot ROM is also a PXE-style
+  client and accepts the OFFER only when the vendor-encapsulated option-43 carries
+  the **"Raspberry Pi Boot"** PXE boot-menu string (the `dnsmasq`
+  `pxe-service=0,"Raspberry Pi Boot"` recipe — some setups append three trailing
+  spaces to the menu name). So the i86 responder's existing fixed option-43 blob is
+  the right *mechanism* for both families; whether the Pi 3 boot ROM is byte-strict
+  about the exact menu string (trailing spaces, sub-opt 10 prompt) is the one thing
+  only a capture settles — hence i89b.
+- **DHCP — Pi 3B option ordering.** On a **Pi 3B** specifically, option-66 (TFTP
+  server) must appear **after** option-43 in the reply or the boot ROM uses the
+  wrong TFTP server; the Pi 4 is order-insensitive. The Pi 3 also **ignores the
+  standard DHCP bootfile name** and drives the transfer entirely from TFTP.
+- **TFTP — the Pi 3 requests `bootcode.bin` first.** The Pi 3 boot ROM has no
+  built-in stage that fetches `start.elf` directly; it pulls **`bootcode.bin`**
+  (the second-stage loader, absent on Pi 4) first, then `start.elf` + `fixup.dat`
+  + `config.txt`/`cmdline.txt` + the kernel. Same **serial-subdir-then-root** probe
+  behaviour as the Pi 4 (§2).
+- **Server impact: none.** The i83 server keys on the filename alone and the two
+  families' firmware names are disjoint (`bootcode.bin`/`start.elf`/`fixup.dat` vs
+  `start4.elf`/`fixup4.dat`), so **one flat store serves both** with no model
+  awareness. This is now pinned by `TestServerServesBothPiFamilies` in
+  `tools/netboot-oracle/oracle_test.go`, which resolves both file sets (sizes from
+  the `http.RPiFirmware` manifest) through the same store.
+
+## 5. Open follow-ups
+
+- **i89b** — capture a **Pi 3** netboot on real hardware (hub + Wireshark) to
+  confirm the §4 facts on the wire and generate Pi 3 golden vectors (the DHCP
+  DISCOVER/OFFER/ACK + the first TFTP probe sequence), the same way the Pi 4
+  vectors were produced. Pete-gated (needs a Pi 3 + the SAM + the capture rig).
+  The decisive open detail is whether the Pi 3 boot ROM is byte-strict about the
+  option-43 menu string.
 - A fresh clean Pi-4 capture is **not** needed — the present one is complete.
 - TFTP `blksize` values seen (1024 / 1468) should both be accepted; confirm no
   other sizes when the Pi-3 capture lands.
@@ -172,5 +207,10 @@ is the invariant; the specific filenames are not.**
 - Option/field decoding: RFC 2131/2132 (DHCP/BOOTP), RFC 4578 (PXE/BOOTP arch
   options), Intel PXE spec (option-43 sub-options), RFC 1350/2347/2348/2349
   (TFTP) — see [`tftp-protocol-research.md`](tftp-protocol-research.md).
+- Pi 3 family (§4): Raspberry Pi *Network boot your Raspberry Pi* documentation
+  (`raspberrypi.com/documentation/computers/remote-access.html`); the GSI
+  "Network boot a bunch of Raspberry Pi 3" how-to; `dnsmasq-discuss` /
+  raspberrypi/firmware issue threads on Pi 3B `pxe-service`/option-43/option-66
+  ordering and the `bootcode.bin`-first request order.
 - [`trinity-capabilities.md`](trinity-capabilities.md) — the ENC28J60 stack the
   responder/server sit on.

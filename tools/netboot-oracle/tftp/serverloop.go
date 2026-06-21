@@ -110,12 +110,24 @@ func (s *ServerLoop) StartTransfer(rrqFrame []byte, sendOACK bool) []byte {
 			blksize = AcceptedBlksize(n)
 		}
 	}
+	// RFC 7440: grant a windowsize only when the client asked for one, clamped to
+	// what the server supports, and echo it in the OACK so both sides agree.
+	windowsize := uint64(WindowsizeDefault)
+	if v, ok := req.Option("windowsize"); ok {
+		if n, perr := strconv.ParseUint(v, 10, 64); perr == nil {
+			windowsize = AcceptedWindowsize(n)
+		}
+	}
 	s.xfer = NewServerXfer(s.pendingSrc, int(blksize))
-	oack := BuildOACK([]Option{
+	s.xfer.SetWindowsize(int(windowsize))
+	oackOpts := []Option{
 		{"blksize", strconv.FormatUint(blksize, 10)},
 		{"tsize", strconv.FormatUint(size, 10)},
-	})
-	return s.wrap(oack)
+	}
+	if windowsize > WindowsizeDefault {
+		oackOpts = append(oackOpts, Option{"windowsize", strconv.FormatUint(windowsize, 10)})
+	}
+	return s.wrap(BuildOACK(oackOpts))
 }
 
 // OnACK advances the transfer for a received ACK frame and returns the next
@@ -155,6 +167,50 @@ func (s *ServerLoop) FirstData() []byte {
 		return nil
 	}
 	return s.wrap(data)
+}
+
+// FirstWindow returns the first window of DATA frames (blocks 1..windowsize),
+// sent after the client ACKs block 0 of an OACK that granted a windowsize. It is
+// the windowed counterpart of FirstData; the Z80 loop writes each frame in turn.
+func (s *ServerLoop) FirstWindow() [][]byte {
+	if s.xfer == nil {
+		return nil
+	}
+	return s.wrapWindow(s.xfer.NextWindow())
+}
+
+// OnACKWindow advances a windowed transfer for a received ACK frame and returns
+// the next window of DATA frames to send, or nil when the transfer has completed
+// or the ACK is not part of it. It is the windowed counterpart of OnACK; the ACK
+// is cumulative, so a gap-triggered lower ACK rewinds and re-sends from there.
+func (s *ServerLoop) OnACKWindow(ackFrame []byte) [][]byte {
+	if s.xfer == nil {
+		return nil
+	}
+	u, ok := frame.ParseUDP(ackFrame)
+	if !ok || u.SrcPort != s.clientTID || u.DstPort != s.ServerTID {
+		return nil
+	}
+	block, err := ParseACK(u.Payload)
+	if err != nil {
+		return nil
+	}
+	if s.xfer.OnWindowAck(block) {
+		return nil // transfer complete
+	}
+	return s.wrapWindow(s.xfer.NextWindow())
+}
+
+// wrapWindow frames each DATA payload of a window as a UDP datagram to the client.
+func (s *ServerLoop) wrapWindow(payloads [][]byte) [][]byte {
+	if len(payloads) == 0 {
+		return nil
+	}
+	out := make([][]byte, 0, len(payloads))
+	for _, p := range payloads {
+		out = append(out, s.wrap(p))
+	}
+	return out
 }
 
 // Done reports whether the current transfer has completed.

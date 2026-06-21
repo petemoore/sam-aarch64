@@ -10,7 +10,7 @@
 //
 // This is the client fetch made host-verifiable end-to-end by the i80 emulation.
 // It is emulation verification, NOT hardware verification — the B-DOS RST-8 HSAVE
-// that writes the received bytes to Trinity storage (no ROM/SAMDOS in the
+// that writes the received bytes to Trinity storage (no ROM/DOS in the
 // harness), the real ENC28J60 silicon, and an end-to-end fetch on real hardware
 // stay gated on real Trinity (CLAUDE.md §5).
 package z80_test

@@ -386,7 +386,7 @@ PROV_STATUS:     defb PROV_CONTINUE     ; last prov_onframe status (Continue/Fil
 ;
 ; This is the non-host-verifiable half (CLAUDE.md §5): the Trinity EEPROM
 ; identity read, the ENC28J60 silicon init, and the per-record HSAVE to Trinity
-; storage cannot run in the flat-memory koron-go/z80 harness (no ROM / SAMDOS /
+; storage cannot run in the flat-memory koron-go/z80 harness (no ROM / DOS /
 ; RST 8). It ships UNVERIFIED until exercised on real Trinity hardware. The wire +
 ; fetch + verify path it drives (prov_first / prov_onframe / prov_next + the
 ; streaming SHA-256) IS host-verified by the TestProvision*Z80 oracle tests over
@@ -571,7 +571,7 @@ store_end:
 ; storage_sink_leaf(HL = window ptr, BC = window length) — the per-window store
 ; leaf the streaming flush reaches (through the body-skip filter). It (1) hashes
 ; the window into the running verify, then (2) HSAVEs it to Trinity as the next
-; bounded record <prefix><NNN>. NOT host-verifiable (no RST 8 / SAMDOS in the
+; bounded record <prefix><NNN>. NOT host-verifiable (no RST 8 / DOS in the
 ; harness) — unverified until Pete's Trinity test (CLAUDE.md §5).
 ;
 ; The HSAVE source-paging (page = ptr>>14, offset = ptr&0x3FFF | &8000) follows

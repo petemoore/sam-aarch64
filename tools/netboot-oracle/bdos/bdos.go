@@ -23,7 +23,7 @@
 // What this package does NOT model, and what stays UNVERIFIED until real
 // hardware: the actual RST 8 hook dispatch into B-DOS (HGTHD's directory walk,
 // HLOAD's sector reads, HSAVE's sector writes, HRECORD's record selection). The
-// flat-memory koron-go/z80 harness has no ROM / no SAMDOS bank / no RST 8
+// flat-memory koron-go/z80 harness has no ROM / no DOS bank / no RST 8
 // dispatch, so the hook bodies cannot be exercised host-side. The i62 dual-run
 // proof (bdos-version-landscape.md) verified those hooks round-trip on real
 // SAMDOS-2 + B-DOS-AL backends; an end-to-end netboot fetch on real Trinity is

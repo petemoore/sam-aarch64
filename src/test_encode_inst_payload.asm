@@ -420,6 +420,12 @@ enc_fix_table:
                 defb    2
                 defw    6
                 defb    &f6, &06, &00, &b9
+; i204 bare Imm16 SlotKind (0x08) coverage: udf #0x1234 -> imm16 @0
+                defw    &0000
+                defw    enc_fix_udf
+                defb    1
+                defw    89
+                defb    &34, &12, &00, &00
 ; sentinel: fixture ptr 0 terminates the table
                 defw    &0000
                 defw    0
@@ -539,6 +545,10 @@ enc_fix_mem_stur_m8:    defb    &01, &11, &08, &01, &12, &02, &00, &01, &f8
 enc_fix_mem_ldp_off16:  defb    &01, &13, &01, &14, &08, &01, &15, &02, &00, &01, &10
 ; str w22,[x23,#4]: Rt=w22, MemBaseOff(base=23, off=4)
 enc_fix_mem_str_w:      defb    &02, &16, &08, &01, &17, &02, &00, &01, &04
+
+; i204 Imm16 fixture: udf #0x1234 (exact Go OperandWriter bytes)
+; op0: IMM_EXPR (&05), len 3, PUSH_IMM16 (&02), 0x1234 LE
+enc_fix_udf:            defb    &05, &03, &00, &02, &34, &12
 
 ; Total payload size: the LDIR in run_encode_inst_self_tests uses this
 ; count as BC.  Computed by the assembler so no manual update is needed

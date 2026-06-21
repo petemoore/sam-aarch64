@@ -178,6 +178,24 @@ func (c *CardModel) Sector(n, linearSector int) [bdSectorSize]byte {
 	return c.Sectors[idx][linearSector]
 }
 
+// WriteFileBody lays a whole-file body into record n's sectors starting at linear
+// sector 0 (512 bytes each, the final sector zero-padded) — the model of an HSAVE
+// depositing a saved file into a record, readable back via HRSAD from the same
+// (record, linearSec) coordinates (i144). A zero-length body writes nothing.
+//
+// Fidelity scope: this models content *recoverability* (the bytes saved are the
+// bytes read back), not B-DOS's exact on-card directory/header layout — the file
+// body occupies the record's data sectors from sector 0, which is what HRSAD reads.
+// That is the right level for the round-trip content assertions i119e needs; a test
+// that depends on the precise on-card sector map would need a deeper model.
+func (c *CardModel) WriteFileBody(n int, body []byte) {
+	for sec := 0; sec*bdSectorSize < len(body); sec++ {
+		var data [bdSectorSize]byte
+		copy(data[:], body[sec*bdSectorSize:])
+		c.SetSector(n, sec, data)
+	}
+}
+
 // SetRecordName sets the first 10 bytes of record n's 16-byte list-entry name
 // (a test helper preserving bytes 10..15; the full entry name is 16 bytes,
 // space-padded — docs/specs/trinity-record-detection-design.md §4.3). The name
@@ -339,7 +357,19 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		for i := 0; i < bdUIFALen; i++ {
 			u[i] = mac.m.peek(ix + uint16(i))
 		}
-		s.saves = append(s.saves, decodeBDOSSave(s.selected, u))
+		save := decodeBDOSSave(s.selected, u)
+		s.saves = append(s.saves, save)
+		// Write-back (i144): copy the saved file's bytes from its source page into
+		// the selected record's sectors, so a follow-up HRSAD reads the file back
+		// (round-trip content verification — the i119e E2E asserts record contents,
+		// not just that the right record was selected). The source is physical page
+		// save.Page (low 5 bits) at section-C offset save.Addr&0x3FFF; a whole-file
+		// save lands in the record from linear sector 0 — the same (record, linearSec)
+		// coordinates HRSAD reads (and that HWSAD writes a single sector to).
+		if s.card != nil && s.selected >= 0 && save.Size > 0 {
+			body := mac.m.readPhysical(save.Page&0x1F, save.Addr&0x3FFF, int(save.Size))
+			s.card.WriteFileBody(s.selected, body)
+		}
 	case bdHookHGTHD:
 		// Server-side lookup-by-name; the client write-out never issues it, so it
 		// is not modelled (a no-op return). Add a DIFA deposit here if a server

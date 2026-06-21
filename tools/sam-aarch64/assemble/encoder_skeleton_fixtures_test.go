@@ -407,6 +407,11 @@ func TestEncoderSkeletonFixtures(t *testing.T) {
 			w.WriteReg(format.OpRegW, 22)
 			w.WriteMemBaseOff(format.MemBaseOff, 23, immExpr(4))
 		}, 2},
+		// --- i204: bare Imm16 SlotKind (0x08) coverage ---
+		// udf #0x1234 -> imm16 @0 (the only Imm16-slot form-table user)
+		{"udf_0x1234", "udf", 0, func(w *format.OperandWriter) {
+			w.WriteImmExpr(immExpr(0x1234))
+		}, 1},
 	}
 
 	for _, fx := range fixtures {

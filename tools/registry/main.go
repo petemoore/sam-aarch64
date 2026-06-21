@@ -83,6 +83,13 @@ func main() {
 	paths := defaultMutatorPaths()
 	paths.migrating = migrating
 
+	// A mutating command run with a stale binary would rewrite the live registry
+	// with old logic, silently (the i138 incident — i142). Refuse before doing any
+	// work (and before taking the lock) if the binary is older than its source.
+	if mutatingCommands[cmd] {
+		assertBinaryFresh()
+	}
+
 	// Serialize mutating commands behind an exclusive advisory lock so two
 	// concurrent invocations (e.g. Pete adds an item while an agent runs `dep
 	// add`) cannot interleave their load→mutate→write and clobber each other.

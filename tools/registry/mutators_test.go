@@ -973,3 +973,61 @@ func TestPriorityAutoMaintain_OrderPreservation(t *testing.T) {
 	}
 	assertPriorityValid(t, paths)
 }
+
+// TestDeriveUmbrellaStatuses covers the i233 fix: umbrella status is derived
+// from its children (DONE iff all children are DONE/WONTFIX, else OPEN, never
+// IN_PROGRESS), at the applyAndCommit chokepoint, so completing the last child
+// no longer leaves the umbrella stale-OPEN.
+func TestDeriveUmbrellaStatuses(t *testing.T) {
+	mk := func(id, kind, parent string, st Status) Item {
+		return Item{ID: id, Kind: kind, Parent: parent, Status: st}
+	}
+
+	t.Run("all children closed flips a stale-OPEN umbrella to DONE", func(t *testing.T) {
+		reg := &Registry{Items: []Item{
+			mk("i1", "umbrella", "", StatusOpen),
+			mk("i1a", "leaf", "i1", StatusDone),
+			mk("i1b", "leaf", "i1", StatusWontfix),
+		}}
+		deriveUmbrellaStatuses(reg)
+		if got := reg.Items[0].Status; got != StatusDone {
+			t.Errorf("umbrella status = %s, want DONE", got)
+		}
+	})
+
+	t.Run("an open child flips a stale-DONE umbrella back to OPEN", func(t *testing.T) {
+		reg := &Registry{Items: []Item{
+			mk("i1", "umbrella", "", StatusDone),
+			mk("i1a", "leaf", "i1", StatusDone),
+			mk("i1b", "leaf", "i1", StatusInProgress),
+		}}
+		deriveUmbrellaStatuses(reg)
+		if got := reg.Items[0].Status; got != StatusOpen {
+			t.Errorf("umbrella status = %s, want OPEN", got)
+		}
+	})
+
+	t.Run("nested umbrellas settle via the fixpoint", func(t *testing.T) {
+		// i1 (umbrella) -> i1a (umbrella) -> i1a1 (leaf, DONE).
+		reg := &Registry{Items: []Item{
+			mk("i1", "umbrella", "", StatusOpen),
+			mk("i1a", "umbrella", "i1", StatusOpen),
+			mk("i1a1", "leaf", "i1a", StatusDone),
+		}}
+		deriveUmbrellaStatuses(reg)
+		if reg.Items[1].Status != StatusDone {
+			t.Errorf("inner umbrella = %s, want DONE", reg.Items[1].Status)
+		}
+		if reg.Items[0].Status != StatusDone {
+			t.Errorf("outer umbrella = %s, want DONE (fixpoint should close both levels)", reg.Items[0].Status)
+		}
+	})
+
+	t.Run("a childless umbrella keeps its stored status", func(t *testing.T) {
+		reg := &Registry{Items: []Item{mk("i1", "umbrella", "", StatusOpen)}}
+		deriveUmbrellaStatuses(reg)
+		if reg.Items[0].Status != StatusOpen {
+			t.Errorf("childless umbrella = %s, want unchanged OPEN", reg.Items[0].Status)
+		}
+	})
+}

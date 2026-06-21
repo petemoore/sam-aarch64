@@ -17,6 +17,7 @@ import (
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/dhcp"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/golden"
+	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/http"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/internal/mask"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/server"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/smoke"
@@ -492,6 +493,56 @@ func TestServerResolveBehaviour(t *testing.T) {
 	}
 }
 
+// TestServerServesBothPiFamilies proves the i83 server's "one flat store serves
+// every model" property (phase3-delivery-design §6.1) extends to the Pi 3 family
+// (i89): the same name-keyed store resolves the Pi 3 firmware set
+// (bootcode.bin/start.elf/fixup.dat) and the Pi 4/400 set (start4.elf/fixup4.dat)
+// identically, because the server keys on the filename alone and the two families'
+// names are disjoint. Sizes come from the http.RPiFirmware manifest — the same
+// authority the Z80 FW_MANIFEST table is byte-compared against — so this test
+// tracks the manifest rather than restating magic numbers.
+//
+// The Pi 3 boot ROM's *wire* behaviour differs from the Pi 4's (it requests
+// bootcode.bin first, ignores the DHCP bootfile name, and on a Pi 3B needs
+// option-66 after option-43 — see docs/notes/pi-netboot-capture-analysis.md
+// "Pi 3 family"), but none of that reaches the server's resolve path, which is
+// model-agnostic by construction. A real Pi 3 capture + Pi 3 golden wire vectors
+// is the optional hardware-confirmation tail (i89b).
+func TestServerServesBothPiFamilies(t *testing.T) {
+	// One flat store: the per-build files plus every firmware file the manifest pins.
+	store := tftp.MapStore{
+		"config.txt":  1591,
+		"kernel8.img": 1000,
+	}
+	for _, f := range http.RPiFirmware.Files {
+		store[f.Name] = uint64(f.Size)
+	}
+
+	pi3Set := []string{"bootcode.bin", "start.elf", "fixup.dat"}
+	pi4Set := []string{"start4.elf", "fixup4.dat"}
+
+	for _, name := range append(append([]string{}, pi3Set...), pi4Set...) {
+		act, size := tftp.Resolve(store, name)
+		if act != tftp.ActionOACK {
+			t.Errorf("%q resolved to %v, want OACK (one flat store must serve both Pi families)", name, act)
+		}
+		if want := store[name]; size != want {
+			t.Errorf("%q served size %d, want %d (manifest authority)", name, size, want)
+		}
+	}
+
+	// A Pi 3 also probes a serial-number subdir first (same as the Pi 4); it must
+	// 404 so the boot ROM falls back to the flat root.
+	if act, _ := tftp.Resolve(store, "1a2b3c4d/bootcode.bin"); act != tftp.ActionError404 {
+		t.Errorf("Pi 3 serial-subdir probe resolved to %v, want ERROR404", act)
+	}
+
+	// A name in neither family ERROR(1)s and the server stays alive.
+	if act, _ := tftp.Resolve(store, "recovery.elf"); act != tftp.ActionError404 {
+		t.Errorf("unknown file resolved to %v, want ERROR404", act)
+	}
+}
+
 // TestAcceptedBlksize pins the server's blksize negotiation (1024 and 1468
 // accepted; out-of-range falls back to the RFC 1350 default).
 func TestAcceptedBlksize(t *testing.T) {
@@ -500,6 +551,269 @@ func TestAcceptedBlksize(t *testing.T) {
 		if got := tftp.AcceptedBlksize(in); got != want {
 			t.Errorf("AcceptedBlksize(%d) = %d, want %d", in, got, want)
 		}
+	}
+}
+
+// --- RFC 7440 windowed TFTP (i120a — the Go authority for the Z80 port) ------
+
+// TestAcceptedWindowsize pins the server's windowsize negotiation: absent/0/1
+// stays lock-step, in-range echoes, above WindowsizeMax clamps down.
+func TestAcceptedWindowsize(t *testing.T) {
+	cases := map[uint64]uint64{0: 1, 1: 1, 2: 2, 4: 4, 16: 16, 17: 16, 65535: 16}
+	for in, want := range cases {
+		if got := tftp.AcceptedWindowsize(in); got != want {
+			t.Errorf("AcceptedWindowsize(%d) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+func windowedRamp(n int) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = byte(i*7 + 3)
+	}
+	return b
+}
+
+// driveWindowed runs an RFC 7440 windowed transfer between a ServerXfer sender
+// and a ClientXfer receiver directly (no UDP framing — the two state machines the
+// Z80 ports), dropping each DATA block whose number is in `drop` exactly once to
+// exercise the gap/rewind path. It returns the bytes the receiver accumulated and
+// the number of ACKs it emitted (the round-trip count the optimization shrinks).
+func driveWindowed(t *testing.T, file []byte, blksize, windowsize int, drop map[uint16]bool) ([]byte, int) {
+	t.Helper()
+	const serverTID = 0x9000
+	send := tftp.NewServerXfer(tftp.ByteSource(file), blksize)
+	send.SetWindowsize(windowsize)
+	recv := tftp.NewClientXfer(blksize, serverTID)
+	recv.SetWindowsize(windowsize)
+
+	maxWindows := len(file)/blksize + windowsize + 100 // generous convergence bound
+	acks := 0
+	for i := 0; !send.Done(); i++ {
+		if i > maxWindows {
+			t.Fatalf("windowed transfer did not converge after %d windows", i)
+		}
+		window := send.NextWindow()
+		if len(window) == 0 {
+			t.Fatal("empty window before completion")
+		}
+		var lastAck uint16
+		gotAck := false
+		for _, dataPayload := range window {
+			block, _, _ := tftp.ParseDATA(dataPayload)
+			if drop[block] {
+				delete(drop, block) // drop this block exactly once
+				continue
+			}
+			act := recv.OnData(serverTID, dataPayload)
+			if act.Reply != nil {
+				lastAck, _ = tftp.ParseACK(act.Reply)
+				gotAck = true
+				acks++
+			}
+		}
+		if !gotAck {
+			t.Fatal("a window produced no ACK at all")
+		}
+		send.OnWindowAck(lastAck)
+	}
+	if !recv.Done() {
+		t.Fatal("receiver not marked done at end of transfer")
+	}
+	return recv.Bytes(), acks
+}
+
+// TestWindowedXferRoundTrip drives a clean windowed transfer (no loss) and
+// asserts the file arrives intact and the receiver ACKs far less than once per
+// block — the round-trip saving windowing exists for.
+func TestWindowedXferRoundTrip(t *testing.T) {
+	const blksize, windowsize = 512, 4
+	file := windowedRamp(blksize*9 + 100) // 10 blocks: 9 full + a short final
+	got, acks := driveWindowed(t, file, blksize, windowsize, nil)
+	if !bytes.Equal(got, file) {
+		t.Fatalf("windowed transfer corrupted the file (%d bytes vs %d)", len(got), len(file))
+	}
+	blocks := len(file)/blksize + 1
+	if acks >= blocks {
+		t.Errorf("windowed transfer used %d ACKs for %d blocks; want fewer (the round-trip win)", acks, blocks)
+	}
+}
+
+// TestWindowedXferRewindOnLoss drops a block mid-window and asserts the receiver
+// re-ACKs its last in-sequence block, the sender rewinds, and the file still
+// arrives intact (RFC 7440 §4 gap handling).
+func TestWindowedXferRewindOnLoss(t *testing.T) {
+	const blksize, windowsize = 512, 4
+	file := windowedRamp(blksize*9 + 100)
+	got, _ := driveWindowed(t, file, blksize, windowsize, map[uint16]bool{6: true})
+	if !bytes.Equal(got, file) {
+		t.Fatalf("rewind-after-loss corrupted the file (%d vs %d bytes)", len(got), len(file))
+	}
+}
+
+// TestWindowedXferFirstBlockLoss drops the very first block (acked == 0, the
+// worst gap case — the receiver has nothing in sequence to ACK but its prior
+// block-0 ACK) and asserts recovery.
+func TestWindowedXferFirstBlockLoss(t *testing.T) {
+	const blksize, windowsize = 512, 4
+	file := windowedRamp(blksize*5 + 7)
+	got, _ := driveWindowed(t, file, blksize, windowsize, map[uint16]bool{1: true})
+	if !bytes.Equal(got, file) {
+		t.Fatalf("first-block-loss recovery corrupted the file (%d vs %d bytes)", len(got), len(file))
+	}
+}
+
+// TestWindowedXferExactMultiple covers the zero-length final block (file an exact
+// multiple of blksize) under windowing.
+func TestWindowedXferExactMultiple(t *testing.T) {
+	const blksize, windowsize = 512, 3
+	file := windowedRamp(blksize * 4) // blocks 1-4 full, block 5 zero-length final
+	got, _ := driveWindowed(t, file, blksize, windowsize, nil)
+	if !bytes.Equal(got, file) {
+		t.Fatalf("exact-multiple windowed transfer corrupted the file (%d vs %d bytes)", len(got), len(file))
+	}
+}
+
+// TestServerLoopNegotiatesWindowsize pins the frame-level negotiation: an RRQ
+// asking for windowsize gets it echoed in the OACK (clamped to WindowsizeMax), a
+// plain RRQ gets none (lock-step), and the client loop adopts the granted window
+// from the OACK (it then withholds the ACK until the window fills).
+func TestServerLoopNegotiatesWindowsize(t *testing.T) {
+	const blksize = 1024
+	const serverTID = 40136
+	const clientTID = 30574
+	file := make([]byte, 3*blksize)
+	store := tftp.MapStore{"config.txt": uint64(len(file))}
+
+	rrqWindowed := func(ws string) []byte {
+		opts := []tftp.Option{{Name: "tsize", Value: "0"}, {Name: "blksize", Value: "1024"}}
+		if ws != "" {
+			opts = append(opts, tftp.Option{Name: "windowsize", Value: ws})
+		}
+		return frame.BuildUDPFrame(frame.UDP{
+			DstMAC: mask.ServerMAC, SrcMAC: mask.ClientMAC,
+			SrcIP: mask.ClientIP, DstIP: mask.ServerIP,
+			SrcPort: clientTID, DstPort: 69,
+			Payload: tftp.BuildRRQ("config.txt", "octet", opts),
+		})
+	}
+	oackOpts := func(rrq []byte) []tftp.Option {
+		sl := tftp.NewServerLoop(store, mask.ServerMAC, mask.ServerIP, serverTID)
+		sl.SetSource(tftp.ByteSource(file))
+		u, _ := frame.ParseUDP(sl.OnRRQ(rrq))
+		opts, err := tftp.ParseOACK(u.Payload)
+		if err != nil {
+			t.Fatalf("parse OACK: %v", err)
+		}
+		return opts
+	}
+
+	// In-range request is echoed; over-max is clamped; absent leaves it out.
+	if ws, ok := tftp.OptionUint(oackOpts(rrqWindowed("8")), "windowsize"); !ok || ws != 8 {
+		t.Errorf("OACK windowsize = %d (present=%v), want 8", ws, ok)
+	}
+	if ws, _ := tftp.OptionUint(oackOpts(rrqWindowed("999")), "windowsize"); ws != tftp.WindowsizeMax {
+		t.Errorf("over-max windowsize OACK = %d, want %d (clamped)", ws, tftp.WindowsizeMax)
+	}
+	if _, ok := tftp.OptionUint(oackOpts(rrqWindowed("")), "windowsize"); ok {
+		t.Error("plain RRQ got a windowsize in its OACK; want none (lock-step)")
+	}
+
+	// The client loop adopts the granted window from the OACK and then withholds
+	// the ACK of block 1 (mid-window of 8) — proof the window was taken.
+	cl := tftp.NewClientLoop(mask.ClientMAC, mask.ClientIP, clientTID, 512)
+	oackFrame := frame.BuildUDPFrame(frame.UDP{
+		DstMAC: mask.ClientMAC, SrcMAC: mask.ServerMAC,
+		SrcIP: mask.ServerIP, DstIP: mask.ClientIP,
+		SrcPort: serverTID, DstPort: clientTID,
+		Payload: tftp.BuildOACK([]tftp.Option{
+			{Name: "blksize", Value: "1024"},
+			{Name: "tsize", Value: "3072"},
+			{Name: "windowsize", Value: "8"},
+		}),
+	})
+	if cl.OnServerReply(oackFrame) == nil {
+		t.Fatal("client loop ignored the OACK")
+	}
+	dataFrame := frame.BuildUDPFrame(frame.UDP{
+		DstMAC: mask.ClientMAC, SrcMAC: mask.ServerMAC,
+		SrcIP: mask.ServerIP, DstIP: mask.ClientIP,
+		SrcPort: serverTID, DstPort: clientTID,
+		Payload: tftp.BuildDATA(1, file[:blksize]),
+	})
+	if cl.OnDATA(dataFrame) != nil {
+		t.Error("client ACKed block 1 of an 8-block window; want silence until the window fills")
+	}
+}
+
+// TestServerLoopWindowedFrames drives the framed windowed server-send path
+// (ServerLoop.FirstWindow / OnACKWindow — the windowed counterparts the Z80
+// server loop ports): a windowsize-negotiating RRQ yields an OACK, the ACK of
+// block 0 yields a full window of contiguous DATA frames addressed to the client
+// TID, each window ACK yields the next window, and the transfer ends on the short
+// final block with Done set.
+func TestServerLoopWindowedFrames(t *testing.T) {
+	const blksize, windowsize = 512, 3
+	const serverTID = 40222
+	const clientTID = 31000
+	file := windowedRamp(blksize*5 + 100) // 6 blocks: 5 full + a short final
+	store := tftp.MapStore{"config.txt": uint64(len(file))}
+	sl := tftp.NewServerLoop(store, mask.ServerMAC, mask.ServerIP, serverTID)
+	sl.SetSource(tftp.ByteSource(file))
+
+	rrq := frame.BuildUDPFrame(frame.UDP{
+		DstMAC: mask.ServerMAC, SrcMAC: mask.ClientMAC,
+		SrcIP: mask.ClientIP, DstIP: mask.ServerIP,
+		SrcPort: clientTID, DstPort: 69,
+		Payload: tftp.BuildRRQ("config.txt", "octet", []tftp.Option{
+			{Name: "blksize", Value: "512"},
+			{Name: "tsize", Value: "0"},
+			{Name: "windowsize", Value: "3"},
+		}),
+	})
+	ou, _ := frame.ParseUDP(sl.OnRRQ(rrq))
+	opts, _ := tftp.ParseOACK(ou.Payload)
+	if ws, _ := tftp.OptionUint(opts, "windowsize"); ws != windowsize {
+		t.Fatalf("OACK windowsize = %d, want %d", ws, windowsize)
+	}
+
+	ackFrame := func(block uint16) []byte {
+		return frame.BuildUDPFrame(frame.UDP{
+			DstMAC: mask.ServerMAC, SrcMAC: mask.ClientMAC,
+			SrcIP: mask.ClientIP, DstIP: mask.ServerIP,
+			SrcPort: clientTID, DstPort: serverTID,
+			Payload: tftp.BuildACK(block),
+		})
+	}
+
+	var got []byte
+	var lastBlock uint16
+	for window := sl.FirstWindow(); len(window) > 0; window = sl.OnACKWindow(ackFrame(lastBlock)) {
+		if len(window) > windowsize {
+			t.Fatalf("window of %d frames exceeds windowsize %d", len(window), windowsize)
+		}
+		for _, f := range window {
+			u, ok := frame.ParseUDP(f)
+			if !ok || u.SrcPort != serverTID || u.DstPort != clientTID {
+				t.Fatalf("window frame ports src=%d dst=%d, want %d -> %d", u.SrcPort, u.DstPort, serverTID, clientTID)
+			}
+			block, data, err := tftp.ParseDATA(u.Payload)
+			if err != nil {
+				t.Fatalf("parse DATA: %v", err)
+			}
+			if block != lastBlock+1 {
+				t.Fatalf("window block = %d, want %d (contiguous)", block, lastBlock+1)
+			}
+			lastBlock = block
+			got = append(got, data...)
+		}
+	}
+	if !sl.Done() {
+		t.Error("server loop not marked done after the final window ACK")
+	}
+	if !bytes.Equal(got, file) {
+		t.Fatalf("framed windowed transfer corrupted the file (%d vs %d bytes)", len(got), len(file))
 	}
 }
 

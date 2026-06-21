@@ -23,19 +23,37 @@ compact-`.tbn` round-trip) needs the complete set, which is exactly what this
 target assembles. The corpus-dependent zx0 profiling tests skip when their
 inputs are absent — that's expected, not a failure.
 
-## Two gotchas that cost real time
+## Stale artifacts can't false-pass (TestMain build guard)
 
-- **Rebuild the off-axis payloads after any `src/*.asm` change.** The off-axis
-  cluster (`test_cluster.bin`) and `test_mem.bin` bake *main-binary* routine
-  addresses in via `--importfile=assembler.sym`. Change the main binary and
-  rebuild only `assembler.bin` and the boot self-tests crash on stale
-  addresses (a self-test FAIL or a wild jump). `make harness-sweep` rebuilds
-  them together; if you build by hand, include `assembler cluster-offaxis
-  test-mem-offaxis`.
-- **`go test` caches across binary changes.** Go's test cache keys on Go
-  sources, not on the `build/*.bin` files the harness reads at runtime — so a
-  re-run after rebuilding the assembler can report a stale cached `ok`. Use
-  `go test -count=1` (as `harness-sweep` does) after any rebuild.
+`go test ./...` in this package rebuilds **every** SAM-side artifact it reads
+*before any test runs*, via a `TestMain` (`build_assert_test.go`) that runs
+`make <artifact-targets>` and **aborts the suite if the build exits non-zero**.
+The Makefile's prerequisite graph (`build/*.bin : src/*.asm`) rebuilds anything
+stale and no-ops when everything is fresh (~0.5s warm), so every read in the
+suite sees an artifact current with its sources. A failed `pyz80` build (which
+leaves the *previous* `.bin` on disk) now makes the suite **FAIL**, not silently
+pass against the stale binary (registry item i116; the four-session false-pass
+class — sha256-fastest-z80, i88-tls, i48c-expr-parser, the timestamp-keyed
+variant).
+
+This makes both historical gotchas structural rather than advisory:
+
+- **Off-axis payloads rebuild automatically.** The off-axis cluster
+  (`test_cluster.bin`) and `test_mem.bin` bake *main-binary* routine addresses
+  in via `--importfile=assembler.sym`; the TestMain sweep includes
+  `assembler cluster-offaxis test-mem-offaxis`, so they rebuild together
+  whenever the main binary changes — no more stale-address self-test crashes.
+- **A stale `build/*.bin` can't survive into a read.** Go's test cache keys on
+  Go sources, not the `build/*.bin` the harness reads at runtime, so a bare
+  re-run *could* report a cached `ok` against an old binary. The TestMain build
+  runs every invocation (it is not part of the cached test body), so the
+  artifacts are freshened before the (possibly cached) tests execute. Use
+  `go test -count=1` (as `harness-sweep` does) if you also want to defeat Go's
+  result cache for the test bodies themselves.
+
+To bypass the pre-build (no `make`/`pyz80` on PATH, or to test a hand-placed
+artifact), set `HARNESS_SKIP_BUILD=1` — an explicit, warned opt-out, never the
+default.
 
 ## Writing a new test
 
