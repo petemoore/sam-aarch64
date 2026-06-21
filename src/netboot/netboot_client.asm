@@ -346,7 +346,19 @@ cl_next_block:
                 sbc     hl, de                 ; HL = data length
                 ld      (LAST_DATA_LEN), hl
 
-                ; accumulate the payload into STAGING at the running offset.
+                ; route the payload: STAGING (mode 0, default — the i82 host-verified
+                ; whole-file accumulate) or the i122b raw-record streaming sink
+                ; (mode 1 — the i122c fetch-and-boot path: write 512-byte sectors as
+                ; they arrive, so a full 819200-byte disk image never sits whole in
+                ; RAM). CLIENT_SINK_MODE selects; only the boot build has the sink.
+                if defined(NETBOOT_HOSTTEST)==0
+                ld      a, (CLIENT_SINK_MODE)
+                or      a
+                jr      nz, cl_sink_payload
+                endif
+
+                ; --- mode 0: accumulate the payload into STAGING at the offset ---
+                ld      hl, (LAST_DATA_LEN)
                 push    hl
                 ld      hl, (STAGE_OFFSET)
                 ld      de, STAGING
@@ -365,6 +377,20 @@ cl_no_copy:
                 ld      de, (LAST_DATA_LEN)
                 add     hl, de
                 ld      (STAGE_OFFSET), hl
+                jr      cl_after_payload
+
+                if defined(NETBOOT_HOSTTEST)==0
+cl_sink_payload:
+                ; --- mode 1: stream the payload into the selected record. The sink
+                ; re-blocks into sectors + HWSADs each full one, and tracks the
+                ; 32-bit image size in RRS_TOTAL (STAGE_OFFSET is left alone — its
+                ; 16 bits would overflow on a full record; RRS_TOTAL is the size
+                ; authority the finalize step validates). ---
+                ld      hl, RXBUF + RX_UDP_PAYLOAD + 4
+                ld      bc, (LAST_DATA_LEN)
+                call    raw_record_sink_leaf
+                endif
+cl_after_payload:
 
                 ; acked = block (assemble big-endian -> store little-endian).
                 ld      a, (RXBUF + RX_UDP_PAYLOAD + 2)
@@ -640,7 +666,13 @@ err_unknown_tid_msg: defm "unknown transfer ID"
 ; ARP request, then loop receiving until the transfer completes; finally HSAVE the
 ; staged image to Trinity storage via the B-DOS seam. On any bring-up failure it
 ; sets a distinctive border colour and halts.
-client_main:
+; client_setup — shared boot preamble for the netboot client entries: read the
+; SAM's MAC+IP from the Trinity EEPROM into CLIENT_*, set the fixed fetch target
+; (SERVER_IP + filename + the requested blksize), clear the transfer state
+; (CLIENT_SINK_MODE = 0 = STAGING by default), init the ENC28J60, and wait for the
+; PHY link. Halts with a distinct border on any bring-up failure (config/init/
+; link); returns on success.
+client_setup:
                 di
                 ; --- locate + read the "Trinity Network " flash chunk ---
                 ld      a, 1
@@ -696,6 +728,7 @@ client_main:
                 ld      (GOT_MAC), a
                 ld      (GOT_SERVER), a
                 ld      (XFER_DONE), a
+                ld      (CLIENT_SINK_MODE), a  ; default = STAGING; client_fetch_boot sets 1
                 ld      hl, 0
                 ld      (ACKED), hl
                 ld      (STAGE_OFFSET), hl
@@ -717,7 +750,13 @@ client_main:
                 ld      a, b
                 or      c
                 jp      z, cl_fail_link
+                ret
 
+; client_main — fetch the configured file into STAGING and HSAVE it to a picked
+; Trinity record (the flat-file write-out, with the show-name+confirm picker).
+; CALL 32768 lands here on boot.
+client_main:
+                call    client_setup
                 ; --- broadcast the ARP request, then receive until done --
                 call    client_first
 cl_fetch_loop:
@@ -785,6 +824,94 @@ cl_fail_link:
                 di
                 halt
 
+; ===========================================================================
+; client_fetch_boot — the i122 PXE-style fetch-and-boot entry: read the SAM's
+; network identity from EEPROM, TFTP-fetch the configured disk image STRAIGHT
+; into a reusable scratch Trinity record (the i122b streaming sink — a full
+; 819200-byte image never sits whole in RAM), validate it, and ALHK-boot it.
+; No control return on success (the booted record's AUTO file takes over).
+;
+; The capstone composing the four i122 bricks: i82 (fetch loop) + i122b (raw
+; streaming write) + i114c (validate) + i122a (boot-a-record). The scratch record
+; (cl_boot_record) is a netboot-owned, reusable slot — we overwrite our own
+; scratch each boot, no per-boot cleanup (i122 design note a). An image that
+; fails validation (not exactly 819200 bytes, or no BDOS stamp) is rejected and
+; NOT booted (magenta border) — corrupt disk-records never boot (design §6.5).
+client_fetch_boot:
+                call    client_setup           ; EEPROM config + drv_init + link (halts on failure)
+
+                ; --- select the scratch record + arm the streaming sink ---
+                ld      a, (cl_boot_record)
+                ld      (BD_BOOT_RECORD), a    ; the record to stream into, validate, and boot
+                call    bdos_select_record     ; HRECORD-select it (HWSADs target it)
+                call    raw_record_sink_reset
+                ld      a, 1
+                ld      (CLIENT_SINK_MODE), a  ; stream the body into the record
+
+                ; --- fetch (ARP -> RRQ -> DATA/ACK), streaming to the record ---
+                call    client_first
+cfb_loop:
+                call    client_run_once
+                ld      a, (XFER_DONE)
+                or      a
+                jr      z, cfb_loop
+
+                ; --- commit: flush + validate + boot-if-valid (no return on boot) -
+                call    client_finalize
+
+                ; reached only if the image was rejected (not a valid disk record).
+                ld      a, 3                   ; magenta border: invalid image, not booted
+                out     (&fe), a
+                di
+                halt
+
+; ===========================================================================
+; client_finalize — commit the streamed image: flush the sink's final partial
+; sector, validate the result as a Trinity disk record (size == 819200 from
+; RRS_TOTAL AND the BDOS stamp@232 read back via HRSAD), and — only if valid —
+; ALHK-boot the record (BD_BOOT_RECORD; never returns on hardware). On an invalid
+; image it sets CLIENT_BOOT_RESULT = 0 and returns so the caller can signal it.
+;
+; Pre: the scratch record is HRECORD-selected (so HRSAD reads it back) and
+;      BD_BOOT_RECORD names it. Out: CLIENT_BOOT_RESULT = 1 iff valid (then it
+;      boots and never returns); 0 iff rejected (returns).
+client_finalize:
+                call    raw_record_sink_finish ; flush any final partial sector
+
+                ; size = RRS_TOTAL -> BD_REC_SIZE (32-bit).
+                ld      hl, (RRS_TOTAL)
+                ld      (BD_REC_SIZE), hl
+                ld      hl, (RRS_TOTAL + 2)
+                ld      (BD_REC_SIZE + 2), hl
+
+                ; read sector 0 (track 0, sector 1) back via HRSAD so the validator
+                ; can check the BDOS stamp@232 of the just-written record.
+                xor     a
+                ld      (BD_READ_TRACK), a
+                inc     a
+                ld      (BD_READ_SECTOR), a    ; sector 1 (1-based)
+                call    bdos_read_sector       ; -> BD_READ_BUF (512 bytes)
+
+                call    bdos_validate_disk_record  ; -> BD_REC_VALID (1 = valid)
+                ld      a, (BD_REC_VALID)
+                or      a
+                jr      z, cfin_reject
+
+                ; valid: boot the record (ALHK auto-load + run; never returns on HW).
+                ld      a, 1
+                ld      (CLIENT_BOOT_RESULT), a
+                call    bdos_boot_record       ; HRECORD-select BD_BOOT_RECORD + ALHK
+                ret                            ; harness-only: ALHK never returns on hardware
+cfin_reject:
+                xor     a
+                ld      (CLIENT_BOOT_RESULT), a    ; not a valid disk record: do not boot
+                ret
+
+; The reusable netboot scratch record — edit for your card. We overwrite OUR OWN
+; scratch each boot (i122 note a), so this is not the shared-resource confirm gate
+; (that gate is the client_main picker); on real hardware reserve a slot here.
+cl_boot_record:   defb 1
+
 cl_chunk_name:    defm "Trinity Network "     ; the flash chunk holding MAC+IP
 ; The fixed fetch target — edit for your network (the TFTP server + the file).
 cl_server_ip:     defb 192, 168, 0, 1         ; the server holding the .mgt image
@@ -817,9 +944,11 @@ REPLY_TID:        defs 2
 
 ACKED:            defs 2                 ; highest block ACKed (LE value)
 ACK_BLOCK:        defs 2                 ; the block the next ACK names (LE value)
-STAGE_OFFSET:     defs 2                 ; bytes accumulated so far
+STAGE_OFFSET:     defs 2                 ; bytes accumulated so far (mode 0 / STAGING)
 LAST_DATA_LEN:    defs 2
 XFER_DONE:        defs 1
+CLIENT_SINK_MODE: defs 1                 ; 0 = STAGING (default), 1 = raw-record streaming sink (i122c)
+CLIENT_BOOT_RESULT: defs 1               ; client_finalize: 1 = valid image booted, 0 = rejected
 CL_RX_LEN:        defs 2
 TFTP_PKT_LEN:     defs 2
 TPKT:             defs 64                ; the ACK/ERROR packet buffer

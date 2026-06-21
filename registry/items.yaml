@@ -2280,10 +2280,12 @@
   title: "Fetch->validate->raw-write->boot orchestration entry + harness E2E"
   description: |
     i122 brick 3: the integration entry that ties the bricks together — TFTP-fetch a named disk image (i82 receive loop), validate it as a raw Trinity disk record (i114c bdos_validate_disk_record: size==819200 AND BDOS stamp@232, reject on mismatch), stream-write it into a record (i122b), then ALHK-boot it (i122a). Plus a harness E2E test driving the whole path. No control return on success. Real SD write + boot dispatch hardware-gated; orchestration + validation host-verifiable.
-  status: OPEN
+  status: DONE
   depends_on: [i122a, i122b]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 498, role: completing}
   parent: i122
   refs: [src/netboot/netboot_client.asm, docs/notes/netboot-trinity-testing.md, i122]
 
@@ -2880,3 +2882,12 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i182
+  title: Bootable fetch-and-boot disk + real-Trinity run of client_fetch_boot
+  description: |
+    i122c delivered the host-verified PXE-style fetch-and-boot orchestration entry (client_fetch_boot: EEPROM identity -> TFTP-fetch a .mgt straight into a scratch record via the raw_record_sink -> validate -> ALHK-boot). To exercise it on real hardware, build a bootable SAM disk whose autorun invokes client_fetch_boot (a netboot-fetch-boot-disk make target mirroring netboot-client-disk), decide the autorun entry vs client_main, and run it on real SAM+Trinity: serve a stamped 819200-byte .mgt, confirm it streams into the scratch record (1600 HWSAD sectors), validates, and ALHK-boots it. Hardware-gated (the whole point is the real SD write + real boot, unverifiable in emulation); entangled with the auto-boot/control-return autonomy (i132/i135). The full-size valid stream is also not driven through the bit-banged ENC in the host harness, so the real wire run is the first full-scale fetch-and-boot.
+  status: OPEN
+  depends_on: [i122c]
+  kind: leaf
+  owner: pete
