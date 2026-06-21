@@ -4329,6 +4329,8 @@
   title: "deploy-guard: fire only on actual push EXECUTION, not string mentions"
   description: |
     The SAM-deploy PreToolUse hook (tools/deploy-guard/pre-deploy-check.sh) matches deploy tokens anywhere in the command string, so read-only commands that merely MENTION a pusher path/IP (git grep, git ls-tree, a heredoc writing a retro) are falsely DENIED — hit ~5x in the 2026-06-25 session. The _INSPECTION_LEADERS suppression only checks the leading word + bails on any &&/;/| separator, so 'cd X && <read-only>' slips through. Fix (Pete: 'gate it only for the push'): split the command into statements (&&/||/;/newline/pipe), strip leading cd/env-assignment prefixes per statement, treat a statement as a deploy ONLY when its VERB is an actual push execution — interpreter (python/python3/sh/bash) or ./ running a pusher script (trinload-push/trinpush-serve/trinpush .py/.sh), or the script invoked directly; or tftp/atftp client; or curl/wget -T/--upload-file to the SAM; or nc/ncat/socat to the SAM IP/discovery port. Drop the bare-IP/bare-port/bare-0x8000/bare-page-1 mention patterns. Must still FIRE on real deploys + DEPLOY_CHECKED=1 still allows. Add a self-test.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 681, role: completing}
