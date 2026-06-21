@@ -747,6 +747,76 @@ func TestServerLoopNegotiatesWindowsize(t *testing.T) {
 	}
 }
 
+// TestServerLoopWindowedFrames drives the framed windowed server-send path
+// (ServerLoop.FirstWindow / OnACKWindow — the windowed counterparts the Z80
+// server loop ports): a windowsize-negotiating RRQ yields an OACK, the ACK of
+// block 0 yields a full window of contiguous DATA frames addressed to the client
+// TID, each window ACK yields the next window, and the transfer ends on the short
+// final block with Done set.
+func TestServerLoopWindowedFrames(t *testing.T) {
+	const blksize, windowsize = 512, 3
+	const serverTID = 40222
+	const clientTID = 31000
+	file := windowedRamp(blksize*5 + 100) // 6 blocks: 5 full + a short final
+	store := tftp.MapStore{"config.txt": uint64(len(file))}
+	sl := tftp.NewServerLoop(store, mask.ServerMAC, mask.ServerIP, serverTID)
+	sl.SetSource(tftp.ByteSource(file))
+
+	rrq := frame.BuildUDPFrame(frame.UDP{
+		DstMAC: mask.ServerMAC, SrcMAC: mask.ClientMAC,
+		SrcIP: mask.ClientIP, DstIP: mask.ServerIP,
+		SrcPort: clientTID, DstPort: 69,
+		Payload: tftp.BuildRRQ("config.txt", "octet", []tftp.Option{
+			{Name: "blksize", Value: "512"},
+			{Name: "tsize", Value: "0"},
+			{Name: "windowsize", Value: "3"},
+		}),
+	})
+	ou, _ := frame.ParseUDP(sl.OnRRQ(rrq))
+	opts, _ := tftp.ParseOACK(ou.Payload)
+	if ws, _ := tftp.OptionUint(opts, "windowsize"); ws != windowsize {
+		t.Fatalf("OACK windowsize = %d, want %d", ws, windowsize)
+	}
+
+	ackFrame := func(block uint16) []byte {
+		return frame.BuildUDPFrame(frame.UDP{
+			DstMAC: mask.ServerMAC, SrcMAC: mask.ClientMAC,
+			SrcIP: mask.ClientIP, DstIP: mask.ServerIP,
+			SrcPort: clientTID, DstPort: serverTID,
+			Payload: tftp.BuildACK(block),
+		})
+	}
+
+	var got []byte
+	var lastBlock uint16
+	for window := sl.FirstWindow(); len(window) > 0; window = sl.OnACKWindow(ackFrame(lastBlock)) {
+		if len(window) > windowsize {
+			t.Fatalf("window of %d frames exceeds windowsize %d", len(window), windowsize)
+		}
+		for _, f := range window {
+			u, ok := frame.ParseUDP(f)
+			if !ok || u.SrcPort != serverTID || u.DstPort != clientTID {
+				t.Fatalf("window frame ports src=%d dst=%d, want %d -> %d", u.SrcPort, u.DstPort, serverTID, clientTID)
+			}
+			block, data, err := tftp.ParseDATA(u.Payload)
+			if err != nil {
+				t.Fatalf("parse DATA: %v", err)
+			}
+			if block != lastBlock+1 {
+				t.Fatalf("window block = %d, want %d (contiguous)", block, lastBlock+1)
+			}
+			lastBlock = block
+			got = append(got, data...)
+		}
+	}
+	if !sl.Done() {
+		t.Error("server loop not marked done after the final window ACK")
+	}
+	if !bytes.Equal(got, file) {
+		t.Fatalf("framed windowed transfer corrupted the file (%d vs %d bytes)", len(got), len(file))
+	}
+}
+
 // --- Transfer-loop state machines (i82 client / i83 server, plan §6.1) ---
 
 // TestClientTransferLoop drives the i82 client receive model with the captured
