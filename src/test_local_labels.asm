@@ -324,7 +324,7 @@ set_local_pc_buf_imm:
 ;     defb b0, b1, b2, b3
 ;
 ; Mirrors assert_value_buf_eq_imm (test_symbols.asm) but reads from
-; local_label_pc_buf.  On mismatch: jp fail.
+; local_label_pc_buf.  On mismatch: jp fail_at_bc (records the call site).
 ;
 ; Clobbers: A, BC, HL.
 ; -----------------------------------------------------------------------
@@ -334,25 +334,25 @@ assert_local_pc_buf_eq_imm:
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
                 inc     hl
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
                 inc     hl
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
                 inc     hl
 
                 ld      a, (bc)
                 cp      (hl)
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
 
                 push    bc

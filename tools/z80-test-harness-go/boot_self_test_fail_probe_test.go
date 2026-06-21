@@ -69,15 +69,22 @@ func TestBootSelfTestsFailProbe(t *testing.T) {
 	if res.Passed {
 		t.Fatalf("BROKEN disasm self-test still produced a passing boot — the gate is vacuous!")
 	}
-	if !strings.HasPrefix(res.PrinterCapture, "FAIL") {
+	tag, pc, ok := parseFailBanner(res.PrinterCapture)
+	if !ok {
 		t.Fatalf("expected a FAIL banner from the broken disasm self-test, got printer=%q exit=%q",
 			res.PrinterCapture, res.ExitReason)
 	}
-	tag := strings.TrimSpace(strings.TrimPrefix(res.PrinterCapture, "FAIL"))
 	if !strings.EqualFold(tag, "ee") {
 		t.Errorf("expected fail tag EE from the injected fault, got %q (printer=%q)", tag, res.PrinterCapture)
-	} else {
-		t.Logf("gate correctly caught the broken disasm self-test with fail tag %q", tag)
+	}
+	// The disasm self-test fails via `jp fail_with_tag` (a direct site), so the
+	// banner's call-site PC field must be zero — proving fail_with_tag does not
+	// leak a stale LAST_FAIL_PC from an earlier (passing) assert helper.
+	if pc != 0 {
+		t.Errorf("direct fail_with_tag site should report pc=0000, got %04X (printer=%q)", pc, res.PrinterCapture)
+	}
+	if !t.Failed() {
+		t.Logf("gate correctly caught the broken disasm self-test with fail tag %q pc=%04X", tag, pc)
 	}
 }
 
@@ -138,14 +145,19 @@ func TestBootSelfTestsZX0FailProbe(t *testing.T) {
 	if res.Passed {
 		t.Fatalf("BROKEN zx0 self-test still produced a passing boot — the gate is vacuous!")
 	}
-	if !strings.HasPrefix(res.PrinterCapture, "FAIL") {
+	tag, pc, ok := parseFailBanner(res.PrinterCapture)
+	if !ok {
 		t.Fatalf("expected a FAIL banner from the broken zx0 self-test, got printer=%q exit=%q",
 			res.PrinterCapture, res.ExitReason)
 	}
-	tag := strings.TrimSpace(strings.TrimPrefix(res.PrinterCapture, "FAIL"))
 	if !strings.EqualFold(tag, "e9") {
 		t.Errorf("expected fail tag E9 from the injected fault, got %q (printer=%q)", tag, res.PrinterCapture)
-	} else {
-		t.Logf("gate correctly caught the broken zx0 self-test with fail tag %q", tag)
+	}
+	// Direct fail_with_tag site → call-site PC field must be zero.
+	if pc != 0 {
+		t.Errorf("direct fail_with_tag site should report pc=0000, got %04X (printer=%q)", pc, res.PrinterCapture)
+	}
+	if !t.Failed() {
+		t.Logf("gate correctly caught the broken zx0 self-test with fail tag %q pc=%04X", tag, pc)
 	}
 }

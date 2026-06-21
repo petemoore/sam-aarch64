@@ -35,7 +35,7 @@
 ; The return address on the stack points at the first defb byte.  This
 ; routine compares DEHL against the four bytes (HL low first, then DE
 ; high), advances the return address past them on match, and RETs.
-; On mismatch: jp fail.
+; On mismatch: jp fail_at_bc (records the call site, then fails).
 ;
 ; Layout reminder: DEHL where HL is bits 0..15 and DE is bits 16..31,
 ; so the in-memory little-endian byte order is L, H, E, D.
@@ -47,27 +47,48 @@
 ; Clobbers: A, BC.  Preserves DE and HL so the caller's "actual" result
 ; remains intact (useful when chaining diagnostics).
 ; -----------------------------------------------------------------------
+; -----------------------------------------------------------------------
+; fail_at_bc / fail_at_ret — shared diagnostic fail entries (resident, so
+; off-axis suites reach them via build/assembler.sym).
+;
+; fail_at_bc records BC (an inline-literal pointer just past the failing
+; assertion's `call`, i.e. within a few bytes of the call site) into
+; LAST_FAIL_PC, then falls through to fail.  fail_at_ret records the
+; caller's return address from the top of the stack instead — for helpers
+; that did NOT pop it (the assert_cf_* checks take no inline literal).
+;
+; Reached only on the fail path; `fail` halts, so clobbering BC/HL and
+; leaving the stack unbalanced is harmless.  See LAST_FAIL_PC in
+; src/assembler.asm for why one write per run is never stale.
+; -----------------------------------------------------------------------
+fail_at_ret:    pop     hl             ; HL = caller's return addr (the site)
+                ld      (LAST_FAIL_PC), hl
+                jp      fail
+
+fail_at_bc:     ld      (LAST_FAIL_PC), bc
+                jp      fail
+
 assert_eq32_de_hl_imm:
                 pop     bc             ; BC = pointer to inline literal
 
                 ld      a, (bc)        ; byte 0: low byte of HL
                 cp      l
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
 
                 ld      a, (bc)        ; byte 1: high byte of HL
                 cp      h
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
 
                 ld      a, (bc)        ; byte 2: low byte of DE
                 cp      e
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc
 
                 ld      a, (bc)        ; byte 3: high byte of DE
                 cp      d
-                jp      nz, fail
+                jp      nz, fail_at_bc
                 inc     bc             ; BC now points just past the literal
 
                 push    bc             ; restore as return address

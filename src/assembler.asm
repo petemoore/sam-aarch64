@@ -587,6 +587,17 @@ fail:           ld      a, 2
 ; the existing `grep '^FAIL'` status check still works.
                 ld      a, (LAST_FAIL_TAG)
                 call    print_hex_byte
+; Diagnostic: emit LAST_FAIL_PC as four ASCII hex digits (high byte first)
+; immediately after the tag, so the banner reads FAIL<tag><pc>.  A non-zero
+; PC names the call site of a failing inline-literal assert helper (record
+; it via fail_at_bc / fail_at_ret, resolve it against build/assembler.sym);
+; zero means the failure came from a direct fail / fail_with_tag site, for
+; which the tag is the identifier.  Because `fail` halts, only one fail
+; fires per run, so a value here is never stale.
+                ld      a, (LAST_FAIL_PC+1)
+                call    print_hex_byte
+                ld      a, (LAST_FAIL_PC)
+                call    print_hex_byte
                 ld      a, 10
                 call    print_status_char
                 di
@@ -614,6 +625,12 @@ print_hex_emit:
                 ret
 
 LAST_FAIL_TAG:  defb    0
+
+; LAST_FAIL_PC — diagnostic call-site PC for a failing inline-literal assert
+; helper, recorded on the fail path only (via fail_at_bc / fail_at_ret).
+; Resides in section C so off-axis suites (running under an LMPR swap, HMPR
+; stable) can store into it.  Printed by `fail` after LAST_FAIL_TAG.
+LAST_FAIL_PC:   defw    0
 
 
 ; -----------------------------------------------------------------------

@@ -238,6 +238,7 @@
   description: |
     The flatten step has spectrum4.ld hardcoded; decouple the linker layout so other projects can use the toolchain without baking spectrum4-specific layout assumptions. Scope row.
   status: OPEN
+  depends_on: [i56]
   kind: leaf
   owner: agent
 
@@ -253,15 +254,18 @@
   title: Per-fail-site diagnostic strings
   description: |
     Add per-fail-site diagnostic strings to test failures so failures are more easily identified without a disassembler. Deferred-backlog item.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 506, role: completing}
 
 - id: i23
   title: "Paged-IN HLOAD-ceiling lift (current ceiling: 96 KB = 6 pages 7..12, src/assembler.asm:49)"
   description: |
     The current IN-file ceiling is 96 KB (6 pages, 7–12, hardcoded src/assembler.asm line 49). Lift this ceiling to support larger source files via additional paged HLOAD slots. Deferred-backlog item.
   status: OPEN
+  depends_on: [i2]
   kind: leaf
   owner: agent
 
@@ -270,6 +274,7 @@
   description: |
     The output length field is 16-bit and the output buffer ceiling is 32768 bytes (src/encoder.asm). Lift the OUT_LEN field and ceiling to support assemblies larger than 32 KB. Deferred-backlog item.
   status: OPEN
+  depends_on: [i2]
   kind: leaf
   owner: agent
 
