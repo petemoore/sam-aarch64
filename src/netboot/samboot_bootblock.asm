@@ -8,14 +8,19 @@
 ; (chunk 1, ORG &4000) calls the real B-DOS init at &805F from &409E (bytes
 ; CD 5F 80). The combined image changes ONLY those 3 bytes to `CALL inject`; the
 ; splice tool (tools/samboot-splice) patches the captured chunk-1 and copies this
-; routine into the free space. `inject` runs the real B-DOS init itself, then reads
-; the SAMBOOT BIOS config and either auto-boots a record or RETs to &40A1 — which
-; is `restore:`, the byte-identical verbatim tail of Colin's bootblock (the screen
-; redraw + BASIC exit). On the no-auto-boot path our code never trampled the screen,
-; so there is no stripes redraw here (that obsolete i135d fold is dropped; the stripe
-; PIXELS are an i230 hardware concern).
+; routine into the free space. `inject` first restores the MGT opening screen
+; (i112) — the rainbow stripes + copyright banner Colin's Trinity ROM patch
+; displaced — then runs the real B-DOS init itself, then reads the SAMBOOT BIOS
+; config and either auto-boots a record or RETs to &40A1 — which is `restore:`, the
+; byte-identical verbatim tail of Colin's bootblock (LINICOLS disarm + BASIC exit).
+; The screen-draw is VERBATIM stock ROM v3.0 code (the &ED1B RAINBOW SCREEN + the
+; &0F7F report-&50 banner body, minus wait-for-key + teardown — see colin-rom-fork-
+; diff.md), NOT a reconstruction; the stripe + banner PIXELS are an i230 hardware-
+; confirm item (the screenless Go core builds the LINICOLS table — emulation-
+; verified — but does not render them).
 ;
-;   inject:           call &805F            ; the real B-DOS init (returns on hardware)
+;   inject:           <stripes + banner>   ; restore the MGT opening screen (i112)
+;                     call &805F            ; the real B-DOS init (returns on hardware)
 ;   inject_decision:  call samboot_read_config   ; i176: CY+HL=record, or NC=no auto-boot
 ;                     ret  nc                ; no auto-boot -> RET to &40A1 = restore: (verbatim)
 ;                     ld   a, l
@@ -57,10 +62,98 @@ SAMBOOT_INJECT_ORG:    equ &415E           ; the bootblock free space (file &15E
 
 ; ===========================================================================
 ; inject — the spliced bootblock routine. The 3-byte CALL at &409E enters here.
+;
+; First it builds the MGT rainbow-stripe line-colour table (i112) — the &ED1B
+; RAINBOW SCREEN code Colin's Trinity probe displaced — so the stripes are up while
+; B-DOS initialises. Then it runs the real B-DOS init (CALL &805F). AFTER B-DOS init
+; returns it redraws the MGT copyright banner (the &0F7F report-&50 body), then reads
+; the SAMBOOT BIOS config and either auto-boots a record or RETs to &40A1 = restore:
+; (Colin's verbatim tail: LINICOLS disarm + BASIC exit).
+;
+; Both screen blocks are VERBATIM stock ROM v3.0 code
+; (~/sam-archive/samboot-capture/colin-rom-fork-diff.md), NOT a reconstruction.
+;
+; PLACEMENT (empirical, measured — see the PR / samboot_bootblock_test.go). The
+; stripe table build is PURE RAM writes, so it runs in the screenless Go core and is
+; emulation-verified (test B reads back LINICOLS). The banner calls real ROM0 display
+; routines (CLSLOWER/UTMSG/RST10/RST30) that the screenless core cannot execute
+; cleanly — placing the banner BEFORE &805F made the reset-chain run wander into ROM
+; and never reach &805F. So the banner sits AFTER CALL &805F: in emulation &805F does
+; not return (q50 decision 3 / i232), so the banner is unreached there — hardware-only
+; by position, the same honesty line as the post-&805F config read. On hardware &805F
+; returns and the banner draws. RISK: Colin overwrote the UTMSG msg-0 TEXT region
+; (&F5D5-&F615) with his EEPROM reader, so the banner text may render garbled on
+; hardware — an i230 hardware-confirm item, NOT a reason to change the verbatim code.
 ; ===========================================================================
 inject:
+                ; --- MGT rainbow stripes: verbatim ROM v3.0 RAINBOW SCREEN (&ED1B),
+                ; the exact code Colin's Trinity probe displaced (colin-rom-fork-diff.md
+                ; "&ED1B-&ED45"). Pure RAM writes (builds LINICOLS from PALTAB+1), so it
+                ; runs in the screenless harness; SimCoupe / hardware render the pixels.
+                ld      de, &55D9               ; PALTAB+1
+                ld      hl, &5600               ; LINICOLS (L=0)
+                ld      b, l                    ; B = scan number, init 0
+                ld      c, l
+sbb_rbowl:      ld      (hl), b
+                inc     hl
+                ld      (hl), c                 ; PAL MEM ZERO
+                inc     hl
+                ld      a, (de)
+                inc     de
+                ld      (hl), a                 ; main colour
+                inc     hl
+                ld      (hl), a                 ; alt colour = main
+                inc     hl
+                ld      a, b
+                add     a, 11                   ; next scan to alter at
+                ld      b, a
+                cp      166
+                jr      c, sbb_rbowl
+                ld      (hl), &ff               ; terminate the line-colour list
+
+                ; No EI here: the bootblock already executed EI at &409D (the byte
+                ; immediately before the spliced CALL at &409E — confirmed FB in the
+                ; capture), so interrupts are already enabled when inject runs and the
+                ; stripe ISR renders. A redundant EI also perturbs the emulation reset
+                ; chain (the duplicate-EI + B-DOS-init spin lets the timer ISR re-run
+                ; the boot), so it is omitted — faithful to hardware and emulation-clean.
+
                 call    &805F               ; real B-DOS init (no return in the Go core)
-inject_decision:                            ; host decision test enters HERE (skips &805F)
+
+                ; --- MGT banner: verbatim ROM v3.0 report-&50 banner body (&0F7F),
+                ; minus WTFK + teardown. CLSLOWER/UTMSG/PRNUMB1/RST10/RST30 are all
+                ; intact on Colin's ROM (colin-rom-fork-diff.md bottom-line table).
+                ; CALL &06B5 (CLSLOWER) is prepended because the stock body was entered
+                ; via REPORT-50 (which had set the lower-window print position); we call
+                ; it directly so we set it ourselves. HARDWARE-ONLY BY POSITION: &805F
+                ; above does not return in the Go core, so this is unreached in emulation
+                ; (the same honesty line as the post-&805F config read); hardware draws it.
+                call    &06b5                   ; CLSLOWER — set lower-window print pos
+                xor     a
+                call    &3db0                   ; UTMSG msg 0 -> MGT copyright banner
+                ld      hl, &5a34               ; BGFLG
+                ld      a, &82                  ; e-acute (foreign-set on)
+                ld      (hl), a
+                rst     &10
+                ld      (hl), 0
+                ld      a, " "
+                rst     &10
+                ld      a, (&5cb4)              ; PRAMTP (16 or 32)
+                inc     a
+                ld      l, a
+                ld      h, 0
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl
+                add     hl, hl                  ; HL = (PRAMTP+1) * 16 (256 or 512)
+                ld      b, h
+                ld      c, l
+                rst     &30
+                defw    &f5ab                   ; PRNUMB1 (RST 30 inline-pointer call)
+                ld      a, "K"
+                rst     &10
+
+inject_decision:                            ; host decision test enters HERE (skips screen + &805F)
                 call    samboot_read_config ; i176: A=1/HL=record (CY set) or A=0 (CY clr)
                 ret     nc                  ; A=0: no auto-boot -> RET to &40A1 = restore:
                 ld      a, l                ; BD_BOOT_RECORD is 1 byte (record <= 255)

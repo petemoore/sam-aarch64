@@ -200,10 +200,18 @@ func TestSplicedBootLoadsBDOSCoherently(t *testing.T) {
 	enc.LoadEEPROMImage(splicedDeviceEEPROM(t, eeprom, inject))
 	mac.AttachIO(enc)
 
+	// Stop at the FIRST arrival at &805F (StopPCSkip=0). The q50-scoped claim is
+	// "the bootblock loads chunk-1 coherently UP TO &805F via inject"; we must not
+	// run past B-DOS init (q50 decision 3 / i232). The screenless Go core cannot
+	// render the line-interrupt stripes inject now builds, so left to run past &805F
+	// the unmodelled ISR re-enters the boot — exactly the region we are told not to
+	// assert. Stopping at the first &805F captures precisely the in-scope behaviour:
+	// the 12 chunk loads + the splice + inject + the hand-off to B-DOS init.
 	chunkLoads := 0
-	var reachedSpliceSite, reachedInject, reachedExecDOS bool
+	var reachedSpliceSite, reachedInject bool
 	res, err := mac.RunBootFrom(0x0000, z80h.Entry{
 		StepCap: realBootStepCap,
+		StopPC:  0x805F, // the B-DOS entry inject CALLs
 		Trace: func(pc uint16) {
 			switch pc {
 			case addrReadChunk:
@@ -212,19 +220,20 @@ func TestSplicedBootLoadsBDOSCoherently(t *testing.T) {
 				reachedSpliceSite = true
 			case addrInject: // &415E — inject
 				reachedInject = true
-			case 0x805F: // reached via inject's CALL &805F
-				reachedExecDOS = true
 			}
 		},
 	})
 	if err != nil {
 		t.Fatalf("spliced boot run faulted: %v", err)
 	}
-	t.Logf("spliced boot: read_chunk=%d spliceSite(&409E)=%v inject(&415E)=%v &805F=%v finalPC=&%04X halted=%v",
-		chunkLoads, reachedSpliceSite, reachedInject, reachedExecDOS, res.PC, res.Halted)
+	t.Logf("spliced boot: read_chunk=%d spliceSite(&409E)=%v inject(&415E)=%v stoppedAt&805F=%v finalPC=&%04X",
+		chunkLoads, reachedSpliceSite, reachedInject, res.ReachedStop, res.PC)
 
+	if !res.ReachedStop || res.PC != 0x805F {
+		t.Errorf("boot did not reach &805F via inject (stopped=%v, finalPC=&%04X) — the bootblock did not hand off to B-DOS init through the splice", res.ReachedStop, res.PC)
+	}
 	if chunkLoads != 12 {
-		t.Errorf("bootblock ran %d read_chunk loads, want 12 (B-DOS chunks 2..13) — the splice broke the loader", chunkLoads)
+		t.Errorf("bootblock ran %d read_chunk loads before &805F, want 12 (B-DOS chunks 2..13) — the splice broke the loader", chunkLoads)
 	}
 	if !reachedSpliceSite {
 		t.Error("the splice site &409E was never reached — the bootblock load loop did not complete")
@@ -232,11 +241,46 @@ func TestSplicedBootLoadsBDOSCoherently(t *testing.T) {
 	if !reachedInject {
 		t.Error("inject (&415E) was never reached — the CALL inject splice did not transfer control")
 	}
-	if !reachedExecDOS {
-		t.Error("&805F was never reached via inject — inject did not call the real B-DOS init")
+
+	// The stripe redraw is emulation-verified, not just present: inject built the
+	// LINICOLS line-colour table (&5600) before &805F, exactly as the &ED1B RAINBOW
+	// SCREEN lays it out — 4-byte entries {scan_lo, 0, colour, colour}, scan stepping
+	// +11 from 0, an &FF terminator after scan >= 166. (The pixels themselves are an
+	// i230 hardware-confirm item; here we assert the table the ISR renders from.)
+	assertLinicolsStripeTable(t, mac)
+}
+
+// assertLinicolsStripeTable reads the LINICOLS line-colour table at &5600 and checks
+// the &ED1B RAINBOW SCREEN layout inject builds: entry 0's scan byte is 0, each
+// 4-byte entry's scan byte steps +11, and an &FF terminator appears at the entry
+// whose scan would reach >= 166 (the loop's `cp 166 / jr c` bound). This makes the
+// stripe redraw emulation-verified (the table is built), distinct from the pixels
+// (hardware, i230).
+func assertLinicolsStripeTable(t *testing.T, mac *z80h.Machine) {
+	t.Helper()
+	const linicols = 0x5600
+	// The loop emits one 4-byte entry per scan value 0, 11, 22, ... while scan < 166,
+	// then writes the &FF terminator. scan values: 0,11,...,154,165 -> 165 < 166 so
+	// 165 gets an entry, next would be 176 >= 166 -> terminator. That is 16 entries
+	// (0..165 step 11) then the terminator at offset 16*4 = 64.
+	scan := 0
+	off := 0
+	for scan < 166 {
+		got := mac.Read(uint16(linicols+off), 4)
+		if int(got[0]) != scan {
+			t.Errorf("LINICOLS[%d].scan = %d, want %d (&ED1B builds scan stepping +11 from 0)", off/4, got[0], scan)
+		}
+		if got[1] != 0 {
+			t.Errorf("LINICOLS[%d].scan_hi = %d, want 0 (PAL MEM ZERO)", off/4, got[1])
+		}
+		if got[2] != got[3] {
+			t.Errorf("LINICOLS[%d] alt colour %02X != main colour %02X (&ED1B sets alt = main)", off/4, got[3], got[2])
+		}
+		scan += 11
+		off += 4
 	}
-	if res.PC < 0x8000 {
-		t.Errorf("finalPC=&%04X is below &8000 — the boot did not run into the loaded B-DOS", res.PC)
+	if term := mac.Read(uint16(linicols+off), 1)[0]; term != 0xFF {
+		t.Errorf("LINICOLS terminator at +%d = %02X, want FF (the &ED1B list terminator)", off, term)
 	}
 }
 
