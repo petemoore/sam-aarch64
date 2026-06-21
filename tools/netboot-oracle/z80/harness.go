@@ -128,6 +128,19 @@ type mem struct {
 	// sets it true to make the port read 0xFF, exercising the hardware (RET-to-
 	// trinload) branch of the terminator. See test_report.asm tr_terminate.
 	detectHardware bool
+
+	// access, when non-nil, is invoked on every RAM/ROM data read and write (not
+	// instruction fetches per se — Get is the z80.Memory read path, so fetches call
+	// it too; callers filter by address). It is the analysis hook used to PROVE
+	// which addresses a boot reads/writes (fork-vs-stock ROM study). write=false is
+	// a read returning val; write=true is a store of val. Nil for every normal test.
+	access func(addr uint16, write bool, val uint8)
+}
+
+// SetAccessTrace installs an access hook fired on every data read/write through
+// the memory model. Used by the fork-analysis harness to prove address usage.
+func (mac *Machine) SetAccessTrace(fn func(addr uint16, write bool, val uint8)) {
+	mac.m.access = fn
 }
 
 const (
@@ -161,11 +174,18 @@ func (m *mem) Get(addr uint16) uint8 {
 			return m.keyQueue[0]
 		}
 	}
-	return m.peek(addr)
+	v := m.peek(addr)
+	if m.access != nil {
+		m.access(addr, false, v)
+	}
+	return v
 }
 
 func (m *mem) Set(addr uint16, value uint8) {
 	m.poke(addr, value)
+	if m.access != nil {
+		m.access(addr, true, value)
+	}
 	// "Key consumed": the inlined KYIP2 poll does RES 5,(HL) on FLAGS after
 	// reading LASTK. A write to FLAGS with bit 5 clear while a key is queued
 	// means the head key was just consumed — advance the queue.
