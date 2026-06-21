@@ -299,11 +299,11 @@
   owner: agent
 
 - id: i25
-  title: (hksp) HSAVE/HLOAD error handler
+  title: "File-I/O error handler via DOSER (&5BC0)"
   description: |
-    Add a proper error handler for HSAVE/HLOAD failures invoked via (hksp); currently errors are not surfaced to the user. Deferred-backlog item.
+    Surface SAMDOS file-I/O failures (HGTHD/HLOAD/HSAVE file-not-found, disk-full, wrong-type, ...) to the user instead of crashing the assembler. The app-facing error vector is DOSER (&5BC0), NOT (hksp) (see i185: (hksp) is zeroed on every hook entry — samdos/src/b.s:450-451 — and is SAMDOS-internal/NMI-only; an app handler there is never reached). Mechanism: port COMET's idiom (comet.asm prepare/dier/sproom, 1265-1382) — set (&5BC0) to a handler before file ops; ROM PTDOS does JP (DOSER) after every hook (rom DOSC :12977-12980,13003) with A = error number (0 on success). Scope: alt D (minimal, chosen) — the handler does AND A; RET Z on success, else converts the error into the existing diagnosed FAIL (jp fail with a load/save tag, reusing src/assembler.asm fail/fail_with_tag + src/print.asm); alt A (future enhancement) — per-error-number messages + stack recovery so the program could continue rather than halt. Also CORRECT the i183 harness, which models the wrong vector ((hksp)): model the DOSER post-hook dispatch (success + error) and treat an app-set (hksp) as zeroed, so the handler is verified against the real mechanism (emulation-first). Refs: docs/specs/samdos-file-io.md, comet.asm:1265-1382, src/loader.asm + src/main_loop.asm (hook call sites), tools/z80-test-harness-go/harness.go.
   status: OPEN
-  depends_on: [i183]
+  depends_on: [i183, i185]
   kind: leaf
   owner: agent
 
@@ -2948,3 +2948,13 @@
   depends_on: [i183]
   kind: leaf
   owner: agent
+
+- id: i185
+  title: "Correct SAMDOS file-I/O error references: app vector is DOSER (&5BC0), not (hksp)"
+  description: |
+    i25/i183 and the reference docs (docs/specs/samdos-file-io.md, docs/notes/sam-stub-audit.md) framed graceful file-I/O error handling around installing an (hksp) handler. That is wrong: the SAMDOS hook dispatcher zeros (hksp) on EVERY hook entry before the hook body runs (samdos/src/b.s:450-451), so an app-set (hksp) is never seen by derr (d.s:430-437) -- (hksp) is SAMDOS-internal (NMI snapshot only, d.s:606/745). The app-facing error vector is DOSER (&5BC0), a BASIC sysvar (always mapped, no paging dance) that ROM PTDOS dispatches via JP (DOSER) after every DOS hook (rom DOSC, docs/sam/sam-coupe_rom-v3.0_annotated-disassembly.txt:12977-12980,13003); COMET uses exactly this (comet.asm:1265-1382). samdos-file-io.md:174 already notes &5BC0 is COMET's error vector -- internally inconsistent with its (hksp) caveat. Scope of THIS item: fix the reference docs. Implementation (DOSER handler + harness DOSER model) is i25.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 509, role: completing}

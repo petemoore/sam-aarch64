@@ -445,8 +445,9 @@ cross-checked against `samdos/src/h.s:132-156` and the Tech Manual
 ;   OUT_PAGE  - physical page where the OUT buffer's first byte lives
 ;   OUT_LEN   - total byte count, may exceed 16384
 ;
-; Output: file "OUT" written to current drive.  Errors longjmp via
-; `(hksp)` (BASIC error handler by default — assembler halts).
+; Output: file "OUT" written to current drive.  Errors longjmp to BASIC's
+; error path (assembler halts); install a DOSER (&5BC0) handler to catch
+; them gracefully (registry item i25 — NOT (hksp); see "Critical caveat").
 ;
 ; Clobbers: A, BC, DE, HL, IX (IX = dchan on exit).  IY/SP/LMPR/HMPR
 ; preserved.
@@ -547,8 +548,28 @@ and the other file-IO hooks.
 **Critical caveat (from the audit):** HSAVE and HLOAD longjmp on error via
 `derr → derr1` (`d.s:430-460`), which restores SP to `(entsp)` and pops into
 BASIC's error path. For a `di / halt` top-level loop this means a file-IO
-error effectively crashes the program. Installing an `(hksp)` handler before
-the hook would give graceful error reporting — tracked as registry item i25.
+error effectively crashes the program.
+
+To catch this gracefully, install a handler in the **`DOSER` (`&5BC0`)** error
+vector — the same one COMET patches (the `&5BC0` mention above; COMET
+`comet.asm:1265-1382` `prepare`/`dier`/`sproom`). `DOSER` is a BASIC system
+variable (`VAR2+&1C0`), always mapped in section B, so the application can
+write it from its own address space with **no paging dance**. ROM PTDOS's
+post-hook return path `DOSC`
+(`docs/sam/sam-coupe_rom-v3.0_annotated-disassembly.txt:12977-12980, 13003`)
+does `LD HL,(DOSER); INC H; DEC H; JR NZ,DHLJ` → `JP (HL)` after **every** DOS
+hook (success or error), with `A` = the error number (0 on success). So a
+`DOSER` handler fires on the error longjmp and can convert it into a clean,
+diagnosed FAIL. Tracked as registry item **i25**.
+
+> **Do NOT use `(hksp)` for this** — it is the wrong vector. The hook
+> dispatcher zeros `(hksp)` on **every** hook entry, *before* the hook body
+> runs (`samdos/src/b.s:450-451`), so any value an application writes to
+> `(hksp)` is gone by the time `derr` reads it — `derr` always sees 0 for an
+> app-initiated error and falls through to the default BASIC-error path.
+> `(hksp)` is purely SAMDOS-internal: it is set only by the NMI snapshot-save
+> path (`d.s:606`, torn down at `d.s:744-745`) as an internal retry vehicle,
+> not an application handler. (See registry item i185.)
 
 ## Where the patterns live in this codebase
 

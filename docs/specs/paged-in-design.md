@@ -539,7 +539,7 @@ Cross-fixture for ENCTAB×IN bracket: run core/symbols/operands fixtures unchang
 - **IN > 64 KB.**  4 pages × 16 KB = 64 KB ceiling.  Debug builds (~274 KB even after compaction) need a streaming-from-disk variant of `reader_next_kind`, out of scope for M6.
 - **Disassembler.**  Falls out of compact `.tbn`; separate strand.
 - **Streaming read (re-HLOAD per chunk).**  Option B; rejected.
-- **`(hksp)` error handling for HGTHD/HLOAD failures.**  Out of scope; current `jp fail` matches M3..M5 + PR #36 behaviour.
+- **`DOSER` (`&5BC0`) error handling for HGTHD/HLOAD failures** (NOT `(hksp)` — see `samdos-file-io.md` "Critical caveat"; registry i25).  Out of scope here; current `jp fail` matches M3..M5 + PR #36 behaviour.
 - **IN-page bookkeeping in ALLOCT.**  We never return to BASIC, so writing to the ALLOCT page-allocation table is not required (same posture as ENCTAB and OUT — `trampoline.asm:205-208`).
 
 ## Risks

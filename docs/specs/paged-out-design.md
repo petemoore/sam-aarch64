@@ -203,7 +203,7 @@ A second fixture exercising page-crossing (> 16 KB of output) is optional for th
 - **Disassembler.**  Falls out of compact `.tbn` work; separate strand.
 - **Multi-output emission** via HSVBK.  Single HSAVE at end of pass 2 is enough for spectrum4 release.
 - **64 KB output limit.**  16-bit OUT_LEN; debug builds need M7+.
-- **`(hksp)` error handler** for graceful HSAVE failures.  Out of scope; current `di/halt` exit is consistent with M3..M5 behaviour.
+- **`DOSER` (`&5BC0`) error handler** for graceful HSAVE failures (NOT `(hksp)` — see `samdos-file-io.md` "Critical caveat"; registry i25).  Out of scope here; current `di/halt` exit is consistent with M3..M5 behaviour.
 
 ## Risks
 
