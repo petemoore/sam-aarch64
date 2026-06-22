@@ -40,7 +40,15 @@
 ; Provenance: tools/sam-aarch64/assemble/pass1.go (Pass1 / directiveSizeAtPC /
 ; litPoolOperand / resolveEquDirective). Verified host-side in pass1_ir_test.go.
 
+; The org + leaf includes belong to the standalone pass1-ir harness. When this
+; file is `include`d by another harness (test_compact_ir.asm, i48c-b8b) the
+; includer owns the org and the leaf includes, so they are gated out here to
+; avoid a double-org / double-definition (mirrors asmparse.asm's
+; ASMPARSE_STANDALONE guard). PASS1_IR_STANDALONE is set by the pass1-ir-z80
+; Makefile target.
+                if defined(PASS1_IR_STANDALONE)
                 org     &8000
+                endif
 
                 include "tbn_constants.inc"
 
@@ -63,6 +71,23 @@ STAGING_BUF:    equ     &D500          ; 1 KB record staging area
 STAGING_BUF_END: equ    &D900
 LITPOOL_EXPR_BUF: equ   &D900          ; 2 KB cross-pass expr pool
 LITPOOL_EXPR_BUF_END: equ &E100
+
+; COMPACT_REC_PC — per-record RecordPC array for the optional i48c-b8b capture
+; (4-byte LE PASS_PC per record, 128-record cap). Sits in the &F000-page tail
+; above SYMTAB_OVERFLOW (&E800-&F000); free in both this standalone harness and
+; the b8b compact harness that includes this file. b8a never reads it (capture
+; flag stays 0); the symbol exists so the link resolves.
+COMPACT_REC_PC: equ     &F000          ; 128 * 4 = 512 B → &F200
+
+; ORIGIN_LOW — the low 32 bits of OriginVMA (u32 LE), the partner of ORIGIN_HIGH.
+; The compact-core sidecar anchor is RecordPC - OriginVMA (compact.go:109/129);
+; RecordPC's low word is captured per record in COMPACT_REC_PC, so the subtraction
+; needs OriginVMA's low word too. Set only by the OriginVMA-seeding `.org` path
+; (the host's pass1.go:291-294 gate), 0 otherwise. Lives in the &F000-page tail
+; (&FFB0, after the compact harness's scratch cells which end at &FFAE) so it is
+; free in both this standalone harness and the b8b compact harness; b8a never
+; reads it (the anchor subtraction is b8b-only), the symbol just resolves the link.
+ORIGIN_LOW:     equ     &FFB0          ; 4 bytes — low word of OriginVMA (u32 LE)
 
 PASS_PASS1:     equ     1
 PASS_PASS2:     equ     2
@@ -99,17 +124,41 @@ pass1_ir_walk:
                 call    litpool_init
                 call    pass_pc_reset
 
+; ORIGIN_LOW := 0. pass_pc_reset clears PASS_PC + ORIGIN_HIGH; ORIGIN_LOW is the
+; harness-only low-word partner (only the OriginVMA-seeding `.org` sets it), so
+; zero it here so a fixture with no leading `.org` anchors at RecordPC directly.
+                xor     a
+                ld      (ORIGIN_LOW + 0), a
+                ld      (ORIGIN_LOW + 1), a
+                ld      (ORIGIN_LOW + 2), a
+                ld      (ORIGIN_LOW + 3), a
+
 ; HL = cursor into the IR buffer; DE = bytes remaining.
                 ld      hl, PASS1_IR_BUF
                 ld      (p1ir_cursor), hl
                 ld      hl, (PASS1_IR_LEN)
                 ld      (p1ir_remaining), hl
 
+; Record-index counter for the optional RecordPC capture (i48c-b8b). Reset to 0
+; here; incremented per record only when p1ir_capture_recpc != 0 (b8b sets it).
+                xor     a
+                ld      (p1ir_rec_index), a
+                ld      (p1ir_rec_index + 1), a
+
 p1ir_loop:
                 ld      hl, (p1ir_remaining)
                 ld      a, h
                 or      l
                 jr      z, p1ir_done                ; remaining == 0 → flush + return
+
+; Optional RecordPC capture (i48c-b8b): host Compact anchors COMMENT/BLANK_RUN
+; to p1.RecordPC[i] = the PC at the START of record i (pass1.go:173). When the
+; b8b compact walk needs those anchors it sets p1ir_capture_recpc; the pass1
+; walk then stores PASS_PC (4-byte LE) into COMPACT_REC_PC[rec_index] before
+; processing each record, exactly as Pass1 appends res.RecordPC at the loop top.
+                ld      a, (p1ir_capture_recpc)
+                or      a
+                call    nz, p1ir_store_recpc
 
                 ld      hl, (p1ir_cursor)
                 ld      a, (hl)                     ; record kind tag
@@ -131,6 +180,30 @@ p1ir_loop:
 p1ir_done:
 ; Implicit flush at end of input (pass1.go:311 flushPool(pc)).
                 call    litpool_flush
+                ret
+
+
+; -----------------------------------------------------------------------
+; p1ir_store_recpc — store PASS_PC (4-byte LE) into COMPACT_REC_PC at the slot
+; for the current record index, then increment the index. Faithful to
+; pass1.go:173 (res.RecordPC = append(res.RecordPC, pc)) so the b8b compact walk
+; reads RecordPC[i] = PC at the start of record i.
+;
+; Clobbers: A, BC, DE, HL.
+; -----------------------------------------------------------------------
+p1ir_store_recpc:
+                ld      hl, (p1ir_rec_index)
+                add     hl, hl                      ; *2
+                add     hl, hl                      ; *4 (4 bytes per slot)
+                ld      de, COMPACT_REC_PC
+                add     hl, de                      ; HL = &COMPACT_REC_PC[index]
+                ex      de, hl                      ; DE = dest slot
+                ld      hl, PASS_PC
+                ld      bc, 4
+                ldir
+                ld      hl, (p1ir_rec_index)
+                inc     hl
+                ld      (p1ir_rec_index), hl
                 ret
 
 
@@ -432,17 +505,87 @@ p1ir_dir_ltorg:
                 jp      p1ir_advance
 
 
-; ---- .org — set PASS_PC := target (pass1.go:270-300). The OriginVMA case
-; (first .org before any output, target != 0) is faithfully ported: at PASS_PC
-; == 0 with no pool entries and ORIGIN_HIGH still 0, the target seeds both
-; PASS_PC and ORIGIN_HIGH. Otherwise the target must be >= current PASS_PC
-; (backward .org is an error) and PASS_PC := target.
+; ---- .org — set PASS_PC := target (pass1.go:270-300). The OriginVMA-seeding
+; case (host pass1.go:291-294) is faithfully ported: when PASS_PC == 0, no pool
+; entries are allocated, the origin (ORIGIN_LOW:ORIGIN_HIGH) is still 0, and the
+; target != 0, the target SEEDS the origin — set ORIGIN_LOW:ORIGIN_HIGH and
+; PASS_PC to the target and (like the host) SKIP the backward check. Otherwise
+; the backward check applies (target_low32 >= PASS_PC) and PASS_PC := target,
+; ORIGIN_HIGH := target_high32 (origin unchanged on a non-seeding `.org`).
 ;
-; PASS_PC tracks the low 32 bits; the .org backward / set logic mirrors
-; main_dir_org_pass1 + main_dir_org_set_pc.
+; ORIGIN_LOW is the low word the compact-core anchor (RecordPC - OriginVMA)
+; subtracts; ORIGIN_HIGH is re-applied by the origin-relative push handlers.
+; PASS_PC tracks only the low 32 bits. Mirrors main_dir_org_pass1 +
+; main_dir_org_set_pc plus the seeding gate.
 p1ir_dir_org:
                 call    main_eval_first_imm         ; expr_result = target (8-byte LE)
 
+; ---- Seeding gate: PASS_PC == 0 ----------------------------------------
+                ld      a, (PASS_PC + 0)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (PASS_PC + 1)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (PASS_PC + 2)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (PASS_PC + 3)
+                or      a
+                jr      nz, p1ir_org_not_seed
+; ---- origin (ORIGIN_LOW:ORIGIN_HIGH) still 0 ---------------------------
+                ld      a, (ORIGIN_LOW + 0)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (ORIGIN_LOW + 1)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (ORIGIN_LOW + 2)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (ORIGIN_LOW + 3)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (ORIGIN_HIGH + 0)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (ORIGIN_HIGH + 1)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (ORIGIN_HIGH + 2)
+                or      a
+                jr      nz, p1ir_org_not_seed
+                ld      a, (ORIGIN_HIGH + 3)
+                or      a
+                jr      nz, p1ir_org_not_seed
+; ---- no pool entries allocated yet (host len(PoolEntries) == 0) --------
+                ld      a, (LITPOOL_COUNT)
+                or      a
+                jr      nz, p1ir_org_not_seed
+; ---- target != 0 (full 64 bits) ---------------------------------------
+                ld      hl, expr_result
+                ld      b, 8
+                xor     a
+p1ir_org_seed_nz:
+                or      (hl)
+                inc     hl
+                djnz    p1ir_org_seed_nz
+                or      a
+                jr      z, p1ir_org_not_seed        ; target == 0 → ordinary advance
+
+; Seed: ORIGIN_LOW := target_low32, ORIGIN_HIGH := target_high32,
+; PASS_PC := target_low32. Backward check is skipped (host returns immediately).
+                ld      hl, expr_result + 0
+                ld      de, ORIGIN_LOW
+                ld      bc, 4
+                ldir
+                ld      hl, expr_result + 4
+                ld      de, ORIGIN_HIGH
+                ld      bc, 4
+                ldir
+                jp      p1ir_org_set_pc
+
+p1ir_org_not_seed:
 ; Backward check: CF = (target_low32 < PASS_PC).
                 ld      a, (expr_result + 0)
                 ld      hl, PASS_PC
@@ -458,7 +601,15 @@ p1ir_dir_org:
                 sbc     a, (hl)
                 jp      c, p1ir_org_backward
 
-; PASS_PC := expr_result[0..3]; ORIGIN_HIGH := expr_result[4..7].
+; ORIGIN_HIGH := target_high32 (a non-seeding `.org` advances PC; the origin's
+; high word still tracks the current VMA's high word for origin-relative pushes).
+                ld      hl, expr_result + 4
+                ld      de, ORIGIN_HIGH
+                ld      bc, 4
+                ldir
+
+p1ir_org_set_pc:
+; PASS_PC := expr_result[0..3].
                 ld      a, (expr_result + 0)
                 ld      (PASS_PC + 0), a
                 ld      a, (expr_result + 1)
@@ -467,10 +618,6 @@ p1ir_dir_org:
                 ld      (PASS_PC + 2), a
                 ld      a, (expr_result + 3)
                 ld      (PASS_PC + 3), a
-                ld      hl, expr_result + 4
-                ld      de, ORIGIN_HIGH
-                ld      bc, 4
-                ldir
                 ld      bc, (p1ir_dir_size)
                 jp      p1ir_advance
 
@@ -1010,6 +1157,11 @@ p1ir_scan_width:                defb    0
 p1ir_scan_expr_ptr:             defw    0
 p1ir_scan_expr_len:             defw    0
 
+; i48c-b8b RecordPC capture state. p1ir_capture_recpc gates the capture (0 in the
+; b8a standalone harness; the b8b compact walk sets it to 1 before pass1_ir_walk).
+p1ir_capture_recpc:             defb    0
+p1ir_rec_index:                 defw    0
+
 ; Directive staging — the names main_loop.asm's helpers / sizer use; the eval
 ; helpers above and pass1_dir_size read these.
 main_dir_id:                    defb    0
@@ -1020,9 +1172,12 @@ main_dir_payload_after_header:  defw    0
 p1ds_acc:                       defw    0
 
 PASS1_IR_LEN:                   defw    0
-; IR record buffer. Sized to fill the &8000 page up to just below the &C100
-; pass-1 scratch region (the tables the reused leaves use start at &C100), so a
-; comment-heavy fixture whose serialised IR overflows this is skipped host-side
-; rather than corrupting the tables.
-PASS1_IR_BUF:                   defs    11264       ; 11 KB IR record buffer
+; IR record buffer. Sized so that, in the b8b compact harness (which `include`s
+; this file and appends the compact-core code after this buffer), the buffer end
+; plus the compact code stays below the &C160 SYMTAB the reused leaves populate —
+; otherwise pass1 writing symbols would overwrite the compact code (the i48c-b8b
+; SYMTAB-vs-code collision). A comment-heavy fixture whose serialised IR overflows
+; this is skipped host-side (mirrored as pass1IRBufSize in the Go harness) rather
+; than corrupting the tables. The corpus + hand fixtures fit comfortably.
+PASS1_IR_BUF:                   defs    10752       ; IR record buffer (see above)
 
