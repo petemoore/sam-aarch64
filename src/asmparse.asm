@@ -84,19 +84,28 @@
 ;        statement line, emitting a COMMENT record for each `//`/`#`/`/* */`
 ;        comment token with placement 0 (line-leading) or 1 (after a statement
 ;        on the same line). The lexer already carries each comment's body as the
-;        token span. The remaining special forms (movl / ldr= / barriers /
-;        mrs-msr / dc-tlbi, B5b-B5f), directives and labels are later bricks — a
-;        line that needs one is outside this domain and sets PARSE_ERR.
+;        token span.
+;   B5 (label/local defs): the statement-leading definition records (port of
+;        parseLine's TokIdent+':' / TokInt+':' cases, parser.go:103-119, plus
+;        emitLabelDef/emitLocalDef, parser.go:38-45). A leading identifier
+;        followed by ':' interns its name (sym_intern) and emits a LABEL_DEF
+;        carrying the id; a leading integer in [1,99] followed by ':' emits a
+;        LOCAL_DEF carrying the digit. Both are checked before the
+;        mnemonic/directive dispatch, matching parseLine. These are in-memory
+;        IR records (compacted into the header tables at serialize-time).
 ;
 ; RECORD STREAM (emission form — original framing for the host harness; the
 ; OPERAND bytes are byte-faithful to format.OperandWriter). The stream is
 ; self-describing: every record begins with a REC_KIND_* tag byte so a reader
-; can walk a mix of record kinds. The three kinds emitted:
+; can walk a mix of record kinds. The kinds emitted:
 ;   INST:      REC_KIND_INST | mnemonic_id:2 LE | operand_count:1 |
 ;              operands_len:2 LE | operands[]
+;   LABEL_DEF: REC_KIND_LABEL_DEF | len:2 LE | sym_id:2 LE            (len = 2)
+;   LOCAL_DEF: REC_KIND_LOCAL_DEF | len:2 LE | digit:1               (len = 1)
 ;   COMMENT:   REC_KIND_COMMENT | len:2 LE | placement:1 | body[]   (len = 1+body)
 ;   BLANK_RUN: REC_KIND_BLANK_RUN | len:2 LE | run_len:4 LE          (len = 4)
-; COMMENT / BLANK_RUN use the format-package [kind:1][len:2][payload] framing
+; LABEL_DEF / LOCAL_DEF / COMMENT / BLANK_RUN use the format-package
+; [kind:1][len:2][payload] framing
 ; (tools/sam-aarch64-format/reader.go); INST keeps its richer header after the
 ; tag. A register operand is `kind:1, reg:1` (kind = OP_KIND_REG_X/W/XSP/WSP);
 ; an immediate operand is `OP_KIND_IMM_EXPR:1, expr_len:2 LE, expr[]` where expr
@@ -216,7 +225,7 @@ pr_no_blanks:
                 ld      hl, (PARSE_TOK)
                 ld      a, (hl)
                 cp      TOK_EOF
-                jr      z, pr_done
+                jp      z, pr_done
                 ; emittedStatement = false for this statement line.
                 xor     a
                 ld      (PR_EMITTED), a
@@ -227,16 +236,18 @@ pr_line:
                 cp      TOK_EOL
                 jr      z, pr_line_eol      ; statement terminator (NOT a blank)
                 cp      TOK_EOF
-                jr      z, pr_done
+                jp      z, pr_done
                 cp      TOK_LINECOMMENT
                 jr      z, pr_comment
                 cp      TOK_BLOCKCOMMENT
                 jr      z, pr_comment
                 cp      TOK_IDENT
-                jr      z, pr_inst
+                jp      z, pr_ident         ; mnemonic / directive / label def
+                cp      TOK_INT
+                jp      z, pr_localdef      ; B5: `1:` local-label def (or error)
                 cp      TOK_DOT
                 jr      z, pr_dot           ; B6: `. = expr` location-counter set
-                jr      pr_domainerr        ; line-leading non-ident: out of domain
+                jp      pr_domainerr        ; line-leading non-ident: out of domain
 pr_line_eol:
                 call    parse_advance_tok   ; consume the line-terminating TOK_EOL
                 jr      pr_loop             ; next line: re-count blanks
@@ -257,13 +268,13 @@ pr_inst:
                 cp      &2E             ; '.'
                 jr      z, pr_directive
                 call    parse_inst
-                jr      c, pr_done          ; error -> stop
+                jp      c, pr_done          ; error -> stop
                 ld      a, 1
                 ld      (PR_EMITTED), a     ; emittedStatement = true
                 jr      pr_line             ; back to the inner loop (trailing comment / EOL)
 pr_directive:
                 call    parse_directive     ; B6: `.set`/`.word`/`.org`/`.section`/…
-                jr      c, pr_done
+                jp      c, pr_done
                 ld      a, 1
                 ld      (PR_EMITTED), a
                 jr      pr_line
@@ -276,14 +287,79 @@ pr_dot:
                 add     hl, de              ; HL -> token after '.'
                 ld      a, (hl)
                 cp      TOK_EQUALS
-                jr      nz, pr_domainerr
+                jp      nz, pr_domainerr
                 call    parse_advance_tok   ; consume '.'
                 call    parse_advance_tok   ; consume '='
                 call    parse_org_rhs
-                jr      c, pr_done
+                jp      c, pr_done
                 ld      a, 1
                 ld      (PR_EMITTED), a
                 jr      pr_line
+; --- TOK_IDENT at statement start: a label def (`foo:`) takes priority over the
+;     mnemonic/directive dispatch (parser.go:115-119 checks the colon first). ---
+pr_ident:
+                ld      hl, (PARSE_TOK)
+                ld      de, TOK_REC_SIZE
+                add     hl, de              ; HL -> token after the identifier
+                ld      a, (hl)
+                cp      TOK_COLON
+                jr      z, pr_labeldef
+                jp      pr_inst             ; not a label -> mnemonic / directive
+pr_labeldef:
+                ; Intern the label name (its identifier span) to a u16 id and
+                ; emit a LABEL_DEF record carrying that id (emitLabelDef).
+                ld      hl, (PARSE_TOK)
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = span_ptr
+                inc     hl
+                ld      c, (hl)             ; C = span_len low (label names < 256)
+                ex      de, hl              ; HL = span_ptr
+                call    sym_intern          ; HL = id
+                call    parse_emit_label_def
+                call    parse_advance_tok   ; consume the identifier
+                call    parse_advance_tok   ; consume the ':'
+                ld      a, 1
+                ld      (PR_EMITTED), a
+                jp      pr_line
+; --- TOK_INT at statement start: a local-label def (`1:`) when followed by ':'
+;     with the value in [1,99]; any other leading number is an error
+;     (parser.go:103-114). ---
+pr_localdef:
+                ld      hl, (PARSE_TOK)
+                ld      de, TOK_REC_SIZE
+                add     hl, de              ; HL -> token after the number
+                ld      a, (hl)
+                cp      TOK_COLON
+                jr      nz, pr_domainerr    ; bare number at statement start -> error
+                ; The token value (offset 6, 8 bytes LE) must be in [1,99]: the low
+                ; byte holds the digit and bytes 1..7 must be zero.
+                ld      hl, (PARSE_TOK)
+                ld      de, 6
+                add     hl, de              ; HL -> value low byte
+                ld      a, (hl)
+                ld      b, a                ; B = candidate digit
+                inc     hl
+                ld      c, 7                ; check the upper 7 value bytes are zero
+pld_zchk:
+                ld      a, (hl)
+                or      a
+                jr      nz, pr_domainerr    ; value > 0xFF -> out of [1,99]
+                inc     hl
+                dec     c
+                jr      nz, pld_zchk
+                ld      a, b                ; A = digit
+                or      a
+                jr      z, pr_domainerr     ; 0 -> not a valid local label
+                cp      100
+                jr      nc, pr_domainerr    ; >= 100 -> out of [1,99]
+                call    parse_emit_local_def    ; A = digit
+                call    parse_advance_tok   ; consume the number
+                call    parse_advance_tok   ; consume the ':'
+                ld      a, 1
+                ld      (PR_EMITTED), a
+                jp      pr_line
 pr_domainerr:
 pr_lexerr:
                 ld      a, 1
@@ -4042,6 +4118,52 @@ parse_emit_blank_run:
                 ld      (hl), 0
                 inc     hl
                 ld      (hl), 0
+                inc     hl
+                ld      (PARSE_RECPTR), hl
+                ld      hl, (PARSE_RECN)
+                inc     hl
+                ld      (PARSE_RECN), hl
+                ret
+
+; ===========================================================================
+; parse_emit_label_def — emit one LABEL_DEF record (emitLabelDef, parser.go:39).
+; Entry: HL = interned symbol id (u16). The record uses the format-package
+; [kind:1][len:2 LE][payload] framing with payload = id (2 bytes LE).
+; ===========================================================================
+parse_emit_label_def:
+                push    hl                  ; save id
+                ld      hl, (PARSE_RECPTR)
+                ld      (hl), REC_KIND_LABEL_DEF
+                inc     hl
+                ld      (hl), 2             ; len low  (payload = 2-byte id)
+                inc     hl
+                ld      (hl), 0             ; len high
+                inc     hl
+                pop     de                  ; DE = id
+                ld      (hl), e
+                inc     hl
+                ld      (hl), d
+                inc     hl
+                ld      (PARSE_RECPTR), hl
+                ld      hl, (PARSE_RECN)
+                inc     hl
+                ld      (PARSE_RECN), hl
+                ret
+
+; ===========================================================================
+; parse_emit_local_def — emit one LOCAL_DEF record (emitLocalDef, parser.go:44).
+; Entry: A = local-label digit (1..99). Payload = digit (1 byte).
+; ===========================================================================
+parse_emit_local_def:
+                ld      c, a                ; save digit
+                ld      hl, (PARSE_RECPTR)
+                ld      (hl), REC_KIND_LOCAL_DEF
+                inc     hl
+                ld      (hl), 1             ; len low  (payload = 1-byte digit)
+                inc     hl
+                ld      (hl), 0             ; len high
+                inc     hl
+                ld      (hl), c             ; digit
                 inc     hl
                 ld      (PARSE_RECPTR), hl
                 ld      hl, (PARSE_RECN)

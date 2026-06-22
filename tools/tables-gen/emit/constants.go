@@ -23,10 +23,12 @@ import (
 //     OP_KIND_REG_WSP, where the Go OperandKind.Name() returns REG_X_SP /
 //     REG_W_SP. The opKinds list carries the exact Z80 suffix per value so
 //     the generated symbol names match every `cp OP_KIND_*` site verbatim.
-//   - REC_KIND_*: the Z80 carries a 6-of-9 SUBSET of the Go RecordKind set
-//     (it omits LABEL_DEF, LOCAL_DEF, BLANK_RUN — record kinds it never
-//     dispatches on). recKinds lists exactly the six it uses, in value
-//     order, so the generated block reproduces the existing subset.
+//   - REC_KIND_*: the Z80 carries every Go RecordKind. LABEL_DEF / LOCAL_DEF
+//     are emitted by the text→overlay parser (src/asmparse.asm, i48c-b5) as
+//     in-memory IR records — compacted into the header label/local tables at
+//     serialize-time, so they never reach an on-disk record stream, but the
+//     parser tags them with these equates. recKinds lists all nine in value
+//     order.
 //   - DIR_*: the full DirectiveTable (append-only, IDs 0..N-1) maps
 //     mechanically — `.text` → DIR_TEXT — with the directive name kept as
 //     an inline comment, matching the hand-written block.
@@ -55,12 +57,12 @@ func RenderConstantsInc(w io.Writer) error {
 		emitEqu(w, "OP_KIND_"+ok.suffix, fmt.Sprintf("&%02X", ok.value), "")
 	}
 
-	// REC_KIND_* — the 6-of-9 subset the Z80 dispatches on, value order.
+	// REC_KIND_* — every Go RecordKind, value order.
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "; -----------------------------------------------------------------------")
 	fmt.Fprintln(w, "; RecordKind constants (tools/sam-aarch64-format/kinds.go).")
-	fmt.Fprintln(w, "; The Z80 carries a SUBSET of the Go RecordKind set — only the kinds it")
-	fmt.Fprintln(w, "; dispatches on (it omits LABEL_DEF, LOCAL_DEF).")
+	fmt.Fprintln(w, "; LABEL_DEF/LOCAL_DEF are emitted by the text→overlay parser (i48c-b5)")
+	fmt.Fprintln(w, "; as in-memory IR records; the rest tag the on-disk record stream.")
 	fmt.Fprintln(w, "; -----------------------------------------------------------------------")
 	for _, rk := range recKinds {
 		if got := byte(rk.kind); got != rk.value {
@@ -158,6 +160,8 @@ type recKindEntry struct {
 
 var recKinds = []recKindEntry{
 	{format.KindInst, 0x01, "INST"},
+	{format.KindLabelDef, 0x02, "LABEL_DEF"},
+	{format.KindLocalDef, 0x03, "LOCAL_DEF"},
 	{format.KindDirective, 0x04, "DIRECTIVE"},
 	{format.KindComment, 0x05, "COMMENT"},
 	{format.KindBlankRun, 0x06, "BLANK_RUN"},
@@ -266,8 +270,8 @@ func writeConstantsHeader(w io.Writer) {
 	fmt.Fprintln(w, ";")
 	fmt.Fprintln(w, "; Projected from the Go authority:")
 	fmt.Fprintln(w, ";   OP_KIND_*   — tools/sam-aarch64-format/operands.go (OperandKind)")
-	fmt.Fprintln(w, ";   REC_KIND_*  — tools/sam-aarch64-format/kinds.go (RecordKind; a 7-of-9")
-	fmt.Fprintln(w, ";                 subset — the Z80 dispatches only on these)")
+	fmt.Fprintln(w, ";   REC_KIND_*  — tools/sam-aarch64-format/kinds.go (RecordKind; all nine,")
+	fmt.Fprintln(w, ";                 incl. the parser-only LABEL_DEF/LOCAL_DEF IR kinds)")
 	fmt.Fprintln(w, ";   DIR_*       — tools/sam-aarch64-format/directives.go (DirectiveTable)")
 	fmt.Fprintln(w, ";   MEM_SHAPE_* — tools/sam-aarch64-format/operands.go (MemShape)")
 	fmt.Fprintln(w, ";   EXT_*       — tools/sam-aarch64-format/operands.go (ExtendKind)")
