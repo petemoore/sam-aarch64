@@ -61,6 +61,35 @@ func TestEncoderSkeletonFixtures(t *testing.T) {
 			w.WriteReg(format.OpRegX, 1)
 			w.WriteImmExpr(immExpr(0xff))
 		}, 3},
+		// Logical-immediate replication-size coverage (i205): one ORR
+		// per element size so the size-parameterized replicate routine
+		// is exercised on every branch.  size==64 is orr_x0_x1_0xff
+		// above; these add 32/16/8/4/2.
+		{"orr_x0_x1_size32", "orr", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteImmExpr(immExpr(0x0000000100000001))
+		}, 3},
+		{"orr_x0_x1_size16", "orr", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteImmExpr(immExpr(0x0001000100010001))
+		}, 3},
+		{"orr_x0_x1_size8", "orr", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteImmExpr(immExpr(0x0101010101010101))
+		}, 3},
+		{"orr_x0_x1_size4", "orr", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteImmExpr(immExpr(0x1111111111111111))
+		}, 3},
+		{"orr_x0_x1_size2", "orr", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteReg(format.OpRegX, 1)
+			w.WriteImmExpr(immExpr(0x5555555555555555))
+		}, 3},
 		{"csel_x0_x1_x2_eq", "csel", 0, func(w *format.OperandWriter) {
 			w.WriteReg(format.OpRegX, 0)
 			w.WriteReg(format.OpRegX, 1)
