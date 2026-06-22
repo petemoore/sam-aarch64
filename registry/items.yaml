@@ -763,9 +763,11 @@
   title: Barriers dsb/dmb/isb (barrier-arg keyword→CRm)
   description: |
     Parse barrier instructions dsb/dmb/isb: map barrier-arg keyword (e.g. sy, ish, nsh, ...) to the CRm encoding field.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 548, role: completing}
   parent: i48c
   refs: [src/asmparse.asm, tools/sam-aarch64/frontend/parser.go]
 

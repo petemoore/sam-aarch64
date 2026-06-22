@@ -294,6 +294,12 @@ parse_inst:
                 jp      z, parse_movk
                 cp      MNEM_MOVL
                 jp      z, parse_movl       ; B5b: movl pseudo (movz+movk expansion)
+                cp      MNEM_DSB
+                jp      z, parse_barrier_req ; B5c: dsb (mandatory barrier arg)
+                cp      MNEM_DMB
+                jp      z, parse_barrier_req ; B5c: dmb (mandatory barrier arg)
+                cp      MNEM_ISB
+                jp      z, parse_barrier_opt ; B5c: isb (optional arg, default sy)
 pi_loop:
                 ld      hl, (PARSE_TOK)
                 ld      a, (hl)
@@ -730,6 +736,152 @@ pml_emit_inst:
                 ld      a, 2
                 ld      (PI_COUNT), a
                 jp      parse_emit_inst
+
+; ===========================================================================
+; parse_barrier — B5c special-form parse for dsb/dmb/isb. (Port of parseBarrier,
+; parser.go:704-732.) The barrier-arg keyword (sy/st/ld/ish/ishst/ishld/nsh/
+; nshst/nshld/osh/oshst/oshld) maps to its CRm field value; one INST record is
+; emitted with a single imm-expr operand carrying CRm. For dsb/dmb the arg is
+; mandatory; for isb it is optional and defaults to `sy` (CRm=0xf). Entry (from
+; parse_inst dispatch): PI_MNEMID=dsb/dmb/isb, PI_OPSPTR=PARSE_OPSBUF, PI_COUNT=0,
+; mnemonic consumed. Exit: one INST record (CY clear); on error jumps pi_err.
+; ===========================================================================
+parse_barrier_req:                          ; dsb/dmb: arg mandatory
+                xor     a
+                jr      parse_barrier
+parse_barrier_opt:                          ; isb: arg optional (default sy)
+                ld      a, 1
+parse_barrier:
+                ld      (BARRIER_OPT), a
+                ; Is the current token a barrier-arg keyword (an identifier)?
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_IDENT
+                jr      z, pb_has_arg
+                ; No arg present. Mandatory -> error; optional -> default sy (0xf).
+                ld      a, (BARRIER_OPT)
+                or      a
+                jp      z, pi_err
+                ld      a, &0f
+                jr      pb_emit
+pb_has_arg:
+                call    barrier_lookup      ; A = CRm, CY set if unknown keyword
+                jp      c, pi_err
+                push    af
+                call    parse_advance_tok   ; consume the keyword
+                pop     af
+pb_emit:
+                ; Emit one INST: 1 operand = imm-expr WriteImm(CRm). A = CRm.
+                ld      (BARRIER_CRM), a
+                ld      hl, EXPR_BUF
+                ld      (EXPR_PTR), hl
+                call    movk_set_immval_zero
+                ld      a, (BARRIER_CRM)
+                ld      (IMM_VAL), a
+                call    expr_emit_imm_from_immval
+                call    emit_imm_expr_operand
+                ld      a, 1
+                ld      (PI_COUNT), a
+                jp      pi_emit
+
+; ===========================================================================
+; barrier_lookup — match the current token's (PARSE_TOK) span against the barrier
+; keyword table. Out: A = CRm and CY clear on match; CY set if the span is not a
+; known barrier keyword. Clobbers AF/BC/DE/HL.
+; ===========================================================================
+barrier_lookup:
+                ld      hl, (PARSE_TOK)
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = span ptr
+                inc     hl
+                ld      a, (hl)             ; span_len low
+                ld      (BARRIER_SPANLEN), a
+                inc     hl
+                ld      a, (hl)             ; span_len high
+                or      a
+                scf
+                ret     nz                  ; len >= 256: not a barrier keyword
+                ld      (BARRIER_SPANPTR), de
+                ld      hl, barrier_tbl
+bl_loop:
+                ld      a, (hl)             ; entry length (0 = sentinel)
+                or      a
+                jr      z, bl_nf
+                ld      c, a                ; C = entry length
+                ld      a, (BARRIER_SPANLEN)
+                cp      c
+                jr      nz, bl_next         ; length mismatch
+                push    hl                  ; save entry ptr (at length byte)
+                inc     hl                  ; HL -> entry name bytes
+                ld      de, (BARRIER_SPANPTR)
+                ld      b, c
+bl_cmp:
+                ld      a, (de)
+                cp      (hl)
+                jr      nz, bl_cmpfail
+                inc     hl
+                inc     de
+                djnz    bl_cmp
+                ld      a, (hl)             ; all matched: HL -> the CRm byte
+                pop     de                  ; discard saved entry ptr
+                or      a                   ; CY clear: found
+                ret
+bl_cmpfail:
+                pop     hl                  ; restore entry ptr (length byte)
+bl_next:
+                ld      a, (hl)             ; entry length
+                ld      c, a
+                ld      b, 0
+                inc     hl                  ; skip length byte
+                add     hl, bc              ; skip name bytes
+                inc     hl                  ; skip CRm byte
+                jr      bl_loop
+bl_nf:
+                scf
+                ret
+
+; barrier keyword -> CRm (bits 11:8) table: [len:1, name[len], crm:1], 0-terminated.
+; (Port of barrierCRm, parser.go:670-698 / ARM ARM C6.2.73-74,99.)
+barrier_tbl:
+                defb    2
+                defm    "sy"
+                defb    &0f
+                defb    2
+                defm    "st"
+                defb    &0e
+                defb    2
+                defm    "ld"
+                defb    &0d
+                defb    3
+                defm    "ish"
+                defb    &0b
+                defb    5
+                defm    "ishst"
+                defb    &0a
+                defb    5
+                defm    "ishld"
+                defb    &09
+                defb    3
+                defm    "nsh"
+                defb    &07
+                defb    5
+                defm    "nshst"
+                defb    &06
+                defb    5
+                defm    "nshld"
+                defb    &05
+                defb    3
+                defm    "osh"
+                defb    &03
+                defb    5
+                defm    "oshst"
+                defb    &02
+                defb    5
+                defm    "oshld"
+                defb    &01
+                defb    0
 
 ; ===========================================================================
 ; expr_buf_single_imm — if EXPR_BUF..(EXPR_PTR) holds exactly one PUSH_IMMn (the
@@ -3392,6 +3544,10 @@ MOVL_HI16:      defs 2          ; parse_movl: (imm>>16)&0xffff (LE)
 MOVL_HW:        defs 1          ; parse_movl: hw slot for the inst being emitted (0/1)
 MOVL_TMPPTR:    defs 2          ; parse_movl: imm16 source ptr saved across pml_begin_ops
 MOVL_TMPMNEM:   defs 1          ; parse_movl: mnemonic id saved across the operand build
+BARRIER_OPT:    defs 1          ; parse_barrier: 1 if the arg is optional (isb), 0 if mandatory
+BARRIER_CRM:    defs 1          ; parse_barrier: resolved CRm value for the emitted operand
+BARRIER_SPANPTR: defs 2         ; barrier_lookup: saved token span pointer
+BARRIER_SPANLEN: defs 1         ; barrier_lookup: saved token span length
 PARSE_OPSBUF:   defs 256        ; one instruction's operand bytes (staging)
 EXPR_BUF:       defs 256        ; one operand's expression bytecode (build buffer)
 EXPR_PTR:       defs 2          ; expression-bytecode write pointer (into EXPR_BUF)
