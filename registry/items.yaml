@@ -2035,9 +2035,11 @@
   title: Memory-read coverage / generic dead-code finder
   description: |
     Instrument the koron-go/z80 harness to record every byte read (opcode fetch + data load) while running the whole test corpus, then report bytes inside a build's code/data image never touched. Each unread region is a candidate: either genuinely dead (delete, reclaim code window) or a coverage gap (add a fixture). Phase 1 (flat payloads, paging-free): hook mac.Read/opcode-fetch + use .map symbol ranges. Phase 2 (paged binary): trace must record (physical page, offset) and hook the paging port. Exclude known-acceptable-unread ranges via MARKER SYMBOLS from the pyz80 .map — drift-proof.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 570, role: completing}
   refs: [tools/z80-test-harness-go/, i109, i73]
 
 - id: i112

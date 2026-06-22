@@ -284,6 +284,12 @@ type Hardware struct {
 
 	// CPU back-reference (set after construction).
 	cpu *z80.CPU
+
+	// Optional read-coverage recorder (item i111).  When non-nil, every
+	// resolveRead marks the physical (page, offset) it actually touched —
+	// capturing both opcode fetches and data loads, since koron's CPU routes
+	// both through Get -> resolveRead.  nil for normal runs (zero overhead).
+	cov *coverage
 }
 
 // snapshot captures the current CPU register file + paging state.
@@ -408,7 +414,42 @@ func (h *Hardware) resolveWritePage(addr uint16) int {
 
 // Get implements z80.Memory.
 func (h *Hardware) Get(addr uint16) uint8 {
+	if h.cov != nil {
+		// Record the PHYSICAL (page, offset) actually read, resolving through
+		// the current paging exactly as resolveRead does.  Keying on physical
+		// storage (not logical addr) is unambiguous across LMPR/HMPR changes,
+		// which matters because the assembler binary's section-C code is read
+		// at logical &8000.. from physical page 2 regardless of who else maps
+		// that logical window.  ROM reads (read page < 0) are ignored.
+		if page := h.resolveReadPage(addr); page >= 0 {
+			h.cov.mark(page, int(addr&0x3FFF))
+		}
+	}
 	return h.resolveRead(addr)
+}
+
+// resolveReadPage returns the physical RAM page a read of addr resolves to
+// under the current paging, or -1 for a ROM read (ROM is not coverage-tracked).
+// It mirrors resolveRead's section decode.
+func (h *Hardware) resolveReadPage(addr uint16) int {
+	section := addr >> 14
+	switch section {
+	case 0: // Section A
+		if h.lmpr&0x20 == 0 {
+			return -1 // ROM 0
+		}
+		return int(h.lmpr & 0x1F)
+	case 1: // Section B
+		return int((h.lmpr&0x1F + 1) & 0x1F)
+	case 2: // Section C
+		return int(h.hmpr & 0x1F)
+	case 3: // Section D
+		if h.lmpr&0x40 != 0 {
+			return -1 // ROM 1
+		}
+		return int((h.hmpr&0x1F + 1) & 0x1F)
+	}
+	return -1
 }
 
 // Set implements z80.Memory.
@@ -621,6 +662,13 @@ type Config struct {
 	// fixtures that need neither the disassembler nor the sysreg tables).  An
 	// injected FailHGTHD/FailHSAVE failure always errors regardless of this flag.
 	StrictFileNotFound bool
+
+	// EnableCoverage turns on read-coverage recording (item i111): every byte
+	// the run reads (opcode fetch or data load) is marked in the returned
+	// hardware's coverage map, keyed by physical (page, offset).  Off by
+	// default — normal runs pay no overhead.  Retrieve the map via the
+	// *Hardware returned by RunConfigHW.
+	EnableCoverage bool
 }
 
 // TrigResult holds the state captured when Config.TrigPC was first reached.
@@ -635,6 +683,14 @@ type TrigResult struct {
 // RunConfig is the full-control entry point.  It returns the Result plus the
 // windowed PC trace (empty unless Config.TraceHi>Config.TraceLo).
 func RunConfig(cfg Config) (Result, []RegSnapshot, TrigResult) {
+	res, trace, trig, _ := RunConfigHW(cfg)
+	return res, trace, trig
+}
+
+// RunConfigHW is RunConfig plus the underlying *Hardware, so callers can read
+// post-run state the Result doesn't carry — notably the read-coverage map when
+// Config.EnableCoverage is set (item i111's dead-code finder).
+func RunConfigHW(cfg Config) (Result, []RegSnapshot, TrigResult, *Hardware) {
 	hw := newHardware()
 	hw.traceLo, hw.traceHi = cfg.TraceLo, cfg.TraceHi
 	hw.trigPC = cfg.TrigPC
@@ -647,6 +703,9 @@ func RunConfig(cfg Config) (Result, []RegSnapshot, TrigResult) {
 	hw.failHGTHD = cfg.FailHGTHD
 	hw.failHSAVE = cfg.FailHSAVE
 	hw.strictFileNotFound = cfg.StrictFileNotFound
+	if cfg.EnableCoverage {
+		hw.cov = newCoverage()
+	}
 	res := runOn(hw, cfg.AssemblerBin, cfg.EnctabData, cfg.InData, cfg.Files, cfg.Timeout)
 	return res, hw.windowTrace, TrigResult{
 		Hit:        hw.trigHit,
@@ -654,7 +713,7 @@ func RunConfig(cfg Config) (Result, []RegSnapshot, TrigResult) {
 		Backtrace:  hw.trigBT,
 		StepAtTrig: hw.trigStep,
 		Dump:       hw.trigDump,
-	}
+	}, hw
 }
 
 func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedFile, timeout time.Duration) Result {

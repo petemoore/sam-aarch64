@@ -80,3 +80,33 @@ count, and last 30 PCs. For windowed PC/register traces or a trigger-PC
 backtrace use `RunConfig` from Go (`TraceLo`/`TraceHi`, `TrigPC`) — see
 `test_variant_test.go` and `SCOPE.md`. The harness is agent-owned: add
 inspection features (watchpoints, richer dumps) as normal Z80 work.
+
+## Read-coverage / dead-code report (item i111)
+
+`TestCoverageReport` (in `coverage_test.go`) maps which bytes of the
+test-variant `build/assembler.bin` are NEVER read during the run, to find
+dead-code candidates for the &C000 footprint pass (item i205). Run it:
+
+```
+cd tools/z80-test-harness-go
+go test -run TestCoverageReport -v .
+```
+
+It boots the assembler through the full self-test path **and** assembles every
+aarch64 fixture in `tests/{core,operands,format,symbols}/sources/`, recording
+every byte the CPU reads (opcode fetch + data load) via a coverage hook in
+`Hardware.Get` (opt-in: `Config.EnableCoverage`, zero overhead when off — see
+`coverage.go`). It then maps touched bytes back through `build/assembler.sym`
+and prints + writes `build/coverage-report.txt`: a size-ranked list of
+untouched symbol ranges (each a dead-code candidate **or** a coverage gap) plus
+a total reclaimable-bytes estimate.
+
+**Drift-proofing:** symbol ranges that are legitimately never-read on the happy
+path (error-only strings, sentinel equates) are excluded from the reclaimable
+total via a small documented allowlist in `coverage_exclusions.go` — add a
+prefix + reason there to suppress a future false positive.
+
+**Fidelity caveat:** the resident section-C assembler code is not paged, so its
+coverage is faithful; paged off-axis payloads (pages 4, 12–15) are not part of
+`assembler.bin`'s image and are not attributed (correct for the section-C
+budget question). See the `coverage.go` package doc for the full keying model.
