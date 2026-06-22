@@ -2716,10 +2716,12 @@
   title: "B3h — raw SD CMD17 card-absolute list-sector read on ports &DC-&DF (hardware gate for B3)"
   description: |
     Hardware implementation of the card-absolute list-sector read modelled in B3 by the harness hook BD_HOOK_LISTREAD. Implements the SPI command ladder (CMD17 single-block read) on Trinity ports &DC-&DF to read list sectors 1..base-1 directly off the SD card. Not required for B3 emulation; the harness models the returned bytes. Needs final confirmation of the exact SPI init/read sequence on real hardware before building (docs/specs/trinity-record-detection-design.md §8, open-verification-item-1 and §3 frozen-interface principle).
-  status: OPEN
+  status: DONE
   depends_on: [i193, i145c, i145h]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 546, role: completing}
   parent: i119
   refs: [docs/specs/trinity-record-detection-design.md]
 
@@ -3238,6 +3240,7 @@
     PRINCIPLE (Pete, 2026-06-21, REFINED — read before implementing): the goal is NOT to merge the two harnesses into one tool. It is to STOP DUPLICATING the SAM-Coupé emulation IMPLEMENTATION. There must be ONE Go SAM-Coupé emulation core on the koron-go/z80 library — the CPU + memory/paging + IO model (the sampage package, created by i181, is the seed) — that BOTH harnesses USE rather than each carrying its own copy of the same features. The two harnesses MAY stay distinct codebases/packages where they are logically separate and benefit from independence: the assembler harness (tools/z80-test-harness-go) is assembler/disassembler-focused with DOS-hook + printer devices; the netboot harness (tools/netboot-oracle/z80) is netboot-focused with ENC28J60 + EEPROM + trinload. Do NOT force logically-separate tools together. Over-arching rule: don't duplicate implementations — if both share the same underlying emulation library, the problem is resolved.
     CONCRETELY: the LMPR/HMPR paging + ROM write-protect currently exists TWICE — in the assembler harness (resolveRead/resolveWritePage) and, since i181, in sampage (used by the netboot harness). That duplication is what let the dumper's &C000 ROM-paging bug reach hardware (one harness had the model, the other didn't). i190 = make the assembler harness ALSO use the shared core (replace its inline pager with sampage; promote sampage to a location both modules can import) so the paging/memory model is implemented ONCE. Devices (ENC28J60/EEPROM/DOS-hooks/trinload) live where they are used — they are not duplicated, so no merge is needed. The pure-Go protocol oracle (frame/tftp/dhcp) is unaffected. ACCEPTANCE: the SAM CPU+memory+paging+ROM model exists in exactly one place that both harnesses import; both existing test suites pass; the harnesses may remain separate packages/modules.
   status: OPEN
+  depends_on: [q41]
   kind: umbrella
   owner: agent
 
@@ -3246,7 +3249,7 @@
   description: |
     Pete (2026-06-21): SAMBOOT feeds the emulator — once we've captured the patched ROM (i87a/i87a-b2) and the Trinity EEPROM (i87a-b1, done), the shared SAM-emulation core (i190) should load THOSE real artifacts so it emulates the real SAM+Trinity authentically: the actual patched system ROM (ROM0+ROM1) at boot, the real EEPROM contents (the 'Trinity Network ' config + Colin's bootblock) behind the modelled EEPROM SPI device, and Colin's real eeprom.asm read protocol. This turns the test emulator into a faithful model of Pete's actual machine. CONSTRAINT: rom.bin/eeprom.bin are Colin's proprietary, non-redistributable artifacts (kept in ~/sam-archive, never committed) — the emulator LOADS them as local/gitignored fixtures (path via env/flag), with a synthetic fallback for CI where the real bytes are absent (mirroring how i181/dumper_test program known fixtures). Depends on the full ROM extraction (i87a-b2); the EEPROM half is available now.
   status: OPEN
-  depends_on: [i87a-b2]
+  depends_on: [i87a-b2, q41]
   kind: leaf
   owner: agent
   parent: i190
@@ -3313,7 +3316,7 @@
   description: |
     The i121 payoff on real hardware, autonomous: 'start trinload -> push the serve program (push-serve.py) -> tftp put each .mgt disk image (validated size==819200, streamed into a free record + claimed) -> tftp put tftp.done -> return to trinload', then read a stored record back (servable-raw) and byte-compare to confirm the store. Unblocked once the production CSD read lands (i145b, so the server finds free records) and the full experiment is emulation-proven (i145d). Agent-actionable: trinload runs on the SAM (192.168.2.75) over the LAN from the Pi; push via tools/trinload-push/push-serve.py + curl tftp://; the 19 build/*.mgt are valid + staged (/tmp/push-all-disks.sh batches them). NO Pete needed for the push+store+readback; booting a pushed record to watch it run is a downstream nicety (autonomous via i135 auto-boot, or a Pete-present spot-check) and NOT a blocker for this item.
   status: OPEN
-  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141]
+  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198]
   kind: leaf
   owner: agent
 
@@ -3358,3 +3361,12 @@
   kind: leaf
   owner: agent
   parent: i197
+
+- id: i198
+  title: Real CMD24 list-sector WRITE + flip serve/client boot images to the real read+write list path
+  description: |
+    Sibling/integration of i141 (which implemented the real CMD17 list READ, bd_list_read_hw, emulation-proven). For the real-hardware disk push (i194) to find AND claim free records on real Trinity, the boot images must use the real card-absolute list path end-to-end: (1) implement bd_list_write_hw — the raw SD CMD24 single-block WRITE of a list sector on ports &DC-&DF (the i145h model already covers CMD24, sdcard.go), mirroring bd_list_read_hw; (2) gate bdos_claim_record's list write behind the same NETBOOT_REAL_LISTREAD-style flag; (3) flip the serve/client boot images to define the real-list flag so bdos_read_list_sector/the claim write use the real SPI path instead of the BD_HOOK_LISTREAD/LISTWRITE harness scaffold; (4) update/extend the B3 boot-image tests (bdos_claim_name_test, bdos_picker_test) to seed the SD model (SeedSector) rather than the hook, so the claim read-modify-write round-trip is proven through real CMD17+CMD24. Read-only emulation precedent: i141. Hardware verification happens as part of i194's real push. owner:agent.
+  status: OPEN
+  depends_on: [i141]
+  kind: leaf
+  owner: agent
