@@ -857,15 +857,17 @@
   title: "Z80 Pass1-over-IR: PC assignment + label/local position capture + symbol resolution"
   description: |
     Port assemble.Pass1 (tools/sam-aarch64/assemble/pass1.go) to walk the encoder's in-memory IR record stream (INST/DIRECTIVE/LABEL_DEF/LOCAL_DEF/COMMENT/BLANK_RUN as emitted by parse_run) and compute: each record's output PC (INST=4 bytes; .word/.quad/.byte/.skip/.balign/.org/.ltorg PC effects; literal-pool placement), the absolute offset of every LABEL_DEF (name_id->PC) and LOCAL_DEF (digit->PC) for the header tables, and .set/.equ symbol values. Output: a label/local position table + origin VMA, the input headerRows + the assembler both consume. Flat-memory-autonomous; harness-test a new entry that feeds an IR record buffer and compares the resolved positions vs host Pass1.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 557, role: completing}
   parent: i48c-b8
 
 - id: i48c-b8b
   title: "Z80 Compact: IR records -> compact overlay records + sidecar + globals"
   description: |
-    Port assemble.Compact (tools/sam-aarch64/assemble/compact.go) to rewrite the encoder's IR record stream into the compact v2 record stream: each INST -> a KindInsnRun element (fully-literal PC-invariant instruction as a bare 4-byte word; symbol/PC-bearing instruction as base word with relocated field zeroed + {slot,expr} overlay patch, via the pcProbeA/pcProbeB literal guard); same-directive constant data coalesces to KindLitData (<=1016 byte cap); COMMENT/BLANK_RUN records relocate to tagged editor-region sidecar rows anchored to output PC; .global directives -> a name_id list. Consumes b8a's PC/position info. Harness-test the compacted record bytes vs host Compact over fixtures.
+    Port assemble.Compact (tools/sam-aarch64/assemble/compact.go) to rewrite the encoder's IR record stream into the compact v2 record stream: each INST -> a KindInsnRun element (fully-literal PC-invariant instruction as a bare 4-byte word; symbol/PC-bearing instruction as base word with relocated field zeroed + {slot,expr} overlay patch, via the pcProbeA/pcProbeB literal guard); same-directive constant data coalesces to KindLitData (<=1016 byte cap); COMMENT/BLANK_RUN records relocate to tagged editor-region sidecar rows anchored to output PC; .global directives -> a name_id list. Consumes b8a's PC/position info. Harness-test the compacted record bytes vs host Compact over fixtures. NOTE (b8a PR #557): b8a's flat harness re-ported pass1.go's directive PC sizing (pass1_dir_*) rather than reuse main_loop.asm compute_directive_size (which drags in the paged assembler). When wiring the integrated path, reconcile which directive sizer the real build uses so the two don't drift.
   status: OPEN
   depends_on: [i48c-b8a]
   kind: leaf
@@ -885,7 +887,7 @@
 - id: i48c-b8d
   title: "Corpus round-trip integration: text -> compact .tbn on SAM byte-matches host (+optionally assemble to OUT)"
   description: |
-    The lands-last wiring: drive the full SAM pipeline text -> lex(asmlex) -> parse(asmparse) -> Pass1-over-IR(b8a) -> Compact(b8b) -> serialize(b8c) over the fixture corpus and assert the produced compact v2 .tbn bytes byte-match the host CompactTBNBytes output (the m9 i48c done-criterion: text->overlay byte-match host for the corpus). Optionally feed the produced .tbn through the existing assembler reader+pass1/pass2 to OUT bytes and compare to the host-assembled output, closing text->bytes end-to-end. Wire a corpus-driven harness test (and, if it fits the boot budget, a SimCoupe self-test).
+    The lands-last wiring: drive the full SAM pipeline text -> lex(asmlex) -> parse(asmparse) -> Pass1-over-IR(b8a) -> Compact(b8b) -> serialize(b8c) over the fixture corpus and assert the produced compact v2 .tbn bytes byte-match the host CompactTBNBytes output (the m9 i48c done-criterion: text->overlay byte-match host for the corpus). Optionally feed the produced .tbn through the existing assembler reader+pass1/pass2 to OUT bytes and compare to the host-assembled output, closing text->bytes end-to-end. Wire a corpus-driven harness test (and, if it fits the boot budget, a SimCoupe self-test). ARCHITECTURE CONSTRAINT (found in b8a, PR #557): the parser tables (asmparse SYM_NAMES/PARSE_RECS) and the assembler pass-1 tables (assembler.asm OPVAL_ARRAY/PASS_PC@&C159/LITPOOL@&D200/LOCAL_LABEL_TABLE@&E280) BOTH claim the &C100-&EFFF scratch region, so the full text->.tbn chain cannot run in one flat binary with today's layout. b8a side-stepped this by producing the IR host-side; b8d (and the real SAM editor) must resolve the memory layout (relocate/page one stage's tables) so parse_run + pass1 + compact + serialize coexist. This is the integrated-build memory-model question (relates to q36).
   status: OPEN
   depends_on: [i48c-b8c]
   kind: leaf
