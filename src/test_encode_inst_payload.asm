@@ -283,6 +283,92 @@ enc_fix_table:
                 defb    3
                 defw    23
                 defb    &41, &00, &18, &37
+; i201a compound-operand fixtures (shifted-reg + extended-reg)
+                defw    &0000
+                defw    enc_fix_sr_add_lsl3             ; add x0,x1,x2,lsl#3
+                defb    3
+                defw    1
+                defb    &20, &0c, &02, &8b
+                defw    &0000
+                defw    enc_fix_sr_sub_lsr7             ; sub x3,x4,x5,lsr#7
+                defb    3
+                defw    2
+                defb    &83, &1c, &45, &cb
+                defw    &0000
+                defw    enc_fix_sr_and_asr2             ; and w6,w7,w8,asr#2
+                defb    3
+                defw    14
+                defb    &e6, &08, &88, &0a
+                defw    &0000
+                defw    enc_fix_sr_orr_ror15            ; orr x9,x10,x11,ror#15
+                defb    3
+                defw    15
+                defb    &49, &3d, &cb, &aa
+                defw    &0000
+                defw    enc_fix_sr_eor_lsl0             ; eor x12,x13,x14,lsl#0
+                defb    3
+                defw    16
+                defb    &ac, &01, &0e, &ca
+                defw    &0000
+                defw    enc_fix_sr_bic_lsl0             ; bic x0,x1,x2,lsl#0
+                defb    3
+                defw    47
+                defb    &20, &00, &22, &8a
+                defw    &0000
+                defw    enc_fix_sr_subs_lsl0            ; subs x3,x4,x5,lsl#0
+                defb    3
+                defw    45
+                defb    &83, &00, &05, &eb
+                defw    &0000
+                defw    enc_fix_sr_ands_lsl0            ; ands w0,w1,w2,lsl#0
+                defb    3
+                defw    80
+                defb    &20, &00, &02, &6a
+                defw    &0000
+                defw    enc_fix_coerce_add3             ; add x0,x1,x2 (3-reg coercion)
+                defb    3
+                defw    1
+                defb    &20, &00, &02, &8b
+                defw    &0000
+                defw    enc_fix_coerce_sub3             ; sub w3,w4,w5 (3-reg coercion W)
+                defb    3
+                defw    2
+                defb    &83, &00, &05, &4b
+                defw    &0000
+                defw    enc_fix_coerce_tst2x            ; tst x0,x1 (2-reg coercion X)
+                defb    2
+                defw    46
+                defb    &1f, &00, &01, &ea
+                defw    &0000
+                defw    enc_fix_coerce_tst2w            ; tst w2,w3 (2-reg coercion W)
+                defb    2
+                defw    46
+                defb    &5f, &00, &03, &6a
+                defw    &0000
+                defw    enc_fix_sr_tst_lsl3             ; tst x0,x1,lsl#3 (explicit ShiftedReg)
+                defb    2
+                defw    46
+                defb    &1f, &0c, &01, &ea
+                defw    &0000
+                defw    enc_fix_er_add_uxtw2            ; add x0,x1,w2,uxtw#2
+                defb    3
+                defw    1
+                defb    &20, &48, &22, &8b
+                defw    &0000
+                defw    enc_fix_er_add_sxtx1            ; add x3,x4,x5,sxtx#1
+                defb    3
+                defw    1
+                defb    &83, &e4, &25, &8b
+                defw    &0000
+                defw    enc_fix_er_sub_uxtb0            ; sub x6,x7,w8,uxtb#0
+                defb    3
+                defw    2
+                defb    &e6, &00, &28, &cb
+                defw    &0000
+                defw    enc_fix_er_sub_sxth3            ; sub x9,x10,x11,sxth#3
+                defb    3
+                defw    2
+                defb    &49, &ad, &2b, &cb
 ; sentinel: fixture ptr 0 terminates the table
                 defw    &0000
                 defw    0
@@ -344,6 +430,42 @@ enc_fix_ldr_x:     defb &01, &00, &05, &03, &00, &02, &08, &10
 enc_fix_ldr_w:     defb &02, &01, &05, &03, &00, &02, &10, &10
 enc_fix_tbz:       defb &01, &00, &05, &02, &00, &01, &05, &05, &03, &00, &02, &10, &10
 enc_fix_tbnz:      defb &02, &01, &05, &02, &00, &01, &03, &05, &03, &00, &02, &08, &10
+
+; i201a compound-operand fixture operand streams (exact Go OperandWriter bytes)
+; add x0,x1,x2,lsl#3: Rd=x0, Rn=x1, ShiftedReg(X,Rm=2,LSL,amt=3)
+enc_fix_sr_add_lsl3:    defb    &01, &00, &01, &01, &06, &01, &02, &00, &02, &00, &01, &03
+; sub x3,x4,x5,lsr#7: Rd=x3, Rn=x4, ShiftedReg(X,Rm=5,LSR,amt=7)
+enc_fix_sr_sub_lsr7:    defb    &01, &03, &01, &04, &06, &01, &05, &01, &02, &00, &01, &07
+; and w6,w7,w8,asr#2: Rd=w6, Rn=w7, ShiftedReg(W,Rm=8,ASR,amt=2)
+enc_fix_sr_and_asr2:    defb    &02, &06, &02, &07, &06, &00, &08, &02, &02, &00, &01, &02
+; orr x9,x10,x11,ror#15: Rd=x9, Rn=x10, ShiftedReg(X,Rm=11,ROR,amt=15)
+enc_fix_sr_orr_ror15:   defb    &01, &09, &01, &0a, &06, &01, &0b, &03, &02, &00, &01, &0f
+; eor x12,x13,x14,lsl#0: Rd=x12, Rn=x13, ShiftedReg(X,Rm=14,LSL,amt=0)
+enc_fix_sr_eor_lsl0:    defb    &01, &0c, &01, &0d, &06, &01, &0e, &00, &02, &00, &01, &00
+; bic x0,x1,x2,lsl#0: Rd=x0, Rn=x1, ShiftedReg(X,Rm=2,LSL,amt=0) N=1
+enc_fix_sr_bic_lsl0:    defb    &01, &00, &01, &01, &06, &01, &02, &00, &02, &00, &01, &00
+; subs x3,x4,x5,lsl#0
+enc_fix_sr_subs_lsl0:   defb    &01, &03, &01, &04, &06, &01, &05, &00, &02, &00, &01, &00
+; ands w0,w1,w2,lsl#0
+enc_fix_sr_ands_lsl0:   defb    &02, &00, &02, &01, &06, &00, &02, &00, &02, &00, &01, &00
+; add x0,x1,x2 (3-reg coercion -> LSL#0)
+enc_fix_coerce_add3:    defb    &01, &00, &01, &01, &01, &02
+; sub w3,w4,w5 (3-reg coercion W -> LSL#0)
+enc_fix_coerce_sub3:    defb    &02, &03, &02, &04, &02, &05
+; tst x0,x1 (2-reg coercion X -> ShiftedReg LSL#0, Rd=xzr)
+enc_fix_coerce_tst2x:   defb    &01, &00, &01, &01
+; tst w2,w3 (2-reg coercion W -> ShiftedReg LSL#0)
+enc_fix_coerce_tst2w:   defb    &02, &02, &02, &03
+; tst x0,x1,lsl#3 (explicit ShiftedReg operand on tst)
+enc_fix_sr_tst_lsl3:    defb    &01, &00, &06, &01, &01, &00, &02, &00, &01, &03
+; add x0,x1,w2,uxtw#2: ExtendedReg(W,Rm=2,UXTW,amt=2)
+enc_fix_er_add_uxtw2:   defb    &01, &00, &01, &01, &07, &00, &02, &02, &02, &00, &01, &02
+; add x3,x4,x5,sxtx#1: ExtendedReg(X,Rm=5,SXTX,amt=1)
+enc_fix_er_add_sxtx1:   defb    &01, &03, &01, &04, &07, &01, &05, &07, &02, &00, &01, &01
+; sub x6,x7,w8,uxtb#0: ExtendedReg(W,Rm=8,UXTB,amt=0)
+enc_fix_er_sub_uxtb0:   defb    &01, &06, &01, &07, &07, &00, &08, &00, &02, &00, &01, &00
+; sub x9,x10,x11,sxth#3: ExtendedReg(X,Rm=11,SXTH,amt=3)
+enc_fix_er_sub_sxth3:   defb    &01, &09, &01, &0a, &07, &01, &0b, &05, &02, &00, &01, &03
 
 ; Total payload size: the LDIR in run_encode_inst_self_tests uses this
 ; count as BC.  Computed by the assembler so no manual update is needed
