@@ -608,6 +608,37 @@ flash (i135c) should proceed**, until the boot is traced in emulation. Tracked:
 i197 split into the completed static-RE leaf and an emulation-validation leaf
 gated on i190a; i135c remains blocked on the i197 umbrella.
 
+### 7.5 The boot traced in emulation (i190a) — §7.4 point 1 resolved, point 2 pinned
+
+i190a loads the real captured `rom.bin` + `eeprom.bin` into the netboot emulation
+core (the faithful `sampage` pager + the Trinity EEPROM SPI model) and boots the
+patched ROM **from reset (PC=0)** — the authentic boot, no flat shortcut, no
+HOSTTEST carve-out (`tools/netboot-oracle/z80/samboot_real_boot_test.go`). The
+trace settles §7.4:
+
+- **Point 1 — which artifact runs at `&4000`: chunk 1, NOT the `&0000` bootblock.**
+  The boot follows the documented path in order — stock ROM init → the `&ED1B`
+  Trinity probe (which stores the `'T'` marker at `&4000`) → report `&50` → the
+  `&0F7F` fetch (LMPR=`&5F`, EEPROM-enable, read 1024 B from device `&002000` into
+  `&4000`) → `JP &4000`. The 1024 bytes landed at `&4000` are **byte-for-byte
+  EEPROM `&002000..&0023FF`** (chunk 1, first byte `&E3` = `EX (SP),HL`), not the
+  coherent `&0000` bootblock (`&DB &FA` = `IN A,(&FA)`). So the ROM really does run
+  the chunk-1 routine library, exactly as §7.3 read it — the `&0000` bootblock is
+  **dormant on this card's boot path**. The SAMBOOT injection therefore belongs on
+  the **ROM-loaded chunk-1 path that executes at `&4000`**, not the `&0000` block.
+
+- **Point 2 — the section-B gap is real and now concrete.** Execution at `&4000`
+  immediately runs chunk-1's prologue `EX (SP),HL; PUSH DE; CALL &5C26`, and
+  `&5C26` is **uninitialised (zero) RAM** — this single-stage path never loads
+  section B (`&4000-&7FFF`), so the `CALL` lands in a zero sled. That is the direct
+  evidence of the missing **runtime multi-stage / paging load** the static trace
+  could only hypothesise: either a stage we have not yet captured populates section
+  B before chunk 1 runs, **or** `rom.bin` and `eeprom.bin` were captured from
+  different machine states. Distinguishing the two is the remaining i197c step
+  (a re-capture of the running card is the hardware cross-check). The emulator now
+  makes this observable and re-runnable; the test pins `&5C26 == 0x00` so any change
+  to that assumption (a future stage populating section B) trips the guard.
+
 ---
 
 ## Sources

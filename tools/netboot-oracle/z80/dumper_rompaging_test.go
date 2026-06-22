@@ -27,8 +27,8 @@
 //
 // Emulation-verified is not hardware-verified (CLAUDE.md §5): these prove the
 // paging logic; the captured ROM bytes themselves are still hardware-gated
-// (i87a/i87b), and i190a will load the real extracted ROM in place of these
-// synthetic fixtures.
+// (i87a/i87b). The real extracted ROM + EEPROM now boot in this same core via
+// samboot_real_boot_test.go (i190a), the boot-trace prerequisite for i197c.
 package z80_test
 
 import (

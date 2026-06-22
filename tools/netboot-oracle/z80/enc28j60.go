@@ -461,6 +461,18 @@ func (e *ENC28J60) ProgramNamedChunk(value int, name string, data []byte) {
 	e.ProgramChunk(value, data)
 }
 
+// LoadEEPROMImage replaces the flash EEPROM backing store with a verbatim raw
+// image — the whole captured device, byte 0 = device address 0 (the EEPROM SPI
+// READ protocol addresses the flat store directly; eeprom.go). This is the i190a
+// entry: load the REAL captured ~/sam-archive/samboot-capture/eeprom.bin so the
+// real patched-ROM boot fetch (which reads device address &002000 into &4000)
+// pulls Colin's actual bytes, not a synthetic chunk. The image is copied, so the
+// caller's slice is not retained. Pair with Machine.Pager().ROM = rom.bin to run
+// the real boot end-to-end (samboot_real_boot_test.go).
+func (e *ENC28J60) LoadEEPROMImage(image []byte) {
+	e.eep.store = append([]byte(nil), image...)
+}
+
 // ProgramChunk lays a 1 KB data chunk at the flat EEPROM address eeprom.asm's
 // read_chunk reads for chunk number n (the value passed in `value`). get_chunk
 // maps n to flat address (28 + n*4)<<8, so chunk n lives n*1024 bytes above
