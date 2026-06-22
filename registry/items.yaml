@@ -1356,10 +1356,12 @@
   title: "SAMBOOT: document the SAM boot chain from the captured ROM/EEPROM + public source"
   description: |
     Diff rom.bin vs stock SAM ROM 3.0, confirm the EEPROM bootblock matches the public reproduction, and document the chip->bootblock->B-DOS handoff + where the injection hook attaches.
-  status: OPEN
+  status: DONE
   depends_on: [i87a-b1, i135a, i87a-b2]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 543, role: completing}
   parent: i87
   refs: [docs/specs/samboot.md]
 
@@ -2637,7 +2639,7 @@
   description: |
     Flash the prototyped patched EEPROM to Pete's Trinity via write_chunk, keeping the captured EEPROM as the restore backup; power-cycle and confirm unattended auto-boot of the configured record. Hardware (Pete).
   status: OPEN
-  depends_on: [i135d, i87a-b1, i87b]
+  depends_on: [i135d, i87a-b1, i87b, i197]
   kind: leaf
   owner: pete
   parent: i135
@@ -3325,3 +3327,13 @@
   owner: agent
   prs:
     - {num: 538, role: completing}
+
+- id: i197
+  title: "SAMBOOT: RE the captured on-card bootblock + re-derive the real injection hook (public boot.asm differs)"
+  description: |
+    i87b found the captured on-card EEPROM chunk-1 bootblock (the blob the patched ROM reads from EEPROM addr &002000 into &4000 and runs) does NOT byte-match the public LongSteve/z80 boot.asm reproduction — it is Colin's actual production build (the boot.asm start:/banner/TODO signatures are absent). The i135d injection prototype (DONE, PR #494) was built against the PUBLIC boot.asm TODO hook, so it does not directly apply to Pete's card. Reverse-engineer Colin's actual bootblock from ~/sam-archive/samboot-capture/eeprom.bin (chunk 1 @ &002000, ORG &4000; disassemble with z80dis), confirm the real EEPROM chunk layout (the public-doc 64-byte-header model also did not parse cleanly), locate the real boot-a-record injection site + free space, and re-validate the injection (stripes + BIOS config + boot-record) against the real build in emulation before any flash. Offline, read-only; never commit Colin's proprietary artifacts. owner:agent.
+  status: OPEN
+  depends_on: [i87b]
+  kind: leaf
+  owner: agent
+  refs: [docs/notes/samboot-bootblock-analysis.md, docs/specs/samboot.md]
