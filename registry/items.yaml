@@ -799,9 +799,11 @@
   title: ldr = literal-pool pseudo (OpLitPool)
   description: |
     Parse ldr= pseudo-instruction: captures the pool-value expression into an OpLitPool operand for later literal-pool placement and PC-relative load emission.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 552, role: completing}
   parent: i48c
   refs: [src/asmparse.asm, tools/sam-aarch64/frontend/parser.go]
 

@@ -308,6 +308,8 @@ parse_inst:
                 jp      z, parse_dc         ; B5e: dc <op>, Xt
                 cp      MNEM_TLBI
                 jp      z, parse_tlbi       ; B5e: tlbi <op>[, Xt]
+                cp      MNEM_LDR
+                jp      z, parse_ldr        ; B5f: ldr Rn, =expr literal-pool pseudo
 pi_loop:
                 ld      hl, (PARSE_TOK)
                 ld      a, (hl)
@@ -1033,6 +1035,89 @@ pdt_has_xt:
                 jp      pi_emit
 
 ; ===========================================================================
+; parse_ldr — B5f special-form parse for the `ldr <Xn|Wn>, =<expr>` literal-pool
+; pseudo-instruction. (Port of tryParseLdrLitPool, parser.go:975-1021.) The shape
+; is recognised by peeking three tokens WITHOUT consuming — an X/W register, a
+; comma, then `=`. On a match it emits [reg][OP_KIND_LIT_POOL, width, expr] where
+; width is 8 (X) or 4 (W) and the expr is the constant-folded pool value. Any
+; other shape (memory addressing, PC-relative literal, etc.) is NOT this pseudo:
+; we fall through to pi_loop and let the generic operand parser handle the `ldr`
+; like any other instruction — matching the Go's (false, nil) return. Entry (from
+; parse_inst dispatch): PI_MNEMID=ldr, PI_OPSPTR=PARSE_OPSBUF, PI_COUNT=0,
+; mnemonic consumed. Exit: one INST record (CY clear via pi_emit); else pi_err.
+; ===========================================================================
+parse_ldr:
+                ; Peek op0: must be a register-name identifier.
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_IDENT
+                jp      nz, pi_loop         ; not an ident -> generic ldr
+                inc     hl
+                ld      e, (hl)
+                inc     hl
+                ld      d, (hl)             ; DE = span_ptr
+                inc     hl
+                ld      a, (hl)             ; A = span_len low (reg names < 256)
+                ex      de, hl              ; HL = span_ptr
+                call    match_reg           ; CY = is-reg, B = kind, C = reg
+                jp      nc, pi_loop         ; not a register -> generic ldr
+                ; Require X or W kind (not XSP/WSP).
+                ld      a, b
+                cp      OP_KIND_REG_X
+                jr      z, pl_kind_ok
+                cp      OP_KIND_REG_W
+                jp      nz, pi_loop         ; SP forms -> generic ldr
+pl_kind_ok:
+                ld      a, b
+                ld      (POR_KIND), a       ; save destination register kind
+                ld      a, c
+                ld      (POR_REG), a        ; save destination register number
+                ; Peek op1 head: token after the register must be a comma.
+                ld      hl, (PARSE_TOK)
+                ld      de, TOK_REC_SIZE
+                add     hl, de              ; HL -> tok1
+                ld      a, (hl)
+                cp      TOK_COMMA
+                jp      nz, pi_loop         ; no comma -> generic ldr
+                ; Peek the token after the comma: must be `=`.
+                add     hl, de              ; HL -> tok2
+                ld      a, (hl)
+                cp      TOK_EQUALS
+                jp      nz, pi_loop         ; not `=expr` -> generic ldr
+                ; Commit: emit the destination register operand, then consume
+                ; the reg, comma and `=` tokens (3 tokens).
+                ld      hl, (PI_OPSPTR)
+                ld      a, (POR_KIND)
+                ld      (hl), a             ; operand kind
+                inc     hl
+                ld      a, (POR_REG)
+                ld      (hl), a             ; register number
+                inc     hl
+                ld      (PI_OPSPTR), hl
+                call    parse_advance_tok   ; consume register
+                call    parse_advance_tok   ; consume comma
+                call    parse_advance_tok   ; consume `=`
+                ; Parse the pool-value expression (minPrec 0), constant-fold it.
+                ld      hl, EXPR_BUF
+                ld      (EXPR_PTR), hl
+                xor     a                   ; minPrec = 0
+                call    parse_expr_prec
+                jp      c, pi_err
+                call    expr_fold           ; collapse a pure-constant stream
+                ; width = 8 (X destination) or 4 (W destination).
+                ld      a, (POR_KIND)
+                cp      OP_KIND_REG_W
+                ld      a, 8
+                jr      nz, pl_have_width
+                ld      a, 4
+pl_have_width:
+                ld      (LITPOOL_WIDTH), a
+                call    emit_litpool_operand
+                ld      a, 2
+                ld      (PI_COUNT), a
+                jp      pi_emit
+
+; ===========================================================================
 ; expr_buf_single_imm — if EXPR_BUF..(EXPR_PTR) holds exactly one PUSH_IMMn (the
 ; folded-constant form produced by expr_fold), load its sign-extended int64 into
 ; IMM_VAL and return CY clear. Otherwise (a symbolic/raw bytecode stream, or a
@@ -1439,6 +1524,42 @@ emit_imm_expr_operand:
                 jr      z, eieo_nocopy      ; (defensive) zero-length expr
                 ldir                        ; copy expr bytes; DE -> end
 eieo_nocopy:
+                ld      (PI_OPSPTR), de
+                ret
+
+; ===========================================================================
+; emit_litpool_operand — append an OP_KIND_LIT_POOL operand at (PI_OPSPTR)
+; carrying the expression bytecode currently in EXPR_BUF..(EXPR_PTR):
+; [OP_KIND_LIT_POOL, width:1, expr_len:2 LE, expr[]]. width is taken from
+; (LITPOOL_WIDTH) (4 for a W destination, 8 for X). Advances (PI_OPSPTR) past the
+; new operand. (Port of OperandWriter.WriteLitPool, operands.go:213.) Clobbers
+; A/BC/DE/HL.
+; ===========================================================================
+emit_litpool_operand:
+                ; expr_len = EXPR_PTR - EXPR_BUF
+                ld      hl, (EXPR_PTR)
+                ld      de, EXPR_BUF
+                or      a
+                sbc     hl, de
+                ld      b, h
+                ld      c, l                ; BC = expr byte length
+                ld      hl, (PI_OPSPTR)
+                ld      (hl), OP_KIND_LIT_POOL
+                inc     hl
+                ld      a, (LITPOOL_WIDTH)
+                ld      (hl), a             ; width (4 or 8)
+                inc     hl
+                ld      (hl), c             ; expr_len low
+                inc     hl
+                ld      (hl), b             ; expr_len high
+                inc     hl
+                ex      de, hl              ; DE = operand dest (after the header)
+                ld      hl, EXPR_BUF        ; HL = source bytecode
+                ld      a, b
+                or      c
+                jr      z, elpo_nocopy      ; (defensive) zero-length expr
+                ldir                        ; copy expr bytes; DE -> end
+elpo_nocopy:
                 ld      (PI_OPSPTR), de
                 ret
 
@@ -3698,6 +3819,7 @@ BARRIER_CRM:    defs 1          ; parse_barrier: resolved CRm value for the emit
 BARRIER_SPANPTR: defs 2         ; barrier_lookup: saved token span pointer
 BARRIER_SPANLEN: defs 1         ; barrier_lookup: saved token span length
 DCTLBI_XTOPT:   defs 1          ; parse_dc_tlbi: 1 if the Xt operand is optional (tlbi), 0 if mandatory (dc)
+LITPOOL_WIDTH:  defs 1          ; parse_ldr: pool-entry width (4 for W dest, 8 for X dest)
 PARSE_OPSBUF:   defs 256        ; one instruction's operand bytes (staging)
 EXPR_BUF:       defs 256        ; one operand's expression bytecode (build buffer)
 EXPR_PTR:       defs 2          ; expression-bytecode write pointer (into EXPR_BUF)
