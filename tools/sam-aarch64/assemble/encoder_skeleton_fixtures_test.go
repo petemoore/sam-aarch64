@@ -175,6 +175,22 @@ func TestEncoderSkeletonFixtures(t *testing.T) {
 		{"dmb_11", "dmb", 0, func(w *format.OperandWriter) {
 			w.WriteImmExpr(immExpr(11))
 		}, 1},
+		// --- i203c special forms: mrs / msr / dc / tlbi (sysreg) ---
+		{"mrs_x0_midr", "mrs", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteSysName("midr_el1")
+		}, 2},
+		{"msr_daifset_2", "msr", 0, func(w *format.OperandWriter) {
+			w.WriteSysName("daifset")
+			w.WriteImmExpr(immExpr(2))
+		}, 2},
+		{"dc_cvac_x0", "dc", 0, func(w *format.OperandWriter) {
+			w.WriteSysName("cvac")
+			w.WriteReg(format.OpRegX, 0)
+		}, 2},
+		{"tlbi_vmalle1", "tlbi", 0, func(w *format.OperandWriter) {
+			w.WriteSysName("vmalle1")
+		}, 1},
 	}
 
 	for _, fx := range fixtures {

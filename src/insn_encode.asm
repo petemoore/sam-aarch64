@@ -79,6 +79,7 @@ OPK_REG_X:      equ     &01     ; REG_X  (is64 marker)
 OPK_REG_W:      equ     &02     ; REG_W  (32-bit marker)
 OPK_IMM_EXPR:   equ     &05
 OPK_COND:       equ     &0a
+OPK_SYS_NAME:   equ     &0b     ; OpSysName (mrs/msr/dc/tlbi name operand)
 
 ; Self-test fail tags.
 ENC_TAG_NOFORM:    equ  &e5
@@ -109,11 +110,12 @@ enc_kinds_loop:
 enc_after_kinds:
 
 ; -- Special-form intercepts (mirror Go pass2.go:337-353 switch) --------
-; lsl/lsr (17/18), bitfield (49/50/51/83/84), csetm (52) and the
-; barriers isb/dsb/dmb (66/67/68) bypass the form table unconditionally;
-; ror (70) and bic (47) only when their 3rd operand is an immediate (the
-; reg forms -> RORV / BIC-shifted-reg go through the form table).  All
-; other mnemonics fall through to the generic form-table path below.
+; lsl/lsr (17/18), bitfield (49/50/51/83/84), csetm (52), the barriers
+; isb/dsb/dmb (66/67/68) and the sysreg ops mrs/msr/dc/tlbi (76/77/78/79)
+; bypass the form table unconditionally; ror (70) and bic (47) only when
+; their 3rd operand is an immediate (the reg forms -> RORV / BIC-shifted-
+; reg go through the form table).  All other mnemonics fall through to
+; the generic form-table path below.
                 ld      a, (enc_mnem + 1)
                 or      a
                 jr      nz, enc_after_special       ; id >= 256: never special
@@ -140,6 +142,14 @@ enc_after_kinds:
                 jp      z, enc_barrier
                 cp      68
                 jp      z, enc_barrier
+                cp      76
+                jp      z, enc_sysname
+                cp      77
+                jp      z, enc_sysname
+                cp      78
+                jp      z, enc_sysname
+                cp      79
+                jp      z, enc_sysname
                 cp      70
                 jr      z, enc_special_imm2         ; ror: needs imm op[2]
                 cp      47
@@ -291,6 +301,8 @@ enc_skip_operand:
                 jr      z, enc_skip_imm
                 cp      OPK_COND
                 jr      z, enc_skip_one
+                cp      OPK_SYS_NAME                ; len-prefixed, like imm
+                jr      z, enc_skip_imm
                 cp      OPK_IMM_EXPR
                 jp      nc, enc_fail_unsupported_operand
                 or      a
@@ -706,6 +718,101 @@ enc_barrier_crm:
                 ld      d, &d5
                 ret
 
+; -- enc_sysname — mrs/msr/dc/tlbi: stage stream -> OPVAL_ARRAY, reuse ---
+; the proven sysname encoders (sysname.asm).  Those read OPVAL_ARRAY +
+; main_op_count and resolve names through the paged sysreg tables
+; (sysname_lookup_* snapshot/restore the live LMPR, so this composes with
+; the ENCTAB window encode_inst runs in).  They return DE:HL with the
+; same byte order encode_inst yields (L=byte0..D=byte3), so we tail-call.
+;
+; Port of pass2.go::encodeMrs/encodeMsr/encodeDc/encodeTlbi — the per-name
+; field math lives in the existing encoders; this is the stream->OPVAL
+; staging the .tbn path's parser does on the other side.
+enc_sysname:
+                ld      hl, OPVAL_ARRAY             ; wipe the entries we touch
+                ld      b, 30
+                xor     a
+enc_sn_wipe:
+                ld      (hl), a
+                inc     hl
+                djnz    enc_sn_wipe
+                ld      a, (enc_op_count)
+                ld      (main_op_count), a
+                or      a
+                jp      z, enc_sn_dispatch
+                ld      (enc_remaining), a
+                ld      hl, (enc_op_ptr)
+                ld      ix, OPVAL_ARRAY
+enc_sn_loop:
+                ld      a, (hl)                     ; operand kind
+                ld      (ix + 0), a
+                cp      OPK_SYS_NAME
+                jr      z, enc_sn_name
+                cp      OPK_IMM_EXPR
+                jr      z, enc_sn_imm
+; register / cond: single payload byte -> OPVAL[i]+1.
+                inc     hl
+                ld      a, (hl)
+                ld      (ix + 1), a
+                inc     hl
+                jr      enc_sn_next
+enc_sn_name:
+; [0b][len_lo][len_hi][name bytes]: store name ptr -> +2/+3, len -> +4/+5.
+                inc     hl
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)                     ; BC = name length
+                inc     hl                          ; HL -> name bytes
+                ld      (ix + 4), c
+                ld      (ix + 5), b
+                ld      (ix + 2), l
+                ld      (ix + 3), h
+                add     hl, bc                      ; skip the name bytes
+                jr      enc_sn_next
+enc_sn_imm:
+; [05][len_lo][len_hi][expr]: eval -> expr_result, copy 8 LE bytes -> +2.
+                push    hl                          ; operand start
+                inc     hl
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)                     ; BC = expr length
+                inc     hl
+                add     hl, bc                      ; HL -> next operand
+                ld      (enc_sn_next_ptr), hl
+                pop     hl                          ; HL -> operand start
+                push    ix
+                call    enc_eval_at                 ; -> expr_result
+                pop     ix
+                push    ix
+                pop     de
+                inc     de
+                inc     de                          ; DE = OPVAL[i]+2
+                ld      hl, expr_result
+                ld      b, 8
+enc_sn_imm_cp:
+                ld      a, (hl)
+                ld      (de), a
+                inc     hl
+                inc     de
+                djnz    enc_sn_imm_cp
+                ld      hl, (enc_sn_next_ptr)
+enc_sn_next:
+                ld      de, OPVAL_STRIDE
+                add     ix, de
+                ld      a, (enc_remaining)
+                dec     a
+                ld      (enc_remaining), a
+                jp      nz, enc_sn_loop
+enc_sn_dispatch:
+                ld      a, (enc_mnem)
+                cp      76
+                jp      z, encode_mrs_word
+                cp      77
+                jp      z, encode_msr_word
+                cp      78
+                jp      z, encode_dc_word
+                jp      encode_tlbi_word            ; 79
+
 ; -- enc_rd_width — HL -> Rd operand; set enc_regmask (63/31) + enc_rd ---
 ; is64 iff Rd kind != OpRegW.  Preserves nothing; returns with HL past Rd.
 enc_rd_width:
@@ -848,5 +955,6 @@ enc_shift:      defb    0
 enc_lsb:        defb    0
 enc_width:      defb    0
 enc_op2ptr:     defw    0
+enc_sn_next_ptr: defw   0
 enc_base:       defb    0, 0, 0, 0
 enc_word:       defb    0, 0, 0, 0
