@@ -2794,7 +2794,7 @@
   title: "Ship the CSD read in the boot image: page it out of the &C000 window (ENCTAB-style) so BD_RECORDS computes at boot"
   description: |
     The remaining work to actually CLOSE the hardware gap (BD_RECORDS=0 on real HW). i145b-b1's CSD-read+decode module (sd_csd.asm) is proven but gated off because it overflows the &C000 boot window by ~460-490 bytes. Ship it by paging the module out of section C (mirror the ENCTAB COMET-trampoline page-out, which already pages a payload out of the &C000 window), or a section-D overlay, so serve_main/client_main compute BD_RECORDS at boot within budget. Un-gate NETBOOT_CSD_BDRECORDS once it fits, and add an integration test that runs the un-gated serve_main path (not just the standalone fixture). The ENCTAB trampoline is the likely pattern to mirror (agent-actionable); raise a qN if the page-out approach needs a genuinely new design choice. The boot-budget is becoming a systemic constraint (multiple features need the window) — consider whether a general overlay mechanism is warranted. owner:agent.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i145b-b1]
   kind: leaf
   owner: agent
