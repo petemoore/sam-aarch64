@@ -2540,9 +2540,9 @@
 - id: i122d
   title: "sha256-dedup-before-fetch: skip fetch + boot existing copy if content hash already on card"
   description: |
-    i122 brick 4: idempotent fetch. Before fetching, compute the image's content SHA-256, derive its record name via i114d (content-addressed lookup), and check the on-card record list (i119 list-read path) — if a record with that content already exists, skip the fetch and boot the existing copy (i122a). Closes the i122 design note (b). Builds on i114d naming + the i119 list-read. Host-verifiable; real boot hardware-gated.
-  status: OPEN
-  depends_on: [i114d, i122c, q35]
+    WONTFIX (Pete, 2026-06-23, q35): content-hash dedup of stored disk images is dropped as YAGNI. Rationale: the only benefit was SD-card SPACE — but a ~32GB card holds ~40,000 disk images at 819200 B each, while the entire published SAM catalogue is ~1,000 disks (<1GB). Space will never be the constraint, so the dedup machinery (content-addressed naming, name->hash manifest, streaming chunk-compare, copy-on-write on divergence, dedup-reference bookkeeping against the shared-storage confirm gate) is pure complexity for zero real benefit. The simple, safe model stands: fetch/receive -> find a free record (i119 detection) -> mandatory show-name + confirm-before-overwrite (trinity_storage_shared_resource) -> store. If re-fetch TIME ever becomes a real annoyance, a trivial 'already have this name, boot local' check could be added later without any content-addressed machinery — track then, not now.
+  status: WONTFIX
+  depends_on: [i114d, i122c]
   kind: leaf
   owner: agent
   parent: i122
@@ -3632,7 +3632,7 @@
 - id: i213
   title: "Trinity EEPROM capability signature + version (interfacing code auto-detects our patch, never assumes it)"
   description: |
-    Pete (2026-06-22, q40): when WE customise the Trinity EEPROM (restore the stripes, add boot-a-record-on-startup, add large-disk support, etc.), write a MAGIC SIGNATURE + VERSION NUMBER into the EEPROM. Any code interfacing with the Trinity must NOT assume our patched code is present (not everyone patches their EEPROM, or may not have yet) — it reads the signature+version, auto-detects available capabilities, and degrades gracefully to stock behaviour when absent. Foundational versioning for ALL our EEPROM customisations. Design: signature bytes + version layout at an EEPROM offset free/safe on stock cards and stable across versions; a read helper returning 'stock' vs 'patched vN + capability flags'. Ties into the i135 EEPROM-patch strand (signature written as part of i135c's flash). owner:agent for the design + detect/read code; the EEPROM write rides i135c (Pete's flash).
+    Trinity EEPROM version stamp: when we customise the Trinity EEPROM (i135c — stripes restore, boot-a-record-on-startup, etc.), write a small magic signature + version byte at a stable EEPROM offset, so code can cheaply detect WHICH version of our patch is present and degrade gracefully when it is absent (stock card). Kept (Pete, 2026-06-23): cheap to add and genuinely useful ONCE we ship features that depend on the patch + a second patch version that must be distinguished. SCOPE NARROWED from the original q40 framing: just the version stamp + a read helper — NOT the heavyweight per-capability auto-detect machinery that was tied to the now-WONTFIX 32-bit BD_RECORDS widening (i214). The write rides i135c (Pete's flash); the stamp-format design + read helper are owner:agent. Low priority until the first patched feature lands.
   status: OPEN
   kind: leaf
   owner: agent
@@ -3640,9 +3640,8 @@
 - id: i214
   title: "Widen BD_RECORDS to 32-bit, gated behind the Trinity EEPROM large-disk capability flag (>51GB cards)"
   description: |
-    Pete (2026-06-22, q40): do the 32-bit BD_RECORDS widening as part of patching the EEPROM, exposed via the capability signature (i213) so it auto-detects — code reading BD_RECORDS checks the capability and uses 32-bit only when our patched EEPROM advertises large-disk support, else falls back to Colin's faithful 16-bit (cards >~51GB wrap on stock B-DOS 1.5t: 16-bit DVAR at &80C4, only low 16 bits kept at &A486; block-count decode is fully 32-bit/correct, only the records STORE caps). i145b ports faithfully (16-bit) by default regardless; this is the OPTIONAL >51GB enhancement, meaningful only with our patched EEPROM present. Depends on i213.
-  status: OPEN
-  depends_on: [i213]
+    WONTFIX (Pete, 2026-06-23): overkill. 32-bit BD_RECORDS only matters past ~51GB of disk images (65535 records x 800KB); the published SAM catalogue is <1GB, so faithful 16-bit (Colin's B-DOS design, ported as-is by i145b) is wildly sufficient — we will never approach the cap. Revisit only if a concrete >51GB need appears.
+  status: WONTFIX
   kind: leaf
   owner: agent
 
