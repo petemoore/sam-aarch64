@@ -355,6 +355,58 @@ func TestEncoderSkeletonFixtures(t *testing.T) {
 			w.WriteReg(format.OpRegX, 10)
 			w.WriteExtendedReg(1, 11, format.ExtSXTH, immExpr(3))
 		}, 3},
+		// --- i201b memory-operand forms (OpMem) ---
+		// MemBase (shape 0): ldr x0,[x1]
+		{"ldr_x0_x1_base", "ldr", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 0)
+			w.WriteMemBase(1)
+		}, 2},
+		// MemBaseOff (shape 1): ldr x2,[x3,#8]  -- scaled unsigned offset
+		{"ldr_x2_x3_off8", "ldr", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 2)
+			w.WriteMemBaseOff(format.MemBaseOff, 3, immExpr(8))
+		}, 2},
+		// MemBaseOffPre (shape 2): str x4,[x5,#0]!  -- pre-index
+		{"str_x4_x5_pre0", "str", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 4)
+			w.WriteMemBaseOff(format.MemBaseOffPre, 5, immExpr(0))
+		}, 2},
+		// MemBaseOffPost (shape 3): str x6,[x7],#8  -- post-index
+		{"str_x6_x7_post8", "str", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 6)
+			w.WriteMemBaseOff(format.MemBaseOffPost, 7, immExpr(8))
+		}, 2},
+		// MemBaseIdx (shape 4): ldr x8,[x9,x10]  -- register offset (X width)
+		{"ldr_x8_x9_x10_idx", "ldr", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 8)
+			w.WriteMemBaseIdx(9, 10, 1) // idxWidth=1 (X)
+		}, 2},
+		// MemBaseIdxShifted (shape 5): str x11,[x12,x13,lsl#3]
+		{"str_x11_x12_x13_lsl3", "str", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 11)
+			w.WriteMemBaseIdxShifted(12, 13, 1, 3) // idxWidth=1 (X), shiftAmt=3
+		}, 2},
+		// MemBaseIdxExtended (shape 6): ldr x14,[x15,w16,uxtw]
+		{"ldr_x14_x15_w16_uxtw", "ldr", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 14)
+			w.WriteMemBaseIdxExtended(15, 16, 0, format.ExtUXTW, 0) // idxWidth=0 (W)
+		}, 2},
+		// stur x17,[x18,#-8]  -- unscaled signed offset
+		{"stur_x17_x18_m8", "stur", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 17)
+			w.WriteMemBaseOff(format.MemBaseOff, 18, immExpr(-8))
+		}, 2},
+		// ldp x19,x20,[x21,#16]  -- pair MemBaseOff
+		{"ldp_x19_x20_x21_off16", "ldp", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegX, 19)
+			w.WriteReg(format.OpRegX, 20)
+			w.WriteMemBaseOff(format.MemBaseOff, 21, immExpr(16))
+		}, 3},
+		// str w22,[x23,#4]  -- W-register, scale=4
+		{"str_w22_x23_off4", "str", 0, func(w *format.OperandWriter) {
+			w.WriteReg(format.OpRegW, 22)
+			w.WriteMemBaseOff(format.MemBaseOff, 23, immExpr(4))
+		}, 2},
 	}
 
 	for _, fx := range fixtures {
