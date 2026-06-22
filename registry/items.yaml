@@ -15,9 +15,8 @@
 - id: i2
   title: "On-SAM IDE memory model (edit buffer + IN/OUT paging; claim all free RAM, grow on demand)"
   description: |
-    The IDE memory model: the edit buffer and IN/OUT paging strategy, under the claim-all-free-RAM-grow-on-demand framing. Design PROPOSAL written: docs/specs/ide-memory-model-design.md (a resident page_owner[] allocator + boot-time pool sizing shared by editor and assembler, lifting the i23/i24 IN/OUT ceilings). The foundational architecture choice is gated on q36 (Pete's editor-era steer); implementation begins once q36 is answered.
+    On-SAM IDE memory model — DECIDED (q36, Pete 2026-06-22). A SINGLE dynamic page pool (a resident page_owner[] allocator in section D, boot-sized from PRAMTP) shared by the editor AND the assembler: any subsystem alloc_page/free_page; a requester that can't get a page raises its own out-of-memory error. Supersedes the assembler's hardcoded off-axis pages 4-15 and FOLDS the i23 96KB-IN / i24 32KB-OUT ceilings into the pool. 256KB is FIRST-CLASS (~144KB doc ceiling; ~9 free pages); 512KB ~25 free pages. Pool exhaustion = refuse-with-message (the honest ceiling) — page persistence/SPILL is a DOWNSTREAM feature (depends on i2, never blocks it). Lazy edit/assemble spill: DOC blocks serialize to disk only when FREE can't satisfy an alloc, and only as many as needed (§4.5) — a 512KB machine touches disk zero times. IDE owns allocation for its session (rebuild BASIC ALLOCT only on exit). Spec: docs/specs/ide-memory-model-design.md. Implements the pool i41 §5.2 already assumes; lifts i23/i24 for free.
   status: OPEN
-  depends_on: [q36]
   kind: leaf
   owner: agent
   refs: [docs/specs/ide-memory-model-design.md, i41, i23, i24]
@@ -3642,5 +3641,22 @@
     Pete (2026-06-22, q40): do the 32-bit BD_RECORDS widening as part of patching the EEPROM, exposed via the capability signature (i213) so it auto-detects — code reading BD_RECORDS checks the capability and uses 32-bit only when our patched EEPROM advertises large-disk support, else falls back to Colin's faithful 16-bit (cards >~51GB wrap on stock B-DOS 1.5t: 16-bit DVAR at &80C4, only low 16 bits kept at &A486; block-count decode is fully 32-bit/correct, only the records STORE caps). i145b ports faithfully (16-bit) by default regardless; this is the OPTIONAL >51GB enhancement, meaningful only with our patched EEPROM present. Depends on i213.
   status: OPEN
   depends_on: [i213]
+  kind: leaf
+  owner: agent
+
+- id: i215
+  title: "IDE page-persistence (spill): lazy-spill cold DOC blocks to Trinity or floppy/tape when the pool is full"
+  description: |
+    Downstream of i2 (Pete, 2026-06-22, q36): the i2 baseline refuses-with-message when the page pool is exhausted. This OPTIONAL feature makes alloc_page lazy-SPILL a cold DOC block to a persistence backend instead of refusing (design §4.5/§5/§7): serialize the block to disk, free its page, satisfy the alloc; reload on demand. Backend is PLUGGABLE — Trinity storage if the machine has it, else a physical floppy/tape — so a space-limited user on ANY machine gains document headroom beyond the ~144KB/256KB ceiling. HARD CONSTRAINT: the assembler must run fully on a floppy/tape-only machine with NO Trinity, so the spill backend is optional and must degrade to refuse-with-message when absent. Depends on i2 (the pool allocator + the page_owner[] discipline) but NEVER blocks it.
+  status: OPEN
+  depends_on: [i2]
+  kind: leaf
+  owner: agent
+
+- id: i216
+  title: Audit + normalize SAMDOS vs B-DOS terminology across living docs and code comments
+  description: |
+    Follow-on to i75/q10 (DONE: B-DOS AL 1.5a is the shipped default DOS; editor/assembler disks ship B-DOS). i75 reoriented the main living docs but was point-in-time; ~66 files still mention SAMDOS (many legitimately). This standing audit sweeps living docs + src comments and normalizes: (a) SAMDOS used as a generic stand-in for the loaded DOS (the hook/DOSFLG/DOSER mechanisms are DOS-agnostic) -> DOS-neutral ('the loaded DOS'); (b) SAMDOS meaning the SHIPPED DOS -> B-DOS; (c) PRESERVE legitimate SAMDOS references — the canonical-DOS source citations, genuinely SAMDOS-internal mechanisms (e.g. the (hksp) NMI snapshot, i185), and the verbatim upstream/ROM material. EXCLUDE reference/ + sam-archive/ (verbatim upstream) and docs/sam/ (canonical ROM disassembly + tech manual — SAMDOS is correct there). Single-source: the DOS-target decision lives canonically in i75/ARCHITECTURE.md; docs point to it, never restate. Known straggler captured 2026-06-22: docs/specs/ide-memory-model-design.md:47 ('SAMDOS occupies one page'). Raised by Pete (2026-06-22) while reviewing the q36 doc.
+  status: OPEN
   kind: leaf
   owner: agent

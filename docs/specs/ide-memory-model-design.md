@@ -46,9 +46,31 @@ From `docs/notes/sam-paging.md` (§§1–6) and `docs/notes/memory-layout.md`:
   LMPR/HMPR bracket.
 - At boot BASIC owns pages 0–3; SAMDOS occupies one page (`DOSFLG`, `&5BC2`);
   the screen occupies two pages — `sam-paging.md:456-485, 569-598`.
-- **Free-page budget after reserving ROM-shadow/BASIC(4) + DOS(1) + screen(2) +
-  resident IDE code:** ~**9 pages (~144 KB)** on a 256 KB machine, ~**24 pages
-  (~384 KB)** on a 512 KB machine. This pool is exactly what "claim all free RAM"
+- **The "4 BASIC pages" are not 4 reservations.** The IDE owns the machine for
+  its session (§7.3), so it `NEW`s BASIC at startup (Pete, 2026-06-22) and
+  reclaims the freed BASIC *program + variable* pages into the pool. What stays
+  reserved is only what the ROM/DOS routines need: the **system page** holding
+  the SAM system variables (all at `&5xxx` → physical **page 1**; the full table
+  is `sam-paging.md §7`), the **system stack**, and the **ROM/DOS workspace**;
+  plus the **`DOSFLG` page**, the **two screen pages**, and the **resident-code
+  page** (section C loads over a page already in the 0–3 set). The exact reclaim
+  falls out of the boot survey (`LASTPAGE`/`RAMTOP` + the sysvar extent), not a
+  blind reservation of 4.
+- **The two screen pages hold a 24 KB screen, leaving an 8 KB tail usable.**
+  Modes 3/4 use 24 KB and wrap an even page into the next odd one
+  (`sam-paging.md:165-167`, `tech-man_v3-0.txt:947-955`), so the top **8 KB of
+  the odd screen page is free RAM**. The system variables are in page 1, *not*
+  the screen pages, so they are never at risk here — but the boot survey still
+  **validates** the tail (read `VMPR` → the screen pages; confirm the tail isn't
+  `DOSFLG`'s page and isn't `ALLOCT`-marked) before tagging it a fixed
+  **screen-tail scratch** region (usable for draw-time/screen-coupled state —
+  render scratch, the draw trampoline, part of `page_owner[]` — but never handed
+  out as a generic pool page). General principle: reclaim sub-page gaps where
+  pages splice, boot-validated.
+- **Free-page budget** (before the BASIC-program reclaim, the conservative
+  floor): ~**9 pages (~144 KB)** on a 256 KB machine, ~**25 pages (~400 KB)** on
+  a 512 KB machine — `NEW`ing BASIC adds a page or two on top, and the 8 KB
+  screen-tail a little more. This pool is exactly what "claim all free RAM"
   refers to.
 
 The IDE's resident code lives in section C (`&8000–&BFFF`) under the same
@@ -98,10 +120,20 @@ record.
 At IDE start, before any document or assembly:
 
 1. Read `PRAMTP` → highest physical page → total page count.
-2. Mark `RESERVED`: pages 0–3 (BASIC), `DOSFLG`'s page, the two screen pages
-   (`sam-paging.md` §§5–6), and the page(s) holding resident IDE code.
-3. Mark every remaining page `FREE`.
-4. Surface the free count as the **document budget** shown to the user
+2. **`NEW` BASIC** (§7.3) so its program/variable pages collapse and become
+   reclaimable.
+3. Mark `RESERVED` only what the ROM/DOS still need: the **system page** (the
+   `&5xxx` sysvars + stack + ROM/DOS workspace, page 1), the **`DOSFLG` page**,
+   the **two screen pages** (from `VMPR`), and the **resident-code page** — *not*
+   a blind pages-0–3 block. Use `LASTPAGE`/`RAMTOP` + the sysvar extent to keep
+   only the genuinely system-critical low page.
+4. **Validate + tag the screen-tail:** compute the top 8 KB of the odd screen
+   page (`VMPR`); if it is not `DOSFLG`'s page and not `ALLOCT`-marked, tag it a
+   fixed `SCRATCH` region (usable, never a generic pool page). If validation
+   fails, leave it reserved — never assume.
+5. Mark every remaining page `FREE` (this includes the BASIC program pages freed
+   by step 2).
+6. Surface the free count as the **document budget** shown to the user
    (e.g. "≈144 KB free" / "≈384 KB free").
 
 This is the boot-survey i41 §5.2 refers to ("sizes the pool via
@@ -132,24 +164,33 @@ pages:
 - **ENCTAB / disasm / payloads:** allocated once at boot from the pool (they are
   resident-for-the-session), replacing their hardcoded page numbers.
 
-### 4.5 The lifecycle — edit ⇄ assemble (composes with i40)
+### 4.5 The lifecycle — edit ⇄ assemble (composes with i40; lazy spill)
 
 ```
 boot        : alloc ENCTAB, DISASM, payloads; size FREE pool
 edit        : document grows  → alloc_page(DOC) per block split
               document shrinks → free_page on block merge / close
-assemble    : editor serializes doc to .tbn on disk (i40), then
-              free_page(DOC) for every block page  ──► pool refills
-              assembler alloc_page(IN/OUT/SCRATCH) from the now-large pool
-assemble end: free_page(IN/OUT/SCRATCH); editor reloads .tbn,
-              alloc_page(DOC) refills blocks (the natural compaction point)
+assemble    : assembler requests IN/OUT/SCRATCH via alloc_page.
+              Eviction is LAZY — DOC pages spill to disk ONLY when FREE
+              cannot satisfy a request:
+                FREE non-empty → hand out a free page (no disk I/O)
+                FREE empty     → serialize one DOC block to .tbn (i40),
+                                 free_page(DOC), then satisfy the request
+assemble end: free_page(IN/OUT/SCRATCH); reload ONLY the DOC blocks that
+              were spilled (none if the pool never ran short)
 ```
 
 This is i40's evict/reload (`editor-edit-model-design.md` §5.2) expressed in
-allocator calls. The key property: **the editor's ~25-page document and the
-assembler's ~3-page resident budget never need to coexist in RAM** — they
-time-share the same pool across the edit/assemble boundary, which is what makes
-"all free RAM for the document" affordable on a 256 KB machine.
+allocator calls, made **demand-driven**. The key property: the editor's
+document and the assembler's resident budget **coexist in RAM whenever the pool
+is large enough** — on a 512 KB machine (~25 free pages) assembly touches the
+disk **zero** times. Only when free pages run short (a large document on a
+256 KB machine) does the editor spill document blocks, and only as many as the
+assembler actually needs — so "all free RAM for the document" costs a disk
+round-trip *exactly when, and only as much as, RAM pressure demands.* The spill
+unit is one i40 block. Spilling itself is a downstream feature (see §5 / §7); an
+unconditional refuse-with-message is the i2-baseline when no spill backend
+exists.
 
 ### 4.6 The unified memory map (logical windows × dynamic pages)
 
@@ -165,16 +206,23 @@ Physical pages above the reserved set are no longer a fixed table — they are t
 
 ## 5. Pool-exhaustion policy
 
-When `alloc_page` finds no `FREE` page:
+The **i2 baseline is refuse-with-message** — no page-persistence backend. When
+`alloc_page` finds no `FREE` page and no spill backend is available:
 
 - **Document growth (editor):** refuse the insert with a clear "document full —
   N KB max on this machine" message; never silently truncate or clobber. On a
   256 KB machine this is a real ceiling (~144 KB); on 512 KB it is unlikely.
-  (A future enhancement could spill cold blocks to disk, but that is out of
-  scope for i2 — track separately if wanted.)
-- **Assembly (IN/OUT):** the editor has already evicted, so the whole pool is
-  available; exhaustion here means the *output* exceeds free RAM, surfaced as an
-  assembler error with the byte count — the honest failure, not a wrap.
+- **Assembly (IN/OUT):** with no spill backend the document stays resident, so
+  exhaustion means the document **plus** the output exceed free RAM, surfaced as
+  an assembler error with the byte count — the honest failure, not a wrap.
+
+**Page persistence (spill) is a downstream feature, not i2** (Pete, 2026-06-22).
+When present it makes `alloc_page` *lazy-spill* a cold DOC block (§4.5) instead
+of refusing — to **Trinity if the machine has it, else a physical floppy/tape**,
+so a space-limited user on any machine gains headroom. The assembler must run
+fully on a floppy/tape-only machine with no Trinity, so the spill backend is
+optional and pluggable. Tracked as a separate item that *depends on* i2 — never
+blocks it.
 
 ## 6. Risks
 
@@ -183,45 +231,55 @@ When `alloc_page` finds no `FREE` page:
   assertions are the guard; this wants a boot self-test (claim-all/free-all
   round-trip; assert reserved pages never move) in the harness.
 - **256 KB headroom is genuinely tight** — ~9 free pages must cover ENCTAB +
-  disasm + payloads + the document. The evict-on-assemble time-share (§4.5) is
-  what makes it fit; if a future feature needs editor and assembler resident
-  *simultaneously*, the model breaks and 512 KB becomes the floor.
+  disasm + payloads + the document. The lazy edit/assemble time-share (§4.5)
+  makes it fit; on the i2 baseline (no spill backend) a document that cannot
+  coexist with the assembler's IN/OUT hits the honest refuse-with-message
+  ceiling, which the downstream spill feature (§5/§7) later lifts.
 - **Bracket discipline** — every pool page is reached through an LMPR/HMPR
   bracket; the existing `reader.asm`/`emit_byte` patterns generalise, but the
   N-page OUT/IN lists add bracket sites to audit.
+- **Screen-tail / sysvar safety** — the 8 KB screen-tail reclaim (§2, §4.2.4)
+  must be **boot-validated**, never assumed. The SAM system variables all live
+  at `&5xxx` → physical page 1 (`sam-paging.md §7`), *not* in the screen pages,
+  so they are not at risk in the tail — but the exact screen page (`VMPR`) and
+  DOS page vary, so the survey confirms the tail is neither `DOSFLG`'s page nor
+  `ALLOCT`-marked before use, and leaves it reserved on any doubt. Trampling a
+  ROM-used byte is the RAM equivalent of clobbering a shared SD record.
 
-## 7. The decision for Pete (q36)
+## 7. Decision (q36, resolved 2026-06-22)
 
-Everything above is a worked recommendation. One choice is genuinely
-foundational and is Pete's to steer (the editor-era handover reserved exactly
-this):
+Pete steered the foundational choice. **The IDE adopts the single dynamic page
+pool shared by the editor *and* the assembler (this proposal, §4)** —
+superseding the assembler's hardcoded off-axis pages 4–15 and lifting the fixed
+96 KB-IN / 32 KB-OUT ceilings (folding i23/i24). Any subsystem allocs and frees
+pages; a subsystem that requests a page and cannot get one is responsible for
+raising its own out-of-memory error.
 
-**Does the IDE adopt a single dynamic page pool shared by the editor *and* the
-assembler (this proposal, §4) — superseding the assembler's hardcoded off-axis
-pages 4–15 and lifting the fixed 96 KB-IN / 32 KB-OUT ceilings (i23/i24) — or
-does the editor layer a separate pool *on top of* the assembler's existing
-static layout (smaller change, but two memory regimes and no IN/OUT lift)?**
+Sub-decisions:
 
-Sub-decisions that ride the same answer:
+1. **Minimum target machine** — **256 KB is first-class** (≈144 KB document
+   ceiling). The lazy spill (§4.5) is the headroom mechanism; 512 KB is not a
+   floor.
+2. **Pool-exhaustion on a full document** — **refuse-with-message** is the i2
+   baseline (§5). **Page persistence / spill is a downstream feature, NOT i2** —
+   a separate item that *depends on* i2 (spill to Trinity if present, else
+   floppy/tape; the assembler must run fully without Trinity). It is added later
+   so a space-limited user on any machine gains headroom, but it never blocks
+   i2.
+3. **`ALLOCT` coexistence / BASIC** — **the IDE owns allocation for its
+   session** and **`NEW`s BASIC at startup** to reclaim its program/variable
+   pages (§2, §4.2). There is no reason to preserve a user's BASIC program: on an
+   autoboot disk the boot stub just `CALL`s the IDE, and a hand-loaded user can
+   `NEW` after exit anyway. The IDE keeps only the system-critical low page
+   (`&5xxx` sysvars + stack + ROM/DOS workspace), the `DOSFLG` page, the screen
+   pages, and its code page reserved. On exit it leaves BASIC in that clean `NEW`
+   state with consistent `ALLOCT`/`LASTPAGE`/`RAMTOP` — simpler than restoring a
+   program. The 8 KB screen-tail (§2) is a bonus fixed scratch region, always
+   boot-validated so the ROM's system variables (which live in page 1, never the
+   screen pages) are never trampled.
 
-1. **Minimum target machine** — is 256 KB a first-class target (≈144 KB document
-   ceiling, hard reliance on evict-on-assemble), or is 512 KB the floor? This
-   sets the headroom budget (§6).
-2. **Pool-exhaustion on a full document** — refuse-with-message (recommended,
-   §5) now, with disk-spill deferred to a tracked follow-up; or is disk-spill
-   in-scope for i2?
-3. **`ALLOCT` coexistence** — does the IDE own page allocation outright once it
-   starts (BASIC not returned to mid-session), or must it keep BASIC's `ALLOCT`
-   bookkeeping consistent so a clean hand-back is possible?
-
-**Agent recommendation:** the unified pool (§4), 256 KB supported but documents
-correspondingly smaller, refuse-with-message exhaustion (disk-spill deferred),
-and the IDE owns allocation for its session (rebuild BASIC's view only on exit).
-This is the model i41 §5.2 already assumes, it delivers the i23/i24 ceiling lifts
-for free, and it matches the "claim all free RAM, grow on demand" framing
-directly. The alternative (separate editor pool over the static assembler map) is
-a smaller change but leaves two memory regimes and the IN/OUT caps in place — a
-local optimum that the editor era will likely outgrow.
+This is the model i41 §5.2 already assumes, and it delivers the i23/i24 ceiling
+lifts for free.
 
 ## 8. Relationship & lifecycle
 
