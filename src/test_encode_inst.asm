@@ -240,6 +240,70 @@ run_encode_inst_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &20, &10, &81, &13
 
+; -- i203b special forms: bic-imm / csetm / barrier --------------------
+; -- bic x0, x1, #0xff  =>  0x9278DC20  (AND ~imm logical) ------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_bic_x
+                ld      a, 3
+                ld      de, 47
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &dc, &78, &92
+
+; -- bic w0, w1, #0xff  =>  0x12185C20  (32-bit AND ~imm) ------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_bic_w
+                ld      a, 3
+                ld      de, 47
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &5c, &18, &12
+
+; -- csetm x0, eq  =>  0xDA9F13E0  (CSINV inverted cond) -------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_csetm_x
+                ld      a, 2
+                ld      de, 52
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &e0, &13, &9f, &da
+
+; -- csetm w3, ne  =>  0x5A9F03E3  (32-bit CSINV) -------------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_csetm_w
+                ld      a, 2
+                ld      de, 52
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &e3, &03, &9f, &5a
+
+; -- isb #15  =>  0xD5033FDF  (barrier CRm in bits 11:8) ------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_isb
+                ld      a, 1
+                ld      de, 66
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &df, &3f, &03, &d5
+
+; -- dsb #11  =>  0xD5033B9F ----------------------------------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_dsb
+                ld      a, 1
+                ld      de, 67
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &9f, &3b, &03, &d5
+
+; -- dmb #11  =>  0xD5033BBF ----------------------------------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_dmb
+                ld      a, 1
+                ld      de, 68
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &bf, &3b, &03, &d5
+
                 call    enctab_map_out
                 ret
 
@@ -287,3 +351,11 @@ enc_fix_bfc:    defb    &01, &00, &05, &02, &00, &01, &08, &05, &02, &00, &01, &
 enc_fix_sbfx:   defb    &01, &00, &01, &01, &05, &02, &00, &01, &08, &05, &02, &00, &01, &04
 enc_fix_ror_x:  defb    &01, &00, &01, &01, &05, &02, &00, &01, &04
 enc_fix_ror_w:  defb    &02, &00, &02, &01, &05, &02, &00, &01, &04
+; i203b special forms (exact Go OperandWriter bytes)
+enc_fix_bic_x:  defb    &01, &00, &01, &01, &05, &03, &00, &02, &ff, &00
+enc_fix_bic_w:  defb    &02, &00, &02, &01, &05, &03, &00, &02, &ff, &00
+enc_fix_csetm_x: defb   &01, &00, &0a, &00
+enc_fix_csetm_w: defb   &02, &03, &0a, &01
+enc_fix_isb:    defb    &05, &02, &00, &01, &0f
+enc_fix_dsb:    defb    &05, &02, &00, &01, &0b
+enc_fix_dmb:    defb    &05, &02, &00, &01, &0b
