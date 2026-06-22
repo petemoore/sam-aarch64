@@ -189,12 +189,14 @@ func fbQueueTransfer(enc *z80h.ENC28J60, img []byte) {
 	// last block above is already short — no extra empty block needed.
 }
 
-// fbRunFetchBoot loads the boot binary the faithful way (ROM1 at &C000), programs
-// the EEPROM identity, attaches the ENC + a BDOS store/card, points cl_boot_record
-// at the scratch record, queues the transfer, and RunBoots client_fetch_boot.
+// fbRunFetchBoot loads the boot binary the faithful way (flat all-RAM: section D is
+// RAM at boot, where client_boot's i145b CSD overlay lives — see the romBaseBoot
+// note in netboot_boot_test.go), programs the EEPROM identity, attaches the ENC + a
+// BDOS store/card, points cl_boot_record at the scratch record, queues the transfer,
+// and RunBoots client_fetch_boot.
 func fbRunFetchBoot(t *testing.T, img []byte, record int) (*z80h.Machine, *z80h.BDOSStore, z80h.CallResult) {
 	t.Helper()
-	mac, err := z80h.LoadBoot(cliBootBin, cliBootMap, romBaseBoot)
+	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
 		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}

@@ -1324,17 +1324,15 @@ serve_main:
                 ; (replacing the inject-only shortcut that left it 0 on real
                 ; hardware). On any read failure BD_RECORDS stays 0 (safe decline).
                 ;
-                ; BUDGET-GATED (i145b finding). The SD-read driver + CSD decode +
-                ; records math adds ~600 bytes; the serve boot image has only ~150
-                ; bytes of section-C headroom, so pulling it in by default overflows
-                ; &C000 (build/-D NETBOOT_CSD_BDRECORDS=1 reproduces the overflow,
-                ; reported precisely on the branch). The faithful implementation is
-                ; in sd_csd.asm and verified by csd_to_bd_records_test.go; shipping
-                ; it in the boot image needs the boot-window budget resolved (a
-                ; section-D overlay or a COMET-trampoline page-out, like ENCTAB).
-                if defined(NETBOOT_CSD_BDRECORDS)
+                ; SHIPPED as a section-D overlay (i145b-b2). The SD-read driver +
+                ; CSD decode + records math (~600 bytes, sd_csd.asm) pushes the boot
+                ; image past &C000 into section D; that is fine — section D is RAM at
+                ; boot (LOAD CODE 32768 deposits the >&BFFF bytes into section-D RAM
+                ; and ROM1 is off at run, LMPR &1F), proven in SimCoupe by the
+                ; section-D loadability probe (docs/notes/sam-paging.md, the
+                ; secd-loadability make target). The image stays within the
+                ; &8000-&FFFF (32768-byte) window the boot fit-check enforces.
                 call    csd_set_bd_records
-                endif
 
                 ; --- init the ENC28J60 with the SAM's real MAC ----------
                 ld      hl, CONFIG_SERVERMAC
@@ -1542,13 +1540,12 @@ SRC_TABLE:        defs 256
 NETBOOT_WANT_CLAIM: equ 1
                 include "bdos_seam.asm"        ; i121f: free-record find + record select + HWSAD/HRSAD + validate
                 include "raw_record_sink.asm"  ; i121f: streaming disk-image -> raw record (HWSAD per sector)
-                ; i145b CSD-read -> BD_RECORDS. Budget-gated (see csd_set_bd_records
-                ; call site): ~600 bytes that overflow the serve boot window, so it
-                ; is only assembled under -D NETBOOT_CSD_BDRECORDS=1. The module is
-                ; verified standalone by csd_to_bd_records_test.go regardless.
-                if defined(NETBOOT_CSD_BDRECORDS)
+                ; i145b CSD-read -> BD_RECORDS (i145b-b2): shipped as a section-D
+                ; overlay. The ~600-byte module places the boot image's tail above
+                ; &BFFF into section D, which is RAM at boot (see the csd_set_bd_records
+                ; call site). Verified standalone by csd_to_bd_records_test.go and via
+                ; serve_main by the boot integration test.
                 include "sd_csd.asm"
-                endif
 
 ; ===========================================================================
 ; SERVE_CONFIG — the placement-strategy config block (i121h). A small, fixed,

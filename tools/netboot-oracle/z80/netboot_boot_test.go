@@ -35,14 +35,28 @@ const (
 	cliBootBin   = "../../../build/netboot_client_boot.bin"
 	cliBootMap   = "../../../build/netboot_client_boot.map"
 
-	// romBaseBoot is the first ROM1 address at boot (section D); the SAM cannot
-	// write a loaded image above &BFFF until it pages RAM in.
+	// romBaseBoot models section A's ROM at boot for the small section-C-only boot
+	// images (smoke/server), which never spill above &BFFF. NOTE: section D
+	// (&C000-&FFFF) is NOT ROM1 at boot — it is RAM. LOAD CODE 32768 deposits a
+	// program's >&BFFF bytes straight into section-D RAM and ROM1 is off at run
+	// (boot LMPR = &1F), proven in SimCoupe by the section-D loadability probe
+	// (`make secd-loadability`; docs/notes/sam-paging.md). So section-D-overlay
+	// images (http, and serve/client with the i145b CSD overlay) load with flat
+	// Load, which faithfully models that all-RAM runtime; LoadBoot's drop-the-tail
+	// model is correct only for the section-C images that opt into it here.
 	romBaseBoot = 0xC000
 
 	// bootStepCap bounds a boot-wrapper run. The wrappers either halt (a fail/
 	// success border) or loop forever (a serve loop / a livelock); the cap ends
 	// the forever case so the test can inspect the wire + the spin PC.
-	bootStepCap = 2_000_000
+	//
+	// Headroom note (i145b-b2): serve_main/client_main now run csd_set_bd_records
+	// at startup. With an SD card attached the CSD read is quick; with NO card
+	// (the tests that don't attach one) it runs the full bounded retry ladder
+	// before safely declining (BD_RECORDS untouched) — ~2.7M steps, a ~0.45s
+	// one-time fallback on real hardware (which always has the Trinity card). The
+	// cap covers that bail plus the wrapper's own work.
+	bootStepCap = 8_000_000
 )
 
 // cliBootServerIP is the fixed TFTP-server address the bootable client_main
@@ -106,7 +120,9 @@ func TestSmokeBootRunsFromEEPROM(t *testing.T) {
 // reactive. See i124 for the full diagnosis; the link-up model + fix are i124's
 // follow-up. (Emulation-verified is not hardware-verified, CLAUDE.md §5.)
 func TestClientBootReachesFirstTX(t *testing.T) {
-	mac, err := z80h.LoadBoot(cliBootBin, cliBootMap, romBaseBoot)
+	// Flat Load: client_boot ships the i145b CSD overlay above &C000 (section-D RAM);
+	// see the romBaseBoot note. LoadBoot would drop csd_set_bd_records.
+	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
 		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
@@ -177,7 +193,9 @@ func TestClientBootReachesFirstTX(t *testing.T) {
 // wait-then-send logic against the hardware-confirmed silent-wire model.
 func TestClientBootRecoversFromLinkDownStart(t *testing.T) {
 	run := func(linkUpAfterOps int) (z80h.CallResult, *z80h.ENC28J60) {
-		mac, err := z80h.LoadBoot(cliBootBin, cliBootMap, romBaseBoot)
+		// Flat Load: client_boot's i145b CSD overlay lives in section-D RAM (see the
+		// romBaseBoot note); LoadBoot would drop it.
+		mac, err := z80h.Load(cliBootBin, cliBootMap)
 		if err != nil {
 			t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 		}

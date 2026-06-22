@@ -82,7 +82,13 @@ func bootRRQ(name string) []byte {
 // Both replies must byte-match the corresponding Go authority frames, proving the
 // boot wrapper correctly read the EEPROM identity and provisioned the demo store.
 func TestServeBootFromEEPROM(t *testing.T) {
-	mac, err := z80h.LoadBoot(serveBootBin, serveBootMap, romBaseBoot)
+	// Flat Load (not LoadBoot): serve_boot ships the i145b CSD-read overlay, so its
+	// tail runs above &C000 into section D — which is RAM at boot (LOAD CODE 32768
+	// deposits the >&BFFF bytes; ROM1 off at run, proven by the section-D loadability
+	// probe). LoadBoot's drop-the-tail-above-&C000 model would discard csd_set_bd_records
+	// and crash serve_main's call into it. Flat all-RAM is the faithful runtime model
+	// (the same reason http_main_boot_test uses flat Load).
+	mac, err := z80h.Load(serveBootBin, serveBootMap)
 	if err != nil {
 		t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
 	}
@@ -148,6 +154,53 @@ func TestServeBootFromEEPROM(t *testing.T) {
 	if !bytes.Equal(tx[1], wantDATA) {
 		t.Errorf("serve_main TFTP DATA 1 (hello.txt) != Go authority\n  z80 %x\n  go  %x", tx[1], wantDATA)
 	}
+}
+
+// TestServeBootComputesBDRecordsFromCSD is the i145b-b2 integration test: it runs
+// the REAL bootable serve_main with an SD card whose CSD is configured, and asserts
+// serve_main COMPUTED BD_RECORDS from that card (the un-gated csd_set_bd_records
+// call shipped as a section-D overlay), not had it injected. Unlike
+// csd_to_bd_records_test.go (which CALLs csd_set_bd_records by symbol against a
+// standalone fixture), this drives the whole boot path — EEPROM read +
+// provision_demo + csd_set_bd_records + drv_init — so it proves the un-gated read
+// fits and runs in the real boot image. The card is ~3.7 GB; serve_main must store
+// the same 16-bit record count the i145e-validated Go reference computes.
+func TestServeBootComputesBDRecordsFromCSD(t *testing.T) {
+	mac, err := z80h.Load(serveBootBin, serveBootMap)
+	if err != nil {
+		t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
+	}
+	enc := z80h.NewENC28J60()
+	enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)
+	const cSize = 0x001D59 // ~3.7 GB SDHC card (CSD v2.0)
+	enc.AttachSD(csdV2(cSize))
+	mac.AttachIO(enc)
+
+	// Zero BD_RECORDS first so a non-zero result can only come from serve_main
+	// computing it from the modelled card — never a stale/injected value.
+	bdAddr := symAddr(t, mac, "BD_RECORDS")
+	mac.WriteU16LE(bdAddr, 0)
+
+	res, err := mac.RunBoot("serve_main", z80h.Entry{StepCap: bootStepCap})
+	if err != nil {
+		t.Fatalf("RunBoot serve_main: %v", err)
+	}
+	border, _ := enc.LastBorder()
+	if res.Halted {
+		t.Fatalf("serve_main halted at PC=&%04X border=%d — expected it to reach the serve loop "+
+			"(border=2 EEPROM read failed, border=1 drv_init failed)", res.PC, border)
+	}
+
+	b := mac.Read(bdAddr, 2)
+	got := uint16(b[0]) | uint16(b[1])<<8
+	_, want := refRecords(refBlocksV2(cSize))
+	if uint32(got) != want {
+		t.Fatalf("serve_main computed BD_RECORDS=%d, want %d (from CSD C_SIZE=0x%X)", got, want, cSize)
+	}
+	if got == 0 {
+		t.Fatalf("serve_main left BD_RECORDS=0 — the CSD read did not run in the boot path")
+	}
+	t.Logf("serve_main COMPUTED BD_RECORDS=%d from the modelled CSD (not injected)", got)
 }
 
 // TestServerBootFromEEPROM runs the REAL bootable netboot_main wrapper end-to-end:
