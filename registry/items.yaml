@@ -3565,8 +3565,8 @@
 - id: i205
   title: "encode_inst boot self-test: relieve the inline section-C budget (&C000 cliff)"
   description: |
-    The test-variant assembler.bin boots all encode_inst self-tests inline in section C (test_encode_inst.asm). With i199+i203a/b/c the suite reached 360 B headroom to the &C000 stack-page cliff; adding i203d's mov-imm/ldr-lit/tbz encoders + vectors overflows by 378 B (prod fits fine: 4964 B headroom, so the encoders themselves are not the problem — only the test-variant inline self-test). Relieve the budget so the encode_inst suite can keep growing: e.g. move budget-consuming NON-ENCTAB inline self-tests off-axis (the encode_inst test itself must stay inline because it needs ENCTAB mapped in section A, which conflicts with the off-axis section-A trampoline), or give the encode_inst self-test a paged home that coexists with the ENCTAB window. Blocks i203d (the final i203 special-form leaf) and likely i204. Engineering task; the ENCTAB/section-A conflict is the design crux.
+    Relieve the test-variant assembler.bin &C000 inline-self-test budget (i203d overflows by 378 B; i201a/i204 add more) by RECOVERING CODE FOOTPRINT, not by paging tricks or scope/coverage cuts (Pete steer 2026-06-22, q43 answered). Prod fits fine (4964 B headroom) so instruction support is complete; the work is dead-code removal + de-duplication + commoning hand-written routines (slots/*.asm, insn_run.asm fold_*, the special-form encoders) into generic data-driven forms — every cut guarded by the full SimCoupe test matrix (correctness preserved). Enabled by i111 (memory-read coverage / dead-code finder: data-driven map of never-touched regions). Sequence: i111 tool -> optimization pass -> unpark i203d (draft PR #566) -> verify it now fits -> merge. Improves the production binary too, and buys runway for the rest of the encoder strand.
   status: OPEN
-  depends_on: [q43]
+  depends_on: [i111]
   kind: leaf
   owner: agent
