@@ -3545,3 +3545,123 @@ func randInstLine(rng *rand.Rand) string {
 	}
 	return line
 }
+
+// ---------------------------------------------------------------------------
+// B5b — movl pseudo (parse_movl). `movl Rd, #imm32` / `movl Rd, sym` expands to
+// MOVZ (mnemonic "mov") + optional MOVK, mirroring parseMovl (parser.go:741-836).
+// ---------------------------------------------------------------------------
+
+// exprOperand wraps arbitrary expression bytecode (built by a closure) as an
+// OP_KIND_IMM_EXPR operand (0x05 | len:2 LE | expr[]), the same framing
+// immExprOperand/movkSymOp produce — used for movl's symbolic relocation operands.
+func exprOperand(build func(w *format.ExprWriter)) []byte {
+	var e format.ExprWriter
+	build(&e)
+	expr := e.Bytes()
+	b := []byte{0x05, byte(len(expr)), byte(len(expr) >> 8)}
+	return append(b, expr...)
+}
+
+// TestParseMovlHandCases pins the INST record(s) movl expands to. Constant cases
+// assert MOVZ #lo16 [+ MOVK #((1<<16)|hi16)] via immExprOperand; the lo16==0
+// special case folds to a single MOVZ #((1<<16)|hi16); the symbolic case asserts
+// the :abs_g0_nc:/:abs_g1: relocation pair. First record's mnemonic is "mov"
+// (the encoder treats `mov Rd,#imm` as MOVZ), exactly as parseMovl emits.
+func TestParseMovlHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	W := format.OpRegW
+	reg := func(k format.OperandKind, n byte) []byte { return []byte{byte(k), n} }
+
+	cases := []struct {
+		desc string
+		src  string
+		want []parseRec
+	}{
+		{
+			"movl x0, #0x1234 (lo only, single MOVZ)",
+			"movl x0, #0x1234\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "mov"), count: 2,
+				ops: concat(reg(X, 0), immExprOperand(0x1234))}},
+		},
+		{
+			"movl x0, #0 (zero, single MOVZ)",
+			"movl x0, #0\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "mov"), count: 2,
+				ops: concat(reg(X, 0), immExprOperand(0))}},
+		},
+		{
+			"movl w3, #0xabcd (W reg, single MOVZ)",
+			"movl w3, #0xabcd\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "mov"), count: 2,
+				ops: concat(reg(W, 3), immExprOperand(0xabcd))}},
+		},
+		{
+			"movl x0, #0x12345678 (MOVZ #lo16 + MOVK #hi16)",
+			"movl x0, #0x12345678\n",
+			[]parseRec{
+				{mnemonicID: mustMnemID(t, "mov"), count: 2,
+					ops: concat(reg(X, 0), immExprOperand(0x5678))},
+				{mnemonicID: mustMnemID(t, "movk"), count: 2,
+					ops: concat(reg(X, 0), immExprOperand((1<<16)|0x1234))},
+			},
+		},
+		{
+			"movl x1, #0x12340000 (lo16==0, single MOVZ hw=1)",
+			"movl x1, #0x12340000\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "mov"), count: 2,
+				ops: concat(reg(X, 1), immExprOperand((1<<16)|0x1234))}},
+		},
+		{
+			"movl x2, #(0x1000+0x234) (constant-folded, lo only)",
+			"movl x2, #(0x1000+0x234)\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "mov"), count: 2,
+				ops: concat(reg(X, 2), immExprOperand(0x1234))}},
+		},
+		{
+			"movl x0, foo (symbolic: :abs_g0_nc: + :abs_g1:)",
+			"movl x0, foo\n",
+			[]parseRec{
+				{mnemonicID: mustMnemID(t, "mov"), count: 2,
+					ops: concat(reg(X, 0), exprOperand(func(w *format.ExprWriter) {
+						w.WriteSym(0)
+						w.WriteOp(format.OpRelAbsG0NC)
+					}))},
+				{mnemonicID: mustMnemID(t, "movk"), count: 2,
+					ops: concat(reg(X, 0), exprOperand(func(w *format.ExprWriter) {
+						w.WriteImm(1 << 16)
+						w.WriteSym(0)
+						w.WriteOp(format.OpRelAbsG1)
+						w.WriteOp(format.OpOr)
+					}))},
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			got, errFlag := parseZ80(t, mac, []byte(c.src))
+			if errFlag {
+				t.Fatalf("PARSE_ERR set unexpectedly")
+			}
+			compareRecs(t, "Z80 vs hand", got, c.want)
+		})
+	}
+}
+
+// TestParseMovlError checks malformed movl lines set PARSE_ERR (no records).
+func TestParseMovlError(t *testing.T) {
+	mac := loadAsmparse(t)
+	for _, src := range []string{
+		"movl x0\n",  // missing ',' + immediate
+		"movl x0,\n", // missing immediate
+		"movl #5\n",  // missing destination register
+	} {
+		t.Run(src, func(t *testing.T) {
+			_, errFlag := parseZ80(t, mac, []byte(src))
+			if !errFlag {
+				t.Fatalf("expected PARSE_ERR for %q", src)
+			}
+		})
+	}
+}
