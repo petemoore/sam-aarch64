@@ -1318,6 +1318,24 @@ serve_main:
                 ; --- provision the baked-in demo files ------------------
                 call    provision_demo
 
+                ; --- read the SD CSD -> BD_RECORDS (i145b) ---------------
+                ; The WRQ record-push picker needs the card's total record count;
+                ; csd_set_bd_records computes it from the inserted SD card's CSD
+                ; (replacing the inject-only shortcut that left it 0 on real
+                ; hardware). On any read failure BD_RECORDS stays 0 (safe decline).
+                ;
+                ; BUDGET-GATED (i145b finding). The SD-read driver + CSD decode +
+                ; records math adds ~600 bytes; the serve boot image has only ~150
+                ; bytes of section-C headroom, so pulling it in by default overflows
+                ; &C000 (build/-D NETBOOT_CSD_BDRECORDS=1 reproduces the overflow,
+                ; reported precisely on the branch). The faithful implementation is
+                ; in sd_csd.asm and verified by csd_to_bd_records_test.go; shipping
+                ; it in the boot image needs the boot-window budget resolved (a
+                ; section-D overlay or a COMET-trampoline page-out, like ENCTAB).
+                if defined(NETBOOT_CSD_BDRECORDS)
+                call    csd_set_bd_records
+                endif
+
                 ; --- init the ENC28J60 with the SAM's real MAC ----------
                 ld      hl, CONFIG_SERVERMAC
                 call    drv_init
@@ -1524,6 +1542,13 @@ SRC_TABLE:        defs 256
 NETBOOT_WANT_CLAIM: equ 1
                 include "bdos_seam.asm"        ; i121f: free-record find + record select + HWSAD/HRSAD + validate
                 include "raw_record_sink.asm"  ; i121f: streaming disk-image -> raw record (HWSAD per sector)
+                ; i145b CSD-read -> BD_RECORDS. Budget-gated (see csd_set_bd_records
+                ; call site): ~600 bytes that overflow the serve boot window, so it
+                ; is only assembled under -D NETBOOT_CSD_BDRECORDS=1. The module is
+                ; verified standalone by csd_to_bd_records_test.go regardless.
+                if defined(NETBOOT_CSD_BDRECORDS)
+                include "sd_csd.asm"
+                endif
 
 ; ===========================================================================
 ; SERVE_CONFIG — the placement-strategy config block (i121h). A small, fixed,

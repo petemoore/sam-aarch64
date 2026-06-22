@@ -757,6 +757,18 @@ client_setup:
 ; CALL 32768 lands here on boot.
 client_main:
                 call    client_setup
+                ; --- read the SD CSD -> BD_RECORDS (i145b) ---------------
+                ; The record picker below needs the card's total record count;
+                ; csd_set_bd_records computes it from the inserted SD card's CSD
+                ; (replacing the inject-only shortcut that left it 0 on real
+                ; hardware -> no free record -> safe decline). Budget-gated: the
+                ; ~600-byte SD-read+decode overflows the client boot window, so it
+                ; is only pulled in under -D NETBOOT_CSD_BDRECORDS=1 (the i145b
+                ; finding). The module is verified by csd_to_bd_records_test.go;
+                ; shipping it in the boot image needs the budget resolved.
+                if defined(NETBOOT_CSD_BDRECORDS)
+                call    csd_set_bd_records
+                endif
                 ; --- broadcast the ARP request, then receive until done --
                 call    client_first
 cl_fetch_loop:
@@ -769,11 +781,12 @@ cl_fetch_loop:
                 ; The Trinity SD is a SHARED user resource: the picker shows the
                 ; chosen record's name (or "free / unnamed") and requires the user
                 ; to confirm BEFORE any write. No confirm => no write (i119e).
-                ; BD_RECORDS (card record count) comes from the SD CSD capacity
-                ; read, which is hardware-gated (no emulator for ports &DC-&DF,
-                ; design §8); on real hardware set BD_RECORDS from the CSD before
-                ; here, the emulation E2E injects it. Until the CSD brick lands,
-                ; BD_RECORDS=0 => no free record => safe decline (no write).
+                ; BD_RECORDS (card record count) is computed from the SD CSD
+                ; capacity read at client_main startup (csd_set_bd_records, i145b)
+                ; WHEN the budget-gated CSD read is compiled in (-D
+                ; NETBOOT_CSD_BDRECORDS=1). In the default boot image it stays 0
+                ; (the read does not fit the boot window) => no free record =>
+                ; safe decline (no write).
                 xor     a
                 ld      (BD_PICK_MODE), a          ; mode 0 = auto-pick-free
                 call    bdos_pick_record
@@ -988,4 +1001,11 @@ STAGING:          defs 2048
                 include "bdos_picker.asm"      ; i119d: record-selection UX (B4)
                 include "eeprom.asm"
                 include "raw_record_sink.asm"  ; i122b: streaming disk-image -> raw record (HWSAD)
+                ; i145b CSD-read -> BD_RECORDS. Budget-gated (see the call site in
+                ; client_main): ~600 bytes that overflow the client boot window, so
+                ; it is only assembled under -D NETBOOT_CSD_BDRECORDS=1. The module
+                ; is verified standalone by csd_to_bd_records_test.go regardless.
+                if defined(NETBOOT_CSD_BDRECORDS)
+                include "sd_csd.asm"
+                endif
                 endif

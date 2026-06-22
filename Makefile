@@ -578,6 +578,19 @@ $(BUILD)/netboot_bdos_seam.bin $(BUILD)/netboot_bdos_seam.map: src/netboot/bdos_
 
 netboot-bdos-seam: $(BUILD)/netboot_bdos_seam.bin $(BUILD)/netboot_bdos_seam.map
 
+# sd-csd (i145b) — the CSD-read -> BD_RECORDS decode (sd_csd.asm) as a standalone
+# host-test fixture: encdrv (wait_ready) + bdos_seam (BD_RECORDS) + sd_csd, so
+# csd_to_bd_records_test.go can Load it, attach the i145c SD model, and assert
+# BD_RECORDS is COMPUTED from the modelled card's CSD (not injected).
+$(BUILD)/netboot_sd_csd.bin $(BUILD)/netboot_sd_csd.map: src/netboot/sd_csd_standalone.asm src/netboot/sd_csd.asm src/netboot/encdrv.asm src/netboot/bdos_seam.asm
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_HOSTTEST=1 \
+	    --obj=$(BUILD)/netboot_sd_csd.bin \
+	    --mapfile=$(BUILD)/netboot_sd_csd.map \
+	    src/netboot/sd_csd_standalone.asm
+
+netboot-sd-csd: $(BUILD)/netboot_sd_csd.bin $(BUILD)/netboot_sd_csd.map
+
 # smoke-test (i94) — the Trinity bring-up smoke test: drv_read a frame, answer an
 # ARP request for the SAM's IP with build_arp_reply, drv_write the reply.  Two
 # builds from one source:

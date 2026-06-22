@@ -2775,9 +2775,30 @@
     Fold the proven SD-init/CMD9/CSD-read/decode (from i145a) into a routine called at serve_main + client_main startup that sets BD_RECORDS from the card, REPLACING the injected value (the shortcut that hid the i145 gap). Prefer a NON-DISRUPTIVE bare CMD9 (the card is already B-DOS-initialised at boot) over a full re-init. Faithfully PORTS Colin's 16-bit BD_RECORDS behaviour by default (matches hardware; the 16-bit cap holds 65535 records x 800KB ~= 51GB, ample for the disk-image-storage use case); widening to 32-bit for >51GB cards is the optional enhancement tracked in the BD_RECORDS-width question. Emulation-verified against the i145c model (BD_RECORDS computed, not injected). Depends i145a (proven SD-read code) + i145c (model).
   status: OPEN
   depends_on: [i145a, i145c]
-  kind: leaf
+  kind: umbrella
   owner: agent
   parent: i145
+
+- id: i145b-b1
+  title: "CSD->BD_RECORDS decode + emulation proof (gated module + test); ship pending the boot-budget page-out"
+  description: |
+    DONE this session. The production SD CSD read + the CSD->blocks->BD_RECORDS decode (src/netboot/sd_csd.asm: full SD-init ladder + CMD9 + the v1/v2 capacity decode + the 32-bit/16-bit records math), proven in EMULATION against the i145c model (csd_to_bd_records_test.go): BD_RECORDS is COMPUTED from the modelled CSD (NOT injected), matching the i145e-validated Go reference incl. Pete's 64GB -> 14581 (the q40 16-bit wrap). Card-init: the full ladder (netboot is a minimal env; the card cannot be assumed B-DOS-initialised). Wired into serve_main + client_main BUT gated behind -D NETBOOT_CSD_BDRECORDS=1 because it overflows the &C000 boot window by ~460-490 bytes (the ~630-byte module vs ~150 bytes free) — default boot builds are byte-for-byte UNCHANGED (no regression). The decode is correct + proven; SHIPPING it on hardware is i145b-b2. This is what ends the inject-BD_RECORDS shortcut at the logic level.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 539, role: completing}
+  parent: i145b
+
+- id: i145b-b2
+  title: "Ship the CSD read in the boot image: page it out of the &C000 window (ENCTAB-style) so BD_RECORDS computes at boot"
+  description: |
+    The remaining work to actually CLOSE the hardware gap (BD_RECORDS=0 on real HW). i145b-b1's CSD-read+decode module (sd_csd.asm) is proven but gated off because it overflows the &C000 boot window by ~460-490 bytes. Ship it by paging the module out of section C (mirror the ENCTAB COMET-trampoline page-out, which already pages a payload out of the &C000 window), or a section-D overlay, so serve_main/client_main compute BD_RECORDS at boot within budget. Un-gate NETBOOT_CSD_BDRECORDS once it fits, and add an integration test that runs the un-gated serve_main path (not just the standalone fixture). The ENCTAB trampoline is the likely pattern to mirror (agent-actionable); raise a qN if the page-out approach needs a genuinely new design choice. The boot-budget is becoming a systemic constraint (multiple features need the window) — consider whether a general overlay mechanism is warranted. owner:agent.
+  status: OPEN
+  depends_on: [i145b-b1]
+  kind: leaf
+  owner: agent
+  parent: i145b
 
 - id: i145c
   title: Harness SD-SPI/CSD model — model the DC/DF seam + SD command state machine + configurable CSD
@@ -2796,7 +2817,7 @@
   description: |
     The experiment that was never faithfully emulated: trinload load -> push serve program -> serve_main reads EEPROM + the modelled CSD -> BD_RECORDS computed (NOT injected) -> push a .mgt -> validate size==819200 -> stream to highest free record -> claim. Asserts the real-hardware path end to end. The test whose absence let the BD_RECORDS=0 hardware failure slip through.
   status: OPEN
-  depends_on: [i145b, i145c, i145f, i145h]
+  depends_on: [i145c, i145f, i145h, i145b-b2]
   kind: leaf
   owner: agent
   parent: i145
@@ -3286,7 +3307,7 @@
   description: |
     The i121 payoff on real hardware, autonomous: 'start trinload -> push the serve program (push-serve.py) -> tftp put each .mgt disk image (validated size==819200, streamed into a free record + claimed) -> tftp put tftp.done -> return to trinload', then read a stored record back (servable-raw) and byte-compare to confirm the store. Unblocked once the production CSD read lands (i145b, so the server finds free records) and the full experiment is emulation-proven (i145d). Agent-actionable: trinload runs on the SAM (192.168.2.75) over the LAN from the Pi; push via tools/trinload-push/push-serve.py + curl tftp://; the 19 build/*.mgt are valid + staged (/tmp/push-all-disks.sh batches them). NO Pete needed for the push+store+readback; booting a pushed record to watch it run is a downstream nicety (autonomous via i135 auto-boot, or a Pete-present spot-check) and NOT a blocker for this item.
   status: OPEN
-  depends_on: [i145a, i145b, i145c, i145d, i145e, i121d, i195, i141]
+  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141]
   kind: leaf
   owner: agent
 
