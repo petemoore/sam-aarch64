@@ -2818,10 +2818,12 @@
   title: "Full E2E emulation test — trinload -> push server -> push .mgt -> store, BD_RECORDS from modelled CSD (not injected)"
   description: |
     The experiment that was never faithfully emulated: trinload load -> push serve program -> serve_main reads EEPROM + the modelled CSD -> BD_RECORDS computed (NOT injected) -> push a .mgt -> validate size==819200 -> stream to highest free record -> claim. Asserts the real-hardware path end to end. The test whose absence let the BD_RECORDS=0 hardware failure slip through.
-  status: OPEN
+  status: DONE
   depends_on: [i145c, i145f, i145h, i145b-b2]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 542, role: completing}
   parent: i145
 
 - id: i145e

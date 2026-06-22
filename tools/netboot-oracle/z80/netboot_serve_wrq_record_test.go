@@ -837,3 +837,131 @@ func TestServeWRQRecordPushStrategyExplicitTaken(t *testing.T) {
 		t.Fatalf("SectorWrites() = %d, want 0 (the named explicit record is never touched)", len(w))
 	}
 }
+
+// TestServeE2EComputedBDRecordsRecordPush is the i145d full-E2E emulation test —
+// the experiment whose ABSENCE let the BD_RECORDS=0 hardware failure ship (every
+// `tftp put` rejected with "no free record" because nothing read the card's record
+// count). It runs the REAL serve_main boot path with a modelled Trinity SD card, so
+// BD_RECORDS is COMPUTED from the card's CSD (i145b, NOT injected by the test), then
+// pushes a valid 819,200-byte .mgt over WRQ and asserts it is found, claimed, and
+// streamed into the highest free record located USING that computed count.
+//
+// This is the join the prior tests left untested: csd_to_bd_records_test.go proved
+// the CSD->BD_RECORDS decode in isolation, and the other WRQ tests in this file
+// proved the push by INJECTING BD_RECORDS — so the csd_set_bd_records ->
+// bdos_find_free_record -> push chain was never exercised as one piece until here.
+//
+// Practicality: the full 819,200-byte body streams through the sink
+// (raw_record_sink_leaf) rather than 1600 bit-banged wire DATA blocks (the wire
+// receive path + ring wraps are proven by TestServeWRQRecordPushWireRouting /
+// WireRingWrap). Emulation-verified is not hardware-verified (CLAUDE.md §5): the
+// real SD CSD read + the real `tftp put` stay gated on Pete's Trinity.
+func TestServeE2EComputedBDRecordsRecordPush(t *testing.T) {
+	mac, err := z80h.Load(serveBootBin, serveBootMap)
+	if err != nil {
+		t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
+	}
+
+	// Model a Trinity: ENC + the EEPROM identity serve_main reads (the DEMO identity,
+	// so the demoWRQ/serveDemo helpers address serve_main's configured endpoint) + an
+	// SD card whose CSD decodes to a small record count (cheap free-record scan).
+	enc := z80h.NewENC28J60()
+	enc.ProgramTrinityNetwork(demoServerMAC, demoServerIP)
+	const cSize = 0x0F // CSD v2.0; ~16384 blocks -> a handful of records
+	enc.AttachSD(csdV2(cSize))
+	mac.AttachIO(enc)
+
+	store := z80h.NewBDOSStore()
+	card := z80h.NewCardModel()
+	store.AttachCard(card)
+	mac.AttachBDOS(store)
+
+	// The record count the Z80 must COMPUTE from the CSD (the i145e-validated Go ref).
+	_, want := refRecords(refBlocksV2(cSize))
+	nrec := int(want)
+	if nrec < 2 {
+		t.Fatalf("test CSD yields %d records; need >=2 to leave a free one", nrec)
+	}
+	// Name records 1..nrec-1; leave the highest (nrec) free, so the default
+	// highest-free strategy claims record nrec.
+	wantRecord := nrec
+	for r := 1; r < nrec; r++ {
+		card.SetRecordName(r, "INUSE")
+	}
+
+	// Zero BD_RECORDS so a non-zero result can ONLY come from serve_main computing it.
+	mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), 0)
+
+	// Boot serve_main: EEPROM read -> provision_demo -> csd_set_bd_records -> drv_init
+	// -> serve loop (spins to the step cap; the CSD read completes early).
+	if _, err := mac.RunBoot("serve_main", z80h.Entry{StepCap: bootStepCap}); err != nil {
+		t.Fatalf("RunBoot serve_main: %v", err)
+	}
+
+	// (1) BD_RECORDS was COMPUTED from the CSD over the boot path — not injected.
+	bd := mac.Read(symAddr(t, mac, "BD_RECORDS"), 2)
+	got := uint16(bd[0]) | uint16(bd[1])<<8
+	if uint32(got) != want || got == 0 {
+		t.Fatalf("BD_RECORDS = %d, want %d (computed from CSD C_SIZE=0x%X) — the boot CSD read failed",
+			got, want, cSize)
+	}
+
+	// (2) Push a valid 819,200-byte image over WRQ. The handshake must find + select
+	// the highest free record using the COMPUTED BD_RECORDS.
+	goRef := serve.New(
+		serve.Config{ServerMAC: demoServerMAC, ServerIP: demoServerIP, ServerTID: demoServerTID, DiskRecordPush: true},
+		tftp.MapStore{}, func(string) tftp.Source { return tftp.ByteSource(nil) })
+	goRef.SetFreeRecordAvailable(true)
+
+	wrq := demoWRQ("upload.mgt", nil)
+	eqFrame(t, "WRQ -> ACK-0", serveDemo(t, mac, enc, wrq), goRef.OnFrame(wrq))
+	if sel := store.Selected(); sel != wantRecord {
+		t.Fatalf("claimed record = %d, want %d (the highest free record found via the COMPUTED BD_RECORDS=%d)",
+			sel, wantRecord, got)
+	}
+
+	// Stream the full valid image through the sink at 819,200-byte scale (the path the
+	// wire feeds, without the slow bit-banged ENC per block).
+	img := recordValidImage()
+	for off := 0; off < len(img); {
+		end := off + rrsSliceMax
+		if end > len(img) {
+			end = len(img)
+		}
+		mac.Write(rrsScratch, img[off:end])
+		if _, err := mac.CallEntry("raw_record_sink_leaf", z80h.Entry{HL: rrsScratch, BC: uint16(end - off)}); err != nil {
+			t.Fatalf("raw_record_sink_leaf @%d: %v", off, err)
+		}
+		off = end
+	}
+	mac.WriteU16LE(symAddr(t, mac, "WRQ_ACKED"), 1600)
+
+	before := len(enc.TXFrames())
+	if _, err := mac.Call("wd_finalize"); err != nil {
+		t.Fatalf("wd_finalize: %v", err)
+	}
+	tx := enc.TXFrames()
+	if len(tx) != before+1 {
+		t.Fatalf("wd_finalize transmitted %d frames, want 1", len(tx)-before)
+	}
+	final := tx[len(tx)-1]
+
+	// (3) Valid 819,200-byte image -> BD_REC_VALID, 1600 sectors into wantRecord, a
+	// final ACK, and the record CLAIMED (its list-name entry written).
+	if v := mac.Read(symAddr(t, mac, "BD_REC_VALID"), 1)[0]; v != 1 {
+		t.Errorf("BD_REC_VALID = %d, want 1 (a valid 819200-byte BDOS image)", v)
+	}
+	assertRecordSectors(t, store.SectorWrites(), img, wantRecord)
+	pay := udpPayload(t, final)
+	if tftp.Opcode(pay) != tftp.OpACK {
+		t.Fatalf("final reply opcode = %d, want ACK — got %x", tftp.Opcode(pay), pay)
+	}
+	if blk, err := tftp.ParseACK(pay); err != nil || blk != 1600 {
+		t.Fatalf("final ACK block = %d (err %v), want 1600", blk, err)
+	}
+	if len(store.ListWrites()) == 0 {
+		t.Error("no record-list write captured — wd_finalize did not claim the record")
+	}
+	t.Logf("i145d E2E OK: BD_RECORDS=%d COMPUTED from CSD; valid push found+claimed+stored record %d (1600 sectors)",
+		got, wantRecord)
+}
