@@ -501,7 +501,7 @@
   description: |
     Optional second-order optimisation: pack the INSN_RUN overlay operand fields (reg=5b, kind-tag, shift-kind=2b, cond=4b, width=1b, mem-shape=3b) into sub-byte bitfields instead of one byte per field, per docs/specs/compact-tbn-nextgen-design.md §3.1 (which rates it "REFINE / accept narrowly" — real ~-4 KB but the least leverage per unit of Z80 complexity, a polish layered on the structural wins, not a headline). A SEPARATE concern from the comment/blank-run parsing brick (i48c-b7); the earlier "absorbed into i48c-b7" framing conflated two unrelated subsystems and pointed at a stale design ref (i48-syntactic-encoder-design.md has no §3.1). De-coupled 2026-06-21: gated on i48c-b8 (do the format-packing polish once the overlay encoder is functionally complete, so it isn't re-churned). Migrated to M9 at M8 close (2026-06-12).
   status: OPEN
-  depends_on: [i48c-b8]
+  depends_on: [i48c-b8a]
   kind: leaf
   owner: agent
   parent: i48c
@@ -845,13 +845,52 @@
 - id: i48c-b8
   title: "Integration/fixture round-trip (assembler-coupled, lands last)"
   description: |
-    Wire the completed text→overlay encoder into the full assembler path and verify end-to-end fixture round-trips. Assembler-coupled (like i41d Brick 4b); depends on B1–B7 being complete. Lands last in the i48c sequence.
+    Wire the completed text->overlay encoder (B1-B7) into the full assembler path so the SAM produces host-identical compact v2 .tbn from typed text, proving text->overlay byte-match over the fixture corpus. DISCOVERED SCOPE (2026-06-22): the SAM assembler reads label/local DEFINITIONS from the .tbn HEADER TABLES (reader.asm:151), not from the encoder's inline LABEL_DEF/LOCAL_DEF IR records, so a Z80 port of the host compact-serializer pipeline sits between encoder and assembler: assemble.Pass1 (PC assignment + label/local position capture + symbol resolution over the IR) -> assemble.Compact (IR -> INSN_RUN/LIT_DATA overlay records + COMMENT/BLANK_RUN->sidecar + .global->globals) -> headerRows + format.WriteFile (header tables w/ uvarint deltas + front-coded name table + editor region). Go authority: tools/sam-aarch64/assemble/{pass1,compact}.go + tools/sam-aarch64-format/writer.go. Umbrella; decomposed into b1-b4.
   status: OPEN
   depends_on: [i48c-b5b, i48c-b5c, i48c-b5d, i48c-b5e, i48c-b5f, i48c-b6, i48c-b5]
-  kind: leaf
+  kind: umbrella
   owner: agent
   parent: i48c
   refs: [src/assembler.asm, src/asmparse.asm]
+
+- id: i48c-b8a
+  title: "Z80 Pass1-over-IR: PC assignment + label/local position capture + symbol resolution"
+  description: |
+    Port assemble.Pass1 (tools/sam-aarch64/assemble/pass1.go) to walk the encoder's in-memory IR record stream (INST/DIRECTIVE/LABEL_DEF/LOCAL_DEF/COMMENT/BLANK_RUN as emitted by parse_run) and compute: each record's output PC (INST=4 bytes; .word/.quad/.byte/.skip/.balign/.org/.ltorg PC effects; literal-pool placement), the absolute offset of every LABEL_DEF (name_id->PC) and LOCAL_DEF (digit->PC) for the header tables, and .set/.equ symbol values. Output: a label/local position table + origin VMA, the input headerRows + the assembler both consume. Flat-memory-autonomous; harness-test a new entry that feeds an IR record buffer and compares the resolved positions vs host Pass1.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i48c-b8
+
+- id: i48c-b8b
+  title: "Z80 Compact: IR records -> compact overlay records + sidecar + globals"
+  description: |
+    Port assemble.Compact (tools/sam-aarch64/assemble/compact.go) to rewrite the encoder's IR record stream into the compact v2 record stream: each INST -> a KindInsnRun element (fully-literal PC-invariant instruction as a bare 4-byte word; symbol/PC-bearing instruction as base word with relocated field zeroed + {slot,expr} overlay patch, via the pcProbeA/pcProbeB literal guard); same-directive constant data coalesces to KindLitData (<=1016 byte cap); COMMENT/BLANK_RUN records relocate to tagged editor-region sidecar rows anchored to output PC; .global directives -> a name_id list. Consumes b8a's PC/position info. Harness-test the compacted record bytes vs host Compact over fixtures.
+  status: OPEN
+  depends_on: [i48c-b8a]
+  kind: leaf
+  owner: agent
+  parent: i48c-b8
+
+- id: i48c-b8c
+  title: "Z80 serialize: headerRows + WriteFile -> compact v2 .tbn bytes"
+  description: |
+    Port headerRows (compact.go:196) + format.WriteFile (tools/sam-aarch64-format/writer.go) to emit the full compact v2 .tbn: 12-byte header (magic SA64 + version 2 + flags + editor_region_offset u32), header label table ([count u16][name_id u16][delta uvarint] rows) and local table ([count u16][digit u8][delta uvarint] rows) built from b8a positions, the front-coded name table, the b8b compacted records, then the editor region (sidecar comment/blank rows + globals). Deltas are uvarint-encoded running offsets. Harness-test the serialized bytes vs host CompactTBNBytes/WriteFile over fixtures.
+  status: OPEN
+  depends_on: [i48c-b8b]
+  kind: leaf
+  owner: agent
+  parent: i48c-b8
+
+- id: i48c-b8d
+  title: "Corpus round-trip integration: text -> compact .tbn on SAM byte-matches host (+optionally assemble to OUT)"
+  description: |
+    The lands-last wiring: drive the full SAM pipeline text -> lex(asmlex) -> parse(asmparse) -> Pass1-over-IR(b8a) -> Compact(b8b) -> serialize(b8c) over the fixture corpus and assert the produced compact v2 .tbn bytes byte-match the host CompactTBNBytes output (the m9 i48c done-criterion: text->overlay byte-match host for the corpus). Optionally feed the produced .tbn through the existing assembler reader+pass1/pass2 to OUT bytes and compare to the host-assembled output, closing text->bytes end-to-end. Wire a corpus-driven harness test (and, if it fits the boot budget, a SimCoupe self-test).
+  status: OPEN
+  depends_on: [i48c-b8c]
+  kind: leaf
+  owner: agent
+  parent: i48c-b8
 
 - id: i48d
   title: Doc unification — bring tbn-binary-format-reference.md to v2 overlay-only format
