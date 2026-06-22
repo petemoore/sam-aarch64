@@ -320,9 +320,13 @@ func (e *ENC28J60) In(port uint8) uint8 {
 	e.ops++
 	switch port {
 	case portTrinityCtl:
-		// Busy flag (bit 3): the emulation is never busy, so the driver's
-		// wait_ready loops exit immediately.
-		return 0x00
+		// Microcontroller status. Bit 3 (busy) is always clear — the emulation is
+		// never busy, so the driver's wait_ready loops exit immediately. When an SD
+		// card is configured the SD model supplies the card-present (bit 1) and
+		// write-protect (bit 2, sense-inverted: set == writable) bits its sector
+		// driver checks (hd.svb-t's `IN(&DC); CPL; AND 4` WP gate, &A91B); with no
+		// card the status is the bare not-busy 0x00 the pre-existing tests expect.
+		return e.sd.ctlStatus()
 	case portTrinityEEP:
 		// Shared port: EEPROM read data while a flash read transaction is in its
 		// data phase, otherwise the identity-probe reply ('T'/'R').
