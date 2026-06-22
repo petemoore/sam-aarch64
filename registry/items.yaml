@@ -2639,7 +2639,7 @@
   description: |
     Flash the prototyped patched EEPROM to Pete's Trinity via write_chunk, keeping the captured EEPROM as the restore backup; power-cycle and confirm unattended auto-boot of the configured record. Hardware (Pete).
   status: OPEN
-  depends_on: [i135d, i87a-b1, i87b, i197]
+  depends_on: [i135d, i87a-b1, i87b, i197c]
   kind: leaf
   owner: pete
   parent: i135
@@ -3334,6 +3334,27 @@
     i87b found the captured on-card EEPROM chunk-1 bootblock (the blob the patched ROM reads from EEPROM addr &002000 into &4000 and runs) does NOT byte-match the public LongSteve/z80 boot.asm reproduction — it is Colin's actual production build (the boot.asm start:/banner/TODO signatures are absent). The i135d injection prototype (DONE, PR #494) was built against the PUBLIC boot.asm TODO hook, so it does not directly apply to Pete's card. Reverse-engineer Colin's actual bootblock from ~/sam-archive/samboot-capture/eeprom.bin (chunk 1 @ &002000, ORG &4000; disassemble with z80dis), confirm the real EEPROM chunk layout (the public-doc 64-byte-header model also did not parse cleanly), locate the real boot-a-record injection site + free space, and re-validate the injection (stripes + BIOS config + boot-record) against the real build in emulation before any flash. Offline, read-only; never commit Colin's proprietary artifacts. owner:agent.
   status: OPEN
   depends_on: [i87b]
-  kind: leaf
+  kind: umbrella
   owner: agent
   refs: [docs/notes/samboot-bootblock-analysis.md, docs/specs/samboot.md]
+
+- id: i197a
+  title: "SAMBOOT: static RE of the captured on-card bootblock (real bootblock at EEPROM &0000; flat layout; candidate hook site)"
+  description: |
+    DONE. Reverse-engineered Colin's real bootblock from the i87b capture (offline, read-only). Findings in docs/notes/samboot-bootblock-analysis.md §7: (1) the real boot.asm-equivalent bootblock is at EEPROM offset &000000 (unique signature match), correcting §6.2's 'absent' claim — it is Colin's own build (execute-DOS &805F not &804C; no inline stripes/wait_for_key, redraws via ROM &06B5 + sysvar pokes; no TODO hook). (2) The EEPROM is a FLAT image, not the public 64-byte-header FS: chunk N at (28+4N)*256 = &2000+(N-1)*&400 (from get_chunk &412C); bootblock at &0000 pre-chunk; chunks 2-13 = B-DOS -> &8000-&AFFF. (3) Candidate injection hook site = between CALL &805F (&409E) and restore (&40A1), same logical point as boot.asm TODO; ~683 bytes free at &00015E-&000408. ROM fetch re-confirmed (reads &2000->&4000, JP &4000).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 545, role: completing}
+  parent: i197
+
+- id: i197c
+  title: "SAMBOOT: emulation-trace the real boot to resolve static contradictions and finalize the injection site"
+  description: |
+    OPEN, gated on i190a. The static RE (i197a) found two facts that contradict a clean single-stage boot and cannot be settled by disassembly (samboot-bootblock-analysis.md §7.4): (1) the patched ROM loads chunk 1 (&2000, a B-DOS routine library, NOT a valid cold entry) to &4000 and JP &4000 — but the coherent bootblock is at &0000, which the ROM path never reads; (2) B-DOS (chunks 2-13 at &8000) calls into section B (&4657/&5C6A) that nothing statically loads, and B-DOS does heavy EEPROM I/O — so there is a runtime multi-stage load/paging stage invisible to static trace. Trace the boot in a faithful emulator (patched ROM + SAM paging + Trinity SPI EEPROM serving the real bytes = i190a) to determine which artifact executes at &4000 and therefore whether the injection belongs in the &0000 bootblock or the ROM-loaded path. Secondary check the trace settles: whether rom.bin/eeprom.bin were captured from the same machine state (re-capture = hardware cross-check). No EEPROM flash (i135c) until resolved.
+  status: OPEN
+  depends_on: [i190a]
+  kind: leaf
+  owner: agent
+  parent: i197
