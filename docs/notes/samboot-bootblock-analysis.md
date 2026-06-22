@@ -676,11 +676,67 @@ trace settles §7.4:
   remaining i197c step is therefore to **verify the boot ordering in this emulator**
   — does the real boot run the normal ROM init (populating `STREAMS`/`FLAGS2`)
   before handing off to chunk 1? — rather than to hunt a hidden loader on hardware.
-  A re-capture of the running card drops to **optional belt-and-braces** (it would
-  only cross-check that `rom.bin`/`eeprom.bin` came from one machine state). The
-  emulator makes this observable and re-runnable; the test pins `&5C26 == 0x00` for
-  *this from-reset path*, so any change to the boot ordering (init running before
-  chunk 1) trips the guard and is caught.
+  **§7.6 carries that verification; it confirms the ordering and corrects the "zero
+  because init had not run" wording above.**
+
+### 7.6 The init ordering, verified in the i190a emulator (i197c)
+
+The §7.5 "remaining step" is now done. An instrumented from-reset run
+(`tools/netboot-oracle/z80/samboot_real_boot_test.go`,
+`TestRealBootInitRunsBeforeChunk1`) traces the cold-init milestones and resolves the
+ordering decisively — with a sentinel experiment that removes the last ambiguity.
+
+- **Init runs BEFORE chunk 1 — confirmed.** The from-reset boot visits, in order,
+  `MNINIT &EBAE → NEW2 &EC8F → the streams-zap loop &ECB6 → &ECC8`, and only then
+  reaches `&4000`. So the normal ROM cold-init (RAM probe → memory table → channels
+  → streams) **does** run before the chunk-1 handoff. Chunk 1 is therefore a
+  **library entry on a live, initialised system**, not a cold entry — as §7.4
+  hypothesised.
+
+- **`&5C26 == 0` is a WRITTEN zero, not unreached RAM — the §7.5 wording corrected.**
+  The decisive test plants a `0xAA` sentinel at `&5C26`'s physical-page-0 offset
+  (under the boot LMPR `&5F`, section B = physical page 0, so `&5C26` lives at page-0
+  offset `&1C26`) *before* the boot, then checks it after. It comes back **`0x00`** —
+  so NEW2's `CLSTL` loop (the "12 more stream ptrs to zap", lines 24628-24632)
+  **actively wrote** the zero. `&5C26` is one of the `&5C0C-&5C35` STREAMS entries
+  NEW2 zeros; its zero is the *initialised* value, **not** evidence that "init had
+  not run yet" or that a section-B stage "failed to load." The §7.5 phrasing
+  ("reaches chunk 1 … **before** the normal … init has populated that band") is
+  superseded by this: init **had** run; `&5C26` is a deliberately-zeroed stream
+  pointer. (The whole boot runs under LMPR `&5F`, so NEW2 and chunk 1 see the *same*
+  physical page — there is no page-mismatch confound.)
+
+- **The real residual: chunk 1 is a B-DOS *library* the ROM enters without a resident
+  B-DOS.** A direct disassembly of the two candidate artifacts (read-only, against
+  the capture) makes the shape unambiguous. EEPROM `&0000` is the coherent **boot
+  sequencer**: `IN A,(250)` save-LMPR → `OR 64` page → `IN A,(251)`/`OUT (251),A`
+  HMPR=29 → `DI` → a chunk-load loop (`chunk 2 → &8000`, `3 → &8400`, `4 → &8800`,
+  …). EEPROM `&2000` (chunk 1, the bytes the patched ROM actually reads to `&4000`
+  and `JP &4000`s — re-confirmed byte-for-byte from the ROM patch: `&0F8F LMPR=&5F`,
+  then `LD HL,&0020`/`LD DE,&0400` and the `&F5DD` reader clocks address `00 20 00`)
+  is a **table of small `CALL`/`RET` B-DOS support routines** (`EX (SP),HL; PUSH DE;
+  CALL &5C26; … RET`, repeated; later entries `LD E,(HL);INC HL;LD D,(HL);…;RET`,
+  `CALL &5C2C; SET 0,(HL); RET`, …). So the ROM's single `&2000`-fetch path runs a
+  *library*, and **nothing on that path loads B-DOS** (chunks 2..13 → `&8000`) — only
+  the `&0000` sequencer does. That is why the trace wanders: chunk 1's `CALL &5C26`
+  expects a resident, fully-initialised B-DOS that this path never brings up.
+
+**What this resolves, and what it leaves open for the injection site.** Resolved:
+the init-ordering question that gated i197c (init runs first; `&5C26 == 0` is
+initialised state; chunk 1 is a library entry, not a cold entry; no hidden
+multi-stage loader is implied). The capture is a **consistent single-machine runtime
+snapshot** (CAPTURE-NOTES.txt: `rom.bin` + `eeprom.bin` dumped in one trinload
+session, the card serving identically before and after), so the incoherence is **not
+a cross-state artifact** — it is real: the captured patched ROM fetches a B-DOS
+*library* (chunk 1) as its boot entry and never loads B-DOS. **Still open (the
+injection-site follow-on):** the boot-entry contradiction itself — the ROM hard-codes
+fetching `&2000` (a library) yet the only coherent sequencer is `&0000`. Finalizing
+*where* the boot-a-record hook attaches needs the trace continued **with B-DOS made
+resident** in the emulation (load chunks 2..13 → `&8000`, run the `&805F` init, then
+re-enter chunk 1 against a live B-DOS) and/or a fresh re-capture — so the re-capture,
+"optional belt-and-braces" in §7.5, is better read as **recommended before any
+i135c flash**: the current captures do not boot coherently to the point an injection
+would attach. No EEPROM flash (i135c) until that is settled.
 
 ---
 

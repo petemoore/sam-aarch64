@@ -22,28 +22,33 @@
 //     (LMPR=&5F, EEPROM-enable, read 1024 B from device &002000 into &4000) →
 //     JP &4000 — under a PC trace.
 //
-// WHAT IT RESOLVES (samboot-bootblock-analysis.md §7.4). The static RE found two
-// facts that contradict a clean single-stage boot and could not be settled by
-// disassembly: (1) the ROM loads device &002000 (chunk 1 — a B-DOS routine
+// WHAT IT RESOLVES (samboot-bootblock-analysis.md §7.4/§7.5/§7.6). The static RE
+// found facts that contradict a clean single-stage boot and could not be settled
+// by disassembly: (1) the ROM loads device &002000 (chunk 1 — a B-DOS routine
 // library, first byte EX (SP),HL — NOT a valid cold entry) to &4000 and JP &4000,
-// while the coherent self-contained bootblock sits at device &0000 which the ROM
-// path never reads; (2) B-DOS calls into a section-B (&4000-&7FFF) support library
-// that nothing statically loads. The trace settles both: it confirms the real boot
-// jumps to the chunk-1 routine library at &4000 (NOT the &0000 bootblock), and that
-// that code immediately CALLs &5C26 — a section-B address this single-stage path
-// leaves UNINITIALISED — pinning the gap as a runtime multi-stage/paging load (or a
-// cross-state capture). This is exactly what i197c needs to finalize the injection
-// site: the injection belongs on the ROM-loaded chunk-1 path that actually runs at
-// &4000, not the dormant &0000 bootblock.
+// while the coherent self-contained boot sequencer sits at device &0000 which the
+// ROM path never reads; (2) chunk 1 immediately CALLs &5C26, read at the time as a
+// call into an "unloaded section-B support library" left zero by a "missing
+// multi-stage load." The trace settles (1) — the real boot does jump to the chunk-1
+// routine library at &4000, not the &0000 sequencer — and CORRECTS (2): &5C26 is a
+// documented STREAMS-table sysvar (&5C0C-&5C35) that the normal cold-init NEW2 loop
+// DELIBERATELY ZEROS. TestRealBootInitRunsBeforeChunk1 proves the from-reset boot
+// runs that whole init (MNINIT &EBAE -> NEW2 &EC8F -> the streams-zap &ECB6/&ECC8)
+// BEFORE handing to &4000, so &5C26 == 0 is the WRITTEN-zero NEW2 left, not
+// unreached RAM and not a missing loader. The residual is therefore NOT "section B
+// wasn't loaded" but "chunk 1 is a B-DOS library that needs B-DOS RESIDENT, and the
+// ROM's single &2000-fetch path never loads B-DOS (chunks 2..13, which only the
+// &0000 sequencer loads)" — the boot-entry contradiction §7.6 leaves open for the
+// injection-site follow-on.
 //
 // THE HONESTY LINE (CLAUDE.md §5, §7). This runs the REAL patched ROM and REAL
 // EEPROM through the faithful pager + EEPROM SPI model — emulation-first, no flat
-// shortcut, no HOSTTEST carve-out. What it does NOT model: the SAM display/ASIC
-// and the analogue side; and it deliberately does not synthesise the missing
-// section-B stage (whether a runtime load populates it, or rom.bin/eeprom.bin came
-// from different machine states, is the open question the trace SURFACES for i197c,
-// not one this test invents an answer to). Emulation-verified is not hardware-
-// verified.
+// shortcut, no HOSTTEST carve-out. The capture is a consistent single-machine
+// runtime snapshot (CAPTURE-NOTES.txt: rom + eeprom dumped in one trinload session),
+// so it is NOT cross-state; what it does NOT model is the SAM display/ASIC and a
+// resident, initialised B-DOS — so chunk 1's library CALLs run against an
+// initialised-but-B-DOS-absent system, which is exactly why the &4000 path wanders
+// instead of completing. Emulation-verified is not hardware-verified.
 package z80_test
 
 import (
@@ -70,7 +75,22 @@ const (
 	addrEEPROMReader = 0xF5DD // ROM1: the SPI read routine (opcode 3 + 3-byte addr)
 	addrJP4000       = 0x0FAF // ROM0: JP &4000 — run what was fetched
 	addrRunTarget    = 0x4000 // where the fetched chunk runs
-	addrChunk1Call   = 0x5C26 // chunk-1's first CALL — into the unloaded section B
+	addrChunk1Call   = 0x5C26 // chunk-1's first CALL target — a STREAMS-table sysvar NEW2 zeros
+
+	// Normal cold-init milestones (annotated ROM disasm) that must run BEFORE the
+	// &4000 handoff if chunk 1 is a library entry on a live system. MNINIT is the
+	// reset cold-start; NEW2 -> the streams-zap loop populates &5C0C-&5C35 (which
+	// contains &5C26) — &ECB6 starts it, &ECC8 is the CLSTL zap covering &5C26.
+	addrMNINIT      = 0xEBAE
+	addrNEW2        = 0xEC8F
+	addrStreamsInit = 0xECB6
+	addrStreamsZap  = 0xECC8
+
+	// In-page offsets of the sysvars within section B's physical page. Under the
+	// boot LMPR (&5F) section B = physical page 0, so &5C26/&5C6A live at these
+	// offsets in page 0 — the page chunk 1 reads when it runs at &4000.
+	offStreamVar = 0x1C26 // &5C26 in-page offset
+	offFLAGS2    = 0x1C6A // &5C6A in-page offset
 
 	// Boot-time paging: ROM0 at section A (LMPR bit5=0), ROM1 at section D (bit6=1),
 	// page 0 — the reset map the patched ROM begins executing under.
@@ -279,13 +299,18 @@ func TestRealBootRunsChunk1NotBootblock(t *testing.T) {
 	}
 }
 
-// TestRealBootSectionBUnloaded surfaces §7.4 point 2 for i197c: the chunk-1 code at
-// &4000 CALLs &5C26 in section B (&4000-&7FFF), but this single-stage boot path
-// never loads section B — so &5C26 is uninitialised (zero) RAM. That is the
-// concrete evidence of the missing runtime multi-stage / paging load (or a
-// cross-state capture) the static trace could only hypothesise. The test does NOT
-// fix the gap; it pins it as an OBSERVATION for the i197c follow-up.
-func TestRealBootSectionBUnloaded(t *testing.T) {
+// TestRealBootChunk1CallsZeroedStreamVar pins the CORRECTED §7.5/§7.6 reading of the
+// chunk-1 prologue's CALL &5C26. The earlier framing read &5C26 == 0 as a "missing
+// runtime multi-stage load that never populated a section-B support library." That
+// was wrong about WHY it is zero: &5C26 is a documented STREAMS-table sysvar
+// (&5C0C-&5C35) that the cold-init NEW2 loop deliberately zeros (the "12 more stream
+// ptrs to zap"). The companion TestRealBootInitRunsBeforeChunk1 proves NEW2 runs
+// before &4000 and WRITES this zero. So &5C26 == 0 is the initialised value, not
+// unreached RAM — and chunk 1 CALLing it is a B-DOS library routine expecting a
+// resident B-DOS (which the ROM's single &2000-fetch path never loads), not a
+// hidden loader. This test keeps the byte assertion as a regression guard and
+// documents the corrected interpretation.
+func TestRealBootChunk1CallsZeroedStreamVar(t *testing.T) {
 	rom, eeprom := loadRealCaptures(t)
 	mac, _ := newRealBootMachine(t, rom, eeprom)
 
@@ -293,14 +318,80 @@ func TestRealBootSectionBUnloaded(t *testing.T) {
 		t.Fatalf("real boot run faulted: %v", err)
 	}
 
-	// &5C26 is the chunk-1 CALL target; it lives at section-B offset &1C26, outside
-	// the 1 KB the ROM fetched at &4000 — so on this single-stage path it is whatever
-	// uninitialised RAM held, i.e. zero. (If a future stage populated it, this byte
-	// would be non-zero and the boot would continue coherently — exactly the
-	// multi-stage hypothesis i197c must settle, e.g. by capturing the running card.)
+	// &5C26 (the chunk-1 CALL target) is a STREAMS-table sysvar NEW2 zeros during the
+	// cold-init that runs before &4000. So it reads 0x00 — the WRITTEN-zero NEW2 left,
+	// proven by TestRealBootInitRunsBeforeChunk1's sentinel. (If a resident B-DOS later
+	// installed a hook vector here, this would be non-zero — but that needs B-DOS
+	// loaded, which the ROM's chunk-1 path never does: the §7.6 injection-site gap.)
 	target := mac.Read(addrChunk1Call, 1)[0]
-	t.Logf("chunk-1 CALL target &%04X (section B) after boot = 0x%02X (0x00 => section B was never loaded by the single-stage path)", addrChunk1Call, target)
+	t.Logf("chunk-1 CALL target &%04X = 0x%02X (NEW2-zeroed STREAMS sysvar; B-DOS not resident on this path)", addrChunk1Call, target)
 	if target != 0x00 {
-		t.Errorf("§7.4 assumption changed: &%04X = 0x%02X, expected 0x00 (an unloaded section B). If the boot now populates section B, update the §7.4 analysis and i197c.", addrChunk1Call, target)
+		t.Errorf("§7.6 assumption changed: &%04X = 0x%02X, expected 0x00 (the NEW2-zeroed STREAMS entry). If the boot now installs a vector here, update §7.6 + i197c.", addrChunk1Call, target)
+	}
+}
+
+// TestRealBootInitRunsBeforeChunk1 is the i197c deliverable: it proves the from-reset
+// boot runs the FULL normal ROM cold-init (MNINIT -> NEW2 -> the streams-zap loop)
+// BEFORE handing off to the chunk-1 routine library at &4000 — resolving the
+// init-ordering question §7.4/§7.5 left open, and CORRECTING the "&5C26 is zero
+// because init had not run yet / a stage failed to load" reading. The decisive trick
+// is a sentinel: planting 0xAA at &5C26's and &5C6A's physical-page-0 offsets before
+// the boot, so a post-run 0x00 means NEW2 actively WROTE the zero (init ran), not
+// that the byte was never touched (init skipped). It is.
+func TestRealBootInitRunsBeforeChunk1(t *testing.T) {
+	rom, eeprom := loadRealCaptures(t)
+	mac, _ := newRealBootMachine(t, rom, eeprom)
+
+	// Under the boot LMPR (&5F) section B maps to physical page 0, so &5C26/&5C6A
+	// live at page-0 offsets &1C26/&1C6A — the bytes chunk 1 reads when it runs.
+	// Sentinel them so a written-zero is distinguishable from an untouched default.
+	const sentinel = 0xAA
+	mac.Pager().RAM[0][offStreamVar] = sentinel
+	mac.Pager().RAM[0][offFLAGS2] = sentinel
+
+	seen := map[uint16]bool{}
+	var order []uint16
+	var streamsInitBefore4000, reached4000 bool
+	if _, err := mac.RunBootFrom(0x0000, z80h.Entry{
+		StepCap: realBootStepCap,
+		Trace: func(pc uint16) {
+			switch pc {
+			case addrMNINIT, addrNEW2, addrStreamsInit, addrStreamsZap, addrRunTarget:
+				if !seen[pc] {
+					seen[pc] = true
+					order = append(order, pc)
+				}
+			}
+			if pc == addrStreamsInit && !reached4000 {
+				streamsInitBefore4000 = true
+			}
+			if pc == addrRunTarget {
+				reached4000 = true
+			}
+		},
+	}); err != nil {
+		t.Fatalf("real boot run faulted: %v", err)
+	}
+	t.Logf("cold-init milestone order (first visit): %X", order)
+
+	// 1. The whole cold-init chain ran, and the streams-zap ran BEFORE &4000.
+	for _, m := range []uint16{addrMNINIT, addrNEW2, addrStreamsInit, addrStreamsZap} {
+		if !seen[m] {
+			t.Errorf("cold-init milestone &%04X was never reached — the from-reset boot did not run normal ROM init", m)
+		}
+	}
+	if !streamsInitBefore4000 {
+		t.Errorf("the streams-init (&%04X) did not run before &4000 — init ordering is NOT init-then-chunk1", addrStreamsInit)
+	}
+
+	// 2. NEW2 overwrote the &5C26 sentinel with zero — so &5C26 == 0 is a WRITTEN
+	//    zero (init ran), the proof that corrects the "uninitialised / missing
+	//    loader" reading. (&5C6A = FLAGS2 is in the same NEW-managed band.)
+	if got := mac.Pager().RAM[0][offStreamVar]; got == sentinel {
+		t.Errorf("&5C26 (page0 &%04X) still holds the 0x%02X sentinel — NEW2 did NOT write it; init did not populate the STREAMS band", offStreamVar, sentinel)
+	} else if got != 0x00 {
+		t.Logf("note: &5C26 = 0x%02X (written by init, non-zero) — chunk 1 would see a live value here", got)
+	} else {
+		t.Logf("&5C26 sentinel 0x%02X -> 0x00: NEW2 wrote the zero (the zeroed STREAMS entry), confirming init ran before &4000", sentinel)
 	}
 }
