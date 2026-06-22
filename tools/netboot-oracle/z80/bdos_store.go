@@ -256,10 +256,13 @@ type SectorWrite struct {
 // name entry the write changed and the new name. Exactly one entry changes per
 // claim (the safety invariant); ChangedRecord is that record (0 if none changed).
 type ListWrite struct {
-	ListSector    int      // the 1-based list sector written
-	ChangedRecord int      // the 1-based record whose entry the write changed (0 = none)
-	Name          string   // the new record name (trailing spaces trimmed)
-	Entry         [16]byte // the raw 16-byte entry written for ChangedRecord
+	ListSector    int                // the 1-based list sector written
+	ChangedRecord int                // the 1-based record whose entry the write changed (0 = none)
+	Name          string             // the new record name (trailing spaces trimmed)
+	Entry         [16]byte           // the raw 16-byte entry written for ChangedRecord
+	RawSector     [bdSectorSize]byte // the full 512 bytes the Z80 wrote back (the unmediated
+	// read-modify-write result, captured before reconciliation — lets a safety test
+	// assert byte-for-byte that ONLY the claimed 16-byte slot changed vs the prior sector).
 }
 
 // BDOSStore models the B-DOS record store for the netboot write-out. Construct
@@ -420,7 +423,7 @@ func (s *BDOSStore) handle(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 func (s *BDOSStore) applyListWrite(listSec int, written [bdSectorSize]byte) {
 	const entriesPerSector = 32
 	const entrySize = 16
-	lw := ListWrite{ListSector: listSec}
+	lw := ListWrite{ListSector: listSec, RawSector: written}
 	if s.card == nil {
 		s.listWrites = append(s.listWrites, lw)
 		return

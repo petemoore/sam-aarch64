@@ -91,7 +91,8 @@ BD_OFF_PAGE:      equ 31                 ; HSAVE source page (low 5 bits)
 BD_OFF_LOAD:      equ 32                 ; HSAVE source offset (LE word)
 BD_OFF_PAGES:     equ 34                 ; pages-count
 BD_OFF_LENGTH:    equ 35                 ; length-mod-16K (LE word)
-BD_NAME_LEN:      equ 10
+BD_NAME_LEN:      equ 10                 ; the 10-char B-DOS file-name field width
+BD_REC_NAME_LEN:  equ 16                 ; the full 16-char central-list record-name field
 BD_EXT_LEN:       equ 4
 BD_TYPE_CODE:     equ 19
 BD_DIFA_MARKER:   equ &7F                ; mask to clear the +36 bit-7 marker
@@ -646,6 +647,12 @@ bfhr_next:
                 jr      nz, bfhr_loop          ; n >= 1 still: keep scanning down
                 ret                            ; scanned 1..BD_RECORDS, none free
 
+                ; The WRQ record-claim path (list-write + claim build/sanitise) is
+                ; assembled only for the serve unit, which sets NETBOOT_WANT_CLAIM
+                ; before including this file. The client never claims a record, so it
+                ; omits this code and stays inside its boot window (i195).
+                if defined(NETBOOT_WANT_CLAIM)
+
 ; ---------------------------------------------------------------------------
 ; bdos_write_list_sector — write one 512-byte list sector back to the card (card-
 ; absolute, not record-clamped) — the WRITE sibling of bdos_read_list_sector.
@@ -689,11 +696,12 @@ bdos_write_list_sector:
 ; intact), then writes that one sector back. A named record is never reached: the
 ; only entry touched is the one at this record's own (listSector, byteOffset).
 ;
-; The name field: the on-card list name is the filename with a leading
-; "trinity-sam-disks/" prefix stripped (the disk-record namespace prefix, bdos
-; Classify), any dotted suffix dropped, and capped at 10 chars in the B-DOS name
-; field (the bdos_name_to_uifa convention); the 16-byte entry is space-padded.
-; Mirrors the Go authority serve.claimRecordName + CardModel.SetRecordName.
+; The name field: the on-card list name is the WRQ filename derived + sanitised by
+; bdos_build_claim_entry — a leading "trinity-sam-disks/" prefix stripped, the final
+; path segment taken, any dotted suffix dropped, every byte forced into the legal
+; printable charset 0x20..0x7E, truncated to the full 16-char record-name field, and
+; space-padded. The WRQ filename is attacker-controllable; see bdos_build_claim_entry
+; for the hardened derivation. Mirrors the Go authority serve.claimRecordName.
 bdos_claim_record:
                 ; 1. Build the 16-byte list entry name into BD_CLAIM_ENTRY.
                 call    bdos_build_claim_entry
@@ -725,14 +733,43 @@ bdos_claim_record:
 
 ; ---------------------------------------------------------------------------
 ; bdos_build_claim_entry — build the 16-byte central-list name entry for a record
-; from BD_CLAIM_NAME_PTR: strip a leading "trinity-sam-disks/" prefix, drop any
-; dotted suffix, copy up to 10 chars into the B-DOS name field, and space-pad the
-; full 16-byte entry. Host-verifiable (pure memory build, no RST). Mirrors the Go
-; authority serve.claimRecordName (and the bdos_name_to_uifa name convention).
+; from BD_CLAIM_NAME_PTR, the WRQ filename. This is the FULL 16-char record-name
+; field (the whole list entry IS the record name — design §4.3), so the pushed
+; disk images are legible via the `RECORD` command. Host-verifiable (pure memory
+; build, no RST). Mirrors the Go authority serve.claimRecordName.
 ;
-; In:  BD_CLAIM_NAME_PTR  2 bytes  pointer to the NUL-terminated filename
-; Out: BD_CLAIM_ENTRY    16 bytes  the space-padded list-entry name
-; Clobbers: A, B, DE, HL.
+; THE WRQ FILENAME IS ATTACKER-CONTROLLABLE (it arrives over the network) and this
+; entry is written into a SHARED user resource (the Trinity SD card's central
+; record list, alongside other people's disks). The derivation + sanitisation is
+; therefore HARDENED — no input can overrun the 16-byte slot or write a byte that
+; corrupts the on-card list or makes the entry read as free/illegal:
+;
+;   1. Strip a leading "trinity-sam-disks/" prefix (the disk-record namespace).
+;   2. Take the FINAL path segment: scan to the NUL, remembering the byte after
+;      the last '/'; that is the segment start (so "a/b/c.mgt" -> "c.mgt", and a
+;      traversal payload like "../../../etc/passwd" -> "passwd"). '/' can never
+;      appear in the stored name.
+;   3. Drop a dotted suffix: copy until NUL or the first '.' ("disk.mgt" -> "disk").
+;   4. SANITISE each candidate byte to the legal printable record-name charset
+;      0x20..0x7E (space..'~'). B-DOS's own print path masks AND 127 then renders
+;      every masked byte < 0x21 as a space-replacement and would render 0x7F (DEL)
+;      as garbage (bdos15a.src.txt:4098-4115, L18652). So any byte outside
+;      0x20..0x7E (high-bit bytes, control bytes 0x00..0x1F, DEL 0x7F) is replaced
+;      with '_' (0x5F) — a legible, legal stand-in — rather than dropped, so the
+;      name length is preserved and no illegal byte ever reaches the card.
+;   5. TRUNCATE to 16 (BD_CLAIM_ENTRY is 16 bytes) — a hard bound; no input of any
+;      length can overrun the entry or the 16-byte on-card slot.
+;   6. Guarantee a VALID NAMED entry: if sanitisation produced no characters (empty
+;      or all-separator/all-dot input), substitute the default name "pushed" so the
+;      first byte is a legal non-zero char with bit 7 clear — never accidentally
+;      free (firstByte AND 0x7F == 0) or write-protected (bit 7 set). The charset
+;      0x20..0x7E is already bit-7-clear and the '_' replacement is non-zero, so the
+;      first written char is always legal; the empty-name default covers the case
+;      where nothing was written at all.
+;
+; In:  BD_CLAIM_NAME_PTR  2 bytes  pointer to the NUL-terminated WRQ filename
+; Out: BD_CLAIM_ENTRY    16 bytes  the sanitised, space-padded 16-byte list-entry name
+; Clobbers: A, B, C, DE, HL.
 bdos_build_claim_entry:
                 ; space-fill the whole 16-byte entry first; the name overwrites
                 ; the leading bytes, leaving the tail as padding.
@@ -748,21 +785,97 @@ bbce_fill:
                 ld      hl, (BD_CLAIM_NAME_PTR)
                 call    bdos_strip_disk_prefix ; HL -> past the prefix if present
 
-                ; copy up to 10 chars into the B-DOS name field, stopping at NUL or
-                ; '.' (drop the dotted suffix). The entry is already space-padded.
+                ; Take the final path segment: scan to NUL, tracking the byte after
+                ; the last '/'. Any path separator collapses to its final segment, so
+                ; a traversal payload ("../../../x") yields only the leaf and '/' is
+                ; never stored. HL is preserved as the segment start.
+                call    bdos_last_segment      ; HL -> start of the final path segment
+
+                ; Copy up to 16 sanitised chars into the entry, stopping at NUL or
+                ; '.' (drop the dotted suffix). C counts chars written (for the
+                ; empty-name guard). The entry is already space-padded.
                 ld      de, BD_CLAIM_ENTRY
-                ld      b, BD_NAME_LEN         ; cap at 10 chars (the B-DOS name field)
+                ld      b, BD_REC_NAME_LEN     ; cap at 16 chars (the full record-name field)
+                ld      c, 0                   ; C = chars written so far
 bbce_name:
                 ld      a, (hl)
                 or      a
-                jr      z, bbce_done           ; NUL: stop (padding already in place)
+                jr      z, bbce_endname        ; NUL: stop (padding already in place)
                 cp      "."
-                jr      z, bbce_done           ; dotted suffix: stop
+                jr      z, bbce_endname        ; dotted suffix: stop
+                call    bdos_sanitise_char     ; A -> legal 0x20..0x7E (else '_')
                 ld      (de), a
+                inc     c                      ; one more char written
                 inc     hl
                 inc     de
                 djnz    bbce_name
-bbce_done:
+bbce_endname:
+                ; Empty-name guard: if nothing was written (C == 0) the entry is all
+                ; spaces — entry[0] AND 0x7F == 0 reads as FREE. Substitute a safe
+                ; default so the record is a valid NAMED entry.
+                ld      a, c
+                or      a
+                ret     nz                     ; at least one char: a valid named entry
+                ; copy the default name into the (still space-padded) entry.
+                ld      hl, bdos_default_name
+                ld      de, BD_CLAIM_ENTRY
+                ld      b, BD_DEFAULT_NAME_LEN
+bbce_default:
+                ld      a, (hl)
+                ld      (de), a
+                inc     hl
+                inc     de
+                djnz    bbce_default
+                ret
+
+bdos_default_name:    defm "pushed"
+BD_DEFAULT_NAME_LEN:  equ 6                  ; len("pushed")
+
+; ---------------------------------------------------------------------------
+; bdos_sanitise_char — map a candidate name byte to the legal printable record-name
+; charset 0x20..0x7E. Any byte outside that range (high-bit set, control 0x00..0x1F,
+; or DEL 0x7F) becomes '_' (0x5F). B-DOS prints names with AND 127 per byte and
+; treats masked bytes < 0x21 as a space-replacement (L18652); keeping only
+; 0x20..0x7E guarantees every stored byte renders cleanly via `RECORD` and is
+; bit-7-clear (so the first char can never set the write-protect bit).
+;
+; In:  A  candidate byte
+; Out: A  the byte if 0x20 <= A <= 0x7E, else '_' (0x5F)
+; Clobbers: A, F.
+bdos_sanitise_char:
+                cp      &20                    ; below space?
+                jr      c, bsc_replace         ; 0x00..0x1F: control byte
+                cp      &7F                    ; 0x7F (DEL) or high-bit (>= 0x80)?
+                jr      nc, bsc_replace         ; 0x7F..0xFF: DEL or high-bit
+                ret                            ; 0x20..0x7E: legal, keep verbatim
+bsc_replace:
+                ld      a, "_"                 ; legible, legal stand-in (0x5F)
+                ret
+
+; ---------------------------------------------------------------------------
+; bdos_last_segment — advance HL to the start of the final path segment of the
+; NUL-terminated string at HL: the byte after the LAST '/'. If there is no '/',
+; HL is unchanged. This collapses any directory traversal to its leaf and ensures
+; no '/' is ever copied into the record name.
+;
+; In:  HL  pointer to the NUL-terminated string
+; Out: HL  pointer to the start of the final segment (past the last '/')
+; Clobbers: A, DE.
+bdos_last_segment:
+                ld      d, h
+                ld      e, l                   ; DE = candidate segment start (= HL initially)
+bls_scan:
+                ld      a, (hl)
+                or      a
+                jr      z, bls_done            ; NUL: end of string
+                inc     hl
+                cp      "/"
+                jr      nz, bls_scan           ; not a separator: keep scanning
+                ld      d, h
+                ld      e, l                   ; '/' seen: segment starts at the next byte
+                jr      bls_scan
+bls_done:
+                ex      de, hl                 ; HL = final segment start
                 ret
 
 ; ---------------------------------------------------------------------------
@@ -793,6 +906,8 @@ bsdp_nomatch:
 
 bdos_disk_prefix: defm "trinity-sam-disks/"
 BD_DISK_PREFIX_LEN: equ 18                 ; len("trinity-sam-disks/")
+
+                endif                          ; NETBOOT_WANT_CLAIM (the WRQ record-claim path)
 
 ; ---------------------------------------------------------------------------
 ; bdos_write_sector — write 512 bytes from BD_WRITE_BUF to the selected record

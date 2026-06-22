@@ -1517,6 +1517,11 @@ SRC_TABLE:        defs 256
                 ; (RRQ-only) leave these out, matching the sink-code guards above.
                 if (defined(NETBOOT_HOSTTEST)==0) * (defined(DUMPER)==0)
                 include "eeprom.asm"
+                ; The serve unit is the only consumer of the WRQ record-claim path
+                ; (wd_finalize -> bdos_claim_record), so it asks bdos_seam.asm to
+                ; assemble the claim/list-write routines. The client never claims, so
+                ; it omits them (boot-window budget — i195).
+NETBOOT_WANT_CLAIM: equ 1
                 include "bdos_seam.asm"        ; i121f: free-record find + record select + HWSAD/HRSAD + validate
                 include "raw_record_sink.asm"  ; i121f: streaming disk-image -> raw record (HWSAD per sector)
 
