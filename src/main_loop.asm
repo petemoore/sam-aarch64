@@ -1185,16 +1185,8 @@ main_dir_org_pass2:
                 sbc     a, (hl)
                 ld      b, a
                 jp      c, fail
-main_dir_org_emit_loop:
-                ld      a, b
-                or      c
-                jr      z, main_dir_org_set_pc
-                push    bc
-                xor     a
-                call    emit_byte
-                pop     bc
-                dec     bc
-                jr      main_dir_org_emit_loop
+                call    emit_n_zeros                ; emit BC zero bytes
+                jp      main_dir_org_set_pc
 
 ; ---- .ltorg — flush the literal pool (both passes) -------------------
 ;
@@ -1248,10 +1240,20 @@ main_dir_org_set_pc:
 ; Mac-side reference: refenc/pass2.go:1763-1770.
 main_dir_skip_emit:
                 call    compute_directive_size      ; BC = N (size, 16-bit)
+                call    emit_n_zeros                ; emit BC zero bytes
+                jp      dir_emit_done
+
+
+; ---- emit_n_zeros — emit BC zero bytes via emit_byte -----------------
+;
+; Shared by the .org gap-fill and .skip/.space pass-2 emit paths, which
+; both pad the output with a run of zeros.  BC=0 emits nothing.  HL is
+; preserved across emit_byte by that routine; this loop preserves BC.
+emit_n_zeros:
                 ld      a, b
                 or      c
-                jp      z, dir_emit_done
-main_dir_skip_emit_loop:
+                ret     z
+emit_n_zeros_loop:
                 push    bc
                 xor     a
                 call    emit_byte
@@ -1259,8 +1261,8 @@ main_dir_skip_emit_loop:
                 dec     bc
                 ld      a, b
                 or      c
-                jr      nz, main_dir_skip_emit_loop
-                jp      dir_emit_done
+                jr      nz, emit_n_zeros_loop
+                ret
 
 
 ; ---- .inst (pass 2 emit) — one 32-bit LE word ------------------------
