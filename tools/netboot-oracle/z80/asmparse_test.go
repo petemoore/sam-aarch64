@@ -3732,3 +3732,91 @@ func TestParseBarrierError(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// B5d — mrs/msr (parse_mrs/parse_msr). The sysreg/PSTATE name is emitted as an
+// OP_KIND_SYS_NAME operand carrying the name verbatim, mirroring parseMrs/parseMsr
+// (parser.go:842-926). Name validation is the encoder's job (sysreg_data.asm), so
+// the parser emits any bareword name; these cases use real names for clarity.
+// ---------------------------------------------------------------------------
+
+// sysnameOperand builds an OP_KIND_SYS_NAME operand ([0x0B, len:2 LE, name]) via
+// the Go authority OperandWriter.WriteSysName.
+func sysnameOperand(name string) []byte {
+	var ow format.OperandWriter
+	ow.WriteSysName(name)
+	return ow.Bytes()
+}
+
+func TestParseMrsMsrHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	reg := func(k format.OperandKind, n byte) []byte { return []byte{byte(k), n} }
+
+	cases := []struct {
+		desc string
+		src  string
+		want []parseRec
+	}{
+		{
+			"mrs x0, sctlr_el1",
+			"mrs x0, sctlr_el1\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "mrs"), count: 2,
+				ops: concat(reg(X, 0), sysnameOperand("sctlr_el1"))}},
+		},
+		{
+			"mrs x5, midr_el1",
+			"mrs x5, midr_el1\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "mrs"), count: 2,
+				ops: concat(reg(X, 5), sysnameOperand("midr_el1"))}},
+		},
+		{
+			"msr sctlr_el1, x1 (register form)",
+			"msr sctlr_el1, x1\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "msr"), count: 2,
+				ops: concat(sysnameOperand("sctlr_el1"), reg(X, 1))}},
+		},
+		{
+			"msr daifset, #2 (PSTATE immediate form)",
+			"msr daifset, #2\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "msr"), count: 2,
+				ops: concat(sysnameOperand("daifset"), immExprOperand(2))}},
+		},
+		{
+			"msr spsel, #0",
+			"msr spsel, #0\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "msr"), count: 2,
+				ops: concat(sysnameOperand("spsel"), immExprOperand(0))}},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			got, errFlag := parseZ80(t, mac, []byte(c.src))
+			if errFlag {
+				t.Fatalf("PARSE_ERR set unexpectedly")
+			}
+			compareRecs(t, "Z80 vs hand", got, c.want)
+		})
+	}
+}
+
+// TestParseMrsMsrError checks structurally-malformed mrs/msr lines set PARSE_ERR.
+// (Unknown sysreg NAMES are deferred to the encoder, not rejected here — by design.)
+func TestParseMrsMsrError(t *testing.T) {
+	mac := loadAsmparse(t)
+	for _, src := range []string{
+		"mrs x0\n",        // missing ',' + sysname
+		"mrs x0,\n",       // missing sysname after comma
+		"msr\n",           // missing sysname
+		"msr sctlr_el1\n", // missing ',' + second operand
+		"msr #5, x0\n",    // first operand not a name (TOK_HASH)
+	} {
+		t.Run(src, func(t *testing.T) {
+			_, errFlag := parseZ80(t, mac, []byte(src))
+			if !errFlag {
+				t.Fatalf("expected PARSE_ERR for %q", src)
+			}
+		})
+	}
+}
