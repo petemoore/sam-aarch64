@@ -118,13 +118,16 @@ disasm_bin="$ROOT/build/disasm.bin"
 zx0_bin="$ROOT/build/zx0.bin"
 if [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler.bin" ]; then
     # Test variant — needs the off-axis payloads + the self-test disasm + zx0.
-    make -s test-mem-offaxis paged-call-payload cluster-offaxis disasm-test-payload zx0-test-payload
+    # The enc-fix payload (page 11, i69) carries the encode_inst self-test
+    # fixtures off-axis; without it on the disk the boot self-test hangs.
+    make -s test-mem-offaxis paged-call-payload cluster-offaxis enc-fix-payload disasm-test-payload zx0-test-payload
     disasm_bin="$ROOT/build/disasm-test.bin"
     zx0_bin="$ROOT/build/zx0-test.bin"
     test_variant_flags=(
         -test-mem "$ROOT/build/test_mem.bin"
         -paged-call "$ROOT/build/paged_call_test_payload.bin"
         -cluster "$ROOT/build/test_cluster.bin"
+        -enc-fix "$ROOT/build/enc_fix_payload.bin"
     )
 fi
 "$ROOT/build/build-disk" \

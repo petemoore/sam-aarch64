@@ -1167,7 +1167,7 @@ test-encoder: sam-aarch64 tables-gen
 
 ci-encoder: test-encoder
 
-.PHONY: assembler assembler-prod build-disk disk test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-payload disasm-test-payload test-core ci-core check-budget
+.PHONY: assembler assembler-prod build-disk disk test-mem-offaxis cluster-offaxis paged-call-payload enc-fix-payload sysreg-data disasm-payload disasm-test-payload test-core ci-core check-budget
 
 # check-budget — fail if either assembler variant has grown into the
 # &C000 stack page (the silent boot-hang cliff; see
@@ -1204,11 +1204,17 @@ assembler-prod: $(BUILD)/assembler-prod.bin
 # Test-variant build also exports the symbol table for the off-axis
 # test_mem.bin to import (plan-PR 3 — see
 # https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md).
-$(BUILD)/assembler.bin $(BUILD)/assembler.sym: src/assembler.asm $(wildcard src/*.asm) $(wildcard src/**/*.asm) $(wildcard src/*.inc)
+# Also imports enc_fix_payload.sym to pick up ENC_FIX_PAYLOAD_LEN (i69):
+# the payload is org'd at &E100, assembled standalone (no assembler.sym
+# dependency — all values are literals), and exports the payload length
+# via its sym file.  The payload must be built before the assembler so
+# this --importfile is satisfied.
+$(BUILD)/assembler.bin $(BUILD)/assembler.sym: src/assembler.asm $(wildcard src/*.asm) $(wildcard src/**/*.asm) $(wildcard src/*.inc) $(BUILD)/enc_fix_payload.sym
 	@mkdir -p $(BUILD)
 	pyz80 -D BUILD_TESTS=1 \
 	    --obj=$(BUILD)/assembler.bin \
 	    --exportfile=$(BUILD)/assembler.sym \
+	    --importfile=$(BUILD)/enc_fix_payload.sym \
 	    src/assembler.asm
 	@./tools/check-code-budget.sh $(BUILD)/assembler.bin test
 
@@ -1255,6 +1261,28 @@ $(BUILD)/test_cluster.bin: src/test_offaxis_cluster.asm \
 	    src/test_offaxis_cluster.asm
 
 cluster-offaxis: $(BUILD)/test_cluster.bin
+
+# encode_inst fixture data payload (BUILD_TESTS only — i69 lever 3).
+#
+# src/test_encode_inst_payload.asm is a pure-data file (org &E100)
+# holding enc_fix_table rows + operand streams.  It assembles
+# standalone (all values are literals; no importfile needed) into
+# build/enc_fix_payload.bin.  The sym file exports ENC_FIX_PAYLOAD_LEN,
+# which the assembler target imports via --importfile to size the LDIR
+# in run_encode_inst_self_tests.
+#
+# The payload is HLOADed at boot into physical page 11 by
+# src/loader.asm::load_enc_fix_payload, then bulk-copied via LDIR into
+# section-D RAM at ENC_FIX_TABLE_RAM (&E100) before enctab_map_in.
+# Because the binary is assembled with org &E100, every row's "fixture
+# ptr" field already holds a section-D absolute address after the copy.
+$(BUILD)/enc_fix_payload.bin $(BUILD)/enc_fix_payload.sym: src/test_encode_inst_payload.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/enc_fix_payload.bin \
+	    --exportfile=$(BUILD)/enc_fix_payload.sym \
+	    src/test_encode_inst_payload.asm
+
+enc-fix-payload: $(BUILD)/enc_fix_payload.bin
 
 # paged_call self-test payload (BUILD_TESTS only).
 #
@@ -1371,10 +1399,11 @@ build-disk: $(BUILD)/build-disk
 # boot sequence calls the disasm &8003 and zx0 &AFA0 self-tests via
 # paged_call — so it must ship the TEST disasm + zx0 binaries
 # (disasm-test.bin, zx0-test.bin).
-disk: assembler test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-test-payload zx0-test-payload enctab $(BUILD)/build-disk
+disk: assembler test-mem-offaxis cluster-offaxis enc-fix-payload paged-call-payload sysreg-data disasm-test-payload zx0-test-payload enctab $(BUILD)/build-disk
 	$(BUILD)/build-disk \
 	    -test-mem $(BUILD)/test_mem.bin \
 	    -cluster $(BUILD)/test_cluster.bin \
+	    -enc-fix $(BUILD)/enc_fix_payload.bin \
 	    -paged-call $(BUILD)/paged_call_test_payload.bin \
 	    -sysreg-data $(BUILD)/sysreg_data.bin \
 	    -disasm $(BUILD)/disasm-test.bin \
@@ -1390,7 +1419,7 @@ disk: assembler test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data 
 # inputs are absent — expected, not a failure.  Dev convenience, NOT a CI gate
 # (SimCoupé is the gate); see tools/z80-test-harness-go/USAGE.md.
 .PHONY: harness-sweep
-harness-sweep: assembler assembler-prod enctab cluster-offaxis test-mem-offaxis paged-call-payload sysreg-data disasm-payload disasm-test-payload zx0-payload zx0-test-payload zx0-compress-payload sam-aarch64
+harness-sweep: assembler assembler-prod enctab cluster-offaxis test-mem-offaxis enc-fix-payload paged-call-payload sysreg-data disasm-payload disasm-test-payload zx0-payload zx0-test-payload zx0-compress-payload sam-aarch64
 	cd tools/z80-test-harness-go && go test -count=1 ./...
 
 # test-core — sweep every fixture under tests/core/sources/ end-to-end:

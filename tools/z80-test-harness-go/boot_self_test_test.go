@@ -33,12 +33,12 @@
 //     not as a CI failure minutes later.
 //
 // Requires (all from `make assembler enctab sysreg-data disasm-test-payload
-// zx0-test-payload test-mem-offaxis cluster-offaxis paged-call-payload
-// sam-aarch64`):
+// zx0-test-payload test-mem-offaxis cluster-offaxis enc-fix-payload
+// paged-call-payload sam-aarch64`):
 //
 //	build/assembler.bin   build/enctab.enc   build/sysreg_data.bin
 //	build/disasm-test.bin build/zx0-test.bin build/test_mem.bin
-//	build/test_cluster.bin
+//	build/test_cluster.bin build/enc_fix_payload.bin
 //	build/paged_call_test_payload.bin   build/sam-aarch64
 //
 // Skipped automatically if any artefact is absent.  SimCoupé remains the sole
@@ -66,6 +66,10 @@ func TestBootSelfTestsPass(t *testing.T) {
 	d15Path := filepath.Join(root, "build", "disasm-test.bin")
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
+	// The encode_inst fixture data payload on physical page 11 (i69): the
+	// BUILD_TESTS boot HLOADs it via load_enc_fix_payload, then
+	// run_encode_inst_self_tests bulk-copies it to section-D RAM.
+	encFixPath := filepath.Join(root, "build", "enc_fix_payload.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
 	// The zx0 boot self-test (i68) paged_calls into the BUILD_TESTS zx0
 	// payload (zx0-test.bin), so the test disk equivalent must serve it.
@@ -73,9 +77,9 @@ func TestBootSelfTestsPass(t *testing.T) {
 	samPath := filepath.Join(root, "build", "sam-aarch64")
 	fixturePath := filepath.Join(root, "tests", "core", "sources", "inst_nop_ret.s")
 
-	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path, zx0Path, samPath, fixturePath} {
+	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, encFixPath, p14Path, zx0Path, samPath, fixturePath} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make assembler enctab sysreg-data disasm-test-payload zx0-test-payload test-mem-offaxis cluster-offaxis paged-call-payload sam-aarch64`", p)
+			t.Skipf("prerequisite missing: %s\n  run `make assembler enctab sysreg-data disasm-test-payload zx0-test-payload test-mem-offaxis cluster-offaxis enc-fix-payload paged-call-payload sam-aarch64`", p)
 		}
 	}
 
@@ -99,11 +103,12 @@ func TestBootSelfTestsPass(t *testing.T) {
 	d15, _ := os.ReadFile(d15Path)
 	tm, _ := os.ReadFile(tmPath)
 	cluster, _ := os.ReadFile(clusterPath)
+	encFix, _ := os.ReadFile(encFixPath)
 	p14, _ := os.ReadFile(p14Path)
 	zx0, _ := os.ReadFile(zx0Path)
 	in, _ := os.ReadFile(tbnPath)
 
-	res := runBootSelfTests(asm, enc, in, sd13, d15, tm, cluster, p14, zx0)
+	res := runBootSelfTests(asm, enc, in, sd13, d15, tm, cluster, encFix, p14, zx0)
 
 	t.Logf("Exit: %s", res.ExitReason)
 	t.Logf("Printer: %q", res.PrinterCapture)
@@ -144,8 +149,9 @@ func TestBootSelfTestsPass(t *testing.T) {
 
 // runBootSelfTests wires every boot payload (in the same page assignments the
 // boot expects) and runs the test-variant assembler to completion.  The d15
-// disasm payload on page 15 is the piece the earlier harness lacked.
-func runBootSelfTests(asm, enc, in, sd13, d15, tm, cluster, p14, zx0 []byte) Result {
+// disasm payload on page 15 is the piece the earlier harness lacked; enc_fix
+// on page 11 is the i69 lever-3 addition.
+func runBootSelfTests(asm, enc, in, sd13, d15, tm, cluster, encFix, p14, zx0 []byte) Result {
 	return RunWithFiles(asm, enc, in, []NamedFile{
 		// sd13 before test_mem so test_mem wins the initial page-13
 		// pre-deposit (run_mem_self_tests runs first); the boot later
@@ -153,6 +159,11 @@ func runBootSelfTests(asm, enc, in, sd13, d15, tm, cluster, p14, zx0 []byte) Res
 		{Name: "sd13", Content: sd13, TargetPage: 13},
 		{Name: "test_mem", Content: tm, TargetPage: 13},
 		{Name: "cluster", Content: cluster, TargetPage: 12},
+		// The encode_inst fixture data payload on physical page 11 (i69):
+		// HLOAD'd by load_enc_fix_payload as "enc_fix", then bulk-copied
+		// to section-D RAM by run_encode_inst_self_tests before
+		// enctab_map_in.
+		{Name: "enc_fix", Content: encFix, TargetPage: 11},
 		{Name: "p14", Content: p14, TargetPage: 14},
 		// The zx0 compressor+decoder payload on physical page 13 at
 		// offset &0400 (it HLOADs at &8400, beside sd13 at &8000):

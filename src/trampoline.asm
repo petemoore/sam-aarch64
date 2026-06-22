@@ -297,6 +297,41 @@ LMPR_TEST_MEM:  equ     &20 + TEST_MEM_PAGE         ; = &2D
 ; extended_reg / litpool self-test suites (1225 B), HLOADed at boot and
 ; invoked once via an LMPR swap (cluster_dispatch at section-A &0000).
 ;
+; Page 11: encode_inst fixture data payload (BUILD_TESTS only — i69
+; lever 3).
+;
+; The enc_fix_table rows and operand-stream data that feed
+; run_encode_inst_self_tests are assembled into a separate binary
+; (src/test_encode_inst_payload.asm, org &E100) and HLOADed here at
+; boot.  At the start of run_encode_inst_self_tests the entire payload
+; is bulk-copied via LDIR from section-A page 11 into section-D RAM
+; at ENC_FIX_TABLE_RAM = &E100, then the driver loop runs unchanged
+; against the section-D copy.  This keeps the ~528 B + future growth
+; out of section C, banking that headroom against the &C000 cliff.
+;
+; Page 11 is free during the entire boot-self-test phase.  The IN
+; .tbn buffer occupies pages 7..12 only during main_assemble, which
+; runs after all boot self-tests are complete.  Page 12 holds the
+; off-axis cluster (TEST_CLUSTER_PAGE below), so page 11 is the next
+; free page before it.
+;
+; LMPR_ENC_FIX = &20 | 11 = &2B puts section A = page 11.  The LDIR
+; source is HL = &0000 (start of section A).  Section B under this
+; LMPR = page 12 (the cluster page), but the LDIR touches only
+; section A; the copy completes before enctab_map_in, so ENCTAB
+; (page 4) is not involved.
+if defined(BUILD_TESTS)
+ENC_FIX_PAGE:       equ     11
+LMPR_ENC_FIX:       equ     &20 + ENC_FIX_PAGE          ; = &2B
+; ENC_FIX_TABLE_RAM: section-D destination for the LDIR bulk-copy.
+; Overlaps LITPOOL_PC_MAP (&E100..&E27F), which is safe because the
+; bulk-copy runs before main_assemble initialises the litpool.
+ENC_FIX_TABLE_RAM:  equ     &E100
+; ENC_FIX_PAYLOAD_LEN is imported at build time from enc_fix_payload.sym
+; (see Makefile: assembler target depends on enc-fix-payload and uses
+; --importfile=$(BUILD)/enc_fix_payload.sym).
+endif
+
 ; Page 12: a free page per the Tech Manual PAGE ALLOCATION TABLE (pages
 ; 4..12 unused).  At the boot-self-test phase it holds nothing — IN is
 ; not HLOADed into pages 7..12 until main_assemble, long after the

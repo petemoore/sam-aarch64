@@ -339,6 +339,15 @@ if defined(BUILD_TESTS)
 ; main_assemble).  M6 budget-relief PR (2026-05-29).
                 call    load_offaxis_cluster
 
+; -- BUILD_TESTS only: HLOAD the encode_inst fixture data payload into
+; physical page 11 (i69 lever 3).  Loaded here alongside the other
+; off-axis payloads so all HLOADs complete before the self-tests run.
+; Page 11 is free at boot-self-test time (same reason as page 12 above).
+; run_encode_inst_self_tests bulk-copies from page 11 into section-D RAM
+; at ENC_FIX_TABLE_RAM (&E100) via LDIR before enctab_map_in, banking
+; ~528 B of section-C headroom.  See src/test_encode_inst_payload.asm.
+                call    load_enc_fix_payload
+
 ; -- BUILD_TESTS only: HLOAD the paged_call self-test payload into
 ; physical page 14, then run the self-test.  Must happen AFTER
 ; enctab_trampoline_setup (paged_call body needs installing in

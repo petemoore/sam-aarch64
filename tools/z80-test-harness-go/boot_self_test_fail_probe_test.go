@@ -29,10 +29,11 @@ func TestBootSelfTestsFailProbe(t *testing.T) {
 	d15Path := filepath.Join(root, "build", "disasm-test.bin")
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
+	encFixPath := filepath.Join(root, "build", "enc_fix_payload.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
 	zx0Path := filepath.Join(root, "build", "zx0-test.bin")
 
-	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path, zx0Path} {
+	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, encFixPath, p14Path, zx0Path} {
 		if _, err := os.Stat(p); err != nil {
 			t.Skipf("prerequisite missing: %s", p)
 		}
@@ -44,6 +45,7 @@ func TestBootSelfTestsFailProbe(t *testing.T) {
 	d15, _ := os.ReadFile(d15Path)
 	tm, _ := os.ReadFile(tmPath)
 	cluster, _ := os.ReadFile(clusterPath)
+	encFix, _ := os.ReadFile(encFixPath)
 	p14, _ := os.ReadFile(p14Path)
 	zx0, _ := os.ReadFile(zx0Path)
 
@@ -61,7 +63,7 @@ func TestBootSelfTestsFailProbe(t *testing.T) {
 	broken := append([]byte(nil), d15...)
 	copy(broken[3:], []byte{0x01, 0xEE, 0x00, 0xC9})
 
-	res := runBootSelfTests(asm, enc, in, sd13, broken, tm, cluster, p14, zx0)
+	res := runBootSelfTests(asm, enc, in, sd13, broken, tm, cluster, encFix, p14, zx0)
 
 	t.Logf("Exit: %s", res.ExitReason)
 	t.Logf("Printer: %q", res.PrinterCapture)
@@ -103,10 +105,11 @@ func TestBootSelfTestsZX0FailProbe(t *testing.T) {
 	d15Path := filepath.Join(root, "build", "disasm-test.bin")
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
+	encFixPath := filepath.Join(root, "build", "enc_fix_payload.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
 	zx0Path := filepath.Join(root, "build", "zx0-test.bin")
 
-	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path, zx0Path} {
+	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, tmPath, clusterPath, encFixPath, p14Path, zx0Path} {
 		if _, err := os.Stat(p); err != nil {
 			t.Skipf("prerequisite missing: %s", p)
 		}
@@ -118,6 +121,7 @@ func TestBootSelfTestsZX0FailProbe(t *testing.T) {
 	d15, _ := os.ReadFile(d15Path)
 	tm, _ := os.ReadFile(tmPath)
 	cluster, _ := os.ReadFile(clusterPath)
+	encFix, _ := os.ReadFile(encFixPath)
 	p14, _ := os.ReadFile(p14Path)
 	zx0, _ := os.ReadFile(zx0Path)
 
@@ -137,7 +141,7 @@ func TestBootSelfTestsZX0FailProbe(t *testing.T) {
 	broken := append([]byte(nil), zx0...)
 	copy(broken[zx0SelfTestFileOff:], []byte{0x01, 0xE9, 0x00, 0xC9})
 
-	res := runBootSelfTests(asm, enc, in, sd13, d15, tm, cluster, p14, broken)
+	res := runBootSelfTests(asm, enc, in, sd13, d15, tm, cluster, encFix, p14, broken)
 
 	t.Logf("Exit: %s", res.ExitReason)
 	t.Logf("Printer: %q", res.PrinterCapture)

@@ -410,6 +410,44 @@ name_test_mem:  defb    19
 
 
 ; -----------------------------------------------------------------------
+; load_enc_fix_payload — BUILD_TESTS only.  HLOAD the encode_inst
+;                        fixture data payload into physical page 11
+;                        via the trampoline.
+;
+; i69 lever 3: the enc_fix_table rows + operand streams (~528 B, growing
+; with future fixtures) are assembled into a separate binary
+; (src/test_encode_inst_payload.asm, org &E100) and deposited here at
+; boot.  run_encode_inst_self_tests bulk-copies them via LDIR into
+; section-D RAM at ENC_FIX_TABLE_RAM before enctab_map_in.
+;
+; Structural twin of load_offaxis_cluster below: HGTHD +
+; HLOAD-via-trampoline.  The only differences are the file name
+; ("enc_fix") and the target page (ENC_FIX_PAGE = 11).
+;
+; Input:  none (precondition: enctab_trampoline_setup has been called).
+; Output: enc_fix_payload.bin content sits at physical page 11.  Reads
+;         via section A (LMPR = LMPR_ENC_FIX = &2B) see the data at
+;         &E100-onward (the org address).  LMPR/HMPR restored on return.
+; Clobbers: A, BC, DE, HL, IX (everything except SP).
+; -----------------------------------------------------------------------
+load_enc_fix_payload:
+                ld      hl, name_enc_fix
+                ld      a, ENC_FIX_PAGE
+                jp      load_payload_generic
+
+
+; -----------------------------------------------------------------------
+; UIFA name block for "enc_fix" (BUILD_TESTS only).
+;
+; The on-disk catalogue entry is created by build-disk when invoked
+; with the -enc-fix flag.
+; -----------------------------------------------------------------------
+name_enc_fix:   defb    19
+                defm    "enc_fix   "   ; 10 chars (7 + 3 trailing spaces)
+                defm    "    "         ; 4-char ext (unused)
+
+
+; -----------------------------------------------------------------------
 ; load_offaxis_cluster — BUILD_TESTS only.  HLOAD the off-axis "M5 +
 ;                        misc encoder" cluster binary into physical
 ;                        page 12 via the trampoline.

@@ -33,6 +33,8 @@ func TestVariantBootSelfTests(t *testing.T) {
 	}
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
+	// The encode_inst fixture data payload on page 11 (i69).
+	encFixPath := filepath.Join(root, "build", "enc_fix_payload.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
 	sd13Path := filepath.Join(root, "build", "sysreg_data.bin")
 	// BUILD_TESTS assembler boot runs the disasm self-test → TEST disasm.
@@ -40,7 +42,7 @@ func TestVariantBootSelfTests(t *testing.T) {
 	encPath := filepath.Join(root, "build", "enctab.enc")
 	samPath := filepath.Join(root, "build", "sam-aarch64")
 	fixturePath := filepath.Join(root, "tests", "m3", "sources", "inst_nop_ret.s")
-	for _, p := range []string{tmPath, clusterPath, p14Path, sd13Path, d15Path, encPath, samPath, fixturePath} {
+	for _, p := range []string{tmPath, clusterPath, encFixPath, p14Path, sd13Path, d15Path, encPath, samPath, fixturePath} {
 		if _, err := os.Stat(p); err != nil {
 			t.Skipf("prerequisite missing: %s", p)
 		}
@@ -60,6 +62,7 @@ func TestVariantBootSelfTests(t *testing.T) {
 	asm, _ := os.ReadFile(asmPath)
 	tm, _ := os.ReadFile(tmPath)
 	cluster, _ := os.ReadFile(clusterPath)
+	encFix, _ := os.ReadFile(encFixPath)
 	p14, _ := os.ReadFile(p14Path)
 	sd13, _ := os.ReadFile(sd13Path)
 	d15, _ := os.ReadFile(d15Path)
@@ -89,6 +92,10 @@ func TestVariantBootSelfTests(t *testing.T) {
 			// budget-relief PR).  load_offaxis_cluster HGTHD+HLOADs it at
 			// boot; cluster_dispatch runs it via one LMPR swap.
 			{Name: "cluster", Content: cluster, TargetPage: 12},
+			// The encode_inst fixture data payload on physical page 11
+			// (i69): HLOAD'd as "enc_fix", then bulk-copied to section-D
+			// RAM by run_encode_inst_self_tests before enctab_map_in.
+			{Name: "enc_fix", Content: encFix, TargetPage: 11},
 			{Name: "p14", Content: p14, TargetPage: 14},
 			// The disassembler payload, HLOAD'd by load_page15_payload
 			// (src/loader.asm) as SAMDOS CODE file "d15" into physical
