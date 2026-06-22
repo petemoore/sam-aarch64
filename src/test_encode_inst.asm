@@ -131,6 +131,115 @@ run_encode_inst_self_tests:
                 call    assert_eq32_de_hl_imm
                 defb    &20, &00, &00, &10
 
+; -- i203a special forms: shift / bitfield / ror -----------------------
+; -- lsl x0, x1, #4  =>  0xD37CEC20  (mnem 17, UBFM alias) -------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_lsl_x
+                ld      a, 3
+                ld      de, 17
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &ec, &7c, &d3
+
+; -- lsl w0, w1, #4  =>  0x531C6C20  (32-bit UBFM alias) --------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_lsl_w
+                ld      a, 3
+                ld      de, 17
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &6c, &1c, &53
+
+; -- lsr x0, x1, #4  =>  0xD344FC20  (mnem 18, UBFM alias) -------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_lsr_x
+                ld      a, 3
+                ld      de, 18
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &fc, &44, &d3
+
+; -- lsl x0, x1, x2  =>  0x9AC22020  (LSLV reg form) ------------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_lslv
+                ld      a, 3
+                ld      de, 17
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &20, &c2, &9a
+
+; -- lsr x0, x1, x2  =>  0x9AC22420  (LSRV reg form) ------------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_lsrv
+                ld      a, 3
+                ld      de, 18
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &24, &c2, &9a
+
+; -- bfi x0, x1, #8, #4  =>  0xB3780C20  (BFM alias) ------------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_bfi
+                ld      a, 4
+                ld      de, 49
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &0c, &78, &b3
+
+; -- bfxil x0, x1, #8, #4  =>  0xB3482C20  (BFM alias) ----------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_bfxil
+                ld      a, 4
+                ld      de, 50
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &2c, &48, &b3
+
+; -- ubfx w0, w1, #8, #4  =>  0x53082C20  (32-bit UBFM alias) ---------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_ubfx
+                ld      a, 4
+                ld      de, 51
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &2c, &08, &53
+
+; -- bfc x0, #8, #4  =>  0xB3780FE0  (BFM alias, Rn=XZR) --------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_bfc
+                ld      a, 3
+                ld      de, 83
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &e0, &0f, &78, &b3
+
+; -- sbfx x0, x1, #8, #4  =>  0x93482C20  (SBFM alias) ----------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_sbfx
+                ld      a, 4
+                ld      de, 84
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &2c, &48, &93
+
+; -- ror x0, x1, #4  =>  0x93C11020  (EXTR alias) --------------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_ror_x
+                ld      a, 3
+                ld      de, 70
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &10, &c1, &93
+
+; -- ror w0, w1, #4  =>  0x13811020  (32-bit EXTR alias) -------------
+                call    enc_seed_pc0
+                ld      hl, enc_fix_ror_w
+                ld      a, 3
+                ld      de, 70
+                call    encode_inst
+                call    assert_eq32_de_hl_imm
+                defb    &20, &10, &81, &13
+
                 call    enctab_map_out
                 ret
 
@@ -165,3 +274,16 @@ enc_fix_cbz:    defb    &01, &00, &05, &03, &00, &02, &08, &10
 enc_fix_b:      defb    &05, &03, &00, &02, &10, &10
 enc_fix_adrp:   defb    &01, &00, &05, &03, &00, &02, &00, &30
 enc_fix_adr:    defb    &01, &00, &05, &03, &00, &02, &04, &10
+; i203a special forms (exact Go OperandWriter bytes)
+enc_fix_lsl_x:  defb    &01, &00, &01, &01, &05, &02, &00, &01, &04
+enc_fix_lsl_w:  defb    &02, &00, &02, &01, &05, &02, &00, &01, &04
+enc_fix_lsr_x:  defb    &01, &00, &01, &01, &05, &02, &00, &01, &04
+enc_fix_lslv:   defb    &01, &00, &01, &01, &01, &02
+enc_fix_lsrv:   defb    &01, &00, &01, &01, &01, &02
+enc_fix_bfi:    defb    &01, &00, &01, &01, &05, &02, &00, &01, &08, &05, &02, &00, &01, &04
+enc_fix_bfxil:  defb    &01, &00, &01, &01, &05, &02, &00, &01, &08, &05, &02, &00, &01, &04
+enc_fix_ubfx:   defb    &02, &00, &02, &01, &05, &02, &00, &01, &08, &05, &02, &00, &01, &04
+enc_fix_bfc:    defb    &01, &00, &05, &02, &00, &01, &08, &05, &02, &00, &01, &04
+enc_fix_sbfx:   defb    &01, &00, &01, &01, &05, &02, &00, &01, &08, &05, &02, &00, &01, &04
+enc_fix_ror_x:  defb    &01, &00, &01, &01, &05, &02, &00, &01, &04
+enc_fix_ror_w:  defb    &02, &00, &02, &01, &05, &02, &00, &01, &04
