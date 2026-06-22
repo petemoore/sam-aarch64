@@ -787,9 +787,11 @@
   title: dc/tlbi — op-name + optional Xt
   description: |
     Parse dc/tlbi instructions: map operation-name string to encoding + accept optional Xt register operand.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 550, role: completing}
   parent: i48c
   refs: [src/asmparse.asm, tools/sam-aarch64/frontend/parser.go]
 

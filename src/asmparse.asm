@@ -274,7 +274,7 @@ parse_inst:
                 ex      de, hl              ; HL = span_ptr
                 call    mnemonic_lookup     ; A = found, HL = id
                 or      a
-                jr      z, pi_err           ; unknown mnemonic -> out of domain
+                jp      z, pi_err           ; unknown mnemonic -> out of domain
                 ld      (PI_MNEMID), hl     ; save id
                 call    parse_advance_tok   ; consume the mnemonic
                 ld      hl, PARSE_OPSBUF
@@ -304,6 +304,10 @@ parse_inst:
                 jp      z, parse_mrs        ; B5d: mrs Xt, <sysreg>
                 cp      MNEM_MSR
                 jp      z, parse_msr        ; B5d: msr <sysreg|pstate>, Xt|#imm
+                cp      MNEM_DC
+                jp      z, parse_dc         ; B5e: dc <op>, Xt
+                cp      MNEM_TLBI
+                jp      z, parse_tlbi       ; B5e: tlbi <op>[, Xt]
 pi_loop:
                 ld      hl, (PARSE_TOK)
                 ld      a, (hl)
@@ -974,6 +978,59 @@ emit_sysname_operand:
 eso_done:
                 ld      (PI_OPSPTR), de
                 ret
+
+; ===========================================================================
+; parse_dc / parse_tlbi — B5e special-form parse for dc/tlbi. (Port of
+; parseDcTlbi, parser.go:932-964.) The operation name is a bareword identifier
+; emitted as an OP_KIND_SYS_NAME operand (emit_sysname_operand); an optional
+; `, Xt` register operand follows. For dc the register is mandatory; for tlbi it
+; is optional. Shapes:
+;   dc <op>, Xt        -> [sysname][reg Xt]
+;   tlbi <op>          -> [sysname]
+;   tlbi <op>, Xt      -> [sysname][reg Xt]
+; The op-name table lookup + Xt-requirement check live in the encoder
+; (sysreg_data.asm — single home of the DC/TLBI op tables), so the parser emits
+; the name verbatim, the same deferral as mrs/msr (B5d). Entry (from parse_inst
+; dispatch): PI_MNEMID=dc/tlbi, PI_OPSPTR=PARSE_OPSBUF, PI_COUNT=0, mnemonic
+; consumed. Exit: one INST record (CY clear); else pi_err.
+; ===========================================================================
+parse_dc:                                   ; Xt mandatory
+                xor     a
+                jr      parse_dc_tlbi
+parse_tlbi:                                 ; Xt optional
+                ld      a, 1
+parse_dc_tlbi:
+                ld      (DCTLBI_XTOPT), a
+                ; Operand 1: operation name (bareword identifier).
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_IDENT
+                jp      nz, pi_err
+                call    emit_sysname_operand
+                call    parse_advance_tok
+                ; Optional `, Xt`.
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_COMMA
+                jr      z, pdt_has_xt
+                ; No register: dc requires one (error); tlbi emits a 1-operand inst.
+                ld      a, (DCTLBI_XTOPT)
+                or      a
+                jp      z, pi_err
+                ld      a, 1
+                ld      (PI_COUNT), a
+                jp      pi_emit
+pdt_has_xt:
+                call    parse_advance_tok   ; consume the comma
+                ld      hl, (PARSE_TOK)
+                ld      a, (hl)
+                cp      TOK_IDENT
+                jp      nz, pi_err          ; expected a register after ','
+                call    parse_operand       ; emit the Xt register operand
+                jp      c, pi_err
+                ld      a, 2
+                ld      (PI_COUNT), a
+                jp      pi_emit
 
 ; ===========================================================================
 ; expr_buf_single_imm — if EXPR_BUF..(EXPR_PTR) holds exactly one PUSH_IMMn (the
@@ -3640,6 +3697,7 @@ BARRIER_OPT:    defs 1          ; parse_barrier: 1 if the arg is optional (isb),
 BARRIER_CRM:    defs 1          ; parse_barrier: resolved CRm value for the emitted operand
 BARRIER_SPANPTR: defs 2         ; barrier_lookup: saved token span pointer
 BARRIER_SPANLEN: defs 1         ; barrier_lookup: saved token span length
+DCTLBI_XTOPT:   defs 1          ; parse_dc_tlbi: 1 if the Xt operand is optional (tlbi), 0 if mandatory (dc)
 PARSE_OPSBUF:   defs 256        ; one instruction's operand bytes (staging)
 EXPR_BUF:       defs 256        ; one operand's expression bytecode (build buffer)
 EXPR_PTR:       defs 2          ; expression-bytecode write pointer (into EXPR_BUF)

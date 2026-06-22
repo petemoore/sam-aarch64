@@ -3820,3 +3820,77 @@ func TestParseMrsMsrError(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// B5e — dc/tlbi (parse_dc/parse_tlbi). The op name is an OP_KIND_SYS_NAME operand
+// followed by an optional Xt register (mandatory for dc, optional for tlbi),
+// mirroring parseDcTlbi (parser.go:932-964). Op-name validation is deferred to
+// the encoder (sysreg_data.asm), as for mrs/msr (B5d).
+// ---------------------------------------------------------------------------
+
+func TestParseDcTlbiHandCases(t *testing.T) {
+	mac := loadAsmparse(t)
+	X := format.OpRegX
+	reg := func(k format.OperandKind, n byte) []byte { return []byte{byte(k), n} }
+
+	cases := []struct {
+		desc string
+		src  string
+		want []parseRec
+	}{
+		{
+			"dc cvac, x0",
+			"dc cvac, x0\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "dc"), count: 2,
+				ops: concat(sysnameOperand("cvac"), reg(X, 0))}},
+		},
+		{
+			"dc zva, x3",
+			"dc zva, x3\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "dc"), count: 2,
+				ops: concat(sysnameOperand("zva"), reg(X, 3))}},
+		},
+		{
+			"tlbi vmalle1 (no Xt)",
+			"tlbi vmalle1\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "tlbi"), count: 1,
+				ops: sysnameOperand("vmalle1")}},
+		},
+		{
+			"tlbi vae1is, x1 (with Xt)",
+			"tlbi vae1is, x1\n",
+			[]parseRec{{mnemonicID: mustMnemID(t, "tlbi"), count: 2,
+				ops: concat(sysnameOperand("vae1is"), reg(X, 1))}},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			got, errFlag := parseZ80(t, mac, []byte(c.src))
+			if errFlag {
+				t.Fatalf("PARSE_ERR set unexpectedly")
+			}
+			compareRecs(t, "Z80 vs hand", got, c.want)
+		})
+	}
+}
+
+// TestParseDcTlbiError checks structurally-malformed dc/tlbi lines set PARSE_ERR:
+// dc requires the Xt operand; a dangling comma with no register is rejected.
+func TestParseDcTlbiError(t *testing.T) {
+	mac := loadAsmparse(t)
+	for _, src := range []string{
+		"dc cvac\n",    // dc requires ', Xt'
+		"dc\n",         // missing op name
+		"tlbi\n",       // missing op name
+		"dc cvac,\n",   // comma but no register
+		"tlbi vae1,\n", // comma but no register
+	} {
+		t.Run(src, func(t *testing.T) {
+			_, errFlag := parseZ80(t, mac, []byte(src))
+			if !errFlag {
+				t.Fatalf("expected PARSE_ERR for %q", src)
+			}
+		})
+	}
+}
