@@ -3567,5 +3567,6 @@
   description: |
     The test-variant assembler.bin boots all encode_inst self-tests inline in section C (test_encode_inst.asm). With i199+i203a/b/c the suite reached 360 B headroom to the &C000 stack-page cliff; adding i203d's mov-imm/ldr-lit/tbz encoders + vectors overflows by 378 B (prod fits fine: 4964 B headroom, so the encoders themselves are not the problem — only the test-variant inline self-test). Relieve the budget so the encode_inst suite can keep growing: e.g. move budget-consuming NON-ENCTAB inline self-tests off-axis (the encode_inst test itself must stay inline because it needs ENCTAB mapped in section A, which conflicts with the off-axis section-A trampoline), or give the encode_inst self-test a paged home that coexists with the ENCTAB window. Blocks i203d (the final i203 special-form leaf) and likely i204. Engineering task; the ENCTAB/section-A conflict is the design crux.
   status: OPEN
+  depends_on: [q43]
   kind: leaf
   owner: agent
