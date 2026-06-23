@@ -144,7 +144,7 @@ func validate(reg *Registry) *ValidationError {
 //     must be "completing" or "followup".
 //  6. Umbrella carries no prs. DONE-umbrella coherence: all children DONE/WONTFIX.
 //     (PR-less DONE leaf is valid; any number of PRs on a DONE leaf is valid.)
-//  8. Bounded description (title <= 120 chars/1 line; description <= 2000 chars/30 lines).
+//  8. Bounded description (title <= 200 chars/1 line; description <= 2000 chars/30 lines).
 //  9. Required-fields-per-status (WONTFIX => reason in description).
 //  10. Id-shaped refs exist in the union. (Deferred when opts.migrating is true.)
 //  11. Dependencies form a DAG: every depends_on target exists; no cycles.
@@ -245,8 +245,8 @@ func validateWith(reg *Registry, opts validateOpts) *ValidationError {
 		// The trailing newline a YAML block scalar appends on round-trip is
 		// trimmed first, so the bound measures content, not the serialization
 		// artifact (an in-memory 2000-char desc stays valid after reload).
-		if n := utf8.RuneCountInString(it.Title); n > 120 {
-			ve.add(id, fmt.Sprintf("title exceeds 120 chars (%d)", n))
+		if n := utf8.RuneCountInString(it.Title); n > 200 {
+			ve.add(id, fmt.Sprintf("title exceeds 200 chars (%d)", n))
 		}
 		if strings.ContainsRune(it.Title, '\n') {
 			ve.add(id, "title must be single-line")
