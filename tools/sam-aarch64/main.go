@@ -57,6 +57,8 @@ func main() {
 		preprocess    bool
 		renderMode    bool
 		dumpUsage     bool
+		fix835769     bool
+		fix843419     bool
 	)
 	flag.StringVar(&outFlag, "o", "", "output file (default stdout)")
 	flag.StringVar(&emitTBN, "emit-tbn", "",
@@ -88,6 +90,15 @@ func main() {
 	flag.BoolVar(&dumpUsage, "dump-usage", false,
 		"after assembly, print a peak-usage census of all internal data "+
 			"structures to stderr — used for sizing the Z80-side tables.")
+	flag.BoolVar(&fix835769, "fix-cortex-a53-835769", false,
+		"apply the Cortex-A53 erratum 835769 workaround to the binary: "+
+			"insert a NOP between a memory op and an immediately following "+
+			"64-bit multiply-accumulate. Off by default (only A53/Pi 3 is "+
+			"affected); does not alter the emitted .tbn.")
+	flag.BoolVar(&fix843419, "fix-cortex-a53-843419", false,
+		"apply the Cortex-A53 erratum 843419 workaround to the binary: "+
+			"rewrite an ADRP at a page-boundary slot (in an affected ld/st "+
+			"sequence) to an ADR. Off by default; does not alter the .tbn.")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		usageErr()
@@ -108,7 +119,8 @@ func main() {
 		runPreprocess(src, in, incDirs, outFlag)
 	default:
 		runAssemble(src, in, incDirs, flattenFlag, originStr,
-			stripComments, thinComments, stripData, emitTBN, outFlag, dumpUsage)
+			stripComments, thinComments, stripData, emitTBN, outFlag, dumpUsage,
+			assemble.ErrataOptions{Fix835769: fix835769, Fix843419: fix843419})
 	}
 }
 
@@ -125,7 +137,7 @@ func isTBN(buf []byte) bool {
 // via format.ReadFile.
 func runAssemble(src []byte, path string, incDirs includeDirsFlag,
 	flatten bool, originStr string, stripComments bool, thinComments int, stripData bool,
-	emitTBN, outFlag string, dumpUsage bool) {
+	emitTBN, outFlag string, dumpUsage bool, errata assemble.ErrataOptions) {
 
 	tbnIsInput := isTBN(src)
 	var f *format.File
@@ -181,7 +193,7 @@ func runAssemble(src []byte, path string, incDirs includeDirsFlag,
 			fail(err)
 		}
 	}
-	out, err := assemble.Pass2(f, p1)
+	out, err := assemble.Pass2WithErrata(f, p1, errata)
 	if err != nil {
 		fail(err)
 	}
