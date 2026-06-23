@@ -462,7 +462,7 @@
   description: |
     Beyond-M7 / future idea. Support for assembling from multiple source files with staged or partial loading, enabling larger projects than currently fit in a single-file workflow.
   status: OPEN
-  depends_on: [i2a]
+  depends_on: [i2a, q46]
   kind: leaf
   owner: agent
 
@@ -471,7 +471,7 @@
   description: |
     Use the proven Trinity B-DOS storage seam (src/netboot/bdos_seam.asm; spanning records in src/netboot/fw_span.asm) for staged/overlaid assembly, lifting the i23 96 KB IN / i24 32 KB OUT ceilings. Storage-access half proven by netboot work. Assembler still uses plain HSAVE/HLOAD for single-file IN→OUT; this item extends that to mass-storage-backed staging. Rescoped 2026-06-17: netboot proved records are accessible + writable; remaining deliverable is the assembler-scale integration.
   status: OPEN
-  depends_on: [i2a]
+  depends_on: [i2a, i24]
   kind: leaf
   owner: agent
   refs: [memory/trinity_hardware.md, src/netboot/bdos_seam.asm, i23, i24]
