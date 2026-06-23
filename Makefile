@@ -605,6 +605,23 @@ $(BUILD)/netboot_sd_listread.bin $(BUILD)/netboot_sd_listread.map: src/netboot/s
 
 netboot-sd-listread: $(BUILD)/netboot_sd_listread.bin $(BUILD)/netboot_sd_listread.map
 
+# eeprom-roundtrip — the non-destructive Trinity EEPROM write round-trip test
+# (i225). Exercises the real eeprom.asm write path on a free scratch chunk and
+# reports the result over the network (test_report.asm: a "SATR" UDP packet) +
+# the border colour, so the SAME binary runs identically in the ENC28J60
+# emulator and on real hardware. Driven by eeprom_roundtrip_test.go; gated by
+# ci-netboot-z80.
+$(BUILD)/eeprom_roundtrip.bin $(BUILD)/eeprom_roundtrip.map: src/netboot/eeprom_roundtrip_standalone.asm src/netboot/build_udp_frame.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/eeprom.asm src/netboot/test_report.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/eeprom_roundtrip.bin \
+	    --mapfile=$(BUILD)/eeprom_roundtrip.map \
+	    src/netboot/eeprom_roundtrip_standalone.asm
+	@# org &8000, must fit section C so trinload can push it (push with
+	@# tools/trinload-push/trinload-push.py <sam-ip> build/eeprom_roundtrip.bin 1 0x8000).
+	@tools/netboot-boot-fit-check.sh $(BUILD)/eeprom_roundtrip.bin 16384 eeprom_roundtrip.bin
+
+netboot-eeprom-roundtrip: $(BUILD)/eeprom_roundtrip.bin $(BUILD)/eeprom_roundtrip.map
+
 # smoke-test (i94) — the Trinity bring-up smoke test: drv_read a frame, answer an
 # ARP request for the SAM's IP with build_arp_reply, drv_write the reply.  Two
 # builds from one source:
@@ -1043,7 +1060,7 @@ $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map: src/test_compact_ir.a
 compact-ir-z80: $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-samboot-inject netboot-smoke-boot netboot-server-boot netboot-serve-boot netboot-client-boot netboot-trinload netboot-sd-listread
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-samboot-inject netboot-smoke-boot netboot-server-boot netboot-serve-boot netboot-client-boot netboot-trinload netboot-sd-listread netboot-eeprom-roundtrip
 
 ci-netboot-z80: netboot-z80-routines editmodel-z80 editmodel-paged-z80 pagepool-z80 viewport-z80 asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80
 	cd tools/sampage && go test ./...

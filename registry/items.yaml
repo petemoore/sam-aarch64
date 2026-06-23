@@ -2800,7 +2800,7 @@
   description: |
     Flash the prototyped patched EEPROM to Pete's Trinity via write_chunk, keeping the captured EEPROM as the restore backup; power-cycle and confirm unattended auto-boot of the configured record. Hardware (Pete).
   status: OPEN
-  depends_on: [i135d, i87a-b1, i87b, i197c, i221]
+  depends_on: [i135d, i87a-b1, i87b, i197c, i221, i226]
   kind: leaf
   owner: pete
   parent: i135
@@ -3850,3 +3850,22 @@
   owner: agent
   prs:
     - {num: 616, role: completing}
+
+- id: i225
+  title: On-SAM test-report-over-network framework + first client (EEPROM write round-trip)
+  description: |
+    Build a REUSABLE on-SAM test harness primitive: a test_report routine that emits a result over the network (UDP via the hardware-proven ENC driver + build_udp_frame) AND paints the SAM border (green=pass/red=fail). Because the report goes over the wire, the SAME binary runs identically in the koron-go ENC28J60 emulator (result read from TXFrames) and on the real Trinity (result read from a UDP listener) — no emulation/hardware divergence (CLAUDE.md §7), and the agent reads results DIRECTLY, so future hardware-bound tests become agent-autonomous. First client: the non-destructive EEPROM write round-trip on a confirmed-unused free chunk (chunk 20, all-0xFF in the capture): read+save, write a position-sensitive pattern, read-back+verify, restore, re-verify; report PASS/FAIL+detail. De-risks i135c (the first real EEPROM write must not be the boot code). Emulation-verified under eeprom.go (i221 write model) incl. a write-fault negative control proving the test reports FAIL. Hands Pete a runnable artifact for i226 (hardware run).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 620, role: completing}
+
+- id: i226
+  title: Run the EEPROM write round-trip on real Trinity hardware — prove the write path before any boot-code flash
+  description: |
+    Hardware (Pete). Run the round-trip test payload on the real SAM+Trinity: read a free chunk, write a test pattern, read back + verify, restore, confirm. Proves the on-SAM EEPROM WRITE path (never run on real silicon — only reads via i87a) works end-to-end without touching boot/B-DOS/config. Keep the full eeprom.bin capture as the ultimate restore backup. Only after this passes does i135c (flash the patched boot chunk) proceed.
+  status: OPEN
+  depends_on: [i225]
+  kind: leaf
+  owner: pete
