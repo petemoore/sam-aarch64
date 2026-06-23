@@ -49,8 +49,13 @@ registry, not the bundled test fixtures.
 
 `ready` **excludes `owner:pete` (needs-Pete-present) items by default**, so the
 tip is always agent-actionable — you never have to skip a hardware/Pete item. When
-Pete is around, `build/registry ready --pete-present` includes them and lists them
-first (don't waste his presence).
+Pete is around, `ready` auto-includes and prioritises his items when the
+**presence marker** `~/.claude/autonomous-loop/pete-present` exists — just
+`touch` it at session start and `rm` it when he leaves; no flag needed. The
+marker persists across sessions and context resets, so autonomous runs pick it up
+without any per-session setup. `--pete-present` and `--pete-away` still work as
+before: an explicit flag always overrides the marker (`--pete-away` wins over the
+marker; `--pete-present` wins when there is no marker).
 
 ## Run
 

@@ -21,7 +21,9 @@ must pass before committing. Commit the YAML + regenerated `.md` together.
 ## Pick / inspect
 
 - `build/registry ready` — priority-ordered unblocked pullable items; the **tip is
-  authoritative** (`--pete-present` includes + prioritizes `owner:pete` items).
+  authoritative**. `owner:pete` items are auto-included (and listed first) when the
+  presence marker `~/.claude/autonomous-loop/pete-present` exists; `--pete-present`
+  forces include, `--pete-away` forces exclude (flags override the marker).
 - `build/registry in-progress` — all IN_PROGRESS items (must be empty before a merge).
 - `build/registry view --id iNN|qNN [--format json]` — the record + computed dependents
   + priority rank. Use this instead of grepping the YAML.
