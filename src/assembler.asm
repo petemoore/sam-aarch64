@@ -244,6 +244,16 @@ OPMEM_OFF:      equ     &D100          ; 8 bytes — OpMem offset (s64 LE)
 
                 include "print.asm"
 
+                ; i2b — the IDE page allocator (src/pagepool.asm) + its boot
+                ; survey (src/pool_boot.asm). PP_TABLE_BASE places the resident
+                ; page_owner[] table in section D's free region (&C9A4-&CFFF,
+                ; documented above), so it stays out of the section-C code
+                ; stream. pool_boot_init runs at boot below; run_pool_self_tests
+                ; runs in the BUILD_TESTS self-test block.
+PP_TABLE_BASE:  equ     &C9A4
+                include "pagepool.asm"
+                include "pool_boot.asm"
+
 ; -----------------------------------------------------------------------
 ; Main program — entry via jp from &8000.
 ;
@@ -311,6 +321,14 @@ endif
 ; run_mem_self_tests below.  The pre-load on-axis self-tests don't
 ; touch section B, so installing the trampoline early is safe.
                 call    enctab_trampoline_setup
+
+; -- i2b: size the IDE page pool from PRAMTP and reserve the statically-used
+; pages (0..15). Additive — no buffer is migrated to the pool yet, so this
+; only stands up the page_owner[] table; it reads sysvars (PRAMTP in section B)
+; under the boot LMPR, so it must run after the LMPR capture above. Harmless
+; in production (the pool has no consumer yet); the BUILD_TESTS self-test below
+; exercises it.
+                call    pool_boot_init
 
 ; -- PRODUCTION: HLOAD disasm.bin into physical page 15.  The disassembler
 ; is a production feature (needed by the editor at runtime); deposited for
@@ -435,6 +453,9 @@ if defined(BUILD_TESTS)
                 ; (litpool_init re-initialises its own state) so its earlier
                 ; position in the cluster is behaviour-neutral.
                 call    run_emit_paged_self_tests
+                ; The i2b page-pool self-test (run_pool_self_tests) runs
+                ; off-axis in the page-12 cluster below, not inline — it stays
+                ; out of the section-C test-variant budget.
 
 ; -- Disasm stub self-test: invoke run_disasm_self_test on page 15 via
 ; paged_call.  The self-test (in disasm.bin at DISASM_SELF_TEST_ENTRY)

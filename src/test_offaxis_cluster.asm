@@ -104,6 +104,10 @@ cluster_dispatch:
                 call    run_shifted_reg_self_tests
                 call    run_extended_reg_self_tests
                 call    run_litpool_self_tests
+                ; i2b: exercise the live, boot-sized page pool (pool_boot_init
+                ; ran earlier in the main boot path). pp_* operate on the
+                ; section-D page_owner[] table, HMPR-stable under this swap.
+                call    run_pool_self_tests
                 ret
 
                 include "test_symbols.asm"
@@ -116,3 +120,4 @@ cluster_dispatch:
                 include "test_shifted_reg.asm"
                 include "test_extended_reg.asm"
                 include "test_litpool.asm"
+                include "test_pagepool.asm"
