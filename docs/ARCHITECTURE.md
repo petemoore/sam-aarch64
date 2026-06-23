@@ -384,6 +384,8 @@ exercise combinations, and the release gate exercises everything at once.
   [`notes/sam-paging.md`](notes/sam-paging.md)
 - Host toolchain: [`../tools/README.md`](../tools/README.md)
 - Format: [specs/tbn-binary-format-reference.md](specs/tbn-binary-format-reference.md)
+- SAM software catalogue (every key binary/disasm/investigation + how they relate):
+  [specs/sam-software-catalogue.md](specs/sam-software-catalogue.md)
 - Disk/file plumbing — the DOS hook layer (SAMDOS 2 / B-DOS):
   [specs/samdos-file-io.md](specs/samdos-file-io.md) ·
   [`notes/sam-disk-format.md`](notes/sam-disk-format.md) ·

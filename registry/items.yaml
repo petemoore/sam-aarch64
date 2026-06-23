@@ -3381,9 +3381,11 @@
   title: "SAM software catalogue: index every key binary, disassembly, investigation + how they relate"
   description: |
     Pete (2026-06-21): we now have many pieces of SAM software — some disassembled, some commented, some not — and no single overview, which has caused real confusion (e.g. SAMDOS vs B-DOS, where B-DOS replaces SAMDOS). Build a generic SAM software catalogue (a living reference doc) that for each piece records: what it is, where its binary lives, where its disassembly lives + whether commented, related investigations/reports, and how the pieces relate. Pieces include: the SAM system ROMs (untarnished, incl. startup stripes); Colin's forked ROM (fetches boot code from EEPROM -> how the forked-B-DOS bootblock is stored on EEPROM) — extracted 2026-06-21 (rom0.bin in ~/sam-archive/samboot-capture/, rom1 pending i87a-b2); the Trinity EEPROM contents + the Trinity disk's network-config program (defines the EEPROM layout) — eeprom.bin extracted 2026-06-21; trinload; SAMDOS; B-DOS; our own netboot programs + harness. Reference it from ARCHITECTURE.md. Record extraction artifacts so they are never lost.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 605, role: completing}
   refs: [docs/specs/samboot.md, docs/ARCHITECTURE.md]
 
 - id: i190
@@ -3779,3 +3781,11 @@
   owner: agent
   prs:
     - {num: 597, role: completing}
+
+- id: i219
+  title: Acquire a stock (untarnished) SAM Coupé system ROM binary + disassembly
+  description: |
+    Gap surfaced by i189 (the SAM software catalogue, docs/specs/sam-software-catalogue.md): the project has NO stock/untarnished SAM Coupe system ROM — no binary, no disassembly, no deep doc; it exists only conceptually (the ZX Spectrum ROM disasms under ~/git are a DIFFERENT machine, not a substitute). We have Colin's FORKED ROM captured (rom0/rom1/rom.bin) but not the stock one. Having the stock ROM would let us diff fork-vs-stock to isolate exactly what Colin changed for the EEPROM boot path, and ground the startup-stripes / boot behaviour. owner:pete — acquisition is Pete's call (Colin Piggot / Simon Owen are contacts, or a SimCoupe ROM image). Agent can disassemble/annotate once a binary is in hand.
+  status: OPEN
+  kind: leaf
+  owner: pete
