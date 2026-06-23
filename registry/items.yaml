@@ -332,7 +332,7 @@
   description: |
     The output length field is 16-bit and the output buffer ceiling is 32768 bytes (src/encoder.asm). Lift the OUT_LEN field and ceiling to support assemblies larger than 32 KB. Deferred-backlog item.
   status: OPEN
-  depends_on: [i2a, i2b]
+  depends_on: [i2a, i2b, q45, i218]
   kind: leaf
   owner: agent
 
@@ -3564,7 +3564,7 @@
   description: |
     Third/final sub-brick of i201. Port encodeLdrLitPoolInst (ldr Xt,=expr literal-pool slot, pass2.go:639-672) + wire into encode_inst's pre-form-table dispatch (pass2.go:241-243). REUSES fold_litpool19 (insn_run.asm FSID_LITPOOL19) + the litpool table machinery (litpool.asm). New work = parse the OpLitPool operand (width + expr) and route to the litpool fold. Faithful port (CLAUDE.md s6). Depends on i199, i201a. Extends the boot self-test + Go authority fixtures (needs litpool table init). SimCoupe-gated.
   status: OPEN
-  depends_on: [i199, i201a]
+  depends_on: [i199, i201a, i218]
   kind: leaf
   owner: agent
   parent: i201
@@ -3730,3 +3730,11 @@
   owner: agent
   prs:
     - {num: 589, role: completing}
+
+- id: i218
+  title: "Commoning pass #3 — restore test-variant section-C headroom (i23 consumed it to 13 B)"
+  description: |
+    i23 (#595) consumed the BUILD_TESTS test-variant section-C headroom down to 13 B (was ~299 B pre-i23 per the m9 handover; i206 was commoning pass #2). Both the OUT-ceiling lift (i24) and the encoder strand (i201c/i204) add inline section-C code and cannot fit until headroom is reclaimed. Reclaim by factoring shared logic (the i201a/b/c OPVAL-populator family; the i206 prod-code commoning families ml_div*/main_dir_org_*/sysname per build/coverage-report.txt) and/or relocating a still-inline self-test off-axis (test_reader_paged.asm is a candidate — it is currently inline at assembler.asm:557). Mirror i206 (commoning #2, DONE). Verify via the test-variant budget gate (code_end < &C000) + the harness boot self-tests.
+  status: OPEN
+  kind: leaf
+  owner: agent
