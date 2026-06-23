@@ -35,6 +35,10 @@ TR_HDR_LEN:      equ 9             ; magic(4)+version(1)+test_id(2)+status(1)+dl
 TR_BORDER_PASS:  equ 4             ; SAM border colour: green
 TR_BORDER_FAIL:  equ 2             ; SAM border colour: red
 
+EMU_DETECT_PORT: equ &7F           ; unmapped SAM port for emulation detection (i228)
+TR_MODE_EMU:     equ &E0           ; tr_terminate branch markers (recorded in TR_TERM_MODE)
+TR_MODE_HW:      equ &A0
+
 test_report:
                 ; Stash the entry parameters (the buffer build below needs the
                 ; registers).
@@ -115,6 +119,32 @@ tr_paint:
                 out     (&fe), a
                 ret
 
+; ---------------------------------------------------------------------------
+; tr_terminate — end a pushed test, doing the right thing for where it runs.
+;
+; Reads the unmapped EMU_DETECT_PORT (i228): real hardware floats the bus high to
+; 0xFF; the emulator returns a distinct marker (the koron-go IO model returns
+; 0x00). Then:
+;   - emulation -> di;halt, the launch-independent clean stop the harness detects;
+;   - hardware  -> RET, back to trinload (which pushed its listener as our return
+;     address), so trinload stays alive for the next pushed test (the autonomous
+;     loop — no power-cycle between tests).
+; Records the branch taken in TR_TERM_MODE so a harness test can assert both
+; paths. A payload ends with `call test_report` then `jp tr_terminate`.
+; ---------------------------------------------------------------------------
+tr_terminate:
+                in      a, (EMU_DETECT_PORT)    ; 0xFF on hardware; marker (!=0xFF) in emulation
+                inc     a                        ; 0xFF -> 0 (Z) only on hardware
+                jr      z, tr_term_hw
+                ld      a, TR_MODE_EMU
+                ld      (TR_TERM_MODE), a
+                di
+                halt
+tr_term_hw:
+                ld      a, TR_MODE_HW
+                ld      (TR_TERM_MODE), a
+                ret
+
 tr_magic:         defb 83,65,84,82               ; "SATR"
 tr_broadcast_mac: defb &ff,&ff,&ff,&ff,&ff,&ff
 tr_broadcast_ip:  defb 255,255,255,255
@@ -131,4 +161,5 @@ tr_save_id:       defs 2
 tr_save_status:   defs 1
 tr_save_dlen:     defs 1
 tr_save_dptr:     defs 2
+TR_TERM_MODE:     defs 1            ; tr_terminate branch marker (TR_MODE_EMU/HW)
 TR_PAYLOAD:       defs TR_HDR_LEN+TR_DETAIL_MAX
