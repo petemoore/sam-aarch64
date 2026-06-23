@@ -51,11 +51,19 @@ const (
 	selENCReset   = 0x28 // ereset (microcontroller-level ENC reset)
 	selNullOff    = 0x04 // enulloff (auto-null off)
 	selNullOn     = 0x2F // enullon (auto-null on)
-	selProbeT     = 0x08 // identity probe: reply 'T' on &DD
-	selProbeR     = 0x09 // identity probe: reply 'R' on &DD
+	selIdentBase  = 0x08 // IDENT string read: &08..&0F return the 8 chars of trinityIdent
+	selProbeT     = 0x08 // &08 = 1st IDENT char 'T' (the driver's chk_trinity reads this)
+	selProbeR     = 0x09 // &09 = 2nd IDENT char 'R'
+	selIdentTop   = 0x0F // &0F = 8th IDENT char
 	selEEPEnable  = 0x11 // eeprom_enable: CS-assert the flash EEPROM (eeprom.asm)
 	selEEPDisable = 0x10 // eeprom_disable: CS-deassert it
 )
+
+// trinityIdent is the 8-byte firmware IDENT string the microcontroller returns over
+// &DD for select commands &08..&0F (manual "Trinity - Ident"). The 4th char is a
+// SPACE (verified from the source scan IMG_20260617_162601). chk_trinity only reads
+// the first two ('T','R'); the full string is modelled for fidelity.
+const trinityIdent = "TRI v1.1"
 
 // ENC28J60 SPI opcode encodings (datasheet Table 4-1: 3-bit op in the top bits,
 // 5-bit register address in the low bits; RBM/WBM/SRC are fixed bytes).
@@ -320,12 +328,11 @@ func (e *ENC28J60) In(port uint8) uint8 {
 	e.ops++
 	switch port {
 	case portTrinityCtl:
-		// Microcontroller status. Bit 3 (busy) is always clear — the emulation is
-		// never busy, so the driver's wait_ready loops exit immediately. When an SD
-		// card is configured the SD model supplies the card-present (bit 1) and
-		// write-protect (bit 2, sense-inverted: set == writable) bits its sector
-		// driver checks (hd.svb-t's `IN(&DC); CPL; AND 4` WP gate, &A91B); with no
-		// card the status is the bare not-busy 0x00 the pre-existing tests expect.
+		// Trinity Status Register (%1100BWFE): fixed top nibble 0xC0, then bit3 BUSY
+		// (always clear — the emulation never stalls, so wait_ready loops exit), bit2
+		// WRITE, bit1 FLASH (card present), bit0 ENCINT. The SD model supplies the
+		// card-present + write bits (its `IN(&DC); CPL; AND 4` WP gate, &A91B); with no
+		// card it returns the bare 0xC0. (ctlStatus, sdcard.go.)
 		return e.sd.ctlStatus()
 	case portTrinityEEP:
 		// Shared port: EEPROM read data while a flash read transaction is in its
@@ -409,10 +416,9 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 		// &04 is the SD init ladder's all-deselect bracket too (dis &A626/&A8EE):
 		// drop SD CS and clear its per-transaction state.
 		e.sd.sdReset()
-	case selProbeT:
-		e.probeReply = 'T' // 0x54
-	case selProbeR:
-		e.probeReply = 'R' // 0x52
+	case selProbeT, selProbeR, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, selIdentTop:
+		// IDENT string read (&08..&0F): latch the Nth char of "TRI v1.1" for IN &DD.
+		e.probeReply = trinityIdent[v-selIdentBase]
 	case selEEPEnable:
 		e.eep.csAssert() // eeprom_enable: begin a flash transaction
 	case selEEPDisable:

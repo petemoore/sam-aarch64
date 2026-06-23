@@ -3683,3 +3683,13 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i217
+  title: "Trinity emulator fidelity: %1100 status-register top nibble + full 8-byte IDENT string (verified vs manual scans)"
+  description: |
+    From the OCR/doc-vs-code audit triggered by the #588 EEPROM-addressing fix (Pete, 2026-06-23). Two minor emulator-fidelity gaps vs the verified Trinity manual: (F2) sdcard.go ctlStatus returned top nibble 0000, but IN &DC = %1100BWFE has FIXED bits 7,6 (idle base &C0, never &00) -> fixed to &C0 (no card) / &C6 (card present); (F3) enc28j60.go modelled only IDENT chars &08/&09 ('T'/'R'), but the probe is a full 8-byte string &08..&0F = 'TRI v1.1' (4th char a SPACE, verified from source scan IMG_20260617_162601) -> now returns all 8. Both harmless today (chk_trinity only reads &08/&09 + bit3/bit2) but make the model return data exactly as the docs describe. Tests: TestTrinityStatusRegister + TestTrinityIdentString. Doc: trinity-capabilities.md §2 extended with the verified Status Register + IDENT details (cited to the scans). Audit also confirmed our dumper waits-for-BUSY correctly and all command bytes match the manual; only the EEPROM address map had drifted (fixed in #588). Refs: docs/notes/trinity-capabilities.md.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 589, role: completing}

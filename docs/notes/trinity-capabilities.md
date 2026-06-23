@@ -53,6 +53,36 @@ Bit 3 read back from `&DC` = **busy flag**: `wait_ready` polls `IN A,(&DC); AND 
 
 The SD card (`&DF`) select values are **confirmed by B-DOS 1.5t itself** — the fork is their canonical consumer (the B-DOS 1.5t analysis, i71, `bdos-trinity-fork-analysis.md`), upgrading the earlier empirical recovery from period Trinity utility software: `&30` = SD deselect, `&31` = SD select, `&38` = SD initialise (microcontroller command; returns 1 for MMC, 2 for SD), `&3F` = SD select with auto-null. In addition, `&04` is the SD-idle / all-deselect state the fork writes around every transaction (auto-null off). The microcontroller identity probe writes commands `&08` then `&09` to `&DC` and reads the replies — expected `'T'`,`'R'` — from port `&DD` (the EEPROM SPI data port, not `&DF`). `IN (&DC)` bit 1 = card present; bit 2 = the write-protect switch sense, inverted.
 
+### `IN &DC` — the Trinity Status Register (verified against the manual scan)
+
+The manual's "Trinity Status Register" section gives the full read-back byte as
+**`%1100BWFE`** — the **top nibble is FIXED** (bits 7,6 = 1; bits 5,4 = 0), so a read
+is never `&00`; the idle no-card value is **`&C0`**. The low nibble is dynamic:
+
+| Bit | Name | Meaning |
+|---|---|---|
+| 3 | BUSY | microcontroller busy — `1` = do not access any Trinity port except `IN &DC` |
+| 2 | WRITE | flash-card write status — `1` = write enabled, `0` = disabled (driver reads it `CPL/AND 4`, sense-inverted) |
+| 1 | FLASH | flash card inserted — `1` = yes |
+| 0 | ENCINT | ENC28J60 interrupt — `1` = interrupt triggered |
+
+[Source: Trinity manual "Trinity Status Register", scan `~/sam-archive/trinity-docs/photos/IMG_20260617_162550.jpg`; verified visually 2026-06-23.]
+
+### `&08`–`&0F` — the 8-byte firmware IDENT string
+
+The identity probe is a full **8-byte IDENT string**, not just two bytes: `OUT &DC` with
+each of `&08`..`&0F` then `IN &DD` returns the Nth character. The string is
+**`"TRI v1.1"`** (`T`,`R`,`I`,*space*,`v`,`1`,`.`,`1` — "Trinity v1.1", the firmware
+version). The 4th char is a **space**, verified from the source scan (OCR rendered it
+as empty `()`). `chk_trinity` only reads the first two (`'T'`,`'R'`) as a presence gate.
+[Source: Trinity manual "Trinity – Ident", scan `IMG_20260617_162601.jpg`; verified 2026-06-23.]
+
+The host emulator (`tools/netboot-oracle/z80/enc28j60.go`, `sdcard.go`) models both the
+`&C0`-based status register and the full IDENT string (`TestTrinityStatusRegister`,
+`TestTrinityIdentString`). **EEPROM addressing gotcha:** the i87a capture `eeprom.bin`
+is *chunk-ordered* (file offset 0 = device `&2000` = chunk 1), so any tool loading it
+must un-rotate to device-linear first — see `samboot-bootblock-analysis.md` §8.
+
 ---
 
 ## 3. SPI Mechanics

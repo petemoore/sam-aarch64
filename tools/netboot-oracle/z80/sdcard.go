@@ -259,17 +259,19 @@ func (s *SDCard) sdSelect(v uint8) bool {
 	return false
 }
 
-// ctlStatus is the &DC microcontroller-status byte the model reports. Bit 3
-// (busy) is always clear (the model never stalls). When a card is configured it
-// also reports bit 1 (card present) and bit 2 (write-protect, SENSE-INVERTED: the
-// driver reads it as `CPL / AND 4`, so a writable card must read the bit SET —
-// doc §1, hd.svb-t WP gate &A91B). With no card configured it returns 0x00, the
-// bare not-busy value the pre-existing no-card tests rely on.
+// ctlStatus is the &DC Trinity Status Register byte the model reports. Per the
+// manual ("Trinity Status Register"), IN &DC returns %1100BWFE: bits 7,6 are FIXED
+// 1, bits 5,4 FIXED 0, then bit3 BUSY / bit2 WRITE / bit1 FLASH (card inserted) /
+// bit0 ENCINT. So the base is 0xC0, never 0x00. Bit 3 (busy) is always clear (the
+// model never stalls). When a card is configured it also reports bit 1 (card
+// present) and bit 2 (write status, SENSE-INVERTED: the driver reads it as
+// `CPL / AND 4`, so a writable card must read the bit SET — hd.svb-t WP gate &A91B).
+// ENCINT (bit 0) is not modelled here.
 func (s *SDCard) ctlStatus() uint8 {
 	if !s.configured {
-		return 0x00
+		return 0xC0 // no card: fixed top nibble only (FLASH=0, busy clear)
 	}
-	return 0x06 // bit1 present + bit2 write-enabled (sense-inverted), bit3 busy clear
+	return 0xC6 // 0xC0 | bit1 present | bit2 write-enabled (sense-inverted), busy clear
 }
 
 // sdReset clears all per-transaction state (selNullOff / &04 all-deselect bracket,
