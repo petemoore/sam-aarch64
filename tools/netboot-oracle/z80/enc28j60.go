@@ -479,6 +479,17 @@ func (e *ENC28J60) LoadEEPROMImage(image []byte) {
 	e.eep.store = append([]byte(nil), image...)
 }
 
+// EEPROMImage returns a copy of the flash EEPROM backing store — the device as it
+// stands now, byte 0 = device address 0. It is the read-side counterpart of
+// LoadEEPROMImage: a test takes a backup snapshot before a destructive write_chunk,
+// then asserts the write changed the right bytes and that restoring the snapshot
+// (LoadEEPROMImage) brings the originals back — the i135c backup/restore rehearsal
+// run in emulation before any real flash. The store is copied, so the caller may
+// keep it across further writes.
+func (e *ENC28J60) EEPROMImage() []byte {
+	return append([]byte(nil), e.eep.store...)
+}
+
 // ProgramChunk lays a 1 KB data chunk at the flat EEPROM address eeprom.asm's
 // read_chunk reads for chunk number n (the value passed in `value`). get_chunk
 // maps n to flat address (28 + n*4)<<8, so chunk n lives n*1024 bytes above
