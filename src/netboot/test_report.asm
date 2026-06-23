@@ -133,8 +133,16 @@ tr_paint:
 ; paths. A payload ends with `call test_report` then `jp tr_terminate`.
 ; ---------------------------------------------------------------------------
 tr_terminate:
-                in      a, (EMU_DETECT_PORT)    ; 0xFF on hardware; marker (!=0xFF) in emulation
-                inc     a                        ; 0xFF -> 0 (Z) only on hardware
+                ; Read with IN A,(C) and B=0 so the port address is exactly &007F
+                ; — the form the i228 probe characterized (&FF on hardware). The
+                ; DB-form IN A,(&7F) would put A on the high address lines (reading
+                ; &xx7F, an uncharacterized port): that froze the SAM on the first
+                ; hardware run, and the harness masked it (koron-go does not model
+                ; A on the high address lines for IN A,(n)).
+                ld      c, EMU_DETECT_PORT
+                ld      b, 0
+                in      a, (c)                  ; &FF on hardware; marker (!=&FF) in emulation
+                inc     a                        ; &FF -> 0 (Z) only on hardware
                 jr      z, tr_term_hw
                 ld      a, TR_MODE_EMU
                 ld      (TR_TERM_MODE), a
