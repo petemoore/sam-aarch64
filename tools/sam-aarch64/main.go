@@ -51,6 +51,7 @@ func main() {
 		incDirs       includeDirsFlag
 		flattenFlag   bool
 		originStr     string
+		layoutFile    string
 		stripComments bool
 		thinComments  int
 		stripData     bool
@@ -69,6 +70,9 @@ func main() {
 	flag.BoolVar(&flattenFlag, "flatten", false,
 		"after parsing, apply the linker-equivalent flatten pass "+
 			"(spectrum4 layout: .text + BSS labels as .equ).")
+	flag.StringVar(&layoutFile, "layout", "",
+		"JSON section-layout file for -flatten (default: the built-in "+
+			"spectrum4 layout; see frontend/testdata/spectrum4.layout.json).")
 	flag.StringVar(&originStr, "origin", "0xfffffff000000000",
 		"origin VMA emitted at the start of -flatten output "+
 			"(the linker script's `. = N`); ignored without -flatten.")
@@ -103,6 +107,9 @@ func main() {
 	if flag.NArg() != 1 {
 		usageErr()
 	}
+	if layoutFile != "" && !flattenFlag {
+		fail(fmt.Errorf("-layout has no effect without -flatten"))
+	}
 	in := flag.Arg(0)
 	src, err := os.ReadFile(in)
 	if err != nil {
@@ -118,7 +125,7 @@ func main() {
 		}
 		runPreprocess(src, in, incDirs, outFlag)
 	default:
-		runAssemble(src, in, incDirs, flattenFlag, originStr,
+		runAssemble(src, in, incDirs, flattenFlag, originStr, layoutFile,
 			stripComments, thinComments, stripData, emitTBN, outFlag, dumpUsage,
 			assemble.ErrataOptions{Fix835769: fix835769, Fix843419: fix843419})
 	}
@@ -136,7 +143,7 @@ func isTBN(buf []byte) bool {
 // decision A). Only an existing on-disk `.tbn` (overlay format) is decoded
 // via format.ReadFile.
 func runAssemble(src []byte, path string, incDirs includeDirsFlag,
-	flatten bool, originStr string, stripComments bool, thinComments int, stripData bool,
+	flatten bool, originStr, layoutFile string, stripComments bool, thinComments int, stripData bool,
 	emitTBN, outFlag string, dumpUsage bool, errata assemble.ErrataOptions) {
 
 	tbnIsInput := isTBN(src)
@@ -157,9 +164,16 @@ func runAssemble(src []byte, path string, incDirs includeDirsFlag,
 			if perr != nil {
 				fail(fmt.Errorf("bad -origin %q: %v", originStr, perr))
 			}
+			var layout []frontend.SectionLayout
+			if layoutFile != "" {
+				layout, err = frontend.LoadLayoutFile(layoutFile)
+				if err != nil {
+					fail(err)
+				}
+			}
 			f, err = frontend.TranslateAndFlatten(src, path,
 				frontend.PreprocessOptions{IncludeDirs: incDirs},
-				frontend.FlattenOptions{OriginVMA: origin})
+				frontend.FlattenOptions{OriginVMA: origin, Layout: layout})
 		} else {
 			f, err = frontend.TranslateWithOptions(src, path,
 				frontend.PreprocessOptions{IncludeDirs: incDirs})

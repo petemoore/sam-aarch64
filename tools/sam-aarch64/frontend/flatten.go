@@ -40,20 +40,36 @@ type FlattenOptions struct {
 	// OriginVMA is the virtual address of the first emitted byte
 	// (mirroring the linker script `. = 0xfffffff000000000`).
 	OriginVMA int64
+	// Layout is the section-ordering table the flatten pass lays out
+	// against. When nil it defaults to SpectrumFourLayout, so the host
+	// flatten path is not spectrum4-locked: a different target supplies
+	// its own table (e.g. via the `-layout` flag → LoadLayoutFile). The
+	// table's role convention is fixed (see SectionLayout): slot 0 is the
+	// code section, slot 1 the data section, slots 2+ are address-only.
+	Layout []SectionLayout
 }
 
-// SectionLayout describes one entry in the linker script's section
+// SectionLayout describes one entry in a target's linker-script section
 // ordering. Alignment is applied *before* the section starts (i.e.
 // section.start = ALIGN(prev_section.end, alignment)).
+//
+// The flatten pass assigns roles by POSITION in the layout slice: slot 0
+// is the CODE section (emitted in source order, with a trailing `.ltorg`
+// that flushes its literal pool); slot 1 is the DATA section (emitted
+// after the code with a leading `.balign 0x10`, only when it has content);
+// slots 2+ are ADDRESS-ONLY (trailing NOBITS — their labels become
+// `.equ NAME, VMA` records and their bytes are dropped, mirroring
+// `objcopy -O binary` on the linked ELF where post-data sections are
+// NOBITS).
 type SectionLayout struct {
-	Name         string
-	StartAlign   int64
-	TrailingAlign int64 // ALIGN applied to PC at end of section (0 = none)
+	Name          string `json:"name"`
+	StartAlign    int64  `json:"start_align"`
+	TrailingAlign int64  `json:"trailing_align"` // ALIGN applied to PC at end of section (0 = none)
 }
 
 // SpectrumFourLayout encodes the linker-script section order used by
-// kernel/spectrum4.ld. Section sizing and start computations consult
-// this table.
+// kernel/spectrum4.ld. It is the default FlattenOptions.Layout. Section
+// sizing and start computations consult the active layout table.
 var SpectrumFourLayout = []SectionLayout{
 	{Name: ".text", StartAlign: 0x10},
 	{Name: ".data", StartAlign: 0x10},
@@ -65,10 +81,10 @@ var SpectrumFourLayout = []SectionLayout{
 	{Name: "bss_tests", StartAlign: 0x10},
 }
 
-// canonicalSectionIndex returns the index of name in SpectrumFourLayout
-// or -1 if name is not a known section.
-func canonicalSectionIndex(name string) int {
-	for i, s := range SpectrumFourLayout {
+// layoutIndex returns the index of name in the layout table, or -1 if
+// name is not a known section.
+func layoutIndex(layout []SectionLayout, name string) int {
+	for i, s := range layout {
 		if s.Name == name {
 			return i
 		}
@@ -83,6 +99,16 @@ func canonicalSectionIndex(name string) int {
 // label names already interned during parsing are reused). Returns the
 // new record stream.
 func Flatten(records []format.Record, names []string, opts FlattenOptions) ([]format.Record, error) {
+	// The active section-ordering table. Defaults to spectrum4 so the
+	// common path is unchanged; a non-spectrum4 target passes its own.
+	layout := opts.Layout
+	if layout == nil {
+		layout = SpectrumFourLayout
+	}
+	if len(layout) == 0 {
+		return nil, fmt.Errorf("flatten: layout has no sections")
+	}
+
 	// Bucket records by current section. The walker observes
 	// `.text` / `.data` / `.section X` directives and switches the
 	// current bucket; those directive records are *consumed* (not
@@ -126,24 +152,24 @@ func Flatten(records []format.Record, names []string, opts FlattenOptions) ([]fo
 	// section sizer also accounts for the literal-pool flush at the
 	// trailing `.ltorg`.
 	type sec struct {
-		layout   SectionLayout
-		records  []format.Record
-		start    int64
-		size     int64
+		layout     SectionLayout
+		records    []format.Record
+		start      int64
+		size       int64
 		hasContent bool
 	}
-	sections := make([]*sec, len(SpectrumFourLayout))
-	for i, lay := range SpectrumFourLayout {
+	sections := make([]*sec, len(layout))
+	for i, lay := range layout {
 		recs := bucketByName[lay.Name]
 		sections[i] = &sec{layout: lay, records: recs, hasContent: len(recs) > 0}
 	}
 
 	// Detect any unknown sections that were used but aren't part of
-	// the spectrum4 linker script — surface as an error to avoid
-	// silently dropping content.
+	// the active layout — surface as an error to avoid silently
+	// dropping content.
 	for n := range bucketByName {
-		if canonicalSectionIndex(n) < 0 {
-			return nil, fmt.Errorf("flatten: section %q not in spectrum4 linker script", n)
+		if layoutIndex(layout, n) < 0 {
+			return nil, fmt.Errorf("flatten: section %q not in the layout", n)
 		}
 	}
 
@@ -175,8 +201,8 @@ func Flatten(records []format.Record, names []string, opts FlattenOptions) ([]fo
 	// will emit. Other sections only contain data/space directives;
 	// instructions in BSS sections are not expected (and would be a
 	// linker error in GNU as too).
-	for _, s := range sections {
-		size, err := sectionSize(s.records, s.layout.Name, names, globalSymbols)
+	for i, s := range sections {
+		size, err := sectionSize(s.records, i == 0, names, globalSymbols)
 		if err != nil {
 			return nil, fmt.Errorf("flatten: sizing %s: %w", s.layout.Name, err)
 		}
@@ -256,7 +282,7 @@ func Flatten(records []format.Record, names []string, opts FlattenOptions) ([]fo
 	//    release.img.
 	for i := 2; i < len(sections); i++ {
 		s := sections[i]
-		labels, err := sectionLabels(s.records, s.layout.Name, names, globalSymbols)
+		labels, err := sectionLabels(s.records, names, globalSymbols)
 		if err != nil {
 			return nil, fmt.Errorf("flatten: labels in %s: %w", s.layout.Name, err)
 		}
@@ -368,7 +394,7 @@ type labelOffset struct {
 // constants in the input (collected by the global pre-pass) — entries
 // from this section may shadow them, but in practice spectrum4 does
 // not redefine constants per-section.
-func sectionLabels(records []format.Record, sectionName string, names []string, globalSymbols map[string]int64) ([]labelOffset, error) {
+func sectionLabels(records []format.Record, names []string, globalSymbols map[string]int64) ([]labelOffset, error) {
 	var labels []labelOffset
 	// Start from a copy of globalSymbols so that this section's own
 	// `.equ`s can shadow without mutating the caller's map.
@@ -401,11 +427,11 @@ func sectionLabels(records []format.Record, sectionName string, names []string, 
 }
 
 // sectionSize returns the total byte size of records (with the
-// section-local PC starting at zero). For `.text` it ALSO appends the
-// size of the literal-pool flush so the result equals refenc's emitted
-// .text byte count (including the trailing `.ltorg`). globalSymbols
-// is the table of all `.set`/`.equ` constants in the input.
-func sectionSize(records []format.Record, sectionName string, names []string, globalSymbols map[string]int64) (int64, error) {
+// section-local PC starting at zero). For the code section (isCode) it
+// ALSO appends the size of the literal-pool flush so the result equals
+// refenc's emitted byte count (including the trailing `.ltorg`).
+// globalSymbols is the table of all `.set`/`.equ` constants in the input.
+func sectionSize(records []format.Record, isCode bool, names []string, globalSymbols map[string]int64) (int64, error) {
 	symbols := make(map[string]int64, len(globalSymbols))
 	for k, v := range globalSymbols {
 		symbols[k] = v
@@ -452,10 +478,10 @@ func sectionSize(records []format.Record, sectionName string, names []string, gl
 			pc += n
 		}
 	}
-	// Implicit flush at end-of-section for .text — the Flatten output
-	// always emits a trailing .ltorg, so include that flush's bytes
+	// Implicit flush at end-of-section for the code section — the Flatten
+	// output always emits a trailing .ltorg, so include that flush's bytes
 	// in the section size.
-	if sectionName == ".text" {
+	if isCode {
 		pc = flushPoolSize(pc, pending)
 	}
 	return pc, nil
