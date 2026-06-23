@@ -83,6 +83,7 @@ OPK_EXT_REG:    equ     &07     ; OpExtendedReg (extended-register operand)
 OPK_MEM:        equ     &08     ; OpMem (memory-address operand)
 OPK_COND:       equ     &0a
 OPK_SYS_NAME:   equ     &0b     ; OpSysName (mrs/msr/dc/tlbi name operand)
+OPK_LITPOOL:    equ     &0c     ; OpLitPool (`ldr Xt, =expr` literal-pool operand)
 
 ; Self-test fail tags.
 ENC_TAG_NOFORM:    equ  &e5
@@ -327,6 +328,8 @@ enc_cscan_loop:
                 jp      z, enc_extended
                 cp      OPK_MEM
                 jp      z, enc_mem
+                cp      OPK_LITPOOL
+                jp      z, enc_litpool
                 inc     hl
                 djnz    enc_cscan_loop
                 jr      enc_form_table
@@ -477,6 +480,10 @@ enc_skip_operand:
                 jr      z, enc_skip_compound
                 cp      OPK_MEM
                 jr      z, enc_skip_mem
+; OpLitPool (&0C): wire format [kind][width:1][expr_len:u16 LE][expr].
+; Skip the 1 fixed width byte, then the len-prefixed expr (like imm).
+                cp      OPK_LITPOOL
+                jr      z, enc_skip_litpool
                 cp      OPK_IMM_EXPR
                 jp      nc, enc_fail_unsupported_operand
                 or      a
@@ -496,6 +503,11 @@ enc_skip_compound:
                 inc     hl                          ; skip width
                 inc     hl                          ; skip Rm
                 inc     hl                          ; skip shiftKind/extend
+                jr      enc_skip_imm                ; skip u16-len + expr bytes
+
+enc_skip_litpool:
+; Skip 1 fixed byte (width), then the u16-prefixed expr.
+                inc     hl                          ; skip width
                 jr      enc_skip_imm                ; skip u16-len + expr bytes
 
 ; enc_skip_mem — HL is past the 0x08 kind byte, pointing at the shape byte.
@@ -1269,6 +1281,22 @@ enc_ldrlit_b:
                 call    insn_fold                   ; DEHL = imm19 bits @5
                 call    or_dehl_into_base
                 jp      enc_emit_base
+
+; -- enc_litpool — ldr Xt/Wt, =expr: PC-relative load of the pool slot ---
+; Port of pass2.go::encodeLdrLitPoolInst (pass2.go:639-672), dispatched
+; from enc_compound_scan when an OpLitPool (&0C) operand is present
+; (mirrors the Go dispatch at pass2.go:241-243).  The pool slot was
+; allocated in pass 1 (litpool_register); the proven litpool_encode_ldr_word
+; (src/litpool.asm) looks the slot up by PASS_PC and computes
+;   base | ((entry_pc - pc)/4 << 5) | Rt   (base 0x58 for X, 0x18 for W,
+; selected from the slot's recorded width).  We only need to stage Rt
+; into OPVAL[0] (its +1 byte is the register); width comes from the slot.
+enc_litpool:
+                xor     a
+                call    enc_nth_operand             ; HL -> op0 (Rt)
+                ld      de, OPVAL_ARRAY + 0 * OPVAL_STRIDE
+                call    enc_copy_kindreg            ; OPVAL[0] = Rt kind, reg
+                jp      litpool_encode_ldr_word     ; tail-call; returns DE:HL
 
 ; -- enc_tbz — tbz(22)/tbnz(23) Rt,#bit,label: imm14 (FSID_BRANCH14) -----
 ; Port of pass2.go::encodeTbzTbnz.  word = (b5<<31)|(0b011011<<25)|
