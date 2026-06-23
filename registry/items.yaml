@@ -3392,7 +3392,7 @@
     PRINCIPLE (Pete, 2026-06-21, REFINED — read before implementing): the goal is NOT to merge the two harnesses into one tool. It is to STOP DUPLICATING the SAM-Coupé emulation IMPLEMENTATION. There must be ONE Go SAM-Coupé emulation core on the koron-go/z80 library — the CPU + memory/paging + IO model (the sampage package, created by i181, is the seed) — that BOTH harnesses USE rather than each carrying its own copy of the same features. The two harnesses MAY stay distinct codebases/packages where they are logically separate and benefit from independence: the assembler harness (tools/z80-test-harness-go) is assembler/disassembler-focused with DOS-hook + printer devices; the netboot harness (tools/netboot-oracle/z80) is netboot-focused with ENC28J60 + EEPROM + trinload. Do NOT force logically-separate tools together. Over-arching rule: don't duplicate implementations — if both share the same underlying emulation library, the problem is resolved.
     CONCRETELY: the LMPR/HMPR paging + ROM write-protect currently exists TWICE — in the assembler harness (resolveRead/resolveWritePage) and, since i181, in sampage (used by the netboot harness). That duplication is what let the dumper's &C000 ROM-paging bug reach hardware (one harness had the model, the other didn't). i190 = make the assembler harness ALSO use the shared core (replace its inline pager with sampage; promote sampage to a location both modules can import) so the paging/memory model is implemented ONCE. Devices (ENC28J60/EEPROM/DOS-hooks/trinload) live where they are used — they are not duplicated, so no merge is needed. The pure-Go protocol oracle (frame/tftp/dhcp) is unaffected. ACCEPTANCE: the SAM CPU+memory+paging+ROM model exists in exactly one place that both harnesses import; both existing test suites pass; the harnesses may remain separate packages/modules.
   status: OPEN
-  depends_on: [i208]
+  depends_on: [i208, q47]
   kind: umbrella
   owner: agent
 
@@ -3711,9 +3711,11 @@
   title: "Assess on-SAM macro/preprocessor support (i31): scope, integration point, perf + size impact estimate"
   description: |
     Pete (2026-06-22, q38) actively uses macros developing on the Mac; losing them when development moves on-SAM would be a real problem, so on-SAM macros 'would be a huge win' — PROVIDED it doesn't blow up assemble-time performance or program size or force a redesign. ACTION (this item): an agent produces a REPORT, not an implementation: what .if build-constraint syntax + macro definition/expansion semantics are needed (survey what Pete's Mac-side sources actually use); where it integrates vs the existing host asmparse/text2bin preprocessing; the Go-authority-first plan; and crucially an ESTIMATE of the assemble-time performance cost + program-size cost + whether it 'slips in' or needs a redesign. q38 depends on this report; once it lands, Pete returns to q38 to give the go/no-go + scope. Does NOT implement i31 — only scopes it.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 603, role: completing}
 
 - id: i210
   title: "Assess linker-script parsing / SpectrumFourLayout extraction (i56/i20): touch points + cost estimate"
