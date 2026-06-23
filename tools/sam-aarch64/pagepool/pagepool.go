@@ -112,6 +112,60 @@ func (p *Pool) Free(page int, expected Owner) error {
 	return nil
 }
 
+// AllocRun hands out the lowest-indexed CONTIGUOUS run of n Free pages, tags all
+// n with owner, and returns the run's first page number. The first-fit policy is
+// deterministic so the Z80 port (pp_alloc_run) and this oracle return identical
+// page numbers for an identical op sequence. ok is false when no run of n
+// consecutive Free pages exists (including n > nPages). Mirrors pp_alloc_run.
+func (p *Pool) AllocRun(n int, owner Owner) (page int, ok bool) {
+	if n <= 0 {
+		panic(fmt.Sprintf("pagepool: AllocRun with n %d <= 0", n))
+	}
+	if owner < firstOwnerTag {
+		panic(fmt.Sprintf("pagepool: AllocRun with non-owner tag %d", owner))
+	}
+	// Scan start indices [0, nPages-n]; the last valid start is nPages-n.
+	for start := 0; start+n <= p.nPages; start++ {
+		allFree := true
+		for i := start; i < start+n; i++ {
+			if p.owner[i] != Free {
+				allFree = false
+				break
+			}
+		}
+		if allFree {
+			for i := start; i < start+n; i++ {
+				p.owner[i] = owner
+			}
+			return start, true
+		}
+	}
+	return 0, false
+}
+
+// FreeRun returns n consecutive pages [page,page+n) to the Free pool. It asserts
+// EVERY one of the n pages currently carries the expected owner tag and validates
+// all n BEFORE mutating any, so a partial mismatch leaves the table untouched
+// (all-or-nothing). A range error or any tag mismatch returns an error with the
+// table unchanged. Mirrors pp_free_run.
+func (p *Pool) FreeRun(page, n int, expected Owner) error {
+	if n <= 0 {
+		return fmt.Errorf("pagepool: FreeRun with n %d <= 0", n)
+	}
+	if page < 0 || page+n > MaxPages {
+		return fmt.Errorf("pagepool: free run [%d,%d) out of range", page, page+n)
+	}
+	for i := page; i < page+n; i++ {
+		if p.owner[i] != expected {
+			return fmt.Errorf("pagepool: free run page %d: owner is %d, expected %d", i, p.owner[i], expected)
+		}
+	}
+	for i := page; i < page+n; i++ {
+		p.owner[i] = Free
+	}
+	return nil
+}
+
 // OwnerOf returns the current ownership tag of a page. Mirrors pp_owner_of.
 func (p *Pool) OwnerOf(page int) Owner {
 	if page < 0 || page >= MaxPages {

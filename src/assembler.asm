@@ -322,12 +322,12 @@ endif
 ; touch section B, so installing the trampoline early is safe.
                 call    enctab_trampoline_setup
 
-; -- i2b: size the IDE page pool from PRAMTP and reserve the statically-used
-; pages (0..15). Additive — no buffer is migrated to the pool yet, so this
-; only stands up the page_owner[] table; it reads sysvars (PRAMTP in section B)
-; under the boot LMPR, so it must run after the LMPR capture above. Harmless
-; in production (the pool has no consumer yet); the BUILD_TESTS self-test below
-; exercises it.
+; -- i2b/i23: size the IDE page pool from PRAMTP and reserve the statically-used
+; pages (0..6 and 13..15). The IN pages 7..12 are left FREE — load_in_file is
+; the pool's first consumer: it allocates a contiguous IN run from the pool
+; (pp_alloc_run) at assemble time (i23). pool_boot reads sysvars (PRAMTP in
+; section B) under the boot LMPR, so it must run after the LMPR capture above.
+; The BUILD_TESTS self-test below exercises the live pool.
                 call    pool_boot_init
 
 ; -- PRODUCTION: HLOAD disasm.bin into physical page 15.  The disassembler

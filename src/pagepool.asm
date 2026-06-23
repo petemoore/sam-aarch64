@@ -178,6 +178,138 @@ pp_free_fail:
                 ret
 
 ; ===========================================================================
+; pp_alloc_run — hand out the lowest-indexed CONTIGUOUS run of B FREE pages,
+; tagging all B with owner A. First-fit, deterministic: identical outcome to the
+; Go oracle AllocRun for an identical op sequence.
+;
+; Entry: A = owner tag (PP_DOC..PP_PAYLOAD), B = n (number of pages, >= 1).
+; Return: A = first page number (0..PP_MAX_PAGES-1) on success;
+;         A = PP_FAIL when no run of B consecutive FREE pages exists. n==0 and
+;         n > PP_NPAGES both fail WITHOUT tagging anything.
+; Clobbers: B, C, D, E, H, L (A holds the result). Stack is balanced.
+;
+; Strategy: for start = 0 .. PP_NPAGES-n, test PP_OWNER[start..start+n-1] all
+; FREE; on the first full match, tag all n and return start. C holds n (run
+; length); the owner tag is held on the stack and reloaded for the tag pass; E
+; holds the current start index; the scan address is recomputed from PP_OWNER + E
+; each start so a partial match cheaply rewinds.
+; ===========================================================================
+pp_alloc_run:
+                push    af              ; stash owner tag (A) for the tag pass
+                ld      c, b            ; C = n (run length)
+                ld      a, b
+                or      a
+                jr      z, pp_alloc_run_fail    ; n==0 -> fail, tag nothing
+                ld      a, (PP_NPAGES)
+                sub     b               ; A = PP_NPAGES - n = last valid start
+                jr      c, pp_alloc_run_fail    ; n > PP_NPAGES -> no run fits
+                ; A = max start index (inclusive); loop start = 0..A.
+                inc     a               ; A = number of start positions to try
+                ld      d, a            ; D = remaining start positions
+                ld      e, 0            ; E = current start index
+pp_alloc_run_try:
+                ; Check PP_OWNER[E .. E+n-1] all FREE. HL = PP_OWNER + E.
+                ld      hl, PP_OWNER
+                ld      a, l
+                add     a, e
+                ld      l, a
+                ld      a, h
+                adc     a, 0
+                ld      h, a            ; HL = &PP_OWNER[E]
+                ld      b, c            ; B = n pages to check
+pp_alloc_run_check:
+                ld      a, (hl)
+                cp      PP_FREE
+                jr      nz, pp_alloc_run_next   ; not all free -> next start
+                inc     hl
+                djnz    pp_alloc_run_check
+                ; Full match. HL now points one past the run (PP_OWNER+E+n);
+                ; tag all n walking BACKWARDS, avoiding a second base recompute.
+                ld      b, c            ; B = n pages to tag
+                pop     af              ; A = owner tag (balances the entry push)
+pp_alloc_run_tag:
+                dec     hl
+                ld      (hl), a         ; tag the page with the owner
+                djnz    pp_alloc_run_tag
+                ld      a, e            ; A = first page = start index
+                ret
+pp_alloc_run_next:
+                inc     e               ; advance start index
+                dec     d
+                jr      nz, pp_alloc_run_try
+pp_alloc_run_fail:
+                pop     af              ; balance the entry push
+                ld      a, PP_FAIL
+                ret
+
+; ===========================================================================
+; pp_free_run — return B consecutive pages [A,A+n) to FREE, asserting EVERY one
+; currently carries tag C. All-or-nothing: all n are validated BEFORE any is
+; freed, so a partial mismatch leaves the table unchanged.
+;
+; Entry: A = first page, B = n (>= 1), C = expected owner tag.
+; Return: A = 0 on success; A = PP_FAIL on out-of-range (page+n > PP_MAX_PAGES,
+;         n==0) or any tag mismatch. On failure the table is unchanged.
+; Clobbers: B, D, E, H, L (A holds the result; C preserved through validation).
+;
+; STANDALONE-ONLY: the symmetric counterpart to pp_alloc_run, but no PRODUCTION
+; consumer exists yet — i23's load_in_file frees its single head page with
+; pp_free_page and never run-frees the IN buffer (the assembler is single-shot;
+; i24's OUT migration / the IDE edit-assemble cycle is the first run-free
+; caller). Compiled only into the standalone harness build (PP_STANDALONE) so it
+; stays Go-authority-verified yet costs the production assembler zero bytes
+; against the tight &C000 test-variant budget. Drop the guard when a production
+; caller appears.
+; ===========================================================================
+                if defined(PP_STANDALONE)
+pp_free_run:
+                ld      e, a            ; E = first page (saved for the free pass)
+                ld      a, b
+                or      a
+                jr      z, pp_free_run_fail     ; n==0 -> fail
+                ; Range: page + n must be <= PP_MAX_PAGES.
+                ld      a, e
+                add     a, b            ; A = page + n (fits in 8 bits: <= 32+255)
+                jr      c, pp_free_run_fail     ; wrapped -> out of range
+                cp      PP_MAX_PAGES + 1
+                jr      nc, pp_free_run_fail    ; page+n > PP_MAX_PAGES
+                ; Validation pass: PP_OWNER[E .. E+n-1] all == C, mutate nothing.
+                ld      hl, PP_OWNER
+                ld      a, l
+                add     a, e
+                ld      l, a
+                ld      a, h
+                adc     a, 0
+                ld      h, a            ; HL = &PP_OWNER[E]
+                ; B already = n; D = n saved for the free pass.
+                ld      d, b
+pp_free_run_check:
+                ld      a, (hl)
+                cp      c               ; current owner == expected?
+                jr      nz, pp_free_run_fail    ; mismatch -> abort, unchanged
+                inc     hl
+                djnz    pp_free_run_check
+                ; All n validated. Free pass: PP_OWNER[E .. E+n-1] = PP_FREE.
+                ld      hl, PP_OWNER
+                ld      a, l
+                add     a, e
+                ld      l, a
+                ld      a, h
+                adc     a, 0
+                ld      h, a            ; HL = &PP_OWNER[E]
+                ld      b, d            ; B = n pages to free
+pp_free_run_free:
+                ld      (hl), PP_FREE
+                inc     hl
+                djnz    pp_free_run_free
+                xor     a               ; A = 0 = success
+                ret
+pp_free_run_fail:
+                ld      a, PP_FAIL
+                ret
+                endif                   ; PP_STANDALONE (pp_free_run)
+
+; ===========================================================================
 ; pp_owner_of — return the current ownership tag of page A.
 ;
 ; Entry: A = page (0..PP_MAX_PAGES-1).

@@ -98,6 +98,32 @@ func ppFree(t *testing.T, mac *z80h.Machine, page int, owner pagepool.Owner) boo
 	return res.A != ppFail
 }
 
+// ppAllocRun drives pp_alloc_run(A=owner, B=n); returns (firstPage, ok).
+// B is the high byte of the BC register the harness preloads.
+func ppAllocRun(t *testing.T, mac *z80h.Machine, n int, owner pagepool.Owner) (int, bool) {
+	t.Helper()
+	res, err := mac.CallEntry("pp_alloc_run", z80h.Entry{A: uint8(owner), BC: uint16(n) << 8})
+	if err != nil {
+		t.Fatalf("pp_alloc_run(n=%d, owner=%d): %v", n, owner, err)
+	}
+	if res.A == ppFail {
+		return 0, false
+	}
+	return int(res.A), true
+}
+
+// ppFreeRun drives pp_free_run(A=page, B=n, C=expected owner); returns true on
+// success. B (high byte) and C (low byte) are packed into BC for the harness.
+func ppFreeRun(t *testing.T, mac *z80h.Machine, page, n int, owner pagepool.Owner) bool {
+	t.Helper()
+	bc := uint16(n)<<8 | uint16(owner)
+	res, err := mac.CallEntry("pp_free_run", z80h.Entry{A: uint8(page), BC: bc})
+	if err != nil {
+		t.Fatalf("pp_free_run(page=%d, n=%d, owner=%d): %v", page, n, owner, err)
+	}
+	return res.A != ppFail
+}
+
 // ppOwnerOf drives pp_owner_of(A=page).
 func ppOwnerOf(t *testing.T, mac *z80h.Machine, page int) pagepool.Owner {
 	t.Helper()
@@ -298,6 +324,184 @@ func TestPagePoolClaimAllFreeAllZ80(t *testing.T) {
 	for _, p := range reserved {
 		if ppOwnerOf(t, mac, p) != pagepool.Reserved {
 			t.Errorf("reserved page %d not Reserved after round-trip", p)
+		}
+	}
+}
+
+// assertTableMatches checks the whole Z80 page_owner[] table against the oracle.
+func assertTableMatches(t *testing.T, mac *z80h.Machine, ownerAddr uint16, oracle *pagepool.Pool, ctx string) {
+	t.Helper()
+	got := ppOwnerTable(mac, ownerAddr)
+	for i := 0; i < pagepool.MaxPages; i++ {
+		if got[i] != oracle.OwnerOf(i) {
+			t.Errorf("%s: page %d Z80 owner %d, oracle %d", ctx, i, got[i], oracle.OwnerOf(i))
+		}
+	}
+}
+
+// TestPagePoolAllocRunZ80 exercises the contiguous-run primitives (pp_alloc_run
+// / pp_free_run) against the pagepool.Pool oracle. A reserved page in the middle
+// creates a gap, so a run that doesn't fit before the gap must be placed after
+// it — proving first-fit skips a too-small leading run.
+func TestPagePoolAllocRunZ80(t *testing.T) {
+	mac := loadPagePool(t)
+	ownerAddr := ppSym(t, mac, "PP_OWNER")
+
+	const nPages = 10
+	var oracle pagepool.Pool
+	oracle.Init(nPages)
+	ppInit(t, mac, nPages)
+
+	// Reserve page 4 to split the pool: free runs are [0..3] (4 pages) and
+	// [5..9] (5 pages).
+	if !ppReserve(t, mac, 4) {
+		t.Fatalf("pp_reserve(4) failed")
+	}
+	if err := oracle.Reserve(4); err != nil {
+		t.Fatalf("oracle.Reserve(4): %v", err)
+	}
+	assertTableMatches(t, mac, ownerAddr, &oracle, "after reserve(4)")
+
+	// A run of 3 fits in the leading [0..3] gap, starting at 0.
+	zPage, zOK := ppAllocRun(t, mac, 3, pagepool.OwnerDoc)
+	oPage, oOK := oracle.AllocRun(3, pagepool.OwnerDoc)
+	if zOK != oOK || zPage != oPage {
+		t.Fatalf("AllocRun(3): Z80=(%d,%v) oracle=(%d,%v)", zPage, zOK, oPage, oOK)
+	}
+	if zPage != 0 {
+		t.Errorf("AllocRun(3) start = %d, want 0", zPage)
+	}
+	assertTableMatches(t, mac, ownerAddr, &oracle, "after AllocRun(3)")
+
+	// Now only page 3 is free before the gap (too small) and pages [5..9] after
+	// it. A run of 4 must skip the too-small leading slot and land at 5.
+	zPage, zOK = ppAllocRun(t, mac, 4, pagepool.OwnerIn)
+	oPage, oOK = oracle.AllocRun(4, pagepool.OwnerIn)
+	if zOK != oOK || zPage != oPage {
+		t.Fatalf("AllocRun(4): Z80=(%d,%v) oracle=(%d,%v)", zPage, zOK, oPage, oOK)
+	}
+	if zPage != 5 {
+		t.Errorf("AllocRun(4) start = %d, want 5 (first-fit must skip the too-small leading run)", zPage)
+	}
+	assertTableMatches(t, mac, ownerAddr, &oracle, "after AllocRun(4)")
+
+	// Free space now: page 3 (1), page 9 (1). No contiguous run of 2 exists.
+	if _, ok := ppAllocRun(t, mac, 2, pagepool.OwnerOut); ok {
+		t.Errorf("AllocRun(2) should fail — no run of 2 contiguous free pages")
+	}
+	if _, ok := oracle.AllocRun(2, pagepool.OwnerOut); ok {
+		t.Errorf("oracle AllocRun(2) should fail too")
+	}
+	assertTableMatches(t, mac, ownerAddr, &oracle, "after failed AllocRun(2)")
+
+	// A single-page run still succeeds at page 3 (lowest free).
+	zPage, zOK = ppAllocRun(t, mac, 1, pagepool.OwnerScratch)
+	oPage, oOK = oracle.AllocRun(1, pagepool.OwnerScratch)
+	if zOK != oOK || zPage != oPage {
+		t.Fatalf("AllocRun(1): Z80=(%d,%v) oracle=(%d,%v)", zPage, zOK, oPage, oOK)
+	}
+	if zPage != 3 {
+		t.Errorf("AllocRun(1) start = %d, want 3", zPage)
+	}
+	assertTableMatches(t, mac, ownerAddr, &oracle, "after AllocRun(1)")
+}
+
+// TestPagePoolFreeRunZ80 exercises pp_free_run: a clean round-trip restores the
+// free count and table, and a tag mismatch is rejected all-or-nothing (table
+// unchanged).
+func TestPagePoolFreeRunZ80(t *testing.T) {
+	mac := loadPagePool(t)
+	ownerAddr := ppSym(t, mac, "PP_OWNER")
+
+	const nPages = 12
+	var oracle pagepool.Pool
+	oracle.Init(nPages)
+	ppInit(t, mac, nPages)
+
+	freeBefore := ppFreeCount(t, mac)
+	if freeBefore != oracle.FreeCount() {
+		t.Fatalf("free count %d != oracle %d", freeBefore, oracle.FreeCount())
+	}
+
+	// Alloc a run of 5 pages (lands at 0..4), then free it; the count and table
+	// must be restored exactly.
+	zPage, zOK := ppAllocRun(t, mac, 5, pagepool.OwnerPayload)
+	oPage, oOK := oracle.AllocRun(5, pagepool.OwnerPayload)
+	if zOK != oOK || zPage != oPage {
+		t.Fatalf("AllocRun(5): Z80=(%d,%v) oracle=(%d,%v)", zPage, zOK, oPage, oOK)
+	}
+	assertTableMatches(t, mac, ownerAddr, &oracle, "after AllocRun(5)")
+	if got := ppFreeCount(t, mac); got != freeBefore-5 {
+		t.Errorf("free count after AllocRun(5) = %d, want %d", got, freeBefore-5)
+	}
+
+	if !ppFreeRun(t, mac, zPage, 5, pagepool.OwnerPayload) {
+		t.Fatalf("FreeRun(%d,5,Payload) rejected", zPage)
+	}
+	if err := oracle.FreeRun(oPage, 5, pagepool.OwnerPayload); err != nil {
+		t.Fatalf("oracle.FreeRun: %v", err)
+	}
+	assertTableMatches(t, mac, ownerAddr, &oracle, "after FreeRun(5)")
+	if got := ppFreeCount(t, mac); got != freeBefore {
+		t.Errorf("free count after FreeRun = %d, want %d (round-trip not restored)", got, freeBefore)
+	}
+
+	// Tag-mismatch case: alloc a 3-run under OwnerDoc, then attempt FreeRun with
+	// the wrong expected tag. It must fail with the table UNCHANGED, even though
+	// the first pages of the run match — all-or-nothing validation.
+	zPage, _ = ppAllocRun(t, mac, 3, pagepool.OwnerDoc)
+	oPage, _ = oracle.AllocRun(3, pagepool.OwnerDoc)
+	assertTableMatches(t, mac, ownerAddr, &oracle, "after AllocRun(3) Doc")
+
+	tableBefore := ppOwnerTable(mac, ownerAddr)
+	if ppFreeRun(t, mac, zPage, 3, pagepool.OwnerIn) {
+		t.Errorf("FreeRun with wrong tag (OwnerIn vs OwnerDoc) was accepted")
+	}
+	if err := oracle.FreeRun(oPage, 3, pagepool.OwnerIn); err == nil {
+		t.Errorf("oracle.FreeRun wrong tag should error")
+	}
+	tableAfter := ppOwnerTable(mac, ownerAddr)
+	for i := 0; i < pagepool.MaxPages; i++ {
+		if tableBefore[i] != tableAfter[i] {
+			t.Errorf("page %d mutated by a rejected FreeRun: %d -> %d", i, tableBefore[i], tableAfter[i])
+		}
+	}
+	assertTableMatches(t, mac, ownerAddr, &oracle, "after rejected FreeRun")
+
+	// Partial-mismatch all-or-nothing: a run where only the LAST page is wrong.
+	// Alloc 2 pages Doc, then 1 page In adjacent; a FreeRun of 3 expecting Doc
+	// must reject and leave all 3 untouched (the first two genuinely are Doc).
+	dPage, _ := ppAllocRun(t, mac, 2, pagepool.OwnerDoc)
+	oracle.AllocRun(2, pagepool.OwnerDoc)
+	iPage, _ := ppAllocRun(t, mac, 1, pagepool.OwnerIn)
+	oracle.AllocRun(1, pagepool.OwnerIn)
+	if iPage != dPage+2 {
+		t.Fatalf("expected adjacent alloc: In at %d, Doc run at %d", iPage, dPage)
+	}
+	assertTableMatches(t, mac, ownerAddr, &oracle, "after Doc+Doc+In")
+
+	tableBefore = ppOwnerTable(mac, ownerAddr)
+	if ppFreeRun(t, mac, dPage, 3, pagepool.OwnerDoc) {
+		t.Errorf("FreeRun(3) over Doc,Doc,In expecting Doc was accepted")
+	}
+	oracle.FreeRun(dPage, 3, pagepool.OwnerDoc) // errors; table unchanged
+	tableAfter = ppOwnerTable(mac, ownerAddr)
+	for i := 0; i < pagepool.MaxPages; i++ {
+		if tableBefore[i] != tableAfter[i] {
+			t.Errorf("page %d mutated by a rejected partial FreeRun: %d -> %d", i, tableBefore[i], tableAfter[i])
+		}
+	}
+	assertTableMatches(t, mac, ownerAddr, &oracle, "after rejected partial FreeRun")
+
+	// Out-of-range: a run that would extend past nPages still tags nothing.
+	tableBefore = ppOwnerTable(mac, ownerAddr)
+	if ppFreeRun(t, mac, nPages-1, 5, pagepool.Free) {
+		t.Errorf("FreeRun past the table end was accepted")
+	}
+	tableAfter = ppOwnerTable(mac, ownerAddr)
+	for i := 0; i < pagepool.MaxPages; i++ {
+		if tableBefore[i] != tableAfter[i] {
+			t.Errorf("page %d mutated by an out-of-range FreeRun: %d -> %d", i, tableBefore[i], tableAfter[i])
 		}
 	}
 }
