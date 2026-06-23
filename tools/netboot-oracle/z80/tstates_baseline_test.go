@@ -69,7 +69,9 @@ func TestBaselineSHA256(t *testing.T) {
 // gain is locked in: 418,843 (register rewrite, #365) -> 377,371 (8x unroll,
 // #367) -> 346,267 (inline Ch/Maj, i102p) -> 342,747 (alternating sha_tmpa walk
 // in the sigma/Sigma XOR passes, i102q) -> 315,355 (register-accumulator round:
-// T1/T2 summed in B,C,D,E across the term adds, no per-add write-back, i102r).
+// T1/T2 summed in B,C,D,E across the term adds, no per-add write-back, i102r)
+// -> 309,211 (register-accumulator extend: W[t] sum kept in B,C,D,E across all
+// four terms, eliminating per-add sha_tmpa write-back/re-read, i102s).
 // A future improvement lowers it; a regression trips it.
 func TestSHA256PerBlockCompress(t *testing.T) {
 	measure := func(n int) uint64 {
@@ -89,7 +91,7 @@ func TestSHA256PerBlockCompress(t *testing.T) {
 		return res.TStates
 	}
 	perBlock := measure(128) - measure(64)
-	const ceiling = 315355 // register-accumulator round (i102r); lower this when a new increment lands
+	const ceiling = 309211 // register-accumulator extend (i102s); lower this when a new increment lands
 	t.Logf("i102 sha256 per-block compress = %d T-states (current floor %d)", perBlock, ceiling)
 	if perBlock > ceiling {
 		t.Fatalf("per-block compress %d T regressed past the %d floor", perBlock, ceiling)

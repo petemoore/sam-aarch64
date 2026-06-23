@@ -1995,9 +1995,11 @@
   title: i102 sha256 message-schedule extend loop — BCDE accumulate in add4_body (~2% gain)
   description: |
     The message-schedule extend loop still does 3 term adds memory-to-memory (add4_body). Applying the BCDE register-accumulate pattern used in the round path to add4_body eliminates the write-back round-trips, netting an estimated ~2% further reduction. One clean lever remaining after i102r. Low priority (world-best already, no deadline).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 606, role: completing}
   parent: i102m
   refs: [src/netboot/sha256.asm, i102m, i102r]
 

@@ -249,6 +249,43 @@ st_bcde_tmpa:   MACRO
                 ld      (hl), e
 ENDM
 
+; st_bcde_hl — (HL word) = B,C,D,E, big-endian (B -> byte0/MSB .. E -> byte3/LSB).
+; HL must point at the word's MSB (byte0) on entry; leaves HL at byte3. Clobbers HL.
+; 46T. Used by the extend loop to store the register accumulator directly to W[t],
+; avoiding the intermediate write to sha_tmpa + a separate copy4_body.
+st_bcde_hl:     MACRO
+                ld      (hl), b
+                inc     hl
+                ld      (hl), c
+                inc     hl
+                ld      (hl), d
+                inc     hl
+                ld      (hl), e
+ENDM
+
+; add_bcde_mem — BCDE += big-endian word at (HL), where HL points at byte3 (LSB).
+; Walks HL DOWN from byte3 to byte0 with dec hl between each byte. Carry propagates
+; LSB -> MSB: byte3 uses ADD (clears carry), bytes 2..0 use ADC (fold carry in).
+; In: HL = word+3 (LSB). Out: BCDE = old BCDE + mem word; HL = word+0 (MSB).
+; Clobbers A, HL. 78T.
+add_bcde_mem:   MACRO
+                ld      a, e
+                add     a, (hl)                 ; byte3 (LSB): ADD clears carry first
+                ld      e, a
+                dec     hl
+                ld      a, d
+                adc     a, (hl)                 ; byte2
+                ld      d, a
+                dec     hl
+                ld      a, c
+                adc     a, (hl)                 ; byte1
+                ld      c, a
+                dec     hl
+                ld      a, b
+                adc     a, (hl)                 ; byte0 (MSB)
+                ld      b, a
+ENDM
+
 ; ===========================================================================
 ; State + scratch (the data block the host test can read/reset). Placed FIRST
 ; so every data label is defined before the code references it — a forward data
@@ -280,6 +317,10 @@ sha_tmpa:       defs 4                  ; sigma/Ch result word
 sha_majs:       defs 4                  ; Maj result word (unrolled round path:
                                         ; held aside while S0 occupies sha_tmpa)
 sha_wt:         defs 2                  ; address of W[t] during the extend loop
+sha_ptr7:       defs 2                  ; address of W[t-7]+3 (LSB), precomputed each
+sha_ptr16:      defs 2                  ; address of W[t-16]+3 (LSB), precomputed each
+                                        ; extend iteration before BCDE loads (woff_body
+                                        ; consumes DE, which overlaps the accumulator)
 sha_wptr:       defs 2                  ; address of W[t] during the round loop
 sha_kt:         defs 2                  ; address of K[t] during the round loop
 sha_round_ctr:  defs 1                  ; 64-round loop counter (memory, not B)
@@ -512,38 +553,42 @@ sha256_compress:
                 ld      a, 48                   ; 48 words to extend (16..63);
                 ld      (sha_ext_ctr), a        ; memory counter (body > djnz range)
 sha_extend:
-                ; tmp2 = s0(W[t-15])  (computed first; the running sum lives in
-                ; sha_tmpa, which sha_sigma0/1 overwrite, so stash s0 aside)
+                ; Precompute W[t-7] and W[t-16] LSB pointers BEFORE loading the
+                ; register accumulator: woff_body consumes DE, which overlaps the
+                ; B,C,D,E quad used for the running sum, so address arithmetic
+                ; happens first while DE is free.
+                ld      de, -7*4+3
+                woff_body                        ; HL -> W[t-7]+3 (LSB)
+                ld      (sha_ptr7), hl
+                ld      de, -16*4+3
+                woff_body                        ; HL -> W[t-16]+3 (LSB)
+                ld      (sha_ptr16), hl
+                ; tmp2 = s0(W[t-15])  (computed first; sha_sigma0/1 overwrite
+                ; sha_tmpa, so stash s0 aside)
                 ld      de, -15*4
                 woff_body
                 call    sha_sigma0
                 ld      hl, sha_tmpa
                 ld      de, sha_tmp2
                 copy4_body
-                ; sha_tmpa = s1(W[t-2])  (the running accumulator)
+                ; BCDE = s1(W[t-2])  (load the register accumulator after sigma)
                 ld      de, -2*4
                 woff_body                        ; HL -> W[t-2]
-                call    sha_sigma1
-                ; sha_tmpa += s0(W[t-15])
-                ld      de, sha_tmp2+3
-                ld      hl, sha_tmpa+3
-                add4_body
-                ; sha_tmpa += W[t-7]
-                ld      de, -7*4+3
-                woff_body                        ; HL -> W[t-7]+3 (LSB)
-                ex      de, hl                  ; DE -> W[t-7]+3
-                ld      hl, sha_tmpa+3
-                add4_body
-                ; sha_tmpa += W[t-16]
-                ld      de, -16*4+3
-                woff_body                        ; HL -> W[t-16]+3 (LSB)
-                ex      de, hl                  ; DE -> W[t-16]+3
-                ld      hl, sha_tmpa+3
-                add4_body
-                ; W[t] = sha_tmpa
+                call    sha_sigma1               ; result -> sha_tmpa
                 ld      hl, sha_tmpa
-                ld      de, (sha_wt)            ; DE -> W[t]
-                copy4_body
+                ld_bcde                          ; BCDE = s1(W[t-2])
+                ; BCDE += s0(W[t-15])
+                ld      hl, sha_tmp2+3           ; -> s0 LSB
+                add_bcde_mem
+                ; BCDE += W[t-7]
+                ld      hl, (sha_ptr7)           ; -> W[t-7] LSB
+                add_bcde_mem
+                ; BCDE += W[t-16]
+                ld      hl, (sha_ptr16)          ; -> W[t-16] LSB
+                add_bcde_mem
+                ; W[t] = BCDE  (one store, no intermediate sha_tmpa write-back)
+                ld      hl, (sha_wt)
+                st_bcde_hl
                 ; advance to W[t+1]
                 ld      hl, (sha_wt)
                 ld      bc, 4
@@ -590,7 +635,8 @@ sha_extend:
                 ;    only.  Bigger, so it stays OUT of the composite.  Per-block
                 ;    compress: 418,843 (register rewrite) -> 377,371 (unroll) ->
                 ;    346,267 (inline Ch/Maj) -> 342,747 (alternating sigma walk)
-                ;    -> 315,355 (register-accumulator round) T-states.
+                ;    -> 315,355 (register-accumulator round) -> 309,211
+                ;    (register-accumulator extend, i102s) T-states.
                 ;
                 ; Shared pre-setup (both paths): the W/K pointers track the word
                 ; LSB (+3) so add4_body (LSB-first) consumes them directly; the
