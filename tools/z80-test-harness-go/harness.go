@@ -94,6 +94,7 @@ import (
 	"time"
 
 	"github.com/koron-go/z80"
+	"github.com/petemoore/sam-aarch64/tools/sampage"
 )
 
 const (
@@ -107,19 +108,12 @@ const (
 	enctabPage = 4 // ENCTAB encoder table
 	inBasePage = 7 // first IN .tbn page (up to 6 pages = pages 7..12)
 
-	// ROM size: 32 KB (two 16 KB halves).
-	romSize = 32768
-
 	// Synthetic port: RST 8 hook dispatch.  Not a real SAM port.
 	portHookDispatch = 0xFD
 
 	// Printer ports.
 	portPrintData   = 0xE8
 	portPrintStrobe = 0xE9
-
-	// Paging ports.
-	portLMPR = 0xFA // &FA
-	portHMPR = 0xFB // &FB
 
 	// SAMDOS UIFA buffer address (in section B, page 1).
 	uifaAddr = 0x4B00
@@ -218,11 +212,12 @@ type NamedFile struct {
 // assembler: 32 pages of 16 KB RAM, a 32 KB fake ROM (ROM0 at &0000, ROM1
 // at &4000 within the ROM slice), LMPR/HMPR paging, printer ports, and the
 // synthetic RST-8 hook dispatch port.
+//
+// Memory paging (LMPR/HMPR register decode, ROM write-protect, section
+// mapping) is handled by the shared sampage.Mem, so the model is identical
+// to the one the netboot harness uses.
 type Hardware struct {
-	rom  [romSize]byte
-	ram  [numPages][pageSize]byte
-	lmpr uint8
-	hmpr uint8
+	pager *sampage.Mem // one memory model: LMPR/HMPR paging + ROM write-protect
 
 	// Printer capture: bytes written to &E8 on each strobe-high.
 	printerBuf    strings.Builder
@@ -286,9 +281,9 @@ type Hardware struct {
 	cpu *z80.CPU
 
 	// Optional read-coverage recorder (item i111).  When non-nil, every
-	// resolveRead marks the physical (page, offset) it actually touched —
+	// Get marks the physical (page, offset) it actually touched —
 	// capturing both opcode fetches and data loads, since koron's CPU routes
-	// both through Get -> resolveRead.  nil for normal runs (zero overhead).
+	// both through Get.  nil for normal runs (zero overhead).
 	cov *coverage
 }
 
@@ -296,7 +291,7 @@ type Hardware struct {
 func (h *Hardware) snapshot() RegSnapshot {
 	c := h.cpu
 	if c == nil {
-		return RegSnapshot{LMPR: h.lmpr, HMPR: h.hmpr}
+		return RegSnapshot{LMPR: h.pager.LMPR, HMPR: h.pager.HMPR}
 	}
 	return RegSnapshot{
 		PC:   c.PC,
@@ -311,15 +306,14 @@ func (h *Hardware) snapshot() RegSnapshot {
 		BC_:  c.Alternate.BC.U16(),
 		DE_:  c.Alternate.DE.U16(),
 		HL_:  c.Alternate.HL.U16(),
-		LMPR: h.lmpr,
-		HMPR: h.hmpr,
+		LMPR: h.pager.LMPR,
+		HMPR: h.pager.HMPR,
 	}
 }
 
 func newHardware() *Hardware {
 	h := &Hardware{
-		lmpr: lmprDefault,
-		hmpr: hmprDefault,
+		pager: &sampage.Mem{LMPR: lmprDefault, HMPR: hmprDefault},
 	}
 	h.installFakeROM()
 	h.seedSysvars()
@@ -339,7 +333,7 @@ func (h *Hardware) seedSysvars() {
 	// &5CB4 is in section B (&4000-&7FFF), which maps physical page
 	// (LMPR&0x1F + 1) under the boot LMPR.
 	page := (lmprDefault&0x1F + 1) & 0x1F
-	h.ram[page][pramtp-0x4000] = numPages - 1
+	h.pager.RAM[page][pramtp-0x4000] = numPages - 1
 }
 
 // installFakeROM writes the RST-8 intercept stub at &0008 in the fake ROM.
@@ -357,8 +351,8 @@ func (h *Hardware) seedSysvars() {
 // in normal flow; treated as a trap if PC lands there).
 func (h *Hardware) installFakeROM() {
 	// Fill with 0xFF.
-	for i := range h.rom {
-		h.rom[i] = 0xFF
+	for i := range h.pager.ROM {
+		h.pager.ROM[i] = 0xFF
 	}
 	// RST-8 stub at &0008.
 	stub := []byte{
@@ -369,135 +363,72 @@ func (h *Hardware) installFakeROM() {
 		0xD3, 0xFD, // OUT (0xFD),A
 		0xC9, // RET
 	}
-	copy(h.rom[0x0008:], stub)
+	copy(h.pager.ROM[0x0008:], stub)
 }
 
-// resolve returns the physical memory slice byte for the given Z80 address.
-// For reads, it uses the current LMPR/HMPR; for writes, same logic but ROM
-// writes are silently dropped (handled in Set).
-//
-// Memory map (SAM Coupé Tech Manual v3.0 §6.10):
-//
-//	Section A (0x0000-0x3FFF): ROM 0 if LMPR bit5=0; else RAM page (LMPR & 0x1F)
-//	Section B (0x4000-0x7FFF): RAM page (LMPR & 0x1F + 1) mod 32; LMPR bit7=WPRAM (ignored)
-//	Section C (0x8000-0xBFFF): RAM page (HMPR & 0x1F)
-//	Section D (0xC000-0xFFFF): ROM 1 if LMPR bit6=1; else RAM page (HMPR & 0x1F + 1) mod 32
-func (h *Hardware) resolveRead(addr uint16) (data uint8) {
-	offset := int(addr & 0x3FFF)
-	section := addr >> 14
-	switch section {
+// resolveReadPage returns the physical RAM page a read of addr resolves to
+// under the current paging, or -1 for a ROM read (ROM is not coverage-tracked).
+// Used by the read-coverage recorder (Get, item i111) to key on physical
+// storage rather than logical address.
+func (h *Hardware) resolveReadPage(addr uint16) int {
+	p := h.pager
+	offset := addr >> 14
+	const pageMask = 0x1F
+	const lmprRAMSecA = 0x20
+	const lmprROM1SecD = 0x40
+	switch offset {
 	case 0: // Section A
-		if h.lmpr&0x20 == 0 {
-			return h.rom[offset] // ROM 0
+		if p.LMPR&lmprRAMSecA == 0 {
+			return -1 // ROM 0
 		}
-		return h.ram[h.lmpr&0x1F][offset]
+		return int(p.LMPR & pageMask)
 	case 1: // Section B
-		page := (h.lmpr&0x1F + 1) & 0x1F
-		return h.ram[page][offset]
+		return int((p.LMPR&pageMask + 1) & pageMask)
 	case 2: // Section C
-		return h.ram[h.hmpr&0x1F][offset]
-	case 3: // Section D
-		if h.lmpr&0x40 != 0 {
-			return h.rom[16384+offset] // ROM 1
+		return int(p.HMPR & pageMask)
+	default: // Section D
+		if p.LMPR&lmprROM1SecD != 0 {
+			return -1 // ROM 1
 		}
-		page := (h.hmpr&0x1F + 1) & 0x1F
-		return h.ram[page][offset]
+		return int((p.HMPR&pageMask + 1) & pageMask)
 	}
-	return 0xFF
-}
-
-// resolveWritePage returns the physical page index for a section-C or D write.
-// Returns -1 for ROM (drop write).
-func (h *Hardware) resolveWritePage(addr uint16) int {
-	section := addr >> 14
-	switch section {
-	case 0:
-		if h.lmpr&0x20 == 0 {
-			return -1 // ROM 0 — drop
-		}
-		return int(h.lmpr & 0x1F)
-	case 1:
-		return int((h.lmpr&0x1F + 1) & 0x1F)
-	case 2:
-		return int(h.hmpr & 0x1F)
-	case 3:
-		if h.lmpr&0x40 != 0 {
-			return -1 // ROM 1 — drop
-		}
-		return int((h.hmpr&0x1F + 1) & 0x1F)
-	}
-	return -1
 }
 
 // Get implements z80.Memory.
 func (h *Hardware) Get(addr uint16) uint8 {
 	if h.cov != nil {
 		// Record the PHYSICAL (page, offset) actually read, resolving through
-		// the current paging exactly as resolveRead does.  Keying on physical
-		// storage (not logical addr) is unambiguous across LMPR/HMPR changes,
-		// which matters because the assembler binary's section-C code is read
-		// at logical &8000.. from physical page 2 regardless of who else maps
-		// that logical window.  ROM reads (read page < 0) are ignored.
+		// the current paging.  Keying on physical storage (not logical addr) is
+		// unambiguous across LMPR/HMPR changes, which matters because the
+		// assembler binary's section-C code is read at logical &8000.. from
+		// physical page 2 regardless of who else maps that logical window.
+		// ROM reads (read page < 0) are ignored.
 		if page := h.resolveReadPage(addr); page >= 0 {
 			h.cov.mark(page, int(addr&0x3FFF))
 		}
 	}
-	return h.resolveRead(addr)
-}
-
-// resolveReadPage returns the physical RAM page a read of addr resolves to
-// under the current paging, or -1 for a ROM read (ROM is not coverage-tracked).
-// It mirrors resolveRead's section decode.
-func (h *Hardware) resolveReadPage(addr uint16) int {
-	section := addr >> 14
-	switch section {
-	case 0: // Section A
-		if h.lmpr&0x20 == 0 {
-			return -1 // ROM 0
-		}
-		return int(h.lmpr & 0x1F)
-	case 1: // Section B
-		return int((h.lmpr&0x1F + 1) & 0x1F)
-	case 2: // Section C
-		return int(h.hmpr & 0x1F)
-	case 3: // Section D
-		if h.lmpr&0x40 != 0 {
-			return -1 // ROM 1
-		}
-		return int((h.hmpr&0x1F + 1) & 0x1F)
-	}
-	return -1
+	return h.pager.Get(addr)
 }
 
 // Set implements z80.Memory.
 func (h *Hardware) Set(addr uint16, value uint8) {
-	page := h.resolveWritePage(addr)
-	if page < 0 {
-		return // ROM write — silently drop
-	}
-	h.ram[page][addr&0x3FFF] = value
+	h.pager.Set(addr, value)
 }
 
 // In implements z80.IO.
 func (h *Hardware) In(port uint8) uint8 {
-	switch port {
-	case portLMPR:
-		return h.lmpr
-	case portHMPR:
-		return h.hmpr
+	if v, ok := h.pager.PortIn(port); ok {
+		return v
 	}
 	return 0xFF
 }
 
 // Out implements z80.IO.
 func (h *Hardware) Out(port uint8, value uint8) {
+	if h.pager.PortOut(port, value) {
+		return // paging port handled
+	}
 	switch port {
-	case portLMPR:
-		h.lmpr = value
-	case portHMPR:
-		// Bits 5-7 of HMPR are mode-3 CLUT — preserve them on any write.
-		// Bits 0-4 are the page number for sections C+D.
-		h.hmpr = (h.hmpr & 0xE0) | (value & 0x1F)
 	case portPrintData:
 		h.lastPrintData = value
 	case portPrintStrobe:
@@ -554,7 +485,7 @@ func (h *Hardware) depositInPages(data []byte) {
 	for i, b := range data {
 		page := inBasePage + i/pageSize
 		offset := i % pageSize
-		h.ram[page][offset] = b
+		h.pager.RAM[page][offset] = b
 	}
 }
 
@@ -570,7 +501,7 @@ func (h *Hardware) depositPageAt(page, offset int, data []byte) {
 	if offset+len(data) > pageSize {
 		panic(fmt.Sprintf("depositPageAt: offset %d + data (%d B) exceeds pageSize", offset, len(data)))
 	}
-	copy(h.ram[page][offset:], data)
+	copy(h.pager.RAM[page][offset:], data)
 }
 
 // depositPagesFrom copies data into consecutive physical pages starting at
@@ -587,7 +518,7 @@ func (h *Hardware) depositPagesFrom(startPage int, data []byte) {
 		if end > len(data) {
 			end = len(data)
 		}
-		copy(h.ram[startPage+off/pageSize][:], data[off:end])
+		copy(h.pager.RAM[startPage+off/pageSize][:], data[off:end])
 	}
 }
 
@@ -598,7 +529,7 @@ func (h *Hardware) readPageBytes(startPage int, offset int, length int) []byte {
 	for i := range out {
 		pg := startPage + (offset+i)/pageSize
 		off := (offset + i) % pageSize
-		out[i] = h.ram[pg][off]
+		out[i] = h.pager.RAM[pg][off]
 	}
 	return out
 }
@@ -827,9 +758,9 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 			// the boot-LMPR's page (page 0) unless LMPR changes.
 			//
 			// Read name from UIFA[1..10] at the resolved address.
-			uifaPage := int((hw.lmpr&0x1F + 1) & 0x1F)
+			uifaPage := int((hw.pager.LMPR&0x1F + 1) & 0x1F)
 			uifaOffset := uifaAddr & 0x3FFF
-			rawName := string(hw.ram[uifaPage][uifaOffset+1 : uifaOffset+11])
+			rawName := string(hw.pager.RAM[uifaPage][uifaOffset+1 : uifaOffset+11])
 			name := strings.TrimRight(rawName, " ")
 
 			// Look up the named file in the registry; this becomes the
@@ -853,17 +784,17 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 					pages--
 					lenMod = pageSize
 				}
-				hw.ram[copyPage][copyOffset+34] = pages
+				hw.pager.RAM[copyPage][copyOffset+34] = pages
 				lenWithFlag := lenMod | 0x8000
-				hw.ram[copyPage][copyOffset+35] = uint8(lenWithFlag)
-				hw.ram[copyPage][copyOffset+36] = uint8(lenWithFlag >> 8)
+				hw.pager.RAM[copyPage][copyOffset+35] = uint8(lenWithFlag)
+				hw.pager.RAM[copyPage][copyOffset+36] = uint8(lenWithFlag >> 8)
 				hw.doserDispatch(0, "", false) // success: DOSER fires with A=0
 			} else if strings.HasPrefix(name, "IN") && !injectedFail {
 				hw.currentFile = nil
-				hw.ram[copyPage][copyOffset+34] = inFilePages
+				hw.pager.RAM[copyPage][copyOffset+34] = inFilePages
 				lenWithFlag := inFileLenMod16K | 0x8000
-				hw.ram[copyPage][copyOffset+35] = uint8(lenWithFlag)
-				hw.ram[copyPage][copyOffset+36] = uint8(lenWithFlag >> 8)
+				hw.pager.RAM[copyPage][copyOffset+35] = uint8(lenWithFlag)
+				hw.pager.RAM[copyPage][copyOffset+36] = uint8(lenWithFlag >> 8)
 				hw.doserDispatch(0, "", false) // success: DOSER fires with A=0
 			} else if name == "enctab.enc" && !injectedFail {
 				// Defensive dead path: enctab.enc is auto-registered whenever
@@ -952,11 +883,11 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 				if n < len(content) {
 					content = content[:n]
 				}
-				dstPage := int(hw.hmpr & 0x1F)
+				dstPage := int(hw.pager.HMPR & 0x1F)
 				dstOff := int(hw.cpu.HL.U16()) & 0x3FFF
 				for i, b := range content {
 					pg := (dstPage + (dstOff+i)/pageSize) & 0x1F
-					hw.ram[pg][(dstOff+i)%pageSize] = b
+					hw.pager.RAM[pg][(dstOff+i)%pageSize] = b
 				}
 				hw.currentFile = nil
 			}
@@ -980,12 +911,12 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 			//   UIFA[32-33]: section-C source offset (&8000)
 			//   UIFA[34]: pages count (OUT_LEN >> 14)
 			//   UIFA[35-36]: remainder length (OUT_LEN & 0x3FFF)
-			uifaPage := int((hw.lmpr&0x1F + 1) & 0x1F)
+			uifaPage := int((hw.pager.LMPR&0x1F + 1) & 0x1F)
 			uifaOffset := int(uifaAddr & 0x3FFF)
-			startPage := int(hw.ram[uifaPage][uifaOffset+31])
-			pagesCount := int(hw.ram[uifaPage][uifaOffset+34])
-			remLo := uint16(hw.ram[uifaPage][uifaOffset+35])
-			remHi := uint16(hw.ram[uifaPage][uifaOffset+36])
+			startPage := int(hw.pager.RAM[uifaPage][uifaOffset+31])
+			pagesCount := int(hw.pager.RAM[uifaPage][uifaOffset+34])
+			remLo := uint16(hw.pager.RAM[uifaPage][uifaOffset+35])
+			remHi := uint16(hw.pager.RAM[uifaPage][uifaOffset+36])
 			remainder := int(remLo | (remHi << 8))
 
 			// Total length = pagesCount*16384 + remainder.
@@ -1014,9 +945,9 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 	cpu.PC = 0x8000
 	// LMPR = lmprDefault (&1F): ROM0 in section A, page 0 in section B.
 	// This is what the assembler's `in a, (250); ld (LMPR_DEFAULT_RUNTIME), a` captures.
-	hw.lmpr = lmprDefault
+	hw.pager.LMPR = lmprDefault
 	// HMPR = hmprDefault (2): assembler code in section C.
-	hw.hmpr = hmprDefault
+	hw.pager.HMPR = hmprDefault
 	// SP: assembler sets SP = &C100 in start:; the harness starts with SP = &FFFE
 	// as a safe default before the assembler's `ld sp, &C100` executes.
 	cpu.SP = 0xFFFE

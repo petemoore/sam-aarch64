@@ -6,6 +6,7 @@ require (
 	github.com/koron-go/z80 v0.10.2
 	github.com/petemoore/sam-aarch64/tools/aarch64dec v0.0.0
 	github.com/petemoore/sam-aarch64/tools/sam-aarch64-format v0.0.0-00010101000000-000000000000
+	github.com/petemoore/sam-aarch64/tools/sampage v0.0.0
 	github.com/petemoore/sam-aarch64/tools/zx0-greedy v0.0.0
 )
 
@@ -20,3 +21,5 @@ replace github.com/petemoore/sam-aarch64/tools/zx0-greedy => ../zx0-greedy
 replace github.com/petemoore/sam-aarch64/tools/aarch64enc => ../aarch64enc
 
 replace github.com/petemoore/sam-aarch64/tools/sam-aarch64-format => ../sam-aarch64-format
+
+replace github.com/petemoore/sam-aarch64/tools/sampage => ../sampage

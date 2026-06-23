@@ -32,7 +32,7 @@ import (
 	"strings"
 
 	"github.com/koron-go/z80"
-	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80/sampage"
+	"github.com/petemoore/sam-aarch64/tools/sampage"
 )
 
 // loadOrg is the org address every netboot routine .bin assembles to (&8000,
@@ -115,7 +115,7 @@ type mem struct {
 	pager     *sampage.Mem // the one memory model: LMPR/HMPR paging + ROM write-protect
 	io        IODevice
 	cpu       *z80.CPU // back-reference, for the INI/IND port correction in In
-	romActive bool     // when true, addr >= romBase is read-only ROM (boot model)
+	romActive bool     // netboot-local fixed-overlay: when true, addr >= romBase is read-only (boot model), layered over the shared pager
 	romBase   uint16   // first ROM address (e.g. 0xC000 for ROM1 at boot)
 	keyQueue  []byte   // injected keypresses (i138 keyboard-sysvar stub)
 	keyMatrix uint8    // byte returned on port &f9 reads (active-low keyboard matrix)
