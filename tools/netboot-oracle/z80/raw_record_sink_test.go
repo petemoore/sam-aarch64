@@ -24,12 +24,14 @@ import (
 )
 
 // rrsScratch is a free flat-harness RAM window for staging chunk bytes before
-// each raw_record_sink_leaf call: above the program (which ends &BE93) and clear
-// of the harness stack (&6FFE) and HALT trap (&7000). The window is &C000..&FFFF
-// (16 KB); chunks are staged in slices no larger than rrsSliceMax.
+// each raw_record_sink_leaf call: above the binary tail (&C2EB for the serve
+// boot binary, which now carries sdc_init_ladder / bd_list_* at &BFFA–&C2EB
+// after adding NETBOOT_REAL_LISTREAD) and clear of the harness stack (&6FFE)
+// and HALT trap (&7000). Window is &D000..&EFFF (8 KB); chunks are staged in
+// slices no larger than rrsSliceMax.
 const (
-	rrsScratch  = 0xC000
-	rrsSliceMax = 0x3000 // 12 KB — comfortably inside the &C000..&FFFF window
+	rrsScratch  = 0xD000
+	rrsSliceMax = 0x2000 // 8 KB — within &D000..&EFFF
 )
 
 // rrsSeq returns n bytes with a position-dependent pattern (matching the Go

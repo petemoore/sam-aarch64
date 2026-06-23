@@ -749,7 +749,8 @@ netboot-serve: $(BUILD)/netboot_serve.bin $(BUILD)/netboot_serve.map
 # 32768-byte &8000-&FFFF window, not the 16384-byte section-C limit.
 $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map: src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm src/netboot/sd_csd.asm src/netboot/bdos_seam.asm src/netboot/raw_record_sink.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_serve_boot.bin \
+	pyz80 -D NETBOOT_REAL_LISTREAD=1 \
+	    --obj=$(BUILD)/netboot_serve_boot.bin \
 	    --mapfile=$(BUILD)/netboot_serve_boot.map \
 	    src/netboot/netboot_serve.asm
 	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_serve_boot.bin 32768 netboot_serve_boot.bin
@@ -908,7 +909,8 @@ netboot-client: $(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map
 # budget is the full 32768-byte &8000-&FFFF window (see the serve rule above).
 $(BUILD)/netboot_client_boot.bin $(BUILD)/netboot_client_boot.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/bdos_picker.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/key_read_test.asm src/netboot/eeprom.asm src/netboot/raw_record_sink.asm src/netboot/sd_csd.asm
 	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_client_boot.bin \
+	pyz80 -D NETBOOT_REAL_LISTREAD=1 \
+	    --obj=$(BUILD)/netboot_client_boot.bin \
 	    --mapfile=$(BUILD)/netboot_client_boot.map \
 	    src/netboot/netboot_client.asm
 	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_client_boot.bin 32768 netboot_client_boot.bin
