@@ -319,7 +319,7 @@
 - id: i23
   title: "Paged-IN HLOAD-ceiling lift (current ceiling: 96 KB = 6 pages 7..12, src/assembler.asm:49)"
   description: |
-    The current IN-file ceiling is 96 KB (6 pages, 7–12, hardcoded src/assembler.asm line 49). Lift this ceiling to support larger source files via additional paged HLOAD slots. Deferred-backlog item.
+    Lift the IN-file 96KB ceiling (6 contiguous pages 7..12, hardcoded) by migrating the IN buffer to the i2 page pool (spec §4.4): alloc_page(PP_IN) per 16KB chunk of the loaded .tbn into an in_pages[] list, HLOAD each chunk into its allocated (possibly non-contiguous) page, and have the reader bracket through the LIST. SCOPE/RISK (surveyed 2026-06-23): the reader (src/reader.asm, ~615 lines) is the per-byte load-bearing path and its paging model assumes CONTIGUOUS pages — it computes page=index+LMPR_IN_BASE (reader.asm:133-134) and advances across a section-A &4000 boundary by INCREMENTING the LMPR page (the in_map_current / reader_read_next_byte / normalization sites ~236-510). Every such 'page=base+index' and 'next=current+1' site (~10) must become an in_pages[] lookup. The pool API (i2a/i2b, live at boot via pool_boot_init) is pp_alloc_page(owner=PP_IN)->page, page_owner[] in section D at PP_TABLE_BASE. This is a careful refactor of the most load-bearing path — best as a fresh focused session; verify via the release-gate (release.tbn flows through IN) + harness TestBootSelfTestsPass. i24 (OUT, emit_byte side) is the sibling with the same page-list pattern. Authority: docs/specs/paged-in-design.md, docs/specs/ide-memory-model-design.md §4.4. Depends on i2b (DONE: pool live + boot-sized).
   status: OPEN
   depends_on: [i2a, i2b]
   kind: leaf
