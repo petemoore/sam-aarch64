@@ -1059,6 +1059,7 @@
   description: |
     Explicitly punted in favour of the text2bin -flatten approach. Multi-section / linker-script handling in refenc would only be needed if a non-spectrum4-shaped project surfaces. Deferred; from ROADMAP deferred checklist (retired in i52 PR 3).
   status: OPEN
+  depends_on: [q53]
   kind: leaf
   owner: agent
 
@@ -1174,6 +1175,7 @@
   description: |
     Persist SAM pages to Trinity B-DOS records as a general storage technique. Deferred by Pete's decision (2026-06-10, q9 resolved): 'no value implementing right now'; revisit only if a concrete need appears. Conditional on i66's reactivation being Pete's call.
   status: OPEN
+  depends_on: [q53]
   kind: leaf
   owner: agent
   refs: [docs/notes/bdos-version-landscape.md]
@@ -3985,5 +3987,6 @@
   description: |
     Free section-C space so the i204b overlay_classify/literal_word/compact_inst routines (~1300 B) + their boot self-test can land inline. These routines call encode_inst (reads ENCTAB in section A) so they CANNOT be evicted off-axis — the established lever-1 (evict-to-cluster, PR #52/#180) and commoning passes (i205/i206/i218) are EXHAUSTED for ENCTAB-coupled code and recover only tens of bytes (the test variant has ~11 B headroom vs a 1300 B need). Remaining viable levers (registry i69/i205 analysis): (2) serial test bay / a SECOND BUILD_TESTS boot variant (a new -D flag + make target + harness boot test + CI job) that runs the encode/overlay suite in a boot WITHOUT the other inline test suites, time-multiplexing memory ('tests need not coexist'); (3) chunked payloads; (4) the i2/q36 dynamic page-pool memory model (the long-term fix that lifts the whole section-C/scratch contention). Pick a lever (Pete steer recommended, as i205 was steered via q43), implement it, then unblock i204b: include insn_overlay.asm + test_overlay_classify.asm, wire run_overlay_classify_self_tests, and verify TestBootSelfTestsPass + the SimCoupe matrix green. Staged work: scratchpad/i204b-*.asm.
   status: OPEN
+  depends_on: [q54]
   kind: leaf
   owner: agent
