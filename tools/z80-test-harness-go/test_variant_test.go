@@ -98,7 +98,7 @@ func TestVariantBootSelfTests(t *testing.T) {
 			{Name: "enc_fix", Content: encFix, TargetPage: 11},
 			{Name: "p14", Content: p14, TargetPage: 14},
 			// The disassembler payload, HLOAD'd by load_page15_payload
-			// (src/loader.asm) as SAMDOS CODE file "d15" into physical
+			// (src/loader.asm) as a DOS CODE file "d15" into physical
 			// page 15.  The BUILD_TESTS boot does a paged_call to
 			// DISASM_SELF_TEST_ENTRY (&8003) on that page; without it
 			// served, page 15 is empty and the paged_call jumps into a

@@ -2,7 +2,7 @@
 
 Authoritative reference for the SAM Coupé's paging hardware, the ROM's
 "REL PAGE FORM" addressing convention, the BASIC sysvars that record paging
-state, and SAMDOS's interaction with all of it. Every claim is backed by a
+state, and the loaded DOS's interaction with all of it. Every claim is backed by a
 source citation in the form `file:line`. The two principal sources are:
 
 - `docs/sam/sam-coupe_tech-man_v3-0.txt` — Bruce Gordon's Technical Manual v3.0.
@@ -46,7 +46,7 @@ EXEC addr encoding, etc.), see `docs/notes/sam-file-header.md`.
   offset=0xBFFF)` = 81919, which means "the byte just below page 4". User code
   living at logical addresses 0x4000–0xBFFF lives in physical page 1 or 2 and
   is reachable via the default LMPR=0 layout.
-- SAMDOS resides in **one page** (recorded in DOSFLG, sysvar `&5BC2`) at logical
+- The loaded DOS resides in **one page** (recorded in DOSFLG, sysvar `&5BC2`) at logical
   `&8000–&BFFF` (section C) — paged in via HMPR ← DOSFLG. When the ROM dispatches
   a DOS hook, it actually pages the DOS at section B (LMPR ← DOSFLG-1) so it
   has a stack at &8000 and the DOS can use C/D for buffers; see "SAMDOS hook
@@ -179,7 +179,7 @@ To find the screen base from BASIC the User Guide gives
 
 ---
 
-## 3. ROM/SAMDOS save-restore patterns for paging registers
+## 3. ROM/DOS save-restore patterns for paging registers
 
 Any ROM routine that touches LMPR or HMPR must restore the entry value before
 returning, otherwise it will corrupt the caller's mapping. The ROM has three
@@ -583,7 +583,7 @@ All sysvar addresses below are taken from
 | `&5A8D` | WKENDP    | 1 | REL PAGE FORM page byte for end-of-workspace (`...rom-v3.0_annotated-disassembly.txt:881`) |
 | `&5A8E` | WKEND     | 2 | REL PAGE FORM offset for end-of-workspace (`...:882`) |
 | `&5AD9` | NMILRP    | 1 | LMPR value when last NMI fired (`...:962`) |
-| `&5BC2` | DOSFLG    | 1 | 0 if no DOS loaded, else physical page where SAMDOS lives (`...:1051`) |
+| `&5BC2` | DOSFLG    | 1 | 0 if no DOS loaded, else physical page where the loaded DOS lives (`...:1051`) |
 | `&5BC3` | DOSCNT    | 1 | bit 0 set if DOS is in control of the system |
 | `&5CB0` | LASTPAGE  | 1 | Last physical page reserved by BASIC; updated by OPEN/CLOSE (`...:1140`) |
 | `&5CB1` | RAMTOPP   | 1 | Page byte of RAMTOP (`...:1141`) |

@@ -269,7 +269,7 @@ PP_TABLE_BASE:  equ     &C9A4
 start:
                 di                     ; disable interrupts (batch program)
 
-; Set up the stack before any call.  SAMDOS's EI in the RST 8 hook
+; Set up the stack before any call.  The DOS's EI in the RST 8 hook
 ; re-enables interrupts, so DI must be repeated after hook calls.
                 ld      sp, &C100
 
@@ -558,7 +558,7 @@ endif
 
 ; -- Run the assemble: pass 1 (table build) + pass 2 (emit) -----------
 ; main_assemble owns the two-pass dance AND the ENCTAB-window
-; bracketing: it loads IN (LMPR=DEFAULT for SAMDOS hooks), then
+; bracketing: it loads IN (LMPR=DEFAULT for DOS hooks), then
 ; map_in's ENCTAB into section A, calls form_lookup_init, runs the
 ; passes, then map_out's before returning.  Callers see LMPR back at
 ; LMPR_DEFAULT.  See main_loop.asm.
@@ -574,7 +574,7 @@ endif
                 call    print_status_string
 
 ; -- Clean exit ---------------------------------------------------------
-; The DI at start: is undone by SAMDOS's EI inside the RST 8 hook window
+; The DI at start: is undone by the DOS's EI inside the RST 8 hook window
 ; (ROM PTDOS does EI before dispatching — see docs/notes/headless-simcoupe.md
 ; "Why the stub ends in DI; HALT").
 ; Re-issue DI so HALT with IFF1=0 triggers SimCoupé's -exitonhalt.

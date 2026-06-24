@@ -26,9 +26,9 @@
 //	Physical pages 5-6: OUT buffer (written by assembler)
 //	Physical pages 7-12: IN .tbn (pre-deposited; read via LMPR brackets)
 //
-// # RST 8 / SAMDOS hook interception
+// # RST 8 / DOS hook interception
 //
-// The SAM Coupé ROM PTDOS sits at &0008 and dispatches SAMDOS hooks.  We
+// The SAM Coupé ROM PTDOS sits at &0008 and dispatches DOS hooks.  We
 // install a minimal fake ROM that:
 //
 //	&0008:  EX (SP),HL   ; HL = return addr (= DEFB byte address)
@@ -47,11 +47,11 @@
 //	130 HLOAD — no-op: data already pre-deposited in the target pages.
 //	132 HSAVE — capture: read OUT bytes from UIFA[31..36] + pages 5-6.
 //
-// # SAMDOS file-I/O error dispatch via DOSER (&5BC0) (i25 prerequisite)
+// # DOS file-I/O error dispatch via DOSER (&5BC0) (i25 prerequisite)
 //
 // After EVERY DOS hook (success or error) ROM PTDOS dispatches the BASIC
 // sysvar DOSER (&5BC0): `ld hl,(DOSER); inc h; dec h; jr z,..; jp (hl)` with
-// register A = the SAMDOS error number (0 on success).  An application installs
+// register A = the DOS error number (0 on success).  An application installs
 // its error handler by writing the handler's address into DOSER; the handler
 // inspects A and resumes (its `and a; ret z` returns on success) or handles the
 // error.  The harness models this so i25's DOSER handler can be verified in
@@ -60,7 +60,7 @@
 //   - On every file-I/O hook (HGTHD/HLOAD/HSAVE — success AND error) the
 //     harness reads the emulated DOSER vector at Config.DoserAddr (defaulting
 //     to &5BC0, honouring current paging) and models `JP (DOSER)` with A set to
-//     the SAMDOS error number: 0 on success, a non-zero code (e.g. 107
+//     the DOS error number: 0 on success, a non-zero code (e.g. 107
 //     file-not-found, 105 disk-full) on failure.
 //   - A non-zero DOSER value is an installed handler; the harness reaches it by
 //     hijacking the synthetic RST-8 stub's trailing RET — on success it pushes
@@ -115,9 +115,9 @@ const (
 	portPrintData   = 0xE8
 	portPrintStrobe = 0xE9
 
-	// SAMDOS UIFA buffer address (in section B, page 1).
+	// DOS UIFA buffer address (in section B, page 1).
 	uifaAddr = 0x4B00
-	// SAMDOS UIFA copy at &4B50 (filled by HGTHD via txhed).
+	// DOS UIFA copy at &4B50 (filled by HGTHD via txhed).
 	uifaCopyAddr = 0x4B50
 
 	// Fake ROM: our RST-8 stub lives at &0008.
@@ -162,7 +162,7 @@ type Result struct {
 	FaultRegs RegSnapshot
 	Steps     uint64
 
-	// UnservedFiles lists SAMDOS file names the assembler asked for via
+	// UnservedFiles lists DOS file names the assembler asked for via
 	// HGTHD that the harness could neither serve (no registered NamedFile)
 	// nor account for as a known pre-deposited file (enctab.enc / IN) — plus
 	// any names with an injected HGTHD failure (Config.FailHGTHD).  Each is a
@@ -191,11 +191,11 @@ func (r RegSnapshot) String() string {
 		r.AF_, r.BC_, r.DE_, r.HL_, r.LMPR, r.HMPR)
 }
 
-// NamedFile is a SAMDOS file the harness can serve via HGTHD+HLOAD.  The
+// NamedFile is a DOS file the harness can serve via HGTHD+HLOAD.  The
 // content is copied into TargetPage when the assembler issues an HLOAD with
 // HMPR mapping TargetPage into section C (the COMET trampoline idiom).
 type NamedFile struct {
-	Name       string // SAMDOS catalogue name, up to 10 chars (no padding needed)
+	Name       string // DOS catalogue name, up to 10 chars (no padding needed)
 	Content    []byte
 	TargetPage int // physical page the assembler will load this file into
 	// LoadOffset is the offset within TargetPage where the content lands
@@ -231,7 +231,7 @@ type Hardware struct {
 	pcHead  int // index of oldest entry (ring buffer)
 	pcCount int // number of valid entries
 
-	// Named-file registry for HGTHD/HLOAD.  Keyed by the 10-char SAMDOS
+	// Named-file registry for HGTHD/HLOAD.  Keyed by the 10-char DOS
 	// name (trailing spaces trimmed).  The "current" file is selected by
 	// HGTHD (which reads the name from UIFA) and consumed by the next
 	// HLOAD.
@@ -249,7 +249,7 @@ type Hardware struct {
 	// of the emulated DOSER error-handler vector (defaults to &5BC0; a non-zero
 	// 2-byte LE value there is an installed handler).  failHGTHD / failHSAVE
 	// force injected file-I/O failures.  After every file-I/O hook, doserDispatch
-	// models `JP (DOSER)` with A = the SAMDOS error number (0 on success): it
+	// models `JP (DOSER)` with A = the DOS error number (0 on success): it
 	// either enters the installed handler via the RST-8 stub's trailing RET or,
 	// on an error with no handler, records pendingFault to halt with a message.
 	doserAddr          uint16
@@ -546,7 +546,7 @@ func Run(assemblerBin, enctabData, inData []byte, timeout time.Duration) Result 
 	return RunWithFiles(assemblerBin, enctabData, inData, nil, timeout)
 }
 
-// RunWithFiles is like Run but additionally serves a set of named SAMDOS
+// RunWithFiles is like Run but additionally serves a set of named DOS
 // files via HGTHD+HLOAD.  This is what the BUILD_TESTS variant needs: at
 // boot it HLOADs "test_mem" (page 13) and "p14" (page 14) before running
 // the self-test suite.  Each NamedFile's content is also pre-deposited into
@@ -582,17 +582,17 @@ type Config struct {
 
 	// File-I/O error model via DOSER (&5BC0) — see the package doc.
 	//
-	// DoserAddr is the logical address of the emulated SAMDOS DOSER
+	// DoserAddr is the logical address of the emulated DOS DOSER
 	// error-handler vector; defaults to &5BC0 (the real SAM address) when left
 	// 0.  On every file-I/O hook the harness reads the 2-byte LE value there
 	// (honouring current paging); a non-zero value is an installed handler that
-	// ROM PTDOS would `JP (DOSER)` into with A = the SAMDOS error number (0 on
+	// ROM PTDOS would `JP (DOSER)` into with A = the DOS error number (0 on
 	// success).  A zero value (no handler) makes a success an ordinary hook
 	// return and an error take the default-halt path — matching the current
 	// assembler, which installs no handler, and the &5BC0 RAM, which is zero.
 	DoserAddr uint16
 
-	// FailHGTHD forces HGTHD to report file-not-found for these SAMDOS names
+	// FailHGTHD forces HGTHD to report file-not-found for these DOS names
 	// even when the file is registered/served — lets a test exercise the
 	// error path (and i25's handler) without physically omitting a payload.
 	FailHGTHD map[string]bool
@@ -678,9 +678,9 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 		}
 	}
 
-	// Auto-register the IN file ("IN" in the SAMDOS catalogue) so that a
+	// Auto-register the IN file ("IN" in the DOS catalogue) so that a
 	// re-HLOAD of IN actually re-deposits the .tbn into pages 7.. — exactly
-	// as real SAMDOS re-reads it from disk.  Without this, the BUILD_TESTS
+	// as the loaded DOS re-reads it from disk.  Without this, the BUILD_TESTS
 	// reader self-test (which stamps a synthetic blob over IN page 7) would
 	// leave page 7 corrupted, because main_assemble's load_in_file HLOAD
 	// would be a no-op.  (Registered only if the caller hasn't already
@@ -1043,9 +1043,9 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 
 // doserDispatch models ROM PTDOS's post-hook DOSER (&5BC0) dispatch
 // (rom DOSC, docs/sam/...rom...:12977-12980, 13003): after EVERY DOS hook the
-// ROM does `ld hl,(DOSER); inc h; dec h; jr nz; jp (hl)` with A = the SAMDOS
+// ROM does `ld hl,(DOSER); inc h; dec h; jr nz; jp (hl)` with A = the DOS
 // error number (0 on success).  errCode is 0 for a successful hook, a non-zero
-// SAMDOS error number for a failure.
+// DOS error number for a failure.
 //
 // The installed handler is reached by hijacking the synthetic RST-8 stub's
 // trailing RET (executed on the next Step after this callback):
@@ -1091,7 +1091,7 @@ func (h *Hardware) doserDispatch(errCode uint8, reason string, includeHint bool)
 	h.Set(c.SP+1, uint8(doser>>8))
 }
 
-// unservedFileHint returns a human-readable diagnostic naming any SAMDOS
+// unservedFileHint returns a human-readable diagnostic naming any DOS
 // files HGTHD requested that the harness could not serve, with the common
 // remedy.  Empty string when every requested file was served.
 func (h *Hardware) unservedFileHint() string {

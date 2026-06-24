@@ -268,7 +268,7 @@ type Machine struct {
 	m       *mem
 	symbols map[string]uint16
 
-	// rstHandlers models SAMDOS/B-DOS RST-vector hooks the flat harness has no
+	// rstHandlers models DOS RST-vector hooks the flat harness has no
 	// ROM for. Keyed by the RST target address (e.g. &0008 for RST 8): when the
 	// run loop finds PC at a registered target, it pops the return address the RST
 	// pushed and invokes the handler, which reads any inline operand byte(s) and
@@ -683,7 +683,7 @@ func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (Call
 			halted = true
 			break
 		}
-		// A SAMDOS/B-DOS RST hook: the RST already pushed its return address (the
+		// A DOS RST hook: the RST already pushed its return address (the
 		// inline hook-code byte). Pop it, let the handler read the inline operand(s)
 		// + apply the side effect, and resume where it returns — so the flat harness
 		// runs hook-dispatching code (e.g. the client write-out) it has no ROM for.

@@ -10,7 +10,7 @@ Outputs:
 
 - `make enctab` → `build/enctab.enc` — the binary form table the SAM-side
   encoder loads at boot (MRA projection + hand-curated `manual_forms.go`).
-  The loader reads the file length from the SAMDOS DIFA header, so no
+  The loader reads the file length from the DOS DIFA header, so no
   assembly-time length constant is needed (i7 phase A eliminated
   `ENCTAB_LEN`).
 - `make enctab-regen-source` → `tools/aarch64enc/data.go` — the Go mirror of
