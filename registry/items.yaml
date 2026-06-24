@@ -1262,9 +1262,30 @@
   description: |
     Codegen the at/ic/barrier operand tables from the Go authority (spec §6 Q3). Deferred by sequencing only (Pete 2026-06-12: tracked so it automatically gets done); queue after i7 phases A–C land. Gated on the aarch64dec/sys.go code→data refactor (i7 phase D prerequisite).
   status: OPEN
-  kind: leaf
+  kind: umbrella
   owner: agent
   refs: [docs/specs/codegen-tables-design.md, i7]
+
+- id: i74a
+  title: "i74a: Go code->data refactor of aarch64dec/sys.go at/ic/barrier switches"
+  description: |
+    Move the at/ic/barrier option name<->encoding data out of the aarch64dec/sys.go switches (barrierOption/atName/icName) into exported data tables + accessors in tools/sam-aarch64-format/sysregs.go, mirroring the existing DCOps/TLBIOps + DCName/TLBIName pattern. sys.go's barrierOption becomes a thin wrapper over format.BarrierOptionName; atName/icName are deleted and sysInstrName calls format.ATName/format.ICName. Behaviour-identical (sys_test.go + TestDisasmOracle stay green; release-gate byte-identical). Exposes BarrierOptions()/ATOps()/ICOps() generator accessors so i74b can codegen the Z80 .inc. Prerequisite for i74b (the codegen + Z80 disasm.asm table replacement). Go authority for the data: ARM ARM C5.3 (at C5.3.1, ic C5.3.10, barriers); current encodings verified against objdump in sys.go.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 631, role: completing}
+  parent: i74
+
+- id: i74b
+  title: "i74b: tables-gen at/ic/barrier emitter + generated Z80 disasm.asm tables"
+  description: |
+    Add a tables-gen emitter (e.g. -atic-inc) that projects the i74a format.ATOps()/ICOps()/BarrierOptions() authority into a committed Z80 include (src/disasm_sysopts.inc or similar), then replace the hand-maintained disasm_sys_at_tbl/disasm_sys_ic_tbl/disasm_sys_baropt_tbl tables in src/disasm.asm (~lines 7127-7228) with an include of the generated file. Wire into make tables / make tables-sync-check (sysreg-sync CI job) and extend the sync test to cover the new tables. Gate: byte-identical build/disasm.bin before/after (one-time cmp) + TestDisasmOracle 100% + release-gate. Faithful port (CLAUDE.md s6); follows the i7 phase-B/C codegen pattern. Depends on i74a.
+  status: OPEN
+  depends_on: [i74a]
+  kind: leaf
+  owner: agent
+  parent: i74
 
 - id: i75
   title: "B-DOS boot-disk swap execution: prove SimCoupé matrix green, flip shipped default"
