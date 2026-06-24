@@ -16,7 +16,7 @@
   title: "On-SAM IDE memory model (edit buffer + IN/OUT paging; claim all free RAM, grow on demand)"
   description: |
     On-SAM IDE memory model — DECIDED (q36, Pete 2026-06-22). A SINGLE dynamic page pool (a resident page_owner[] allocator in section D, boot-sized from PRAMTP) shared by the editor AND the assembler: any subsystem alloc_page/free_page; a requester that can't get a page raises its own out-of-memory error. Supersedes the assembler's hardcoded off-axis pages 4-15 and FOLDS the i23 96KB-IN / i24 32KB-OUT ceilings into the pool. 256KB is FIRST-CLASS (~144KB doc ceiling; ~9 free pages); 512KB ~25 free pages. Pool exhaustion = refuse-with-message (the honest ceiling) — page persistence/SPILL is a DOWNSTREAM feature (depends on i2, never blocks it). Lazy edit/assemble spill: DOC blocks serialize to disk only when FREE can't satisfy an alloc, and only as many as needed (§4.5) — a 512KB machine touches disk zero times. IDE owns allocation for its session (rebuild BASIC ALLOCT only on exit). Spec: docs/specs/ide-memory-model-design.md. Implements the pool i41 §5.2 already assumes; lifts i23/i24 for free.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   refs: [docs/specs/ide-memory-model-design.md, i41, i23, i24]
@@ -58,7 +58,7 @@
   title: Basic read-only listing/scroll viewer (centre-locked cursor; up/down only)
   description: |
     SAM-side read-only viewer ported from the host prototype. The i76 P1 host viewer is the functional authority this SAM implementation will port. Carried forward by i76 Phase-1.
-  status: OPEN
+  status: DONE
   depends_on: [i2a]
   kind: umbrella
   owner: agent
@@ -157,7 +157,7 @@
   title: SimCoupé + test-harness tooling improvements
   description: |
     Umbrella for SimCoupé emulator + editor-test-harness tooling improvements (version bumps, paste support, automated-editor input injection). Created 2026-06-20 (i153) so the i12a/b/c sub-items have their required umbrella parent — the children predate the parent-integrity rule.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   refs: [tools/Dockerfile.dev]
@@ -1500,7 +1500,7 @@
   title: Dump + reverse-engineer Pete's patched SAM ROM (Phase-3)
   description: |
     Pete's SAM runs a modified system ROM giving Trinity-interface access at power-on (no B-DOS floppy needed). When his SAM is next online he dumps the ROM to disk; we then diff it against the stock SAM ROM to document exactly how Trinity-at-boot is patched in, so the boot mechanism is reproducible/understood. Not a blocker — trinload can net-load the client/server in the interim, and trinity.mgt + reference/bdos cover the interface. Hardware-gated: artifact production needs Pete's hardware.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   refs: ["docs/specs/phase3-delivery-design.md §3", i84]
@@ -1809,7 +1809,7 @@
   title: Aggressive T-state optimization of the netboot crypto / TLS-1.3 cipher-suite Z80
   description: |
     Drive down T-states and code size of host-verified crypto leaves (sha256, hmac_sha256, hkdf, chacha20, poly1305, x25519, aead) using full Z80 opcode set including undocumented instructions; bit-exact reproducibility preserved (byte-for-byte host tests are the guardrail). Craft/fun exercise, no deadline. Landed as sub-items i102a–i102l + i102n–i102r (all DONE, closed registry): x25519 cumulative -50.4% (1.604G→0.796G), SHA-256 -56.8% (729K→315K T/block, fastest verified Z80 SHA-256). Remaining: i102m (sha256 throughput umbrella — sub-items mostly done, one small lever left).
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   refs: [i88, src/netboot/, tools/netboot-oracle/z80/]
@@ -1962,7 +1962,7 @@
   title: i102 sha256 throughput rewrite for the firmware-verify path
   description: |
     Increments i102n-i102r landed (closed registry): sha256 729,795->315,355 T/block (-56.8%) — fastest verified Z80 SHA-256. Decomposed into i102n–i102r (all DONE) + i102s (message-schedule extend loop lever, OPEN). Low priority (world-best already, no deadline).
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   parent: i102
@@ -2604,7 +2604,7 @@
   title: "SAM fetch-and-boot (PXE-style): TFTP-client-fetch a disk image and boot it directly"
   description: |
     SAM acts like a netbooting Pi: on boot, TFTP-fetches a named disk image, writes to a scratch/boot record, and boots into it (no control return). Design notes: (a) use reusable scratch record (no cleanup post-boot); (b) sha256-dedup before fetch — if content hash already in storage, skip fetch and boot existing copy (idempotent). Reuses i114/q26 content-addressed record naming. Builds on i82 receive loop + i119 write-out + a boot-a-record primitive (Trinity RECORD-then-BOOT model).
-  status: OPEN
+  status: DONE
   depends_on: [i114c, i114d]
   kind: umbrella
   owner: agent
@@ -2672,7 +2672,7 @@
   title: Emulate full Trinity boot path so netboot boot wrappers run end-to-end in the harness
   description: |
     Close the emulate-before-hardware gap. PR #423 landed: EEPROM modeled + ROM1-read-only-at-&C000; smoke_main + client_main run end-to-end. i82 hang localized: client_main logic sound (reaches client_first, emits ARP); fault = proactive ARP TX before PHY link-up + no ARP retransmit (→ i127). Remaining: model PHY link-up (LSTAT + drop-TX-while-down) to reproduce the drop in emulation; SD/RST-8 stub for full client fetch; fold server/serve/http wrappers + delete NETBOOT_HOSTTEST carve-outs (→ i126).
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   refs: [tools/netboot-oracle/z80/eeprom.go, tools/netboot-oracle/z80/harness.go, tools/netboot-oracle/z80/enc28j60.go, tools/netboot-oracle/z80/netboot_boot_test.go, src/netboot/eeprom.asm, src/netboot/bdos_seam.asm, i119, i125, i126, i127, i93]
@@ -2972,7 +2972,7 @@
   title: "Production SD CSD read -> BD_RECORDS, wired into serve_main + client_main startup"
   description: |
     Fold the proven SD-init/CMD9/CSD-read/decode (from i145a) into a routine called at serve_main + client_main startup that sets BD_RECORDS from the card, REPLACING the injected value (the shortcut that hid the i145 gap). Prefer a NON-DISRUPTIVE bare CMD9 (the card is already B-DOS-initialised at boot) over a full re-init. Faithfully PORTS Colin's 16-bit BD_RECORDS behaviour by default (matches hardware; the 16-bit cap holds 65535 records x 800KB ~= 51GB, ample for the disk-image-storage use case); widening to 32-bit for >51GB cards is the optional enhancement tracked in the BD_RECORDS-width question. Emulation-verified against the i145c model (BD_RECORDS computed, not injected). Depends i145a (proven SD-read code) + i145c (model).
-  status: OPEN
+  status: DONE
   depends_on: [i145a, i145c]
   kind: umbrella
   owner: agent
@@ -3251,7 +3251,7 @@
     Mechanism: 'build/registry ready' takes --pete-away (DEFAULT: excludes owner:pete) or --pete-present (includes AND prioritizes owner:pete, so when Pete is around the agent does presence-gated work first — don't waste his presence).
     PRESENCE FILE = the single point of truth for whether Pete is around, surviving session handover / /clear / context-limit restart (the gap this closes). EITHER Pete OR an agent may create/delete it: Pete touches/rm's it; an agent creates it when Pete starts interacting and deletes it when Pete says he's stepping away (e.g. from his phone, where he can't touch files) — the agent TELLS Pete each time it creates/deletes on his behalf. The agent reads it at startup to default the --pete flag; monitor.sh can highlight presence from it.
     Work: add the ready --pete-away/--pete-present flag defaulting from the presence file; convert the decision-shaped owner:pete items (i6, i50, i56, i66, i100c) to questions; backlog gate marker for owner:pete; document the model + presence file in CLAUDE.md + ROADMAP. Then i172 audits i133's dependents to reclassify presence-gated ones.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
 
@@ -3675,7 +3675,7 @@
   title: "i48c-b8e-2: special-form encoders (shift/bitfield/bic-imm/csetm/barrier/ror/sysreg/mov-imm/ldr-lit/tbz)"
   description: |
     Second brick of i48c-b8e (see umbrella). Port the mnemonic-specific intercepts bypassing the form table (pass2.go:301-362 dispatch + handlers): encodeLSLSR (UBFM aliases, imm & reg), encodeBitfieldInst (bfi/bfxil/ubfx/bfc/sbfx -> BFM/UBFM/SBFM computed immr/imms), encodeBicImm (negate then logical-imm), encodeCsetm (csinv inverted cond), encodeBarrierInst (isb/dsb/dmb CRm bits 11:8), encodeRorImm (EXTR alias), encodeMrs/Msr/Dc/Tlbi (system-reg/SYS), tryEncodeMovImm (movz/movn/orr-imm autoselect, pass2.go:476-540), encodeLdrLitDirect (ldr Xt,label PC-rel19, pass2.go:546-569), encodeTbzTbnz (pass2.go:584-629). The hardest brick (~400-500 LOC). Faithful port (CLAUDE.md s6). Depends on i199 (reuses its self-test harness + form lookup). Extends the boot self-test with special-form fixtures, SimCoupe-gated.
-  status: OPEN
+  status: DONE
   depends_on: [i199]
   kind: umbrella
   owner: agent
@@ -3953,6 +3953,8 @@
   title: "registry CLI: umbrella derived-status does not cascade to DONE when the last child completes"
   description: |
     Observed 2026-06-24 (i74): setting the final child leaf (i74b) to DONE left the umbrella i74 stuck at OPEN — its derived status did not recompute to DONE (all children DONE/WONTFIX => umbrella DONE per CLAUDE.md), so it lingered in item-registry-open.md until manually 'set-status --id i74 --status DONE'. set-status on a child should re-derive the parent umbrella's status (DONE when all children DONE/WONTFIX, OPEN if any child open), same as 'split' rewrites edges. Until fixed, agents must manually close an umbrella after its last child lands. Low priority (mechanical correctness; manual workaround exists). Code: build/registry (tools/registry).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 634, role: completing}
