@@ -4120,3 +4120,11 @@
   owner: agent
   prs:
     - {num: 624, role: completing}
+
+- id: i240
+  title: "monitor.sh: gate nudges on Pete-presence semaphore + announce arrival/departure in-session"
+  description: |
+    When Pete is present (the ~/.claude/autonomous-loop/pete-present semaphore exists), monitor.sh should NOT deliver autonomous-loop nudges/interruptions. Additionally: when the monitor DETECTS the semaphore was just created, stuff a friendly arrival line into the session (e.g. 'Hi Claude, I am back, Pete here.'); when it detects the file was just deleted, stuff a departure line (e.g. 'Pete has left - he deleted his presence flag, please continue working autonomously.'). Pete request 2026-06-24. Parked/future; do not work yet.
+  status: OPEN
+  kind: leaf
+  owner: agent
