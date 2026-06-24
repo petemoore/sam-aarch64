@@ -659,7 +659,7 @@
   title: CRC / signature in the .tbn file header (integrity check)
   description: |
     Deferred since M1. The v1 header has magic/version/flags but no integrity field. Add a CRC or signature field to the .tbn header for integrity checking. Referenced in the M1 status 'Known gaps' list.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m1-status.md"]
