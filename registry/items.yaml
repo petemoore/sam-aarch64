@@ -3741,7 +3741,7 @@
   title: "i48c-b8e-4a: close the Imm16 SlotKind (0x08) gap for udf"
   description: |
     Close the form-table's bare Imm16 slot (SlotKind 0x08, used only by udf / mnemonic 89), which encode_inst previously fail-tagged ENC_TAG_BADSLOT (encode_imm_n caps at width 7). Add encode_imm16 (a 16-bit sibling) and intercept SlotKind 0x08 in enc_slot_loop before the fold path. Faithful port of encodeImmN for Imm16 (aarch64enc/encode.go:34 groups Imm5/Imm6/Imm16); range-checked via check_expr_hi48_zero so a >16-bit constant fails loudly. Verified with a 'udf #0x1234' -> 0x00001234 Go-authority fixture (TestEncoderSkeletonFixtures/udf_0x1234) + a Z80 boot self-test row in the enc_fix page-11 payload. Independently completable + green (fits the test-variant budget); split out of i204 because the overlay routines (i204b) do not fit.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
   parent: i204
