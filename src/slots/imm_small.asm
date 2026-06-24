@@ -91,7 +91,6 @@ encode_cond:
 ; (RST 8 dispatch), so the established "don't hold B across RST 8"
 ; caveat (see src/sam_io.inc) does not apply here.
 ; -----------------------------------------------------------------------
-; -----------------------------------------------------------------------
 ; encode_imm16 — pack an unsigned 16-bit immediate at bit_position 0,
 ; reading the value from the 8-byte LE expr_result.
 ;
@@ -112,7 +111,13 @@ encode_cond:
 ; Output: DEHL = imm16 at bit 0 (L=byte0, H=byte1, E=0, D=0).
 ; Error:  value >= 1<<16 -> jp fail (via check_expr_hi48_zero).
 ; Clobbers: A, BC, DE, HL.
+;
+; Gated BUILD_TESTS: the only caller, enc_do_imm16 (insn_encode.asm), is
+; itself BUILD_TESTS-only (encode_inst has no production caller yet — it is
+; wired in by a later compactor brick).  Gating keeps the unreferenced
+; routine out of the production binary, exactly as insn_encode.asm is.
 ; -----------------------------------------------------------------------
+if defined(BUILD_TESTS)
 encode_imm16:
                 call    check_expr_hi48_zero        ; bytes 2..7 must be 0
                 ld      a, (expr_result + 0)
@@ -122,6 +127,7 @@ encode_imm16:
                 ld      d, 0
                 ld      e, 0
                 ret
+endif
 
 encode_imm_n:
 ; -- Save the value before we start clobbering registers ----------------
