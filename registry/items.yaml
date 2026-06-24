@@ -2226,7 +2226,7 @@
   title: Netboot serve manifest + record-allocation strategy
   description: |
     A manifest on the booted record maps TFTP names/paths -> B-DOS records, decoupling the served namespace from B-DOS 10-char flat filename limits. Entries carry {locator(s), span count, size, optional SHA-256}. Storage-allocation strategy in manifest header (first-free / highest-free / fixed-list; never silently steal a record). Multi-project use with shared-files-by-reference. Sub-choices settled: encoding=text, locator key=number+name, span naming=hash-derived, default=highest-free. Storage-class: trinity-sam-disks/ prefix = validated raw-record disk. Design at §6.5.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   refs: ["docs/specs/netboot-storage-manifest-design.md §6.5", i93, i95, i99, i70, i100, i101, i119, i122]
@@ -2247,9 +2247,11 @@
   title: "Netboot storage-allocation strategy: header policy (first-free / fixed-list / highest-free)"
   description: |
     design §4: storage-allocation policy in the manifest header (front section), user-chosen, default highest-free. s1 first-free (pack already-claimed records then lowest free), s2 fixed-list (overflow WARNS, never steals an unlisted record), s3 highest-free (keep low slots for the user's own disks). Invariants: overflow is an explicit warning, never a silent record-steal; the header records whether the manifest's own disk is in the pool; resume reuses already-claimed space. Go authority over a modelled store; host-verifiable.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 651, role: completing}
   parent: i114
   refs: ["docs/specs/netboot-storage-manifest-design.md §4"]
 

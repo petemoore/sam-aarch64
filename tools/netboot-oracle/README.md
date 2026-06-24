@@ -45,8 +45,12 @@ The Pi 3 boot-ROM wire differences and the remaining capture work are in
   Pi-facing TFTP names/paths → local B-DOS files or remote record locators (+ span,
   size, optional SHA-256). `*Manifest` is a drop-in `Store` (so `Resolve` answers
   an RRQ straight off it), and `Entry.ServePlan` threads a remote blob through
-  `bdos.SpanPlan` for the ordered read plan. Design:
-  `docs/specs/netboot-storage-manifest-design.md` §1-3.
+  `bdos.SpanPlan` for the ordered read plan. `allocator.go` is the storage-allocation
+  authority (i114b): the manifest-header policy (first-free / fixed-list / highest-free,
+  default highest-free) chooses which records a new blob is written to over a modelled
+  `Card`, reusing already-claimed leftover space first and **warning rather than ever
+  stealing** an unlisted/excluded record on overflow. Design:
+  `docs/specs/netboot-storage-manifest-design.md` §1-4.
 - `bdos` — the storage seam: the UIFA/DIFA field arithmetic gluing the server
   (serve by name) + client (write by name) to the B-DOS hooks, plus a flat-
   directory model and the firmware-spanning convention (`span.go`: `SpanPlan`
