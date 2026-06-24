@@ -209,6 +209,58 @@ func TestCSDProbeBoundedOnStuckBusy(t *testing.T) {
 	}
 }
 
+// TestCSDProbeDrvInitMustPrecedeSD is the i242 regression guard: drv_init MUST run
+// before any SD work. drv_init's chk_trinity identity probe uses fixed DJNZ delays
+// (not a BUSY-poll), so it must see a quiescent PIC; the heavy &38 SD-init leaves the
+// PIC settling, and an identity-select issued while settling reads stale → chk_trinity
+// reports the board missing → drv_init BC=0 → blue pm_fail_init on hardware (found on
+// real Trinity 2026-06-24). This was invisible until the emulator modelled the post-&38
+// settle (enc28j60.go sdInitSettling, CLAUDE.md rule 7). The fix reorders probe_main to
+// init the ENC first; this test pins both orders so a regression fails here, not on the bench.
+func TestCSDProbeDrvInitMustPrecedeSD(t *testing.T) {
+	macAddrName := "CONFIG_SERVERMAC"
+	runDrvInit := func(t *testing.T, mac *z80h.Machine) uint16 {
+		a := symAddr(t, mac, macAddrName)
+		mac.Write(a, csdProbeServerMAC[:])
+		res, err := mac.CallEntry("drv_init", z80h.Entry{HL: a})
+		if err != nil {
+			t.Fatalf("drv_init call: %v", err)
+		}
+		return res.BC
+	}
+
+	// WRONG order (the hardware bug): SD CSD read, THEN drv_init -> chk_trinity stale -> BC=0.
+	// ModelSDInitSettle is opt-in (see enc28j60.go): always-on would also flag serve_main
+	// (a confirmed same-pattern bug) + the client write path, pending their reorder.
+	t.Run("sd-before-enc fails", func(t *testing.T) {
+		mac := loadCSDProbe(t)
+		fillCSDProbeConfig(t, mac)
+		enc := z80h.NewENC28J60()
+		enc.ModelSDInitSettle = true // model the post-&38 PIC settle that makes chk_trinity stale
+		enc.AttachSD(z80h.CSDForV2(0x01E8FF))
+		mac.AttachIO(enc)
+		_ = runCSDProbeRead(t, mac)
+		if bc := runDrvInit(t, mac); bc == 1 {
+			t.Error("drv_init AFTER an SD transaction returned success — the post-&38 settle is not modelled; this is the bug that reaches hardware")
+		}
+	})
+
+	// CORRECT order (the fix): drv_init FIRST against a quiescent PIC -> BC=1 -> then SD works.
+	t.Run("enc-before-sd succeeds", func(t *testing.T) {
+		mac := loadCSDProbe(t)
+		fillCSDProbeConfig(t, mac)
+		enc := z80h.NewENC28J60()
+		enc.AttachSD(z80h.CSDForV2(0x01E8FF))
+		mac.AttachIO(enc)
+		if bc := runDrvInit(t, mac); bc != 1 {
+			t.Errorf("drv_init BEFORE any SD work returned BC=%d, want 1 (success against a quiescent PIC)", bc)
+		}
+		if got := runCSDProbeRead(t, mac); len(got) != 16 {
+			t.Errorf("CSD read after drv_init returned %d bytes, want 16", len(got))
+		}
+	})
+}
+
 // TestCSDProbeV2ReadsConfiguredCSD is the headline i145a check: against a v2/SDHC
 // (64GB) card, the probe's SD-read path drives the model's full command ladder +
 // CMD9 and leaves the configured CSD in STAGE byte-for-byte, and the serve path

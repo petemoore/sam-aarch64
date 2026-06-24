@@ -3030,7 +3030,7 @@
   title: "SD CSD capacity read -> BD_RECORDS (hardware-gated)"
   description: |
     client_main's auto-pick needs BD_RECORDS (card record count = tot.sct/1600). tot.sct comes from the SD CSD capacity read over SPI (ports &DC-&DF), which is hardware-gated (no emulator). Until this lands, BD_RECORDS=0 on real hardware => picker finds no free record => safe decline (no write). The emulation E2E injects BD_RECORDS directly. Implement the CSD read so the bootable client can actually claim a record on hardware.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   parent: i119
@@ -3132,10 +3132,12 @@
   title: "CSD probe HARDWARE run: push the emulation-proven probe to the real SAM, capture the real CSD"
   description: |
     Hardware half of the CSD probe (split from i145a per emulation-first): push the emulation-proven probe to the real SAM (trinload @ 192.168.2.75), tftp get csd.bin, capture the real CSD + confirm SPI timing. 2026-06-24 STATUS: a hardware attempt hung the SAM (3 restarts) + the capture never cleanly verified; that triggered the i235 comprehensive Trinity-emulator fidelity work (PR #641, DONE) which encoded EVERY documented Trinity behaviour (shared one-PIC microcontroller: global busy/auto-null, aliased read-back, MUX select, + all smaller behaviours). The faithful model runs the full probe_main end-to-end and SERVES the CSD — the hang does NOT reproduce in emulation, so the cause is below the documented digital contract (real-silicon timing the Trinity docs leave unspecified: &28 50us settle / PHY link-up / PIC &38 internals) OR the original capture was flawed. NEXT: the FULLY-STAGED one-shot hardware re-test (scratchpad/hw_retest_csd.sh: ping-gate + push + loopback-verified tftpget.py + post-run ARP-state diagnostic) — one clean shot distinguishes a real hang (ARP stays FAILED) from a capture-issue (ARP resolves / CSD served). If a real hang: next emulation deepening = mine the ENC28J60 chip datasheet (settles the timing the Trinity manual leaves unspecified). Pete-present (he reloads trinload). Authority + fidelity inventory: docs/specs/trinity-emulation-fidelity.md.
-  status: OPEN
+  status: DONE
   depends_on: [i145a, i145f]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 656, role: completing}
   parent: i145
 
 - id: i145h
@@ -4138,3 +4140,58 @@
   owner: agent
   prs:
     - {num: 655, role: completing}
+
+- id: i242
+  title: "CSD probe drv_init fails on hardware: reorder drv_init before SD read (chk_trinity vs post-&38 PIC settle)"
+  description: |
+    HARDWARE-FOUND (2026-06-24): on real Trinity the probe halts at pm_fail_init (blue border) because drv_init's chk_trinity (fixed DJNZ delays, no BUSY poll) issues its &08 identity select while the shared PIC is still settling from the heavy &38 SD-init done just before — the OUT is dropped (manual:180), the identity read is stale, chk_trinity fails. Fix: reorder drv_init BEFORE csd_read_into_stage (matches trinload's proven order; startup CSD pre-read is not load-bearing, re-read per-RRQ). Emulation-first: model a post-&38 PIC settle window in the emulator (drop ENC-select OUT during it) + a test that reproduces the failure with old order and passes with the reorder, per CLAUDE.md rule 7. Also adopt Colin's full deselect tail (&30/dummy-&DF/&30/&04). Authority: review vs trinity-emulation-fidelity.md, encdrv.asm chk_trinity, combined.txt:180,321, Colin bdos15t SD driver.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 656, role: completing}
+
+- id: i243
+  title: Route all trinload-pushed di;halt sites through tr_terminate (i228) + document the technique
+  description: |
+    Pete (2026-06-24): trinload-pushed programs must end via tr_terminate (di;halt under test / ret to trinload on hardware via the &007F unmapped-port probe, i228, src/netboot/test_report.asm) — NOT raw di;halt, which strands the SAM on every failed experiment. csd_probe pm_fail_cfg/pm_fail_init bypass it. Audit + convert the trinload-pushed netboot di;halt sites (csd_probe, http_main, netboot_client/server/serve, dumper, smoke_test); LEAVE the SimCoupe -exitonhalt halts in src/assembler.asm and src/secd_probe.asm (different, correct mechanism). Document the technique canonically (netboot-trinity-testing.md + pointer to tr_terminate header) so it stops being re-derived/lost.
+  status: OPEN
+  kind: umbrella
+  owner: agent
+
+- id: i243a
+  title: "CSD probe error paths -> tr_terminate (not raw di;halt) + document the technique canonically"
+  description: |
+    Done in this PR: csd_probe.asm pm_fail_cfg/pm_fail_init now show the diagnostic border, hold for Esc, then jp tr_terminate (i228) so a failed run returns to trinload instead of stranding the SAM; test_report.asm included in the trinload build. The tr_terminate technique documented in docs/notes/netboot-trinity-testing.md.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 656, role: completing}
+    - {num: 656, role: completing}
+  parent: i243
+
+- id: i243b
+  title: "Audit + convert the OTHER trinload-pushed netboot di;halt sites to tr_terminate (http_main, client/server/serve, dumper, smoke)"
+  description: |
+    Per-file audit: distinguish trinload-pushed programs (-> tr_terminate, RET to trinload) from disk-booted ones (different exit). Leave SimCoupe -exitonhalt halts in src/assembler.asm + src/secd_probe.asm. Convert the pushed ones so failed experiments don't strand the SAM (Pete, 2026-06-24).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i243
+
+- id: i244
+  title: "serve_main + client write path: same SD-before-ENC drv_init bug — reorder + flip ModelSDInitSettle always-on"
+  description: |
+    i242's opt-in emulator model (enc28j60.go ModelSDInitSettle) revealed that serve_main does csd_set_bd_records (SD) BEFORE drv_init (netboot_serve.asm ~1335/1339) — the SAME chk_trinity-stale bug the CSD probe hit on hardware; it would blue-halt on real Trinity with an SD card present. The client write path (client_main) also fails the always-on model after ~10492 steps (a 2nd ENC identity probe after SD work?) — needs per-program tracing to confirm real-bug vs model artifact. Fix: reorder drv_init before any SD work in serve_main (mechanical) + investigate/fix client, then flip ModelSDInitSettle to always-on (delete the opt-in) so the whole class is caught in emulation. Authority: the i242 review + trinity-emulation-fidelity.md.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i245
+  title: "Trinity SD model: enforce the one-byte read lag so a missing command flush (Ncc sync) FAILS in emulation (the i145g all-zeros bug class)"
+  description: |
+    The koron-go SD model (sdcard.go) frames a command by bit-pattern ((b&0xC0)==0x40), not clock count, and returns command responses with NO one-byte read lag — so a flush-less command (opcode sent immediately after &31 select, missing the leading &FF Ncc sync) frames and responds IDENTICALLY to a correct one. That is exactly why the i145g all-zeros CSD bug (missing leading flush in sd_cmd/sdc_cmd) passed every host test yet failed on real hardware. FIX: model the &DF one-byte read lag faithfully (doc trinity-sd-z80-interface.md §3: sd.in reads 'the byte clocked in by the PREVIOUS OUT'), so a command not preceded by the flush misaligns and yields no valid response / no &FE token — making the missing-flush class a build-time failure. Determine the exact mechanism (Ncc sync vs lag alignment) from the authority first; migrate existing SD tests (drivers now send the flush). Emulation-first: an emulator that cannot catch this class is the defect (feedback_port_diff_authority_first). Followup from i145g (PR #656).
+  status: OPEN
+  kind: leaf
+  owner: agent

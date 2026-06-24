@@ -53,6 +53,15 @@ drv_init:      DI
                POP  HL
                JP   NZ,exit_failure
 
+; enc_rx_reestablish — the body of drv_init from here on (ereset + ring/MAC/PHY
+; re-arm + RX enable), MINUS chk_trinity. Call it (HL=MAC) to restore the ENC's
+; persistent RX state after another peripheral (the SD card) was driven on the
+; shared controller — drv_read only restores per-call select/bank, never this
+; once-only RX arming, so a full SD transaction kills serving until it is re-run.
+; chk_trinity is deliberately NOT re-run (it fails when the PIC is still settling
+; from the &38 SD-init, the i242 finding). Falls into exit_success (BC=1, RET).
+; (Added label only — the vendored instructions are unchanged.)
+enc_rx_reestablish:
                CALL ereset         ; reset ENC
                CALL enulloff       ; auto-nulling off
 

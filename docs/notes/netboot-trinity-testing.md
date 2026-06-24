@@ -47,6 +47,18 @@ everything end-to-end *first*:
 - **Bound every wait that touches hardware.** A poll with no timeout can spin forever
   and hang the SAM (the SD busy-wait hang, i241). Verify the emulation exercises the
   timeout/abort path before trusting a routine on real silicon.
+- **End a trinload-pushed program via `tr_terminate`, NEVER a raw `di; halt`.** A pushed
+  program runs in trinload's RAM; `di; halt` **strands the SAM** (dead keyboard,
+  power-cycle required) on every exit — including error exits — which makes the
+  push→test→fix loop miserable. `tr_terminate` (`src/netboot/test_report.asm`, i228)
+  probes the unmapped port `&007F` (floats high → `&FF` on real hardware; a distinct
+  marker in the koron-go emulator) and does **`di; halt` under emulation** (so harness
+  tests still stop) / **`RET` to trinload on hardware** (so the machine stays usable and
+  re-pushable). Every exit path — success *and* error — ends with `jp tr_terminate`
+  (set a diagnostic border first, and on an error path hold for an Esc so the operator
+  can read it, then fall into `tr_terminate`). The **only** legitimate raw `di; halt` is
+  SimCoupé's `-exitonhalt` in the *disk-booted* assembler self-tests
+  (`src/assembler.asm`, `src/secd_probe.asm`) — those run under SimCoupé, not trinload.
 
 Write the built `.mgt` to a real floppy (or load it in your usual way) and boot
 it on the SAM. Every netboot disk **auto-runs on power-on** — a B-DOS boot, then

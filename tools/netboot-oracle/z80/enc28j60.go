@@ -224,6 +224,25 @@ type ENC28J60 struct {
 	// SD-path busy-wait is bounded. See isBusy.
 	StuckBusy bool
 
+	// ModelSDInitSettle, when true, models the real-silicon divergence behind the
+	// i242 drv_init failure: the heavy &38 SD-init leaves the shared PIC settling, so
+	// a subsequent ENC identity-select (&08..&0F, used only by chk_trinity, which
+	// does NOT busy-poll) is not honoured and the identity read returns stale —
+	// chk_trinity sees != 'TR' and reports the board missing (drv_init -> BC=0 ->
+	// blue pm_fail_init). It makes the SD-before-ENC ordering bug fail in emulation
+	// instead of only on hardware (CLAUDE.md rule 7). It is OPT-IN (off by default)
+	// because making it always-on flags serve_main (a confirmed same-pattern SD-
+	// before-ENC bug) AND the client write path (unconfirmed — needs per-program
+	// tracing), and the precise post-&38 settle timing is "genuinely unspecified"
+	// (trinity-emulation-fidelity.md). Flipping it always-on once those programs are
+	// reordered + the timing is pinned is tracked as a follow-up (i242). A test
+	// enables it to prove the probe's ordering bug + fix.
+	ModelSDInitSettle bool
+	// sdInitSettling is the internal flag (set by an &38 SD-init under
+	// ModelSDInitSettle, cleared by an &28 ENC reset). Affects ONLY the identity
+	// probe — SD/EEPROM/ENC-data paths are untouched.
+	sdInitSettling bool
+
 	// SPI transaction state for the ENC SPI back-end. The microcontroller latches
 	// the MISO byte clocked out by the most recent OUT (&DE); the next IN (&DE)
 	// returns it via lastClockedIn (the one-byte read-lag, trinity-capabilities.md §3).
@@ -777,6 +796,14 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 		}
 		return
 	case v >= selIdentBase && v <= selIdentTop: // &08..&0F — IDENT string read
+		// If the PIC is still settling from a heavy &38 SD-init, this identity-select
+		// is not honoured (the PIC is busy with SD work) and the read-back latch keeps
+		// its prior value — chk_trinity, which does not busy-poll, reads stale and fails.
+		// This is the i242 real-silicon divergence; the correct order (drv_init before
+		// any SD) never hits it. See sdInitSettling.
+		if e.sdInitSettling {
+			return
+		}
 		// Latch the Nth char of the IDENT string into the shared read-back latch; the
 		// driver's chk_trinity reads it on the next IN &DD (gap c routes it there).
 		e.probeReply = trinityIdent[v-selIdentBase]
@@ -820,6 +847,7 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 		return
 	case v == selENCReset: // &28 — ENC reset (SRC); 50µs settle is a blind DJNZ on the Z80 side
 		e.softReset()
+		e.sdInitSettling = false // the ENC reset quiesces the PIC's post-SD-init settle (i242)
 		// CS state is unaffected by an internal reset; keep ENC selected if it was.
 		return
 	case v == selNullOn: // &2F — ENC auto-null on (the global mode, ENC target)
@@ -839,6 +867,9 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 			e.autoNullTarget = periphSD
 		case selSDInit:
 			e.selectPeripheral(periphSD)
+			if e.ModelSDInitSettle {
+				e.sdInitSettling = true // heavy SD-init leaves the PIC settling (i242); see ModelSDInitSettle
+			}
 		case selSDDeselct:
 			if e.selPeriph == periphSD {
 				e.selPeriph = periphNone // CS high; do not re-deselect (sdSelect already cleared)
