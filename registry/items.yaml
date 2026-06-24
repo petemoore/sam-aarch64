@@ -3056,7 +3056,7 @@
 - id: i145g
   title: "CSD probe HARDWARE run: push the emulation-proven probe to the real SAM, capture the real CSD"
   description: |
-    Hardware half of the CSD probe (split from i145a per emulation-first). Push the EMULATION-PROVEN probe (i145a) to the real SAM (trinload @ 192.168.2.75), run it, and tftp get csd.bin to capture the REAL CSD bytes + confirm SPI timing/token-retry behaviour. Runs ONLY AFTER i145a passes in emulation against the i145f-validated model — the safety gate Pete set 2026-06-22 (a trinload crash on hardware cannot be recovered remotely). The captured real CSD then re-parameterises the i145c model faithfully. owner:agent (hardware reachable, trinload left running) but irreversible-risk, so gated behind emulation.
+    Hardware half of the CSD probe (split from i145a per emulation-first): push the emulation-proven probe to the real SAM (trinload @ 192.168.2.75), tftp get csd.bin, capture the real CSD + confirm SPI timing. 2026-06-24 STATUS: a hardware attempt hung the SAM (3 restarts) + the capture never cleanly verified; that triggered the i235 comprehensive Trinity-emulator fidelity work (PR #641, DONE) which encoded EVERY documented Trinity behaviour (shared one-PIC microcontroller: global busy/auto-null, aliased read-back, MUX select, + all smaller behaviours). The faithful model runs the full probe_main end-to-end and SERVES the CSD — the hang does NOT reproduce in emulation, so the cause is below the documented digital contract (real-silicon timing the Trinity docs leave unspecified: &28 50us settle / PHY link-up / PIC &38 internals) OR the original capture was flawed. NEXT: the FULLY-STAGED one-shot hardware re-test (scratchpad/hw_retest_csd.sh: ping-gate + push + loopback-verified tftpget.py + post-run ARP-state diagnostic) — one clean shot distinguishes a real hang (ARP stays FAILED) from a capture-issue (ARP resolves / CSD served). If a real hang: next emulation deepening = mine the ENC28J60 chip datasheet (settles the timing the Trinity manual leaves unspecified). Pete-present (he reloads trinload). Authority + fidelity inventory: docs/specs/trinity-emulation-fidelity.md.
   status: OPEN
   depends_on: [i145a, i145f]
   kind: leaf
@@ -3997,6 +3997,8 @@
   title: "Trinity emulator hardware-parity: exhaustively encode EVERY documented hardware behaviour into the Go Trinity model (microcontroller/SD/ENC/EEPROM/SPI), no skips"
   description: |
     Pete (research-first/comprehensive-emulation, i126 north star): the i145g probe hang exposed that the Go Trinity emulator (sdcard.go/enc28j60.go/eeprom model) is far from hardware parity — it models the SD and ENC as INDEPENDENT devices though real Trinity is ONE shared PIC microcontroller on one SPI bus (shared &DC busy/select, &DD/&DE/&DF aliased read-back), the &DC busy bit is hardwired clear, &38 is opaque, full probe_main was never even run (NETBOOT_HOSTTEST==0 carve-out = i231). GOAL is NOT just to fix the hang: exhaustively mine EVERY authority (OCR'd Trinity manual ~/sam-archive/trinity-docs/text, Colin B-DOS 1.5t annotated disasm, simonowen trinload/encdrv/eeprom, trinity-capabilities.md, trinity-sd-z80-interface.md, ROM/capture analyses) for EVERY behavioural detail — every port/bit/mode/command/timing/sequence/edge/error path — and encode ALL of it into the model, no guessing, no skipping, ruthless. Then run the WHOLE suite (no regressions). The hang (and future ones) will then manifest naturally. Deliverable: a committed Trinity fidelity inventory (behaviour -> citation -> model status) + a faithful unified-microcontroller model + the missing full-probe_main e2e test. Was: narrow i145g-hang reproduction.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 641, role: completing}
