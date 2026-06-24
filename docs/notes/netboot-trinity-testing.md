@@ -33,6 +33,21 @@ EEPROM / SD hardware), [`pi-netboot-capture-analysis.md`](pi-netboot-capture-ana
   `arping`, `ping`, `tcpdump`/Wireshark.
 - The dev toolchain to build the disk: `pyz80` + Go (the dev container has both).
 
+**Prepare the FULL path — including data capture — before any hardware shot.**
+A hardware run is expensive (it can wedge the SAM and cost power-cycles), so stage
+everything end-to-end *first*:
+- **The capture/recording mechanism must be proven working before the test starts**,
+  not discovered missing mid-run. If the test reports data back over the wire (a
+  served file, a UDP status, a TFTP transfer), **loopback-test the listener/receiver
+  locally first** so you *know* it records. (Earned the hard way: a session started a
+  run and only then found it had no working way to record the capture — too late.)
+- **Don't ask whether trinload is running — test it.** Probe the SAM directly
+  (`ping`/`arping 192.168.2.75`, or just attempt the transfer); a reachability check
+  is faster and more reliable than a question.
+- **Bound every wait that touches hardware.** A poll with no timeout can spin forever
+  and hang the SAM (the SD busy-wait hang, i241). Verify the emulation exercises the
+  timeout/abort path before trusting a routine on real silicon.
+
 Write the built `.mgt` to a real floppy (or load it in your usual way) and boot
 it on the SAM. Every netboot disk **auto-runs on power-on** — a B-DOS boot, then
 an AUTO BASIC that `CLEAR`s, `LOAD`s the program at &8000, and `CALL`s it.
