@@ -2936,10 +2936,12 @@
 - id: i137
   title: build-disk netboot ceiling check doesn't distinguish section class (i125 follow-up)
   description: |
-    tools/build-disk/main.go rejects netboot image only if it loads past &10000 (≤32768 bytes). A section-C bootable (smoke/serve/server/client) must fit &8000-&BFFF (≤16384); above that it loads into ROM1 at boot and crashes. Mostly masked: the per-program make fit-check (i125, 16384 for section-C) fires first, so an over-section-C binary never reaches build-disk normally. Gap only reachable by calling build-disk -netboot directly on an over-section-C image. Fix needs a -netboot-section-c flag threaded through disk targets. Low priority (masked by i125 gate).
-  status: OPEN
+    WONTFIX (2026-06-24): the premise is a stale paging model. Original concern: build-disk -netboot rejects only >&10000 (32768B), but a 'section-C bootable must fit &8000-&BFFF (<=16384) or it loads into ROM1 at boot and crashes'. That is FALSE: at boot LMPR=&1F has ROM1 OFF (bit 6 clear), so section D (&C000-&FFFF) is RAM, not ROM1 (docs/notes/sam-paging.md L119-123, citing ROM disasm L13066 'LD A,1FH;OUT(250),A'; ROM1 only appears with LMPR=&5F). LOAD CODE 32768 deposits >&BFFF bytes straight into section-D RAM and runs there — proven in SimCoupe by 'make secd-loadability' and modelled in netboot_boot_test.go; serve/client/http deliberately use the 32768 budget (i145b section-D CSD overlay) and i96 serve is hardware-confirmed. So there is no ROM1-crash gap: build-disk's &10000 hard ceiling is correct/complete, and the 16384-vs-32768 split is a per-image self-imposed DESIGN budget whose single home is the make fit-check (tools/netboot-boot-fit-check.sh). Adding a -netboot-section-c flag would reject valid section-D images and duplicate that policy (single-source-of-truth). The item also miscategorised serve as section-C-only (it uses section D).
+  status: WONTFIX
   kind: leaf
   owner: agent
+  prs:
+    - {num: 646, role: completing}
   refs: [tools/build-disk/main.go, tools/netboot-boot-fit-check.sh, i125, i119]
 
 - id: i138
