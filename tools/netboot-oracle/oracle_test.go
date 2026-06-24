@@ -17,6 +17,7 @@ import (
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/dhcp"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/golden"
+	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/http"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/internal/mask"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/server"
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/smoke"
@@ -489,6 +490,56 @@ func TestServerResolveBehaviour(t *testing.T) {
 		if act, _ := tftp.Resolve(store, miss); act != tftp.ActionError404 {
 			t.Errorf("miss %q resolved to %v, want ERROR404", miss, act)
 		}
+	}
+}
+
+// TestServerServesBothPiFamilies proves the i83 server's "one flat store serves
+// every model" property (phase3-delivery-design §6.1) extends to the Pi 3 family
+// (i89): the same name-keyed store resolves the Pi 3 firmware set
+// (bootcode.bin/start.elf/fixup.dat) and the Pi 4/400 set (start4.elf/fixup4.dat)
+// identically, because the server keys on the filename alone and the two families'
+// names are disjoint. Sizes come from the http.RPiFirmware manifest — the same
+// authority the Z80 FW_MANIFEST table is byte-compared against — so this test
+// tracks the manifest rather than restating magic numbers.
+//
+// The Pi 3 boot ROM's *wire* behaviour differs from the Pi 4's (it requests
+// bootcode.bin first, ignores the DHCP bootfile name, and on a Pi 3B needs
+// option-66 after option-43 — see docs/notes/pi-netboot-capture-analysis.md
+// "Pi 3 family"), but none of that reaches the server's resolve path, which is
+// model-agnostic by construction. A real Pi 3 capture + Pi 3 golden wire vectors
+// is the optional hardware-confirmation tail (i89b).
+func TestServerServesBothPiFamilies(t *testing.T) {
+	// One flat store: the per-build files plus every firmware file the manifest pins.
+	store := tftp.MapStore{
+		"config.txt":  1591,
+		"kernel8.img": 1000,
+	}
+	for _, f := range http.RPiFirmware.Files {
+		store[f.Name] = uint64(f.Size)
+	}
+
+	pi3Set := []string{"bootcode.bin", "start.elf", "fixup.dat"}
+	pi4Set := []string{"start4.elf", "fixup4.dat"}
+
+	for _, name := range append(append([]string{}, pi3Set...), pi4Set...) {
+		act, size := tftp.Resolve(store, name)
+		if act != tftp.ActionOACK {
+			t.Errorf("%q resolved to %v, want OACK (one flat store must serve both Pi families)", name, act)
+		}
+		if want := store[name]; size != want {
+			t.Errorf("%q served size %d, want %d (manifest authority)", name, size, want)
+		}
+	}
+
+	// A Pi 3 also probes a serial-number subdir first (same as the Pi 4); it must
+	// 404 so the boot ROM falls back to the flat root.
+	if act, _ := tftp.Resolve(store, "1a2b3c4d/bootcode.bin"); act != tftp.ActionError404 {
+		t.Errorf("Pi 3 serial-subdir probe resolved to %v, want ERROR404", act)
+	}
+
+	// A name in neither family ERROR(1)s and the server stays alive.
+	if act, _ := tftp.Resolve(store, "recovery.elf"); act != tftp.ActionError404 {
+		t.Errorf("unknown file resolved to %v, want ERROR404", act)
 	}
 }
 

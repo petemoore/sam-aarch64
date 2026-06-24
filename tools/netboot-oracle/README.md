@@ -8,6 +8,12 @@ check possible before i80 (SimCoupé Trinity-net emulation): it validates the
 *protocol logic in isolation* — not the Z80 execution, the ENC28J60 hardware, or
 an end-to-end Pi boot, which stay gated on i80 / real Trinity.
 
+The wire golden vectors are Pi 4/400; the server is model-agnostic (it serves by
+filename), so `TestServerServesBothPiFamilies` pins that one flat store serves the
+Pi 3 firmware set (`bootcode.bin`/`start.elf`/`fixup.dat`) and the Pi 4 set alike.
+The Pi 3 boot-ROM wire differences and the remaining capture work are in
+`docs/notes/pi-netboot-capture-analysis.md` §4 (i89 / i89b).
+
 ## Packages
 
 - `frame` — the Ethernet/IPv4/UDP offset contract + `BuildUDPFrame`, the Go
