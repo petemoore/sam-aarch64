@@ -280,3 +280,75 @@ func makeSectorPayload(fill byte) []byte {
 	}
 	return s
 }
+
+// TestBDOSSaveWriteBackRoundTrips drives the real HSAVE save-hook over a staged
+// section-C file and asserts the saved bytes land in the selected record and read
+// back via HRSAD — the round-trip content path i144 adds (the write-back into the
+// CardModel). Before i144 the store captured the HSAVE UIFA but copied no bytes, so
+// a follow-up HRSAD read all-zero; this proves a saved file is now recoverable, the
+// prerequisite for the i119e E2E to assert record CONTENTS (not just selection).
+func TestBDOSSaveWriteBackRoundTrips(t *testing.T) {
+	mac, err := z80h.Load(cliBootBin, cliBootMap)
+	if err != nil {
+		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+	}
+	store := z80h.NewBDOSStore()
+	card := z80h.NewCardModel()
+	store.AttachCard(card)
+	mac.AttachBDOS(store)
+
+	const record = 3
+	if _, err := mac.CallEntry("bdos_select_record", z80h.Entry{A: record}); err != nil {
+		t.Fatalf("bdos_select_record(%d): %v", record, err)
+	}
+
+	// Stage a known file in section C. In the flat model &8000 is physical page 3,
+	// so BD_SAVE_PAGE=3 / BD_SAVE_ADDR=&8000 names exactly these bytes. 600 bytes =>
+	// two sectors, the second part-full (zero-padded) — exercises the layout + pad.
+	body := make([]byte, 600)
+	for i := range body {
+		body[i] = byte(i*3 + 1)
+	}
+	mac.Write(0x8000, body)
+
+	const name = "cfgfile"
+	nameAddr := symAddr(t, mac, "RRQ_FILENAME")
+	mac.Write(nameAddr, append([]byte(name), 0))
+	mac.WriteU16LE(symAddr(t, mac, "BD_NAME_PTR"), nameAddr)
+	mac.Write(symAddr(t, mac, "BD_SAVE_PAGE"), []byte{3})
+	mac.WriteU16LE(symAddr(t, mac, "BD_SAVE_ADDR"), 0x8000)
+	mac.WriteU16LE(symAddr(t, mac, "BD_SAVE_SIZE"), uint16(len(body)))
+	if _, err := mac.CallEntry("bdos_fill_save_uifa", z80h.Entry{}); err != nil {
+		t.Fatalf("bdos_fill_save_uifa: %v", err)
+	}
+	if _, err := mac.CallEntry("bdos_save_hook", z80h.Entry{}); err != nil {
+		t.Fatalf("bdos_save_hook: %v", err)
+	}
+
+	// The write-back populated the record's sectors: sector 0 = first 512 bytes,
+	// sector 1 = the 88-byte tail, zero-padded.
+	sec0 := card.Sector(record, 0)
+	var want0 [512]byte
+	copy(want0[:], body[:512])
+	if sec0 != want0 {
+		t.Errorf("record %d sector 0 mismatch after HSAVE write-back", record)
+	}
+	sec1 := card.Sector(record, 1)
+	var want1 [512]byte
+	copy(want1[:], body[512:])
+	if sec1 != want1 {
+		t.Errorf("record %d sector 1 mismatch (tail + zero-pad)", record)
+	}
+
+	// And it round-trips through the real HRSAD read hook: track 0 / sector 1
+	// (linear sector 0) reads the first 512 bytes back into BD_READ_BUF.
+	mac.Write(symAddr(t, mac, "BD_READ_TRACK"), []byte{0})
+	mac.Write(symAddr(t, mac, "BD_READ_SECTOR"), []byte{1})
+	if _, err := mac.CallEntry("bdos_read_sector", z80h.Entry{}); err != nil {
+		t.Fatalf("bdos_read_sector: %v", err)
+	}
+	readBack := mac.Read(symAddr(t, mac, "BD_READ_BUF"), 512)
+	if !bytes.Equal(readBack, body[:512]) {
+		t.Errorf("HRSAD round-trip mismatch: saved file did not read back (first byte got %#x want %#x)", readBack[0], body[0])
+	}
+}

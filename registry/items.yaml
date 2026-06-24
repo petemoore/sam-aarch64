@@ -3015,9 +3015,11 @@
   title: "Harness HSAVE write-back model: persist captured bytes into CardModel sectors"
   description: |
     BDOSStore.handle captures the HSAVE UIFA (record+name+page+addr+size) but does NOT copy the Size bytes from the source page into CardModel.Sectors[record]. Add a write-back so a follow-up HRSAD can read the saved file back — enabling the i119e E2E to assert record CONTENTS (not just that the right record was selected + CONFIRMED). Not needed for the safety gate; useful for round-trip verification.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 648, role: completing}
   parent: i119
 
 - id: i145
