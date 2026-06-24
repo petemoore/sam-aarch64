@@ -15,4 +15,4 @@ A small Go harness (a nested module — its own `go.mod` so the parent `netboot-
 
 An end-to-end Pi netboot and real-silicon TX/RX timing (e.g. PHY link-up delay) stay gated on **real Trinity hardware** — the final integration gate. **Emulation-verified ≠ hardware-verified.**
 
-Build + run: `make ci-netboot-z80` (the `netboot-z80` CI job). Authority + design: [`../README.md`](../README.md); `docs/notes/trinity-capabilities.md`; `docs/plans/phase3-netboot-implementation-plan.md`.
+Build + run: `make ci-netboot-z80` (the `netboot-z80` CI job). A `TestMain` (`build_assert_test.go`) rebuilds every `build/*.bin` the tests load before any test runs and aborts on a non-zero build, so `go test` here can't silently pass against a stale artifact (i116); `HARNESS_SKIP_BUILD=1` bypasses it. Authority + design: [`../README.md`](../README.md); `docs/notes/trinity-capabilities.md`; `docs/plans/phase3-netboot-implementation-plan.md`.

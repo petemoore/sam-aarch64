@@ -2354,9 +2354,11 @@
   title: Harness measurement / byte-match tests must assert the build succeeded — no stale-.bin reads
   description: |
     A failed pyz80/make build leaves the previous .bin in place (or a timestamp-keyed target no-ops after a source restore), so a T-state or byte-identical check reads the stale artifact and reports a false pass. Bit the project 4 sessions: sha256-fastest-z80, i88-tls-go-authority-arc, i48c-expr-parser-bricks, and a timestamp-keyed variant. Fix is structural (the i21 USAGE.md doc note did not take): make harness measurement/oracle tests depend on the .bin build target (or assert build exit-0 / a freshness check) so they cannot run against a stale artifact.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 640, role: completing}
   refs: [tools/z80-test-harness-go/, i104, i21]
 
 - id: i117
