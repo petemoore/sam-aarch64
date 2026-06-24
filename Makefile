@@ -1229,6 +1229,7 @@ tables: tables-gen
 	$(BUILD)/tables-gen -constants-inc src/tbn_constants.inc
 	$(BUILD)/tables-gen -mnemonic-ids-inc src/mnemonic_ids.inc
 	$(BUILD)/tables-gen -mnemonic-names-inc src/mnemonic_names.inc
+	$(BUILD)/tables-gen -sysopts-inc src/disasm_sysopts.inc
 
 # tables-sync-check — freshness guard: regenerate the committed tables into
 # build/gen/ and diff against the in-tree copies; fail on any drift (a Go-side
@@ -1243,8 +1244,9 @@ tables-sync-check: tables-gen
 	$(BUILD)/tables-gen -constants-inc $(BUILD)/gen/tbn_constants.inc
 	$(BUILD)/tables-gen -mnemonic-ids-inc $(BUILD)/gen/mnemonic_ids.inc
 	$(BUILD)/tables-gen -mnemonic-names-inc $(BUILD)/gen/mnemonic_names.inc
+	$(BUILD)/tables-gen -sysopts-inc $(BUILD)/gen/disasm_sysopts.inc
 	@fail=0; \
-	for f in sysreg_tables.inc tbn_constants.inc mnemonic_ids.inc mnemonic_names.inc; do \
+	for f in sysreg_tables.inc tbn_constants.inc mnemonic_ids.inc mnemonic_names.inc disasm_sysopts.inc; do \
 	    if ! diff -u src/$$f $(BUILD)/gen/$$f; then \
 	        echo ""; \
 	        echo "ERROR: src/$$f is stale — it differs from the tools/tables-gen"; \
@@ -1430,11 +1432,11 @@ sysreg-data: $(BUILD)/sysreg_data.bin
 #                    self-test entry + fixtures.  Ships only on the test
 #                    disk (the BUILD_TESTS assembler boot calls &8003 via
 #                    paged_call to verify the decoder).
-$(BUILD)/disasm.bin: src/disasm.asm src/sysreg_names.inc src/sysreg_tables.inc
+$(BUILD)/disasm.bin: src/disasm.asm src/sysreg_names.inc src/sysreg_tables.inc src/disasm_sysopts.inc
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/disasm.bin src/disasm.asm
 
-$(BUILD)/disasm-test.bin: src/disasm.asm src/sysreg_names.inc src/sysreg_tables.inc
+$(BUILD)/disasm-test.bin: src/disasm.asm src/sysreg_names.inc src/sysreg_tables.inc src/disasm_sysopts.inc
 	@mkdir -p $(BUILD)
 	pyz80 -D BUILD_TESTS=1 --obj=$(BUILD)/disasm-test.bin src/disasm.asm
 
