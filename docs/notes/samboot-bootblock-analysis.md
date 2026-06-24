@@ -799,6 +799,17 @@ Tests: `TestRealBootLoadsBootblockAtChunk1` (the fetch lands the bootblock) and
   the BUSY flag correctly); the defect was the *consumer's* address assumption. A
   follow-up may teach the dumper to emit a device-linear image, but the existing
   capture is complete and correct once un-rotated.
+- **The emulation reset boot does not run past `CALL &805F` — consequence for the
+  i229 splice verification.** The injection site is *after* `CALL &805F` (before
+  `restore:`), but in the Go emulator B-DOS init never returns: the from-reset trace
+  reaches `&805F` and runs forward into B-DOS init, halting where init touches the
+  unmodeled SD/screen (finalPC > `&8000`; `TestRealBootLoadsBDOSCoherently`). So the
+  spliced post-`&805F` config-decision is **unreachable in emulation** — the
+  reset-chain test can verify only that the patched chunk-1 *loads + runs coherently
+  to `&805F`*, with the decision LOGIC covered by the symbol-driven
+  `samboot_inject_test.go` and the in-chain decision + stripe pixels left to the i230
+  hardware RAM test. Whether to accept that scope or first teach the emulator to
+  complete B-DOS init (an i126 slice) is **q50** (i229 depends on it).
 
 ---
 
