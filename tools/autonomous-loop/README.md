@@ -22,14 +22,29 @@ the limit, so nothing is summarised away. The session stays interactive and
    the model, so it can't wake the agent on its own; the nudge (a real text line,
    *not* the startup prompt) creates the next turn so the agent reads the readout
    and acts.
-3. Agent: follow the resume nudge — it carries the continue-vs-wind-down
-   decision rule (the authoritative wording is `RESUME_NUDGE` in `monitor.sh`;
-   on wind-down, write the ROADMAP handover → `touch ~/.claude/autonomous-loop/wound-down`).
-4. Monitor stuffs `/clear` + the startup prompt → clean reset. Repeat.
+3. Agent: follow the resume nudge — it carries the decision rule (the
+   authoritative wording is `RESUME_NUDGE` in `monitor.sh`). After picking the
+   `ready` tip it takes ONE of three exits: **(1) keep working** (workable
+   non-Pete tip, ≥50% free); **(2) context/budget wind-down** — write the
+   ROADMAP handover → `touch ~/.claude/autonomous-loop/wound-down` (monitor
+   `/clear`s + restarts fresh to keep working, incl. for a large item that wants
+   a fresh-context session); **(3) backlog-drained hold** — when *zero* workable
+   non-Pete items remain → write the handover → `touch ~/.claude/autonomous-loop/quiescent`.
+4. Monitor reacts: on `wound-down`, `/clear` + the startup prompt → clean reset,
+   repeat. On `quiescent` (item **i103**), **hold**: stop nudging — no `/clear`,
+   no restart — until the session transcript grows (Pete writes back / any new
+   turn), then auto-expire the hold and resume normal polling.
 
 The agent never blocks on Pete: questions go in `registry/questions.yaml` (via
 `build/registry add --space questions …` then `make registry`) and it keeps
-working; it only addresses Pete directly when the whole non-Pete backlog drains.
+working; it only addresses Pete directly when the whole non-Pete backlog drains —
+and then it goes **quiescent** (exit 3) rather than restart-looping. Without the
+quiescent hold, a true drain would wind down → `/clear` + restart → re-confirm
+the drain → restart again, forever, waking an idle session and burning tokens;
+the hold is keyed to transcript growth so it **auto-expires on the first sign of
+life** (no manual restart, no permanently-deaf loop). If no transcript can be
+found to watch, the monitor declines to hold (deaf-loop insurance) and the
+hang-timeout still backstops.
 Work is pulled from `build/registry ready` (returns the top unblocked open item
 from the priority queue in `registry/priority.yaml`; generated view:
 `docs/notes/backlog.md`). The YAML is the source of truth — never hand-edit
@@ -69,7 +84,9 @@ Tunable via env: `ALOOP_WINDOW`, `ALOOP_PROMPT`, `ALOOP_POLL`,
 `ALOOP_SUBMIT_SETTLE`, `ALOOP_CHUNK_SIZE`, `ALOOP_CHUNK_DELAY`,
 `ALOOP_NUDGE_TRIES`, `ALOOP_NUDGE_VERIFY_WAIT`, `ALOOP_TURN_MARKER`,
 `ALOOP_IDLE_POLL`, `ALOOP_IDLE_CONFIRM`, `ALOOP_IDLE_MAX`, `ALOOP_LOG`
-(see `monitor-nudge-delivery.md`).
+(see `monitor-nudge-delivery.md`), and — for the i103 quiescent hold —
+`ALOOP_PROJECTS_DIR` / `ALOOP_TRANSCRIPT` (where the watcher reads transcript
+growth; defaults to the newest `*.jsonl` under `~/.claude/projects`).
 
 **Watch it live:** the monitor traces every action — each stuffed payload, each
 submit, every idle-wait and branch decision — to `$ALOOP_LOG` (default
