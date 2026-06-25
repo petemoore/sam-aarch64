@@ -768,6 +768,20 @@ client_main:
                 ; image stays inside the 32768-byte &8000-&FFFF window. Verified by
                 ; csd_to_bd_records_test.go and the serve_main boot integration test.
                 call    csd_set_bd_records
+                ; --- re-arm the ENC RX path the SD transaction disturbed (i244) --
+                ; client_setup already ran drv_init FIRST (ENC up against a quiescent
+                ; PIC, before any SD work — so the i242 chk_trinity-stale ordering bug
+                ; does NOT apply to the client). But the csd_set_bd_records CSD read is
+                ; an SD transaction on the shared one-PIC Trinity controller, and it
+                ; leaves the ENC's persistent RX state (RXEN, ring pointers, MAC/PHY)
+                ; disturbed; drv_read never restores it, so the proactive client_first
+                ; TX + the fetch loop's drv_read would run on a dead ENC. Re-arm now
+                ; (enc_rx_reestablish: drv_init's RX-arm body minus chk_trinity), same
+                ; fix serve_main applies after its startup CSD read.
+                di
+                ld      hl, CLIENT_MAC
+                call    enc_rx_reestablish
+                ei
                 ; --- broadcast the ARP request, then receive until done --
                 call    client_first
 cl_fetch_loop:

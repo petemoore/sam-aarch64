@@ -224,23 +224,24 @@ type ENC28J60 struct {
 	// SD-path busy-wait is bounded. See isBusy.
 	StuckBusy bool
 
-	// ModelSDInitSettle, when true, models the real-silicon divergence behind the
-	// i242 drv_init failure: the heavy &38 SD-init leaves the shared PIC settling, so
-	// a subsequent ENC identity-select (&08..&0F, used only by chk_trinity, which
-	// does NOT busy-poll) is not honoured and the identity read returns stale —
-	// chk_trinity sees != 'TR' and reports the board missing (drv_init -> BC=0 ->
-	// blue pm_fail_init). It makes the SD-before-ENC ordering bug fail in emulation
-	// instead of only on hardware (CLAUDE.md rule 7). It is OPT-IN (off by default)
-	// because making it always-on flags serve_main (a confirmed same-pattern SD-
-	// before-ENC bug) AND the client write path (unconfirmed — needs per-program
-	// tracing), and the precise post-&38 settle timing is "genuinely unspecified"
-	// (trinity-emulation-fidelity.md). Flipping it always-on once those programs are
-	// reordered + the timing is pinned is tracked as a follow-up (i242). A test
-	// enables it to prove the probe's ordering bug + fix.
-	ModelSDInitSettle bool
-	// sdInitSettling is the internal flag (set by an &38 SD-init under
-	// ModelSDInitSettle, cleared by an &28 ENC reset). Affects ONLY the identity
-	// probe — SD/EEPROM/ENC-data paths are untouched.
+	// sdInitSettling models the real-silicon divergence behind the i242 drv_init
+	// failure: the heavy &38 SD-init leaves the shared PIC settling, so a subsequent
+	// ENC identity-select (&08..&0F, used only by chk_trinity, which does NOT
+	// busy-poll) is not honoured and the identity read returns stale — chk_trinity
+	// sees != 'TR' and reports the board missing (drv_init -> BC=0 -> blue
+	// pm_fail_init). It makes any SD-before-ENC drv_init ordering bug FAIL in
+	// emulation instead of only on hardware (CLAUDE.md rule 7).
+	//
+	// ALWAYS-ON (i244): every &38 SD-init sets it, so EVERY test exercises the post-
+	// &38 settle and an SD-before-ENC ordering bug is a build-time catch — it was
+	// opt-in until serve_main was reordered (csd_set_bd_records before drv_init crashed
+	// a real SAM, 2026-06-24) and the client write path was confirmed clean. The
+	// CORRECT order (drv_init's chk_trinity against a quiescent PIC, before any SD
+	// work) never trips it: the ENC reset in drv_init's RX-arm body (&28) clears the
+	// flag, and after the startup SD read the boot wrapper re-arms the ENC
+	// (enc_rx_reestablish, which resets too). Set by an &38 SD-init, cleared by an &28
+	// ENC reset. Affects ONLY the identity probe — SD/EEPROM/ENC-data paths are
+	// untouched, so the SD read/write tests (which run drv_init first) are unaffected.
 	sdInitSettling bool
 
 	// SPI transaction state for the ENC SPI back-end. The microcontroller latches
@@ -867,9 +868,11 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 			e.autoNullTarget = periphSD
 		case selSDInit:
 			e.selectPeripheral(periphSD)
-			if e.ModelSDInitSettle {
-				e.sdInitSettling = true // heavy SD-init leaves the PIC settling (i242); see ModelSDInitSettle
-			}
+			// Always-on (i244): the heavy &38 SD-init leaves the PIC settling, so a
+			// chk_trinity identity probe issued before an &28 ENC reset reads stale.
+			// Every test now models this, making an SD-before-ENC drv_init ordering
+			// bug a build-time catch (see sdInitSettling).
+			e.sdInitSettling = true
 		case selSDDeselct:
 			if e.selPeriph == periphSD {
 				e.selPeriph = periphNone // CS high; do not re-deselect (sdSelect already cleared)
