@@ -933,27 +933,43 @@ $(BUILD)/samboot_config.bin $(BUILD)/samboot_config.map: src/netboot/samboot_con
 
 netboot-samboot-config: $(BUILD)/samboot_config.bin $(BUILD)/samboot_config.map
 
-# netboot-samboot-inject (i135d, also completes i112) — the patched-bootblock
-# decision+dispatch glue: redraw the MGT stripes unconditionally (i112 fold),
-# read the SAMBOOT BIOS config (i176 samboot_read_config), then auto-boot the
-# configured record (i122a bdos_boot_record) or fall through to a normal boot.
-# Pure control flow over two already-ported, harness-tested primitives — no new
-# Go authority. Built WITHOUT NETBOOT_HOSTTEST (like netboot_client_boot) so the
-# real RST 8 ALHK dispatch inside bdos_boot_record is present and the harness's
-# AttachBDOS can capture the boot; the stripes PIXELS are hardware-gated (the
-# bdos_picker.asm picker_render precedent). samboot_inject_test.go programs the
-# config into the emulated EEPROM and asserts the boot decision + the
-# unconditional stripes redraw (the call probe) across 5 cases. The on-hardware
-# reset->ROM->bootblock chain, the stripes pixels, and the ALHK auto-load are the
-# i135c hardware path, out of scope. Charter: docs/specs/samboot.md §4/§6.
-$(BUILD)/samboot_inject.bin $(BUILD)/samboot_inject.map: src/netboot/samboot_inject.asm src/netboot/samboot_config.asm src/netboot/bdos_seam.asm src/netboot/eeprom.asm
+# netboot-samboot-inject (i229) — the combined patched-bootblock injection: the
+# real splice the SAMBOOT flash adds to Colin's Trinity bootblock. `inject` (in the
+# bootblock free space &415E..&43FF) runs the real B-DOS init (CALL &805F), reads
+# the SAMBOOT BIOS config (i176 samboot_read_config), then auto-boots the configured
+# record (i122a bdos_boot_record) or RETs to &40A1 = restore: (Colin's verbatim
+# screen tail). Org &415E; SAMBOOT_BOOTBLOCK/SAMBOOT_SCRATCH/SAMBOOT_INJECT_ORG are
+# set inside the asm via equ, so no -D flag is needed; built WITHOUT NETBOOT_HOSTTEST
+# (the RST 8 ALHK dispatch is present so AttachBDOS can capture the boot) and WITHOUT
+# NETBOOT_WANT_CLAIM (the WRQ write/claim path is excluded). The SAMBOOT_BOOTBLOCK
+# gate trims eeprom.asm + bdos_seam.asm to the read-only auto-boot closure so the
+# image fits the 674 free bytes; the post-assemble check asserts the .map end <=
+# &43FF. samboot_bootblock_test.go (A) asserts the decision logic (5 cases) and (B)
+# the SPLICED chunk-1 boots coherently to &805F on the real capture. The stripe
+# pixels, the real ALHK record boot, and the scratch-RAM hardware-safety are the
+# i230 hardware path. Charter: docs/specs/samboot.md §4/§6; plan: docs/plans/i229-combined-bootblock.md.
+$(BUILD)/samboot_bootblock.bin $(BUILD)/samboot_bootblock.map: src/netboot/samboot_bootblock.asm src/netboot/samboot_config.asm src/netboot/bdos_seam.asm src/netboot/eeprom.asm
 	@mkdir -p $(BUILD)
 	pyz80 \
-	    --obj=$(BUILD)/samboot_inject.bin \
-	    --mapfile=$(BUILD)/samboot_inject.map \
-	    src/netboot/samboot_inject.asm
+	    --obj=$(BUILD)/samboot_bootblock.bin \
+	    --mapfile=$(BUILD)/samboot_bootblock.map \
+	    src/netboot/samboot_bootblock.asm
+	@tools/samboot-bootblock-fit-check.sh $(BUILD)/samboot_bootblock.map
 
-netboot-samboot-inject: $(BUILD)/samboot_inject.bin $(BUILD)/samboot_inject.map
+netboot-samboot-inject: $(BUILD)/samboot_bootblock.bin $(BUILD)/samboot_bootblock.map
+
+# samboot-splice (i229) — produce the combined ≤1024-byte chunk-1 image by splicing
+# `inject` into a COPY of the captured bootblock (chunk 1 of the local eeprom.bin):
+# patch the 3 bytes at file &9E (CALL &805F -> CALL inject) and copy the inject blob
+# into the free space at file &15E. The proprietary capture bytes are NEVER committed
+# — the output build/samboot_bootblock_chunk1.bin is git-ignored. Skips gracefully
+# (exit 0 with a log) if the capture is absent, like the other capture-gated build
+# helpers; the no-silent-skip rule applies to the reset-chain TEST, not this helper.
+.PHONY: samboot-splice
+samboot-splice: $(BUILD)/samboot_bootblock.bin
+	cd tools/netboot-oracle && go run ./cmd/samboot-splice \
+	    -inject $(CURDIR)/$(BUILD)/samboot_bootblock.bin \
+	    -out $(CURDIR)/$(BUILD)/samboot_bootblock_chunk1.bin
 
 # netboot-client (i82) — the TFTP client boot disk: fetch a file (a .mgt image)
 # from a TFTP server and write it to Trinity storage via the B-DOS hooks.  Two
