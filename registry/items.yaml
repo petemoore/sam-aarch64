@@ -3418,7 +3418,7 @@
   title: "Registry: raise the item-title length limit from 120 to ~160 chars (validate.go + mutators help + test)"
   description: |
     The 120-char title cap forced abbreviating SAMBOOT item titles. Bump the limit in tools/registry/validate.go (the check + message + the §147 comment), the mutators.go add-flag help text, and update validate_test.go's title-length assertion. Keep titles single-line. Pete invited this (2026-06-20).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
 
