@@ -622,6 +622,21 @@ type Entry struct {
 	// called for the RST-hook fast path too (with the RST target PC). Keep it
 	// cheap: it runs once per instruction.
 	Trace func(pc uint16)
+
+	// FrameIntPeriod, when non-zero, makes the run fire a maskable frame
+	// interrupt every FrameIntPeriod executed instructions, modelling the SAM's
+	// 50 Hz line/frame interrupt. It is delivered through the real CPU interrupt
+	// path (koron processInterrupt): when IFF1 is set the CPU pushes PC and
+	// vectors to the ROM's handler (&0038 in IM1, or the IM2 vector), so the
+	// genuine &0038 KEYSCAN/clock handler RUNS — populating LASTK/FLAGS, advancing
+	// FRAMES, etc. Zero (every existing caller) leaves the run interrupt-free,
+	// preserving prior behaviour exactly. Used by the samboot-statediff diagnostic
+	// to boot the stock v3.0 ROM through its real frame-driven editor wait (whose
+	// idle relies on the interrupt populating the keyboard sysvars), so it reaches
+	// the SAME editor FLAGS-poll idle as Colin's fork — the precondition for a
+	// meaningful RAM diff at a shared sync PC. The minimal i257 EI;HALT-resume
+	// (advance past HALT) is independent and still applies between interrupts.
+	FrameIntPeriod uint64
 }
 
 // CallResult is what a routine returns to the harness.
@@ -729,7 +744,26 @@ func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (Call
 	halted := false
 	stopVisits := 0
 	reachedStop := false
+	var sinceInt uint64 // instructions since the last frame interrupt was raised
 	for {
+		// Frame interrupt (opt-in via Entry.FrameIntPeriod): raise a maskable INT
+		// every FrameIntPeriod instructions. koron's Step() consumes cpu.Interrupt
+		// only when IFF1 is set (a maskable INT is held off while interrupts are
+		// disabled, exactly as on hardware), pushing PC and vectoring to the ROM
+		// handler (&0038 in IM1). We arm it here and let Step() deliver-or-ignore;
+		// if ignored (IFF1=0) it stays armed until the ROM does EI. This runs the
+		// genuine &0038 KEYSCAN/clock handler so LASTK/FLAGS/FRAMES are populated.
+		if in.FrameIntPeriod != 0 {
+			sinceInt++
+			if sinceInt >= in.FrameIntPeriod && cpu.Interrupt == nil {
+				// Data carries the data-bus byte the CPU latches at INT ack; it is
+				// used only by IM2 (vector = I:byte&0xFE) and IM0, and ignored by
+				// IM1. The SAM floats the bus high (0xFF) during the frame INT ack,
+				// so the IM2 vector is read from I:0xFE — the ROM's IM2 table entry.
+				cpu.Interrupt = &z80.Interrupt{Type: z80.IMType, Data: []uint8{0xFF}}
+				sinceInt = 0
+			}
+		}
 		if in.Trace != nil {
 			in.Trace(cpu.PC)
 		}
