@@ -128,6 +128,18 @@ type SDCard struct {
 	cmdBuf [sdCmdFrame]byte
 	cmdLen int
 
+	// Leading-flush enforcement (i245). The documented command frame is
+	// [&FF flush][opcode][4 arg][CRC] — a flush/idle clock precedes EVERY command
+	// opcode (trinity-sd-z80-interface.md §3/§5; Colin sd.cmd &A7FA; MMCSD cmd9).
+	// flushBeforeCmd records that a true idle flush (NOT a response-stream poll
+	// byte) was clocked since the last response was consumed / since &31 select.
+	// A command whose opcode arrives with flushBeforeCmd == false is malformed: it
+	// de-syncs the card (deSynced, sticky until the next transaction), so every
+	// following read is idle &FF and no &FE data token ever arrives — reproducing
+	// the i145g all-zeros bug a flush-less driver hits on real silicon.
+	flushBeforeCmd bool
+	deSynced       bool
+
 	// Response stream. After a command frame completes, resp holds the bytes the
 	// subsequent reads return (R1, then any R3/R7 trailer or the &FE-token+CSD
 	// stream), and respPos indexes the next. Reads past the end return &FF (idle).
@@ -311,6 +323,10 @@ func (s *SDCard) sdReset() {
 	s.respPos = 0
 	s.miso = sdIdleMISO
 	s.phase = phaseIdle
+	// Fresh transaction bracket (&04): the first command must be preceded by an
+	// idle/flush clock again, and any prior de-sync is cleared.
+	s.flushBeforeCmd = false
+	s.deSynced = false
 }
 
 // autoClock serves a bare IN &DF under &3F auto-null mode: the microcontroller
@@ -402,6 +418,12 @@ func (s *SDCard) out(v uint8) {
 	}
 	// Dummy/flush clock in the response (or idle) phase: latch the next response
 	// byte for the following IN (the read-lag).
+	if s.respPos >= len(s.resp) {
+		// A TRUE idle/flush clock — no response is pending, so this is the leading
+		// Ncc flush a command needs (i245), not an R1/token poll byte (those happen
+		// while respPos < len(resp) and must NOT satisfy the flush requirement).
+		s.flushBeforeCmd = true
+	}
 	s.miso = s.nextResp()
 }
 
@@ -495,6 +517,25 @@ func (s *SDCard) completeCommand() {
 	op := s.cmdBuf[0]
 	s.resp = nil
 	s.respPos = 0
+
+	// Leading-flush enforcement (i245): this command's opcode must have been
+	// preceded by a true idle/flush clock. If not, the real card never frames it —
+	// model that as a sticky de-sync: arm no response, so every following read is
+	// idle &FF, the R1 poll times out, and CMD9's &FE token never arrives (the
+	// i145g all-zeros symptom). flushBeforeCmd is consumed here for the next command.
+	missedFlush := !s.flushBeforeCmd
+	s.flushBeforeCmd = false
+	if missedFlush {
+		s.deSynced = true
+	}
+	if s.deSynced {
+		// no valid response while de-synced (until the next &04/&31 bracket), but
+		// still clear the command-frame state so the next byte doesn't overflow cmdBuf.
+		s.inCmd = false
+		s.cmdLen = 0
+		return
+	}
+
 	switch op {
 	case 0x40: // CMD0 GO_IDLE_STATE -> R1 = 0x01 (idle)
 		s.resp = []byte{0x01}
