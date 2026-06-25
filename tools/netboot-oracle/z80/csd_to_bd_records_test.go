@@ -136,6 +136,55 @@ func TestCSDToBDRecordsV1(t *testing.T) {
 	}
 }
 
+// TestCSDToBDRecordsBoundedOnStuckBusy is the i250/fix-#5 hang-safety gate, run as
+// part of the DEFAULT suite (no opt-in): it models a wedged Trinity whose &DC BUSY
+// bit (bit 3) NEVER clears — the real-hardware failure that hung Pete's SAM (the
+// 2026-06-24 3-restart hang) — and asserts the SHARED serve/client SD path
+// (csd_set_bd_records → sdc_init_ladder → sdc_in/sdc_out) TERMINATES instead of
+// spinning forever.
+//
+// Before fix #5 the shared sdc_out/sdc_in called the vendored UNBOUNDED wait_ready
+// (encdrv.asm:427, `JR wait_ready` forever): against this stuck controller the
+// routine would never return, the harness would run to its step cap, and Call would
+// error. The bounded sdc_wait_ready (sd_csd.asm) gives up after SDC_BUSY_LIMIT polls
+// and sets the sticky sdc_timed_out, so the whole ladder unwinds fast and the read
+// fails gracefully (BD_RECORDS left 0 — the same safe decline as no card). Revert
+// the bound (point sdc_out/sdc_in back at wait_ready) and this test fails by hanging
+// to the step cap — the revert-the-fix-fails proof that the emulator now CATCHES the
+// unbounded-wait class by default, not only under the opt-in csd_probe probe (i241).
+func TestCSDToBDRecordsBoundedOnStuckBusy(t *testing.T) {
+	if _, err := os.Stat(sdCSDBin); err != nil {
+		t.Skipf("sd_csd fixture not built (%s); run `make netboot-sd-csd`", sdCSDBin)
+	}
+	mac, err := z80h.Load(sdCSDBin, sdCSDMap)
+	if err != nil {
+		t.Fatalf("load sd_csd fixture: %v", err)
+	}
+	enc := z80h.NewENC28J60()
+	enc.AttachSD(csdV2(0x001D59)) // a real CSD is configured, but it can never be read
+	mac.AttachIO(enc)
+	enc.StuckBusy = true // the controller's BUSY bit never clears
+
+	// Must TERMINATE. With the unbounded wait_ready this Call would run to the step
+	// cap and error; the bound makes it return (the busy-wait gives up).
+	addr := symAddr(t, mac, "BD_RECORDS")
+	mac.WriteU16LE(addr, 0)
+	if _, err := mac.Call("csd_set_bd_records"); err != nil {
+		t.Fatalf("csd_set_bd_records did not terminate against a stuck Trinity: %v "+
+			"(the SD busy-wait is unbounded — fix #5 missing, the SAM would hang)", err)
+	}
+
+	// The bounded busy-wait actually fired (sticky flag set), and the read declined
+	// safely (no bogus record count from garbage SPI reads).
+	if to := mac.Read(symAddr(t, mac, "sdc_timed_out"), 1)[0]; to != 1 {
+		t.Errorf("sdc_timed_out = %d after a stuck-BUSY transaction, want 1 (the bounded wait must have given up)", to)
+	}
+	b := mac.Read(addr, 2)
+	if got := uint16(b[0]) | uint16(b[1])<<8; got != 0 {
+		t.Errorf("BD_RECORDS = %d against a stuck Trinity, want 0 (safe decline on a failed read)", got)
+	}
+}
+
 // TestCSDToBDRecordsNoCard confirms the safe-decline path: with no SD card
 // configured (the model inert), csd_read_into_stage cannot read a CSD and
 // BD_RECORDS is left 0 — so the picker finds no free record and declines, never a

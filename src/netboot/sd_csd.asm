@@ -30,8 +30,9 @@
 ; configured CSD and asserts BD_RECORDS is COMPUTED (not injected) and matches the
 ; Go reference. Emulation-verified is not hardware-verified (CLAUDE.md §5).
 ;
-; Included by netboot_serve.asm / netboot_client.asm. Depends on wait_ready
-; (encdrv.asm) and BD_RECORDS (bdos_seam.asm) — the including file pulls those in.
+; Included by netboot_serve.asm / netboot_client.asm. The SD byte path uses this
+; module's own bounded sdc_wait_ready (not the vendored encdrv.asm wait_ready);
+; depends on BD_RECORDS (bdos_seam.asm), which the including file pulls in.
 
 SDC_PORT:         equ &DC                       ; microcontroller select + status
 SDC_DATA:         equ &DF                       ; SD transparent SPI byte relay
@@ -41,6 +42,7 @@ SDC_DESEL:        equ &30                       ; SD deselect
 SDC_INIT:         equ &38                       ; microcontroller "SD init" wake
 SDC_DATATOK:      equ &FE                       ; start-of-data token preceding the CSD
 SDC_IDLE:         equ &FF                       ; SPI-idle MISO
+SDC_BUSY_LIMIT:   equ &FFFF                     ; busy-wait poll budget (~65535, ~0.5s) before sdc_wait_ready gives up
 
 ; The 16-byte CSD read target. This module ships as a section-D overlay (i145b-b2),
 ; so CSD_STAGE lives wherever the module lands in the boot image (section C or D);
@@ -62,14 +64,18 @@ csd_set_bd_records:
                 ret
 
 ; ===========================================================================
-; SD-SPI primitives (manual &31 select). wait_ready (encdrv.asm) is the shared &DC
-; bit-3 busy poll.
+; SD-SPI primitives (manual &31 select). sdc_wait_ready (below) is the BOUNDED &DC
+; bit-3 busy poll — NOT the vendored unbounded wait_ready (encdrv.asm), which spins
+; `JR wait_ready` forever on a stuck Trinity and hung the SAM (the 2026-06-24
+; 3-restart hang). Fix #5 (hardware-readiness-audit.md): bound this shared path so a
+; wedged controller can't wedge serve_main/client_main. The vendored ENC-path
+; wait_ready stays untouched (its uses are proven).
 ; ===========================================================================
 
-; sdc_out — wait for not-busy, then OUT (&DF),A.
+; sdc_out — wait for not-busy (bounded), then OUT (&DF),A.
 sdc_out:
                 push    af
-                call    wait_ready
+                call    sdc_wait_ready
                 pop     af
                 out     (SDC_DATA), a
                 ret
@@ -78,9 +84,38 @@ sdc_out:
 sdc_in:
                 ld      a, SDC_IDLE
                 call    sdc_out
-                call    wait_ready
+                call    sdc_wait_ready
                 in      a, (SDC_DATA)
                 ret
+
+; sdc_wait_ready — bounded replacement for the vendored (unbounded) wait_ready, used
+; ONLY on the SD byte path (sdc_out/sdc_in). Waits for the Trinity busy bit (&DC bit
+; 3) to clear, but gives up after SDC_BUSY_LIMIT polls and sets sdc_timed_out
+; (sticky) — so a stuck card/controller can NEVER hang serve_main/client_main. Once
+; tripped, returns immediately so the rest of the already-bounded ladder unwinds
+; fast; sdc_init_ladder clears the flag at the start of every transaction. Preserves
+; BC/DE/HL; clobbers AF (sdc_out brackets its data byte with push/pop af, and sdc_in
+; reloads A from SDC_DATA after). Faithful port of the gold-standard csd_probe.asm
+; sd_wait_ready (i241/fix #5).
+sdc_wait_ready:
+                ld      a, (sdc_timed_out)
+                or      a
+                ret     nz                     ; already gave up — don't wait again
+                push    bc
+                ld      bc, SDC_BUSY_LIMIT
+scwr_loop:      in      a, (SDC_PORT)
+                and     %00001000              ; busy?
+                jr      z, scwr_ready          ; clear -> proceed
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, scwr_loop
+                ld      a, 1
+                ld      (sdc_timed_out), a     ; budget exhausted -> sticky abort
+scwr_ready:     pop     bc
+                ret
+
+sdc_timed_out:  defb    0                      ; set once an SD busy-wait exhausts its budget
 
 ; sdc_cmd — send the 6-byte command frame, poll R1 (bit7 clear = valid) <=256.
 ; In: A=opcode|&40, BC=arg[31:16], DE=arg[15:0], (sdc_cmd_crc) preset.
@@ -175,6 +210,8 @@ csdr_read_loop:
 ; ===========================================================================
 sdc_init_ladder:
                 di
+                xor     a
+                ld      (sdc_timed_out), a      ; fresh transaction — clear the sticky busy-timeout flag
                 ld      a, SDC_NULLOFF
                 out     (SDC_PORT), a
                 ; microcontroller wake (&38) + &FF settle poll

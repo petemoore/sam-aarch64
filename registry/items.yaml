@@ -4218,9 +4218,11 @@
   title: "sd_csd.asm: bound the SD busy-wait (sdc_out/sdc_in use the unbounded wait_ready) so a stuck Trinity can't hang serve_main/client_main (fix #5)"
   description: |
     Hardware fix #5 (docs/notes/hardware-readiness-audit.md). The shared SPI primitives sdc_out/sdc_in (src/netboot/sd_csd.asm) call wait_ready (src/netboot/encdrv.asm:427), which loops 'JR wait_ready' forever while the &DC busy bit is set — a stuck Trinity hangs serve_main AND client_main with no timeout. Add a bounded retry/timeout to the SD busy-wait on this path. Because sd_csd.asm is SHARED, ONE edit fixes both serve_main and client_main. Reference the gold-standard csd_probe (probe_main) which already has this. Was untracked before the 2026-06-25 hardware-readiness audit.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 673, role: completing}
   refs: [docs/notes/hardware-readiness-audit.md, src/netboot/sd_csd.asm, src/netboot/encdrv.asm]
 
 - id: i247
@@ -4258,9 +4260,11 @@
   title: "Trinity emulator: make a stuck-BUSY/timeout condition part of the DEFAULT SD test path so an unbounded wait_ready FAILS in emulation (not just opt-in)"
   description: |
     EMULATION GAP (docs/notes/hardware-readiness-audit.md). The modelled SD BUSY clears in ~1 poll, so the unbounded wait_ready ('JR wait_ready' forever, encdrv.asm:427) never actually hangs in emulation — only the OPT-IN stuck-BUSY mode (i241) exercises a hang. So a program lacking the bounded busy-wait (fix #5) passes the default host tests yet hangs on a stuck Trinity. Make a stuck-BUSY/timeout condition part of the DEFAULT SD test path so an unbounded wait_ready FAILS in emulation without opting in. Ties to the i126 comprehensive-emulation north star. Pete 2026-06-25: emulation<->hardware gaps are top priority. Gates the fix-#5 program work (i246).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 673, role: completing}
   refs: [docs/notes/hardware-readiness-audit.md, i126, i241]
 
 - id: i251
