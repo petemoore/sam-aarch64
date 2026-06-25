@@ -330,14 +330,22 @@ dm_serve_loop:
 
 dm_fail_cfg:
                 ld      a, 2                   ; red border: no/bad network settings
-                out     (&fe), a
-                di
-                halt
+                jr      dm_fail_show
 dm_fail_init:
                 ld      a, 1                   ; blue border: ENC28J60 init failed
+dm_fail_show:
+                ; Show the diagnostic border, hold so the operator can read it, then
+                ; hand control back to trinload via tr_terminate (di;halt under test,
+                ; RET to trinload on hardware — the i228 unmapped-port probe). The
+                ; dumper is trinload-pushed (netboot-dumper-trinload); a raw di;halt
+                ; strands the SAM, costing a power-cycle on every failed push (i243b).
                 out     (&fe), a
-                di
-                halt
+dm_fail_wait:
+                ld      a, &f7                 ; poll Esc (trinload's key idiom)
+                in      a, (&f9)
+                bit     5, a
+                jr      nz, dm_fail_wait       ; hold the border until Esc, then return
+                jp      tr_terminate
 
 ; dumper_provision — copy the region STORE + SRC_TABLE templates into the live
 ; tables resolve + resolve_src walk. The dumper does NOT fill STAGE here: each
@@ -354,6 +362,12 @@ dumper_provision:
                 ret
 
 dm_chunk_name:    defm "Trinity Network "     ; the flash chunk holding MAC+IP
+
+                ; tr_terminate (i228): dm_fail_cfg/dm_fail_init end via it, not a
+                ; raw di;halt, so a failed dumper push leaves the SAM usable (i243b).
+                ; Included only in the trinload build (dumper_main's home); its only
+                ; external dep, build_udp_frame, is pulled in by netboot_serve.asm.
+                include "test_report.asm"
 
                 endif  ; !NETBOOT_HOSTTEST
 

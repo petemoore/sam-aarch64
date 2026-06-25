@@ -4155,7 +4155,7 @@
   title: Route all trinload-pushed di;halt sites through tr_terminate (i228) + document the technique
   description: |
     Pete (2026-06-24): trinload-pushed programs must end via tr_terminate (di;halt under test / ret to trinload on hardware via the &007F unmapped-port probe, i228, src/netboot/test_report.asm) — NOT raw di;halt, which strands the SAM on every failed experiment. csd_probe pm_fail_cfg/pm_fail_init bypass it. Audit + convert the trinload-pushed netboot di;halt sites (csd_probe, http_main, netboot_client/server/serve, dumper, smoke_test); LEAVE the SimCoupe -exitonhalt halts in src/assembler.asm and src/secd_probe.asm (different, correct mechanism). Document the technique canonically (netboot-trinity-testing.md + pointer to tr_terminate header) so it stops being re-derived/lost.
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
 
@@ -4175,7 +4175,7 @@
   title: "Audit + convert the OTHER trinload-pushed netboot di;halt sites to tr_terminate (http_main, client/server/serve, dumper, smoke)"
   description: |
     Per-file audit: distinguish trinload-pushed programs (-> tr_terminate, RET to trinload) from disk-booted ones (different exit). Leave SimCoupe -exitonhalt halts in src/assembler.asm + src/secd_probe.asm. Convert the pushed ones so failed experiments don't strand the SAM (Pete, 2026-06-24).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
   parent: i243
