@@ -68,7 +68,12 @@ LOGFILE="${ALOOP_LOG:-$SEMA_DIR/monitor.log}" # persistent trace: every stuff/su
 TASK_DONE="$SEMA_DIR/task-done"
 WOUND_DOWN="$SEMA_DIR/wound-down"
 QUIESCENT="$SEMA_DIR/quiescent"             # backlog-drained hold (i103): agent touches it when ZERO workable non-Pete items remain; monitor stops nudging until the transcript grows (Pete writes back)
+PETE_PRESENT="$SEMA_DIR/pete-present"       # presence semaphore (i240): while it exists Pete is driving interactively -- suppress ALL nudges/restarts; announce arrival/departure on the transition edges
 LOCK="$SEMA_DIR/monitor.lock"               # single-instance guard (see preflight)
+
+# i240 announcement lines, stuffed once on the presence transition edges.
+PETE_ARRIVAL_MSG="${ALOOP_PETE_ARRIVAL:-Hi Claude, Pete here -- I am back. (Autonomous-loop nudges are suppressed while I am present; carry on, I will steer.)}"
+PETE_DEPARTURE_MSG="${ALOOP_PETE_DEPARTURE:-Pete has left (his presence flag was removed). Please continue working autonomously per docs/ROADMAP.md and the autonomous-loop protocol.}"
 # PROJECTS_DIR holds the Claude Code session transcripts (one .jsonl per
 # session, appended to live). The quiescence watcher (i103) measures the active
 # transcript's size to detect "the transcript grew" = a new turn = a sign of
@@ -251,7 +256,34 @@ log "semaphores under: $SEMA_DIR"
 # --- loop ------------------------------------------------------------------
 last_signal=$SECONDS
 quiescent_mark=""                           # transcript size when quiescence began; empty = not holding (i103)
+# i240: seed the presence edge-detector from the CURRENT state so a monitor
+# (re)started while Pete is already present does NOT spuriously announce arrival.
+pete_was=""; [ -e "$PETE_PRESENT" ] && pete_was="1"
+log "i240: pete-present at startup: ${pete_was:-no}"
 while true; do
+  # i240 -- Pete-presence gate. While the pete-present semaphore exists, Pete is
+  # driving the session interactively, so suppress ALL autonomous-loop nudges and
+  # restarts (the whole QUIESCENT/WOUND_DOWN/TASK_DONE/HANG machinery below). On
+  # each presence transition edge, stuff a one-shot arrival/departure line so the
+  # in-session agent knows the mode changed. Semaphores are NOT consumed while
+  # suppressed -- a task-done/wound-down left pending is processed normally once
+  # Pete leaves, so no work signal is lost.
+  pete_now=""; [ -e "$PETE_PRESENT" ] && pete_now="1"
+  if [ "$pete_now" != "$pete_was" ]; then
+    if [ -n "$pete_now" ]; then
+      log "i240: pete-present appeared -> announce arrival; nudges suppressed"
+      stuff "$PETE_ARRIVAL_MSG"; submit
+    else
+      log "i240: pete-present removed -> announce departure; autonomous nudges resume"
+      stuff "$PETE_DEPARTURE_MSG"; submit
+      last_signal=$SECONDS   # fresh hang-timeout baseline so departure doesn't instantly hang-nudge
+    fi
+    pete_was="$pete_now"
+  fi
+  if [ -n "$pete_now" ]; then
+    sleep "$POLL"
+    continue
+  fi
   # If $QUIESCENT vanished by any path (auto-expire below, or an external rm),
   # forget the stale baseline so a future hold re-marks from scratch.
   [ -e "$QUIESCENT" ] || quiescent_mark=""

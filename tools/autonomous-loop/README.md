@@ -72,6 +72,19 @@ without any per-session setup. `--pete-present` and `--pete-away` still work as
 before: an explicit flag always overrides the marker (`--pete-away` wins over the
 marker; `--pete-present` wins when there is no marker).
 
+The same `pete-present` marker also **gates the monitor itself (i240)**: while it
+exists, the monitor **suppresses every nudge/restart** (the
+`/context`+resume, the `/clear`+restart, and the hang-timeout nudge) — Pete is
+driving the session interactively and the loop must not interrupt him. On each
+presence transition the monitor stuffs a one-shot line into the session: an
+**arrival** line when the marker appears (`ALOOP_PETE_ARRIVAL`) and a
+**departure** line when it is removed (`ALOOP_PETE_DEPARTURE`), so the in-session
+agent knows the mode changed. Semaphores are **not consumed** while suppressed, so
+a `task-done`/`wound-down` left pending during a present period is processed
+normally the moment Pete leaves — no work signal is lost. So `touch
+~/.claude/autonomous-loop/pete-present` both surfaces Pete's items in `ready` and
+silences the loop; `rm` it to hand control back to autonomous mode.
+
 ## Run
 
 ```sh
@@ -83,7 +96,8 @@ Tunable via env: `ALOOP_WINDOW`, `ALOOP_PROMPT`, `ALOOP_POLL`,
 `ALOOP_HANG_TIMEOUT`, `ALOOP_CLEAR_SETTLE`, `ALOOP_CONTEXT_SETTLE`,
 `ALOOP_SUBMIT_SETTLE`, `ALOOP_CHUNK_SIZE`, `ALOOP_CHUNK_DELAY`,
 `ALOOP_NUDGE_TRIES`, `ALOOP_NUDGE_VERIFY_WAIT`, `ALOOP_TURN_MARKER`,
-`ALOOP_IDLE_POLL`, `ALOOP_IDLE_CONFIRM`, `ALOOP_IDLE_MAX`, `ALOOP_LOG`
+`ALOOP_IDLE_POLL`, `ALOOP_IDLE_CONFIRM`, `ALOOP_IDLE_MAX`, `ALOOP_LOG`,
+`ALOOP_PETE_ARRIVAL`, `ALOOP_PETE_DEPARTURE` (the i240 presence-edge lines)
 (see `monitor-nudge-delivery.md`), and — for the i103 quiescent hold —
 `ALOOP_PROJECTS_DIR` / `ALOOP_TRANSCRIPT` (where the watcher reads transcript
 growth; defaults to the newest `*.jsonl` under `~/.claude/projects`).
