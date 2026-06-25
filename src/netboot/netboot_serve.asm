@@ -1424,14 +1424,23 @@ SV_SETTLE_LOOPS:  equ &0200                     ; ~512-iter fixed settle (~a few
 
 sv_fail_cfg:
                 ld      a, 2                   ; red border: no/bad network settings
-                out     (&fe), a
-                di
-                halt
+                jr      sv_fail_show
 sv_fail_init:
                 ld      a, 1                   ; blue border: ENC28J60 init failed
+sv_fail_show:
+                ; Show the diagnostic border, hold so the operator can read it, then
+                ; hand control back to trinload via tr_terminate (di;halt under test,
+                ; RET to trinload on hardware — the i228 unmapped-port probe). The
+                ; serve binary is trinload-pushable (netboot-serve-trinload pushes
+                ; netboot_serve_boot.bin), and a raw di;halt strands the SAM, costing
+                ; a power-cycle on every failed push (Pete, 2026-06-24; i243b).
                 out     (&fe), a
-                di
-                halt
+sv_fail_wait:
+                ld      a, &f7                 ; poll Esc (trinload's key idiom)
+                in      a, (&f9)
+                bit     5, a
+                jr      nz, sv_fail_wait       ; hold the border until Esc, then return
+                jp      tr_terminate
 
 ; provision_demo — copy the assembled demo STORE + SRC_TABLE templates into the
 ; live STORE/SRC_TABLE the resolve + resolve_src walk. The templates are built at
@@ -1594,6 +1603,12 @@ SRC_TABLE:        defs 256
 NETBOOT_WANT_CLAIM: equ 1
                 include "bdos_seam.asm"        ; i121f: free-record find + record select + HWSAD/HRSAD + validate
                 include "raw_record_sink.asm"  ; i121f: streaming disk-image -> raw record (HWSAD per sector)
+                ; tr_terminate (i228): serve_main's bring-up error paths end via it,
+                ; not a raw di;halt, so a failed trinload push leaves the SAM usable
+                ; (i243b). build_udp_frame (its only external dep) is included above.
+                ; The dumper/csd_probe builds (DUMPER=1) include test_report.asm
+                ; themselves, so this serve-only include can't double-define.
+                include "test_report.asm"
                 ; i145b CSD-read -> BD_RECORDS (i145b-b2): shipped as a section-D
                 ; overlay. The ~600-byte module places the boot image's tail above
                 ; &BFFF into section D, which is RAM at boot (see the csd_set_bd_records
