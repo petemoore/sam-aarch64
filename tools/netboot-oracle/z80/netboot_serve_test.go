@@ -126,6 +126,21 @@ func initServeDriver(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60) {
 	}
 }
 
+// reArmENCRX re-runs enc_rx_reestablish (drv_init's RX-arming minus chk_trinity),
+// the re-arm serve_main/probe_main do right after their boot-time SD read
+// (netboot_serve.asm:1399-1402, csd_probe.asm:482-485). A host test that performs an
+// SD transaction (csd_set_bd_records, csd_read_into_stage) then serves MUST mirror it:
+// the SD ladder disturbs the ENC RX path (the emulator now models this — i249), so
+// without the re-arm serving is dead, exactly as on hardware. This is boot-faithful,
+// not a test-weakening — you cannot read the CSD then serve without re-arming.
+func reArmENCRX(t *testing.T, mac *z80h.Machine) {
+	t.Helper()
+	macAddr := symAddr(t, mac, "CONFIG_SERVERMAC")
+	if _, err := mac.CallEntry("enc_rx_reestablish", z80h.Entry{HL: macAddr}); err != nil {
+		t.Fatalf("call enc_rx_reestablish: %v", err)
+	}
+}
+
 // serveDemo injects req (if non-nil) and runs one serve_serve_once, returning the
 // single frame the driver transmitted (or nil if it sent nothing).
 func serveDemo(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, req []byte) []byte {

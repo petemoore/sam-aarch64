@@ -96,7 +96,19 @@ drr_check_csd:
                 call    dr_streq3              ; CY set if (HL) begins "csd"
                 ret     nc                     ; unknown name: leave STAGE as-is
 
-                jp      csd_read_into_stage    ; read the 16-byte CSD into STAGE
+                call    csd_read_into_stage    ; read the 16-byte CSD into STAGE
+
+                ; --- re-arm the ENC RX path the per-RRQ SD read disturbed (i249) ---
+                ; The mid-serve CSD re-read disturbs the ENC's persistent RX state
+                ; (RXEN, ring pointers, MAC/PHY) exactly as the startup read does
+                ; (probe_main, above); drv_read never restores it. Without this re-arm
+                ; the server streams csd.bin once then receives nothing — the next RRQ
+                ; never lands (serve-dies-after-SD). Mirrors probe_main's startup re-arm.
+                di
+                ld      hl, CONFIG_SERVERMAC
+                call    enc_rx_reestablish
+                ei
+                ret
 
 rgn_quit_prefix:  defm "qui"
 pm_quit_flag:     defb 0                       ; set by an RRQ for "quit*"; polled by pm_serve_loop

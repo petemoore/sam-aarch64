@@ -129,6 +129,10 @@ func loadServeRecordPush(t *testing.T, records, freeRecord int) (*z80h.Machine, 
 	if _, err := mac.Call("csd_set_bd_records"); err != nil {
 		t.Fatalf("csd_set_bd_records: %v", err)
 	}
+	// Boot-faithful re-arm: the CSD read disturbed the ENC RX path (i249); serve_main
+	// re-arms here before its serve loop (netboot_serve.asm:1391-1402), so the host
+	// test must too, or serve_serve_once receives nothing.
+	reArmENCRX(t, mac)
 	mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), uint16(records))
 
 	cfg := serve.Config{ServerMAC: demoServerMAC, ServerIP: demoServerIP, ServerTID: demoServerTID, DiskRecordPush: true}
@@ -533,6 +537,10 @@ func loadServeRecordPushFree(t *testing.T, records int, free []int) (*z80h.Machi
 	if _, err := mac.Call("csd_set_bd_records"); err != nil {
 		t.Fatalf("csd_set_bd_records: %v", err)
 	}
+	// Boot-faithful re-arm: the CSD read disturbed the ENC RX path (i249); serve_main
+	// re-arms here before its serve loop (netboot_serve.asm:1391-1402), so the host
+	// test must too, or serve_serve_once receives nothing.
+	reArmENCRX(t, mac)
 	mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), uint16(records))
 
 	// The i121g claim tests assert a LOWEST-first record advance (3 then 4, the

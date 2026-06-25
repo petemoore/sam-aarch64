@@ -295,6 +295,10 @@ func TestCSDProbeV2ReadsConfiguredCSD(t *testing.T) {
 				}
 			}
 
+			// The SD read disturbed the ENC RX path (i249); probe_main re-arms after
+			// its startup CSD read (csd_probe.asm:475-485), so the host test must too.
+			reArmENCRX(t, mac)
+
 			// (2) The serve path streams the same 16 bytes over a bare-RRQ transfer.
 			streamed := streamCSD(t, mac, enc)
 			if len(streamed) != csdProbeBytes {
@@ -342,6 +346,10 @@ func TestCSDProbeV1ReadsConfiguredCSD(t *testing.T) {
 				}
 			}
 
+			// The SD read disturbed the ENC RX path (i249); probe_main re-arms after
+			// its startup CSD read (csd_probe.asm:475-485), so the host test must too.
+			reArmENCRX(t, mac)
+
 			streamed := streamCSD(t, mac, enc)
 			if !bytes.Equal(streamed, csd[:]) {
 				t.Fatalf("served csd.bin = % 02x, configured = % 02x", streamed, csd[:])
@@ -377,5 +385,68 @@ func TestCSDProbeRereadsOnRRQ(t *testing.T) {
 	got = streamCSD(t, mac, enc)
 	if !bytes.Equal(got, second[:]) {
 		t.Fatalf("re-read csd.bin = % 02x, want % 02x (refresh hook did not re-read?)", got, second[:])
+	}
+}
+
+// TestCSDProbeRXDisarmedBySDRead is the i249 negative control: the white-box proof
+// that the emulator now CATCHES the "serve-dies-after-SD" class (hardware fix #3). An
+// SD transaction (csd_read_into_stage) on the shared one-PIC Trinity controller
+// disturbs the ENC28J60's persistent RX state; drv_read never restores it. So a frame
+// injected AFTER an SD read, WITHOUT an intervening enc_rx_reestablish, must NOT be
+// delivered — and after the &28 ENC reset that enc_rx_reestablish issues, the SAME
+// frame must arrive byte-exact. Reverting the model's rxDisarmed gate (enc28j60.go
+// materialiseRX) makes the middle assertion fail — the i244 revert-the-fix-fails
+// shape that turns a missing re-arm into a build-time catch (CLAUDE.md rule 7).
+func TestCSDProbeRXDisarmedBySDRead(t *testing.T) {
+	csd := z80h.CSDForV2(0x001D59)
+	mac := loadCSDProbe(t)
+	fillCSDProbeConfig(t, mac)
+	enc := z80h.NewENC28J60()
+	enc.AttachSD(csd)
+	mac.AttachIO(enc)
+	initCSDProbeDriver(t, mac, enc) // drv_init arms the ENC RX path
+
+	// A minimal Ethernet frame addressed to the SAM (so it passes drv_init's ERXFCON
+	// unicast filter). drv_read returns the raw bytes, so the payload is immaterial.
+	frameToSAM := append(append([]byte{}, csdProbeServerMAC[:]...),
+		0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, // src
+		0x08, 0x06, // ethertype
+		0xde, 0xad, 0xbe, 0xef)
+
+	pkt := symAddr(t, mac, "PACKET")
+	readFrame := func() []byte {
+		res, err := mac.CallEntry("drv_read", z80h.Entry{HL: pkt})
+		if err != nil {
+			t.Fatalf("call drv_read: %v", err)
+		}
+		if res.BC == 0 {
+			return nil
+		}
+		return mac.Read(pkt, int(res.BC))
+	}
+
+	// (1) Baseline — RX armed by drv_init (no SD read yet): the frame is received.
+	enc.InjectRX(frameToSAM)
+	if got := readFrame(); !bytes.Equal(got, frameToSAM) {
+		t.Fatalf("baseline drv_read = %x, want the injected frame %x (RX armed by drv_init)", got, frameToSAM)
+	}
+
+	// (2) Disturb — an SD transaction disarms the ENC RX path. A frame injected now
+	//     is invisible to drv_read: the serve-dies-after-SD failure, in emulation.
+	if _, err := mac.Call("csd_read_into_stage"); err != nil {
+		t.Fatalf("csd_read_into_stage: %v", err)
+	}
+	enc.InjectRX(frameToSAM)
+	if got := readFrame(); got != nil {
+		t.Fatalf("after an SD read WITHOUT a re-arm, drv_read = %x, want NOTHING "+
+			"(the SD transaction disarmed RX — this is the serve-dies-after-SD class)", got)
+	}
+
+	// (3) Re-arm — enc_rx_reestablish (the &28 ENC reset) restores RX, and the SAME
+	//     queued frame now arrives byte-exact. This is the re-arm a serving program
+	//     MUST run after any SD read (serve_main:1399-1402, probe_main:482-485).
+	reArmENCRX(t, mac)
+	if got := readFrame(); !bytes.Equal(got, frameToSAM) {
+		t.Fatalf("after enc_rx_reestablish, drv_read = %x, want the frame %x (the re-arm must restore RX)", got, frameToSAM)
 	}
 }
