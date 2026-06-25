@@ -4234,9 +4234,11 @@
   title: "serve_main + client_main: enc_rx_reestablish after csd_set_bd_records (SD disturbs ENC RX before serving), mirroring csd_probe (fix #3, beyond i244's reorder)"
   description: |
     Hardware fix #3 (docs/notes/hardware-readiness-audit.md). The SD transaction disturbs the ENC RX path; without a re-arm, serving dies after the first SD read. csd_probe (probe_main) calls enc_rx_reestablish (src/netboot/csd_probe.asm:484) after its SD read — serve_main and client_main do NOT. serve_main: add the re-arm before serve_serve_once (netboot_serve.asm). client_main: add it after the SD write (netboot_client.asm). NOTE: i244 covers the serve_main #2 reorder (drv_init before SD) and may incorporate the serve_main re-arm; if i244 lands the serve_main re-arm, scope this item to client_main so it is not forgotten. i245 models the one-byte read lag (fix #1 class), a different gap. Was untracked for client_main before the 2026-06-25 hardware-readiness audit.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 666, role: completing}
   refs: [docs/notes/hardware-readiness-audit.md, src/netboot/netboot_serve.asm, src/netboot/netboot_client.asm, src/netboot/csd_probe.asm]
 
 - id: i249
@@ -4273,3 +4275,5 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 668, role: completing}
