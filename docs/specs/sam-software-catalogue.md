@@ -44,13 +44,20 @@ trinload / our netboot**. Both are spelled out in "How the pieces relate" below.
 ### 1. SAM system ROM (stock)
 
 The untarnished SAM Coupé ROM — BASIC interpreter, boot stripes, the standard
-firmware. **We hold no binary and no disassembly of the stock ROM**, and no deep
-doc covers it; it is referenced only conceptually (e.g. the boot stripes as the
-visible startup behaviour). The ZX Spectrum ROM disassemblies under
-`~/git/notes/zxspectrum_roms/` are a *different machine's* ROMs and are **not**
-the SAM ROM — do not confuse them. The closest thing we have to SAM firmware
-internals is the **forked** ROM (§2) and the DOS layers (§5/§6), not the stock
-ROM. If a stock-SAM-ROM reference is ever needed, it is an acquisition gap.
+firmware. **We hold the genuine official v3.0 binary** (i219, 2026-06-24):
+`~/sam-archive/samboot-capture/rom_official_v30.bin` (32 KB, md5
+`1bc4fa10a9bb05a036e854fa60d151d9`, version byte `&000F=&1E`) — Dr Andy Wright's
+original image, published with permission as `roms/ROM30` in
+[simonowen/samrom](https://github.com/simonowen/samrom). SimCoupé's bundled dump
+(`rom_stock.bin`, `&000F=&1F`) is the **same ROM** with a 4-byte vanity bump
+(version stamp + a cosmetic `"plc"`→`"PLC"`); there is no functional v3.1. See
+`~/sam-archive/samboot-capture/README.md` for the full ROM index (stock variants,
+the fork, and the EEPROM capture) and the banner/é note. The relevant firmware
+internals are disassembled/annotated where the fork touches them in
+`docs/specs/samboot-fork-analysis.md`; a full standalone stock-ROM disassembly is
+not yet written. The ZX Spectrum ROM disassemblies under
+`~/git/notes/zxspectrum_roms/` are a *different machine's* ROMs and are **not** the
+SAM ROM — do not confuse them.
 
 ### 2. Colin's forked ROM
 
