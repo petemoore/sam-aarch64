@@ -4244,7 +4244,13 @@
 - id: i249
   title: "Trinity emulator: model the SD-transaction -> ENC-RX disturbance so a missing enc_rx_reestablish FAILS in emulation (the serve-dies-after-SD class)"
   description: |
-    EMULATION GAP (docs/notes/hardware-readiness-audit.md). On real hardware an SD transaction disturbs the ENC RX path, so a program that omits enc_rx_reestablish (fix #3) serves once then dies. The emulator does NOT model this disturbance, so a missing re-arm passes in emulation and ships a hardware failure. Make the Trinity/SD model perturb the ENC RX state across an SD transaction such that serving without a subsequent enc_rx_reestablish FAILS a host test — turning the serve-dies-after-SD class into a build-time failure. Ties to the i126 comprehensive-emulation north star (one faithful layer, every cross-subsystem surprise fails in emulation not first on silicon). Pete 2026-06-25: emulation<->hardware gaps are top priority. Gates the fix-#3 program work (i248).
+    EMULATION GAP (hardware fix #3). On real hardware an SD transaction on the shared one-PIC Trinity controller disturbs the ENC28J60 RX state (RXEN/ring/MAC/PHY), so serving over the network after an SD read WITHOUT re-running enc_rx_reestablish serves once then dies. The emulator did not model this, so a missing re-arm passed in emulation and shipped a hardware failure. Make the model perturb the ENC RX path so serving without a subsequent enc_rx_reestablish FAILS a host test. Ties to the i126 north star; gates the fix-#3 program work.
+    
+    WIP IN PROGRESS on branch i249-enc-rx-disturbance (model change done: rxDisarmed flag in enc28j60.go, set on SD selects, cleared on the &28 ENC reset, gating materialiseRX). It correctly fails ~20 serve/csd tests because those unit tests call csd_set_bd_records then serve_serve_once directly, bypassing serve_main's boot-time enc_rx_reestablish re-arm.
+    
+    FULL HANDOFF BRIEF: docs/plans/i249-enc-rx-disturbance.md — READ IT before touching anything. It lists the definitive AUTHORITIES (hardware-readiness-audit.md fix #3; netboot_serve.asm:494-502 + encdrv.asm:56-62; trinity-emulation-fidelity.md) and WORKING EXAMPLES to mirror (csd_probe/probe_main gold standard; serve_main boot re-arm netboot_serve.asm:1358-1402; enc_rx_reestablish encdrv.asm:64; the sdInitSettling i244 model pattern), the exact next steps (boot-faithful test re-arms; the TestServeDiskPushTrinloadDeployable full-boot anomaly to investigate; the negative-control white-box test; the fidelity-spec row), the positives that must stay green (TestServeE2EComputedBDRecordsRecordPush), and the open granularity question.
+    
+    DO NOT GUESS — read the authorities and working examples and diff against them (the recurring failure mode; memory feedback_port_diff_authority_first).
   status: OPEN
   kind: leaf
   owner: agent

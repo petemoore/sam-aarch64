@@ -1,0 +1,38 @@
+# i249 — model the SD-transaction → ENC-RX disturbance (handoff plan)
+
+Ephemeral execution plan (delete in the completing PR). WIP is on branch `i249-enc-rx-disturbance`.
+
+EMULATION GAP (hardware fix #3). On real hardware an SD transaction on the shared one-PIC Trinity controller disturbs the ENC28J60's persistent RX state (RXEN, ring pointers, MAC/PHY), so a program that serves over the network AFTER an SD read without re-running enc_rx_reestablish serves once then dies ("serve-dies-after-SD"). The emulator did not model this, so a missing re-arm passed in emulation and shipped a hardware failure. Make the Trinity/SD model perturb the ENC RX path so serving without a subsequent enc_rx_reestablish FAILS a host test. Ties to the i126 comprehensive-emulation north star. Pete 2026-06-25: emulation<->hardware gaps are top priority. Gates the fix-#3 program work.
+
+=== READ THESE FIRST — DO NOT GUESS (the recurring failure mode) ===
+Earlier sessions GUESSED implementations despite having the docs + working examples. The i145g all-zeros CSD bug cost ~50 hardware iterations for exactly this reason (see memory feedback_port_diff_authority_first). Before writing or changing ANY model code, READ the definitive sources below and the WORKING EXAMPLES; diff your change against them.
+
+AUTHORITIES (the documented behaviour to model faithfully):
+- docs/notes/hardware-readiness-audit.md — fix #3 is the spec. Line ~20: "enc_rx_reestablish AFTER the SD transaction — the SD transaction disturbs the ENC RX path; without a re-arm, serving dies after the first SD read." Line ~97: "#3 not caught — the emulator does not model the SD transaction disturbing the ENC RX path."
+- src/netboot/netboot_serve.asm:494-502 and src/netboot/encdrv.asm:56-62 — the driver-side authority naming the EXACT disturbed state: "each [SD I/O] disturbs the ENC's persistent RX state (RXEN, ring pointers, MAC/PHY), and drv_read restores only per-call select/bank, never that once-only arming."
+- docs/specs/trinity-emulation-fidelity.md — the fidelity inventory. IMPORTANT honesty boundary: the docs assert THAT an SD transaction disturbs RXEN/ring/MAC/PHY (serving dies until re-armed), but NOT the precise register-level mechanism (no source says RXEN is cleared vs ring corrupted vs filter scrambled). So model the documented OBSERVABLE (no RX until re-armed), NOT a fabricated register corruption — the same observable-level approach sdInitSettling already uses. Add a fidelity-spec row recording the i249 model + flag the exact mechanism as "Genuinely unspecified".
+- docs/specs/trinity-sd-z80-interface.md — the SD/Trinity interface reference.
+
+WORKING EXAMPLES TO MIRROR (read, then copy the pattern — do not invent):
+- THE GOLD STANDARD: csd_probe / probe_main (src/netboot/csd_probe.asm) has all 6 hardware fixes and re-arms correctly after its SD read (enc_rx_reestablish ~csd_probe.asm:484). Any serve/client re-arm must match this shape.
+- serve_main's boot (src/netboot/netboot_serve.asm:1358-1402): drv_init FIRST -> csd_set_bd_records (SD read) -> enc_rx_reestablish re-arm -> serve loop. This is the correct, already-shipped (i244/#666) re-arm placement.
+- enc_rx_reestablish (src/netboot/encdrv.asm:64): drv_init's RX-arm body MINUS chk_trinity. Starts with ereset (&28). It is what restores RX; the model must treat the &28 reset it issues as the clear-point.
+- THE MODEL PATTERN TO MIRROR: sdInitSettling in tools/netboot-oracle/z80/enc28j60.go (i244, hardware fix #2). It is set on the &38 SD-init select and cleared on the &28 ENC reset (selENCReset). i249's rxDisarmed is the SAME set/clear SHAPE for a DIFFERENT failure class (RX receive path, not the identity probe). Do NOT reuse sdInitSettling — separate flag, different gate.
+
+=== WORK ALREADY DONE — branch i249-enc-rx-disturbance ===
+The model change is implemented on branch origin/i249-enc-rx-disturbance (continue there; do not start from scratch). enc28j60.go: new field rxDisarmed, set on the SD selects (&31 selSDManual / &3F selSDAutoNul / &38 selSDInit), cleared in selENCReset (next to sdInitSettling), and gating materialiseRX (return early while disarmed -> EPKTCNT stays 0 -> drv_read returns BC=0). materialiseRX has ONE call site (the EPKTCNT RCR read at enc28j60.go:~1086), so gating it there is complete. The RX model has NO RXEN gate today (materialiseRX delivers regardless of arming) — that is the gap this closes. See the WIP commit message for full detail.
+
+=== WHY IT IS INCOMPLETE — the diagnosis (verified, not guessed) ===
+The model correctly FAILS ~20 serve/csd tests. Root cause: those unit tests call csd_set_bd_records (an SD transaction) then serve_serve_once DIRECTLY (serveDemo / mac.Call in netboot_serve_test.go:131), bypassing serve_main's boot-time enc_rx_reestablish re-arm. The REAL boot re-arms (netboot_serve.asm:1401); the unit tests do not. So the tests passed before only because the old model never disturbed RX — exactly the gap i249 closes. Confirmed sites that call csd_set_bd_records then serve without a re-arm: netboot_serve_wrq_record_test.go:129 and :533 (+ the csd_probe tests).
+
+=== NEXT STEPS (precise) ===
+1. Make the failing unit tests boot-faithful: add enc_rx_reestablish after the csd_set_bd_records call in the test setup (netboot_serve_wrq_record_test.go:129,533 and the csd_probe tests), mirroring serve_main's boot order (netboot_serve.asm:1391->1401). Prefer a shared helper if one funnels the setup. This is faithful, not a test-weakening: on hardware you CANNOT do csd_set_bd_records then serve without re-arming.
+2. INVESTIGATE THE ANOMALY before assuming: TestServeDiskPushTrinloadDeployable (netboot_serve_wrq_record_test.go:989) uses the FULL RunBoot("serve_main") which re-arms at boot, yet it still failed. Trace why — likely a post-RunBoot SD op before serveDemo, or RunBoot's StepCap stopping before enc_rx_reestablish at netboot_serve.asm:1401. Do not patch it blindly; understand it. (If it reveals serve_main has a residual SD-after-rearm path, e.g. provision_demo or an in-loop SD op, that is a REAL bug i249 exposed — fix the program, not the test.)
+3. Add a negative-control white-box test (style of trinity_fidelity_test.go / the TestTrinity* family): inject an RX frame, drive an SD select (&31/&38) on the ENC28J60, assert drv_read / EPKTCNT yields NO packet; then call the &28 reset path (enc_rx_reestablish equivalent) and assert the SAME frame now receives. This is the proof the mechanism catches the class (mirrors how i244 proved its case: revert the fix -> test fails).
+4. POSITIVES THAT MUST STAY GREEN: TestServeE2EComputedBDRecordsRecordPush (the richest SD-then-receive E2E; serve_main + serve_serve_once carry the re-arm via i244/i248, so it must still pass once the harness mirrors the boot). Run the FULL tools/netboot-oracle/z80 go test ./... — all green before opening the PR.
+5. Add the trinity-emulation-fidelity.md row (the i249 model + the "exact mechanism Genuinely-unspecified" honesty note).
+
+=== OPEN QUESTION (validate, do not assume) ===
+Disturbance GRANULARITY: the WIP disarms on EVERY SD select (&31/&3F/&38). The authority confirms THAT SD disturbs RX but not how often / at what granularity. Confirm against the positive (re-arming) tests that this granularity does not over-fire (e.g. a stray &31 mid-serve that the program does not re-arm after). If it over-fires on a legitimate path, narrow the trigger (e.g. only the &38 init, or only a completed CMD17/CMD24 transaction) — but justify the choice from the authority/working examples, not convenience.
+
+Emulation-first: an emulator that cannot catch this class is the defect (feedback_port_diff_authority_first, feedback_comprehensive_emulation). Followup class alongside i250 (bounded-wait) / i251 (deselect).
