@@ -61,13 +61,15 @@ The subagent returns a one-line PASS/FAIL verdict per item plus a final MERGE / 
 
 **Why this rule:** PR #99 (2026-06-07) had integration wiring reverted in its final commit; the handover doc described intermediate-commit state and claimed "paging mechanics proven end-to-end." A pre-merge review with item #3 would have caught this immediately. Item #1 would have caught the orphaned `test_disasm_paged.asm`.
 
-### 4. Never push or commit directly to `main` — everything lands via a PR
+### 4. Code changes land via a PR; **doc-only changes go directly to `main`**
 
-All changes reach `main` through a pull request. **Do not push commits directly to `main`**, even when branch protection would allow it (the owner can bypass — don't). This includes "quick" docs/handover updates: branch, PR, merge.
+Anything that can affect the build or the binaries reaches `main` **through a pull request** — source code, `registry/*.yaml` (and their generated views), `.github/**`, `Makefile`, build tooling, scripts. For those, **do not push directly to `main`** even though branch protection would allow it (the owner can bypass — don't): branch, PR, CI, §3 review, merge.
 
-Merging is fine: once a PR's CI is green and the mandatory pre-merge review (§3) passes, **the agent may run `gh pr merge --merge --delete-branch` itself** — Pete does not need to click merge. The constraint is *no direct pushes to main*, not *who merges*. If a change genuinely shouldn't merge yet (mid-flight, design input wanted), leave the PR open (draft) rather than holding the work on an unmerged local branch with stale `main`.
+**Exception — doc-only changes commit straight to `main`, no PR, no CI.** A change touching **only** prose docs (`docs/**`) and/or markdown (`**/*.md`) — a ROADMAP handover update, a spec edit, a README — may be committed and pushed **directly to `main`** as Pete (`enforce_admins` is off, so the push is allowed; CI's `push` trigger skips these paths, so nothing runs). PRs are for **features**, not docs. The one exclusion inside this exception: **never** hand-push a *generated* registry view (`docs/notes/*registry*.md`, `backlog.md`) on its own — those are CLI output and only ever change alongside `registry/*.yaml`, which makes the change non-doc-only → PR.
 
-**Why this rule:** earlier sessions made direct commits to `main` (bypassing branch protection) for handover/state updates; Pete wants every change to go through the PR + CI + review gate, with no exceptions for "small" or "docs-only" changes.
+Merging (for the PR path) is fine: once a PR's CI is green and the mandatory pre-merge review (§3) passes, **the agent may run `gh pr merge --merge --delete-branch` itself** — Pete does not need to click merge. The constraint is *no direct pushes of build-affecting changes*, not *who merges*. If a change genuinely shouldn't merge yet (mid-flight, design input wanted), leave the PR open (draft) rather than holding the work on an unmerged local branch with stale `main`.
+
+**Why this rule:** earlier sessions made direct commits to `main` for code/state in ways Pete wanted gated — hence the PR + CI + review gate for anything build-affecting. But running the full SimCoupé matrix on every prose edit was pure friction (Pete, 2026-06-25: "CI for every doc update is driving me bananas"), and a PR per doc tweak is noise — so doc-only updates now land directly.
 
 ### 5. Don't weaken a test to keep `main` green — use a feature branch until it passes
 
