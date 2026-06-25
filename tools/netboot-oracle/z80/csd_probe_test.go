@@ -230,13 +230,13 @@ func TestCSDProbeDrvInitMustPrecedeSD(t *testing.T) {
 	}
 
 	// WRONG order (the hardware bug): SD CSD read, THEN drv_init -> chk_trinity stale -> BC=0.
-	// ModelSDInitSettle is opt-in (see enc28j60.go): always-on would also flag serve_main
-	// (a confirmed same-pattern bug) + the client write path, pending their reorder.
+	// The post-&38 PIC settle is now modelled always-on (i244, see enc28j60.go
+	// sdInitSettling): every &38 SD-init makes a subsequent chk_trinity read stale, so
+	// this ordering bug fails in emulation for EVERY program, not just an opt-in test.
 	t.Run("sd-before-enc fails", func(t *testing.T) {
 		mac := loadCSDProbe(t)
 		fillCSDProbeConfig(t, mac)
 		enc := z80h.NewENC28J60()
-		enc.ModelSDInitSettle = true // model the post-&38 PIC settle that makes chk_trinity stale
 		enc.AttachSD(z80h.CSDForV2(0x01E8FF))
 		mac.AttachIO(enc)
 		_ = runCSDProbeRead(t, mac)

@@ -4184,7 +4184,7 @@
   title: "serve_main + client write path: same SD-before-ENC drv_init bug — reorder + flip ModelSDInitSettle always-on"
   description: |
     i242's opt-in emulator model (enc28j60.go ModelSDInitSettle) revealed that serve_main does csd_set_bd_records (SD) BEFORE drv_init (netboot_serve.asm ~1335/1339) — the SAME chk_trinity-stale bug the CSD probe hit on hardware; it would blue-halt on real Trinity with an SD card present. The client write path (client_main) also fails the always-on model after ~10492 steps (a 2nd ENC identity probe after SD work?) — needs per-program tracing to confirm real-bug vs model artifact. Fix: reorder drv_init before any SD work in serve_main (mechanical) + investigate/fix client, then flip ModelSDInitSettle to always-on (delete the opt-in) so the whole class is caught in emulation. Authority: the i242 review + trinity-emulation-fidelity.md.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
 

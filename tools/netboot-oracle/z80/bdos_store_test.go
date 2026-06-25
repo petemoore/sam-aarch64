@@ -96,7 +96,8 @@ func TestBDOSStoreCapturesRecordAndUIFA(t *testing.T) {
 //	4: "BOOT"     (named)
 //	5: "SHADEBOBS" (named)
 //
-// BD_RECORDS is set to 5.  Returns mac, enc, store, and the file bytes served.
+// BD_RECORDS is computed by client_main from the csdV2(7) CSD (→ 5 records).
+// Returns mac, enc, store, and the file bytes served.
 func bootClientE2ESetup(t *testing.T) (*z80h.Machine, *z80h.ENC28J60, *z80h.BDOSStore, []byte) {
 	t.Helper()
 	// Flat Load: client_boot's i145b CSD overlay lives in section-D RAM (see the
@@ -121,17 +122,19 @@ func bootClientE2ESetup(t *testing.T) (*z80h.Machine, *z80h.ENC28J60, *z80h.BDOS
 	// are within records 1..32, so only one list sector is needed).
 	// csdV2(7) → (7+1)*1024 = 8192 blocks → 8192/1600 = 5 records, matching
 	// the BD_RECORDS = 5 layout: client_main calls csd_set_bd_records internally
-	// which overwrites the injected value, so the CSD itself must encode 5 records.
+	// (after drv_init, i244), so the CSD itself must encode 5 records.
 	sd := enc.AttachSD(csdV2(7))
 	sec1 := card.ListSector(1)
 	sd.SeedSector(1, sec1[:])
 
 	mac.AttachIO(enc)
 	mac.AttachBDOS(store)
-	if _, err := mac.Call("csd_set_bd_records"); err != nil {
-		t.Fatalf("csd_set_bd_records: %v", err)
-	}
-	mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), 5)
+	// Do NOT pre-call csd_set_bd_records here: an SD CSD read leaves the shared PIC
+	// settling (sdInitSettle, always-on i244), and client_main's own drv_init (run
+	// FIRST in client_setup, mirroring a fresh boot with no prior SD op) would then
+	// read a stale chk_trinity identity and fail. A real boot starts with no prior SD
+	// transaction; this setup must too. client_main computes BD_RECORDS itself from
+	// the configured csdV2(7) → 5 records, so no pre-seed is needed.
 
 	// Pre-queue the frames client_main consumes: ARP reply -> DATA block 1 (short
 	// final, so XFER_DONE fires after one block).  The emulated ENC delivers one
