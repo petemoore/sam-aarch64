@@ -3298,7 +3298,7 @@
   title: "Research CIIP (Z80 TCP/IP stack): locate source, assess license + portability"
   description: |
     From q25 (Pete: yes, investigate). Find CIIP — a pre-existing Z80 TCP/IP stack (TFTP/HTTP/DNS servers+clients; Simon Owen reportedly ported it to pyz80). Search ~/sam-archive + Pete's disks + online (GitHub etc.); do NOT scan Pete's photos (he checked — no source location, and it burns tokens). Assess license/portability and weigh 'adapt CIIP' vs continue i82/i83/i86. Report findings.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
 
