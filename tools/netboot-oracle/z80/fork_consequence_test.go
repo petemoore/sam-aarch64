@@ -21,11 +21,8 @@ import (
 // and trace the exact instructions stock runs to get back to BASIC. This is the
 // authoritative return-to-BASIC sequence the EEPROM bootblock must mirror.
 func TestStockTeardownReturnsToBASIC(t *testing.T) {
-	stockPath := realCapturePath("rom_stock_v30.bin")
-	eepPath := realCapturePath("eeprom.bin")
-	if stockPath == "" || eepPath == "" {
-		t.Skip("captures absent")
-	}
+	stockPath := requirePrivateCapture(t, "rom_stock_v30.bin")
+	eepPath := requirePrivateCapture(t, "eeprom.bin")
 	stock, _ := os.ReadFile(stockPath)
 	eeprom, _ := os.ReadFile(eepPath)
 
@@ -86,11 +83,8 @@ func TestStockTeardownReturnsToBASIC(t *testing.T) {
 // We trace the stock boot with the key-wait NOP'd out so it runs all the way to
 // BASIC, recording every write to those two addresses.
 func TestStockSetsNSPPCandTVDATA(t *testing.T) {
-	stockPath := realCapturePath("rom_stock_v30.bin")
-	eepPath := realCapturePath("eeprom.bin")
-	if stockPath == "" || eepPath == "" {
-		t.Skip("captures absent")
-	}
+	stockPath := requirePrivateCapture(t, "rom_stock_v30.bin")
+	eepPath := requirePrivateCapture(t, "eeprom.bin")
 	stock, _ := os.ReadFile(stockPath)
 	eeprom, _ := os.ReadFile(eepPath)
 	patched := append([]byte(nil), stock...)
@@ -140,12 +134,9 @@ func TestStockSetsNSPPCandTVDATA(t *testing.T) {
 // changes. &FC44 is the UMVAL message-table pointer (read at init -> UMSGS);
 // &D902 is a disk index-hole constant; &FBFF is the BASIC command table.
 func TestNonBootDiffReachability(t *testing.T) {
-	forkPath := realCapturePath("rom.bin")
-	stockPath := realCapturePath("rom_stock_v30.bin")
-	eepPath := realCapturePath("eeprom.bin")
-	if forkPath == "" || stockPath == "" || eepPath == "" {
-		t.Skip("captures absent")
-	}
+	forkPath := requirePrivateCapture(t, "rom.bin")
+	stockPath := requirePrivateCapture(t, "rom_stock_v30.bin")
+	eepPath := requirePrivateCapture(t, "eeprom.bin")
 	eeprom, _ := os.ReadFile(eepPath)
 
 	watch := map[uint16]string{

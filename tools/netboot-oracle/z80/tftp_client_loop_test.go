@@ -32,7 +32,7 @@ const (
 func loadTFTPCli(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(tftpCliBinPath); err != nil {
-		t.Skipf("tftp_client_loop binary not built (%s); run `make netboot-tftp-client-loop`", tftpCliBinPath)
+		t.Fatalf("tftp_client_loop binary not built (%s); run `make netboot-tftp-client-loop`", tftpCliBinPath)
 	}
 	mac, err := z80h.Load(tftpCliBinPath, tftpCliMapPath)
 	if err != nil {

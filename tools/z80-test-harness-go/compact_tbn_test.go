@@ -40,7 +40,7 @@ func TestCompactTbnAssembly(t *testing.T) {
 
 	for _, p := range []string{asmPath, encPath, sd13Path, d15Path, samPath, releaseSrc, releaseImg} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make assembler-prod enctab sam-aarch64 sysreg-data disasm-payload`", p)
+			t.Fatalf("prerequisite missing: %s\n  run `make assembler-prod enctab sam-aarch64 sysreg-data disasm-payload`", p)
 		}
 	}
 

@@ -197,7 +197,11 @@ jobs:
       - name: Install pyz80
         run: pip install --break-system-packages git+https://github.com/simonowen/pyz80
       - name: Netboot Z80 routines vs golden vectors
-        run: make ci-netboot-z80
+        # Colin's proprietary captures (forked ROM / EEPROM / B-DOS 1.5t) are
+        # non-redistributable and absent in CI; SKIP_PRIVATE_TESTS gates exactly
+        # those tests (an explicit, intentional skip — i253). Every other fixture
+        # is built by ci-netboot-z80 and its test fails hard if missing.
+        run: SKIP_PRIVATE_TESTS=true make ci-netboot-z80
       - name: Bootable netboot disks build
         run: make netboot-smoke-disk netboot-server-disk netboot-serve-disk netboot-client-disk netboot-http-disk
       - name: Serve push launcher config-patch test (i121d)
@@ -265,6 +269,8 @@ jobs:
         run: make staticcheck
       - name: doc link checker
         run: make check-doc-links
+      - name: no-silent-skips gate (i253)
+        run: make check-no-silent-skips
 
   # core — sweeps the fixture corpus end-to-end on the dev container:
   #   sam-aarch64 → build-disk → SimCoupé (Xvfb 24bit) → samfile extract

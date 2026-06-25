@@ -27,7 +27,7 @@ const (
 func loadBodySink(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(bodySinkBinPath); err != nil {
-		t.Skipf("body_sink binary not built (%s); run `make netboot-body-sink`", bodySinkBinPath)
+		t.Fatalf("body_sink binary not built (%s); run `make netboot-body-sink`", bodySinkBinPath)
 	}
 	mac, err := z80h.Load(bodySinkBinPath, bodySinkMapPath)
 	if err != nil {

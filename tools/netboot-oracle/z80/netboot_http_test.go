@@ -30,7 +30,7 @@ const (
 func loadNetbootHTTP(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(netbootHTTPBinPath); err != nil {
-		t.Skipf("netboot_http binary not built (%s); run `make netboot-http`", netbootHTTPBinPath)
+		t.Fatalf("netboot_http binary not built (%s); run `make netboot-http`", netbootHTTPBinPath)
 	}
 	mac, err := z80h.Load(netbootHTTPBinPath, netbootHTTPMapPath)
 	if err != nil {

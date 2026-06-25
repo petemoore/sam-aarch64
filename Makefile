@@ -56,15 +56,20 @@ ci-disasm-roundtrip: test-disasm
 # fixtures).  Validates the protocol logic in isolation — NOT the Z80
 # execution or the ENC28J60 hardware (those are gated on i80/real-Trinity).
 .PHONY: ci-netboot-oracle
+# SKIP_PRIVATE_TESTS gates the one test that needs the multi-MB Pi firmware
+# blobs (http/manifest_test.go's local-file hash cross-check) — those live in
+# Pete's spectrum4 checkout, are NOT committed, and are absent in CI. The
+# always-on byte-for-byte gate is z80/fw_source_test.go; every other fixture
+# here is committed and its test fails hard if missing (i253, no-silent-skips).
 ci-netboot-oracle:
-	cd tools/netboot-oracle && go test ./...
+	cd tools/netboot-oracle && SKIP_PRIVATE_TESTS=true go test ./...
 
 # ci-registry — run the registry CLI's Go unit tests (id-allocation / nextSubID,
 # parent invariants, gate column, in-progress, and the live-registry conformance
 # test). The registry-sync job validates the LIVE data during gen; this gates the
 # tool's LOGIC so a regression can't merge green.
 .PHONY: ci-registry
-ci-registry:
+ci-registry: registry-gen
 	cd tools/registry && go test ./...
 
 # netboot Z80 routines — the SAM-side port (src/netboot/*.asm) of the netboot
@@ -1101,7 +1106,7 @@ ci-netboot-z80: netboot-z80-routines editmodel-z80 editmodel-paged-z80 pagepool-
 	# matches its generator (tools/sha256-unroll-gen) byte-for-byte.
 	cd tools/sha256-unroll-gen && go test ./...
 
-test-format: sam-aarch64
+test-format: sam-aarch64 release-unstripped-tbn
 	cd tools/sam-aarch64-format && go test ./...
 	cd tools/sam-aarch64 && go test ./...
 	./tests/format/run-gnu-as-check.sh
@@ -1145,6 +1150,10 @@ staticcheck:
 .PHONY: check-doc-links
 check-doc-links:
 	bash tools/check-doc-links.sh
+
+.PHONY: check-no-silent-skips
+check-no-silent-skips:
+	bash tools/check-no-silent-skips.sh
 
 .PHONY: registry registry-sync-check registry-gen tables-gen enctab test-encoder ci-encoder
 
@@ -1265,7 +1274,7 @@ tables-sync-check: tables-gen
 	if [ $$fail -ne 0 ]; then exit 1; fi
 	@echo "tables-sync-check: generated tables are up to date with tools/tables-gen."
 
-test-encoder: sam-aarch64 tables-gen
+test-encoder: sam-aarch64 tables-gen release-unstripped-tbn
 	cd tools/sam-aarch64-format && go test ./...
 	cd tools/aarch64enc && go test ./...
 	cd tools/tables-gen && go test ./...

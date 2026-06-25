@@ -19,7 +19,7 @@ const (
 func loadTCPSegMachine(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(tcpSegBinPath); err != nil {
-		t.Skipf("netboot routine binary not built (%s); run `make netboot-build-tcp-segment`", tcpSegBinPath)
+		t.Fatalf("netboot routine binary not built (%s); run `make netboot-build-tcp-segment`", tcpSegBinPath)
 	}
 	mac, err := z80h.Load(tcpSegBinPath, tcpSegMapPath)
 	if err != nil {

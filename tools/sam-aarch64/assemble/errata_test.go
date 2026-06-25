@@ -180,7 +180,7 @@ func toolchain(t *testing.T) (as, ld, objdump string) {
 	ld = find("aarch64-linux-gnu-ld", "aarch64-none-elf-ld")
 	objdump = find("aarch64-linux-gnu-objdump", "aarch64-none-elf-objdump")
 	if as == "" || ld == "" || objdump == "" {
-		t.Skip("aarch64 GNU toolchain (as/ld/objdump) not on PATH — skipping binutils cross-check")
+		t.Fatal("aarch64 GNU toolchain (as/ld/objdump) not on PATH — install binutils-aarch64-linux-gnu (CI does)")
 	}
 	return as, ld, objdump
 }

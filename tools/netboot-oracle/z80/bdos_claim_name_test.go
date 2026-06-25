@@ -93,7 +93,7 @@ func assertSafeLegibleName(t *testing.T, name string, entry []byte) {
 func TestClaimEntrySanitisesAdversarialNames(t *testing.T) {
 	mac, err := z80h.Load(serveBootBin, serveBootMap)
 	if err != nil {
-		t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
+		t.Fatalf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
 	}
 
 	cases := []struct {
@@ -179,7 +179,7 @@ func TestClaimRecordPreservesNeighbours(t *testing.T) {
 		t.Run(nameForSub(name), func(t *testing.T) {
 			mac, err := z80h.Load(serveBootBin, serveBootMap)
 			if err != nil {
-				t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
+				t.Fatalf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
 			}
 
 			// Attach the SD model. csd_set_bd_records populates CSD_STAGE (needed by
@@ -267,7 +267,7 @@ func TestClaimRecordPreservesNeighbours(t *testing.T) {
 func TestClaimRMWRealCMD17CMD24(t *testing.T) {
 	mac, err := z80h.Load(serveBootBin, serveBootMap)
 	if err != nil {
-		t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
+		t.Fatalf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
 	}
 
 	// Attach an SDHC card and prime CSD_STAGE + BD_RECORDS.

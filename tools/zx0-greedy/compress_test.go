@@ -153,7 +153,7 @@ func TestCompressCorpusBlock(t *testing.T) {
 		}
 		parent := filepath.Dir(root)
 		if parent == root {
-			t.Skip("cannot find repo root")
+			t.Fatal("cannot find repo root (no Makefile found walking up) — broken test setup")
 		}
 		root = parent
 	}
@@ -161,7 +161,7 @@ func TestCompressCorpusBlock(t *testing.T) {
 	rawPath := filepath.Join(root, "build", "zx0-blocks", "block_0002kb_0074.raw")
 	raw, err := os.ReadFile(rawPath)
 	if err != nil {
-		t.Skipf("no corpus block at %s: %v", rawPath, err)
+		t.Fatalf("corpus block not built at %s (run 'make zx0-blocks'): %v", rawPath, err)
 	}
 
 	p := DefaultParams

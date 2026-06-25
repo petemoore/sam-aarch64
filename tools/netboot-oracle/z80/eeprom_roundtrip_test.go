@@ -80,7 +80,7 @@ func loadEEPROMRoundtrip(t *testing.T) (*z80h.Machine, *z80h.ENC28J60) {
 	t.Helper()
 	mac, err := z80h.Load(emRTBin, emRTMap)
 	if err != nil {
-		t.Skipf("eeprom_roundtrip not built (%s); run `make netboot-eeprom-roundtrip`: %v", emRTBin, err)
+		t.Fatalf("eeprom_roundtrip not built (%s); run `make netboot-eeprom-roundtrip`: %v", emRTBin, err)
 	}
 	enc := z80h.NewENC28J60()
 	img := make([]byte, 131072)

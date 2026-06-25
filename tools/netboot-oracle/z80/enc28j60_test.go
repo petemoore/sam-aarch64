@@ -33,7 +33,7 @@ var testMAC = [6]byte{0x02, 0x53, 0x41, 0x4D, 0x00, 0x01}
 func loadEnc(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(encBinPath); err != nil {
-		t.Skipf("ENC driver binary not built (%s); run `make netboot-encdrv`", encBinPath)
+		t.Fatalf("ENC driver binary not built (%s); run `make netboot-encdrv`", encBinPath)
 	}
 	mac, err := z80h.Load(encBinPath, encMapPath)
 	if err != nil {

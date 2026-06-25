@@ -84,7 +84,7 @@ func pmARP() []byte {
 func loadCSDProbeMain(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(csdProbeTrinloadBin); err != nil {
-		t.Skipf("csd_probe trinload binary not built (%s); run `make netboot-csd-probe-trinload`", csdProbeTrinloadBin)
+		t.Fatalf("csd_probe trinload binary not built (%s); run `make netboot-csd-probe-trinload`", csdProbeTrinloadBin)
 	}
 	mac, err := z80h.Load(csdProbeTrinloadBin, csdProbeTrinloadMap)
 	if err != nil {

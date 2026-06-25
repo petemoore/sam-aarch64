@@ -29,7 +29,7 @@ func TestVariantBootSelfTests(t *testing.T) {
 
 	asmPath := filepath.Join(root, "build", "assembler.bin")
 	if _, err := os.Stat(asmPath); err != nil {
-		t.Skip("build/assembler.bin absent — run `make assembler test-mem-offaxis paged-call-payload enctab sam-aarch64`")
+		t.Fatal("build/assembler.bin absent — run `make assembler test-mem-offaxis paged-call-payload enctab sam-aarch64`")
 	}
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
@@ -41,10 +41,10 @@ func TestVariantBootSelfTests(t *testing.T) {
 	d15Path := filepath.Join(root, "build", "disasm-test.bin")
 	encPath := filepath.Join(root, "build", "enctab.enc")
 	samPath := filepath.Join(root, "build", "sam-aarch64")
-	fixturePath := filepath.Join(root, "tests", "m3", "sources", "inst_nop_ret.s")
+	fixturePath := filepath.Join(root, "tests", "format", "sources", "inst_nop_ret.s")
 	for _, p := range []string{tmPath, clusterPath, encFixPath, p14Path, sd13Path, d15Path, encPath, samPath, fixturePath} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s", p)
+			t.Fatalf("prerequisite missing: %s", p)
 		}
 	}
 

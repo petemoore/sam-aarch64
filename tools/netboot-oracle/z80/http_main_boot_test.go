@@ -66,7 +66,7 @@ var httpBootServerIP = frame.IPv4{192, 168, 0, 1}
 func TestHTTPMainBootReachesFirstTX(t *testing.T) {
 	mac, err := z80h.Load(httpBootBin, httpBootMap)
 	if err != nil {
-		t.Skipf("http boot binary not built (%v); run `make netboot-http-boot`", err)
+		t.Fatalf("http boot binary not built (%v); run `make netboot-http-boot`", err)
 	}
 	enc := z80h.NewENC28J60()
 	enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)
@@ -139,7 +139,7 @@ func TestHTTPMainRecoversFromLinkDownStart(t *testing.T) {
 	run := func(linkUpAfterOps int) (z80h.CallResult, *z80h.ENC28J60) {
 		mac, err := z80h.Load(httpBootBin, httpBootMap)
 		if err != nil {
-			t.Skipf("http boot binary not built (%v); run `make netboot-http-boot`", err)
+			t.Fatalf("http boot binary not built (%v); run `make netboot-http-boot`", err)
 		}
 		enc := z80h.NewENC28J60()
 		enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)

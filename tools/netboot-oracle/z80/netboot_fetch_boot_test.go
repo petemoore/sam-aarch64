@@ -60,7 +60,7 @@ func fbStreamAndFinalize(t *testing.T, img []byte, record int) (*z80h.Machine, *
 	t.Helper()
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
-		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
 	store := z80h.NewBDOSStore()
 	card := z80h.NewCardModel()
@@ -198,7 +198,7 @@ func fbRunFetchBoot(t *testing.T, img []byte, record int) (*z80h.Machine, *z80h.
 	t.Helper()
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
-		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
 	enc := z80h.NewENC28J60()
 	enc.ProgramTrinityNetwork(fbSamMAC, fbSamIP)

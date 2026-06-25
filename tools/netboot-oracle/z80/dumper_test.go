@@ -43,7 +43,7 @@ const (
 func loadDumper(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(dumperBinPath); err != nil {
-		t.Skipf("netboot_dumper binary not built (%s); run `make netboot-dumper`", dumperBinPath)
+		t.Fatalf("netboot_dumper binary not built (%s); run `make netboot-dumper`", dumperBinPath)
 	}
 	mac, err := z80h.Load(dumperBinPath, dumperMapPath)
 	if err != nil {

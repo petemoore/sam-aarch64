@@ -46,7 +46,7 @@ const (
 func loadEditModel(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(emBinPath); err != nil {
-		t.Skipf("editmodel binary not built (%s); run `make editmodel-z80`", emBinPath)
+		t.Fatalf("editmodel binary not built (%s); run `make editmodel-z80`", emBinPath)
 	}
 	mac, err := z80h.Load(emBinPath, emMapPath)
 	if err != nil {

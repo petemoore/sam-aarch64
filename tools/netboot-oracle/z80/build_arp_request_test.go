@@ -17,7 +17,7 @@ const (
 func loadARPMachine(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(arpBinPath); err != nil {
-		t.Skipf("netboot ARP-request binary not built (%s); run `make netboot-build-arp-request`", arpBinPath)
+		t.Fatalf("netboot ARP-request binary not built (%s); run `make netboot-build-arp-request`", arpBinPath)
 	}
 	mac, err := z80h.Load(arpBinPath, arpMapPath)
 	if err != nil {

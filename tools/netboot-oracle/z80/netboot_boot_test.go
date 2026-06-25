@@ -71,7 +71,7 @@ var cliBootServerIP = frame.IPv4{192, 168, 0, 1}
 func TestSmokeBootRunsFromEEPROM(t *testing.T) {
 	mac, err := z80h.LoadBoot(smokeBootBin, smokeBootMap, romBaseBoot)
 	if err != nil {
-		t.Skipf("smoke boot binary not built (%v); run `make netboot-smoke-boot`", err)
+		t.Fatalf("smoke boot binary not built (%v); run `make netboot-smoke-boot`", err)
 	}
 	enc := z80h.NewENC28J60()
 	enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)
@@ -124,7 +124,7 @@ func TestClientBootReachesFirstTX(t *testing.T) {
 	// see the romBaseBoot note. LoadBoot would drop csd_set_bd_records.
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
-		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
 	enc := z80h.NewENC28J60()
 	enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)
@@ -197,7 +197,7 @@ func TestClientBootRecoversFromLinkDownStart(t *testing.T) {
 		// romBaseBoot note); LoadBoot would drop it.
 		mac, err := z80h.Load(cliBootBin, cliBootMap)
 		if err != nil {
-			t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+			t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 		}
 		enc := z80h.NewENC28J60()
 		enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)
@@ -262,7 +262,7 @@ func TestDrvWaitLinkWaitsThenSucceeds(t *testing.T) {
 	run := func(linkUpAfterOps int) z80h.CallResult {
 		mac, err := z80h.Load(cliBootBin, cliBootMap)
 		if err != nil {
-			t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+			t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 		}
 		enc := z80h.NewENC28J60()
 		enc.SetLinkUpAfterOps(linkUpAfterOps)

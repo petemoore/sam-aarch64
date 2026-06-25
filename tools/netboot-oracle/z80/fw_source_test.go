@@ -24,7 +24,7 @@ const (
 func loadFWSource(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(fwSourceBinPath); err != nil {
-		t.Skipf("fw_source binary not built (%s); run `make netboot-fw-source`", fwSourceBinPath)
+		t.Fatalf("fw_source binary not built (%s); run `make netboot-fw-source`", fwSourceBinPath)
 	}
 	mac, err := z80h.Load(fwSourceBinPath, fwSourceMapPath)
 	if err != nil {

@@ -289,7 +289,7 @@ func TestBinaryGenMatchesValidFixture(t *testing.T) {
 	repoRoot := findRepoRootRegistry(t)
 	bin := filepath.Join(repoRoot, "build", "registry")
 	if _, err := os.Stat(bin); err != nil {
-		t.Skipf("registry binary not found at %s; run `make registry-gen` first", bin)
+		t.Fatalf("registry binary not found at %s; run `make registry-gen` first (a missing build artifact must fail, not skip — i253)", bin)
 	}
 
 	fixtureItems := filepath.Join(repoRoot, "tools", "registry", "testdata", "items.yaml")

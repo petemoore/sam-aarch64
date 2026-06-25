@@ -36,7 +36,7 @@ import (
 func TestBDOSStoreCapturesRecordAndUIFA(t *testing.T) {
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
-		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
 	store := z80h.NewBDOSStore()
 	mac.AttachBDOS(store)
@@ -104,7 +104,7 @@ func bootClientE2ESetup(t *testing.T) (*z80h.Machine, *z80h.ENC28J60, *z80h.BDOS
 	// romBaseBoot note in netboot_boot_test.go); LoadBoot would drop it.
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
-		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
 	enc := z80h.NewENC28J60()
 	enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP) // the SAM's own MAC+IP

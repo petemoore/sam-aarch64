@@ -250,7 +250,7 @@ func TestSAMDOSBootMissingSysregDataDiagnostic(t *testing.T) {
 	d15Path := filepath.Join(root, "build", "disasm.bin")
 	for _, p := range []string{asmPath, encPath, d15Path} {
 		if _, err := os.Stat(p); err != nil {
-			t.Skipf("prerequisite missing: %s\n  run `make assembler-prod enctab disasm-payload`", p)
+			t.Fatalf("prerequisite missing: %s\n  run `make assembler-prod enctab disasm-payload`", p)
 		}
 	}
 	asm, _ := os.ReadFile(asmPath)

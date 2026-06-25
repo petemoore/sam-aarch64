@@ -25,7 +25,7 @@ const (
 func loadHTTPMain(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(httpMainBinPath); err != nil {
-		t.Skipf("http_main binary not built (%s); run `make netboot-http-main`", httpMainBinPath)
+		t.Fatalf("http_main binary not built (%s); run `make netboot-http-main`", httpMainBinPath)
 	}
 	mac, err := z80h.Load(httpMainBinPath, httpMainMapPath)
 	if err != nil {

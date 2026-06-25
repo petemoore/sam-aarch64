@@ -28,7 +28,7 @@ const (
 func loadKS(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(ksBinPath); err != nil {
-		t.Skipf("tls_keyschedule binary not built (%s); run `make netboot-tls-keyschedule`", ksBinPath)
+		t.Fatalf("tls_keyschedule binary not built (%s); run `make netboot-tls-keyschedule`", ksBinPath)
 	}
 	mac, err := z80h.Load(ksBinPath, ksMapPath)
 	if err != nil {

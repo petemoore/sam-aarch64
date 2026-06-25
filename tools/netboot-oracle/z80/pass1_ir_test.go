@@ -46,10 +46,37 @@ const (
 // pass1IRBufSize matches the PASS1_IR_BUF reservation in src/test_pass1_ir.asm.
 const pass1IRBufSize = 10752
 
+// pass1KnownOversize is the reviewed exclude-list of corpus fixtures whose
+// serialised IR is genuinely larger than the SAM's real on-chip PASS1_IR_BUF
+// (pass1IRBufSize) — a true on-hardware limit, NOT a pass1 bug or a test gap.
+// The flat harness cannot process them because the SAM itself cannot. Each
+// entry is name -> the reason (which cap, with the observed size). A NEW corpus
+// fixture that exceeds the cap but is absent here is a t.Fatalf (it must be
+// reviewed and added, never silently skipped); a stale entry (never hit) is a
+// t.Errorf at end of the corpus sweep. See i253 (no-silent-skips).
+var pass1KnownOversize = map[string]string{
+	"in_long_source.s": "IR ~16484 B exceeds the 10752-byte PASS1_IR_BUF (comment-heavy paged fixture)",
+}
+
+// pass1KnownTranslateOOS is the reviewed exclude-list of corpus fixtures that
+// frontend.Translate cannot handle in isolation (include search paths, etc.) —
+// a fixture-scope issue, not a pass1 gap. Empty today: every corpus fixture
+// Translates standalone. A NEW fixture that errors but is absent here is a
+// t.Fatalf; a stale entry is a t.Errorf.
+var pass1KnownTranslateOOS = map[string]string{}
+
+// pass1OversizeSeen / pass1TranslateOOSSeen record which exclude-list entries
+// the corpus sweep actually hit, so a stale (never-encountered) entry can be
+// flagged after the sweep.
+var (
+	pass1OversizeSeen     = map[string]bool{}
+	pass1TranslateOOSSeen = map[string]bool{}
+)
+
 func loadPass1IR(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(p1Bin); err != nil {
-		t.Skipf("pass1-ir binary not built (%s); run `make pass1-ir-z80`", p1Bin)
+		t.Fatalf("pass1-ir binary not built (%s); run `make pass1-ir-z80`", p1Bin)
 	}
 	mac, err := z80h.Load(p1Bin, p1Map)
 	if err != nil {
@@ -129,11 +156,10 @@ func runPass1IR(t *testing.T, mac *z80h.Machine, ir []byte) {
 		t.Fatal(err)
 	}
 	if len(ir) > pass1IRBufSize {
-		// A comment-heavy fixture can serialise to more than the flat harness's
-		// IR buffer holds (the buffer sits below the &C100 pass-1 scratch in the
-		// &8000 page, so it is bounded). COMMENT/BLANK_RUN records carry no PC
-		// effect, so this is a fixture-scope size limit, not a pass1 gap — skip.
-		t.Skipf("IR %d bytes exceeds the %d-byte PASS1_IR_BUF (comment-heavy fixture, out of harness scope)", len(ir), pass1IRBufSize)
+		// checkFixture pre-screens oversize fixtures against pass1KnownOversize
+		// before reaching here, so any IR that arrives oversize is a programming
+		// error in the caller, not a fixture-scope skip.
+		t.Fatalf("runPass1IR reached with oversize IR (%d > %d) — checkFixture should have screened it", len(ir), pass1IRBufSize)
 	}
 	mac.Write(bufAddr, ir)
 	mac.WriteU16LE(lenAddr, uint16(len(ir)))
@@ -244,6 +270,20 @@ func checkFixture(t *testing.T, name string, src []byte) {
 	}
 
 	ir := serializeIR(t, f)
+
+	// Oversize screen: an IR larger than the SAM's real PASS1_IR_BUF cannot be
+	// processed on hardware — a genuine limit, not a pass1 gap. Such a fixture
+	// must be a REVIEWED entry in pass1KnownOversize (then we just don't run it);
+	// a NEW oversize fixture absent from the list fails hard so it gets reviewed
+	// (no silent skip — i253).
+	if len(ir) > pass1IRBufSize {
+		if _, known := pass1KnownOversize[name]; known {
+			pass1OversizeSeen[name] = true
+			return
+		}
+		t.Fatalf("%s: IR %d bytes exceeds the %d-byte PASS1_IR_BUF and is NOT in pass1KnownOversize — review and add it (with the cap+size) or shrink the fixture", name, len(ir), pass1IRBufSize)
+	}
+
 	// A fresh machine per fixture so the tables start empty.
 	freshMac := loadPass1IR(t)
 	runPass1IR(t, freshMac, ir)
@@ -359,8 +399,11 @@ func TestPass1IRCoreFixtures(t *testing.T) {
 	}
 
 	// Corpus fixture sources, across the assembler test tiers. A fixture
-	// Translate can't handle in isolation (include search paths, etc.) is
-	// skipped — a translate error is a fixture-scope issue, not a pass1 bug.
+	// frontend.Translate can't handle in isolation (include search paths, etc.)
+	// is a fixture-scope issue, not a pass1 bug — but it must be a REVIEWED entry
+	// in pass1KnownTranslateOOS, never a silent skip (i253). Oversize-against-the
+	// -SAM-buffer fixtures are screened inside checkFixture against
+	// pass1KnownOversize.
 	for _, dir := range []string{"core", "format", "operands", "symbols", "paged"} {
 		srcDir := "../../../tests/" + dir + "/sources"
 		entries, err := os.ReadDir(srcDir)
@@ -378,10 +421,28 @@ func TestPass1IRCoreFixtures(t *testing.T) {
 			}
 			t.Run(dir+"/"+e.Name(), func(t *testing.T) {
 				if _, err := frontend.Translate(src, e.Name()); err != nil {
-					t.Skipf("%s: Translate error (out of pass1-ir fixture scope): %v", e.Name(), err)
+					if _, known := pass1KnownTranslateOOS[e.Name()]; known {
+						pass1TranslateOOSSeen[e.Name()] = true
+						return
+					}
+					t.Fatalf("%s: Translate error and NOT in pass1KnownTranslateOOS — review and add it or fix Translate: %v", e.Name(), err)
 				}
 				checkFixture(t, e.Name(), src)
 			})
+		}
+	}
+
+	// Stale-entry guard: every exclude-list entry must have been encountered by
+	// the corpus sweep, else the list has drifted (the fixture was renamed,
+	// removed, or shrank below the cap) and should be pruned.
+	for name := range pass1KnownOversize {
+		if !pass1OversizeSeen[name] {
+			t.Errorf("pass1KnownOversize entry %q was never encountered — stale, prune it", name)
+		}
+	}
+	for name := range pass1KnownTranslateOOS {
+		if !pass1TranslateOOSSeen[name] {
+			t.Errorf("pass1KnownTranslateOOS entry %q was never encountered — stale, prune it", name)
 		}
 	}
 }

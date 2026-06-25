@@ -31,7 +31,7 @@ const (
 func loadHTTPGet(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(httpGetBinPath); err != nil {
-		t.Skipf("http_get binary not built (%s); run `make netboot-http-get`", httpGetBinPath)
+		t.Fatalf("http_get binary not built (%s); run `make netboot-http-get`", httpGetBinPath)
 	}
 	mac, err := z80h.Load(httpGetBinPath, httpGetMapPath)
 	if err != nil {

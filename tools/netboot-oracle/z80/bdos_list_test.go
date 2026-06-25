@@ -55,7 +55,7 @@ func makeEntry(name string) [16]byte {
 func TestRecordEntryParse(t *testing.T) {
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
-		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
 	card := z80h.NewCardModel()
 
@@ -165,7 +165,7 @@ func TestRecordEntryParse(t *testing.T) {
 func TestFindFreeRecord(t *testing.T) {
 	mac, err := z80h.Load(cliBootBin, cliBootMap)
 	if err != nil {
-		t.Skipf("client boot binary not built (%v); run `make netboot-client-boot`", err)
+		t.Fatalf("client boot binary not built (%v); run `make netboot-client-boot`", err)
 	}
 	card := z80h.NewCardModel()
 

@@ -53,11 +53,11 @@ func TestZX0CorpusTotals(t *testing.T) {
 
 	corpus, err := os.ReadFile(filepath.Join(root, "build", "zx0-corpus.raw"))
 	if err != nil {
-		t.Skipf("build/zx0-corpus.raw not found — run 'make zx0-corpus' first: %v", err)
+		t.Fatalf("build/zx0-corpus.raw not found — run 'make zx0-corpus' first: %v", err)
 	}
 	compressorBin, err := os.ReadFile(filepath.Join(root, "build", "zx0_compress.bin"))
 	if err != nil {
-		t.Skipf("build/zx0_compress.bin not found — run 'make zx0-compress-payload' first: %v", err)
+		t.Fatalf("build/zx0_compress.bin not found — run 'make zx0-compress-payload' first: %v", err)
 	}
 	t.Logf("corpus: %d bytes, zx0_compress.bin: %d bytes", len(corpus), len(compressorBin))
 

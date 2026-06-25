@@ -18,8 +18,9 @@
 //
 // The B-DOS 1.5t binary is Colin's PROPRIETARY code: it is referenced by its
 // ~/sam-archive path (resolved from $HOME, or $BDOS15T_BIN), never copied into
-// the repo. The test t.Skips if it is absent, mirroring the optional-input guard
-// in dumper_rompaging_test.go (skip when the build artifact is missing).
+// the repo. When it is absent the test FAILS HARD (i253) — unless
+// SKIP_PRIVATE_TESTS=true is set, the one explicit, intentional skip gate (CI sets
+// it, because this proprietary artifact can never be published).
 package z80_test
 
 import (
@@ -228,9 +229,12 @@ func (sdPortStub) Out(port uint8, value uint8) {}
 // config, and the entire computation lives within &4000-&7FFF.
 func loadBdosInSectionB(t *testing.T) *z80h.Machine {
 	t.Helper()
+	if os.Getenv("SKIP_PRIVATE_TESTS") == "true" {
+		t.Skip("SKIP_PRIVATE_TESTS=true: B-DOS 1.5t binary unavailable (Colin's non-redistributable artifact)")
+	}
 	bin := colinBdosBinPath()
 	if bin == "" {
-		t.Skip("B-DOS 1.5t binary not present (set $BDOS15T_BIN or place at ~/sam-archive/bdos/analysis/extracted/bdos15t-beta6.bin) — proprietary, not in repo")
+		t.Fatalf("B-DOS 1.5t binary absent (set $BDOS15T_BIN or place at ~/sam-archive/bdos/analysis/extracted/bdos15t-beta6.bin) and SKIP_PRIVATE_TESTS is not set — place the file or set SKIP_PRIVATE_TESTS=true (proprietary, not in repo)")
 	}
 	code, err := os.ReadFile(bin)
 	if err != nil {

@@ -72,7 +72,7 @@ func TestParseRealNopXML(t *testing.T) {
 	// Real vendored XML — exercises the schema as it actually is.
 	f, err := openXML(t, "../../../reference/arm-mra/nop.xml")
 	if err != nil {
-		t.Skipf("real NOP XML not available: %v", err)
+		t.Fatalf("vendored reference/arm-mra/nop.xml missing or unreadable: %v", err)
 	}
 	defer f.Close()
 	forms, err := ParseInstructionXML(f)

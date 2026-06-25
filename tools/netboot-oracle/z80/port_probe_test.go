@@ -28,7 +28,7 @@ var candidatePorts = []byte{
 func TestPortProbeEmitsReport(t *testing.T) {
 	mac, err := z80h.Load(portProbeBin, portProbeMap)
 	if err != nil {
-		t.Skipf("port_probe not built (%s); run `make netboot-port-probe`: %v", portProbeBin, err)
+		t.Fatalf("port_probe not built (%s); run `make netboot-port-probe`: %v", portProbeBin, err)
 	}
 	enc := z80h.NewENC28J60()
 	mac.AttachIO(enc)

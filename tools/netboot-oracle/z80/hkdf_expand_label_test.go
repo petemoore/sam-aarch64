@@ -31,7 +31,7 @@ const (
 func loadEL(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(elBinPath); err != nil {
-		t.Skipf("hkdf_expand_label binary not built (%s); run `make netboot-hkdf-expand-label`", elBinPath)
+		t.Fatalf("hkdf_expand_label binary not built (%s); run `make netboot-hkdf-expand-label`", elBinPath)
 	}
 	mac, err := z80h.Load(elBinPath, elMapPath)
 	if err != nil {

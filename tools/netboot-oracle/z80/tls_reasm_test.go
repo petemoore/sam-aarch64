@@ -27,7 +27,7 @@ const (
 func loadTLSReasm(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(tlsReasmBinPath); err != nil {
-		t.Skipf("tls_reasm binary not built (%s); run `make netboot-tls-reasm`", tlsReasmBinPath)
+		t.Fatalf("tls_reasm binary not built (%s); run `make netboot-tls-reasm`", tlsReasmBinPath)
 	}
 	mac, err := z80h.Load(tlsReasmBinPath, tlsReasmMapPath)
 	if err != nil {

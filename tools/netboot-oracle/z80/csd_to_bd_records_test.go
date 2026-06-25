@@ -40,7 +40,7 @@ const (
 func loadSDCSDFixture(t *testing.T, csd [16]byte) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(sdCSDBin); err != nil {
-		t.Skipf("sd_csd fixture not built (%s); run `make netboot-sd-csd`", sdCSDBin)
+		t.Fatalf("sd_csd fixture not built (%s); run `make netboot-sd-csd`", sdCSDBin)
 	}
 	mac, err := z80h.Load(sdCSDBin, sdCSDMap)
 	if err != nil {
@@ -154,7 +154,7 @@ func TestCSDToBDRecordsV1(t *testing.T) {
 // unbounded-wait class by default, not only under the opt-in csd_probe probe (i241).
 func TestCSDToBDRecordsBoundedOnStuckBusy(t *testing.T) {
 	if _, err := os.Stat(sdCSDBin); err != nil {
-		t.Skipf("sd_csd fixture not built (%s); run `make netboot-sd-csd`", sdCSDBin)
+		t.Fatalf("sd_csd fixture not built (%s); run `make netboot-sd-csd`", sdCSDBin)
 	}
 	mac, err := z80h.Load(sdCSDBin, sdCSDMap)
 	if err != nil {
@@ -196,7 +196,7 @@ func TestCSDToBDRecordsBoundedOnStuckBusy(t *testing.T) {
 // (CLAUDE.md rule 7), where before it was observable-but-ungated for this path.
 func TestCSDToBDRecordsDeselectTailProper(t *testing.T) {
 	if _, err := os.Stat(sdCSDBin); err != nil {
-		t.Skipf("sd_csd fixture not built (%s); run `make netboot-sd-csd`", sdCSDBin)
+		t.Fatalf("sd_csd fixture not built (%s); run `make netboot-sd-csd`", sdCSDBin)
 	}
 	mac, err := z80h.Load(sdCSDBin, sdCSDMap)
 	if err != nil {
@@ -226,7 +226,7 @@ func TestCSDToBDRecordsDeselectTailProper(t *testing.T) {
 // bogus non-zero count.
 func TestCSDToBDRecordsNoCard(t *testing.T) {
 	if _, err := os.Stat(sdCSDBin); err != nil {
-		t.Skipf("sd_csd fixture not built (%s); run `make netboot-sd-csd`", sdCSDBin)
+		t.Fatalf("sd_csd fixture not built (%s); run `make netboot-sd-csd`", sdCSDBin)
 	}
 	mac, err := z80h.Load(sdCSDBin, sdCSDMap)
 	if err != nil {

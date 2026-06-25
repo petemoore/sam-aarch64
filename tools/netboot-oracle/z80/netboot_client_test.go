@@ -46,7 +46,7 @@ var (
 func loadClient(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(cliBinPath); err != nil {
-		t.Skipf("netboot_client binary not built (%s); run `make netboot-client`", cliBinPath)
+		t.Fatalf("netboot_client binary not built (%s); run `make netboot-client`", cliBinPath)
 	}
 	mac, err := z80h.Load(cliBinPath, cliMapPath)
 	if err != nil {

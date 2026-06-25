@@ -25,7 +25,7 @@ const (
 func loadTR(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(trBinPath); err != nil {
-		t.Skipf("tls_record binary not built (%s); run `make netboot-tls-record`", trBinPath)
+		t.Fatalf("tls_record binary not built (%s); run `make netboot-tls-record`", trBinPath)
 	}
 	mac, err := z80h.Load(trBinPath, trMapPath)
 	if err != nil {

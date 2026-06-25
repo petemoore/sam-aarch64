@@ -25,7 +25,7 @@ const (
 func loadFE(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(feBinPath); err != nil {
-		t.Skipf("x25519 binary not built (%s); run `make netboot-x25519-field`", feBinPath)
+		t.Fatalf("x25519 binary not built (%s); run `make netboot-x25519-field`", feBinPath)
 	}
 	mac, err := z80h.Load(feBinPath, feMapPath)
 	if err != nil {

@@ -48,7 +48,7 @@ func loadPagedEditModel(t *testing.T) *z80h.Machine {
 	t.Helper()
 	mac, err := z80h.LoadAt(emPagedBinPath, emPagedMapPath, emPagedOrg)
 	if err != nil {
-		t.Skipf("paged editmodel not built (%s); run `make editmodel-paged-z80`: %v", emPagedBinPath, err)
+		t.Fatalf("paged editmodel not built (%s); run `make editmodel-paged-z80`: %v", emPagedBinPath, err)
 	}
 
 	// Size the pool, then reserve the resident pages so they are never handed

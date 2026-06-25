@@ -4296,6 +4296,25 @@
   prs:
     - {num: 668, role: completing}
 
+- id: i253
+  title: "No silently-skipping tests: a missing precondition must FAIL, not skip (Pete 2026-06-25)"
+  description: |
+    Pete's directive (2026-06-25): no test may silently t.Skip on a missing precondition — if a precondition is needed, its absence must cause a test FAILURE. Surfaced by the i251 finding that build/netboot_sd_csd.bin was never built in CI, so the WHOLE csd_to_bd_records suite (incl. the i250/i251 gates) silently skipped in CI undetected. Survey: 156 t.Skip* sites. Categories: (A) ~120+ 'binary/fixture not built; run make X' -> must fail hard (the fixture is always buildable; absence = a CI-wiring bug, exactly the sd_csd case) + ensure CI builds every needed fixture; (B) private-capture tests (Colin's proprietary rom.bin/eeprom.bin, 'captures absent') -> cannot run in CI, need an explicit opt-in mechanism (build tag / separate suite) so they're not in the default go test run at all; (C) 'out-of-harness-scope'/cap-exceeded skips -> explicit named exclusions or fail-hard; (D) opt-in sweeps (SWEEP=1) -> explicit make target/build tag; (E) toolchain-absent (GNU) skips -> CLAUDE.md §3 currently allows these as 'principled' — reconcile. Also update repo CLAUDE.md testing policy + add a memory entry.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 680, role: completing}
+
+- id: i254
+  title: "Run ALL tests in CI: private binaries as repo secrets (SKIP_PRIVATE_TESTS default-true, our CI overrides) + add currently-excluded packages"
+  description: |
+    Pete (2026-06-25), follow-on to i253. GOAL: CI runs EVERY test; nothing silently excluded. (1) SKIP_PRIVATE_TESTS=true is the CI DEFAULT (forks get no secrets -> they skip the gated tests explicitly). (2) OUR repo's CI materialises the private binaries from encrypted GitHub repo secrets (rom.bin, eeprom.bin, B-DOS 1.5t -> the capture paths) and overrides SKIP_PRIVATE_TESTS=false so our CI runs them; GitHub withholds secrets from fork PRs. Pete is fine storing them as secrets. (3) ADD the currently-CI-excluded packages (z80-test-harness-go, zx0-greedy, editor-prototype) to CI, guarded by SKIP_PRIVATE_TESTS where they need private resources. TENSION RESOLVED (Pete 2026-06-25): the 'go harness is not a CI gate' rule predates Trinity emulation — SimCoupe was then strictly more complete so it gated CI; now the go harness emulates Trinity (ENC/SD/EEPROM) which SimCoupe does NOT, so gating Trinity-requiring tests on the go harness in CI is CORRECT (netboot-oracle/z80 already does). CONSOLIDATION: i126 (port Trinity INTO SimCoupe) -> once it lands CI can consolidate on SimCoupe. CAVEAT on 'private': the proprietary/non-redistributable status of Colin's binaries is a PRECAUTIONARY assumption by Pete, NOT confirmed fact — they may be freely redistributable. If confirmed redistributable, they could simply be committed/fetched and skip the secrets entirely (simpler). PETE-GATED: Pete creates the secrets. depends_on i253 + i126. Detail: docs/plans/i253-no-silent-skips.md.
+  status: OPEN
+  depends_on: [i253, i126]
+  kind: leaf
+  owner: agent
+
 - id: i255
   title: "monitor.sh (i240 refinement): suppress ONLY the time-based hang nudge while Pete present; keep file-driven task-done/wound-down/quiescent live"
   description: |

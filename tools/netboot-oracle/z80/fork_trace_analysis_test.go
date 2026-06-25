@@ -19,12 +19,9 @@ import (
 
 func loadForkAnalysisROMs(t *testing.T) (stock, fork, eeprom []byte) {
 	t.Helper()
-	stockPath := realCapturePath("rom_stock_v30.bin")
-	forkPath := realCapturePath("rom.bin")
-	eepPath := realCapturePath("eeprom.bin")
-	if stockPath == "" || forkPath == "" || eepPath == "" {
-		t.Skip("fork-analysis captures absent (need rom_stock_v30.bin + rom.bin + eeprom.bin under ~/sam-archive/samboot-capture)")
-	}
+	stockPath := requirePrivateCapture(t, "rom_stock_v30.bin")
+	forkPath := requirePrivateCapture(t, "rom.bin")
+	eepPath := requirePrivateCapture(t, "eeprom.bin")
 	var err error
 	if stock, err = os.ReadFile(stockPath); err != nil {
 		t.Fatalf("read stock: %v", err)

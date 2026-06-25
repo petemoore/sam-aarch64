@@ -31,7 +31,7 @@ const (
 func loadSF(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(sfBinPath); err != nil {
-		t.Skipf("tls_server_flight binary not built (%s); run `make netboot-tls-server-flight`", sfBinPath)
+		t.Fatalf("tls_server_flight binary not built (%s); run `make netboot-tls-server-flight`", sfBinPath)
 	}
 	mac, err := z80h.Load(sfBinPath, sfMapPath)
 	if err != nil {

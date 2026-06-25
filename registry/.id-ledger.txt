@@ -483,8 +483,6 @@ i249
 i250
 i251
 i252
-# i253/i254 reserved for the unmerged i253-no-silent-skips branch (prev session);
-# recorded so main never reallocates them (id-collision avoidance, 2026-06-25).
 i253
 i254
 i255

@@ -23,7 +23,7 @@ const (
 func loadFWSpan(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(fwSpanBinPath); err != nil {
-		t.Skipf("fw_span binary not built (%s); run `make netboot-fw-span`", fwSpanBinPath)
+		t.Fatalf("fw_span binary not built (%s); run `make netboot-fw-span`", fwSpanBinPath)
 	}
 	mac, err := z80h.Load(fwSpanBinPath, fwSpanMapPath)
 	if err != nil {

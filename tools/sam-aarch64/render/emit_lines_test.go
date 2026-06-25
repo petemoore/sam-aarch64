@@ -51,7 +51,7 @@ func TestEmitLinesOnRealReleaseTbn(t *testing.T) {
 	const path = "../../../build/release-unstripped.tbn"
 	buf, err := os.ReadFile(path)
 	if err != nil {
-		t.Skipf("release tbn not built (%v); run `make release-unstripped-tbn`", err)
+		t.Fatalf("release tbn not built (%v); run `make release-unstripped-tbn` (a missing build artifact must fail, not skip — i253)", err)
 	}
 	f, err := format.ReadFile(buf)
 	if err != nil {

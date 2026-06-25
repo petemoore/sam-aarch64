@@ -39,7 +39,7 @@ func loadPagePool(t *testing.T) *z80h.Machine {
 	t.Helper()
 	mac, err := z80h.Load(ppBinPath, ppMapPath)
 	if err != nil {
-		t.Skipf("pagepool binary not built (%s); run `make pagepool-z80`: %v", ppBinPath, err)
+		t.Fatalf("pagepool binary not built (%s); run `make pagepool-z80`: %v", ppBinPath, err)
 	}
 	return mac
 }

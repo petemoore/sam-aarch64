@@ -48,7 +48,7 @@ var (
 func loadServeDemo(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(srvDemoBinPath); err != nil {
-		t.Skipf("netboot_serve binary not built (%s); run `make netboot-serve`", srvDemoBinPath)
+		t.Fatalf("netboot_serve binary not built (%s); run `make netboot-serve`", srvDemoBinPath)
 	}
 	mac, err := z80h.Load(srvDemoBinPath, srvDemoMapPath)
 	if err != nil {

@@ -90,7 +90,7 @@ func TestServeBootFromEEPROM(t *testing.T) {
 	// (the same reason http_main_boot_test uses flat Load).
 	mac, err := z80h.Load(serveBootBin, serveBootMap)
 	if err != nil {
-		t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
+		t.Fatalf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
 	}
 	enc := z80h.NewENC28J60()
 	enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)
@@ -168,7 +168,7 @@ func TestServeBootFromEEPROM(t *testing.T) {
 func TestServeBootComputesBDRecordsFromCSD(t *testing.T) {
 	mac, err := z80h.Load(serveBootBin, serveBootMap)
 	if err != nil {
-		t.Skipf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
+		t.Fatalf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
 	}
 	enc := z80h.NewENC28J60()
 	enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)
@@ -214,7 +214,7 @@ func TestServeBootComputesBDRecordsFromCSD(t *testing.T) {
 func TestServerBootFromEEPROM(t *testing.T) {
 	mac, err := z80h.LoadBoot(serverBootBin, serverBootMap, romBaseBoot)
 	if err != nil {
-		t.Skipf("server boot binary not built (%v); run `make netboot-server-boot`", err)
+		t.Fatalf("server boot binary not built (%v); run `make netboot-server-boot`", err)
 	}
 	enc := z80h.NewENC28J60()
 	enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)
