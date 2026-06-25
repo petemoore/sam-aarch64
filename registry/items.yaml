@@ -4192,6 +4192,62 @@
   title: "Trinity SD model: enforce the one-byte read lag so a missing command flush (Ncc sync) FAILS in emulation (the i145g all-zeros bug class)"
   description: |
     The koron-go SD model (sdcard.go) frames a command by bit-pattern ((b&0xC0)==0x40), not clock count, and returns command responses with NO one-byte read lag — so a flush-less command (opcode sent immediately after &31 select, missing the leading &FF Ncc sync) frames and responds IDENTICALLY to a correct one. That is exactly why the i145g all-zeros CSD bug (missing leading flush in sd_cmd/sdc_cmd) passed every host test yet failed on real hardware. FIX: model the &DF one-byte read lag faithfully (doc trinity-sd-z80-interface.md §3: sd.in reads 'the byte clocked in by the PREVIOUS OUT'), so a command not preceded by the flush misaligns and yields no valid response / no &FE token — making the missing-flush class a build-time failure. Determine the exact mechanism (Ncc sync vs lag alignment) from the authority first; migrate existing SD tests (drivers now send the flush). Emulation-first: an emulator that cannot catch this class is the defect (feedback_port_diff_authority_first). Followup from i145g (PR #656).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 657, role: completing}
+
+- id: i246
+  title: "sd_csd.asm: bound the SD busy-wait (sdc_out/sdc_in use the unbounded wait_ready) so a stuck Trinity can't hang serve_main/client_main (fix #5)"
+  description: |
+    Hardware fix #5 (docs/notes/hardware-readiness-audit.md). The shared SPI primitives sdc_out/sdc_in (src/netboot/sd_csd.asm) call wait_ready (src/netboot/encdrv.asm:427), which loops 'JR wait_ready' forever while the &DC busy bit is set — a stuck Trinity hangs serve_main AND client_main with no timeout. Add a bounded retry/timeout to the SD busy-wait on this path. Because sd_csd.asm is SHARED, ONE edit fixes both serve_main and client_main. Reference the gold-standard csd_probe (probe_main) which already has this. Was untracked before the 2026-06-25 hardware-readiness audit.
   status: OPEN
   kind: leaf
   owner: agent
+  refs: [docs/notes/hardware-readiness-audit.md, src/netboot/sd_csd.asm, src/netboot/encdrv.asm]
+
+- id: i247
+  title: "sd_csd.asm: port Colin's 4-step deselect tail (replace 2-step sdc_deselect) on the serve_main/client_main SD write path (fix #6)"
+  description: |
+    Hardware fix #6 (docs/notes/hardware-readiness-audit.md). sdc_deselect (src/netboot/sd_csd.asm:246) does a 2-step deselect (SDC_DESEL then SDC_NULLOFF); real Trinity hardware needs Colin's 4-step deselect tail to leave SPI state the card handles correctly. Port the 4-step tail. Because sd_csd.asm is SHARED, ONE edit fixes both serve_main and client_main. Reference the gold-standard csd_probe (probe_main). Was untracked before the 2026-06-25 hardware-readiness audit.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [docs/notes/hardware-readiness-audit.md, src/netboot/sd_csd.asm]
+
+- id: i248
+  title: "serve_main + client_main: enc_rx_reestablish after csd_set_bd_records (SD disturbs ENC RX before serving), mirroring csd_probe (fix #3, beyond i244's reorder)"
+  description: |
+    Hardware fix #3 (docs/notes/hardware-readiness-audit.md). The SD transaction disturbs the ENC RX path; without a re-arm, serving dies after the first SD read. csd_probe (probe_main) calls enc_rx_reestablish (src/netboot/csd_probe.asm:484) after its SD read — serve_main and client_main do NOT. serve_main: add the re-arm before serve_serve_once (netboot_serve.asm). client_main: add it after the SD write (netboot_client.asm). NOTE: i244 covers the serve_main #2 reorder (drv_init before SD) and may incorporate the serve_main re-arm; if i244 lands the serve_main re-arm, scope this item to client_main so it is not forgotten. i245 models the one-byte read lag (fix #1 class), a different gap. Was untracked for client_main before the 2026-06-25 hardware-readiness audit.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [docs/notes/hardware-readiness-audit.md, src/netboot/netboot_serve.asm, src/netboot/netboot_client.asm, src/netboot/csd_probe.asm]
+
+- id: i249
+  title: "Trinity emulator: model the SD-transaction -> ENC-RX disturbance so a missing enc_rx_reestablish FAILS in emulation (the serve-dies-after-SD class)"
+  description: |
+    EMULATION GAP (docs/notes/hardware-readiness-audit.md). On real hardware an SD transaction disturbs the ENC RX path, so a program that omits enc_rx_reestablish (fix #3) serves once then dies. The emulator does NOT model this disturbance, so a missing re-arm passes in emulation and ships a hardware failure. Make the Trinity/SD model perturb the ENC RX state across an SD transaction such that serving without a subsequent enc_rx_reestablish FAILS a host test — turning the serve-dies-after-SD class into a build-time failure. Ties to the i126 comprehensive-emulation north star (one faithful layer, every cross-subsystem surprise fails in emulation not first on silicon). Pete 2026-06-25: emulation<->hardware gaps are top priority. Gates the fix-#3 program work (i248).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [docs/notes/hardware-readiness-audit.md, i126]
+
+- id: i250
+  title: "Trinity emulator: make a stuck-BUSY/timeout condition part of the DEFAULT SD test path so an unbounded wait_ready FAILS in emulation (not just opt-in)"
+  description: |
+    EMULATION GAP (docs/notes/hardware-readiness-audit.md). The modelled SD BUSY clears in ~1 poll, so the unbounded wait_ready ('JR wait_ready' forever, encdrv.asm:427) never actually hangs in emulation — only the OPT-IN stuck-BUSY mode (i241) exercises a hang. So a program lacking the bounded busy-wait (fix #5) passes the default host tests yet hangs on a stuck Trinity. Make a stuck-BUSY/timeout condition part of the DEFAULT SD test path so an unbounded wait_ready FAILS in emulation without opting in. Ties to the i126 comprehensive-emulation north star. Pete 2026-06-25: emulation<->hardware gaps are top priority. Gates the fix-#5 program work (i246).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [docs/notes/hardware-readiness-audit.md, i126, i241]
+
+- id: i251
+  title: "Trinity emulator: model the deselect-tail requirement so the 2-step (vs Colin's 4-step) deselect FAILS in emulation"
+  description: |
+    EMULATION GAP (docs/notes/hardware-readiness-audit.md). The SD model accepts the 2-step sdc_deselect (sd_csd.asm:246); real Trinity hardware needs Colin's 4-step deselect tail. Because the emulator accepts the short tail, a program with the wrong deselect (missing fix #6) passes in emulation and mishandles SPI on silicon. Model the deselect-tail requirement so a 2-step (vs 4-step) deselect FAILS a host test — making the wrong-deselect class a build-time failure. Ties to the i126 comprehensive-emulation north star. Pete 2026-06-25: emulation<->hardware gaps are top priority. Gates the fix-#6 program work (i247).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  refs: [docs/notes/hardware-readiness-audit.md, i126]
