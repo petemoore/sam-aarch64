@@ -773,8 +773,16 @@ func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (Call
 		cpu.Step()
 		steps++
 		if cpu.HALT {
-			halted = true
-			break
+			if !cpu.IFF1 {
+				halted = true
+				break
+			}
+			// EI; HALT — waiting for the frame interrupt. On real hardware the
+			// 50 Hz frame INT resumes it; model that so frame-timed delay loops
+			// (e.g. B-DOS init's &AB17) spin out instead of stopping the run.
+			// koron's oopHALT rewinds PC to the HALT opcode, so step past it.
+			cpu.HALT = false
+			cpu.PC++
 		}
 		if steps >= cap {
 			if capIsError {

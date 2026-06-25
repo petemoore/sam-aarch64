@@ -1010,8 +1010,18 @@ func runOn(hw *Hardware, assemblerBin, enctabData, inData []byte, files []NamedF
 			break
 		}
 		if cpu.HALT {
-			exitReason = fmt.Sprintf("HALT at PC=%04X", cpu.PC)
-			break
+			if !cpu.IFF1 {
+				// DI; HALT — the terminal boot-end convention. The assembler
+				// boot ends here.
+				exitReason = fmt.Sprintf("HALT at PC=%04X", cpu.PC)
+				break
+			}
+			// EI; HALT — waiting for the 50 Hz frame interrupt. On real
+			// hardware the frame INT resumes it; model that so frame-timed
+			// delay loops spin out instead of stopping the run. koron's
+			// oopHALT rewinds PC to the HALT opcode, so step past it.
+			cpu.HALT = false
+			cpu.PC++
 		}
 	}
 	if exitReason == "" {
