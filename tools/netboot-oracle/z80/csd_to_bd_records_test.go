@@ -185,6 +185,41 @@ func TestCSDToBDRecordsBoundedOnStuckBusy(t *testing.T) {
 	}
 }
 
+// TestCSDToBDRecordsDeselectTailProper is the i251/fix-#6 gate, run as part of the
+// DEFAULT suite: a real shared-path SD transaction (csd_set_bd_records, which ends
+// in sdc_deselect) must close the card with Colin's proven 4-step deselect tail
+// (&30 / dummy &FF on &DF / &30 / &04), not the old 2-step (&30 / &04) that leaves
+// SPI state a real card mishandles on silicon. The model tracks the ordered close
+// (trackSDClose) and LastSDCloseProper reports whether the proven order ran; this
+// test gates on it. Revert sdc_deselect to the 2-step close and this fails — the
+// revert-the-fix-fails proof that the wrong-deselect class is now a build-time catch
+// (CLAUDE.md rule 7), where before it was observable-but-ungated for this path.
+func TestCSDToBDRecordsDeselectTailProper(t *testing.T) {
+	if _, err := os.Stat(sdCSDBin); err != nil {
+		t.Skipf("sd_csd fixture not built (%s); run `make netboot-sd-csd`", sdCSDBin)
+	}
+	mac, err := z80h.Load(sdCSDBin, sdCSDMap)
+	if err != nil {
+		t.Fatalf("load sd_csd fixture: %v", err)
+	}
+	enc := z80h.NewENC28J60()
+	enc.AttachSD(csdV2(0x001D59))
+	mac.AttachIO(enc)
+
+	if _, err := mac.Call("csd_set_bd_records"); err != nil {
+		t.Fatalf("call csd_set_bd_records: %v", err)
+	}
+
+	proper, observed := enc.LastSDCloseProper()
+	if !observed {
+		t.Fatal("no SD deselect-tail close observed after csd_set_bd_records (the transaction did not deselect the card?)")
+	}
+	if !proper {
+		t.Fatal("SD deselect was not Colin's proven 4-step close (&30 / dummy &DF / &30 / &04) — " +
+			"fix #6 missing, a real card mishandles the SPI tail on silicon")
+	}
+}
+
 // TestCSDToBDRecordsNoCard confirms the safe-decline path: with no SD card
 // configured (the model inert), csd_read_into_stage cannot read a CSD and
 // BD_RECORDS is left 0 — so the picker finds no free record and declines, never a
