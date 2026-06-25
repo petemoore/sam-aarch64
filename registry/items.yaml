@@ -1007,7 +1007,9 @@
 - id: i50
   title: Host Go-tool CLI shape — deferred design question (one binary vs three vs pandoc-style)
   description: |
-    Deferred design question (Pete 2026-06-09): whether host tools stay one format-aware front door (sam-aarch64, auto-detects SA64 magic), revert to three binaries (encode/decode/translate), or adopt pandoc-style --from/--to. Three concerns are already cleanly separated as libraries (aarch64enc / aarch64dec / sam-aarch64-format+frontend); CLI count is a thin presentation choice, orthogonal to the i48 in-memory-only-symbolic-form win. Revisit when bulk GNU→.tbn import and listings host features land. Go tools are Z80-port scaffolding + oracle (memory/project_go_tools_are_z80_scaffolding.md).
+    DECIDED (Pete, 2026-06-25): adopt the pandoc-style --from/--to CLI for the host Go tools (e.g. 'sam-aarch64 --from=asm --to=tbn foo.s'; --from=tbn --to=asm; future --from=gnu --to=tbn). Supersedes the earlier deferral (one front door vs three vs pandoc). Implementation is a thin presentation front-end: the three concerns are ALREADY cleanly separated as libraries (aarch64enc / aarch64dec / sam-aarch64-format+frontend), so this is CLI wiring over existing libs, not new functionality.
+    
+    Scope notes (from a partial 2026-06-25 survey): the current integrated 'sam-aarch64' (tools/sam-aarch64/main.go) modes map onto from/to — assemble src->bin (--from=asm --to=bin/img), assemble .tbn->bin (--from=tbn --to=bin), --render .tbn->text (--from=tbn --to=asm), -E preprocess. Settle the format taxonomy (is 'gnu' distinct from 'asm'? our source IS gnu-syntax; --from=gnu may just alias, OR imply the future bulk GNU->.tbn import which does NOT exist yet — do NOT build that here unless scoped). Keep the existing CI/Makefile/run-*.sh invocations working (they use the current flags — see tools/run-disasm-roundtrip.sh, run-release-gate.sh, Makefile release targets). LOW priority: per memory project_go_tools_are_z80_scaffolding, the Go tools are Z80-port scaffolding + oracle — do not gold-plate; this is a presentation reshape, not a value-add.
   status: OPEN
   kind: leaf
   owner: pete
