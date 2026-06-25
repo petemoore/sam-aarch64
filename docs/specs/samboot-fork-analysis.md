@@ -284,14 +284,20 @@ Tooling lives in `tools/netboot-oracle/z80/fork_trace_analysis_test.go` +
 `fork_consequence_test.go` + `Machine.SetAccessTrace`. The write-ups (which contain
 disassembly of Colin's proprietary ROM) are PRIVATE, under
 `~/sam-archive/samboot-capture/`:
-- `colin-rom-fork-diff.md` — the static 97-byte / 7-region instruction diff.
+- `colin-rom-fork-diff.md` — the static instruction diff (the original 97-byte /
+  7-region count vs the reconstructed baseline; corrected to 140 bytes / 6 regions
+  vs the genuine stock v3.0 in `colin-rom-fork-boot-analysis.md`).
 - `colin-rom-fork-boot-analysis.md` — the boot-execution analysis + reproducible
   tooling + the "still to prove" checklist.
 
 ## Research checklist — the COMPLETE picture (close every item before any flash code)
 
 ROM side:
-- [x] Byte-level diff: exactly 97 bytes in 7 regions, both sides disassembled.
+- [x] Byte-level diff: exactly 140 bytes in 6 functional regions, both sides
+  disassembled, against the genuine stock v3.0 baseline (`rom_stock_v30.bin`). (The
+  earlier "97 bytes / 7 regions" was an undercount taken against a
+  disassembly-reconstructed baseline that was byte-exact only in code regions; the
+  real-baseline figure is 140/6 — see `~/sam-archive/samboot-capture/README.md`.)
 - [x] Boots byte-identical for 873,763 instructions, first fork at `&ED1B`.
 - [x] Removed-at-boot code named (RAINBOW, UTMSG banner, READKEY wait).
 - [x] Added-at-boot code named (probe, fetch, EEPROM reader, bootblock, B-DOS).
