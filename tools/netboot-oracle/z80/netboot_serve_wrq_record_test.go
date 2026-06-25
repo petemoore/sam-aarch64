@@ -1060,3 +1060,118 @@ func TestServeE2EComputedBDRecordsRecordPush(t *testing.T) {
 	t.Logf("i145d E2E OK: BD_RECORDS=%d COMPUTED from CSD; valid push found+claimed+stored record %d (1600 sectors)",
 		got, wantRecord)
 }
+
+// TestServeDiskPushTrinloadDeployable is the i194 emulation gate for the trinload-
+// pushable "disk-record push" deployable END-TO-END: it loads the SAME binary the
+// morning deploy pushes (netboot_serve_boot.bin — org &8000, entry &8000, the only
+// build carrying the WRQ record-push path behind NETBOOT_HOSTTEST==0), drives a small
+// multi-block .mgt over the REAL serve_serve_once WRQ dispatch into a CLAIMED FREE
+// record (sector writes captured per block), and then drives the i194 clean-exit
+// (sv_exit_to_trinload) and asserts it quiesces the shared &DC controller (the busy-
+// poll milestones execute) and RETs cleanly to trinload's pushed return address.
+//
+// This is what proves the DEPLOYABLE — not a piece of it — does the disk-record push
+// in the model: the binary loaded here is byte-for-byte the one trinpush-serve.py
+// pushes (the Makefile netboot-serve-trinload target IS this binary). Emulation-
+// verified is not hardware-verified (CLAUDE.md §5): the real ENC silicon, the wire
+// `tftp put`, and whether a real PIC resumes chk_trinity after the quiesce stay gated
+// on Pete's Trinity. The clean-exit quiesce is DESIGNED, hardware-unverified — this
+// test proves only that the deselect + bounded busy-poll + settle path EXECUTES and
+// the RET still reaches trinload (it does not strand the SAM on the way out).
+func TestServeDiskPushTrinloadDeployable(t *testing.T) {
+	const records, freeRecord = 8, 4
+	mac, enc, store, _, goRef := loadServeRecordPush(t, records, freeRecord)
+
+	// A small multi-block image: two full 512-byte blocks + a short tail → three DATA
+	// blocks ending short. (The full-record validate→ACK decision is proven by
+	// TestServeWRQRecordPushValidatesFull; the point here is the deployable routes a
+	// pushed image into a FREE record over the real WRQ dispatch, then exits cleanly.)
+	const blksize = 512
+	img := make([]byte, 2*blksize+128)
+	for i := range img {
+		img[i] = byte(i*17 + 3)
+	}
+
+	// 1. Bare WRQ (`tftp put` default) → ACK-0; the free record is claimed + armed.
+	wrq := demoWRQ("morning.mgt", nil)
+	eqFrame(t, "deployable WRQ → ACK-0", serveDemo(t, mac, enc, wrq), goRef.OnFrame(wrq))
+	if active := mac.Read(symAddr(t, mac, "WRQ_RECV_ACTIVE"), 1)[0]; active != 1 {
+		t.Fatalf("WRQ_RECV_ACTIVE = %d after the WRQ, want 1 (the push must arm against the free record)", active)
+	}
+
+	// 2. DATA blocks 1..N → an ACK per block; the body streams into the claimed record.
+	block := uint16(1)
+	for off := 0; off < len(img); off += blksize {
+		end := off + blksize
+		if end > len(img) {
+			end = len(img)
+		}
+		dataFrame := demoData(block, img[off:end])
+		eqFrame(t, "deployable DATA → reply", serveDemo(t, mac, enc, dataFrame), goRef.OnFrame(dataFrame))
+		block++
+	}
+
+	// The body landed in the CLAIMED FREE record (record 4), sector by sector — the
+	// disk-record push the deployable exists to do.
+	z80Writes := store.SectorWrites()
+	assertRecordSectors(t, z80Writes, img, freeRecord)
+	for _, w := range z80Writes {
+		if w.Record != freeRecord {
+			t.Fatalf("a sector targeted record %d, not the claimed FREE record %d", w.Record, freeRecord)
+		}
+	}
+
+	// 3. The i194 CLEAN EXIT: drive sv_exit_to_trinload (the single RET-to-trinload
+	// point both serve exits jump to). CallEntry pushes the HALT trap as the return
+	// address — exactly how trinload pushes its `start` — so a clean RET lands on the
+	// trap (res.Halted). A Trace records the quiesce milestones so we can assert the
+	// &DC deselect + bounded BUSY-poll actually executed before the RET (not skipped).
+	visited := map[string]bool{}
+	milestones := map[uint16]string{}
+	for _, n := range []string{"sv_exit_to_trinload", "sv_q_busy", "sv_q_settled", "sv_q_settle"} {
+		if a, err := mac.Sym(n); err == nil {
+			milestones[a] = n
+		}
+	}
+	if _, ok := milestonesHas(milestones, "sv_exit_to_trinload"); !ok {
+		t.Fatal("sv_exit_to_trinload symbol absent — the i194 quiesce exit is not in the binary")
+	}
+	res, err := mac.CallEntry("sv_exit_to_trinload", z80h.Entry{
+		StepCap: 1_000_000, // a healthy controller clears BUSY in ~1 poll; the cap only bounds a stuck one
+		Trace: func(pc uint16) {
+			if n, ok := milestones[pc]; ok {
+				visited[n] = true
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallEntry sv_exit_to_trinload: %v", err)
+	}
+	// (a) It RETd cleanly to trinload's pushed return address (landed on the HALT trap).
+	if !res.Halted {
+		t.Fatalf("sv_exit_to_trinload did not RET (PC=&%04X steps=%d) — the quiesce never reached trinload; "+
+			"a stuck busy-poll would strand the SAM on exit", res.PC, res.Steps)
+	}
+	// (b) The quiesce path executed: the &DC busy-poll loop and the settle ran. With
+	// the model's BUSY raised by the deselect OUT, the first IN &DC reads BUSY set, so
+	// the loop body (sv_q_busy) runs before it clears, then sv_q_settled/settle run.
+	if !visited["sv_q_busy"] {
+		t.Error("sv_q_busy was never visited — the &DC BUSY-poll did not run (the quiesce was skipped)")
+	}
+	if !visited["sv_q_settled"] && !visited["sv_q_settle"] {
+		t.Error("neither sv_q_settled nor sv_q_settle was visited — the post-deselect settle did not run")
+	}
+	t.Logf("i194 deployable OK: pushed %d-byte .mgt → %d sectors into FREE record %d; "+
+		"sv_exit_to_trinload quiesced &DC + RET to trinload in %d steps (clean exit DESIGNED, hardware-unverified)",
+		len(img), len(z80Writes), freeRecord, res.Steps)
+}
+
+// milestonesHas reports whether the milestone map contains the named symbol.
+func milestonesHas(m map[uint16]string, name string) (uint16, bool) {
+	for a, n := range m {
+		if n == name {
+			return a, true
+		}
+	}
+	return 0, false
+}
