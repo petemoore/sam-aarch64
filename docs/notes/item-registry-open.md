@@ -121,7 +121,6 @@ first-class columns. The generated `.md` files are views of `registry/items.yaml
 | <a id="i133"></a>**i133** | **Self-service autonomous hardware testing via trinload** — With trinload on SAM (recs 3/128) + control returning between programs (i132), run unattended experiments: push a program via trinload3.py, it runs+RETs, push the next; feedback via tcpdump + a net result channel. PRIORITIZED to top (Pete 2026-06-20): the crux is whether we can BOOTSTRAP our own code from EEPROM / Trinity storage WITHOUT a human typing BOOT or picking a record — if a power-cycled SAM auto-starts a service that boots a pushed image, hardware testing goes fully autonomous (no Pete). The sooner we build it, the sooner we know. Auto-boot = i135; i172 audits dependents. | OPEN | agent | ⏳ i266 |  | i135, i121a, i122, [i266](#i266) | [i118b](#i118b), [i143](#i143), [i152](#i152), [i70](#i70), [i88c](#i88c), [i93b](#i93b) | ~/git/trinload/test/trinload.py, src/netboot/, i132, i127 |
 | <a id="i143"></a>**i143** | **bdos_picker: hardware MODE-2 blit for picker_render (follow-up from i119d)** — picker_render in src/netboot/bdos_picker.asm is a stub ret (all decision/show-name/confirm logic is host-verified in i119d). This item wires the actual SAM MODE-2 screen blit so the picker display is visible on real hardware. Depends on i119d being merged. | OPEN | agent | ⏳ i133 |  | i119d, [i133](#i133) |  |  |
 | <a id="i152"></a>**i152** | **Verify the A=drive-register contract for HRSAD/HWSAD raw-sector hooks on real Trinity** — bdos_read_sector (HRSAD, i119) and bdos_write_sector (HWSAD, i114c) both leave A = the sector value at the rst 8, but the B-DOS hook code reads A as the drive number (bdos15a.src.txt rwsad/xsad: LD A,(hk.a)). After HRECORD-select a Trinity record presents as drive 2. The koron-go harness models the selected record via HRECORD and ignores A, so it cannot catch a wrong-drive bug. Confirm on real Trinity whether these hooks need A explicitly set (e.g. A=2 or A=record) or whether HRECORD makes the record the active context regardless of A; fix both routines symmetrically if needed. | OPEN | agent | ⏳ i133 |  | [i133](#i133) |  | src/netboot/bdos_seam.asm, reference/bdos/bdos15a.src.txt, [i119](#i119), i114c |
-| <a id="i160"></a>**i160** | **Tree-view preview at the bottom of the registry .md docs** — Append a visual tree view (umbrellas → children → bricks) to item-registry-open.md / item-registry-closed.md / backlog.md, below the full table, so the hierarchy is visible at a glance. Derive from the parent edges in gen.go. Pete request 2026-06-20 (the corrupted '#3'). | OPEN | agent | ready |  |  |  |  |
 | <a id="i162"></a>**i162** | **Version-control ~/bin agent tools in a private ~/git/claude-tools repo** — From q33 (Pete: yes, private). Create ~/git/claude-tools, move the ~/bin agent tools in (claude-chat-export incl. the i155 fix, claude-diary helpers, claude-chat-export SessionEnd hook target, etc.), scrub anything private/secret, push to github.com/petemoore/claude-tools as a PRIVATE repo (Pete can make public later). Gives the tools backup + history. | OPEN | agent | ready |  |  |  |  |
 | <a id="i168"></a>**i168** | **Future: import a full source file into the editor (fail-with-line-number on bad line)** — Future feature (q24, Pete 2026-06-20). The SAM editor accepts ONE LINE AT A TIME (parsed/validated on entry) — no whole-file import today. If/when import is added: on a bad line, fail and report the line number + the error; the user fixes the source and retries (Pete's preferred behaviour). Gated on the editor groundwork (depends i3) — a normal backlog item, not part of current editor specs. | OPEN | agent | ⏳ i3 |  | [i3](#i3) |  |  |
 | <a id="i172"></a>**i172** | **Audit i133's dependents: reclassify presence-gated ones as 'needs Pete' (or push i133 up)** — i133-dependents audit (Pete 2026-06-20): i133 (automate SAM testing via trinload) gates i118b, i135, i141, i143, i145, i152, i70, i88c, i93b — but many likely only need Pete PHYSICALLY PRESENT (a key-press / hardware action), not the full automation. Per the needs-Pete model (i169): go through each; for those that only need Pete present, mark owner:pete (needs-pete) + drop the i133 dep. Alternatively push i133 near the top so when it lands we verify it truly unblocks them. Depends on i169. | OPEN | agent | ready |  | i169a |  |  |
@@ -144,3 +143,57 @@ first-class columns. The generated `.md` files are views of `registry/items.yaml
 | <a id="i264b"></a>**i264b** | **Record picker UI (Increment 2): list available records, select by number/name, persist the SAMBOOT Config chunk** — Increment 2 of i264 (Increment 1 = i264a, the config-driven boot + ESC escape, is DONE). When ESC is held at boot (the i264a hook currently goes to the opening screen -> BASIC), instead launch a RECORD-PICKER: read the on-card Trinity record list (trinity_storage_shared_resource: list sectors, 16-byte entries, name + free-detection; bdos_seam.asm/bdos_picker.asm have on-SAM code to port/trim), display records by number + name, let the user select one (by number OR name), and PERSIST the choice to the 'SAMBOOT Config' EEPROM chunk (version=1, mode=1, recLo/recHi) via the EEPROM write path (write_index + write_chunk, currently gated out of the bootblock build) so subsequent power-ons auto-boot it. Budget: the bootblock chunk has ~250 free bytes — the picker UI may need to live in a B-DOS-resident scratch page after &805F, or boot a dedicated setup record, rather than in-chunk (design fork to resolve). Develop + emulation-verify in netboot-oracle (the EEPROM write model i221 + CardModel record list both exist). Hardware flash/test gated on i266 (TAPO)/Pete. | OPEN | agent | ready |  |  |  |  |
 | <a id="i265"></a>**i265** | **Delete the superseded in-repo SAMBOOT splice/inject apparatus (samboot_bootblock/config + splice diagnostics) now the forked bootloader supersedes it** — q55 (2026-06-26) abandoned the in-repo splice-into-captured-bootblock approach (i259/i260/i261 WONTFIX) for the private forked bootloader (trinity-autoboot). The in-repo apparatus it leaves behind — src/netboot/samboot_bootblock.asm, samboot_config.asm, the splice-inject diagnostics (samboot_inject_fullboot_test.go and the splicedDeviceEEPROM/loadInjectBlob helpers) and related Makefile/CI wiring — is now superseded dead code (emulation-only, harmless, but hygiene debt per CLAUDE.md doc-lifecycle). Audit what is genuinely unused (some helpers like deviceLinearEEPROM / loadRealCaptures are shared with the still-valid real-boot tests — keep those), then delete the splice-only parts in a focused PR. Preserve the RE findings (the register-clobbering proof, &805F->&40A1) in git history / the trinity-autoboot DESIGN.md before deleting. | OPEN | agent | ready |  |  |  |  |
 | <a id="i266"></a>**i266** | **Install TAPO smart-plug for autonomous SAM power-cycling (enables agent-run hardware sessions)** — Pete (2026-06-26) is installing a TAPO smart-plug in the next few days so the agent can power-cycle the SAM remotely and recover to trinload during hardware tests. This is the enabler for AUTONOMOUS real-hardware sessions (push/flash/test without Pete physically present): until it lands, every real-hardware task that needs a power-cycle or recovery is gated on Pete being present. Gates the hardware halves of i194 (stream .mgt -> Trinity records) and i264 (selector-firmware flash/test), and any future agent-run hardware work. owner:pete = Pete installs it; once done, set DONE and the gated hardware tasks unblock. | OPEN | pete | 👤 pete |  |  | [i133](#i133), [i194](#i194) |  |
+
+## Tree view — umbrella hierarchy
+
+- [i3](#i3) — `OPEN` — Editor groundwork (Phase 2) — full vision
+  - [i43](#i43) — `OPEN` — Editor: register simulator with user-chosen seeds + replay-on-edit
+  - [i44](#i44) — `OPEN` — Editor: inline instruction-explanation panel (prose semantics, flags, regs, bit-field layout)
+  - [i45](#i45) — `OPEN` — Editor: 'did you mean a simpler instruction?' result-equivalent rewrite hint
+  - [i46](#i46) — `OPEN` — Editor: system-register documentation panel (ARM MRA subset + editorial overlay)
+  - [i47](#i47) — `OPEN` — Editor: inverse-flow navigation + retro UI affordances (chiptune, period fonts, animations)
+- [i25](#i25) — `OPEN` — File-I/O error handler via DOSER (&5BC0)
+  - [i25b](#i25b) — `OPEN` — SAM-side DOSER (&5BC0) file-I/O error handler (port COMET)
+- [i27](#i27) — `OPEN` — Cortex-A53 errata workarounds (--fix-cortex-a53-*)
+  - [i27b](#i27b) — `OPEN` — i27b: Z80 port — Cortex-A53 835769 NOP insertion
+  - [i27c](#i27c) — `OPEN` — i27c: Z80 port — Cortex-A53 843419 ADRP->ADR rewrite + SAM enable/disable toggle
+- [i41](#i41) — `OPEN` — Editor edit-buffer data structure — insertion performance for large source
+  - [i41e](#i41e) — `OPEN` — Editor edit-model — i48-IR record payload + document symbol table + hybrid record model
+- [i48](#i48) — `OPEN` — Single serialized format + pass-free syntactic encoder (the design)
+  - [i48c](#i48c) — `OPEN` — Z80 text→overlay encoder (editor input path)
+    - [i39c](#i39c) — `OPEN` — Phase 3 — bitfield-packing polish on the overlay slot bytes
+    - [i48c-b8](#i48c-b8) — `OPEN` — Integration/fixture round-trip (assembler-coupled, lands last)
+      - [i48c-b8c](#i48c-b8c) — `OPEN` — Z80 serialize: headerRows + WriteFile -> compact v2 .tbn bytes
+      - [i48c-b8d](#i48c-b8d) — `OPEN` — Corpus round-trip integration: text -> compact .tbn on SAM byte-matches host (+optionally assemble to OUT)
+      - [i48c-b8e](#i48c-b8e) — `OPEN` — Compact encoder adapter: literal-probe + overlay-patch emission (paged, needs ENCTAB)
+- [i81](#i81) — `OPEN` — Upstream SimCoupé issue triage — review open issues and assist where we can
+  - [i81a](#i81a) — `OPEN` — PNG-endian one-line upstream SimCoupé PR: the __aarch64__ little-endian-guard fix in Base/SimCoupe.h
+  - [i81c](#i81c) — `OPEN` — Optionally offer the SDL dummy-driver headless renderer fallback upstream
+- [i88](#i88) — `OPEN` — On-SAM HTTPS/TLS-1.3 client to fetch Pi firmware directly from GitHub
+  - [i88c](#i88c) — `OPEN` — i88 6b — hardware-gated integration: wire tls_reasm into tcp_conn, paging layout, bootable disk, real RST 8 on Trinity
+- [i89](#i89) — `OPEN` — Capture a Pi 3 netboot exchange (Phase-3) — extend i83/i86 oracle to the older Pi family
+  - [i89b](#i89b) — `OPEN` — Capture a real Pi 3 netboot exchange + generate Pi 3 golden wire vectors
+- [i93](#i93) — `OPEN` — Phase-3 netboot B-DOS storage seam (bdos_seam.asm) — name-to-record glue
+  - [i93b](#i93b) — `OPEN` — B-DOS RST 8 hook dispatch on real Trinity — hardware-gated (HGTHD/HLOAD/HSAVE/HRECORD)
+- [i95](#i95) — `OPEN` — Phase-3 netboot integrated server — single dispatch loop (ARP+DHCP+TFTP)
+  - [i95b](#i95b) — `OPEN` — End-to-end Pi boot on real Trinity — hardware-gated: DHCP + B-DOS provisioning + real Pi boot
+- [i100](#i100) — `OPEN` — Firmware-download provisioning UX — user-selectable revision and file subset
+  - [i100c](#i100c) — `OPEN` — Picker UX — user-facing revision/file-selection interface for the firmware downloader
+- [i117](#i117) — `OPEN` — Extract sam-aarch64 learnings into a reusable open-source autonomous Claude project framework
+  - [i117a](#i117a) — `OPEN` — Prior-art survey: existing Claude Code autonomous-orchestration plugins/frameworks vs i117
+- [i118](#i118) — `OPEN` — i82 TFTP client — OACK handling / standard-TFTP-server interop
+  - [i118b](#i118b) — `OPEN` — hardware verification — OACK path on real Trinity hardware
+- [i119](#i119) — `OPEN` — i82 TFTP client — persistence write-out on real hardware
+  - [i143](#i143) — `OPEN` — bdos_picker: hardware MODE-2 blit for picker_render (follow-up from i119d)
+- [i120](#i120) — `OPEN` — Windowed TFTP (RFC 7440) for the netboot client/server — throughput optimization
+  - [i120b](#i120b) — `OPEN` — Port windowed TFTP to the Z80 client (i82) + server (i83/i95) and re-add windowsize to ClientOptionSet
+- [i121](#i121) — `OPEN` — SAM TFTP server — WRQ (write / accept-in) support: push disk images to the SAM, auto-slotted
+  - [i121c](#i121c) — `OPEN` — WRQ auto-slot + write-out (write-to-free-only)
+  - [i121i](#i121i) — `OPEN` — .mgt bootable server-disk vessel + BASIC loader that appends the same config block
+  - [i121j](#i121j) — `OPEN` — SAM-side interactive strategy prompt when config is undefined (deferred)
+- [i123](#i123) — `OPEN` — Investigate migrating the build from make to tup
+  - [i123b](#i123b) — `OPEN` — Perform the make->tup build migration (Pete-greenlit)
+- [i204](#i204) — `OPEN` — i48c-b8e-4: overlayClassify + literalWord (overlay mirror + PC-invariance probe)
+  - [i204b](#i204b) — `OPEN` — i48c-b8e-4b: overlay_classify + literal_word + compact_inst (Z80 port + boot self-test)
+- [i264](#i264) — `OPEN` — SAMBOOT selector firmware: hold-key-at-boot launches a record picker (choose boot record by number/name) instead of hardcoded record 3
+  - [i264b](#i264b) — `OPEN` — Record picker UI (Increment 2): list available records, select by number/name, persist the SAMBOOT Config chunk

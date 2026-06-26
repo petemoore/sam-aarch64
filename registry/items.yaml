@@ -3304,9 +3304,11 @@
   title: Tree-view preview at the bottom of the registry .md docs
   description: |
     Append a visual tree view (umbrellas → children → bricks) to item-registry-open.md / item-registry-closed.md / backlog.md, below the full table, so the hierarchy is visible at a glance. Derive from the parent edges in gen.go. Pete request 2026-06-20 (the corrupted '#3').
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 691, role: completing}
 
 - id: i161
   title: "Research CIIP (Z80 TCP/IP stack): locate source, assess license + portability"
