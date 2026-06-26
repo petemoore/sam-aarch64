@@ -4664,9 +4664,11 @@
   title: "Network debug channel: SAM netboot programs report state over UDP/TFTP (agent-readable) instead of RST &10 screen"
   description: |
     For autonomous hardware debugging, instrument the SAM netboot programs to report progress/state over the network — a UDP status channel, or reuse the already-working TFTP error-reply path — that the AGENT reads itself (tcpdump or a small listener), replacing RST &10 screen dumps that only a present human can see (the i270 debug bottleneck). RRQ already proves the SAM TXes UDP fine on real hardware, so the TX path exists; use it for step-markers through a handler (e.g. localise WITHIN the WRQ/SD-write path for i270). Pairs with i266 (TAPO power-cycle) + the agent-autonomy host setup as the trio that makes hardware sessions self-service. Not a hard blocker for i270/i194 (those can be verified Pete-present via tcpdump), but it is what makes that verify loop autonomous.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 716, role: completing}
 
 - id: i272
   title: "Agent hardware-session autonomy: passwordless tcpdump/arping + safe-command allowlist so the agent runs captures/probes itself"

@@ -88,8 +88,15 @@ func sdSlotName(sd *z80h.SDCard, listSec, n int) string {
 // bdos_find_free_record will return (set up as the only free slot among `records`);
 // pass freeRecord == 0 to drive the no-free-record case (every record named).
 func loadServeRecordPush(t *testing.T, records, freeRecord int) (*z80h.Machine, *z80h.ENC28J60, *z80h.BDOSStore, *z80h.SDCard, *serve.Responder) {
+	return loadServeRecordPushBin(t, serveBootBin, serveBootMap, records, freeRecord)
+}
+
+// loadServeRecordPushBin is loadServeRecordPush parameterized by binary path, so a
+// variant build (e.g. the i271 NETBOOT_DEBUG serve, netboot_serve_dbg_test.go) can
+// reuse the identical SD + BDOS + record-list setup.
+func loadServeRecordPushBin(t *testing.T, bin, mapf string, records, freeRecord int) (*z80h.Machine, *z80h.ENC28J60, *z80h.BDOSStore, *z80h.SDCard, *serve.Responder) {
 	t.Helper()
-	mac, err := z80h.Load(serveBootBin, serveBootMap)
+	mac, err := z80h.Load(bin, mapf)
 	if err != nil {
 		t.Fatalf("serve boot binary not built (%v); run `make netboot-serve-boot`", err)
 	}

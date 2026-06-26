@@ -395,6 +395,10 @@ rrq_oack:
 ; and just accumulates into WRQ_STAGING, ACKing the final block (no store), unchanged.
 ; ===========================================================================
 handle_wrq:
+                if defined(NETBOOT_DEBUG)
+                ld      a, DBG_WRQ_ENTRY
+                call    dbg_marker
+                endif
                 ; learn the client endpoint (same pattern as handle_rrq).
                 ld      hl, RXBUF + RX_ETH_SRCMAC
                 ld      de, CLIENT_MAC
@@ -423,6 +427,10 @@ handle_wrq:
                 jr      nc, wrq_not_done
                 ld      a, 1
                 ld      (XFER_STOP_REQUESTED), a
+                if defined(NETBOOT_DEBUG)
+                ld      a, DBG_DONE_CTRL
+                call    dbg_marker
+                endif
                 call    build_ack0             ; courtesy ACK-0 (packet at TBUF, BC = 4)
                 jp      srv_send_tbuf          ; reply, then return; no claim, no arm
 wrq_not_done:
@@ -449,6 +457,10 @@ wrq_class_done:
                 ; no free record: ERROR(3, "no free record"), do not arm. The finder's
                 ; CMD17 list reads disturbed the ENC; re-arm before the ERROR reply TX.
                 call    serve_rearm_enc
+                if defined(NETBOOT_DEBUG)
+                ld      a, DBG_WRQ_NOFREE
+                call    dbg_marker
+                endif
                 xor     a
                 ld      (ERR_CODE), a
                 ld      a, 3
@@ -478,9 +490,17 @@ wrq_armed:
                 ; the record), each disturbing the shared one-PIC Trinity controller's
                 ; ENC RX state. Re-arm before the handshake reply's ENC TX (i244).
                 call    serve_rearm_enc
+                if defined(NETBOOT_DEBUG)
+                ld      a, DBG_WRQ_CLAIMED
+                call    dbg_marker
+                endif
                 endif
 
 wrq_handshake:
+                if defined(NETBOOT_DEBUG)
+                ld      a, DBG_WRQ_HANDSHAKE
+                call    dbg_marker
+                endif
                 ; bare WRQ? (no options: PARSE_OPT_COUNT == 0)
                 ld      bc, (PARSE_OPT_COUNT)
                 ld      a, b
@@ -779,6 +799,10 @@ handle_data:
                 jp      wd_send_ack            ; ACK block = DE (the received block)
 
 wd_next_block:
+                if defined(NETBOOT_DEBUG)
+                ld      a, DBG_DATA_BLOCK
+                call    dbg_marker
+                endif
                 ; payload length = frame length - (42 + 4 TFTP header)
                 ld      hl, (RX_LEN)
                 ld      de, RX_UDP_PAYLOAD + 4
@@ -938,6 +962,10 @@ wd_send_ack:
 ; on mismatch" intent in TFTP-push form. Mirrors netboot_client.asm client_finalize
 ; (the store+validate half; the boot half is i122c, not this push path).
 wd_finalize:
+                if defined(NETBOOT_DEBUG)
+                ld      a, DBG_FINALIZE
+                call    dbg_marker
+                endif
                 call    raw_record_sink_finish ; flush any final partial sector
 
                 ; size = RRS_TOTAL -> BD_REC_SIZE (32-bit LE).
@@ -974,6 +1002,10 @@ wd_finalize:
                 ld      (BD_CLAIM_NAME_PTR), hl
                 call    bdos_claim_record
 
+                if defined(NETBOOT_DEBUG)
+                ld      a, DBG_FINALIZE_VALID
+                call    dbg_marker
+                endif
                 ; valid: ACK the final block (TFTP success). DE was clobbered by the
                 ; validate + claim paths; reload the just-accepted block (== WRQ_ACKED).
                 ld      de, (WRQ_ACKED)
@@ -984,6 +1016,10 @@ wd_invalid:
                 ; wd_finalize's HRSAD read (+ no claim on the reject path) disturbed the
                 ; ENC; re-arm before the ERROR reply's TX (i244), same as wd_send_ack.
                 call    serve_rearm_enc
+                if defined(NETBOOT_DEBUG)
+                ld      a, DBG_FINALIZE_BAD
+                call    dbg_marker
+                endif
                 xor     a
                 ld      (ERR_CODE), a
                 ld      a, 3
@@ -1800,6 +1836,11 @@ NETBOOT_WANT_CLAIM: equ 1
                 ; The dumper/csd_probe builds (DUMPER=1) include test_report.asm
                 ; themselves, so this serve-only include can't double-define.
                 include "test_report.asm"
+                ; i271 network debug step-markers — additive, only under
+                ; -D NETBOOT_DEBUG (reuses build_udp_frame/drv_write/TR_SRC_* above).
+                if defined(NETBOOT_DEBUG)
+                include "dbg_marker.asm"
+                endif
                 ; i145b CSD-read -> BD_RECORDS (i145b-b2): shipped as a section-D
                 ; overlay. The ~600-byte module places the boot image's tail above
                 ; &BFFF into section D, which is RAM at boot (see the csd_set_bd_records
