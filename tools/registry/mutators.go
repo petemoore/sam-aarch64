@@ -543,6 +543,14 @@ func runAdd(args []string, paths mutatorPaths) {
 
 	applyAndCommit(reg, paths)
 	fmt.Printf("registry: added %s\n", newID)
+	// For item adds, report the resulting ready-queue position so the caller
+	// can see immediately where it landed (i279: make priority self-explanatory).
+	if *space == "items" && paths.priorityYAML != "" {
+		reg2, err := loadReg(paths)
+		if err == nil {
+			reportReadyPosition(reg2, newID)
+		}
+	}
 }
 
 // runSplit implements `split --parent iN --title … [--desc …] [--status …] [--owner …] [--kind …] [--pr N [--role …]] [--dep …]… [--ref …]…`.

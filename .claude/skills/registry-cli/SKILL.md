@@ -46,7 +46,7 @@ must pass before committing. Commit the YAML + regenerated `.md` together.
 - Title: `build/registry set-title --id iNN --title "…"` (items only).
 - Description / question body: `build/registry set-desc --id iNN|qNN --desc "…"`.
   Use set-title/set-desc — **do not hand-edit `items.yaml`/`questions.yaml`** for these
-  (the CLI enforces the ≤120-char title / ≤2000-char desc limits, regenerates the views,
+  (the CLI enforces the ≤200-char title / ≤4096-char desc limits, regenerates the views,
   and runs the dependency guard; a hand-edit bypasses all three).
 - Attach a PR: `build/registry set-pr --id iNN --pr N [--role completing|followup]`.
 
@@ -64,3 +64,17 @@ must pass before committing. Commit the YAML + regenerated `.md` together.
 - `build/registry answer --id qNN` — only after curating every dependent item (apply the
   decision: redefine / split / WONTFIX / spawn follow-ups). The delete-gate blocks the
   answer while anything still depends on the question (the no-information-loss guarantee).
+
+## Priority model — how `ready` ordering works
+
+The priority queue (`registry/priority.yaml`) is a **total order** over all pullable
+(OPEN/IN_PROGRESS non-umbrella) items. `ready` emits a **filtered subset** of that queue:
+(1) only items whose every `depends_on` target is DONE/WONTFIX or absent ("actionable");
+(2) by default `owner:pete` items are **excluded** (needs Pete present to execute) — use
+`--pete-present` to include them first; (3) `IN_PROGRESS` items are excluded (see
+`in-progress`). The topological repair pass auto-adjusts rank so every item appears after
+its in-queue dependencies, so `prioritize --to-top` places an item **first among
+agent-actionable items only when it has no in-queue prerequisites**; otherwise it is
+pulled just after its last prerequisite. After `add`, `prioritize`, and `move`, the CLI
+reports the **resulting ready-position + reasons** automatically — trust that output,
+never reverse-engineer the source.

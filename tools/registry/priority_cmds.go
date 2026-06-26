@@ -287,6 +287,11 @@ func runPrioritize(args []string, paths mutatorPaths) {
 
 	applyPriorityChange(reg, newOrder, paths)
 	fmt.Printf("registry: moved %s to rank 1\n", *id)
+	// Re-load to see the post-topo-repair order, then report the resulting ready position.
+	reg2, err := loadReg(paths)
+	if err == nil {
+		reportReadyPosition(reg2, *id)
+	}
 }
 
 // runMove implements `move --id iN --before iM` and `move --id iN --after iM`:
@@ -361,6 +366,11 @@ func runMove(args []string, paths mutatorPaths) {
 	} else {
 		fmt.Printf("registry: moved %s after %s\n", *id, *after)
 	}
+	// Re-load to see the post-topo-repair order, then report the resulting ready position.
+	reg2, err := loadReg(paths)
+	if err == nil {
+		reportReadyPosition(reg2, *id)
+	}
 }
 
 // applyPriorityChange validates the new priority order, writes priority.yaml,
@@ -394,4 +404,221 @@ func applyPriorityChange(reg *Registry, newOrder []string, paths mutatorPaths) {
 	// Re-load with the new priority and regenerate all views.
 	reg.Priority = newOrder
 	genToOutDirOrStdout(reg, paths)
+}
+
+// reportReadyPosition prints a self-explanatory position summary for id after
+// an add or prioritize operation. It shows the item's ready-queue rank and
+// explains why any items appear above it (owner:pete items, dep-blocked items).
+// This prevents agents from wondering "why isn't my item at position 1?" and
+// spelunking the source — the output tells them exactly where they are and why.
+//
+// Priority model (one paragraph for agents):
+// The priority queue (registry/priority.yaml) is a total order over all pullable
+// (OPEN/IN_PROGRESS non-umbrella) items. `ready` emits a FILTERED SUBSET of that
+// queue: (1) items whose every depends_on target is DONE/WONTFIX or absent are
+// "actionable"; (2) by default owner:pete items are excluded (needs Pete present
+// to execute) — use --pete-present to include them; (3) IN_PROGRESS items are
+// excluded (already being worked, see `in-progress`). The topological repair pass
+// auto-adjusts rank so every item appears after its in-queue dependencies, so
+// `prioritize --to-top` puts an item first among agent-actionable items ONLY when
+// it has no in-queue prerequisites; otherwise it is pulled just after its last
+// prerequisite. After any add/prioritize, this function reports the resulting
+// ready-queue rank so you never have to guess.
+func reportReadyPosition(reg *Registry, id string) {
+	// Build data structures for the ready computation.
+	itemStatus := map[string]Status{}
+	itemKind := map[string]string{}
+	itemOwner := map[string]string{}
+	for _, it := range reg.Items {
+		itemStatus[it.ID] = it.Status
+		itemKind[it.ID] = it.Kind
+		itemOwner[it.ID] = it.Owner
+	}
+	questionIDs := map[string]bool{}
+	for _, q := range reg.Questions {
+		questionIDs[q.ID] = true
+	}
+	pullable := pullableItems(reg.Items)
+
+	depSatisfied := func(depID string) bool {
+		if questionIDs[depID] {
+			return false
+		}
+		st, exists := itemStatus[depID]
+		if !exists {
+			return true
+		}
+		return st == StatusDone || st == StatusWontfix
+	}
+	allDepsSatisfied := func(it Item) bool {
+		for _, dep := range it.DependsOn {
+			if !depSatisfied(dep) {
+				return false
+			}
+		}
+		return true
+	}
+
+	byID := map[string]Item{}
+	for _, it := range reg.Items {
+		byID[it.ID] = it
+	}
+
+	// Compute the order (priority list or canonical sort).
+	var order []string
+	if len(reg.Priority) > 0 {
+		order = reg.Priority
+	} else {
+		for _, it := range sortedItems(reg.Items) {
+			order = append(order, it.ID)
+		}
+	}
+
+	// Walk the order, partitioning into the ready categories and counting.
+	type reasonedItem struct {
+		id     string
+		reason string // why it's above the target
+	}
+	var abovePete, aboveAgent []reasonedItem
+	targetReadyPos := -1
+	totalReady := 0
+	inQueuePos := -1
+	for qPos, qid := range order {
+		it, ok := byID[qid]
+		if !ok {
+			continue
+		}
+		if qid == id {
+			inQueuePos = qPos
+		}
+		if !pullable[qid] || it.Status == StatusInProgress {
+			continue
+		}
+		if !allDepsSatisfied(it) {
+			continue
+		}
+		// This item is ready (agent or pete).
+		if it.Owner == "pete" {
+			if qid == id {
+				targetReadyPos = totalReady + 1
+			}
+			totalReady++
+			if targetReadyPos == -1 {
+				abovePete = append(abovePete, reasonedItem{id: qid, reason: "owner:pete"})
+			}
+		} else {
+			if qid == id {
+				targetReadyPos = totalReady + 1
+			}
+			totalReady++
+			if targetReadyPos == -1 {
+				aboveAgent = append(aboveAgent, reasonedItem{id: qid, reason: "agent-actionable"})
+			}
+		}
+	}
+
+	// Count dep-blocked items above us in the queue.
+	blockedAbove := 0
+	if inQueuePos >= 0 {
+		for _, qid := range order[:inQueuePos] {
+			it, ok := byID[qid]
+			if !ok || !pullable[qid] || it.Status == StatusInProgress {
+				continue
+			}
+			if !allDepsSatisfied(it) {
+				blockedAbove++
+			}
+		}
+	}
+
+	// Build the explanation.
+	if targetReadyPos == -1 {
+		// The item is not in the ready set (blocked or not pullable).
+		it, ok := byID[id]
+		if !ok {
+			fmt.Printf("registry: %s: not found in registry\n", id)
+			return
+		}
+		if !pullable[id] {
+			fmt.Printf("registry: %s is not pullable (status:%s kind:%s) — it does not appear in `ready`\n",
+				id, it.Status, it.Kind)
+			return
+		}
+		if it.Status == StatusInProgress {
+			fmt.Printf("registry: %s is IN_PROGRESS — it does not appear in `ready` (see `in-progress`)\n", id)
+			return
+		}
+		// Find which deps are unsatisfied.
+		var unsatisfied []string
+		for _, dep := range it.DependsOn {
+			if !depSatisfied(dep) {
+				unsatisfied = append(unsatisfied, dep)
+			}
+		}
+		fmt.Printf("registry: %s is dependency-blocked (unsatisfied: %v) — it does not appear in `ready`\n",
+			id, unsatisfied)
+		return
+	}
+
+	// Build the position line.
+	var parts []string
+	if len(abovePete) > 0 {
+		ids := make([]string, len(abovePete))
+		for i, r := range abovePete {
+			ids[i] = r.id
+		}
+		parts = append(parts, fmt.Sprintf("owner:pete items (%s) shown first when pete-present", joinIDs(ids)))
+	}
+	if blockedAbove > 0 {
+		parts = append(parts, fmt.Sprintf("%d dep-blocked item(s) hidden above it in the raw queue", blockedAbove))
+	}
+
+	agentPos := targetReadyPos - len(abovePete)
+	if it, ok := byID[id]; ok && it.Owner != "pete" {
+		// Report agent-queue position specifically.
+		agentReady := totalReady - len(abovePete)
+		if len(parts) == 0 {
+			fmt.Printf("registry: %s is at ready-position %d of %d (top agent-actionable item)\n",
+				id, agentPos, agentReady)
+		} else {
+			fmt.Printf("registry: %s is at ready-position %d of %d: %s\n",
+				id, agentPos, agentReady, joinParts(parts))
+		}
+	} else {
+		// Pete item.
+		if len(parts) == 0 {
+			fmt.Printf("registry: %s is at ready-position %d of %d (pete-present queue)\n",
+				id, targetReadyPos, totalReady)
+		} else {
+			fmt.Printf("registry: %s is at ready-position %d of %d: %s\n",
+				id, targetReadyPos, totalReady, joinParts(parts))
+		}
+	}
+}
+
+// joinIDs formats a slice of ids as "i1, i2, i3" (comma-separated).
+func joinIDs(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	result := ids[0]
+	for _, id := range ids[1:] {
+		result += ", " + id
+	}
+	return result
+}
+
+// joinParts formats the explanation parts into a readable sentence.
+func joinParts(parts []string) string {
+	if len(parts) == 0 {
+		return ""
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	result := parts[0]
+	for _, p := range parts[1:] {
+		result += "; " + p
+	}
+	return result
 }

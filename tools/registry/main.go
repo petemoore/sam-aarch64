@@ -169,6 +169,18 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] set-pr   --id iN --pr N [--role completing|followup]")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] dep      add|rm --id iN --on iM|qN")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] answer   --id qN")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Priority model (one paragraph):")
+	fmt.Fprintln(os.Stderr, "  The priority queue (registry/priority.yaml) is a total order over all pullable")
+	fmt.Fprintln(os.Stderr, "  (OPEN/IN_PROGRESS non-umbrella) items. `ready` emits a FILTERED SUBSET of that")
+	fmt.Fprintln(os.Stderr, "  queue: (1) items whose every depends_on target is DONE/WONTFIX or absent are")
+	fmt.Fprintln(os.Stderr, "  actionable; (2) by default owner:pete items are excluded (needs Pete present)")
+	fmt.Fprintln(os.Stderr, "  — use --pete-present to include them; (3) IN_PROGRESS items are excluded.")
+	fmt.Fprintln(os.Stderr, "  The topological repair pass auto-adjusts rank so every item appears after its")
+	fmt.Fprintln(os.Stderr, "  in-queue dependencies, so `prioritize --to-top` places an item first among")
+	fmt.Fprintln(os.Stderr, "  agent-actionable items ONLY when it has no in-queue prerequisites; otherwise")
+	fmt.Fprintln(os.Stderr, "  it is pulled just after its last prerequisite. After add/prioritize/move,")
+	fmt.Fprintln(os.Stderr, "  the tool reports the resulting ready-position + reasons automatically.")
 }
 
 // defaultMutatorPaths resolves where the registry CLI reads and writes when run

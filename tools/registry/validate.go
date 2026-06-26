@@ -144,7 +144,7 @@ func validate(reg *Registry) *ValidationError {
 //     must be "completing" or "followup".
 //  6. Umbrella carries no prs. DONE-umbrella coherence: all children DONE/WONTFIX.
 //     (PR-less DONE leaf is valid; any number of PRs on a DONE leaf is valid.)
-//  8. Bounded description (title <= 200 chars/1 line; description <= 2000 chars/30 lines).
+//  8. Bounded description (title <= 200 chars/1 line; description <= 4096 chars/30 lines).
 //  9. Required-fields-per-status (WONTFIX => reason in description).
 //  10. Id-shaped refs exist in the union. (Deferred when opts.migrating is true.)
 //  11. Dependencies form a DAG: every depends_on target exists; no cycles.
@@ -244,7 +244,7 @@ func validateWith(reg *Registry, opts validateOpts) *ValidationError {
 		// "chars"), so multibyte content (em dashes, accents) is not penalised.
 		// The trailing newline a YAML block scalar appends on round-trip is
 		// trimmed first, so the bound measures content, not the serialization
-		// artifact (an in-memory 2000-char desc stays valid after reload).
+		// artifact (an in-memory 4096-char desc stays valid after reload).
 		if n := utf8.RuneCountInString(it.Title); n > 200 {
 			ve.add(id, fmt.Sprintf("title exceeds 200 chars (%d)", n))
 		}
@@ -252,8 +252,8 @@ func validateWith(reg *Registry, opts validateOpts) *ValidationError {
 			ve.add(id, "title must be single-line")
 		}
 		desc := strings.TrimRight(it.Description, "\n")
-		if n := utf8.RuneCountInString(desc); n > 2000 {
-			ve.add(id, fmt.Sprintf("description exceeds 2000 chars (%d)", n))
+		if n := utf8.RuneCountInString(desc); n > 4096 {
+			ve.add(id, fmt.Sprintf("description exceeds 4096 chars (%d)", n))
 		}
 		if n := strings.Count(desc, "\n"); n >= 30 {
 			ve.add(id, fmt.Sprintf("description exceeds 30 lines (%d newlines)", n))
@@ -406,8 +406,8 @@ func validateWith(reg *Registry, opts validateOpts) *ValidationError {
 
 		// Invariant 8: question body bounded (trailing newline trimmed — see items).
 		body := strings.TrimRight(q.Body, "\n")
-		if n := utf8.RuneCountInString(body); n > 2000 {
-			ve.add(id, fmt.Sprintf("body exceeds 2000 chars (%d)", n))
+		if n := utf8.RuneCountInString(body); n > 4096 {
+			ve.add(id, fmt.Sprintf("body exceeds 4096 chars (%d)", n))
 		}
 		if n := strings.Count(body, "\n"); n >= 30 {
 			ve.add(id, fmt.Sprintf("body exceeds 30 lines (%d newlines)", n))

@@ -275,10 +275,36 @@ func TestValidate_Inv8_TitleAtLimitOK(t *testing.T) {
 func TestValidate_Inv8_DescTooLong(t *testing.T) {
 	reg := &Registry{
 		Items: []Item{
-			{ID: "i1", Title: "ok", Description: strings.Repeat("x", 2001), Status: StatusOpen, Kind: "leaf", Owner: "agent"},
+			{ID: "i1", Title: "ok", Description: strings.Repeat("x", 4097), Status: StatusOpen, Kind: "leaf", Owner: "agent"},
 		},
 	}
-	assertError(t, reg, "i1", "description exceeds 2000 chars")
+	assertError(t, reg, "i1", "description exceeds 4096 chars")
+}
+
+// Invariant 8: description at the new 4096-char limit must pass (i276).
+func TestValidate_Inv8_DescAtNewLimit(t *testing.T) {
+	reg := &Registry{
+		Items: []Item{
+			{ID: "i1", Title: "ok", Description: strings.Repeat("x", 4096), Status: StatusOpen, Kind: "leaf", Owner: "agent"},
+		},
+	}
+	ve := validate(reg)
+	if ve.hasErrors() {
+		t.Fatalf("4096-char description should validate; got:\n%s", strings.Join(ve.msgs, "\n"))
+	}
+}
+
+// Invariant 8: description between old (2000) and new (4096) limit must now pass.
+func TestValidate_Inv8_DescBetweenOldAndNewLimit(t *testing.T) {
+	reg := &Registry{
+		Items: []Item{
+			{ID: "i1", Title: "ok", Description: strings.Repeat("x", 2500), Status: StatusOpen, Kind: "leaf", Owner: "agent"},
+		},
+	}
+	ve := validate(reg)
+	if ve.hasErrors() {
+		t.Fatalf("2500-char description should now validate (new limit is 4096); got:\n%s", strings.Join(ve.msgs, "\n"))
+	}
 }
 
 // Invariant 8: description too many lines.
