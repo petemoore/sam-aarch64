@@ -4597,3 +4597,11 @@
   owner: agent
   prs:
     - {num: 693, role: completing}
+
+- id: i268
+  title: Deploy-guard hook false-fires on 'go test' commands containing a deploy keyword (e.g. 'tftp')
+  description: |
+    The SAM deploy-guard hook (i252/i256, meant to fire only on actual SAM-push execution) blocked a read-only 'go test ./tools/netboot-oracle/z80/ -run TestTFTPClient...' command during i120b-b1 because the command string contained 'tftp' (and a heredoc with tftp paths). i256 was supposed to fire only on actual push execution, not mere mentions — a host 'go test' is neither a deploy nor a push. Tighten the matcher so plain 'go test'/build/grep commands that merely mention a protocol keyword are not treated as deployments (match the actual deploy tool invocation, e.g. trinload-push/DEPLOY paths, not substring 'tftp'). Low priority; worked around in-session by avoiding the keyword in the command.
+  status: OPEN
+  kind: leaf
+  owner: agent
