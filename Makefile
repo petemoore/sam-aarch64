@@ -627,6 +627,34 @@ $(BUILD)/eeprom_roundtrip.bin $(BUILD)/eeprom_roundtrip.map: src/netboot/eeprom_
 
 netboot-eeprom-roundtrip: $(BUILD)/eeprom_roundtrip.bin $(BUILD)/eeprom_roundtrip.map
 
+# gen-bootloader-data — regenerate the embedded bootloader DEFB data from the
+# sibling trinity-autoboot repo's build/bootloader.bin. The output
+# (src/netboot/bootloader_chunk1_data.asm) is GITIGNORED: it holds the private
+# bootloader (Colin's boot block + our patches), kept out of the repo and CI
+# (q55). LOCAL-ONLY — needs ~/git/trinity-autoboot built (`cd ~/git/trinity-autoboot && make`).
+TRINITY_AUTOBOOT ?= $(HOME)/git/trinity-autoboot
+.PHONY: gen-bootloader-data
+gen-bootloader-data:
+	tools/gen-bootloader-data.py $(TRINITY_AUTOBOOT)/build/bootloader.bin src/netboot/bootloader_chunk1_data.asm
+
+# eeprom-flash-chunk1 — flash the trinity-autoboot bootloader into the Trinity
+# EEPROM bootblock (chunk 1) and verify the write (i135c — the first destructive
+# EEPROM write). Reuses the i225/i226 hardware-proven write_chunk path + the
+# test_report SATR primitive. The bootloader bytes are embedded verbatim from the
+# gitignored bootloader_chunk1_data.asm (run `make gen-bootloader-data` first).
+# LOCAL-ONLY: the embedded bootloader is private (q55), so this target and its
+# test (eeprom_flash_chunk1_test.go, SKIP_PRIVATE_TESTS-gated) are NOT in CI.
+$(BUILD)/eeprom_flash_chunk1.bin $(BUILD)/eeprom_flash_chunk1.map: src/netboot/eeprom_flash_chunk1.asm src/netboot/bootloader_chunk1_data.asm src/netboot/build_udp_frame.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/eeprom.asm src/netboot/test_report.asm
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/eeprom_flash_chunk1.bin \
+	    --mapfile=$(BUILD)/eeprom_flash_chunk1.map \
+	    src/netboot/eeprom_flash_chunk1.asm
+	@# org &8000, must fit section C so trinload can push it (push with
+	@# tools/trinload-push/trinload-push.py <sam-ip> build/eeprom_flash_chunk1.bin 1 0x8000).
+	@tools/netboot-boot-fit-check.sh $(BUILD)/eeprom_flash_chunk1.bin 16384 eeprom_flash_chunk1.bin
+
+netboot-eeprom-flash-chunk1: $(BUILD)/eeprom_flash_chunk1.bin $(BUILD)/eeprom_flash_chunk1.map
+
 # port-probe (i228 step A) — a hardware port-characterization probe: INs candidate
 # unmapped ports and reports each value over the network (test_report SATR), to
 # pick a port for runtime emulation-vs-hardware detection. org &8000, trinload-

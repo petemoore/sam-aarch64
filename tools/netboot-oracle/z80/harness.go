@@ -589,6 +589,43 @@ func (mac *Machine) PendingKeys() int {
 	return len(mac.m.keyQueue)
 }
 
+// StubReturn makes a CALL to addr behave as an immediate RET in the screenless
+// harness: when execution reaches addr the return address the CALL pushed is
+// popped and execution resumes there, without running addr's body. It is the
+// CALL-target analogue of AttachPrintRecorder/AttachBDOS — for a ROM display
+// routine (e.g. CLSLOWER &06B5) that a test path reaches but is not exercising:
+// the routine's screen effect is hardware-only (i230), the test verifies the
+// surrounding logic. Registering it is harmless for paths that never reach addr.
+func (mac *Machine) StubReturn(addr uint16) {
+	mac.setRSTHandler(addr, func(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
+		return retAddr
+	})
+}
+
+// ModelReadkey installs a behavioural model of the ROM READKEY routine (&1CB1)
+// for the screenless harness: it consumes one injected key (InjectKeys) and
+// returns it the way the real ROM does — A = key, NZ, CY when a key is queued;
+// A = 0, Z, NC when none. (ROM v3.0 disasm &1CB1: TWOKSC then XOR A / RET for
+// "no key — Z,NC", or KYVL / AND A / SCF for "got key — NZ,CY".) READKEY itself
+// RST-30s into the paged TWOKSC, which the flat core cannot run, so this faithful
+// model lets a WTFK any-key loop (`call &1CB1 / jr z`) terminate in emulation
+// once a key has been injected.
+func (mac *Machine) ModelReadkey() {
+	mac.setRSTHandler(0x1CB1, func(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
+		if len(mac.m.keyQueue) > 0 {
+			cpu.AF.Hi = mac.m.keyQueue[0]            // A = key code
+			mac.m.keyQueue = mac.m.keyQueue[1:]      // consume it
+			cpu.AF.Lo &^= uint8(z80.FlagZ)           // NZ — a key is ready
+			cpu.AF.Lo |= uint8(z80.FlagC)            // CY — "got key"
+		} else {
+			cpu.AF.Hi = 0                            // A = 0
+			cpu.AF.Lo |= uint8(z80.FlagZ)            // Z — no key
+			cpu.AF.Lo &^= uint8(z80.FlagC)           // NC
+		}
+		return retAddr
+	})
+}
+
 // Entry holds the register values a routine reads on entry. The ENC28J60 driver
 // takes HL -> MAC / packet buffer and BC = length (for drv_write); the
 // packet-builder routines read their inputs from memory parameter blocks and

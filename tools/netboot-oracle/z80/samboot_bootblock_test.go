@@ -78,6 +78,11 @@ func runBootblockDecision(t *testing.T, programChunk []byte) bootblockResult {
 	store := z80h.NewBDOSStore()
 	mac.AttachBDOS(store)
 
+	// The auto-boot teardown calls CLSLOWER (&06B5), a ROM display routine the
+	// screenless core cannot run; stub it to a RET. Its lower-screen clear is
+	// hardware-only (i230) — this decision test verifies only config -> dispatch.
+	mac.StubReturn(0x06B5)
+
 	if programChunk != nil {
 		if len(samboot.ChunkName) != 16 {
 			t.Fatalf("samboot.ChunkName %q is %d bytes, want 16", samboot.ChunkName, len(samboot.ChunkName))
@@ -85,10 +90,21 @@ func runBootblockDecision(t *testing.T, programChunk []byte) bootblockResult {
 		enc.ProgramNamedChunk(sambootBootblockChunkValue, samboot.ChunkName, programChunk)
 	}
 
+	// On the no-auto-boot path the inject falls into inject_wtfk and calls READKEY
+	// (&1CB1) — a ROM keyboard routine the screenless core cannot run. Stop the run
+	// the moment PC reaches inject_wtfk: arriving there with no boot captured IS the
+	// no-auto-boot outcome (the wait + teardown are hardware-confirmed, i230). On the
+	// auto-boot path the `jr c` jumps over inject_wtfk to inject_autoboot, so this
+	// StopPC never fires and the run proceeds through the teardown to bdos_boot_record.
+	wtfk, err := mac.Sym("inject_wtfk")
+	if err != nil {
+		t.Fatalf("symbol inject_wtfk not in map: %v", err)
+	}
+
 	// Enter at inject_decision so the real B-DOS init (CALL &805F) is skipped —
 	// &805F does not return in the Go core (q50 decision 3); the decision+dispatch
 	// from inject_decision onward is what this group verifies.
-	if _, err := mac.CallEntry("inject_decision", z80h.Entry{}); err != nil {
+	if _, err := mac.CallEntry("inject_decision", z80h.Entry{StopPC: wtfk}); err != nil {
 		t.Fatalf("call inject_decision: %v", err)
 	}
 	return bootblockResult{boots: store.Boots(), selected: store.Selected()}

@@ -15,15 +15,18 @@
 ; is the missing interrupt setup: build LINICOLS, baseline the border, EI, and
 ; HOLD (so the ISRs paint) until the operator presses a key.
 ;
-; NO ROM-ROUTINE CALLS (emulation-first, CLAUDE.md §7 / i231). trinload has already
-; CLS'd the display before it pushes us (it does `xor a / call &014E` at start), so
-; the stripes fill the paper-0 area without a re-clear; the banner is printed via
-; RST &10 (the one ROM interaction, which the Go harness models with a print
-; recorder). Everything else — the LINICOLS build, the border baseline, EI, and the
-; key-hold poll — is direct RAM/port work that runs verbatim in the flat Go harness
-; (no booted-sysvar state needed, so no carve-out and no flaky ROM-call wander). An
-; explicit ROM CLS + CLSLOWER print-positioning is a later refinement once a
-; boot-from-0 harness (i232) can run them against a real post-boot sysvar state.
+; FAITHFUL FLOW (i259). This demo mirrors the patched-bootblock inject's faithful
+; opening-screen sequence (docs/specs/samboot-opening-screen.md) so the i230
+; hardware re-test exercises the same ROM-routine path the real inject will: it
+; sets the lower-screen print position via CLSLOWER (&06B5) before the banner — so
+; the banner lands in the lower screen exactly as the stock report-50 handler did —
+; and waits for ANY key via the verbatim stock WTFK (READKEY &1CB1; Z = no key),
+; not the earlier Esc-only poll. CLSLOWER and READKEY are real ROM routines (READKEY
+; RST-30s into the paged TWOKSC); the Go harness models them — StubReturn for
+; CLSLOWER's hardware-only screen-clear, ModelReadkey for the any-key wait — so the
+; demo still runs end-to-end in emulation, and the pixels/position are confirmed on
+; Pete's real SAM (i230). The banner text is printed via RST &10 (recorded by the
+; harness print recorder).
 ;
 ; THE RECIPE:
 ;   1. DI while we rebuild the line table.
@@ -32,12 +35,15 @@
 ;   3. Build LINICOLS (&5600) from PALTAB (&55D8+1) — the verbatim stock-ROM
 ;      RAINBOW SCREEN port (&ED1B): 4-byte entries {scan_lo, 0, colour, colour},
 ;      scan stepping +&0B from 0 while < &A6, then an &FF terminator.
-;   4. Print the MGT copyright banner via RST &10.
-;   5. EI — arms the line-interrupt rainbow (THE step the flat-yellow demo omitted).
-;   6. Hold until a key: trinload's proven `ld a,&f7 / in a,(&f9) / bit 5` poll
-;      (Esc), driven by PressEsc in emulation.
-;   7. Teardown: LINICOLS[0]=&FF disarms the rainbow next frame.
-;   8. EI + RET cleanly to trinload via tr_terminate.
+;   4. CALL CLSLOWER (&06B5) — select channel K / lower screen (verbatim stock
+;      MAINER3 print-position step), so the banner lands in the lower screen.
+;   5. Print the MGT copyright banner via RST &10.
+;   6. EI — arms the line-interrupt rainbow (THE step the flat-yellow demo omitted).
+;   7. Hold until ANY key: verbatim stock WTFK — `call READKEY (&1CB1) / jr z`
+;      (READKEY returns Z when no key is ready); driven by an injected key in
+;      emulation (ModelReadkey).
+;   8. Teardown: LINICOLS[0]=&FF disarms the rainbow next frame.
+;   9. EI + RET cleanly to trinload via tr_terminate.
 ;
 ; The Go harness has no display, so mgt_screen_demo_test.go asserts the demo built
 ; the exact LINICOLS table and printed the exact banner text and returned cleanly —
@@ -48,7 +54,6 @@
 
 PALTAB:          equ &55D8              ; ROM palette table (stripes read from +1)
 LINICOLS:        equ &5600              ; line-colour table (stripes write here)
-STATPORT:        equ &F9               ; keyboard/status read (Esc = bit 5 with row &F7)
 BORDPORT:        equ &FE               ; border colour out
 
 mgt_demo_main:
@@ -81,7 +86,14 @@ mgt_rbowl:
                 jr      c, mgt_rbowl
                 ld      (hl), &ff       ; terminate the line-colour list
 
-                ; --- (4) print the MGT copyright banner ---
+                ; --- (4) select the lower screen (verbatim stock MAINER3 step) ---
+                ; CLSLOWER (&06B5) clears the lower screen and selects channel K, so
+                ; the banner below lands in the lower screen exactly as the stock
+                ; report-50 banner did. Real ROM routine (hardware-only screen effect;
+                ; the harness stubs it to a RET). Matches the inject's CLSLOWER call.
+                call    &06b5
+
+                ; --- (5) print the MGT copyright banner ---
                 ; The authoritative stock-ROM banner text (message 0). Printed char
                 ; by char via RST &10 (the SAM print-a-char restart). On hardware the
                 ; ROM renders it; in emulation the harness intercepts RST &10 and
@@ -97,24 +109,23 @@ mgt_banner_loop:
                 jr      mgt_banner_loop
 mgt_banner_done:
 
-                ; --- (5) arm + render: EI so FRAMINT re-arms STATPORT from
+                ; --- (6) arm + render: EI so FRAMINT re-arms STATPORT from
                 ;     LINICOLS[0] and LINEINT paints CLUT-0 each scan line ---
                 ei
 
-                ; --- (6) hold the screen until a key (trinload's &F9 bit-5 Esc poll;
-                ;     driven by PressEsc in emulation) ---
+                ; --- (7) hold the screen until ANY key — verbatim stock WTFK
+                ;     (READKEY &1CB1 returns Z when no key is ready); driven by an
+                ;     injected key in emulation (ModelReadkey) ---
 mgt_wtfk:
-                ld      a, &f7
-                in      a, (STATPORT)   ; &F9: bit 5 = Esc (active-low) for row &F7
-                bit     5, a
-                jr      nz, mgt_wtfk    ; loop while Esc not pressed (bit5 = 1)
+                call    &1cb1           ; READKEY — Z when no key is ready
+                jr      z, mgt_wtfk     ; loop until ANY key is pressed (NZ,CY)
 
-                ; --- (7) teardown: disarm the rainbow next frame ---
+                ; --- (8) teardown: disarm the rainbow next frame ---
                 di
                 ld      a, &ff
                 ld      (LINICOLS), a
 
-                ; --- (8) restore interrupts and RET cleanly to trinload ---
+                ; --- (9) restore interrupts and RET cleanly to trinload ---
                 ei
                 jp      tr_terminate    ; di;halt in emulation, RET to trinload on hardware
 
