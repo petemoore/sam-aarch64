@@ -3982,8 +3982,37 @@
     Downstream of i2 (Pete, 2026-06-22, q36): the i2 baseline refuses-with-message when the page pool is exhausted. This OPTIONAL feature makes alloc_page lazy-SPILL a cold DOC block to a persistence backend instead of refusing (design §4.5/§5/§7): serialize the block to disk, free its page, satisfy the alloc; reload on demand. Backend is PLUGGABLE — Trinity storage if the machine has it, else a physical floppy/tape — so a space-limited user on ANY machine gains document headroom beyond the ~144KB/256KB ceiling. HARD CONSTRAINT: the assembler must run fully on a floppy/tape-only machine with NO Trinity, so the spill backend is optional and must degrade to refuse-with-message when absent. Depends on i2 (the pool allocator + the page_owner[] discipline) but NEVER blocks it.
   status: OPEN
   depends_on: [i2a]
+  kind: umbrella
+  owner: agent
+
+- id: i215a
+  title: "Spill manager: Go correctness authority (pluggable SpillBackend + lazy-spill alloc + reload-on-demand + degrade-to-refuse), host-verified"
+  description: |
+    First brick of i215 (mirrors the i2a allocator-core pattern). Go authority tools/sam-aarch64/pagepool spill manager modeling design §4.5/§5: a pluggable SpillBackend interface (Store/Load/Discard a serialized DOC block by id); a spill-aware allocator that, on FREE-pool exhaustion, evicts the COLDEST resident DOC block via the backend, frees its page, and satisfies the alloc; reload-on-demand when a spilled block is touched (may cascade another spill); and degrade-to-REFUSE when no backend is configured (the i2 baseline). Host-verified with table tests + an in-memory fake backend proving: zero spills when the pool is large; lazy spill exactly-as-needed under pressure; reload round-trips block content; refuse-with-message with no backend. Does NOT port to Z80 (i215b) nor add a concrete Trinity/floppy backend + boot wiring (i215c). Spec: docs/specs/ide-memory-model-design.md §4.5/§5/§7.
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
+  parent: i215
+
+- id: i215b
+  title: "Spill manager: Z80 port of the lazy-spill hook in the page allocator"
+  description: |
+    Z80 port of the i215a spill-aware allocator: hook src/pagepool.asm alloc to evict the coldest DOC block via the backend dispatch on FREE-pool exhaustion, free its page, retry; reload-on-demand path; degrade-to-refuse when no backend. Host-verified vs the i215a Go authority through the koron-go/z80 harness (mirrors i2a's pagepool_test.go). Depends on i215a.
+  status: OPEN
+  depends_on: [i215a]
+  kind: leaf
+  owner: agent
+  parent: i215
+
+- id: i215c
+  title: "Spill manager: concrete pluggable backends (Trinity record / floppy-tape) + boot wiring"
+  description: |
+    Concrete SpillBackend implementations behind the i215a interface: Trinity SD-record store when present, else physical floppy/tape; selected at boot by capability detection. The assembler must run fully on a floppy/tape-only machine with NO Trinity (HARD constraint), so the backend is optional and degrades to refuse-with-message when absent. SimCoupe/boot integration. Depends on i215b.
+  status: OPEN
+  depends_on: [i215b]
+  kind: leaf
+  owner: agent
+  parent: i215
 
 - id: i216
   title: Audit + normalize SAMDOS vs B-DOS terminology across living docs and code comments
