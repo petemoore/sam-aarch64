@@ -2441,9 +2441,8 @@
   description: |
     Confirm the OACK path works on real Trinity hardware: netboot client connects to a standards-compliant TFTP server (e.g. macOS tftpd), receives OACK, ACKs block 0, and receives the file. Gated on Trinity hardware access + a standards-compliant server in the test environment.
   status: OPEN
-  depends_on: [i133]
   kind: leaf
-  owner: agent
+  owner: pete
   parent: i118
   refs: [i119, i82]
 
@@ -3020,9 +3019,9 @@
   description: |
     picker_render in src/netboot/bdos_picker.asm is a stub ret (all decision/show-name/confirm logic is host-verified in i119d). This item wires the actual SAM MODE-2 screen blit so the picker display is visible on real hardware. Depends on i119d being merged.
   status: OPEN
-  depends_on: [i119d, i133]
+  depends_on: [i119d]
   kind: leaf
-  owner: agent
+  owner: pete
   parent: i119
 
 - id: i144
@@ -3225,9 +3224,8 @@
   description: |
     bdos_read_sector (HRSAD, i119) and bdos_write_sector (HWSAD, i114c) both leave A = the sector value at the rst 8, but the B-DOS hook code reads A as the drive number (bdos15a.src.txt rwsad/xsad: LD A,(hk.a)). After HRECORD-select a Trinity record presents as drive 2. The koron-go harness models the selected record via HRECORD and ignores A, so it cannot catch a wrong-drive bug. Confirm on real Trinity whether these hooks need A explicitly set (e.g. A=2 or A=record) or whether HRECORD makes the record the active context regardless of A; fix both routines symmetrically if needed.
   status: OPEN
-  depends_on: [i133]
   kind: leaf
-  owner: agent
+  owner: pete
   refs: [src/netboot/bdos_seam.asm, reference/bdos/bdos15a.src.txt, i119, i114c]
 
 - id: i153
@@ -3386,10 +3384,12 @@
   title: "Audit i133's dependents: reclassify presence-gated ones as 'needs Pete' (or push i133 up)"
   description: |
     i133-dependents audit (Pete 2026-06-20): i133 (automate SAM testing via trinload) gates i118b, i135, i141, i143, i145, i152, i70, i88c, i93b — but many likely only need Pete PHYSICALLY PRESENT (a key-press / hardware action), not the full automation. Per the needs-Pete model (i169): go through each; for those that only need Pete present, mark owner:pete (needs-pete) + drop the i133 dep. Alternatively push i133 near the top so when it lands we verify it truly unblocks them. Depends on i169.
-  status: OPEN
+  status: DONE
   depends_on: [i169a, i267]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 694, role: completing}
 
 - id: i173
   title: "SAMBOOT: build the one-shot ROM+EEPROM dumper (serves captured bytes via the proven TFTP server)"
