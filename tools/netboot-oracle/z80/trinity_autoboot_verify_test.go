@@ -7,8 +7,12 @@
 //	Run: cd ~/git/trinity-autoboot && make
 //	     cd ~/git/sam-aarch64/tools/netboot-oracle && go test ./z80/ -tags trinityboot -run Trinity -v
 //
-// Addresses (from build/bootloader.map): decision &415E, no_autoboot &4169,
-// build_stripes &4187, basic_exit &4174, read_config &4203, bdos_boot_record &42EF.
+// Addresses (re-derive from build/bootloader.map after any bootloader edit; they
+// shift as the free-space code grows): decision &415E, config_decision &4166,
+// boot_fallback &4171, no_autoboot &4179, build_stripes &4197, read_config &4213,
+// bdos_boot_record &42FF. The i264 selector decision: ESC held at boot -> manual
+// control (no_autoboot -> opening screen -> BASIC); else -> config-driven auto-boot,
+// falling back to BOOT_RECORD (3) when no "SAMBOOT Config" chunk exists.
 package z80_test
 
 import (
@@ -44,9 +48,12 @@ func trinityDevice(t *testing.T, eeprom, boot []byte) []byte {
 	return dev
 }
 
-// TestTrinityNoConfigBootsToBASIC: with no config chunk, the bootloader runs the
-// opening screen (build_stripes) + wait-for-key, then falls to BASIC.
-func TestTrinityNoConfigBootsToBASIC(t *testing.T) {
+// TestTrinityNoConfigFallsBackToRecord3: with NO "SAMBOOT Config" chunk and ESC not
+// held, the i264 decision falls back to BOOT_RECORD (3 = trinload) — preserving
+// today's auto-boot until the picker writes a config. The full boot reaches
+// decision -> config_decision -> read_config (miss) -> boot_fallback ->
+// bdos_boot_record, and must NOT run the opening screen (build_stripes).
+func TestTrinityNoConfigFallsBackToRecord3(t *testing.T) {
 	rom, eeprom := loadRealCaptures(t)
 	boot := loadTrinityBoot(t)
 	mac := z80h.New()
@@ -58,52 +65,38 @@ func TestTrinityNoConfigBootsToBASIC(t *testing.T) {
 	enc := z80h.NewENC28J60()
 	enc.LoadEEPROMImage(trinityDevice(t, eeprom, boot)) // no config chunk
 	mac.AttachIO(enc)
-	mac.InjectKeys([]byte{'x'}) // dismiss the WTFK / editor key-wait
+	// ESC not held: harness keyMatrix defaults to 0xFF (no key) -> the auto-boot path.
 
-	// HONESTY LINE: build_stripes is pure RAM writes (runs in the screenless harness),
-	// but draw_banner (CLSLOWER/POMSG via paged ROM) + READKEY are ROM display/keyboard
-	// the screenless core cannot run — they wander/loop here and are hardware-confirmed
-	// (i230). So we assert the part that DOES run: the boot reaches decision -> the
-	// no-auto-boot opening screen, and build_stripes builds the &ED1B LINICOLS rainbow.
-	hits := map[uint16]int{0x415E: 0, 0x4187: 0} // decision, build_stripes
-	const linicols = 0x5600
-	var stripes []byte
+	hits := map[uint16]int{0x415E: 0, 0x4171: 0, 0x42FF: 0, 0x4197: 0} // decision, boot_fallback, bdos_boot_record, build_stripes
 	mac.RunBootFrom(0x0000, z80h.Entry{
 		StepCap: 6_000_000, FrameIntPeriod: 20000,
 		Trace: func(pc uint16) {
 			if _, ok := hits[pc]; ok {
 				hits[pc]++
 			}
-			if pc == 0x41A4 && stripes == nil { // draw_banner entry: build_stripes just returned, paging intact
-				stripes = mac.Read(linicols, 16*4+1)
-			}
 		},
 	})
-	if stripes == nil {
-		stripes = mac.Read(linicols, 16*4+1)
-	}
-	t.Logf("no-config: decision=%d build_stripes=%d (banner/WTFK/BASIC are hardware-only, i230)", hits[0x415E], hits[0x4187])
+	t.Logf("no-config: decision=%d boot_fallback=%d bdos_boot_record=%d build_stripes=%d",
+		hits[0x415E], hits[0x4171], hits[0x42FF], hits[0x4197])
 	if hits[0x415E] == 0 {
 		t.Errorf("decision not reached — full boot did not reach our return-path code")
 	}
-	if hits[0x4187] == 0 {
-		t.Errorf("build_stripes not reached — opening screen did not run")
+	if hits[0x4171] == 0 {
+		t.Errorf("boot_fallback not reached — no-config did not fall back to BOOT_RECORD")
 	}
-	for i, scan := 0, 0; scan < 166; i, scan = i+1, scan+11 {
-		if int(stripes[i*4]) != scan {
-			t.Errorf("LINICOLS[%d].scan = %d, want %d (&ED1B rainbow not built)", i, stripes[i*4], scan)
-			break
-		}
+	if hits[0x42FF] == 0 {
+		t.Errorf("bdos_boot_record not reached — fallback did not dispatch the record")
 	}
-	if stripes[16*4] != 0xFF {
-		t.Errorf("LINICOLS terminator = &%02X, want &FF", stripes[16*4])
+	if hits[0x4197] != 0 {
+		t.Errorf("build_stripes reached (%d) — no-config must auto-boot, not show the opening screen", hits[0x4197])
 	}
 }
 
 // TestTrinityWithConfigReachesAutoboot: with a "SAMBOOT Config  " chunk for record
-// N, the full boot reads it and reaches the auto-boot dispatch (bdos_boot_record).
-// No BDOSStore (it would swallow the ROM's RST 8/DB 50 EEPROM fetch); reaching the
-// dispatch proves the config was read and acted on. The ALHK endpoint is the next test.
+// N and ESC not held, the full boot reads it and reaches the auto-boot dispatch
+// (bdos_boot_record), NOT the fallback. No BDOSStore (it would swallow the ROM's
+// RST 8/DB 50 EEPROM fetch); reaching the dispatch proves the config was read and
+// acted on. The ALHK endpoint is TestTrinityAutobootALHK.
 func TestTrinityWithConfigReachesAutoboot(t *testing.T) {
 	rom, eeprom := loadRealCaptures(t)
 	boot := loadTrinityBoot(t)
@@ -118,7 +111,7 @@ func TestTrinityWithConfigReachesAutoboot(t *testing.T) {
 	enc.ProgramNamedChunk(20, samboot.ChunkName, samboot.Boot(7).Encode())
 	mac.AttachIO(enc)
 
-	hits := map[uint16]int{0x4203: 0, 0x42EF: 0, 0x4169: 0} // read_config, bdos_boot_record, no_autoboot
+	hits := map[uint16]int{0x4213: 0, 0x42FF: 0, 0x4171: 0} // read_config, bdos_boot_record, boot_fallback
 	mac.RunBootFrom(0x0000, z80h.Entry{
 		StepCap: 6_000_000, FrameIntPeriod: 20000,
 		Trace: func(pc uint16) {
@@ -127,12 +120,57 @@ func TestTrinityWithConfigReachesAutoboot(t *testing.T) {
 			}
 		},
 	})
-	t.Logf("with-config: read_config=%d bdos_boot_record=%d no_autoboot=%d", hits[0x4203], hits[0x42EF], hits[0x4169])
-	if hits[0x4203] == 0 {
+	t.Logf("with-config: read_config=%d bdos_boot_record=%d boot_fallback=%d", hits[0x4213], hits[0x42FF], hits[0x4171])
+	if hits[0x4213] == 0 {
 		t.Errorf("read_config not reached in the full boot")
 	}
-	if hits[0x42EF] == 0 {
-		t.Errorf("bdos_boot_record not reached — config not found/acted-on (went no_autoboot=%d)", hits[0x4169])
+	if hits[0x42FF] == 0 {
+		t.Errorf("bdos_boot_record not reached — config not found/acted-on (fell back=%d)", hits[0x4171])
+	}
+	if hits[0x4171] != 0 {
+		t.Errorf("boot_fallback reached (%d) — a present config must auto-boot directly, not fall back", hits[0x4171])
+	}
+}
+
+// TestTrinityEscHeldManualControl: holding ESC at boot takes the manual-control path
+// (no_autoboot -> opening screen) instead of auto-booting. Entering at `decision` (the
+// CallEntry pattern that avoids the ROM-boot RST-8 conflict), with ESC pressed the
+// decision must reach build_stripes (the opening screen) and must NOT reach
+// bdos_boot_record. build_stripes is pure RAM (runs in the screenless core); we stop
+// there, before draw_banner/READKEY (paged-ROM, hardware-only).
+func TestTrinityEscHeldManualControl(t *testing.T) {
+	if _, err := os.Stat(trinityBootBin); err != nil {
+		t.Fatalf("bootloader not built: %v", err)
+	}
+	mac, err := z80h.LoadAt(trinityBootBin, trinityBootMap, 0x4000)
+	if err != nil {
+		t.Fatalf("load bootloader: %v", err)
+	}
+	enc := z80h.NewENC28J60()
+	enc.ProgramNamedChunk(5, samboot.ChunkName, samboot.Boot(3).Encode()) // config present, but ESC overrides it
+	mac.AttachIO(enc)
+	store := z80h.NewBDOSStore()
+	mac.AttachBDOS(store)
+	mac.PressEsc(true) // hold ESC at the decision
+
+	const mBuildStripes, mBdosBoot = 0x4197, 0x42FF
+	hits := map[uint16]int{mBuildStripes: 0, mBdosBoot: 0}
+	if _, err := mac.CallEntry("decision", z80h.Entry{
+		StepCap: 2_000_000, StopPC: mBuildStripes,
+		Trace: func(pc uint16) {
+			if _, ok := hits[pc]; ok {
+				hits[pc]++
+			}
+		},
+	}); err != nil {
+		t.Fatalf("call decision: %v", err)
+	}
+	t.Logf("ESC-held: build_stripes=%d bdos_boot_record=%d Boots=%v", hits[mBuildStripes], hits[mBdosBoot], store.Boots())
+	if hits[mBuildStripes] == 0 {
+		t.Errorf("build_stripes not reached — ESC held did not take the manual-control opening-screen path")
+	}
+	if hits[mBdosBoot] != 0 || len(store.Boots()) != 0 {
+		t.Errorf("auto-boot happened despite ESC held (bdos_boot_record=%d, Boots=%v) — ESC must override the config", hits[mBdosBoot], store.Boots())
 	}
 }
 
