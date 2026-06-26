@@ -4540,9 +4540,11 @@
   title: Trim MEMORY.md index back under the 24.4KB load limit
   description: |
     MEMORY.md (the auto-loaded memory index at ~/.claude/projects/<slug>/memory/MEMORY.md) is ~28KB, over the 24.4KB limit — the session-start loader now truncates it, so only part loads (warning emitted 2026-06-26; an agent also flagged it to Pete). Index entries have grown into multi-line paragraphs. FIX: shorten each index line to a one-line <=200-char hook (title + pointer), moving any detail into the per-topic memory file it points to (never into MEMORY.md). Audit for stale/duplicate/low-value entries (e.g. multiple superseded project-status snapshots) and prune or consolidate. Goal: index well under 24.4KB so it loads whole. NOT a repo change — edits live under ~/.claude (memory files), no PR/CI.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 709, role: completing}
 
 - id: i264
   title: "SAMBOOT selector firmware: hold-key-at-boot launches a record picker (choose boot record by number/name) instead of hardcoded record 3"
