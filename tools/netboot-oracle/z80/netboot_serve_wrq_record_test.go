@@ -197,7 +197,7 @@ func TestServeWRQRecordPushWireRouting(t *testing.T) {
 	}
 
 	// 1. Bare WRQ (`tftp put` default) → ACK-0 handshake.
-	wrq := demoWRQ("upload.mgt", nil)
+	wrq := demoWRQ("trinity-sam-disks/upload.mgt", nil)
 	eqFrame(t, "WRQ → ACK-0", serveDemo(t, mac, enc, wrq), goRef.OnFrame(wrq))
 
 	// 2. DATA blocks 1..N → an ACK per block; the final reply on the short block.
@@ -264,6 +264,114 @@ func TestServeWRQRecordPushWireRouting(t *testing.T) {
 	}
 }
 
+// TestServeWRQFlatFilePush is the i121c FlatFile-class E2E gate, mirroring
+// TestServeWRQRecordPushWireRouting but for the DEFAULT (non-prefixed) storage class:
+// a WRQ filename WITHOUT the "trinity-sam-disks/" prefix classifies as FlatFile
+// (bdos.Classify), so the body is flat-accumulated into WRQ_STAGING and, on the short
+// final block, HSAVE'd into the claimed free record as a plain file (wd_finalize_flat
+// → bdos_save_hook + bdos_claim_record) — no 819,200-byte disk-record validation. The
+// transfer is driven through the REAL serve_serve_once dispatch over the ENC, every
+// reply asserted byte-for-byte against the Go authority's finalizeFlat, and the HSAVE
+// asserted via the harness BDOSStore.Saves (record, dotted-suffix-dropped name, the
+// staged bytes), with a final ACK (not ERROR) on the short block.
+func TestServeWRQFlatFilePush(t *testing.T) {
+	const records, freeRecord = 8, 4
+	mac, enc, store, _, goRef := loadServeRecordPush(t, records, freeRecord)
+
+	// A small file that fits the flat staging window: one full 512-byte block + a
+	// short 200-byte tail → two DATA blocks, ending short.
+	const blksize = 512
+	file := make([]byte, blksize+200)
+	for i := range file {
+		file[i] = byte(i*23 + 9)
+	}
+	name := "notes.dat" // NON-prefixed → FlatFile (the default class)
+
+	// 1. Bare WRQ (`tftp put` default) → ACK-0 handshake; the free record is claimed.
+	wrq := demoWRQ(name, nil)
+	eqFrame(t, "flat WRQ → ACK-0", serveDemo(t, mac, enc, wrq), goRef.OnFrame(wrq))
+
+	// 2. DATA blocks 1..N → an ACK per block; the final reply on the short block.
+	var final []byte
+	block := uint16(1)
+	for off := 0; off < len(file); off += blksize {
+		end := off + blksize
+		if end > len(file) {
+			end = len(file)
+		}
+		dataFrame := demoData(block, file[off:end])
+		got := serveDemo(t, mac, enc, dataFrame)
+		eqFrame(t, "flat DATA → reply", got, goRef.OnFrame(dataFrame))
+		final = got
+		block++
+	}
+
+	// The HSAVE landed: exactly one BDOSSave, into the claimed free record, with the
+	// dotted-suffix-dropped name and the right byte count. (BDOSSave carries the UIFA
+	// fields — record/name/size/addr — not the bytes; the staged bytes are read from
+	// WRQ_STAGING below, the source the HSAVE reads.)
+	saves := store.Saves()
+	if len(saves) != 1 {
+		t.Fatalf("Saves() = %d, want 1 (one flat-file HSAVE)", len(saves))
+	}
+	s := saves[0]
+	if s.Record != freeRecord {
+		t.Errorf("HSAVE record = %d, want %d (the claimed free record)", s.Record, freeRecord)
+	}
+	if s.Name != "notes" {
+		t.Errorf("HSAVE name = %q, want %q (dotted suffix dropped by bdos_name_to_uifa)", s.Name, "notes")
+	}
+	if s.Size != uint32(len(file)) {
+		t.Errorf("HSAVE size = %d, want %d (the staged byte count)", s.Size, len(file))
+	}
+
+	// The bytes the HSAVE reads (its WRQ_STAGING source) equal the pushed file.
+	z80Staged := mac.Read(wrqStagingAddr, len(file))
+	if !bytes.Equal(z80Staged, file) {
+		t.Errorf("WRQ_STAGING != pushed file\n  z80 %x...\n  want %x...",
+			z80Staged[:min(16, len(z80Staged))], file[:min(16, len(file))])
+	}
+
+	// The final reply is an ACK (opcode 4) of the final block, not an ERROR — a flat
+	// file is never content-rejected (design §6.5).
+	pay := udpPayload(t, final)
+	if tftp.Opcode(pay) != tftp.OpACK {
+		t.Fatalf("final reply opcode = %d, want ACK(%d) — got %x", tftp.Opcode(pay), tftp.OpACK, pay)
+	}
+	if blk, err := tftp.ParseACK(pay); err != nil || blk != block-1 {
+		t.Fatalf("final ACK block = %d (err %v), want %d (the final block)", blk, err, block-1)
+	}
+}
+
+// TestServeWRQFlatFileNoFree is the FlatFile no-free-record gate, mirroring
+// TestServeWRQRecordPushNoFreeRecord but for a non-prefixed (FlatFile) name: every
+// record is named, so the WRQ is rejected with ERROR(3) at the handshake, the receiver
+// is NOT armed, and no HSAVE runs — matching the Go authority.
+func TestServeWRQFlatFileNoFree(t *testing.T) {
+	const records, freeRecord = 4, 0 // 0 = no free slot; all 4 named
+	mac, enc, store, _, goRef := loadServeRecordPush(t, records, freeRecord)
+
+	wrq := demoWRQ("notes.dat", nil) // NON-prefixed → FlatFile
+	got := serveDemo(t, mac, enc, wrq)
+	eqFrame(t, "flat no-free WRQ → ERROR(3)", got, goRef.OnFrame(wrq))
+
+	pay := udpPayload(t, got)
+	if tftp.Opcode(pay) != tftp.OpERROR {
+		t.Fatalf("no-free reply opcode = %d, want ERROR(%d) — got %x", tftp.Opcode(pay), tftp.OpERROR, pay)
+	}
+	if code, _, err := tftp.ParseError(pay); err != nil || code != tftp.ErrDiskFull {
+		t.Fatalf("no-free reply = ERROR code %d (err %v), want %d", code, err, tftp.ErrDiskFull)
+	}
+
+	// The receiver was NOT armed and nothing was HSAVE'd.
+	if active := mac.Read(symAddr(t, mac, "WRQ_RECV_ACTIVE"), 1)[0]; active != 0 {
+		t.Errorf("WRQ_RECV_ACTIVE = %d, want 0 (no receiver armed when no record is free)", active)
+	}
+	if sv := store.Saves(); len(sv) != 0 {
+		t.Fatalf("Saves() = %d, want 0 (nothing HSAVE'd when no record is free)", len(sv))
+	}
+}
+
 // TestServeWRQRecordPushNoFreeRecord drives the all-records-full case through the
 // real dispatch: every record is named, so bdos_find_free_record returns 0, the WRQ
 // is rejected with ERROR(3, "no free record") at the handshake, the receiver is NOT
@@ -273,7 +381,7 @@ func TestServeWRQRecordPushNoFreeRecord(t *testing.T) {
 	const records, freeRecord = 4, 0 // 0 = no free slot; all 4 named
 	mac, enc, store, _, goRef := loadServeRecordPush(t, records, freeRecord)
 
-	wrq := demoWRQ("upload.mgt", nil)
+	wrq := demoWRQ("trinity-sam-disks/upload.mgt", nil)
 	got := serveDemo(t, mac, enc, wrq)
 	eqFrame(t, "no-free WRQ → ERROR(3)", got, goRef.OnFrame(wrq))
 
@@ -313,7 +421,7 @@ func streamFullRecordAndFinalize(t *testing.T, img []byte, record int) (*z80h.Ma
 	// drive the WRQ handshake through the real dispatch (on the already-inited ENC)
 	// so CLIENT_* is learned (wd_finalize wraps the reply to it), the record is
 	// selected, the sink reset, and the receiver armed in sink mode.
-	wrq := demoWRQ("upload.mgt", nil)
+	wrq := demoWRQ("trinity-sam-disks/upload.mgt", nil)
 	if got := serveDemo(t, mac, enc, wrq); got == nil {
 		t.Fatal("WRQ handshake sent nothing")
 	}
@@ -442,7 +550,7 @@ func TestServeWRQRecordPushWireRingWrap(t *testing.T) {
 	}
 
 	// 1. Bare WRQ -> ACK-0 handshake.
-	wrq := demoWRQ("ringwrap.mgt", nil)
+	wrq := demoWRQ("trinity-sam-disks/ringwrap.mgt", nil)
 	eqFrame(t, "WRQ -> ACK-0", serveDemo(t, mac, enc, wrq), goRef.OnFrame(wrq))
 
 	// 2. Every DATA block -> an ACK per block, byte-for-byte vs the Go authority.
@@ -672,7 +780,7 @@ func TestServeWRQRecordPushClaimsDifferentRecords(t *testing.T) {
 	copy(img2[bdos.BDOSStampOffset:bdos.BDOSStampOffset+4], []byte("BDOS"))
 	// A filename whose stem is 15 chars — within the full 16-char record-name field
 	// (i195), so it is kept whole: "seconddiskimage" (the .mgt suffix dropped).
-	final2 := runFullPush(t, mac, enc, goRef, "seconddiskimage.mgt", img2)
+	final2 := runFullPush(t, mac, enc, goRef, "trinity-sam-disks/seconddiskimage.mgt", img2)
 	if blk, err := tftp.ParseACK(udpPayload(t, final2)); err != nil || blk != 1600 {
 		t.Fatalf("push 2 final reply = ACK %d (err %v), want ACK 1600 (valid image)", blk, err)
 	}
@@ -738,7 +846,7 @@ func TestServeWRQRecordPushClaimOnlyOnValid(t *testing.T) {
 	// Push 1: an INVALID image (one sector short → wrong size). It streams into the
 	// claimed record 5, fails validation, and must NOT claim (no CMD24 list-write).
 	bad := recordValidImage()[:bdos.RecordSize-bdos.SectorSize]
-	final1 := runFullPush(t, mac, enc, goRef, "broken.mgt", bad)
+	final1 := runFullPush(t, mac, enc, goRef, "trinity-sam-disks/broken.mgt", bad)
 	assertErrorDiskFull(t, final1)
 	if v := mac.Read(symAddr(t, mac, "BD_REC_VALID"), 1)[0]; v != 0 {
 		t.Errorf("BD_REC_VALID = %d after the bad push, want 0", v)
@@ -752,7 +860,7 @@ func TestServeWRQRecordPushClaimOnlyOnValid(t *testing.T) {
 	// Push 2: a VALID image. bdos_find_free_record still returns record 5 (it was
 	// never claimed), so the good image REUSES that slot — and now claims it.
 	good := recordValidImage()
-	final2 := runFullPush(t, mac, enc, goRef, "good.mgt", good)
+	final2 := runFullPush(t, mac, enc, goRef, "trinity-sam-disks/good.mgt", good)
 	if blk, err := tftp.ParseACK(udpPayload(t, final2)); err != nil || blk != 1600 {
 		t.Fatalf("push 2 final reply = ACK %d (err %v), want ACK 1600", blk, err)
 	}
@@ -833,7 +941,7 @@ func TestServeWRQRecordPushStrategy(t *testing.T) {
 	assertSinglePush := func(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, store *z80h.BDOSStore, sd *z80h.SDCard, goRef *serve.Responder, wantRecord int) {
 		t.Helper()
 		img := recordValidImage()
-		final := runFullPush(t, mac, enc, goRef, "disk.mgt", img)
+		final := runFullPush(t, mac, enc, goRef, "trinity-sam-disks/disk.mgt", img)
 		if blk, err := tftp.ParseACK(udpPayload(t, final)); err != nil || blk != 1600 {
 			t.Fatalf("final reply = ACK %d (err %v), want ACK 1600 (valid image)", blk, err)
 		}
@@ -910,7 +1018,7 @@ func TestServeWRQRecordPushStrategyExplicitTaken(t *testing.T) {
 	patchStrategy(t, mac, uint8(serve.StrategyExplicit), 7) // explicit a named record
 	goRef := goRefWithStrategy(serve.StrategyExplicit, 7, free)
 
-	wrq := demoWRQ("disk.mgt", nil)
+	wrq := demoWRQ("trinity-sam-disks/disk.mgt", nil)
 	got := serveDemo(t, mac, enc, wrq)
 	eqFrame(t, "explicit-taken WRQ → ERROR(3)", got, goRef.OnFrame(wrq))
 
@@ -1013,7 +1121,7 @@ func TestServeE2EComputedBDRecordsRecordPush(t *testing.T) {
 		tftp.MapStore{}, func(string) tftp.Source { return tftp.ByteSource(nil) })
 	goRef.SetFreeRecordAvailable(true)
 
-	wrq := demoWRQ("upload.mgt", nil)
+	wrq := demoWRQ("trinity-sam-disks/upload.mgt", nil)
 	eqFrame(t, "WRQ -> ACK-0", serveDemo(t, mac, enc, wrq), goRef.OnFrame(wrq))
 	if sel := store.Selected(); sel != wantRecord {
 		t.Fatalf("claimed record = %d, want %d (the highest free record found via the COMPUTED BD_RECORDS=%d)",
@@ -1101,7 +1209,7 @@ func TestServeDiskPushTrinloadDeployable(t *testing.T) {
 	}
 
 	// 1. Bare WRQ (`tftp put` default) → ACK-0; the free record is claimed + armed.
-	wrq := demoWRQ("morning.mgt", nil)
+	wrq := demoWRQ("trinity-sam-disks/morning.mgt", nil)
 	eqFrame(t, "deployable WRQ → ACK-0", serveDemo(t, mac, enc, wrq), goRef.OnFrame(wrq))
 	if active := mac.Read(symAddr(t, mac, "WRQ_RECV_ACTIVE"), 1)[0]; active != 1 {
 		t.Fatalf("WRQ_RECV_ACTIVE = %d after the WRQ, want 1 (the push must arm against the free record)", active)

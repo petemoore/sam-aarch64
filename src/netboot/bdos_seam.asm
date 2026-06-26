@@ -908,11 +908,13 @@ bls_done:
 
 ; ---------------------------------------------------------------------------
 ; bdos_strip_disk_prefix — if the string at HL begins with "trinity-sam-disks/",
-; advance HL past it; otherwise leave HL unchanged. Mirrors the Go authority
-; bdos.Classify (the disk-record namespace prefix). Host-verifiable.
+; advance HL past it and set CY; otherwise leave HL unchanged and clear CY. Mirrors
+; the Go authority bdos.Classify, which returns BOTH the class (CY = DiskRecord) and
+; the stripped internal name (HL). Host-verifiable.
 ;
 ; In:  HL  pointer to the candidate string
 ; Out: HL  advanced past the prefix if it matched, else unchanged
+;      CY  set if the prefix matched (DiskRecord class), clear otherwise (FlatFile)
 ; Clobbers: A, B, DE.
 bdos_strip_disk_prefix:
                 push    hl                     ; remember the start (restore on mismatch)
@@ -927,9 +929,11 @@ bsdp_cmp:
                 djnz    bsdp_cmp
                 ; full prefix matched — HL is past it; discard the saved start.
                 pop     de                     ; drop the start; keep HL advanced
+                scf                             ; CY = matched (DiskRecord class)
                 ret
 bsdp_nomatch:
                 pop     hl                     ; restore HL to the start (no prefix)
+                or      a                       ; CY = 0 (FlatFile class)
                 ret
 
 bdos_disk_prefix: defm "trinity-sam-disks/"

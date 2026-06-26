@@ -316,6 +316,94 @@ func newPushServer(free []int, strategy PlacementStrategy) *Responder {
 	return s
 }
 
+// TestFlatFilePush pins the i121c FlatFile-class push in the Go authority: a WRQ
+// filename with NO "trinity-sam-disks/" prefix classifies as FlatFile (the default
+// class, design §6.5), so the body is flat-accumulated and — on the short final
+// block — HSAVE'd into the claimed free record as a plain file (no 819,200-byte
+// disk-record validation). The final reply is the final ACK (not ERROR), the store
+// records one FlatStore (the claimed record + storage name + the pushed bytes), and
+// the record is claimed exactly like the disk-record path.
+func TestFlatFilePush(t *testing.T) {
+	s := newPushServer([]int{5}, StrategyLowestFree)
+
+	const blksize = 512
+	data := []byte("hello flat world")
+	name := "notes.dat"
+
+	// Drive the whole exchange so the final reply frame is observed directly.
+	s.OnFrame(wrqFrame(name, nil))
+	var final []byte
+	block := uint16(1)
+	for off := 0; off < len(data); off += blksize {
+		end := off + blksize
+		if end > len(data) {
+			end = len(data)
+		}
+		final = s.OnFrame(wrqDataFrame(block, data[off:end]))
+		block++
+	}
+	if len(data)%blksize == 0 {
+		final = s.OnFrame(wrqDataFrame(block, nil))
+	}
+
+	// The short final block is answered with an ACK, not an ERROR.
+	u, ok := frame.ParseUDP(final)
+	if !ok {
+		t.Fatalf("final reply is not a UDP frame: %x", final)
+	}
+	if tftp.Opcode(u.Payload) != tftp.OpACK {
+		t.Fatalf("final reply opcode = %d, want ACK(%d) — got %x", tftp.Opcode(u.Payload), tftp.OpACK, u.Payload)
+	}
+
+	// Exactly one FlatStore: claimed record 5, the Classify internal storage name
+	// (no prefix to strip → "notes.dat"), and the pushed bytes verbatim.
+	stores := s.FlatStores()
+	if len(stores) != 1 {
+		t.Fatalf("FlatStores() = %d, want 1", len(stores))
+	}
+	if stores[0].Record != 5 {
+		t.Errorf("FlatStore record = %d, want 5 (the free record)", stores[0].Record)
+	}
+	if stores[0].Name != name {
+		t.Errorf("FlatStore name = %q, want %q (Classify internal name, no prefix)", stores[0].Name, name)
+	}
+	if !bytes.Equal(stores[0].Data, data) {
+		t.Errorf("FlatStore data = %x, want %x", stores[0].Data, data)
+	}
+
+	// The flat store claims its record (so the next push lands elsewhere), like the
+	// disk-record path.
+	claims := s.Claims()
+	if len(claims) != 1 {
+		t.Fatalf("Claims() = %d, want 1", len(claims))
+	}
+	if claims[0].Record != 5 {
+		t.Errorf("claim record = %d, want 5", claims[0].Record)
+	}
+}
+
+// TestFlatFilePushNoFree pins the no-free-record rejection for a FlatFile push: with
+// no free record, the WRQ is rejected with ERROR(3) at the handshake and no flat
+// store is recorded. Mirrors the disk-record no-free assertion.
+func TestFlatFilePushNoFree(t *testing.T) {
+	s := newPushServer(nil, StrategyLowestFree) // no free record
+
+	reply := s.OnFrame(wrqFrame("notes.dat", nil))
+	u, ok := frame.ParseUDP(reply)
+	if !ok {
+		t.Fatalf("no-free WRQ reply is not a UDP frame: %x", reply)
+	}
+	if tftp.Opcode(u.Payload) != tftp.OpERROR {
+		t.Fatalf("no-free WRQ reply opcode = %d, want ERROR(%d) — got %x", tftp.Opcode(u.Payload), tftp.OpERROR, u.Payload)
+	}
+	if code, _, err := tftp.ParseError(u.Payload); err != nil || code != tftp.ErrDiskFull {
+		t.Fatalf("no-free WRQ reply = ERROR code %d (err %v), want %d", code, err, tftp.ErrDiskFull)
+	}
+	if fs := s.FlatStores(); len(fs) != 0 {
+		t.Fatalf("FlatStores() = %d, want 0 (nothing stored when no record is free)", len(fs))
+	}
+}
+
 // TestDiskRecordPushClaimsAdvance pins the i121g claim model in the Go authority
 // under the lowest-free strategy: two successive valid pushes claim DIFFERENT
 // records (the first claim advances the free-record sequence) with the right
@@ -327,7 +415,7 @@ func TestDiskRecordPushClaimsAdvance(t *testing.T) {
 	s := newPushServer([]int{3, 4}, StrategyLowestFree)
 
 	pushImage(s, "trinity-sam-disks/firstdisk.mgt", validRecordImage())
-	pushImage(s, "seconddiskimage.mgt", validRecordImage())
+	pushImage(s, "trinity-sam-disks/seconddiskimage.mgt", validRecordImage())
 
 	claims := s.Claims()
 	if len(claims) != 2 {
@@ -344,7 +432,7 @@ func TestDiskRecordPushClaimsAdvance(t *testing.T) {
 	}
 
 	// The card is now exhausted (both free records claimed): the next WRQ is rejected.
-	reply := s.OnFrame(wrqFrame("third.mgt", nil))
+	reply := s.OnFrame(wrqFrame("trinity-sam-disks/third.mgt", nil))
 	u, ok := frame.ParseUDP(reply)
 	if !ok {
 		t.Fatalf("third-push reply is not a UDP frame: %x", reply)
@@ -362,13 +450,13 @@ func TestDiskRecordPushClaimOnlyOnValid(t *testing.T) {
 	s := newPushServer([]int{5}, StrategyLowestFree)
 
 	// Invalid: one sector short of RecordSize → rejected, no claim.
-	pushImage(s, "broken.mgt", validRecordImage()[:bdos.RecordSize-bdos.SectorSize])
+	pushImage(s, "trinity-sam-disks/broken.mgt", validRecordImage()[:bdos.RecordSize-bdos.SectorSize])
 	if c := s.Claims(); len(c) != 0 {
 		t.Fatalf("invalid push recorded %d claims, want 0", len(c))
 	}
 
 	// Valid: reuses record 5 (never claimed by the bad push) and now claims it.
-	pushImage(s, "good.mgt", validRecordImage())
+	pushImage(s, "trinity-sam-disks/good.mgt", validRecordImage())
 	claims := s.Claims()
 	if len(claims) != 1 || claims[0].Record != 5 {
 		t.Fatalf("Claims() = %+v, want one claim of record 5 (reused)", claims)
@@ -386,8 +474,8 @@ func TestDiskRecordPushClaimOnlyOnValid(t *testing.T) {
 func TestDiskRecordPushStrategy(t *testing.T) {
 	t.Run("highest-free (default) claims top-down 4 then 3", func(t *testing.T) {
 		s := newPushServer([]int{3, 4}, StrategyHighestFree)
-		pushImage(s, "first.mgt", validRecordImage())
-		pushImage(s, "second.mgt", validRecordImage())
+		pushImage(s, "trinity-sam-disks/first.mgt", validRecordImage())
+		pushImage(s, "trinity-sam-disks/second.mgt", validRecordImage())
 		claims := s.Claims()
 		if len(claims) != 2 || claims[0].Record != 4 || claims[1].Record != 3 {
 			t.Fatalf("highest-free claims = %+v, want records 4 then 3", claims)
@@ -396,8 +484,8 @@ func TestDiskRecordPushStrategy(t *testing.T) {
 
 	t.Run("lowest-free claims bottom-up 3 then 4", func(t *testing.T) {
 		s := newPushServer([]int{3, 4}, StrategyLowestFree)
-		pushImage(s, "first.mgt", validRecordImage())
-		pushImage(s, "second.mgt", validRecordImage())
+		pushImage(s, "trinity-sam-disks/first.mgt", validRecordImage())
+		pushImage(s, "trinity-sam-disks/second.mgt", validRecordImage())
 		claims := s.Claims()
 		if len(claims) != 2 || claims[0].Record != 3 || claims[1].Record != 4 {
 			t.Fatalf("lowest-free claims = %+v, want records 3 then 4", claims)
@@ -411,7 +499,7 @@ func TestDiskRecordPushStrategy(t *testing.T) {
 		cfg.ExplicitRecord = 4 // 4 is free; 3 is too, but explicit picks 4
 		s := New(cfg, tftp.MapStore{}, func(string) tftp.Source { return tftp.ByteSource(nil) })
 		s.SetFreeRecords([]int{3, 4})
-		pushImage(s, "pinned.mgt", validRecordImage())
+		pushImage(s, "trinity-sam-disks/pinned.mgt", validRecordImage())
 		claims := s.Claims()
 		if len(claims) != 1 || claims[0].Record != 4 {
 			t.Fatalf("explicit claims = %+v, want one claim of record 4", claims)
@@ -425,7 +513,7 @@ func TestDiskRecordPushStrategy(t *testing.T) {
 		cfg.ExplicitRecord = 7 // 7 is NOT in the free set: already named
 		s := New(cfg, tftp.MapStore{}, func(string) tftp.Source { return tftp.ByteSource(nil) })
 		s.SetFreeRecords([]int{3, 4})
-		reply := s.OnFrame(wrqFrame("pinned.mgt", nil))
+		reply := s.OnFrame(wrqFrame("trinity-sam-disks/pinned.mgt", nil))
 		u, ok := frame.ParseUDP(reply)
 		if !ok {
 			t.Fatalf("explicit-taken reply is not a UDP frame: %x", reply)

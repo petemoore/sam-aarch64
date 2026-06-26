@@ -2580,10 +2580,12 @@
   title: WRQ auto-slot + write-out (write-to-free-only)
   description: |
     Final block -> bdos_find_free_record (i119); none free -> reply TFTP ERROR(3,'no free record'); else select + bdos_fill_save_uifa (name from WRQ filename) + bdos_save_hook. q30 RESOLVED (write-to-free-only via disk-config auto-pick; prompt if config absent) so ungated. E2E mirrors TestClientE2EConfirm: assert HSAVE in the free record + right bytes; all-full -> ERROR(3) + zero HSAVEs. rst-8 HSAVE persist stays hardware-gated.
-  status: OPEN
+  status: DONE
   depends_on: [i121b]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 695, role: completing}
   parent: i121
 
 - id: i121d

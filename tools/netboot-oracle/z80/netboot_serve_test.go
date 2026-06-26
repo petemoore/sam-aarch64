@@ -212,9 +212,10 @@ func demoData(block uint16, data []byte) []byte {
 }
 
 // wrqStagingAddr is where the Z80 serve unit accumulates a WRQ upload
-// (WRQ_STAGING equ &C000, section D — flat RAM under the host harness). It is an
-// assembler equate, so it is read by literal address rather than via the map.
-const wrqStagingAddr = 0xC000
+// (WRQ_STAGING equ &C800 — section D, after the serve binary's code, so a bootable
+// FlatFile push HSAVEs from here without overlapping code/state/stack; i121c). It is
+// an assembler equate, so it is read by literal address rather than via the map.
+const wrqStagingAddr = 0xC800
 
 func eqFrame(t *testing.T, label string, got, want []byte) {
 	t.Helper()

@@ -846,7 +846,9 @@ netboot-serve-disk: $(BUILD)/netboot_serve_boot.bin $(BUILD)/build-disk
 # contained, so it IS the trinload-pushable block — no separate build. The host
 # launcher tools/trinload-push/trinpush-serve.py sets the WRQ placement strategy in its
 # SERVE_CONFIG block (--strategy) and pushes it via the ?/@/X protocol; a subsequent
-# `tftp put <image.mgt>` lands an 819,200-byte disk image in a FREE Trinity record
+# `tftp put <image.mgt> trinity-sam-disks/<image.mgt>` lands an 819,200-byte disk image
+# in a FREE Trinity record (the "trinity-sam-disks/" prefix selects the validated
+# disk-record class — i121c / design §6.5; a NON-prefixed `put X` stores a flat file)
 # (raw_record_sink + the size==819200 / "BDOS"-stamp validation gate), then the serve
 # loop RETs to trinload via sv_exit_to_trinload — which quiesces the shared &DC
 # microcontroller (deselect + bounded BUSY-poll + settle) so trinload's fixed-delay
@@ -856,7 +858,7 @@ netboot-serve-disk: $(BUILD)/netboot_serve_boot.bin $(BUILD)/build-disk
 # tested by netboot-trinpush-test, and the WRQ push + quiesce path is emulation-tested
 # in Go (netboot_serve_wrq_record_test.go).
 netboot-serve-trinload: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map
-	@echo "pushable serve / disk-record-push block: $(BUILD)/netboot_serve_boot.bin (push with tools/trinload-push/trinpush-serve.py <sam-ip> --strategy …; then tftp put <image.mgt>)"
+	@echo "pushable serve / disk-record-push block: $(BUILD)/netboot_serve_boot.bin (push with tools/trinload-push/trinpush-serve.py <sam-ip> --strategy …; then 'tftp put <image.mgt> trinity-sam-disks/<image.mgt>' for a bootable disk record — a non-prefixed put stores a flat file, i121c)"
 
 # netboot-trinpush-test (i121d) — host-test the serve push launcher's config patcher
 # (mapfile parse, offset math, magic check, patched bytes) against the REAL built
