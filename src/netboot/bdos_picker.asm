@@ -569,10 +569,10 @@ pel_done:
 ; PICK_DISPLAY content directly.
 ; ---------------------------------------------------------------------------
 picker_render:
-                if defined(NETBOOT_HOSTTEST)==0
-                ; Real-hardware MODE-2 blit of PICK_DISPLAY to SAM screen.
-                ; Registered as a follow-up item (see the i119 registry).
-                endif
+                ; Real-hardware MODE-2 blit of PICK_DISPLAY to SAM screen is a
+                ; follow-up item (see the i119 registry); currently a stub ret,
+                ; identical in every build (i231b: no carve-out — there was no code
+                ; to exclude).
                 ret
 
 ; ---------------------------------------------------------------------------

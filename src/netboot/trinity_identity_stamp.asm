@@ -57,13 +57,11 @@ TRINITY_STAMP_MAGIC1:  equ &41                    ; 'A'  chunk+1
 TRINITY_STAMP_MAGIC2:  equ &4D                    ; 'M'  chunk+2
 TRINITY_STAMP_MAGIC3:  equ &42                    ; 'B'  chunk+3
 
-                ; The host harness invokes trinity_read_stamp by symbol and never
-                ; CALLs &8000. A standalone/bootable use enters via this shim; under
-                ; NETBOOT_HOSTTEST the harness calls the symbol directly, so the shim
-                ; is omitted and &8000 just falls into the reader (harmless).
-                if defined(NETBOOT_HOSTTEST)==0
+                ; A standalone/bootable use enters at &8000 via this shim. The host
+                ; harness invokes trinity_read_stamp by symbol and never CALLs &8000,
+                ; so the shim is harmless dead code there — included in every build
+                ; (i231b: no carve-out).
                 jp      trinity_read_stamp
-                endif
 
 ; ===========================================================================
 ; trinity_read_stamp — read the firmware identity stamp from the EEPROM and report

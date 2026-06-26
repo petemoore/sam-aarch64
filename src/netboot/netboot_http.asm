@@ -259,9 +259,11 @@ fetch_recv:
 ; the real flash config reader (real-hardware path only).
 ; ===========================================================================
                 include "bdos_seam.asm"
-                if defined(NETBOOT_HOSTTEST)==0
+                ; eeprom.asm (the Trinity flash reader: find_index/read_chunk) is
+                ; the emulation-verified path — the harness EEPROM model serves its
+                ; reads (trinity_identity_stamp_test.go), so it is included in EVERY
+                ; build, host-test too (i231b: no carve-out).
                 include "eeprom.asm"
-                endif
 
 ; Fetch state (the connection state lives in tcp_conn.asm's CONN_* block).
 FETCH_PHASE:    defb PH_ARP
