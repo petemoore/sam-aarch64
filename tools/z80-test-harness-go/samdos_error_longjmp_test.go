@@ -237,12 +237,14 @@ func TestSAMDOSLegacySilentNoOpPreserved(t *testing.T) {
 }
 
 // TestSAMDOSBootMissingSysregDataDiagnostic boots the real prod assembler with
-// sd13 deliberately omitted — the "forgot -sysreg-data" mistake.  Under
-// StrictFileNotFound the boot fails at the sd13 HGTHD with a clean,
-// cause-naming halt (with the -sysreg-data remedy) instead of a downstream
-// &0038 garbage trap.  No DOSER handler is installed, so this exercises the
-// default-halt path on a real prod boot.  Artifact-gated: skips if the prod
-// build is absent.
+// sd13 deliberately omitted — the "forgot -sysreg-data" mistake.  The prod
+// assembler installs the i25b DOSER handler at boot, so under StrictFileNotFound
+// the sd13 HGTHD file-not-found is dispatched to the handler, which converts it
+// into the diagnosed FAIL banner (FAIL6b — error 0x6B = file-not-found) instead
+// of a silent no-op or a downstream &0038 garbage trap.  The companion
+// TestDoserHandlerFailsOnFileIOError exercises the same path for a missing d15;
+// this case pins the specific "forgot -sysreg-data" mistake.  Artifact-gated:
+// fails if the prod build is absent.
 func TestSAMDOSBootMissingSysregDataDiagnostic(t *testing.T) {
 	root := repoRoot(t)
 	asmPath := filepath.Join(root, "build", "assembler-prod.bin")
@@ -266,21 +268,20 @@ func TestSAMDOSBootMissingSysregDataDiagnostic(t *testing.T) {
 		StrictFileNotFound: true,
 		Timeout:            10 * time.Second,
 	})
-	t.Logf("Exit: %s", res.ExitReason)
+	t.Logf("Exit: %s  Printer: %q", res.ExitReason, res.PrinterCapture)
 	if res.Passed {
 		t.Fatalf("boot without sd13 unexpectedly passed; exit=%q", res.ExitReason)
 	}
-	if !strings.Contains(res.ExitReason, "sd13") {
-		t.Errorf("ExitReason should name the missing sd13, got %q", res.ExitReason)
+	if !strings.HasPrefix(res.PrinterCapture, "FAIL") {
+		t.Fatalf("the DOSER handler should convert the missing sd13 into a diagnosed FAIL banner; printer=%q exit=%q",
+			res.PrinterCapture, res.ExitReason)
 	}
-	if !strings.Contains(res.ExitReason, "file-I/O error") {
-		t.Errorf("ExitReason should be a clean file-I/O error, got %q", res.ExitReason)
-	}
-	if !strings.Contains(res.ExitReason, "-sysreg-data") {
-		t.Errorf("ExitReason should carry the -sysreg-data remedy, got %q", res.ExitReason)
+	if !strings.HasPrefix(res.PrinterCapture, "FAIL6b") {
+		t.Errorf("FAIL tag = %q, want the file-not-found error number 6b (FAIL6b…) passed through by the handler",
+			res.PrinterCapture)
 	}
 	if strings.Contains(res.ExitReason, "TRAP") {
-		t.Errorf("missing sd13 surfaced as a downstream trap, not the clean default halt: %q", res.ExitReason)
+		t.Errorf("missing sd13 surfaced as a downstream trap, not the handler-converted FAIL: %q", res.ExitReason)
 	}
 	found := false
 	for _, n := range res.UnservedFiles {

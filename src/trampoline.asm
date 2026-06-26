@@ -498,6 +498,28 @@ HMPR_SAVE:      equ     TRAMPOLINE_DST + 32
 ; https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-hload-16k-limit-investigation.md.
 SP_SAVE:        equ     TRAMPOLINE_DST + 33    ; 2 bytes (33, 34)
 
+; DOSER (&5BC0) file-I/O error handler — section-B residence (i25b,
+; PRODUCTION only).  The handler body is copied here at boot (see
+; doser_handler_body in src/assembler.asm) and (&5BC0) points at it.
+;
+; Why section B, not section C: the ROM's post-hook DOSER dispatch (DOSC,
+; rom-v3.0 disassembly &3830-&3856) does `jp (DOSER)` with the CALLER'S
+; HMPR still live — the ROM restores only LMPR (port 250), never HMPR
+; (port 251).  An HLOAD via the trampoline runs with HMPR = the payload's
+; target page (the trampoline restores HMPR only AFTER the RST 8 returns),
+; so section C is paged onto the payload at dispatch time.  A section-C
+; handler would be unreachable there (it executed payload garbage → a
+; &0038 trap).  Section B is LMPR-stable and stays mapped under any HMPR,
+; so the handler always runs.  Lives in the free gap between SP_SAVE
+; (ends &7E22) and PAGED_CALL_DST (&7E40); body is 12 bytes (&7E23-&7E2E).
+DOSER_HANDLER_DST:   equ     TRAMPOLINE_DST + &23   ; = &7E23
+; DOSER_DEFAULT_HMPR — 1 byte holding the boot/default HMPR, captured at
+; handler-install time.  The error path restores it (so section C maps the
+; assembler code again) before jumping to the section-C fail_with_tag —
+; the HMPR analogue of COMET dier's `OUT (250),A` LMPR restore
+; (comet.asm:1361).  Top of the gap, clear of the 12-byte body.
+DOSER_DEFAULT_HMPR:  equ     TRAMPOLINE_DST + &3F   ; = &7E3F
+
 ; TRAMP_SAFE_SP — value SP is switched to during the RST 8.  Chosen
 ; near the top of section B (which is LMPR-stable) but well clear of
 ; the trampoline body and HMPR_SAVE/SP_SAVE bytes.  The RST 8 push
