@@ -1250,6 +1250,10 @@ check-doc-links:
 check-no-silent-skips:
 	bash tools/check-no-silent-skips.sh
 
+.PHONY: check-hosttest-carveouts
+check-hosttest-carveouts:
+	bash tools/check-hosttest-carveouts.sh
+
 .PHONY: registry registry-sync-check registry-gen tables-gen enctab test-encoder ci-encoder
 
 # registry-gen — build the registry validate/gen CLI.  Operates on

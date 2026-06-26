@@ -25,6 +25,8 @@ This directory holds the Go-side toolchain, build helpers, and dev tools that su
 | `build-spectrum4-release.sh` | Builds spectrum4 `release.img` from sources via our toolchain, then byte-compares against the GNU oracle. Requires `aarch64-none-elf-{as,ld,objcopy}` on `PATH`. | — |
 | `check-code-budget.sh` | Fails the build when an assembler variant's code end reaches the `&C000` stack-page cliff; prints headroom. Runs inline after every assembler build and as `make check-budget`. | `check-budget` |
 | `check-doc-links.sh` | Verifies every relative markdown link in the entry docs and under `docs/`, `tools/`, `tests/` resolves to an existing path; skips URLs and immutable blob-SHA links. | `check-doc-links` |
+| `check-no-silent-skips.sh` | i253 guard — every Go-test `t.Skip*` must reference the one sanctioned `SKIP_PRIVATE_TESTS` gate; a silent skip on a missing precondition fails the build. | `check-no-silent-skips` |
+| `check-hosttest-carveouts.sh` | i231 emulation-first ratchet — counts opening `if defined(NETBOOT_HOSTTEST)==0` carve-outs (code excluded from the host/emulation build → ships to hardware un-emulated) per file and exact-matches `hosttest-carveout-allowlist.txt`; a new carve-out fails, eliminating one requires ratcheting the ledger down to zero. | `check-hosttest-carveouts` |
 | `session-handover.sh` | Agent-session infrastructure (SessionStart hook via `.claude/settings.json`) — not build tooling. Warns about dated filenames and in-flight plans. | — |
 | `Dockerfile.dev` | Dev-container image (pyz80 + SimCoupé + Go). SimCoupé is built from upstream v1.2.16 source, which ships `-exitonhalt` natively. SimCoupé runs only in this container. | — |
 

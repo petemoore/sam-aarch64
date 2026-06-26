@@ -1,0 +1,53 @@
+# hosttest-carveout-allowlist.txt — the ratchet ledger for the i231
+# emulation-first guard (tools/check-hosttest-carveouts.sh).
+#
+# A "carve-out" is an opening assembler directive whose condition is true
+# exactly when NETBOOT_HOSTTEST is UNDEFINED — canonically
+#     if defined(NETBOOT_HOSTTEST)==0          (alone or ANDed with other gates)
+# but the guard also catches every equivalent spelling pyz80 accepts (`IF`,
+# `!=1`, `<1`, `<=0`, swapped operands, spaces inside `defined ( … )`).
+# It excludes its block from the HOST/emulation build, so that code ships to
+# real hardware UN-emulated — the exact CLAUDE.md §7 / feedback_emulation_first
+# anti-pattern (the i82 client_main brick, the samboot_stripes stub). Agents
+# keep reintroducing it, so this ledger + guard make the fix SYSTEMIC: the count
+# of carve-outs can only RATCHET DOWN, never up.
+#
+# This is NOT a list of "approved forever" exceptions — it is the shrinking set
+# of carve-outs still awaiting elimination under i231b. The end state is an
+# empty ledger (every entry removed as its carve-out is eliminated: the block
+# either runs safely in emulation as-is, the harness is taught to model what it
+# needs, or it runs under SimCoupé — the ROM/screen-bearing CI gate).
+#
+# Format: one "<count> <path>" line per src file that still contains carve-outs,
+# where <count> is the EXACT number of opening NETBOOT_HOSTTEST==0 directives in
+# that file. Blank lines and #-comments are ignored.
+#
+# The guard exact-matches this ledger against the live tree and FAILS on ANY
+# divergence:
+#   - a NEW carve-out (a file not listed, or a listed file over its count) fails
+#     → you added an emulation carve-out; don't (see CLAUDE.md §7).
+#   - a REMOVED carve-out not reflected here (a listed file under its count, or a
+#     stale zero-actual entry) fails → you eliminated one; ratchet this ledger
+#     DOWN to match (decrement the count, or delete the line at zero).
+#
+# So eliminating carve-outs (good) requires editing this file to a smaller total;
+# adding them (bad) is impossible without editing this file, which a reviewer
+# sees. Baseline: 34 sites / 12 files (audit 2026-06-23).
+#
+# The shapes this guard deliberately does NOT count (they are not the anti-
+# pattern): `if defined(NETBOOT_HOSTTEST)` (a host-test-only recording double —
+# never reaches hardware) and `if defined(NETBOOT_HOSTTEST) | defined(NETBOOT_STREAM)`
+# (present in BOTH the host harness and the real bootable — the correct pattern).
+
+1 src/netboot/bdos_picker.asm
+1 src/netboot/bdos_seam.asm
+2 src/netboot/csd_probe.asm
+2 src/netboot/http_main.asm
+5 src/netboot/netboot_client.asm
+3 src/netboot/netboot_dumper.asm
+1 src/netboot/netboot_http.asm
+11 src/netboot/netboot_serve.asm
+3 src/netboot/netboot_server.asm
+1 src/netboot/samboot_config.asm
+3 src/netboot/smoke_test.asm
+1 src/netboot/trinity_identity_stamp.asm
