@@ -116,7 +116,12 @@ echo "--- build-disk ---"
 test_variant_flags=()
 disasm_bin="$ROOT/build/disasm.bin"
 zx0_bin="$ROOT/build/zx0.bin"
+# i207: pass -variant so build-disk refuses to build a disk missing any payload
+# the boot loader HLOADs (a missing one silently HANGS SimCoupé — the i69 bug,
+# where this script once omitted -enc-fix). prod by default; test below.
+disk_variant="prod"
 if [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler.bin" ]; then
+    disk_variant="test"
     # Test variant — needs the off-axis payloads + the self-test disasm + zx0.
     # The enc-fix payload (page 11, i69) carries the encode_inst self-test
     # fixtures off-axis; without it on the disk the boot self-test hangs.
@@ -131,6 +136,7 @@ if [ "$ASSEMBLER_BIN" = "$ROOT/build/assembler.bin" ]; then
     )
 fi
 "$ROOT/build/build-disk" \
+    -variant "$disk_variant" \
     "${test_variant_flags[@]}" \
     -sysreg-data "$ROOT/build/sysreg_data.bin" \
     -disasm "$disasm_bin" \
