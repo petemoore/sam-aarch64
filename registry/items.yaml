@@ -2542,9 +2542,39 @@
     Z80 port of the windowed-TFTP logic whose Go authority is i120a. Add windowed ACK (ACK only last block of each window) + lost-block/out-of-window rewind to the SAM client and server, SimCoupe-verify, then re-add windowsize to ClientOptionSet (i118 had dropped it for lock-step correctness). Gated on i120a.
   status: OPEN
   depends_on: [i120a]
-  kind: leaf
+  kind: umbrella
   owner: agent
   parent: i120
+
+- id: i120b-b1
+  title: Z80 client windowed TFTP receive — standalone harness-verified loop (tftp_client_loop.asm) vs the Go authority
+  description: |
+    Port tftp.ClientXfer.onDataWindowed (RFC 7440) into the standalone client receive loop src/netboot/tftp_client_loop.asm: WINDOWSIZE/WINCOUNT state, accumulate in-sequence blocks, ACK only the last of each window, re-ACK the last good block on a gap to trigger sender rewind; lock-step (windowsize<=1) path byte-identical. Host-verified in tools/netboot-oracle/z80 (TestTFTPClientWindowedFull/Gap/ShortFinal) byte-for-byte vs the Go authority (added ClientLoop.SetWindowsize). tftp_client_loop.asm is a harness-only translation unit, so this changes no live binary. The bootable client integration + re-adding windowsize to ClientOptionSet + SimCoupe end-to-end is i120b-b3 (needs the windowed server i120b-b2 to actually exercise windowing on the wire).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 707, role: completing}
+  parent: i120b
+
+- id: i120b-b2
+  title: "Z80 server windowed TFTP send (RFC 7440): negotiate+OACK windowsize, windowed DATA send + cumulative-ACK rewind, harness + SimCoupe verified"
+  description: |
+    Server half of i120b (port of the i120a Go authority). Mirror tftp.ServerXfer NextWindow/OnWindowAck + serverloop windowsize negotiation in the Z80 server (src/netboot/tftp_server_loop.asm): parse+clamp windowsize from the RRQ ([1,16]), emit it in the OACK (tftp_build.asm), send a window of DATA before expecting an ACK, advance/rewind winAcked on the cumulative ACK, track winFinal for the short final block; add WINSIZE/WINACKED/WINFINAL state. Lock-step path unchanged. Host-verify via tools/netboot-oracle/z80 server loop tests against the Go authority, then SimCoupe-verify. Independent of i120b-b1 (the OACK windowsize wire format is the shared contract).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i120b
+
+- id: i120b-b3
+  title: "Z80 bootable client windowed integration: port windowed receive into netboot_client.asm + OACK windowsize parse + re-add windowsize to ClientOptionSet/RRQ, SimCoupe-verified"
+  description: |
+    Mirror the i120b-b1 windowed receive (onDataWindowed) into the bootable phase machine src/netboot/netboot_client.asm (its own duplicate receive loop), parse windowsize from the OACK into WINDOWSIZE (alongside the existing blksize parse), and re-add {windowsize,N} to tftp.ClientOptionSet + the Z80 RRQ option bytes. End-to-end SimCoupe verify: against a lock-step server the client must gracefully stay lock-step (no windowsize OACK), and against the windowed server (i120b-b2) it must do windowed receive. Depends on i120b-b1 (the verified receive logic) and i120b-b2 (a windowed server to exercise it end-to-end).
+  status: OPEN
+  depends_on: [i120b-b1, i120b-b2]
+  kind: leaf
+  owner: agent
+  parent: i120b
 
 - id: i121
   title: "SAM TFTP server — WRQ (write / accept-in) support: push disk images to the SAM, auto-slotted"

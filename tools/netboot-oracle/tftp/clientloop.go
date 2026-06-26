@@ -143,6 +143,13 @@ func (c *ClientLoop) OnTimeout() []byte {
 	return c.wrap(ack)
 }
 
+// SetWindowsize sets the RFC 7440 receive window directly — the number of
+// in-sequence blocks the loop accumulates before ACKing (it ACKs only the last
+// of each window; 1 is lock-step). In a live transfer the window is adopted from
+// the OACK in onOACK; this setter is the host harness's parallel to writing the
+// WINDOWSIZE symbol into the Z80 loop.
+func (c *ClientLoop) SetWindowsize(w int) { c.xfer.SetWindowsize(w) }
+
 // Done reports whether the transfer has completed (a short final block).
 func (c *ClientLoop) Done() bool { return c.xfer.Done() }
 
