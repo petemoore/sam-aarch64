@@ -46,11 +46,18 @@
                 org     &8000
 
                 ; The boot entry (CALL 32768) must be the first instruction at
-                ; &8000. client_main is defined later (under NETBOOT_HOSTTEST==0);
-                ; the host harness invokes routines by symbol and never CALLs
-                ; 32768, so this jp is bootable-only.
+                ; &8000. client_main / client_fetch_boot are defined later (under
+                ; NETBOOT_HOSTTEST==0); the host harness invokes routines by symbol
+                ; and never CALLs 32768, so this jp is bootable-only. NETBOOT_FETCH_BOOT
+                ; selects the i122c PXE-style fetch-and-boot entry (fetch -> stream into a
+                ; scratch record -> validate -> ALHK-boot) instead of the default
+                ; client_main fetch-then-HSAVE-with-picker write-out (i182a).
                 if defined(NETBOOT_HOSTTEST)==0
+                if defined(NETBOOT_FETCH_BOOT)
+                jp      client_fetch_boot
+                else
                 jp      client_main
+                endif
                 endif
 
 ; ===========================================================================

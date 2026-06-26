@@ -34,6 +34,10 @@ const (
 	smokeBootMap = "../../../build/netboot_smoke_boot.map"
 	cliBootBin   = "../../../build/netboot_client_boot.bin"
 	cliBootMap   = "../../../build/netboot_client_boot.map"
+	// The i182a fetch-and-boot bootable: netboot_client.asm built with
+	// NETBOOT_FETCH_BOOT, so its &8000 autorun entry runs client_fetch_boot.
+	fetchBootBin = "../../../build/netboot_fetch_boot.bin"
+	fetchBootMap = "../../../build/netboot_fetch_boot.map"
 
 	// romBaseBoot models section A's ROM at boot for the small section-C-only boot
 	// images (smoke/server), which never spill above &BFFF. NOTE: section D
