@@ -84,6 +84,7 @@ type preprocPos struct {
 	line int
 }
 
+// String formats the preprocessor position as "file:line".
 func (p preprocPos) String() string { return fmt.Sprintf("%s:%d", p.file, p.line) }
 
 type preprocessor struct {

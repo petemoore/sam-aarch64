@@ -1,3 +1,10 @@
+// Package render is the .tbn→text back end: it renders a decoded overlay
+// .tbn (a *format.File) back to canonical GNU-as source. Emit returns the
+// joined text; EmitLines returns it as PC-tagged Line records (so callers can
+// correlate output lines with addresses). It walks the record stream in PC
+// order, interleaving the sidecar comment/blank-run rows (pc.go) and splicing
+// instruction overlays back into mnemonic+operand text (overlay.go). This is
+// the inverse of the frontend+assemble path and drives `sam-aarch64 --render`.
 package render
 
 import (

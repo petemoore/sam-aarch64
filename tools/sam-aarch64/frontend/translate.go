@@ -1,3 +1,12 @@
+// Package frontend is the front end of the host assembler: it turns GNU-as
+// source text into the in-memory symbolic record IR (*format.File) that the
+// assemble package consumes. The pipeline is preprocess (includes / macros /
+// conditional assembly, preprocess.go) → lex (lexer.go) → parse (parser.go),
+// with Translate as the entry point. It also provides the post-parse record
+// transforms the host driver applies: the linker-equivalent flatten pass
+// (flatten.go / layout.go) and the comment/data stripping passes (strip.go).
+// The IR is never serialized — it is handed straight to the assembler (i48
+// decision A).
 package frontend
 
 import (

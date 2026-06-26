@@ -41,7 +41,11 @@ import (
 // for .include "file" directives.
 type includeDirsFlag []string
 
-func (i *includeDirsFlag) String() string     { return fmt.Sprint(*i) }
+// String renders the accumulated include directories for flag display.
+func (i *includeDirsFlag) String() string { return fmt.Sprint(*i) }
+
+// Set appends one -I directory to the list each time the flag is given,
+// implementing flag.Value so -I is repeatable.
 func (i *includeDirsFlag) Set(v string) error { *i = append(*i, v); return nil }
 
 func main() {

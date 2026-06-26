@@ -27,12 +27,18 @@ const (
 	Free Owner = 1
 	// Owner tags (>= firstOwnerTag): a page handed out to a subsystem. free_page
 	// only accepts a page whose current tag is one of these.
-	OwnerDoc     Owner = 2
-	OwnerIn      Owner = 3
-	OwnerOut     Owner = 4
+	OwnerDoc Owner = 2
+	// OwnerIn tags a page holding the assembler's IN (source/.tbn input) buffer.
+	OwnerIn Owner = 3
+	// OwnerOut tags a page holding the assembler's OUT (emitted-binary) buffer.
+	OwnerOut Owner = 4
+	// OwnerScratch tags a page handed out for transient working storage.
 	OwnerScratch Owner = 5
-	OwnerEnctab  Owner = 6
-	OwnerDisasm  Owner = 7
+	// OwnerEnctab tags a page holding the paged-out encoding table (enctab).
+	OwnerEnctab Owner = 6
+	// OwnerDisasm tags a page holding disassembler state or tables.
+	OwnerDisasm Owner = 7
+	// OwnerPayload tags a page holding an HLOAD'd boot payload (pages 12-15).
 	OwnerPayload Owner = 8
 
 	// firstOwnerTag is the lowest value that denotes a handed-out page. Anything

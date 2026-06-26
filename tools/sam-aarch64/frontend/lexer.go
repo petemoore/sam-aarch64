@@ -5,36 +5,75 @@ import (
 	"unicode"
 )
 
+// TokKind identifies the lexical category of a Tok produced by Lex.
 type TokKind byte
 
 const (
+	// TokEOF marks the end of the token stream.
 	TokEOF TokKind = iota
+	// TokEOL is a newline (end of a logical line).
 	TokEOL
+	// TokIdent is an identifier: a label, mnemonic, register, directive name,
+	// or symbol (a leading '.' is part of the identifier, e.g. ".text").
 	TokIdent
+	// TokInt is an integer literal (decimal, 0x hex, 0b binary, or a char
+	// literal); its value is in Tok.Int.
 	TokInt
+	// TokString is a double-quoted string literal; its decoded bytes (escapes
+	// resolved) are in Tok.Bytes.
 	TokString
+	// TokComma is a ',' operand separator.
 	TokComma
+	// TokHash is a mid-line '#' immediate prefix (as in `add x0, x0, #4`).
 	TokHash
+	// TokColon is a ':' (label terminator, or relocation-modifier delimiter as
+	// in `:lo12:`).
 	TokColon
+	// TokBang is a '!' write-back marker (as in `[x0, #8]!`).
 	TokBang
+	// TokDot is a bare '.' (the current-location symbol), distinct from a '.'
+	// that begins an identifier.
 	TokDot
+	// TokLBracket is a '[' opening a memory operand.
 	TokLBracket
+	// TokRBracket is a ']' closing a memory operand.
 	TokRBracket
+	// TokLParen is a '(' opening a parenthesised expression.
 	TokLParen
+	// TokRParen is a ')' closing a parenthesised expression.
 	TokRParen
+	// TokPlus is a '+' (addition).
 	TokPlus
+	// TokMinus is a '-' (subtraction or unary negation).
 	TokMinus
+	// TokStar is a '*' (multiplication).
 	TokStar
+	// TokSlash is a '/' (division); '//' and '/* */' are lexed as comments, not
+	// as this token.
 	TokSlash
+	// TokAmp is a '&' (bitwise AND).
 	TokAmp
+	// TokPipe is a '|' (bitwise OR).
 	TokPipe
+	// TokCaret is a '^' (bitwise XOR).
 	TokCaret
+	// TokTilde is a '~' (bitwise NOT).
 	TokTilde
+	// TokShl is a '<<' (left shift); a lone '<' is an error.
 	TokShl
+	// TokShr is a '>>' (right shift); a lone '>' is an error.
 	TokShr
+	// TokLineComment is a line comment ('//' anywhere, or '#' at line start);
+	// its body text is in Tok.Bytes.
 	TokLineComment
+	// TokBlockComment is a '/* ... */' block comment; its body (which may span
+	// lines) is in Tok.Bytes.
 	TokBlockComment
+	// TokLocalRef is a forward/backward local-label reference such as `1f` or
+	// `2b`; the label number is in Tok.Digit and the direction byte ('f' or
+	// 'b') in Tok.LocalDir.
 	TokLocalRef
+	// TokEquals is an '=' (the ldr literal-pool form `ldr Xn, =expr`).
 	TokEquals
 	// TokPercent is the '%' character. GNU as uses it as a prefix on
 	// section-type keywords in `.section NAME, "flags", %type`
@@ -42,6 +81,11 @@ const (
 	TokPercent
 )
 
+// Tok is a single lexical token. Beyond Kind and Pos, the value fields are
+// populated per kind: Int carries a TokInt's value, Text the identifier or
+// numeric-literal spelling (a char literal sets Int with no Text), Bytes the
+// TokString / comment body, and Digit+LocalDir a TokLocalRef's digit and
+// direction.
 type Tok struct {
 	Kind     TokKind
 	Pos      Position
