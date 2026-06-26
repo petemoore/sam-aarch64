@@ -3294,9 +3294,11 @@
   title: Hyperlink item refs to in-file anchors in the registry .md tables
   description: |
     In item-registry-open/closed.md + backlog.md, render id references (deps, dependents, parent, id-shaped refs) as in-file anchor links (e.g. [i122](#i122)) so a reader can jump to the referenced row within the same doc. Needs per-row anchors (GFM heading/HTML anchors in a table cell) + ref→anchor rewriting in gen.go. Pete request 2026-06-20.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 690, role: completing}
 
 - id: i160
   title: Tree-view preview at the bottom of the registry .md docs
