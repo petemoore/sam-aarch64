@@ -67,7 +67,7 @@ func TestAlignExponentGuard(t *testing.T) {
 
 	for _, c := range cases {
 		tbn := buildAlignTbn(t, c.n)
-		res := RunWithFiles(asm, enc, tbn, nil, 10*time.Second)
+		res := runProdComplete(t, asm, enc, tbn, 10*time.Second)
 		if c.wantTag == "" {
 			if !res.Passed {
 				t.Errorf("%s: expected clean assembly, got printer=%q exit=%s",

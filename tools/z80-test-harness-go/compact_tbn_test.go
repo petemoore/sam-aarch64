@@ -63,8 +63,6 @@ func TestCompactTbnAssembly(t *testing.T) {
 
 	asm, _ := os.ReadFile(asmPath)
 	enc, _ := os.ReadFile(encPath)
-	sd13, _ := os.ReadFile(sd13Path)
-	d15, _ := os.ReadFile(d15Path)
 	in, err := os.ReadFile(compactTbn)
 	if err != nil {
 		t.Fatalf("read compact .tbn: %v", err)
@@ -85,12 +83,10 @@ func TestCompactTbnAssembly(t *testing.T) {
 		t.Errorf("compact .tbn is %d IN pages, exceeds the 6-page / 96 KB ceiling", pages)
 	}
 
-	res := RunWithFiles(asm, enc, in,
-		[]NamedFile{
-			{Name: "sd13", Content: sd13, TargetPage: 13},
-			{Name: "d15", Content: d15, TargetPage: 15},
-		},
-		30*time.Second)
+	// Serve the COMPLETE prod-boot disk (sd13 + zx013 + d15) with
+	// StrictFileNotFound (i184): the prod assembler HLOADs all three at boot, so
+	// a missing one now fails loudly instead of silently no-opping.
+	res := runProdComplete(t, asm, enc, in, 30*time.Second)
 	if !res.Passed {
 		t.Fatalf("compact .tbn run FAILED: exit=%q printer=%q regs=%s",
 			res.ExitReason, res.PrinterCapture, res.FaultRegs)

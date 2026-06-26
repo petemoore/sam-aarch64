@@ -3524,10 +3524,12 @@
   title: Harness prod-boot decode tests should serve a complete disk + StrictFileNotFound (emulation-first uniformity)
   description: |
     Follow-up to i183. Several harness tests boot the PROD assembler with a minimal file set (align/org/fold guards, harness_test, compact_tbn) and rely on the legacy silent HLOAD no-op for the unconditional d15/sd13/zx013 boot loads. i183 made the faithful file-not-found longjmp OPT-IN (Config.StrictFileNotFound) to avoid breaking these. The emulation-first ideal (one layer, no carve-outs) is for every prod-boot test to serve a complete bootable disk and set StrictFileNotFound=true, so a future 'needed payload silently missing' bug fails loudly. Low priority, dev-tool test hygiene (not a CI gate). Refs: tools/z80-test-harness-go/harness.go Config.StrictFileNotFound, SCOPE.md i183 note.
-  status: OPEN
+  status: DONE
   depends_on: [i183]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 697, role: completing}
 
 - id: i185
   title: "Correct SAMDOS file-I/O error references: app vector is DOSER (&5BC0), not (hksp)"

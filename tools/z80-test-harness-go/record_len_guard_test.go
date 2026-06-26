@@ -78,7 +78,7 @@ func TestRecordPayloadExactlyFull(t *testing.T) {
 	}
 	for _, c := range cases {
 		tbn := wrapRecords(t, litDataRecord(c.payloadLen))
-		res := RunWithFiles(asm, enc, tbn, nil, 10*time.Second)
+		res := runProdComplete(t, asm, enc, tbn, 10*time.Second)
 		if c.wantPass && !res.Passed {
 			t.Errorf("%s: expected clean assembly, got printer=%q exit=%s",
 				c.name, res.PrinterCapture, res.ExitReason)
@@ -107,7 +107,7 @@ func TestZeroLengthRecordRejected(t *testing.T) {
 	}
 
 	tbn := wrapRecords(t, litDataRecord(0))
-	res := RunWithFiles(asm, enc, tbn, nil, 10*time.Second)
+	res := runProdComplete(t, asm, enc, tbn, 10*time.Second)
 	if res.Passed {
 		t.Errorf("zero-length LIT_DATA record: expected rejection, but assembly PASSED (BC underflow!)")
 	} else {
