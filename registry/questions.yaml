@@ -45,3 +45,8 @@
   body: |
     i234 must free section-C space for the i204b overlay_classify/literal_word/compact_inst routines (~1300 B) + their boot self-test. These call encode_inst (reads ENCTAB in section A) so they CANNOT be evicted off-axis, and the commoning lever (i205/q43 steer, i206/i218) is EXHAUSTED for ENCTAB-coupled code (recovers tens of bytes; test variant has ~11 B headroom vs a 1300 B need). Remaining viable levers (i69/i205 analysis): (2) a SECOND BUILD_TESTS boot variant (new -D flag + make target + harness boot test + CI job) running the encode/overlay suite in a boot WITHOUT the other inline test suites — time-multiplexing memory per i69's 'tests need not coexist'; (3) chunked payloads; (4) the i2/q36 dynamic page-pool memory model (the long-term fix that lifts the whole section-C/scratch contention). Lever 2 adds a permanent CI job + build variant (a standing cost); lever 4 is a multi-session refactor. Precedent: the analogous i205 budget-relief was Pete-steered via q43. Pete's call on which lever before the agent builds i234.
   owner: pete
+
+- id: q56
+  body: |
+    Publish the SAMBOOT/trinboot patch (configurable default-boot-record + opening-stripes restore) as an open-source tool for Trinity owners (i177)? q55 (2026-06-26) decided to KEEP IT PRIVATE for now — the bootloader is Colin Piggot's boot block (private bytes) + our patches, built locally, out of CI. If you DO want to share it, the clean route per q55 is an upstream PATCH to LongSteve's public Trinity-bootloader repo (our diffs only, never Colin's bytes) + a link from our project, NOT a redistribution. Until you decide to publish, i177 stays blocked (no autonomous publication of Colin-derived work). Answer to unblock or WONTFIX i177.
+  owner: pete

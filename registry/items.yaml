@@ -3172,9 +3172,11 @@
   title: "Turn-end safety valve: make stop-after-merge structural, not discretionary"
   description: |
     The autonomous-loop context protection (touch task-done -> end turn -> monitor /clears for a fresh context) relies on the agent CHOOSING to stop after each merged PR — the easiest step to skip mid-flow. 2026-06-20: a session never stopped, accumulating ~10 merged PRs into one polluted context (judgment-picking + missing-edge blindness followed). Make end-turn-after-merge STRUCTURAL: e.g. the monitor detects 'new merge to main + no task-done while a turn is still running' and intervenes, and/or a gh-pr-merge wrapper auto-touches task-done. Design + own PR.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 688, role: completing}
 
 - id: i148
   title: "registry CLI: a 'view' sub-command to print an item/question by id (replace ad-hoc YAML greps)"
@@ -3419,7 +3421,7 @@
   description: |
     Release the SAMBOOT EEPROM boot-config + stripes-restore patch as a standalone open-source tool for any Trinity owner: a Python program sent over trinload that patches the EEPROM, or a bootable .mgt. Gives Trinity users the configurable default-boot-record + opening-stripes feature for free. NOT a requirement for SAMBOOT -- depends on it (publication only).
   status: OPEN
-  depends_on: [i135, i176]
+  depends_on: [i135, i176, q56]
   kind: leaf
   owner: agent
   refs: [docs/specs/samboot.md]
