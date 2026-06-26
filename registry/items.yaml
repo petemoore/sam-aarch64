@@ -2649,9 +2649,11 @@
   title: .mgt bootable server-disk vessel + BASIC loader that appends the same config block
   description: |
     The OTHER shipping vessel (sibling of i121d's trinload vessel): a bootable .mgt that a BASIC loader boots, loading the WRQ server code + appending the i121h config block at the same memory location, so the runtime image matches the trinload vessel exactly. The disk carries the config file the loader reads (absence -> the future i121k SAM prompt). Same program source as the trinload vessel; only the packaging differs. Sibling deliverable to i121d.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 699, role: completing}
   parent: i121
 
 - id: i121j

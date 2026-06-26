@@ -832,12 +832,20 @@ $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map: src/netboot/net
 
 netboot-serve-boot: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map
 
-# A bootable SAM disk image that auto-runs the serve-files TFTP demo on power-on.
-# Boot it on a SAM + Trinity, then from any LAN machine `tftp <sam-ip>` + `get
-# hello.txt`, or `curl tftp://<sam-ip>/hello.txt` (see
-# docs/notes/netboot-trinity-testing.md "Serve-files demo").
-netboot-serve-disk: $(BUILD)/netboot_serve_boot.bin $(BUILD)/build-disk
+# A bootable SAM disk image that auto-runs the combined RRQ+WRQ serve program on
+# power-on (i121i — the .mgt packaging vessel, sibling of the i121d trinload code
+# block). The AUTO BASIC LOADs the serve binary at &8000 then OVERLAYS a small
+# SERVE_CONFIG CODE file ("cfg") at the SERVE_CONFIG address, so the disk carries
+# its WRQ record-placement strategy explicitly — the runtime image matches the
+# trinload vessel's host-patched block exactly. Default strategy highest-free;
+# override at build time with NETBOOT_STRATEGY=lowest | explicit:N. Boot it on a
+# SAM + Trinity, then from any LAN machine `tftp <sam-ip>` (get serves files; put
+# writes a disk image to a free record per the strategy) — see
+# docs/notes/netboot-trinity-testing.md.
+NETBOOT_STRATEGY ?= highest
+netboot-serve-disk: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map $(BUILD)/build-disk
 	$(BUILD)/build-disk -netboot $(BUILD)/netboot_serve_boot.bin -netboot-name serve \
+	    -netboot-config-map $(BUILD)/netboot_serve_boot.map -netboot-strategy $(NETBOOT_STRATEGY) \
 	    $(BUILD)/netboot_serve.mgt
 
 # netboot-serve-trinload (i121d) — the pushable serve block, ALSO the i194 "disk-record
