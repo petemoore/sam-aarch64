@@ -4578,9 +4578,11 @@
   title: Delete the superseded in-repo SAMBOOT splice/inject apparatus (samboot_bootblock/config + splice diagnostics) now the forked bootloader supersedes it
   description: |
     q55 (2026-06-26) abandoned the in-repo splice-into-captured-bootblock approach (i259/i260/i261 WONTFIX) for the private forked bootloader (trinity-autoboot). The in-repo apparatus it leaves behind — src/netboot/samboot_bootblock.asm, samboot_config.asm, the splice-inject diagnostics (samboot_inject_fullboot_test.go and the splicedDeviceEEPROM/loadInjectBlob helpers) and related Makefile/CI wiring — is now superseded dead code (emulation-only, harmless, but hygiene debt per CLAUDE.md doc-lifecycle). Audit what is genuinely unused (some helpers like deviceLinearEEPROM / loadRealCaptures are shared with the still-valid real-boot tests — keep those), then delete the splice-only parts in a focused PR. Preserve the RE findings (the register-clobbering proof, &805F->&40A1) in git history / the trinity-autoboot DESIGN.md before deleting.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 710, role: completing}
 
 - id: i266
   title: Install TAPO smart-plug for autonomous SAM power-cycling (enables agent-run hardware sessions)
@@ -4605,5 +4607,14 @@
   description: |
     The SAM deploy-guard hook (i252/i256, meant to fire only on actual SAM-push execution) blocked a read-only 'go test ./tools/netboot-oracle/z80/ -run TestTFTPClient...' command during i120b-b1 because the command string contained 'tftp' (and a heredoc with tftp paths). i256 was supposed to fire only on actual push execution, not mere mentions — a host 'go test' is neither a deploy nor a push. Tighten the matcher so plain 'go test'/build/grep commands that merely mention a protocol keyword are not treated as deployments (match the actual deploy tool invocation, e.g. trinload-push/DEPLOY paths, not substring 'tftp'). Low priority; worked around in-session by avoiding the keyword in the command.
   status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i269
+  title: "Remove now-dead SAMBOOT_BOOTBLOCK conditional gating from eeprom.asm/bdos_seam.asm/samboot_config.asm (splice abandoned, i265)"
+  description: |
+    After i265 deleted the splice apparatus (samboot_bootblock.asm was the ONLY definer of SAMBOOT_BOOTBLOCK), the 'if defined(SAMBOOT_BOOTBLOCK)...' conditional gating in the still-valid shared files eeprom.asm, bdos_seam.asm, and samboot_config.asm is dead code (the flag is never set; the ==0 branches always compile). Harmless (builds green) but hygiene debt. Remove the dead SAMBOOT_BOOTBLOCK branches + the 2 stale samboot_config.asm comments referencing the deleted samboot_bootblock.asm. NOTE: samboot_config.asm line 71 carries an i231-counted NETBOOT_HOSTTEST==0 carve-out inside a SAMBOOT_BOOTBLOCK condition — simplifying it changes the i231 ratchet ledger, so this composes with i231b (ratchet the allowlist down). Keep the carve-out guard green.
+  status: OPEN
+  depends_on: [i265]
   kind: leaf
   owner: agent
