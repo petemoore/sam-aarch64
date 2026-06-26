@@ -29,6 +29,7 @@
 //	registry [--migrating] split   --parent iN --title … [--desc …] [--status …] [--owner …] [--kind …] [--pr N [--role …]] [--dep …]… [--ref …]…   (child id determined from the parent)
 //	registry [--migrating] set-status --id iN --status … [--pr N]
 //	registry [--migrating] set-title  --id iN --title "…"        (items only)
+//	registry [--migrating] set-owner  --id iN --owner agent|pete  (items only)
 //	registry [--migrating] set-desc   --id iN|qN --desc "…"      (item description / question body)
 //	registry [--migrating] set-pr  --id iN --pr N [--role completing|followup]
 //	registry [--migrating] dep     add|rm --id iN --on iM|qN
@@ -130,6 +131,8 @@ func main() {
 		runSetStatus(args[1:], paths)
 	case "set-title":
 		runSetTitle(args[1:], paths)
+	case "set-owner":
+		runSetOwner(args[1:], paths)
 	case "set-desc":
 		runSetDesc(args[1:], paths)
 	case "set-pr":
@@ -161,6 +164,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] split    --parent iN --title … [--desc …] [--status …] [--owner …] [--kind …] [--pr N] [--dep …]… [--ref …]…   (child id auto-determined)")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] set-status --id iN --status … [--pr N]")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] set-title  --id iN --title \"…\"        (items only)")
+	fmt.Fprintln(os.Stderr, "  registry [--migrating] set-owner  --id iN --owner agent|pete  (items only)")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] set-desc   --id iN|qN --desc \"…\"      (item description / question body)")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] set-pr   --id iN --pr N [--role completing|followup]")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] dep      add|rm --id iN --on iM|qN")

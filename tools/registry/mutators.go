@@ -763,6 +763,44 @@ func runSetTitle(args []string, paths mutatorPaths) {
 	os.Exit(1)
 }
 
+// runSetOwner implements `set-owner --id iN --owner agent|pete` (items only).
+// It is the lever the needs-Pete model (i169) uses to move a presence-gated item
+// out of the agent `ready` queue (owner:pete) or back into it (owner:agent) —
+// previously impossible without a hand-edit of items.yaml (which bypasses the
+// CLI's validation + guards). Questions are always owner:pete, so there is no
+// set-owner for qN. The owner is restricted to the two meaningful values so a
+// typo (e.g. "peet") cannot silently break the `ready` owner filter, which
+// matches owner == "pete" exactly.
+func runSetOwner(args []string, paths mutatorPaths) {
+	fs := flag.NewFlagSet("set-owner", flag.ExitOnError)
+	id := fs.String("id", "", "item id to update")
+	owner := fs.String("owner", "", "new owner: agent|pete")
+	fs.Parse(args) //nolint:errcheck // ExitOnError handles
+	if *id == "" || *owner == "" {
+		fmt.Fprintln(os.Stderr, "registry set-owner: --id and --owner are required")
+		os.Exit(2)
+	}
+	if *owner != "agent" && *owner != "pete" {
+		fmt.Fprintf(os.Stderr, "registry set-owner: --owner must be agent|pete, got %q\n", *owner)
+		os.Exit(2)
+	}
+	reg, err := loadReg(paths)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	for i := range reg.Items {
+		if reg.Items[i].ID == *id {
+			reg.Items[i].Owner = *owner
+			applyAndCommit(reg, paths)
+			fmt.Printf("registry: %s owner → %s\n", *id, *owner)
+			return
+		}
+	}
+	fmt.Fprintf(os.Stderr, "registry set-owner: item %q not found\n", *id)
+	os.Exit(1)
+}
+
 // runSetDesc implements `set-desc --id iN|qN --desc "…"` — updates an item's
 // Description or a question's Body. The ≤2000-char limit is enforced by validate.
 // Exists so descriptions never need a hand-edit of items.yaml/questions.yaml.
