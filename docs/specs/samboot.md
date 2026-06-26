@@ -167,6 +167,25 @@ real reader decodes them back). The actual **flash of the chunk to a real EEPROM
 (via the Trinity `write_chunk` routine) is the inherently-hardware destructive
 path — it happens at i135c, and is **out of scope** for i176.
 
+### Firmware identity stamp (i213) — a sibling named chunk
+
+The customised EEPROM also carries a small **firmware identity stamp** in its own
+named chunk, **`"Trinity Firmware"`** (exactly 16 bytes, no padding). It exists
+because the B-DOS in control is *not* guaranteed to be the one we flashed — B-DOS
+can be loaded from **floppy** (the normal case without our customised ROM chip) —
+so our software cannot assume the patched firmware is present. The stamp lets it
+**detect which firmware is running** and handle a mismatch gracefully (it is *not*
+capability negotiation — record access through the EEPROM B-DOS is transparent;
+i214 WONTFIX). Payload: a 4-byte magic `"SAMB"` (chunk+0..3) + a version byte
+(chunk+4), rest reserved `0`. The Z80 reader `trinity_read_stamp`
+(`src/netboot/trinity_identity_stamp.asm`) returns the version in `A` (0 = not our
+firmware; CY mirrors), reusing `find_index`/`read_chunk` exactly like the config
+reader; the host authority + format are `tools/netboot-oracle/trinityfw`. Same
+scope split as i176: format + reader + emulation round-trip here; the **flash** of
+the stamp rides the i135c bootblock write (private fork), out of scope. This is
+the second named chunk *we* define (alongside `"SAMBOOT Config  "`); both are
+found by name, so they never collide.
+
 ## 5. What is already built (the transport)
 
 Most of the network transport the loop needs already exists and is host-verified;
