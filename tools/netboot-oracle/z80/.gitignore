@@ -1,0 +1,4 @@
+# Compiled cmd executables that `go build ./...` drops into this dir
+# (run `go run ./cmd/NAME` instead; these are never committed).
+/bdostrace
+/bdostrace-paged
