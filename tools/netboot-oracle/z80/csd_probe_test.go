@@ -187,9 +187,9 @@ func runCSDProbeRead(t *testing.T, mac *z80h.Machine) []byte {
 // where the vendored unbounded wait_ready spun forever on every SPI byte. With the
 // bounded sd_wait_ready, csd_read_into_stage must TERMINATE (return rather than hit
 // the maxSteps runaway cap) and leave the unmistakable "SD BUSY TIMEOUT!" marker in
-// STAGE instead of garbage masquerading as a CSD. (Only the SD path is bounded; the
-// vendored ENC driver's own wait_ready is unchanged, so this test exercises the SD
-// read in isolation and does not run drv_init under StuckBusy.)
+// STAGE instead of garbage masquerading as a CSD. (This exercises the SD read in
+// isolation and does not run drv_init under StuckBusy; the ENC driver's own wait_ready
+// is independently bounded by i280b-b2c — see TestWaitReadyBoundedOnStuckBusy.)
 func TestCSDProbeBoundedOnStuckBusy(t *testing.T) {
 	csd := z80h.CSDForV2(0x01E8FF) // a real CSD is configured, but it can never be read
 	mac := loadCSDProbe(t)
