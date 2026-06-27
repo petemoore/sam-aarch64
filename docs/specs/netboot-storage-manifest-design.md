@@ -125,12 +125,24 @@ fresh one).
      byte-identically. Never produces a bootable disk.
    - **explicit `trinity-sam-disks/` prefix** — `tftp put X trinity-sam-disks/X` declares
      "store as a SAM disk **record**." The server **validates before committing** and
-     **rejects on mismatch** (so corrupt disk-records can't accumulate): size **== 819,200**
-     (a Trinity record is exactly that) **and** a structural signature — the **`BDOS` stamp
-     at byte 232** that HRECORD-select/boot already requires (extensible to other SAM disk
-     formats later via their own signatures). A raw record is simultaneously **bootable**
-     (HRECORD + boot) and **servable-raw** (read sectors 0..1599 = the `.mgt`), so a disk
-     needs **one copy**, not two — no separate "extract to a record" step.
+     **rejects on mismatch** (so corrupt disk-records can't accumulate): the check is
+     **size == 819,200** — a Trinity record is exactly one `.mgt` image, and that is the
+     whole structural contract. **A pushed `.mgt` does NOT need B-DOS installed on it**: a
+     `.mgt` is a disk *container* (80×2×10×512 raw, no header — `samfile`), and which DOS
+     (B-DOS, SAMDOS, a game's own loader, none) is formatted *inside* it is one level
+     deeper and **irrelevant to Trinity** — it stores the record container, not its
+     contents (Pete, 2026-06-21 + 2026-06-29). The `trinity-sam-disks/` **prefix carries
+     the intent** (it disambiguates a coincidentally-819,200-byte non-disk file from an
+     actual SAM disk), so size alone is a sufficient *validation* of that declared intent;
+     the local filename/extension is irrelevant. A raw record is simultaneously **bootable**
+     (HRECORD + boot of the disk's own boot sector — which never inspects +232) and
+     **servable-raw** (read sectors 0..1599 = the `.mgt`), so a disk needs **one copy**,
+     not two — no separate "extract to a record" step. *(Earlier drafts of this decision
+     also required a `BDOS`@232 stamp "that HRECORD-select/boot already requires" — that was
+     a misconception: the stamp is B-DOS's own catalog/format signature, read by
+     `bdos_inspect_record` to **identify** existing B-DOS disks for the overwrite-safety
+     show-name gate, NOT a boot or selection requirement. It wrongly rejected every bootable
+     non-B-DOS-formatted disk, including all of ours. Removed; size-only stands.)*
 
    The filename is the only intent lever a *stock* `tftp`/`curl` client can set (mode is
    fixed to `octet`; custom RFC-2347 options aren't reachable from stock clients), so the

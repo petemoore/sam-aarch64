@@ -5017,3 +5017,19 @@
   owner: agent
   prs:
     - {num: 749, role: completing}
+
+- id: i284
+  title: Push the CJ's Elephant playable disk (cjs-sam-remake boot_m2b.mgt) to the SAM over Trinity TFTP — the real-world end-to-end demo of the now-working SD write
+  description: |
+    Pete's real-world validation/demo of the i280 write fix (HWSAD A=2, hardware-confirmed 2026-06-29): push an actual playable game disk from ~/git/cjs-sam-remake (the CJ's Elephant Antics SAM remake, a SEPARATE Pete project) to a free Trinity SD record over the netboot serve's WRQ path, then boot it on the SAM. The playable disk is ~/git/cjs-sam-remake/build/boot_m2b.mgt per that repo's docs/WRITEUP.md. NUANCE: boot_m2b.mgt is ~66KB, NOT a full 800K (819200 B) .mgt, so the i121f disk-RECORD path (validates size==819200 + BDOS stamp@232) will reject it at FINALIZE; options: (a) push via the flat-file archive path (wd_finalize_flat / HSAVE) instead of the disk-record path; (b) pad/build a full 800K bootable .mgt of the game; (c) use one of the full-800K CJ disks (boot_sb.mgt / boot_test.mgt). Decide the path with Pete. This also exercises i270a's bd_list_write_hw record-claim on hardware (the still-unverified piece). Depends on the write fix (i280, DONE) + i194/i270a for the record-claim path. NOTE: no prior registry item existed for this despite expectation — filed 2026-06-29.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i285
+  title: "Disk-record push validation: size-only (drop the invalid BDOS@232 stamp gate)"
+  description: |
+    The trinity-sam-disks/ WRQ disk-record validation required size==819200 AND a 'BDOS' stamp at byte 232. The stamp gate is INVALID: a .mgt saved to Trinity does not need B-DOS installed on it — the DOS (if any) inside the .mgt container is one level deeper and irrelevant to Trinity; the stamp is B-DOS's catalog/format signature (bdos_inspect_record still reads it to IDENTIFY B-DOS disks for the overwrite-safety show-name gate), NOT a boot/selection requirement. The old gate wrongly rejected every bootable non-B-DOS .mgt (incl. all our build/*.mgt and cj.mgt). Fix: size-only validation in bdos_validate_disk_record (Z80) + ValidateDiskRecord (Go) + flipped tests + §6.5 doc. This was ANALYZED + IMPLEMENTED on 2026-06-21 (chat archive) but the code edit was never committed (lost on no branch); restored 2026-06-29. Pete confirmed (2026-06-21 + 2026-06-29). Enables i284/i194.
+  status: DONE
+  kind: leaf
+  owner: agent

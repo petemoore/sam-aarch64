@@ -37,57 +37,45 @@ func TestClassify(t *testing.T) {
 	}
 }
 
-// TestValidateDiskRecord pins the size+stamp validation contract.  Both
-// conditions must hold independently, and each has its own distinct error
-// message so the rejection reason is diagnosable.
+// TestValidateDiskRecord pins the SIZE-ONLY validation contract: a Trinity
+// record is exactly RecordSize bytes, and that is the whole structural check.
+// A pushed .mgt does NOT need B-DOS installed on it — the DOS (if any) inside
+// the .mgt is one level deeper and irrelevant to Trinity (Pete, 2026-06-21 +
+// 2026-06-29). The "trinity-sam-disks/" prefix carries the intent; size
+// confirms it. The old "BDOS"@232 gate wrongly rejected every bootable
+// non-B-DOS-formatted disk (including all of ours); it has been removed.
 func TestValidateDiskRecord(t *testing.T) {
-	// A valid first sector: 512 bytes with the BDOS stamp at offset 232.
-	validSector := make([]byte, 512)
-	copy(validSector[BDOSStampOffset:], []byte("BDOS"))
-
-	// Valid: exactly RecordSize and stamp present.
-	if err := ValidateDiskRecord(RecordSize, validSector); err != nil {
-		t.Errorf("valid record rejected: %v", err)
-	}
-
-	// Wrong size: one byte short.
-	if err := ValidateDiskRecord(RecordSize-1, validSector); err == nil {
-		t.Error("wrong-size record accepted, want rejection")
-	}
-
-	// Wrong size: one byte over.
-	if err := ValidateDiskRecord(RecordSize+1, validSector); err == nil {
-		t.Error("over-size record accepted, want rejection")
-	}
-
-	// Zero size.
-	if err := ValidateDiskRecord(0, validSector); err == nil {
-		t.Error("zero-size record accepted, want rejection")
-	}
-
-	// Correct size but stamp missing (all-zero first sector).
+	// Exactly RecordSize with NO stamp (the real-world case — e.g. a SAMDOS or
+	// game .mgt like cj.mgt): ACCEPTED.
 	noStamp := make([]byte, 512)
-	if err := ValidateDiskRecord(RecordSize, noStamp); err == nil {
-		t.Error("record with missing BDOS stamp accepted, want rejection")
+	if err := ValidateDiskRecord(RecordSize, noStamp); err != nil {
+		t.Errorf("stampless full-size .mgt rejected (DOS-inside is irrelevant): %v", err)
 	}
 
-	// Correct size but stamp bytes wrong (4 bytes, not "BDOS").
-	badStamp := make([]byte, 512)
-	copy(badStamp[BDOSStampOffset:], []byte("XXXX"))
-	if err := ValidateDiskRecord(RecordSize, badStamp); err == nil {
-		t.Error("record with wrong stamp bytes accepted, want rejection")
+	// Exactly RecordSize with a non-"BDOS" stamp (some other DOS inside): ACCEPTED.
+	otherDOS := make([]byte, 512)
+	copy(otherDOS[BDOSStampOffset:], []byte("XXXX"))
+	if err := ValidateDiskRecord(RecordSize, otherDOS); err != nil {
+		t.Errorf("full-size .mgt with a non-BDOS DOS rejected: %v", err)
 	}
 
-	// First sector too short to contain the stamp (235 bytes instead of >=236).
-	shortSector := make([]byte, BDOSStampOffset+3)
-	if err := ValidateDiskRecord(RecordSize, shortSector); err == nil {
-		t.Error("record with too-short first sector accepted, want rejection")
+	// A B-DOS-formatted disk (stamp present) is of course still valid.
+	withStamp := make([]byte, 512)
+	copy(withStamp[BDOSStampOffset:], []byte("BDOS"))
+	if err := ValidateDiskRecord(RecordSize, withStamp); err != nil {
+		t.Errorf("B-DOS-formatted record rejected: %v", err)
 	}
 
-	// Stamp present but at wrong offset (231, one byte early) — stamp@232 absent.
-	wrongOffset := make([]byte, 512)
-	copy(wrongOffset[BDOSStampOffset-1:], []byte("BDOS"))
-	if err := ValidateDiskRecord(RecordSize, wrongOffset); err == nil {
-		t.Error("record with stamp at wrong offset accepted, want rejection")
+	// firstSector is no longer inspected, so even a nil/short sector validates
+	// when the size is right (size is the whole contract now).
+	if err := ValidateDiskRecord(RecordSize, nil); err != nil {
+		t.Errorf("nil first sector with correct size rejected: %v", err)
+	}
+
+	// Wrong sizes are still rejected (one short, one over, zero).
+	for _, sz := range []int{RecordSize - 1, RecordSize + 1, 0} {
+		if err := ValidateDiskRecord(sz, withStamp); err == nil {
+			t.Errorf("wrong-size record (%d) accepted, want rejection", sz)
+		}
 	}
 }

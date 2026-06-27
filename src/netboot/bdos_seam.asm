@@ -319,20 +319,18 @@ bdos_validate_disk_record:
                 sbc     hl, de
                 jr      nz, bvdr_fail            ; high word mismatch
 
-                ; --- stamp check: BD_READ_BUF+232 == "BDOS" ---
-                ; Same 4-byte compare pattern as bdos_inspect_record (bir_stamp).
-                ld      hl, BD_READ_BUF + 232
-                ld      de, bdos_id_str
-                ld      b, 4
-bvdr_stamp:
-                ld      a, (de)
-                cp      (hl)
-                jr      nz, bvdr_fail
-                inc     hl
-                inc     de
-                djnz    bvdr_stamp
-
-                ld      a, 1                     ; both checks passed
+                ; Size is the whole contract: a Trinity record is exactly 819200
+                ; bytes, and any full SAM disk image (B-DOS, SAMDOS, a game, our
+                ; build-disk output) is a valid bootable record — it does NOT need
+                ; B-DOS installed on it. The "BDOS"@232 stamp is B-DOS's own
+                ; catalog/format signature (bdos_inspect_record still reads it to
+                ; IDENTIFY B-DOS disks for the overwrite-safety show-name gate), NOT
+                ; a boot or selection requirement: booting a record executes the
+                ; disk's own boot sector and never checks +232. Validating the stamp
+                ; here wrongly rejected every bootable non-B-DOS-formatted disk
+                ; (including all of ours). Drop it; keep size. (Pete, 2026-06-21 +
+                ; 2026-06-29; analysis in the 2026-06-21 session record.)
+                ld      a, 1                     ; size check passed
                 ld      (BD_REC_VALID), a
                 ret
 

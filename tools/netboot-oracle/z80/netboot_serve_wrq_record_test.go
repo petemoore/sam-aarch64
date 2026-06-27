@@ -500,16 +500,23 @@ func TestServeWRQRecordPushValidatesFull(t *testing.T) {
 		assertErrorDiskFull(t, final)
 	})
 
-	t.Run("missing BDOS stamp → ERROR(3)", func(t *testing.T) {
+	t.Run("stampless 819200-byte image → ACK (a .mgt needs no B-DOS installed)", func(t *testing.T) {
 		const record = 4
 		img := recordValidImage()
-		copy(img[bdos.BDOSStampOffset:bdos.BDOSStampOffset+4], []byte("XXXX")) // right size, no stamp
-		mac, _, final := streamFullRecordAndFinalize(t, img, record)
+		copy(img[bdos.BDOSStampOffset:bdos.BDOSStampOffset+4], []byte("XXXX")) // right size, non-BDOS DOS inside
+		mac, store, final := streamFullRecordAndFinalize(t, img, record)
 
-		if v := mac.Read(symAddr(t, mac, "BD_REC_VALID"), 1)[0]; v != 0 {
-			t.Errorf("BD_REC_VALID = %d, want 0 (missing stamp rejected)", v)
+		if v := mac.Read(symAddr(t, mac, "BD_REC_VALID"), 1)[0]; v != 1 {
+			t.Errorf("BD_REC_VALID = %d, want 1 (size-only validation: the DOS inside the .mgt is irrelevant)", v)
 		}
-		assertErrorDiskFull(t, final)
+		assertRecordSectors(t, store.SectorWrites(), img, record)
+		pay := udpPayload(t, final)
+		if tftp.Opcode(pay) != tftp.OpACK {
+			t.Fatalf("final reply opcode = %d, want ACK(%d) for a valid full-size .mgt — got %x", tftp.Opcode(pay), tftp.OpACK, pay)
+		}
+		if blk, err := tftp.ParseACK(pay); err != nil || blk != 1600 {
+			t.Fatalf("final ACK block = %d (err %v), want 1600", blk, err)
+		}
 	})
 }
 
