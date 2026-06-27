@@ -5058,3 +5058,11 @@
   owner: agent
   prs:
     - {num: 753, role: completing}
+
+- id: i288
+  title: "Faithful PC=0->trinload->serve->WRQ emulation rig (real B-DOS, no Go mock): reproduce/trace the cj.mgt-push HRECORD crash"
+  description: |
+    Pete's directive (2026-06-30): emulation-FIRST with AUTHENTIC Z80 B-DOS (NO Go mocks); boot exactly as the real SAM (PC=0 -> Colin forked ROM + our forked EEPROM bootloader + real Colin B-DOS -> auto-boot SD record 3 = trinload -> trinload loads the serve -> push cj.mgt WRQ); use B-DOS routines directly (read 1 sector, write 1 sector, x1600), NOT a reimplementation; no major rewrites (likely one/two mis-set registers). Built on CLEAN main. NEW rig tools/netboot-oracle/z80/trinity_full_flow_repro_test.go (trinityboot tag, local-only, private deps) on branch trinity-fullflow-emulation-repro. VERIFIED so far: HRECORD(3) under real B-DOS mounts (CMD17 LBA 152) + reads record-3 directory (CMD17 LBA 3352, returns seeded trinload.mgt bytes) -- mount+select+read all work in emulation; the gap is ALHK not loading record 3's AUTO file (AUTOtrin.O) -- only 2 CMD17 reads, then returns to the ROM editor (&01BC), trinload (&6000) never runs. NEXT: understand ALHK (hook 136/&88) auto-file load; then drive the serve write under real B-DOS and see if the HRECORD-WRITE crash reproduces. Supersedes the unmerged i289/PR#754 pivot (those are backup-only per Pete).
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
