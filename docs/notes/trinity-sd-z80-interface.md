@@ -1517,6 +1517,23 @@ Every `HWSAD_PRE` is now followed by `HWSAD_POST` — **the per-block SD write c
 
 Authority: this section; `bdos15a.src.txt` (`HWSAD:530`, `set.drive`); `bdos15t-beta6.annotated.dis` (`&9E16` HWSAD prelude `&9E3C/&9E3F`, `&8662` device-select `cp 1`/`cp 2`); the faithful rig `bdos_save_writes_record_test.go` (§8ad) + `bdos_hwsad_drive_contract_test.go` (this section).
 
+## 8ag. FULL-DISK cj.mgt push attempt — the per-block write fix is necessary but NOT sufficient: the full push still hangs in the B-DOS HOOK path (the claim's HRECORD), the §8d/§8m shared-PIC / SPI-persistence class (i194/i284, q62)
+
+Goal (Pete): write a real 800K `.mgt` (his CJ's Elephant remake `boot_m2b.mgt` → `cj.mgt`, 819200 B) to a free Trinity record and BOOT it (write-then-boot = full autonomy). With the A=2 write fix (§8af, i280) + the size-only validation fix (i285 — the `BDOS`@232 gate was invalid; a `.mgt` needs no B-DOS installed on it) both in, `cj.mgt` validates and the per-block write device-select is correct. But the **end-to-end hardware push HANGS**:
+
+- **`curl exit 28` (timeout) for BOTH the production AND the debug serve** (~301 s). So it is **not** the debug markers' ENC-TX-near-SD wedge (§8x) — production has no markers and still hangs.
+- The **debug serve localizes it**: markers reach `WRQ_ENTRY → CLAIM_FIND_PRE → CLAIM_SELECT_PRE`, then **silence** (no `CLAIM_SELECT_POST`). So the hang is the **claim's HRECORD select** (`bdos_select_record`, B-DOS hook 156), BEFORE the per-block write is ever reached.
+- **It is the SAME shape as the §8af write hang, one hook earlier:** our OWN raw CMD17 list reads (`bd_list_read_hw`, `CLAIM_FIND_PRE`) **succeed** (a free record is found → `CLAIM_SELECT_PRE` is reached); then the **B-DOS hook** (HRECORD) hangs. Our raw ops self-heal (re-run `sdc_init_ladder` every call, §8m); B-DOS's hooks rely on boot-time SPI-mode **persistence** which the serve's `drv_init` ENC `ereset` (after trinload's `drv_exit` handoff) disturbs → HRECORD's internal SD read spins at `&A7CC`.
+- **NOT an A=drive bug:** HRECORD's contract is genuinely `A=0` + record in HL ("ambient device becomes D2", `bdos15t-beta6.annotated.dis:4410`), so `bdos_select_record` is correct; the §8af A=2 fix is HWSAD/HRSAD-specific.
+- **It is FLAKY:** the §8af/i283 shot's claim+write SUCCEEDED (synthetic 1.5K payload, `CLAIM_SELECT_POST → HWSAD_POST`); the full 1600-block `cj.mgt` push hangs at the claim. Hardware-state-dependent, the §8d Heisenbug signature.
+- **Idle secondary mode:** a *delayed* curl (idle serve) instead **exits to BASIC** — and `TestZZServeIdle` confirmed `serve_main` **spins forever on idle in emulation** (PC=&AEA5, cap hit), so that exit is hardware-specific too (likely trinload's `drv_exit`→serve handoff; trinload's identical Esc poll keeps trinload up, so it is not the Esc poll).
+
+**Emulation cannot reproduce any of this** (the koron-go SD model always clears `&DC` BUSY + the flat ENC doesn't model the shared-PIC wedge / SPI persistence / trinload `drv_exit` handoff). The full WRQ disk push is green in emulation (`TestServeWRQRecordPushValidatesFull`), and `serve_main` loops fine — so this is purely the hardware shared-PIC class.
+
+**This is the architecture tension q62 raises:** the standing guidance is "reuse B-DOS hooks, don't reimplement", but the B-DOS hooks (HRECORD claim, HWSAD write) are exactly what hang, while our own self-healing raw SD ops survive. Options (Pete to decide, q62): (a) do the claim+write with our own self-healing CMD17/CMD24 (bypass B-DOS for the push); (b) self-heal the SPI right before each B-DOS hook (but §8m's H2′ probe showed re-establishing the card before HWSAD still hung); (c) the §8x scope path on the shared PIC (ENC28J60 Rev-B7 `TXRTS` erratum). Gates i194/i284.
+
+Authority: this section; markers `src/netboot/dbg_marker.asm` + `tools/hardware-shot/listen-markers.py`; HRECORD `bdos15t-beta6.annotated.dis:4410`; §8m (SPI persistence), §8d (shared-bus Heisenbug), §8x (ENC erratum); trinload exec handoff `~/git/trinload/trinload.asm` `try_exec` (`call drv_exit` before `jp (hl)`).
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
