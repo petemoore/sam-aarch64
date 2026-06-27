@@ -573,6 +573,15 @@ serve_rearm_enc:
 ;      clear if none is available (no free record, or the explicit record is named).
 ; Mirrors client_fetch_boot's select.
 wrq_claim_record:
+                if defined(NETBOOT_DEBUG)
+                ; i280b-b2: split the claim into its two SD steps so a hardware shot
+                ; pins which hangs. FIND_PRE→SELECT_PRE gap = bdos_find_record_for_strategy
+                ; (our CMD17 list reads); SELECT_PRE→SELECT_POST gap = bdos_select_record
+                ; (the B-DOS HRECORD hook). Both are at SD-transaction boundaries (no CS
+                ; asserted), the sanctioned dbg_marker call sites.
+                ld      a, DBG_CLAIM_FIND_PRE
+                call    dbg_marker
+                endif
                 call    bdos_find_record_for_strategy  ; -> BD_FREE_RECORD (1-based, 0 = none)
                 ld      a, (BD_FREE_RECORD)
                 ld      b, a
@@ -581,7 +590,15 @@ wrq_claim_record:
                 jr      z, wrq_no_free         ; BD_FREE_RECORD == 0: nothing free
                 ld      a, (BD_FREE_RECORD)    ; low byte = the record number (>=1)
                 ld      (WRQ_RECORD), a
+                if defined(NETBOOT_DEBUG)
+                ld      a, DBG_CLAIM_SELECT_PRE
+                call    dbg_marker
+                endif
                 call    bdos_select_record     ; HRECORD-select it (HWSADs target it)
+                if defined(NETBOOT_DEBUG)
+                ld      a, DBG_CLAIM_SELECT_POST
+                call    dbg_marker             ; preserves flags; the scf below still sets CY
+                endif
                 scf
                 ret
 wrq_no_free:
