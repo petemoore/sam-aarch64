@@ -78,7 +78,7 @@ ci-registry: registry-gen
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -947,36 +947,25 @@ netboot-dumper-trinload: $(BUILD)/netboot_dumper_trinload.bin $(BUILD)/netboot_d
 # the host decodes the card capacity. It is the dumper (netboot_dumper.asm)
 # re-pointed at the SD card's CSD as the served region; it reuses serve_serve_once
 # + every helper from netboot_serve.asm verbatim (DUMPER arms the rrq_hit refresh
-# hook there) + eeprom.asm (for the "Trinity Network " config read). Two builds:
-#   * the host-test binary (NETBOOT_HOSTTEST) guards probe_main out; csd_probe_
-#     test.go attaches a v2/64GB and a v1 CSD via AttachSD, drives the SD read +
-#     a bare RRQ for csd.bin through serve_serve_once, and asserts the streamed
-#     16 bytes == the configured CSD byte-for-byte against the i145c SD-SPI model
-#     (which was validated by Colin's REAL B-DOS init ladder, i145f).
-#   * the trinload-pushable binary (no flag) is a raw section-C image (org &8000)
-#     including probe_main; trinload pushes it to page P offset &8000 and jumps to
-#     &8000. No -disk target: it is trinload-pushed, not booted. The REAL-card run
-#     is i145g (CLAUDE.md §5 — emulation-verified is not hardware-verified).
+# hook there) + eeprom.asm (for the "Trinity Network " config read). ONE binary,
+# used by every test (no carve-out flat-beside-full split, i231b-b4b): it is a raw
+# section-C image (org &8000) including probe_main; trinload pushes it to page P
+# offset &8000 and jumps to &8000. No -disk target — it is trinload-pushed, not
+# booted; the boot-fit-check still applies (it must fit section C so STAGE at
+# &C000 is free RAM). csd_probe_test.go drives the SD read + a bare RRQ for csd.bin
+# through serve_serve_once piecewise (v2/64GB + v1 CSD via AttachSD, asserting the
+# streamed 16 bytes == the configured CSD byte-for-byte against the i145c SD-SPI
+# model validated by Colin's REAL B-DOS init ladder, i145f); csd_probe_main_test.go
+# drives the full probe_main end-to-end. The REAL-card run is i145g (CLAUDE.md §5 —
+# emulation-verified is not hardware-verified).
 $(BUILD)/csd_probe.bin $(BUILD)/csd_probe.map: src/netboot/csd_probe.asm src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_HOSTTEST=1 \
-	    --obj=$(BUILD)/csd_probe.bin \
+	pyz80 --obj=$(BUILD)/csd_probe.bin \
 	    --mapfile=$(BUILD)/csd_probe.map \
 	    src/netboot/csd_probe.asm
+	@tools/netboot-boot-fit-check.sh $(BUILD)/csd_probe.bin 16384 csd_probe.bin
 
 netboot-csd-probe: $(BUILD)/csd_probe.bin $(BUILD)/csd_probe.map
-
-# The trinload-pushable CSD probe binary: the full program including probe_main,
-# org &8000 (section C). Pushed via trinload, not booted — boot-fit-check still
-# applies (it must fit section C so STAGE at &C000 is free RAM).
-$(BUILD)/csd_probe_trinload.bin $(BUILD)/csd_probe_trinload.map: src/netboot/csd_probe.asm src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
-	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/csd_probe_trinload.bin \
-	    --mapfile=$(BUILD)/csd_probe_trinload.map \
-	    src/netboot/csd_probe.asm
-	@tools/netboot-boot-fit-check.sh $(BUILD)/csd_probe_trinload.bin 16384 csd_probe_trinload.bin
-
-netboot-csd-probe-trinload: $(BUILD)/csd_probe_trinload.bin $(BUILD)/csd_probe_trinload.map
 
 # netboot-samboot-config (i176) — the SAMBOOT BIOS config reader: a leaf routine
 # (samboot_read_config) that reads the editable default-boot-record config from a
@@ -1191,7 +1180,7 @@ $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map: src/test_compact_ir.a
 compact-ir-z80: $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-trinity-identity netboot-server-boot netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-samboot-config netboot-trinity-identity netboot-server-boot netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
 
 ci-netboot-z80: netboot-z80-routines editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80
 	cd tools/sampage && go test ./...
