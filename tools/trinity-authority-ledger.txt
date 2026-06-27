@@ -37,3 +37,4 @@ tools/netboot-oracle/z80/sdcard.go              docs/notes/trinity-sd-z80-interf
 tools/netboot-oracle/z80/eeprom.go              src/netboot/eeprom.asm                     Colin Piggot's vendored lib (simonowen/trinload)
 tools/netboot-oracle/z80/bdos_store.go          src/netboot/bdos_seam.asm                  the real B-DOS RST 8 hook bodies (HRECORD/HSAVE/HRSAD)
 tools/netboot-oracle/trinityfw/trinityfw.go     src/netboot/trinity_identity_stamp.asm     trinity_read_stamp — the byte-layout contract both sides share
+tools/netboot-oracle/samboot/samboot.go         src/netboot/samboot_config.asm             samboot_read_config — the SAMBOOT BIOS config chunk byte-layout contract

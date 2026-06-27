@@ -1,4 +1,10 @@
-// Package samboot is the host-side authority for the SAMBOOT BIOS config — the
+// Trinity-HW provenance (i273): this model is DERIVED FROM the SAM/Colin
+// authority recorded in tools/trinity-authority-ledger.txt (the Z80 reader
+// src/netboot/samboot_config.asm — samboot_read_config — is the byte-layout
+// contract both sides share); it is never itself the authority for real Trinity
+// hardware behaviour (CLAUDE.md rule 8 / feedback_port_diff_authority_first).
+//
+// Package samboot is the host-side MODEL of the SAMBOOT BIOS config — the
 // persisted, editable default-boot-record setting the patched bootblock (i135d)
 // reads from a named Trinity EEPROM chunk to decide whether to auto-boot a chosen
 // record at power-on, or fall through to a normal boot.
@@ -9,7 +15,7 @@
 // src/netboot/samboot_config.asm (samboot_read_config); the format below is the
 // single byte-layout contract both sides share — see docs/specs/samboot.md §4.
 //
-// SCOPE: this is the host editor + format authority only. The flash of the chunk
+// SCOPE: this is the host editor + format model only. The flash of the chunk
 // to a real EEPROM is the inherently-hardware i135c path (via the Trinity
 // write_chunk routine) and is out of scope here. The emulation round-trip test
 // (tools/netboot-oracle/z80/samboot_config_test.go) programs the encoded bytes
