@@ -5036,3 +5036,13 @@
   owner: agent
   prs:
     - {num: 750, role: completing}
+
+- id: i286
+  title: "q62 option (a) EMULATION-FIRST: serve disk-record write via our OWN self-healing CMD24 by absolute LBA, bypassing the flaky B-DOS HWSAD/HRECORD/HRSAD hooks"
+  description: |
+    Implement q62 option (a) emulation-first (§8ah): bd_record_write_hw (sd_csd.asm) writes each record-data sector by ABSOLUTE card LBA (csd_base + 1600*(rec-1) + linearSec) via our own self-healing CMD24, reusing the extracted bd_cmd24_write_core that bd_list_write_hw shares; the serve disk-push sink (raw_record_sink RRS_OWN_CMD24=1) + handle_wrq drop the flaky HRECORD select (write is by absolute LBA) and wd_finalize drops the HRSAD read-back (size-only validation, i285); the claim NAME entry + free-record find stay on our own self-healing bd_list_write_hw/bd_list_read_hw. The B-DOS hook routines remain in the tree (client + other paths/tests use them). Emulation-verified: sd_record_write_test.go unit-tests the record->LBA math vs the §6/§7 authority + data-safety (writes stay in the claimed record's range only); netboot_serve_wrq_record_test.go + netboot_serve_dbg_test.go assert the SD-model captures (not the HWSAD hook) + the new marker sequence. Hardware push stays Pete-gated (reimplemented write to a shared physical card) under i194/i284; does NOT answer q62 (Pete's decision + the hardware confirmation remain).
+  status: DONE
+  depends_on: [q62]
+  kind: leaf
+  owner: agent
+  refs: ["docs/notes/trinity-sd-z80-interface.md §8ah"]
