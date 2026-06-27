@@ -28,6 +28,21 @@ This small SPI-bridge firmware (≤8 KB) is the shared "one PIC" behind the SD/E
 
 The pragmatic substitutes for the locked firmware: **ask Colin Piggot** (its designer — the definitive source for the exact BUSY/SSP-wait semantics; `q61`), a **logic analyzer on the PIC↔peripheral SPI lines** (observes the SSP stall directly), and **black-box measurement** of `&DC` bit 3 (the one port not routed through the PIC, so always readable) across the SD-write sequence.
 
+### Board component inventory (photo-confirmed)
+
+A high-quality photo of the board front — `~/sam-archive/trinity-docs/photos/trinity-board-v1.1-front-IMG_20260629_140203.jpg` (Pete, 2026-06-29) — confirms the parts directly from their package markings. Silkscreen: **"QUAZAR TRINITY ETHERNET INTERFACE · V1.1 (C) 2019 COLIN PIGGOT"** (matches the `"TRI v1.1"` firmware IDENT).
+
+| Part (marking) | Pkg | Role |
+|---|---|---|
+| **PIC16F74-I/P** (Microchip) | 40-pin DIP, **socketed** | The gateway microcontroller (SSP/SPI bridge; owns the `&DC` BUSY firmware). Socketed ⇒ can be pulled and read in a standalone PICkit/ZIF, no in-circuit ICSP. |
+| **ENC28J60-I/SP** (Microchip) | 28-pin DIP | Ethernet controller. |
+| **25LC1024** (Microchip; silkscreen "EPROM") | 8-pin DIP | 128 K SPI EEPROM (network/config/boot-block store). |
+| **GAL16V8D** | 20-pin DIP | Programmable logic = the SAM-bus glue / address decode (the manual's "general control logic"); decodes ports `&DC–&DF` to the PIC. Its JEDEC equations are a separate readable artifact if ever needed (bus decode, not the BUSY logic). |
+| **20.000 MHz crystal** | HC-49 can | System clock (near the PIC). |
+| RJ45 + magnetics, microSD-in-adapter slot, A/B status LEDs, electrolytics, resistor networks, the SAM expansion **edge connector** | — | Per the manual's component tour. |
+
+So the board carries **four ICs** of interest: the PIC16F74 (MCU), ENC28J60 (ethernet), 25LC1024 (EEPROM), and the GAL16V8D (bus glue). No RTC or auxiliary SRAM is present (confirmed against the parts list above). A photo of the **back** would additionally show any ICSP/programming header and the routing, if needed.
+
 The Trinity also supports a **Trinity Boot ROM** chip option that replaces the standard SAM ROM page, allowing automatic B-DOS load from EEPROM at power-on. [Source: https://www.worldofsam.org/products/trinity-boot-rom.]
 
 No RTC (real-time clock) or extra RAM is documented anywhere in the sources consulted. The manual's labelled **component tour** (scan `IMG_20260617_162538.jpg`) enumerates every board part — microcontroller, EEPROM, ENC28J60, status LEDs, RJ45 socket, Ethernet-interrupt jumper, MMC/SD flashcard slot + LED, general control logic, voltage regulator, standoffs — and lists **no RTC and no auxiliary SRAM**. So the board carries no auxiliary SRAM beyond the ENC28J60's 8 KB frame buffer as far as the manual shows. (Photos checked; not shown to the contrary — a tiny unlabelled part can't be ruled out from a parts list alone, but nothing in the docs suggests one.)
