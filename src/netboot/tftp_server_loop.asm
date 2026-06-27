@@ -16,9 +16,19 @@
 ;       miss -> build_error(1, "File not found"), wrap, drv_write; serve nothing
 ;               (keep serving — the headline robustness rule). Serial-subdir
 ;               prefixes resolve to ERROR404 too (the Pi retries at root).
-;   tftp_first_data:  after the client ACKs block 0, send DATA block 1.
+;   tftp_first_data:  after the client ACKs block 0, send DATA block 1 — or, when
+;                     a windowsize > 1 was negotiated, the first window of DATA.
 ;   tftp_handle_ack:  drv_read an ACK; advance the transfer; send the next DATA
 ;                     (a short block ends it) or report completion.
+;
+; RFC 7440 windowed send (i120b-b2, the port of tftp.ServerXfer NextWindow/
+; OnWindowAck + serverloop.go windowsize negotiation): when the RRQ requests a
+; "windowsize" the server clamps it to [1,16], echoes it in the OACK (only when
+; > 1), then sends a whole window of DATA back-to-back before waiting for one
+; cumulative ACK (send_window). The ACK advances or rewinds the window's left
+; edge (ack_windowed): a lower-than-last ACK means a loss, so the next window
+; re-sends from there. windowsize 1 is the unchanged lock-step path above, so a
+; non-windowed transfer is byte-identical to before.
 ;
 ; The dispatch, the serve-by-name resolution, the OACK option string (blksize
 ; then tsize, the captured order), the streamed DATA cadence, and the short-
@@ -30,7 +40,7 @@
 ;
 ; PROVENANCE: the reply-driven server loop + serve-by-name + ERROR(1)-on-miss-
 ; keep-serving + serial-subdir-404 are serverloop.go / server.go (oracle §2-§3);
-; the TFTP wire format is RFC 1350 + 2347 (OACK). The reply framing uses
+; the TFTP wire format is RFC 1350 + 2347 (OACK) + 7440 (windowsize). The reply framing uses
 ; build_udp_frame (server IP + transfer TID -> client IP + client TID), matching
 ; the captured exchange (server replies from an ephemeral TID to the client TID).
 ;
@@ -150,11 +160,20 @@ srv_hit:
                 ld      (XFER_OFFSET+2), hl
                 ld      a, 1
                 ld      (XFER_ACTIVE), a
+                ; windowed-send state (RFC 7440): the window's left edge starts at
+                ; block 0 (nothing ACKed yet) and no short final block sent yet.
+                ld      hl, 0
+                ld      (XFER_WINACKED), hl
+                ld      (XFER_WINFINAL), hl
 
                 ; --- negotiate the blksize -----------------------------
                 ; find the request's "blksize" option, parse + clamp it
                 ; (AcceptedBlksize: 8..1468 echoed, else the 512 default).
                 call    negotiate_blksize      ; -> XFER_BLKSIZE
+                ; --- negotiate the windowsize (RFC 7440) ---------------
+                ; find the request's "windowsize" option, parse + clamp it
+                ; (AcceptedWindowsize: 1..16, else the 1 default = lock-step).
+                call    negotiate_windowsize   ; -> XFER_WINSIZE
 
                 ; --- build the OACK option string ----------------------
                 ; "blksize\0<bs>\0tsize\0<size>\0" into OACK_OPTS; BC = length.
@@ -172,6 +191,10 @@ tftp_first_data:
                 ld      a, (XFER_ACTIVE)
                 or      a
                 jp      z, srv_none
+                ; windowed (windowsize >= 2): send the first window (blocks
+                ; 1..windowsize back-to-back); else lock-step DATA block 1.
+                call    xfer_is_windowed
+                jp      c, send_window
                 jp      send_next_data
 
 ; ---------------------------------------------------------------------------
@@ -204,6 +227,12 @@ tftp_handle_ack:
                 ld      d, a
                 ld      a, (RXBUF + RX_UDP_PAYLOAD + 3)
                 ld      e, a                   ; DE = acked block
+
+                ; windowed (windowsize >= 2): cumulative-ACK window handling
+                ; (advance/rewind the left edge, send the next window). DE (block)
+                ; is preserved across xfer_is_windowed (it touches only A).
+                call    xfer_is_windowed
+                jp      c, ack_windowed
 
                 ; Did we just send the short final block, now ACKed? If the last
                 ; DATA payload was < blksize and its block == acked, finish.
@@ -330,6 +359,207 @@ srv_send_tbuf:
 
 srv_none:
                 ld      bc, 0
+                ret
+
+; ---------------------------------------------------------------------------
+; xfer_is_windowed — CY set iff the negotiated windowsize is >= 2 (RFC 7440
+; windowed mode); CY clear for windowsize 1 (lock-step). Touches only A, so
+; callers can keep a block number in DE/HL across it.
+; ---------------------------------------------------------------------------
+xfer_is_windowed:
+                ld      a, (XFER_WINSIZE+1)
+                or      a
+                jr      nz, xiw_yes            ; > 255 (can't really happen; safe)
+                ld      a, (XFER_WINSIZE)
+                cp      2
+                jr      nc, xiw_yes            ; >= 2: windowed
+                or      a                      ; clear CY: lock-step
+                ret
+xiw_yes:
+                scf
+                ret
+
+; ---------------------------------------------------------------------------
+; send_window — transmit the current RFC 7440 window: blocks
+; XFER_WINACKED+1 .. XFER_WINACKED+XFER_WINSIZE back-to-back, stopping after the
+; short final block (whose number it records in XFER_WINFINAL). Mirrors
+; tftp.ServerXfer.NextWindow: each block's byte offset is (block-1)*blksize,
+; computed once for the window's first block (winAcked*blksize) and advanced by
+; send_next_data per block (so a rewind simply re-sends from winAcked+1). Reuses
+; send_next_data (build_data + wrap + drv_write, which sets XFER_LAST_SHORT and
+; advances XFER_OFFSET). Out: BC = the last DATA frame's length.
+; ---------------------------------------------------------------------------
+send_window:
+                ; XFER_OFFSET = XFER_WINACKED * XFER_BLKSIZE (32-bit; high word 0 —
+                ; the streamed files fit 16 bits, matching send_next_data's note).
+                ld      de, (XFER_WINACKED)
+                ld      bc, (XFER_BLKSIZE)
+                call    srv_mul16              ; HL = DE * BC (low 16)
+                ld      (XFER_OFFSET), hl
+                ld      hl, 0
+                ld      (XFER_OFFSET+2), hl
+                ; first block of the window = winAcked + 1
+                ld      hl, (XFER_WINACKED)
+                inc     hl
+                ld      (XFER_NEXT_BLK), hl
+                ; remaining blocks to send this window = windowsize
+                ld      hl, (XFER_WINSIZE)
+                ld      (SW_COUNT), hl
+sw_loop:
+                call    send_next_data         ; sends DATA(XFER_NEXT_BLK); sets XFER_LAST_SHORT
+                ld      a, (XFER_LAST_SHORT)
+                or      a
+                jr      nz, sw_final           ; short block ends the window early
+                ld      hl, (XFER_NEXT_BLK)
+                inc     hl
+                ld      (XFER_NEXT_BLK), hl
+                ld      hl, (SW_COUNT)
+                dec     hl
+                ld      (SW_COUNT), hl
+                ld      a, h
+                or      l
+                jr      nz, sw_loop
+                ret                            ; full window sent, no short block
+sw_final:
+                ; record the short final block's number (the one just sent)
+                ld      hl, (XFER_NEXT_BLK)
+                ld      (XFER_WINFINAL), hl
+                ret
+
+; ---------------------------------------------------------------------------
+; ack_windowed — handle a cumulative ACK for a windowed transfer. DE = the ACKed
+; block. Mirrors tftp.ServerXfer.OnWindowAck + ServerLoop.OnACKWindow:
+;   - if the short final block (XFER_WINFINAL) is ACKed, the transfer completes
+;     (XFER_ACTIVE=0, send nothing);
+;   - otherwise advance/rewind the window's left edge to the ACKed block when it
+;     is in range [winAcked, maxSent] (a stale/impossible ACK leaves it put), then
+;     re-send the window from the (possibly rewound) edge — OnACKWindow always
+;     emits NextWindow() unless the transfer is complete.
+;   maxSent = min(winAcked + windowsize, winFinal-if-reached).
+; ---------------------------------------------------------------------------
+ack_windowed:
+                ld      (AW_BLOCK), de         ; save the ACKed block
+                ; completion: winFinal != 0 AND block == winFinal ?
+                ld      hl, (XFER_WINFINAL)
+                ld      a, h
+                or      l
+                jr      z, aw_range            ; no short final yet
+                or      a
+                sbc     hl, de                 ; winFinal - block
+                jr      nz, aw_range
+                ; the short final block has been ACKed: transfer complete.
+                xor     a
+                ld      (XFER_ACTIVE), a
+                jp      srv_none
+aw_range:
+                ; maxSent = winAcked + windowsize
+                ld      hl, (XFER_WINACKED)
+                ld      de, (XFER_WINSIZE)
+                add     hl, de                 ; HL = winAcked + windowsize
+                ; clamp to winFinal when reached and smaller: maxSent = min(HL, winFinal)
+                ld      de, (XFER_WINFINAL)
+                ld      a, d
+                or      e
+                jr      z, aw_have_max         ; winFinal == 0: no clamp
+                push    hl
+                or      a
+                sbc     hl, de                 ; maxSent - winFinal
+                pop     hl                     ; HL = maxSent (POP keeps the sbc flags)
+                jr      c, aw_have_max         ; maxSent < winFinal: keep maxSent
+                ld      hl, (XFER_WINFINAL)    ; else maxSent = winFinal
+aw_have_max:
+                ; (a) block <= maxSent ?  maxSent - block; borrow => block > maxSent
+                ld      de, (AW_BLOCK)
+                push    hl
+                or      a
+                sbc     hl, de                 ; maxSent - block
+                pop     hl
+                jr      c, aw_send             ; block > maxSent: ignore (no advance)
+                ; (b) block >= winAcked ?  block - winAcked; borrow => block < winAcked
+                ld      hl, (AW_BLOCK)
+                ld      de, (XFER_WINACKED)
+                or      a
+                sbc     hl, de                 ; block - winAcked
+                jr      c, aw_send             ; block < winAcked: ignore (no advance)
+                ; in range: advance/rewind the window's left edge to the ACKed block.
+                ld      hl, (AW_BLOCK)
+                ld      (XFER_WINACKED), hl
+aw_send:
+                ; re-send the window from the (possibly rewound) left edge.
+                jp      send_window
+
+; ---------------------------------------------------------------------------
+; srv_mul16 — HL = DE * BC (low 16 bits), shift-and-add. Clobbers A, BC, DE, HL.
+; ---------------------------------------------------------------------------
+srv_mul16:
+                ld      hl, 0
+sm_loop:
+                ld      a, b
+                or      c
+                ret     z                      ; multiplier exhausted
+                srl     b
+                rr      c                      ; multiplier >>= 1, LSB -> CY
+                jr      nc, sm_skip
+                add     hl, de                 ; add multiplicand when LSB set
+sm_skip:
+                sla     e
+                rl      d                      ; multiplicand <<= 1
+                jr      sm_loop
+
+; ---------------------------------------------------------------------------
+; negotiate_windowsize — find the request's "windowsize" option, parse its
+; decimal value, clamp it (AcceptedWindowsize: 1..16, else the 1 default), store
+; in XFER_WINSIZE. Default 1 (lock-step) when absent or zero. Mirrors
+; tftp.AcceptedWindowsize + the OnRRQ windowsize lookup in serverloop.go.
+; Clobbers A, BC, DE, HL.
+; ---------------------------------------------------------------------------
+negotiate_windowsize:
+                ld      hl, 1                  ; default = 1 (lock-step)
+                ld      (XFER_WINSIZE), hl
+
+                ld      bc, (PARSE_OPT_COUNT)
+                ld      a, b
+                or      c
+                ret     z                      ; no options: keep 1
+                ld      hl, (PARSE_OPTS)
+nw_loop:
+                push    bc
+                push    hl
+                ld      de, str_windowsize
+                call    streq_cstr             ; CY if equal; HL -> value on match
+                jr      c, nw_found
+                pop     hl
+                call    skip_cstr
+                call    skip_cstr
+                pop     bc
+                dec     bc
+                ld      a, b
+                or      c
+                jr      nz, nw_loop
+                ret                            ; "windowsize" absent: keep 1
+nw_found:
+                pop     de                     ; discard the saved name ptr
+                pop     bc                     ; discard the saved count
+                call    parse_dec_u16          ; HL = value (0 on bad)
+                ; clamp to [1,16]: 0 -> 1; > 16 -> 16; else echo.
+                ld      a, h
+                or      a
+                jr      nz, nw_clamp_hi        ; > 255: clamp to 16
+                ld      a, l
+                or      a
+                jr      z, nw_default          ; 0: use 1
+                cp      17
+                jr      nc, nw_clamp_hi        ; >= 17: clamp to 16
+                ld      h, 0
+                ld      (XFER_WINSIZE), hl     ; 1..16: echo
+                ret
+nw_clamp_hi:
+                ld      hl, 16
+                ld      (XFER_WINSIZE), hl
+                ret
+nw_default:
+                ld      hl, 1
+                ld      (XFER_WINSIZE), hl
                 ret
 
 ; ---------------------------------------------------------------------------
@@ -478,6 +708,24 @@ build_oack_opts:
                 xor     a
                 ld      (de), a
                 inc     de
+                ; "windowsize\0<ws>\0" — only when granted (> 1), so a lock-step
+                ; OACK is byte-identical to before (RFC 7440: echo only what is
+                ; negotiated; serverloop.go appends iff windowsize > the default).
+                ld      a, (XFER_WINSIZE+1)
+                or      a
+                jr      nz, boo_winsize        ; > 255 (safe; max is 16)
+                ld      a, (XFER_WINSIZE)
+                cp      2
+                jr      c, boo_no_winsize      ; < 2: omit
+boo_winsize:
+                ld      hl, str_windowsize
+                call    copy_cstr_incl_nul
+                ld      hl, (XFER_WINSIZE)
+                call    write_dec_u16
+                xor     a
+                ld      (de), a
+                inc     de
+boo_no_winsize:
                 ; length = DE - OACK_OPTS
                 ld      hl, OACK_OPTS
                 ex      de, hl                 ; HL = cursor, DE = OACK_OPTS
@@ -553,6 +801,8 @@ str_blksize:      defm "blksize"
                   defb 0
 str_tsize:        defm "tsize"
                   defb 0
+str_windowsize:   defm "windowsize"
+                  defb 0
 
 ; ===========================================================================
 ; Configuration + transfer state (harness / boot code fills CONFIG_* + the
@@ -573,6 +823,13 @@ XFER_OFFSET:      defs 4                 ; bytes streamed so far (LE)
 XFER_NEXT_BLK:    defs 2                 ; next block number (LE)
 XFER_ACTIVE:      defs 1                 ; 1 = a transfer is armed
 XFER_LAST_SHORT:  defs 1                 ; 1 = the last DATA was a short block
+; RFC 7440 windowed send (i120b-b2). XFER_WINSIZE 1 = lock-step (XFER_WINACKED /
+; XFER_WINFINAL / SW_COUNT / AW_BLOCK unused). > 1 drives send_window/ack_windowed.
+XFER_WINSIZE:     defs 2                 ; negotiated window size (LE); 1 = lock-step
+XFER_WINACKED:    defs 2                 ; window left edge: highest cumulatively-ACKed block (LE)
+XFER_WINFINAL:    defs 2                 ; short final block number once sent (LE); 0 = not reached
+SW_COUNT:         defs 2                 ; send_window: blocks left to send this window
+AW_BLOCK:         defs 2                 ; ack_windowed: the ACKed block being processed
 SRV_RX_LEN:       defs 2
 TFTP_PKT_LEN:     defs 2
 RXBUF:            defs 1518
