@@ -2561,9 +2561,11 @@
   title: "Z80 server windowed TFTP send (RFC 7440): negotiate+OACK windowsize, windowed DATA send + cumulative-ACK rewind, harness + SimCoupe verified"
   description: |
     Server half of i120b (port of the i120a Go authority). Mirror tftp.ServerXfer NextWindow/OnWindowAck + serverloop windowsize negotiation in the Z80 server (src/netboot/tftp_server_loop.asm): parse+clamp windowsize from the RRQ ([1,16]), emit it in the OACK (tftp_build.asm), send a window of DATA before expecting an ACK, advance/rewind winAcked on the cumulative ACK, track winFinal for the short final block; add WINSIZE/WINACKED/WINFINAL state. Lock-step path unchanged. Host-verify via tools/netboot-oracle/z80 server loop tests against the Go authority, then SimCoupe-verify. Independent of i120b-b1 (the OACK windowsize wire format is the shared contract).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 742, role: completing}
   parent: i120b
 
 - id: i120b-b3
