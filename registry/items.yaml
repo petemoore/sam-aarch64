@@ -4899,6 +4899,8 @@
   depends_on: [i280b-b2h, i280b-b2l, i280b-b2m, i280b-b2q, i283]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 749, role: completing}
   parent: i280b-b2
 
 - id: i280b-b2j
@@ -5013,3 +5015,5 @@
   depends_on: [i280b-b2t]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 749, role: completing}
