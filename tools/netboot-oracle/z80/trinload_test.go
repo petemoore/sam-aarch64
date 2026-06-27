@@ -192,3 +192,124 @@ func TestTrinloadDataWriteToOffset(t *testing.T) {
 		t.Errorf("data @ &8040 = %x, want %x — the @ offset arithmetic failed", got, data)
 	}
 }
+
+// countDiscoveryReplies counts the '!' discovery replies among the TX frames.
+// trinload answers each '?' query with a single-byte '!' UDP payload; the '@' and
+// 'X' acks carry 4-byte payloads, so they do not collide with this count.
+func countDiscoveryReplies(frames [][]byte) int {
+	n := 0
+	for _, f := range frames {
+		if u, ok := frame.ParseUDP(f); ok && bytes.Equal(u.Payload, []byte{'!'}) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestTrinloadWedgedByNonReturningProgram models the i278 wedge class: a pushed
+// program that never RETs to trinload's `start` holds the CPU forever, so
+// trinload's read_loop never runs again and a *later* discovery push goes
+// unanswered — the SAM appears "not responding even though running", recoverable
+// only by a reset / power-cycle (i266/TAPO). This is exactly the i270 WRQ-hang
+// symptom observed on hardware 2026-06-26.
+//
+// The pushed program here is `jr $` (an infinite self-loop), the emulation
+// stand-in for any program whose exit strands the CPU instead of returning to
+// trinload (a bare `di; halt`, or a hung serve loop). The sequence is:
+//  1. '?'  → trinload replies '!'           (reply #1, proves it was listening)
+//  2. '@'  → loads `jr $` at &8000
+//  3. 'X'  → executes it; the CPU wedges in the self-loop, never reaching start
+//  4. '?'  → arrives, but read_loop never runs again, so NO reply egresses
+//
+// The wedge is proven by exactly ONE '!' reply: the pre-execute discovery was
+// answered, the post-execute one was not.
+func TestTrinloadWedgedByNonReturningProgram(t *testing.T) {
+	mac, err := z80h.LoadAt(trinloadBin, trinloadMap, trinloadOrg)
+	if err != nil {
+		t.Fatalf("trinload not built (%v); run `make netboot-trinload`", err)
+	}
+	installTrinloadROMStubs(mac)
+
+	enc := z80h.NewENC28J60()
+	enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)
+	mac.AttachIO(enc)
+
+	// The wedge program: jr $ (0x18 0xFE) — loops on itself forever, never RETs.
+	wedge := []byte{0x18, 0xFE}
+
+	enc.InjectRX(trinloadFrame([]byte{'?'}))                                     // discovery #1
+	enc.InjectRX(trinloadFrame(append([]byte{'@', 0x01, 0x00, 0x00}, wedge...))) // load wedge @ &8000
+	enc.InjectRX(trinloadFrame([]byte{'X', 0x01, 0x00, 0x80}))                   // execute @ &8000
+	enc.InjectRX(trinloadFrame([]byte{'?'}))                                     // discovery #2 — must go unanswered
+
+	startAddr, err := mac.Sym("start")
+	if err != nil {
+		t.Fatalf("sym start: %v", err)
+	}
+	// No StopPC: the wedged program never reaches start, so the run spins to the cap.
+	res, err := mac.RunBoot("start", z80h.Entry{StepCap: trinloadStepCap})
+	if err != nil {
+		t.Fatalf("RunBoot trinload start: %v", err)
+	}
+	t.Logf("trinload wedge: PC=&%04X steps=%d replies=%d tx=%d",
+		res.PC, res.Steps, countDiscoveryReplies(enc.TXFrames()), len(enc.TXFrames()))
+
+	// Control must NOT have returned to trinload's start — the program wedged.
+	if res.PC == startAddr {
+		t.Errorf("PC returned to start=&%04X — the wedge program unexpectedly returned to trinload", startAddr)
+	}
+
+	// Exactly one '!' reply: discovery #1 was answered, discovery #2 was not, because
+	// the CPU is stuck in the wedge program and read_loop never ran again.
+	if got := countDiscoveryReplies(enc.TXFrames()); got != 1 {
+		t.Errorf("got %d '!' discovery replies, want 1 — a wedged program must leave the post-execute discovery unanswered (else the wedge model is wrong)", got)
+	}
+}
+
+// TestTrinloadRespondsToRediscoveryAfterCleanReturn is the positive control for
+// TestTrinloadWedgedByNonReturningProgram: a pushed program that RETs cleanly hands
+// control back to trinload's start, which re-runs drv_init and re-enters read_loop,
+// so a *later* discovery push IS answered. This is the i278 outcome a clean-exit
+// (#4 tr_terminate) program must satisfy — trinload stays re-pushable.
+//
+// The sequence is identical to the wedge test except the pushed program is `ret`:
+//  1. '?'  → reply '!'           (reply #1)
+//  2. '@'  → loads `ret` at &8000
+//  3. 'X'  → executes; the program RETs → control returns to start → read_loop
+//  4. '?'  → answered → reply '!' (reply #2)
+//
+// Two '!' replies prove trinload recovered to its listen loop after the program ran.
+func TestTrinloadRespondsToRediscoveryAfterCleanReturn(t *testing.T) {
+	mac, err := z80h.LoadAt(trinloadBin, trinloadMap, trinloadOrg)
+	if err != nil {
+		t.Fatalf("trinload not built (%v); run `make netboot-trinload`", err)
+	}
+	installTrinloadROMStubs(mac)
+
+	enc := z80h.NewENC28J60()
+	enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)
+	mac.AttachIO(enc)
+
+	// The clean program: ret (0xC9) — returns immediately to trinload's start.
+	clean := []byte{0xC9}
+
+	enc.InjectRX(trinloadFrame([]byte{'?'}))                                     // discovery #1
+	enc.InjectRX(trinloadFrame(append([]byte{'@', 0x01, 0x00, 0x00}, clean...))) // load ret @ &8000
+	enc.InjectRX(trinloadFrame([]byte{'X', 0x01, 0x00, 0x80}))                   // execute @ &8000
+	enc.InjectRX(trinloadFrame([]byte{'?'}))                                     // discovery #2 — must be answered
+
+	// No StopPC: after the clean RET, start re-runs and read_loop answers discovery
+	// #2; the run then spins to the cap once the inject queue drains.
+	res, err := mac.RunBoot("start", z80h.Entry{StepCap: trinloadStepCap})
+	if err != nil {
+		t.Fatalf("RunBoot trinload start: %v", err)
+	}
+	t.Logf("trinload clean-return: PC=&%04X steps=%d replies=%d tx=%d",
+		res.PC, res.Steps, countDiscoveryReplies(enc.TXFrames()), len(enc.TXFrames()))
+
+	// Two '!' replies: trinload returned to read_loop after the program RET'd and
+	// answered the second discovery — it is still re-pushable.
+	if got := countDiscoveryReplies(enc.TXFrames()); got != 2 {
+		t.Errorf("got %d '!' discovery replies, want 2 — after a clean RET trinload must re-enter read_loop and answer the re-discovery", got)
+	}
+}
