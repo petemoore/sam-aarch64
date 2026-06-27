@@ -1024,13 +1024,31 @@ bare-stamped record** — it wants the card-level record-list / a named record, 
 selection gate. The **`HRECORD` *hook* (156)**, by contrast, selects with **just the stamp**
 (the i62 finding) — and the hook is exactly what our serve uses (`HRECORD` then `HWSAD`).
 
-**NEXT (i280b-b2q) — drive the HOOKS, not the BASIC command:** via the §8o-armed dispatch
-(`DOSCNT=0`), with a stamped record in the model, drive (a) `HRECORD`(156)+`HSAVE`(132) = a
-working write, and (b) `HRECORD`(156)+`HWSAD`(149) = our serve's path, capture both IN/OUT+hook
-traces with the rig's decoder, and diff. The gap (the setup/orchestration `HSAVE` does that raw
-`HWSAD` skips) is the fix for writing `.mgt` images to records. The rig
-(`bdos_save_capture_wip_test.go`), the §8o/§8p arming, the format spec, and the seed mechanism
-are all in place.
+**The real blocker, precisely diagnosed (Pete's "load B-DOS into memory" hint): B-DOS has not
+MOUNTED the seeded card — `last.record` is 0.** Driving the `HRECORD`(156) hook via the
+§8o-armed dispatch (`A=0`, `HL=1`) reaches the HRECORD handler (`&9FAB`) but **issues no SD
+read and does not select** (`&780B` stays 0) — it returns early, because `sel.record`
+range-checks the record number against the in-memory **record count, which is 0**. Confirmed:
+`last.record` reads 0 after boot. So the boot path that reaches editor idle (patched ROM →
+trinload → B-DOS) **never ran B-DOS's card-mount (HDINIT)** for the SD records — B-DOS is
+resident but the SD card is not mounted as a record device. Two fixes attempted and **failed**:
+(1) driving HDINIT as a bare hook `rst 8/defb 135` — no-op (reached the dispatcher but issued no
+SD I/O, `last.record` still 0; so 135 is not a callable bare-hook mount, or needs setup); (2)
+poking the inferred 1.5a sysvars `last.record &80C4` / `record.no &80C6` / `record.t &80C9`
+high — the poke held (re-read = 1000) but HRECORD's behaviour did **not** change, so either
+those are the wrong **1.5t** addresses or `sel.record` reads the count elsewhere. Neither the
+BASIC `RECORD` command nor the `HRECORD` hook will select until B-DOS has mounted the card.
+
+**NEXT (i280b-b2q) — make B-DOS mount the card, then capture:** the clean route is to build a
+**full card-level Trinity format** in the SD model (boot sector at 0 per samdisk's
+`UpdateBDOSBootSector` DVAR-0 layout — geometry + `base_sectors` at bytes `0x104-0x107` /
+`0x10e`, the record-list at sectors `1..base-1`, plus the per-record `"BDOS"`@232 stamps) **so
+B-DOS's boot-time HDINIT recognises and mounts it** (`last.record` set from the card). *Then*
+`RECORD n` / the `HRECORD`+`HSAVE` vs `HRECORD`+`HWSAD` hook diff runs and the capture works.
+Alternatively, trace B-DOS 1.5t's real mount path (`hd.init`, `bdos15a.src.txt:1778`) /
+`sel.record` (`&A0CD`) to find the exact 1.5t record sysvars and the mount trigger. The rig
+(`bdos_save_capture_wip_test.go`), the §8o/§8p arming, the samdisk format spec, and the verified
+seed mechanism are all in place; only B-DOS mounting the card remains.
 
 ## 9. Porting to fresh Z80
 
