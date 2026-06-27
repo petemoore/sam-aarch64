@@ -4856,9 +4856,11 @@
   title: "Window-independent observability: report the PRIOR WRQ's serve_rearm_enc enc_timed_out on the reliable WRQ_ENTRY marker (escapes the post-rearm dead ENC-TX window)"
   description: |
     OPEN. §8e showed the disk-push failure is POST-serve_rearm_enc (the handshake reply lands in a window where the SD-disturbed ENC accepts TX commands but puts no frame on the wire, recovering by the next serve loop), and that DBG_REARM_TIMEOUT cannot escape that window (it is the same drv_write) so its absence is inconclusive. To discriminate (a) the re-arm TIMED OUT (enc_timed_out=1; &DC bit3 stayed hung -> a bus-hand-off fix) from (b) the re-arm SUCCEEDED but the ENC was not yet wire-ready (enc_timed_out=0 -> settle/verify TX-capable before the handshake, or retry it): at WRQ_ENTRY (which escapes reliably on every iteration) ALSO emit the enc_timed_out left by the PREVIOUS WRQ's serve_rearm_enc. curl's WRQ retransmits make iterations 2..N report iterations 1..N-1's re-arm result from OUTSIDE the dead window. Emulation-add the marker + a host test, then a TAPO shot reads the bit. Gates the i280b-b2d fix choice. Doesn't reproduce in koron-go (SD model clears busy).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 727, role: completing}
   parent: i280b-b2
 
 - id: i281
