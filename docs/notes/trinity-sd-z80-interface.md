@@ -364,7 +364,7 @@ so the claim → re-arm → handshake completes and the per-block write (the §8
 still unexercised on hardware) is finally reached. The fault still does not reproduce
 in koron-go (the SD model clears busy and there is no shared ENC/SD controller), so this
 remains a hardware-gated investigation. (i280b-b2 split here: the localization is
-**i280b-b2a**; the fix is **i280b-b2b**.)
+**i280b-b2b**; the fix is **i280b-b2c**.)
 
 ## 9. Porting to fresh Z80
 

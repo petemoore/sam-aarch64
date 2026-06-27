@@ -38,7 +38,13 @@ const (
 	dbgWRQClaimed    = 0x11
 	dbgWRQNoFree     = 0x12
 	dbgWRQHandshake  = 0x13
+	dbgClaimFindPre  = 0x14
+	dbgClaimSelPre   = 0x15
+	dbgClaimSelPost  = 0x16
 	dbgDataBlock     = 0x20
+	dbgFlushPre      = 0x21
+	dbgHwsadPre      = 0x22
+	dbgHwsadPost     = 0x23
 	dbgFinalize      = 0x30
 	dbgFinalizeValid = 0x31
 	dbgFinalizeBad   = 0x32
@@ -113,7 +119,7 @@ func TestServeDebugMarkersWRQRecordPush(t *testing.T) {
 
 	// 1. Bare WRQ (disk-record class via the prefix) → entry, claimed, handshake; ACK-0.
 	markers, reply := driveDbg(t, mac, enc, demoWRQ("trinity-sam-disks/upload.mgt", nil))
-	wantMarkers(t, "WRQ", markers, dbgWRQEntry, dbgWRQClaimed, dbgWRQHandshake)
+	wantMarkers(t, "WRQ", markers, dbgWRQEntry, dbgClaimFindPre, dbgClaimSelPre, dbgClaimSelPost, dbgWRQClaimed, dbgWRQHandshake)
 	if op := tftp.Opcode(udpPayload(t, reply)); op != tftp.OpACK {
 		t.Fatalf("WRQ reply opcode = %d, want ACK(%d)", op, tftp.OpACK)
 	}
@@ -128,11 +134,12 @@ func TestServeDebugMarkersWRQRecordPush(t *testing.T) {
 		}
 		markers, reply = driveDbg(t, mac, enc, demoData(block, img[off:end]))
 		if end-off < blksize {
-			// final short block → DATA_BLOCK, FINALIZE, FINALIZE_BAD (sub-record image)
-			wantMarkers(t, "final DATA", markers, dbgDataBlock, dbgFinalize, dbgFinalizeBad)
+			// final short block → DATA_BLOCK, FINALIZE, then the padded-tail sector
+			// flush (FLUSH_PRE/HWSAD_PRE/HWSAD_POST), then FINALIZE_BAD (sub-record image)
+			wantMarkers(t, "final DATA", markers, dbgDataBlock, dbgFinalize, dbgFlushPre, dbgHwsadPre, dbgHwsadPost, dbgFinalizeBad)
 			finalReply = reply
 		} else {
-			wantMarkers(t, "DATA", markers, dbgDataBlock)
+			wantMarkers(t, "DATA", markers, dbgDataBlock, dbgFlushPre, dbgHwsadPre, dbgHwsadPost)
 			if op := tftp.Opcode(udpPayload(t, reply)); op != tftp.OpACK {
 				t.Fatalf("DATA %d reply opcode = %d, want ACK(%d)", block, op, tftp.OpACK)
 			}
@@ -149,7 +156,7 @@ func TestServeDebugMarkersNoFreeRecord(t *testing.T) {
 	mac, enc, _, _, _ := loadServeRecordPushBin(t, serveBootDebugBin, serveBootDebugMap, records, freeRecord)
 
 	markers, reply := driveDbg(t, mac, enc, demoWRQ("trinity-sam-disks/upload.mgt", nil))
-	wantMarkers(t, "WRQ no-free", markers, dbgWRQEntry, dbgWRQNoFree)
+	wantMarkers(t, "WRQ no-free", markers, dbgWRQEntry, dbgClaimFindPre, dbgWRQNoFree)
 	assertErrorDiskFull(t, reply)
 }
 
@@ -177,7 +184,7 @@ func TestServeDebugMarkersFinalizeValid(t *testing.T) {
 
 	// WRQ handshake (sets PARSE_FILENAME for the claim, arms the disk-record sink).
 	markers, _ := driveDbg(t, mac, enc, demoWRQ("trinity-sam-disks/goodisk.mgt", nil))
-	wantMarkers(t, "valid WRQ", markers, dbgWRQEntry, dbgWRQClaimed, dbgWRQHandshake)
+	wantMarkers(t, "valid WRQ", markers, dbgWRQEntry, dbgClaimFindPre, dbgClaimSelPre, dbgClaimSelPost, dbgWRQClaimed, dbgWRQHandshake)
 
 	// Stream the whole valid image through the sink at full scale.
 	img := recordValidImage()

@@ -4818,7 +4818,6 @@
   owner: agent
   prs:
     - {num: 724, role: completing}
-    - {num: 724, role: completing}
   parent: i280b-b2
 
 - id: i280b-b2c
