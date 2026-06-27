@@ -798,6 +798,60 @@ behaviour-mutating re-init that would taint future observational shots; this sec
 reproducibility record: `sdc_init_ladder`+`sdc_deselect` before the `rst 8`, markers `&24`/
 `&25`). This measurement is i280b-b2l (DONE).
 
+## 8n. The ROM DOS-call path RE-PAGES on every hook — §8m's "wrong paging context" fix direction is refuted; the real open question is the `hk.hl` register bank (i280b-b2i)
+
+§8m proposed the surviving cause was the HWSAD prelude (`&9E66 call &0005` + the `&780F`
+section-B access) running in the **wrong DOS-call paging context** (the serve fires `rst 8`
+with section B = page 0, not B-DOS's workspace). Tracing the **ROM RST8 → DOS dispatch path**
+(annotated ROM v3.0 disassembly) **refutes that direction** and corrects two §8 assumptions:
+
+- **`call &0005` is `HLJUMP: JP (HL)`** (ROM `&0005`), the ROM "call indirect via HL"
+  trampoline — *not* a far-copy routine. In the HWSAD prelude HL = `&83ED` (the `wr.buff`
+  write dispatch, `pop hl` at `&9E63`), so `&9E66 call &0005` simply **invokes the device
+  dispatch / SD write core**. The prelude is: page the caller's source into section C
+  (`out (&fb)` at `&9E5E`), stash the framed source ptr at `&780F`, then call the write
+  dispatch once per chunk (count=1 for HWSAD). So the hang downstream of `HWSAD_PRE` is in
+  that dispatch (`&83ED → &83F7 → &A8F4` SD write, or the `&8406` FDC poll), as §8a framed.
+
+- **The ROM DOS-call entry sets up the paging context itself — our pre-`rst 8` LMPR is
+  irrelevant.** `rst 8` → ROM `&0008` (`NOP / EXX / JP &37CE`) → `ERROR2 &37CE`
+  (`ld hl,(CHAD); ex af,af'; pop de; ld a,(de)`=hook code; `call NZ,HLJUMP` to `RST8V`) →
+  falls to **`PTDOS &380B`** when `DOSFLG` is set (DOS booted = the serve). PTDOS at `&381C`
+  does **`out (250),A` with `A = DOSFLG_page − 1`** → **section A = ROM0, section B = the DOS
+  page** (and `ld sp,&8000`), *then* `call &4200` (the B-DOS hook handler). So **every** DOS
+  hook runs with section B = the DOS page and ROM0 at `&0000` **regardless of the caller's
+  LMPR before `rst 8`** — the §8l-measured serve LMPR=`&1F` is overwritten by PTDOS before the
+  handler runs. The prelude's `&780F` (section B = DOS page now) and `call &0005` (ROM0 now)
+  therefore resolve correctly. **§8m's "arm the paging context" fix is unnecessary.** (HMPR /
+  section C is **not** touched by PTDOS, so the serve's HMPR=1 persists — our `BD_WRITE_BUF`
+  in section C stays readable, consistent with §8l's no-displacement conclusion *if* `hk.hl`
+  is our buffer address.)
+
+- **The real open question (the i280b-b2i fix gate): which register bank populates `hk.hl`
+  / `hk.de`?** The dispatcher `&8319` does `exx` + `ex af,af'` **then** saves
+  `hk.hl←HL, hk.de←DE, hk.bc←BC, hk.a←A` (so it reads the *post-swap* bank). The ROM path
+  also swaps (`&0009 EXX`, `&37D4 EX AF,AF'`), and PTDOS clobbers A (the hook code) — so the
+  net bank that reaches `hk.hl` depends on the full `&0009 EXX` + `&37D4 EX AF,AF'` + PTDOS +
+  `&4200 → &8319` swap chain, which is **too tangled to settle by static reading** (the
+  relocated `&4200`/RST8V entry is the §8b "honest boundary"). **§8k/§8l simply ASSUMED
+  `hk.hl` = our main `HL` = `&BE42`** (→ page 1, no-op). That assumption is **unverified**,
+  and the #730 result — `hk.a` comes from `A'`, *not* main A (main-A=2 had no hardware
+  effect, §8c) — is the warning sign: if `hk.hl` likewise comes from a bank our seam does not
+  set, the prelude `out (&fb)` pages in a **garbage** source page → the §8k displacement
+  (which §8l "refuted" only under the main-`HL` assumption) **is** the hang, and our seam's
+  `ld hl,BD_WRITE_BUF` (main HL) never reaches `hk.hl`.
+
+  **NEXT (the decisive experiment, fix-gating):** determine the `hk.hl`/`hk.de` source bank
+  empirically — the existing `TestHWSADPagedPointerContract` **pre-pokes** `hk.hl`, so it does
+  **not** exercise the dispatch and cannot answer this. Either (1) extend the paged-boot
+  harness to run the **full** `rst 8` PTDOS dispatch (set `DOSFLG`/`RST8V`, let PTDOS page DOS
+  in) with **distinguishable** main vs alternate `HL`/`DE`, then read `hk.hl`=`&81DA` /
+  `hk.de`=`&81DC` — the same way §8h established `hk.a`=`&81D9` from `A'`; or (2) a
+  both-banks hardware probe: set the params in **both** banks (`ld hl,BD_WRITE_BUF` *and*
+  `exx; ld hl,BD_WRITE_BUF; …; exx`) and TAPO-retest — if the write then completes, the bank
+  was the bug (then narrow which). If `hk.hl` ≠ `&BE42`, the fix is the #730 pattern applied
+  to `hk.hl`/`hk.de`: load them in the bank `&8319` actually reads. This is i280b-b2i.
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
