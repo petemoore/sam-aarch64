@@ -4813,9 +4813,12 @@
   title: "Hardware-localize the disk-push failure: an ENC/SD shared-bus Heisenbug in the WRQ claim->rearm->handshake path, NOT the per-block HWSAD write (gated i271 FIND/SELECT+HWSAD markers; §8d)"
   description: |
     DONE. Three TAPO self-serve shots with finer i271 markers re-localized the disk-record WRQ push failure. Solid 3/3: curl never gets a handshake (0 bytes); the per-block HWSAD write is NEVER reached (FLUSH_PRE/HWSAD_PRE/HWSAD_POST never fire) - superseding the §8a/b/c per-block-write framing; the failure sits in the WRQ free-record claim -> serve_rearm_enc -> handshake region. The symptom MOVES under instrumentation (no claim markers: wedge after first WRQ_ENTRY; with claim markers: claim succeeds+loops, dies before WRQ_CLAIMED = serve_rearm_enc) because dbg_marker is itself an ENC TX on the one-PIC controller the SD shares -> the root cause is ENC/SD shared-bus contention, not a fixed logic bug. Markers gated on NETBOOT_DEBUG; production serve byte-identical. See trinity-sd-z80-interface.md §8d.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 724, role: completing}
+    - {num: 724, role: completing}
   parent: i280b-b2
 
 - id: i280b-b2c
