@@ -263,6 +263,51 @@ per `feedback_port_diff_authority_first`. Reproducing the *fault* (the busy-wait
 remains impossible in koron-go regardless (the SD model always clears `&DC` bit 3,
 §8a); that stays a hardware gate (the i271 UDP marker channel).
 
+## 8c. Hardware retest — the `&780B` / hk.a theory is REFUTED (i280b-b2)
+
+The §8b gold contract predicted that forcing the ambient device `&780B`=2 (the SD
+path) would fix the per-block write hang, and that our seam's bug was
+`bdos_write_sector` leaving `A`=sector (so block 0 = sector 1 → `A`=1 → `&8662`
+sets `&780B`=1 floppy → the `&8684` FDC-poll). The fix passed `A`=2
+(`BD_DEVICE_TRINITY`) to HWSAD/HRSAD so `&8662` forces `&780B`=2.
+
+**Hardware retest (2026-06-28, TAPO self-serve + i271 UDP markers) REFUTES it.**
+The exact fixed binary was pushed (`netboot_serve_boot_debug.bin`; the `A`=2 byte
+`3e 02` verified present immediately before `cf 95` = `rst 8 / defb 149` at
+`bdos_write_sector`), then a disk-record WRQ push (`curl -T … tftp://…/trinity-sam-disks/…`).
+Markers: **`WRQ_ENTRY ×3 → DATA_BLOCK ×1 → hang`** — the per-block write still
+hangs after the first 512-byte block (curl uploaded exactly 512 B then timed
+out), the **same symptom** as before the change.
+
+Conclusions:
+- **The discriminator is NOT hk.a / the `&780B` floppy-gate.** Forcing `&780B`=2
+  does not avoid the hang — so the §8a "ambient device wrongly = floppy → FDC
+  poll" model is **not** (or not the whole of) the real fault. The handover's
+  caution ("our working read shares the flat shape; don't assume hk.a") was right.
+- **`A`=2 is not even a safe no-op.** The captured `&8662` A==2 branch runs
+  Trinity-setup sub-calls (`call &4677; call &60e4`) *before* storing `&780B`=2;
+  the hang may now be inside those, i.e. `A`=2 can trade one hang for another.
+  (`A`=0 — i270 — takes the `jr nz,&8680` branch that skips both and leaves
+  `&780B`; it was "insufficient" but for a different reason.)
+- **The hang is somewhere in B-DOS's own HWSAD/SD-write code reached after
+  `DATA_BLOCK`, and is still unlocalized.** Our six hardware fixes (leading `&FF`
+  flush, bounded busy-wait, 4-step deselect, …) live in *our* `sd_csd.asm` /
+  `encdrv.asm`; HWSAD runs **B-DOS's own** SD primitives (`&A918` etc.), which we
+  do not patch — yet B-DOS's record writes work for Colin, so it is our
+  *invocation*, not B-DOS's code, that is wrong. What that invocation gets wrong
+  is now the open question (i280b-b2).
+
+Next-step options for i280b-b2 (need fresh analysis, not another blind shot):
+(1) extend the §8b paged-boot trace to actually run HWSAD end-to-end so the hang
+point is observable in emulation (the §8b honest-boundary blocker — the handler
+wanders without the real DOS-call SP/paging context — must be solved first);
+(2) add finer i271 markers *around* (not inside) the HWSAD call and a bounded
+guard so a hang reports rather than wedges; (3) diff our HRECORD-select →
+HWSAD invocation sequence against how B-DOS's own RECORD-copy command reaches
+HWSAD (the §8a/§8b authority path), register-for-register and paging-state for
+paging-state. The fault does not reproduce in koron-go (the SD model clears
+busy), so each hypothesis still ends in a hardware retest.
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
