@@ -4724,6 +4724,7 @@
   description: |
     An agent reviews ALL recurring hardware-fidelity + workflow 'things that went wrong', finds the PATTERN, and advises how to STOP THE ROT AT SOURCE (CLAUDE.md rules, hooks, skills, command gates, prompt/handover updates, registry policy) to remove the class. CATALOG (each grounded in an incident; most have items): (1) Go-model-treated-as-authority for Trinity HW -> i273 + i270 (CMD24 write), i145g (CSD flush), i249/250/251 (serve fixes caught late). (2) registry CLI silent failure -> i275. (3) registry desc-limit hit -> i276. (4) trinpush not runnable without 'python3 ...' -> i277. (5) asking 'is trinload up?' instead of probing (ARP). (6) not logging failure over the network -> i271. (7) agent-invisible status (border colour / RST &10 screen) -> i271. (8) not trying the Trinity/hardware path first. (9) trinload wedged-after-a-bad-program / degrade-after-hours -> i278. (10) agents CONFUSED BY THE REGISTRY TOOL (esp. the opaque priority model) reverse-engineer its SOURCE -> i279 (+ i275). OUTPUT: a PRIORITISED recommendation set, each -> a follow-up item or rule/hook/skill change. Read-only analysis; no code change here. Encompasses i273 + the emulation-first discipline.
   status: OPEN
+  depends_on: [q62]
   kind: leaf
   owner: agent
 
@@ -4751,7 +4752,7 @@
   title: "trinpush ergonomics: make the trinload push scripts directly runnable (executable + make targets/wrapper + discoverable) — no looking up 'python3 .../trinpush-serve.py'"
   description: |
     Recurring friction (2026-06-26): pushing to the SAM needed 'python3 tools/trinload-push/trinpush-serve.py <ip> --strategy ...' — the script was not executable (timeout: Permission denied on the shebang) and the exact invocation had to be looked up. FIX so deploys have no friction: (a) chmod +x the trinpush*.py scripts (+ a correct python3 shebang); (b) add make targets (e.g. make trinload-push-serve IP=.. STRATEGY=..) or a thin wrapper that bundles the DEPLOY_CHECKED gate + the right args; (c) make the invocation discoverable (surface the build hint in netboot-trinity-testing.md + the deploy-guard checklist). Keep the DEPLOY_CHECKED deploy-guard. One instance of the broader 'tooling the agent must reverse-engineer each time' pattern (see the retrospective i274).
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 

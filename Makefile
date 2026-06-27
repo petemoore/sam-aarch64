@@ -893,6 +893,27 @@ netboot-serve-trinload: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_b
 netboot-trinpush-test: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map
 	cd tools/trinload-push && python3 -m unittest test_trinpush -v
 
+# trinpush-help (i277) — print the canonical SAM-push invocations so the exact
+# command never has to be looked up. Print-only (no deploy): the actual push still
+# goes through the deploy-guard (DEPLOY_CHECKED=1 + the hardware-readiness checklist).
+.PHONY: trinpush-help
+trinpush-help:
+	@echo 'Push to the SAM (it auto-boots trinload ~80s after power-on; the pusher scripts are executable):'
+	@echo
+	@echo '  Full automated shot — power-cycle, push, capture :9001 markers, power off:'
+	@echo '    DEPLOY_CHECKED=1 tools/hardware-shot/run-shot.sh [BIN] [MAP] [PAYLOAD] [IP]'
+	@echo
+	@echo '  Push the serve program, then store a disk record from any LAN host:'
+	@echo '    make netboot-serve-trinload'
+	@echo '    DEPLOY_CHECKED=1 tools/trinload-push/trinpush-serve.py <sam-ip> --strategy highest'
+	@echo '    curl -T image.mgt tftp://<sam-ip>/trinity-sam-disks/image.mgt'
+	@echo
+	@echo '  Push + run any netboot *_trinload.bin (org &8000):'
+	@echo '    DEPLOY_CHECKED=1 tools/trinload-push/trinload-push.py <sam-ip> build/netboot_dumper_trinload.bin 1 0x8000'
+	@echo
+	@echo 'DEPLOY_CHECKED=1 is required — without it the deploy-guard hook shows the hardware-readiness checklist.'
+	@echo 'Details: tools/trinload-push/README.md ; docs/notes/netboot-trinity-testing.md'
+
 # netboot-dumper (i173) — the SAMBOOT one-shot ROM+EEPROM dumper: trinload-pushed
 # (NOT booted), it reads the patched 32 KB ROM + 128 KB Trinity EEPROM and serves
 # them as 16 KB-region TFTP files (rom0/rom1 + eep0..eep7) so the host captures

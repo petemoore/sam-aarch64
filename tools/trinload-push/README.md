@@ -9,7 +9,20 @@ the SAMBOOT ROM/EEPROM dumper for the i87a captures.
 It exists because the Pi (and other dev hosts) ship python3 only; the upstream
 `trinload.py` is python2. Same protocol, byte-for-byte: discovery `?`→`!`, then
 `@`-blocks (unicast, 4-byte acks, 4 outstanding), then `X` (page + execute addr). The
-wire protocol lives in `trinpush.py`, shared by both scripts here.
+wire protocol lives in `trinpush.py` (a library), shared by both CLI scripts here.
+
+## Quick reference
+
+`make trinpush-help` prints the canonical push invocations — no looking up the path
+or args. The two CLI scripts (`trinload-push.py`, `trinpush-serve.py`) are
+**executable**, so run them directly (no `python3 …` prefix). For a whole hands-off
+shot — power-cycle the SAM, push, capture `:9001` markers, power off — use
+[`tools/hardware-shot/run-shot.sh`](../hardware-shot/run-shot.sh).
+
+Every actual push is gated by the **deploy-guard** hook (i252): prefix
+`DEPLOY_CHECKED=1` after confirming the hardware-readiness checklist it prints. The
+guard fires on *executing* a pusher (so `trinpush-serve.py …` is gated whether run as
+`./trinpush-serve.py` or `python3 trinpush-serve.py`), not on merely naming one.
 
 ## `trinload-push.py` — push any binary
 

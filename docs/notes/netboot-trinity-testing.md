@@ -507,6 +507,11 @@ over TFTP as 16 KB regions the host pulls and concatenates. It reads ROM/EEPROM
 > afterwards (eep0 re-pulled identical), proving no clobber. rom1 is now safe to
 > pull from the current (`netboot_dumper_trinload.bin`) dumper.
 
+> **Push recipes at a glance:** run `make trinpush-help` — it prints the canonical
+> invocations (the executable pusher scripts and `tools/hardware-shot/run-shot.sh`)
+> so the exact command never has to be looked up. Every push needs `DEPLOY_CHECKED=1`
+> (the deploy-guard hook prints the hardware-readiness checklist without it).
+
 Push the dumper with `tools/trinload-push/trinload-push.py` (the py3 pusher), then
 pull the regions over TFTP. The full procedure:
 
