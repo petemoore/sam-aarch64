@@ -363,6 +363,21 @@ BD_HOOK_HWSAD:    equ 149                ; write raw 512-byte sector (HWSAD)
 BD_HOOK_LISTREAD: equ 161                ; card-absolute list-sector read: E=listSec, HL=dest
 BD_HOOK_LISTWRITE: equ 162               ; card-absolute list-sector write: E=listSec, HL=source
 
+; The drive/device number passed in A to the HRSAD/HWSAD (rwsad) hooks. It is the
+; B-DOS device selector, NOT a sector number. The hook's device-select prelude
+; (&8662 in B-DOS 1.5t) keys the ambient-device var &780B off this A:
+;   A==1 -> &780B=1 (floppy); A==2 -> &780B=2 (Trinity); A∉{1,2} -> &780B unchanged.
+; The sector dispatch then gates on &780B (&8684: `ld a,(&780b); dec a; ret nz` —
+; &780B==1 takes an un-timed FDC poll = a HANG with no floppy controller; any other
+; value takes the SD path). The netboot store is always the Trinity SD device, so we
+; pass 2 to force &780B=2 (the SD path) on every sector hook, immune to whatever the
+; preceding HRECORD-select / boot left in &780B. Passing the sector number (the prior
+; bug) made block 0 = sector 1 select A=1 = floppy => &780B=1 => the per-block write
+; hang i280 traced on real hardware; passing 0 (i270) was insufficient because it
+; LEAVES &780B as-is. See docs/notes/trinity-sd-z80-interface.md §8a/§8b (the gold
+; entry contract, derived from Colin's captured B-DOS 1.5t: &8662/&8684).
+BD_DEVICE_TRINITY: equ 2                  ; A for HRSAD/HWSAD: select the Trinity SD device
+
 ; bdos_select_record — HRECORD: select the mass-storage record (0 = floppy).
 ; In: A = record number. On real B-DOS, all subsequent HGTHD/HSAVE/HLOAD use it.
 bdos_select_record:
@@ -418,6 +433,7 @@ bdos_read_sector:
                 ld      a, (BD_READ_SECTOR)
                 ld      e, a
                 ld      hl, BD_READ_BUF
+                ld      a, BD_DEVICE_TRINITY    ; A = device (NOT sector) — force &780B=2 (SD path)
                 rst     8
                 defb    BD_HOOK_HRSAD
                 ret
@@ -946,7 +962,8 @@ BD_DISK_PREFIX_LEN: equ 18                 ; len("trinity-sam-disks/")
 ; at (track, sector) using HWSAD (hook 149, bdos15a.src.txt:528-531).
 ;
 ; HWSAD register contract (bdos15a.src.txt:535-537, shared rwsad entry point):
-;   A  = drive number (same as HRSAD; bdos_seam uses 0 = selected record)
+;   A  = device number (same as HRSAD; bdos_seam passes BD_DEVICE_TRINITY=2 to
+;        force the SD path via &780B — see the BD_DEVICE_TRINITY note above)
 ;   D  = track  (0-79)
 ;   E  = sector (1-10)
 ;   HL = source memory address (the 512 bytes to write)
@@ -968,6 +985,7 @@ bdos_write_sector:
                 ld      a, (BD_WRITE_SECTOR)
                 ld      e, a
                 ld      hl, BD_WRITE_BUF
+                ld      a, BD_DEVICE_TRINITY    ; A = device (NOT sector) — force &780B=2 (SD path)
                 rst     8
                 defb    BD_HOOK_HWSAD
                 ret
