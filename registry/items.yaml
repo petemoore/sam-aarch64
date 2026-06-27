@@ -2443,6 +2443,7 @@
   description: |
     Confirm the OACK path works on real Trinity hardware: netboot client connects to a standards-compliant TFTP server (e.g. macOS tftpd), receives OACK, ACKs block 0, and receives the file. Gated on Trinity hardware access + a standards-compliant server in the test environment.
   status: OPEN
+  depends_on: [i272]
   kind: leaf
   owner: agent
   parent: i118
@@ -2572,7 +2573,7 @@
   title: "Z80 bootable client windowed integration: port windowed receive into netboot_client.asm + OACK windowsize parse + re-add windowsize to ClientOptionSet/RRQ, SimCoupe-verified"
   description: |
     Mirror the i120b-b1 windowed receive (onDataWindowed) into the bootable phase machine src/netboot/netboot_client.asm (its own duplicate receive loop), parse windowsize from the OACK into WINDOWSIZE (alongside the existing blksize parse), and re-add {windowsize,N} to tftp.ClientOptionSet + the Z80 RRQ option bytes. End-to-end SimCoupe verify: against a lock-step server the client must gracefully stay lock-step (no windowsize OACK), and against the windowed server (i120b-b2) it must do windowed receive. Depends on i120b-b1 (the verified receive logic) and i120b-b2 (a windowed server to exercise it end-to-end).
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i120b-b1, i120b-b2]
   kind: leaf
   owner: agent
@@ -3263,6 +3264,7 @@
   description: |
     bdos_read_sector (HRSAD, i119) and bdos_write_sector (HWSAD, i114c) both leave A = the sector value at the rst 8, but the B-DOS hook code reads A as the drive number (bdos15a.src.txt rwsad/xsad: LD A,(hk.a)). After HRECORD-select a Trinity record presents as drive 2. The koron-go harness models the selected record via HRECORD and ignores A, so it cannot catch a wrong-drive bug. Confirm on real Trinity whether these hooks need A explicitly set (e.g. A=2 or A=record) or whether HRECORD makes the record the active context regardless of A; fix both routines symmetrically if needed.
   status: OPEN
+  depends_on: [i272]
   kind: leaf
   owner: agent
   refs: [src/netboot/bdos_seam.asm, reference/bdos/bdos15a.src.txt, i119, i114c]
@@ -3542,7 +3544,7 @@
   description: |
     Hardware-gated completion of i182 (unverifiable in emulation). Boot the i182a fetch-and-boot disk on real SAM+Trinity, serve a stamped 819200-byte .mgt, confirm it streams into the scratch record (1600 HWSAD sectors), validates, and ALHK-boots it. Entangled with auto-boot/control-return autonomy (i132/i135). The full-size valid stream is the first full-scale fetch-and-boot (not driven through the bit-banged ENC in the host harness). Needs i182a's disk.
   status: OPEN
-  depends_on: [i182a]
+  depends_on: [i182a, i272]
   kind: leaf
   owner: agent
   parent: i182
@@ -4660,7 +4662,7 @@
   description: |
     Diff our CMD24 write bd_list_write_hw (src/netboot/sd_csd.asm) EXACTLY against Colin's FORK ADDITIONS — his 1.5t Trinity SD-driver PATCHES, NOT the whole B-DOS: ~/sam-archive/bdos/analysis/region-diffs.txt (the 1.5a->1.5t diff), ANALYSIS.md, draft-bdos-trinity-fork-analysis.md, and bdos15t-beta6.annotated.dis (the SD region: sd.out &A7C5, sd.cmd-with-address &A81F, write tail &A86B, deselect &A8D7). Port faithfully: the Trinity SD is MICROCONTROLLER-mediated — OUT(&DC),&3F auto-null select (uC supplies dummies in data phases), write busy-wait up to 65536 reads, the real data-response framing — vs our per-byte OUT / no auto-null / 256-iter poll. Cite Colin's source like the read path does. VERIFY ON REAL SAM HARDWARE (192.168.2.75): WRQ completes, SAM emits its OACK, a pushed disk stores to a free record + reads back byte-identical. Hardware-prove this BEFORE feeding the emulator (i270b). Gates i194.
   status: OPEN
-  depends_on: [i280b-b2b, i280b-b2c, i280b-b2d, i280b-b2e, i280b-b2f, i280b-b2g, i280b-b2h, i280b-b2i]
+  depends_on: [i280b-b2b, i280b-b2c, i280b-b2d, i280b-b2e, i280b-b2f, i280b-b2g, i280b-b2h, i280b-b2i, q62]
   kind: leaf
   owner: agent
   parent: i270
