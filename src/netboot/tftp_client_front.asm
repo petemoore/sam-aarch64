@@ -259,8 +259,9 @@ rrq_mode_octet:   defm "octet"
 
 ; The ClientOptionSet, pre-formatted as the wire bytes build_rrq copies verbatim:
 ; each "name",0,"value",0. Byte-identical to the Go tftp.ClientOptionSet ordering
-; (blksize, tsize, timeout). windowsize is NOT requested: a lock-step receiver
-; must not ask for RFC 7440 windowed delivery it cannot handle (i118/i120).
+; (blksize, tsize, timeout, windowsize). windowsize=8 requests RFC 7440 windowed
+; delivery; the receiver handles it and stays lock-step when the server's OACK
+; omits windowsize (i120b-b3).
 rrq_opt_template:
                   defm "blksize"
                   defb 0
@@ -273,6 +274,10 @@ rrq_opt_template:
                   defm "timeout"
                   defb 0
                   defm "2"
+                  defb 0
+                  defm "windowsize"
+                  defb 0
+                  defm "8"
                   defb 0
 RRQ_OPT_LEN:      equ $ - rrq_opt_template
 
