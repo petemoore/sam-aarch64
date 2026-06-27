@@ -218,6 +218,55 @@ func (s *SDCard) CapturedSector(addr uint32) ([]byte, bool) {
 	return sec, ok
 }
 
+// RecordDataSector returns the 512 bytes captured for linear sector linearSec
+// (0-based) of record (1-based) on an SDHC/v2 card, using the i194 record->absolute
+// -LBA formula LBA = csdBase + 1600*(record-1) + linearSec (the same math
+// bd_record_write_hw computes). It is the own-CMD24 disk-push read-back analogue of
+// the BDOSStore HWSAD-hook capture: a test that bypasses the HWSAD hook (writing by
+// absolute LBA) asserts the stored bytes here instead of via SectorWrites().
+// Returns (nil,false) if nothing was written at that record's linear sector.
+func (s *SDCard) RecordDataSector(csdBase uint32, record, linearSec int) ([]byte, bool) {
+	const sectorsPerRecord = 1600
+	addr := csdBase + sectorsPerRecord*(uint32(record)-1) + uint32(linearSec)
+	return s.CapturedSector(addr)
+}
+
+// CapturedRecordBlockCount returns how many distinct card-absolute blocks were
+// captured (CMD24 writes + seeds) that fall in record's own range
+// [csdBase+1600*(record-1), csdBase+1600*record) — the data-safety check that the
+// own-CMD24 write only ever touched the claimed record's blocks. The whole-store
+// count is CapturedBlockCount; any block outside the range is a safety violation a
+// test can detect by comparing the two.
+func (s *SDCard) CapturedRecordBlockCount(csdBase uint32, record int) int {
+	const sectorsPerRecord = 1600
+	lo := csdBase + sectorsPerRecord*(uint32(record)-1)
+	hi := csdBase + sectorsPerRecord*uint32(record)
+	n := 0
+	for addr := range s.store {
+		if addr >= lo && addr < hi {
+			n++
+		}
+	}
+	return n
+}
+
+// CapturedBlockCount returns the total number of distinct card-absolute blocks in
+// the backing store (CMD24 writes + any SeedSector calls).
+func (s *SDCard) CapturedBlockCount() int { return len(s.store) }
+
+// CapturedBlocksBelow returns how many captured blocks fall strictly below addr —
+// the boot block + record-list area when addr is csd_base. A data-safety test
+// subtracts this from CapturedBlockCount to get the number of record-data blocks.
+func (s *SDCard) CapturedBlocksBelow(addr uint32) int {
+	n := 0
+	for a := range s.store {
+		if a < addr {
+			n++
+		}
+	}
+	return n
+}
+
 // CSDForV2 builds a 16-byte CSD v2.0 register (SDHC/SDXC) for the given 22-bit
 // C_SIZE: blocks = (C_SIZE+1)*1024 512-byte blocks. CSD_STRUCTURE = 01 (byte0 bit
 // 6). C_SIZE occupies bits [69:48]: byte7 low 6 bits, byte8, byte9 (SD physical-
