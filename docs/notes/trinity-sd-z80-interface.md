@@ -562,6 +562,52 @@ harness); the remaining data-phase-SD-hook hang is tracked as a fresh item. **Ne
 the SD side of the shared controller after `serve_rearm_enc`'s `ereset`, before the first data-phase SD
 hook (with the A'=0 fix applied to the re-select probe to remove that confound), then re-shoot.
 
+## 8j. Root cause of the data-phase hang (i280b-b2h) — the paged-pointer `hk.hl` contract, as §8a predicted; the SD-bus and DI/EI theories REFUTED
+
+Two grounded refutations cleared the field, leaving the §8a contract bug:
+
+- **REFUTED — `serve_rearm_enc`'s `ereset` (`OUT &DC,&28`) damages the SD side.** `&DC`'s
+  high nibble is a **peripheral mux** (Colin's Trinity manual: `&1x`=EEPROM, `&2x`=ENC,
+  `&3x`=SD): `&28` is the **ENC-only** soft-reset. The ENC28J60 datasheet §11.2 confirms the
+  SPI System-Command reset reverts only ENC registers and does not drive the RESET pin —
+  it cannot touch the SD card or the PIC's SD state, and the `&DC` BUSY bit is a momentary
+  per-`OUT` busy, not an SD-session state (§8f already proved the bus is responsive after
+  the re-arm). So a quiesce/re-init of the SD after `ereset` is the wrong side (consistent
+  with §8e's quiesce-before failing). The koron-go `&28` handler likewise resets only the
+  ENC.
+- **REFUTED — the data-phase hooks run with interrupts enabled and the claim-phase under
+  `DI`.** Both run under the **same** ambient `EI`: `sv_serve_loop` runs `EI` (the `ei` after
+  `serve_main`'s bring-up), and neither `handle_wrq`'s claim nor `handle_data`'s write adds a
+  `di` around its SD hook. Same interrupt state in both phases → not the discriminator.
+
+**The real discriminator — the source pointer's top two bits.** The HWSAD/HRSAD prelude
+(§8a, `&9E27-&9E60`) reads `hk.hl`, takes its **top two bits as a source page** (`AND &C0 /
+SUB &40 / RLCA RLCA`), and `OUT (&FB)` (HMPR) **pages that in at section C** — *unless* `H &
+&C0 == 0` (a section-A pointer), when it skips the switch (`JR Z,&9E89`). Our seam passes
+`HL = BD_WRITE_BUF = &BE42` (HWSAD) / `BD_READ_BUF = &BA07` (HRSAD) — both **section C, top
+bits `10`** — so the prelude **fires the `OUT (&FB)`** and repages section C, **displacing
+B-DOS from section C mid-handler** → the handler's own code vanishes → the hang (exactly the
+§8b honest-boundary failure mode). The **claim**'s HRECORD passes a *record number* in HL
+(top bits `00`) → the switch is **skipped** → it works. **That is the claim-vs-data
+asymmetry**, fully grounded — and it means the §8i re-select hang (HRECORD, record# in HL,
+no page-switch) was the **separate stale-A' confound**, not a generic "any data-phase SD
+hook hangs".
+
+This is precisely the fix §8a flagged and that got buried under the §8d–§8h handshake/A'
+work: **"the entry contract is paged-pointer HL + device in `&780B` + drive in `hk.a`, not
+the flat `HL=flat-source` our seam currently assumes."** The A'=0 fix (§8h, #730) was real
+but secondary — the page-switch fires regardless of A'.
+
+**Fix direction (i280b-b2h):** make `hk.hl` honor the paged-pointer contract — read the
+prelude's exact page+offset semantics (`&9E27-&9E60`) and how B-DOS's own write supplies its
+source (does it page the caller's data into a section that does NOT overlap B-DOS, then copy
+to `wr.buff`?), then either (a) pass our staging buffer as a correctly-encoded paged pointer,
+or (b) stage the data where the prelude reads it flat (top bits `00`), or (c) hand B-DOS the
+source the way its own HSAVE path does. Reuse B-DOS; do not reimplement. The page-switch is
+observable in the `bdostrace-paged` harness (drive HWSAD with a section-C `hk.hl` and watch
+the `OUT (&FB)` repage B-DOS away — the wander §8b already saw), so the fix is
+emulation-checkable before a TAPO shot (success = `HWSAD_PRE → HWSAD_POST` + push completes).
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
