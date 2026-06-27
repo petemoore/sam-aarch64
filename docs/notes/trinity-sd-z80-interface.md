@@ -364,7 +364,50 @@ so the claim → re-arm → handshake completes and the per-block write (the §8
 still unexercised on hardware) is finally reached. The fault still does not reproduce
 in koron-go (the SD model clears busy and there is no shared ENC/SD controller), so this
 remains a hardware-gated investigation. (i280b-b2 split here: the localization is
-**i280b-b2b**; the fix is **i280b-b2c**.)
+**i280b-b2b**; the bound is **i280b-b2c**; the fix is **i280b-b2d**.)
+
+## 8e. Hardware shot (i280b-b2d attempt) — the failure is a POST-re-arm ENC-TX-readiness window, not the pre-re-arm bus hand-off; and the marker channel cannot observe it
+
+A TAPO self-serve shot ran the **b2c-bound + a b2d candidate fix** build: a *quiesce
+before the re-arm* — `sd_bus_quiesce` (OUT `&DC,&04` + bounded `&DC` busy-poll + fixed
+settle, the same proven hand-off `sv_exit_to_trinload` uses to return to trinload) called
+in `serve_rearm_enc` *before* `enc_rx_reestablish`, on the theory that the claim's SD ops
+left `&DC` bit-3 hung so the re-arm's first `wait_ready` could not proceed. Tooling now
+committed: `tools/hardware-shot/` (`listen-markers.py` + `run-shot.sh`).
+
+**Markers seen (curl `-T … tftp://…/trinity-sam-disks/x.mgt`, 6 curl WRQ retransmits):**
+`WRQ_ENTRY → CLAIM_FIND_PRE → CLAIM_SELECT_PRE → CLAIM_SELECT_POST`, repeated **×6**;
+**never** `WRQ_CLAIMED`/`WRQ_HANDSHAKE`/`DATA_BLOCK`; **no `DBG_REARM_TIMEOUT` (&17)**;
+curl received 0 bytes (no handshake), same end-state as the §8d shot-3.
+
+**Conclusions:**
+- **The quiesce-before-re-arm did NOT fix it** — the push still never hand-shakes. So the
+  pre-re-arm bus hand-off was the *wrong side* of the re-arm (it was a sound but
+  unnecessary change; not landed on `main` — prime directive: no unverified behavioural
+  fix merges).
+- **The dividing line is exactly `serve_rearm_enc`, and the symptom is POST-re-arm.** Every
+  marker *before* the re-arm (`WRQ_ENTRY`/`FIND`/`SELECT`) escapes reliably on **all 6**
+  iterations; every marker *at/after* it (`WRQ_CLAIMED`, the handshake reply itself) escapes
+  on **none** — yet the ENC TX **recovers by the next serve-loop iteration** (the next
+  `WRQ_ENTRY` escapes). So right after `serve_rearm_enc` runs (post-SD-claim) the ENC
+  **accepts TX commands but puts no valid frame on the wire for a window**, then settles.
+  The handshake reply (a `drv_write` immediately after the re-arm) falls in that dead
+  window → curl never gets it → retransmit loop.
+- **`DBG_REARM_TIMEOUT` is NOT the reliable signal b2c assumed.** `&17` is itself an ENC-TX
+  `drv_write` emitted right after the re-arm, so it shares the dead window and cannot
+  escape — its **absence is inconclusive** (could be "no timeout" *or* "timed out but the
+  marker couldn't transmit"). This **extends the §8d methodology wall**: even a
+  "post-window" ENC marker cannot observe a fault *in* the ENC-TX path.
+
+**Next step (the real b2d gate) — a window-independent observability channel first.** The
+clean, cheap discriminator: at `WRQ_ENTRY` (which escapes reliably), also emit the
+`enc_timed_out` value left by the **previous** WRQ's `serve_rearm_enc`. curl's retransmits
+make iterations 2–6 report iterations 1–5's re-arm result from *outside* the dead window —
+distinguishing **(a) the re-arm timed out** (`&DC` bit-3 stayed hung → a bus-hand-off fix)
+from **(b) the re-arm succeeded but the ENC TX was not yet wire-ready** (→ settle/verify the
+ENC is TX-capable before the handshake, or retry the handshake). Only then is the actual fix
+chosen and re-shot. The fault still does not reproduce in koron-go (the SD model clears busy;
+no shared controller), so this stays hardware-gated.
 
 ## 9. Porting to fresh Z80
 
