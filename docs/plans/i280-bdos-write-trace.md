@@ -12,7 +12,29 @@ Live state: registry **i280b-b2q DONE** (PRs #737/#738), **i280b-b2i OPEN** (the
 
 ---
 
-## IMPLEMENTING-AGENT HANDOVER — START HERE (2026-06-29)
+## ROOT CAUSE FOUND + FIXED (2026-06-29, i280b-b2t / §8af) — read §8af FIRST
+
+**The write hang is the raw HWSAD presenting `A = the sector number` to the B-DOS
+device-select; the first .mgt sector (1) selects the FLOPPY → the FDC-poll hang.**
+Re-derived in the faithful (Continue/WTKY2) rig — the §8c–§8o armed-dispatch findings
+below were `&01CB`-reboot-artifact-contaminated (§8ae) and several are refuted by §8af:
+
+- **`hk.a` = the caller's MAIN A** at the `rst 8` (NOT the alternate A'; §8h/#730 refuted).
+  The rwsad prelude `&9E3C ld a,(hk.a) / &9E3F call &8662` device-selects on it.
+- **`&8662 cp 1` → floppy (the un-timed FDC poll = the hang); `cp 2` → Trinity SD.**
+- **FIX (landed):** `src/netboot/bdos_seam.asm` loads `A = BD_DRIVE_TRINITY` (=2) right
+  before the `rst 8` in `bdos_write_sector` + `bdos_read_sector`. Guards in
+  `bdos_hwsad_drive_contract_test.go` (faithful behavioural + assembled-image byte-guard).
+- **REMAINING:** a TAPO **hardware retest** that the push completes end-to-end (emulation's
+  SD model can't exercise the real write-core busy-wait). Tracked as the re-aimed **i283**.
+
+Full detail + the device-select diff + the faithful probe: **§8af**. The hardware-only-wedge
+theories below (§8v ENC erratum etc.) are the FALLBACK if the A=2 fix's hardware retest still
+hangs — they are no longer the leading hypothesis.
+
+---
+
+## (superseded by §8af) IMPLEMENTING-AGENT HANDOVER (2026-06-29)
 
 **Read FIRST, before any code:** `docs/notes/trinity-sd-z80-interface.md` §8s, §8t, §8u,
 then **§8v (the latest — it CORRECTS the emulation-first plan below)**, then the SOURCES

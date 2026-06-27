@@ -815,6 +815,34 @@ func (mac *Machine) Continue(in Entry) (CallResult, error) {
 	return mac.runLoop("continue", mac.cont, in, false)
 }
 
+// ContinueFrom resumes the machine from the CPU state left by the previous
+// run/Continue — preserving every register (main AND alternate), the interrupt
+// state, and the live paging (LMPR/HMPR) — but redirects PC to `addr` and pushes
+// the HALT-trap as the return address (so the routine's final RET lands on the
+// trap). It is the faithful "call this injected machine code in the booted state"
+// primitive: unlike run()/RunBootFrom(), it does NOT reset SP to a synthetic stack
+// or zero the registers — the editor-idle / post-RECORD device state (sysvars, the
+// selected record, the alternate bank) survives intact. Use it to invoke our
+// serve's raw machine-code HWSAD sequence faithfully (i280b-b2t), avoiding the
+// §8ae &01CB reboot-artifact contamination of the RunBootFrom(stub) harness.
+//
+// The injected code must be staged by the caller and must end in a RET (it returns
+// to the planted HALT trap). SP is the live editor stack; the trap address is
+// pushed onto it, so the code sees a normal call frame.
+func (mac *Machine) ContinueFrom(addr uint16, in Entry) (CallResult, error) {
+	if mac.cont == nil {
+		return CallResult{}, fmt.Errorf("z80: ContinueFrom with no prior run to resume")
+	}
+	cpu := mac.cont
+	mac.m.cpu = cpu
+	cpu.SP -= 2
+	mac.m.poke(cpu.SP, byte(haltTrap&0xff))
+	mac.m.poke(cpu.SP+1, byte(haltTrap>>8))
+	mac.m.poke(haltTrap, 0x76) // HALT opcode
+	cpu.PC = addr
+	return mac.runLoop("continueFrom", cpu, in, false)
+}
+
 func (mac *Machine) runLoop(name string, cpu *z80.CPU, in Entry, capIsError bool) (CallResult, error) {
 	cap := uint64(maxSteps)
 	if in.StepCap != 0 {
