@@ -24,9 +24,10 @@
 //	exercised identically in TestSmokeBootRunsFromEEPROM and is the reactive minimum
 //	that proves the boot wrapper ran through EEPROM read + drv_init successfully).
 //
-// Emulation-verified is not hardware-verified (CLAUDE.md §5). The NETBOOT_HOSTTEST
-// guards are NOT deleted — they are correct build-variant switches; this PR adds
-// emulation coverage, not a removal of the guards.
+// Emulation-verified is not hardware-verified (CLAUDE.md §5). netboot_main's
+// NETBOOT_HOSTTEST==0 carve-out has since been removed (i231b-b4d) — it is now in
+// the single netboot_server build this test loads. serve_main is still gated in
+// netboot_serve.asm (those carve-outs are tracked under i231b-b4b).
 package z80_test
 
 import (
