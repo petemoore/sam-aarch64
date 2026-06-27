@@ -4904,6 +4904,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 733, role: completing}
   parent: i280b-b2
 
 - id: i281
