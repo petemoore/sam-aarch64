@@ -308,6 +308,64 @@ HWSAD (the §8a/§8b authority path), register-for-register and paging-state for
 paging-state. The fault does not reproduce in koron-go (the SD model clears
 busy), so each hypothesis still ends in a hardware retest.
 
+## 8d. Hardware re-localization (i280b-b2) — the failure is an ENC/SD shared-bus Heisenbug in the CLAIM path, not the per-block write
+
+Option (2) above was taken: finer i271 markers were added around the per-block
+write (`DBG_FLUSH_PRE` &21 at `rrs_flush_sector`; `DBG_HWSAD_PRE` &22 / `_POST`
+&23 bracketing the `rst 8`/`defb 149` in `bdos_write_sector`) and, after the first
+shot pointed earlier, around the two SD steps of the free-record claim
+(`DBG_CLAIM_FIND_PRE` &14 before `bdos_find_record_for_strategy`'s CMD17 list reads;
+`DBG_CLAIM_SELECT_PRE` &15 / `_POST` &16 bracketing the `bdos_select_record`
+HRECORD hook). Three TAPO self-serve shots (current-main serve + markers, pushed
+via `netboot_serve_boot_debug.bin`; disk-record WRQ `curl -T … tftp://…/trinity-sam-disks/x.mgt`):
+
+| shot | markers compiled | UDP:9001 markers seen | curl |
+|------|------------------|-----------------------|------|
+| 1 | HWSAD only | `WRQ_ENTRY` ×1, then nothing | 0 B, timed out |
+| 2 | HWSAD only | `WRQ_ENTRY` ×1, then nothing | 0 B, timed out |
+| 3 | HWSAD + CLAIM | `WRQ_ENTRY → FIND_PRE → SELECT_PRE → SELECT_POST`, **×5** (curl re-sends the WRQ every ~6 s); never `WRQ_CLAIMED`/`WRQ_HANDSHAKE`/`DATA_BLOCK` | 0 B, timed out |
+
+**Solid, reproducible conclusions (3/3):**
+- **The disk-record push reproducibly fails to hand-shake** — curl receives 0 bytes
+  every time (it never gets an OACK/ACK), independent of UDP marker delivery. So the
+  serve never reaches `wrq_handshake`.
+- **The per-block HWSAD write is NEVER reached.** None of `FLUSH_PRE`/`HWSAD_PRE`/`HWSAD_POST`
+  ever fired. **This supersedes the §8a/§8b/§8c framing** that the blocker is inside
+  B-DOS's HWSAD per-block write — the run dies upstream, in the WRQ free-record
+  **claim → ENC re-arm → handshake** region, before any sector is written.
+- **The failure point is acutely sensitive to where the ENC-TX markers sit (a
+  Heisenbug).** Without the claim markers (shots 1–2) the serve stops after the first
+  `WRQ_ENTRY` and **wedges** (curl's later WRQ retransmits are not processed — only one
+  `WRQ_ENTRY`). With the claim markers interleaved (shot 3) the claim's SD find + HRECORD
+  select **succeed and repeat** (`SELECT_POST` fires 5×) and the serve **loops** instead
+  of wedging — but still never emits `WRQ_CLAIMED`. The only non-trivial step between
+  `SELECT_POST` and `WRQ_CLAIMED` is **`serve_rearm_enc`** (the ENC RX re-arm after the
+  SD list-reads + HRECORD select; `raw_record_sink_reset` between them is pure memory).
+
+**Why this is the root-cause signal, not noise:** `dbg_marker` is itself an **ENC
+transmit** (`build_udp_frame` + `drv_write`) on the **one-PIC Trinity controller the
+SD shares**. Inserting ENC transmits between the SD operations changes the controller
+state and **moves the symptom** (wedge-in-claim → loop-past-claim, hang-in-find/select
+→ hang-in-rearm). A fixed logic bug in one routine would not migrate under
+instrumentation; an ENC↔SD shared-bus / controller-state contention does exactly this.
+The existing i242/i244/i245 fixes (drv_init-before-SD, `enc_rx_reestablish` after SD)
+are evidently **incomplete for this exact sequence** — find (CMD17 reads) + HRECORD
+select + `serve_rearm_enc`, interleaved with the serve's ENC serving.
+
+**Methodology wall for the next step:** ENC-based remote markers **cannot cleanly
+localize an ENC/SD-contention bug — they perturb it.** The next step is therefore NOT
+another marker shot. It is one of: (a) **bounded guards** — convert every unbounded
+SD/ENC busy-wait on this path (the find's CMD17 reads, the HRECORD hook's waits, and
+especially `serve_rearm_enc`) into a *bounded* wait that, on expiry, reports a distinct
+failure marker and returns rather than wedging — so the hang becomes observable without
+adding ENC traffic *inside* the contended window; and/or (b) a **non-ENC observability
+channel** (border/screen state, captured out-of-band). Then fix the ENC↔SD transition
+so the claim → re-arm → handshake completes and the per-block write (the §8c target,
+still unexercised on hardware) is finally reached. The fault still does not reproduce
+in koron-go (the SD model clears busy and there is no shared ENC/SD controller), so this
+remains a hardware-gated investigation. (i280b-b2 split here: the localization is
+**i280b-b2a**; the fix is **i280b-b2b**.)
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
