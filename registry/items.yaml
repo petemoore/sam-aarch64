@@ -4656,7 +4656,7 @@
   description: |
     Diff our CMD24 write bd_list_write_hw (src/netboot/sd_csd.asm) EXACTLY against Colin's FORK ADDITIONS — his 1.5t Trinity SD-driver PATCHES, NOT the whole B-DOS: ~/sam-archive/bdos/analysis/region-diffs.txt (the 1.5a->1.5t diff), ANALYSIS.md, draft-bdos-trinity-fork-analysis.md, and bdos15t-beta6.annotated.dis (the SD region: sd.out &A7C5, sd.cmd-with-address &A81F, write tail &A86B, deselect &A8D7). Port faithfully: the Trinity SD is MICROCONTROLLER-mediated — OUT(&DC),&3F auto-null select (uC supplies dummies in data phases), write busy-wait up to 65536 reads, the real data-response framing — vs our per-byte OUT / no auto-null / 256-iter poll. Cite Colin's source like the read path does. VERIFY ON REAL SAM HARDWARE (192.168.2.75): WRQ completes, SAM emits its OACK, a pushed disk stores to a free record + reads back byte-identical. Hardware-prove this BEFORE feeding the emulator (i270b). Gates i194.
   status: OPEN
-  depends_on: [i280b-b2b, i280b-b2c, i280b-b2d, i280b-b2e, i280b-b2]
+  depends_on: [i280b-b2b, i280b-b2c, i280b-b2d, i280b-b2e, i280b-b2f, i280b-b2g, i280b-b2h]
   kind: leaf
   owner: agent
   parent: i270
@@ -4866,10 +4866,21 @@
   parent: i280b-b2
 
 - id: i280b-b2g
-  title: "B-DOS HWSAD per-block write hangs (HWSAD_PRE without HWSAD_POST): the original §8a hang, revealed once b2d's drv_wait_link let the push hand-shake + reach the per-block write"
+  title: Honor the hk.a=A' shadow-accumulator contract in the HWSAD/HRSAD seam + bdostrace-paged experiment-4 proof + re-localize the hang (§8h)
   description: |
-    OPEN. With i280b-b2d landed (the handshake now completes, §8g), the disk-record push reaches the B-DOS per-block write for the FIRST time: a TAPO shot shows DATA_BLOCK -> FLUSH_PRE -> HWSAD_PRE, then hangs (no HWSAD_POST, curl times out). This is the original §8a/§8b HWSAD hang (the i280b-b2 umbrella's first target) that the §8d/§8e/§8f handshake blocker had been masking. Per §8a the hang is in the B-DOS HWSAD hook (rst 8 / defb 149) ENTRY PRELUDE (handler &9E16: a paged-pointer page-setup driving HMPR + the &83F7 device-dispatch keyed on the ambient-device var &780B, whose floppy/Z branch is an un-timed FDC poll = the hang shape), NOT the §5/§8 write core (which traces clean in koron-go; gold CMD24 stream captured by i280a bdostrace). The A=2/&780B ambient-device theory was hardware-refuted (§8c, b2b). Next: the bdostrace-paged harness (tools/netboot-oracle/z80/cmd/bdostrace-paged) to trace the prelude end-to-end so the hang point is observable, then fix our HWSAD INVOCATION contract (reuse B-DOS entry points; don't reimplement). Doesn't reproduce in koron-go (SD model clears busy). Ends in a TAPO shot (tools/hardware-shot/run-shot.sh; success = HWSAD_POST + the push completes).
-  status: IN_PROGRESS
+    DONE (#730). Root-caused the HWSAD_PRE-without-HWSAD_POST hang from Colin's 1.5t disasm: the hook dispatcher (&8319) reads hk.a from the ALTERNATE accumulator A' (&8322 ex af,af' / &8323 ld (&81D9),a), not main A; the rwsad prelude device-select (&9E3F call &8662) re-keys ambient device &780B purely from hk.a on every HWSAD/HRSAD. Our seam loaded only main A and never set A' -> hk.a was uncontrolled inherited shadow state (explains §8c's main-A=2 refutation). Fix: xor a / ex af,af' before the rst 8 in bdos_write_sector + bdos_read_sector, pinning hk.a=0. Emulation-corroborated by cmd/bdostrace-paged experiment 4. A real latent-bug fix + new tooling, but NOT the hang fix on its own: two hardware shots (§8h/§8i) showed the hang persists and re-localized it to ANY data-phase SD hook wedging after serve_rearm_enc's ereset -> split out as i280b-b2h.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 730, role: completing}
+  parent: i280b-b2
+
+- id: i280b-b2h
+  title: "Data-phase SD-hook hang: any B-DOS SD rst-8 hook (HWSAD/HRECORD) wedges in the data phase after serve_rearm_enc's ereset; the same hook works at claim time (§8i)"
+  description: |
+    OPEN. Re-localized from i280b-b2g. Two TAPO shots (docs/notes/trinity-sd-z80-interface.md §8h/§8i): (1) the hk.a=A' contract fix (pin A'=0) did NOT stop the hang — still HWSAD_PRE without HWSAD_POST. (2) re-HRECORD-selecting immediately before the write hangs EARLIER, at FLUSH_PRE before HWSAD_PRE — i.e. the re-select (a DIFFERENT SD hook) also wedges, while the identical HRECORD succeeds at claim time (CLAIM_SELECT_POST fires every shot). So the hang is NOT HWSAD-specific: any B-DOS SD rst-8 hook invoked in the data phase wedges. The differentiator is the context between claim and data phases: serve_rearm_enc's ENC ereset (a full soft-reset of the shared one-PIC ENC/SD Trinity controller). Resurfaces the §8d shared-bus framing, sharpened to 'the first data-phase SD hook wedges'; b2d's drv_wait_link fixed the ENC-TX handshake after ereset but NOT the SD side. Next: re-init/quiesce the SD side of the shared controller after serve_rearm_enc's ereset, before the first data-phase SD hook (apply the A'=0 fix to the re-select probe to remove that confound), then re-shoot (TAPO self-serve; success = HWSAD_POST + push completes). Confound to control: the §8i re-select probe ran HRECORD with a stale A'.
+  status: OPEN
   kind: leaf
   owner: agent
   parent: i280b-b2
