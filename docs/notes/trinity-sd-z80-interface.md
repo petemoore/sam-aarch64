@@ -914,6 +914,102 @@ assumes about persistent SD/SPI state across an `ereset`, then a marker **inside
 busy-wait + a full SD-side re-init after `serve_rearm_enc`, then a TAPO retest. This measurement is
 i280b-b2m (DONE).
 
+## 8p. The §8b "honest boundary" is SOLVED — the HWSAD handler now runs END-TO-END in emulation (the §8o `DOSCNT=0` arming is the key) (i280b-b2n)
+
+Since §8a, the HWSAD handler was held to be **un-traceable in emulation**: the prelude
+`call`s a SAM-ROM bridge (the flat harness "escapes the run window at real `&9BF1 → call
+&0103`" and runs off into unmapped memory). Every downstream question therefore deflected to
+a hardware shot. §8o's arming dissolves that barrier — the **full real ROM dispatch** now
+carries an external caller's `rst 8` into the handler, and the **real-boot harness has the
+real ROM** at `&0000`/`&C000`, so the `&0103` bridge (and `&0005`, `&0033`) **execute and
+return** instead of wandering.
+
+**The unlock (`TestHWSADHandlerTraceable`).** Boot Colin's real ROM v3.0 + B-DOS 1.5t, set the
+faithful post-claim device vars (`&780B`=2 Trinity SD, `&8135`=`&44` class, `&8132`=2 number)
+in B-DOS's page, arm the serve map (LMPR=`&1F`, HMPR=1) **and `DOSCNT &5BC3`=0** (§8o), then
+`rst 8 / defb 149`. The handler is observed running through, in order: the dispatcher (`&8319`
+alias `&4319`) → **handler entry `&9E16` (alias `&5E16`)** → **prelude `&9E27`** → device-select
+(`&8662` alias `&4662`) → and across the **`&0103` ROM bridge reached from the real `&9BF1`
+escape point** — then it unwinds and **returns to the editor idle loop** (`finalPC=&01BF`), with
+**no fault and no wander into unmapped memory**. So the §8a/§8b "honest boundary" is gone: the
+handler is now directly observable.
+
+**Two corrections to the earlier framing this surfaced:**
+- The reason a raw `rst 8` from the editor-idle snapshot does **not** dispatch (bdostrace-paged
+  experiment 1) was mis-attributed to "the DOS-call stack chain is not armed." The real gate is the
+  ROM recursion guard at **`&37E8`** (`ld a,(DOSCNT &5BC3); rrca; jr c,NORMERR`): the snapshot has
+  `DOSCNT=1` ("DOS in control") → it diverts to `&1D95` and returns. `DOSCNT=0` (the external-caller
+  state) carries it through. (Experiment 1's finding text updated.)
+- The device-select `&8662` is keyed on `hk.a`: `cp 1`→floppy (`&8673`), `cp 2`→Trinity SD-setup
+  (`call &4677`/`&60E4`), **else** (incl. `hk.a`=0) → `&8680`, which is **not** "floppy-port
+  setup" but the **FDC-vs-SD dispatch read** itself (`&8684 ld a,(&780B); dec a; ret nz` → `&780B`=2
+  routes SD). So `hk.a`=0 leaves `&780B`=2 in force, as §8m's authority diff said.
+
+**SCOPE (honest — what this does and does NOT do).** This guards end-to-end *traceability*, not
+hang reproduction. With the hand-set device state here the handler returns cleanly **without
+reaching the SD CMD24 write core (`&A8F4`)** — driving it that far needs the **fully faithful
+claim-select state** the real serve's HRECORD leaves (the `&80AF` flag `&4677` tests, and whatever
+`&60E4` sets up), which is a deeper state reconstruction. And even reaching the write core, the
+koron-go SD model **always clears busy**, so the suspected busy-wait hang (§8l suspect b) still
+cannot reproduce there without modelling that timing. So §8p is a **methodology unlock** (future
+i280b-b2i steps are now emulation-observable up to the write core) — not the fix. **NEXT
+(i280b-b2i continuation):** reconstruct the faithful claim-select state to drive the handler into
+`&A8F4` in emulation and read exactly how far the write core gets; in parallel, model the `&DC`
+bit-3 busy semantics in the SD model so the busy-wait can be exercised. This unlock is i280b-b2n.
+
+## 8q. Capture-and-diff the ground-truth write (Pete's plan) — harness built, blocked on a valid Trinity card format; option-1 (raw HWSAD vs orchestrated write) is the leading hypothesis (i280b-b2q)
+
+Pete's steer (2026-06-29): stop theorising — drive a *working* B-DOS record write in
+emulation (`RECORD n : SAVE …`), trap every IN/OUT + B-DOS hook, and diff our serve's
+write against it; the gap is the bug. This section records the capture rig built for that
+and where it's blocked.
+
+**The capture rig works** (`bdos_save_capture_wip_test.go`): boot Colin's real ROM v3.0 +
+B-DOS 1.5t, **type real BASIC commands** at the prompt via `InjectKeys` + `FrameIntPeriod`
+(the editor tokenises + executes them), with a `&DC-&DF` port logger that **decodes the SD
+command frames** (CMD + 32-bit address). It cleanly captures the live SD I/O of any command.
+
+**Empirical findings:**
+- `RECORD n` runs the **full SD init ladder every time** (CMD0/8/ACMD41/59/9/16) before its
+  access — B-DOS **self-heals the SD bus on every record op** (this is why the claim/read path
+  works regardless of bus state; §8m). Our per-op write core does **not** (it relies on
+  boot-time SPI persistence) — a real asymmetry.
+- `RECORD n` then issues **one `CMD17` read of block 152** — and **the same block 152 for
+  `RECORD 1` *and* `RECORD 300`**. So block 152 (= `base` = `⌊(⌊total/1600⌋+32)/32⌋+1`) is a
+  **fixed card directory / record-list sector** B-DOS reads to resolve *any* record number, not
+  record-n's private data. On a blank card it is empty → "Invalid record" → the select fails, so
+  `SAVE` never reaches a write (zero CMD24s).
+- The device-select `&8662` disasm (read this shot): `cp 1`→floppy `&8673`; `cp 2`→Trinity
+  SD-setup (`call &4677`/`&60E4`); **else** (incl. `hk.a`=0) → `&8680` = the **FDC-vs-SD dispatch
+  read** (`&8684 ld a,(&780B); dec a; ret nz`), *not* "floppy-port setup". So `hk.a`=0 leaves
+  `&780B`=2 (SD), as §8m's authority diff said.
+
+**The blocker (and why it's not a dead end).** A working `SAVE`/`FORMAT RECORD` needs a card
+that is **Trinity-formatted at the card level** — the supplied BASIC formatter builds the
+record-list/master structure (Trinity manual `IMG_20260617_162816/823`: `RECORD n` = select
+record n as DRIVE 2; `RECORD 0` = floppy; records are 800 KB, formatted before use). A bare
+`BDOS`-stamp at byte 232 (the i62 minimal recipe) is enough for the **`HRECORD` *hook*** but
+**not** for the BASIC `RECORD` command's card-directory read, and `FORMAT RECORD 1` alone
+writes nothing (it assumes the card structure exists). **The format is fully derivable from the
+docs we hold** — `bdos15a.src.txt` `hd.init` (`last.record`/`last.recs` at `:1778`) + the
+`FORMAT` command (`bdos14e.src.txt:2565`) specify the record-list + base layout; no hardware or
+card dump is required (Pete: "you have all the information I have").
+
+**Leading hypothesis (option 1), not yet confirmed by capture.** Both the code-level recon and
+the i62 experiment show a working record write goes **`HRECORD`-select → `HSAVE`** (hook 132 →
+`open.file`/`HSVBK`/`HCFSM` orchestration, byte-identical to the floppy call sites that work),
+whereas our serve does **`HRECORD`-select → raw `HWSAD`** (hook 149, the "bookkeeping-free WRITE
+AT" primitive that *deliberately skips directory/allocation/setup*). The capture will pin the
+exact setup/sequence our raw-HWSAD path omits.
+
+**NEXT (i280b-b2q):** (1) build a valid Trinity card in the netboot-oracle SD model from
+`hd.init`/`FORMAT` (record-list at sectors 1..base-1 + the block-152 directory + a stamped
+record), seeded via `SDCard.SeedSector`; (2) capture a working `RECORD n : SAVE` (or
+`HRECORD`+`HSAVE` via the §8o-armed dispatch) IN/OUT + hook trace; (3) capture our
+`HRECORD`+`HWSAD` path the same way; (4) diff — the missing hook/wait/setup is the fix. The rig
+(`bdos_save_capture_wip_test.go`) and the §8o/§8p arming are in place; only the valid-card
+construction remains.
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**

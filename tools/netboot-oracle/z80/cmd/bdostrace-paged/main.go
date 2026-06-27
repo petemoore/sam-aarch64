@@ -261,9 +261,12 @@ func (m *machine) rd(a uint16) uint8 { return m.mac.Read(a, 1)[0] }
 
 // ---------------------------------------------------------------------------
 // Experiment 1: faithfulness probe — does a raw `rst 8 / defb N` from arbitrary
-// post-boot code reach the real B-DOS hook handler?  (It does not, and the trace
-// shows precisely why — the SAM DOS-call indirection is not armed for an external
-// caller in the editor-idle snapshot.)
+// post-boot code reach the real B-DOS hook handler?  In the editor-idle snapshot it
+// does NOT, and §8o/§8p found precisely why: the ROM recursion guard at &37E8
+// (`ld a,(DOSCNT &5BC3); rrca; jr c,NORMERR`) diverts to &1D95 because the snapshot
+// has DOSCNT=1 ("DOS in control"). An EXTERNAL caller (our serve) runs with DOSCNT=0,
+// and clearing it carries the rst8 through to the dispatcher — see
+// TestHWSADHookBankContract / TestHWSADHandlerTraceable.
 // ---------------------------------------------------------------------------
 func (m *machine) experimentRST8() {
 	fmt.Println("\n== experiment 1: rst 8 / defb 149 (HWSAD) from a scratch RAM stub ==")
@@ -303,10 +306,10 @@ func (m *machine) experimentRST8() {
 	fmt.Printf("  reached dispatcher &8319: %d times; reached HWSAD &9E16: %d times\n",
 		reached[addrDispatch], reached[addrHWSAD])
 	fmt.Printf("  SAM DOS-hook vector (&5AEE) = &%04X, &5BC3(DOS-present)=&%02X\n", dosVec, m.rd(0x5BC3))
-	fmt.Println("  finding: the ROM RST8 handler (&37CE) reads the inline hook code, then")
-	fmt.Println("    dispatches DOS via `ld sp,(&5C3D); jp &1D95` (the relocated DOS-call")
-	fmt.Println("    stack chain). In the editor-idle snapshot that chain is not armed for an")
-	fmt.Println("    EXTERNAL caller, so the hook returns to the editor without reaching &8319.")
+	fmt.Println("  finding (§8o/§8p): the ROM RST8 handler (&37CE) reaches the recursion")
+	fmt.Println("    guard `ld a,(DOSCNT &5BC3); rrca; jr c,NORMERR` — the editor-idle snapshot")
+	fmt.Println("    has DOSCNT=1, so it diverts to &1D95 and returns without reaching &8319.")
+	fmt.Println("    Setting DOSCNT=0 (the external-caller state) carries it to the dispatcher.")
 	fmt.Printf("    recent PCs: %s\n", fmtPCs(ring[:], ri))
 }
 
