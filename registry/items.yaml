@@ -3706,7 +3706,7 @@
   description: |
     The i121 payoff on real hardware, autonomous: 'start trinload -> push the serve program (push-serve.py) -> tftp put each .mgt disk image (validated size==819200, streamed into a free record + claimed) -> tftp put tftp.done -> return to trinload', then read a stored record back (servable-raw) and byte-compare to confirm the store. Unblocked once the production CSD read lands (i145b, so the server finds free records) and the full experiment is emulation-proven (i145d). Agent-actionable: trinload runs on the SAM (192.168.2.75) over the LAN from the Pi; push via tools/trinload-push/push-serve.py + curl tftp://; the 19 build/*.mgt are valid + staged (/tmp/push-all-disks.sh batches them). NO Pete needed for the push+store+readback; booting a pushed record to watch it run is a downstream nicety (autonomous via i135 auto-boot, or a Pete-present spot-check) and NOT a blocker for this item.
   status: OPEN
-  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198, i266, i270a, i280]
+  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198, i266, i270a, i280b]
   kind: leaf
   owner: agent
 
@@ -4765,8 +4765,26 @@
   description: |
     Hardware (2026-06-28) showed our TFTP-push per-block write hangs in B-DOS's HWSAD hook (rst 8/defb 149) even though B-DOS is resident; the A=0 drive-contract fix (branch i270-hwsad-drive-contract) is necessary but NOT sufficient. The captured Trinity docs have NO SD write example (Issue-21 article unwritten), so Colin's B-DOS 1.5t is the only authority. PLAN (docs/plans/i270d-bdos-write-trace.md): extend the koron-go harness into a 'bdostrace' tool that LOADS the real bdos15t-beta6.bin and runs a record write/copy against the existing SD model, trapping &DC-&DF IN/OUT + entry-point register state, to capture the correct invocation contract (SD-init/seek/record-base/page/HRECORD prelude). Then fix bdos_seam.asm to REUSE B-DOS's entry points (Pete: don't reimplement). Vehicle: koron-go harness (SimCoupe rejected - no Trinity ports). Steps 1-5 diagnostic; step 6 fixes src. Reframes i270a/#713 (bd_list_write_hw is the list-claim write, not the per-block hang gate). Net debug channel (i271) already lets the agent read step markers over UDP:9001 without sudo.
   status: OPEN
+  kind: umbrella
+  owner: agent
+
+- id: i280a
+  title: "bdostrace diagnostic tool: trace B-DOS 1.5t SD init + CMD24 write-core (gold byte-stream) in koron-go, pin the HWSAD entry prelude as ROM-dependent (not flat-traceable)"
+  description: |
+    DONE (tool: tools/netboot-oracle/z80/cmd/bdostrace/). Established: the SD-init ladder, records math, and CMD24 write-core+tail all run clean in the flat harness against the SD model (low-level write is faithful; hardware hang is NOT in the write core); the gold successful CMD24 byte-stream is captured. The HWSAD hook ENTRY prelude (handler &9E16: paged-pointer page-setup driving HMPR + device-dispatch &83F7 keyed on ambient-device &780B whose floppy branch is an un-timed FDC poll = the hang shape) is NOT traceable in the flat section-B harness — it call &0103's a SAM-ROM bridge helper (escape at real &9BF1) the flat model lacks; the SD model also always clears busy so the busy-wait hang can't reproduce here regardless. Findings: docs/notes/trinity-sd-z80-interface.md §8a.
+  status: DONE
   kind: leaf
   owner: agent
+  parent: i280
+
+- id: i280b
+  title: Trace the B-DOS HWSAD entry contract in a paged-boot harness (SAM ROM + B-DOS real page + sysvars) and fix bdos_seam.asm by reusing B-DOS entry points
+  description: |
+    The remaining i280 work. The flat section-B harness can't run the HWSAD entry prelude (it calls SAM ROM &0103 + reads sysvars the window overlaps). Build a paged-boot trace: LoadROMImage (SAM ROM &0000/&C000) + B-DOS in its real &8000 page + sysvars &5000, drive a real HRECORD-select -> HWSAD, capture the gold entry contract (device/record/page state a successful write needs). Diff our seam vs gold; the discriminator between our WORKING read (HRSAD, same flat shape, works on hw) and the HANGING write is unpinned - do NOT assume hk.a alone (i270 A=0 was necessary-but-insufficient on hw). Fix bdos_seam.asm by REUSING B-DOS entry points (Pete: don't reimplement); confirm via paged-boot trace then hardware retest (i271 UDP markers, TAPO self-serve). Plan: docs/plans/i280-bdos-write-trace.md. Findings so far: docs/notes/trinity-sd-z80-interface.md §8a.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i280
 
 - id: i281
   title: "TAPO power-management automation: monitor tracks SAM on-time + escalates + auto-off backstop; agent keep-alive; idle-off in agent prompts"

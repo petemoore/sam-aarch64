@@ -1,6 +1,45 @@
 # i280 — Trace B-DOS's own Trinity SD record write to derive our write contract
 
-**Status:** plan (execution not started). Ephemeral — delete in the PR that completes i280.
+**Status:** i280a DONE (the `bdostrace` tool + the traceable findings); i280b OPEN
+(the remaining paged-boot entry-contract trace + the `bdos_seam.asm` fix). Ephemeral
+— delete in the PR that completes i280b.
+
+## Findings so far (i280a — tool: `tools/netboot-oracle/z80/cmd/bdostrace/`)
+
+The full conclusions live in `docs/notes/trinity-sd-z80-interface.md` §8a. In brief:
+
+- The §4 init ladder, the records math, and the §5/§8 CMD24 write-core + CMD17
+  read-core all run **clean** in the flat koron-go harness against the modelled SD
+  card — so the SD-SPI model and the low-level write are faithful; the hardware
+  hang is **not** in the write core. `bdostrace -scenario writecore` captures the
+  **gold successful CMD24 byte-stream**.
+- The hardware hang is in the HWSAD hook **entry prelude** (handler &9E16): a
+  page-setup (HL is a *paged* pointer — page in the top bits — driving HMPR) + a
+  device-dispatch (&83F7, keyed on the ambient-device var &780B: NZ→SD &A8F4,
+  Z→an **un-timed FDC poll** at &8406+ = the hang shape) before the §8 write core.
+- That prelude is **not traceable in the flat section-B harness**: it `call &0103`s
+  a SAM-ROM bridge helper (escape at real &9BF1) the flat model lacks. The SD model
+  also always clears busy, so the busy-wait hang cannot reproduce here regardless.
+
+## Remaining (i280b)
+
+1. Trace the entry prelude faithfully in a **paged-boot** harness: `LoadROMImage`
+   (SAM ROM at &0000/&C000) + B-DOS in its real &8000 page + sysvars at &5000, so
+   `call &0103`, the HMPR switch, and the device/record state all resolve — the
+   flatten trick used for the §8 routines breaks here.
+2. Drive a real HRECORD-select → HWSAD and capture the **gold entry contract**
+   (what device/record/page state a successful write needs).
+3. Diff our serve's seam invocation against the gold contract; the discriminator
+   between our **working read** (HRSAD, same flat shape) and the **hanging write**
+   is still unpinned — do not assume it is `hk.a` alone (i270's `A=0` was
+   necessary-but-insufficient on hardware).
+4. Fix `src/netboot/bdos_seam.asm` by **reusing B-DOS entry points** (Pete: don't
+   reimplement). Confirm via the paged-boot trace, then a hardware retest (the i271
+   UDP marker channel; TAPO self-serve).
+
+---
+
+## Original plan (vehicle + instrumentation), retained for i280b
 
 ## Why
 
