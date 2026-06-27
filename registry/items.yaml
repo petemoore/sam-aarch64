@@ -4948,6 +4948,17 @@
   owner: agent
   parent: i280b-b2
 
+- id: i280b-b2r
+  title: "§8r: the record mount/select works in emulation (DEVICE mounts from CSD: last.record=4809; RECORD 1 self-heals + selects) — the write blocker is re-aimed downstream to SAVE/HSAVE"
+  description: |
+    DONE (§8r, PR #736). Measured last.record (&80C4) on B-DOS's resident page (correcting the prior wrong-page poke). Boot does NOT mount; DEVICE re-runs HDINIT (&A1B1) and mounts FROM THE CSD ALONE (last.record=4809 = the GetBDOSCaps count for csdV2(0x001D59)); HDINIT needs no on-card boot sector/record-list for the count. With the full mount var-set poked (last.record &80C4 / base &80C2 / capacity &80BD / record.no &80C6 / hd.wp &80C8), RECORD 1 self-heals the bus (full init ladder) + CMD17-reads block 152 and the select PERSISTS — identical for a bare BDOS@232 stamp or a real MGT directory, so record-1 content is NOT the gate. The write blocker is downstream at SAVE/HSAVE (no SD I/O, resets last.record, falls back to floppy; stock SAM error &0C raised downstream of the directory read, not B-DOS rep81). Guards: TestBDOSBootNoMountDeviceMounts, TestBDOSRecordSelectSelfHeals. Findings: trinity-sd-z80-interface.md §8r.
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 736, role: completing}
+  parent: i280b-b2
+
 - id: i281
   title: "TAPO power-management automation: monitor tracks SAM on-time + escalates + auto-off backstop; agent keep-alive; idle-off in agent prompts"
   description: |
