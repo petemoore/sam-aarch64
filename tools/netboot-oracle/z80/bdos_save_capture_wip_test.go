@@ -64,8 +64,14 @@ func TestBDOSSaveCaptureWIP(t *testing.T) {
 		sd.SeedSector(block, s)
 	}
 	const recBase = 152
-	for _, n := range []uint32{4, 5, 10, 300} {
+	for _, n := range []uint32{1, 2, 3, 4, 5, 10, 300} {
 		stamp(recBase + (n-1)*1600)
+	}
+	// Verify the seed is served by the model's backing store (block 152 = record 1 base).
+	if got, ok := sd.CapturedSector(152); ok {
+		t.Logf("seed check: block 152 bytes[232:236] = %q (ok=%v)", string(got[232:236]), ok)
+	} else {
+		t.Logf("seed check: block 152 NOT in backing store (ok=false) — SeedSector did not take")
 	}
 	var lastPC uint16
 	var log []capEv
@@ -149,23 +155,11 @@ func TestBDOSSaveCaptureWIP(t *testing.T) {
 		}
 	}
 
-	// Let B-DOS format record 1 itself (writes a valid format into the persisting SD
-	// model). Inject the y/n prompt answer(s) after the command line.
-	fStart := len(log)
-	mac.InjectKeys([]byte("FORMAT OVER RECORD 1\rYy\r\r"))
-	seenF := map[uint16]bool{}
-	var fHooks []string
-	lm := map[uint16]string{0x4319: "DISPATCH", 0x68F4: "SDwrite", 0x4406: "FDCpoll", 0x5E16: "HWSAD"}
-	_, _ = mac.RunBootFrom(addrEditorIdle, z80h.Entry{StepCap: 60_000_000, FrameIntPeriod: 60000,
-		Trace: func(pc uint16) {
-			lastPC = pc
-			if n, ok := lm[pc]; ok && !seenF[pc] {
-				seenF[pc] = true
-				fHooks = append(fHooks, n)
-			}
-		}})
-	t.Logf("== FORMAT OVER RECORD 1 ==  landmarks=%v pendingKeys=%d", fHooks, mac.PendingKeys())
-	decodeCmds("FORMAT RECORD 1", fStart)
+	// Pete's hint: make B-DOS detect/init the seeded card (load its record structure
+	// into memory) with DEVICE before selecting a record.
+	dStart := len(log)
+	typeLine("DEVICE", "DEVICE", false)
+	decodeCmds("DEVICE", dStart)
 
 	r1Start := len(log)
 	typeLine("RECORD 1", "RECORD 1", false)

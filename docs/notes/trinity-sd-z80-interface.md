@@ -1002,13 +1002,35 @@ whereas our serve does **`HRECORD`-select → raw `HWSAD`** (hook 149, the "book
 AT" primitive that *deliberately skips directory/allocation/setup*). The capture will pin the
 exact setup/sequence our raw-HWSAD path omits.
 
-**NEXT (i280b-b2q):** (1) build a valid Trinity card in the netboot-oracle SD model from
-`hd.init`/`FORMAT` (record-list at sectors 1..base-1 + the block-152 directory + a stamped
-record), seeded via `SDCard.SeedSector`; (2) capture a working `RECORD n : SAVE` (or
-`HRECORD`+`HSAVE` via the §8o-armed dispatch) IN/OUT + hook trace; (3) capture our
-`HRECORD`+`HWSAD` path the same way; (4) diff — the missing hook/wait/setup is the fix. The rig
-(`bdos_save_capture_wip_test.go`) and the §8o/§8p arming are in place; only the valid-card
-construction remains.
+**The authoritative card format (from samdisk `~/git/samdisk/src/SAMCoupe.cpp` —
+`GetBDOSCaps`/`IsBDOSDisk`/format; same B-DOS record format as Trinity, only the storage
+backend differs):**
+- `list_sectors = bdos_sectors / ((512/16)·1600) + 1 = bdos_sectors/51200 + 1`;
+  `base_sectors = 1 + list_sectors` (+1 boot sector); `records = (bdos_sectors − base)/1600`.
+  For our `csdV2(0x001D59)` card (7 694 336 sectors): `list_sectors=151`, **`base_sectors=152`**,
+  records≈4806 — **exactly the observed CMD17 152**.
+- record *n* data at `base_sectors + 1600·(n−1)`.
+- **detection / selection gate:** `"BDOS"` at **byte 232** of the sector at `base_sectors`
+  (record 1's first MGT directory sector); `"DBSO"` if byteswapped (Atom IDE only — Trinity SD is
+  not byteswapped). The record-list (labels, 16 B/entry, 32/sector) is at sectors `1..base−1`.
+- a FORMAT zero-fills the boot+list area (sectors `0..base−1`) and writes each record's first
+  sector with `"BDOS"`@232 (`cmd_format.cpp`). samdisk's `WriteRecord` (.mgt → record) is
+  **`throw "not implemented"`** — so samdisk can't build the image for us; we build it in Go from
+  this spec. (samdisk is not even needed at runtime — reading the spec was enough.)
+
+**Verified:** `SDCard.SeedSector(152, …)` IS served (`CapturedSector(152)` returns the `"BDOS"`
+stamp). So the seed mechanism is correct. **But the BASIC `RECORD n` command still rejects a
+bare-stamped record** — it wants the card-level record-list / a named record, more than the
+selection gate. The **`HRECORD` *hook* (156)**, by contrast, selects with **just the stamp**
+(the i62 finding) — and the hook is exactly what our serve uses (`HRECORD` then `HWSAD`).
+
+**NEXT (i280b-b2q) — drive the HOOKS, not the BASIC command:** via the §8o-armed dispatch
+(`DOSCNT=0`), with a stamped record in the model, drive (a) `HRECORD`(156)+`HSAVE`(132) = a
+working write, and (b) `HRECORD`(156)+`HWSAD`(149) = our serve's path, capture both IN/OUT+hook
+traces with the rig's decoder, and diff. The gap (the setup/orchestration `HSAVE` does that raw
+`HWSAD` skips) is the fix for writing `.mgt` images to records. The rig
+(`bdos_save_capture_wip_test.go`), the §8o/§8p arming, the format spec, and the seed mechanism
+are all in place.
 
 ## 9. Porting to fresh Z80
 
