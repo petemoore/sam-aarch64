@@ -33,7 +33,22 @@ Live state: branch `i280b-b2n-hwsad-traceable` (pushed), registry **i280b-b2q OP
     image in Go from this spec; samdisk is **not** needed at runtime.
 - **Verified:** `SDCard.SeedSector(block, data)` is served (`CapturedSector` confirms).
 
-## THE CURRENT BLOCKER (re-aimed — §8r supersedes the §8q "no mount" framing)
+## THE CURRENT BLOCKER (re-aimed again — §8s localizes the §8r write blocker)
+
+**§8s (i280b-b2q, guard `TestHWSADReachesWriteCore`): the write blocker is device-select
+aborting on `hk.a=0`.** Driving `HWSAD`(149) through the §8o dispatch against a genuine
+`RECORD 1` select reaches device-select (`&8662`) then diverges into the `&8680→&9A8B`
+abort (B-DOS's error reporter) — no SD command, returns to editor. Cause: device-select
+`cp 1 / cp 2 / jr nz &8680`, and `hk.a` (from the alternate `A'`, dispatcher `&8321 exx /
+&8322 ex af,af' / &8323 ld (&81D9),a`) arrives as **0** — the external `rst 8` path resets
+A', so a caller's A' doesn't reach hk.a (true for A'=0 AND A'=2). §8b's "force A=2" was a
+no-op (it set *main* A). The write core needs device-select to see **hk.a=2 AND `&80AF`≠0**
+(the `&8677` SD-claimed gate). `&DC` bit-3 busy is already modelled (`StuckBusy`). NEXT:
+resolve how the real serve sets hk.a/`&80AF` (avoid the DOSCNT=0 external path so A'
+survives, or explicitly claim the SD device first), then reach `&A8F4`/`CMD24` and diff vs
+`HSAVE`. Full detail: `docs/notes/trinity-sd-z80-interface.md` §8s.
+
+## THE EARLIER BLOCKER (re-aimed — §8r supersedes the §8q "no mount" framing)
 
 **The mount + select are SOLVED; the write blocker moved DOWNSTREAM to `SAVE`/`HSAVE`.**
 Per §8r (guards `TestBDOSBootNoMountDeviceMounts` + `TestBDOSRecordSelectSelfHeals`):
