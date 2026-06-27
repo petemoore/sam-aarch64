@@ -4752,9 +4752,11 @@
   title: "trinpush ergonomics: make the trinload push scripts directly runnable (executable + make targets/wrapper + discoverable) — no looking up 'python3 .../trinpush-serve.py'"
   description: |
     Recurring friction (2026-06-26): pushing to the SAM needed 'python3 tools/trinload-push/trinpush-serve.py <ip> --strategy ...' — the script was not executable (timeout: Permission denied on the shebang) and the exact invocation had to be looked up. FIX so deploys have no friction: (a) chmod +x the trinpush*.py scripts (+ a correct python3 shebang); (b) add make targets (e.g. make trinload-push-serve IP=.. STRATEGY=..) or a thin wrapper that bundles the DEPLOY_CHECKED gate + the right args; (c) make the invocation discoverable (surface the build hint in netboot-trinity-testing.md + the deploy-guard checklist). Keep the DEPLOY_CHECKED deploy-guard. One instance of the broader 'tooling the agent must reverse-engineer each time' pattern (see the retrospective i274).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 759, role: completing}
 
 - id: i278
   title: "trinload reliability: audit (in emulation) which pushed programs leave trinload/the SAM wedged, and check for a natural timeout that degrades it after hours"
