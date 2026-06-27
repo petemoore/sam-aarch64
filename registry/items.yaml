@@ -4765,6 +4765,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 760, role: completing}
 
 - id: i279
   title: "registry: make priority/ordering SELF-EXPLANATORY so agents don't reverse-engineer the source (prioritize --to-top has no visible effect on 'ready', unexplained)"
