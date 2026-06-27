@@ -14,10 +14,33 @@ Live state: registry **i280b-b2q DONE** (PRs #737/#738), **i280b-b2i OPEN** (the
 
 ## IMPLEMENTING-AGENT HANDOVER — START HERE (2026-06-29)
 
-**Read FIRST, before any code:** `docs/notes/trinity-sd-z80-interface.md` §8s, §8t, §8u
-(the most recent findings), then the SOURCES table at the bottom of this section. Heed the
-research-first rule (`memory/feedback_docs_first`): the hardware primary sources below
-were NOT read until late and that caused a wrong experiment design — read them up front.
+**Read FIRST, before any code:** `docs/notes/trinity-sd-z80-interface.md` §8s, §8t, §8u,
+then **§8v (the latest — it CORRECTS the emulation-first plan below)**, then the SOURCES
+table at the bottom of this section. Heed the research-first rule
+(`memory/feedback_docs_first`): the hardware primary sources below were NOT read until late
+and that caused a wrong experiment design — read them up front.
+
+### §8v UPDATE (2026-06-29) — the emulation "model the wedge" step is NOT achievable from sources; the gate is now a hardware measurement
+
+A primary-source read (cited in §8v) refines the §8t/§8u plan below:
+
+- **The SD write core is self-protecting against any _finite_ busy.** `&A81F` check_busy's
+  (`&A820`) BEFORE its first OUT and wait-then-OUTs every byte (dis:5844-5847, 5787-5794),
+  and BUSY is time-based + self-clearing (manual). So a too-short ENC-reset settle is
+  **ridden out** — it cannot hang `&A7CC`. §8u's "ereset's 50 µs settle" framing is refuted.
+- **The hang needs a PERMANENT PIC wedge**, whose only source-grounded cause is the ENC
+  silicon transmit-errata (Owen, `…163200.txt:96-98`; workaround = ECON1 TXRST, encdrv:231,
+  not `ereset`). The sources do **not** pin a deterministic trigger in our serve sequence.
+- **Therefore plan step 1 ("model the one-PIC interaction so the real serve reproduces the
+  hang without `StuckBusy`") is unachievable from sources** — modelling a wedge trigger the
+  sources don't pin would be _inventing_ behaviour (prime directive / CLAUDE.md rule 7). The
+  `StuckBusy` model (§8s) is **already** the faithful wedge model; the open question is the
+  hardware trigger.
+- **The decisive step is now a hardware measurement (owner pete, TAPO-gated):** a
+  production / marker-minimal push while measuring `&DC` bit 3 across the per-block write via
+  a non-network channel. i280b-b2i now `depends_on` that tracked hardware item — see the
+  registry. The emulation-first steps 1-2 below are superseded by §8v; step 3 (the hardware
+  shot) is the live path.
 
 ### Where it stands (what's proven, what's the leading cause)
 
@@ -82,8 +105,9 @@ were NOT read until late and that caused a wrong experiment design — read them
 - `~/sam-archive/trinity-docs/text/IMG_20260617_162617.txt` — shared `&DD/&DE/&DF` read-back
   latch (point 7), per-peripheral auto-null, PUSH/POP, ENC `/CS` pulse `%00100011`.
 - `~/sam-archive/trinity-docs/text/IMG_20260617_162626.txt` — ENC interrupt polling (ENCINT).
-- `~/sam-archive/trinity-docs/text/IMG_20260617_163210.txt` + `…_163218.txt` — Simon Owen's
-  diary: SPI lag, MAC double-read, the **ENC transmit-hang**, 6.5K/1.5K buffer split.
+- `~/sam-archive/trinity-docs/text/IMG_20260617_163200.txt` — Simon Owen's diary: SPI lag,
+  MAC double-read, the **ENC transmit-hang** (`:96-98`), 6.5K/1.5K buffer split. (The
+  `…163210.txt`/`…163218.txt` files an earlier note cited do NOT exist — §8v.)
 - `~/sam-archive/trinity-docs/text/combined.txt` — all OCR concatenated (grep-friendly).
 
 **B-DOS write-core disassembly:**

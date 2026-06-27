@@ -1273,6 +1273,83 @@ side), and the manual's "OUT-while-busy is ignored" (a mis-timed SD command is d
 leaving the card mid-transaction → its read never completes). **The `DBG_HWSAD_PRE` marker
 TX fires right before the SD write — it is itself a prime suspect for wedging the PIC.**
 
+## 8v. The hang requires a PERMANENT PIC wedge — a finite ENC-reset settle is ridden out; the trigger is NOT source-pinned and needs a hardware measurement (i280b-b2i)
+
+A primary-source read of the **B-DOS write-core disassembly** + the **encdrv `&DC` writers**
++ the **manual's busy semantics** (every claim cited below) refines §8u's "leading root
+cause" and corrects the emulation-first plan's step 1. The decisive finding: **the SD write
+core is self-protecting against any _finite_ busy, so a too-short ENC-reset settle cannot
+hang it — only a _permanently wedged_ PIC can, and the primary sources do not pin a
+deterministic trigger for that wedge in our serve sequence.**
+
+**1. The write core check_busy's BEFORE its first OUT, and wait-then-OUTs every byte.**
+The CMD24 sender `&A925` calls `&A81F` (`sd.cmd-with-address`), whose entry is
+`&A81F DI / &A820 CALL &A7CC / &A823 LD A,&31 / &A825 OUT (&DC),&31`
+(`~/sam-archive/bdos/analysis/bdos15t-beta6.annotated.dis:5844-5847`). So the **first** SD
+action is a `check_busy` poll at `&A820`, *before* the first OUT (the `&31` SD-select). The
+per-byte primitive `sd.out &A7C5` is `PUSH AF / CALL &A7CC / POP AF / OUT (&DC|&DF) / …`
+(`:5787-5794`) — i.e. **wait-for-not-busy, _then_ OUT**. Consequence: the write core's
+OUTs are NEVER issued while busy, so the manual's "OUT-while-busy is dropped" (§8u) cannot
+desync the write core — it waits first. (The write-core entry `&A918` does one bare
+`IN A,(&DC)` masked with `&04` — the WP/write bit, *not* `&08` busy — so it is a
+write-protect check, not a busy gate; `:5995-6007`.)
+
+**2. BUSY is time-based and self-clearing; reading `&DC` does NOT clear it.** Manual:
+"the microcontroller marks itself as busy, then sends the byte over the SPI bus … and marks
+itself as no longer busy" (`~/sam-archive/trinity-docs/text/IMG_20260617_162608.txt:52-55`);
+"&DC … is the only I/O Port not linked via the microcontroller so can be read at any time"
+(`IMG_20260617_162550.txt:41-42`). So `check_busy`/`&A7CC` (`IN A,(&DC) / AND 8 / RET Z / JR`,
+no timeout — `dis:5791-5794`) can only _observe_ the PIC finishing; reading `&DC` has no
+side effect. **Therefore a finite busy (the 50 µs ENC-reset settle, or any per-byte window)
+is simply spun-out by `&A7CC` and the path proceeds** — the manual's "CALL check_busy after
+every OUT" (`IMG_20260617_162550.txt:72-79`) is _designed_ to absorb exactly that transient.
+The "ereset's 50 µs settle wasn't waited for" framing in §8u is thus **refuted as a hang
+cause**: the write core rides it out.
+
+**3. For `&A7CC` to spin forever the PIC's BUSY must be stuck _indefinitely_ — a true
+wedge.** The only source-grounded cause of a permanent ENC/PIC wedge is the **ENC silicon
+transmit-errata** Simon Owen documents: "a documented ENC issue with the transmit logic
+getting stuck under certain conditions. A bug in my work-around meant I would still
+occasionally hang during transmits" (`IMG_20260617_163200.txt:96-98` — note: the file is
+`…163200.txt`, not the `…163210.txt` the §8u SOURCES list cites; correct that pointer). The
+in-driver workaround for this is the **ECON1 TXRST set/clear** at the top of each TX attempt
+(`src/netboot/encdrv.asm:231-237`), an ENC-internal errata fix — **not** the `&DC` `ereset`
+(which is the power-on / link-open reset used by `drv_init`/`drv_exit`/`enc_rx_reestablish`).
+
+**4. The encdrv `&DC` writers return while the PIC may still be busy — but this is benign.**
+`eon`/`eoff`/`epulse`/`ereset` each `CALL wait_ready` _before_ their OUT and then RET with no
+trailing poll (`encdrv.asm:456-479`); `ereset`'s post-reset wait is two blind `DJNZ $`
+(~1 ms ≫ 50 µs), not a busy poll. So they leave the PIC mid-process on return, violating the
+manual's "check_busy after every OUT" on their _last_ OUT. **But the next operation's leading
+`wait_ready`/`check_busy` absorbs that finite residual** (our `wait_ready` is the bounded
+i280b-b2c poll, `encdrv.asm:442-454`; B-DOS's `&A820` is the unbounded one) — so this is not
+a bug that can wedge a well-formed caller. There is **no source-grounded software defect** in
+the busy discipline to fix.
+
+**What this means for the emulation-first plan (corrects §8t step 1).** "Model the one-PIC
+interaction so the real serve reproduces the `&A7CC` hang _without_ manual `StuckBusy`" is
+**not achievable from the primary sources**: a faithful, time-based busy model rides out every
+finite window (point 2), and reproducing the hang would require a permanent wedge whose
+**trigger the sources do not pin** (point 3) — modelling one would be _inventing_ behaviour,
+which the prime directive and CLAUDE.md rule 7 (inadequate emulation manufactures false
+confidence) forbid. The `StuckBusy` model (§8s, `TestHWSADWriteCoreReachableWithGatesForced`
+case 2) is therefore **already the faithful model of the wedge as far as the sources allow** —
+a wedged `&DC` bit-3 ⇒ `&A7CC` spins. The genuinely open question is purely **what triggers
+the wedge in the real serve sequence**, and that is a **hardware datum**, not a modellable one.
+
+**The decisive next step is hardware (Pete/TAPO-gated):** a **production / marker-minimal**
+build push (no ENC TX anywhere near the SD write — the §8t prime suspect removed) while
+**measuring `&DC` bit 3** across the per-block write via a NON-network channel (`&DC` reads
+are always safe — the one port not via the PIC; or border/screen; or a RAM breadcrumb). Two
+outcomes, each conclusive: (a) the push **completes** ⇒ the wedge was the debug-marker /
+near-write ENC TX (errata), and the fix is "keep ENC TX clear of the SD write window" (the
+markers are already debug-only and outside the SD CS, so a production build may already be
+correct); (b) it **still hangs with `&DC` bit-3 stuck** ⇒ a deeper ENC/PIC contention or
+TXRST-workaround bug, localizable from where bit-3 latches high. Until that datum exists the
+fix cannot be chosen on grounds rather than guesswork — so i280b-b2i is gated on a tracked
+hardware-measurement item (owner pete), not on further emulation. (Research: this section's
+citations; the implementing-agent handover in `docs/plans/i280-bdos-write-trace.md`.)
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
