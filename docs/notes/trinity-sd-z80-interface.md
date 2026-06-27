@@ -1564,6 +1564,25 @@ Pushed the production own-CMD24 serve (#752, `bd_record_write_hw` verified in th
 
 Authority: this section; §8af/§8ag/§8ah; `sd_csd.asm sdc_init_ladder` (the per-block cost); §8x (scope path) + §8ab (on-hardware ring-buffer tracer idea); q62.
 
+## 8aj. THE LIKELY ROOT — the per-block FULL ENC `ereset` — and a PIVOT: stop reimplementing B-DOS's SD write, use it directly with a MINIMAL re-arm (Pete, 2026-06-29)
+
+Stepping back (prompted by Pete) and **questioning the load-bearing "reimplement" conclusion** instead of defending it. The chain we built — B-DOS hooks hang → reimplement our own self-healing SD write → it's slow — all traces to **one line**, and that line was never re-examined after we fixed the bugs that confounded the original diagnosis.
+
+**The per-block sequence (bootable serve):** receive DATA (ENC RX) → write the 512-byte sector (SD) → `wd_send_ack` calls **`serve_rearm_enc` → `enc_rx_reestablish` → `CALL ereset`** → ACK (ENC TX). That `ereset` is a **full ENC28J60 soft-reset** (`OUT (&DC),%00101000` + a 1 ms+ settle for the CLKRDY errata) **followed by a complete chip reconfigure** (the reset wipes it) — and it runs **on every accepted DATA block** (`netboot_serve.asm wd_send_ack`, `NETBOOT_HOSTTEST==0`).
+
+**That single per-block full-reset explains everything:**
+1. **The slowness** — a full ENC chip reset + reconfigure (and, for the own-CMD24 path, a full `sdc_init_ladder` SD re-init too) ×1600 blocks.
+2. **Why B-DOS's HWSAD "hangs"** — Colin's write assumes the SD stays initialised between sector writes (true from BASIC, where there is no network). The per-block ENC reset disturbs the shared µC/SD state, so B-DOS's *next* HWSAD finds the SD unexpectedly reset and stalls. **Colin's code isn't broken — we reset the controller out from under it every block.**
+3. **Why we reimplemented** — our own SD driver re-inits per block precisely to *survive* that reset. The reimplementation is a **workaround for a disturbance we introduce ourselves.**
+
+**Is the per-block reset even needed?** The re-arm after an SD op is **real** (i249, a genuine hardware observation: *"no `enc_rx_reestablish` → serving died after the first SD read"*, `hardware-readiness-audit.md`:66) — so `rxDisarmed` is faithful, not self-fulfilling. **BUT** the hardware only proved *"no re-arm → dies"*, NOT *"only a full chip reset works"*. A full `ereset` is almost certainly **overkill**: a lighter re-arm (re-select ENC + `enulloff`; re-enable `ECON1.RXEN`; re-point `ERXRDPT` — no `&28` soft-reset, no reconfigure) may restore `drv_read` **without** disturbing the SD. If so, **B-DOS's HWSAD works directly — fast, no reimplementation.** The original "reimplement" conclusion was also confounded by bugs since fixed (the A=2 device-select §8af — which alone routed writes to the floppy and hung — plus the handshake/b2d fix and the §8x marker perturbation), and was never re-tested after those.
+
+**THE PIVOT (i289):** replace the per-block full `ereset` with the minimal re-arm (i289), use B-DOS HWSAD directly (`RRS_OWN_CMD24=0`), and hardware-test the full `cj.mgt` push with **ACK-logging observability** (the Pi is the TFTP sender, so it sees every ACK block# — passive, no markers, no root). Emulation-first needs the ENC reset/re-arm modelled faithfully from the datasheet (i288) — today the model's `rxDisarmed` is cleared *only* by the full reset (it encodes the assumption under test).
+
+**The reimplementation is PARKED, not deleted (i290, Pete-personal-review-gated):** the own-CMD24 path (#752, merged; behind the `RRS_OWN_CMD24` selector) + the #713 Colin-auto-null port (draft) stay recoverable — if i289 shows only a full reset works, we keep them. #713 is a **draft, gated on Pete's personal review** (not agent-merged). The likely outcome: a *very small* trinload-side routine using B-DOS directly, and the reimplementation deleted as overkill — accepting the day spent on it bought the shared-controller understanding that cracked this.
+
+Authority: this section; `netboot_serve.asm` `wd_send_ack`/`serve_rearm_enc`; `encdrv.asm` `enc_rx_reestablish`/`ereset`; `hardware-readiness-audit.md` (i249, the real re-arm observation); `enc28j60.go` `rxDisarmed`; ENC28J60 datasheet §11.2 (SRC). Items: i288 (emulate ereset/re-arm), i289 (the pivot), i290 (keep-or-delete the reimplementation, Pete).
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
