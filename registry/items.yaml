@@ -4289,7 +4289,7 @@
 - id: i231b-b4f
   title: "samboot_config.asm carve-out eliminated (1 site): make the jp samboot_read_config shim unconditional"
   description: |
-    Removed the single NETBOOT_HOSTTEST==0 carve-out in src/netboot/samboot_config.asm — the jp samboot_read_config shim at &8000. The shim is wanted by the no-flag builds (the private forked bootloader, and the in-repo samboot_inject.asm which includes samboot_config.asm WITHOUT NETBOOT_HOSTTEST) and is harmless in the standalone host build (samboot_config_test.go calls samboot_read_config by symbol and never executes &8000). Same trivial remove-if-overgated shape as the dumper's jp dumper_main (i231b-b4e). Made it unconditional; eeprom.asm is flag-agnostic so the now-inert -D NETBOOT_HOSTTEST=1 is dropped from the standalone Makefile rule. Ledger 20->19 / 5->4 files.
+    Removed the single NETBOOT_HOSTTEST==0 carve-out in src/netboot/samboot_config.asm — the jp samboot_read_config shim at &8000. The shim is wanted by the no-flag forked-bootloader build (i135d enters at &8000) and is harmless in the in-repo standalone build (samboot_config_test.go calls samboot_read_config by symbol and never executes &8000). Same trivial remove-if-overgated shape as the dumper's jp dumper_main (i231b-b4e). Made it unconditional; eeprom.asm is flag-agnostic so the now-inert -D NETBOOT_HOSTTEST=1 is dropped from the standalone Makefile rule. Ledger 20->19 / 5->4 files.
   status: DONE
   kind: leaf
   owner: agent
