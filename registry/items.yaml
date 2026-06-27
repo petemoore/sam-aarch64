@@ -5031,6 +5031,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 762, role: completing}
 
 - id: i282
   title: "build/registry: dedupe prs[] on set-pr/set-status --pr (both append, producing a duplicate {num,role} entry)"
