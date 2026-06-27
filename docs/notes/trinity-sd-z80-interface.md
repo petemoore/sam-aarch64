@@ -444,6 +444,40 @@ CLKRDY as unreliable, so a bounded settle or a TX self-check), and/or retry the 
 it bounded (a stuck ENC must never wedge the serve). Then a confirming shot: the disk push
 should reach `WRQ_CLAIMED → WRQ_HANDSHAKE` and curl should hand-shake.
 
+## 8g. Hardware shot (i280b-b2d fix) — CONFIRMED: gating replies on `drv_wait_link` makes the push hand-shake and reach the per-block write; reveals the original §8a HWSAD hang
+
+Research (datasheet + driver + the fix-#3 audit) established the mechanism: `serve_rearm_enc`'s
+`ereset` is a full ENC28J60 soft-reset that resets the PHY → drops the 10BASE-T link; the ENC has
+no auto-negotiation, so the link takes real time to re-establish, and a frame TX'd before it is up
+is **silently lost** (TXRTS clears, TXIF sets, no egress). The serve is reactive everywhere EXCEPT
+the WRQ handshake reply — the one immediate proactive-TX-after-`ereset` — so it landed in the
+link-down window. Fix (b): `srv_send_tbuf` (the serve's universal reply path — RRQ DATA, WRQ
+handshake, ACKs, ERROR all `jp` here) now `call drv_wait_link` (the existing i127 gate) before every
+transmit — cheap when the link is up (every reactive reply), waits out the post-`ereset`
+re-establishment when down. `enc_link.asm` is now included in the serve build. A TAPO shot of the
+debug build:
+
+**Markers:** `WRQ_ENTRY → CLAIM_FIND_PRE → CLAIM_SELECT_PRE → CLAIM_SELECT_POST → DATA_BLOCK →
+FLUSH_PRE → HWSAD_PRE`, then silence (curl timed out at 35 s).
+
+**Decisive — the §8d/§8e/§8f blocker is FIXED:** a single clean progression (not the 6× `WRQ_ENTRY`
+retransmit loop of §8d/§8f). The handshake reply now reaches curl (held until link-up by
+`drv_wait_link`), curl sends DATA block 1, the serve **receives** it (`DATA_BLOCK`), stages a full
+sector (`FLUSH_PRE`), and **enters the B-DOS per-block write** (`HWSAD_PRE`). §8d established the
+per-block write was **NEVER reached**; it is now reached. (The `WRQ_CLAIMED`/`WRQ_HANDSHAKE` *markers*
+— raw `dbg_marker` TX in the link-down window, not via `srv_send_tbuf` — are still lost; the real
+reply is what got through. `DATA_BLOCK`/`FLUSH_PRE`/`HWSAD_PRE` escape because they fire with the
+link already up, no `ereset` between them.)
+
+**The next blocker is now the original §8a HWSAD hang:** the run stops at `HWSAD_PRE` with no
+`HWSAD_POST` (no ACK to curl → timeout). This is the B-DOS HWSAD per-block write hang §8a/§8b
+localized (the i280b-b2 umbrella's original target), which the §8d handshake blocker had been
+masking. **b2d is DONE** (the hand-shake deliverable, hardware-confirmed); the HWSAD write hang is a
+**separate root cause** (B-DOS's own write code via the `rst 8`/`defb 149` hook) tracked as a fresh
+item. Per §8a the hang is in the HWSAD hook entry prelude (handler `&9E16`: paged-pointer page-setup
++ the `&83F7` device-dispatch whose floppy branch is an un-timed FDC poll), not the §5/§8 write core
+(which traces clean in koron-go).
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**

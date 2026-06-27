@@ -86,14 +86,22 @@ def main(argv):
 
     if seen:
         print("sequence: " + " -> ".join(seen), flush=True)
-        if "PRIOR_REARM_TIMEOUT" in seen:
-            print("RESULT: PRIOR_REARM_TIMEOUT (&18) — the prior WRQ's re-arm TIMED OUT (the bus "
-                  "stayed busy); i280b-b2d is a bus-hand-off fix.", flush=True)
-        elif "WRQ_CLAIMED" in seen:
-            print("RESULT: reached WRQ_CLAIMED — the re-arm proceeded past the claim.", flush=True)
+        # Order matters: deepest progress first. The per-block write (HWSAD/FLUSH/DATA)
+        # means the push hand-shook and reached the B-DOS write — past the §8d claim/
+        # handshake blocker (fixed in i280b-b2d via drv_wait_link).
+        if "HWSAD_POST" in seen:
+            print("RESULT: HWSAD_POST — a per-block SD write COMPLETED.", flush=True)
+        elif "HWSAD_PRE" in seen:
+            print("RESULT: reached HWSAD_PRE (no _POST) — hand-shake OK + per-block write entered, "
+                  "but the B-DOS HWSAD write hangs (the original §8a HWSAD hang).", flush=True)
+        elif "DATA_BLOCK" in seen:
+            print("RESULT: reached DATA_BLOCK — the push hand-shook and is receiving data "
+                  "(past the §8d claim/handshake blocker).", flush=True)
+        elif "PRIOR_REARM_TIMEOUT" in seen:
+            print("RESULT: PRIOR_REARM_TIMEOUT (&18) — the prior WRQ's re-arm TIMED OUT (bus stayed busy).",
+                  flush=True)
         elif "CLAIM_SELECT_POST" in seen:
-            print("RESULT: looped at the claim with NO &18 — the re-arm SUCCEEDED but the ENC was "
-                  "not yet wire-ready (post-rearm TX-readiness; i280b-b2d).", flush=True)
+            print("RESULT: looped at the claim (no DATA_BLOCK) — the push did not hand-shake.", flush=True)
         if "REARM_TIMEOUT" in seen:
             print("NOTE: REARM_TIMEOUT (&17) also escaped this run.", flush=True)
     else:
