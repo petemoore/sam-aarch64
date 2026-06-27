@@ -39,6 +39,7 @@ DBG_WRQ_HANDSHAKE:  equ &13           ; about to send the OACK / ACK-0 handshake
 DBG_CLAIM_FIND_PRE:    equ &14        ; wrq_claim_record: about to bdos_find_record_for_strategy (CMD17 list reads)
 DBG_CLAIM_SELECT_PRE:  equ &15        ; free record found; about to bdos_select_record (HRECORD hook)
 DBG_CLAIM_SELECT_POST: equ &16        ; HRECORD select returned (the claim succeeded)
+DBG_REARM_TIMEOUT:     equ &17        ; serve_rearm_enc's ENC busy-poll hit its bound (stuck shared bus = the i280b contention)
 DBG_DATA_BLOCK:     equ &20           ; a DATA block accepted, about to sink/stage it
 DBG_FLUSH_PRE:      equ &21           ; rrs_flush_sector entered: a full 512-byte sector is staged, about to write it
 DBG_HWSAD_PRE:      equ &22           ; bdos_write_sector entered: about to RST 8 / DEFB 149 (B-DOS HWSAD)

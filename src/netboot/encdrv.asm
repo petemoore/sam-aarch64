@@ -42,6 +42,15 @@ tx_status:     DEFS 8              ; ENC TX status
 read_ptr:      DEFW 0              ; current RX buffer pos
 tx_flags:      DEFB &00            ; use &03 to append CRC
 
+; enc_timed_out — set by wait_ready when its busy-poll budget is exhausted (a stuck
+; shared-controller busy bit, e.g. the i280b ENC/SD contention after an SD transaction
+; left &DC bit 3 hung). Pure reporting: serve_rearm_enc clears it before a re-arm and
+; reads it after to emit a timeout marker. The load-bearing effect is that wait_ready
+; RETURNS instead of spinning forever, so a stuck bus can no longer wedge the SAM — the
+; ENC analogue of the i241 sdc_wait_ready bound (sd_csd.asm).
+enc_timed_out: DEFB &00
+ENC_BUSY_LIMIT: EQU &FFFF          ; busy-poll budget (~65535, well over any healthy &DC busy period)
+
 
 ; Initialise ENC
 ; Entry: HL points to MAC address to use
@@ -424,10 +433,25 @@ wr_buf_lp:     IN   A,(&DC)
                JR   NZ,wr_buf_lp
                JR   eoff
 
-wait_ready:    IN   A,(&DC)
+; wait_ready — busy-poll &DC bit 3 (the shared-controller busy flag) before each SPI
+; byte, now BOUNDED (i280b-b2c): up to ENC_BUSY_LIMIT polls, then give up (set
+; enc_timed_out) and RETURN rather than spin forever. On a healthy bus bit 3 clears in
+; a poll or two so the budget is never approached; the bound only bites when the shared
+; Trinity controller is wedged (the i280b ENC/SD contention shape), converting a hard
+; hang into a recoverable timeout. A=0 on the ready exit (unchanged); preserves BC.
+wait_ready:    PUSH BC
+               LD   BC,ENC_BUSY_LIMIT
+ewr_loop:      IN   A,(&DC)
                AND  %00001000
-               RET  Z
-               JR   wait_ready
+               JR   Z,ewr_ready    ; bit 3 clear -> ready (A=0)
+               DEC  BC
+               LD   A,B
+               OR   C
+               JR   NZ,ewr_loop
+               LD   A,1
+               LD   (enc_timed_out),A   ; budget exhausted -> report + bail (no wedge)
+ewr_ready:     POP  BC
+               RET
 
 eon:           CALL wait_ready
                LD   A,%00100001    ; ENC enable
