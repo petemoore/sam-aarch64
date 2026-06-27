@@ -43,4 +43,3 @@
 2 src/netboot/http_main.asm
 5 src/netboot/netboot_client.asm
 11 src/netboot/netboot_serve.asm
-1 src/netboot/samboot_config.asm

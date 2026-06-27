@@ -56,13 +56,11 @@ SAMBOOT_CFG_VERSION:  equ 1                       ; chunk+0 format version
 SAMBOOT_CFG_MODE_NONE: equ 0                      ; chunk+1: no auto-boot
 SAMBOOT_CFG_MODE_BOOT: equ 1                      ; chunk+1: auto-boot the record
 
-                ; samboot_read_config is a leaf called by symbol (the host harness
-                ; and the i135d forked bootloader both enter it directly), so &8000
-                ; just falls through into the reader. The bootable build still wants
-                ; a jp shim at &8000; the host harness calls the symbol, so skip it.
-                if defined(NETBOOT_HOSTTEST)==0
+                ; The i135d forked bootloader enters at &8000, so a jp shim routes
+                ; it to the reader. The host harness calls samboot_read_config by
+                ; symbol and never executes &8000, so the shim is harmless there —
+                ; kept unconditional (no emulation carve-out).
                 jp      samboot_read_config
-                endif
 
 ; ===========================================================================
 ; samboot_read_config — read the SAMBOOT BIOS config from the EEPROM and decide
