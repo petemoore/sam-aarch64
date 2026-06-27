@@ -1,153 +1,100 @@
-# i280 — Trace B-DOS's own Trinity SD record write to derive our write contract
+# i280 — Get writing SAM .mgt disk images to Trinity SD records working
 
-**Status:** i280a DONE (the `bdostrace` tool + the traceable findings); i280b OPEN
-(the remaining paged-boot entry-contract trace + the `bdos_seam.asm` fix). Ephemeral
-— delete in the PR that completes i280b.
+**Goal (Pete):** the serve receives a `.mgt` disk image over TFTP and must write it
+into a Trinity SD **record**; today the per-block write **hangs on real hardware**.
+Approach (Pete): capture a *working* B-DOS record write in emulation, diff our serve's
+write against it, fix the gap.
 
-## Findings so far (i280a — tool: `tools/netboot-oracle/z80/cmd/bdostrace/`)
+**Status:** i280a DONE (the `bdostrace` tool). i280b is a long, well-documented
+investigation — `docs/notes/trinity-sd-z80-interface.md` **§8a–§8q** is the authority;
+read it before touching this. Ephemeral plan — delete in the PR that completes i280b.
+Live state: branch `i280b-b2n-hwsad-traceable` (pushed), registry **i280b-b2q OPEN**.
 
-The full conclusions live in `docs/notes/trinity-sd-z80-interface.md` §8a. In brief:
+## What is established (don't re-derive — see §8a–§8q + the registry)
 
-- The §4 init ladder, the records math, and the §5/§8 CMD24 write-core + CMD17
-  read-core all run **clean** in the flat koron-go harness against the modelled SD
-  card — so the SD-SPI model and the low-level write are faithful; the hardware
-  hang is **not** in the write core. `bdostrace -scenario writecore` captures the
-  **gold successful CMD24 byte-stream**.
-- The hardware hang is in the HWSAD hook **entry prelude** (handler &9E16): a
-  page-setup (HL is a *paged* pointer — page in the top bits — driving HMPR) + a
-  device-dispatch (&83F7, keyed on the ambient-device var &780B: NZ→SD &A8F4,
-  Z→an **un-timed FDC poll** at &8406+ = the hang shape) before the §8 write core.
-- That prelude is **not traceable in the flat section-B harness**: it `call &0103`s
-  a SAM-ROM bridge helper (escape at real &9BF1) the flat model lacks. The SD model
-  also always clears busy, so the busy-wait hang cannot reproduce here regardless.
+- **The hang is downstream of `HWSAD_PRE`, inside B-DOS's own write path.** Cleared as
+  causes, each with evidence: addressing/page-displacement (§8l), the `hk.hl`/`hk.de`/
+  `hk.a` **register bank** (§8o — all MAIN bank; `hk.hl`=our `&BE42`), DOS-call paging
+  context (§8n — PTDOS re-pages every hook), SD-bus health (§8m, hardware), DI/EI (§8j).
+- **§8p (DONE, i280b-b2n):** the HWSAD handler now runs **end-to-end in emulation** via
+  the `DOSCNT &5BC3 = 0` arming + the real-boot harness's real ROM bridges (the §8b
+  "honest boundary" is gone). Regression guard: `TestHWSADHandlerTraceable`.
+- **§8q (this work):** the **authoritative Trinity/BDOS card format** (from samdisk
+  `~/git/samdisk/src/SAMCoupe.cpp` `GetBDOSCaps`/`IsBDOSDisk`/`UpdateBDOSBootSector` +
+  `cmd_format.cpp`):
+  - `list_sectors = bdos_sectors/51200 + 1`; `base_sectors = 1 + list_sectors`;
+    `records = (bdos_sectors − base)/1600`. For our `csdV2(0x001D59)` card:
+    **`base_sectors = 152`** (matches the observed CMD17 152); records ≈ 4806.
+  - record *n* data at `base + 1600·(n−1)`; **selection gate = `"BDOS"` at byte 232**
+    of the record's first sector; record-list (16-B labels, 32/sector) at sectors
+    `1..base−1`; boot sector at sector 0 (DVAR-0 geometry, `base_sectors` at bytes
+    `0x104–0x107` and the DVAR block at `0x10e` — see `UpdateBDOSBootSector`).
+  - samdisk's `WriteRecord` (.mgt→record) is **not implemented**, so we build the card
+    image in Go from this spec; samdisk is **not** needed at runtime.
+- **Verified:** `SDCard.SeedSector(block, data)` is served (`CapturedSector` confirms).
 
-## Remaining (i280b)
+## THE CURRENT BLOCKER (precisely diagnosed — §8q)
 
-1. Trace the entry prelude faithfully in a **paged-boot** harness: `LoadROMImage`
-   (SAM ROM at &0000/&C000) + B-DOS in its real &8000 page + sysvars at &5000, so
-   `call &0103`, the HMPR switch, and the device/record state all resolve — the
-   flatten trick used for the §8 routines breaks here.
-2. Drive a real HRECORD-select → HWSAD and capture the **gold entry contract**
-   (what device/record/page state a successful write needs).
-3. Diff our serve's seam invocation against the gold contract; the discriminator
-   between our **working read** (HRSAD, same flat shape) and the **hanging write**
-   is still unpinned — do not assume it is `hk.a` alone (i270's `A=0` was
-   necessary-but-insufficient on hardware).
-4. Fix `src/netboot/bdos_seam.asm` by **reusing B-DOS entry points** (Pete: don't
-   reimplement). Confirm via the paged-boot trace, then a hardware retest (the i271
-   UDP marker channel; TAPO self-serve).
+**B-DOS has not MOUNTED the seeded card: `last.record` reads 0 after boot.** The boot
+path (patched ROM → trinload → B-DOS → editor idle) leaves B-DOS resident but does **not**
+run its record-device mount/HDINIT. So `sel.record` range-checks every record number
+against a count of 0 and bails — **both** the BASIC `RECORD` command **and** the
+`HRECORD`(156) hook reach their handlers but refuse to select (no SD read, `&780B` stays
+0). Failed shortcuts: bare `rst 8/defb 135` (HDINIT) is a no-op; poking inferred 1.5a
+sysvars `&80C4/&80C6/&80C9` held but didn't change behaviour (wrong 1.5t addresses, or the
+count lives elsewhere).
 
----
+## NEXT — execution plan (a fresh, deliberate build)
 
-## Original plan (vehicle + instrumentation), retained for i280b
+All work in `tools/netboot-oracle/z80/`. The capture rig is `bdos_save_capture_wip_test.go`;
+the arming pattern is in `hwsad_handler_traceable_test.go` (§8o `DOSCNT=0` + serve map).
 
-## Why
+**Step 1 — build a full card-level Trinity format in the SD model so HDINIT mounts it.**
+Write a Go helper (e.g. `seedBDOSCard(sd *z80h.SDCard, totalSectors int)`) that, using
+`SDCard.SeedSector`, lays down per the samdisk spec:
+  - compute `list_sectors`, `base_sectors`, `records` from `totalSectors` (the
+    `GetBDOSCaps` formula above).
+  - **sector 0:** a BDOS boot sector — port `UpdateBDOSBootSector`'s DVAR-0 layout
+    (geometry + `base_sectors` at `0x104–0x107`/`0x10e`). Read it from
+    `~/git/samdisk/src/SAMCoupe.cpp:255-320` and mirror the exact bytes. (Trinity is LBA;
+    if HDINIT computes the count from the LBA size alone, sector 0 may be optional — test
+    both: stamp-only first, add the boot sector if `last.record` is still 0.)
+  - **sectors 1..base−1:** the record-list. For record 1, write a named entry (16 bytes
+    at offset `((1-1)&0x1f)<<4` of list sector `1 + (1-1)/32`) so it is "in use/named".
+  - **record 1 first sector (block `base`):** a valid MGT directory sector with `"BDOS"`
+    at byte 232 (and ideally a real MGT dir header — see `SAMCoupe.cpp` `SetDiskInfo`).
+  Seed this **before boot**, so boot-time HDINIT sees a formatted card.
 
-Our TFTP-push serve writes a received `.mgt` to a free Trinity record via
-`bdos_write_sector` → `rst 8 / defb 149` (the B-DOS **HWSAD** hook). On real
-hardware (2026-06-28) it **hangs in the per-block write** after DATA block 1. B-DOS
-*is* resident (it loaded trinload), so the hook is serviced — yet our invocation
-hangs where B-DOS's own record writes succeed. We fixed one contract bug (HWSAD
-wants `A`=drive=0; ours left `A`=sector — on branch `i270-hwsad-drive-contract`),
-but hardware showed **`A=0` alone is not sufficient**. The captured Trinity docs
-have **no SD sector write example** (the Issue-21 article was never written), so
-**Colin's B-DOS 1.5t is the only authority** for the write — and the way to learn
-the *correct invocation contract* is to **trace B-DOS's own working record write in
-emulation**.
+**Step 2 — verify the mount.** Boot (`newRealBootMachine`), then read `last.record`
+(find its real 1.5t address: trace `sel.record &A0CD` / `hd.init` in
+`~/sam-archive/bdos/analysis/bdos15t-beta6.annotated.dis`, or read it after a successful
+`RECORD n`). **Gate:** `last.record` must be non-zero. If still 0, B-DOS's boot does not
+mount the SD records at all — then drive the real mount hook explicitly (find the correct
+mount entry in the 1.5t disasm; the `DEVICE` command handler is the lead) before capture.
 
-Pete's directive: **reuse B-DOS, do not reimplement the SD protocol from first
-principles.** The trace tells us which B-DOS prelude/entry-points a successful write
-needs (SD-init, seek/record-base poke, `set.drive.a`, the `&251` page set), so our
-serve replicates that — ideally by calling the same entry points.
+**Step 3 — capture the WORKING write.** With the card mounted, via the §8o-armed dispatch
+(`DOSCNT=0`, serve map) drive `HRECORD`(156) (`A=0`, `HL=record#`) then `HSAVE`(132)
+(`IX → UIFA at &4B00`; build the UIFA like `src/netboot/bdos_seam.asm` `bdos_fill_save_uifa`
+does) of a small CODE file. Capture the IN/OUT + hook landmarks with the rig's decoder.
+This is the **gold** sequence.
 
-## Vehicle decision
+**Step 4 — capture OURS + diff.** Same arming, drive `HRECORD`(156) then `HWSAD`(149) (our
+serve's `bdos_write_sector` shape). Diff the two IN/OUT + hook traces. The setup/
+orchestration `HSAVE` does that raw `HWSAD` skips (or a missing wait/ready-gate) is the
+bug — option 1 in §8q, still **unconfirmed** until this diff lands.
 
-**Extend the koron-go harness (`tools/netboot-oracle/z80/`); reject SimCoupé.**
-- SimCoupé is GUI/SDL and, decisively, **does not model the `&DC`–`&DF` Trinity
-  ports** — B-DOS's SD I/O would read open bus.
-- The koron-go harness already has port IN/OUT interception (`harness.go` `mem.In`
-  ~:235 / `mem.Out` ~:313), per-instruction PC trace (`in.Trace` ~:805),
-  memory-access trace (`SetAccessTrace` ~:149), flat-memory load (`Write`/`LoadAt`
-  ~:357/:522), and a **working SD-SPI model** (`sdcard.go`, CMD0/8/41/58/9/16/17/24,
-  written against Colin's `&A918`/`&A86B`).
-- The change vs today: **load the real B-DOS binary**
-  (`~/sam-archive/bdos/analysis/extracted/bdos15t-beta6.bin`) into harness RAM and
-  run its real `&A623`/`&A81F`/`&A918` code against the SD model, with **no
-  `AttachBDOS` Go hook** intercepting RST 8 (today `bdos_store.go` *re-implements*
-  the hooks; to trace B-DOS itself we run B-DOS's Z80, not our Go model — i273).
+**Step 5 — fix `src/netboot/bdos_seam.asm`** to do the missing setup (reuse B-DOS entry
+points; Pete: don't reimplement). Verify in emulation (the rig + a new regression test),
+then a TAPO hardware retest (i271 UDP markers; `tools/hardware-shot/run-shot.sh`).
 
-### Loading notes (risks)
-- B-DOS executes paged: `&8000`–`&BFFF` with `&4000`–`&7FFF` aliases, and the SD
-  primitives are *called* at the `&67xx` alias (e.g. `call 0x67cc`). The flat 64 KB
-  harness must have the image **mirrored into the `&4000`–`&7FFF` (and `&67xx`)
-  window** too, or those calls hit empty RAM. Verify the first traced `call 0x67cc`
-  lands on real code.
-- B-DOS RAM workspace (`hd.wp`@&40c8, page/addr@&4119/&411c, buffer@&7805, record
-  vars) must be sane — **prefer running B-DOS's own init/select path** to populate
-  them over poking guesses.
+## Key references
 
-## What to trace (order)
-
-1. **HWSAD single-sector write (our exact path).** HRECORD-select a record, set
-   `hk.de`=track/sector, `hk.hl`=buffer, `A`=0, `RunFrom` the `HWSAD` label. If it
-   hangs in emulation too, we've reproduced the bug traceably; if it succeeds, the
-   trace shows the state the HRECORD-select left that our serve omits.
-2. **The record-copy command (record N→M) — the gold reference.** Drives the full
-   successful init→select→read→select→write→deselect sequence; its `&DC`/`&DF` log
-   is the authoritative CMD24 stream and its entry/register order is the template to
-   reuse. Drive the copy/backup subroutine directly (pre-poke workspace) rather than
-   via the BASIC tokeniser.
-
-## Instrumentation (a logging layer on the existing hooks)
-
-- OUT `&DC`: decode `&30`/`&31`/`&38`/`&3F`/`&04` + PC.
-- IN `&DC`: value + busy bit (3) + PC — the hang loop shows here.
-- IN/OUT `&DD`/`&DE`/`&DF`: the literal SPI byte stream (CMD24 opcode `&58`, 4 addr
-  bytes, `&FE` token, 512 payload, CRC, data-response `&05`, busy→`&FF`).
-- PC+registers at: HRECORD select, SD-init `&A623`, seek (`&A16B`/`&A1A6`),
-  `set.drive.a`, `&A81F` (CMD sender — capture B=opcode + the poked LBA immediates
-  read at `&A836`/`&A843`), `&A918` (write core), `&A86B` (tail), `&A8D7` (deselect).
-- `SetAccessTrace` on `&A836`/`&A837`/`&A843`/`&A844` — the dest LBA B-DOS computes.
-- Hang detector: if `maxSteps` hit inside the `&A81F`/`&A918` busy-poll, emit
-  `HANG at &XXXX, last &DC IN=0xNN`.
-
-**Artifact:** an annotated trace with (A) entry/register sequence, (B) port byte
-stream, (C) the LBA computation. Tool lives in `tools/netboot-oracle/z80/cmd/bdostrace/`
-with a README; read-only/diagnostic.
-
-## Trace → fix
-
-- **Outcome A (preferred): call B-DOS entry points correctly.** If the gold trace
-  reaches HWSAD's core only after a prelude (SD-init via HRECORD/`chk.hd.ex`, seek
-  poking the LBA, `set.drive.a` A=0, `&251` page), the fix in `bdos_seam.asm` is to
-  **replicate that prelude** — call the same higher-level record-write entry, or
-  invoke B-DOS's SD-init+seek entries before HWSAD. Confirmed when adding the missing
-  call makes the emulated HWSAD complete (busy clears, `&FF` release) where it hung.
-- **Outcome B (fallback): mirror the protocol** in our own direct-SPI routine
-  (`raw_record_sink.asm`/`sd_csd.asm`) per the byte stream — only if entry-point
-  reuse is shown impossible. (Re-implements Colin; least preferred.)
-- **Discriminator:** run our *current* seam path under the same harness+real-B-DOS
-  and diff against the gold trace; the first divergent call (or first non-clearing
-  `&DC` poll) is the missing contract.
-
-## Risks
-- Emulation may be too forgiving (`sdcard.go` always clears busy) and the hang may
-  NOT reproduce — acceptable: the gold trace still gives the target sequence; the
-  hang then stays a hardware gate (CLAUDE.md §5) and we make our path match + retest.
-- The `MMCSD` software-disk utility (not captured) may be a cleaner record-copy
-  authority — worth requesting from Colin in parallel (q-note).
-
-## Step list / split
-1. bdostrace scaffold: load real B-DOS, mirror aliases, attach SD, reach `&A623`
-   init alive. 2. Instrument port/register/memory traces → artifact. 3. Trace HWSAD
-   single write (path 1). 4. Trace record-copy (gold ref, path 2). 5. Diff our path
-   vs gold → "missing contract" conclusion. 6. **Fix `bdos_seam.asm`** (Outcome A/B;
-   deps 1-5; modifies `src/`). 7. README + Colin/MMCSD request.
-Items 1-5 are diagnostic; only 6 changes `src/`.
-
-## Relationship to i270a/#713
-i270a/#713 (fix `bd_list_write_hw`, the direct-SPI **list-claim** write) is a correct
-fix for *that* routine but is **not the gate** on i194 — it's only reached at finalize,
-after the per-block data write that hangs. The trace may show the record-claim should
-also use a B-DOS entry point (making `bd_list_write_hw` removable). Keep #713 draft
-pending the trace outcome.
+- Findings authority: `docs/notes/trinity-sd-z80-interface.md` §8a–§8q.
+- Format spec source: `~/git/samdisk/src/SAMCoupe.cpp` (`GetBDOSCaps` ~:330,
+  `IsBDOSDisk` :199, `UpdateBDOSBootSector` :255) + `src/types/record.cpp`.
+- B-DOS 1.5t disasm: `~/sam-archive/bdos/analysis/bdos15t-beta6.annotated.dis`
+  (`sel.record &A0CD`, HRECORD `&9FAB`, HSAVE `&9D54`, HWSAD `&9E16`); 1.5a source
+  `bdos15a.src.txt` (`hd.init` :1778) + `bdos14e.src.txt` (`FORMAT` :2565).
+- Rig + arming: `bdos_save_capture_wip_test.go`, `hwsad_handler_traceable_test.go`,
+  `hwsad_hook_bank_test.go`; SD model `sdcard.go` (`SeedSector`/`CapturedSector`).
+- Serve write path to fix: `src/netboot/bdos_seam.asm` (`bdos_write_sector` :972).
