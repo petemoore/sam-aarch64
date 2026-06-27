@@ -111,6 +111,22 @@ const statusBusy = 0x08
 // any real inter-OUT code gap let it clear.
 const busyByteTStates = 16
 
+// sdInitSettleTStates bounds the post-&38 PIC settle window (gap b/#35). The
+// manual gives ONE settle figure — ~50µs after a heavy controller operation
+// (manual:70,112,132; the &28 ENC reset shares it) — and nothing finer; the exact
+// per-operation duration is Genuinely-unspecified (trinity-emulation-fidelity.md
+// §"Genuinely unspecified"). At the SAM's ~6 MHz CPU clock 50µs is ~300 T-states
+// (6e6 * 50e-6 = 300). We use a conservative 4× margin (1200 T-states) so the
+// window comfortably covers the documented settle plus any modelling slack, yet is
+// VASTLY shorter than the real elapsed time between a faithful boot's SD-init and
+// its next identity probe (measured ~192k Z80 instructions in the full B-DOS
+// auto-load path, i288). Beyond this budget the PIC has settled, so the identity
+// read-back is honoured (FRESH) — silicon settles in real time and never latches
+// "unsettled" forever, which is what a real SAM proves by booting through exactly
+// this sequence. Within the budget a probe issued before settling still reads
+// stale, preserving the i242/i287 back-to-back catch.
+const sdInitSettleTStates = 1200
+
 // statusENCINT is &DC bit 0 (ENCINT): mirrors the ENC's pending-interrupt state
 // (manual:19,99,100; gap 5). The supported v1.1 polling path reads it here.
 const statusENCINT = 0x01
@@ -268,10 +284,22 @@ type ENC28J60 struct {
 	// CORRECT order (drv_init's chk_trinity against a quiescent PIC, before any SD
 	// work) never trips it: the ENC reset in drv_init's RX-arm body (&28) clears the
 	// flag, and after the startup SD read the boot wrapper re-arms the ENC
-	// (enc_rx_reestablish, which resets too). Set by an &38 SD-init, cleared by an &28
-	// ENC reset. Affects ONLY the identity probe — SD/EEPROM/ENC-data paths are
-	// untouched, so the SD read/write tests (which run drv_init first) are unaffected.
+	// (enc_rx_reestablish, which resets too).
+	//
+	// BOUNDED SETTLE (i289): the flag clears on EITHER of two events — an &28 ENC
+	// reset (the driver-driven quiesce, faithful) OR the elapse of a real settle
+	// window (sdInitSettleTStates from the &38). The latch is NOT indefinite: real
+	// silicon settles in ~50µs and never stays "unsettled" forever (Pete's real SAM
+	// boots through this exact &38-then-no-&28 sequence). settleUntilT is the T-state
+	// deadline (e.tNow at the &38 + sdInitSettleTStates); once e.tNow reaches it the
+	// identity probe reads FRESH again. Without this bound the flag latched forever in
+	// a faithful full boot (B-DOS's auto-load does the &38 with NO following &28 —
+	// ~192k instructions, 0 resets, before the next probe; i288), manufacturing a
+	// FALSE stale-read failure that does NOT happen on hardware. Affects ONLY the
+	// identity probe — SD/EEPROM/ENC-data paths are untouched, so the SD read/write
+	// tests (which run drv_init first) are unaffected.
 	sdInitSettling bool
+	settleUntilT   uint64
 
 	// rxDisarmed models hardware fix #3 (docs/notes/hardware-readiness-audit.md): an
 	// SD transaction on the shared one-PIC Trinity controller disturbs the ENC28J60's
@@ -880,8 +908,15 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 		// its prior value — chk_trinity, which does not busy-poll, reads stale and fails.
 		// This is the i242 real-silicon divergence; the correct order (drv_init before
 		// any SD) never hits it. See sdInitSettling.
+		//
+		// The settle is BOUNDED (i289): once the settle window has elapsed the PIC has
+		// settled, so clear the flag and honour the probe (FRESH). Within the window it
+		// still reads stale, preserving the i242/i287 back-to-back catch.
 		if e.sdInitSettling {
-			return
+			if e.tNow < e.settleUntilT {
+				return
+			}
+			e.sdInitSettling = false
 		}
 		// Latch the Nth char of the IDENT string into the shared read-back latch; the
 		// driver's chk_trinity reads it on the next IN &DD (gap c routes it there).
@@ -926,7 +961,7 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 		return
 	case v == selENCReset: // &28 — ENC reset (SRC); 50µs settle is a blind DJNZ on the Z80 side
 		e.softReset()
-		e.sdInitSettling = false // the ENC reset quiesces the PIC's post-SD-init settle (i242)
+		e.sdInitSettling = false // the ENC reset quiesces the PIC's post-SD-init settle (i242; one of two clears, the other being the bounded settle window — i289)
 		e.rxDisarmed = false     // the ENC reset re-arms RX after an SD transaction (i249); enc_rx_reestablish does this first
 		// CS state is unaffected by an internal reset; keep ENC selected if it was.
 		return
@@ -950,10 +985,13 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 		case selSDInit:
 			e.selectPeripheral(periphSD)
 			// Always-on (i244): the heavy &38 SD-init leaves the PIC settling, so a
-			// chk_trinity identity probe issued before an &28 ENC reset reads stale.
+			// chk_trinity identity probe issued WITHIN the settle window reads stale.
 			// Every test now models this, making an SD-before-ENC drv_init ordering
-			// bug a build-time catch (see sdInitSettling).
+			// bug a build-time catch (see sdInitSettling). The window is BOUNDED
+			// (i289): it closes after sdInitSettleTStates, so the PIC settles in real
+			// time rather than latching "unsettled" until an &28 that may never come.
 			e.sdInitSettling = true
+			e.settleUntilT = e.tNow + sdInitSettleTStates
 			e.rxDisarmed = true // SD transaction disturbs the ENC RX path (i249)
 		case selSDDeselct:
 			if e.selPeriph == periphSD {
