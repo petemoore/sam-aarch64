@@ -490,11 +490,27 @@ wrq_claimed:
                 ld      a, (WRQ_FLAT_MODE)
                 or      a
                 jr      nz, wrq_arm_flat
-                call    raw_record_sink_reset  ; RRS_FILL/LINEAR/TOTAL = 0
+                call    raw_record_sink_reset  ; RRS_FILL/LINEAR/TOTAL = 0, RRS_OWN_CMD24 = 0
+                ; Arm the sink for the OWN-CMD24 absolute-LBA write (i194 / §8ag):
+                ; rrs_flush_sector writes each sector by absolute card LBA of
+                ; (RRS_RECORD, linearSec) via our own self-healing CMD24, bypassing the
+                ; flaky B-DOS HWSAD hook. WRQ_RECORD was set by wrq_claim_record.
+                ld      a, (WRQ_RECORD)
+                ld      l, a
+                ld      h, 0
+                ld      (RRS_RECORD), hl
                 ld      a, 1
+                ld      (RRS_OWN_CMD24), a     ; use bd_record_write_hw, not HWSAD
                 ld      (WRQ_SINK_MODE), a     ; handle_data streams into the record
                 jr      wrq_armed
 wrq_arm_flat:
+                ; The flat-file class commits with HSAVE (wd_finalize_flat), which
+                ; targets the B-DOS "current record" — so this path DOES HRECORD-select
+                ; the claimed record. (Only the disk-record class, above, drops the
+                ; select: it writes by absolute LBA via our own CMD24, §8ag.) WRQ_RECORD
+                ; is the claimed free record from wrq_claim_record.
+                ld      a, (WRQ_RECORD)
+                call    bdos_select_record     ; HRECORD-select it (HSAVE targets it)
                 xor     a
                 ld      (WRQ_SINK_MODE), a     ; handle_data flat-accumulates into WRQ_STAGING
 wrq_armed:
@@ -621,15 +637,14 @@ wrq_claim_record:
                 jr      z, wrq_no_free         ; BD_FREE_RECORD == 0: nothing free
                 ld      a, (BD_FREE_RECORD)    ; low byte = the record number (>=1)
                 ld      (WRQ_RECORD), a
-                if defined(NETBOOT_DEBUG)
-                ld      a, DBG_CLAIM_SELECT_PRE
-                call    dbg_marker
-                endif
-                call    bdos_select_record     ; HRECORD-select it (HWSADs target it)
-                if defined(NETBOOT_DEBUG)
-                ld      a, DBG_CLAIM_SELECT_POST
-                call    dbg_marker             ; preserves flags; the scf below still sets CY
-                endif
+                ; NO HRECORD-select (i194 / §8ag): the per-sector write is now our own
+                ; bd_record_write_hw by ABSOLUTE card LBA (csd_base + 1600*(rec-1) +
+                ; linearSec), which consults no B-DOS "current record" state — so the
+                ; flaky B-DOS HRECORD hook (which HANGS on hardware, the claim's
+                ; CLAIM_SELECT_PRE-with-no-POST signature) is dropped. WRQ_RECORD
+                ; (set above) is the record the sink writes into; the claim's NAME
+                ; entry is still written via bdos_claim_record (our own self-healing
+                ; bd_list_write_hw) in wd_finalize.
                 scf
                 ret
 wrq_no_free:
@@ -1022,14 +1037,11 @@ wd_finalize:
                 ld      hl, (RRS_TOTAL + 2)
                 ld      (BD_REC_SIZE + 2), hl
 
-                ; read sector 0 (track 0, sector 1) back via HRSAD so the validator
-                ; can check the "BDOS" stamp@232 of the just-written record.
-                xor     a
-                ld      (BD_READ_TRACK), a
-                inc     a
-                ld      (BD_READ_SECTOR), a    ; sector 1 (1-based)
-                call    bdos_read_sector       ; -> BD_READ_BUF (512 bytes)
-
+                ; Validation is SIZE-ONLY (i285): a .mgt needs no B-DOS installed on
+                ; it, so there is no sector-0 stamp to read back. The own-CMD24 write
+                ; path (i194) has no B-DOS "current record" state to read through
+                ; either — so NO HRSAD read-back is issued here (it was the flaky
+                ; B-DOS hook §8ag, and validation no longer needs sector 0).
                 call    bdos_validate_disk_record  ; -> BD_REC_VALID (1 = valid)
                 ld      a, (BD_REC_VALID)
                 or      a
