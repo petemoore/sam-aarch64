@@ -41,18 +41,19 @@ const (
 // fits one Ethernet frame (no reassembly); tsize=0 asks the server to report the
 // file's size in the OACK; timeout=2 is the retransmit hint.
 //
-// windowsize is deliberately NOT requested here: per RFC 7440 a client that asks
-// for windowsize must handle windowed delivery (ACK only the last block of each
-// window, not every block), and the *live* Z80 receiver is still lock-step —
-// requesting it would break against any server that grants it (e.g. macOS tftpd
-// OACKs windowsize). The windowed state machines now exist as the Go authority
-// (ServerXfer.NextWindow/OnWindowAck, ClientXfer windowed receive — i120a); the
-// Z80 port + re-adding windowsize to this set is i120b. Until then the client
-// stays a correct lock-step (one ACK per block) RFC 1350/2347 client.
+// windowsize=8 requests RFC 7440 windowed delivery (ACK only the last block of
+// each window, not every block) — an ~8x cut in ACK round-trips. The Z80 receiver
+// handles windowed delivery in both the standalone loop (tftp_client_loop.asm,
+// i120b-b1) and the bootable phase machine (netboot_client.asm, i120b-b3): it
+// adopts the windowsize the server grants in the OACK and stays lock-step when the
+// server omits it, so this is safe against any server (a lock-step-only server
+// OACKs no windowsize → the client ACKs every block). 8 is well within the
+// server's WindowsizeMax (16) and keeps rewind-on-gap modest.
 var ClientOptionSet = []Option{
 	{"blksize", "1428"},
 	{"tsize", "0"},
 	{"timeout", "2"},
+	{"windowsize", "8"},
 }
 
 // Option is one TFTP option (name=value, both NUL-terminated on the wire).

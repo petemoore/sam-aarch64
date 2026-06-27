@@ -330,6 +330,17 @@ cl_tid_ok:
                 ld      a, (RXBUF + RX_UDP_PAYLOAD + 3)
                 ld      e, a                   ; DE = block
 
+                ; windowed receive (RFC 7440) when WINDOWSIZE > 1; else lock-step.
+                ; Only A is used here, so DE (block) is preserved either way. Mirrors
+                ; tftp_client_loop.asm (i120b-b1) / ClientXfer.onDataWindowed.
+                ld      a, (WINDOWSIZE+1)
+                or      a
+                jp      nz, cl_windowed        ; high byte set: > 255, windowed
+                ld      a, (WINDOWSIZE)
+                cp      2
+                jp      nc, cl_windowed        ; low byte >= 2: windowed
+
+                ; --- lock-step path (windowsize <= 1) ---
                 ; expected == ACKED + 1?
                 ld      hl, (ACKED)
                 inc     hl
@@ -346,6 +357,56 @@ cl_tid_ok:
                 jp      cl_send_ack
 
 cl_next_block:
+                call    cl_accept_block        ; accumulate + acked=block + done
+                jp      cl_send_ack            ; lock-step: ACK the accepted block
+
+; ---------------------------------------------------------------------------
+; cl_windowed — RFC 7440 windowed receive (mirrors ClientXfer.onDataWindowed).
+; In: DE = received block. Accumulate an in-sequence block (acked+1) and ACK only
+; at the window boundary or the short final block; any gap or duplicate re-ACKs
+; the last in-sequence block (ACKED) to make the sender rewind, and resets the
+; window counter. Mid-window blocks accumulate silently (no ACK).
+; ---------------------------------------------------------------------------
+cl_windowed:
+                ld      hl, (ACKED)
+                inc     hl                     ; HL = acked + 1
+                or      a
+                sbc     hl, de                 ; (acked+1) - block
+                jr      z, cl_w_inseq          ; block == acked+1: the next block
+                ; gap or duplicate: reset the window, re-ACK the last good block.
+                ld      hl, 0
+                ld      (WINCOUNT), hl
+                ld      hl, (ACKED)
+                ld      (ACK_BLOCK), hl
+                jp      cl_send_ack
+cl_w_inseq:
+                call    cl_accept_block        ; accumulate + acked=block + done
+                ld      hl, (WINCOUNT)
+                inc     hl
+                ld      (WINCOUNT), hl         ; winCount++
+                ld      a, (XFER_DONE)
+                or      a
+                jr      nz, cl_w_ack           ; short final block: ACK now
+                ld      hl, (WINCOUNT)
+                ld      de, (WINDOWSIZE)
+                or      a
+                sbc     hl, de                 ; winCount - windowsize
+                jp      c, cl_none             ; winCount < windowsize: mid-window, no ACK
+cl_w_ack:
+                ld      hl, 0
+                ld      (WINCOUNT), hl         ; reset the window
+                ld      hl, (ACKED)
+                ld      (ACK_BLOCK), hl        ; ACK the last in-sequence block
+                jp      cl_send_ack
+
+; ---------------------------------------------------------------------------
+; cl_accept_block — accept an in-sequence DATA block: route its payload to
+; STAGING (mode 0, the i82 host-verified whole-file accumulate) or the i122b
+; raw-record streaming sink (mode 1, the i122c fetch-and-boot path), advance
+; STAGE_OFFSET, set ACKED/ACK_BLOCK = block, and set XFER_DONE on a short final
+; block. Shared by the lock-step (cl_next_block) and windowed (cl_w_inseq) paths.
+; ---------------------------------------------------------------------------
+cl_accept_block:
                 ; payload length = frame length - (42 + 4 TFTP header)
                 ld      hl, (CL_RX_LEN)
                 ld      de, RX_UDP_PAYLOAD + 4
@@ -353,11 +414,9 @@ cl_next_block:
                 sbc     hl, de                 ; HL = data length
                 ld      (LAST_DATA_LEN), hl
 
-                ; route the payload: STAGING (mode 0, default — the i82 host-verified
-                ; whole-file accumulate) or the i122b raw-record streaming sink
-                ; (mode 1 — the i122c fetch-and-boot path: write 512-byte sectors as
-                ; they arrive, so a full 819200-byte disk image never sits whole in
-                ; RAM). CLIENT_SINK_MODE selects; only the boot build has the sink.
+                ; CLIENT_SINK_MODE selects the payload route; only the boot build
+                ; has the sink. Mode 1 streams 512-byte sectors as they arrive so a
+                ; full 819200-byte disk image never sits whole in RAM.
                 if defined(NETBOOT_HOSTTEST)==0
                 ld      a, (CLIENT_SINK_MODE)
                 or      a
@@ -398,7 +457,6 @@ cl_sink_payload:
                 call    raw_record_sink_leaf
                 endif
 cl_after_payload:
-
                 ; acked = block (assemble big-endian -> store little-endian).
                 ld      a, (RXBUF + RX_UDP_PAYLOAD + 2)
                 ld      h, a
@@ -412,9 +470,10 @@ cl_after_payload:
                 ld      de, (CLIENT_BLKSIZE)
                 or      a
                 sbc     hl, de
-                jr      nc, cl_send_ack
+                ret     nc                     ; datalen >= blksize: not the last
                 ld      a, 1
                 ld      (XFER_DONE), a
+                ret
 cl_send_ack:
                 call    build_ack_frame_and_send
                 ret
@@ -537,14 +596,33 @@ oack_have_server:
                 call    find_option
                 ld      a, (FIND_OK)
                 or      a
-                jr      z, oack_ack0           ; no blksize option: keep 512
+                jr      z, oack_windowsize     ; no blksize option: keep 512, still try windowsize
                 ld      hl, (FIND_VALUE_PTR)
                 call    atoi_dec               ; (HL) decimal string -> DE
                 ld      a, d
                 or      e
-                jr      z, oack_ack0           ; zero/garbage: keep 512
+                jr      z, oack_windowsize     ; zero/garbage: keep 512
                 ex      de, hl
                 ld      (CLIENT_BLKSIZE), hl   ; adopt the negotiated blksize
+oack_windowsize:
+                ; windowsize (RFC 7440): adopt the server-granted window. The server
+                ; appends windowsize only when it grants > 1 (a lock-step server omits
+                ; it), so an absent option leaves WINDOWSIZE at its 1 default and the
+                ; receiver stays lock-step. Mirrors clientloop.go onOACK: if ws>0 then
+                ; SetWindowsize(ws). Parsed independently of blksize.
+                ld      hl, oack_windowsize_name
+                ld      (FIND_NAME_PTR), hl
+                call    find_option
+                ld      a, (FIND_OK)
+                or      a
+                jr      z, oack_ack0           ; no windowsize option: stay lock-step
+                ld      hl, (FIND_VALUE_PTR)
+                call    atoi_dec               ; (HL) decimal string -> DE
+                ld      a, d
+                or      e
+                jr      z, oack_ack0           ; zero/garbage: stay lock-step
+                ex      de, hl
+                ld      (WINDOWSIZE), hl       ; adopt the negotiated window
 oack_ack0:
                 ; ACK block 0 -> the server starts sending DATA at block 1.
                 ld      hl, 0
@@ -586,6 +664,8 @@ atd_done:
 
 oack_blksize_name: defm "blksize"
                    defb 0
+oack_windowsize_name: defm "windowsize"
+                      defb 0
 
 ; tftp_recv_timeout — SAS fix: retransmit the last ACK only (never the RRQ).
 ; Out: BC = bytes transmitted, or 0 if no block has been ACKed yet.
@@ -642,8 +722,9 @@ rrq_mode_octet:   defm "octet"
                   defb 0
 
 ; The ClientOptionSet, byte-identical to the Go tftp.ClientOptionSet ordering
-; (blksize, tsize, timeout). windowsize is NOT requested: a lock-step receiver
-; must not ask for RFC 7440 windowed delivery it cannot handle (i118/i120).
+; (blksize, tsize, timeout, windowsize). windowsize=8 requests RFC 7440 windowed
+; delivery; the receiver (do_recv_data / cl_windowed) handles it, and stays
+; lock-step when the server omits windowsize from the OACK (i120b-b3).
 rrq_opt_template:
                   defm "blksize"
                   defb 0
@@ -656,6 +737,10 @@ rrq_opt_template:
                   defm "timeout"
                   defb 0
                   defm "2"
+                  defb 0
+                  defm "windowsize"
+                  defb 0
+                  defm "8"
                   defb 0
 RRQ_OPT_LEN:      equ $ - rrq_opt_template
 
@@ -739,6 +824,9 @@ client_setup:
                 ld      hl, 0
                 ld      (ACKED), hl
                 ld      (STAGE_OFFSET), hl
+                ld      (WINCOUNT), hl         ; window counter starts empty
+                ld      hl, 1
+                ld      (WINDOWSIZE), hl       ; lock-step until an OACK grants a window
 
                 ; --- init the ENC28J60 with the SAM's real MAC ----------
                 ld      hl, CLIENT_MAC
@@ -975,6 +1063,8 @@ REPLY_TID:        defs 2
 
 ACKED:            defs 2                 ; highest block ACKed (LE value)
 ACK_BLOCK:        defs 2                 ; the block the next ACK names (LE value)
+WINDOWSIZE:       defs 2                 ; RFC 7440 window from the OACK; <=1 = lock-step
+WINCOUNT:         defs 2                 ; in-sequence blocks taken since the last ACK
 STAGE_OFFSET:     defs 2                 ; bytes accumulated so far (mode 0 / STAGING)
 LAST_DATA_LEN:    defs 2
 XFER_DONE:        defs 1
