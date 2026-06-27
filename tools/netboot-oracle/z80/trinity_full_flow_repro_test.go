@@ -110,23 +110,30 @@ func TestTrinityFullFlowReachesTrinload(t *testing.T) {
 	t.Logf("full-flow: bdos_boot_record=%d trinload_start=%d read_loop=%d finalPC=&%04X reachedStop=%v steps=%d err=%v",
 		hits[mBdosBootRecord], hits[trinloadStart], hits[trinloadReadLoop], res.PC, res.ReachedStop, res.Steps, runErr)
 
-	// Extract CMD17/CMD24 LBAs from the &DF (SD) command stream.
+	// Extract CMD17/CMD24 LBAs from the &DF (SD) command stream. SD command frames
+	// are 6 consecutive &DF OUT bytes: [0x40|cmd, a3, a2, a1, a0, crc]; the data-phase
+	// dummy clocks are &DF INs (and &FF/&FE OUTs, which have bit6 clear or both top
+	// bits set), so parse over OUT-only events and key on (val & 0xC0)==0x40.
 	rec3lo, rec3hi := uint32(152+1600*2), uint32(152+1600*3-1) // 3352..4951
-	var reads, writes []uint32
 	dc := *lg
-	for i := 0; i < len(dc); i++ {
-		if !dc[i].write || dc[i].port != 0xDF {
+	var dfOut []capEv
+	for i := range dc {
+		if dc[i].write && dc[i].port == 0xDF {
+			dfOut = append(dfOut, dc[i])
+		}
+	}
+	var reads, writes []uint32
+	for i := 0; i+4 < len(dfOut); i++ {
+		v := dfOut[i].val
+		if v&0xC0 != 0x40 {
 			continue
 		}
-		v := dc[i].val
-		if v&0xC0 == 0x40 && i+4 < len(dc) {
-			lba := uint32(dc[i+1].val)<<24 | uint32(dc[i+2].val)<<16 | uint32(dc[i+3].val)<<8 | uint32(dc[i+4].val)
-			switch v & 0x3F {
-			case 17:
-				reads = append(reads, lba)
-			case 24:
-				writes = append(writes, lba)
-			}
+		lba := uint32(dfOut[i+1].val)<<24 | uint32(dfOut[i+2].val)<<16 | uint32(dfOut[i+3].val)<<8 | uint32(dfOut[i+4].val)
+		switch v & 0x3F {
+		case 17:
+			reads = append(reads, lba)
+		case 24:
+			writes = append(writes, lba)
 		}
 	}
 	inRec3 := func(ls []uint32) (n int, sample []uint32) {
