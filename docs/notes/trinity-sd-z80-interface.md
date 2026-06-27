@@ -1388,6 +1388,35 @@ hardware measurement" is now "needs **Colin** (`q61`) **or** SSP-level hardware 
 3. **`q61` (Colin):** the definitive answer to the SSP/BUSY semantics; Pete's contact.
 A logic-analyzer on the PIC↔peripheral SPI lines (Pete-side) would directly show the SSP stall.
 
+## 8x. The MCU is a PIC16F74 + the ENC transmit-hang is a DOCUMENTED erratum + an SPI-bus probing guide (i283)
+
+The microcontroller is identified — **Microchip PIC16F74** (40-pin, socketed; full board inventory + photos in `trinity-capabilities.md`). Two consequences for this investigation:
+
+**(1) The §8w wedge is now grounded in a real, documented erratum — not speculation.** The ENC28J60 has a transmit-hang in **Rev. B7 Silicon Errata issue 12** (DS80349, https://ww1.microchip.com/downloads/en/DeviceDoc/80349b.pdf): after a transmit, **`TXRTS` is not cleared by the transmit logic**, so firmware that polls `TXRTS`-to-clear **spins forever**; the sanctioned fix is to wait on `TXIF`/`TXERIF` and reset via `ECON1.TXRST`. On the Trinity the PIC16F74 is the **single SPI master** shared by ENC+SD+EEPROM, so a firmware spin in the ENC transmit-completion poll blocks the *one* master → a queued SD op **never starts** → the SAM sees "SD write hangs" (the §8a/§8s/§8w symptom). The PIC firmware is almost certainly code-protected (can't dump — `trinity-capabilities.md`), so this is confirmed by **bus observation**, not a firmware read.
+
+**(2) Oscilloscope / logic-analyzer probing guide (Pete has a scope).** SCK/MOSI/MISO are one shared 3-wire bus to all three peripherals; per-peripheral CS lines (driven from `&DC`) demultiplex. Ground at PIC pin 12 or 31.
+
+| Ch | Signal | Probe point | Datasheet pin |
+|----|--------|-------------|---------------|
+| 0 (clk) | SCK | PIC pin **18** (RC3) or SD contact 5 | DS30325B |
+| 1 | MOSI | PIC pin **24** (RC5/SDO) or SD contact 2 | DS30325B |
+| 2 | MISO | PIC pin **23** (RC4/SDI) or SD contact 7 | DS30325B |
+| 3 (trig) | SD-CS | SD slot contact **1** (DAT3) | SD SPI std |
+| (4) | ENC-CS | ENC28J60 pin **9** | DS39662E |
+
+Trigger SD-CS falling, single-shot. Signatures: **(a) SCK dead** = PIC stalled in firmware (the ENC-erratum signature — spinning on `TXRTS`); **(b) a CS stuck low** = died mid-transaction on that peripheral (ENC-CS stuck ⇒ the SD op can't start); **(c) SD CLK alive + MISO stuck high** = SD command dropped / card not responding (note: MISO held *low* during a write is legitimate busy-programming, not a hang); **(d)** decode the last bytes (sigrok/PulseView SPI decoder, mode 0) — ENC opcodes (WBM `0x7A`, bit-ops) before SCK dies ⇒ ENC-path wedge; an SD `CMD24` (`0x58`) with no card reply ⇒ SD side. Tool: a scope answers (a)/(b)/(c); a ~£10 FX2 USB analyzer + sigrok gives the decoded bytes (d). Sample ≥24 MHz (SPI ≤5 MHz = 20 MHz crystal /4).
+
+## 8y. Pete's BASIC-SAVE-trace approach — status: the rig works + RECORD traces, but the emulated BASIC SAVE errors &0C before writing (no gold trace yet); the decisive unblock is a hardware BASIC SAVE
+
+Pete's plan (capture the full IN/OUT trace of a minimal BASIC `SAVE`-to-record so the exact SD command + hook sequence is known) is implemented as **i280b-b2q**'s rig `bdos_save_capture_wip_test.go`. Status:
+- ✅ It captures every Trinity-port IN/OUT and traces **`RECORD n`** cleanly: self-heal init ladder + `CMD17` block-152 (directory) read; the select persists (§8r). The select sequence is captured.
+- ❌ The BASIC **`SAVE`-to-record fails in emulation**: no SD I/O, `last.record` reset, floppy fallback, stock **error &0C (12)** raised downstream of the directory read (§8r). So there is **no working-save (`CMD24`) trace via BASIC** — the gold sequence Pete wants does not yet exist, because the emulated SAVE never writes. (The only emulation path that reaches `CMD24` is driving the HWSAD hook directly with the device-select gates forced — §8s — not the BASIC orchestration.)
+- **Suspected cause:** an emulator fidelity gap (Trinity-detect `&DC` `&08/&09`→'TR', a post-init ready/status, or default-device routing) makes the emulated SAVE reject the selected record before writing.
+
+**Decisive unblock (two routes, the 2nd ties to §8x):**
+1. **Emulation:** find why HSAVE raises &0C (trace the raise point in B-DOS's SAVE path) and make the emulated BASIC SAVE-to-record *succeed*, then capture the gold IN/OUT trace + diff our HWSAD path against it.
+2. **Hardware (decisive):** run the minimal BASIC `SAVE`-to-record on the **real** SAM+Trinity and **scope-trace** the SPI bus (§8x). This answers the open question *does BASIC SAVE-to-record even work on hardware?* — **yes** ⇒ the gold SPI sequence is captured directly *and* the hang is specific to our serve's HWSAD invocation (copy what BASIC does); **no/hangs** ⇒ B-DOS record-save is broken board-wide (a bigger finding). Either outcome is conclusive, and it sidesteps the emulator &0C fidelity gap entirely.
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
