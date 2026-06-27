@@ -1130,13 +1130,32 @@ faithful claim-select state — `last.record`=4809 persists, §8r fact 3), the w
   immediately exercisable — the b2q "model the busy" half needs no new model work, only a
   path that reaches it.
 
-**NEXT (b2q continuation):** the write core is gated by device-select seeing **hk.a=2 AND
-`&80AF`≠0**. Neither the caller's `A'` (reset by the rst-8 path) nor a BASIC `RECORD` select
-establishes them here. Resolve how the real serve's HWSAD dispatch sets hk.a/`&80AF` — i.e.
-whether the serve must NOT route through the DOSCNT=0 external path (so A' survives), or must
-explicitly claim the SD device (set `&80AF` via the `&A0E4` setup `&8662` runs for A=2)
-before HWSAD. Then drive into `&A8F4`/`CMD24`, exercise the `StuckBusy` busy-wait, and diff
-against `HSAVE`(132). Every hypothesis still ends in a TAPO hardware retest (i271 markers).
+**PROBE RESULT (the §8s open question answered; guard
+`TestHWSADWriteCoreReachableWithGatesForced`).** Forcing BOTH device-select gates —
+poking `hk.a`=2 (`&81D9`) and `&80AF`=1 at the HWSAD handler entry `&9E16`, before the
+prelude reads them:
+
+- **HWSAD reaches the write core.** It traverses device-select → the write core `&A8F4`
+  and **issues `CMD24` to block 153** (record 1's region, base 152 + the track0/sector2
+  offset), then **returns cleanly** (the stub `di;halt`, ~3.3k steps). So there is **no
+  deeper model-fidelity gap past device-select**: the *only* blockers to the write are the
+  two device-select gates. The b2q fix is therefore purely to make `hk.a`=2 + `&80AF`≠0
+  hold faithfully when the serve invokes HWSAD — not to model any further hardware.
+- **The `&DC` bit-3 busy-wait hang is reproducible.** With the same gates forced AND the
+  `&DC` bit-3 BUSY flag wedged (`ENC28J60.StuckBusy`), the write path **spins forever**
+  (hits the step cap, never halts) at **`&67CE` = `&A7CE`** — inside the `wait` routine
+  `&A7CC` (the §9 `&DC` bit-3 busy-poll). This pins the suspected hardware hang precisely:
+  it is the `&A7CC` `IN A,(&DC) / AND 8 / JR NZ` loop with no timeout, hanging when the
+  PIC's BUSY bit never releases. (The default self-releasing model returns cleanly, which
+  is why the hang never reproduced before — §8a.)
+
+**NEXT (the FIX — i280b-b2i):** make the serve's HWSAD invocation satisfy the two
+device-select gates (`hk.a`=2 + `&80AF`≠0) — either route HWSAD so `A'` survives to the
+dispatcher (not the DOSCNT=0 external path that resets it), or explicitly claim the SD
+device (the `&A0E4` setup `&8662` runs for A=2, which sets `&80AF`) before HWSAD — and/or
+bound the `&A7CC` busy-wait with a timeout so a wedged PIC degrades instead of hanging.
+Then diff against `HSAVE`(132). Every hypothesis still ends in a TAPO hardware retest (i271
+markers).
 
 ## 9. Porting to fresh Z80
 

@@ -237,6 +237,110 @@ func driveHookSeq(t *testing.T, mac *z80h.Machine, log *[]capEv, stub uint16, la
 	return reached, frames, sawWrite, hkA
 }
 
+// TestHWSADWriteCoreReachableWithGatesForced (i280b-b2q, §8s probe) answers the
+// decisive question §8s leaves open: with BOTH device-select gates forced — hk.a=2
+// (Trinity SD) and the SD-claimed flag &80AF≠0 — does HWSAD actually reach the SD
+// write core &A8F4 / issue CMD24, or is there a DEEPER model-fidelity gap past
+// device-select? The answer decides the fix direction:
+//   - reaches the write core  => the ONLY blockers are the two device-select gates;
+//     the b2q fix is purely to make hk.a=2 + &80AF set faithfully (no model gap).
+//   - still diverges          => a further gate exists downstream (model fidelity);
+//     localize the new divergence next.
+//
+// The gates are forced by poking B-DOS's vars (section-B aliases under the §8o map:
+// hk.a=&81D9->&41D9, &80AF->&40AF) the first time the HWSAD handler entry &9E16
+// (&5E16) is reached — i.e. before the prelude reads hk.a (&9E3C) and before the
+// A==2 path checks &80AF (&8677). This is a PROBE (a non-faithful forced state), not
+// a claim about how the serve sets them — purely "is the write core reachable here".
+func TestHWSADWriteCoreReachableWithGatesForced(t *testing.T) {
+	src := uint16(0xBE42)
+	const stub = 0x9000
+
+	// runForced drives HWSAD with both device-select gates forced; stuckBusy wedges
+	// the &DC bit-3 BUSY flag so it never clears (the real-hardware hang mode).
+	runForced := func(stuckBusy bool) (reached map[uint16]bool, frames []sdFrame, sawWrite bool, res z80h.CallResult, poked bool) {
+		mac, enc, log := bootWriteCoreMachine(t)
+		buf := make([]byte, 512)
+		for i := range buf {
+			buf[i] = byte(0xA0 + (i & 0x1F))
+		}
+		mac.Write(src, buf)
+		mac.Write(stub, []byte{
+			0x11, 0x02, 0x00, // ld de,&0002 (D=track0 E=sector2)
+			0x21, byte(src), byte(src >> 8), // ld hl,BD_WRITE_BUF
+			0xCF, 149, // rst 8 ; defb 149 (HWSAD)
+			0xF3, 0x76, // di ; halt
+		})
+		reached = map[uint16]bool{}
+		from := len(*log)
+		var rerr error
+		res, rerr = mac.RunBootFrom(stub, z80h.Entry{
+			StepCap: 8_000_000,
+			Trace: func(pc uint16) {
+				if pc == mcHWSAD && !poked {
+					mac.Write(0x41D9, []byte{0x02}) // hk.a = 2 (Trinity SD)
+					mac.Write(0x40AF, []byte{0x01}) // &80AF SD-claimed flag != 0
+					if stuckBusy {
+						enc.StuckBusy = true // wedge &DC bit-3 from the write moment on
+					}
+					poked = true
+				}
+				for _, m := range writeCoreLandmarks {
+					if pc == m.pc {
+						reached[pc] = true
+					}
+				}
+			},
+		})
+		_ = rerr
+		frames, sawWrite = decodeFrames(*log, from)
+		return reached, frames, sawWrite, res, poked
+	}
+
+	// Case 1: gates forced, busy releases normally — HWSAD reaches the write core,
+	// issues CMD24, and returns cleanly (the §8s answer: no deeper model gap).
+	reached, frames, sawWrite, res, poked := runForced(false)
+	t.Logf("== HWSAD gates forced, busy normal ==")
+	for _, m := range writeCoreLandmarks {
+		mark := " "
+		if reached[m.pc] {
+			mark = "x"
+		}
+		t.Logf("   [%s] %s", mark, m.name)
+	}
+	t.Logf("   finalPC=&%04X steps=%d SD frames=%d sawWrite=%v poked=%v", res.PC, res.Steps, len(frames), sawWrite, poked)
+	for _, f := range frames {
+		tag := ""
+		if f.cmd == 24 {
+			tag = "  <<< CMD24 WRITE"
+		}
+		fmt.Printf("    CMD%-2d addr=%d (0x%X) @PC=&%04X%s\n", f.cmd, f.addr, f.addr, f.pc, tag)
+	}
+	if !poked {
+		t.Fatalf("HWSAD handler entry &9E16 never reached — the rig broke before the gate poke")
+	}
+	if !reached[mcWriteCore] || !sawWrite {
+		t.Errorf("§8s: with both device-select gates forced, HWSAD did NOT reach the write core (writeCore=%v CMD24=%v) — a further downstream gate appeared; localize it and update §8s",
+			reached[mcWriteCore], sawWrite)
+	}
+	if !res.Halted {
+		t.Errorf("§8s: gates-forced HWSAD did not return cleanly (finalPC=&%04X steps=%d) — a hang with the SELF-RELEASING busy means a non-busy stall; investigate", res.PC, res.Steps)
+	}
+
+	// Case 2: same, but the &DC bit-3 BUSY flag is wedged (StuckBusy) — the
+	// real-hardware hang mode. The write path's busy-wait must then SPIN (hit the
+	// step cap, never halt), demonstrating the suspected busy-wait hang is
+	// exercisable in emulation (the b2q "model the &DC busy" goal).
+	reached2, _, _, res2, poked2 := runForced(true)
+	t.Logf("== HWSAD gates forced, &DC bit-3 BUSY wedged (StuckBusy) ==")
+	t.Logf("   finalPC=&%04X steps=%d halted=%v reachedWriteCore=%v poked=%v", res2.PC, res2.Steps, res2.Halted, reached2[mcWriteCore], poked2)
+	if res2.Halted {
+		t.Errorf("with &DC BUSY wedged the write path still returned (halted) — the busy-wait is NOT gated on &DC bit-3 as §9 models; revisit which poll hangs")
+	} else {
+		t.Logf("§8s/b2q confirmed: a wedged &DC bit-3 BUSY makes the HWSAD write path spin (finalPC=&%04X, no halt) — the suspected busy-wait hang is reproducible in emulation", res2.PC)
+	}
+}
+
 // TestHWSADReachesWriteCore (i280b-b2q, §8s) drives the serve's HWSAD(149) hook
 // through the §8o-armed real-ROM PTDOS dispatch, against a GENUINE BASIC `RECORD 1`
 // select (the faithful claim-select state, last.record=4809 persisting per §8r),
