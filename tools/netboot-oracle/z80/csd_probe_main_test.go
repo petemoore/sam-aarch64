@@ -20,7 +20,7 @@
 // `go test`. It then reports PRECISELY where the run ends up.
 //
 // It uses the single csd_probe build (build/csd_probe.bin), which contains
-// probe_main (i231b-b4b removed the carve-out that used to guard it out of the
+// probe_main (i231b-b4c removed the carve-out that used to guard it out of the
 // host-test build; csd_probe_test.go drives the same binary piecewise). The image
 // org's at &8000 and tops out
 // at &B47D — entirely below &C000 — so a flat Load places it faithfully.
