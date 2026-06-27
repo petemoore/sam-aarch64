@@ -33,18 +33,41 @@ Live state: branch `i280b-b2n-hwsad-traceable` (pushed), registry **i280b-b2q OP
     image in Go from this spec; samdisk is **not** needed at runtime.
 - **Verified:** `SDCard.SeedSector(block, data)` is served (`CapturedSector` confirms).
 
-## THE CURRENT BLOCKER (precisely diagnosed — §8q)
+## THE CURRENT BLOCKER (re-aimed — §8r supersedes the §8q "no mount" framing)
 
-**B-DOS has not MOUNTED the seeded card: `last.record` reads 0 after boot.** The boot
-path (patched ROM → trinload → B-DOS → editor idle) leaves B-DOS resident but does **not**
-run its record-device mount/HDINIT. So `sel.record` range-checks every record number
-against a count of 0 and bails — **both** the BASIC `RECORD` command **and** the
-`HRECORD`(156) hook reach their handlers but refuse to select (no SD read, `&780B` stays
-0). Failed shortcuts: bare `rst 8/defb 135` (HDINIT) is a no-op; poking inferred 1.5a
-sysvars `&80C4/&80C6/&80C9` held but didn't change behaviour (wrong 1.5t addresses, or the
-count lives elsewhere).
+**The mount + select are SOLVED; the write blocker moved DOWNSTREAM to `SAVE`/`HSAVE`.**
+Per §8r (guards `TestBDOSBootNoMountDeviceMounts` + `TestBDOSRecordSelectSelfHeals`):
+- Boot does not mount (`last.record`=0) — but `DEVICE` re-runs HDINIT (`&A1B1`) and mounts
+  the card **from the CSD alone**: `last.record`=4809 (the exact `GetBDOSCaps` count). So a
+  full card-level format is **not** needed for the mount; `DEVICE` is the trigger.
+- With the full 1.5t mount var-set poked into B-DOS's page (`last.record`=`&80C4`,
+  base=`&80C2`, capacity=`&80BD`, record.no=`&80C6`, hd.wp=`&80C8`), **`RECORD 1` selects
+  and persists** — it runs the faithful self-heal init ladder + `CMD17` block-152 read and
+  `last.record` stays 4809. This holds for a bare `"BDOS"@232` stamp OR a real MGT
+  directory, so the record-1 sector content is **not** the gate.
+- **`SAVE`/`HSAVE` is where it fails:** after a selected `RECORD 1`, `SAVE` issues **no SD
+  I/O**, resets `last.record`=0, and falls back to the floppy. A stock SAM error `&0C` (12)
+  appears around the path, raised **downstream of the directory read** (not B-DOS `rep81`).
+  Suspected model-fidelity gap (Trinity-detect `&DC` `&08/&09`→`'TR'`, a post-init
+  ready/status, or default-device routing). Full detail: `trinity-sd-z80-interface.md` §8r.
 
-## NEXT — execution plan (a fresh, deliberate build)
+## NEXT — drive + diff the write directly (the §8r re-aim)
+
+The mount/select are no longer in the way — skip the "build a full card format / make boot
+HDINIT mount" steps below (superseded by §8r: poke the mount var-set, or use `DEVICE`). The
+capture target is now the **SAVE/HSAVE write step**:
+1. Fresh boot; poke the mount var-set (see §8r / `bdos_record_mount_test.go`).
+2. Via the §8o-armed dispatch (`DOSCNT &5BC3=0`, serve map), drive `HRECORD`(156) then
+   `HSAVE`(132) (build the UIFA at `&4B00` like `bdos_seam.asm bdos_fill_save_uifa`); trace
+   IN/OUT + hooks and find where the path diverges (why no `CMD24`, where `&0C` is raised).
+3. Same with `HRECORD`+`HWSAD`(149) (our serve's shape); diff the two traces.
+4. Fix `src/netboot/bdos_seam.asm` (reuse B-DOS entry points; Pete: don't reimplement);
+   verify in emulation, then a TAPO hardware retest.
+
+The historical "build a full card format" plan below is retained for reference but is NOT
+the current path (the mount is CSD-derived; §8r).
+
+### (superseded) original card-format build
 
 All work in `tools/netboot-oracle/z80/`. The capture rig is `bdos_save_capture_wip_test.go`;
 the arming pattern is in `hwsad_handler_traceable_test.go` (§8o `DOSCNT=0` + serve map).
