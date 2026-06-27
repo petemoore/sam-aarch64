@@ -63,6 +63,12 @@ class MustNotFire(unittest.TestCase):
         "echo 0x8000 page 1",
         "git show HEAD -- tools/trinload-push/trinload-push.py",
         "rg 'tftp' tools/",
+        # i268: a tftp:// URL merely NAMED by a non-transfer verb (go test, grep,
+        # a heredoc path) is a mention, not an execution — must not false-fire.
+        "go test ./tools/netboot-oracle/z80/ -run TestTFTPClient -v",
+        "grep -rn 'tftp://192.168.2.75' tools/",
+        "cat > x.md <<EOF\nfetch via tftp://192.168.2.75/x\nEOF",
+        "go test ./... -run TestTFTP <<EOF\ntftp://192.168.2.75/boot.bin\nEOF",
     ]
 
     def test_must_not_fire(self):
@@ -86,7 +92,7 @@ class MustFire(unittest.TestCase):
         "atftp --put --local-file foo.bin 192.168.2.75",
         "/abs/path/to/trinload-push.py 192.168.2.75 foo.bin",
         "echo hi && python3 tools/trinload-push/trinload-push.py 192.168.2.75 foo.bin",
-        "wget --post-file=foo tftp://192.168.2.75/x",  # tftp:// URL -> fires on case 2
+        "wget --post-file=foo tftp://192.168.2.75/x",  # wget + --post-file upload flag -> rule 3
     ]
 
     def test_must_fire(self):

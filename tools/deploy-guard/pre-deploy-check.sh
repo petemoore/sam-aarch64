@@ -73,7 +73,22 @@ _DISCOVERY_PORT_RE = re.compile(
 _TFTP_URL_RE = re.compile(r"tftp://", re.IGNORECASE)
 _SAM_IP_RE = re.compile(re.escape(SAM_IP))
 
-_UPLOAD_FLAGS = {"-T", "--upload-file", "-d", "--data", "--data-binary"}
+# curl/wget body-upload flags. A tftp:// URL is treated as a deploy ONLY when it
+# is an argument to a transfer verb that actually UPLOADS (curl/wget here, or the
+# tftp/atftp client below) — never on a bare mention. wget's body-upload flags
+# (--post-file/--body-file) are included so a wget upload is caught by the
+# execution-gated rule rather than by matching the URL anywhere in the statement
+# (which false-fired on a grep / go-test / heredoc that merely names a tftp:// path
+# — i268).
+_UPLOAD_FLAGS = {
+    "-T",
+    "--upload-file",
+    "-d",
+    "--data",
+    "--data-binary",
+    "--post-file",
+    "--body-file",
+}
 
 
 def _statements(command: str):
@@ -142,11 +157,12 @@ def _statement_is_deploy(stmt: str):
     if _PUSHER_SCRIPT_RE.search(verb) or _PUSHER_SCRIPT_ARG_RE.search(verb_base):
         return "a pusher script executed directly (" + verb_base + ")"
 
-    # 2. A TFTP client: verb tftp/atftp, or any tftp:// URL in the statement.
+    # 2. A TFTP client invocation: verb tftp/atftp. A bare tftp:// URL elsewhere
+    #    (a grep, a go-test name, a heredoc path) is a MENTION, not an execution,
+    #    so it is NOT matched here — a tftp:// upload is caught by rule 3 below
+    #    (curl/wget + an upload flag), the only verbs that actually push via it.
     if verb_base in ("tftp", "atftp"):
         return "a TFTP client invocation (" + verb_base + ")"
-    if _TFTP_URL_RE.search(stmt):
-        return "a TFTP transfer (tftp:// URL)"
 
     # 3. curl/wget WITH an upload flag AND targeting the SAM.
     if verb_base in ("curl", "wget"):
