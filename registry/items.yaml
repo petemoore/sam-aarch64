@@ -4804,7 +4804,7 @@
   title: "Localize + fix the B-DOS HWSAD per-block write hang (A=2/&780B refuted; hang is in our HWSAD invocation, unlocalized) + hardware retest"
   description: |
     OPEN. The §8b gold-contract hypothesis (force ambient device &780B=2 by passing A=2 to HWSAD/HRSAD instead of the sector number) was IMPLEMENTED and HARDWARE-REFUTED (2026-06-28, PR #722 closed; finding in docs/notes/trinity-sd-z80-interface.md §8c). The per-block write still hangs after DATA_BLOCK 1 with A=2 in the binary, so the discriminator is NOT hk.a/&780B — the §8a FDC-poll model is not the (whole) fault. The hang is in B-DOS's own HWSAD/SD-write code (which we do not patch and which works for Colin), so our INVOCATION is wrong in some still-unlocalized way. Next: (1) extend the §8b paged-boot trace to run HWSAD end-to-end (solve the wander-without-DOS-call-context blocker) so the hang point is observable; (2) add finer i271 markers around the HWSAD call + a bounded guard; (3) diff our HRECORD-select->HWSAD sequence register/paging-for-paging against B-DOS's own RECORD-copy path. Fault doesn't reproduce in koron-go (SD model clears busy), so each hypothesis ends in a hardware retest. Reuse B-DOS entry points; don't reimplement.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i280b
