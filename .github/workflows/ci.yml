@@ -273,6 +273,8 @@ jobs:
         run: make check-no-silent-skips
       - name: emulation-first carve-out ratchet (i231)
         run: make check-hosttest-carveouts
+      - name: trinity-authority provenance ledger (i273)
+        run: make check-trinity-authority
 
   # core — sweeps the fixture corpus end-to-end on the dev container:
   #   sam-aarch64 → build-disk → SimCoupé (Xvfb 24bit) → samfile extract

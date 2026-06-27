@@ -2,6 +2,11 @@ package z80
 
 import "fmt"
 
+// Trinity-HW provenance (i273): this model is DERIVED FROM the SAM/Colin
+// authority recorded in tools/trinity-authority-ledger.txt; it is never itself
+// the authority for real Trinity hardware behaviour (CLAUDE.md rule 8 /
+// feedback_port_diff_authority_first).
+//
 // enc28j60.go — host-side emulation of the Quazar Trinity Ethernet path, the
 // i80 brick that turns the ENC28J60 wire I/O from "gated on hardware" into
 // "host-verifiable". It models the Trinity microcontroller (port &DC select +
