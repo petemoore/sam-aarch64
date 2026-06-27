@@ -4646,10 +4646,12 @@
   title: "Remove now-dead SAMBOOT_BOOTBLOCK conditional gating from eeprom.asm/bdos_seam.asm/samboot_config.asm (splice abandoned, i265)"
   description: |
     After i265 deleted the splice apparatus (samboot_bootblock.asm was the ONLY definer of SAMBOOT_BOOTBLOCK), the 'if defined(SAMBOOT_BOOTBLOCK)...' conditional gating in the still-valid shared files eeprom.asm, bdos_seam.asm, and samboot_config.asm is dead code (the flag is never set; the ==0 branches always compile). Harmless (builds green) but hygiene debt. Remove the dead SAMBOOT_BOOTBLOCK branches + the 2 stale samboot_config.asm comments referencing the deleted samboot_bootblock.asm. NOTE: samboot_config.asm line 71 carries an i231-counted NETBOOT_HOSTTEST==0 carve-out inside a SAMBOOT_BOOTBLOCK condition — simplifying it changes the i231 ratchet ledger, so this composes with i231b (ratchet the allowlist down). Keep the carve-out guard green.
-  status: OPEN
+  status: DONE
   depends_on: [i265]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 757, role: completing}
 
 - id: i270
   title: "Hardware finding: serve TFTP WRQ (write) handshake hangs on silicon while RRQ (read) works — root-cause the never-tested SD-write/HSAVE path"
