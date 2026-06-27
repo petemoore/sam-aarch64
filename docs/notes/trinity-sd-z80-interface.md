@@ -526,6 +526,42 @@ entirely (one-instruction contract fix, no reimplementation). **Hardware-gated:*
 cannot reproduce in koron-go, so the confirming gate is a TAPO shot — success = `HWSAD_PRE` →
 `HWSAD_POST` per block and the push completes.
 
+**The A' fix is correct (a real latent bug — the seam relied on undefined shadow state) but is
+NOT, on its own, the hang fix.** A TAPO shot of the A'=0 build (verified: `af 08` = `xor a ; ex
+af,af'` immediately before the `cf 95` HWSAD `rst 8` in the binary) still stops at `HWSAD_PRE` with no
+`HWSAD_POST` — the **same** end-state as §8g. So pinning `hk.a`=0 removed the nondeterminism but did
+not stop the hang. With A' now controlled, the FDC-vs-SD branch is decided **solely** by whether the
+claim-select's `&780B`=2 persisted to write time — which the next probe tested.
+
+## 8i. Hardware probe (i280b-b2g) — the hang is NOT HWSAD-specific: ANY data-phase SD hook hangs
+
+To test "did the claim-select's state survive to the per-block write", a probe build re-issued the
+**HRECORD-select immediately before the write** in `rrs_flush_sector` (reusing `bdos_select_record`,
+keeping the A'=0 fix on the write). A TAPO shot:
+
+**Markers:** `WRQ_ENTRY → CLAIM_FIND_PRE → CLAIM_SELECT_PRE → CLAIM_SELECT_POST → DATA_BLOCK →
+FLUSH_PRE`, then silence — **it hangs in the re-select itself, before `HWSAD_PRE`.**
+
+**This is the decisive re-localization.** The re-`HRECORD`-select is a *different* SD hook than HWSAD,
+yet it **also hangs**, and at the *same* place in the flow (the first SD hook after `FLUSH_PRE`). The
+identical HRECORD-select **succeeded at claim time** (`CLAIM_SELECT_POST` fires every shot). So the
+hang is **not specific to HWSAD or to the write contract** — it is that **any B-DOS SD `rst 8` hook
+invoked in the data phase hangs**, while the same hook works in the claim phase. The differentiator is
+the **context between the two phases**: `serve_rearm_enc`'s ENC `ereset` (a full soft-reset of the
+shared one-PIC ENC/SD Trinity controller) + the handshake + the serve-loop return. This **resurfaces
+the §8d shared-bus framing** (an `ereset` leaving the SD side of the shared controller in a state where
+the next SD command's busy-wait never clears) — now sharpened: it is reproducibly the **first
+data-phase SD hook** that wedges, and b2d's `drv_wait_link` (which fixed the ENC-TX *handshake* after
+`ereset`) does **not** cover the **SD side** after `ereset`.
+
+(Confound to control next: the probe's re-select did not carry the A'=0 fix, so its HRECORD ran with a
+stale A' too — a stale-A' HRECORD path is a possible alternative cause. But HRECORD at claim time also
+had a stale A' and worked, so the phase/context remains the dominant variable.) The A'=0 contract fix
+and the `cmd/bdostrace-paged` experiment-4 tooling land regardless (real latent-bug fix + investigation
+harness); the remaining data-phase-SD-hook hang is tracked as a fresh item. **Next:** re-init / quiesce
+the SD side of the shared controller after `serve_rearm_enc`'s `ereset`, before the first data-phase SD
+hook (with the A'=0 fix applied to the re-select probe to remove that confound), then re-shoot.
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
