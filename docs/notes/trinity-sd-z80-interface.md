@@ -1350,6 +1350,44 @@ fix cannot be chosen on grounds rather than guesswork — so i280b-b2i is gated 
 hardware-measurement item (owner pete), not on further emulation. (Research: this section's
 citations; the implementing-agent handover in `docs/plans/i280-bdos-write-trace.md`.)
 
+## 8w. The §8v decisive shot RAN: a PRODUCTION (marker-free) serve ALSO hangs the WRQ write — the markers are exonerated; the wedge is real (i283)
+
+The §8v decisive experiment was executed on real hardware (`tools/hardware-shot/run-shot.sh`
+with the **production** `netboot_serve_boot.bin`, no `NETBOOT_DEBUG` markers; TAPO power-cycle
+→ trinpush serve → `curl -T` a small `.mgt` WRQ to a highest-free record, 2026-06-29):
+
+- **Result: `curl exit 28` (timeout).** The push did not complete in 35 s — the WRQ write
+  **hangs with a marker-free production build**. This is §8v **outcome (b)**.
+- **The §8v/§8t marker-suspect is EXONERATED.** A production build emits **no ENC TX near the
+  SD write**, yet it still hangs. So `DBG_HWSAD_PRE` (and the debug markers generally) are
+  **not** the cause; "keep ENC TX clear of the SD write window" is necessary hygiene but is
+  **not sufficient** — the wedge happens without any debug TX. The remaining ENC activity
+  before the per-block write in the WRQ path is `serve_rearm_enc`'s ereset + the handshake/ACK
+  TX + the DATA-block RX; the wedge originates there, inside B-DOS's HWSAD core (consistent
+  with the prior §8d debug trail `DATA_BLOCK→FLUSH_PRE→HWSAD_PRE→silence`).
+
+**The MCU is now identified — Microchip PIC16F74** (read off the chip; `trinity-capabilities.md`),
+which sharpens the wedge mechanism from "abstract ENC stall" to a concrete datasheet path: the
+PIC16F74's **SSP** (its SPI master to ENC/SD/EEPROM) raises **SSPOV** (overflow) / **WCOL**
+(write-collision) flags that "must be cleared in software" (DS30325B §9). If Colin's firmware's
+per-byte wait-loop polls **BF** and does not handle an SSPOV/WCOL raised by a stalled ENC SPI op
+(Owen's transmit-hang), it spins and **never clears `&DC` BUSY** → the SAM's `&A7CC` poll hangs.
+The `&DC` BUSY flag is this PIC's firmware construct, so the firmware would settle it — but the
+PIC16F74 firmware is **almost certainly code-protected** (read-back = all-zeros; un-protect =
+chip-erase = wipe), so it can't be dumped. Net: the §8v "needs the PIC firmware **or** a
+hardware measurement" is now "needs **Colin** (`q61`) **or** SSP-level hardware observation."
+
+**NEXT (agent-actionable — hardware self-serve, no Pete gate):**
+1. **Block-localize:** a DEBUG shot counting `DBG_DATA_BLOCK`/`DBG_HWSAD_PRE` markers — does it
+   hang on block **1** (wedge from the claim/rearm/handshake setup) or a later block (wedge
+   accumulates per ENC↔SD alternation)? Markers fire OUTSIDE the SD CS so this is safe (the §8d
+   trail already used them); it adds the block index.
+2. **`&DC` black-box:** instrument `bdos_write_sector` to read `&DC` bit-3 (the one safe port)
+   immediately before the `rst 8` and stash it in a RAM breadcrumb / report it via a marker at
+   that safe point — is BUSY already stuck *before* the B-DOS write, or only inside it?
+3. **`q61` (Colin):** the definitive answer to the SSP/BUSY semantics; Pete's contact.
+A logic-analyzer on the PIC↔peripheral SPI lines (Pete-side) would directly show the SSP stall.
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
