@@ -113,7 +113,7 @@ is required). Source + built disk:
 
 We also vendor a copy under `src/netboot/trinload.asm` for the netboot work. Used
 operationally to drive hardware captures (see the capture procedure in
-`CAPTURE-NOTES.txt`, which `make netboot-dumper-trinload` + a trinload push +
+`CAPTURE-NOTES.txt`, which `make netboot-dumper` + a trinload push +
 TFTP pull). Hands-on guide: [../notes/netboot-trinity-testing.md](../notes/netboot-trinity-testing.md).
 
 ### 5. SAMDOS
