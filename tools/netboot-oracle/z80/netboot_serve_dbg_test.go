@@ -221,3 +221,59 @@ func TestServeDebugMarkersFinalizeValid(t *testing.T) {
 		t.Fatalf("valid finalize reply = ACK %d (err %v), want ACK %d", blk, err, bdos.RecordSize/512)
 	}
 }
+
+// TestServeRearmEncLatchesPriorTimeoutFlag proves the i280b-b2f latch: serve_rearm_enc
+// copies enc_timed_out into last_rearm_timed_out at its end, so the NEXT WRQ_ENTRY can
+// report the prior re-arm's result from OUTSIDE the §8e post-rearm dead ENC-TX window
+// (where DBG_REARM_TIMEOUT itself cannot escape). On a healthy bus the re-arm does not
+// time out, so the latch must read 0 — proving the copy executes and reflects
+// enc_timed_out. The timed-out case (enc_timed_out -> 1 on a stuck bus) is proven by
+// TestWaitReadyBoundedOnStuckBusy; the report of a SET latch by TestServeDebugPriorRearmMarker.
+func TestServeRearmEncLatchesPriorTimeoutFlag(t *testing.T) {
+	const records, freeRecord = 8, 4
+	mac, _, _, _, _ := loadServeRecordPushBin(t, serveBootDebugBin, serveBootDebugMap, records, freeRecord)
+	latch := symAddr(t, mac, "last_rearm_timed_out")
+	mac.Write(latch, []byte{0xAA}) // poison so the copy is visibly exercised
+	if _, err := mac.Call("serve_rearm_enc"); err != nil {
+		t.Fatalf("serve_rearm_enc: %v", err)
+	}
+	if got := mac.Read(latch, 1)[0]; got != 0 {
+		t.Fatalf("last_rearm_timed_out = %#x after a healthy re-arm, want 0 (the latch must copy enc_timed_out=0)", got)
+	}
+	if to := mac.Read(symAddr(t, mac, "enc_timed_out"), 1)[0]; to != 0 {
+		t.Fatalf("enc_timed_out = %d on a healthy re-arm, want 0", to)
+	}
+}
+
+// TestServeDebugPriorRearmMarker is the i280b-b2f report gate: when last_rearm_timed_out
+// is set (the prior WRQ's serve_rearm_enc timed out), the next WRQ_ENTRY emits
+// DBG_PRIOR_REARM_TIMEOUT (&18) right after WRQ_ENTRY — the window-independent channel that
+// discriminates "re-arm timed out" (&18 present) from "re-arm succeeded but the ENC was not
+// yet wire-ready" (&18 absent), since the §8e finding is that the re-arm's own marker cannot
+// escape the post-rearm dead ENC-TX window. With the latch clear (healthy) no &18 is emitted.
+func TestServeDebugPriorRearmMarker(t *testing.T) {
+	const dbgPriorRearmTimeout = 0x18
+	const records, freeRecord = 8, 4
+
+	// (a) latch SET -> &18 immediately after WRQ_ENTRY.
+	mac, enc, _, _, _ := loadServeRecordPushBin(t, serveBootDebugBin, serveBootDebugMap, records, freeRecord)
+	mac.Write(symAddr(t, mac, "last_rearm_timed_out"), []byte{1})
+	markers, _ := driveDbg(t, mac, enc, demoWRQ("trinity-sam-disks/x.mgt", nil))
+	if len(markers) < 2 || markers[0] != dbgWRQEntry || markers[1] != dbgPriorRearmTimeout {
+		t.Fatalf("latch set: markers = %#x, want to start [%#x %#x] (WRQ_ENTRY then PRIOR_REARM_TIMEOUT)",
+			markers, dbgWRQEntry, dbgPriorRearmTimeout)
+	}
+
+	// (b) negative control: latch CLEAR -> no &18 anywhere; WRQ_ENTRY still first.
+	mac2, enc2, _, _, _ := loadServeRecordPushBin(t, serveBootDebugBin, serveBootDebugMap, records, freeRecord)
+	mac2.Write(symAddr(t, mac2, "last_rearm_timed_out"), []byte{0})
+	m2, _ := driveDbg(t, mac2, enc2, demoWRQ("trinity-sam-disks/y.mgt", nil))
+	for _, c := range m2 {
+		if c == dbgPriorRearmTimeout {
+			t.Fatalf("latch clear: &18 emitted unexpectedly in %#x", m2)
+		}
+	}
+	if len(m2) == 0 || m2[0] != dbgWRQEntry {
+		t.Fatalf("latch clear: markers = %#x, want to start with WRQ_ENTRY", m2)
+	}
+}

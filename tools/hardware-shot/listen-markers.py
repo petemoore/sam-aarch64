@@ -33,6 +33,7 @@ MARKERS = {
     0x15: "CLAIM_SELECT_PRE",     # free record found; about to bdos_select_record (HRECORD hook)
     0x16: "CLAIM_SELECT_POST",    # HRECORD select returned (the claim succeeded)
     0x17: "REARM_TIMEOUT",        # serve_rearm_enc's ENC busy-poll hit its bound (the i280b contention)
+    0x18: "PRIOR_REARM_TIMEOUT",  # at WRQ_ENTRY: the PRIOR WRQ's re-arm timed out (b2f; escapes the §8e dead window)
     0x20: "DATA_BLOCK",           # a DATA block accepted, about to sink/stage it
     0x21: "FLUSH_PRE",            # rrs_flush_sector entered: a full sector staged, about to write it
     0x22: "HWSAD_PRE",            # bdos_write_sector entered: about to RST 8 / DEFB 149 (B-DOS HWSAD)
@@ -85,10 +86,16 @@ def main(argv):
 
     if seen:
         print("sequence: " + " -> ".join(seen), flush=True)
-        if "REARM_TIMEOUT" in seen:
-            print("RESULT: REARM_TIMEOUT seen — the SD->ENC re-arm still wedged (i280b-b2d NOT fixed).", flush=True)
+        if "PRIOR_REARM_TIMEOUT" in seen:
+            print("RESULT: PRIOR_REARM_TIMEOUT (&18) — the prior WRQ's re-arm TIMED OUT (the bus "
+                  "stayed busy); i280b-b2d is a bus-hand-off fix.", flush=True)
         elif "WRQ_CLAIMED" in seen:
             print("RESULT: reached WRQ_CLAIMED — the re-arm proceeded past the claim.", flush=True)
+        elif "CLAIM_SELECT_POST" in seen:
+            print("RESULT: looped at the claim with NO &18 — the re-arm SUCCEEDED but the ENC was "
+                  "not yet wire-ready (post-rearm TX-readiness; i280b-b2d).", flush=True)
+        if "REARM_TIMEOUT" in seen:
+            print("NOTE: REARM_TIMEOUT (&17) also escaped this run.", flush=True)
     else:
         print("RESULT: no markers received.", flush=True)
     return 0
