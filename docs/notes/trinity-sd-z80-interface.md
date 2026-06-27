@@ -184,6 +184,85 @@ What the trace establishes (the lower layers all run clean in the flat koron-go 
 
 **Carry into the fix (i280b → `bdos_seam.asm`):** the entry contract is *paged-pointer HL + device in `&780B` + drive in `hk.a`*, not the flat `(A=drive, D=track, E=sector, HL=flat-source)` our seam currently assumes. Note the symmetry constraint: our `bdos_read_sector` (HRSAD, shares the `rwsad` entry) passes the same flat shape and **works on hardware**, so the discriminator between the working read and the hanging write is still to be pinned — do **not** assume it is `hk.a` alone (the i270 `A=0` change was necessary-but-insufficient on hardware).
 
+## 8b. The gold entry contract — paged-boot trace (i280b)
+
+§8a localised the hardware write hang to the HWSAD hook entry prelude but could
+not trace it: the flat section-B harness escapes into SAM-ROM bridges (`call
+&0103`/`&0033`/`&0005`) it has no model for. i280b runs the prelude in the **real
+paged environment** — a tool (`tools/netboot-oracle/z80/cmd/bdostrace-paged/`)
+that boots Colin's captured ROM + EEPROM to a B-DOS-resident editor idle (the
+`samboot_real_boot_test.go` recipe: `LoadROMImage` + device-linear EEPROM + paged
+boot to `&01CB`), with the SD card attached so HDINIT mounts it. In that state
+ROM0 is at `&0000` (LMPR `&1F`) and B-DOS is resident at section C (HMPR `&1D` =
+page 29), so the real dispatcher/handler bytes are present and the ROM bridges
+resolve. Findings (all cross-checked against the 1.5t annotated disassembly,
+addresses cited; the disassembly's internal targets are section-B aliases =
+real − `&4000`):
+
+**The hook-table dispatch is confirmed byte-exact.** The dispatcher is at real
+**`&8319`** (`ld (hk.sp),sp` / saves IX + the caller's **alternate-set** regs
+`A'`→hk.a (`&81D9`), `HL'`→hk.hl (`&81DA`), `DE'`→hk.de (`&81DC`), `BC'`→hk.bc
+(`&81DE`); reads the hook code from main `A` as index = code−128, doubled, into
+the table at **`&839F`**). The captured table resolves slot 149→handler `&5E16`
+(= real **`&9E16`** HWSAD), 160→`&5E1B` (**`&9E1B`** HRSAD), 156→`&5FAB`
+(**`&9FAB`** HRECORD) — matching §8a exactly.
+
+**The discriminator is the AMBIENT DEVICE, and read/write share it — the
+wr.buff-vs-rd.buff asymmetry hypothesis is REFUTED.** HWSAD (`ld hl,wr.buff`,
+real `&83ED`) and HRSAD (`ld hl,rd.buff`, real `&844F`) join a **shared** prelude
+at `&9E1E` and the **same** device-select **`&8662`** (called with `A`=hk.a). The
+two device trampolines are byte-identical at the gate:
+- wr.buff `&83ED`: `… call &8684 ; jp nz,&A8F4` (SD save) — else falls into the
+  FDC poll at `&8406+` (`in a,(&E0)`, un-timed = the §8a hang shape).
+- rd.buff `&844F`: `… call &8684 ; jp nz,&A954` (SD load) — else FDC poll `&8460+`.
+
+Both gate on the **same** `&8684` read of the ambient-device var **`&780B`**
+(`dec a; ret nz` → Z iff `&780B`==1). So there is no write-specific device
+configuration distinct from the read's: a *successful* HRSAD and a *successful*
+HWSAD require the identical ambient state, and our working read proves that state
+is reachable. **The discriminator between our working read and hanging write is
+therefore the ambient device at write time, not a separate write path.**
+
+**The gold contract a successful HWSAD write needs** (the state HRECORD-select
+establishes, read from the disasm + confirmed reachable in the paged boot):
+- **`&8135` (device class) == `&44`.** The device-select's entry at `&8657` does
+  `ld a,(&8135); cp &44; jp nz,&9F31` (B-DOS "device not present" error) before
+  anything else. (Boot's HDINIT already leaves `&8135`=`&44` once a card mounts —
+  the tool observes this post-boot.)
+- **`&8132` (device number) == 2** (Trinity). `&8662` turns it into `&780B`:
+  `cp 1`→`&780B`=1 (floppy), `cp 2`→`&780B`=2 (Trinity), else (A==0)→runs the
+  floppy-port setup `&8680` and **leaves `&780B` unchanged**.
+- **`&780B` (ambient device) == 2** at the dispatch, so both trampolines take
+  `jp nz` → the SD path (`&A8F4`/`&A954`) instead of the FDC poll.
+
+`&8132` and `&8135` are both written by the **HRECORD handler** (`&9F11`/`&9F15`)
+— i.e. record-select is what arms the device class+number. The crucial corollary
+for the seam: **hk.a (the drive in `A`) only re-runs `&8662`**; `A`=0 (our seam
+post-i270) **leaves `&780B` as the prior select left it**. So if a stale `&780B`=1
+(floppy) is in effect at the write, `A`=0 keeps it floppy → the FDC-poll hang —
+which is exactly the necessary-but-insufficient shape i270 saw on hardware. The
+fix must ensure the **ambient device is Trinity (`&780B`!=1)** at the write, which
+the HRECORD-select that precedes our `bdos_write_sector` is supposed to do — so
+the seam's job is to (a) HRECORD-select the target record immediately before the
+write (re-arming `&8132`/`&8135`/`&780B`), and (b) pass an `A` that does not
+*clear* it back to floppy (`A`=0 is safe **iff** the preceding select left
+`&780B`=2; `A`=2 would re-assert it explicitly).
+
+**Honest boundary (what did NOT run).** A raw `rst 8 / defb N` from arbitrary
+post-boot code does **not** reach `&8319` in this snapshot: the ROM RST8 handler
+(`&37CE`) dispatches DOS through the relocated DOS-call stack chain (`ld
+sp,(&5C3D); jp &1D95`), and the editor-idle snapshot does not arm that chain (the
+DOS-hook vector `&5AEE` reads `&0000`) for an *external* caller — so the hook
+returns to the editor. Likewise, calling `&8319` or a handler directly is only
+partially faithful: the prelude's page-setup `out (&fb)` repages section C away
+from B-DOS mid-handler and the run then escapes into a ROM bridge. The tool
+therefore confirms the **dispatch table + the device gate** empirically (boot,
+table resolution, the `&8662`→`&780B` keying, both handlers reaching the shared
+`&8662`) and derives the rest from the disassembly authority — the reliable source
+per `feedback_port_diff_authority_first`. Reproducing the *fault* (the busy-wait)
+remains impossible in koron-go regardless (the SD model always clears `&DC` bit 3,
+§8a); that stays a hardware gate (the i271 UDP marker channel).
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
