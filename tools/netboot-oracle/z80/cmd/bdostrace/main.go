@@ -87,7 +87,8 @@ const (
 	winFdcPoke1 = 0x45EA // FDC port base self-modified by HWSAD's floppy setup (&8680)
 	winFdcPoke2 = 0x45A5
 
-	addrHRECORD = 0x9FAB // HRECORD handler (hook 156): A=0 + record in hk.hl selects
+	// (The HRECORD handler is at real &9FAB — hook 156, A=0 + record in hk.hl — and
+	// is what i280b will drive before HWSAD to set the ambient device + record base.)
 
 	// A 512-byte source buffer + a 6-byte launch prologue in the section-B window,
 	// above the loaded code (ends ~real &AB2D = &6B2D) and clear of the harness
