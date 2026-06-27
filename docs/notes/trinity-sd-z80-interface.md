@@ -1186,25 +1186,47 @@ real obstacle may be the busy-wait, or vice-versa):
   serve's real context. So **"emulation says device-select gate" is not yet a hardware
   fact.**
 
-**THE DECISIVE EXPERIMENT (next, i280b-b2i): a write-core marker on hardware.** Passive
-`HWSAD_PRE/POST` can't see inside the `rst 8`. In a **diagnostic** `NETBOOT_DEBUG` build
-(B-DOS runs from RAM — the EEPROM bootblock loads it, so it is patchable at runtime, and
-this build is never shipped), detour-hook the **write-core entry `&A8F4`** (and/or the
-`&A7CC` busy-poll) to emit a new `DBG_WRITECORE` marker: overwrite a few bytes there with a
-`CALL` to a trampoline that emits the marker, runs the displaced instructions, and jumps
-back. Then one TAPO shot is decisive:
-- `HWSAD_PRE → DBG_WRITECORE → silence` ⇒ it **reaches the write core** and hangs in the
-  `&A7CC` busy-wait. Fix = the SD/PIC busy state: the `serve_rearm_enc` ENC ereset before
-  the write leaves `&DC` bit-3 stuck → re-init/quiesce the SD side (the `&38/&04` ladder)
-  after `serve_rearm_enc` and before the write. (`StuckBusy` already reproduces this in
-  emulation, so the fix is emulation-verifiable before the shot.)
-- `HWSAD_PRE → silence` (no `DBG_WRITECORE`) ⇒ it **aborts before the write core** at
-  device-select. Fix = satisfy `hk.a`=2 + `&80AF` faithfully (the §8s gate work).
+**A NETWORK MARKER INSIDE THE SD WRITE CORE IS UNSAFE — do NOT do it (the discovery-report
+point 7 / one-PIC constraint).** A first-cut plan here was to detour-hook the write-core
+entry `&A8F4` to emit a `DBG_WRITECORE` UDP marker. **That is wrong.** Per
+`~/sam-archive/trinity-docs/DISCOVERY_REPORT.md` §3 point 7 (and the existing `dbg_marker`
+header): the SD, ENC and EEPROM share **one** microcontroller, and `IN &DD/&DE/&DF` all
+return the **same** last-clocked read-back latch. Emitting a network marker (an ENC TX via
+`drv_write`) *inside* an SD transaction — CS asserted, between an SD command and its byte
+read-back — clobbers that shared latch and the PIC's in-flight state, so the marker would
+**cause or change the very hang it means to observe**. `dbg_marker` already forbids this
+("never call while an SD chip-select is asserted"); a write-core marker breaks the rule.
+The emulator already models the shared latch (`enc28j60.go`: "all three data ports alias
+ONE shared read-back latch"), so this is a grounded hardware fact, not a guess.
 
-Until that marker shot runs, do **not** commit a serve-code fix for either branch — pick
-the fix only once the write-core marker says which obstacle is real (the CLAUDE.md §7
-"emulator is the contract" + prime-directive "understand before changing": a serve change
-off the wrong branch risks breaking what already works on hardware).
+**This re-points the investigation at the one-PIC interaction as the likely ROOT, not the
+device-select gate.** The leading hypothesis (i280b-b2i) — `serve_rearm_enc`'s ENC ereset
+between the claim-select and the data-phase write leaves the shared PIC's SD side wedged —
+is exactly the one-PIC contention point 7 describes. `&DC` (status) carries BUSY (bit 3)
+*and* ENCINT (bit 0) from the same PIC, so ENC activity (an ereset, or even a debug-marker
+TX) can perturb the BUSY signal the `&A7CC` poll waits on. Corollary: the existing
+`DBG_HWSAD_PRE` TX fires right before the SD write — close enough to the SD path that it,
+too, may perturb the PIC; a clean fix test should keep network TX well clear of the write.
+
+**REVISED PLAN (emulation-first, grounded; i280b-b2i):**
+1. **Model the one-PIC ENC↔SD interaction faithfully** in `enc28j60.go`: an ENC ereset
+   (and/or ENC TX) while/just-before an SD transaction leaves `&DC` BUSY (bit 3) asserted
+   / the shared latch disturbed — so the real serve sequence (claim-select → `serve_rearm_enc`
+   → HWSAD write) reproduces the `&A7CC` hang **without** the manual `StuckBusy` toggle.
+   Ground every modelled effect in the discovery report + the one-PIC manual facts; do not
+   invent behaviour.
+2. **Implement the fix:** re-init/quiesce the SD side (the `&38/&04` ladder) after
+   `serve_rearm_enc` and before the HWSAD write, and ensure no ENC TX (debug marker)
+   interleaves the SD write. Verify in emulation the hang clears.
+3. **Hardware confirm with a PRODUCTION (or marker-minimal) build** — markers, if any, only
+   at points well clear of the SD transaction — so the test isn't confounded by the very
+   TX-near-SD effect in point 7. Success = the push completes (record written, final ACK).
+
+If a hardware *observation* of where it hangs is still wanted, use a NON-network channel
+(border/screen for a human watcher, or a RAM breadcrumb a post-mortem can read) — never an
+ENC TX inside the SD path. Do **not** commit a serve-code fix until the emulation reproduces
+the hang via the modelled one-PIC interaction (CLAUDE.md §7 emulator-is-contract +
+prime-directive understand-before-changing).
 
 ## 9. Porting to fresh Z80
 
