@@ -189,6 +189,10 @@ rrs_flush_sector:
                 ; (bdos_write_record), HWSAD_PRE->HWSAD_POST gap = the B-DOS rst 8.
                 ld      a, DBG_FLUSH_PRE
                 call    dbg_marker
+                ; i280b-b2i: report LMPR/HMPR at STAGING time too — if it differs from
+                ; the HWSAD_PRE report, the data was staged into a different page than
+                ; the prelude reads back (a paging-consistency bug distinct from §8k).
+                call    dbg_report_paging
                 endif
                 ld      hl, (RRS_LINEAR)
                 ld      (BD_WRITE_START), hl    ; write at the current linear sector

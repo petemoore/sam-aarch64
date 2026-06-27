@@ -49,6 +49,12 @@ const (
 	dbgFinalizeValid = 0x31
 	dbgFinalizeBad   = 0x32
 	dbgDoneCtrl      = 0x40
+	// i280b-b2i runtime-paging value reports: each TAG is immediately followed by a
+	// marker whose code byte IS the register value. They are diagnostic (the value
+	// is harness/hardware paging state, not a pipeline step), so driveDbg strips each
+	// tag+value PAIR positionally before the step-sequence assertions.
+	dbgHmprNext = 0x50
+	dbgLmprNext = 0x51
 )
 
 // dbgMarkerCode returns (code, true) if f is an "SDBG" debug-marker frame. The UDP
@@ -79,12 +85,23 @@ func driveDbg(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, req []byte) (
 	if _, err := mac.Call("serve_serve_once"); err != nil {
 		t.Fatalf("call serve_serve_once: %v", err)
 	}
+	var raw []byte
 	for _, f := range enc.TXFrames()[before:] {
 		if code, ok := dbgMarkerCode(f); ok {
-			markers = append(markers, code)
+			raw = append(raw, code)
 		} else {
 			reply = f
 		}
+	}
+	// Strip the i280b-b2i paging-report pairs (HMPR_NEXT/LMPR_NEXT + the value byte
+	// that follows each) positionally, so the value can coincide with a step code
+	// without confusing the assertions.
+	for i := 0; i < len(raw); i++ {
+		if raw[i] == dbgHmprNext || raw[i] == dbgLmprNext {
+			i++ // also skip the value byte that follows the tag
+			continue
+		}
+		markers = append(markers, raw[i])
 	}
 	return markers, reply
 }

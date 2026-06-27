@@ -42,6 +42,10 @@ MARKERS = {
     0x31: "FINALIZE_VALID",       # record validated + claimed -> final ACK
     0x32: "FINALIZE_BAD",         # invalid image -> ERROR(3)
     0x40: "DONE_CTRL",            # "tftp.done" control received -> return to trinload
+    # i280b-b2i runtime-paging value reports: each TAG is immediately followed by a
+    # marker whose code byte IS the register value (printed as the next UNKNOWN(&XX)).
+    0x50: "HMPR_NEXT",            # the NEXT marker's &XX = HMPR (section C/D page) at this point
+    0x51: "LMPR_NEXT",            # the NEXT marker's &XX = LMPR (section A/B page) at this point
 }
 
 

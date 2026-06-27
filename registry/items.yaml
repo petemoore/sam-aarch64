@@ -4656,7 +4656,7 @@
   description: |
     Diff our CMD24 write bd_list_write_hw (src/netboot/sd_csd.asm) EXACTLY against Colin's FORK ADDITIONS — his 1.5t Trinity SD-driver PATCHES, NOT the whole B-DOS: ~/sam-archive/bdos/analysis/region-diffs.txt (the 1.5a->1.5t diff), ANALYSIS.md, draft-bdos-trinity-fork-analysis.md, and bdos15t-beta6.annotated.dis (the SD region: sd.out &A7C5, sd.cmd-with-address &A81F, write tail &A86B, deselect &A8D7). Port faithfully: the Trinity SD is MICROCONTROLLER-mediated — OUT(&DC),&3F auto-null select (uC supplies dummies in data phases), write busy-wait up to 65536 reads, the real data-response framing — vs our per-byte OUT / no auto-null / 256-iter poll. Cite Colin's source like the read path does. VERIFY ON REAL SAM HARDWARE (192.168.2.75): WRQ completes, SAM emits its OACK, a pushed disk stores to a free record + reads back byte-identical. Hardware-prove this BEFORE feeding the emulator (i270b). Gates i194.
   status: OPEN
-  depends_on: [i280b-b2b, i280b-b2c, i280b-b2d, i280b-b2e, i280b-b2f, i280b-b2g, i280b-b2h]
+  depends_on: [i280b-b2b, i280b-b2c, i280b-b2d, i280b-b2e, i280b-b2f, i280b-b2g, i280b-b2h, i280b-b2i]
   kind: leaf
   owner: agent
   parent: i270
@@ -4888,11 +4888,20 @@
   parent: i280b-b2
 
 - id: i280b-b2i
-  title: "Implement the HWSAD low-page staging fix (§8k): copy each sector into an absolute page 0/1/2 scratch + pass a paged hk.hl; pin the serve's runtime LMPR/HMPR page map first"
+  title: "Re-localize + fix the HWSAD data-phase hang DOWNSTREAM of the page-setup (§8l): addressing is correct (HMPR=1); suspects = ambient &780B at write, SD core busy-wait on hw, or ENC-SD shared bus"
   description: |
-    OPEN. The §8j/§8k root cause is CONFIRMED in emulation (i280b-b2h): the HWSAD/HRSAD prelude (&9E1F-&9E60) pages section C from hk.hl's top 2 bits (page=(H>>6)-1, raw, in {0,1,2}; H[7:6]==00 = <16384 range error) then streams the 512 source bytes from section C. Our seam's flat HL=BD_WRITE_BUF=&BE42 (H=&BE->page1) repages section C to absolute page 1, displacing B-DOS mid-handler = the hang. The encoding can only name absolute pages 0/1/2, but the serve runs in a high page P (trinload push), so BD_WRITE_BUF's page is unnameable. FIX: copy each 512-byte sector into an absolute-page-0/1/2 scratch immediately before the rst 8, then pass hk.hl=((srcPage+1)<<14)|sectionC-framed-offset. Clean reuse-B-DOS candidate: B-DOS's own res.buf (&7913, page 1). PREREQUISITE (correctness-critical, shared SD card): pin the serve's runtime LMPR/HMPR page map - which absolute page section B holds at serve time, and whether res.buf/another low region is safe transiently without corrupting B-DOS/trinload/screen - by researching the serve boot paging or instrumenting it, BEFORE coding/shooting. Emulation-checkable in cmd/bdostrace-paged exp 5 + TestHWSADPagedPointerContract (the positive sub-case shows a correctly-paged hk.hl reads our buffer). Then TAPO shot: success = HWSAD_PRE -> HWSAD_POST + push completes.
+    OPEN (reframed by §8l hardware measurement). The §8k low-page-staging fix is REFUTED: trinload pushes the serve to page 1, so BD_WRITE_BUF=&BE42 is already in page 1 and hk.hl=&BE42 decodes to page 1 = a NO-OP out(&fb) at the write (HMPR measured =1 at staging AND write); the source is read correctly, no displacement (that was an editor-idle-harness artifact). With correct addressing + the A'=0 fix, the rst-8 HWSAD STILL hangs (HWSAD_PRE, no HWSAD_POST), so the hang is DOWNSTREAM of the page-setup. Suspects (§8l): (a) ambient device &780B not still =2 (Trinity) at the data-phase write -> the &83F7 device-dispatch takes the un-timed FDC poll &8406 = hang; (b) the real SD CMD24 write-core busy-wait on hardware (&DC bit-3 never clears) that the koron-go SD model can't reproduce (always clears busy), i.e. the ENC/SD one-PIC shared-bus state left by serve_rearm_enc before the data-phase SD transaction (the §8d framing for the write core, not the claim handshake b2d fixed). NEXT: instrument the debug serve to report &780B (and the &DC busy bit) at HWSAD_PRE, plus a marker inside the write-core busy-wait, to split (a) vs (b); then fix. Tooling ready: dbg_report_paging pattern (i280b-b2j) extends to report any byte.
   status: OPEN
   depends_on: [i280b-b2h]
+  kind: leaf
+  owner: agent
+  parent: i280b-b2
+
+- id: i280b-b2j
+  title: "Hardware-measure the serve runtime page map (HMPR=1, LMPR=&1F at staging+write) — REFUTES the §8k low-page fix; buffer is in page 1, &BE42 addresses it correctly; the hang is downstream (§8l)"
+  description: |
+    DONE (#PR). Added dbg_report_paging to the i271 debug channel (DBG_HMPR_NEXT/DBG_LMPR_NEXT tag+value markers) at FLUSH_PRE + HWSAD_PRE; a TAPO self-serve shot read HMPR=&01 (section C = absolute page 1) and LMPR=&1F at BOTH staging and the write. So BD_WRITE_BUF=&BE42 is in page 1 and hk.hl=&BE42 names it correctly (out(&fb),1 is a no-op since HMPR already 1) -> the §8k low-page-staging fix is unnecessary/refuted; the §8k displacement was an editor-idle-harness artifact (B-DOS at page 29 in section C there, not on the serve). The hang persists with correct addressing + A'=0, so it is downstream of the page-setup -> reframed i280b-b2i. Full detail: docs/notes/trinity-sd-z80-interface.md §8l.
+  status: DONE
   kind: leaf
   owner: agent
   parent: i280b-b2
