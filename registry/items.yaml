@@ -5048,3 +5048,11 @@
   prs:
     - {num: 752, role: completing}
   refs: ["docs/notes/trinity-sd-z80-interface.md §8ah"]
+
+- id: i287
+  title: Model the Trinity shared-read-latch interleave rule in the ENC emulator + diagnostic
+  description: |
+    Pete's rule (manual:IMG_20260617_162617, DISCOVERY_REPORT §7): the three data ports &DD/&DE/&DF alias ONE microcontroller read-back latch; after a peripheral MUX switch you must clock the newly-selected peripheral before reading the latch, else IN returns the PREVIOUS peripheral's stale byte ('do not interleave OUTs to different peripherals before reading back'). Encoded in tools/netboot-oracle/z80/enc28j60.go: track which peripheral last wrote the latch (lastClockedBy); a data IN that returns a foreign peripheral's byte is a violation (StrictInterleave panics; InterleaveViolations() records count+context). Controls in trinity_interleave_test.go (positive: deliberate ENC->SD cross-read FIRES; negative: clock-then-read is clean). The WRQ-push setup asserts zero violations across every push test. DIAGNOSTIC RESULT: our own-CMD24 serve does NOT violate the rule (zero violations even in the wire-level interleaved pushes) — RULES OUT an interleave violation as the cj.mgt-push bug. Confirmed structurally: the Trinity &DC-&DF ports are accessed ONLY from main-line drivers, never from an interrupt handler (trinload installs no custom ISR; the ROM frame ISR is KEYSCAN/clock, doesn't touch Trinity), so improper interleaving cannot occur. The remaining hardware issue is the per-block self-heal SLOWNESS, not a protocol-rule violation. Most other documented rules (BUSY-before-OUT drop, read-after-BUSY, &DC status-exempt, PUSH/POP, auto-null, SD block/byte addressing) were already modeled.
+  status: DONE
+  kind: leaf
+  owner: agent

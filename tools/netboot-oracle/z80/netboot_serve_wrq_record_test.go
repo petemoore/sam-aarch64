@@ -108,6 +108,17 @@ func loadServeRecordPushBin(t *testing.T, bin, mapf string, records, freeRecord 
 	fillServeConfig(t, mac, []demoFile{{"hello.txt", makeFile(10), 0xD000}})
 
 	enc := z80h.NewENC28J60()
+	// Diagnostic (Pete's shared-read-latch rule): the three data ports &DD/&DE/&DF
+	// alias one microcontroller read latch, so reading it after a peripheral MUX
+	// switch without re-clocking the new peripheral returns the PREVIOUS peripheral's
+	// stale byte (manual:IMG_20260617_162617). Record any such cross-peripheral stale
+	// read across the whole push and fail the test if the serve violates it — this
+	// turns the §8d "shared-bus" hardware hazard into a host-catchable assertion.
+	t.Cleanup(func() {
+		if n, msg := enc.InterleaveViolations(); n > 0 {
+			t.Errorf("trinity shared-read-latch interleave rule VIOLATED %d time(s): %s", n, msg)
+		}
+	})
 	// Attach SD before initServeDriver so serve_main's CSD read path is ready.
 	sd := enc.AttachSD(csdV2(1))
 	initServeDriver(t, mac, enc)
@@ -666,6 +677,17 @@ func loadServeRecordPushFree(t *testing.T, records int, free []int) (*z80h.Machi
 	fillServeConfig(t, mac, []demoFile{{"hello.txt", makeFile(10), 0xD000}})
 
 	enc := z80h.NewENC28J60()
+	// Diagnostic (Pete's shared-read-latch rule): the three data ports &DD/&DE/&DF
+	// alias one microcontroller read latch, so reading it after a peripheral MUX
+	// switch without re-clocking the new peripheral returns the PREVIOUS peripheral's
+	// stale byte (manual:IMG_20260617_162617). Record any such cross-peripheral stale
+	// read across the whole push and fail the test if the serve violates it — this
+	// turns the §8d "shared-bus" hardware hazard into a host-catchable assertion.
+	t.Cleanup(func() {
+		if n, msg := enc.InterleaveViolations(); n > 0 {
+			t.Errorf("trinity shared-read-latch interleave rule VIOLATED %d time(s): %s", n, msg)
+		}
+	})
 	// Attach SD before initServeDriver so serve_main's CSD read path is ready.
 	sd := enc.AttachSD(csdV2(1))
 	initServeDriver(t, mac, enc)

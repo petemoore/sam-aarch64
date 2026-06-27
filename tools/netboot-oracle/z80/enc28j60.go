@@ -1,5 +1,7 @@
 package z80
 
+import "fmt"
+
 // enc28j60.go — host-side emulation of the Quazar Trinity Ethernet path, the
 // i80 brick that turns the ENC28J60 wire I/O from "gated on hardware" into
 // "host-verifiable". It models the Trinity microcontroller (port &DC select +
@@ -79,6 +81,19 @@ const (
 	periphENC                    // ENC28J60 (&21 / &2F)
 	periphSD                     // SD/flash (&31 / &3F)
 )
+
+func (p peripheral) String() string {
+	switch p {
+	case periphEEP:
+		return "EEPROM"
+	case periphENC:
+		return "ENC"
+	case periphSD:
+		return "SD"
+	default:
+		return "none"
+	}
+}
 
 // statusBusy is &DC bit 3 (BUSY): the PIC raises it for one SPI byte after each
 // OUT to &DC/&DD/&DE/&DF, and it clears on the next IN (&DC) status read
@@ -205,9 +220,23 @@ type ENC28J60 struct {
 	autoNullMode     bool
 	autoNullTarget   peripheral
 	lastClockedIn    byte
-	lastClockedValid bool // a peripheral has clocked at least one byte since reset
+	lastClockedValid bool      // a peripheral has clocked at least one byte since reset
+	lastClockedBy    peripheral // which peripheral last wrote the shared read-back latch
 	savedReadByte    byte
 	savedReadValid   bool
+
+	// Interleave-rule enforcement (manual:IMG_20260617_162617; DISCOVERY_REPORT §7):
+	// the three data ports &DD/&DE/&DF alias ONE shared microcontroller read latch.
+	// After a peripheral MUX switch you must clock the NEWLY-selected peripheral
+	// before reading the latch, else IN returns the PREVIOUS peripheral's stale byte
+	// ("do not interleave OUTs to different peripherals before reading back"). The
+	// real SAM blindly returns the stale byte; with StrictInterleave set the model
+	// records the violation (count + a human description) so a diagnostic can catch
+	// the exact instruction (the harness correlates the PC). Default off so existing
+	// tests are unaffected. &DC (control/status) is exempt — it is always readable.
+	StrictInterleave   bool
+	interleaveViols    int
+	interleaveFirstMsg string
 
 	// BUSY timing (gap b). tNow is the running Z80 T-state cursor handed in by the
 	// harness (SetTState) just before each In/Out. An OUT to &DC/&DD/&DE/&DF raises
@@ -528,6 +557,7 @@ func (e *ENC28J60) clearBusy() { e.busyUntilT = 0 }
 func (e *ENC28J60) clockedIn(b byte) {
 	e.lastClockedIn = b
 	e.lastClockedValid = true
+	e.lastClockedBy = e.selPeriph // which peripheral wrote the shared read latch
 }
 
 // spiMISOByte returns the ENC SPI MISO byte the most recent OUT (&DE) clocked out
@@ -727,7 +757,34 @@ func (e *ENC28J60) readDataPort() uint8 {
 	if !e.lastClockedValid {
 		return sdIdleMISO // nothing clocked yet: SPI-idle MISO-high
 	}
+	// Interleave-rule check (gap: shared read latch): the data IN returns the latch.
+	// If the currently-selected peripheral did NOT clock that byte (a different real
+	// peripheral last wrote it, with no fresh clock of THIS peripheral since the MUX
+	// switch), this read returns a STALE foreign byte — the "don't read back across a
+	// peripheral switch without re-clocking" violation. The auto-null branches above
+	// re-clock the selected peripheral first, so they never trip this; only a manual
+	// IN immediately after a switch (no intervening data OUT to the new peripheral)
+	// does. The real SAM returns the stale byte regardless; in StrictInterleave mode
+	// we record it (and the harness can fault on the offending instruction).
+	if (e.selPeriph == periphENC || e.selPeriph == periphSD || e.selPeriph == periphEEP) &&
+		e.lastClockedBy != periphNone && e.lastClockedBy != e.selPeriph {
+		e.interleaveViols++
+		if e.interleaveFirstMsg == "" {
+			e.interleaveFirstMsg = fmt.Sprintf("data IN while %s selected but latch last written by %s (stale cross-peripheral read; byte=&%02X)",
+				e.selPeriph, e.lastClockedBy, e.lastClockedIn)
+		}
+		if e.StrictInterleave {
+			panic(fmt.Sprintf("trinity interleave-rule violation: %s", e.interleaveFirstMsg))
+		}
+	}
 	return e.lastClockedIn
+}
+
+// InterleaveViolations returns how many stale cross-peripheral data reads have
+// occurred (the shared-read-latch rule, manual:IMG_20260617_162617) and the first
+// one's description. Zero => the driver always clocks-then-reads (rule respected).
+func (e *ENC28J60) InterleaveViolations() (int, string) {
+	return e.interleaveViols, e.interleaveFirstMsg
 }
 
 // Out handles a Z80 OUT to a Trinity port.
