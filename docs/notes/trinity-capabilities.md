@@ -37,11 +37,15 @@ A high-quality photo of the board front — `~/sam-archive/trinity-docs/photos/t
 | **PIC16F74-I/P** (Microchip) | 40-pin DIP, **socketed** | The gateway microcontroller (SSP/SPI bridge; owns the `&DC` BUSY firmware). Socketed ⇒ can be pulled and read in a standalone PICkit/ZIF, no in-circuit ICSP. |
 | **ENC28J60-I/SP** (Microchip) | 28-pin DIP | Ethernet controller. |
 | **25LC1024** (Microchip; silkscreen "EPROM") | 8-pin DIP | 128 K SPI EEPROM (network/config/boot-block store). |
-| **GAL16V8D** | 20-pin DIP | Programmable logic = the SAM-bus glue / address decode (the manual's "general control logic"); decodes ports `&DC–&DF` to the PIC. Its JEDEC equations are a separate readable artifact if ever needed (bus decode, not the BUSY logic). |
+| **GAL16V8D** | 20-pin DIP | Programmable logic = SAM-bus address **decode** (the manual's "general control logic"); decodes ports `&DC–&DF` to the PIC. JEDEC equations are a separate readable artifact if ever needed (decode, not the BUSY logic). |
+| **CD74AC244E** (TI) | 20-pin DIP | Octal 3-state **buffer/line driver** — SAM data/address bus buffering. [close-up: `…closeup-pic16f74-cd74ac244-IMG_20260629_141407.jpg`] |
+| **SN74AC373N** (TI) | 20-pin DIP | Octal transparent **D-latch**, 3-state — SAM-bus address/data latch. [close-up: `…closeup-sn74ac373-IMG_20260629_141417.jpg`] |
 | **20.000 MHz crystal** | HC-49 can | System clock (near the PIC). |
 | RJ45 + magnetics, microSD-in-adapter slot, A/B status LEDs, electrolytics, resistor networks, the SAM expansion **edge connector** | — | Per the manual's component tour. |
 
-So the board carries **four ICs** of interest: the PIC16F74 (MCU), ENC28J60 (ethernet), 25LC1024 (EEPROM), and the GAL16V8D (bus glue). No RTC or auxiliary SRAM is present (confirmed against the parts list above). A photo of the **back** would additionally show any ICSP/programming header and the routing, if needed.
+So the board carries **six ICs**: PIC16F74 (MCU), ENC28J60 (ethernet), 25LC1024 (EEPROM), and a SAM-bus **glue trio** — GAL16V8D (decode) + CD74AC244E (buffer) + SN74AC373N (latch). No RTC or auxiliary SRAM (confirmed against the parts list). The glue trio is the Z80-bus interface; the BUSY logic is *not* in it — it lives in the PIC firmware.
+
+**Board details still unconfirmed (not visible / not yet photographed):** the **back of the board** (routing + any **ICSP/programming header** — which would allow a PIC firmware read *without pulling the chip* — + jumpers/test points); whether there is a **second crystal (~25 MHz) for the ENC28J60** (only the 20 MHz near the PIC is clearly seen); and the **voltage regulator** + the **Ethernet-interrupt jumper** the manual's component tour lists. None of these would reveal the SD-write-hang datum (the PIC's BUSY/SSP firmware behaviour, which is not on the board surface) — they matter only for firmware-read feasibility and completeness.
 
 The Trinity also supports a **Trinity Boot ROM** chip option that replaces the standard SAM ROM page, allowing automatic B-DOS load from EEPROM at power-on. [Source: https://www.worldofsam.org/products/trinity-boot-rom.]
 
