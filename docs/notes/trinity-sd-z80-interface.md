@@ -852,6 +852,68 @@ with section B = page 0, not B-DOS's workspace). Tracing the **ROM RST8 → DOS 
   was the bug (then narrow which). If `hk.hl` ≠ `&BE42`, the fix is the #730 pattern applied
   to `hk.hl`/`hk.de`: load them in the bank `&8319` actually reads. This is i280b-b2i.
 
+## 8o. §8n's `hk.hl` register-bank hypothesis REFUTED in emulation — `hk.hl`/`hk.de`/`hk.a` all come from the MAIN bank; addressing is correct, the hang is downstream in the SD write core (i280b-b2m)
+
+§8n pinned the i280b-b2i fix gate as: does `hk.hl` come from our **main** `HL` (so the seam's
+`ld hl,BD_WRITE_BUF` reaches it) or from a bank our seam never sets (so the prelude `out (&fb)`
+pages a **garbage** source page → the hang)? It flagged that the existing
+`TestHWSADPagedPointerContract` **pre-pokes** `hk.hl` and so cannot answer this. This section
+runs the decisive experiment — the §8n "option (1)" — and **refutes the bank hypothesis**.
+
+**The measurement (`TestHWSADHookBankContract`, netboot-oracle).** Boot Colin's real ROM v3.0 +
+B-DOS 1.5t to editor idle, then drive a real `rst 8 / defb 149` (HWSAD) through the **full** ROM
+PTDOS dispatch — the genuine `&0008 EXX → ERROR2 &37CE → PTDOS &380B → out (250) &381C → call &4200
+→ dispatcher &8319` chain — with the caller's **main** and **alternate** register banks set to
+disjoint sentinels (`exx; ld hl,…` for the alt bank), then read what the dispatcher saved into
+`hk.a`/`hk.hl`/`hk.de`. **Result, two sentinel configs, fresh boot each:**
+
+| sentinel | main HL | alt HL′ | → `hk.hl` | main DE | alt DE′ | → `hk.de` | main A | alt A′ | → `hk.a` |
+|----------|---------|---------|-----------|---------|---------|-----------|--------|--------|----------|
+| A | `&9400` | `&3333` | **`&9400`** | `&2222` | `&4444` | **`&2222`** | `&00` | `&AA` | **`&00`** |
+| B | `&BE42` | `&8642` | **`&BE42`** | `&1357` | `&9753` | **`&1357`** | `&07` | `&55` | **`&07`** |
+
+**All three save the MAIN bank.** sentinel B is decisive: main `HL = &BE42` (our actual
+`BD_WRITE_BUF`) → `hk.hl = &BE42`. The swap chain is exactly **two `EXX`** (ROM `&0009` + dispatcher
+`&8321`) and **two `EX AF,AF'`** (ROM `&37D4` + dispatcher `&8322`) — even counts, so `HL`/`DE`/`A`
+net back to main at the `&8319` saves (`ld (&81DA),hl` etc.). The captured PC trail confirms the
+path register-for-register.
+
+**Arming the dispatch faithfully — the `DOSCNT` gate (a §8n correction).** The editor-idle snapshot
+does **not** dispatch a stub's `rst 8` to the hook handler, and §8n mis-attributed the reason. The
+real gate is **`DOSCNT` (`&5BC3`)**, the ROM recursion guard: `&37E8 ld a,(DOSCNT) / rrca / jr
+c,NORMERR` ("DON'T RECURSE"). The snapshot has `DOSCNT=1` ("DOS in control") → the `rst 8` is routed
+to `NORMERR → &1D95` and **never reaches the dispatcher**. An **external** caller invoking a DOS hook
+(BASIC, or our serve) runs with **`DOSCNT=0`**; setting it so is what carries the `rst 8` through
+`&37F4 jr nz,PTDOS` (`DOSFLG=&1D` is already set at boot) into `&381C out (250)` → `&4200` → the
+dispatcher at its **section-B alias `&4319`** (PTDOS maps B-DOS into section B). Hardware corroborates
+`DOSCNT=0` is the faithful state: `HWSAD_PRE` fires on the real serve (§8g/§8l), which only happens if
+the `rst 8` reaches the handler. *(`RST8V` `&5AEE`=0 throughout — DOS does not arm it; dispatch is
+purely the `DOSCNT`/`DOSFLG` fall-through, not the `RST8V` hook.)*
+
+**What this refutes / re-confirms:**
+- **§8n's bank hypothesis: REFUTED.** `hk.hl` = main `HL`. The seam's `ld hl,BD_WRITE_BUF` reaches
+  `hk.hl` unchanged; the §8k/§8l assumption (`hk.hl=&BE42`) was correct, not unverified. So the
+  prelude reads **our** buffer (page 1, HMPR already 1 → the `out (&fb)` is a no-op) — **§8l's
+  no-displacement conclusion stands, now confirmed via the independent register-bank route.**
+- **The §8h/#730 `hk.a=A'` inference: REFUTED.** `hk.a` = main `A`. The §8c null result ("force main
+  `A`=2 had no hardware effect") is fully explained by the hang being **downstream** (§8j/§8n), not by
+  `hk.a` reading the alternate bank. The seam's `xor a; ex af,af'` (A′=0) is harmless but does not
+  touch `hk.a`; with main `A`=0 the device-select takes its "else" branch and **leaves** the claim's
+  `&780B=2` (SD) in force — consistent with the write reaching the SD core.
+
+**Net (the i280b-b2i state after §8o).** Addressing (§8l), register bank (§8o), DOS-call paging
+context (§8n: PTDOS re-pages every hook), and SD-bus health at the write (§8m) are **all cleared**.
+The **only surviving cause** of the data-phase hang is **downstream in B-DOS's own SD CMD24 write
+core** — the `&DC` bit-3 busy-wait the koron-go SD model cannot reproduce (it always clears busy), the
+§8l suspect (b). §8m's read-only `sdc_init_ladder` reinit re-enters SPI mode but the per-op write core
+(`&A81F`/`&A918`) re-issues only `out (&DC),&31` and relies on the boot-time HDINIT SPI state
+**persisting**; the ENC `ereset` (`serve_rearm_enc`) between the claim-select and the data-phase write
+is the remaining suspect for leaving the shared one-PIC controller's SD side unrecoverable without the
+full `&38`/`&04` init. Next (i280b-b2i, hardware-gated): authority-diff i270a for what the write core
+assumes about persistent SD/SPI state across an `ereset`, then a marker **inside** the write-core
+busy-wait + a full SD-side re-init after `serve_rearm_enc`, then a TAPO retest. This measurement is
+i280b-b2m (DONE).
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
