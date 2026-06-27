@@ -726,6 +726,78 @@ core rather than the claim handshake b2d fixed). Next instrumentation: report `&
 
 This measurement is i280b-b2j (DONE); the re-localized fix is i280b-b2i (reframed OPEN).
 
+## 8m. Authority diff + hardware probe REFUTE the SD-bus suspect — the hang is inside the B-DOS HWSAD handler, not the SD card's state (i280b-b2l)
+
+§8l left two live suspects for the downstream hang: **(a)** the ambient device `&780B` not
+still 2 at the write (→ the FDC-poll hang), and **(b)** the real SD CMD24 write-core
+busy-wait wedging because our ENC `ereset` (`serve_rearm_enc`, between the claim's
+HRECORD-select and the data-phase write) left the shared one-PIC controller in a bad state
+for a subsequent SD transaction. i280b-b2l settled both **without** the paging-fragile
+`&780B` read §8l warned against — by an authority diff plus one decisive hardware probe.
+
+**Authority diff (`feedback_port_diff_authority_first`).** Against Colin's 1.5t disassembly
+(`~/sam-archive/bdos/analysis/bdos15t-beta6.annotated.dis`) and our serve:
+- **(a) refuted.** `&780B` has exactly **one** writer in the whole binary — `&8673` inside
+  the device-select `&8662`, keyed on `hk.a`=A′ (`cp 1`→floppy, `cp 2`→Trinity). Nothing
+  between the claim's HRECORD-select and HWSAD touches it, and the #730 `A′=0` fix (present
+  in the hanging binary) **leaves** the claim's `&780B`=2 in force. Also §8i already showed
+  a data-phase *re-select* (HRECORD, which does **not** dispatch on `&780B` to an FDC poll)
+  itself hangs — a wrong-`&780B` floppy-dispatch cannot explain that.
+- **HWSAD ≠ HRECORD in one specific way.** HRECORD (a `rst 8` hook) **works** at claim time
+  (`CLAIM_SELECT_POST` fires every shot) because record-select is pure LBA arithmetic
+  (`&A0A2`: `record×1600 + base`, poked into the seek immediates) — **no SD I/O**. HWSAD's
+  handler `&9E16`, by contrast, runs a **source-copy prelude** the disasm confirms byte for
+  byte: `&9E5E out (&fb),a` pages the caller's source page into section C, `&9E60 ld
+  (&780F),hl`, then **`&9E66 call &0005`** (a SAM-ROM bridge) copies the bytes into B-DOS's
+  sector buffer, before falling through to the `&83ED` write dispatch. This copy/paging
+  dance — touching a section-B address (`&780F`) and a ROM bridge from the serve's own
+  paging context (HMPR=1, LMPR=`&1F` → section B = page 0, **not** B-DOS's workspace page) —
+  is exactly the §8a/§8b "honest boundary" the flat harness could never trace, and is the
+  HWSAD-specific step HRECORD lacks.
+- **Why the claim's raw SD reads succeed is NOT evidence the bus is fine (the self-heal
+  trap).** The claim's free-record finder reads list sectors via `bd_list_read_hw`
+  (`src/netboot/sd_csd.asm`), which **calls `sdc_init_ladder` every time** (CMD0/8/41/58/59)
+  — it re-enters SPI mode on every read, so it **self-heals** any bus disturbance. B-DOS's
+  HWSAD does the opposite: it relies on the boot-time HDINIT SPI mode **persisting** (the
+  per-op write core `&A81F`/`&A918` re-issues only `OUT (&DC),&31`, never the `&38`/`&04`
+  init — exhaustive: the binary has 10 `OUT (&DC),imm`, all in HDINIT `&A623` or the per-op
+  sender). So "claim reads work" is consistent with *either* a healthy bus *or* a bus our
+  ereset breaks — it cannot discriminate (b).
+
+**The decisive hardware probe (H2′).** To split (b) — "the ereset breaks the SD card's
+persistent SPI state; HWSAD assumes persistence → hangs" — from an HWSAD-handler-internal
+cause, a NETBOOT_DEBUG probe re-ran `sdc_init_ladder` + `sdc_deselect` (the known-good,
+**read-only**, LBA-poking-**free** re-establish, zero record-list-clobber risk) immediately
+before the `rst 8` HWSAD, bracketed by new markers `SD_REINIT_PRE`/`SD_REINIT_POST`. A TAPO
+self-serve shot read:
+
+```
+… DATA_BLOCK → FLUSH_PRE → (HMPR=01,LMPR=1F) → HWSAD_PRE → (HMPR=01,LMPR=1F)
+  → SD_REINIT_PRE → SD_REINIT_POST → [no HWSAD_POST]
+```
+
+`SD_REINIT_POST` **fired** — the full SD init ladder runs clean post-`ereset` (the bus is
+demonstrably **not** wedged; suspect (b) as "the ereset leaves the SD unusable" is
+**REFUTED on hardware**). Yet with the card freshly re-established in SPI mode and idle
+*one instruction before* the write, the `rst 8` HWSAD **still hangs** (`HWSAD_POST` never
+fires). **So the hang is not the SD card's state at all — it is inside the B-DOS HWSAD
+handler**, downstream of `HWSAD_PRE` and unaffected by re-initialising the card.
+
+**Net (the surviving hypothesis for the i280b-b2i fix).** With addressing correct (§8l:
+HMPR=1, no displacement), `&780B`/A′ controlled (§8h/#730), and the SD bus proven healthy
+at the write (this shot), the only thing left is the **HWSAD prelude itself running in the
+wrong DOS-call paging context**: the `&9E66 call &0005` ROM bridge + the `&780F` section-B
+buffer access assume B-DOS's resident workspace is paged into section B (the state the ROM
+RST8 → DOS-call entry `&37CE`/`&1D95` arms), whereas our serve fires `rst 8 / defb 149`
+with section B = page 0. HRECORD survives that context (no copy, no `&780F`, no `&0005`);
+HWSAD does not. The fix direction (i280b-b2i): arm the DOS-call paging context the prelude
+needs before the `rst 8` (e.g. page B-DOS's workspace into section B, save/restore), or
+route the write through B-DOS's own DOS-call record-write entry rather than a bare hook
+`rst 8` from a foreign paging state. The probe was a measurement (reverted — it is a
+behaviour-mutating re-init that would taint future observational shots; this section is its
+reproducibility record: `sdc_init_ladder`+`sdc_deselect` before the `rst 8`, markers `&24`/
+`&25`). This measurement is i280b-b2l (DONE).
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**

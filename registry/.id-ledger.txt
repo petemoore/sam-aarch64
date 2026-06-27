@@ -553,3 +553,5 @@ i280b-b2g
 i280b-b2h
 i280b-b2i
 i280b-b2j
+i280b-b2k
+i280b-b2l
