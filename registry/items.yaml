@@ -4923,9 +4923,11 @@
   title: "Measure which register bank feeds hk.hl/hk.de in the real rst8 dispatch (§8o) — it is the MAIN bank, refuting §8n's bank hypothesis"
   description: |
     DONE-pending (§8o). The i280b-b2i fix gate per §8n was: does hk.hl come from main HL (our seam's ld hl,BD_WRITE_BUF reaches it) or a bank our seam never sets (then the prelude pages a garbage source → the hang)? Measured empirically in the netboot-oracle harness (TestHWSADHookBankContract): boot Colin's real ROM v3.0 + B-DOS 1.5t, arm the FAITHFUL serve runtime (LMPR=&1F, HMPR=1, and crucially DOSCNT &5BC3:=0 — the ROM recursion guard at &37E8 routes an external caller's rst8 to the hook dispatcher only when DOSCNT bit0 is clear; the editor-idle snapshot has it =1), drive rst8/defb149 with main vs alternate banks set to disjoint sentinels, read hk.a/hk.hl/hk.de at the dispatcher saves. RESULT: all three come from the MAIN bank (sentinelB proves it: main HL=&BE42 → hk.hl=&BE42). The ROM/B-DOS swap chain is exactly 2x EXX (&0009 + &8321) and 2x EX AF,AF' (&37D4 + &8322) — even, so net main. REFUTES §8n: hk.hl = main HL, our seam's pointer DOES reach it; the §8k/§8l assumption was correct. Also refutes the §8h/#730 hk.a=A' inference (hk.a = main A; §8c's null result is the downstream hang per §8j/§8n, not hk.a's bank). Net: addressing/bank/paging-context all cleared; the surviving cause of the data-phase hang is downstream in the SD write core. Doc: §8o.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 735, role: completing}
   parent: i280b-b2
 
 - id: i281
