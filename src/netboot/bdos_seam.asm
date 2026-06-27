@@ -413,6 +413,13 @@ bdos_save_hook:
 ; and the Trinity SD driver. In the harness the HRSAD handler (i119 brick 1)
 ; intercepts the RST 8 and fills BD_READ_BUF from the CardModel.
 bdos_read_sector:
+                ; i280b-b2g: HRSAD shares the rwsad prelude with HWSAD, so it keys
+                ; the ambient device off hk.a = A' too. Pin A'=0 (leave the SD
+                ; select) for the same reason as bdos_write_sector — a working read
+                ; today only works because its call site happens to inherit a benign
+                ; A'; this makes it deterministic and immune to that regressing.
+                xor     a
+                ex      af, af'                 ; hk.a = A' = 0 (leave the SD select)
                 ld      a, (BD_READ_TRACK)
                 ld      d, a
                 ld      a, (BD_READ_SECTOR)
@@ -964,15 +971,22 @@ BD_DISK_PREFIX_LEN: equ 18                 ; len("trinity-sam-disks/")
 ; writes BD_WRITE_BUF into the CardModel (bdos_store.go bdHookHWSAD case).
 bdos_write_sector:
                 if defined(NETBOOT_DEBUG)
-                ; i280b-b2: emit PRE *before* loading A/D/E/HL so the marker (which
-                ; preserves all registers but is entered with A = the marker code)
-                ; cannot disturb hk.a = the drive byte the HWSAD hook reads. If the
-                ; next hardware shot shows HWSAD_PRE arriving but HWSAD_POST absent,
-                ; the hang is inside the B-DOS rst 8 HWSAD itself (the s8c assumption),
-                ; not in our seam/decode.
                 ld      a, DBG_HWSAD_PRE
                 call    dbg_marker
                 endif
+                ; i280b-b2g: honor the B-DOS hk.a contract — the hook dispatcher
+                ; (&8319) reads the caller's ALTERNATE accumulator A' as hk.a
+                ; (&8322 `ex af,af'` / &8323 `ld (&81D9),a`), NOT main A. The rwsad
+                ; prelude's device-select (&9E3F `call &8662`) re-keys the ambient
+                ; device &780B from hk.a on every HWSAD: A'=0 LEAVES &780B as the
+                ; preceding HRECORD-select set it (=2, Trinity SD); A'=1 forces
+                ; &780B=1 (floppy) -> the un-timed FDC poll at &8406 = the hardware
+                ; hang. We load only main registers, so without this A' is an
+                ; uncontrolled inherited shadow value (the §8c "force A=2" fix set
+                ; main A, which the dispatcher never reads -> no effect, as the
+                ; hardware refutation showed). Pin A'=0 so the device stays SD.
+                xor     a
+                ex      af, af'                 ; hk.a = A' = 0 (leave the SD select)
                 ld      a, (BD_WRITE_TRACK)
                 ld      d, a
                 ld      a, (BD_WRITE_SECTOR)

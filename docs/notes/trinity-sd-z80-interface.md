@@ -478,6 +478,54 @@ item. Per §8a the hang is in the HWSAD hook entry prelude (handler `&9E16`: pag
 + the `&83F7` device-dispatch whose floppy branch is an un-timed FDC poll), not the §5/§8 write core
 (which traces clean in koron-go).
 
+## 8h. Root cause SETTLED (i280b-b2g) — the hook keys the device on `hk.a` = the SHADOW accumulator A', which our seam never set
+
+The §8a hang is the un-timed FDC poll at `&8406`, reached when `&780B` (ambient device) is `1`
+(floppy) at the write. The unanswered question through §8a–§8g was *what makes `&780B`=1 at our
+write* when the preceding HRECORD-select set it to `2`. The disassembly settles it.
+
+**The hook dispatcher reads `hk.a` from the ALTERNATE accumulator A', not main A.** At `&8319`
+(`bdos15t-beta6.annotated.dis`):
+```
+8321: exx
+8322: ex af,af'          ; <- switch to the ALTERNATE set
+8323: ld (&81d9),a        ; hk.a = A'  (the shadow accumulator)
+8331: ex af,af'
+```
+The HWSAD/HRSAD shared prelude then does `&9E3C ld a,(&81d9) ; &9E3F call &8662` — the device-select
+**re-derives `&780B` from `hk.a` = A' on every call** (it enters `&8662` at the `cp 1`/`cp 2` keying,
+*bypassing* the `&8657` `&8135`-class path): `A'==0` LEAVES `&780B` (so the prior select's `2` stands
+→ SD), `A'==1` sets `&780B`=1 (floppy → the FDC-poll hang), `A'==2` runs the `&4677`/`&60E4` Trinity
+sub-calls (§8c's wedge risk) then `&780B`=2.
+
+**Our seam (`bdos_write_sector`/`bdos_read_sector`) loaded only main `A`/`D`/`E`/`HL` and never set
+A'.** So `hk.a` was an **uncontrolled inherited shadow value** — whatever the last `ex af,af'` in the
+ROM / IM1 frame-interrupt / driver machinery happened to leave. When that stray A' is `1`, the write
+diverts to the FDC poll and hangs.
+
+This **explains every prior result**:
+- **§8c refutation:** the "force `A`=2" fix set *main* `A` (`3e 02` before `cf 95`), which the
+  dispatcher never reads — so it had zero effect, exactly as the hardware shot showed ("same symptom").
+- **Read/write asymmetry (§8a caveat):** both paths leave A' uncontrolled; they are issued from
+  *different call sites* (read from `wd_finalize`, write per-block from `handle_data`) that inherit
+  *different* stray A'. "Read works" was luck, not a real read-vs-write difference.
+- **§8d Heisenbug:** inserting `dbg_marker` ENC-TX calls runs ROM/driver code that perturbs the
+  inherited shadow A' → moves the symptom. Not a bus contention after all (for *this* hang).
+
+**Emulation corroboration** (`cmd/bdostrace-paged` experiment 4, since the busy-wait itself can't
+reproduce — the SD model always clears busy): with a clean post-select `&780B`=2, driving the device
+gate shows `&780B`=2 → reaches the SD core `&A8F4`; `&780B`=1 → enters the `&8406` FDC poll and spins
+to the step cap (the hang). And `&8662` with `hk.a`=1 forces `&780B`=1. So the A'→`&780B`→branch chain
+is mechanical.
+
+**Fix (`src/netboot/bdos_seam.asm`):** honor the documented `hk.a`=A' contract — `xor a ; ex af,af'`
+immediately before the `rst 8` in both `bdos_write_sector` and `bdos_read_sector`, pinning `hk.a`=0.
+That LEAVES the HRECORD-select's `&780B`=2 (Trinity SD) in force — deterministically, instead of
+depending on a stray shadow value — and avoids the `A'`=2 sub-call wedge §8c flagged. Reuses B-DOS
+entirely (one-instruction contract fix, no reimplementation). **Hardware-gated:** the busy-wait hang
+cannot reproduce in koron-go, so the confirming gate is a TAPO shot — success = `HWSAD_PRE` →
+`HWSAD_POST` per block and the push completes.
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**

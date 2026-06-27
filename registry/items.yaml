@@ -4869,7 +4869,7 @@
   title: "B-DOS HWSAD per-block write hangs (HWSAD_PRE without HWSAD_POST): the original §8a hang, revealed once b2d's drv_wait_link let the push hand-shake + reach the per-block write"
   description: |
     OPEN. With i280b-b2d landed (the handshake now completes, §8g), the disk-record push reaches the B-DOS per-block write for the FIRST time: a TAPO shot shows DATA_BLOCK -> FLUSH_PRE -> HWSAD_PRE, then hangs (no HWSAD_POST, curl times out). This is the original §8a/§8b HWSAD hang (the i280b-b2 umbrella's first target) that the §8d/§8e/§8f handshake blocker had been masking. Per §8a the hang is in the B-DOS HWSAD hook (rst 8 / defb 149) ENTRY PRELUDE (handler &9E16: a paged-pointer page-setup driving HMPR + the &83F7 device-dispatch keyed on the ambient-device var &780B, whose floppy/Z branch is an un-timed FDC poll = the hang shape), NOT the §5/§8 write core (which traces clean in koron-go; gold CMD24 stream captured by i280a bdostrace). The A=2/&780B ambient-device theory was hardware-refuted (§8c, b2b). Next: the bdostrace-paged harness (tools/netboot-oracle/z80/cmd/bdostrace-paged) to trace the prelude end-to-end so the hang point is observable, then fix our HWSAD INVOCATION contract (reuse B-DOS entry points; don't reimplement). Doesn't reproduce in koron-go (SD model clears busy). Ends in a TAPO shot (tools/hardware-shot/run-shot.sh; success = HWSAD_POST + the push completes).
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i280b-b2

@@ -453,6 +453,91 @@ func (m *machine) experimentHandlerSymmetry() {
 	fmt.Println("  `call &8684; jp nz,&A954` — same &8684 read of &780B) => NO wr/rd asymmetry.")
 }
 
+// ---------------------------------------------------------------------------
+// Experiment 4: the hk.a = A' (shadow accumulator) discriminator (i280b-b2g).
+// The dispatcher &8319 saves the caller's ALTERNATE A' into hk.a (&81D9) via
+// `ex af,af' ; ld (&81D9),a`, and the HWSAD/HRSAD prelude device-select &9E3F
+// `call &8662` re-keys the ambient device &780B PURELY from that hk.a on EVERY
+// call (bypassing the &8657 &8135-class check). So with a clean post-HRECORD-
+// select state (&780B=2), the device branch the write takes is decided solely
+// by hk.a: 0 LEAVES &780B=2 (SD path), 1 forces &780B=1 (FDC poll = the hang),
+// 2 runs the Trinity sub-calls then &780B=2. Our seam loads only MAIN A and
+// never sets A', so on hardware hk.a is an uncontrolled inherited shadow value
+// — the bug. This experiment drives the handler with hk.a pre-poked to each
+// value (a section-A hk.hl so the page-setup `out (&fb)` repage is skipped and
+// the run does not wander) and reports which branch &83F7 reaches — the
+// emulation proof that forcing A'=0 selects the SD path.
+func (m *machine) experimentShadowA() {
+	fmt.Println("\n== experiment 4: hk.a = A' decides the device branch (i280b-b2g) ==")
+	fmt.Println("  The dispatcher &8319 stores the caller's ALTERNATE A' into hk.a (&81D9)")
+	fmt.Println("  (&8322 ex af,af' / &8323 ld (&81D9),a). The prelude device-select &9E3F")
+	fmt.Println("  `call &8662` re-keys &780B from hk.a on EVERY HWSAD/HRSAD. Our seam loads")
+	fmt.Println("  only MAIN A, never A', so on hardware hk.a is an uncontrolled shadow value.")
+
+	// Part A: drive &8662 (the device-select) with a CLEAN post-HRECORD-select
+	// pre-state (&780B=2) for each hk.a, and observe the resulting &780B. The
+	// hk.a==1 case returns cleanly and is the decisive one (an uncontrolled
+	// A'==1 forces &780B=1). The hk.a==0/==2 sub-paths call ROM bridges the flat
+	// model lacks and wander (the §8b honest boundary) — the disasm settles them:
+	// A==0 takes &8680 and LEAVES &780B (=2 here -> SD); A==2 runs the Trinity
+	// sub-calls then sets &780B=2.
+	fmt.Println("  [A] device-select &8662, pre-state &780B=2 (as HRECORD-select leaves it):")
+	for _, hka := range []uint8{0, 1, 2} {
+		m.pageDOSIntoSectionB()
+		m.mac.Write(winDevVar, []byte{2})
+		m.mac.Write(winDevCls, []byte{0x44})
+		r := m.callAliasB(addrDevSel, hka)
+		if !r.Halted {
+			// Sub-call into a ROM bridge the flat model lacks — the §8b boundary.
+			// disasm: A==0 takes &8680 and LEAVES &780B (=2 -> SD); A==2 runs the
+			// Trinity sub-calls then sets &780B=2.
+			fmt.Printf("    hk.a(A')=%d -> wandered into a ROM bridge (disasm: %s)\n",
+				hka, map[uint8]string{0: "A==0 leaves &780B=2 -> SD", 2: "A==2 sets &780B=2 -> SD"}[hka])
+			continue
+		}
+		out := m.rd(winDevVar)
+		eff := "SD path (write proceeds)"
+		if out == 1 {
+			eff = "FDC poll &8406 (un-timed = the HANG)"
+		}
+		fmt.Printf("    hk.a(A')=%d -> &780B=&%02X => %s\n", hka, out, eff)
+	}
+
+	// Part B: drive the write device-dispatch at the `call &8684` (&83F4, just
+	// before `jp nz,&A8F4` at &83F7) for &780B in {2,1} and observe which branch
+	// (&A8F4 SD save vs &8406 FDC poll) it reaches — proving the &780B -> branch
+	// mapping the device-select feeds.
+	const addrWGate = addrWDev - 3 // &83F4: `call &8684` (reads &780B), then &83F7 `jp nz`
+	fmt.Println("  [B] write-dispatch &83F4 (`call &8684; jp nz,&A8F4` else FDC &8406):")
+	for _, dev := range []uint8{2, 1} {
+		m.pageDOSIntoSectionB()
+		m.mac.Write(winDevVar, []byte{dev})
+		seen := map[uint16]bool{}
+		r, _ := m.mac.RunBootFrom(addrWGate-0x4000, z80h.Entry{
+			StepCap: 1_000_000,
+			Trace: func(pc uint16) {
+				m.lastPC = pc
+				real := pc
+				if pc < 0x8000 && pc >= 0x4000 {
+					real = pc + 0x4000
+				}
+				if real == addrSDSave || real == addrFDCWPoll {
+					seen[real] = true
+				}
+			},
+		})
+		branch := "(neither reached)"
+		if seen[addrSDSave] {
+			branch = "SD PATH &A8F4 (write proceeds)"
+		} else if seen[addrFDCWPoll] {
+			branch = "FDC POLL &8406 (un-timed = the HANG)"
+		}
+		fmt.Printf("    &780B=%d -> %s (steps=%d)\n", dev, branch, r.Steps)
+	}
+	fmt.Println("  => hk.a(A')=0 keeps &780B=2 -> SD path; hk.a(A')=1 forces &780B=1 -> FDC hang.")
+	fmt.Println("     Fix: `xor a / ex af,af'` before the rst 8 pins hk.a=0 (honors the contract).")
+}
+
 func fmtPCs(ring []uint16, ri int) string {
 	out := ""
 	for i := 0; i < len(ring); i++ {
@@ -471,6 +556,7 @@ func main() {
 	m.experimentRST8()
 	m.experimentDeviceSelect()
 	m.experimentHandlerSymmetry()
+	m.experimentShadowA()
 
 	fmt.Println("\n== GOLD CONTRACT (see docs/notes/trinity-sd-z80-interface.md §8b) ==")
 	fmt.Println("  A successful HWSAD write needs the ambient device armed as Trinity SD:")
