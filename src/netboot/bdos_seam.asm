@@ -963,6 +963,16 @@ BD_DISK_PREFIX_LEN: equ 18                 ; len("trinity-sam-disks/")
 ; sector cache and the Trinity SD driver. The harness intercepts RST 8 and
 ; writes BD_WRITE_BUF into the CardModel (bdos_store.go bdHookHWSAD case).
 bdos_write_sector:
+                if defined(NETBOOT_DEBUG)
+                ; i280b-b2: emit PRE *before* loading A/D/E/HL so the marker (which
+                ; preserves all registers but is entered with A = the marker code)
+                ; cannot disturb hk.a = the drive byte the HWSAD hook reads. If the
+                ; next hardware shot shows HWSAD_PRE arriving but HWSAD_POST absent,
+                ; the hang is inside the B-DOS rst 8 HWSAD itself (the s8c assumption),
+                ; not in our seam/decode.
+                ld      a, DBG_HWSAD_PRE
+                call    dbg_marker
+                endif
                 ld      a, (BD_WRITE_TRACK)
                 ld      d, a
                 ld      a, (BD_WRITE_SECTOR)
@@ -970,6 +980,10 @@ bdos_write_sector:
                 ld      hl, BD_WRITE_BUF
                 rst     8
                 defb    BD_HOOK_HWSAD
+                if defined(NETBOOT_DEBUG)
+                ld      a, DBG_HWSAD_POST
+                call    dbg_marker
+                endif
                 ret
 
 ; ---------------------------------------------------------------------------
