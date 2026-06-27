@@ -4894,7 +4894,7 @@
 - id: i280b-b2i
   title: Fix the HWSAD data-phase hang — addressing/bank/paging-context all cleared (§8l/§8n/§8o); surviving cause is the downstream SD CMD24 write-core busy-wait after serve_rearm_enc's ereset
   description: |
-    OPEN — the SD-write hang fix, now GATED on hardware item i283 (§8v). START HERE: docs/notes/trinity-sd-z80-interface.md §8v (corrects §8s/§8t/§8u) + docs/plans/i280-bdos-write-trace.md. §8v finding (primary-source-grounded): the B-DOS SD write core is self-protecting against any FINITE busy — &A81F check_busy's (&A820) BEFORE its first OUT and wait-then-OUTs every byte, and &DC BUSY is time-based + self-clearing — so a too-short ENC-reset settle is RIDDEN OUT and cannot hang &A7CC (refutes the §8u '50us settle' / 'serve_rearm_enc ereset' framing as the cause). For &A7CC to spin forever the PIC must be PERMANENTLY wedged; the only source-grounded cause is the ENC silicon transmit-errata (Owen), and the sources do NOT pin a deterministic trigger in our serve sequence. So 'model the wedge in emulation so the real serve reproduces the hang' is unachievable from sources (it would require INVENTING the trigger — prime directive / rule 7); the §8s StuckBusy model is ALREADY the faithful wedge model. The open question is purely the hardware trigger => i283 (owner pete): a production/marker-minimal push measuring &DC bit 3 across the per-block write. Once i283 pins the trigger, implement the fix here (reuse B-DOS entry points; likely 'keep ENC TX clear of the SD write window') + verify in emulation + hardware retest.
+    SUPERSEDED framing: the 'surviving cause = downstream SD CMD24 write-core busy-wait after ereset' hypothesis is REFUTED by i280b-b2t (#748, §8af). The real root cause was the device-select: our raw HWSAD presented A=the-sector-number to &8662 (which reads hk.a = main A), so the first .mgt sector (1) selected the FLOPPY -> the FDC-poll hang. Fixed in bdos_seam.asm (A=2). This item now tracks the FINAL on-hardware confirmation that the write works end-to-end: it depends on i283 (the hardware retest of the A=2 fix). Close it DONE once i283 confirms the push completes on real Trinity. Authority: trinity-sd-z80-interface.md §8af.
   status: OPEN
   depends_on: [i280b-b2h, i280b-b2l, i280b-b2m, i280b-b2q, i283]
   kind: leaf
@@ -4982,9 +4982,11 @@
   title: Diff the gold RECORD-select device state vs our serve's HRECORD-select; port the HSAVE-path setup our raw HWSAD skips into bdos_seam.asm
   description: |
     i280b-b2s (§8ad) captured the WORKING write in emulation: real BASIC RECORD 1; SAVE -> HSAVE(132) -> device-select -> CMD24, round-trip-verified memory->SD->memory (TestBASICSaveWritesRecordToSD). Our serve calls raw HWSAD(149) via rst 8 from machine code, which aborts at device-select (hk.a=0 across the external dispatch, §8s). METHOD (Pete): the IN/OUT-frame difference is a SIDE EFFECT — trace which ROM/B-DOS routines (entry points) the WORKING BASIC RECORD/SAVE calls and the REGISTER VALUES at each call, vs which entry points our serve calls and with what registers; the divergence is calling the wrong entry point and/or not setting registers properly before the call. FIX: make our serve (src/netboot/bdos_seam.asm) call the SAME B-DOS entry points with the SAME register/device state the working HSAVE path establishes (reuse B-DOS entry points; don't reimplement). Hypothesis (Pete): we are calling the wrong ROM hook (raw HWSAD vs the HSAVE path); fixing that should make it work on hardware too. Then emulation-verify our serve reaches CMD24, then a TAPO hardware retest. Authority: trinity-sd-z80-interface.md §8ad/§8s + ~/sam-archive/bdos/analysis (HSAVE &9D54, HWSAD &9E16, device-select &8662, HRECORD &9FAB).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 748, role: completing}
   parent: i280b-b2
 
 - id: i281
@@ -5004,9 +5006,10 @@
   owner: agent
 
 - id: i283
-  title: "Hardware measure: capture &DC bit-3 (BUSY) across the serve's per-block SD-write on real Trinity — production/marker-minimal build — to pin the i280b-b2i hang trigger"
+  title: "Hardware retest the i280b-b2t A=2 SD-write fix: push the fixed serve, curl a .mgt, confirm the push completes end-to-end (block-localizing markers)"
   description: |
-    §8v: the SD-write hang requires a PERMANENT PIC wedge (the write core rides out any finite busy via its own &A820 check_busy before its first OUT); the primary sources do NOT pin a deterministic trigger for the wedge in our serve sequence — the only source-grounded permanent-wedge cause is the ENC silicon transmit-errata (Owen). So the trigger cannot be modelled faithfully (inventing it = prime-directive / rule-7 violation); it is a HARDWARE datum. Do a production / marker-minimal push (no ENC TX anywhere near the SD write — the §8t prime suspect removed) while measuring &DC bit 3 across the per-block write via a NON-network channel (&DC reads are always safe; or border/screen; or a RAM breadcrumb a post-mortem reads). Two conclusive outcomes: (a) push COMPLETES => the wedge was the debug-marker/near-write ENC TX (errata) and the fix is 'keep ENC TX clear of the SD write window' (markers are already debug-only + outside the SD CS, so a production build may already be correct); (b) still HANGS with &DC bit-3 stuck => deeper ENC/PIC contention or a TXRST-workaround bug, localizable from where bit-3 latches high. Pete/TAPO-gated (autonomy enabler i272). Authority: trinity-sd-z80-interface.md §8v + docs/plans/i280-bdos-write-trace.md.
+    i280b-b2t (#748, §8af) root-caused the SD-write hang in the faithful rig: the raw HWSAD presented A=the-sector-number to the B-DOS device-select (&8662 reads hk.a = main A); the first .mgt sector (1) selected the FLOPPY -> the un-timed FDC poll = the hang. Fixed by presenting A=2 (Trinity SD) before the rst 8 in bdos_seam.asm. Emulation reproduces both hang (A=1) and fix (A=2->CMD24), but the koron-go SD model cannot exercise the real SD-write-core busy-wait, so a TAPO hardware shot must confirm the push COMPLETES end-to-end on real Trinity. Steps: build the fixed netboot_serve_boot_debug, power-cycle (tapo.sh), trinpush-serve, curl -T a .mgt, read UDP:9001 markers; success = the record is written + final ACK to curl. If it STILL hangs (a separate write-core wedge survives the device-select fix), FALLBACK = measure &DC bit-3 (BUSY) across the per-block write via a non-network channel to localize where BUSY latches (the §8v/i283-original plan). Agent-self-serve (TAPO). Authority: trinity-sd-z80-interface.md §8af + docs/plans/i280-bdos-write-trace.md.
   status: OPEN
+  depends_on: [i280b-b2t]
   kind: leaf
   owner: agent
