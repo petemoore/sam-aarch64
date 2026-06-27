@@ -4824,9 +4824,11 @@
   title: "Bound the ENC wait_ready (i241 pattern) + report rearm timeout (DBG_REARM_TIMEOUT): a stuck shared bus can no longer wedge the SAM; the timeout is observable"
   description: |
     DONE. wait_ready (encdrv.asm) now polls &DC bit3 up to ENC_BUSY_LIMIT then sets enc_timed_out and RETURNS instead of spinning forever (the §8d wedge: serve_rearm_enc->enc_rx_reestablish->ereset->eoff->wait_ready on a stuck shared bus). Mirrors the i241 sdc_wait_ready bound on the ENC side; in all netboot builds. Healthy path unaffected (koron-go clears &DC bit3 after one SPI-byte time; all ENC/serve/golden-marker tests green). serve_rearm_enc emits DBG_REARM_TIMEOUT (&17, NETBOOT_DEBUG) so a hardware shot sees the timeout WITHOUT ENC markers in the contended window (the §8d Heisenbug). Mitigation+observability, NOT the root-cause fix (-> i280b-b2d).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 725, role: completing}
   parent: i280b-b2
 
 - id: i280b-b2d
