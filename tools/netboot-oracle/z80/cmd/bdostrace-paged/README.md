@@ -9,13 +9,9 @@ record write needs — the input the i280b `src/netboot/bdos_seam.asm` fix consu
 It is the paged counterpart of `cmd/bdostrace` (i280a): that flat tool runs the §8
 SD-write *core*, but cannot run the hook *entry prelude* (it escapes into SAM-ROM
 bridges the flat 64 KB model lacks). See `docs/notes/trinity-sd-z80-interface.md`
-§8b for the captured contract and §8a / `docs/plans/i280-bdos-write-trace.md` for
-the surrounding task.
-
-This is a **read-only diagnostic that emits a report, not an assertion** — it lives
-in `cmd/` (not as a `Test*`) per the testing policy. CI builds it; running it needs
-Colin's proprietary captures (referenced by path, never in the repo), so CI does
-not run it.
+§8b for the captured contract and `docs/plans/i280-bdos-write-trace.md` for the
+task. A **read-only diagnostic** (in `cmd/`, not a `Test*`, per the testing
+policy); CI builds but does not run it (the captures are not in the repo).
 
 ## Requirements
 
