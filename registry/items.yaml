@@ -4245,9 +4245,9 @@
   parent: i231b-b4
 
 - id: i231b-b4b
-  title: Eliminate the remaining 24 carve-outs (bdos_seam RST8 dispatch + multi-site files)
+  title: Eliminate the remaining 21 carve-outs (bdos_seam RST8 dispatch + multi-site files)
   description: |
-    After smoke_test.asm (i231b-b4a) + csd_probe.asm (i231b-b4c), the ledger is 24 sites / 6 files: bdos_seam.asm (1, the RST8/B-DOS-hook dispatch HGTHD/HSAVE/HRSAD/HRECORD — needs harness modeling or SimCoupe, class B), netboot_serve.asm (10, the (HOSTTEST==0)*(DUMPER==0) combined gates), netboot_client.asm (5), netboot_dumper.asm (3), netboot_server.asm (3), http_main.asm (2). Each needs per-site analysis: remove-if-overgated (check whether a harness test already drives the carved path, as smoke_main/probe_main were), model-in-harness, or run under SimCoupe; take on per file/cluster. NOTE: nesting depth is maxed at the i231b-b4X level, so track each file's completion as a NEW sibling leaf under the i231b-b4 umbrella (split --parent i231b-b4), not under this row.
+    After smoke_test.asm (i231b-b4a), csd_probe.asm (i231b-b4c) + netboot_server.asm (i231b-b4d), the ledger is 21 sites / 5 files: bdos_seam.asm (1, the RST8/B-DOS-hook dispatch — needs harness modeling or SimCoupe, class B), netboot_serve.asm (10, the (HOSTTEST==0)*(DUMPER==0) combined gates), netboot_client.asm (5, has a host-only double), netboot_dumper.asm (3, host-only double; dumper_main driven by dumper_rompaging_test.go), http_main.asm (2, host-only double; http_main driven by http_main_boot_test.go). Per-file analysis: dumper/http/client are remove-if-overgated candidates (their mains are already harness-driven) but each also has a host-only 'if defined(NETBOOT_HOSTTEST)' double, so the flag can't simply be dropped — needs care. netboot_serve's 10 combined gates + bdos_seam class-B are the hard core. Nesting maxed at i231b-b4X: track each file's completion as a NEW sibling leaf under i231b-b4 (split --parent i231b-b4).
   status: OPEN
   kind: leaf
   owner: agent
@@ -4262,6 +4262,15 @@
   owner: agent
   prs:
     - {num: 764, role: completing}
+  parent: i231b-b4
+
+- id: i231b-b4d
+  title: "netboot_server.asm carve-outs eliminated (3 sites): unify the server binary; netboot_main already harness-driven via netboot_serve_boot_test.go"
+  description: |
+    Removed the 3 NETBOOT_HOSTTEST==0 carve-outs in src/netboot/netboot_server.asm (the jp netboot_main entry, the netboot_main body, the eeprom.asm include). Same remove-if-overgated shape as smoke/csd_probe: netboot_main is already exercised end-to-end in emulation by netboot_serve_boot_test.go (TestServerBootFromEEPROM). netboot_server.asm has no host-only double and no netboot_serve.asm include, so once the 3 carve-outs go NO HOSTTEST conditional remains — the flag became a no-op and both builds were identical. Collapsed netboot_server.bin (HOSTTEST) + netboot_server_boot.bin into ONE netboot_server.bin used by every test (netboot_server_test.go piecewise + netboot_serve_boot_test.go full) and the netboot-server-disk image. Ledger 26->23 / 7->6 files.
+  status: DONE
+  kind: leaf
+  owner: agent
   parent: i231b-b4
 
 - id: i232
