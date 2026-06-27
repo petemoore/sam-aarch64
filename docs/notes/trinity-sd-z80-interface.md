@@ -1157,6 +1157,55 @@ bound the `&A7CC` busy-wait with a timeout so a wedged PIC degrades instead of h
 Then diff against `HSAVE`(132). Every hypothesis still ends in a TAPO hardware retest (i271
 markers).
 
+## 8t. Reconcile §8s (emulation) with §8d–§8h (hardware): which blocker is REAL is still undecided — and the decisive shot needs a write-core marker (i280b-b2i)
+
+The §8s emulation result and the hardware shots do **not** yet pin the same blocker, and
+it matters because they point at **different fixes**. Stating the gap honestly so the next
+step targets the right one (a §8s over-read would chase the device-select gate when the
+real obstacle may be the busy-wait, or vice-versa):
+
+- **What hardware shows (§8d/§8g/§8h):** `DATA_BLOCK → FLUSH_PRE → HWSAD_PRE`, then
+  **silence** — no `HWSAD_POST`, curl times out. So the serve reaches the HWSAD `rst 8`
+  and never returns. **Silence is consistent with BOTH** candidate hangs:
+  (a) device-select aborts on `hk.a` (the §8s emulation path — `&8680→&9A8B`, which on
+  hardware would divert to the editor/error and stop emitting markers = silence), OR
+  (b) it reaches the write core and spins in the `&A7CC` `&DC`-bit-3 busy-wait (the §8a
+  hypothesis, faithfully reproduced by `StuckBusy` in §8s) = silence. A passive marker
+  shot **cannot tell them apart** — both end at `HWSAD_PRE` + silence.
+- **What §8s emulation shows:** with `hk.a=0`, device-select aborts (never reaches the
+  write core); with `hk.a=2` + `&80AF`≠0 **forced**, HWSAD reaches `&A8F4`/CMD24 cleanly,
+  and a wedged `&DC` busy then hangs it at `&A7CC`. So in *emulation* the device-select
+  gate is a real obstacle for `hk.a=0`.
+- **Why this is UNDECIDED, not resolved:** §8b/§8c/§8h never cleanly achieved `hk.a=2` on
+  hardware (§8c set *main* A — a no-op; §8h pinned A'=0). So we have no hardware data for
+  the `hk.a=2` case, and we don't know whether the real dispatch even yields `hk.a=0` (the
+  §8s `hk.a=0` came from the test's `DOSCNT=0` external-`rst 8` scaffold, whose ROM path
+  resets `A'` — that may diverge from how the serve's own in-context `rst 8` dispatches).
+  The emulator's device-select/`&9A8B` behavior under a synthetic stub (no real BASIC error
+  context, `&8104`=0 → it error-prints rather than unwinds) may also diverge from the
+  serve's real context. So **"emulation says device-select gate" is not yet a hardware
+  fact.**
+
+**THE DECISIVE EXPERIMENT (next, i280b-b2i): a write-core marker on hardware.** Passive
+`HWSAD_PRE/POST` can't see inside the `rst 8`. In a **diagnostic** `NETBOOT_DEBUG` build
+(B-DOS runs from RAM — the EEPROM bootblock loads it, so it is patchable at runtime, and
+this build is never shipped), detour-hook the **write-core entry `&A8F4`** (and/or the
+`&A7CC` busy-poll) to emit a new `DBG_WRITECORE` marker: overwrite a few bytes there with a
+`CALL` to a trampoline that emits the marker, runs the displaced instructions, and jumps
+back. Then one TAPO shot is decisive:
+- `HWSAD_PRE → DBG_WRITECORE → silence` ⇒ it **reaches the write core** and hangs in the
+  `&A7CC` busy-wait. Fix = the SD/PIC busy state: the `serve_rearm_enc` ENC ereset before
+  the write leaves `&DC` bit-3 stuck → re-init/quiesce the SD side (the `&38/&04` ladder)
+  after `serve_rearm_enc` and before the write. (`StuckBusy` already reproduces this in
+  emulation, so the fix is emulation-verifiable before the shot.)
+- `HWSAD_PRE → silence` (no `DBG_WRITECORE`) ⇒ it **aborts before the write core** at
+  device-select. Fix = satisfy `hk.a`=2 + `&80AF` faithfully (the §8s gate work).
+
+Until that marker shot runs, do **not** commit a serve-code fix for either branch — pick
+the fix only once the write-core marker says which obstacle is real (the CLAUDE.md §7
+"emulator is the contract" + prime-directive "understand before changing": a serve change
+off the wrong branch risks breaking what already works on hardware).
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
