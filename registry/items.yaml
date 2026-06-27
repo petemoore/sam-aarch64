@@ -5038,7 +5038,7 @@
   title: "build/registry: dedupe prs[] on set-pr/set-status --pr (both append, producing a duplicate {num,role} entry)"
   description: |
     Minor tooling robustness: calling set-pr --pr N then set-status --pr N (or either twice) appends a second identical {num: N, role: completing} to the item's prs[] instead of being idempotent. Observed on i280b-b2b (PR #724), hand-deduped. Make the PR-attach path upsert (no duplicate num+role pairs).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
 

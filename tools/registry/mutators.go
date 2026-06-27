@@ -520,7 +520,7 @@ func runAdd(args []string, paths mutatorPaths) {
 			Refs:        []string(refs),
 		}
 		if *prNum > 0 {
-			it.PRs = append(it.PRs, PRRef{Num: *prNum, Role: PRRole(*prRole)})
+			it.AddPR(*prNum, PRRole(*prRole))
 		}
 		if it.DependsOn == nil {
 			it.DependsOn = []string{}
@@ -650,7 +650,7 @@ func runSplit(args []string, paths mutatorPaths) {
 		Refs:        []string(refs),
 	}
 	if *prNum > 0 {
-		child.PRs = append(child.PRs, PRRef{Num: *prNum, Role: PRRole(*prRole)})
+		child.AddPR(*prNum, PRRole(*prRole))
 	}
 	if child.DependsOn == nil {
 		child.DependsOn = []string{}
@@ -733,7 +733,7 @@ func runSetStatus(args []string, paths mutatorPaths) {
 
 	reg.Items[idx].Status = Status(*status)
 	if *prNum > 0 {
-		reg.Items[idx].PRs = append(reg.Items[idx].PRs, PRRef{Num: *prNum, Role: RoleCompleting})
+		reg.Items[idx].AddPR(*prNum, RoleCompleting)
 	}
 
 	applyAndCommit(reg, paths)
@@ -878,7 +878,7 @@ func runSetPR(args []string, paths mutatorPaths) {
 		os.Exit(1)
 	}
 
-	reg.Items[idx].PRs = append(reg.Items[idx].PRs, PRRef{Num: *prNum, Role: PRRole(*role)})
+	reg.Items[idx].AddPR(*prNum, PRRole(*role))
 	applyAndCommit(reg, paths)
 	fmt.Printf("registry: attached PR #%d (role:%s) to %s\n", *prNum, *role, *id)
 }
