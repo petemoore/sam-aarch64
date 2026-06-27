@@ -336,6 +336,15 @@ type Machine struct {
 	// returns the PC to resume at. Nil until a handler is attached (e.g.
 	// AttachBDOS, bdos_store.go) — every existing test runs with no handler.
 	rstHandlers map[uint16]func(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16
+
+	// cont holds the CPU state from the most recent run so Continue can resume the
+	// SAME machine — PC, SP, all registers, IFF — in place, exactly where it
+	// stopped (at a StopPC). This is the faithful "carry on executing" primitive:
+	// unlike RunBootFrom, which resets SP and PC to a synthetic entry, Continue
+	// preserves the live call chain, so a routine that stopped mid-flow (e.g. the
+	// editor idling at WTKY2 &04FA, blocked on a key) resumes correctly once the
+	// precondition changes (e.g. InjectKeys primes the key queue). Nil until run.
+	cont *z80.CPU
 }
 
 // setRSTHandler registers fn as the handler for the RST whose target is addr
@@ -461,6 +470,23 @@ func LoadPaged(binPath, mapPath string, lmpr, hmpr uint8) (*Machine, error) {
 // fixtures, and inspect the post-run paging state (e.g. assert a routine
 // restored LMPR or clobbered a page). It is the harness's one memory model.
 func (mac *Machine) Pager() *sampage.Mem { return mac.m.pager }
+
+// Regs is a snapshot of the live Z80 registers, for inspecting CPU state inside a
+// Trace callback (which only carries PC). The register file is otherwise opaque.
+type Regs struct{ A, B, C, D, E, H, L uint8 }
+
+// LiveRegs returns the live CPU registers during/after a run. Valid inside a Trace
+// callback and after a run returns; nil-safe (returns zero Regs) before any run.
+func (mac *Machine) LiveRegs() Regs {
+	c := mac.m.cpu
+	if c == nil {
+		return Regs{}
+	}
+	return Regs{
+		A: c.AF.Hi, B: c.BC.Hi, C: c.BC.Lo, D: c.DE.Hi, E: c.DE.Lo,
+		H: c.HL.Hi, L: c.HL.Lo,
+	}
+}
 
 // LoadROMImage copies a real 32 KB SAM system-ROM image into the pager's ROM
 // (ROM0 = low 16 KB at logical &0000 when section A maps ROM; ROM1 = high 16 KB
@@ -613,14 +639,14 @@ func (mac *Machine) StubReturn(addr uint16) {
 func (mac *Machine) ModelReadkey() {
 	mac.setRSTHandler(0x1CB1, func(cpu *z80.CPU, mac *Machine, retAddr uint16) uint16 {
 		if len(mac.m.keyQueue) > 0 {
-			cpu.AF.Hi = mac.m.keyQueue[0]            // A = key code
-			mac.m.keyQueue = mac.m.keyQueue[1:]      // consume it
-			cpu.AF.Lo &^= uint8(z80.FlagZ)           // NZ — a key is ready
-			cpu.AF.Lo |= uint8(z80.FlagC)            // CY — "got key"
+			cpu.AF.Hi = mac.m.keyQueue[0]       // A = key code
+			mac.m.keyQueue = mac.m.keyQueue[1:] // consume it
+			cpu.AF.Lo &^= uint8(z80.FlagZ)      // NZ — a key is ready
+			cpu.AF.Lo |= uint8(z80.FlagC)       // CY — "got key"
 		} else {
-			cpu.AF.Hi = 0                            // A = 0
-			cpu.AF.Lo |= uint8(z80.FlagZ)            // Z — no key
-			cpu.AF.Lo &^= uint8(z80.FlagC)           // NC
+			cpu.AF.Hi = 0                  // A = 0
+			cpu.AF.Lo |= uint8(z80.FlagZ)  // Z — no key
+			cpu.AF.Lo &^= uint8(z80.FlagC) // NC
 		}
 		return retAddr
 	})
@@ -772,7 +798,24 @@ func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (Call
 	mac.m.poke(0x6FFE, byte(haltTrap&0xff))
 	mac.m.poke(0x6FFF, byte(haltTrap>>8))
 	mac.m.poke(haltTrap, 0x76) // HALT opcode
+	return mac.runLoop(name, cpu, in, capIsError)
+}
 
+// Continue resumes the machine from the CPU state left by the previous run/Continue
+// — same PC, SP, registers, and interrupt state — and steps under the new Entry
+// (a fresh StopPC/StepCap/Trace). It is the faithful "carry on executing" primitive
+// for multi-step interactions where the call chain must survive across stops (e.g.
+// the editor idling at WTKY2 then resuming once keys are queued). It errors if no
+// prior run has established CPU state.
+func (mac *Machine) Continue(in Entry) (CallResult, error) {
+	if mac.cont == nil {
+		return CallResult{}, fmt.Errorf("z80: Continue with no prior run to resume")
+	}
+	mac.m.cpu = mac.cont
+	return mac.runLoop("continue", mac.cont, in, false)
+}
+
+func (mac *Machine) runLoop(name string, cpu *z80.CPU, in Entry, capIsError bool) (CallResult, error) {
 	cap := uint64(maxSteps)
 	if in.StepCap != 0 {
 		cap = in.StepCap
@@ -862,6 +905,8 @@ func (mac *Machine) run(name string, pc uint16, in Entry, capIsError bool) (Call
 			break // RunBoot: a spin/forever-loop is a normal outcome
 		}
 	}
+	// Persist the CPU so Continue can resume this exact state in place.
+	mac.cont = cpu
 	return CallResult{
 		BC: cpu.BC.U16(), DE: cpu.DE.U16(), HL: cpu.HL.U16(), A: cpu.AF.Hi,
 		Steps: steps, TStates: tstates, PC: cpu.PC, Halted: halted,

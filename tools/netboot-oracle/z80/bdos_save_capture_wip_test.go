@@ -77,16 +77,25 @@ func TestBDOSSaveCaptureWIP(t *testing.T) {
 	var log []capEv
 	mac.AttachIO(&capIO{inner: enc, lastPC: &lastPC, log: &log})
 
+	// Boot to the GENUINE editor key-wait idle (WTKY2 &04FA — the editor's
+	// CALL INPUTAD / RET C / JR Z,WTKY2 spin), NOT addrEditorIdle (&01CB), which is
+	// the ROM's HLJPI `JP (HL)` trampoline. Resuming a command run at &01CB with
+	// RunBootFrom (which resets SP) jumps to &0000 = a cold reset that runs the
+	// power-on RAM test (zeroing DOSFLG) and reboots B-DOS — so commands were never
+	// actually executed; the apparent CMD24@&01CB was a reboot artifact. See §8z
+	// correction + TestBASICSaveDispatchesToHSAVE.
 	res, err := mac.RunBootFrom(0x0000, z80h.Entry{
-		StepCap: realBootStepCap, StopPC: addrEditorIdle, StopPCSkip: 16,
+		StepCap: 80_000_000, StopPC: wtky2Idle, StopPCSkip: 0, FrameIntPeriod: 60000,
 		Trace: func(pc uint16) { lastPC = pc },
 	})
 	if err != nil || !res.ReachedStop {
-		t.Fatalf("boot failed: %v reached=%v PC=&%04X", err, res.ReachedStop, res.PC)
+		t.Fatalf("boot did not reach editor key-wait idle WTKY2: %v reached=%v PC=&%04X", err, res.ReachedStop, res.PC)
 	}
-	t.Logf("booted to editor idle: LMPR=&%02X HMPR=&%02X", mac.Pager().LMPR, mac.Pager().HMPR)
+	t.Logf("booted to editor idle (WTKY2 &04FA): LMPR=&%02X HMPR=&%02X DOSFLG=&%02X",
+		mac.Pager().LMPR, mac.Pager().HMPR, mac.Read(0x5BC2, 1)[0])
 
-	// Type a direct command and run the editor until it drains the keys + returns to idle.
+	// Type a direct command and Continue the editor IN PLACE (preserving the call
+	// chain) until it drains the keys + idles again at WTKY2.
 	typeLine := func(label, line string, capPorts bool) {
 		logStart := len(log)
 		mac.InjectKeys(append([]byte(line), 0x0D))
@@ -96,10 +105,12 @@ func TestBDOSSaveCaptureWIP(t *testing.T) {
 			0x0008: "RST8", 0x4319: "DISPATCH", 0x5D54: "HSAVE", 0x47CB: "open.file",
 			0x4889: "HSVBK", 0x49C2: "HCFSM", 0x43ED: "wr.buff", 0x68F4: "SDwrite",
 			0x6925: "CMD24", 0x4662: "devsel", 0x5E16: "HWSAD", 0x4406: "FDCpoll",
+			0x0D2F: "LINERUN",
 		}
-		_, _ = mac.RunBootFrom(addrEditorIdle, z80h.Entry{
-			StepCap:        30_000_000,
+		_, _ = mac.Continue(z80h.Entry{
+			StepCap:        40_000_000,
 			FrameIntPeriod: 60000,
+			StopPC:         wtky2Idle, StopPCSkip: 200,
 			Trace: func(pc uint16) {
 				lastPC = pc
 				if n, ok := landmarks[pc]; ok && !seen[pc] {

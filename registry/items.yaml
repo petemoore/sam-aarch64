@@ -4967,6 +4967,15 @@
     - {num: 736, role: completing}
   parent: i280b-b2
 
+- id: i280b-b2s
+  title: "Debug + fix the emulator fidelity gap that makes BASIC SAVE-to-record error &0C instead of writing — make the rig capture a working SAVE (the gold IN/OUT trace), per Pete's port-audit method"
+  description: |
+    Pete (2026-06-29): the scope is days away; meanwhile debug the emulation gap. §8y: the i280b-b2q rig (bdos_save_capture_wip_test.go) traces BASIC RECORD cleanly but the emulated BASIC SAVE-to-record errors SAM &0C (12) BEFORE any SD I/O (no gold CMD24 trace yet). Method (Pete): the trace IS the diagnostic — find where B-DOS reads a Trinity port and diverges to the error/floppy path; that port's emulator handler (enc28j60.go/sdcard.go/eeprom.go) is the gap — check if it is faithful to the docs/Colin's B-DOS or stubbed/guessed. §8r suspects: Trinity-detect &DC &08/&09->'TR', a post-init ready/status, card-present/WP bits, default-device routing. Fix must be GROUNDED (model documented behaviour, never invent — rule 7). Success: the rig shows BASIC SAVE issuing SD I/O / a CMD24; then diff our HWSAD path vs the gold trace. Authority: trinity-sd-z80-interface.md §8r/§8y + ~/sam-archive/bdos/analysis (HSAVE &9D54) + trinity-docs.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i280b-b2
+
 - id: i281
   title: "TAPO power-management automation: monitor tracks SAM on-time + escalates + auto-off backstop; agent keep-alive; idle-off in agent prompts"
   description: |
