@@ -706,6 +706,24 @@ core rather than the claim handshake b2d fixed). Next instrumentation: report `&
 `&DC` busy bit) at `HWSAD_PRE`, and a marker *inside* the write core's busy-wait, to split (a) vs
 (b).
 
+**⚠️ Soundness traps for that next measurement (identified, NOT yet handled — design around them):**
+- **Reading `&780B` from our seam is paging-fragile.** `&780B` is a section-B address
+  (`&4000-&7FFF`), and B-DOS's ambient-device var lives in **B-DOS's own page** (the one the `&0033`
+  ROM bridge maps into section B *during* a hook — that is why §8a/§8h read it only after
+  `pageDOSIntoSectionB`). But at `HWSAD_PRE` the serve has **LMPR=`&1F` → section B = page 0**
+  (measured this shot), so B-DOS's page is **not** in section B and a plain `ld a,(&780B)` reads
+  page-0 garbage, NOT the real ambient-device var. To report `&780B` soundly the seam must first
+  page B-DOS's var-page into section B (its serve page number is unknown — editor-idle shows 29, the
+  serve's may differ), then restore — fragile. A cleaner discriminator is likely needed.
+- **`&DC` is the Trinity *select* port, not a clean status read.** `IN (&DC)` returns controller
+  status (busy=bit 3) but has select-side semantics; reading it can perturb the shared ENC/SD
+  controller. It is paging-independent (a port read), but treat the read as potentially disturbing
+  and cross-check against the §8d–§8f shared-bus findings.
+- **Prefer the authority-diff route first** (`feedback_port_diff_authority_first`): read Colin's
+  fork (`region-diffs.txt` + the SD region in `bdos15t-beta6.annotated.dis`) for what happens to
+  `&780B` and the SD/ENC shared bus **between** a record-select (HRECORD) and a raw sector write
+  (HWSAD). This overlaps i270a and may pin (a) vs (b) **statically**, with no paging-fragile read.
+
 This measurement is i280b-b2j (DONE); the re-localized fix is i280b-b2i (reframed OPEN).
 
 ## 9. Porting to fresh Z80
