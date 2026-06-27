@@ -30,7 +30,9 @@
 package z80_test
 
 import (
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	z80h "github.com/petemoore/sam-aarch64/tools/netboot-oracle/z80"
@@ -120,19 +122,151 @@ func TestTrinityFullFlowReachesTrinload(t *testing.T) {
 
 	const mBdosBootRecord = 0x42FF // bootloader: bdos_boot_record dispatch (HRECORD + ALHK)
 	hits := map[uint16]int{mBdosBootRecord: 0, trinloadStart: 0, trinloadReadLoop: 0}
+
+	// ---- DEV INSTRUMENTATION (uncommitted, 2026-06-30) ----------------------
+	// Goal: capture trinload's execution from the first time PC hits &6000 and
+	// find exactly where execution permanently LEAVES trinload's range
+	// (&6000-&6D05) — the last trinload PC and the destination it transfers to.
+	//
+	// Subtlety: PCs in &6000-&6D05 also belong to B-DOS *before* trinload runs
+	// (the SD ladder runs at logical &67CA/&67F5). So we only start tracing once
+	// trinload's `start` (&6000) has actually executed (`armed`).
+	//
+	// We record, after arming, a flat trace of every PC together with whether it
+	// is in trinload's range. We also log each transition out-of-range with the
+	// trinload PC it left from and the destination PC; and (because trinload
+	// legitimately CALLs into the ROM many times and returns) we keep the FULL
+	// post-arm trace so we can see the very last trinload PC and where it ends.
+	const (
+		tlLo = 0x6000
+		tlHi = 0x6D05
+	)
+	armed := false
+	type seg struct {
+		fromPC uint16 // last trinload PC before leaving the range
+		toPC   uint16 // first PC outside the range (destination)
+		regs   z80h.Regs
+	}
+	var transitions []seg
+	prevInRange := false
+	var lastTrinloadPC uint16
+	postArmSteps := 0
+	// Ring of the last N PCs after arming (for context around the final exit).
+	ring := make([]uint16, 0, 4096)
+	// Count distinct trinload PCs visited (how far into trinload it got).
+	tlPCs := map[uint16]int{}
+	// Measure the instruction gap between B-DOS's last &DC=&38 SD-init (executed at
+	// pc &6639) and trinload's chk_trinity identity probe (&DC=&08 at pc &65EE). If
+	// this gap is far larger than the ~50us settle window (~75-150 instr at ~6MHz),
+	// the model's indefinite sdInitSettling latch is over-aggressive vs real silicon.
+	totalSteps := 0
+	last38Step, probe08Step := -1, -1
+
 	res, runErr := mac.RunBootFrom(0x0000, z80h.Entry{
 		StepCap:        80_000_000, // generous: boot + B-DOS init + ALHK sector loads of trinload
 		FrameIntPeriod: 20000,      // B-DOS init's EI;HALT frame-delay loops need the 50Hz tick
 		StopPC:         trinloadReadLoop,
 		Trace: func(pc uint16) {
 			lastPC = pc
+			totalSteps++
+			if pc == 0x6639 {
+				last38Step = totalSteps // keep the last occurrence before the probe
+			}
+			if pc == 0x65EE && probe08Step < 0 {
+				probe08Step = totalSteps
+			}
 			if _, ok := hits[pc]; ok {
 				hits[pc]++
+			}
+			if pc == trinloadStart {
+				armed = true
+			}
+			if !armed {
+				return
+			}
+			postArmSteps++
+			inRange := pc >= tlLo && pc <= tlHi
+			if inRange {
+				lastTrinloadPC = pc
+				tlPCs[pc]++
+			}
+			// Record a transition when we move from in-range to out-of-range.
+			if prevInRange && !inRange {
+				transitions = append(transitions, seg{fromPC: lastTrinloadPC, toPC: pc, regs: mac.LiveRegs()})
+			}
+			prevInRange = inRange
+			ring = append(ring, pc)
+			if len(ring) > 4096 {
+				ring = ring[len(ring)-4096:]
 			}
 		},
 	})
 	t.Logf("full-flow: bdos_boot_record=%d trinload_start=%d read_loop=%d finalPC=&%04X reachedStop=%v steps=%d err=%v",
 		hits[mBdosBootRecord], hits[trinloadStart], hits[trinloadReadLoop], res.PC, res.ReachedStop, res.Steps, runErr)
+	gap := -1
+	if last38Step >= 0 && probe08Step >= 0 {
+		gap = probe08Step - last38Step
+	}
+	t.Logf("SETTLE GAP: last &38 (SD-init @&6639) at instr %d, chk_trinity &08 probe (@&65EE) at instr %d -> gap=%d instructions (settle window ~75-150)",
+		last38Step, probe08Step, gap)
+
+	// ---- DEV INSTRUMENTATION REPORT ----------------------------------------
+	t.Logf("INSTR: postArm steps=%d, distinct trinload PCs visited=%d, lastTrinloadPC=&%04X, %d out-of-range transitions",
+		postArmSteps, len(tlPCs), lastTrinloadPC, len(transitions))
+	// Print the full transition list: each is a trinload->outside jump/call/ret.
+	for i, s := range transitions {
+		t.Logf("  T[%d] trinload &%04X -> &%04X  (A=%02X BC=%02X%02X DE=%02X%02X HL=%02X%02X)",
+			i, s.fromPC, s.toPC, s.regs.A, s.regs.B, s.regs.C, s.regs.D, s.regs.E, s.regs.H, s.regs.L)
+	}
+	// Print the tail of the post-arm PC ring (the last ~80 PCs executed) so we
+	// can see the exit and where it ended up (the ROM editor idle band).
+	tail := ring
+	if len(tail) > 120 {
+		tail = tail[len(tail)-120:]
+	}
+	var tb []string
+	for _, p := range tail {
+		tb = append(tb, fmt.Sprintf("%04X", p))
+	}
+	t.Logf("INSTR tail PCs (last %d): %s", len(tail), strings.Join(tb, " "))
+
+	// ---- DEV INSTRUMENTATION: &DC microcontroller-select stream -------------
+	// chk_trinity's identity probe (&DC=&08/&09 then IN &DD) reads STALE when the
+	// ENC model's sdInitSettling flag is set — set by any &DC=&38 (SD init),
+	// cleared only by &DC=&28 (ENC reset). B-DOS's auto-boot does SD work, so if a
+	// &38 fired with no &28 before trinload's chk_trinity, the probe fails and
+	// trinload prints "Trinity not detected." Confirm by listing the &DC=&38/&28
+	// events and the first &DC=&08 (chk_trinity probe) with their PCs.
+	dcAll := *lg
+	var dc38, dc28, dc08 []capEv
+	for _, e := range dcAll {
+		if e.port != 0xDC || !e.write {
+			continue
+		}
+		switch e.val {
+		case 0x38:
+			dc38 = append(dc38, e)
+		case 0x28:
+			dc28 = append(dc28, e)
+		case 0x08:
+			dc08 = append(dc08, e)
+		}
+	}
+	t.Logf("INSTR &DC: %d x &38(SD-init), %d x &28(ENC-reset), %d x &08(chk_trinity probe)",
+		len(dc38), len(dc28), len(dc08))
+	show := func(label string, evs []capEv) {
+		n := len(evs)
+		if n > 6 {
+			t.Logf("  &DC=%s: %d events; first PC=&%04X, last PC=&%04X", label, n, evs[0].pc, evs[n-1].pc)
+		} else {
+			for _, e := range evs {
+				t.Logf("  &DC=%s OUT @ pc=&%04X", label, e.pc)
+			}
+		}
+	}
+	show("38", dc38)
+	show("28", dc28)
+	show("08", dc08)
 
 	// Extract CMD17/CMD24 LBAs from the &DF (SD) command stream. SD command frames
 	// are 6 consecutive &DF OUT bytes: [0x40|cmd, a3, a2, a1, a0, crc]; the data-phase
