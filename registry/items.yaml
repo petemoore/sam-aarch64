@@ -5071,7 +5071,9 @@
   title: "ENC model fidelity: clear sdInitSettling after a settle window/activity, not only on &DC=&28 (indefinite latch over-aggressive ~1000x)"
   description: |
     VERIFIED (i288 rig, trinity_full_flow_repro_test.go): the ENC28J60 model's sdInitSettling flag (enc28j60.go) is set by &DC=&38 (SD-init) and cleared ONLY by &DC=&28 (ENC reset). In the faithful full boot, B-DOS's ALHK does &38 during auto-boot and NO &28 ever follows, so the flag latches indefinitely; trinload's chk_trinity identity probe (&DC=&08) then reads stale -> 'Trinity not detected.' -> trinload exits to BASIC instead of reaching read_loop. MEASURED gap between the &38 (@&6639) and the &08 probe (@&65EE) = 192147 instructions, with 0 &28 all boot; the settle window is ~75-150 instr (~50us at 6MHz). Pete's REAL SAM boots trinload fine with no &28, so real silicon settles in real time -> the indefinite latch is over-aggressive by ~1000x and manufactures a false failure. FIX: clear sdInitSettling after a bounded settle (a T-state budget) or after sufficient unrelated bus activity, preserving the i242/i287 back-to-back SD-then-probe catch (a timed clear still fires for a genuine within-window violation). DATA/FIDELITY-SENSITIVE: do NOT rush at deep context; needs a careful T-state-budget choice (fidelity doc calls the exact settle 'Genuinely-unspecified'), a full netboot-oracle test run (trinity_interleave_test/i242/i287 must stay green), and Pete's blessing on the hardware-timing assumption. Proof-of-fix: disabling the flag made the rig reach read_loop + print 'TrinLoad 1.0: Ready' (subagent, reverted). Unblocks i288's trinload->read_loop, then the serve-write-crash reproduction. NOTE: this same shared-PIC model underlies the prior session's '§8ag serve crash not emulation-reproducible' claim -> its fidelity is now in question; re-evaluate after the fix.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i288]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 755, role: completing}
