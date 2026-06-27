@@ -453,11 +453,23 @@ bd_list_write_hw:
                 ld      (bd_list_lba + 1), a
                 ld      (bd_list_lba + 2), a
                 ld      (bd_list_lba + 3), a
-                ; SDv1 (byte-addressed) cards need LBA<<9; SDHC/v2 use the LBA verbatim.
+                call    bd_lba_apply_v1_shift   ; SDv1: bd_list_lba <<= 9; v2/SDHC: no-op
+                ; Source is the 512-byte list buffer; reuse the shared CMD24 core.
+                ld      hl, BD_LIST_BUF
+                jp      bd_cmd24_write_core
+
+; ===========================================================================
+; bd_lba_apply_v1_shift — for an SDv1 (byte-addressed) card, shift bd_list_lba
+; left by 9 (block number -> byte offset); for SDHC/v2 (block-addressed) leave it
+; verbatim. The card class is read from CSD_STAGE[0] (bit7:6 == 01 => v2). Shared
+; by every CMD17/CMD24 LBA setup so the byte-vs-block addressing is computed once.
+; In/Out: bd_list_lba (32-bit LE). Clobbers AF, B, HL.
+; ===========================================================================
+bd_lba_apply_v1_shift:
                 ld      a, (CSD_STAGE)
                 and     &C0
                 cp      &40
-                jr      z, blwr_have_lba        ; v2/SDHC: block address, no shift
+                ret     z                       ; v2/SDHC: block address, no shift
                 ld      b, 9                    ; v1: bd_list_lba <<= 9
 blwr_shl:
                 ld      hl, bd_list_lba
@@ -470,7 +482,24 @@ blwr_shl:
                 inc     hl
                 rl      (hl)
                 djnz    blwr_shl
-blwr_have_lba:
+                ret
+
+; ===========================================================================
+; bd_cmd24_write_core — the shared CMD24 single-block write protocol (the §5/§8
+; write tail Colin's hd.svb-t models, matched to sdcard.go's CMD24 state machine).
+; Self-healing: runs the full sdc_init_ladder every call, so a disturbed SPI state
+; (the serve's ENC ereset) is re-established before the write. Used by both
+; bd_list_write_hw (record-list claim) and bd_record_write_hw (record data write),
+; so the CMD24 handshake lives in ONE tested place.
+;
+; In:  bd_list_lba  4 bytes  32-bit LE block/byte address (already v1-shifted).
+;      HL                    pointer to the 512-byte source buffer.
+; Out: CY clear on success, CY set on failure (command reject / not-accepted /
+;      busy timeout). Card deselected + EI on every path.
+; Clobbers: AF, BC, DE, HL.
+; ===========================================================================
+bd_cmd24_write_core:
+                ld      (bd_cmd24_src), hl     ; latch the source pointer for the data phase
                 call    sdc_init_ladder        ; wake + CMD0/8/41/58/59; card selected
                 ; CMD24 WRITE_SINGLE_BLOCK, arg = bd_list_lba (sent MSB-first by sdc_cmd).
                 ld      a, &FF                  ; CRC don't-care (CRC off)
@@ -492,9 +521,9 @@ blwr_have_lba:
                 ; Protocol step 3: &FE start-of-data token.
                 ld      a, SDC_DATATOK
                 call    sdc_out
-                ; Protocol step 4: send the 512-byte data block from BD_LIST_BUF
+                ; Protocol step 4: send the 512-byte data block from (bd_cmd24_src)
                 ;   (two 256-byte passes, mirroring the read's two-pass INI).
-                ld      hl, BD_LIST_BUF
+                ld      hl, (bd_cmd24_src)
                 ld      b, 0                    ; 256 bytes first pass
 blwr_wd1:
                 ld      a, (hl)
@@ -536,7 +565,108 @@ blwr_ok:
                 or      a                       ; CY clear: success
                 jp      sdc_deselect
 
+; ===========================================================================
+; bd_record_write_hw — write one 512-byte data sector of a claimed Trinity record
+; with our OWN self-healing CMD24, by ABSOLUTE card LBA, bypassing the B-DOS HWSAD
+; hook (q62 option (a) / i194 / §8ag). The B-DOS hooks flakily hang on real hardware
+; (they rely on boot-time SPI-mode persistence the serve's ENC reset disturbs);
+; bd_cmd24_write_core re-runs sdc_init_ladder every call, so it self-heals and works.
+;
+; RECORD -> LBA (the data-safety-critical math; cross-checked against the Go
+; authority tools/netboot-oracle/bdos/raw_sink.go + the §6/§7 record geometry):
+;
+;     LBA = csd_base + 1600*(record-1) + linearSec
+;
+;   - csd_base (sd_csd.asm) is the first DATA sector of the card (record-list base
+;     + 1) computed by csd_blocks_to_records at startup.
+;   - record is 1-based; linearSec is 0-based (0..1599 within the record).
+;   - 1600*(record-1) is a 16-bit*16-bit -> >=24-bit product; computed by repeated
+;     16-bit addition of 1600 into a 32-bit accumulator ((record-1) iterations,
+;     <= ~4808 for the largest card). Correctness first; the per-sector cost is
+;     dwarfed by the bit-banged SPI transfer.
+;
+; DATA SAFETY: the LBA always falls in [csd_base+1600*(n-1), csd_base+1600*n) for
+; the claimed record n and linearSec in 0..1599 — it can never reach another
+; record's blocks, the record list (sectors 1..base-1), or sector 0. The caller
+; passes the CLAIMED FREE record number; bdos_find_record_for_strategy guarantees
+; the record was free (the shared-resource invariant).
+;
+; In:  BD_REC_WRITE_REC     2 bytes  1-based claimed record number n (>= 1)
+;      BD_REC_WRITE_LINEAR  2 bytes  0-based linear sector within the record (0..1599)
+;      HL                            pointer to the 512-byte source buffer
+; Out: CY clear on success, CY set on failure (bd_cmd24_write_core's contract).
+; Clobbers: AF, BC, DE, HL.
+;
+; EMULATION. Host-verified under the i145c/i145h SD model (sdcard.go): the CMD24
+; lands in store[LBA], so a test asserts the absolute block address + the 512 bytes
+; (netboot_serve_wrq_record_test.go own-CMD24 path; the LBA math is unit-tested in
+; isolation in sd_record_write_test.go). Emulation-verified is not hardware-verified
+; (CLAUDE.md §5): the real-Trinity write is i194's hardware step (Pete-gated).
+; ===========================================================================
+bd_record_write_hw:
+                push    hl                      ; save the source pointer across the LBA math
+
+                ; --- accumulator (32-bit LE) := 1600 * (record - 1) ---
+                ld      hl, 0
+                ld      (bd_rec_lba), hl
+                ld      (bd_rec_lba + 2), hl
+                ld      hl, (BD_REC_WRITE_REC)
+                dec     hl                      ; HL = record - 1 (iteration count)
+brw_mul_loop:
+                ld      a, h
+                or      l
+                jr      z, brw_mul_done         ; (record-1) additions of 1600 done
+                push    hl                      ; save the loop counter
+                ; bd_rec_lba += 1600 (32-bit: low word add, then propagate carry).
+                ld      hl, (bd_rec_lba)
+                ld      bc, 1600
+                add     hl, bc
+                ld      (bd_rec_lba), hl
+                jr      nc, brw_mul_nocarry
+                ld      hl, (bd_rec_lba + 2)
+                inc     hl
+                ld      (bd_rec_lba + 2), hl
+brw_mul_nocarry:
+                pop     hl                      ; restore the loop counter
+                dec     hl
+                jr      brw_mul_loop
+brw_mul_done:
+                ; --- accumulator += linearSec (16-bit, into the 32-bit accumulator) ---
+                ld      hl, (bd_rec_lba)
+                ld      bc, (BD_REC_WRITE_LINEAR)
+                add     hl, bc
+                ld      (bd_rec_lba), hl
+                jr      nc, brw_lin_nocarry
+                ld      hl, (bd_rec_lba + 2)
+                inc     hl
+                ld      (bd_rec_lba + 2), hl
+brw_lin_nocarry:
+                ; --- accumulator += csd_base (16-bit) ---
+                ld      hl, (bd_rec_lba)
+                ld      bc, (csd_base)
+                add     hl, bc
+                ld      (bd_rec_lba), hl
+                jr      nc, brw_base_nocarry
+                ld      hl, (bd_rec_lba + 2)
+                inc     hl
+                ld      (bd_rec_lba + 2), hl
+brw_base_nocarry:
+                ; Move the computed block LBA into bd_list_lba (the address
+                ; bd_cmd24_write_core sends), then apply the v1 byte-shift.
+                ld      hl, (bd_rec_lba)
+                ld      (bd_list_lba), hl
+                ld      hl, (bd_rec_lba + 2)
+                ld      (bd_list_lba + 2), hl
+                call    bd_lba_apply_v1_shift   ; SDv1: <<9; v2/SDHC: no-op
+
+                pop     hl                      ; restore the source pointer
+                jp      bd_cmd24_write_core     ; shared CMD24 protocol; returns to caller
+
 bd_list_lba:      defs 4                        ; 32-bit LE CMD17/CMD24 block/byte address
+bd_cmd24_src:     defs 2                        ; bd_cmd24_write_core: 512-byte source pointer
+bd_rec_lba:       defs 4                        ; bd_record_write_hw: 32-bit LE record data-block LBA accumulator
+BD_REC_WRITE_REC:    defs 2                     ; bd_record_write_hw: 1-based claimed record number n
+BD_REC_WRITE_LINEAR: defs 2                     ; bd_record_write_hw: 0-based linear sector within the record
 
 ; ===========================================================================
 ; csd_decode_blocks — decode CSD_STAGE into the 32-bit (LE) csd_blocks.
