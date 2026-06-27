@@ -1121,6 +1121,18 @@ wd_finalize_flat:
 ; IP + server TID -> client IP + client TID) and transmit it.
 srv_send_tbuf:
                 ld      (TFTP_PKT_LEN), bc
+                ; i280b-b2d: gate every reply on the PHY link being up. The serve is
+                ; reactive everywhere EXCEPT right after a serve_rearm_enc, whose ereset
+                ; (full ENC soft-reset, to restore the SD-disturbed RX) drops the 10BASE-T
+                ; link; a frame TX'd before the link re-establishes is silently lost (no
+                ; egress — §8f), which is exactly why the WRQ handshake reply never reached
+                ; curl. drv_wait_link (i127) returns at once when the link is already up
+                ; (the reactive replies — RRQ DATA, ACKs with no preceding reset) and waits
+                ; out the post-reset re-establishment when it is down. Bounded (65536 polls)
+                ; so a no-cable case can't wedge; the BC length is saved above and the frame
+                ; fields below are reloaded fresh, so drv_wait_link's A/BC/DE/HL clobbers are
+                ; harmless. We send regardless of its BC result (best-effort on timeout).
+                call    drv_wait_link
 
                 ld      hl, CLIENT_MAC
                 ld      de, PARAM_DST_MAC
@@ -1857,6 +1869,12 @@ SRC_TABLE:        defs 256
                 include "tftp_build.asm"
                 include "tftp_parse.asm"
                 include "encdrv.asm"
+                ; enc_link.asm (i127) adds drv_wait_link — wait for the ENC28J60 PHY
+                ; link before transmitting. srv_send_tbuf gates every reply on it
+                ; (i280b-b2d): after a serve_rearm_enc the ereset drops the 10BASE-T
+                ; link (§8f), and a reply TX'd before it re-establishes is silently
+                ; lost. Composes encdrv primitives (above); host-build-safe.
+                include "enc_link.asm"
                 ; The dumper includes eeprom.asm itself (it reads the EEPROM in
                 ; every build), so suppress this conditional include there to avoid
                 ; a double definition. The standalone serve build keeps it: the

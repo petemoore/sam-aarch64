@@ -807,7 +807,7 @@ netboot-server-disk: $(BUILD)/netboot_server_boot.bin $(BUILD)/build-disk
 #   * the bootable binary (no flag) includes serve_main + eeprom.asm so it reads the
 #     SAM's real MAC/IP, provisions the baked-in demo files, and serves on real
 #     Trinity (the disk built by netboot-serve-disk).
-$(BUILD)/netboot_serve.bin $(BUILD)/netboot_serve.map: src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm
+$(BUILD)/netboot_serve.bin $(BUILD)/netboot_serve.map: src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/enc_link.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_HOSTTEST=1 \
 	    --obj=$(BUILD)/netboot_serve.bin \
@@ -822,7 +822,7 @@ netboot-serve: $(BUILD)/netboot_serve.bin $(BUILD)/netboot_serve.map
 # &C000 into section D — RAM at boot (the section-D loadability probe proves LOAD CODE
 # deposits >&BFFF into RAM and ROM1 is off at run), so its boot budget is the full
 # 32768-byte &8000-&FFFF window, not the 16384-byte section-C limit.
-$(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map: src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm src/netboot/sd_csd.asm src/netboot/bdos_seam.asm src/netboot/raw_record_sink.asm
+$(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map: src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/eeprom.asm src/netboot/sd_csd.asm src/netboot/bdos_seam.asm src/netboot/raw_record_sink.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_REAL_LISTREAD=1 \
 	    --obj=$(BUILD)/netboot_serve_boot.bin \
@@ -840,7 +840,7 @@ netboot-serve-boot: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.
 # for netboot_serve_boot.bin: push it to the SAM the same way for a diagnostic run,
 # then deploy the non-debug serve. The Go harness asserts the marker sequence
 # (netboot_serve_dbg_test.go). Same boot budget (32768) as the non-debug image.
-$(BUILD)/netboot_serve_boot_debug.bin $(BUILD)/netboot_serve_boot_debug.map: src/netboot/netboot_serve.asm src/netboot/dbg_marker.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm src/netboot/sd_csd.asm src/netboot/bdos_seam.asm src/netboot/raw_record_sink.asm src/netboot/test_report.asm
+$(BUILD)/netboot_serve_boot_debug.bin $(BUILD)/netboot_serve_boot_debug.map: src/netboot/netboot_serve.asm src/netboot/dbg_marker.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/eeprom.asm src/netboot/sd_csd.asm src/netboot/bdos_seam.asm src/netboot/raw_record_sink.asm src/netboot/test_report.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_DEBUG=1 \
 	    --obj=$(BUILD)/netboot_serve_boot_debug.bin \

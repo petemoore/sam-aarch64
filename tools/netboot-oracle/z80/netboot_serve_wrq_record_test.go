@@ -1298,3 +1298,41 @@ func milestonesHas(m map[uint16]string, name string) (uint16, bool) {
 	}
 	return 0, false
 }
+
+// TestServeWRQHandshakeWaitsForLink is the i280b-b2d emulation gate: after the WRQ
+// claim's serve_rearm_enc (whose ereset drops the 10BASE-T link on real silicon, §8f),
+// the handshake reply must NOT be transmitted until the link is back up — otherwise it is
+// silently dropped (no egress) and curl never hand-shakes. srv_send_tbuf now calls
+// drv_wait_link (i127) before every reply. This models the link DOWN past the point the
+// handshake would naturally fire and asserts the reply still reaches the wire, held until
+// link-up. Without the drv_wait_link gate the reply fires into the link-down window and the
+// model drops it (serveDemo then sees 0 frames and fails) — so this guards the fix. Mirrors
+// TestEEPROMRoundTripWaitsForLink (the proactive-client i127 case).
+func TestServeWRQHandshakeWaitsForLink(t *testing.T) {
+	const records, freeRecord = 8, 4
+	wrq := demoWRQ("trinity-sam-disks/morning.mgt", nil)
+
+	// Baseline (link up immediately): learn the op count at which the handshake reply
+	// naturally transmits.
+	mac0, enc0, _, _, _ := loadServeRecordPush(t, records, freeRecord)
+	if serveDemo(t, mac0, enc0, wrq) == nil {
+		t.Fatal("baseline: the bare WRQ produced no handshake reply")
+	}
+	natTX := enc0.FirstTXOps()
+	if natTX <= 0 {
+		t.Fatalf("baseline transmitted no frame (FirstTXOps=%d)", natTX)
+	}
+
+	// Hold the link down until well past that point, straddling the natural handshake TX.
+	mac, enc, _, _, _ := loadServeRecordPush(t, records, freeRecord)
+	linkUp := natTX + 5000
+	enc.SetLinkUpAfterOps(linkUp)
+
+	reply := serveDemo(t, mac, enc, wrq) // serveDemo fails if the reply was dropped (no frame)
+	if reply == nil {
+		t.Fatal("WRQ handshake reply dropped in the link-down window — drv_wait_link missing/ineffective")
+	}
+	if tx := enc.FirstTXOps(); tx < linkUp {
+		t.Errorf("handshake TX at op %d, before link-up at %d — drv_wait_link did not hold the reply", tx, linkUp)
+	}
+}
