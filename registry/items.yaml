@@ -5041,6 +5041,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 763, role: completing}
 
 - id: i283
   title: "Hardware retest the i280b-b2t A=2 SD-write fix: push the fixed serve, curl a .mgt, confirm the push completes end-to-end (block-localizing markers)"
