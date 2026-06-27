@@ -54,9 +54,25 @@ func seedRecordFromMgt(t *testing.T, sd *z80h.SDCard, csdBase uint32, record int
 	if len(mgt) != 819200 {
 		t.Fatalf("disk image is %d bytes, want exactly 819200 (80*10*2*512)", len(mgt))
 	}
-	for i := 0; i < 1600; i++ {
-		lba := csdBase + uint32(1600*(record-1)) + uint32(i)
-		sd.SeedSector(lba, mgt[512*i:512*i+512])
+	// B-DOS addresses a record's sectors SIDE-MAJOR: conv.de computes
+	// linear = side*800 + 10*track + (sector-1) (ANALYSIS.md §75; "10 x track +
+	// sector-1, side 2 via bit 7"). A .mgt image is TRACK-MAJOR with the two sides
+	// interleaved per track: mgtSector = track*20 + side*10 + (sector-1). So a raw
+	// byte-for-byte copy puts the directory (linear 0) in the right place but every
+	// file's data sectors in the wrong one. Re-order .mgt -> B-DOS record order here.
+	// (TRINLOAD_REORDER=0 to seed RAW and observe the mismatch.)
+	raw := os.Getenv("TRINLOAD_REORDER") == "0"
+	for L := 0; L < 1600; L++ {
+		mgtSec := L
+		if !raw {
+			side := L / 800
+			rem := L % 800
+			track := rem / 10
+			sector := rem % 10
+			mgtSec = track*20 + side*10 + sector
+		}
+		lba := csdBase + uint32(1600*(record-1)) + uint32(L)
+		sd.SeedSector(lba, mgt[512*mgtSec:512*mgtSec+512])
 	}
 }
 
@@ -81,8 +97,16 @@ func TestTrinityFullFlowReachesTrinload(t *testing.T) {
 
 	enc := z80h.NewENC28J60()
 	enc.LoadEEPROMImage(trinityDevice(t, eeprom, boot)) // forked bootloader in chunk 1, no config chunk
-	sd := enc.AttachSD(csdV2(0x001D59))                 // base=152, records=4809 (matches the real card)
-	seedRecordFromMgt(t, sd, 152, 3, mgt)               // record 3 = trinload
+	sd := enc.AttachSD(csdV2(0x001D59)) // base=152, records=4809 (matches the real card)
+	// EXPERIMENT (2026-06-30): real B-DOS get.label rejects a record whose first dir
+	// entry lacks the "BDOS" 4-byte ID at byte 232 ('Invalid record', rep81;
+	// bdos15t-beta6.annotated.dis &8DC2 get.label). The plain ~/git/trinload/
+	// trinload.mgt has 00 00 00 00 there. Stamp it to test whether the missing stamp
+	// is why ALHK bails. (TRINLOAD_STAMP=0 to disable and see the unstamped behaviour.)
+	if os.Getenv("TRINLOAD_STAMP") != "0" {
+		copy(mgt[232:236], []byte("BDOS"))
+	}
+	seedRecordFromMgt(t, sd, 152, 3, mgt) // record 3 = trinload
 	// ESC not held: keyMatrix defaults to 0xFF -> the config-driven auto-boot path,
 	// which (no config chunk) falls back to BOOT_RECORD 3.
 
