@@ -4845,9 +4845,11 @@
   title: "Hardware-shot toolkit (tools/hardware-shot: UDP:9001 marker listener + off->on->push->curl->listen->off orchestrator) + the §8e b2d-attempt finding"
   description: |
     Commit the previously session-scratch hardware-shot recipe as reusable tooling: tools/hardware-shot/listen-markers.py (decode the i271 DBG_* markers, mirror of src/netboot/dbg_marker.asm) + run-shot.sh (TAPO power-cycle -> push a NETBOOT_DEBUG serve binary to trinload -> disk-record WRQ via curl -> capture UDP:9001 markers -> power off; gated by the i252 deploy-guard, run with DEPLOY_CHECKED=1). Also records the §8e hardware finding: the b2d quiesce-before-rearm candidate was hardware-REFUTED (push still never hand-shakes), and the failure is a POST-serve_rearm_enc ENC-TX-readiness window the ENC marker channel cannot observe (even DBG_REARM_TIMEOUT shares the dead window). See docs/notes/trinity-sd-z80-interface.md §8e.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 726, role: completing}
   parent: i280b-b2
 
 - id: i280b-b2f
