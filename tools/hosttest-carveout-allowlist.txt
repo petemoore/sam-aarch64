@@ -47,4 +47,3 @@
 11 src/netboot/netboot_serve.asm
 3 src/netboot/netboot_server.asm
 1 src/netboot/samboot_config.asm
-3 src/netboot/smoke_test.asm

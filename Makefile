@@ -78,7 +78,7 @@ ci-registry: registry-gen
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-smoke-boot netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-boot netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -681,34 +681,21 @@ $(BUILD)/mgt_screen_demo.bin $(BUILD)/mgt_screen_demo.map: src/netboot/mgt_scree
 netboot-mgt-screen-demo: $(BUILD)/mgt_screen_demo.bin $(BUILD)/mgt_screen_demo.map
 
 # smoke-test (i94) — the Trinity bring-up smoke test: drv_read a frame, answer an
-# ARP request for the SAM's IP with build_arp_reply, drv_write the reply.  Two
-# builds from one source:
-#   * the host-test binary (NETBOOT_HOSTTEST) excludes the EEPROM read + the
-#     bootable forever-loop so the harness can drive smoke_serve_once directly;
-#     smoke_test_test.go asserts the ARP reply on the virtual wire matches the Go
-#     smoke.Responder authority byte-for-byte.
-#   * the bootable binary (no flag) includes smoke_main + the vendored eeprom.asm
-#     so it reads the SAM's real MAC/IP and runs on real Trinity (the disk built
-#     by netboot-smoke-disk).
-$(BUILD)/netboot_smoke_test.bin $(BUILD)/netboot_smoke_test.map: src/netboot/smoke_test.asm src/netboot/build_arp_reply.asm src/netboot/encdrv.asm
+# ARP request for the SAM's IP with build_arp_reply, drv_write the reply.  ONE
+# binary, used by every test (no carve-out flat-beside-full split, i231b-b4):
+# smoke_test_test.go drives smoke_serve_once directly and asserts the ARP reply
+# on the virtual wire matches the Go smoke.Responder authority byte-for-byte;
+# netboot_boot_test.go drives the bootable smoke_main end-to-end against the
+# modelled EEPROM. The same binary boots real Trinity (the disk built by
+# netboot-smoke-disk).
+$(BUILD)/netboot_smoke.bin $(BUILD)/netboot_smoke.map: src/netboot/smoke_test.asm src/netboot/build_arp_reply.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_HOSTTEST=1 \
-	    --obj=$(BUILD)/netboot_smoke_test.bin \
-	    --mapfile=$(BUILD)/netboot_smoke_test.map \
+	pyz80 --obj=$(BUILD)/netboot_smoke.bin \
+	    --mapfile=$(BUILD)/netboot_smoke.map \
 	    src/netboot/smoke_test.asm
+	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_smoke.bin 16384 netboot_smoke.bin
 
-netboot-smoke-test: $(BUILD)/netboot_smoke_test.bin $(BUILD)/netboot_smoke_test.map
-
-# The bootable smoke-test binary: the full program including the EEPROM config
-# read + the smoke_main forever-loop, for real Trinity hardware.
-$(BUILD)/netboot_smoke_boot.bin $(BUILD)/netboot_smoke_boot.map: src/netboot/smoke_test.asm src/netboot/build_arp_reply.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
-	@mkdir -p $(BUILD)
-	pyz80 --obj=$(BUILD)/netboot_smoke_boot.bin \
-	    --mapfile=$(BUILD)/netboot_smoke_boot.map \
-	    src/netboot/smoke_test.asm
-	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_smoke_boot.bin 16384 netboot_smoke_boot.bin
-
-netboot-smoke-boot: $(BUILD)/netboot_smoke_boot.bin $(BUILD)/netboot_smoke_boot.map
+netboot-smoke: $(BUILD)/netboot_smoke.bin $(BUILD)/netboot_smoke.map
 
 # netboot-trinload (i132) — vendored simonowen/trinload, built to a raw &6000
 # binary + symbol map so the koron-z80 harness can load and run it (trinload_test.go).
@@ -726,8 +713,8 @@ netboot-trinload: $(BUILD)/trinload.bin $(BUILD)/trinload.map
 # on a SAM + Trinity, then from another machine on the same LAN `ping <sam-ip>`
 # or `arping <sam-ip>` and watch the SAM's MAC come back (see
 # docs/notes/netboot-trinity-testing.md).
-netboot-smoke-disk: $(BUILD)/netboot_smoke_boot.bin $(BUILD)/build-disk
-	$(BUILD)/build-disk -netboot $(BUILD)/netboot_smoke_boot.bin -netboot-name smoke \
+netboot-smoke-disk: $(BUILD)/netboot_smoke.bin $(BUILD)/build-disk
+	$(BUILD)/build-disk -netboot $(BUILD)/netboot_smoke.bin -netboot-name smoke \
 	    $(BUILD)/netboot_smoke.mgt
 
 # secd-loadability — the section-D loadability probe (src/secd_probe.asm). Builds a
@@ -1204,7 +1191,7 @@ $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map: src/test_compact_ir.a
 compact-ir-z80: $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke-test netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-trinity-identity netboot-smoke-boot netboot-server-boot netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-http-main netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-server netboot-serve netboot-client netboot-dumper netboot-dumper-trinload netboot-csd-probe netboot-csd-probe-trinload netboot-samboot-config netboot-trinity-identity netboot-server-boot netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
 
 ci-netboot-z80: netboot-z80-routines editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80
 	cd tools/sampage && go test ./...
