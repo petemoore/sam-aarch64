@@ -4912,9 +4912,11 @@
   title: "Hardware-measure (§8m): H2' REFUTED — re-establishing the SD card (sdc_init_ladder) right before HWSAD still hangs; the hang is INSIDE the B-DOS HWSAD handler, not the SD-bus/&780B state"
   description: |
     DONE (authority diff + one TAPO probe shot). Splits the §8l (a)-vs-(b) suspects without the paging-fragile &780B read. AUTHORITY DIFF (bdos15t-beta6.annotated.dis): (a) refuted — &780B has one writer (&8673 in &8662, keyed on hk.a=A'), nothing between HRECORD-select and HWSAD touches it, #730's A'=0 leaves the claim's &780B=2, and §8i's data-phase re-select (HRECORD, no FDC dispatch) itself hangs. KEY INSIGHT: the claim's raw SD reads work ONLY because bd_list_read_hw calls sdc_init_ladder every time (self-heals) — B-DOS's HWSAD relies on boot-time SPI-mode PERSISTENCE — so 'claim reads work' cannot discriminate (b). HARDWARE PROBE (H2'): re-ran sdc_init_ladder+sdc_deselect (read-only, no LBA poke, no list-clobber) right before the rst-8 HWSAD, markers SD_REINIT_PRE/POST. Shot: SD_REINIT_POST FIRED (full init ladder runs clean post-ereset -> bus NOT wedged -> (b) REFUTED on hardware) but HWSAD_POST never fires (rst 8 still hangs with the card freshly re-established). => the hang is INSIDE the B-DOS HWSAD handler, not the SD card state. Surviving cause: the HWSAD prelude (&9E66 call &0005 ROM bridge + &780F section-B buffer copy) runs in the wrong DOS-call paging context (serve has section B=page 0, not B-DOS workspace); HRECORD survives it (no copy/&780F/&0005), HWSAD does not. Probe reverted (mutating; would taint future shots) — reproducibility record in §8m. Hands the precise fix direction to i280b-b2i.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 734, role: completing}
   parent: i280b-b2
 
 - id: i281
