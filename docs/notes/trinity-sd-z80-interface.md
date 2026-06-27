@@ -1228,6 +1228,51 @@ ENC TX inside the SD path. Do **not** commit a serve-code fix until the emulatio
 the hang via the modelled one-PIC interaction (CLAUDE.md §7 emulator-is-contract +
 prime-directive understand-before-changing).
 
+## 8u. Primary-source grounding for the hang — the one-PIC BUSY model (with exact citations)
+
+Read from the Trinity manual OCR + Simon Owen's developer diary (cite the photo originals
+in `~/sam-archive/trinity-docs/photos/` to confirm any UNVERIFIED OCR before relying on a
+figure). These primary facts reframe the `&A7CC` hang:
+
+- **`&A7CC` IS the manual's canonical `check_busy`.** The manual prints it verbatim:
+  `check_busy: IN A,(&DC) / AND &08 / JR NZ,check_busy / RET`, "CALL after every OUT
+  instruction." Source: `~/sam-archive/trinity-docs/text/IMG_20260617_162550.txt`. So the
+  hang is this exact poll on `&DC` bit 3.
+- **BUSY (`&DC` bit 3) is the WHOLE microcontroller's busy flag**, not an SD-specific one.
+  "When you OUT a command or data to the Trinity, the microcontroller will take time to
+  process … While busy, a bit on a Status Register will be set … Any data OUT'd while the
+  microcontroller is busy will be ignored." It is set on EVERY OUT to ANY of `&DC`–`&DF`
+  and cleared when the PIC finishes that one byte. Source: `IMG_20260617_162550.txt`,
+  `IMG_20260617_162617.txt`. **So `check_busy` cannot tell SD-busy from ENC-busy — one PIC,
+  one BUSY bit.**
+- **`&DC` (status) is the ONLY port NOT routed through the microcontroller** — "can be read
+  at any time", even while busy. Source: `IMG_20260617_162550.txt`. ⇒ a debug channel that
+  *reads* `&DC` is always safe; an ENC-*TX* channel (`drv_write` over `&DE`) is not.
+- **IN `&DD`/`&DE`/`&DF` share one read-back latch** (the DISCOVERY_REPORT §3 point 7):
+  "all point to the same microcontroller port, and will return the last byte clocked in …
+  from any peripheral." Interleaving OUTs to different peripherals before reading back loses
+  data. Source: `~/sam-archive/trinity-docs/text/IMG_20260617_162617.txt` (summary in
+  `~/sam-archive/trinity-docs/DISCOVERY_REPORT.md` §3.7).
+- **ENC reset (`%00101000` OUT `&DC`) needs a 50 µs settle** ("wait 50us after this for the
+  ENC28J60 to fully reset its registers"); SD init is `%00111000` (returns 0=absent/1=MMC/
+  2=SD); ENC `/CS` pulse is `%00100011`. Source:
+  `~/sam-archive/trinity-docs/text/IMG_20260617_162608.txt`, `IMG_20260617_162617.txt`.
+- **Documented ENC TRANSMIT-HANG.** Simon Owen: "I was also stung by a documented ENC issue
+  with the transmit logic getting stuck under certain conditions. A bug in my work-around
+  meant I would still occasionally hang during transmits." The `ereset`/`epulse` in
+  `src/netboot/encdrv.asm` is that work-around. Source:
+  `~/sam-archive/trinity-docs/text/IMG_20260617_163210.txt`.
+
+**Synthesised leading root cause (grounded, supersedes the §8s device-select-gate emphasis
+as the HARDWARE story):** an ENC transmit that wedges (Simon's transmit-hang) — or any ENC
+op that leaves the shared PIC mid-operation — leaves `&DC` BUSY **set**, and the next SD
+op's `check_busy`/`&A7CC` then spins forever on a BUSY bit that reflects the **ENC/PIC**, not
+the SD card. This unifies every prior thread: point 7 (one PIC, one BUSY), the §8s `&A7CC`
+`StuckBusy` repro, the i280b-b2i hypothesis (`serve_rearm_enc`'s ereset disturbs the SD
+side), and the manual's "OUT-while-busy is ignored" (a mis-timed SD command is dropped,
+leaving the card mid-transaction → its read never completes). **The `DBG_HWSAD_PRE` marker
+TX fires right before the SD write — it is itself a prime suspect for wedging the PIC.**
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**

@@ -6,9 +6,113 @@ Approach (Pete): capture a *working* B-DOS record write in emulation, diff our s
 write against it, fix the gap.
 
 **Status:** i280a DONE (the `bdostrace` tool). i280b is a long, well-documented
-investigation — `docs/notes/trinity-sd-z80-interface.md` **§8a–§8q** is the authority;
+investigation — `docs/notes/trinity-sd-z80-interface.md` **§8a–§8u** is the authority;
 read it before touching this. Ephemeral plan — delete in the PR that completes i280b.
-Live state: branch `i280b-b2n-hwsad-traceable` (pushed), registry **i280b-b2q OPEN**.
+Live state: registry **i280b-b2q DONE** (PRs #737/#738), **i280b-b2i OPEN** (the fix).
+
+---
+
+## IMPLEMENTING-AGENT HANDOVER — START HERE (2026-06-29)
+
+**Read FIRST, before any code:** `docs/notes/trinity-sd-z80-interface.md` §8s, §8t, §8u
+(the most recent findings), then the SOURCES table at the bottom of this section. Heed the
+research-first rule (`memory/feedback_docs_first`): the hardware primary sources below
+were NOT read until late and that caused a wrong experiment design — read them up front.
+
+### Where it stands (what's proven, what's the leading cause)
+
+- **Reproduced in emulation (PRs #737/#738, guards in
+  `tools/netboot-oracle/z80/bdos_write_core_reach_test.go`):** HWSAD reaches the B-DOS SD
+  write core `&A8F4`/CMD24 when the two device-select gates are satisfied, and the hang
+  reproduces — wedging `&DC` bit-3 BUSY (`ENC28J60.StuckBusy`) makes the write path spin at
+  `&A7CC` (= `&67CE` under the serve map). Detail: §8s.
+- **The hang is the manual's `check_busy` poll on `&DC` bit 3 (`&A7CC`).** `&DC` BUSY is the
+  WHOLE shared microcontroller's busy flag (one PIC for SD+ENC+EEPROM); it cannot
+  distinguish SD-busy from ENC-busy. Detail + citations: §8u.
+- **Leading root cause (grounded, §8u):** an ENC transmit/op that wedges the shared PIC
+  (Simon Owen's documented ENC transmit-hang; or `serve_rearm_enc`'s ereset; or a mis-timed
+  OUT-while-busy dropping an SD command) leaves `&DC` BUSY stuck → the next SD op's `&A7CC`
+  poll spins forever on a BUSY bit that reflects the ENC/PIC, not the SD card.
+- **The §8s "device-select gate" (`hk.a`=2 + `&80AF`) is an EMULATION finding, not confirmed
+  as the hardware blocker** — hardware shows `HWSAD_PRE → silence`, consistent with both a
+  device-select abort AND the `&A7CC` hang (§8t). Do not assume the gate is the hardware
+  obstacle; the one-PIC BUSY story (§8u) is the better-grounded hypothesis.
+
+### DO NOT (hard-won pitfalls)
+
+- **Never emit a network/ENC-TX debug marker inside an SD transaction** (CS asserted). It
+  clobbers the shared `&DD/&DE/&DF` read-back latch and the one-PIC state — it would CAUSE
+  or mask the hang. `src/netboot/dbg_marker.asm` already forbids TX during an asserted SD
+  CS. The existing `DBG_HWSAD_PRE` TX fires right before the write and is itself a SUSPECT.
+- **Hardware observation must use a NON-network channel** — `&DC` reads are always safe
+  (the one port not via the PIC, §8u); or border/screen for a human; or a RAM breadcrumb.
+- **Don't commit a serve-code fix off emulation alone** until the emulation reproduces the
+  hang via the *modelled one-PIC interaction* (not the manual `StuckBusy` toggle) — CLAUDE.md
+  §7 (emulator-is-contract) + the prime directive (understand before changing). A serve
+  change off the wrong branch risks breaking the working HGTHD/HLOAD/HSAVE hooks.
+
+### Plan (emulation-first, grounded)
+
+1. **Model the one-PIC ENC↔SD interaction** in `tools/netboot-oracle/z80/enc28j60.go`
+   (it already models the shared read-back latch, `rxDisarmed`, `sdInitSettling`,
+   `StuckBusy`): make an ENC ereset / ENC TX leave `&DC` BUSY asserted (or the PIC wedged)
+   unless the proper settle/quiesce is done — grounded in §8u (BUSY semantics, the 50 µs
+   ENC-reset settle, the transmit-hang), NOT invented. Goal: the REAL serve sequence
+   (claim-select → `serve_rearm_enc` → HWSAD write) reproduces the `&A7CC` hang with no
+   manual `StuckBusy`. Trace the serve's actual sequence first (is `serve_rearm_enc` between
+   the data-block RX and the HWSAD write? — `src/netboot/netboot_serve.asm`, the
+   `DBG_DATA_BLOCK`/sink path + `serve_rearm_enc` ~567).
+2. **Fix:** quiesce/re-init the SD side and wait for `&DC` BUSY clear (+ the 50 µs ENC-reset
+   settle) after `serve_rearm_enc` and before the HWSAD write; ensure NO ENC TX (debug
+   marker or serve reply) interleaves the SD write window. Verify the modelled hang clears.
+3. **Hardware confirm with a PRODUCTION / marker-minimal build** (no ENC TX near the SD
+   write, so point 7 doesn't confound the test). Success = the push completes (record
+   written, final ACK to curl). Hardware is Pete-gated (TAPO; the autonomy enabler is i272).
+
+### SOURCES (exact paths — dig deeper here)
+
+**Primary hardware docs** (OCR; verify figures against the photo originals in
+`~/sam-archive/trinity-docs/photos/` before relying on a number — OCR is noisy):
+- `~/sam-archive/trinity-docs/DISCOVERY_REPORT.md` — the summary index (its §3.7 = the
+  shared-latch gotcha; §2a.4 = the transmit-hang). It cites the per-photo `.txt` below.
+- `~/sam-archive/trinity-docs/text/IMG_20260617_162550.txt` — status register `%1100BWFE`,
+  BUSY-bit semantics, the `check_busy` routine, "`&DC` readable any time".
+- `~/sam-archive/trinity-docs/text/IMG_20260617_162608.txt` — chip-select/init commands,
+  ENC reset `%00101000` (+50 µs), SD init `%00111000` (0/1/2), the OUT→busy→IN SPI protocol.
+- `~/sam-archive/trinity-docs/text/IMG_20260617_162617.txt` — shared `&DD/&DE/&DF` read-back
+  latch (point 7), per-peripheral auto-null, PUSH/POP, ENC `/CS` pulse `%00100011`.
+- `~/sam-archive/trinity-docs/text/IMG_20260617_162626.txt` — ENC interrupt polling (ENCINT).
+- `~/sam-archive/trinity-docs/text/IMG_20260617_163210.txt` + `…_163218.txt` — Simon Owen's
+  diary: SPI lag, MAC double-read, the **ENC transmit-hang**, 6.5K/1.5K buffer split.
+- `~/sam-archive/trinity-docs/text/combined.txt` — all OCR concatenated (grep-friendly).
+
+**B-DOS write-core disassembly:**
+- `~/sam-archive/bdos/analysis/bdos15t-beta6.annotated.dis` — `&A7CC` wait/`check_busy`,
+  `&A8F4` SD write core, `&A925` CMD24, `&8662` device-select, `&8319` hook dispatcher,
+  `&9E16` HWSAD handler, `&9FAB` HRECORD. (Section-B aliases subtract `&4000`.)
+
+**Findings authority + this plan:**
+- `docs/notes/trinity-sd-z80-interface.md` §8a–§8u (§8s/§8t/§8u are newest).
+- `docs/notes/trinity-capabilities.md` (the verified capability doc).
+- `docs/plans/i280-bdos-write-trace.md` (this file).
+- Registry: `i280b-b2i` (the fix), `i280b-b2` (umbrella) — `build/registry view --id i280b-b2i`.
+
+**SAM-side serve code (the write path):**
+- `src/netboot/netboot_serve.asm` — `serve_rearm_enc` (~567), WRQ/data-block sink + `DBG_*`.
+- `src/netboot/raw_record_sink.asm` — `rrs_flush_sector` → `bdos_write_record`.
+- `src/netboot/bdos_seam.asm` — `bdos_write_record` (~1029), `bdos_write_sector` (~972, the
+  `A'`=0 pin + `DBG_HWSAD_PRE/POST`).
+- `src/netboot/encdrv.asm` — `ereset`/`epulse`, `enc_rx_reestablish`, `wait_ready`.
+- `src/netboot/dbg_marker.asm` — the i271 UDP marker channel + its SD-CS constraint.
+
+**Emulator (model + tests):**
+- `tools/netboot-oracle/z80/enc28j60.go` — shared read-back latch (~688), `ctlStatus` (~591),
+  `isBusy`/`clearBusy`/`StuckBusy` (~509-524), `rxDisarmed`/`sdInitSettling` (~227-260).
+- `tools/netboot-oracle/z80/sdcard.go` — the SD model (`ctlStatus` ~305, CMD24 path).
+- `tools/netboot-oracle/z80/bdos_write_core_reach_test.go` — the §8s guards (write-core
+  reach + the `StuckBusy` `&A7CC` hang repro).
+
+---
 
 ## What is established (don't re-derive — see §8a–§8q + the registry)
 
