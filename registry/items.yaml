@@ -5851,3 +5851,11 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i351
+  title: "PR 826 review residuals: compact_inst PASS_PC header inaccuracy (latent trap for the production compactor) + two section-D comment fixes"
+  description: |
+    Non-blocking findings from the PR 826 pre-merge review (review 4621786432, inline anchors): (1) src/insn_overlay.asm:832 - compact_inst's header claims 'PASS_PC is left at the true PC' but the fully-literal exit path leaves it at probe B (0x40000); harmless today (the boot self-test brackets PASS_PC itself) but a latent trap when the production compactor starts calling compact_inst - fix the exit to restore PASS_PC (or correct the contract + audit callers). (2) src/insn_overlay.asm:963 + src/test_overlay_classify.asm:217 - scratch-area comments say 'section-C RAM' where the suite actually runs from section D (&F080+). (3) noted-only: assembler.asm:629 LDIR count is trusted from the ovl12 payload header - same trust level as every HLOAD payload, recorded as accepted.
+  status: OPEN
+  kind: leaf
+  owner: agent
