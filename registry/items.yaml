@@ -5461,6 +5461,8 @@
   title: registry-sync-check should also run 'validate' — local pre-commit gate misses invariants CI catches
   description: |
     GAP (found on #785, i315): the documented pre-commit gate 'make registry-sync-check' rebuilds the CLI and diffs the generated views, but does NOT run 'build/registry validate'. So a source-YAML invariant violation that leaves the views self-consistent passes locally yet FAILS CI's separate 'Validate the registry source' step. Concretely: a stale local build/registry binary's 'set-status --status DONE' did not auto-repair registry/priority.yaml (left i315 ranked while DONE); registry-sync-check passed (views regenerated consistently from the bad priority.yaml) but CI's fresh-binary 'validate' rejected 'id i315 ranked but status is DONE'. FIX: make registry-sync-check ALSO invoke 'build/registry validate registry/items.yaml registry/questions.yaml' (same REGISTRY_* env as the CI step) so local == CI's registry gate. Small Makefile change; keep the view-diff too. Consider documenting 'make registry-gen before any build/registry mutation' so mutations never run a stale binary.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 788, role: completing}
