@@ -675,7 +675,17 @@ sp_data_lba:
                 ; Clobbers AF,BC,DE,HL; card deselected + EI on every path.
                 ld      hl, (BD_FREE_RECORD)   ; n = the claimed record
                 ld      (BD_REC_WRITE_REC), hl
-                ld      hl, (BD_WRITE_START)   ; i = this block's linearSec
+                ; THE .mgt -> record REORDER (i315/i294): the host streams a .mgt
+                ; container TRACK-major (samfile: m = cyl*20 + side*10 + (sector-1)); a
+                ; Trinity SD record stores the disk SIDE-major (B-DOS 1.5t conv.de &A151:
+                ; rec = side*800 + track*10 + (sector-1)). Map the received .mgt linear m
+                ; to its side-major record linear BEFORE the write, so a streamed .mgt
+                ; boots (a track-major write shows the directory but reads scrambled
+                ; side-1/higher-track data -> '108 End of file'). Directory sector m==0
+                ; maps to rec 0 (aligned under both orders), so the sector-0 label
+                ; mutation above — keyed off the raw m — stays correct.
+                ld      hl, (BD_WRITE_START)   ; m = this block's .mgt linear sector
+                call    mgt_to_record_linear   ; HL = side-major record linear
                 ld      (BD_REC_WRITE_LINEAR), hl
                 ld      hl, BD_WRITE_BUF       ; 512-byte source sector
                 call    bd_record_write_hw     ; own CMD24, absolute LBA
@@ -700,6 +710,65 @@ sp_data_lba:
                 ld      bc, 4
                 call    ack_len
                 jp      sp_serve_loop
+
+; ---------------------------------------------------------------------------
+; mgt_to_record_linear (i315/i294) — map a .mgt TRACK-major linear sector to the
+; SIDE-major linear sector a Trinity SD record stores, so a streamed .mgt boots.
+;
+;   .mgt   (track-major, samfile):                 m   = cyl*20  + side*10 + (sector-1)
+;   record (side-major, B-DOS 1.5t conv.de &A151): rec = side*800 + cyl*10 + (sector-1)
+;
+; With sec1 = m mod 10, q10 = m / 10, side = q10 bit0, cyl = q10 >> 1:
+;   rec = side*800 + cyl*10 + sec1
+; m==0 (track0/side0/sector1, the directory/label) maps to rec 0 — aligned under
+; both orders — so the caller's sector-0 mutation, keyed off the raw m, is correct.
+;
+; Compute record_linear FROM the received m (not an incrementing counter): the
+; windowed push (sd-push.py) may retransmit, so blocks can arrive out of order.
+;
+; In:  HL = m    (0..1599, the received .mgt linear sector)
+; Out: HL = rec  (0..1599, the side-major record linear sector)
+; Clobbers A, BC, DE.
+; ---------------------------------------------------------------------------
+mgt_to_record_linear:
+                ; divide m by 10: HL := q10 (0..159, H=0), C := sec1 (0..9). (div_hl_10.)
+                ld      c, 0
+                ld      b, 16
+m2r_bit:
+                add     hl, hl
+                ld      a, c
+                rla
+                cp      10
+                jr      c, m2r_nosub
+                sub     10
+                inc     l
+m2r_nosub:
+                ld      c, a
+                djnz    m2r_bit
+                ; C = sec1 (untouched to the end). Split q10 (in L, H=0): side=bit0, cyl=>>1.
+                ld      a, l
+                srl     a                      ; A = cyl (0..79), CF = side
+                ld      b, 0
+                rl      b                      ; B = side (0 or 1)
+                ; HL := cyl*10
+                ld      l, a
+                ld      h, 0
+                add     hl, hl                 ; 2*cyl
+                ld      d, h
+                ld      e, l                   ; DE = 2*cyl
+                add     hl, hl                 ; 4*cyl
+                add     hl, hl                 ; 8*cyl
+                add     hl, de                 ; 10*cyl
+                ; += side*800
+                bit     0, b
+                jr      z, m2r_addsec1         ; side 0: no 800
+                ld      de, 800
+                add     hl, de
+m2r_addsec1:
+                ; += sec1 (in C; B=0 so BC = sec1)
+                ld      b, 0
+                add     hl, bc
+                ret
 
 ; ---------------------------------------------------------------------------
 ; sp_finalize — an 'F' message: validate the received sector count (size-only:
