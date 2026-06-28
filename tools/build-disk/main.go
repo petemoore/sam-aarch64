@@ -146,6 +146,28 @@ const (
 	ServeStratExplicit = 2    // place at the explicit record (ServeCfgRecordNone => undefined)
 	ServeCfgRecordNone = 0xFFFF
 	ServeConfigSize    = 4 // magic(1) + strategy(1) + record(2 LE)
+
+	// StoreNameMax is the B-DOS directory-name field width — the ceiling for
+	// an on-record store name. A TFTP name longer than this is stored under a
+	// mangled store name and mapped back via the NBMANIFEST file (i346).
+	StoreNameMax = 10
+
+	// ManifestStoreName is the store name of the manifest file mapping
+	// mangled store names to full TFTP names. Exactly StoreNameMax chars.
+	// The netboot server's boot-time walk (src/netboot/netboot_server.asm
+	// nb_apply_manifest) parses it and rewrites its serve tables, then drops
+	// the manifest entry itself (it is never servable).
+	ManifestStoreName = "NBMANIFEST"
+
+	// ManifestTFTPNameMax caps a -netboot-extra TFTP name. Keeps the Z80
+	// STORE/NB_SRC_TABLE sizing arithmetic honest (netboot_server.asm) —
+	// the longest real Pi-boot name is bcm2711-rpi-400.dtb (19 chars).
+	ManifestTFTPNameMax = 31
+
+	// ManifestMaxBytes is NB_FILE_MAX in netboot_server.asm: the walk never
+	// stages a larger file, so a bigger manifest would silently disable the
+	// name mapping. Fail the build instead.
+	ManifestMaxBytes = 1518
 )
 
 // serveConfigBlock returns the 4 config bytes for the given strategy code and
@@ -271,7 +293,7 @@ func main() {
 	netbootConfigName := flag.String("netboot-config-name", "cfg", "i121i: directory-entry name for the SERVE_CONFIG CODE file (the AUTO BASIC LOADs this name)")
 	netbootCodeAuto := flag.Bool("netboot-code-auto", false, "i332: compose the -netboot binary as ONE auto-executing CODE file (exec = load address) instead of the AUTO BASIC + CODE pair, baking any -netboot-config-map config into the file bytes; the record vessel B-DOS boot_record can boot (its ALHK runs the AUTO* CODE file directly — the BASIC-auto run leg never fires on that path). -netboot-name must start with \"AUTO\"")
 	var netbootExtras extraFileFlags
-	flag.Var(&netbootExtras, "netboot-extra", "i95b-b1: name=path of an extra CODE data file shipped in the -netboot disk's directory (repeatable; name <= 10 chars). The netboot server's boot-time store walk indexes these and serves them by name over TFTP")
+	flag.Var(&netbootExtras, "netboot-extra", "i95b-b1: name=path of an extra CODE data file shipped in the -netboot disk's directory (repeatable). The netboot server's boot-time store walk indexes these and serves them by name over TFTP; a name over the 10-char B-DOS directory field is stored under a mangled store name and mapped back via the NBMANIFEST file (i346)")
 	variant := flag.String("variant", "none", "i207: assembler-disk boot-payload completeness guard — 'test' or 'prod' require every payload the boot loader HLOADs to be present (a missing one silently HANGS SimCoupé); 'none' (default) skips the check (minimal boot-test disks)")
 	codeAuto := flag.Bool("code-auto", false, "i319b-b1: compose the assembler as ONE auto-executing CODE file 'AUTOasm' (exec = load &8000) instead of the AUTO BASIC + 'assembler' pair, keeping every HLOADed sibling file on the disk — the boot_record-bootable RECORD vessel for the assembler disk (B-DOS ALHK runs the record's AUTO* file directly; a BASIC-auto record never boots, i332). The BASIC-auto shape stays the floppy vessel")
 	flag.Usage = func() {
@@ -697,35 +719,95 @@ func (e *extraFileFlags) Set(v string) error {
 
 // extraFile is one loaded -netboot-extra payload.
 type extraFile struct {
-	name string
-	data []byte
+	name      string // the full TFTP request name (what the Pi asks for)
+	storeName string // the <=10-char B-DOS directory name (== name when it fits)
+	data      []byte
+}
+
+// mangleStoreName derives the B-DOS directory name for a TFTP name: verbatim
+// when it fits the 10-char field, else the first 10 characters. Deterministic
+// and order-independent — the NBMANIFEST maps the mangled name back to the
+// full TFTP name at serve time. Collisions (two names sharing a 10-char
+// prefix, or a mangled name equal to another extra's verbatim name) are
+// detected by load() and fail the build loudly; there is no silent
+// disambiguation.
+func mangleStoreName(name string) string {
+	if len(name) <= StoreNameMax {
+		return name
+	}
+	return name[:StoreNameMax]
+}
+
+// buildManifest emits the NBMANIFEST body mapping store names back to full
+// TFTP names. Format (keep in lockstep with the parser,
+// src/netboot/netboot_server.asm nb_apply_manifest/nb_manifest_map):
+//
+//	repeated records:
+//	  [10 bytes]  store name, space-padded (the B-DOS directory name)
+//	  [1+ bytes]  full TFTP name, NUL-terminated
+//	terminated by a single NUL where the next record's store name would start.
+//
+// Extras whose name already fits the directory field keep it verbatim and are
+// omitted — the parser treats absence from the manifest as identity. Returns
+// nil when nothing needs mapping (no manifest file is shipped).
+func buildManifest(extras []extraFile) []byte {
+	var out []byte
+	for _, x := range extras {
+		if x.storeName == x.name {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%-*s", StoreNameMax, x.storeName)...)
+		out = append(out, x.name...)
+		out = append(out, 0)
+	}
+	if out == nil {
+		return nil
+	}
+	return append(out, 0)
 }
 
 // addNetbootExtras writes each -netboot-extra payload as a plain CODE
-// directory entry (load &8000, no exec — the load address is nominal: the
-// server reads these through the B-DOS hooks, never by a BASIC LOAD).
+// directory entry under its store name (load &8000, no exec — the load
+// address is nominal: the server reads these through the B-DOS hooks, never
+// by a BASIC LOAD), plus the NBMANIFEST mapping file when any store name
+// differs from its TFTP name.
 func addNetbootExtras(disk *samfile.DiskImage, extras []extraFile) error {
 	for _, x := range extras {
-		if err := disk.AddCodeFile(x.name, x.data, LoadAddress, 0); err != nil {
-			return fmt.Errorf("AddCodeFile(%s): %w", x.name, err)
+		if err := disk.AddCodeFile(x.storeName, x.data, LoadAddress, 0); err != nil {
+			return fmt.Errorf("AddCodeFile(%s): %w", x.storeName, err)
+		}
+	}
+	if m := buildManifest(extras); m != nil {
+		if len(m) > ManifestMaxBytes {
+			return fmt.Errorf("%s is %d bytes, over the %d-byte NB_FILE_MAX the server's store walk stages — too many long-named extras", ManifestStoreName, len(m), ManifestMaxBytes)
+		}
+		if err := disk.AddCodeFile(ManifestStoreName, m, LoadAddress, 0); err != nil {
+			return fmt.Errorf("AddCodeFile(%s): %w", ManifestStoreName, err)
 		}
 	}
 	return nil
 }
 
-// load parses and reads each name=path value. Names are capped at the 10-char
-// B-DOS directory-name field — a longer name would be silently truncated on
-// disk and then never match its TFTP request.
+// load parses and reads each name=path value. The name is the TFTP request
+// name; one longer than the 10-char B-DOS directory field is stored under a
+// mangled store name and mapped back via NBMANIFEST (i346). Store-name
+// collisions fail the build.
 func (e extraFileFlags) load() ([]extraFile, error) {
 	var out []extraFile
+	byStore := map[string]string{ManifestStoreName: "the store-name manifest (reserved)"}
 	for _, v := range e {
 		name, path, ok := strings.Cut(v, "=")
 		if !ok || name == "" || path == "" {
 			return nil, fmt.Errorf("bad -netboot-extra %q: want name=path", v)
 		}
-		if len(name) > 10 {
-			return nil, fmt.Errorf("-netboot-extra name %q is %d chars; the B-DOS directory-name field holds 10", name, len(name))
+		if len(name) > ManifestTFTPNameMax {
+			return nil, fmt.Errorf("-netboot-extra name %q is %d chars; the NBMANIFEST scheme caps TFTP names at %d", name, len(name), ManifestTFTPNameMax)
 		}
+		store := mangleStoreName(name)
+		if prev, dup := byStore[store]; dup {
+			return nil, fmt.Errorf("-netboot-extra %q needs the store name %q, already taken by %s — rename one (mangling is deterministic truncation, never a silent disambiguation)", name, store, prev)
+		}
+		byStore[store] = fmt.Sprintf("%q", name)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("read -netboot-extra %s: %w", name, err)
@@ -733,7 +815,7 @@ func (e extraFileFlags) load() ([]extraFile, error) {
 		if len(data) == 0 {
 			return nil, fmt.Errorf("-netboot-extra %s: %s is empty", name, path)
 		}
-		out = append(out, extraFile{name: name, data: data})
+		out = append(out, extraFile{name: name, storeName: store, data: data})
 	}
 	return out, nil
 }
@@ -882,7 +964,14 @@ func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeNam
 			fmt.Printf("%-12s%d bytes  auto-exec &%04X\n", codeName+":", len(codeBin), LoadAddress)
 		}
 		for _, x := range extras {
-			fmt.Printf("%-12s%d bytes  (served by name over TFTP)\n", x.name+":", len(x.data))
+			if x.storeName != x.name {
+				fmt.Printf("%-12s%d bytes  (served as %q via %s)\n", x.storeName+":", len(x.data), x.name, ManifestStoreName)
+			} else {
+				fmt.Printf("%-12s%d bytes  (served by name over TFTP)\n", x.name+":", len(x.data))
+			}
+		}
+		if m := buildManifest(extras); m != nil {
+			fmt.Printf("%-12s%d bytes  (store-name -> TFTP-name map)\n", ManifestStoreName+":", len(m))
 		}
 		fmt.Printf("Built %s (boot_record-bootable CODE-auto record vessel)\n", outputPath)
 		return nil
