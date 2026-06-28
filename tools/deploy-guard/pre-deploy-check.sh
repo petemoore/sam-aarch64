@@ -56,9 +56,12 @@ _PUSHER_SCRIPT_RE = re.compile(
     r"(?:^|/)(?:trinload-push|trinpush-serve|trinpush)\S*\.(?:py|sh)$",
     re.IGNORECASE,
 )
-# The same, anywhere in a statement's argument list (interpreter case).
+# The same, anywhere in a statement's argument list (interpreter case). The
+# leading \b keeps unrelated filenames that merely EMBED a pusher name from
+# matching — test_trinpush.py (word char before "trinpush") is the guard's
+# own test module, not a pusher, and false-fired without it (i337).
 _PUSHER_SCRIPT_ARG_RE = re.compile(
-    r"(?:trinload-push|trinpush-serve|trinpush)\S*\.(?:py|sh)\b",
+    r"\b(?:trinload-push|trinpush-serve|trinpush)\S*\.(?:py|sh)\b",
     re.IGNORECASE,
 )
 
@@ -105,14 +108,19 @@ def _statements(command: str):
 
     Quote tracking is coarse bash semantics: a backslash escapes the next
     character outside single quotes; a single-quoted span is literal until
-    its closing quote. An unbalanced quote runs to end-of-string, leaving
-    the tail as one statement — still scanned, so a real deploy verb after
-    a stray quote is seen rather than dropped. Inside `$(…)`/heredocs the
-    split stays coarse (over-splitting only ever exposes MORE verbs to
-    inspect, so it cannot hide a real deploy).
+    its closing quote. A quote still OPEN at end-of-string (a stray
+    apostrophe in a heredoc body, an unterminated string) gets its span
+    coarse-re-split on the same separators (i337): bash can still execute
+    statements chained after it in heredoc contexts, so an unclosed span
+    cannot be trusted as data — and re-splitting only that span cannot
+    reintroduce the i336 false-positive, which involves BALANCED quotes
+    only. Inside `$(…)`/heredocs the split stays coarse (over-splitting
+    only ever exposes MORE verbs to inspect, so it cannot hide a real
+    deploy).
     """
     stmts, buf = [], []
     quote = None  # None, "'" or '"'
+    open_idx = 0  # buf index where the currently-open quote began
     escaped = False
     i, n = 0, len(command)
     while i < n:
@@ -128,6 +136,7 @@ def _statements(command: str):
             if c == quote:
                 quote = None
         elif c in ("'", '"'):
+            open_idx = len(buf)
             buf.append(c)
             quote = c
         elif command.startswith("&&", i) or command.startswith("||", i):
@@ -140,7 +149,12 @@ def _statements(command: str):
         else:
             buf.append(c)
         i += 1
-    stmts.append("".join(buf))
+    if quote is not None:
+        # Unclosed quote: keep the balanced head, coarse-re-split the open span.
+        stmts.append("".join(buf[:open_idx]))
+        stmts.extend(re.split(r"&&|\|\||;|\n|\|", "".join(buf[open_idx:])))
+    else:
+        stmts.append("".join(buf))
     return stmts
 
 
