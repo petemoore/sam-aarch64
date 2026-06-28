@@ -30,11 +30,6 @@ import (
 	frontend "github.com/petemoore/sam-aarch64/tools/sam-aarch64/frontend"
 )
 
-// addrLEXTOKS is the relocated LEX_TOKS address under ASMPARSE_CORPUS_BUFS.
-// LEX_TOKS is an `equ` constant in src/asmlex.asm, absent from the pyz80
-// mapfile; a drift here vs. the .asm is a silent corruption.
-const addrLEXTOKS uint16 = 0x0100
-
 // Capacity constants matching the ASMPARSE_CORPUS_BUFS definitions in
 // src/asmlex.asm and src/asmparse.asm. These are the limits the Z80 binary
 // enforces; a fixture that exceeds one belongs in parseKnownOversize.
