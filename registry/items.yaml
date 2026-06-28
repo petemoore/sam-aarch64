@@ -1004,7 +1004,7 @@
   title: "Parser corpus byte-match: text->IR on Z80 (parse_run) equals host frontend.Translate over the 93-fixture corpus"
   description: |
     New corpus-driven harness test driving build/asmparse.bin parse_run over tests/{core,format,operands,symbols,paged}/sources/*.s, byte-matching the PARSE_RECS output against serializeIR(frontend.Translate(src)) — parse_run emits exactly the serializeIR wire framing (pass1_ir_test.go:88-150; asmparse_test.go:578-636), so the compare is direct. Closes the gap that asmparse is only hand/fuzz-tested (never corpus-tested against the host front-end). Capacity work expected: the standalone build has LEX_SRC=2048B and PARSE_RECS=2048B vs corpus sources up to ~16.5KB (in_long_source.s) — either grow/relocate the big buffers (equ-override placement; low RAM &0000-&7FFF is free in the standalone; CEMIT_BUFS_EXTERNAL is the precedent, src/compact_emit.asm:59-63) or use a reviewed knownOversize exclude-list (i253 pattern; serKnownOversize precedent). Check LEX_TOKS granularity (whole-source vs per-line lexing, 256-token capacity) before sizing.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i48c-b8
