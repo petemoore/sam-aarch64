@@ -332,11 +332,13 @@
 - id: i24
   title: "16-bit OUT_LEN / 32 KB-output limit (OUT_LEN: defw 0 src/main_loop.asm; 32768-byte OUT ceiling src/encoder.asm)"
   description: |
-    OUT-ceiling lift to support >32KB assemblies (q45 = option A, Pete 2026-07-01). The 16-bit OUT_LEN + 32768-byte ceiling (src/encoder.asm) cap assembled output at 32KB. Lift via option A (UNIFORM): the whole OUT buffer becomes ONE contiguous pool run (i2 page-pool), sized from the pass-1 total, and EVERY emit_byte brackets LMPR (page in the OUT page, write, restore) like today's high zone -- so HSAVE can save the >32KB output as one contiguous file (B-DOS HSAVE/HLOAD are contiguous-only). Loses today's free-low-zone fast path for the first 16KB (a one-shot ~150ms cost on a full assemble -- negligible per Pete). Simplest single code path; needs no section-C budget (unlike option B two-mode). The emit-hot-path perf optimisation is deferred to a separate lowest-priority item (measure by T-states to assemble release.s, once feature-complete).
-  status: IN_PROGRESS
+    DONE 2026-07-02 (PR 824): option A shipped. OUT = one contiguous pp_alloc_run(PP_OUT) sized from the pass-1 PASS_PC total (snapshot before pass_pc_reset); every emit_byte LMPR-brackets uniformly with lazy page advance; OUT_LEN 24-bit; save_out_file UIFA general (dynamic base page, unmasked pages) - the i33 seam. pp_free_run production; boot reservation shrinks to pages 0..4. New tags: b3 = run-alloc OOM (user-facing), b4 = total>=16MB; b0 repurposed = run-exceeded invariant. Proven: inst_out_over32k.s (40932 B, GNU-as byte-compare on both SimCoupé variants + harness TestOutOver32K vs the Go oracle); release gate 3-way byte-match holds (21752 B); test-variant headroom 11->72 B (emit suite moved off-axis). Emit-path perf deferred per the decision.
+  status: DONE
   depends_on: [i2a, i2b, i218]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 824, role: completing}
 
 - id: i25
   title: "File-I/O error handler via DOSER (&5BC0)"
