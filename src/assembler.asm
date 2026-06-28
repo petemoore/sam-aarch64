@@ -10,9 +10,9 @@
 ;                  OR IN page N (LMPR = LMPR_IN_BASE + N) inside the
 ;                    reader_next_kind bracket — see reader.asm.
 ;   &4000-&7FFF  section B — page 1 (BASIC sys area, mostly unused by us);
-;                  trampoline copy at TRAMPOLINE_DST (&7E00).  Under
-;                  LMPR_ENCTAB section B = page 5 = OUT-low (used as
-;                  the OUT emit window — see emit_byte).
+;                  trampoline copy at TRAMPOLINE_DST (&7E00).  emit_byte
+;                  brackets LMPR per byte to map the OUT run's current
+;                  page here (the OUT emit window — see emit_byte).
 ;   &8000-&BFFF  section C — assembler code (this file + all includes).
 ;                  The IN/OUT/ENCTAB buffers live off-axis (below), so
 ;                  the whole 16 KB section is code budget.
@@ -38,19 +38,21 @@
 ;
 ;   Physical page 4 (off-axis): ENCTAB body — paged into section A on
 ;     demand for encoder runtime reads.  See `src/trampoline.asm`.
-;   Physical pages 5..6 (off-axis): OUT buffer — page 5 reached via
-;     section B with LMPR_ENCTAB for free (low zone, bytes 0..16383);
-;     page 6 reached via LMPR=LMPR_OUT_HIGH bracket per emit
-;     (high zone, bytes 16384..32767).  HSAVE at end of pass 2 reads
-;     the buffer via section C with UIFA[31] = OUT_BASE_PAGE.  See
-;     docs/specs/paged-out-design.md and
-;     docs/specs/samdos-file-io.md.
-;   Physical pages 7..12 (off-axis): IN .tbn buffer — 6 contiguous
-;     pages = 96 KB ceiling (bumped from 4 pages / 64 KB on 2026-05-28
-;     to fit spectrum4's 88 KB stripped release.tbn).  HLOAD'd once at
-;     startup via load_in_file_paged; read via per-record LMPR-bracket
-;     into section A on each reader_next_kind call.  See
-;     docs/specs/paged-in-design.md.
+;   Physical pages 5..12 (off-axis): page-pool pages (src/pagepool.asm)
+;     claimed at assemble time by the two buffer consumers:
+;       IN  — a contiguous run allocated by load_in_file
+;         (pp_alloc_run(PP_IN)), HLOAD'd once at startup and read via
+;         per-record LMPR-bracket into section A on each
+;         reader_next_kind call.  See docs/specs/paged-in-design.md.
+;       OUT — a contiguous run allocated between the passes by
+;         reset_out_buffer (pp_alloc_run(PP_OUT), sized from the pass-1
+;         total), written per-byte via an LMPR-bracketed section-B
+;         window (emit_byte).  HSAVE at end of pass 2 reads the run via
+;         section C with UIFA[31] = OUT_RUN_BASE.  See
+;         docs/specs/paged-out-design.md and
+;         docs/specs/samdos-file-io.md.
+;     Expansion RAM (16..PRAMTP on a >256 KB machine) joins the same
+;     pool, so large buffers can land in the 16..31 run.
 ;   Physical page 12 (off-axis, BUILD_TESTS only): test_cluster.bin —
 ;     the off-axis encoder self-test cluster
 ;     (src/test_offaxis_cluster.asm), HLOAD'd at boot and invoked once
@@ -349,12 +351,14 @@ endif
                 ld      (&5BC0), hl
                 endif
 
-; -- i2b/i23: size the IDE page pool from PRAMTP and reserve the statically-used
-; pages (0..6 and 13..15). The IN pages 7..12 are left FREE — load_in_file is
-; the pool's first consumer: it allocates a contiguous IN run from the pool
-; (pp_alloc_run) at assemble time (i23). pool_boot reads sysvars (PRAMTP in
-; section B) under the boot LMPR, so it must run after the LMPR capture above.
-; The BUILD_TESTS self-test below exercises the live pool.
+; -- i2b/i23/i24: size the IDE page pool from PRAMTP and reserve the
+; statically-used pages (0..4 and 13..15). The buffer pages 5..12 are left
+; FREE for the pool's two consumers: load_in_file allocates a contiguous IN
+; run (pp_alloc_run(PP_IN), i23) and reset_out_buffer allocates a contiguous
+; OUT run sized from the pass-1 total (pp_alloc_run(PP_OUT), i24) at assemble
+; time. pool_boot reads sysvars (PRAMTP in section B) under the boot LMPR, so
+; it must run after the LMPR capture above. The BUILD_TESTS self-tests below
+; exercise the live pool.
                 call    pool_boot_init
 
 ; -- PRODUCTION: HLOAD disasm.bin into physical page 15.  The disassembler
@@ -477,14 +481,12 @@ if defined(BUILD_TESTS)
                 call    run_sysreg_paged_self_tests
 
                 call    run_sysname_self_tests
-                ; run_litpool_self_tests now runs off-axis in the page-12
-                ; cluster above (M6 budget-relief PR).  It is self-contained
-                ; (litpool_init re-initialises its own state) so its earlier
-                ; position in the cluster is behaviour-neutral.
-                call    run_emit_paged_self_tests
-                ; The i2b page-pool self-test (run_pool_self_tests) runs
-                ; off-axis in the page-12 cluster below, not inline — it stays
-                ; out of the section-C test-variant budget.
+                ; run_litpool_self_tests, run_pool_self_tests (i2b), and
+                ; run_emit_paged_self_tests (i24) all run off-axis in the
+                ; page-12 cluster above, not inline — they stay out of the
+                ; section-C test-variant budget.  The emit suite is
+                ; cluster-safe because it never touches LMPR itself
+                ; (emit_byte / out_run_peek bracket LMPR from section C).
 
 ; -- Disasm stub self-test: invoke run_disasm_self_test on page 15 via
 ; paged_call.  The self-test (in disasm.bin at DISASM_SELF_TEST_ENTRY)
@@ -780,7 +782,9 @@ if defined(BUILD_TESTS)
                 ; test-variant budget for the ORIGIN_HIGH machinery.  No
                 ; behavioural change: the cluster still runs the suite.
                 include "test_trampoline.asm"
-                include "test_emit_paged.asm"
+                ; test_emit_paged.asm lives off-axis in the page-12 cluster
+                ; (test_offaxis_cluster.asm); its resident support helper
+                ; out_run_peek is in test_assert_eq32.asm above.
                 include "test_reader_paged.asm"
                 include "test_paged_call.asm"
                 include "test_sysreg_paged.asm"
@@ -797,8 +801,8 @@ endif
 ; -- paged_call body source ---------------------------------------------
 ; Included LAST so the body source bytes appear at the end of the
 ; binary, NOT near the BUILD_TESTS test-data labels (boot_hmpr,
-; lmpr_save_test, reader_paged_*) which live alongside the
-; test_*.asm includes above.  The body is NEVER executed from its
+; reader_paged_*) which live alongside the test_*.asm includes
+; above.  The body is NEVER executed from its
 ; section-C source location — enctab_trampoline_setup LDIRs the
 ; bytes into section B at boot; this include just emits the
 ; source-side bytes for the LDIR to read from.

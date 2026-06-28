@@ -25,110 +25,103 @@ OPVAL_STRIDE:           equ     10
 ; ---------------------------------------------------------------------
 ; emit_byte — append one byte to the output buffer at PC, advance PC.
 ;
-; Per docs/specs/paged-out-design.md.  OUT lives in
-; physical pages 5 (low zone) + 6 (high zone), reached via section B
-; (&4000-&7FFF):
+; Per docs/specs/paged-out-design.md.  OUT is ONE contiguous run of
+; page-pool pages (pp_alloc_run(PP_OUT), sized from the pass-1 total by
+; reset_out_buffer).  Every emit brackets LMPR uniformly:
 ;
-;   Low zone  (OUT_ZONE = 0; OUT bytes 0..16383):
-;       LMPR is already LMPR_ENCTAB during the encoder window, so
-;       section B maps to page 5 (= LMPR_ENCTAB + 1) for free.  Write
-;       lands directly with no LMPR change.
-;   High zone (OUT_ZONE = 1; OUT bytes 16384..32767):
-;       Bracket the write with `in a,(250)` to snapshot the current
-;       LMPR (= LMPR_ENCTAB at the call site), `out (250), LMPR_OUT_HIGH`
-;       to put page 6 in section B, write, then restore the snapshot.
-;       Reading LMPR live (rather than hard-coding LMPR_ENCTAB on the
-;       restore) keeps us correct against the boot-time top-bits in
-;       LMPR_DEFAULT_RUNTIME (see assembler.asm:142, trampoline.asm).
-;       (Port 250 = LMPR, port 251 = HMPR per SAM Coupé Tech Manual
-;       §6.10 and the existing trampoline / enctab_map_in usage.)
+;   `in a,(250)` snapshots the live LMPR (whatever the caller runs
+;   under — LMPR_ENCTAB during the encoder window), `out (250), A` with
+;   OUT_LMPR_CUR maps the cursor's run page into section B
+;   (&4000-&7FFF), the byte is stored at OUT_PC, and the snapshot is
+;   restored.  Reading LMPR live (rather than hard-coding a constant on
+;   the restore) keeps us correct against the boot-time top-bits in
+;   LMPR_DEFAULT_RUNTIME (see assembler.asm, trampoline.asm).
+;   (Port 250 = LMPR, port 251 = HMPR per SAM Coupé Tech Manual §6.10
+;   and the existing trampoline / enctab_map_in usage.)
 ;
-; OUT_PC walks &4000..&7FFF; when it hits &8000 we flip OUT_ZONE to 1
-; and wrap OUT_PC back to &4000.  The OUT buffer spans both zones
-; (pages 5 + 6 = 32768 bytes), so a full 32768-byte output is legal:
-; writing the final byte (zone 1, OUT_PC &7FFF) leaves OUT_PC at the
-; &8000 "buffer full" sentinel with OUT_LEN = 32768.  The *next*
-; emit_byte (the 32769th byte) finds the sentinel and is the error —
-; jp fail.
+; OUT_PC walks &4000..&7FFF within the current run page.  A write that
+; fills the page leaves OUT_PC parked at the &8000 boundary; the NEXT
+; emit_byte advances into the following run page (out_advance_page:
+; OUT_PAGE_IDX+1, OUT_LMPR_CUR+1, OUT_PC wraps to &4000).  The lazy
+; advance makes an exactly-run-filling output legal: the final byte
+; parks the cursor and no advance is attempted.  When no next page
+; exists the output has exceeded the pass-1-sized run — an internal
+; invariant break (pass 1 and pass 2 must advance identically), tag &b0.
 ;
 ; Input:    A = byte to emit.
-; Output:   byte stored; OUT_PC advanced; OUT_LEN incremented; on a
-;           zone boundary, OUT_ZONE flipped and OUT_PC wrapped.
+; Output:   byte stored; OUT_PC advanced; 24-bit OUT_LEN incremented;
+;           on a page boundary, cursor advanced into the next run page.
 ; Clobbers: A, HL.  BC, DE preserved.
 ; ---------------------------------------------------------------------
 emit_byte:
                 push    af                  ; preserve byte across LMPR/store
-                push    bc                  ; high-zone path clobbers HL only,
-                push    de                  ; but BC/DE must survive per ABI
                 ld      hl, (OUT_PC)
-                ld      a, (OUT_ZONE)
-                or      a
-                jr      nz, emit_byte_high_or_full
-
-; ----- Low zone — write to section B with LMPR_ENCTAB live -----------
-                pop     de
-                pop     bc
-                pop     af                  ; A = byte
-                ld      (hl), a
-                jr      emit_byte_advance
-
-; ----- High zone — bracket the store with LMPR=LMPR_OUT_HIGH ---------
-; Port 250 is LMPR (sections A+B); port 251 is HMPR (sections C+D).
-; The OUT buffer is reached via section B so we touch LMPR only.
-;
-; First reject a write into a full buffer: in zone 1, OUT_PC == &8000 is
-; the "buffer full" sentinel left by the 32768th byte (see the
-; zone-boundary handling in emit_byte_advance).  A write here would be
-; the 32769th byte — past the 32768-byte OUT ceiling.
-emit_byte_high_or_full:
                 ld      a, h
                 cp      &80
-                jr      nz, emit_byte_high
-                pop     de
-                pop     bc
-                pop     af                  ; discard the byte; nothing emitted
-                ld      a, &b0
-                jp      fail_with_tag       ; tag b0: OUT > 32 KB
-emit_byte_high:
+                jr      nz, emit_byte_store
+                call    out_advance_page    ; cursor parked at a page boundary
+                jr      c, emit_byte_overrun   ; no next page in the run
+
+emit_byte_store:
                 in      a, (250)
                 ld      (emit_lmpr_save), a
-                ld      a, LMPR_OUT_HIGH
-                out     (250), a
-                pop     de
-                pop     bc
+                ld      a, (OUT_LMPR_CUR)
+                out     (250), a            ; section B = current run page
                 pop     af                  ; A = byte
-                ld      (hl), a             ; section B = page 6 under &25
+                ld      (hl), a
                 ld      a, (emit_lmpr_save)
-                out     (250), a            ; restore LMPR_ENCTAB
-                ; fall through; A is dead beyond this point
-
-; ----- Common tail: advance OUT_PC, handle zone boundary, bump LEN ----
-emit_byte_advance:
+                out     (250), a            ; restore the caller's LMPR
                 inc     hl
-                ld      a, h
-                cp      &80
-                jr      nz, emit_byte_no_zone_cross
+                ld      (OUT_PC), hl        ; may park at &8000 (page full)
 
-; Hit &8000 — last byte of the current zone was just written.  In zone 0
-; this is the 16384-byte boundary: flip OUT_ZONE 0 → 1 and wrap OUT_PC
-; back to &4000.  In zone 1 it is the 32768-byte boundary: the buffer is
-; now exactly full, so leave OUT_PC at the &8000 "buffer full" sentinel
-; (emit_byte rejects the next write at entry) and bump OUT_LEN to 32768
-; normally.
-                ld      a, (OUT_ZONE)
-                or      a
-                jr      nz, emit_byte_no_zone_cross   ; zone 1 → keep &8000 sentinel
-                ld      a, 1
-                ld      (OUT_ZONE), a
+; Bump 24-bit OUT_LEN.  HL is free to clobber per the ABI.
+                ld      hl, OUT_LEN
+                inc     (hl)
+                ret     nz
+                inc     hl
+                inc     (hl)
+                ret     nz
+                inc     hl
+                inc     (hl)
+                ret
+
+; The run was sized from the pass-1 total, so an emit past its last
+; page means pass 2 produced more bytes than pass 1 counted — an
+; internal invariant break, not a user-facing out-of-memory (that is
+; reset_out_buffer's tag &b3).
+emit_byte_overrun:
+                ld      a, &b0
+                jp      fail_with_tag       ; tag b0: output exceeded the run
+
+
+; ---------------------------------------------------------------------
+; out_advance_page — move the OUT cursor into the next page of the run.
+;
+; Split out of emit_byte so the boundary predicate is directly testable
+; (the emit self-test drives it against a deliberately undersized run).
+;
+; Input:    none (reads OUT_PAGE_IDX / OUT_RUN_PAGES / OUT_LMPR_CUR).
+; Output:   CF clear on success: OUT_PAGE_IDX+1, OUT_LMPR_CUR+1 (run
+;           pages are contiguous, so the section-B mapping just
+;           increments), HL = &4000 (the new page's base).
+;           CF set when the cursor is already in the run's last page;
+;           state unchanged.
+; Clobbers: A, HL (and the state bytes on success).
+; ---------------------------------------------------------------------
+out_advance_page:
+                ld      a, (OUT_RUN_PAGES)
+                ld      hl, OUT_PAGE_IDX
+                inc     (hl)
+                cp      (hl)                ; new idx == pages → past the end
+                jr      z, out_advance_page_full
+                ld      hl, OUT_LMPR_CUR
+                inc     (hl)                ; next contiguous page at section B
                 ld      hl, &4000
-
-emit_byte_no_zone_cross:
-                ld      (OUT_PC), hl
-
-; Bump 16-bit OUT_LEN.  HL is free to clobber per the ABI.
-                ld      hl, (OUT_LEN)
-                inc     hl
-                ld      (OUT_LEN), hl
+                or      a                   ; CF clear = success
+                ret
+out_advance_page_full:
+                dec     (hl)                ; leave OUT_PAGE_IDX unchanged
+                scf
                 ret
 
 
@@ -164,7 +157,7 @@ emit_bytes_n_loop:
 ; ---------------------------------------------------------------------
 ; Scratch / state.
 ; ---------------------------------------------------------------------
-; LMPR snapshot used by emit_byte's high-zone bracket.  Live LMPR at
+; LMPR snapshot used by emit_byte's per-byte bracket.  Live LMPR at
 ; the call site (= LMPR_ENCTAB during the encoder window) is captured
 ; here so the restore goes back to the *exact* boot-derived value
 ; rather than a hard-coded constant.

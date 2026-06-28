@@ -252,16 +252,11 @@ pp_alloc_run_fail:
 ;         n==0) or any tag mismatch. On failure the table is unchanged.
 ; Clobbers: B, D, E, H, L (A holds the result; C preserved through validation).
 ;
-; STANDALONE-ONLY: the symmetric counterpart to pp_alloc_run, but no PRODUCTION
-; consumer exists yet — i23's load_in_file frees its single head page with
-; pp_free_page and never run-frees the IN buffer (the assembler is single-shot;
-; i24's OUT migration / the IDE edit-assemble cycle is the first run-free
-; caller). Compiled only into the standalone harness build (PP_STANDALONE) so it
-; stays Go-authority-verified yet costs the production assembler zero bytes
-; against the tight &C000 test-variant budget. Drop the guard when a production
-; caller appears.
+; The symmetric counterpart to pp_alloc_run. Production caller:
+; reset_out_buffer (main_loop.asm) run-frees the previous OUT run before
+; allocating a fresh one (i24) — the no-leak guarantee across assembles.
+; The Go authority (pagepool.go FreeRun) is likewise unconditional.
 ; ===========================================================================
-                if defined(PP_STANDALONE)
 pp_free_run:
                 ld      e, a            ; E = first page (saved for the free pass)
                 ld      a, b
@@ -307,7 +302,6 @@ pp_free_run_free:
 pp_free_run_fail:
                 ld      a, PP_FAIL
                 ret
-                endif                   ; PP_STANDALONE (pp_free_run)
 
 ; ===========================================================================
 ; pp_owner_of — return the current ownership tag of page A.

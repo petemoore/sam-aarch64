@@ -109,7 +109,10 @@ run_reader_paged_self_tests:
 ; pages it allocates anyway).
 READER_TEST_BASE:       equ     &20 + 8     ; LMPR for page 8 (RAM0 | 8) — a non-7
                                             ;   base with no boot payload (page 11 is
-                                            ;   ENC_FIX_PAGE; 4=ENCTAB,5/6=OUT,13-15=payloads)
+                                            ;   ENC_FIX_PAGE; 4=ENCTAB, 13-15=payloads;
+                                            ;   5..12 are free pool pages here — the
+                                            ;   IN/OUT runs aren't allocated until
+                                            ;   main_assemble)
 
                 in      a, (250)
                 ld      (reader_paged_lmpr_save), a
