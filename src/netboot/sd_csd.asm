@@ -38,6 +38,7 @@ SDC_PORT:         equ &DC                       ; microcontroller select + statu
 SDC_DATA:         equ &DF                       ; SD transparent SPI byte relay
 SDC_NULLOFF:      equ &04                       ; all-deselect, auto-null off
 SDC_SEL:          equ &31                       ; SD select, manual mode
+SDC_SEL_NULL:     equ &3F                       ; SD select, AUTO-NULL (PIC injects the per-byte dummy)
 SDC_DESEL:        equ &30                       ; SD deselect
 SDC_INIT:         equ &38                       ; microcontroller "SD init" wake
 SDC_DATATOK:      equ &FE                       ; start-of-data token preceding the CSD
@@ -558,46 +559,89 @@ bcw_cmd24:
                 ld      a, &58                  ; CMD24
                 call    sdc_cmd                 ; R1 consumed; on entry CY set = fail
                 jr      c, bcw_retry            ; command failed: bounded in-core retry (i339)
+                ; Flip to &3F AUTO-NULL for the whole data/response phase (i338), the
+                ; two-select-mode shape of Colin's write core: command+arg under &31
+                ; (sdc_cmd, above), then bdos15t &A85A switches to &3F so every data
+                ; byte is a bare wait+OUTI and every tail byte a bare wait+IN — the
+                ; PIC injects the per-byte dummy. This drops the per-byte cost from
+                ; the ~195 T manual sdc_out sandwich to ~65 T (the i323-measured SD
+                ; leg was Z80-bit-bang-dominated). The select OUT itself is busy-
+                ; gated like any &DC command.
+                call    sdc_wait_ready
+                ld      a, SDC_SEL_NULL
+                out     (SDC_PORT), a
                 ; Protocol step 2: dummy &FF (the gap before the &FE token).
                 ld      a, SDC_IDLE
                 call    sdc_out
                 ; Protocol step 3: &FE start-of-data token.
                 ld      a, SDC_DATATOK
                 call    sdc_out
-                ; Protocol step 4: send the 512-byte data block from (bd_cmd24_src)
-                ;   (two 256-byte passes, mirroring the read's two-pass INI).
+                ; Protocol step 4: the 512 data bytes from (bd_cmd24_src) — Colin's
+                ; bulk shape (wait + OUTI per byte, two 256-byte passes), with the
+                ; wait INLINED and BOUNDED: ~256 spins (~1.75 ms) per byte is ~40x
+                ; the PIC's per-byte relay, so the bound only bites on a wedged PIC
+                ; (the i241/i280b hang class) — then it sets the sticky sdc_timed_out
+                ; (so everything after unwinds fast) and takes the i339 retry path.
                 ld      hl, (bd_cmd24_src)
+                ld      c, SDC_DATA
                 ld      b, 0                    ; 256 bytes first pass
 blwr_wd1:
-                ld      a, (hl)
-                call    sdc_out
-                inc     hl
-                djnz    blwr_wd1
+                ld      e, 0                    ; per-byte busy budget: 256 spins
+blwr_wd1w:
+                in      a, (SDC_PORT)
+                and     %00001000               ; PIC busy?
+                jr      z, blwr_wd1go
+                dec     e
+                jr      nz, blwr_wd1w
+                jr      bcw_data_wedge          ; budget gone: wedged PIC
+blwr_wd1go:
+                outi                            ; (HL) -> &DF, HL++, B--
+                jr      nz, blwr_wd1
                 ld      b, 0                    ; + 256 = 512
 blwr_wd2:
-                ld      a, (hl)
-                call    sdc_out
-                inc     hl
-                djnz    blwr_wd2
-                ; Protocol step 5: 2 dummy CRC bytes (CRC is off; values ignored).
+                ld      e, 0
+blwr_wd2w:
+                in      a, (SDC_PORT)
+                and     %00001000
+                jr      z, blwr_wd2go
+                dec     e
+                jr      nz, blwr_wd2w
+bcw_data_wedge:
+                ld      a, 1
+                ld      (sdc_timed_out), a      ; sticky: the retries fail fast, not re-spin
+                jr      bcw_retry
+blwr_wd2go:
+                outi
+                jr      nz, blwr_wd2
+                ; Protocol step 5: 2 dummy CRC bytes (CRC is off; values ignored) —
+                ; still bare OUTs under auto-null, each busy-gated.
+                call    sdc_wait_ready
                 ld      a, SDC_IDLE
-                call    sdc_out
-                call    sdc_out
+                out     (SDC_DATA), a
+                call    sdc_wait_ready
+                ld      a, SDC_IDLE
+                out     (SDC_DATA), a
                 ; Protocol step 6: gap byte before the data-response (discarded).
-                call    sdc_in
+                ; Under auto-null a read is a bare wait+IN (the PIC supplies the
+                ; dummy clock) — bdos15t tail &A893.
+                call    sdc_wait_ready
+                in      a, (SDC_DATA)
                 ; Protocol step 7: data-response token. Mask &1E; subtract 4; zero = accepted.
-                call    sdc_in
+                call    sdc_wait_ready
+                in      a, (SDC_DATA)
                 and     &1E
                 sub     4
                 jr      nz, bcw_retry           ; not accepted: bounded in-core retry (i339)
                 ; Protocol step 8: busy poll. Card drives &00 while writing, releases &FF when done.
-                ; `inc a; jr z` loops on the &00 -> 1 path and exits on the &FF -> 0 path.
-                ; Bounded at BCW_BUSY_POLLS (~260 ms at ~56 us/poll), covering the SD-spec
-                ; 250 ms write-busy allowance — the old 256-poll (~14 ms) budget read a
-                ; legitimately slow write as failure, feeding the i339 cascade.
+                ; `inc a; jr z` loops on the &00 -> 1 path and exits on the &FF -> 0 path
+                ; (bdos15t &A8AB: wait + bare IN per poll). Bounded at BCW_BUSY_POLLS,
+                ; covering the SD-spec 250 ms write-busy allowance — the old 256-poll
+                ; (~14 ms) budget read a legitimately slow write as failure, feeding
+                ; the i339 cascade.
                 ld      de, BCW_BUSY_POLLS
 blwr_busy:
-                call    sdc_in
+                call    sdc_wait_ready
+                in      a, (SDC_DATA)
                 inc     a
                 jr      z, blwr_ok              ; &FF -> 0: write done, card released MISO
                 dec     de

@@ -213,7 +213,9 @@ Differential measurement of the `sd_push` per-sector loop on the real SAM + Trin
 
 The ~1.55× gap between the nominal-6 MHz static account (31 ms) and the measured 48.5 ms is consistent with SAM ASIC memory contention on RAM-resident code.
 
-**Conclusion: the push is bit-bang-bound** — the Z80 per-byte loops plus the PIC relay — not card-bound and not network/host-bound. SAM-side headroom exists: the SD data phase uses the manual `&31` per-byte `sdc_out` sandwich (~195 T/byte) where B-DOS 1.5t's bulk write runs `&3F` auto-null + `wait`+`OUTI` (~64 T/byte), and the 512-byte payload is double-copied (zero-fill + packet→buffer LDIR) before the write. Fixing both is estimated to bring ~74 → ~50 ms/sector (~10 KB/s); beyond that the PIC relay itself is the floor (Trinity firmware property, not fixable SAM-side).
+**Conclusion: the push is bit-bang-bound** — the Z80 per-byte loops plus the PIC relay — not card-bound and not network/host-bound.
+
+The i338 optimization acts on this attribution: the CMD24 data phase now runs B-DOS-style `&3F` auto-null + bounded-`wait`+`OUTI` (~65 T/byte instead of the ~195 T/byte manual `&31` `sdc_out` sandwich), and a full 512-byte block is written straight from the packet buffer (no zero-fill + copy LDIRs). **Measured after the fix (same method, same junk image): 87.2 s / 1600 sectors = 54.5 ms/sector = 9.2 KB/s.** The remaining SD leg (~29 ms/sector) is command overhead plus the PIC per-byte relay wait — the Trinity firmware floor, not fixable SAM-side; the network leg (25.6 ms) is likewise PIC-relay-dominated.
 
 ---
 
