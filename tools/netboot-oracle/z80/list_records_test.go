@@ -219,3 +219,76 @@ func TestListRecordsBigCardClamp(t *testing.T) {
 		t.Fatalf("READ-ONLY VIOLATION: %d SD write(s) at %v", len(writes), writes)
 	}
 }
+
+// TestListRecords64GBCard — the REAL-hardware regression (i319a, found 2026-07-02 on
+// the first list-records hardware shot): Pete's 64 GB card decodes — via B-DOS
+// 1.5t's faithful >51 GB clamp (&A452, csd_compute_eff) — to BD_RECORDS = 65535
+// EXACTLY, and the original nlist = (BD_RECORDS+31)>>5 computation overflowed 16
+// bits (65535+31 wraps to 30 → nlist 0), so the range check refused EVERY 'L'
+// query and the tool returned no inventory. This test attaches the card's REAL
+// captured CSD (csd_probe read-back, 2026-07-02) and asserts the full decode chain
+// (records 65535, base 2050 — the values live-traced from B-DOS on this card) and
+// that list sectors are served again up to the 1-byte-seam clamp.
+func TestListRecords64GBCard(t *testing.T) {
+	if _, err := os.Stat(listRecordsBin); err != nil {
+		t.Fatalf("list_records binary not built (%s); run `make netboot-list-records`", listRecordsBin)
+	}
+	mac, err := z80h.Load(listRecordsBin, listRecordsMap)
+	if err != nil {
+		t.Fatalf("load list_records: %v", err)
+	}
+	// The real 64 GB card's CSD, byte-for-byte as csd_probe served it from the
+	// live card (C_SIZE = 0x01DBD3 → ~63.9 GB).
+	realCSD := [16]byte{
+		0x40, 0x0E, 0x00, 0x32, 0x5B, 0x59, 0x00, 0x01,
+		0xDB, 0xD3, 0x7F, 0x80, 0x0A, 0x40, 0x40, 0xDF,
+	}
+	enc := z80h.NewENC28J60()
+	enc.ProgramTrinityNetwork(spSAMMac, spSAMIp)
+	sd := enc.AttachSD(realCSD)
+	mac.AttachIO(enc)
+	mac.AttachPrintRecorder()
+
+	enc.InjectRX(sdPushFrame([]byte{'?'}))
+	enc.InjectRX(lrQuery(1))   // pre-fix: refused ('E') because nlist wrapped to 0
+	enc.InjectRX(lrQuery(255)) // the last seam-reachable sector still serves
+	enc.InjectRX(lrQuery(256)) // past the 1-byte seam: refused
+	enc.InjectRX(sdPushFrame([]byte{'Q'}))
+
+	if _, err := mac.RunBoot("list_records_main", z80h.Entry{StepCap: 30_000_000}); err != nil {
+		t.Fatalf("RunBoot list_records_main faulted: %v", err)
+	}
+	frames := enc.TXFrames()
+
+	sym := func(name string) uint16 {
+		a, err := mac.Sym(name)
+		if err != nil {
+			t.Fatalf("symbol %q absent from %s", name, listRecordsMap)
+		}
+		return a
+	}
+	// The faithful decode chain on this CSD: BD_RECORDS = 65535 and base = 2050 —
+	// the exact values traced live from B-DOS 1.5t on this card (csd_compute_eff).
+	if records := int(leU16(mac.Read(sym("BD_RECORDS"), 2))); records != 65535 {
+		t.Fatalf("BD_RECORDS = %d, want 65535 (the B-DOS >51GB clamp on the real 64GB CSD)", records)
+	}
+	if base := int(leU16(mac.Read(sym("csd_base"), 2))); base != 2050 {
+		t.Fatalf("csd_base = %d, want 2050 (the live-traced B-DOS base for this card)", base)
+	}
+	if got := countPayload(frames, []byte{'!', 0xFF, 0xFF}); got < 1 {
+		t.Errorf("no '!'+65535 discovery reply; tx payloads=%v", txPayloads(frames))
+	}
+
+	// THE regression pin: list sector 1 must SERVE (pre-fix it was refused).
+	for _, idx := range []uint16{1, 255} {
+		if reply := findPayloadPrefix(frames, []byte{'R', byte(idx & 0xFF), byte(idx >> 8)}); reply == nil || len(reply) != 3+512 {
+			t.Errorf("list sector %d did not serve an 'R'+512B reply (the nlist overflow refused it pre-fix)", idx)
+		}
+	}
+	if got := countPayload(frames, []byte{'E', 0, 1}); got < 1 {
+		t.Errorf("list sector 256 was not refused — the 1-byte-seam clamp must still hold on the big card")
+	}
+	if writes := sd.WrittenSectors(); len(writes) != 0 {
+		t.Fatalf("READ-ONLY VIOLATION: %d SD write(s) at %v", len(writes), writes)
+	}
+}
