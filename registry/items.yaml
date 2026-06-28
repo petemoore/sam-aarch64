@@ -416,7 +416,7 @@
   title: "i27c: Z80 port — Cortex-A53 843419 ADRP->ADR rewrite + SAM enable/disable toggle"
   description: |
     Faithful Z80 port (CLAUDE.md s6) of the i27a 843419 fix + the SAM-side enable/disable toggle UX (q37: explicit feature, off by default). Post-layout scan over the OUT buffer: for each ADRP at a final page-offset 0xff8/0xffc matching the sequence predicate (mem-op, optional 1 non-branch insn, then unsigned-imm ld/st whose base == ADRP Rd), rewrite ADRP->ADR in place (no address shift — the +/-1MB ADR range always fits our image). Mirror the Go authority masks. Wire the SAM toggle (directive or build option) covering BOTH 835769 (i27b) and 843419. SimCoupe-gated; boot self-test fixture. Go authority: errata.go (i27a).
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i27a, i234]
   kind: leaf
   owner: agent
