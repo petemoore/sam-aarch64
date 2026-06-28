@@ -214,6 +214,6 @@ toc_fail:
                 ld      (LAST_FAIL_PC), hl
                 jp      fail_with_tag
 
-; -- Scratch (section-C RAM) ---------------------------------------------
+; -- Scratch (section-D RAM: part of the ovl12 payload copy) --------------
 toc_row:        defw    0                       ; current fixture row ptr
 toc_oc_opcount: defb    0

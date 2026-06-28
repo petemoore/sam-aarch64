@@ -35,13 +35,17 @@
 ; FoldSlot constants, tools/aarch64enc/overlay.go:16-38) — used directly,
 ; not redeclared.
 ;
-; SCOPE: i204b wires these ONLY as a boot self-test (see
-; src/test_overlay_classify.asm).  The production compactor skeleton
-; (src/test_compact_ir.asm) still emits placeholder base words; rewriting
-; it to call compact_inst is a separate follow-up.  This file is included
-; by src/test_overlay_suite.asm — the page-12 payload of the
-; BUILD_TESTS_ENCODE boot variant, executed from section-D RAM — so the
-; production assembler-prod binary is unaffected.
+; SCOPE: these routines are exercised as boot self-tests (see
+; src/test_overlay_classify.asm for the per-routine fixtures and
+; src/test_compact_adapter.asm for the full-pipeline adapter test).  The
+; emission adapter that feeds compact_inst results into INSN_RUN frames
+; is src/compact_emit.asm (i48c-b8e).  The FLAT-harness compactor walk
+; (src/test_compact_ir.asm) still emits placeholder base words — the flat
+; harness has no ENCTAB, so it structurally cannot call compact_inst; the
+; encoder-coupled emission is verified here in the paged boot instead.
+; This file is included by src/test_overlay_suite.asm — the page-12
+; payload of the BUILD_TESTS_ENCODE boot variant, executed from section-D
+; RAM — so the production assembler-prod binary is unaffected.
 ;
 ; Known divergences from the Go authority (deliberate, same net result):
 ;   * literalWord catches a probe-PC encode error and keeps the
@@ -829,7 +833,9 @@ ovl_loud_gap:
 ;   On overlay (ovl_is_literal==0): OVL_SLOT / OVL_EXPR_PTR / OVL_EXPR_LEN
 ;     / OVL_IS_LITPOOL / OVL_LITWIDTH / OVL_RT hold the single patch.
 ;   A = 0 on success; A = 1 if overlay_classify hit a loud gap.
-; Clobbers: everything (PASS_PC is left at the true PC).
+; Clobbers: everything except PASS_PC, which is restored to the true PC
+;   on EVERY exit (both the fully-literal and the overlay path re-load it
+;   from the entry bracket — i351).
 ; -----------------------------------------------------------------------
 compact_inst:
                 ld      (enc_mnem), de
@@ -845,9 +851,13 @@ compact_inst:
 ; literal_word first (compact.go:253).
                 call    literal_word                ; CF=1 + DEHL = bare word
                 jr      nc, ci_overlay
-; Fully-literal: store the bare word, no patch.
+; Fully-literal: store the bare word, no patch.  The probes left PASS_PC
+; at probe B; restore the true PC so the caller's PC state survives
+; (the compactor calls compact_inst per instruction and owns the running
+; PC — a stale probe value here was the i351 latent trap).
                 ld      (ovl_base + 0), hl
                 ld      (ovl_base + 2), de
+                call    ci_restore_pc
                 ld      a, 1
                 ld      (ovl_is_literal), a
                 xor     a                           ; success
@@ -855,10 +865,7 @@ compact_inst:
 ci_overlay:
 ; Restore the true PC: encodeInstOverlay receives it (overlay.go:20) for
 ; the classify (classifyMovImm's eval context) and the base-word encode.
-                ld      hl, (ovl_pc_save + 0)
-                ld      (PASS_PC + 0), hl
-                ld      hl, (ovl_pc_save + 2)
-                ld      (PASS_PC + 2), hl
+                call    ci_restore_pc
                 xor     a
                 ld      (ovl_is_literal), a
 ; overlay_classify (encodeInstOverlay:21).
@@ -900,6 +907,15 @@ ci_overlay_encode:
                 ld      a, (OVL_SLOT)
                 call    enc_zero_slot               ; clear the relocated field
                 xor     a                           ; success
+                ret
+
+; ci_restore_pc — reload PASS_PC from the compact_inst entry bracket
+; (ovl_pc_save), so every compact_inst exit leaves PASS_PC at the true PC.
+ci_restore_pc:
+                ld      hl, (ovl_pc_save + 0)
+                ld      (PASS_PC + 0), hl
+                ld      hl, (ovl_pc_save + 2)
+                ld      (PASS_PC + 2), hl
                 ret
 
 ; -----------------------------------------------------------------------
@@ -960,7 +976,8 @@ ezs_mask_table:
                 defb    &1f, &00, &00, &ff          ; 12 Litpool19
                 defb    &1f, &00, &80, &ff          ; 13 MovzAuto
 
-; -- Scratch + outputs (section-C RAM) ----------------------------------
+; -- Scratch + outputs (section-D RAM: this file executes from the ovl12
+; -- payload copy at OVERLAY_SUITE_RAM, so these cells live there too) --
 ovl_is_literal: defb    0                           ; compact_inst: 1 bare / 0 overlay
 ovl_gen_fs:     defb    0                           ; candidate FoldSlot (generic loop)
 ovl_wa:         defb    0, 0, 0, 0                  ; literal_word: wA (4 LE bytes)
