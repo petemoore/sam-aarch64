@@ -5422,9 +5422,11 @@
   title: "Boot-a-record tool: trinload-pushed program that boots a specified record number"
   description: |
     The autonomous-testing primitive: a small trinload-pushed Z80 program that takes a record number and boots that record (RECORD n + run its boot). Enables the full autonomous loop — build a disk, push it (sd_push+i315), boot it, observe — and re-boot an unchanged record later. Distinct from i264/i264b (the hold-key-at-boot record-PICKER UI); this is the non-interactive 'boot record N' automation tool driven over the network via trinload. trinload always auto-boots on power-up (i135c) and is the interface for all these tools.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 795, role: completing}
 
 - id: i317
   title: "Delete-a-record tool: trinload-pushed program that frees a specified Trinity SD record"
