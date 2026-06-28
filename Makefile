@@ -1696,6 +1696,26 @@ disk: assembler test-mem-offaxis cluster-offaxis enc-fix-payload paged-call-payl
 	    -zx0 $(BUILD)/zx0-test.bin \
 	    $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/test.mgt
 
+# disk-record (i319b-b1) — the assembler test disk as a boot_record-bootable
+# RECORD vessel: the AUTO BASIC + "assembler" pair becomes ONE auto-executing
+# "AUTOasm" CODE file (B-DOS ALHK runs the record's AUTO* file directly; a
+# BASIC-auto record never boots, i332); every HLOADed sibling payload ships
+# unchanged. Store with sd-push, boot with boot-record.py. The floppy vessel
+# (build/test.mgt) is unchanged.
+.PHONY: disk-record
+disk-record: assembler test-mem-offaxis cluster-offaxis enc-fix-payload paged-call-payload sysreg-data disasm-test-payload zx0-test-payload enctab $(BUILD)/build-disk
+	$(BUILD)/build-disk \
+	    -variant test \
+	    -code-auto \
+	    -test-mem $(BUILD)/test_mem.bin \
+	    -cluster $(BUILD)/test_cluster.bin \
+	    -enc-fix $(BUILD)/enc_fix_payload.bin \
+	    -paged-call $(BUILD)/paged_call_test_payload.bin \
+	    -sysreg-data $(BUILD)/sysreg_data.bin \
+	    -disasm $(BUILD)/disasm-test.bin \
+	    -zx0 $(BUILD)/zx0-test.bin \
+	    $(BUILD)/assembler.bin $(BUILD)/enctab.enc $(BUILD)/test_record.mgt
+
 # harness-sweep — one-shot "build every artefact the koron-go/z80 harness
 # reads, then run its full Go test suite" (tools/z80-test-harness-go).
 # The per-variant prerequisites in that dir's README cover the standalone
