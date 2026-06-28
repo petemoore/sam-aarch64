@@ -82,6 +82,16 @@ reorder. #773 already handles record registration + card-derived base. Whether
 `sd_push` should also stamp +232 (for `RECORD`-list recognition) is a separate
 decision; leave it out of the boot fix unless a concrete need appears.
 
+## Status: APPROACH HARDWARE-PROVEN (2026-07-01)
+
+A **host-side** side-major stream-reorder push of `cj.mgt` (throwaway pusher, real
+`sd_push` binary) booted **CJ's Elephant on the real SAM** (record `cjfixed`). So
+the side-major reorder is confirmed end-to-end on silicon. What remains in i315 is
+the **durable SAM-side** implementation (below) + emulation coverage; the host-side
+reorder was only the fast proof and was not kept. (Aside observed: `sd_push` doesn't
+cleanly return to trinload after a write — i296 — so a second back-to-back push
+needs a power-cycle; and the push is slow pending i284.)
+
 ## Validation
 
 1. **Emulation (agent, CI):** extend the netboot Z80 harness — push a `.mgt`
