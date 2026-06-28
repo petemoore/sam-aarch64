@@ -98,21 +98,7 @@ encode_inst:
                 ld      (enc_op_ptr), hl
 
 ; -- Pass A: build kinds[] in OPVAL_KINDS (for form_lookup_match) -------
-                or      a
-                jr      z, enc_after_kinds          ; 0 operands
-                ld      b, a                        ; B = count
-                ld      de, OPVAL_KINDS
-enc_kinds_loop:
-                ld      a, (hl)                     ; operand kind
-                ld      (de), a
-                inc     de
-                push    bc
-                push    de
-                call    enc_skip_operand            ; HL -> next operand
-                pop     de
-                pop     bc
-                djnz    enc_kinds_loop
-enc_after_kinds:
+                call    enc_build_kinds
 
 ; -- Special-form intercepts (mirror Go pass2.go:337-353 switch) --------
 ; lsl/lsr (17/18), bitfield (49/50/51/83/84), csetm (52), the barriers
@@ -1686,6 +1672,30 @@ enc_rd_width_store:
                 inc     hl
                 ld      a, (hl)                     ; Rd reg
                 ld      (enc_rd), a
+                ret
+
+; -- enc_build_kinds — fill OPVAL_KINDS with each operand's kind byte ----
+; Reads enc_op_count / enc_op_ptr (stored by the caller).  Shared by
+; encode_inst (pass A above) and overlay_classify (insn_overlay.asm),
+; which mirrors the same kinds[] build (overlay.go:83-93).
+; Clobbers A, BC, DE, HL.
+enc_build_kinds:
+                ld      a, (enc_op_count)
+                or      a
+                ret     z                           ; 0 operands
+                ld      b, a                        ; B = count
+                ld      hl, (enc_op_ptr)
+                ld      de, OPVAL_KINDS
+enc_kinds_loop:
+                ld      a, (hl)                     ; operand kind
+                ld      (de), a
+                inc     de
+                push    bc
+                push    de
+                call    enc_skip_operand            ; HL -> next operand
+                pop     de
+                pop     bc
+                djnz    enc_kinds_loop
                 ret
 
 ; -- enc_nth_operand — A = operand index; returns HL -> that operand ----
