@@ -5481,7 +5481,7 @@
   title: "List-records tool: trinload-pushed program that reports the Trinity SD record inventory (number + name) over the net"
   description: |
     A trinload-pushed Z80 program that reads the on-card Trinity SD record list and reports each used record's NUMBER + NAME (+ free slots) back over the network, so a host/agent can query what is on the card remotely without physical access. Completes the store/boot/delete/LIST testing toolkit. Motivation (Pete 2026-07-01): when iterating on a disk image we want to keep re-writing it to the SAME record each pass (preserve the record number); if that mapping is lost, an agent can re-discover what is on the card by querying it remotely. Reads the record list directly per docs/specs/trinity-record-detection-design.md + trinity_storage_shared_resource (frozen layout, show name). Read-only (no write) - data-safe. Feeds i319 (hardware-test-all-images needs to know/preserve record placement).
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
