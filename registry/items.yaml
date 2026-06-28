@@ -1412,7 +1412,7 @@
   title: i17 review residuals — LOW-severity hardening and dead-code findings
   description: |
     L12: .set/.equ REDEFINITION -> HARD FAIL (Pete 2026-07-01, q49). The Z80 assembler hard-fails on .set/.equ redefinition; make the Go authority (tools/sam-aarch64/assemble/pass1.go resolveEquDirective ~L382) ALSO hard-fail (it currently silently overwrites, matching GNU as). This is a DELIBERATE divergence from GNU as -- document it. Rationale (Pete): strict-input / byte-identical-output. We already reject inputs GNU accepts (e.g. SIMD), so there is precedent; if code assembles at all, the generated binary is byte-identical to GNU as, so there is NO divergence in emitted code -- the desired guarantee. WORK: (a) add a test asserting the hard-fail on redefinition (Go + Z80 oracle); (b) change the Go resolveEquDirective from silent-overwrite to hard-fail; (c) document the intentional GNU-as input divergence (near the align-with-binutils notes). See memory feedback_align_with_binutils (refined: match binutils on OUTPUT byte-identity, but we may be STRICTER on input).
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   refs: ["PR #185", i17]
