@@ -75,6 +75,8 @@ const (
 // in every working capture (oracle §1). The Pi 4 boot ROM's hard requirement is
 // the option-43 "Raspberry Pi Boot" blob below, but echoing PXEClient is the
 // observed-correct behaviour and tags the offer as a netboot offer on a shared LAN.
+// It is also the required prefix of an inbound request's vendor class: the
+// responder answers only PXE clients (Responder.OnRequest's rogue-DHCP gate).
 var PXEClient = []byte("PXEClient")
 
 // Option43RaspberryPiBoot is the fixed 32-byte PXE vendor-encapsulated-options

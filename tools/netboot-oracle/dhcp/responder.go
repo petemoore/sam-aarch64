@@ -1,6 +1,8 @@
 package dhcp
 
 import (
+	"bytes"
+
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
 )
 
@@ -14,8 +16,9 @@ import (
 // This is reply-driven: the Pi initiates the DORA cycle (DISCOVER -> OFFER,
 // REQUEST -> ACK). The responder owns no timers; the caller's read loop drives
 // it one request at a time (the Z80 loop calls drv_read, then OnRequest, then
-// drv_write). Non-DISCOVER/REQUEST messages and non-DHCP frames yield nil — the
-// loop ignores them and keeps serving.
+// drv_write). Non-DISCOVER/REQUEST messages, non-DHCP frames, and requests
+// without a PXEClient vendor class (option 60) yield nil — the loop ignores
+// them and keeps serving.
 //
 // Config (the SAM's fixed network identity) mirrors the captured proxyDHCP
 // behaviour (oracle §1) and the plan §3.1 template.
@@ -69,10 +72,10 @@ func (r *Responder) lease(mac [6]byte) [4]byte {
 	return a
 }
 
-// OnRequest processes one received Ethernet frame. If it is a DHCP DISCOVER it
-// returns the OFFER frame; if a REQUEST, the ACK frame; otherwise nil (ignored,
-// keep serving). The returned frame is the complete Ethernet/IPv4/UDP broadcast
-// reply, ready for drv_write.
+// OnRequest processes one received Ethernet frame. If it is a DHCP DISCOVER
+// from a PXE client it returns the OFFER frame; if a REQUEST, the ACK frame;
+// otherwise nil (ignored, keep serving). The returned frame is the complete
+// Ethernet/IPv4/UDP broadcast reply, ready for drv_write.
 func (r *Responder) OnRequest(reqFrame []byte) []byte {
 	u, ok := frame.ParseUDP(reqFrame)
 	if !ok || u.DstPort != 67 {
@@ -91,6 +94,17 @@ func (r *Responder) OnRequest(reqFrame []byte) []byte {
 		replyType = MsgACK
 	default:
 		return nil // DECLINE/RELEASE/INFORM etc.: not part of the netboot DORA
+	}
+
+	// Rogue-DHCP protection: the SAM serves only PXE netboot clients, so a
+	// DISCOVER/REQUEST must carry a vendor class (option 60) with the 9-byte
+	// "PXEClient" prefix to be answered; any other DHCP client on a shared LAN
+	// (a laptop, a phone renewing its lease) is ignored like a non-DHCP frame.
+	// Prefix match, not equality: the captured Pi 400 sends the 32-byte
+	// "PXEClient:Arch:00000:UNDI:002001" in both messages (the golden
+	// DHCPDiscover/DHCPRequest vectors).
+	if vc := msg.Option(OptVendorClass); vc == nil || !bytes.HasPrefix(vc.Value, PXEClient) {
+		return nil
 	}
 
 	var uuid []byte
