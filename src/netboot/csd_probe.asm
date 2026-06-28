@@ -462,9 +462,12 @@ csd_timeout_msg: defm   "SD BUSY TIMEOUT!"      ; exactly 16 bytes (CSD_BYTES)
 ; is wrong. Test the base=390 hypothesis (B-DOS using the 16-bit-WRAPPED BD_RECORDS=12423
 ; for the list size: list=ceil(12423/32)=389, base=390) AND read the boot sector (LBA 0),
 ; which should hold the card's real B-DOS geometry (base / last.record).
-SP_LBA_BOOT:     equ 0                          ; boot sector + first list sectors (the superblock/geometry)
-SP_LBA_REC3:     equ 390 + 1600*2               ; 3590:  record 3 body base IF base=390
-SP_LBA_REC12:    equ 390 + 1600*11              ; 17990: record 12 body base IF base=390
+; B-DOS's TRACED seek base = 2050 (RECORD 1's real CMD17 LBA in emulation, vs the
+; capacity-formula's 2438). Read records 1/3/12 at base=2050 off the REAL card to confirm
+; empirically (valid SAMDOS directory + "BDOS"@232 ⇒ base=2050 nailed). boot.bin=rec1@2050.
+SP_LBA_BOOT:     equ 2050                       ; 2050:  record 1 body base IF base=2050 (rec1=base+0)
+SP_LBA_REC3:     equ 2050 + 1600*2              ; 5250:  record 3 body base IF base=2050
+SP_LBA_REC12:    equ 2050 + 1600*11             ; 19650: record 12 body base IF base=2050
 SP_SCAN_SECS:    equ 24                         ; rel sectors 0..23
 
 ; sd_sector_dispatch — match the RRQ filename to a sector-dump file and read it.

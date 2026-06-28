@@ -281,6 +281,37 @@ which is not faithful to the 64 GB card). Established facts now:
   New diagnostics committed: `sd_real_card_base_test.go`, `sd_record_seek_trap_test.go`, `sd_sector_probe_test.go`
   (+ the read-only `sd_sector_probe` build target). The probe currently reads list/r3/r12/boot windows + quit.bin.
 
+## ⭐ BUG CONFIRMED (2026-07-01) — B-DOS base = 2050, NOT the formula's 2438 (a 16-bit records overflow)
+EMPIRICAL PROOF (read the REAL card at base=2050 offsets via the read-only probe):
+- rec1 @ LBA 2050: "BDOS"@232 ✓, +210="L1        ", first16="Ssamdos2" (valid SAMDOS2 dir).
+- rec3 @ LBA 5250: "BDOS"@232 ✓, +210="L3        ".
+- rec12 @ LBA 19650: "BDOS"@232 ✓, +210="L12       ", first16="bdos".
+All three WORKING records are valid .mgt at base=2050 + the labels match the catalogue. So
+**B-DOS's REAL record base = 2050**, confirming the RECORD-1-traps-to-2050 lead.
+
+**THE BUG (deterministic, no guessing):** sd_push's `csd_set_bd_records` computes csd_base via the
+capacity formula `base=(blocks/1600+32)/32+1` = **2438** for the 64 GB card; B-DOS actually uses **2050**.
+sd_push wrote cj at 2438+1600*12 = **21638**; B-DOS reads record 13 at 2050+1600*12 = **21250** (empty,
+zeros) → get.label finds no "BDOS" → "81 Invalid record, 0:1". The catalogue claim worked because the
+list sector = (n-1)/32+1 is base-INDEPENDENT (so "cj" correctly appears at entry 13).
+
+**WHY 2050 (the mechanism):** base=2050 ⟺ records1 = 65536 = 2^16 (since (65536+32)/32+1 = 2050), vs the
+TRUE records1 = blocks/1600 = 77959. So B-DOS's record-count math **OVERFLOWS at 16 bits** (BD_RECORDS is a
+16-bit slot — the decode test already documents the wrap of the STORED count; here the overflow also feeds
+the BASE/list-region sizing). NOTE: the isolated &A45A run (runColinRecords, TestRealCardBaseBDOSvsSdPush)
+gave base=2438 for blocks=124735488 — so the overflow is NOT in &A45A's arithmetic on a clean 32-bit block
+count; it is in the BOOT path's block-count / records1 (the full CSD-init ladder &A623→&A736 vs the isolated
+hand-filled decode), which produces records1≈65536. **Trace the boot's CSD-decode + records-math to pin the
+exact overflow (deterministic; do NOT guess), then mirror it.**
+
+**THE FIX (mirror B-DOS, do not hardcode):** make sd_push's base computation reproduce B-DOS's boot-path
+result (2050) — i.e. apply the same 16-bit overflow/cap to records1 that B-DOS does — so csd_base == B-DOS's
+base for ANY card size. Then re-push cj: it lands at 2050+1600*12 = 21250 where B-DOS reads it, RECORD 13
+validates, and it boots. (The i145 CSD/records port must match B-DOS's boot behaviour for >65535-record cards,
+not just the documented formula — this is the gap that "passed review" because the formula matched the docs
+but not B-DOS's 16-bit-overflow boot reality on a 64 GB card.) Verify on the real card by re-pushing + RECORD 13,
+and by pulling cj back + samfile-listing the reconstructed .mgt.
+
 **Consequences for the goals:**
 - **i299 (this item) is DIAGNOSED-RESOLVED:** the write is correct; "invalid" is downstream of i296
   (sd_push clean exit), not a write defect. Remaining = a clean-boot hardware confirm of `RECORD 13`
