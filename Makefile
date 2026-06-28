@@ -1292,7 +1292,7 @@ asmlex-z80: $(BUILD)/asmlex.bin $(BUILD)/asmlex.map
 # Depends on the generated src/mnemonic_names.inc (committed; `make tables`).
 $(BUILD)/asmparse.bin $(BUILD)/asmparse.map: src/asmparse.asm $(asm_deps/src/asmparse.asm)
 	@mkdir -p $(BUILD)
-	pyz80 -D ASMPARSE_STANDALONE=1 --obj=$(BUILD)/asmparse.bin \
+	pyz80 -D ASMPARSE_STANDALONE=1 -D ASMPARSE_CORPUS_BUFS=1 --obj=$(BUILD)/asmparse.bin \
 	    --mapfile=$(BUILD)/asmparse.map \
 	    src/asmparse.asm
 

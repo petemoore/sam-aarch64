@@ -1204,6 +1204,15 @@ LEX_STRP:       defs 2          ; string-pool write pointer (TOK_STRING bodies)
 ; Public I/O buffers
 ; ===========================================================================
 LEX_ERR:        defs 1          ; non-zero after a lexical error
+                if defined(ASMPARSE_CORPUS_BUFS)
+; Corpus build: LEX_TOKS relocated to low RAM (free in the flat harness:
+; &0100-&63FA unused — harness.go:842-845 reserves only SP=&6FFE/haltTrap=&7000);
+; LEX_SRC and LEX_STRPOOL grown to hold the longest corpus source.
+LEX_SRC:        defs 4096       ; input source bytes (corpus: 4096 B cap)
+LEX_TOKS:       equ  &0100      ; output token records (14 B each -> 1024 tokens, 14336 B, ends &3900)
+LEX_STRPOOL:    defs 4096       ; decoded TOK_STRING bodies (corpus: 4096 B cap)
+                else
 LEX_SRC:        defs 2048       ; input source bytes (caller writes; BC = len)
 LEX_TOKS:       defs 3584       ; output token records (14 B each -> 256 tokens)
 LEX_STRPOOL:    defs 2048       ; decoded TOK_STRING bodies (span ptr/len index here)
+                endif
