@@ -1260,9 +1260,38 @@
     SAM IP stack fetches Pi firmware (several MB) from cdn.githubraw.com over HTTP (q11 resolved: on-SAM HTTP via uIP, host-tool-free; q12 resolved: Model A only). Full host-verifiable HTTP-fetch path complete + host-verified across Bricks 1–6 (#245/#247/#254/#256/#257/#259 netboot_http.asm). Remaining: hardware-gated (EEPROM read + section-C paging + HSAVE RST-8 dispatch on real Trinity; emulation-verified != hardware-verified, CLAUDE.md §5). i82 TFTP client bridges provisioning meanwhile; HTTPS stretch is i88.
   status: OPEN
   depends_on: [i133, i93b]
-  kind: leaf
+  kind: umbrella
   owner: agent
   refs: [docs/specs/phase3-delivery-design.md, docs/notes/trinity-capabilities.md, docs/notes/bdos-version-landscape.md, src/netboot/netboot_http.asm, docs/notes/netboot-trinity-testing.md, i61, i66, i84, i88]
+
+- id: i70a
+  title: "HTTP-fetch smoke-shot readiness: LAN server IP config, first-FREE SD-record persist, single-file smoke manifest, marker beacon + runbook-compliant exit"
+  description: |
+    Close the 2026-07-03 pre-flight NO-GO gaps so a smoke hardware shot of the real i70 gate (EEPROM read + section-C staging + HSAVE RST-8) can run: (1) ht_server_ip is a placeholder 192.168.0.1 (http_main.asm:458) with no on-SAM DNS — make the fetch server IP a build-time setting pointed at a LAN HTTP mirror (the runbook python3 -m http.server peer, netboot-trinity-testing.md:429-497); (2) the persist path does bdos_select_record(0) which bdos_seam.asm:376 documents as FLOPPY (the http_main.asm:532 comment claims "Trinity flat store" — fix the lie), bypassing first-FREE shared-card discipline — route the HSAVE persist through a first-FREE SD record (bdos_find_free_record, bdos_seam.asm:600; the i93b-proven numbered-record pattern); (3) no smoke mode — add a single-small-file build variant (LICENCE.broadcom, 1594 B; FW_MANIFEST fw_source.asm:126-197, PROV_FILE_COUNT http_main.asm:281); (4) no autonomous success channel — wire the i271 dbg_marker :9001 beacon (the netboot_serve pattern) into http_main phases; (5) exit strands trinload (raw di;halt) — comply with netboot-trinity-testing.md:54-62 (clean return or documented power-cycle recovery). Host state is green (Bricks 1-6 all PASS 2026-07-03); this item is code-only, emulation-verified, no hardware.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i70
+
+- id: i70b
+  title: "HTTP-fetch smoke hardware shot: EEPROM read + section-C staging + HSAVE RST-8 verified on real Trinity (single small file from a LAN server)"
+  description: |
+    The scoped hardware validation the 2026-07-03 pre-flight recommended: boot the smoke-variant fetcher on the real SAM (TAPO power-cycle, trinload push or floppy vessel per the i70a exit decision), fetch LICENCE.broadcom (1594 B) from the LAN HTTP mirror, persist via HSAVE RST-8 into the first-FREE SD record, confirm via tcpdump port-80 capture (loopback-proven first) + :9001 markers + post-cycle record read-back. This exercises exactly the unverified hardware gate (section-C paging of the HSAVE source is the q16 hardware detail, http_main.asm:494-497). Note i347-class exposure (EI d loop, no IM2 takeover) is low-risk for a seconds-long smoke but must be assessed before any multi-minute fetch.
+  status: OPEN
+  depends_on: [i70a]
+  kind: leaf
+  owner: agent
+  parent: i70
+
+- id: i70c
+  title: Directory-safe multi-blob persist + full 6-file cdn manifest on hardware (start.elf-scale spanning)
+  description: |
+    The full i70 payoff, blocked on a persist design reconciliation: at FW_RECORD_CAP=6144 (http_main.asm:333) start.elf alone becomes 486 HSAVE files in ONE B-DOS record directory (~80-slot limit) — the fw_span record-spanning design (src/netboot/fw_span.asm, phase3-delivery-design.md) must be reconciled with directory capacity (span across multiple first-FREE records or raise the per-file window) before any multi-MB persist. Also assess the i347 IM2 exposure for the 10-18+ min full fetch (Z80 SHA-256 in the loop dominates; measured bands in trinity-capabilities.md), and decide the cdn reachability story (LAN mirror of the pinned a43df3a firmware blobs vs resolved cdn IP; blobs verified live 2026-07-03, SHA-256-pinned so an untrusted proxy is fine).
+  status: OPEN
+  depends_on: [i70b]
+  kind: leaf
+  owner: agent
+  parent: i70
 
 - id: i71
   title: "B-DOS reference + Trinity-fork deep-dive: vendor, disassemble, diff, re-point rig"
@@ -5855,7 +5884,7 @@
 - id: i347
   title: netboot_serve (i332 vessel) shares the EI'd-loop / ROM-IM1-chain exposure on unbounded serve runs
   description: |
-    Found during i95b-b1 stage 2: the vendored ENC driver EIs on every exit, so a record-booted serve program running its loop indefinitely gets ROM IM1 frame interrupts + the B-DOS frame hook against a frozen boot context, with shared-&DC SD/ENC traffic - netboot_server (i95b-b1) now arms an IM 2 takeover after its last B-DOS hook to own the vector for the serve phase; netboot_serve (the i332 TFTP-record vessel, record 145) has NO such takeover and its faithful tests only drive short windows, so the exposure is theoretical-but-real for long-lived serves on hardware. Assess and, if confirmed, port the IM 2 takeover pattern from netboot_server.asm to netboot_serve.asm.
+    Found during i95b-b1 stage 2: the vendored ENC driver EIs on every exit, so a record-booted serve program running its loop indefinitely gets ROM IM1 frame interrupts + the B-DOS frame hook against a frozen boot context, with shared-&DC SD/ENC traffic - netboot_server (i95b-b1) now arms an IM 2 takeover after its last B-DOS hook to own the vector for the serve phase; netboot_serve (the i332 TFTP-record vessel, record 145) has NO such takeover and its faithful tests only drive short windows, so the exposure is theoretical-but-real for long-lived serves on hardware. Assess and, if confirmed, port the IM 2 takeover pattern from netboot_server.asm to netboot_serve.asm. NOTE (2026-07-03 i70 pre-flight): http_main (the i70 fetcher) has the SAME exposure — di once at entry, no IM2 takeover, EI d by every ENC-driver exit and RST-8 HSAVE — and its full-manifest fetch runs 10-18+ min, more acute than the serve vessels; the i70c full fetch is gated on assessing this (seconds-long i70b smoke is low-risk).
   status: OPEN
   kind: leaf
   owner: agent
