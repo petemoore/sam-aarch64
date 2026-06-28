@@ -3,10 +3,11 @@
 # and byte-diff the round-trip output against
 # `aarch64-*-as + ld -Ttext=0 + objcopy -O binary`.
 #
-# Per docs/specs/paged-out-design.md.  Paged fixtures exercise > 2 KB output
-# via the paged-OUT machinery (sections-B emit with LMPR_ENCTAB low zone,
-# LMPR_OUT_HIGH high zone, HSAVE auto-paging across &C000).  See also
-# docs/specs/samdos-file-io.md.
+# Per docs/specs/paged-out-design.md.  Paged fixtures exercise large output
+# via the paged-OUT machinery (the pool-run section-B emit with per-byte
+# LMPR bracket, page advances at each 16 KB boundary, HSAVE auto-paging
+# across &C000).  inst_out_over32k.s crosses the old two-page / 32 KB
+# ceiling (i24).  See also docs/specs/samdos-file-io.md.
 #
 # Invoked by `make test-paged` / `make ci-paged` and the paged CI job.
 # Pattern mirrors tests/operands/run-roundtrip.sh.

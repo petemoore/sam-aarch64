@@ -1904,9 +1904,10 @@ ci-operands-prod: test-operands-prod
 # pipeline as test-operands (sam-aarch64 → build-disk → SimCoupé → samfile
 # extract OUT → byte-compare against aarch64-*-as + ld -Ttext=0 +
 # objcopy -O binary).  Per docs/specs/paged-out-design.md.  The paged
-# fixtures exercise the paged-OUT machinery (sections-B emit + HSAVE
-# auto-paging across &C000) by emitting > 16 KB of output to cross the
-# OUT_ZONE low → high boundary.
+# fixtures exercise the paged-OUT machinery (the pool-run section-B emit
+# + HSAVE auto-paging across &C000) by emitting > 16 KB of output to
+# cross a run page boundary — and > 32 KB (inst_out_over32k.s, i24) to
+# cross the old two-page ceiling.
 test-paged: assembler test-mem-offaxis paged-call-payload enctab $(BUILD)/build-disk sam-aarch64
 	./tests/paged/run-roundtrip.sh
 
