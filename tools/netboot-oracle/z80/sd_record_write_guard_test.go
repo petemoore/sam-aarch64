@@ -51,8 +51,14 @@ func callRecordWrite(t *testing.T, mac *z80h.Machine, sd *z80h.SDCard, rec, line
 	mac.Write(symAddr(t, mac, "bd_rec_guard_tripped"), []byte{0}) // clear the sticky flag (1 byte — it abuts BD_REC_WRITE_REC)
 	mac.WriteU16LE(symAddr(t, mac, "BD_REC_WRITE_REC"), rec)
 	mac.WriteU16LE(symAddr(t, mac, "BD_REC_WRITE_LINEAR"), linear)
-	// A 512-byte source buffer of recognisable data at a safe scratch address.
-	const src = 0x9000
+	// A 512-byte source buffer of recognisable data at a safe scratch address. It
+	// must NOT overlap the fixture's data region (csd_base / csd_blocks / the
+	// BD_REC_WRITE_* cells live in sd_csd.asm's storage above the &8000 org) nor the
+	// harness stack (SP starts at &6FFE, growing down). &7000..&71FF sits in the free
+	// gap between the two, and fixture growth moves the data region UP and away from
+	// it — so a later layout shift cannot push a symbol into the buffer (an earlier
+	// &9000 placement DID collide once csd_base relocated just above &9000).
+	const src = 0x7000
 	buf := make([]byte, 512)
 	for i := range buf {
 		buf[i] = byte(i)

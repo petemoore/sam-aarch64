@@ -58,13 +58,15 @@
 ; THE HONESTY LINE (CLAUDE.md §5): these routines are host-verifiable — they
 ; only build / decode memory. The actual hook DISPATCH (RST 8 / DEFB 129 HGTHD,
 ; / DEFB 130 HLOAD, / DEFB 132 HSAVE, and the HRECORD &9C record select) is NOT
-; host-verifiable: the flat-memory koron-go/z80 harness has no ROM, no DOS
-; bank, and no RST 8 dispatch, so the hook bodies cannot run host-side. Those
-; calls live in bdos_hooks (below) behind `ifndef NETBOOT_HOSTTEST`, excluded
-; from the host build, and stay UNVERIFIED until exercised on real Trinity
-; hardware (the i62 dual-run proved the hooks round-trip on real SAMDOS-2 +
-; B-DOS-AL backends; the netboot fetch end-to-end is the final integration
-; gate). Emulation-verified is not hardware-verified.
+; host-verifiable in this file's own execution: the flat-memory koron-go/z80
+; harness has no ROM, no DOS bank, and no real RST 8 vector. Instead bdos_store.go
+; MODELS the RST 8 dispatch (which hook, with which UIFA / record), so the
+; bootable binaries that include this seam (client / serve / http / sd_push)
+; exercise the dispatch path in emulation through that model; real B-DOS
+; persistence stays UNVERIFIED until exercised on real Trinity hardware (the i62
+; dual-run proved the hooks round-trip on real SAMDOS-2 + B-DOS-AL backends; the
+; netboot fetch end-to-end is the final integration gate). Emulation-verified is
+; not hardware-verified.
 ;
 ; PROVENANCE: the UIFA/DIFA layout + hook codes are docs/specs/samdos-file-io.md
 ; + src/sam_io.inc; the length encoding is src/main_loop.asm save_out_file +
@@ -336,14 +338,19 @@ bvdr_fail:
 
 
 ; ===========================================================================
-; The real B-DOS hook dispatch — NOT host-verifiable (no ROM / SAMDOS bank in
-; the harness). Excluded from the host build (NETBOOT_HOSTTEST). Stays
-; unverified until exercised on real Trinity hardware (CLAUDE.md §5). The bodies
-; are the established in-tree idioms (src/loader.asm HGTHD path; src/io.asm
-; HSAVE note); the HRECORD &9C select is the B-DOS mass-storage step.
+; The real B-DOS hook dispatch. The bodies issue `rst 8` with the B-DOS hook
+; codes; on real hardware they route through the ROM/SAMDOS bank + the Trinity
+; SD driver. The flat harness has no ROM / RST-8 vector, so bdos_store.go models
+; each hook (HRECORD/HGTHD/HSAVE/HRSAD/HWSAD/ALHK/LISTREAD): every bootable
+; binary that includes this seam (client / serve / http / sd_push) exercises the
+; dispatch in emulation through that model. The standalone unit-test binary
+; (netboot_bdos_seam.bin) carries these bodies too, but bdos_seam_test drives
+; only the arithmetic leaves above — it never reaches a `rst 8`. Real-Trinity
+; RST 8 stays the final gate (CLAUDE.md §5); emulation-verified is not hardware-
+; verified. The bodies are the established in-tree idioms (src/loader.asm HGTHD
+; path; src/io.asm HSAVE note); the HRECORD &9C select is the B-DOS mass-storage
+; step.
 ; ===========================================================================
-                if defined(NETBOOT_HOSTTEST)==0
-
 BD_UIFA_ADDR:     equ &4B00              ; the SAMDOS UIFA buffer (real address)
 BD_DIFA_ADDR:     equ &4B50              ; SAMDOS deposits the DIFA here
 BD_HOOK_HRECORD:  equ &9C                ; B-DOS record select (156)
@@ -1100,8 +1107,6 @@ bdos_boot_record:
                 rst     8
                 defb    BD_HOOK_ALHK            ; auto-load + run the record's AUTO file
                 ret                             ; harness-only: ALHK never returns on hardware
-
-                endif
 
 ; ===========================================================================
 ; Data region — the UIFA / DIFA buffers and the routine parameters.
