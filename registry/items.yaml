@@ -5234,3 +5234,43 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i299
+  title: Diagnose+fix sd_push record reads '81 Invalid record' (get.label rejects body stamp)
+  description: |
+    sd_push create-record write (PR #773) completes on hardware (cj.mgt->record 13, no crash) but RECORD 13='81 Invalid record': get.label rejects the body stamp though the catalogue is correct (B-DOS finds record 13). Read record 13 body sector 0 (LBA csd_base+1600*12 ~21638), inspect +210/+232/+250 vs 'BDOS'. Hypotheses: (a) sector-0 mutation didn't land; (b) body base off-by-one vs B-DOS &80C2; (c) get.label's exact sector. Blocks deploy+boot cjs. Spec: docs/plans/sd-push-create-record-implementation.md.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i300
+  title: Update sd_push Go tests for own-LBA + sector-0-mutation create-record flow
+  description: |
+    sd_push_test.go/sd_push_faithful_test.go still assert the old HWSAD/HRECORD path; update to own-LBA + sector-0 'BDOS' mutation so PR #773 CI goes green and it's mergeable.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i301
+  title: "Speed up sd_push body write: drop per-sector sdc_init_ladder"
+  description: |
+    ~8KB/s because bd_cmd24_write_core runs sdc_init_ladder per sector. B-DOS already inited the card; no per-block ENC re-arm disturbs the bus (settled) -> init once or not at all -> tens of KB/s.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i302
+  title: Boot record 13 to confirm cjs runs (after record is get.label-valid)
+  description: |
+    sd_push writes but doesn't boot. After the invalid-record fix, boot record 13 (config boot to record 13 + power-cycle, or record-picker i264b) to confirm cjs runs end-to-end.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i303
+  title: "sd_push cleanup: prune dead HWSAD/HRECORD seam routines + plumb record name from filename"
+  description: |
+    Own-LBA sd_push leaves dead HWSAD/HRECORD seam routines (Pete: delete duplicate code); record name hardcoded 'cj.mgt' - plumb from pushed filename (<=16).
+  status: OPEN
+  kind: leaf
+  owner: agent
