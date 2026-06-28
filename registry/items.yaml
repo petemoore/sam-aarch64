@@ -5571,7 +5571,7 @@
   title: "boot_record fails on real hardware: HRECORD+ALHK boot bounces back to trinload (i316 hardware follow-up)"
   description: |
     First hardware trial of boot_record (i319a, 2026-07-02): booting record 186 (netboot_serve, stored+stamped) AND record 123 (cjfixed, the i302-proven bootable) both bounced back to trinload (ping + 0xEDB0 '?' answering ~10s later). ELIMINATED by the faithful dispatch gate (boot_record_faithful_test.go, PR 802, real ROM+B-DOS from editor idle): (1) the DOSCNT/&37E8 recursion-guard class -- HRECORD redirects the &A185 seek base in BOTH armed and unarmed states; (2) selection-not-honoured -- ALHK's AUTO search CMD17 reads the SELECTED record's directory band. On an empty record ALHK errors ('no auto file', rep101) back to the editor prompt. REMAINING: the real-SAM context is TRINLOAD idle, which no faithful rig reaches -- build the full-chain faithful boot (samboot_real_boot_test.go reaches the bootblock fetch; extend through real B-DOS load from EEPROM chunks 2-13 -> HAUTO -> a SEEDED record-3 trinload image to trinload idle), push boot_record into page 1 from THERE, and watch where the second ALHK goes. The mock-based TestTrinityAutobootALHK cannot answer this (AttachBDOS mock; cf feedback_trinity_sd_write_settled_truths). Suspect space: trinload-idle B-DOS variable state (mid-HAUTO residue: current command/device/dev.no), the DI'd/stack context an ALHK error longjmps through, or the page-1 occupancy interaction during the auto-load.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
