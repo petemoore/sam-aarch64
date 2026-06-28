@@ -1045,6 +1045,15 @@
     - {num: 833, role: completing}
   parent: i48c-b8
 
+- id: i48c-b8k
+  title: Extend the b8d chain driver with the page-13 sysreg lookup so the three sysreg fixtures join the corpus byte-match (+ two PR 835 review cleanups)
+  description: |
+    PR 835 review follow-up (review 4623816269): the b8d chain driver stubs encode_dc_word/encode_tlbi_word/mrs-msr sysreg lookup with fail tag &fe (the real lookup needs the page-13 payload: sysname.asm:326-376, paged_call/SYSREG_SYSREG_ENTRY/LMPR_DEFAULT_RUNTIME), so inst_mrs_msr.s, inst_mrs_msr_missing.s and inst_dc_tlbi.s sit on b8dKnownSkip and the corpus compare is 80 of 83. Wire the page-13 sysreg payload into the paged-chain arrangement (seed the page + route the stubs through the real lookup) so all three join TestChainPagedB8dCorpus. The full mrs/msr/dc/tlbi encode path is meanwhile covered by the green boot enc-tests gate (enc_fix_* fixtures under SimCoupé), so this is completeness polish, not a coverage hole. Fold in the two review yellows: delete the now-dead enc_fsid_movz (insn_encode.asm:578, orphaned by the SK_IMM16SH mapping fix) and update the stale insn_overlay.asm:708-711 "deliberately different" NOTE that described the old mapping.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i48c-b8
+
 - id: i48d
   title: Doc unification — bring tbn-binary-format-reference.md to v2 overlay-only format
   description: |

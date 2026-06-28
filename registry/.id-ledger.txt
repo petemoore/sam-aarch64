@@ -670,3 +670,4 @@ i48c-b8j
 i70d
 i70e
 i70f
+i48c-b8k
