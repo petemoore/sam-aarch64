@@ -94,12 +94,54 @@ _UPLOAD_FLAGS = {
 def _statements(command: str):
     """Split a command string into individual statements.
 
-    Splits on &&, ||, ;, newline and | (pipe). This is a deliberately coarse
-    lexical split — it does not honour quoting around separators — which is
-    safe here: over-splitting can only ever expose MORE verbs to inspect, so
-    it cannot hide a real deploy.
+    Splits on &&, ||, ;, newline and | (pipe) — but only OUTSIDE quoted
+    spans. Separators inside single- or double-quoted text are data (a
+    commit message, a printf argument), not statement boundaries: splitting
+    there manufactures "statements" out of quoted prose, and a prose line
+    beginning with a pusher filename then false-fires the guard (i336: a
+    `g commit -m` body did exactly this). Keeping each statement's quotes
+    intact preserves the interpreter rule's reach into quoted arguments
+    (`bash -c "…sd-push.py…"` still fires via the shlex'd arg search).
+
+    Quote tracking is coarse bash semantics: a backslash escapes the next
+    character outside single quotes; a single-quoted span is literal until
+    its closing quote. An unbalanced quote runs to end-of-string, leaving
+    the tail as one statement — still scanned, so a real deploy verb after
+    a stray quote is seen rather than dropped. Inside `$(…)`/heredocs the
+    split stays coarse (over-splitting only ever exposes MORE verbs to
+    inspect, so it cannot hide a real deploy).
     """
-    return re.split(r"&&|\|\||;|\n|\|", command)
+    stmts, buf = [], []
+    quote = None  # None, "'" or '"'
+    escaped = False
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if escaped:
+            buf.append(c)
+            escaped = False
+        elif c == "\\" and quote != "'":
+            buf.append(c)
+            escaped = True
+        elif quote is not None:
+            buf.append(c)
+            if c == quote:
+                quote = None
+        elif c in ("'", '"'):
+            buf.append(c)
+            quote = c
+        elif command.startswith("&&", i) or command.startswith("||", i):
+            stmts.append("".join(buf))
+            buf = []
+            i += 1  # consume the second separator char too
+        elif c in ";\n|":
+            stmts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(c)
+        i += 1
+    stmts.append("".join(buf))
+    return stmts
 
 
 def _strip_prefixes(tokens):

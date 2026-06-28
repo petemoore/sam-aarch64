@@ -69,6 +69,13 @@ class MustNotFire(unittest.TestCase):
         "grep -rn 'tftp://192.168.2.75' tools/",
         "cat > x.md <<EOF\nfetch via tftp://192.168.2.75/x\nEOF",
         "go test ./... -run TestTFTP <<EOF\ntftp://192.168.2.75/boot.bin\nEOF",
+        # i336: statement separators INSIDE quotes are data, not boundaries —
+        # a multi-line commit message whose wrapped line begins with a pusher
+        # filename false-fired as "a pusher script executed directly".
+        'g commit -m "trinload-push: retry finalize (i335)\n\n'
+        'covered by pure verdict tests in\ntest_trinpush.py."',
+        'echo "a; b; tools/trinload-push/sd-push.py"',
+        "git commit -m 'ran tools/trinload-push/sd-push.py earlier; see notes'",
     ]
 
     def test_must_not_fire(self):
@@ -93,6 +100,11 @@ class MustFire(unittest.TestCase):
         "/abs/path/to/trinload-push.py 192.168.2.75 foo.bin",
         "echo hi && python3 tools/trinload-push/trinload-push.py 192.168.2.75 foo.bin",
         "wget --post-file=foo tftp://192.168.2.75/x",  # wget + --post-file upload flag -> rule 3
+        # i336: quote-aware splitting must not HIDE a deploy inside a quoted
+        # interpreter argument — the shlex'd arg search still reaches it,
+        # even with a newline inside the quotes.
+        'bash -c "python3 tools/trinload-push/sd-push.py 192.168.2.75 x.mgt"',
+        'sh -c "echo hi\npython3 tools/trinload-push/trinload-push.py 192.168.2.75 f.bin"',
     ]
 
     def test_must_fire(self):
