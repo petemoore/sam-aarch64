@@ -1063,7 +1063,6 @@
   description: |
     Explicitly punted in favour of the text2bin -flatten approach. Multi-section / linker-script handling in refenc would only be needed if a non-spectrum4-shaped project surfaces. Deferred; from ROADMAP deferred checklist (retired in i52 PR 3).
   status: OPEN
-  depends_on: [q53]
   kind: leaf
   owner: agent
 
@@ -1177,9 +1176,8 @@
 - id: i66
   title: Trinity page-persistence as a general persist-to-mass-storage technique
   description: |
-    Persist SAM pages to Trinity B-DOS records as a general storage technique. Deferred by Pete's decision (2026-06-10, q9 resolved): 'no value implementing right now'; revisit only if a concrete need appears. Conditional on i66's reactivation being Pete's call.
-  status: OPEN
-  depends_on: [q53]
+    WONTFIX -- subsumed by i215c. The editor spill manager's concrete Trinity-SD-record backend (i215c) realizes this general persist-to-Trinity-record mechanism. i66's q9 revisit-trigger (revisit if a concrete need appears) fired as the i2/q36 editor page-pool spill (i215, 2026-06-22), which post-dates i66's 2026-06-10 deferral. Reopen only if a persist-to-Trinity-storage need arises OUTSIDE the editor-spill use case. Original scope: persist SAM pages to Trinity B-DOS records as a general storage technique (deferred by Pete, q9).
+  status: WONTFIX
   kind: leaf
   owner: agent
   refs: [docs/notes/bdos-version-landscape.md]
@@ -2084,8 +2082,7 @@
   title: Per-session retro reports
   description: |
     At wind-down each session writes a short blameless retrospective to ~/claude-retro/ on genuine process/workflow friction, written independently (not reading other sessions' reports first) so converging signal across sessions is real, not echoed. Rule: say what genuinely happened; 'nothing notable' is a valid report; each friction grounded in a specific incident. Reviewed by hand every few sessions / at milestone close -> recurring frictions become actionable changes (CLAUDE.md / memory / qN). Distinct from the diary (~/claude-diary/). Practice started 2026-06-15.
-  status: OPEN
-  depends_on: [q53]
+  status: DONE
   kind: leaf
   owner: agent
   refs: [~/claude-retro/README.md, docs/ROADMAP.md]
@@ -2411,7 +2408,6 @@
   description: |
     Preliminary 2026-06-18 scan: metaswarm, ccswarm, ruflo, claude-plan-orchestrator, autonomous-dev, closedloop-ai, barkain, Composio AO + Claude Code Agent Teams; plus awesome-agent-orchestrators, awesome-cli-coding-agents. Most emphasise PARALLELISM. i117's model differs: single serial orchestrator + deterministic non-LLM monitor (i97) + prime-directive culture + blameless retro + iN/qN registry backbone. Deliverable: feature-by-feature comparison to confirm differentiation and whether gap justifies building i117. Research-first; cite each tool. Pete's call; do not auto-pick-up.
   status: OPEN
-  depends_on: [q53]
   kind: leaf
   owner: agent
   parent: i117
@@ -2696,7 +2692,6 @@
   description: |
     DEFERRED (Pete 2026-06-21: more complex to model, not needed now). Complementary to the host-launcher config: if the in-memory config block's strategy is undefined (the host launcher / disk config left it unset, e.g. user chose 'ask on the SAM'), the program prompts the user on the SAM keyboard for the placement strategy at launch. For now the host launcher always sets a concrete strategy (default highest-free), so this path is unused. Requires modelling a SAM keyboard prompt in emulation.
   status: OPEN
-  depends_on: [q53]
   kind: leaf
   owner: agent
   parent: i121
@@ -5491,6 +5486,14 @@
   title: Measure + assess sd_push network throughput on hardware (the ~10-13 KB/s question)
   description: |
     Pete measured the last 800KB image push at well over a minute (~10-13 KB/s). VERIFIED in source that neither recalled culprit lingers: i301 dropped the per-sector SD init (card inited once, sd_push.asm:19), and the ENC ereset is init/exit-only NOT per-block (sd_push.asm:400/702; i293 dropped the per-block ereset). So the throughput is most likely the INHERENT bit-banged ENC receive ceiling (~375 T-states/byte ~= 16 KB/s at 6 MHz, consistent with observed ~13 KB/s). TASK: during the i319 hardware-test push campaign, time an actual push, compute KB/s, and CONFIRM whether it is the bit-bang ceiling (best-we-can-do) or a residual per-op cost remains. If genuinely bit-bang-bound, a follow-up can consider an ENC-receive-speed optimisation; if not, find + remove the residual. Pairs with i318 (screen progress) + i308 (record# over net).
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i324
+  title: Mine the accumulated ~/claude-retro/ session retro reports for converging process-friction signal (one-off)
+  description: |
+    One-off (Pete 2026-07-01): the per-session retro-report practice (i104, DONE) has accumulated a substantial corpus of blameless retros in ~/claude-retro/. Read them ALL and find the CONVERGING signal -- recurring process/workflow friction that surfaces INDEPENDENTLY across multiple sessions (the whole point of writing them without reading prior reports first, so agreement is real signal). Produce a prioritised recommendation set, each mapping to a follow-up item / CLAUDE.md rule / hook / skill change, mirroring the i274 hardware-fidelity retrospective method. Read-only analysis (no code change in this item). Output: a synthesis + filed follow-ups. Likely high-value now that many reports exist.
   status: OPEN
   kind: leaf
   owner: agent
