@@ -4712,7 +4712,7 @@
 - id: i267
   title: Add set-owner verb to the registry CLI
   description: |
-    The CLI has set-status/set-title/set-desc/set-pr but NO way to change an existing item's owner (agent<->pete). This blocks i172 (reclassify i133's presence-gated dependents to owner:pete) and q53 option (c) (re-own tip-clutter to owner:pete). Add 'registry set-owner --id iN --owner agent|pete' mirroring set-title: validate the owner value, mutate, regenerate views, run the dependency guard. Questions are always owner:pete (no set-owner for qN). Include a test.
+    The CLI has set-status/set-title/set-desc/set-pr but NO way to change an existing item's owner (agent<->pete). This blocks i172 (reclassify i133's presence-gated dependents to owner:pete). Add 'registry set-owner --id iN --owner agent|pete' mirroring set-title: validate the owner value, mutate, regenerate views, run the dependency guard. Questions are always owner:pete (no set-owner for qN). Include a test.
   status: DONE
   kind: leaf
   owner: agent
