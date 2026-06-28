@@ -5572,7 +5572,7 @@
   title: Mine the accumulated ~/claude-retro/ session retro reports for converging process-friction signal (one-off)
   description: |
     One-off (Pete 2026-07-01): the per-session retro-report practice (i104, DONE) has accumulated a substantial corpus of blameless retros in ~/claude-retro/. Read them ALL and find the CONVERGING signal -- recurring process/workflow friction that surfaces INDEPENDENTLY across multiple sessions (the whole point of writing them without reading prior reports first, so agreement is real signal). Produce a prioritised recommendation set, each mapping to a follow-up item / CLAUDE.md rule / hook / skill change, mirroring the i274 hardware-fidelity retrospective method. Read-only analysis (no code change in this item). Output: a synthesis + filed follow-ups. Likely high-value now that many reports exist.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
