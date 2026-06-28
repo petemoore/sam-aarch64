@@ -1692,7 +1692,7 @@
   title: B-DOS RST 8 hook dispatch on real Trinity — hardware-gated (HGTHD/HLOAD/HSAVE/HRECORD)
   description: ""
   status: OPEN
-  depends_on: [i133, i295]
+  depends_on: [i133, i295, i316, q67]
   kind: leaf
   owner: agent
   parent: i93
@@ -3548,7 +3548,7 @@
   description: |
     Hardware-gated completion of i182 (unverifiable in emulation). Boot the i182a fetch-and-boot disk on real SAM+Trinity, serve a stamped 819200-byte .mgt, confirm it streams into the scratch record (1600 HWSAD sectors), validates, and ALHK-boots it. Entangled with auto-boot/control-return autonomy (i132/i135). The full-size valid stream is the first full-scale fetch-and-boot (not driven through the bit-banged ENC in the host harness). Needs i182a's disk.
   status: OPEN
-  depends_on: [i182a, i272, i295]
+  depends_on: [i182a, i272, i295, q67]
   kind: leaf
   owner: agent
   parent: i182
@@ -4773,7 +4773,7 @@
   description: |
     AFTER i270a works on real hardware, update the Go EMULATOR model of SD-card WRITES to faithfully reproduce the real Trinity uC-mediated behaviour learned on hardware (auto-null select, the real busy-wait + data-response framing). Today sdcard.go models a RAW SD card and was wrongly treated as the authority (i273); it must now be DERIVED FROM the hardware-proven behaviour. AUDIT ALL Go emulators that model SD — the netboot-oracle sdcard.go, AND check for any other Go SD/Trinity emulator (the comprehensive-emulation i126 surface) — and update each so they model the WRITE path correctly. Depends on i270a (hardware-proven first, per Pete: get it working on real SAM before feeding back to Go). Feeds i270c.
   status: OPEN
-  depends_on: [i295]
+  depends_on: [i295, q67]
   kind: leaf
   owner: agent
   parent: i270
@@ -5138,7 +5138,7 @@
   description: |
     Real-world validation/demo (Pete): push the CJ's Elephant Antics playable disk (cj.mgt = ~/git/cjs-sam-remake boot_m2b.mgt, a SEPARATE Pete project, 819200 B) to a free Trinity SD record via the hardware-proven sd_push path (sd-push.py + src/netboot/sd_push.asm, incl. the i315 side-major reorder), then BOOT it on the SAM. Validation is SIZE-ONLY (i285): cj.mgt is accepted (no BDOS stamp; +232 is not a boot/select requirement - memory feedback_trinity_sd_write_settled_truths). Deps i289/i293/i295 all DONE. NOTE: a hardware-confirmed sd_push run already wrote record cjfixed and BOOTED CJ's Elephant on the real SAM (i295/i302, #784) - the mechanism is proven; this item is now the clean repeatable one-command push+boot demo/wrapper (drive boot via SAMBOOT autoboot i264b or a pushed boot-record). The .mgt-to-record ordering (D3, track-major vs side-major) is SOLVED (i294/i315) - do NOT re-list as open. Possibly-remaining: D1 (in-context HRECORD rst-8 crash) only if it recurs on the sd_push path.
   status: OPEN
-  depends_on: [i289, i293, i295]
+  depends_on: [i289, i293, i295, q67]
   kind: leaf
   owner: agent
 
@@ -5432,6 +5432,7 @@
   description: |
     The autonomous-testing primitive: a small trinload-pushed Z80 program that takes a record number and boots that record (RECORD n + run its boot). Enables the full autonomous loop — build a disk, push it (sd_push+i315), boot it, observe — and re-boot an unchanged record later. Distinct from i264/i264b (the hold-key-at-boot record-PICKER UI); this is the non-interactive 'boot record N' automation tool driven over the network via trinload. trinload always auto-boots on power-up (i135c) and is the interface for all these tools.
   status: OPEN
+  depends_on: [q67]
   kind: leaf
   owner: agent
 
