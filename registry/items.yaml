@@ -1762,10 +1762,12 @@
 - id: i88c-b1
   title: "i88c-b1 — wire tls_reasm into CONN_SINK_FILTER: sink+emit shims, bounded emulation integration test"
   description: |
-    The wiring: new src/netboot/tls_main.asm composes tls_reasm + tls_client + tcp_conn's CONN_SINK_FILTER dispatch with two shims — tls_sink_feed (CONN_SINK_FILTER target: HL=window,BC=len -> jp tls_reasm_feed) and tls_record_shim (REASM_EMIT_PTR: copy the emitted record REASM_BUF->TC_RX, set TC_RX_LEN, call tls_client_on_record). Emulation-first: a new tools/netboot-oracle/z80/tls_integration_test.go replays the existing captured handshake flight (records <=TC_RX=1056, flat-buildable) chunked at mis-aligned TCP-segment sizes THROUGH storage_sink_flush (the real dispatch) and asserts TC_PHASE reaches DONE / secrets match the Go authority. REASM_BUF placed in low memory so the composite fits flat. Land via PR. body_sink_write is the precedent.
-  status: IN_PROGRESS
+    DONE (PR #844): src/netboot/tls_main.asm composes tls_reasm + tls_client and adds tls_record_shim — the REASM_EMIT_PTR call-through (copy the reassembled record REASM_BUF->TC_RX, set TC_RX_LEN, call tls_client_on_record). CONN_SINK_FILTER is armed DIRECTLY to tls_reasm_feed (its (HL=chunk,BC=len) contract matches the storage_sink_flush mode-1 dispatch, so no sink-side wrapper is needed — body_sink_write's proven mechanism; the only new code is the emit shim). Emulation-first (tools/netboot-oracle/z80/tls_integration_test.go): the captured github.com server flight is chunked mis-aligned AND fed whole through tls_reasm_feed, reassembled, and drives the 6a machine to DONE with the client Finished record + all four traffic secrets byte-matching the Go authority, plus a chunked AEAD-reject negative control. Bounded flat build (REASM_MAX=512, the module lands in the free gap &F7A5-&FB00); the full-size 16645 REASM_BUF + a 16645 TC_RX cannot coexist flat = paged layout i88c-b2 (q72); real RST-8 shot = i88c-b4.
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 844, role: completing}
   parent: i88c
   refs: [src/netboot/tls_main.asm, src/netboot/tls_reasm.asm, src/netboot/tls_client.asm, src/netboot/tcp_conn.asm]
 
