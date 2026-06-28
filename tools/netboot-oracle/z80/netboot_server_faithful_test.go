@@ -10,9 +10,11 @@
 // netboot_main reads the SAM identity from the captured EEPROM -> drv_init ->
 // the B-DOS STORE WALK (nb_fill_store) reads the booted record's directory via
 // real RST-8 HRSAD, HGTHDs + HLOADs each small stand-in file through the real
-// 1.5t hooks into FILE_ARENA — then the serve loop answers the captured golden
-// frames (DISCOVER->OFFER, REQUEST->ACK, ARP, RRQ->OACK->DATA, miss->ERROR(1),
-// non-PXE silence) byte-for-byte vs the Go sub-responders.
+// 1.5t hooks into FILE_ARENA, and the NBMANIFEST rewrite (nb_apply_manifest,
+// i346) maps mangled 10-char store names back to their full TFTP names — then
+// the serve loop answers the captured golden frames (DISCOVER->OFFER,
+// REQUEST->ACK, ARP, RRQ->OACK->DATA, miss->ERROR(1), non-PXE silence)
+// byte-for-byte vs the Go sub-responders.
 //
 // The walk needs no record number: B-DOS's HRECORD selection persists from
 // boot_record's select through the ALHK boot into the running program (the same
@@ -44,6 +46,13 @@ const (
 	serverRecordMGT   = "../../../build/netboot_server_record.mgt"
 	standinConfigPath = "../testdata/pi-standins/config.txt"
 	standinStart4Path = "../testdata/pi-standins/start4.elf"
+
+	// The i346 long-named stand-ins: both exceed the 10-char B-DOS directory
+	// field, so build-disk stores them mangled ("cmdline.tx", "bcm2711-rp")
+	// plus an NBMANIFEST map, and the server's walk rewrites its tables to
+	// serve them under these full TFTP names.
+	standinCmdlinePath = "../testdata/pi-standins/cmdline.txt"
+	standinDtbPath     = "../testdata/pi-standins/bcm2711-rpi-400.dtb"
 )
 
 // readdressToSAM rebuilds a captured golden unicast frame so it targets the
@@ -115,6 +124,8 @@ func TestNetbootServerFaithful(t *testing.T) {
 	mgt := mustReadFile(t, serverRecordMGT, "make netboot-server-record")
 	configTxt := mustReadFile(t, standinConfigPath, "restore tools/netboot-oracle/testdata/pi-standins")
 	start4Elf := mustReadFile(t, standinStart4Path, "restore tools/netboot-oracle/testdata/pi-standins")
+	cmdlineTxt := mustReadFile(t, standinCmdlinePath, "restore tools/netboot-oracle/testdata/pi-standins")
+	dtbBin := mustReadFile(t, standinDtbPath, "restore tools/netboot-oracle/testdata/pi-standins")
 	seedRecordFromMGT(sd, 2, mgt, "nbsrv")
 	seedRecordList(sd, map[int]string{1: "rec1", 2: "nbsrv"})
 
@@ -167,11 +178,16 @@ func TestNetbootServerFaithful(t *testing.T) {
 	}
 
 	// --- Stage 2: the walk filled STORE + NB_SRC_TABLE from the record's
-	// directory — the two small stand-ins indexed with their exact sizes, the
+	// directory — the small stand-ins indexed with their exact sizes, the
 	// oversize files (the AUTOnbsrv binary itself, the boot DOS) excluded.
+	// The long-named stand-ins appear under their FULL TFTP names (the i346
+	// manifest rewrite), and the NBMANIFEST entry itself is dropped — the
+	// exact-count check below asserts both.
 	wantStore := map[string]int{
-		"config.txt": len(configTxt),
-		"start4.elf": len(start4Elf),
+		"config.txt":          len(configTxt),
+		"start4.elf":          len(start4Elf),
+		"cmdline.txt":         len(cmdlineTxt),
+		"bcm2711-rpi-400.dtb": len(dtbBin),
 	}
 	gotStore := parseWalkStore(t, mac.Read(storeAddr, 1024))
 	if len(gotStore) != len(wantStore) {
@@ -183,9 +199,15 @@ func TestNetbootServerFaithful(t *testing.T) {
 		}
 	}
 	// The staged arena bytes must be the files, byte-for-byte from the record
-	// through the real HGTHD+HLOAD.
-	tbl := parseWalkSrcTable(t, mac.Read(tblAddr, 256))
-	for name, want := range map[string][]byte{"config.txt": configTxt, "start4.elf": start4Elf} {
+	// through the real HGTHD+HLOAD — the manifest-mapped entries too (their
+	// rewritten NB_SRC_TABLE rows must keep the right arena ptr + size).
+	tbl := parseWalkSrcTable(t, mac.Read(tblAddr, 512)) // NB_SRC_TABLE_LEN
+	for name, want := range map[string][]byte{
+		"config.txt":          configTxt,
+		"start4.elf":          start4Elf,
+		"cmdline.txt":         cmdlineTxt,
+		"bcm2711-rpi-400.dtb": dtbBin,
+	} {
 		e, ok := tbl[name]
 		if !ok {
 			t.Fatalf("stage 2: %s absent from NB_SRC_TABLE (%v)", name, tbl)
@@ -219,8 +241,10 @@ func TestNetbootServerFaithful(t *testing.T) {
 	refDHCP := dhcp.NewResponder(samMAC, samIP, subnet, broadcast, poolBase, 8, 7200, 3600, 6300)
 	refARP := smoke.NewResponder(samMAC, samIP)
 	goStore := tftp.MapStore{
-		"config.txt": uint64(len(configTxt)),
-		"start4.elf": uint64(len(start4Elf)),
+		"config.txt":          uint64(len(configTxt)),
+		"start4.elf":          uint64(len(start4Elf)),
+		"cmdline.txt":         uint64(len(cmdlineTxt)),
+		"bcm2711-rpi-400.dtb": uint64(len(dtbBin)),
 	}
 	refTFTP := tftp.NewServerLoop(goStore, samMAC, samIP, nbServerTID)
 
@@ -341,6 +365,70 @@ func TestNetbootServerFaithful(t *testing.T) {
 	}
 	_ = refTFTP.OnACK(ackFrom(start4TID, 1))
 	t.Logf("stage 11: start4.elf served in one short block")
+
+	// rrqFor builds an optioned RRQ (tsize 0 + blksize 1024, the captured
+	// shape) for name from a fresh client TID.
+	rrqFor := func(name string, tid uint16) []byte {
+		return frame.BuildUDPFrame(frame.UDP{
+			DstMAC: frame.MAC(samMAC), SrcMAC: frame.MAC(mask.ClientMAC),
+			SrcIP: frame.IPv4(mask.ClientIP), DstIP: frame.IPv4(samIP),
+			SrcPort: tid, DstPort: 69,
+			Payload: tftp.BuildRRQ(name, "octet", []tftp.Option{{Name: "tsize", Value: "0"}, {Name: "blksize", Value: "1024"}}),
+		})
+	}
+
+	// --- Stage 11b (i346): cmdline.txt — a manifest-mapped name (stored as
+	// "cmdline.tx" on the record) served under its full 11-char TFTP name,
+	// one short block, byte-verified.
+	const cmdlineTID = 30576
+	refTFTP.SetSource(tftp.ByteSource(cmdlineTxt))
+	eq("OACK (cmdline.txt)", drive("OACK cmdline", rrqFor("cmdline.txt", cmdlineTID)), refTFTP.OnRRQ(rrqFor("cmdline.txt", cmdlineTID)))
+	dc := drive("DATA 1 cmdline", ackFrom(cmdlineTID, 0))
+	eq("DATA 1 (cmdline.txt)", dc, refTFTP.FirstData())
+	if _, p, _ := tftp.ParseDATA(udpPayload(t, dc)); !bytes.Equal(p, cmdlineTxt) {
+		t.Errorf("stage 11b: cmdline.txt payload (%d bytes) != fixture (%d bytes)", len(p), len(cmdlineTxt))
+	}
+	if fin := drive("final ACK cmdline", ackFrom(cmdlineTID, 1)); fin != nil {
+		t.Errorf("stage 11b: ACK of cmdline.txt's single block should end the transfer, got %x", fin)
+	}
+	_ = refTFTP.OnACK(ackFrom(cmdlineTID, 1))
+	t.Logf("stage 11b: cmdline.txt served under its full manifest-mapped name")
+
+	// --- Stage 11c (i346): bcm2711-rpi-400.dtb — the 19-char mapped name
+	// (stored as "bcm2711-rp"), streamed as a full 1024-byte block plus the
+	// short tail, both byte-verified.
+	const dtbTID = 30577
+	refTFTP.SetSource(tftp.ByteSource(dtbBin))
+	eq("OACK (bcm2711-rpi-400.dtb)", drive("OACK dtb", rrqFor("bcm2711-rpi-400.dtb", dtbTID)), refTFTP.OnRRQ(rrqFor("bcm2711-rpi-400.dtb", dtbTID)))
+	dd1 := drive("DATA 1 dtb", ackFrom(dtbTID, 0))
+	eq("DATA 1 (bcm2711-rpi-400.dtb)", dd1, refTFTP.FirstData())
+	if _, p, _ := tftp.ParseDATA(udpPayload(t, dd1)); !bytes.Equal(p, dtbBin[:1024]) {
+		t.Errorf("stage 11c: dtb block 1 (%d bytes) != fixture head", len(p))
+	}
+	dd2 := drive("DATA 2 dtb", ackFrom(dtbTID, 1))
+	eq("DATA 2 (bcm2711-rpi-400.dtb)", dd2, refTFTP.OnACK(ackFrom(dtbTID, 1)))
+	if _, p, _ := tftp.ParseDATA(udpPayload(t, dd2)); !bytes.Equal(p, dtbBin[1024:]) {
+		t.Errorf("stage 11c: dtb final block (%d bytes) != fixture tail (%d bytes)", len(p), len(dtbBin)-1024)
+	}
+	if fin := drive("final ACK dtb", ackFrom(dtbTID, 2)); fin != nil {
+		t.Errorf("stage 11c: ACK of the dtb's final block should end the transfer, got %x", fin)
+	}
+	_ = refTFTP.OnACK(ackFrom(dtbTID, 2))
+	t.Logf("stage 11c: bcm2711-rpi-400.dtb streamed (1024 + %d) under its mapped name", len(dtbBin)-1024)
+
+	// --- Stage 11d (i346): the rewrite replaced (not aliased) the mangled
+	// names, and dropped the manifest from the store — the on-record store
+	// name and NBMANIFEST itself both ERROR(1), byte-matching the authority
+	// (whose store never held either).
+	for i, name := range []string{"cmdline.tx", "NBMANIFEST"} {
+		tid := uint16(30580 + i)
+		reply := drive("miss "+name, rrqFor(name, tid))
+		eq("ERROR(1) for "+name, reply, refTFTP.OnRRQ(rrqFor(name, tid)))
+		if code, _, err := tftp.ParseError(udpPayload(t, reply)); err != nil || code != tftp.ErrFileNotFound {
+			t.Errorf("stage 11d: RRQ %s -> code %d (err %v), want 1 (file not found)", name, code, err)
+		}
+	}
+	t.Logf("stage 11d: the mangled store name and NBMANIFEST are not servable")
 
 	// --- Stage 12: a miss — the captured golden RRQ for recovery.elf (not in
 	// the record) -> ERROR(1, File not found), and the server keeps serving.

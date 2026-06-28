@@ -1,0 +1,22 @@
+bcm2711-rpi-400.dtb STAND-IN (i346) -- not a real device tree blob.
+Its 19-char name exceeds the 10-char B-DOS directory field, so
+build-disk stores it as "bcm2711-rp" and the server serves it under
+the full name via NBMANIFEST. Sized past one 1024-byte TFTP block so
+the mapped-name transfer streams a full block plus a short final one.
+dtb-standin line 000: the quick brown fox jumps over the lazy dog
+dtb-standin line 001: the quick brown fox jumps over the lazy dog
+dtb-standin line 002: the quick brown fox jumps over the lazy dog
+dtb-standin line 003: the quick brown fox jumps over the lazy dog
+dtb-standin line 004: the quick brown fox jumps over the lazy dog
+dtb-standin line 005: the quick brown fox jumps over the lazy dog
+dtb-standin line 006: the quick brown fox jumps over the lazy dog
+dtb-standin line 007: the quick brown fox jumps over the lazy dog
+dtb-standin line 008: the quick brown fox jumps over the lazy dog
+dtb-standin line 009: the quick brown fox jumps over the lazy dog
+dtb-standin line 010: the quick brown fox jumps over the lazy dog
+dtb-standin line 011: the quick brown fox jumps over the lazy dog
+dtb-standin line 012: the quick brown fox jumps over the lazy dog
+dtb-standin line 013: the quick brown fox jumps over the lazy dog
+dtb-standin line 014: the quick brown fox jumps over the lazy dog
+dtb-standin line 015: the quick brown fox jumps over the lazy dog
+dtb-standin line 016: the quick brown fox jumps over the lazy dog

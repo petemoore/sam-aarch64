@@ -341,4 +341,11 @@ RESOLVE_SIZE:     defs 4                 ; little-endian
 RESOLVE_NAME_PTR: defs 2
 
 RRQ_IN:           defs 512               ; the input RRQ payload
-STORE:            defs 1024              ; the flat name->size store (harness-filled)
+
+; STORE capacity. Sizing (i346): the full Pi-4 + Pi-3 boot name set is ~12
+; names of <= 19 chars (docs/notes/pi-netboot-capture-analysis.md §5), so
+; even every name at the 31-char -netboot-extra cap costs 12 * (31 + 5) =
+; 432 bytes — 1024 leaves >2x headroom. Writers (the harness fill, the
+; netboot_server store walk + manifest rewrite) bound themselves by this equ.
+STORE_LEN:        equ 1024
+STORE:            defs STORE_LEN         ; the flat name->size store (harness-filled)

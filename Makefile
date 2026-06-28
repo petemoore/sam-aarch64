@@ -800,11 +800,13 @@ netboot-server-disk: $(BUILD)/netboot_server.bin $(BUILD)/build-disk
 # file (exec = load &8000; the i332 pattern — a BASIC-auto record can never
 # boot) plus the Pi-boot stand-in files in the same record's directory, which
 # the server's boot-time B-DOS store walk (nb_fill_store) indexes and serves by
-# name. Stand-in names are capped at the B-DOS 10-char directory limit
-# ("config.txt" fits; the real Pi's "cmdline.txt" etc. need a name-mapping
-# scheme — i95b-b2 territory). Emulation gate: netboot-oracle
-# TestNetbootServerFaithful boots this exact artifact on the captured real ROM +
-# B-DOS 1.5t and replays the golden Pi session against the Go authority.
+# name. Stand-in names longer than the B-DOS 10-char directory field
+# (cmdline.txt, bcm2711-rpi-400.dtb) ride the NBMANIFEST name map (i346):
+# build-disk stores them under mangled 10-char names plus a manifest file the
+# server's walk parses to serve them under their real TFTP names. Emulation
+# gate: netboot-oracle TestNetbootServerFaithful boots this exact artifact on
+# the captured real ROM + B-DOS 1.5t and replays the golden Pi session against
+# the Go authority.
 NETBOOT_STANDINS := tools/netboot-oracle/testdata/pi-standins
 .PHONY: netboot-server-record
 netboot-server-record: $(BUILD)/netboot_server.bin $(BUILD)/build-disk
@@ -812,6 +814,8 @@ netboot-server-record: $(BUILD)/netboot_server.bin $(BUILD)/build-disk
 	    -netboot-code-auto \
 	    -netboot-extra config.txt=$(NETBOOT_STANDINS)/config.txt \
 	    -netboot-extra start4.elf=$(NETBOOT_STANDINS)/start4.elf \
+	    -netboot-extra cmdline.txt=$(NETBOOT_STANDINS)/cmdline.txt \
+	    -netboot-extra bcm2711-rpi-400.dtb=$(NETBOOT_STANDINS)/bcm2711-rpi-400.dtb \
 	    $(BUILD)/netboot_server_record.mgt
 
 # netboot-serve (i96) — the serve-files TFTP demo server: ARP + TFTP only (no DHCP,

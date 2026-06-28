@@ -1,0 +1,1 @@
+console=serial0,115200 console=tty1 root=/dev/nfs rootwait rw ip=dhcp -- cmdline.txt STAND-IN (i346): not a real Pi kernel command line. Its 11-char name exceeds the 10-char B-DOS directory field, so build-disk stores it as "cmdline.tx" and the server serves it under the full name via NBMANIFEST. Single short TFTP block.
