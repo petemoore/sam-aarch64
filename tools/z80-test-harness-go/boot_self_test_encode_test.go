@@ -248,8 +248,8 @@ func TestBootSelfTestsOverlayFailProbe(t *testing.T) {
 	// at +8} (src/test_encode_inst_payload.asm), so +8 is the first
 	// expected base byte.  Flipping it guarantees a base-word mismatch on
 	// fixture 0 → toc_fail records the row pointer (= toc_ci_table) in
-	// LAST_FAIL_PC and the assertion tag TOC_TAG_CI_BASE (&d2) in
-	// LAST_FAIL_TAG → banner FAILd2<toc_ci_table>.
+	// LAST_FAIL_PC and the assertion tag TOC_TAG_CI_BASE (&c2) in
+	// LAST_FAIL_TAG → banner FAILc2<toc_ci_table>.
 	const rowBaseOff = 8
 	off := int(tocCiTable) - encFixTableRAM + rowBaseOff
 	if off <= 0 || off >= len(encFix) {
@@ -271,8 +271,8 @@ func TestBootSelfTestsOverlayFailProbe(t *testing.T) {
 		t.Fatalf("expected a FAIL banner from the corrupted overlay fixture, got printer=%q exit=%q",
 			res.PrinterCapture, res.ExitReason)
 	}
-	if !strings.EqualFold(tag, "d2") {
-		t.Errorf("expected the TOC_TAG_CI_BASE tag d2, got %q (printer=%q)", tag, res.PrinterCapture)
+	if !strings.EqualFold(tag, "c2") {
+		t.Errorf("expected the TOC_TAG_CI_BASE tag c2, got %q (printer=%q)", tag, res.PrinterCapture)
 	}
 	// toc_fail records the failing row pointer; row 0 sits at toc_ci_table.
 	if pc != uint16(tocCiTable) {

@@ -4,11 +4,12 @@
 ;
 ; Like run_encode_inst_self_tests, these routines read the form table +
 ; slot records from ENCTAB, so this suite runs AFTER load_enctab inside
-; its own enctab_map_in / form_lookup_init / enctab_map_out bracket and
-; INLINE in section C (the off-axis clusters page into section A, where
-; ENCTAB lives, so they cannot coexist).  It lives in the
-; BUILD_TESTS_ENCODE boot variant (i234) and runs right after
-; run_encode_inst_self_tests.
+; its own enctab_map_in / form_lookup_init / enctab_map_out bracket, and
+; must stay addressable while ENCTAB occupies section A (the off-axis
+; clusters page into section A, so they cannot host it).  It lives in
+; the BUILD_TESTS_ENCODE boot variant (i234), rides the page-12 suite
+; payload (src/test_overlay_suite.asm), executes from section-D RAM at
+; OVERLAY_SUITE_RAM, and runs right after run_encode_inst_self_tests.
 ;
 ; Every fixture mirrors one case in
 ; tools/sam-aarch64/assemble/overlay_classify_fixtures_test.go
@@ -29,8 +30,7 @@
 ; payload (src/test_encode_inst_payload.asm, i204b block at the payload
 ; tail), already bulk-copied to section-D RAM at ENC_FIX_TABLE_RAM by
 ; run_encode_inst_self_tests before this suite runs; the toc_* labels
-; are imported from build/enc_fix_payload.sym.  Keeping the ~430 fixture
-; bytes off-axis spares the section-C code budget (i69 lever 3).
+; are imported from build/enc_fix_payload.sym at the suite build.
 ;
 ; On any mismatch: record the failing row pointer in LAST_FAIL_PC, the
 ; failing assertion in LAST_FAIL_TAG (the TOC_TAG_* below), and jp fail
@@ -41,15 +41,15 @@ TOC_CI_ROW_LEN: equ     12          ; compact_inst rows (layout: payload)
 TOC_OC_ROW_LEN: equ     10          ; overlay_classify rows (layout: payload)
 
 ; Fail tags: which assertion tripped (LAST_FAIL_PC carries the row).
-TOC_TAG_CI_STATUS: equ  &d0        ; compact_inst returned a loud gap
-TOC_TAG_CI_ISLIT:  equ  &d1        ; is_literal mismatch
-TOC_TAG_CI_BASE:   equ  &d2        ; base word mismatch
-TOC_TAG_OC_STATUS: equ  &d3        ; overlay_classify returned a loud gap
-TOC_TAG_OC_SLOT:   equ  &d4        ; slot mismatch
-TOC_TAG_OC_LP:     equ  &d5        ; is_litpool mismatch
-TOC_TAG_OC_WIDTH:  equ  &d6        ; litwidth mismatch
-TOC_TAG_OC_RT:     equ  &d7        ; rt mismatch
-TOC_TAG_LOUD:      equ  &d8        ; loud-gap fixture did not report A=1
+TOC_TAG_CI_STATUS: equ  &c0        ; compact_inst returned a loud gap
+TOC_TAG_CI_ISLIT:  equ  &c1        ; is_literal mismatch
+TOC_TAG_CI_BASE:   equ  &c2        ; base word mismatch
+TOC_TAG_OC_STATUS: equ  &c3        ; overlay_classify returned a loud gap
+TOC_TAG_OC_SLOT:   equ  &c4        ; slot mismatch
+TOC_TAG_OC_LP:     equ  &c5        ; is_litpool mismatch
+TOC_TAG_OC_WIDTH:  equ  &c6        ; litwidth mismatch
+TOC_TAG_OC_RT:     equ  &c7        ; rt mismatch
+TOC_TAG_LOUD:      equ  &c8        ; loud-gap fixture did not report A=1
 
 run_overlay_classify_self_tests:
                 call    enctab_map_in

@@ -38,8 +38,9 @@
 ; SCOPE: i204b wires these ONLY as a boot self-test (see
 ; src/test_overlay_classify.asm).  The production compactor skeleton
 ; (src/test_compact_ir.asm) still emits placeholder base words; rewriting
-; it to call compact_inst is a separate follow-up.  This file is therefore
-; gated under BUILD_TESTS_ENCODE alongside insn_encode.asm — the
+; it to call compact_inst is a separate follow-up.  This file is included
+; by src/test_overlay_suite.asm — the page-12 payload of the
+; BUILD_TESTS_ENCODE boot variant, executed from section-D RAM — so the
 ; production assembler-prod binary is unaffected.
 ;
 ; Known divergences from the Go authority (deliberate, same net result):
