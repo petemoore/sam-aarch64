@@ -4297,6 +4297,15 @@
     - {num: 767, role: completing}
   parent: i231b-b4
 
+- id: i231b-b4g
+  title: "bdos_seam.asm carve-out eliminated (1 site): RST 8 hook block unconditional; standalone unit-test binary carries it unused, hooks already emulation-exercised via client/serve/http bootables"
+  description: |
+    Eliminate the single NETBOOT_HOSTTEST==0 carve-out at src/netboot/bdos_seam.asm:345 (the real B-DOS RST 8 hook-dispatch section: bdos_select_record/lookup/save/read_sector/read_list_sector/write_sector/boot_record + BD_HOOK_* equs + the NETBOOT_WANT_CLAIM claim block). The guard exists only so the STANDALONE host-test binary netboot_bdos_seam.bin (-D NETBOOT_STANDALONE -D NETBOOT_HOSTTEST, driven by bdos_seam_test.go which calls only the pure-arithmetic leaves above the line) assembles lean. The hook bodies are ALREADY compiled into + emulation-exercised by every bootable binary that includes the seam (client/serve/http/sd_push) via bdos_store.go's RST 8 model (HRECORD/HGTHD/HSAVE/HRSAD/HWSAD/ALHK/LISTREAD) — so removing the carve-out ships nothing new to hardware un-emulated; it just makes the standalone carry the (test-unused) hook bodies. No harness modeling, no conflicting host-double. Confirm the standalone still assembles (define any missing storage/benign vector if needed), bdos_seam_test.go still passes, and ratchet the ledger 1->0 (delete the bdos_seam.asm line). Does NOT touch any settled-truth framing (feedback_trinity_sd_write_settled_truths) — pure build-structure change.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  parent: i231b-b4
+
 - id: i232
   title: "All Go-harness tests boot the SAM from address 0 (real ROM cold-init) for faithful machine state, not Call-with-seeded-state"
   description: |
