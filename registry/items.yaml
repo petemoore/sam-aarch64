@@ -5639,6 +5639,6 @@
   title: "sd-push.py finalize is single-shot: a lost 'D'/'E' UDP reply misreports a completed push as failure"
   description: |
     Observed on the i319a-b2 boot-leg shot (2026-07-02): all 1600 sectors streamed (109.6s), sd_push finalized SAM-side (record 145 claimed + named 'netboot_serve_re', trinload back at the port), but the single 'F' send with one 2s wait missed the lost UDP reply -> the launcher printed 'ERROR: no finalize reply' and exited 1 for a push that SUCCEEDED. FIX in sd-push.py finalize(): retry 'F' a few times (safe both ways: if the first 'F' was lost sd_push is still serving and finalizes on the retry; if only the reply was lost sd_push has RET'd and trinload ignores 'F'); on continued silence, probe '?' -- a bare-'!' (trinload) response implies sd_push exited post-finalize, so report 'finalize reply lost; verify via list-records' (distinct exit code) instead of a hard ERROR.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
