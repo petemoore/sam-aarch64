@@ -1,21 +1,20 @@
-// sd_record_validity_test.go — the i299 DEFINITIVE resolver (emulation-first, CLAUDE.md
-// §7). The hardware read-back proved our create-record write is byte-correct: record 13's
-// body sector 0 at LBA (13-1)*1600+csd_base carries "BDOS"@232 + the disk name@210, and
-// 1.5t's get.label (the RECORD-select validity gate, exprcd→rep81 "81 Invalid record")
-// reads EXACTLY that LBA+232. So 1.5t source says record 13 should VALIDATE — yet hardware
-// reported "81 Invalid record". This test settles the contradiction by running the REAL
-// B-DOS 1.5t RECORD-select against a record seeded EXACTLY as our hardware write produced it.
+// sd_record_validity_test.go — i299/i295 regression guard for B-DOS's RECORD-select
+// validity CONTRACT. Runs REAL B-DOS 1.5t RECORD-select (bootToEditorIdleSD = real ROM +
+// B-DOS 1.5t + the SD-SPI model) against a record whose body sector 0 is seeded exactly as
+// our create-record write produces it (cj.mgt dir + "BDOS"@232 + name@210 at the record's
+// body base (n-1)*1600+base), and asserts:
+//   - WITH "BDOS"@232 at the record base → errnr 0 (get.label validates it).
+//   - WITHOUT the stamp → errnr 81 ("Invalid record") [negative control: get.label IS the gate].
+// So a record with the stamp AT ITS BODY BASE is RECORD-valid — the write STRUCTURE is
+// correct when it lands at the base B-DOS actually reads.
 //
-// It mirrors TestBASICSaveWritesRecordToSD's rig (bootToEditorIdleSD = real ROM + B-DOS 1.5t
-// + the SD-SPI model), which itself seeds "BDOS"@232 at record 1's base (LBA 152) as the
-// "record-1 selection stamp" — i.e. the rig already encodes that a "BDOS"@232 at
-// (n-1)*1600+base sector-0 is what makes RECORD-select succeed. We seed record 13 the same
-// way our write did and assert RECORD 13 does NOT raise errnr 81; a no-stamp variant is the
-// negative control (must raise 81).
-//
-// If RECORD 13 validates here, our write structure IS valid → the hardware "invalid" was a
-// stale/cache artifact (re-test on a clean B-DOS boot). If it fails here, the bug reproduces
-// and the rig exposes exactly which LBA/offset get.label rejects.
+// NOTE — the actual real-hardware bug (for the record): this test uses the small card
+// (base=152), so it validates at base=152's record-13 LBA. The real 64GB-card "81 Invalid
+// record" was NOT a stamp/structure problem, and NOT a stale/cache artifact — it was a BASE
+// MISCOMPUTE: sd_push wrote the body at csd_base=2438 (un-clamped blocks/1600) while B-DOS
+// reads at base=2050 (its 16-bit records clamp). See TestBDOSRecordsMathBase64GB (traces
+// base=2050 on the real B-DOS binary) + the sd_csd.asm csd_compute_eff fix. This test guards
+// the get.label CONTRACT; the base fix ensures sd_push writes where B-DOS reads.
 package z80_test
 
 import (
@@ -67,7 +66,7 @@ func TestRecordSelectValidityViaGetLabel(t *testing.T) {
 				t.Fatalf("RECORD %d WITH BDOS@232 at LBA %d (exactly our hardware write) returned errnr 81 (Invalid record) — our write structure is genuinely rejected by 1.5t get.label; the bug reproduces in emulation", rec, recBodyS0)
 			}
 			if c.withBDOS {
-				t.Logf("RESOLVED: real B-DOS 1.5t RECORD %d VALIDATES our write structure (errnr=%d, not 81). The hardware 'Invalid record' was a stale/cache artifact, not a write defect.", rec, errnr)
+				t.Logf("CONTRACT CONFIRMED: real B-DOS 1.5t RECORD %d validates a record with BDOS@232 at its body base (errnr=%d, not 81). The real-hardware 'Invalid record' was the BASE MISCOMPUTE (sd_push wrote base=2438; B-DOS reads base=2050, its 16-bit clamp) — the base fix makes sd_push write here.", rec, errnr)
 			}
 		})
 	}
