@@ -216,8 +216,32 @@ and run real B-DOS 1.5t `RECORD`-select/get.label — observe valid/invalid AND 
 If invalid in emulation → reproduced + fully traceable; if valid → the HW observation was stale →
 re-test hardware. (Hardware re-test needs `RECORD 13` typed at the SAM = Pete-present, or driven.)
 
-**ROOT-CAUSE FIX for the recurring 1.5a-vs-1.5t lure (Pete's idea, 2026-07-01 → its own item):**
+**ROOT-CAUSE FIX for the recurring 1.5a-vs-1.5t lure (Pete's idea, 2026-07-01 → i304):**
 reconstruct a *labelled 1.5t source* by starting from `bdos15a.src.txt`, swapping in 1.5t's changed
 routines, and reassembling until it produces the EXACT 1.5t binary (byte-match check = the proof it's
 right) — retaining all the 1.5a comments, then annotating the new routines. Differences are minimal.
 This gives a clean, greppable 1.5t authority so agents stop reaching for 1.5a.
+
+## RESOLUTION (2026-07-01, EMULATION — CONTRADICTION SETTLED): the write is CORRECT; "invalid" was a stale-state artifact
+`tools/netboot-oracle/z80/sd_record_validity_test.go` (TestRecordSelectValidityViaGetLabel) runs the
+**REAL B-DOS 1.5t** RECORD-select (bootToEditorIdleSD = real ROM + B-DOS 1.5t + the SD-SPI model;
+`editorRunLine "RECORD 13"`) against a card seeded with record 13's body sector 0 EXACTLY as our
+hardware write produced it (cj.mgt dir + "BDOS"@232 + name@210 at LBA (13-1)*1600+base). Result:
+- **WITH "BDOS"@232 → errnr = 0 (VALID).** Real B-DOS 1.5t accepts our write structure.
+- **WITHOUT the stamp → errnr = 81 ("Invalid record").** Negative control: confirms get.label IS the
+  gate and the seeded LBA is exactly where it reads.
+
+**⇒ Our create-record write is structurally CORRECT — no fix to the write is needed.** The hardware
+"81 Invalid record, 0:1" was a **stale/unclean-state artifact**: sd_push writes raw (bypassing B-DOS)
+and on that run "exited without returning cleanly to trinload" (i296), so when `RECORD 13` was typed
+in the SAME session B-DOS's device/seek/SD state was disturbed (the "0:1" hints drive 0 = floppy) →
+get.label read the wrong place. A CLEAN B-DOS boot (which re-reads the card) validates the record.
+
+**Consequences for the goals:**
+- **i299 (this item) is DIAGNOSED-RESOLVED:** the write is correct; "invalid" is downstream of i296
+  (sd_push clean exit), not a write defect. Remaining = a clean-boot hardware confirm of `RECORD 13`
+  (needs RECORD typed at the SAM = Pete-present, OR a driven net RECORD-select probe).
+- **BOOTING a pushed record (i302 / the i194/i284 end goal) never used get.label** — boot runs the
+  disk's own boot sector. So "boot cjs" was never blocked by the RECORD-select invalidity.
+- Prioritise **i296** (sd_push clean return to trinload): it both removes the stale-state cause AND
+  is the precondition for re-pushing without a power-cycle.
