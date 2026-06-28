@@ -358,6 +358,7 @@ BD_HOOK_ALHK:     equ 136                ; auto-load hook (&88): stage the recor
 BD_LMPR_PORT:     equ &FA                ; Low Memory Page Register
 BD_LMPR_ROM1:     equ &40                ; LMPR bit 6: ROM1 at section D
 BD_HOOK_HGTHD:    equ 129                ; get file header (find by name)
+BD_HOOK_HLOAD:    equ 130                ; load whole file (found by HGTHD)
 BD_HOOK_HSAVE:    equ 132                ; save whole file
 BD_HOOK_HRSAD:    equ 160                ; read raw 512-byte sector (HRSAD)
 BD_HOOK_HWSAD:    equ 149                ; write raw 512-byte sector (HWSAD)
@@ -408,6 +409,36 @@ bdos_save_hook:
                 ld      ix, BD_UIFA_ADDR
                 rst     8
                 defb    BD_HOOK_HSAVE
+                ret
+
+; bdos_load_hook — copy the built UIFA to the real &4B00, issue HLOAD (hook 130).
+;
+; In:  HL = section-C destination (&8000..&BFFF)
+;      C  = pages count (from the DIFA at +34)
+;      DE = lengthMod16K (DIFA +35..36 LE, with the +36 bit-7 marker cleared)
+;      the 48-byte UIFA at BD_UIFA (the same name block the HGTHD lookup used)
+;
+; HLOAD never touches HMPR (docs/specs/samdos-file-io.md §"The trampoline
+; contract"): the load lands in the page CURRENTLY mapped at section C, so a
+; caller loading into its own page needs no trampoline — the i62test step-5
+; simplification. A cross-page load needs the HMPR trampoline
+; (src/trampoline.asm), not this routine.
+; Longjmps on DOS read error (registry i25 — no graceful return). RST 8 does
+; EI and leaves IX at dchan (src/loader.asm header notes).
+bdos_load_hook:
+                push    hl                     ; the UIFA copy clobbers HL/DE/BC
+                push    de
+                push    bc
+                ld      hl, BD_UIFA
+                ld      de, BD_UIFA_ADDR
+                ld      bc, BD_UIFA_LEN
+                ldir
+                pop     bc
+                pop     de
+                pop     hl
+                ld      ix, BD_UIFA_ADDR
+                rst     8
+                defb    BD_HOOK_HLOAD
                 ret
 
 ; bdos_read_sector — read 512 bytes from the selected record at (track, sector).
