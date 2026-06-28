@@ -5514,7 +5514,7 @@
   title: "Emulation gate: the assembler record vessel boots under captured B-DOS ALHK (real-hook HLOADs from the record; boot self-tests pass)"
   description: |
     The rule-7 gate before any hardware shot, and the answer to the scout's one open risk: whether B-DOS's hook workspace under ALHK CODE-auto exec supports the assembler's subsequent RST-8 HGTHD/HLOAD-by-name calls the way BASIC's CALL 32768 does. Rig: generalize the serve_record_vessel_test.go pattern (netboot-oracle) -- seedRecordFromMGT already takes any .mgt; stage boot_record at the vessel's record, continue into real captured B-DOS 1.5t ALHK, then assert the assembler (a) execs, (b) HLOADs enctab.enc + the page payloads by name from the RECORD through the real hooks, (c) runs the BUILD_TESTS boot self-tests to a PASS verdict (assert via map symbols / print recorder, the TestBootSelfTestsPass idiom -- that harness models hooks and skips BASIC, so it cannot answer this; no existing test boots the assembler under a real DOS).
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i319b-b1]
   kind: leaf
   owner: agent
