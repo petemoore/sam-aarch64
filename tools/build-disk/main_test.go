@@ -219,7 +219,7 @@ func TestBuildServeDiskOverlayMatchesTrinload(t *testing.T) {
 		cfg := &netbootConfig{name: "cfg", addr: configAddr, data: serveConfigBlock(strat, rec), strategy: c.spec}
 
 		out := filepath.Join(dir, "serve-"+c.spec+".mgt")
-		if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, cfg, false); err != nil {
+		if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, cfg, false, nil); err != nil {
 			t.Fatalf("buildNetbootDisk(%s): %v", c.spec, err)
 		}
 
@@ -258,7 +258,7 @@ func TestBuildServeDiskNoConfig(t *testing.T) {
 	dir := t.TempDir()
 	binPath, _, _, _ := fakeServe(t, dir, 0x200)
 	out := filepath.Join(dir, "serve.mgt")
-	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, nil, false); err != nil {
+	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, nil, false, nil); err != nil {
 		t.Fatalf("buildNetbootDisk: %v", err)
 	}
 	di, err := samfile.Load(out)
@@ -282,13 +282,13 @@ func TestBuildServeDiskMagicGuard(t *testing.T) {
 
 	// Point one byte too low — lands on a non-magic byte.
 	cfg := &netbootConfig{name: "cfg", addr: configAddr - 1, data: serveConfigBlock(ServeStratHighest, 0), strategy: "highest"}
-	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, cfg, false); err == nil {
+	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, cfg, false, nil); err == nil {
 		t.Error("expected the magic guard to reject a config addr off the SERVE_CONFIG block")
 	}
 
 	// Point past the end of the binary — out-of-range guard.
 	cfg2 := &netbootConfig{name: "cfg", addr: LoadAddress + 0x200, data: serveConfigBlock(ServeStratHighest, 0), strategy: "highest"}
-	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, cfg2, false); err == nil {
+	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "serve", out, cfg2, false, nil); err == nil {
 		t.Error("expected the range guard to reject a config addr past the serve code")
 	}
 }
@@ -311,7 +311,7 @@ func TestBuildServeRecordVesselCodeAuto(t *testing.T) {
 	cfg := &netbootConfig{name: "cfg", addr: configAddr, data: serveConfigBlock(strat, rec), strategy: "explicit:42"}
 
 	out := filepath.Join(dir, "serve-record.mgt")
-	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "AUTOserve", out, cfg, true); err != nil {
+	if err := buildNetbootDisk(testDosPath(t), DefaultDosName, DefaultDosLoad, binPath, "AUTOserve", out, cfg, true, nil); err != nil {
 		t.Fatalf("buildNetbootDisk(codeAuto): %v", err)
 	}
 

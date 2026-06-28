@@ -270,6 +270,8 @@ func main() {
 	netbootStrategy := flag.String("netboot-strategy", "highest", "i121i: WRQ record placement baked into the disk config file: highest | lowest | explicit:N (requires -netboot-config-map)")
 	netbootConfigName := flag.String("netboot-config-name", "cfg", "i121i: directory-entry name for the SERVE_CONFIG CODE file (the AUTO BASIC LOADs this name)")
 	netbootCodeAuto := flag.Bool("netboot-code-auto", false, "i332: compose the -netboot binary as ONE auto-executing CODE file (exec = load address) instead of the AUTO BASIC + CODE pair, baking any -netboot-config-map config into the file bytes; the record vessel B-DOS boot_record can boot (its ALHK runs the AUTO* CODE file directly — the BASIC-auto run leg never fires on that path). -netboot-name must start with \"AUTO\"")
+	var netbootExtras extraFileFlags
+	flag.Var(&netbootExtras, "netboot-extra", "i95b-b1: name=path of an extra CODE data file shipped in the -netboot disk's directory (repeatable; name <= 10 chars). The netboot server's boot-time store walk indexes these and serves them by name over TFTP")
 	variant := flag.String("variant", "none", "i207: assembler-disk boot-payload completeness guard — 'test' or 'prod' require every payload the boot loader HLOADs to be present (a missing one silently HANGS SimCoupé); 'none' (default) skips the check (minimal boot-test disks)")
 	codeAuto := flag.Bool("code-auto", false, "i319b-b1: compose the assembler as ONE auto-executing CODE file 'AUTOasm' (exec = load &8000) instead of the AUTO BASIC + 'assembler' pair, keeping every HLOADed sibling file on the disk — the boot_record-bootable RECORD vessel for the assembler disk (B-DOS ALHK runs the record's AUTO* file directly; a BASIC-auto record never boots, i332). The BASIC-auto shape stays the floppy vessel")
 	flag.Usage = func() {
@@ -320,10 +322,17 @@ func main() {
 		if *netbootCodeAuto && !strings.HasPrefix(*netbootName, "AUTO") {
 			log.Fatalf("-netboot-code-auto: -netboot-name %q must start with \"AUTO\" (B-DOS ALHK selects the record's AUTO* file)", *netbootName)
 		}
-		if err := buildNetbootDisk(*dosPath, *dosName, uint32(*dosLoad), *netbootPath, *netbootName, args[0], cfg, *netbootCodeAuto); err != nil {
+		extras, err := netbootExtras.load()
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := buildNetbootDisk(*dosPath, *dosName, uint32(*dosLoad), *netbootPath, *netbootName, args[0], cfg, *netbootCodeAuto, extras); err != nil {
 			log.Fatal(err)
 		}
 		return
+	}
+	if len(netbootExtras) > 0 {
+		log.Fatal("-netboot-extra requires -netboot mode")
 	}
 
 	var assemblerPath, enctabPath, inPath, outputPath string
@@ -675,6 +684,60 @@ type netbootConfig struct {
 	strategy string
 }
 
+// extraFileFlags collects repeated -netboot-extra name=path values (i95b-b1):
+// extra CODE data files shipped in the -netboot disk's directory, which the
+// netboot server's boot-time store walk indexes and serves by name over TFTP.
+type extraFileFlags []string
+
+func (e *extraFileFlags) String() string { return strings.Join(*e, ",") }
+func (e *extraFileFlags) Set(v string) error {
+	*e = append(*e, v)
+	return nil
+}
+
+// extraFile is one loaded -netboot-extra payload.
+type extraFile struct {
+	name string
+	data []byte
+}
+
+// addNetbootExtras writes each -netboot-extra payload as a plain CODE
+// directory entry (load &8000, no exec — the load address is nominal: the
+// server reads these through the B-DOS hooks, never by a BASIC LOAD).
+func addNetbootExtras(disk *samfile.DiskImage, extras []extraFile) error {
+	for _, x := range extras {
+		if err := disk.AddCodeFile(x.name, x.data, LoadAddress, 0); err != nil {
+			return fmt.Errorf("AddCodeFile(%s): %w", x.name, err)
+		}
+	}
+	return nil
+}
+
+// load parses and reads each name=path value. Names are capped at the 10-char
+// B-DOS directory-name field — a longer name would be silently truncated on
+// disk and then never match its TFTP request.
+func (e extraFileFlags) load() ([]extraFile, error) {
+	var out []extraFile
+	for _, v := range e {
+		name, path, ok := strings.Cut(v, "=")
+		if !ok || name == "" || path == "" {
+			return nil, fmt.Errorf("bad -netboot-extra %q: want name=path", v)
+		}
+		if len(name) > 10 {
+			return nil, fmt.Errorf("-netboot-extra name %q is %d chars; the B-DOS directory-name field holds 10", name, len(name))
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read -netboot-extra %s: %w", name, err)
+		}
+		if len(data) == 0 {
+			return nil, fmt.Errorf("-netboot-extra %s: %s is empty", name, path)
+		}
+		out = append(out, extraFile{name: name, data: data})
+	}
+	return out, nil
+}
+
 // addAssemblerSlots writes the assembler disk's boot slot(s) after the DOS.
 // The floppy vessel (codeAuto=false) ships the AUTO BASIC + "assembler" CODE
 // pair; the record vessel (codeAuto=true, i319b-b1) ships ONE auto-executing
@@ -734,7 +797,7 @@ func addAssemblerSlots(disk *samfile.DiskImage, codeAuto bool, padded []byte) (*
 // because B-DOS boot_record's ALHK path runs an AUTO* CODE file directly and
 // never fires a BASIC-auto's RUN leg. The BASIC-auto shape stays the floppy
 // ROM-BOOT vessel.
-func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeName, outputPath string, cfg *netbootConfig, codeAuto bool) error {
+func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeName, outputPath string, cfg *netbootConfig, codeAuto bool, extras []extraFile) error {
 	dosBin, err := os.ReadFile(dosPath)
 	if err != nil {
 		return fmt.Errorf("read dos: %w", err)
@@ -805,6 +868,9 @@ func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeNam
 		if err := disk.AddCodeFile(codeName, codeBin, LoadAddress, LoadAddress); err != nil {
 			return fmt.Errorf("AddCodeFile(%s): %w", codeName, err)
 		}
+		if err := addNetbootExtras(disk, extras); err != nil {
+			return err
+		}
 		if err := disk.Save(outputPath); err != nil {
 			return fmt.Errorf("save %s: %w", outputPath, err)
 		}
@@ -814,6 +880,9 @@ func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeNam
 				codeName+":", len(codeBin), LoadAddress, cfg.addr, cfg.strategy)
 		} else {
 			fmt.Printf("%-12s%d bytes  auto-exec &%04X\n", codeName+":", len(codeBin), LoadAddress)
+		}
+		for _, x := range extras {
+			fmt.Printf("%-12s%d bytes  (served by name over TFTP)\n", x.name+":", len(x.data))
 		}
 		fmt.Printf("Built %s (boot_record-bootable CODE-auto record vessel)\n", outputPath)
 		return nil
@@ -864,6 +933,12 @@ func buildNetbootDisk(dosPath, dosName string, dosLoad uint32, codePath, codeNam
 		if err := disk.AddCodeFile(cfg.name, cfg.data, cfg.addr, 0); err != nil {
 			return fmt.Errorf("AddCodeFile(%s): %w", cfg.name, err)
 		}
+	}
+
+	// The -netboot-extra data files (i95b-b1): plain CODE entries the server's
+	// boot-time store walk indexes and serves by name.
+	if err := addNetbootExtras(disk, extras); err != nil {
+		return err
 	}
 
 	if err := disk.Save(outputPath); err != nil {

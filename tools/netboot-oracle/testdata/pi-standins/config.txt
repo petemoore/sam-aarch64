@@ -1,0 +1,24 @@
+# config.txt -- Pi-boot STAND-IN served by the SAM netboot server (i95b-b1).
+# Not a real Raspberry Pi config: the emulation gate serves this file over
+# TFTP from a Trinity SD record and byte-compares every DATA block against
+# the Go authority. Content is arbitrary but fixed.
+
+arm_64bit=1
+enable_uart=1
+uart_2ndstage=1
+kernel=kernel8.img
+# pad: the quick brown fox jumps over the lazy dog 0123456789
+# pad: the quick brown fox jumps over the lazy dog 0123456789
+# pad: the quick brown fox jumps over the lazy dog 0123456789
+# pad: the quick brown fox jumps over the lazy dog 0123456789
+# pad: the quick brown fox jumps over the lazy dog 0123456789
+# pad: the quick brown fox jumps over the lazy dog 0123456789
+# pad: the quick brown fox jumps over the lazy dog 0123456789
+# pad: the quick brown fox jumps over the lazy dog 0123456789
+# pad: the quick brown fox jumps over the lazy dog 0123456789
+# pad: the quick brown fox jumps over the lazy dog 0123456789
+# pad: the quick brown fox jumps over the lazy dog 0123456789
+# pad: the quick brown fox jumps over the lazy dog 0123456789
+# pad: the quick brown fox jumps over the lazy dog 0123456789
+# pad: the quick brown fox jumps over the lazy dog 0123456789
+# pad: the quick brown fox jumps over the lazy dog 0123456789
