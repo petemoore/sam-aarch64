@@ -3,6 +3,7 @@
 # Re-rank with: registry prioritize --id iN --to-top
 #               registry move --id iN --before iM
 #               registry move --id iN --after iM
+- i315
 - i295
 - i302
 - i194
@@ -64,7 +65,6 @@
 - i284
 - i231b-b4b
 - i291
-- i294
 - i296
 - i297
 - i304
