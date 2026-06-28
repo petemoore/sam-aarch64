@@ -25,7 +25,7 @@
 //	Item/question ids are ALWAYS tool-determined — there is no next-id and no
 //	caller-supplied --id:
 //
-//	registry [--migrating] add     [--space items|questions] --owner … (items: --title --status [--desc] [--kind] [--pr N [--role …]] [--dep …]… [--ref …]…) (questions: --desc)
+//	registry [--migrating] add     [--space items|questions] --owner … (items: --title --status [--desc] [--kind] [--pr N [--role …]] [--dep …]… [--ref …]… [--to-top]) (questions: --desc)
 //	registry [--migrating] split   --parent iN --title … [--desc …] [--status …] [--owner …] [--kind …] [--pr N [--role …]] [--dep …]… [--ref …]…   (child id determined from the parent)
 //	registry [--migrating] set-status --id iN --status … [--pr N]
 //	registry [--migrating] set-title  --id iN --title "…"        (items only)
@@ -160,7 +160,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  registry prioritize --id iN --to-top")
 	fmt.Fprintln(os.Stderr, "  registry move       --id iN --before iM")
 	fmt.Fprintln(os.Stderr, "  registry move       --id iN --after  iM")
-	fmt.Fprintln(os.Stderr, "  registry [--migrating] add      [--space items|questions] --owner … (items: --title --status [--desc] [--kind] [--pr N] [--dep …]… [--ref …]…) (questions: --desc)   (id is auto-allocated)")
+	fmt.Fprintln(os.Stderr, "  registry [--migrating] add      [--space items|questions] --owner … (items: --title --status [--desc] [--kind] [--pr N] [--dep …]… [--ref …]… [--to-top]) (questions: --desc)   (id is auto-allocated; lands at the queue TAIL unless --to-top)")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] split    --parent iN --title … [--desc …] [--status …] [--owner …] [--kind …] [--pr N] [--dep …]… [--ref …]…   (child id auto-determined)")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] set-status --id iN --status … [--pr N]")
 	fmt.Fprintln(os.Stderr, "  registry [--migrating] set-title  --id iN --title \"…\"        (items only)")
@@ -179,8 +179,11 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  The topological repair pass auto-adjusts rank so every item appears after its")
 	fmt.Fprintln(os.Stderr, "  in-queue dependencies, so `prioritize --to-top` places an item first among")
 	fmt.Fprintln(os.Stderr, "  agent-actionable items ONLY when it has no in-queue prerequisites; otherwise")
-	fmt.Fprintln(os.Stderr, "  it is pulled just after its last prerequisite. After add/prioritize/move,")
-	fmt.Fprintln(os.Stderr, "  the tool reports the resulting ready-position + reasons automatically.")
+	fmt.Fprintln(os.Stderr, "  it is pulled just after its last prerequisite. `add` lands new items at the")
+	fmt.Fprintln(os.Stderr, "  queue TAIL (add --to-top for the front); `split` places the child at the")
+	fmt.Fprintln(os.Stderr, "  parent's rank. After add/split/prioritize/move, the tool reports the")
+	fmt.Fprintln(os.Stderr, "  resulting ready-position + reasons automatically, and every mutation ends")
+	fmt.Fprintln(os.Stderr, "  with the exact `make registry && git add …` staging line.")
 }
 
 // defaultMutatorPaths resolves where the registry CLI reads and writes when run
@@ -397,6 +400,7 @@ func runGen(args []string, paths mutatorPaths) {
 
 	// Four views: item-open, item-closed, question-open, backlog (when priority exists).
 	// Spec §"Generator" and §"Questions — transient by design".
-	// genToOutDirOrStdout handles both stdout and in-place file modes.
-	genToOutDirOrStdout(reg, paths)
+	// genToOutDirOrStdout handles both stdout and in-place file modes; the
+	// explicit `gen` command is the one caller that wants the stdout dump.
+	genToOutDirOrStdout(reg, paths, true)
 }

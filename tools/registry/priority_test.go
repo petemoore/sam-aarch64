@@ -11,14 +11,16 @@ import (
 // pullableReg returns a minimal registry for priority invariant tests.
 //
 // Items:
-//   i1      umbrella (not pullable)
-//   i1a     DONE leaf (not pullable)
-//   i1b     OPEN leaf, depends_on i1a (i1a is DONE → satisfied for ready)
-//   i2      OPEN leaf, depends_on q1 (q1 is an open question → not satisfied for ready)
-//   i3      WONTFIX leaf (not pullable)
+//
+//	i1      umbrella (not pullable)
+//	i1a     DONE leaf (not pullable)
+//	i1b     OPEN leaf, depends_on i1a (i1a is DONE → satisfied for ready)
+//	i2      OPEN leaf, depends_on q1 (q1 is an open question → not satisfied for ready)
+//	i3      WONTFIX leaf (not pullable)
 //
 // Questions:
-//   q1      open question
+//
+//	q1      open question
 //
 // Valid priority: [i1b, i2] — topological order is unconstrained between them
 // since i1b depends on DONE i1a (no pullable dep) and i2 depends on q1 (question).
@@ -378,8 +380,9 @@ func TestPriority_TopoValidAfterReorder(t *testing.T) {
 // items gated on an open question are excluded.
 //
 // Fixture:
-//   i1b  — depends_on i1a (DONE) → READY
-//   i2   — depends_on q1 (open question) → NOT READY
+//
+//	i1b  — depends_on i1a (DONE) → READY
+//	i2   — depends_on q1 (open question) → NOT READY
 func TestReady_UnblockedItems(t *testing.T) {
 	reg := pullableReg()
 
@@ -670,7 +673,7 @@ func TestGenToOutDir_BacklogWritten(t *testing.T) {
 		outDir:       outDir,
 		templatesDir: templatesDir,
 	}
-	genToOutDirOrStdout(reg, paths)
+	genToOutDirOrStdout(reg, paths, true)
 
 	backlogPath := filepath.Join(outDir, "backlog.md")
 	data, err := os.ReadFile(backlogPath)
@@ -721,7 +724,7 @@ func TestGenToOutDir_BacklogSkippedWhenNoPriority(t *testing.T) {
 		outDir:       outDir,
 		templatesDir: templatesDir,
 	}
-	genToOutDirOrStdout(reg, paths)
+	genToOutDirOrStdout(reg, paths, true)
 
 	backlogPath := filepath.Join(outDir, "backlog.md")
 	if _, err := os.Stat(backlogPath); err == nil {

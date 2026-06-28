@@ -39,13 +39,17 @@ the YAML + regenerated `.md` together.
 
 ## Create
 
-- New top-level item: `build/registry add --title "…" --desc "…" --status OPEN --owner agent [--dep iMM]… [--ref …]…`
-  (id auto-allocated — no `--id`; `--owner pete` for hardware/Pete-gated work).
+- New top-level item: `build/registry add --title "…" --desc "…" --status OPEN --owner agent [--dep iMM]… [--ref …]… [--to-top]`
+  (id auto-allocated — no `--id`; `--owner pete` for hardware/Pete-gated work). The new
+  item lands at the queue **tail** by default — `--to-top` places it at the front (use it
+  only when the new work should preempt the active thrust); the printed ready-position
+  line shows where it landed.
 - New question: `build/registry add --space questions --owner pete --desc "…"` (id auto-allocated).
 - Sub-item: `build/registry split --parent iNN --title "…" [--desc …] [--status …] [--owner …] [--dep …]… [--ref …]…`
   promotes the parent to an umbrella and adds a child whose id is determined from the
   parent (`iNN`→`iNNa`, `iNNx`→`iNNx-b1`). It auto-rewrites the parent's dependents onto
-  the children. It WARNS if the parent is DONE (a DONE item becoming a derived-status
+  the children, and the child takes the parent's queue rank (the parent leaves the queue
+  as an umbrella). It WARNS if the parent is DONE (a DONE item becoming a derived-status
   umbrella is unusual).
 
 ## Update
@@ -83,6 +87,9 @@ The priority queue (`registry/priority.yaml`) is a **total order** over all pull
 `in-progress`). The topological repair pass auto-adjusts rank so every item appears after
 its in-queue dependencies, so `prioritize --to-top` places an item **first among
 agent-actionable items only when it has no in-queue prerequisites**; otherwise it is
-pulled just after its last prerequisite. After `add`, `prioritize`, and `move`, the CLI
-reports the **resulting ready-position + reasons** automatically — trust that output,
-never reverse-engineer the source.
+pulled just after its last prerequisite. `add` lands new items at the queue **tail**
+(`add --to-top` for the front); `split` places the child at the parent's rank. After
+`add`, `split`, `prioritize`, and `move`, the CLI reports the **resulting ready-position
++ reasons** automatically — trust that output, never reverse-engineer the source. Every
+mutation's output ends with the exact `make registry && git add …` staging line — run it
+verbatim (staging a subset, e.g. items.yaml alone, is the registry-sync CI failure mode).

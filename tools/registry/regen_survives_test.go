@@ -333,7 +333,7 @@ func TestGenToOutDir(t *testing.T) {
 		templatesDir: templatesDir,
 	}
 
-	genToOutDirOrStdout(reg, paths)
+	genToOutDirOrStdout(reg, paths, true)
 
 	expectedFiles := []struct {
 		name string
@@ -396,7 +396,7 @@ func TestGenToOutDir_EmptyRegistry(t *testing.T) {
 		outDir:       outDir,
 		templatesDir: templatesDir,
 	}
-	genToOutDirOrStdout(reg, paths)
+	genToOutDirOrStdout(reg, paths, true)
 
 	for _, name := range []string{"item-registry-open.md", "item-registry-closed.md", "question-registry-open.md"} {
 		data, err := os.ReadFile(filepath.Join(outDir, name))
