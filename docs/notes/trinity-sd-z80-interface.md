@@ -172,10 +172,10 @@ Higher-level writes therefore reach the card as: **HRECORD to select the record,
 > claims Pete ordered "killed with fire" (chiefly "B-DOS hooks are flaky →
 > reimplement" and "+232 is required to boot"). **It has been removed — git
 > history preserves the full blow-by-blow.** What follows is the corrected,
-> settled summary. Full evidence + the post-mortem:
-> `docs/plans/trinity-sd-write-saga-cleanup.md` (§A settled truths, §B the
-> false-claim purge list, §D the genuinely-open questions, §F the systemic
-> controls); auto-loaded memory `feedback_trinity_sd_write_settled_truths`.
+> settled summary. The full settled-truths + purge history live in the auto-loaded
+> memory `feedback_trinity_sd_write_settled_truths`
+> (+ `feedback_bdos_record_header_vs_disk_body`); the systemic post-mortem controls
+> are the open question q64; the full blow-by-blow is in git history.
 
 **The settled truths (do NOT re-derive without NEW contradicting primary-source evidence):**
 
