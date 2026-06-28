@@ -475,8 +475,8 @@
 - id: i33
   title: "Trinity mass-storage: leverage B-DOS record seam for staged/overlaid assembly (i23/i24 ceiling lift)"
   description: |
-    Use the proven Trinity B-DOS storage seam (src/netboot/bdos_seam.asm; spanning records in src/netboot/fw_span.asm) for staged/overlaid assembly, lifting the i23 96 KB IN / i24 32 KB OUT ceilings. Storage-access half proven by netboot work. Assembler still uses plain HSAVE/HLOAD for single-file IN→OUT; this item extends that to mass-storage-backed staging. Rescoped 2026-06-17: netboot proved records are accessible + writable; remaining deliverable is the assembler-scale integration.
-  status: OPEN
+    SUPERSEDED (2026-07-03): the two ceilings this item existed to lift are gone — i23 (IN, PR 595) and i24 (OUT, PR 824) both landed on the q36 unified-pool contiguous-run design Pete chose (ceiling = largest contiguous free run; 256KB on a 512KB SAM). The residual capability (staged/overlaid assembly of inputs/outputs exceeding RAM via B-DOS records) has no tracked use case (every fixture incl. release.s fits the pool comfortably), and storage-backed headroom is the design territory of i215 (pluggable lazy-spill, Pete q36: downstream + optional, degrade to refuse-with-message without Trinity). The storage-access half (records readable/writable via the seam) was proven by the netboot campaigns and needs no further proof here. Re-open with a concrete >run-ceiling input if one ever appears — git history preserves the original scope.
+  status: WONTFIX
   depends_on: [i2a, i24]
   kind: leaf
   owner: agent
