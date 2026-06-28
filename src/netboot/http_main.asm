@@ -582,9 +582,10 @@ endif
 ; storage_sink_leaf(HL = window ptr, BC = window length) — the per-window store
 ; leaf the streaming flush reaches (through the body-skip filter). It (1) hashes
 ; the window into the running verify, then (2) HSAVEs it to Trinity as the next
-; bounded record <prefix><NNN>. The real RST-8 HSAVE is exercised faithfully by
-; http_store_faithful_test.go (real ROM + B-DOS 1.5t + SD model); the on-wire
-; round-trip is the i70b hardware gate (CLAUDE.md §5).
+; bounded record <prefix><NNN>. The HSAVE source-page derivation below matches
+; hook_roundtrip.asm's store, which hook_roundtrip_faithful gates on real B-DOS
+; 1.5t (i93b); a full-come-up faithful gate for this leg is tracked as i356, and
+; the i70b re-shoot is the on-wire hardware gate (CLAUDE.md §5).
 ;
 ; The HSAVE source page is the flush buffer's PHYSICAL page — read live from HMPR
 ; (the window is always in section C, so HMPR names its page) — and the offset is
