@@ -5463,7 +5463,7 @@
   title: "Toolkit end-to-end hardware proof: list/push/boot/delete cycle on the real SAM with netboot_serve.mgt (network self-confirming)"
   description: |
     First i319 leaf: run the full toolkit cycle against the real SAM+Trinity -- list-records.py (i322 hardware validation, read-only), sd-push.py netboot_serve.mgt to the first free record (timing the push for i323; i308 record# report), boot-record.py that record (the i316 hardware follow-up; serve disk self-confirms via any TFTP response, which trinload cannot produce), power-cycle back to trinload, delete-record.py the record (the i317 hardware follow-up), re-list to confirm freed. serve_main is audit-HARDWARE-READY (all six fixes); B-DOS is resident under autoboot (samboot.md: the bootblock loads B-DOS to RAM before trinload).
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   parent: i319
@@ -5482,8 +5482,8 @@
 - id: i319a-b2
   title: "boot leg: boot_record a stored record on real hardware + TFTP-confirm the booted serve disk"
   description: |
-    The boot leg re-shot with the i328 fix (2026-07-02): the fixed boot_record CHANGED hardware behaviour -- record 186 (BASIC-auto serve disk) now proceeds into the boot and ends in a silent livelock (emulation-reproduced: the BASIC-run leg derails, see i332), and a record-3 re-boot attempt from real trinload idle returned to trinload instantly without booting (the first-boot-residue divergence, see i331). TFTP confirmation therefore still outstanding. Blocked on: i331 (make the pushed boot dispatch work from REAL trinload idle) + i332 (a boot_record-bootable serve image -- CODE-auto <=16K is the proven shape). Once both land: store the new serve image to a free record (sd-push, data-safe first-free), boot-record.py it, poll TFTP; then optionally delete the stale BASIC-auto record 186.
-  status: IN_PROGRESS
+    COMPLETED (2026-07-02 campaign, this shot; no code PR -- the enablers were #805 i332 / #806 i331 / #807 i330 / #808 i329): the boot leg ran end-to-end on the real SAM+Trinity. Sequence: fresh trinload probed (bare-'!' identity per i329); list-records confirmed first-free=145 and the stale BASIC-auto record 186; sd-push stored build/netboot_serve_record.mgt (the i332 CODE-auto vessel) to record 145 ('netboot_serve_re', 1600 sectors / 109.6s streamed -- consistent with the i323 7.1 KB/s figure; the launcher's lost-finalize-reply gap filed as i335, the push itself SUCCEEDED); boot-record.py 145 booted it -- TFTP self-confirmed on the wire: hello.txt + readme.txt served, nope.txt ERROR(1), still serving after the error (trinload cannot answer TFTP, so the response proves the record-stored vessel exec'd). Power-cycle -> trinload autoboot; delete-record freed 186 with neighbours 185/188 byte-intact; re-list confirmed. Record 145 KEPT as the reusable bootable serve record (the i331-recommended probe vehicle + an i319b boot target). The stage-2 '!SP'/'!LR' tag discovery (i329) was exercised on hardware throughout.
+  status: DONE
   depends_on: [i328, i331, i332, i330, i329]
   kind: leaf
   owner: agent
@@ -5631,6 +5631,14 @@
   title: "boot-record.py: refuse/warn when the target record's image overlaps the record-boot continuation stack (&7FE0-&7FFF)"
   description: |
     i331 finding: B-DOS's record-boot continuation runs its working stack at &7FFx (SP descends from &8000 through the hook dispatch + ROM1 load-continuation). A pushed boot_record for a record whose AUTO image load range covers &7FE0-&7FFF (a StartPage-0 image larger than &1FE0 bytes, e.g. trinload's 11KB at &6000 = record 3) interleaves sector deposits with live stack frames -- both corrupt, control pops image bytes as return addresses, and the boot wanders into a deaf polling orbit instead of exec'ing (emulation-reproduced in trinload_first_boot_faithful_test.go; hardware-consistent with the i319a-b2 instant-return probe). The launcher can read the target record's directory entry (StartPage + length) and refuse -- or at minimum warn -- before pushing a boot for an overlapping image. Images loading at &8000+ (the i332 serve/feature vessel class) are unaffected.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i335
+  title: "sd-push.py finalize is single-shot: a lost 'D'/'E' UDP reply misreports a completed push as failure"
+  description: |
+    Observed on the i319a-b2 boot-leg shot (2026-07-02): all 1600 sectors streamed (109.6s), sd_push finalized SAM-side (record 145 claimed + named 'netboot_serve_re', trinload back at the port), but the single 'F' send with one 2s wait missed the lost UDP reply -> the launcher printed 'ERROR: no finalize reply' and exited 1 for a push that SUCCEEDED. FIX in sd-push.py finalize(): retry 'F' a few times (safe both ways: if the first 'F' was lost sd_push is still serving and finalizes on the retry; if only the reply was lost sd_push has RET'd and trinload ignores 'F'); on continued silence, probe '?' -- a bare-'!' (trinload) response implies sd_push exited post-finalize, so report 'finalize reply lost; verify via list-records' (distinct exit code) instead of a hard ERROR.
   status: OPEN
   kind: leaf
   owner: agent
