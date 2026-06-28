@@ -2382,7 +2382,7 @@
   title: Collapse the now-unarmed encode_logical_imm soft-reject hook
   description: |
     PR #371 (q20/i73-L9 sweep) deleted encode_logical_imm_try, the only caller that ever armed encode_logical_imm_soft; with no armer, encode_logical_imm_reject always jp fails. The soft branch + encode_logical_imm_soft/encode_logical_imm_rejected flags are vestigial. Collapsing back to a plain jp fail + dropping the two equates is behaviourally identical (flag never set) -> release.bin byte-identical. LOW priority (touches v2-production code). The hook may be re-armed by the future i48c editor encoder — decide when i48c's encoder is designed.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i48c]
   kind: leaf
   owner: agent
