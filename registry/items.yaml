@@ -5659,6 +5659,8 @@
   title: "deploy-guard splitter residuals: EOF-unbalanced-quote re-split + heredoc quoted-line false-fire (unanchored trinpush regex)"
   description: |
     Two residuals from the i336 quote-aware splitter's adversarial review (PR 810). (1) MISS, low-probability: a heredoc body containing an UNPAIRED quote char (a stray apostrophe like don't, or a lone double-quote) opens a quoted span that swallows every subsequent statement to EOF -- a deploy chained AFTER it in the same Bash call is missed by the guard yet still executed by bash (marker-verified in the review). Concrete fix from the review: when the scanner reaches EOF still inside a quote, coarse-re-split that open span (the old newline/;-split) -- this cannot reintroduce the i336 false-positive, which only involves BALANCED quoted spans. (2) FALSE-FIRE, pre-existing in old AND new: a heredoc data line that is itself a quoted string mentioning a pusher-adjacent filename false-fires because the quoted blob becomes the shlex verb and _PUSHER_SCRIPT_ARG_RE matches via the UNANCHORED 'trinpush' substring (test_trinpush.py contains trinpush). Fix candidates: anchor the arg regex to path/word starts so unrelated filenames embedding 'trinpush' do not match, and/or skip heredoc bodies. Add both-direction regression tests in pre_deploy_check_test.py.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 811, role: completing}
