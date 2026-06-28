@@ -585,6 +585,17 @@ func (e *ENC28J60) SetTState(t uint64) {
 	e.tNow = t
 }
 
+// SettlePIC declares that real time has passed since the previous run's SD
+// traffic: it expires the i242 post-&38 identity-probe settle window. The
+// harness restarts the T-state cursor at 0 for each run, so a settleUntilT
+// armed late in a long prior run would otherwise pin every later run's
+// chk_trinity probe stale — a clock artifact, not silicon behaviour. Call it
+// between separately-driven runs that are NOT back-to-back on real hardware
+// (e.g. a full boot, then a later pushed-program session). The i242/i244
+// SD-before-ENC ordering catch (consecutive routines driven as consecutive
+// runs) deliberately does NOT call this.
+func (e *ENC28J60) SettlePIC() { e.sdInitSettling = false }
+
 // raiseBusy marks the PIC busy for one SPI-byte time after an OUT to
 // &DC/&DD/&DE/&DF (gap b): busyUntilT = now + busyByteTStates.
 func (e *ENC28J60) raiseBusy() { e.busyUntilT = e.tNow + busyByteTStates }

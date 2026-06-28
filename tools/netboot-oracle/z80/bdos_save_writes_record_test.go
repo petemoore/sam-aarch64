@@ -86,6 +86,15 @@ func hasCmd(cs []cmdFrame, n uint8) bool {
 // + B-DOS) but also returns the SD card handle so a write can be verified to have landed.
 func bootToEditorIdleSD(t *testing.T) (*z80h.Machine, *[]capEv, *z80h.SDCard) {
 	t.Helper()
+	mac, lg, sd, _ := bootToEditorIdleSDENC(t)
+	return mac, lg, sd
+}
+
+// bootToEditorIdleSDENC is bootToEditorIdleSD's full-width core: it also returns
+// the ENC28J60 handle so a caller can inject/inspect network frames on the booted
+// machine (the i328 trinload-idle chain drives trinload's ?/@/X protocol).
+func bootToEditorIdleSDENC(t *testing.T) (*z80h.Machine, *[]capEv, *z80h.SDCard, *z80h.ENC28J60) {
+	t.Helper()
 	rom, eeprom := loadRealCaptures(t)
 	mac := z80h.New()
 	if err := mac.LoadROMImage(rom); err != nil {
@@ -109,7 +118,7 @@ func bootToEditorIdleSD(t *testing.T) (*z80h.Machine, *[]capEv, *z80h.SDCard) {
 	if err != nil || !res.ReachedStop {
 		t.Fatalf("boot did not reach WTKY2: %v reached=%v PC=&%04X", err, res.ReachedStop, res.PC)
 	}
-	return mac, lg, sd
+	return mac, lg, sd, enc
 }
 
 // storeBlocks returns the SD backing-store block addresses present (sorted ascending by
