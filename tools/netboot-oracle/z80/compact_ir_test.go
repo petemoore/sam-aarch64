@@ -41,12 +41,16 @@ const (
 // same contract the b8a table addresses rely on; a drift here vs. the .asm is a
 // silent corruption, so the .asm RAM map documents the identical addresses.
 const (
-	addrCompactSidecar      = 0xF200
-	addrCompactGlobals      = 0xF500
-	addrCompactRecs         = 0xFA40
-	addrCompactSidecarCount = 0xFF80
-	addrCompactGlobalsCount = 0xFF82
-	addrCompactRecsLen      = 0xFF84
+	addrCompactSidecar        = 0xF200
+	addrCompactGlobals        = 0xF500
+	addrCompactRecs           = 0xFA40
+	addrCompactSidecarCount   = 0xFF80
+	addrCompactGlobalsCount   = 0xFF82
+	addrCompactRecsLen        = 0xFF84
+	addrCompactLabelRows      = 0x5000
+	addrCompactLocalRows      = 0x5400
+	addrCompactLabelRowsCount = 0xFFBC
+	addrCompactLocalRowsCount = 0xFFBE
 )
 
 // Compact-core buffer capacities (mirroring the *_CAP equates in
@@ -61,6 +65,11 @@ const (
 	compactGlobalsCap   = 128
 	compactDataRunCap   = 1216
 	compactRecsCap      = 1344
+	// Header label/local row caps (rows, not bytes). The 128-record
+	// COMPACT_REC_PC cap already bounds these (every row is a record), so
+	// the screens below can only fire if the buffer reservations shrink.
+	compactLabelRowsCap = 128
+	compactLocalRowsCap = 128
 )
 
 // compactKnownOversize is the reviewed exclude-list of corpus fixtures that
@@ -299,6 +308,36 @@ func z80Recs(t *testing.T, mac *z80h.Machine) []byte {
 	return mac.Read(uint16(addrCompactRecs), n)
 }
 
+// z80HeaderRows reads the captured header label/local rows (i48c-b8c):
+// COMPACT_LABELROWS rows of [name_id:2 LE][offset:4 LE] and COMPACT_LOCALROWS
+// rows of [digit:1][offset:4 LE], both in record (capture) order.
+func z80HeaderRows(t *testing.T, mac *z80h.Machine) ([]format.LabelRow, []format.LocalRow) {
+	t.Helper()
+	nLabels := int(binary.LittleEndian.Uint16(mac.Read(uint16(addrCompactLabelRowsCount), 2)))
+	labels := make([]format.LabelRow, 0, nLabels)
+	addr := uint16(addrCompactLabelRows)
+	for i := 0; i < nLabels; i++ {
+		b := mac.Read(addr, 6)
+		labels = append(labels, format.LabelRow{
+			NameID: binary.LittleEndian.Uint16(b),
+			Offset: int64(binary.LittleEndian.Uint32(b[2:])),
+		})
+		addr += 6
+	}
+	nLocals := int(binary.LittleEndian.Uint16(mac.Read(uint16(addrCompactLocalRowsCount), 2)))
+	locals := make([]format.LocalRow, 0, nLocals)
+	addr = uint16(addrCompactLocalRows)
+	for i := 0; i < nLocals; i++ {
+		b := mac.Read(addr, 5)
+		locals = append(locals, format.LocalRow{
+			Digit:  b[0],
+			Offset: int64(binary.LittleEndian.Uint32(b[1:])),
+		})
+		addr += 5
+	}
+	return labels, locals
+}
+
 // litDataRec is one KindLitData record (dir_id + raw bytes) parsed from a record
 // stream — the non-encoder constant-data output compared exactly between sides.
 type litDataRec struct {
@@ -452,6 +491,18 @@ func checkCompactFixture(t *testing.T, name string, src []byte) {
 			return
 		}
 	}
+	wantLabels, wantLocals := deriveHeaderRows(f, p1)
+	screenHeaderRowOffsets(t, name, wantLabels, wantLocals)
+	if n := len(wantLabels); n > compactLabelRowsCap {
+		if compactOversize(t, name, "label rows", n, compactLabelRowsCap, "COMPACT_LABELROWS") {
+			return
+		}
+	}
+	if n := len(wantLocals); n > compactLocalRowsCap {
+		if compactOversize(t, name, "local rows", n, compactLocalRowsCap, "COMPACT_LOCALROWS") {
+			return
+		}
+	}
 
 	ir := serializeIR(t, f)
 	mac := loadCompactIR(t)
@@ -475,6 +526,30 @@ func checkCompactFixture(t *testing.T, name string, src []byte) {
 	gotView := parseCompactView(t, z80Recs(t, mac))
 	wantView := parseCompactView(t, wantRecs)
 	compareView(t, name, gotView, wantView)
+
+	// 4) Header label/local rows (i48c-b8c capture) — exact, in record order
+	// (deriveHeaderRows mirrors the capture; the b8c serializer sorts later).
+	gotLabels, gotLocals := z80HeaderRows(t, mac)
+	if len(gotLabels) != len(wantLabels) {
+		t.Errorf("%s: %d label rows, host headerRows %d", name, len(gotLabels), len(wantLabels))
+	} else {
+		for i := range wantLabels {
+			if gotLabels[i] != wantLabels[i] {
+				t.Errorf("%s: label row[%d] = {id %d, off %d}, host {id %d, off %d}",
+					name, i, gotLabels[i].NameID, gotLabels[i].Offset, wantLabels[i].NameID, wantLabels[i].Offset)
+			}
+		}
+	}
+	if len(gotLocals) != len(wantLocals) {
+		t.Errorf("%s: %d local rows, host headerRows %d", name, len(gotLocals), len(wantLocals))
+	} else {
+		for i := range wantLocals {
+			if gotLocals[i] != wantLocals[i] {
+				t.Errorf("%s: local row[%d] = {digit %d, off %d}, host {digit %d, off %d}",
+					name, i, gotLocals[i].Digit, gotLocals[i].Offset, wantLocals[i].Digit, wantLocals[i].Offset)
+			}
+		}
+	}
 }
 
 func compareSidecar(t *testing.T, name string, got, want []format.SidecarRow) {
