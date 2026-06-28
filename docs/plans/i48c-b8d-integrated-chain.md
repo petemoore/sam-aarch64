@@ -103,10 +103,31 @@ TestFlashChunk1WriteFaultReportsFail needs the gitignored bootloader_chunk1_data
 CI (the full SimCoupé matrix) as the final gate per PR. Delete this plan in the PR that
 completes brick 2 (registry: set i48c-b8d DONE there).
 
-## Open measurements this plan waits on (from b8g)
+## Measurements (taken 2026-07-03, host-side over the corpus minus in_long_source)
 
-- Max token count + strpool bytes over the screened corpus → LEX_TOKS/LEX_STRPOOL sizing
-  in page 9 (budget: code ~8.4 KB + TOKS + STRPOOL ≤ 16 KB).
-- Max IR bytes over the *screened* (not just pass1-screened) corpus → PARSE_RECS sizing in
-  page 8 (budget: RECS + LEX_SRC + SYM_NAMES ≤ 16 KB).
-- Max `.tbn` size over the screened corpus → out-window fit inside the freed LEX_TOKS span.
+The b8d screened corpus is the union of the sibling exclude-lists: `parseKnownOversize`
+(in_long_source) + `compactKnownOversize` (10 fixtures incl. the size-dominating
+inst_expr_muldiv / inst_adrp_highorigin / inst_mov_setconst / inst_quad_addr /
+inst_out_over32k) ⇒ **83 fixtures**. Over those 83 the maxima are: source ≈1236 B
+(inst_bitfield), tokens **167** (inst_bitfield), IR ≈1000 B, names 27 B, `.tbn` ≈811 B.
+(Including the compact-excluded 9: src 2185 / toks 167 / IR 1945 / tbn 1962 — still small.)
+**Conclusion: the brick-1 (PR #831) page-8/9 layout needs NO resizing** — PARSE_RECS 2048,
+LEX_SRC 2048, SYM_NAMES 512, LEX_TOKS 256 tokens, LEX_STRPOOL 1024 all cover the screened
+corpus; a 2 KB `.tbn` out window in page-8 spare (&1200+) suffices. Phase-3's out window
+therefore does NOT need the freed-LEX_TOKS trick — page-8 spare is simpler.
+
+## Brick split (revised after brick 1 / PR #831)
+
+- **Brick 1 = i48c-b8i (DONE, PR #831):** paged parser image + driver + single-fixture
+  IR byte-match. Layout as recorded in that PR (code &4000-&661F page 9, buffers above).
+- **Brick 2 = i48c-b8j:** phases 0-2 without the encoder — extend the driver to run
+  pass1_ir_walk + the compact walk (skeleton INST arm, as in the flat b8b) over the
+  page-8 IR (PASS1_IR_BUF equ-aliased to the PARSE_RECS window address; length from
+  PARSE_RECPTR), with the pass-1 tables at their production &C100-&EFFF homes and the
+  compact-core state at &F000+; relocate the b8b header-row capture buffers (&5000/&5400
+  in the flat harness — inside the page-9 window here) into page-8 spare; corpus test
+  over the 83 asserting the b8b non-encoder comparisons (sidecar rows, globals, record
+  view, header rows) against the host authority.
+- **Brick 3 (completes i48c-b8d):** the real-encoder INST arm (per-INST ENCTAB bracket +
+  staging copy), the names transform, compact_serialize with the page-8 out window, and
+  the corpus `.tbn` byte-match vs CompactTBNBytes.
