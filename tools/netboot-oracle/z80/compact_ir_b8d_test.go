@@ -69,19 +69,17 @@ const (
 
 	// b8dEnctabPage is the physical page for the ENCTAB.
 	b8dEnctabPage = 4
+
+	// b8dSysregDataPage is the physical page for the sysreg lookup tables
+	// (sysreg_data.bin, assembled at org &8000, visible as section C when HMPR=13).
+	b8dSysregDataPage = 13
 )
 
+const b8dSysregDataBin = "../../../build/sysreg_data.bin"
+
 // b8dKnownSkip is the reviewed exclude-list for the b8d chain.  Each entry is a
-// source filename → human-readable reason.  It is a superset of
-// compactPagedKnownOversize (b8j limits; same buffers), extended with fixtures
-// that exercise encoding paths unsupported by the b8d standalone driver:
-//
-//   - inst_mrs_msr.s / inst_mrs_msr_missing.s: mrs/msr/dc/tlbi encoding calls
-//     encode_mrs_word et al., which in the b8d driver is a stub that fails with
-//     tag &fe — the full sysreg lookup (sysname.asm) needs the page-13 matcher
-//     infrastructure (paged_call, LMPR_DEFAULT_RUNTIME, SYSREG_* constants) that
-//     the b8d driver does not carry.  These fixtures are excluded so the corpus
-//     test is GREEN; the gap is tracked for future work.
+// source filename → human-readable reason.  Entries are a superset of
+// compactPagedKnownOversize (b8j limits; same buffers).
 var b8dKnownSkip = map[string]string{
 	// --- From compactPagedKnownOversize (same underlying capacity limits) ---
 	"in_long_source.s":        "source 16474 B exceeds LEX_SRC 4096 B cap (paged parser limit)",
@@ -94,10 +92,6 @@ var b8dKnownSkip = map[string]string{
 	"inst_mov_setconst.s":     "sidecar ~1599 B exceeds the 768-byte COMPACT_SIDECAR cap",
 	"inst_out_over32k.s":      "sidecar ~1271 B exceeds the 768-byte COMPACT_SIDECAR cap",
 	"inst_quad_addr.s":        "sidecar ~1380 B exceeds the 768-byte COMPACT_SIDECAR cap",
-	// --- b8d-specific: sysreg encoding infrastructure absent in b8d driver ---
-	"inst_mrs_msr.s":         "mrs/msr encoding requires page-13 sysreg lookup (not in b8d driver)",
-	"inst_mrs_msr_missing.s": "mrs/msr encoding requires page-13 sysreg lookup (not in b8d driver)",
-	"inst_dc_tlbi.s":         "dc/tlbi encoding requires page-13 sysreg lookup (not in b8d driver)",
 }
 
 var b8dKnownSkipSeen = map[string]bool{}
@@ -131,12 +125,13 @@ func newB8DMachine(t *testing.T, binData []byte) *z80h.Machine {
 }
 
 // seedB8DChainPaged prepares a machine for one fixture run by depositing the
-// ENCTAB, parser image, and source bytes into their physical pages.  Page 8
-// starts zeroed (fresh machine per fixture), so no explicit clear is needed.
-func seedB8DChainPaged(pager *sampage.Mem, enctabData, parserImage, src []byte) {
-	copy(pager.RAM[b8dEnctabPage][:], enctabData)  // page 4: raw enctab.enc
-	copy(pager.RAM[9][:], parserImage)              // page 9: parser code
-	copy(pager.RAM[8][pagedLEXSRCOffset:], src)     // page 8 at &0800: source text
+// ENCTAB, parser image, sysreg data, and source bytes into their physical pages.
+// Page 8 starts zeroed (fresh machine per fixture), so no explicit clear is needed.
+func seedB8DChainPaged(pager *sampage.Mem, enctabData, parserImage, sysregData, src []byte) {
+	copy(pager.RAM[b8dEnctabPage][:], enctabData)        // page 4: raw enctab.enc
+	copy(pager.RAM[9][:], parserImage)                   // page 9: parser code
+	copy(pager.RAM[b8dSysregDataPage][:], sysregData)    // page 13: sysreg_data.bin (org &8000)
+	copy(pager.RAM[8][pagedLEXSRCOffset:], src)          // page 8 at &0800: source text
 }
 
 // checkB8DFixture is the per-source assertion for the b8d chain.
@@ -145,7 +140,7 @@ func seedB8DChainPaged(pager *sampage.Mem, enctabData, parserImage, src []byte) 
 // For remaining fixtures, a full set of capacity pre-flight checks runs; an
 // unknown oversize is a t.Fatalf (same pattern as compactPagedOversize).  Passing
 // fixtures have their Z80 output compared byte-for-byte against the host oracle.
-func checkB8DFixture(t *testing.T, b8dBin, enctabData, parserImage []byte, name string, src []byte) {
+func checkB8DFixture(t *testing.T, b8dBin, enctabData, parserImage, sysregData []byte, name string, src []byte) {
 	t.Helper()
 
 	// Early exclusion: skip reviewed entries (capacity limits and unsupported
@@ -210,9 +205,11 @@ func checkB8DFixture(t *testing.T, b8dBin, enctabData, parserImage []byte, name 
 	// Run the b8d paged chain: fresh machine per fixture.
 	mac := newB8DMachine(t, b8dBin)
 	pager := mac.Pager()
-	seedB8DChainPaged(pager, enctabData, parserImage, src)
+	seedB8DChainPaged(pager, enctabData, parserImage, sysregData, src)
 
-	res, callErr := mac.CallEntry("b8d_chain_paged", z80h.Entry{BC: uint16(len(src))})
+	res, callErr := mac.CallEntry("b8d_chain_paged", z80h.Entry{
+		BC: uint16(len(src)),
+	})
 	if callErr != nil {
 		t.Fatalf("%s: b8d_chain_paged: %v", name, callErr)
 	}
@@ -265,13 +262,13 @@ func checkB8DFixture(t *testing.T, b8dBin, enctabData, parserImage []byte, name 
 	}
 }
 
-// loadB8DInputs reads the three shared binaries (driver, enctab, parser) once
-// and returns them.  Fatal if any is missing (i253).
-func loadB8DInputs(t *testing.T) (b8dBin, enctabData, parserImage []byte) {
+// loadB8DInputs reads the four shared binaries (driver, enctab, parser, sysreg)
+// once and returns them.  Fatal if any is missing (i253).
+func loadB8DInputs(t *testing.T) (b8dBin, enctabData, parserImage, sysregData []byte) {
 	t.Helper()
-	for _, path := range []string{b8dChainDriverBin, b8dEnctabBin, pagedParserBin} {
+	for _, path := range []string{b8dChainDriverBin, b8dEnctabBin, pagedParserBin, b8dSysregDataBin} {
 		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("required binary not built (%s); run `make b8d-chain-paged-driver-z80 enctab asmparse-paged-z80`", path)
+			t.Fatalf("required binary not built (%s); run `make b8d-chain-paged-driver-z80 enctab asmparse-paged-z80 sysreg-data`", path)
 		}
 	}
 	var err error
@@ -287,6 +284,10 @@ func loadB8DInputs(t *testing.T) (b8dBin, enctabData, parserImage []byte) {
 	if err != nil {
 		t.Fatalf("read parser image: %v", err)
 	}
+	sysregData, err = os.ReadFile(b8dSysregDataBin)
+	if err != nil {
+		t.Fatalf("read sysreg data: %v", err)
+	}
 	return
 }
 
@@ -294,7 +295,7 @@ func loadB8DInputs(t *testing.T) (b8dBin, enctabData, parserImage []byte) {
 // (parse → pass1 → compact walk, real encoder) over the screened fixture set,
 // asserting the serialized .tbn byte-matches assemble.CompactTBNBytes.
 func TestChainPagedB8dCorpus(t *testing.T) {
-	b8dBin, enctabData, parserImage := loadB8DInputs(t)
+	b8dBin, enctabData, parserImage, sysregData := loadB8DInputs(t)
 
 	for _, dir := range []string{"core", "format", "operands", "symbols", "paged"} {
 		srcDir := "../../../tests/" + dir + "/sources"
@@ -317,7 +318,7 @@ func TestChainPagedB8dCorpus(t *testing.T) {
 				t.Fatalf("read %s: %v", path, readErr)
 			}
 			t.Run(dir+"/"+name, func(t *testing.T) {
-				checkB8DFixture(t, b8dBin, enctabData, parserImage, name, src)
+				checkB8DFixture(t, b8dBin, enctabData, parserImage, sysregData, name, src)
 			})
 		}
 	}
@@ -335,10 +336,10 @@ func TestChainPagedB8dCorpus(t *testing.T) {
 // TestChainPagedB8dSmoke is a single-fixture fast smoke test: the same
 // inst_reg_imm.s fixture the other paged tests use.
 func TestChainPagedB8dSmoke(t *testing.T) {
-	b8dBin, enctabData, parserImage := loadB8DInputs(t)
+	b8dBin, enctabData, parserImage, sysregData := loadB8DInputs(t)
 	src, err := os.ReadFile(pagedFixtureSrc)
 	if err != nil {
 		t.Fatalf("read fixture %s: %v", pagedFixtureSrc, err)
 	}
-	checkB8DFixture(t, b8dBin, enctabData, parserImage, pagedFixtureName, src)
+	checkB8DFixture(t, b8dBin, enctabData, parserImage, sysregData, pagedFixtureName, src)
 }
