@@ -5240,11 +5240,12 @@
 - id: i295
   title: Hardware-confirm sd_push cj.mgt record write end-to-end (TRACED)
   description: |
-    2026-06-30 first HW write transferred data (border/LEDs flashing; B-DOS-direct moves data on silicon, no hang) but TIMED OUT at 8m20s still-streaming (no clean F->D) and was NOT packet-traced. Re-run tools/trinload-push/sd-push.py WITH tcpdump (sudo tcpdump -i eth0 'udp port 60848 or arp or icmp', passwordless i272) + a long timeout; observe to F->D; diagnose the >8min slowness (slow-per-block vs ACK-stalls). Check trinload up (discovery ?->! on UDP 0xEDB0) BEFORE power-cycling. The csd_probe gate confirmed a sane 64GB card (csd_base=2438). owner pete = shared-card write, needs Pete watching the SAM. HW confirmation of i293/i194/i284.
-  status: OPEN
-  depends_on: [i315]
+    DONE 2026-07-01: hardware-confirmed. A side-major-reordered cj.mgt push (host-side throwaway reorder + the real sd_push binary) wrote record 'cjfixed' and it BOOTED CJ's Elephant on the real SAM. The sd_push write path is hardware-proven end-to-end; the missing piece was sector ORDERING (a Trinity record is side-major, a .mgt track-major - i294 DONE, memory feedback_trinity_sd_write_settled_truths). The DURABLE SAM-side reorder is i315. Observed: sd_push doesn't cleanly return to trinload (i296) so a 2nd back-to-back push needs a power-cycle; push is slow pending i284.
+  status: DONE
   kind: leaf
   owner: pete
+  prs:
+    - {num: 784, role: completing}
 
 - id: i296
   title: "sd_push: return cleanly to trinload after the write"
@@ -5305,11 +5306,13 @@
 - id: i302
   title: Boot record 13 to confirm cjs runs (after record is get.label-valid)
   description: |
-    sd_push writes but doesn't boot. After the invalid-record fix, boot record 13 (config boot to record 13 + power-cycle, or record-picker i264b) to confirm cjs runs end-to-end.
-  status: OPEN
+    DONE 2026-07-01: cjfixed (a side-major-pushed cj.mgt record) booted CJ's Elephant on the real SAM - cjs runs end-to-end from a network-pushed record. Confirms the store->boot chain on silicon.
+  status: DONE
   depends_on: [i295]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 784, role: completing}
 
 - id: i303
   title: "sd_push: plumb the record name from the pushed filename (replace hardcoded cj.mgt)"
