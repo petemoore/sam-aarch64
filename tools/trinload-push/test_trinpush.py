@@ -262,3 +262,84 @@ class TestRealBinary(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _load_boot_record():
+    """Import boot-record.py (dashed filename) as a module."""
+    path = os.path.join(os.path.dirname(__file__), "boot-record.py")
+    spec = importlib.util.spec_from_file_location("boot_record_launcher", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+boot_record = _load_boot_record()
+
+
+def _mgt_with_auto(name, filetype, load, length):
+    """Compose a minimal .mgt directory holding one AUTO entry (slot 1) after a
+    non-AUTO slot 0, with the SAM dir-entry address fields set from load/length."""
+    img = bytearray(0x5000)
+    img[0x000] = 0x13
+    img[0x001:0x00B] = b"samdos2   "
+    img[0x100] = filetype
+    img[0x101:0x10B] = (name + " " * (10 - len(name))).encode("ascii")
+    start_page = (load >> 14) - 1
+    off_form = (load & 0x3FFF) | 0x8000
+    img[0x1EC] = start_page
+    img[0x1ED], img[0x1EE] = off_form & 0xFF, off_form >> 8
+    img[0x1EF] = length >> 14
+    img[0x1F0], img[0x1F1] = length & 0xFF, (length & 0x3FFF) >> 8
+    return bytes(img)
+
+
+class TestBootHazard(unittest.TestCase):
+    """i334: refuse the known will-not-boot record shapes before firing ALHK."""
+
+    def test_vessel_class_is_clean(self):
+        auto = boot_record.parse_mgt_auto_entry(
+            _mgt_with_auto("AUTOasm", 0x13, 0x8000, 20391))
+        self.assertEqual(auto, ("AUTOasm", 0x13, 0x8000, 20391))
+        self.assertIsNone(boot_record.boot_hazard(auto))
+
+    def test_stack_overlap_refused(self):
+        # trinload's shape: 11 KB at &6000 reaches &8C00, through the &7FE0
+        # continuation stack (the i331 record-3 finding).
+        auto = boot_record.parse_mgt_auto_entry(
+            _mgt_with_auto("AUTOtrin.O", 0x13, 0x6000, 0x2C00))
+        hazard = boot_record.boot_hazard(auto)
+        self.assertIsNotNone(hazard)
+        self.assertIn("i331", hazard)
+
+    def test_below_stack_is_clean(self):
+        # &6000 + &1FE0 ends exactly AT the stack floor — no overlap.
+        auto = boot_record.parse_mgt_auto_entry(
+            _mgt_with_auto("AUTOx", 0x13, 0x6000, 0x1FE0))
+        self.assertIsNone(boot_record.boot_hazard(auto))
+
+    def test_basic_auto_refused(self):
+        hazard = boot_record.boot_hazard(
+            boot_record.parse_mgt_auto_entry(_mgt_with_auto("AUTO", 0x10, 0x8000, 100)))
+        self.assertIsNotNone(hazard)
+        self.assertIn("i332", hazard)
+
+    def test_no_auto_refused(self):
+        img = bytearray(0x5000)
+        img[0x000] = 0x13
+        img[0x001:0x00B] = b"samdos2   "
+        hazard = boot_record.boot_hazard(boot_record.parse_mgt_auto_entry(bytes(img)))
+        self.assertIsNotNone(hazard)
+        self.assertIn("no AUTO*", hazard)
+
+    def test_real_assembler_vessel(self):
+        # The real artifact (built by `make disk-record`) must parse to the
+        # documented shape and be clean.
+        path = os.path.join(REPO, "build", "test_record.mgt")
+        if not os.path.exists(path):
+            self.fail(f"{path} not built — run `make disk-record`")
+        auto = boot_record.parse_mgt_auto_entry(open(path, "rb").read())
+        self.assertIsNotNone(auto, "no AUTO* entry in the real vessel")
+        name, filetype, load, length = auto
+        self.assertEqual((name, filetype, load), ("AUTOasm", 0x13, 0x8000))
+        self.assertEqual(length, 20391)
+        self.assertIsNone(boot_record.boot_hazard(auto))
