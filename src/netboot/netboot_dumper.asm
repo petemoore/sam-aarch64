@@ -40,12 +40,10 @@
 DUMPER:         equ 1                          ; arm netboot_serve.asm's hook + own-org suppression
 
                 ; Entry: trinload's X packet does `out (HMPR),P; jp &8000`, landing
-                ; here. The host harness invokes routines by symbol and never CALLs
-                ; &8000, and dumper_main is excluded from the host-test build, so
-                ; this jp is the hardware/trinload entry only.
-                if defined(NETBOOT_HOSTTEST)==0
+                ; here. Every test invokes routines by symbol and never CALLs
+                ; &8000, so this jp is the hardware/trinload entry only — harmless
+                ; in the harness (dumper_test.go calls serve_serve_once at &8003).
                 jp      dumper_main
-                endif
 
 ; The serve state machine + every helper + CONFIG/STORE/SRC_TABLE. With DUMPER
 ; defined it does NOT emit its own org/boot-jp/serve_main and DOES `call
@@ -241,10 +239,8 @@ dr_stage_ptr:     defw 0
 ; copies ROM0->STAGE and the paging save/restore is asserted; rom1 was the i87a
 ; hardware crash and is now fixed + asserted here. What remains hardware-gated is
 ; only the patched ROM's real bytes (i87a captures them, i87b diffs them; i190a
-; loads them in place of the fixtures). Guarded out of the host-test build only
-; because that build stubs the ROM path; the trinload build runs it.
+; loads them in place of the fixtures).
 ; ===========================================================================
-                if defined(NETBOOT_HOSTTEST)==0
 
 ; dumper_read_rom0 — copy ROM0 (&0000-&3FFF, section A) into STAGE (&C000-&FFFF,
 ; section D). ROM0 (section A) and STAGE (section D) are different sections, so a
@@ -304,26 +300,12 @@ dumper_read_rom1:
 
 dr_save_lmpr:     defb 0
 
-                endif  ; !NETBOOT_HOSTTEST
-
-; In the host-test build the ROM-paging entry points are unreachable (no rom*.bin
-; RRQ is driven), but dumper_refresh_region references them by label, so provide
-; inert stubs so the host binary links. They never run under the harness.
-                if defined(NETBOOT_HOSTTEST)
-dumper_read_rom0:
-                ret
-dumper_read_rom1:
-                ret
-                endif
-
 ; ===========================================================================
-; Bootable / trinload entry (excluded from the host harness build — no EEPROM,
-; no real silicon). dumper_main reads the SAM's MAC/IP from the "Trinity Network "
-; flash chunk, provisions the region STORE/SRC_TABLE, inits the ENC28J60, then
-; loops serve_serve_once with an Esc-to-RET exit so it can be re-pushed.
+; Bootable / trinload entry. dumper_main reads the SAM's MAC/IP from the
+; "Trinity Network " flash chunk, provisions the region STORE/SRC_TABLE, inits
+; the ENC28J60, then loops serve_serve_once with an Esc-to-RET exit so it can be
+; re-pushed.
 ; ===========================================================================
-                if defined(NETBOOT_HOSTTEST)==0
-
 dumper_main:
                 di
                 ; --- locate + read the "Trinity Network " flash chunk -----
@@ -408,7 +390,7 @@ dm_fail_show:
                 ; Show the diagnostic border, hold so the operator can read it, then
                 ; hand control back to trinload via tr_terminate (di;halt under test,
                 ; RET to trinload on hardware — the i228 unmapped-port probe). The
-                ; dumper is trinload-pushed (netboot-dumper-trinload); a raw di;halt
+                ; dumper is trinload-pushed (netboot-dumper); a raw di;halt
                 ; strands the SAM, costing a power-cycle on every failed push (i243b).
                 out     (&fe), a
 dm_fail_wait:
@@ -436,16 +418,13 @@ dm_chunk_name:    defm "Trinity Network "     ; the flash chunk holding MAC+IP
 
                 ; tr_terminate (i228): dm_fail_cfg/dm_fail_init end via it, not a
                 ; raw di;halt, so a failed dumper push leaves the SAM usable (i243b).
-                ; Included only in the trinload build (dumper_main's home); its only
-                ; external dep, build_udp_frame, is pulled in by netboot_serve.asm.
+                ; Its only external dep, build_udp_frame, is pulled in by netboot_serve.asm.
                 include "test_report.asm"
-
-                endif  ; !NETBOOT_HOSTTEST
 
 ; ===========================================================================
 ; Region STORE + SRC_TABLE templates (mirror provision_demo's, netboot_serve.asm:
-; 968-992). Both are needed in the host-test build too: dumper_test.go provisions
-; them directly so resolve / resolve_src match the region names.
+; 968-992). dumper_test.go provisions them directly so resolve / resolve_src
+; match the region names.
 ;   STORE:     name\0 | 4-byte LE size, then a 0 sentinel.
 ;   SRC_TABLE: name\0 | 2-byte LE source ptr | 4-byte LE size, then a 0 sentinel.
 ; Every region defaults to STAGE / REGION_BYTES; dumper_refresh_region overrides
@@ -552,9 +531,8 @@ dump_src_tmpl_end:
 
 ; ===========================================================================
 ; The Trinity flash reader. netboot_serve.asm suppresses its own eeprom.asm
-; include under DUMPER (above), so the dumper owns it — and includes it in EVERY
-; build (host-test too): the EEPROM read is the emulation-verified path, so it is
-; never carved out. find_index / read_chunk + the value/chunk/name/part/total
-; storage all come from here.
+; include under DUMPER (above), so the dumper owns it: the EEPROM read is the
+; emulation-verified path. find_index / read_chunk + the value/chunk/name/part/
+; total storage all come from here.
 ; ===========================================================================
                 include "eeprom.asm"

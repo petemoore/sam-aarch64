@@ -1,5 +1,10 @@
 package z80
 
+// Trinity-HW provenance (i273): this model is DERIVED FROM the SAM/Colin
+// authority recorded in tools/trinity-authority-ledger.txt; it is never itself
+// the authority for real Trinity hardware behaviour (CLAUDE.md rule 8 /
+// feedback_port_diff_authority_first).
+//
 // bdos_store.go — host model of the SAMDOS-2 / B-DOS file-I/O hook dispatch the
 // netboot write-out drives (i134). The flat harness has no ROM, no SAMDOS bank,
 // and no RST 8 vector, so bdos_seam.asm's hook bodies (bdos_select_record /

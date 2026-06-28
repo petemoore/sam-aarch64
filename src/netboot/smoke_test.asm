@@ -18,11 +18,12 @@
 ;     emulated Trinity (smoke_test_test.go), asserting the reply on the virtual
 ;     wire is byte-for-byte the Go authority smoke.Responder.OnFrame output.
 ;
-;   smoke_main  (real hardware only) — the bootable entry CALL 32768 runs: read
-;     the SAM's MAC + IP from the Trinity EEPROM "Trinity Network " chunk, run
-;     drv_init, then loop forever calling smoke_serve_once. Excluded from the
-;     host build (NETBOOT_HOSTTEST) — the EEPROM read + drv_init + the forever
-;     loop are not host-verifiable (no EEPROM/real-silicon in the harness).
+;   smoke_main  (the bootable entry) — CALL 32768 runs: read the SAM's MAC + IP
+;     from the Trinity EEPROM "Trinity Network " chunk, run drv_init, then loop
+;     forever calling smoke_serve_once. The harness drives it too: with the
+;     EEPROM modelled (eeprom.go) netboot_boot_test.go runs smoke_main end-to-end
+;     and asserts the EEPROM-read identity answers an injected ARP. Real ENC
+;     TX/RX timing + the live round trip stay hardware-gated (CLAUDE.md §5).
 ;
 ; This is the SAM-side Z80 port of the netboot-oracle Go authority
 ; tools/netboot-oracle/smoke/smoke.go::Responder.OnFrame. The parse-request +
@@ -39,20 +40,19 @@
 ;
 ; VERIFICATION: smoke_serve_once is host-verifiable end-to-end under the i80
 ; emulation — inject an ARP request, dispatch + build, drv_write, assert the
-; reply on the virtual wire matches the Go Responder byte-for-byte. NOT
-; host-verifiable: the EEPROM config read, the real ENC28J60 TX/RX timing, and
-; the actual round trip with Pete's Pi — gated on real Trinity hardware
+; reply on the virtual wire matches the Go Responder byte-for-byte. smoke_main
+; (the EEPROM config read + drv_init + the serve loop) is host-verifiable too,
+; via netboot_boot_test.go against the modelled EEPROM. Still hardware-gated:
+; the real ENC28J60 TX/RX timing and the actual round trip with Pete's Pi
 ; (CLAUDE.md §5). Emulation-verified is not hardware-verified.
 
                 org     &8000
 
                 ; The boot entry (CALL 32768) must be the first instruction at
-                ; &8000. smoke_main is defined later (under NETBOOT_HOSTTEST==0);
-                ; the host harness invokes routines by symbol and never CALLs
-                ; 32768, so this jp is bootable-only.
-                if defined(NETBOOT_HOSTTEST)==0
+                ; &8000. The host harness invokes routines by symbol (it never
+                ; CALLs 32768), so this jp is the hardware boot entry — but the
+                ; harness still runs smoke_main itself (netboot_boot_test.go).
                 jp      smoke_main
-                endif
 
 ; ===========================================================================
 ; The composed state machine. It supplies the single org; the included
@@ -188,10 +188,9 @@ smoke_none:
                 ret
 
 ; ===========================================================================
-; Real-hardware bootable entry (excluded from the host harness build, which has
-; no EEPROM / real silicon). CALL 32768 lands here on boot.
+; The bootable entry. CALL 32768 lands here on boot. It runs in the host harness
+; too — netboot_boot_test.go drives it against the modelled EEPROM + ENC.
 ; ===========================================================================
-                if defined(NETBOOT_HOSTTEST)==0
 
 ; smoke_main — read the SAM's MAC + IP from the Trinity EEPROM "Trinity Network "
 ; chunk into SMOKE_MAC/SMOKE_IP, init the ENC28J60, then loop forever answering
@@ -255,13 +254,11 @@ smoke_fail_init:
 
 smoke_chunk_name: defm "Trinity Network "     ; the flash chunk holding MAC+IP
 
-                endif  ; !NETBOOT_HOSTTEST
-
 ; ===========================================================================
-; CONFIG block — the SAM's identity the smoke logic reads. On the bootable build
-; smoke_main fills it from the EEPROM; in the host harness the Go test writes it
-; directly (SMOKE_MAC / SMOKE_IP) so the Z80 and the Go authority share one
-; identity and produce identical reply bytes.
+; CONFIG block — the SAM's identity the smoke logic reads. smoke_main fills it
+; from the EEPROM (netboot_boot_test.go exercises that path); the smoke_serve_once
+; tests write it directly (SMOKE_MAC / SMOKE_IP) so the Z80 and the Go authority
+; share one identity and produce identical reply bytes.
 ; ===========================================================================
 SMOKE_MAC:        defs 6
 SMOKE_IP:         defs 4
@@ -271,10 +268,8 @@ SM_RXBUF:         defs 1518                ; the received-frame buffer
 ; ---------------------------------------------------------------------------
 ; Composed primitives + the vendored drivers. build_arp_reply is the
 ; host-verified ARP-reply builder; encdrv.asm is the real Trinity ENC28J60
-; driver; eeprom.asm is the real flash config reader (real-hardware path only).
+; driver; eeprom.asm is the real flash config reader (modelled by eeprom.go).
 ; ---------------------------------------------------------------------------
                 include "build_arp_reply.asm"
                 include "encdrv.asm"
-                if defined(NETBOOT_HOSTTEST)==0
                 include "eeprom.asm"
-                endif

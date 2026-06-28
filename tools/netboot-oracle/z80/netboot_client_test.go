@@ -75,6 +75,8 @@ func fillClientConfig(t *testing.T, mac *z80h.Machine) *client.Client {
 	put("XFER_DONE", []byte{0})
 	put("ACKED", []byte{0, 0})
 	put("STAGE_OFFSET", []byte{0, 0})
+	put("WINDOWSIZE", []byte{1, 0}) // lock-step until an OACK grants a window (client_setup's default)
+	put("WINCOUNT", []byte{0, 0})
 
 	return client.New(client.Config{
 		ClientMAC: cClientMAC, ClientIP: cClientIP, ServerIP: cServerIP,
@@ -214,6 +216,140 @@ func TestClientFullFetchSession(t *testing.T) {
 	}
 	if !bytes.Equal(ref.Bytes(), file) {
 		t.Fatalf("Go authority staged bytes != file")
+	}
+}
+
+// eqStep asserts the Z80 and the Go authority agree at one DATA step: both
+// silent (mid-window, no ACK) or both sending the same frame. Used by the
+// windowed-receive tests where the Go authority (client.Client, the i120a/b1
+// oracle) decides exactly which blocks are ACKed.
+func eqStep(t *testing.T, label string, got, want []byte) {
+	t.Helper()
+	if (got == nil) != (want == nil) {
+		t.Fatalf("%s: z80 sent %x, go sent %x (one ACKed, one was silent)", label, got, want)
+	}
+	if want != nil && !bytes.Equal(got, want) {
+		t.Errorf("%s != Go authority\n  z80 %x\n  go  %x", label, got, want)
+	}
+}
+
+// TestClientWindowedSession confirms that when the server OACKs a windowsize the
+// bootable client adopts RFC 7440 windowed receive (i120b-b3): mid-window blocks
+// accumulate silently (no ACK) and only the last block of each window — or the
+// short final block — is ACKed, matching the Go authority byte-for-byte. The
+// lock-step fallback (a server that OACKs no windowsize) stays covered by
+// TestClientFullFetchSession / TestClientNoOACKFallbackSession.
+func TestClientWindowedSession(t *testing.T) {
+	const win = 4
+	file := makeFile(cliBlksize*5 + 100) // blocks 1-5 full + block 6 short final (100 bytes)
+	mac := loadClient(t)
+	ref := fillClientConfig(t, mac)
+	enc := z80h.NewENC28J60()
+	initClientDriver(t, mac, enc)
+
+	clientStep(t, mac, enc, "client_first", nil)
+	arpReply := frame.BuildARPReply(cServerMAC, cClientMAC, cServerIP, cClientIP)
+	ref.OnFrame(arpReply)
+	clientStep(t, mac, enc, "client_run_once", arpReply) // -> RRQ (now requests windowsize 8)
+
+	// OACK grants blksize 1428 AND windowsize 4 -> ACK 0 + windowed receive.
+	oack := cOackFrame(cliSrvTID, []tftp.Option{
+		{Name: "blksize", Value: "1428"}, {Name: "tsize", Value: "7240"},
+		{Name: "timeout", Value: "2"}, {Name: "windowsize", Value: "4"},
+	})
+	goAck0, _ := ref.OnFrame(oack)
+	eqClient(t, "ACK 0", clientStep(t, mac, enc, "client_run_once", oack), goAck0)
+	if w := mac.Read(symAddr(t, mac, "WINDOWSIZE"), 2); int(w[0])|int(w[1])<<8 != win {
+		t.Fatalf("WINDOWSIZE = %d after a windowsize OACK, want %d", int(w[0])|int(w[1])<<8, win)
+	}
+
+	send := func(b uint16, label string) {
+		lo := (int(b) - 1) * cliBlksize
+		hi := lo + cliBlksize
+		if hi > len(file) {
+			hi = len(file)
+		}
+		d := cDataFrame(cliSrvTID, b, file[lo:hi])
+		goTx, _ := ref.OnFrame(d)
+		eqStep(t, label, clientStep(t, mac, enc, "client_run_once", d), goTx)
+	}
+
+	// blocks 1-3 silent (mid-window), block 4 -> ACK 4 (window boundary).
+	send(1, "block 1 (mid-window)")
+	send(2, "block 2 (mid-window)")
+	send(3, "block 3 (mid-window)")
+	send(4, "block 4 (window boundary)")
+	// block 5 silent (mid-window), block 6 (short final) -> ACK 6 + done.
+	send(5, "block 5 (mid-window)")
+	send(6, "block 6 (short final)")
+
+	goDone := ref.Done()
+	if !goDone {
+		t.Fatalf("the Go authority should be done after the short final block")
+	}
+	if mac.Read(symAddr(t, mac, "XFER_DONE"), 1)[0] != 1 {
+		t.Fatalf("XFER_DONE not set after the short final block")
+	}
+	staged := mac.Read(symAddr(t, mac, "STAGING"), len(file))
+	if !bytes.Equal(staged, file) {
+		t.Fatalf("staged bytes != file (%d bytes)", len(file))
+	}
+	if !bytes.Equal(ref.Bytes(), file) {
+		t.Fatalf("Go authority staged bytes != file")
+	}
+}
+
+// TestClientWindowedGapRewind confirms a gap inside a window re-ACKs the last
+// in-sequence block (so the sender rewinds) and the client then resumes — driven
+// against the Go authority byte-for-byte. Sequence: 1,2,3, then 5 (block 4
+// dropped) which must re-ACK 3, then the resend 4,5,6.
+func TestClientWindowedGapRewind(t *testing.T) {
+	file := makeFile(cliBlksize*5 + 100)
+	mac := loadClient(t)
+	ref := fillClientConfig(t, mac)
+	enc := z80h.NewENC28J60()
+	initClientDriver(t, mac, enc)
+
+	clientStep(t, mac, enc, "client_first", nil)
+	arpReply := frame.BuildARPReply(cServerMAC, cClientMAC, cServerIP, cClientIP)
+	ref.OnFrame(arpReply)
+	clientStep(t, mac, enc, "client_run_once", arpReply)
+
+	oack := cOackFrame(cliSrvTID, []tftp.Option{
+		{Name: "blksize", Value: "1428"}, {Name: "tsize", Value: "7240"},
+		{Name: "timeout", Value: "2"}, {Name: "windowsize", Value: "4"},
+	})
+	goAck0, _ := ref.OnFrame(oack)
+	eqClient(t, "ACK 0", clientStep(t, mac, enc, "client_run_once", oack), goAck0)
+
+	send := func(b uint16, label string) {
+		lo := (int(b) - 1) * cliBlksize
+		hi := lo + cliBlksize
+		if hi > len(file) {
+			hi = len(file)
+		}
+		d := cDataFrame(cliSrvTID, b, file[lo:hi])
+		goTx, _ := ref.OnFrame(d)
+		eqStep(t, label, clientStep(t, mac, enc, "client_run_once", d), goTx)
+	}
+
+	send(1, "block 1")
+	send(2, "block 2")
+	send(3, "block 3")
+	send(5, "block 5 (gap, expected 4) -> re-ACK 3") // the gap: re-ACKs the last in-sequence block
+	send(4, "block 4 (resumed)")
+	send(5, "block 5 (resumed)")
+	send(6, "block 6 (short final)")
+
+	if !ref.Done() {
+		t.Fatalf("the Go authority should be done after the short final block")
+	}
+	if mac.Read(symAddr(t, mac, "XFER_DONE"), 1)[0] != 1 {
+		t.Fatalf("XFER_DONE not set after the short final block")
+	}
+	staged := mac.Read(symAddr(t, mac, "STAGING"), len(file))
+	if !bytes.Equal(staged, file) {
+		t.Fatalf("staged bytes != file after a gap-rewind window")
 	}
 }
 

@@ -1,4 +1,10 @@
-// Package trinityfw is the host-side authority for the i213 Trinity firmware
+// Trinity-HW provenance (i273): this model is DERIVED FROM the SAM/Colin
+// authority recorded in tools/trinity-authority-ledger.txt (the Z80 reader
+// src/netboot/trinity_identity_stamp.asm — trinity_read_stamp — is the byte-layout
+// contract both sides share); it is never itself the authority for real Trinity
+// hardware behaviour (CLAUDE.md rule 8 / feedback_port_diff_authority_first).
+//
+// Package trinityfw is the host-side MODEL of the i213 Trinity firmware
 // IDENTITY STAMP — a small magic-signature + version marker written into a named
 // Trinity EEPROM chunk when we customise the firmware (the i135c bootblock flash),
 // so our software can DETECT whether our patched firmware is the one actually
@@ -17,7 +23,7 @@
 // (trinity_read_stamp); the format below is the single byte-layout contract both
 // sides share — see the registry item i213.
 //
-// SCOPE: host format authority + read helper only. The flash of the chunk to a
+// SCOPE: host-side format model + read helper only. The flash of the chunk to a
 // real EEPROM is the inherently-hardware i135c path (the Trinity write_chunk
 // routine, in the private bootloader fork) and is out of scope here. The emulation
 // round-trip test (tools/netboot-oracle/z80/trinity_identity_stamp_test.go)

@@ -1,5 +1,10 @@
 package z80
 
+// Trinity-HW provenance (i273): this model is DERIVED FROM the SAM/Colin
+// authority recorded in tools/trinity-authority-ledger.txt; it is never itself
+// the authority for real Trinity hardware behaviour (CLAUDE.md rule 8 /
+// feedback_port_diff_authority_first).
+//
 // eeprom.go — host-side emulation of the Quazar Trinity flash EEPROM (a Microchip
 // 25LC1024, 128 KB), the second device on the Trinity SPI bus (the first is the
 // ENC28J60, enc28j60.go). It models the SPI READ and page-WRITE protocol of the

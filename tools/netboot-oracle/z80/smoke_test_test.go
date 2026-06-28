@@ -28,14 +28,14 @@ import (
 )
 
 const (
-	smokeBinPath = "../../../build/netboot_smoke_test.bin"
-	smokeMapPath = "../../../build/netboot_smoke_test.map"
+	smokeBinPath = "../../../build/netboot_smoke.bin"
+	smokeMapPath = "../../../build/netboot_smoke.map"
 )
 
 func loadSmoke(t *testing.T) *z80h.Machine {
 	t.Helper()
 	if _, err := os.Stat(smokeBinPath); err != nil {
-		t.Fatalf("smoke_test binary not built (%s); run `make netboot-smoke-test`", smokeBinPath)
+		t.Fatalf("smoke binary not built (%s); run `make netboot-smoke`", smokeBinPath)
 	}
 	mac, err := z80h.Load(smokeBinPath, smokeMapPath)
 	if err != nil {

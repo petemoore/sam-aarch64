@@ -106,7 +106,7 @@ func TestZ80BuildRRQByteExact(t *testing.T) {
 }
 
 // TestZ80BuildRRQClientOptionSet asserts the client builds the settled option
-// set (blksize=1428, tsize=0, timeout=2, windowsize=4) byte-for-byte as the Go
+// set (blksize=1428, tsize=0, timeout=2, windowsize=8) byte-for-byte as the Go
 // BuildRRQ does for spectrum4.img — the option string the SAM emits on hardware
 // (mirrors the Go TestRRQBuilderMatchesClientOptionSet).
 func TestZ80BuildRRQClientOptionSet(t *testing.T) {

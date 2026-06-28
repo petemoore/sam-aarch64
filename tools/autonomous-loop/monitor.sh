@@ -100,6 +100,30 @@ MERGE_BRANCH="${ALOOP_MERGE_BRANCH:-main}"
 MERGE_REF="${ALOOP_MERGE_REF:-$MERGE_REMOTE/$MERGE_BRANCH}"   # the ref new_merges_since reads
 MERGE_CHECK_INTERVAL="${ALOOP_MERGE_CHECK_INTERVAL:-120}"    # seconds between merge-watch fetches
 
+# --- i281: TAPO SAM power management ----------------------------------------
+# The autonomous loop powers the real SAM on via a TAPO smart plug (tapo.sh).
+# Left unattended it would stay on indefinitely. This watch reads the on/off
+# STATE tapo.sh records (/var/tmp/tapo-power-state, "<on|off> <epoch>") and, while
+# Pete is AWAY, manages the SAM's uptime: it MESSAGES the agent at each escalation
+# threshold (30/60/90/120/150 min, once per threshold) asking whether the SAM is
+# still needed, and at the 180-min backstop calls `tapo.sh off` ITSELF and tells
+# the agent. An agent actively using the SAM keeps it on by REFRESHING the
+# keep-alive file (`touch $TAPO_KEEPALIVE`): the on-age is measured from the LATER
+# of the power-on epoch and the keep-alive mtime, so the SAM survives past 3h only
+# while an agent keeps pushing the deadline forward. It degrades safely — an
+# absent/unparseable state file, or state "off", does NOTHING (never fires on an
+# unknown state) — and is fully suppressed while Pete is present (he steers the
+# hardware). State source decision (i281): infer from tapo.sh's recorded action
+# rather than a live TAPO query — no network/venv dependency in the hot loop; the
+# backstop is a safety net regardless of any out-of-band physical toggle.
+TAPO_WATCH="${ALOOP_TAPO_WATCH:-1}"                         # 1 = manage SAM power; 0 = off
+TAPO_CMD="${ALOOP_TAPO_CMD:-$HOME/bin/tapo.sh}"            # the plug control script
+TAPO_STATE_FILE="${ALOOP_TAPO_STATE:-/var/tmp/tapo-power-state}"
+TAPO_KEEPALIVE="${ALOOP_TAPO_KEEPALIVE:-$SEMA_DIR/tapo-keepalive}"  # agent `touch`es to keep the SAM on
+TAPO_CHECK_INTERVAL="${ALOOP_TAPO_CHECK_INTERVAL:-60}"     # seconds between power-state checks
+TAPO_ESCALATE_MINS="${ALOOP_TAPO_ESCALATE_MINS:-30 60 90 120 150}"  # message thresholds (minutes on)
+TAPO_OFF_MINS="${ALOOP_TAPO_OFF_MINS:-180}"               # auto-off backstop (minutes on)
+
 # log() timestamps to stdout AND appends to $LOGFILE so the trace survives the
 # session -- the live stall that motivated i179 left no inspectable record. Watch
 # with `tail -f "$LOGFILE"`. (Pete asked for exactly this visibility, 2026-06-20.)
@@ -273,6 +297,56 @@ nudge_until_turn() {
   return 1
 }
 
+# --- i281 TAPO power helpers (pure; unit-tested via test-tapo-power.sh) ------
+# Factored out of the loop so the age/threshold/keep-alive logic is testable
+# without a real plug. None of these call tapo.sh or touch hardware.
+
+# tapo_state_is_on STATE_FILE -> 0 (true) iff the recorded state is exactly "on".
+# A missing/empty/unparseable file is NOT on (safe default: manage nothing).
+tapo_state_is_on() {
+  local f="$1" st="" ep=""
+  [ -f "$f" ] || return 1
+  read -r st ep <"$f" 2>/dev/null || return 1
+  [ "$st" = "on" ]
+}
+
+# tapo_on_epoch STATE_FILE -> echoes the power-on epoch field (only meaningful
+# when state is "on"); echoes 0 if the file is absent or the field non-numeric.
+tapo_on_epoch() {
+  local f="$1" st="" ep=""
+  [ -f "$f" ] || { echo 0; return; }
+  read -r st ep <"$f" 2>/dev/null || { echo 0; return; }
+  [[ "$ep" =~ ^[0-9]+$ ]] || ep=0
+  echo "$ep"
+}
+
+# tapo_effective_on ON_EPOCH KEEPALIVE -> echoes max(ON_EPOCH, keep-alive mtime).
+# Touching the keep-alive file pushes the effective start forward, so the on-age
+# (and thus every escalation/backstop deadline) resets — the agent's "keep it on".
+tapo_effective_on() {
+  local on_ep="$1" ka="$2" ka_ep=0
+  [[ "$on_ep" =~ ^[0-9]+$ ]] || on_ep=0
+  if [ -f "$ka" ]; then ka_ep=$(stat -c %Y "$ka" 2>/dev/null || echo 0); fi
+  [[ "$ka_ep" =~ ^[0-9]+$ ]] || ka_ep=0
+  if (( ka_ep > on_ep )); then echo "$ka_ep"; else echo "$on_ep"; fi
+}
+
+# tapo_due_escalations AGE_MIN ANNOUNCED THRESHOLDS... -> echoes (space-separated)
+# the thresholds AGE_MIN has reached that ANNOUNCED (a space-list) does not yet
+# contain. Pure: the caller adds each emitted threshold to its announced set so
+# each fires at most once per on-session.
+tapo_due_escalations() {
+  local age="$1" announced="$2"; shift 2
+  local t out=""
+  for t in "$@"; do
+    [[ "$t" =~ ^[0-9]+$ ]] || continue
+    if (( age >= t )) && [[ " $announced " != *" $t "* ]]; then
+      out="$out $t"
+    fi
+  done
+  echo "${out# }"
+}
+
 # When this file is SOURCED (e.g. by test-merge-detection.sh) expose the functions
 # above without running the monitor; executing it directly falls through to the
 # preflight + loop below. `(return 0 …)` succeeds only in a sourced context.
@@ -316,6 +390,16 @@ if [ "$MERGE_WATCH" = "1" ]; then
   log "i147: merge-watch on; REPO=$REPO ref=$MERGE_REF seed=${last_main_sha:-<none>} interval=${MERGE_CHECK_INTERVAL}s"
 else
   log "i147: merge-watch off (ALOOP_MERGE_WATCH=0)"
+fi
+# i281: TAPO power-watch loop state.
+last_tapo_check=$SECONDS
+tapo_announced=""        # space-list of escalation thresholds already messaged this on-session
+tapo_offed=""            # set once the backstop auto-offs; cleared when the SAM goes off / restarts
+tapo_eff_seen=""         # last effective-on epoch seen, to detect a keep-alive / power-on advance
+if [ "$TAPO_WATCH" = "1" ]; then
+  log "i281: TAPO power-watch on; cmd=$TAPO_CMD state=$TAPO_STATE_FILE keepalive=$TAPO_KEEPALIVE escalate=[${TAPO_ESCALATE_MINS}]min off=${TAPO_OFF_MINS}min interval=${TAPO_CHECK_INTERVAL}s"
+else
+  log "i281: TAPO power-watch off (ALOOP_TAPO_WATCH=0)"
 fi
 while true; do
   # i240 -- Pete-presence gate. While the pete-present semaphore exists, Pete is
@@ -362,6 +446,56 @@ while true; do
           log "i147: PR merge landed on $MERGE_REF with no checkpoint pending -> synthesizing task-done (structural stop-after-merge): $(printf '%s' "$merges" | tr '\n' ' ')"
           touch "$TASK_DONE"
         fi
+      fi
+    fi
+  fi
+  # i281 -- TAPO SAM power management. Throttled, read-only of the state tapo.sh
+  # records; suppressed while Pete is present (he steers the hardware). Manages
+  # how long the real SAM stays powered on unattended: escalate (message the
+  # agent), then auto-off at the backstop. Degrades safely: state "off"/unknown
+  # does nothing. The keep-alive file lets an agent hold the SAM on across the
+  # deadlines by touching it (resets the on-age). All messaging follows the same
+  # stuff/submit path as the other agent-directed lines.
+  if [ "$TAPO_WATCH" = "1" ] && [ -z "$pete_now" ] \
+     && [ ! -e "$TASK_DONE" ] && [ ! -e "$WOUND_DOWN" ] && [ ! -e "$QUIESCENT" ] \
+     && (( SECONDS - last_tapo_check >= TAPO_CHECK_INTERVAL )); then
+    last_tapo_check=$SECONDS
+    if tapo_state_is_on "$TAPO_STATE_FILE"; then
+      tapo_now=$(date +%s)
+      tapo_on_ep=$(tapo_on_epoch "$TAPO_STATE_FILE")
+      tapo_eff=$(tapo_effective_on "$tapo_on_ep" "$TAPO_KEEPALIVE")
+      # A keep-alive touch (or a fresh power-on) moves the effective start forward:
+      # reset the escalation ladder + the auto-off latch so the agent's "keep it
+      # on" genuinely restarts the clock.
+      if [ -n "$tapo_eff_seen" ] && (( tapo_eff > tapo_eff_seen )); then
+        if [ -n "$tapo_announced" ] || [ -n "$tapo_offed" ]; then
+          log "i281: effective-on advanced ($tapo_eff_seen -> $tapo_eff: keep-alive/power-on) -> resetting escalation ladder"
+        fi
+        tapo_announced=""; tapo_offed=""
+      fi
+      tapo_eff_seen=$tapo_eff
+      tapo_age=$(( (tapo_now - tapo_eff) / 60 ))
+      if [ -z "$tapo_offed" ] && (( tapo_age >= TAPO_OFF_MINS )); then
+        log "i281: SAM on ${tapo_age}min (>= ${TAPO_OFF_MINS} backstop), Pete away, no keep-alive -> '$TAPO_CMD off'"
+        if [ -x "$TAPO_CMD" ] && "$TAPO_CMD" off >>"$LOGFILE" 2>&1; then
+          tapo_offed="1"
+          stuff "Autonomous-loop power backstop (i281): the SAM had been ON for ${tapo_age} min with no keep-alive, so I ran '$TAPO_CMD off' to avoid leaving it powered indefinitely. Need it again? Run '$TAPO_CMD on' (boots into trinload in ~80s) and 'touch $TAPO_KEEPALIVE' while you use it."; submit
+        else
+          log "i281: WARNING -- '$TAPO_CMD off' failed or not executable; will retry next check"
+        fi
+      else
+        tapo_due=$(tapo_due_escalations "$tapo_age" "$tapo_announced" $TAPO_ESCALATE_MINS)
+        if [ -n "$tapo_due" ]; then
+          tapo_announced="$tapo_announced $tapo_due"
+          log "i281: SAM on ${tapo_age}min -> escalation message (new thresholds: $tapo_due)"
+          stuff "Autonomous-loop power check (i281): the SAM has been powered ON for ~${tapo_age} min. If you still need it, 'touch $TAPO_KEEPALIVE' to keep it on (resets this timer); if not, run '$TAPO_CMD off'. At ${TAPO_OFF_MINS} min with no keep-alive I power it off automatically."; submit
+        fi
+      fi
+    else
+      # SAM off / state unknown -> manage nothing; clear the ladder for next power-on.
+      if [ -n "$tapo_announced$tapo_offed$tapo_eff_seen" ]; then
+        log "i281: SAM no longer ON (state off/unknown) -> clearing escalation ladder"
+        tapo_announced=""; tapo_offed=""; tapo_eff_seen=""
       fi
     fi
   fi

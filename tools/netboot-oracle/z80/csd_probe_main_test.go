@@ -5,11 +5,11 @@
 // iteration alone), each in isolation, against the v2/v1 CSD model. It never runs
 // probe_main — the FULL trinload boot sequence the hardware actually executes:
 //
-//   probe_main: (1) find_index+read_chunk read the "Trinity Network " flash chunk
-//   into CONFIG (the SAM's MAC/IP); (2) probe_provision sets up the csd.bin STORE;
-//   (3) csd_read_into_stage runs the SD-SPI CSD read on &DC/&DF; (4) drv_init
-//   re-inits the ENC28J60 with the SAM's MAC; (5) pm_serve_loop is the ARP+TFTP
-//   serve loop (exits on Esc).
+//	probe_main: (1) find_index+read_chunk read the "Trinity Network " flash chunk
+//	into CONFIG (the SAM's MAC/IP); (2) probe_provision sets up the csd.bin STORE;
+//	(3) csd_read_into_stage runs the SD-SPI CSD read on &DC/&DF; (4) drv_init
+//	re-inits the ENC28J60 with the SAM's MAC; (5) pm_serve_loop is the ARP+TFTP
+//	serve loop (exits on Esc).
 //
 // On real hardware, pushing this probe HANGS the SAM (it stops answering ARP/ping
 // after the push). The suspicion is the INTERLEAVED SD-then-ENC I/O on the shared
@@ -19,9 +19,10 @@
 // a TIMEOUT (RunBoot returns Halted=false at the spin PC) rather than wedging
 // `go test`. It then reports PRECISELY where the run ends up.
 //
-// It uses the NON-HOSTTEST trinload build (build/csd_probe_trinload.bin), the only
-// build that contains probe_main (the HOSTTEST build guards it out, which is WHY
-// the piecewise test never ran it). The trinload image org's at &8000 and tops out
+// It uses the single csd_probe build (build/csd_probe.bin), which contains
+// probe_main (i231b-b4c removed the carve-out that used to guard it out of the
+// host-test build; csd_probe_test.go drives the same binary piecewise). The image
+// org's at &8000 and tops out
 // at &B47D — entirely below &C000 — so a flat Load places it faithfully.
 package z80_test
 
@@ -36,8 +37,8 @@ import (
 )
 
 const (
-	csdProbeTrinloadBin = "../../../build/csd_probe_trinload.bin"
-	csdProbeTrinloadMap = "../../../build/csd_probe_trinload.map"
+	csdProbeMainBin = "../../../build/csd_probe.bin"
+	csdProbeMainMap = "../../../build/csd_probe.map"
 
 	// The probe reads its own MAC/IP from the EEPROM "Trinity Network " chunk and
 	// hard-codes CONFIG_SERVERTID = 40136 (probe_main). So the serve frames we
@@ -78,20 +79,20 @@ func pmARP() []byte {
 	return frame.BuildARPRequest(frame.MAC(pmClientMac), frame.IPv4(pmClientIp), frame.IPv4(pmSAMIp))
 }
 
-// loadCSDProbeMain loads the trinload (probe_main-bearing) build, skipping if it
-// is not built. Flat Load (not LoadBoot): the whole image lives below &C000, and
-// the probe pages nothing, so flat all-RAM is the faithful runtime model.
+// loadCSDProbeMain loads the csd_probe build (which contains probe_main),
+// failing if it is not built. Flat Load (not LoadBoot): the whole image lives
+// below &C000, and the probe pages nothing, so flat all-RAM is the faithful model.
 func loadCSDProbeMain(t *testing.T) *z80h.Machine {
 	t.Helper()
-	if _, err := os.Stat(csdProbeTrinloadBin); err != nil {
-		t.Fatalf("csd_probe trinload binary not built (%s); run `make netboot-csd-probe-trinload`", csdProbeTrinloadBin)
+	if _, err := os.Stat(csdProbeMainBin); err != nil {
+		t.Fatalf("csd_probe binary not built (%s); run `make netboot-csd-probe`", csdProbeMainBin)
 	}
-	mac, err := z80h.Load(csdProbeTrinloadBin, csdProbeTrinloadMap)
+	mac, err := z80h.Load(csdProbeMainBin, csdProbeMainMap)
 	if err != nil {
-		t.Fatalf("load csd_probe_trinload: %v", err)
+		t.Fatalf("load csd_probe: %v", err)
 	}
 	if _, err := mac.Sym("probe_main"); err != nil {
-		t.Fatalf("probe_main symbol absent from %s — wrong build?", csdProbeTrinloadMap)
+		t.Fatalf("probe_main symbol absent from %s — wrong build?", csdProbeMainMap)
 	}
 	return mac
 }

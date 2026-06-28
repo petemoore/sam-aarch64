@@ -1,6 +1,6 @@
 // samboot_config_test.go — the i176 host-verification of the SAMBOOT BIOS config
-// reader. It loads the reader host-test binary (src/netboot/samboot_config.asm,
-// built -D NETBOOT_HOSTTEST=1), programs the encoded config into the emulated
+// reader. It loads the reader binary (src/netboot/samboot_config.asm, one
+// flag-free build since i231b-b4f), programs the encoded config into the emulated
 // Trinity flash under the "SAMBOOT Config  " name (ProgramNamedChunk), runs the
 // real samboot_read_config against eeprom.asm's find_index + read_chunk, and
 // asserts the decision (A/HL register contract) matches what the host encoder put

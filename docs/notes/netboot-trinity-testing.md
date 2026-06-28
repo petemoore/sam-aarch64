@@ -505,18 +505,23 @@ over TFTP as 16 KB regions the host pulls and concatenates. It reads ROM/EEPROM
 > harness, then **hardware-confirmed** by this recapture: rom1 served cleanly
 > (genuine Z80 ROM — most-common byte `0xCD`=CALL), and the SAM kept serving
 > afterwards (eep0 re-pulled identical), proving no clobber. rom1 is now safe to
-> pull from the current (`netboot_dumper_trinload.bin`) dumper.
+> pull from the current (`netboot_dumper.bin`) dumper.
+
+> **Push recipes at a glance:** run `make trinpush-help` — it prints the canonical
+> invocations (the executable pusher scripts and `tools/hardware-shot/run-shot.sh`)
+> so the exact command never has to be looked up. Every push needs `DEPLOY_CHECKED=1`
+> (the deploy-guard hook prints the hardware-readiness checklist without it).
 
 Push the dumper with `tools/trinload-push/trinload-push.py` (the py3 pusher), then
 pull the regions over TFTP. The full procedure:
 
 1. **Build the pushable dumper:**
    ```sh
-   make netboot-dumper-trinload      # -> build/netboot_dumper_trinload.bin (org &8000)
+   make netboot-dumper               # -> build/netboot_dumper.bin (org &8000)
    ```
 2. **Push it over trinload** (trinload must be RUNNING on the SAM — `192.168.2.75`):
    ```sh
-   tools/trinload-push/trinload-push.py 192.168.2.75 build/netboot_dumper_trinload.bin 1 0x8000
+   tools/trinload-push/trinload-push.py 192.168.2.75 build/netboot_dumper.bin 1 0x8000
    ```
    (py3; the upstream `~/git/trinload/test/trinload.py` is py2-only — see
    `tools/trinload-push/README.md`.) The dumper runs, reads its MAC/IP from the
