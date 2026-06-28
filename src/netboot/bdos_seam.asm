@@ -281,14 +281,16 @@ bdos_id_str:    defm "BDOS"
 ; bdos_validate_disk_record — validate a staged image as a raw Trinity SAM
 ; disk record (i114c storage-class DiskRecord).
 ;
-; Both conditions must hold (design §6.5, decision 5):
-;   1. BD_REC_SIZE == 819200 (80 tracks × 10 sectors × 2 sides × 512 bytes)
-;   2. BD_READ_BUF+232 == "BDOS" (the stamp bdos_inspect_record also checks)
+; Validation is SIZE-ONLY: BD_REC_SIZE == 819200 (80 tracks × 10 sectors ×
+; 2 sides × 512 bytes). Any full SAM disk image is a valid bootable record — it
+; does NOT need B-DOS installed on it. Byte 232 ("BDOS") is B-DOS's own
+; catalog/format signature (bdos_inspect_record reads it to IDENTIFY B-DOS disks
+; for the overwrite-safety show-name gate), NOT a boot or selection requirement:
+; booting a record executes the disk's own boot sector and never checks +232.
+; (Pete, 2026-06-21 + 2026-06-29; see the inline rationale in the body below.)
 ;
-; Pre: the caller has loaded the image's first sector into BD_READ_BUF (e.g.
-;      via bdos_read_sector(track=0,sector=1)) and stored the total image byte
-;      length (32-bit LE) in BD_REC_SIZE.
-; Out: BD_REC_VALID  1 byte   1 if both conditions hold, else 0
+; Pre: BD_REC_SIZE holds the total image byte length (32-bit LE).
+; Out: BD_REC_VALID  1 byte   1 if the size matches, else 0
 ; Clobbers: A, BC, DE, HL.
 ;
 ; This is the Z80 port of the Go authority bdos.ValidateDiskRecord

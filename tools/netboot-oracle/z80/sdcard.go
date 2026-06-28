@@ -231,11 +231,10 @@ func (s *SDCard) CapturedSector(addr uint32) ([]byte, bool) {
 }
 
 // RecordDataSector returns the 512 bytes captured for linear sector linearSec
-// (0-based) of record (1-based) on an SDHC/v2 card, using the i194 record->absolute
-// -LBA formula LBA = csdBase + 1600*(record-1) + linearSec (the same math
-// bd_record_write_hw computes). It is the own-CMD24 disk-push read-back analogue of
-// the BDOSStore HWSAD-hook capture: a test that bypasses the HWSAD hook (writing by
-// absolute LBA) asserts the stored bytes here instead of via SectorWrites().
+// (0-based) of record (1-based) on an SDHC/v2 card, using the card geometry
+// LBA = csdBase + 1600*(record-1) + linearSec. It reads back what the real B-DOS
+// HWSAD CMD24 wrote into the SD model (the faithful sd_push path): a test asserts
+// the stored bytes landed at the chosen record's absolute LBA range.
 // Returns (nil,false) if nothing was written at that record's linear sector.
 func (s *SDCard) RecordDataSector(csdBase uint32, record, linearSec int) ([]byte, bool) {
 	const sectorsPerRecord = 1600
@@ -245,8 +244,8 @@ func (s *SDCard) RecordDataSector(csdBase uint32, record, linearSec int) ([]byte
 
 // CapturedRecordBlockCount returns how many distinct card-absolute blocks were
 // captured (CMD24 writes + seeds) that fall in record's own range
-// [csdBase+1600*(record-1), csdBase+1600*record) — the data-safety check that the
-// own-CMD24 write only ever touched the claimed record's blocks. The whole-store
+// [csdBase+1600*(record-1), csdBase+1600*record) — the data-safety check that a
+// record write only ever touched the claimed record's blocks. The whole-store
 // count is CapturedBlockCount; any block outside the range is a safety violation a
 // test can detect by comparing the two.
 func (s *SDCard) CapturedRecordBlockCount(csdBase uint32, record int) int {

@@ -954,8 +954,9 @@ cl_fail_link:
 ; streaming write) + i114c (validate) + i122a (boot-a-record). The scratch record
 ; (cl_boot_record) is a netboot-owned, reusable slot — we overwrite our own
 ; scratch each boot, no per-boot cleanup (i122 design note a). An image that
-; fails validation (not exactly 819200 bytes, or no BDOS stamp) is rejected and
-; NOT booted (magenta border) — corrupt disk-records never boot (design §6.5).
+; fails validation (not exactly 819200 bytes — size-only; a disk needs no B-DOS
+; installed on it) is rejected and NOT booted (magenta border) — a truncated or
+; oversized image never boots (design §6.5).
 client_fetch_boot:
                 call    client_setup           ; EEPROM config + drv_init + link (halts on failure)
 
@@ -986,14 +987,15 @@ cfb_loop:
 
 ; ===========================================================================
 ; client_finalize — commit the streamed image: flush the sink's final partial
-; sector, validate the result as a Trinity disk record (size == 819200 from
-; RRS_TOTAL AND the BDOS stamp@232 read back via HRSAD), and — only if valid —
-; ALHK-boot the record (BD_BOOT_RECORD; never returns on hardware). On an invalid
-; image it sets CLIENT_BOOT_RESULT = 0 and returns so the caller can signal it.
+; sector, validate the result as a Trinity disk record (SIZE-ONLY: size == 819200
+; from RRS_TOTAL — a disk needs no B-DOS installed on it, so there is no +232
+; stamp to check), and — only if valid — ALHK-boot the record (BD_BOOT_RECORD;
+; never returns on hardware). On an invalid image it sets CLIENT_BOOT_RESULT = 0
+; and returns so the caller can signal it.
 ;
-; Pre: the scratch record is HRECORD-selected (so HRSAD reads it back) and
-;      BD_BOOT_RECORD names it. Out: CLIENT_BOOT_RESULT = 1 iff valid (then it
-;      boots and never returns); 0 iff rejected (returns).
+; Pre: the scratch record is HRECORD-selected and BD_BOOT_RECORD names it.
+;      Out: CLIENT_BOOT_RESULT = 1 iff valid (then it boots and never returns);
+;      0 iff rejected (returns).
 client_finalize:
                 call    raw_record_sink_finish ; flush any final partial sector
 
@@ -1003,15 +1005,18 @@ client_finalize:
                 ld      hl, (RRS_TOTAL + 2)
                 ld      (BD_REC_SIZE + 2), hl
 
-                ; read sector 0 (track 0, sector 1) back via HRSAD so the validator
-                ; can check the BDOS stamp@232 of the just-written record.
+                ; read sector 0 (track 0, sector 1) back via HRSAD as a post-write
+                ; liveness check of the just-written record. Validation itself is
+                ; SIZE-ONLY (bdos_validate_disk_record reads BD_REC_SIZE, not this
+                ; buffer): a .mgt needs no B-DOS installed on it, so there is no +232
+                ; stamp to verify here.
                 xor     a
                 ld      (BD_READ_TRACK), a
                 inc     a
                 ld      (BD_READ_SECTOR), a    ; sector 1 (1-based)
                 call    bdos_read_sector       ; -> BD_READ_BUF (512 bytes)
 
-                call    bdos_validate_disk_record  ; -> BD_REC_VALID (1 = valid)
+                call    bdos_validate_disk_record  ; -> BD_REC_VALID (1 = valid, size-only)
                 ld      a, (BD_REC_VALID)
                 or      a
                 jr      z, cfin_reject
