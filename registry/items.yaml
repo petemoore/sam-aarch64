@@ -458,7 +458,7 @@
   title: On-SAM preprocessor (.if build-constraints + macros)
   description: |
     Beyond-M7 idea, now UNBLOCKED by the b8 umbrella closing (2026-07-03: the on-SAM lex/parse/pass1/compact/serialize substrate is corpus-proven). On-SAM preprocessor supporting .if build-constraints and macro expansion, reducing reliance on the host-side preprocess step. NEXT ACTION (spec gate, CLAUDE.md discipline 1): draft a short design spec for Pete approval BEFORE any implementation — scope (which .if/.set/macro forms; ~1/3 of spectrum4 sources need macros per the 2026-05-25 survey in memory/macro_expansion_research), where it sits in the pipeline (pre-lex text transform vs token-level), memory model (q36 pool), and the Go-authority-first port order (host preprocessor in tools/sam-aarch64 first, then the Z80 port). Raise the spec as a qN for Pete when drafted.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i48c-b8a, i48c-b8b, i48c-b8c, i48c-b8d, i48c-b8e, i48c-b8f]
   kind: leaf
   owner: agent
