@@ -1624,6 +1624,7 @@
   description: |
     Hardware-gated confirmation tail of i89. On Pete's Pi 3 + SAM with the hub+Wireshark rig, capture the DHCP DISCOVER/OFFER/ACK + first TFTP probe sequence and generate masked Pi 3 golden vectors (as the Pi 4 vectors were). Decisive open detail: whether the Pi 3 boot ROM is byte-strict about the option-43 'Raspberry Pi Boot' menu string (trailing spaces). Findings to confirm are in pi-netboot-capture-analysis.md section 4.
   status: OPEN
+  depends_on: [i345]
   kind: leaf
   owner: pete
   parent: i89
@@ -1732,9 +1733,28 @@
   description: ""
   status: OPEN
   depends_on: [i93b]
-  kind: leaf
+  kind: umbrella
   owner: agent
   parent: i95
+
+- id: i95b-b1
+  title: "Integrated ARP+DHCP+TFTP server hardware shot: real Trinity, host-side simulated Pi client (DORA + TFTP fetch by name)"
+  description: |
+    The agent-workable slice of the end-to-end Pi boot: run the i95a integrated dispatch-loop server (netboot_server) on the real SAM+Trinity and drive it from THIS host with a crafted PXE-style client reproducing the captured Pi 400 exchange (pi-netboot-capture-analysis.md): DHCP DISCOVER->OFFER, REQUEST->ACK (option-43 blob, siaddr, per-MAC lease), ARP, then TFTP RRQ->OACK->DATA fetch by name of small store-resident files. SAFETY PRECONDITION before serving DHCP on the shared LAN: verify dhcp_loop answers ONLY PXEClient-vendor-class (opt 60) DISCOVERs (add the filter if absent, matching the captured Pi behaviour) so no house device can take a bogus lease; otherwise do not run unisolated. Multi-MB spanned-firmware serving is NOT in scope (i70 serve-time-reassembly residuals). Real-Pi boot is the sibling (rig-gated, i345).
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i95b
+
+- id: i95b-b2
+  title: "Real Pi netboots from the SAM end-to-end (rig-gated): DHCP + TFTP boot of the physical target Pi"
+  description: |
+    The physical-client tail of the end-to-end Pi boot: with the i345 hub-isolated rig in place and the i95b-b1 simulated-client shot proven, power the netboot-enabled target Pi and confirm it DHCP-leases from the SAM, TFTP-fetches its boot file set from the Trinity store, and boots. Multi-MB firmware provisioning/serving (spanning) rides the i70 residuals.
+  status: OPEN
+  depends_on: [i345, i95b-b1]
+  kind: leaf
+  owner: agent
+  parent: i95b
 
 - id: i96
   title: "Phase-3 serve-files TFTP demo (ARP + TFTP, no DHCP)"
@@ -5770,3 +5790,12 @@
   status: DONE
   kind: leaf
   owner: agent
+
+- id: i345
+  title: "Netboot-target Pi rig: hub-isolated network segment with a netboot-enabled Pi wired to the SAM (Pete hardware setup)"
+  description: |
+    Physical prerequisite for any REAL-Pi netboot exchange against the SAM (i95b real-Pi boot; i89b Pi-3 capture): a netboot-enabled target Pi (Pi 400 per the existing captures, or Pi 3 for i89b) wired to the SAM on an ISOLATED segment (the hub+Wireshark rig from the trinload captures, pi-netboot-capture-analysis.md). Isolation is load-bearing: the SAM's DHCP server answering DISCOVERs on the shared house LAN would be a rogue DHCP server handing broken leases to other devices - the reference dnsmasq capture setup used a separate USB-NIC subnet (192.168.50.x) for exactly this reason. Pete-owned: physically wiring/enabling the rig; once it exists the exchanges themselves can run agent-side.
+  status: OPEN
+  kind: leaf
+  owner: pete
+  refs: [docs/notes/pi-netboot-capture-analysis.md]
