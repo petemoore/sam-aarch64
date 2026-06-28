@@ -488,6 +488,15 @@ func (mac *Machine) LiveRegs() Regs {
 	}
 }
 
+// LiveSP returns the live stack pointer during/after a run. Valid inside a
+// Trace callback and after a run returns; nil-safe (returns 0 before any run).
+func (mac *Machine) LiveSP() uint16 {
+	if mac.m.cpu == nil {
+		return 0
+	}
+	return mac.m.cpu.SP
+}
+
 // LiveAltRegs returns the live ALTERNATE CPU registers (AF'/BC'/DE'/HL') during/
 // after a run. Valid inside a Trace callback and after a run returns; nil-safe.
 // Needed to observe routines that compute in the alternate set after an EXX —
