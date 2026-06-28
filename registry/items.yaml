@@ -5806,7 +5806,7 @@
   title: "Pi-boot filename mapping: real Pi file names exceed the 10-char B-DOS directory-name limit"
   description: |
     The netboot_server store walk (i95b-b1) indexes files by their B-DOS directory names, which cap at 10 chars - real Pi 400 boot names (cmdline.txt = 11, bcm2711-rpi-400.dtb = 19, armstub8-gic.bin = 16) cannot be stored verbatim, so a name-mapping scheme (e.g. a manifest file in the record mapping TFTP names to store names, or serving from a manifest instead of raw dir names) is needed before a real Pi can fetch its full file set. Blocks i95b-b2 fetch-by-real-name; config.txt/start4.elf already fit.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
@@ -5830,6 +5830,6 @@
   title: "PR 822 review residuals: bound the opt-60 scanner to RX_LEN, fix the duplicate-DATA re-ACK in simulate-pi-client.py, drop NB_ENTRY_LENMOD, list the client in hardware-shot README"
   description: |
     Non-blocking findings from the PR 822 pre-merge review (inline comments, review 4620650934): (1) both Z80 PXEClient filter sites read the option-60 value without bounding by RX_LEN - a truncated/malformed option lets the 9-byte prefix compare read past the frame end (worst case a malformed frame passes the gate); add an HL+9 <= frame-end check matching the copy_uuid bound style. (2) simulate-pi-client.py duplicate-DATA branch comments 're-ACK below' but 'continue' skips the ACK, so a lost ACK stalls to timeout instead of re-ACKing. (3) NB_ENTRY_LENMOD equ in netboot_server.asm is unused - delete. (4) tools/hardware-shot/README.md does not list simulate-pi-client.py. Also consider a shared equ for the STORE+1024 literal duplicating tftp_parse.asm's defs 1024.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
