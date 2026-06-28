@@ -1741,7 +1741,7 @@
   title: "Integrated ARP+DHCP+TFTP server hardware shot: real Trinity, host-side simulated Pi client (DORA + TFTP fetch by name)"
   description: |
     The agent-workable slice of the end-to-end Pi boot: run the i95a integrated dispatch-loop server (netboot_server) on the real SAM+Trinity and drive it from THIS host with a crafted PXE-style client reproducing the captured Pi 400 exchange (pi-netboot-capture-analysis.md): DHCP DISCOVER->OFFER, REQUEST->ACK (option-43 blob, siaddr, per-MAC lease), ARP, then TFTP RRQ->OACK->DATA fetch by name of small store-resident files. SAFETY PRECONDITION before serving DHCP on the shared LAN: verify dhcp_loop answers ONLY PXEClient-vendor-class (opt 60) DISCOVERs (add the filter if absent, matching the captured Pi behaviour) so no house device can take a bogus lease; otherwise do not run unisolated. Multi-MB spanned-firmware serving is NOT in scope (i70 serve-time-reassembly residuals). Real-Pi boot is the sibling (rig-gated, i345).
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i95b
