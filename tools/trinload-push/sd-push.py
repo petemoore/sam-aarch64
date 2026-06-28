@@ -13,18 +13,19 @@ Two stages, both over UDP port 0xEDB0:
        '?'                         -> '!'   (discovery)
        'N' + name(<=16 bytes)      -> '.'   (record name for the catalogue entry)
        '@' + linearSec(LE16) + data-> '.'×4 (data block; <=512 data bytes)
-       'F'                         -> 'D'   (finalize: complete 1600-sector record)
-                                      'E'   (finalize: wrong sector count)
+       'F'                         -> 'D' + record(LE16)  (finalize: complete
+                                      1600-sector record, written to record N)
+                                      'E' + record(LE16)  (finalize: wrong sector
+                                      count; record N was the target)
      We stream the .mgt as one '@' block per 512-byte sector (linearSec = the
      0-based sector index, track-major: track*10 + (sector-1)), windowed at 4
      outstanding acks like trinload, then finalize.
 
-WARNING (data safety): sd_push auto-picks the FIRST FREE record and writes ONLY
-that record. As of i293 the record-DIRECTED HWSAD write PASSES end-to-end in
-faithful emulation (HRECORD redirects B-DOS's write base to the picked free
-record; every CMD24 lands in that record's LBA range, data-safe), but is NOT yet
-hardware-confirmed (emulation-verified is not hardware-verified). Do NOT run this
-against a card with data you care about until it is confirmed on real Trinity hardware.
+WARNING (data safety): sd_push auto-picks the FIRST FREE record (one whose 16-byte
+list-entry name reads unnamed) and writes ONLY that record — it never targets a
+USED record. The own-CMD24 write path is hardware-proven (i294/i295: a pushed
+record booted on the real SAM), but the Trinity SD card is a SHARED user resource
+(trinity_storage_shared_resource): treat every push with care.
 
 Usage:
   tools/trinload-push/sd-push.py [SAM_IP] [MGT_PATH] [SD_PUSH_BIN]
@@ -68,13 +69,17 @@ def stream_mgt(sock, dst, data):
 
 
 def finalize(sock, dst):
-    """Send 'F' and return the reply byte ('D' done / 'E' error), or None on timeout."""
+    """Send 'F' and return (status, record): status is the reply byte ('D' done /
+    'E' error; None on timeout) and record is the claimed 1-based record number
+    (LE16 after the status byte, i308), or None if the reply carries none (an
+    older sd_push binary)."""
     sock.sendto(b"F", (dst, PORT))
     try:
         reply, _ = sock.recvfrom(8)
     except socket.timeout:
-        return None
-    return reply[:1]
+        return None, None
+    record = struct.unpack("<H", reply[1:3])[0] if len(reply) >= 3 else None
+    return reply[:1], record
 
 
 def send_name(sock, dst, name):
@@ -121,12 +126,14 @@ def push_mgt(sam, mgt_path, sd_push_bin):
     t0 = time.time()
     sent = stream_mgt(sock, dst, data)
     print(f"  streamed {sent} sectors in {time.time() - t0:.1f}s; finalizing")
-    reply = finalize(sock, dst)
+    reply, record = finalize(sock, dst)
+    where = f"record {record}" if record else "the free record (number unreported)"
     if reply == b"D":
-        print("DONE: sd_push validated a complete record and wrote it to the free record")
+        print(f"DONE: sd_push validated a complete record and wrote it to {where}")
         return True
     if reply == b"E":
-        print("ERROR: sd_push reported an incomplete record (sector count != 1600)")
+        print(f"ERROR: sd_push reported an incomplete record (sector count != 1600; "
+              f"the target was {where})")
         return False
     print("ERROR: no finalize reply from sd_push")
     return False

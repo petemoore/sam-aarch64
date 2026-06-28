@@ -244,11 +244,12 @@ func TestSDPushLogic(t *testing.T) {
 		t.Fatalf("writes outside record %d's body band = %v, want exactly [%d] (only the list-sector claim; a body write must not stray into another record or off the card)", free, outside, claimLBA)
 	}
 
-	// (7) The premature finalize (count=3) must reply 'E' (error), not 'D'.
-	if got := countPayload(enc.TXFrames(), []byte{'E'}); got < 1 {
-		t.Errorf("premature finalize (3 sectors) did not reply 'E'; tx payloads=%v", txPayloads(enc.TXFrames()))
+	// (7) The premature finalize (count=3) must reply 'E' (error), not 'D' — carrying
+	// the claimed record number (record 1, LE16 after the status byte; i308).
+	if got := countPayload(enc.TXFrames(), []byte{'E', 1, 0}); got < 1 {
+		t.Errorf("premature finalize (3 sectors) did not reply 'E'+record 1 (LE16); tx payloads=%v", txPayloads(enc.TXFrames()))
 	}
-	if got := countPayload(enc.TXFrames(), []byte{'D'}); got != 0 {
+	if got := countPayloadPrefix(enc.TXFrames(), []byte{'D'}); got != 0 {
 		t.Errorf("premature finalize replied 'D' (%d) — a 3-sector record must NOT validate as complete", got)
 	}
 }
@@ -363,10 +364,12 @@ func TestSDPushFinalizeComplete(t *testing.T) {
 		}
 	}
 
-	if got := countPayload(enc.TXFrames(), []byte{'D'}); got < 1 {
-		t.Errorf("finalize after 1600 sectors did not reply 'D' (done); tx payloads=%v", txPayloads(enc.TXFrames()))
+	// The 'D' reply carries the claimed record number (record 1, LE16; i308) so the
+	// host can report/boot record N without reading the card.
+	if got := countPayload(enc.TXFrames(), []byte{'D', 1, 0}); got < 1 {
+		t.Errorf("finalize after 1600 sectors did not reply 'D'+record 1 (LE16); tx payloads=%v", txPayloads(enc.TXFrames()))
 	}
-	if got := countPayload(enc.TXFrames(), []byte{'E'}); got != 0 {
+	if got := countPayloadPrefix(enc.TXFrames(), []byte{'E'}); got != 0 {
 		t.Errorf("finalize after a complete 1600-sector record replied 'E' (%d) — should validate", got)
 	}
 }
@@ -474,6 +477,19 @@ func countPayload(frames [][]byte, want []byte) int {
 	n := 0
 	for _, f := range frames {
 		if u, ok := frame.ParseUDP(f); ok && bytes.Equal(u.Payload, want) {
+			n++
+		}
+	}
+	return n
+}
+
+// countPayloadPrefix counts TX frames whose UDP payload starts with want — for
+// asserting a status byte's ABSENCE regardless of what trails it (the finalize
+// replies carry a record number after the status byte, i308).
+func countPayloadPrefix(frames [][]byte, want []byte) int {
+	n := 0
+	for _, f := range frames {
+		if u, ok := frame.ParseUDP(f); ok && bytes.HasPrefix(u.Payload, want) {
 			n++
 		}
 	}

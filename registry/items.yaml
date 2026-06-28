@@ -5354,7 +5354,7 @@
   title: "sd_push: report the claimed free-record NUMBER over the net"
   description: |
     After a create-record push, sd-push.py prints only 'wrote it to the free record' -- the record# is unknown, so you cannot RECORD/boot it without inspecting the card. Have sd_push send the claimed BD_FREE_RECORD in a net marker and sd-push.py print it. Needed for the i302 boot-visual confirmation + general ergonomics.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
