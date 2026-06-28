@@ -261,13 +261,14 @@ ENC_FIX_TABLE_RAM:  equ     &E100
 ; (see Makefile: assembler target depends on enc-fix-payload and uses
 ; --importfile=$(BUILD)/enc_fix_payload.sym).
 
-; Page 12: overlay_classify boot-self-test suite (i204b) — CODE, not
-; just data.  The suite (src/test_overlay_suite.asm: the insn_overlay.asm
-; routines + their fixture driver) is ~1.5 KB and, like the encode
-; family, must be addressable while ENCTAB occupies section A — but it
-; does not fit the enc-tests variant's section-C budget (417 B over the
-; &C000 cliff when inline).  Section-D RAM is the relief: the payload is
-; HLOADed here at boot ("ovl12"), then a stub in assembler.asm copies
+; Page 12: the enc-tests section-D suite (i204b overlay_classify +
+; i48c-b8e compact encoder adapter, with their boot self-tests) — CODE,
+; not just data.  The suite (src/test_overlay_suite.asm: the
+; insn_overlay.asm + compact_emit.asm routines + their fixture drivers)
+; is ~2.9 KB and, like the encode family, must be addressable while
+; ENCTAB occupies section A — but it does not fit the enc-tests
+; variant's section-C budget.  Section-D RAM is the relief: the payload
+; is HLOADed here at boot ("ovl12"), then a stub in assembler.asm copies
 ; its code via LDIR into the free section-D region at OVERLAY_SUITE_RAM
 ; and calls it there.  Section D is HMPR-controlled, so the suite stays
 ; addressable inside its enctab_map_in bracket (which swaps only LMPR)
@@ -288,7 +289,10 @@ ENC_FIX_TABLE_RAM:  equ     &E100
 ; region (see the assembler.asm memory map), clear of the encode_inst
 ; scratch at &F000-&F01A (live while the suite runs) and of the enc_fix
 ; payload copy at &E100+ (the suite's fixture tables, read while the
-; suite runs).  Suite end ~&F700 leaves ~2.3 KB of the region free.
+; suite runs).  The suite code may extend to &FCFF (the Makefile
+; overlay-suite size guard enforces it); above it live the compact
+; adapter's runtime buffers, &FD00-&FF7F (src/compact_emit.asm's map),
+; leaving &FF80-&FFFF free.
 OVERLAY_SUITE_PAGE: equ     12
 LMPR_OVERLAY_SUITE: equ     &20 + OVERLAY_SUITE_PAGE    ; = &2C
 OVERLAY_SUITE_RAM:  equ     &F080

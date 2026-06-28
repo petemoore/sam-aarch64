@@ -722,6 +722,57 @@ toc_op_litpool: defb    &01, &00, &0c, &08, &03, &00, &05, &00, &00
 ; lsl x0,x1,#sym  (loud gap)
 toc_op_loud_lsl: defb   &01, &00, &01, &01, &05, &03, &00, &05, &00, &00
 
+; =======================================================================
+; i48c-b8e compact-adapter fixture (test_compact_adapter.asm)
+;
+; cadapt_ir is a serialized IR record stream (the parse_run wire layout);
+; cadapt_expected is the compact record stream assemble.Compact produces
+; for it.  BOTH byte arrays are derived by — and drift-guarded against —
+; tools/netboot-oracle/z80/compact_adapter_fixture_test.go
+; ::TestCompactAdapterFixture (the Go authority, CLAUDE.md §6): that test
+; bakes the same bytes and fails on any divergence, printing the defb
+; re-bake dump.  The record mix and what it exercises are documented on
+; buildCompactAdapterFixture there.
+;
+; PLACEMENT: like the toc_* block above, this sits past the &E100-&E27F
+; LITPOOL_PC_MAP clobber zone.  The payload tail now reaches into the
+; &E800+ SYMTAB_OVERFLOW region — safe by the same boot-phase ordering:
+; nothing writes the symbol tables before main_assemble, and every suite
+; reading this copy has completed by then.
+; =======================================================================
+cadapt_ir_len:  defw    cadapt_ir_end - cadapt_ir
+cadapt_ir:
+                defb    &04, &08, &00, &0c, &01, &05, &03, &00, &02, &00, &10, &05
+                defb    &06, &00, &00, &20, &68, &65, &61, &64, &01, &00, &00, &00
+                defb    &00, &00, &01, &01, &00, &03, &09, &00, &03, &00, &03, &01
+                defb    &05, &02, &00, &01, &05, &01, &09, &00, &01, &06, &00, &05
+                defb    &03, &00, &02, &20, &10, &01, &00, &00, &00, &00, &00, &05
+                defb    &05, &00, &01, &20, &6d, &69, &64, &01, &14, &00, &02, &08
+                defb    &00, &01, &00, &05, &03, &00, &02, &18, &10, &01, &05, &00
+                defb    &02, &0f, &00, &01, &01, &0c, &08, &09, &00, &04, &f0, &de
+                defb    &bc, &9a, &78, &56, &34, &12, &01, &00, &00, &00, &00, &00
+                defb    &04, &11, &00, &04, &03, &05, &02, &00, &01, &01, &05, &02
+                defb    &00, &01, &02, &05, &02, &00, &01, &03, &04, &07, &00, &04
+                defb    &01, &05, &02, &00, &01, &04, &05, &06, &00, &00, &20, &64
+                defb    &61, &74, &61, &04, &0e, &00, &02, &02, &05, &03, &00, &02
+                defb    &aa, &00, &05, &03, &00, &02, &bb, &00, &01, &00, &00, &00
+                defb    &00, &00
+cadapt_ir_end:
+
+cadapt_expected_len: defw   cadapt_expected_end - cadapt_expected
+cadapt_expected:
+                defb    &04, &08, &00, &0c, &01, &05, &03, &00, &02, &00, &10, &09
+                defb    &09, &00, &00, &1f, &20, &03, &d5, &20, &14, &00, &91, &09
+                defb    &2a, &00, &01, &00, &00, &00, &14, &01, &01, &03, &02, &20
+                defb    &10, &1f, &20, &03, &d5, &00, &00, &00, &00, &b4, &01, &02
+                defb    &03, &02, &18, &10, &01, &00, &00, &58, &01, &0c, &09, &04
+                defb    &f0, &de, &bc, &9a, &78, &56, &34, &12, &09, &05, &00, &00
+                defb    &1f, &20, &03, &d5, &08, &11, &00, &04, &01, &00, &00, &00
+                defb    &02, &00, &00, &00, &03, &00, &00, &00, &04, &00, &00, &00
+                defb    &08, &03, &00, &02, &aa, &bb, &09, &05, &00, &00, &1f, &20
+                defb    &03, &d5
+cadapt_expected_end:
+
 ; Total payload size: the LDIR in run_encode_inst_self_tests uses this
 ; count as BC.  Computed by the assembler so no manual update is needed
 ; when fixtures are added.
