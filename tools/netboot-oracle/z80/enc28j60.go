@@ -578,23 +578,25 @@ func (e *ENC28J60) autoNullFor(p peripheral) bool {
 // harness restarts the cursor at 0 for each run (Call/RunBoot); a cursor that jumps
 // BACKWARDS means a fresh run began, so any in-flight BUSY window is stale — clear
 // it (the PIC has long since finished the prior run's last byte).
+//
+// The identity-probe settle window survives the run boundary ONLY while still
+// open in the old timeline — that is the i242 back-to-back catch (SD traffic at
+// the end of one run, drv_init at the start of the next; on hardware those are
+// microseconds apart). A window that had ALREADY elapsed before the boundary is
+// spent: carrying its absolute deadline into the new (smaller) timeline would
+// re-arm it for the whole next run, pinning chk_trinity stale in a way real
+// silicon cannot (the i327 faithful-boot artifact — B-DOS's boot-time SD
+// traffic ends ~192k instructions before the boot run stops at WTKY2, yet a
+// later pushed tool's drv_init read the leftover deadline as still-pending).
 func (e *ENC28J60) SetTState(t uint64) {
 	if t < e.tNow {
 		e.busyUntilT = 0
+		if e.sdInitSettling && e.tNow >= e.settleUntilT {
+			e.sdInitSettling = false
+		}
 	}
 	e.tNow = t
 }
-
-// SettlePIC declares that real time has passed since the previous run's SD
-// traffic: it expires the i242 post-&38 identity-probe settle window. The
-// harness restarts the T-state cursor at 0 for each run, so a settleUntilT
-// armed late in a long prior run would otherwise pin every later run's
-// chk_trinity probe stale — a clock artifact, not silicon behaviour. Call it
-// between separately-driven runs that are NOT back-to-back on real hardware
-// (e.g. a full boot, then a later pushed-program session). The i242/i244
-// SD-before-ENC ordering catch (consecutive routines driven as consecutive
-// runs) deliberately does NOT call this.
-func (e *ENC28J60) SettlePIC() { e.sdInitSettling = false }
 
 // raiseBusy marks the PIC busy for one SPI-byte time after an OUT to
 // &DC/&DD/&DE/&DF (gap b): busyUntilT = now + busyByteTStates.
@@ -901,6 +903,16 @@ func (e *ENC28J60) clockData(value uint8) {
 	case periphSD:
 		e.sd.out(value)
 		e.clockedIn(e.sd.miso)
+		// The manual's ~50µs settle applies "after a heavy controller
+		// operation": while the &38-armed window is open, continued SD traffic
+		// keeps the PIC in it, so the deadline anchors at the END of the
+		// transaction's last byte, not at the opening &38 (i327). The i242
+		// hardware failure is a probe issued right after the SD *traffic*; an
+		// early-boot transaction whose traffic ended ~192k instructions before
+		// the next probe must not pin it stale.
+		if e.sdInitSettling {
+			e.settleUntilT = e.tNow + sdInitSettleTStates
+		}
 	}
 }
 

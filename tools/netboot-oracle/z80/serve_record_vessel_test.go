@@ -50,7 +50,8 @@ func TestBootRecordServeRecordVessel(t *testing.T) {
 
 	// Boot the record from the armed pushed-program state (the exact context
 	// the real launcher's push creates; see TestBootRecordFromTrinloadIdle).
-	enc.SettlePIC()
+	// The PIC settle window the boot's SD traffic armed expired within the
+	// boot run itself; the model expires it across the run boundary (i327).
 	const page = 1
 	_, brMain := stageBootRecord(t, mac, 2)
 	armServeDispatch(mac, page)

@@ -275,9 +275,8 @@ func TestBootRecordFromTrinloadIdle(t *testing.T) {
 	// --- Phase 1: the first boot — the fixed boot_record, config-patched to
 	// record 3, run from the armed pushed-program state (page 1, DOSCNT=0,
 	// LMPR=&1F/HMPR=1): the exact context the real launcher's push creates.
-	// The machine boot ended long ago in real time; expire the PIC settle
-	// window the boot's SD traffic armed (a per-run clock artifact otherwise).
-	enc.SettlePIC()
+	// The PIC settle window the boot's SD traffic armed expired within the
+	// boot run itself; the model expires it across the run boundary (i327).
 	const page = 1
 	_, brMain := stageBootRecord(t, mac, 3)
 	armServeDispatch(mac, page)

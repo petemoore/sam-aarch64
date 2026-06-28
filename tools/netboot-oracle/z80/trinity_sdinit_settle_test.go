@@ -29,6 +29,11 @@ import (
 //       STALE  — the i242/i287 catch is preserved; and
 //   (b) a &38 followed by advancing the T-state cursor PAST the settle budget,
 //       then an identity probe, reads FRESH — the over-aggressive latch is gone.
+//
+// The deadline anchors at the END of the SD traffic (each SD data byte inside
+// an open window refreshes it — i327): the manual's ~50µs settle follows the
+// heavy operation, and the i242 hardware failure was a probe right after the
+// CSD *traffic*. pic_settle_boundary_test.go pins the run-boundary semantics.
 
 const (
 	settleCtlPort  = 0xDC // portTrinityCtl
@@ -108,13 +113,16 @@ func TestSDInitSettleFreshAfterWindow(t *testing.T) {
 	enc.Out(settleCtlPort, settleSDInit)
 
 	// Dirty the latch with a real SD byte (as a CSD read would), so a successful
-	// FRESH probe is unambiguous: only an honoured probe can put 'T' back.
-	dirtyLatchWithSD(enc, sdInitT+gapTS)
+	// FRESH probe is unambiguous: only an honoured probe can put 'T' back. The
+	// SD byte also REFRESHES the settle deadline (i327): the manual's ~50µs is
+	// measured after the transaction's LAST byte, not after the opening &38.
+	lastByteT := uint64(sdInitT + gapTS)
+	dirtyLatchWithSD(enc, lastByteT)
 
-	// Advance well past the budget — but VASTLY less than the ~192k-instruction
-	// real-world gap that exposed the indefinite-latch bug (i288). The PIC has
-	// settled; the probe must now be honoured.
-	past := uint64(sdInitT + settleBudgetTS + 50)
+	// Advance well past the budget from the LAST SD byte — but VASTLY less than
+	// the ~192k-instruction real-world gap that exposed the indefinite-latch bug
+	// (i288). The PIC has settled; the probe must now be honoured.
+	past := lastByteT + settleBudgetTS + 50
 	if got := probeIdentByte(enc, past); got != 'T' {
 		t.Errorf("identity probe issued PAST the settle window returned &%02X (%q), want 'T' (FRESH) — the over-aggressive indefinite latch is NOT fixed; a faithful full boot (&38 with no following &28) would falsely fail chk_trinity", got, rune(got))
 	}
@@ -130,10 +138,12 @@ func TestSDInitSettleBoundaryStillStale(t *testing.T) {
 	const sdInitT = 200
 	enc.SetTState(sdInitT)
 	enc.Out(settleCtlPort, settleSDInit)
-	dirtyLatchWithSD(enc, sdInitT+gapTS)
+	lastByteT := uint64(sdInitT + gapTS)
+	dirtyLatchWithSD(enc, lastByteT)
 
-	// One T-state before the deadline: still settling -> STALE.
-	justInside := uint64(sdInitT + settleBudgetTS - 1)
+	// One T-state before the deadline (anchored at the LAST SD byte, i327):
+	// still settling -> STALE.
+	justInside := lastByteT + settleBudgetTS - 1
 	if got := probeIdentByte(enc, justInside); got == 'T' {
 		t.Errorf("identity probe one T-state before the settle deadline returned 'T' (FRESH) — the window closes too early; the i242/i287 catch is weakened")
 	}
