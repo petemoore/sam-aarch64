@@ -115,6 +115,10 @@ cluster_dispatch:
                 ; LMPR internally while executing from section C, restoring the
                 ; cluster page before returning (see test_emit_paged.asm).
                 call    run_emit_paged_self_tests
+                ; i27b: Cortex-A53 erratum 835769 predicate self-tests.
+                ; Exercises errata_is_hazard and errata_check_and_handle
+                ; (port of errata.go aarch64ErratumSequence:337-358).
+                call    run_erratum835769_self_tests
                 ret
 
                 include "test_symbols.asm"
@@ -129,3 +133,4 @@ cluster_dispatch:
                 include "test_litpool.asm"
                 include "test_pagepool.asm"
                 include "test_emit_paged.asm"
+                include "test_erratum835769.asm"

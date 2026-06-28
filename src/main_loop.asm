@@ -341,6 +341,9 @@ pass_pc_reset_oh:
                 ld      (hl), a
                 inc     hl
                 djnz    pass_pc_reset_oh
+; i27b: clear errata 835769 prev-instruction state at each pass start.
+; A = 0 here (from xor a above, unchanged by the loop).
+                ld      (ERRATA_PREV_VALID), a
                 ret
 
 

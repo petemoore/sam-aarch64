@@ -58,10 +58,18 @@ if defined(INSN_RUN_FOLD_ONLY)==0
 main_handle_insn_run:
                 ld      a, (hl)             ; mode byte
                 or      a
-                jp      z, main_handle_lit_insts    ; mode 0: literal memcpy
-                                                    ; (mode byte == the
-                                                    ; 1-byte tag it skips)
+                jr      nz, mhir_mode1      ; non-zero → mode 1 overlay
+
+; mode 0: literal word run (mode byte plays the role of the ignored tag).
+; i27b: when 835769 fix is active, process each word individually for
+; hazard detection (mhir_mode0_errata in errata_835769.asm).
+                ld      a, (FIX_835769_ENABLED)
+                or      a
+                jp      nz, mhir_mode0_errata
+                jp      main_handle_lit_insts       ; fast path: bulk memcpy
+
 ; mode 1: skip the mode byte; HL → first element, BC = element bytes.
+mhir_mode1:
                 inc     hl
                 dec     bc
                 ld      a, (PASS_MODE)
@@ -121,6 +129,15 @@ insn_p2_patch_loop:
                 jr      insn_p2_patch_loop
 
 insn_p2_elem_emit:
+; i27b: copy base_word to ERRATA_INSN2 and check for 835769 hazard.
+; Port of errata.go aarch64ErratumSequence:337-358.  If a hazard is
+; detected the NOP (erratumNOP = 0xd503201f) is emitted before the
+; instruction and PASS_PC advances by 4 for the NOP.
+                ld      hl, insn_base
+                ld      de, ERRATA_INSN2
+                ld      bc, 4
+                ldir
+                call    errata_check_and_handle
                 ld      a, (insn_base + 0)
                 call    emit_byte
                 ld      a, (insn_base + 1)
@@ -130,6 +147,8 @@ insn_p2_elem_emit:
                 ld      a, (insn_base + 3)
                 call    emit_byte
                 call    pass_pc_advance_4
+; i27b: record this instruction as the new previous for the next check.
+                call    errata_update_prev
                 jp      insn_p2_elem_loop
 
 
@@ -188,7 +207,18 @@ insn_p1_lp_width:
                 jr      insn_p1_patch_loop
 
 insn_p1_elem_done:
+; i27b: copy base_word to ERRATA_INSN2 and check for 835769 hazard (pass 1).
+; Port of errata.go aarch64ErratumSequence:337-358.  If a hazard is
+; detected PASS_PC advances by 4 (accounting for the NOP byte slot) before
+; the instruction's own advance.
+                ld      hl, insn_base
+                ld      de, ERRATA_INSN2
+                ld      bc, 4
+                ldir
+                call    errata_check_and_handle
                 call    pass_pc_advance_4
+; i27b: record this instruction as the new previous for the next check.
+                call    errata_update_prev
                 jp      insn_p1_elem_loop
 
 ; -----------------------------------------------------------------------
