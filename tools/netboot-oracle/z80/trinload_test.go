@@ -139,7 +139,10 @@ func TestTrinloadPushRunReturn(t *testing.T) {
 		t.Errorf("trinload set HMPR=%d (written=%v), want page 1 from the @/X packets", p, ok)
 	}
 
-	// The '!' discovery reply must appear among the TX frames.
+	// The '!' discovery reply must appear among the TX frames. The exact-equality
+	// match is load-bearing: a BARE 1-byte '!' is trinload's signature — pushed
+	// tools tag their replies ('!'+2-byte tag) and push_and_run refuses stage-1
+	// against anything non-bare (i329), so trinload must never grow its reply.
 	foundReply := false
 	for _, f := range enc.TXFrames() {
 		u, ok := frame.ParseUDP(f)

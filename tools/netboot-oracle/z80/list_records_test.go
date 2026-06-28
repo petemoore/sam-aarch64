@@ -106,10 +106,14 @@ func TestListRecords(t *testing.T) {
 	t.Logf("list_records: halted=%v finalPC=&%04X steps=%d tx=%d",
 		res.Halted, res.PC, res.Steps, len(frames))
 
-	// (1) Discovery answers '!' + the record count (LE16) so the host knows how
-	// many list sectors to query.
-	if got := countPayload(frames, []byte{'!', byte(lrRecords & 0xFF), byte(lrRecords >> 8)}); got < 1 {
-		t.Errorf("no '!'+records(%d LE16) discovery reply; tx payloads=%v", lrRecords, txPayloads(frames))
+	// (1) Discovery answers "!LR" ('!' + the tool tag, i329 — never trinload's
+	// bare '!') + the record count (LE16) so the host knows how many list
+	// sectors to query.
+	if got := countPayload(frames, []byte{'!', 'L', 'R', byte(lrRecords & 0xFF), byte(lrRecords >> 8)}); got < 1 {
+		t.Errorf("no '!LR'+records(%d LE16) discovery reply; tx payloads=%v", lrRecords, txPayloads(frames))
+	}
+	if got := countPayload(frames, []byte{'!'}); got != 0 {
+		t.Errorf("%d BARE '!' discovery replies — that is trinload's signature; list_records must tag its reply '!LR' (i329)", got)
 	}
 
 	// (2) The seeded sectors come back byte-exact: 'R' + listSec (LE16) + 512 bytes.
@@ -200,8 +204,8 @@ func TestListRecordsBigCardClamp(t *testing.T) {
 	if records <= 255*32 {
 		t.Fatalf("test CSD decoded to %d records, need > %d to exercise the clamp", records, 255*32)
 	}
-	if got := countPayload(frames, []byte{'!', byte(records & 0xFF), byte(records >> 8)}); got < 1 {
-		t.Errorf("no '!'+records(%d LE16) discovery reply; tx payloads=%v", records, txPayloads(frames))
+	if got := countPayload(frames, []byte{'!', 'L', 'R', byte(records & 0xFF), byte(records >> 8)}); got < 1 {
+		t.Errorf("no '!LR'+records(%d LE16) discovery reply; tx payloads=%v", records, txPayloads(frames))
 	}
 
 	// Sector 255: the last seam-reachable list sector still serves (unseeded zeros).
@@ -278,8 +282,8 @@ func TestListRecords64GBCard(t *testing.T) {
 	if base := int(leU16(mac.Read(sym("csd_base"), 2))); base != 2050 {
 		t.Fatalf("csd_base = %d, want 2050 (the live-traced B-DOS base for this card)", base)
 	}
-	if got := countPayload(frames, []byte{'!', 0xFF, 0xFF}); got < 1 {
-		t.Errorf("no '!'+65535 discovery reply; tx payloads=%v", txPayloads(frames))
+	if got := countPayload(frames, []byte{'!', 'L', 'R', 0xFF, 0xFF}); got < 1 {
+		t.Errorf("no '!LR'+65535 discovery reply; tx payloads=%v", txPayloads(frames))
 	}
 
 	// THE regression pin: list sector 1 must SERVE (pre-fix it was refused).

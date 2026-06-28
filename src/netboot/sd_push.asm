@@ -35,7 +35,12 @@
 ; except sector 0's mutated metadata.
 ;
 ; PROTOCOL (our own small framing on port 0xEDB0, modelled on trinload's ?/@):
-;   '?'  discovery            -> reply "!"
+;   '?'  discovery            -> reply "!SP" — '!' + this tool's 2-byte tag (i329).
+;                                Trinload alone answers a BARE '!'; every pushed tool
+;                                tags its reply so a host launcher can tell WHICH
+;                                program owns port 0xEDB0 (a stage-1 push retry once
+;                                hit a live sd_push and streamed its '@' blocks into
+;                                a record as junk — the i319a incident).
 ;   '@'  data block           -> [linearSec LE16][<=512 data bytes]; copy the data into
 ;                                the 512-byte buffer, mutate sector 0 if i==0, write it
 ;                                to record-LBA csd_base+1600*(n-1)+i by own CMD24, then
@@ -366,9 +371,15 @@ sp_try_udp:
                 ld      a, (packet+42)
                 cp      "?"                    ; discovery?
                 jr      nz, sp_not_disc
+                ; reply "!SP" — '!' + the tool tag, so a launcher can tell sd_push
+                ; from trinload (which alone answers a bare '!'; i329).
                 ld      a, "!"
                 ld      (packet+42), a
-                ld      bc, 1
+                ld      a, "S"
+                ld      (packet+43), a
+                ld      a, "P"
+                ld      (packet+44), a
+                ld      bc, 3
                 call    ack_len
                 jp      sp_serve_loop
 

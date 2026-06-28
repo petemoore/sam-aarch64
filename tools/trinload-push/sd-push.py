@@ -10,7 +10,7 @@ Two stages, both over UDP port 0xEDB0:
      src/netboot/sd_push.asm and tools/netboot-oracle/z80/sd_push_faithful_test.go.)
 
   2. sd_push then listens on the SAME port with its OWN small framing:
-       '?'                         -> '!'   (discovery)
+       '?'                         -> '!SP' (discovery: '!' + the tool tag, i329)
        'N' + name(<=16 bytes)      -> '.'   (record name for the catalogue entry)
        '@' + linearSec(LE16) + data-> '.'×4 (data block; <=512 data bytes)
        'F'                         -> 'D' + record(LE16)  (finalize: complete
@@ -37,7 +37,7 @@ import struct
 import sys
 import time
 
-from trinpush import PORT, discover, push_and_run
+from trinpush import PORT, discover_tool, push_and_run
 
 SECTOR = 512
 RECORD_SECTORS = 1600  # a Trinity record is exactly 1600 sectors (819200 bytes)
@@ -117,7 +117,7 @@ def push_mgt(sam, mgt_path, sd_push_bin):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.settimeout(2.0)
-    dst = discover(sock, sam, attempts=15)
+    dst, _ = discover_tool(sock, sam, b"SP", attempts=15)
     if dst is None:
         print("FAILED: sd_push did not answer discovery (it may not have come up)")
         return False

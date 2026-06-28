@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Host unit + integration tests for the serve push launcher's config patcher.
+"""Host unit + integration tests for the trinpush launcher library.
 
 The strategy->record-placement EFFECT is emulation-tested in Go
-(netboot_serve_wrq_record_test.go). These tests cover what the Python launcher
-uniquely owns: parsing the pyz80 mapfile, the offset math (addr - org), the magic
-sanity-check, and the patched bytes — including against the REAL built serve binary
-so map-format drift or an offset slip is caught.
+(netboot_serve_wrq_record_test.go). These tests cover what the Python launchers
+uniquely own: the discovery-reply identity rules (i329 — who owns port 0xEDB0,
+and the stage-1 refusal that keeps a push away from a live tool), parsing the
+pyz80 mapfile, the offset math (addr - org), the magic sanity-check, and the
+patched bytes — including against the REAL built serve binary so map-format
+drift or an offset slip is caught.
 
 Run via `make netboot-trinpush-test` (builds netboot_serve_boot.bin first) or
 `python3 -m unittest` from this directory.
@@ -19,6 +21,29 @@ import trinpush as tp
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SERVE_BIN = os.path.join(REPO, "build", "netboot_serve_boot.bin")
 SERVE_MAP = os.path.join(REPO, "build", "netboot_serve_boot.map")
+
+
+class TestDiscoveryIdentity(unittest.TestCase):
+    """i329: only trinload's bare '!' may receive a stage-1 push; tools are named
+    by their 2-byte tag so refusals and stage-2 checks can say WHO is serving."""
+
+    def test_identify(self):
+        self.assertEqual(tp.identify(b"!"), "trinload")
+        self.assertEqual(tp.identify(b"!SP"), "sd_push")
+        self.assertEqual(tp.identify(b"!LR\x90\x01"), "list_records")
+        self.assertIn("unknown tool", tp.identify(b"!XY"))
+        self.assertIn("unknown responder", tp.identify(b"?"))
+        self.assertIn("unknown responder", tp.identify(b"!S"))
+
+    def test_stage1_accepts_only_bare_trinload(self):
+        self.assertIsNone(tp.stage1_refusal(b"!"))
+
+    def test_stage1_refuses_live_tools(self):
+        for reply, who in ((b"!SP", "sd_push"), (b"!LR\x05\x00", "list_records"),
+                           (b"!XY", "unknown tool")):
+            refusal = tp.stage1_refusal(reply)
+            self.assertIsNotNone(refusal, f"{reply!r} must be refused")
+            self.assertIn(who, refusal)
 
 
 class TestParseStrategy(unittest.TestCase):

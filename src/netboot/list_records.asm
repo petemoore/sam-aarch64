@@ -10,8 +10,10 @@
 ; (eeprom.asm), init the ENC28J60 (encdrv.asm), read the inserted card's CSD to
 ; learn its record count (sd_csd.asm csd_set_bd_records), then serve UDP port
 ; 0xEDB0 with a tiny framing (modelled on sd_push's):
-;   '?'  discovery          -> reply "!" + BD_RECORDS (LE16) — the host learns the
-;                              card's record count (0 = CSD unreadable) up front.
+;   '?'  discovery          -> reply "!LR" + BD_RECORDS (LE16) — '!' + this tool's
+;                              2-byte tag (i329; trinload alone answers a BARE '!',
+;                              so a launcher can tell WHICH program owns the port),
+;                              then the card's record count (0 = CSD unreadable).
 ;   'L'  list-sector query  -> [listSec LE16, 1-based]; reply "R" + listSec (LE16)
 ;                              + the RAW 512-byte list sector (32 × 16-byte name
 ;                              entries — the host decodes free/used/write-protect,
@@ -121,7 +123,7 @@ list_records_main:
 
                 ; --- read the inserted card's CSD -> BD_RECORDS ---------------------
                 ; On a read failure BD_RECORDS stays 0: we still SERVE (the host sees
-                ; "!"+0 and reports the unreadable card remotely) — better than a
+                ; "!LR"+0 and reports the unreadable card remotely) — better than a
                 ; local-only failure hold for a remote-query tool.
                 call    csd_set_bd_records
                 ld      a, "3"                 ; DBG: CSD read done (CMD9)
@@ -267,13 +269,18 @@ lr_try_udp:
                 ld      a, (packet+42)
                 cp      "?"                    ; discovery?
                 jr      nz, lr_not_disc
-                ; reply "!" + BD_RECORDS (LE16): the record count rides discovery so
-                ; the host knows how many list sectors to query (0 = CSD unreadable).
+                ; reply "!LR" + BD_RECORDS (LE16): '!' + the tool tag (i329 — trinload
+                ; alone answers a bare '!'), then the record count so the host knows
+                ; how many list sectors to query (0 = CSD unreadable).
                 ld      a, "!"
                 ld      (packet+42), a
+                ld      a, "L"
+                ld      (packet+43), a
+                ld      a, "R"
+                ld      (packet+44), a
                 ld      hl, (BD_RECORDS)
-                ld      (packet+43), hl        ; LE16 after the status byte
-                ld      bc, 3
+                ld      (packet+45), hl        ; LE16 after the tag
+                ld      bc, 5
                 call    ack_len
                 jp      lr_serve_loop
 
@@ -364,7 +371,7 @@ lr_print_str:
 ; Failure paths — print the reason, show a diagnostic border, hold until Esc,
 ; then RET to trinload (never a raw di;halt, which would strand the SAM and
 ; cost a power-cycle). Only the no-network cases land here; an unreadable CSD
-; still serves (the host sees "!"+0).
+; still serves (the host sees "!LR"+0).
 ; ---------------------------------------------------------------------------
 lr_fail_cfg:
                 ld      hl, lr_str_fail_cfg
