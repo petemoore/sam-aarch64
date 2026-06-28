@@ -1321,9 +1321,11 @@
   title: "HTTP-fetch shot config completions: HT_SERVER_PORT knob, IP defines wired into all three recipes, tr_terminate exits (i228) for http_main"
   description: |
     Post-i70a gaps found staging the i70b shot on this capture host: (1) the fetch port was hardcoded 80 (http_main.asm:384-388) and the host cannot bind :80 unprivileged (only tcpdump/arping are sudoers-allowed) — HT_SERVER_PORT define + Makefile var, default 80; (2) the netboot-http-boot and netboot-http-boot-debug recipes never passed the HT_SERVER_IP_* defines (only the smoke recipe did), so the SHOT binary would fetch the placeholder 192.168.0.1 regardless of the make vars — all three recipes now pass IP+port; (3) http_main exited every path with raw di;halt, which strands a trinload-pushed SAM — the i228 rule (netboot-trinity-testing.md prerequisites) mandates tr_terminate (RET to trinload on hardware, di;halt under emulation); all four exits now jp tr_terminate, with test_report.asm gaining a TR_TERMINATE_ONLY gate so the exit is includable without the UDP reporter and its build_udp_frame dependency (default includers byte-identical, md5-verified). Runbook updated accordingly (also corrects the earlier power-cycle-recovery wording, which contradicted i228).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 834, role: completing}
   parent: i70
 
 - id: i71
