@@ -1,80 +1,94 @@
 ; sd_push.asm — the small trinload-pushable cj.mgt -> Trinity-SD-record pusher (i293).
 ;
-; THE WHOLE JOB, in trinload's own idiom: "a little network bit-pushing + a couple
-; of B-DOS hook calls". Pushed to the SAM via trinload (page P, offset &8000), it:
+; THE WHOLE JOB, in trinload's own idiom ("a little network bit-pushing"), but with
+; RAW absolute-LBA SD writes and NO B-DOS dependency. Pushed to the SAM via trinload
+; (page P, offset &8000), it:
 ;
 ;   1. reads the SAM's MAC/IP from the "Trinity Network " EEPROM chunk (eeprom.asm),
 ;      inits the ENC28J60 (encdrv.asm), reads the inserted card's CSD to learn its
-;      record count + data base (sd_csd.asm), and auto-picks the FIRST FREE record
-;      (bdos_seam.asm bdos_find_free_record — reads the on-card record list via the
-;      real CMD17, NETBOOT_REAL_LISTREAD). SAFETY: it only ever writes a free record.
-;   2. HRECORD-selects that free record (bdos_select_record), then listens on UDP
-;      port 0xEDB0 for the .mgt stream and writes each 512-byte sector into the
-;      selected record with the B-DOS HWSAD hook (bdos_write_sector, A=2 = Trinity
-;      SD). NO own-CMD24, NO per-sector SD init-ladder. NO per-block ENC re-arm: an
-;      SD transaction does NOT disturb the ENC's autonomous RX (the &DC byte only
-;      mux-selects which SPI peripheral the Z80 talks to; the ENC's ECON1.RXEN, set
-;      once in drv_init, keeps the RX FIFO filling independently — ENC28J60 datasheet
-;      §7.2 + simonowen/trinload encdrv.asm, where drv_read never re-enables RX and
-;      only &28 ereset disturbs it, at init/exit only). The byte-level drain rule
-;      (poll &DC bit 3 between port switches, which encdrv/sd_csd/bdos already do) is
-;      what keeps the alternating ENC/SD port switches safe.
-;   3. on a finalize message, validates the received sector count and RETs to
-;      trinload (re-pushable), exactly like trinload's own clean exit.
+;      record count + data base (sd_csd.asm csd_base), and auto-picks the FIRST FREE
+;      record (bdos_seam.asm bdos_find_free_record — reads the on-card record list via
+;      the real CMD17, NETBOOT_REAL_LISTREAD). SAFETY: it only ever writes a free
+;      record (one whose 16-byte catalogue name has (name[0] AND 127) == 0).
+;   2. CLAIMS the record's catalogue/list name (bdos_claim_record — a read-modify-write
+;      of the one list sector via raw CMD17+CMD24, NOT a B-DOS hook), so the record
+;      appears in the SAM `RECORD` listing. This also builds the sanitised 16-byte
+;      name in BD_CLAIM_ENTRY, reused for the sector-0 label below.
+;   3. listens on UDP port 0xEDB0 for the .mgt stream and writes each 512-byte sector
+;      to the record BODY by its ABSOLUTE card LBA (csd_base+1600*(n-1)+i) with our own
+;      self-healing CMD24 (sd_csd.asm bd_record_write_hw). On the FIRST body sector
+;      (i==0) it MUTATES the buffer first — disk name@+210/+250 and "BDOS"@+232 — so
+;      the record carries the B-DOS validity stamp permanently inside its first sector
+;      (the SamDisk WriteRecord transformation). NO HRECORD, NO HWSAD, NO B-DOS rst 8
+;      on the write path: every write is a raw CMD24 the ROM's SD driver is not needed
+;      for, so the program does not depend on B-DOS being resident.
+;   4. on a finalize message, validates the received sector count and RETs to trinload
+;      (re-pushable), exactly like trinload's own clean exit.
 ;
-; RECORD-DIRECTED WRITE — HRECORD sets PERSISTENT B-DOS state that crosses the rst 8
-; boundary by construction: the record.no/record.t DVARs and, via record-selection,
-; the self-modifying seek-base immediates at &A185/&A188 in the resident B-DOS page.
-; HWSAD's seek reads those immediates + the per-access linear sector to form the
-; CMD24 argument, so sector i of record n lands at csd_base + 1600*(n-1) + i. One
-; HRECORD-select up front therefore directs every subsequent per-sector HWSAD into
-; the chosen record — no per-write re-select.
+; WHY OWN-LBA, NOT HWSAD/HRECORD (the design reversal, i295): the working host-tool
+; reference is SamDisk's WriteRecord (SamDisk 3.x preserved source, record.cpp /
+; SAMCoupe.cpp), which writes a non-B-DOS .mgt to a record by MUTATING the image
+; (BDOS@232 + label@210/250 in sector 0) and writing the body + catalogue entry by
+; absolute LBA — no B-DOS. Doing the same on the SAM sheds the HRECORD rst-8 crash
+; class (HRECORD needed B-DOS paged a way it was not). The .mgt content is bit-for-bit
+; except sector 0's mutated metadata.
 ;
 ; PROTOCOL (our own small framing on port 0xEDB0, modelled on trinload's ?/@):
 ;   '?'  discovery            -> reply "!"
-;   '@'  data block           -> [linearSec LE16][<=512 data bytes]; copy the data
-;                                into the 512-byte sector buffer and HWSAD-write it
-;                                to (track = linearSec/10, sector = linearSec%10+1)
-;                                of the selected record; then ACK the 4-byte header.
+;   '@'  data block           -> [linearSec LE16][<=512 data bytes]; copy the data into
+;                                the 512-byte buffer, mutate sector 0 if i==0, write it
+;                                to record-LBA csd_base+1600*(n-1)+i by own CMD24, then
+;                                ACK the 4-byte header.
 ;   'F'  finalize             -> reply "D" (done) if the received-count == 1600
-;                                (size-only, the bdos_validate_disk_record contract:
-;                                a record is exactly 1600 sectors = 819200 bytes),
-;                                else "E"; then RET to trinload (clean, re-pushable).
+;                                (size-only: a record is exactly 1600 sectors =
+;                                819200 bytes), else "E"; then RET to trinload (clean,
+;                                re-pushable).
 ;   plus ARP-request and ICMP-echo replies (so the host can reach us), ported from
 ;   trinload's return_eth / return_arp / return_ip + the RFC-1071 checksum.
 ;
-; WHY THIS IS THE RIGHT SHAPE (CLAUDE.md rule 8 — the SAM/Colin code is the Trinity
-; authority): the working, hardware-proven path to write a Trinity SD record is the
-; B-DOS HWSAD hook a real BASIC `SAVE` drives (RECORD n; SAVE) — captured in
-; emulation by TestBASICSaveWritesRecordToSD, which boots Colin's forked ROM + real
-; B-DOS 1.5t and confirms `SAVE` issues a CMD24 that lands in the SD model. This
-; program issues that same hook (RST 8 / DEFB 149 with A=2), so on real hardware the
-; ROM's own SD driver does the CMD24 — no reimplementation. The free-record list
-; read (CMD17) is the only raw-SPI step, and it is read-only (it never writes).
-;
-; VERIFICATION (emulation-first, CLAUDE.md rule 7):
-;   * Faithful (real B-DOS): sd_push_faithful_test.go boots Colin's ROM + real
-;     B-DOS, loads this program, injects the cj.mgt stream over the ENC model, and
-;     asserts the pushed bytes land in the SD model (sdcard.go) at the chosen free
-;     record's absolute LBA range — and ONLY there (data safety). The HWSAD RST 8
-;     dispatches to the REAL ROM handler, which issues the real CMD24 to sdcard.go.
-;     Gated on the proprietary captures (SKIP_PRIVATE_TESTS).
-;   * Logic (CI, no captures): sd_push_test.go runs this same binary under the flat
-;     harness with AttachBDOS intercepting the HWSAD/HRECORD dispatch and AttachSD
-;     serving the free-record CMD17 list read, asserting the receive -> free-pick ->
-;     per-sector HWSAD dispatch -> ACK logic deterministically.
-; Emulation-verified is not hardware-verified (CLAUDE.md §5): the final real-Trinity
-; run is the remaining gate.
+; VERIFICATION (emulation-first, CLAUDE.md rule 7): sd_push_faithful_test.go boots
+; Colin's ROM + real B-DOS, loads this program, injects the cj.mgt stream over the ENC
+; model, and asserts the catalogue entry + the 1600 body sectors + the sector-0
+; mutation land at the correct absolute LBAs in the SD model (sdcard.go) — and ONLY
+; there (data safety). Emulation-verified is not hardware-verified (CLAUDE.md §5): the
+; real-Trinity run + a sector-0 +232 read-back ("BDOS", not "DBSO") is the final gate.
 ;
 ; ONE BUILD, FLAG-FREE (no NETBOOT_HOSTTEST carve-out, i231b): this file contains no
-; `if defined(NETBOOT_HOSTTEST)` directive. Both tests load the SAME .bin; the flat
-; harness intercepts the RST 8 hooks rather than excluding them from the build (the
-; carve-out anti-pattern). NETBOOT_REAL_LISTREAD selects the real CMD17 list read in
-; bdos_seam.asm/sd_csd.asm (the boot images' path).
+; `if defined(NETBOOT_HOSTTEST)` directive. NETBOOT_REAL_LISTREAD selects the real
+; CMD17/CMD24 list read+write in bdos_seam.asm/sd_csd.asm (the boot images' path).
 
                 org     &8000
 
 HMPR:       equ &fb                     ; High Memory Page Register
+
+; ===========================================================================
+; CREATE-RECORD STRATEGY — own-LBA raw writes, image mutated (SamDisk's approach).
+; ===========================================================================
+; The root bug this file fixes (i293/i295): a Trinity record has TWO independent
+; on-card structures and sd_push only ever wrote ONE of them, so the record was not
+; registered and the old HRECORD-select rst 8 crashed (HRECORD needed B-DOS paged a
+; way it was not). This rewrite sheds B-DOS entirely: it writes BOTH structures by
+; RAW absolute-LBA CMD24, exactly as the SamDisk host tool's WriteRecord does
+; (SamDisk 3.x preserved source, record.cpp / SAMCoupe.cpp).
+;
+;   1. The CATALOGUE / record-LIST name — the 16-byte name at card list sectors
+;      1..base-1 (record n's entry: sector 1+(n-1)/32, byte offset ((n-1)&31)<<4).
+;      Registers the record so it appears in the SAM `RECORD` listing. A slot is
+;      FREE iff (name[0] AND 127) == 0. Written by bdos_claim_record (raw CMD24,
+;      SamDisk record.cpp:171-187).
+;   2. The record BODY — 1600 sectors at csd_base+1600*(n-1)+i. The .mgt content,
+;      written bit-for-bit EXCEPT the FIRST sector (i==0), into which we MUTATE the
+;      B-DOS validity metadata: the disk name at +210/+250 and the "BDOS" stamp at
+;      +232 (SamDisk record.cpp:163-165 + SAMCoupe.cpp:101-110). cj.mgt itself
+;      carries NEITHER (cj.mgt[232]=00); B-DOS get.label reads body track-0 +232 for
+;      "BDOS" (bdos15a.src.txt:2834-2848), new.lab writes name@210/"BDOS"@232/name@250
+;      (bdos15a.src.txt:2773-2794). The stamp is INSIDE body sector 0 — NOT a
+;      separate sector — so it is permanent and survives the full stream.
+;
+; ONE path, no toggle, no B-DOS rst-8 hooks on the write path: claim the catalogue
+; name (raw CMD24) -> stream the body by own-LBA CMD24 (bd_record_write_hw), mutating
+; sector 0 in flight. The SAME 16-byte name (BD_CLAIM_ENTRY, built by the claim) feeds
+; both the catalogue entry and the sector-0 label mutation.
 
                 ; Entry: trinload's X packet does `out (HMPR),P; jp &8000`, landing
                 ; here. The host harness runs sd_push_main by symbol; this jp is the
@@ -93,8 +107,8 @@ HMPR:       equ &fb                     ; High Memory Page Register
 ; ===========================================================================
                 include "encdrv.asm"          ; drv_init / drv_read / drv_write / enc_rx_reestablish
                 include "eeprom.asm"           ; find_index / read_chunk + value/chunk/name/part/total
-                include "bdos_seam.asm"        ; bdos_find_free_record / bdos_select_record / bdos_write_record
-                include "sd_csd.asm"           ; csd_set_bd_records (BD_RECORDS + csd_base) / bd_list_read_hw
+                include "bdos_seam.asm"        ; bdos_find_free_record / bdos_claim_record / BD_CLAIM_ENTRY / bdos_id_str
+                include "sd_csd.asm"           ; csd_set_bd_records (BD_RECORDS + csd_base) / bd_list_read_hw / bd_record_write_hw
 
 ; The SAM MAC/IP live in the EEPROM reader's `chunk` buffer (eeprom.asm): the
 ; "Trinity Network " chunk is read into `chunk`, MAC at +0, IP at +6. Defined here,
@@ -282,6 +296,8 @@ cblk_end:
 ; ===========================================================================
 sd_push_main:
                 di
+                ld      a, "1"                 ; DBG: entered main (after di)
+                call    dbg_char
 
                 ; --- locate + read the "Trinity Network " EEPROM chunk -> MAC/IP --
                 ld      a, 1
@@ -306,6 +322,8 @@ sd_push_main:
                 ld      a, (sam_ip+0)
                 or      b
                 jp      z, sp_fail_cfg
+                ld      a, "2"                 ; DBG: EEPROM net-config (MAC/IP) OK
+                call    dbg_char
 
                 ; --- init the ENC28J60 FIRST, before any SD work (i242) -----------
                 ; drv_init's chk_trinity identity probe uses fixed delays, not a BUSY
@@ -317,12 +335,16 @@ sd_push_main:
                 ld      a, b
                 or      c
                 jp      z, sp_fail_init
+                ld      a, "3"                 ; DBG: drv_init (ENC28J60) OK
+                call    dbg_char
 
                 ; --- read the inserted card's CSD -> BD_RECORDS + csd_base ---------
                 ; csd_set_bd_records (sd_csd.asm) runs the bounded init ladder + CMD9,
                 ; decodes the record count, and stores csd_base (the first data
                 ; sector). On a read failure BD_RECORDS stays 0 -> "no free record".
                 call    csd_set_bd_records
+                ld      a, "4"                 ; DBG: CSD read done (CMD9)
+                call    dbg_char
 
                 ; --- auto-pick the first FREE record (read-only list scan) ---------
                 ; bdos_find_free_record reads the on-card record list (the real CMD17)
@@ -334,15 +356,42 @@ sd_push_main:
                 ld      a, h
                 or      l
                 jp      z, sp_fail_nofree      ; no free record: decline, do not write
+                ld      a, "5"                 ; DBG: free record found (CMD17 list scan OK)
+                call    dbg_char
 
-                ; --- HRECORD-select the free record (the FIRST B-DOS hook call) ----
-                ; HRECORD sets B-DOS's PERSISTENT record state (the record.no/record.t
-                ; DVARs and, via record-selection, the self-modifying seek-base immediates
-                ; at &A185/&A188 in the resident B-DOS page). That state crosses the rst 8
-                ; boundary by construction, so every subsequent per-sector HWSAD seeks
-                ; from this record's base — no per-write re-select needed.
-                ld      a, l                   ; A = free record number (low byte; records << 256)
-                call    bdos_select_record
+                ; =====================================================================
+                ; CLAIM the record's CATALOGUE / list-name entry, so the record appears
+                ; in the SAM `RECORD` listing. This is the ONLY create step — the "BDOS"
+                ; validity stamp goes INSIDE the body's first sector (mutated in the serve
+                ; loop, i==0), not a separate sector, and the body is written by own LBA.
+                ; NO HRECORD-select and NO HWSAD: the write path uses no B-DOS rst-8 hook.
+                ;
+                ; bdos_claim_record (bdos_seam.asm:735) register contract (READ + cited):
+                ;   In:  BD_FREE_RECORD   2B  the 1-based record to claim (>=1; set by the
+                ;                             scan above).
+                ;        BD_CLAIM_NAME_PTR 2B  pointer to a NUL-terminated name; sanitised +
+                ;                             space-padded to the 16-byte record-name field
+                ;                             in BD_CLAIM_ENTRY by bdos_build_claim_entry,
+                ;                             which GUARANTEES name[0] is a legal non-zero,
+                ;                             bit7-clear char (so the slot reads NAMED, never
+                ;                             free/write-protected).
+                ;   Out: the record's 16-byte list entry written via read-modify-write of its
+                ;        one containing list sector (raw CMD17 read + CMD24 write under
+                ;        NETBOOT_REAL_LISTREAD, no rst 8); BD_CLAIM_ENTRY now holds the built
+                ;        16-byte name, which the sector-0 label mutation reuses. Clobbers
+                ;        A, BC, DE, HL.
+                ;   SAFETY: it touches ONLY BD_FREE_RECORD's own 16-byte entry; every other
+                ;   entry in the list sector is preserved byte-for-byte, and the slot was
+                ;   proven free, so no other user's record is ever overwritten.
+                ld      hl, sp_record_name     ; the pushed filename (<=16 chars)
+                ld      (BD_CLAIM_NAME_PTR), hl
+                call    bdos_claim_record      ; catalogue 16-byte name; builds BD_CLAIM_ENTRY
+                ld      a, "7"                 ; DBG: catalogue entry written
+                call    dbg_char
+                ld      a, "R"                 ; DBG: show which record we claimed + write to
+                call    dbg_char
+                ld      hl, (BD_FREE_RECORD)
+                call    dbg_hl                 ; the 1-based record number (hex)
 
                 ; NO ENC re-arm after the startup SD work. An SD transaction on the Trinity
                 ; controller does NOT disturb the ENC's autonomous RX: the &DC byte only
@@ -473,8 +522,9 @@ sp_not_data:
 
 ; ---------------------------------------------------------------------------
 ; sp_data_block — a '@' block: payload = [linearSec LE16][<=512 data bytes].
-; Copy the data into the 512-byte sector buffer, write it to the selected record
-; via the HWSAD hook, count it, then ACK the 4-byte header.
+; Copy the data into the 512-byte sector buffer; on linearSec 0 mutate the B-DOS
+; validity metadata into it; write it to record n's body sector by absolute LBA
+; (own CMD24); count it; then ACK the 4-byte header.
 ; ---------------------------------------------------------------------------
 sp_data_block:
                 ; UDP data length (bytes after the 8-byte UDP header) -> BC.
@@ -492,17 +542,12 @@ sp_data_block:
                 ld      b, h
                 ld      c, l                   ; BC = data byte count (0..512)
 
-                ; THE .mgt -> sector MAP (the single, switchable place, D3): the host
-                ; sends a 0-based LINEAR SECTOR; the shipping track-major convention
-                ; is track = linearSec/10, sector = linearSec%10+1, which is exactly
-                ; what bdos_write_record decodes. We do NOT assume the side-major
-                ; (side*800 + 10*track + sector) layout; if a future card needs it,
-                ; the host changes the linearSec it sends here — this Z80 side stays
-                ; the plain track-major decode. linearSec arrives at packet+43 (LE16).
-                ld      hl, (packet+43)        ; linearSec (LE16)
+                ; THE .mgt -> record-LBA MAP: the host sends a 0-based LINEAR SECTOR i
+                ; (0..1599); we write it to record n's body sector i by absolute card LBA
+                ; csd_base+1600*(n-1)+i (bd_record_write_hw does that math). linearSec
+                ; arrives at packet+43 (LE16); latch it for the write + the i==0 test.
+                ld      hl, (packet+43)        ; linearSec i (LE16)
                 ld      (BD_WRITE_START), hl
-                ld      hl, 1
-                ld      (BD_WRITE_COUNT), hl   ; one sector per block
 
                 ; clear the sector buffer, then copy the <=512 data bytes into it (a
                 ; short final block leaves the tail zero — the record's last sector).
@@ -523,28 +568,57 @@ sp_data_block:
                 ldir
 
 sp_data_write:
-                ; write the sector via the HWSAD hook (A=2 inside bdos_write_sector).
-                ; bdos_write_record decodes BD_WRITE_START -> track/sector and calls
-                ; bdos_write_sector once (BD_WRITE_COUNT == 1). On real B-DOS the HWSAD
-                ; RST 8 routes through the ROM's own SD driver, which issues the CMD24 —
-                ; we do NOT reimplement the write (CLAUDE.md rule 8: the SAM/Colin code
-                ; is the Trinity authority).
-                ;
-                ; The write lands in the HRECORD-selected record's LBA range: HRECORD poked
-                ; the seek-base immediates (&A185/&A188) for this record, and HWSAD's seek
-                ; reads those immediates + the per-access linear sector to form the CMD24
-                ; argument — so sector i of record n lands at csd_base + 1600*(n-1) + i.
-                ; (Faithfully verified in sd_push_faithful_test.go against Colin's real
-                ; B-DOS 1.5t: every sector lands in the chosen record's range and nowhere
-                ; else.) Emulation-verified is not hardware-verified (CLAUDE.md §5).
-                call    bdos_write_record
+                ; SECTOR-0 MUTATION (the SamDisk WriteRecord transformation): on the FIRST
+                ; body sector (i==0) only, write the B-DOS validity metadata INTO the image
+                ; before the SD write, so the record carries the stamp permanently in its
+                ; first sector (cj.mgt has none of its own). Offsets cited from B-DOS
+                ; new.lab (bdos15a.src.txt:2773-2794) / SamDisk record.cpp:163-165 +
+                ; SAMCoupe.cpp:101-110:
+                ;   * disk name  = BD_CLAIM_ENTRY[0..9]   -> BD_WRITE_BUF+210 (10 bytes)
+                ;   * "BDOS" stamp = bdos_id_str (4 bytes) -> BD_WRITE_BUF+232 (get.label reads
+                ;                                             body track-0 +232, bdos15a:2839)
+                ;   * name tail  = BD_CLAIM_ENTRY[10..15] -> BD_WRITE_BUF+250 (6 bytes)
+                ; The 16-byte name is the SAME BD_CLAIM_ENTRY the catalogue claim built, so
+                ; the on-card label matches the catalogue title. "BDOS" is written verbatim
+                ; (NOT byte-swapped) to match B-DOS get.label — a hardware sector-0 +232
+                ; read-back should show "BDOS", not "DBSO".
+                ld      hl, (BD_WRITE_START)   ; i
+                ld      a, h
+                or      l
+                jr      nz, sp_data_lba        ; i != 0: no mutation, write as-is
+                ld      hl, BD_CLAIM_ENTRY     ; name[0..9] -> +210
+                ld      de, BD_WRITE_BUF+210
+                ld      bc, 10
+                ldir
+                ld      hl, bdos_id_str        ; "BDOS" -> +232
+                ld      de, BD_WRITE_BUF+232
+                ld      bc, 4
+                ldir
+                ld      hl, BD_CLAIM_ENTRY+10  ; name[10..15] -> +250
+                ld      de, BD_WRITE_BUF+250
+                ld      bc, 6
+                ldir
+
+sp_data_lba:
+                ; write the (possibly mutated) sector to record n's body sector i by its
+                ; ABSOLUTE card LBA, via our own self-healing CMD24 — NO B-DOS rst 8.
+                ; bd_record_write_hw (sd_csd.asm:606) contract: In BD_REC_WRITE_REC = n,
+                ; BD_REC_WRITE_LINEAR = i, HL = 512-byte source -> CMD24 to
+                ; csd_base+1600*(n-1)+i (LBA math sd_csd.asm:578; data-safe band :588).
+                ; Clobbers AF,BC,DE,HL; card deselected + EI on every path.
+                ld      hl, (BD_FREE_RECORD)   ; n = the claimed record
+                ld      (BD_REC_WRITE_REC), hl
+                ld      hl, (BD_WRITE_START)   ; i = this block's linearSec
+                ld      (BD_REC_WRITE_LINEAR), hl
+                ld      hl, BD_WRITE_BUF       ; 512-byte source sector
+                call    bd_record_write_hw     ; own CMD24, absolute LBA
 
                 ; count the received sector (finalize checks the total == 1600).
                 ld      hl, (sp_recv_count)
                 inc     hl
                 ld      (sp_recv_count), hl
 
-                ; NO ENC re-arm after the HWSAD write. The write is an SD transaction, but
+                ; NO ENC re-arm after the CMD24 write. The write is an SD transaction, but
                 ; an SD transaction does NOT disturb the ENC's autonomous RX (only the &DC
                 ; mux-select changes, which the ENC's internal RXEN cannot see; the RX FIFO
                 ; keeps filling — ENC28J60 datasheet §7.2 + encdrv.asm: drv_read never
@@ -578,8 +652,75 @@ sp_fin_reply:
                 ld      (packet+42), a
                 ld      bc, 1
                 call    ack_len
+                ld      a, "9"                 ; DBG: write-complete (record body finalised)
+                call    dbg_char
                 ; clean exit: RET to trinload's start (it pushed start as our return).
                 ret
+
+; ---------------------------------------------------------------------------
+; dbg_char — print the character in A to the SAM screen via the ROM print-a-char
+; restart (RST &10, the trinload idiom). Preserves EVERY register so a marker can
+; sit between live-register startup stages without disturbing them. i295 debug:
+; localise where sd_push dies on hardware (which marker is the last one shown).
+; ---------------------------------------------------------------------------
+dbg_char:
+                push    af
+                push    bc
+                push    de
+                push    hl
+                push    ix
+                push    iy
+                rst     &10                    ; ROM prints A to the current channel
+                pop     iy
+                pop     ix
+                pop     hl
+                pop     de
+                pop     bc
+                pop     af
+                ret
+
+; dbg_hex — print A as two hex digits; dbg_hl — print HL as four. i295 debug.
+dbg_hex:
+                push    af
+                push    bc
+                ld      c, a
+                rrca
+                rrca
+                rrca
+                rrca
+                call    dbg_nib                ; high nibble
+                ld      a, c
+                call    dbg_nib                ; low nibble
+                pop     bc
+                pop     af
+                ret
+dbg_nib:
+                and     15
+                cp      10
+                jr      c, dbg_nib_dec
+                add     a, "A" - 10
+                jr      dbg_nib_emit
+dbg_nib_dec:
+                add     a, "0"
+dbg_nib_emit:
+                call    dbg_char
+                ret
+dbg_hl:
+                push    af
+                ld      a, h
+                call    dbg_hex
+                ld      a, l
+                call    dbg_hex
+                pop     af
+                ret
+; dbg_hold_esc — hold the CPU (screen frozen) until Esc, then RET to trinload.
+; Keeps trinload from resuming + scrolling away the debug output. i295 debug.
+dbg_hold_esc:
+                ld      a, &f7
+                in      a, (&f9)
+                bit     5, a                   ; Esc?  (same poll as the serve loop)
+                jr      nz, dbg_hold_esc       ; not pressed -> keep holding
+                ret                            ; Esc -> RET to trinload (recoverable)
 
 ; ---------------------------------------------------------------------------
 ; Failure paths — show a diagnostic border, hold until Esc, then RET to trinload
@@ -606,6 +747,20 @@ sp_fail_wait:
 ; Data.
 ; ===========================================================================
 sp_chunk_name:  defm "Trinity Network "       ; the EEPROM chunk holding MAC+IP
+
+; The record name written into BOTH the catalogue entry (bdos_claim_record) and the
+; sector-0 label mutation (the serve loop, i==0) — both read the SAME 16-byte name
+; from BD_CLAIM_ENTRY that the claim builds from this string.
+; This is the pushed file's name. HARDCODED to "cj.mgt" for now; TODO: plumb the real
+; filename from the host (e.g. send it in the discovery/first '@' message) so each
+; push is catalogued under its own name. NUL-terminated: bdos_build_claim_entry strips
+; a "trinity-sam-disks/" prefix (no match here), takes the final path segment, drops
+; the dotted suffix (so "cj.mgt" -> "cj"), sanitises to the legal 0x20..0x7E charset,
+; and space-pads to the 16-byte record-name field. byte0 = 'c' (0x63): non-zero, bit7
+; clear -> the slot reads NAMED (never accidentally free) and is not write-protected,
+; so bdos_find_free_record skips this record on the next push.
+sp_record_name: defm "cj.mgt"
+                defb 0                          ; NUL terminator
 sp_recv_count:  defw 0                         ; sectors received this session
 
 packet:         defs 1518                      ; RX/TX frame buffer (drv_read fills it)

@@ -950,7 +950,7 @@ netboot-csd-probe: $(BUILD)/csd_probe.bin $(BUILD)/csd_probe.map
 # B-DOS and asserts the pushed bytes land at the free record's LBA in the SD model.
 $(BUILD)/sd_push.bin $(BUILD)/sd_push.map: src/netboot/sd_push.asm src/netboot/encdrv.asm src/netboot/eeprom.asm src/netboot/bdos_seam.asm src/netboot/sd_csd.asm
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_REAL_LISTREAD=1 --obj=$(BUILD)/sd_push.bin \
+	pyz80 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_WANT_CLAIM=1 --obj=$(BUILD)/sd_push.bin \
 	    --mapfile=$(BUILD)/sd_push.map \
 	    src/netboot/sd_push.asm
 	@tools/netboot-boot-fit-check.sh $(BUILD)/sd_push.bin 16384 sd_push.bin
