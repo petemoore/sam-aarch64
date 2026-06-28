@@ -5177,7 +5177,7 @@
   title: Emulate the ENC28J60 ereset + lighter re-arm options faithfully per the datasheet (so re-arm-after-SD recovery is testable in emulation)
   description: |
     RESOLVED by the authority resolution + #771: the question what ENC re-arm is needed after an SD op is answered = NONE (only ereset disturbs RX; a mux-select cannot; per encdrv.asm + the ENC28J60 datasheet). The over-aggressive rxDisarmed-on-SD-select model was the bug, fixed in enc28j60.go by #771. Re-arm-after-SD is now faithfully modelled (= none), which was this item goal.
-  status: DONE
+  status: OPEN
   kind: leaf
   owner: agent
   prs:
