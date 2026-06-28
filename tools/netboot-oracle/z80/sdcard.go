@@ -176,6 +176,15 @@ type SDCard struct {
 	// without the seeded directory/list sectors confounding the count.
 	writtenSectors []uint32
 
+	// cmd24AfterInit counts committed CMD24 writes whose transaction was preceded by
+	// a full &38 init-ladder wake (woken) — i.e. writes that paid for a card init.
+	// The init-once optimisation (i301) means only the FIRST write of a push run
+	// inits; every subsequent write re-selects (&31) with no &38, so this stays 1
+	// for a whole record push. Per-sector init (the regression) would make it equal
+	// the write count. woken is reset on the &04 deselect (sdReset) that ends each
+	// write transaction, so this counts init-bearing writes, not total writes.
+	cmd24AfterInit int
+
 	// phase is the current sector data-phase state (phaseIdle outside a CMD17/24
 	// data phase). writeBuf accumulates the CMD24 payload; writeIdx counts captured
 	// data bytes; crcLeft counts the trailing CRC bytes still to swallow; busyLeft
@@ -287,6 +296,12 @@ func (s *SDCard) WrittenSectors() []uint32 {
 	copy(out, s.writtenSectors)
 	return out
 }
+
+// CMD24WritesAfterInit returns how many committed CMD24 writes were preceded by a
+// full &38 init-ladder wake in their own transaction. The init-once path (i301)
+// keeps this at 1 for a whole record push (only the first write inits); a
+// per-sector-init regression drives it up to the write count.
+func (s *SDCard) CMD24WritesAfterInit() int { return s.cmd24AfterInit }
 
 // WrittenSectorsOutsideRecord returns the addresses of CMD24 writes that landed
 // OUTSIDE record's own LBA range [csdBase+1600*(record-1), csdBase+1600*record) —
@@ -543,6 +558,9 @@ func (s *SDCard) outDataPhase(v uint8) {
 			copy(sec, s.writeBuf)
 			s.store[s.addr] = sec
 			s.writtenSectors = append(s.writtenSectors, s.addr)
+			if s.woken {
+				s.cmd24AfterInit++ // this write paid for a full &38 init this transaction (i301)
+			}
 			s.crcLeft = 2 // 2 trailing dummy CRC bytes (&A881/&A88B dec a; out)
 			s.phase = phaseWriteCRC
 		}

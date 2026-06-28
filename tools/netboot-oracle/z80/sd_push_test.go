@@ -190,6 +190,14 @@ func TestSDPushLogic(t *testing.T) {
 		t.Fatalf("CMD24 writes landed at %v, want %v (claim @ list sector 1, then body 152/153/154)", writes, wantWrites)
 	}
 
+	// (3b) INIT-ONCE (i301): of those four writes, exactly ONE ran the full &38 init
+	// ladder — the first (the claim). The card is inited once per push, then every
+	// subsequent write re-selects (&31) only, mirroring B-DOS 1.5t hd.svb-t. A
+	// regression back to per-sector init would make all four pay for an init.
+	if n := sd.CMD24WritesAfterInit(); n != 1 {
+		t.Fatalf("init-once broken: %d of the CMD24 writes ran the full init ladder, want exactly 1 (the card must init once per push, not per sector)", n)
+	}
+
 	// (4) Body sectors byte-exact, EXCEPT sector 0's mutated B-DOS metadata.
 	// Linear 1 and 2 must be verbatim copies of the pushed payload.
 	for _, linear := range []int{1, 2} {

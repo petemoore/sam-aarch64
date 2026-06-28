@@ -16,7 +16,8 @@
 ;      name in BD_CLAIM_ENTRY, reused for the sector-0 label below.
 ;   3. listens on UDP port 0xEDB0 for the .mgt stream and writes each 512-byte sector
 ;      to the record BODY by its ABSOLUTE card LBA (csd_base+1600*(n-1)+i) with our own
-;      self-healing CMD24 (sd_csd.asm bd_record_write_hw). On the FIRST body sector
+;      CMD24 (sd_csd.asm bd_record_write_hw; the card is inited once then streamed,
+;      like B-DOS 1.5t hd.svb-t). On the FIRST body sector
 ;      (i==0) it MUTATES the buffer first — disk name@+210/+250 and "BDOS"@+232 — so
 ;      the record carries the B-DOS validity stamp permanently inside its first sector
 ;      (the SamDisk WriteRecord transformation). NO HRECORD, NO HWSAD, NO B-DOS rst 8
@@ -601,7 +602,7 @@ sp_data_write:
 
 sp_data_lba:
                 ; write the (possibly mutated) sector to record n's body sector i by its
-                ; ABSOLUTE card LBA, via our own self-healing CMD24 — NO B-DOS rst 8.
+                ; ABSOLUTE card LBA, via our own CMD24 (init-once) — NO B-DOS rst 8.
                 ; bd_record_write_hw (sd_csd.asm:606) contract: In BD_REC_WRITE_REC = n,
                 ; BD_REC_WRITE_LINEAR = i, HL = 512-byte source -> CMD24 to
                 ; csd_base+1600*(n-1)+i (LBA math sd_csd.asm:578; data-safe band :588).
