@@ -1060,8 +1060,8 @@
 - id: i55
   title: Multi-section / linker-script honouring in refenc
   description: |
-    Explicitly punted in favour of the text2bin -flatten approach. Multi-section / linker-script handling in refenc would only be needed if a non-spectrum4-shaped project surfaces. Deferred; from ROADMAP deferred checklist (retired in i52 PR 3).
-  status: OPEN
+    Explicitly punted in favour of the text2bin -flatten approach. Multi-section / linker-script handling in refenc would only be needed if a non-spectrum4-shaped project surfaces. WONTFIX (i344 deferral-encoding sweep, 2026-07-02): the -flatten approach superseded this, and q42 (Pete 2026-06-23, via the i210 linker-script-layout assessment) chose the cheap -layout/SpectrumFourLayout extraction (i56, PR 615) over any linker-script parser. Re-open if a non-spectrum4-shaped project actually surfaces.
+  status: WONTFIX
   kind: leaf
   owner: agent
 
@@ -2407,7 +2407,7 @@
     Preliminary 2026-06-18 scan: metaswarm, ccswarm, ruflo, claude-plan-orchestrator, autonomous-dev, closedloop-ai, barkain, Composio AO + Claude Code Agent Teams; plus awesome-agent-orchestrators, awesome-cli-coding-agents. Most emphasise PARALLELISM. i117's model differs: single serial orchestrator + deterministic non-LLM monitor (i97) + prime-directive culture + blameless retro + iN/qN registry backbone. Deliverable: feature-by-feature comparison to confirm differentiation and whether gap justifies building i117. Research-first; cite each tool. Pete's call; do not auto-pick-up.
   status: OPEN
   kind: leaf
-  owner: agent
+  owner: pete
   parent: i117
   refs: [i117]
 
@@ -2579,7 +2579,7 @@
   title: "SAM TFTP server — WRQ (write / accept-in) support: push disk images to the SAM, auto-slotted"
   description: |
     PRIMARY netboot use case: boot SAM, 'tftp put' a disk image from the Mac, SAM writes it to a free Trinity record, boot+test. Combines with the i83/i95 serve-out server into one program (RRQ+WRQ). q30 resolved (2026-06-20): auto-pick is a DISK CONFIG — at launch the program reads it; if absent it PROMPTS (auto-pick a free record? y/n); test/shipped disks ship that config allowing any free record, so unattended push works with a pre-configured disk + never overwrites a named record. Reuses i82 receive loop + i119 write-out; adds WRQ parse + OACK/ACK-0 + free-slot alloc (i114).
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   refs: [src/netboot/, tools/netboot-oracle/tftp/, i82, i83, i95, i114, i119, i70]
@@ -2688,8 +2688,8 @@
 - id: i121j
   title: SAM-side interactive strategy prompt when config is undefined (deferred)
   description: |
-    DEFERRED (Pete 2026-06-21: more complex to model, not needed now). Complementary to the host-launcher config: if the in-memory config block's strategy is undefined (the host launcher / disk config left it unset, e.g. user chose 'ask on the SAM'), the program prompts the user on the SAM keyboard for the placement strategy at launch. For now the host launcher always sets a concrete strategy (default highest-free), so this path is unused. Requires modelling a SAM keyboard prompt in emulation.
-  status: OPEN
+    DEFERRED (Pete 2026-06-21: more complex to model, not needed now). Complementary to the host-launcher config: if the in-memory config block's strategy is undefined (the host launcher / disk config left it unset, e.g. user chose 'ask on the SAM'), the program prompts the user on the SAM keyboard for the placement strategy at launch. For now the host launcher always sets a concrete strategy (default highest-free), so this path is unused. Requires modelling a SAM keyboard prompt in emulation. WONTFIX (i344 deferral-encoding sweep, 2026-07-02): no concrete un-defer trigger exists to hang an edge on (the ask-on-the-SAM config shape is hypothetical); re-open if a launcher/disk-config path that leaves the strategy unset is ever built.
+  status: WONTFIX
   kind: leaf
   owner: agent
   parent: i121
@@ -5167,7 +5167,7 @@
   title: Emulate the ENC28J60 ereset + lighter re-arm options faithfully per the datasheet (so re-arm-after-SD recovery is testable in emulation)
   description: |
     RESOLVED by the authority resolution + #771: the question what ENC re-arm is needed after an SD op is answered = NONE (only ereset disturbs RX; a mux-select cannot; per encdrv.asm + the ENC28J60 datasheet). The over-aggressive rxDisarmed-on-SD-select model was the bug, fixed in enc28j60.go by #771. Re-arm-after-SD is now faithfully modelled (= none), which was this item goal.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
   prs:
@@ -5762,6 +5762,6 @@
   title: "Deferred-by-decision items need an honest registry state: trigger edge or WONTFIX, never plain OPEN in the queue (policy + one-off sweep)"
   description: |
     i324 retro-mining P6 (4+ June-era sessions, residual today): items deferred by an explicit decision but left plain OPEN keep surfacing as ready tips, and each time the agent re-derives or re-litigates the deferral from prose - the exact deliberation the checkpoint protocol bans. Incidents: i55 (declined by q42) + i66 (deferred by q9) clogged all four checkpoints of the 06-24 session (i66 since WONTFIXed; i55 is STILL OPEN and pullable today); i20/i21 self-deferred shapes cost first-principles reasoning at the 06-21-i22 session; editor-era-parked items i77/i90/i101 walked the tip in succession on 06-24 until dep-i3 edges were added. The owner:pete filter (i169a) and missing-edge protocol cover Pete-gated and dependency-blocked tips, but NOT decision-deferred ones. POLICY (add to CLAUDE.md registry section): when a decision defers an item, encode it - either depends_on the item/event that would un-defer it (preferred when a concrete trigger exists), or WONTFIX with the decision cited (git history preserves it; re-open is cheap). 'Deferred' prose in a description with no edge is the bug shape, same class as a missing depends_on. SWEEP: walk the open registry for items whose descriptions say deferred/parked/declined/only-matters-once and give each an edge or WONTFIX - starting with i55 (q42 declined it; apply that decision).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
