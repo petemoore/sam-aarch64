@@ -3264,11 +3264,13 @@
 - id: i152
   title: Verify the A=drive-register contract for HRSAD/HWSAD raw-sector hooks on real Trinity
   description: |
-    bdos_read_sector (HRSAD, i119) and bdos_write_sector (HWSAD, i114c) both leave A = the sector value at the rst 8, but the B-DOS hook code reads A as the drive number (bdos15a.src.txt rwsad/xsad: LD A,(hk.a)). After HRECORD-select a Trinity record presents as drive 2. The koron-go harness models the selected record via HRECORD and ignores A, so it cannot catch a wrong-drive bug. Confirm on real Trinity whether these hooks need A explicitly set (e.g. A=2 or A=record) or whether HRECORD makes the record the active context regardless of A; fix both routines symmetrically if needed.
-  status: OPEN
+    RESOLVED (#748 i280b-b2t + #749 i283): the A=drive-select contract for the raw-sector hooks is hardware-confirmed - device-select reads hk.a = the callers main A, so present A=2 before the rst 8 for HWSAD/HRSAD (HRECORD stays A=0 + record# in HL); recorded as trinity-sd-z80-interface.md section 8a settled truth 5. Original question: bdos_read_sector (HRSAD, i119) and bdos_write_sector (HWSAD, i114c) both leave A = the sector value at the rst 8 while the B-DOS hook reads A as the drive number - confirm on real Trinity whether A must be set explicitly; now answered (A=2).
+  status: DONE
   depends_on: [i272, i295]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 749, role: completing}
   refs: [src/netboot/bdos_seam.asm, reference/bdos/bdos15a.src.txt, i119, i114c]
 
 - id: i153
@@ -3710,9 +3712,9 @@
 - id: i194
   title: "Real-hardware disk push: stream all build/*.mgt to the SAM via the trinload serve vessel, into free Trinity records"
   description: |
-    BLOCKED pending q65 (reshape decision) - original framing is STALE. It names the superseded trinload serve-vessel + tftp push path, but the hardware-proven push path is now sd-push.py + src/netboot/sd_push.asm with the i315 side-major reorder (the serve vessel lacks the reorder, so a .mgt pushed that way lands track-major and will not boot). Its read-a-stored-record-back (servable-raw) + byte-compare verification depends on a record-body readback tool that was never built (no bd_record_read; the serve RRQ path serves in-RAM templates, not stored records; the un-reorder map lives only inside sd_push_test.go). Substantially overlaps i319 (push ALL .mgt via the store+boot toolkit, gated on i315+i316). See q65 for WONTFIX-as-redundant vs re-scope-to-readback-tool.
-  status: OPEN
-  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198, i266, i280b-b2b, i280b-b2c, i280b-b2d, i280b-b2e, i289, i293, i295, q65]
+    WONTFIX - superseded by i319 (Pete, 2026-07-01). i194 named the superseded trinload serve-vessel + tftp push path; the hardware-proven path is sd_push (sd-push.py + src/netboot/sd_push.asm with the i315 side-major reorder). i319 (push ALL .mgt via the store+boot toolkit, gated on i315+i316) is the correctly-framed version of the same push-all-and-verify goal. Preserved note: the one piece i319 does not cover is a byte-EXACT stored-record readback + un-reorder compare - no bd_record_read exists; sd_push.asm:651 only checks the +232 stamp; the un-reorder map lives only in sd_push_test.go. If autonomous byte-exact store-verification is later wanted, open a fresh item for it then.
+  status: WONTFIX
+  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198, i266, i280b-b2b, i280b-b2c, i280b-b2d, i280b-b2e, i289, i293, i295]
   kind: leaf
   owner: agent
 
@@ -5134,7 +5136,7 @@
 - id: i284
   title: Push the CJ's Elephant playable disk (cjs-sam-remake boot_m2b.mgt) to the SAM over Trinity TFTP — the real-world end-to-end demo of the now-working SD write
   description: |
-    Pete's real-world validation/demo: push an actual playable game disk (cj.mgt = ~/git/cjs-sam-remake boot_m2b.mgt, the CJ's Elephant Antics SAM remake, a SEPARATE Pete project, 819200 B) to a free Trinity SD record over the serve WRQ path, then BOOT it on the SAM (write-then-boot = full autonomy). Validation is SIZE-ONLY (i285), so cj.mgt is accepted (no BDOS stamp needed; +232 is not a boot/select requirement — settled, memory feedback_trinity_sd_write_settled_truths). The A=drive-select write fix (i280, A=2 for HWSAD/HRSAD) is in and hardware-confirmed. The decisive remaining work is i293 (the B-DOS-direct cj.mgt push: kill the per-block ENC ereset, no own-CMD24 reimplementation) — this item depends on i293. GENUINELY OPEN (do NOT re-frame as the killed 'flaky hooks' claim): the in-context HRECORD rst-8 crash root cause (D1 — HRECORD is clean in isolation + under serve LMPR &1F paging; the crash is at HRECORD's rst 8, NOT a first SD read), and the .mgt->record sector ordering (D3, track-major vs side-major). Once i293 lands the write, BOOT via SAMBOOT autoboot (i264b) or a pushed boot-record.
+    Real-world validation/demo (Pete): push the CJ's Elephant Antics playable disk (cj.mgt = ~/git/cjs-sam-remake boot_m2b.mgt, a SEPARATE Pete project, 819200 B) to a free Trinity SD record via the hardware-proven sd_push path (sd-push.py + src/netboot/sd_push.asm, incl. the i315 side-major reorder), then BOOT it on the SAM. Validation is SIZE-ONLY (i285): cj.mgt is accepted (no BDOS stamp; +232 is not a boot/select requirement - memory feedback_trinity_sd_write_settled_truths). Deps i289/i293/i295 all DONE. NOTE: a hardware-confirmed sd_push run already wrote record cjfixed and BOOTED CJ's Elephant on the real SAM (i295/i302, #784) - the mechanism is proven; this item is now the clean repeatable one-command push+boot demo/wrapper (drive boot via SAMBOOT autoboot i264b or a pushed boot-record). The .mgt-to-record ordering (D3, track-major vs side-major) is SOLVED (i294/i315) - do NOT re-list as open. Possibly-remaining: D1 (in-context HRECORD rst-8 crash) only if it recurs on the sd_push path.
   status: OPEN
   depends_on: [i289, i293, i295]
   kind: leaf
