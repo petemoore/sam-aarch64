@@ -5592,6 +5592,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 807, role: completing}
 
 - id: i331
   title: boot_record from REAL trinload idle returns to caller without booting — faithful bootloader-first-boot rig needed (i328 follow-on)
