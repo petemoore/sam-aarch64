@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Listen for the SAM netboot debug markers (i271) on UDP :9001 and decode them.
+
+Each instrumented step in the bootable serve (built with -D NETBOOT_DEBUG) broadcasts
+a 6-byte UDP packet to 255.255.255.255:9001:
+
+    off 0  magic    4   'S','D','B','G'
+    off 4  version  1   = 1
+    off 5  marker   1   = a DBG_* step code (src/netboot/dbg_marker.asm)
+
+This binds 0.0.0.0:9001 and prints each marker as it arrives, decoding the code to its
+name so a hang/timeout localizes to the LAST marker seen. TX-only on the SAM side, so it
+survives an SD transaction disturbing the ENC RX path. Ctrl-C (or --seconds) to stop.
+
+Usage:
+    listen-markers.py [--seconds N] [--port 9001]
+
+The DBG_* table is kept in lockstep with src/netboot/dbg_marker.asm — update both
+together. (Single source would mean parsing the .asm; this small mirror is clearer.)
+"""
+import argparse
+import socket
+import sys
+import time
+
+# Mirror of the DBG_* equ block in src/netboot/dbg_marker.asm.
+MARKERS = {
+    0x10: "WRQ_ENTRY",            # handle_wrq entered
+    0x11: "WRQ_CLAIMED",          # free record claimed + ENC re-armed
+    0x12: "WRQ_NOFREE",           # no free record -> ERROR(3)
+    0x13: "WRQ_HANDSHAKE",        # about to send the OACK / ACK-0 handshake
+    0x14: "CLAIM_FIND_PRE",       # about to bdos_find_record_for_strategy (CMD17 list reads)
+    0x15: "CLAIM_SELECT_PRE",     # free record found; about to bdos_select_record (HRECORD hook)
+    0x16: "CLAIM_SELECT_POST",    # HRECORD select returned (the claim succeeded)
+    0x17: "REARM_TIMEOUT",        # serve_rearm_enc's ENC busy-poll hit its bound (the i280b contention)
+    0x20: "DATA_BLOCK",           # a DATA block accepted, about to sink/stage it
+    0x21: "FLUSH_PRE",            # rrs_flush_sector entered: a full sector staged, about to write it
+    0x22: "HWSAD_PRE",            # bdos_write_sector entered: about to RST 8 / DEFB 149 (B-DOS HWSAD)
+    0x23: "HWSAD_POST",           # the HWSAD RST 8 returned (the per-sector SD write completed)
+    0x30: "FINALIZE",             # final block: entering wd_finalize (flush+validate+claim)
+    0x31: "FINALIZE_VALID",       # record validated + claimed -> final ACK
+    0x32: "FINALIZE_BAD",         # invalid image -> ERROR(3)
+    0x40: "DONE_CTRL",            # "tftp.done" control received -> return to trinload
+}
+
+
+def main(argv):
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--seconds", type=float, default=0.0,
+                    help="stop after N seconds of silence (0 = run until Ctrl-C)")
+    ap.add_argument("--port", type=int, default=9001)
+    args = ap.parse_args(argv)
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    except OSError:
+        pass
+    sock.bind(("0.0.0.0", args.port))
+    print(f"listening for SAM debug markers on udp/:{args.port} "
+          f"({'until Ctrl-C' if args.seconds == 0 else f'{args.seconds}s idle timeout'})",
+          flush=True)
+
+    seen = []
+    while True:
+        if args.seconds > 0:
+            sock.settimeout(args.seconds)
+        try:
+            data, addr = sock.recvfrom(65535)
+        except socket.timeout:
+            print(f"-- {args.seconds:.0f}s idle, stopping --", flush=True)
+            break
+        except KeyboardInterrupt:
+            print("\n-- interrupted --", flush=True)
+            break
+        ts = time.strftime("%H:%M:%S")
+        if len(data) >= 6 and data[0:4] == b"SDBG":
+            code = data[5]
+            name = MARKERS.get(code, f"UNKNOWN(&{code:02X})")
+            print(f"{ts}  &{code:02X}  {name:18s} from {addr[0]}", flush=True)
+            seen.append(name)
+        else:
+            print(f"{ts}  non-marker {len(data)}B from {addr[0]}: {data[:16].hex()}", flush=True)
+
+    if seen:
+        print("sequence: " + " -> ".join(seen), flush=True)
+        if "REARM_TIMEOUT" in seen:
+            print("RESULT: REARM_TIMEOUT seen — the SD->ENC re-arm still wedged (i280b-b2d NOT fixed).", flush=True)
+        elif "WRQ_CLAIMED" in seen:
+            print("RESULT: reached WRQ_CLAIMED — the re-arm proceeded past the claim.", flush=True)
+    else:
+        print("RESULT: no markers received.", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
