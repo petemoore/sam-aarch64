@@ -5564,7 +5564,7 @@
   title: Measure + assess sd_push network throughput on hardware (the ~10-13 KB/s question)
   description: |
     Pete measured the last 800KB image push at well over a minute (~10-13 KB/s). VERIFIED in source that neither recalled culprit lingers: i301 dropped the per-sector SD init, and the ENC ereset is init/exit-only NOT per-block. MEASURED (i319a campaign, 2026-07-02, this Pi -> real SAM over the streamed stage-2 driver): 1600 sectors / 819200 B in 112.0s = 7.1 KB/s, window=4. Attribution INCOMPLETE: pure ENC bit-bang RX accounts for ~32ms/sector (~16 KB/s ceiling) but observed is ~70ms/sector -- roughly half the budget is elsewhere (candidates: the CMD24 write cost per sector, ack turnaround, HOST-side python window pacing). REMAINING TASK: attribute the non-RX ~38ms/sector (e.g. compare a host-side tight-loop pusher, or time the SAM-side write path via markers) and conclude bit-bang-bound vs residual.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
