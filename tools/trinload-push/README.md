@@ -62,6 +62,27 @@ launcher reads `SERVE_CONFIG`'s offset from the mapfile, sanity-checks its `0x5A
 magic, and patches the strategy (and explicit record, LE) before pushing.
 `make netboot-trinpush-test` host-tests that patch logic against the real binary.
 
+## `sd-push.py` — push a `.mgt` into a free SD record via `sd_push` (i293)
+
+The small `?`/`@`/`F` pusher for `src/netboot/sd_push.asm`: stage 1 uses TrinLoad to
+load `build/sd_push.bin` to **page 1** and run it; stage 2 streams the `.mgt` as one
+`@` block per 512-byte sector (`linearSec` ascending, windowed at 4 acks) and `F`-
+finalizes. `sd_push` auto-picks the first **free** record and writes only that record.
+
+```sh
+make netboot-sd-push
+tools/trinload-push/sd-push.py 192.168.2.75 mydisk.mgt build/sd_push.bin
+```
+
+Args: `<sam-ip> <mgt-path> [sd_push.bin=build/sd_push.bin]`.
+
+**DATA-SAFETY CAVEAT (i293):** the record-DIRECTED HWSAD write is **not yet hardware-
+confirmed** — in emulation the HRECORD-via-rst8 select does not redirect B-DOS's write
+base, so the write lands at B-DOS's default record base, **not** the picked free record
+(open i280b/i270; see the i293 PR + `tools/netboot-oracle/z80/sd_push_faithful_test.go`).
+Do **not** run this against a card with data you care about until that is fixed and
+confirmed on real hardware.
+
 TrinLoad must already be running on the SAM (it listens on `0xEDB0`). The full
 hardware procedure lives in
 [`docs/notes/netboot-trinity-testing.md`](../../docs/notes/netboot-trinity-testing.md).
