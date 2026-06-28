@@ -111,6 +111,12 @@ def list_records(sam, list_bin, page):
         return False
 
     nlist = (records + ENTRIES_PER_SECTOR - 1) // ENTRIES_PER_SECTOR
+    if nlist > 255:
+        # The list-read seam addresses sectors with one byte, so the program serves
+        # list sectors 1..255 (records 1..8160) and refuses higher indices. Match it.
+        print(f"  WARN: {records} records, but the list-read seam reaches only the "
+              f"first {255 * ENTRIES_PER_SECTOR}; listing those")
+        nlist, records = 255, 255 * ENTRIES_PER_SECTOR
     print(f"stage 2: card has {records} records ({nlist} list sectors); reading the list")
 
     used, free, first_free = [], 0, None

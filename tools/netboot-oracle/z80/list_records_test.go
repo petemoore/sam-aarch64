@@ -157,3 +157,65 @@ func TestListRecords(t *testing.T) {
 		}
 	}
 }
+
+// TestListRecordsBigCardClamp — the 1-byte seam guard: BD_LIST_SECTOR (the list-read
+// seam input) is one byte, so list_records clamps its serveable range to list sectors
+// 1..255 (records 1..8160). On a card whose record count exceeds that (a ~6.7 GB CSD
+// here), a query for sector 256 must be REFUSED ('E') — NOT silently truncated by the
+// 8-bit store into a read of sector 0 (the boot sector) mislabelled as sector 256,
+// which is what the unclamped code did. Sector 255 (in range) still serves.
+func TestListRecordsBigCardClamp(t *testing.T) {
+	if _, err := os.Stat(listRecordsBin); err != nil {
+		t.Fatalf("list_records binary not built (%s); run `make netboot-list-records`", listRecordsBin)
+	}
+	mac, err := z80h.Load(listRecordsBin, listRecordsMap)
+	if err != nil {
+		t.Fatalf("load list_records: %v", err)
+	}
+	enc := z80h.NewENC28J60()
+	enc.ProgramTrinityNetwork(spSAMMac, spSAMIp)
+	sd := enc.AttachSD(z80h.CSDForV2(0x3200)) // 12801 * 512 KiB ≈ 6.7 GB — records > 8160
+	mac.AttachIO(enc)
+	mac.AttachPrintRecorder()
+
+	enc.InjectRX(sdPushFrame([]byte{'?'}))
+	enc.InjectRX(lrQuery(255))
+	enc.InjectRX(lrQuery(256))
+	enc.InjectRX(sdPushFrame([]byte{'Q'}))
+
+	if _, err := mac.RunBoot("list_records_main", z80h.Entry{StepCap: 30_000_000}); err != nil {
+		t.Fatalf("RunBoot list_records_main faulted: %v", err)
+	}
+	frames := enc.TXFrames()
+
+	// Precondition: the CSD decode really produced a record count past the seam's
+	// 8160-record reach (else this test exercises nothing).
+	bdRecords, err := mac.Sym("BD_RECORDS")
+	if err != nil {
+		t.Fatalf("BD_RECORDS symbol absent from %s", listRecordsMap)
+	}
+	records := int(leU16(mac.Read(bdRecords, 2)))
+	if records <= 255*32 {
+		t.Fatalf("test CSD decoded to %d records, need > %d to exercise the clamp", records, 255*32)
+	}
+	if got := countPayload(frames, []byte{'!', byte(records & 0xFF), byte(records >> 8)}); got < 1 {
+		t.Errorf("no '!'+records(%d LE16) discovery reply; tx payloads=%v", records, txPayloads(frames))
+	}
+
+	// Sector 255: the last seam-reachable list sector still serves (unseeded zeros).
+	if reply := findPayloadPrefix(frames, []byte{'R', 255, 0}); reply == nil || len(reply) != 3+512 {
+		t.Errorf("list sector 255 (in range) did not serve an 'R'+512B reply; got %v", reply)
+	}
+	// Sector 256: past the 1-byte seam — refused, never a boot-sector read in disguise.
+	if got := countPayload(frames, []byte{'E', 0, 1}); got < 1 {
+		t.Errorf("list sector 256 was not refused with 'E' — the 8-bit truncation guard is not holding")
+	}
+	if reply := findPayloadPrefix(frames, []byte{'R', 0, 1}); reply != nil {
+		t.Errorf("list sector 256 got an 'R' reply — the 8-bit store truncated it to a sector-0 read")
+	}
+
+	// Still read-only on the big card.
+	if writes := sd.WrittenSectors(); len(writes) != 0 {
+		t.Fatalf("READ-ONLY VIOLATION: %d SD write(s) at %v", len(writes), writes)
+	}
+}

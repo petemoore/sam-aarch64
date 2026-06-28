@@ -137,6 +137,17 @@ list_records_main:
                 rr      l                      ; /16
                 srl     h
                 rr      l                      ; /32
+                ; The list-read seam addresses sectors with ONE byte (BD_LIST_SECTOR,
+                ; bdos_seam.asm), so this tool serves list sectors 1..255 (records
+                ; 1..8160). Clamp nlist so a bigger card's higher sectors are REFUSED
+                ; ('E') by the range check rather than silently truncated to a wrong
+                ; low sector by the 8-bit store in lr_list_query. Widening the seam
+                ; to 16-bit is tracked separately (the whole toolkit shares the limit).
+                ld      a, h
+                or      a
+                jr      z, lr_nlist_ok
+                ld      hl, 255
+lr_nlist_ok:
                 ld      (lr_nlist), hl
                 ld      a, "4"                 ; DBG: serving (inventory ready)
                 call    dbg_char
