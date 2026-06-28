@@ -5259,7 +5259,7 @@
   title: "Speed up sd_push body write: drop per-sector sdc_init_ladder"
   description: |
     ~8KB/s because bd_cmd24_write_core runs sdc_init_ladder per sector. B-DOS already inited the card; no per-block ENC re-arm disturbs the bus (settled) -> init once or not at all -> tens of KB/s.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
@@ -5317,6 +5317,14 @@
   title: "sd_push: report the claimed free-record NUMBER over the net"
   description: |
     After a create-record push, sd-push.py prints only 'wrote it to the free record' -- the record# is unknown, so you cannot RECORD/boot it without inspecting the card. Have sd_push send the claimed BD_FREE_RECORD in a net marker and sd-push.py print it. Needed for the i302 boot-visual confirmation + general ergonomics.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i309
+  title: "Makefile: several netboot .bin rules omit sd_csd.asm (and other transitive includes) from prereqs → stale local incremental builds"
+  description: |
+    csd_probe.bin (Makefile:933) and likely other netboot rules include sd_csd.asm transitively (via csd_probe.asm/netboot_serve.asm) but do NOT list it as a make prerequisite, so 'make' does not rebuild them when sd_csd.asm changes -> stale .bin -> false-green local tests (the i280b-class stale-binary trap; feedback_go_test_stale_binary_cache). CI is unaffected (clean checkout builds all fresh). Found during i301: had to 'make -B netboot-z80-routines' to test an sd_csd.asm change because 'make netboot-z80-routines' reported 'Nothing to be done'. Fix: audit every netboot .bin rule and ensure each lists sd_csd.asm + its transitive includes as prereqs (or auto-generate the dep list). Low-risk, mechanical.
   status: OPEN
   kind: leaf
   owner: agent
