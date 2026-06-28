@@ -481,7 +481,9 @@ make netboot-http-boot-debug              # -> build/netboot_http_boot_debug.bin
 
 3. Push or boot `build/netboot_http_boot_debug.bin` on the SAM + Trinity (use
    trinload or the smoke disk). The program halts at DI;HALT when it finishes or
-   fails, so trinload survives for the next push.
+   fails; if it was pushed via trinload, that halt replaces trinload, so a TAPO
+   power-cycle is required before the next push (disk-boot runs recover the same
+   way — power-cycle back to the auto-booted trinload).
 
 **What a pass looks like.** For the smoke shot: green border, and LICENCE.broadcom present in the SAM's Trinity storage (browse from B-DOS — `DIR` the record). The harness confirms the exit mechanism: `http_main` uses `DI;HALT` after the green `OUT (&FE)`, which is the correct Z80 section-D overlay exit.
 
