@@ -5278,9 +5278,11 @@
   title: "sd_push: plumb the record name from the pushed filename (replace hardcoded cj.mgt)"
   description: |
     sd_push.asm:763 hardcodes sp_record_name = 'cj.mgt'; plumb the pushed filename instead (<=16 chars, sanitised by the existing bdos_build_claim_entry pipeline). MECHANICAL (no design fork). The push protocol (UDP 0xEDB0: '?'/'@'/'F') carries no filename today. Add an 'N' message: sd-push.py sends b'N'+basename[:16] after discovery and before the block stream; sd_push.asm dispatches 'N' -> copy <=16 payload bytes into a writable sp_record_name buffer (defs 17) + ack. WRINKLE: bdos_claim_record currently runs at BOOT (sd_push.asm:389) before the serve loop, so the claim must move to fire on the first 'N' (or first '@') so the name is set first. Verify: extend sd_push_test.go to assert BD_CLAIM_ENTRY reflects a pushed name (list entry + sector-0 label +210/+250). The 'prune dead HWSAD/HRECORD seam' half moved to i305.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 775, role: completing}
 
 - id: i304
   title: Reconstruct a labelled B-DOS 1.5t source from 1.5a + reassemble to byte-match
