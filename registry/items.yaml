@@ -6044,9 +6044,11 @@
   title: "i70b shot-2 finding: wedge at the stream-end store leg — first B-DOS SD op after our raw CMD17 ladder; emulate the cross-driver seam + q16 source paging, repro FIRST"
   description: |
     FINDING + FIX (PR pending): the i70b store-leg wedge is a wrong HSAVE source PAGE in storage_sink_leaf (src/netboot/http_main.asm). It built BD_SAVE_PAGE = (ptr>>14)&3 = the CPU SECTION index (2 for the section-C flush buffer CONN_FLUSH_BUF &9E88), but trinload loads the image at PHYSICAL page 1 — so real B-DOS 1.5t paged physical page 2 (the image's section-D half) into section C as the HSAVE source, read garbage, and wild-jumped on the hook return (rx dead — the exact 2026-07-03 shot-2 signature: 1072/1594 bytes streamed then dead at the first real RST-8 HSAVE). The two hypotheses in the original desc (cross-driver SD state; q16 section-C paging) were NOT the cause: the 1.5t authority analysis shows every card-level mismatch path is bounded and error-reported, and the ladder leaves the card in the state B-DOS expects (CRC off, block len 512); the ONLY unbounded loop is the &DC MCU busy poll, which our teardown handles correctly. FIX: read the physical page live from HMPR (in a,(251)/and &1F), mirroring hook_roundtrip.asm's hardware-proven store (i93b). Strict correction (page 2 was definitively wrong for a page-1 image); netboot-oracle suite passes. A full-come-up faithful emulation GATE for this exact leg could not be built this session (the come-up's raw SD ladder + ENC drv_init share the one &DC controller port, unmodelled -> CSD read declines under emulation; and driving storage_sink_leaf in isolation derails on harness context reconstruction) -> filed as a follow-up. The i70b re-shoot is the end-to-end hardware confirmation.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 839, role: completing}
 
 - id: i356
   title: "Faithful emulation gate for the http-boot store leg (ENC/SD &DC come-up seam + storage_sink_leaf real-context drive)"
