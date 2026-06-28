@@ -5239,7 +5239,7 @@
   title: Diagnose+fix sd_push record reads '81 Invalid record' (get.label rejects body stamp)
   description: |
     sd_push create-record write (PR #773) completes on hardware (cj.mgt->record 13, no crash) but RECORD 13='81 Invalid record': get.label rejects the body stamp though the catalogue is correct (B-DOS finds record 13). Read record 13 body sector 0 (LBA csd_base+1600*12 ~21638), inspect +210/+232/+250 vs 'BDOS'. Hypotheses: (a) sector-0 mutation didn't land; (b) body base off-by-one vs B-DOS &80C2; (c) get.label's exact sector. Blocks deploy+boot cjs. Spec: docs/plans/sd-push-create-record-implementation.md.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
@@ -5271,6 +5271,14 @@
   title: "sd_push cleanup: prune dead HWSAD/HRECORD seam routines + plumb record name from filename"
   description: |
     Own-LBA sd_push leaves dead HWSAD/HRECORD seam routines (Pete: delete duplicate code); record name hardcoded 'cj.mgt' - plumb from pushed filename (<=16).
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i304
+  title: Reconstruct a labelled B-DOS 1.5t source from 1.5a + reassemble to byte-match
+  description: |
+    Root-cause fix for the recurring 1.5a-vs-1.5t authority lure (Pete flagged it 2 sessions running; feedback_bdos_15t_not_15a). Start from reference/bdos/bdos15a.src.txt (the clean labelled 1.5a COMET source), identify the routines 1.5t changed (per bdos15t-beta6.annotated.dis: the SD init ladder, the 32-bit linear seek replacing hd.seek/set.chs/seek.base, the CSD/records math, record-base poke), splice the 1.5t versions in, and reassemble (pyz80) iterating until it produces the EXACT 1.5t binary (extracted/bdos15t-beta6.bin) -- the byte-match is the proof of correctness. Retain all 1.5a comments; finally annotate the new routines. Differences are minimal. Deliverable: a committed reference/bdos/bdos15t.src.txt (+ a make target asserting byte-identity) that becomes THE cited Trinity-HW B-DOS authority, and update the in-repo references/plan/code citations that currently point at 1.5a. NOTE: 1.5t is Colin's proprietary binary (kept out-of-repo, SKIP_PRIVATE_TESTS-gated) -- the reconstructed SOURCE is ours but the byte-match gate must guard against committing Colin's bytes; follow the existing private-artifact pattern (csd_decode_colin_test.go resolves the bin from ~/sam-archive).
   status: OPEN
   kind: leaf
   owner: agent

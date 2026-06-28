@@ -92,16 +92,28 @@ drr_check_csd:
                 ld      hl, (PARSE_FILENAME)
                 ld      de, rgn_csd_prefix
                 call    dr_streq3              ; CY set if (HL) begins "csd"
-                ret     nc                     ; unknown name: leave STAGE as-is
+                jr      nc, drr_check_sectors  ; not "csd": maybe a SD_SECTOR_PROBE sector read
 
                 call    csd_read_into_stage    ; read the 16-byte CSD into STAGE
+                jr      drr_rearm              ; re-arm the ENC after the SD transaction
+
+drr_check_sectors:
+       if defined(SD_SECTOR_PROBE)
+                ; SD_SECTOR_PROBE: an RRQ for a sector-dump file (list.bin / r13.bin /
+                ; r3.bin) reads raw card sectors into STAGE (read-only — CMD17 only, no
+                ; CMD24). CY set if a name matched + a read ran (then re-arm the ENC).
+                call    sd_sector_dispatch
+                jr      c, drr_rearm
+       endif
+                ret                            ; unknown name: leave STAGE as-is
 
                 ; --- re-arm the ENC RX path the per-RRQ SD read disturbed (i249) ---
-                ; The mid-serve CSD re-read disturbs the ENC's persistent RX state
-                ; (RXEN, ring pointers, MAC/PHY) exactly as the startup read does
-                ; (probe_main, above); drv_read never restores it. Without this re-arm
-                ; the server streams csd.bin once then receives nothing — the next RRQ
-                ; never lands (serve-dies-after-SD). Mirrors probe_main's startup re-arm.
+                ; The mid-serve SD read disturbs the ENC's persistent RX state (RXEN,
+                ; ring pointers, MAC/PHY) exactly as the startup read does (probe_main,
+                ; above); drv_read never restores it. Without this re-arm the server
+                ; streams one file then receives nothing — the next RRQ never lands
+                ; (serve-dies-after-SD). Mirrors probe_main's startup re-arm.
+drr_rearm:
                 di
                 ld      hl, CONFIG_SERVERMAC
                 call    enc_rx_reestablish
@@ -264,7 +276,7 @@ sd_cmd0arg:
 ; CCS-clear OCR; the CSD decode is the host's job. We just need CMD9 to deliver
 ; the 16 CSD bytes.
 ; ===========================================================================
-csd_read_into_stage:
+sd_run_init_ladder:
                 di
                 xor     a
                 ld      (sd_timed_out), a       ; fresh attempt — clear the sticky busy-timeout flag
@@ -353,6 +365,17 @@ csd_acmd41_done:
                 ld      a, &7B
                 call    sd_cmd0arg
 
+                ret                             ; card selected + ready for a data command (CMD9/CMD17)
+
+; ===========================================================================
+; csd_read_into_stage — run the shared init ladder, then read the 16-byte CSD
+; via CMD9 into STAGE. (The init ladder is factored into sd_run_init_ladder so
+; the SD_SECTOR_PROBE sector reader, sd_read_sectors, reuses the identical
+; hardware-proven wake + CMD0/8/41/58/59 sequence.)
+; ===========================================================================
+csd_read_into_stage:
+                call    sd_run_init_ladder
+
                 ; --- CMD9 SEND_CSD: opcode &49 -> &FE token + 16 CSD + 2 CRC ---
                 ld      a, &49
                 call    sd_cmd0arg             ; A = R1 (expect 0)
@@ -415,6 +438,151 @@ csd_rds_done:
                 ret
 
 csd_timeout_msg: defm   "SD BUSY TIMEOUT!"      ; exactly 16 bytes (CSD_BYTES)
+
+       if defined(SD_SECTOR_PROBE)
+; ===========================================================================
+; SD_SECTOR_PROBE — a READ-ONLY raw-sector dump extension (the i299 create-record
+; diagnosis). It adds three served files that CMD17-read raw card sectors into
+; STAGE so the host can see WHERE on the card the create-record write landed:
+;   list.bin  1 sector  @ LBA 1                  (the record-list catalogue sector;
+;                                                  record 13's 16-byte entry is at +192)
+;   r2.bin    8 sectors @ LBA SP_LBA_REC2         (record 2 = "Comet v18", a known real
+;                                                  disk — DISCRIMINATOR: is its "BDOS"
+;                                                  stamp at our-formula (n-1)*1600+base?)
+;   r13.bin   8 sectors @ LBA SP_LBA_REC13        (record 13 = our write; sector 0, where
+;                                                  get.label reads +232 for "BDOS", is 4
+;                                                  sectors into the window — CONFIRMED present)
+;   rax.bin   8 sectors @ LBA SP_LBA_REC13ALT      (record 13 under the ALTERNATIVE 1.5t
+;                                                  formula n*1600+base — where B-DOS may
+;                                                  actually read it if the -1 is wrong)
+; The LBAs are absolute and assume csd_base = 2438 (confirmed by the host CSD decode).
+; record n body sector 0 (our formula) = 2438 + 1600*(n-1); the window starts 4 before,
+; so sector 0 is at window index 4. There is NO CMD24 anywhere — it cannot write.
+SP_LBA_REC13:    equ 2438 + 1600*12 - 4         ; 21634: record 13 body window (our formula)
+SP_LBA_REC2:     equ 2438 + 1600*1  - 4         ; 4034:  record 2 "Comet v18" body window
+SP_LBA_REC13ALT: equ 2438 + 1600*13 - 4         ; 23234: record 13 body window (alt n*1600+base)
+
+; sd_sector_dispatch — match the RRQ filename to a sector-dump file and read it.
+; Out: CY set if a name matched and a read ran (caller then re-arms the ENC); CY
+; clear if no sector name matched (caller leaves STAGE as-is).
+sd_sector_dispatch:
+                ld      hl, (PARSE_FILENAME)
+                ld      de, rgn_list_prefix
+                call    dr_streq3              ; "lis" (list.bin)?
+                jr      nc, ssd_try_r2
+                ld      hl, 1
+                ld      bc, 0
+                ld      a, 1
+                jr      ssd_go
+ssd_try_r2:
+                ld      hl, (PARSE_FILENAME)
+                ld      de, rgn_r2_prefix
+                call    dr_streq3              ; "r2." (r2.bin = Comet v18)?
+                jr      nc, ssd_try_r13
+                ld      hl, SP_LBA_REC2 & &FFFF
+                ld      bc, SP_LBA_REC2 >> 16
+                ld      a, 8
+                jr      ssd_go
+ssd_try_r13:
+                ld      hl, (PARSE_FILENAME)
+                ld      de, rgn_r13_prefix
+                call    dr_streq3              ; "r13" (r13.bin = our write)?
+                jr      nc, ssd_try_rax
+                ld      hl, SP_LBA_REC13 & &FFFF
+                ld      bc, SP_LBA_REC13 >> 16
+                ld      a, 8
+                jr      ssd_go
+ssd_try_rax:
+                ld      hl, (PARSE_FILENAME)
+                ld      de, rgn_rax_prefix
+                call    dr_streq3              ; "rax" (rax.bin = record 13 alt formula)?
+                jr      nc, ssd_no_match
+                ld      hl, SP_LBA_REC13ALT & &FFFF
+                ld      bc, SP_LBA_REC13ALT >> 16
+                ld      a, 8
+ssd_go:
+                ; HL = LBA low word, BC = LBA high word, A = sector count.
+                ld      (sec_lba), hl
+                ld      (sec_lba+2), bc
+                ld      (sec_count), a
+                call    sd_read_sectors
+                scf                            ; matched + read
+                ret
+ssd_no_match:
+                or      a                      ; CY clear: not a sector name
+                ret
+
+; sd_read_sectors — READ-ONLY raw sector dump. Runs the shared init ladder, then
+; CMD17-reads (sec_count) consecutive 512-byte sectors from block address (sec_lba)
+; into STAGE. Block addressing (the card is SDHC/v2). CMD17 only — no CMD24.
+; HL is the STAGE write cursor and survives sd_cmd/sd_in (they preserve HL); the
+; per-sector loop counter lives in (sec_count) since sd_cmd clobbers BC.
+sd_read_sectors:
+                call    sd_run_init_ladder     ; di + wake + CMD0/8/41/58/59 (card selected)
+                ld      hl, STAGE
+srs_one:
+                ld      a, &FF
+                ld      (sd_cmd_crc), a
+                ld      a, (sec_lba+3)
+                ld      b, a                   ; arg[31:24]
+                ld      a, (sec_lba+2)
+                ld      c, a                   ; arg[23:16]
+                ld      a, (sec_lba+1)
+                ld      d, a                   ; arg[15:8]
+                ld      a, (sec_lba)
+                ld      e, a                   ; arg[7:0]
+                ld      a, &51                 ; CMD17 READ_SINGLE_BLOCK
+                call    sd_cmd                 ; clobbers AF,BC,DE; HL preserved
+                ld      b, 0                   ; up to 256 token polls
+srs_tok:
+                call    sd_in
+                cp      SD_DATATOK
+                jr      z, srs_tok_ok
+                djnz    srs_tok
+                jp      csd_deselect           ; no token: stop, serve what we have
+srs_tok_ok:
+                ld      b, 0                   ; 256 bytes
+srs_rd1:
+                call    sd_in
+                ld      (hl), a
+                inc     hl
+                djnz    srs_rd1
+                ld      b, 0                   ; + 256 = 512
+srs_rd2:
+                call    sd_in
+                ld      (hl), a
+                inc     hl
+                djnz    srs_rd2
+                call    sd_in                  ; 2 CRC bytes (discard)
+                call    sd_in
+                ; sec_lba++ (32-bit LE), preserving the STAGE cursor in HL.
+                push    hl
+                ld      hl, sec_lba
+                inc     (hl)
+                jr      nz, srs_lba_ok
+                inc     hl
+                inc     (hl)
+                jr      nz, srs_lba_ok
+                inc     hl
+                inc     (hl)
+                jr      nz, srs_lba_ok
+                inc     hl
+                inc     (hl)
+srs_lba_ok:
+                pop     hl                     ; restore STAGE cursor (advanced 512)
+                ld      a, (sec_count)
+                dec     a
+                ld      (sec_count), a
+                jr      nz, srs_one
+                jp      csd_deselect           ; shared deselect tail + ei
+
+rgn_list_prefix: defm "lis"
+rgn_r2_prefix:   defm "r2."
+rgn_r13_prefix:  defm "r13"
+rgn_rax_prefix:  defm "rax"
+sec_lba:         defs 4
+sec_count:       defs 1
+       endif
 
 ; ===========================================================================
 ; Bootable / trinload entry. probe_main reads the SAM's MAC/IP from the "Trinity
@@ -559,6 +727,28 @@ probe_store_tmpl:
                   defb 0
                   defw CSD_BYTES
                   defw 0                        ; size high word
+       if defined(SD_SECTOR_PROBE)
+                  defm "list.bin"
+                  defb 0
+                  defw 512
+                  defw 0
+                  defm "r2.bin"
+                  defb 0
+                  defw 4096                     ; 8 sectors
+                  defw 0
+                  defm "r13.bin"
+                  defb 0
+                  defw 4096                     ; 8 sectors
+                  defw 0
+                  defm "rax.bin"
+                  defb 0
+                  defw 4096                     ; 8 sectors
+                  defw 0
+                  defm "quit.bin"               ; clean exit back to trinload (no power-cycle)
+                  defb 0
+                  defw 1
+                  defw 0
+       endif
                   defb 0                        ; end-of-store sentinel
 probe_store_tmpl_end:
 
@@ -568,6 +758,33 @@ probe_src_tmpl:
                   defw STAGE
                   defw CSD_BYTES
                   defw 0                        ; size high word
+       if defined(SD_SECTOR_PROBE)
+                  defm "list.bin"
+                  defb 0
+                  defw STAGE
+                  defw 512
+                  defw 0
+                  defm "r2.bin"
+                  defb 0
+                  defw STAGE
+                  defw 4096
+                  defw 0
+                  defm "r13.bin"
+                  defb 0
+                  defw STAGE
+                  defw 4096
+                  defw 0
+                  defm "rax.bin"
+                  defb 0
+                  defw STAGE
+                  defw 4096
+                  defw 0
+                  defm "quit.bin"
+                  defb 0
+                  defw STAGE
+                  defw 1
+                  defw 0
+       endif
                   defb 0                        ; end-of-table sentinel
 probe_src_tmpl_end:
 

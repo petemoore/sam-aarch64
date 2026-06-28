@@ -167,3 +167,57 @@ than guessing — this writes Pete's real shared SD card.
   card currently has cj.mgt at record 13 (catalogue-named, body written, but not get.label-valid).
   trinload is up (no power-cycle needed). The deploy-guard false-fires on the word "tftp" in any
   command (i268) — avoid it in greps.
+
+## RESULTS (2026-07-01) — HARDWARE READ-BACK + 1.5t SOURCE: our write is CORRECT; source says it should be VALID; CONTRADICTION
+A READ-ONLY sector probe was built and run against the real card to settle the
+hypotheses above. **Tool: `src/netboot/csd_probe.asm` built with `-D SD_SECTOR_PROBE`
+(`make netboot-sd-sector-probe` → `build/sd_sector_probe.bin`)** — the hardware-proven
+csd_probe + a CMD17-only extension (NO CMD24 in the binary → cannot write the card)
+that serves `list.bin`/`r2.bin`/`r13.bin`/`rax.bin`/`quit.bin` over TFTP, each reading
+raw card sectors into STAGE. Emulation-gated by `sd_sector_probe_test.go`
+(TestSectorProbeReadsSeededLBAs) before deploy. Host fetch = plain `curl tftp://…`.
+
+**Hardware reads (csd_base = 2438, re-confirmed live from the CSD):**
+1. **Catalogue (LBA 1) is CORRECT.** Record 13's 16-byte entry at +192 = `636a` + spaces
+   ("cj"), claimed, among Pete's real records (record 2 = "Comet v18", records 1,3-32 = "LN").
+2. **Our record-13 body write is CORRECT *per our formula*.** LBA `csd_base+1600*12` = **21638**
+   holds the cj.mgt first sector: `+210`="cj        ", **`+232`="BDOS" (42444f53)**, first bytes
+   = the real cj.mgt directory (`samdos.bin`). The mutation ran and landed exactly where we wrote.
+3. **Record bodies ARE at `csd_base+1600*(n-1)` (our formula).** Record 2 ("Comet", real) has
+   content at LBA 4038 = `csd_base+1600*1`; the **alt-formula** LBA `csd_base+1600*13` = 23238
+   is ZEROS. So the (n-1) base is right; `n*1600+base` is wrong.
+4. **A WORKING record (Comet, rec 2) has NO "BDOS"@232** at its sector-0 (LBA 4038), and its
+   sector 0 isn't a SAMDOS directory. **⇒ the "BDOS"@232-stamp theory the whole design rested on
+   is FALSIFIED as the validity gate** (a working record lacks it). [[feedback_bdos_record_header_vs_disk_body]]
+5. **Catalogue metadata differs:** working entries have bytes [10:15] = `000000000000` (Comet, L3,
+   L11…) or an `ffff`-prefixed value (L1=`ffff0c0000`, L5=`ffff8f4400`, L32=`ffff796200`); **ours
+   = `202020202020` (spaces)** — our claim space-padded all 16 bytes instead of leaving the metadata
+   region zero. The one concrete structural difference between our record and every working one.
+
+**1.5t SOURCE (the real-HW authority — `bdos15t-beta6.annotated.dis`, NOT 1.5a; [[feedback_bdos_15t_not_15a]]):**
+- get.label (&8DE0): reads the record's first directory entry, checks `+232 == "BDOS"`; CY (invalid)
+  iff mismatch → `RECORD n` reports rep81 "Invalid record" (exprcd, 1.5a line 877; 1.5t &8DC2).
+- RECORD-select (&A0E4 → &A100): `dec de` (a0ec) makes record# = **record-1**, then
+  mult16-32 `(record-1)*1600` (&A113) `+ base` (&80C2=2438), poked to the seek base immediates
+  &A185/&A188. conv.de(track0,sector1) (&A151) = **0**. So get.label for record 13 reads
+  `(13-1)*1600 + 2438 + 0` = **LBA 21638** — EXACTLY where our "BDOS"@232 is.
+- **⇒ Per 1.5t source, record 13 SHOULD validate** (BDOS present at the read LBA), and the count
+  check passes (last.record ≫ 13; ≥824 records listed). **This CONTRADICTS the hardware "invalid".**
+
+**THE OPEN CONTRADICTION (this is i299's crux now):** our write is byte-correct at the LBA 1.5t
+get.label reads, yet hardware reported "81 Invalid record, 0:1". Candidate explanations, in order:
+  (a) the hardware "invalid" was STALE / a directory cache (re-test `RECORD 13` on the live card now
+      that the write is confirmed in place); (b) the catalogue metadata (bytes 10:15 = spaces vs
+      zero) matters to select/validation; (c) the "0:1" suffix = drive 0 (floppy) — a drive-select
+      slip on the RECORD path; (d) a get.label setup call (0x45d2/0x5c6a/0x444f) I haven't fully traced.
+**DEFINITIVE resolver = EMULATION (CLAUDE.md §7, which this strand should have used first):** seed the
+faithful rig's SD model with record 13 exactly as written (catalogue + body+BDOS@232 at (n-1)*1600+base)
+and run real B-DOS 1.5t `RECORD`-select/get.label — observe valid/invalid AND the exact LBA(s) read.
+If invalid in emulation → reproduced + fully traceable; if valid → the HW observation was stale →
+re-test hardware. (Hardware re-test needs `RECORD 13` typed at the SAM = Pete-present, or driven.)
+
+**ROOT-CAUSE FIX for the recurring 1.5a-vs-1.5t lure (Pete's idea, 2026-07-01 → its own item):**
+reconstruct a *labelled 1.5t source* by starting from `bdos15a.src.txt`, swapping in 1.5t's changed
+routines, and reassembling until it produces the EXACT 1.5t binary (byte-match check = the proof it's
+right) — retaining all the 1.5a comments, then annotating the new routines. Differences are minimal.
+This gives a clean, greppable 1.5t authority so agents stop reaching for 1.5a.
