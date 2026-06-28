@@ -5589,7 +5589,7 @@
   title: sd-push.py stage-2 discovery window shorter than sd_push's real startup (~12s on the 64GB card)
   description: |
     sd_push's startup on the real 64GB card (EEPROM read + ENC init + CSD ladder + free-record list scan) takes ~12s; sd-push.py's stage-2 discover() is 5 attempts x 2s = 10s, so the launcher declared failure while sd_push was still coming up (i319a, 2026-07-02; the manual stage-2 driver with attempts=10 then worked). Bump the stage-2 discovery attempts (e.g. 15) in sd-push.py; same for list-records.py discover_inventory. One-line-per-launcher robustness fix.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
 
