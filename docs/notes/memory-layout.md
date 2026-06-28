@@ -30,12 +30,13 @@ These pages are not normally mapped into the address space; they are paged in on
 |---------|----------|
 | 4 | ENCTAB body — paged into section A on demand for encoder reads. See `trampoline.asm`. |
 | 5..12 | Page-pool pages (`src/pagepool.asm`; expansion RAM 16..PRAMTP joins the same pool on a >256 KB machine), claimed as contiguous runs at assemble time by the two buffer consumers: **IN** — `pp_alloc_run(PP_IN)` by `load_in_file`, HLOAD'd once, read per-record via an LMPR bracket; **OUT** — `pp_alloc_run(PP_OUT)` by `reset_out_buffer`, sized from the pass-1 total, written per-byte via an LMPR-bracketed section-B window (`emit_byte`), HSAVE'd via section C with `UIFA[31] = OUT_RUN_BASE`. See `docs/specs/paged-in-design.md` / `docs/specs/paged-out-design.md`. |
+| 11 | `enc_fix_payload.bin` (`BUILD_TESTS_ENCODE` only, i234) — encode_inst fixture rows + operand streams (`src/test_encode_inst_payload.asm`, org `&E100`), HLOAD'd at boot via `load_enc_fix_payload` and bulk-copied to section-D `ENC_FIX_TABLE_RAM` by `run_encode_inst_self_tests`. Time-multiplexed with the IN buffer, which is not HLOAD'd until `main_assemble`. |
 | 12 | `test_cluster.bin` (`BUILD_TESTS` only) — the off-axis encoder self-test cluster (`src/test_offaxis_cluster.asm`), invoked once via an LMPR swap. Time-multiplexed with the IN buffer, which is not HLOAD'd until `main_assemble`. |
 | 13 | Two production payloads, every build (per `docs/specs/comment-storage-design.md` §5): `sysreg_data.bin` at `&8000` — sysname lookup tables + matcher (`src/sysreg_data.asm`), loaded by `load_page13_payload` — and `zx0.bin` at `&8400` — ZX0 compressor (`&8400`) + turbo decoder (`&8B00`) (`src/zx0_payload.asm`), loaded by `load_zx0_payload`, with compressor workspace at `&8B80-&AF9D`. Both reached via `paged_call`. Under `BUILD_TESTS` the page first holds `test_mem.bin` (the largest self-test suite, invoked via LMPR-swap-CALL-restore from `start:`); the production payloads overwrite it once that suite completes, and the test disk's `zx0-test.bin` adds the `&AFA0` boot self-test + baked fixture. |
 | 14 | ZX0 staging area (every build) — `&C000-&E0FF` in the section-D view under `HMPR=13`: raw block in at `ZX0_STAGING_SRC` (`&C000`), compressed result out at `ZX0_STAGING_DST` (`&D000`). Under `BUILD_TESTS` the page first holds `paged_call_test_payload.bin` — the `paged_call` boot self-test stub (`PAGED_CALL_TEST_PAGE`), 3 bytes at offset 0, fully consumed before the zx0 self-test stages over it. |
 | 15 | `disasm.bin` (every build) — the on-SAM disassembler (`src/disasm.asm`), HLOAD'd at boot via `load_page15_payload` (`DISASM_PAGE`) and invoked via `paged_call`. |
 
-(Source of truth for the static page numbers: the `equ`s in `src/trampoline.asm` — `ENCTAB_PAGE`, `IN_BASE_PAGE`, `TEST_CLUSTER_PAGE`, `PAGED_CALL_TEST_PAGE`, `DISASM_PAGE` — and `src/zx0_comm.inc` (`ZX0_PAGE` + the zx0 entry/staging addresses), plus the loader recipes in `src/loader.asm` and `Makefile`. The IN/OUT runs have no compile-time page: their bases live in the runtime state `IN_BASE_LMPR` / `OUT_RUN_BASE`, and the reserved-vs-pool split is `POOL_RESV_*` in `src/pool_boot.asm`.)
+(Source of truth for the static page numbers: the `equ`s in `src/trampoline.asm` — `ENCTAB_PAGE`, `IN_BASE_PAGE`, `ENC_FIX_PAGE`, `TEST_CLUSTER_PAGE`, `PAGED_CALL_TEST_PAGE`, `DISASM_PAGE` — and `src/zx0_comm.inc` (`ZX0_PAGE` + the zx0 entry/staging addresses), plus the loader recipes in `src/loader.asm` and `Makefile`. The IN/OUT runs have no compile-time page: their bases live in the runtime state `IN_BASE_LMPR` / `OUT_RUN_BASE`, and the reserved-vs-pool split is `POOL_RESV_*` in `src/pool_boot.asm`.)
 
 ## Scratch region `equ`s (section D)
 
@@ -66,17 +67,18 @@ Defined in `assembler.asm` (and allocated/used by the named files). Addresses, c
 
 ## Code-budget ceiling — the `&C000` cliff
 
-Both assembler variants link at `org &8000`; their scratch/stack starts at `&C000` (`SP = &C100`). If a build's `code_end` reaches `&C000` it collides with the stack page, and the failure manifests as a **silent deterministic boot-hang** (rc=124) with no diagnostic — the exact "test-variant fragility" class that bit PR #43 (see `memory/feedback_test_variant_fragility.md`).
+All assembler variants link at `org &8000`; their scratch/stack starts at `&C000` (`SP = &C100`). If a build's `code_end` reaches `&C000` it collides with the stack page, and the failure manifests as a **silent deterministic boot-hang** (rc=124) with no diagnostic — the exact "test-variant fragility" class that bit PR #43 (see `memory/feedback_test_variant_fragility.md`).
 
-`tools/check-code-budget.sh` turns that silent cliff into a build/CI failure **with a number** (`code_end &C0xx ≥ ceiling &C000 — N bytes over`). It runs at the tail of every `make assembler` / `assembler-prod` recipe, and `make check-budget` checks both variants explicitly (the release-gate code-budget check). Defaults: `ORG=0x8000`, `CEILING=0xC000`.
+`tools/check-code-budget.sh` turns that silent cliff into a build/CI failure **with a number** (`code_end &C0xx ≥ ceiling &C000 — N bytes over`). It runs at the tail of every `make assembler` / `assembler-prod` / `assembler-enc-tests` recipe, and `make check-budget` checks all three variants explicitly (the release-gate code-budget check). Defaults: `ORG=0x8000`, `CEILING=0xC000`.
 
 - **prod variant** (`build/assembler-prod.bin`) — smaller; self-tests `#ifdef`'d out.
-- **test variant** (`build/assembler.bin`) — larger; includes in-section self-tests. The off-axis moves (test_mem → page 13, the M5/misc cluster → page 12, the IN/OUT/ENCTAB buffers → pages 4–12) exist specifically to keep both variants under the cliff. The script prints the headroom-to-ceiling for each.
+- **test variant** (`build/assembler.bin`) — larger; includes the in-section self-tests except the encode_inst family. The off-axis moves (test_mem → page 13, the M5/misc cluster → page 12, the IN/OUT/ENCTAB buffers → pages 4–12) exist specifically to keep the variants under the cliff.
+- **enc-tests variant** (`build/assembler-enc-tests.bin`, i234) — prod plus the encode_inst self-test family (ENCTAB-coupled, inline-only), booted as its own run so the two self-test variants time-multiplex the section-C test budget. The script prints the headroom-to-ceiling for each.
 
 ## Related docs
 
 - `src/assembler.asm` — **the source of truth** (header comment + `equ`s).
-- `src/README.md` — assembler taxonomy (prod/test, off-axis modules, include order).
+- `src/README.md` — assembler taxonomy (prod/test/enc-tests, off-axis modules, include order).
 - `docs/notes/sam-paging.md` — SAM Coupé paging primer (sections, LMPR/HMPR).
 - Memory-layout brainstorm (blob-pinned: <https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-memory-layout-brainstorm.md>) — design discussion behind the off-axis layout.
 - `tools/check-code-budget.sh` — the budget gate.

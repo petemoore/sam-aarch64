@@ -48,21 +48,29 @@ SimCoupé). [`src/README.md`](../src/README.md) is its index; the essentials:
   evaluator → form lookup → encoder → record handlers → reader → two-pass
   driver → symbols → local labels → literal pool → print) lives in
   `src/README.md`.
-- **Two build variants from the same source**, split by the `BUILD_TESTS`
-  define: the test variant (`make assembler` → `build/assembler.bin`)
-  compiles in all boot-time self-test suites and exports
-  `build/assembler.sym`; the production variant (`make assembler-prod` →
-  `build/assembler-prod.bin`) omits them. Both emit identical output bytes
-  on every fixture; CI verifies the variants against each other (§7).
-- **Off-axis payloads on physical pages 12–15.** Standalone binaries
+- **Three build variants from the same source**, split by the
+  `BUILD_TESTS` / `BUILD_TESTS_ENCODE` defines: the test variant (`make
+  assembler` → `build/assembler.bin`, `-D BUILD_TESTS=1`) compiles in
+  every boot-time self-test suite except the encode_inst family and
+  exports `build/assembler.sym`; the encode self-test variant (`make
+  assembler-enc-tests` → `build/assembler-enc-tests.bin`,
+  `-D BUILD_TESTS_ENCODE=1`, i234) boots only the ENCTAB-coupled
+  encode_inst family, time-multiplexing section-C test memory with the
+  test variant across two boot runs; the production variant (`make
+  assembler-prod` → `build/assembler-prod.bin`) omits all self-tests.
+  All emit identical output bytes on every fixture; CI verifies the
+  variants against each other (§7).
+- **Off-axis payloads on physical pages 11–15.** Standalone binaries
   assembled separately and HLOAD'd at boot, reached by paging rather than
   `include`: the big self-test suites (`test_cluster.bin` → page 12,
-  `test_mem.bin` → page 13, both `BUILD_TESTS` only), the production
-  sysreg/dc/tlbi/pstate lookup tables (`sysreg_data.bin` → page 13, every
-  build), the ZX0 compressor + decoder (`zx0.bin` → page 13 at `&8400`,
-  every build), the `paged_call` self-test stub (page 14, `BUILD_TESTS`
-  only), and the on-SAM disassembler (`disasm.bin` → page 15, every
-  build). §5 covers the paging machinery.
+  `test_mem.bin` → page 13, both `BUILD_TESTS` only), the encode_inst
+  fixture data (`enc_fix_payload.bin` → page 11, `BUILD_TESTS_ENCODE`
+  only), the production sysreg/dc/tlbi/pstate lookup tables
+  (`sysreg_data.bin` → page 13, every build), the ZX0 compressor +
+  decoder (`zx0.bin` → page 13 at `&8400`, every build), the `paged_call`
+  self-test stub (page 14, `BUILD_TESTS` only), and the on-SAM
+  disassembler (`disasm.bin` → page 15, every build). §5 covers the
+  paging machinery.
 
 ### 2.2 Host side — `tools/`
 
@@ -289,11 +297,12 @@ not the file — the fully-commented release `.tbn` is ~363 KB on disk.
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) maps the gates
 to CI jobs.
 
-**Build**: `make all` builds both assembler variants (`assembler`,
-`assembler-prod`), each tail-checked by the code-budget script. `make
-disk` assembles the bootable test disk: `tools/build-disk` packs
-`assembler.bin`, `enctab.enc`, and the off-axis payloads (`-test-mem`,
-`-cluster`, `-paged-call`, `-sysreg-data`, `-disasm`) into a `.mgt` image.
+**Build**: `make all` builds the three assembler variants (`assembler`,
+`assembler-prod`, `assembler-enc-tests`), each tail-checked by the
+code-budget script. `make disk` assembles the bootable test disk:
+`tools/build-disk` packs `assembler.bin`, `enctab.enc`, and the off-axis
+payloads (`-test-mem`, `-cluster`, `-paged-call`, `-sysreg-data`,
+`-disasm`) into a `.mgt` image.
 
 **The round-trip oracle** (the heart of the project): for each fixture
 `.s`, host and SAM both assemble it, and the result is byte-compared
@@ -337,6 +346,7 @@ SimCoupé job pulls that image by sha tag and runs inside it. The jobs:
 | `disasm`, `disasm-roundtrip` | `make ci-disasm` / `ci-disasm-roundtrip` (host-only) |
 | `sysreg-sync`, `staticcheck` | sync guard / dead-code gate (host-only) |
 | `core`, `symbols`, `operands`, `paged` | fixture-corpus round-trips on SimCoupé (test variant) |
+| `enc-tests` | one SimCoupé boot of the encode self-test variant to OK (i234) |
 | `symbols-prod`, `operands-prod`, `paged-prod` | same corpora with the production variant (variant-divergence guard) |
 | `release-gate` | the 3-way release byte-match + code budget |
 
@@ -359,7 +369,9 @@ pyramid — each layer is slower and more authoritative than the one above:
    pipeline, including the **paged boot path**: `TestBootSelfTestsPass`
    boots the `BUILD_TESTS` assembler with all page-12–15 payloads and
    asserts every boot self-test passes in ~30 ms
-   (`TestBootSelfTestsFailProbe` is the negative control). It also gives
+   (`TestBootSelfTestsFailProbe` is the negative control), and
+   `TestBootSelfTestsEncodePass` / `TestBootSelfTestsEncodeFailProbe` do
+   the same for the encode self-test variant (i234). It also gives
    PC traces and register snapshots on failure. It is **not a gate**: it
    may crash or mislead without blocking anything, agents evolve it as
    normal work, and SimCoupé wins every disagreement. Gotcha: always pass
