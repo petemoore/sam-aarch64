@@ -528,7 +528,10 @@ netboot-http: $(BUILD)/netboot_http.bin $(BUILD)/netboot_http.map
 # use.
 $(BUILD)/netboot_http_boot.bin $(BUILD)/netboot_http_boot.map: src/netboot/http_main.asm $(asm_deps/src/netboot/http_main.asm)
 	@mkdir -p $(BUILD)
-	pyz80 -D NETBOOT_STREAM=1 --obj=$(BUILD)/netboot_http_boot.bin \
+	pyz80 -D NETBOOT_STREAM=1 -D HT_SERVER_IP_A=$(HT_SERVER_IP_A) -D HT_SERVER_IP_B=$(HT_SERVER_IP_B) \
+	    -D HT_SERVER_IP_C=$(HT_SERVER_IP_C) -D HT_SERVER_IP_D=$(HT_SERVER_IP_D) \
+	    -D HT_SERVER_PORT=$(HT_SERVER_PORT) \
+	    --obj=$(BUILD)/netboot_http_boot.bin \
 	    --mapfile=$(BUILD)/netboot_http_boot.map \
 	    src/netboot/http_main.asm
 	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_http_boot.bin 32768 netboot_http_boot.bin
@@ -550,11 +553,13 @@ HT_SERVER_IP_A ?= 192
 HT_SERVER_IP_B ?= 168
 HT_SERVER_IP_C ?= 0
 HT_SERVER_IP_D ?= 1
+HT_SERVER_PORT ?= 80
 $(BUILD)/netboot_http_smoke_boot.bin $(BUILD)/netboot_http_smoke_boot.map: src/netboot/http_main.asm $(asm_deps/src/netboot/http_main.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_HTTP_SMOKE=1 \
 	    -D HT_SERVER_IP_A=$(HT_SERVER_IP_A) -D HT_SERVER_IP_B=$(HT_SERVER_IP_B) \
 	    -D HT_SERVER_IP_C=$(HT_SERVER_IP_C) -D HT_SERVER_IP_D=$(HT_SERVER_IP_D) \
+	    -D HT_SERVER_PORT=$(HT_SERVER_PORT) \
 	    --obj=$(BUILD)/netboot_http_smoke_boot.bin \
 	    --mapfile=$(BUILD)/netboot_http_smoke_boot.map \
 	    src/netboot/http_main.asm
@@ -578,6 +583,9 @@ netboot-http-smoke-disk: $(BUILD)/netboot_http_smoke_boot.bin $(BUILD)/build-dis
 $(BUILD)/netboot_http_boot_debug.bin $(BUILD)/netboot_http_boot_debug.map: src/netboot/http_main.asm $(asm_deps/src/netboot/http_main.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_DEBUG=1 -D NETBOOT_HTTP_SMOKE=1 \
+	    -D HT_SERVER_IP_A=$(HT_SERVER_IP_A) -D HT_SERVER_IP_B=$(HT_SERVER_IP_B) \
+	    -D HT_SERVER_IP_C=$(HT_SERVER_IP_C) -D HT_SERVER_IP_D=$(HT_SERVER_IP_D) \
+	    -D HT_SERVER_PORT=$(HT_SERVER_PORT) \
 	    --obj=$(BUILD)/netboot_http_boot_debug.bin \
 	    --mapfile=$(BUILD)/netboot_http_boot_debug.map \
 	    src/netboot/http_main.asm

@@ -48,6 +48,8 @@
                                                 ; the composed binary fits the &8000-
                                                 ; &10000 window.
                 include "enc_link.asm"          ; drv_wait_link (PHY link-up, i127/i128)
+TR_TERMINATE_ONLY: equ 1                        ; exit only — skip the UDP reporter
+                include "test_report.asm"       ; tr_terminate (i228 exit: RET to trinload on hw)
 
 ; prov_skeleton — a public label so anything linking against the composed binary
 ; has a stable entry alongside prov_first/prov_onframe/prov_next.
@@ -337,9 +339,11 @@ FW_RECORD_CAP:    equ 6144
 ; config + the per-file base port/ISS, init the ENC28J60, then drive the
 ; multi-file provisioning loop: fetch each manifest file end to end, streaming its
 ; body through the SHA-256 verify into bounded HSAVE records on Trinity storage.
-; On a bring-up failure it sets a distinctive border colour and halts; on success
-; (all files fetched) it sets a green border and halts. CALL 32768 (the boot AUTO
-; BASIC) reaches this via the `jp http_main` at &8000.
+; On a bring-up failure it sets a distinctive border colour; on success (all
+; files fetched) it sets a green border. Every exit then goes through
+; tr_terminate (i228): RET to trinload on hardware (the SAM stays usable and
+; re-pushable), di;halt under emulation (the harness-detectable stop). CALL
+; 32768 (the boot AUTO BASIC) reaches this via the `jp http_main` at &8000.
 http_main:
                 di
                 ; --- locate + read the "Trinity Network " flash chunk ---
@@ -381,10 +385,10 @@ http_main:
                 ld      de, CONN_SERVER_IP
                 ld      bc, 4
                 ldir
-                ; the server port = 80 (HTTP), big-endian.
-                ld      a, 80 >> 8
+                ; the server port (HT_SERVER_PORT, default 80), big-endian.
+                ld      a, HT_SERVER_PORT >> 8
                 ld      (CONN_SERVER_PORT), a
-                ld      a, 80 & &ff
+                ld      a, HT_SERVER_PORT & &ff
                 ld      (CONN_SERVER_PORT + 1), a
                 ; per-file base initial send sequence (big-endian); prov_start
                 ; derives each file's ISS as BASE_ISS + index*0x10000.
@@ -471,8 +475,7 @@ if defined(NETBOOT_DEBUG)
 endif
                 ld      a, 4
                 out     (&fe), a
-                di
-                halt
+                jp      tr_terminate            ; RET to trinload on hardware; di;halt under emulation (i228)
 
 ht_fail_cfg:
 if defined(NETBOOT_DEBUG)
@@ -481,8 +484,7 @@ if defined(NETBOOT_DEBUG)
 endif
                 ld      a, 2                    ; red border: no/bad network settings
                 out     (&fe), a
-                di
-                halt
+                jp      tr_terminate
 ht_fail_init:
 if defined(NETBOOT_DEBUG)
                 ld      a, DBG_HTTP_FAIL_INIT
@@ -490,8 +492,7 @@ if defined(NETBOOT_DEBUG)
 endif
                 ld      a, 1                    ; blue border: ENC28J60 init failed
                 out     (&fe), a
-                di
-                halt
+                jp      tr_terminate
 ht_fail_link:
 if defined(NETBOOT_DEBUG)
                 ld      a, DBG_HTTP_FAIL_LINK
@@ -499,8 +500,7 @@ if defined(NETBOOT_DEBUG)
 endif
                 ld      a, 6                    ; yellow border: PHY link never came up
                 out     (&fe), a                ; (cable unplugged, or no link partner)
-                di
-                halt
+                jp      tr_terminate
 
 ht_chunk_name:    defm "Trinity Network "      ; the flash chunk holding MAC+IP
 ; The firmware-fetch server IPv4 address. Override at build time with pyz80 -D
@@ -520,6 +520,11 @@ HT_SERVER_IP_C: equ 0
 endif
 if defined(HT_SERVER_IP_D)==0
 HT_SERVER_IP_D: equ 1
+endif
+; The fetch server TCP port. Override at build time (e.g. HT_SERVER_PORT=8080)
+; when the serving host cannot bind :80 unprivileged. Default: 80 (HTTP).
+if defined(HT_SERVER_PORT)==0
+HT_SERVER_PORT: equ 80
 endif
 ht_server_ip:     defb HT_SERVER_IP_A, HT_SERVER_IP_B, HT_SERVER_IP_C, HT_SERVER_IP_D
 ht_iss:           defb 0, 0, 4, 0              ; per-file base initial send sequence (BE)

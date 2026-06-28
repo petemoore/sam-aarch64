@@ -430,7 +430,7 @@ hardware-verified (CLAUDE.md §5).
 
 **What it is.** The firmware self-provisioning capstone: the SAM is an **HTTP/1.0 client** that fetches a multi-file pinned firmware bundle from a plain HTTP server and **writes each file to Trinity storage** via the B-DOS record hooks. It boots as a section-D overlay (loaded at `&8000`, running in the `&8000`–`&FFFF` window that is RAM at post-load runtime), reads the SAM's MAC + IP from the Trinity EEPROM, initialises the ENC28J60, reads the SD card's CSD to learn the total record count (`BD_RECORDS`), waits for the PHY link (proactive-TX gate, i128), then drives a multi-file provisioning loop: for each file, it broadcasts an ARP request, opens a TCP connection, sends a `GET` for the file's cdn.githubraw.com URL, streams the response body through a SHA-256 verify into bounded B-DOS HSAVE records (one per 16 KB window, starting at the first free record on the card), and records the per-file hash-match verdict. On completion it sets a **green border** and halts; a bring-up failure sets a **border colour and halts** (red = no Trinity / blank EEPROM; yellow = `drv_init` failed; yellow (6) = PHY link timeout).
 
-**The server IP** is configurable at build time via `-D HT_SERVER_IP_{A,B,C,D}=n` (defaults to 192.168.0.1). The file list is the pinned manifest in `src/netboot/fw_source.asm` (six Raspberry Pi firmware files by default; one file in the smoke build below).
+**The server IP** is configurable at build time via `-D HT_SERVER_IP_{A,B,C,D}=n` (defaults to 192.168.0.1), and **the server port** via `HT_SERVER_PORT=n` (default 80) — use a high port (e.g. 8080) when the serving host cannot bind :80 unprivileged (this capture host cannot; only tcpdump/arping are sudoers-allowed). The file list is the pinned manifest in `src/netboot/fw_source.asm` (six Raspberry Pi firmware files by default; one file in the smoke build below).
 
 **i70b smoke shot (recommended first run).** For a scoped first hardware test, use the 1-file smoke binary (LICENCE.broadcom, ~1594 bytes, ~4 records). It exercises the full boot path — EEPROM read, drv_init, CSD read, link wait, first-free record detection, ARP, TCP handshake, GET, streaming SHA-256 into HSAVE records — in a short run with a small, predictable blob. The debug variant emits UDP step-marker packets (port 9001, "SDBG" magic) so a tcpdump on the host shows exactly how far the SAM got without anyone watching the border colour.
 
@@ -458,8 +458,9 @@ make netboot-http-boot-debug              # -> build/netboot_http_boot_debug.bin
 
    ```sh
    # cdn.githubraw.com proxies raw.githubusercontent.com — a real internet fetch.
-   # Or serve the blob locally (must match the pinned SHA-256 in fw_source.asm):
-   python3 -m http.server 80
+   # Or serve the blob locally (must match the pinned SHA-256 in fw_source.asm);
+   # match the port to the HT_SERVER_PORT the binary was built with:
+   python3 -m http.server 8080
    ```
 
 2. (Optional, for autonomous diagnosis) Start the marker listener before powering on:
@@ -480,10 +481,9 @@ make netboot-http-boot-debug              # -> build/netboot_http_boot_debug.bin
    ```
 
 3. Push or boot `build/netboot_http_boot_debug.bin` on the SAM + Trinity (use
-   trinload or the smoke disk). The program halts at DI;HALT when it finishes or
-   fails; if it was pushed via trinload, that halt replaces trinload, so a TAPO
-   power-cycle is required before the next push (disk-boot runs recover the same
-   way — power-cycle back to the auto-booted trinload).
+   trinload or the smoke disk). Every exit (success and failure) goes through
+   `tr_terminate` (i228): on hardware it RETs back to trinload, so the SAM stays
+   re-pushable with no power-cycle; under emulation it di;halts for the harness.
 
 **What a pass looks like.** For the smoke shot: green border, and LICENCE.broadcom present in the SAM's Trinity storage (browse from B-DOS — `DIR` the record). The harness confirms the exit mechanism: `http_main` uses `DI;HALT` after the green `OUT (&FE)`, which is the correct Z80 section-D overlay exit.
 
