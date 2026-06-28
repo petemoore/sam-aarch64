@@ -3706,7 +3706,7 @@
   description: |
     The i121 payoff on real hardware, autonomous: 'start trinload -> push the serve program (push-serve.py) -> tftp put each .mgt disk image (validated size==819200, streamed into a free record + claimed) -> tftp put tftp.done -> return to trinload', then read a stored record back (servable-raw) and byte-compare to confirm the store. Unblocked once the production CSD read lands (i145b, so the server finds free records) and the full experiment is emulation-proven (i145d). Agent-actionable: trinload runs on the SAM (192.168.2.75) over the LAN from the Pi; push via tools/trinload-push/push-serve.py + curl tftp://; the 19 build/*.mgt are valid + staged (/tmp/push-all-disks.sh batches them). NO Pete needed for the push+store+readback; booting a pushed record to watch it run is a downstream nicety (autonomous via i135 auto-boot, or a Pete-present spot-check) and NOT a blocker for this item.
   status: OPEN
-  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198, i266, i270a, i280b]
+  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198, i266, i270a, i280b-b2]
   kind: leaf
   owner: agent
 
@@ -4656,7 +4656,7 @@
   description: |
     Diff our CMD24 write bd_list_write_hw (src/netboot/sd_csd.asm) EXACTLY against Colin's FORK ADDITIONS — his 1.5t Trinity SD-driver PATCHES, NOT the whole B-DOS: ~/sam-archive/bdos/analysis/region-diffs.txt (the 1.5a->1.5t diff), ANALYSIS.md, draft-bdos-trinity-fork-analysis.md, and bdos15t-beta6.annotated.dis (the SD region: sd.out &A7C5, sd.cmd-with-address &A81F, write tail &A86B, deselect &A8D7). Port faithfully: the Trinity SD is MICROCONTROLLER-mediated — OUT(&DC),&3F auto-null select (uC supplies dummies in data phases), write busy-wait up to 65536 reads, the real data-response framing — vs our per-byte OUT / no auto-null / 256-iter poll. Cite Colin's source like the read path does. VERIFY ON REAL SAM HARDWARE (192.168.2.75): WRQ completes, SAM emits its OACK, a pushed disk stores to a free record + reads back byte-identical. Hardware-prove this BEFORE feeding the emulator (i270b). Gates i194.
   status: OPEN
-  depends_on: [i280b]
+  depends_on: [i280b-b2]
   kind: leaf
   owner: agent
   parent: i270
@@ -4785,9 +4785,29 @@
   description: |
     The remaining i280 work. The flat section-B harness can't run the HWSAD entry prelude (it calls SAM ROM &0103 + reads sysvars the window overlaps). Build a paged-boot trace: LoadROMImage (SAM ROM &0000/&C000) + B-DOS in its real &8000 page + sysvars &5000, drive a real HRECORD-select -> HWSAD, capture the gold entry contract (device/record/page state a successful write needs). Diff our seam vs gold; the discriminator between our WORKING read (HRSAD, same flat shape, works on hw) and the HANGING write is unpinned - do NOT assume hk.a alone (i270 A=0 was necessary-but-insufficient on hw). Fix bdos_seam.asm by REUSING B-DOS entry points (Pete: don't reimplement); confirm via paged-boot trace then hardware retest (i271 UDP markers, TAPO self-serve). Plan: docs/plans/i280-bdos-write-trace.md. Findings so far: docs/notes/trinity-sd-z80-interface.md §8a.
   status: OPEN
-  kind: leaf
+  kind: umbrella
   owner: agent
   parent: i280
+
+- id: i280b-b1
+  title: "Paged-boot HWSAD trace tool + gold entry contract (bdostrace-paged, §8b)"
+  description: |
+    DONE (PR pending). Built tools/netboot-oracle/z80/cmd/bdostrace-paged: boots Colin's captured ROM+EEPROM to B-DOS-resident editor idle (ROM0 at &0000, B-DOS section C page 29) with an SD card attached, and drives the real HWSAD/HRSAD/HRECORD hook machinery to capture the gold entry contract (docs/notes/trinity-sd-z80-interface.md §8b). Findings: a successful HWSAD write needs the ambient device armed as Trinity SD (&8135 class=&44, &8132 dev#=2, &780B=2), all armed by HRECORD-select; post-boot &780B/&8132 are UNARMED (0) though the card is mounted (&8135=&44), so a record-select before the write is mandatory. The wr.buff-vs-rd.buff asymmetry hypothesis is REFUTED: read and write share the same &8684/&780B device gate, so the discriminator is the ambient device at write time, not a separate write path. Honest boundary: an isolated rst8/handler entry from the editor-idle snapshot wanders (the real DOS-call SP/paging context is not armed), so the contract is confirmed where empirically observable (boot, hook-table dispatch, &8662->&780B keying, both handlers reaching the shared device-select) and derived from the 1.5t disasm authority elsewhere; the busy-wait fault stays a hardware gate (SD model always clears busy).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 721, role: completing}
+  parent: i280b
+
+- id: i280b-b2
+  title: "Fix bdos_seam.asm per the §8b gold contract (HRECORD-select to arm ambient device &780B=2 before the write) + hardware retest"
+  description: |
+    OPEN. The §8b gold contract (PR for i280b-b1) established that a successful B-DOS HWSAD write needs the ambient device armed as Trinity SD (&780B=2 / &8132=2 / &8135=&44), set by HRECORD-select, and that read and write share that gate (no wr/rd asymmetry). Diff src/netboot/bdos_seam.asm against that contract: ensure the serve HRECORD-selects the target record IMMEDIATELY before bdos_write_sector (re-arming &780B), and does not pass an A that clears &780B back to floppy (A=0 is safe iff the preceding select left &780B=2; A=2 re-asserts it). Reuse B-DOS entry points; do not reimplement. Confirm via the bdostrace-paged scaffold where possible, then a hardware retest (TAPO self-serve + i271 UDP markers) since the busy-wait fault cannot reproduce in koron-go.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i280b
 
 - id: i281
   title: "TAPO power-management automation: monitor tracks SAM on-time + escalates + auto-off backstop; agent keep-alive; idle-off in agent prompts"
