@@ -1379,9 +1379,11 @@
   title: "listen-markers.py DBG table missed the DBG_HTTP_* codes (i70a lockstep rule)"
   description: |
     The i271 lockstep rule (listen-markers.py header: the DBG_* table is kept in lockstep with src/netboot/dbg_marker.asm) was missed by PR 832: the DBG_HTTP_* codes (&60-&66, &70-&72, dbg_marker.asm:64-73) decode as UNKNOWN. Observed live in the 2026-07-03 i70b shot. Add the names to the listener table.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 841, role: completing}
   parent: i70
 
 - id: i71
