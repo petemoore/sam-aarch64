@@ -5456,8 +5456,26 @@
     The payoff milestone. Once the SAM disk-testing toolkit works — store (sd_push + i315 reorder), boot (i316 boot-a-record), delete (i317) — push ALL our existing feature .mgt images to the real SAM over the network and test the full disk-boot + feature behaviour on real silicon: the aarch64 assembler, the disassembler, the editor, the netboot/TFTP demos, etc. This is what unblocks 'sam as a daily driver' verification on hardware instead of only in emulation. Umbrella: split per feature-image as we go. Gated on the toolkit (i315 + i316) + the cj boot proof (i295/i302) that validates the store->boot chain end to end.
   status: OPEN
   depends_on: [i315, i316, i317, i308, i318, i322]
+  kind: umbrella
+  owner: agent
+
+- id: i319a
+  title: "Toolkit end-to-end hardware proof: list/push/boot/delete cycle on the real SAM with netboot_serve.mgt (network self-confirming)"
+  description: |
+    First i319 leaf: run the full toolkit cycle against the real SAM+Trinity -- list-records.py (i322 hardware validation, read-only), sd-push.py netboot_serve.mgt to the first free record (timing the push for i323; i308 record# report), boot-record.py that record (the i316 hardware follow-up; serve disk self-confirms via any TFTP response, which trinload cannot produce), power-cycle back to trinload, delete-record.py the record (the i317 hardware follow-up), re-list to confirm freed. serve_main is audit-HARDWARE-READY (all six fixes); B-DOS is resident under autoboot (samboot.md: the bootblock loads B-DOS to RAM before trinload).
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
+  parent: i319
+
+- id: i319b
+  title: Per-feature-image hardware boots via the toolkit (assembler / disassembler / editor / demos)
+  description: |
+    The remaining i319 scope after the i319a toolkit proof: push + boot + verify each feature .mgt on real silicon (release/assembler disk, disassembler, editor, netboot demos...). Split one leaf per image as each is attempted.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i319
 
 - id: i320
   title: registry-sync-check should also run 'validate' — local pre-commit gate misses invariants CI catches
@@ -5491,7 +5509,7 @@
   title: Measure + assess sd_push network throughput on hardware (the ~10-13 KB/s question)
   description: |
     Pete measured the last 800KB image push at well over a minute (~10-13 KB/s). VERIFIED in source that neither recalled culprit lingers: i301 dropped the per-sector SD init (card inited once, sd_push.asm:19), and the ENC ereset is init/exit-only NOT per-block (sd_push.asm:400/702; i293 dropped the per-block ereset). So the throughput is most likely the INHERENT bit-banged ENC receive ceiling (~375 T-states/byte ~= 16 KB/s at 6 MHz, consistent with observed ~13 KB/s). TASK: during the i319 hardware-test push campaign, time an actual push, compute KB/s, and CONFIRM whether it is the bit-bang ceiling (best-we-can-do) or a residual per-op cost remains. If genuinely bit-bang-bound, a follow-up can consider an ENC-receive-speed optimisation; if not, find + remove the residual. Pairs with i318 (screen progress) + i308 (record# over net).
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
