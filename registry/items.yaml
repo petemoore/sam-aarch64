@@ -5825,3 +5825,11 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i349
+  title: "PR 822 review residuals: bound the opt-60 scanner to RX_LEN, fix the duplicate-DATA re-ACK in simulate-pi-client.py, drop NB_ENTRY_LENMOD, list the client in hardware-shot README"
+  description: |
+    Non-blocking findings from the PR 822 pre-merge review (inline comments, review 4620650934): (1) both Z80 PXEClient filter sites read the option-60 value without bounding by RX_LEN - a truncated/malformed option lets the 9-byte prefix compare read past the frame end (worst case a malformed frame passes the gate); add an HL+9 <= frame-end check matching the copy_uuid bound style. (2) simulate-pi-client.py duplicate-DATA branch comments 're-ACK below' but 'continue' skips the ACK, so a lost ACK stalls to timeout instead of re-ACKing. (3) NB_ENTRY_LENMOD equ in netboot_server.asm is unused - delete. (4) tools/hardware-shot/README.md does not list simulate-pi-client.py. Also consider a shared equ for the STORE+1024 literal duplicating tftp_parse.asm's defs 1024.
+  status: OPEN
+  kind: leaf
+  owner: agent
