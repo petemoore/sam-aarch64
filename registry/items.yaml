@@ -5526,7 +5526,7 @@
   title: "Hardware shot: push + boot the assembler record vessel; best-effort confirm, visual check deferred"
   description: |
     After the emulation gate: sd-push build/test_record.mgt (or final name) to the first free record, boot-record.py it, and best-effort-confirm per the ROADMAP rule (network-reporting disks self-confirm; a purely-visual disk gets the boot + a trinload-gone probe -- boot dispatched, machine left trinload -- with the on-screen BUILD_TESTS self-test verdict DEFERRED to Pete-presence). Power-cycle recovery via tapo.sh; keep the record for re-boots; standard deploy-guard checklist applies.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i319b-b1, i319b-b2]
   kind: leaf
   owner: agent
