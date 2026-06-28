@@ -5432,9 +5432,11 @@
   title: "Delete-a-record tool: trinload-pushed program that frees a specified Trinity SD record"
   description: |
     A trinload-pushed Z80 program that deletes/frees a specified record on the Trinity SD card (clears its record-list entry so the slot is reusable). Completes the store/boot/delete testing toolkit so autonomous tests can re-push cleanly without exhausting records. Data-safety: only free the named/numbered record; never touch neighbours (trinity_storage_shared_resource). Shared-card write -> hardware validation is Pete-gated (i295 family).
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 796, role: completing}
 
 - id: i318
   title: "sd_push: SAM-screen output showing progress + which record was created"
