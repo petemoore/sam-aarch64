@@ -45,6 +45,7 @@ STRAT_EXPLICIT = 2
 TOOL_TAGS = {
     b"SP": "sd_push",
     b"LR": "list_records",
+    b"HR": "hook_roundtrip",
 }
 
 STRATEGY_NAMES = {"highest": STRAT_HIGHEST, "lowest": STRAT_LOWEST}
