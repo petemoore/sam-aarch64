@@ -40,6 +40,7 @@ DBG_CLAIM_FIND_PRE:    equ &14        ; wrq_claim_record: about to bdos_find_rec
 DBG_CLAIM_SELECT_PRE:  equ &15        ; free record found; about to bdos_select_record (HRECORD hook)
 DBG_CLAIM_SELECT_POST: equ &16        ; HRECORD select returned (the claim succeeded)
 DBG_REARM_TIMEOUT:     equ &17        ; serve_rearm_enc's ENC busy-poll hit its bound (stuck shared bus = the i280b contention)
+DBG_PRIOR_REARM_TIMEOUT: equ &18      ; at WRQ_ENTRY: the PRIOR WRQ's claim serve_rearm_enc timed out — latched + reported from OUTSIDE the §8e post-rearm dead ENC-TX window (i280b-b2f). &18 present ⇒ re-arm timed out (bus stayed busy); absent ⇒ re-arm succeeded but the ENC was not yet wire-ready
 DBG_DATA_BLOCK:     equ &20           ; a DATA block accepted, about to sink/stage it
 DBG_FLUSH_PRE:      equ &21           ; rrs_flush_sector entered: a full 512-byte sector is staged, about to write it
 DBG_HWSAD_PRE:      equ &22           ; bdos_write_sector entered: about to RST 8 / DEFB 149 (B-DOS HWSAD)
@@ -115,4 +116,11 @@ dbg_broadcast_mac:  defb &ff,&ff,&ff,&ff,&ff,&ff
 dbg_broadcast_ip:   defb 255,255,255,255
 dbg_port_be:        defb DBG_PORT >> 8, DBG_PORT & &ff
 dbg_save_code:      defs 1
+; i280b-b2f: enc_timed_out latched at the END of serve_rearm_enc and emitted at the NEXT
+; WRQ_ENTRY as DBG_PRIOR_REARM_TIMEOUT. The §8e finding is that DBG_REARM_TIMEOUT, emitted
+; inside the post-rearm dead ENC-TX window, may not reach the wire; this latch is read at
+; WRQ_ENTRY (which DOES escape), reporting the prior re-arm's result from outside the window.
+; Initialised 0 so the first WRQ (no prior re-arm) emits no &18. Persists across the serve
+; loop until the next re-arm rewrites it.
+last_rearm_timed_out: defb 0
 DBG_PAYLOAD:        defs 6

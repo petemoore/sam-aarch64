@@ -398,6 +398,18 @@ handle_wrq:
                 if defined(NETBOOT_DEBUG)
                 ld      a, DBG_WRQ_ENTRY
                 call    dbg_marker
+                ; i280b-b2f: report the PRIOR WRQ's claim re-arm result HERE, where the marker
+                ; TX reliably escapes (unlike DBG_REARM_TIMEOUT inside the §8e post-rearm dead
+                ; window). &18 present at WRQ_ENTRY ⇒ the previous WRQ's serve_rearm_enc timed
+                ; out (the bus stayed busy → a bus-hand-off fix); absent ⇒ the re-arm succeeded
+                ; but the ENC was not yet wire-ready (→ a post-rearm TX-readiness fix). curl's
+                ; WRQ retransmits make iterations 2..N report iterations 1..N-1.
+                ld      a, (last_rearm_timed_out)
+                or      a
+                jr      z, wrq_entry_no_prior
+                ld      a, DBG_PRIOR_REARM_TIMEOUT
+                call    dbg_marker
+wrq_entry_no_prior:
                 endif
                 ; learn the client endpoint (same pattern as handle_rrq).
                 ld      hl, RXBUF + RX_ETH_SRCMAC
@@ -566,6 +578,11 @@ serve_rearm_enc:
                 ; timed out (rather than the serve silently dying). The serve stays alive
                 ; and trinload-recoverable either way.
                 ld      a, (enc_timed_out)
+                ld      (last_rearm_timed_out), a   ; i280b-b2f: latch for the NEXT WRQ_ENTRY to
+                                                    ; report — §8e showed DBG_REARM_TIMEOUT below
+                                                    ; may not escape the post-rearm dead ENC-TX
+                                                    ; window, so the latch (read where TX escapes)
+                                                    ; is the reliable channel.
                 or      a
                 ret     z
                 ld      a, DBG_REARM_TIMEOUT

@@ -409,6 +409,41 @@ ENC is TX-capable before the handshake, or retry the handshake). Only then is th
 chosen and re-shot. The fault still does not reproduce in koron-go (the SD model clears busy;
 no shared controller), so this stays hardware-gated.
 
+## 8f. Hardware shot (i280b-b2f) — the discriminator's verdict: the re-arm SUCCEEDS; the gap is post-`ereset` TX-readiness, NOT a stuck bus
+
+i280b-b2f added the window-independent channel §8e prescribed: `serve_rearm_enc` latches
+`enc_timed_out` into `last_rearm_timed_out` at its end, and `handle_wrq` emits
+`DBG_PRIOR_REARM_TIMEOUT` (&18) right after the (reliably-escaping) `WRQ_ENTRY` marker iff
+that latch is set — so each WRQ retransmit reports the *previous* WRQ's claim re-arm result
+from **outside** the post-re-arm dead TX window. All additive under `NETBOOT_DEBUG` (production
+byte-identical). A TAPO shot:
+
+**Markers (6 curl WRQ retransmits):** `WRQ_ENTRY → CLAIM_FIND_PRE → CLAIM_SELECT_PRE →
+CLAIM_SELECT_POST` ×6 — and **NO `&18` on any iteration** (incl. iterations 2–6, which
+report iterations 1–5's claim re-arm). curl 0 bytes, as before.
+
+**Verdict (definitive):** `last_rearm_timed_out` was **0** every iteration ⇒ the claim's
+`serve_rearm_enc` **did not time out** — every `wait_ready` saw `&DC` bit-3 clear and the
+routine *returned* each time (we reach the next `WRQ_ENTRY`, so it neither timed out nor
+wedged anywhere, incl. the unbounded `wr_phy_wait` PHY poll). **This kills the b2c/b2d
+"`&DC` stays hung / the re-arm times out on a stuck bus" hypothesis** — the bus is
+responsive and the re-arm completes. The failure is the *other* §8e branch: **the re-arm
+SUCCEEDS but the ENC TX is not yet wire-ready for a window afterwards.** Decisive corroborating
+detail: the markers *before* the claim re-arm (`WRQ_ENTRY`/`FIND`/`SELECT`, themselves ENC
+TX) escape on every iteration, but everything *after* it (`WRQ_CLAIMED`, `WRQ_HANDSHAKE`, and
+the handshake reply) escapes on none — so **the re-arm itself (its `ereset` full ENC soft-reset)
+breaks TX for a window**, recovering by the next serve loop. (The SD claim ops disturb ENC
+**RX** but not TX — hence the pre-re-arm markers work; the re-arm restores RX by resetting the
+whole ENC, which transiently kills **TX**.)
+
+**The b2d fix is now well-posed (no more hardware guessing needed to choose it):** after
+`serve_rearm_enc`, make the ENC TX genuinely wire-ready before the handshake reply — e.g. wait
+for `ESTAT.CLKRDY`/OST after the `ereset` soft-reset (the driver's own errata note already flags
+CLKRDY as unreliable, so a bounded settle or a TX self-check), and/or retry the handshake reply
+(it provably succeeds by the next iteration). Mirror the ENC driver's existing primitives; keep
+it bounded (a stuck ENC must never wedge the serve). Then a confirming shot: the disk push
+should reach `WRQ_CLAIMED → WRQ_HANDSHAKE` and curl should hand-shake.
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
