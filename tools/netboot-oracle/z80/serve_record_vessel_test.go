@@ -18,6 +18,7 @@
 package z80_test
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/petemoore/sam-aarch64/tools/netboot-oracle/frame"
@@ -72,6 +73,30 @@ func TestBootRecordServeRecordVessel(t *testing.T) {
 	}
 	if body == 0 {
 		t.Error("no record-2 BODY sectors read — the serve binary cannot have been loaded from the card")
+	}
+
+	// The load must be COMPLETE through the file's final sector. The tail of
+	// the >16K image (its second page) holds the csd_* routines and then
+	// SERVE_CONFIG; compare the static code span [csd_blocks_to_records,
+	// csd_blocks) — symbol-derived, past the 16K fold, and before the
+	// runtime-mutated CSD variables and the strategy-dependent config bytes —
+	// against the source binary. A short load (a lost final sector) leaves
+	// this window unwritten and cannot pass.
+	serveBin := mustReadFile(t, serveBootBin, "make netboot-serve-boot")
+	tailLo := serveSym("csd_blocks_to_records")
+	tailHi := serveSym("csd_blocks")
+	if tailLo < 0xC000 || tailHi <= tailLo {
+		t.Fatalf("tail window [&%04X,&%04X) no longer suits the completeness check — pick fresh symbols past the 16K fold", tailLo, tailHi)
+	}
+	loaded := mac.Pager().RAM[page+1][tailLo-0xC000 : tailHi-0xC000]
+	want := serveBin[tailLo-0x8000 : tailHi-0x8000]
+	if !bytes.Equal(loaded, want) {
+		diff := 0
+		for diff < len(want) && loaded[diff] == want[diff] {
+			diff++
+		}
+		t.Errorf("loaded image tail differs from netboot_serve_boot.bin at &%04X (got &%02X want &%02X) — the record load did not deliver the file's final sectors",
+			int(tailLo)+diff, loaded[diff], want[diff])
 	}
 
 	// Serve's adopted identity, read back from its CONFIG block (filled from
