@@ -9,6 +9,33 @@ SHELL := /usr/bin/env bash
 BUILD := build
 TESTS := tests
 
+# A recipe that fails after partially writing its target must not leave that
+# half-written file behind looking fresh (make deletes a changed target on
+# recipe failure).  A target the failed recipe never touched keeps its old
+# mtime, stays out of date, and keeps failing the build until fixed —
+# `make check-artifacts-fresh` catches consumers that bypass make (i309).
+.DELETE_ON_ERROR:
+
+# "asm_deps/<file>" variables: the transitive pyz80 include closure of every
+# .asm/.inc under src/, computed by tools/asm-deps.sh.  Each pyz80 rule
+# declares its top source file plus that file's asm_deps closure variable as
+# its prerequisites, so the include graph is never hand-maintained
+# (hand-listed closures drifted and caused stale-binary test runs — i309).
+# The fragment is regenerated on every make run (~0.3 s) but only rewritten
+# when the graph changes, so make's makefile-remake mechanism restarts only
+# on a real change; --check fails the run if an asm_deps reference in this
+# Makefile names a nonexistent file (a typo would otherwise silently expand
+# to no prerequisites).  Plain `include` (not -include) so a scanner failure
+# stops the build instead of silently building with no include deps.
+ASM_DEPS_MK := $(BUILD)/asm-deps.mk
+$(ASM_DEPS_MK): FORCE
+	@mkdir -p $(BUILD)
+	@tools/asm-deps.sh --check Makefile > $@.tmp
+	@if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv $@.tmp $@; fi
+.PHONY: FORCE
+FORCE:
+include $(ASM_DEPS_MK)
+
 .PHONY: all clean
 
 # Default build: the two shipping assembler variants (the recipe for each
@@ -86,7 +113,7 @@ ci-registry: registry-gen
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
 .PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
-$(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm
+$(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm $(asm_deps/src/netboot/build_udp_frame.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
 	    --mapfile=$(BUILD)/netboot_build_udp_frame.map \
@@ -94,7 +121,7 @@ $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/n
 
 netboot-build-udp-frame: $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map
 
-$(BUILD)/netboot_dhcp_reply.bin $(BUILD)/netboot_dhcp_reply.map: src/netboot/dhcp_reply.asm
+$(BUILD)/netboot_dhcp_reply.bin $(BUILD)/netboot_dhcp_reply.map: src/netboot/dhcp_reply.asm $(asm_deps/src/netboot/dhcp_reply.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_dhcp_reply.bin \
 	    --mapfile=$(BUILD)/netboot_dhcp_reply.map \
@@ -102,7 +129,7 @@ $(BUILD)/netboot_dhcp_reply.bin $(BUILD)/netboot_dhcp_reply.map: src/netboot/dhc
 
 netboot-dhcp-reply: $(BUILD)/netboot_dhcp_reply.bin $(BUILD)/netboot_dhcp_reply.map
 
-$(BUILD)/netboot_tftp_build.bin $(BUILD)/netboot_tftp_build.map: src/netboot/tftp_build.asm
+$(BUILD)/netboot_tftp_build.bin $(BUILD)/netboot_tftp_build.map: src/netboot/tftp_build.asm $(asm_deps/src/netboot/tftp_build.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_tftp_build.bin \
 	    --mapfile=$(BUILD)/netboot_tftp_build.map \
@@ -110,7 +137,7 @@ $(BUILD)/netboot_tftp_build.bin $(BUILD)/netboot_tftp_build.map: src/netboot/tft
 
 netboot-tftp-build: $(BUILD)/netboot_tftp_build.bin $(BUILD)/netboot_tftp_build.map
 
-$(BUILD)/netboot_tftp_parse.bin $(BUILD)/netboot_tftp_parse.map: src/netboot/tftp_parse.asm
+$(BUILD)/netboot_tftp_parse.bin $(BUILD)/netboot_tftp_parse.map: src/netboot/tftp_parse.asm $(asm_deps/src/netboot/tftp_parse.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_tftp_parse.bin \
 	    --mapfile=$(BUILD)/netboot_tftp_parse.map \
@@ -118,7 +145,7 @@ $(BUILD)/netboot_tftp_parse.bin $(BUILD)/netboot_tftp_parse.map: src/netboot/tft
 
 netboot-tftp-parse: $(BUILD)/netboot_tftp_parse.bin $(BUILD)/netboot_tftp_parse.map
 
-$(BUILD)/netboot_tftp_client.bin $(BUILD)/netboot_tftp_client.map: src/netboot/tftp_client.asm
+$(BUILD)/netboot_tftp_client.bin $(BUILD)/netboot_tftp_client.map: src/netboot/tftp_client.asm $(asm_deps/src/netboot/tftp_client.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_tftp_client.bin \
 	    --mapfile=$(BUILD)/netboot_tftp_client.map \
@@ -126,7 +153,7 @@ $(BUILD)/netboot_tftp_client.bin $(BUILD)/netboot_tftp_client.map: src/netboot/t
 
 netboot-tftp-client: $(BUILD)/netboot_tftp_client.bin $(BUILD)/netboot_tftp_client.map
 
-$(BUILD)/netboot_build_arp_request.bin $(BUILD)/netboot_build_arp_request.map: src/netboot/build_arp_request.asm
+$(BUILD)/netboot_build_arp_request.bin $(BUILD)/netboot_build_arp_request.map: src/netboot/build_arp_request.asm $(asm_deps/src/netboot/build_arp_request.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_arp_request.bin \
 	    --mapfile=$(BUILD)/netboot_build_arp_request.map \
@@ -134,7 +161,7 @@ $(BUILD)/netboot_build_arp_request.bin $(BUILD)/netboot_build_arp_request.map: s
 
 netboot-build-arp-request: $(BUILD)/netboot_build_arp_request.bin $(BUILD)/netboot_build_arp_request.map
 
-$(BUILD)/netboot_build_arp_reply.bin $(BUILD)/netboot_build_arp_reply.map: src/netboot/build_arp_reply.asm
+$(BUILD)/netboot_build_arp_reply.bin $(BUILD)/netboot_build_arp_reply.map: src/netboot/build_arp_reply.asm $(asm_deps/src/netboot/build_arp_reply.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_arp_reply.bin \
 	    --mapfile=$(BUILD)/netboot_build_arp_reply.map \
@@ -147,7 +174,7 @@ netboot-build-arp-reply: $(BUILD)/netboot_build_arp_reply.bin $(BUILD)/netboot_b
 # HTTP client rides on; the UDP-only trinload stack does not provide it.  Host-
 # verified: tcp_segment_test.go byte-compares the emitted segment (incl. the
 # mandatory pseudo-header checksum) against the Go authority tcp.BuildSegment.
-$(BUILD)/netboot_build_tcp_segment.bin $(BUILD)/netboot_build_tcp_segment.map: src/netboot/build_tcp_segment.asm
+$(BUILD)/netboot_build_tcp_segment.bin $(BUILD)/netboot_build_tcp_segment.map: src/netboot/build_tcp_segment.asm $(asm_deps/src/netboot/build_tcp_segment.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_tcp_segment.bin \
 	    --mapfile=$(BUILD)/netboot_build_tcp_segment.map \
@@ -161,7 +188,7 @@ netboot-build-tcp-segment: $(BUILD)/netboot_build_tcp_segment.bin $(BUILD)/netbo
 # building block.  Host-verified: sha256_test.go byte-compares the Z80 digest
 # against Go's crypto/sha256 over the FIPS/NIST vectors, fed both whole and in
 # awkward chunks to exercise the streaming partial-block carry.
-$(BUILD)/netboot_sha256.bin $(BUILD)/netboot_sha256.map: src/netboot/sha256.asm
+$(BUILD)/netboot_sha256.bin $(BUILD)/netboot_sha256.map: src/netboot/sha256.asm $(asm_deps/src/netboot/sha256.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_sha256.bin \
 	    --mapfile=$(BUILD)/netboot_sha256.map \
@@ -173,7 +200,7 @@ netboot-sha256: $(BUILD)/netboot_sha256.bin $(BUILD)/netboot_sha256.map
 # block above the SHA-256 primitive (TLS 1.3's HKDF key schedule is HMAC-SHA256).
 # A thin orchestration over sha256.asm.  Standalone leaf, host-verified by
 # hmac_sha256_test.go vs Go crypto/hmac over the RFC 4231 vectors.
-$(BUILD)/netboot_hmac_sha256.bin $(BUILD)/netboot_hmac_sha256.map: src/netboot/hmac_sha256.asm src/netboot/sha256.asm
+$(BUILD)/netboot_hmac_sha256.bin $(BUILD)/netboot_hmac_sha256.map: src/netboot/hmac_sha256.asm $(asm_deps/src/netboot/hmac_sha256.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_hmac_sha256.bin \
 	    --mapfile=$(BUILD)/netboot_hmac_sha256.map \
@@ -185,7 +212,7 @@ netboot-hmac-sha256: $(BUILD)/netboot_hmac_sha256.bin $(BUILD)/netboot_hmac_sha2
 # hkdf_extract (PRK = HMAC(salt, IKM)) + hkdf_expand (the T(i) chain to L bytes);
 # orchestration over hmac_sha256.asm, no new arithmetic.  Standalone leaf,
 # host-verified by hkdf_test.go vs Go crypto/hkdf over the RFC 5869 vectors.
-$(BUILD)/netboot_hkdf.bin $(BUILD)/netboot_hkdf.map: src/netboot/hkdf.asm src/netboot/hmac_sha256.asm src/netboot/sha256.asm
+$(BUILD)/netboot_hkdf.bin $(BUILD)/netboot_hkdf.map: src/netboot/hkdf.asm $(asm_deps/src/netboot/hkdf.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_hkdf.bin \
 	    --mapfile=$(BUILD)/netboot_hkdf.map \
@@ -198,7 +225,7 @@ netboot-hkdf: $(BUILD)/netboot_hkdf.bin $(BUILD)/netboot_hkdf.map
 # hkdf_expand.  The function the whole TLS key schedule is built from.  Standalone
 # leaf, host-verified by hkdf_expand_label_test.go vs a Go RFC 8446 §7.1 reference
 # (anchored to the RFC 8448 known-answer).
-$(BUILD)/netboot_hkdf_expand_label.bin $(BUILD)/netboot_hkdf_expand_label.map: src/netboot/hkdf_expand_label.asm src/netboot/hkdf.asm src/netboot/hmac_sha256.asm src/netboot/sha256.asm
+$(BUILD)/netboot_hkdf_expand_label.bin $(BUILD)/netboot_hkdf_expand_label.map: src/netboot/hkdf_expand_label.asm $(asm_deps/src/netboot/hkdf_expand_label.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_hkdf_expand_label.bin \
 	    --mapfile=$(BUILD)/netboot_hkdf_expand_label.map \
@@ -209,7 +236,7 @@ netboot-hkdf-expand-label: $(BUILD)/netboot_hkdf_expand_label.bin $(BUILD)/netbo
 # netboot-chacha20 (i88) — the ChaCha20 block function (RFC 8439 §2.3), the first
 # i88 cipher (from-scratch ARX: the quarter-round + 20 rounds).  Standalone leaf,
 # host-verified by chacha20_test.go vs the RFC 8439 known-answer vectors.
-$(BUILD)/netboot_chacha20.bin $(BUILD)/netboot_chacha20.map: src/netboot/chacha20.asm
+$(BUILD)/netboot_chacha20.bin $(BUILD)/netboot_chacha20.map: src/netboot/chacha20.asm $(asm_deps/src/netboot/chacha20.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_chacha20.bin \
 	    --mapfile=$(BUILD)/netboot_chacha20.map \
@@ -221,7 +248,7 @@ netboot-chacha20: $(BUILD)/netboot_chacha20.bin $(BUILD)/netboot_chacha20.map
 # the ChaCha20-Poly1305 MAC: byte-radix multi-precision (8x8 mul8, a 17x16
 # schoolbook product, reduction mod 2^130-5).  Standalone leaf, host-verified by
 # poly1305_test.go vs the RFC 8439 §2.5.2 KAT + a math/big reference.
-$(BUILD)/netboot_poly1305.bin $(BUILD)/netboot_poly1305.map: src/netboot/poly1305.asm src/netboot/qsq.asm
+$(BUILD)/netboot_poly1305.bin $(BUILD)/netboot_poly1305.map: src/netboot/poly1305.asm $(asm_deps/src/netboot/poly1305.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_poly1305.bin \
 	    --mapfile=$(BUILD)/netboot_poly1305.map \
@@ -234,7 +261,7 @@ netboot-poly1305: $(BUILD)/netboot_poly1305.bin $(BUILD)/netboot_poly1305.map
 # 32x32 schoolbook product, reduction via 2^256≡38 + 2^255≡19).  Standalone leaf,
 # host-verified by x25519_field_test.go vs a math/big reference (the ladder builds
 # on this in a follow-up).
-$(BUILD)/netboot_x25519.bin $(BUILD)/netboot_x25519.map: src/netboot/x25519.asm src/netboot/qsq.asm
+$(BUILD)/netboot_x25519.bin $(BUILD)/netboot_x25519.map: src/netboot/x25519.asm $(asm_deps/src/netboot/x25519.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_x25519.bin \
 	    --mapfile=$(BUILD)/netboot_x25519.map \
@@ -247,7 +274,7 @@ netboot-x25519-field: $(BUILD)/netboot_x25519.bin $(BUILD)/netboot_x25519.map
 # -D NETBOOT_AEAD so their NETBOOT_STANDALONE org guard stays inert and this file
 # sets the org once).  Standalone leaf, host-verified by aead_test.go vs the RFC
 # 8439 §2.8.2 (encrypt) + §2.6.2 (key-gen) KATs + a decrypt round-trip + tamper.
-$(BUILD)/netboot_aead.bin $(BUILD)/netboot_aead.map: src/netboot/aead.asm src/netboot/chacha20.asm src/netboot/poly1305.asm src/netboot/qsq.asm
+$(BUILD)/netboot_aead.bin $(BUILD)/netboot_aead.map: src/netboot/aead.asm $(asm_deps/src/netboot/aead.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_AEAD=1 --obj=$(BUILD)/netboot_aead.bin \
 	    --mapfile=$(BUILD)/netboot_aead.map \
@@ -261,7 +288,7 @@ netboot-aead: $(BUILD)/netboot_aead.bin $(BUILD)/netboot_aead.map
 # their NETBOOT_STANDALONE org guard stays inert and this file sets the org once).
 # Standalone leaf, host-verified by tls_keyschedule_test.go vs a Go RFC 8446 §7.1
 # reference anchored to the RFC 8448 known-answer.
-$(BUILD)/netboot_tls_keyschedule.bin $(BUILD)/netboot_tls_keyschedule.map: src/netboot/tls_keyschedule.asm src/netboot/hkdf_expand_label.asm src/netboot/hkdf.asm src/netboot/hmac_sha256.asm src/netboot/sha256.asm
+$(BUILD)/netboot_tls_keyschedule.bin $(BUILD)/netboot_tls_keyschedule.map: src/netboot/tls_keyschedule.asm $(asm_deps/src/netboot/tls_keyschedule.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_TLS_KS=1 --obj=$(BUILD)/netboot_tls_keyschedule.bin \
 	    --mapfile=$(BUILD)/netboot_tls_keyschedule.map \
@@ -275,7 +302,7 @@ netboot-tls-keyschedule: $(BUILD)/netboot_tls_keyschedule.bin $(BUILD)/netboot_t
 # modules' org guards stay inert and this file sets the org once).  Standalone leaf,
 # host-verified by tls_record_test.go (seal->open round-trip + a Go framing
 # cross-check via the in-binary aead_encrypt + tamper/seq rejection).
-$(BUILD)/netboot_tls_record.bin $(BUILD)/netboot_tls_record.map: src/netboot/tls_record.asm src/netboot/aead.asm src/netboot/chacha20.asm src/netboot/poly1305.asm src/netboot/qsq.asm
+$(BUILD)/netboot_tls_record.bin $(BUILD)/netboot_tls_record.map: src/netboot/tls_record.asm $(asm_deps/src/netboot/tls_record.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_TLS_RECORD=1 --obj=$(BUILD)/netboot_tls_record.bin \
 	    --mapfile=$(BUILD)/netboot_tls_record.map \
@@ -289,7 +316,7 @@ netboot-tls-record: $(BUILD)/netboot_tls_record.bin $(BUILD)/netboot_tls_record.
 # so its org guard stays inert), adding a snapshot (save state -> final -> restore)
 # so Derive-Secret can hash the transcript so far without ending the stream.
 # Standalone leaf, host-verified by tls_transcript_test.go vs Go crypto/sha256.
-$(BUILD)/netboot_tls_transcript.bin $(BUILD)/netboot_tls_transcript.map: src/netboot/tls_transcript.asm src/netboot/sha256.asm
+$(BUILD)/netboot_tls_transcript.bin $(BUILD)/netboot_tls_transcript.map: src/netboot/tls_transcript.asm $(asm_deps/src/netboot/tls_transcript.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_TLS_TRANSCRIPT=1 --obj=$(BUILD)/netboot_tls_transcript.bin \
 	    --mapfile=$(BUILD)/netboot_tls_transcript.map \
@@ -302,7 +329,7 @@ netboot-tls-transcript: $(BUILD)/netboot_tls_transcript.bin $(BUILD)/netboot_tls
 # assembly (no crypto include'd; built with -D NETBOOT_TLS_CH so it sets the org
 # once).  Standalone leaf, host-verified by tls_client_hello_test.go (byte-exact
 # vs an independent Go reconstruction + a crypto/tls ClientHelloInfo parse).
-$(BUILD)/netboot_tls_client_hello.bin $(BUILD)/netboot_tls_client_hello.map: src/netboot/tls_client_hello.asm
+$(BUILD)/netboot_tls_client_hello.bin $(BUILD)/netboot_tls_client_hello.map: src/netboot/tls_client_hello.asm $(asm_deps/src/netboot/tls_client_hello.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_TLS_CH=1 --obj=$(BUILD)/netboot_tls_client_hello.bin \
 	    --mapfile=$(BUILD)/netboot_tls_client_hello.map \
@@ -318,7 +345,7 @@ netboot-tls-client-hello: $(BUILD)/netboot_tls_client_hello.bin $(BUILD)/netboot
 # and captures its verify_data.  Built with -D NETBOOT_TLS_SF (the composition
 # idiom; tls_transcript.asm + sha256.asm include'd, org guards inert).  Standalone
 # leaf, host-verified by tls_server_flight_test.go.
-$(BUILD)/netboot_tls_server_flight.bin $(BUILD)/netboot_tls_server_flight.map: src/netboot/tls_server_flight.asm src/netboot/tls_transcript.asm src/netboot/sha256.asm
+$(BUILD)/netboot_tls_server_flight.bin $(BUILD)/netboot_tls_server_flight.map: src/netboot/tls_server_flight.asm $(asm_deps/src/netboot/tls_server_flight.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_TLS_SF=1 --obj=$(BUILD)/netboot_tls_server_flight.bin \
 	    --mapfile=$(BUILD)/netboot_tls_server_flight.map \
@@ -333,13 +360,7 @@ netboot-tls-server-flight: $(BUILD)/netboot_tls_server_flight.bin $(BUILD)/netbo
 # Built with -D NETBOOT_TLS_CLIENT=1: this file sets the org once, and the flag
 # dedups the two cross-brick collisions (sha256 + qsq, port plan Part 0).  Host-
 # verified by tls_client_test.go (capture-then-replay vs the Go authority).
-$(BUILD)/netboot_tls_client.bin $(BUILD)/netboot_tls_client.map: \
-	    src/netboot/tls_client.asm \
-	    src/netboot/tls_keyschedule.asm src/netboot/hkdf_expand_label.asm \
-	    src/netboot/hkdf.asm src/netboot/hmac_sha256.asm src/netboot/sha256.asm \
-	    src/netboot/tls_record.asm src/netboot/aead.asm src/netboot/chacha20.asm \
-	    src/netboot/poly1305.asm src/netboot/qsq.asm src/netboot/tls_client_hello.asm \
-	    src/netboot/tls_server_flight.asm src/netboot/tls_transcript.asm src/netboot/x25519.asm
+$(BUILD)/netboot_tls_client.bin $(BUILD)/netboot_tls_client.map: src/netboot/tls_client.asm $(asm_deps/src/netboot/tls_client.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_TLS_CLIENT=1 --obj=$(BUILD)/netboot_tls_client.bin \
 	    --mapfile=$(BUILD)/netboot_tls_client.map \
@@ -351,7 +372,7 @@ netboot-tls-client: $(BUILD)/netboot_tls_client.bin $(BUILD)/netboot_tls_client.
 # orged at &8000 by encdrv_harness.asm.  The i80 emulation test (enc28j60_test)
 # runs drv_init/drv_write/drv_read from this binary against the emulated Trinity
 # (tools/netboot-oracle/z80/enc28j60.go), the host-verifiable ENC28J60 wire path.
-$(BUILD)/netboot_encdrv.bin $(BUILD)/netboot_encdrv.map: src/netboot/encdrv_harness.asm src/netboot/encdrv.asm
+$(BUILD)/netboot_encdrv.bin $(BUILD)/netboot_encdrv.map: src/netboot/encdrv_harness.asm $(asm_deps/src/netboot/encdrv_harness.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_encdrv.bin \
 	    --mapfile=$(BUILD)/netboot_encdrv.map \
@@ -365,7 +386,7 @@ netboot-encdrv: $(BUILD)/netboot_encdrv.bin $(BUILD)/netboot_encdrv.map
 # (encdrv.asm) into one binary; the i80 emulation test (dhcp_loop_test) runs it
 # against the emulated Trinity and asserts the wire frame matches the Go
 # Responder authority byte-for-byte.
-$(BUILD)/netboot_dhcp_loop.bin $(BUILD)/netboot_dhcp_loop.map: src/netboot/dhcp_loop.asm src/netboot/build_udp_frame.asm src/netboot/dhcp_reply.asm src/netboot/encdrv.asm
+$(BUILD)/netboot_dhcp_loop.bin $(BUILD)/netboot_dhcp_loop.map: src/netboot/dhcp_loop.asm $(asm_deps/src/netboot/dhcp_loop.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_dhcp_loop.bin \
 	    --mapfile=$(BUILD)/netboot_dhcp_loop.map \
@@ -382,7 +403,7 @@ netboot-dhcp-loop: $(BUILD)/netboot_dhcp_loop.bin $(BUILD)/netboot_dhcp_loop.map
 # SHA-256 verify (sha256.asm + conn_verify_init/final); both are excluded from
 # the bootable images (which don't pass the flag) to keep them under &10000. The
 # existing oracle tests are unaffected — CONN_SINK_ENABLED defaults to 0.
-$(BUILD)/netboot_tcp_conn.bin $(BUILD)/netboot_tcp_conn.map: src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/encdrv.asm src/netboot/sha256.asm
+$(BUILD)/netboot_tcp_conn.bin $(BUILD)/netboot_tcp_conn.map: src/netboot/tcp_conn.asm $(asm_deps/src/netboot/tcp_conn.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_HOSTTEST=1 --obj=$(BUILD)/netboot_tcp_conn.bin \
 	    --mapfile=$(BUILD)/netboot_tcp_conn.map \
@@ -398,7 +419,7 @@ netboot-tcp-conn: $(BUILD)/netboot_tcp_conn.bin $(BUILD)/netboot_tcp_conn.map
 # of the accumulated-CONN_DATA assert).  Mirrors the Go-authority streaming tests
 # (PR #263).  Also covered by ci-netboot-z80 (which runs the whole package).
 netboot-tcp-conn-stream: $(BUILD)/netboot_tcp_conn.bin $(BUILD)/netboot_tcp_conn.map
-	cd tools/netboot-oracle/z80 && go test -run TestTCPConnStream ./...
+	cd tools/netboot-oracle/z80 && go test -count=1 -run TestTCPConnStream ./...
 
 # http-get — the i70 HTTP/1.0 GET client (firmware self-provisioning): build the
 # request, send it over the established TCP connection (tcp_conn.asm), and parse
@@ -408,7 +429,7 @@ netboot-tcp-conn-stream: $(BUILD)/netboot_tcp_conn.bin $(BUILD)/netboot_tcp_conn
 # asserts the GET segment on the virtual wire matches the Go http.Client.Start
 # authority byte-for-byte, streams a response, and checks the parse vs Go
 # ParseResponse.
-$(BUILD)/netboot_http_get.bin $(BUILD)/netboot_http_get.map: src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/encdrv.asm
+$(BUILD)/netboot_http_get.bin $(BUILD)/netboot_http_get.map: src/netboot/http_get.asm $(asm_deps/src/netboot/http_get.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_http_get.bin \
 	    --mapfile=$(BUILD)/netboot_http_get.map \
@@ -421,7 +442,7 @@ netboot-http-get: $(BUILD)/netboot_http_get.bin $(BUILD)/netboot_http_get.map
 # /<owner>/<repo>/<sha>/<path> into FW_PATH; the host test (fw_source_test)
 # byte-compares it vs the Go authority http.GithubRawPath, building both from the
 # FW_* config strings read back out of the binary (one source of truth).
-$(BUILD)/netboot_fw_source.bin $(BUILD)/netboot_fw_source.map: src/netboot/fw_source.asm
+$(BUILD)/netboot_fw_source.bin $(BUILD)/netboot_fw_source.map: src/netboot/fw_source.asm $(asm_deps/src/netboot/fw_source.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 \
 	    --obj=$(BUILD)/netboot_fw_source.bin \
@@ -436,7 +457,7 @@ netboot-fw-source: $(BUILD)/netboot_fw_source.bin $(BUILD)/netboot_fw_source.map
 # leaf (NETBOOT_STANDALONE, org &8000), host-verified by body_sink_test.go vs the
 # Go authority http.NewBodySink — NOT wired into the bootable image yet (which
 # stays byte-identical).
-$(BUILD)/netboot_body_sink.bin $(BUILD)/netboot_body_sink.map: src/netboot/body_sink.asm
+$(BUILD)/netboot_body_sink.bin $(BUILD)/netboot_body_sink.map: src/netboot/body_sink.asm $(asm_deps/src/netboot/body_sink.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 \
 	    --obj=$(BUILD)/netboot_body_sink.bin \
@@ -449,7 +470,7 @@ netboot-body-sink: $(BUILD)/netboot_body_sink.bin $(BUILD)/netboot_body_sink.map
 # records out of an arbitrary byte stream (TCP segments do not align to record
 # boundaries).  Standalone leaf, host-verified by tls_reasm_test.go vs the Go
 # authority tls/reassembler.go::RecordReassembler over mis-aligned chunk sequences.
-$(BUILD)/netboot_tls_reasm.bin $(BUILD)/netboot_tls_reasm.map: src/netboot/tls_reasm.asm
+$(BUILD)/netboot_tls_reasm.bin $(BUILD)/netboot_tls_reasm.map: src/netboot/tls_reasm.asm $(asm_deps/src/netboot/tls_reasm.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 \
 	    --obj=$(BUILD)/netboot_tls_reasm.bin \
@@ -463,7 +484,7 @@ netboot-tls-reasm: $(BUILD)/netboot_tls_reasm.bin $(BUILD)/netboot_tls_reasm.map
 # + fw_span_record_name (<prefix><NNN>).  Standalone leaf (NETBOOT_STANDALONE,
 # org &8000), host-verified by fw_span_test.go vs bdos.SpanPlan/SpanRecordName —
 # NOT wired into the bootable image (which stays byte-identical).
-$(BUILD)/netboot_fw_span.bin $(BUILD)/netboot_fw_span.map: src/netboot/fw_span.asm
+$(BUILD)/netboot_fw_span.bin $(BUILD)/netboot_fw_span.map: src/netboot/fw_span.asm $(asm_deps/src/netboot/fw_span.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 \
 	    --obj=$(BUILD)/netboot_fw_span.bin \
@@ -485,7 +506,7 @@ netboot-fw-span: $(BUILD)/netboot_fw_span.bin $(BUILD)/netboot_fw_span.map
 #   * the bootable binary (no flag) includes http_main + eeprom.asm + the B-DOS HSAVE
 #     so it reads the SAM's real MAC/IP, fetches the firmware blob, and writes it to
 #     Trinity storage (the disk built by netboot-http-disk).
-$(BUILD)/netboot_http.bin $(BUILD)/netboot_http.map: src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm
+$(BUILD)/netboot_http.bin $(BUILD)/netboot_http.map: src/netboot/netboot_http.asm $(asm_deps/src/netboot/netboot_http.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_HOSTTEST=1 \
 	    --obj=$(BUILD)/netboot_http.bin \
@@ -505,7 +526,7 @@ netboot-http: $(BUILD)/netboot_http.bin $(BUILD)/netboot_http.map
 # above &C000, in section-D RAM), so its boot budget is the full 32768-byte window to
 # &10000 (netboot-boot-fit-check.sh), not the 16384-byte section-C limit small images
 # use.
-$(BUILD)/netboot_http_boot.bin $(BUILD)/netboot_http_boot.map: src/netboot/http_main.asm src/netboot/netboot_http.asm src/netboot/http_get.asm src/netboot/tcp_conn.asm src/netboot/build_tcp_segment.asm src/netboot/build_arp_request.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/eeprom.asm src/netboot/sha256.asm src/netboot/fw_source.asm src/netboot/body_sink.asm src/netboot/fw_span.asm
+$(BUILD)/netboot_http_boot.bin $(BUILD)/netboot_http_boot.map: src/netboot/http_main.asm $(asm_deps/src/netboot/http_main.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STREAM=1 --obj=$(BUILD)/netboot_http_boot.bin \
 	    --mapfile=$(BUILD)/netboot_http_boot.map \
@@ -528,7 +549,7 @@ netboot-http-disk: $(BUILD)/netboot_http_boot.bin $(BUILD)/build-disk
 # into one binary; the i80 emulation test (tftp_server_loop_test) runs it
 # against the emulated Trinity and asserts each wire frame matches the Go
 # ServerLoop authority byte-for-byte.
-$(BUILD)/netboot_tftp_server_loop.bin $(BUILD)/netboot_tftp_server_loop.map: src/netboot/tftp_server_loop.asm src/netboot/build_udp_frame.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm
+$(BUILD)/netboot_tftp_server_loop.bin $(BUILD)/netboot_tftp_server_loop.map: src/netboot/tftp_server_loop.asm $(asm_deps/src/netboot/tftp_server_loop.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_tftp_server_loop.bin \
 	    --mapfile=$(BUILD)/netboot_tftp_server_loop.map \
@@ -542,7 +563,7 @@ netboot-tftp-server-loop: $(BUILD)/netboot_tftp_server_loop.bin $(BUILD)/netboot
 # primitives (build_udp_frame + tftp_client) and the real driver (encdrv.asm);
 # the i80 emulation test (tftp_client_loop_test) asserts each wire frame matches
 # the Go ClientLoop authority byte-for-byte.
-$(BUILD)/netboot_tftp_client_loop.bin $(BUILD)/netboot_tftp_client_loop.map: src/netboot/tftp_client_loop.asm src/netboot/build_udp_frame.asm src/netboot/tftp_client.asm src/netboot/encdrv.asm
+$(BUILD)/netboot_tftp_client_loop.bin $(BUILD)/netboot_tftp_client_loop.map: src/netboot/tftp_client_loop.asm $(asm_deps/src/netboot/tftp_client_loop.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_tftp_client_loop.bin \
 	    --mapfile=$(BUILD)/netboot_tftp_client_loop.map \
@@ -556,7 +577,7 @@ netboot-tftp-client-loop: $(BUILD)/netboot_tftp_client_loop.bin $(BUILD)/netboot
 # (build_arp_request + build_rrq + build_udp_frame) and the real driver
 # (encdrv.asm); the i80 emulation test (tftp_client_front_test) asserts the ARP
 # request + RRQ wire frames match the Go ClientFront authority byte-for-byte.
-$(BUILD)/netboot_tftp_client_front.bin $(BUILD)/netboot_tftp_client_front.map: src/netboot/tftp_client_front.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/encdrv.asm
+$(BUILD)/netboot_tftp_client_front.bin $(BUILD)/netboot_tftp_client_front.map: src/netboot/tftp_client_front.asm $(asm_deps/src/netboot/tftp_client_front.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_tftp_client_front.bin \
 	    --mapfile=$(BUILD)/netboot_tftp_client_front.map \
@@ -570,7 +591,7 @@ netboot-tftp-client-front: $(BUILD)/netboot_tftp_client_front.bin $(BUILD)/netbo
 # NOT host-verifiable — no ROM/SAMDOS in the harness) is excluded; the host test
 # (bdos_seam_test) byte-compares the built UIFA + decoded size vs the Go authority
 # (tools/netboot-oracle/bdos).  The hook path stays unverified until real Trinity.
-$(BUILD)/netboot_bdos_seam.bin $(BUILD)/netboot_bdos_seam.map: src/netboot/bdos_seam.asm
+$(BUILD)/netboot_bdos_seam.bin $(BUILD)/netboot_bdos_seam.map: src/netboot/bdos_seam.asm $(asm_deps/src/netboot/bdos_seam.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 -D NETBOOT_HOSTTEST=1 \
 	    --obj=$(BUILD)/netboot_bdos_seam.bin \
@@ -583,7 +604,7 @@ netboot-bdos-seam: $(BUILD)/netboot_bdos_seam.bin $(BUILD)/netboot_bdos_seam.map
 # host-test fixture: encdrv (wait_ready) + bdos_seam (BD_RECORDS) + sd_csd, so
 # csd_to_bd_records_test.go can Load it, attach the i145c SD model, and assert
 # BD_RECORDS is COMPUTED from the modelled card's CSD (not injected).
-$(BUILD)/netboot_sd_csd.bin $(BUILD)/netboot_sd_csd.map: src/netboot/sd_csd_standalone.asm src/netboot/sd_csd.asm src/netboot/encdrv.asm src/netboot/bdos_seam.asm
+$(BUILD)/netboot_sd_csd.bin $(BUILD)/netboot_sd_csd.map: src/netboot/sd_csd_standalone.asm $(asm_deps/src/netboot/sd_csd_standalone.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_HOSTTEST=1 \
 	    --obj=$(BUILD)/netboot_sd_csd.bin \
@@ -597,7 +618,7 @@ netboot-sd-csd: $(BUILD)/netboot_sd_csd.bin $(BUILD)/netboot_sd_csd.map
 # sd_csd.asm) instead of the BD_HOOK_LISTREAD harness hook. sd_listread_test.go Loads
 # it, attaches the i145c/i145h SD model, SeedSectors the record-list sectors, and
 # asserts the detection routines read them back through the raw CMD17 SPI path.
-$(BUILD)/netboot_sd_listread.bin $(BUILD)/netboot_sd_listread.map: src/netboot/sd_listread_standalone.asm src/netboot/sd_csd.asm src/netboot/encdrv.asm src/netboot/bdos_seam.asm
+$(BUILD)/netboot_sd_listread.bin $(BUILD)/netboot_sd_listread.map: src/netboot/sd_listread_standalone.asm $(asm_deps/src/netboot/sd_listread_standalone.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_REAL_LISTREAD=1 \
 	    --obj=$(BUILD)/netboot_sd_listread.bin \
@@ -612,7 +633,7 @@ netboot-sd-listread: $(BUILD)/netboot_sd_listread.bin $(BUILD)/netboot_sd_listre
 # the border colour, so the SAME binary runs identically in the ENC28J60
 # emulator and on real hardware. Driven by eeprom_roundtrip_test.go; gated by
 # ci-netboot-z80.
-$(BUILD)/eeprom_roundtrip.bin $(BUILD)/eeprom_roundtrip.map: src/netboot/eeprom_roundtrip_standalone.asm src/netboot/build_udp_frame.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/eeprom.asm src/netboot/test_report.asm
+$(BUILD)/eeprom_roundtrip.bin $(BUILD)/eeprom_roundtrip.map: src/netboot/eeprom_roundtrip_standalone.asm $(asm_deps/src/netboot/eeprom_roundtrip_standalone.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/eeprom_roundtrip.bin \
 	    --mapfile=$(BUILD)/eeprom_roundtrip.map \
@@ -640,7 +661,7 @@ gen-bootloader-data:
 # gitignored bootloader_chunk1_data.asm (run `make gen-bootloader-data` first).
 # LOCAL-ONLY: the embedded bootloader is private (q55), so this target and its
 # test (eeprom_flash_chunk1_test.go, SKIP_PRIVATE_TESTS-gated) are NOT in CI.
-$(BUILD)/eeprom_flash_chunk1.bin $(BUILD)/eeprom_flash_chunk1.map: src/netboot/eeprom_flash_chunk1.asm src/netboot/bootloader_chunk1_data.asm src/netboot/build_udp_frame.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/eeprom.asm src/netboot/test_report.asm
+$(BUILD)/eeprom_flash_chunk1.bin $(BUILD)/eeprom_flash_chunk1.map: src/netboot/eeprom_flash_chunk1.asm $(asm_deps/src/netboot/eeprom_flash_chunk1.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/eeprom_flash_chunk1.bin \
 	    --mapfile=$(BUILD)/eeprom_flash_chunk1.map \
@@ -655,7 +676,7 @@ netboot-eeprom-flash-chunk1: $(BUILD)/eeprom_flash_chunk1.bin $(BUILD)/eeprom_fl
 # unmapped ports and reports each value over the network (test_report SATR), to
 # pick a port for runtime emulation-vs-hardware detection. org &8000, trinload-
 # pushable. Gated by ci-netboot-z80.
-$(BUILD)/port_probe.bin $(BUILD)/port_probe.map: src/netboot/port_probe_standalone.asm src/netboot/build_udp_frame.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/test_report.asm
+$(BUILD)/port_probe.bin $(BUILD)/port_probe.map: src/netboot/port_probe_standalone.asm $(asm_deps/src/netboot/port_probe_standalone.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/port_probe.bin \
 	    --mapfile=$(BUILD)/port_probe.map \
@@ -667,7 +688,7 @@ netboot-port-probe: $(BUILD)/port_probe.bin $(BUILD)/port_probe.map
 # mgt-screen-demo — trinload-pushable RAM test that redraws the MGT opening
 # screen (rainbow stripes, ported verbatim from the stock ROM &ED1B; banner next).
 # Emulation-tested (mgt_screen_demo_test.go), org &8000, RETs to trinload. i229.
-$(BUILD)/mgt_screen_demo.bin $(BUILD)/mgt_screen_demo.map: src/netboot/mgt_screen_demo_standalone.asm src/netboot/build_udp_frame.asm src/netboot/encdrv.asm src/netboot/test_report.asm
+$(BUILD)/mgt_screen_demo.bin $(BUILD)/mgt_screen_demo.map: src/netboot/mgt_screen_demo_standalone.asm $(asm_deps/src/netboot/mgt_screen_demo_standalone.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/mgt_screen_demo.bin \
 	    --mapfile=$(BUILD)/mgt_screen_demo.map \
@@ -684,7 +705,7 @@ netboot-mgt-screen-demo: $(BUILD)/mgt_screen_demo.bin $(BUILD)/mgt_screen_demo.m
 # netboot_boot_test.go drives the bootable smoke_main end-to-end against the
 # modelled EEPROM. The same binary boots real Trinity (the disk built by
 # netboot-smoke-disk).
-$(BUILD)/netboot_smoke.bin $(BUILD)/netboot_smoke.map: src/netboot/smoke_test.asm src/netboot/build_arp_reply.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+$(BUILD)/netboot_smoke.bin $(BUILD)/netboot_smoke.map: src/netboot/smoke_test.asm $(asm_deps/src/netboot/smoke_test.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_smoke.bin \
 	    --mapfile=$(BUILD)/netboot_smoke.map \
@@ -697,7 +718,7 @@ netboot-smoke: $(BUILD)/netboot_smoke.bin $(BUILD)/netboot_smoke.map
 # binary + symbol map so the koron-z80 harness can load and run it (trinload_test.go).
 # Validates the push->run->return cycle (?/@/X protocol) in emulation before any
 # hardware push. trinload includes the already-vendored encdrv.asm + eeprom.asm.
-$(BUILD)/trinload.bin $(BUILD)/trinload.map: src/netboot/trinload.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+$(BUILD)/trinload.bin $(BUILD)/trinload.map: src/netboot/trinload.asm $(asm_deps/src/netboot/trinload.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/trinload.bin \
 	    --mapfile=$(BUILD)/trinload.map \
@@ -720,7 +741,7 @@ netboot-smoke-disk: $(BUILD)/netboot_smoke.bin $(BUILD)/build-disk
 # D is RAM at boot (not ROM1), which the i145b SD CSD read relies on (section-D
 # overlay). Self-contained SimCoupe run (isolated HOME so Pete's ~/.simcoupe config
 # is untouched; offscreen video). Asserts "^OK$" or fails.
-$(BUILD)/secd_probe.bin: src/secd_probe.asm
+$(BUILD)/secd_probe.bin: src/secd_probe.asm $(asm_deps/src/secd_probe.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/secd_probe.bin src/secd_probe.asm
 
@@ -751,7 +772,7 @@ secd-loadability: $(BUILD)/secd_probe.bin $(BUILD)/build-disk
 # netboot_serve_boot_test.go drives the bootable netboot_main end-to-end against
 # the modelled EEPROM. The same binary boots real Trinity (the disk built by
 # netboot-server-disk).
-$(BUILD)/netboot_server.bin $(BUILD)/netboot_server.map: src/netboot/netboot_server.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/dhcp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+$(BUILD)/netboot_server.bin $(BUILD)/netboot_server.map: src/netboot/netboot_server.asm $(asm_deps/src/netboot/netboot_server.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_server.bin \
 	    --mapfile=$(BUILD)/netboot_server.map \
@@ -777,7 +798,7 @@ netboot-server-disk: $(BUILD)/netboot_server.bin $(BUILD)/build-disk
 #   * the bootable binary (no flag) includes serve_main + eeprom.asm so it reads the
 #     SAM's real MAC/IP, provisions the baked-in demo files, and serves on real
 #     Trinity (the disk built by netboot-serve-disk).
-$(BUILD)/netboot_serve.bin $(BUILD)/netboot_serve.map: src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/enc_link.asm
+$(BUILD)/netboot_serve.bin $(BUILD)/netboot_serve.map: src/netboot/netboot_serve.asm $(asm_deps/src/netboot/netboot_serve.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_HOSTTEST=1 \
 	    --obj=$(BUILD)/netboot_serve.bin \
@@ -792,7 +813,7 @@ netboot-serve: $(BUILD)/netboot_serve.bin $(BUILD)/netboot_serve.map
 # &C000 into section D — RAM at boot (the section-D loadability probe proves LOAD CODE
 # deposits >&BFFF into RAM and ROM1 is off at run), so its boot budget is the full
 # 32768-byte &8000-&FFFF window, not the 16384-byte section-C limit.
-$(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map: src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/eeprom.asm src/netboot/sd_csd.asm src/netboot/bdos_seam.asm src/netboot/raw_record_sink.asm
+$(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.map: src/netboot/netboot_serve.asm $(asm_deps/src/netboot/netboot_serve.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_REAL_LISTREAD=1 \
 	    --obj=$(BUILD)/netboot_serve_boot.bin \
@@ -810,7 +831,7 @@ netboot-serve-boot: $(BUILD)/netboot_serve_boot.bin $(BUILD)/netboot_serve_boot.
 # for netboot_serve_boot.bin: push it to the SAM the same way for a diagnostic run,
 # then deploy the non-debug serve. The Go harness asserts the marker sequence
 # (netboot_serve_dbg_test.go). Same boot budget (32768) as the non-debug image.
-$(BUILD)/netboot_serve_boot_debug.bin $(BUILD)/netboot_serve_boot_debug.map: src/netboot/netboot_serve.asm src/netboot/dbg_marker.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/eeprom.asm src/netboot/sd_csd.asm src/netboot/bdos_seam.asm src/netboot/raw_record_sink.asm src/netboot/test_report.asm
+$(BUILD)/netboot_serve_boot_debug.bin $(BUILD)/netboot_serve_boot_debug.map: src/netboot/netboot_serve.asm $(asm_deps/src/netboot/netboot_serve.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_DEBUG=1 \
 	    --obj=$(BUILD)/netboot_serve_boot_debug.bin \
@@ -920,7 +941,7 @@ trinpush-help:
 # stay hardware-gated (i87a captures + i87b diffs); the paging mechanics are
 # emulation-verified. boot-fit-check applies (must fit section C so STAGE at &C000
 # is free RAM).
-$(BUILD)/netboot_dumper.bin $(BUILD)/netboot_dumper.map: src/netboot/netboot_dumper.asm src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+$(BUILD)/netboot_dumper.bin $(BUILD)/netboot_dumper.map: src/netboot/netboot_dumper.asm $(asm_deps/src/netboot/netboot_dumper.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_dumper.bin \
 	    --mapfile=$(BUILD)/netboot_dumper.map \
@@ -947,7 +968,7 @@ netboot-dumper: $(BUILD)/netboot_dumper.bin $(BUILD)/netboot_dumper.map
 # model validated by Colin's REAL B-DOS init ladder, i145f); csd_probe_main_test.go
 # drives the full probe_main end-to-end. The REAL-card run is i145g (CLAUDE.md §5 —
 # emulation-verified is not hardware-verified).
-$(BUILD)/csd_probe.bin $(BUILD)/csd_probe.map: src/netboot/csd_probe.asm src/netboot/netboot_serve.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_reply.asm src/netboot/tftp_build.asm src/netboot/tftp_parse.asm src/netboot/encdrv.asm src/netboot/eeprom.asm
+$(BUILD)/csd_probe.bin $(BUILD)/csd_probe.map: src/netboot/csd_probe.asm $(asm_deps/src/netboot/csd_probe.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/csd_probe.bin \
 	    --mapfile=$(BUILD)/csd_probe.map \
@@ -965,7 +986,7 @@ netboot-csd-probe: $(BUILD)/csd_probe.bin $(BUILD)/csd_probe.map
 # sd_push_test.go drives the receive->free-pick->HWSAD logic under the flat harness;
 # sd_push_faithful_test.go (SKIP_PRIVATE_TESTS) drives it against Colin's real ROM +
 # B-DOS and asserts the pushed bytes land at the free record's LBA in the SD model.
-$(BUILD)/sd_push.bin $(BUILD)/sd_push.map: src/netboot/sd_push.asm src/netboot/encdrv.asm src/netboot/eeprom.asm src/netboot/bdos_seam.asm src/netboot/sd_csd.asm src/netboot/netglue.asm
+$(BUILD)/sd_push.bin $(BUILD)/sd_push.map: src/netboot/sd_push.asm $(asm_deps/src/netboot/sd_push.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_WANT_CLAIM=1 --obj=$(BUILD)/sd_push.bin \
 	    --mapfile=$(BUILD)/sd_push.map \
@@ -986,7 +1007,7 @@ netboot-sd-push: $(BUILD)/sd_push.bin $(BUILD)/sd_push.map
 # HRECORD + ALHK dispatch), patches BOOT_CFG_RECORD, and asserts the record is selected
 # and exactly one ALHK boot fires against it. The on-hardware boot shot is a SEPARATE
 # follow-up (CLAUDE.md §5 — emulation-verified is not hardware-verified).
-$(BUILD)/boot_record.bin $(BUILD)/boot_record.map: src/netboot/boot_record.asm src/netboot/bdos_seam.asm
+$(BUILD)/boot_record.bin $(BUILD)/boot_record.map: src/netboot/boot_record.asm $(asm_deps/src/netboot/boot_record.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/boot_record.bin \
 	    --mapfile=$(BUILD)/boot_record.map \
@@ -1010,7 +1031,7 @@ netboot-boot-record: $(BUILD)/boot_record.bin $(BUILD)/boot_record.map
 # patches DEL_CFG_RECORD, and asserts the named record's list entry is zeroed (reads FREE)
 # while every neighbour entry stays byte-for-byte intact. The on-hardware free shot is a
 # SEPARATE follow-up (CLAUDE.md §5 — emulation-verified is not hardware-verified; i295 family).
-$(BUILD)/delete_record.bin $(BUILD)/delete_record.map: src/netboot/delete_record.asm src/netboot/bdos_seam.asm src/netboot/sd_csd.asm
+$(BUILD)/delete_record.bin $(BUILD)/delete_record.map: src/netboot/delete_record.asm $(asm_deps/src/netboot/delete_record.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_WANT_CLAIM=1 --obj=$(BUILD)/delete_record.bin \
 	    --mapfile=$(BUILD)/delete_record.map \
@@ -1033,7 +1054,7 @@ netboot-delete-record: $(BUILD)/delete_record.bin $(BUILD)/delete_record.map
 # drives it under the flat harness with the ENC + SD-SPI models, seeds named list
 # entries, and asserts the reply payloads AND zero SD writes. The on-hardware run is
 # a SEPARATE follow-up (CLAUDE.md §5 — emulation-verified is not hardware-verified).
-$(BUILD)/list_records.bin $(BUILD)/list_records.map: src/netboot/list_records.asm src/netboot/encdrv.asm src/netboot/eeprom.asm src/netboot/bdos_seam.asm src/netboot/sd_csd.asm src/netboot/netglue.asm
+$(BUILD)/list_records.bin $(BUILD)/list_records.map: src/netboot/list_records.asm $(asm_deps/src/netboot/list_records.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_REAL_LISTREAD=1 --obj=$(BUILD)/list_records.bin \
 	    --mapfile=$(BUILD)/list_records.map \
@@ -1053,7 +1074,7 @@ netboot-list-records: $(BUILD)/list_records.bin $(BUILD)/list_records.map
 # i135c path, out of scope. The host editor that produces the chunk bytes is
 # tools/netboot-oracle/cmd/samboot-config (covered by `go test ./...`). Charter:
 # docs/specs/samboot.md §4.
-$(BUILD)/samboot_config.bin $(BUILD)/samboot_config.map: src/netboot/samboot_config.asm src/netboot/eeprom.asm
+$(BUILD)/samboot_config.bin $(BUILD)/samboot_config.map: src/netboot/samboot_config.asm $(asm_deps/src/netboot/samboot_config.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/samboot_config.bin \
 	    --mapfile=$(BUILD)/samboot_config.map \
@@ -1071,7 +1092,7 @@ netboot-samboot-config: $(BUILD)/samboot_config.bin $(BUILD)/samboot_config.map
 # reader decodes it back (A/CY contract). The on-hardware EEPROM WRITE (flashing
 # the stamp) rides the i135c bootblock flash (private fork), out of scope. Host
 # format authority: tools/netboot-oracle/trinityfw. Charter: registry item i213.
-$(BUILD)/trinity_identity_stamp.bin $(BUILD)/trinity_identity_stamp.map: src/netboot/trinity_identity_stamp.asm src/netboot/eeprom.asm
+$(BUILD)/trinity_identity_stamp.bin $(BUILD)/trinity_identity_stamp.map: src/netboot/trinity_identity_stamp.asm $(asm_deps/src/netboot/trinity_identity_stamp.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_HOSTTEST=1 \
 	    --obj=$(BUILD)/trinity_identity_stamp.bin \
@@ -1091,7 +1112,7 @@ netboot-trinity-identity: $(BUILD)/trinity_identity_stamp.bin $(BUILD)/trinity_i
 #   * the bootable binary (no flag) includes client_main + eeprom.asm + the B-DOS
 #     HSAVE so it reads the SAM's real MAC/IP, fetches, and writes to Trinity (the
 #     disk built by netboot-client-disk).
-$(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/key_read_test.asm
+$(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map: src/netboot/netboot_client.asm $(asm_deps/src/netboot/netboot_client.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_HOSTTEST=1 \
 	    --obj=$(BUILD)/netboot_client.bin \
@@ -1104,7 +1125,7 @@ netboot-client: $(BUILD)/netboot_client.bin $(BUILD)/netboot_client.map
 # the client_main fetch-then-HSAVE flow, for real Trinity. Like the serve image it
 # carries the i145b-b2 SD CSD read (sd_csd.asm) as a section-D overlay, so its boot
 # budget is the full 32768-byte &8000-&FFFF window (see the serve rule above).
-$(BUILD)/netboot_client_boot.bin $(BUILD)/netboot_client_boot.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/bdos_picker.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/key_read_test.asm src/netboot/eeprom.asm src/netboot/raw_record_sink.asm src/netboot/sd_csd.asm
+$(BUILD)/netboot_client_boot.bin $(BUILD)/netboot_client_boot.map: src/netboot/netboot_client.asm $(asm_deps/src/netboot/netboot_client.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_REAL_LISTREAD=1 \
 	    --obj=$(BUILD)/netboot_client_boot.bin \
@@ -1126,7 +1147,7 @@ netboot-client-disk: $(BUILD)/netboot_client_boot.bin $(BUILD)/build-disk
 # into a scratch Trinity record -> validate -> ALHK-boot) instead of client_main. Same
 # source + includes as netboot_client_boot (incl. the i145b-b2 SD CSD overlay), so the
 # boot budget is the full 32768-byte &8000-&FFFF window.
-$(BUILD)/netboot_fetch_boot.bin $(BUILD)/netboot_fetch_boot.map: src/netboot/netboot_client.asm src/netboot/build_udp_frame.asm src/netboot/build_arp_request.asm src/netboot/tftp_client.asm src/netboot/bdos_seam.asm src/netboot/bdos_picker.asm src/netboot/encdrv.asm src/netboot/enc_link.asm src/netboot/key_read_test.asm src/netboot/eeprom.asm src/netboot/raw_record_sink.asm src/netboot/sd_csd.asm
+$(BUILD)/netboot_fetch_boot.bin $(BUILD)/netboot_fetch_boot.map: src/netboot/netboot_client.asm $(asm_deps/src/netboot/netboot_client.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_REAL_LISTREAD=1 -D NETBOOT_FETCH_BOOT=1 \
 	    --obj=$(BUILD)/netboot_fetch_boot.bin \
@@ -1147,7 +1168,7 @@ netboot-fetch-boot-disk: $(BUILD)/netboot_fetch_boot.bin $(BUILD)/build-disk
 # paging). The koron-go/z80 harness under tools/netboot-oracle/z80/ is a
 # general flat-memory Z80 test driver (not netboot-specific); the editmodel
 # test reuses it directly. Gated by ci-netboot-z80 alongside the netboot tests.
-$(BUILD)/editmodel.bin $(BUILD)/editmodel.map: src/editmodel.asm
+$(BUILD)/editmodel.bin $(BUILD)/editmodel.map: src/editmodel.asm $(asm_deps/src/editmodel.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D EM_STANDALONE=1 --obj=$(BUILD)/editmodel.bin \
 	    --mapfile=$(BUILD)/editmodel.map \
@@ -1161,7 +1182,7 @@ editmodel-z80: $(BUILD)/editmodel.bin $(BUILD)/editmodel.map
 # includes pagepool.asm resident. Driven by editmodel_paged_test.go under the
 # one sampage harness (where OUT (251) pages section C for real); gated by
 # ci-netboot-z80 alongside the flat editmodel build.
-$(BUILD)/editmodel-paged.bin $(BUILD)/editmodel-paged.map: src/editmodel.asm src/pagepool.asm
+$(BUILD)/editmodel-paged.bin $(BUILD)/editmodel-paged.map: src/editmodel.asm $(asm_deps/src/editmodel.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D EM_PAGED=1 --obj=$(BUILD)/editmodel-paged.bin \
 	    --mapfile=$(BUILD)/editmodel-paged.map \
@@ -1172,7 +1193,7 @@ editmodel-paged-z80: $(BUILD)/editmodel-paged.bin $(BUILD)/editmodel-paged.map
 # pagepool-z80 — the on-SAM IDE page allocator core, i2a (flat-memory; no SAM
 # paging yet — the page_owner[] table is just a byte array here). Same standalone
 # koron-go/z80 harness as editmodel; gated by ci-netboot-z80.
-$(BUILD)/pagepool.bin $(BUILD)/pagepool.map: src/pagepool.asm
+$(BUILD)/pagepool.bin $(BUILD)/pagepool.map: src/pagepool.asm $(asm_deps/src/pagepool.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D PP_STANDALONE=1 --obj=$(BUILD)/pagepool.bin \
 	    --mapfile=$(BUILD)/pagepool.map \
@@ -1183,7 +1204,7 @@ pagepool-z80: $(BUILD)/pagepool.bin $(BUILD)/pagepool.map
 # spill-z80 — the page-persistence (spill) manager, i215b: the lazy-spill policy
 # layered over pagepool (i2a) and ported from the i215a Go authority. Same
 # standalone koron-go/z80 harness; gated by ci-netboot-z80.
-$(BUILD)/spill.bin $(BUILD)/spill.map: src/spill.asm src/pagepool.asm
+$(BUILD)/spill.bin $(BUILD)/spill.map: src/spill.asm $(asm_deps/src/spill.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D SP_STANDALONE=1 --obj=$(BUILD)/spill.bin \
 	    --mapfile=$(BUILD)/spill.map \
@@ -1194,7 +1215,7 @@ spill-z80: $(BUILD)/spill.bin $(BUILD)/spill.map
 # viewport-z80 — the read-only viewer's scroll/cursor state machine, i4a
 # (flat-memory; no screen rendering). Same standalone koron-go/z80 harness as
 # editmodel; gated by ci-netboot-z80.
-$(BUILD)/viewport.bin $(BUILD)/viewport.map: src/viewport.asm
+$(BUILD)/viewport.bin $(BUILD)/viewport.map: src/viewport.asm $(asm_deps/src/viewport.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D VP_STANDALONE=1 --obj=$(BUILD)/viewport.bin \
 	    --mapfile=$(BUILD)/viewport.map \
@@ -1204,7 +1225,7 @@ viewport-z80: $(BUILD)/viewport.bin $(BUILD)/viewport.map
 
 # asmlex-z80 — aarch64 assembler-source tokenizer, i48c (flat-memory).
 # Same standalone flat-memory harness as editmodel; gated by ci-netboot-z80.
-$(BUILD)/asmlex.bin $(BUILD)/asmlex.map: src/asmlex.asm
+$(BUILD)/asmlex.bin $(BUILD)/asmlex.map: src/asmlex.asm $(asm_deps/src/asmlex.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D ASMLEX_STANDALONE=1 --obj=$(BUILD)/asmlex.bin \
 	    --mapfile=$(BUILD)/asmlex.map \
@@ -1215,7 +1236,7 @@ asmlex-z80: $(BUILD)/asmlex.bin $(BUILD)/asmlex.map
 # asmparse-z80 — aarch64 assembler-source parser, i48c (flat-memory).
 # Same standalone flat-memory harness as asmlex; gated by ci-netboot-z80.
 # Depends on the generated src/mnemonic_names.inc (committed; `make tables`).
-$(BUILD)/asmparse.bin $(BUILD)/asmparse.map: src/asmparse.asm src/mnemonic_names.inc
+$(BUILD)/asmparse.bin $(BUILD)/asmparse.map: src/asmparse.asm $(asm_deps/src/asmparse.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D ASMPARSE_STANDALONE=1 --obj=$(BUILD)/asmparse.bin \
 	    --mapfile=$(BUILD)/asmparse.map \
@@ -1228,9 +1249,7 @@ asmparse-z80: $(BUILD)/asmparse.bin $(BUILD)/asmparse.map
 # expr_eval/symbols/local_labels/litpool/ml + the new IR-walk); the IR record
 # buffer is produced host-side. Verified by tools/netboot-oracle/z80/pass1_ir_test.go
 # against assemble.Pass1. Depends on the included leaf sources + tbn_constants.inc.
-$(BUILD)/test_pass1_ir.bin $(BUILD)/test_pass1_ir.map: src/test_pass1_ir.asm \
-	    src/expr_eval.asm src/symbols.asm src/local_labels.asm src/litpool.asm \
-	    src/ml.asm src/tbn_constants.inc
+$(BUILD)/test_pass1_ir.bin $(BUILD)/test_pass1_ir.map: src/test_pass1_ir.asm $(asm_deps/src/test_pass1_ir.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D PASS1_IR_STANDALONE=1 --obj=$(BUILD)/test_pass1_ir.bin \
 	    --mapfile=$(BUILD)/test_pass1_ir.map \
@@ -1244,9 +1263,7 @@ pass1-ir-z80: $(BUILD)/test_pass1_ir.bin $(BUILD)/test_pass1_ir.map
 # LOCAL_DEF dropped, INST → skeleton KindInsnRun elements. Includes the b8a
 # pass1-ir harness (reusing its pass1 walk + leaves + RecordPC capture). Verified
 # by tools/netboot-oracle/z80/compact_ir_test.go against assemble.Compact.
-$(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map: src/test_compact_ir.asm \
-	    src/test_pass1_ir.asm src/expr_eval.asm src/symbols.asm src/local_labels.asm \
-	    src/litpool.asm src/ml.asm src/tbn_constants.inc
+$(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map: src/test_compact_ir.asm $(asm_deps/src/test_compact_ir.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/test_compact_ir.bin \
 	    --mapfile=$(BUILD)/test_compact_ir.map \
@@ -1257,17 +1274,37 @@ compact-ir-z80: $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map
 # Every netboot routine binary the harness tests load.
 netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-server netboot-serve netboot-client netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-samboot-config netboot-trinity-identity netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
 
-# netboot-serve-record is a prerequisite so TestBootRecordServeRecordVessel always
-# tests a vessel packaging the CURRENT serve binary: the .mgt recipe is PHONY (no
-# file-level dep), so an incremental local run that rebuilt netboot_serve_boot.bin
-# without repackaging fed the test a stale vessel — a confusing false red (the test
-# itself is SKIP_PRIVATE_TESTS-gated in CI, so only local runs ever hit it).
-ci-netboot-z80: netboot-z80-routines editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80 netboot-serve-record
+# netboot-z80-artifacts — every artifact the tools/netboot-oracle/z80 suite
+# loads from build/, as ONE aggregate target.  This is the single source of
+# truth for that artifact set: the suite's TestMain pre-build
+# (tools/netboot-oracle/z80/build_assert_test.go) invokes this target by name
+# instead of duplicating the list (the duplicated list drifted — it was
+# missing spill-z80, netboot-serve-record, disk-record and
+# netboot-eeprom-flash-chunk1, so a direct `go test` ran those tests against
+# whatever stale artifact was on disk — i309).
+#
+# The .mgt vessels (netboot-serve-record, disk-record) are included so the
+# record-vessel tests always boot a vessel packaging the CURRENT binaries:
+# their recipes are PHONY (always repackage), so an incremental run that
+# rebuilt a .bin without repackaging fed the test a stale vessel — a
+# confusing false red (those tests are SKIP_PRIVATE_TESTS-gated in CI, so
+# only local runs ever hit it).
+# netboot-eeprom-flash-chunk1 joins the set only when the gitignored private
+# bootloader data (q55) is present — its consuming test is
+# SKIP_PRIVATE_TESTS-gated, and CI (no private data) can't build it.
+NETBOOT_PRIVATE_ARTIFACTS := $(if $(wildcard src/netboot/bootloader_chunk1_data.asm),netboot-eeprom-flash-chunk1)
+.PHONY: netboot-z80-artifacts
+netboot-z80-artifacts: netboot-z80-routines editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80 netboot-serve-record disk-record $(NETBOOT_PRIVATE_ARTIFACTS)
+
+ci-netboot-z80: netboot-z80-artifacts
 	cd tools/sampage && go test ./...
-	cd tools/netboot-oracle/z80 && go test ./...
+	# -count=1 on the suites that read external files (build/ artifacts /
+	# src/*.asm): Go's test cache has served a stale PASS across an
+	# artifact-only change (the i280b-b2b false green).
+	cd tools/netboot-oracle/z80 && go test -count=1 ./...
 	# Guard: the 8x-unrolled SHA-256 round block inlined in sha256.asm still
 	# matches its generator (tools/sha256-unroll-gen) byte-for-byte.
-	cd tools/sha256-unroll-gen && go test ./...
+	cd tools/sha256-unroll-gen && go test -count=1 ./...
 
 test-format: sam-aarch64 release-unstripped-tbn
 	cd tools/sam-aarch64-format && go test ./...
@@ -1325,6 +1362,13 @@ check-hosttest-carveouts:
 .PHONY: check-trinity-authority
 check-trinity-authority:
 	bash tools/check-trinity-authority.sh
+
+# check-artifacts-fresh — assert every existing make-managed build/ artifact
+# is up to date with its transitive prerequisites (the mechanised stale-mtime
+# check, i309).  Run before trusting a `go test` invoked outside make.
+.PHONY: check-artifacts-fresh
+check-artifacts-fresh:
+	bash tools/check-artifacts-fresh.sh
 
 .PHONY: registry registry-sync-check registry-gen tables-gen enctab test-encoder ci-encoder
 
@@ -1506,7 +1550,7 @@ assembler-prod: $(BUILD)/assembler-prod.bin
 # dependency — all values are literals), and exports the payload length
 # via its sym file.  The payload must be built before the assembler so
 # this --importfile is satisfied.
-$(BUILD)/assembler.bin $(BUILD)/assembler.sym $(BUILD)/assembler.map: src/assembler.asm $(wildcard src/*.asm) $(wildcard src/**/*.asm) $(wildcard src/*.inc) $(BUILD)/enc_fix_payload.sym
+$(BUILD)/assembler.bin $(BUILD)/assembler.sym $(BUILD)/assembler.map: src/assembler.asm $(asm_deps/src/assembler.asm) $(BUILD)/enc_fix_payload.sym
 	@mkdir -p $(BUILD)
 	pyz80 -D BUILD_TESTS=1 \
 	    --obj=$(BUILD)/assembler.bin \
@@ -1516,7 +1560,7 @@ $(BUILD)/assembler.bin $(BUILD)/assembler.sym $(BUILD)/assembler.map: src/assemb
 	    src/assembler.asm
 	@./tools/check-code-budget.sh $(BUILD)/assembler.bin test
 
-$(BUILD)/assembler-prod.bin: src/assembler.asm $(wildcard src/*.asm) $(wildcard src/**/*.asm) $(wildcard src/*.inc)
+$(BUILD)/assembler-prod.bin: src/assembler.asm $(asm_deps/src/assembler.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/assembler-prod.bin src/assembler.asm
 	@./tools/check-code-budget.sh $(BUILD)/assembler-prod.bin prod
@@ -1530,7 +1574,7 @@ $(BUILD)/assembler-prod.bin: src/assembler.asm $(wildcard src/*.asm) $(wildcard 
 # addresses in the main binary.  The resulting build/test_mem.bin is
 # small (~780 B) and is HLOADed at boot into physical page 13 by
 # src/loader.asm::load_test_mem_off_axis.  See plan-PR 3 brief.
-$(BUILD)/test_mem.bin: src/test_mem_offaxis.asm src/test_mem.asm $(BUILD)/assembler.sym
+$(BUILD)/test_mem.bin: src/test_mem_offaxis.asm $(asm_deps/src/test_mem_offaxis.asm) $(BUILD)/assembler.sym
 	pyz80 --importfile=$(BUILD)/assembler.sym \
 	    --obj=$(BUILD)/test_mem.bin \
 	    src/test_mem_offaxis.asm
@@ -1548,12 +1592,7 @@ test-mem-offaxis: $(BUILD)/test_mem.bin
 # (~1225 B) is HLOADed at boot into physical page 12 by
 # src/loader.asm::load_offaxis_cluster and invoked via one LMPR swap.
 # See src/test_offaxis_cluster.asm.
-$(BUILD)/test_cluster.bin: src/test_offaxis_cluster.asm \
-		src/test_slots.asm src/test_pc_rel.asm \
-		src/test_directives.asm src/test_ror_imm.asm \
-		src/test_shifted_reg.asm src/test_extended_reg.asm \
-		src/test_litpool.asm \
-		$(BUILD)/assembler.sym
+$(BUILD)/test_cluster.bin: src/test_offaxis_cluster.asm $(asm_deps/src/test_offaxis_cluster.asm) $(BUILD)/assembler.sym
 	pyz80 --importfile=$(BUILD)/assembler.sym \
 	    --obj=$(BUILD)/test_cluster.bin \
 	    src/test_offaxis_cluster.asm
@@ -1574,7 +1613,7 @@ cluster-offaxis: $(BUILD)/test_cluster.bin
 # section-D RAM at ENC_FIX_TABLE_RAM (&E100) before enctab_map_in.
 # Because the binary is assembled with org &E100, every row's "fixture
 # ptr" field already holds a section-D absolute address after the copy.
-$(BUILD)/enc_fix_payload.bin $(BUILD)/enc_fix_payload.sym: src/test_encode_inst_payload.asm
+$(BUILD)/enc_fix_payload.bin $(BUILD)/enc_fix_payload.sym: src/test_encode_inst_payload.asm $(asm_deps/src/test_encode_inst_payload.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/enc_fix_payload.bin \
 	    --exportfile=$(BUILD)/enc_fix_payload.sym \
@@ -1588,7 +1627,7 @@ enc-fix-payload: $(BUILD)/enc_fix_payload.bin
 # physical page 14 by src/loader.asm::load_page14_payload.
 # Exercised by src/test_paged_call.asm.  Per plan-PR 1 of
 # https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/2026-05-28-paged-call-architecture.md.
-$(BUILD)/paged_call_test_payload.bin: src/paged_call_test_payload.asm
+$(BUILD)/paged_call_test_payload.bin: src/paged_call_test_payload.asm $(asm_deps/src/paged_call_test_payload.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/paged_call_test_payload.bin src/paged_call_test_payload.asm
 
@@ -1605,7 +1644,7 @@ paged-call-payload: $(BUILD)/paged_call_test_payload.bin
 # correction documented in src/sysreg_data.asm).  Needed by EVERY
 # build, not just BUILD_TESTS — sysreg/dc/tlbi/pstate operands appear
 # in shipping sources.
-$(BUILD)/sysreg_data.bin: src/sysreg_data.asm src/sysreg_tables.inc
+$(BUILD)/sysreg_data.bin: src/sysreg_data.asm $(asm_deps/src/sysreg_data.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/sysreg_data.bin src/sysreg_data.asm
 
@@ -1629,11 +1668,11 @@ sysreg-data: $(BUILD)/sysreg_data.bin
 #                    self-test entry + fixtures.  Ships only on the test
 #                    disk (the BUILD_TESTS assembler boot calls &8003 via
 #                    paged_call to verify the decoder).
-$(BUILD)/disasm.bin: src/disasm.asm src/sysreg_names.inc src/sysreg_tables.inc src/disasm_sysopts.inc
+$(BUILD)/disasm.bin: src/disasm.asm $(asm_deps/src/disasm.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/disasm.bin src/disasm.asm
 
-$(BUILD)/disasm-test.bin: src/disasm.asm src/sysreg_names.inc src/sysreg_tables.inc src/disasm_sysopts.inc
+$(BUILD)/disasm-test.bin: src/disasm.asm $(asm_deps/src/disasm.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D BUILD_TESTS=1 --obj=$(BUILD)/disasm-test.bin src/disasm.asm
 
@@ -1645,7 +1684,7 @@ disasm-test-payload: $(BUILD)/disasm-test.bin
 # page-13 product address).  Byte-identical to the compressor head of the
 # combined zx0 payload below; consumed by the harness battery
 # (tools/z80-test-harness-go zx0_*_test.go).
-$(BUILD)/zx0_compress.bin: src/zx0_compress.asm
+$(BUILD)/zx0_compress.bin: src/zx0_compress.asm $(asm_deps/src/zx0_compress.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/zx0_compress.bin --mapfile=$(BUILD)/zx0_compress.map src/zx0_compress.asm
 
@@ -1664,11 +1703,11 @@ zx0-compress-payload: $(BUILD)/zx0_compress.bin
 #                 driver + the baked Go-authority fixture at &AFA0
 #                 (generated below); pads across the &8B80 workspace
 #                 region, so ~11 KB.  Ships only on the test disk.
-$(BUILD)/zx0.bin: src/zx0_payload.asm src/zx0_compress.asm src/dzx0_turbo.asm src/zx0_comm.inc
+$(BUILD)/zx0.bin: src/zx0_payload.asm $(asm_deps/src/zx0_payload.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/zx0.bin src/zx0_payload.asm
 
-$(BUILD)/zx0-test.bin: src/zx0_payload.asm src/zx0_compress.asm src/dzx0_turbo.asm src/zx0_comm.inc $(BUILD)/zx0_selftest_fixture.inc
+$(BUILD)/zx0-test.bin: src/zx0_payload.asm $(asm_deps/src/zx0_payload.asm) $(BUILD)/zx0_selftest_fixture.inc
 	@mkdir -p $(BUILD)
 	pyz80 -D BUILD_TESTS=1 --obj=$(BUILD)/zx0-test.bin src/zx0_payload.asm
 
@@ -1676,7 +1715,7 @@ $(BUILD)/zx0-test.bin: src/zx0_payload.asm src/zx0_compress.asm src/dzx0_turbo.a
 # comment text + its greedy-compressed bytes (H=512 D=16), emitted by the
 # Go authority so the boot self-tests are exact byte-compares
 # (comment-storage-design §7.1).
-$(BUILD)/zx0_selftest_fixture.inc: tests/release/release.s tools/zx0-greedy/compress.go tools/zx0-greedy/cmd/zx0fixture/main.go
+$(BUILD)/zx0_selftest_fixture.inc: tests/release/release.s $(wildcard tools/zx0-greedy/*.go) $(wildcard tools/zx0-greedy/cmd/zx0fixture/*.go) tools/zx0-greedy/go.mod
 	@mkdir -p $(BUILD)
 	cd tools/zx0-greedy && go run ./cmd/zx0fixture \
 	    -src $(CURDIR)/tests/release/release.s \
@@ -1687,7 +1726,7 @@ zx0-payload: $(BUILD)/zx0.bin
 
 zx0-test-payload: $(BUILD)/zx0-test.bin
 
-$(BUILD)/build-disk: tools/build-disk/main.go tools/build-disk/go.mod
+$(BUILD)/build-disk: $(wildcard tools/build-disk/*.go) tools/build-disk/go.mod tools/build-disk/go.sum
 	@mkdir -p $(BUILD)
 	cd tools/build-disk && go build -o ../../$(BUILD)/build-disk .
 
@@ -1738,7 +1777,17 @@ disk-record: assembler test-mem-offaxis cluster-offaxis enc-fix-payload paged-ca
 # inputs are absent — expected, not a failure.  Dev convenience, NOT a CI gate
 # (SimCoupé is the gate); see tools/z80-test-harness-go/USAGE.md.
 .PHONY: harness-sweep
-harness-sweep: assembler assembler-prod enctab cluster-offaxis test-mem-offaxis enc-fix-payload paged-call-payload sysreg-data disasm-payload disasm-test-payload zx0-payload zx0-test-payload zx0-compress-payload sam-aarch64
+# harness-artifacts — every artifact the tools/z80-test-harness-go suite reads
+# from build/, as ONE aggregate target: the single source of truth referenced
+# by name from that suite's TestMain pre-build (build_assert_test.go), so the
+# Go side never carries its own (drift-prone) copy of the list.  The zx0
+# corpus artifacts (zx0-corpus, zx0-blocks) are deliberately NOT here: they
+# need an external zx0 compressor on PATH / a corpus sweep, and their
+# consuming tests fail with an instructive message when absent.
+.PHONY: harness-artifacts
+harness-artifacts: assembler assembler-prod enctab cluster-offaxis test-mem-offaxis enc-fix-payload paged-call-payload sysreg-data disasm-payload disasm-test-payload zx0-payload zx0-test-payload zx0-compress-payload sam-aarch64
+
+harness-sweep: harness-artifacts
 	cd tools/z80-test-harness-go && go test -count=1 ./...
 
 # test-core — sweep every fixture under tests/core/sources/ end-to-end:

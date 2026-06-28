@@ -27,22 +27,13 @@ import (
 	"testing"
 )
 
-// netbootArtifactTargets is the set of `make` targets that build every
-// SAM-side artifact this package's tests load from build/. It mirrors the
-// prerequisites of the `ci-netboot-z80` target in the Makefile. Keep the two
-// in sync: a new build/*.bin loaded by a test must be added here AND to
-// ci-netboot-z80.
-var netbootArtifactTargets = []string{
-	"netboot-z80-routines",
-	"editmodel-z80",
-	"editmodel-paged-z80",
-	"pagepool-z80",
-	"viewport-z80",
-	"asmlex-z80",
-	"asmparse-z80",
-	"pass1-ir-z80",
-	"compact-ir-z80",
-}
+// netbootArtifactTargets invokes the Makefile's netboot-z80-artifacts
+// aggregate — the single source of truth for the artifact set this package's
+// tests load from build/. A new build/* artifact loaded by a test must be
+// added to that aggregate's prerequisites in the Makefile; nothing is listed
+// here (a duplicated per-target list drifted out of sync with the Makefile —
+// i309).
+var netbootArtifactTargets = []string{"netboot-z80-artifacts"}
 
 // findRepoRoot walks up from the current working directory to the repo root,
 // identified by the presence of a Makefile.
