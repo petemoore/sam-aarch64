@@ -30,6 +30,10 @@ record booted on the real SAM), but the Trinity SD card is a SHARED user resourc
 Usage:
   tools/trinload-push/sd-push.py [SAM_IP] [MGT_PATH] [SD_PUSH_BIN]
 Defaults: 192.168.2.75  <required>  build/sd_push.bin
+
+Exit codes: 0 = pushed and finalize-confirmed ('D'); 1 = failure; 2 = usage;
+3 = finalize reply lost but sd_push exited back to trinload — the push very
+likely completed; verify with list-records.py (i335).
 """
 import os
 import socket
@@ -37,7 +41,7 @@ import struct
 import sys
 import time
 
-from trinpush import PORT, discover_tool, push_and_run
+from trinpush import PORT, discover, discover_tool, identify, push_and_run
 
 SECTOR = 512
 RECORD_SECTORS = 1600  # a Trinity record is exactly 1600 sectors (819200 bytes)
@@ -68,18 +72,49 @@ def stream_mgt(sock, dst, data):
     return nsec
 
 
-def finalize(sock, dst):
+def finalize(sock, dst, attempts=5):
     """Send 'F' and return (status, record): status is the reply byte ('D' done /
-    'E' error; None on timeout) and record is the claimed 1-based record number
-    (LE16 after the status byte, i308), or None if the reply carries none (an
-    older sd_push binary)."""
-    sock.sendto(b"F", (dst, PORT))
-    try:
-        reply, _ = sock.recvfrom(8)
-    except socket.timeout:
-        return None, None
-    record = struct.unpack("<H", reply[1:3])[0] if len(reply) >= 3 else None
-    return reply[:1], record
+    'E' error; None if no reply after all attempts) and record is the claimed
+    1-based record number (LE16 after the status byte, i308), or None if the
+    reply carries none (an older sd_push binary).
+
+    'F' is retried on a lost reply (i335 — one lost UDP reply misreported a
+    completed 1600-sector push as failure). A retry is safe both ways: if the
+    'F' itself was lost, sd_push is still serving and finalizes on the retry;
+    if only the REPLY was lost, sd_push has RET'd to trinload, which ignores
+    'F'. Stale block acks ('.') still in flight from the stream are consumed
+    and skipped, not mistaken for a finalize reply."""
+    for attempt in range(attempts):
+        sock.sendto(b"F", (dst, PORT))
+        try:
+            while True:
+                reply, _ = sock.recvfrom(8)
+                if reply[:1] in (b"D", b"E"):
+                    record = (struct.unpack("<H", reply[1:3])[0]
+                              if len(reply) >= 3 else None)
+                    return reply[:1], record
+                # a stale block ack — keep listening within this attempt
+        except socket.timeout:
+            if attempt + 1 < attempts:
+                print(f"  F attempt {attempt + 1}: no finalize reply, retrying")
+    return None, None
+
+
+def lost_reply_verdict(reply):
+    """Map the post-finalize '?' probe reply to (exit_code, message) (i335).
+
+    Called only after finalize() got no 'D'/'E' through every attempt. A bare
+    '!' means trinload owns the port again — sd_push processed a finalize and
+    exited, so the push very likely completed and only the reply was lost:
+    exit 3 (verify, not failure). Anything else is a real failure (exit 1)."""
+    if reply == b"!":
+        return 3, ("finalize reply lost, but sd_push has exited back to trinload — "
+                   "the push very likely completed; verify with list-records.py "
+                   "(the record should be claimed and named)")
+    if reply is None:
+        return 1, "no finalize reply and no discovery response — the SAM may be wedged"
+    return 1, (f"no finalize reply and {identify(reply)} still owns the port — "
+               "the finalize never got through")
 
 
 def send_name(sock, dst, name):
@@ -97,6 +132,9 @@ def send_name(sock, dst, name):
 
 
 def push_mgt(sam, mgt_path, sd_push_bin):
+    """Run the two-stage push; return a process exit code: 0 = pushed and
+    finalize-confirmed ('D'), 1 = failure, 3 = finalize reply lost but sd_push
+    exited back to trinload — verify with list-records.py (i335)."""
     data = open(mgt_path, "rb").read()
     if len(data) != RECORD_SECTORS * SECTOR:
         print(f"WARNING: {mgt_path} is {len(data)} B, not {RECORD_SECTORS * SECTOR} "
@@ -107,7 +145,7 @@ def push_mgt(sam, mgt_path, sd_push_bin):
     push_bin = open(sd_push_bin, "rb").read()
     if not push_and_run(sam, push_bin, page=1, addr=0x8000):
         print("FAILED: could not push/run sd_push (is TrinLoad listening on the SAM?)")
-        return False
+        return 1
 
     # Stage 2: talk sd_push's own protocol on the same port. sd_push's startup
     # (EEPROM read + ENC init + CSD ladder + free-record list scan) takes ~12 s
@@ -120,7 +158,7 @@ def push_mgt(sam, mgt_path, sd_push_bin):
     dst, _ = discover_tool(sock, sam, b"SP", attempts=15)
     if dst is None:
         print("FAILED: sd_push did not answer discovery (it may not have come up)")
-        return False
+        return 1
 
     record_name = os.path.basename(mgt_path)
     send_name(sock, dst, record_name)
@@ -134,13 +172,16 @@ def push_mgt(sam, mgt_path, sd_push_bin):
     where = f"record {record}" if record else "the free record (number unreported)"
     if reply == b"D":
         print(f"DONE: sd_push validated a complete record and wrote it to {where}")
-        return True
+        return 0
     if reply == b"E":
         print(f"ERROR: sd_push reported an incomplete record (sector count != 1600; "
               f"the target was {where})")
-        return False
-    print("ERROR: no finalize reply from sd_push")
-    return False
+        return 1
+    # No 'D'/'E' through every attempt: ask who owns the port now (i335).
+    _, disc = discover(sock, sam, attempts=3)
+    code, message = lost_reply_verdict(disc)
+    print(("WARNING: " if code == 3 else "ERROR: ") + message)
+    return code
 
 
 if __name__ == "__main__":
@@ -150,4 +191,4 @@ if __name__ == "__main__":
         sys.exit(2)
     MGT = sys.argv[2]
     BIN = sys.argv[3] if len(sys.argv) > 3 else "build/sd_push.bin"
-    sys.exit(0 if push_mgt(SAM, MGT, BIN) else 1)
+    sys.exit(push_mgt(SAM, MGT, BIN))
