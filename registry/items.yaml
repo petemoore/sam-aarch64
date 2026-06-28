@@ -3706,7 +3706,7 @@
   description: |
     The i121 payoff on real hardware, autonomous: 'start trinload -> push the serve program (push-serve.py) -> tftp put each .mgt disk image (validated size==819200, streamed into a free record + claimed) -> tftp put tftp.done -> return to trinload', then read a stored record back (servable-raw) and byte-compare to confirm the store. Unblocked once the production CSD read lands (i145b, so the server finds free records) and the full experiment is emulation-proven (i145d). Agent-actionable: trinload runs on the SAM (192.168.2.75) over the LAN from the Pi; push via tools/trinload-push/push-serve.py + curl tftp://; the 19 build/*.mgt are valid + staged (/tmp/push-all-disks.sh batches them). NO Pete needed for the push+store+readback; booting a pushed record to watch it run is a downstream nicety (autonomous via i135 auto-boot, or a Pete-present spot-check) and NOT a blocker for this item.
   status: OPEN
-  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198, i266, i270a]
+  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198, i266, i270a, i280]
   kind: leaf
   owner: agent
 
@@ -4612,7 +4612,7 @@
   title: Install TAPO smart-plug for autonomous SAM power-cycling (enables agent-run hardware sessions)
   description: |
     Pete (2026-06-26) is installing a TAPO smart-plug in the next few days so the agent can power-cycle the SAM remotely and recover to trinload during hardware tests. This is the enabler for AUTONOMOUS real-hardware sessions (push/flash/test without Pete physically present): until it lands, every real-hardware task that needs a power-cycle or recovery is gated on Pete being present. Gates the hardware halves of i194 (stream .mgt -> Trinity records) and i264 (selector-firmware flash/test), and any future agent-run hardware work. owner:pete = Pete installs it; once done, set DONE and the gated hardware tasks unblock.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: pete
 
@@ -4759,3 +4759,19 @@
   owner: agent
   prs:
     - {num: 714, role: completing}
+
+- id: i280
+  title: "Trace B-DOS's own Trinity SD record write in emulation to derive our write contract; then fix the serve write path (reuse B-DOS, don't reimplement)"
+  description: |
+    Hardware (2026-06-28) showed our TFTP-push per-block write hangs in B-DOS's HWSAD hook (rst 8/defb 149) even though B-DOS is resident; the A=0 drive-contract fix (branch i270-hwsad-drive-contract) is necessary but NOT sufficient. The captured Trinity docs have NO SD write example (Issue-21 article unwritten), so Colin's B-DOS 1.5t is the only authority. PLAN (docs/plans/i270d-bdos-write-trace.md): extend the koron-go harness into a 'bdostrace' tool that LOADS the real bdos15t-beta6.bin and runs a record write/copy against the existing SD model, trapping &DC-&DF IN/OUT + entry-point register state, to capture the correct invocation contract (SD-init/seek/record-base/page/HRECORD prelude). Then fix bdos_seam.asm to REUSE B-DOS's entry points (Pete: don't reimplement). Vehicle: koron-go harness (SimCoupe rejected - no Trinity ports). Steps 1-5 diagnostic; step 6 fixes src. Reframes i270a/#713 (bd_list_write_hw is the list-claim write, not the per-block hang gate). Net debug channel (i271) already lets the agent read step markers over UDP:9001 without sudo.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i281
+  title: "TAPO power-management automation: monitor tracks SAM on-time + escalates + auto-off backstop; agent keep-alive; idle-off in agent prompts"
+  description: |
+    The 10s cross-process power-event guard is DONE (lock + /var/tmp/tapo-last-power-event timestamp in ~/git/tapo-plug/tapo.sh, shared across all callers). REMAINING (Pete, 2026-06-28): (1) monitor (tools/autonomous-loop/monitor.sh) tracks the TAPO on/off state + the age since the last power-ON; when on >30/60/90/120/150 min it MESSAGES the agent asking if the SAM is still needed (recording which interval it has already asked, so it asks once per threshold, not repeatedly); at 180 min it calls 'tapo.sh off' ITSELF as a backstop and tells the agent it did so. (2) The agent can SIGNAL 'keep it on' by refreshing the power-event timestamp (or a dedicated keep-alive file) — so the SAM only stays on past 3h if an agent actively pushes the timestamp forward. (3) Agent prompt(s)/briefing: instruct agents to TURN THE SAM OFF when not using it (tapo.sh off), that they can power-cycle it themselves (off->on, >=10s apart, boots into trinload in ~80s), and how the keep-alive works. Decide the on/off state source (TAPO query vs infer from tapo.sh's last action) + the keep-alive mechanism. owner agent.
+  status: OPEN
+  kind: leaf
+  owner: agent
