@@ -15,8 +15,16 @@ the umbrella-vs-leaf dependency rule, IN_PROGRESS / atomic-item / split discipli
 items-vs-PRs — are load-bearing POLICY and live in `CLAUDE.md` ("Tracking work (the
 registry)"). This skill is only the *how to invoke* each operation.**
 
+**Before any mutation, rebuild the binary: `make registry-gen`.** A stale `build/registry`
+(source changed but binary not rebuilt) can silently produce an *invalid* state — e.g. a
+`set-status … DONE` that fails to drop the id from `registry/priority.yaml` — whose
+regenerated views are still self-consistent, so it passes locally yet fails CI's `validate`
+step (the #785 / i320 gap). The `make …` targets below all rebuild first; a bare
+`build/registry` mutation does not.
+
 After any mutation: `make registry` (regenerates the views), and `make registry-sync-check`
-must pass before committing. Commit the YAML + regenerated `.md` together.
+(which now also runs `validate`, closing the i320 gap) must pass before committing. Commit
+the YAML + regenerated `.md` together.
 
 ## Pick / inspect
 

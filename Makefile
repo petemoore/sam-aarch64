@@ -1246,12 +1246,21 @@ registry: registry-gen
 	REGISTRY_OUTDIR=docs/notes \
 	$(BUILD)/registry gen registry/items.yaml registry/questions.yaml
 
-# registry-sync-check — freshness guard: regenerate the four registry views
-# into build/gen/registry/ and diff against the committed docs/notes/ copies;
-# fail on drift (a YAML edit that forgot `make registry`, or a hand edit to a
-# generated file).  Mirrors tables-sync-check.
-# Not wired into CI — deferred to the final i115d switchover.
+# registry-sync-check — the local pre-commit registry gate, mirroring CI's two
+# registry-sync steps: (1) validate the source against every invariant, then
+# (2) regenerate the four views into build/gen/registry/ and diff them against
+# the committed docs/notes/ copies, failing on drift (a YAML edit that forgot
+# `make registry`, or a hand edit to a generated file).  Validating here too
+# closes the i320 gap: a source-invariant violation that leaves the views
+# self-consistent (e.g. a DONE item still ranked in priority.yaml) passed the
+# view-diff locally yet failed CI's separate validate step.  Same REGISTRY_* env
+# as CI's "Validate the registry source" step.
 registry-sync-check: registry-gen
+	REGISTRY_ITEMS=registry/items.yaml \
+	REGISTRY_QUESTIONS=registry/questions.yaml \
+	REGISTRY_PRIORITY=registry/priority.yaml \
+	REGISTRY_DIR=registry \
+	$(BUILD)/registry validate registry/items.yaml registry/questions.yaml
 	@mkdir -p $(BUILD)/gen/registry
 	REGISTRY_ITEMS=registry/items.yaml \
 	REGISTRY_QUESTIONS=registry/questions.yaml \
