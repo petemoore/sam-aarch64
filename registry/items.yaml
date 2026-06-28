@@ -5613,6 +5613,8 @@
   title: "local dev-harness redness on the Pi host: TestVariantBootSelfTests + TestZX0DecodeBench fail (pre-existing)"
   description: |
     Observed 2026-07-02 while landing PR 803 (netboot-only change; failures persist with the branch's changes stashed, and the assembler build includes no netboot source): tools/z80-test-harness-go TestVariantBootSelfTests fails with 'SP descended dangerously close to reader-test code: PC=B800 SP=7EFE' and TestZX0DecodeBench fails alongside; make disk rebuild did not clear it. The Go harness is a dev tool, not a CI gate (SimCoupe gates), so this blocks nothing -- but the inner-loop signal for assembler work on this host is degraded until diagnosed.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 804, role: completing}
