@@ -701,6 +701,10 @@ func main() {
 		encFixSize, _ := os.Stat(*encFixPath)
 		fmt.Printf("enc_fix:    %d bytes\n", encFixSize.Size())
 	}
+	if *ovlSuitePath != "" {
+		ovlSuiteSize, _ := os.Stat(*ovlSuitePath)
+		fmt.Printf("ovl12:      %d bytes\n", ovlSuiteSize.Size())
+	}
 	if *sysregDataPath != "" {
 		sysregDataSize, _ := os.Stat(*sysregDataPath)
 		fmt.Printf("sd13:       %d bytes\n", sysregDataSize.Size())
