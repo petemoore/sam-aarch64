@@ -49,7 +49,7 @@ const (
 	rst8HookAddr = 0x0008 // the RST 8 vector the SAMDOS/B-DOS hooks dispatch through
 
 	bdHookHRECORD   = 0x9C // record select (156)
-	bdHookALHK      = 136  // auto-load hook (0x88): load+run the selected drive/record's AUTO file (bdos15a.src.txt:463 HAUTO; KEYBOARD_BOOT_WORKAROUND.md §2 BOOT D8DCH)
+	bdHookALHK      = 136  // auto-load hook (0x88): B-DOS 1.5t HAUTO (real &9DBD) stages the selected record's AUTO file and returns E=1; the ROM1 continuation at &E274+ then loads+runs it (i328; KEYBOARD_BOOT_WORKAROUND.md §2 BOOT D8DCH)
 	bdHookHGTHD     = 129  // get file header (lookup by name) — server-side, not modelled here
 	bdHookHSAVE     = 132  // save whole file
 	bdHookHWSAD     = 149  // write raw 512-byte sector at (D=track, E=sector) from HL (bdos15a.src.txt:528-531)
@@ -319,9 +319,10 @@ func (s *BDOSStore) SectorWrites() []SectorWrite { return s.sectorWrites }
 func (s *BDOSStore) ListWrites() []ListWrite { return s.listWrites }
 
 // Boots returns the records ALHK-booted, in order — each is the record that was
-// HRECORD-selected when the auto-load hook fired. On real hardware ALHK never
-// returns (it loads + runs the record's AUTO file); the harness models the boot
-// as a captured event so fetch-and-boot tests can assert which record booted.
+// HRECORD-selected when the auto-load hook fired. On real hardware ALHK stages
+// the AUTO file and the ROM1 continuation boots it, never returning to the
+// caller; the flat harness collapses that whole boot into a captured event so
+// fetch-and-boot tests can assert which record booted.
 func (s *BDOSStore) Boots() []int { return s.boots }
 
 // AttachCard sets the card model the store uses for HRSAD reads. A nil card

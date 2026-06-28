@@ -354,7 +354,9 @@ bvdr_fail:
 BD_UIFA_ADDR:     equ &4B00              ; the SAMDOS UIFA buffer (real address)
 BD_DIFA_ADDR:     equ &4B50              ; SAMDOS deposits the DIFA here
 BD_HOOK_HRECORD:  equ &9C                ; B-DOS record select (156)
-BD_HOOK_ALHK:     equ 136                ; auto-load hook (&88): load+run the record's AUTO file
+BD_HOOK_ALHK:     equ 136                ; auto-load hook (&88): stage the record's AUTO file
+BD_LMPR_PORT:     equ &FA                ; Low Memory Page Register
+BD_LMPR_ROM1:     equ &40                ; LMPR bit 6: ROM1 at section D
 BD_HOOK_HGTHD:    equ 129                ; get file header (find by name)
 BD_HOOK_HSAVE:    equ 132                ; save whole file
 BD_HOOK_HRSAD:    equ 160                ; read raw 512-byte sector (HRSAD)
@@ -1140,28 +1142,42 @@ bwr_divdone:
 
 ; ---------------------------------------------------------------------------
 ; bdos_boot_record — the i122a boot-a-record primitive: HRECORD-select a record,
-; then fire ALHK (hook 136) to load + run that record's AUTO file. This is the
-; B-DOS BOOT routine's "DOS resident" branch (KEYBOARD_BOOT_WORKAROUND.md §2:
-; RST 8 / DEFB ALHK at D8DCH) and B-DOS HAUTO (bdos15a.src.txt:463), which loads
-; the AUTO file from the currently-selected drive/record and runs it.
+; then fire ALHK (hook 136) to boot that record's AUTO file. This is the B-DOS
+; BOOT routine's "DOS resident" branch (KEYBOARD_BOOT_WORKAROUND.md §2: RST 8 /
+; DEFB ALHK at D8DCH).
 ;
 ; In:  BD_BOOT_RECORD  1 byte  the record number to select and boot (0 = floppy).
 ;
-; ALHK does NOT return on real hardware — it boots into the loaded AUTO file, so
-; control never reaches the `ret` below. The harness models the boot as a
-; captured event (bdos_store.go bdHookALHK case) and returns retAddr+1, so the
-; `ret` resumes for the host test; the ret is harness-only / defensive.
+; THE ALHK CONTRACT (B-DOS 1.5t HAUTO, real &9DBD — the i328 root cause): ALHK
+; itself does NOT load or run anything. It scans the SELECTED record's directory
+; for an AUTO* file, stages that file's UIFA/DIFA into the system buffers at
+; &4B00/&4B50, and returns E=1 through the ROM's hook exit — which then vectors
+; into the ROM1 LOAD continuation at &E274+ to perform the actual body load and
+; the jump to the file's execute address. That continuation lives in ROM1, so
+; SECTION D MUST MAP ROM1 (LMPR bit 6) when the hook fires. The BOOT keyword and
+; the power-on bootloader satisfy this implicitly (their callers execute in/under
+; ROM1); a trinload-pushed caller does NOT — its LMPR has bit 6 clear, so the
+; hook exit lands in RAM garbage at &E274, the SAM crashes and re-autoboots, and
+; the push appears to "bounce back to trinload" ~10 s later (the i328 hardware
+; signature). Hence the OR &40 below: map ROM1 at section D before the RST 8.
 ;
-; Hardware-gated like the other RST 8 hooks: the real auto-load + boot routes
-; through the B-DOS loader and the Trinity SD driver and stays unverified until
-; exercised on real Trinity hardware (CLAUDE.md §5). Emulation-verified is not
-; hardware-verified.
+; On a successful boot the ROM1 continuation never returns here (it jumps into
+; the loaded image); on a failed search B-DOS raises rep101 ("no AUTO file"),
+; which longjmps to the editor context — also never here. The `ret` below is
+; harness-only: the flat-harness BDOSStore models the whole boot as a captured
+; event and resumes at retAddr+1.
+;
+; Hardware-gated like the other RST 8 hooks (CLAUDE.md §5): emulation-verified
+; is not hardware-verified.
 bdos_boot_record:
                 ld      a, (BD_BOOT_RECORD)
                 call    bdos_select_record      ; HRECORD: select the record (A = record)
+                in      a, (BD_LMPR_PORT)
+                or      BD_LMPR_ROM1            ; map ROM1 at section D: the post-ALHK
+                out     (BD_LMPR_PORT), a       ;   ROM1 LOAD continuation runs there
                 rst     8
-                defb    BD_HOOK_ALHK            ; auto-load + run the record's AUTO file
-                ret                             ; harness-only: ALHK never returns on hardware
+                defb    BD_HOOK_ALHK            ; stage the AUTO file; ROM1 loads + runs it
+                ret                             ; harness-only: never reached on hardware
 
 ; ===========================================================================
 ; Data region — the UIFA / DIFA buffers and the routine parameters.

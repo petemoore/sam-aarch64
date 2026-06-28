@@ -7,14 +7,15 @@
 ;
 ; THE WHOLE JOB is a thin wrapper around bdos_boot_record (bdos_seam.asm, the i122a
 ; primitive): set BD_BOOT_RECORD to the requested record number, then
-; `call bdos_boot_record`. That primitive does HRECORD-select-record-N + RST 8 / DEFB
-; ALHK (hook 136), the B-DOS BOOT "DOS resident" branch (KEYBOARD_BOOT_WORKAROUND.md
-; §2) / HAUTO (bdos15a.src.txt:463) — it loads and runs record N's AUTO file, which on
-; real hardware never returns (control boots into the loaded image). This program is
-; therefore mostly plumbing: read the host-chosen record number, hand it to the
-; primitive, and — for the paths that DO return (a floppy-boot that returned control, or
-; the harness model of ALHK) — exit cleanly back to trinload, never a bare di;halt (a
-; raw halt strands the SAM and costs a power-cycle on every push; Pete, 2026-06-24).
+; `call bdos_boot_record`. That primitive HRECORD-selects record N, maps ROM1 at
+; section D, and fires RST 8 / DEFB ALHK (hook 136) — B-DOS HAUTO stages record N's
+; AUTO file and the ROM1 LOAD continuation at &E274+ loads and runs it (the i328
+; mechanism; see bdos_boot_record's header). On real hardware a successful boot never
+; returns (control jumps into the loaded image). This program is therefore mostly
+; plumbing: read the host-chosen record number, hand it to the primitive, and — for
+; the paths that DO return (the harness model of ALHK) — exit cleanly back to
+; trinload, never a bare di;halt (a raw halt strands the SAM and costs a power-cycle
+; on every push; Pete, 2026-06-24).
 ;
 ; RECORD-NUMBER INPUT — a host-patched config block (the sd_push / netboot_serve idiom).
 ; BOOT_CONFIG is a small fixed region at the END of the binary that the host launcher
