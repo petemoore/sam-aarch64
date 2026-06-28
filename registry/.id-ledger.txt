@@ -665,3 +665,4 @@ i48c-b8h
 i70a
 i70b
 i70c
+i48c-b8i
