@@ -68,8 +68,8 @@ are length-prefixed (u16 LE), never NUL-terminated.
 ```
 ┌─────────────────────────────────────────────┐
 │ Magic    "SA64"      4 bytes  (0x53 41 36 34)│  format.go:7
-│ Version  u16 LE      = 2                     │  format.go:13
-│ Flags    u16 LE      bit0 = tagged sidecar   │  format.go:16
+│ Version  u16 LE      = 3                     │  format.go:16
+│ Flags    u16 LE      bit0 = tagged sidecar   │  format.go:19
 │ editor_region_offset u32 LE  (§2.3)          │  writer.go / reader.go
 ├─────────────────────── assembler-facing region ──────────────┤
 │ Label table  (§2.4)                          │  header_tables.go:35,90
@@ -104,14 +104,15 @@ The file splits at `editor_region_offset` into an **assembler-facing region**
 see `docs/specs/compact-tbn-nextgen-design.md` §3.5/§3.6/§3.7.
 
 - **Magic / version / flags / editor_region_offset** (12 bytes total).
-  `ReadFile` rejects a bad magic or a version ≠ 2. `Flags` bit 0
+  `ReadFile` rejects a bad magic or a version ≠ 3. `Flags` bit 0
   (`FlagTaggedSidecar`, `format.go`) marks an editor region whose sidecar rows
   carry a leading `kind u8` discriminator (comment / blank-run, §2.5 / i78); a
   file written by the current toolchain sets it, and a reader of an older file
   without the bit parses the legacy untagged shape (every row a comment). The
   SAM Z80 reader skips the flags word entirely (`reader.asm:96`) — the bit is
   editor-region metadata the assembler never reads. The version check is a clean
-  break — a v1 file is rejected, not down-converted.
+  break — an older-version file is rejected, not down-converted (version 3
+  packed the mode-1 patch header, §7.2 / i39c).
 - **Label table** and **local table** — the v2 header **position tables**
   (§2.4). They head the assembler-facing region. They carry one row per
   resolved position-label / numeric-local def site, so a `KindInsnRun` run
@@ -535,8 +536,14 @@ the field's bits, and those bits are **ORed into the zeroed field**:
 mode 1:  [01]  then per element:
          [base_word u32 LE]
          [patch_count u8]
-         patch_count × ( [slot u8][expr_len u8][expr bytes] )   writer.go:93 / reader.go:152
+         patch_count × ( [slot:4|expr_len:4]([real_len u8])[expr bytes] )   writer.go / reader.go
 ```
+
+The patch header is one packed byte (i39c): the **slot** id in the high
+nibble, the expression length in the low nibble. A length nibble of **15
+is an escape**: the real length follows as a u8 (lengths 0–14 are inline;
+15–255 take the escape byte). Slot ids therefore live in 1–15; the writer
+panics on a slot outside the nibble (`WriteInsnRun`).
 
 - A **patch-free element** in mode 1 (`patch_count = 0`) is a fully-literal
   instruction absorbed into an overlay frame to avoid splitting a run; it is
@@ -544,11 +551,12 @@ mode 1:  [01]  then per element:
   emits maximal patch-free stretches as mode-0 frames and only absorbs short
   literal gaps (< `litBreak` = 4) into a surrounding mode-1 frame — a
   size choice that never changes the assembled bytes.
-- **`expr_len` and `patch_count` are single bytes** (the writer panics if a
-  patch expression exceeds 255 bytes or an element exceeds 255 patches —
-  compaction bugs, `writer.go:95,101`). The patch expression is the same
-  length-prefixed expression bytecode as §5, but with a **u8** length here
-  (the §4 operand `IMM_EXPR` uses a u16 length — these are distinct framings).
+- **`expr_len` caps at 255 and `patch_count` is a single byte** (the writer
+  panics if a patch expression exceeds 255 bytes or an element exceeds 255
+  patches — compaction bugs, `writer.go:WriteInsnRun`). The patch expression
+  is the same expression bytecode as §5, its length carried in the packed
+  header's nibble or the escape u8 (the §4 operand `IMM_EXPR` uses a u16
+  length — these are distinct framings).
 - **PC accounting is exact**: each element occupies 4 output bytes, so label
   offsets and the 2-pass values are unchanged.
 - A run's payload is capped at **1016 bytes** (`insnRunMaxPayload`,
@@ -557,12 +565,15 @@ mode 1:  [01]  then per element:
 
 #### 7.2.1 Fold slots (`aarch64enc.FoldSlot`, `overlay.go:16`)
 
-The `slot` byte selects which bitfield the patch writes and the conversion
-applied (`Fold`, `overlay.go:45`). Each rule mirrors *exactly* the conversion
-the literal encoder performs for that field (cited in `overlay.go` against
-the `tools/sam-aarch64/assemble/pass2.go` slot encoders), so the overlay and
-literal paths cannot diverge. The byte values are an **append-only wire
-contract** shared with the Z80 slot dispatch.
+The `slot` id (the packed patch header's high nibble, §7.2) selects which
+bitfield the patch writes and the conversion applied (`Fold`,
+`overlay.go:45`). Each rule mirrors *exactly* the conversion the literal
+encoder performs for that field (cited in `overlay.go` against the
+`tools/sam-aarch64/assemble/pass2.go` slot encoders), so the overlay and
+literal paths cannot diverge. The id values are an **append-only wire
+contract** shared with the Z80 slot dispatch; the packed header holds ids
+1–15, so **two ids (14, 15) remain** before the header needs an escape of
+its own.
 
 | ID | Slot | Field | Fold (`value` = evaluated patch expr; `pc` = element PC) |
 |----|------|-------|----------------------------------------------------------|

@@ -23,8 +23,7 @@ func TestInsnRunMode1RoundTrip(t *testing.T) {
 		0x01,                   // mode 1
 		0x00, 0x00, 0x00, 0x94, // base 0x94000000
 		0x01,             // patch_count 1
-		0x01,             // slot 1
-		0x03,             // expr_len 3
+		0x13,             // packed header [slot:1|expr_len:3]
 		0x05, 0x07, 0x00, // PUSH_SYM 0x0007
 		0x1f, 0x20, 0x03, 0xd5, // base 0xd503201f
 		0x00, // patch_count 0
@@ -50,6 +49,57 @@ func TestInsnRunMode1RoundTrip(t *testing.T) {
 	}
 	if !rr.AtEnd() {
 		t.Errorf("reader not at end after one record")
+	}
+}
+
+// A mode-1 patch whose expression is 15+ bytes takes the expr_len-nibble
+// escape: header [slot:4|0xF] followed by the real length u8 (i39c).
+func TestInsnRunMode1LenEscapeRoundTrip(t *testing.T) {
+	longExpr := bytes.Repeat([]byte{0xAA}, 15)
+	elems := []InsnElement{
+		{BaseWord: 0x91000000, Patches: []InsnPatch{{Slot: 6, Expr: longExpr}}},
+	}
+
+	var w RecordWriter
+	w.WriteInsnRun(1, elems)
+
+	wantPayload := append([]byte{
+		0x01,                   // mode 1
+		0x00, 0x00, 0x00, 0x91, // base 0x91000000
+		0x01, // patch_count 1
+		0x6F, // packed header [slot:6|escape 0xF]
+		0x0F, // real expr_len 15
+	}, longExpr...)
+	want := append([]byte{byte(KindInsnRun), byte(len(wantPayload)), 0x00}, wantPayload...)
+	if !bytes.Equal(w.Bytes(), want) {
+		t.Fatalf("wire bytes:\n got %x\nwant %x", w.Bytes(), want)
+	}
+
+	rr := NewRecordReader(w.Bytes())
+	rec, err := rr.Next()
+	if err != nil {
+		t.Fatalf("Next: %v", err)
+	}
+	if !reflect.DeepEqual(rec.Elements, elems) {
+		t.Errorf("elements = %+v, want %+v", rec.Elements, elems)
+	}
+}
+
+// A slot id that cannot fit the 4-bit packed header field is a compaction
+// bug the writer refuses to encode.
+func TestInsnRunSlotRangePanics(t *testing.T) {
+	for _, slot := range []byte{0, 16} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("slot %d: want panic, got none", slot)
+				}
+			}()
+			var w RecordWriter
+			w.WriteInsnRun(1, []InsnElement{
+				{BaseWord: 1, Patches: []InsnPatch{{Slot: slot, Expr: []byte{0x05, 0x00, 0x00}}}},
+			})
+		}()
 	}
 }
 

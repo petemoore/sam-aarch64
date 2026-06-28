@@ -23,8 +23,8 @@ func TestWriteFileMinimal(t *testing.T) {
 	if string(got[:4]) != "SA64" {
 		t.Errorf("magic = %q", string(got[:4]))
 	}
-	if got[4] != 2 || got[5] != 0 {
-		t.Errorf("version = %d %d, want 2 0", got[4], got[5])
+	if got[4] != 3 || got[5] != 0 {
+		t.Errorf("version = %d %d, want 3 0", got[4], got[5])
 	}
 	// The name table moved to the editor region (M8 / i39b-2). The section
 	// index at bytes 8..12 points at it; its first field is the name count.

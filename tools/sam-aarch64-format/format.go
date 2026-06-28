@@ -6,11 +6,14 @@ package format
 // Magic is the 4-byte file header tag (§2).
 var Magic = [4]byte{'S', 'A', '6', '4'}
 
-// Version is the on-disk format version (§2). v2 is the instruction-overlay
-// format (M8 / i39a): the KindInsnRun record replaces the KindLitInsts run
-// and folds symbol/PC-bearing instructions into the same run via a sparse
-// patch overlay. It is a clean break — the reader rejects any other version.
-const Version uint16 = 2
+// Version is the on-disk format version (§2). Version 2 introduced the
+// instruction-overlay format (M8 / i39a): the KindInsnRun record replaces
+// the KindLitInsts run and folds symbol/PC-bearing instructions into the
+// same run via a sparse patch overlay. Version 3 (i39c) packs the mode-1
+// patch header into one byte, [slot:4|expr_len:4], with a length-escape
+// byte for expressions of 15+ bytes. Each bump is a clean break — the
+// reader rejects any other version.
+const Version uint16 = 3
 
 // Flags is the header flags word written by this version (§2.1). It records
 // editor-region capabilities the reader needs to know before parsing the

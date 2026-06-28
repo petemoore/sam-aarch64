@@ -35,11 +35,14 @@ func (w *RecordWriter) WriteLitData(directiveID byte, raw []byte) {
 	w.buf = append(w.buf, raw...)
 }
 
-// WriteInsnRun writes a KindInsnRun record (compact `.tbn` v2 instruction
+// WriteInsnRun writes a KindInsnRun record (compact `.tbn` instruction
 // overlay). mode 0 packs each element's bare 4-byte word; mode 1 writes
-// each element as [base_word][patch_count][slot,expr_len,expr]…. Panics on
-// programming errors (a mode-0 element carrying patches, a patch count or
-// expr length exceeding the u8 wire field) — those are compaction bugs.
+// each element as [base_word][patch_count][packed patches…], where a patch
+// is one packed header byte [slot:4|expr_len:4] followed by the expr bytes
+// — expr_len nibble 15 escapes to a real-length u8 (i39c slot-byte
+// packing). Panics on programming errors (a mode-0 element carrying
+// patches, a patch count or expr length exceeding the u8 wire field, a
+// slot outside the 4-bit header field) — those are compaction bugs.
 func (w *RecordWriter) WriteInsnRun(mode byte, elements []InsnElement) {
 	payload := []byte{mode}
 	switch mode {
@@ -58,10 +61,17 @@ func (w *RecordWriter) WriteInsnRun(mode byte, elements []InsnElement) {
 			}
 			payload = append(payload, byte(len(el.Patches)))
 			for _, p := range el.Patches {
+				if p.Slot == 0 || p.Slot > 15 {
+					panic("WriteInsnRun: patch slot outside the 4-bit header field")
+				}
 				if len(p.Expr) > 255 {
 					panic("WriteInsnRun: patch expr_len exceeds 255")
 				}
-				payload = append(payload, p.Slot, byte(len(p.Expr)))
+				if len(p.Expr) < exprLenEscape {
+					payload = append(payload, p.Slot<<4|byte(len(p.Expr)))
+				} else {
+					payload = append(payload, p.Slot<<4|exprLenEscape, byte(len(p.Expr)))
+				}
 				payload = append(payload, p.Expr...)
 			}
 		}
@@ -71,6 +81,10 @@ func (w *RecordWriter) WriteInsnRun(mode byte, elements []InsnElement) {
 	w.writeHeader(KindInsnRun, len(payload))
 	w.buf = append(w.buf, payload...)
 }
+
+// exprLenEscape is the mode-1 patch-header expr_len nibble value marking
+// "real u8 length follows" (§7.2). Inline lengths are 0–14.
+const exprLenEscape = 0x0F
 
 func appendU32(buf []byte, v uint32) []byte {
 	var tmp [4]byte

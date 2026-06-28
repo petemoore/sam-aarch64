@@ -74,7 +74,7 @@
 ;   &d3  SER_TAG_SIDECAR_KIND   sidecar row kind > 1
 ; -----------------------------------------------------------------------
 
-SER_TBN_VERSION:        equ     2           ; format.Version (format.go:13)
+SER_TBN_VERSION:        equ     3           ; format.Version (format.go:16)
 SER_TBN_FLAGS:          equ     1           ; format.Flags = FlagTaggedSidecar
                                             ; (format.go:18/27)
 

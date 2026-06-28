@@ -15,7 +15,7 @@
 ;      H < &40 (= &3FFE) and LMPR low 5 bits incremented by 1.
 ;   2. synthetic record read at a NON-default base: stamp a 21-byte ".tbn"
 ;      blob into page 8 (a deliberately non-7 base) via an LMPR=&28 bracket,
-;      seed IN_BASE_LMPR = page 8.  Blob = "SA64", version=2, flags=0,
+;      seed IN_BASE_LMPR = page 8.  Blob = "SA64", version=3, flags=0,
 ;      editor_region_offset=21, label_count=0, local_count=0, then one
 ;      record [kind=&77][len=&02 &00][&AB &CD].  Call
 ;      reset_reader_to_in_buf (which tail-calls reader_init); reader_init
@@ -91,7 +91,7 @@ run_reader_paged_self_tests:
 ; reachable.  The blob is:
 ;
 ;   offset 0..3   : "SA64"
-;   offset 4..5   : version u16 LE = 0x0002
+;   offset 4..5   : version u16 LE = 0x0003
 ;   offset 6..7   : flags u16 LE = 0x0000
 ;   offset 8..11  : editor_region_offset u32 LE = 21  (section index, M8 / i39b-2)
 ;   offset 12..13 : label_count u16 LE = 0x0000  (compact `.tbn` v2 header table)
@@ -233,7 +233,7 @@ reader_paged_fail_with_lmpr:
 ; -----------------------------------------------------------------------
 reader_paged_synthetic_tbn:
                 defm    "SA64"              ; magic (4 bytes)
-                defw    2                   ; version u16 LE = 2 (compact `.tbn` v2)
+                defw    3                   ; version u16 LE = 3 (format.Version)
                 defw    0                   ; flags u16 LE = 0
                 defw    21                  ; editor_region_offset u32 LE = 21 (end of records)
                 defw    0

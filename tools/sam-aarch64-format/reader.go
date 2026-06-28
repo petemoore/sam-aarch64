@@ -136,12 +136,22 @@ func (r *RecordReader) Next() (Record, error) {
 				patchCount := int(body[pos])
 				pos++
 				for p := 0; p < patchCount; p++ {
-					if pos+2 > len(body) {
+					if pos+1 > len(body) {
 						return rec, fmt.Errorf("INSN_RUN mode 1: truncated patch header at %d", pos)
 					}
-					slot := body[pos]
-					exprLen := int(body[pos+1])
-					pos += 2
+					// Packed header [slot:4|expr_len:4]; len nibble 15
+					// escapes to a real-length u8 (i39c).
+					hdr := body[pos]
+					pos++
+					slot := hdr >> 4
+					exprLen := int(hdr & 0x0F)
+					if exprLen == exprLenEscape {
+						if pos+1 > len(body) {
+							return rec, fmt.Errorf("INSN_RUN mode 1: truncated patch length at %d", pos)
+						}
+						exprLen = int(body[pos])
+						pos++
+					}
 					if pos+exprLen > len(body) {
 						return rec, fmt.Errorf("INSN_RUN mode 1: truncated patch expr at %d", pos)
 					}
