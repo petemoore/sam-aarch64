@@ -4317,6 +4317,15 @@
   owner: agent
   parent: i231b-b4
 
+- id: i231b-b4i
+  title: "http_main.asm carve-outs eliminated (2 sites): collapse to the bootable; resolve the PROV_STORE_* host-double vs real B-DOS HSAVE store leaf"
+  description: |
+    Eliminate the 2 NETBOOT_HOSTTEST==0 carve-outs in src/netboot/http_main.asm (boot entry org/jp :42; the whole bootable section :405 = http_main entry + FW_RECORD_CAP + fw_span include + the REAL B-DOS HSAVE store leaf storage_sink_leaf/store_begin/store_end). Trickier than the smoke/csd/server/bdos_seam collapses: http_main has a host store double PROV_STORE_* (:218, the sanctioned 'if defined(NETBOOT_HOSTTEST)' recording-double shape) with its OWN store_begin/store_end that the oracle tests (http_main_store_test.go, http_main_loop_test.go) use to verify the provisioning loop's per-file verdicts, AND the real B-DOS HSAVE store leaf (:405+) with its OWN store_begin/store_end. Dropping HOSTTEST (collapse to the full bootable, like csd_probe) removes the recording double, so the oracle store tests must be retargeted. KEY DESIGN QUESTION to resolve in investigation: can they verify the provisioning loop WITHOUT using the AttachBDOS mock to test B-DOS behaviour (memory feedback_trinity_sd_write_settled_truths #4 forbids that) — e.g. by checking CONN_HASH_MATCH / the per-file verdicts directly (provisioning-logic, not B-DOS-behaviour)? Also watch the [[i313]] high-address hazard (the store leaf's address after collapse). Ledger 13->11 / 2->1 files (netboot_serve remains). Investigate first; if it needs a design decision I cannot make or hits a real blocker, record it (qN or a dep edge) and reassess.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  parent: i231b-b4
+
 - id: i232
   title: "All Go-harness tests boot the SAM from address 0 (real ROM cold-init) for faithful machine state, not Call-with-seeded-state"
   description: |
