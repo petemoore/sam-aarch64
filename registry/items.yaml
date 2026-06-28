@@ -4769,9 +4769,11 @@
   title: "Agent hardware-session autonomy: passwordless tcpdump/arping + safe-command allowlist so the agent runs captures/probes itself"
   description: |
     Decide + set up which hardware-session commands the agent runs without Pete relaying them. (a) Passwordless capture: a sudoers.d NOPASSWD line (or setcap cap_net_raw,cap_net_admin+eip) for /usr/bin/tcpdump + /usr/bin/arping so the agent starts captures/liveness probes itself (today needs Pete's sudo; a recent cached credential is not durable). (b) settings.json allowlist of the safe hardware commands (the trinpush push scripts under DEPLOY_CHECKED, curl tftp to the SAM, arping) so they do not prompt each call; the DEPLOY_CHECKED deploy-guard stays for actual pushes. Pairs with i266 (TAPO) + the net debug channel as the autonomy trio. owner pete = the sudoers/setcap is Pete's one-time host action; the settings.json allowlist + documenting the command list is agent work once greenlit.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: pete
+  prs:
+    - {num: 768, role: completing}
 
 - id: i273
   title: "Systemic: Z80/Colin SAM code is the authority for Trinity HW (EEPROM/SD/Ethernet); the Go model must be DERIVED from it, never treated as authority"
@@ -5152,10 +5154,12 @@
   title: "PIVOT to NO-reimplement disk write: minimal ENC re-arm (not full ereset) + use B-DOS HWSAD directly"
   description: |
     §8aj diagnosis: the per-block FULL ENC ereset (enc_rx_reestablish, called per accepted DATA block in wd_send_ack) is the root of (a) the slowness, (b) B-DOS HWSAD 'hanging' (the reset disturbs the shared µC/SD state Colin's write assumes intact), (c) why we reimplemented to self-heal. THE DRAIN THEORY (Pete): with every routine draining (OUT followed by IN) + no port access from interrupts, sequential ENC<->SD alternation is safe by construction; the shared read latch only bites an UN-DRAINED switch, and the interleave detector proves we drain (zero violations). The i249 're-arm needed' obs PREDATES our draining discipline, so it may have been the un-drained latch read itself (now fixed) rather than a real ENC-RX disturbance. TEST ORDER: (1) proper draining + ZERO re-arm (drop enc_rx_reestablish, just MUX-switch) + B-DOS HWSAD direct (RRS_OWN_CMD24=0); if the ENC RX still genuinely needs nudging, (2) MINIMAL re-arm (re-enable ECON1.RXEN / re-point ERXRDPT / re-select ENC — no &28 reset, no reconfigure). Full ereset is wrong either way. VALIDATE: hardware cj.mgt push with ACK-logging observability (the Pi is the TFTP sender, sees every ACK block# — passive, no markers, no root) — success = curl completes + a booted record. Emulation can't adjudicate the re-arm question (rxDisarmed encodes the full-reset assumption); model what we learn in i288. Likely a very small trinload-side routine. Authority: §8aj; netboot_serve.asm wd_send_ack; encdrv.asm enc_rx_reestablish/ereset; hardware-readiness-audit.md (i249).
-  status: OPEN
+  status: DONE
   depends_on: [i288]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 755, role: completing}
 
 - id: i290
   title: "KEEP-OR-DELETE the SD-write reimplementation (own-CMD24 #752 + the #713 Colin-port) — PETE PERSONAL REVIEW"
@@ -5165,3 +5169,11 @@
   depends_on: [i289]
   kind: leaf
   owner: pete
+
+- id: i291
+  title: Measure the real ENC28J60/shared-PIC settle time on hardware (unattended ethernet-reporting bisection) to replace the conservative 1200-T-state emulator constant
+  description: |
+    Follow-up to i289 (#755). The enc28j60.go sdInitSettling window is currently a conservative 1200-T-state constant (4x the documented ~50us) — a pure emulator-fidelity knob that never runs on real silicon, safely bounded so it catches the i242/i287 SD-before-ENC ordering bug without latching. This item MEASURES the real settle to make the model faithful rather than conservative, which also independently validates the shared-PIC settle model underpinning the §8ag serve-crash interpretation. Approach (Pete's, 2026-06-30): a trinload-pushed Z80 probe that does the &38 SD-init, waits N T-states, issues an identity probe, and reports stale-vs-fresh over ETHERNET (UDP markers, not screen — so it runs unattended; bisect N between a too-small lower bound and a too-large upper bound to converge on the real settle). Then set the emulator constant to the measured value (+ margin). owner agent: now self-serviceable (i266 TAPO power-cycle + i272 passwordless tcpdump). NOT required for correctness — purely a fidelity refinement.
+  status: OPEN
+  kind: leaf
+  owner: agent
