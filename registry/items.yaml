@@ -4245,9 +4245,9 @@
   parent: i231b-b4
 
 - id: i231b-b4b
-  title: Eliminate the remaining 21 carve-outs (bdos_seam RST8 dispatch + multi-site files)
+  title: "Eliminate the remaining 18 carve-outs / 3 files (http_main, netboot_client, netboot_serve)"
   description: |
-    After smoke_test.asm (i231b-b4a), csd_probe.asm (i231b-b4c) + netboot_server.asm (i231b-b4d), the ledger is 21 sites / 5 files: bdos_seam.asm (1, the RST8/B-DOS-hook dispatch — needs harness modeling or SimCoupe, class B), netboot_serve.asm (10, the (HOSTTEST==0)*(DUMPER==0) combined gates), netboot_client.asm (5, has a host-only double), netboot_dumper.asm (3, host-only double; dumper_main driven by dumper_rompaging_test.go), http_main.asm (2, host-only double; http_main driven by http_main_boot_test.go). Per-file analysis: dumper/http/client are remove-if-overgated candidates (their mains are already harness-driven) but each also has a host-only 'if defined(NETBOOT_HOSTTEST)' double, so the flag can't simply be dropped — needs care. netboot_serve's 10 combined gates + bdos_seam class-B are the hard core. Nesting maxed at i231b-b4X: track each file's completion as a NEW sibling leaf under i231b-b4 (split --parent i231b-b4).
+    The carve-outs remaining after smoke_test.asm (i231b-b4a), csd_probe.asm (i231b-b4c), netboot_server.asm (i231b-b4d), netboot_dumper.asm (i231b-b4e) and bdos_seam.asm (i231b-b4g) — the live ledger is 18 sites / 3 files: netboot_serve.asm (11, the (HOSTTEST==0)*(DUMPER==0) combined gates — the hard core), netboot_client.asm (5, has a host-only STAGING size-switch double + a real bootable body already harness-driven via bdos_store_test.go RunBoot(client_main) + netboot_fetch_boot_test.go), http_main.asm (2, has a host store double [PROV_STORE_*] AND a real B-DOS HSAVE store leaf both defining store_begin/store_end — dropping HOSTTEST removes the recording double, so collapse needs the oracle store tests retargeted at the real B-DOS store model). netboot_client is the cleanest next remove-if-overgated collapse (the harness already models EEPROM + all B-DOS RST 8 hooks + SD CSD); http_main needs the store-double resolution; netboot_serve's combined gates are the hardest. Nesting maxed at i231b-b4X: track each file's completion as a NEW sibling leaf under i231b-b4 (split --parent i231b-b4).
   status: OPEN
   kind: leaf
   owner: agent
