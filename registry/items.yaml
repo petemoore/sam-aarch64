@@ -5444,9 +5444,11 @@
   title: "sd_push: SAM-screen output showing progress + which record was created"
   description: |
     User-facing feature: while sd_push receives + writes a record, show clear status on the SAM screen (streaming progress, the record number/name created, done/error). Pairs with i308 (report the record# back over the network) so both a human at the SAM and an automated pusher know where the disk landed. Nice-to-have that makes the tool legible; queue alongside the cj deploy.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 798, role: completing}
 
 - id: i319
   title: Hardware-test our .mgt feature images on the real SAM (assembler/disassembler/editor/...) via the store+boot toolkit
