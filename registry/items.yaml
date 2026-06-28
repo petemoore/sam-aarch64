@@ -1751,7 +1751,7 @@
   description: |
     The physical-client tail of the end-to-end Pi boot: with the i345 hub-isolated rig in place and the i95b-b1 simulated-client shot proven, power the netboot-enabled target Pi and confirm it DHCP-leases from the SAM, TFTP-fetches its boot file set from the Trinity store, and boots. Multi-MB firmware provisioning/serving (spanning) rides the i70 residuals.
   status: OPEN
-  depends_on: [i345, i95b-b1]
+  depends_on: [i345, i95b-b1, i346]
   kind: leaf
   owner: agent
   parent: i95b
@@ -5799,3 +5799,19 @@
   kind: leaf
   owner: pete
   refs: [docs/notes/pi-netboot-capture-analysis.md]
+
+- id: i346
+  title: "Pi-boot filename mapping: real Pi file names exceed the 10-char B-DOS directory-name limit"
+  description: |
+    The netboot_server store walk (i95b-b1) indexes files by their B-DOS directory names, which cap at 10 chars - real Pi 400 boot names (cmdline.txt = 11, bcm2711-rpi-400.dtb = 19, armstub8-gic.bin = 16) cannot be stored verbatim, so a name-mapping scheme (e.g. a manifest file in the record mapping TFTP names to store names, or serving from a manifest instead of raw dir names) is needed before a real Pi can fetch its full file set. Blocks i95b-b2 fetch-by-real-name; config.txt/start4.elf already fit.
+  status: OPEN
+  kind: leaf
+  owner: agent
+
+- id: i347
+  title: netboot_serve (i332 vessel) shares the EI'd-loop / ROM-IM1-chain exposure on unbounded serve runs
+  description: |
+    Found during i95b-b1 stage 2: the vendored ENC driver EIs on every exit, so a record-booted serve program running its loop indefinitely gets ROM IM1 frame interrupts + the B-DOS frame hook against a frozen boot context, with shared-&DC SD/ENC traffic - netboot_server (i95b-b1) now arms an IM 2 takeover after its last B-DOS hook to own the vector for the serve phase; netboot_serve (the i332 TFTP-record vessel, record 145) has NO such takeover and its faithful tests only drive short windows, so the exposure is theoretical-but-real for long-lived serves on hardware. Assess and, if confirmed, port the IM 2 takeover pattern from netboot_server.asm to netboot_serve.asm.
+  status: OPEN
+  kind: leaf
+  owner: agent
