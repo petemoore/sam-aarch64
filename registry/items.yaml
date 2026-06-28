@@ -975,6 +975,8 @@
   depends_on: [i48c-b8c, i48c-b8g, i48c-b8i, i48c-b8j]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 835, role: completing}
   parent: i48c-b8
 
 - id: i48c-b8e
