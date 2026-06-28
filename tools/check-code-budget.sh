@@ -56,10 +56,11 @@ rc=0
 if [[ $# -ge 2 ]]; then
     check_one "$1" "$2" || rc=$?
 else
-    # Default: check both variants.  Either being absent is a hard error
+    # Default: check all three variants.  Any being absent is a hard error
     # (the caller asked for a budget check; missing binaries mean the
     # build didn't run).
-    check_one "$ROOT/build/assembler.bin"      "test" || rc=$?
-    check_one "$ROOT/build/assembler-prod.bin" "prod" || rc=$?
+    check_one "$ROOT/build/assembler.bin"           "test" || rc=$?
+    check_one "$ROOT/build/assembler-prod.bin"      "prod" || rc=$?
+    check_one "$ROOT/build/assembler-enc-tests.bin" "enc-tests" || rc=$?
 fi
 exit "$rc"

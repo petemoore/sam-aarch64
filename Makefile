@@ -38,9 +38,9 @@ include $(ASM_DEPS_MK)
 
 .PHONY: all clean
 
-# Default build: the two shipping assembler variants (the recipe for each
-# also runs tools/check-code-budget.sh inline).
-all: assembler assembler-prod
+# Default build: the three assembler variants (the recipe for each also
+# runs tools/check-code-budget.sh inline).
+all: assembler assembler-prod assembler-enc-tests
 
 clean:
 	rm -rf $(BUILD)
@@ -1562,55 +1562,64 @@ test-encoder: sam-aarch64 tables-gen release-unstripped-tbn
 
 ci-encoder: test-encoder
 
-.PHONY: assembler assembler-prod build-disk disk test-mem-offaxis cluster-offaxis paged-call-payload enc-fix-payload sysreg-data disasm-payload disasm-test-payload test-core ci-core check-budget
+.PHONY: assembler assembler-prod assembler-enc-tests build-disk disk test-mem-offaxis cluster-offaxis paged-call-payload enc-fix-payload sysreg-data disasm-payload disasm-test-payload test-core ci-core check-budget
 
-# check-budget — fail if either assembler variant has grown into the
+# check-budget — fail if any assembler variant has grown into the
 # &C000 stack page (the silent boot-hang cliff; see
 # tools/check-code-budget.sh + memory/feedback_test_variant_fragility.md).
 # The same assertion also runs inline at the tail of each assembler build
-# recipe, so any `make assembler` / `make assembler-prod` enforces it too;
-# this target is the explicit both-variants entry point used by CI.
-check-budget: assembler assembler-prod
+# recipe, so any `make assembler` / `make assembler-prod` /
+# `make assembler-enc-tests` enforces it too; this target is the explicit
+# all-variants entry point used by CI.
+check-budget: assembler assembler-prod assembler-enc-tests
 	./tools/check-code-budget.sh
 
-# Two build variants of the SAM-side assembler:
+# Three build variants of the SAM-side assembler:
 #
 #   assembler       (test variant, default for dev / ci-core / ci-symbols)
-#                   Includes all boot-time self-tests (slots / symbols /
-#                   local labels / expr_eval / PC-rel).  Larger binary
-#                   but catches per-routine regressions before the
-#                   fixture-corpus round-trip even runs.  This is what
-#                   tests/core/run-roundtrip.sh expect.
+#                   Built with `-D BUILD_TESTS=1`.  Includes every
+#                   boot-time self-test suite EXCEPT the encode_inst
+#                   family (slots / symbols / local labels / expr_eval /
+#                   PC-rel / trampoline / reader / disasm / zx0 / ...).
+#                   Larger binary but catches per-routine regressions
+#                   before the fixture-corpus round-trip even runs.  This
+#                   is what tests/core/run-roundtrip.sh expect.
+#
+#   assembler-enc-tests  (encode self-test variant, i234)
+#                   Built with `-D BUILD_TESTS_ENCODE=1`.  Runs ONLY the
+#                   encode_inst self-test family (insn_encode.asm +
+#                   test_encode_inst.asm + the page-11 enc_fix payload
+#                   load) at boot — the family is ENCTAB-coupled and must
+#                   stay inline in section C, so it gets its own boot run,
+#                   time-multiplexing section-C test memory with the test
+#                   variant across two boots.
 #
 #   assembler-prod  (production variant, for end-user shipping)
-#                   Self-tests #ifdef'd out via `-D BUILD_TESTS=0` (i.e.
-#                   BUILD_TESTS is undefined; `if defined(BUILD_TESTS)`
-#                   blocks in src/assembler.asm are skipped).  Smaller
-#                   binary — frees code budget.  Identical OUT bytes on
-#                   every fixture (the self-tests don't affect the assemble
-#                   path); the build-split-status target verifies this.
+#                   Neither define set, so every self-test block is
+#                   skipped.  Smaller binary — frees code budget.
+#                   Identical OUT bytes on every fixture (the self-tests
+#                   don't affect the assemble path); the *-prod CI jobs
+#                   verify this.
 #
-# Both variants byte-match GNU on all fixture corpora.
+# All variants byte-match GNU on all fixture corpora.
 
 assembler: $(BUILD)/assembler.bin
 
 assembler-prod: $(BUILD)/assembler-prod.bin
 
+assembler-enc-tests: $(BUILD)/assembler-enc-tests.bin
+
 # Test-variant build also exports the symbol table for the off-axis
 # test_mem.bin to import (plan-PR 3 — see
 # https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/plans/2026-05-28-plan-pr3-test-corpus-off-axis.md).
-# Also imports enc_fix_payload.sym to pick up ENC_FIX_PAYLOAD_LEN (i69):
-# the payload is org'd at &E100, assembled standalone (no assembler.sym
-# dependency — all values are literals), and exports the payload length
-# via its sym file.  The payload must be built before the assembler so
-# this --importfile is satisfied.
-$(BUILD)/assembler.bin $(BUILD)/assembler.sym $(BUILD)/assembler.map: src/assembler.asm $(asm_deps/src/assembler.asm) $(BUILD)/enc_fix_payload.sym
+# The encode_inst family (and with it the enc_fix_payload.sym import)
+# lives in the assembler-enc-tests variant below (i234).
+$(BUILD)/assembler.bin $(BUILD)/assembler.sym $(BUILD)/assembler.map: src/assembler.asm $(asm_deps/src/assembler.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D BUILD_TESTS=1 \
 	    --obj=$(BUILD)/assembler.bin \
 	    --exportfile=$(BUILD)/assembler.sym \
 	    --mapfile=$(BUILD)/assembler.map \
-	    --importfile=$(BUILD)/enc_fix_payload.sym \
 	    src/assembler.asm
 	@./tools/check-code-budget.sh $(BUILD)/assembler.bin test
 
@@ -1618,6 +1627,20 @@ $(BUILD)/assembler-prod.bin: src/assembler.asm $(asm_deps/src/assembler.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/assembler-prod.bin src/assembler.asm
 	@./tools/check-code-budget.sh $(BUILD)/assembler-prod.bin prod
+
+# Encode self-test variant (i234).  Imports enc_fix_payload.sym for
+# ENC_FIX_PAYLOAD_LEN (the LDIR size in run_encode_inst_self_tests) the
+# same way the test variant recipe does; exports its own .sym/.map for
+# fail-banner PC resolution in the harness.
+$(BUILD)/assembler-enc-tests.bin $(BUILD)/assembler-enc-tests.sym $(BUILD)/assembler-enc-tests.map: src/assembler.asm $(asm_deps/src/assembler.asm) $(BUILD)/enc_fix_payload.sym
+	@mkdir -p $(BUILD)
+	pyz80 -D BUILD_TESTS_ENCODE=1 \
+	    --obj=$(BUILD)/assembler-enc-tests.bin \
+	    --exportfile=$(BUILD)/assembler-enc-tests.sym \
+	    --mapfile=$(BUILD)/assembler-enc-tests.map \
+	    --importfile=$(BUILD)/enc_fix_payload.sym \
+	    src/assembler.asm
+	@./tools/check-code-budget.sh $(BUILD)/assembler-enc-tests.bin enc-tests
 
 # Off-axis test_mem build (BUILD_TESTS only).
 #
@@ -1790,12 +1813,11 @@ build-disk: $(BUILD)/build-disk
 # boot sequence calls the disasm &8003 and zx0 &AFA0 self-tests via
 # paged_call — so it must ship the TEST disasm + zx0 binaries
 # (disasm-test.bin, zx0-test.bin).
-disk: assembler test-mem-offaxis cluster-offaxis enc-fix-payload paged-call-payload sysreg-data disasm-test-payload zx0-test-payload enctab $(BUILD)/build-disk
+disk: assembler test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-test-payload zx0-test-payload enctab $(BUILD)/build-disk
 	$(BUILD)/build-disk \
 	    -variant test \
 	    -test-mem $(BUILD)/test_mem.bin \
 	    -cluster $(BUILD)/test_cluster.bin \
-	    -enc-fix $(BUILD)/enc_fix_payload.bin \
 	    -paged-call $(BUILD)/paged_call_test_payload.bin \
 	    -sysreg-data $(BUILD)/sysreg_data.bin \
 	    -disasm $(BUILD)/disasm-test.bin \
@@ -1809,13 +1831,12 @@ disk: assembler test-mem-offaxis cluster-offaxis enc-fix-payload paged-call-payl
 # unchanged. Store with sd-push, boot with boot-record.py. The floppy vessel
 # (build/test.mgt) is unchanged.
 .PHONY: disk-record
-disk-record: assembler test-mem-offaxis cluster-offaxis enc-fix-payload paged-call-payload sysreg-data disasm-test-payload zx0-test-payload enctab $(BUILD)/build-disk
+disk-record: assembler test-mem-offaxis cluster-offaxis paged-call-payload sysreg-data disasm-test-payload zx0-test-payload enctab $(BUILD)/build-disk
 	$(BUILD)/build-disk \
 	    -variant test \
 	    -code-auto \
 	    -test-mem $(BUILD)/test_mem.bin \
 	    -cluster $(BUILD)/test_cluster.bin \
-	    -enc-fix $(BUILD)/enc_fix_payload.bin \
 	    -paged-call $(BUILD)/paged_call_test_payload.bin \
 	    -sysreg-data $(BUILD)/sysreg_data.bin \
 	    -disasm $(BUILD)/disasm-test.bin \
@@ -1839,7 +1860,7 @@ disk-record: assembler test-mem-offaxis cluster-offaxis enc-fix-payload paged-ca
 # need an external zx0 compressor on PATH / a corpus sweep, and their
 # consuming tests fail with an instructive message when absent.
 .PHONY: harness-artifacts
-harness-artifacts: assembler assembler-prod enctab cluster-offaxis test-mem-offaxis enc-fix-payload paged-call-payload sysreg-data disasm-payload disasm-test-payload zx0-payload zx0-test-payload zx0-compress-payload sam-aarch64
+harness-artifacts: assembler assembler-prod assembler-enc-tests enctab cluster-offaxis test-mem-offaxis enc-fix-payload paged-call-payload sysreg-data disasm-payload disasm-test-payload zx0-payload zx0-test-payload zx0-compress-payload sam-aarch64
 
 harness-sweep: harness-artifacts
 	cd tools/z80-test-harness-go && go test -count=1 ./...
@@ -1851,6 +1872,19 @@ test-core: assembler test-mem-offaxis paged-call-payload enctab $(BUILD)/build-d
 	./tests/core/run-roundtrip.sh
 
 ci-core: test-core
+
+.PHONY: test-enc-tests ci-enc-tests
+
+# test-enc-tests — SimCoupé-boot the encode self-test variant (i234) to a
+# clean OK on one trivial fixture.  The variant's assemble path is
+# identical to prod (covered corpus-wide by the *-prod jobs); its unique
+# value is the encode_inst boot self-test family, which runs identically
+# on every boot — so one boot is the whole signal and a corpus sweep
+# would add cost without coverage.
+test-enc-tests: assembler-enc-tests enc-fix-payload enctab $(BUILD)/build-disk sam-aarch64
+	ASSEMBLER_BIN=$(CURDIR)/$(BUILD)/assembler-enc-tests.bin ./tools/run-roundtrip.sh core tests/core/sources/inst_nop_ret.s
+
+ci-enc-tests: test-enc-tests
 
 .PHONY: test-symbols ci-symbols
 
