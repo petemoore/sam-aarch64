@@ -1337,7 +1337,7 @@
   title: "HTTP-fetch smoke hardware shot: EEPROM read + section-C staging + HSAVE RST-8 verified on real Trinity (single small file from a LAN server)"
   description: |
     The scoped hardware validation the 2026-07-03 pre-flight recommended: boot the smoke-variant fetcher on the real SAM (TAPO power-cycle, trinload push or floppy vessel per the i70a exit decision), fetch LICENCE.broadcom (1594 B) from the LAN HTTP mirror, persist via HSAVE RST-8 into the first-FREE SD record, confirm via tcpdump port-80 capture (loopback-proven first) + :9001 markers + post-cycle record read-back. This exercises exactly the unverified hardware gate (section-C paging of the HSAVE source is the q16 hardware detail, http_main.asm:494-497). Note i347-class exposure (EI d loop, no IM2 takeover) is low-risk for a seconds-long smoke but must be assessed before any multi-minute fetch.
-  status: OPEN
+  status: IN_PROGRESS
   depends_on: [i70a, i70d, i70e]
   kind: leaf
   owner: agent
