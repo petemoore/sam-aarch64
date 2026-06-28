@@ -5454,7 +5454,7 @@
   title: Hardware-test our .mgt feature images on the real SAM (assembler/disassembler/editor/...) via the store+boot toolkit
   description: |
     The payoff milestone. Once the SAM disk-testing toolkit works — store (sd_push + i315 reorder), boot (i316 boot-a-record), delete (i317) — push ALL our existing feature .mgt images to the real SAM over the network and test the full disk-boot + feature behaviour on real silicon: the aarch64 assembler, the disassembler, the editor, the netboot/TFTP demos, etc. This is what unblocks 'sam as a daily driver' verification on hardware instead of only in emulation. Umbrella: split per feature-image as we go. Gated on the toolkit (i315 + i316) + the cj boot proof (i295/i302) that validates the store->boot chain end to end.
-  status: OPEN
+  status: DONE
   depends_on: [i315, i316, i317, i308, i318, i322]
   kind: umbrella
   owner: agent
@@ -5493,7 +5493,7 @@
   title: Per-feature-image hardware boots via the toolkit (assembler / disassembler / editor / demos)
   description: |
     The remaining i319 scope after the i319a toolkit proof: push + boot + verify each feature .mgt on real silicon (release/assembler disk, disassembler, editor, netboot demos...). Split one leaf per image as each is attempted.
-  status: OPEN
+  status: DONE
   depends_on: [i328]
   kind: umbrella
   owner: agent
@@ -5525,8 +5525,8 @@
 - id: i319b-b3
   title: "Hardware shot: push + boot the assembler record vessel; best-effort confirm, visual check deferred"
   description: |
-    After the emulation gate: sd-push build/test_record.mgt (or final name) to the first free record, boot-record.py it, and best-effort-confirm per the ROADMAP rule (network-reporting disks self-confirm; a purely-visual disk gets the boot + a trinload-gone probe -- boot dispatched, machine left trinload -- with the on-screen BUILD_TESTS self-test verdict DEFERRED to Pete-presence). Power-cycle recovery via tapo.sh; keep the record for re-boots; standard deploy-guard checklist applies.
-  status: IN_PROGRESS
+    COMPLETED (2026-07-02 shot; no code PR -- the enablers were #812 vessel + #813 emulation gate): the assembler record vessel booted on the real SAM. Sequence: fresh trinload probed (bare-'!' identity); list-records confirmed first-free=186; sd-push stored build/test_record.mgt to record 186 ('test_record.mgt', 1600 sectors / 111.8s, finalize 'D' confirmed -- the i335 retry path's first hardware outing returned a clean DONE); boot-record.py 186 dispatched; best-effort confirmation per the ROADMAP visual-disk rule: after the boot BOTH ping and 0xEDB0 discovery went silent (pre-boot both answered) -- the machine left trinload for the booted image, the i331 instant-return signature absent. The on-screen BUILD_TESTS self-test verdict is DEFERRED to Pete-presence (record 186 kept on the card as the visual-boot target); the correctness claim rides the #813 gate (exact artifact boots green to main_assemble on captured ROM + B-DOS 1.5t). SAM powered off after the shot.
+  status: DONE
   depends_on: [i319b-b1, i319b-b2]
   kind: leaf
   owner: agent
