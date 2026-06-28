@@ -6054,9 +6054,11 @@
   title: "Faithful emulation gate for the http-boot store leg (ENC/SD &DC come-up seam + storage_sink_leaf real-context drive)"
   description: |
     Rule-7 faithful in-emulation gate for the http-boot store leg — CONFIRMED NECESSARY by i70b shot 3 (2026-07-03): the i355 HMPR source-page fix was merged (#839) on authority analysis + code review + the wire-side suite WITHOUT a faithful store-leg emulation repro, and the hardware re-shoot then wedged IDENTICALLY (markers to 0x63 FILE_START, body streamed to the FIN, then rx dead at the RST-8 HSAVE, no 0x64 FILE_SAVED). So the source page was necessary-but-insufficient and the REAL store-leg root cause is still unknown — this gate is now the critical path (i70b depends_on it; no further hardware retry until emulation reproduces the wedge AND a fix clears it). Two blockers found trying to build it: (1) the http image runs OUR raw SD init ladder (csd_set_bd_records, unconditional at boot) AND ENC drv_init, sharing the one &DC Trinity controller port; the flat SD/ENC model (sdcard.go behind enc28j60.go) does not reproduce hardware's card recovery after that shared-port traffic, so the come-up CSD read declines (BD_RECORDS=0) and the come-up cannot reach the store leg with a live card. (2) Driving storage_sink_leaf in isolation via a stub+ContinueFrom derails before sha256_update (it needs the image's full real runtime context, only a working end-to-end come-up establishes it). GOAL: model the &DC ENC/SD seam faithfully so the http come-up runs end-to-end in emulation, then add a faithful http store-leg test (real ROM+B-DOS 1.5t+SD model, no BDOSStore mock) that reproduces the pre-fix wedge AND locates the residual root cause the i355 fix did not address. Investigation facts + the confirmed-insufficient fix are in the i355 desc + i70b shots 2/3.
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 840, role: completing}
 
 - id: i357
   title: Fix the http store leaf to persist into a FREE Trinity record (the i356-located i70b store wedge)
