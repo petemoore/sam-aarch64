@@ -660,9 +660,8 @@
 - id: i42
   title: CRC / signature in the .tbn file header (integrity check)
   description: |
-    STALE FRAMING (this row predates the v2 format): it says 'the v1 header has magic/version/flags but no integrity field' — but the .tbn format was redesigned to v2 ('Format B', shipped via i39/M8 2026-06-12, designed WITH Pete). Re-scope to v2. Intent stands: add a CRC/checksum/signature integrity field so a corrupted .tbn (bad disk sector, truncated transfer) is detected rather than silently mis-assembled. This is a FORMAT EVOLUTION of Pete's carefully-designed v2 format and touches the byte-match CI gates (release-gate, disasm-roundtrip) + the SAM-side reader (verify-on-load costs T-states). Genuine design choices -> q52 (Pete's format call): which integrity primitive, where in the v2 header, version strategy/back-compat, what bytes are covered, and whether the SAM-side verify cost is worth it. Gated on q52.
-  status: OPEN
-  depends_on: [q52]
+    WONTFIX (Pete 2026-07-01, q52). A .tbn integrity/CRC field is NOT warranted. (1) STORAGE already CRC-protects it: floppy FDC writes a hardware CRC-16 per sector (SAMDOS surfaces a CRC error as a read error, not silent garbage); Trinity SD blocks carry CRC + card ECC. (2) NETWORK: each hop is CRC-32-protected by the ENC28J60 Ethernet FCS (hardware TX-append + RX-discard); our UDP checksum is 0 (legal IPv4, per trinload build_udp_frame), so the ONLY uncovered vector is corruption INSIDE an intermediate switch -- ~never with ECC switches on a home LAN. (3) PRECEDENT: the closest analog, ELF (assembled binary + metadata), carries NO corruption checksum; a.out/COFF/base-Mach-O/user-mode-PE likewise delegate to storage/transport. Where executables DO add integrity (GNU build-id, code signing) it is for IDENTITY or ADVERSARIAL trust, not accidental corruption. (4) A CRC adds recompute-on-save complexity for a ~never risk. The q49 hard-fail-on-invalid-decode already turns gross structural corruption into an error, not a silent mis-assemble. IF EVER REOPENED (real corruption bites): use CRC-16 or the existing RFC-1071 one's-complement sum (ip_checksum), NEVER SHA-256 (adversarial tool, wrong + slow).
+  status: WONTFIX
   kind: leaf
   owner: agent
   refs: ["https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/notes/m1-status.md"]
