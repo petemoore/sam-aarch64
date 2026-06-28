@@ -1,6 +1,7 @@
 package z80_test
 
 import (
+	"bytes"
 	"os"
 	"testing"
 
@@ -11,43 +12,31 @@ import (
 // captures). It drives sd_push's OWN routines through Colin's forked ROM + B-DOS 1.5t
 // + the SD model, so the RST 8 hooks dispatch to the REAL ROM handlers (NOT the
 // AttachBDOS mock — no AttachBDOS here; the real ROM issues the real CMD9/CMD17/CMD24
-// to sdcard.go). This proves the load-bearing pieces the flat-harness logic test
-// (sd_push_test.go) cannot, AND honestly records the documented emulator boundary +
-// open hardware blocker that bound how far the record-DIRECTED write can be verified
-// in emulation today.
+// to sdcard.go). It proves the record-DIRECTED write end-to-end in emulation:
 //
-// WHAT THIS RIG PROVES (real B-DOS, this environment):
 //   1. sd_push's csd_set_bd_records reads the real card CSD (CMD9) and computes
-//      BD_RECORDS + csd_base — the record-count + LBA-base the picker/addressing need.
+//      BD_RECORDS + csd_base.
 //   2. sd_push's bdos_find_free_record reads the on-card record LIST via the REAL
-//      CMD17 single-block read and auto-picks the first free record (record 1 free on
-//      an empty list; record 2 when record 1's list entry is named).
-//   3. sd_push's HWSAD write path (bdos_write_record -> bdos_write_sector, A=2)
-//      reaches the REAL B-DOS SD write core and issues a real CMD24 — the i280b-b2t
-//      A=2 drive-select fix works for sd_push's invocation too (A=1 would hang in the
-//      B-DOS floppy poll).
+//      CMD17 single-block read and auto-picks the first free record (record 2 when
+//      record 1's list entry is named).
+//   3. sd_push's bdos_select_record (HRECORD) redirects B-DOS's seek base to the
+//      chosen record, and sd_push's per-sector bdos_write_record (HWSAD) issues a real
+//      CMD24 that LANDS in the CHOSEN record's LBA range (csd_base + 1600*(rec-1) + i)
+//      — and ONLY there (data safety) — for a MULTI-SECTOR payload, with ZERO ENC
+//      re-arm between sectors.
 //
-// THE DOCUMENTED BOUNDARY (why the record-DIRECTED write is not asserted-landed here):
-//   The HWSAD write needs the ambient device armed as Trinity SD AND the mounted
-//   record base set to the SELECTED record — all armed by a record-select with the
-//   FULL DOS-call SP/paging context (registry i280b-b2n / docs/notes/
-//   trinity-sd-z80-interface.md §8b: "post-boot the device is UNARMED; a record-select
-//   before the write is mandatory", with the honest boundary that "an isolated
-//   rst8/handler entry from the editor-idle snapshot wanders — the real DOS-call
-//   context is not armed"). Driving sd_push's hooks one-at-a-time via ContinueFrom from
-//   the editor-idle snapshot is exactly that isolated-entry path: the CMD24 fires but
-//   lands at the DEFAULT record base (csd_base, record 1), NOT the bdos_select_record'd
-//   free record — the HRECORD-via-rst8 select does not redirect B-DOS's write base from
-//   this partial context. Faithfully verifying the record-DIRECTED landing therefore
-//   needs the END-TO-END path (trinload push -> sd_push_main -> the receive loop) on
-//   REAL Trinity hardware (the koron-go SD model also always clears busy, so the real
-//   write-core busy-wait is unmodelled) — the open i280b/i270 + i283 hardware gate.
-//
-// So this test asserts (1)-(3) as hard facts and LOGS the record-base observation as
-// the open-blocker characterization (the pattern bdos_write_core_reach_test.go uses):
-// it documents reality rather than asserting a landing the emulator cannot faithfully
-// produce. Shipping the record-directed claim as PASS would be exactly the kind of
-// emulator-green-on-a-guess the prime directive + CLAUDE.md rule 8 forbid.
+// THE FAITHFUL DISPATCH ARMING (the i293 emulator-fidelity fix). On real hardware a
+// trinload-pushed program is an EXTERNAL caller of B-DOS — NOT a routine running inside
+// a DOS call. The B-DOS hook dispatcher (&8319) reaches the handlers cleanly only in
+// that external-caller state: DOSCNT (&5BC3) = 0 (the §8o/i280b-b2n unlock — DOSCNT=1
+// is "DOS in control", which diverts the rst 8 through the &37E8 recursion guard that
+// CLOBBERS the shadow registers carrying the record number, so HRECORD sees record 0
+// and never redirects the seek base), with the serve runtime map (LMPR=&1F, HMPR=1).
+// The earlier rig drove the hooks from the raw editor-idle snapshot (DOSCNT=1), which
+// is the §8b "isolated rst-8 entry wanders" boundary; arming DOSCNT=0 models the real
+// pushed-program context and the record-directed write then lands correctly. (Verified
+// against the gold BASIC `RECORD n` path, which pokes the SAME seek-base immediate
+// &A185 to csd_base+1600*(n-1) — TestBASICSaveWritesRecordToSD / the i293 diagnosis.)
 //
 // GATED on the proprietary captures; skips under SKIP_PRIVATE_TESTS (the one sanctioned
 // skip, i253). Emulation-verified is not hardware-verified (CLAUDE.md §5).
@@ -59,6 +48,10 @@ const (
 	// csdV2(0x001D59): base (first data sector) = 152, records = 4809 — the card shape
 	// the gold faithful rigs use. csd_base feeds the record->LBA math.
 	faithCSDBase = 152
+
+	// The resident B-DOS page at editor idle (page 29) holds the self-modifying seek-base
+	// immediate &A185/&A188 the record select pokes; the faithful diagnosis reads it there.
+	faithDOSPage = 29
 )
 
 // loadSDPushIntoPage copies build/sd_push.bin into physical RAM page `page` of the
@@ -68,7 +61,7 @@ const (
 // THE PAGED-POINTER CONTRACT (i280b-b2h §8k, TestHWSADPagedPointerContract): the real
 // B-DOS HWSAD prelude repages section C to (H>>6)-1 from the high byte H of the source
 // pointer hk.hl, then streams the 512 bytes from THERE. sd_push's BD_WRITE_BUF is at
-// logical &909B (H=&90 -> (0x90>>6)-1 = 1), so the prelude reads absolute page 1 —
+// logical &90xx (H=&90 -> (0x90>>6)-1 = 1), so the prelude reads absolute page 1 —
 // meaning sd_push (and its BD_WRITE_BUF data) MUST live in page 1 for the write to read
 // OUR bytes. This is the deployment contract: trinload must push sd_push to page 1 (the
 // page the shipping serve uses).
@@ -85,6 +78,24 @@ func loadSDPushIntoPage(t *testing.T, mac *z80h.Machine, page uint8) {
 	mac.Pager().HMPR = page
 	mac.Write(0x8000, code)
 	mac.Pager().HMPR = sH
+}
+
+// armServeDispatch puts the machine into the faithful external-caller dispatch state a
+// trinload-pushed program runs in: DOSCNT (&5BC3) = 0 and the serve runtime map
+// (LMPR=&1F, HMPR=page). Re-applied before each hook drive (a hook can change DOSCNT).
+func armServeDispatch(mac *z80h.Machine, page uint8) {
+	mac.Write(0x5BC3, []byte{0x00}) // DOSCNT := 0 (external caller / not-in-DOS)
+	mac.Pager().LMPR = 0x1F
+	mac.Pager().HMPR = page
+}
+
+// rdDOSPage reads n bytes at addr from B-DOS's resident page (section C view).
+func rdDOSPage(mac *z80h.Machine, addr uint16, n int) []byte {
+	saved := mac.Pager().HMPR
+	mac.Pager().HMPR = faithDOSPage
+	b := mac.Read(addr, n)
+	mac.Pager().HMPR = saved
+	return b
 }
 
 func TestSDPushFaithfulRecordWrite(t *testing.T) {
@@ -118,85 +129,141 @@ func TestSDPushFaithfulRecordWrite(t *testing.T) {
 
 	// --- FACT 2: sd_push picks the first free record via the real CMD17 list read. ---
 	// Name record 1's list entry so the pick advances to record 2 (proves the scan
-	// reads real list bytes + the free test, not a fixed answer).
+	// reads real list bytes + the free test, AND gives a NON-default target base so the
+	// landing assertion below distinguishes record 2 (LBA 1752) from the default (152)).
 	listSec1 := make([]byte, 512)
-	listSec1[0] = byte('A') // record 1's list entry: named => not free
+	listSec1[0] = byte('A')    // record 1's list entry: named => not free
 	sd.SeedSector(1, listSec1) // card-absolute LBA 1 = list sector 1
 	if _, err := mac.ContinueFrom(sym("bdos_find_free_record"), z80h.Entry{StepCap: 8_000_000}); err != nil {
 		t.Fatalf("bdos_find_free_record: %v", err)
 	}
-	free := leU16(mac.Read(sym("BD_FREE_RECORD"), 2))
+	free := int(leU16(mac.Read(sym("BD_FREE_RECORD"), 2)))
 	t.Logf("FACT 2 — sd_push free-record pick (real CMD17 list read): BD_FREE_RECORD=%d", free)
 	if free != 2 {
 		t.Fatalf("BD_FREE_RECORD = %d, want 2 (record 1 named, record 2 the first free)", free)
 	}
 
-	// sd_push HRECORD-selects the free record (the real B-DOS HRECORD).
-	if _, err := mac.ContinueFrom(sym("bdos_select_record"), z80h.Entry{
-		HL: free, A: byte(free), StepCap: 4_000_000,
-	}); err != nil {
-		t.Fatalf("bdos_select_record(%d): %v", free, err)
-	}
+	recBase := uint32(faithCSDBase + 1600*(free-1)) // record 2's first data LBA = 1752
+	defBase := uint32(faithCSDBase)                 // the default (unredirected) base = 152
 
-	// --- FACT 3: sd_push's HWSAD write reaches the real B-DOS SD write core + CMD24. ---
-	// Stage a sector into BD_WRITE_BUF (page 1, the prelude's page) and drive the exact
-	// primitive sp_data_block calls. Trace the real B-DOS write-core / CMD24 landmarks
-	// (section-B aliases, B-DOS paged into section B during the hook).
-	const (
-		mcWriteCore = 0x68F4 // &A8F4 SD write core
-		mcCMD24Send = 0x6925 // &A925 CMD24 sender
-	)
-	sec := make([]byte, 512)
-	for i := range sec {
-		sec[i] = byte((i*7 + 0x11) & 0xFF)
-	}
+	// --- FACT 3: sd_push's HRECORD-select redirects B-DOS's seek base to record 2. ---
+	// Drive sd_push's bdos_select_record in the faithful armed dispatch state. HRECORD
+	// pokes the self-modifying seek-base immediate (&A185/&A188) in the resident B-DOS
+	// page from the record number — to record 2's base (1752), NOT the default (152).
+	seekBefore := leU16(rdDOSPage(mac, 0xA185, 2))
+	armServeDispatch(mac, page)
+	selStub := uint16(0x9000)
 	mac.Pager().HMPR = page
-	mac.Write(sym("BD_WRITE_BUF"), sec)
-	mac.WriteU16LE(sym("BD_WRITE_START"), 0) // linear sector 0
-	mac.WriteU16LE(sym("BD_WRITE_COUNT"), 1)
-
-	reachedCore := false
-	from := len(*lg)
-	res, err := mac.ContinueFrom(sym("bdos_write_record"), z80h.Entry{
-		StepCap: 8_000_000,
-		Trace: func(pc uint16) {
-			if pc == mcWriteCore {
-				reachedCore = true
-			}
-		},
+	mac.Write(selStub, []byte{
+		0x21, byte(free), byte(free >> 8), // ld hl,free
+		0xAF,       // xor a            (bdos_select_record's HL=record, A=0 contract)
+		0xCF, 0x9C, // rst 8 ; defb 156 (HRECORD)
+		0xF3, 0x76, // di ; halt
 	})
-	if err != nil {
-		t.Fatalf("bdos_write_record: %v", err)
+	if _, err := mac.RunBootFrom(selStub, z80h.Entry{StepCap: 6_000_000}); err != nil {
+		t.Fatalf("HRECORD select stub: %v", err)
 	}
-	frames, sawCMD24 := decodeFrames(*lg, from)
-	t.Logf("FACT 3 — sd_push HWSAD write: reachedWriteCore=%v sawCMD24=%v finalPC=&%04X halted=%v SDframes=%d",
-		reachedCore, sawCMD24, res.PC, res.Halted, len(frames))
-	if !reachedCore {
-		t.Errorf("sd_push's HWSAD write did NOT reach the real B-DOS SD write core &A8F4 — the A=2 drive-select (i280b-b2t) is not taking for sd_push's invocation")
-	}
-	if !sawCMD24 {
-		t.Errorf("sd_push's HWSAD write issued no CMD24 — the write did not reach the SD command stage")
+	seekAfter := leU16(rdDOSPage(mac, 0xA185, 2))
+	t.Logf("FACT 3 — sd_push HRECORD select: seek-base immediate &A185 %d -> %d (record %d base = %d)", seekBefore, seekAfter, free, recBase)
+	if uint32(seekAfter) != recBase {
+		t.Fatalf("HRECORD did not redirect the seek base: &A185 = %d, want %d (csd_base + 1600*(%d-1)). The record-directed select is not taking.", seekAfter, recBase, free)
 	}
 
-	// --- THE DOCUMENTED BOUNDARY: where did the CMD24 land? ---
-	// In this isolated-hook-entry rig the record-select does not arm the full DOS-call
-	// context, so the write lands at the DEFAULT record base (record 1), not the picked
-	// free record. We LOG this (the open-blocker characterization) rather than assert a
-	// record-directed landing the emulator cannot faithfully produce from this context.
-	landedFree := false
-	if _, ok := sd.RecordDataSector(faithCSDBase, int(free), 0); ok {
-		landedFree = true
+	// --- FACT 4: per-sector HWSAD writes land in record 2's LBA range, byte-exact,
+	// with ZERO ENC re-arm, and NOTHING lands outside record 2. ---
+	// Push a MULTI-SECTOR payload that crosses a track boundary (linear 0..11 spans
+	// track 0 sectors 1-10 + track 1 sectors 1-2), exercising bdos_write_record's
+	// linearSec->track/sector decode and the per-sector seek-from-record-base.
+	const nSectors = 12
+	want := make([][]byte, nSectors)
+	for s := 0; s < nSectors; s++ {
+		sec := make([]byte, 512)
+		for i := range sec {
+			sec[i] = byte((s*37 + i*7 + 0x11) & 0xFF) // distinctive, non-trivial, per-sector
+		}
+		want[s] = sec
 	}
-	_, landedRec1 := sd.RecordDataSector(faithCSDBase, 1, 0)
-	t.Logf("BOUNDARY — CMD24 landing: at picked free record %d (LBA %d)? %v ; at default record 1 (LBA %d)? %v",
-		free, faithCSDBase+1600*(int(free)-1), landedFree, faithCSDBase, landedRec1)
-	if landedFree {
-		// If a future fix arms the select via this path, the write lands at the free
-		// record — flip this to an assertion then (with the data-safety range check).
-		t.Logf("NOTE: the write LANDED at the picked free record — the record-directed select now works via the isolated-hook path; promote this to a hard assertion + data-safety range check and update the boundary note")
-	} else {
-		t.Logf("CONFIRMED OPEN BLOCKER (i280b/i270, §8b): sd_push's HWSAD CMD24 fires + reaches the write core, but lands at the DEFAULT record base (not the bdos_select_record'd free record) — the HRECORD-via-rst8 select does not redirect B-DOS's write base from the isolated editor-idle hook context. Record-DIRECTED + data-safe landing needs the end-to-end push on real Trinity hardware (i283), or B-DOS's full DOS-call-context mount. This is why sd_push must NOT be deployed to write a live shared card until the record-directed select is hardware-confirmed.")
+
+	const mcWriteCore = 0x68F4 // &A8F4 SD write core
+	for s := 0; s < nSectors; s++ {
+		// Stage sector s into BD_WRITE_BUF (page 1 — the prelude's page) and drive the
+		// exact sp_data_block primitive (BD_WRITE_START = linear sector, COUNT = 1).
+		mac.Pager().HMPR = page
+		mac.Write(sym("BD_WRITE_BUF"), want[s])
+		mac.WriteU16LE(sym("BD_WRITE_START"), uint16(s))
+		mac.WriteU16LE(sym("BD_WRITE_COUNT"), 1)
+		// Re-arm the faithful dispatch (a prior hook may have moved DOSCNT) and keep
+		// HMPR=page so the prelude reads OUR bytes. NO enc_rx_reestablish between writes
+		// — the i293 fix: an SD transaction does not disturb the ENC RX.
+		armServeDispatch(mac, page)
+		mac.Pager().HMPR = page
+
+		reachedCore := false
+		from := len(*lg)
+		res, err := mac.ContinueFrom(sym("bdos_write_record"), z80h.Entry{
+			StepCap: 8_000_000,
+			Trace: func(pc uint16) {
+				if pc == mcWriteCore {
+					reachedCore = true
+				}
+			},
+		})
+		if err != nil {
+			t.Fatalf("bdos_write_record[sector %d]: %v", s, err)
+		}
+		frames, sawCMD24 := decodeFrames(*lg, from)
+		if !reachedCore {
+			t.Fatalf("sector %d: HWSAD did NOT reach the real B-DOS SD write core &A8F4", s)
+		}
+		if !sawCMD24 {
+			t.Fatalf("sector %d: HWSAD issued no CMD24", s)
+		}
+		// The CMD24 for sector s must address record 2's LBA recBase+s.
+		var cmd24Addr uint32
+		var got24 bool
+		for _, f := range frames {
+			if f.cmd == 24 {
+				cmd24Addr = f.addr
+				got24 = true
+			}
+		}
+		if !got24 || cmd24Addr != recBase+uint32(s) {
+			t.Fatalf("sector %d: CMD24 landed at LBA %d, want %d (record %d, linear sector %d). The write is not record-directed.",
+				s, cmd24Addr, recBase+uint32(s), free, s)
+		}
+		_ = res
 	}
+
+	// (a) Every sector's CMD24 landed in record 2's range, byte-exact (c).
+	for s := 0; s < nSectors; s++ {
+		got, ok := sd.RecordDataSector(faithCSDBase, free, s)
+		if !ok {
+			t.Fatalf("record %d linear sector %d not present in the SD store — the write did not land", free, s)
+		}
+		if !bytes.Equal(got, want[s]) {
+			t.Fatalf("record %d linear sector %d: bytes differ (first got %#x want %#x) — the data path did not carry the pushed image", free, s, got[0], want[s][0])
+		}
+	}
+	t.Logf("FACT 4a/c — all %d sectors landed in record %d (LBA %d..%d), byte-exact", nSectors, free, recBase, recBase+nSectors-1)
+
+	// (d) DATA SAFETY: every committed CMD24 write fell inside record 2's range; none
+	// touched any other record / the boot+list area. (SeedSector pre-loads at LBA 1/152
+	// are NOT writes, so WrittenSectors is the clean view.)
+	if outside := sd.WrittenSectorsOutsideRecord(faithCSDBase, free); len(outside) != 0 {
+		t.Fatalf("DATA-SAFETY VIOLATION: %d CMD24 write(s) landed outside record %d's range [%d,%d): %v",
+			len(outside), free, recBase, faithCSDBase+1600*free, outside)
+	}
+	if n := len(sd.WrittenSectors()); n != nSectors {
+		t.Fatalf("expected exactly %d CMD24 writes, saw %d (WrittenSectors=%v)", nSectors, n, sd.WrittenSectors())
+	}
+	if _, landedDefault := sd.RecordDataSector(faithCSDBase, 1, 0); !landedDefault {
+		// Sanity: record 1's data sector 0 (LBA 152) holds ONLY the seed (rec1 stamp),
+		// never one of our pushed sectors — confirm our writes did not stray there.
+		t.Logf("note: LBA %d (record 1 sec 0) absent — it was only ever the seeded stamp", defBase)
+	} else if got, _ := sd.RecordDataSector(faithCSDBase, 1, 0); bytes.Equal(got, want[0]) {
+		t.Fatalf("DATA-SAFETY VIOLATION: sector 0 of record 1 (the DEFAULT base, LBA %d) holds our pushed bytes — a write strayed to the default record", defBase)
+	}
+	t.Logf("FACT 4d — data-safe: all %d writes inside record %d's range, none at the default base or any other record", nSectors, free)
 }
 
 // leU16 decodes a 2-byte little-endian value.

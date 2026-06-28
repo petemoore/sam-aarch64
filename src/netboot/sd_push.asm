@@ -11,17 +11,24 @@
 ;   2. HRECORD-selects that free record (bdos_select_record), then listens on UDP
 ;      port 0xEDB0 for the .mgt stream and writes each 512-byte sector into the
 ;      selected record with the B-DOS HWSAD hook (bdos_write_sector, A=2 = Trinity
-;      SD). NO own-CMD24, NO per-sector SD init-ladder. There IS one cheap ENC RX
-;      RE-ARM (enc_rx_reestablish) after each HWSAD write: an SD transaction on the
-;      shared one-PIC Trinity controller tears down the ENC's once-only RX arming
-;      (RXEN/ring/MAC/PHY), so without it serving "dies after the first SD read"
-;      (docs/notes/hardware-readiness-audit.md fix #3, the i244/i249 finding) — the
-;      exact cadence the shipping serve uses (enc_rx_reestablish before each ACK,
-;      netboot_serve.asm wd_send_ack). The byte-level drain rule (poll &DC bit 3
-;      between port switches, which encdrv/sd_csd/bdos already do) keeps individual
-;      port switches safe but does NOT restore that RX arming — a separate concern.
+;      SD). NO own-CMD24, NO per-sector SD init-ladder. NO per-block ENC re-arm: an
+;      SD transaction does NOT disturb the ENC's autonomous RX (the &DC byte only
+;      mux-selects which SPI peripheral the Z80 talks to; the ENC's ECON1.RXEN, set
+;      once in drv_init, keeps the RX FIFO filling independently — ENC28J60 datasheet
+;      §7.2 + simonowen/trinload encdrv.asm, where drv_read never re-enables RX and
+;      only &28 ereset disturbs it, at init/exit only). The byte-level drain rule
+;      (poll &DC bit 3 between port switches, which encdrv/sd_csd/bdos already do) is
+;      what keeps the alternating ENC/SD port switches safe.
 ;   3. on a finalize message, validates the received sector count and RETs to
 ;      trinload (re-pushable), exactly like trinload's own clean exit.
+;
+; RECORD-DIRECTED WRITE — HRECORD sets PERSISTENT B-DOS state that crosses the rst 8
+; boundary by construction: the record.no/record.t DVARs and, via record-selection,
+; the self-modifying seek-base immediates at &A185/&A188 in the resident B-DOS page.
+; HWSAD's seek reads those immediates + the per-access linear sector to form the
+; CMD24 argument, so sector i of record n lands at csd_base + 1600*(n-1) + i. One
+; HRECORD-select up front therefore directs every subsequent per-sector HWSAD into
+; the chosen record — no per-write re-select.
 ;
 ; PROTOCOL (our own small framing on port 0xEDB0, modelled on trinload's ?/@):
 ;   '?'  discovery            -> reply "!"
@@ -321,8 +328,7 @@ sd_push_main:
                 ; bdos_find_free_record reads the on-card record list (the real CMD17)
                 ; and returns the lowest free record in BD_FREE_RECORD (0 if none free).
                 ; SAFETY: a free record is one whose list entry is unnamed, so the write
-                ; can never land on a record someone else created. This is an SD
-                ; transaction, so the ENC re-arm below MUST follow it (not precede it).
+                ; can never land on a record someone else created.
                 call    bdos_find_free_record
                 ld      hl, (BD_FREE_RECORD)
                 ld      a, h
@@ -330,26 +336,23 @@ sd_push_main:
                 jp      z, sp_fail_nofree      ; no free record: decline, do not write
 
                 ; --- HRECORD-select the free record (the FIRST B-DOS hook call) ----
+                ; HRECORD sets B-DOS's PERSISTENT record state (the record.no/record.t
+                ; DVARs and, via record-selection, the self-modifying seek-base immediates
+                ; at &A185/&A188 in the resident B-DOS page). That state crosses the rst 8
+                ; boundary by construction, so every subsequent per-sector HWSAD seeks
+                ; from this record's base — no per-write re-select needed.
                 ld      a, l                   ; A = free record number (low byte; records << 256)
                 call    bdos_select_record
 
-                ; --- re-arm the ENC RX path the startup SD transactions disturbed ---
-                ; The CSD read + the free-record list read + HRECORD-select are SD
-                ; transactions on the shared one-PIC Trinity controller, and EVERY SD
-                ; transaction disturbs the ENC's persistent RX state (RXEN/ring/MAC/PHY)
-                ; — the i249/i244 hardware-readiness finding (docs/notes/hardware-
-                ; readiness-audit.md fix #3: "without a re-arm, serving dies after the
-                ; first SD read"). drv_read restores only per-call select/bank, never that
-                ; once-only RX arming, so the re-arm comes AFTER the last startup SD op,
-                ; right before the serve loop's first drv_read. (The same finding is why
-                ; each data block re-arms after its HWSAD write — see sp_data_block. The
-                ; byte-level drain rule keeps individual port switches safe; this re-arm
-                ; restores the RX engine the SD transaction tears down — a different
-                ; concern the drain alone does NOT cover.)
-                di
-                ld      hl, sam_mac
-                call    enc_rx_reestablish
-                ei
+                ; NO ENC re-arm after the startup SD work. An SD transaction on the Trinity
+                ; controller does NOT disturb the ENC's autonomous RX: the &DC byte only
+                ; mux-selects which SPI peripheral the Z80 talks to; the ENC's ECON1.RXEN
+                ; (set once in drv_init) keeps the RX FIFO filling independently of the mux
+                ; (ENC28J60 datasheet §7.2 + simonowen/trinload encdrv.asm: drv_read never
+                ; re-enables RX; only &28 ereset disturbs it, and that is init/exit only).
+                ; The byte-level drain rule (poll &DC bit 3 between port switches, which
+                ; encdrv/sd_csd/bdos already do) keeps individual port switches safe; with
+                ; RX undisturbed there is nothing further to restore.
 
                 ; reset the received-sector counter (finalize checks it == 1600).
                 ld      hl, 0
@@ -527,17 +530,13 @@ sp_data_write:
                 ; we do NOT reimplement the write (CLAUDE.md rule 8: the SAM/Colin code
                 ; is the Trinity authority).
                 ;
-                ; KNOWN OPEN BLOCKER (i280b/i270, verified by sd_push_faithful_test.go):
-                ; against real B-DOS this HWSAD write reaches the SD write core + issues a
-                ; CMD24 (the i280b-b2t A=2 fix works), BUT it currently lands at B-DOS's
-                ; DEFAULT record base, NOT the bdos_select_record'd free record — the
-                ; HRECORD-via-rst8 select does not redirect B-DOS's write base. So the
-                ; record-DIRECTED, data-safe landing is NOT yet hardware-confirmed: do not
-                ; deploy this against a live shared card until i280b/i270 + the hardware
-                ; gate (i283) resolve the record-directed select. (The codebase's own fix
-                ; direction for this is the own-CMD24 absolute-LBA write bd_record_write_hw,
-                ; sd_csd.asm — record-directed by construction — which this program does NOT
-                ; use, per the i293 design brief.)
+                ; The write lands in the HRECORD-selected record's LBA range: HRECORD poked
+                ; the seek-base immediates (&A185/&A188) for this record, and HWSAD's seek
+                ; reads those immediates + the per-access linear sector to form the CMD24
+                ; argument — so sector i of record n lands at csd_base + 1600*(n-1) + i.
+                ; (Faithfully verified in sd_push_faithful_test.go against Colin's real
+                ; B-DOS 1.5t: every sector lands in the chosen record's range and nowhere
+                ; else.) Emulation-verified is not hardware-verified (CLAUDE.md §5).
                 call    bdos_write_record
 
                 ; count the received sector (finalize checks the total == 1600).
@@ -545,21 +544,14 @@ sp_data_write:
                 inc     hl
                 ld      (sp_recv_count), hl
 
-                ; --- re-arm the ENC RX path the HWSAD write disturbed (i244/i249) ---
-                ; The HWSAD write is an SD transaction on the shared one-PIC Trinity
-                ; controller, and every SD transaction disturbs the ENC's persistent RX
-                ; state (RXEN/ring/MAC/PHY); without a re-arm the server "dies after the
-                ; first SD read" (docs/notes/hardware-readiness-audit.md fix #3, i249).
-                ; This is the SAME cadence the shipping serve uses — enc_rx_reestablish
-                ; before each ACK TX (netboot_serve.asm wd_send_ack, i244) — so the NEXT
-                ; drv_read and this ACK's drv_write both work. It is a per-block RX RE-ARM
-                ; (the once-only ENC RXEN/ring arming the SD op tore down), not a per-block
-                ; heavy ENC ereset of the link/PHY in a tight inner loop. drv_read never
-                ; restores this arming itself.
-                di
-                ld      hl, sam_mac
-                call    enc_rx_reestablish
-                ei
+                ; NO ENC re-arm after the HWSAD write. The write is an SD transaction, but
+                ; an SD transaction does NOT disturb the ENC's autonomous RX (only the &DC
+                ; mux-select changes, which the ENC's internal RXEN cannot see; the RX FIFO
+                ; keeps filling — ENC28J60 datasheet §7.2 + encdrv.asm: drv_read never
+                ; re-enables RX, only &28 ereset does, init/exit only). So the NEXT drv_read
+                ; and this ACK's drv_write both work with zero re-arm between blocks. The
+                ; byte-level drain rule (already honoured by encdrv/sd_csd/bdos) is what
+                ; keeps the alternating ENC/SD port switches safe.
 
                 ; ACK the 4-byte header (mirror trinload's @-ack).
                 ld      a, "."

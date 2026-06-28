@@ -241,7 +241,7 @@ type ENC28J60 struct {
 	autoNullMode     bool
 	autoNullTarget   peripheral
 	lastClockedIn    byte
-	lastClockedValid bool      // a peripheral has clocked at least one byte since reset
+	lastClockedValid bool       // a peripheral has clocked at least one byte since reset
 	lastClockedBy    peripheral // which peripheral last wrote the shared read-back latch
 	savedReadByte    byte
 	savedReadValid   bool
@@ -306,25 +306,44 @@ type ENC28J60 struct {
 	sdInitSettling bool
 	settleUntilT   uint64
 
-	// rxDisarmed models hardware fix #3 (docs/notes/hardware-readiness-audit.md): an
-	// SD transaction on the shared one-PIC Trinity controller disturbs the ENC28J60's
-	// persistent RX state (RXEN, ring pointers, MAC/PHY — netboot_serve.asm:494-502),
-	// which drv_read never restores. So a program that serves over the network AFTER an
-	// SD read without re-arming the ENC (enc_rx_reestablish) receives once then dies —
-	// the "serve-dies-after-SD" class. Set whenever the SD card is MUX-selected for a
-	// transaction; cleared only by the &28 ENC reset (selENCReset), which is the first
-	// thing enc_rx_reestablish/drv_init do — so a program that re-arms is automatically
-	// fine and one that omits it stays disarmed. While set, materialiseRX refuses to
-	// deliver frames (EPKTCNT stays 0 -> drv_read returns BC=0), making a missing
-	// enc_rx_reestablish a build-time failure (CLAUDE.md rule 7) instead of a hardware
-	// surprise (the i126 comprehensive-emulation north star).
+	// rxDisarmed models the ONE thing that disturbs the ENC28J60's autonomous receive
+	// engine: an ENC reset (&28 ereset). It is NOT set by an ordinary SD device mux-
+	// select. This is the authority-grounded correction of the earlier "any SD select
+	// disarms RX" model (i293).
 	//
-	// Fidelity boundary (i249): the authority (the audit + the driver comments) asserts
-	// THAT an SD transaction disturbs RXEN/ring/MAC/PHY so serving dies until re-armed,
-	// but NOT the precise register-level mechanism (no source says RXEN is cleared vs the
-	// ring corrupted vs the filter scrambled). So this models the documented OBSERVABLE
-	// (no RX until re-armed) at the receive path, the same observable-level approach as
-	// sdInitSettling — not a fabricated register corruption. See trinity-emulation-fidelity.md.
+	// Trinity-HW provenance (i273): the authority is the ENC28J60 datasheet
+	// (~/git/notes/pxe/Microchip ENC28J60.pdf) and Simon Owen's driver
+	// (~/git/trinload/encdrv.asm), diffed line-by-line:
+	//   - RX is enabled ONCE, by drv_init setting ECON1.RXEN (encdrv.asm:91; datasheet
+	//     §7.2 "Receiving Packets": "Enable reception by setting ECON1.RXEN"). RXEN is an
+	//     internal ENC register bit; once set, "packets which pass the current filter ...
+	//     will be written into the receive buffer" (datasheet ECON1.RXEN description) —
+	//     the RX hardware fills the circular FIFO AUTONOMOUSLY, with no Z80 involvement
+	//     (datasheet §3.2.1 RECEIVE BUFFER: "a circular FIFO buffer managed by hardware
+	//     ... the hardware will automatically write the next byte ... the receive
+	//     hardware will never write outside the boundaries of the FIFO").
+	//   - The Trinity &DC byte selects which SPI peripheral the Z80 TALKS TO; it cannot
+	//     touch the ENC chip's internal ECON1.RXEN. drv_read (encdrv.asm:99) only sets
+	//     banks, reads EPKTCNT, and streams the buffer — it NEVER re-enables RX, because
+	//     RX was never disabled by reading. eon/eoff (encdrv.asm:396/401) toggle ONLY the
+	//     &DC mux-select byte (%00100001 / %00100000) — harmless to RXEN. The SD driver
+	//     (src/netboot/sd_csd.asm) drives ONLY the SD byte path (sdc_out/sdc_in); it
+	//     issues no ECON1 write and no &28, so an SD CMD17/CMD24 leaves RXEN untouched and
+	//     the ENC keeps receiving into its ring across the SD transaction.
+	//   - The ONLY &DC op that disturbs RX is &28 ereset (encdrv.asm:411 -> the ENC SRC
+	//     soft reset), called solely at init/exit (drv_init:29, drv_exit:257) — never per
+	//     access. A reset re-runs the whole RX-arm body, so it both clears and re-arms.
+	// So the faithful model: SD selects do NOT disarm RX; only &28 does (and &28 also
+	// re-arms). enc_rx_reestablish (which begins with &28) therefore re-arms — but a
+	// program that omits a per-block re-arm is NOT penalised, because the SD op never
+	// disarmed RX in the first place (the authority above). The earlier "serve dies after
+	// the first SD read" model perturbed RX on every SD select; that was a guess about a
+	// failure mode, not grounded in the datasheet/driver, and over-penalised a correct
+	// no-re-arm program. While set (only after a literal &28 with no following arm),
+	// materialiseRX delivers nothing (EPKTCNT stays 0 -> drv_read returns BC=0).
+	//
+	// (The SEPARATE sdInitSettling &38-settle model — the i242/i287 SD-before-ENC
+	// drv_init ordering catch — is a DIFFERENT, legitimate mechanism and is unaffected.)
 	rxDisarmed bool
 
 	// SPI transaction state for the ENC SPI back-end. The microcontroller latches
@@ -967,7 +986,7 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 	case v == selENCReset: // &28 — ENC reset (SRC); 50µs settle is a blind DJNZ on the Z80 side
 		e.softReset()
 		e.sdInitSettling = false // the ENC reset quiesces the PIC's post-SD-init settle (i242; one of two clears, the other being the bounded settle window — i289)
-		e.rxDisarmed = false     // the ENC reset re-arms RX after an SD transaction (i249); enc_rx_reestablish does this first
+		e.rxDisarmed = false     // &28 ereset is the one op that disturbs RX, and it re-arms it; drv_init / enc_rx_reestablish begin with this reset (encdrv.asm:29/411)
 		// CS state is unaffected by an internal reset; keep ENC selected if it was.
 		return
 	case v == selNullOn: // &2F — ENC auto-null on (the global mode, ENC target)
@@ -981,12 +1000,15 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 			e.selectPeripheral(periphSD)
 			e.autoNullMode = false
 			e.autoNullTarget = periphNone
-			e.rxDisarmed = true // SD transaction disturbs the ENC RX path (i249)
+			// An SD device mux-select does NOT disturb the ENC's autonomous RX (RXEN is
+			// an internal ENC register the &DC byte cannot touch; the RX FIFO fills
+			// independently of the SPI mux — see the rxDisarmed field comment / the
+			// ENC28J60 datasheet + encdrv.asm authority). So leave rxDisarmed alone.
 		case selSDAutoNul:
 			e.selectPeripheral(periphSD)
 			e.autoNullMode = true
 			e.autoNullTarget = periphSD
-			e.rxDisarmed = true // SD transaction disturbs the ENC RX path (i249)
+			// As selSDManual: an SD mux-select leaves the ENC RX engine armed.
 		case selSDInit:
 			e.selectPeripheral(periphSD)
 			// Always-on (i244): the heavy &38 SD-init leaves the PIC settling, so a
@@ -995,9 +1017,11 @@ func (e *ENC28J60) ctlSelect(v uint8) {
 			// bug a build-time catch (see sdInitSettling). The window is BOUNDED
 			// (i289): it closes after sdInitSettleTStates, so the PIC settles in real
 			// time rather than latching "unsettled" until an &28 that may never come.
+			// (This is the IDENTITY-PROBE settle — a different mechanism from RX arming;
+			// the &38 SD-init does NOT disarm the ENC's autonomous RX, so rxDisarmed is
+			// left alone here too.)
 			e.sdInitSettling = true
 			e.settleUntilT = e.tNow + sdInitSettleTStates
-			e.rxDisarmed = true // SD transaction disturbs the ENC RX path (i249)
 		case selSDDeselct:
 			if e.selPeriph == periphSD {
 				e.selPeriph = periphNone // CS high; do not re-deselect (sdSelect already cleared)
@@ -1362,10 +1386,12 @@ func (e *ENC28J60) doTransmit() {
 // so the frame lands where the driver's read_ptr (== the previous packet's
 // next-pointer) will point. This is what makes multi-packet receive correct.
 func (e *ENC28J60) materialiseRX() {
-	// RX is disarmed after an SD transaction until the ENC is re-armed (i249, fix #3):
-	// deliver nothing while disarmed, so EPKTCNT stays 0 and drv_read returns BC=0. A
-	// program that calls enc_rx_reestablish (or drv_init) after its SD read clears this
-	// via the &28 ENC reset; one that omits it serves once then dies — now in emulation.
+	// Deliver nothing only while RX is genuinely disarmed — i.e. between an &28 ereset
+	// and its RXEN re-arm. An ordinary SD transaction does NOT disarm RX (the &DC mux
+	// byte cannot touch the ENC's internal RXEN; the RX FIFO fills autonomously — see
+	// the rxDisarmed field comment / the ENC28J60 datasheet + encdrv.asm authority), so
+	// a correct program that serves across SD reads/writes WITHOUT a per-block re-arm
+	// keeps receiving here. (i293 corrects the earlier "any SD select disarms RX" model.)
 	if e.rxDisarmed {
 		return
 	}
