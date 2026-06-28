@@ -276,20 +276,33 @@ def _load_boot_record():
 boot_record = _load_boot_record()
 
 
-def _mgt_with_auto(name, filetype, load, length):
-    """Compose a minimal .mgt directory holding one AUTO entry (slot 1) after a
-    non-AUTO slot 0, with the SAM dir-entry address fields set from load/length."""
-    img = bytearray(0x5000)
+def _mgt_with_auto(name, filetype, load, length, track=0, slot=1, fillers=True):
+    """Compose a minimal .mgt directory holding one AUTO entry at (track, slot)
+    in the side-interleaved layout (side-0 track t at offset t*10240), with the
+    SAM dir-entry address fields set from load/length. Slots before it are
+    filled with in-use non-AUTO entries (B-DOS terminates its scan at the first
+    never-used slot) unless fillers=False."""
+    if isinstance(name, str):
+        name = name.encode("ascii")
+    img = bytearray(4 * 10240)
     img[0x000] = 0x13
     img[0x001:0x00B] = b"samdos2   "
-    img[0x100] = filetype
-    img[0x101:0x10B] = (name + " " * (10 - len(name))).encode("ascii")
+    if fillers:
+        for t in range(track + 1):
+            for s in range(20 if t < track else slot):
+                off = t * 10240 + s * 256
+                if img[off] == 0:
+                    img[off] = 0x13
+                    img[off + 1:off + 11] = b"filler    "
+    off = track * 10240 + slot * 256
+    img[off] = filetype
+    img[off + 1:off + 11] = name + b" " * (10 - len(name))
     start_page = (load >> 14) - 1
     off_form = (load & 0x3FFF) | 0x8000
-    img[0x1EC] = start_page
-    img[0x1ED], img[0x1EE] = off_form & 0xFF, off_form >> 8
-    img[0x1EF] = length >> 14
-    img[0x1F0], img[0x1F1] = length & 0xFF, (length & 0x3FFF) >> 8
+    img[off + 0xEC] = start_page
+    img[off + 0xED], img[off + 0xEE] = off_form & 0xFF, off_form >> 8
+    img[off + 0xEF] = length >> 14
+    img[off + 0xF0], img[off + 0xF1] = length & 0xFF, (length & 0x3FFF) >> 8
     return bytes(img)
 
 
@@ -324,12 +337,59 @@ class TestBootHazard(unittest.TestCase):
         self.assertIn("i332", hazard)
 
     def test_no_auto_refused(self):
-        img = bytearray(0x5000)
+        img = bytearray(4 * 10240)
         img[0x000] = 0x13
         img[0x001:0x00B] = b"samdos2   "
         hazard = boot_record.boot_hazard(boot_record.parse_mgt_auto_entry(bytes(img)))
         self.assertIsNotNone(hazard)
         self.assertIn("no AUTO*", hazard)
+
+    def test_lowercase_auto_matches(self):
+        # B-DOS's AUTO* match is case-insensitive (XOR;AND %11011111 — PR 814
+        # review): a lowercase "auto" BASIC is the REAL i332 livelock shape and
+        # must be diagnosed as such, not as "no AUTO* file".
+        hazard = boot_record.boot_hazard(boot_record.parse_mgt_auto_entry(
+            _mgt_with_auto("auto", 0x10, 0x8000, 100)))
+        self.assertIsNotNone(hazard)
+        self.assertIn("i332", hazard)
+
+    def test_lowercase_auto_code_vessel_clean(self):
+        # ...and a lowercase CODE vessel must NOT be falsely refused.
+        self.assertIsNone(boot_record.boot_hazard(boot_record.parse_mgt_auto_entry(
+            _mgt_with_auto("autoserve", 0x13, 0x8000, 18217))))
+
+    def test_bit7_name_does_not_match(self):
+        # Bit 7 stays significant in B-DOS's match: an inverse-video first
+        # char is not an AUTO file.
+        name = bytes([ord("A") | 0x80]) + b"UTO"
+        self.assertIsNone(boot_record.parse_mgt_auto_entry(
+            _mgt_with_auto(name, 0x13, 0x8000, 100)))
+
+    def test_dir_track_interleave(self):
+        # The directory's later tracks live at t*10240 in the side-interleaved
+        # .mgt layout: an AUTO entry on dir track 1 (slot 20+) must be found.
+        auto = boot_record.parse_mgt_auto_entry(
+            _mgt_with_auto("AUTOx", 0x13, 0x8000, 100, track=1, slot=3))
+        self.assertEqual(auto, ("AUTOx", 0x13, 0x8000, 100))
+
+    def test_scan_stops_at_never_used_slot(self):
+        # B-DOS terminates its scan at the first never-used slot; an AUTO
+        # entry past such a hole is invisible to it — and so to the guard.
+        img = _mgt_with_auto("AUTOx", 0x13, 0x8000, 100, track=0, slot=5,
+                             fillers=False)
+        self.assertIsNone(boot_record.parse_mgt_auto_entry(img))
+
+    def test_real_serve_floppy_is_refused(self):
+        # The REAL netboot_serve.mgt (built by make netboot-serve-disk) is the
+        # exact artifact whose record 186 livelocked on hardware (i332): a
+        # lowercase-"auto" BASIC. The guard must refuse it AS the i332 shape.
+        path = os.path.join(REPO, "build", "netboot_serve.mgt")
+        if not os.path.exists(path):
+            self.fail(f"{path} not built — run `make netboot-serve-disk`")
+        hazard = boot_record.boot_hazard(
+            boot_record.parse_mgt_auto_entry(open(path, "rb").read()))
+        self.assertIsNotNone(hazard, "the BASIC-auto floppy vessel must be refused")
+        self.assertIn("i332", hazard)
 
     def test_real_assembler_vessel(self):
         # The real artifact (built by `make disk-record`) must parse to the

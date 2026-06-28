@@ -62,32 +62,51 @@ FILETYPE_BASIC = 0x10
 FILETYPE_CODE = 0x13
 
 
+def _matches_auto(raw_name):
+    """B-DOS HAUTO's "AUTO*" prefix match on the first 4 RAW name bytes.
+
+    Faithful to B-DOS 1.5a L18929/match.ix (SAMDOS cknam identical):
+    `XOR (HL) : AND %11011111` per byte — the case bit (0x20) is ignored,
+    every other bit INCLUDING bit 7 is significant, so lowercase "auto"
+    matches but a bit-7-set (inverse/flashing) name byte does not.
+    """
+    return all((b ^ p) & 0xDF == 0 for b, p in zip(raw_name[:4], b"AUTO"))
+
+
 def parse_mgt_auto_entry(img):
     """Find the AUTO* directory entry B-DOS's ALHK will boot in a .mgt image.
 
-    Walks the MGT directory (tracks 0-3 side 0, 2 × 256-byte entries per
-    512-byte sector, 80 entries) for the first in-use entry whose bit-7-stripped
-    name starts with "AUTO". Returns (name, filetype, load, length) — load and
-    length decoded from the SAM dir-entry fields (StartAddressPage at +0xEC,
-    page offset &8000-form at +0xED-EE, full pages at +0xEF, LengthMod16K at
-    +0xF0-F1) — or None if no AUTO* entry exists.
+    Faithful to the B-DOS HAUTO scan: the directory is tracks 0-3 SIDE 0 —
+    in the side-interleaved .mgt layout, side-0 track t starts at image
+    offset t*10240 — each track 10 × 512-byte sectors of 2 × 256-byte
+    entries (20 entries per track, 80 total), and the scan TERMINATES at
+    the first never-used slot (type byte 0 and first name byte 0, B-DOS
+    1.5a L18915) — an entry past such a hole is invisible to B-DOS too.
+    Returns (name, filetype, load, length) for the first entry whose raw
+    name matches "AUTO*" per _matches_auto — load and length decoded from
+    the SAM dir-entry fields (StartAddressPage at +0xEC, page offset
+    &8000-form at +0xED-EE, full pages at +0xEF, LengthMod16K at +0xF0-F1)
+    — or None if the scan finds no AUTO* entry.
     """
-    for e in range(80):
-        off = e * 256
-        entry = img[off:off + 256]
-        if len(entry) < 256 or (entry[0] & 0x7F) == 0:
-            continue
-        name = bytes(b & 0x7F for b in entry[1:11]).decode("ascii", "replace").rstrip()
-        if not name.startswith("AUTO"):
-            continue
-        filetype = entry[0] & 0x3F
-        start_page = entry[0xEC]
-        off_form = entry[0xED] | (entry[0xEE] << 8)
-        pages = entry[0xEF]
-        len_mod = entry[0xF0] | (entry[0xF1] << 8)
-        load = ((start_page + 1) << 14) + (off_form & 0x3FFF)
-        length = pages * 16384 + len_mod
-        return name, filetype, load, length
+    for track in range(4):
+        for slot in range(20):
+            off = track * 10240 + slot * 256
+            entry = img[off:off + 256]
+            if len(entry) < 256:
+                return None
+            if entry[0] == 0 and entry[1] == 0:
+                return None  # never-used slot: B-DOS terminates the scan here
+            if (entry[0] & 0x7F) == 0 or not _matches_auto(entry[1:11]):
+                continue
+            name = bytes(b & 0x7F for b in entry[1:11]).decode("ascii", "replace").rstrip()
+            filetype = entry[0] & 0x3F
+            start_page = entry[0xEC] & 0x1F
+            off_form = entry[0xED] | (entry[0xEE] << 8)
+            pages = entry[0xEF]
+            len_mod = entry[0xF0] | (entry[0xF1] << 8)
+            load = ((start_page + 1) << 14) + (off_form & 0x3FFF)
+            length = pages * 16384 + len_mod
+            return name, filetype, load, length
     return None
 
 
