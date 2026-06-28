@@ -406,6 +406,36 @@ http_main:
                 or      c
                 jp      z, ht_fail_init
 
+                ; --- read the SD card's CSD to populate BD_RECORDS -----------
+                ; csd_set_bd_records runs the full standalone init ladder (CMD0/
+                ; 8/41/58/59/9) and decodes the CSD into BD_RECORDS. On read failure
+                ; (no card, wrong card, stuck SPI) BD_RECORDS stays 0 — the graceful
+                ; decline path (storage_sink_leaf will use record 0). The SD SPI
+                ; ladder disturbs the shared ENC RX path (&38 wake / PIC settling,
+                ; i242), so enc_rx_reestablish re-arms the ENC RX filter afterwards.
+                ; This runs AFTER drv_init but BEFORE drv_wait_link: drv_init does not
+                ; depend on the SPI state (it uses the ENC register path, not the PIC
+                ; relay), and drv_wait_link's PHY poll is unaffected by a prior SD
+                ; transaction (the link bit is in the ENC's PHY, not the SPI ladder).
+if defined(NETBOOT_DEBUG)
+                ; DBG_HTTP_ENTRY fires here — after drv_init, so the ENC is ready to
+                ; transmit. TR_SRC_MAC / TR_SRC_IP aliases (defined at end of this file
+                ; under NETBOOT_DEBUG) point at CONN_CLIENT_MAC / CONN_CLIENT_IP, which
+                ; were populated from the EEPROM chunk above, so marker frames carry the
+                ; SAM's real identity. This is the first point a marker can reach the wire.
+                ld      a, DBG_HTTP_ENTRY
+                call    dbg_marker
+endif
+                call    csd_set_bd_records      ; BD_RECORDS <- card record count (0 on failure)
+                di
+                ld      hl, CONN_CLIENT_MAC     ; enc_rx_reestablish: HL = MAC pointer
+                call    enc_rx_reestablish      ; re-arm ENC RX after SD SPI disturbance
+                ei
+if defined(NETBOOT_DEBUG)
+                ld      a, DBG_HTTP_EEPROM_OK   ; CSD read done (or failed gracefully) + ENC RX re-armed
+                call    dbg_marker
+endif
+
                 ; --- wait for the PHY link before the first (proactive) TX -
                 ; prov_first broadcasts an ARP request immediately; a frame sent
                 ; before the 10BASE-T link is up is silently dropped, and drv_init
@@ -417,6 +447,10 @@ http_main:
                 ld      a, b
                 or      c
                 jp      z, ht_fail_link
+if defined(NETBOOT_DEBUG)
+                ld      a, DBG_HTTP_LINK_UP
+                call    dbg_marker
+endif
 
                 ; --- drive the multi-file provisioning loop --------------
                 call    prov_first              ; file 0's ARP
@@ -431,31 +465,63 @@ ht_prov_loop:
                 jr      ht_prov_loop
 ht_done:
                 ; success: all files fetched + stored. green border, halt.
+if defined(NETBOOT_DEBUG)
+                ld      a, DBG_HTTP_ALL_DONE
+                call    dbg_marker
+endif
                 ld      a, 4
                 out     (&fe), a
                 di
                 halt
 
 ht_fail_cfg:
+if defined(NETBOOT_DEBUG)
+                ld      a, DBG_HTTP_FAIL_CFG
+                call    dbg_marker
+endif
                 ld      a, 2                    ; red border: no/bad network settings
                 out     (&fe), a
                 di
                 halt
 ht_fail_init:
+if defined(NETBOOT_DEBUG)
+                ld      a, DBG_HTTP_FAIL_INIT
+                call    dbg_marker
+endif
                 ld      a, 1                    ; blue border: ENC28J60 init failed
                 out     (&fe), a
                 di
                 halt
 ht_fail_link:
+if defined(NETBOOT_DEBUG)
+                ld      a, DBG_HTTP_FAIL_LINK
+                call    dbg_marker
+endif
                 ld      a, 6                    ; yellow border: PHY link never came up
                 out     (&fe), a                ; (cable unplugged, or no link partner)
                 di
                 halt
 
 ht_chunk_name:    defm "Trinity Network "      ; the flash chunk holding MAC+IP
-; The fixed firmware-fetch target — edit for your network. Each file's HTTP path +
-; Host come from the pinned manifest (fw_source.asm); prov_start wires them.
-ht_server_ip:     defb 192, 168, 0, 1          ; the HTTP server (firmware mirror)
+; The firmware-fetch server IPv4 address. Override at build time with pyz80 -D
+; flags (all four octets must be given together; no partial override):
+;   make netboot-http-boot HT_SERVER_IP_A=10 HT_SERVER_IP_B=0 \
+;        HT_SERVER_IP_C=0 HT_SERVER_IP_D=1
+; Default: 192.168.0.1. Each file's HTTP path + Host come from the pinned
+; manifest (fw_source.asm); prov_start wires them.
+if defined(HT_SERVER_IP_A)==0
+HT_SERVER_IP_A: equ 192
+endif
+if defined(HT_SERVER_IP_B)==0
+HT_SERVER_IP_B: equ 168
+endif
+if defined(HT_SERVER_IP_C)==0
+HT_SERVER_IP_C: equ 0
+endif
+if defined(HT_SERVER_IP_D)==0
+HT_SERVER_IP_D: equ 1
+endif
+ht_server_ip:     defb HT_SERVER_IP_A, HT_SERVER_IP_B, HT_SERVER_IP_C, HT_SERVER_IP_D
 ht_iss:           defb 0, 0, 4, 0              ; per-file base initial send sequence (BE)
 
 ; --- the real B-DOS HSAVE store leaf (hardware-gated, q16/q22) ----------------
@@ -466,15 +532,34 @@ FW_REC_IDX:        defs 2
 ; ptr prov_start passes to store_begin); fw_span_record_name builds each record
 ; name from it.
 FW_STORE_NAME_PTR: defs 2
+; FW_BASE_RECORD — the first free Trinity SD record for the current file, set by
+; store_begin (via bdos_find_free_record). storage_sink_leaf uses FW_BASE_RECORD +
+; FW_REC_IDX as the per-window Trinity record number. Stays 0 when BD_RECORDS=0
+; (no SD card read succeeded at boot), in which case record 0 (floppy) is used as
+; a graceful-decline path — the pre-SD-card-read default.
+FW_BASE_RECORD:    defs 2
 
-; store_begin(HL = the file's logical name ptr) — open a file in the store:
-; remember its name for record naming and reset the record index. No HSAVE yet;
-; the body is written window-by-window by storage_sink_leaf as it streams.
-; Clobbers HL.
+; store_begin(HL = the file's logical name ptr) — open a file in the store: remember
+; its name for record naming, reset the record index, and pick the first free Trinity
+; SD record for the whole file. bdos_find_free_record scans 1..BD_RECORDS (set at
+; boot by csd_set_bd_records) and stores the first free record in BD_FREE_RECORD;
+; we latch that into FW_BASE_RECORD so every storage_sink_leaf window for THIS file
+; uses a contiguous band starting at the free record. When BD_RECORDS=0 (no card or
+; CSD read failed), BD_FREE_RECORD stays 0 and storage_sink_leaf uses record 0.
+; Clobbers AF, BC, DE, HL.
 store_begin:
+if defined(NETBOOT_DEBUG)
+                push    hl
+                ld      a, DBG_HTTP_FILE_START
+                call    dbg_marker
+                pop     hl
+endif
                 ld      (FW_STORE_NAME_PTR), hl
                 ld      hl, 0
                 ld      (FW_REC_IDX), hl
+                call    bdos_find_free_record   ; BD_FREE_RECORD = first free 1..BD_RECORDS (0 if none)
+                ld      hl, (BD_FREE_RECORD)
+                ld      (FW_BASE_RECORD), hl
                 ret
 
 ; store_end — close the current file: finish the streamed-body SHA-256 and compare
@@ -483,6 +568,10 @@ store_begin:
 ; finalises the verify verdict. Acting on a mismatch — reject / retry / surface it
 ; — is the picker UX (i100c). Clobbers A, BC, DE, HL, IX.
 store_end:
+if defined(NETBOOT_DEBUG)
+                ld      a, DBG_HTTP_FILE_VERIFY
+                call    dbg_marker
+endif
                 jp      conn_verify_final
 
 ; storage_sink_leaf(HL = window ptr, BC = window length) — the per-window store
@@ -528,12 +617,53 @@ storage_sink_leaf:
                 ld      h, a
                 ld      (BD_SAVE_ADDR), hl
                 call    bdos_fill_save_uifa     ; build the HSAVE UIFA
-                xor     a
-                call    bdos_select_record      ; record 0 = the Trinity flat store
+                ; Select Trinity SD record: first-free base (set in store_begin) +
+                ; per-file window index (FW_REC_IDX). This keeps each file in a
+                ; contiguous band of records starting at the first free slot. When
+                ; BD_RECORDS=0 (no card at boot), FW_BASE_RECORD=0 and record 0
+                ; (floppy) is used as a graceful-decline path.
+                ld      hl, (FW_BASE_RECORD)
+                ld      de, (FW_REC_IDX)
+                add     hl, de
+                ld      a, l
+                call    bdos_select_record      ; first-free base + window index
                 call    bdos_save_hook          ; HSAVE (real B-DOS only)
+if defined(NETBOOT_DEBUG)
+                ld      a, DBG_HTTP_FILE_SAVED
+                call    dbg_marker
+endif
 
                 ; --- advance the record index for the next window ---
                 ld      hl, (FW_REC_IDX)
                 inc     hl
                 ld      (FW_REC_IDX), hl
                 ret
+
+; ===========================================================================
+; sd_csd.asm — CSD read and BD_RECORDS derivation. Included here (after all the
+; code) so every symbol it defines — csd_set_bd_records, csd_base, BD_RECORDS
+; (via bdos_seam.asm already included transitively) — is available above.
+; No NETBOOT_WANT_CLAIM / NETBOOT_REAL_LISTREAD: http_main uses B-DOS RST 8
+; hooks for record selection and never issues raw CMD24 SPI writes, so the
+; ~540-byte write cluster (bd_list_write_hw / bd_cmd24_write_core /
+; bd_record_write_hw) is omitted, keeping the binary inside the 32 KB budget.
+; ===========================================================================
+                include "sd_csd.asm"
+
+; Under NETBOOT_DEBUG, include the UDP debug broadcast channel (dbg_marker.asm).
+; TR_SRC_MAC / TR_SRC_IP alias CONN_CLIENT_MAC / CONN_CLIENT_IP (the EEPROM-read
+; SAM identity, populated at boot) so marker frames carry the real SAM address.
+; This avoids including test_report.asm (~175 bytes), which carries hardcoded
+; addresses rather than the EEPROM-read identity; the EQU aliases add zero bytes.
+if defined(NETBOOT_DEBUG)
+TR_SRC_MAC:       equ CONN_CLIENT_MAC
+TR_SRC_IP:        equ CONN_CLIENT_IP
+; PACKET aliases to ARP_PACKET (the 1518-byte buffer build_arp_request.asm already
+; allocates) so build_udp_frame.asm skips its own defs 1518 (guarded by PACKET_SHARED).
+; The two uses are never concurrent: ARP is broadcast before the HTTP connection, and
+; dbg_marker fires at handler boundaries after the ARP phase.
+PACKET:           equ ARP_PACKET
+PACKET_SHARED:    equ 1
+                include "build_udp_frame.asm"   ; build_udp_frame function + PARAM_* cells
+                include "dbg_marker.asm"        ; dbg_marker + DBG_HTTP_* codes
+endif

@@ -112,7 +112,7 @@ ci-registry: registry-gen
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-http-smoke-boot netboot-http-smoke-disk netboot-http-boot-debug netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm $(asm_deps/src/netboot/build_udp_frame.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -541,6 +541,49 @@ netboot-http-boot: $(BUILD)/netboot_http_boot.bin
 netboot-http-disk: $(BUILD)/netboot_http_boot.bin $(BUILD)/build-disk
 	$(BUILD)/build-disk -netboot $(BUILD)/netboot_http_boot.bin -netboot-name httpfetch \
 	    $(BUILD)/netboot_http.mgt
+
+# netboot-http-smoke (i70a D3) — the scoped 1-file smoke fetch: LICENCE.broadcom
+# only (1594 bytes, ~4 records), built with -D NETBOOT_HTTP_SMOKE=1.  Produces a
+# bootable binary and disk for the i70b smoke shot (docs/notes/netboot-trinity-testing.md).
+# Server IP can be overridden at make time: HT_SERVER_IP_A/B/C/D (defaults: 192.168.0.1).
+HT_SERVER_IP_A ?= 192
+HT_SERVER_IP_B ?= 168
+HT_SERVER_IP_C ?= 0
+HT_SERVER_IP_D ?= 1
+$(BUILD)/netboot_http_smoke_boot.bin $(BUILD)/netboot_http_smoke_boot.map: src/netboot/http_main.asm $(asm_deps/src/netboot/http_main.asm)
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_HTTP_SMOKE=1 \
+	    -D HT_SERVER_IP_A=$(HT_SERVER_IP_A) -D HT_SERVER_IP_B=$(HT_SERVER_IP_B) \
+	    -D HT_SERVER_IP_C=$(HT_SERVER_IP_C) -D HT_SERVER_IP_D=$(HT_SERVER_IP_D) \
+	    --obj=$(BUILD)/netboot_http_smoke_boot.bin \
+	    --mapfile=$(BUILD)/netboot_http_smoke_boot.map \
+	    src/netboot/http_main.asm
+	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_http_smoke_boot.bin 32768 netboot_http_smoke_boot.bin
+
+netboot-http-smoke-boot: $(BUILD)/netboot_http_smoke_boot.bin $(BUILD)/netboot_http_smoke_boot.map
+
+netboot-http-smoke-disk: $(BUILD)/netboot_http_smoke_boot.bin $(BUILD)/build-disk
+	$(BUILD)/build-disk -netboot $(BUILD)/netboot_http_smoke_boot.bin -netboot-name httpsmoke \
+	    $(BUILD)/netboot_http_smoke.mgt
+
+# netboot-http-boot-debug (i70a D4) — the HTTP-fetch boot binary with the i271
+# UDP debug-marker channel compiled in (-D NETBOOT_DEBUG=1).  Emits step codes
+# (DBG_HTTP_ENTRY .. DBG_HTTP_FAIL_LINK) as UDP broadcast packets so an autonomous
+# agent can localise a hang without a human watching the SAM's border colour.
+# The Go harness asserts the marker sequence (http_main_dbg_test.go).
+# Combined with NETBOOT_HTTP_SMOKE (1-file manifest) to stay within the 32 KB boot
+# budget: build_udp_frame.asm (needed by dbg_marker) adds ~260 bytes that the full
+# 6-file binary cannot absorb.  For the i70b smoke shot this is the natural choice
+# anyway (a 1-file fetch exercises the complete boot+store path concisely).
+$(BUILD)/netboot_http_boot_debug.bin $(BUILD)/netboot_http_boot_debug.map: src/netboot/http_main.asm $(asm_deps/src/netboot/http_main.asm)
+	@mkdir -p $(BUILD)
+	pyz80 -D NETBOOT_STREAM=1 -D NETBOOT_DEBUG=1 -D NETBOOT_HTTP_SMOKE=1 \
+	    --obj=$(BUILD)/netboot_http_boot_debug.bin \
+	    --mapfile=$(BUILD)/netboot_http_boot_debug.map \
+	    src/netboot/http_main.asm
+	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_http_boot_debug.bin 32768 netboot_http_boot_debug.bin
+
+netboot-http-boot-debug: $(BUILD)/netboot_http_boot_debug.bin $(BUILD)/netboot_http_boot_debug.map
 
 # tftp-server-loop — the i83 TFTP server transfer loop (state machine):
 # drv_read an RRQ, parse + resolve, reply with an OACK (hit) or ERROR(1) (miss),

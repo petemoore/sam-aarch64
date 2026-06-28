@@ -320,6 +320,13 @@ sdc_deselect:
                 ret
 
 ; ===========================================================================
+; NETBOOT_REAL_LISTREAD selects bd_list_read_hw (the real CMD17 card-absolute path):
+; sd_push / list_records / delete_record / the serve debug boot set this flag; the
+; standard production serve + http_main use the BD_HOOK_LISTREAD RST 8 hook instead.
+; Without this flag, bdos_find_free_record's bdos_record_list_read_sector takes the
+; RST 8 path (bdos_seam.asm); the 119-byte bd_list_read_hw body is not assembled.
+if defined(NETBOOT_REAL_LISTREAD)
+; ===========================================================================
 ; bd_list_read_hw — the REAL card-absolute list-sector read (i141): the hardware
 ; implementation of bdos_read_list_sector's BD_HOOK_LISTREAD model. Reads one
 ; 512-byte list sector off the SD card via a raw CMD17 single-block read on the
@@ -416,6 +423,17 @@ bllr_rd2:
                 or      a                       ; CY clear: success
                 jp      sdc_deselect
 
+endif                                          ; NETBOOT_REAL_LISTREAD
+
+; ===========================================================================
+; NETBOOT_WANT_CLAIM selects the CMD24 write cluster: bd_list_write_hw,
+; bd_lba_apply_v1_shift, bd_cmd24_write_core, bd_record_write_hw,
+; bd_record_lba_in_band, and bd_cmp32, plus their data area. Binaries that
+; write to the SD card (sd_push, delete_record, boot_record, the serve) set
+; this flag; the production serve defines it internally. http_main uses B-DOS
+; HSAVE/HRECORD hooks for storage and never issues raw CMD24 writes, so the
+; ~540-byte write cluster is omitted, keeping http_main inside the 32 KB budget.
+if defined(NETBOOT_WANT_CLAIM)
 ; ===========================================================================
 ; bd_list_write_hw — the REAL card-absolute list-sector write (i198): the
 ; hardware implementation of bdos_write_list_sector's BD_HOOK_LISTWRITE model.
@@ -910,7 +928,16 @@ bc32_a_less:
                 scf                             ; CY set (A < B)
                 ret
 
+endif                                          ; NETBOOT_WANT_CLAIM (write cluster code)
+
+; bd_list_lba is used by both bd_list_read_hw (NETBOOT_REAL_LISTREAD path) and the
+; CMD24 write cluster (NETBOOT_WANT_CLAIM path). It is allocated whenever EITHER flag
+; is set; the 4 bytes are dead in builds where neither applies (no penalty: http_main
+; includes sd_csd.asm with neither flag, so this data is not assembled at all).
+if defined(NETBOOT_REAL_LISTREAD) | defined(NETBOOT_WANT_CLAIM)
 bd_list_lba:      defs 4                        ; 32-bit LE CMD17/CMD24 block/byte address
+endif
+if defined(NETBOOT_WANT_CLAIM)
 bd_cmd24_src:     defs 2                        ; bd_cmd24_write_core: 512-byte source pointer
 bd_rec_lba:       defs 4                        ; bd_record_write_hw: 32-bit LE record data-block LBA accumulator
 bd_rec_ofs:       defs 4                        ; bd_record_write_hw: 32-bit LE record offset 1600*(n-1) (band start, rel. base)
@@ -919,6 +946,7 @@ bd_cmp_tmp:       defs 4                        ; bd_record_lba_in_band / bd_cmp
 bd_rec_guard_tripped: defb 0                    ; sticky: set when the data-safety guard REFUSED an out-of-band write
 BD_REC_WRITE_REC:    defs 2                     ; bd_record_write_hw: 1-based claimed record number n
 BD_REC_WRITE_LINEAR: defs 2                     ; bd_record_write_hw: 0-based linear sector within the record
+endif                                           ; NETBOOT_WANT_CLAIM (write cluster data)
 
 ; ===========================================================================
 ; csd_decode_blocks — decode CSD_STAGE into the 32-bit (LE) csd_blocks.

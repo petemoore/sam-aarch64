@@ -12,6 +12,12 @@
 
                 org     &8000
 
+; NETBOOT_WANT_CLAIM pulls in the CMD24 write cluster from sd_csd.asm (bd_list_write_hw,
+; bd_cmd24_write_core, bd_record_write_hw, the data-safety guard). Defined here so the
+; standalone fixture includes the write path that sd_record_write_guard_test.go exercises
+; (bd_record_write_hw / bd_rec_guard_tripped) — the same path sd_push and the serve use.
+NETBOOT_WANT_CLAIM: equ 1
+
                 include "encdrv.asm"           ; wait_ready (the shared &DC busy poll)
                 include "bdos_seam.asm"         ; BD_RECORDS (+ the picker seam storage)
                 include "sd_csd.asm"            ; the i145b CSD read + decode under test

@@ -122,17 +122,27 @@ fw_emit_loop:
 ; the OACK tsize when the stored object is served, and the record-spanning split
 ; count (size / per-record capacity).  The Go authority is http.RPiFirmware
 ; (FirmwareFile.Size).
+;
+; Under NETBOOT_HTTP_SMOKE, the manifest is trimmed to one file (LICENCE.broadcom,
+; 1594 bytes, ~4 records) — small enough for a scoped smoke shot to finish quickly
+; without a 6-file / multi-GB fetch.  The full 6-file list is the default.
 ; ===========================================================================
-FW_FILE_COUNT:  equ 6
+if defined(NETBOOT_HTTP_SMOKE)
+FW_FILE_COUNT:  equ 1           ; smoke: one file (LICENCE.broadcom, ~1594 bytes)
+else
+FW_FILE_COUNT:  equ 6           ; production: all six pinned firmware files
+endif
 FW_REC_LEN:     equ 40          ; per record: name ptr(2) + path ptr(2) + hash(32)
                                 ; + size(4, 32-bit LE)
 
 ; Strings first, so the table's pointers are backward references (no forward data
-; reference for pyz80's two-pass sizing).
+; reference for pyz80's two-pass sizing). In smoke builds only the LICENCE strings
+; are referenced; the other five are excluded to save binary space.
 fw_nm_licence:  defm "LICENCE.broadcom"
                 defb 0
 fw_pp_licence:  defm "boot/LICENCE.broadcom"
                 defb 0
+if defined(NETBOOT_HTTP_SMOKE)==0
 fw_nm_bootcode: defm "bootcode.bin"
                 defb 0
 fw_pp_bootcode: defm "boot/bootcode.bin"
@@ -153,6 +163,7 @@ fw_nm_fixup4:   defm "fixup4.dat"
                 defb 0
 fw_pp_fixup4:   defm "boot/fixup4.dat"
                 defb 0
+endif
 
 ; The record array: { name ptr (defw), path ptr (defw), pinned SHA-256 (32 B),
 ; size (32-bit LE: low word then high word) }.  Each size is split into two
@@ -165,6 +176,7 @@ FW_MANIFEST:
                 defb &c7,&28,&3f,&f5,&1f,&86,&3d,&93,&a2,&75,&c6,&6e,&3b,&4c,&b0,&80
                 defb &21,&a5,&dd,&4d,&8c,&1e,&7a,&cc,&47,&d8,&72,&fb,&e5,&2d,&3d,&6b
                 defw 1594, 0                    ; size = 1594
+if defined(NETBOOT_HTTP_SMOKE)==0
                 defw fw_nm_bootcode
                 defw fw_pp_bootcode
                 ; bootcode.bin  sha256
@@ -195,6 +207,7 @@ FW_MANIFEST:
                 defb &5f,&2d,&92,&2a,&87,&bb,&3a,&75,&f9,&ae,&7b,&50,&78,&f5,&2a,&83
                 defb &d6,&b8,&3a,&2a,&86,&62,&23,&a6,&4d,&32,&83,&41,&e5,&b4,&35,&1e
                 defw 5413, 0                    ; size = 5413
+endif
 
 ; ===========================================================================
 ; fw_manifest_entry — point at one manifest record by index.

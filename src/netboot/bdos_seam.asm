@@ -1072,7 +1072,11 @@ bdos_write_sector:
                 ; flat HL=BD_WRITE_BUF=&BE42 names the buffer's real page depends on
                 ; HMPR here (the serve is pushed to page 1, so &BE42 may already be
                 ; correct — the §8k displacement was an editor-idle-harness artifact).
+                ; NETBOOT_SERVE_DBG: dbg_report_paging is serve-specific (the sector-
+                ; write path); excluded in http_main debug builds (no HWSAD there).
+                if defined(NETBOOT_SERVE_DBG)
                 call    dbg_report_paging
+                endif
                 endif
                 ; i280b-b2t (§8af): present A = 2 (Trinity SD) to the rwsad prelude's
                 ; device-select. The prelude does `ld a,(hk.a)` then `call &8662`,
