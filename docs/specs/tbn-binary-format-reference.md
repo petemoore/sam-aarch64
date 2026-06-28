@@ -536,7 +536,7 @@ the field's bits, and those bits are **ORed into the zeroed field**:
 mode 1:  [01]  then per element:
          [base_word u32 LE]
          [patch_count u8]
-         patch_count × ( [slot:4|expr_len:4]([real_len u8])[expr bytes] )   writer.go / reader.go
+         patch_count × ( [slot:4|expr_len:4] [real_len u8 if escaped] [expr bytes] )   writer.go / reader.go
 ```
 
 The patch header is one packed byte (i39c): the **slot** id in the high

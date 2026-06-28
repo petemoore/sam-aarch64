@@ -519,8 +519,9 @@ func parsePureInsnRun(t *testing.T, name string, recs []byte) []format.InsnEleme
 }
 
 // cemitWireElements serialises elements into the CEMIT_ELEMS storage layout
-// (src/compact_emit.asm header): [base:4 LE][patch_count:1] then per patch
-// [slot:1][expr_len:1][expr] — the mode-1 wire layout.
+// (src/compact_emit.asm header): [base:4 LE][patch_count:1] then per patch a
+// packed [slot:4|expr_len:4] header (len nibble 15 = real-length-u8 escape)
+// + expr bytes — the mode-1 wire layout (i39c).
 func cemitWireElements(t *testing.T, elems []format.InsnElement) []byte {
 	t.Helper()
 	var out []byte
@@ -536,7 +537,14 @@ func cemitWireElements(t *testing.T, elems []format.InsnElement) []byte {
 			if len(p.Expr) > 255 {
 				t.Fatalf("patch expr is %d bytes — exceeds the u8 wire field", len(p.Expr))
 			}
-			out = append(out, p.Slot, byte(len(p.Expr)))
+			if p.Slot == 0 || p.Slot > 15 {
+				t.Fatalf("patch slot %d — outside the 4-bit packed header field", p.Slot)
+			}
+			if len(p.Expr) < 15 {
+				out = append(out, p.Slot<<4|byte(len(p.Expr)))
+			} else {
+				out = append(out, p.Slot<<4|0x0F, byte(len(p.Expr)))
+			}
 			out = append(out, p.Expr...)
 		}
 	}
@@ -544,11 +552,14 @@ func cemitWireElements(t *testing.T, elems []format.InsnElement) []byte {
 }
 
 // cemitWireSize is the on-wire size of one element (insnElementSize,
-// compact.go:340-346).
+// compact.go).
 func cemitWireSize(el format.InsnElement) int {
 	sz := 5
 	for _, p := range el.Patches {
-		sz += 2 + len(p.Expr)
+		sz += 1 + len(p.Expr)
+		if len(p.Expr) >= 15 {
+			sz++
+		}
 	}
 	return sz
 }
