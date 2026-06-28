@@ -84,6 +84,30 @@ hardware-confirmed** (emulation-verified is not hardware-verified, CLAUDE.md §5
 Do **not** run this against a card with data you care about until it is confirmed on
 real Trinity hardware.
 
+## `boot-record.py` — boot a Trinity SD record N via `boot_record` (i316)
+
+The non-interactive "boot record N" primitive (the network-driven counterpart to the
+i264 hold-key picker): it patches the record number into `build/boot_record.bin`'s
+`BOOT_CONFIG` block, then TrinLoad-pushes the program to **page 1** / `&8000` and runs
+it. `boot_record` (`src/netboot/boot_record.asm`) HRECORD-selects that record and fires
+ALHK to load + run its AUTO file — so the autonomous loop can build a disk, push it into
+a record (`sd-push.py`), then **boot it** and observe, hands-off. The record number is
+delivered by **patching the binary** before the push (no wire loop), exactly like
+`trinpush-serve.py` patches `SERVE_CONFIG`.
+
+```sh
+make netboot-boot-record
+tools/trinload-push/boot-record.py 192.168.2.75 3     # boot record 3 (0 = floppy)
+```
+
+Args: `<sam-ip> <record> [--bin build/boot_record.bin] [--map …] [--page 1]`.
+
+`boot_record`'s HRECORD-select + ALHK fire are **emulation-verified only**
+(`tools/netboot-oracle/z80/boot_record_test.go` asserts both under the harness); the
+real on-hardware auto-load + boot is a **separate hardware shot** (emulation-verified is
+not hardware-verified, CLAUDE.md §5). The launcher boots whatever record you name — make
+sure it holds a bootable disk.
+
 TrinLoad must already be running on the SAM (it listens on `0xEDB0`). The full
 hardware procedure lives in
 [`docs/notes/netboot-trinity-testing.md`](../../docs/notes/netboot-trinity-testing.md).
