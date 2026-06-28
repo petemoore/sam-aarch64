@@ -19,11 +19,11 @@ Two stages, both over UDP port 0xEDB0:
      outstanding acks like trinload, then finalize.
 
 WARNING (data safety): sd_push auto-picks the FIRST FREE record and writes ONLY
-that record. As of i293 the record-DIRECTED HWSAD write is NOT yet hardware-
-confirmed (the HRECORD-via-rst8 select does not redirect B-DOS's write base in
-emulation — open i280b/i270; see the PR). Do NOT run this against a card whose
-record 1 (or whatever B-DOS's default record base is) holds data you care about
-until the record-directed write is confirmed on real hardware.
+that record. As of i293 the record-DIRECTED HWSAD write PASSES end-to-end in
+faithful emulation (HRECORD redirects B-DOS's write base to the picked free
+record; every CMD24 lands in that record's LBA range, data-safe), but is NOT yet
+hardware-confirmed (emulation-verified is not hardware-verified). Do NOT run this
+against a card with data you care about until it is confirmed on real Trinity hardware.
 
 Usage:
   tools/trinload-push/sd-push.py [SAM_IP] [MGT_PATH] [SD_PUSH_BIN]

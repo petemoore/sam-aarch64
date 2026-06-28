@@ -76,12 +76,13 @@ tools/trinload-push/sd-push.py 192.168.2.75 mydisk.mgt build/sd_push.bin
 
 Args: `<sam-ip> <mgt-path> [sd_push.bin=build/sd_push.bin]`.
 
-**DATA-SAFETY CAVEAT (i293):** the record-DIRECTED HWSAD write is **not yet hardware-
-confirmed** — in emulation the HRECORD-via-rst8 select does not redirect B-DOS's write
-base, so the write lands at B-DOS's default record base, **not** the picked free record
-(open i280b/i270; see the i293 PR + `tools/netboot-oracle/z80/sd_push_faithful_test.go`).
-Do **not** run this against a card with data you care about until that is fixed and
-confirmed on real hardware.
+**DATA-SAFETY CAVEAT (i293):** the record-DIRECTED HWSAD write **passes end-to-end in
+faithful emulation** (real Colin ROM + B-DOS 1.5t: `HRECORD` redirects B-DOS's write
+base to the picked free record, every CMD24 lands in that record's LBA range, byte-exact
+and data-safe — `tools/netboot-oracle/z80/sd_push_faithful_test.go`), but is **not yet
+hardware-confirmed** (emulation-verified is not hardware-verified, CLAUDE.md §5).
+Do **not** run this against a card with data you care about until it is confirmed on
+real Trinity hardware.
 
 TrinLoad must already be running on the SAM (it listens on `0xEDB0`). The full
 hardware procedure lives in
