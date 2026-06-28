@@ -5649,6 +5649,6 @@
   title: "deploy-guard: quoted commit-message text can false-positive as a pusher execution"
   description: |
     Observed 2026-07-02 (i335 session): a 'g commit -m' whose multi-line message contained a wrapped line beginning with a pusher filename (test_trinpush dot py) was DENIED as 'a pusher script executed directly' -- the guard's statement splitter breaks on newlines inside the quoted -m string, so message text parses as statements. Violates the guard's own contract ('a command that merely MENTIONS a pusher path -- a heredoc writing a retro -- is NOT a deploy'). FIX in tools/deploy-guard/pre-deploy-check.sh: make statement splitting quote-aware (shlex the whole command before splitting on newlines, or strip quoted string contents before the split), and add a regression test in pre_deploy_check_test.py with a commit command whose -m body starts a line with a pusher filename. Workaround meanwhile: reword the message.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
