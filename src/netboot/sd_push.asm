@@ -67,10 +67,7 @@
 
                 org     &8000
 
-LEPR:       equ &80                     ; Low External Page Register
 HMPR:       equ &fb                     ; High Memory Page Register
-
-ROM_LDIR:   equ &008f                   ; LDIR in ROM (trinload uses it for the block copy)
 
                 ; Entry: trinload's X packet does `out (HMPR),P; jp &8000`, landing
                 ; here. The host harness runs sd_push_main by symbol; this jp is the
