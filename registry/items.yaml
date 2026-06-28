@@ -3712,7 +3712,7 @@
   description: |
     The i121 payoff on real hardware, autonomous: 'start trinload -> push the serve program (push-serve.py) -> tftp put each .mgt disk image (validated size==819200, streamed into a free record + claimed) -> tftp put tftp.done -> return to trinload', then read a stored record back (servable-raw) and byte-compare to confirm the store. Unblocked once the production CSD read lands (i145b, so the server finds free records) and the full experiment is emulation-proven (i145d). Agent-actionable: trinload runs on the SAM (192.168.2.75) over the LAN from the Pi; push via tools/trinload-push/push-serve.py + curl tftp://; the 19 build/*.mgt are valid + staged (/tmp/push-all-disks.sh batches them). NO Pete needed for the push+store+readback; booting a pushed record to watch it run is a downstream nicety (autonomous via i135 auto-boot, or a Pete-present spot-check) and NOT a blocker for this item.
   status: OPEN
-  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198, i266, i280b-b2b, i280b-b2c, i280b-b2d, i280b-b2e, i289, i293]
+  depends_on: [i145a, i145b-b1, i145c, i145d, i145e, i121d, i195, i141, i198, i266, i280b-b2b, i280b-b2c, i280b-b2d, i280b-b2e, i289, i293, i295]
   kind: leaf
   owner: agent
 
@@ -5104,7 +5104,7 @@
   description: |
     Pete's real-world validation/demo: push an actual playable game disk (cj.mgt = ~/git/cjs-sam-remake boot_m2b.mgt, the CJ's Elephant Antics SAM remake, a SEPARATE Pete project, 819200 B) to a free Trinity SD record over the serve WRQ path, then BOOT it on the SAM (write-then-boot = full autonomy). Validation is SIZE-ONLY (i285), so cj.mgt is accepted (no BDOS stamp needed; +232 is not a boot/select requirement — settled, memory feedback_trinity_sd_write_settled_truths). The A=drive-select write fix (i280, A=2 for HWSAD/HRSAD) is in and hardware-confirmed. The decisive remaining work is i293 (the B-DOS-direct cj.mgt push: kill the per-block ENC ereset, no own-CMD24 reimplementation) — this item depends on i293. GENUINELY OPEN (do NOT re-frame as the killed 'flaky hooks' claim): the in-context HRECORD rst-8 crash root cause (D1 — HRECORD is clean in isolation + under serve LMPR &1F paging; the crash is at HRECORD's rst 8, NOT a first SD read), and the .mgt->record sector ordering (D3, track-major vs side-major). Once i293 lands the write, BOOT via SAMBOOT autoboot (i264b) or a pushed boot-record.
   status: OPEN
-  depends_on: [i289, i293]
+  depends_on: [i289, i293, i295]
   kind: leaf
   owner: agent
 
