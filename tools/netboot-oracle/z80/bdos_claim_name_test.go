@@ -16,20 +16,18 @@
 //   - bdos_claim_record's read-modify-write touches ONLY the claimed record's own
 //     16-byte slot — every OTHER entry in the list sector is preserved byte-for-byte
 //     (the shared-resource safety invariant), proven against the FULL 512 bytes the
-//     Z80 wrote back (ListWrite.RawSector), not the harness's single-entry reconcile;
+//     Z80 CMD24-wrote to the SD model (CapturedSector), not a single-entry reconcile;
 //   - a 200-char / traversal / all-illegal / empty name cannot overrun or corrupt
 //     the sector;
 //   - the Z80 result matches the Go authority serve.ClaimRecordName byte-for-byte.
 //
-// THE HONESTY LINE (CLAUDE.md §5): bdos_read_list_sector / bdos_write_list_sector
-// reach the card via the harness hooks BD_HOOK_LISTREAD/LISTWRITE (161/162). There
-// is no Z80 SPI driver for CARD-ABSOLUTE list-sector access — that is the
-// hardware-gated §8 open item (the i145h CMD17/CMD24 model serves Colin's
-// RECORD-CLAMPED seek path, not card-absolute list reads). So the list
-// read-modify-write is exercised at the HOOK level here, NOT through a raw CMD24
-// SPI command frame. The hook faithfully models the on-card RMW result, and the
-// safety invariant is asserted against the actual 512 bytes the Z80 code wrote —
-// but it is emulation-verified, not hardware-verified, and not the raw-SPI path.
+// THE HONESTY LINE (CLAUDE.md §5): the serve boot binary builds with
+// NETBOOT_REAL_LISTREAD, so bdos_read_list_sector / bdos_write_list_sector run
+// the raw CMD17/CMD24 SPI drivers (bd_list_read_hw / bd_list_write_hw) against
+// the SDCard SPI model — the same card-absolute list path sd_push later proved
+// on real hardware (i319a). The harness-invented RST-8 list hooks 161/162 are
+// never used: they collide with real B-DOS 1.5t handlers and wedge hardware
+// (i70e).
 package z80_test
 
 import (

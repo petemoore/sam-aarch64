@@ -932,8 +932,8 @@ endif                                          ; NETBOOT_WANT_CLAIM (write clust
 
 ; bd_list_lba is used by both bd_list_read_hw (NETBOOT_REAL_LISTREAD path) and the
 ; CMD24 write cluster (NETBOOT_WANT_CLAIM path). It is allocated whenever EITHER flag
-; is set; the 4 bytes are dead in builds where neither applies (no penalty: http_main
-; includes sd_csd.asm with neither flag, so this data is not assembled at all).
+; is set; the 4 bytes are dead in builds where neither applies (e.g. boot_record,
+; which never touches the record list).
 if defined(NETBOOT_REAL_LISTREAD) | defined(NETBOOT_WANT_CLAIM)
 bd_list_lba:      defs 4                        ; 32-bit LE CMD17/CMD24 block/byte address
 endif

@@ -89,13 +89,23 @@ func TestProvStoreDemarcation(t *testing.T) {
 
 	mac := loadHTTPMain(t)
 	writeProvConfig(t, mac) // BASE_PORT / BASE_ISS (identity unused by this test)
+	// The free-record scan runs the REAL CMD17 list read (NETBOOT_REAL_LISTREAD,
+	// i70e) — attach the SPI SD model with a CSD and run the boot's CSD read so
+	// BD_RECORDS and the block-vs-byte addressing come from the real decode
+	// ladder, exactly as on hardware. Un-seeded list sectors read back as zeros
+	// = all records free, so prov_start(0) picks record 1.
+	enc := z80h.NewENC28J60()
+	sd := enc.AttachSD(csdV2(0x001D59)) // ~3.7 GB SDHC
+	mac.AttachIO(enc)
+	if _, err := mac.Call("csd_set_bd_records"); err != nil {
+		t.Fatalf("csd_set_bd_records: %v", err)
+	}
 	store := z80h.NewBDOSStore()
+	// D2: after the first HSAVE the record must scan as used so prov_start(1)
+	// picks record 2 — on the SPI path that means the record-LIST bytes on the
+	// card model, not the hook-time overlay (i70e).
+	store.MirrorUsedRecordsTo(sd)
 	mac.AttachBDOS(store) // the REAL store leaf's rst 8 HSAVE runs (no card: verdict = the digest)
-	// D2: BD_RECORDS must be > 0 so bdos_find_free_record (called in store_begin)
-	// can scan the list and find a free record. With BD_RECORDS=10, prov_start(0)
-	// finds record 1 free → stores in FW_BASE_RECORD; prov_start(1) finds record 2
-	// free (usedRecords overlay marks record 1 used after the first HSAVE).
-	mac.WriteU16LE(symAddr(t, mac, "BD_RECORDS"), 10)
 
 	name0 := manifestNameBytes(t, mac, 0)
 	name1 := manifestNameBytes(t, mac, 1)
