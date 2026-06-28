@@ -5399,3 +5399,11 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i314
+  title: "Reconcile the firmware-fetch record naming: Z80 storage_sink_leaf names records by hex(name[0:3]) but the Go authority bdos.SpanRecordName is content-addressed hex(hash[0:3])"
+  description: |
+    Discovered during i231b-b4i (#782 review). RULE-6 divergence in the hardware-gated HTTP firmware-fetch store path. The Go authority tools/netboot-oracle/bdos/span.go:52 SpanRecordName(blobHash [32]byte, index) returns a CONTENT-ADDRESSED name: fmt.Sprintf('%02x%02x%02x%03d', blobHash[0], blobHash[1], blobHash[2], index) — hex of the first 3 bytes of the blob's SHA-256 HASH + the zero-padded record index. But the Z80 src/netboot/http_main.asm storage_sink_leaf passes FW_STORE_NAME_PTR (the manifest NAME ptr set by store_begin), not a hash, to fw_span.asm fw_span_record_name — which hex-encodes the first 3 bytes of whatever HL points to. So the Z80 names records hex(NAME[0:3])+index, NOT hex(HASH[0:3])+index. fw_span.asm's own comment ('Mirrors bdos.SpanRecordName(blobHash...)', 'Emit hash[0], hash[1], hash[2]') says it should take a HASH — inconsistent with the caller passing the name. This is PRE-EXISTING (not introduced by #782; the bootable was byte-identical) and hardware-gated (the http_main store path is unverified on real hardware, CLAUDE.md §5), and #782's new tests accurately document the CURRENT name-based behavior. RECONCILE: (a) is the Z80 a port bug — storage_sink_leaf should pass a hash pointer (CONN_PINNED_HASH or the computed digest) to be content-addressed like the authority — OR (b) are the authority + fw_span.asm comment stale and name-based naming is the intended design? Check the serve side (netboot_serve reads 'the same convention' per http_main.asm) — does it expect name-hex or hash-hex? If the persist + serve sides agree (name-hex) the round-trip works but diverges from the authority; if they disagree, records can't be found. Per rule 6 the Go authority is the encoding truth unless there's a documented reason to diverge (like the plain-vs-suffixed SpanPlan choice). May escalate to a qN if the design intent needs Pete. Relates to i101 (serve record naming), the fw_span/http_main store leaf.
+  status: OPEN
+  kind: leaf
+  owner: agent
