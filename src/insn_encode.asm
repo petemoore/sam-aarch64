@@ -548,14 +548,15 @@ enc_smem_extended:
 ; -----------------------------------------------------------------------
 ; enc_slotkind_to_fsid — map an expr-bearing SlotKind to its FoldSlot id
 ; (insn_run.asm FSID_*).  A in = slot kind; A out = FSID.  Unmapped -> fail.
-; Imm16Shifted -> FSID_MOVZ_AUTO: the auto-hw-select path matches Go's
-; encodeImm16Shifted hw==0 branch (encode.go:53-65).
+; Imm16Shifted -> FSID_MOVK_IMM16: value is packed (hw<<16)|imm16, the form
+; table already holds the base word with hw in bits 22:21; fold just places
+; the low 16 bits.  Authority: overlay.go:169-170 (FoldMovkImm16).
 ; -----------------------------------------------------------------------
 enc_slotkind_to_fsid:
                 cp      SK_IMM12SH
                 jr      z, enc_fsid_addsub
                 cp      SK_IMM16SH
-                jr      z, enc_fsid_movz
+                jr      z, enc_fsid_movk
                 cp      SK_LOGICAL
                 jr      z, enc_fsid_logical
                 cp      SK_BR26
@@ -571,6 +572,8 @@ enc_slotkind_to_fsid:
                 ld      a, ENC_TAG_BADSLOT
                 jp      fail_with_tag
 enc_fsid_addsub: ld     a, FSID_ADDSUB_IMM12
+                ret
+enc_fsid_movk:  ld      a, FSID_MOVK_IMM16
                 ret
 enc_fsid_movz:  ld      a, FSID_MOVZ_AUTO
                 ret
@@ -750,9 +753,21 @@ enc_extended:
                 ld      a, (hl)                     ; extend
                 ld      (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 3), a
                 inc     hl
-; Evaluate amtExpr -> imm3 (low byte).
-                call    enc_eval_at_hl              ; HL -> [lenlo][lenhi][expr...]
+; Evaluate amtExpr -> imm3 (low byte).  Empty amtExpr (len=0) means no
+; explicit shift amount; the default is 0.
+                ld      c, (hl)
+                inc     hl
+                ld      b, (hl)
+                inc     hl                          ; HL -> expr bytes
+                ld      a, b
+                or      c
+                jr      z, enc_ext_zero_amt
+                call    eval_expr_const
                 ld      a, (expr_result)
+                jr      enc_ext_amt_done
+enc_ext_zero_amt:
+                xor     a                           ; len=0: default imm3=0
+enc_ext_amt_done:
                 ld      (OPVAL_ARRAY + 2 * OPVAL_STRIDE + 4), a
 
                 ld      a, (enc_mnem)

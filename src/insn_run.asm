@@ -43,6 +43,12 @@ FSID_LITPOOL19:         equ     12
 FSID_MOVZ_AUTO:         equ     13
 
 
+; INSN_RUN_FOLD_ONLY: when defined, skip the production pass-1/2 handlers
+; (they depend on walk_records / emit_byte etc. that a fold-only consumer
+; such as the b8d paged chain driver does not provide).  insn_fold and the
+; fold_* helpers are always included; the FSID_* constants above too.
+if defined(INSN_RUN_FOLD_ONLY)==0
+
 ; -----------------------------------------------------------------------
 ; main_handle_insn_run — INSN_RUN (0x09) dispatch.
 ;
@@ -221,6 +227,7 @@ insn_p1_elem_done:
                 call    pass_pc_advance_4
                 jp      insn_p1_elem_loop
 
+endif   ; defined(INSN_RUN_FOLD_ONLY)==0
 
 ; -----------------------------------------------------------------------
 ; insn_fold — apply a FoldSlot rule.
@@ -301,9 +308,40 @@ fold_logical_call:
 
 ; ---- movk #imm16 (explicit): imm16 @5; hw stays in the base word -------
 fold_movk_imm16:
-                ld      hl, (expr_result)           ; low 16 bits = imm16
+; FoldMovkImm16: value packed as (hw<<16)|imm16 by encodeImm16Shifted.
+; Returns DEHL = (hw<<21)|(imm16<<5) — the combined fold delta.
+; The ENCTAB base word carries hw=0 (mask 0xffc00000 / 0xff800000 does not
+; fix bits 22:21), so hw must be supplied by this fold.
+; The caller (enc_field_done / insn_p2_patch_loop) applies or_dehl_into_base;
+; this fold must NOT do so — just return the delta.
+; Authority: overlay.go:94-99; encode.go:40-66.
+                ld      hl, (expr_result)           ; HL = imm16 (bits 15:0)
                 ld      a, 5
-                jp      field_place
+                call    field_place                 ; DEHL = imm16 << 5
+                push    de                          ; save high bits of delta
+                push    hl                          ; save low bits of delta
+                ld      a, (expr_result + 2)        ; bits 23:16 of value
+                and     3                           ; hw = bits 17:16
+                ld      l, a
+                ld      h, 0
+                ld      a, 21
+                call    field_place                 ; DEHL = hw << 21
+; Combine: DEHL |= saved (imm16 << 5) from the stack.
+                pop     bc                          ; BC = saved HL (C=L, B=H)
+                ld      a, l
+                or      c
+                ld      l, a
+                ld      a, h
+                or      b
+                ld      h, a
+                pop     bc                          ; BC = saved DE (C=E, B=D)
+                ld      a, e
+                or      c
+                ld      e, a
+                ld      a, d
+                or      b
+                ld      d, a
+                ret                                 ; return combined delta in DEHL
 
 ; ---- mov-imm auto-movz: compute hw, imm16 @5 + hw @21 ------------------
 fold_movz_auto:

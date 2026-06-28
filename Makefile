@@ -1435,6 +1435,22 @@ $(BUILD)/chain_paged_driver.bin $(BUILD)/chain_paged_driver.map: src/chain_paged
 
 chain-paged-driver-z80: $(BUILD)/chain_paged_driver.bin $(BUILD)/chain_paged_driver.map
 
+# b8d-chain-paged-driver-z80 — b8d capstone: real encoder arm (i48c-b8d).
+# Same base as chain-paged-driver-z80 plus -D COMPACT_WALK_REAL_ENCODER=1,
+# which activates the cemit_add_inst INST arm and compact_serialize.
+# Entry b8d_chain_paged; output .tbn at page-8 offset &2F00.
+$(BUILD)/b8d_chain_paged_driver.bin $(BUILD)/b8d_chain_paged_driver.map: src/chain_paged_driver.asm $(asm_deps/src/chain_paged_driver.asm) $(BUILD)/asmparse_paged.sym
+	@mkdir -p $(BUILD)
+	pyz80 -D CHAIN_PAGED_DRIVER=1 -D COMPACT_WALK_REAL_ENCODER=1 \
+	    -D INSN_RUN_FOLD_ONLY=1 -D CEMIT_BUFS_EXTERNAL=1 \
+	    -D BUILD_TESTS_ENCODE=1 \
+	    --importfile=$(BUILD)/asmparse_paged.sym \
+	    --obj=$(BUILD)/b8d_chain_paged_driver.bin \
+	    --mapfile=$(BUILD)/b8d_chain_paged_driver.map \
+	    src/chain_paged_driver.asm
+
+b8d-chain-paged-driver-z80: $(BUILD)/b8d_chain_paged_driver.bin $(BUILD)/b8d_chain_paged_driver.map
+
 # Every netboot routine binary the harness tests load.
 netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-server netboot-serve netboot-client netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-samboot-config netboot-trinity-identity netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
 
@@ -1458,7 +1474,7 @@ netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-bu
 # SKIP_PRIVATE_TESTS-gated, and CI (no private data) can't build it.
 NETBOOT_PRIVATE_ARTIFACTS := $(if $(wildcard src/netboot/bootloader_chunk1_data.asm),netboot-eeprom-flash-chunk1)
 .PHONY: netboot-z80-artifacts
-netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 netboot-serve-record netboot-server-record disk-record $(NETBOOT_PRIVATE_ARTIFACTS)
+netboot-z80-artifacts: netboot-z80-routines netboot-http-boot-debug netboot-http-smoke-boot editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 asmparse-paged-z80 parse-paged-driver-z80 chain-paged-driver-z80 b8d-chain-paged-driver-z80 pass1-ir-z80 compact-ir-z80 compact-ser-z80 netboot-serve-record netboot-server-record disk-record $(NETBOOT_PRIVATE_ARTIFACTS)
 
 ci-netboot-z80: netboot-z80-artifacts
 	cd tools/sampage && go test ./...
