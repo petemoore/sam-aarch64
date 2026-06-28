@@ -1754,10 +1754,53 @@
     Wire tls_reasm_feed into tcp_conn CONN_SINK_FILTER; finalise paging layout; build a bootable disk; exercise over real RST 8 on Trinity hardware. Prerequisite: TC_RX must grow from 1056 to 16645 B (TLS max) before a real Certificate record fits. Hardware-gated (CLAUDE.md §5).
   status: OPEN
   depends_on: [i133, i93b]
-  kind: leaf
+  kind: umbrella
   owner: agent
   parent: i88
   refs: [src/netboot/tls_reasm.asm, src/netboot/tls_client.asm, src/netboot/tcp_conn.asm, i88, i88b]
+
+- id: i88c-b1
+  title: "i88c-b1 — wire tls_reasm into CONN_SINK_FILTER: sink+emit shims, bounded emulation integration test"
+  description: |
+    The wiring: new src/netboot/tls_main.asm composes tls_reasm + tls_client + tcp_conn's CONN_SINK_FILTER dispatch with two shims — tls_sink_feed (CONN_SINK_FILTER target: HL=window,BC=len -> jp tls_reasm_feed) and tls_record_shim (REASM_EMIT_PTR: copy the emitted record REASM_BUF->TC_RX, set TC_RX_LEN, call tls_client_on_record). Emulation-first: a new tools/netboot-oracle/z80/tls_integration_test.go replays the existing captured handshake flight (records <=TC_RX=1056, flat-buildable) chunked at mis-aligned TCP-segment sizes THROUGH storage_sink_flush (the real dispatch) and asserts TC_PHASE reaches DONE / secrets match the Go authority. REASM_BUF placed in low memory so the composite fits flat. Land via PR. body_sink_write is the precedent.
+  status: OPEN
+  kind: leaf
+  owner: agent
+  parent: i88c
+  refs: [src/netboot/tls_main.asm, src/netboot/tls_reasm.asm, src/netboot/tls_client.asm, src/netboot/tcp_conn.asm]
+
+- id: i88c-b2
+  title: "i88c-b2 — grow TC_RX 1056->16645 + finalise paged buffer layout for full-size TLS records"
+  description: |
+    Grow TC_RX to REASM_MAX (16645) so a real Certificate record fits, and finalise the paged layout: measured, REASM_BUF(16645)+TC_RX(16645)+crypto code cannot coexist in a flat build (tls_client composite already 30629 B at &8000), so a multi-page arrangement is required. No Go authority (a Z80 paging constraint) -> design decision q72.
+  status: OPEN
+  depends_on: [i88c-b1, q72]
+  kind: leaf
+  owner: agent
+  parent: i88c
+  refs: [src/netboot/tls_client.asm, src/netboot/tls_reasm.asm]
+
+- id: i88c-b3
+  title: "i88c-b3 — bootable TLS disk: tls_main.asm as NETBOOT_STREAM boot binary + make target + build-disk wiring"
+  description: |
+    Build the bootable TLS artifact: tls_main.asm assembled with NETBOOT_STREAM, org &8000 (jp entry), a make netboot-tls-boot/-disk target and build-disk wiring, mirroring netboot-http-boot/-disk. depends_on the finalised paged layout (b2).
+  status: OPEN
+  depends_on: [i88c-b2]
+  kind: leaf
+  owner: agent
+  parent: i88c
+  refs: [src/netboot/tls_main.asm, Makefile]
+
+- id: i88c-b4
+  title: i88c-b4 — real RST-8 TLS shot on Trinity hardware (hardware-gated)
+  description: |
+    Exercise the composed TLS build over real RST 8 on the Trinity SAM. Gated on the b3 bootable disk + q72 (hardware-leg scope: live-internet TLS vs captured replay; what it fetches/stores). If the q72 answer makes the shot store via HSAVE, additionally gate on i357 (the free-record store-leg wedge, itself q71-gated) — add that edge at decision time. Emulation-first: no shot until the software legs are emulation-green and Pete signs off q72.
+  status: OPEN
+  depends_on: [i88c-b3, q72]
+  kind: leaf
+  owner: agent
+  parent: i88c
+  refs: [src/netboot/tls_main.asm, docs/notes/netboot-trinity-testing.md]
 
 - id: i89
   title: Capture a Pi 3 netboot exchange (Phase-3) — extend i83/i86 oracle to the older Pi family
