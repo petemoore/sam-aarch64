@@ -4,6 +4,7 @@
 #               registry move --id iN --before iM
 #               registry move --id iN --after iM
 - i293
+- i292
 - i270a
 - i288
 - i194
@@ -67,4 +68,3 @@
 - i290
 - i231b-b4b
 - i291
-- i292
