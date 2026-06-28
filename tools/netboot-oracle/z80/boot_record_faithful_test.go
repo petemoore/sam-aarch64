@@ -8,13 +8,13 @@
 // &A185 in the resident B-DOS page as the HRECORD observable (the same FACT-3
 // instrument as sd_push_faithful_test.go):
 //
-//   * UNARMED (DOSCNT as the editor idle leaves it — "DOS in control"): the &37E8
-//     recursion guard diverts the rst 8 and clobbers the shadow registers carrying
-//     the record number, so HRECORD never redirects the seek base — the real-SAM
-//     bounce, IF real trinload also inherits a non-zero DOSCNT.
-//   * ARMED (DOSCNT=0, the external-caller state): HRECORD redirects the seek base
-//     to the requested record — the dispatch works, so the fix is boot_record
-//     arming the state itself before its hooks.
+//   * UNARMED (DOSCNT as the editor idle leaves it) and ARMED (DOSCNT=0, the
+//     external-caller state) BOTH dispatch correctly here: HRECORD redirects the
+//     seek base to the requested record, and ALHK's AUTO search reads the
+//     SELECTED record's directory. That ELIMINATES the &37E8 recursion-guard /
+//     DOSCNT class and the selection-not-honoured class as the i328 cause — at
+//     editor idle. The real-SAM bounce therefore lives in the TRINLOAD-idle
+//     context, which no faithful rig reaches yet (the remaining i328 work).
 package z80_test
 
 import (
