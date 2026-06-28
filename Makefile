@@ -1257,7 +1257,12 @@ compact-ir-z80: $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map
 # Every netboot routine binary the harness tests load.
 netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-server netboot-serve netboot-client netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-samboot-config netboot-trinity-identity netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
 
-ci-netboot-z80: netboot-z80-routines editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80
+# netboot-serve-record is a prerequisite so TestBootRecordServeRecordVessel always
+# tests a vessel packaging the CURRENT serve binary: the .mgt recipe is PHONY (no
+# file-level dep), so an incremental local run that rebuilt netboot_serve_boot.bin
+# without repackaging fed the test a stale vessel — a confusing false red (the test
+# itself is SKIP_PRIVATE_TESTS-gated in CI, so only local runs ever hit it).
+ci-netboot-z80: netboot-z80-routines editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80 netboot-serve-record
 	cd tools/sampage && go test ./...
 	cd tools/netboot-oracle/z80 && go test ./...
 	# Guard: the 8x-unrolled SHA-256 round block inlined in sha256.asm still
