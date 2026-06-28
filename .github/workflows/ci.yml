@@ -162,6 +162,8 @@ jobs:
           go-version: '1.26.1'
       - name: Netboot oracle (DHCP/TFTP golden vectors)
         run: make ci-netboot-oracle
+      - name: build-disk unit tests (vessel shapes, variant guard)
+        run: make ci-build-disk
 
   # registry-tests — the registry CLI's Go unit tests (id allocation / nextSubID,
   # parent invariants, gate column, in-progress, and the live-registry conformance

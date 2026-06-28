@@ -612,8 +612,8 @@ func main() {
 
 	fmt.Printf("%-12s%d bytes  T4S1-T5S10\n", *dosName+":", len(dosBin))
 	if *codeAuto {
-		fmt.Printf("AUTOasm:    %d bytes  auto-exec &%04X (record vessel)\n",
-			len(assemblerBin), LoadAddress)
+		fmt.Printf("AUTOasm:    %d bytes (%d code + pad, two-page)  auto-exec &%04X (record vessel)\n",
+			len(padded), len(assemblerBin), LoadAddress)
 	} else {
 		fmt.Printf("auto:       %d bytes   T6S1-T6S2  (PROG=%d, +VARS=%d, +GAP=%d)\n",
 			len(auto.Bytes()), auto.NVARSOffset(),
