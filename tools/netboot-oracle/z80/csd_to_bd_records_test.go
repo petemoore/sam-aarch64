@@ -136,6 +136,53 @@ func TestCSDToBDRecordsV1(t *testing.T) {
 	}
 }
 
+// TestCSDToBDRecordsBaseFor64GB is the i295 create-record regression gate: the Z80
+// csd_set_bd_records must compute csd_base (the record-body LBA anchor:
+// LBA = csd_base + 1600*(n-1) + i) EQUAL to what B-DOS 1.5t uses, or every raw-LBA
+// record write lands where B-DOS does not look. It asserts csd_base against the Go
+// reference refRecords (which mirrors B-DOS's &A452 16-bit-overflow clamp), and pins
+// the empirically-proven value 2050 for Pete's 64 GB card. This runs on the built
+// fixture + SD model — NO private B-DOS binary — so it gates CI directly (it is the
+// unit-level counterpart of the full-boot TestBDOSRecordsMathBase64GB).
+func TestCSDToBDRecordsBaseFor64GB(t *testing.T) {
+	cases := []struct {
+		name     string
+		cSize    uint32
+		wantBase uint16 // empirically-proven / B-DOS-matching base
+	}{
+		{"64GB-Pete", 0x01DBD3, 2050}, // Pete's real card: the 16-bit clamp -> base 2050 (not 2438)
+		{"64GB-alt", 0x01E8FF, 2050},  // another >51 GB card: also clamps to base 2050
+		{"~30GB", 0x00F3FF, 1251},     // below the clamp threshold: base unaffected
+		{"~3.7GB", 0x001D59, 152},     // the small card the gold rigs use
+		{"8MB-min", 0x00000F, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mac := loadSDCSDFixture(t, csdV2(tc.cSize))
+			// Zero csd_base first so a green result can only be the routine writing it.
+			baseAddr := symAddr(t, mac, "csd_base")
+			mac.WriteU16LE(baseAddr, 0)
+			if _, err := mac.Call("csd_set_bd_records"); err != nil {
+				t.Fatalf("csd_set_bd_records: %v", err)
+			}
+			b := mac.Read(baseAddr, 2)
+			gotBase := uint16(b[0]) | uint16(b[1])<<8
+
+			blocks := refBlocksV2(tc.cSize)
+			wantBase, _ := refRecords(blocks)
+			if uint32(gotBase) != wantBase {
+				t.Fatalf("C_SIZE=0x%X blocks=%d: Z80 csd_base=%d, Go reference (B-DOS-matching) base=%d",
+					tc.cSize, blocks, gotBase, wantBase)
+			}
+			if gotBase != tc.wantBase {
+				t.Fatalf("C_SIZE=0x%X: Z80 csd_base=%d, want %d (the empirically-proven base)", tc.cSize, gotBase, tc.wantBase)
+			}
+			t.Logf("C_SIZE=0x%X blocks=%d -> csd_base=%d (record n body LBA = %d + 1600*(n-1); == B-DOS)",
+				tc.cSize, blocks, gotBase, gotBase)
+		})
+	}
+}
+
 // TestCSDToBDRecordsBoundedOnStuckBusy is the i250/fix-#5 hang-safety gate, run as
 // part of the DEFAULT suite (no opt-in): it models a wedged Trinity whose &DC BUSY
 // bit (bit 3) NEVER clears — the real-hardware failure that hung Pete's SAM (the

@@ -488,6 +488,23 @@ func (mac *Machine) LiveRegs() Regs {
 	}
 }
 
+// LiveAltRegs returns the live ALTERNATE CPU registers (AF'/BC'/DE'/HL') during/
+// after a run. Valid inside a Trace callback and after a run returns; nil-safe.
+// Needed to observe routines that compute in the alternate set after an EXX —
+// e.g. B-DOS 1.5t's records math (&A58C divide reads its 32-bit dividend from the
+// alt DE':HL'), the i295 overflow trace.
+func (mac *Machine) LiveAltRegs() Regs {
+	c := mac.m.cpu
+	if c == nil {
+		return Regs{}
+	}
+	a := c.Alternate
+	return Regs{
+		A: a.AF.Hi, B: a.BC.Hi, C: a.BC.Lo, D: a.DE.Hi, E: a.DE.Lo,
+		H: a.HL.Hi, L: a.HL.Lo,
+	}
+}
+
 // LoadROMImage copies a real 32 KB SAM system-ROM image into the pager's ROM
 // (ROM0 = low 16 KB at logical &0000 when section A maps ROM; ROM1 = high 16 KB
 // at logical &C000 when section D maps ROM). This is the i190a entry for the

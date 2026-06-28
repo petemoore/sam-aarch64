@@ -140,26 +140,47 @@ func refBlocksV1(readBlLen, cSize, cSizeMult uint32) uint32 {
 	return uint32(bytes / 512)
 }
 
-// refRecords mirrors the &A45A records math:
+// bdosEffBlocks is the effective block count B-DOS 1.5t's HDINIT feeds its records
+// math — i.e. the &A3D2→&A452 pre-processing of the raw CSD block count, TRACED on
+// hardware-real B-DOS (i295, TestBDOSRecordsMathBase64GB). Two steps:
 //
-//	records1 = blocks / 1600
+//  1. +1 (&A340). The HDINIT zero-check does `inc hl` on the block-count low word
+//     and, on the normal (non-zero) branch (&A34E), does NOT undo it, so the value
+//     stored at &80BD-C0 and fed onward is blocks+1. (Harmless for records1/base
+//     on any real card except at an exact 1600·2^16 boundary; kept for fidelity.)
+//  2. The &A452 CLAMP. `ld hl,&F9C0 (-1600); add hl,de` tests the HIGH word of
+//     blocks+1: if high16(blocks+1) >= 1600 (i.e. blocks+1 >= 1600·65536 =
+//     104,857,600), &A454 substitutes a SYNTHETIC dividend DE:HL = 1600:449 =
+//     0x064001C1 = 104,858,049 for the whole records math. That divides by 1600 to
+//     exactly 65536 (= 2^16) — records1 SATURATES at 65536, so the record-list base
+//     is CEILINGED at (65536+32)/32+1 = 2050. THIS is the "16-bit" overflow: B-DOS
+//     cannot represent more than 65536 records, so on a >51 GB card (Pete's 64 GB)
+//     both records1 and the derived base clamp, and base = 2050 (NOT the un-clamped
+//     2438 the true blocks/1600=77959 would give). Below the threshold, eff=blocks+1
+//     verbatim and the math is the historic formula.
+func bdosEffBlocks(blocks uint32) uint32 {
+	bp1 := blocks + 1
+	if (bp1>>16)&0xFFFF >= 1600 {
+		return 0x064001C1 // 104,858,049 — the &A454 synthetic clamp dividend (records1 -> 65536)
+	}
+	return bp1
+}
+
+// refRecordsCore is the isolated &A45A base/records core: given the effective
+// dividend `eff` (already &A452-clamped by bdosEffBlocks), it computes
+//
+//	records1 = eff / 1600
 //	base     = (records1 + 32)/32 + 1                          (stored 16-bit @ &80C2)
-//	usable   = blocks - base
+//	usable   = eff - base
 //	records  = usable / 1600  (+1 if (usable % 1600)/10 >= 5 tracks)   (stored 16-bit @ &80C4)
 //
-// IMPORTANT — 16-bit BD_RECORDS (a real characteristic of Colin's code, not an
-// error): the BD_RECORDS store at &A4A7 is `ld (&80C4),hl` — only the LOW 16 bits
-// of the records quotient are kept (the divide's quotient high word, in the alt
-// DE, is discarded at &A486 `push hl`). So a card whose record count exceeds
-// 65535 (≈ >51 GB, since 65535 × 800 KB ≈ 51 GB) WRAPS. refRecordsFull returns the
-// true 32-bit count; refRecords returns the 16-bit value Colin's code actually
-// stores (true value mod 2^16) — that is what the running Z80 code is checked
-// against. The overflow is surfaced in the test log.
-func refRecordsFull(blocks uint32) (base, records uint32) {
-	records1 := blocks / 1600
+// This is exactly what runColinRecords (the isolated Z80 &A45A entry) executes, so
+// the two are checked against each other fed the SAME dividend.
+func refRecordsCore(eff uint32) (base, records uint32) {
+	records1 := eff / 1600
 	listSize := (records1 + 32) / 32
 	base = listSize + 1
-	usable := blocks - base
+	usable := eff - base
 	records = usable / 1600
 	rem := usable % 1600
 	if rem/10 >= 5 {
@@ -168,11 +189,23 @@ func refRecordsFull(blocks uint32) (base, records uint32) {
 	return base, records
 }
 
+// refRecordsFull is the END-TO-END B-DOS records math (HDINIT &A3D2→&A4A7): the
+// &A452 clamp (bdosEffBlocks) FOLLOWED BY the &A45A core. It returns the full
+// (un-truncated) values; the &80C2/&80C4 stores are 16-bit (refRecords truncates).
+//
+// IMPORTANT — 16-bit BD_RECORDS (a real characteristic of Colin's code, not an
+// error): the BD_RECORDS store at &A4A7 is `ld (&80C4),hl` — only the LOW 16 bits
+// of the records quotient are kept (the divide's quotient high word, in the alt
+// DE, is discarded at &A486 `push hl`). Combined with the &A452 clamp, a >51 GB
+// card's BD_RECORDS is 65535 (records saturate) and its base is 2050. refRecords
+// returns the 16-bit values Colin's code actually stores — what the running Z80
+// code is checked against.
+func refRecordsFull(blocks uint32) (base, records uint32) {
+	return refRecordsCore(bdosEffBlocks(blocks))
+}
+
 // refRecords returns the values Colin's code stores: base and the 16-bit-truncated
-// BD_RECORDS. (base is also a 16-bit store but never exceeds 16 bits for any SD
-// card — even a 2 TB card is base ≈ 80000... actually base CAN exceed 16 bits for
-// very large cards; for the cards under test it does not, and the divergence of
-// interest is the records overflow, surfaced explicitly.)
+// BD_RECORDS (both &80C2/&80C4 are 16-bit stores).
 func refRecords(blocks uint32) (base, records uint32) {
 	base, full := refRecordsFull(blocks)
 	return base & 0xFFFF, full & 0xFFFF
@@ -273,20 +306,25 @@ func runColinDecode(t *testing.T, mac *z80h.Machine, csd [16]byte, cardType uint
 }
 
 // runColinRecords runs Colin's REAL records math (the self-contained base/records
-// core at &A45A) on the given 32-bit block count, and returns the base (&80C2) and
-// BD_RECORDS (&80C4) it computes. The block count is passed in MAIN DE:HL (DE high,
-// HL low) — &A45A's `push de; push hl; exx` moves it into the alt registers the
-// divides use — and the run stops at &A4AA (the first size-print call,
-// just past the BD_RECORDS store at &A4A7). The number-printer at &992A is
-// neutered to a RET (it descends into ROM print, which this section-B-only model
-// has no ROM for; it is pure UI and does not affect the arithmetic).
-func runColinRecords(t *testing.T, mac *z80h.Machine, blocks uint32) (base, records uint32, res z80h.CallResult) {
+// core at &A45A) on the given EFFECTIVE dividend, and returns the base (&80C2) and
+// BD_RECORDS (&80C4) it computes. This is the CORE ONLY — the caller must pass the
+// value B-DOS's full HDINIT path (&A3D2→&A452) would hand the core, i.e.
+// bdosEffBlocks(blocks): the +1 and the &A452 16-bit-overflow clamp are applied
+// UPSTREAM of &A45A, so feeding raw blocks here would MISS the clamp (that was the
+// i295 base=2438-vs-2050 confusion — the full boot applies the clamp, this isolated
+// entry does not). The value is passed in MAIN DE:HL (DE high, HL low) — &A45A's
+// `push de; push hl; exx` moves it into the alt registers the divides use — and the
+// run stops at &A4AA (the first size-print call, just past the BD_RECORDS store at
+// &A4A7). The number-printer at &992A is neutered to a RET (it descends into ROM
+// print, which this section-B-only model has no ROM for; it is pure UI and does not
+// affect the arithmetic).
+func runColinRecords(t *testing.T, mac *z80h.Machine, eff uint32) (base, records uint32, res z80h.CallResult) {
 	t.Helper()
-	// Enter at &A45A with the 32-bit block count in MAIN DE:HL (DE high, HL low).
+	// Enter at &A45A with the effective dividend in MAIN DE:HL (DE high, HL low).
 	var err error
 	res, err = mac.RunFrom(recordsEntryB, z80h.Entry{
-		HL:      uint16(blocks & 0xFFFF),
-		DE:      uint16(blocks >> 16),
+		HL:      uint16(eff & 0xFFFF),
+		DE:      uint16(eff >> 16),
 		StopPC:  recordsStopB,
 		StepCap: 2_000_000,
 	})
@@ -330,18 +368,26 @@ func TestCSDDecodeColinV2(t *testing.T) {
 			if blocks != want {
 				t.Fatalf("C_SIZE=0x%X: Colin blocks=%d, Go reference=%d", tc.cSize, blocks, want)
 			}
-			wantBase, wantRecords := refRecords(blocks)
+			// runColinRecords is the ISOLATED &A45A core; feed it the &A452-clamped
+			// effective dividend (bdosEffBlocks) — the value B-DOS's full HDINIT path
+			// hands the core — and compare against the core reference fed the same
+			// value. For the 64GB-Pete case this exercises the 16-bit overflow clamp
+			// (eff=104858049 -> records1=65536 -> base=2050).
+			eff := bdosEffBlocks(blocks)
+			wantBase, wantRecords := refRecordsCore(eff)
 			_, fullRecords := refRecordsFull(blocks)
-			gotBase, gotRecords, rres := runColinRecords(t, mac, blocks)
+			gotBase, gotRecords, rres := runColinRecords(t, mac, eff)
 			if !rres.ReachedStop {
 				t.Fatalf("records math did not reach the store (PC=&%04X, halted=%v)", rres.PC, rres.Halted)
 			}
 			if gotBase != wantBase || gotRecords != wantRecords {
-				t.Fatalf("C_SIZE=0x%X blocks=%d: Colin base=%d records=%d, Go reference base=%d records=%d",
-					tc.cSize, blocks, gotBase, gotRecords, wantBase, wantRecords)
+				t.Fatalf("C_SIZE=0x%X blocks=%d eff=%d: Colin base=%d records=%d, Go reference base=%d records=%d",
+					tc.cSize, blocks, eff, gotBase, gotRecords, wantBase, wantRecords)
 			}
 			note := "Colin==Go"
-			if fullRecords > 0xFFFF {
+			if eff != blocks+1 {
+				note = fmt.Sprintf("Colin==Go; blocks=%d CLAMPS to eff=%d (16-bit records overflow) -> records1=65536, base=%d", blocks, eff, gotBase)
+			} else if fullRecords > 0xFFFF {
 				note = fmt.Sprintf("Colin==Go(16-bit); TRUE records=%d OVERFLOWS the 16-bit BD_RECORDS slot -> wraps to %d", fullRecords, gotRecords)
 			}
 			t.Logf("C_SIZE=0x%X  CSD[7..9]=%02x %02x %02x  blocks=%d (=%d GB)  base=%d  records=%d (%s)",
@@ -376,8 +422,9 @@ func TestCSDDecodeColinV1(t *testing.T) {
 				t.Fatalf("v1 READ_BL_LEN=%d C_SIZE=%d MULT=%d: Colin blocks=%d, Go reference=%d",
 					tc.readBlLen, tc.cSize, tc.cSizeMult, blocks, want)
 			}
-			wantBase, wantRecords := refRecords(blocks)
-			gotBase, gotRecords, rres := runColinRecords(t, mac, blocks)
+			eff := bdosEffBlocks(blocks)
+			wantBase, wantRecords := refRecordsCore(eff)
+			gotBase, gotRecords, rres := runColinRecords(t, mac, eff)
 			if !rres.ReachedStop {
 				t.Fatalf("records math did not reach the store (PC=&%04X, halted=%v)", rres.PC, rres.Halted)
 			}
