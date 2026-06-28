@@ -1669,7 +1669,7 @@
   title: Phase-3 netboot B-DOS storage seam (bdos_seam.asm) — name-to-record glue
   description: |
     Name→record glue shared by i83 server and i82 client. Three routines from Go authority bdos/bdos.go, host-verified: bdos_name_to_uifa (name→48-byte UIFA), bdos_difa_to_size (DIFA→32-bit size for OACK tsize), bdos_fill_save_uifa (name+page+offset+size→HSAVE UIFA). Field conventions from src/io.asm/loader.asm/main_loop.asm + samdos-file-io.md. Seam arithmetic LANDED + host-verified. Remaining: RST 8 hook dispatch (HGTHD/HLOAD/HSAVE/HRECORD) stays unverified until real Trinity (hardware-gated, CLAUDE.md §5).
-  status: OPEN
+  status: DONE
   kind: umbrella
   owner: agent
   refs: [src/netboot/bdos_seam.asm, tools/netboot-oracle/bdos/, docs/specs/samdos-file-io.md, docs/notes/bdos-version-landscape.md, i82, i83, i62, i71]
@@ -1686,11 +1686,14 @@
 
 - id: i93b
   title: B-DOS RST 8 hook dispatch on real Trinity — hardware-gated (HGTHD/HLOAD/HSAVE/HRECORD)
-  description: ""
-  status: IN_PROGRESS
+  description: |
+    DONE 2026-07-02: hardware-verified (autonomous shot). The hook_roundtrip probe (src/netboot/hook_roundtrip.asm, tag !HR) ran HRECORD-select -> HSAVE (1553-byte pattern, file HKPROBE) -> HGTHD size check -> HLOAD read-back -> byte-compare via real RST 8 dispatch against B-DOS 1.5t on the real SAM + Trinity (scratch record 187, verdict P phase 6 detail 0), with a clean Q->RET back to trinload; the scratch record was deleted afterwards, neighbours intact. Emulation-first: the same round-trip passed against the captured ROM + 1.5t (hook_roundtrip_faithful_test.go) before the shot. Adds the missing HLOAD dispatch (bdos_load_hook) to bdos_seam.asm. The 1.5t hook-dispatch leg (bdos-version-landscape.md) is hardware-verified; unblocks i70/i88c/i95b.
+  status: DONE
   depends_on: [i133, i295, i316]
   kind: leaf
   owner: agent
+  prs:
+    - {num: 821, role: completing}
   parent: i93
 
 - id: i94
