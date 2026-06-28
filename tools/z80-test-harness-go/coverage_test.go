@@ -8,8 +8,9 @@
 //
 // It UNIONS two runs for a more complete map:
 //
-//  1. The full boot self-test corpus (exercises encode_inst + most slot/fold
-//     paths before main_assemble).
+//  1. The full boot self-test corpus (exercises most slot/fold paths before
+//     main_assemble; the encode_inst family boots in the enc-tests variant,
+//     a different binary, so it is out of scope for this map — i234).
 //  2. A representative real assembly of several tests/core fixtures (covers
 //     code that only runs during actual assembly, not boot self-tests).
 //
@@ -43,14 +44,13 @@ func TestCoverageReport(t *testing.T) {
 	d15Path := filepath.Join(root, "build", "disasm-test.bin")
 	tmPath := filepath.Join(root, "build", "test_mem.bin")
 	clusterPath := filepath.Join(root, "build", "test_cluster.bin")
-	encFixPath := filepath.Join(root, "build", "enc_fix_payload.bin")
 	p14Path := filepath.Join(root, "build", "paged_call_test_payload.bin")
 	zx0Path := filepath.Join(root, "build", "zx0-test.bin")
 	samPath := filepath.Join(root, "build", "sam-aarch64")
 
-	for _, p := range []string{asmPath, symPath, encPath, sd13Path, d15Path, tmPath, clusterPath, encFixPath, p14Path, zx0Path, samPath} {
+	for _, p := range []string{asmPath, symPath, encPath, sd13Path, d15Path, tmPath, clusterPath, p14Path, zx0Path, samPath} {
 		if _, err := os.Stat(p); err != nil {
-			t.Fatalf("prerequisite missing: %s\n  run `make assembler enctab sysreg-data disasm-test-payload zx0-test-payload test-mem-offaxis cluster-offaxis enc-fix-payload paged-call-payload sam-aarch64`", p)
+			t.Fatalf("prerequisite missing: %s\n  run `make assembler enctab sysreg-data disasm-test-payload zx0-test-payload test-mem-offaxis cluster-offaxis paged-call-payload sam-aarch64`", p)
 		}
 	}
 
@@ -60,7 +60,6 @@ func TestCoverageReport(t *testing.T) {
 	d15, _ := os.ReadFile(d15Path)
 	tm, _ := os.ReadFile(tmPath)
 	cluster, _ := os.ReadFile(clusterPath)
-	encFix, _ := os.ReadFile(encFixPath)
 	p14, _ := os.ReadFile(p14Path)
 	zx0, _ := os.ReadFile(zx0Path)
 
@@ -68,8 +67,6 @@ func TestCoverageReport(t *testing.T) {
 		{Name: "sd13", Content: sd13, TargetPage: 13},
 		{Name: "test_mem", Content: tm, TargetPage: 13},
 		{Name: "cluster", Content: cluster, TargetPage: 12},
-		// The encode_inst fixture data payload on physical page 11 (i69).
-		{Name: "enc_fix", Content: encFix, TargetPage: 11},
 		{Name: "p14", Content: p14, TargetPage: 14},
 		{Name: "zx013", Content: zx0, TargetPage: 13, LoadOffset: 0x0400},
 		{Name: "d15", Content: d15, TargetPage: 15},
