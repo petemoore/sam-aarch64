@@ -100,16 +100,17 @@ func loadSDPush(t *testing.T) *z80h.Machine {
 // SD-SPI card models attached, and the RST &10 print channel modelled — the state a
 // trinload-pushed sd_push runs in, minus real hardware. The SD store starts EMPTY, so
 // record 1's list entry reads all-zero (FREE) and bdos_find_free_record picks it. It
-// returns the machine + the SD card so the test asserts the CMD24 writes.
-func setupSDPushMain(t *testing.T, csd [16]byte) (*z80h.Machine, *z80h.ENC28J60, *z80h.SDCard) {
+// returns the machine + the SD card so the test asserts the CMD24 writes, and the
+// print recorder so it asserts the i318 screen-status lines.
+func setupSDPushMain(t *testing.T, csd [16]byte) (*z80h.Machine, *z80h.ENC28J60, *z80h.SDCard, *z80h.PrintRecorder) {
 	t.Helper()
 	mac := loadSDPush(t)
 	enc := z80h.NewENC28J60()
 	enc.ProgramTrinityNetwork(spSAMMac, spSAMIp) // so the EEPROM config read succeeds
 	sd := enc.AttachSD(csd)                       // real CMD9/CMD17/CMD24 against sdcard.go
 	mac.AttachIO(enc)
-	mac.AttachPrintRecorder() // model RST &10 (dbg_char markers) — no ROM in the flat harness
-	return mac, enc, sd
+	rec := mac.AttachPrintRecorder() // model RST &10 (screen status + stage markers)
+	return mac, enc, sd, rec
 }
 
 // TestSDPushLogic drives sd_push end-to-end with a small 3-sector .mgt stream and
@@ -124,9 +125,11 @@ func setupSDPushMain(t *testing.T, csd [16]byte) (*z80h.Machine, *z80h.ENC28J60,
 //  5. the claim wrote record 1's 16-byte list entry ("cj" + spaces);
 //  6. data safety: the ONLY write outside record 1's body band is the claim (list
 //     sector 1) — nothing strayed into a neighbouring record or off the card;
-//  7. finalize on a non-1600 count (3) replies 'E' (the size-only validation works).
+//  7. finalize on a non-1600 count (3) replies 'E' (the size-only validation works);
+//  8. the i318 screen story is printed: banner + stage markers, the picked record,
+//     the claim line, and the closing ERR line with the received count.
 func TestSDPushLogic(t *testing.T) {
-	mac, enc, sd := setupSDPushMain(t, z80h.CSDForV2(0x001D59))
+	mac, enc, sd, rec := setupSDPushMain(t, z80h.CSDForV2(0x001D59))
 
 	// Three distinct 512-byte sectors at linear 0,1,2 (the start of the record body).
 	sectors := make([][]byte, 3)
@@ -252,6 +255,16 @@ func TestSDPushLogic(t *testing.T) {
 	if got := countPayloadPrefix(enc.TXFrames(), []byte{'D'}); got != 0 {
 		t.Errorf("premature finalize replied 'D' (%d) — a 3-sector record must NOT validate as complete", got)
 	}
+
+	// (8) The i318 screen story: banner + the "1".."5" stage markers run together on
+	// one line, then the picked record, the claim line (default name "cj", .mgt
+	// stripped), and the closing ERR line carrying the received count.
+	printed := string(rec.Chars())
+	for _, want := range []string{"SD-PUSH 12345", "REC 1 FREE", "cj -> REC 1", "ERR: 3 SECS"} {
+		if !strings.Contains(printed, want) {
+			t.Errorf("screen output missing %q; printed=%q", want, printed)
+		}
+	}
 }
 
 // TestSDPushRecordNameFromN drives sd_push with an 'N' record-name message before the
@@ -261,7 +274,7 @@ func TestSDPushLogic(t *testing.T) {
 // buffer, and the deferred claim (sp_claim_once, on the first body block) builds
 // BD_CLAIM_ENTRY from it.
 func TestSDPushRecordNameFromN(t *testing.T) {
-	mac, enc, sd := setupSDPushMain(t, z80h.CSDForV2(0x001D59))
+	mac, enc, sd, rec := setupSDPushMain(t, z80h.CSDForV2(0x001D59))
 
 	sec := make([]byte, 512)
 	for i := range sec {
@@ -308,6 +321,11 @@ func TestSDPushRecordNameFromN(t *testing.T) {
 	if got := strings.TrimRight(string(sec0[210:220]), " "); got != "mydisk" {
 		t.Errorf("sector 0 +210 label = %q, want \"mydisk\" (the pushed name, not the default \"cj\")", got)
 	}
+
+	// (c) The i318 claim line carries the PUSHED name, trailing spaces trimmed.
+	if printed := string(rec.Chars()); !strings.Contains(printed, "mydisk -> REC 1") {
+		t.Errorf("screen output missing %q; printed=%q", "mydisk -> REC 1", printed)
+	}
 }
 
 // TestSDPushFinalizeComplete drives a finalize after exactly 1600 sectors and asserts
@@ -315,7 +333,7 @@ func TestSDPushRecordNameFromN(t *testing.T) {
 // full 1600-sector record (each linearSec distinct) and confirms all 1600 body CMD24s
 // land inside record 1's absolute LBA band, then finalize returns 'D'.
 func TestSDPushFinalizeComplete(t *testing.T) {
-	mac, enc, sd := setupSDPushMain(t, z80h.CSDForV2(0x001D59))
+	mac, enc, sd, rec := setupSDPushMain(t, z80h.CSDForV2(0x001D59))
 
 	sec := make([]byte, 512)
 	for i := range sec {
@@ -372,6 +390,17 @@ func TestSDPushFinalizeComplete(t *testing.T) {
 	if got := countPayloadPrefix(enc.TXFrames(), []byte{'E'}); got != 0 {
 		t.Errorf("finalize after a complete 1600-sector record replied 'E' (%d) — should validate", got)
 	}
+
+	// The i318 screen story for a complete push: exactly 16 progress dots (one per
+	// 100 sectors) and the closing DONE line naming the record. Nothing else in the
+	// output prints '.' (the default name "cj.mgt" reaches the screen suffix-stripped).
+	printed := string(rec.Chars())
+	if got := strings.Count(printed, "."); got != 16 {
+		t.Errorf("progress dots = %d, want 16 (one per 100 sectors); printed=%q", got, printed)
+	}
+	if !strings.Contains(printed, "DONE: REC 1") {
+		t.Errorf("screen output missing %q; printed=%q", "DONE: REC 1", printed)
+	}
 }
 
 // sideMajorRecordLinear mirrors sd_push's mgt_to_record_linear (i315/i294): a .mgt
@@ -395,7 +424,7 @@ func sideMajorRecordLinear(m int) int {
 // lands at record linear sideMajorRecordLinear(m), and — explicitly — that the mapping is
 // a genuine reorder, not the identity (record linear 10 holds .mgt sector 20, not 10).
 func TestSDPushSideMajorReorder(t *testing.T) {
-	mac, enc, sd := setupSDPushMain(t, z80h.CSDForV2(0x001D59))
+	mac, enc, sd, _ := setupSDPushMain(t, z80h.CSDForV2(0x001D59))
 
 	// fingerprint(m): a 512-byte sector uniquely identifying .mgt linear index m —
 	// bytes[0:2] = m (LE), the rest a per-m pseudo-random fill so two sectors are wholly
