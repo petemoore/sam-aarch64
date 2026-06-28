@@ -5242,8 +5242,8 @@
 - id: i296
   title: "sd_push: return cleanly to trinload after the write"
   description: |
-    After the 2026-06-30 HW write, sd_push exited without returning to trinload (left the SAM in BASIC; needs a power-cycle). Make sd_push RET to trinload after finalize (mirror the dumper tr_terminate / i228 pattern) so a completed push leaves trinload running + re-pushable.
-  status: IN_PROGRESS
+    WONTFIX (Pete, 2026-07-02) — misdiagnosis; sd_push's exit is already correct. Investigated emulation-first: (1) sd_push has ONLY clean 'ret' exits (sp_finalize RETs on F->D; failures RET after Esc; no bare di;halt). (2) A pushed program that RETs returns to trinload cleanly and stays re-pushable — proven by i278's TestTrinloadRespondsToRediscoveryAfterCleanReturn + a di;ret-shape probe; the '2nd push needs ei' theory was FALSE (trinload has zero ei/di/halt/im and polls the keyboard port &f9 directly — it does not use interrupts). (3) The real cause of the observed non-return: the write never REACHES finalize — the 2026-06-30 push was 'still streaming at 8m20s' when cut off (host sd-push.py timed out, no F->D), so sd_push held the CPU and wedged trinload (i278: trinload isn't interrupt-driven; recovery = power-cycle). 'It is not all' (Pete): serve/dumper/csd_probe return cleanly; csd_probe stayed responsive on 2026-06-30 before the slow write. Underlying issue is write SPEED (~300ms/sector), not the exit. Two hardware failure modes Pete has seen: a crash, and 'trinload back on screen but not responding'. DECISION: leave it; if it recurs when Pete is present, capture live -> check hardware consistency -> reproduce in emulation -> fix then. The wedge CLASS is already reliably reproduced in emulation (i278 TestTrinloadWedgedByNonReturningProgram).
+  status: WONTFIX
   kind: leaf
   owner: agent
 
@@ -5451,7 +5451,7 @@
   description: |
     The payoff milestone. Once the SAM disk-testing toolkit works — store (sd_push + i315 reorder), boot (i316 boot-a-record), delete (i317) — push ALL our existing feature .mgt images to the real SAM over the network and test the full disk-boot + feature behaviour on real silicon: the aarch64 assembler, the disassembler, the editor, the netboot/TFTP demos, etc. This is what unblocks 'sam as a daily driver' verification on hardware instead of only in emulation. Umbrella: split per feature-image as we go. Gated on the toolkit (i315 + i316) + the cj boot proof (i295/i302) that validates the store->boot chain end to end.
   status: OPEN
-  depends_on: [i315, i316, i317, i296, i308, i318, i322]
+  depends_on: [i315, i316, i317, i308, i318, i322]
   kind: leaf
   owner: agent
 
