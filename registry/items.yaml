@@ -5746,7 +5746,7 @@
   title: "Cut feature branches from origin/main, not local main - keep session-local IN_PROGRESS registry commits off PR branches"
   description: |
     i324 retro-mining P4: the 07-02-i319a session paid ~12 min extra CI (3 PRs x a 'resolve to OPEN for merge' commit + re-run) because branches cut from LOCAL main carried the session's crash-safe IN_PROGRESS registry commits for UNRELATED items; 07-01-i315 separately hit unobvious wind-down sequencing for the same reason. The crash-safe marker (handover-contract rule 1) and the branch-cut point are structurally the same place today. FIX: (a) codify in CLAUDE.md's workflow section: feature branches are cut from origin/main (git fetch && g checkout -b <branch> origin/main), matching the existing worktree rule (discipline rule 5); the IN_PROGRESS marker commit stays on LOCAL main only, and the work's own item is marked IN_PROGRESS on the BRANCH (rides the PR, resolved to DONE before merge as today); (b) verify the autonomous-loop docs/nudges agree. Doc/policy-only change plus a small habit shift; no tooling required. Evidence: retro reports 2026-07-02-i319a (three contaminated PRs) and 2026-07-01-i315 (wind-down sequencing).
-  status: OPEN
+  status: DONE
   kind: leaf
   owner: agent
 
