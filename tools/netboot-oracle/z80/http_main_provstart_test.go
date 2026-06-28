@@ -1,4 +1,4 @@
-// http_main_provstart_test.go — Brick 4 host-verification of prov_start in
+// http_main_provstart_test.go — host-verification of prov_start in
 // src/netboot/http_main.asm: the per-file connection re-init (the Z80 port of
 // Provisioner.start(i)).
 //

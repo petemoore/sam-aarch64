@@ -1,6 +1,6 @@
-// http_main_loop_test.go — Brick 6 host-verification of the rx-driven download
-// loop in src/netboot/http_main.asm (prov_first / prov_onframe / prov_next): the
-// Z80 port of the Go authority tools/netboot-oracle/http/provision.go::Provisioner
+// http_main_loop_test.go — host-verification of the rx-driven download loop in
+// src/netboot/http_main.asm (prov_first / prov_onframe / prov_next): the Z80 port
+// of the Go authority tools/netboot-oracle/http/provision.go::Provisioner
 // (.First / .OnFrame / .Next).
 //
 // Each test drives the Z80 loop and the Go Provisioner in LOCKSTEP over the same
@@ -8,16 +8,20 @@
 // its PROV_STATUS equal the Go Provisioner's tx and Status byte-for-byte — the
 // per-file ARP / SYN / ACK+GET / data-ACK / FIN-ACK cadence, the per-file
 // ephemeral port + ISS (BasePort+i, BaseISS+i*ISSStride), and the FileDone vs
-// AllDone status edge. After the run it cross-checks the per-file store double
-// (PROV_STORE_OFFS slices of CONN_SINK_OUT, names, verdicts) against the Go
-// MemStore + FileResult verdicts.
+// AllDone status edge. The loop runs into the REAL B-DOS store leaf (a BDOSStore
+// is attached): each file's streamed body is HSAVE'd as one or more bounded records
+// (fw_span_record_name / the flush-window split), and its per-file verdict is
+// CONN_HASH_MATCH — read at the file's FIN (store_end), before the next prov_start
+// overwrites it — cross-checked against the Go Provisioner's FileResult.Verified.
+// CONN_HASH_MATCH is a cryptographic proof the streamed bytes are the served body;
+// store.Saves() proves the real leaf emitted the right records.
 //
 // The download plan is built from the Z80's OWN manifest read-back (fw_plan_path
 // / fw_manifest_entry) so the GET paths + names are the Z80's, not a second source
 // of truth — this test isolates the LOOP logic (the manifest content is gated by
 // fw_source_test.go). Bodies are synthetic; because prov_start pins each file's
 // REAL manifest hash, the test overrides CONN_PINNED_HASH to the served body's
-// hash per file (the pin-copy itself is Brick 4-verified), so the verdict tracks
+// hash per file (the pin-copy itself is provstart-verified), so the verdict tracks
 // the served bytes — true for clean files, false for a corrupted one.
 package z80_test
 
@@ -109,15 +113,21 @@ func provSrvSegZ80(clientPort uint16, seq, ack uint32, flags uint8, payload []by
 }
 
 // setupProvLoop loads http_main, fills the connection config + the per-file
-// BASE_PORT/BASE_ISS policy, turns on streaming, sets the file count, and returns
-// the machine, the emulated NIC, and the matching Go ProvisionConfig.
-func setupProvLoop(t *testing.T, n int) (*z80h.Machine, *z80h.ENC28J60, nbhttp.ProvisionConfig) {
+// BASE_PORT/BASE_ISS policy, turns on streaming, sets the file count, attaches the
+// REAL B-DOS store (so storage_sink_leaf's rst 8 HSAVE runs), and returns the
+// machine, the emulated NIC, the attached store, and the matching Go
+// ProvisionConfig. No card is attached: the per-file verdict is the cryptographic
+// CONN_HASH_MATCH, and the records are asserted from store.Saves() (name + size),
+// neither of which needs a card readback.
+func setupProvLoop(t *testing.T, n int) (*z80h.Machine, *z80h.ENC28J60, *z80h.BDOSStore, nbhttp.ProvisionConfig) {
 	t.Helper()
 	mac := loadHTTPMain(t)
 	fillTCPConnConfig(t, mac) // client/server MAC + IP + server port + (unused) ISS
 	writeProvConfig(t, mac)   // BASE_PORT / BASE_ISS — the per-file policy
 	enc := z80h.NewENC28J60()
 	initTCPConnDriver(t, mac, enc)
+	store := z80h.NewBDOSStore()
+	mac.AttachBDOS(store)
 
 	mac.WriteU16LE(symAddr(t, mac, "PROV_FILE_COUNT"), uint16(n))
 	mac.Write(symAddr(t, mac, "CONN_SINK_ENABLED"), []byte{1})
@@ -129,7 +139,7 @@ func setupProvLoop(t *testing.T, n int) (*z80h.Machine, *z80h.ENC28J60, nbhttp.P
 		ServerIP: c.serverIP, ServerPort: c.serverPort,
 		BasePort: fClientPrt, BaseISS: fISS, Window: provWindow,
 	}
-	return mac, enc, cfg
+	return mac, enc, store, cfg
 }
 
 // synthBody returns file i's synthetic body — a size mix: a multi-window file, a
@@ -193,11 +203,13 @@ func provStep(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, p *nbhttp.Pro
 // loop and the Go Provisioner in lockstep (ARP → SYN/SYN-ACK → GET → response
 // segments → FIN) and cross-checking every frame + status. corruptFile >= 0 flips
 // the first byte of that file's served body so its verdict fails. segSize bounds
-// the server's data-segment size.
+// the server's data-segment size. It returns each file's CONN_HASH_MATCH verdict,
+// captured at that file's FIN (store_end) BEFORE the next prov_start overwrites it.
 func driveProvZ80(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, p *nbhttp.Provisioner,
-	cfg nbhttp.ProvisionConfig, plan []nbhttp.FetchSpec, bodies [][]byte, segSize, corruptFile int) {
+	cfg nbhttp.ProvisionConfig, plan []nbhttp.FetchSpec, bodies [][]byte, segSize, corruptFile int) []byte {
 	t.Helper()
 	c := tcpConnCfg
+	verdicts := make([]byte, len(plan))
 
 	if ztx, gtx := provFirst(t, mac, enc), p.First(); !bytes.Equal(ztx, gtx) {
 		t.Fatalf("First: ARP != Go Provisioner\n  z80 %x\n  go  %x", ztx, gtx)
@@ -210,8 +222,8 @@ func driveProvZ80(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, p *nbhttp
 		srvISS := uint32(0x90000000) + uint32(fileIdx)*0x1000
 
 		// prov_start pinned this file's REAL manifest hash; override it to the
-		// served body's hash so the verdict tracks the bytes (Brick 5 already
-		// proved the pin compare; the pin copy itself is Brick 4-verified).
+		// served body's hash so the verdict tracks the bytes (the store test already
+		// proved the pin compare; the pin copy itself is provstart-verified).
 		pinHash(t, mac, spec.SHA256)
 
 		body := append([]byte{}, bodies[fileIdx]...)
@@ -244,16 +256,19 @@ func driveProvZ80(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, p *nbhttp
 			srvSeq += uint32(end - off)
 		}
 
-		// Server FIN -> FIN-ACK + the file/all-done status.
+		// Server FIN -> FIN-ACK + the file/all-done status. store_end has run inside
+		// prov_onframe, so CONN_HASH_MATCH holds this file's verdict now — capture it
+		// before prov_next's prov_start resets it.
 		zst := provStep(t, mac, enc, p,
 			provSrvSegZ80(clientPort, srvSeq, srvAck, tcp.FlagFIN|tcp.FlagACK, nil),
 			fmt.Sprintf("file%d fin", fileIdx))
+		verdicts[fileIdx] = mac.Read(symAddr(t, mac, "CONN_HASH_MATCH"), 1)[0]
 
 		if fileIdx == len(plan)-1 {
 			if zst != byte(nbhttp.StatusAllDone) {
 				t.Fatalf("last file %d: PROV_STATUS = %d, want AllDone", fileIdx, zst)
 			}
-			return
+			return verdicts
 		}
 		if zst != byte(nbhttp.StatusFileDone) {
 			t.Fatalf("file %d: PROV_STATUS = %d, want FileDone", fileIdx, zst)
@@ -264,26 +279,75 @@ func driveProvZ80(t *testing.T, mac *z80h.Machine, enc *z80h.ENC28J60, p *nbhttp
 	}
 }
 
-// readZ80Store reads the per-file store double back: each file's CONN_SINK_OUT
-// slice (demarcated by PROV_STORE_OFFS), its recorded name, and its verdict.
-func readZ80Store(t *testing.T, mac *z80h.Machine, n int) (slices [][]byte, names []string, verdicts []byte) {
+// chunkFile records one file's per-record body chunks (the header-stripped windows
+// the store sink receives), in Write order.
+type chunkFile struct {
+	name   string
+	chunks []int // byte length of each Write (== one HSAVE record's body size)
+}
+
+// chunkStore is an http.Store that records each file's ordered body-chunk sizes —
+// the AUTHORITY for the per-record split, since the Go Conn+BodySink windows the
+// raw HTTP stream and skips the header exactly as the Z80 conn_accumulate +
+// body_sink_write do. Each Begin(name).Write(chunk) is one bounded HSAVE record on
+// the Z80 side, so the Go chunk sizes are what store.Saves() sizes must equal.
+type chunkStore struct {
+	files  []*chunkFile
+	byName map[string]*chunkFile
+}
+
+func newChunkStore() *chunkStore { return &chunkStore{byName: map[string]*chunkFile{}} }
+
+func (s *chunkStore) Begin(name string) tcp.Sink {
+	f := &chunkFile{name: name}
+	s.files = append(s.files, f)
+	s.byName[name] = f
+	return &chunkFileSink{f: f}
+}
+func (s *chunkStore) End(name string) {}
+
+type chunkFileSink struct{ f *chunkFile }
+
+func (w *chunkFileSink) Write(chunk []byte) { w.f.chunks = append(w.f.chunks, len(chunk)) }
+
+// assertStoreRecords asserts the Z80 store.Saves() records equal, in order, the
+// per-file bounded records the Go authority (goStore, driven by the same
+// Provisioner) chunked the stream into — same total count, and for each file the
+// per-record body SIZE (the Go chunk length) and NAME (fw_span_record_name of the
+// manifest name at the record index within that file). Proves the REAL store leaf
+// HSAVE'd exactly the right records, header stripped, without re-deriving the
+// windowing math (the Go Conn+BodySink is the boundary authority).
+func assertStoreRecords(t *testing.T, mac *z80h.Machine, store *z80h.BDOSStore, goStore *chunkStore, plan []nbhttp.FetchSpec) {
 	t.Helper()
-	if got := readWord(t, mac, "PROV_STORE_COUNT"); int(got) != n {
-		t.Fatalf("PROV_STORE_COUNT = %d, want %d", got, n)
+	type wantRec struct {
+		name string
+		size uint32
 	}
-	offsAddr := symAddr(t, mac, "PROV_STORE_OFFS")
-	off := func(i int) uint16 { return binary.LittleEndian.Uint16(mac.Read(offsAddr+uint16(i*2), 2)) }
-	sinkAddr := symAddr(t, mac, "CONN_SINK_OUT")
-	namesAddr := symAddr(t, mac, "PROV_STORE_NAMES")
-	slices = make([][]byte, n)
-	names = make([]string, n)
-	for i := 0; i < n; i++ {
-		slices[i] = mac.Read(sinkAddr+off(i), int(off(i+1)-off(i)))
-		ptr := binary.LittleEndian.Uint16(mac.Read(namesAddr+uint16(i*2), 2))
-		names[i] = readCStrAt(mac, ptr)
+	var want []wantRec
+	for i, f := range goStore.files {
+		if f.name != plan[i].Name {
+			t.Errorf("file %d Go store name %q != plan name %q", i, f.name, plan[i].Name)
+		}
+		nameBytes := manifestNameBytes(t, mac, i)
+		if string(nameBytes) != plan[i].Name {
+			t.Errorf("file %d manifest name %q != plan name %q", i, nameBytes, plan[i].Name)
+		}
+		for recIdx, n := range f.chunks {
+			want = append(want, wantRec{spanRecordName(nameBytes, recIdx), uint32(n)})
+		}
 	}
-	verdicts = mac.Read(symAddr(t, mac, "PROV_FILE_VERDICTS"), n)
-	return slices, names, verdicts
+	saves := store.Saves()
+	if len(saves) != len(want) {
+		t.Fatalf("store recorded %d HSAVE(s), want %d bounded records (Go authority chunk count)", len(saves), len(want))
+	}
+	for i, w := range want {
+		if saves[i].Name != w.name {
+			t.Errorf("record[%d] name = %q, want %q (fw_span_record_name)", i, saves[i].Name, w.name)
+		}
+		if saves[i].Size != w.size {
+			t.Errorf("record[%d] size = %d, want %d (Go authority chunk size)", i, saves[i].Size, w.size)
+		}
+	}
 }
 
 // verdictByte maps a Go FileResult.Verified bool to the Z80 verdict byte.
@@ -295,32 +359,23 @@ func verdictByte(b bool) byte {
 }
 
 // TestProvisionMultiFileZ80: a three-file plan fetches each file end to end, every
-// wire frame + status matching the Go Provisioner, each streamed body stored under
-// its name in fetch order (header stripped), and each pinned hash verifying.
+// wire frame + status matching the Go Provisioner, each streamed body HSAVE'd as
+// bounded records in fetch order (header stripped), and each pinned hash verifying.
 func TestProvisionMultiFileZ80(t *testing.T) {
 	const n = 3
-	mac, enc, cfg := setupProvLoop(t, n)
+	mac, enc, store, cfg := setupProvLoop(t, n)
 	plan, bodies := buildZ80Plan(t, mac, n)
-	store := nbhttp.NewMemStore()
-	p := nbhttp.NewProvisioner(cfg, plan, store)
+	goStore := newChunkStore()
+	p := nbhttp.NewProvisioner(cfg, plan, goStore)
 
-	driveProvZ80(t, mac, enc, p, cfg, plan, bodies, 11, -1) // small segs straddle windows
+	verdicts := driveProvZ80(t, mac, enc, p, cfg, plan, bodies, 11, -1) // small segs straddle windows
 
-	slices, names, verdicts := readZ80Store(t, mac, n)
+	// The real store leaf HSAVE'd each file's body as bounded records, in order,
+	// matching the Go authority's per-record chunk split (name + size).
+	assertStoreRecords(t, mac, store, goStore, plan)
+
 	res := p.Results()
 	for i := 0; i < n; i++ {
-		if names[i] != store.Order[i] {
-			t.Errorf("name[%d] = %q, want %q (Go store order)", i, names[i], store.Order[i])
-		}
-		if !bytes.Equal(slices[i], store.Files[names[i]]) {
-			t.Errorf("file %d stored bytes != Go MemStore[%q]\n  z80 %x\n  go  %x", i, names[i], slices[i], store.Files[names[i]])
-		}
-		if !bytes.Equal(slices[i], bodies[i]) {
-			t.Errorf("file %d stored bytes != served body", i)
-		}
-		if bytes.Contains(slices[i], []byte("HTTP/1.0")) {
-			t.Errorf("file %d still contains the HTTP header", i)
-		}
 		if verdicts[i] != verdictByte(res[i].Verified) {
 			t.Errorf("verdict[%d] = %d, want %d (Go Verified=%v)", i, verdicts[i], verdictByte(res[i].Verified), res[i].Verified)
 		}
@@ -330,19 +385,25 @@ func TestProvisionMultiFileZ80(t *testing.T) {
 	}
 }
 
-// TestProvisionHashMismatchZ80: a corrupted body still streams and stores, but its
-// verdict is 0 while its neighbours stay 1 — verdicts [1,0,1], matching the Go
-// Provisioner. The integrity check that makes the untrusted-proxy fetch safe.
+// TestProvisionHashMismatchZ80: a corrupted body still streams and HSAVEs its
+// records, but its verdict is 0 while its neighbours stay 1 — verdicts [1,0,1],
+// matching the Go Provisioner. The integrity check that makes the untrusted-proxy
+// fetch safe. (Corrupting one body byte does not change its length, so the record
+// split is unchanged; the verdict 0 is the cryptographic proof the bytes differ.)
 func TestProvisionHashMismatchZ80(t *testing.T) {
 	const n = 3
-	mac, enc, cfg := setupProvLoop(t, n)
+	mac, enc, store, cfg := setupProvLoop(t, n)
 	plan, bodies := buildZ80Plan(t, mac, n)
-	store := nbhttp.NewMemStore()
-	p := nbhttp.NewProvisioner(cfg, plan, store)
+	goStore := newChunkStore()
+	p := nbhttp.NewProvisioner(cfg, plan, goStore)
 
-	driveProvZ80(t, mac, enc, p, cfg, plan, bodies, 7, 1) // corrupt file index 1
+	verdicts := driveProvZ80(t, mac, enc, p, cfg, plan, bodies, 7, 1) // corrupt file index 1
 
-	slices, _, verdicts := readZ80Store(t, mac, n)
+	// The corrupted bytes still HSAVE'd (the verdict rejects them, not the write —
+	// a caller acts on the verdict). The record split is length-preserving, so the
+	// Go authority's chunk sizes still match.
+	assertStoreRecords(t, mac, store, goStore, plan)
+
 	res := p.Results()
 	want := []byte{1, 0, 1}
 	for i := 0; i < n; i++ {
@@ -353,32 +414,24 @@ func TestProvisionHashMismatchZ80(t *testing.T) {
 			t.Errorf("verdict[%d] = %d != Go Verified=%v", i, verdicts[i], res[i].Verified)
 		}
 	}
-	// The corrupted bytes still landed in the store (the verdict rejects them, not
-	// the write — a caller acts on the verdict).
-	corrupted := append([]byte{}, bodies[1]...)
-	corrupted[0] ^= 0xFF
-	if !bytes.Equal(slices[1], corrupted) {
-		t.Errorf("file 1 stored bytes != the corrupted served body")
-	}
 }
 
 // TestProvisionSingleFileZ80: the degenerate one-file plan reports AllDone directly
-// (no intervening FileDone / Next), matching the Go Provisioner.
+// (no intervening FileDone / Next), matching the Go Provisioner, and HSAVEs its
+// body as bounded records that verify.
 func TestProvisionSingleFileZ80(t *testing.T) {
 	const n = 1
-	mac, enc, cfg := setupProvLoop(t, n)
+	mac, enc, store, cfg := setupProvLoop(t, n)
 	plan, bodies := buildZ80Plan(t, mac, n)
-	store := nbhttp.NewMemStore()
-	p := nbhttp.NewProvisioner(cfg, plan, store)
+	goStore := newChunkStore()
+	p := nbhttp.NewProvisioner(cfg, plan, goStore)
 
-	driveProvZ80(t, mac, enc, p, cfg, plan, bodies, 5, -1)
+	verdicts := driveProvZ80(t, mac, enc, p, cfg, plan, bodies, 5, -1)
 
-	slices, _, verdicts := readZ80Store(t, mac, n)
+	assertStoreRecords(t, mac, store, goStore, plan)
+
 	if verdicts[0] != 1 {
 		t.Errorf("single-file verdict = %d, want 1", verdicts[0])
-	}
-	if !bytes.Equal(slices[0], bodies[0]) {
-		t.Errorf("single-file stored bytes != served body")
 	}
 	if len(p.Results()) != 1 || !p.Results()[0].Verified {
 		t.Fatalf("Go single-file plan did not verify: %+v", p.Results())
