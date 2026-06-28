@@ -5177,3 +5177,19 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i292
+  title: EXECUTE the Trinity SD-write saga cleanup (section E) — purge ALL misinformation + delete the reimplementation
+  description: |
+    The MISINFORMATION PURGE (section E of docs/plans/trinity-sd-write-saga-cleanup.md; Pete decisions 1-4,6). Set the record straight so the regressed claims stop resurfacing: purge the false claims (flaky-hooks, +232-required-to-boot, crash-in-first-read, hk.a-from-A', AttachBDOS-acceptable) from docs (ROADMAP Current State + trinity-sd-z80-interface.md §8), registry item/question descriptions, and source comments (netboot_serve/client/bdos_seam/raw_record_sink); DELETE q63 (lift the genuinely-open side-major question into a clean item first) and q62 (Pete answered: B-DOS-direct); re-point i194/i284 off q62/q63; reframe i286/i288/i270 off the false premise. Keep the genuinely-open questions (HRECORD rst8 crash, side-major, record-3 layout). COMPLEMENTARY to i293 (the fix) — both happen this session; not in conflict. Old reimplementation recoverable from git history.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+
+- id: i293
+  title: "B-DOS-direct pivot (the actual cj.mgt fix): KILL the per-block ENC ereset (zero re-arm) + remove the own-CMD24 reimplementation"
+  description: |
+    The FIX (do-or-die, Pete 2026-06-30). Make cj.mgt write to a free Trinity record + boot, via a SMALL ~200-instruction routine: trinload-proven network receive + a couple of B-DOS write hook calls (HRECORD select A=0/HL=rec#, then HWSAD A=2 per 512B sector), with NO per-block ENC ereset (zero re-arm; the ENC RX engine is autonomous; D2 settled by Pete), NO own-CMD24 reimplementation, NO per-sector init-ladder. METHOD: establish the facts (trinload net code, the B-DOS hook calling convention, the record->LBA layout) then ONE-SHOT the implementation. EMULATION-FIRST: verify end-to-end in emulation and FIX the emulator (sdcard.go shared-microcontroller/drain-rule fidelity, derived from the Trinity docs + Colin's B-DOS per rule 8) wherever it cannot verify; then hardware-confirm via TAPO. Removing the heavy machinery (the 'monster' Pete flagged) is inherent. Old reimplementation (#752/#713) recoverable from git history IFF this fails (decision 4). ACCEPTANCE: ~trinload-sized, no heavy machinery, emulation-verified. Resolves i290=DELETE.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
