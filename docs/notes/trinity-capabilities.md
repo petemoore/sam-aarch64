@@ -201,6 +201,20 @@ All estimates below are **derived** from T-state counting of `encdrv.asm` at the
 
 **These figures are Z80-side-only.** SD card command-response latency (CMD17 → data token: typically 1–10 ms for a real card) is not included and would dominate at low transfer counts.
 
+### Measured on hardware (i323 attribution, 2026-07-02)
+
+Differential measurement of the `sd_push` per-sector loop on the real SAM + Trinity + 64 GB SDHC (Pi → SAM over the streamed stage-2 driver; a no-SD-write build isolating the network leg, plus an in-binary meter build counting PIC busy-wait spins and card-busy polls, reported in the finalize reply):
+
+| leg | measured | notes |
+|---|---|---|
+| **Full path** | **74.2 ms/sector = 6.9 KB/s** | steady (69.9–75.0 across 100-sector chunks); matches the i319a 112 s / 1600-sector push |
+| Network leg (RX 557 B frame + parse + 2×512 B LDIR + ack TX) | 25.6 ms/sector | **window-independent** (window 1 ≡ window 4) → host pacing + ack turnaround contribute ~0 |
+| SD-write leg (CMD24, manual-mode `sdc_out` per byte) | 48.5 ms/sector | Z80 bit-bang ≈ 195 T/byte × 522 B ≈ 17.4 ms at nominal 6 MHz; PIC busy-wait measured at 638 spins/sector ≈ 14–21 ms; **card busy = 0** (the card was never once observed busy across >1000 writes) |
+
+The ~1.55× gap between the nominal-6 MHz static account (31 ms) and the measured 48.5 ms is consistent with SAM ASIC memory contention on RAM-resident code.
+
+**Conclusion: the push is bit-bang-bound** — the Z80 per-byte loops plus the PIC relay — not card-bound and not network/host-bound. SAM-side headroom exists: the SD data phase uses the manual `&31` per-byte `sdc_out` sandwich (~195 T/byte) where B-DOS 1.5t's bulk write runs `&3F` auto-null + `wait`+`OUTI` (~64 T/byte), and the 512-byte payload is double-copied (zero-fill + packet→buffer LDIR) before the write. Fixing both is estimated to bring ~74 → ~50 ms/sector (~10 KB/s); beyond that the PIC relay itself is the floor (Trinity firmware property, not fixable SAM-side).
+
 ---
 
 ## 6. Phase-3 TFTP: What We Can Rely On
