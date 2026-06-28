@@ -208,20 +208,29 @@ func TestServeBootComputesBDRecordsFromCSD(t *testing.T) {
 
 // TestServerBootFromEEPROM runs the REAL bootable netboot_main wrapper end-to-end:
 // it reads the SAM's MAC+IP from the emulated EEPROM, fills the full CONFIG block
-// (MAC, IP, DHCP pool, lease times, TID), inits the ENC28J60, then serves the
-// integrated netboot session. The test injects a single ARP request and asserts
-// the reply byte-matches smoke.NewResponder — the reactive minimum that proves the
-// boot wrapper ran to completion through the EEPROM read and drv_init, the only
-// code paths unique to the boot wrapper (the rest is shared with the HOSTTEST build,
-// already proven in TestServerFullSession).
+// (MAC, IP, DHCP pool, lease times, TID), inits the ENC28J60, runs the B-DOS
+// store walk, then serves the integrated netboot session. The test injects a
+// single ARP request and asserts the reply byte-matches smoke.NewResponder — the
+// reactive minimum that proves the boot wrapper ran to completion through the
+// EEPROM read, drv_init, and the walk (the rest is shared with the harness-driven
+// dispatch, already proven in TestServerFullSession).
+//
+// Flat Load (not LoadBoot): the i95b-b1 store walk pushes the image's tail past
+// &C000 into section D — RAM at boot — and LoadBoot's drop-the-tail-above-&C000
+// model would discard the walk code (the same reason TestServeBootFromEEPROM
+// uses flat Load). The attached BDOSStore answers the walk's RST 8 hooks; with
+// no card attached every directory sector reads all-zero, so the walk finds no
+// files and the store stays empty — the full walk-fills-the-store path runs
+// under the captured real ROM + B-DOS 1.5t in netboot_server_faithful_test.go.
 func TestServerBootFromEEPROM(t *testing.T) {
-	mac, err := z80h.LoadBoot(serverBootBin, serverBootMap, romBaseBoot)
+	mac, err := z80h.Load(serverBootBin, serverBootMap)
 	if err != nil {
 		t.Fatalf("server boot binary not built (%v); run `make netboot-server`", err)
 	}
 	enc := z80h.NewENC28J60()
 	enc.ProgramTrinityNetwork(mask.ServerMAC, mask.ServerIP)
 	mac.AttachIO(enc)
+	mac.AttachBDOS(z80h.NewBDOSStore())
 
 	arpReq := frame.BuildARPRequest(frame.MAC(mask.ClientMAC), frame.IPv4(mask.ClientIP), frame.IPv4(mask.ServerIP))
 	enc.InjectRX(arpReq)

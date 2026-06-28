@@ -874,6 +874,13 @@ func (mac *Machine) Continue(in Entry) (CallResult, error) {
 // The injected code must be staged by the caller and must end in a RET (it returns
 // to the planted HALT trap). SP is the live editor stack; the trap address is
 // pushed onto it, so the code sees a normal call frame.
+//
+// ContinueFrom is a CALL primitive, not a resume: to resume a run that stopped
+// at StepCap/StopPC, use Continue. Chaining ContinueFrom(prev.PC) LOOKS like a
+// resume but pushes the trap word onto the live stack each time — if the
+// previous run stopped mid-interrupt-handler (or mid any routine about to pop),
+// the inserted word shifts every subsequent pop/RET one slot and the unwind
+// lands on the halt trap (the netboot_server_faithful_test first-draft wedge).
 func (mac *Machine) ContinueFrom(addr uint16, in Entry) (CallResult, error) {
 	if mac.cont == nil {
 		return CallResult{}, fmt.Errorf("z80: ContinueFrom with no prior run to resume")

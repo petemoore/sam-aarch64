@@ -770,14 +770,21 @@ secd-loadability: $(BUILD)/secd_probe.bin $(BUILD)/build-disk
 # DISCOVER->OFFER->REQUEST->ACK->ARP->RRQ->OACK->ACK->DATA session on the virtual
 # wire matches the Go server.Server.OnFrame authority byte-for-byte);
 # netboot_serve_boot_test.go drives the bootable netboot_main end-to-end against
-# the modelled EEPROM. The same binary boots real Trinity (the disk built by
-# netboot-server-disk).
+# the modelled EEPROM; netboot_server_faithful_test.go boots the record vessel on
+# the captured real ROM + B-DOS 1.5t and replays the golden Pi session. The same
+# binary boots real Trinity (the record built by netboot-server-record, or the
+# floppy disk built by netboot-server-disk).
+# The i95b-b1 B-DOS store walk (bdos_seam.asm + the walk code) pushes the image's
+# tail past &C000 into section D — RAM at boot (the section-D loadability probe /
+# the i332 CODE-auto exec context both prove it), so its boot budget is the full
+# 32768-byte &8000-&FFFF window, not the 16384-byte section-C limit (the same
+# budget as netboot_serve_boot).
 $(BUILD)/netboot_server.bin $(BUILD)/netboot_server.map: src/netboot/netboot_server.asm $(asm_deps/src/netboot/netboot_server.asm)
 	@mkdir -p $(BUILD)
 	pyz80 --obj=$(BUILD)/netboot_server.bin \
 	    --mapfile=$(BUILD)/netboot_server.map \
 	    src/netboot/netboot_server.asm
-	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_server.bin 16384 netboot_server.bin
+	@tools/netboot-boot-fit-check.sh $(BUILD)/netboot_server.bin 32768 netboot_server.bin
 
 netboot-server: $(BUILD)/netboot_server.bin $(BUILD)/netboot_server.map
 
@@ -787,6 +794,25 @@ netboot-server: $(BUILD)/netboot_server.bin $(BUILD)/netboot_server.map
 netboot-server-disk: $(BUILD)/netboot_server.bin $(BUILD)/build-disk
 	$(BUILD)/build-disk -netboot $(BUILD)/netboot_server.bin -netboot-name netboot \
 	    $(BUILD)/netboot_server.mgt
+
+# netboot-server-record (i95b-b1) — the boot_record-bootable RECORD vessel for
+# the integrated netboot server: the server binary as ONE auto-executing CODE
+# file (exec = load &8000; the i332 pattern — a BASIC-auto record can never
+# boot) plus the Pi-boot stand-in files in the same record's directory, which
+# the server's boot-time B-DOS store walk (nb_fill_store) indexes and serves by
+# name. Stand-in names are capped at the B-DOS 10-char directory limit
+# ("config.txt" fits; the real Pi's "cmdline.txt" etc. need a name-mapping
+# scheme — i95b-b2 territory). Emulation gate: netboot-oracle
+# TestNetbootServerFaithful boots this exact artifact on the captured real ROM +
+# B-DOS 1.5t and replays the golden Pi session against the Go authority.
+NETBOOT_STANDINS := tools/netboot-oracle/testdata/pi-standins
+.PHONY: netboot-server-record
+netboot-server-record: $(BUILD)/netboot_server.bin $(BUILD)/build-disk
+	$(BUILD)/build-disk -netboot $(BUILD)/netboot_server.bin -netboot-name AUTOnbsrv \
+	    -netboot-code-auto \
+	    -netboot-extra config.txt=$(NETBOOT_STANDINS)/config.txt \
+	    -netboot-extra start4.elf=$(NETBOOT_STANDINS)/start4.elf \
+	    $(BUILD)/netboot_server_record.mgt
 
 # netboot-serve (i96) — the serve-files TFTP demo server: ARP + TFTP only (no DHCP,
 # no Pi PXE blob), serving a few files baked into the binary to a plain TFTP/curl
@@ -1318,7 +1344,7 @@ netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-bu
 # SKIP_PRIVATE_TESTS-gated, and CI (no private data) can't build it.
 NETBOOT_PRIVATE_ARTIFACTS := $(if $(wildcard src/netboot/bootloader_chunk1_data.asm),netboot-eeprom-flash-chunk1)
 .PHONY: netboot-z80-artifacts
-netboot-z80-artifacts: netboot-z80-routines editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80 netboot-serve-record disk-record $(NETBOOT_PRIVATE_ARTIFACTS)
+netboot-z80-artifacts: netboot-z80-routines editmodel-z80 editmodel-paged-z80 pagepool-z80 spill-z80 viewport-z80 asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80 netboot-serve-record netboot-server-record disk-record $(NETBOOT_PRIVATE_ARTIFACTS)
 
 ci-netboot-z80: netboot-z80-artifacts
 	cd tools/sampage && go test ./...
