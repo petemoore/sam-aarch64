@@ -80,6 +80,7 @@ var compactKnownOversize = map[string]string{
 	"inst_logical_noncanon.s": "sidecar ~1343 B exceeds the 768-byte COMPACT_SIDECAR cap (comment-heavy paged fixture)",
 	"inst_long_emit.s":        "sidecar ~1110 B exceeds the 768-byte COMPACT_SIDECAR cap (comment-heavy paged fixture)",
 	"inst_mov_setconst.s":     "sidecar ~1599 B exceeds the 768-byte COMPACT_SIDECAR cap (comment-heavy paged fixture)",
+	"inst_out_over32k.s":      "sidecar ~1271 B exceeds the 768-byte COMPACT_SIDECAR cap (the i24 >32 KB-output vehicle; exercises output volume, not compact IR)",
 	"inst_quad_addr.s":        "sidecar ~1380 B exceeds the 768-byte COMPACT_SIDECAR cap (comment-heavy paged fixture)",
 }
 
