@@ -28,11 +28,12 @@ const (
 	sectorProbeBinPath = "../../../build/sd_sector_probe.bin"
 	sectorProbeMapPath = "../../../build/sd_sector_probe.map"
 
-	// The probe's absolute LBAs (csd_probe.asm SP_LBA_REC2/REC13/REC13ALT + list).
-	spLBAList     = 1
-	spLBARec2     = 2438 + 1600*1 - 4  // 4034  (record 2 = Comet v18)
-	spLBARec13    = 2438 + 1600*12 - 4 // 21634 (record 13 = our write)
-	spLBARec13Alt = 2438 + 1600*13 - 4 // 23234 (record 13 = alt n*1600+base formula)
+	// The probe's absolute LBAs (csd_probe.asm SP_LBA_REC3/REC12/REC13 + list).
+	spLBAList  = 1
+	spLBARec3  = 2438 + 1600*2  // 5638  (record 3,  works on HW)
+	spLBARec12 = 2438 + 1600*11 // 20038 (record 12, works on HW)
+	spLBARec13 = 2438 + 1600*12 // 21638 (record 13 = our cj write)
+	spScanSecs = 24
 )
 
 func loadSectorProbe(t *testing.T) *z80h.Machine {
@@ -102,9 +103,9 @@ func TestSectorProbeReadsSeededLBAs(t *testing.T) {
 		count int
 	}{
 		{"list.bin", spLBAList, 1},
-		{"r2.bin", spLBARec2, 8},
-		{"r13.bin", spLBARec13, 8},
-		{"rax.bin", spLBARec13Alt, 8},
+		{"r3.bin", spLBARec3, spScanSecs},
+		{"r12.bin", spLBARec12, spScanSecs},
+		{"r13.bin", spLBARec13, spScanSecs},
 	}
 
 	// Seed every targeted sector with its LBA-encoding pattern.

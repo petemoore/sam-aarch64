@@ -458,9 +458,14 @@ csd_timeout_msg: defm   "SD BUSY TIMEOUT!"      ; exactly 16 bytes (CSD_BYTES)
 ; The LBAs are absolute and assume csd_base = 2438 (confirmed by the host CSD decode).
 ; record n body sector 0 (our formula) = 2438 + 1600*(n-1); the window starts 4 before,
 ; so sector 0 is at window index 4. There is NO CMD24 anywhere — it cannot write.
-SP_LBA_REC13:    equ 2438 + 1600*12 - 4         ; 21634: record 13 body window (our formula)
-SP_LBA_REC2:     equ 2438 + 1600*1  - 4         ; 4034:  record 2 "Comet v18" body window
-SP_LBA_REC13ALT: equ 2438 + 1600*13 - 4         ; 23234: record 13 body window (alt n*1600+base)
+; Records 3 & 12 are EMPTY at csd_base(2438)+1600*(n-1) yet RECORD-select OK -> our base
+; is wrong. Test the base=390 hypothesis (B-DOS using the 16-bit-WRAPPED BD_RECORDS=12423
+; for the list size: list=ceil(12423/32)=389, base=390) AND read the boot sector (LBA 0),
+; which should hold the card's real B-DOS geometry (base / last.record).
+SP_LBA_BOOT:     equ 0                          ; boot sector + first list sectors (the superblock/geometry)
+SP_LBA_REC3:     equ 390 + 1600*2               ; 3590:  record 3 body base IF base=390
+SP_LBA_REC12:    equ 390 + 1600*11              ; 17990: record 12 body base IF base=390
+SP_SCAN_SECS:    equ 24                         ; rel sectors 0..23
 
 ; sd_sector_dispatch — match the RRQ filename to a sector-dump file and read it.
 ; Out: CY set if a name matched and a read ran (caller then re-arms the ENC); CY
@@ -469,37 +474,37 @@ sd_sector_dispatch:
                 ld      hl, (PARSE_FILENAME)
                 ld      de, rgn_list_prefix
                 call    dr_streq3              ; "lis" (list.bin)?
-                jr      nc, ssd_try_r2
+                jr      nc, ssd_try_r3
                 ld      hl, 1
                 ld      bc, 0
                 ld      a, 1
                 jr      ssd_go
-ssd_try_r2:
+ssd_try_r3:
                 ld      hl, (PARSE_FILENAME)
-                ld      de, rgn_r2_prefix
-                call    dr_streq3              ; "r2." (r2.bin = Comet v18)?
-                jr      nc, ssd_try_r13
-                ld      hl, SP_LBA_REC2 & &FFFF
-                ld      bc, SP_LBA_REC2 >> 16
-                ld      a, 8
+                ld      de, rgn_r3_prefix
+                call    dr_streq3              ; "r3." (r3.bin = record 3, works)?
+                jr      nc, ssd_try_r12
+                ld      hl, SP_LBA_REC3 & &FFFF
+                ld      bc, SP_LBA_REC3 >> 16
+                ld      a, SP_SCAN_SECS
                 jr      ssd_go
-ssd_try_r13:
+ssd_try_r12:
                 ld      hl, (PARSE_FILENAME)
-                ld      de, rgn_r13_prefix
-                call    dr_streq3              ; "r13" (r13.bin = our write)?
-                jr      nc, ssd_try_rax
-                ld      hl, SP_LBA_REC13 & &FFFF
-                ld      bc, SP_LBA_REC13 >> 16
-                ld      a, 8
+                ld      de, rgn_r12_prefix
+                call    dr_streq3              ; "r12" (r12.bin = record 12, works)?
+                jr      nc, ssd_try_boot
+                ld      hl, SP_LBA_REC12 & &FFFF
+                ld      bc, SP_LBA_REC12 >> 16
+                ld      a, SP_SCAN_SECS
                 jr      ssd_go
-ssd_try_rax:
+ssd_try_boot:
                 ld      hl, (PARSE_FILENAME)
-                ld      de, rgn_rax_prefix
-                call    dr_streq3              ; "rax" (rax.bin = record 13 alt formula)?
+                ld      de, rgn_boot_prefix
+                call    dr_streq3              ; "boo" (boot.bin = LBA 0, the superblock/geometry)?
                 jr      nc, ssd_no_match
-                ld      hl, SP_LBA_REC13ALT & &FFFF
-                ld      bc, SP_LBA_REC13ALT >> 16
-                ld      a, 8
+                ld      hl, SP_LBA_BOOT & &FFFF
+                ld      bc, SP_LBA_BOOT >> 16
+                ld      a, SP_SCAN_SECS
 ssd_go:
                 ; HL = LBA low word, BC = LBA high word, A = sector count.
                 ld      (sec_lba), hl
@@ -577,9 +582,9 @@ srs_lba_ok:
                 jp      csd_deselect           ; shared deselect tail + ei
 
 rgn_list_prefix: defm "lis"
-rgn_r2_prefix:   defm "r2."
-rgn_r13_prefix:  defm "r13"
-rgn_rax_prefix:  defm "rax"
+rgn_r3_prefix:   defm "r3."
+rgn_r12_prefix:  defm "r12"
+rgn_boot_prefix: defm "boo"
 sec_lba:         defs 4
 sec_count:       defs 1
        endif
@@ -732,17 +737,17 @@ probe_store_tmpl:
                   defb 0
                   defw 512
                   defw 0
-                  defm "r2.bin"
+                  defm "r3.bin"
                   defb 0
-                  defw 4096                     ; 8 sectors
+                  defw 12288                    ; 24 sectors
                   defw 0
-                  defm "r13.bin"
+                  defm "r12.bin"
                   defb 0
-                  defw 4096                     ; 8 sectors
+                  defw 12288                    ; 24 sectors
                   defw 0
-                  defm "rax.bin"
+                  defm "boot.bin"
                   defb 0
-                  defw 4096                     ; 8 sectors
+                  defw 12288                    ; 24 sectors
                   defw 0
                   defm "quit.bin"               ; clean exit back to trinload (no power-cycle)
                   defb 0
@@ -764,20 +769,20 @@ probe_src_tmpl:
                   defw STAGE
                   defw 512
                   defw 0
-                  defm "r2.bin"
+                  defm "r3.bin"
                   defb 0
                   defw STAGE
-                  defw 4096
+                  defw 12288
                   defw 0
-                  defm "r13.bin"
+                  defm "r12.bin"
                   defb 0
                   defw STAGE
-                  defw 4096
+                  defw 12288
                   defw 0
-                  defm "rax.bin"
+                  defm "boot.bin"
                   defb 0
                   defw STAGE
-                  defw 4096
+                  defw 12288
                   defw 0
                   defm "quit.bin"
                   defb 0

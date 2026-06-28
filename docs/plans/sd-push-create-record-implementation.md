@@ -237,6 +237,50 @@ and on that run "exited without returning cleanly to trinload" (i296), so when `
 in the SAME session B-DOS's device/seek/SD state was disturbed (the "0:1" hints drive 0 = floppy) →
 get.label read the wrong place. A CLEAN B-DOS boot (which re-reads the card) validates the record.
 
+## CORRECTION (2026-07-01, Pete at keyboard): "stale" was WRONG — RECORD 13 fails on a clean restart; the bug is a record→LBA DIVERGENCE
+Pete re-tested on the real SAM: **RECORD 13 still "81 Invalid record, 0:1" after a restart** (not stale);
+**RECORD 3 and RECORD 12 WORK**; the catalogue correctly shows entry 13 = "cj". So our earlier
+"emulation validates → stale artifact" conclusion was WRONG (the emulation used a SMALL card, base=152,
+which is not faithful to the 64 GB card). Established facts now:
+- **sd_push is NOT hardcoded** — it calls `csd_set_bd_records` (reads the card CSD via CMD9) and computes
+  `csd_base` at runtime (`csd_base: defs 2`, sd_csd.asm:905); `bd_record_write_hw` uses `(csd_base)+1600*(n-1)+i`.
+  Only the *throwaway diagnostic probe* hardcoded 21638 (= 2438+1600*12), a host shortcut.
+- **Real B-DOS 1.5t computes base=2438** from Pete's exact 64 GB CSD (TestRealCardBaseBDOSvsSdPush:
+  isolated &A736 decode + &A45A records-math → base 2438, BD_RECORDS 12423 [16-bit wrap of true 77959]).
+  So sd_push's base == B-DOS's *formula* base == 2438. **The math matches the formula.**
+- **BUT the real card's records are NOT at base=2438 positions.** The read-only probe (csd_probe + SD_SECTOR_PROBE,
+  CMD17-only) read records 3 & 12 at 5638 & 20038 (= 2438+1600*(n-1)) as **completely zero** (24 sectors each),
+  yet they RECORD-select fine — so **Pete's disks are stored at a base ≠ 2438** (Pete: "the disk images are
+  located somewhere else … you are looking at the wrong place"). The probe DOES read correctly (it found cj at
+  21638 and Comet's content at 4038 = 2438+1600*1 in the same runs; catalogue at LBA 1 = the real record list
+  L1/Lemmings/Zubdemo…), so this is not a probe-can't-read issue — it's the LBA we compute.
+- **HOT LEAD (unconfirmed): B-DOS's REAL seek base may be ~2050, not 2438.** TestRecordSeekLBAReal64GB boots
+  real B-DOS 1.5t with the 64 GB CSD and traps the CMD17 read LBA: **RECORD 1 → CMD17 LBA 2050** (NOT 2438).
+  If base=2050: rec3→5250, rec12→19650 (where Pete's disks are), rec13→21250 (empty — we wrote 21638) → invalid.
+  Δ(2438−2050)=388. CAVEAT: that rig boot left base(&80C2)=0 / last.record(&80C4)=0 (the SD geometry did NOT
+  initialise in the rig — so RECORD 3/12/13 issued NO CMD17, failing the count check on last.record=0). So 2050
+  is a strong clue from a half-initialised state, NOT yet a confirmed base. The divergence between B-DOS's
+  *formula* base (2438) and its *actual* seek (2050) is the thing to nail.
+
+**TWO live hypotheses (Pete, do not guess — isolate B-DOS):**
+  (A) B-DOS's actual record→LBA mapping differs from `(n-1)*1600 + formula_base` — a different base (stored vs
+      computed?), an offset, or a stride. **Isolate the B-DOS routine that DEFINES record storage and mirror it
+      EXACTLY** (sd_push must compute offsets identically to B-DOS, ideally by the same maths).
+  (B) The probe's SD read INTERFACE returns different sectors than intended (Pete: "maybe the IN/OUT ports is
+      different … maybe there is an offset there") — verify the probe's CMD17 addressing/byte-lag matches B-DOS's
+      `bd_list_read_hw` exactly.
+
+**NON-GUESSING CONTINUATION (next session / fresh context):**
+  1. Fix the 64 GB-CSD faithful boot so base/last.record actually compute (currently 0 — the SD init/records-math
+     didn't run/store in the rig; debug vs the small-card boot which gets base=152). Then trap RECORD 3 & 12's
+     CMD17 LBA — that is B-DOS DEFINING where record bodies live. Compare to 2438+1600*(n-1) AND to the 2050 lead.
+  2. If B-DOS reads rec3 at e.g. 5250 (base 2050), confirm base=2050 and find WHY the formula (2438) is wrong for
+     this card (stored geometry? a different last.record at format? the 16-bit BD_RECORDS wrap feeding the base?).
+  3. Make sd_push compute the body LBA by the SAME maths/routine B-DOS uses (mirror or call it), then re-push cj.
+  4. ALSO settle hypothesis (B): compare the probe's CMD17 read path byte-for-byte to bd_list_read_hw.
+  New diagnostics committed: `sd_real_card_base_test.go`, `sd_record_seek_trap_test.go`, `sd_sector_probe_test.go`
+  (+ the read-only `sd_sector_probe` build target). The probe currently reads list/r3/r12/boot windows + quit.bin.
+
 **Consequences for the goals:**
 - **i299 (this item) is DIAGNOSED-RESOLVED:** the write is correct; "invalid" is downstream of i296
   (sd_push clean exit), not a write defect. Remaining = a clean-boot hardware confirm of `RECORD 13`
