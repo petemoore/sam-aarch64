@@ -1226,7 +1226,7 @@
   description: |
     SAM IP stack fetches Pi firmware (several MB) from cdn.githubraw.com over HTTP (q11 resolved: on-SAM HTTP via uIP, host-tool-free; q12 resolved: Model A only). Full host-verifiable HTTP-fetch path complete + host-verified across Bricks 1–6 (#245/#247/#254/#256/#257/#259 netboot_http.asm). Remaining: hardware-gated (EEPROM read + section-C paging + HSAVE RST-8 dispatch on real Trinity; emulation-verified != hardware-verified, CLAUDE.md §5). i82 TFTP client bridges provisioning meanwhile; HTTPS stretch is i88.
   status: OPEN
-  depends_on: [i133]
+  depends_on: [i133, i93b]
   kind: leaf
   owner: agent
   refs: [docs/specs/phase3-delivery-design.md, docs/notes/trinity-capabilities.md, docs/notes/bdos-version-landscape.md, src/netboot/netboot_http.asm, docs/notes/netboot-trinity-testing.md, i61, i66, i84, i88]
@@ -1597,7 +1597,7 @@
   description: |
     Wire tls_reasm_feed into tcp_conn CONN_SINK_FILTER; finalise paging layout; build a bootable disk; exercise over real RST 8 on Trinity hardware. Prerequisite: TC_RX must grow from 1056 to 16645 B (TLS max) before a real Certificate record fits. Hardware-gated (CLAUDE.md §5).
   status: OPEN
-  depends_on: [i133]
+  depends_on: [i133, i93b]
   kind: leaf
   owner: agent
   parent: i88
@@ -1692,7 +1692,7 @@
   title: B-DOS RST 8 hook dispatch on real Trinity — hardware-gated (HGTHD/HLOAD/HSAVE/HRECORD)
   description: ""
   status: OPEN
-  depends_on: [i133]
+  depends_on: [i133, i295]
   kind: leaf
   owner: agent
   parent: i93
@@ -2443,7 +2443,7 @@
   description: |
     Confirm the OACK path works on real Trinity hardware: netboot client connects to a standards-compliant TFTP server (e.g. macOS tftpd), receives OACK, ACKs block 0, and receives the file. Gated on Trinity hardware access + a standards-compliant server in the test environment.
   status: OPEN
-  depends_on: [i272]
+  depends_on: [i272, i310]
   kind: leaf
   owner: agent
   parent: i118
@@ -2913,7 +2913,7 @@
   title: Self-service autonomous hardware testing via trinload
   description: |
     With trinload on SAM (recs 3/128) + control returning between programs (i132), run unattended experiments: push a program via trinload3.py, it runs+RETs, push the next; feedback via tcpdump + a net result channel. PRIORITIZED to top (Pete 2026-06-20): the crux is whether we can BOOTSTRAP our own code from EEPROM / Trinity storage WITHOUT a human typing BOOT or picking a record — if a power-cycled SAM auto-starts a service that boots a pushed image, hardware testing goes fully autonomous (no Pete). The sooner we build it, the sooner we know. Auto-boot = i135; i172 audits dependents.
-  status: OPEN
+  status: DONE
   depends_on: [i135, i121a, i122, i266, i271, i272]
   kind: leaf
   owner: agent
@@ -3266,7 +3266,7 @@
   description: |
     bdos_read_sector (HRSAD, i119) and bdos_write_sector (HWSAD, i114c) both leave A = the sector value at the rst 8, but the B-DOS hook code reads A as the drive number (bdos15a.src.txt rwsad/xsad: LD A,(hk.a)). After HRECORD-select a Trinity record presents as drive 2. The koron-go harness models the selected record via HRECORD and ignores A, so it cannot catch a wrong-drive bug. Confirm on real Trinity whether these hooks need A explicitly set (e.g. A=2 or A=record) or whether HRECORD makes the record the active context regardless of A; fix both routines symmetrically if needed.
   status: OPEN
-  depends_on: [i272]
+  depends_on: [i272, i295]
   kind: leaf
   owner: agent
   refs: [src/netboot/bdos_seam.asm, reference/bdos/bdos15a.src.txt, i119, i114c]
@@ -3546,7 +3546,7 @@
   description: |
     Hardware-gated completion of i182 (unverifiable in emulation). Boot the i182a fetch-and-boot disk on real SAM+Trinity, serve a stamped 819200-byte .mgt, confirm it streams into the scratch record (1600 HWSAD sectors), validates, and ALHK-boots it. Entangled with auto-boot/control-return autonomy (i132/i135). The full-size valid stream is the first full-scale fetch-and-boot (not driven through the bit-banged ENC in the host harness). Needs i182a's disk.
   status: OPEN
-  depends_on: [i182a, i272]
+  depends_on: [i182a, i272, i295]
   kind: leaf
   owner: agent
   parent: i182
@@ -4740,6 +4740,7 @@
   description: |
     AFTER i270a works on real hardware, update the Go EMULATOR model of SD-card WRITES to faithfully reproduce the real Trinity uC-mediated behaviour learned on hardware (auto-null select, the real busy-wait + data-response framing). Today sdcard.go models a RAW SD card and was wrongly treated as the authority (i273); it must now be DERIVED FROM the hardware-proven behaviour. AUDIT ALL Go emulators that model SD — the netboot-oracle sdcard.go, AND check for any other Go SD/Trinity emulator (the comprehensive-emulation i126 surface) — and update each so they model the WRITE path correctly. Depends on i270a (hardware-proven first, per Pete: get it working on real SAM before feeding back to Go). Feeds i270c.
   status: OPEN
+  depends_on: [i295]
   kind: leaf
   owner: agent
   parent: i270
@@ -5335,3 +5336,11 @@
   status: OPEN
   kind: leaf
   owner: agent
+
+- id: i310
+  title: Provide a standards-compliant TFTP server in the test environment (for the i118b OACK-interop hardware test)
+  description: |
+    i118b needs the netboot CLIENT to fetch from a STANDARDS-COMPLIANT third-party TFTP server (e.g. tftpd-hpa on the Pi, or macOS tftpd) that emits OACK for optioned RRQ. No such server is installed/reachable in the test env (no tftpd on this host; a standards-compliant server binds privileged port 69 -> needs apt install + config or a setcap/sudoers grant, which is Pete's host action, not covered by i272's tcpdump/arping caps). Once provided + reachable from the SAM (192.168.2.75), i118b unblocks and the agent runs the OACK-receive shot self-serve (power-cycle + push client + tcpdump). owner:pete = the one-time host setup.
+  status: OPEN
+  kind: leaf
+  owner: pete
