@@ -112,7 +112,7 @@ ci-registry: registry-gen
 # koron-go/z80 harness (tools/netboot-oracle/z80) and byte-compares its emitted
 # packet against the same golden vectors the Go authority is checked against.
 # Needs pyz80 (the dev container), unlike the pure-Go ci-netboot-oracle.
-.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
+.PHONY: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-tcp-conn-stream netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-http-disk netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-smoke-disk netboot-server netboot-server-disk netboot-serve-boot netboot-serve-boot-debug netboot-serve-trinload netboot-trinpush-test netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-samboot-config netboot-trinity-identity netboot-trinload netboot-sd-csd netboot-sd-listread netboot-z80-routines asmlex-z80 asmparse-z80 pass1-ir-z80 compact-ir-z80 editmodel-z80 pagepool-z80 spill-z80 viewport-z80 ci-netboot-z80
 $(BUILD)/netboot_build_udp_frame.bin $(BUILD)/netboot_build_udp_frame.map: src/netboot/build_udp_frame.asm $(asm_deps/src/netboot/build_udp_frame.asm)
 	@mkdir -p $(BUILD)
 	pyz80 -D NETBOOT_STANDALONE=1 --obj=$(BUILD)/netboot_build_udp_frame.bin \
@@ -1063,6 +1063,30 @@ $(BUILD)/list_records.bin $(BUILD)/list_records.map: src/netboot/list_records.as
 
 netboot-list-records: $(BUILD)/list_records.bin $(BUILD)/list_records.map
 
+# netboot-hook-roundtrip (i93b) — the small trinload-pushable B-DOS RST-8 hook
+# round-trip probe: HRECORD-select a host-patched record (LE16 in the HKRT_CONFIG
+# block), HSAVE a deterministic pattern as CODE file "HKPROBE", HGTHD it back,
+# HLOAD it beside the source, byte-compare, then serve the verdict over UDP
+# 0xEDB0 ('?' -> "!HR", 'R' -> [verdict][phase][detail LE16], 'Q' -> exit) — the
+# hardware proof that the whole whole-file hook family (HRECORD/HSAVE/HGTHD/
+# HLOAD) dispatches correctly from the pushed-program context on real B-DOS
+# 1.5t. Composes encdrv/eeprom/bdos_seam only — no sd_csd, no raw SPI: every
+# card access is an RST 8 hook, so it needs neither NETBOOT_REAL_LISTREAD nor
+# NETBOOT_WANT_CLAIM. ONE build, flag-free (no NETBOOT_HOSTTEST carve-out,
+# i231). Section-C only (16384 budget). hook_roundtrip_faithful_test.go
+# (SKIP_PRIVATE_TESTS) drives the whole probe against Colin's real ROM + B-DOS
+# 1.5t + the SD model and asserts verdict 'P' with the pattern landed in the
+# record's LBA band, plus the i327 come-up gate. The on-hardware run is the
+# i93b gate itself (CLAUDE.md §5 — emulation-verified is not hardware-verified).
+$(BUILD)/hook_roundtrip.bin $(BUILD)/hook_roundtrip.map: src/netboot/hook_roundtrip.asm $(asm_deps/src/netboot/hook_roundtrip.asm)
+	@mkdir -p $(BUILD)
+	pyz80 --obj=$(BUILD)/hook_roundtrip.bin \
+	    --mapfile=$(BUILD)/hook_roundtrip.map \
+	    src/netboot/hook_roundtrip.asm
+	@tools/netboot-boot-fit-check.sh $(BUILD)/hook_roundtrip.bin 16384 hook_roundtrip.bin
+
+netboot-hook-roundtrip: $(BUILD)/hook_roundtrip.bin $(BUILD)/hook_roundtrip.map
+
 # netboot-samboot-config (i176) — the SAMBOOT BIOS config reader: a leaf routine
 # (samboot_read_config) that reads the editable default-boot-record config from a
 # named Trinity EEPROM chunk ("SAMBOOT Config  ") and returns the auto-boot
@@ -1272,7 +1296,7 @@ $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map: src/test_compact_ir.a
 compact-ir-z80: $(BUILD)/test_compact_ir.bin $(BUILD)/test_compact_ir.map
 
 # Every netboot routine binary the harness tests load.
-netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-server netboot-serve netboot-client netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-samboot-config netboot-trinity-identity netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
+netboot-z80-routines: netboot-build-udp-frame netboot-dhcp-reply netboot-tftp-build netboot-tftp-parse netboot-tftp-client netboot-build-arp-request netboot-build-arp-reply netboot-build-tcp-segment netboot-sha256 netboot-hmac-sha256 netboot-hkdf netboot-hkdf-expand-label netboot-chacha20 netboot-poly1305 netboot-x25519-field netboot-aead netboot-tls-keyschedule netboot-tls-record netboot-tls-transcript netboot-tls-client-hello netboot-tls-server-flight netboot-tls-client netboot-encdrv netboot-dhcp-loop netboot-tcp-conn netboot-http-get netboot-fw-source netboot-body-sink netboot-tls-reasm netboot-fw-span netboot-http netboot-http-boot netboot-tftp-server-loop netboot-tftp-client-loop netboot-tftp-client-front netboot-bdos-seam netboot-smoke netboot-server netboot-serve netboot-client netboot-dumper netboot-csd-probe netboot-sd-push netboot-boot-record netboot-delete-record netboot-list-records netboot-hook-roundtrip netboot-samboot-config netboot-trinity-identity netboot-serve-boot netboot-serve-boot-debug netboot-client-boot netboot-fetch-boot-boot netboot-trinload netboot-sd-csd netboot-sd-listread netboot-eeprom-roundtrip netboot-port-probe netboot-mgt-screen-demo
 
 # netboot-z80-artifacts — every artifact the tools/netboot-oracle/z80 suite
 # loads from build/, as ONE aggregate target.  This is the single source of
