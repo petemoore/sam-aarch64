@@ -165,6 +165,25 @@ The six **device-dispatch sites** in the common sector-I/O code each test the am
 
 Higher-level writes therefore reach the card as: **HRECORD to select the record, then ordinary HSAVE / HOFLE+HSBYT** — the hook call shapes proven on AL 1.5a in i62 work unchanged on 1.5t (no raw SPI driver needed for the HSAVE path; the raw SPI path is only for the CSD probe and any direct list-sector read).
 
+## 8a. The hook ENTRY path before the sector dispatch (HWSAD/HRSAD &9E16) — i280 findings
+
+§8 covers the sector-I/O routines once the device is selected and the LBA poked. The hook **entry** path that gets there — what HWSAD/HRSAD do *between* `rst 8 / defb n` and the §8 dispatch — is a separate, more entangled layer. i280 traced it (tool: `tools/netboot-oracle/z80/cmd/bdostrace/`) because our netboot serve's per-block write **hangs on real hardware** in exactly this region (`bdos_write_sector` → `rst 8 / defb 149`), while B-DOS's own record writes succeed.
+
+What the trace establishes (the lower layers all run clean in the flat koron-go harness against the modelled SD card):
+
+- **The §4 init ladder, the records math, and the §5/§8 CMD24 write-core + CMD17 read-core all PASS in emulation** (the existing `sd_init_colin_test.go` / `csd_decode_colin_test.go` / `sd_record_io_colin_test.go`, re-confirmed by `bdostrace -scenario init|writecore`). So the SD-SPI model and the low-level write are faithful — the hardware hang is **not** in the write core.
+
+- **The HWSAD hook HANDLER is &9E16** (hook table at &839F, `dis:606`; HWSAD=149 → index (149−128)·2=&2A → entry `16 5e` → handler &5E16+§B = real &9E16). Before reaching the §8 write core it runs a **prelude**:
+  1. **page-setup** (&9E27–&9E60): reads `hk.hl` (&81DA), takes its top two bits as a source *page* (`AND &C0 / SUB &40 / RLCA RLCA`), reads HMPR (`IN A,(&FB)`), and `OUT (&FB)` switches the page in — i.e. HWSAD interprets the caller's HL as a **paged pointer (page in the top bits)**, not a flat address. `H & &C0 == 0` (a section-A pointer) skips the switch (`JR Z,&9E89`).
+  2. **device-select** (&9E3F `call &8662`, keyed on `hk.a`): `A==2` → Trinity store (`&780B`=2); `A==1` → floppy store (`&780B`=1); `A==0` → runs the floppy-port setup (&8680: pokes FDC base `&E0` into the I/O routines at &45EA/&45A5) and leaves `&780B` unchanged.
+  3. falls into **xsad/wr.buff** (&83ED), whose **device-dispatch** (&83F7) does `call &8684` (reads `&780B`: `dec a; ret nz`) then `jp nz,&A8F4` (the §8 SD path) — **else falls through to &8406+, which polls the FDC ports `IN A,(&E0)` / `IN A,(&E4)` in an un-timed loop**. With no controller that poll never exits: this is the **shape of the hardware hang** (ambient device wrongly = floppy when the write runs).
+
+- **The full entry prelude is NOT traceable in the flat section-B harness.** It calls SAM-ROM/system routines the flat model lacks — the trace **escapes the run window at real &9BF1 → `call &0103`** (a B-DOS↔ROM bridge helper invoked throughout the hook machinery) and runs off into unmapped low memory. Faithfully tracing the prelude requires the real paged environment (SAM ROM at &0000/&C000, system vars at &5000, B-DOS in its real &8000 page via `LoadROMImage` + paged boot) — the flatten trick that works for the self-contained §8 routines breaks here because the prelude reaches into ROM + sysvars the section-B window overlaps. **This is i280b.**
+
+- **The hardware busy-wait hang cannot reproduce in koron-go regardless**: the SD model always clears `&DC` bit 3 (`sdcard.go`). So emulation can derive the *successful* entry contract (the gold sequence) but cannot reproduce the *fault*; pinning the exact missing contract bit needs the i280b paged-boot trace and/or hardware instrumentation (the i271 UDP marker channel).
+
+**Carry into the fix (i280b → `bdos_seam.asm`):** the entry contract is *paged-pointer HL + device in `&780B` + drive in `hk.a`*, not the flat `(A=drive, D=track, E=sector, HL=flat-source)` our seam currently assumes. Note the symmetry constraint: our `bdos_read_sector` (HRSAD, shares the `rwsad` entry) passes the same flat shape and **works on hardware**, so the discriminator between the working read and the hanging write is still to be pinned — do **not** assume it is `hk.a` alone (the i270 `A=0` change was necessary-but-insufficient on hardware).
+
 ## 9. Porting to fresh Z80
 
 The fork's primitives map onto existing sam-aarch64 SPI code (the SD port reuses the same busy-poll / one-byte-lag / auto-null shapes the ENC and EEPROM drivers already implement). **Mirror these:**
