@@ -482,10 +482,11 @@ make netboot-http-boot-debug              # -> build/netboot_http_boot_debug.bin
 
 3. Push or boot `build/netboot_http_boot_debug.bin` on the SAM + Trinity (use
    trinload or the smoke disk). Every exit (success and failure) goes through
-   `tr_terminate` (i228): on hardware it RETs back to trinload, so the SAM stays
-   re-pushable with no power-cycle; under emulation it di;halts for the harness.
+   `tr_terminate` (i228): a trinload-pushed run RETs back to trinload on hardware,
+   so the SAM stays re-pushable with no power-cycle (a disk-booted run RETs to the
+   AUTO BASIC instead); under emulation it di;halts for the harness.
 
-**What a pass looks like.** For the smoke shot: green border, and LICENCE.broadcom present in the SAM's Trinity storage (browse from B-DOS — `DIR` the record). The harness confirms the exit mechanism: `http_main` uses `DI;HALT` after the green `OUT (&FE)`, which is the correct Z80 section-D overlay exit.
+**What a pass looks like.** For the smoke shot: green border, and LICENCE.broadcom present in the SAM's Trinity storage (browse from B-DOS — `DIR` the record). The exit after the green `OUT (&FE)` is `tr_terminate` (i228): a trinload-pushed run RETs back to trinload; a disk-booted run RETs back to the AUTO BASIC (the border keeps the verdict either way).
 
 **What this confirms / does not (host-verified vs hardware-gated).** The host harness proves: the provisioner's **wire side** byte-for-byte over the i80 emulation; the **store leaf** (store_begin / storage_sink_leaf / store_end) first-free record detection + HSAVE record selection via the BDOSStore oracle (`TestProvStoreDemarcation`); the **boot path marker sequence** [ENTRY → EEPROM_OK → LINK_UP → FILE_START] in the debug binary (`TestHTTPMainBootDebugMarkers`); the **PHY link-wait gate** (i128, `TestHTTPMainBootReachesFirstTX` / `TestHTTPMainRecoversFromLinkDownStart`). What the harness cannot prove — and what this on-hardware run confirms — is the **B-DOS RST-8 HSAVE write-out** (the harness models the hook dispatch via BDOSStore but has no ROM/SAMDOS to back it; the hook field arithmetic is host-verified, only the real dispatch is hardware-gated), the **CSD SPI ladder** on real Trinity hardware (`csd_set_bd_records`, verifying BD_RECORDS is derived from the card), the real ENC28J60 silicon timing, and the end-to-end fetch against a real HTTP server. Emulation-verified is not hardware-verified (CLAUDE.md §5).
 

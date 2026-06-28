@@ -658,8 +658,9 @@ endif
 ; Under NETBOOT_DEBUG, include the UDP debug broadcast channel (dbg_marker.asm).
 ; TR_SRC_MAC / TR_SRC_IP alias CONN_CLIENT_MAC / CONN_CLIENT_IP (the EEPROM-read
 ; SAM identity, populated at boot) so marker frames carry the real SAM address.
-; This avoids including test_report.asm (~175 bytes), which carries hardcoded
-; addresses rather than the EEPROM-read identity; the EQU aliases add zero bytes.
+; test_report.asm is included above with TR_TERMINATE_ONLY, which gates out the
+; UDP reporter and its hardcoded TR_SRC_* identity cells — so these EQU aliases
+; are the only TR_SRC_* definitions and add zero bytes.
 if defined(NETBOOT_DEBUG)
 TR_SRC_MAC:       equ CONN_CLIENT_MAC
 TR_SRC_IP:        equ CONN_CLIENT_IP
