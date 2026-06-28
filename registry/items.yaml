@@ -1763,7 +1763,7 @@
   title: "i88c-b1 — wire tls_reasm into CONN_SINK_FILTER: sink+emit shims, bounded emulation integration test"
   description: |
     The wiring: new src/netboot/tls_main.asm composes tls_reasm + tls_client + tcp_conn's CONN_SINK_FILTER dispatch with two shims — tls_sink_feed (CONN_SINK_FILTER target: HL=window,BC=len -> jp tls_reasm_feed) and tls_record_shim (REASM_EMIT_PTR: copy the emitted record REASM_BUF->TC_RX, set TC_RX_LEN, call tls_client_on_record). Emulation-first: a new tools/netboot-oracle/z80/tls_integration_test.go replays the existing captured handshake flight (records <=TC_RX=1056, flat-buildable) chunked at mis-aligned TCP-segment sizes THROUGH storage_sink_flush (the real dispatch) and asserts TC_PHASE reaches DONE / secrets match the Go authority. REASM_BUF placed in low memory so the composite fits flat. Land via PR. body_sink_write is the precedent.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
   parent: i88c
