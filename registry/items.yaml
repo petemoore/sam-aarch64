@@ -4308,6 +4308,15 @@
     - {num: 780, role: completing}
   parent: i231b-b4
 
+- id: i231b-b4h
+  title: "netboot_client.asm carve-outs eliminated (5 sites): collapse the flat HOSTTEST binary into the bootable; client_main/client_fetch_boot already harness-driven"
+  description: |
+    Eliminate the 5 NETBOOT_HOSTTEST==0 carve-outs in src/netboot/netboot_client.asm (boot entry :55; sink-mode selector :420; cl_sink_payload+raw_record_sink_leaf :448; the whole bootable body client_setup/client_main/client_fetch_boot/client_finalize :754; the real-module includes bdos_picker/eeprom/raw_record_sink/sd_csd :1114). Remove-if-overgated collapse (i231b-b4a/c/d/g pattern): client_main is already exercised in emulation by bdos_store_test.go RunBoot(client_main), client_fetch_boot by netboot_fetch_boot_test.go; the harness models EEPROM (eeprom.go) + all B-DOS RST 8 hooks (bdos_store.go) + SD CSD + border. Plan: delete the flat netboot_client.bin HOSTTEST build, retarget netboot_client_test.go's leaf drivers at netboot_client_boot.bin, make the 5 blocks unconditional. CARE POINTS to verify before/while implementing: (1) the flat build's 16384-byte STAGING vs the boot build's 2048 (the :1095 host-double size-switch) — confirm no retargeted test accumulates >2048 into STAGING; (2) the flat's harness LISTREAD hook vs the boot's REAL_LISTREAD CMD17 path — confirm no retargeted leaf test depends on the harness hook; (3) fixture-shift collateral (feedback_carveout_elim_shifts_hosttest_fixtures) — grep z80 tests for literal >=0x8000 scratch consts + run the FULL suite. Ledger 18->13 / 3->2 files.
+  status: IN_PROGRESS
+  kind: leaf
+  owner: agent
+  parent: i231b-b4
+
 - id: i232
   title: "All Go-harness tests boot the SAM from address 0 (real ROM cold-init) for faithful machine state, not Call-with-seeded-state"
   description: |
