@@ -7,31 +7,11 @@
 ; Per https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m3-z80-emitter-design.md §2.3.
 ; Format citation: https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-24-m2-encoder-tables-design.md §2.
 ;
-; M5 budget-lever change: ENCTAB no longer lives in section C
-; -----------------------------------------------------------
-; Pre-M5: ENCTAB was loaded directly into &A000 in section C (alongside
-; the assembler code).  This stole 4 KB from the code budget — fine for
-; M3 / M4 but blocked M5's compound-operand encoders which push code
-; size past 8 KB.  Per the design source `docs/specs/2026-05-27-samdos-
-; load-idiom.md` we now use the COMET-style trampoline pattern to load
-; ENCTAB into a dedicated physical RAM page (page 4) outside section C.
-; This frees &A000-&AFFF for code use, opening 12 KB total for code
-; (&8000-&AFFF) instead of 8 KB (&8000-&9FFF).
-;
-; Memory layout (M5 post-budget-lever):
-;   &0000-&3FFF  ROM0 (section A, default)     OR  page 4 = ENCTAB
-;                                                  (when LMPR = LMPR_ENCTAB)
-;   &4000-&7FFF  page 1 (section B, default)
-;                  with trampoline copy at TRAMPOLINE_DST (= &7E00)
-;   &8000-&AFFF  assembler code (12 KB; this file + all M3/M4/M5 includes)
-;   &B000-&B7FF  IN .tbn buffer (2 KB)
-;   &B800-&BFFF  OUT buffer (2 KB)
-;   &C000-&C0FF  stack (SP = &C100, grows down into section D)
-;   &C100-&FFFF  scratch (OPVAL arrays, eval stack, SYMTAB etc.) —
-;                section D RAM
-;
-;   Physical page 4: ENCTAB (paged into section A on demand via
-;                LMPR = LMPR_ENCTAB).
+; ENCTAB loads via the COMET-style trampoline pattern into a dedicated
+; physical RAM page (page 4) outside section C, keeping the whole 16 KB
+; code section for code.  The authoritative memory map lives in the
+; header comment of src/assembler.asm (mirrored by
+; docs/notes/memory-layout.md) — not restated here.
 ;
 ; The trampoline lives in section B because HMPR changes paged out
 ; whatever was in section C/D — so the trampoline's own code must

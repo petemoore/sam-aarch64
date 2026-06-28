@@ -29,7 +29,7 @@ PRAMTP:         equ &5CB4
 ;
 ; Pages 5..12 are pool pages, claimed by the two buffer CONSUMERS:
 ;   IN  — load_in_file allocates a contiguous run via pp_alloc_run(PP_IN)
-;         at assemble time (i23; docs/plans deleted, see PR history).
+;         at assemble time (i23; docs/specs/paged-in-design.md).
 ;   OUT — reset_out_buffer allocates a contiguous run via
 ;         pp_alloc_run(PP_OUT) between the passes, sized from the pass-1
 ;         total, and pp_free_run's it on the next assemble (i24).

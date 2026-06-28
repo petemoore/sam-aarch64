@@ -155,12 +155,14 @@ reopen it.
 The assembler's buffers become pool allocations instead of link-time fixed
 pages:
 
-- **IN buffer:** sized to the loaded `.tbn` prefix (i40 already loads only the
-  assembler-facing prefix). `alloc_page(IN)` per page needed — **no 96 KB cap**;
-  the cap becomes "free pages remaining" (folds **i23**).
-- **OUT buffer:** `alloc_page(OUT)` per 16 KB of output; `OUT_LEN` widens to the
-  pool's reach — **no 32 KB cap** (folds **i24**). The 16-bit `OUT_LEN` and the
-  `emit_byte` low/high-zone bracket generalise to an N-page list.
+- **IN buffer** (shipped, i23): sized to the loaded `.tbn` prefix (i40 already
+  loads only the assembler-facing prefix), allocated as a **contiguous run**
+  (`pp_alloc_run(IN)`) by `load_in_file` — **no 96 KB cap**; the cap is "free
+  contiguous pool pages".
+- **OUT buffer** (shipped, i24; q45 = option A): one **contiguous run**
+  (`pp_alloc_run(OUT)`) sized from the pass-1 total by `reset_out_buffer`,
+  every `emit_byte` LMPR-bracketed uniformly, `OUT_LEN` widened to 24-bit —
+  **no 32 KB cap**. Design detail: `docs/specs/paged-out-design.md`.
 - **ENCTAB / disasm / payloads:** allocated once at boot from the pool (they are
   resident-for-the-session), replacing their hardcoded page numbers.
 

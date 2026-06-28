@@ -202,15 +202,16 @@ a section only for the duration of an access:
   (which swaps HMPR so the DOS load lands in page 4 via the section C
   window), then mapped into section A under `LMPR_ENCTAB` for encoder
   reads.
-- **Paged IN** (pages 7–12, a 96 KB ceiling) — the `.tbn` source is
-  HLOAD'd once at startup; each record is staged into section D's
+- **Paged IN** (a contiguous page-pool run, sized to the loaded `.tbn`
+  prefix) — the source is HLOAD'd once at startup into a run allocated
+  from the page pool; each record is staged into section D's
   `STAGING_BUF` through a per-record LMPR bracket into section A. Design
   rationale: [specs/paged-in-design.md](specs/paged-in-design.md).
-- **Paged OUT** (pages 5–6, 32 KB) — `emit_byte` writes the low zone
-  through section B (free under `LMPR_ENCTAB`) and the high zone through a
-  per-emit LMPR bracket; at end of pass 2, HSAVE reads the buffer through
-  section C with the save's start-page (UIFA) set to the OUT base page,
-  auto-paging across `&C000`. Design rationale:
+- **Paged OUT** (a contiguous page-pool run, sized from the pass-1
+  total) — every `emit_byte` writes through a per-byte LMPR bracket
+  mapping the run's current page into section B; at end of pass 2, HSAVE
+  reads the run through section C with the save's start-page (UIFA) set
+  to the run's base page, auto-paging across `&C000`. Design rationale:
   [specs/paged-out-design.md](specs/paged-out-design.md).
 - **`paged_call`** — the generic "call a routine in another physical
   page" helper (call shape: `call paged_call / defw addr / defb page`):

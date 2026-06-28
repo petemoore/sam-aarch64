@@ -2,6 +2,16 @@
 
 **Status**: design spec.  Pairs with `docs/specs/paged-out-design.md` (the OUT-side counterpart) and `docs/specs/samdos-file-io.md` (the COMET-style HLOAD trampoline pattern).  Date: 2026-05-27.
 
+> **Page-number note.** The record-staging read mechanism, the LMPR-bracket
+> idiom, and the two-phase HGTHD+HLOAD load described here are all current —
+> but the *static page assignments* (IN at 7..10/7..12, OUT at 5..6 with the
+> `OUT_ZONE` low/high split) are superseded: both buffers are now
+> **contiguous page-pool runs** allocated at assemble time (`pp_alloc_run`,
+> `src/pagepool.asm`; IN via `load_in_file` (i23), OUT via
+> `reset_out_buffer` (i24)).  The live OUT model is
+> `docs/specs/paged-out-design.md`; the live page map is
+> `docs/notes/memory-layout.md`.
+
 This is the design for the second M6 PR.  Scope: relocate the IN `.tbn` buffer out of section C so that inputs larger than 2 KB are possible.  Compaction of the `.tbn` format itself is a separate strand (M6 PR 3 — `https://github.com/petemoore/sam-aarch64/blob/c0f62fa/docs/specs/2026-05-27-compact-tbn-and-disassembler-design.md`).
 
 ## Goal

@@ -514,8 +514,8 @@ reader_at_end_no:
 ; (paged)".  Brackets an LMPR=IN_POS_PAGE window around the read; copies
 ; [payload] bytes from section A into STAGING_BUF; renormalises across
 ; IN page boundaries during the copy.  Restores LMPR_ENCTAB before
-; returning so the encoder window (ENCTAB in section A, OUT-low in
-; section B as LMPR_ENCTAB+1) is live on entry to the record handler.
+; returning so the encoder window (ENCTAB in section A) is live on
+; entry to the record handler.
 ;
 ; The inner copy loop uses LDI, which sets P/V = (BC != 0).  Continue
 ; via JP PE saves a `ld a, b / or c / jr nz` per iteration compared to

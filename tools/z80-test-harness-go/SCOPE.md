@@ -63,7 +63,6 @@ adversarial use of the harness on a real failure):
 - **Border port &FE**: writes are silently ignored.
 
 ### Not implemented (out of scope for spike)
-- Multi-page OUT files (OUT_LEN > 16384): the HSAVE capture reads pages 5+6 via physical page read, so the logic handles it — but it has not been tested.
 - HGFLE (158) / LBYT (159): not called by the prod assembler; no-op stubs suffice.
 - HOFLE (147) / SBYT (148) / CFSM (152): not called; not stubbed.
 

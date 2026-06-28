@@ -68,8 +68,9 @@ off-axis (`src/test_offaxis_cluster.asm`), and asserts with `jp fail` on
 mismatch. `tools/z80-test-harness-go` boots the `BUILD_TESTS` assembler and
 `TestBootSelfTestsPass` asserts every suite passes. Because a failure is
 terminal (`jp fail` halts the boot), a boot self-test can only assert the
-**success** path — e.g. `test_emit_paged` §5 emits the 32768th OUT byte and
-checks it succeeds.
+**success** path — e.g. `test_emit_paged` §6 emits the OUT run's final byte
+and checks it succeeds (its §7 tests the refusal *predicate* directly,
+because the `jp fail_with_tag` it feeds cannot be survived).
 
 ### 2. Go-side guard test (`RunWithFiles` + a hand-built `.tbn`)
 

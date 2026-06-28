@@ -9,7 +9,7 @@ The assembler links at `org &8000` (entry `jp start`; `CALL 32768` lands on the 
 | Range | Section | Contents |
 |-------|---------|----------|
 | `&0000-&3FFF` | A | ROM0 by default; **or** ENCTAB (physical page 4) under `LMPR_ENCTAB`; **or** an IN page under `LMPR_IN_BASE + N` inside the reader bracket (see `reader.asm`). |
-| `&4000-&7FFF` | B | Page 1 (BASIC sys area, mostly unused). Trampoline copy at `TRAMPOLINE_DST` (`&7E00`). Under `LMPR_ENCTAB`, section B = page 5 = OUT-low (the OUT emit window — see `emit_byte`). |
+| `&4000-&7FFF` | B | Page 1 (BASIC sys area, mostly unused). Trampoline copy at `TRAMPOLINE_DST` (`&7E00`). `emit_byte` brackets LMPR per byte to map the OUT run's current page here (the OUT emit window). |
 | `&8000-&BFFF` | C | **Assembler code** (`assembler.asm` + all includes). The IN/OUT/ENCTAB buffers live off-axis, so the whole 16 KB section is code budget; `tools/check-code-budget.sh` (run at the tail of `make assembler` / `assembler-prod`) enforces `code_end < &C000` — the stack page starts there. |
 | `&C000-&C0FF` | D | Stack (`SP = &C100`, grows down). |
 | `&C100-&D4FF` | D | Scratch — OPVAL arrays, SYMTAB, litpool table + counters (sub-allocations below). |
@@ -29,14 +29,13 @@ These pages are not normally mapped into the address space; they are paged in on
 | Page(s) | Contents |
 |---------|----------|
 | 4 | ENCTAB body — paged into section A on demand for encoder reads. See `trampoline.asm`. |
-| 5..6 | OUT buffer. Page 5 reached via section B under `LMPR_ENCTAB` (low zone, bytes 0..16383); page 6 via `LMPR_OUT_HIGH` per emit (high zone, 16384..32767). HSAVE at end of pass 2 reads via section C with `UIFA[31] = OUT_BASE_PAGE`. |
-| 7..12 | IN `.tbn` buffer — 6 contiguous pages = 96 KB ceiling. HLOAD'd once at startup; read per-record via an LMPR bracket. |
+| 5..12 | Page-pool pages (`src/pagepool.asm`; expansion RAM 16..PRAMTP joins the same pool on a >256 KB machine), claimed as contiguous runs at assemble time by the two buffer consumers: **IN** — `pp_alloc_run(PP_IN)` by `load_in_file`, HLOAD'd once, read per-record via an LMPR bracket; **OUT** — `pp_alloc_run(PP_OUT)` by `reset_out_buffer`, sized from the pass-1 total, written per-byte via an LMPR-bracketed section-B window (`emit_byte`), HSAVE'd via section C with `UIFA[31] = OUT_RUN_BASE`. See `docs/specs/paged-in-design.md` / `docs/specs/paged-out-design.md`. |
 | 12 | `test_cluster.bin` (`BUILD_TESTS` only) — the off-axis encoder self-test cluster (`src/test_offaxis_cluster.asm`), invoked once via an LMPR swap. Time-multiplexed with the IN buffer, which is not HLOAD'd until `main_assemble`. |
 | 13 | Two production payloads, every build (per `docs/specs/comment-storage-design.md` §5): `sysreg_data.bin` at `&8000` — sysname lookup tables + matcher (`src/sysreg_data.asm`), loaded by `load_page13_payload` — and `zx0.bin` at `&8400` — ZX0 compressor (`&8400`) + turbo decoder (`&8B00`) (`src/zx0_payload.asm`), loaded by `load_zx0_payload`, with compressor workspace at `&8B80-&AF9D`. Both reached via `paged_call`. Under `BUILD_TESTS` the page first holds `test_mem.bin` (the largest self-test suite, invoked via LMPR-swap-CALL-restore from `start:`); the production payloads overwrite it once that suite completes, and the test disk's `zx0-test.bin` adds the `&AFA0` boot self-test + baked fixture. |
 | 14 | ZX0 staging area (every build) — `&C000-&E0FF` in the section-D view under `HMPR=13`: raw block in at `ZX0_STAGING_SRC` (`&C000`), compressed result out at `ZX0_STAGING_DST` (`&D000`). Under `BUILD_TESTS` the page first holds `paged_call_test_payload.bin` — the `paged_call` boot self-test stub (`PAGED_CALL_TEST_PAGE`), 3 bytes at offset 0, fully consumed before the zx0 self-test stages over it. |
 | 15 | `disasm.bin` (every build) — the on-SAM disassembler (`src/disasm.asm`), HLOAD'd at boot via `load_page15_payload` (`DISASM_PAGE`) and invoked via `paged_call`. |
 
-(Source of truth for the page numbers: the `equ`s in `src/trampoline.asm` — `ENCTAB_PAGE`, `OUT_BASE_PAGE`, `IN_BASE_PAGE`, `TEST_CLUSTER_PAGE`, `PAGED_CALL_TEST_PAGE`, `DISASM_PAGE` — and `src/zx0_comm.inc` (`ZX0_PAGE` + the zx0 entry/staging addresses), plus the loader recipes in `src/loader.asm` and `Makefile`.)
+(Source of truth for the static page numbers: the `equ`s in `src/trampoline.asm` — `ENCTAB_PAGE`, `IN_BASE_PAGE`, `TEST_CLUSTER_PAGE`, `PAGED_CALL_TEST_PAGE`, `DISASM_PAGE` — and `src/zx0_comm.inc` (`ZX0_PAGE` + the zx0 entry/staging addresses), plus the loader recipes in `src/loader.asm` and `Makefile`. The IN/OUT runs have no compile-time page: their bases live in the runtime state `IN_BASE_LMPR` / `OUT_RUN_BASE`, and the reserved-vs-pool split is `POOL_RESV_*` in `src/pool_boot.asm`.)
 
 ## Scratch region `equ`s (section D)
 

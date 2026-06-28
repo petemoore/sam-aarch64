@@ -1602,7 +1602,7 @@ load_in_file:
 ; size (the size lives at file offset 8, inside the head).  Alloc one IN page
 ; from the pool; IN_BASE_LMPR holds its full LMPR value (RAM0 | page).  After
 ; decoding the prefix size we free this page and alloc the full contiguous run
-; (Phase 1.5).  i23 / docs/plans/i23-in-pool-contiguous.md.
+; (Phase 1.5).  i23 / docs/specs/paged-in-design.md.
                 ld      a, PP_IN
                 ld      b, 1
                 call    pp_alloc_run        ; A = head page, or PP_FAIL
@@ -1920,7 +1920,7 @@ main_dir_equ_pending_id:        defw    0
 ; buffer's contiguous run, allocated from the i2 page pool by load_in_file
 ; (pp_alloc_run).  Replaces the old fixed LMPR_IN_BASE constant: reset_reader
 ; and reader_init's IN_END calc read it so the reader walks the run wherever
-; the pool placed it (i23 / docs/plans/i23-in-pool-contiguous.md).  Pages within
+; the pool placed it (i23 / docs/specs/paged-in-design.md).  Pages within
 ; the run are contiguous, so the per-page advance stays a plain LMPR increment.
 IN_BASE_LMPR:           defb    0
 IN_POS_PAGE:            defb    0           ; current LMPR low5+RAM0 for IN
