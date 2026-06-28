@@ -1172,12 +1172,23 @@ main_dir_payload_after_header:  defw    0
 p1ds_acc:                       defw    0
 
 PASS1_IR_LEN:                   defw    0
-; IR record buffer. Sized so that, in the b8b compact harness (which `include`s
-; this file and appends the compact-core code after this buffer), the buffer end
-; plus the compact code stays below the &C160 SYMTAB the reused leaves populate —
-; otherwise pass1 writing symbols would overwrite the compact code (the i48c-b8b
-; SYMTAB-vs-code collision). A comment-heavy fixture whose serialised IR overflows
-; this is skipped host-side (mirrored as pass1IRBufSize in the Go harness) rather
-; than corrupting the tables. The corpus + hand fixtures fit comfortably.
+                if defined(CHAIN_PAGED_DRIVER)
+; Paged chain (b8j+): the IR lives in the page-8 window at section A base
+; (&0000) while LMPR=&28.  No defs buffer is emitted; pass1_ir_walk and
+; compact_ir_walk read the IR through the live section A window.  The driver
+; (chain_paged_driver.asm b8j_chain_paged) computes and writes PASS1_IR_LEN
+; before calling compact_ir_walk.  PARSE_RECS = equ &0000 (imported from
+; asmparse_paged.sym), so PASS1_IR_BUF = equ &0000 aliases it exactly.
+PASS1_IR_BUF:                   equ     &0000
+                else
+; Flat harness (b8a/b8b): the buffer sits in the &8000 page after the code.
+; Sized so that, in the b8b compact harness (which `include`s this file and
+; appends the compact-core code after this buffer), the buffer end plus the
+; compact code stays below the &C160 SYMTAB the reused leaves populate —
+; otherwise pass1 writing symbols would overwrite the compact code (the
+; i48c-b8b SYMTAB-vs-code collision).  A comment-heavy fixture whose serialised
+; IR overflows this is screened host-side (mirrored as pass1IRBufSize in the
+; Go harness) rather than corrupting the tables.
 PASS1_IR_BUF:                   defs    10752       ; IR record buffer (see above)
+                endif
 
