@@ -276,7 +276,10 @@ def tftp_fetch(sam_ip: str, name: str, timeout: float = 10.0):
             sys.exit(1)
         block = struct.unpack("!H", pkt[2:4])[0]
         if block != expected_block:
-            continue  # duplicate, re-ACK below
+            # A retransmitted DATA block means our ACK was lost: re-ACK it so
+            # the server advances instead of stalling to timeout (RFC 1350 §4).
+            s.sendto(b"\0\x04" + pkt[2:4], (rip, rport))
+            continue
         chunk = pkt[4:]
         data += chunk
         stamps.append(time.monotonic())

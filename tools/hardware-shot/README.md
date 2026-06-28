@@ -8,6 +8,9 @@ Self-serve Trinity hardware-shot tooling for the netboot disk-record push invest
   table mirrors `src/netboot/dbg_marker.asm`. A stall localizes to the last marker seen.
 - `run-shot.sh` — one full shot: TAPO power-cycle → push a debug serve binary to the
   auto-booted trinload → disk-record WRQ push via `curl` → capture markers → power off.
+- `simulate-pi-client.py` — drive a live SAM netboot server with the captured Pi 400
+  exchange: DHCP DORA + a non-PXE negative probe, then TFTP fetches with byte
+  verification and per-block timing (`--selftest` = the no-SAM capture-readiness check).
 
 ## Usage
 

@@ -499,6 +499,20 @@ cvp_got60:
                 ld      a, b
                 cp      pxeclient_len
                 jr      c, cvp_no              ; value too short for the prefix
+                ; the 9 compared value bytes must lie inside the frame: a
+                ; truncated option 60 whose claimed length runs past RX_LEN
+                ; would otherwise be compared against stale RXBUF bytes
+                ; beyond the frame (the same push/sbc bound style as the
+                ; code/length checks above, applied to the value; i349).
+                push    hl
+                ld      bc, pxeclient_len
+                add     hl, bc
+                or      a
+                sbc     hl, de                 ; (value + 9) - end
+                pop     hl
+                jr      z, cvp_prefix          ; value+9 == end: still in frame
+                jr      nc, cvp_no             ; value+9 > end: truncated, ignore
+cvp_prefix:
                 ld      de, pxeclient
                 ld      b, pxeclient_len
 cvp_cmp:
@@ -1329,7 +1343,8 @@ RXBUF:            defs 1518              ; the single received-frame buffer
 NB_FILE_MAX:      equ 1518               ; = RXBUF's size (the HLOAD bounce)
 NB_DIR_TRACKS:    equ 4                  ; MGT directory: tracks 0-3, side 0
 NB_ENTRY_PAGES:   equ &EF                ; dir entry: full-16K-pages count
-NB_ENTRY_LENMOD:  equ &F0                ; dir entry: length mod 16K (LE word)
+                                         ; (length mod 16K follows at &F0,
+                                         ; reached by inc hl from here)
 NB_TYPE_CODE:     equ 19                 ; dir entry type: CODE (bits 0-5)
 
 nb_fill_store:

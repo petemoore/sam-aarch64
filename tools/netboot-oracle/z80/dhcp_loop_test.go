@@ -247,15 +247,78 @@ func mutateVendorClass(t *testing.T, orig, val []byte) []byte {
 	})
 }
 
+// truncatedOption60 returns a DISCOVER variant whose vendor-class TLV is the
+// final bytes of the frame and claims more value bytes than remain: the
+// length byte (9) is in bounds but only the 4 value bytes "PXEC" exist, so an
+// unbounded 9-byte prefix compare would read past the frame end into stale
+// RXBUF bytes (the i349 check_vendor_pxe value bound). The frame's IP/UDP
+// lengths stay consistent — only the DHCP options region is cut short (and
+// loses its end marker, which the truncation eats).
+func truncatedOption60(t *testing.T, orig []byte) []byte {
+	t.Helper()
+	u, ok := frame.ParseUDP(orig)
+	if !ok {
+		t.Fatal("golden frame did not parse as UDP")
+	}
+	body := u.Payload
+	out := append([]byte(nil), body[:dhcp.OffOptions]...)
+	for off := dhcp.OffOptions; off < len(body); {
+		code := body[off]
+		if code == dhcp.OptPad {
+			out = append(out, code)
+			off++
+			continue
+		}
+		if code == dhcp.OptEnd {
+			break // the truncated option below ends the payload instead
+		}
+		l := int(body[off+1])
+		if code != dhcp.OptVendorClass {
+			out = append(out, body[off:off+2+l]...)
+		}
+		off += 2 + l
+	}
+	out = append(out, dhcp.OptVendorClass, 9, 'P', 'X', 'E', 'C')
+	return frame.BuildUDPFrame(frame.UDP{
+		DstMAC: u.DstMAC, SrcMAC: u.SrcMAC,
+		SrcIP: u.SrcIP, DstIP: u.DstIP,
+		SrcPort: u.SrcPort, DstPort: u.DstPort,
+		Payload: out,
+	})
+}
+
+// rxbufPrimer returns a must-ignore UDP frame (an uninteresting dst port, so
+// no responder answers it) sized past truncLen and carrying "lient" at frame
+// offsets [truncLen, truncLen+5). Injected immediately before the truncated-
+// option-60 frame it makes a bound REGRESSION deterministic: without the
+// value bound, the truncated frame's 9-byte compare reads "PXEC" in-frame
+// plus "lient" from this frame's stale RXBUF tail — a full "PXEClient" match
+// — and the server answers a frame it must ignore.
+func rxbufPrimer(t *testing.T, truncLen int) []byte {
+	t.Helper()
+	const hdr = 42 // eth (14) + ip (20) + udp (8): the payload starts here
+	payload := bytes.Repeat([]byte{0xAA}, truncLen-hdr+5)
+	copy(payload[truncLen-hdr:], "lient")
+	return frame.BuildUDPFrame(frame.UDP{
+		DstMAC: frame.MAC{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},
+		SrcMAC: mask.ClientMAC,
+		SrcIP:  mask.ClientIP, DstIP: [4]byte{255, 255, 255, 255},
+		SrcPort: 40000, DstPort: 9, // discard: not 67/69/our TID
+		Payload: payload,
+	})
+}
+
 // nonPXEDHCPVariants are the rogue-DHCP negative frames: a DISCOVER and a
-// REQUEST with the vendor class (option 60) stripped, and with a non-PXE
-// vendor class — none may be answered (responder.go's option-60 gate, ported
-// as check_vendor_pxe in dhcp_loop.asm and netboot_server.asm).
+// REQUEST with the vendor class (option 60) stripped, with a non-PXE vendor
+// class, and with a truncated option 60 (primed so an unbounded value read
+// would falsely match) — none may be answered (responder.go's option-60
+// gate, ported as check_vendor_pxe in dhcp_loop.asm and netboot_server.asm).
 func nonPXEDHCPVariants(t *testing.T) []struct {
 	name string
 	req  []byte
 } {
 	t.Helper()
+	trunc := truncatedOption60(t, golden.DHCPDiscover)
 	return []struct {
 		name string
 		req  []byte
@@ -264,6 +327,9 @@ func nonPXEDHCPVariants(t *testing.T) []struct {
 		{"DISCOVER with a non-PXE vendor class", mutateVendorClass(t, golden.DHCPDiscover, []byte("MSFT 5.0"))},
 		{"REQUEST without option 60", mutateVendorClass(t, golden.DHCPRequest, nil)},
 		{"REQUEST with a non-PXE vendor class", mutateVendorClass(t, golden.DHCPRequest, []byte("MSFT 5.0"))},
+		// The primer rides directly before the truncated frame — order matters.
+		{"RXBUF primer for the truncated option 60 (non-DHCP)", rxbufPrimer(t, len(trunc))},
+		{"DISCOVER with a truncated option 60", trunc},
 	}
 }
 
