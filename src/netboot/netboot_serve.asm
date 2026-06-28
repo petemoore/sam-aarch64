@@ -554,9 +554,23 @@ wrq_arm_receiver:
 ; Bracketed di/ei like probe_main's startup re-arm. Clobbers AF/BC/DE/HL.
 serve_rearm_enc:
                 di
+                xor     a
+                ld      (enc_timed_out), a     ; fresh budget for this re-arm (i280b-b2c)
                 ld      hl, CONFIG_SERVERMAC
                 call    enc_rx_reestablish
                 ei
+                if defined(NETBOOT_DEBUG)
+                ; i280b-b2c: the bound in wait_ready means a stuck shared bus (the §8d
+                ; ENC/SD contention) now RETURNS here instead of wedging; report it via
+                ; a non-perturbing post-window marker so a hardware shot sees the re-arm
+                ; timed out (rather than the serve silently dying). The serve stays alive
+                ; and trinload-recoverable either way.
+                ld      a, (enc_timed_out)
+                or      a
+                ret     z
+                ld      a, DBG_REARM_TIMEOUT
+                call    dbg_marker
+                endif
                 ret
 
 ; wrq_claim_record — claim a FREE Trinity record for the push. Pick the record per

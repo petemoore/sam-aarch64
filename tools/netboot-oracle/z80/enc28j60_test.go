@@ -93,6 +93,53 @@ func TestDrvInitDetectsMissingBoard(t *testing.T) {
 	}
 }
 
+// TestWaitReadyBoundedOnStuckBusy proves the ENC wait_ready busy-poll is now bounded
+// (i280b-b2c). It models a wedged Trinity controller whose &DC BUSY bit (bit 3) NEVER
+// clears — the §8d disk-push wedge, where serve_rearm_enc → enc_rx_reestablish → ereset
+// → eoff → the previously-unbounded wait_ready spun forever and hung the SAM. With the
+// bound, wait_ready must TERMINATE (return rather than hit the maxSteps runaway cap) and
+// set enc_timed_out. The ENC analogue of TestCSDProbeBoundedOnStuckBusy (the i241 SD-path
+// bound); the only way to reach the budget in emulation is this explicit StuckBusy fault.
+func TestWaitReadyBoundedOnStuckBusy(t *testing.T) {
+	mac := loadEnc(t)
+	enc := z80h.NewENC28J60()
+	mac.AttachIO(enc)
+
+	flag := sym(t, mac, "enc_timed_out")
+	mac.Write(flag, []byte{0}) // fresh budget
+
+	enc.StuckBusy = true // the controller's BUSY bit never clears
+
+	// A still-unbounded wait_ready would spin past maxSteps and error here;
+	// terminating IS the bounded-ness proof.
+	if _, err := mac.Call("wait_ready"); err != nil {
+		t.Fatalf("wait_ready under StuckBusy did not terminate (still unbounded?): %v", err)
+	}
+	if got := mac.Read(flag, 1)[0]; got != 1 {
+		t.Fatalf("enc_timed_out = %d after a stuck-BUSY wait_ready, want 1", got)
+	}
+}
+
+// TestWaitReadyHealthyDoesNotTimeOut is the negative control: on a healthy bus (BUSY
+// clears on the first IN &DC) wait_ready returns WITHOUT approaching its budget, so
+// enc_timed_out stays 0 — proving the bound bites only on a genuinely stuck bus and the
+// normal serving path is unaffected.
+func TestWaitReadyHealthyDoesNotTimeOut(t *testing.T) {
+	mac := loadEnc(t)
+	enc := z80h.NewENC28J60()
+	mac.AttachIO(enc)
+
+	flag := sym(t, mac, "enc_timed_out")
+	mac.Write(flag, []byte{0})
+
+	if _, err := mac.Call("wait_ready"); err != nil {
+		t.Fatalf("wait_ready on a healthy bus: %v", err)
+	}
+	if got := mac.Read(flag, 1)[0]; got != 0 {
+		t.Fatalf("enc_timed_out = %d on a healthy bus, want 0 (the bound must not bite)", got)
+	}
+}
+
 // TestDrvWriteFrameOnWire is increment goal (2): a frame handed to drv_write
 // lands byte-exact on the virtual wire (the emulated TX buffer).
 func TestDrvWriteFrameOnWire(t *testing.T) {

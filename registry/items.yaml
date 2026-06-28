@@ -4821,10 +4821,22 @@
   parent: i280b-b2
 
 - id: i280b-b2c
-  title: "Fix the ENC/SD shared-bus contention so the disk-record WRQ push completes claim->rearm->handshake and reaches the per-block write (bound the find/select/rearm waits; non-perturbing observability)"
+  title: "Bound the ENC wait_ready (i241 pattern) + report rearm timeout (DBG_REARM_TIMEOUT): a stuck shared bus can no longer wedge the SAM; the timeout is observable"
   description: |
-    OPEN. Per §8d, the disk-push reproducibly hangs in the WRQ free-record claim -> serve_rearm_enc -> handshake region (ENC/SD shared one-PIC controller contention), before the per-block HWSAD write is ever reached. ENC-based i271 markers perturb the bug (Heisenbug), so the next step is NOT another marker shot: (a) make every unbounded SD/ENC busy-wait on this path bounded (bdos_find_record_for_strategy CMD17 reads, the HRECORD hook, and especially serve_rearm_enc) so an expiry reports a distinct failure marker and returns instead of wedging; and/or (b) add a non-ENC observability channel. Then fix the ENC<->SD transition so claim->rearm->handshake completes and the §8c per-block write is finally exercised on hardware. Does not reproduce in koron-go (no shared ENC/SD controller). Reuse B-DOS entry points; don't reimplement.
+    DONE. wait_ready (encdrv.asm) now polls &DC bit3 up to ENC_BUSY_LIMIT then sets enc_timed_out and RETURNS instead of spinning forever (the §8d wedge: serve_rearm_enc->enc_rx_reestablish->ereset->eoff->wait_ready on a stuck shared bus). Mirrors the i241 sdc_wait_ready bound on the ENC side; in all netboot builds. Healthy path unaffected (koron-go clears &DC bit3 after one SPI-byte time; all ENC/serve/golden-marker tests green). serve_rearm_enc emits DBG_REARM_TIMEOUT (&17, NETBOOT_DEBUG) so a hardware shot sees the timeout WITHOUT ENC markers in the contended window (the §8d Heisenbug). Mitigation+observability, NOT the root-cause fix (-> i280b-b2d).
+  status: DONE
+  kind: leaf
+  owner: agent
+  prs:
+    - {num: 725, role: completing}
+  parent: i280b-b2
+
+- id: i280b-b2d
+  title: "Fix the ENC<->SD shared-controller contention root cause: the rearm no longer times out and the disk-record push completes claim->rearm->handshake->write"
+  description: |
+    OPEN. With i280b-b2c's bound landed the disk push no longer wedges, but the re-arm still TIMES OUT on a stuck shared bus (observable via DBG_REARM_TIMEOUT) so the per-block write is still not reached. Root cause per §8d: the WRQ claim's SD ops (our CMD17 find + B-DOS HRECORD select) leave the one-PIC Trinity controller's &DC busy bit hung, so the subsequent enc_rx_reestablish/ereset busy-poll can't proceed. Investigate (now observable, non-perturbing): why &DC bit3 stays set after the claim's SD ops (SD CS left asserted? PIC mid-op? our CMD17 deselect tail vs B-DOS's?); fix the ENC<->SD transition (clean SD deselect/settle before re-arm, or reorder find/select vs rearm) so the re-arm proceeds and handshake+write run. Reuse B-DOS entry points. Ends in a TAPO hardware shot.
   status: OPEN
+  depends_on: [i280b-b2c]
   kind: leaf
   owner: agent
   parent: i280b-b2
