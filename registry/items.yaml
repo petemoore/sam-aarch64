@@ -5234,6 +5234,8 @@
   status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 784, role: completing}
 
 - id: i295
   title: Hardware-confirm sd_push cj.mgt record write end-to-end (TRACED)
