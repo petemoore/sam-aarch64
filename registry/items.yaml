@@ -457,11 +457,30 @@
 - id: i31
   title: On-SAM preprocessor (.if build-constraints + macros)
   description: |
-    Beyond-M7 idea, now UNBLOCKED by the b8 umbrella closing (2026-07-03: the on-SAM lex/parse/pass1/compact/serialize substrate is corpus-proven). On-SAM preprocessor supporting .if build-constraints and macro expansion, reducing reliance on the host-side preprocess step. NEXT ACTION (spec gate, CLAUDE.md discipline 1): draft a short design spec for Pete approval BEFORE any implementation — scope (which .if/.set/macro forms; ~1/3 of spectrum4 sources need macros per the 2026-05-25 survey in memory/macro_expansion_research), where it sits in the pipeline (pre-lex text transform vs token-level), memory model (q36 pool), and the Go-authority-first port order (host preprocessor in tools/sam-aarch64 first, then the Z80 port). Raise the spec as a qN for Pete when drafted.
-  status: IN_PROGRESS
+    On-SAM preprocessor (.if build-constraints + macros + .include), reducing reliance on the host-side preprocess step. Direction approved (q38 GO, 2026-06-21, on the i209 assessment); unblocked by the b8 umbrella close (2026-07-03). Design spec: docs/specs/on-sam-preprocessor-design.md (i31a); implementation (i31b) is spec-gated on q70.
+  status: OPEN
   depends_on: [i48c-b8a, i48c-b8b, i48c-b8c, i48c-b8d, i48c-b8e, i48c-b8f]
+  kind: umbrella
+  owner: agent
+
+- id: i31a
+  title: On-SAM preprocessor — design spec
+  description: |
+    Draft the design spec for Pete approval (the i31 spec gate). DONE 2026-07-03: docs/specs/on-sam-preprocessor-design.md (direct-to-main doc commit), superseding the i209 assessment (deleted; final blob cited in the spec). Approval raised as q70.
+  status: DONE
   kind: leaf
   owner: agent
+  parent: i31
+
+- id: i31b
+  title: On-SAM preprocessor — implementation (Z80 port of preprocess.go per the approved spec)
+  description: |
+    Implement the on-SAM preprocessor per docs/specs/on-sam-preprocessor-design.md once q70 approves it: Go-authority-first bricks (1: .set table + .if/.else/.endif stack; 2: .macro/.endm + \param substitution + invocation with recursion guard; 3: .include + # line emission via a pluggable reader vector, real reader = UIFA+HGTHD+trampoline-HLOAD; 4: prep_run wired in front of b8d_chain_paged + corpus gate). Oracle gates: byte-equal vs host sam-aarch64 -E on ported preprocess_test.go fixtures + new preprocessor-bearing corpus fixtures (spectrum4 slice), then end-to-end text->.tbn vs CompactTBNBytes. Buffers from the i2 pool (new PP_PREP tag); own paged image (b8d two-image pattern). The expanded-text LEX_SRC ceiling lift is explicitly NOT this item (spec par.3).
+  status: OPEN
+  depends_on: [q70]
+  kind: leaf
+  owner: agent
+  parent: i31
 
 - id: i32
   title: Multiple source files + staged/partial loading

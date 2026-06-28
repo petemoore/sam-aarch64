@@ -55,3 +55,8 @@
   body: |
     Branch-protection required-checks list has drifted from ci.yml: netboot-z80, registry-sync, and registry-tests run in CI but are NOT in the required list (found 2026-07-03 while adding the new enc-tests job, which IS now required alongside its core/paged siblings). CLAUDE.md documents the protection as requiring 'the CI status checks defined in ci.yml'. Deliberate (e.g. jobs considered advisory) or drift to fix? If drift: add the three to the required list.
   owner: pete
+
+- id: q70
+  body: |
+    Approve the on-SAM preprocessor design spec (docs/specs/on-sam-preprocessor-design.md) — the i31 spec gate (CLAUDE.md discipline 1). Direction was already approved (q38 GO, 2026-06-21); this approves the concrete design: scope = the closed host-preprocessor subset (.include, .macro/.endm + \param, bare-symbol .if/.else/.endif, .set, # line emission); position = text->text pass in front of the b8d chain writing into the LEX_SRC window (over-cap = explicit error; ceiling lift tracked separately); buffers from the i2 page pool (new PP_PREP tag); own paged image per the b8d two-image pattern (~2-3.5 KB); Go-authority-first bricks porting preprocess.go, oracle-gated byte-equal vs host -E plus end-to-end text->.tbn vs CompactTBNBytes (the existing corpus is already-preprocessed, so new preprocessor-bearing fixtures incl. a spectrum4 slice). Implementation (i31b) is dep-gated on this question.
+  owner: pete

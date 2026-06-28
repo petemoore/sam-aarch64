@@ -14,6 +14,9 @@ design doc is deleted (git history is the archive).
   `.tbn` v2 instruction-overlay design (M8; i39c/i40/i51 pending).
 - [`i48-syntactic-encoder-design.md`](i48-syntactic-encoder-design.md) —
   single-format syntactic encoder; drives the future i48c SAM-side work.
+- [`on-sam-preprocessor-design.md`](on-sam-preprocessor-design.md) — the
+  on-SAM preprocessor (`.if` + macros + `.include`; i31): a Z80 port of the
+  host `Preprocess` pass, in front of the b8d chain (awaiting approval).
 - [`codegen-tables-design.md`](codegen-tables-design.md) — generate the
   Z80 data tables (sysreg, constants, mnemonic IDs) from the Go authority
   (i7; approved — phases A–C in flight, phase D queued as i74).
