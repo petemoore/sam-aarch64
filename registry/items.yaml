@@ -5259,9 +5259,11 @@
   title: "Speed up sd_push body write: drop per-sector sdc_init_ladder"
   description: |
     ~8KB/s because bd_cmd24_write_core runs sdc_init_ladder per sector. B-DOS already inited the card; no per-block ENC re-arm disturbs the bus (settled) -> init once or not at all -> tens of KB/s.
-  status: IN_PROGRESS
+  status: DONE
   kind: leaf
   owner: agent
+  prs:
+    - {num: 774, role: completing}
 
 - id: i302
   title: Boot record 13 to confirm cjs runs (after record is get.label-valid)
