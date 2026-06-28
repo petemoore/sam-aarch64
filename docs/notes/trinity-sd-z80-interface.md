@@ -204,14 +204,31 @@ Higher-level writes therefore reach the card as: **HRECORD to select the record,
    manual's busy semantics (`~/sam-archive/trinity-docs/text/IMG_20260617_162550.txt`,
    `IMG_20260617_162608.txt`); `DISCOVERY_REPORT.md`.
 
-4. **+232 is NOT a boot/select requirement.** Booting a record runs the disk's own
-   boot sector and never inspects byte 232; record-push validation is **size-only
-   (== 819200)**. The 4-byte `"BDOS"` stamp at offset 232 of a record's first
-   directory entry is only B-DOS's catalog/format signature — read by
-   `bdos_inspect_record` for the overwrite-safety gate (see §7 and
-   `docs/specs/trinity-record-detection-design.md`), never a boot gate. FRED disks
-   (no B-DOS) and cj.mgt boot fine without it. (Encoded by i285/#750 in
-   `bdos_seam.asm`.)
+4. **The `"BDOS"@232` stamp — canonical statement (optional in a `.mgt` FILE, patched
+   into a persisted SD RECORD on write).** The 4-byte `"BDOS"` stamp lives at **offset
+   232 of the disk-image body's first directory sector** (track 0 / sector 1) — the
+   `.mgt` *content*, **not** the card record-LIST catalogue. Two consequences,
+   distinct and both true:
+   - A **`.mgt` FILE is valid without it**, so record-push **validation is size-only
+     (== 819200)** — a stampless file (FRED / plain SAMDOS, e.g. `cj.mgt`, whose body
+     +232 = `00 00 00 00`) is never rejected on input.
+   - A **persisted Trinity SD RECORD needs it**: B-DOS 1.5t's `get.label` compares
+     those 4 bytes and raises `rep81` 'Invalid record' when absent, so the write path
+     **patches** `"BDOS"@232` (+ the record name @+210) into the record's sector-0
+     (`sd_push.asm sp_data_write`). So the stamp is load-bearing for a record's
+     *acceptance* by B-DOS 1.5t's record-management (Pete 2026-07-01), even though the
+     boot SECTOR itself never re-reads it. (Whether a given *direct-ALHK* boot path
+     also needs it is path-dependent — `client_finalize` ALHK-boots a size-valid
+     record with no stamp check; see i321.) The write is destructive of the original
+     4 bytes (a read-back is a valid image but not byte-identical); moot since records
+     are never pulled back off the card.
+
+   The stamp is also read by `bdos_inspect_record` for the overwrite-safety gate (§7;
+   `docs/specs/trinity-record-detection-design.md §4.5`). **This is the canonical
+   record-vs-file / +232 statement — cite it, don't re-derive** (memory
+   `feedback_bdos_record_header_vs_disk_body`; i285/#750, i294/i315). *Path-parity
+   caveat:* `sd_push` patches the stamp; the serve-WRQ + `client_finalize` routes
+   currently validate size-only **without** patching (tracked as i321).
 
 5. **A=2 (Trinity drive-select) is real for the SECTOR hooks but not for HRECORD.**
    The raw sector hooks HWSAD(149)/HRSAD(160) device-select on `hk.a` = the caller's

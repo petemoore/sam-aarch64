@@ -79,7 +79,8 @@ type Config struct {
 	// DiskRecordPush selects the i121f WRQ "disk-record push" behaviour: a WRQ is
 	// streamed into a claimed Trinity record (the body re-blocked into 512-byte
 	// sectors via bdos.RawSink), validated as a Trinity disk record on the final
-	// block (size == RecordSize AND the BDOS stamp@232), and answered with the
+	// block (size-only == RecordSize, i285 — the BDOS@232 stamp is not a validation
+	// criterion), and answered with the
 	// final ACK on success or ERROR(3) on a bad image. With it false the WRQ path
 	// is the i121a/i121b flat receive-to-staging (no record claim, always ACK) —
 	// the Z80 HOSTTEST wire build mirrors this. The Z80 picks the same behaviour
@@ -456,8 +457,8 @@ func (r *Responder) recvData(u frame.UDP) []byte {
 
 // finalizePush commits a disk-record push on its short final block: flush the
 // sink's final partial sector, validate the streamed image as a Trinity disk
-// record (size == RecordSize from sink.Total() AND the BDOS stamp@232 of the
-// written sector 0), and reply with the final ACK on a valid image or
+// record (size-only == RecordSize from sink.Total(), i285 — the BDOS@232 stamp is
+// B-DOS's own signature, not a validation criterion), and reply with the final ACK on a valid image or
 // ERROR(3, "invalid disk record") on a bad one. Port of netboot_serve.asm
 // wd_finalize; the validation is bdos.ValidateDiskRecord (the same authority the
 // Z80 bdos_validate_disk_record ports).
