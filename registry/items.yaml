@@ -5243,7 +5243,7 @@
   title: "sd_push: return cleanly to trinload after the write"
   description: |
     After the 2026-06-30 HW write, sd_push exited without returning to trinload (left the SAM in BASIC; needs a power-cycle). Make sd_push RET to trinload after finalize (mirror the dumper tr_terminate / i228 pattern) so a completed push leaves trinload running + re-pushable.
-  status: OPEN
+  status: IN_PROGRESS
   kind: leaf
   owner: agent
 
